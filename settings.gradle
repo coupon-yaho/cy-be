@@ -1,0 +1,8 @@
+rootProject.name = 'coupon-yaho'
+
+include "api"
+include "batch"
+include "core"
+include "storage"
+include "infra:mq"
+include "infra:redis"
