@@ -35,3 +35,10 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### 로컬 설정 — .example 만 커밋한다
+**/src/main/resources/application.yml
+**/src/main/resources/storage.yml
+
+### 운영 DB 서버 설정 — 커밋하지 않는다
+infra/mysql/my.cnf
