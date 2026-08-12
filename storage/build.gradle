@@ -1,8 +1,22 @@
+plugins {
+    id 'java-test-fixtures'
+}
+
 dependencies {
     implementation project(':core')
 
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'org.flywaydb:flyway-mysql'
+
     runtimeOnly 'com.mysql:mysql-connector-j'
 
-    testRuntimeOnly 'com.h2database:h2'
+    testFixturesApi 'org.springframework.boot:spring-boot-starter-test'
+    testFixturesApi 'org.springframework.boot:spring-boot-testcontainers'
+    testFixturesApi 'org.springframework.boot:spring-boot-data-jpa-test'
+    testFixturesApi 'org.springframework.boot:spring-boot-jdbc-test'
+    testFixturesApi 'org.testcontainers:testcontainers-mysql'
+
+    testFixturesRuntimeOnly 'com.mysql:mysql-connector-j'
 }
