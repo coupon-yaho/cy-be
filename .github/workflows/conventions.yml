@@ -1,0 +1,202 @@
+name: Conventions
+
+# PR 제목 / 브랜치명 / 커밋 메시지 규약 검사. (이슈 트래커: Jira)
+#
+# 브랜치는 3계층이다 (docs/03-collaboration.md 1.1절):
+#   main  →  feature/CY-1 (에픽)  →  feature/CY-12 (하위 작업)
+# 에픽과 하위는 **이름 형식이 같다.** 계층은 PR 의 base 로만 구분된다.
+# 그래서 이 워크플로는 둘을 구분하지 않고 같은 규칙을 적용한다.
+#
+# 강제 대상은 PR 제목과 브랜치명 — 실패하면 머지가 막힌다.
+# 개별 커밋은 경고만 한다 (마찰을 줄이기 위해).
+#
+# 브랜치·PR 제목에 Jira 이슈 키가 들어가야 Jira 개발 패널에
+# 브랜치/PR/커밋이 자동 연결된다. 그 연결이 "업무 분담" 채점 증빙이다.
+#
+# required check 등록: Settings > Rules > Ruleset > Require status checks
+#   PR 제목 규약, 브랜치명 규약
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  TYPES: 'feature|fix|refactor|test|docs|chore|perf|ci'
+
+  # Jira 프로젝트 키 — 쿠폰 야호(Coupon Yaho)
+  # 비워두면 대문자 2자 이상인 아무 키나 허용합니다(형식만 검사).
+  JIRA_KEY: 'CY'
+
+jobs:
+  # ─────────────────────────────────────────────────────────
+  # PR 제목 — 브랜치명과 같은 형식 + 요약. 반드시 통과.
+  #   feature/CY-12 재고 차감을 원자적으로 처리
+  #   fix/CY-31 Entry-Token GETDEL 경합 수정
+  # ─────────────────────────────────────────────────────────
+  pr-title:
+    name: PR 제목 규약
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          KEY="${JIRA_KEY:-[A-Z][A-Z0-9]+}"
+          PATTERN="^(${TYPES})/${KEY}-[0-9]+ .{3,}$"
+
+          if printf '%s' "$PR_TITLE" | grep -qE "$PATTERN"; then
+            echo "✅ $PR_TITLE"
+            exit 0
+          fi
+
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## ❌ PR 제목 규약 위반
+
+          \`\`\`
+          $PR_TITLE
+          \`\`\`
+
+          **형식**: \`<type>/<JIRA-KEY> <요약>\`  — 브랜치명과 같은 형식에 요약을 붙입니다.
+
+          | 부분 | 규칙 |
+          |---|---|
+          | type | \`feature\` \`fix\` \`refactor\` \`test\` \`docs\` \`chore\` \`perf\` \`ci\` |
+          | JIRA-KEY | Jira 이슈 키 (예: \`${JIRA_KEY:-CY}-12\`) |
+          | 요약 | 3자 이상 |
+
+          **예시**
+          \`\`\`
+          feature/${JIRA_KEY:-CY}-12 재고 차감을 원자적으로 처리
+          fix/${JIRA_KEY:-CY}-31 Entry-Token GETDEL 동시 요청 경합 수정
+          test/${JIRA_KEY:-CY}-45 재고 N에 2N 스레드 동시성 테스트 추가
+          \`\`\`
+
+          > 에픽 → main PR 도 같은 형식입니다 (에픽 티켓 키를 씁니다).
+          > 키가 있어야 Jira 이슈에 PR이 자동 연결됩니다.
+          EOF
+
+          echo "::error title=PR 제목 규약 위반::형식은 [JIRA-KEY] <type>(<scope>): <요약> 입니다. Summary 참고."
+          exit 1
+
+  # ─────────────────────────────────────────────────────────
+  # 브랜치명 — <type>/<JIRA-KEY>[-<설명>]
+  #   feature/CY-1                     에픽 (설명 생략)
+  #   feature/CY-12                    하위 작업
+  #   feature/CY-12-stock-decrement    하위 작업 (설명 붙임)
+  #
+  # 에픽과 하위의 형식이 같다 — 계층은 PR 의 base 로 구분한다 (헤더 참조).
+  # Jira는 브랜치명에서 키를 찾아 이슈에 자동 연결한다.
+  # ─────────────────────────────────────────────────────────
+  branch-name:
+    name: 브랜치명 규약
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          KEY="${JIRA_KEY:-[A-Z][A-Z0-9]+}"
+          PATTERN="^(${TYPES})/${KEY}-[0-9]+(-[a-z0-9][a-z0-9-]*)?$"
+
+          if printf '%s' "$BRANCH" | grep -qE "$PATTERN"; then
+            echo "✅ $BRANCH"
+            exit 0
+          fi
+
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## ❌ 브랜치명 규약 위반
+
+          \`\`\`
+          $BRANCH
+          \`\`\`
+
+          **형식**: \`<type>/<JIRA-KEY>[-<설명>]\`  — 설명은 생략 가능합니다.
+
+          | 부분 | 규칙 |
+          |---|---|
+          | type | \`feature\` \`fix\` \`refactor\` \`test\` \`docs\` \`chore\` \`perf\` \`ci\` |
+          | JIRA-KEY | Jira 이슈 키 (예: \`${JIRA_KEY:-CY}-12\`) |
+          | 설명 | 소문자, 숫자, 하이픈만 — **생략 가능** |
+
+          **예시**
+          \`\`\`
+          feature/${JIRA_KEY:-CY}-1                     에픽 (main 에서 딴다)
+          feature/${JIRA_KEY:-CY}-12                    하위 작업 (에픽에서 딴다)
+          feature/${JIRA_KEY:-CY}-12-stock-decrement    하위 작업 + 설명
+          fix/${JIRA_KEY:-CY}-31-entry-token-getdel
+          \`\`\`
+
+          **고치는 법**
+          \`\`\`bash
+          git branch -m ${TYPE:-feature}/${JIRA_KEY:-CY}-00
+          git push origin -u \$(git branch --show-current)
+          git push origin --delete $BRANCH
+          \`\`\`
+
+          > Jira는 브랜치명에서 키를 찾아 이슈 개발 패널에 자동 연결합니다.
+          EOF
+
+          echo "::error title=브랜치명 규약 위반::형식은 <type>/<JIRA-KEY>-<설명> 입니다. Summary 참고."
+          exit 1
+
+  # ─────────────────────────────────────────────────────────
+  # 커밋 메시지 — 경고만. 개발 중 마찰을 늘리지 않는다.
+  #   feature/CY-12 재고 차감 원자화     ← 브랜치명과 같은 형식
+  #
+  # 하위 → 에픽은 스쿼시해도 되지만 에픽 → main 은 스쿼시하지 않으므로
+  # 커밋에도 키가 있어야 Jira 연결이 남는다. 그래서 검사는 하되 막지는 않는다.
+  # required check로 등록하지 말 것.
+  # ─────────────────────────────────────────────────────────
+  commit-messages:
+    name: 커밋 메시지 (경고)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          KEY="${JIRA_KEY:-[A-Z][A-Z0-9]+}"
+          PATTERN="^(${TYPES})/${KEY}-[0-9]+ .{3,}$"
+          BAD=0
+
+          {
+            echo "## 커밋 메시지 검사"
+            echo ""
+            echo "형식: \`<type>/<JIRA-KEY> <메시지>\`   예: \`feature/${JIRA_KEY:-CY}-12 재고 차감 원자화\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            SHA="${line%% *}"
+            MSG="${line#* }"
+            case "$MSG" in "Merge "*) continue ;; esac
+
+            if printf '%s' "$MSG" | grep -qE "$PATTERN"; then
+              echo "- ✅ \`${SHA:0:7}\` $MSG" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- ⚠️ \`${SHA:0:7}\` $MSG" >> "$GITHUB_STEP_SUMMARY"
+              BAD=$((BAD+1))
+            fi
+          done < <(git log --format='%H %s' "$BASE_SHA..$HEAD_SHA")
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$BAD" -gt 0 ]; then
+            {
+              echo "> ⚠️ $BAD 개가 형식에 맞지 않습니다."
+              echo "> 머지는 막지 않지만, Jira 이슈에 커밋이 자동 연결되지 않습니다."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=커밋 메시지::$BAD 개가 형식에 맞지 않습니다 (경고)"
+          else
+            echo "> 전부 통과." >> "$GITHUB_STEP_SUMMARY"
+          fi
