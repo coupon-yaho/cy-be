@@ -60,15 +60,17 @@ reviews:
     base_branches:
       - "^(feature|fix|refactor|test|docs|chore|perf|ci)/CY-[0-9]+"
 
-    # 에픽 → main PR 은 리뷰하지 않는다. 하위 PR 에서 이미 전부 리뷰된 코드라
-    # 다시 돌리면 같은 지적이 두 번 달린다.
-    # base_branches 로는 못 막는다 — main 은 기본 브랜치라 항상 대상이다.
-    # 그래서 라벨로 뺀다. `!` 는 negative match. 에픽 PR 에 `epic` 라벨을 붙이면 스킵된다.
+    # 리뷰를 건너뛸 PR 은 `skip-review` 라벨 하나로 통일한다.
+    # `!` 는 negative match — "이 라벨이 붙은 것만 제외" 라는 뜻이다.
+    # positive 라벨을 하나라도 섞으면 화이트리스트로 뒤집혀서 나머지가 전부 스킵된다.
     #
-    # `skip-review` 는 되돌리기·설정 범프처럼 리뷰할 코드가 없는 PR 용이다.
+    # 붙이는 경우 둘:
+    #   1. 에픽 → main PR — 하위 PR 에서 이미 전부 리뷰된 코드다. 다시 돌리면 같은 지적이
+    #      두 번 달린다. base_branches 로는 못 막는다(main 은 기본 브랜치라 항상 대상).
+    #   2. 되돌리기·설정 범프처럼 리뷰할 코드가 없는 PR
+    #
     # 머지 게이트(PR 제목·브랜치명 규약 + 승인 1건)는 이 라벨로 못 건너뛴다.
     labels:
-      - "!epic"
       - "!skip-review"
 
     # 봇 PR 은 리뷰하지 않는다.
@@ -429,10 +431,6 @@ reviews:
       instructions: "batch 모듈, 검증 배치, 더미데이터 생성기, 오염셋, 통계 집계 변경일 때."
     - label: "area/5-viz"
       instructions: "대시보드·관리자 화면(static), k6 부하 스크립트, Chaos 하네스 변경일 때."
-    - label: "epic"
-      instructions: >-
-        에픽 브랜치를 main 으로 머지하는 PR 일 때. base 가 main 이고 여러 하위 작업이
-        누적돼 있으면 이 라벨이다. 이 라벨이 붙으면 자동 리뷰가 스킵된다.
     - label: "blocked"
       instructions: "선행 PR 을 기다려야 머지 가능한 상태일 때."
     - label: "needs-discussion"

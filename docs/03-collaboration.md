@@ -47,7 +47,7 @@ PR 제목  <type>/<JIRA-KEY> <요약>       feature/CY-12 재고 차감을 원�
 - 리뷰어 최소 1명 승인 후 머지. 셀프 머지 금지
 - Jira 이슈를 먼저 만들고, 그 키로 브랜치를 판다
 - `CODEOWNERS`가 영역별 리뷰어를 자동 배정한다
-- **에픽 → main PR 에는 `epic` 라벨을 붙인다.** 이미 하위 PR 에서 다 리뷰된 코드라 AI 리뷰를 다시 돌리지 않기 위한 표시다 (2절)
+- **에픽 → main PR 에는 `skip-review` 라벨을 붙인다.** 이미 하위 PR 에서 다 리뷰된 코드라 AI 리뷰를 다시 돌리지 않기 위한 것이다 (2절)
 
 **Jira 프로젝트 키 설정** — `.github/workflows/conventions.yml` 의 `JIRA_KEY` 한 곳만 바꾸면 된다.
 ```yaml
@@ -75,16 +75,18 @@ CodeRabbit 은 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동
 auto_review:
   base_branches:
     - "^(feature|fix|refactor|test|docs|chore|perf|ci)/CY-[0-9]+"
-  labels: ["!epic", "!skip-review"]
+  labels: ["!skip-review"]
 ```
 
 | PR | 리뷰 |
 |---|---|
 | 하위 → 에픽 (`feature/CY-12` → `feature/CY-1`) | **돈다** ← 여기가 리뷰 지점 |
-| 에픽 → main (`epic` 라벨) | 안 돈다. 하위에서 이미 다 봤다 |
-| `skip-review` 라벨 | 안 돈다. 되돌리기·설정 범프용 |
+| 에픽 → main (`skip-review` 라벨) | 안 돈다. 하위에서 이미 다 봤다 |
+| 되돌리기·설정 범프 (`skip-review` 라벨) | 안 돈다 |
 | draft PR | 안 돈다. `Ready for review` 로 바꾸면 그때 — **누락이 아니라 유예** |
 | 봇 PR (dependabot 등) | 안 돈다 |
+
+**스킵 라벨은 `skip-review` 하나뿐이다.** 에픽 머지용 라벨을 따로 두지 않는 이유 — 하는 일이 "리뷰 스킵"으로 똑같아서 라벨을 나눠도 얻는 게 없고, 5명이 "언제 뭘 붙이는지" 외워야 하는 비용만 는다. 에픽 머지인지는 **base 가 `main` 인가**로 이미 판별된다.
 
 **라벨이 "리뷰 없이 머지"를 여는 건 아니다.** AI 리뷰는 required check 가 아니라 애초에 머지를 막지 않는다 (3.5a절). 머지 게이트는 **`PR 제목 규약`·`브랜치명 규약` + 승인 1건**이고 그건 라벨로 못 건너뛴다.
 
