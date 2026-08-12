@@ -3,8 +3,17 @@
 # PRD 협업 규칙: "업무 분담"이 수행능력 30점의 명시 세부항목.
 # 누가 어느 영역을 소유하는지가 레포에 코드로 남는 것 자체가 채점 증빙이다.
 #
-# ⚠️ @team-member-N 을 실제 GitHub 유저명으로 바꿔야 동작합니다.
-#    미치환 상태로 두면 GitHub이 조용히 무시합니다 (에러 없음).
+# ⚠️ 현재 **모든 경로가 전원 배정**입니다. 영역별 담당자가 아직 안 정해졌기 때문입니다.
+#
+#    아래 ①~⑤ 구획은 **어느 경로가 어느 영역인지의 지도**로 먼저 살려 둡니다.
+#    담당자가 정해지면 해당 구획의 유저명만 한 명으로 줄이면 됩니다 — 경로는 그대로 두고
+#    오른쪽 계정 목록만 바꾸는 작업이라 diff 가 깨끗합니다.
+#
+#    예) ② 동시성 담당이 @SH-Seol 로 정해지면
+#        **/issuance/**   @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+#      → **/issuance/**   @SH-Seol
+#
+#    존재하지 않는 계정을 적으면 GitHub 이 **에러 없이 조용히 무시**합니다.
 #    확인: PR 생성 시 Reviewers 에 자동 배정되는지 보면 됩니다.
 #
 # ─────────────────────────────────────────────────────────
@@ -34,52 +43,52 @@
 
 # ── ① 도메인·코어 ────────────────────────────────────────
 # 엔티티/ERD, 상태 전이, 멱등성, 브랜드·스케줄러, 등급 검증, 만료 3계층, 드리프트 감지
-**/domain/**                    @team-member-1
-**/coupon/**                    @team-member-1
-**/campaign/**                  @team-member-1
-**/scheduler/**                 @team-member-1
-**/entity/**                    @team-member-1
-**/mapper/**                    @team-member-1
+**/domain/**                    @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/coupon/**                    @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/campaign/**                  @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/scheduler/**                 @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/entity/**                    @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/mapper/**                    @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 # core 의 포트 인터페이스 — 여기가 바뀌면 어댑터 전부가 영향을 받는다
-**/core/**/port/**              @team-member-1
+**/core/**/port/**              @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 # Flyway DDL. 되돌릴 수 없으므로 ① 이 소유한다
-storage/src/main/resources/db/** @team-member-1
+storage/src/main/resources/db/** @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 # 시각 소스. 검증 결정론의 뿌리라 아무나 못 바꾼다 (docs/10-batch-design.md)
-core/src/main/java/**/support/TimeProvider.java        @team-member-1
-core/src/main/java/**/support/config/TimeConfig.java   @team-member-1
+core/src/main/java/**/support/TimeProvider.java        @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+core/src/main/java/**/support/config/TimeConfig.java   @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ── ② 동시성 v1+v2 ───────────────────────────────────────
 # DB 비관적 락, Redis Lua 원자 카운터
-**/issuance/**                  @team-member-2
-**/stock/**                     @team-member-2
-**/lock/**                      @team-member-2
-**/*.lua                        @team-member-2
+**/issuance/**                  @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/stock/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/lock/**                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/*.lua                        @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ── ③ 인프라·비동기 ──────────────────────────────────────
 # /entry + Entry-Token, v3 Redis+Kafka, 적응형 대기열, Resilience4j
-**/entry/**                     @team-member-3
-**/queue/**                     @team-member-3
-**/kafka/**                     @team-member-3
-**/resilience/**                @team-member-3
+**/entry/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/queue/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/kafka/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/resilience/**                @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ── ④ 데이터·검증 ────────────────────────────────────────
 # 더미데이터 생성기, 검증 배치, 오염셋 600건, 리포트, 통계 집계
-**/verification/**              @team-member-4
-**/seed/**                      @team-member-4
-**/stats/**                     @team-member-4
+**/verification/**              @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/seed/**                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+**/stats/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ── ⑤ 시각화·측정 ────────────────────────────────────────
 # 대시보드 26패널, 관리자 CRUD, k6, Chaos 하네스, 시연 영상
-**/src/main/resources/static/** @team-member-5
-/loadtest/**                    @team-member-5
-/chaos/**                       @team-member-5
+**/src/main/resources/static/** @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/loadtest/**                    @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/chaos/**                       @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ─────────────────────────────────────────────────────────
 # 모듈 통째 배정 — 한 영역에 1:1 대응하는 모듈만. 위 줄들을 덮는다.
 # ─────────────────────────────────────────────────────────
-/infra/redis/**                 @team-member-2
-/infra/mq/**                    @team-member-3
-/batch/**                       @team-member-4
+/infra/redis/**                 @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/infra/mq/**                    @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/batch/**                       @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ── 공통: 전원 리뷰 ──────────────────────────────────────
 # 설계 문서·CI 설정·빌드 스크립트는 한 명이 바꾸면 전원에게 영향이 간다
