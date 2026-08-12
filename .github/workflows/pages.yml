@@ -1,0 +1,59 @@
+# 이 워크플로는 site/ 폴더만 GitHub Pages 로 올립니다.
+# 리포의 나머지 파일(docs/ 등)은 배포물에 포함되지 않습니다.
+#
+# 주의 — 공개 범위는 Pages 설정이 아니라 리포 visibility 가 정합니다.
+#        리포가 public 이면 docs/ 안 문서도 리포 페이지에서 그대로 열립니다.
+#
+# 사용 전 : 리포 Settings → Pages → Source 를 "GitHub Actions" 로 바꿔야 합니다.
+
+name: Deploy site to Pages
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포는 한 번에 하나만. 밀린 실행은 최신 것만 남긴다.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 배포물에 대외비 문서가 섞이지 않았는지 확인
+        run: |
+          if find site -type f \( -name '*.md' -o -name '*.pptx' -o -name '*.docx' -o -name '*.dbml' \) | grep -q .; then
+            echo "::error::site/ 안에 문서 파일이 있습니다. 발표 자산만 두세요."
+            find site -type f \( -name '*.md' -o -name '*.pptx' -o -name '*.docx' -o -name '*.dbml' \)
+            exit 1
+          fi
+          echo "OK — 배포 대상:"
+          find site -type f | sort
+
+      # enablement: 첫 실행에서 Pages 가 꺼져 있으면 켠다.
+      # (수동으로 Settings → Pages → Source 를 "GitHub Actions" 로 바꿔도 됩니다)
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

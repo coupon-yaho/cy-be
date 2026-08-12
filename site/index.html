@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>쿠폰 야~호 — 4조 KAFKICK</title>
+<meta name="description" content="LG유플러스 유레카 백엔드 종합프로젝트 · 4조 KAFKICK 발표 자료">
+<style>
+/* 발표 덱(plan/index.html)과 같은 토큰을 쓴다. 값을 바꿀 일이 생기면 양쪽을 함께 고칠 것. */
+:root{
+  --ink:#152349;
+  --ink2:#3E4B68;
+  --ink3:#67728A;
+  --faint:#D8D3C8;
+  --rule2:#DAD5C9;
+  --acc:#C2566A;
+  --bg:#FFFFFF;
+  --sans:Pretendard,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{min-height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;line-height:1.5}
+body,h1,p,span,div,li{word-break:keep-all}
+
+.wrap{max-width:900px;margin:0 auto;padding:clamp(48px,9vw,112px) clamp(24px,5vw,40px) 56px}
+
+.eyebrow{font-size:clamp(12px,2.6vw,14px);font-weight:700;letter-spacing:.32em;color:var(--ink3)}
+.logo{display:block;width:min(460px,100%);height:auto;margin:clamp(20px,4vw,34px) 0 0}
+.accbar{width:56px;height:5px;background:var(--acc);margin:clamp(28px,5vw,42px) 0 0}
+h1{font-size:clamp(30px,6.4vw,52px);font-weight:800;letter-spacing:-.02em;
+  line-height:1.2;margin-top:clamp(18px,3vw,26px);text-wrap:balance}
+.lede{font-size:clamp(15px,3.2vw,19px);color:var(--ink2);margin-top:14px;max-width:46ch;text-wrap:pretty}
+
+.list{margin-top:clamp(48px,8vw,84px)}
+
+.row{position:relative;display:flex;align-items:center;gap:clamp(14px,3vw,26px);
+  padding:clamp(22px,4vw,30px) 0;border-top:1.5px solid var(--rule2);
+  text-decoration:none;color:inherit}
+.row::before{content:"";position:absolute;left:0;top:-1.5px;width:100%;height:4px;
+  background:var(--acc);transform:scaleX(0);transform-origin:left center;
+  transition:transform .26s cubic-bezier(.22,.8,.3,1)}
+.row:last-child{border-bottom:1.5px solid var(--rule2)}
+
+.n{flex:none;width:clamp(34px,6vw,48px);font-size:clamp(14px,2.8vw,17px);font-weight:800;
+  color:var(--faint);font-variant-numeric:tabular-nums}
+.body{flex:1;min-width:0}
+.name{font-size:clamp(21px,4.6vw,32px);font-weight:800;letter-spacing:-.01em;
+  line-height:1.25;display:block}
+.meta{display:block;margin-top:7px;font-size:clamp(13px,2.7vw,16px);color:var(--ink3)}
+.go{flex:none;font-size:clamp(18px,3.6vw,24px);color:var(--ink3)}
+
+/* 공개된 발표 */
+.row.live .name,.row.live .n,.row.live .go{transition:color .18s,transform .24s cubic-bezier(.22,.8,.3,1)}
+.row.live:hover::before,.row.live:focus-visible::before{transform:scaleX(1)}
+.row.live:hover .name,.row.live:focus-visible .name{color:var(--acc);transform:translateX(9px)}
+.row.live:hover .n,.row.live:hover .go,
+.row.live:focus-visible .n,.row.live:focus-visible .go{color:var(--acc)}
+.row.live:focus-visible{outline:2px solid var(--acc);outline-offset:6px;border-radius:2px}
+
+/* 준비 중 — 자리는 잡아 두되 누를 수 없다 */
+.row.soon{cursor:default}
+.row.soon .n{color:#E7E3DA}
+.row.soon .name{color:#A8AFBE}
+.row.soon .meta{color:#B4BAC6}
+.chip{flex:none;font-size:clamp(11px,2.4vw,13px);font-weight:700;letter-spacing:.1em;
+  color:var(--ink3);border:1.5px solid var(--rule2);border-radius:999px;
+  padding:5px 13px;white-space:nowrap}
+
+footer{margin-top:clamp(44px,8vw,76px);padding-top:22px;border-top:1.5px solid var(--rule2);
+  display:flex;flex-wrap:wrap;gap:8px 22px;align-items:baseline;
+  font-size:clamp(13px,2.7vw,16px);color:var(--ink3)}
+footer b{color:var(--ink);font-weight:800}
+
+/* JS 가 꺼져 있어도 링크는 살아 있어야 한다 */
+.fallback{margin-top:clamp(48px,8vw,84px);border-top:1.5px solid var(--rule2);padding-top:24px}
+.fallback li{list-style:none;padding:14px 0;border-bottom:1.5px solid var(--rule2);
+  font-size:clamp(18px,3.6vw,24px);font-weight:800}
+.fallback a{color:var(--ink)}
+
+/* 좁은 화면 : 칩·화살표를 다음 줄로 내려 이름이 쪼개지지 않게 한다 */
+@media (max-width:560px){
+  .row{flex-wrap:wrap;row-gap:12px}
+  .body{flex:1 1 60%}
+  .go,.chip{margin-left:auto}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .row::before,.row .name,.row .n,.row .go{transition:none}
+  .row.live:hover .name,.row.live:focus-visible .name{transform:none}
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <p class="eyebrow">LG유플러스 유레카 백엔드 · 종합프로젝트</p>
+  <img class="logo" src="assets/logo-main.png" alt="쿠폰 야~호">
+  <div class="accbar"></div>
+  <h1>4조 KAFKICK</h1>
+  <p class="lede">통신사 브랜드데이 선착순 쿠폰 발급 시스템</p>
+
+  <nav class="list" id="list"></nav>
+
+  <noscript>
+    <ul class="fallback">
+      <li><a href="plan/">기획 발표 — 2026.08.11</a></li>
+    </ul>
+  </noscript>
+
+  <footer>
+    <span><b>조장 허건</b></span>
+    <span>박지훈 · 설승환 · 유희준 · 이경주</span>
+  </footer>
+</main>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   발표 목록. 여기만 고치면 됩니다.
+
+     name  발표 이름
+     meta  날짜 · 장수 같은 부연
+     href  덱이 있는 폴더. 이 값이 있으면 눌리는 항목이 되고,
+           없으면 '준비 중' 으로 회색 처리됩니다.
+
+   ▸ 추가      배열에 한 줄 넣습니다. 넣은 위치가 곧 표시 순서고
+               번호(01, 02 …)는 순서대로 자동으로 매겨집니다.
+   ▸ 중간 삽입 원하는 두 줄 사이에 끼워 넣기만 하면 됩니다.
+   ▸ 공개      site/<폴더>/index.html 을 두고 href 를 채웁니다.
+
+   예) 중간 발표가 기획과 최종 사이에 들어가는 경우
+       { name: "기획 발표", … },
+       { name: "중간 발표", meta: "2026.08.24 · 12장", href: "midterm/" },
+       { name: "최종 발표", … },
+   ══════════════════════════════════════════════════════════════ */
+var DECKS = [
+  { name: "기획 발표", meta: "2026.08.11 · 15장 · 발표 5~7분", href: "plan/" },
+  { name: "최종 발표", meta: "일정 확정 후 공개" }
+];
+
+(function () {
+  var list = document.getElementById("list");
+  var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+  var esc = function (t) { var d = document.createElement("div"); d.textContent = t; return d.innerHTML; };
+
+  list.innerHTML = DECKS.map(function (d, i) {
+    var inner =
+      '<span class="n">' + pad(i + 1) + '</span>' +
+      '<span class="body">' +
+        '<span class="name">' + esc(d.name) + '</span>' +
+        '<span class="meta">' + esc(d.meta || "") + '</span>' +
+      '</span>';
+    return d.href
+      ? '<a class="row live" href="' + esc(d.href) + '">' + inner +
+        '<span class="go" aria-hidden="true">→</span></a>'
+      : '<div class="row soon" aria-disabled="true">' + inner +
+        '<span class="chip">준비 중</span></div>';
+  }).join("");
+})();
+</script>
+</body>
+</html>
