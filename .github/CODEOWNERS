@@ -1,0 +1,97 @@
+# CODEOWNERS — 5영역 자동 리뷰어 배정
+#
+# PRD 협업 규칙: "업무 분담"이 수행능력 30점의 명시 세부항목.
+# 누가 어느 영역을 소유하는지가 레포에 코드로 남는 것 자체가 채점 증빙이다.
+#
+# ⚠️ @team-member-N 을 실제 GitHub 유저명으로 바꿔야 동작합니다.
+#    미치환 상태로 두면 GitHub이 조용히 무시합니다 (에러 없음).
+#    확인: PR 생성 시 Reviewers 에 자동 배정되는지 보면 됩니다.
+#
+# ─────────────────────────────────────────────────────────
+# 이 레포의 구조 (Gradle 멀티모듈 + 헥사고날, 패키지 com.kafkick — README.md 참조)
+#   api/        HTTP 진입점. 영역이 섞이므로 패키지 단위로 배정
+#   core/       도메인 모델 · 유즈케이스 · 포트 인터페이스
+#   storage/    JPA 어댑터 + Flyway 마이그레이션
+#   infra/redis/  Redis 어댑터 (재고 카운터, Lua)  → ② 통째로
+#   infra/mq/     Kafka 어댑터                    → ③ 통째로
+#   batch/      스케줄 작업 · 검증 배치            → ④ 통째로
+#
+# 도메인별 묶음이라 같은 관심사가 여러 모듈에 흩어진다. 예를 들어 "쿠폰"은
+#   core/coupon/{domain,service,port}  storage/db/coupon/{entity,repository,mapper}
+#   infra/mq/coupon/                   api/coupon/{controller,dto}
+# 에 걸쳐 있다. 그래서 모듈이 아니라 **관심사(패키지) 글롭**이 배정의 기본 단위다.
+#
+# CODEOWNERS 는 **마지막에 매칭된 줄이 이긴다.** 그래서 순서가
+#   ① 전체 기본값 → ② 관심사(패키지) 배정 → ③ 모듈 통째 배정 → ④ 공통
+# 이다. 모듈이 한 영역에 1:1 대응하는 경우(redis/mq/batch)만 통째로 덮는다.
+
+# ── 기본값: 전원 ─────────────────────────────────────────
+*                               @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+
+# ─────────────────────────────────────────────────────────
+# 관심사(패키지) 단위 — 모듈을 가로지른다
+# ─────────────────────────────────────────────────────────
+
+# ── ① 도메인·코어 ────────────────────────────────────────
+# 엔티티/ERD, 상태 전이, 멱등성, 브랜드·스케줄러, 등급 검증, 만료 3계층, 드리프트 감지
+**/domain/**                    @team-member-1
+**/coupon/**                    @team-member-1
+**/campaign/**                  @team-member-1
+**/scheduler/**                 @team-member-1
+**/entity/**                    @team-member-1
+**/mapper/**                    @team-member-1
+# core 의 포트 인터페이스 — 여기가 바뀌면 어댑터 전부가 영향을 받는다
+**/core/**/port/**              @team-member-1
+# Flyway DDL. 되돌릴 수 없으므로 ① 이 소유한다
+storage/src/main/resources/db/** @team-member-1
+# 시각 소스. 검증 결정론의 뿌리라 아무나 못 바꾼다 (docs/10-batch-design.md)
+core/src/main/java/**/support/TimeProvider.java        @team-member-1
+core/src/main/java/**/support/config/TimeConfig.java   @team-member-1
+
+# ── ② 동시성 v1+v2 ───────────────────────────────────────
+# DB 비관적 락, Redis Lua 원자 카운터
+**/issuance/**                  @team-member-2
+**/stock/**                     @team-member-2
+**/lock/**                      @team-member-2
+**/*.lua                        @team-member-2
+
+# ── ③ 인프라·비동기 ──────────────────────────────────────
+# /entry + Entry-Token, v3 Redis+Kafka, 적응형 대기열, Resilience4j
+**/entry/**                     @team-member-3
+**/queue/**                     @team-member-3
+**/kafka/**                     @team-member-3
+**/resilience/**                @team-member-3
+
+# ── ④ 데이터·검증 ────────────────────────────────────────
+# 더미데이터 생성기, 검증 배치, 오염셋 600건, 리포트, 통계 집계
+**/verification/**              @team-member-4
+**/seed/**                      @team-member-4
+**/stats/**                     @team-member-4
+
+# ── ⑤ 시각화·측정 ────────────────────────────────────────
+# 대시보드 26패널, 관리자 CRUD, k6, Chaos 하네스, 시연 영상
+**/src/main/resources/static/** @team-member-5
+/loadtest/**                    @team-member-5
+/chaos/**                       @team-member-5
+
+# ─────────────────────────────────────────────────────────
+# 모듈 통째 배정 — 한 영역에 1:1 대응하는 모듈만. 위 줄들을 덮는다.
+# ─────────────────────────────────────────────────────────
+/infra/redis/**                 @team-member-2
+/infra/mq/**                    @team-member-3
+/batch/**                       @team-member-4
+
+# ── 공통: 전원 리뷰 ──────────────────────────────────────
+# 설계 문서·CI 설정·빌드 스크립트는 한 명이 바꾸면 전원에게 영향이 간다
+/docs/**                        @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/.github/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/.claude/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+# 리뷰 기준 자체다. 혼자 무력화할 수 없어야 한다 (docs/03-collaboration.md 4.1절)
+/.coderabbit.yaml               @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+# 모듈 의존 방향(api·batch → 어댑터는 runtimeOnly)이 build.gradle 에서 강제된다.
+# 이게 풀리면 core 가 JPA·Kafka 를 직접 참조할 수 있게 된다 — 아키텍처 불변식이라 전원이 본다.
+**/build.gradle                 @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/settings.gradle                @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/README.md                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/gradle/**                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+/docker-compose*.yml            @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon

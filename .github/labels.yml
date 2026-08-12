@@ -1,0 +1,39 @@
+# GitHub 라벨 정의
+#
+# 이슈 트래킹은 Jira가 한다. 여기 라벨은 **GitHub PR 목록에서만 필요한 것**만 남긴다.
+#   - 영역/우선순위/스프린트 → Jira 컴포넌트·라벨·스프린트로 관리
+#   - PR 필터링과 워크플로 제어 → 아래 라벨
+#
+# 등록 (레포 생성 후 1회) — docs/03-collaboration.md 4.4절 스크립트 참조
+
+# ── 워크플로 제어 ──────────────────────────────────────
+# AI 리뷰 스킵용 라벨은 없다 — CodeRabbit 은 라벨이 아니라 PR 본문의
+# `@coderabbitai ignore` 로 건너뛴다 (.coderabbit.yaml 참조).
+- name: security-audit
+  color: "B60205"
+  description: "공식 보안 액션으로 전수 점검 (security-audit.yml, CLAUDE_API_KEY 필요)"
+
+# ── PR 상태 ────────────────────────────────────────────
+- name: blocked
+  color: "B60205"
+  description: "선행 PR 대기 중 — 머지하지 마세요"
+- name: needs-discussion
+  color: "D876E3"
+  description: "설계 판단이 필요 — 스탠드업에서 다룰 것"
+
+# ── 영역 (PR 목록 필터용, Jira와 중복이지만 GitHub에서 빠르게 보기 위함) ──
+- name: area/1-domain
+  color: "1D76DB"
+  description: "① 도메인·코어"
+- name: area/2-concurrency
+  color: "0E8A16"
+  description: "② 동시성"
+- name: area/3-infra
+  color: "5319E7"
+  description: "③ 인프라·비동기"
+- name: area/4-data
+  color: "D93F0B"
+  description: "④ 데이터·검증"
+- name: area/5-viz
+  color: "FBCA04"
+  description: "⑤ 시각화·측정"

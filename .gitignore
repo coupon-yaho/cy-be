@@ -42,3 +42,44 @@ out/
 
 ### 운영 DB 서버 설정 — 커밋하지 않는다
 infra/mysql/my.cnf
+
+### 시크릿 — PRD 보안 "설계에 비어 있던 구멍 ④", D1 최우선
+# 커밋 이력에 한 번이라도 들어가면 히스토리 삭제만으로 부족하고 키를 교체해야 한다.
+# 여기가 첫 번째 방어선이다.
+.env
+.env.*
+!.env.example
+*.jks
+*.p12
+*.pem
+*.key
+application-local.yml
+application-local.yaml
+application-secret*.yml
+**/secrets/
+jwt_tokens.csv
+
+### 부하 테스트·검증 산출물
+# 결과 파일은 용량이 크고 실행마다 달라진다. 비교표에 쓸 확정 수치만 docs/ 에 커밋한다.
+loadtest/results/
+loadtest/*.json
+!loadtest/*.config.json
+verification-reports/
+*.summary.json
+
+### 더미데이터 (유저 100만 / 쿠폰 300만 / 이력 520만)
+seed-data/
+*.sql.gz
+*.csv
+!docs/**/*.csv
+
+### 로그·런타임
+logs/
+*.log
+hs_err_pid*
+replay_pid*
+*.hprof
+
+### OS
+.DS_Store
+Thumbs.db
