@@ -64,6 +64,7 @@ env:
 | PR 생성/수정 | `conventions.yml` → `pr-title`, `branch-name` | **실패 시 머지 차단** |
 | PR 생성/수정 | `conventions.yml` → `commit-messages` | 경고만 |
 | PR 생성/push | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | AI 리뷰 (아래) |
+| CodeRabbit 리뷰 제출 | `coderabbit-slack.yml` | Slack 알림. webhook 없으면 스킵 |
 | `security-audit` 라벨 / 수동 | `security-audit.yml` | 보안 전수 점검. 키 없으면 스킵 |
 
 **리뷰는 `하위 → 에픽` PR 에만 붙는다.** 이게 이 설정의 핵심이다.
@@ -478,7 +479,23 @@ GitHub이 시크릿을 로그에서 `***`로 자동 마스킹한다.
 |---|---|---|
 | CodeRabbit (App) | 없음 | 레포에 설치만 하면 된다 |
 | `conventions.yml` | 없음 | `GITHUB_TOKEN` 자동 제공 |
+| `coderabbit-slack.yml` | `SLACK_WEBHOOK_URL` | **선택** — 없으면 실패 없이 스킵된다 |
 | `security-audit.yml` | `CLAUDE_API_KEY` | **선택** — 키가 없으면 실패 없이 스킵된다 |
+
+### 4.1a Slack 알림
+
+CodeRabbit 이 리뷰를 제출하면 Slack 으로 쏜다.
+
+```bash
+# Slack 앱 > Incoming Webhooks 에서 채널 URL 발급 후
+gh secret set SLACK_WEBHOOK_URL
+```
+
+**`on: status` 가 아니라 `on: pull_request_review` 를 쓴다.** 흔히 도는 예제는 CodeRabbit 의 commit status 를 잡는데, `review_progress` 가 기본 켜져 있으면 CodeRabbit 은 **check run** 을 쓰고 legacy commit status 를 남기지 않는다(공식 스키마: *"commit_status … is only used when review_progress is disabled"*). 그 방식은 이벤트 자체가 안 와서 조용히 죽는다.
+
+우리는 `request_changes_workflow: true` 라 CodeRabbit 이 **GitHub Review 를 제출**한다. 그게 "리뷰가 실제로 달렸다"의 가장 직접적인 신호라 그걸 잡는다. 알림에는 리뷰 상태(수정 요청/승인/코멘트), PR 링크, 작성자, 변경량, 그리고 **`head → base` 브랜치 흐름**이 들어간다 — 하위 작업 PR 인지 에픽 머지인지 Slack 에서 바로 구분된다.
+
+> CodeRabbit 대시보드에도 자체 Slack 연동이 있다. 그쪽은 유지보수가 필요 없는 대신 메시지 형식을 우리가 못 정한다. 브랜치 흐름 표시가 필요 없어지면 갈아타도 된다.
 
 `security-audit.yml`은 D13에 1회 돌리는 용도라, 그때 가서 키를 만들어도 된다. 지금 만들 필요 없다.
 
@@ -632,6 +649,7 @@ Settings → Actions → General
   labels.yml                    GitHub 라벨 (영역/우선순위는 Jira가 관리)
   workflows/
     conventions.yml             PR 제목·브랜치명 강제 / 커밋 경고  ⚠️ JIRA_KEY 설정
+    coderabbit-slack.yml        CodeRabbit 리뷰 → Slack  (SLACK_WEBHOOK_URL 없으면 스킵)
     security-audit.yml          공식 보안 액션. D13 1회  (CLAUDE_API_KEY 없으면 스킵)
 
 (GitHub Issues 템플릿 없음 — 이슈 트래커는 Jira)
