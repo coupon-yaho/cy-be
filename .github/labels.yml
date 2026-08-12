@@ -7,13 +7,17 @@
 # 등록 (레포 생성 후 1회) — docs/03-collaboration.md 4.4절 스크립트 참조
 
 # ── 워크플로 제어 ──────────────────────────────────────
-# AI 리뷰 스킵용 라벨은 없다 — CodeRabbit 은 라벨이 아니라 PR 본문의
-# `@coderabbitai ignore` 로 건너뛴다 (.coderabbit.yaml 참조).
+- name: skip-review
+  color: "EDEDED"
+  description: "CodeRabbit 리뷰를 건너뜁니다 — 되돌리기·설정 범프 등 리뷰할 코드가 없는 PR용"
 - name: security-audit
   color: "B60205"
   description: "공식 보안 액션으로 전수 점검 (security-audit.yml, CLAUDE_API_KEY 필요)"
 
 # ── PR 상태 ────────────────────────────────────────────
+- name: epic
+  color: "0052CC"
+  description: "에픽 → main 머지 PR — 하위 PR 에서 이미 리뷰됐으므로 AI 리뷰를 건너뜁니다"
 - name: blocked
   color: "B60205"
   description: "선행 PR 대기 중 — 머지하지 마세요"

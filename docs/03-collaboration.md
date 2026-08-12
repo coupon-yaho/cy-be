@@ -9,28 +9,45 @@
 
 **이슈 트래커는 Jira.** GitHub Issues는 쓰지 않는다.
 
+### 1.1 브랜치는 3계층이다
+
 ```
-브랜치   <type>/<JIRA-KEY>-<설명>              feat/CY-12-coupon-state-machine
-PR 제목  [<JIRA-KEY>] <type>(<scope>): <요약>  [CY-12] feat(coupon): 재고 차감 원자화
-커밋     <type>(<scope>): <요약> [<JIRA-KEY>]  feat(coupon): 재고 차감 원자화 [CY-12]
-머지     Squash merge only                      (커밋은 경고만 — 스쿼시로 사라짐)
+main
+ └── feature/CY-1              에픽. main 에서 딴다
+      ├── feature/CY-12        하위 작업. 에픽에서 딴다  ← 커밋은 여기서
+      └── feature/CY-13        하위 작업
+```
+
+1. Jira 에서 **에픽** 티켓을 만들고 `main` 에서 에픽 브랜치를 판다
+2. 에픽 아래 **하위 작업** 티켓을 만들고 에픽 브랜치에서 작업 브랜치를 판다
+3. 커밋은 하위 작업 브랜치에서 한다
+4. 작업이 끝나면 **하위 → 에픽** PR 을 연다 ← **리뷰가 붙는 지점**
+5. 에픽 전체가 끝나면 **에픽 → main** PR 을 연다
+
+```
+브랜치   <type>/<JIRA-KEY>[-<설명>]     feature/CY-12   또는  feature/CY-12-stock-decrement
+PR 제목  <type>/<JIRA-KEY> <요약>       feature/CY-12 재고 차감을 원자적으로 처리
+커밋     <type>/<JIRA-KEY> <메시지>     feature/CY-12 UPDATE README
 ```
 
 | 부분 | 규칙 |
 |---|---|
-| `<type>` | `feat` `fix` `refactor` `test` `docs` `chore` `perf` `ci` |
+| `<type>` | `feature` `fix` `refactor` `test` `docs` `chore` `perf` `ci` |
 | `<JIRA-KEY>` | Jira 이슈 키. 예 `CY-12` |
-| `<scope>` | 소문자, 숫자, `.`, `_`, `-` (coupon, entry, verification …) — 생략 가능 |
-| `<설명>` | 소문자, 숫자, 하이픈만 |
+| `<설명>` | 소문자, 숫자, 하이픈만 — **생략 가능** (에픽 브랜치는 보통 생략) |
+
+**에픽 브랜치와 하위 브랜치는 이름이 같은 형식이다.** 계층은 이름이 아니라 **PR 의 base 가 무엇인가**로 결정된다. base 가 `feature/CY-N` 이면 하위 작업 PR 이고, base 가 `main` 이면 에픽 PR 이다. 자동화도 이 기준을 쓴다 (2절).
 
 **왜 Jira 키를 브랜치명에 넣는가.** Jira는 브랜치명·커밋·PR 제목에서 이슈 키를 찾아 **이슈의 개발(Development) 패널에 자동 연결**한다. 그러면 이슈 하나를 열었을 때 어떤 브랜치에서 누가 작업했고 어떤 PR로 머지됐는지가 한 화면에 뜬다. **이게 "업무 분담" 채점 증빙 그 자체다** — 별도로 정리할 필요가 없어진다. 키가 빠지면 그 연결이 통째로 안 생긴다.
 
-**왜 PR 제목만 강제하는가.** Squash merge를 쓰므로 **PR 제목이 그대로 main의 커밋 메시지**가 된다. 브랜치 안의 개별 커밋은 스쿼시되어 사라지므로, 거기까지 강제하면 개발 중 마찰만 늘고 얻는 게 없다. 채점 대상인 main 커밋 로그는 PR 제목만 지켜도 깨끗하게 남는다.
+**커밋 메시지도 같은 형식인 이유.** 하위 → 에픽 PR 을 스쿼시하면 개별 커밋은 사라지지만, **에픽 → main 은 스쿼시하지 않는다**(에픽 안의 작업 단위를 보존해야 이력이 남는다). 그래서 커밋 메시지에도 키가 있어야 Jira 연결이 유지된다. 다만 강제하지는 않고 **경고만** 한다 — 개발 중 마찰을 늘리지 않기 위해서다.
 
-**PR 규칙**
+### 1.2 PR 규칙
+
 - 리뷰어 최소 1명 승인 후 머지. 셀프 머지 금지
 - Jira 이슈를 먼저 만들고, 그 키로 브랜치를 판다
 - `CODEOWNERS`가 영역별 리뷰어를 자동 배정한다
+- **에픽 → main PR 에는 `epic` 라벨을 붙인다.** 이미 하위 PR 에서 다 리뷰된 코드라 AI 리뷰를 다시 돌리지 않기 위한 표시다 (2절)
 
 **Jira 프로젝트 키 설정** — `.github/workflows/conventions.yml` 의 `JIRA_KEY` 한 곳만 바꾸면 된다.
 ```yaml
@@ -49,16 +66,30 @@ env:
 | PR 생성/push | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | AI 리뷰 (아래) |
 | `security-audit` 라벨 / 수동 | `security-audit.yml` | 보안 전수 점검. 키 없으면 스킵 |
 
-**AI 리뷰는 올라오는 모든 PR 에 기본으로 돈다.** 워크플로 파일이 아니라 **GitHub App** 이라 Actions 분을 쓰지 않는다. 스킵되는 경우는 둘:
+**리뷰는 `하위 → 에픽` PR 에만 붙는다.** 이게 이 설정의 핵심이다.
 
-| 경우 | 왜 |
+CodeRabbit 은 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동 리뷰한다. 그런데 우리 실제 작업 PR 은 전부 `하위 → 에픽` 이라 main 을 안 거친다. 그래서 `.coderabbit.yaml` 에 base 브랜치 패턴을 명시했다. **이 줄이 없으면 리뷰가 하나도 안 달린다.**
+
+```yaml
+auto_review:
+  base_branches:
+    - "^(feature|fix|refactor|test|docs|chore|perf|ci)/CY-[0-9]+"
+  labels: ["!epic", "!skip-review"]
+```
+
+| PR | 리뷰 |
 |---|---|
-| draft PR | 아직 작업 중. `Ready for review` 로 바꾸면 그때 돈다 — **누락이 아니라 유예** |
-| PR 본문에 `@coderabbitai ignore` | 되돌리기·설정 범프처럼 리뷰할 코드가 없는 PR |
+| 하위 → 에픽 (`feature/CY-12` → `feature/CY-1`) | **돈다** ← 여기가 리뷰 지점 |
+| 에픽 → main (`epic` 라벨) | 안 돈다. 하위에서 이미 다 봤다 |
+| `skip-review` 라벨 | 안 돈다. 되돌리기·설정 범프용 |
+| draft PR | 안 돈다. `Ready for review` 로 바꾸면 그때 — **누락이 아니라 유예** |
+| 봇 PR (dependabot 등) | 안 돈다 |
 
-**`@coderabbitai ignore` 가 "리뷰 없이 머지"를 여는 건 아니다.** AI 리뷰는 required check 가 아니라 애초에 머지를 막지 않는다 (3.5a절). 머지 게이트는 **`PR 제목 규약`·`브랜치명 규약` + 승인 1건**이고 그건 이 명령으로 못 건너뛴다.
+**라벨이 "리뷰 없이 머지"를 여는 건 아니다.** AI 리뷰는 required check 가 아니라 애초에 머지를 막지 않는다 (3.5a절). 머지 게이트는 **`PR 제목 규약`·`브랜치명 규약` + 승인 1건**이고 그건 라벨로 못 건너뛴다.
 
-> PR 도중에 다시 부르려면 코멘트로 `@coderabbitai review`(증분) 또는 `@coderabbitai full review`(전체).
+> 수동 제어 — 본문에 `@coderabbitai ignore`(스킵), 코멘트로 `@coderabbitai review`(증분) / `@coderabbitai full review`(전체).
+
+**리뷰는 GitHub Review 형태로 달린다.** `request_changes_workflow: true` 라 사람 리뷰어처럼 **줄 단위 인라인 코멘트 + Request changes** 를 남기고, 지적이 다 해소되면 자동으로 승인한다. 단 CodeRabbit 을 Ruleset 의 required reviewer 로 등록하면 3.5a절(비차단)이 깨진다 — 등록하지 말 것.
 
 ---
 

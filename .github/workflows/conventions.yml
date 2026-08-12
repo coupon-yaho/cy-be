@@ -2,9 +2,13 @@ name: Conventions
 
 # PR 제목 / 브랜치명 / 커밋 메시지 규약 검사. (이슈 트래커: Jira)
 #
+# 브랜치는 3계층이다 (docs/03-collaboration.md 1.1절):
+#   main  →  feature/CY-1 (에픽)  →  feature/CY-12 (하위 작업)
+# 에픽과 하위는 **이름 형식이 같다.** 계층은 PR 의 base 로만 구분된다.
+# 그래서 이 워크플로는 둘을 구분하지 않고 같은 규칙을 적용한다.
+#
 # 강제 대상은 PR 제목과 브랜치명 — 실패하면 머지가 막힌다.
-# 개별 커밋은 Squash merge로 사라지므로 경고만 한다.
-#   → Settings > General > Squash merging + "Default to pull request title" 전제
+# 개별 커밋은 경고만 한다 (마찰을 줄이기 위해).
 #
 # 브랜치·PR 제목에 Jira 이슈 키가 들어가야 Jira 개발 패널에
 # 브랜치/PR/커밋이 자동 연결된다. 그 연결이 "업무 분담" 채점 증빙이다.
@@ -21,7 +25,7 @@ permissions:
   pull-requests: read
 
 env:
-  TYPES: 'feat|fix|refactor|test|docs|chore|perf|ci'
+  TYPES: 'feature|fix|refactor|test|docs|chore|perf|ci'
 
   # Jira 프로젝트 키 — 쿠폰 야호(Coupon Yaho)
   # 비워두면 대문자 2자 이상인 아무 키나 허용합니다(형식만 검사).
@@ -29,9 +33,9 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────
-  # PR 제목 — Squash merge 시 main의 커밋 메시지가 된다. 반드시 통과.
-  #   [CY-12] feat(coupon): 재고 차감을 원자적으로 처리
-  #   [CY-31] fix: Entry-Token GETDEL 경합 수정      ← scope 생략 가능
+  # PR 제목 — 브랜치명과 같은 형식 + 요약. 반드시 통과.
+  #   feature/CY-12 재고 차감을 원자적으로 처리
+  #   fix/CY-31 Entry-Token GETDEL 경합 수정
   # ─────────────────────────────────────────────────────────
   pr-title:
     name: PR 제목 규약
@@ -42,7 +46,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           KEY="${JIRA_KEY:-[A-Z][A-Z0-9]+}"
-          PATTERN="^\[${KEY}-[0-9]+\] (${TYPES})(\([a-z0-9._-]+\))?: .{3,}$"
+          PATTERN="^(${TYPES})/${KEY}-[0-9]+ .{3,}$"
 
           if printf '%s' "$PR_TITLE" | grep -qE "$PATTERN"; then
             echo "✅ $PR_TITLE"
@@ -56,23 +60,22 @@ jobs:
           $PR_TITLE
           \`\`\`
 
-          **형식**: \`[<JIRA-KEY>] <type>(<scope>): <한글 요약>\`
+          **형식**: \`<type>/<JIRA-KEY> <요약>\`  — 브랜치명과 같은 형식에 요약을 붙입니다.
 
           | 부분 | 규칙 |
           |---|---|
-          | JIRA-KEY | 대괄호 안에 Jira 이슈 키 (예: \`[${JIRA_KEY:-CY}-12]\`) |
-          | type | \`feat\` \`fix\` \`refactor\` \`test\` \`docs\` \`chore\` \`perf\` \`ci\` |
-          | scope | 소문자, 숫자, 마침표, 밑줄, 하이픈 — **생략 가능** |
+          | type | \`feature\` \`fix\` \`refactor\` \`test\` \`docs\` \`chore\` \`perf\` \`ci\` |
+          | JIRA-KEY | Jira 이슈 키 (예: \`${JIRA_KEY:-CY}-12\`) |
           | 요약 | 3자 이상 |
 
           **예시**
           \`\`\`
-          [${JIRA_KEY:-CY}-12] feat(coupon): 재고 차감을 원자적으로 처리
-          [${JIRA_KEY:-CY}-31] fix(entry): Entry-Token GETDEL 동시 요청 경합 수정
-          [${JIRA_KEY:-CY}-45] test: 재고 N에 2N 스레드 동시성 테스트 추가
+          feature/${JIRA_KEY:-CY}-12 재고 차감을 원자적으로 처리
+          fix/${JIRA_KEY:-CY}-31 Entry-Token GETDEL 동시 요청 경합 수정
+          test/${JIRA_KEY:-CY}-45 재고 N에 2N 스레드 동시성 테스트 추가
           \`\`\`
 
-          > Squash merge라 이 제목이 그대로 main의 커밋 메시지가 됩니다.
+          > 에픽 → main PR 도 같은 형식입니다 (에픽 티켓 키를 씁니다).
           > 키가 있어야 Jira 이슈에 PR이 자동 연결됩니다.
           EOF
 
@@ -80,10 +83,12 @@ jobs:
           exit 1
 
   # ─────────────────────────────────────────────────────────
-  # 브랜치명 — <type>/<JIRA-KEY>-<설명>
-  #   feat/CY-12-coupon-state-machine
-  #   fix/CY-31-entry-token-getdel
+  # 브랜치명 — <type>/<JIRA-KEY>[-<설명>]
+  #   feature/CY-1                     에픽 (설명 생략)
+  #   feature/CY-12                    하위 작업
+  #   feature/CY-12-stock-decrement    하위 작업 (설명 붙임)
   #
+  # 에픽과 하위의 형식이 같다 — 계층은 PR 의 base 로 구분한다 (헤더 참조).
   # Jira는 브랜치명에서 키를 찾아 이슈에 자동 연결한다.
   # ─────────────────────────────────────────────────────────
   branch-name:
@@ -95,7 +100,7 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           KEY="${JIRA_KEY:-[A-Z][A-Z0-9]+}"
-          PATTERN="^(${TYPES})/${KEY}-[0-9]+-[a-z0-9][a-z0-9-]*$"
+          PATTERN="^(${TYPES})/${KEY}-[0-9]+(-[a-z0-9][a-z0-9-]*)?$"
 
           if printf '%s' "$BRANCH" | grep -qE "$PATTERN"; then
             echo "✅ $BRANCH"
@@ -109,25 +114,25 @@ jobs:
           $BRANCH
           \`\`\`
 
-          **형식**: \`<type>/<JIRA-KEY>-<설명>\`
+          **형식**: \`<type>/<JIRA-KEY>[-<설명>]\`  — 설명은 생략 가능합니다.
 
           | 부분 | 규칙 |
           |---|---|
-          | type | \`feat\` \`fix\` \`refactor\` \`test\` \`docs\` \`chore\` \`perf\` \`ci\` |
+          | type | \`feature\` \`fix\` \`refactor\` \`test\` \`docs\` \`chore\` \`perf\` \`ci\` |
           | JIRA-KEY | Jira 이슈 키 (예: \`${JIRA_KEY:-CY}-12\`) |
-          | 설명 | 소문자, 숫자, 하이픈만 |
+          | 설명 | 소문자, 숫자, 하이픈만 — **생략 가능** |
 
           **예시**
           \`\`\`
-          feat/${JIRA_KEY:-CY}-12-coupon-state-machine
-          feat/${JIRA_KEY:-CY}-18-redis-lua-counter
+          feature/${JIRA_KEY:-CY}-1                     에픽 (main 에서 딴다)
+          feature/${JIRA_KEY:-CY}-12                    하위 작업 (에픽에서 딴다)
+          feature/${JIRA_KEY:-CY}-12-stock-decrement    하위 작업 + 설명
           fix/${JIRA_KEY:-CY}-31-entry-token-getdel
-          test/${JIRA_KEY:-CY}-45-corrupt-dataset
           \`\`\`
 
           **고치는 법**
           \`\`\`bash
-          git branch -m ${TYPE:-feat}/${JIRA_KEY:-CY}-00-올바른-이름
+          git branch -m ${TYPE:-feature}/${JIRA_KEY:-CY}-00
           git push origin -u \$(git branch --show-current)
           git push origin --delete $BRANCH
           \`\`\`
@@ -139,8 +144,11 @@ jobs:
           exit 1
 
   # ─────────────────────────────────────────────────────────
-  # 커밋 메시지 — 경고만. Squash로 사라지므로 머지를 막지 않는다.
-  #   feat(coupon): 재고 차감 원자화 [CY-12]     ← Jira 키는 뒤에
+  # 커밋 메시지 — 경고만. 개발 중 마찰을 늘리지 않는다.
+  #   feature/CY-12 재고 차감 원자화     ← 브랜치명과 같은 형식
+  #
+  # 하위 → 에픽은 스쿼시해도 되지만 에픽 → main 은 스쿼시하지 않으므로
+  # 커밋에도 키가 있어야 Jira 연결이 남는다. 그래서 검사는 하되 막지는 않는다.
   # required check로 등록하지 말 것.
   # ─────────────────────────────────────────────────────────
   commit-messages:
@@ -158,13 +166,13 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           KEY="${JIRA_KEY:-[A-Z][A-Z0-9]+}"
-          PATTERN="^(${TYPES})(\([a-z0-9._-]+\))?: .{3,} \[${KEY}-[0-9]+\]$"
+          PATTERN="^(${TYPES})/${KEY}-[0-9]+ .{3,}$"
           BAD=0
 
           {
             echo "## 커밋 메시지 검사"
             echo ""
-            echo "형식: \`<type>(<scope>): <요약> [JIRA-KEY]\`"
+            echo "형식: \`<type>/<JIRA-KEY> <메시지>\`   예: \`feature/${JIRA_KEY:-CY}-12 재고 차감 원자화\`"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -186,7 +194,7 @@ jobs:
           if [ "$BAD" -gt 0 ]; then
             {
               echo "> ⚠️ $BAD 개가 형식에 맞지 않습니다."
-              echo "> Squash merge라 머지는 막지 않지만, Jira 이슈에 커밋이 자동 연결되지 않습니다."
+              echo "> 머지는 막지 않지만, Jira 이슈에 커밋이 자동 연결되지 않습니다."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::warning title=커밋 메시지::$BAD 개가 형식에 맞지 않습니다 (경고)"
           else

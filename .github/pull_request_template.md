@@ -1,7 +1,10 @@
 <!--
-  제목 형식:  [CY-12] feat(coupon): 재고 차감을 원자적으로 처리
-  브랜치:     feat/CY-12-coupon-state-machine
+  제목 형식:  feature/CY-12 재고 차감을 원자적으로 처리
+  브랜치:     feature/CY-12  (에픽 feature/CY-1 에서 딴 하위 작업)
+  base:      에픽 브랜치입니다. main 이 아닙니다.
   키가 있어야 Jira 이슈에 이 PR이 자동 연결됩니다.
+
+  에픽 → main PR 이면 `epic` 라벨을 붙이세요 (AI 리뷰가 중복으로 돌지 않게).
 -->
 
 ## Jira
@@ -49,6 +52,6 @@ CY-
 
 ---
 
-<!-- CodeRabbit 이 모든 PR을 자동 리뷰합니다. 머지를 막지는 않습니다.
+<!-- CodeRabbit 이 `하위 → 에픽` PR 을 자동 리뷰합니다. 머지를 막지는 않습니다.
      리뷰 기준은 `.coderabbit.yaml` — 아래 체크리스트와 같은 근거(docs/)를 봅니다.
-     리뷰가 필요 없는 PR(되돌리기·설정 범프)이면 이 본문에 `@coderabbitai ignore` 를 적으세요. -->
+     리뷰가 필요 없는 PR(되돌리기·설정 범프)이면 `skip-review` 라벨을 붙이세요. -->
