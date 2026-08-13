@@ -7,6 +7,7 @@ import com.kafkick.core.coupon.exception.CouponErrorCode;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.coupon.entity.CouponTemplateEntity;
 import com.kafkick.storage.coupon.repository.CouponTemplateJpaRepository;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Repository;
 import org.springframework.dao.DataIntegrityViolationException;
 
@@ -14,11 +15,14 @@ import org.springframework.dao.DataIntegrityViolationException;
 public class CouponTemplateRepositoryAdapter implements CouponTemplateRepository {
 
     private final CouponTemplateJpaRepository jpaRepository;
+    private final EntityManager entityManager;
 
     public CouponTemplateRepositoryAdapter(
-            CouponTemplateJpaRepository jpaRepository
+            CouponTemplateJpaRepository jpaRepository,
+            EntityManager entityManager
     ) {
         this.jpaRepository = jpaRepository;
+        this.entityManager = entityManager;
     }
 
     @Override
@@ -28,7 +32,9 @@ public class CouponTemplateRepositoryAdapter implements CouponTemplateRepository
                     CouponTemplateEntity.from(couponTemplate);
 
             CouponTemplateEntity savedEntity =
-                    jpaRepository.save(entity);
+                    jpaRepository.saveAndFlush(entity);
+
+            entityManager.refresh(savedEntity);
 
             return savedEntity.toDomain();
         } catch (DataIntegrityViolationException exception) {

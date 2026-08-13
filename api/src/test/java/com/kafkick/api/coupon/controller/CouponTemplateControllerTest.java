@@ -49,7 +49,6 @@ class CouponTemplateControllerTest {
                 20,
                 20_000,
                 null,
-                10_000,
                 30,
                 1,
                 CouponDayOfWeek.TUE,
@@ -77,7 +76,6 @@ class CouponTemplateControllerTest {
                   "discountRate": 20,
                   "maxDiscountAmount": 20000,
                   "discountAmount": null,
-                  "minOrderAmount": 10000,
                   "validDays": 30,
                   "nthWeek": 1,
                   "dayOfWeek": "TUE",
@@ -94,13 +92,10 @@ class CouponTemplateControllerTest {
                 """;
 
         mockMvc.perform(post("/api/v1/admin/coupon-templates")
-                        .contentType(MediaType.APPLICATION_JSON)
+                .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isCreated())
-                .andExpect(header().string(
-                        "Location",
-                        "/api/v1/admin/coupon-templates/100"
-                ))
+                .andExpect(header().doesNotExist("Location"))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(100))
                 .andExpect(jsonPath("$.data.brandId").value(1))
@@ -112,6 +107,8 @@ class CouponTemplateControllerTest {
                 .andExpect(jsonPath("$.data.maxDiscountAmount")
                         .value(20_000))
                 .andExpect(jsonPath("$.data.discountAmount")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.data.minOrderAmount")
                         .doesNotExist())
                 .andExpect(jsonPath("$.data.stockPerOccurrence")
                         .value(10_000))
@@ -138,7 +135,6 @@ class CouponTemplateControllerTest {
                   "name": "",
                   "policyType": "FIXED_AMOUNT",
                   "discountAmount": 5000,
-                  "minOrderAmount": 10000,
                   "validDays": 30,
                   "nthWeek": 1,
                   "dayOfWeek": "TUE",
@@ -180,7 +176,6 @@ class CouponTemplateControllerTest {
                   "discountRate": 20,
                   "maxDiscountAmount": 20000,
                   "discountAmount": 5000,
-                  "minOrderAmount": 10000,
                   "validDays": 30,
                   "nthWeek": 1,
                   "dayOfWeek": "TUE",
@@ -214,7 +209,6 @@ class CouponTemplateControllerTest {
                   "policyType": "PERCENT",
                   "discountRate": 20,
                   "maxDiscountAmount": 20000,
-                  "minOrderAmount": 10000,
                   "validDays": 30,
                   "nthWeek": 1,
                   "dayOfWeek": "TUE",

@@ -11,7 +11,6 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalTime;
@@ -24,7 +23,6 @@ public record CouponTemplateCreateRequest(
         Integer discountRate,
         Integer maxDiscountAmount,
         Integer discountAmount,
-        @NotNull @PositiveOrZero Integer minOrderAmount,
         @NotNull @Positive Integer validDays,
         @NotNull @Min(1) @Max(4) Integer nthWeek,
         @NotNull CouponDayOfWeek dayOfWeek,
@@ -42,7 +40,6 @@ public record CouponTemplateCreateRequest(
                 discountRate,
                 maxDiscountAmount,
                 discountAmount,
-                minOrderAmount,
                 validDays,
                 nthWeek,
                 dayOfWeek,

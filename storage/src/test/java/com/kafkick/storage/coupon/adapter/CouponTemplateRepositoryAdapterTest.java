@@ -12,6 +12,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import jakarta.persistence.EntityManager;
+
 import com.kafkick.core.coupon.CouponDayOfWeek;
 import com.kafkick.core.coupon.CouponPolicyType;
 import com.kafkick.core.coupon.CouponTemplate;
@@ -33,30 +35,38 @@ class CouponTemplateRepositoryAdapterTest {
     @Mock
     private CouponTemplateJpaRepository jpaRepository;
 
+    @Mock
+    private EntityManager entityManager;
+
+    @Mock
+    private CouponTemplateEntity savedEntity;
+
     @InjectMocks
     private CouponTemplateRepositoryAdapter repositoryAdapter;
 
     @Test
+    @DisplayName("저장 후 DB 값을 다시 읽어 도메인 모델로 반환한다")
+    void refreshSavedCouponTemplate() {
+        CouponTemplate couponTemplate = createCouponTemplate(null);
+        CouponTemplate savedCouponTemplate = createCouponTemplate(1L);
+
+        when(jpaRepository.saveAndFlush(any(CouponTemplateEntity.class)))
+                .thenReturn(savedEntity);
+        when(savedEntity.toDomain()).thenReturn(savedCouponTemplate);
+
+        CouponTemplate result = repositoryAdapter.save(couponTemplate);
+
+        assertThat(result).isSameAs(savedCouponTemplate);
+        verify(entityManager).refresh(savedEntity);
+        verify(savedEntity).toDomain();
+    }
+
+    @Test
     @DisplayName("DB 제약을 위반하면 COUPON-001 오류로 변환한다")
     void convertDataIntegrityViolation() {
-        CouponTemplate couponTemplate = CouponTemplate.create(
-                999L,
-                "존재하지 않는 브랜드 쿠폰",
-                CouponPolicyType.FIXED_AMOUNT,
-                null,
-                null,
-                5_000,
-                10_000,
-                30,
-                1,
-                CouponDayOfWeek.TUE,
-                LocalTime.of(14, 0),
-                2,
-                10_000,
-                Set.of(MembershipGrade.VIP)
-        );
+        CouponTemplate couponTemplate = createCouponTemplate(null);
 
-        when(jpaRepository.save(any(CouponTemplateEntity.class)))
+        when(jpaRepository.saveAndFlush(any(CouponTemplateEntity.class)))
                 .thenThrow(new DataIntegrityViolationException(
                         "foreign key violation"
                 ));
@@ -75,6 +85,44 @@ class CouponTemplateRepositoryAdapterTest {
                 });
 
         verify(jpaRepository)
-                .save(any(CouponTemplateEntity.class));
+                .saveAndFlush(any(CouponTemplateEntity.class));
+    }
+
+    private CouponTemplate createCouponTemplate(Long id) {
+        if (id == null) {
+            return CouponTemplate.create(
+                    999L,
+                    "존재하지 않는 브랜드 쿠폰",
+                    CouponPolicyType.FIXED_AMOUNT,
+                    null,
+                    null,
+                    5_000,
+                    30,
+                    1,
+                    CouponDayOfWeek.TUE,
+                    LocalTime.of(14, 0),
+                    2,
+                    10_000,
+                    Set.of(MembershipGrade.VIP)
+            );
+        }
+
+        return CouponTemplate.restore(
+                id,
+                999L,
+                "존재하지 않는 브랜드 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                30,
+                1,
+                CouponDayOfWeek.TUE,
+                LocalTime.of(14, 0),
+                2,
+                10_000,
+                Set.of(MembershipGrade.VIP),
+                true
+        );
     }
 }

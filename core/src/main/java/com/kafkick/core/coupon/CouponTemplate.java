@@ -14,7 +14,6 @@ public record CouponTemplate(
         Integer discountRate,
         Integer maxDiscountAmount,
         Integer discountAmount,
-        int minOrderAmount,
         int validDays,
         int nthWeek,
         CouponDayOfWeek dayOfWeek,
@@ -43,7 +42,6 @@ public record CouponTemplate(
                 durationHours
         );
         validateStock(stockPerOccurrence);
-        validateMinOrderAmount(minOrderAmount);
         validateEligibleGrades(eligibleGrades);
 
         name = name.trim();
@@ -59,7 +57,6 @@ public record CouponTemplate(
             Integer discountRate,
             Integer maxDiscountAmount,
             Integer discountAmount,
-            int minOrderAmount,
             int validDays,
             int nthWeek,
             CouponDayOfWeek dayOfWeek,
@@ -76,7 +73,6 @@ public record CouponTemplate(
                 discountRate,
                 maxDiscountAmount,
                 discountAmount,
-                minOrderAmount,
                 validDays,
                 nthWeek,
                 dayOfWeek,
@@ -96,7 +92,6 @@ public record CouponTemplate(
             Integer discountRate,
             Integer maxDiscountAmount,
             Integer discountAmount,
-            int minOrderAmount,
             int validDays,
             int nthWeek,
             CouponDayOfWeek dayOfWeek,
@@ -116,7 +111,6 @@ public record CouponTemplate(
                 discountRate,
                 maxDiscountAmount,
                 discountAmount,
-                minOrderAmount,
                 validDays,
                 nthWeek,
                 dayOfWeek,
@@ -294,16 +288,6 @@ public record CouponTemplate(
         if (stockPerOccurrence <= 0) {
             throw new IllegalArgumentException(
                     "쿠폰 재고는 0보다 커야 합니다."
-            );
-        }
-    }
-
-    private static void validateMinOrderAmount(
-            int minOrderAmount
-    ) {
-        if (minOrderAmount < 0) {
-            throw new IllegalArgumentException(
-                    "최소 주문 금액은 0 이상이어야 합니다."
             );
         }
     }

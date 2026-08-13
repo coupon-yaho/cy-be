@@ -43,9 +43,6 @@ public class CouponTemplateEntity {
     @Column(name = "discount_amount")
     private Integer discountAmount;
 
-    @Column(name = "min_order_amount", nullable = false)
-    private int minOrderAmount;
-
     @Column(name = "valid_days", nullable = false)
     private int validDays;
 
@@ -82,7 +79,6 @@ public class CouponTemplateEntity {
         this.discountRate = couponTemplate.discountRate();
         this.maxDiscountAmount = couponTemplate.maxDiscountAmount();
         this.discountAmount = couponTemplate.discountAmount();
-        this.minOrderAmount = couponTemplate.minOrderAmount();
         this.validDays = couponTemplate.validDays();
         this.nthWeek = (byte) couponTemplate.nthWeek();
         this.dayOfWeek = couponTemplate.dayOfWeek();
@@ -106,7 +102,6 @@ public class CouponTemplateEntity {
                 discountRate,
                 maxDiscountAmount,
                 discountAmount,
-                minOrderAmount,
                 validDays,
                 nthWeek.intValue(),
                 dayOfWeek,
