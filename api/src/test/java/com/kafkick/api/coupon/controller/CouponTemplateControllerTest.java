@@ -95,7 +95,10 @@ class CouponTemplateControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isCreated())
-                .andExpect(header().doesNotExist("Location"))
+                .andExpect(header().string(
+                        "Location",
+                        "/api/v1/admin/coupon-templates/100"
+                ))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(100))
                 .andExpect(jsonPath("$.data.brandId").value(1))

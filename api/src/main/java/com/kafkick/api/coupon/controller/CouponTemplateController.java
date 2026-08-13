@@ -1,9 +1,10 @@
-// 관리자용 쿠폰 템플릿 생성 결과를 공통 응답 형식으로 반환합니다.
+// 관리자용 쿠폰 템플릿 생성 결과를 공통 응답 형식과 Location 헤더로 반환합니다.
 package com.kafkick.api.coupon.controller;
+
+import java.net.URI;
 
 import jakarta.validation.Valid;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,7 +35,11 @@ public class CouponTemplateController {
         CouponTemplateCreateResponse response =
                 couponTemplateCreateService.create(request);
 
-        return ResponseEntity.status(HttpStatus.CREATED)
+        URI location = URI.create(
+                "/api/v1/admin/coupon-templates/" + response.id()
+        );
+
+        return ResponseEntity.created(location)
                 .body(ResponseEnvelope.success(response));
     }
 }
