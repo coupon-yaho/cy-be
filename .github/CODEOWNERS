@@ -72,7 +72,7 @@ core/src/main/java/**/support/config/TimeConfig.java   @HUHGEON @SH-Seol @parkji
 **/resilience/**                @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 
 # ── ④ 데이터·검증 ────────────────────────────────────────
-# 더미데이터 생성기, 검증 배치, 오염셋 600건, 리포트, 통계 집계
+# 더미데이터 생성기, 검증 배치, 오염셋 700건, 리포트, 통계 집계
 **/verification/**              @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 **/seed/**                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 **/stats/**                     @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
