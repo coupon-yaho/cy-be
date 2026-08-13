@@ -7,7 +7,7 @@ import com.kafkick.core.coupon.CouponPolicyType;
 import com.kafkick.core.coupon.MembershipGrade;
 
 import java.time.LocalTime;
-import java.util.Set;
+import java.util.List;
 
 public record CouponTemplateCreateResponse(
         Long id,
@@ -24,7 +24,7 @@ public record CouponTemplateCreateResponse(
         LocalTime startTime,
         int durationHours,
         int stockPerOccurrence,
-        Set<MembershipGrade> eligibleGrades,
+        List<MembershipGrade> eligibleGrades,
         boolean active
 ) {
 
@@ -44,7 +44,9 @@ public record CouponTemplateCreateResponse(
                 couponTemplate.startTime(),
                 couponTemplate.durationHours(),
                 couponTemplate.stockPerOccurrence(),
-                couponTemplate.eligibleGrades(),
+                couponTemplate.eligibleGrades().stream()
+                        .sorted()
+                        .toList(),
                 couponTemplate.active()
         );
     }

@@ -19,7 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalTime;
-import java.util.Set;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -56,7 +56,7 @@ class CouponTemplateControllerTest {
                 LocalTime.of(14, 0),
                 2,
                 10_000,
-                Set.of(
+                List.of(
                         MembershipGrade.WELCOME,
                         MembershipGrade.SILVER,
                         MembershipGrade.GOLD,
@@ -115,6 +115,14 @@ class CouponTemplateControllerTest {
                         .doesNotExist())
                 .andExpect(jsonPath("$.data.stockPerOccurrence")
                         .value(10_000))
+                .andExpect(jsonPath("$.data.eligibleGrades[0]")
+                        .value("WELCOME"))
+                .andExpect(jsonPath("$.data.eligibleGrades[1]")
+                        .value("SILVER"))
+                .andExpect(jsonPath("$.data.eligibleGrades[2]")
+                        .value("GOLD"))
+                .andExpect(jsonPath("$.data.eligibleGrades[3]")
+                        .value("VIP"))
                 .andExpect(jsonPath("$.data.active").value(true));
 
         verify(couponTemplateCreateService)

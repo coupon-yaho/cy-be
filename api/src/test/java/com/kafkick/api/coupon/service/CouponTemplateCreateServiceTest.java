@@ -106,6 +106,13 @@ class CouponTemplateCreateServiceTest {
         assertThat(response.maxDiscountAmount()).isEqualTo(20_000);
         assertThat(response.discountAmount()).isNull();
         assertThat(response.active()).isTrue();
+        assertThat(response.eligibleGrades())
+                .containsExactly(
+                        MembershipGrade.WELCOME,
+                        MembershipGrade.SILVER,
+                        MembershipGrade.GOLD,
+                        MembershipGrade.VIP
+                );
     }
 
     @Test

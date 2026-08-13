@@ -3,6 +3,8 @@ package com.kafkick.core.coupon;
 
 import java.time.LocalTime;
 import java.util.Set;
+import java.util.Collections;
+import java.util.EnumSet;
 
 public record CouponTemplate(
         Long id,
@@ -27,7 +29,7 @@ public record CouponTemplate(
         validateId(id);
         validateBrandId(brandId);
         validateName(name);
-        validatePolicy(
+        policyType = validatePolicy(
                 policyType,
                 discountRate,
                 maxDiscountAmount,
@@ -45,7 +47,9 @@ public record CouponTemplate(
         validateEligibleGrades(eligibleGrades);
 
         name = name.trim();
-        eligibleGrades = Set.copyOf(eligibleGrades);
+        eligibleGrades = Collections.unmodifiableSet(
+                EnumSet.copyOf(eligibleGrades)
+        );
     }
 
     public static CouponTemplate create(
@@ -102,6 +106,8 @@ public record CouponTemplate(
             Set<MembershipGrade> eligibleGrades,
             boolean active
     ) {
+        validateRestoredId(id);
+
         return new CouponTemplate(
                 id,
                 brandId,
@@ -156,7 +162,7 @@ public record CouponTemplate(
         }
     }
 
-    private static void validatePolicy(
+    private static CouponPolicyType validatePolicy(
             CouponPolicyType policyType,
             Integer discountRate,
             Integer maxDiscountAmount,
@@ -168,18 +174,25 @@ public record CouponTemplate(
             );
         }
 
-        switch (policyType) {
-            case PERCENT_CAPPED -> validatePercentPolicy(
-                    discountRate,
-                    maxDiscountAmount,
-                    discountAmount
-            );
-            case FIXED_AMOUNT -> validateFixedAmountPolicy(
-                    discountRate,
-                    maxDiscountAmount,
-                    discountAmount
-            );
-        }
+        return switch (policyType) {
+            case PERCENT_CAPPED -> {
+                validatePercentPolicy(
+                        discountRate,
+                        maxDiscountAmount,
+                        discountAmount
+                );
+                yield policyType;
+            }
+
+            case FIXED_AMOUNT -> {
+                validateFixedAmountPolicy(
+                        discountRate,
+                        maxDiscountAmount,
+                        discountAmount
+                );
+                yield policyType;
+            }
+        };
     }
 
     private static void validatePercentPolicy(
@@ -258,9 +271,21 @@ public record CouponTemplate(
             );
         }
 
-        if (durationHours <= 0) {
+        if (startTime.getNano() != 0) {
             throw new IllegalArgumentException(
-                    "쿠폰 진행 시간은 0보다 커야 합니다."
+                    "쿠폰 시작 시간은 초 단위까지만 입력할 수 있습니다."
+            );
+        }
+
+        if (durationHours < 1 || durationHours > 24) {
+            throw new IllegalArgumentException(
+                    "쿠폰 진행 시간은 1에서 24 사이여야 합니다."
+            );
+        }
+
+        if (!startTime.plusHours(durationHours).isAfter(startTime)) {
+            throw new IllegalArgumentException(
+                    "쿠폰 진행 시간은 시작일 자정을 넘을 수 없습니다."
             );
         }
     }
@@ -289,6 +314,14 @@ public record CouponTemplate(
         if (eligibleGrades == null || eligibleGrades.isEmpty()) {
             throw new IllegalArgumentException(
                     "참여 가능한 멤버십 등급이 필요합니다."
+            );
+        }
+    }
+
+    private static void validateRestoredId(Long id) {
+        if (id == null || id <= 0) {
+            throw new IllegalArgumentException(
+                    "복원할 쿠폰 템플릿 ID는 0보다 커야 합니다."
             );
         }
     }

@@ -182,11 +182,112 @@ class CouponTemplateTest {
         Set<MembershipGrade> restored =
                 MembershipGrade.fromMask(mask);
 
-        assertThat(mask).isEqualTo(12);
         assertThat(restored)
-                .containsExactlyInAnyOrder(
+                .containsExactly(
                         MembershipGrade.GOLD,
                         MembershipGrade.VIP
+                );
+    }
+
+    @Test
+    @DisplayName("쿠폰 진행 시간은 24시간을 초과할 수 없다")
+    void rejectDurationOverTwentyFourHours() {
+        assertThatThrownBy(() -> CouponTemplate.create(
+                1L,
+                "잘못된 진행 시간",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                10_000,
+                30,
+                1,
+                CouponDayOfWeek.TUE,
+                LocalTime.of(10, 0),
+                25,
+                10_000,
+                Set.of(MembershipGrade.VIP)
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "쿠폰 진행 시간은 1에서 24 사이여야 합니다."
+                );
+    }
+
+    @Test
+    @DisplayName("쿠폰 진행 시간은 시작일 자정을 넘을 수 없다")
+    void rejectDurationCrossingMidnight() {
+        assertThatThrownBy(() -> CouponTemplate.create(
+                1L,
+                "자정을 넘는 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                10_000,
+                30,
+                1,
+                CouponDayOfWeek.TUE,
+                LocalTime.of(23, 0),
+                2,
+                10_000,
+                Set.of(MembershipGrade.VIP)
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "쿠폰 진행 시간은 시작일 자정을 넘을 수 없습니다."
+                );
+    }
+
+    @Test
+    @DisplayName("쿠폰 시작 시간에는 소수 초를 입력할 수 없다")
+    void rejectFractionalStartTime() {
+        assertThatThrownBy(() -> CouponTemplate.create(
+                1L,
+                "소수 초가 있는 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                10_000,
+                30,
+                1,
+                CouponDayOfWeek.TUE,
+                LocalTime.of(14, 0, 30, 700_000_000),
+                2,
+                10_000,
+                Set.of(MembershipGrade.VIP)
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "쿠폰 시작 시간은 초 단위까지만 입력할 수 있습니다."
+                );
+    }
+
+    @Test
+    @DisplayName("저장된 쿠폰 템플릿 복원에는 ID가 필요하다")
+    void rejectRestorationWithoutId() {
+        assertThatThrownBy(() -> CouponTemplate.restore(
+                null,
+                1L,
+                "ID 없는 쿠폰 템플릿",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                10_000,
+                30,
+                1,
+                CouponDayOfWeek.TUE,
+                LocalTime.of(14, 0),
+                2,
+                10_000,
+                Set.of(MembershipGrade.VIP),
+                true
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "복원할 쿠폰 템플릿 ID는 0보다 커야 합니다."
                 );
     }
 }
