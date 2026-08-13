@@ -85,7 +85,6 @@ management.endpoints.web.exposure.include: health,metrics,admission-capacity
 management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 ```
 - `exclude` 가 **명시**되어 있는가 — `include` 만 쓰면 나중에 `*` 로 바뀔 때 `env`가 함께 열린다. AES 키를 환경변수로 주입하므로 `/actuator/env` 는 실제 유출 경로다
-- `/api/v1/admin/**` 에 `hasRole("ADMIN")` 이 걸려 있는가
 - Compose에서 관리 포트가 외부로 노출되는가
 
 ### 5. 헤더 기반 인증 — JWT 는 쓰지 않는다
