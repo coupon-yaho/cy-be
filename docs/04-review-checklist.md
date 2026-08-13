@@ -7,6 +7,19 @@
 전부 `docs/01-what-we-build.md`(흔들리지 않는 축, 함정 8개), `docs/02-erd-decisions.md`(F1~F7),
 `docs/PRD-v4.15.md` 에서 뽑았다. 여기서 규칙을 새로 만들지 않는다.
 
+> ### ⚠️ 어휘 — DDL 명칭이 정답이다
+>
+> | 지금 이름 | 뜻 | 이 문서의 구 어휘 |
+> |---|---|---|
+> | `coupons` | **회차** 147 | `campaigns` |
+> | `issuances` | **발급건** 300만 | `coupons` |
+> | `issuance_histories` | 이력 534만 | `coupon_histories` |
+> | `issuance_usages` | 사용 실적 132만 | `coupon_usages` |
+>
+> 컬럼명만 레거시로 남은 것 — `verification_findings.campaign_id` → `coupons.id`,
+> `.coupon_id` → `issuances.id`, `asof_state.coupon_id` → `issuances.id`.
+> 본문에 구 어휘가 남아 있으면 위 표로 치환해 읽는다.
+
 > ⚠️ **48항목을 다 봤는지 기계가 세던 장치는 없어졌다** (`docs/03-collaboration.md` 3.5c절).
 > 코어 PR 에서는 사람 리뷰어가 이 목록을 직접 훑어야 한다.
 
@@ -94,9 +107,9 @@
 
 - 배치 코드에 `now()` / `LocalDateTime.now()` / `Instant.now()` 가 **없는가**
 - `부재` 기준 시각이 `asOf` 파라미터로 **주입**되는가
-- `부재` 정렬에 `(occurred_at, id)` **타이브레이커**가 있는가 (동시각 이력의 순서 고정)
+- `부재` 정렬에 `(created_at, id)` **타이브레이커**가 있는가 (동시각 이력의 순서 고정)
 - `부재` 같은 `(asOf, dataset)` 재실행이 같은 결과를 내는가 — `findings_checksum` 으로 증명되는가
-- `부재` 검증이 `coupons` ↔ `coupon_histories` ↔ `coupon_usages` **3축을 모두** 대조하는가
+- `부재` 검증이 `asof_state.state` ↔ `issuances.status` ↔ `issuance_usages` **3축을 모두** 대조하는가
 - 오염 데이터셋이 정상 데이터셋과 **분리**돼 있는가 (→ 함정 1)
 - `부재` `verification_findings` 가 위반 유형별 식별자(`campaign_id` `member_id` `history_id`)를 담는가 (→ F1)
 

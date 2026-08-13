@@ -5,6 +5,21 @@
 
 ---
 
+> ### ⚠️ 어휘 — DDL 명칭이 정답이다
+>
+> | 지금 이름 | 뜻 | 이 문서의 구 어휘 |
+> |---|---|---|
+> | `coupons` | **회차** 147 | `campaigns` |
+> | `issuances` | **발급건** 300만 | `coupons` |
+> | `issuance_histories` | 이력 534만 | `coupon_histories` |
+> | `issuance_usages` | 사용 실적 132만 | `coupon_usages` |
+>
+> 컬럼명만 레거시로 남은 것 — `verification_findings.campaign_id` → `coupons.id`,
+> `.coupon_id` → `issuances.id`, `asof_state.coupon_id` → `issuances.id`.
+> 본문에 구 어휘가 남아 있으면 위 표로 치환해 읽는다.
+
+---
+
 ## 먼저, 이 ERD의 좋은 판단 5개
 
 일정이 밀리면 "간단하게 합치자"는 말이 나오는데, 아래는 합치면 프로젝트가 망가진다.
@@ -79,7 +94,10 @@ verification_findings(
 )
 ```
 
-NULL이 많은 게 거슬리면 `target_type + target_id` 2컬럼으로 줄여도 된다. 다만 `expected`/`actual`은 어느 쪽이든 넣는다.
+**확정** — 다형 FK 컬럼은 조회 편의로만 남기고, **집합 비교·UNIQUE·checksum 은 `target_key` 문자열 하나로만** 한다.
+형식은 `COUPON:{회차id}` / `COUPON:{회차id}|MEMBER:{회원id}` / `ISSUANCE:{발급건id}` / `HISTORY:{이력id}`.
+FK 컬럼으로 직접 비교하면 `NULL = NULL` 이 UNKNOWN 이라 **정확히 검출한 finding 이 전부 누락으로 잡힌다.**
+`expected`/`actual` 은 `NOT NULL` 로 둔다.
 
 ---
 
@@ -103,7 +121,7 @@ verification_runs(
   as_of DATETIME(6),
   dataset VARCHAR(10),           -- CLEAN / CORRUPT
   finding_count INT,
-  findings_checksum CHAR(64),    -- ★ SHA-256 of 정렬된 (finding_type, target_id) 리스트
+  findings_checksum CHAR(64),    -- ★ SHA-256 of 정렬된 (finding_type, target_key) 리스트
   started_at DATETIME(6),
   finished_at DATETIME(6)
 )

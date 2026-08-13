@@ -289,7 +289,15 @@ reviews:
     # ─────────────────────────────────────────────────────────
     - path: "batch/**/*.java"
       instructions: >-
-        요구사항은 "300만 건 전수 검증 + 같은 데이터로 재실행하면 같은 결과"다.
+        요구사항은 "전수 검증 + 같은 데이터로 재실행하면 같은 결과"다.
+        규모는 회원 100만 · 발급건 300만 · 이력 534만이다.
+
+        **어휘를 먼저 확인한다.** `coupons` 는 쿠폰이 아니라 **회차**(147행)이고,
+        발급건은 `issuances`(300만), 이력은 `issuance_histories`(534만),
+        사용 실적은 `issuance_usages`(132만)다. 구 어휘(`campaigns` / `coupon_histories` /
+        `coupon_usages`)로 쓴 쿼리는 정반대 테이블을 읽는 것이므로 지적한다.
+        `verification_findings.campaign_id` 는 `coupons.id`, `.coupon_id` 는 `issuances.id`
+        를 가리키는 **레거시 컬럼명**이다.
 
         결정론을 깨는 것들 — 검증 배치 코드 안의 `now()` / `LocalDateTime.now()` /
         `Instant.now()` 는 발견 즉시 blocker 다. 주입된 `asOf` 를 써야 한다.
@@ -297,43 +305,72 @@ reviews:
         재실행하면 값이 달라진다. 검증 배치에서 시각은 오직 `asOf` 파라미터로만 들어온다.
         증분 윈도우도 절대 구간 `(from_ts, as_of_ts)` 로 받아야 한다. `최근 N분` 같은
         상대 윈도우는 현재 시각 기준이라 같은 파라미터 재실행이 재현되지 않는다.
-        그 외: 정렬 타이브레이커 없음(`ORDER BY occurred_at` 만 있으면 동일 시각 이력의
-        순서가 흔들린다 — `(occurred_at, id)` 여야 한다), 병렬 청크 결과를 정렬 없이 병합,
-        난수 시드가 고정되지 않은 더미데이터 생성기,
+        그 외: 정렬 타이브레이커 없음(리플레이 정렬은 **`(created_at, id)`** 여야 한다.
+        `occurred_at` 이라는 컬럼은 존재하지 않는다), 병렬 청크 결과를 정렬 없이 병합,
         HashMap/HashSet 순회 결과가 리포트 순서에 반영되는 코드.
+        `attempt` 가 JobParameters 의 식별 파라미터에 없으면 같은 `asOf` 재실행이 차단되어
+        결정론 증명 자체가 불가능하다 — `uk_run_params(as_of, dataset, scope, attempt)` 도 같은 방향이다.
 
         `asOf` 는 "실행 순간을 고정해 재실행 결정성을 만드는 값"이지 과거 조회 기능이 아니다.
-        임의 과거 시각을 허용하는 API 는 이력만 잘리고 coupons.status 는 현재라 정상 데이터가
-        전부 불일치로 나온다. `asOf >= max(coupon_histories.created_at)` 검증이 있는지 본다.
+        임의 과거 시각을 허용하는 API 는 이력만 잘리고 `issuances.status` 는 현재라 정상 데이터가
+        전부 불일치로 나온다. `asOf >= max(issuance_histories.created_at)` 검증이 있는지 본다.
 
-        결정론 판정: `finding_count` 비교만으로는 약하다(다른 쿠폰이 걸려도 개수는 같을 수 있다).
-        `finding_type` 집합 비교도 약하다. `(finding_type, target_id)` 정렬 리스트의
-        체크섬(`findings_checksum`)으로 판정해야 한다.
+        **집합 비교의 키는 `target_key` 문자열 하나뿐이다.** 형식은
+        `COUPON:{회차id}` / `COUPON:{회차id}|MEMBER:{회원id}` / `ISSUANCE:{발급건id}` /
+        `HISTORY:{이력id}` 다. 다형 FK 컬럼(campaign_id·member_id·coupon_id·history_id)으로
+        조인하거나 비교하면 `NULL = NULL` 이 UNKNOWN 이라 **정확히 검출한 finding 이 전부
+        누락으로 뒤집힌다** — 발견 즉시 blocker. FK 컬럼은 조회 편의로만 남긴다.
+        결정론 판정은 정렬된 `(finding_type, target_key)` 만 해싱한 `findings_checksum`
+        으로 한다(`finding_type + U+001F + target_key + U+001E` 반복 후 SHA-256).
+        `expected`/`actual` 같은 자유 문자열을 섞으면 포맷 한 글자에 거짓 실패가 난다.
 
-        3축 대조: `coupons.status ↔ histories 리플레이 결과 ↔ usages 활성 행 수`.
-        둘만 대조하면 미검출이 생긴다. usages 규칙은 status='USED' 면 canceled_at IS NULL
-        행이 정확히 1개, 그 외면 0개다. 쿠폰당 활성 사용 행 2개 이상도 잡아야 한다.
+        3축 대조: `asof_state.state ↔ issuances.status ↔ issuance_usages 활성 행 수`.
+        활성 판정은 `used_at <= asOf AND (canceled_at IS NULL OR canceled_at > asOf)` 다.
+        `asof_state` 는 PK 가 `(run_id, coupon_id)` 라 **run 마다 새로 만든다**. 컬럼명은
+        `status` 가 아니라 **`state`** 이고, `active_usage_count` 를 Step 0 가 같이 채우므로
+        V5 가 실행 시점에 usages 를 조인하면 지적한다. `TEMPORARY TABLE` 은 재시작 시 사라지므로 금지.
 
-        `verification_findings` 표현력: 재고 불일치는 캠페인 단위(campaign_id 필요),
-        1인 다매는 (캠페인, 회원) 단위, 불법 전이는 이력 행 단위(history_id 필요).
-        expected/actual 이 없어 "쿠폰 X가 이상함"까지만 말하면 지적한다.
+        **검증 규칙은 6종(V1~V6)이다.** 발급코드 중복은 별도 규칙이 아니라 `V2` 의 두 번째
+        케이스이고(`GROUP BY coupon_id, code HAVING COUNT(*)>1`, MIN(id) 제외),
+        고아 이력은 `V4` 가 전이 연쇄로 잡는다. `V7` / `DUPLICATE_CODE` / `ORPHAN_COUPON`
+        같은 규칙을 새로 만들면 같은 행이 두 규칙에 잡혀 집합 비교가 깨진다 — 지적한다.
+        `V6` 는 **`issuances.issued_grade` 스냅샷**을 `grades` 와 조인한다.
+        `members.membership_grade` 를 조인하면 현재값이라 시드가 일부러 심어 둔
+        "현재는 부적격·스냅샷은 적격" 3% 가 통째로 오탐이 된다 — blocker.
 
-        오염셋: 오염 유형 5(동일 쿠폰 두 유저)·6(동일 유저 2건)은 제약이 걸린 스키마에
-        삽입할 수 없다(uk_campaign_member, code UNIQUE 에 막힌다). 별도 스키마여야 하고
-        검증 배치가 대상 스키마를 `dataset` 파라미터로 받아야 한다.
+        오염셋: **주입 700건이지만 정답은 800행**이다(유형 3이 `V1` 과 `V4` 를 동시에 울린다).
+        규칙별 기대 행수는 V1 200 · V2 200 · V3 100 · V4 200 · V5 100 · V6 0 이다.
+        700 을 기대 행수로 assert 하면 지적한다.
+        오염 유형 5·6·1·3 은 CLEAN 전용 제약(`uk_coupon_code` / `uk_coupon_member` /
+        `ck_stock_range`)을 위반해야 하므로 제약이 없는 별도 스키마에만 들어간다.
+        검증 배치는 대상 스키마를 `dataset` 파라미터로 받아야 한다.
 
         검증 배치가 자체 전이 로직을 가지면 런타임과 두 벌로 갈라져 같은 버그를 양쪽이
-        재현한다 — 검증이 검증이 아니게 된다. 상태머신을 공유하는지 확인한다.
+        재현한다 — 검증이 검증이 아니게 된다. `CouponStateMachine` 을 공유하는지 확인한다.
+        리플레이는 자기가 추적한 상태를 진실로 보고 `from_status` 를 믿지 않는다.
+        불법 전이를 만나면 finding 으로 기록하되 상태는 전이시키지 않고 계속 진행한다.
 
-        성능: 300만 건 전수 스캔에 `findAll()` 같은 전체 로딩(OOM), 청크·커서 없는 배치,
-        인덱스가 걸린 상태의 대량 INSERT(적재 후 인덱스 생성이 정석).
+        **검증하면 안 되는 것** — `stock_per_occurrence ↔ total_quantity` 불일치,
+        만료 누락(`expires_at < asOf` 인데 `ISSUED`), 스냅샷 컬럼 불일치는 전부 정상이다.
+        규칙으로 추가하면 정상셋 0건이 원천 불가능해진다.
+
+        성능: 전수 스캔에 `findAll()` 같은 전체 로딩(OOM), 청크·커서 없는 배치,
+        `JdbcPagingItemReader` 의 기본 `OFFSET` 페이징(MySQL 에서 앞 행을 다 읽고 버린다 —
+        keyset paging 이어야 하고 sortKeys 마지막은 유니크 단조 증가 컬럼).
+        더미데이터는 별도 Python 시드 저장소가 만든다 — 배치가 시드를 다시 구현하면 지적한다.
+        보조 인덱스가 일부러 없는 상태이므로 임의로 인덱스를 추가하지 않는다.
 
     - path: "**/{verification,seed,stats}/**/*.java"
       instructions: >-
         batch 모듈과 같은 기준을 적용한다. 특히 검증·집계 코드 안의 `now()` 계열 호출은
-        blocker 이고, 주입된 `asOf` 를 써야 한다. 정렬에는 `(occurred_at, id)` 타이브레이커가
-        필요하고, 결정론 판정은 `findings_checksum` 으로 한다.
+        blocker 이고, 주입된 `asOf` 를 써야 한다. 정렬에는 `(created_at, id)` 타이브레이커가
+        필요하고, 결정론 판정은 정렬된 `(finding_type, target_key)` 의 `findings_checksum` 으로 한다.
         "누적 발급률"(통계)과 "재고 점유율"(불변식)을 섞어 쓰면 지적한다.
+        통계 테이블은 누적과 현재값을 나눠 담는다 — `coupon_stats.issued_total`(누적, 퍼널의 분모)과
+        `issued`(현재)를 섞으면 지적한다. 불변식은
+        `issued + used = coupon_stocks.active_count` 와
+        `issued + used + cancelled + expired = issued_total` 이다.
+        `grade_stats` 는 `issuances.issued_grade` 로 집계하고 `members` 를 조인하지 않는다.
 
     # ─────────────────────────────────────────────────────────
     # 스키마·엔티티
@@ -404,8 +441,9 @@ reviews:
         `Thread.sleep()` 으로 타이밍에 의존하는 테스트는 CI 에서 간헐 실패한다 —
         `CountDownLatch` / `Awaitility` 로 교체를 제안한다.
         동시성 테스트는 재고 N에 2N 스레드를 동시 발사해 정확히 N건이 나오는지 검증해야 한다.
-        정합성 테스트는 정상 셋에서 0건, 오염 셋에서 전량(700건) 검출을 확인해야 한다.
-        건수만 assert 하면 약하다 — 오탐 350 + 미검출 350 도 700 이다.
+        정합성 테스트는 정상 셋에서 0건, 오염 셋에서 **정답 800행 집합 일치**를 확인해야 한다.
+        건수만 assert 하면 약하다 — 오탐 400 + 미검출 400 도 800 이다.
+        조인 키는 `(finding_type, target_key)` 이고 양방향 `MINUS` 로 누락 0 · 오탐 0 이어야 한다.
         주입 시 산출한 `expected_findings` 와 양방향 대조해 누락 0 · 오탐 0 을 보는지 확인한다.
         결정론 테스트가 `finding_count` 만 assert 하면 약하다 — `findings_checksum` 비교를 제안한다.
         테스트 이름이 무엇을 검증하는지 말하는지 본다.
