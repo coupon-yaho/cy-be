@@ -7,6 +7,7 @@ import com.kafkick.api.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.CouponDayOfWeek;
 import com.kafkick.core.coupon.CouponPolicyType;
 import com.kafkick.core.coupon.MembershipGrade;
+import com.kafkick.core.support.TimeProvider;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +32,9 @@ class CouponTemplateControllerTest {
 
     @MockitoBean
     private CouponTemplateCreateService couponTemplateCreateService;
+
+    @MockitoBean
+    private TimeProvider timeProvider;
 
     @Test
     @DisplayName("쿠폰 템플릿을 생성하면 201과 생성 결과를 반환한다")

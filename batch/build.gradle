@@ -4,6 +4,8 @@ plugins {
 
 dependencies {
     implementation project(':core')
+    runtimeOnly project(':storage')
+    testImplementation testFixtures(project(':storage'))
 
     implementation 'org.springframework.boot:spring-boot-starter-batch'
 }

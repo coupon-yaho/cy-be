@@ -1,0 +1,101 @@
+name: Security Audit
+
+# Anthropic 공식 보안 리뷰 액션으로 전수 취약점 점검.
+#
+# PR마다 돌리지 않는다 — 상시 PR 리뷰는 CodeRabbit 이 맡고, 이 액션은 별도 API 키를
+# 요구하는 유료 경로다. 과금 경로를 둘로 나눠 상시 운영하는 건 3주 프로젝트에 부담이라
+# PRD 보안 탭의 "의존성 취약점 | D13 | 1회" 자리에 맞춰 마감 전 전수로 돌린다.
+#
+# CodeRabbit 과 탐지 깊이가 다르다:
+#   이 액션     인젝션, XXE, 암호화, 역직렬화, TOCTOU 를 전수로 깊게
+#   CodeRabbit  변경분(diff) 중심 + .coderabbit.yaml 의 도메인 규칙(PII·Lua·asOf 등)
+# 마감 전 1회는 "변경분 밖에 남아 있는 취약점"을 잡기 위한 것이다.
+#
+# ⚠️ 사전 준비
+#    Settings > Secrets > Actions
+#      CLAUDE_API_KEY   ← console.anthropic.com 에서 발급 (OAuth 토큰과 다름)
+#    키가 없으면 이 워크플로는 스킵된다 (실패하지 않음).
+
+on:
+  # 수동 실행 — D13 전수 점검
+  # ⚠️ inputs 를 추가하지 말 것. workflow_dispatch 입력을 ${{ }} 로 셸에 보간하면
+  #    명령 주입(CWE-78)이 된다. 꼭 필요하면 env: 경유 + 정규식 검증할 것.
+  workflow_dispatch:
+
+  # security-audit 라벨을 붙인 PR
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  audit:
+    name: 보안 전수 점검
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: write
+    # 라벨 트리거인 경우 security-audit 라벨일 때만 + 포크 PR 차단
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'security-audit' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: API 키 확인
+        id: key
+        env:
+          KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## ⏭️ 보안 감사 스킵"
+              echo ""
+              echo "\`CLAUDE_API_KEY\` 시크릿이 없습니다."
+              echo ""
+              echo "1. https://console.anthropic.com 에서 API 키 발급"
+              echo "2. \`gh secret set CLAUDE_API_KEY\`"
+              echo ""
+              echo "> 상시 PR 리뷰는 CodeRabbit 이 맡습니다 — 이 키는 마감 전 전수 점검용입니다."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # TODO(D13): @main 대신 커밋 SHA로 고정할 것
+      #   gh api repos/anthropics/claude-code-security-review/commits/main --jq .sha
+      - name: Claude Security Review
+        if: steps.key.outputs.has_key == 'true'
+        uses: anthropics/claude-code-security-review@main
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          comment-pr: ${{ github.event_name == 'pull_request' }}
+          upload-results: true
+          claude-model: claude-opus-5
+          claudecode-timeout: '30'
+          # 검토 가치가 없는 경로 제외 — 더미데이터와 부하 결과는 코드가 아니다
+          exclude-directories: 'seed-data,loadtest/results,verification-reports,build,.gradle'
+
+      - name: 결과 안내
+        if: steps.key.outputs.has_key == 'true'
+        run: |
+          {
+            echo "## 보안 전수 점검 완료"
+            echo ""
+            echo "이 액션이 보는 것: 인젝션, XXE, 인증 우회, 권한 상승, 하드코딩 시크릿,"
+            echo "약한 암호화, 레이스 컨디션, TOCTOU, XSS, 역직렬화"
+            echo ""
+            echo "**이 액션이 보지 않는 것** (CodeRabbit path_instructions 담당):"
+            echo "- PII 마스킹 — 로그·응답·에러·검증 리포트"
+            echo "- \`/actuator/env\` exclude 명시"
+            echo "- JWT 알고리즘 서버 강제"
+            echo "- Redis Lua KEYS/ARGV 사용"
+            echo ""
+            echo "> 둘 다 확인해야 PRD 보안 필수 6건이 커버됩니다."
+          } >> "$GITHUB_STEP_SUMMARY"

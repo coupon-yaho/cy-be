@@ -1,0 +1,36 @@
+# api/batch 가 spring.config.import 로 가져다 쓰는 공통 DB 설정.
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    # 로컬 개발용 기본값. 운영은 환경변수로 최소 권한 계정을 주입한다.
+    username: ${DB_USERNAME:app}
+    password: ${DB_PASSWORD:app}
+    hikari:
+      # 서버 max_connections=50. 전 인스턴스 풀 합계가 이를 넘지 않게 배분한다.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      connection-timeout: 3000
+      validation-timeout: 3000
+      keepalive-time: 30000
+      max-lifetime: 580000   # MySQL wait_timeout 보다 짧게. 끊긴 커넥션 재사용 방지
+
+  jpa:
+    hibernate:
+      ddl-auto: validate   # 스키마의 주인은 Flyway
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC   # 서버 default-time-zone='+00:00' 과 일치
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
+        default_batch_fetch_size: 100
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false   # 기존 테이블이 있는 DB 에 처음 붙일 때만 true
+    validate-on-migrate: true
+    clean-disabled: true
+    placeholder-replacement: false   # DDL 의 ${...} 를 Flyway 가 치환하지 않도록
