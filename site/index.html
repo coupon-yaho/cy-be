@@ -5,7 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>쿠폰 야~호 — 4조 KAFKICK</title>
 <meta name="description" content="LG유플러스 유레카 백엔드 종합프로젝트 · 4조 KAFKICK 발표 자료">
+<link rel="preload" href="assets/fonts/pretendard-800.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/pretendard-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/pretendard-700.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+/* Pretendard 를 직접 싣는다. 시스템 폰트에 맡기면 윈도우에서 맑은 고딕으로 대체되고,
+   글자 폭이 달라 한 줄이던 문장이 두 줄이 되면서 고정 좌표 레이아웃이 무너진다.
+   KS X 1001 상용 2350자 + 실제 사용 글자로 서브셋한 것이라 3종 합쳐 528KB 다. */
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:400;font-display:block;
+  src:url('assets/fonts/pretendard-400.woff2') format('woff2')}
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:700;font-display:block;
+  src:url('assets/fonts/pretendard-700.woff2') format('woff2')}
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:800;font-display:block;
+  src:url('assets/fonts/pretendard-800.woff2') format('woff2')}
+
 /* 발표 덱(plan/index.html)과 같은 토큰을 쓴다. 값을 바꿀 일이 생기면 양쪽을 함께 고칠 것. */
 :root{
   --ink:#152349;

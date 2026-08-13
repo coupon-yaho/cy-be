@@ -4,7 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>쿠폰 야~호 · 기획안 발표 — 4조 KAFKICK</title>
+<link rel="preload" href="../assets/fonts/pretendard-800.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/pretendard-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/pretendard-700.woff2" as="font" type="font/woff2" crossorigin>
 <style>
+/* Pretendard 를 직접 싣는다. 시스템 폰트에 맡기면 윈도우에서 맑은 고딕으로 대체되고,
+   글자 폭이 달라 한 줄이던 문장이 두 줄이 되면서 고정 좌표 레이아웃이 무너진다.
+   KS X 1001 상용 2350자 + 실제 사용 글자로 서브셋한 것이라 3종 합쳐 528KB 다. */
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:400;font-display:block;
+  src:url('../assets/fonts/pretendard-400.woff2') format('woff2')}
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:700;font-display:block;
+  src:url('../assets/fonts/pretendard-700.woff2') format('woff2')}
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:800;font-display:block;
+  src:url('../assets/fonts/pretendard-800.woff2') format('woff2')}
+
 /* ═══════════════════════════════════════════════════════════
    설계 캔버스 1920 × 1080. 화면 크기에 맞춰 통째로 스케일한다.
    그리드   여백 96 · 거터 36 · 4열 405 / 3열 552 / 2열 846
@@ -48,7 +61,7 @@ div,span,h1{word-break:keep-all}
 .say{font-size:50px;font-weight:800;color:var(--ink);line-height:1.3}
 .hint{font-size:28px;font-weight:800;color:var(--acc)}
 .foot{font-size:22px;color:var(--ink3)}
-.sub{font-size:26px;font-weight:600;color:var(--ink2)}  /* 각주 아님 — 읽혀야 하는 부연 */
+.sub{font-size:26px;font-weight:700;color:var(--ink2)}  /* 각주 아님 — 읽혀야 하는 부연 */
 .foot b{font-weight:700}
 .accbar{position:absolute;background:var(--acc);height:6px;width:84px}
 
@@ -68,21 +81,25 @@ div,span,h1{word-break:keep-all}
 .lit{color:var(--acc)!important}
 .rule.lit{border-color:var(--acc);border-top-width:4px}
 
-/* ── 목차 행 : 올리면 켜지고 누르면 그 장으로 간다 ── */
-.trow{position:absolute;height:96px;display:flex;align-items:center;
+/* ── 목차 행 : 올리면 켜지고 누르면 그 묶음의 첫 장으로 간다 ──
+   장별 제목을 그대로 늘어놓으면 목차가 아니라 요약이 된다.
+   여기서는 큰 흐름 다섯만 세우고 상세는 뒤에서 말한다. */
+.trow{position:absolute;height:128px;display:flex;align-items:center;
   background:none;border:0;border-top:1.5px solid var(--rule2);
   font-family:var(--sans);text-align:left;cursor:pointer}
 .trow::before{content:"";position:absolute;left:0;top:-1.5px;width:100%;height:4px;
   background:var(--acc);transform:scaleX(0);transform-origin:left center;
   transition:transform .24s cubic-bezier(.22,.8,.3,1)}
 .trow:hover::before,.trow:focus-visible::before{transform:scaleX(1)}
-.trow .tn{width:76px;flex:none;font-size:26px;font-weight:800;color:var(--faint);
+.trow .tn{width:84px;flex:none;font-size:30px;font-weight:800;color:var(--faint);
   font-variant-numeric:tabular-nums;transition:color .18s}
-.trow .ti{flex:1;font-size:36px;font-weight:800;color:var(--ink);line-height:1.2;
-  transition:color .18s,transform .22s cubic-bezier(.22,.8,.3,1)}
-.trow .tp{font-size:22px;font-weight:700;color:var(--ink3);
+.trow .ti{width:440px;flex:none;font-size:50px;font-weight:800;color:var(--ink);
+  line-height:1.2;transition:color .18s,transform .22s cubic-bezier(.22,.8,.3,1)}
+.trow .td{flex:1;font-size:30px;color:var(--ink2);line-height:1.3;transition:color .18s}
+.trow .tp{flex:none;font-size:24px;font-weight:700;color:var(--ink3);
   font-variant-numeric:tabular-nums;transition:color .18s}
-.trow:hover .tn,.trow:hover .tp,.trow:focus-visible .tn,.trow:focus-visible .tp{color:var(--acc)}
+.trow:hover .tn,.trow:hover .tp,.trow:hover .td,
+.trow:focus-visible .tn,.trow:focus-visible .tp,.trow:focus-visible .td{color:var(--acc)}
 .trow:hover .ti,.trow:focus-visible .ti{color:var(--acc);transform:translateX(10px)}
 .trow:focus{outline:none}
 
@@ -180,21 +197,14 @@ div,span,h1{word-break:keep-all}
   <div class="a ttl" style="left:96px;top:120px">목차</div>
   <div class="accbar" style="left:96px;top:228px"></div>
 
-  <button class="trow" data-go="3" style="left:96px;top:336px;width:846px"><span class="tn">01</span><span class="ti">오픈 직후 몇 초에 몰리는 트래픽</span><span class="tp">03</span></button>
-  <button class="trow" data-go="4" style="left:96px;top:440px;width:846px"><span class="tn">02</span><span class="ti">재고 10,000장, 초과 발급 0건</span><span class="tp">04</span></button>
-  <button class="trow" data-go="5" style="left:96px;top:544px;width:846px"><span class="tn">03</span><span class="ti">증명할 두 가지 — 동시성과 정합성</span><span class="tp">05</span></button>
-  <button class="trow" data-go="6" style="left:96px;top:648px;width:846px"><span class="tn">04</span><span class="ti">쿠폰 상태 4종과 재고 불변식</span><span class="tp">06</span></button>
-  <button class="trow" data-go="7" style="left:96px;top:752px;width:846px"><span class="tn">05</span><span class="ti">버그가 나도 지켜져야 하는 셋</span><span class="tp">07</span></button>
-  <button class="trow" data-go="8" style="left:96px;top:856px;width:846px"><span class="tn">06</span><span class="ti">필수 기능 8종 — 무엇을 만드나</span><span class="tp">08</span></button>
-  <button class="trow" data-go="9" style="left:978px;top:336px;width:846px"><span class="tn">07</span><span class="ti">API 서버 · 배치 서버 · 저장소</span><span class="tp">09</span></button>
-  <button class="trow" data-go="10" style="left:978px;top:440px;width:846px"><span class="tn">08</span><span class="ti">V1→V3, 병목이 옮겨가는 경로</span><span class="tp">10</span></button>
-  <button class="trow" data-go="11" style="left:978px;top:544px;width:846px"><span class="tn">09</span><span class="ti">전수 검증 6축과 오염 700건</span><span class="tp">11</span></button>
-  <button class="trow" data-go="12" style="left:978px;top:648px;width:846px"><span class="tn">10</span><span class="ti">기술 스택과 리소스 고정 조건</span><span class="tp">12</span></button>
-  <button class="trow" data-go="13" style="left:978px;top:752px;width:846px"><span class="tn">11</span><span class="ti">3주 일정과 5인 역할 분담</span><span class="tp">13</span></button>
-  <button class="trow" data-go="14" style="left:978px;top:856px;width:846px"><span class="tn">12</span><span class="ti">산출물 넷과 판정 기준</span><span class="tp">14</span></button>
+  <button class="trow" data-go="3" style="left:96px;top:336px;width:1728px"><span class="tn">01</span><span class="ti">요구사항</span><span class="td">무엇을 만들어야 하나</span><span class="tp">03 — 05</span></button>
+  <button class="trow" data-go="6" style="left:96px;top:464px;width:1728px"><span class="tn">02</span><span class="ti">해결 방향</span><span class="td">도메인 · 시스템 구성 · 버전 전략 · 검증</span><span class="tp">06 — 11</span></button>
+  <button class="trow" data-go="12" style="left:96px;top:592px;width:1728px"><span class="tn">03</span><span class="ti">수행 도구</span><span class="td">기술 스택과 고정 조건</span><span class="tp">12</span></button>
+  <button class="trow" data-go="13" style="left:96px;top:720px;width:1728px"><span class="tn">04</span><span class="ti">수행 방향</span><span class="td">일정과 역할 분담</span><span class="tp">13</span></button>
+  <button class="trow" data-go="14" style="left:96px;top:848px;width:1728px"><span class="tn">05</span><span class="ti">기대 결과</span><span class="td">산출물과 합격 판정 기준</span><span class="tp">14</span></button>
 
   <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
-  <div class="a foot" style="left:96px;top:1020px">항목을 누르면 그 장으로 넘어갑니다 · 발표 5~7분</div>
+  <div class="a foot" style="left:96px;top:1020px">항목을 누르면 그 대목으로 넘어갑니다 · 발표 5~7분</div>
   <div class="a foot" style="right:96px;top:1020px"><b>02 / 15</b></div>
 </section>
 
