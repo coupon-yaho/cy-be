@@ -45,11 +45,11 @@ jobs:
           echo "OK — 배포 대상:"
           find site -type f | sort
 
-      # enablement: 첫 실행에서 Pages 가 꺼져 있으면 켠다.
-      # (수동으로 Settings → Pages → Source 를 "GitHub Actions" 로 바꿔도 됩니다)
+      # Pages 사이트 생성은 GITHUB_TOKEN 권한 밖이다 (organization 리포는
+      # administration:write 가 필요해 "Resource not accessible by integration" 로 막힌다).
+      # 최초 1회만 Settings → Pages → Source 를 "GitHub Actions" 로 바꿔 두면
+      # 이후로는 이 스텝이 기존 사이트를 그대로 집어 온다.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
