@@ -1,6 +1,6 @@
 # coupon-yaho
 
-Kafka 기반 선착순 쿠폰 발급 시스템.
+선착순 쿠폰 발급 시스템
 
 ## 패키지 구조
 
@@ -78,8 +78,7 @@ coupon-yaho
 │
 ├── infra
 │   ├── mq                               Kafka 어댑터
-│   ├── redis                            Redis 어댑터
-│   └── mysql/                           운영 DB 서버 설정 (Gradle 모듈 아님, 커밋 제외)
+│   └── redis                            Redis 어댑터
 │
 └── build.gradle, settings.gradle
 ```
@@ -89,11 +88,13 @@ coupon-yaho
 `application.yml`, `storage.yml`은 커밋하지 않는다. 클론 후 `.example`을 복사해야 앱이 뜬다.
 
 ```bash
-for f in $(find . -name '*.yml.example'); do cp "$f" "${f%.example}"; done
+find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
 ```
 
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
+
+테스트는 Testcontainers 로 실제 MySQL 을 띄우므로 Docker 가 필요하다.
 
 ### 새 코드를 어디에 둘 것인가
 

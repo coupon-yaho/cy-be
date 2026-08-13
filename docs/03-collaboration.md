@@ -47,7 +47,7 @@ PR 제목  <type>/<JIRA-KEY> <요약>       feature/CY-12 재고 차감을 원�
 - 리뷰어 최소 1명 승인 후 머지. 셀프 머지 금지
 - Jira 이슈를 먼저 만들고, 그 키로 브랜치를 판다
 - `CODEOWNERS`가 영역별 리뷰어를 자동 배정한다
-- **에픽 → main PR 에는 `epic` 라벨을 붙인다.** 이미 하위 PR 에서 다 리뷰된 코드라 AI 리뷰를 다시 돌리지 않기 위한 표시다 (2절)
+- **에픽 → main PR 에는 `skip-review` 라벨을 붙인다.** 이미 하위 PR 에서 다 리뷰된 코드라 AI 리뷰를 다시 돌리지 않기 위한 것이다 (2절)
 
 **Jira 프로젝트 키 설정** — `.github/workflows/conventions.yml` 의 `JIRA_KEY` 한 곳만 바꾸면 된다.
 ```yaml
@@ -64,6 +64,7 @@ env:
 | PR 생성/수정 | `conventions.yml` → `pr-title`, `branch-name` | **실패 시 머지 차단** |
 | PR 생성/수정 | `conventions.yml` → `commit-messages` | 경고만 |
 | PR 생성/push | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | AI 리뷰 (아래) |
+| CodeRabbit 리뷰 제출 | `coderabbit-slack.yml` | Slack 알림. webhook 없으면 스킵 |
 | `security-audit` 라벨 / 수동 | `security-audit.yml` | 보안 전수 점검. 키 없으면 스킵 |
 
 **리뷰는 `하위 → 에픽` PR 에만 붙는다.** 이게 이 설정의 핵심이다.
@@ -74,16 +75,18 @@ CodeRabbit 은 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동
 auto_review:
   base_branches:
     - "^(feature|fix|refactor|test|docs|chore|perf|ci)/CY-[0-9]+"
-  labels: ["!epic", "!skip-review"]
+  labels: ["!skip-review"]
 ```
 
 | PR | 리뷰 |
 |---|---|
 | 하위 → 에픽 (`feature/CY-12` → `feature/CY-1`) | **돈다** ← 여기가 리뷰 지점 |
-| 에픽 → main (`epic` 라벨) | 안 돈다. 하위에서 이미 다 봤다 |
-| `skip-review` 라벨 | 안 돈다. 되돌리기·설정 범프용 |
+| 에픽 → main (`skip-review` 라벨) | 안 돈다. 하위에서 이미 다 봤다 |
+| 되돌리기·설정 범프 (`skip-review` 라벨) | 안 돈다 |
 | draft PR | 안 돈다. `Ready for review` 로 바꾸면 그때 — **누락이 아니라 유예** |
 | 봇 PR (dependabot 등) | 안 돈다 |
+
+**스킵 라벨은 `skip-review` 하나뿐이다.** 에픽 머지용 라벨을 따로 두지 않는 이유 — 하는 일이 "리뷰 스킵"으로 똑같아서 라벨을 나눠도 얻는 게 없고, 5명이 "언제 뭘 붙이는지" 외워야 하는 비용만 는다. 에픽 머지인지는 **base 가 `main` 인가**로 이미 판별된다.
 
 **라벨이 "리뷰 없이 머지"를 여는 건 아니다.** AI 리뷰는 required check 가 아니라 애초에 머지를 막지 않는다 (3.5a절). 머지 게이트는 **`PR 제목 규약`·`브랜치명 규약` + 승인 1건**이고 그건 라벨로 못 건너뛴다.
 
@@ -478,7 +481,23 @@ GitHub이 시크릿을 로그에서 `***`로 자동 마스킹한다.
 |---|---|---|
 | CodeRabbit (App) | 없음 | 레포에 설치만 하면 된다 |
 | `conventions.yml` | 없음 | `GITHUB_TOKEN` 자동 제공 |
+| `coderabbit-slack.yml` | `SLACK_WEBHOOK_URL` | **선택** — 없으면 실패 없이 스킵된다 |
 | `security-audit.yml` | `CLAUDE_API_KEY` | **선택** — 키가 없으면 실패 없이 스킵된다 |
+
+### 4.1a Slack 알림
+
+CodeRabbit 이 리뷰를 제출하면 Slack 으로 쏜다.
+
+```bash
+# Slack 앱 > Incoming Webhooks 에서 채널 URL 발급 후
+gh secret set SLACK_WEBHOOK_URL
+```
+
+**`on: status` 가 아니라 `on: pull_request_review` 를 쓴다.** 흔히 도는 예제는 CodeRabbit 의 commit status 를 잡는데, `review_progress` 가 기본 켜져 있으면 CodeRabbit 은 **check run** 을 쓰고 legacy commit status 를 남기지 않는다(공식 스키마: *"commit_status … is only used when review_progress is disabled"*). 그 방식은 이벤트 자체가 안 와서 조용히 죽는다.
+
+우리는 `request_changes_workflow: true` 라 CodeRabbit 이 **GitHub Review 를 제출**한다. 그게 "리뷰가 실제로 달렸다"의 가장 직접적인 신호라 그걸 잡는다. 알림에는 리뷰 상태(수정 요청/승인/코멘트), PR 링크, 작성자, 변경량, 그리고 **`head → base` 브랜치 흐름**이 들어간다 — 하위 작업 PR 인지 에픽 머지인지 Slack 에서 바로 구분된다.
+
+> CodeRabbit 대시보드에도 자체 Slack 연동이 있다. 그쪽은 유지보수가 필요 없는 대신 메시지 형식을 우리가 못 정한다. 브랜치 흐름 표시가 필요 없어지면 갈아타도 된다.
 
 `security-audit.yml`은 D13에 1회 돌리는 용도라, 그때 가서 키를 만들어도 된다. 지금 만들 필요 없다.
 
@@ -632,6 +651,7 @@ Settings → Actions → General
   labels.yml                    GitHub 라벨 (영역/우선순위는 Jira가 관리)
   workflows/
     conventions.yml             PR 제목·브랜치명 강제 / 커밋 경고  ⚠️ JIRA_KEY 설정
+    coderabbit-slack.yml        CodeRabbit 리뷰 → Slack  (SLACK_WEBHOOK_URL 없으면 스킵)
     security-audit.yml          공식 보안 액션. D13 1회  (CLAUDE_API_KEY 없으면 스킵)
 
 (GitHub Issues 템플릿 없음 — 이슈 트래커는 Jira)

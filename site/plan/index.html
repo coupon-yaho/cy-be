@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>쿠폰 야~호 · 기획안 발표 — 4조 KAFKICK</title>
+<link rel="preload" href="../assets/fonts/pretendard-800.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/pretendard-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/pretendard-700.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+/* Pretendard 를 직접 싣는다. 시스템 폰트에 맡기면 윈도우에서 맑은 고딕으로 대체되고,
+   글자 폭이 달라 한 줄이던 문장이 두 줄이 되면서 고정 좌표 레이아웃이 무너진다.
+   KS X 1001 상용 2350자 + 실제 사용 글자로 서브셋한 것이라 3종 합쳐 528KB 다. */
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:400;font-display:block;
+  src:url('../assets/fonts/pretendard-400.woff2') format('woff2')}
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:700;font-display:block;
+  src:url('../assets/fonts/pretendard-700.woff2') format('woff2')}
+@font-face{font-family:'Pretendard';font-style:normal;font-weight:800;font-display:block;
+  src:url('../assets/fonts/pretendard-800.woff2') format('woff2')}
+
+/* ═══════════════════════════════════════════════════════════
+   설계 캔버스 1920 × 1080. 화면 크기에 맞춰 통째로 스케일한다.
+   그리드   여백 96 · 거터 36 · 4열 405 / 3열 552 / 2열 846
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  --ink:#152349;    /* 제목 · 본문 */
+  --ink2:#3E4B68;   /* 부연 */
+  --ink3:#67728A;   /* 라벨 · 각주 */
+  --faint:#D8D3C8;  /* 큰 번호 */
+  --rule:#152349;
+  --rule2:#DAD5C9;
+  --acc:#C2566A;    /* 액센트 */
+  --bg:#FFFFFF;
+  --sans:Pretendard,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#20242B;overflow:hidden}
+body{font-family:var(--sans);-webkit-font-smoothing:antialiased}
+div,span,h1{word-break:keep-all}
+
+.frame{position:fixed;inset:0;overflow:hidden}
+.stage{position:absolute;left:50%;top:50%;margin:-540px 0 0 -960px;
+  width:1920px;height:1080px;background:var(--bg);
+  transform-origin:center center;box-shadow:0 30px 90px -34px rgba(0,0,0,.85);overflow:hidden}
+
+.slide{position:absolute;inset:0;opacity:0;visibility:hidden;transition:opacity .28s ease,visibility .28s}
+.slide.on{opacity:1;visibility:visible}
+.a{position:absolute}
+
+/* ── 타이포 롤 ── */
+.mark{font-size:20px;font-weight:700;letter-spacing:6px;color:var(--ink3)}
+.ttl{font-size:68px;font-weight:800;letter-spacing:-1.5px;color:var(--ink);line-height:1.14}
+.lab{font-size:23px;font-weight:700;letter-spacing:2.5px;color:var(--ink3);transition:color .18s}
+.num{font-size:66px;font-weight:800;color:var(--faint);line-height:1;transition:color .18s}
+.h3{font-size:40px;font-weight:800;color:var(--ink);line-height:1.2;transition:color .18s}
+.h3.acc{color:var(--acc)}
+.bd{font-size:30px;color:var(--ink2);line-height:1.44}
+.bd.sm{font-size:28px}
+.big{font-size:92px;font-weight:800;color:var(--ink);line-height:1;font-variant-numeric:tabular-nums;transition:color .18s}
+.big.acc{color:var(--acc)}
+.say{font-size:50px;font-weight:800;color:var(--ink);line-height:1.3}
+.hint{font-size:28px;font-weight:800;color:var(--acc)}
+.foot{font-size:22px;color:var(--ink3)}
+.sub{font-size:26px;font-weight:700;color:var(--ink2)}  /* 각주 아님 — 읽혀야 하는 부연 */
+.foot b{font-weight:700}
+.accbar{position:absolute;background:var(--acc);height:6px;width:84px}
+
+/* ── 헤어라인 : 진입 시 좌→우로 그어진다 ── */
+.rule{position:absolute;height:0;border-top:2px solid var(--rule);
+  transform-origin:left center;transform:scaleX(0);
+  transition:transform .5s cubic-bezier(.22,.8,.3,1),border-color .18s,border-top-width .18s}
+.rule.thick{border-top-width:4px;border-color:var(--acc)}
+.rule.soft{border-top-width:1.5px;border-color:var(--rule2)}
+.slide.on .rule{transform:scaleX(1)}
+.slide.on .rule:nth-of-type(2){transition-delay:.06s}
+.slide.on .rule:nth-of-type(3){transition-delay:.12s}
+.slide.on .rule:nth-of-type(4){transition-delay:.18s}
+
+/* ── 마우스를 올린 열 전체가 액센트로 켜진다 ── */
+.hz{position:absolute;z-index:3}
+.lit{color:var(--acc)!important}
+.rule.lit{border-color:var(--acc);border-top-width:4px}
+
+/* ── 목차 행 : 올리면 켜지고 누르면 그 묶음의 첫 장으로 간다 ──
+   장별 제목을 그대로 늘어놓으면 목차가 아니라 요약이 된다.
+   여기서는 큰 흐름 다섯만 세우고 상세는 뒤에서 말한다. */
+.trow{position:absolute;height:128px;display:flex;align-items:center;
+  background:none;border:0;border-top:1.5px solid var(--rule2);
+  font-family:var(--sans);text-align:left;cursor:pointer}
+.trow::before{content:"";position:absolute;left:0;top:-1.5px;width:100%;height:4px;
+  background:var(--acc);transform:scaleX(0);transform-origin:left center;
+  transition:transform .24s cubic-bezier(.22,.8,.3,1)}
+.trow:hover::before,.trow:focus-visible::before{transform:scaleX(1)}
+.trow .tn{width:84px;flex:none;font-size:30px;font-weight:800;color:var(--faint);
+  font-variant-numeric:tabular-nums;transition:color .18s}
+.trow .ti{width:440px;flex:none;font-size:50px;font-weight:800;color:var(--ink);
+  line-height:1.2;transition:color .18s,transform .22s cubic-bezier(.22,.8,.3,1)}
+.trow .td{flex:1;font-size:30px;color:var(--ink2);line-height:1.3;transition:color .18s}
+.trow .tp{flex:none;font-size:24px;font-weight:700;color:var(--ink3);
+  font-variant-numeric:tabular-nums;transition:color .18s}
+.trow:hover .tn,.trow:hover .tp,.trow:hover .td,
+.trow:focus-visible .tn,.trow:focus-visible .tp,.trow:focus-visible .td{color:var(--acc)}
+.trow:hover .ti,.trow:focus-visible .ti{color:var(--acc);transform:translateX(10px)}
+.trow:focus{outline:none}
+
+.rail{position:absolute;left:96px;right:96px;bottom:14px;display:flex;gap:6px;z-index:5}
+.pip{flex:1;height:4px;background:var(--rule2);border:0;padding:0;cursor:pointer;transition:background .2s}
+.pip:hover{background:#B5BCCF}
+.pip[data-on="1"]{background:var(--acc)}
+
+.ctl{position:fixed;top:14px;right:14px;z-index:20;display:flex;gap:6px}
+.ib{width:34px;height:34px;border-radius:50%;border:1px solid #4A5160;background:#2A2F38;color:#C8CEDA;cursor:pointer;font-size:14px;display:grid;place-items:center}
+.ib:hover{color:#fff;border-color:#6C7688}
+.nav{position:fixed;top:50%;transform:translateY(-50%);z-index:20;width:40px;height:40px;border-radius:50%;border:1px solid #4A5160;background:#2A2F38;color:#C8CEDA;cursor:pointer;font-size:16px;display:grid;place-items:center;opacity:.4;transition:opacity .2s}
+.nav:hover{opacity:1}
+.nav[disabled]{opacity:.08;cursor:default}
+#prev{left:12px} #next{right:12px}
+@media(max-width:820px){.nav{display:none}}
+
+.btn{font-family:var(--sans);font-size:24px;font-weight:700;border:2px solid var(--ink);
+  background:transparent;color:var(--ink);padding:10px 26px;cursor:pointer;transition:background .15s,color .15s}
+.btn:hover{background:var(--ink);color:#fff}
+.btn.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.pri:hover{filter:brightness(1.08)}
+
+/* ── 03 트래픽 — RPS 타임시리즈 + 누적 발급 이중선 ── */
+#chart{position:absolute;overflow:visible}
+.lg{font-size:23px;font-weight:700;color:var(--ink2);display:flex;align-items:center;gap:10px}
+.lg i{width:28px;height:5px;display:block;flex:none}
+.mk{position:absolute;width:0;border-left:3px dashed var(--ink3);transform:scaleY(0);
+  transform-origin:bottom center;transition:transform .16s ease-out}
+.mk.on{transform:scaleY(1)}
+.mkl{position:absolute;font-size:26px;font-weight:800;color:var(--acc);
+  opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s}
+.mkl.on{opacity:1;transform:none}
+.ann{font-size:27px;font-weight:800;color:var(--ink);white-space:nowrap;
+  opacity:0;transform:translateY(8px);transition:opacity .26s,transform .26s}
+.ann.acc{color:var(--acc)}
+.ann.on{opacity:1;transform:none}
+
+/* ── 08 병목 ── */
+.node{position:absolute;transition:opacity .3s}
+.node .nm{font-size:36px;font-weight:800;color:var(--ink);line-height:1.2}
+.node .ns{font-size:20px;font-weight:700;letter-spacing:2.5px;color:var(--ink3);margin-top:6px}
+.node .nb{font-size:28px;font-weight:800;color:var(--acc);margin-top:50px;opacity:0;transition:opacity .3s}
+.node.dim{opacity:.2}
+.node.hot .nb{opacity:1}
+
+/* 번호 매긴 목록 — 항목 경계가 안 보이던 문제 */
+.ol div{font-size:26px;color:var(--ink2);line-height:1;padding:11px 0;
+  border-top:1.5px solid var(--rule2);display:flex;gap:16px;align-items:baseline}
+.ol div:first-child{border-top:0;padding-top:0}
+.ol b{flex:none;width:34px;font-size:19px;font-weight:800;color:var(--acc);
+  font-variant-numeric:tabular-nums}
+
+/* 상태 카드 — 영문 위, 한글 아래로 폭을 맞춘다 */
+.st{font-size:44px;font-weight:800;color:var(--ink);line-height:1;letter-spacing:-.5px;transition:color .18s}
+.st.off{color:var(--ink3)}
+.stk{font-size:30px;font-weight:700;color:var(--ink2);line-height:1}
+
+.cells{position:absolute;display:flex;gap:5px}
+.cells i{width:21px;height:24px;background:var(--rule2);transition:background .16s}
+.cells i.hit{background:var(--acc)}
+
+.wm{position:absolute;height:auto}
+</style>
+</head>
+<body>
+
+<div class="ctl">
+  <button class="ib" id="tone" title="배경 톤">◑</button>
+  <button class="ib" id="fs" title="전체화면 (F)">⛶</button>
+</div>
+<button class="nav" id="prev">‹</button>
+<button class="nav" id="next">›</button>
+
+<div class="frame"><div class="stage" id="stage">
+
+<!-- 01 표지 ───────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;width:1728px;top:100px;text-align:center">LG유플러스 유레카 백엔드 · 종합프로젝트 기획안</div>
+  <img class="wm" src="../assets/logo-main.png" alt="쿠폰 야~호" style="left:400px;top:174px;width:1120px">
+  <div class="accbar" style="left:918px;top:576px"></div>
+  <div class="a" style="left:96px;width:1728px;top:618px;text-align:center;font-size:84px;font-weight:800;color:var(--ink);line-height:1.18;letter-spacing:-3px">
+    통신사 브랜드데이<br>선착순 쿠폰 발급 시스템
+  </div>
+  <div class="rule" style="left:96px;right:96px;top:954px"></div>
+  <div class="a" style="left:96px;top:978px;font-size:28px;font-weight:800;color:var(--ink)">4조 KAFKICK</div>
+  <div class="a" style="left:372px;top:980px;font-size:27px;color:var(--ink2)">조장 허건 · 박지훈 · 설승환 · 유희준 · 이경주</div>
+  <div class="a foot" style="right:96px;top:984px">2026.08.11</div>
+</section>
+
+<!-- 02 목차 ───────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 02</div>
+  <div class="a ttl" style="left:96px;top:120px">목차</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <button class="trow" data-go="3" style="left:96px;top:336px;width:1728px"><span class="tn">01</span><span class="ti">요구사항</span><span class="td">무엇을 만들어야 하나</span><span class="tp">03 — 05</span></button>
+  <button class="trow" data-go="6" style="left:96px;top:464px;width:1728px"><span class="tn">02</span><span class="ti">해결 방향</span><span class="td">도메인 · 시스템 구성 · 버전 전략 · 검증</span><span class="tp">06 — 11</span></button>
+  <button class="trow" data-go="12" style="left:96px;top:592px;width:1728px"><span class="tn">03</span><span class="ti">수행 도구</span><span class="td">기술 스택과 고정 조건</span><span class="tp">12</span></button>
+  <button class="trow" data-go="13" style="left:96px;top:720px;width:1728px"><span class="tn">04</span><span class="ti">수행 방향</span><span class="td">일정과 역할 분담</span><span class="tp">13</span></button>
+  <button class="trow" data-go="14" style="left:96px;top:848px;width:1728px"><span class="tn">05</span><span class="ti">기대 결과</span><span class="td">산출물과 합격 판정 기준</span><span class="tp">14</span></button>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">항목을 누르면 그 대목으로 넘어갑니다 · 발표 5~7분</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>02 / 15</b></div>
+</section>
+
+<!-- 03 상황 ───────────────────────────────────────────── -->
+<section class="slide" data-slide="3">
+  <div class="a mark" style="left:96px;top:74px">P · 03 — 상황</div>
+  <div class="a ttl" style="left:96px;top:120px">요청은 오픈 직후 몇 초에 몰립니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="a bd" style="left:96px;top:276px;width:1300px">
+    평소엔 요청이 거의 없습니다. 오픈 시각에 한꺼번에 들어왔다가, 재고가 떨어지면 곧바로 잦아듭니다.
+  </div>
+  <button class="btn pri" id="playBars" style="position:absolute;right:96px;top:270px">▶ 트래픽 재생</button>
+
+  <!-- 무엇을 보는 그래프인지부터 밝힌다 : 두 계열 · 가로축 시간 -->
+  <div class="a lg" style="left:96px;top:352px"><i style="background:var(--acc)"></i>초당 요청 수</div>
+  <div class="a lg" style="left:356px;top:352px"><i style="background:var(--ink)"></i>누적 발급 수</div>
+  <div class="a lab" style="right:96px;top:352px">가로축 시간(초)</div>
+  <div class="mkl" id="mkl" style="left:664px;top:348px">오픈</div>
+
+  <svg id="chart" width="1503" height="200" viewBox="0 0 1503 200" style="left:96px;top:400px" aria-label="오픈 전후 초당 요청 수와 누적 발급 수">
+    <defs>
+      <linearGradient id="fadeRps" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#C2566A" stop-opacity=".26"/>
+        <stop offset="1" stop-color="#C2566A" stop-opacity="0"/>
+      </linearGradient>
+      <clipPath id="reveal"><rect id="revealRect" x="0" y="-60" width="0" height="300"/></clipPath>
+    </defs>
+    <line x1="0" y1="20"  x2="1503" y2="20"  stroke="#67728A" stroke-width="2" stroke-dasharray="7 8" opacity=".55"/>
+    <line x1="0" y1="200" x2="1503" y2="200" stroke="#DAD5C9" stroke-width="2"/>
+    <g clip-path="url(#reveal)">
+      <path id="rpsArea" fill="url(#fadeRps)"/>
+      <path id="rpsLine" fill="none" stroke="#C2566A" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+      <path id="cumLine" fill="none" stroke="#152349" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    </g>
+    <line id="head" x1="0" y1="-40" x2="0" y2="200" stroke="#67728A" stroke-width="2" opacity="0"/>
+  </svg>
+  <div class="mk" id="mk" style="left:684px;top:392px;height:208px"></div>
+
+  <div class="a ann acc" id="annA" style="left:762px;top:414px">동시 20,000 요청</div>
+  <div class="a ann"     id="annB" style="left:1150px;top:446px">10,000장에서 멈춥니다</div>
+
+  <div class="rule" style="left:96px;width:1503px;top:606px"></div>
+  <div class="a sub" style="left:96px;top:620px">평소</div>
+  <div class="a sub" style="left:690px;top:620px;color:var(--acc);font-weight:800">오픈 — 재고 소진까지</div>
+  <div class="a sub" style="left:1104px;top:620px">소진 후</div>
+
+  <div class="rule" style="left:96px;width:552px;top:704px"></div>
+  <div class="a h3" style="left:96px;top:734px">평소</div>
+  <div class="a bd sm" style="left:96px;top:800px;width:552px">요청이 거의 없습니다.</div>
+
+  <div class="rule thick" style="left:684px;width:552px;top:704px"></div>
+  <div class="a h3 acc" style="left:684px;top:734px">오픈 직후</div>
+  <div class="a bd sm" style="left:684px;top:800px;width:552px">수십 배가 한 번에 들어옵니다.</div>
+
+  <div class="rule" style="left:1272px;width:552px;top:704px"></div>
+  <div class="a h3" style="left:1272px;top:734px">소진 후</div>
+  <div class="a bd sm" style="left:1272px;top:800px;width:552px">재고가 0 이 되면 남은 요청은 전부 거절됩니다.</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">버텨야 하는 건 평균이 아니라 그 몇 초입니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>03 / 15</b></div>
+</section>
+
+<!-- 04 문제 ───────────────────────────────────────────── -->
+<section class="slide" data-slide="4">
+  <div class="a mark" style="left:96px;top:74px">P · 04 — 문제</div>
+  <div class="a ttl" style="left:96px;top:120px">1장도 더 나가면 안 됩니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="p4a" style="left:96px;top:330px;width:405px;height:280px"></div>
+  <div class="rule" data-g="p4a" style="left:96px;width:405px;top:336px"></div>
+  <div class="a lab" data-g="p4a" style="left:96px;top:362px">요청</div>
+  <div class="a big" data-g="p4a" style="left:96px;top:420px" data-count="20000">0</div>
+  <div class="a bd sm" style="left:96px;top:534px;width:405px">오픈 순간 동시 요청</div>
+
+  <div class="hz" data-g="p4b" style="left:537px;top:330px;width:405px;height:280px"></div>
+  <div class="rule" data-g="p4b" style="left:537px;width:405px;top:336px"></div>
+  <div class="a lab" data-g="p4b" style="left:537px;top:362px">발급 성공</div>
+  <div class="a big" data-g="p4b" style="left:537px;top:420px" data-count="10000">0</div>
+  <div class="a bd sm" style="left:537px;top:534px;width:405px">재고와 정확히 같습니다</div>
+
+  <div class="hz" data-g="p4c" style="left:978px;top:330px;width:405px;height:280px"></div>
+  <div class="rule" data-g="p4c" style="left:978px;width:405px;top:336px"></div>
+  <div class="a lab" data-g="p4c" style="left:978px;top:362px">재고 소진 · 409</div>
+  <div class="a big" data-g="p4c" style="left:978px;top:420px" data-count="10000">0</div>
+  <div class="a bd sm" style="left:978px;top:534px;width:405px">재고가 없으면 거절하는 게 정상입니다</div>
+
+  <div class="rule thick" style="left:1419px;width:405px;top:336px"></div>
+  <div class="a lab" style="left:1419px;top:362px;color:var(--acc)">초과 발급</div>
+  <div class="a big acc" style="left:1419px;top:420px">0</div>
+  <div class="a bd sm" style="left:1419px;top:534px;width:405px">1 이 되는 순간 실패입니다</div>
+
+  <div class="a say" style="left:96px;top:700px;width:1700px">
+    한 건만 넘어가도 정산이 어긋나고, 누가 왜 못 받았는지 설명할 수 없습니다.
+  </div>
+
+  <div class="rule" style="left:96px;right:96px;top:776px"></div>
+  <div class="a lab" style="left:96px;top:802px">초과 발급은 이렇게 생깁니다</div>
+  <div class="a bd sm" style="left:96px;top:846px;width:552px"><b style="color:var(--acc)">01</b>&nbsp;&nbsp;두 요청이 동시에 재고 1을 읽습니다</div>
+  <div class="a bd sm" style="left:684px;top:846px;width:552px"><b style="color:var(--acc)">02</b>&nbsp;&nbsp;둘 다 발급 가능하다고 판단합니다</div>
+  <div class="a bd sm" style="left:1272px;top:846px;width:552px"><b style="color:var(--acc)">03</b>&nbsp;&nbsp;둘 다 발급되어 재고가 −1 이 됩니다</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">재고 10,000 · 동시 20,000 (과제 필수 요건)</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>04 / 15</b></div>
+</section>
+
+<!-- 05 두 질문 ─────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 05</div>
+  <div class="a ttl" style="left:96px;top:120px">우리가 증명할 건 두 가지</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="p5a" style="left:96px;top:330px;width:846px;height:360px"></div>
+  <div class="rule" data-g="p5a" style="left:96px;width:846px;top:336px"></div>
+  <div class="a" data-g="p5a" style="left:96px;top:372px;font-size:84px;font-weight:800;color:var(--faint);line-height:1;transition:color .18s">01</div>
+  <div class="a" data-g="p5a" style="left:96px;top:478px;font-size:56px;font-weight:800;color:var(--ink);transition:color .18s">초과 발급이 정말 0건인가</div>
+  <div class="a lab" data-g="p5a" style="left:96px;top:560px">동시성</div>
+  <div class="a bd" style="left:96px;top:610px;width:820px">
+    DB 락에서 시작해 Redis, Kafka까지 네 단계로 만들고 같은 조건에서 측정합니다.
+  </div>
+
+  <div class="rule thick" style="left:978px;width:846px;top:336px"></div>
+  <div class="a" style="left:978px;top:372px;font-size:84px;font-weight:800;color:var(--faint);line-height:1">02</div>
+  <div class="a" style="left:978px;top:478px;font-size:56px;font-weight:800;color:var(--acc)">그 0건을 어떻게 믿게 만드나</div>
+  <div class="a lab" style="left:978px;top:560px">정합성</div>
+  <div class="a bd" style="left:978px;top:610px;width:820px">
+    300만 건을 전부 훑고, 검증기 자체가 제대로 도는지부터 확인합니다.
+  </div>
+
+  <div class="rule soft" style="left:96px;width:846px;top:768px"></div>
+  <div class="a lab" style="left:96px;top:794px">이 질문의 합격선</div>
+  <div class="a" style="left:96px;top:838px;width:846px;font-size:36px;font-weight:800;color:var(--ink)">초과 발급 0건 · 1인 1매 위반 0건</div>
+
+  <div class="rule soft" style="left:978px;width:846px;top:768px"></div>
+  <div class="a lab" style="left:978px;top:794px;color:var(--acc)">이 질문의 합격선</div>
+  <div class="a" style="left:978px;top:838px;width:846px;font-size:36px;font-weight:800;color:var(--acc)">오염 700건 검출 · 정상셋 0건 · 재실행 결과 일치</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">남은 장이 이 두 질문에 답합니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>05 / 15</b></div>
+</section>
+
+<!-- 06 상태와 재고 ─────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 06 — 답 1 · 도메인</div>
+  <div class="a ttl" style="left:96px;top:120px">쿠폰은 네 가지 상태를 오갑니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="a lab" style="left:96px;top:302px">상태는 넷, 재고를 차지하는 것은 앞의 둘뿐입니다</div>
+
+  <div class="hz" data-g="q1" style="left:96px;top:336px;width:405px;height:300px"></div>
+  <div class="rule thick" data-g="q1" style="left:96px;width:405px;top:336px"></div>
+  <div class="a st" data-g="q1" style="left:96px;top:368px">ISSUED</div>
+  <div class="a stk" data-g="q1" style="left:96px;top:426px">발급됨</div>
+  <div class="a bd sm" style="left:96px;top:480px;width:405px">받았고 아직 쓰지 않은 상태</div>
+  <div class="a hint" style="left:96px;top:582px;font-size:24px">재고를 차지합니다</div>
+
+  <div class="hz" data-g="q2" style="left:537px;top:336px;width:405px;height:300px"></div>
+  <div class="rule thick" data-g="q2" style="left:537px;width:405px;top:336px"></div>
+  <div class="a st" data-g="q2" style="left:537px;top:368px">USED</div>
+  <div class="a stk" data-g="q2" style="left:537px;top:426px">사용됨</div>
+  <div class="a bd sm" style="left:537px;top:480px;width:405px">이미 쓴 상태. 사용취소하면 발급됨으로 되돌아옵니다</div>
+  <div class="a hint" style="left:537px;top:582px;font-size:24px">재고를 차지합니다</div>
+
+  <div class="hz" data-g="q3" style="left:978px;top:336px;width:405px;height:300px"></div>
+  <div class="rule" data-g="q3" style="left:978px;width:405px;top:336px"></div>
+  <div class="a st off" data-g="q3" style="left:978px;top:368px">CANCELLED</div>
+  <div class="a stk" data-g="q3" style="left:978px;top:426px">발급취소됨</div>
+  <div class="a bd sm" style="left:978px;top:480px;width:405px">발급 자체를 물린 상태. 여기서 끝입니다</div>
+  <div class="a foot" style="left:978px;top:582px;font-size:24px">재고를 돌려줍니다</div>
+
+  <div class="hz" data-g="q4" style="left:1419px;top:336px;width:405px;height:300px"></div>
+  <div class="rule" data-g="q4" style="left:1419px;width:405px;top:336px"></div>
+  <div class="a st off" data-g="q4" style="left:1419px;top:368px">EXPIRED</div>
+  <div class="a stk" data-g="q4" style="left:1419px;top:426px">만료됨</div>
+  <div class="a bd sm" style="left:1419px;top:480px;width:405px">사용 기간이 지난 상태. 여기서 끝입니다</div>
+  <div class="a foot" style="left:1419px;top:582px;font-size:24px">재고를 돌려줍니다</div>
+
+  <div class="rule" style="left:96px;width:846px;top:664px"></div>
+  <div class="a lab" style="left:96px;top:690px">되돌아오는 전이</div>
+  <div class="a" style="left:96px;top:730px;font-size:34px;font-weight:800;color:var(--ink)">발급됨 ⇄ 사용됨</div>
+  <div class="a bd sm" style="left:96px;top:780px;width:846px">사용하면 넘어가고, 사용취소하면 되돌아옵니다</div>
+
+  <div class="rule" style="left:978px;width:846px;top:664px"></div>
+  <div class="a lab" style="left:978px;top:690px">끝나는 전이</div>
+  <div class="a" style="left:978px;top:730px;font-size:34px;font-weight:800;color:var(--ink3)">발급됨 → 발급취소됨 · 만료됨</div>
+  <div class="a bd sm" style="left:978px;top:780px;width:846px">한번 끝난 쿠폰은 다시 움직이지 않습니다</div>
+
+  <div class="rule thick" style="left:96px;right:96px;top:854px"></div>
+  <div class="a lab" style="left:96px;top:880px;color:var(--acc)">재고 불변식</div>
+  <div class="a foot" style="right:96px;top:884px">total_quantity − active_count</div>
+  <div class="a" style="left:96px;top:922px;font-size:58px;font-weight:800;color:var(--ink)">남은 재고 = 총 수량 − 살아 있는 쿠폰 수</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">누적 발급 수로 세면 취소분 때문에 멀쩡한 데이터도 오탐으로 잡힙니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>06 / 15</b></div>
+</section>
+
+<!-- 07 불변 규칙 ───────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 07 — 답 1 · 불변 규칙</div>
+  <div class="a ttl" style="left:96px;top:120px">버그가 나도 지켜져야 하는 세 가지</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="r1" style="left:96px;top:364px;width:552px;height:360px"></div>
+  <div class="rule" data-g="r1" style="left:96px;width:552px;top:336px"></div>
+  <div class="a num" data-g="r1" style="left:96px;top:364px;font-size:46px">01</div>
+  <div class="a h3" data-g="r1" style="left:96px;top:426px;font-size:44px">1인 1매</div>
+  <div class="a bd" style="left:96px;top:490px;width:552px">한 회원이 같은 회차에서 두 장을 받는 일은 없어야 합니다.</div>
+  <div class="rule soft" style="left:96px;width:552px;top:700px"></div>
+  <div class="a lab" style="left:96px;top:726px">어떻게 보장하나</div>
+  <div class="a bd sm" style="left:96px;top:768px;width:552px">(회원, 회차) 복합 UNIQUE 제약을 겁니다. 애플리케이션 검사를 빠져나가도 DB가 두 번째 INSERT 를 거부합니다.</div>
+
+  <div class="hz" data-g="r2" style="left:684px;top:364px;width:552px;height:360px"></div>
+  <div class="rule" data-g="r2" style="left:684px;width:552px;top:336px"></div>
+  <div class="a num" data-g="r2" style="left:684px;top:364px;font-size:46px">02</div>
+  <div class="a h3" data-g="r2" style="left:684px;top:426px;font-size:44px">이력은 추가만</div>
+  <div class="a bd" style="left:684px;top:490px;width:552px">현재 상태는 갱신하되, 변경 사실은 이력 테이블에 쌓기만 합니다.</div>
+  <div class="rule soft" style="left:684px;width:552px;top:700px"></div>
+  <div class="a lab" style="left:684px;top:726px">어떻게 보장하나</div>
+  <div class="a bd sm" style="left:684px;top:768px;width:552px">이력을 지우거나 고치지 않습니다. 검증 배치는 처음부터 되감은 결과와 현재 상태가 같은지 대조합니다.</div>
+
+  <div class="hz" data-g="r3" style="left:1272px;top:364px;width:552px;height:360px"></div>
+  <div class="rule thick" data-g="r3" style="left:1272px;width:552px;top:336px"></div>
+  <div class="a num" data-g="r3" style="left:1272px;top:364px;font-size:46px">03</div>
+  <div class="a h3 acc" data-g="r3" style="left:1272px;top:426px;font-size:44px">멱등성</div>
+  <div class="a bd" style="left:1272px;top:490px;width:552px">네트워크 재시도나 더블클릭으로 같은 요청이 두 번 들어와도, 반영은 한 번만 됩니다.</div>
+  <div class="rule soft" style="left:1272px;width:552px;top:700px"></div>
+  <div class="a lab" style="left:1272px;top:726px">어떻게 보장하나</div>
+  <div class="a bd sm" style="left:1272px;top:768px;width:552px">요청마다 멱등성 키를 저장해 둡니다. 같은 키가 다시 오면 처리하지 않고 첫 번째 결과를 그대로 돌려줍니다.</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">구현이 완벽하다는 전제에 기대지 않습니다. DB 제약과 저장해 둔 멱등성 키, 지우지 않는 이력으로 받칩니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>07 / 15</b></div>
+</section>
+
+<!-- 07 필수 기능 ───────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 08 — 무엇을 만드는가</div>
+  <div class="a ttl" style="left:96px;top:120px">만드는 기능은 여덟 개입니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="pF1" style="left:96px;top:330px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF1" style="left:96px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pF1" style="left:96px;top:364px;font-size:46px">01</div>
+  <div class="a h3" data-g="pF1" style="left:96px;top:424px">선착순 발급</div>
+  <div class="a bd sm" style="left:96px;top:484px;width:405px">재고 10,000장에 1인 1매. DB UNIQUE 제약이 최종 방어선입니다.</div>
+
+  <div class="hz" data-g="pF2" style="left:537px;top:330px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF2" style="left:537px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pF2" style="left:537px;top:364px;font-size:46px">02</div>
+  <div class="a h3" data-g="pF2" style="left:537px;top:424px">버전 사다리</div>
+  <div class="a bd sm" style="left:537px;top:484px;width:405px">V1 → V2.1 → V2.2 → V3 을 같은 조건에서 측정해 비교합니다.</div>
+
+  <div class="hz" data-g="pF3" style="left:978px;top:330px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF3" style="left:978px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pF3" style="left:978px;top:364px;font-size:46px">03</div>
+  <div class="a h3" data-g="pF3" style="left:978px;top:424px">쿠폰 상태 관리</div>
+  <div class="a bd sm" style="left:978px;top:484px;width:405px">예약 발급과 실시간 재고. 상태 변경은 이력에 쌓기만 합니다.</div>
+
+  <div class="hz" data-g="pF4" style="left:1419px;top:330px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF4" style="left:1419px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pF4" style="left:1419px;top:364px;font-size:46px">04</div>
+  <div class="a h3" data-g="pF4" style="left:1419px;top:424px">Redis 대기열</div>
+  <div class="a bd sm" style="left:1419px;top:484px;width:405px">입장과 발급을 분리해 발급까지 도달하는 속도를 우리가 조절합니다.</div>
+
+  <div class="hz" data-g="pF5" style="left:96px;top:642px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF5" style="left:96px;width:405px;top:648px"></div>
+  <div class="a num" data-g="pF5" style="left:96px;top:676px;font-size:46px">05</div>
+  <div class="a h3" data-g="pF5" style="left:96px;top:736px">관리자 콘솔</div>
+  <div class="a bd sm" style="left:96px;top:796px;width:405px">브랜드·쿠폰·일정 CRUD와 운영 중 버전 전환.</div>
+
+  <div class="hz" data-g="pF6" style="left:537px;top:642px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF6" style="left:537px;width:405px;top:648px"></div>
+  <div class="a num" data-g="pF6" style="left:537px;top:676px;font-size:46px">06</div>
+  <div class="a h3" data-g="pF6" style="left:537px;top:736px">정합성 검증 배치</div>
+  <div class="a bd sm" style="left:537px;top:796px;width:405px">300만 건 전수 검사. 같은 기준시각이면 같은 결과가 나옵니다.</div>
+
+  <div class="hz" data-g="pF7" style="left:978px;top:642px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF7" style="left:978px;width:405px;top:648px"></div>
+  <div class="a num" data-g="pF7" style="left:978px;top:676px;font-size:46px">07</div>
+  <div class="a h3" data-g="pF7" style="left:978px;top:736px">통계 · 대시보드</div>
+  <div class="a bd sm" style="left:978px;top:796px;width:405px">3화면으로 독자를 나누고, 사전 집계로 즉시 응답합니다.</div>
+
+  <div class="hz" data-g="pF8" style="left:1419px;top:642px;width:405px;height:270px"></div>
+  <div class="rule" data-g="pF8" style="left:1419px;width:405px;top:648px"></div>
+  <div class="a num" data-g="pF8" style="left:1419px;top:676px;font-size:46px">08</div>
+  <div class="a h3" data-g="pF8" style="left:1419px;top:736px">부하 · 장애 주입</div>
+  <div class="a bd sm" style="left:1419px;top:796px;width:405px">k6 20,000 VU 를 걸고, DB를 끊어 복구까지 확인합니다.</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">01~03 이 기본, 04~05 가 운영, 06~08 이 스스로를 증명하는 부분입니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>08 / 15</b></div>
+</section>
+
+<!-- 07 아키텍처 ────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 09 — 시스템 구성</div>
+  <div class="a ttl" style="left:96px;top:120px">바꾸는 건 인터페이스 하나뿐</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="p7a" style="left:96px;top:330px;width:552px;height:290px"></div>
+  <div class="rule" data-g="p7a" style="left:96px;width:552px;top:336px"></div>
+  <div class="a lab" data-g="p7a" style="left:96px;top:362px">진입</div>
+  <div class="a h3" data-g="p7a" style="left:96px;top:410px">사용자 · 운영자</div>
+  <div class="a bd sm" style="left:96px;top:490px;width:552px">k6 20,000 VU 부하<br>관리자 화면 · 대시보드</div>
+
+  <div class="rule thick" style="left:684px;width:552px;top:336px"></div>
+  <div class="a lab" style="left:684px;top:362px;color:var(--acc)">API 서버 · Spring Boot</div>
+  <div class="a h3 acc" style="left:684px;top:410px">IssuanceStrategy</div>
+  <div class="a bd sm" style="left:684px;top:490px;width:552px">발급 로직을 이 인터페이스 뒤에 두고<br>V1~V3 은 구현체만 바꿉니다.</div>
+
+  <div class="hz" data-g="p7c" style="left:1272px;top:330px;width:552px;height:290px"></div>
+  <div class="rule" data-g="p7c" style="left:1272px;width:552px;top:336px"></div>
+  <div class="a lab" data-g="p7c" style="left:1272px;top:362px">저장소</div>
+  <div class="a h3" data-g="p7c" style="left:1272px;top:410px">MySQL · Redis · Kafka</div>
+  <div class="a bd sm" style="left:1272px;top:490px;width:552px">최종 원장 · 재고 카운터<br>비동기 영속화</div>
+
+  <div class="hz" data-g="p7d" style="left:96px;top:694px;width:1728px;height:150px"></div>
+  <div class="rule" data-g="p7d" style="left:96px;right:96px;top:700px"></div>
+  <div class="a lab" data-g="p7d" style="left:96px;top:726px">배치 서버 · Spring Batch</div>
+  <div class="a h3" data-g="p7d" style="left:96px;top:774px">300만 건 전수 검증 · 오염셋 주입 · 통계 집계</div>
+  <div class="a hint" style="right:96px;top:786px">앱과 분리해서 돌립니다</div>
+
+  <div class="rule" style="left:96px;right:96px;top:862px"></div>
+  <div class="a lab" style="left:96px;top:888px">몰리는 몇 초를 버티는 장치</div>
+  <div class="a bd sm" style="left:96px;top:932px;width:552px">대기열로 입장과 발급을 분리</div>
+  <div class="a bd sm" style="left:684px;top:932px;width:552px">1회성 입장 토큰으로 우회 차단</div>
+  <div class="a bd sm" style="left:1272px;top:932px;width:552px">Circuit Breaker 를 DB · Redis · Kafka 3분리</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">도메인 · 데이터 · API 는 네 버전이 전부 공유합니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>09 / 15</b></div>
+</section>
+
+<!-- 08 병목 ───────────────────────────────────────────── -->
+<section class="slide" data-slide="10">
+  <div class="a mark" style="left:96px;top:74px">P · 10 — 답 1 · 왜 네 단계인가</div>
+  <div class="a ttl" style="left:96px;top:120px">병목은 없어지지 않고 옮겨갑니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="a" style="left:96px;top:282px;display:flex;gap:12px" id="vsw">
+    <button class="btn on" data-v="1">V1</button>
+    <button class="btn" data-v="2">V2.1</button>
+    <button class="btn" data-v="3">V2.2</button>
+    <button class="btn" data-v="4">V3</button>
+  </div>
+
+  <div class="rule" style="left:96px;width:405px;top:404px"></div>
+  <div class="node hot" data-n="1" style="left:96px;top:436px;width:405px">
+    <div class="nm">MySQL 비관적 락</div><div class="ns">SELECT FOR UPDATE</div>
+    <div class="bd sm" style="margin-top:26px">모든 요청이 재고 행 하나에 줄을 섭니다.</div>
+    <div class="nb">병목 · DB 커넥션 풀</div>
+  </div>
+
+  <div class="rule" style="left:537px;width:405px;top:404px"></div>
+  <div class="node dim" data-n="2" style="left:537px;top:436px;width:405px">
+    <div class="nm">Redis 원자 카운터</div><div class="ns">LUA ATOMIC</div>
+    <div class="bd sm" style="margin-top:26px">Redis 와 DB 값이 어긋나기 시작합니다.</div>
+    <div class="nb">병목 · Redis</div>
+  </div>
+
+  <div class="rule" style="left:978px;width:405px;top:404px"></div>
+  <div class="node dim" data-n="3" style="left:978px;top:436px;width:405px">
+    <div class="nm">Redis 대기열</div><div class="ns">SORTED SET</div>
+    <div class="bd sm" style="margin-top:26px">발급까지 도달하는 속도를 우리가 조절합니다.</div>
+    <div class="nb">병목 · Redis + 입장 제어</div>
+  </div>
+
+  <div class="rule" style="left:1419px;width:405px;top:404px"></div>
+  <div class="node dim" data-n="4" style="left:1419px;top:436px;width:405px">
+    <div class="nm">Kafka 비동기</div><div class="ns">CLAIM THEN PERSIST</div>
+    <div class="bd sm" style="margin-top:26px">잠깐 어긋나는 건 정상, 영영 안 들어가면 위반.</div>
+    <div class="nb">병목 · backlog 소화 속도</div>
+  </div>
+
+  <div class="rule" style="left:96px;right:96px;top:830px"></div>
+  <div class="a lab" style="left:96px;top:856px">한 번에 하나만 바꿉니다. 도메인 · 데이터 · 부하 · 리소스는 그대로 둡니다</div>
+  <div class="a" style="left:96px;width:552px;top:902px;font-size:33px;font-weight:800;color:var(--ink)">각 단계의 다음 상한은 어디인가</div>
+  <div class="a" style="left:684px;width:552px;top:902px;font-size:33px;font-weight:800;color:var(--ink)">검증 체계는 언제부터 필요해지나</div>
+  <div class="a" style="left:1272px;width:552px;top:902px;font-size:33px;font-weight:800;color:var(--ink)">언제 다음 단계로 가야 하나</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">처리량 순위보다 병목이 옮겨가는 경로를 봅니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>10 / 15</b></div>
+</section>
+
+<!-- 09 검증 ───────────────────────────────────────────── -->
+<section class="slide" data-slide="11">
+  <div class="a mark" style="left:96px;top:74px">P · 11 — 답 2 · 차별점</div>
+  <div class="a ttl" style="left:96px;top:120px">0건을 어떻게 믿게 만드나</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="a say" style="left:96px;top:292px;width:1700px">
+    아무것도 안 봐도 0건은 나옵니다. 그래서 먼저 틀린 데이터를 일부러 심습니다.
+  </div>
+
+  <div class="hz" data-g="p9a" style="left:96px;top:430px;width:846px;height:230px"></div>
+  <div class="rule" data-g="p9a" style="left:96px;width:846px;top:436px"></div>
+  <div class="a lab" data-g="p9a" style="left:96px;top:462px">오염 7유형 × 100건</div>
+  <div class="a ol" style="left:96px;top:504px;width:420px">
+    <div><b>01</b>이력 없는 재고 감소</div>
+    <div><b>02</b>상태와 이력 불일치</div>
+    <div><b>03</b>재고 이중 복원</div>
+    <div><b>04</b>종단 상태에서 불법 전이</div>
+  </div>
+  <div class="a ol" style="left:540px;top:504px;width:420px">
+    <div><b>05</b>한 쿠폰이 두 유저에게</div>
+    <div><b>06</b>한 유저가 같은 회차 두 장</div>
+    <div><b>07</b>사용 실적 불일치</div>
+  </div>
+
+  <div class="hz" data-g="p9b" style="left:96px;top:710px;width:846px;height:230px"></div>
+  <div class="rule" data-g="p9b" style="left:96px;width:846px;top:716px"></div>
+  <div class="a lab" data-g="p9b" style="left:96px;top:742px">300만 건을 훑는 여섯 관점</div>
+  <div class="a bd" style="left:96px;top:790px;width:846px">재고 정합 · 1인 1매 · 이력 replay<br>불법 전이 · 사용 실적 · 등급 자격</div>
+  <div class="a hint" style="left:96px;top:900px">같은 기준시각이면 몇 번을 돌려도 같은 결과</div>
+
+  <div class="rule thick" style="left:978px;width:846px;top:436px"></div>
+  <div class="a lab" style="left:978px;top:462px;color:var(--acc)">합격 기준</div>
+  <div class="a big acc" style="left:978px;top:512px" id="vcount">0</div>
+  <div class="a bd sm" style="left:978px;top:632px">오염셋에서 정확히 검출</div>
+  <div class="a big" style="left:1416px;top:512px">0</div>
+  <div class="a bd sm" style="left:1416px;top:632px">정상셋에서 검출</div>
+  <div class="a lab" style="left:978px;top:684px">심어둔 오염 700건을 배치가 훑는 과정</div>
+  <div class="cells" id="cells" style="left:978px;top:716px"></div>
+  <button class="btn pri" id="runV" style="position:absolute;left:978px;top:780px">검증 배치 실행</button>
+  <div class="a foot" id="vstat" style="left:1264px;top:794px">눌러 보면 검출되는 과정이 보입니다</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">이게 통과해야 우리가 말하는 0건이 믿을 만한 0건이 됩니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>11 / 15</b></div>
+</section>
+
+<!-- 10 스택 ───────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 12 — 수행 도구</div>
+  <div class="a ttl" style="left:96px;top:120px">조건을 고정해야 비교가 됩니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="pAa" style="left:96px;top:330px;width:405px;height:330px"></div>
+  <div class="rule" data-g="pAa" style="left:96px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pAa" style="left:96px;top:370px">01</div>
+  <div class="a h3" data-g="pAa" style="left:96px;top:452px">Back end</div>
+  <div class="a bd sm" style="left:96px;top:520px;width:405px">Java 21 · Spring Boot 4.1<br>Spring Data JPA · Batch<br>MySQL · Redis · Kafka</div>
+
+  <div class="hz" data-g="pAb" style="left:537px;top:330px;width:405px;height:330px"></div>
+  <div class="rule" data-g="pAb" style="left:537px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pAb" style="left:537px;top:370px">02</div>
+  <div class="a h3" data-g="pAb" style="left:537px;top:452px">Gradle 멀티모듈</div>
+  <div class="a bd sm" style="left:537px;top:520px;width:405px">api · batch · core · storage<br>infra:mq · infra:redis<br>API와 배치 서버를 분리</div>
+
+  <div class="hz" data-g="pAc" style="left:978px;top:330px;width:405px;height:330px"></div>
+  <div class="rule" data-g="pAc" style="left:978px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pAc" style="left:978px;top:370px">03</div>
+  <div class="a h3" data-g="pAc" style="left:978px;top:452px">Front end</div>
+  <div class="a bd sm" style="left:978px;top:520px;width:405px">TypeScript · TanStack Start<br>Tailwind v4 · shadcn/ui<br>Chart.js · 대시보드 3화면</div>
+
+  <div class="hz" data-g="pAd" style="left:1419px;top:330px;width:405px;height:330px"></div>
+  <div class="rule" data-g="pAd" style="left:1419px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pAd" style="left:1419px;top:370px">04</div>
+  <div class="a h3" data-g="pAd" style="left:1419px;top:452px">테스트 · 협업</div>
+  <div class="a bd sm" style="left:1419px;top:520px;width:405px">JUnit 5 · Testcontainers · k6<br>GitHub Actions · Jira<br>PR 리뷰 · AI 코드리뷰</div>
+
+  <div class="rule" style="left:96px;right:96px;top:700px"></div>
+  <div class="a lab" style="left:96px;top:726px">네 버전을 같은 조건에 두려고 고정하는 것</div>
+  <div class="a bd" style="left:96px;top:770px;width:1728px">
+    컨테이너 CPU · 메모리 limit · 커넥션 풀 크기 · k6 부하 시나리오 · 더미데이터를 네 버전 모두 동일하게 둡니다
+  </div>
+
+  <div class="rule thick" style="left:96px;right:96px;top:856px"></div>
+  <div class="a lab" style="left:96px;top:882px;color:var(--acc)">개인정보 보호 (과제 필수 요건)</div>
+  <div class="a bd" style="left:96px;top:926px;width:1728px">
+    AES-256-GCM 컬럼 암호화 · HMAC-SHA256 blind index · API 응답과 로그 마스킹
+  </div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">조건이 하나라도 다르면 버전 비교표의 숫자는 근거가 되지 못합니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>12 / 15</b></div>
+</section>
+
+<!-- 11 일정 ───────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 13 — 수행 방향</div>
+  <div class="a ttl" style="left:96px;top:120px">3주를 스프린트 둘로 나눕니다</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="pBa" style="left:96px;top:330px;width:846px;height:330px"></div>
+  <div class="rule" data-g="pBa" style="left:96px;width:846px;top:336px"></div>
+  <div class="a lab" data-g="pBa" style="left:96px;top:362px">스프린트 1 — 08/12 → 08/17</div>
+  <div class="a h3" data-g="pBa" style="left:96px;top:412px;font-size:46px">쿠폰 발급 및 운영 기능</div>
+  <div class="a bd" style="left:96px;top:500px;width:846px">전원이 함께 ERD와 상태머신, API 스펙을 확정한 뒤 영역별로 나눠 들어갑니다.</div>
+  <div class="a hint" style="left:96px;top:620px">점검 · V1 이 동시 1,000 요청에서 초과 발급 0건</div>
+
+  <div class="hz" data-g="pBb" style="left:978px;top:330px;width:846px;height:330px"></div>
+  <div class="rule" data-g="pBb" style="left:978px;width:846px;top:336px"></div>
+  <div class="a lab" data-g="pBb" style="left:978px;top:362px">스프린트 2 — 08/18 → 08/31</div>
+  <div class="a h3" data-g="pBb" style="left:978px;top:412px;font-size:46px">V2 · V3 두 트랙 병렬</div>
+  <div class="a bd" style="left:978px;top:500px;width:846px">두 트랙이 검증 배치와 대시보드, k6 부하 측정을 함께 진행합니다.</div>
+  <div class="a hint" style="left:978px;top:620px">인원 분배는 08/17 진척도를 보고 정합니다</div>
+
+  <div class="rule" style="left:96px;right:96px;top:750px"></div>
+  <div class="a lab" style="left:96px;top:776px">역할 분담</div>
+  <div class="a" style="left:96px;top:822px;font-size:38px;font-weight:800;color:var(--ink)">허건</div>
+  <div class="a sub" style="left:96px;top:882px">조장 · 배치 서버</div>
+  <div class="a" style="left:441px;top:822px;font-size:38px;font-weight:800;color:var(--ink)">박지훈</div>
+  <div class="a sub" style="left:441px;top:882px">쿠폰 · 동시성 · ERD</div>
+  <div class="a" style="left:786px;top:822px;font-size:38px;font-weight:800;color:var(--ink)">유희준</div>
+  <div class="a sub" style="left:786px;top:882px">대기열 · Redis</div>
+  <div class="a" style="left:1131px;top:822px;font-size:38px;font-weight:800;color:var(--ink)">설승환</div>
+  <div class="a sub" style="left:1131px;top:882px">관리자 · 통계</div>
+  <div class="a" style="left:1476px;top:822px;font-size:38px;font-weight:800;color:var(--ink)">이경주</div>
+  <div class="a sub" style="left:1476px;top:882px">관리자 · 통계</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">착수 08/11 · 마감 08/31 · 주말 빼고 15일</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>13 / 15</b></div>
+</section>
+
+<!-- 12 산출물 ──────────────────────────────────────────── -->
+<section class="slide">
+  <div class="a mark" style="left:96px;top:74px">P · 14 — 기대 결과</div>
+  <div class="a ttl" style="left:96px;top:120px">무엇을 내놓고, 무엇으로 판정하나</div>
+  <div class="accbar" style="left:96px;top:228px"></div>
+
+  <div class="hz" data-g="pCa" style="left:96px;top:330px;width:405px;height:260px"></div>
+  <div class="rule" data-g="pCa" style="left:96px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pCa" style="left:96px;top:370px">01</div>
+  <div class="a h3" data-g="pCa" style="left:96px;top:452px">동작하는 시스템</div>
+  <div class="a bd sm" style="left:96px;top:518px;width:405px">네 버전 · 관리자 콘솔 · 대기열까지 도는 시스템</div>
+
+  <div class="hz" data-g="pCb" style="left:537px;top:330px;width:405px;height:260px"></div>
+  <div class="rule" data-g="pCb" style="left:537px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pCb" style="left:537px;top:370px">02</div>
+  <div class="a h3" data-g="pCb" style="left:537px;top:452px">버전 비교표</div>
+  <div class="a bd sm" style="left:537px;top:518px;width:405px">소진 시간 · 응답시간 · 에러율 · 병목 위치</div>
+
+  <div class="hz" data-g="pCc" style="left:978px;top:330px;width:405px;height:260px"></div>
+  <div class="rule" data-g="pCc" style="left:978px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pCc" style="left:978px;top:370px">03</div>
+  <div class="a h3" data-g="pCc" style="left:978px;top:452px">검증 리포트</div>
+  <div class="a bd sm" style="left:978px;top:518px;width:405px">300만 전수 · 오염 700건 검출 · 재실행 일치</div>
+
+  <div class="hz" data-g="pCd" style="left:1419px;top:330px;width:405px;height:260px"></div>
+  <div class="rule" data-g="pCd" style="left:1419px;width:405px;top:336px"></div>
+  <div class="a num" data-g="pCd" style="left:1419px;top:370px">04</div>
+  <div class="a h3" data-g="pCd" style="left:1419px;top:452px">대시보드 3화면</div>
+  <div class="a bd sm" style="left:1419px;top:518px;width:405px">브랜드별 추이 · 등급 분포 · 상태 전이 funnel</div>
+
+  <div class="rule thick" style="left:96px;right:96px;top:694px"></div>
+  <div class="a lab" style="left:96px;top:720px;color:var(--acc)">합격 판정 기준</div>
+  <div class="a" style="left:96px;top:770px;font-size:86px;font-weight:800;color:var(--ink);line-height:1">0</div>
+  <div class="a bd sm" style="left:96px;top:880px">초과 발급</div>
+  <div class="a" style="left:624px;top:770px;font-size:86px;font-weight:800;color:var(--ink);line-height:1">0</div>
+  <div class="a bd sm" style="left:624px;top:880px">1인 1매 위반</div>
+  <div class="a" style="left:1152px;top:770px;font-size:86px;font-weight:800;color:var(--acc);line-height:1">700 / 0</div>
+  <div class="a bd sm" style="left:1152px;top:880px">오염셋 검출 / 정상셋 검출</div>
+
+  <div class="rule soft" style="left:96px;right:96px;top:1002px"></div>
+  <div class="a foot" style="left:96px;top:1020px">전부 k6 지표와 검증 배치가 자동으로 판정합니다 · 눈으로 보고 정하는 기준은 없습니다</div>
+  <div class="a foot" style="right:96px;top:1020px"><b>14 / 15</b></div>
+</section>
+
+<!-- 13 마무리 ──────────────────────────────────────────── -->
+<section class="slide">
+  <div class="accbar" style="left:96px;top:470px"></div>
+  <div class="a" style="left:96px;top:512px;font-size:150px;font-weight:800;color:var(--ink);letter-spacing:-6px;line-height:1">Thank you</div>
+  <div class="rule" style="left:96px;right:96px;top:954px"></div>
+  <div class="a" style="left:96px;top:978px;font-size:28px;font-weight:800;color:var(--ink)">4조 KAFKICK</div>
+  <div class="a" style="left:372px;top:980px;font-size:27px;color:var(--ink2)">허건 · 박지훈 · 설승환 · 유희준 · 이경주</div>
+</section>
+
+<nav class="rail" id="rail"></nav>
+</div></div>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var $  = function(s,r){ return (r||document).querySelector(s); };
+  var $$ = function(s,r){ return [].slice.call((r||document).querySelectorAll(s)); };
+
+  /* 1920×1080 캔버스를 화면에 맞춘다 */
+  var stage = $("#stage");
+  function fit(){ stage.style.transform = "scale(" + Math.min(innerWidth/1920, innerHeight/1080) + ")"; }
+  addEventListener("resize", fit); fit();
+
+  var slides = $$(".slide"), rail = $("#rail"), N = slides.length, idx = -1;
+  slides.forEach(function(s,i){
+    var b = document.createElement("button");
+    b.className = "pip"; b.type = "button";
+    b.setAttribute("aria-label", (i+1)+"번 슬라이드");
+    b.onclick = function(){ go(i); };
+    rail.appendChild(b);
+  });
+  var pips = $$(".pip", rail);
+
+  function go(i){
+    i = Math.max(0, Math.min(N-1, i));
+    if(i === idx) return;
+    slides.forEach(function(s,k){ s.classList.toggle("on", k===i); });
+    pips.forEach(function(p,k){ p.dataset.on = k===i ? "1":"0"; });
+    idx = i;
+    $("#prev").disabled = idx===0; $("#next").disabled = idx===N-1;
+    if(location.hash !== "#"+(idx+1)) history.replaceState(null,"","#"+(idx+1));
+    var n = slides[i].dataset.slide;
+    if(n==="3") playBars(); else stopBars();
+    if(n==="4") countUp(slides[i]);
+    if(n==="11") resetCells();
+  }
+  $("#prev").onclick = function(){ go(idx-1); };
+  $("#next").onclick = function(){ go(idx+1); };
+  document.onkeydown = function(e){
+    var k = e.key;
+    if(k==="ArrowRight"||k==="PageDown"||k===" "){ e.preventDefault(); go(idx+1); }
+    else if(k==="ArrowLeft"||k==="PageUp"){ e.preventDefault(); go(idx-1); }
+    else if(k==="Home"){ go(0); } else if(k==="End"){ go(N-1); }
+    else if(k==="f"||k==="F"){ $("#fs").click(); }
+  };
+  $("#fs").onclick = function(){
+    if(document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  };
+  var warm = false;
+  $("#tone").onclick = function(){
+    warm = !warm;
+    document.documentElement.style.setProperty("--bg", warm ? "#F8F6F2" : "#FFFFFF");
+  };
+
+  /* 목차 — 누르면 그 장으로 */
+  $$(".trow").forEach(function(r){
+    r.type = "button";
+    r.onclick = function(){ go(+r.dataset.go - 1); };
+  });
+
+  /* 열 위에 마우스를 올리면 그 열 전체가 액센트로 켜진다 */
+  $$(".hz").forEach(function(h){
+    var g = $$('[data-g="'+h.dataset.g+'"]').filter(function(e){ return e !== h; });
+    var set = function(on){ g.forEach(function(e){ e.classList.toggle("lit", on); }); };
+    h.addEventListener("mouseenter", function(){ set(true); });
+    h.addEventListener("mouseleave", function(){ set(false); });
+  });
+
+  /* ── 03 · 트래픽 타임시리즈 ───────────────────────────────
+     실시간으로 왼쪽에서 오른쪽으로 그려 나간다. 가로축이 곧 시간이라
+     평소 구간에서는 1초 가까이 아무 일도 안 일어나고, 오픈 지점에서
+     선이 수직으로 튄다. 급증을 스태거로 흘리면 파도로 읽히던 문제가
+     여기서는 생기지 않는다.
+
+     빨강 = 초당 요청 수, 남색 = 누적 발급 수(오른쪽 축).
+     요청은 계속 들어오는데 누적 발급은 10,000 에서 평평해진다 — 재고 소진. */
+  var CW = 1503, CH = 200, TOP = 20, DUR = 2400, OPEN_P = .396;
+  var RPS = [[0,.02],[34,.02],[36,.03],[38,.05],[39.2,.10],[39.6,1],
+             [41,.97],[43,.90],[45,.77],[47,.61],[49,.46],[51,.33],[53,.23],
+             [55,.15],[57,.10],[59,.07],[61,.05],[64,.03],[68,.02],[100,.02]];
+  var CUM = [[0,0],[39,0],[39.6,.10],[41,.27],[43,.41],[45,.50],[47,.56],
+             [49,.59],[51,.61],[53,.618],[55,.62],[100,.62]];
+  var px = function(p){ return p/100*CW; };
+  var py = function(v){ return CH - v*(CH-TOP); };
+  var dOf = function(pts){
+    return pts.map(function(p,i){ return (i?"L":"M")+px(p[0]).toFixed(1)+" "+py(p[1]).toFixed(1); }).join(" ");
+  };
+  $("#rpsLine").setAttribute("d", dOf(RPS));
+  $("#rpsArea").setAttribute("d", dOf(RPS)+" L"+CW+" "+CH+" L0 "+CH+" Z");
+  $("#cumLine").setAttribute("d", dOf(CUM));
+
+  var rev = $("#revealRect"), head = $("#head"), raf = null, t0 = null;
+  var mk = $("#mk"), mkl = $("#mkl"), annA = $("#annA"), annB = $("#annB");
+
+  function stopBars(){
+    if(raf){ cancelAnimationFrame(raf); raf = null; }
+    t0 = null;
+    rev.setAttribute("width", 0);
+    head.setAttribute("opacity", 0);
+    [mk,mkl,annA,annB].forEach(function(e){ e.classList.remove("on"); });
+  }
+  function fillBars(){
+    rev.setAttribute("width", CW);
+    [mk,mkl,annA,annB].forEach(function(e){ e.classList.add("on"); });
+  }
+  function playBars(){
+    stopBars();
+    if(reduce){ fillBars(); return; }
+    head.setAttribute("opacity", 1);
+    raf = requestAnimationFrame(function step(t){
+      if(t0 === null) t0 = t;
+      var p = Math.min(1, (t-t0)/DUR), x = p*CW;
+      rev.setAttribute("width", x);
+      head.setAttribute("x1", x); head.setAttribute("x2", x);
+      if(p >= OPEN_P - .012){ mk.classList.add("on"); mkl.classList.add("on"); }
+      if(p >= .44) annA.classList.add("on");
+      if(p >= .60) annB.classList.add("on");
+      if(p < 1) raf = requestAnimationFrame(step);
+      else { head.setAttribute("opacity", 0); raf = null; }
+    });
+  }
+  $("#playBars").onclick = playBars;
+
+  /* 04 · 카운터 롤업 */
+  function countUp(s){
+    $$("[data-count]", s).forEach(function(el){
+      var to = +el.dataset.count, t0 = null, dur = 900;
+      if(reduce){ el.textContent = to.toLocaleString("en-US"); return; }
+      el.textContent = "0";
+      requestAnimationFrame(function step(t){
+        if(!t0) t0 = t;
+        var p = Math.min(1,(t-t0)/dur), e = 1-Math.pow(1-p,3);
+        el.textContent = Math.round(to*e).toLocaleString("en-US");
+        if(p<1) requestAnimationFrame(step);
+      });
+    });
+  }
+
+  /* 08 · 병목 이동 */
+  var HOT = {"1":"1","2":"2","3":"2","4":"4"};
+  $$("#vsw .btn").forEach(function(b){
+    b.onclick = function(){
+      var v = b.dataset.v;
+      $$("#vsw .btn").forEach(function(x){ x.classList.toggle("on", x===b); });
+      $$(".node").forEach(function(nd){
+        nd.classList.toggle("dim", +nd.dataset.n > +v);
+        nd.classList.toggle("hot", nd.dataset.n === HOT[v]);
+      });
+    };
+  });
+
+  /* 09 · 오염 검출 */
+  var cellsEl = $("#cells"), cellEls = [], vc = $("#vcount"), vst = $("#vstat"), vt = null;
+  for(var i=0;i<28;i++){ var c = document.createElement("i"); cellsEl.appendChild(c); cellEls.push(c); }
+  function resetCells(){
+    if(vt){ clearInterval(vt); vt = null; }
+    cellEls.forEach(function(c){ c.classList.remove("hit"); });
+    vc.textContent = "0";
+    $("#runV").textContent = "검증 배치 실행";
+    vst.textContent = "눌러 보면 검출되는 과정이 보입니다";
+  }
+  function doneCells(){
+    vc.textContent = "700";
+    $("#runV").textContent = "다시 실행";
+    vst.textContent = "700건 전부 검출 · 정상셋 오탐 0건 — 합격";
+  }
+  $("#runV").onclick = function(){
+    if(vt) return;
+    resetCells();
+    if(reduce){ cellEls.forEach(function(c){ c.classList.add("hit"); }); doneCells(); return; }
+    $("#runV").textContent = "훑는 중…";
+    var i = 0;
+    vst.textContent = "300만 건을 훑으며 심어둔 오염을 찾는 중";
+    vt = setInterval(function(){
+      if(i >= cellEls.length){ clearInterval(vt); vt = null; doneCells(); return; }
+      cellEls[i].classList.add("hit"); i++;
+      vc.textContent = Math.round(700*i/cellEls.length);
+    }, 55);
+  };
+
+  stopBars();
+  var start = parseInt((location.hash||"").slice(1),10);
+  go(isNaN(start) ? 0 : start-1);
+})();
+</script>
+</body>
+</html>

@@ -15,6 +15,21 @@ model: claude-opus-5
 
 ---
 
+## 0. 어휘 — DDL 명칭이 정답이다
+
+| 지금 이름 | 뜻 | 구 어휘 |
+|---|---|---|
+| `coupons` | **회차** 147 | `campaigns` |
+| `issuances` | **발급건** 300만 | `coupons` |
+| `issuance_histories` | 이력 534만 | `coupon_histories` |
+| `issuance_usages` | 사용 실적 132만 | `coupon_usages` |
+
+`coupons` 는 쿠폰이 아니라 **회차**다. 구 어휘로 쓴 쿼리는 정반대 테이블을 읽는다.
+컬럼명만 레거시로 남은 것 — `verification_findings.campaign_id` → `coupons.id`,
+`.coupon_id` → `issuances.id`, `asof_state.coupon_id` → `issuances.id`.
+
+---
+
 ## 보고 원칙
 
 **찾은 것은 전부 보고한다.** 확신이 없거나 사소해 보여도 적어라.
@@ -45,7 +60,7 @@ active_count = 현재 ISSUED + USED 개수  (취소·만료 시 감소)
 
 - `active_count`를 **누적 발급 수**로 다루는 코드. 이름이 `issued_count`거나, 취소/만료에서 감소시키지 않으면 위반이다. 더미데이터에 CANCELLED가 10%(30만 장) 있어서 누적으로 재면 정상 데이터가 대량 오탐된다
 - 초과 발급 판정을 누적 이력 수로 하는 코드
-- 재고를 캠페인 행에서 읽거나 쓰는 코드 — 재고는 `coupon_stocks`에만 있다
+- 재고를 회차(`coupons`) 행에서 읽거나 쓰는 코드 — 재고는 `coupon_stocks`에만 있다
 
 ### 2. 락 범위와 보유 시간
 
@@ -104,6 +119,19 @@ active_count = 현재 ISSUED + USED 개수  (취소·만료 시 감소)
 
 ---
 
+### 만료 배치와의 경합 — ④ 소유
+
+`expireJob` 이 이 프로젝트에서 **재고를 움직이는 유일한 배치**다. 발급 경로와 같은 행을 잠근다.
+
+- 만료 대상을 `SELECT` 로 읽은 개수 `N` 으로 `active_count` 를 감산하는가
+  → `SELECT` 와 `UPDATE` 사이에 사용자가 취소하면 그 발급건은 이미 `CANCELLED` 라 전이가 안 되는데
+  `N` 으로 감산하면 **재고가 이중 복원**된다. **조건부 `UPDATE` 의 affected rows** 로 세야 한다
+- 재고 갱신을 발급건 1건마다 하는가 → 청크 안에서 회차별로 묶어 1회
+- 발급 경로와 **같은 락 순서**(`coupon_stocks` 행)를 쓰는가 → 다르면 데드락
+
+> **만료와 취소는 재고를 같은 방향으로 움직인다.** 발급(감산)과의 경합보다 이쪽이 실제로 더 잘 깨지고
+> 조용히 통과한다. 동시성 테스트 매트릭스 **14번**(만료 배치 중 cancel/use 동시 → 재고 1회만 복원)이 이걸 잡는다.
+
 ## 보고 형식
 
 ```markdown
@@ -121,7 +149,7 @@ active_count = 현재 ISSUED + USED 개수  (취소·만료 시 감소)
 
 ### 확인함
 - 상태 전이가 CouponStateMachine 경유 ✓
-- uk_campaign_member 유지 ✓
+- uk_coupon_member 유지 ✓
 ```
 
 지적이 없으면 `### 지적 (0건)` 과 확인 목록만 남겨라.
