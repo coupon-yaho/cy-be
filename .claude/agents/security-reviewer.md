@@ -47,6 +47,22 @@ log.info("issued: memberId={}, campaignId={}", member.getId(), campaignId);
 - 예외 메시지에 사용자 데이터가 섞이는가
 - API 응답 DTO에 마스킹 없이 PII 필드가 노출되는가
 - 검증 리포트·대시보드 이벤트 스트림에 이름/연락처가 들어가는가 (`member_id`는 허용)
+- **검증·통계 쿼리가 `members` 를 조인하는가** → 금지다. 등급이 필요하면 `issuances.issued_grade` 스냅샷을 쓴다.
+  `DUP_PER_MEMBER` finding 이 `member_id` 를 담으므로 조인 유혹이 구조적으로 존재한다
+- 리포트 출력이 **화이트리스트** 방식인가 → 블랙리스트는 컬럼이 늘면 샌다
+
+#### 암호화 규약 — 시드와 앱이 글자 단위로 맞아야 한다
+
+```
+*_enc   varbinary(256) = IV(12B) ‖ AES-256-GCM ciphertext ‖ tag(16B),  AAD 없음
+*_hash  char(64)       = lower(hex(HMAC-SHA256(HMAC_KEY, normalize(평문))))
+normalize: email = trim + lowercase / phone = 숫자만
+```
+
+- **키 없는 SHA-256 을 블라인드 인덱스로 쓰는가** → 이메일은 엔트로피가 낮아 사전 공격이 통한다. HMAC 이어야 한다
+- `email_enc` 로 검색하는가 → GCM 은 행마다 IV 가 달라 **절대 매칭되지 않는다.** 검색은 `email_hash` 로
+- SQL `AES_DECRYPT()` 를 쓰는가 → GCM 모드가 아니라 호환되지 않는다. 복호화는 애플리케이션에서
+- 대량 조회에서 복호화하는가 → 화면에 보여줄 페이지 단위 수십 행에서만
 - `server.error.include-stacktrace: never` 가 유지되는가
 
 ### 2. 암호화·해시
@@ -72,11 +88,20 @@ management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 - `/api/v1/admin/**` 에 `hasRole("ADMIN")` 이 걸려 있는가
 - Compose에서 관리 포트가 외부로 노출되는가
 
-### 5. JWT
+### 5. 헤더 기반 인증 — JWT 는 쓰지 않는다
 
-- 알고리즘을 서버가 강제하는가 (`.sig().add(Jwts.SIG.HS256)`) — 토큰이 주장하는 `alg`를 그대로 믿으면 `alg: none` 우회가 성립한다
-- 서명 검증을 건너뛰는 경로가 있는가
-- `exp` 를 검사하는가
+**회원과 등급을 요청 헤더로 받는다.** 회원가입·로그인이 범위 밖이라(가상 회원 가정) 서명이 없다.
+그래서 **클라이언트가 무엇이든 주장할 수 있다**는 전제로 코드를 봐야 한다.
+
+- 헤더 등급을 그대로 믿고 발급하는가 → 회차의 `eligible_grades_mask` 와 **서버가 대조**해야 한다.
+  안 하면 부적격 등급이 발급되고 그 값이 `issuances.issued_grade` 스냅샷에 박힌다
+  → 검증 배치 `V6 GRADE_VIOLATION` 이 실제로 잡는다. **리뷰에서 먼저 잡는 게 맞다**
+- 헤더 회원 ID 로 남의 쿠폰을 조회·사용할 수 있는가 → 소유자 검사가 있는가
+- `jwt`·`Jwts`·서명 검증 코드가 남아 있는가 → **폐기된 설계다.** 남아 있으면 지적한다
+- 헤더 이름이 코드 곳곳에 문자열 리터럴로 흩어져 있는가
+
+> 서명이 없다는 건 **인증이 약한 게 아니라 아예 없다**는 뜻이다. 데모 범위에서는 의도된 선택이지만,
+> 그만큼 **서버측 자격 검사(등급·소유자)가 유일한 방어선**이다.
 
 ### 6. Entry-Token
 
