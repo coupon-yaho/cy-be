@@ -8,6 +8,8 @@ import com.kafkick.core.coupon.CouponDayOfWeek;
 import com.kafkick.core.coupon.CouponPolicyType;
 import com.kafkick.core.coupon.MembershipGrade;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.coupon.exception.CouponErrorCode;
+import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -99,20 +101,21 @@ class CouponTemplateControllerTest {
                         "Location",
                         "/api/v1/admin/coupon-templates/100"
                 ))
-                .andExpect(jsonPath("$.id").value(100))
-                .andExpect(jsonPath("$.brandId").value(1))
-                .andExpect(jsonPath("$.name")
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(100))
+                .andExpect(jsonPath("$.data.brandId").value(1))
+                .andExpect(jsonPath("$.data.name")
                         .value("모카빈 20% 할인"))
-                .andExpect(jsonPath("$.policyType")
+                .andExpect(jsonPath("$.data.policyType")
                         .value("PERCENT_CAPPED"))
-                .andExpect(jsonPath("$.discountRate").value(20))
-                .andExpect(jsonPath("$.maxDiscountAmount")
+                .andExpect(jsonPath("$.data.discountRate").value(20))
+                .andExpect(jsonPath("$.data.maxDiscountAmount")
                         .value(20_000))
-                .andExpect(jsonPath("$.discountAmount")
+                .andExpect(jsonPath("$.data.discountAmount")
                         .doesNotExist())
-                .andExpect(jsonPath("$.stockPerOccurrence")
+                .andExpect(jsonPath("$.data.stockPerOccurrence")
                         .value(10_000))
-                .andExpect(jsonPath("$.active").value(true));
+                .andExpect(jsonPath("$.data.active").value(true));
 
         verify(couponTemplateCreateService)
                 .create(any(CouponTemplateCreateRequest.class));
@@ -142,14 +145,11 @@ class CouponTemplateControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code")
-                        .value("INVALID_REQUEST"))
-                .andExpect(jsonPath("$.message")
-                        .value("요청값을 확인해 주세요."))
-                .andExpect(jsonPath("$.fieldErrors.brandId")
-                        .exists())
-                .andExpect(jsonPath("$.fieldErrors.name")
-                        .exists());
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400))
+                .andExpect(jsonPath("$.error.code")
+                        .value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message").exists());
 
         verifyNoInteractions(couponTemplateCreateService);
     }
@@ -159,7 +159,8 @@ class CouponTemplateControllerTest {
     void rejectInvalidDiscountPolicy() throws Exception {
         when(couponTemplateCreateService.create(
                 any(CouponTemplateCreateRequest.class)
-        )).thenThrow(new IllegalArgumentException(
+        )).thenThrow(new BusinessException(
+                CouponErrorCode.INVALID_COUPON_TEMPLATE,
                 "퍼센트 할인에는 정액 할인 금액을 입력할 수 없습니다."
         ));
 
@@ -186,11 +187,13 @@ class CouponTemplateControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code")
-                        .value("INVALID_COUPON"))
-                .andExpect(jsonPath("$.message").value(
-                        "퍼센트 할인에는 정액 할인 금액을 입력할 수 없습니다."
-                ));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400))
+                .andExpect(jsonPath("$.error.code")
+                        .value("COUPON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("쿠폰 템플릿 값이 올바르지 않습니다."));
+
     }
 
     @Test
@@ -218,11 +221,12 @@ class CouponTemplateControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code")
-                        .value("INVALID_REQUEST"))
-                .andExpect(jsonPath("$.message").value(
-                        "요청 본문의 형식이나 Enum 값을 확인해 주세요."
-                ));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400))
+                .andExpect(jsonPath("$.error.code")
+                        .value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("잘못된 요청입니다."));
 
         verifyNoInteractions(couponTemplateCreateService);
     }

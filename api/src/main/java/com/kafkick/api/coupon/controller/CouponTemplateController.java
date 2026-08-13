@@ -1,17 +1,20 @@
-// 관리자용 쿠폰 템플릿 생성 HTTP API를 제공합니다.
+// 관리자용 쿠폰 템플릿 생성 결과를 공통 응답 형식과 Location 헤더로 반환합니다.
 package com.kafkick.api.coupon.controller;
 
-import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
-import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
-import com.kafkick.api.coupon.service.CouponTemplateCreateService;
+import java.net.URI;
+
 import jakarta.validation.Valid;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.net.URI;
+import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
+import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
+import com.kafkick.api.coupon.service.CouponTemplateCreateService;
+import com.kafkick.api.support.ResponseEnvelope;
 
 @RestController
 @RequestMapping("/api/v1/admin/coupon-templates")
@@ -19,19 +22,24 @@ public class CouponTemplateController {
 
     private final CouponTemplateCreateService couponTemplateCreateService;
 
-    public CouponTemplateController(CouponTemplateCreateService couponTemplateCreateService) {
+    public CouponTemplateController(
+            CouponTemplateCreateService couponTemplateCreateService
+    ) {
         this.couponTemplateCreateService = couponTemplateCreateService;
     }
 
     @PostMapping
-    public ResponseEntity<CouponTemplateCreateResponse> create(
+    public ResponseEntity<ResponseEnvelope<CouponTemplateCreateResponse>> create(
             @Valid @RequestBody CouponTemplateCreateRequest request
     ) {
-        CouponTemplateCreateResponse response = couponTemplateCreateService.create(request);
+        CouponTemplateCreateResponse response =
+                couponTemplateCreateService.create(request);
+
         URI location = URI.create(
                 "/api/v1/admin/coupon-templates/" + response.id()
         );
 
-        return ResponseEntity.created(location).body(response);
+        return ResponseEntity.created(location)
+                .body(ResponseEnvelope.success(response));
     }
 }

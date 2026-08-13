@@ -4,6 +4,8 @@ package com.kafkick.api.coupon.service;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
 import com.kafkick.core.coupon.*;
+import com.kafkick.core.coupon.exception.CouponErrorCode;
+import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -127,10 +129,19 @@ class CouponTemplateCreateServiceTest {
         );
 
         assertThatThrownBy(() -> couponTemplateCreateService.create(request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessException.class)
                 .hasMessage(
                         "퍼센트 할인에는 정액 할인 금액을 입력할 수 없습니다."
-                );
+                )
+                .satisfies(exception -> {
+                    BusinessException businessException =
+                            (BusinessException) exception;
+
+                    assertThat(businessException.getErrorCode())
+                            .isEqualTo(
+                                    CouponErrorCode.INVALID_COUPON_TEMPLATE
+                            );
+                });
 
         verifyNoInteractions(couponTemplateRepository);
     }
