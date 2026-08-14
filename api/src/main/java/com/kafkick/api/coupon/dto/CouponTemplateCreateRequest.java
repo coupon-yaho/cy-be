@@ -1,10 +1,10 @@
-// 관리자 쿠폰 템플릿 생성 요청을 검증하고 CouponTemplate 도메인 모델로 변환합니다.
+// 관리자 쿠폰 템플릿 생성 요청을 검증하고 코어 유즈케이스 명령으로 변환합니다.
 package com.kafkick.api.coupon.dto;
 
-import com.kafkick.core.coupon.CouponTemplate;
-import com.kafkick.core.coupon.CouponDayOfWeek;
-import com.kafkick.core.coupon.CouponPolicyType;
-import com.kafkick.core.coupon.MembershipGrade;
+import com.kafkick.core.coupon.domain.CouponDayOfWeek;
+import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -32,8 +32,8 @@ public record CouponTemplateCreateRequest(
         @NotEmpty Set<@NotNull MembershipGrade> eligibleGrades
 ) {
 
-    public CouponTemplate toDomain() {
-        return CouponTemplate.create(
+    public CouponTemplateCreateCommand toCommand() {
+        return new CouponTemplateCreateCommand(
                 brandId,
                 name,
                 policyType,

@@ -13,8 +13,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
-import com.kafkick.api.coupon.service.CouponTemplateCreateService;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.core.coupon.domain.CouponTemplate;
+import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 
 @RestController
 @RequestMapping("/api/v1/admin/coupon-templates")
@@ -32,8 +33,10 @@ public class CouponTemplateController {
     public ResponseEntity<ResponseEnvelope<CouponTemplateCreateResponse>> create(
             @Valid @RequestBody CouponTemplateCreateRequest request
     ) {
+        CouponTemplate savedCouponTemplate =
+                couponTemplateCreateService.create(request.toCommand());
         CouponTemplateCreateResponse response =
-                couponTemplateCreateService.create(request);
+                CouponTemplateCreateResponse.from(savedCouponTemplate);
 
         URI location = URI.create(
                 "/api/v1/admin/coupon-templates/" + response.id()

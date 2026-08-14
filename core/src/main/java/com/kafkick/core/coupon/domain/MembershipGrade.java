@@ -1,5 +1,5 @@
 // 멤버십 등급과 DB 저장용 비트마스크 변환 기능을 제공합니다.
-package com.kafkick.core.coupon;
+package com.kafkick.core.coupon.domain;
 
 import java.util.EnumSet;
 import java.util.Collections;

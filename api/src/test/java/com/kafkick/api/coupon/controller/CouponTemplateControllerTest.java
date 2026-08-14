@@ -2,13 +2,14 @@
 package com.kafkick.api.coupon.controller;
 
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
-import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
-import com.kafkick.api.coupon.service.CouponTemplateCreateService;
-import com.kafkick.core.coupon.CouponDayOfWeek;
-import com.kafkick.core.coupon.CouponPolicyType;
-import com.kafkick.core.coupon.MembershipGrade;
+import com.kafkick.core.coupon.domain.CouponDayOfWeek;
+import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupon.domain.CouponTemplate;
+import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.support.TimeProvider;
-import com.kafkick.core.coupon.exception.CouponErrorCode;
+import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
+import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
+import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalTime;
-import java.util.List;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -41,7 +42,7 @@ class CouponTemplateControllerTest {
     @Test
     @DisplayName("쿠폰 템플릿을 생성하면 201과 생성 결과를 반환한다")
     void createCouponTemplate() throws Exception {
-        CouponTemplateCreateResponse response = new CouponTemplateCreateResponse(
+        CouponTemplate savedCouponTemplate = CouponTemplate.restore(
                 100L,
                 1L,
                 "모카빈 20% 할인",
@@ -55,7 +56,7 @@ class CouponTemplateControllerTest {
                 LocalTime.of(14, 0),
                 2,
                 10_000,
-                List.of(
+                Set.of(
                         MembershipGrade.WELCOME,
                         MembershipGrade.SILVER,
                         MembershipGrade.GOLD,
@@ -65,8 +66,8 @@ class CouponTemplateControllerTest {
         );
 
         when(couponTemplateCreateService.create(
-                any(CouponTemplateCreateRequest.class)
-        )).thenReturn(response);
+                any(CouponTemplateCreateCommand.class)
+        )).thenReturn(savedCouponTemplate);
 
         String requestBody = """
                 {
@@ -126,7 +127,7 @@ class CouponTemplateControllerTest {
                 .andExpect(jsonPath("$.data.active").value(true));
 
         verify(couponTemplateCreateService)
-                .create(any(CouponTemplateCreateRequest.class));
+                .create(any(CouponTemplateCreateCommand.class));
     }
 
     @Test
@@ -165,9 +166,9 @@ class CouponTemplateControllerTest {
     @DisplayName("도메인 할인 정책 검증에 실패하면 400을 반환한다")
     void rejectInvalidDiscountPolicy() throws Exception {
         when(couponTemplateCreateService.create(
-                any(CouponTemplateCreateRequest.class)
+                any(CouponTemplateCreateCommand.class)
         )).thenThrow(new BusinessException(
-                CouponErrorCode.INVALID_COUPON_TEMPLATE,
+                CouponTemplateErrorCode.INVALID_COUPON_TEMPLATE,
                 "퍼센트 할인에는 정액 할인 금액을 입력할 수 없습니다."
         ));
 
@@ -196,7 +197,7 @@ class CouponTemplateControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(400))
                 .andExpect(jsonPath("$.error.code")
-                        .value("COUPON-001"))
+                        .value("COUPON-101"))
                 .andExpect(jsonPath("$.error.message")
                         .value("쿠폰 템플릿 값이 올바르지 않습니다."));
 

@@ -1,5 +1,5 @@
 // 쿠폰 템플릿 생성과 할인 정책별 도메인 검증을 테스트합니다.
-package com.kafkick.core.coupon;
+package com.kafkick.core.coupon.domain;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

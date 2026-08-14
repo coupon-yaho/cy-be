@@ -3,11 +3,11 @@ package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.ErrorCode;
 
-public enum CouponErrorCode implements ErrorCode {
+public enum CouponTemplateErrorCode implements ErrorCode {
 
     INVALID_COUPON_TEMPLATE(
             400,
-            "COUPON-001",
+            "COUPON-101",
             "쿠폰 템플릿 값이 올바르지 않습니다."
     );
 
@@ -15,7 +15,7 @@ public enum CouponErrorCode implements ErrorCode {
     private final String code;
     private final String message;
 
-    CouponErrorCode(int status, String code, String message) {
+    CouponTemplateErrorCode(int status, String code, String message) {
         this.status = status;
         this.code = code;
         this.message = message;

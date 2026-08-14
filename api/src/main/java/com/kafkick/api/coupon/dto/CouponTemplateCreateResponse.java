@@ -1,10 +1,10 @@
 // 저장이 완료된 쿠폰 템플릿 정보를 반환합니다.
 package com.kafkick.api.coupon.dto;
 
-import com.kafkick.core.coupon.CouponTemplate;
-import com.kafkick.core.coupon.CouponDayOfWeek;
-import com.kafkick.core.coupon.CouponPolicyType;
-import com.kafkick.core.coupon.MembershipGrade;
+import com.kafkick.core.coupon.domain.CouponDayOfWeek;
+import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupon.domain.CouponTemplate;
+import com.kafkick.core.coupon.domain.MembershipGrade;
 
 import java.time.LocalTime;
 import java.util.List;
