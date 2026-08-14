@@ -4,7 +4,7 @@
   base:      에픽 브랜치입니다. main 이 아닙니다.
   키가 있어야 Jira 이슈에 이 PR이 자동 연결됩니다.
 
-  에픽 → main PR 이면 `epic` 라벨을 붙이세요 (AI 리뷰가 중복으로 돌지 않게).
+  에픽 → main PR 이면 `skip-review` 라벨을 붙이세요 (AI 리뷰가 중복으로 돌지 않게).
 -->
 
 ## Jira

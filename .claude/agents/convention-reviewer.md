@@ -14,6 +14,21 @@ model: claude-sonnet-5
 
 ---
 
+## 0. 어휘 — DDL 명칭이 정답이다
+
+| 지금 이름 | 뜻 | 구 어휘 |
+|---|---|---|
+| `coupons` | **회차** 147 | `campaigns` |
+| `issuances` | **발급건** 300만 | `coupons` |
+| `issuance_histories` | 이력 534만 | `coupon_histories` |
+| `issuance_usages` | 사용 실적 132만 | `coupon_usages` |
+
+`coupons` 는 쿠폰이 아니라 **회차**다. 구 어휘로 쓴 쿼리는 정반대 테이블을 읽는다.
+컬럼명만 레거시로 남은 것 — `verification_findings.campaign_id` → `coupons.id`,
+`.coupon_id` → `issuances.id`, `asof_state.coupon_id` → `issuances.id`.
+
+---
+
 ## 보고 원칙
 
 **찾은 것은 전부 보고한다.** 확신이 없거나 사소해 보여도 적어라.
@@ -35,7 +50,7 @@ model: claude-sonnet-5
 | 발견하면 | 이유 |
 |---|---|
 | `issued_count` / `issuedCount` | 누적으로 읽힌다. `active_count` 여야 한다 |
-| `campaigns.total_quantity` | 재고는 `coupon_stocks`에만. 양쪽 보유 금지 |
+| `coupons.total_quantity` | 재고는 `coupon_stocks`에만. 양쪽 보유 금지 |
 | `coupons.version` | 낙관적 락은 범위 밖. 쓰지 않을 컬럼은 혼란만 준다 |
 | `limit_per_member` | N매를 허용하면 UNIQUE를 못 걸어 최종 방어선이 사라진다 |
 

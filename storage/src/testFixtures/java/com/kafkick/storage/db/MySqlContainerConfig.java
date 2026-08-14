@@ -25,8 +25,8 @@ public class MySqlContainerConfig {
                 .withUrlParam("characterEncoding", "UTF-8")
                 .withUrlParam("useUnicode", "true")
                 .withUrlParam("rewriteBatchedStatements", "true")
-                // infra/mysql/my.cnf 중 쿼리 결과에 영향을 주는 항목만 옮겼다.
-                // 메모리·로깅·binlog 는 테스트에 불필요하므로 제외. 저 파일이 바뀌면 여기도 같이 본다.
+                // 운영 MySQL 서버 설정(my.cnf) 중 쿼리 결과에 영향을 주는 항목만 옮겼다.
+                // 메모리·로깅·binlog 는 테스트에 불필요하므로 제외. 서버 설정이 바뀌면 여기도 같이 본다.
                 .withCommand(
                         "--default-time-zone=+00:00",
                         "--character-set-server=utf8mb4",
