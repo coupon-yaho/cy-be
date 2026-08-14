@@ -2,6 +2,7 @@
 package com.kafkick.api.coupon.controller;
 
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
+import com.kafkick.api.support.AdminRequestHeaders;
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
@@ -98,7 +99,11 @@ class CouponTemplateControllerTest {
                 """;
 
         mockMvc.perform(post("/api/v1/admin/coupon-templates")
-                .contentType(MediaType.APPLICATION_JSON)
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isCreated())
                 .andExpect(header().string(
@@ -155,6 +160,10 @@ class CouponTemplateControllerTest {
                 """;
 
         mockMvc.perform(post("/api/v1/admin/coupon-templates")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
@@ -196,6 +205,10 @@ class CouponTemplateControllerTest {
                 """;
 
         mockMvc.perform(post("/api/v1/admin/coupon-templates")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
@@ -229,6 +242,10 @@ class CouponTemplateControllerTest {
                 """;
 
         mockMvc.perform(post("/api/v1/admin/coupon-templates")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(requestBody))
                 .andExpect(status().isBadRequest())
@@ -269,7 +286,11 @@ class CouponTemplateControllerTest {
         when(couponTemplateQueryService.findById(100L))
                 .thenReturn(couponTemplate);
 
-        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 100L))
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 100L)
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(100))
@@ -298,7 +319,11 @@ class CouponTemplateControllerTest {
                         "couponTemplateId=999"
                 ));
 
-        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 999L))
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 999L)
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(404))
@@ -313,7 +338,11 @@ class CouponTemplateControllerTest {
     @Test
     @DisplayName("쿠폰 템플릿 ID가 0 이하면 400을 반환한다")
     void rejectNonPositiveCouponTemplateId() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 0L))
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 0L)
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(400))
@@ -321,6 +350,35 @@ class CouponTemplateControllerTest {
                         .value("COMMON-001"))
                 .andExpect(jsonPath("$.error.message")
                         .value("쿠폰 템플릿 ID는 0보다 커야 합니다."));
+
+        verifyNoInteractions(couponTemplateQueryService);
+    }
+
+    @Test
+    @DisplayName("관리자 역할 헤더가 없으면 403을 반환한다")
+    void rejectRequestWithoutAdminRoleHeader() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 100L))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(403))
+                .andExpect(jsonPath("$.error.code").value("COMMON-005"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("접근 권한이 없습니다."));
+
+        verifyNoInteractions(couponTemplateQueryService);
+    }
+
+    @Test
+    @DisplayName("관리자가 아닌 역할 헤더이면 403을 반환한다")
+    void rejectRequestWithNonAdminRoleHeader() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 100L)
+                        .header(AdminRequestHeaders.USER_ROLE, "MEMBER"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(403))
+                .andExpect(jsonPath("$.error.code").value("COMMON-005"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("접근 권한이 없습니다."));
 
         verifyNoInteractions(couponTemplateQueryService);
     }
