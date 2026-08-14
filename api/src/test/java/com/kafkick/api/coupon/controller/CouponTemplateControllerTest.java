@@ -1,4 +1,4 @@
-// 쿠폰 템플릿 생성 API의 성공 응답과 요청 검증 오류를 테스트합니다.
+// 쿠폰 템플릿 생성 및 단건 조회 API의 응답 계약을 테스트합니다.
 package com.kafkick.api.coupon.controller;
 
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
@@ -6,10 +6,11 @@ import com.kafkick.core.coupon.domain.CouponDayOfWeek;
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
-import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
 import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
+import com.kafkick.core.coupon.service.CouponTemplateQueryService;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -35,6 +37,9 @@ class CouponTemplateControllerTest {
 
     @MockitoBean
     private CouponTemplateCreateService couponTemplateCreateService;
+
+    @MockitoBean
+    private CouponTemplateQueryService couponTemplateQueryService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -235,5 +240,88 @@ class CouponTemplateControllerTest {
                         .value("잘못된 요청입니다."));
 
         verifyNoInteractions(couponTemplateCreateService);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 ID로 단건 조회하면 200과 조회 결과를 반환한다")
+    void findCouponTemplateById() throws Exception {
+        CouponTemplate couponTemplate = CouponTemplate.restore(
+                        100L,
+                        1L,
+                        "골드 VIP 20% 할인",
+                        CouponPolicyType.PERCENT_CAPPED,
+                        20,
+                        10_000,
+                        null,
+                        7,
+                        2,
+                        CouponDayOfWeek.WED,
+                        LocalTime.of(10, 0),
+                        2,
+                        100,
+                        Set.of(
+                                MembershipGrade.GOLD,
+                                MembershipGrade.VIP
+                        ),
+                        true
+                );
+
+        when(couponTemplateQueryService.findById(100L))
+                .thenReturn(couponTemplate);
+
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 100L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(100))
+                .andExpect(jsonPath("$.data.brandId").value(1))
+                .andExpect(jsonPath("$.data.name")
+                        .value("골드 VIP 20% 할인"))
+                .andExpect(jsonPath("$.data.policyType")
+                        .value("PERCENT_CAPPED"))
+                .andExpect(jsonPath("$.data.minOrderAmount")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.data.eligibleGrades[0]")
+                        .value("GOLD"))
+                .andExpect(jsonPath("$.data.eligibleGrades[1]")
+                        .value("VIP"))
+                .andExpect(jsonPath("$.data.active").value(true));
+
+        verify(couponTemplateQueryService).findById(100L);
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 쿠폰 템플릿을 조회하면 404를 반환한다")
+    void rejectMissingCouponTemplate() throws Exception {
+        when(couponTemplateQueryService.findById(999L))
+                .thenThrow(new BusinessException(
+                        CouponTemplateErrorCode.COUPON_TEMPLATE_NOT_FOUND,
+                        "couponTemplateId=999"
+                ));
+
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 999L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(404))
+                .andExpect(jsonPath("$.error.code")
+                        .value("COUPON-102"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("쿠폰 템플릿을 찾을 수 없습니다."));
+
+        verify(couponTemplateQueryService).findById(999L);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 ID가 0 이하면 400을 반환한다")
+    void rejectNonPositiveCouponTemplateId() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 0L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400))
+                .andExpect(jsonPath("$.error.code")
+                        .value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("쿠폰 템플릿 ID는 0보다 커야 합니다."));
+
+        verifyNoInteractions(couponTemplateQueryService);
     }
 }

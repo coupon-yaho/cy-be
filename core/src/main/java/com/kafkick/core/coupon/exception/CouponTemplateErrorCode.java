@@ -9,6 +9,12 @@ public enum CouponTemplateErrorCode implements ErrorCode {
             400,
             "COUPON-101",
             "쿠폰 템플릿 값이 올바르지 않습니다."
+    ),
+
+    COUPON_TEMPLATE_NOT_FOUND(
+            404,
+            "COUPON-102",
+            "쿠폰 템플릿을 찾을 수 없습니다."
     );
 
     private final int status;

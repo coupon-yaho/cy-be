@@ -1,5 +1,12 @@
-// CouponTemplateRepository 포트를 Spring Data JPA로 구현합니다.
+// 쿠폰 템플릿 저장 및 단건 조회 포트를 Spring Data JPA로 구현합니다.
 package com.kafkick.storage.db.coupon.repository;
+
+import java.util.Optional;
+
+import jakarta.persistence.EntityManager;
+
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
@@ -7,9 +14,6 @@ import com.kafkick.core.coupon.port.CouponTemplateRepository;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.coupon.entity.CouponTemplateEntity;
 import com.kafkick.storage.db.coupon.mapper.CouponTemplateEntityMapper;
-import jakarta.persistence.EntityManager;
-import org.springframework.stereotype.Repository;
-import org.springframework.dao.DataIntegrityViolationException;
 
 @Repository
 public class CouponTemplateRepositoryImpl implements CouponTemplateRepository {
@@ -45,5 +49,11 @@ public class CouponTemplateRepositoryImpl implements CouponTemplateRepository {
                     exception
             );
         }
+    }
+
+    @Override
+    public Optional<CouponTemplate> findById(Long id) {
+        return jpaRepository.findById(id)
+                .map(CouponTemplateEntityMapper::toDomain);
     }
 }

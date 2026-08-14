@@ -3,7 +3,6 @@ package com.kafkick.core.coupon.domain;
 
 import java.util.EnumSet;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.Set;
 
 public enum MembershipGrade {
