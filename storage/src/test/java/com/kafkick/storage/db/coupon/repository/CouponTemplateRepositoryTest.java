@@ -116,6 +116,28 @@ class CouponTemplateRepositoryTest {
                 });
     }
 
+    @Test
+    @DisplayName("저장한 쿠폰 템플릿을 ID로 단건 조회한다")
+    void findCouponTemplateById() {
+        CouponTemplate savedCouponTemplate =
+                couponTemplateRepository.save(createCouponTemplate(1L));
+
+        CouponTemplate foundCouponTemplate = couponTemplateRepository
+                .findById(savedCouponTemplate.id())
+                .orElseThrow();
+
+        assertThat(foundCouponTemplate.id())
+                .isEqualTo(savedCouponTemplate.id());
+        assertThat(foundCouponTemplate.brandId()).isEqualTo(1L);
+        assertThat(foundCouponTemplate.name())
+                .isEqualTo(savedCouponTemplate.name());
+        assertThat(foundCouponTemplate.eligibleGrades())
+                .containsExactly(
+                        MembershipGrade.GOLD,
+                        MembershipGrade.VIP
+                );
+    }
+
     private CouponTemplate createCouponTemplate(Long brandId) {
         return CouponTemplate.create(
                 brandId,

@@ -6,7 +6,8 @@ public enum CommonErrorCode implements ErrorCode {
     INVALID_INPUT(400, "COMMON-001", "잘못된 요청입니다."),
     NOT_FOUND(404, "COMMON-002", "요청한 리소스를 찾을 수 없습니다."),
     METHOD_NOT_ALLOWED(405, "COMMON-003", "지원하지 않는 요청 방식입니다."),
-    INTERNAL_ERROR(500, "COMMON-004", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+    INTERNAL_ERROR(500, "COMMON-004", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."),
+    FORBIDDEN(403, "COMMON-005", "접근 권한이 없습니다.");
 
     private final int status;
     private final String code;
