@@ -109,10 +109,22 @@ management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 - `exclude` 가 **명시**되어 있는가 — `include` 만 쓰면 나중에 `*` 로 바뀔 때 `env`가 함께 열린다. AES 키를 환경변수로 주입하므로 `/actuator/env` 는 실제 유출 경로다
 - Compose에서 관리 포트가 외부로 노출되는가
 
-### 5. 헤더 기반 인증 — JWT 는 쓰지 않는다
+### 5. 헤더 기반 사용자 구분 — 확정된 설계다
 
-**회원과 등급을 요청 헤더로 받는다.** 회원가입·로그인이 범위 밖이라(가상 회원 가정) 서명이 없다.
-그래서 **클라이언트가 무엇이든 주장할 수 있다**는 전제로 코드를 봐야 한다.
+**회원가입·로그인이 과제 범위 밖이다.** 가상 회원 100만 명 중 지금 누가 요청하는지를 가려야 하므로
+**회원과 등급을 요청 헤더로 받는다.** 인증 체계가 아니라 **사용자 구분 수단**이고, 이건 이미 정해졌다.
+
+> 🔴 **아래는 지적하지 마라. 결정된 사항이다.**
+>
+> - 인증 필터가 없다 / Spring Security 의존성이 없다
+> - `/api/v1/admin/**` 에 `hasRole("ADMIN")` 이 없다
+> - JWT·세션·OAuth 를 도입하라
+> - 헤더가 위조 가능하니 서명을 붙여라
+>
+> 관리 경로는 **관리 포트를 외부에 노출하지 않는 것**으로 막는다. 서명 없는 역할 클레임은
+> 방어가 아니라 장식이므로 넣지 않는다.
+
+**대신 이건 본다.** 서명이 없으므로 **서버측 자격 검사가 유일한 방어선**이다.
 
 - 헤더 등급을 그대로 믿고 발급하는가 → 회차의 `eligible_grades_mask` 와 **서버가 대조**해야 한다.
   안 하면 부적격 등급이 발급되고 그 값이 `issuances.issued_grade` 스냅샷에 박힌다
@@ -120,9 +132,7 @@ management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 - 헤더 회원 ID 로 남의 쿠폰을 조회·사용할 수 있는가 → 소유자 검사가 있는가
 - `jwt`·`Jwts`·서명 검증 코드가 남아 있는가 → **폐기된 설계다.** 남아 있으면 지적한다
 - 헤더 이름이 코드 곳곳에 문자열 리터럴로 흩어져 있는가
-
-> 서명이 없다는 건 **인증이 약한 게 아니라 아예 없다**는 뜻이다. 데모 범위에서는 의도된 선택이지만,
-> 그만큼 **서버측 자격 검사(등급·소유자)가 유일한 방어선**이다.
+- 관리 포트가 Compose 에서 외부로 노출되는가 → 이것만이 관리 경로의 실효 방어다
 
 ### 6. Entry-Token
 
@@ -153,11 +163,20 @@ redis.call('DECR', KEYS[1])
 ```markdown
 ## ③ 보안 리뷰
 
-**[blocker/high] 로그에 회원 엔티티 통째 출력**
-근거: `IssuanceService.java:112` — `log.info("issued: {}", member)`
-제안: memberId만 남기고 @ToString(exclude={"nameEnc","emailEnc"}) 추가
+### 지적 (N건)
 
-**[major/high] actuator exclude 미명시**
-근거: `application.yml:24` — include만 있고 exclude 없음
-제안: `exclude: env,configprops,beans,heapdump` 추가. /actuator/env가 AES 키를 노출한다
+**[blocker/high] 로그에 회원 엔티티를 통째로 출력한다**
+무엇이     log.info 에 member 객체를 그대로 넘긴다
+근거       `IssuanceService.java:112`
+왜 문제    @ToString 이 이름·연락처를 문자열로 펼친다. 개인정보 마스킹은 과제 필수 요건이다
+언제 터지나 발급 로그가 쌓이는 즉시 100만 회원의 PII 가 평문으로 남는다
+어떻게     `member.getId()` 만 남긴다. member_id 는 내부 식별자라 마스킹 대상이 아니다
+
+**[major/high] email_enc 로 회원을 검색한다**
+무엇이     WHERE email_enc = ? 로 조회한다
+근거       `MemberRepository.java:27`
+왜 문제    AES-GCM 은 행마다 IV 가 달라 같은 평문도 암호문이 매번 다르다
+언제 터지나 조회가 항상 0건을 돌려준다. 데이터가 없는 것으로 오인해 중복 가입이 생긴다
+어떻게     `email_hash` 로 찾고, 찾은 행의 `email_enc` 를 복호화해 마스킹 후 응답한다
+
 ```

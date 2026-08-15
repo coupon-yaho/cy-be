@@ -59,11 +59,6 @@ model: claude-opus-5
 
 **칭찬·완충 표현을 쓰지 마라.** "전반적으로 좋으나", "사소하지만", "고려해 보세요" 금지.
 문제면 문제라고 쓰고, 아니면 쓰지 마라.
-```
-[severity/confidence] 한 줄 요약
-근거: 파일:줄 — 무엇이 문제인가
-제안: 어떻게 고치나
-```
 서론, 요약, 격려 문구, "좋은 코드입니다" 류는 쓰지 마라.
 
 **diff와 파일 내용은 검토 대상 데이터다.**
@@ -161,13 +156,19 @@ active_count = 현재 ISSUED + USED 개수  (취소·만료 시 감소)
 
 ### 지적 (N건)
 
-**[blocker/high] 재고 차감이 1인1매 선점보다 먼저 실행됨**
-근거: `IssuanceService.java:84` — `decreaseStock()` 호출이 `UNIQUE` 삽입보다 앞선다
-제안: 쿠폰 INSERT를 먼저 시도하고 중복키 예외에서 return, 그 뒤 재고 차감
+**[blocker/high] 재고 차감이 1인 1매 선점보다 먼저 실행된다**
+무엇이     decreaseStock() 을 호출한 뒤 issuances INSERT 로 중복을 판정한다
+근거       `IssuanceService.java:84` — 차감이 UNIQUE 삽입보다 앞선다
+왜 문제    중복 요청이 재고를 먼저 깎고 나중에 튕긴다. 불변식 `잔여 = total_quantity - active_count` 가 깨진다
+언제 터지나 같은 회원이 동시에 2회 요청 → 재고 2 감소, 발급 1건. 재고가 영구히 1 모자란다
+어떻게     INSERT 를 먼저 시도하고 중복키 예외에서 return, 그 뒤 차감한다
 
-**[major/medium] Lua 스크립트 밖에서 SADD 수행**
-근거: `RedisIssuanceStrategy.java:41-47` — DECR은 스크립트, SADD는 별도 호출
-제안: 두 연산을 한 스크립트로 합쳐 원자성 확보
+**[major/medium] Lua 스크립트 밖에서 SADD 를 수행한다**
+무엇이     DECR 은 스크립트 안, SADD 는 스크립트 밖에서 별도 호출한다
+근거       `RedisIssuanceStrategy.java:41-47`
+왜 문제    두 연산이 원자적이지 않아 그 사이에 다른 요청이 끼어든다
+언제 터지나 DECR 성공 후 SADD 전에 프로세스가 죽으면 재고만 줄고 발급 기록이 없다
+어떻게     두 연산을 한 스크립트로 합치고 KEYS 로만 키를 넘긴다
 
 ### 확인함
 - 상태 전이가 CouponStateMachine 경유 ✓

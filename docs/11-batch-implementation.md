@@ -20,12 +20,24 @@ storage JPA · 어댑터 · Flyway
 프로세스가 갈리므로 **Hikari 풀이 자동으로 분리**된다. `HikariCP` 사용률이 v1 병목의 증거인데
 배치가 나눠 쓰면 그 증거가 흐려진다 — 이 분리가 그것을 구조적으로 막는다.
 
-### 살아 있어야 하는 것과 죽어 있어야 하는 것이 두 앱으로 갈린다
+### 스케줄러는 전부 batch 에 있고, 부하 중에는 하나도 돌지 않는다
 
-| 어디에 | 무엇이 | 부하 중 | 왜 |
-|---|---|---|---|
-| `api` | 회차 생성 · 회차 상태 전이 · 드리프트 감시 | 유지 | **회차가 `OPEN` 으로 안 바뀌면 발급 자체를 못 한다** |
-| `batch` | `expireJob` · `verifyJob` | **정지** | 재고를 움직이거나 300만을 읽어 **측정을 오염시킨다** |
+회차 생성과 상태 전이까지 batch 가 가져간다. 상태를 바꾸는 배치가 한 프로세스에 모여야
+정지 스위치가 하나로 끝나기 때문이다.
+
+| 어디에 | 무엇이 | 부하 중 |
+|---|---|---|
+| `api` | 발급 · 사용 · 취소 · 대기열 · 드리프트 감시 | 유지 |
+| `api` | **재고 소진 시 회차를 `CLOSED` 로** — 발급 경로가 인라인으로 | 유지 |
+| `batch` | 회차 생성 · 회차 상태 전이 스케줄러 | **정지** |
+| `batch` | `expireJob` · `verifyJob` | **정지** |
+
+**부하 중에 스케줄러가 하나도 안 돌아도 되는 이유** — 부하 테스트는 이미 `OPEN` 인 회차 하나에
+트래픽을 몰아넣는 것이다. 테스트 시작 전에 대상 회차를 `OPEN` 으로 준비해 두면 되고,
+테스트 도중에 새 회차가 열릴 일은 없다.
+
+재고 소진으로 `CLOSED` 가 되는 것만 부하 중에 실제로 일어나는데, 이건 **발급 경로가 그 자리에서**
+바꾼다. 스케줄러를 기다리면 재고가 0인데 `OPEN` 인 구간이 생긴다.
 
 그래서 **부하 중 정지 수단이 설정이 아니라 컨테이너다.**
 
@@ -36,16 +48,17 @@ docker compose -f base.yml -f batch.yml up batch  # 부하 종료 후 겹쳐 올
 
 `base.yml` 은 한 글자도 안 바뀌므로 비교표의 *"동일 Docker Compose 리소스 limit"* 이 유지된다.
 
-### 판정 시점에는 두 앱을 모두 멈춘다
+### 판정 시점에는 스위치 하나로 멈춘다
 
-`batch` 를 띄운 채로 `FULL` 을 두 번 돌려야 하는데, `api` 의 회차 상태 전이 스케줄러는 계속 돈다.
-**회차 하나만 `CLOSED` 로 바뀌어도** `sum(coupon_stocks.active_count)` 나 `max(issuances.updated_at)` 이
-움직여 지문이 달라지고 결정론 증명이 실패한다.
+`batch` 를 띄운 채로 `FULL` 을 두 번 돌려야 하는데, 그때 같이 뜬 스케줄러가 회차를 열거나
+만료를 돌리면 **회차 하나만 `CLOSED` 로 바뀌어도** `sum(coupon_stocks.active_count)` 나
+`max(issuances.updated_at)` 이 움직여 지문이 달라지고 결정론 증명이 실패한다.
 
 ```yaml
-campaign.scheduling.enabled: false   # api 앱 — ① 소유. 아직 없다
-batch.scheduling.enabled: false      # batch 앱
+batch.scheduling.enabled: false   # 전 스케줄러를 @ConditionalOnProperty 로 이 하나에 묶는다
 ```
+
+스케줄러가 전부 batch 에 있으므로 끌 것이 하나다. 두 앱에 흩어져 있으면 하나는 반드시 빠뜨린다.
 
 ---
 
@@ -85,7 +98,7 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 `@EnableBatchProcessing` 은 붙이지 않는다 — 붙이면 `BatchAutoConfiguration` 이 물러나
 `JobRepository` · `JobLauncher` 를 직접 정의해야 한다.
 
-메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.3 원본 그대로이고,
+메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
 `spring.batch.jdbc.initialize-schema: never` 라 이 파일이 없으면 `JobRepository` 초기화가 즉시 실패한다.
 
 ---
@@ -294,16 +307,32 @@ Step 7 통계(CLEAN 만)   Step 8 finalize
 
 ---
 
-## 11. 아직 정하지 못한 것
+## 11. 인증은 헤더로 사용자를 구분한다
+
+**회원가입·로그인은 과제 범위 밖이다.** 가상 회원 100만 명 중 지금 누가 요청하는지를 가려야 하므로
+**회원과 권한을 요청 헤더로 받는다.** 인증 체계가 아니라 사용자 구분 수단이다.
+
+서명이 없으므로 클라이언트가 무엇이든 주장할 수 있다. 그래서 방어선은 둘이다.
+
+| 무엇 | 어떻게 |
+|---|---|
+| 관리 경로 `/api/v1/admin/**` | **관리 포트를 Compose 에서 외부에 노출하지 않는다** |
+| 사용자 경로 | 서버가 헤더 등급을 회차의 `eligible_grades_mask` 와 **대조**한다 |
+
+서명 없는 역할 클레임(`hasRole`)은 방어가 아니라 장식이므로 넣지 않는다.
+JWT · 세션 · Spring Security 도 도입하지 않는다.
+
+> 앱이 헤더 등급을 대조하지 않으면 부적격 등급이 발급되고 그 값이 `issuances.issued_grade`
+> 스냅샷에 그대로 박힌다. **검증 배치 `V6` 가 그것을 잡는다** — 즉 `V6` 는 시드 데이터 검사가 아니라
+> 런타임 결함 검사다.
+
+---
+
+## 12. 아직 정하지 못한 것
 
 **`CouponPolicyType` 에 `DATA_GRANT` 가 없다.** `V1__init_schema.sql` 의 `coupon_templates` 에는
 `data_grant_mb` 컬럼이 있고 `policy_type` 주석이 `PERCENT_CAPPED / FIXED_AMOUNT / DATA_GRANT` 다.
 시드가 `DATA_GRANT` 를 넣는 순간 `@Enumerated(STRING)` 역직렬화가 터진다.
-
-**관리 API 인증 방식.** JWT 를 폐기하고 헤더로 회원·등급을 넘기기로 하면서 `/api/v1/admin/**` 방어가 비었다.
-서명이 없으므로 역할 클레임은 위조 가능하고, **관리 포트 분리가 현재 유일한 실효 수단**이다.
-
-**`campaign.scheduling.enabled`.** `api` 앱 스케줄러를 판정 시점에 멈출 수단이 어느 문서에도 없다.
 
 **③ 답변 대기 둘.** Redis 선점 카운터 TTL(미영속 발급 검증의 전제)과 Kafka DLT 계약.
 답이 오기 전까지 착수하지 않는다.

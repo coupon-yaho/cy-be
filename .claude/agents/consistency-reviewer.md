@@ -235,12 +235,18 @@ asof_state.state  ↔  issuances.status  ↔  issuance_usages 활성 행 수
 ### 지적 (N건)
 
 **[blocker/high] 집합 비교를 다형 FK 컬럼으로 한다**
-근거: `VerificationRunService.java:88` — campaign_id/coupon_id 로 조인
-제안: target_key 단일 키로 비교. NULL=NULL 이 UNKNOWN 이라 전부 누락 판정된다
+무엇이     expected_findings 와 verification_findings 를 campaign_id·coupon_id 로 조인한다
+근거       `VerificationRunService.java:88`
+왜 문제    규칙마다 채우는 컬럼이 달라 나머지가 NULL 인데 `NULL = NULL` 은 UNKNOWN 이다
+언제 터지나 800행을 정확히 검출해도 전부 "누락" 으로 잡혀 D10 게이트가 실패한다
+어떻게     `target_key` 단일 문자열로 비교한다. 조인 키는 `(finding_type, target_key)` 뿐이다
 
 **[blocker/high] V6 가 members 를 조인한다**
-근거: `V6GradeViolation.java:24`
-제안: issuances.issued_grade 스냅샷 사용. 시드가 심은 3% 가 오탐이 된다
+무엇이     등급 자격을 members.membership_grade 로 판정한다
+근거       `V6GradeViolation.java:24`
+왜 문제    현재값이라 발급 시점 자격과 다르다. 시드가 3% 를 일부러 어긋내 놨다
+언제 터지나 정상셋 검증에서 등급 제한 회차의 3% 가 통째로 오탐 → 0건이 원천 불가능해진다
+어떻게     `issuances.issued_grade` 스냅샷을 `grades` 와 조인한다
 
 ### 확인함
 - asOf가 파라미터로 주입됨 ✓
