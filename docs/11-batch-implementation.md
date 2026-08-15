@@ -1,7 +1,31 @@
 # 배치 서버 구현 방향
 
-> 무엇을 어떻게 만드는가. 왜 그렇게 정했는지의 배경은 `10-batch-design.md`,
-> 시드와 맞춰야 하는 계약은 시드 저장소의 `contract.json` 이 원본이다.
+> 무엇을 어떻게 만드는가. 왜 그렇게 정했는지의 배경은 `10-batch-design.md`.
+
+## 계약 원본
+
+시드와 맞춰야 하는 계약의 **원본은 시드 저장소** `coupon-yaho/cy-seed-data-generator` 의
+`contract.json` 이다. 이 저장소에는 읽기 전용 사본을 `docs/contract.json` 으로 둔다.
+
+```
+원본   cy-seed-data-generator @ 96b12f2  (2026-08-13)
+사본   docs/contract.json                 바이트 동일
+```
+
+**사본을 손으로 고치지 않는다.** 원본이 바뀌면 통째로 다시 받아 덮는다.
+
+```bash
+gh api repos/coupon-yaho/cy-seed-data-generator/contents/contract.json \
+  --jq '.content' | base64 -d > docs/contract.json
+git diff docs/contract.json    # 비어 있어야 정상
+```
+
+사본을 두는 이유는 **어긋남을 잡을 수 있게 하려는 것**이다. 사본이 없으면 배치 코드가
+계약과 맞는지 확인하려고 매번 다른 저장소를 열어야 하고, 리뷰어(사람·CodeRabbit)는
+아예 못 본다. 실제로 리뷰 설정이 계약을 자기 말로 다시 적었다가 두 번 어긋났다.
+
+**계약과 이 문서가 다르면 계약이 이긴다.** 이 문서는 계약을 구현으로 옮긴 것이고,
+계약은 시드가 실제로 심는 데이터를 규정한다.
 
 ---
 
