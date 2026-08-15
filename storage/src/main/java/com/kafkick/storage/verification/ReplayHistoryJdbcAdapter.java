@@ -2,9 +2,7 @@
 package com.kafkick.storage.verification;
 
 import static com.kafkick.storage.verification.ColumnValues.toEnum;
-import static com.kafkick.storage.verification.ColumnValues.toLocalDateTime;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -56,7 +54,7 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
                     IssuanceEventType.valueOf(rs.getString("event_type")),
                     toEnum(rs.getString("from_status"), IssuanceStatus::valueOf),
                     IssuanceStatus.valueOf(rs.getString("to_status")),
-                    toLocalDateTime(rs.getTimestamp("created_at"))
+                    rs.getObject("created_at", LocalDateTime.class)
             );
 
     private final JdbcClient jdbcClient;
@@ -70,7 +68,7 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
         // MIN/MAX 는 대상이 없어도 NULL 한 행을 준다. 그래서 single() 이고,
         // 빈 결과 판정은 wasNull() 로 한다 — getLong 은 NULL 을 0 으로 돌려준다.
         return jdbcClient.sql(SELECT_RANGE_BOUNDS)
-                .param("asOf", Timestamp.valueOf(asOf))
+                .param("asOf", asOf)
                 .query((rs, rowNum) -> {
                     long min = rs.getLong("min_id");
                     return rs.wasNull()
@@ -89,7 +87,7 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
         return jdbcClient.sql(SELECT_RANGE)
                 .param("fromIssuanceId", fromIssuanceId)
                 .param("toIssuanceId", toIssuanceId)
-                .param("asOf", Timestamp.valueOf(asOf))
+                .param("asOf", asOf)
                 .query(ROW_MAPPER)
                 .list();
     }

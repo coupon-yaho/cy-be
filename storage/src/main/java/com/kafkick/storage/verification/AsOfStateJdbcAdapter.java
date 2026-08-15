@@ -1,7 +1,6 @@
 // asof_state 쓰기 어댑터입니다. 300만 행이라 단건 왕복이 아니라 배치로 씁니다.
 package com.kafkick.storage.verification;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -79,7 +78,7 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
     public void applyActiveUsageCounts(long runId, LocalDateTime asOf) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("runId", runId)
-                .addValue("asOf", Timestamp.valueOf(asOf));
+                .addValue("asOf", asOf);
 
         jdbcTemplate.update(APPLY_USAGE_COUNTS, params);
     }
@@ -90,6 +89,6 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
                 .addValue("issuanceId", result.issuanceId())
                 .addValue("state", result.state().name())
                 .addValue("lastHistoryId", result.lastHistoryId())
-                .addValue("lastEventAt", Timestamp.valueOf(result.lastEventAt()));
+                .addValue("lastEventAt", result.lastEventAt());
     }
 }

@@ -1,6 +1,5 @@
 package com.kafkick.storage.db;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -51,8 +50,8 @@ public final class VerificationSeed {
                 .param("memberId", newMemberId())
                 .param("code", nextCode())
                 .param("status", status.name())
-                .param("issuedAt", Timestamp.valueOf(EPOCH))
-                .param("expiresAt", Timestamp.valueOf(EPOCH.plusDays(7))));
+                .param("issuedAt", EPOCH)
+                .param("expiresAt", EPOCH.plusDays(7)));
     }
 
     /** 이력 한 행을 만들고 식별자를 돌려준다. {@code fromStatus} 가 null 이면 발급 이력이다. */
@@ -72,7 +71,7 @@ public final class VerificationSeed {
                 .param("eventType", eventType.name())
                 .param("fromStatus", fromStatus == null ? null : fromStatus.name())
                 .param("toStatus", toStatus.name())
-                .param("createdAt", Timestamp.valueOf(createdAt)));
+                .param("createdAt", createdAt));
     }
 
     /** 사용 행 하나. {@code canceledAt} 이 null 이면 취소되지 않은 사용이다. */
@@ -83,8 +82,8 @@ public final class VerificationSeed {
                         VALUES (:issuanceId, NULL, 1000, :usedAt, :canceledAt)
                         """)
                 .param("issuanceId", issuanceId)
-                .param("usedAt", Timestamp.valueOf(usedAt))
-                .param("canceledAt", canceledAt == null ? null : Timestamp.valueOf(canceledAt))
+                .param("usedAt", usedAt)
+                .param("canceledAt", canceledAt)
                 .update();
     }
 
@@ -125,7 +124,7 @@ public final class VerificationSeed {
                         INSERT INTO members (membership_grade, created_at)
                         VALUES ('VIP', :createdAt)
                         """)
-                .param("createdAt", Timestamp.valueOf(EPOCH)));
+                .param("createdAt", EPOCH));
     }
 
     private long insertBrand() {
@@ -154,9 +153,9 @@ public final class VerificationSeed {
                         """)
                 .param("templateId", templateId)
                 .param("brandId", brandId)
-                .param("openAt", Timestamp.valueOf(EPOCH))
-                .param("closeAt", Timestamp.valueOf(EPOCH.plusDays(1)))
-                .param("createdAt", Timestamp.valueOf(EPOCH)));
+                .param("openAt", EPOCH)
+                .param("closeAt", EPOCH.plusDays(1))
+                .param("createdAt", EPOCH));
     }
 
     private String nextCode() {

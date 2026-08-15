@@ -1,11 +1,9 @@
 package com.kafkick.storage.verification;
 
 import static com.kafkick.storage.verification.ColumnValues.toEnum;
-import static com.kafkick.storage.verification.ColumnValues.toLocalDateTime;
 import static com.kafkick.storage.verification.ColumnValues.toName;
-import static com.kafkick.storage.verification.ColumnValues.toTimestamp;
 
-import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import org.springframework.jdbc.core.RowMapper;
@@ -57,8 +55,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
 
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(
             rs.getLong("id"),
-            toLocalDateTime(rs.getTimestamp("as_of")),
-            toLocalDateTime(rs.getTimestamp("from_ts")),
+            rs.getObject("as_of", LocalDateTime.class),
+            rs.getObject("from_ts", LocalDateTime.class),
             ScopeType.valueOf(rs.getString("scope")),
             DatasetType.valueOf(rs.getString("dataset")),
             rs.getInt("attempt"),
@@ -67,8 +65,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
             rs.getInt("finding_count"),
             rs.getString("findings_checksum"),
             rs.getString("dataset_fingerprint"),
-            toLocalDateTime(rs.getTimestamp("started_at")),
-            toLocalDateTime(rs.getTimestamp("finished_at"))
+            rs.getObject("started_at", LocalDateTime.class),
+            rs.getObject("finished_at", LocalDateTime.class)
     );
 
     private final JdbcClient jdbcClient;
@@ -82,13 +80,13 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
         KeyHolder keyHolder = new GeneratedKeyHolder();
 
         jdbcClient.sql(INSERT)
-                .param("asOf", Timestamp.valueOf(run.asOf()))
-                .param("fromTs", toTimestamp(run.fromTs()))
+                .param("asOf", run.asOf())
+                .param("fromTs", run.fromTs())
                 .param("scope", run.scope().name())
                 .param("dataset", run.dataset().name())
                 .param("attempt", run.attempt())
                 .param("findingCount", run.findingCount())
-                .param("startedAt", Timestamp.valueOf(run.startedAt()))
+                .param("startedAt", run.startedAt())
                 .update(keyHolder);
 
         Number generated = keyHolder.getKey();
@@ -117,7 +115,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .param("findingCount", run.findingCount())
                 .param("findingsChecksum", run.findingsChecksum())
                 .param("datasetFingerprint", run.datasetFingerprint())
-                .param("finishedAt", toTimestamp(run.finishedAt()))
+                .param("finishedAt", run.finishedAt())
                 .param("id", run.id())
                 .update();
 
