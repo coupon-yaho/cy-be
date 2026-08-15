@@ -171,13 +171,28 @@ class AsOfStateJdbcAdapterTest {
     }
 
     @Test
-    @DisplayName("갱신 건수는 활성 사용이 하나 이상인 발급건 수다")
-    void reportChangedRowCount() {
+    @DisplayName("활성 사용이 없는 발급건은 0 으로 남는다")
+    void leaveZeroWhenNoActiveUsage() {
         long used = seededState(IssuanceStatus.USED);
-        seededState(IssuanceStatus.ISSUED);
+        long untouched = seededState(IssuanceStatus.ISSUED);
         data.usage(used, AS_OF.minusHours(1), null);
 
-        assertThat(adapter.applyActiveUsageCounts(runId, AS_OF)).isEqualTo(1);
+        adapter.applyActiveUsageCounts(runId, AS_OF);
+
+        assertThat(activeUsageCount(used)).isEqualTo(1);
+        assertThat(activeUsageCount(untouched)).isZero();
+    }
+
+    @Test
+    @DisplayName("두 번 채워도 값이 그대로다 — 재시작해도 사용 건수가 흔들리지 않는다")
+    void applyUsageCountsTwice() {
+        long issuanceId = seededState(IssuanceStatus.USED);
+        data.usage(issuanceId, AS_OF.minusHours(1), null);
+
+        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF);
+
+        assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }
 
     private long seededState(IssuanceStatus status) {

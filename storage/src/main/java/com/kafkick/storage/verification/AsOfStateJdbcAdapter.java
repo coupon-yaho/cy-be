@@ -76,12 +76,12 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
     }
 
     @Override
-    public int applyActiveUsageCounts(long runId, LocalDateTime asOf) {
+    public void applyActiveUsageCounts(long runId, LocalDateTime asOf) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("runId", runId)
                 .addValue("asOf", Timestamp.valueOf(asOf));
 
-        return jdbcTemplate.update(APPLY_USAGE_COUNTS, params);
+        jdbcTemplate.update(APPLY_USAGE_COUNTS, params);
     }
 
     private static SqlParameterSource toParams(long runId, ReplayResult result) {

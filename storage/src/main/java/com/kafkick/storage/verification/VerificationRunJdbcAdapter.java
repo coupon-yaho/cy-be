@@ -111,7 +111,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
             throw new IllegalArgumentException("갱신하려면 검증 실행 ID가 필요합니다.");
         }
 
-        jdbcClient.sql(UPDATE)
+        int updated = jdbcClient.sql(UPDATE)
                 .param("verdict", toName(run.verdict()))
                 .param("statsStatus", toName(run.statsStatus()))
                 .param("findingCount", run.findingCount())
@@ -120,6 +120,13 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .param("finishedAt", toTimestamp(run.finishedAt()))
                 .param("id", run.id())
                 .update();
+
+        // save() 는 실패를 예외로 알리는데 update() 만 조용히 넘어가면, 정리 배치가 지운 run 을
+        // 갱신하려 할 때 판정이 안 써졌는데도 잡이 COMPLETED 로 끝난다.
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "검증 실행을 갱신하지 못했습니다. id=" + run.id() + " 갱신된 행=" + updated);
+        }
     }
 
     @Override
