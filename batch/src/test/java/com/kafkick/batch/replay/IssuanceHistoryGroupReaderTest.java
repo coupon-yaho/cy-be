@@ -113,6 +113,30 @@ class IssuanceHistoryGroupReaderTest {
                 .containsExactly(Long.MAX_VALUE);
     }
 
+    @Test
+    @DisplayName("발급건 역순이 섞이면 끊는다 — 조용히 두 묶음으로 갈리면 뒤가 앞을 덮어쓴다")
+    void rejectRowsOutOfIssuanceOrder() {
+        FakeHistories histories = new FakeHistories()
+                .with(1L, issue(1L, 1L))
+                .with(2L, issue(2L, 2L))
+                .unsorted();
+
+        assertThatThrownBy(() -> readAll(reader(histories, 10)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("발급건 오름차순이 아닙니다");
+    }
+
+    @Test
+    @DisplayName("같은 발급건이 이어지면 한 묶음이다 — 중복 식별자는 위반이 아니다")
+    void keepRepeatedIssuanceIdInOneGroup() {
+        FakeHistories histories = new FakeHistories()
+                .with(1L, issue(1L, 1L), use(2L, 1L), cancelUse(3L, 1L));
+
+        assertThat(readAll(reader(histories, 10))).singleElement()
+                .extracting(IssuanceHistoryGroup::histories)
+                .satisfies(records -> assertThat(records).hasSize(3));
+    }
+
     // ─────────────────────────── 경계 주입 ───────────────────────────
 
     @Test
@@ -299,6 +323,13 @@ class IssuanceHistoryGroupReaderTest {
         private final List<String> requestedWindows = new ArrayList<>();
 
         private int scanRangeCalls;
+        private boolean unsorted;
+
+        /** 어댑터의 ORDER BY 가 사라진 상황을 흉내 낸다. */
+        FakeHistories unsorted() {
+            this.unsorted = true;
+            return this;
+        }
 
         FakeHistories with(long issuanceId, IssuanceHistoryRecord... histories) {
             byIssuance.put(issuanceId, List.of(histories));
@@ -333,7 +364,9 @@ class IssuanceHistoryGroupReaderTest {
             return byIssuance.entrySet().stream()
                     .filter(entry -> entry.getKey() >= fromIssuanceId
                             && entry.getKey() <= toIssuanceId)
-                    .sorted(Map.Entry.comparingByKey())
+                    .sorted(unsorted
+                            ? Map.Entry.<Long, List<IssuanceHistoryRecord>>comparingByKey().reversed()
+                            : Map.Entry.comparingByKey())
                     .flatMap(entry -> entry.getValue().stream()
                             .filter(history -> history.id() <= maxHistoryId)
                             .sorted(Comparator.comparing(IssuanceHistoryRecord::createdAt)

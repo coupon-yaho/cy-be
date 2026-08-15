@@ -25,7 +25,6 @@ import com.kafkick.batch.replay.AsOfStateItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
-import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationRun;
@@ -90,6 +89,9 @@ public class VerifyJobConfig {
     /**
      * 실행 행을 만들고, 훑을 경계를 얼려 잡 실행 컨텍스트에 심는다.
      *
+     * <p>실행 시작 시각은 Spring Batch 가 이미 기록한 값을 쓴다. 여기서 {@code now()} 를 부르면
+     * 검증 배치에 현재 시각 의존이 생기고, 다음 사람이 규칙에서도 부르게 된다.
+     *
      * <p>실행 행은 <b>있으면 찾고 없으면 만든다.</b> 그냥 INSERT 하면 재시작 때 두 방향으로 막힌다 —
      * 이 Step 이 COMPLETED 인데 잡 컨텍스트가 아직 저장 전이면 {@code runId} 를 잃고,
      * 반대로 다시 INSERT 하면 {@code uk_run_params} 중복키에 걸린다.
@@ -97,8 +99,7 @@ public class VerifyJobConfig {
     @Bean
     public Step startRunStep(
             VerificationRunRepository runs,
-            ReplayHistoryRepository histories,
-            TimeProvider timeProvider
+            ReplayHistoryRepository histories
     ) {
         return new StepBuilder("startRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -120,7 +121,8 @@ public class VerifyJobConfig {
                             .map(VerificationRun::id)
                             .orElseGet(() -> runs.save(VerificationRun.start(
                                     asOf, parameters.getLocalDateTime("fromTs"),
-                                    scope, dataset, attempt, timeProvider.now())).id());
+                                    scope, dataset, attempt,
+                                    stepExecution.getJobExecution().getStartTime())).id());
 
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();

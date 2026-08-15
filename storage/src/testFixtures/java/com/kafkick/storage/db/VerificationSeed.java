@@ -96,6 +96,10 @@ public final class VerificationSeed {
     public void clear() {
         TABLES_IN_DELETE_ORDER.forEach(
                 table -> jdbcClient.sql("DELETE FROM " + table).update());
+
+        // 캐시를 안 비우면 다음 issuance() 가 방금 지운 회차·등급을 FK 로 가리킨다.
+        couponId = null;
+        gradesInserted = false;
     }
 
     private long couponId() {

@@ -1,6 +1,7 @@
 package com.kafkick.storage.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -141,6 +142,28 @@ class AsOfStateJdbcAdapterTest {
     }
 
     @Test
+    @DisplayName("asOf 와 같은 시각에 쓴 사용은 센다 — used_at 경계는 포함이다")
+    void countUsageExactlyAtAsOf() {
+        long issuanceId = seededState(IssuanceStatus.USED);
+        data.usage(issuanceId, AS_OF, null);
+
+        adapter.applyActiveUsageCounts(runId, AS_OF);
+
+        assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("asOf 와 같은 시각에 취소된 사용은 세지 않는다 — canceled_at 경계는 배제다")
+    void ignoreUsageCanceledExactlyAtAsOf() {
+        long issuanceId = seededState(IssuanceStatus.ISSUED);
+        data.usage(issuanceId, AS_OF.minusHours(1), AS_OF);
+
+        adapter.applyActiveUsageCounts(runId, AS_OF);
+
+        assertThat(activeUsageCount(issuanceId)).isZero();
+    }
+
+    @Test
     @DisplayName("활성 사용이 여럿이면 그만큼 센다 — V5 가 이 숫자로 이중 사용을 잡는다")
     void countMultipleActiveUsages() {
         long issuanceId = seededState(IssuanceStatus.USED);
@@ -193,6 +216,16 @@ class AsOfStateJdbcAdapterTest {
         adapter.applyActiveUsageCounts(runId, AS_OF);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("시드를 비운 뒤에도 같은 인스턴스로 다시 심을 수 있다 — 캐시가 지운 FK 를 가리키면 안 된다")
+    void reuseSeedAfterClear() {
+        data.issuance(IssuanceStatus.ISSUED);
+
+        data.clear();
+
+        assertThatCode(() -> data.issuance(IssuanceStatus.ISSUED)).doesNotThrowAnyException();
     }
 
     private long seededState(IssuanceStatus status) {

@@ -3,9 +3,7 @@ package com.kafkick.batch.job;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -22,9 +20,6 @@ import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -43,18 +38,17 @@ import com.kafkick.storage.db.VerificationSeed;
  * <p>창 크기를 2 로 낮춰 창이 여러 번 넘어가는 경로를 실제로 태운다.
  * 기본값 50000 이면 어떤 테스트도 창을 한 번밖에 안 읽는다.
  *
- * <p>시계를 고정한다. {@code asOf} 는 실행 시작 시각을 넘을 수 없는데, 실제 시계를 쓰면
- * 고정된 {@code AS_OF} 가 기기 시각에 따라 미래가 되기도 하고 과거가 되기도 한다.
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2"
 })
-@Import({MySqlContainerConfig.class, VerifyJobConfigTest.FixedClockConfig.class})
+@Import(MySqlContainerConfig.class)
 class VerifyJobConfigTest {
 
-    private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
+    /** 실행 시작 시각(= 실제 지금)보다 앞서야 한다. asOf 는 미래를 가리킬 수 없다. */
+    private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
 
     @Autowired
     private JobOperator jobOperator;
@@ -69,17 +63,6 @@ class VerifyJobConfigTest {
     private JdbcClient jdbcClient;
 
     private VerificationSeed seed;
-
-    /** 실행 시작을 asOf 직후로 못 박는다. 테스트가 기기 시각과 타임존에서 독립한다. */
-    @TestConfiguration(proxyBeanMethods = false)
-    static class FixedClockConfig {
-
-        @Bean
-        @Primary
-        Clock fixedClock() {
-            return Clock.fixed(AS_OF.plusMinutes(1).toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
-        }
-    }
 
     @BeforeEach
     void setUp() {

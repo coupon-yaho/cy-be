@@ -139,7 +139,10 @@ public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHist
 
     /**
      * 이미 {@code issuance_id} 오름차순으로 정렬돼 온 것을 전제로 이어진 구간을 자른다.
-     * 정렬이 깨지면 같은 발급건이 두 묶음으로 나뉘어 뒤 묶음이 앞 묶음을 덮어쓴다.
+     *
+     * <p><b>전제가 깨지면 즉시 끊는다.</b> 같은 발급건이 두 묶음으로 갈리면 뒤 묶음이
+     * 중간 상태로 {@code asof_state} 를 덮어쓰는데, 라이터가 UPSERT 라 아무 소리도 안 난다.
+     * 어댑터의 {@code ORDER BY} 가 사라지는 회귀를 여기서 드러낸다.
      */
     private static List<IssuanceHistoryGroup> groupByIssuance(List<IssuanceHistoryRecord> rows) {
         List<IssuanceHistoryGroup> groups = new ArrayList<>();
@@ -147,6 +150,11 @@ public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHist
 
         for (IssuanceHistoryRecord row : rows) {
             if (!current.isEmpty() && row.issuanceId() != current.get(0).issuanceId()) {
+                if (row.issuanceId() < current.get(0).issuanceId()) {
+                    throw new IllegalStateException(
+                            "이력이 발급건 오름차순이 아닙니다. 앞=" + current.get(0).issuanceId()
+                                    + " 뒤=" + row.issuanceId());
+                }
                 groups.add(new IssuanceHistoryGroup(current.get(0).issuanceId(), current));
                 current = new ArrayList<>();
             }
