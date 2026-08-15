@@ -45,7 +45,14 @@ batch:
   verify:
     # asof_state 는 run 당 300만 행이다. 방치하면 가장 빨리 커지는 테이블이다.
     asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
-    chunk-size: ${VERIFY_CHUNK_SIZE:200000}
+
+    # 한 트랜잭션에 쓰는 발급건 수. 이만큼이 메모리에 올라가고 실패하면 이만큼 되돌린다.
+    chunk-size: ${VERIFY_CHUNK_SIZE:1000}
+
+    # 이력을 한 번에 읽어 올 발급건 식별자 폭.
+    # 이력 식별자가 아니라 발급건 식별자로 잘라야 한 발급건의 이력이 두 창에 걸치지 않는다.
+    # 크게 잡을수록 왕복은 줄지만 한 번에 올라오는 이력 행이 는다 — 발급건당 평균 1.8행이다.
+    replay-window-size: ${VERIFY_REPLAY_WINDOW_SIZE:50000}
 
 logging:
   level:

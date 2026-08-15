@@ -303,7 +303,10 @@ reviews:
         결정론을 깨는 것들 — 검증 배치 코드 안의 `now()` / `LocalDateTime.now()` /
         `Instant.now()` 는 발견 즉시 blocker 다. 주입된 `asOf` 를 써야 한다.
         **`TimeProvider` 주입도 같은 위반이다** — `timeProvider.now()` 는 결국 현재 시각이라
-        재실행하면 값이 달라진다. 검증 배치에서 시각은 오직 `asOf` 파라미터로만 들어온다.
+        재실행하면 값이 달라진다. 판정에 쓰는 시각은 오직 `asOf` 파라미터로만 들어온다.
+        예외는 `verification_runs.started_at` 처럼 <b>실행을 관측해 남기는 컬럼</b>뿐이고,
+        이건 checksum·지문 재료가 아니다. 그 값도 `now()` 를 부르지 말고 Spring Batch 가
+        이미 기록한 `JobExecution.getStartTime()` 을 쓴다.
         증분 윈도우도 절대 구간 `(from_ts, as_of_ts)` 로 받아야 한다. `최근 N분` 같은
         상대 윈도우는 현재 시각 기준이라 같은 파라미터 재실행이 재현되지 않는다.
         그 외: 정렬 타이브레이커 없음(리플레이 정렬은 **`(created_at, id)`** 여야 한다.
@@ -349,7 +352,13 @@ reviews:
         검증 배치가 자체 전이 로직을 가지면 런타임과 두 벌로 갈라져 같은 버그를 양쪽이
         재현한다 — 검증이 검증이 아니게 된다. `CouponStateMachine` 을 공유하는지 확인한다.
         리플레이는 자기가 추적한 상태를 진실로 보고 `from_status` 를 믿지 않는다.
-        불법 전이를 만나면 finding 으로 기록하되 상태는 전이시키지 않고 계속 진행한다.
+        **상태는 `created_at <= asOf` 이력을 `(created_at, id)` 오름차순 정렬한 마지막
+        `to_status` 다** (시드 저장소 contract.json `replay_rule.state`,
+        docs/11-batch-implementation.md). 불법 전이를 만나도 finding 으로 기록하고
+        그 행의 `to_status` 를 따라 계속 접는다. 상태를 안 옮기면 뒤 행이 연쇄로 불법이 되어
+        오염 200건이 수천 건으로 번지고, 오염 유형 4 에서 리플레이가 `EXPIRED` 를 내놓아
+        `issuances.status=USED` 와 어긋나 V3·V5 가 각각 100건씩 오탐한다.
+        접기가 상태를 안 옮기게 하라는 지적은 하지 않는다.
 
         **검증하면 안 되는 것** — `stock_per_occurrence ↔ total_quantity` 불일치,
         만료 누락(`expires_at < asOf` 인데 `ISSUED`), 스냅샷 컬럼 불일치는 전부 정상이다.
@@ -526,8 +535,18 @@ knowledge_base:
     filePatterns:
       # 설계 문서를 리뷰 기준으로 직접 읽힌다 — path_instructions 는 요약이고
       # 판단 근거의 원문은 여기 있다.
+      #
+      # ⚠️ path_instructions 와 여기가 다르면 **여기가 이긴다.** 규칙을 두 곳에 적으면
+      #    갈라진다. 실제로 아래 두 번 갈라져 리뷰어가 틀린 기준으로 blocker 를 냈다.
+      #      CY-14  만료된 USED 의 CANCEL_USE 처리
+      #      CY-16  불법 전이를 만났을 때의 상태 전이
+      #    검증·배치 규칙을 새로 적기 전에 docs/contract.json 을 먼저 본다.
       - files: "docs/01-what-we-build.md,docs/02-erd-decisions.md,docs/04-review-checklist.md"
         applyTo: "**/*.java"
+      # 검증 계약의 원본(시드 저장소 사본)과 배치 구현 방향.
+      # 리플레이·전이표·target_key·오염 매트릭스의 판단 근거가 전부 여기다.
+      - files: "docs/contract.json,docs/11-batch-implementation.md,docs/10-batch-design.md"
+        applyTo: "batch/**,**/{verification,replay,seed,stats}/**"
       - files: ".claude/agents/concurrency-reviewer.md"
         applyTo: "**/{issuance,issue,coupon,stock,lock}/**,infra/redis/**,**/*.lua"
       - files: ".claude/agents/consistency-reviewer.md"

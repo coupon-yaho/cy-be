@@ -121,16 +121,23 @@ asOf >= max(coupon_histories.created_at)
 
 ### 함정 3. 만료된 `USED`를 사용취소하면? — 정확성 단계
 
-상태 전이표에 이 경우가 없다. 그런데 더미데이터에 EXPIRED 15%(45만 장)와 "USED 중 20% 복원"이 동시에 있어서 **반드시 발생한다.**
+더미데이터에 EXPIRED 15%(45만 장)와 "USED 중 20% 복원"이 동시에 있어서 **반드시 발생한다.**
 
-**우리 결정**: 전이표에 두 행을 추가하고 `CouponStateMachine`에 넣는다.
+**우리 결정**: 전이표는 **5행으로 고정**하고, 만료된 `USED`도 예외 없이 `ISSUED`로 되돌린다.
 
 ```
-USED + expires_at >= now  ──CANCEL_USE──→ ISSUED   (재고 변화 없음)
-USED + expires_at <  now  ──CANCEL_USE──→ EXPIRED  (재고 +1, 종단)
+(없음) ──ISSUE──→ ISSUED
+ISSUED ──USE──→ USED
+USED   ──CANCEL_USE──→ ISSUED     만료 여부와 무관
+ISSUED ──CANCEL──→ CANCELLED      종단
+ISSUED ──EXPIRE──→ EXPIRED        종단
 ```
 
-만료된 쿠폰을 `ISSUED`로 되살리면 사용자가 못 쓰는 쿠폰을 유효한 걸로 보게 되고, 오염 유형 4(종단 상태 불법 전이)와 판정 경계가 겹쳐 오탐이 난다.
+**전이표는 시각을 인자로 받지 않는다.** `expires_at`을 보고 결과가 갈리면 같은 이력을 다시 접을 때마다 판정이 달라져 재실행 결정론이 무너진다. 리플레이는 `asOf` 이하 이력만 보고 상태를 재구성하는데, 전이 자체가 시각에 의존하면 그 재구성이 불가능하다.
+
+`ISSUED`로 돌아온 만료 쿠폰은 **다음 `expireJob`이 `EXPIRED`로 옮긴다.** 그 사이의 간극은 결함이 아니라 배치 주기의 함수라, `finding`이 아니라 별도 관측 지표로 둔다(`11-batch-implementation.md` 9절 "검증하지 않는 것").
+
+`USED ──EXPIRE──→ EXPIRED`는 전이표에 없다. 이미 쓴 쿠폰은 만료되지 않는다.
 
 ### 함정 4. 20초 뒤 대기열이 얼어붙는다 — 보여주기 단계
 
@@ -270,7 +277,7 @@ D1에 앉아서 30분이면 끝나는 것들. 안 정하고 시작하면 나중�
 | 1 | 오염셋 스키마 분리 + `verify(asOf, dataset)` 시그니처 | 검증 배치를 다시 짬 |
 | 2 | `asOf` 의미 = 실행 순간 고정 (과거 조회 아님) | 정상 데이터가 전부 불일치로 나옴 |
 | 3 | `CouponStateMachine`을 런타임·배치 공용 모듈로 | 검증이 검증이 아니게 됨 |
-| 4 | 만료된 `USED`의 `CANCEL_USE` 전이 2행 | 오염 유형 4와 오탐 충돌 |
+| 4 | ~~만료된 `USED`의 `CANCEL_USE` 전이 2행~~ → **전이표 5행 고정. 시각을 인자로 받지 않는다** | 재실행마다 판정이 달라짐 |
 | 5 | `idempotency_records.status` 컬럼 + 409 `CONFLICT_IN_PROGRESS` | 테스트 시나리오 4를 못 통과 |
 | 6 | `NO_ENTRY_TOKEN` → 400 | k6가 매 요청 JSON 파싱 |
 | 7 | JWT 시드 → CSV → k6 파이프라인 | `/entry`→`/issue` 테스트 자체가 막힘 |

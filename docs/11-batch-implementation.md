@@ -1,7 +1,54 @@
 # 배치 서버 구현 방향
 
-> 무엇을 어떻게 만드는가. 왜 그렇게 정했는지의 배경은 `10-batch-design.md`,
-> 시드와 맞춰야 하는 계약은 시드 저장소의 `contract.json` 이 원본이다.
+> 무엇을 어떻게 만드는가. 왜 그렇게 정했는지의 배경은 `10-batch-design.md`.
+
+## 계약 원본
+
+시드와 맞춰야 하는 계약의 **원본은 시드 저장소** `coupon-yaho/cy-seed-data-generator` 의
+`contract.json` 이다. 이 저장소에는 읽기 전용 사본을 `docs/contract.json` 으로 둔다.
+
+```
+원본   cy-seed-data-generator @ 96b12f2  (2026-08-13)
+사본   docs/contract.json                 바이트 동일
+```
+
+**사본을 손으로 고치지 않는다.**
+
+검증과 갱신은 다른 일이다. 한 명령으로 겸하면 차이가 났을 때 *사본을 손댄 것*인지
+*원본이 바뀐 것*인지 구별할 수 없다.
+
+둘 다 **먼저 임시 파일에 받고, 성공했을 때만** 비교하거나 덮는다.
+`> docs/contract.json` 은 명령이 돌기 전에 파일을 비우므로, 조회가 실패하면 사본이 0바이트가 된다.
+검증도 마찬가지로 조회가 실패하면 빈 입력과 비교해 "사본을 손댔다"로 잘못 읽힌다.
+
+```bash
+# 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
+set -o pipefail
+tmp=$(mktemp)
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=96b12f2" \
+  --jq '.content' | base64 -d > "$tmp" \
+  && diff "$tmp" docs/contract.json && echo "사본이 원본과 같다"
+rm -f "$tmp"
+```
+
+```bash
+# 갱신 — 원본이 새 리비전으로 올라갔을 때만. 위 표의 SHA·날짜도 같이 고친다
+set -o pipefail
+tmp=$(mktemp)
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=<새 SHA>" \
+  --jq '.content' | base64 -d > "$tmp" \
+  && mv "$tmp" docs/contract.json
+rm -f "$tmp"
+```
+
+갱신은 **계약이 바뀌었다는 뜻**이라 배치 코드도 같이 봐야 한다. 조용히 덮지 않는다.
+
+사본을 두는 이유는 **어긋남을 잡을 수 있게 하려는 것**이다. 사본이 없으면 배치 코드가
+계약과 맞는지 확인하려고 매번 다른 저장소를 열어야 하고, 리뷰어(사람·CodeRabbit)는
+아예 못 본다. 실제로 리뷰 설정이 계약을 자기 말로 다시 적었다가 두 번 어긋났다.
+
+**계약과 이 문서가 다르면 계약이 이긴다.** 이 문서는 계약을 구현으로 옮긴 것이고,
+계약은 시드가 실제로 심는 데이터를 규정한다.
 
 ---
 
