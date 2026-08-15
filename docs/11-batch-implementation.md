@@ -12,13 +12,24 @@
 사본   docs/contract.json                 바이트 동일
 ```
 
-**사본을 손으로 고치지 않는다.** 원본이 바뀌면 통째로 다시 받아 덮는다.
+**사본을 손으로 고치지 않는다.**
+
+검증과 갱신은 다른 일이다. 한 명령으로 겸하면 차이가 났을 때 *사본을 손댄 것*인지
+*원본이 바뀐 것*인지 구별할 수 없다.
 
 ```bash
-gh api repos/coupon-yaho/cy-seed-data-generator/contents/contract.json \
-  --jq '.content' | base64 -d > docs/contract.json
-git diff docs/contract.json    # 비어 있어야 정상
+# 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=96b12f2" \
+  --jq '.content' | base64 -d | diff - docs/contract.json
 ```
+
+```bash
+# 갱신 — 원본이 새 리비전으로 올라갔을 때만. 위 표의 SHA·날짜도 같이 고친다
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=<새 SHA>" \
+  --jq '.content' | base64 -d > docs/contract.json
+```
+
+갱신은 **계약이 바뀌었다는 뜻**이라 배치 코드도 같이 봐야 한다. 조용히 덮지 않는다.
 
 사본을 두는 이유는 **어긋남을 잡을 수 있게 하려는 것**이다. 사본이 없으면 배치 코드가
 계약과 맞는지 확인하려고 매번 다른 저장소를 열어야 하고, 리뷰어(사람·CodeRabbit)는
