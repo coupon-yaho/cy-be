@@ -20,6 +20,7 @@ import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.verification.replay.IssuanceHistoryRecord;
 import com.kafkick.core.verification.replay.IssuanceIdRange;
 import com.kafkick.storage.db.RepositoryTest;
+import com.kafkick.storage.db.VerificationSeed;
 
 @RepositoryTest
 @Import(ReplayHistoryJdbcAdapter.class)
@@ -33,11 +34,11 @@ class ReplayHistoryJdbcAdapterTest {
     @Autowired
     private JdbcClient jdbcClient;
 
-    private VerificationTestData data;
+    private VerificationSeed data;
 
     @BeforeEach
     void setUp() {
-        data = new VerificationTestData(jdbcClient);
+        data = new VerificationSeed(jdbcClient);
     }
 
     @Test

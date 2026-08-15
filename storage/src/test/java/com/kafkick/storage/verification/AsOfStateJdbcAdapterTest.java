@@ -18,6 +18,7 @@ import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.replay.ReplayResult;
 import com.kafkick.storage.db.RepositoryTest;
+import com.kafkick.storage.db.VerificationSeed;
 
 @RepositoryTest
 @Import({AsOfStateJdbcAdapter.class, VerificationRunJdbcAdapter.class})
@@ -35,12 +36,12 @@ class AsOfStateJdbcAdapterTest {
     @Autowired
     private JdbcClient jdbcClient;
 
-    private VerificationTestData data;
+    private VerificationSeed data;
     private long runId;
 
     @BeforeEach
     void setUp() {
-        data = new VerificationTestData(jdbcClient);
+        data = new VerificationSeed(jdbcClient);
         runId = newRun(1);
     }
 

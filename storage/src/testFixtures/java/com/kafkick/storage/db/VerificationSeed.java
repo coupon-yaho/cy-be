@@ -1,7 +1,8 @@
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -16,9 +17,16 @@ import com.kafkick.core.coupon.IssuanceStatus;
  *
  * <p>검증하려는 값과 무관한 컬럼은 고정값으로 채운다. 회차·회원은 처음 필요할 때 한 번만 만든다.
  */
-final class VerificationTestData {
+public final class VerificationSeed {
 
     private static final LocalDateTime EPOCH = LocalDateTime.of(2026, 8, 1, 0, 0);
+
+    /** 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다. */
+    private static final List<String> TABLES_IN_DELETE_ORDER = List.of(
+            "asof_state", "verification_findings", "verification_runs",
+            "issuance_usages", "issuance_histories", "issuances",
+            "coupon_stocks", "coupons", "coupon_templates", "brands",
+            "members", "grades");
 
     private final JdbcClient jdbcClient;
 
@@ -26,12 +34,12 @@ final class VerificationTestData {
     private boolean gradesInserted;
     private int codeSequence;
 
-    VerificationTestData(JdbcClient jdbcClient) {
+    public VerificationSeed(JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
     }
 
     /** 발급건 하나를 만들고 식별자를 돌려준다. */
-    long issuance(IssuanceStatus status) {
+    public long issuance(IssuanceStatus status) {
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO issuances
                             (coupon_id, member_id, code, issued_grade, status,
@@ -48,7 +56,7 @@ final class VerificationTestData {
     }
 
     /** 이력 한 행을 만들고 식별자를 돌려준다. {@code fromStatus} 가 null 이면 발급 이력이다. */
-    long history(
+    public long history(
             long issuanceId,
             IssuanceEventType eventType,
             IssuanceStatus fromStatus,
@@ -68,7 +76,7 @@ final class VerificationTestData {
     }
 
     /** 사용 행 하나. {@code canceledAt} 이 null 이면 취소되지 않은 사용이다. */
-    void usage(long issuanceId, LocalDateTime usedAt, LocalDateTime canceledAt) {
+    public void usage(long issuanceId, LocalDateTime usedAt, LocalDateTime canceledAt) {
         jdbcClient.sql("""
                         INSERT INTO issuance_usages
                             (issuance_id, order_id, discount_amount, used_at, canceled_at)
@@ -78,6 +86,17 @@ final class VerificationTestData {
                 .param("usedAt", Timestamp.valueOf(usedAt))
                 .param("canceledAt", canceledAt == null ? null : Timestamp.valueOf(canceledAt))
                 .update();
+    }
+
+    /**
+     * 검증이 건드리는 테이블을 FK 역순으로 비운다.
+     *
+     * <p>{@code @RepositoryTest} 는 테스트마다 롤백하므로 부를 일이 없다.
+     * 잡을 실제로 돌리는 테스트는 트랜잭션 밖이라 롤백이 없어 이걸 써야 한다.
+     */
+    public void clear() {
+        TABLES_IN_DELETE_ORDER.forEach(
+                table -> jdbcClient.sql("DELETE FROM " + table).update());
     }
 
     private long couponId() {
