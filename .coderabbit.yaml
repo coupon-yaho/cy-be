@@ -420,10 +420,18 @@ reviews:
         새 설정 키를 추가했는데 대응하는 `.example` 갱신이 없으면 지적한다 —
         클론한 팀원의 앱이 뜨지 않는다.
 
+        인증: **회원가입·로그인은 과제 범위 밖이다.** 가상 회원 100만 명 중 누구인지를 가리려고
+        회원·등급을 요청 헤더로 받는 것이 확정된 설계다. 따라서 **인증 필터 부재 ·
+        Spring Security 의존성 부재 · `/api/v1/admin/**` 의 `hasRole` 부재 · JWT 도입 ·
+        헤더 서명은 지적하지 마라.** 관리 경로는 관리 포트를 외부에 노출하지 않는 것으로 막는다.
+        대신 서버가 헤더 등급을 회차의 `eligible_grades_mask` 와 대조하는지, 헤더 회원 ID 로
+        남의 쿠폰을 다룰 수 있는지는 본다 — 서명이 없으므로 그게 유일한 방어선이다.
+
         actuator: `management.endpoints.web.exposure.exclude` 가 명시되어 있는지 본다.
         include 만 쓰면 나중에 `*` 로 바뀔 때 env 가 함께 열린다. AES 키를 환경변수로
         주입하므로 `/actuator/env` 는 실제 유출 경로다.
         기대값: `exclude: env,configprops,beans,heapdump`, 관리 포트 분리(9090).
+        단 actuator 의존성이 없는 모듈에는 해당하지 않는다 — 없는 것을 막으라고 하지 마라.
 
         `server.error.include-stacktrace: never` 가 유지되는지.
         AES 키·JWT 시크릿·DB 비밀번호가 리터럴로 박혀 있는지(환경변수 주입이어야 한다).
