@@ -1,4 +1,4 @@
--- Spring Batch 메타 테이블. spring-batch-core 6.0.3 의 org/springframework/batch/core/schema-mysql.sql 원본이다.
+-- Spring Batch 메타 테이블. spring-batch-core 6.0.4 의 org/springframework/batch/core/schema-mysql.sql 원본이다.
 --
 -- 왜 Flyway 로 관리하나
 --   batch/application.yml 이 spring.batch.jdbc.initialize-schema: never 다.
