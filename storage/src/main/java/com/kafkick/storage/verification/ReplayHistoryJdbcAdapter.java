@@ -14,7 +14,7 @@ import org.springframework.stereotype.Repository;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.verification.replay.IssuanceHistoryRecord;
-import com.kafkick.core.verification.replay.IssuanceIdRange;
+import com.kafkick.core.verification.replay.ReplayScanRange;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
 
 /**
@@ -25,13 +25,17 @@ import com.kafkick.core.verification.replay.ReplayHistoryRepository;
 public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
 
     /**
-     * {@code created_at} 에는 인덱스가 없어 이 문장은 전체를 훑는다.
-     * 실행마다 한 번뿐이라 감수한다.
+     * {@code created_at} 에는 인덱스가 없어 이 문장은 전체를 훑는다. 실행마다 한 번뿐이라 감수한다.
+     *
+     * <p>전체 최대 시각까지 <b>같은 스캔에서</b> 잰다. 따로 질의하면 풀스캔이 두 번이고,
+     * 두 스캔 사이에 행이 들어오면 검증하려던 값끼리 어긋난다.
      */
-    private static final String SELECT_RANGE_BOUNDS = """
-            SELECT MIN(issuance_id) AS min_id, MAX(issuance_id) AS max_id
+    private static final String SELECT_SCAN_RANGE = """
+            SELECT MIN(CASE WHEN created_at <= :asOf THEN issuance_id END) AS min_issuance_id,
+                   MAX(CASE WHEN created_at <= :asOf THEN issuance_id END) AS max_issuance_id,
+                   MAX(CASE WHEN created_at <= :asOf THEN id END)          AS max_history_id,
+                   MAX(created_at)                                          AS latest_created_at
               FROM issuance_histories
-             WHERE created_at <= :asOf
             """;
 
     /**
@@ -43,6 +47,7 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
             SELECT id, issuance_id, event_type, from_status, to_status, created_at
               FROM issuance_histories
              WHERE issuance_id BETWEEN :fromIssuanceId AND :toIssuanceId
+               AND id <= :maxHistoryId
                AND created_at <= :asOf
              ORDER BY issuance_id, created_at, id
             """;
@@ -64,16 +69,22 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
     }
 
     @Override
-    public Optional<IssuanceIdRange> issuanceIdRange(LocalDateTime asOf) {
+    public Optional<ReplayScanRange> scanRange(LocalDateTime asOf) {
         // MIN/MAX 는 대상이 없어도 NULL 한 행을 준다. 그래서 single() 이고,
         // 빈 결과 판정은 wasNull() 로 한다 — getLong 은 NULL 을 0 으로 돌려준다.
-        return jdbcClient.sql(SELECT_RANGE_BOUNDS)
+        return jdbcClient.sql(SELECT_SCAN_RANGE)
                 .param("asOf", asOf)
                 .query((rs, rowNum) -> {
-                    long min = rs.getLong("min_id");
-                    return rs.wasNull()
-                            ? Optional.<IssuanceIdRange>empty()
-                            : Optional.of(new IssuanceIdRange(min, rs.getLong("max_id")));
+                    long minIssuanceId = rs.getLong("min_issuance_id");
+                    if (rs.wasNull()) {
+                        return Optional.<ReplayScanRange>empty();
+                    }
+
+                    return Optional.of(new ReplayScanRange(
+                            minIssuanceId,
+                            rs.getLong("max_issuance_id"),
+                            rs.getLong("max_history_id"),
+                            rs.getObject("latest_created_at", LocalDateTime.class)));
                 })
                 .single();
     }
@@ -82,12 +93,14 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
     public List<IssuanceHistoryRecord> findRange(
             long fromIssuanceId,
             long toIssuanceId,
-            LocalDateTime asOf
+            LocalDateTime asOf,
+            long maxHistoryId
     ) {
         return jdbcClient.sql(SELECT_RANGE)
                 .param("fromIssuanceId", fromIssuanceId)
                 .param("toIssuanceId", toIssuanceId)
                 .param("asOf", asOf)
+                .param("maxHistoryId", maxHistoryId)
                 .query(ROW_MAPPER)
                 .list();
     }

@@ -53,6 +53,15 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
              WHERE id = :id
             """;
 
+    private static final String SELECT_BY_PARAMS = """
+            SELECT id, as_of, from_ts, scope, dataset, attempt,
+                   verdict, stats_status, finding_count,
+                   findings_checksum, dataset_fingerprint, started_at, finished_at
+              FROM verification_runs
+             WHERE as_of = :asOf AND dataset = :dataset
+               AND scope = :scope AND attempt = :attempt
+            """;
+
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(
             rs.getLong("id"),
             rs.getObject("as_of", LocalDateTime.class),
@@ -125,6 +134,22 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
             throw new IllegalStateException(
                     "검증 실행을 갱신하지 못했습니다. id=" + run.id() + " 갱신된 행=" + updated);
         }
+    }
+
+    @Override
+    public Optional<VerificationRun> findByParams(
+            LocalDateTime asOf,
+            DatasetType dataset,
+            ScopeType scope,
+            int attempt
+    ) {
+        return jdbcClient.sql(SELECT_BY_PARAMS)
+                .param("asOf", asOf)
+                .param("dataset", dataset.name())
+                .param("scope", scope.name())
+                .param("attempt", attempt)
+                .query(ROW_MAPPER)
+                .optional();
     }
 
     @Override

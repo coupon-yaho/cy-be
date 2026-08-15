@@ -17,18 +17,20 @@ import java.util.Optional;
 public interface ReplayHistoryRepository {
 
     /**
-     * asOf 이하 이력이 있는 발급건 식별자의 양 끝. 이력이 하나도 없으면 빈 값.
+     * 이 실행이 볼 이력의 경계를 한 번에 잰다. 이력이 하나도 없으면 빈 값.
      *
-     * <p>실행 시작에 한 번만 부르고 그 값을 끝까지 씁니다.
+     * <p><b>실행 시작에 한 번만 부른다.</b> 창마다 다시 재면 그 사이 커밋된 행 때문에
+     * 경계가 달라져 결정론이 깨진다.
      */
-    Optional<IssuanceIdRange> issuanceIdRange(LocalDateTime asOf);
+    Optional<ReplayScanRange> scanRange(LocalDateTime asOf);
 
     /**
      * 구간의 이력을 {@code (issuance_id, created_at, id)} 오름차순으로 읽는다.
      *
      * @param fromIssuanceId 구간 시작. 포함
      * @param toIssuanceId   구간 끝. 포함
+     * @param maxHistoryId   {@link ReplayScanRange#maxHistoryId()}. 실행 중 들어온 행을 막는 상한
      */
     List<IssuanceHistoryRecord> findRange(
-            long fromIssuanceId, long toIssuanceId, LocalDateTime asOf);
+            long fromIssuanceId, long toIssuanceId, LocalDateTime asOf, long maxHistoryId);
 }

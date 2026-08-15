@@ -1,8 +1,11 @@
 package com.kafkick.batch.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -12,12 +15,16 @@ import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParameters;
+import org.springframework.batch.core.job.parameters.InvalidJobParametersException;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -35,13 +42,16 @@ import com.kafkick.storage.db.VerificationSeed;
  *
  * <p>창 크기를 2 로 낮춰 창이 여러 번 넘어가는 경로를 실제로 태운다.
  * 기본값 50000 이면 어떤 테스트도 창을 한 번밖에 안 읽는다.
+ *
+ * <p>시계를 고정한다. {@code asOf} 는 실행 시작 시각을 넘을 수 없는데, 실제 시계를 쓰면
+ * 고정된 {@code AS_OF} 가 기기 시각에 따라 미래가 되기도 하고 과거가 되기도 한다.
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, VerifyJobConfigTest.FixedClockConfig.class})
 class VerifyJobConfigTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
@@ -59,6 +69,17 @@ class VerifyJobConfigTest {
     private JdbcClient jdbcClient;
 
     private VerificationSeed seed;
+
+    /** 실행 시작을 asOf 직후로 못 박는다. 테스트가 기기 시각과 타임존에서 독립한다. */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return Clock.fixed(AS_OF.plusMinutes(1).toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        }
+    }
 
     @BeforeEach
     void setUp() {
@@ -81,15 +102,50 @@ class VerifyJobConfigTest {
     }
 
     @Test
-    @DisplayName("asOf 이후 이력은 반영되지 않는다 — 리플레이는 asOf 시점을 재구성한다")
-    void ignoreHistoryAfterAsOf() throws Exception {
+    @DisplayName("마지막 이력보다 앞선 asOf 는 거부한다 — asOf 는 실행 순간을 고정하는 값이지 과거 조회가 아니다")
+    void rejectAsOfBeforeLatestHistory() throws Exception {
         long issuanceId = seed.issuance(IssuanceStatus.USED);
         issued(issuanceId, AS_OF.minusHours(1));
         used(issuanceId, AS_OF.plusHours(1));
 
-        launch(1);
+        JobExecution execution = launch(1);
 
-        assertThat(statesOf(issuanceId)).containsExactly("ISSUED");
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                message -> message.contains("마지막 이력 시각 이상이어야 합니다"));
+        assertThat(asOfStateCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("증분 검증은 거부한다 — 받아 놓고 전수로 돌면 기록만 INCREMENTAL 로 남는다")
+    void rejectIncrementalScope() throws Exception {
+        JobParameters parameters = new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF)
+                .addLocalDateTime("fromTs", AS_OF.minusMinutes(10))
+                .addString("scope", "INCREMENTAL")
+                .addString("dataset", "CLEAN")
+                .addLong("attempt", 1L)
+                .toJobParameters();
+
+        JobExecution execution = jobOperator.start(verifyJob, parameters);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                message -> message.contains("증분 검증은 아직 지원하지 않습니다"));
+        assertThat(runCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("필수 파라미터가 빠지면 잡이 시작조차 하지 않는다 — 무엇이 빠졌는지 보여야 한다")
+    void rejectMissingRequiredParameter() {
+        JobParameters parameters = new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF)
+                .addString("dataset", "CLEAN")
+                .addLong("attempt", 1L)
+                .toJobParameters();
+
+        assertThatThrownBy(() -> jobOperator.start(verifyJob, parameters))
+                .isInstanceOf(InvalidJobParametersException.class);
     }
 
     @Test
@@ -169,16 +225,33 @@ class VerifyJobConfigTest {
     }
 
     @Test
-    @DisplayName("두 번 돌려도 같은 상태가 나온다 — asOf 가 같으면 결과가 같다")
-    void produceSameStateOnRerun() throws Exception {
+    @DisplayName("두 번 돌리면 asof_state 전체가 바이트 단위로 같다 — 결정론의 실체다")
+    void produceIdenticalAsOfStateOnRerun() throws Exception {
+        long first = seed.issuance(IssuanceStatus.USED);
+        issued(first, AS_OF.minusHours(3));
+        used(first, AS_OF.minusHours(2));
+        seed.usage(first, AS_OF.minusHours(2), null);
+
+        long second = seed.issuance(IssuanceStatus.ISSUED);
+        issued(second, AS_OF.minusHours(1));
+
+        long runOne = launch(1).getExecutionContext().getLong("runId");
+        long runTwo = launch(2).getExecutionContext().getLong("runId");
+
+        assertThat(digestOf(runOne)).isEqualTo(digestOf(runTwo)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("같은 시각 이력이 섞여도 두 실행이 같다 — 타이브레이커가 빠지면 여기서 갈린다")
+    void stayIdenticalWhenHistoriesShareTimestamp() throws Exception {
         long issuanceId = seed.issuance(IssuanceStatus.USED);
-        issued(issuanceId, AS_OF.minusHours(3));
-        used(issuanceId, AS_OF.minusHours(2));
+        issued(issuanceId, AS_OF.minusHours(1));
+        used(issuanceId, AS_OF.minusHours(1));
 
-        launch(1);
-        launch(2);
+        long runOne = launch(1).getExecutionContext().getLong("runId");
+        long runTwo = launch(2).getExecutionContext().getLong("runId");
 
-        assertThat(statesOf(issuanceId)).containsExactly("USED", "USED");
+        assertThat(digestOf(runOne)).isEqualTo(digestOf(runTwo));
     }
 
     @Test
@@ -226,6 +299,32 @@ class VerifyJobConfigTest {
                 .param("id", issuanceId)
                 .query(Integer.class)
                 .list();
+    }
+
+    /**
+     * 상태 한 컬럼만 보면 last_history_id 가 뒤바뀌어도, 발급건 하나가 통째로 빠져도 통과한다.
+     * 행 전체를 정렬해 접어야 타이브레이커 회귀가 드러난다.
+     */
+    private String digestOf(long runId) {
+        jdbcClient.sql("SET SESSION group_concat_max_len = 1048576").update();
+
+        return jdbcClient.sql("""
+                        SELECT SHA2(GROUP_CONCAT(
+                                 CONCAT_WS(0x1f, coupon_id, state,
+                                           COALESCE(last_history_id, ''), last_event_at,
+                                           active_usage_count)
+                                 ORDER BY coupon_id SEPARATOR 0x1e), 256)
+                          FROM asof_state WHERE run_id = :runId
+                        """)
+                .param("runId", runId)
+                .query(String.class)
+                .single();
+    }
+
+    private static List<String> failureMessagesOf(JobExecution execution) {
+        return execution.getAllFailureExceptions().stream()
+                .map(Throwable::getMessage)
+                .toList();
     }
 
     private int asOfStateCount() {

@@ -34,6 +34,7 @@ public record VerificationRun(
         validateAttempt(attempt);
         validateStartedAt(startedAt);
         validateFindingCount(findingCount);
+        validateAsOfNotInFuture(asOf, startedAt);
     }
 
     public static VerificationRun start(
@@ -118,6 +119,20 @@ public record VerificationRun(
     private static void validateAsOf(LocalDateTime asOf) {
         if (asOf == null) {
             throw new IllegalArgumentException("검증 기준 시각이 필요합니다.");
+        }
+    }
+
+    /**
+     * asOf 가 실행 시작보다 미래면 아직 일어나지 않은 일을 기준으로 삼는 것이다.
+     *
+     * <p>이력은 {@code created_at <= asOf} 로 잘리는데 그 상한이 미래면, 실행이 도는 동안
+     * 들어온 행이 창 위치에 따라 들어가기도 하고 빠지기도 한다. 재실행 결과가 달라진다.
+     */
+    private static void validateAsOfNotInFuture(LocalDateTime asOf, LocalDateTime startedAt) {
+        if (asOf.isAfter(startedAt)) {
+            throw new IllegalArgumentException(
+                    "검증 기준 시각은 실행 시작 시각을 넘을 수 없습니다. asOf=" + asOf
+                            + " 실행 시작=" + startedAt);
         }
     }
 

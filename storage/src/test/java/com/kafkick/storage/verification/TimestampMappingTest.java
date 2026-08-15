@@ -68,7 +68,7 @@ class TimestampMappingTest {
     @Test
     @DisplayName("저장된 벽시계를 그대로 읽는다 — JVM 타임존이 값을 밀면 안 된다")
     void readStoredWallClockUnshifted() {
-        assertThat(adapter.findRange(issuanceId, issuanceId, AS_OF))
+        assertThat(adapter.findRange(issuanceId, issuanceId, AS_OF, Long.MAX_VALUE))
                 .singleElement()
                 .extracting(IssuanceHistoryRecord::createdAt)
                 .isEqualTo(STORED);
@@ -77,12 +77,12 @@ class TimestampMappingTest {
     @Test
     @DisplayName("asOf 가 저장된 벽시계와 같은 규약으로 비교된다 — 밀리면 이력이 통째로 잘린다")
     void compareAsOfAgainstSameWallClock() {
-        assertThat(adapter.findRange(issuanceId, issuanceId, AS_OF)).hasSize(1);
+        assertThat(adapter.findRange(issuanceId, issuanceId, AS_OF, Long.MAX_VALUE)).hasSize(1);
     }
 
     @Test
     @DisplayName("asOf 를 저장 시각 직전으로 두면 잘린다 — 경계가 벽시계 기준으로 선다")
     void cutJustBeforeStoredWallClock() {
-        assertThat(adapter.findRange(issuanceId, issuanceId, STORED.minusNanos(1_000))).isEmpty();
+        assertThat(adapter.findRange(issuanceId, issuanceId, STORED.minusNanos(1_000), Long.MAX_VALUE)).isEmpty();
     }
 }

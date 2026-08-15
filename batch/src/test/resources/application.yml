@@ -1,0 +1,16 @@
+# 테스트 설정을 저장소에 고정한다.
+# 이게 없으면 테스트가 main/resources/application.yml 을 읽는데, 그 파일은 .gitignore 대상이라
+# 있는 사람과 없는 사람의 결과가 갈린다. .example 을 복사한 순간 flyway.enabled:false 로
+# 스키마가 안 생기고, spring.config.import 가 없는 storage.yml 을 찾아 컨텍스트가 아예 안 뜬다.
+spring:
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  batch:
+    jdbc:
+      initialize-schema: never   # 메타 테이블은 V2__batch_metadata.sql 이 만든다
+    job:
+      enabled: false             # 컨텍스트가 뜨자마자 잡이 자동 실행되는 것을 막는다
+  jpa:
+    hibernate:
+      ddl-auto: none

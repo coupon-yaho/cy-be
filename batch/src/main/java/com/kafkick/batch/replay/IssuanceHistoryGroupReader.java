@@ -6,18 +6,21 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
-import java.util.Optional;
 
 import org.springframework.batch.infrastructure.item.ExecutionContext;
 import org.springframework.batch.infrastructure.item.ItemStreamReader;
 
 import com.kafkick.core.verification.replay.IssuanceHistoryRecord;
-import com.kafkick.core.verification.replay.IssuanceIdRange;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
+import com.kafkick.core.verification.replay.ReplayScanRange;
 
 /**
  * 창 하나를 통째로 읽어 발급건 단위로 쪼개 내보냅니다. 창은 <b>발급건 식별자</b> 범위라
  * 한 발급건의 이력이 두 창에 걸치는 일이 없습니다.
+ *
+ * <p><b>훑을 경계를 스스로 재지 않습니다.</b> 실행 시작 Step 이 재서 넘겨준 것을 씁니다.
+ * 리더가 열리는 시점은 실행 행이 만들어진 뒤라, 여기서 재면 그 사이 생긴 발급건이
+ * 경계 밖으로 밀려 영원히 안 읽힙니다.
  *
  * <p><b>재시작 위치는 창 단위입니다.</b> 버퍼에 아직 안 나간 묶음이 남아 있으면 그 묶음이
  * 나온 창의 시작을 저장합니다. 다음 창을 저장하면 남은 묶음이 통째로 사라지고, 그 발급건들은
@@ -28,70 +31,64 @@ import com.kafkick.core.verification.replay.ReplayHistoryRepository;
  */
 public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHistoryGroup> {
 
-    private static final String KEY_RANGE_MIN = "replay.range.min";
-    private static final String KEY_RANGE_MAX = "replay.range.max";
+    /**
+     * 창 하나가 통째로 힙에 올라옵니다. 발급건당 이력이 평균 1.8행이므로
+     * 20만 창이면 이력 약 36만 행이 동시에 상주합니다. 청크 크기를 줄여도 이건 안 줄어듭니다.
+     */
+    static final long MAX_WINDOW_SIZE = 200_000L;
+
     private static final String KEY_WINDOW_START = "replay.window.start";
 
     private final ReplayHistoryRepository repository;
     private final LocalDateTime asOf;
+    private final ReplayScanRange scanRange;
     private final long windowSize;
 
     private final Deque<IssuanceHistoryGroup> buffer = new ArrayDeque<>();
-
-    /** 훑을 것이 없으면 null 로 남습니다. */
-    private IssuanceIdRange range;
 
     private long nextWindowStart;
     private long drainingWindowStart;
     private boolean exhausted;
 
+    /**
+     * @param scanRange 실행 시작 Step 이 얼린 경계. 훑을 이력이 없으면 null
+     */
     public IssuanceHistoryGroupReader(
             ReplayHistoryRepository repository,
             LocalDateTime asOf,
+            ReplayScanRange scanRange,
             long windowSize
     ) {
-        if (windowSize < 1) {
-            throw new IllegalArgumentException("창 크기는 1 이상이어야 합니다. 값=" + windowSize);
+        if (windowSize < 1 || windowSize > MAX_WINDOW_SIZE) {
+            throw new IllegalArgumentException(
+                    "창 크기는 1 이상 " + MAX_WINDOW_SIZE + " 이하여야 합니다. 값=" + windowSize);
         }
 
         this.repository = repository;
         this.asOf = asOf;
+        this.scanRange = scanRange;
         this.windowSize = windowSize;
     }
 
-    /**
-     * 훑을 범위는 처음 열 때 한 번만 구해 실행 컨텍스트에 박아 둔다.
-     * 재시작할 때 다시 구하면 그 사이 들어온 이력 때문에 범위가 달라져 결정론이 깨진다.
-     */
     @Override
     public void open(ExecutionContext executionContext) {
         buffer.clear();
         exhausted = false;
 
-        if (executionContext.containsKey(KEY_RANGE_MIN)) {
-            range = new IssuanceIdRange(
-                    executionContext.getLong(KEY_RANGE_MIN),
-                    executionContext.getLong(KEY_RANGE_MAX));
-            nextWindowStart = executionContext.getLong(KEY_WINDOW_START);
-        } else {
-            Optional<IssuanceIdRange> found = repository.issuanceIdRange(asOf);
-            range = found.orElse(null);
-            nextWindowStart = found.map(IssuanceIdRange::min).orElse(0L);
-
-            found.ifPresent(bounds -> {
-                executionContext.putLong(KEY_RANGE_MIN, bounds.min());
-                executionContext.putLong(KEY_RANGE_MAX, bounds.max());
-                executionContext.putLong(KEY_WINDOW_START, bounds.min());
-            });
+        if (scanRange == null) {
+            return;
         }
 
+        nextWindowStart = executionContext.containsKey(KEY_WINDOW_START)
+                ? executionContext.getLong(KEY_WINDOW_START)
+                : scanRange.minIssuanceId();
         drainingWindowStart = nextWindowStart;
     }
 
     @Override
     public IssuanceHistoryGroup read() {
         while (buffer.isEmpty()) {
-            if (range == null || exhausted || nextWindowStart > range.max()) {
+            if (scanRange == null || exhausted || nextWindowStart > scanRange.maxIssuanceId()) {
                 return null;
             }
             loadNextWindow();
@@ -106,7 +103,7 @@ public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHist
      */
     @Override
     public void update(ExecutionContext executionContext) {
-        if (range == null) {
+        if (scanRange == null) {
             return;
         }
 
@@ -121,8 +118,8 @@ public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHist
 
     private void loadNextWindow() {
         long windowEnd = windowEndFrom(nextWindowStart);
-        List<IssuanceHistoryRecord> rows =
-                repository.findRange(nextWindowStart, windowEnd, asOf);
+        List<IssuanceHistoryRecord> rows = repository.findRange(
+                nextWindowStart, windowEnd, asOf, scanRange.maxHistoryId());
 
         drainingWindowStart = nextWindowStart;
         if (windowEnd == Long.MAX_VALUE) {
@@ -136,8 +133,8 @@ public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHist
 
     /** {@code start + windowSize - 1} 을 그대로 더하면 넘칠 수 있어 남은 폭을 먼저 잰다. */
     private long windowEndFrom(long start) {
-        long remaining = range.max() - start;
-        return remaining < windowSize - 1 ? range.max() : start + windowSize - 1;
+        long remaining = scanRange.maxIssuanceId() - start;
+        return remaining < windowSize - 1 ? scanRange.maxIssuanceId() : start + windowSize - 1;
     }
 
     /**

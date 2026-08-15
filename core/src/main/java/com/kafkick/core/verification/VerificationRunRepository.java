@@ -1,5 +1,6 @@
 package com.kafkick.core.verification;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 /**
@@ -17,4 +18,14 @@ public interface VerificationRunRepository {
     void update(VerificationRun run);
 
     Optional<VerificationRun> findById(long id);
+
+    /**
+     * 식별 파라미터로 실행을 되찾는다. {@code uk_run_params} 가 이 조합에 걸려 있어 많아야 하나다.
+     *
+     * <p>재시작 때 필요하다. 실행 기록 Step 이 COMPLETED 로 커밋됐는데 잡 컨텍스트가 아직
+     * 저장되기 전에 프로세스가 죽으면, 재시작 시 그 Step 은 건너뛰는데 실행 식별자는 없다.
+     * 다시 INSERT 하면 이번엔 중복키에 걸린다. 찾을 수 있어야 두 방향이 다 풀린다.
+     */
+    Optional<VerificationRun> findByParams(
+            LocalDateTime asOf, DatasetType dataset, ScopeType scope, int attempt);
 }

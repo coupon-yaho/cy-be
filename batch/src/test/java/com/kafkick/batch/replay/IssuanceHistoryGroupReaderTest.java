@@ -18,8 +18,8 @@ import org.springframework.batch.infrastructure.item.ExecutionContext;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.verification.replay.IssuanceHistoryRecord;
-import com.kafkick.core.verification.replay.IssuanceIdRange;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
+import com.kafkick.core.verification.replay.ReplayScanRange;
 
 /**
  * 저장소는 가짜로 둔다. 여기서 보려는 것은 SQL 이 아니라 <b>창을 어떻게 밀고 재시작 위치를
@@ -29,6 +29,9 @@ import com.kafkick.core.verification.replay.ReplayHistoryRepository;
 class IssuanceHistoryGroupReaderTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
+    private static final String KEY_WINDOW_START = "replay.window.start";
+
+    // ─────────────────────────── 묶기 ───────────────────────────
 
     @Test
     @DisplayName("이력이 없으면 처음부터 끝이다")
@@ -55,6 +58,21 @@ class IssuanceHistoryGroupReaderTest {
     }
 
     @Test
+    @DisplayName("창은 발급건 식별자로 자른다 — 한 발급건의 이력이 두 창에 걸치지 않는다")
+    void neverSplitOneIssuanceAcrossWindows() {
+        FakeHistories histories = new FakeHistories()
+                .with(1L, issue(1L, 1L), use(2L, 1L), cancelUse(3L, 1L))
+                .with(2L, issue(4L, 2L));
+
+        List<IssuanceHistoryGroup> groups = readAll(reader(histories, 1));
+
+        assertThat(groups.get(0).histories()).hasSize(3);
+        assertThat(groups.get(1).histories()).hasSize(1);
+    }
+
+    // ─────────────────────────── 창 밀기 ───────────────────────────
+
+    @Test
     @DisplayName("창을 여러 번 밀어 전부 읽는다 — 한 창에 다 안 들어와도 빠뜨리지 않는다")
     void slideWindowUntilExhausted() {
         FakeHistories histories = new FakeHistories()
@@ -68,21 +86,7 @@ class IssuanceHistoryGroupReaderTest {
 
         assertThat(groups).extracting(IssuanceHistoryGroup::issuanceId)
                 .containsExactly(1L, 2L, 3L, 4L, 5L);
-        assertThat(histories.requestedWindows)
-                .containsExactly("1-2", "3-4", "5-5");
-    }
-
-    @Test
-    @DisplayName("창은 발급건 식별자로 자른다 — 한 발급건의 이력이 두 창에 걸치지 않는다")
-    void neverSplitOneIssuanceAcrossWindows() {
-        FakeHistories histories = new FakeHistories()
-                .with(1L, issue(1L, 1L), use(2L, 1L), cancelUse(3L, 1L))
-                .with(2L, issue(4L, 2L));
-
-        List<IssuanceHistoryGroup> groups = readAll(reader(histories, 1));
-
-        assertThat(groups.get(0).histories()).hasSize(3);
-        assertThat(groups.get(1).histories()).hasSize(1);
+        assertThat(histories.requestedWindows).containsExactly("1-2", "3-4", "5-5");
     }
 
     @Test
@@ -98,34 +102,61 @@ class IssuanceHistoryGroupReaderTest {
     }
 
     @Test
-    @DisplayName("훑을 범위는 처음 한 번만 구해 실행 컨텍스트에 박는다 — 다시 구하면 결정론이 깨진다")
-    void freezeRangeOnFirstOpen() {
-        FakeHistories histories = new FakeHistories().with(1L, issue(1L, 1L));
-        ExecutionContext context = new ExecutionContext();
+    @DisplayName("구간 끝이 Long 최대여도 창 계산이 넘치지 않는다 — 넘치면 종료 판정이 뒤집혀 영원히 돈다")
+    void surviveWindowOverflowAtLongMax() {
+        FakeHistories histories = new FakeHistories()
+                .with(Long.MAX_VALUE, issue(1L, Long.MAX_VALUE));
 
-        reader(histories, 10).open(context);
+        List<IssuanceHistoryGroup> groups = readAll(reader(histories, 2));
 
-        assertThat(context.getLong("replay.range.min")).isEqualTo(1L);
-        assertThat(context.getLong("replay.range.max")).isEqualTo(1L);
-        assertThat(histories.rangeCalls).isEqualTo(1);
+        assertThat(groups).extracting(IssuanceHistoryGroup::issuanceId)
+                .containsExactly(Long.MAX_VALUE);
     }
 
+    // ─────────────────────────── 경계 주입 ───────────────────────────
+
     @Test
-    @DisplayName("재시작하면 범위를 다시 구하지 않고 저장된 것을 쓴다")
-    void restoreRangeInsteadOfRecomputing() {
+    @DisplayName("경계를 스스로 재지 않는다 — 리더가 열리는 시점은 실행 행이 만들어진 뒤다")
+    void neverMeasureScanRangeItself() {
         FakeHistories histories = new FakeHistories()
                 .with(1L, issue(1L, 1L))
                 .with(2L, issue(2L, 2L));
-        ExecutionContext context = new ExecutionContext();
-        context.putLong("replay.range.min", 1L);
-        context.putLong("replay.range.max", 2L);
-        context.putLong("replay.window.start", 2L);
+        ReplayScanRange given = new ReplayScanRange(1L, 2L, 2L, AS_OF);
 
-        List<IssuanceHistoryGroup> groups = readAll(reader(histories, 10), context);
+        readAll(new IssuanceHistoryGroupReader(histories, AS_OF, given, 10));
 
-        assertThat(histories.rangeCalls).isZero();
-        assertThat(groups).extracting(IssuanceHistoryGroup::issuanceId).containsExactly(2L);
+        assertThat(histories.scanRangeCalls).isZero();
     }
+
+    @Test
+    @DisplayName("주어진 상한을 넘는 이력은 안 읽는다 — 실행 중 들어온 행을 막는다")
+    void honorFrozenHistoryUpperBound() {
+        FakeHistories histories = new FakeHistories()
+                .with(1L, issue(1L, 1L), use(9L, 1L));
+        ReplayScanRange frozen = new ReplayScanRange(1L, 1L, 1L, AS_OF);
+
+        List<IssuanceHistoryGroup> groups =
+                readAll(new IssuanceHistoryGroupReader(histories, AS_OF, frozen, 10));
+
+        assertThat(groups).singleElement()
+                .extracting(IssuanceHistoryGroup::histories)
+                .satisfies(records -> assertThat(records).hasSize(1));
+    }
+
+    @Test
+    @DisplayName("경계가 없으면 아무것도 내보내지 않는다 — 접을 이력이 없는 실행이다")
+    void readNothingWhenScanRangeAbsent() {
+        IssuanceHistoryGroupReader reader =
+                new IssuanceHistoryGroupReader(new FakeHistories(), AS_OF, null, 10);
+        ExecutionContext context = new ExecutionContext();
+        reader.open(context);
+
+        assertThat(reader.read()).isNull();
+        reader.update(context);
+        assertThat(context.containsKey(KEY_WINDOW_START)).isFalse();
+    }
+
+    // ─────────────────────────── 재시작 ───────────────────────────
 
     @Test
     @DisplayName("버퍼가 남아 있으면 그 창의 시작을 저장한다 — 다음 창을 저장하면 남은 묶음이 사라진다")
@@ -141,7 +172,7 @@ class IssuanceHistoryGroupReaderTest {
         reader.read();
         reader.update(context);
 
-        assertThat(context.getLong("replay.window.start")).isEqualTo(1L);
+        assertThat(context.getLong(KEY_WINDOW_START)).isEqualTo(1L);
     }
 
     @Test
@@ -157,7 +188,7 @@ class IssuanceHistoryGroupReaderTest {
         reader.read();
         reader.update(context);
 
-        assertThat(context.getLong("replay.window.start")).isEqualTo(3L);
+        assertThat(context.getLong(KEY_WINDOW_START)).isEqualTo(3L);
     }
 
     @Test
@@ -199,6 +230,8 @@ class IssuanceHistoryGroupReaderTest {
                 .containsExactly(1L, 2L, 3L);
     }
 
+    // ─────────────────────────── 창 크기 ───────────────────────────
+
     @Test
     @DisplayName("창 크기가 0 이하면 거부한다 — 창이 안 움직여 영원히 돈다")
     void rejectNonPositiveWindowSize() {
@@ -208,19 +241,19 @@ class IssuanceHistoryGroupReaderTest {
     }
 
     @Test
-    @DisplayName("범위 끝이 Long 최대여도 창 계산이 넘치지 않는다")
-    void surviveWindowOverflowAtLongMax() {
-        FakeHistories histories = new FakeHistories()
-                .with(Long.MAX_VALUE, issue(1L, Long.MAX_VALUE));
-
-        List<IssuanceHistoryGroup> groups = readAll(reader(histories, Long.MAX_VALUE));
-
-        assertThat(groups).extracting(IssuanceHistoryGroup::issuanceId)
-                .containsExactly(Long.MAX_VALUE);
+    @DisplayName("창 크기 상한을 넘으면 거부한다 — 창 하나가 통째로 힙에 올라온다")
+    void rejectWindowSizeAboveCap() {
+        assertThatThrownBy(() ->
+                reader(new FakeHistories(), IssuanceHistoryGroupReader.MAX_WINDOW_SIZE + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("이하여야 합니다");
     }
 
+    // ─────────────────────────── 도우미 ───────────────────────────
+
     private static IssuanceHistoryGroupReader reader(FakeHistories histories, long windowSize) {
-        return new IssuanceHistoryGroupReader(histories, AS_OF, windowSize);
+        return new IssuanceHistoryGroupReader(
+                histories, AS_OF, histories.frozenRange(), windowSize);
     }
 
     private static List<IssuanceHistoryGroup> readAll(IssuanceHistoryGroupReader reader) {
@@ -265,27 +298,36 @@ class IssuanceHistoryGroupReaderTest {
         private final Map<Long, List<IssuanceHistoryRecord>> byIssuance = new LinkedHashMap<>();
         private final List<String> requestedWindows = new ArrayList<>();
 
-        private int rangeCalls;
+        private int scanRangeCalls;
 
         FakeHistories with(long issuanceId, IssuanceHistoryRecord... histories) {
             byIssuance.put(issuanceId, List.of(histories));
             return this;
         }
 
-        @Override
-        public Optional<IssuanceIdRange> issuanceIdRange(LocalDateTime asOf) {
-            rangeCalls++;
+        /** 실행 시작 Step 이 얼려 넘겨줬을 값. 리더는 이걸 받기만 한다. */
+        ReplayScanRange frozenRange() {
+            return scanRange(AS_OF).orElse(null);
+        }
 
-            return byIssuance.isEmpty()
-                    ? Optional.empty()
-                    : Optional.of(new IssuanceIdRange(
-                            byIssuance.keySet().stream().min(Long::compare).orElseThrow(),
-                            byIssuance.keySet().stream().max(Long::compare).orElseThrow()));
+        @Override
+        public Optional<ReplayScanRange> scanRange(LocalDateTime asOf) {
+            scanRangeCalls++;
+
+            if (byIssuance.isEmpty()) {
+                return Optional.empty();
+            }
+
+            return Optional.of(new ReplayScanRange(
+                    byIssuance.keySet().stream().min(Long::compare).orElseThrow(),
+                    byIssuance.keySet().stream().max(Long::compare).orElseThrow(),
+                    maxHistoryId(),
+                    AS_OF));
         }
 
         @Override
         public List<IssuanceHistoryRecord> findRange(
-                long fromIssuanceId, long toIssuanceId, LocalDateTime asOf) {
+                long fromIssuanceId, long toIssuanceId, LocalDateTime asOf, long maxHistoryId) {
             requestedWindows.add(fromIssuanceId + "-" + toIssuanceId);
 
             return byIssuance.entrySet().stream()
@@ -293,9 +335,18 @@ class IssuanceHistoryGroupReaderTest {
                             && entry.getKey() <= toIssuanceId)
                     .sorted(Map.Entry.comparingByKey())
                     .flatMap(entry -> entry.getValue().stream()
+                            .filter(history -> history.id() <= maxHistoryId)
                             .sorted(Comparator.comparing(IssuanceHistoryRecord::createdAt)
                                     .thenComparingLong(IssuanceHistoryRecord::id)))
                     .toList();
+        }
+
+        private long maxHistoryId() {
+            return byIssuance.values().stream()
+                    .flatMap(List::stream)
+                    .mapToLong(IssuanceHistoryRecord::id)
+                    .max()
+                    .orElse(0L);
         }
     }
 }

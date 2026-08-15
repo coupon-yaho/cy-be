@@ -2,15 +2,19 @@
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
+import java.util.Optional;
 
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.Job;
+import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.builder.JobBuilder;
+import org.springframework.batch.core.job.parameters.DefaultJobParametersValidator;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.core.step.builder.StepBuilder;
+import org.springframework.batch.infrastructure.item.ExecutionContext;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -29,6 +33,7 @@ import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
 import com.kafkick.core.verification.replay.ReplayResult;
+import com.kafkick.core.verification.replay.ReplayScanRange;
 
 /**
  * <b>{@code attempt} 가 식별 파라미터에 들어 있어야 같은 {@code asOf} 로 다시 돌릴 수 있습니다.</b>
@@ -38,12 +43,23 @@ import com.kafkick.core.verification.replay.ReplayResult;
  *
  * <p>Step 순서는 <b>실행 기록 → 리플레이 → 사용 건수</b> 입니다. {@code asof_state} 가
  * {@code verification_runs.id} 를 FK 로 물기 때문에 실행 행이 먼저 있어야 합니다.
+ *
+ * <p><b>훑을 경계도 실행 기록 Step 에서 얼립니다.</b> 리더가 열리는 시점은 그보다 뒤라,
+ * 거기서 재면 그 사이 생긴 발급건이 경계 밖으로 밀려 영원히 안 읽힙니다.
  */
 @Configuration(proxyBeanMethods = false)
 public class VerifyJobConfig {
 
     public static final String JOB_NAME = "verifyJob";
-    public static final String RUN_ID_KEY = "runId";
+
+    static final String RUN_ID_KEY = "runId";
+    static final String SCAN_MIN_KEY = "replay.scan.minIssuanceId";
+    static final String SCAN_MAX_KEY = "replay.scan.maxIssuanceId";
+    static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
+    static final String SCAN_LATEST_KEY = "replay.scan.latestCreatedAt";
+
+    private static final String[] REQUIRED_PARAMETERS = {"asOf", "scope", "dataset", "attempt"};
+    private static final String[] OPTIONAL_PARAMETERS = {"fromTs"};
 
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
@@ -56,33 +72,60 @@ public class VerifyJobConfig {
         this.transactionManager = transactionManager;
     }
 
+    /**
+     * 파라미터 검증을 잡에 건다. 없으면 {@code scope} 오타 하나에
+     * {@code ScopeType.valueOf(null)} 로 죽어 무엇이 빠졌는지 스택트레이스로만 남는다.
+     */
     @Bean
     public Job verifyJob(Step startRunStep, Step replayStep, Step usageCountStep) {
         return new JobBuilder(JOB_NAME, jobRepository)
+                .validator(new DefaultJobParametersValidator(
+                        REQUIRED_PARAMETERS, OPTIONAL_PARAMETERS))
                 .start(startRunStep)
                 .next(replayStep)
                 .next(usageCountStep)
                 .build();
     }
 
-    /** 실행 행을 만들고 식별자를 잡 실행 컨텍스트에 심는다. 뒤 Step 이 이걸로 자기 행을 쓴다. */
+    /**
+     * 실행 행을 만들고, 훑을 경계를 얼려 잡 실행 컨텍스트에 심는다.
+     *
+     * <p>실행 행은 <b>있으면 찾고 없으면 만든다.</b> 그냥 INSERT 하면 재시작 때 두 방향으로 막힌다 —
+     * 이 Step 이 COMPLETED 인데 잡 컨텍스트가 아직 저장 전이면 {@code runId} 를 잃고,
+     * 반대로 다시 INSERT 하면 {@code uk_run_params} 중복키에 걸린다.
+     */
     @Bean
-    public Step startRunStep(VerificationRunRepository runs, TimeProvider timeProvider) {
+    public Step startRunStep(
+            VerificationRunRepository runs,
+            ReplayHistoryRepository histories,
+            TimeProvider timeProvider
+    ) {
         return new StepBuilder("startRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
-                    JobParameters parameters = chunkContext.getStepContext()
-                            .getStepExecution().getJobParameters();
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
+                    JobParameters parameters = stepExecution.getJobParameters();
 
-                    VerificationRun started = runs.save(VerificationRun.start(
-                            parameters.getLocalDateTime("asOf"),
-                            parameters.getLocalDateTime("fromTs"),
-                            ScopeType.valueOf(parameters.getString("scope")),
-                            DatasetType.valueOf(parameters.getString("dataset")),
-                            parameters.getLong("attempt").intValue(),
-                            timeProvider.now()));
+                    LocalDateTime asOf = parameters.getLocalDateTime("asOf");
+                    ScopeType scope = ScopeType.valueOf(parameters.getString("scope"));
+                    DatasetType dataset = DatasetType.valueOf(parameters.getString("dataset"));
+                    int attempt = parameters.getLong("attempt").intValue();
 
-                    chunkContext.getStepContext().getStepExecution().getJobExecution()
-                            .getExecutionContext().putLong(RUN_ID_KEY, started.id());
+                    rejectUnsupportedScope(scope);
+
+                    Optional<ReplayScanRange> scanRange = histories.scanRange(asOf);
+                    scanRange.ifPresent(range -> rejectAsOfBeforeLatestHistory(asOf, range));
+
+                    long runId = runs
+                            .findByParams(asOf, dataset, scope, attempt)
+                            .map(VerificationRun::id)
+                            .orElseGet(() -> runs.save(VerificationRun.start(
+                                    asOf, parameters.getLocalDateTime("fromTs"),
+                                    scope, dataset, attempt, timeProvider.now())).id());
+
+                    ExecutionContext jobContext =
+                            stepExecution.getJobExecution().getExecutionContext();
+                    jobContext.putLong(RUN_ID_KEY, runId);
+                    scanRange.ifPresent(range -> freeze(jobContext, range));
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
@@ -112,12 +155,10 @@ public class VerifyJobConfig {
     public Step usageCountStep(AsOfStateRepository asOfStates) {
         return new StepBuilder("usageCountStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
-                    StepExecution stepExecution =
-                            chunkContext.getStepContext().getStepExecution();
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
 
                     asOfStates.applyActiveUsageCounts(
-                            requireRunId(stepExecution.getJobExecution()
-                                    .getExecutionContext().get(RUN_ID_KEY)),
+                            requireRunId(stepExecution.getJobExecution()),
                             stepExecution.getJobParameters().getLocalDateTime("asOf"));
 
                     return RepeatStatus.FINISHED;
@@ -130,9 +171,18 @@ public class VerifyJobConfig {
     public IssuanceHistoryGroupReader replayReader(
             ReplayHistoryRepository histories,
             @Value("#{jobParameters['asOf']}") LocalDateTime asOf,
+            @Value("#{jobExecutionContext['" + SCAN_MIN_KEY + "']}") Long minIssuanceId,
+            @Value("#{jobExecutionContext['" + SCAN_MAX_KEY + "']}") Long maxIssuanceId,
+            @Value("#{jobExecutionContext['" + SCAN_MAX_HISTORY_KEY + "']}") Long maxHistoryId,
+            @Value("#{jobExecutionContext['" + SCAN_LATEST_KEY + "']}") String latestCreatedAt,
             @Value("${batch.verify.replay-window-size:50000}") long windowSize
     ) {
-        return new IssuanceHistoryGroupReader(histories, asOf, windowSize);
+        ReplayScanRange scanRange = minIssuanceId == null
+                ? null
+                : new ReplayScanRange(minIssuanceId, maxIssuanceId, maxHistoryId,
+                        LocalDateTime.parse(latestCreatedAt));
+
+        return new IssuanceHistoryGroupReader(histories, asOf, scanRange, windowSize);
     }
 
     @Bean
@@ -141,14 +191,53 @@ public class VerifyJobConfig {
             AsOfStateRepository asOfStates,
             @Value("#{jobExecutionContext['" + RUN_ID_KEY + "']}") Long runId
     ) {
-        return new AsOfStateItemWriter(asOfStates, requireRunId(runId));
+        if (runId == null) {
+            throw new IllegalStateException(
+                    "검증 실행 식별자가 없습니다. startRunStep 이 먼저 돌아야 합니다.");
+        }
+
+        return new AsOfStateItemWriter(asOfStates, runId);
     }
 
-    private static long requireRunId(Object value) {
+    /**
+     * 증분 검증은 아직 구현되지 않았다. 받아 놓고 전수로 돌면 10분마다 534만 행을 다시 접고
+     * {@code asof_state} 가 하루 4억 행 쌓이는데, 기록에는 INCREMENTAL 로 남아 티가 안 난다.
+     */
+    private static void rejectUnsupportedScope(ScopeType scope) {
+        if (scope == ScopeType.INCREMENTAL) {
+            throw new IllegalArgumentException(
+                    "증분 검증은 아직 지원하지 않습니다. 전수로 실행하세요. scope=" + scope);
+        }
+    }
+
+    /**
+     * asOf 는 실행 순간을 고정하는 값이지 과거 조회 기능이 아니다.
+     *
+     * <p>과거를 넣으면 이력만 잘리고 {@code issuances.status} 는 현재값 그대로라,
+     * 정상 데이터에서도 리플레이 결과와 현재 상태가 어긋나는 것이 당연해진다.
+     */
+    private static void rejectAsOfBeforeLatestHistory(LocalDateTime asOf, ReplayScanRange range) {
+        if (range.isBefore(asOf)) {
+            throw new IllegalArgumentException(
+                    "asOf 는 마지막 이력 시각 이상이어야 합니다. asOf=" + asOf
+                            + " 마지막 이력=" + range.latestCreatedAt());
+        }
+    }
+
+    private static void freeze(ExecutionContext jobContext, ReplayScanRange range) {
+        jobContext.putLong(SCAN_MIN_KEY, range.minIssuanceId());
+        jobContext.putLong(SCAN_MAX_KEY, range.maxIssuanceId());
+        jobContext.putLong(SCAN_MAX_HISTORY_KEY, range.maxHistoryId());
+        jobContext.putString(SCAN_LATEST_KEY, range.latestCreatedAt().toString());
+    }
+
+    private static long requireRunId(JobExecution jobExecution) {
+        Object value = jobExecution.getExecutionContext().get(RUN_ID_KEY);
         if (value == null) {
             throw new IllegalStateException(
                     "검증 실행 식별자가 없습니다. startRunStep 이 먼저 돌아야 합니다.");
         }
+
         return ((Number) value).longValue();
     }
 }

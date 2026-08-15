@@ -97,6 +97,24 @@ class VerificationRunTest {
     }
 
     @Test
+    @DisplayName("기준 시각이 실행 시작보다 미래면 거부한다 — 아직 일어나지 않은 일을 기준으로 삼는다")
+    void rejectAsOfAfterStartedAt() {
+        assertThatThrownBy(() -> VerificationRun.start(
+                STARTED_AT.plusSeconds(1), null, ScopeType.FULL, DatasetType.CLEAN, 1, STARTED_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("실행 시작 시각을 넘을 수 없습니다");
+    }
+
+    @Test
+    @DisplayName("기준 시각이 실행 시작과 같으면 받는다 — 경계는 포함이다")
+    void acceptAsOfEqualToStartedAt() {
+        VerificationRun run = VerificationRun.start(
+                STARTED_AT, null, ScopeType.FULL, DatasetType.CLEAN, 1, STARTED_AT);
+
+        assertThat(run.asOf()).isEqualTo(STARTED_AT);
+    }
+
+    @Test
     @DisplayName("식별자 없이 복원하면 거부한다")
     void rejectRestoreWithoutId() {
         assertThatThrownBy(() -> VerificationRun.restore(
