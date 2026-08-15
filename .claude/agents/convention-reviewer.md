@@ -133,11 +133,20 @@ model: claude-sonnet-5
 ```markdown
 ## ④ 컨벤션 리뷰
 
-**[blocker/high] issuedCount 사용**
-근거: `CouponStock.java:18` — 필드명이 issuedCount
-제안: activeCount로 변경. 누적이 아니라 현재 ISSUED+USED 개수다
+### 지적 (N건)
 
-**[minor/medium] Thread.sleep 기반 테스트**
-근거: `IssuanceConcurrencyTest.java:44` — sleep(500)으로 완료 대기
-제안: CountDownLatch.await()로 교체. CI에서 간헐 실패한다
+**[blocker/high] 재고 필드명이 issuedCount 다**
+무엇이     coupon_stocks 의 현재 활성 수를 issuedCount 로 부른다
+근거       `CouponStock.java:18`
+왜 문제    이름이 누적으로 읽혀 구현자가 취소·만료에서 감소시키지 않는다
+언제 터지나 더미데이터에 CANCELLED 가 10%(30만) 있어 정상 운영에서도 대량 오탐이 난다
+어떻게     `activeCount` 로 바꾼다. 현재 ISSUED + USED 라는 뜻이 이름에 있어야 한다
+
+**[minor/medium] Thread.sleep 으로 동시성 완료를 기다린다**
+무엇이     sleep(500) 뒤에 결과를 단언한다
+근거       `IssuanceConcurrencyTest.java:44`
+왜 문제    스레드 완료 시점이 보장되지 않아 결과가 실행마다 달라진다
+언제 터지나 CI 러너가 느린 날 간헐 실패한다. 원인이 코드인지 환경인지 구분이 안 된다
+어떻게     `CountDownLatch.await()` 로 교체한다
+
 ```
