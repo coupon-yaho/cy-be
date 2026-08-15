@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 
+import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
 
 /**
@@ -44,6 +45,26 @@ final class VerificationTestData {
                 .param("status", status.name())
                 .param("issuedAt", Timestamp.valueOf(EPOCH))
                 .param("expiresAt", Timestamp.valueOf(EPOCH.plusDays(7))));
+    }
+
+    /** 이력 한 행을 만들고 식별자를 돌려준다. {@code fromStatus} 가 null 이면 발급 이력이다. */
+    long history(
+            long issuanceId,
+            IssuanceEventType eventType,
+            IssuanceStatus fromStatus,
+            IssuanceStatus toStatus,
+            LocalDateTime createdAt
+    ) {
+        return insertGenerated(jdbcClient.sql("""
+                        INSERT INTO issuance_histories
+                            (issuance_id, event_type, from_status, to_status, created_at)
+                        VALUES (:issuanceId, :eventType, :fromStatus, :toStatus, :createdAt)
+                        """)
+                .param("issuanceId", issuanceId)
+                .param("eventType", eventType.name())
+                .param("fromStatus", fromStatus == null ? null : fromStatus.name())
+                .param("toStatus", toStatus.name())
+                .param("createdAt", Timestamp.valueOf(createdAt)));
     }
 
     /** 사용 행 하나. {@code canceledAt} 이 null 이면 취소되지 않은 사용이다. */

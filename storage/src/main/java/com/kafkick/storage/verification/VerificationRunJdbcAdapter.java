@@ -1,9 +1,12 @@
 package com.kafkick.storage.verification;
 
+import static com.kafkick.storage.verification.ColumnValues.toEnum;
+import static com.kafkick.storage.verification.ColumnValues.toLocalDateTime;
+import static com.kafkick.storage.verification.ColumnValues.toName;
+import static com.kafkick.storage.verification.ColumnValues.toTimestamp;
+
 import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.util.Optional;
-import java.util.function.Function;
 
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -127,19 +130,4 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .optional();
     }
 
-    private static Timestamp toTimestamp(LocalDateTime value) {
-        return value == null ? null : Timestamp.valueOf(value);
-    }
-
-    private static LocalDateTime toLocalDateTime(Timestamp value) {
-        return value == null ? null : value.toLocalDateTime();
-    }
-
-    private static String toName(Enum<?> value) {
-        return value == null ? null : value.name();
-    }
-
-    private static <E> E toEnum(String value, Function<String, E> parser) {
-        return value == null ? null : parser.apply(value);
-    }
 }
