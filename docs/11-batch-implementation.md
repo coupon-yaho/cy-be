@@ -17,16 +17,28 @@
 검증과 갱신은 다른 일이다. 한 명령으로 겸하면 차이가 났을 때 *사본을 손댄 것*인지
 *원본이 바뀐 것*인지 구별할 수 없다.
 
+둘 다 **먼저 임시 파일에 받고, 성공했을 때만** 비교하거나 덮는다.
+`> docs/contract.json` 은 명령이 돌기 전에 파일을 비우므로, 조회가 실패하면 사본이 0바이트가 된다.
+검증도 마찬가지로 조회가 실패하면 빈 입력과 비교해 "사본을 손댔다"로 잘못 읽힌다.
+
 ```bash
 # 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
+set -o pipefail
+tmp=$(mktemp)
 gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=96b12f2" \
-  --jq '.content' | base64 -d | diff - docs/contract.json
+  --jq '.content' | base64 -d > "$tmp" \
+  && diff "$tmp" docs/contract.json && echo "사본이 원본과 같다"
+rm -f "$tmp"
 ```
 
 ```bash
 # 갱신 — 원본이 새 리비전으로 올라갔을 때만. 위 표의 SHA·날짜도 같이 고친다
+set -o pipefail
+tmp=$(mktemp)
 gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=<새 SHA>" \
-  --jq '.content' | base64 -d > docs/contract.json
+  --jq '.content' | base64 -d > "$tmp" \
+  && mv "$tmp" docs/contract.json
+rm -f "$tmp"
 ```
 
 갱신은 **계약이 바뀌었다는 뜻**이라 배치 코드도 같이 봐야 한다. 조용히 덮지 않는다.
