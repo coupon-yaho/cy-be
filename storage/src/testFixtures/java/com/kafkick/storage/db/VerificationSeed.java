@@ -18,12 +18,18 @@ import com.kafkick.core.coupon.IssuanceStatus;
  */
 public final class VerificationSeed {
 
+    private static final LocalDateTime EPOCH = LocalDateTime.of(2026, 8, 1, 0, 0);
+
     /**
-     * 발급 시각의 기준. 어떤 테스트의 {@code asOf} 보다도 앞서야 한다 —
-     * {@code issuances.updated_at} 이 이 값으로 찍히는데, V3 는 {@code updated_at <= asOf} 인
-     * 발급건만 비교하므로 이 값이 뒤에 있으면 발급건이 통째로 빠진다.
+     * 마지막 상태 변경 시각의 기본값. <b>어떤 테스트의 {@code asOf} 보다도 앞서야 한다</b> —
+     * V3 는 {@code updated_at <= asOf} 인 발급건만 비교하므로 이 값이 뒤에 있으면
+     * 발급건이 통째로 빠진다.
+     *
+     * <p>{@code issued_at}·{@code expires_at} 과 분리해 둔다. 셋을 같이 앞당기면 발급건이
+     * 자기 이력보다 먼저 발급되고 첫 이력 전에 이미 만료된 것이 되어, 픽스처가 도메인 불변식을
+     * 깨는 데이터를 만든다.
      */
-    private static final LocalDateTime EPOCH = LocalDateTime.of(2025, 1, 1, 0, 0);
+    private static final LocalDateTime UPDATED_AT = LocalDateTime.of(2025, 1, 1, 0, 0);
 
     /** 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다. */
     private static final List<String> TABLES_IN_DELETE_ORDER = List.of(
@@ -49,14 +55,15 @@ public final class VerificationSeed {
                             (coupon_id, member_id, code, issued_grade, status,
                              issued_at, expires_at, updated_at)
                         VALUES (:couponId, :memberId, :code, 'VIP', :status,
-                                :issuedAt, :expiresAt, :issuedAt)
+                                :issuedAt, :expiresAt, :updatedAt)
                         """)
                 .param("couponId", couponId())
                 .param("memberId", newMemberId())
                 .param("code", nextCode())
                 .param("status", status.name())
                 .param("issuedAt", EPOCH)
-                .param("expiresAt", EPOCH.plusDays(7)));
+                .param("expiresAt", EPOCH.plusDays(7))
+                .param("updatedAt", UPDATED_AT));
     }
 
     /** 이력 한 행을 만들고 식별자를 돌려준다. {@code fromStatus} 가 null 이면 발급 이력이다. */

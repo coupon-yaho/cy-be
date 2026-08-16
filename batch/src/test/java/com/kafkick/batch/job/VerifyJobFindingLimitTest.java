@@ -107,6 +107,14 @@ class VerifyJobFindingLimitTest {
         return messages;
     }
 
+    @Test
+    @DisplayName("V4 검출이 정확히 상한이면 통과한다 — 규칙 Step 과 경계 의미가 같아야 한다")
+    void passAtIllegalTransitionLimit() throws Exception {
+        illegalTransition();
+
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+    }
+
     /** 접힌 상태는 USED 인데 저장값이 ISSUED — V3 하나만 울린다. */
     private void mismatched() {
         long issuanceId = seed.issuance(IssuanceStatus.ISSUED);

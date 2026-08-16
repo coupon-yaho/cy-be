@@ -100,6 +100,36 @@ class VerificationFindingTest {
     }
 
     @Test
+    @DisplayName("키와 식별자 컬럼이 다른 대상을 가리키면 거부한다 — 형식만 맞아도 안 된다")
+    void rejectKeyPointingElsewhere() {
+        assertThatThrownBy(() -> new VerificationFinding(
+                FindingType.REPLAY_MISMATCH, "ISSUANCE:5",
+                null, null, 7L, null, "a", "b"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("다른 대상을 가리킵니다");
+    }
+
+    @Test
+    @DisplayName("검출 단위가 쓰지 않는 컬럼이 채워지면 거부한다 — 인자를 한 칸 밀어 넣은 행이다")
+    void rejectUnusedColumnFilled() {
+        assertThatThrownBy(() -> new VerificationFinding(
+                FindingType.REPLAY_MISMATCH, "ISSUANCE:5",
+                99L, null, 5L, null, "a", "b"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("쓰지 않는 식별자 컬럼");
+    }
+
+    @Test
+    @DisplayName("식별자 컬럼이 비면 거부한다")
+    void rejectMissingIdColumn() {
+        assertThatThrownBy(() -> new VerificationFinding(
+                FindingType.REPLAY_MISMATCH, "ISSUANCE:5",
+                null, null, null, null, "a", "b"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("발급건 ID가 필요합니다");
+    }
+
+    @Test
     @DisplayName("식별자가 0 이하면 거부한다")
     void rejectNonPositiveId() {
         assertThatThrownBy(() -> VerificationFinding.forIssuance(
