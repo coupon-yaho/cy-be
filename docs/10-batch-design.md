@@ -391,22 +391,30 @@ V6  등급 자격 위반
 **V3가 이미 `asOf` 시점 상태를 재구성한다.** 그 산출물을 버리지 말고 테이블로 남기면 나머지 규칙이 공짜로 쓴다.
 
 ```
-Step 0   이력 리플레이 → asof_state (쿠폰별 asOf 시점 상태)
-           WHERE coupon_histories.created_at <= asOf
+Step 0   이력 리플레이 → asof_state (발급건별 asOf 시점 상태)  +  V4 불법 전이
+           WHERE issuance_histories.created_at <= asOf
            ORDER BY (created_at, id)          ← 타이브레이커
 ────────── 여기부터 완전 결정론 ──────────
-Step 1   V4  불법 전이       이력만
-Step 2   V2  1인 1매         asof_state 집계
-Step 3   V5  사용 실적       asof_state ↔ usages
+Step 1   V5  사용 실적       asof_state 안에서 끝난다
                              활성 사용 = used_at <= asOf
                                       AND (canceled_at IS NULL OR canceled_at > asOf)
+Step 2   V2  1인 1매         asof_state ⋈ issuances 집계
 ────────── 여기부터 현재 행을 읽음 ──────────
-Step 4   V3  리플레이 대조   asof_state ↔ coupons.status
-Step 5   V1  재고 정합       asof_state 집계 ↔ coupon_stocks.active_count
-Step 6   V6  등급 자격       coupons ⋈ campaigns ⋈ members ⋈ grades
+Step 3   V3  리플레이 대조   asof_state ↔ issuances.status
+Step 4   V1  재고 정합       asof_state 집계 ↔ coupon_stocks.active_count
+Step 5   V6  등급 자격       issuances ⋈ coupons ⋈ grades (issued_grade 스냅샷)
 ────────────────────────────────────
-Step 7   통계 집계 (CLEAN 만)
+Step 6   통계 집계 (CLEAN 만)
 ```
+
+**V4 는 Step 0 안에 있다.** 초안은 별도 Step 이었는데, 그러면 이력 534만 행을 다시 접어야 하고
+접기 구현이 두 벌로 갈라져 `asof_state` 와 V4 가 서로 다른 말을 하게 된다. 접기는 한 번만 돌고
+산출물 둘이 같은 청크 트랜잭션에서 나간다 — 갈라 놓으면 재시작 뒤에 상태는 있는데 검출은 없는
+구간이 생긴다.
+
+> `V1__init_schema.sql` 의 `asof_state` 테이블 주석에는 아직 초안 Step 번호가 남아 있다.
+> 적용된 마이그레이션이라 고치면 체크섬이 바뀌어 기존 DB 에서 Flyway 가 기동을 거부한다.
+> 주석을 맞추려면 별도 마이그레이션이 필요하다.
 
 **`asof_state` 는 추가 비용이 아니다.** V3가 어차피 만드는 중간 산출물을 테이블로 내보내는 것뿐이다.
 

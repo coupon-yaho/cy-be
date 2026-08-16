@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.LongStream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,8 +40,12 @@ class VerificationFindingJdbcAdapterTest {
 
     @BeforeEach
     void setUp() {
-        runId = runAdapter.save(VerificationRun.start(
-                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 1, AS_OF)).id();
+        runId = newRun(1);
+    }
+
+    private long newRun(int attempt) {
+        return runAdapter.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, attempt, AS_OF)).id();
     }
 
     @Test
@@ -127,8 +132,7 @@ class VerificationFindingJdbcAdapterTest {
     @Test
     @DisplayName("다른 run 의 같은 검출은 따로 쌓인다 — run 마다 네임스페이스가 갈린다")
     void keepFindingsPerRun() {
-        long otherRunId = runAdapter.save(VerificationRun.start(
-                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 2, AS_OF)).id();
+        long otherRunId = newRun(2);
 
         adapter.appendAll(runId, List.of(VerificationFinding.forHistory(
                 FindingType.ILLEGAL_TRANSITION, 88131, "a", "b")));
@@ -150,7 +154,7 @@ class VerificationFindingJdbcAdapterTest {
     @Test
     @DisplayName("한 묶음에 800행을 넣어도 다 들어간다 — 오염셋 정답이 그 규모다")
     void appendCorruptSetSizedBatch() {
-        List<VerificationFinding> findings = java.util.stream.LongStream.rangeClosed(1, 800)
+        List<VerificationFinding> findings = LongStream.rangeClosed(1, 800)
                 .mapToObj(id -> VerificationFinding.forHistory(
                         FindingType.ILLEGAL_TRANSITION, id, "a", "b"))
                 .toList();
