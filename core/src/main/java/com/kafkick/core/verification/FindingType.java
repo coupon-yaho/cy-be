@@ -68,12 +68,19 @@ public enum FindingType {
      * {@code updated_at <= asOf} 로 볼 대상을 완전히 고정할 수 있습니다.
      * <b>"행의 존재는 변하지 않는다" 가 아닙니다</b> — 배치가 도는 동안에도 INSERT 는 일어나므로,
      * 그 조건이 결정론의 전부입니다.
-         *
+     *
      * <p><b>V6 는 결정론이 아닙니다.</b> {@code issued_grade} 는 스냅샷이지만
      * {@code coupons.eligible_grades_mask} 는 살아 있는 행이고, {@code coupons} 에는
-     * {@code updated_at} 컬럼이 없어 시각으로는 가드를 걸 수 없습니다. 지문 재료에도 그 축이 없어서,
-     * 마스크가 바뀌면 <b>지문은 같은데 검출만 달라집니다</b> — 데이터 변경이 검증기 탓으로 오인됩니다.
-         */
+     * {@code updated_at} 컬럼이 없어 시각으로는 가드를 걸 수 없습니다.
+     * {@code dataset_fingerprint} 재료에도 그 축이 없어서, 마스크가 바뀌면
+     * <b>지문은 같은데 검출만 달라집니다</b> — 데이터 변경이 검증기 탓으로 오인됩니다.
+     *
+     * <p><b>그래서 실행 중에는 값을 접어 얼립니다.</b> {@code VerificationRuleRepository#policyDigest}
+     * 가 {@code coupons(id, mask)} 와 {@code grades(code, bit_value)} 를 접고,
+     * {@code startRunStep} 이 잡 컨텍스트에 심어 {@code assertFrozenStep} 이 대조합니다.
+     * <b>이것은 {@code dataset_fingerprint} 와 다른 값입니다</b> — 그쪽은 계약이 정한
+     * 데이터셋 식별자이고, 이쪽은 한 실행 안에서 정책이 안 바뀌었는지만 봅니다.
+     */
     public boolean isDeterministic() {
         return deterministic;
     }

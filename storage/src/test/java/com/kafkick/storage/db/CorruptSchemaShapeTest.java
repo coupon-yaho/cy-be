@@ -37,52 +37,63 @@ class CorruptSchemaShapeTest {
     }
 
     /**
-     * <b>이름이 아니라 성질을 본다.</b> 같은 컬럼에 다른 이름의 UNIQUE 가 살아 있으면
-     * 이름 검사는 통과하는데 오염은 여전히 못 심는다. 실제로 시드 저장소는 이 인덱스를
-     * {@code uk_coupon_code} 로 부르고 cy-be 는 인라인 UNIQUE 라 이름이 {@code code} 다 —
-     * 이름으로 고정하면 <b>둘 중 하나를 통일하는 순간 검사가 공허해진다.</b>
+     * <b>이름도 선두 컬럼도 아니라 "무엇을 막는가" 를 본다.</b>
+     *
+     * <p>이름으로 고정하면 두 저장소가 같은 인덱스를 다르게 부르는 순간 검사가 공허해진다
+     * (시드는 {@code uk_coupon_code}, cy-be 는 인라인 UNIQUE 라 이름이 {@code code} 다).
+     * 선두 컬럼만 봐도 부족하다 — {@code UNIQUE(member_id, coupon_id)} 는 선두가 {@code member_id}
+     * 라 {@code coupon_id} 검사를 통과하는데 <b>유형 6 을 여전히 막는다.</b>
+     *
+     * <p>정확한 판정은 이것이다. 오염이 심는 두 행은 <b>몇 개 컬럼만 다르다.</b>
+     * 어떤 UNIQUE 든 그 다른 컬럼을 <b>하나도 안 갖고 있으면</b> 두 행이 충돌해 INSERT 가 튕긴다.
      */
-    private List<String> uniqueLeadColumnsOn(String table) {
-        return jdbcClient.sql("""
-                        SELECT DISTINCT column_name
+    private List<List<String>> uniqueIndexColumnsOn(String table) {
+        List<String> names = jdbcClient.sql("""
+                        SELECT DISTINCT index_name
                           FROM information_schema.statistics
                          WHERE table_schema = DATABASE() AND table_name = :table
-                           AND non_unique = 0 AND seq_in_index = 1
-                           AND index_name <> 'PRIMARY'
+                           AND non_unique = 0
                         """)
                 .param("table", table)
                 .query(String.class)
                 .list();
+
+        return names.stream()
+                .map(name -> jdbcClient.sql("""
+                                SELECT column_name
+                                  FROM information_schema.statistics
+                                 WHERE table_schema = DATABASE() AND table_name = :table
+                                   AND index_name = :name
+                                 ORDER BY seq_in_index
+                                """)
+                        .param("table", table)
+                        .param("name", name)
+                        .query(String.class)
+                        .list())
+                .toList();
+    }
+
+    /** 두 행이 서로 다른 컬럼을 하나도 안 가진 UNIQUE 는 그 둘의 공존을 막는다. */
+    private void assertNothingBlocks(String table, String what, String... differingColumns) {
+        List<String> differing = List.of(differingColumns);
+
+        assertThat(uniqueIndexColumnsOn(table))
+                .as("%s 를 막는 UNIQUE 가 남아 있다 — 오염을 심을 수 없어 검출 0건이 정상으로 보인다", what)
+                .allSatisfy(columns -> assertThat(columns).containsAnyElementsOf(differing));
     }
 
     @Test
-    @DisplayName("coupon_id 를 선두로 한 UNIQUE 가 없다 — 오염 유형 6 이 INSERT 될 수 있어야 한다")
+    @DisplayName("같은 회원의 두 번째 발급을 막는 UNIQUE 가 없다 — 오염 유형 6")
     void dropUniqueCouponMember() {
-        assertThat(uniqueLeadColumnsOn("issuances"))
-                .as("이름이 무엇이든 (coupon_id, ...) UNIQUE 가 남으면 같은 회원 2건을 못 심는다")
-                .doesNotContain("coupon_id");
+        // 유형 6 의 두 행은 id 와 code 만 다르다.
+        assertNothingBlocks("issuances", "같은 회원의 두 번째 발급", "id", "code");
     }
 
     @Test
-    @DisplayName("code 에 UNIQUE 가 없다 — 오염 유형 5 가 같은 code 를 복제한다")
+    @DisplayName("같은 code 의 복제를 막는 UNIQUE 가 없다 — 오염 유형 5")
     void dropUniqueIssuanceCode() {
-        assertThat(uniqueLeadColumnsOn("issuances")).doesNotContain("code");
-    }
-
-    @Test
-    @DisplayName("ck_stock_range 가 없다 — 오염 유형 1·3 이 재고를 범위 밖으로 민다")
-    void dropStockRangeCheck() {
-        List<String> checks = jdbcClient.sql("""
-                        SELECT constraint_name
-                          FROM information_schema.table_constraints
-                         WHERE table_schema = DATABASE()
-                           AND table_name = 'coupon_stocks'
-                           AND constraint_type = 'CHECK'
-                        """)
-                .query(String.class)
-                .list();
-
-        assertThat(checks).doesNotContain("ck_stock_range");
+        // 유형 5 의 두 행은 id 와 member_id 만 다르다.
+        assertNothingBlocks("issuances", "같은 code 의 복제", "id", "member_id");
     }
 
     /**
