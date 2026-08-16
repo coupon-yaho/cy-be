@@ -510,6 +510,19 @@ class VerificationRuleJdbcAdapterTest {
         assertThat(adapter.policyDigest()).isNotEqualTo(before);
     }
 
+    /**
+     * 나머지 지문 테스트가 전부 <b>달라지는 것</b>만 본다. 가드의 실제 판정은 두 번 계산해
+     * 같은지 보는 것이라, 식에 비결정적 재료가 섞이면 <b>정상 데이터에서 매 실행이 거부된다</b> —
+     * 그 사고는 여기서만 걸린다.
+     */
+    @Test
+    @DisplayName("데이터가 그대로면 지문이 같다 — 정상 실행이 거부되면 안 된다")
+    void keepPolicyDigestStableWhenNothingChanges() {
+        data.issuance(IssuanceStatus.ISSUED);
+
+        assertThat(adapter.policyDigest()).isEqualTo(adapter.policyDigest());
+    }
+
     @Test
     @DisplayName("등급 비트가 재배치되면 정책 지문이 달라진다 — 마스크와 AND 되는 반대쪽 피연산자다")
     void detectGradeBitChangeInPolicyDigest() {

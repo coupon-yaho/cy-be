@@ -102,10 +102,10 @@ public final class VerificationSeed {
 
         jdbcClient.sql("""
                         INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
-                        VALUES (:couponId, 100, :delta, :updatedAt)
+                        VALUES (:couponId, 100, :delta, :updatedAt) AS incoming
                         ON DUPLICATE KEY UPDATE
-                            active_count = active_count + :delta,
-                            updated_at   = GREATEST(updated_at, VALUES(updated_at))
+                            active_count = coupon_stocks.active_count + :delta,
+                            updated_at   = GREATEST(coupon_stocks.updated_at, incoming.updated_at)
                         """)
                 .param("couponId", couponId())
                 .param("delta", delta)
@@ -201,10 +201,10 @@ public final class VerificationSeed {
     public void overwriteStock(int activeCount, LocalDateTime updatedAt) {
         jdbcClient.sql("""
                         INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
-                        VALUES (:couponId, 100, :activeCount, :updatedAt)
+                        VALUES (:couponId, 100, :activeCount, :updatedAt) AS incoming
                         ON DUPLICATE KEY UPDATE
-                            active_count = VALUES(active_count),
-                            updated_at   = VALUES(updated_at)
+                            active_count = incoming.active_count,
+                            updated_at   = incoming.updated_at
                         """)
                 .param("couponId", couponId())
                 .param("activeCount", activeCount)

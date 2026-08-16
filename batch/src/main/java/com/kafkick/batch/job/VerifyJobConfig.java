@@ -35,7 +35,9 @@ import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.VerificationRuleRepository;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
@@ -167,13 +169,15 @@ public class VerifyJobConfig {
                             .getJobParameters().getLocalDateTime("asOf");
 
                     if (rules.hasIssuancesUpdatedAfter(asOf)) {
-                        throw new IllegalStateException(
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
                                 "실행 중에 발급건이 갱신됐습니다. V3 가 그만큼을 비교에서 뺐으므로 "
                                         + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
                     }
 
                     if (rules.hasStocksUpdatedAfter(asOf)) {
-                        throw new IllegalStateException(
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
                                 "실행 중에 재고가 갱신됐습니다. V1 이 그만큼을 비교에서 뺐으므로 "
                                         + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
                     }
@@ -185,7 +189,8 @@ public class VerifyJobConfig {
                             .getJobExecution().getExecutionContext().getString(POLICY_DIGEST_KEY);
 
                     if (!frozenPolicy.equals(rules.policyDigest())) {
-                        throw new IllegalStateException(
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
                                 "실행 중에 회차 정책 또는 등급 체계가 바뀌었습니다. V1·V6 이 그 사이 값을 읽었으므로 "
                                         + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
                     }
