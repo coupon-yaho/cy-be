@@ -16,7 +16,7 @@ import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
-import org.springframework.batch.infrastructure.item.ItemWriter;
+import org.springframework.batch.infrastructure.item.ItemStreamWriter;
 import org.springframework.batch.infrastructure.item.support.CompositeItemWriter;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,16 +25,16 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import com.kafkick.batch.replay.AsOfStateItemWriter;
-import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IllegalTransitionItemWriter;
+import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
-import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
 import com.kafkick.core.verification.VerificationRuleRepository;
+import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
@@ -63,6 +63,9 @@ public class VerifyJobConfig {
     static final String SCAN_MAX_KEY = "replay.scan.maxIssuanceId";
     static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
     static final String SCAN_LATEST_KEY = "replay.scan.latestCreatedAt";
+
+    /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. V1·V2·V6 이 오면 여섯 벌이 된다. */
+    private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
 
     private static final String[] REQUIRED_PARAMETERS = {"asOf", "scope", "dataset", "attempt"};
     private static final String[] OPTIONAL_PARAMETERS = {"fromTs"};
@@ -111,7 +114,7 @@ public class VerifyJobConfig {
     public Step usageMismatchStep(
             VerificationRuleRepository rules,
             VerificationFindingRepository findings,
-            @Value("${batch.verify.max-findings-per-rule:100000}") int maxFindings
+            @Value(MAX_FINDINGS) int maxFindings
     ) {
         return ruleStep("usageMismatchStep", findings, maxFindings,
                 (runId, limit) -> rules.findUsageMismatches(runId, limit));
@@ -122,7 +125,7 @@ public class VerifyJobConfig {
     public Step replayMismatchStep(
             VerificationRuleRepository rules,
             VerificationFindingRepository findings,
-            @Value("${batch.verify.max-findings-per-rule:100000}") int maxFindings
+            @Value(MAX_FINDINGS) int maxFindings
     ) {
         return ruleStep("replayMismatchStep", findings, maxFindings,
                 (runId, limit) -> rules.findReplayMismatches(runId, limit));
@@ -146,8 +149,10 @@ public class VerifyJobConfig {
                     long runId = requireRunId(chunkContext.getStepContext()
                             .getStepExecution().getJobExecution());
 
-                    List<VerificationFinding> detected = query.run(runId, maxFindings);
-                    if (detected.size() >= maxFindings) {
+                    // 하나를 더 요청한다. LIMIT 이 상한까지만 주면 "정확히 상한" 과 "넘침" 을
+                    // 구분할 수 없어, 위반이 딱 상한개인 정상 상황도 실패로 만든다.
+                    List<VerificationFinding> detected = query.run(runId, maxFindings + 1);
+                    if (detected.size() > maxFindings) {
                         throw new IllegalStateException(
                                 name + " 검출이 상한에 닿았습니다. 검증기를 의심하십시오. 상한="
                                         + maxFindings);
@@ -217,7 +222,7 @@ public class VerifyJobConfig {
     @Bean
     public Step replayStep(
             IssuanceHistoryGroupReader replayReader,
-            ItemWriter<ReplayResult> replayWriter,
+            ItemStreamWriter<ReplayResult> replayWriter,
             @Value("${batch.verify.chunk-size:1000}") int chunkSize
     ) {
         return new StepBuilder("replayStep", jobRepository)
@@ -272,12 +277,19 @@ public class VerifyJobConfig {
      *
      * <p><b>같은 청크 트랜잭션에서 나간다.</b> 갈라 놓으면 이력을 다시 접어야 하고
      * 접기 구현이 두 벌이 되며, 재시작 뒤에 상태는 있는데 검출은 없는 구간이 생긴다.
+     *
+     * <p>반환 타입이 {@link ItemStreamWriter} 인 것이 중요하다. {@code ItemWriter} 로 좁히면
+     * {@code @StepScope} 프록시가 JDK 프록시가 되어 그 인터페이스만 노출하고, Spring Batch 의
+     * {@code writer instanceof ItemStream} 검사가 실패해 스트림으로 등록되지 않는다.
+     * 지금은 델리게이트 둘 다 상태가 없어 무해하지만, 상태를 가진 라이터를 하나 더 넣는 순간
+     * {@code open()} 이 영원히 안 불려 "재시작 후 일부 구간만 안 써짐" 으로 나타난다.
      */
     @Bean
     @StepScope
-    public ItemWriter<ReplayResult> replayWriter(
+    public ItemStreamWriter<ReplayResult> replayWriter(
             AsOfStateRepository asOfStates,
             VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings,
             @Value("#{jobExecutionContext['" + RUN_ID_KEY + "']}") Long runId
     ) {
         if (runId == null) {
@@ -288,7 +300,7 @@ public class VerifyJobConfig {
         CompositeItemWriter<ReplayResult> writer = new CompositeItemWriter<>();
         writer.setDelegates(List.of(
                 new AsOfStateItemWriter(asOfStates, runId),
-                new IllegalTransitionItemWriter(findings, runId)));
+                new IllegalTransitionItemWriter(findings, runId, maxFindings)));
 
         return writer;
     }

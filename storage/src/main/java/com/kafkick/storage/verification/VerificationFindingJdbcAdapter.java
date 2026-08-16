@@ -37,6 +37,12 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                 actual   = new.actual
             """;
 
+    /**
+     * 한 번에 보낼 행 수. 전량을 한 배열로 만들면 검출 객체와 파라미터 배열이 동시에 살아
+     * 상한 직전에서 메모리가 두 배가 된다 — 상한이 막으려던 그 실패가 상한 안에서 일어난다.
+     */
+    private static final int BATCH_SIZE = 1_000;
+
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
     public VerificationFindingJdbcAdapter(NamedParameterJdbcTemplate jdbcTemplate) {
@@ -49,11 +55,15 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
             return;
         }
 
-        SqlParameterSource[] batch = findings.stream()
-                .map(finding -> toParams(runId, finding))
-                .toArray(SqlParameterSource[]::new);
+        for (int from = 0; from < findings.size(); from += BATCH_SIZE) {
+            int to = Math.min(from + BATCH_SIZE, findings.size());
 
-        jdbcTemplate.batchUpdate(UPSERT, batch);
+            SqlParameterSource[] batch = findings.subList(from, to).stream()
+                    .map(finding -> toParams(runId, finding))
+                    .toArray(SqlParameterSource[]::new);
+
+            jdbcTemplate.batchUpdate(UPSERT, batch);
+        }
     }
 
     private static SqlParameterSource toParams(long runId, VerificationFinding finding) {

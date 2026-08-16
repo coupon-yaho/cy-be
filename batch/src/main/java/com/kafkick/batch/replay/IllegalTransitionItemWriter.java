@@ -22,15 +22,31 @@ import com.kafkick.core.verification.replay.ReplayResult;
  *
  * <p>이력 한 행은 위반을 많아야 하나 냅니다({@link IllegalTransition}). 그래서 여기서
  * 중복 제거를 하지 않아도 {@code uk_run_finding} 과 어긋나지 않습니다.
+ *
+ * <p><b>누적 상한을 둡니다.</b> 규칙 셋 중 모수가 가장 큽니다 — V3·V5 는 발급건 300만인데
+ * 여기는 이력 534만이고, 전 행이 자바 객체를 통과하는 유일한 규칙입니다. 전이표에서 한 줄만
+ * 빠져도 그 사건의 이력이 <b>전부</b> 위반이 되어 수백만 행이 쌓이고, 그러면 실패가
+ * "검증기 고장" 이 아니라 "데이터가 수백만 건 깨졌다" 로 보입니다.
+ *
+ * <p>재시작하면 카운터가 0부터 다시 셉니다. 상한의 목적이 폭주 감지이지 정확한 총계가 아닙니다.
  */
 public class IllegalTransitionItemWriter implements ItemWriter<ReplayResult> {
 
     private final VerificationFindingRepository findings;
     private final long runId;
+    private final int maxFindings;
 
-    public IllegalTransitionItemWriter(VerificationFindingRepository findings, long runId) {
+    private long written;
+
+    public IllegalTransitionItemWriter(
+            VerificationFindingRepository findings, long runId, int maxFindings) {
+        if (maxFindings < 1) {
+            throw new IllegalArgumentException("검출 상한은 1 이상이어야 합니다. 값=" + maxFindings);
+        }
+
         this.findings = findings;
         this.runId = runId;
+        this.maxFindings = maxFindings;
     }
 
     @Override
@@ -42,6 +58,13 @@ public class IllegalTransitionItemWriter implements ItemWriter<ReplayResult> {
                 .toList();
 
         findings.appendAll(runId, detected);
+
+        written += detected.size();
+        if (written > maxFindings) {
+            throw new IllegalStateException(
+                    "V4 검출이 상한에 닿았습니다. 전이표를 의심하십시오. 상한=" + maxFindings
+                            + " 누적=" + written);
+        }
     }
 
     private static VerificationFinding toFinding(IllegalTransition illegal) {
