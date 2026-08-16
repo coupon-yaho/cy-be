@@ -9,7 +9,6 @@ import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
-/** 허용 문자 판정 자체는 {@link HeaderValuesTest} 가 다룬다. 여기서는 필터 동작만 본다. */
 class RequestIdFilterTest {
 
     private static final String HEADER = "X-Request-Id";
@@ -32,17 +31,22 @@ class RequestIdFilterTest {
     }
 
     @Test
-    @DisplayName("안전한 값은 그대로 응답 헤더로 반사한다")
-    void reflectsSafeValue() throws Exception {
-        assertThat(run("abc-123:456").getHeader(HEADER)).isEqualTo("abc-123:456");
+    @DisplayName("클라이언트 값 대신 서버 상관 ID를 사용한다")
+    void replacesClientValue() throws Exception {
+        assertThat(run("abc-123:456").getHeader(HEADER))
+                .isNotEqualTo("abc-123:456")
+                .matches("[0-9a-f]{32}");
     }
 
     @Test
-    @DisplayName("위험한 값은 버리고 새로 만든다 — 헤더 반사로 인젝션되면 안 된다")
-    void replacesUnsafeValue() throws Exception {
-        String unsafe = "a\tb\"c";
+    @DisplayName("같은 클라이언트 값을 보내도 요청마다 다른 ID를 만든다")
+    void generatesUniqueValueForEachRequest() throws Exception {
+        String first = run("client-id").getHeader(HEADER);
+        String second = run("client-id").getHeader(HEADER);
 
-        assertThat(run(unsafe).getHeader(HEADER)).isNotEqualTo(unsafe).matches("[0-9a-f]{32}");
+        assertThat(first).isNotEqualTo(second);
+        assertThat(first).matches("[0-9a-f]{32}");
+        assertThat(second).matches("[0-9a-f]{32}");
     }
 
     @Test
@@ -56,7 +60,7 @@ class RequestIdFilterTest {
     void mdcMatchesResponseHeaderDuringChain() throws Exception {
         String reflected = run("abc-123:456").getHeader(HEADER);
 
-        assertThat(mdcInsideChain).isEqualTo(reflected).isEqualTo("abc-123:456");
+        assertThat(mdcInsideChain).isEqualTo(reflected).matches("[0-9a-f]{32}");
     }
 
     @Test
