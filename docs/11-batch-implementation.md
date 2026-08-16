@@ -302,17 +302,28 @@ asof_state
 
 Step 순서는 결정론 규칙이 먼저다 — 폭주로 중단돼도 결정론적 부분은 이미 확보된다.
 
+지금 배선된 것 — `VerifyJobConfig#verifyJob` 의 Step 체인 그대로다.
+
 ```
-실행 기록      startRunStep       실행 행 생성 + 훑을 경계 얼리기 + 선행 조건 검사
-Step 0        replayStep         asof_state 생성  +  V4        접기 한 번에 산출물 둘
-사용 건수      usageCountStep     활성 사용을 집계 조인 한 문장으로
-────── 완전 결정론 ──────
-Step 1 V5     Step 2 V2
-────── 현재 행을 읽음 ──────
-Step 3 V3     Step 4 V1     Step 5 V6
-Step 6 통계(CLEAN 만)   Step 7 finalize
-마감          assertFrozenStep   실행 중 발급건이 갱신되지 않았는지 다시 확인
+startRunStep         실행 행 생성 + 훑을 경계 얼리기 + 선행 조건 검사
+replayStep           asof_state 생성  +  V4          접기 한 번에 산출물 둘
+usageCountStep       활성 사용을 집계 조인 한 문장으로
+usageMismatchStep    V5     결정론
+replayMismatchStep   V3     현재 행을 읽는다
+assertFrozenStep     실행 중 발급건이 갱신되지 않았는지 다시 확인
 ```
+
+뒤에 붙을 것 — **아직 구현되지 않았다.** 자리는 결정론 규칙이 먼저라는 원칙으로 정해진다.
+
+```
+V5 뒤에      V2     asof_state ⋈ issuances 집계        결정론
+V3 뒤에      V1     asof_state 집계 ↔ coupon_stocks     현재 행
+             V6     issued_grade 스냅샷 ↔ 자격 마스크    현재 행
+마지막        통계(CLEAN 만) → finalize(판정·checksum·지문)
+```
+
+`assertFrozenStep` 은 규칙이 늘어도 **항상 마지막**이다. 현재 행을 읽는 규칙이 전부 끝난 뒤에
+확인해야 그 사이 갱신을 잡는다.
 
 **V4 는 Step 0 안에 있다.** 별도 Step 이면 이력 534만 행을 다시 접어야 하고, 접기 구현이 두 벌로
 갈라져 `asof_state` 와 V4 가 서로 다른 말을 하게 된다. **순서의 주인은 `VerifyJobConfig#verifyJob`
