@@ -495,6 +495,7 @@ startRunStep         실행 행 생성 + 훑을 경계 얼리기 + 선행 조건
 replayStep           asof_state 생성  +  V4          접기 한 번에 산출물 둘
 usageCountStep       활성 사용을 집계 조인 한 문장으로
 usageMismatchStep    V5     결정론
+duplicateIssuanceStep V2    결정론
 replayMismatchStep   V3     현재 행을 읽는다
 stockMismatchStep    V1     현재 행을 읽는다
 gradeViolationStep   V6     현재 행을 읽는다
@@ -507,7 +508,7 @@ assertFrozenStep     실행 중 발급건·재고·정책(회차+등급)이 얼�
 *"데이터는 그대로인데 검증기가 비결정적"* 이라, 판정표에서 가장 찾기 어려운 칸에 잘못 떨어진다.
 
 그래서 현재 행을 읽는 규칙들과 같은 구간에 두고, **정책 축은 지문으로 얼린다.**
-`coupons` 에는 `updated_at` 이 없어 시각으로 못 보지만 **147행이라 값을 접으면 된다.**
+`coupons` 에는 `updated_at` 이 없어 시각으로 못 보지만 **CLEAN 147 · CORRUPT 291 행이라 값을 접으면 된다.**
 
 ```
 startRunStep      CONCAT(COUNT(*), ':', HEX(BIT_XOR(SHA2(종류 ⋮ 키 ⋮ 값) 상위 64비트)))  →  잡 컨텍스트
@@ -518,14 +519,60 @@ assertFrozenStep  다시 계산해 다르면 거부
 V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 같은 경로로 들어온다.
 축은 이제 셋이다 — **발급건 · 재고 · 정책(회차 마스크 + 등급 비트).**
 
-`GROUP_CONCAT` 은 쓰지 않는다 — `group_concat_max_len` 기본 1024 바이트를 넘으면 경고만 내고 잘려서 **가드가 열린 채로 실패한다.** 회차 147행이 실측 920 바이트로 이미 90% 다.
+`GROUP_CONCAT` 은 쓰지 않는다 — `group_concat_max_len` 기본 1024 바이트를 넘으면 경고만 내고 잘려서 **가드가 열린 채로 실패한다.** **CLEAN 147행이 실측 920 바이트로 한계의 90% 이고, CORRUPT 291행이면 약 1820 바이트로 이미 넘는다.**
+지금 안 잘리는 것은 `GROUP_CONCAT` 을 안 쓰기 때문이지 여유가 있어서가 아니다.
 
 뒤에 붙을 것 — **아직 구현되지 않았다.**
 
 ```
-V5 뒤에      V2     asof_state ⋈ issuances 집계        결정론
 마지막        통계(CLEAN 만) → finalize(판정·checksum·지문)
 ```
+
+### V2 는 케이스가 둘인데 규칙은 하나다
+
+```
+케이스 1  GROUP BY coupon_id, member_id  HAVING COUNT(*) > 1    오염 유형 6
+케이스 2  GROUP BY coupon_id, code       HAVING COUNT(*) > 1    오염 유형 5
+          MIN(id) 는 원본이라 빼고, 복제본의 member 로 키를 만든다
+```
+
+둘을 별도 규칙으로 나누면 `target_key` 형식이 같아 **같은 행이 두 규칙에 잡히고** 집합 비교가
+어긋난다. `FindingType` 이 *"V7 같은 규칙을 새로 만들지 않는다"* 를 못 박은 이유가 이것이다.
+
+**케이스 2 에서 `MIN(id)` 를 빼지 않으면 원본 회원까지 검출된다.** 오염 100건이 200건으로
+부풀어 오탐이 되고, 합격 조건이 "누락 0 · 오탐 0" 이라 게이트가 통째로 떨어진다.
+
+**둘을 `UNION` 으로 합친다 — `UNION ALL` 이면 안 된다.** 한 회원이 두 케이스에 다 걸리면
+같은 키가 두 번 나오고, 잡에서는 `uk_run_finding` 중복키로 **실행 전체가 죽는다.**
+
+`updated_at <= asOf` 는 **집계 안팎에 모두** 건다. 안쪽을 안 자르면 `asOf` 이후 행이
+`COUNT(*)` 를 올려 **그 시점에는 없던 중복이 보인다.**
+
+### CORRUPT 스키마 모양은 시드 저장소가 원본이다
+
+V2 가 잡는 두 케이스는 CLEAN 에서 **물리적으로 심을 수 없다.** 제약이 막는다.
+
+```
+uk_coupon_member          유형 6 — 같은 회원 2건
+issuances.code (UNIQUE)   유형 5 — 같은 code 복제
+ck_stock_range            유형 1(+1) · 3(-1) — 재고를 범위 밖으로
+```
+
+시드 저장소가 `ddl/11_constraints_clean.sql`(거는 쪽)과 `ddl/12_constraints_corrupt.sql`
+(안 거는 쪽)으로 갈라 두었고, **실제 `coupon_corrupt` 스키마는 그쪽이 만든다.**
+
+cy-be 는 그 모양을 테스트에서 재현할 뿐이라
+`storage/src/testFixtures/resources/db/corrupt/V900__drop_clean_only_constraints.sql` 에 둔다 —
+`main` 에 두면 jar 에 실려 **cy-be 가 CORRUPT 스키마의 두 번째 주인처럼 보이고**, 둘이 어긋나도
+아무도 모르게 된다. 쓰는 쪽은 `@CorruptRepositoryTest` 이고 Flyway 로케이션 한 줄만 다르다.
+
+> `uk_coupon_member` 는 `(coupon_id, member_id)` 라 `coupon_id` FK 가 쓰는 유일한 인덱스이기도 하다.
+> 그냥 떨어뜨리면 MySQL 이 막으므로 **대체 인덱스를 먼저 깐다.** 시드 쪽 CORRUPT 는 그 유니크가
+> 애초에 없어 FK 를 걸 때 MySQL 이 자동 생성하는데, 여기서는 있는 것을 떼는 순서라 손으로 만들어 준다.
+
+`ck_stock_range` 는 `V1__init_schema.sql:289` 가 문서로 적어만 두고 실제 DDL 이 빠져 있었다.
+`V5__stock_range_check.sql` 로 CLEAN 경로에 세운다 — 불변식을 DB 제약으로 표현한다는
+PRD 설계 원칙 1번이고, 적어만 두고 안 건 것은 원칙을 어긴 것이다.
 
 ### V1 은 V3 와 정반대로 드라이빙을 잡는다
 
@@ -542,7 +589,7 @@ coupon_stocks 드라이빙   재고 행이 없는데 발급이 쌓인 회차를 
 coupons 드라이빙         둘 다 본다
 ```
 
-회차는 147개뿐이라 **전수 비용이 어느 쪽이든 같다.** 그러니 둘 다 보는 쪽을 고른다.
+회차는 CLEAN 147 · CORRUPT 291 개뿐이라 **전수 비용이 어느 쪽이든 같다.** 그러니 둘 다 보는 쪽을 고른다.
 
 활성은 `ISSUED`·`USED` 다 — 컬럼 주석이 못 박은 **현재 보유량**이지 누적 발급 수가 아니다.
 `CANCELLED`·`EXPIRED` 는 재고로 돌아간 것이라 빠진다.
@@ -573,7 +620,9 @@ seedgen/config.py
   CORRUPT_V1_TYPE3_SLOT = (100, 200)    유형 3 → 과거 회차 [100, 200)
 ```
 
-**① 회차 수** — CORRUPT 는 12 × 24 = 288 개다. 200행이 나온다.
+**① 회차 수** — CORRUPT 는 과거 12 × 24 = 288 에 현재 회차 3 을 더해 **291개**다
+(`corrupt.py` 첫머리가 "24개월 달력(291회차)" 이라고 적는다). 200행이 나온다.
+CLEAN 의 147 도 같은 셈이다 — 과거 144 + 현재 3. **두 숫자의 기준을 섞지 말 것.**
 
 **② 유형 1·3 의 겹침** — 슬롯이 서로소로 나뉘어 있다. `corrupt.py` 첫머리가 그 이유를 적어 둔다 —
 *"V1 은 회차 그레인이라 유형 1 과 유형 3 이 같은 회차에 겹치면 target_key 가 충돌한다"*.
@@ -600,11 +649,7 @@ t.active_count[coupon.id] = active_replay + quota.stock_delta
 > 그쪽 코드를 근거로 대지 못하는 주장은 적지 않는다.
 
 
-주입기가 `active_count` 를 함께 보정하면 풀리는데, 그러면 `updated_at` 도 건드리게 되므로
-**`asOf` 이하 값을 찍어야 한다.**
-
-②가 아니오면 상쇄로 인한 미검출이 생기고, 양방향 MINUS 에서 **누락으로만 보인다** —
-오탐이 0이라 검증기를 아무리 뒤져도 원인이 안 나온다.
+위 ①②③ 에서 전부 확인 완료 — 시드가 이미 보정한다.
 
 **판정 티켓의 방어** — 게이트가 `expected_findings` 를 읽을 때
 `COUNT(*)` 와 `COUNT(DISTINCT target_key)` 를 비교해 다르면 먼저 죽인다.
@@ -640,9 +685,10 @@ SILVER·GOLD 가 위반이다. 테스트가 그 마스크를 못 박고 있다.
 
 **`grades` 에 없는 등급 문자열도 위반이다.** 그래서 `LEFT JOIN` 이다 — `INNER JOIN` 이면 그 행이
 조용히 빠져 미검출이 된다. 다만 CLEAN 스키마에서는 FK(`V1__init_schema.sql:641`)가 그 상태를
-물리적으로 막아 **검출 테스트를 여기서 쓸 수 없다.** `uk_coupon_member` 가 V2 를 막는 것과 같은 부류라,
-제약을 떼는 오염셋 티켓에서 붙는다. 지금은 그 FK 가 아직 있다는 것을 테스트가 고정한다 —
-누가 떼면 빨개지고, 그것이 검출 테스트를 붙이라는 신호다.
+물리적으로 막아 **검출 테스트를 여기서 쓸 수 없다.** `uk_coupon_member` 가 V2 를 막는 것과 같은 부류다.
+**다만 그 FK 는 `V900` 이 떼지 않는다** — 시드 저장소의 CORRUPT 도 등급 FK 는 그대로 둔다.
+그래서 지금도 그 FK 가 있다는 것을 테스트가 고정한다. 누가 떼면 빨개지고,
+그것이 V6 검출 테스트를 붙이라는 신호다.
 
 `assertFrozenStep` 은 규칙이 늘어도 **항상 마지막**이다. 현재 행을 읽는 규칙이 전부 끝난 뒤에
 확인해야 그 사이 갱신을 잡는다. 축이 늘면 여기도 같이 늘어야 한다 — 지금은 발급건·재고·정책(회차+등급) 셋이다.
@@ -655,8 +701,9 @@ SILVER·GOLD 가 위반이다. 테스트가 그 마스크를 못 박고 있다.
 > 시드는 이력을 지우지 않고 재고만 올려 같은 어긋남을 만든다. 판정 기준은 `matrix` 이고
 > `desc` 는 산문이다 — `AsOfStateRepository` javadoc 에 같은 내용이 적혀 있다.
 
-`V2` 가 결정론 구간에 있는 이유 — `asof_state` 에 `member_id` 가 없어 `issuances` 를 읽지만,
-**세는 대상이 "행의 존재"와 `code` 라 둘 다 변하지 않는다.**
+`V2` 가 결정론 구간에 있는 이유 — `issuances` 만 읽는데 그 테이블에는 `updated_at` 이 있어
+`updated_at <= asOf` 로 완전히 자를 수 있다. 가드도 `hasIssuancesUpdatedAfter` 가 이미 갖고 있어
+새로 만들 것이 없다. 현재 행을 읽는 V1·V6 과 다른 점이 이것이다.
 
 ### 오염 주입은 계약이 정한 규칙만 울려야 한다
 
