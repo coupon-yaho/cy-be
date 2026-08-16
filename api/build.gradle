@@ -7,6 +7,14 @@ dependencies {
     // 어댑터는 런타임에만. api 가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
     runtimeOnly project(':storage')
     testImplementation testFixtures(project(':storage'))
+    // ApiResolvedConfigTest 가 HikariConfig 로 바인딩을 걸어 프로퍼티 이름 오타를 잡는다.
+    // storage 를 타고 런타임에는 오지만 직접 쓰므로 명시한다. 버전은 Boot BOM 이 준다.
+    testImplementation 'com.zaxxer:HikariCP'
+    // 같은 이유로 FlywayProperties 도 명시한다. api 가 마이그레이션 소유자라
+    // Flyway 키 오타가 가장 위험한데, 그 서브트리를 바인딩해야 잡힌다.
+    testImplementation 'org.springframework.boot:spring-boot-flyway'
+    // DataSourceProperties 가 여기 있다. spring-boot-jdbc-test 를 타고 오지만 직접 쓰므로 명시한다.
+    testImplementation 'org.springframework.boot:spring-boot-jdbc'
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'

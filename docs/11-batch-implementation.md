@@ -233,6 +233,192 @@ core/src/main/java/com/kafkick/core/
 `CouponStateMachine` 이 `core/coupon` 에 있는 이유는 **런타임도 같은 클래스를 써야 하기 때문**이다.
 검증 전용 패키지에 두면 두 벌로 갈라져 같은 버그를 양쪽이 재현한다.
 
+### `application.yml` 은 문서가 둘이다 — `---` 를 지우면 설정이 조용히 죽는다
+
+`batch/application.yml` 은 `spring.config.import: classpath:storage.yml` 로 DB 설정을 가져온다.
+**들어온 storage.yml 이 그것을 선언한 문서를 이긴다.** 직관과 반대다.
+
+실측으로 드러난 상태다 — 관측 담당자가 batch 컨텍스트에서 `Environment` 를 직접 찍었다.
+
+| 키 | batch 가 적은 값 | 실제로 뜬 값 | |
+|---|---|---|---|
+| `spring.flyway.enabled` | `false` | `true` | storage.yml 이 이김 |
+| `spring.datasource.hikari.maximum-pool-size` | `4` | `10` | storage.yml 이 이김 |
+| `spring.datasource.hikari.pool-name` | `batch-pool` | `batch-pool` | storage.yml 에 같은 키가 없음 |
+
+**에러도 경고도 없다.** 기동은 되고 값만 다르다. 그래서 두 결정이 동시에 깨져 있었다 —
+마이그레이션 소유자를 api 하나로 두기로 한 것과, 배치 풀을 런타임과 나누기로 한 것.
+
+고치는 방법은 `---` 하나다. 같은 파일 안에서 **import 를 선언한 문서보다 뒤 문서가 이긴다.**
+
+```yaml
+spring:
+  config:
+    import: classpath:storage.yml
+  # 여기 적은 값은 storage.yml 에 같은 키가 있으면 진다
+---
+# storage.yml 을 덮어쓸 값은 전부 이 아래
+spring:
+  flyway:
+    enabled: false
+```
+
+덮어쓸 값만 `---` 아래 둔다. 무관한 키를 아래로 내리면 **충돌 검사 범위가 조용히 줄어든다** —
+검사는 앞 문서만 훑기 때문에, 나중에 storage.yml 에 같은 키가 생겨도 아무도 모르게 된다.
+
+Flyway 를 끄는 이유는 계층 2 의 불변식이다 — 검증 배치가 DDL 권한을 쥐면
+*"원본 테이블에 쓰지 않는다"* 가 스키마 수준에서 깨진다.
+
+**대가는 배포 순서 의존인데, 지금은 그 위반이 조용하다.** batch 에는 `@Entity` 가 없어
+`ddl-auto: validate` 가 공허하게 통과하고 `initialize-schema: never` 라 메타 테이블도 안 본다.
+`@Scheduled`·`@RestController` 도 아직 0건이다. 그래서 **빈 DB 에서도 기동이 그냥 성공한다.**
+실패는 잡 실행 시점의 "테이블 없음" SQL 에러로 늦게 나타나고, 스택트레이스가 SQL 계층이라
+*"배포 순서를 틀렸다"* 가 아니라 *"검증 배치가 깨졌다"* 로 읽힌다.
+
+관측할 신호도 없다 — actuator 의존성이 저장소에 없어 **헬스 엔드포인트 자체가 없다.**
+톰캣만 뜨고 매핑은 0개다. 프로세스가 살아 있다는 것 말고는 밖에서 알 수 있는 게 없다.
+
+기동 시점 가드는 **compose 가 들어오는 티켓의 몫**으로 남긴다. 지금은 compose 파일 자체가 없어
+강제할 순서도 없고, 배치를 띄우는 경로가 테스트 말고 없다. 넣을 때는 `ApplicationRunner` 로
+둔다 — 컨텍스트 refresh 이후에 돌아 `FlywayMigrationInitializer` 보다 확실히 뒤에 온다.
+`InitializingBean` 은 그 순서가 보장되지 않으니 쓰지 않는다.
+
+### 풀 크기 손잡이가 바뀌었다
+
+이 변경 전에는 storage.yml 이 이겨서 **batch 풀도 `DB_POOL_SIZE` 가 움직였다.**
+이제 `BATCH_DB_POOL_SIZE` 다. `DB_POOL_SIZE` 만 주던 배포는 batch 쪽이 10 에서 4 로 바뀐다.
+
+### 테스트가 지킨다 — 실패 원인이 갈리도록 나눴다
+
+```
+ConfigImportPrecedenceRuleTest       Spring 규칙 자체. 깨지면 Boot 가 규칙을 바꾼 것이다
+ConfigImportPrecedenceOverlapTest    겹침 판정 규칙(storage). 깨지면 판정기가 헐거워진 것이다
+BatchConfigPrecedenceTest            batch .example 파싱. 깨지면 우리가 키를 잘못 둔 것이다
+ApiConfigPrecedenceTest              api 쪽 같은 검사. 판정기는 storage 픽스처로 공유한다
+ResolvedBatchConfigTest              Boot 로 실제 로드해 값을 본다. 깨지면 결과가 틀린 것이다
+ApiResolvedConfigTest                api 쪽 같은 계층. HermeticBoot 도 픽스처로 공유한다
+```
+
+**파싱만으로는 부족하다.** SnakeYAML 이 잡는 것은 문법과 중복 키뿐이고, **Boot 단계에서만 드러나는 것**은
+전부 통과한다 — 기본값 없는 플레이스홀더, import 가 없는 파일을 가리키는 경우,
+Hikari·Flyway 프로퍼티 **이름 오타**.
+
+마지막이 가장 나쁘다. **운영 기동을 죽이지 않는다** — `@ConfigurationProperties` 의
+`ignoreUnknownFields` 기본값이 `true` 라(Boot 4.1.0 바이트코드 확인) 모르는 키는 **예외 없이
+무시되고 기본값이 뜬다.** 그래서 compose 가 들어와 기동 스모크 테스트가 생겨도 이 검사를 대체하지 못한다.
+`ApiResolvedConfigTest` 가 `NoUnboundElementsBindHandler` 로 DB 없이 잡는 것이 **유일한 검출 지점**이다 —
+기본 `Binder` 도 모르는 프로퍼티를 조용히 무시하므로 그 핸들러 없이는 검증하는 척만 한다.
+
+**`batch.*` 는 다른 방식으로 죽는다.** storage.yml 과 겹칠 상대가 없어 위 검사들이 못 본다.
+키 경로가 틀리면 `@Value` 가 기본값으로 폴백하고 에러도 경고도 없는데, 하필
+`.example` 의 값과 `@Value` 기본값이 **글자까지 같아서** `Environment` 를 찍어 봐도
+*"적힌 값이 떴다"* 로 보인다 — 이 절을 만든 사고보다 한 단계 더 조용하다.
+그래서 `ResolvedBatchConfigTest` 가 **기본값과 다른 값**을 주입해 키 경로가 살아 있는지 본다.
+크론 다섯은 읽는 코드가 아직 0건이라 `CronExpression.parse` 로 문법만 미리 잡아 둔다.
+
+**겹침은 문자열 일치가 아니다.** Boot 는 프로퍼티 트리로 바인딩하므로 판정도 트리로 해야 한다.
+
+```
+a  vs  a[0]      같은 컬렉션 — 상위 소스가 잎을 주면 하위의 [0] 은 통째로 사라진다
+a[0] vs a[1]     같은 컬렉션 — Boot 는 항목을 준 첫 소스에서 멈춘다
+a-b  vs  aB      같은 프로퍼티 — relaxed binding
+logging.level.*  예외 — Map 은 소스별 엔트리를 합친다. 조상 관계여도 둘 다 산다
+```
+
+마지막이 중요하다. Map 루트를 겹침으로 잡으면 **정당한 키를 실패시키면서 메시지가
+`---` 아래로 내리라고 반대로 안내한다.** 그러면 그 키는 옮겨져도 효과가 없고 검사 밖에 영구히 남는다.
+
+**키 위치만 보는 것은 `BatchConfigPrecedenceTest` 와 `ApiConfigPrecedenceTest` 둘이다.** 그래서 뒤 문서에
+`spring.config.activate.on-profile` 이 붙어 **문서가 통째로 비활성화돼도** 키 위치는 그대로라 통과한다.
+`ResolvedBatchConfigTest` 가 결과값으로 그 틈을 메우는데, **덮개가 전면적이지는 않다** —
+하드코딩한 네 프로퍼티(`flyway.enabled` · `maximum-pool-size` · `pool-name` · `datasource.url`)만 본다.
+
+**api 도 같은 두 층을 갖는다.** `HermeticBoot` 와 판정기를 storage 픽스처로 올려 두 모듈이 공유한다 —
+`---` 를 기다리지 않은 이유는, api 의 `.example` 이 저장소 어디에서도 Boot 로 로드되지 않는 상태였고
+하필 마이그레이션을 쥔 쪽이 그랬기 때문이다.
+
+그 키를 예외로 허용하는 목록은 **두지 않았다.** 저장소에 프로파일이 0건이라
+오늘 없는 문제에 구멍을 내는 셈이고, 예외로 뚫은 키는 그대로 검사 밖에 영구히 남는다.
+프로파일을 쓰게 되는 날 이 검사가 빨개지고, 그때 전제부터 다시 보면 된다 — 실패 메시지에 적어 뒀다.
+
+`ConfigImportPrecedenceRuleTest` 는 우리 파일을 보지 않는다. `batch/src/test/resources/precedence/`
+의 합성 yml 세 벌로 **Spring 규칙만 재현한다.** 이것이 빨간 것은 우리 설정이 아니라
+Boot 가 규칙을 바꿨다는 뜻이다 — `.example` 을 뒤지면 안 된다.
+
+컨텍스트를 띄우는 둘은 `HermeticBoot` 를 쓴다. **`systemProperties` 와 `systemEnvironment` 를
+아예 붙이지 않는다.** 두 소스는 설정 파일보다 높아서, 셸에 `SPRING_FLYWAY_ENABLED` 나
+`SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` 가 있으면 파일과 무관하게 값이 바뀐다.
+커맨드라인 인자로 로케이션만 고정하는 것으로는 못 막는다 — **단언 대상 프로퍼티 자체**의
+relaxed 표기가 그대로 들어오기 때문이다.
+
+더 나쁜 쪽은 거짓 빨강이 아니라 **거짓 초록**이다. Compose 표기를 셸에 export 해 둔 사람 앞에서는
+`---` 를 지워도 통과한다 — *조용히 죽는 설정*이 그것을 잡으라고 만든 테스트를 통과하는 셈이다.
+밀폐가 깨졌는지는 테스트가 스스로 확인한다. 부팅 전에 `spring.flyway.enabled=true` 를
+시스템 프로퍼티로 심어 두고, 그 값이 결과에 나오면 실패한다.
+
+`.example` 을 직접 읽는 것은 `BatchConfigPrecedenceTest`·`ApiConfigPrecedenceTest` 둘이고, `ResolvedBatchConfigTest` 는 빌드가 만든 그 사본을 읽는다. 실제 `application.yml` 은 gitignore 대상이라 사람마다 다르고 CI 에는 없다.
+**저장소가 지킬 수 있는 것이 `.example` 뿐이라는 뜻이고, 두 파일을 같이 고쳐야 하는 이유이기도 하다** —
+`.example` 만 고치면 이미 복사해 쓰는 사람은 낡은 설정으로 뜨고 그의 `./gradlew test` 는 초록이다.
+
+### 이 절에서 일부러 안 한 것
+
+리뷰에서 나왔지만 **오늘 결함이 아니라 대칭 문제**라 조건만 적어 둔다. 조건이 만족되는 날 하면 된다.
+
+| 미룬 것 | 언제 하나 |
+|---|---|
+| batch 에도 `NoUnbound` 바인딩 층 | batch 의 모듈 전용 `spring.*` 는 4키다. 그중 하나라도 오타가 나거나 키가 늘면 |
+| 사본(`resolved/application.yml`) 중복 리소스 가드 | `.example` 을 가진 **세 번째 모듈**이 생기는 날. 그때 `ConfigImportPrecedence.only()` 와 같은 판정으로 맞춘다 |
+| `@Value` 스캔을 패키지 전체로 | 지금 `@Value` 는 `VerifyJobConfig` 13곳이 전부다. 스케줄러·API 가 배선되면 그때 `ClassPathScanningCandidateComponentProvider` 로 넓힌다 |
+| `--spring.config.location` 문자열 상수화 | 경로가 바뀌면 "복사본이 아예 없다" 로 **시끄럽게** 죽는다. 조용히 깨지지 않아 급하지 않다 |
+
+**여기서 멈춘 기준은 "지적이 0건인가" 가 아니라 "배포 동작이나 거짓 초록에 영향이 있는가" 다.**
+전자를 종료 조건으로 두면 고칠 때마다 새 코드가 생기고 리뷰어가 그것을 또 보므로 구조적으로 안 끝난다.
+
+> ⚠️ **이것들을 돌리는 CI 가 아직 없다.** `.github/workflows/` 넷 중 Gradle 을 실행하는 것이 하나도 없어
+> (`grep -rn gradlew .github/workflows/` → 0건), 지금 이 방어선은 **사람이 로컬에서 돌릴 때만** 선다.
+> 빌드 잡 추가는 저장소 전체 사안이라 별도 티켓이다.
+>
+> 그 티켓은 **`./gradlew test`(전 모듈)를 불러야 한다.** 겹침 판정을 지키는
+> `ConfigImportPrecedenceOverlapTest` 는 `:storage:test` 에 있는데, `batch`·`api` 는 storage 의
+> **testFixtures 산출물**에만 의존하지 그 모듈의 test 태스크에 의존하지 않는다.
+> `./gradlew :batch:test` 만 돌리면 판정기가 헐거워져도 아무 신호가 없다.
+
+CY-179(관측 전용 DataSource)가 머지되면 관측 풀 이름의 자리는 **storage.yml 이 그 키를
+정의하는지로 갈린다** — 정의하면 `---` 아래(덮어쓰기), 정의하지 않으면 첫 문서(새 키)다.
+인수인계 문서는 storage.yml 이 정의한다고 했지만 아직 어느 브랜치에도 없어서,
+**지금 상태의 정답은 첫 문서다.** 주석 말고 `BatchConfigPrecedenceTest` 가 어느 쪽이라고 하는지를 믿는다.
+
+그 키가 생기기 전까지 `OBS_POOL_NAME` 은 **아무 데서도 읽히지 않는다** — 지금 줘도 효과가 없다.
+
+> ⚠️ **`api` 도 같은 구조라 가드를 함께 붙였다.** `api/application.yml.example` 은 같은
+> `spring.config.import` 를 쓰고 `---` 가 없다. 지금은 storage.yml 과 겹치는 키가 **0개**라
+> 활성 버그가 아니고, **api 가 datasource·flyway 키를 처음 적는 순간 활성화된다.**
+>
+> 조용히 죽는 키가 무엇인지는 따져 봐야 한다. **storage.yml 이 지금 값을 유지하는 한**
+> `baseline-on-migrate`(false)·`validate-on-migrate`(true)·`clean-disabled`(true) 는 무시돼도 시끄럽다 —
+> Flyway 가 기동 중에 예외를 던진다. 지금 조용한 것은 아래 표가 전부다.
+>
+> | 키 | 무시되면 | 얼마나 조용한가 |
+> |---|---|---|
+> | `spring.datasource.url` | **다른 DB 에 붙은 채로 전부 정상 동작한다** | 실패하는 것이 하나도 없다 |
+> | `spring.datasource.username`·`password` | 의도한 최소 권한 계정 대신 storage 계정으로 붙는다 | 신호 없음 |
+> | `spring.flyway.locations` | 추가한 로케이션의 마이그레이션이 실행되지 않는다 | 나중에 스키마 검증에서 |
+> | `spring.datasource.hikari.maximum-pool-size` | `max_connections=50` 배분이 깨진다 | 부하 때 |
+>
+> 맨 위가 가장 위험하다. 복제본으로 조회를 돌리려고 `url` 을 적었는데 무시되면 **primary 에 붙은 채로
+> 아무 일도 안 일어난다.** 복제본 분리가 됐다고 믿은 채 부하를 측정하게 된다.
+>
+> **값이 뒤집히면 이 표도 뒤집힌다.** storage 가 `clean-disabled: false` 가 되는 순간
+> api 가 적어 둔 `true` 는 조용히 죽고, 그때는 예외가 아니라 `flyway.clean()` 이 살아난다.
+> 그래서 판정은 이 표가 아니라 **검사기가 한다** — 세 키도 함께 잡는다.
+>
+> **마이그레이션 소유자가 api 라서** Flyway 를 만질 사람은 그 파일을 연다. 그때 빨개지지 않으면
+> 스키마가 잘못 마이그레이트된 채로 지나간다. 그래서 판정기를 `storage` testFixtures 로 올려
+> `api`·`batch` 가 같은 한 벌을 쓴다 — 모듈마다 복사하면 한쪽만 고쳐진다.
+>
+> ⚠️ 다만 이 브랜치는 `feature/CY-15`(배치 에픽) 아래라 **PR #6 이 머지되기 전까지 api 담당자에게 닿지 않는다.**
+> 그때까지는 이 문서가 전달 수단이다.
+
 ---
 
 ## 7. 글자 단위로 맞춰야 하는 계약

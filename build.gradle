@@ -41,6 +41,51 @@ subprojects {
     tasks.named('test') {
         useJUnitPlatform()
     }
+
+    // ── 설정 우선순위 검사용 .example 복사 ──────────────────────────────
+    //
+    // 저장소가 지키는 것은 .example 뿐이다. 실제 application.yml · storage.yml 은 gitignore
+    // 대상이라 사람마다 다르고 CI 에는 아예 없다. 그런데 Boot 는 .example 확장자로 파서를
+    // 못 고르므로, 읽을 수 있는 이름으로 복사해 실제로 뜨는 값을 테스트가 확인한다.
+    //
+    // resolved/ 아래에 둔다. 클래스패스 루트에 storage.yml 이라는 이름으로 놓으면 개발자가
+    // 실행용으로 만든 storage/src/main/resources/storage.yml 을 가린다 — 자기 파일 대신
+    // .example 을 읽으면서 그 사실을 알 방법이 없다. 그래서 import 경로도 함께 옮긴다.
+    //
+    // 여기 한 벌만 둔다. 모듈마다 복사하면 한쪽만 고쳐지고 다른 쪽은 낡은 규칙으로 통과한다 —
+    // ConfigImportPrecedence 를 storage 픽스처로 올린 이유와 같다.
+    // .example 을 가진 모듈에만 걸리므로 세 번째 모듈이 생겨도 따라온다.
+    plugins.withId('java') {
+        def moduleExample = file('src/main/resources/application.yml.example')
+        if (moduleExample.exists()) {
+            tasks.named('processTestResources') {
+                // filter·rename 클로저의 "본문" 은 어떤 방법으로도 태스크 입력에 올라가지 않는다.
+                // 치환 규칙이나 이름만 바꾸고 소스 yml 을 그대로 두면 UP-TO-DATE 로 건너뛰어
+                // 옛 산출물이 남고, 원본을 읽는 검사와 사본을 읽는 검사가 서로 다른 파일을 보면서
+                // 둘 다 통과한다 — clean 을 강제하는 CI 도 없다.
+                //
+                // 모듈당 복사 대상이 둘뿐이라 매번 도는 비용(수 ms, test 태스크는 내용 스냅샷이라
+                // 재실행되지 않는다)이 규약에 기대는 위험보다 싸다.
+                outputs.upToDateWhen { false }
+
+                // 기본값은 데몬 JVM 의 플랫폼 기본 문자셋이다. filter 를 타는 파일만 그 문자셋으로
+                // 다시 쓰이므로, JEP 400 이전 JDK 로 데몬이 뜨는 환경에서는 한글 주석이 깨진다.
+                filteringCharset = 'UTF-8'
+
+                from(moduleExample) {
+                    into 'resolved'
+                    rename { 'application.yml' }
+                    filter { line ->
+                        line.replace('classpath:storage.yml', 'classpath:/resolved/storage.yml')
+                    }
+                }
+                from(project(':storage').file('src/main/resources/storage.yml.example')) {
+                    into 'resolved'
+                    rename { 'storage.yml' }
+                }
+            }
+        }
+    }
 }
 
 jar {
