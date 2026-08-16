@@ -2,7 +2,9 @@ spring:
   application:
     name: coupon-api
   config:
-    import: classpath:storage.yml
+    import:
+      - classpath:storage.yml
+      - classpath:management.yml   # CY-09
 
   jackson:
     default-property-inclusion: non_null
