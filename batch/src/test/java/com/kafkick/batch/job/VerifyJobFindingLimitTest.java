@@ -74,7 +74,9 @@ class VerifyJobFindingLimitTest {
         JobExecution execution = launch();
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
-        assertThat(failureMessagesOf(execution)).anyMatch(m -> m.contains("검출이 상한에 닿았습니다"));
+        assertThat(failureMessagesOf(execution))
+                .as("상한을 가진 Step 이 넷이라 규칙을 특정하지 않으면 어느 쪽이 터져도 초록이다")
+                .anyMatch(m -> m.contains("replayMismatchStep 검출이 상한에 닿았습니다"));
     }
 
     @Test
@@ -114,6 +116,68 @@ class VerifyJobFindingLimitTest {
         illegalTransition();
 
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("V6 검출이 상한을 넘어도 잡을 멈춘다 — 규칙마다 상한이 따로 걸린다")
+    void stopWhenGradeViolationsExceedLimit() throws Exception {
+        gradeViolation();
+        gradeViolation();
+
+        JobExecution execution = launch();
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .as("V1 이 먼저 터져도 통과하면 이 테스트는 아무것도 지키지 않는다")
+                .anyMatch(m -> m.contains("gradeViolationStep 검출이 상한에 닿았습니다"));
+    }
+
+    @Test
+    @DisplayName("V6 검출이 정확히 상한이면 통과한다")
+    void passAtGradeViolationLimit() throws Exception {
+        gradeViolation();
+
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+    }
+
+    /**
+     * <b>V1 의 상한은 운영에서 도달하지 않는다.</b> 회차 수(147)가 곧 상한이고 기본값은 10000 이다.
+     * 그래도 배선은 확인한다 — {@code ruleStep} 이 규칙마다 같은 코드를 타므로,
+     * {@code maxFindings} 를 안 넘기거나 {@code limit + 1} 을 안 요청하는 실수가 여기서 드러난다.
+     */
+    @Test
+    @DisplayName("V1 검출이 상한을 넘어도 잡을 멈춘다 — 회차 수가 상한이라 운영에선 안 닿는다")
+    void stopWhenStockMismatchesExceedLimit() throws Exception {
+        stockMismatch();
+        stockMismatch();
+
+        JobExecution execution = launch();
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(m -> m.contains("stockMismatchStep 검출이 상한에 닿았습니다"));
+    }
+
+    @Test
+    @DisplayName("V1 검출이 정확히 상한이면 통과한다")
+    void passAtStockMismatchLimit() throws Exception {
+        stockMismatch();
+
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+    }
+
+    /** 회차를 새로 만들고 재고만 어긋내 — V1 하나만 울린다. */
+    private void stockMismatch() {
+        seed.newCoupon();
+        seed.overwriteStock(3);
+    }
+
+    /** 허용 집합에 없는 등급으로 발급 — V6 하나만 울린다. */
+    private void gradeViolation() {
+        seed.restrictCouponTo(12);           // {GOLD, VIP}
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED, "SILVER");
+        seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, AS_OF.minusHours(3));
     }
 
     /** 접힌 상태는 USED 인데 저장값이 ISSUED — V3 하나만 울린다. */

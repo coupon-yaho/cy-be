@@ -1,4 +1,4 @@
-// V3·V5 판정 SQL 입니다. asof_state 를 드라이빙 테이블로 잡습니다.
+// V1·V3·V5·V6 판정 SQL 입니다. 규칙마다 드라이빙 테이블이 다릅니다.
 package com.kafkick.storage.verification;
 
 import java.time.LocalDateTime;
@@ -34,7 +34,7 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * 전부 어긋난 것으로 잡히고 재실행 결과도 달라진다.
      *
      * <p><b>이 조건이 실제로 무언가를 거르면 그건 이미 비정상이다.</b> 실행 시작에
-     * {@link #countIssuancesUpdatedAfter} 로 거부하므로, 정상 경로에서는 여기서 걸러지는 행이 없다.
+     * {@link #hasIssuancesUpdatedAfter} 로 거부하므로, 정상 경로에서는 여기서 걸러지는 행이 없다.
      * 남는 것은 가드 통과 후 이 질의까지의 짧은 틈뿐이다.
      */
     // stored 는 MySQL 예약어다(GENERATED ... STORED). 별칭에 그대로 쓰면 문법 오류가 난다.
@@ -81,12 +81,136 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
             SELECT EXISTS(SELECT 1 FROM issuances WHERE updated_at > :asOf LIMIT 1)
             """;
 
+    /**
+     * V6 판정이 읽는 <b>살아 있는 두 테이블</b>을 한 값으로 접는다.
+     *
+     * <p><b>축이 둘인 이유.</b> V6 은 {@code (coupons.eligible_grades_mask & grades.bit_value) = 0}
+     * 으로 판정한다 — AND 의 양쪽이 각각 다른 테이블이다. {@code coupons} 만 얼리면
+     * {@code SILVER} 의 {@code bit_value} 를 2→16 으로 옮기는 것만으로 검출 집합이 달라지는데
+     * 지문은 그대로다. 둘 다 {@code dataset_fingerprint} 재료에 없고 {@code updated_at} 도 없어
+     * 시각 비교를 못 하므로, 값 자체를 접는다. 회차 147행 · 등급 4행이라 비용이 없다.
+     *
+     * <p><b>{@code GROUP_CONCAT} 을 쓰지 않는다.</b> {@code group_concat_max_len} 기본값이
+     * 1024 바이트인데 회차 147행이 <b>실측 920 바이트</b>다 — 한계의 90% 다.
+     * 지금 잘리지는 않지만 {@code id} 자릿수가 하나만 늘어도 넘고, MySQL 은 넘치면
+     * <b>경고만 내고 조용히 자른다.</b> 뒤쪽 회차의 마스크가 바뀌어도 지문이 그대로가 되어
+     * <b>가드가 열린 채로 실패한다.</b> 세션 변수를 올릴 수도 있지만 커넥션 상태에 기대게 된다.
+     *
+     * <p>행별 해시를 {@code BIT_XOR} 로 접으면 길이 제한이 없다. PK 가 해시 재료에 있어
+     * 같은 해시가 둘 나올 수 없으니 상쇄도 없다. 행 수를 앞에 붙여 <b>INSERT·DELETE</b> 도 잡는다 —
+     * XOR 만으로는 두 행이 함께 사라지는 경우를 놓칠 수 있다. 종류 접두사({@code 'C'}/{@code 'G'})는
+     * 두 축의 해시 공간이 겹치지 않게 한다.
+     */
+    private static final String SELECT_POLICY_DIGEST = """
+            SELECT CONCAT(
+                     (SELECT CONCAT(COUNT(*), ':', LPAD(HEX(BIT_XOR(
+                          CAST(CONV(SUBSTR(
+                              SHA2(CONCAT_WS(0x1f, 'C', id, eligible_grades_mask), 256), 1, 16),
+                              16, 10) AS UNSIGNED))), 16, '0'))
+                        FROM coupons),
+                     0x1e,
+                     (SELECT CONCAT(COUNT(*), ':', LPAD(HEX(BIT_XOR(
+                          CAST(CONV(SUBSTR(
+                              SHA2(CONCAT_WS(0x1f, 'G', code, bit_value), 256), 1, 16),
+                              16, 10) AS UNSIGNED))), 16, '0'))
+                        FROM grades))
+            """;
+
+
+    /** 재고는 회차 147행이라 훑는 비용이 없다. 그래도 형태는 발급건 쪽과 같이 둔다. */
+    private static final String EXISTS_STOCK_UPDATED_AFTER = """
+            SELECT EXISTS(SELECT 1 FROM coupon_stocks WHERE updated_at > :asOf LIMIT 1)
+            """;
+
+    /**
+     * 접은 활성 건수와 저장된 재고가 다른 회차.
+     *
+     * <p><b>{@code coupons} 가 드라이빙이다.</b> {@code asof_state} 를 잡으면 활성이 0인 회차가,
+     * {@code coupon_stocks} 를 잡으면 재고 행이 없는 회차가 각각 결과에서 빠진다 —
+     * 둘 다 잡아야 할 상태다. 재고 없이 발급이 쌓이는 것은 초과 발급의 가장 위험한 형태이고,
+     * 재고가 남았는데 발급이 0인 것은 오염 유형 1 이다. 회차 147개라 전수 비용이 없다.
+     *
+     * <p>활성은 {@code ISSUED}·{@code USED} 다 — 컬럼 주석이 못 박은 <b>현재 보유량</b>이고
+     * 누적 발급 수가 아니다. {@code CANCELLED}·{@code EXPIRED} 는 재고로 돌아간 것이라 빠진다.
+     *
+     * <p>{@code s.updated_at <= :asOf} 로 자르는 이유는 V3 와 같다. 정상 경로에서는
+     * {@link #hasStocksUpdatedAfter} 가 시작에서 막으므로 여기서 걸러지는 행이 없다.
+     */
+    private static final String SELECT_STOCK_MISMATCH = """
+            SELECT c.id                            AS coupon_id,
+                   COALESCE(r.active_count, 0)     AS replayed_active,
+                   COALESCE(s.active_count, 0)     AS stored_active
+              FROM coupons c
+              LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
+              LEFT JOIN (
+                    SELECT i.coupon_id      AS coupon_id,
+                           COUNT(*)         AS active_count
+                      FROM asof_state a
+                      JOIN issuances i ON i.id = a.coupon_id
+                     WHERE a.run_id = :runId
+                       AND a.state IN ('ISSUED', 'USED')
+                     GROUP BY i.coupon_id
+                   ) r ON r.coupon_id = c.id
+             WHERE (s.updated_at IS NULL OR s.updated_at <= :asOf)
+               AND COALESCE(r.active_count, 0) <> COALESCE(s.active_count, 0)
+             ORDER BY c.id
+             LIMIT :limit
+            """;
+
+    /**
+     * 발급 시점 등급이 회차의 허용 등급에 없는 발급건.
+     *
+     * <p><b>{@code members} 를 조인하지 않는다.</b> 현재 등급으로 판정하면 회원이 강등되는 순간
+     * 정상 발급이 위반으로 잡힌다. 스냅샷 둘만 본다.
+     *
+     * <p><b>그래도 결정론은 아니다.</b> {@code coupons.eligible_grades_mask} 는 살아 있는 행이고
+     * 지문 재료에도 없다. 그래서 {@code i.updated_at <= :asOf} 로 "어떤 발급건을 볼지" 만이라도
+     * 고정한다 — <b>이 조건을 지우면 재실행이 갈린다.</b> 정책 축은 {@code policyDigest} 가 지킨다.
+     *
+     * <p><b>{@code grades} 를 LEFT JOIN 으로 잡는다.</b> INNER 로 잡으면 {@code grades} 에 없는
+     * 등급 문자열이 조용히 빠지는데, 그것이야말로 잡아야 할 위반이다.
+     * 오타든 새 등급이든 마스크에 자리가 없으면 발급되면 안 된다.
+     */
+    private static final String SELECT_GRADE_VIOLATION = """
+            SELECT i.id                    AS issuance_id,
+                   i.issued_grade          AS issued_grade,
+                   c.eligible_grades_mask  AS eligible_mask,
+                   g.bit_value             AS grade_bit
+              FROM issuances i
+              JOIN coupons c ON c.id = i.coupon_id
+              LEFT JOIN grades g ON g.code = i.issued_grade
+             WHERE i.updated_at <= :asOf
+               AND (g.bit_value IS NULL OR (c.eligible_grades_mask & g.bit_value) = 0)
+             ORDER BY i.id
+             LIMIT :limit
+            """;
+
     private static final RowMapper<VerificationFinding> REPLAY_MISMATCH_MAPPER =
             (rs, rowNum) -> VerificationFinding.forIssuance(
                     FindingType.REPLAY_MISMATCH,
                     rs.getLong("issuance_id"),
                     "replay=" + rs.getString("replayed_state"),
                     "issuances.status=" + rs.getString("stored_status"));
+
+    private static final RowMapper<VerificationFinding> STOCK_MISMATCH_MAPPER =
+            (rs, rowNum) -> VerificationFinding.forCoupon(
+                    FindingType.STOCK_MISMATCH,
+                    rs.getLong("coupon_id"),
+                    "replay=" + rs.getInt("replayed_active"),
+                    "coupon_stocks.active_count=" + rs.getInt("stored_active"));
+
+    /** 등급 문자열이 {@code grades} 에 없으면 {@code grade_bit} 가 null 이다 — 그 사실을 증거에 남긴다. */
+    private static final RowMapper<VerificationFinding> GRADE_VIOLATION_MAPPER = (rs, rowNum) -> {
+        int mask = rs.getInt("eligible_mask");
+        int bit = rs.getInt("grade_bit");
+        String actualBit = rs.wasNull() ? "grades 에 없는 등급" : "bit=" + bit;
+
+        return VerificationFinding.forIssuance(
+                FindingType.GRADE_VIOLATION,
+                rs.getLong("issuance_id"),
+                "eligible_grades_mask=" + mask,
+                "issued_grade=" + rs.getString("issued_grade") + " " + actualBit);
+    };
 
     private static final RowMapper<VerificationFinding> USAGE_MISMATCH_MAPPER =
             (rs, rowNum) -> VerificationFinding.forIssuance(
@@ -122,6 +246,44 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .param("limit", limit)
                 .query(USAGE_MISMATCH_MAPPER)
                 .list();
+    }
+
+    @Override
+    public List<VerificationFinding> findStockMismatches(long runId, LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_STOCK_MISMATCH)
+                .param("runId", runId)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(STOCK_MISMATCH_MAPPER)
+                .list();
+    }
+
+    @Override
+    public List<VerificationFinding> findGradeViolations(LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_GRADE_VIOLATION)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(GRADE_VIOLATION_MAPPER)
+                .list();
+    }
+
+    @Override
+    public String policyDigest() {
+        return jdbcClient.sql(SELECT_POLICY_DIGEST)
+                .query(String.class)
+                .single();
+    }
+
+    @Override
+    public boolean hasStocksUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(EXISTS_STOCK_UPDATED_AFTER)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single();
     }
 
     @Override

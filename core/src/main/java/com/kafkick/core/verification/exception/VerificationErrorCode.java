@@ -33,6 +33,11 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-005",
             "이력 리플레이 중 처리할 수 없는 상태를 만났습니다."
+    ),
+    DATASET_MUTATED_DURING_RUN(
+            500,
+            "VERIFICATION-006",
+            "검증 실행 중에 대상 데이터가 바뀌어 이 실행의 검출을 신뢰할 수 없습니다."
     );
 
     private final int status;

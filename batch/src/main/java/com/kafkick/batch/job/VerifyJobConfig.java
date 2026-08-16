@@ -1,4 +1,4 @@
-// 검증 잡의 배선입니다. Step 0 리플레이(+V4) → 사용 건수 → V5 → V3. V1·V2·V6 이 뒤에 붙습니다.
+// 검증 잡의 배선입니다. Step 0 리플레이(+V4) → 사용 건수 → V5 → V3 → V1 → V6. V2 가 뒤에 붙습니다.
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
@@ -35,7 +35,9 @@ import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.VerificationRuleRepository;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
@@ -49,7 +51,7 @@ import com.kafkick.core.verification.replay.ReplayScanRange;
  * {@code uk_run_params} 로 막습니다. 결정론 증명이 같은 {@code asOf} 를 두 번 도는 것이라
  * 이게 막히면 증명 자체가 불가능합니다.
  *
- * <p>Step 순서는 <b>실행 기록 → 리플레이(+V4) → 사용 건수 → V5 → V3</b> 입니다. {@code asof_state} 가
+ * <p>Step 순서는 <b>실행 기록 → 리플레이(+V4) → 사용 건수 → V5 → V3 → V1 → V6 → 얼림 확인</b> 입니다. {@code asof_state} 가
  * {@code verification_runs.id} 를 FK 로 물기 때문에 실행 행이 먼저 있어야 합니다.
  *
  * <p><b>훑을 경계도 실행 기록 Step 에서 얼립니다.</b> 리더가 열리는 시점은 그보다 뒤라,
@@ -66,7 +68,10 @@ public class VerifyJobConfig {
     static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
     static final String SCAN_LATEST_KEY = "replay.scan.latestCreatedAt";
 
-    /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. V1·V2·V6 이 오면 여섯 벌이 된다. */
+    /** 시작에 얼린 회차 정책 지문. coupons 에 updated_at 이 없어 값을 접어 비교한다. */
+    static final String POLICY_DIGEST_KEY = "policy.digest";
+
+    /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. 지금 다섯 벌이고 V2 가 오면 여섯이 된다. */
     private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
 
     private static final String[] REQUIRED_PARAMETERS = {"asOf", "scope", "dataset", "attempt"};
@@ -129,6 +134,8 @@ public class VerifyJobConfig {
             Step usageCountStep,
             Step usageMismatchStep,
             Step replayMismatchStep,
+            Step stockMismatchStep,
+            Step gradeViolationStep,
             Step assertFrozenStep
     ) {
         return new JobBuilder(JOB_NAME, jobRepository)
@@ -140,16 +147,19 @@ public class VerifyJobConfig {
                 .next(usageCountStep)
                 .next(usageMismatchStep)
                 .next(replayMismatchStep)
+                .next(stockMismatchStep)
+                .next(gradeViolationStep)
                 .next(assertFrozenStep)
                 .build();
     }
 
     /**
-     * 실행이 도는 동안 발급건이 갱신되지 않았는지 <b>끝에서 다시</b> 본다.
+     * 실행이 도는 동안 <b>세 축이 모두 얼어 있었는지</b> 끝에서 다시 본다 —
+     * 발급건 · 재고 · 회차 정책.
      *
-     * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다. V3 는 체인
-     * 맨 끝이라 그 구간에 갱신된 행을 조용히 빼고 0건으로 통과하는데, 같은 asOf 를 스케줄러가
-     * 멈춘 상태로 다시 돌리면 검출이 나온다 — 같은 파라미터가 다른 답을 낸다.
+     * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다.
+     * 현재 행을 읽는 규칙(V3·V1·V6)이 그 구간에 갱신된 행을 조용히 빼고 0건으로 통과하는데,
+     * 같은 asOf 를 스케줄러가 멈춘 상태로 다시 돌리면 검출이 나온다 — 같은 파라미터가 다른 답을 낸다.
      */
     @Bean
     public Step assertFrozenStep(VerificationRuleRepository rules) {
@@ -159,8 +169,29 @@ public class VerifyJobConfig {
                             .getJobParameters().getLocalDateTime("asOf");
 
                     if (rules.hasIssuancesUpdatedAfter(asOf)) {
-                        throw new IllegalStateException(
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
                                 "실행 중에 발급건이 갱신됐습니다. V3 가 그만큼을 비교에서 뺐으므로 "
+                                        + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
+                    }
+
+                    if (rules.hasStocksUpdatedAfter(asOf)) {
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "실행 중에 재고가 갱신됐습니다. V1 이 그만큼을 비교에서 뺐으므로 "
+                                        + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
+                    }
+
+                    // 회차 축은 시각으로 못 본다. 시작에 얼린 지문과 대조한다 —
+                    // 마스크가 바뀌면 검출은 달라지는데 dataset_fingerprint 는 같게 나와서,
+                    // 판정이 "데이터는 그대로인데 검증기가 비결정적" 으로 잘못 읽는다.
+                    String frozenPolicy = chunkContext.getStepContext().getStepExecution()
+                            .getJobExecution().getExecutionContext().getString(POLICY_DIGEST_KEY);
+
+                    if (!frozenPolicy.equals(rules.policyDigest())) {
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "실행 중에 회차 정책 또는 등급 체계가 바뀌었습니다. V1·V6 이 그 사이 값을 읽었으므로 "
                                         + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
                     }
 
@@ -195,6 +226,47 @@ public class VerifyJobConfig {
     ) {
         return ruleStep("replayMismatchStep", findings, maxFindings,
                 (runId, asOf, limit) -> rules.findReplayMismatches(runId, asOf, limit));
+    }
+
+    /**
+     * V1 재고 정합. <b>현재 {@code coupon_stocks.active_count} 를 읽는다.</b>
+     *
+     * <p>V3 와 같은 이유로 뒤쪽에 둔다 — 현재 행에 의존하는 규칙은 결정론적인 것들 뒤다.
+     * 다만 축이 다르다. V3 는 발급건 축이고 이쪽은 재고 축이라 가드도 따로 필요하다.
+     *
+     * <p><b>이 Step 의 상한은 운영에서 도달하지 않는다.</b> 회차 수(147)가 곧 상한이고 기본값은
+     * 10000 이다. 폭주는 상한이 아니라 {@code uk_run_finding} 중복키로 나타난다 —
+     * V1 이 회차당 1행을 넘기면 그것이 신호다.
+     */
+    @Bean
+    public Step stockMismatchStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings
+    ) {
+        return ruleStep("stockMismatchStep", findings, maxFindings,
+                (runId, asOf, limit) -> rules.findStockMismatches(runId, asOf, limit));
+    }
+
+    /**
+     * V6 등급 자격. <b>{@code asof_state} 를 읽지 않지만 결정론은 아니다.</b>
+     *
+     * <p>{@code issued_grade} 는 스냅샷이라 안 변하는데 {@code coupons.eligible_grades_mask} 는
+     * 살아 있는 행이다. {@code coupons} 에 {@code updated_at} 이 없어 시각으로는 못 막고,
+     * 지문 재료에도 그 축이 없다 — 마스크가 바뀌면 <b>지문은 같은데 검출만 달라진다.</b>
+     * 그래서 현재 행을 읽는 규칙들과 같은 구간(뒤쪽)에 두고, 정책 축은 지문으로 얼린다.
+     *
+     * <p>{@code runId} 는 쓰지 않지만 시그니처는 다른 규칙과 같게 둔다 —
+     * 규칙마다 다른 모양이면 배선에서 하나만 어긋나도 알아채기 어렵다.
+     */
+    @Bean
+    public Step gradeViolationStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings
+    ) {
+        return ruleStep("gradeViolationStep", findings, maxFindings,
+                (runId, asOf, limit) -> rules.findGradeViolations(asOf, limit));
     }
 
     /**
@@ -283,6 +355,7 @@ public class VerifyJobConfig {
                     Optional<ReplayScanRange> scanRange = histories.scanRange(asOf);
                     scanRange.ifPresent(range -> rejectAsOfBeforeLatestHistory(asOf, range));
                     rejectIssuancesUpdatedAfterAsOf(asOf, rules.hasIssuancesUpdatedAfter(asOf));
+                    rejectStocksUpdatedAfterAsOf(asOf, rules.hasStocksUpdatedAfter(asOf));
 
                     long runId = runs
                             .findByParams(asOf, dataset, scope, attempt)
@@ -295,6 +368,7 @@ public class VerifyJobConfig {
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();
                     jobContext.putLong(RUN_ID_KEY, runId);
+                    jobContext.putString(POLICY_DIGEST_KEY, rules.policyDigest());
                     scanRange.filter(ReplayScanRange::hasWindow)
                             .ifPresent(range -> freeze(jobContext, range));
 
@@ -433,6 +507,21 @@ public class VerifyJobConfig {
         if (updatedAfter) {
             throw new IllegalArgumentException(
                     "asOf 이후에 갱신된 발급건이 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
+                            + "asOf=" + asOf);
+        }
+    }
+
+    /**
+     * 재고 축 가드. 발급건 축과 대칭이다.
+     *
+     * <p>V1 이 접은 활성 건수와 <b>현재</b> {@code coupon_stocks.active_count} 를 비교하므로,
+     * 배치가 도는 동안 발급이 한 건만 일어나도 그 회차가 어긋난 것으로 잡힌다.
+     * 그냥 빼면 <b>0건이 두 뜻을 갖는다</b> — "제대로 훑고 없었다" 와 "훑을 대상이 안 남았다".
+     */
+    private static void rejectStocksUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
+        if (updatedAfter) {
+            throw new IllegalArgumentException(
+                    "asOf 이후에 갱신된 재고가 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
                             + "asOf=" + asOf);
         }
     }

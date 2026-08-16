@@ -65,6 +65,12 @@ public enum FindingType {
      *
      * <p>V2 가 결정론인 이유 — 세는 대상이 "행의 존재"와 code 인데 둘 다 변하지 않습니다.
      * 상태가 바뀌어도 행은 남고 코드는 발급 후 불변입니다.
+     *
+     * <p><b>V6 는 결정론이 아닙니다.</b> {@code issued_grade} 는 스냅샷이지만
+     * {@code coupons.eligible_grades_mask} 는 살아 있는 행이고, {@code coupons} 에는
+     * {@code updated_at} 컬럼이 없어 시각으로는 가드를 걸 수 없습니다. 지문 재료에도 그 축이 없어서,
+     * 마스크가 바뀌면 <b>지문은 같은데 검출만 달라집니다</b> — 데이터 변경이 검증기 탓으로 오인됩니다.
+     * V2 와 다른 점이 여기입니다. V2 가 세는 "행의 존재"와 code 는 아무도 바꾸지 않습니다.
      */
     public boolean isDeterministic() {
         return deterministic;

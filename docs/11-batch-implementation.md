@@ -496,20 +496,135 @@ replayStep           asof_state 생성  +  V4          접기 한 번에 산출�
 usageCountStep       활성 사용을 집계 조인 한 문장으로
 usageMismatchStep    V5     결정론
 replayMismatchStep   V3     현재 행을 읽는다
-assertFrozenStep     실행 중 발급건이 갱신되지 않았는지 다시 확인
+stockMismatchStep    V1     현재 행을 읽는다
+gradeViolationStep   V6     현재 행을 읽는다
+assertFrozenStep     실행 중 발급건·재고·정책(회차+등급)이 얼어 있었는지 다시 확인
 ```
 
-뒤에 붙을 것 — **아직 구현되지 않았다.** 자리는 결정론 규칙이 먼저라는 원칙으로 정해진다.
+**V6 는 `asof_state` 를 안 읽지만 결정론도 아니다.** `issued_grade` 는 스냅샷이라 안 변하는데
+`coupons.eligible_grades_mask` 는 살아 있는 행이고 **지문 재료에도 그 축이 없다** —
+마스크가 바뀌면 지문은 같은데 검출만 달라진다. 그 조합의 뜻은
+*"데이터는 그대로인데 검증기가 비결정적"* 이라, 판정표에서 가장 찾기 어려운 칸에 잘못 떨어진다.
+
+그래서 현재 행을 읽는 규칙들과 같은 구간에 두고, **정책 축은 지문으로 얼린다.**
+`coupons` 에는 `updated_at` 이 없어 시각으로 못 보지만 **147행이라 값을 접으면 된다.**
+
+```
+startRunStep      CONCAT(COUNT(*), ':', HEX(BIT_XOR(SHA2(종류 ⋮ 키 ⋮ 값) 상위 64비트)))  →  잡 컨텍스트
+                  coupons(id, mask) 와 grades(code, bit_value) 두 축을 각각 접어 이어 붙인다
+assertFrozenStep  다시 계산해 다르면 거부
+```
+
+V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 같은 경로로 들어온다.
+축은 이제 셋이다 — **발급건 · 재고 · 정책(회차 마스크 + 등급 비트).**
+
+`GROUP_CONCAT` 은 쓰지 않는다 — `group_concat_max_len` 기본 1024 바이트를 넘으면 경고만 내고 잘려서 **가드가 열린 채로 실패한다.** 회차 147행이 실측 920 바이트로 이미 90% 다.
+
+뒤에 붙을 것 — **아직 구현되지 않았다.**
 
 ```
 V5 뒤에      V2     asof_state ⋈ issuances 집계        결정론
-V3 뒤에      V1     asof_state 집계 ↔ coupon_stocks     현재 행
-             V6     issued_grade 스냅샷 ↔ 자격 마스크    현재 행
 마지막        통계(CLEAN 만) → finalize(판정·checksum·지문)
 ```
 
+### V1 은 V3 와 정반대로 드라이빙을 잡는다
+
+같은 "현재 행을 읽는 규칙"인데 드라이빙 테이블이 반대다. 이유가 다르기 때문이다.
+
+| | 드라이빙 | 왜 |
+|---|---|---|
+| V3 | `asof_state` | 발급건 300만이라 전수가 비싸다. 접힌 상태가 없는 행은 기대 매트릭스 밖이다 |
+| V1 | `coupons` | 다른 둘은 각각 한쪽을 놓친다 — 아래 참조 |
+
+```
+asof_state 드라이빙      활성이 0인데 재고가 남은 회차를 놓친다   ← 오염 유형 1
+coupon_stocks 드라이빙   재고 행이 없는데 발급이 쌓인 회차를 놓친다 ← 초과 발급의 가장 위험한 형태
+coupons 드라이빙         둘 다 본다
+```
+
+회차는 147개뿐이라 **전수 비용이 어느 쪽이든 같다.** 그러니 둘 다 보는 쪽을 고른다.
+
+활성은 `ISSUED`·`USED` 다 — 컬럼 주석이 못 박은 **현재 보유량**이지 누적 발급 수가 아니다.
+`CANCELLED`·`EXPIRED` 는 재고로 돌아간 것이라 빠진다.
+
+### 재고 축 가드를 새로 걸었다
+
+V3 가 현재 `issuances.status` 를 읽어서 `hasIssuancesUpdatedAfter` 로 시작·끝을 막는 것과 같다.
+**V1 은 현재 `coupon_stocks.active_count` 를 읽는데 그 축의 가드가 없었다.**
+
+배치가 도는 동안 발급이 한 건만 일어나도 그 회차가 어긋난 것으로 잡히고 재실행 결과가 달라진다.
+그냥 빼면 **0건이 두 뜻을 갖는다** — *"제대로 훑고 없었다"* 와 *"훑을 대상이 안 남았다"*.
+
+### ⚠️ V1 의 기대 200행은 회차 수가 상한이다 — 시드 저장소 확인 필요
+
+`verification_findings` 에 `uk_run_finding(run_id, finding_type, target_key)` 가 걸려 있고
+`STOCK_MISMATCH` 의 `target_key` 는 `COUPON:{coupons.id}` 하나뿐이다. SQL 도 회차당 한 행만 낸다.
+
+**따라서 `STOCK_MISMATCH` 최대 행수 = 오염 대상 회차 수다.** 회차가 147개면 계약의 200행은
+어떤 구현으로도 나올 수 없다 — 규칙이나 SQL 을 고쳐 될 일이 아니다.
+
+시드 저장소에 물어야 할 것 셋.
+
+```
+① CORRUPT 스키마의 coupons 행수는 몇인가        147 이면 200행은 불가능
+② 유형 1 100건과 유형 3 100건이 서로 겹치지 않는 회차에 흩어지는가
+                                                 겹치면 +1 과 -1 이 상쇄돼 그 회차는 미검출
+③ 유형 4·5·6 이 회차별 "접힌 활성 발급 수" 를 바꾸는가
+```
+
+③이 특히 조용하다. 접기는 **불법 전이를 만나도 그 행의 `to_status` 를 따라간다** — 유형 4 가
+`EXPIRED`(비활성) 발급건에 `USE` 이력을 붙이면 접힌 상태가 `USED`(활성)로 바뀐다.
+`coupon_stocks.active_count` 는 그대로이므로 **그 회차에 `STOCK_MISMATCH` 가 하나 뜬다.**
+
+계약의 `matrix` 는 유형 4 에 `ILLEGAL_TRANSITION` 만 기대하므로 그것은 **오탐**이고,
+합격 조건이 "누락 0 · 오탐 0" 이라 게이트가 통째로 떨어진다. 유형 5·6 도 `ISSUE` 이력을 심으면 같다.
+
+주입기가 `active_count` 를 함께 보정하면 풀리는데, 그러면 `updated_at` 도 건드리게 되므로
+**`asOf` 이하 값을 찍어야 한다.**
+
+②가 아니오면 상쇄로 인한 미검출이 생기고, 양방향 MINUS 에서 **누락으로만 보인다** —
+오탐이 0이라 검증기를 아무리 뒤져도 원인이 안 나온다.
+
+**판정 티켓의 방어** — 게이트가 `expected_findings` 를 읽을 때
+`COUNT(*)` 와 `COUNT(DISTINCT target_key)` 를 비교해 다르면 먼저 죽인다.
+*"정답 매니페스트가 회차당 2행 이상을 기대한다. `uk_run_finding` 상 불가능하다"* 가
+미검출로 보이는 것보다 낫다.
+
+### ⚠️ `coupon_stocks.updated_at` 을 찍을 책임이 아직 코드에 없다
+
+새 가드가 이 컬럼 하나에 통째로 의존하는데, 재고를 차감·복원하는 런타임 코드가 아직 없다.
+`ON UPDATE CURRENT_TIMESTAMP` 를 안 건 것은 **의도다** — 걸면 오염 주입기의 UPDATE 가
+현재 시각을 찍어 실행 전체가 거부된다.
+
+그래서 발급 경로가 붙을 때 **시각을 인자로 강제하는 시그니처**로 열어야 한다.
+
+```java
+public interface CouponStockRepository {
+    int decrease(long couponId, LocalDateTime at);   // at 을 안 받으면 잊는다
+}
+```
+
+`updated_at` 을 안 찍으면 시작·끝 가드가 둘 다 `false` 를 돌려주고, V1 은 배치가 도는 동안
+움직인 재고와 얼어붙은 접기 결과를 비교해 **매 실행 다른 회차를 뱉는다.**
+
+### V6 의 마스크는 순서가 아니라 집합이다
+
+```
+WELCOME 1 · SILVER 2 · GOLD 4 · VIP 8      (mask & bit) = 0  →  위반
+```
+
+마스크 12 는 *"GOLD 이상"* 이 아니라 **`{GOLD, VIP}`** 다. 마스크 9(`{WELCOME, VIP}`)처럼
+중간을 건너뛸 수 있으므로 **등급 순서로 판정하면 정반대가 된다** — 그 경우 WELCOME 이 정상이고
+SILVER·GOLD 가 위반이다. 테스트가 그 마스크를 못 박고 있다.
+
+**`grades` 에 없는 등급 문자열도 위반이다.** 그래서 `LEFT JOIN` 이다 — `INNER JOIN` 이면 그 행이
+조용히 빠져 미검출이 된다. 다만 CLEAN 스키마에서는 FK(`V1__init_schema.sql:641`)가 그 상태를
+물리적으로 막아 **검출 테스트를 여기서 쓸 수 없다.** `uk_coupon_member` 가 V2 를 막는 것과 같은 부류라,
+제약을 떼는 오염셋 티켓에서 붙는다. 지금은 그 FK 가 아직 있다는 것을 테스트가 고정한다 —
+누가 떼면 빨개지고, 그것이 검출 테스트를 붙이라는 신호다.
+
 `assertFrozenStep` 은 규칙이 늘어도 **항상 마지막**이다. 현재 행을 읽는 규칙이 전부 끝난 뒤에
-확인해야 그 사이 갱신을 잡는다.
+확인해야 그 사이 갱신을 잡는다. 축이 늘면 여기도 같이 늘어야 한다 — 지금은 발급건·재고·정책(회차+등급) 셋이다.
 
 **V4 는 Step 0 안에 있다.** 별도 Step 이면 이력 534만 행을 다시 접어야 하고, 접기 구현이 두 벌로
 갈라져 `asof_state` 와 V4 가 서로 다른 말을 하게 된다. **순서의 주인은 `VerifyJobConfig#verifyJob`
@@ -551,10 +666,17 @@ V3 뒤에      V1     asof_state 집계 ↔ coupon_stocks     현재 행
 ```
 issuance_histories.created_at > asOf   실행이 거부된다 ("asOf 는 마지막 이력 시각 이상")
 issuances.updated_at         > asOf   실행이 거부된다 (시작과 끝에서 두 번 본다)
+coupon_stocks.updated_at     > asOf   실행이 거부된다 (시작과 끝에서 두 번 본다)
 issuance_usages.used_at      > asOf   조용하다 — 활성 사용이 0 으로 세어져 V5 가 미검출된다
 ```
 
-앞의 둘은 원인이 메시지에 남지만 **셋째는 아무 말이 없다.** 유형 7 의 100건이 통째로 사라지고
+**재고 축이 새로 생겼다.** 계약상 `coupon_stocks` 를 <b>직접</b> 건드리는 것은 **유형 1·3 뿐**이다
+(`corruption.matrix` 의 `STOCK_MISMATCH` 행 둘). `updated_at` 은 `ON UPDATE CURRENT_TIMESTAMP` 가
+아니라 명시 컬럼이라 주입기가 값을 정한다 — 주입 시각을 찍으면 **검증 실행 전체가 거부된다.**
+
+유형 4 는 재고를 직접 안 건드리지만 **접힌 활성 수를 바꿔 V1 을 간접적으로 울린다** — 아래 ③ 참조.
+
+앞의 셋은 원인이 메시지에 남지만 **마지막은 아무 말이 없다.** 유형 7 의 100건이 통째로 사라지고
 "누락 100" 으로만 보인다.
 
 **`canceled_at` 만 예외다.** 이 컬럼은 사건이 아니라 *"asOf 시점에 살아 있었는가"* 를 가르는

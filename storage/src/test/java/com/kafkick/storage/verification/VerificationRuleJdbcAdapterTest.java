@@ -10,9 +10,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
@@ -203,6 +205,409 @@ class VerificationRuleJdbcAdapterTest {
                 .update();
 
         assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).hasSize(1);
+    }
+
+    // ─────────────────────────── V1 재고 정합 ───────────────────────────
+
+    @Test
+    @DisplayName("접은 활성 건수와 재고가 같으면 검출이 없다 — 정상셋 0건이 성립해야 한다")
+    void findNoStockMismatchWhenCountsAgree() {
+        replayed(IssuanceStatus.ISSUED, IssuanceStatus.ISSUED, 0);
+        replayed(IssuanceStatus.USED, IssuanceStatus.USED, 1);
+        data.overwriteStock(2);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("ISSUED 와 USED 만 활성이다 — CANCELLED·EXPIRED 는 재고로 돌아간 것이라 안 센다")
+    void countOnlyIssuedAndUsedAsActive() {
+        replayed(IssuanceStatus.ISSUED, IssuanceStatus.ISSUED, 0);
+        replayed(IssuanceStatus.USED, IssuanceStatus.USED, 1);
+        replayed(IssuanceStatus.CANCELLED, IssuanceStatus.CANCELLED, 0);
+        replayed(IssuanceStatus.EXPIRED, IssuanceStatus.EXPIRED, 0);
+        data.overwriteStock(2);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("재고는 줄었는데 ISSUE 이력이 없으면 잡는다 — 오염 유형 1 의 모양이다")
+    void findStockMismatchWhenStockDroppedWithoutIssuance() {
+        data.overwriteStock(1);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT))
+                .singleElement()
+                .satisfies(finding -> {
+                    assertThat(finding.type()).isEqualTo(FindingType.STOCK_MISMATCH);
+                    assertThat(finding.targetKey()).isEqualTo("COUPON:" + data.currentCouponId());
+                    assertThat(finding.expected()).isEqualTo("replay=0");
+                    assertThat(finding.actual()).isEqualTo("coupon_stocks.active_count=1");
+                });
+    }
+
+    @Test
+    @DisplayName("활성이 0인 회차도 검사한다 — asof_state 를 드라이빙으로 잡으면 통째로 빠지는 자리다")
+    void inspectCouponsWithoutAnyActiveIssuance() {
+        replayed(IssuanceStatus.CANCELLED, IssuanceStatus.CANCELLED, 0);
+        data.overwriteStock(3);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT))
+                .singleElement()
+                .satisfies(finding -> assertThat(finding.expected()).isEqualTo("replay=0"));
+    }
+
+    @Test
+    @DisplayName("CANCEL_USE 이중 복원처럼 재고가 더 많아도 잡는다 — 양방향이다")
+    void findStockMismatchWhenStockIsHigherThanReplay() {
+        replayed(IssuanceStatus.ISSUED, IssuanceStatus.ISSUED, 0);
+        replayed(IssuanceStatus.USED, IssuanceStatus.USED, 1);
+        data.overwriteStock(5);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT))
+                .singleElement()
+                .satisfies(finding -> {
+                    assertThat(finding.expected()).isEqualTo("replay=2");
+                    assertThat(finding.actual()).isEqualTo("coupon_stocks.active_count=5");
+                });
+    }
+
+    @Test
+    @DisplayName("재고 행이 없는데 활성 발급이 있으면 잡는다 — 재고 없이 발급이 쌓이는 것이 가장 위험하다")
+    void findStockMismatchWhenStockRowIsMissing() {
+        replayed(IssuanceStatus.ISSUED, IssuanceStatus.ISSUED, 0);
+        data.removeStock();
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT))
+                .as("coupon_stocks 를 드라이빙으로 잡으면 이 회차가 통째로 빠진다")
+                .singleElement()
+                .satisfies(finding -> {
+                    assertThat(finding.expected()).isEqualTo("replay=1");
+                    assertThat(finding.actual()).isEqualTo("coupon_stocks.active_count=0");
+                });
+    }
+
+    @Test
+    @DisplayName("재고 행도 활성도 없으면 검출이 없다 — 회차만 만들어진 상태는 정상이다")
+    void findNoStockMismatchForEmptyCoupon() {
+        data.removeStock();
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("다른 run 의 접기 결과는 세지 않는다")
+    void ignoreOtherRunOnStockMismatch() {
+        long otherRun = newRun(2);
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);   // 시드가 재고를 1 로 맞춘다
+        asOfStates.appendAll(otherRun, List.of(
+                new ReplayResult(issuanceId, IssuanceStatus.ISSUED, 1L, AS_OF, List.of())));
+        data.overwriteStock(1);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT))
+                .as("이 run 은 접은 것이 없으니 기대가 0 이고 재고 1 과 어긋난다")
+                .singleElement()
+                .satisfies(finding -> assertThat(finding.expected()).isEqualTo("replay=0"));
+    }
+
+    @Test
+    @DisplayName("asOf 이후에 갱신된 재고는 비교하지 않는다 — 배치가 도는 동안 발급이 일어난 것이다")
+    void ignoreStockUpdatedAfterAsOf() {
+        data.overwriteStock(1, AS_OF.plusSeconds(1));
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("asOf 와 같은 시각에 갱신된 재고는 비교한다 — 경계는 포함이다")
+    void compareStockUpdatedExactlyAtAsOf() {
+        data.overwriteStock(1, AS_OF);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("재고 규칙도 상한을 지킨다")
+    void capStockResultsAtLimit() {
+        data.overwriteStock(1);
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, 1)).hasSize(1);
+        assertThatThrownBy(() -> adapter.findStockMismatches(runId, AS_OF, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("어긋난 회차만 잡는다 — 회차가 둘일 때 귀속이 밀리지 않아야 한다")
+    void attributeStockMismatchToTheRightCoupon() {
+        replayed(IssuanceStatus.ISSUED, IssuanceStatus.ISSUED, 0);
+        data.overwriteStock(1);                                   // 회차 A: 맞음
+        long broken = data.newCoupon();
+        replayed(IssuanceStatus.ISSUED, IssuanceStatus.ISSUED, 0);
+        data.overwriteStock(4);                                   // 회차 B: 1 vs 4
+
+        assertThat(adapter.findStockMismatches(runId, AS_OF, LIMIT))
+                .as("GROUP BY 를 지우고 전체 합계를 내도 회차가 하나면 통과한다")
+                .extracting(VerificationFinding::targetKey)
+                .containsExactly("COUPON:" + broken);
+    }
+
+    // ─────────────────────────── V6 등급 자격 ───────────────────────────
+
+    @Test
+    @DisplayName("허용 등급으로 발급됐으면 검출이 없다 — 정상셋 0건이 성립해야 한다")
+    void findNoGradeViolationForEligibleGrade() {
+        data.restrictCouponTo(12);          // {GOLD, VIP}
+        data.issuance(IssuanceStatus.ISSUED, "VIP");
+        data.issuance(IssuanceStatus.ISSUED, "GOLD");
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("허용 집합에 없는 등급으로 발급됐으면 잡는다")
+    void findGradeViolationForIneligibleGrade() {
+        data.restrictCouponTo(12);          // {GOLD, VIP}
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED, "SILVER");
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT))
+                .singleElement()
+                .satisfies(finding -> {
+                    assertThat(finding.type()).isEqualTo(FindingType.GRADE_VIOLATION);
+                    assertThat(finding.targetKey()).isEqualTo("ISSUANCE:" + issuanceId);
+                    assertThat(finding.expected()).isEqualTo("eligible_grades_mask=12");
+                    assertThat(finding.actual()).isEqualTo("issued_grade=SILVER bit=2");
+                });
+    }
+
+    @Test
+    @DisplayName("마스크는 순서가 아니라 집합이다 — 중간을 건너뛴 마스크에서 갈린다")
+    void treatMaskAsSetNotThreshold() {
+        data.restrictCouponTo(9);           // {WELCOME, VIP} — SILVER·GOLD 를 건너뛴다
+        data.issuance(IssuanceStatus.ISSUED, "WELCOME");
+        data.issuance(IssuanceStatus.ISSUED, "VIP");
+        long silver = data.issuance(IssuanceStatus.ISSUED, "SILVER");
+        long gold = data.issuance(IssuanceStatus.ISSUED, "GOLD");
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT))
+                .as("등급 순서로 판정하면 WELCOME 이 잡히고 GOLD 가 빠져 정반대가 된다")
+                .extracting(VerificationFinding::targetKey)
+                .containsExactly("ISSUANCE:" + silver, "ISSUANCE:" + gold);
+    }
+
+    @ParameterizedTest(name = "마스크 {0} 에서 {1} 은 위반이 아니다")
+    @CsvSource({"1, WELCOME", "2, SILVER", "4, GOLD", "8, VIP", "15, VIP", "15, WELCOME"})
+    @DisplayName("자기 비트가 마스크에 있으면 통과한다")
+    void passWhenBitIsInMask(int mask, String grade) {
+        data.restrictCouponTo(mask);
+        data.issuance(IssuanceStatus.ISSUED, grade);
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT)).isEmpty();
+    }
+
+    /**
+     * <b>CLEAN 스키마에서는 FK 가 이 상태를 물리적으로 막는다.</b>
+     * 그래도 판정 SQL 은 {@code LEFT JOIN} 으로 둔다 — 오염셋은 제약을 떼고 심으므로
+     * 그때 살아나고, {@code INNER JOIN} 이면 그 행이 조용히 빠져 미검출이 된다.
+     *
+     * <p>이 테스트는 그 FK 가 아직 있다는 것을 고정한다. 누가 떼면
+     * {@code LEFT JOIN} 가지가 <b>도달 가능해지므로 그때는 실제 검출 테스트가 필요하다</b> —
+     * 이 테스트가 빨개지는 것이 그 신호다.
+     */
+    @Test
+    @DisplayName("grades 에 없는 등급은 CLEAN 에서 FK 가 막는다 — LEFT JOIN 가지는 오염셋용이다")
+    void unknownGradeIsBlockedByForeignKeyInCleanSchema() {
+        assertThatThrownBy(() -> data.issuance(IssuanceStatus.ISSUED, "PLATINUM"))
+                .as("FK 가 사라지면 이 단언이 실패한다. 그때 LEFT JOIN 가지에 검출 테스트를 붙여야 한다")
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("현재 회원 등급이 아니라 발급 시점 스냅샷으로 판정한다 — 강등돼도 정상이다")
+    void judgeByIssuedGradeSnapshotNotCurrentMemberGrade() {
+        data.restrictCouponTo(8);           // {VIP}
+        data.issuance(IssuanceStatus.ISSUED, "VIP");
+        jdbcClient.sql("UPDATE members SET membership_grade = 'WELCOME'").update();
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT))
+                .as("members 를 조인하면 강등되는 순간 정상 발급이 전부 위반으로 잡힌다")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("asOf 이후에 갱신된 발급건은 보지 않는다 — V3 와 같은 기준이다")
+    void ignoreIssuanceUpdatedAfterAsOfOnGradeViolation() {
+        data.restrictCouponTo(12);
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED, "SILVER");
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", issuanceId)
+                .update();
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("등급 규칙도 상한을 지킨다")
+    void capGradeResultsAtLimit() {
+        data.restrictCouponTo(8);
+        data.issuance(IssuanceStatus.ISSUED, "SILVER");
+        data.issuance(IssuanceStatus.ISSUED, "GOLD");
+
+        assertThat(adapter.findGradeViolations(AS_OF, 1)).hasSize(1);
+        assertThatThrownBy(() -> adapter.findGradeViolations(AS_OF, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("발급건이 속한 회차의 마스크로 판정한다 — 회차가 둘일 때 엉뚱한 마스크를 읽으면 안 된다")
+    void judgeAgainstOwnCouponMask() {
+        data.restrictCouponTo(15);                       // 회차 A: 전 등급 허용
+        data.issuance(IssuanceStatus.ISSUED, "SILVER");
+        data.newCoupon();
+        data.restrictCouponTo(12);                       // 회차 B: {GOLD, VIP}
+        long violating = data.issuance(IssuanceStatus.ISSUED, "SILVER");
+
+        assertThat(adapter.findGradeViolations(AS_OF, LIMIT))
+                .as("JOIN coupons 가 엉뚱한 회차를 읽으면 A 쪽이 잡히거나 둘 다 잡힌다")
+                .extracting(VerificationFinding::targetKey)
+                .containsExactly("ISSUANCE:" + violating);
+    }
+
+    /**
+     * {@code LEFT JOIN} 가지는 오염셋용이지만 <b>지금도 도달 가능하다</b> —
+     * 세션 변수로 FK 를 잠깐 끄면 된다. 그 가지와 매퍼의 {@code wasNull()} 분기가
+     * 실제로 도는지 확인해야, 제약 없는 스키마가 붙는 날 처음 알게 되는 일이 없다.
+     */
+    @Test
+    @DisplayName("grades 에 없는 등급은 위반이다 — 제약을 뗀 오염 스키마의 모양이다")
+    void findGradeViolationForUnknownGrade() {
+        jdbcClient.sql("SET SESSION foreign_key_checks = 0").update();
+        try {
+            long issuanceId = data.issuance(IssuanceStatus.ISSUED, "PLATINUM");
+
+            assertThat(adapter.findGradeViolations(AS_OF, LIMIT))
+                    .singleElement()
+                    .satisfies(finding -> {
+                        assertThat(finding.targetKey()).isEqualTo("ISSUANCE:" + issuanceId);
+                        assertThat(finding.actual())
+                                .isEqualTo("issued_grade=PLATINUM grades 에 없는 등급");
+                    });
+        } finally {
+            jdbcClient.sql("SET SESSION foreign_key_checks = 1").update();
+        }
+    }
+
+    // ─────────────────────────── 회차 정책 축 가드 ───────────────────────────
+
+    @Test
+    @DisplayName("마스크가 바뀌면 정책 지문이 달라진다")
+    void detectMaskChangeInPolicyDigest() {
+        data.currentCouponIdOrCreate();
+        String before = adapter.policyDigest();
+
+        data.restrictCouponTo(12);
+
+        assertThat(adapter.policyDigest()).isNotEqualTo(before);
+    }
+
+    /**
+     * 나머지 지문 테스트가 전부 <b>달라지는 것</b>만 본다. 가드의 실제 판정은 두 번 계산해
+     * 같은지 보는 것이라, 식에 비결정적 재료가 섞이면 <b>정상 데이터에서 매 실행이 거부된다</b> —
+     * 그 사고는 여기서만 걸린다.
+     */
+    @Test
+    @DisplayName("데이터가 그대로면 지문이 같다 — 정상 실행이 거부되면 안 된다")
+    void keepPolicyDigestStableWhenNothingChanges() {
+        data.issuance(IssuanceStatus.ISSUED);
+
+        assertThat(adapter.policyDigest()).isEqualTo(adapter.policyDigest());
+    }
+
+    @Test
+    @DisplayName("등급 비트가 재배치되면 정책 지문이 달라진다 — 마스크와 AND 되는 반대쪽 피연산자다")
+    void detectGradeBitChangeInPolicyDigest() {
+        data.issuance(IssuanceStatus.ISSUED);   // grades 행은 발급을 세울 때 들어간다
+        String before = adapter.policyDigest();
+
+        jdbcClient.sql("UPDATE grades SET bit_value = 16 WHERE code = 'SILVER'").update();
+
+        assertThat(adapter.policyDigest())
+                .as("coupons 만 접으면 여기서 지문이 같아 V6 검출만 조용히 달라진다")
+                .isNotEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("회차가 늘면 정책 지문이 달라진다 — XOR 만으로는 못 잡는 경우가 있다")
+    void detectCouponInsertInPolicyDigest() {
+        data.currentCouponIdOrCreate();
+        String before = adapter.policyDigest();
+
+        data.newCoupon();
+
+        assertThat(adapter.policyDigest()).isNotEqualTo(before);
+    }
+
+    /**
+     * <b>{@code GROUP_CONCAT} 으로 짜면 여기서 빨개진다.</b> 회차 147행이 실측 920 바이트로
+     * {@code group_concat_max_len} 기본값 1024 의 90% 다. 여기서는 그 선을 넘겨,
+     * 잘린 뒤 회차의 변경이 지문에 안 나타나는 것을 잡는다 —
+     * MySQL 은 경고만 내므로 <b>가드가 열린 채로 실패한다.</b>
+     */
+    @Test
+    @DisplayName("지문이 길이 한계에 걸리지 않는다 — GROUP_CONCAT 은 1024 바이트에서 조용히 잘린다")
+    void detectChangeBeyondGroupConcatLimit() {
+        long last = 0;
+        for (int i = 0; i < 220; i++) {
+            last = data.newCoupon();
+        }
+        String before = adapter.policyDigest();
+
+        jdbcClient.sql("UPDATE coupons SET eligible_grades_mask = 3 WHERE id = :id")
+                .param("id", last)
+                .update();
+
+        assertThat(adapter.policyDigest())
+                .as("잘린 지문이면 마지막 회차의 변경이 안 보인다")
+                .isNotEqualTo(before);
+    }
+
+    // ─────────────────────────── 재고 축 가드 ───────────────────────────
+
+    @Test
+    @DisplayName("asOf 이후에 갱신된 재고가 있으면 알려준다")
+    void detectStocksUpdatedAfterAsOf() {
+        data.overwriteStock(1, AS_OF.plusSeconds(1));
+
+        assertThat(adapter.hasStocksUpdatedAfter(AS_OF)).isTrue();
+    }
+
+    /**
+     * <b>{@code V4__coupon_stock_precision.sql} 을 되돌리면 이 테스트가 빨개진다.</b>
+     * {@code datetime(0)} 에서는 {@code .6} 이 <b>올림</b>돼 +1초가 되므로 첫 단언이 뒤집힌다.
+     *
+     * <p>그 마이그레이션이 막는 것은 둘 다 침묵 실패다 — 올림이면 정상 데이터인데 실행이 거부되고,
+     * 내림이면 진짜 갱신이 가드를 통과한다. 테스트가 없으면 누가 되돌려도 게이트 날까지 모른다.
+     */
+    @Test
+    @DisplayName("재고 시각의 소수 초가 살아 있다 — 반올림되면 정상 데이터가 거부된다")
+    void keepSubSecondPrecisionOnStockUpdatedAt() {
+        LocalDateTime precise = AS_OF.minusHours(1).withNano(600_000_000);
+        data.overwriteStock(1, precise);
+
+        assertThat(adapter.hasStocksUpdatedAfter(precise))
+                .as("datetime(0) 이면 .6 이 +1초로 올림돼 true 가 된다")
+                .isFalse();
+        assertThat(adapter.hasStocksUpdatedAfter(precise.minusNanos(1_000)))
+                .as("바로 앞 시각 기준으로는 갱신으로 보여야 한다")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("asOf 와 같은 시각까지는 갱신으로 보지 않는다 — 경계는 포함이다")
+    void treatStockUpdatedAtAsOfAsFrozen() {
+        data.overwriteStock(1, AS_OF);
+
+        assertThat(adapter.hasStocksUpdatedAfter(AS_OF)).isFalse();
     }
 
     /** 발급건을 만들고 저장 상태와 접힌 상태를 따로 세운다. */
