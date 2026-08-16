@@ -20,6 +20,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -41,6 +43,7 @@ import org.springframework.scheduling.support.CronExpression;
  *
  * <p>{@link HermeticBoot} 로 띄웁니다 — 셸 환경변수가 판정을 바꾸면 이 테스트의 뜻이 없어집니다.
  */
+@ResourceLock(Resources.SYSTEM_PROPERTIES)
 class ResolvedBatchConfigTest {
 
     private static final String LOCATION = "--spring.config.location=classpath:/resolved/application.yml";

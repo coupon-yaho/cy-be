@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.EnumerablePropertySource;
+import org.springframework.core.env.MutablePropertySources;
+import org.springframework.core.env.PropertySourcesPropertyResolver;
 import org.springframework.core.env.PropertySource;
 
 /**
@@ -69,23 +71,33 @@ public final class ResolvedConfigChecks {
      * <p><b>소스의 원문을 직접 해석한다.</b> 키 이름만 꺼내 {@code getProperty} 를 부르면
      * 우선순위가 가장 높은 값만 돌아와서, 같은 이름을 가진 <b>진 문서의 원문은 한 번도 안 본다</b> —
      * {@code maximum-pool-size} 처럼 두 파일에 다 있는 키가 실제로 그렇다.
+     *
+     * <p><b>해석도 사본 소스만으로 한다.</b> {@code environment} 로 해석하면 커맨드라인 인자가
+     * 기본값 없는 플레이스홀더를 메꿔서 검사가 공허하게 통과한다 —
+     * 테스트가 {@code --VERIFY_CHUNK_SIZE=7} 같은 인자를 넘기는 순간 그렇게 된다.
+     * 호출 맥락에 기대지 않으려고 리졸버를 여기서 직접 만든다.
      */
     public static void assertEveryPlaceholderResolves(ConfigurableEnvironment environment) {
-        int scanned = 0;
-
+        MutablePropertySources copies = new MutablePropertySources();
         for (PropertySource<?> source : environment.getPropertySources()) {
             // 사본에서 온 소스만 본다. 커맨드라인 인자까지 돌 이유가 없다.
-            if (!(source instanceof EnumerablePropertySource<?> enumerable)
-                    || !source.getName().contains("resolved/")) {
-                continue;
+            if (source instanceof EnumerablePropertySource<?> && source.getName().contains("resolved/")) {
+                copies.addLast(source);
             }
+        }
+
+        PropertySourcesPropertyResolver resolver = new PropertySourcesPropertyResolver(copies);
+        int scanned = 0;
+
+        for (PropertySource<?> source : copies) {
+            EnumerablePropertySource<?> enumerable = (EnumerablePropertySource<?>) source;
             scanned++;
 
             for (String name : enumerable.getPropertyNames()) {
                 if (!(enumerable.getProperty(name) instanceof String text) || !text.contains("${")) {
                     continue;
                 }
-                assertThatCode(() -> environment.resolveRequiredPlaceholders(text))
+                assertThatCode(() -> resolver.resolveRequiredPlaceholders(text))
                         .as(source.getName() + " 의 " + name + " = " + text + " 에 기본값이 없다")
                         .doesNotThrowAnyException();
             }

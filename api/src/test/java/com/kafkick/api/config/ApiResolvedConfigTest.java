@@ -41,6 +41,14 @@ class ApiResolvedConfigTest {
 
     private static final String LOCATION = "--spring.config.location=classpath:/resolved/application.yml";
 
+    /**
+     * {@code HermeticBoot} 의 {@code .web(NONE)} 은 설정 파일의
+     * {@code spring.main.web-application-type} 에 진다. api 의 {@code .example} 에 그 키가
+     * 들어오는 날 {@code EmptyConfig} 에는 자동설정이 없어 <b>컨텍스트가 아예 못 뜬다.</b>
+     * 시끄럽게 죽지만 원인이 이 파일과 무관해 보인다.
+     */
+    private static final String NO_WEB = "--spring.main.web-application-type=none";
+
     @Test
     @DisplayName("복사본의 import 경로가 실제로 치환돼 있다")
     void resolvedCopyPointsAtTheResolvedStorage() throws IOException {
@@ -50,7 +58,7 @@ class ApiResolvedConfigTest {
     @Test
     @DisplayName("api 설정이 실제로 로드되고 storage.yml 이 붙는다")
     void resolvesAndImportsStorageConfig() {
-        try (ConfigurableApplicationContext context = HermeticBoot.run(LOCATION)) {
+        try (ConfigurableApplicationContext context = HermeticBoot.run(LOCATION, NO_WEB)) {
             ConfigurableEnvironment environment = context.getEnvironment();
 
             ResolvedConfigChecks.assertReadsResolvedStorage(environment);
@@ -66,7 +74,7 @@ class ApiResolvedConfigTest {
     @Test
     @DisplayName("Flyway·Hikari·DataSource 가 실제로 바인딩된다 — 이름 오타를 DB 없이 잡는다")
     void configurationPropertiesBind() {
-        try (ConfigurableApplicationContext context = HermeticBoot.run(LOCATION)) {
+        try (ConfigurableApplicationContext context = HermeticBoot.run(LOCATION, NO_WEB)) {
             Binder binder = Binder.get(context.getEnvironment());
 
             // NoUnboundElementsBindHandler 가 필요하다. 기본 Binder 는 모르는 프로퍼티를
