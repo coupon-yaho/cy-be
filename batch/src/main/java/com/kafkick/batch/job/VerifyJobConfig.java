@@ -117,7 +117,7 @@ public class VerifyJobConfig {
             @Value(MAX_FINDINGS) int maxFindings
     ) {
         return ruleStep("usageMismatchStep", findings, maxFindings,
-                (runId, limit) -> rules.findUsageMismatches(runId, limit));
+                (runId, asOf, limit) -> rules.findUsageMismatches(runId, limit));
     }
 
     /** V3 리플레이 대조. {@code issuances.status} 라는 현재 값을 읽으므로 뒤에 둔다. */
@@ -128,7 +128,7 @@ public class VerifyJobConfig {
             @Value(MAX_FINDINGS) int maxFindings
     ) {
         return ruleStep("replayMismatchStep", findings, maxFindings,
-                (runId, limit) -> rules.findReplayMismatches(runId, limit));
+                (runId, asOf, limit) -> rules.findReplayMismatches(runId, asOf, limit));
     }
 
     /**
@@ -146,12 +146,13 @@ public class VerifyJobConfig {
     ) {
         return new StepBuilder(name, jobRepository)
                 .tasklet((contribution, chunkContext) -> {
-                    long runId = requireRunId(chunkContext.getStepContext()
-                            .getStepExecution().getJobExecution());
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
+                    long runId = requireRunId(stepExecution.getJobExecution());
+                    LocalDateTime asOf = stepExecution.getJobParameters().getLocalDateTime("asOf");
 
                     // 하나를 더 요청한다. LIMIT 이 상한까지만 주면 "정확히 상한" 과 "넘침" 을
                     // 구분할 수 없어, 위반이 딱 상한개인 정상 상황도 실패로 만든다.
-                    List<VerificationFinding> detected = query.run(runId, maxFindings + 1);
+                    List<VerificationFinding> detected = query.run(runId, asOf, maxFindings + 1);
                     if (detected.size() > maxFindings) {
                         throw new IllegalStateException(
                                 name + " 검출이 상한에 닿았습니다. 검증기를 의심하십시오. 상한="
@@ -168,7 +169,7 @@ public class VerifyJobConfig {
 
     @FunctionalInterface
     private interface RuleQuery {
-        List<VerificationFinding> run(long runId, int limit);
+        List<VerificationFinding> run(long runId, LocalDateTime asOf, int limit);
     }
 
     /**

@@ -1,6 +1,7 @@
-// asof_state 를 읽어 어긋난 발급건을 찾는 계약입니다. 규칙 하나가 메서드 하나입니다.
+// 검증 규칙의 판정 질의 계약입니다. 규칙 하나가 메서드 하나입니다.
 package com.kafkick.core.verification;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -18,8 +19,12 @@ public interface VerificationRuleRepository {
      * V3 리플레이 대조 — 접은 상태와 {@code issuances.status} 가 다른 발급건.
      *
      * <p>오염 유형 2(이력은 USED 인데 저장값은 ISSUED)가 이 규칙에 잡힙니다.
+     *
+     * <p><b>{@code asOf} 이후에 갱신된 발급건은 비교하지 않습니다.</b> 접힌 상태는 asOf 로 얼어 있는데
+     * {@code issuances.status} 는 질의 순간의 현재값이라, 배치가 도는 동안 런타임이 건드린 발급건이
+     * 전부 어긋난 것으로 잡힙니다. 정상셋에서 오탐이 나고 재실행 결과도 달라집니다.
      */
-    List<VerificationFinding> findReplayMismatches(long runId, int limit);
+    List<VerificationFinding> findReplayMismatches(long runId, LocalDateTime asOf, int limit);
 
     /**
      * V5 사용 실적 정합 — 접은 상태와 활성 사용 건수가 어긋나는 발급건.

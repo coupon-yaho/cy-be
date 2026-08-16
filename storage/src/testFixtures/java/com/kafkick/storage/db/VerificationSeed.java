@@ -18,7 +18,12 @@ import com.kafkick.core.coupon.IssuanceStatus;
  */
 public final class VerificationSeed {
 
-    private static final LocalDateTime EPOCH = LocalDateTime.of(2026, 8, 1, 0, 0);
+    /**
+     * 발급 시각의 기준. 어떤 테스트의 {@code asOf} 보다도 앞서야 한다 —
+     * {@code issuances.updated_at} 이 이 값으로 찍히는데, V3 는 {@code updated_at <= asOf} 인
+     * 발급건만 비교하므로 이 값이 뒤에 있으면 발급건이 통째로 빠진다.
+     */
+    private static final LocalDateTime EPOCH = LocalDateTime.of(2025, 1, 1, 0, 0);
 
     /** 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다. */
     private static final List<String> TABLES_IN_DELETE_ORDER = List.of(

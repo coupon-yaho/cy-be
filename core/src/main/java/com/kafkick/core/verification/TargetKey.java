@@ -60,6 +60,25 @@ public final class TargetKey {
         return HISTORY_PREFIX + historyId;
     }
 
+    /**
+     * 이 키가 그 검출 단위의 형식인가.
+     *
+     * <p>{@link VerificationFinding} 의 팩토리와 생성자가 같은 판별기를 쓴다. 형식 검사가
+     * 팩토리에만 있으면 생성자로 우회되고, 그때는 개수는 맞고 키만 달라 원인을 못 찾는다.
+     */
+    public static boolean matches(FindingType.Grain grain, String key) {
+        if (key == null || key.isBlank() || key.length() > MAX_LENGTH) {
+            return false;
+        }
+
+        return switch (grain) {
+            case COUPON -> key.matches("COUPON:[1-9][0-9]*");
+            case COUPON_MEMBER -> key.matches("COUPON:[1-9][0-9]*\\|MEMBER:[1-9][0-9]*");
+            case ISSUANCE -> key.matches("ISSUANCE:[1-9][0-9]*");
+            case HISTORY -> key.matches("HISTORY:[1-9][0-9]*");
+        };
+    }
+
     private static void validateId(long id, String name) {
         if (id <= 0) {
             throw new IllegalArgumentException(

@@ -26,15 +26,11 @@ import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
 
 @RepositoryTest
-@Import({VerificationRuleJdbcAdapter.class, AsOfStateJdbcAdapter.class,
-        VerificationRunJdbcAdapter.class})
+@Import({AsOfStateJdbcAdapter.class, VerificationRunJdbcAdapter.class})
 class VerificationRuleJdbcAdapterTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
     private static final int LIMIT = 1000;
-
-    @Autowired
-    private VerificationRuleJdbcAdapter adapter;
 
     @Autowired
     private AsOfStateJdbcAdapter asOfStates;
@@ -45,14 +41,20 @@ class VerificationRuleJdbcAdapterTest {
     @Autowired
     private JdbcClient jdbcClient;
 
+    private VerificationRuleJdbcAdapter adapter;
     private VerificationSeed data;
     private long runId;
 
     @BeforeEach
     void setUp() {
+        adapter = new VerificationRuleJdbcAdapter(jdbcClient, 600_000L);
         data = new VerificationSeed(jdbcClient);
-        runId = runAdapter.save(VerificationRun.start(
-                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 1, AS_OF)).id();
+        runId = newRun(1);
+    }
+
+    private long newRun(int attempt) {
+        return runAdapter.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, attempt, AS_OF)).id();
     }
 
     // ─────────────────────────── V3 리플레이 대조 ───────────────────────────
@@ -62,7 +64,7 @@ class VerificationRuleJdbcAdapterTest {
     void findNoReplayMismatchWhenStatesAgree() {
         replayed(IssuanceStatus.USED, IssuanceStatus.USED, 1);
 
-        assertThat(adapter.findReplayMismatches(runId, LIMIT)).isEmpty();
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).isEmpty();
     }
 
     @Test
@@ -70,7 +72,7 @@ class VerificationRuleJdbcAdapterTest {
     void findReplayMismatchForStaleStatus() {
         long issuanceId = replayed(IssuanceStatus.USED, IssuanceStatus.ISSUED, 1);
 
-        assertThat(adapter.findReplayMismatches(runId, LIMIT)).singleElement()
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).singleElement()
                 .satisfies(finding -> {
                     assertThat(finding.type()).isEqualTo(FindingType.REPLAY_MISMATCH);
                     assertThat(finding.targetKey()).isEqualTo("ISSUANCE:" + issuanceId);
@@ -89,19 +91,18 @@ class VerificationRuleJdbcAdapterTest {
                 : IssuanceStatus.ISSUED;
         replayed(replayed, stored, replayed == IssuanceStatus.USED ? 1 : 0);
 
-        assertThat(adapter.findReplayMismatches(runId, LIMIT)).hasSize(1);
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).hasSize(1);
     }
 
     @Test
     @DisplayName("다른 run 의 행은 보지 않는다")
     void ignoreOtherRunOnReplayMismatch() {
-        long otherRunId = runAdapter.save(VerificationRun.start(
-                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 2, AS_OF)).id();
+        long otherRunId = newRun(2);
         long issuanceId = data.issuance(IssuanceStatus.ISSUED);
         asOfStates.appendAll(otherRunId, List.of(
                 new ReplayResult(issuanceId, IssuanceStatus.USED, 1L, AS_OF, List.of())));
 
-        assertThat(adapter.findReplayMismatches(runId, LIMIT)).isEmpty();
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).isEmpty();
     }
 
     // ─────────────────────────── V5 사용 실적 정합 ───────────────────────────
@@ -167,15 +168,47 @@ class VerificationRuleJdbcAdapterTest {
         replayed(IssuanceStatus.USED, IssuanceStatus.ISSUED, 1);
         replayed(IssuanceStatus.USED, IssuanceStatus.ISSUED, 1);
 
-        assertThat(adapter.findReplayMismatches(runId, 1)).hasSize(1);
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, 1)).hasSize(1);
     }
 
     @Test
     @DisplayName("상한이 0 이하면 거부한다")
     void rejectNonPositiveLimit() {
-        assertThatThrownBy(() -> adapter.findReplayMismatches(runId, 0))
+        assertThatThrownBy(() -> adapter.findReplayMismatches(runId, AS_OF, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("검출 상한은 1 이상");
+    }
+
+    @Test
+    @DisplayName("asOf 이후에 갱신된 발급건은 비교하지 않는다 — 배치가 도는 동안 런타임이 건드린 것이다")
+    void ignoreIssuanceUpdatedAfterAsOf() {
+        long issuanceId = replayed(IssuanceStatus.USED, IssuanceStatus.ISSUED, 1);
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", issuanceId)
+                .update();
+
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("asOf 와 같은 시각에 갱신된 발급건은 비교한다 — 경계는 포함이다")
+    void compareIssuanceUpdatedExactlyAtAsOf() {
+        long issuanceId = replayed(IssuanceStatus.USED, IssuanceStatus.ISSUED, 1);
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", AS_OF)
+                .param("id", issuanceId)
+                .update();
+
+        assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("질의 상한이 0 이하면 거부한다")
+    void rejectNonPositiveQueryTimeout() {
+        assertThatThrownBy(() -> new VerificationRuleJdbcAdapter(jdbcClient, 0L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("질의 상한은 1ms 이상");
     }
 
     /** 발급건을 만들고 저장 상태와 접힌 상태를 따로 세운다. */

@@ -5,8 +5,9 @@ package com.kafkick.core.verification;
  * <b>{@code targetKey} 를 직접 만들지 못하게 막습니다.</b> 규칙마다 키 형식이 다른데
  * 형식이 어긋나면 개수는 맞고 키만 달라져, 시드가 기록한 {@code expected_findings} 와
  * 양방향 MINUS 에서 <b>누락 N · 오탐 N</b> 으로 동시에 잡힙니다. 원인을 찾기가 가장 어려운 형태입니다.
- * 그래서 생성은 grain 별 정적 팩토리로만 하고, 팩토리가 {@link FindingType#grain()} 과
- * 대조해 어긋나면 거부합니다.
+ * 그래서 정식 생성자와 grain 별 정적 팩토리가 <b>같은 판별기</b>({@link TargetKey#matches})로
+ * 검사합니다. 팩토리에만 검사를 두면 정식 생성자로 우회됩니다 — {@code record} 의 정식 생성자는
+ * public 이라 자동완성이 그것을 먼저 제안합니다.
  *
  * <p><b>레거시 컬럼 이름에 주의합니다.</b> 어휘가 뒤집혀 있어 필드와 컬럼이 1:1 로 안 읽힙니다.
  *
@@ -36,6 +37,12 @@ public record VerificationFinding(
     public VerificationFinding {
         if (type == null) {
             throw new IllegalArgumentException("검출 규칙이 필요합니다.");
+        }
+        // 정식 생성자도 막는다. 팩토리에만 검사가 있으면 IDE 자동완성이 그것을 그냥 지나친다.
+        if (!TargetKey.matches(type.grain(), targetKey)) {
+            throw new IllegalArgumentException(
+                    "규칙의 검출 단위와 키 형식이 다릅니다. 규칙=" + type
+                            + " 단위=" + type.grain() + " 키=" + targetKey);
         }
         validateEvidence(expected, "기대값");
         validateEvidence(actual, "실제값");
