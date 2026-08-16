@@ -100,6 +100,24 @@ class VerifyJobConfigTest {
     }
 
     @Test
+    @DisplayName("asOf 이후에 갱신된 발급건이 있으면 거부한다 — 조용히 빼면 0건이 두 뜻을 갖는다")
+    void rejectIssuancesUpdatedAfterAsOf() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", issuanceId)
+                .update();
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("asOf 이후에 갱신된 발급건이 있습니다"));
+        assertThat(asOfStateCount()).isZero();
+    }
+
+    @Test
     @DisplayName("증분 검증은 거부한다 — 받아 놓고 전수로 돌면 기록만 INCREMENTAL 로 남는다")
     void rejectIncrementalScope() throws Exception {
         JobParameters parameters = new JobParametersBuilder()

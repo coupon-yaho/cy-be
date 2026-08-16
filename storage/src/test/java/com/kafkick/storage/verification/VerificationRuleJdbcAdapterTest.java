@@ -26,7 +26,8 @@ import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
 
 @RepositoryTest
-@Import({AsOfStateJdbcAdapter.class, VerificationRunJdbcAdapter.class})
+@Import({VerificationRuleJdbcAdapter.class, AsOfStateJdbcAdapter.class,
+        VerificationRunJdbcAdapter.class})
 class VerificationRuleJdbcAdapterTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
@@ -41,13 +42,14 @@ class VerificationRuleJdbcAdapterTest {
     @Autowired
     private JdbcClient jdbcClient;
 
+    @Autowired
     private VerificationRuleJdbcAdapter adapter;
+
     private VerificationSeed data;
     private long runId;
 
     @BeforeEach
     void setUp() {
-        adapter = new VerificationRuleJdbcAdapter(jdbcClient, 600_000L);
         data = new VerificationSeed(jdbcClient);
         runId = newRun(1);
     }
@@ -201,14 +203,6 @@ class VerificationRuleJdbcAdapterTest {
                 .update();
 
         assertThat(adapter.findReplayMismatches(runId, AS_OF, LIMIT)).hasSize(1);
-    }
-
-    @Test
-    @DisplayName("질의 상한이 0 이하면 거부한다")
-    void rejectNonPositiveQueryTimeout() {
-        assertThatThrownBy(() -> new VerificationRuleJdbcAdapter(jdbcClient, 0L))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("질의 상한은 1ms 이상");
     }
 
     /** 발급건을 만들고 저장 상태와 접힌 상태를 따로 세운다. */

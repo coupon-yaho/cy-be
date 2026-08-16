@@ -4,7 +4,6 @@ package com.kafkick.storage.verification;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -33,11 +32,18 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * <p>{@code i.updated_at <= :asOf} 로 자른다. 접힌 상태는 asOf 로 얼어 있는데 저장 상태는
      * 질의 순간의 현재값이라, 이 조건이 없으면 배치가 도는 동안 런타임이 건드린 발급건이
      * 전부 어긋난 것으로 잡히고 재실행 결과도 달라진다.
+     *
+     * <p><b>이 조건이 실제로 무언가를 거르면 그건 이미 비정상이다.</b> 실행 시작에
+     * {@link #countIssuancesUpdatedAfter} 로 거부하므로, 정상 경로에서는 여기서 걸러지는 행이 없다.
+     * 남는 것은 가드 통과 후 이 질의까지의 짧은 틈뿐이다.
      */
     // stored 는 MySQL 예약어다(GENERATED ... STORED). 별칭에 그대로 쓰면 문법 오류가 난다.
+    //
+    // 문장 상한은 여기 걸지 않는다. MAX_EXECUTION_TIME 은 read-only SELECT 에만 먹어서
+    // 이 잡에서 가장 무거운 문장(300만 행 UPDATE)을 못 덮는다. 상한은 Step 의 트랜잭션 속성으로
+    // 건다 — Spring 이 그 트랜잭션의 모든 Statement 에 setQueryTimeout 을 적용한다.
     private static final String SELECT_REPLAY_MISMATCH = """
-            SELECT /*+ MAX_EXECUTION_TIME(%d) */
-                   a.coupon_id AS issuance_id,
+            SELECT a.coupon_id AS issuance_id,
                    a.state     AS replayed_state,
                    i.status    AS stored_status
               FROM asof_state a
@@ -56,8 +62,7 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * 이중 사용({@code USED} 인데 2건)을 놓친다.
      */
     private static final String SELECT_USAGE_MISMATCH = """
-            SELECT /*+ MAX_EXECUTION_TIME(%d) */
-                   a.coupon_id                                       AS issuance_id,
+            SELECT a.coupon_id                                       AS issuance_id,
                    a.active_usage_count                              AS actual_count,
                    CASE WHEN a.state = 'USED' THEN 1 ELSE 0 END      AS expected_count
               FROM asof_state a
@@ -65,6 +70,10 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                AND a.active_usage_count <> CASE WHEN a.state = 'USED' THEN 1 ELSE 0 END
              ORDER BY a.coupon_id
              LIMIT :limit
+            """;
+
+    private static final String COUNT_UPDATED_AFTER = """
+            SELECT COUNT(*) FROM issuances WHERE updated_at > :asOf
             """;
 
     private static final RowMapper<VerificationFinding> REPLAY_MISMATCH_MAPPER =
@@ -82,33 +91,16 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                     "active_usage=" + rs.getInt("actual_count"));
 
     private final JdbcClient jdbcClient;
-    private final String replayMismatchSql;
-    private final String usageMismatchSql;
 
-    /**
-     * @param queryTimeoutMillis 문장 단위 상한. 없으면 폭주한 질의가 커넥션을 물고 늘어져
-     *                           배치 풀(기본 4개)과 공유 서버가 함께 막힌다.
-     *                           {@code JdbcClient} 에는 queryTimeout API 가 없어 힌트로 건다
-     */
-    public VerificationRuleJdbcAdapter(
-            JdbcClient jdbcClient,
-            @Value("${batch.verify.query-timeout-ms:600000}") long queryTimeoutMillis
-    ) {
-        if (queryTimeoutMillis < 1) {
-            throw new IllegalArgumentException(
-                    "질의 상한은 1ms 이상이어야 합니다. 값=" + queryTimeoutMillis);
-        }
-
+    public VerificationRuleJdbcAdapter(JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
-        this.replayMismatchSql = SELECT_REPLAY_MISMATCH.formatted(queryTimeoutMillis);
-        this.usageMismatchSql = SELECT_USAGE_MISMATCH.formatted(queryTimeoutMillis);
     }
 
     @Override
     public List<VerificationFinding> findReplayMismatches(long runId, LocalDateTime asOf, int limit) {
         requireLimit(limit);
 
-        return jdbcClient.sql(replayMismatchSql)
+        return jdbcClient.sql(SELECT_REPLAY_MISMATCH)
                 .param("runId", runId)
                 .param("asOf", asOf)
                 .param("limit", limit)
@@ -120,11 +112,19 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
     public List<VerificationFinding> findUsageMismatches(long runId, int limit) {
         requireLimit(limit);
 
-        return jdbcClient.sql(usageMismatchSql)
+        return jdbcClient.sql(SELECT_USAGE_MISMATCH)
                 .param("runId", runId)
                 .param("limit", limit)
                 .query(USAGE_MISMATCH_MAPPER)
                 .list();
+    }
+
+    @Override
+    public long countIssuancesUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(COUNT_UPDATED_AFTER)
+                .param("asOf", asOf)
+                .query(Long.class)
+                .single();
     }
 
     private static void requireLimit(int limit) {
