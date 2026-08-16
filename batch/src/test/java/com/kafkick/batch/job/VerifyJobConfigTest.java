@@ -185,6 +185,62 @@ class VerifyJobConfigTest {
     }
 
     @Test
+    @DisplayName("불법 전이가 V4 검출로 남는다 — 접기가 계산한 것을 같은 청크에서 쓴다")
+    void recordIllegalTransitionAsFinding() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        long illegal = seed.history(issuanceId, IssuanceEventType.EXPIRE,
+                IssuanceStatus.USED, IssuanceStatus.EXPIRED, AS_OF.minusHours(2));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).containsExactly("HISTORY:" + illegal);
+        assertThat(findingTypesOf()).containsExactly("ILLEGAL_TRANSITION");
+    }
+
+    @Test
+    @DisplayName("합법 전이만 있으면 검출이 없다 — 정상셋 0건이 성립해야 한다")
+    void recordNoFindingForLegalHistory() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("종단 상태에서 되살리는 이력 하나가 검출 하나를 낸다 — 오염 유형 4 의 모양이다")
+    void recordOneFindingPerIllegalHistory() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        issued(issuanceId, AS_OF.minusHours(4));
+        seed.history(issuanceId, IssuanceEventType.EXPIRE,
+                IssuanceStatus.ISSUED, IssuanceStatus.EXPIRED, AS_OF.minusHours(3));
+        long revived = seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.EXPIRED, IssuanceStatus.USED, AS_OF.minusHours(2));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).containsExactly("HISTORY:" + revived);
+        assertThat(statesOf(issuanceId)).containsExactly("USED");
+    }
+
+    @Test
+    @DisplayName("두 번 돌려도 검출 집합이 같다 — 판정이 이 집합으로 이뤄진다")
+    void produceSameFindingsOnRerun() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        seed.history(issuanceId, IssuanceEventType.EXPIRE,
+                IssuanceStatus.USED, IssuanceStatus.EXPIRED, AS_OF.minusHours(2));
+
+        long runOne = launch(1).getExecutionContext().getLong("runId");
+        long runTwo = launch(2).getExecutionContext().getLong("runId");
+
+        assertThat(findingKeysOf(runOne)).isEqualTo(findingKeysOf(runTwo)).isNotEmpty();
+    }
+
+    @Test
     @DisplayName("이력이 하나도 없어도 잡은 정상 종료한다")
     void completeOnEmptyDataset() throws Exception {
         JobExecution execution = launch(1);
@@ -302,6 +358,30 @@ class VerifyJobConfigTest {
                 .param("runId", runId)
                 .query(String.class)
                 .single();
+    }
+
+    private List<String> findingTargetKeys() {
+        return jdbcClient.sql("SELECT target_key FROM verification_findings ORDER BY id")
+                .query(String.class)
+                .list();
+    }
+
+    private List<String> findingTypesOf() {
+        return jdbcClient.sql("SELECT finding_type FROM verification_findings ORDER BY id")
+                .query(String.class)
+                .list();
+    }
+
+    private List<String> findingKeysOf(long targetRunId) {
+        return jdbcClient.sql("""
+                        SELECT CONCAT(finding_type, ':', target_key)
+                          FROM verification_findings
+                         WHERE run_id = :runId
+                         ORDER BY finding_type, target_key
+                        """)
+                .param("runId", targetRunId)
+                .query(String.class)
+                .list();
     }
 
     private static List<String> failureMessagesOf(JobExecution execution) {

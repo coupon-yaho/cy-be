@@ -2,6 +2,7 @@
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.batch.core.configuration.annotation.StepScope;
@@ -15,6 +16,8 @@ import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
+import org.springframework.batch.infrastructure.item.ItemWriter;
+import org.springframework.batch.infrastructure.item.support.CompositeItemWriter;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -23,11 +26,13 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import com.kafkick.batch.replay.AsOfStateItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
+import com.kafkick.batch.replay.IllegalTransitionItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationRun;
+import com.kafkick.core.verification.VerificationFindingRepository;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
@@ -137,7 +142,7 @@ public class VerifyJobConfig {
     @Bean
     public Step replayStep(
             IssuanceHistoryGroupReader replayReader,
-            AsOfStateItemWriter replayWriter,
+            ItemWriter<ReplayResult> replayWriter,
             @Value("${batch.verify.chunk-size:1000}") int chunkSize
     ) {
         return new StepBuilder("replayStep", jobRepository)
@@ -187,10 +192,17 @@ public class VerifyJobConfig {
         return new IssuanceHistoryGroupReader(histories, asOf, scanRange, windowSize);
     }
 
+    /**
+     * 접기의 산출물이 둘이라 라이터도 둘이다 — asOf 시점 상태와 V4 불법 전이.
+     *
+     * <p><b>같은 청크 트랜잭션에서 나간다.</b> 갈라 놓으면 이력을 다시 접어야 하고
+     * 접기 구현이 두 벌이 되며, 재시작 뒤에 상태는 있는데 검출은 없는 구간이 생긴다.
+     */
     @Bean
     @StepScope
-    public AsOfStateItemWriter replayWriter(
+    public ItemWriter<ReplayResult> replayWriter(
             AsOfStateRepository asOfStates,
+            VerificationFindingRepository findings,
             @Value("#{jobExecutionContext['" + RUN_ID_KEY + "']}") Long runId
     ) {
         if (runId == null) {
@@ -198,7 +210,12 @@ public class VerifyJobConfig {
                     "검증 실행 식별자가 없습니다. startRunStep 이 먼저 돌아야 합니다.");
         }
 
-        return new AsOfStateItemWriter(asOfStates, runId);
+        CompositeItemWriter<ReplayResult> writer = new CompositeItemWriter<>();
+        writer.setDelegates(List.of(
+                new AsOfStateItemWriter(asOfStates, runId),
+                new IllegalTransitionItemWriter(findings, runId)));
+
+        return writer;
     }
 
     /**
