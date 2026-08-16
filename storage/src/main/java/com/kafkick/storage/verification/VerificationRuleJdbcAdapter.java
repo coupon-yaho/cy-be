@@ -72,8 +72,13 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
              LIMIT :limit
             """;
 
-    private static final String COUNT_UPDATED_AFTER = """
-            SELECT COUNT(*) FROM issuances WHERE updated_at > :asOf
+    /**
+     * {@code updated_at} 에 인덱스가 없어 {@code COUNT(*)} 로 세면 0건일 때도 300만 행을
+     * 끝까지 훑는다 — 정상 경로가 곧 최악 경로가 된다. 필요한 것은 존재 여부뿐이라
+     * 첫 행에서 끊는다.
+     */
+    private static final String EXISTS_UPDATED_AFTER = """
+            SELECT EXISTS(SELECT 1 FROM issuances WHERE updated_at > :asOf LIMIT 1)
             """;
 
     private static final RowMapper<VerificationFinding> REPLAY_MISMATCH_MAPPER =
@@ -120,10 +125,10 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
     }
 
     @Override
-    public long countIssuancesUpdatedAfter(LocalDateTime asOf) {
-        return jdbcClient.sql(COUNT_UPDATED_AFTER)
+    public boolean hasIssuancesUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(EXISTS_UPDATED_AFTER)
                 .param("asOf", asOf)
-                .query(Long.class)
+                .query(Boolean.class)
                 .single();
     }
 

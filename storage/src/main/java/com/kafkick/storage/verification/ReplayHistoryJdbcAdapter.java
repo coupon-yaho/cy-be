@@ -75,16 +75,24 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
         return jdbcClient.sql(SELECT_SCAN_RANGE)
                 .param("asOf", asOf)
                 .query((rs, rowNum) -> {
-                    long minIssuanceId = rs.getLong("min_issuance_id");
-                    if (rs.wasNull()) {
+                    LocalDateTime latest = rs.getObject("latest_created_at", LocalDateTime.class);
+                    if (latest == null) {
+                        // 이력이 한 행도 없다. 검증할 것도 거부할 것도 없다.
                         return Optional.<ReplayScanRange>empty();
                     }
 
+                    // 창은 비어도 마지막 시각은 돌려준다 — asOf 가 모든 이력보다 앞서는 경우가
+                    // 바로 거부해야 하는 경우라, 여기서 함께 비우면 그 검사를 건너뛴다.
+                    long minIssuanceId = rs.getLong("min_issuance_id");
+                    if (rs.wasNull()) {
+                        return Optional.of(new ReplayScanRange(latest, null, null, null));
+                    }
+
                     return Optional.of(new ReplayScanRange(
+                            latest,
                             minIssuanceId,
                             rs.getLong("max_issuance_id"),
-                            rs.getLong("max_history_id"),
-                            rs.getObject("latest_created_at", LocalDateTime.class)));
+                            rs.getLong("max_history_id")));
                 })
                 .single();
     }

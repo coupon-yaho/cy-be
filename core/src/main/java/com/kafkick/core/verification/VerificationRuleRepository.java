@@ -39,16 +39,20 @@ public interface VerificationRuleRepository {
     List<VerificationFinding> findUsageMismatches(long runId, int limit);
 
     /**
-     * asOf 이후에 갱신된 발급건 수. <b>V3 의 선행 조건</b>이다.
+     * asOf 이후에 갱신된 발급건이 있는가. <b>V3 의 선행 조건</b>이다.
      *
      * <p>V3 는 얼어 있는 접기 결과와 <b>현재</b> {@code issuances.status} 를 비교하므로,
      * asOf 이후 갱신된 행은 비교 대상에서 뺀다. 그런데 <b>빼기만 하면 0건이 두 가지 뜻을 갖는다</b> —
      * "제대로 훑고 아무것도 없었다" 와 "훑을 대상이 안 남았다" 가 구분되지 않는다.
      * 정상셋 0건이 합격 조건이라 후자가 녹색으로 통과한다.
      *
-     * <p>그래서 실행 시작에 이 수를 세고 0 이 아니면 거부한다. 오염셋은 정적이어야 하는데
+     * <p>그래서 실행 <b>시작과 끝에</b> 확인하고 하나라도 있으면 거부한다. 시작에만 보면
+     * 그 뒤 몇 분 동안(리플레이 실측 57초 + 집계 + 규칙) 들어온 갱신을 아무도 다시 보지 않아,
+     * 같은 asOf 두 실행이 다른 검출 집합을 내고도 둘 다 통과한다.
+     *
+     * <p>오염셋은 정적이어야 하는데
      * 주입기가 {@code updated_at} 을 주입 시각으로 찍으면 그 발급건들이 통째로 빠지고,
      * 기대 100건이 0건이 되어 "누락 100" 으로만 보인다 — 원인은 어디에도 안 남는다.
      */
-    long countIssuancesUpdatedAfter(LocalDateTime asOf);
+    boolean hasIssuancesUpdatedAfter(LocalDateTime asOf);
 }

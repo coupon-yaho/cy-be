@@ -96,8 +96,9 @@ public class VerifyJobConfig {
      * Step 트랜잭션의 데드라인. Spring 이 그 트랜잭션 안의 모든 {@code Statement} 에
      * {@code setQueryTimeout} 을 걸어 주므로 SELECT·UPDATE·batchUpdate 를 전부 덮는다.
      *
-     * <p><b>문장 단위가 아니라 트랜잭션 단위다.</b> 청크 Step 에서는 청크 하나의 데드라인이므로
-     * {@code chunk-size} 를 키우면 이 값의 의미도 같이 커진다. MySQL 힌트
+     * <p><b>문장 단위가 아니라 트랜잭션 단위다.</b> 청크 Step 에서는 청크 하나의 데드라인이다.
+     * 가장 무거운 청크는 창을 새로 읽는 청크이므로, {@code chunk-size} 보다
+     * <b>{@code replay-window-size}</b> 가 이 값을 좌우한다 — 창 하나가 한 트랜잭션에 통째로 올라온다. MySQL 힌트
      * {@code MAX_EXECUTION_TIME} 을 쓰지 않는 이유는 그것이 read-only SELECT 에만 먹어서
      * 이 잡에서 가장 무거운 문장(300만 행 UPDATE)을 못 덮기 때문이다.
      */
@@ -127,7 +128,8 @@ public class VerifyJobConfig {
             Step replayStep,
             Step usageCountStep,
             Step usageMismatchStep,
-            Step replayMismatchStep
+            Step replayMismatchStep,
+            Step assertFrozenStep
     ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
@@ -138,6 +140,33 @@ public class VerifyJobConfig {
                 .next(usageCountStep)
                 .next(usageMismatchStep)
                 .next(replayMismatchStep)
+                .next(assertFrozenStep)
+                .build();
+    }
+
+    /**
+     * 실행이 도는 동안 발급건이 갱신되지 않았는지 <b>끝에서 다시</b> 본다.
+     *
+     * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다. V3 는 체인
+     * 맨 끝이라 그 구간에 갱신된 행을 조용히 빼고 0건으로 통과하는데, 같은 asOf 를 스케줄러가
+     * 멈춘 상태로 다시 돌리면 검출이 나온다 — 같은 파라미터가 다른 답을 낸다.
+     */
+    @Bean
+    public Step assertFrozenStep(VerificationRuleRepository rules) {
+        return new StepBuilder("assertFrozenStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    LocalDateTime asOf = chunkContext.getStepContext().getStepExecution()
+                            .getJobParameters().getLocalDateTime("asOf");
+
+                    if (rules.hasIssuancesUpdatedAfter(asOf)) {
+                        throw new IllegalStateException(
+                                "실행 중에 발급건이 갱신됐습니다. V3 가 그만큼을 비교에서 뺐으므로 "
+                                        + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
+                    }
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
                 .build();
     }
 
@@ -181,8 +210,9 @@ public class VerifyJobConfig {
             int maxFindings,
             RuleQuery query
     ) {
-        // 라이터 쪽과 거부 조건을 같게 둔다. 여기서 안 막으면 어댑터까지 내려가서야 걸리고,
-        // 그때 메시지에 찍히는 값이 설정한 값과 달라 원인을 못 찾는다.
+        // 여기만 상한에 +1 을 하므로 여기만 Integer.MAX_VALUE 를 막는다.
+        // 라이터(IllegalTransitionItemWriter)는 +1 이 없어 하한만 본다.
+        // 안 막으면 넘친 음수가 어댑터까지 내려가서야 걸리고, 그때 메시지의 값이 설정한 값과 다르다.
         if (maxFindings < 1 || maxFindings == Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
                     "검출 상한은 1 이상 " + (Integer.MAX_VALUE - 1) + " 이하여야 합니다. 값="
@@ -232,7 +262,8 @@ public class VerifyJobConfig {
     public Step startRunStep(
             VerificationRunRepository runs,
             ReplayHistoryRepository histories,
-            VerificationRuleRepository rules
+            VerificationRuleRepository rules,
+            @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled
     ) {
         return new StepBuilder("startRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -245,10 +276,13 @@ public class VerifyJobConfig {
                     int attempt = parameters.getLong("attempt").intValue();
 
                     rejectUnsupportedScope(scope);
+                    rejectRunningSchedulers(schedulingEnabled);
 
+                    // 창이 없어도 마지막 이력 시각은 온다. ifPresent 안에 검사를 넣으면
+                    // asOf 가 모든 이력보다 앞서는 경우 — 거부해야 하는 바로 그 경우 — 를 건너뛴다.
                     Optional<ReplayScanRange> scanRange = histories.scanRange(asOf);
                     scanRange.ifPresent(range -> rejectAsOfBeforeLatestHistory(asOf, range));
-                    rejectIssuancesUpdatedAfterAsOf(asOf, rules.countIssuancesUpdatedAfter(asOf));
+                    rejectIssuancesUpdatedAfterAsOf(asOf, rules.hasIssuancesUpdatedAfter(asOf));
 
                     long runId = runs
                             .findByParams(asOf, dataset, scope, attempt)
@@ -261,7 +295,8 @@ public class VerifyJobConfig {
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();
                     jobContext.putLong(RUN_ID_KEY, runId);
-                    scanRange.ifPresent(range -> freeze(jobContext, range));
+                    scanRange.filter(ReplayScanRange::hasWindow)
+                            .ifPresent(range -> freeze(jobContext, range));
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
@@ -316,10 +351,11 @@ public class VerifyJobConfig {
             @Value("#{jobExecutionContext['" + SCAN_LATEST_KEY + "']}") String latestCreatedAt,
             @Value("${batch.verify.replay-window-size:50000}") long windowSize
     ) {
+        // 창이 있을 때만 컨텍스트에 심으므로, 여기 값이 없으면 접을 것이 없는 실행이다.
         ReplayScanRange scanRange = minIssuanceId == null
                 ? null
-                : new ReplayScanRange(minIssuanceId, maxIssuanceId, maxHistoryId,
-                        LocalDateTime.parse(latestCreatedAt));
+                : new ReplayScanRange(LocalDateTime.parse(latestCreatedAt),
+                        minIssuanceId, maxIssuanceId, maxHistoryId);
 
         return new IssuanceHistoryGroupReader(histories, asOf, scanRange, windowSize);
     }
@@ -393,11 +429,26 @@ public class VerifyJobConfig {
      * "볼 것이 안 남았다" 가 구분되지 않는다.</b> 오염셋에서는 주입기가 {@code updated_at} 을
      * 주입 시각으로 찍는 순간 기대 100건이 0건이 되고, 실패 메시지는 "누락 100" 뿐이다.
      */
-    private static void rejectIssuancesUpdatedAfterAsOf(LocalDateTime asOf, long updatedAfter) {
-        if (updatedAfter > 0) {
+    private static void rejectIssuancesUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
+        if (updatedAfter) {
             throw new IllegalArgumentException(
                     "asOf 이후에 갱신된 발급건이 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
-                            + "asOf=" + asOf + " 갱신된 발급건=" + updatedAfter);
+                            + "asOf=" + asOf);
+        }
+    }
+
+    /**
+     * 스케줄러가 켜진 채로는 검증하지 않는다.
+     *
+     * <p>스케줄러가 이 프로세스 안에 함께 있다. 만료 스케줄러가 5분마다 {@code issuances} 를
+     * 건드리므로, 켜둔 채로 돌리면 실행 도중 갱신이 거의 확실히 일어난다. 런북이 "먼저 끈다" 를
+     * 요구하는데 지금까지 그것을 강제하는 수단이 없었다.
+     */
+    private static void rejectRunningSchedulers(boolean schedulingEnabled) {
+        if (schedulingEnabled) {
+            throw new IllegalArgumentException(
+                    "스케줄러가 켜진 상태에서는 검증할 수 없습니다. "
+                            + "batch.scheduling.enabled=false 로 두고 다시 실행하십시오.");
         }
     }
 

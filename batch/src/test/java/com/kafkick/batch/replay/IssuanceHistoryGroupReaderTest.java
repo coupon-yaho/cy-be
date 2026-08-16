@@ -145,7 +145,7 @@ class IssuanceHistoryGroupReaderTest {
         FakeHistories histories = new FakeHistories()
                 .with(1L, issue(1L, 1L))
                 .with(2L, issue(2L, 2L));
-        ReplayScanRange given = new ReplayScanRange(1L, 2L, 2L, AS_OF);
+        ReplayScanRange given = new ReplayScanRange(AS_OF, 1L, 2L, 2L);
 
         readAll(new IssuanceHistoryGroupReader(histories, AS_OF, given, 10));
 
@@ -157,7 +157,7 @@ class IssuanceHistoryGroupReaderTest {
     void honorFrozenHistoryUpperBound() {
         FakeHistories histories = new FakeHistories()
                 .with(1L, issue(1L, 1L), use(9L, 1L));
-        ReplayScanRange frozen = new ReplayScanRange(1L, 1L, 1L, AS_OF);
+        ReplayScanRange frozen = new ReplayScanRange(AS_OF, 1L, 1L, 1L);
 
         List<IssuanceHistoryGroup> groups =
                 readAll(new IssuanceHistoryGroupReader(histories, AS_OF, frozen, 10));
@@ -350,10 +350,10 @@ class IssuanceHistoryGroupReaderTest {
             }
 
             return Optional.of(new ReplayScanRange(
+                    AS_OF,
                     byIssuance.keySet().stream().min(Long::compare).orElseThrow(),
                     byIssuance.keySet().stream().max(Long::compare).orElseThrow(),
-                    maxHistoryId(),
-                    AS_OF));
+                    maxHistoryId()));
         }
 
         @Override

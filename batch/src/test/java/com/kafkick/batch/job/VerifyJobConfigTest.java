@@ -41,6 +41,7 @@ import com.kafkick.storage.db.VerificationSeed;
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
+        "batch.scheduling.enabled=false",
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2"
 })
@@ -115,6 +116,19 @@ class VerifyJobConfigTest {
         assertThat(failureMessagesOf(execution)).anyMatch(
                 m -> m.contains("asOf 이후에 갱신된 발급건이 있습니다"));
         assertThat(asOfStateCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("이력이 전부 asOf 뒤면 거부한다 — 접을 것이 없다고 초록불이 뜨면 안 된다")
+    void rejectWhenEveryHistoryIsAfterAsOf() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.plusHours(1));
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("마지막 이력 시각 이상이어야 합니다"));
     }
 
     @Test

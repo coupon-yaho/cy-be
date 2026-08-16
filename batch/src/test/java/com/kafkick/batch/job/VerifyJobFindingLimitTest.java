@@ -34,6 +34,7 @@ import com.kafkick.storage.db.VerificationSeed;
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
+        "batch.scheduling.enabled=false",
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2",
         "batch.verify.max-findings-per-rule=1"
