@@ -52,13 +52,20 @@ public final class VerificationSeed {
 
     /** 발급 시각을 지정한다. {@code updated_at} 도 같은 값으로 둔다 — 둘이 어긋난 발급건은 없다. */
     public long issuance(IssuanceStatus status, LocalDateTime issuedAt) {
+        long issuanceId = insertIssuance(status, issuedAt, "VIP");
+        syncStock(status, issuedAt);
+        return issuanceId;
+    }
+
+    private long insertIssuance(IssuanceStatus status, LocalDateTime issuedAt, String issuedGrade) {
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO issuances
                             (coupon_id, member_id, code, issued_grade, status,
                              issued_at, expires_at, updated_at)
-                        VALUES (:couponId, :memberId, :code, 'VIP', :status,
+                        VALUES (:couponId, :memberId, :code, :issuedGrade, :status,
                                 :issuedAt, :expiresAt, :updatedAt)
                         """)
+                .param("issuedGrade", issuedGrade)
                 .param("couponId", couponId())
                 .param("memberId", newMemberId())
                 .param("code", nextCode())
@@ -66,6 +73,51 @@ public final class VerificationSeed {
                 .param("issuedAt", issuedAt)
                 .param("expiresAt", issuedAt.plusDays(7))
                 .param("updatedAt", issuedAt));
+    }
+
+    /**
+     * 발급 하나마다 재고를 함께 맞춘다.
+     *
+     * <p><b>기본 시드는 정합한 CLEAN 셋이어야 한다.</b> 운영에서 회차와 재고는 1:1 로 함께
+     * 움직이므로, 재고 행 없이 발급만 쌓인 상태는 그 자체가 V1 검출 대상이다.
+     * 시드가 그런 데이터를 기본으로 만들면 모든 테스트가 V1 을 침묵시키는 코드를 들고 다녀야 한다.
+     *
+     * <p>시각도 발급 시각을 쓴다. {@code DEFAULT_ISSUED_AT} 을 박으면
+     * {@code issuance(status, 2026-01-15)} 을 부른 순간 <b>재고가 줄기 전에 발급이 있었다</b>는,
+     * 런타임이 만들 수 없는 데이터가 된다 — 이 파일이 발급건 시각에 대해 이미 금지한 형태다.
+     * 갱신 경로는 {@code GREATEST} 로 민다. 재고 시각은 마지막 변경이라 뒤로 물러나면 안 된다.
+     *
+     * <p>맞추는 기준은 <b>저장된 status</b> 다. 이력으로 접힌 상태를 일부러 다르게 세운 테스트는
+     * 재고 축이 자동으로 맞지 않으므로 {@link #overwriteStock(int)} 로 직접 맞춰야 한다 —
+     * 그 어긋남을 잡는 것이 V1 이기 때문이다.
+     *
+     * <p>V1 을 울리고 싶은 테스트는 {@link #overwriteStock(int)} 로 덮어쓰거나
+     * {@link #removeStock()} 로 지운다.
+     */
+    private void syncStock(IssuanceStatus status, LocalDateTime issuedAt) {
+        // 행은 항상 만든다. CANCELLED·EXPIRED 만 있는 회차도 운영이라면 active_count 0 인 행이
+        // 있다. 안 만들면 V1 이 침묵하는 이유가 "0 == 0" 이 아니라 "양쪽 다 없어서" 가 되고,
+        // coupons 를 드라이빙으로 고른 근거(재고 행 없는 회차를 잡는다)와 반대되는 데이터가 깔린다.
+        int delta = status.countsTowardStock() ? 1 : 0;
+
+        jdbcClient.sql("""
+                        INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
+                        VALUES (:couponId, 100, :delta, :updatedAt)
+                        ON DUPLICATE KEY UPDATE
+                            active_count = active_count + :delta,
+                            updated_at   = GREATEST(updated_at, VALUES(updated_at))
+                        """)
+                .param("couponId", couponId())
+                .param("delta", delta)
+                .param("updatedAt", issuedAt)
+                .update();
+    }
+
+    /** 재고 행을 지운다. "재고 없이 발급만 쌓인" 상태를 만드는 유일한 수단이다. */
+    public void removeStock() {
+        jdbcClient.sql("DELETE FROM coupon_stocks WHERE coupon_id = :couponId")
+                .param("couponId", couponId())
+                .update();
     }
 
     /** 이력 한 행을 만들고 식별자를 돌려준다. {@code fromStatus} 가 null 이면 발급 이력이다. */
@@ -102,6 +154,117 @@ public final class VerificationSeed {
     }
 
     /**
+     * 발급 시점 등급을 지정한다. V6 는 이 스냅샷과 회차 마스크만 봐서 판정한다 —
+     * {@code members.membership_grade} 는 조인하지 않으므로 회원 등급과 달라도 된다.
+     *
+     * <p>{@code grades} 에 없는 문자열도 넣을 수 있다. 그 자체가 위반이라 검사 대상이다.
+     */
+    public long issuance(IssuanceStatus status, String issuedGrade) {
+        long issuanceId = insertIssuance(status, DEFAULT_ISSUED_AT, issuedGrade);
+        syncStock(status, DEFAULT_ISSUED_AT);
+        return issuanceId;
+    }
+
+    /**
+     * <b>접힌 상태 기준으로 재고를 맞춘다.</b> 저장 {@code status} 와 접기를 일부러 다르게 세운
+     * 테스트가 V1 을 침묵시키는 수단이다 — {@code overwriteStock} 과 같은 일을 하지만
+     * 이름이 <b>무엇에 맞추는지</b>를 말한다.
+     *
+     * <p>V1 이 보는 것은 {@code asof_state.state}(접힌 값)이고 {@code syncStock} 이 맞추는 것은
+     * {@code issuances.status}(저장값)이다. 둘이 다른 테스트 — V3·V4 테스트의 본질이 그렇다 —
+     * 에서는 <b>반드시 어긋나고</b>, 작성자가 의도하지 않은 {@code STOCK_MISMATCH} 가 하나 더 나온다.
+     */
+    public void matchStockToReplay(int activeAfterReplay) {
+        overwriteStock(activeAfterReplay);
+    }
+
+    /**
+     * 회차의 재고를 이 값으로 <b>확정</b>한다 — {@code issuance()} 의 누적을 무시하고 덮어쓴다.
+     *
+     * <p>{@code issuance()} 가 저장 status 기준으로 이미 맞추므로 기본 시드는 정합하다.
+     * 이 메서드는 그것을 덮어써 V1 을 울리거나, 이력으로 접힌 상태를 일부러 다르게 세운
+     * 테스트에서 재고 축을 그쪽에 맞출 때 쓴다.
+     */
+    public void overwriteStock(int activeCount) {
+        overwriteStock(activeCount, DEFAULT_ISSUED_AT);
+    }
+
+    /**
+     * {@code updated_at} 도 지정한다. 재고 축 가드와 {@code updated_at <= asOf} 경계를 보는 데 쓴다.
+     *
+     * <p><b>{@code syncStock} 의 {@code GREATEST} 규약을 깨고 덮어쓴다.</b> 그쪽은 발급을 쌓는
+     * 자리라 시각이 뒤로 물러나면 안 되지만, 여기는 <b>시각 경계를 검사하는 테스트가 부르는 자리</b>다.
+     * {@code GREATEST} 를 쓰면 {@code DEFAULT_ISSUED_AT} 보다 이른 시각을 넘겼을 때 조용히 무시되고,
+     * {@code hasStocksUpdatedAfter} 경계나 {@code V4} 의 소수 초 회귀를 검사하려던 테스트가
+     * <b>다른 값을 보고도 초록</b>이 된다.
+     */
+    public void overwriteStock(int activeCount, LocalDateTime updatedAt) {
+        jdbcClient.sql("""
+                        INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
+                        VALUES (:couponId, 100, :activeCount, :updatedAt)
+                        ON DUPLICATE KEY UPDATE
+                            active_count = VALUES(active_count),
+                            updated_at   = VALUES(updated_at)
+                        """)
+                .param("couponId", couponId())
+                .param("activeCount", activeCount)
+                .param("updatedAt", updatedAt)
+                .update();
+    }
+
+    /**
+     * 회차의 허용 등급 마스크를 좁힌다. 기본은 15(WELCOME+SILVER+GOLD+VIP 전부)라
+     * 그대로 두면 V6 가 절대 울지 않는다.
+     *
+     * @param mask 비트합. WELCOME 1 · SILVER 2 · GOLD 4 · VIP 8
+     */
+    public void restrictCouponTo(int mask) {
+        jdbcClient.sql("UPDATE coupons SET eligible_grades_mask = :mask WHERE id = :couponId")
+                .param("mask", mask)
+                .param("couponId", couponId())
+                .update();
+    }
+
+    /**
+     * 회차를 새로 만들고 이후 {@code issuance()}·{@code overwriteStock()}·{@code restrictCouponTo()} 가
+     * 그것을 가리키게 한다.
+     *
+     * <p><b>회차가 하나뿐이면 귀속을 검증할 수 없다.</b> {@code GROUP BY i.coupon_id} 를 지우고
+     * 전체 합계를 내도 결과가 같아서 통과한다. 회차 그레인 규칙에서 귀속이 밀리면
+     * 개수는 맞고 키만 달라져 <b>누락 N · 오탐 N 이 동시에</b> 뜬다.
+     */
+    public long newCoupon() {
+        long brandId = insertBrand();
+        couponId = insertCoupon(insertTemplate(brandId), brandId);
+        return couponId;
+    }
+
+    /**
+     * 없으면 만든다. 회차 자체가 필요할 뿐인 자리에서 쓴다.
+     *
+     * <p><b>단언 안에서는 쓰지 마라.</b> 그 자리에서 회차가 새로 생기면
+     * {@code currentCouponId()} 가 막으려던 사고가 그대로 난다.
+     */
+    public long currentCouponIdOrCreate() {
+        return couponId();
+    }
+
+    /**
+     * 이 시드가 만든 회차의 식별자. V1 검출의 {@code target_key} 대조에 쓴다.
+     *
+     * <p><b>만들지 않는다.</b> 조회처럼 보이는데 회차를 만들면, 단언 안에서 부를 때
+     * 그 자리에서 새 회차가 생겨 <b>"검출이 엉뚱한 회차를 가리킨다"</b> 는 실패 메시지를 낸다 —
+     * 실제 원인은 단언 자신이다. 원인을 찾는 데 가장 오래 걸리는 형태다.
+     */
+    public long currentCouponId() {
+        if (couponId == null) {
+            throw new IllegalStateException(
+                    "회차가 아직 없습니다. issuance()·overwriteStock()·newCoupon() 중 하나를 먼저 부르십시오.");
+        }
+        return couponId;
+    }
+
+    /**
      * 검증이 건드리는 테이블을 FK 역순으로 비운다.
      *
      * <p>{@code @RepositoryTest} 는 테스트마다 롤백하므로 부를 일이 없다.
@@ -117,12 +280,7 @@ public final class VerificationSeed {
     }
 
     private long couponId() {
-        if (couponId == null) {
-            long brandId = insertBrand();
-            long templateId = insertTemplate(brandId);
-            couponId = insertCoupon(templateId, brandId);
-        }
-        return couponId;
+        return couponId == null ? newCoupon() : couponId;
     }
 
     /**

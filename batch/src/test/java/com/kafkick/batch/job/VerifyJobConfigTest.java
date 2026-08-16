@@ -12,21 +12,27 @@ import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
-import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.InvalidJobParametersException;
+import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.verification.VerificationFinding;
+import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
+import com.kafkick.storage.verification.VerificationRuleJdbcAdapter;
 
 /**
  * Step 0 의 종단 확인이다. 잡을 실제로 돌려 {@code asof_state} 가 생기는지 본다.
@@ -45,11 +51,67 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, VerifyJobConfigTest.MutateAfterStockStepConfig.class})
 class VerifyJobConfigTest {
 
     /** 실행 시작 시각(= 실제 지금)보다 앞서야 한다. asOf 는 미래를 가리킬 수 없다. */
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /**
+     * <b>V1 이 읽은 직후에 재고를 건드린다.</b> 시작 가드는 통과시키고 끝 가드만 발동시키는
+     * 유일한 방법이다 — 그러지 않으면 {@code assertFrozenStep} 의 재고 가지를 통째로 지워도
+     * 테스트가 전부 초록이다.
+     *
+     * <p><b>리포지터리를 대역으로 갈아끼우지 않는다.</b> 인터페이스에 메서드가 늘 때
+     * {@code default} 로 추가하면 대역이 조용히 위임을 안 해서, 이 클래스만 다른 세계를 보게 된다.
+     * 정작 잡 전체 배선을 확인하는 유일한 테스트가 여기다. Step 리스너면 프로덕션 빈이 그대로 남는다.
+     */
+    static Long mutateStockAfterRead;
+
+    /**
+     * 같은 이유로 정책 축도 규칙이 읽은 뒤에 건드린다.
+     *
+     * <p><b>회차 식별자를 담는다.</b> {@code WHERE} 없이 테이블을 통째로 바꾸면, 나중에 회차를
+     * 둘 이상 세우는 테스트가 이 클래스에 추가될 때 무관한 회차까지 건드려
+     * 원인을 알 수 없는 실패를 만든다. {@code null} 이면 건드리지 않는다.
+     */
+    static Long mutatePolicyAfterRead;
+
+    @TestConfiguration
+    static class MutateAfterStockStepConfig {
+
+        /**
+         * <b>인터페이스가 아니라 어댑터를 상속한다.</b> 인터페이스를 손으로 구현하면
+         * 메서드가 늘 때 {@code default} 로 추가된 것을 조용히 안 위임해서,
+         * 이 클래스만 다른 세계를 보게 된다 — 정작 잡 전체 배선을 확인하는 유일한 테스트가 여기다.
+         * 상속이면 새 메서드가 자동으로 진짜 구현을 탄다.
+         */
+        @Bean
+        @Primary
+        VerificationRuleJdbcAdapter mutatingRules(JdbcClient jdbc) {
+            return new VerificationRuleJdbcAdapter(jdbc) {
+
+                @Override
+                public List<VerificationFinding> findStockMismatches(
+                        long runId, LocalDateTime asOf, int limit) {
+                    List<VerificationFinding> found = super.findStockMismatches(runId, asOf, limit);
+
+                    if (mutateStockAfterRead != null) {
+                        jdbc.sql("UPDATE coupon_stocks SET updated_at = :at WHERE coupon_id = :couponId")
+                                .param("at", asOf.plusSeconds(1))
+                                .param("couponId", mutateStockAfterRead)
+                                .update();
+                    }
+                    if (mutatePolicyAfterRead != null) {
+                        jdbc.sql("UPDATE coupons SET eligible_grades_mask = 7 WHERE id = :couponId")
+                                .param("couponId", mutatePolicyAfterRead)
+                                .update();
+                    }
+                    return found;
+                }
+            };
+        }
+    }
 
     @Autowired
     private JobOperator jobOperator;
@@ -67,6 +129,8 @@ class VerifyJobConfigTest {
 
     @BeforeEach
     void setUp() {
+        mutateStockAfterRead = null;
+        mutatePolicyAfterRead = null;
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
@@ -339,6 +403,119 @@ class VerifyJobConfigTest {
         assertThat(asOfStateCount()).isEqualTo(2);
     }
 
+    // ─────────────────────────── V1 재고 정합 ───────────────────────────
+
+    @Test
+    @DisplayName("접은 활성 건수와 재고가 어긋나면 V1 검출이 남는다 — 오염 유형 1 의 모양이다")
+    void recordStockMismatchAsFinding() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        seed.overwriteStock(5);                       // 접기는 1인데 재고는 5
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).containsExactly("COUPON:" + seed.currentCouponId());
+        assertThat(findingTypesOf()).containsExactly("STOCK_MISMATCH");
+    }
+
+    @Test
+    @DisplayName("재고가 맞으면 V1 검출이 없다 — 정상셋 0건이 성립해야 한다")
+    void recordNoStockMismatchWhenCountsAgree() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("asOf 이후에 갱신된 재고가 있으면 거부한다 — 발급건 축과 대칭이다")
+    void rejectStocksUpdatedAfterAsOf() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        seed.overwriteStock(1, AS_OF.plusSeconds(1));   // 시각만 미래로 민다
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("asOf 이후에 갱신된 재고가 있습니다"));
+        assertThat(asOfStateCount())
+                .as("시작 가드라 접기 전에 멈춰야 한다")
+                .isZero();
+    }
+
+    @Test
+    @DisplayName("규칙이 읽은 뒤 재고가 갱신되면 끝 가드가 잡는다 — 시작 가드만으로는 57초가 무방비다")
+    void failWhenStockIsUpdatedAfterRulesRead() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        mutateStockAfterRead = seed.currentCouponId();   // V1 이 읽은 직후 런타임이 건드리는 상황
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("실행 중에 재고가 갱신됐습니다"));
+    }
+
+    @Test
+    @DisplayName("실행 중에 정책이 바뀌면 끝 가드가 잡는다 — 지문은 같은데 검출만 달라지는 자리다")
+    void failWhenPolicyChangesDuringRun() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        mutatePolicyAfterRead = seed.currentCouponId();
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("실행 중에 회차 정책 또는 등급 체계가 바뀌었습니다"));
+    }
+
+    // ─────────────────────────── V6 등급 자격 ───────────────────────────
+
+    @Test
+    @DisplayName("허용 집합에 없는 등급이면 V6 검출이 남는다")
+    void recordGradeViolationAsFinding() throws Exception {
+        seed.restrictCouponTo(12);           // {GOLD, VIP}
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED, "SILVER");
+        issued(issuanceId, AS_OF.minusHours(1));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).containsExactly("ISSUANCE:" + issuanceId);
+        assertThat(findingTypesOf()).containsExactly("GRADE_VIOLATION");
+    }
+
+    @Test
+    @DisplayName("허용 등급이면 V6 검출이 없다 — 오염 유형이 없어 정상셋 0건이 유일한 검증이다")
+    void recordNoGradeViolationForEligibleGrade() throws Exception {
+        seed.restrictCouponTo(12);
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED, "GOLD");
+        issued(issuanceId, AS_OF.minusHours(1));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("한 발급건이 V6 와 V3 를 함께 울릴 수 있다 — 주입 700 이 정답 800 이 되는 이유다")
+    void recordTwoFindingsForOneIssuance() throws Exception {
+        seed.restrictCouponTo(12);
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED, "SILVER");
+        issued(issuanceId, AS_OF.minusHours(2));
+        used(issuanceId, AS_OF.minusHours(1));   // 접기는 USED, 저장은 ISSUED -> V3
+        seed.usage(issuanceId, AS_OF.minusHours(1), null);
+
+        launch(1);
+
+        assertThat(findingTypesOf())
+                .containsExactlyInAnyOrder("GRADE_VIOLATION", "REPLAY_MISMATCH");
+    }
+
     private void issued(long issuanceId, LocalDateTime at) {
         seed.history(issuanceId, IssuanceEventType.ISSUE, null, IssuanceStatus.ISSUED, at);
     }
@@ -443,6 +620,9 @@ class VerifyJobConfigTest {
         long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
         issued(issuanceId, AS_OF.minusHours(3));
         used(issuanceId, AS_OF.minusHours(2));
+        // 접기는 USED(활성)인데 저장은 EXPIRED 라 시드가 재고를 안 만들었다.
+        // 재고 축을 맞춰야 V1 이 침묵하고 의도한 두 규칙만 남는다.
+        seed.overwriteStock(1);
 
         launch(1);
 
@@ -454,15 +634,27 @@ class VerifyJobConfigTest {
     @Test
     @DisplayName("두 번 돌려도 검출 집합이 같다 — 판정이 이 집합으로 이뤄진다")
     void produceSameFindingSetAcrossRules() throws Exception {
-        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        // V1·V6 을 함께 태운다. 둘 다 deterministic=false 로 분류한 규칙이라 위험이 가장 큰데,
+        // 정작 "두 번 돌려 같은가" 를 이 둘에 대고 확인한 적이 없었다.
+        // V1 은 run 마다 asof_state 를 새로 만들고 현재 재고를 읽고,
+        // V6 은 살아 있는 coupons.eligible_grades_mask 를 읽는다.
+        seed.restrictCouponTo(12);                            // {GOLD, VIP}
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED, "SILVER");
         issued(issuanceId, AS_OF.minusHours(3));
         used(issuanceId, AS_OF.minusHours(2));
         seed.usage(issuanceId, AS_OF.minusHours(2), null);
+        seed.overwriteStock(5);                                        // 접기 1 vs 재고 5
 
         long runOne = launch(1).getExecutionContext().getLong("runId");
         long runTwo = launch(2).getExecutionContext().getLong("runId");
 
-        assertThat(findingKeysOf(runOne)).isEqualTo(findingKeysOf(runTwo)).isNotEmpty();
+        assertThat(findingKeysOf(runOne))
+                .as("계약의 checksum 입력이 (finding_type, target_key) 라 이 비교가 그 대리물이다")
+                .containsExactlyInAnyOrder(
+                        "STOCK_MISMATCH:COUPON:" + seed.currentCouponId(),
+                        "REPLAY_MISMATCH:ISSUANCE:" + issuanceId,
+                        "GRADE_VIOLATION:ISSUANCE:" + issuanceId)
+                .isEqualTo(findingKeysOf(runTwo));
     }
 
     private List<String> findingsOf() {
