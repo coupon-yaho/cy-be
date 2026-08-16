@@ -1,0 +1,14 @@
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        # admission-capacity 는 아직 없다. 나중에 붙일 때 allowlist 를 다시 여는 걸 잊지 않으려고 미리 적는다.
+        include: health,metrics,admission-capacity
+        # include 만 두면 누가 * 로 바꾸는 순간 env 가 함께 열린다. exclude 가 그때의 방어선이다.
+        exclude: env,configprops,beans,heapdump
+  endpoint:
+    health:
+      # 상세에 절대경로·JDBC URL 이 실린다.
+      show-details: never
