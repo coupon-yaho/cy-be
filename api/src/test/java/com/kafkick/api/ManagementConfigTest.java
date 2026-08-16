@@ -27,8 +27,11 @@ import org.springframework.core.env.Environment;
         webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class ManagementConfigTest {
 
-    @Autowired
-    Environment environment;
+    private final Environment environment;
+
+    ManagementConfigTest(@Autowired Environment environment) {
+        this.environment = environment;
+    }
 
     @Test
     @DisplayName("관리 포트가 9090 이다 — Compose 가 막을 포트와 같아야 한다")
