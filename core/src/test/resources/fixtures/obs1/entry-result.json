@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "eventId": "11111111-1111-1111-1111-111111111111",
+  "eventType": "ENTRY_RESULT",
+  "requestId": "request-1",
+  "memberId": 7,
+  "couponId": 9,
+  "grade": "GOLD",
+  "httpStatus": 202,
+  "dependency": "NONE",
+  "queuePosition": 12,
+  "queueSequence": 18,
+  "replayed": false,
+  "occurredAt": "2026-08-15T05:02:31.120Z",
+  "engineVersion": "V3",
+  "releaseStage": "V3",
+  "queueMode": "ADAPTIVE",
+  "benchmarkRunId": 42,
+  "producerInstanceId": "api-1"
+}

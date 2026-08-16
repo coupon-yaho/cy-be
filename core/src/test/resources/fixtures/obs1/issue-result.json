@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "eventId": "33333333-3333-3333-3333-333333333333",
+  "eventType": "ISSUE_RESULT",
+  "requestId": "request-2",
+  "memberId": 7,
+  "couponId": 9,
+  "issuanceId": 101,
+  "issuanceCode": "ISSUANCE0000001",
+  "grade": "GOLD",
+  "httpStatus": 201,
+  "dependency": "NONE",
+  "replayed": false,
+  "occurredAt": "2026-08-15T05:02:31.120Z",
+  "engineVersion": "V3",
+  "releaseStage": "V3",
+  "queueMode": "ADAPTIVE",
+  "benchmarkRunId": 42,
+  "producerInstanceId": "api-1"
+}
