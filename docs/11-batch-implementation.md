@@ -273,7 +273,8 @@ dataset_fingerprint
 asof_state
   PK (run_id, coupon_id) — run 마다 재생성한다. 컬럼명은 state 이지 status 가 아니다.
   FK run_id → verification_runs.id 이므로 run 행을 먼저 INSERT 해야 한다.
-  active_usage_count 를 Step 0 가 같이 채워 V5 가 실행 시점에 usages 를 조인하지 않는다.
+  Step 0 는 상태만 만든다. active_usage_count 는 바로 뒤 usageCountStep 이 집계 조인
+  한 문장으로 채우고, 그래서 V5 는 실행 시점에 usages 를 조인하지 않는다.
 ```
 
 `attempt` 를 JobParameters 의 식별 파라미터에 넣지 않으면 같은 `asOf` 재실행이 차단되어
