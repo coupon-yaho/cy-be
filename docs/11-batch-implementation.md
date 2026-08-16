@@ -360,7 +360,7 @@ V3 뒤에      V1     asof_state 집계 ↔ coupon_stocks     현재 행
 `replay_rule.state`). 그래서 이력 한 줄만 얹으면 접힌 상태가 `USED` 로 바뀌고, `issuances.status`
 와 활성 사용 두 축이 동시에 어긋난다.
 
-**주입이 쓰는 어떤 시각도 `asOf` 보다 뒤일 수 없다.** 축마다 결과가 다르다.
+**사건이 일어난 시각은 `asOf` 보다 뒤일 수 없다.** 축마다 결과가 다르다.
 
 ```
 issuance_histories.created_at > asOf   실행이 거부된다 ("asOf 는 마지막 이력 시각 이상")
@@ -369,11 +369,22 @@ issuance_usages.used_at      > asOf   조용하다 — 활성 사용이 0 으로
 ```
 
 앞의 둘은 원인이 메시지에 남지만 **셋째는 아무 말이 없다.** 유형 7 의 100건이 통째로 사라지고
-"누락 100" 으로만 보인다. 활성으로 남길 사용 행은 `used_at <= asOf` 이고
-`canceled_at` 은 `NULL` 이거나 `> asOf` 여야 한다.
+"누락 100" 으로만 보인다.
+
+**`canceled_at` 만 예외다.** 이 컬럼은 사건이 아니라 *"asOf 시점에 살아 있었는가"* 를 가르는
+경계라, 활성 판정식이 `canceled_at IS NULL OR canceled_at > asOf` 다.
+
+```
+활성으로 남길 사용 행    used_at <= asOf  AND  canceled_at IS NULL
+비활성으로 둘 사용 행    used_at <= asOf  AND  canceled_at <= asOf
+```
+
+판정식의 `canceled_at > asOf` 가지는 "스냅샷 뒤에 취소됐다" 를 표현하지만, `asOf` 가
+마지막 이력 이상이면서 실행 시작 이하로 조여 있어 **시드가 만들 수 있는 값이 아니다.**
+시드는 활성을 `NULL` 로만 표현한다.
 
 `NOW()` 로 찍고 `asOf` 를 주입 완료 시각으로 잡으면 밀리초 차이로 걸린다 —
-**`asOf` 를 주입이 쓴 가장 늦은 시각보다 확실히 뒤로 잡는다.**
+**`asOf` 를 주입이 쓴 가장 늦은 사건 시각보다 확실히 뒤로 잡는다.**
 
 ---
 
