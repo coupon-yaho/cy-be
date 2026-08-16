@@ -27,8 +27,10 @@ import com.kafkick.core.verification.replay.ReplayResult;
 public class AsOfStateJdbcAdapter implements AsOfStateRepository {
 
     /**
-     * 재시작 안전. 청크가 죽은 지점부터 다시 도는데 PK 가 {@code (run_id, coupon_id)} 라
-     * 그냥 INSERT 면 이미 쓴 행에서 중복키로 죽는다.
+     * 같은 행을 다시 써도 되게 만든다. PK 가 {@code (run_id, coupon_id)} 라 그냥 INSERT 면
+     * 같은 발급건이 두 번 나오는 순간 중복키로 죽는데, 그 "두 번" 을 만드는 경로가 여럿이다 —
+     * 창을 다시 읽는 재시작(지금은 {@code preventRestart} 로 막혀 있다), 청크 롤백 후 재실행,
+     * 그리고 앞으로 INSERT-only 가정을 깨는 변경. 마지막이 조용히 죽는 것을 막는 것이 핵심이다.
      *
      * <p>사용 건수는 여기서 건드리지 않는다. {@link #applyActiveUsageCounts} 가 뒤에 채우므로
      * 덮어쓰면 이미 채운 값을 0 으로 되돌린다.

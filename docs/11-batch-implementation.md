@@ -120,7 +120,9 @@ batch.scheduling.enabled: false   # 전 스케줄러를 @ConditionalOnProperty �
 ```
 V1 V2 V6      tasklet + 단일 SQL
 V3 V5         tasklet + 단일 SQL (asof_state 조인)
-V4 · Step 0   JdbcPagingItemReader (keyset) → Processor → JdbcBatchItemWriter
+Step 0 · V4   발급건 식별자 창 기반 커스텀 ItemStreamReader → Processor → CompositeItemWriter
+              (JdbcPagingItemReader 를 안 쓴다 — 창 경계가 발급건 단위여야
+               한 발급건의 이력이 두 창에 걸치지 않는다)
 시드 적재      JdbcBatchItemWriter + rewriteBatchedStatements=true
 ```
 
@@ -271,7 +273,8 @@ dataset_fingerprint
 asof_state
   PK (run_id, coupon_id) — run 마다 재생성한다. 컬럼명은 state 이지 status 가 아니다.
   FK run_id → verification_runs.id 이므로 run 행을 먼저 INSERT 해야 한다.
-  active_usage_count 를 Step 0 가 같이 채워 V5 가 실행 시점에 usages 를 조인하지 않는다.
+  Step 0 는 상태만 만든다. active_usage_count 는 바로 뒤 usageCountStep 이 집계 조인
+  한 문장으로 채우고, 그래서 V5 는 실행 시점에 usages 를 조인하지 않는다.
 ```
 
 `attempt` 를 JobParameters 의 식별 파라미터에 넣지 않으면 같은 `asOf` 재실행이 차단되어
@@ -299,17 +302,89 @@ asof_state
 
 Step 순서는 결정론 규칙이 먼저다 — 폭주로 중단돼도 결정론적 부분은 이미 확보된다.
 
+지금 배선된 것 — `VerifyJobConfig#verifyJob` 의 Step 체인 그대로다.
+
 ```
-Step 0 asof_state 생성
-────── 완전 결정론 ──────
-Step 1 V4   Step 2 V2   Step 3 V5
-────── 현재 행을 읽음 ──────
-Step 4 V3   Step 5 V1   Step 6 V6
-Step 7 통계(CLEAN 만)   Step 8 finalize
+startRunStep         실행 행 생성 + 훑을 경계 얼리기 + 선행 조건 검사
+replayStep           asof_state 생성  +  V4          접기 한 번에 산출물 둘
+usageCountStep       활성 사용을 집계 조인 한 문장으로
+usageMismatchStep    V5     결정론
+replayMismatchStep   V3     현재 행을 읽는다
+assertFrozenStep     실행 중 발급건이 갱신되지 않았는지 다시 확인
 ```
+
+뒤에 붙을 것 — **아직 구현되지 않았다.** 자리는 결정론 규칙이 먼저라는 원칙으로 정해진다.
+
+```
+V5 뒤에      V2     asof_state ⋈ issuances 집계        결정론
+V3 뒤에      V1     asof_state 집계 ↔ coupon_stocks     현재 행
+             V6     issued_grade 스냅샷 ↔ 자격 마스크    현재 행
+마지막        통계(CLEAN 만) → finalize(판정·checksum·지문)
+```
+
+`assertFrozenStep` 은 규칙이 늘어도 **항상 마지막**이다. 현재 행을 읽는 규칙이 전부 끝난 뒤에
+확인해야 그 사이 갱신을 잡는다.
+
+**V4 는 Step 0 안에 있다.** 별도 Step 이면 이력 534만 행을 다시 접어야 하고, 접기 구현이 두 벌로
+갈라져 `asof_state` 와 V4 가 서로 다른 말을 하게 된다. **순서의 주인은 `VerifyJobConfig#verifyJob`
+의 Step 체인이다** — 이 표가 어긋나면 표가 틀린 것이다.
+
+> 유형 1 의 계약 설명("재고는 줄었는데 history 에 ISSUE 기록 없음")은 **시드 구현과 다르다.**
+> 시드는 이력을 지우지 않고 재고만 올려 같은 어긋남을 만든다. 판정 기준은 `matrix` 이고
+> `desc` 는 산문이다 — `AsOfStateRepository` javadoc 에 같은 내용이 적혀 있다.
 
 `V2` 가 결정론 구간에 있는 이유 — `asof_state` 에 `member_id` 가 없어 `issuances` 를 읽지만,
 **세는 대상이 "행의 존재"와 `code` 라 둘 다 변하지 않는다.**
+
+### 오염 주입은 계약이 정한 규칙만 울려야 한다
+
+**시드가 지켜야 하는 계약이다.** 규칙이 축을 여럿 보므로, 한 축만 비틀고 나머지를 그대로 두면
+의도하지 않은 규칙이 함께 운다. 그러면 양방향 MINUS 에서 **오탐**으로 잡혀 게이트가 떨어진다.
+
+**규칙 개수의 주인은 `docs/contract.json` 의 `matrix` 다.** 유형 3 처럼 한 주입이 두 규칙을
+울려야 하는 것도 있다 — "하나만" 이 아니라 "계약이 적은 것만" 이다.
+계약은 *무엇을 몇 건 기대하는가*만 적고, **어떻게 심어야 그것만 나오는가는 여기 있다.**
+시드를 다시 구현할 때 이 표를 먼저 본다.
+
+| 유형 | 비트는 축 | 반드시 함께 맞출 것 | 안 맞추면 |
+|---|---|---|---|
+| 1 재고 과다 | `coupon_stocks.active_count` +1 | **이력을 지우지 않는다.** 재고만 올린다 | 첫 이력이 `ISSUE` 가 아니게 되어 `V4` 가 함께 운다 |
+| 2 저장 상태 지연 | `issuances.status` 를 `ISSUED` 로 | **실제 `USED` 발급건을 골라 status 만 되돌린다.** 활성 사용 행은 그대로 둔다 | `ISSUED` 발급건에 가짜 `USE` 이력을 얹으면 활성 사용이 없어 `V5` 가 함께 운다 |
+| 3 사용취소 이중 기록 | `CANCEL_USE` 이력 하나 추가 **+ `coupon_stocks.active_count` 를 1 더 복원** | 최종 상태가 `USED` 로 유지되게 뒤에 `USE` 를 둔다. 활성 사용 1건 유지 | **재고를 안 건드리면 `V1` 100건이 통째로 누락된다** — 접힌 상태가 그대로라 상태 축에는 볼 차이가 없다. 최종 상태가 `ISSUED` 로 굳으면 `V3` 가, 활성 사용이 어긋나면 `V5` 가 함께 운다 |
+| 4 종단에서 되살림 | `EXPIRED → USED` 이력 하나 추가 | **`issuances.status` 를 `USED` 로 맞추고 활성 사용 행을 1건 넣는다.** 재고는 따로 건드리지 않는다 — 접힌 상태가 `USED` 라 활성 집계에 이미 포함된다 | 접기가 마지막 `to_status` 를 따라가 `USED` 가 되므로, 둘 다 안 맞추면 `V3` 100건 + `V5` 100건이 함께 운다 |
+| 5 코드 중복 | 같은 `code` 를 두 회원에게 | **추가 발급건에 `ISSUE` 이력을 넣고 재고 집계에도 반영한다**(상태 `ISSUED`, 사용 행 없음) | 이력을 안 넣으면 `asof_state` 에 행이 안 생겨 `V3`·`V5` 가 건너뛴다. 이력만 넣고 재고를 안 올리면 `V1` 이 함께 운다 |
+| 6 1인 2매 | 같은 회원에게 두 건 | 유형 5 와 같다 | 유형 5 와 같다 |
+| 7 유령 사용 | 활성 사용 행을 남김 | 이력은 `USE → CANCEL_USE` 로 최종 `ISSUED`, `status` 도 `ISSUED` | 상태를 안 맞추면 `V3` 가 함께 운다 |
+
+유형 4 가 가장 위험하다. **불법 전이여도 접기는 그 행의 `to_status` 를 따라간다**(계약
+`replay_rule.state`). 그래서 이력 한 줄만 얹으면 접힌 상태가 `USED` 로 바뀌고, `issuances.status`
+와 활성 사용 두 축이 동시에 어긋난다.
+
+**사건이 일어난 시각은 `asOf` 보다 뒤일 수 없다.** 축마다 결과가 다르다.
+
+```
+issuance_histories.created_at > asOf   실행이 거부된다 ("asOf 는 마지막 이력 시각 이상")
+issuances.updated_at         > asOf   실행이 거부된다 (시작과 끝에서 두 번 본다)
+issuance_usages.used_at      > asOf   조용하다 — 활성 사용이 0 으로 세어져 V5 가 미검출된다
+```
+
+앞의 둘은 원인이 메시지에 남지만 **셋째는 아무 말이 없다.** 유형 7 의 100건이 통째로 사라지고
+"누락 100" 으로만 보인다.
+
+**`canceled_at` 만 예외다.** 이 컬럼은 사건이 아니라 *"asOf 시점에 살아 있었는가"* 를 가르는
+경계라, 활성 판정식이 `canceled_at IS NULL OR canceled_at > asOf` 다.
+
+```
+활성으로 남길 사용 행    used_at <= asOf  AND  canceled_at IS NULL
+비활성으로 둘 사용 행    used_at <= asOf  AND  canceled_at <= asOf
+```
+
+판정식의 `canceled_at > asOf` 가지는 "스냅샷 뒤에 취소됐다" 를 표현하지만, `asOf` 가
+마지막 이력 이상이면서 실행 시작 이하로 조여 있어 **시드가 만들 수 있는 값이 아니다.**
+시드는 활성을 `NULL` 로만 표현한다.
+
+`NOW()` 로 찍고 `asOf` 를 주입 완료 시각으로 잡으면 밀리초 차이로 걸린다 —
+**`asOf` 를 주입이 쓴 가장 늦은 사건 시각보다 확실히 뒤로 잡는다.**
 
 ---
 

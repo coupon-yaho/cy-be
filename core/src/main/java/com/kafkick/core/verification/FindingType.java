@@ -58,10 +58,10 @@ public enum FindingType {
      * <p>Step 순서를 이것이 결정합니다 — 결정론 규칙이 먼저 돌아야 폭주로 중단돼도
      * 결정론적 부분은 이미 확보됩니다.
      *
-     * <pre>
-     * Step 1 V4   Step 2 V2   Step 3 V5     ← 완전 결정론
-     * Step 4 V3   Step 5 V1   Step 6 V6     ← 현재 행을 읽음
-     * </pre>
+     * <p><b>순서의 주인은 {@code VerifyJobConfig#verifyJob} 의 Step 체인이다.</b> 여기에 표를
+     *두면 배선과 갈라진다 — 이 메서드는 아무도 호출하지 않으므로 어긋나도 아무것도 알려주지 않는다.
+     * ({@code V1__init_schema.sql} 의 {@code asof_state} 주석에도 초안 순서가 남아 있는데,
+     * 적용된 마이그레이션이라 고치면 체크섬이 바뀌어 기존 DB 가 기동을 거부한다.)
      *
      * <p>V2 가 결정론인 이유 — 세는 대상이 "행의 존재"와 code 인데 둘 다 변하지 않습니다.
      * 상태가 바뀌어도 행은 남고 코드는 발급 후 불변입니다.

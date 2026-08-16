@@ -1,7 +1,8 @@
-// 검증 잡의 배선입니다. 지금은 Step 0(이력 리플레이)까지만 있고 규칙 Step 이 뒤에 붙습니다.
+// 검증 잡의 배선입니다. Step 0 리플레이(+V4) → 사용 건수 → V5 → V3. V1·V2·V6 이 뒤에 붙습니다.
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.batch.core.configuration.annotation.StepScope;
@@ -15,18 +16,26 @@ import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
+import org.springframework.batch.infrastructure.item.ItemStreamWriter;
+import org.springframework.batch.infrastructure.item.support.CompositeItemWriter;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
+import org.springframework.transaction.interceptor.TransactionAttribute;
 
 import com.kafkick.batch.replay.AsOfStateItemWriter;
+import com.kafkick.batch.replay.IllegalTransitionItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
+import com.kafkick.core.verification.VerificationFinding;
+import com.kafkick.core.verification.VerificationFindingRepository;
+import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
@@ -40,7 +49,7 @@ import com.kafkick.core.verification.replay.ReplayScanRange;
  * {@code uk_run_params} 로 막습니다. 결정론 증명이 같은 {@code asOf} 를 두 번 도는 것이라
  * 이게 막히면 증명 자체가 불가능합니다.
  *
- * <p>Step 순서는 <b>실행 기록 → 리플레이 → 사용 건수</b> 입니다. {@code asof_state} 가
+ * <p>Step 순서는 <b>실행 기록 → 리플레이(+V4) → 사용 건수 → V5 → V3</b> 입니다. {@code asof_state} 가
  * {@code verification_runs.id} 를 FK 로 물기 때문에 실행 행이 먼저 있어야 합니다.
  *
  * <p><b>훑을 경계도 실행 기록 Step 에서 얼립니다.</b> 리더가 열리는 시점은 그보다 뒤라,
@@ -57,33 +66,186 @@ public class VerifyJobConfig {
     static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
     static final String SCAN_LATEST_KEY = "replay.scan.latestCreatedAt";
 
+    /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. V1·V2·V6 이 오면 여섯 벌이 된다. */
+    private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
+
     private static final String[] REQUIRED_PARAMETERS = {"asOf", "scope", "dataset", "attempt"};
     private static final String[] OPTIONAL_PARAMETERS = {"fromTs"};
 
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
+    private final TransactionAttribute timeout;
 
     public VerifyJobConfig(
             JobRepository jobRepository,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            @Value("${batch.verify.step-timeout-ms:600000}") long stepTimeoutMillis
     ) {
+        if (stepTimeoutMillis < 1_000) {
+            throw new IllegalArgumentException(
+                    "Step 상한은 1000ms 이상이어야 합니다. 초 단위로 내림하기 때문입니다. 값="
+                            + stepTimeoutMillis);
+        }
+
         this.jobRepository = jobRepository;
         this.transactionManager = transactionManager;
+        this.timeout = stepTimeout(stepTimeoutMillis);
+    }
+
+    /**
+     * Step 트랜잭션의 데드라인. Spring 이 그 트랜잭션 안의 모든 {@code Statement} 에
+     * {@code setQueryTimeout} 을 걸어 주므로 SELECT·UPDATE·batchUpdate 를 전부 덮는다.
+     *
+     * <p><b>문장 단위가 아니라 트랜잭션 단위다.</b> 청크 Step 에서는 청크 하나의 데드라인이다.
+     * 가장 무거운 청크는 창을 새로 읽는 청크이므로, {@code chunk-size} 보다
+     * <b>{@code replay-window-size}</b> 가 이 값을 좌우한다 — 창 하나가 한 트랜잭션에 통째로 올라온다. MySQL 힌트
+     * {@code MAX_EXECUTION_TIME} 을 쓰지 않는 이유는 그것이 read-only SELECT 에만 먹어서
+     * 이 잡에서 가장 무거운 문장(300만 행 UPDATE)을 못 덮기 때문이다.
+     */
+    private static TransactionAttribute stepTimeout(long millis) {
+        DefaultTransactionAttribute attribute = new DefaultTransactionAttribute();
+        attribute.setTimeout(Math.toIntExact(millis / 1_000));
+
+        return attribute;
     }
 
     /**
      * 파라미터 검증을 잡에 건다. 없으면 {@code scope} 오타 하나에
      * {@code ScopeType.valueOf(null)} 로 죽어 무엇이 빠졌는지 스택트레이스로만 남는다.
+     *
+     * <p><b>실패한 실행을 이어 돌리지 않는다.</b> 검출 상한이 터지는 이유가 "검증기가 망가졌다" 인데,
+     * 코드를 고치고 이어 돌리면 고치기 전 청크가 쓴 검출과 고친 뒤 검출이 한 {@code run_id} 안에
+     * 섞인다. 판정이 어느 코드의 산출물인지 알 수 없게 된다. 다시 돌리려면 {@code attempt} 를
+     * 올려 새 실행으로 간다 — 그것이 이 시스템의 재실행 축이다.
+     *
+     * <p>부분 재시작을 잃는 대가는 작다. Step 0 실측이 57초라 처음부터 다시 돌려도 1분이다.
+     * <b>검증이 수십 분 단위로 길어지면 이 판단을 다시 해야 한다</b> — 그때는 실행마다 규칙 코드
+     * 버전을 기록하고 버전이 다를 때만 거부하는 쪽이 맞다.
      */
     @Bean
-    public Job verifyJob(Step startRunStep, Step replayStep, Step usageCountStep) {
+    public Job verifyJob(
+            Step startRunStep,
+            Step replayStep,
+            Step usageCountStep,
+            Step usageMismatchStep,
+            Step replayMismatchStep,
+            Step assertFrozenStep
+    ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
                         REQUIRED_PARAMETERS, OPTIONAL_PARAMETERS))
+                .preventRestart()
                 .start(startRunStep)
                 .next(replayStep)
                 .next(usageCountStep)
+                .next(usageMismatchStep)
+                .next(replayMismatchStep)
+                .next(assertFrozenStep)
                 .build();
+    }
+
+    /**
+     * 실행이 도는 동안 발급건이 갱신되지 않았는지 <b>끝에서 다시</b> 본다.
+     *
+     * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다. V3 는 체인
+     * 맨 끝이라 그 구간에 갱신된 행을 조용히 빼고 0건으로 통과하는데, 같은 asOf 를 스케줄러가
+     * 멈춘 상태로 다시 돌리면 검출이 나온다 — 같은 파라미터가 다른 답을 낸다.
+     */
+    @Bean
+    public Step assertFrozenStep(VerificationRuleRepository rules) {
+        return new StepBuilder("assertFrozenStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    LocalDateTime asOf = chunkContext.getStepContext().getStepExecution()
+                            .getJobParameters().getLocalDateTime("asOf");
+
+                    if (rules.hasIssuancesUpdatedAfter(asOf)) {
+                        throw new IllegalStateException(
+                                "실행 중에 발급건이 갱신됐습니다. V3 가 그만큼을 비교에서 뺐으므로 "
+                                        + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
+                    }
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
+                .build();
+    }
+
+    /**
+     * V5 사용 실적 정합. <b>현재 행을 읽는 규칙보다 먼저 둔다.</b>
+     *
+     * <p>이 규칙은 {@code asof_state} 안에서 끝나 asOf 만으로 완전히 재구성된다.
+     * 결정론적인 것을 앞에 두면 뒤에서 폭주로 중단돼도 그 부분은 이미 확보된다.
+     */
+    @Bean
+    public Step usageMismatchStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings
+    ) {
+        return ruleStep("usageMismatchStep", findings, maxFindings,
+                (runId, asOf, limit) -> rules.findUsageMismatches(runId, limit));
+    }
+
+    /** V3 리플레이 대조. {@code issuances.status} 라는 현재 값을 읽으므로 뒤에 둔다. */
+    @Bean
+    public Step replayMismatchStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings
+    ) {
+        return ruleStep("replayMismatchStep", findings, maxFindings,
+                (runId, asOf, limit) -> rules.findReplayMismatches(runId, asOf, limit));
+    }
+
+    /**
+     * 규칙 하나를 Step 하나로 감싼다. 어긋난 것만 올라오므로 청크로 나누지 않는다 —
+     * 정상셋 0건, 오염셋 규칙당 100건이다.
+     *
+     * <p>상한에 닿으면 멈춘다. 그만큼 나왔다는 것은 데이터가 아니라
+     * <b>검증기가 망가졌다</b>는 신호이고, 그대로 담으면 OOM 으로 죽어 원인이 묻힌다.
+     */
+    private Step ruleStep(
+            String name,
+            VerificationFindingRepository findings,
+            int maxFindings,
+            RuleQuery query
+    ) {
+        // 여기만 상한에 +1 을 하므로 여기만 Integer.MAX_VALUE 를 막는다.
+        // 라이터(IllegalTransitionItemWriter)는 +1 이 없어 하한만 본다.
+        // 안 막으면 넘친 음수가 어댑터까지 내려가서야 걸리고, 그때 메시지의 값이 설정한 값과 다르다.
+        if (maxFindings < 1 || maxFindings == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "검출 상한은 1 이상 " + (Integer.MAX_VALUE - 1) + " 이하여야 합니다. 값="
+                            + maxFindings);
+        }
+
+        return new StepBuilder(name, jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
+                    long runId = requireRunId(stepExecution.getJobExecution());
+                    LocalDateTime asOf = stepExecution.getJobParameters().getLocalDateTime("asOf");
+
+                    // 하나를 더 요청한다. LIMIT 이 상한까지만 주면 "정확히 상한" 과 "넘침" 을
+                    // 구분할 수 없어, 위반이 딱 상한개인 정상 상황도 실패로 만든다.
+                    List<VerificationFinding> detected = query.run(runId, asOf, maxFindings + 1);
+                    if (detected.size() > maxFindings) {
+                        throw new IllegalStateException(
+                                name + " 검출이 상한에 닿았습니다. 검증기를 의심하십시오. 상한="
+                                        + maxFindings);
+                    }
+
+                    findings.appendAll(runId, detected);
+                    contribution.incrementWriteCount(detected.size());
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
+                .build();
+    }
+
+    @FunctionalInterface
+    private interface RuleQuery {
+        List<VerificationFinding> run(long runId, LocalDateTime asOf, int limit);
     }
 
     /**
@@ -99,7 +261,9 @@ public class VerifyJobConfig {
     @Bean
     public Step startRunStep(
             VerificationRunRepository runs,
-            ReplayHistoryRepository histories
+            ReplayHistoryRepository histories,
+            VerificationRuleRepository rules,
+            @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled
     ) {
         return new StepBuilder("startRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -112,9 +276,13 @@ public class VerifyJobConfig {
                     int attempt = parameters.getLong("attempt").intValue();
 
                     rejectUnsupportedScope(scope);
+                    rejectRunningSchedulers(schedulingEnabled);
 
+                    // 창이 없어도 마지막 이력 시각은 온다. ifPresent 안에 검사를 넣으면
+                    // asOf 가 모든 이력보다 앞서는 경우 — 거부해야 하는 바로 그 경우 — 를 건너뛴다.
                     Optional<ReplayScanRange> scanRange = histories.scanRange(asOf);
                     scanRange.ifPresent(range -> rejectAsOfBeforeLatestHistory(asOf, range));
+                    rejectIssuancesUpdatedAfterAsOf(asOf, rules.hasIssuancesUpdatedAfter(asOf));
 
                     long runId = runs
                             .findByParams(asOf, dataset, scope, attempt)
@@ -127,22 +295,25 @@ public class VerifyJobConfig {
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();
                     jobContext.putLong(RUN_ID_KEY, runId);
-                    scanRange.ifPresent(range -> freeze(jobContext, range));
+                    scanRange.filter(ReplayScanRange::hasWindow)
+                            .ifPresent(range -> freeze(jobContext, range));
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
+                .transactionAttribute(timeout)
                 .build();
     }
 
     @Bean
     public Step replayStep(
             IssuanceHistoryGroupReader replayReader,
-            AsOfStateItemWriter replayWriter,
+            ItemStreamWriter<ReplayResult> replayWriter,
             @Value("${batch.verify.chunk-size:1000}") int chunkSize
     ) {
         return new StepBuilder("replayStep", jobRepository)
                 .<IssuanceHistoryGroup, ReplayResult>chunk(chunkSize)
                 .transactionManager(transactionManager)
+                .transactionAttribute(timeout)
                 .reader(replayReader)
                 .processor(new ReplayProcessor())
                 .writer(replayWriter)
@@ -165,6 +336,7 @@ public class VerifyJobConfig {
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
+                .transactionAttribute(timeout)
                 .build();
     }
 
@@ -179,18 +351,36 @@ public class VerifyJobConfig {
             @Value("#{jobExecutionContext['" + SCAN_LATEST_KEY + "']}") String latestCreatedAt,
             @Value("${batch.verify.replay-window-size:50000}") long windowSize
     ) {
+        // 창이 있을 때만 컨텍스트에 심으므로, 여기 값이 없으면 접을 것이 없는 실행이다.
         ReplayScanRange scanRange = minIssuanceId == null
                 ? null
-                : new ReplayScanRange(minIssuanceId, maxIssuanceId, maxHistoryId,
-                        LocalDateTime.parse(latestCreatedAt));
+                : new ReplayScanRange(LocalDateTime.parse(latestCreatedAt),
+                        minIssuanceId, maxIssuanceId, maxHistoryId);
 
         return new IssuanceHistoryGroupReader(histories, asOf, scanRange, windowSize);
     }
 
+    /**
+     * 접기의 산출물이 둘이라 라이터도 둘이다 — asOf 시점 상태와 V4 불법 전이.
+     *
+     * <p><b>같은 청크 트랜잭션에서 나간다.</b> 갈라 놓으면 이력을 다시 접어야 하고
+     * 접기 구현이 두 벌이 되며, 재시작 뒤에 상태는 있는데 검출은 없는 구간이 생긴다.
+     *
+     * <p>반환 타입이 {@link ItemStreamWriter} 인 것이 중요하다. {@code ItemWriter} 로 좁히면
+     * {@code @StepScope} 프록시가 JDK 프록시가 되어 그 인터페이스만 노출하고, Spring Batch 의
+     * {@code writer instanceof ItemStream} 검사가 실패해 스트림으로 등록되지 않는다.
+     * {@code IllegalTransitionItemWriter} 가 누적 카운터를 갖지만 그것은 폭주 감지용이고
+     * 실행마다 0 부터 세는 것이 의도라, 지금은 {@code ItemStream} 에 실을 상태가 없다.
+     * 상태를 실어야 하는 라이터를 넣는 순간 이 반환 타입이 실제로 필요해진다 — 그때
+     * {@code ItemWriter} 로 좁혀 두면 {@code open()} 이 영원히 안 불려
+     * "일부 구간만 안 써짐" 으로 나타난다.
+     */
     @Bean
     @StepScope
-    public AsOfStateItemWriter replayWriter(
+    public ItemStreamWriter<ReplayResult> replayWriter(
             AsOfStateRepository asOfStates,
+            VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings,
             @Value("#{jobExecutionContext['" + RUN_ID_KEY + "']}") Long runId
     ) {
         if (runId == null) {
@@ -198,7 +388,12 @@ public class VerifyJobConfig {
                     "검증 실행 식별자가 없습니다. startRunStep 이 먼저 돌아야 합니다.");
         }
 
-        return new AsOfStateItemWriter(asOfStates, runId);
+        CompositeItemWriter<ReplayResult> writer = new CompositeItemWriter<>();
+        writer.setDelegates(List.of(
+                new AsOfStateItemWriter(asOfStates, runId),
+                new IllegalTransitionItemWriter(findings, runId, maxFindings)));
+
+        return writer;
     }
 
     /**
@@ -223,6 +418,37 @@ public class VerifyJobConfig {
             throw new IllegalArgumentException(
                     "asOf 는 마지막 이력 시각 이상이어야 합니다. asOf=" + asOf
                             + " 마지막 이력=" + range.latestCreatedAt());
+        }
+    }
+
+    /**
+     * 이력 축 가드와 대칭이다. 이력은 {@code asOf} 이후 것이 있으면 거부하는데,
+     * 발급건 축에도 같은 것이 필요하다.
+     *
+     * <p>없으면 V3 가 그 행들을 조용히 빼고 0건으로 통과한다 — <b>"아무 문제 없었다" 와
+     * "볼 것이 안 남았다" 가 구분되지 않는다.</b> 오염셋에서는 주입기가 {@code updated_at} 을
+     * 주입 시각으로 찍는 순간 기대 100건이 0건이 되고, 실패 메시지는 "누락 100" 뿐이다.
+     */
+    private static void rejectIssuancesUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
+        if (updatedAfter) {
+            throw new IllegalArgumentException(
+                    "asOf 이후에 갱신된 발급건이 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
+                            + "asOf=" + asOf);
+        }
+    }
+
+    /**
+     * 스케줄러가 켜진 채로는 검증하지 않는다.
+     *
+     * <p>스케줄러가 이 프로세스 안에 함께 있다. 만료 스케줄러가 5분마다 {@code issuances} 를
+     * 건드리므로, 켜둔 채로 돌리면 실행 도중 갱신이 거의 확실히 일어난다. 런북이 "먼저 끈다" 를
+     * 요구하는데 지금까지 그것을 강제하는 수단이 없었다.
+     */
+    private static void rejectRunningSchedulers(boolean schedulingEnabled) {
+        if (schedulingEnabled) {
+            throw new IllegalArgumentException(
+                    "스케줄러가 켜진 상태에서는 검증할 수 없습니다. "
+                            + "batch.scheduling.enabled=false 로 두고 다시 실행하십시오.");
         }
     }
 

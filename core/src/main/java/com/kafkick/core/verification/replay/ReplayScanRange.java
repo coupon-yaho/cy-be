@@ -15,26 +15,43 @@ import java.time.LocalDateTime;
  * 있을 수 있습니다(먼저 시작해 늦게 커밋한 트랜잭션). 창을 좁히는 것이지 닫는 것이 아닙니다.
  * 완전히 닫으려면 실행 전체가 한 트랜잭션이어야 하는데, 그러면 청크 재시작을 잃습니다.
  *
- * @param minIssuanceId asOf 이하 이력을 가진 가장 작은 발급건
- * @param maxIssuanceId 같은 조건의 가장 큰 발급건
- * @param maxHistoryId  asOf 이하 이력 중 가장 큰 이력 식별자. 이 실행의 상한
+ * <p><b>{@code latestCreatedAt} 은 창이 없어도 있습니다.</b> asOf 가 모든 이력보다 앞서면
+ * 접을 것이 없어 창은 비지만, 그때가 바로 <b>asOf 가 과거라서 거부해야 하는 경우</b>입니다.
+ * 창과 함께 비워 버리면 그 검사를 건너뛰고 "검출 0건" 으로 통과합니다.
+ *
  * @param latestCreatedAt 필터와 무관한 <b>전체</b> 이력의 마지막 시각. asOf 검증에 쓴다
+ * @param minIssuanceId   asOf 이하 이력을 가진 가장 작은 발급건. 접을 것이 없으면 null
+ * @param maxIssuanceId   같은 조건의 가장 큰 발급건
+ * @param maxHistoryId    asOf 이하 이력 중 가장 큰 이력 식별자. 이 실행의 상한
  */
 public record ReplayScanRange(
-        long minIssuanceId,
-        long maxIssuanceId,
-        long maxHistoryId,
-        LocalDateTime latestCreatedAt
+        LocalDateTime latestCreatedAt,
+        Long minIssuanceId,
+        Long maxIssuanceId,
+        Long maxHistoryId
 ) {
 
     public ReplayScanRange {
-        if (minIssuanceId > maxIssuanceId) {
-            throw new IllegalArgumentException(
-                    "발급건 구간이 뒤집혔습니다. min=" + minIssuanceId + " max=" + maxIssuanceId);
-        }
         if (latestCreatedAt == null) {
             throw new IllegalArgumentException("마지막 이력 시각이 필요합니다.");
         }
+
+        boolean allSet = minIssuanceId != null && maxIssuanceId != null && maxHistoryId != null;
+        boolean allUnset = minIssuanceId == null && maxIssuanceId == null && maxHistoryId == null;
+        if (!allSet && !allUnset) {
+            throw new IllegalArgumentException(
+                    "창 경계는 셋이 함께 있거나 함께 없어야 합니다. min=" + minIssuanceId
+                            + " max=" + maxIssuanceId + " maxHistory=" + maxHistoryId);
+        }
+        if (allSet && minIssuanceId > maxIssuanceId) {
+            throw new IllegalArgumentException(
+                    "발급건 구간이 뒤집혔습니다. min=" + minIssuanceId + " max=" + maxIssuanceId);
+        }
+    }
+
+    /** asOf 이하 이력이 있어 접을 것이 있는가. */
+    public boolean hasWindow() {
+        return minIssuanceId != null;
     }
 
     /**

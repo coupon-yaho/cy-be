@@ -18,7 +18,15 @@ import com.kafkick.core.coupon.IssuanceStatus;
  */
 public final class VerificationSeed {
 
-    private static final LocalDateTime EPOCH = LocalDateTime.of(2026, 8, 1, 0, 0);
+    /**
+     * 발급 시각의 기본값. <b>저장소 안 모든 테스트의 {@code asOf} 보다 앞서야 한다</b> —
+     * V3 는 {@code updated_at <= asOf} 인 발급건만 비교하므로 뒤에 있으면 통째로 빠진다.
+     *
+     * <p>{@code issued_at}·{@code updated_at}·{@code expires_at} 을 <b>한 기준점에서 파생</b>시킨다.
+     * 상수를 따로 두고 하나만 과거로 밀면 "마지막 상태 변경이 발급보다 먼저" 같은,
+     * 런타임이 만들 수 없는 데이터가 된다. 시각을 보는 규칙이 하나 늘 때마다 다시 깨진다.
+     */
+    private static final LocalDateTime DEFAULT_ISSUED_AT = LocalDateTime.of(2025, 1, 1, 0, 0);
 
     /** 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다. */
     private static final List<String> TABLES_IN_DELETE_ORDER = List.of(
@@ -39,19 +47,25 @@ public final class VerificationSeed {
 
     /** 발급건 하나를 만들고 식별자를 돌려준다. */
     public long issuance(IssuanceStatus status) {
+        return issuance(status, DEFAULT_ISSUED_AT);
+    }
+
+    /** 발급 시각을 지정한다. {@code updated_at} 도 같은 값으로 둔다 — 둘이 어긋난 발급건은 없다. */
+    public long issuance(IssuanceStatus status, LocalDateTime issuedAt) {
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO issuances
                             (coupon_id, member_id, code, issued_grade, status,
                              issued_at, expires_at, updated_at)
                         VALUES (:couponId, :memberId, :code, 'VIP', :status,
-                                :issuedAt, :expiresAt, :issuedAt)
+                                :issuedAt, :expiresAt, :updatedAt)
                         """)
                 .param("couponId", couponId())
                 .param("memberId", newMemberId())
                 .param("code", nextCode())
                 .param("status", status.name())
-                .param("issuedAt", EPOCH)
-                .param("expiresAt", EPOCH.plusDays(7)));
+                .param("issuedAt", issuedAt)
+                .param("expiresAt", issuedAt.plusDays(7))
+                .param("updatedAt", issuedAt));
     }
 
     /** 이력 한 행을 만들고 식별자를 돌려준다. {@code fromStatus} 가 null 이면 발급 이력이다. */
@@ -128,7 +142,7 @@ public final class VerificationSeed {
                         INSERT INTO members (membership_grade, created_at)
                         VALUES ('VIP', :createdAt)
                         """)
-                .param("createdAt", EPOCH));
+                .param("createdAt", DEFAULT_ISSUED_AT));
     }
 
     private long insertBrand() {
@@ -157,9 +171,9 @@ public final class VerificationSeed {
                         """)
                 .param("templateId", templateId)
                 .param("brandId", brandId)
-                .param("openAt", EPOCH)
-                .param("closeAt", EPOCH.plusDays(1))
-                .param("createdAt", EPOCH));
+                .param("openAt", DEFAULT_ISSUED_AT)
+                .param("closeAt", DEFAULT_ISSUED_AT.plusDays(1))
+                .param("createdAt", DEFAULT_ISSUED_AT));
     }
 
     private String nextCode() {

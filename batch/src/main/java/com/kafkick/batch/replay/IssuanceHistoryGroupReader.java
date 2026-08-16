@@ -22,12 +22,15 @@ import com.kafkick.core.verification.replay.ReplayScanRange;
  * 리더가 열리는 시점은 실행 행이 만들어진 뒤라, 여기서 재면 그 사이 생긴 발급건이
  * 경계 밖으로 밀려 영원히 안 읽힙니다.
  *
- * <p><b>재시작 위치는 창 단위입니다.</b> 버퍼에 아직 안 나간 묶음이 남아 있으면 그 묶음이
- * 나온 창의 시작을 저장합니다. 다음 창을 저장하면 남은 묶음이 통째로 사라지고, 그 발급건들은
- * {@code asof_state} 에 아예 안 생깁니다.
+ * <p><b>지금 재시작 경로는 돌지 않습니다.</b> {@code VerifyJobConfig#verifyJob} 이
+ * {@code preventRestart()} 라 실패한 실행을 이어 돌릴 수 없고, 다시 돌리려면 {@code attempt} 를
+ * 올려 새 실행으로 갑니다. 아래 창 체크포인트는 그 결정을 되돌릴 때를 위해 남겨 둔 것이고,
+ * <b>한 번도 실행된 적이 없다는 것을 먼저 확인해야 합니다.</b>
  *
- * <p>그래서 재시작하면 창 하나를 다시 읽어 이미 쓴 묶음을 다시 내보냅니다. 라이터가 UPSERT 라
- * 같은 값이 다시 써질 뿐 결과는 같습니다. 손실보다 중복이 낫습니다.
+ * <p>체크포인트 규칙은 이렇습니다 — 버퍼에 아직 안 나간 묶음이 남아 있으면 그 묶음이 나온 창의
+ * 시작을 저장합니다. 다음 창을 저장하면 남은 묶음이 통째로 사라지고, 그 발급건들은
+ * {@code asof_state} 에 아예 안 생깁니다. 그래서 창 하나를 다시 읽어 중복으로 내보냅니다 —
+ * 라이터가 UPSERT 라 같은 값이 다시 써질 뿐입니다. 손실보다 중복이 낫습니다.
  */
 public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHistoryGroup> {
 
@@ -51,7 +54,8 @@ public class IssuanceHistoryGroupReader implements ItemStreamReader<IssuanceHist
     private boolean exhausted;
 
     /**
-     * @param scanRange 실행 시작 Step 이 얼린 경계. 훑을 이력이 없으면 null
+     * @param scanRange 실행 시작 Step 이 얼린 경계. 접을 이력이 없으면 null 이고,
+     *                  그때는 아무것도 내보내지 않는다
      */
     public IssuanceHistoryGroupReader(
             ReplayHistoryRepository repository,

@@ -44,12 +44,6 @@ class ReplayHistoryJdbcAdapterTest {
     // ─────────────────────────── 경계 산정 ───────────────────────────
 
     @Test
-    @DisplayName("이력이 하나도 없으면 훑을 경계가 없다")
-    void reportNoRangeWhenEmpty() {
-        assertThat(adapter.scanRange(AS_OF)).isEmpty();
-    }
-
-    @Test
     @DisplayName("asOf 이하 이력을 가진 발급건의 양 끝을 준다")
     void reportIssuanceBounds() {
         long first = issuedIssuance(AS_OF.minusHours(1));
@@ -96,10 +90,21 @@ class ReplayHistoryJdbcAdapterTest {
     }
 
     @Test
-    @DisplayName("asOf 이후 이력만 있으면 접을 것이 없다")
-    void reportEmptyWhenEveryHistoryIsAfterAsOf() {
-        issuedIssuance(AS_OF.plusHours(1));
+    @DisplayName("asOf 이후 이력만 있으면 창은 없지만 마지막 시각은 준다 — 거부해야 하는 경우다")
+    void reportRangeWithoutWindowWhenEveryHistoryIsAfterAsOf() {
+        LocalDateTime future = AS_OF.plusHours(1);
+        issuedIssuance(future);
 
+        ReplayScanRange range = adapter.scanRange(AS_OF).orElseThrow();
+
+        assertThat(range.hasWindow()).isFalse();
+        assertThat(range.latestCreatedAt()).isEqualTo(future);
+        assertThat(range.isBefore(AS_OF)).isTrue();
+    }
+
+    @Test
+    @DisplayName("이력이 한 행도 없을 때만 빈 값이다")
+    void reportEmptyOnlyWhenNoHistoryAtAll() {
         assertThat(adapter.scanRange(AS_OF)).isEmpty();
     }
 

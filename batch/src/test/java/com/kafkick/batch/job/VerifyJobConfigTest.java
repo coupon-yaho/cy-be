@@ -41,6 +41,7 @@ import com.kafkick.storage.db.VerificationSeed;
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
+        "batch.scheduling.enabled=false",
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2"
 })
@@ -97,6 +98,37 @@ class VerifyJobConfigTest {
         assertThat(failureMessagesOf(execution)).anyMatch(
                 message -> message.contains("마지막 이력 시각 이상이어야 합니다"));
         assertThat(asOfStateCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("asOf 이후에 갱신된 발급건이 있으면 거부한다 — 조용히 빼면 0건이 두 뜻을 갖는다")
+    void rejectIssuancesUpdatedAfterAsOf() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", issuanceId)
+                .update();
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("asOf 이후에 갱신된 발급건이 있습니다"));
+        assertThat(asOfStateCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("이력이 전부 asOf 뒤면 거부한다 — 접을 것이 없다고 초록불이 뜨면 안 된다")
+    void rejectWhenEveryHistoryIsAfterAsOf() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.plusHours(1));
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution)).anyMatch(
+                m -> m.contains("마지막 이력 시각 이상이어야 합니다"));
     }
 
     @Test
@@ -182,6 +214,64 @@ class VerifyJobConfigTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(statesOf(issuanceId)).containsExactly("EXPIRED");
+    }
+
+    @Test
+    @DisplayName("불법 전이가 V4 검출로 남는다 — 접기가 계산한 것을 같은 청크에서 쓴다")
+    void recordIllegalTransitionAsFinding() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        long illegal = seed.history(issuanceId, IssuanceEventType.EXPIRE,
+                IssuanceStatus.USED, IssuanceStatus.EXPIRED, AS_OF.minusHours(2));
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).containsExactly("HISTORY:" + illegal);
+        assertThat(findingTypesOf()).containsExactly("ILLEGAL_TRANSITION");
+    }
+
+    @Test
+    @DisplayName("합법 전이만 있으면 검출이 없다 — 정상셋 0건이 성립해야 한다")
+    void recordNoFindingForLegalHistory() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("종단 상태에서 되살리는 이력 하나가 검출 하나를 낸다 — 오염 유형 4 의 모양이다")
+    void recordOneFindingPerIllegalHistory() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        issued(issuanceId, AS_OF.minusHours(4));
+        seed.history(issuanceId, IssuanceEventType.EXPIRE,
+                IssuanceStatus.ISSUED, IssuanceStatus.EXPIRED, AS_OF.minusHours(3));
+        long revived = seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.EXPIRED, IssuanceStatus.USED, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);   // 사용 축은 맞춰 V5 를 침묵시킨다
+
+        launch(1);
+
+        assertThat(findingTargetKeys()).containsExactly("HISTORY:" + revived);
+        assertThat(statesOf(issuanceId)).containsExactly("USED");
+    }
+
+    @Test
+    @DisplayName("두 번 돌려도 검출 집합이 같다 — 판정이 이 집합으로 이뤄진다")
+    void produceSameFindingsOnRerun() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        seed.history(issuanceId, IssuanceEventType.EXPIRE,
+                IssuanceStatus.USED, IssuanceStatus.EXPIRED, AS_OF.minusHours(2));
+
+        long runOne = launch(1).getExecutionContext().getLong("runId");
+        long runTwo = launch(2).getExecutionContext().getLong("runId");
+
+        assertThat(findingKeysOf(runOne)).isEqualTo(findingKeysOf(runTwo)).isNotEmpty();
     }
 
     @Test
@@ -302,6 +392,111 @@ class VerifyJobConfigTest {
                 .param("runId", runId)
                 .query(String.class)
                 .single();
+    }
+
+    @Test
+    @DisplayName("접은 상태와 저장값이 어긋나면 V3 로 남는다 — 오염 유형 2 의 모양이다")
+    void recordReplayMismatch() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);   // 사용 축은 맞춰 V5 를 침묵시킨다
+
+        launch(1);
+
+        assertThat(findingsOf()).containsExactly(
+                "REPLAY_MISMATCH:ISSUANCE:" + issuanceId);
+    }
+
+    @Test
+    @DisplayName("ISSUED 인데 활성 사용이 남아 있으면 V5 로 남는다 — 오염 유형 7 의 모양이다")
+    void recordUsageMismatch() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);
+
+        launch(1);
+
+        assertThat(findingsOf()).containsExactly(
+                "USAGE_MISMATCH:ISSUANCE:" + issuanceId);
+    }
+
+    @Test
+    @DisplayName("정상 발급건만 있으면 검출이 하나도 없다 — 정상셋 0건이 이 잡의 합격 조건이다")
+    void recordNothingForCleanData() throws Exception {
+        long used = seed.issuance(IssuanceStatus.USED);
+        issued(used, AS_OF.minusHours(3));
+        used(used, AS_OF.minusHours(2));
+        seed.usage(used, AS_OF.minusHours(2), null);
+
+        long issuedOnly = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuedOnly, AS_OF.minusHours(1));
+
+        launch(1);
+
+        assertThat(findingsOf()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("한 발급건이 두 규칙을 함께 울릴 수 있다 — 주입 수와 정답 행수가 다른 이유다")
+    void recordMultipleRulesForOneIssuance() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+
+        launch(1);
+
+        assertThat(findingsOf()).containsExactlyInAnyOrder(
+                "REPLAY_MISMATCH:ISSUANCE:" + issuanceId,
+                "USAGE_MISMATCH:ISSUANCE:" + issuanceId);
+    }
+
+    @Test
+    @DisplayName("두 번 돌려도 검출 집합이 같다 — 판정이 이 집합으로 이뤄진다")
+    void produceSameFindingSetAcrossRules() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);
+
+        long runOne = launch(1).getExecutionContext().getLong("runId");
+        long runTwo = launch(2).getExecutionContext().getLong("runId");
+
+        assertThat(findingKeysOf(runOne)).isEqualTo(findingKeysOf(runTwo)).isNotEmpty();
+    }
+
+    private List<String> findingsOf() {
+        return jdbcClient.sql("""
+                        SELECT CONCAT(finding_type, ':', target_key)
+                          FROM verification_findings
+                         ORDER BY finding_type, target_key
+                        """)
+                .query(String.class)
+                .list();
+    }
+
+    private List<String> findingTargetKeys() {
+        return jdbcClient.sql("SELECT target_key FROM verification_findings ORDER BY id")
+                .query(String.class)
+                .list();
+    }
+
+    private List<String> findingTypesOf() {
+        return jdbcClient.sql("SELECT finding_type FROM verification_findings ORDER BY id")
+                .query(String.class)
+                .list();
+    }
+
+    private List<String> findingKeysOf(long targetRunId) {
+        return jdbcClient.sql("""
+                        SELECT CONCAT(finding_type, ':', target_key)
+                          FROM verification_findings
+                         WHERE run_id = :runId
+                         ORDER BY finding_type, target_key
+                        """)
+                .param("runId", targetRunId)
+                .query(String.class)
+                .list();
     }
 
     private static List<String> failureMessagesOf(JobExecution execution) {
