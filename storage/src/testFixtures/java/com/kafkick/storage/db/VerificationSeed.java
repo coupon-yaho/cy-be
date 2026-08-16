@@ -30,7 +30,14 @@ public final class VerificationSeed {
 
     /** 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다. */
     private static final List<String> TABLES_IN_DELETE_ORDER = List.of(
-            "asof_state", "verification_findings", "verification_runs",
+            // expected_findings 는 FK 가 없어 DELETE 가 막히지는 않지만 uk_expected 가 있어,
+            // 행이 새면 다음 테스트가 같은 seed_run_id 로 심다가 중복키로 죽는다.
+            // 통계 셋은 아직 아무도 안 채우지만 verification_runs 를 FK 로 문다.
+            // 통계 Step 이 붙는 순간 이 목록이 없으면 DELETE 가 막혀,
+            // 원인 테스트가 아니라 그다음 테스트가 빨개진다.
+            "hourly_stats", "grade_stats", "coupon_stats",
+            "asof_state", "verification_findings", "expected_findings", "verification_runs",
+            "idempotency_records",
             "issuance_usages", "issuance_histories", "issuances",
             "coupon_stocks", "coupons", "coupon_templates", "brands",
             "members", "grades");
@@ -40,6 +47,7 @@ public final class VerificationSeed {
     private Long couponId;
     private boolean gradesInserted;
     private int codeSequence;
+    private String lastCode;
 
     public VerificationSeed(JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
@@ -68,7 +76,7 @@ public final class VerificationSeed {
                 .param("issuedGrade", issuedGrade)
                 .param("couponId", couponId())
                 .param("memberId", newMemberId())
-                .param("code", nextCode())
+                .param("code", lastCode = nextCode())
                 .param("status", status.name())
                 .param("issuedAt", issuedAt)
                 .param("expiresAt", issuedAt.plusDays(7))
@@ -277,15 +285,96 @@ public final class VerificationSeed {
         // 캐시를 안 비우면 다음 issuance() 가 방금 지운 회차·등급을 FK 로 가리킨다.
         couponId = null;
         gradesInserted = false;
+        // 지운 발급의 code 를 복제 원본으로 집으면 "복제했다고 믿는데 실제로는 정상 데이터" 가 된다.
+        lastCode = null;
+        codeSequence = 0;
     }
 
     private long couponId() {
         return couponId == null ? newCoupon() : couponId;
     }
 
+    // ─────────────────────────── V2 · CORRUPT 전용 ───────────────────────────
+
     /**
-     * 발급건마다 회원을 새로 만든다. {@code issuances.uk_coupon_member} 가 1인 1매를 강제하므로
-     * 같은 회차에 같은 회원으로 두 건을 넣을 수 없다.
+     * 발급 하나를 새 회원으로 만들고 <b>그 회원 식별자</b>를 돌려준다. V2 는 회원 단위 규칙이라
+     * {@code issuance()} 가 돌려주는 발급건 식별자로는 검출 키를 만들 수 없다.
+     *
+     * <p><b>{@code CorruptRepositoryTest} 에서만 의미가 있다.</b> 아래 셋은 CLEAN 에서
+     * {@code uk_coupon_member} 와 {@code issuances.code} UNIQUE 에 막혀 INSERT 자체가 튕긴다.
+     */
+    public long issuanceForNewMember() {
+        long memberId = newMemberId();
+        insertIssuanceFor(memberId, nextCode(), DEFAULT_ISSUED_AT);
+        return memberId;
+    }
+
+    /** 이미 있는 회원에게 같은 회차로 한 건 더 — 오염 유형 6 의 모양이다. */
+    public void issuanceForMember(long memberId) {
+        issuanceForMember(memberId, DEFAULT_ISSUED_AT);
+    }
+
+    /** 시각을 지정한다. {@code asOf} 경계를 넘는 두 번째 발급을 세우는 데 쓴다. */
+    public void issuanceForMember(long memberId, LocalDateTime updatedAt) {
+        insertIssuanceFor(memberId, nextCode(), updatedAt);
+    }
+
+    /** 이미 있는 회원에게 같은 {@code code} 로 한 건 더 — 두 케이스에 동시에 걸리는 모양이다. */
+    public void issuanceForMemberWithCode(long memberId, String code) {
+        insertIssuanceFor(memberId, code, DEFAULT_ISSUED_AT);
+    }
+
+    /** 같은 {@code code} 를 새 회원에게 복제 — 오염 유형 5 의 모양이다. 회원 식별자를 돌려준다. */
+    public long issuanceForNewMemberWithCode(String code) {
+        return issuanceForNewMemberWithCode(code, DEFAULT_ISSUED_AT);
+    }
+
+    /** 시각을 지정한다. 케이스 2 의 {@code asOf} 경계를 세우는 데 쓴다. */
+    public long issuanceForNewMemberWithCode(String code, LocalDateTime updatedAt) {
+        long memberId = newMemberId();
+        insertIssuanceFor(memberId, code, updatedAt);
+        return memberId;
+    }
+
+    /** 마지막으로 심은 발급의 code. 복제할 원본을 집을 때 쓴다. */
+    public String currentIssuanceCode() {
+        if (lastCode == null) {
+            throw new IllegalStateException(
+                    "발급이 아직 없습니다. issuanceForNewMember() 를 먼저 부르십시오.");
+        }
+        return lastCode;
+    }
+
+    /**
+     * <b>이력과 재고까지 함께 만든다.</b> 발급 행만 넣으면 접기 결과가 0 이고 재고도 0 이라
+     * V1 이 <b>"둘 다 없어서" 조용할 뿐</b>인 상태가 된다 — 이 파일이 금지한 형태다.
+     * 그 상태에 누가 이력을 한 줄 넣는 순간 재고만 어긋나 V2 테스트가
+     * 엉뚱한 {@code STOCK_MISMATCH} 로 실패한다.
+     */
+    private long insertIssuanceFor(long memberId, String code, LocalDateTime updatedAt) {
+        lastCode = code;
+        long issuanceId = insertGenerated(jdbcClient.sql("""
+                        INSERT INTO issuances
+                            (coupon_id, member_id, code, issued_grade, status,
+                             issued_at, expires_at, updated_at)
+                        VALUES (:couponId, :memberId, :code, 'VIP', 'ISSUED',
+                                :issuedAt, :expiresAt, :updatedAt)
+                        """)
+                .param("couponId", couponId())
+                .param("memberId", memberId)
+                .param("code", code)
+                .param("issuedAt", DEFAULT_ISSUED_AT)
+                .param("expiresAt", DEFAULT_ISSUED_AT.plusDays(7))
+                .param("updatedAt", updatedAt));
+
+        history(issuanceId, IssuanceEventType.ISSUE, null, IssuanceStatus.ISSUED, DEFAULT_ISSUED_AT);
+        syncStock(IssuanceStatus.ISSUED, DEFAULT_ISSUED_AT);
+        return issuanceId;
+    }
+
+    /**
+     * 발급건마다 회원을 새로 만든다. CLEAN 의 {@code uk_coupon_member} 가 1인 1매를 강제하므로,
+     * 같은 회차에 같은 회원으로 두 건을 넣으려면 {@code CorruptRepositoryTest} 위여야 한다.
      */
     private long newMemberId() {
         if (!gradesInserted) {

@@ -75,7 +75,7 @@ class VerifyJobFindingLimitTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(failureMessagesOf(execution))
-                .as("상한을 가진 Step 이 넷이라 규칙을 특정하지 않으면 어느 쪽이 터져도 초록이다")
+                .as("상한을 가진 Step 이 여럿이라 규칙 이름을 특정하지 않으면 어느 쪽이 터져도 초록이다")
                 .anyMatch(m -> m.contains("replayMismatchStep 검출이 상한에 닿았습니다"));
     }
 
@@ -141,7 +141,8 @@ class VerifyJobFindingLimitTest {
     }
 
     /**
-     * <b>V1 의 상한은 운영에서 도달하지 않는다.</b> 회차 수(147)가 곧 상한이고 기본값은 10000 이다.
+     * <b>V1 의 상한은 도달하지 않는다.</b> 검출 수의 천장이 {@code coupons} 총 행수
+     * — 과거(브랜드 12 × 개월) + 현재 3 이라 CLEAN 147 · CORRUPT 291 — 인데 기본값은 10000 이다.
      * 그래도 배선은 확인한다 — {@code ruleStep} 이 규칙마다 같은 코드를 타므로,
      * {@code maxFindings} 를 안 넘기거나 {@code limit + 1} 을 안 요청하는 실수가 여기서 드러난다.
      */

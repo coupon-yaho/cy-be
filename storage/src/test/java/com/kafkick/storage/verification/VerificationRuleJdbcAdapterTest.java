@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.IntFunction;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -173,14 +176,6 @@ class VerificationRuleJdbcAdapterTest {
         replayed(IssuanceStatus.USED, IssuanceStatus.ISSUED, 1);
 
         assertThat(adapter.findReplayMismatches(runId, AS_OF, 1)).hasSize(1);
-    }
-
-    @Test
-    @DisplayName("상한이 0 이하면 거부한다")
-    void rejectNonPositiveLimit() {
-        assertThatThrownBy(() -> adapter.findReplayMismatches(runId, AS_OF, 0))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("검출 상한은 1 이상");
     }
 
     @Test
@@ -497,6 +492,39 @@ class VerificationRuleJdbcAdapterTest {
         }
     }
 
+    /**
+     * <b>어댑터의 다섯 규칙을 한 테스트로 돈다.</b> 규칙마다 따로 쓰면 새 규칙이 붙을 때
+     * 이 가드만 빠뜨리기 쉽다 — 실제로 V2 를 붙이면서 {@code requireLimit} 한 줄이 빠졌고
+     * 규칙별 테스트로는 그것이 드러나지 않았다.
+     *
+     * <p>{@code LIMIT 0} 은 MySQL 에서 에러가 아니라 <b>0행</b>이다. 가드가 없으면 규칙이
+     * 조용히 아무것도 안 잡고 잡은 성공으로 끝난다 — 정상셋 0건이 합격 조건이라
+     * <b>그 침묵은 성공과 구분되지 않는다.</b>
+     *
+     * <p><b>V4 는 여기 없다.</b> 그 상한은 어댑터가 아니라 {@code IllegalTransitionItemWriter}
+     * 생성자에 있고 batch 모듈이라 storage 테스트에서 못 부른다 — 대칭 테스트가 그쪽에 있다.
+     */
+    @Test
+    @DisplayName("어댑터 규칙 다섯이 모두 상한 0 과 음수를 거부한다")
+    void rejectNonPositiveLimit() {
+        Map<String, IntFunction<List<VerificationFinding>>> rules = new LinkedHashMap<>();
+        rules.put("V1 findStockMismatches", limit -> adapter.findStockMismatches(1L, AS_OF, limit));
+        rules.put("V2 findDuplicateIssuances", limit -> adapter.findDuplicateIssuances(AS_OF, limit));
+        rules.put("V3 findReplayMismatches", limit -> adapter.findReplayMismatches(1L, AS_OF, limit));
+        rules.put("V5 findUsageMismatches", limit -> adapter.findUsageMismatches(1L, limit));
+        rules.put("V6 findGradeViolations", limit -> adapter.findGradeViolations(AS_OF, limit));
+
+        rules.forEach((name, rule) -> {
+            assertThatThrownBy(() -> rule.apply(0))
+                    .as(name + " 이 상한 0 을 통과시킨다 — LIMIT 0 은 에러가 아니라 0행이다")
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("검출 상한은 1 이상");
+            assertThatThrownBy(() -> rule.apply(-1))
+                    .as(name + " 이 음수 상한을 통과시킨다")
+                    .isInstanceOf(IllegalArgumentException.class);
+        });
+    }
+
     // ─────────────────────────── 회차 정책 축 가드 ───────────────────────────
 
     @Test
@@ -548,7 +576,7 @@ class VerificationRuleJdbcAdapterTest {
     }
 
     /**
-     * <b>{@code GROUP_CONCAT} 으로 짜면 여기서 빨개진다.</b> 회차 147행이 실측 920 바이트로
+     * <b>{@code GROUP_CONCAT} 으로 짜면 여기서 빨개진다.</b> CLEAN 147행이 실측 920 바이트, CORRUPT 291행이면 약 1820 바이트로
      * {@code group_concat_max_len} 기본값 1024 의 90% 다. 여기서는 그 선을 넘겨,
      * 잘린 뒤 회차의 변경이 지문에 안 나타나는 것을 잡는다 —
      * MySQL 은 경고만 내므로 <b>가드가 열린 채로 실패한다.</b>

@@ -1,4 +1,4 @@
-// V1·V3·V5·V6 판정 SQL 입니다. 규칙마다 드라이빙 테이블이 다릅니다.
+// V1·V2·V3·V5·V6 판정 SQL 입니다. 규칙마다 드라이빙 테이블이 다릅니다.
 package com.kafkick.storage.verification;
 
 import java.time.LocalDateTime;
@@ -88,11 +88,13 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * 으로 판정한다 — AND 의 양쪽이 각각 다른 테이블이다. {@code coupons} 만 얼리면
      * {@code SILVER} 의 {@code bit_value} 를 2→16 으로 옮기는 것만으로 검출 집합이 달라지는데
      * 지문은 그대로다. 둘 다 {@code dataset_fingerprint} 재료에 없고 {@code updated_at} 도 없어
-     * 시각 비교를 못 하므로, 값 자체를 접는다. 회차 147행 · 등급 4행이라 비용이 없다.
+     * 시각 비교를 못 하므로, 값 자체를 접는다. 회차 147~291행 · 등급 4행이라 비용이 없다.
      *
      * <p><b>{@code GROUP_CONCAT} 을 쓰지 않는다.</b> {@code group_concat_max_len} 기본값이
-     * 1024 바이트인데 회차 147행이 <b>실측 920 바이트</b>다 — 한계의 90% 다.
-     * 지금 잘리지는 않지만 {@code id} 자릿수가 하나만 늘어도 넘고, MySQL 은 넘치면
+     * 1024 바이트인데 <b>CLEAN 147행이 실측 920 바이트</b>(한계의 90%)이고
+     * <b>CORRUPT 291행이면 약 1820 바이트로 이미 한계를 넘는다.</b>
+     * 지금 잘리지 않는 것은 {@code GROUP_CONCAT} 을 안 쓰기 때문이지 여유가 있어서가 아니다.
+     * MySQL 은 넘치면
      * <b>경고만 내고 조용히 자른다.</b> 뒤쪽 회차의 마스크가 바뀌어도 지문이 그대로가 되어
      * <b>가드가 열린 채로 실패한다.</b> 세션 변수를 올릴 수도 있지만 커넥션 상태에 기대게 된다.
      *
@@ -117,7 +119,7 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
             """;
 
 
-    /** 재고는 회차 147행이라 훑는 비용이 없다. 그래도 형태는 발급건 쪽과 같이 둔다. */
+    /** 재고는 회차가 147~291행이라 훑는 비용이 없다. 그래도 형태는 발급건 쪽과 같이 둔다. */
     private static final String EXISTS_STOCK_UPDATED_AFTER = """
             SELECT EXISTS(SELECT 1 FROM coupon_stocks WHERE updated_at > :asOf LIMIT 1)
             """;
@@ -128,7 +130,7 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * <p><b>{@code coupons} 가 드라이빙이다.</b> {@code asof_state} 를 잡으면 활성이 0인 회차가,
      * {@code coupon_stocks} 를 잡으면 재고 행이 없는 회차가 각각 결과에서 빠진다 —
      * 둘 다 잡아야 할 상태다. 재고 없이 발급이 쌓이는 것은 초과 발급의 가장 위험한 형태이고,
-     * 재고가 남았는데 발급이 0인 것은 오염 유형 1 이다. 회차 147개라 전수 비용이 없다.
+     * 재고가 남았는데 발급이 0인 것은 오염 유형 1 이다. 회차가 147~291개라 전수 비용이 없다.
      *
      * <p>활성은 {@code ISSUED}·{@code USED} 다 — 컬럼 주석이 못 박은 <b>현재 보유량</b>이고
      * 누적 발급 수가 아니다. {@code CANCELLED}·{@code EXPIRED} 는 재고로 돌아간 것이라 빠진다.
@@ -185,6 +187,45 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
              LIMIT :limit
             """;
 
+    /**
+     * V2 1인 1매 위반. 케이스 둘을 {@code UNION} 으로 합친다 —
+     * 한 회원이 두 케이스에 다 걸려도 {@code target_key} 가 같아 한 행이어야 한다.
+     * {@code UNION ALL} 을 쓰면 {@code uk_run_finding} 중복키로 잡 전체가 죽는다.
+     *
+     * <p><b>케이스 2 에서 {@code MIN(id)} 를 뺀다.</b> 같은 code 가 둘이면 먼저 발급된 쪽은
+     * 정상이고 복제본만 위반이다. 안 빼면 원본 회원까지 검출돼 <b>오탐이 오염 수만큼 늘어난다.</b>
+     *
+     * <p>두 케이스 모두 {@code updated_at <= :asOf} 로 자른다 — 어떤 발급건을 볼지가
+     * 고정돼야 재실행 결과가 같다. 집계 안팎에 모두 걸어야 한다:
+     * 안쪽을 안 자르면 {@code asOf} 이후 행이 {@code COUNT(*)} 를 올려 <b>없는 중복이 보인다.</b>
+     */
+    private static final String SELECT_DUPLICATE_ISSUANCE = """
+            SELECT coupon_id, member_id
+              FROM (
+                    SELECT coupon_id, member_id
+                      FROM issuances
+                     WHERE updated_at <= :asOf
+                     GROUP BY coupon_id, member_id
+                    HAVING COUNT(*) > 1
+
+                    UNION
+
+                    SELECT i.coupon_id, i.member_id
+                      FROM issuances i
+                      JOIN (
+                            SELECT coupon_id, code, MIN(id) AS original_id
+                              FROM issuances
+                             WHERE updated_at <= :asOf
+                             GROUP BY coupon_id, code
+                            HAVING COUNT(*) > 1
+                           ) d ON d.coupon_id = i.coupon_id AND d.code = i.code
+                     WHERE i.updated_at <= :asOf
+                       AND i.id <> d.original_id
+                   ) dup
+             ORDER BY coupon_id, member_id
+             LIMIT :limit
+            """;
+
     private static final RowMapper<VerificationFinding> REPLAY_MISMATCH_MAPPER =
             (rs, rowNum) -> VerificationFinding.forIssuance(
                     FindingType.REPLAY_MISMATCH,
@@ -198,6 +239,14 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                     rs.getLong("coupon_id"),
                     "replay=" + rs.getInt("replayed_active"),
                     "coupon_stocks.active_count=" + rs.getInt("stored_active"));
+
+    private static final RowMapper<VerificationFinding> DUPLICATE_ISSUANCE_MAPPER =
+            (rs, rowNum) -> VerificationFinding.forCouponMember(
+                    FindingType.DUP_PER_MEMBER,
+                    rs.getLong("coupon_id"),
+                    rs.getLong("member_id"),
+                    "발급 1건",
+                    "발급 2건 이상");
 
     /** 등급 문자열이 {@code grades} 에 없으면 {@code grade_bit} 가 null 이다 — 그 사실을 증거에 남긴다. */
     private static final RowMapper<VerificationFinding> GRADE_VIOLATION_MAPPER = (rs, rowNum) -> {
@@ -272,10 +321,35 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
     }
 
     @Override
+    public List<VerificationFinding> findDuplicateIssuances(LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_DUPLICATE_ISSUANCE)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(DUPLICATE_ISSUANCE_MAPPER)
+                .list();
+    }
+
+    @Override
     public String policyDigest() {
         return jdbcClient.sql(SELECT_POLICY_DIGEST)
                 .query(String.class)
                 .single();
+    }
+
+    @Override
+    public boolean hasCleanOnlyConstraints() {
+        return Boolean.TRUE.equals(jdbcClient.sql("""
+                        SELECT EXISTS(
+                                 SELECT 1
+                                   FROM information_schema.statistics
+                                  WHERE table_schema = DATABASE()
+                                    AND table_name = 'issuances'
+                                    AND index_name = 'uk_coupon_member')
+                        """)
+                .query(Boolean.class)
+                .single());
     }
 
     @Override

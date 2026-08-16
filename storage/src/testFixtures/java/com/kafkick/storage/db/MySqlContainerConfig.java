@@ -13,8 +13,18 @@ import org.testcontainers.utility.DockerImageName;
 @TestConfiguration(proxyBeanMethods = false)
 public class MySqlContainerConfig {
 
-    /** latest 는 도커 허브가 가리키는 대상이 바뀌면 커밋이 그대로여도 테스트 결과가 달라진다. */
-    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:latest");
+    /**
+     * <b>시드 저장소가 게이트 데이터셋을 만든 버전에 맞춘다.</b> {@code cy-seed} 의 README 가
+     * "MySQL 8.0.35 컨테이너" 로 실측을 기록하고 {@code docs/07-operations.md} 도 {@code mysql:8.0} 을 쓴다.
+     * 검증 대상 데이터가 그 버전에서 만들어지는데 검증기만 다른 버전에서 돌 이유가 없다.
+     *
+     * <p><b>{@code latest} 를 쓰면 안 된다.</b> 커밋이 그대로여도 도커 허브가 가리키는 대상이
+     * 바뀌면 테스트 결과가 달라진다 — 실제로 이 저장소에서 {@code latest} 가 8.0 에서
+     * <b>26.7 로 넘어간 것을 확인했다.</b> {@code sql-mode} 기본값·{@code CHECK} 강제·
+     * {@code DROP CHECK} 문법이 전부 버전에 묶여 있어, 아래 설정이 "기본값과 같다" 는 주장도
+     * 버전이 고정돼야만 성립한다.
+     */
+    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.0.35");
 
     @Bean
     @ServiceConnection
@@ -32,7 +42,10 @@ public class MySqlContainerConfig {
                         "--character-set-server=utf8mb4",
                         "--collation-server=utf8mb4_0900_ai_ci",
                         "--default-storage-engine=InnoDB",
-                        "--sql-mode=STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
+                        // ONLY_FULL_GROUP_BY 는 MySQL 8 기본값이다. 빼 두면 그룹 키를 잘못 좁힌
+                        // GROUP BY 를 서버가 거부하지 않고 임의 값을 골라 줘서,
+                        // 테스트가 운영보다 느슨한 모드에서 돈다.
+                        "--sql-mode=ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
                                 + "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
                         "--local-infile=0");
     }

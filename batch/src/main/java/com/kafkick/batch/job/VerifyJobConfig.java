@@ -1,7 +1,8 @@
-// 검증 잡의 배선입니다. Step 0 리플레이(+V4) → 사용 건수 → V5 → V3 → V1 → V6. V2 가 뒤에 붙습니다.
+// 검증 잡의 배선입니다. Step 0 리플레이(+V4) → 사용 건수 → V5 → V2 → V3 → V1 → V6.
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 
@@ -32,6 +33,7 @@ import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.verification.DatasetType;
+import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
@@ -51,7 +53,9 @@ import com.kafkick.core.verification.replay.ReplayScanRange;
  * {@code uk_run_params} 로 막습니다. 결정론 증명이 같은 {@code asOf} 를 두 번 도는 것이라
  * 이게 막히면 증명 자체가 불가능합니다.
  *
- * <p>Step 순서는 <b>실행 기록 → 리플레이(+V4) → 사용 건수 → V5 → V3 → V1 → V6 → 얼림 확인</b> 입니다. {@code asof_state} 가
+ * <p><b>Step 순서의 주인은 아래 {@code verifyJob} 의 체인입니다</b> — 여기에 목록을 또 적으면
+ * 갈라집니다. 순서 규율은 {@code FindingType.isDeterministic()} 이고
+ * {@code VerifyJobWiringTest} 가 그것을 강제합니다. {@code asof_state} 가
  * {@code verification_runs.id} 를 FK 로 물기 때문에 실행 행이 먼저 있어야 합니다.
  *
  * <p><b>훑을 경계도 실행 기록 Step 에서 얼립니다.</b> 리더가 열리는 시점은 그보다 뒤라,
@@ -71,8 +75,22 @@ public class VerifyJobConfig {
     /** 시작에 얼린 회차 정책 지문. coupons 에 updated_at 이 없어 값을 접어 비교한다. */
     static final String POLICY_DIGEST_KEY = "policy.digest";
 
-    /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. 지금 다섯 벌이고 V2 가 오면 여섯이 된다. */
+    /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. 지금 여섯 벌이다. */
     private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
+
+    /**
+     * <b>규칙 Step 의 정의다.</b> 이름 규칙으로 추측하지 않는다 — 접미사가 다른 규칙이 들어오면
+     * 검사에서 조용히 빠지고, 순서 위반이 묻힌다.
+     *
+     * <p>{@code ruleStep} 이 진입부에서 이 표를 확인하므로 <b>표를 안 채운 규칙 Step 은
+     * 컨텍스트 기동에서 죽는다.</b> {@code VerifyJobWiringTest} 가 이 표로 순서를 강제한다.
+     */
+    static final Map<String, FindingType> RULE_STEP_TYPES = Map.of(
+            "usageMismatchStep", FindingType.USAGE_MISMATCH,
+            "duplicateIssuanceStep", FindingType.DUP_PER_MEMBER,
+            "replayMismatchStep", FindingType.REPLAY_MISMATCH,
+            "stockMismatchStep", FindingType.STOCK_MISMATCH,
+            "gradeViolationStep", FindingType.GRADE_VIOLATION);
 
     private static final String[] REQUIRED_PARAMETERS = {"asOf", "scope", "dataset", "attempt"};
     private static final String[] OPTIONAL_PARAMETERS = {"fromTs"};
@@ -133,6 +151,7 @@ public class VerifyJobConfig {
             Step replayStep,
             Step usageCountStep,
             Step usageMismatchStep,
+            Step duplicateIssuanceStep,
             Step replayMismatchStep,
             Step stockMismatchStep,
             Step gradeViolationStep,
@@ -146,6 +165,7 @@ public class VerifyJobConfig {
                 .next(replayStep)
                 .next(usageCountStep)
                 .next(usageMismatchStep)
+                .next(duplicateIssuanceStep)
                 .next(replayMismatchStep)
                 .next(stockMismatchStep)
                 .next(gradeViolationStep)
@@ -171,7 +191,8 @@ public class VerifyJobConfig {
                     if (rules.hasIssuancesUpdatedAfter(asOf)) {
                         throw new BusinessException(
                                 VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
-                                "실행 중에 발급건이 갱신됐습니다. V3 가 그만큼을 비교에서 뺐으므로 "
+                                "실행 중에 발급건이 갱신됐습니다. issuances.updated_at <= asOf 로 자르는 "
+                                        + "규칙(V2·V3·V6)이 그만큼을 비교에서 뺐으므로 "
                                         + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
                     }
 
@@ -234,8 +255,13 @@ public class VerifyJobConfig {
      * <p>V3 와 같은 이유로 뒤쪽에 둔다 — 현재 행에 의존하는 규칙은 결정론적인 것들 뒤다.
      * 다만 축이 다르다. V3 는 발급건 축이고 이쪽은 재고 축이라 가드도 따로 필요하다.
      *
-     * <p><b>이 Step 의 상한은 운영에서 도달하지 않는다.</b> 회차 수(147)가 곧 상한이고 기본값은
-     * 10000 이다. 폭주는 상한이 아니라 {@code uk_run_finding} 중복키로 나타난다 —
+     * <p><b>이 Step 의 상한은 도달하지 않는다.</b> {@code uk_run_finding} 때문에 회차당 한 행이
+     * 최대라 <b>검출 수의 천장이 {@code coupons} 총 행수</b>이고, 그것은
+     * 과거(브랜드 12 × 개월) + 현재 3 이다 — <b>CLEAN 147 · CORRUPT 291</b>
+     * ({@code seedgen/config.py} 의 {@code PAST_MONTHS_CORRUPT = 24} 와 {@code CURRENT_COUPONS} 3건,
+     * {@code corrupt.py} 첫머리가 "24개월 달력(291회차)" 이라고 적는다). 기본값은 10000 이다.
+     *
+     * <p>폭주는 상한이 아니라 {@code uk_run_finding} 중복키로 나타난다 —
      * V1 이 회차당 1행을 넘기면 그것이 신호다.
      */
     @Bean
@@ -270,6 +296,28 @@ public class VerifyJobConfig {
     }
 
     /**
+     * V2 1인 1매 위반. <b>결정론이다</b> — {@code issuances} 만 읽고 그 테이블에는
+     * {@code updated_at} 이 있어 경계를 자를 수 있다. 가드도 {@code hasIssuancesUpdatedAfter}
+     * 가 이미 갖고 있어 새로 만들 것이 없다.
+     *
+     * <p>그래서 <b>얼어 있는 축을 읽는 앞 구간</b>에 둔다 — 현재 행을 읽는 V1·V6 과 달리
+     * 이 규칙은 시각으로 완전히 고정된다.
+     *
+     * <p><b>정상셋에서는 검출이 나올 수 없다.</b> {@code uk_coupon_member} 와
+     * {@code issuances.code} UNIQUE 가 두 케이스를 물리적으로 막는다. 그것이 정상이고,
+     * 이 Step 이 의미를 갖는 것은 그 제약이 없는 CORRUPT 스키마에서다.
+     */
+    @Bean
+    public Step duplicateIssuanceStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value(MAX_FINDINGS) int maxFindings
+    ) {
+        return ruleStep("duplicateIssuanceStep", findings, maxFindings,
+                (runId, asOf, limit) -> rules.findDuplicateIssuances(asOf, limit));
+    }
+
+    /**
      * 규칙 하나를 Step 하나로 감싼다. 어긋난 것만 올라오므로 청크로 나누지 않는다 —
      * 정상셋 0건, 오염셋 규칙당 최대 200건(합계 800)이라 산출이 작다. 분포는 docs/contract.json 이 원본이다.
      *
@@ -282,6 +330,12 @@ public class VerifyJobConfig {
             int maxFindings,
             RuleQuery query
     ) {
+        if (!RULE_STEP_TYPES.containsKey(name)) {
+            throw new IllegalStateException(
+                    name + " 이 RULE_STEP_TYPES 에 없습니다. 규칙 Step 은 표에 등록해야 "
+                            + "VerifyJobWiringTest 의 순서 검사가 그것을 봅니다.");
+        }
+
         // 여기만 상한에 +1 을 하므로 여기만 Integer.MAX_VALUE 를 막는다.
         // 라이터(IllegalTransitionItemWriter)는 +1 이 없어 하한만 본다.
         // 안 막으면 넘친 음수가 어댑터까지 내려가서야 걸리고, 그때 메시지의 값이 설정한 값과 다르다.
@@ -345,6 +399,7 @@ public class VerifyJobConfig {
                     LocalDateTime asOf = parameters.getLocalDateTime("asOf");
                     ScopeType scope = ScopeType.valueOf(parameters.getString("scope"));
                     DatasetType dataset = DatasetType.valueOf(parameters.getString("dataset"));
+                    rejectDatasetMismatch(dataset, rules);
                     int attempt = parameters.getLong("attempt").intValue();
 
                     rejectUnsupportedScope(scope);
@@ -468,6 +523,30 @@ public class VerifyJobConfig {
                 new IllegalTransitionItemWriter(findings, runId, maxFindings)));
 
         return writer;
+    }
+
+    /**
+     * <b>라벨과 실제 스키마가 같은지 본다.</b> {@code dataset} 은 {@code verification_runs} 에
+     * 적히는 이름일 뿐이고, 어느 DB 를 읽을지는 접속 URL 이 정한다. 둘이 어긋나면
+     * <b>CORRUPT 를 보면서 "CLEAN 에서 0건" 으로 기록</b>되고, 나중에 그 기록만 보고
+     * 검증기를 뒤지게 된다 — 이 저장소가 반복해서 막아 온 "0건이 두 뜻을 갖는다" 와 같은 종류다.
+     *
+     * <p>실행 <b>전에</b> 죽어야 한다. 검출을 다 쌓은 뒤에 알면 그 run 을 통째로 버려야 한다.
+     */
+    private static void rejectDatasetMismatch(DatasetType dataset, VerificationRuleRepository rules) {
+        boolean cleanShaped = rules.hasCleanOnlyConstraints();
+
+        if (dataset == DatasetType.CLEAN && !cleanShaped) {
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_RUN_PARAMS,
+                    "dataset=CLEAN 인데 uk_coupon_member 가 없습니다. CORRUPT 스키마를 보고 있습니다.");
+        }
+        if (dataset == DatasetType.CORRUPT && cleanShaped) {
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_RUN_PARAMS,
+                    "dataset=CORRUPT 인데 uk_coupon_member 가 살아 있습니다. "
+                            + "오염을 심을 수 없는 스키마라 검출 0건이 정상으로 보입니다.");
+        }
     }
 
     /**

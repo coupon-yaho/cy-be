@@ -474,6 +474,27 @@ class VerifyJobConfigTest {
                 m -> m.contains("실행 중에 회차 정책 또는 등급 체계가 바뀌었습니다"));
     }
 
+    /**
+     * <b>라벨과 실제 스키마가 어긋나면 시작도 못 한다.</b> {@code dataset} 은
+     * {@code verification_runs} 에 적히는 이름일 뿐이라, 이 가드가 없으면
+     * <b>CLEAN DB 를 보면서 "CORRUPT 에서 검출 0건" 으로 기록</b>된다.
+     * 오염을 심을 수 없는 스키마라 0건이 나오는 것이 당연한데, 기록만 보면 합격으로 읽힌다.
+     */
+    @Test
+    @DisplayName("CLEAN 스키마인데 dataset=CORRUPT 면 거부한다 — 0건이 합격으로 읽히는 자리다")
+    void rejectCorruptLabelOnCleanSchema() throws Exception {
+        JobExecution execution = jobOperator.start(verifyJob, new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF)
+                .addString("scope", "FULL")
+                .addString("dataset", "CORRUPT")
+                .addLong("attempt", 1L)
+                .toJobParameters());
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(m -> m.contains("uk_coupon_member 가 살아 있습니다"));
+    }
+
     // ─────────────────────────── V6 등급 자격 ───────────────────────────
 
     @Test
