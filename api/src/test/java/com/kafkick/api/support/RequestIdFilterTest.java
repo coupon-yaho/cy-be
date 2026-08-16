@@ -6,7 +6,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
-import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
@@ -14,8 +13,12 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class RequestIdFilterTest {
 
     private static final String HEADER = "X-Request-Id";
+    private static final String MDC_KEY = "requestId";
 
     private final RequestIdFilter filter = new RequestIdFilter();
+
+    /** 체인 실행 중의 MDC 값. 필터가 심은 값과 응답 헤더가 같은지 보려면 여기서 잡아야 한다. */
+    private String mdcInsideChain;
 
     private MockHttpServletResponse run(String headerValue) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -23,7 +26,8 @@ class RequestIdFilterTest {
             request.addHeader(HEADER, headerValue);
         }
         MockHttpServletResponse response = new MockHttpServletResponse();
-        filter.doFilter(request, response, new MockFilterChain());
+        mdcInsideChain = null;
+        filter.doFilter(request, response, (req, res) -> mdcInsideChain = MDC.get(MDC_KEY));
         return response;
     }
 
@@ -48,10 +52,26 @@ class RequestIdFilterTest {
     }
 
     @Test
+    @DisplayName("체인 실행 중 MDC 값이 응답 헤더와 같다 — 로그와 응답을 같은 키로 묶는 게 목적이다")
+    void mdcMatchesResponseHeaderDuringChain() throws Exception {
+        String reflected = run("abc-123:456").getHeader(HEADER);
+
+        assertThat(mdcInsideChain).isEqualTo(reflected).isEqualTo("abc-123:456");
+    }
+
+    @Test
+    @DisplayName("값을 새로 만든 경우에도 MDC 와 응답 헤더가 같다")
+    void mdcMatchesGeneratedValue() throws Exception {
+        String generated = run("a\tb").getHeader(HEADER);
+
+        assertThat(mdcInsideChain).isEqualTo(generated).matches("[0-9a-f]{32}");
+    }
+
+    @Test
     @DisplayName("응답 후 MDC 를 비운다 — 톰캣 스레드가 재사용된다")
     void clearsMdc() throws Exception {
         run("abc-123");
 
-        assertThat(MDC.get("requestId")).isNull();
+        assertThat(MDC.get(MDC_KEY)).isNull();
     }
 }
