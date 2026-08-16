@@ -32,7 +32,9 @@ import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationRun;
+import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
+import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
@@ -81,14 +83,87 @@ public class VerifyJobConfig {
      * {@code ScopeType.valueOf(null)} 로 죽어 무엇이 빠졌는지 스택트레이스로만 남는다.
      */
     @Bean
-    public Job verifyJob(Step startRunStep, Step replayStep, Step usageCountStep) {
+    public Job verifyJob(
+            Step startRunStep,
+            Step replayStep,
+            Step usageCountStep,
+            Step usageMismatchStep,
+            Step replayMismatchStep
+    ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
                         REQUIRED_PARAMETERS, OPTIONAL_PARAMETERS))
                 .start(startRunStep)
                 .next(replayStep)
                 .next(usageCountStep)
+                .next(usageMismatchStep)
+                .next(replayMismatchStep)
                 .build();
+    }
+
+    /**
+     * V5 사용 실적 정합. <b>현재 행을 읽는 규칙보다 먼저 둔다.</b>
+     *
+     * <p>이 규칙은 {@code asof_state} 안에서 끝나 asOf 만으로 완전히 재구성된다.
+     * 결정론적인 것을 앞에 두면 뒤에서 폭주로 중단돼도 그 부분은 이미 확보된다.
+     */
+    @Bean
+    public Step usageMismatchStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value("${batch.verify.max-findings-per-rule:100000}") int maxFindings
+    ) {
+        return ruleStep("usageMismatchStep", findings, maxFindings,
+                (runId, limit) -> rules.findUsageMismatches(runId, limit));
+    }
+
+    /** V3 리플레이 대조. {@code issuances.status} 라는 현재 값을 읽으므로 뒤에 둔다. */
+    @Bean
+    public Step replayMismatchStep(
+            VerificationRuleRepository rules,
+            VerificationFindingRepository findings,
+            @Value("${batch.verify.max-findings-per-rule:100000}") int maxFindings
+    ) {
+        return ruleStep("replayMismatchStep", findings, maxFindings,
+                (runId, limit) -> rules.findReplayMismatches(runId, limit));
+    }
+
+    /**
+     * 규칙 하나를 Step 하나로 감싼다. 어긋난 것만 올라오므로 청크로 나누지 않는다 —
+     * 정상셋 0건, 오염셋 규칙당 100건이다.
+     *
+     * <p>상한에 닿으면 멈춘다. 그만큼 나왔다는 것은 데이터가 아니라
+     * <b>검증기가 망가졌다</b>는 신호이고, 그대로 담으면 OOM 으로 죽어 원인이 묻힌다.
+     */
+    private Step ruleStep(
+            String name,
+            VerificationFindingRepository findings,
+            int maxFindings,
+            RuleQuery query
+    ) {
+        return new StepBuilder(name, jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    long runId = requireRunId(chunkContext.getStepContext()
+                            .getStepExecution().getJobExecution());
+
+                    List<VerificationFinding> detected = query.run(runId, maxFindings);
+                    if (detected.size() >= maxFindings) {
+                        throw new IllegalStateException(
+                                name + " 검출이 상한에 닿았습니다. 검증기를 의심하십시오. 상한="
+                                        + maxFindings);
+                    }
+
+                    findings.appendAll(runId, detected);
+                    contribution.incrementWriteCount(detected.size());
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .build();
+    }
+
+    @FunctionalInterface
+    private interface RuleQuery {
+        List<VerificationFinding> run(long runId, int limit);
     }
 
     /**

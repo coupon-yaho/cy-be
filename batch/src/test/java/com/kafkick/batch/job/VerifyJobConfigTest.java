@@ -204,6 +204,7 @@ class VerifyJobConfigTest {
         long issuanceId = seed.issuance(IssuanceStatus.USED);
         issued(issuanceId, AS_OF.minusHours(3));
         used(issuanceId, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);
 
         launch(1);
 
@@ -219,6 +220,7 @@ class VerifyJobConfigTest {
                 IssuanceStatus.ISSUED, IssuanceStatus.EXPIRED, AS_OF.minusHours(3));
         long revived = seed.history(issuanceId, IssuanceEventType.USE,
                 IssuanceStatus.EXPIRED, IssuanceStatus.USED, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);   // 사용 축은 맞춰 V5 를 침묵시킨다
 
         launch(1);
 
@@ -358,6 +360,87 @@ class VerifyJobConfigTest {
                 .param("runId", runId)
                 .query(String.class)
                 .single();
+    }
+
+    @Test
+    @DisplayName("접은 상태와 저장값이 어긋나면 V3 로 남는다 — 오염 유형 2 의 모양이다")
+    void recordReplayMismatch() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);   // 사용 축은 맞춰 V5 를 침묵시킨다
+
+        launch(1);
+
+        assertThat(findingsOf()).containsExactly(
+                "REPLAY_MISMATCH:ISSUANCE:" + issuanceId);
+    }
+
+    @Test
+    @DisplayName("ISSUED 인데 활성 사용이 남아 있으면 V5 로 남는다 — 오염 유형 7 의 모양이다")
+    void recordUsageMismatch() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);
+
+        launch(1);
+
+        assertThat(findingsOf()).containsExactly(
+                "USAGE_MISMATCH:ISSUANCE:" + issuanceId);
+    }
+
+    @Test
+    @DisplayName("정상 발급건만 있으면 검출이 하나도 없다 — 정상셋 0건이 이 잡의 합격 조건이다")
+    void recordNothingForCleanData() throws Exception {
+        long used = seed.issuance(IssuanceStatus.USED);
+        issued(used, AS_OF.minusHours(3));
+        used(used, AS_OF.minusHours(2));
+        seed.usage(used, AS_OF.minusHours(2), null);
+
+        long issuedOnly = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuedOnly, AS_OF.minusHours(1));
+
+        launch(1);
+
+        assertThat(findingsOf()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("한 발급건이 두 규칙을 함께 울릴 수 있다 — 주입 수와 정답 행수가 다른 이유다")
+    void recordMultipleRulesForOneIssuance() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+
+        launch(1);
+
+        assertThat(findingsOf()).containsExactlyInAnyOrder(
+                "REPLAY_MISMATCH:ISSUANCE:" + issuanceId,
+                "USAGE_MISMATCH:ISSUANCE:" + issuanceId);
+    }
+
+    @Test
+    @DisplayName("두 번 돌려도 검출 집합이 같다 — 판정이 이 집합으로 이뤄진다")
+    void produceSameFindingSetAcrossRules() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(3));
+        used(issuanceId, AS_OF.minusHours(2));
+        seed.usage(issuanceId, AS_OF.minusHours(2), null);
+
+        long runOne = launch(1).getExecutionContext().getLong("runId");
+        long runTwo = launch(2).getExecutionContext().getLong("runId");
+
+        assertThat(findingKeysOf(runOne)).isEqualTo(findingKeysOf(runTwo)).isNotEmpty();
+    }
+
+    private List<String> findingsOf() {
+        return jdbcClient.sql("""
+                        SELECT CONCAT(finding_type, ':', target_key)
+                          FROM verification_findings
+                         ORDER BY finding_type, target_key
+                        """)
+                .query(String.class)
+                .list();
     }
 
     private List<String> findingTargetKeys() {
