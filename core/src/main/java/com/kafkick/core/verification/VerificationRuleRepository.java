@@ -47,7 +47,7 @@ public interface VerificationRuleRepository {
      * {@code asof_state} 를 잡으면 <b>활성이 0인데 재고가 남은 회차</b>가,
      * {@code coupon_stocks} 를 잡으면 <b>재고 행이 없는데 발급이 쌓인 회차</b>가 빠집니다.
      * 둘 다 검출 대상이고, 뒤엣것은 초과 발급의 가장 위험한 형태입니다.
-     * 회차가 147개뿐이라 전수 비용은 어느 쪽이든 같습니다.
+     * 회차가 CLEAN 147 · CORRUPT 291 뿐이라 전수 비용은 어느 쪽이든 같습니다.
      *
      * <p>활성은 {@code ISSUED} 와 {@code USED} 입니다 — 컬럼 주석이 "ISSUED + USED 합계" 라고
      * 못 박은 <b>현재 보유량</b>이지 누적 발급 수가 아닙니다.
@@ -73,6 +73,32 @@ public interface VerificationRuleRepository {
      * {@code updated_at <= asOf} 로 자릅니다 — V3 와 같은 기준이고 같은 가드가 이미 있습니다.
      */
     List<VerificationFinding> findGradeViolations(LocalDateTime asOf, int limit);
+
+    /**
+     * V2 1인 1매 위반 — 같은 회차에서 한 회원이 둘 이상 받은 것.
+     *
+     * <p><b>케이스가 둘인데 규칙은 하나입니다.</b> {@code target_key} 형식이 같아
+     * 별도 규칙으로 나누면 같은 행이 두 규칙에 잡혀 집합 비교가 어긋납니다.
+     *
+     * <pre>
+     * 케이스 1  GROUP BY coupon_id, member_id   같은 회원이 두 번        오염 유형 6
+     * 케이스 2  GROUP BY coupon_id, code        같은 code 가 두 번       오염 유형 5
+     * </pre>
+     *
+     * <p><b>케이스 2 는 {@code MIN(id)} 를 뺍니다.</b> code 가 겹치면 두 행이 나오는데
+     * 먼저 발급된 쪽은 정상입니다. 안 빼면 <b>원본 회원까지 검출돼 오탐</b>이 되고,
+     * 오염 100건이 200건으로 부풀어 집합 비교가 통째로 깨집니다.
+     *
+     * <p><b>결정론입니다.</b> {@code issuances} 만 읽고 그 테이블에는 {@code updated_at} 이 있어
+     * {@code updated_at <= asOf} 로 자를 수 있습니다. 경계 가드는
+     * {@link #hasIssuancesUpdatedAfter} 가 이미 갖고 있습니다.
+     *
+     * <p><b>CLEAN 스키마에서는 검출이 나올 수 없습니다.</b> {@code uk_coupon_member} 와
+     * {@code issuances.code} UNIQUE 가 두 케이스를 물리적으로 막습니다. 그것이 정상이고,
+     * 이 규칙은 <b>그 제약이 없는 CORRUPT 에서만</b> 의미가 있습니다 —
+     * 테스트도 그래서 {@code CorruptRepositoryTest} 위에서 돕니다.
+     */
+    List<VerificationFinding> findDuplicateIssuances(LocalDateTime asOf, int limit);
 
     /**
      * asOf 이후에 갱신된 발급건이 있는가. <b>V3 의 선행 조건</b>이다.
@@ -108,7 +134,7 @@ public interface VerificationRuleRepository {
      * 회차 정책의 지문. <b>V1·V6 이 읽는 {@code coupons} 축의 가드다.</b>
      *
      * <p>{@code coupons} 에는 {@code updated_at} 이 없어 시각으로 비교할 수 없다.
-     * 대신 값을 접는다 — 회차는 147행뿐이라 비용이 없다.
+     * 대신 값을 접는다 — 회차는 CLEAN 147 · CORRUPT 291 행뿐이라 비용이 없다.
      *
      * <p><b>이 축이 없으면 오진이 난다.</b> 마스크가 바뀌면 검출은 달라지는데
      * {@code dataset_fingerprint} 재료에 그 축이 없어 지문은 같게 나온다.
@@ -116,4 +142,18 @@ public interface VerificationRuleRepository {
      * 실제로는 데이터가 바뀐 것이다 — 판정표에서 가장 찾기 어려운 칸이다.
      */
     String policyDigest();
+
+    /**
+     * 지금 보고 있는 스키마에 <b>CLEAN 전용 제약</b>이 살아 있는가.
+     *
+     * <p>{@code dataset} 파라미터는 {@code verification_runs} 에 적히는 <b>라벨일 뿐</b>이고,
+     * 실제로 어느 스키마를 읽을지는 접속 URL 이 정합니다. 둘이 어긋나면
+     * <b>CORRUPT DB 를 보면서 "CLEAN 에서 0건" 이라고 기록</b>할 수 있습니다 —
+     * 이 프로젝트가 반복해서 막아 온 "0건이 두 뜻을 갖는다" 와 같은 종류입니다.
+     *
+     * <p>{@code uk_coupon_member} 로 판별합니다. CLEAN 전용 셋 중 이것이 가장 안정적입니다 —
+     * {@code ck_stock_range} 는 {@code NOT ENFORCED} 로 살아 있을 수 있고
+     * {@code code} 유일 인덱스는 이름이 저장소마다 다릅니다.
+     */
+    boolean hasCleanOnlyConstraints();
 }
