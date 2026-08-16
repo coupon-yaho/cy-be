@@ -13,7 +13,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /** 요청마다 requestId 를 MDC 에 심어 로그와 에러 응답을 같은 키로 묶는다. */
@@ -28,10 +27,8 @@ public class RequestIdFilter extends OncePerRequestFilter {
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        String requestId = request.getHeader(HEADER);
-        if (!StringUtils.hasText(requestId)) {
-            requestId = UUID.randomUUID().toString().replace("-", "");
-        }
+        // 거부한 값은 로그에도 남기지 않는다. 남기면 막으려던 인젝션이 그대로 들어간다.
+        String requestId = HeaderValues.safe(request.getHeader(HEADER)).orElseGet(RequestIdFilter::generate);
         MDC.put(REQUEST_ID, requestId);
         response.setHeader(HEADER, requestId);
         try {
@@ -40,5 +37,9 @@ public class RequestIdFilter extends OncePerRequestFilter {
             // 톰캣 스레드가 재사용되므로 지우지 않으면 다음 요청이 남의 requestId 를 물고 간다.
             MDC.remove(REQUEST_ID);
         }
+    }
+
+    private static String generate() {
+        return UUID.randomUUID().toString().replace("-", "");
     }
 }
