@@ -2,9 +2,7 @@ package com.kafkick.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.util.Properties;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +14,7 @@ import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfigur
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
+import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.core.io.ClassPathResource;
 
 /**
@@ -39,22 +38,19 @@ class ManagementConfigTest {
     }
 
     /**
-     * 포트만 템플릿 텍스트로 확인한다.
+     * 포트만 템플릿을 파싱해 확인한다.
      *
      * <p>{@code Environment} 로 보면 {@code MANAGEMENT_PORT} 가 설정된 환경에서 깨지고,
      * 그렇다고 테스트에서 그 값을 고정하면 기본값이 바뀌어도 통과해 검증이 무의미해진다.
      * 확인하고 싶은 것은 <b>주입이 없을 때의 기본값</b>이다.
+     *
+     * <p>문자열 포함 검사가 아니라 파싱이어야 한다 — 들여쓰기가 깨져도 문자열은 그대로 남는다.
      */
     @Test
     @DisplayName("템플릿의 관리 포트 기본값이 9090 이다 — Compose 가 막을 포트와 같아야 한다")
-    void managementPortDefaultIsSeparated() throws IOException {
-        assertThat(template()).contains("port: ${MANAGEMENT_PORT:9090}");
-    }
-
-    private static String template() throws IOException {
-        try (InputStream in = new ClassPathResource("management.yml.example").getInputStream()) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
+    void managementPortDefaultIsSeparated() {
+        assertThat(template().getProperty("management.server.port"))
+                .isEqualTo("${MANAGEMENT_PORT:9090}");
     }
 
     @Test
@@ -76,6 +72,12 @@ class ManagementConfigTest {
     void healthDetailsAreNever() {
         assertThat(environment.getProperty("management.endpoint.health.show-details"))
                 .isEqualTo("never");
+    }
+
+    private static Properties template() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("management.yml.example"));
+        return yaml.getObject();
     }
 
     /** 이 값들이 보인다는 것 자체가 {@code application.yml} 의 import 가 살아 있다는 뜻이다. */
