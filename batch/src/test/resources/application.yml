@@ -13,4 +13,10 @@ spring:
       enabled: false             # 컨텍스트가 뜨자마자 잡이 자동 실행되는 것을 막는다
   jpa:
     hibernate:
-      ddl-auto: none
+      # 운영(storage.yml)과 같은 값이어야 이 테스트가 엔티티와 스키마의 드리프트를 잡는다.
+      # batch 는 JPA 를 안 쓰지만 BatchApplication 이 scanBasePackages = "com.kafkick" 이라
+      # storage 의 엔티티가 전부 스캔된다 — 여기서 none 이면 드리프트가 batch 테스트를 통과하고
+      # 운영 기동에서 Schema-validation 으로 죽는다.
+      #
+      # 지금은 구체 @Entity 가 0개라 공허하게 통과한다. 엔티티가 생기는 날부터 일한다.
+      ddl-auto: validate

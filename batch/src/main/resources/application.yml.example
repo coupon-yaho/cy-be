@@ -1,11 +1,25 @@
+#
+# ⚠️ 이 파일은 문서가 둘이다. 맨 아래 `---` 를 지우지 마라.
+#
+#   spring.config.import 로 들어온 storage.yml 은 **그것을 선언한 문서보다 우선한다.**
+#   그래서 이 첫 문서에 storage.yml 과 같은 키를 적으면 조용히 무시된다 — 에러도 경고도 없다.
+#   실제로 spring.flyway.enabled: false 와 maximum-pool-size: 4 가 그렇게 죽어 있었다.
+#
+#   storage.yml 을 덮어쓸 값만 `---` 아래 두 번째 문서에 둔다. 뒤 문서가 이긴다.
+#   나머지는 전부 이 첫 문서에 둔다 — 그래야 BatchConfigPrecedenceTest 의 충돌 검사를 받는다.
+#
 spring:
   application:
     name: coupon-batch
   config:
     import: classpath:storage.yml
 
-  # 관리 포트로만 뜬다. verify 온디맨드 트리거(POST /api/v1/admin/verify)가 필요해서 none 이 아니다.
-  # Compose 에서 이 포트를 외부로 노출하지 않는다 — 그게 admin 방어의 실체다.
+  # 지금은 컨트롤러가 0건이라 매핑 없는 톰캣만 뜬다. actuator 도 없어 헬스 엔드포인트가 없다.
+  #
+  # servlet 으로 두는 것은 뒤에 올 verify 온디맨드 트리거(POST /api/v1/admin/verify)를
+  # 미리 받기 위한 것이다. 관리 포트 분리(management.server.port)는 아직 없다 —
+  # 그 키는 storage.yml 에 없으니 생길 때 아래가 아니라 이 첫 문서에 둔다.
+  # Compose 에서 이 포트를 외부로 노출하지 않는 것이 admin 방어의 실체다.
   main:
     web-application-type: servlet
 
@@ -15,14 +29,11 @@ spring:
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
-  # 마이그레이션 소유자는 api 하나로 고정한다. batch 는 이미 만들어진 스키마 위에서 돈다.
-  flyway:
-    enabled: false
-
   datasource:
     hikari:
-      # 런타임과 풀을 나눈다. HikariCP 사용률이 v1 병목의 증거인데 배치가 나눠 쓰면 증거가 흐려진다.
-      maximum-pool-size: ${BATCH_DB_POOL_SIZE:4}
+      # 미터의 pool 태그가 api 것인지 batch 것인지 가른다.
+      # storage.yml 에 같은 키가 없어 덮어쓰기가 아니다 — 그래서 아래가 아니라 여기에 둔다.
+      # storage.yml 이 나중에 pool-name 을 정의하면 충돌 검사가 잡는다.
       pool-name: batch-pool
 
 server:
@@ -44,17 +55,24 @@ batch:
 
   verify:
     # asof_state 는 run 당 300만 행이다. 방치하면 가장 빨리 커지는 테이블이다.
+    #
+    # ⚠️ 정리 Step 이 들어오기 전까지 이 값은 아무 데서도 읽히지 않는다 — 지금 줘도 효과가 없다.
+    # 키 경로가 살아 있는지만 ResolvedBatchConfigTest 가 확인한다.
     asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
 
     # 한 트랜잭션에 쓰는 발급건 수. 이만큼이 메모리에 올라가고 실패하면 이만큼 되돌린다.
     chunk-size: ${VERIFY_CHUNK_SIZE:1000}
 
-    # 규칙 하나가 낼 수 있는 검출 상한. 여기 닿으면 잡을 멈춘다 —
-    # 오염셋 기대가 규칙당 100건이라, 그만큼 나왔다는 것은 데이터가 아니라 검증기가 망가졌다는 뜻이다.
+    # 규칙 하나가 낼 수 있는 검출 상한. 여기 닿으면 잡을 멈춘다.
+    #
+    # 이것은 폭주 방어지 고장 감지 임계값이 아니다. 오염셋 기대는 규칙당 최대 200건
+    # (V1 200·V2 200·V3 100·V4 200·V5 100·V6 0, 합계 800)이고, 이 상한은 그보다 50배 크다 —
+    # 검출이 300만 발급건만큼 쏟아지는 것을 막는 자리다. 200 을 기준으로 조이면
+    # 정상셋·운영 데이터의 기대치가 달라 거짓 중단이 난다.
     max-findings-per-rule: ${VERIFY_MAX_FINDINGS_PER_RULE:10000}
 
     # Step 트랜잭션의 데드라인. 없으면 폭주한 문장이 커넥션을 물고 늘어져
-    # 배치 풀(위 maximum-pool-size)과 공유 MySQL 이 함께 막힌다.
+    # 배치 풀(아래 maximum-pool-size)과 공유 MySQL 이 함께 막힌다.
     # JobOperator.stop() 은 청크 경계에서만 반응해서 단일 문장에는 안 걸린다.
     #
     # 문장 단위가 아니라 트랜잭션 단위다. 청크 Step 에서는 청크 하나의 데드라인이므로
@@ -74,3 +92,37 @@ logging:
   pattern:
     # runId 를 MDC 에 심어 한 run 의 모든 Step 로그를 같은 키로 묶는다.
     console: "%d{HH:mm:ss.SSS} %-5level [%X{runId:-}] %logger{36} - %msg%n"
+
+---
+#
+# ⚠️ storage.yml 을 덮어쓰는 값만 여기 둔다. storage.yml 과 무관한 키를 여기 두면
+#   위 문서의 충돌 검사를 받지 않아, 나중에 storage.yml 에 같은 키가 생겨도 아무도 모른다.
+#
+# CY-179(관측 전용 DataSource)가 머지되면 관측 풀 이름은 이렇게 가른다 —
+#   storage.yml 이 observation.datasource.hikari.pool-name 을 정의하면  -> 여기(덮어쓰기)
+#   정의하지 않으면                                                    -> 첫 문서(새 키)
+# 인수인계 문서는 storage.yml 이 정의한다고 했지만 아직 어느 브랜치에도 없다.
+# 주석을 믿지 말고 BatchConfigPrecedenceTest 가 어느 쪽이라고 하는지를 믿어라.
+# 그 키가 생기기 전까지 OBS_POOL_NAME 은 아무 데서도 읽히지 않는다. 지금 줘도 효과가 없다.
+#
+spring:
+  # 마이그레이션 소유자는 api 하나로 고정한다. batch 는 이미 만들어진 스키마 위에서 돈다.
+  #
+  # 검증 배치가 DDL 권한을 쥐면 "계층 2 는 원본 테이블에 쓰지 않는다" 가 스키마 수준에서 깨진다.
+  #
+  # 대가는 배포 순서 의존이다. 그런데 **기동은 조용히 성공한다** — batch 에는 @Entity 가 없어
+  # ddl-auto: validate 가 공허하게 통과하고 initialize-schema: never 라 메타 테이블도 안 본다.
+  # api 보다 먼저 뜨면 기동은 그냥 성공한다 — actuator 가 없어 확인할 헬스 엔드포인트조차 없다.
+  # 실패는 잡 실행 시점의 "테이블 없음" SQL 에러로 늦게 드러난다.
+  # 기동 시점에 잡아 주는 가드는 compose 가 들어오는 티켓에서 함께 만든다.
+  flyway:
+    enabled: false
+
+  datasource:
+    hikari:
+      # 런타임과 풀을 나눈다. HikariCP 사용률이 v1 병목의 증거인데 배치가 나눠 쓰면 증거가 흐려진다.
+      # 배치는 단일 스레드 청크라 스텝 트랜잭션 1 + JobRepository 1 이면 된다.
+      #
+      # 이 변경 전에는 storage.yml 이 이겨서 batch 풀도 DB_POOL_SIZE 가 움직였다.
+      # 이제 손잡이는 BATCH_DB_POOL_SIZE 다 — DB_POOL_SIZE 만 주던 배포는 10 에서 4 로 바뀐다.
+      maximum-pool-size: ${BATCH_DB_POOL_SIZE:4}
