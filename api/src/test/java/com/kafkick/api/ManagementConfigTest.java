@@ -2,6 +2,10 @@ package com.kafkick.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +16,7 @@ import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfigur
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.ClassPathResource;
 
 /**
  * 실제 설정 파일의 값을 검증한다.
@@ -33,10 +38,23 @@ class ManagementConfigTest {
         this.environment = environment;
     }
 
+    /**
+     * 포트만 템플릿 텍스트로 확인한다.
+     *
+     * <p>{@code Environment} 로 보면 {@code MANAGEMENT_PORT} 가 설정된 환경에서 깨지고,
+     * 그렇다고 테스트에서 그 값을 고정하면 기본값이 바뀌어도 통과해 검증이 무의미해진다.
+     * 확인하고 싶은 것은 <b>주입이 없을 때의 기본값</b>이다.
+     */
     @Test
-    @DisplayName("관리 포트가 9090 이다 — Compose 가 막을 포트와 같아야 한다")
-    void managementPortIsSeparated() {
-        assertThat(environment.getProperty("management.server.port")).isEqualTo("9090");
+    @DisplayName("템플릿의 관리 포트 기본값이 9090 이다 — Compose 가 막을 포트와 같아야 한다")
+    void managementPortDefaultIsSeparated() throws IOException {
+        assertThat(template()).contains("port: ${MANAGEMENT_PORT:9090}");
+    }
+
+    private static String template() throws IOException {
+        try (InputStream in = new ClassPathResource("management.yml.example").getInputStream()) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 
     @Test
