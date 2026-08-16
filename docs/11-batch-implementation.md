@@ -555,29 +555,50 @@ V3 가 현재 `issuances.status` 를 읽어서 `hasIssuancesUpdatedAfter` 로 �
 배치가 도는 동안 발급이 한 건만 일어나도 그 회차가 어긋난 것으로 잡히고 재실행 결과가 달라진다.
 그냥 빼면 **0건이 두 뜻을 갖는다** — *"제대로 훑고 없었다"* 와 *"훑을 대상이 안 남았다"*.
 
-### ⚠️ V1 의 기대 200행은 회차 수가 상한이다 — 시드 저장소 확인 필요
+### V1 의 기대 200행 — 시드가 이미 맞춰 두었다
 
 `verification_findings` 에 `uk_run_finding(run_id, finding_type, target_key)` 가 걸려 있고
 `STOCK_MISMATCH` 의 `target_key` 는 `COUPON:{coupons.id}` 하나뿐이다. SQL 도 회차당 한 행만 낸다.
+**따라서 `STOCK_MISMATCH` 최대 행수 = 오염 대상 회차 수다.**
 
-**따라서 `STOCK_MISMATCH` 최대 행수 = 오염 대상 회차 수다.** 회차가 147개면 계약의 200행은
-어떤 구현으로도 나올 수 없다 — 규칙이나 SQL 을 고쳐 될 일이 아니다.
-
-시드 저장소에 물어야 할 것 셋.
+여기까지 보고 "회차 147개로는 200행이 불가능하다" 고 적었었는데 **틀렸다.**
+147 은 CLEAN 의 숫자고 V1 의 200행은 CORRUPT 에서 나온다. 시드 저장소를 열어 확인한 결과
+세 가지가 전부 이미 처리돼 있다.
 
 ```
-① CORRUPT 스키마의 coupons 행수는 몇인가        147 이면 200행은 불가능
-② 유형 1 100건과 유형 3 100건이 서로 겹치지 않는 회차에 흩어지는가
-                                                 겹치면 +1 과 -1 이 상쇄돼 그 회차는 미검출
-③ 유형 4·5·6 이 회차별 "접힌 활성 발급 수" 를 바꾸는가
+seedgen/config.py
+  PAST_MONTHS_CLEAN   = 12    12 브랜드 × 12개월 = 144 (+현재월 = 147)
+  PAST_MONTHS_CORRUPT = 24    "오염셋은 V1(회차 그레인) 키 200개가 필요해서 24개월"
+  CORRUPT_V1_TYPE1_SLOT = (0, 100)      유형 1 → 과거 회차 [0, 100)
+  CORRUPT_V1_TYPE3_SLOT = (100, 200)    유형 3 → 과거 회차 [100, 200)
 ```
 
-③이 특히 조용하다. 접기는 **불법 전이를 만나도 그 행의 `to_status` 를 따라간다** — 유형 4 가
-`EXPIRED`(비활성) 발급건에 `USE` 이력을 붙이면 접힌 상태가 `USED`(활성)로 바뀐다.
-`coupon_stocks.active_count` 는 그대로이므로 **그 회차에 `STOCK_MISMATCH` 가 하나 뜬다.**
+**① 회차 수** — CORRUPT 는 12 × 24 = 288 개다. 200행이 나온다.
 
-계약의 `matrix` 는 유형 4 에 `ILLEGAL_TRANSITION` 만 기대하므로 그것은 **오탐**이고,
-합격 조건이 "누락 0 · 오탐 0" 이라 게이트가 통째로 떨어진다. 유형 5·6 도 `ISSUE` 이력을 심으면 같다.
+**② 유형 1·3 의 겹침** — 슬롯이 서로소로 나뉘어 있다. `corrupt.py` 첫머리가 그 이유를 적어 둔다 —
+*"V1 은 회차 그레인이라 유형 1 과 유형 3 이 같은 회차에 겹치면 target_key 가 충돌한다"*.
+
+**③ 유형 4 가 접힌 활성 수를 바꾸는가** — 바꾸지만 **재고도 같이 맞춘다.**
+
+```python
+# 유형 4 — 종단 상태에서 USED 로 불법 전이.
+# 나머지 축(status·usage·재고)은 전부 맞춰서 V4 만 울리게 한다.
+replay_state  = C.USED
+stored_status = C.USED
+usages = [(t2, None)]
+...
+t.active_count[coupon.id] = active_replay + quota.stock_delta
+```
+
+`active_count` 가 **접힌 활성 수(`active_replay`)에서 파생된다.** 유형 4 는 `stock_delta` 를
+건드리지 않고, `USED` 로 뒤집힌 것은 이미 `active_replay` 에 들어 있다. **V1 은 침묵한다.**
+유형 5·6 도 `_emit_dup_row` 의 반환값이 `active_replay` 에 더해지므로 같다.
+
+> **여기서 배운 것.** 배치 쪽 스키마만 보고 시드의 동작을 추론하면 안 된다.
+> 위 세 가지는 전부 `seedgen/` 을 한 번 열어 보면 끝나는 질문이었고, 열지 않은 채로
+> "게이트가 통째로 떨어진다" 까지 적었다. **계약의 단일 출처는 시드 저장소다** —
+> 그쪽 코드를 근거로 대지 못하는 주장은 적지 않는다.
+
 
 주입기가 `active_count` 를 함께 보정하면 풀리는데, 그러면 `updated_at` 도 건드리게 되므로
 **`asOf` 이하 값을 찍어야 한다.**

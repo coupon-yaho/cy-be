@@ -234,8 +234,9 @@ public class VerifyJobConfig {
      * <p>V3 와 같은 이유로 뒤쪽에 둔다 — 현재 행에 의존하는 규칙은 결정론적인 것들 뒤다.
      * 다만 축이 다르다. V3 는 발급건 축이고 이쪽은 재고 축이라 가드도 따로 필요하다.
      *
-     * <p><b>이 Step 의 상한은 운영에서 도달하지 않는다.</b> 회차 수(147)가 곧 상한이고 기본값은
-     * 10000 이다. 폭주는 상한이 아니라 {@code uk_run_finding} 중복키로 나타난다 —
+     * <p><b>이 Step 의 상한은 도달하지 않는다.</b> {@code uk_run_finding} 때문에 회차당 한 행이
+     * 최대라 <b>검출 수의 천장이 회차 수</b>이고, 그 회차 수는 CLEAN 147 · CORRUPT 288
+     * ({@code seedgen/config.py} 의 {@code PAST_MONTHS_CORRUPT = 24})인데 기본값은 10000 이다. 폭주는 상한이 아니라 {@code uk_run_finding} 중복키로 나타난다 —
      * V1 이 회차당 1행을 넘기면 그것이 신호다.
      */
     @Bean

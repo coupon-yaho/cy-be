@@ -141,7 +141,8 @@ class VerifyJobFindingLimitTest {
     }
 
     /**
-     * <b>V1 의 상한은 운영에서 도달하지 않는다.</b> 회차 수(147)가 곧 상한이고 기본값은 10000 이다.
+     * <b>V1 의 상한은 도달하지 않는다.</b> 검출 수의 천장이 회차 수(CLEAN 147 · CORRUPT 288)인데
+     * 기본값은 10000 이다.
      * 그래도 배선은 확인한다 — {@code ruleStep} 이 규칙마다 같은 코드를 타므로,
      * {@code maxFindings} 를 안 넘기거나 {@code limit + 1} 을 안 요청하는 실수가 여기서 드러난다.
      */
