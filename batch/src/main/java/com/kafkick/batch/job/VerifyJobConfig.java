@@ -231,7 +231,6 @@ public class VerifyJobConfig {
 
                     // 이력 축. 리플레이는 얼린 상한까지만 읽는데 지문은 다시 재므로,
                     // 그 사이 백데이트 이력이 들어오면 같은 지문에 다른 검출이 나온다.
-                    // 창이 없는 실행(훑을 이력이 애초에 없던 경우)은 건너뛴다.
                     // 창이 없던 실행(asOf 이하 이력이 0건)도 검사한다. 0 을 넘기면
                     // "id > 0 이면서 asOf 이하인 행이 생겼는가" 가 되어 뜻이 정확히 맞는다 —
                     // 건너뛰면 가드가 막으려던 상황에서 정확히 꺼진다.
@@ -313,6 +312,9 @@ public class VerifyJobConfig {
                             detected,
                             findings.checksumOf(runId),
                             frozenFingerprint(jobExecution),
+                            // 판정 Step 이 시작한 시각을 종료로 쓴다. 잡이 아직 안 끝나
+                            // getEndTime() 은 null 이고, 검증 배치는 now() 를 금지한다.
+                            // 이 뒤에 남은 것은 UPDATE 한 건뿐이라 차이가 작다.
                             stepExecution.getStartTime());
 
                     runs.update(closed);

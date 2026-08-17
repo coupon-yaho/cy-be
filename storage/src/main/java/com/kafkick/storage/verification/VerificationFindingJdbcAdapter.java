@@ -109,20 +109,6 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
         }
     }
 
-    private static SqlParameterSource toParams(long runId, VerificationFinding finding) {
-        return new MapSqlParameterSource()
-                .addValue("runId", runId)
-                .addValue("findingType", finding.type().name())
-                .addValue("targetKey", finding.targetKey())
-                // campaign_id ← 회차, coupon_id ← 발급건. 뒤집힌 레거시 이름이다.
-                .addValue("couponId", finding.couponId())
-                .addValue("memberId", finding.memberId())
-                .addValue("issuanceId", finding.issuanceId())
-                .addValue("historyId", finding.historyId())
-                .addValue("expected", finding.expected())
-                .addValue("actual", finding.actual());
-    }
-
     @Override
     public int countOf(long runId) {
         Integer count = jdbcTemplate.queryForObject(
@@ -156,5 +142,18 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                 });
 
         return DigestValues.hex(digest.digest());
+    }
+    private static SqlParameterSource toParams(long runId, VerificationFinding finding) {
+        return new MapSqlParameterSource()
+                .addValue("runId", runId)
+                .addValue("findingType", finding.type().name())
+                .addValue("targetKey", finding.targetKey())
+                // campaign_id ← 회차, coupon_id ← 발급건. 뒤집힌 레거시 이름이다.
+                .addValue("couponId", finding.couponId())
+                .addValue("memberId", finding.memberId())
+                .addValue("issuanceId", finding.issuanceId())
+                .addValue("historyId", finding.historyId())
+                .addValue("expected", finding.expected())
+                .addValue("actual", finding.actual());
     }
 }

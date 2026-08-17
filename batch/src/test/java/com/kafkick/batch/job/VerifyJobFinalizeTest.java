@@ -263,12 +263,13 @@ class VerifyJobFinalizeTest {
     }
 
     /**
-     * 열린 실행이어도 검출이 이미 붙어 있으면 거부한다. run 행만 지우고 검출이 남는 경로가
-     * 정리 잡에서 생길 수 있고, 그때 위 검사만으로는 합집합을 세게 된다.
+     * <b>열린 실행도 거부한다.</b> 그 상태는 앞 실행이 중간에 죽어 남은 것이고,
+     * {@code asof_state} 에 부분 결과가 남아 있다. 검출이 0건이라 통과시키면
+     * 새 리플레이가 못 덮은 낡은 행이 그대로 V1·V3·V5 에 섞인다.
      */
     @Test
-    @DisplayName("열린 실행도 거부한다 — asof_state 에 앞 실행의 부분 결과가 남아 있다")
-    void rejectRunThatAlreadyHasFindings() throws Exception {
+    @DisplayName("판정이 없는 열린 실행도 거부한다 — asof_state 에 부분 결과가 남는다")
+    void rejectOpenRunWithSameParameters() throws Exception {
         cleanIssuance();
         jdbcClient.sql("""
                         INSERT INTO verification_runs
@@ -276,15 +277,6 @@ class VerifyJobFinalizeTest {
                         VALUES (:asOf, 'FULL', 'CLEAN', 7, :asOf)
                         """)
                 .param("asOf", AS_OF)
-                .update();
-        Long runId = jdbcClient.sql("SELECT id FROM verification_runs WHERE attempt = 7")
-                .query(Long.class).single();
-        jdbcClient.sql("""
-                        INSERT INTO verification_findings
-                            (run_id, finding_type, target_key, campaign_id, expected, actual)
-                        VALUES (:runId, 'STOCK_MISMATCH', 'COUPON:1', 1, '-', '-')
-                        """)
-                .param("runId", runId)
                 .update();
 
         JobExecution execution = launch(7);

@@ -233,6 +233,41 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
              LIMIT :limit
             """;
 
+    /** 계약이 정한 재료 구분자. */
+    private static final String FINGERPRINT_SEPARATOR = "|";
+
+    /** 시드 참조 구현({@code stats.py})의 폴백. 갈리면 같은 데이터에 다른 지문이 나온다. */
+    private static final LocalDateTime EMPTY_DATASET_TIME = LocalDateTime.of(1970, 1, 1, 0, 0);
+
+    private static final DateTimeFormatter FINGERPRINT_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+
+    /**
+     * 계약의 {@code fingerprint.formula} 를 재료 다섯으로 뽑는다. 이어 붙이기와 해싱은
+     * 자바가 한다 — 시각 포맷이 계약에 <b>문자열로</b> 정해져 있어 DB 의 기본 표현에 맡길 수 없다.
+     *
+     * <p>이력은 {@code created_at <= :asOf} 로 자른다. 나머지 넷은 <b>안 자른다</b> —
+     * 계약이 그 필터를 이력에만 걸었고, {@code coupon_stocks} 에는 그럴 컬럼도 없다.
+     * 대신 {@code assertFrozenStep} 이 실행 중 갱신을 막는다.
+     *
+     * <p>빈 데이터셋에서 {@code MAX}·{@code SUM} 은 NULL 이다. 그 자리는
+     * <b>시드 저장소의 참조 구현이 쓰는 값</b>을 그대로 쓴다 —
+     * {@code cy-seed/seedgen/stats.py#dataset_fingerprint} 가 숫자는 {@code 0},
+     * 시각은 {@code 1970-01-01 00:00:00.000000} 으로 접는다.
+     *
+     * <p><b>여기서 다른 값을 쓰면 안 된다.</b> 시드의 매니페스트와 배치의 지문은
+     * <b>대조하라고 있는 값</b>이라({@code seedgen/manifest.py}) 폴백이 갈리면
+     * 같은 데이터에 다른 지문이 나온다. 처음에 {@code "NULL"} 로 짰다가 참조 구현과 맞췄다.
+     */
+    private static final String SELECT_FINGERPRINT_INPUT = """
+            SELECT (SELECT MAX(id) FROM issuance_histories WHERE created_at <= :asOf) AS max_history_id,
+                   (SELECT COUNT(*) FROM issuance_histories WHERE created_at <= :asOf) AS history_count,
+                   (SELECT COUNT(*) FROM issuances)                                    AS issuance_count,
+                   (SELECT CAST(COALESCE(SUM(active_count), 0) AS SIGNED)
+                      FROM coupon_stocks)                                              AS active_total,
+                   (SELECT MAX(updated_at) FROM issuances)                             AS max_updated_at
+            """;
+
     private static final RowMapper<VerificationFinding> REPLAY_MISMATCH_MAPPER =
             (rs, rowNum) -> VerificationFinding.forIssuance(
                     FindingType.REPLAY_MISMATCH,
@@ -345,41 +380,6 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .single();
     }
 
-    /** 계약이 정한 재료 구분자. */
-    private static final String FINGERPRINT_SEPARATOR = "|";
-
-    /** 시드 참조 구현({@code stats.py})의 폴백. 갈리면 같은 데이터에 다른 지문이 나온다. */
-    private static final LocalDateTime EMPTY_DATASET_TIME = LocalDateTime.of(1970, 1, 1, 0, 0);
-
-    private static final DateTimeFormatter FINGERPRINT_TIME =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
-
-    /**
-     * 계약의 {@code fingerprint.formula} 를 재료 다섯으로 뽑는다. 이어 붙이기와 해싱은
-     * 자바가 한다 — 시각 포맷이 계약에 <b>문자열로</b> 정해져 있어 DB 의 기본 표현에 맡길 수 없다.
-     *
-     * <p>이력은 {@code created_at <= :asOf} 로 자른다. 나머지 넷은 <b>안 자른다</b> —
-     * 계약이 그 필터를 이력에만 걸었고, {@code coupon_stocks} 에는 그럴 컬럼도 없다.
-     * 대신 {@code assertFrozenStep} 이 실행 중 갱신을 막는다.
-     *
-     * <p>빈 데이터셋에서 {@code MAX}·{@code SUM} 은 NULL 이다. 그 자리는
-     * <b>시드 저장소의 참조 구현이 쓰는 값</b>을 그대로 쓴다 —
-     * {@code cy-seed/seedgen/stats.py#dataset_fingerprint} 가 숫자는 {@code 0},
-     * 시각은 {@code 1970-01-01 00:00:00.000000} 으로 접는다.
-     *
-     * <p><b>여기서 다른 값을 쓰면 안 된다.</b> 시드의 매니페스트와 배치의 지문은
-     * <b>대조하라고 있는 값</b>이라({@code seedgen/manifest.py}) 폴백이 갈리면
-     * 같은 데이터에 다른 지문이 나온다. 처음에 {@code "NULL"} 로 짰다가 참조 구현과 맞췄다.
-     */
-    private static final String SELECT_FINGERPRINT_INPUT = """
-            SELECT (SELECT MAX(id) FROM issuance_histories WHERE created_at <= :asOf) AS max_history_id,
-                   (SELECT COUNT(*) FROM issuance_histories WHERE created_at <= :asOf) AS history_count,
-                   (SELECT COUNT(*) FROM issuances)                                    AS issuance_count,
-                   (SELECT CAST(COALESCE(SUM(active_count), 0) AS SIGNED)
-                      FROM coupon_stocks)                                              AS active_total,
-                   (SELECT MAX(updated_at) FROM issuances)                             AS max_updated_at
-            """;
-
     @Override
     public boolean hasHistoriesAddedAbove(long frozenMaxHistoryId, LocalDateTime asOf) {
         return Boolean.TRUE.equals(jdbcClient.sql("""
@@ -422,6 +422,22 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
         return DigestValues.sha256Hex(material);
     }
 
+    @Override
+    public boolean hasStocksUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(EXISTS_STOCK_UPDATED_AFTER)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single();
+    }
+
+    @Override
+    public boolean hasIssuancesUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(EXISTS_UPDATED_AFTER)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single();
+    }
+
     /** 참조 구현의 폴백은 {@code 0} 이다. {@code totals} 가 0 에서 시작하기 때문이다. */
     private static String text(Object value) {
         return value == null ? "0" : String.valueOf(value);
@@ -437,22 +453,6 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      */
     private static String timestamp(LocalDateTime value) {
         return FINGERPRINT_TIME.format(value == null ? EMPTY_DATASET_TIME : value);
-    }
-
-    @Override
-    public boolean hasStocksUpdatedAfter(LocalDateTime asOf) {
-        return jdbcClient.sql(EXISTS_STOCK_UPDATED_AFTER)
-                .param("asOf", asOf)
-                .query(Boolean.class)
-                .single();
-    }
-
-    @Override
-    public boolean hasIssuancesUpdatedAfter(LocalDateTime asOf) {
-        return jdbcClient.sql(EXISTS_UPDATED_AFTER)
-                .param("asOf", asOf)
-                .query(Boolean.class)
-                .single();
     }
 
     private static void requireLimit(int limit) {
