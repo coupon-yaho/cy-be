@@ -18,6 +18,11 @@ package com.kafkick.core.verification;
  *
  * <pre>
  * 규칙별 기대 행수   V1 200 · V2 200 · V3 100 · V4 200 · V5 100 · V6 0   합계 800
+ *
+ * V6 만 오염 유형이 없어 정상셋 0건이 유일한 검증이다. 시드의 {@code --plant-v6} 를 켜면
+ * {@code corrupt_type=8} 로 GRADE_VIOLATION 1건이 추가돼 정답이 <b>801행</b>이 된다 —
+ * 700 집계 밖이고 기본은 꺼져 있다. 대조는 800 을 상수로 박지 말고
+ * {@code expected_findings} 를 읽어서 해야 한다.
  * </pre>
  */
 public enum FindingType {

@@ -14,8 +14,19 @@ public interface VerificationRunRepository {
     /** 실행을 기록하고 식별자가 채워진 것을 돌려준다. asof_state 가 이 id 를 FK 로 문다. */
     VerificationRun save(VerificationRun run);
 
-    /** 판정·통계 상태·증적을 갱신한다. */
+    /**
+     * 실행 행 <b>전체</b>를 덮어쓴다. 읽어 온 행 위에서만 부르십시오 —
+     * 새로 만든 객체로 부르면 판정·checksum·지문이 함께 NULL 로 밀립니다.
+     */
     void update(VerificationRun run);
+
+    /**
+     * 통계 상태만 바꿉니다. 통계 Step 이 {@link #update} 를 쓰면 <b>판정을 지울 수 있어서</b>
+     * 따로 둡니다 — {@code finalizeRunStep} 이 채운 네 컬럼이 통계 갱신 한 번에 사라지면,
+     * {@code verdict IS NULL} 이 "실행이 실패했다" 는 신호로 쓰이는 이 저장소에서
+     * 성공한 실행이 실패로 보입니다.
+     */
+    void updateStatsStatus(long runId, StatsStatus status);
 
     Optional<VerificationRun> findById(long id);
 

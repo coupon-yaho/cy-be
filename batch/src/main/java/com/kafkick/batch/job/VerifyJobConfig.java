@@ -32,16 +32,18 @@ import com.kafkick.batch.replay.IllegalTransitionItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;
+import com.kafkick.core.verification.StatsStatus;
+import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
-import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.VerificationRuleRepository;
-import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.replay.AsOfStateRepository;
 import com.kafkick.core.verification.replay.ReplayHistoryRepository;
 import com.kafkick.core.verification.replay.ReplayResult;
@@ -74,6 +76,8 @@ public class VerifyJobConfig {
 
     /** 시작에 얼린 회차 정책 지문. coupons 에 updated_at 이 없어 값을 접어 비교한다. */
     static final String POLICY_DIGEST_KEY = "policy.digest";
+
+    static final String FINGERPRINT_KEY = "dataset.fingerprint";
 
     /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. 지금 여섯 벌이다. */
     private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
@@ -155,7 +159,8 @@ public class VerifyJobConfig {
             Step replayMismatchStep,
             Step stockMismatchStep,
             Step gradeViolationStep,
-            Step assertFrozenStep
+            Step assertFrozenStep,
+            Step finalizeRunStep
     ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
@@ -170,6 +175,7 @@ public class VerifyJobConfig {
                 .next(stockMismatchStep)
                 .next(gradeViolationStep)
                 .next(assertFrozenStep)
+                .next(finalizeRunStep)
                 .build();
     }
 
@@ -180,6 +186,13 @@ public class VerifyJobConfig {
      * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다.
      * 현재 행을 읽는 규칙(V3·V1·V6)이 그 구간에 갱신된 행을 조용히 빼고 0건으로 통과하는데,
      * 같은 asOf 를 스케줄러가 멈춘 상태로 다시 돌리면 검출이 나온다 — 같은 파라미터가 다른 답을 낸다.
+     *
+     * <p><b>축은 넷이다</b> — 발급건 · 재고 · 회차 정책 · 이력. 이력 축은 리플레이가 얼린
+     * 상한과 지문이 다시 재는 값이 갈리는 것을 막는다.
+     *
+     * <p><b>지문도 여기서 캡처한다.</b> 같은 트랜잭션이라 검사와 지문이 같은 스냅샷을 보고,
+     * {@code finalizeRunStep} 이 {@code FINGERPRINT_KEY} 로 꺼내 쓴다 —
+     * 이 줄을 지우면 판정 Step 이 "데이터셋 지문이 없습니다" 로 죽는다.
      */
     @Bean
     public Step assertFrozenStep(VerificationRuleRepository rules) {
@@ -216,10 +229,123 @@ public class VerifyJobConfig {
                                         + "이 실행의 검출은 신뢰할 수 없습니다. asOf=" + asOf);
                     }
 
+                    // 이력 축. 리플레이는 얼린 상한까지만 읽는데 지문은 다시 재므로,
+                    // 그 사이 백데이트 이력이 들어오면 같은 지문에 다른 검출이 나온다.
+                    // 창이 없던 실행(asOf 이하 이력이 0건)도 검사한다. 0 을 넘기면
+                    // "id > 0 이면서 asOf 이하인 행이 생겼는가" 가 되어 뜻이 정확히 맞는다 —
+                    // 건너뛰면 가드가 막으려던 상황에서 정확히 꺼진다.
+                    long frozenMaxHistory = chunkContext.getStepContext().getStepExecution()
+                            .getJobExecution().getExecutionContext()
+                            .getLong(SCAN_MAX_HISTORY_KEY, 0L);
+
+                    if (rules.hasHistoriesAddedAbove(frozenMaxHistory, asOf)) {
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "실행 중에 asOf 이하 이력이 추가됐습니다. 리플레이는 얼린 상한까지만 "
+                                        + "읽었는데 지문은 그 행을 봅니다 — 같은 지문에 다른 검출이 "
+                                        + "나옵니다. asOf=" + asOf);
+                    }
+
+                    // 지문도 여기서 읽는다. finalize 에서 읽으면 그 사이 발급 한 건에 지문이
+                    // 움직여, 같은 asOf 재실행이 "데이터가 바뀜" 으로 잘못 읽힌다.
+                    //
+                    // 규칙이 본 데이터와 지문이 같다는 것은 트랜잭션 스냅샷이 보장하지 않는다 —
+                    // 규칙 Step 은 각자 자기 트랜잭션에서 이미 돌았다. 등식을 지키는 것은
+                    // 바로 위 네 가드다. 가드를 빼면 이 등식이 깨진다.
+                    chunkContext.getStepContext().getStepExecution().getJobExecution()
+                            .getExecutionContext()
+                            .putString(FINGERPRINT_KEY, rules.datasetFingerprint(asOf));
+
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
                 .transactionAttribute(timeout)
                 .build();
+    }
+
+    /**
+     * <b>실행을 닫는다.</b> 이것이 없으면 {@code verdict}·{@code findings_checksum}·
+     * {@code dataset_fingerprint}·{@code finished_at} 이 영원히 NULL 로 남고,
+     * {@code NULL = NULL} 은 UNKNOWN 이라 <b>"재실행 결과가 같은가" 를 물을 수단 자체가 없다.</b>
+     * 규칙을 여섯 개 다 붙여도 판정이 안 나오는 상태가 된다.
+     *
+     * <p><b>{@code assertFrozenStep} 보다 뒤다.</b> 얼림이 깨진 실행은 검출을 믿을 수 없는데
+     * 거기에 판정을 남기면, 나중에 그 행만 보고 합격·불합격을 읽게 된다.
+     * 앞 Step 이 죽으면 이 Step 이 안 돌아 <b>판정이 비어 있는 것 자체가 신호</b>가 된다.
+     *
+     * <p><b>판정은 CLEAN 에서만 낸다.</b> 정상셋은 "검출 0건 = 통과" 가 규칙만으로 결정된다.
+     * 오염셋은 800행이 <b>정답 집합과 같은지</b>를 봐야 하는데 그 대조가 아직 없다 —
+     * 개수만 보면 오탐 400 + 누락 400 도 800 이라 통과한다. 그래서 CORRUPT 는
+     * 판정을 비워 두고 checksum·지문만 남긴다. 그것이 다음 티켓의 입력이다.
+     */
+    @Bean
+    public Step finalizeRunStep(
+            VerificationRunRepository runs,
+            VerificationFindingRepository findings
+    ) {
+        return new StepBuilder("finalizeRunStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
+                    JobExecution jobExecution = stepExecution.getJobExecution();
+                    DatasetType dataset = DatasetType.valueOf(
+                            jobExecution.getJobParameters().getString("dataset"));
+
+                    long runId = requireRunId(jobExecution);
+                    VerificationRun run = runs.findById(runId)
+                            .orElseThrow(() -> new BusinessException(
+                                    VerificationErrorCode.RUN_NOT_FOUND,
+                                    "실행 행이 사라졌습니다. runId=" + runId));
+
+                    // 합격 판정은 전수 실행만 진다. 지금은 startRunStep 이 INCREMENTAL 을
+                    // 거부해 도달 불가지만, 증분 티켓이 그 가드를 푸는 순간 여기서 죽어야
+                    // 판정 규칙을 함께 정하게 된다 — 지금은 그 신호가 코드 어디에도 없다.
+                    if (!run.decidesVerdict()) {
+                        throw new IllegalStateException(
+                                "합격 판정은 전수 실행에서만 냅니다. 증분 판정 규칙이 정해지기 전까지 "
+                                        + "이 경로는 열리면 안 됩니다. runId=" + runId
+                                        + " scope=" + run.scope());
+                    }
+
+                    int detected = findings.countOf(runId);
+
+                    VerificationRun closed = run.finish(
+                            verdictOf(dataset, detected),
+                            detected,
+                            findings.checksumOf(runId),
+                            frozenFingerprint(jobExecution),
+                            // 판정 Step 이 시작한 시각을 종료로 쓴다. 잡이 아직 안 끝나
+                            // getEndTime() 은 null 이고, 검증 배치는 now() 를 금지한다.
+                            // 이 뒤에 남은 것은 UPDATE 한 건뿐이라 차이가 작다.
+                            stepExecution.getStartTime());
+
+                    runs.update(closed);
+
+                    // CORRUPT 는 통계를 만들지 않는다. 비워 두면 "통계 진행 중" 과
+                    // "통계 안 함" 이 같은 값으로 보인다. CLEAN 은 통계 Step 몫이라 안 건드린다.
+                    //
+                    // 부분 갱신을 쓴다 — update() 는 여섯 컬럼을 전부 덮으므로,
+                    // 통계 갱신에 그것을 쓰면 방금 쓴 판정이 함께 지워진다.
+                    if (dataset != DatasetType.CLEAN) {
+                        runs.updateStatsStatus(runId, StatsStatus.SKIPPED);
+                    }
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
+                .build();
+    }
+
+    /**
+     * CLEAN 은 검출 0건이 합격이다. CORRUPT 는 정답 집합과 대조하기 전까지 판정할 수 없어
+     * <b>실패로 둔다</b> — 통과로 두면 대조가 붙기 전까지 <b>오염셋이 무조건 합격</b>으로 기록된다.
+     *
+     * <p>{@code verdict} 컬럼은 nullable 이라 비워 둘 수도 있지만, 시드가 심는 CORRUPT run 이
+     * {@code FAIL} 이므로 같은 값을 쓴다 — 두 쪽 기록이 갈리면 대조 자체가 어려워진다.
+     */
+    static VerdictType verdictOf(DatasetType dataset, int detected) {
+        if (dataset != DatasetType.CLEAN) {
+            return VerdictType.FAIL;
+        }
+        return detected == 0 ? VerdictType.PASS : VerdictType.FAIL;
     }
 
     /**
@@ -380,13 +506,25 @@ public class VerifyJobConfig {
      * <p>실행 시작 시각은 Spring Batch 가 이미 기록한 값을 쓴다. 여기서 {@code now()} 를 부르면
      * 검증 배치에 현재 시각 의존이 생기고, 다음 사람이 규칙에서도 부르게 된다.
      *
-     * <p>실행 행은 <b>있으면 찾고 없으면 만든다.</b> 그냥 INSERT 하면 재시작 때 두 방향으로 막힌다 —
-     * 이 Step 이 COMPLETED 인데 잡 컨텍스트가 아직 저장 전이면 {@code runId} 를 잃고,
-     * 반대로 다시 INSERT 하면 {@code uk_run_params} 중복키에 걸린다.
+     * <p>실행 행은 있으면 찾고 없으면 만든다. 다만 <b>닫힌 실행은 이어받지 않는다.</b>
+     *
+     * <p><b>시드가 같은 키를 미리 점유한다.</b> {@code cy-seed/seedgen/stats.py} 가 적재할 때마다
+     * {@code verification_runs} 를 심고, CORRUPT 는 <b>정답 800행을 그 {@code run_id} 에 붙인다.</b>
+     * 게다가 게이트가 쓰는 {@code asOf} 의 정본이 그 행에서 나온다({@code bin/seed.py} 가
+     * {@code MAX(as_of)} 로 뽑는다) — 우연히 겹치는 게 아니라 <b>정상 절차가 반드시 겹친다.</b>
+     *
+     * <p>이어받으면 {@code countOf}·{@code checksumOf} 가 <b>배치 검출과 시드 정답의 합집합</b>을
+     * 센다. 검증기가 한 건도 못 잡아도 {@code finding_count=800} 에 정답 checksum 이 나오고,
+     * {@code finalizeRunStep} 이 시드가 남긴 기준값을 덮어쓴다 —
+     * <b>게이트는 통과하는데 아무것도 증명하지 못한다.</b>
+     *
+     * <p>재사용이 막으려던 것("이 Step 이 COMPLETED 인데 잡 컨텍스트가 저장 전")은
+     * {@code preventRestart()} 때문에 <b>도달할 수 없다.</b> 그래서 열린 실행만 이어받는다.
      */
     @Bean
     public Step startRunStep(
             VerificationRunRepository runs,
+            VerificationFindingRepository findings,
             ReplayHistoryRepository histories,
             VerificationRuleRepository rules,
             @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled
@@ -414,7 +552,7 @@ public class VerifyJobConfig {
 
                     long runId = runs
                             .findByParams(asOf, dataset, scope, attempt)
-                            .map(VerificationRun::id)
+                            .map(VerifyJobConfig::rejectExistingRun)
                             .orElseGet(() -> runs.save(VerificationRun.start(
                                     asOf, parameters.getLocalDateTime("fromTs"),
                                     scope, dataset, attempt,
@@ -625,6 +763,43 @@ public class VerifyJobConfig {
         jobContext.putLong(SCAN_MAX_KEY, range.maxIssuanceId());
         jobContext.putLong(SCAN_MAX_HISTORY_KEY, range.maxHistoryId());
         jobContext.putString(SCAN_LATEST_KEY, range.latestCreatedAt().toString());
+    }
+
+    /** 얼림 확인이 자기 트랜잭션에서 읽어 둔 지문. 없으면 그 Step 이 안 돈 것이다. */
+    private static String frozenFingerprint(JobExecution jobExecution) {
+        Object value = jobExecution.getExecutionContext().get(FINGERPRINT_KEY);
+        if (value == null) {
+            throw new IllegalStateException(
+                    "데이터셋 지문이 없습니다. assertFrozenStep 이 먼저 돌아야 합니다.");
+        }
+        return (String) value;
+    }
+
+    /**
+     * <b>같은 파라미터의 실행이 이미 있으면 무조건 거부한다.</b> 이어받지 않는다.
+     *
+     * <p><b>닫힌 실행은 시드가 심은 기준 행이다.</b> {@code cy-seed/seedgen/stats.py} 가 적재할 때마다
+     * {@code verification_runs} 를 심고 CORRUPT 는 <b>정답 800행을 그 {@code run_id} 에 붙인다.</b>
+     * 게이트가 쓰는 {@code asOf} 도 그 행에서 나오므로 정상 절차가 반드시 겹친다.
+     * 이어받으면 {@code countOf}·{@code checksumOf} 가 배치 검출과 정답의 합집합을 세어,
+     * <b>검증기가 한 건도 못 잡아도 정답이 나온다.</b>
+     *
+     * <p><b>열린 실행도 이어받지 않는다.</b> 그 상태는 앞 실행이 중간에 죽어 남은 것인데,
+     * {@code asof_state} 에 그 실행의 <b>부분 결과가 남아 있다.</b> 검출이 0건이라 통과시키면
+     * 새 리플레이가 UPSERT 로 덮지 못한 낡은 행이 그대로 V1·V3·V5 에 섞인다.
+     * 게다가 {@code preventRestart()} 때문에 그 상황은 배치 메타DB 와 업무DB 가 어긋났을 때만
+     * 열린다 — 이어받아 될 상태가 아니다.
+     *
+     * <p>시드가 CLEAN {@code attempt} 1·2, CORRUPT 1 을 점유하므로
+     * <b>배치는 CLEAN 3 · CORRUPT 2 부터</b> 시작한다.
+     */
+    private static long rejectExistingRun(VerificationRun existing) {
+        throw new BusinessException(
+                VerificationErrorCode.INVALID_RUN_PARAMS,
+                "같은 파라미터의 실행이 이미 있습니다. 시드가 심은 기준 실행이거나 앞 실행이 남긴 "
+                        + "부분 결과일 수 있어 이어받지 않습니다. attempt 를 올리십시오 "
+                        + "(시드가 CLEAN 1·2, CORRUPT 1 을 점유합니다). runId=" + existing.id()
+                        + " attempt=" + existing.attempt());
     }
 
     private static long requireRunId(JobExecution jobExecution) {

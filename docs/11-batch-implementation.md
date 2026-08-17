@@ -500,6 +500,7 @@ replayMismatchStep   V3     현재 행을 읽는다
 stockMismatchStep    V1     현재 행을 읽는다
 gradeViolationStep   V6     현재 행을 읽는다
 assertFrozenStep     실행 중 발급건·재고·정책(회차+등급)이 얼어 있었는지 다시 확인
+finalizeRunStep      판정·검출 수·checksum·지문·종료 시각을 실행 행에 남긴다
 ```
 
 **V6 는 `asof_state` 를 안 읽지만 결정론도 아니다.** `issued_grade` 는 스냅샷이라 안 변하는데
@@ -525,8 +526,45 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 뒤에 붙을 것 — **아직 구현되지 않았다.**
 
 ```
-마지막        통계(CLEAN 만) → finalize(판정·checksum·지문)
+마지막        통계(CLEAN 만)
 ```
+
+### 판정은 두 값의 조합으로만 뜻이 있다
+
+```
+findings_checksum    정렬된 (finding_type, target_key) 만 → SHA-256
+                     계약이 정한 인코딩: type + U+001F + key + U+001E 반복
+dataset_fingerprint  max(hist.id) | count(hist) | count(issuances)
+                     | sum(active_count) | max(issuances.updated_at)
+```
+
+판정표가 읽는 것은 **조합**이다.
+
+| 지문 | checksum | 뜻 |
+|---|---|---|
+| 다름 | 다름 | 데이터가 바뀌었다 |
+| 같음 | 같음 | 재실행 결정론 성립 |
+| 같음 | **다름** | 🔴 **검증기 버그** — 진짜로 잡고 싶은 칸 |
+
+**두 값을 자바에서 계산한다.** checksum 은 `GROUP_CONCAT` 을 쓰면
+`group_concat_max_len` 을 넘길 때 경고만 내고 잘려서, 오염셋 800행에서 **뒤쪽 검출이
+checksum 에 안 들어간다** — 결정론 판정이 열린 채로 통과한다. 중간 리스트 없이 행마다 접는다. **커서 스트리밍은 아니다** — 행 수 방어는 규칙 Step 의 상한(10000 × 6 = 6만 행 천장)이 한다.
+
+지문의 시각은 **`getTimestamp` 로 읽으면 안 된다.** JVM 기본 시간대로 변환돼,
+서버가 UTC 라도 KST 머신에서 돌리면 9시간이 얹힌다 — **같은 데이터가 머신마다 다른 지문**을 낸다.
+실제로 그렇게 났고 계약 대조 테스트가 잡았다. `LocalDateTime` 으로 직접 받는다.
+
+> **정렬은 콜레이션이 아니라 코드포인트 순서다.** MySQL 기본 콜레이션은 UCA 라
+> `|`(U+007C)를 숫자보다 앞에 두는데 참조 구현의 파이썬 `sorted()` 는 반대다(실측).
+> `CAST(... AS BINARY)` 로 맞춘다.
+>
+> 덤으로 `uk_run_finding` 커버링 인덱스를 못 타게 되어 **`ORDER BY` 를 지우면 테스트가 잡는다.**
+> 그 테스트가 유효한 이유는 데이터가 `COUPON:1|MEMBER:2` 와 `COUPON:11|MEMBER:2` 이기 때문이다 —
+> `|` 가 없는 키만 넣으면 두 순서가 같아 다시 사각지대가 된다.
+
+**판정은 CLEAN 에서만 낸다.** 정상셋은 "검출 0건 = 통과" 가 규칙만으로 결정되지만,
+오염셋은 800행이 **정답 집합과 같은지**를 봐야 한다 — 개수만 보면 오탐 400 + 누락 400 도 800 이다.
+그 대조가 붙기 전까지 CORRUPT 는 `FAIL` 로 둔다. 통과로 두면 **오염셋이 무조건 합격**으로 기록된다.
 
 ### V2 는 케이스가 둘인데 규칙은 하나다
 
