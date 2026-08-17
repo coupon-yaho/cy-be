@@ -1,0 +1,126 @@
+name: Build
+
+# 빌드와 테스트를 PR 마다 돌린다.
+#
+# 이걸 세우기 전까지 테스트 360개가 **작성자 로컬에서만** 돌았다. CodeRabbit 은 코드를 읽을
+# 뿐 실행하지 않으므로, "테스트가 통과한다" 는 주장을 PR 에서 확인할 방법이 없었다.
+#
+# ⚠️ on.pull_request 에 branches 필터를 걸지 말 것.
+#    배치 PR 의 base 는 main 이 아니라 에픽 브랜치(feature/CY-15)다. base 를 main 으로
+#    좁히면 정작 검증할 PR 들이 통째로 빠진다. conventions.yml 도 같은 이유로 필터가 없다.
+#
+# required check 등록: Settings > Rules > Ruleset > Require status checks
+#   빌드·테스트
+# docs/03-collaboration.md 3.5a 절이 "빌드·테스트 CI 는 차단이다" 라고 못 박았다.
+# 등록하지 않으면 이 워크플로는 돌기만 하고 실패해도 머지를 못 막는다 —
+# 그러면 이 파일의 존재 이유가 없다.
+#
+# ⚠️ 이 파일은 에픽 브랜치에도 있어야 한다.
+#    pull_request 이벤트는 워크플로를 PR 의 head 에서 가져온다. main 에만 넣으면
+#    main 보다 앞서 갈라진 에픽에서 자른 브랜치에는 파일이 없어 돌지 않는다.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 워크플로는 소스만 읽는다. 코멘트도 안 달고 릴리스도 안 만든다.
+permissions:
+  contents: read
+
+# 같은 PR 에 연속 푸시하면 앞 실행을 버린다. 테스트가 3~8분이라
+# 급하게 두세 번 밀어 넣으면 러너가 쌓이고 결과도 낡은 커밋 것이 섞인다.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 빌드·테스트
+    runs-on: ubuntu-latest
+    # 로컬 clean build 2분 20초. Testcontainers 가 mysql:8.0.35 를 내려받고
+    # 컨테이너를 여러 번 띄우므로 CI 는 그보다 오래 걸린다. 넉넉히 두되 무한은 아니다.
+    timeout-minutes: 30
+
+    steps:
+      # v7 까지 있지만 이 저장소는 v5 가 다수다(conventions·security-audit). pages 만 v4 라
+      # 이미 갈라져 있는데, 더 벌리지 않는다 — 올릴 때 네 파일을 같이 올린다.
+      #
+      # persist-credentials: false — 기본값은 GITHUB_TOKEN 을 .git/config 에 남긴다.
+      # 이 워크플로는 ./gradlew build 로 **임의 JVM 코드를 실제로 실행하는 유일한 자리**다
+      # (빌드 스크립트 평가·애노테이션 프로세서·서드파티 플러그인). 오염된 의존성이 그 토큰을
+      # 읽을 수 있으므로 남기지 않는다. 이후 git 조작이 없어 부작용도 없다.
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # 툴체인은 build.gradle 이 Java 21 로 못 박아 뒀다(languageVersion = 21).
+      # 여기서 같은 버전을 깔아 두면 Gradle 이 JDK 를 따로 내려받지 않는다.
+      - name: Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # 래퍼 JAR 이 바뀌지 않았는지 본다. gradle-wrapper.jar 는 바이너리라
+      # 리뷰에서 내용을 읽을 수 없어, 교체되면 빌드가 임의 코드를 실행한다.
+      - name: Gradle 래퍼 검증
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Gradle 설정·캐시
+        uses: gradle/actions/setup-gradle@v6
+
+      # build 는 test 와 check 를 포함하고 jar·bootJar 까지 만든다 —
+      # 테스트만 돌리면 패키징이 깨진 것을 머지 뒤에 안다.
+      #
+      # 로컬 application.yml·storage.yml 은 gitignore 대상이라 러너에 아예 없다.
+      # 빌드가 .example 을 resolved/ 로 복사하므로(build.gradle 참고) 그대로 돈다.
+      - name: 빌드·테스트
+        run: ./gradlew build --stacktrace
+
+      # 어느 테스트가 깨졌는지 요약한다. Gradle raw 로그만 남으면 끝까지 스크롤해야 하고,
+      # 아티팩트는 내려받아야 열린다. 기존 워크플로 넷도 전부 이 자리에 요약을 남긴다.
+      #
+      # 실패 테스트가 0건이면 컴파일·패키징에서 깨진 것이다 — 그 둘을 구분해 준다.
+      - name: 실패 요약
+        if: failure()
+        run: |
+          python3 - >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import pathlib, re
+          rows = []
+          for p in pathlib.Path('.').rglob('build/test-results/test/*.xml'):
+              t = p.read_text(errors='ignore')
+              suite = re.search(r'<testsuite name="([^"]+)"', t)
+              for m in re.finditer(r'<testcase name="([^"]+)"[^>]*>\s*<(failure|error)', t):
+                  rows.append((suite.group(1) if suite else p.stem, m.group(1)))
+          print("## ❌ 빌드·테스트 실패")
+          print()
+          if rows:
+              for cls, name in rows[:40]:
+                  print(f"- `{cls.rsplit('.', 1)[-1]}` — {name}")
+              if len(rows) > 40:
+                  print()
+                  print(f"… 외 {len(rows) - 40}건")
+          else:
+              print("실패한 테스트는 없다. 컴파일·패키징 단계에서 깨졌다 — 잡 로그를 봐라.")
+          PY
+
+      # 실패했을 때 어느 테스트가 왜 깨졌는지 러너 로그만으로는 부족하다.
+      #
+      # ⚠️ 공개 저장소다. Gradle 은 테스트의 stdout/stderr 를 JUnit XML 의 <system-out> 에
+      #    그대로 담으므로, 여기 올라간 것은 7일간 누구나 내려받을 수 있다.
+      #    지금은 실을 것이 없다 — 테스트에 PII 리터럴이 없고 암호화 키도 아직 배선 전이며
+      #    Testcontainers 자격증명은 고정 기본값(test/test)이다.
+      #    회원 PII·*_enc 컬럼 테스트가 들어오는 시점에 SQL 파라미터 로깅을 끄고
+      #    업로드 경로를 좁혀야 한다.
+      - name: 테스트 리포트
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 7
