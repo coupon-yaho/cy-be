@@ -2,6 +2,7 @@
 package com.kafkick.storage.verification;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import org.springframework.jdbc.core.RowMapper;
@@ -73,9 +74,12 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
             """;
 
     /**
-     * {@code updated_at} 에 인덱스가 없어 {@code COUNT(*)} 로 세면 0건일 때도 300만 행을
-     * 끝까지 훑는다 — 정상 경로가 곧 최악 경로가 된다. 필요한 것은 존재 여부뿐이라
-     * 첫 행에서 끊는다.
+     * {@code updated_at} 에 인덱스가 없어 <b>이 문장도 0건일 때 300만 행을 끝까지 읽는다</b> —
+     * 정상 경로가 곧 최악 경로다. {@code EXISTS} 가 {@code COUNT(*)} 보다 나은 것은
+     * "갱신이 실제로 있는" 비정상 경로뿐이다.
+     *
+     * <p>처방은 {@code cy-seed/ddl/90_perf_indexes_optional.sql} 이고, 붙이기 전후
+     * {@code EXPLAIN ANALYZE} 가 과제의 일부다. 지금 이 주석은 <b>개선을 주장하지 않는다.</b>
      */
     private static final String EXISTS_UPDATED_AFTER = """
             SELECT EXISTS(SELECT 1 FROM issuances WHERE updated_at > :asOf LIMIT 1)
@@ -117,7 +121,6 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                               16, 10) AS UNSIGNED))), 16, '0'))
                         FROM grades))
             """;
-
 
     /** 재고는 회차가 147~291행이라 훑는 비용이 없다. 그래도 형태는 발급건 쪽과 같이 둔다. */
     private static final String EXISTS_STOCK_UPDATED_AFTER = """
@@ -168,6 +171,10 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * <p><b>그래도 결정론은 아니다.</b> {@code coupons.eligible_grades_mask} 는 살아 있는 행이고
      * 지문 재료에도 없다. 그래서 {@code i.updated_at <= :asOf} 로 "어떤 발급건을 볼지" 만이라도
      * 고정한다 — <b>이 조건을 지우면 재실행이 갈린다.</b> 정책 축은 {@code policyDigest} 가 지킨다.
+     *
+     * <p><b>참조 구현과 갈리는 자리다.</b> {@code cy-seed/seedgen/verify.py} 는 INNER JOIN 이라
+     * 미등록 등급을 안 잡는다. 지금은 {@code issued_grade} 의 FK 가 그런 행의 발생 자체를 막아
+     * 두 집합이 같지만, <b>FK 가 빠지면 여기만 검출해 오탐이 된다.</b>
      *
      * <p><b>{@code grades} 를 LEFT JOIN 으로 잡는다.</b> INNER 로 잡으면 {@code grades} 에 없는
      * 등급 문자열이 조용히 빠지는데, 그것이야말로 잡아야 할 위반이다.
@@ -338,6 +345,54 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .single();
     }
 
+    /** 계약이 정한 재료 구분자. */
+    private static final String FINGERPRINT_SEPARATOR = "|";
+
+    /** 시드 참조 구현({@code stats.py})의 폴백. 갈리면 같은 데이터에 다른 지문이 나온다. */
+    private static final LocalDateTime EMPTY_DATASET_TIME = LocalDateTime.of(1970, 1, 1, 0, 0);
+
+    private static final DateTimeFormatter FINGERPRINT_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+
+    /**
+     * 계약의 {@code fingerprint.formula} 를 재료 다섯으로 뽑는다. 이어 붙이기와 해싱은
+     * 자바가 한다 — 시각 포맷이 계약에 <b>문자열로</b> 정해져 있어 DB 의 기본 표현에 맡길 수 없다.
+     *
+     * <p>이력은 {@code created_at <= :asOf} 로 자른다. 나머지 넷은 <b>안 자른다</b> —
+     * 계약이 그 필터를 이력에만 걸었고, {@code coupon_stocks} 에는 그럴 컬럼도 없다.
+     * 대신 {@code assertFrozenStep} 이 실행 중 갱신을 막는다.
+     *
+     * <p>빈 데이터셋에서 {@code MAX}·{@code SUM} 은 NULL 이다. 그 자리는
+     * <b>시드 저장소의 참조 구현이 쓰는 값</b>을 그대로 쓴다 —
+     * {@code cy-seed/seedgen/stats.py#dataset_fingerprint} 가 숫자는 {@code 0},
+     * 시각은 {@code 1970-01-01 00:00:00.000000} 으로 접는다.
+     *
+     * <p><b>여기서 다른 값을 쓰면 안 된다.</b> 시드의 매니페스트와 배치의 지문은
+     * <b>대조하라고 있는 값</b>이라({@code seedgen/manifest.py}) 폴백이 갈리면
+     * 같은 데이터에 다른 지문이 나온다. 처음에 {@code "NULL"} 로 짰다가 참조 구현과 맞췄다.
+     */
+    private static final String SELECT_FINGERPRINT_INPUT = """
+            SELECT (SELECT MAX(id) FROM issuance_histories WHERE created_at <= :asOf) AS max_history_id,
+                   (SELECT COUNT(*) FROM issuance_histories WHERE created_at <= :asOf) AS history_count,
+                   (SELECT COUNT(*) FROM issuances)                                    AS issuance_count,
+                   (SELECT CAST(COALESCE(SUM(active_count), 0) AS SIGNED)
+                      FROM coupon_stocks)                                              AS active_total,
+                   (SELECT MAX(updated_at) FROM issuances)                             AS max_updated_at
+            """;
+
+    @Override
+    public boolean hasHistoriesAddedAbove(long frozenMaxHistoryId, LocalDateTime asOf) {
+        return Boolean.TRUE.equals(jdbcClient.sql("""
+                        SELECT EXISTS(
+                                 SELECT 1 FROM issuance_histories
+                                  WHERE id > :maxHistoryId AND created_at <= :asOf)
+                        """)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single());
+    }
+
     @Override
     public boolean hasCleanOnlyConstraints() {
         return Boolean.TRUE.equals(jdbcClient.sql("""
@@ -350,6 +405,38 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                         """)
                 .query(Boolean.class)
                 .single());
+    }
+
+    @Override
+    public String datasetFingerprint(LocalDateTime asOf) {
+        String material = jdbcClient.sql(SELECT_FINGERPRINT_INPUT)
+                .param("asOf", asOf)
+                .query((rs, rowNum) -> String.join(FINGERPRINT_SEPARATOR,
+                        text(rs.getObject("max_history_id")),
+                        text(rs.getObject("history_count")),
+                        text(rs.getObject("issuance_count")),
+                        text(rs.getObject("active_total")),
+                        timestamp(rs.getObject("max_updated_at", LocalDateTime.class))))
+                .single();
+
+        return DigestValues.sha256Hex(material);
+    }
+
+    /** 참조 구현의 폴백은 {@code 0} 이다. {@code totals} 가 0 에서 시작하기 때문이다. */
+    private static String text(Object value) {
+        return value == null ? "0" : String.valueOf(value);
+    }
+
+    /**
+     * 계약이 정한 {@code %Y-%m-%d %H:%M:%S.%f} — 마이크로초 6자리다.
+     *
+     * <p><b>{@code getTimestamp} 를 쓰면 안 된다.</b> 그쪽은 {@code java.sql.Timestamp} 로 받아
+     * <b>JVM 기본 시간대로 변환</b>한다. 서버가 UTC 라도 배치를 KST 머신에서 돌리면 9시간이 얹혀,
+     * <b>같은 데이터가 머신마다 다른 지문</b>을 낸다 — 지문이 막으려던 바로 그 사고다.
+     * {@code LocalDateTime} 으로 직접 받으면 변환이 없다.
+     */
+    private static String timestamp(LocalDateTime value) {
+        return FINGERPRINT_TIME.format(value == null ? EMPTY_DATASET_TIME : value);
     }
 
     @Override

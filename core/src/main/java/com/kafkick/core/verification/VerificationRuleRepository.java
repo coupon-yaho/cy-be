@@ -144,6 +144,22 @@ public interface VerificationRuleRepository {
     String policyDigest();
 
     /**
+     * 얼린 이력 상한 <b>위로</b>(= 더 큰 id 로) {@code asOf} 이하 이력이 끼어들었는가.
+     * 이름을 SQL 방향과 맞춘다 — 이 저장소는 어휘가 뒤집혀 있어 이름 오해가 가장 흔한 사고다.
+     *
+     * <p>리플레이는 {@code id <= maxHistoryId} 로 자르는데, {@code dataset_fingerprint} 는
+     * {@code MAX(id) WHERE created_at <= asOf} 를 <b>다시 잰다.</b> 실행 중에 백데이트 이력이
+     * 들어오면 리플레이는 못 읽고 지문은 읽어, <b>같은 지문에 다른 검출</b>이 나온다 —
+     * 판정표가 "검증기 버그" 로 잘못 읽는 바로 그 칸이다.
+     *
+     * <p>발급건 시각 가드가 간접 방어라는 반론이 가능하지만, <b>이력만 넣고 {@code issuances} 를
+     * 안 건드리는 것이 오염 주입의 기본 모양</b>이다 — 유형 3 이 정확히 그렇다.
+     *
+     * <p>PK 범위 조회라 비용이 없다.
+     */
+    boolean hasHistoriesAddedAbove(long frozenMaxHistoryId, LocalDateTime asOf);
+
+    /**
      * 지금 보고 있는 스키마에 <b>CLEAN 전용 제약</b>이 살아 있는가.
      *
      * <p>{@code dataset} 파라미터는 {@code verification_runs} 에 적히는 <b>라벨일 뿐</b>이고,
@@ -155,5 +171,27 @@ public interface VerificationRuleRepository {
      * {@code ck_stock_range} 는 {@code NOT ENFORCED} 로 살아 있을 수 있고
      * {@code code} 유일 인덱스는 이름이 저장소마다 다릅니다.
      */
+
     boolean hasCleanOnlyConstraints();
+
+    /**
+     * 이 실행이 <b>어떤 데이터를 봤는지</b>를 한 값으로 접습니다.
+     *
+     * <p>계약({@code docs/contract.json} 의 {@code fingerprint})이 정한 공식을 글자 그대로 씁니다.
+     *
+     * <pre>
+     * SHA256( max(issuance_histories.id) | count(issuance_histories) | count(issuances)
+     *         | sum(coupon_stocks.active_count) | max(issuances.updated_at) )
+     * 구분자 "|" · 시각 "%Y-%m-%d %H:%M:%S.%f" · 이력은 created_at &lt;= asOf
+     * </pre>
+     *
+     * <p><b>{@code findings_checksum} 과 짝으로만 뜻이 있습니다.</b> 판정표가 그 조합을 읽습니다 —
+     * 지문이 다르면 데이터가 달라진 것이고, <b>지문은 같은데 checksum 이 다르면 검증기 버그</b>입니다.
+     * 이 프로젝트가 진짜로 잡고 싶은 칸이 후자입니다.
+     *
+     * <p><b>{@code policyDigest} 와 다른 값입니다.</b> 그쪽은 한 실행 안에서 회차 정책이
+     * 안 바뀌었는지만 보는 실행 중 가드이고, 이쪽은 실행 사이를 비교하는 데이터셋 식별자입니다.
+     * 그래서 이 공식에는 {@code eligible_grades_mask} 축이 없습니다 — 계약이 그렇게 정했습니다.
+     */
+    String datasetFingerprint(LocalDateTime asOf);
 }
