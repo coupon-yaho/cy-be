@@ -164,6 +164,28 @@ class VerificationFindingJdbcAdapterTest {
         assertThat(countOf(runId)).isEqualTo(800);
     }
 
+    /**
+     * <b>800행은 분할 경계를 넘지 않는다.</b> {@code BATCH_SIZE} 가 1000 이라 위 테스트는
+     * 루프를 <b>한 번만</b> 돌리고 끝난다 — 두 번째 묶음의 오프셋 계산은 한 번도 실행된 적이 없었다.
+     *
+     * <p>규칙당 상한 기본값이 10000 이라 실제 실행은 경계를 쉽게 넘는다.
+     */
+    @Test
+    @DisplayName("분할 경계를 넘겨도 다 들어간다 — 두 번째 묶음이 실제로 돈다")
+    void appendAcrossBatchBoundary() {
+        int size = 1_001;
+        List<VerificationFinding> findings = LongStream.rangeClosed(1, size)
+                .mapToObj(id -> VerificationFinding.forHistory(
+                        FindingType.ILLEGAL_TRANSITION, id, "a", "b"))
+                .toList();
+
+        adapter.appendAll(runId, findings);
+
+        assertThat(countOf(runId))
+                .as("경계를 잘못 계산하면 마지막 1행이 새거나 중복키로 죽는다")
+                .isEqualTo(size);
+    }
+
     private Map<String, Object> findByTargetKey(String targetKey) {
         return jdbcClient.sql("""
                         SELECT finding_type, target_key, campaign_id, member_id,

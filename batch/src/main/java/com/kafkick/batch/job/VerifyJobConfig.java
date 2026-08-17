@@ -708,7 +708,8 @@ public class VerifyJobConfig {
      */
     private static void rejectUnsupportedScope(ScopeType scope) {
         if (scope == ScopeType.INCREMENTAL) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_RUN_PARAMS,
                     "증분 검증은 아직 지원하지 않습니다. 전수로 실행하세요. scope=" + scope);
         }
     }
@@ -721,7 +722,8 @@ public class VerifyJobConfig {
      */
     private static void rejectAsOfBeforeLatestHistory(LocalDateTime asOf, ReplayScanRange range) {
         if (range.isBefore(asOf)) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_AS_OF,
                     "asOf 는 마지막 이력 시각 이상이어야 합니다. asOf=" + asOf
                             + " 마지막 이력=" + range.latestCreatedAt());
         }
@@ -737,7 +739,8 @@ public class VerifyJobConfig {
      */
     private static void rejectIssuancesUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
         if (updatedAfter) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_AS_OF,
                     "asOf 이후에 갱신된 발급건이 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
                             + "asOf=" + asOf);
         }
@@ -752,7 +755,8 @@ public class VerifyJobConfig {
      */
     private static void rejectStocksUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
         if (updatedAfter) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_AS_OF,
                     "asOf 이후에 갱신된 재고가 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
                             + "asOf=" + asOf);
         }
@@ -767,7 +771,8 @@ public class VerifyJobConfig {
      */
     private static void rejectRunningSchedulers(boolean schedulingEnabled) {
         if (schedulingEnabled) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_RUN_PARAMS,
                     "스케줄러가 켜진 상태에서는 검증할 수 없습니다. "
                             + "batch.scheduling.enabled=false 로 두고 다시 실행하십시오.");
         }

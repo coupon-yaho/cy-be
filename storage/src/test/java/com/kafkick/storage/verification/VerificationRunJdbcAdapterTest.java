@@ -87,8 +87,8 @@ class VerificationRunJdbcAdapterTest {
     }
 
     @Test
-    @DisplayName("통계 상태를 판정과 따로 갱신한다")
-    void updateStatsStatusSeparately() {
+    @DisplayName("판정과 통계 상태를 한 번의 update 로 함께 쓴다")
+    void writeVerdictAndStatsStatusTogether() {
         VerificationRun saved = adapter.save(fullRun());
 
         adapter.update(saved.finish(VerdictType.PASS, 0, null, null, STARTED_AT)
@@ -97,6 +97,25 @@ class VerificationRunJdbcAdapterTest {
         VerificationRun found = adapter.findById(saved.id()).orElseThrow();
         assertThat(found.verdict()).isEqualTo(VerdictType.PASS);
         assertThat(found.statsStatus()).isEqualTo(StatsStatus.SKIPPED);
+    }
+
+    /**
+     * <b>이름이 말하는 메서드를 실제로 부른다.</b> 위 테스트가 {@code updateStatsStatus} 라는
+     * 이름을 달고 {@code update()} 만 불러, 통계 Step 이 쓸 전용 경로는 한 번도 안 돌았다.
+     */
+    @Test
+    @DisplayName("통계 상태만 따로 갱신한다 — 판정은 건드리지 않는다")
+    void updateStatsStatusAlone() {
+        VerificationRun saved = adapter.save(fullRun());
+        adapter.update(saved.finish(VerdictType.PASS, 0, null, null, STARTED_AT));
+
+        adapter.updateStatsStatus(saved.id(), StatsStatus.COMPLETE);
+
+        VerificationRun found = adapter.findById(saved.id()).orElseThrow();
+        assertThat(found.statsStatus()).isEqualTo(StatsStatus.COMPLETE);
+        assertThat(found.verdict())
+                .as("통계 갱신이 판정을 지우면 게이트가 읽을 값이 사라진다")
+                .isEqualTo(VerdictType.PASS);
     }
 
     @Test

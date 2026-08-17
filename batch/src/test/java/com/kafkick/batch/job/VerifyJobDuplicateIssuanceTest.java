@@ -145,7 +145,10 @@ class VerifyJobDuplicateIssuanceTest {
                 .addString("scope", "FULL")
                 .addString("dataset", "CORRUPT")
                 .addLong("attempt", 1L)
-                .addLong("seedRunId", 1L)
+                // 비식별이다. 근거는 VerifyJobManifestTest#keepAttemptAsTheOnlyRerunAxis —
+                // 식별로 넣으면 JobInstance 축이 uk_run_params 와 어긋나 재실행이 엉뚱한
+                // 이유로 죽는다. 프로덕션 런처가 없어 이 두 테스트가 파라미터 규약이다.
+                .addLong("seedRunId", 1L, false)
                 .toJobParameters());
     }
 

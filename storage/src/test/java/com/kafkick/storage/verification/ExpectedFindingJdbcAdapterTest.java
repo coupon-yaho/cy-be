@@ -20,7 +20,6 @@ import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.storage.db.RepositoryTest;
-import com.kafkick.storage.db.VerificationSeed;
 
 /**
  * <b>합격 조건은 건수가 아니라 집합 일치입니다.</b> 오탐 400 + 누락 400 도 800 이라,
@@ -54,7 +53,6 @@ class ExpectedFindingJdbcAdapterTest {
 
     @BeforeEach
     void setUp() {
-        new VerificationSeed(jdbcClient);
         runId = runs.save(VerificationRun.start(
                 AS_OF, null, ScopeType.FULL, DatasetType.CORRUPT, 1, AS_OF)).id();
     }

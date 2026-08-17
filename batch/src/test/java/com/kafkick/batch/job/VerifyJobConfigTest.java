@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -242,7 +243,9 @@ class VerifyJobConfigTest {
                 .toJobParameters();
 
         assertThatThrownBy(() -> jobOperator.start(verifyJob, parameters))
-                .isInstanceOf(InvalidJobParametersException.class);
+                .isInstanceOf(InvalidJobParametersException.class)
+                .as("어느 파라미터가 빠졌는지 말하지 않으면 이름만 요란하고 지키는 것이 없다")
+                .hasMessageContaining("scope");
     }
 
     @Test
@@ -343,7 +346,7 @@ class VerifyJobConfigTest {
     }
 
     @Test
-    @DisplayName("두 번 돌려도 검출 집합이 같다 — 판정이 이 집합으로 이뤄진다")
+    @DisplayName("V4 를 두 번 돌려도 검출 집합이 같다 — 리플레이가 재실행에 흔들리지 않는다")
     void produceSameFindingsOnRerun() throws Exception {
         long issuanceId = seed.issuance(IssuanceStatus.EXPIRED);
         issued(issuanceId, AS_OF.minusHours(3));
@@ -783,10 +786,19 @@ class VerifyJobConfigTest {
                 .list();
     }
 
+    /**
+     * <b>원인 사슬을 끝까지 훑는다.</b> Spring Batch 는 태스크릿 예외를 감싸서 올리므로
+     * 최상위 메시지만 보면 우리가 세운 거부 사유가 안 보인다 — 같은 스위트의 나머지
+     * 다섯 사본은 이미 사슬을 훑는데 여기만 갈라져 있었다.
+     */
     private static List<String> failureMessagesOf(JobExecution execution) {
-        return execution.getAllFailureExceptions().stream()
-                .map(Throwable::getMessage)
-                .toList();
+        List<String> messages = new ArrayList<>();
+        for (Throwable failure : execution.getAllFailureExceptions()) {
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                messages.add(String.valueOf(cause.getMessage()));
+            }
+        }
+        return messages;
     }
 
     private int asOfStateCount() {

@@ -33,6 +33,23 @@ class VerificationRunTest {
         assertThat(incrementalRun().decidesVerdict()).isFalse();
     }
 
+    /**
+     * <b>종료가 시작보다 앞서면 소요 시간이 음수가 된다.</b> 가드는 있었지만 테스트가 없어,
+     * 지우면 아무도 모르는 상태였다 — 실제로 CY-193 에서 두 자리가 같은 시각을 쓰던 버그가
+     * {@code isNotNull()} 단언만 있어 통과한 적이 있다.
+     */
+    @Test
+    @DisplayName("종료 시각이 시작보다 앞서면 거부한다")
+    void rejectFinishedBeforeStarted() {
+        VerificationRun run = fullRun();
+
+        assertThatThrownBy(() -> run.finish(
+                VerdictType.PASS, 0, "checksum", "fingerprint",
+                run.startedAt().minusNanos(1_000)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("종료 시각은 시작 시각보다 앞설 수 없습니다");
+    }
+
     @Test
     @DisplayName("판정을 확정하면 검출 건수와 증적이 채워진다")
     void finishRun() {

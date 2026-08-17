@@ -28,6 +28,11 @@ public record ReplayResult(
         if (lastEventAt == null) {
             throw new IllegalArgumentException("마지막 이력 시각이 필요합니다.");
         }
+        if (illegalTransitions == null) {
+            // List.copyOf 가 던지는 NPE 는 같은 생성자의 나머지 두 거부와 형이 달라,
+            // 호출자가 "인자가 틀렸다" 를 한 갈래로 잡을 수 없다.
+            throw new IllegalArgumentException("불법 전이 목록이 필요합니다. 없으면 빈 목록입니다.");
+        }
         illegalTransitions = List.copyOf(illegalTransitions);
     }
 

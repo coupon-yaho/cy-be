@@ -308,9 +308,11 @@ reviews:
         `Instant.now()` 는 발견 즉시 blocker 다. 주입된 `asOf` 를 써야 한다.
         **`TimeProvider` 주입도 같은 위반이다** — `timeProvider.now()` 는 결국 현재 시각이라
         재실행하면 값이 달라진다. 판정에 쓰는 시각은 오직 `asOf` 파라미터로만 들어온다.
-        예외는 `verification_runs.started_at` 처럼 <b>실행을 관측해 남기는 컬럼</b>뿐이고,
-        이건 checksum·지문 재료가 아니다. 그 값도 `now()` 를 부르지 말고 Spring Batch 가
-        이미 기록한 `JobExecution.getStartTime()` 을 쓴다.
+        예외는 `verification_runs.started_at`·`finished_at` 처럼 <b>실행을 관측해 남기는
+        컬럼</b>뿐이고, 이건 checksum·지문 재료가 아니다. 그 값도 `now()` 를 부르지 말고
+        Spring Batch 가 이미 기록한 시각을 쓴다 — `started_at` 은 `JobExecution.getStartTime()`,
+        `finished_at` 은 판정 Step 의 `StepExecution.getStartTime()` 이다.
+        (`JobExecution.getEndTime()` 은 잡이 아직 안 끝나 그 시점에 `null` 이다.)
         증분 윈도우도 절대 구간 `(from_ts, as_of_ts)` 로 받아야 한다. `최근 N분` 같은
         상대 윈도우는 현재 시각 기준이라 같은 파라미터 재실행이 재현되지 않는다.
         그 외: 정렬 타이브레이커 없음(리플레이 정렬은 **`(created_at, id)`** 여야 한다.
