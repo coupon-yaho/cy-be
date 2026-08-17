@@ -39,8 +39,10 @@ class CorruptSchemaShapeTest {
     /**
      * <b>이름도 선두 컬럼도 아니라 "무엇을 막는가" 를 본다.</b>
      *
-     * <p>이름으로 고정하면 두 저장소가 같은 인덱스를 다르게 부르는 순간 검사가 공허해진다
-     * (시드는 {@code uk_coupon_code}, cy-be 는 인라인 UNIQUE 라 이름이 {@code code} 다).
+     * <p>이름으로 고정하면 두 저장소가 같은 인덱스를 다르게 부르는 순간 검사가 공허해진다.
+     * 실제로 그런 상태였다 — 시드는 {@code uk_coupon_code}, cy-be 는 인라인 UNIQUE 라 이름이
+     * {@code code} 였다({@code V6__name_unique_constraints.sql} 이 맞췄다).
+     * 이름을 맞춘 뒤에도 이 검사는 이름을 보지 않는다 — 다시 갈릴 수 있고, 그때 공허해지면 안 된다.
      * 선두 컬럼만 봐도 부족하다 — {@code UNIQUE(member_id, coupon_id)} 는 선두가 {@code member_id}
      * 라 {@code coupon_id} 검사를 통과하는데 <b>유형 6 을 여전히 막는다.</b>
      *
@@ -108,7 +110,7 @@ class CorruptSchemaShapeTest {
                         SELECT column_name
                           FROM information_schema.statistics
                          WHERE table_schema = DATABASE() AND table_name = 'issuances'
-                           AND index_name = 'idx_issuance_coupon'
+                           AND index_name = 'coupon_id'
                          ORDER BY seq_in_index
                         """)
                 .query(String.class)

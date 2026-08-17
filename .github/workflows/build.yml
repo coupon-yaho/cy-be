@@ -86,6 +86,34 @@ jobs:
       - name: 빌드·테스트
         run: ./gradlew build --stacktrace
 
+      # 사본이 상류와 같은지 본다. 이게 없으면 SchemaParityTest 의 초록이
+      # "게이트가 도는 스키마와 같다" 가 아니라 "누가 언젠가 복사한 파일과 같다" 로
+      # 조용히 뜻이 바뀐다 — 그 테스트를 세운 이유 자체가 무력해지는 유일한 축이다.
+      #
+      # diff 실패는 차단(사본을 손댔다는 뜻), SHA 뒤처짐은 경고(상류가 앞서 나갔다는 뜻)로
+      # 가른다. 안 가르면 상류 커밋 하나에 남의 PR 이 전부 빨개진다.
+      - name: 시드 DDL 사본 신선도
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COPY: storage/src/test/resources/seed-ddl
+          UPSTREAM: coupon-yaho/cy-seed-data-generator
+        run: |
+          set -euo pipefail
+          SHA=$(grep -oE '@ [0-9a-f]{7,40}' "$COPY/README.md" | head -1 | cut -d' ' -f2)
+          [ -n "$SHA" ] || { echo "::error::사본 README 에 기준 리비전이 없다"; exit 1; }
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          gh api "repos/$UPSTREAM/contents/ddl?ref=$SHA" \
+            --jq '.[] | select(.name | endswith(".sql")) | .name' | while read -r f; do
+            gh api "repos/$UPSTREAM/contents/ddl/$f?ref=$SHA" \
+              --jq '.content' | base64 -d > "$tmp/$f"
+          done
+          diff -r "$tmp" "$COPY" --exclude=README.md
+          HEAD_SHA=$(gh api "repos/$UPSTREAM/commits/main" --jq '.sha')
+          if [ "${SHA}" != "${HEAD_SHA:0:${#SHA}}" ]; then
+            echo "::warning::사본은 $SHA, 상류 main 은 ${HEAD_SHA:0:7} 이다. 갱신 절차는 $COPY/README.md"
+          fi
+
       # 어느 테스트가 깨졌는지 요약한다. Gradle raw 로그만 남으면 끝까지 스크롤해야 하고,
       # 아티팩트는 내려받아야 열린다. 기존 워크플로 넷도 전부 이 자리에 요약을 남긴다.
       #

@@ -357,6 +357,11 @@ public class VerifyJobConfig {
                     // 부분 갱신을 쓴다 — update() 는 여섯 컬럼을 전부 덮으므로,
                     // 통계 갱신에 그것을 쓰면 방금 쓴 판정이 함께 지워진다.
                     if (dataset != DatasetType.CLEAN) {
+                        // 판정과 같은 트랜잭션에 남긴다. startRunStep 에서 쓰면
+                        // "seed_run_id 는 있는데 verdict 는 NULL" 인 행이 정상적으로 생겨,
+                        // 대조가 실제로 일어났는지를 그 행만 보고는 알 수 없다 —
+                        // 증적 컬럼이 "대조했다" 대신 "대조할 예정이었다" 를 담게 된다.
+                        runs.recordComparedManifest(runId, frozenSeedRunId(jobExecution));
                         runs.updateStatsStatus(runId, StatsStatus.SKIPPED);
                     }
 
@@ -568,6 +573,9 @@ public class VerifyJobConfig {
                     rejectIssuancesUpdatedAfterAsOf(asOf, rules.hasIssuancesUpdatedAfter(asOf));
                     rejectStocksUpdatedAfterAsOf(asOf, rules.hasStocksUpdatedAfter(asOf));
 
+                    // runId 가 필요 없는 가드는 전부 INSERT 앞에 모인다.
+                    Long seedRunId = validateSeedRunId(dataset, parameters, expectedFindings);
+
                     long runId = runs
                             .findByParams(asOf, dataset, scope, attempt)
                             .map(VerifyJobConfig::rejectExistingRun)
@@ -579,7 +587,7 @@ public class VerifyJobConfig {
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();
                     jobContext.putLong(RUN_ID_KEY, runId);
-                    freezeSeedRunId(jobContext, dataset, parameters, expectedFindings);
+                    freezeSeedRunId(jobContext, seedRunId, expectedFindings);
                     jobContext.putString(POLICY_DIGEST_KEY, rules.policyDigest());
                     scanRange.filter(ReplayScanRange::hasWindow)
                             .ifPresent(range -> freeze(jobContext, range));
@@ -920,13 +928,12 @@ public class VerifyJobConfig {
      * 여기서는 <b>일부러 다르게 간다</b> — 시드는 방금 주입한 묶음을 같은 프로세스 안에서
      * 대조하지만, 배치는 <b>남의 DB 를 나중에 읽으므로</b> 기본값이 곧 "낡은 묶음과 조용히 대조" 다.
      */
-    private static void freezeSeedRunId(
-            ExecutionContext jobContext,
+    private static Long validateSeedRunId(
             DatasetType dataset,
             JobParameters parameters,
             ExpectedFindingRepository expected) {
         if (dataset == DatasetType.CLEAN) {
-            return;
+            return null;
         }
 
         JobParameter<?> parameter = parameters.getParameter("seedRunId");
@@ -954,6 +961,23 @@ public class VerifyJobConfig {
                     VerificationErrorCode.MANIFEST_ABSENT,
                     "정답 매니페스트가 없습니다. 오염 주입을 돌리지 않았거나 seedRunId 가 "
                             + "틀렸습니다. seedRunId=" + seedRunId);
+        }
+
+        return seedRunId;
+    }
+
+    /**
+     * <b>얼리는 것과 검증하는 것을 나눈다.</b> 검증은 {@code runId} 가 없어도 되므로 실행 행을
+     * INSERT 하기 <b>전에</b> 끝낸다 — 나머지 여섯 가드가 전부 그 앞에 있고, 이것만 뒤에 있으면
+     * 안전성이 코드 순서가 아니라 tasklet 롤백이라는 암묵 계약에 걸린다. 그 계약이 깨지는 날
+     * ({@code startRunStep} 을 서비스로 뽑거나 전파 속성을 바꾸는 날) {@code seedRunId} 오타
+     * 하나가 {@code verification_runs} 에 열린 행을 남기고, {@code uk_run_params} 때문에
+     * <b>오타를 고쳐도 같은 파라미터로 다시 못 돌린다.</b>
+     */
+    private static void freezeSeedRunId(
+            ExecutionContext jobContext, Long seedRunId, ExpectedFindingRepository expected) {
+        if (seedRunId == null) {
+            return;
         }
 
         jobContext.putLong(SEED_RUN_ID_KEY, seedRunId);

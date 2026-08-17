@@ -166,6 +166,22 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     }
 
     @Override
+    public void recordComparedManifest(long runId, long seedRunId) {
+        int updated = jdbcClient.sql("""
+                        UPDATE verification_runs SET seed_run_id = :seedRunId WHERE id = :id
+                        """)
+                .param("seedRunId", seedRunId)
+                .param("id", runId)
+                .update();
+
+        if (updated != 1) {
+            throw new BusinessException(
+                    VerificationErrorCode.RUN_ROW_VANISHED,
+                    "대조한 정답 묶음을 기록하지 못했습니다. runId=" + runId + " 갱신행=" + updated);
+        }
+    }
+
+    @Override
     public void updateStatsStatus(long runId, StatsStatus status) {
         int updated = jdbcClient.sql("""
                         UPDATE verification_runs SET stats_status = :statsStatus WHERE id = :id

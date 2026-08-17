@@ -151,6 +151,57 @@ class VerificationRunJdbcAdapterTest {
                 .isEqualTo(VerificationErrorCode.RUN_ROW_VANISHED);
     }
 
+    /**
+     * <b>PASS 행 하나로 "어느 묶음과 대조했나" 에 답할 수 있어야 한다.</b> 그 값이 잡 실행
+     * 컨텍스트에만 있으면 정리 배치가 한 번 돌면 영영 못 답한다.
+     */
+    @Test
+    @DisplayName("대조한 정답 묶음을 실행 행에 남긴다 — 판정은 건드리지 않는다")
+    void recordComparedManifest() {
+        // CORRUPT 여야 한다. ck_seed_run_id_corrupt_only 가 CLEAN 행에 이 값을 못 넣게 막는다.
+        VerificationRun saved = adapter.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CORRUPT, 1, STARTED_AT));
+        adapter.update(saved.finish(VerdictType.PASS, 0, null, null, STARTED_AT));
+
+        adapter.recordComparedManifest(saved.id(), 7L);
+
+        assertThat(jdbcClient.sql("SELECT seed_run_id FROM verification_runs WHERE id = :id")
+                .param("id", saved.id())
+                .query(Long.class)
+                .single())
+                .isEqualTo(7L);
+        assertThat(adapter.findById(saved.id()).orElseThrow().verdict())
+                .as("증적을 남기다가 판정을 지우면 게이트가 읽을 값이 사라진다")
+                .isEqualTo(VerdictType.PASS);
+    }
+
+    /**
+     * <b>불변식을 DB 제약으로 표현한다</b>(설계 원칙 1번). CLEAN 은 대조할 묶음이 없으므로
+     * 이 컬럼이 채워진 CLEAN 행은 앞뒤가 안 맞는다. 방어가 호출자 분기 한 곳뿐이면
+     * 다른 경로가 생기는 날 조용히 뚫린다.
+     */
+    @Test
+    @DisplayName("CLEAN 실행에는 정답 묶음을 못 남긴다 — DB 가 막는다")
+    void rejectManifestRecordOnCleanRun() {
+        VerificationRun clean = adapter.save(fullRun());
+
+        // 예외 형이 아니라 제약 이름을 단정한다. MySQL 의 CHECK 위반은 3819/HY000 인데
+        // Spring 의 SQLState 번역기가 그 조합을 모르는 예외로 넘겨, 형으로 고정하면
+        // 무엇이 막았는지가 아니라 번역기의 사정을 단정하게 된다.
+        assertThatThrownBy(() -> adapter.recordComparedManifest(clean.id(), 1L))
+                .as("CLEAN 은 검출 0건이 통과 조건이라 대조 상대가 없다")
+                .hasMessageContaining("ck_seed_run_id_corrupt_only");
+    }
+
+    @Test
+    @DisplayName("없는 실행에 묶음을 기록하면 죽는다 — 조용히 넘어가면 증적이 빈다")
+    void rejectManifestRecordOfMissingRun() {
+        assertThatThrownBy(() -> adapter.recordComparedManifest(999_999L, 1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(VerificationErrorCode.RUN_ROW_VANISHED);
+    }
+
     @Test
     @DisplayName("없는 실행을 찾으면 빈 값이다")
     void findMissingRun() {
@@ -199,6 +250,84 @@ class VerificationRunJdbcAdapterTest {
                 .update();
 
         assertThat(inserted).isEqualTo(1);
+    }
+
+    /**
+     * <b>PRD 의 뷰 정의는 시드가 만드는 상황에서 비결정적이다.</b> {@code PRD-v4.15.md:953} 이
+     * {@code ORDER BY as_of DESC LIMIT 1} 로 적었는데, 시드는 CLEAN 을 <b>같은 {@code as_of}</b> 에
+     * {@code attempt} 1·2 로 심고 둘 다 {@code stats_status = COMPLETE} 다(결정론 증명용).
+     *
+     * <p><b>{@code id} 가 아니라 {@code attempt} 로 정렬한다.</b> 계약이 말하는 것은 "나중 시도"
+     * 인데 {@code id} 는 삽입 순서다. 둘을 맞추는 제약이 없어서, 결정론 증명을 {@code attempt}
+     * 3 → 4 → 2 순서로 돌리면 {@code id} 는 4·5·6 이라 계약이 말한 4 가 아니라 2 를 고른다.
+     *
+     * <p>그래서 여기서는 <b>{@code id} 와 {@code attempt} 를 일부러 어긋나게</b> 넣는다 —
+     * 나중 시도({@code attempt 2})를 <b>먼저</b> 저장해 작은 {@code id} 를 받게 한다.
+     * 이러면 {@code attempt DESC} 를 지우는 돌연변이가 빨개진다({@code id DESC} 만 남으면
+     * {@code attempt 1} 을 고른다).
+     */
+    @Test
+    @DisplayName("최신 통계 뷰는 같은 as_of 면 나중 시도를 고른다 — id 가 아니라 attempt 다")
+    void pickLaterAttemptOnSameAsOf() {
+        long laterAttempt = completedCleanRun(2);
+        long earlierAttempt = completedCleanRun(1);
+
+        assertThat(earlierAttempt)
+                .as("id 와 attempt 가 어긋나야 이 테스트가 무언가를 지킨다")
+                .isGreaterThan(laterAttempt);
+        assertThat(latestStatsRun()).isEqualTo(laterAttempt);
+    }
+
+    /**
+     * <b>증분은 윈도우 집계라 대시보드의 분모가 될 수 없다.</b> {@code (from_ts, as_of]} 로 잘린
+     * 하루치가 누적 발급률의 분모로 들어가면 화면 숫자가 조용히 부풀어 오른다.
+     *
+     * <p>지금은 {@code rejectUnsupportedScope} 가 증분을 막지만, 증분 티켓이 그 가드를 푸는
+     * 순간 뷰에는 대응하는 장치가 없었다 — {@code finalizeRunStep} 은 그때를 대비해
+     * {@code decidesVerdict} 가드를 이미 심어 뒀다.
+     */
+    @Test
+    @DisplayName("증분 실행은 최신 통계 뷰에 들어오지 않는다")
+    void excludeIncrementalFromStatsView() {
+        long incremental = adapter.save(VerificationRun.start(
+                AS_OF, AS_OF.minusDays(1), ScopeType.INCREMENTAL,
+                DatasetType.CLEAN, 1, STARTED_AT)).id();
+        adapter.update(adapter.findById(incremental).orElseThrow()
+                .finish(VerdictType.PASS, 0, null, null, STARTED_AT)
+                .withStatsStatus(StatsStatus.COMPLETE));
+
+        assertThat(latestStatsRun())
+                .as("전수 실행이 하나도 없으면 뷰는 비어 있어야 한다")
+                .isNull();
+    }
+
+    /** 같은 {@code as_of} 에 통계까지 끝난 CLEAN 전수 실행 하나. 반환값은 그 실행 id 다. */
+    private long completedCleanRun(int attempt) {
+        long id = adapter.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, attempt, STARTED_AT)).id();
+        adapter.update(adapter.findById(id).orElseThrow()
+                .finish(VerdictType.PASS, 0, null, null, STARTED_AT)
+                .withStatsStatus(StatsStatus.COMPLETE));
+
+        return id;
+    }
+
+    /** 통계 스냅샷이 완결되지 않았으면 조회 자체가 안 돼야 한다 — 부분값을 섞어 읽지 않는다. */
+    @Test
+    @DisplayName("완결된 CLEAN 스냅샷이 없으면 뷰가 비어 있다")
+    void hideIncompleteSnapshot() {
+        adapter.update(adapter.findById(adapter.save(fullRun()).id()).orElseThrow()
+                .finish(VerdictType.PASS, 0, null, null, STARTED_AT)
+                .withStatsStatus(StatsStatus.PARTIAL));
+
+        assertThat(latestStatsRun()).isNull();
+    }
+
+    private Long latestStatsRun() {
+        return jdbcClient.sql("SELECT id FROM v_latest_stats_run")
+                .query(Long.class)
+                .optional()
+                .orElse(null);
     }
 
     private static VerificationRun fullRun() {
