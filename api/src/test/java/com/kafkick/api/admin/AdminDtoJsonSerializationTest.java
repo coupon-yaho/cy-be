@@ -21,6 +21,8 @@ import com.kafkick.api.admin.observability.dto.AdminEventItem;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.support.LiveEventPollResponse;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.member.Grade;
+import com.kafkick.core.observation.EventType;
 
 /** 관리자 API 공통 응답 초안이 선언한 JSON 필드 구조를 유지하는지 검증합니다. */
 class AdminDtoJsonSerializationTest {
@@ -50,5 +52,31 @@ class AdminDtoJsonSerializationTest {
                 .contains("nextAfterCursor", "eventsMayBeMissing");
         assertThat(objectMapper.writeValueAsString(BenchmarkListResponse.draft()))
                 .contains("items", "hasOlder");
+    }
+
+    /** 이벤트를 관리자용으로 투영할 때 등급과 두 queue 순번을 분리하고 원문 코드를 숨기는지 검증합니다. */
+    @Test
+    void eventJsonKeepsGradeQueuePositionAndSequenceWithoutRawInternalFields() throws Exception {
+        AdminEventItem event = new AdminEventItem(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                EventType.ENTRY_RESULT,
+                1L,
+                2L,
+                null,
+                "ABCD-****",
+                Grade.GOLD,
+                202,
+                null,
+                17L,
+                103L,
+                false,
+                Instant.parse("2026-08-16T00:00:00Z"));
+
+        assertThat(objectMapper.writeValueAsString(event))
+                .contains("\"grade\":\"GOLD\"")
+                .contains("\"queuePosition\":17")
+                .contains("\"queueSequence\":103")
+                .contains("\"issuanceCodeMasked\":\"ABCD-****\"")
+                .doesNotContain("\"issuanceCode\":", "\"requestId\":", "\"producerInstanceId\":");
     }
 }

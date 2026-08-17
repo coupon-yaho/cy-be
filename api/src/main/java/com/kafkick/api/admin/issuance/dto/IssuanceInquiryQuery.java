@@ -6,7 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
 import com.kafkick.api.admin.support.CursorPageNormalizer;
-import com.kafkick.core.admin.ReasonCode;
+import com.kafkick.core.observation.ReasonCode;
 
 /**
  * 회원 발급 문의 조회의 필터와 과거 방향 cursor를 바인딩하는 변경 가능한 선구축 초안입니다.

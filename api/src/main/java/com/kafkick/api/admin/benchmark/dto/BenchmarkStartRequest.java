@@ -5,9 +5,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
-import com.kafkick.core.admin.EngineVersion;
-import com.kafkick.core.admin.QueueMode;
-import com.kafkick.core.admin.ReleaseStage;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
 
 /** 벤치마크 실행 조건을 고정하는 시작 요청입니다. */
 public record BenchmarkStartRequest(

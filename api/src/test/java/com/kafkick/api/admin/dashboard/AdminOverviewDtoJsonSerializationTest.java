@@ -16,14 +16,14 @@ import tools.jackson.databind.ObjectMapper;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.api.admin.support.ObservedValue;
-import com.kafkick.core.admin.Severity;
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**
- * A-03 운영 현황 응답 초안의 JSON 필드, enum 이름, null과 빈 목록 표현을 고정합니다.
+ * 운영 현황 응답 초안의 JSON 필드, enum 이름, null과 빈 목록 표현을 고정합니다.
  *
- * <p>이 테스트는 A-06이 연결할 HTTP 응답 계약을 검증할 뿐이며, 현재 Overview API가 실제 데이터를
+ * <p>이 테스트는 HTTP 응답 계약을 검증할 뿐이며, 현재 Overview API가 실제 데이터를
  * 조회하거나 200을 반환한다는 의미가 아닙니다.</p>
  */
 class AdminOverviewDtoJsonSerializationTest {

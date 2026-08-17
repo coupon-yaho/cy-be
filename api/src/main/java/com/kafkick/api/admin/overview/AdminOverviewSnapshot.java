@@ -3,13 +3,14 @@ package com.kafkick.api.admin.overview;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
-import com.kafkick.core.admin.Severity;
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**
- * A-03 Provider가 반환하는 기술 중립 관리자 운영 현황 결과입니다.
+ * Provider가 반환하는 기술 중립 관리자 운영 현황 결과입니다.
  *
  * <p>HTTP 응답 DTO를 그대로 복제하지 않고 상단 위험 KPI, 전체 발급·대기·지연·캠페인 상태 집계,
  * 조치 목록, 캠페인별 O1·O2·O4, 전체 캠페인 O3 결과 집계로 구성합니다. 각 의미 단위는
@@ -17,8 +18,8 @@ import com.kafkick.core.coupon.CouponStatus;
  * 정상 상태로 위조하지 않고 {@code value=null}과 적절한 {@link SourceStatus}로 전달할 수 있습니다.</p>
  *
  * <p>이 모델은 DB Entity, Redis 자료구조, Kafka record, Micrometer meter에 직접 의존하지 않습니다.
- * B는 후속 관제 Adapter에서 원천 데이터를 만들고, A-06은 그 값을 이 Snapshot으로 조립한 뒤 HTTP
- * 응답으로 변환합니다. 현재 Controller는 이 모델이나 Provider를 주입받지 않으며 계속 501을 반환합니다.</p>
+ * 관제 Adapter가 만든 원천 데이터를 이 Snapshot으로 조립한 뒤 HTTP 응답으로 변환합니다.
+ * 현재 Controller는 이 모델이나 Provider를 주입받지 않으며 계속 501을 반환합니다.</p>
  *
  * @param snapshotAt 여러 원천을 하나의 결과로 조립한 전체 기준 시각
  * @param actionRequired 조치 필요 캠페인의 전체·긴급·주의 수와 해당 관측 상태
@@ -60,7 +61,32 @@ public record AdminOverviewSnapshot(
      * @param status 현재 값의 해석 가능성을 나타내는 공동 SourceStatus 7종 중 하나
      * @param observedAt 원천별 실제 관측 시각; 관측 이력이 없으면 null
      */
-    public record Observation<T>(T value, SourceStatus status, Instant observedAt) { }
+    public record Observation<T>(T value, SourceStatus status, Instant observedAt) {
+
+        /**
+         * 공통 관측 상태와 동일한 값·시각 규칙을 Snapshot 경계에서 보장합니다.
+         *
+         * @throws NullPointerException status가 null인 경우
+         * @throws IllegalArgumentException 상태와 value 또는 observedAt 조합이 관측 규칙을 위반한 경우
+         */
+        public Observation {
+            Objects.requireNonNull(status, "status");
+            switch (status) {
+                case VALID, WARMING_UP, STALE, NO_TRAFFIC -> {
+                    if (value == null || observedAt == null) {
+                        throw new IllegalArgumentException(
+                                status + " 상태에는 value와 observedAt이 필요합니다.");
+                    }
+                }
+                case PENDING, UNAVAILABLE, N_A -> {
+                    if (value != null || observedAt != null) {
+                        throw new IllegalArgumentException(
+                                status + " 상태의 value와 observedAt은 null이어야 합니다.");
+                    }
+                }
+            }
+        }
+    }
 
     /**
      * 화면의 ‘조치 필요 캠페인’ KPI를 구성하는 서버 판정 결과입니다.
@@ -223,8 +249,8 @@ public record AdminOverviewSnapshot(
     /**
      * O4 캠페인별 재고와 예상 소진 상태입니다.
      *
-     * <p>V1은 MySQL 재고, V2·V3는 Redis 재고를 사용하지만 이 A 소유 계약에는 기술 원천을 노출하지
-     * 않습니다. 원천 선택과 실제 계산은 A-06 구현체가 담당합니다. O4 화면에서 함께 표시하는 최근
+     * <p>V1은 MySQL 재고, V2·V3는 Redis 재고를 사용하지만 이 계약에는 기술 원천을 노출하지
+     * 않습니다. 원천 선택과 실제 계산은 구현체가 담당합니다. O4 화면에서 함께 표시하는 최근
      * 분당 발급 속도는 같은 {@link CampaignOverview}의 {@link CampaignOverview#issuanceFlow()}에 있는
      * {@link IssuanceFlow#currentPerMinute()}를 사용합니다. 재고 원천과 발급 원천의 상태·관측 시각을
      * 독립적으로 유지하기 위해 이 record에 발급 속도를 중복 저장하지 않습니다.</p>

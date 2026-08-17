@@ -4,7 +4,7 @@ import java.time.Instant;
 
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**

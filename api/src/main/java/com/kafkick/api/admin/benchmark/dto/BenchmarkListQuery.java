@@ -7,7 +7,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 import com.kafkick.api.admin.support.CursorPageNormalizer;
-import com.kafkick.core.admin.EngineVersion;
+import com.kafkick.core.observation.EngineVersion;
 
 /**
  * Benchmark 실행 목록의 선택 필터와 과거 방향 cursor를 바인딩하는 변경 가능한 선구축 초안입니다.

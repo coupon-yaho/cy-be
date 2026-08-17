@@ -17,8 +17,8 @@ import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.admin.SourceStatus;
-import com.kafkick.core.admin.ReasonCode;
+import com.kafkick.core.observation.ReasonCode;
+import com.kafkick.core.observation.SourceStatus;
 
 /** 대시보드 지표와 발급 조회 DTO의 중첩 관측값·마스킹·enum JSON 계약을 검증합니다. */
 class DashboardIssuanceDtoJsonSerializationTest {

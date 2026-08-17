@@ -3,9 +3,9 @@ package com.kafkick.api.admin.runtimeconfig.dto;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 
-import com.kafkick.core.admin.EngineVersion;
-import com.kafkick.core.admin.QueueMode;
-import com.kafkick.core.admin.ReleaseStage;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
 
 /**
  * revision 기반 전체 RuntimeConfig 교체 요청입니다.

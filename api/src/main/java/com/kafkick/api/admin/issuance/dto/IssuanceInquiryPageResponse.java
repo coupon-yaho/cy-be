@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.List;
 
 import com.kafkick.core.coupon.IssuanceStatus;
-import com.kafkick.core.admin.ReasonCode;
+import com.kafkick.core.observation.ReasonCode;
 
 /**
  * 회원의 발급 시도 결과와 권위 DB의 현재 발급 상태를 과거 방향으로 반환하는 목록 응답 초안입니다.

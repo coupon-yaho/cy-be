@@ -25,12 +25,12 @@ import com.kafkick.api.admin.verification.dto.VerificationRunPageResponse;
 import com.kafkick.core.admin.BenchmarkRunState;
 import com.kafkick.core.admin.BrandCategory;
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.EngineVersion;
 import com.kafkick.core.admin.MeasurementState;
-import com.kafkick.core.admin.QueueMode;
-import com.kafkick.core.admin.ReleaseStage;
-import com.kafkick.core.admin.SourceStatus;
 import com.kafkick.core.admin.VerificationRunState;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.observation.SourceStatus;
 
 /** 목록·운영 명령·상세 응답 DTO의 확정 enum과 nullable JSON 계약을 고정합니다. */
 class AdminExtendedDtoJsonSerializationTest {
@@ -67,16 +67,17 @@ class AdminExtendedDtoJsonSerializationTest {
         assertThat(objectMapper.writeValueAsString(templates)).contains("\"policyType\":\"PERCENT_CAPPED\"");
     }
 
-    /** 런타임 설정의 확정 enum 이름과 nullable 변경 관리자 필드를 JSON 계약으로 고정합니다. */
+    /** 런타임 설정 enum 이름과 문자열 변경 주체를 JSON 계약으로 고정합니다. */
     @Test
-    void runtimeConfigSerializesOnlyConfirmedEnumNamesAndNullableUpdater() throws Exception {
+    void runtimeConfigSerializesCanonicalEnumsAndStringUpdater() throws Exception {
         RuntimeConfigResponse response = new RuntimeConfigResponse(
-                3, EngineVersion.V3, ReleaseStage.V2_2, QueueMode.ADAPTIVE, AT, null, SourceStatus.VALID);
+                3, EngineVersion.V3, ReleaseStage.V2_2, QueueMode.ADAPTIVE,
+                AT, "admin:17", SourceStatus.VALID);
 
         assertThat(objectMapper.writeValueAsString(response))
                 .isEqualTo("{\"revision\":3,\"engineVersion\":\"V3\",\"releaseStage\":\"V2_2\","
                         + "\"queueMode\":\"ADAPTIVE\",\"updatedAt\":\"2026-08-16T00:00:00Z\","
-                        + "\"updatedBy\":null,\"sourceStatus\":\"VALID\"}");
+                        + "\"updatedBy\":\"admin:17\",\"sourceStatus\":\"VALID\"}");
     }
 
     /** Benchmark·계측·검증 명령 응답이 각 수명주기 enum을 사용하는지 검증합니다. */

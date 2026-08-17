@@ -3,7 +3,7 @@ package com.kafkick.api.admin.notification.dto;
 import java.time.Instant;
 import java.util.List;
 
-import com.kafkick.core.admin.ReasonCode;
+import com.kafkick.core.observation.ReasonCode;
 
 /** 실패 알림의 과거 방향 cursor 목록입니다. */
 public record NotificationFailurePageResponse(List<NotificationFailureItem> items,

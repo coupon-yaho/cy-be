@@ -4,11 +4,11 @@ import java.time.Instant;
 import java.util.List;
 
 import com.kafkick.api.admin.support.ObservedValue;
-import com.kafkick.core.admin.ConsistencyPhase;
+import com.kafkick.core.consistency.ConsistencyPhase;
+import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.admin.Severity;
-import com.kafkick.core.admin.SourceStatus;
-import com.kafkick.core.verification.VerdictType;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 
 /**
  * 특정 관측 범위와 집계 구간의 정합성·트래픽·지연·의존성 상태를 한 snapshot으로 반환하는 응답 초안입니다.
@@ -78,6 +78,12 @@ public record AdminMetricsResponse(
      * LIVE 또는 FINAL 정합성 판정과 서로 독립적인 gap 관측값을 묶습니다.
      * 각 gap은 다른 원천의 실패에 영향받지 않고 자체 상태를 가져야 합니다.
      *
+     * <p>Mapper는 {@code ConsistencyEvaluation.gaps()}의 네 항목을 다음과 같이 펼칩니다.
+     * {@code LUA_GAP -> luaGap}, {@code ACTIVE_DB_GAP -> activeDbGap},
+     * {@code DB_COUNTER_GAP -> dbCounterGap}, {@code PERSIST_GAP -> persistGap}입니다.
+     * {@code overIssued}는 Evaluation의 동명 필드에서 별도로 전달합니다. 현재는 Calculator나
+     * Mapper를 호출하지 않고 HTTP 필드 계약만 고정합니다.</p>
+     *
      * @param phase LIVE 또는 FINAL 판정 단계
      * @param verdict FINAL 단계의 PASS/FAIL 판정; LIVE이면 null
      * @param severity 정합성 위험 심각도
@@ -89,7 +95,7 @@ public record AdminMetricsResponse(
      */
     public record ConsistencyResponse(
             ConsistencyPhase phase,
-            VerdictType verdict,
+            Verdict verdict,
             Severity severity,
             ObservedValue<Long> overIssued,
             ObservedValue<Long> luaGap,

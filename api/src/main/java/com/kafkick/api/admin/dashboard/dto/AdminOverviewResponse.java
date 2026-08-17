@@ -12,8 +12,8 @@ import com.kafkick.api.admin.overview.AdminOverviewSnapshot.IssuanceFlowState;
 import com.kafkick.api.admin.overview.AdminOverviewSnapshot.TargetScreen;
 import com.kafkick.api.admin.overview.AdminOverviewSnapshot.TrendDirection;
 import com.kafkick.api.admin.support.ObservedValue;
-import com.kafkick.core.admin.Severity;
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**
@@ -24,7 +24,7 @@ import com.kafkick.core.coupon.CouponStatus;
  * 위조하지 않으며 value를 null로 유지합니다. 완전성·심각도·조치 유형·고객 영향·대상 화면은
  * 명시적 enum으로 고정해 오타나 임의 코드를 허용하지 않습니다.</p>
  *
- * <p>A-03에서는 화면이 요구하는 데이터 형태만 고정합니다. 실제 값은 A-06에서
+ * <p>이 계약은 화면이 요구하는 데이터 형태만 고정합니다. 실제 값은
  * {@code AdminOverviewProvider} 구현체를 연결한 뒤 조립하므로 이 DTO의 존재는 실제 조회 기능 완료를
  * 의미하지 않습니다. DB·Redis·Kafka의 원시 기술 값은 이 응답에 직접 노출하지 않습니다.</p>
  *
@@ -89,7 +89,7 @@ public record AdminOverviewResponse(
                                       long preparationIncompleteCount) { }
 
     /**
-     * B 대기열 Provider가 기준 초과로 판정한 캠페인 수입니다.
+     * 대기열 기준을 초과한 것으로 판정된 캠페인 수입니다.
      *
      * <p>{@code longestWait}는 단위를 이름으로 추측하지 않도록 {@link Duration}으로 전달합니다.
      * 원천이 미관측 상태이거나 대기 시작 시각을 알 수 없어 계산할 수 없으면 null입니다.</p>
@@ -155,7 +155,7 @@ public record AdminOverviewResponse(
      *
      * <p>목록 바깥 {@link ObservedValue}의 상태는 캠페인 기본 목록 조회 상태입니다. 발급 흐름,
      * 대기 상태, 재고 상태는 서로 다른 원천이므로 각 내부 {@link ObservedValue}의 상태와 관측 시각을
-     * 독립적으로 사용합니다. 실제 DB·Redis 연결은 A-06에서 수행합니다.</p>
+     * 독립적으로 사용합니다. 실제 DB·Redis 연결 여부와 무관하게 원천별 상태를 보존합니다.</p>
      *
      * @param priority 서버가 결정한 운영 조치 우선순위
      * @param couponId 캠페인 상세 이동에 사용할 쿠폰 회차 식별자

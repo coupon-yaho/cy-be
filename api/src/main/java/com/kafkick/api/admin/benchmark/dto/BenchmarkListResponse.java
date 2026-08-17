@@ -5,7 +5,7 @@ import java.util.List;
 
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.BenchmarkRunState;
-import com.kafkick.core.admin.EngineVersion;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.verification.VerdictType;
 
 /**

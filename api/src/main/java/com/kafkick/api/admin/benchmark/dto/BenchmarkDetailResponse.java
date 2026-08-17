@@ -5,9 +5,9 @@ import java.util.List;
 
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.BenchmarkRunState;
-import com.kafkick.core.admin.EngineVersion;
-import com.kafkick.core.admin.QueueMode;
-import com.kafkick.core.admin.ReleaseStage;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
 import com.kafkick.core.verification.VerdictType;
 
 /** 벤치마크 실행 조건·공식 결과·서버 시계열을 구분한 상세 응답입니다. */

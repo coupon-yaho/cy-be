@@ -1,8 +1,9 @@
 package com.kafkick.api.admin.support;
 
 import java.time.Instant;
+import java.util.Objects;
 
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.observation.SourceStatus;
 
 /**
  * 독립 수집 원천의 값, 수집 상태, 마지막 관측 시각을 함께 전달하는 공통 관리자 응답 값입니다.
@@ -16,4 +17,30 @@ import com.kafkick.core.admin.SourceStatus;
  * @param state 값을 제공한 원천의 확정 수집 상태
  * @param observedAt 원천에서 마지막으로 관측한 시각; 관측 이력이 없으면 null
  */
-public record ObservedValue<T>(T value, SourceStatus state, Instant observedAt) { }
+public record ObservedValue<T>(T value, SourceStatus state, Instant observedAt) {
+
+    /**
+     * {@code SourceObservation}과 같은 상태·관측 시각 불변식을 HTTP 값 Wrapper에도 적용합니다.
+     *
+     * <p>VALID·WARMING_UP·STALE·NO_TRAFFIC은 실제 관측값과 시각이 있어야 합니다. PENDING·
+     * UNAVAILABLE·N_A는 관측값과 시각이 모두 없어야 하며, 이를 가짜 0이나 조립 시각으로 채우지 않습니다.</p>
+     *
+     * @throws NullPointerException state가 null인 경우
+     * @throws IllegalArgumentException 상태와 value 또는 observedAt 조합이 canonical 관측 규칙을 위반한 경우
+     */
+    public ObservedValue {
+        Objects.requireNonNull(state, "state");
+        switch (state) {
+            case VALID, WARMING_UP, STALE, NO_TRAFFIC -> {
+                if (value == null || observedAt == null) {
+                    throw new IllegalArgumentException(state + " 상태에는 value와 observedAt이 필요합니다.");
+                }
+            }
+            case PENDING, UNAVAILABLE, N_A -> {
+                if (value != null || observedAt != null) {
+                    throw new IllegalArgumentException(state + " 상태의 value와 observedAt은 null이어야 합니다.");
+                }
+            }
+        }
+    }
+}

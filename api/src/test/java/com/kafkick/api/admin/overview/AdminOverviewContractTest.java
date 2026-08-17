@@ -15,12 +15,12 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.admin.Severity;
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**
- * A-03에서 선구축하는 운영 현황 Adapter 경계가 후속 인프라 구현과 분리되는지 검증합니다.
+ * 운영 현황 Adapter 경계가 후속 인프라 구현과 분리되는지 검증합니다.
  *
  * <p>이 테스트의 통과는 Provider 인터페이스와 내부 Snapshot 계약이 준비됐다는 뜻이며,
  * 실제 데이터 조회나 {@code GET /api/v1/admin/overview} 기능 구현 완료를 뜻하지 않습니다.</p>
@@ -30,7 +30,7 @@ class AdminOverviewContractTest {
     private static final Instant FROM = Instant.parse("2026-08-17T00:00:00Z");
     private static final Instant TO = Instant.parse("2026-08-17T01:00:00Z");
 
-    /** Provider 메서드명·인자·반환 타입이 HTML의 A-03 대표 시그니처와 정확히 일치하는지 검증합니다. */
+    /** Provider 메서드명·인자·반환 타입이 확정된 대표 시그니처와 정확히 일치하는지 검증합니다. */
     @Test
     @DisplayName("AdminOverviewProvider는 확정된 getOverview 시그니처를 제공한다")
     void providerKeepsDocumentedSignature() throws Exception {
@@ -81,6 +81,21 @@ class AdminOverviewContractTest {
         assertThat(unobserved.value()).isNull();
         assertThat(unobserved.status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(unobserved.observedAt()).isNull();
+    }
+
+    /** Overview 내부 Observation도 canonical 상태·관측 시각 불변식을 따르는지 검증합니다. */
+    @Test
+    @DisplayName("Snapshot Observation은 상태와 관측 시각 불변식을 위반할 수 없다")
+    void snapshotObservationFollowsCanonicalStateAndTimeInvariant() {
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.Observation<>(
+                1L, SourceStatus.PENDING, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.Observation<>(
+                null, SourceStatus.UNAVAILABLE, TO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.Observation<>(
+                1L, SourceStatus.VALID, null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /** DB·Redis·Kafka·Servlet·Spring 타입이 Snapshot 구성요소로 유입되는 회귀를 방지합니다. */

@@ -14,11 +14,12 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.admin.BenchmarkRunState;
-import com.kafkick.core.admin.ConsistencyPhase;
-import com.kafkick.core.admin.EngineVersion;
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.admin.Severity;
-import com.kafkick.core.admin.SourceStatus;
+import com.kafkick.core.consistency.ConsistencyPhase;
+import com.kafkick.core.consistency.Verdict;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 
 /** 관측 지표와 Benchmark 목록 DTO의 독립 상태·nullable 판정 JSON 구조를 검증합니다. */
 class ObservabilityBenchmarkDtoJsonSerializationTest {
@@ -55,6 +56,40 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 .contains("\"verdict\":null")
                 .contains("\"issueAttemptRps\":{\"value\":null,\"state\":\"PENDING\"")
                 .contains("\"circuitBreakers\":[]");
+    }
+
+    /** 최종 판정과 네 ConsistencyGapType의 관리자 공개 필드 매핑을 JSON 이름으로 고정합니다. */
+    @Test
+    void finalMetricsSerializesCanonicalVerdictAndMappedGapFields() throws Exception {
+        ObservedValue<Long> zeroGap = new ObservedValue<>(0L, SourceStatus.VALID, OBSERVED_AT);
+        AdminMetricsResponse response = new AdminMetricsResponse(
+                new AdminMetricsResponse.MetricsScope(AdminMetricsResponse.MetricsScopeType.GLOBAL, null, null),
+                OBSERVED_AT,
+                MetricsWindow.FIVE_MINUTES,
+                new AdminMetricsResponse.ConsistencyResponse(
+                        ConsistencyPhase.FINAL,
+                        Verdict.PASS,
+                        Severity.NONE,
+                        zeroGap,
+                        zeroGap,
+                        zeroGap,
+                        zeroGap,
+                        zeroGap),
+                new AdminMetricsResponse.TrafficMetrics(null, null, null, null, null),
+                new AdminMetricsResponse.LatencyMetrics(null, null, null),
+                new AdminMetricsResponse.DependencyMetrics(null, null, null),
+                null,
+                List.of());
+
+        assertThat(objectMapper.writeValueAsString(response))
+                .contains("\"phase\":\"FINAL\"")
+                .contains("\"verdict\":\"PASS\"")
+                .contains("\"severity\":\"NONE\"")
+                .contains("\"overIssued\":{\"value\":0")
+                .contains("\"luaGap\":{\"value\":0")
+                .contains("\"activeDbGap\":{\"value\":0")
+                .contains("\"dbCounterGap\":{\"value\":0")
+                .contains("\"persistGap\":{\"value\":0");
     }
 
     /** 실행 중 Benchmark의 nullable verdict와 원천별 관측값이 그대로 유지되는지 검증합니다. */
