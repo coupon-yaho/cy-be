@@ -38,6 +38,11 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-006",
             "검증 실행 중에 대상 데이터가 바뀌어 이 실행의 검출을 신뢰할 수 없습니다."
+    ),
+    MANIFEST_ABSENT(
+            500,
+            "VERIFICATION-007",
+            "오염셋 정답 매니페스트가 없습니다. 시드 주입을 먼저 실행하십시오."
     );
 
     private final int status;

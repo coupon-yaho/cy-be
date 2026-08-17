@@ -1,0 +1,44 @@
+// 오염셋의 정답 매니페스트를 읽어 검출과 대조합니다.
+package com.kafkick.core.verification;
+
+import java.util.List;
+
+/**
+ * <b>합격 조건은 건수가 아니라 집합 일치입니다.</b> 오탐 400 + 누락 400 도 800 이라,
+ * {@code finding_count} 만 보면 정확히 검출한 것과 구분되지 않습니다.
+ *
+ * <p>양방향으로 봅니다 — 정답에 있는데 안 잡힌 것(누락)과 잡았는데 정답에 없는 것(오탐).
+ * 한 방향만 보면 그 둘이 상쇄돼 통과합니다.
+ *
+ * <p><b>기대 행수를 상수로 박지 마십시오.</b> 계약의 800 은 기본 설정일 때의 값이고,
+ * 시드의 {@code --plant-v6} 를 켜면 {@code corrupt_type=8} 로 한 건이 더 붙어 801 이 됩니다.
+ * 판정은 <b>이 테이블을 읽어서</b> 해야 합니다.
+ */
+public interface ExpectedFindingRepository {
+
+    /**
+     * 정답에 있는데 이 실행이 못 잡은 것. <b>규칙이 놓친 것</b>이다.
+     *
+     * <p>조인은 {@code (finding_type, target_key)} 두 컬럼으로만 한다 —
+     * 이유는 {@link FindingKey} 에 있다.
+     */
+    List<FindingKey> missing(long runId, long seedRunId);
+
+    /**
+     * 이 실행이 잡았는데 정답에 없는 것. <b>규칙이 잘못 잡은 것</b>이다.
+     *
+     * <p>정답 묶음이 아예 없으면(오염 주입을 안 돌린 DB) 검출 전부가 여기로 온다.
+     * 그 경우를 판정 전에 걸러야 "오탐 800" 이라는 엉뚱한 결론이 안 나온다.
+     */
+    List<FindingKey> unexpected(long runId, long seedRunId);
+
+    /** 이 정답 묶음이 존재하는가. 없으면 대조 자체가 성립하지 않는다. */
+    boolean exists(long seedRunId);
+
+    /**
+     * 정답 묶음의 총 행수. 실패 메시지에 검출 총수와 함께 실어 <b>실패 모양을 가른다</b> —
+     * {@code 정답 800 / 검출 0} 은 규칙이 안 돈 것이고, {@code 정답 800 / 검출 800} 인데
+     * 누락·오탐이 400씩이면 {@code target_key} 포맷이 어긋난 것이다.
+     */
+    int countOf(long seedRunId);
+}

@@ -61,6 +61,13 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      *
      * <p>불변식은 {@code USED} 면 1건, 아니면 0건이다. 한쪽 방향만 보면
      * 이중 사용({@code USED} 인데 2건)을 놓친다.
+     *
+     * <p><b>{@code asof_state} 를 드라이빙으로 쓰므로 이력이 하나도 없는 발급건은 시야 밖이다.</b>
+     * 그런 발급건은 {@code asof_state} 행 자체가 안 생겨, 활성 사용 행이 남아 있어도 여기서
+     * 안 보인다(V3 도 같은 드라이빙이라 같이 못 본다). V1 이 회차 재고 집계로 간접 검출할 뿐
+     * 발급건 단위로는 아무도 지목하지 못한다. 계약의 오염 유형 7 은 ISSUE 이력이 있는 발급건에
+     * 심으므로 정답 매니페스트 대조는 영향을 받지 않는다 — 런타임 사고(발급건은 만들어졌는데
+     * 이력 INSERT 만 실패)에서만 벌어지는 사각이라 별도 관측 지표로 다룬다.
      */
     private static final String SELECT_USAGE_MISMATCH = """
             SELECT a.coupon_id                                       AS issuance_id,

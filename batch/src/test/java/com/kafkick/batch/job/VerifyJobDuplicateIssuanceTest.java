@@ -68,6 +68,22 @@ class VerifyJobDuplicateIssuanceTest {
         seed.clear();
     }
 
+    /**
+     * <b>CORRUPT 실행은 정답 매니페스트가 있어야 판정된다.</b> 없으면 검출 전부가 오탐이 되어
+     * 대조 자체가 성립하지 않는다. 이 클래스는 <b>배선</b>을 보므로, 시나리오가 내는 검출을
+     * 그대로 정답으로 심어 판정이 통과하게 둔다.
+     */
+    private void expectManifest(String targetKey) {
+        jdbcClient.sql("""
+                        INSERT INTO expected_findings
+                            (seed_run_id, corrupt_type, finding_type, target_key, note, created_at)
+                        VALUES (1, 6, 'DUP_PER_MEMBER', :targetKey, '-', :createdAt)
+                        """)
+                .param("targetKey", targetKey)
+                .param("createdAt", AS_OF)
+                .update();
+    }
+
     /** 같은 회원이 같은 회차에서 두 번 — 오염 유형 6 의 모양. */
     private long duplicateForOneMember() {
         long memberId = seed.issuanceForNewMember();
@@ -80,24 +96,38 @@ class VerifyJobDuplicateIssuanceTest {
     void recordDuplicatePerMember() throws Exception {
         long couponId = seed.currentCouponIdOrCreate();
         long memberId = duplicateForOneMember();
+        expectManifest("COUPON:" + couponId + "|MEMBER:" + memberId);
 
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(findingsOf()).containsExactly(
                 "DUP_PER_MEMBER:COUPON:" + couponId + "|MEMBER:" + memberId);
     }
 
+    /**
+     * <b>매니페스트가 없으면 규칙을 돌리기 전에 죽는다.</b> 검출이 한 건도 안 쌓이는 것이
+     * 그 증거다 — 이전에는 규칙을 다 돌린 뒤 마지막 Step 에서 알았다.
+     *
+     * <p>규칙 자체의 "회원이 다르면 검출하지 않는다" 는 {@code DuplicateIssuanceRuleTest} 가 본다.
+     */
     @Test
-    @DisplayName("정상 발급만 있으면 V2 검출이 없다 — CORRUPT 스키마라도 0건이 기본이다")
-    void recordNothingForDistinctMembers() throws Exception {
+    @DisplayName("매니페스트가 없으면 규칙을 돌리기도 전에 죽는다")
+    void rejectBeforeRunningRulesWhenManifestIsAbsent() throws Exception {
         seed.issuanceForNewMember();
 
-        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
-        assertThat(findingsOf()).isEmpty();
+        JobExecution execution = launch();
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(m -> m.contains("정답 매니페스트가 없습니다"));
+        assertThat(findingsOf())
+                .as("규칙이 안 돌았으므로 검출이 쌓일 수 없다")
+                .isEmpty();
     }
 
     @Test
     @DisplayName("V2 검출이 상한을 넘으면 잡을 멈춘다 — 규칙마다 상한이 따로 걸린다")
     void stopWhenDuplicatesExceedLimit() throws Exception {
+        expectManifest("COUPON:0|MEMBER:0");   // 매니페스트가 있어야 규칙까지 간다
         duplicateForOneMember();
         duplicateForOneMember();
 
@@ -115,6 +145,7 @@ class VerifyJobDuplicateIssuanceTest {
                 .addString("scope", "FULL")
                 .addString("dataset", "CORRUPT")
                 .addLong("attempt", 1L)
+                .addLong("seedRunId", 1L)
                 .toJobParameters());
     }
 

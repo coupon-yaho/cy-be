@@ -38,5 +38,4 @@ class BatchConfigPrecedenceTest {
                 "spring.flyway.enabled",
                 "spring.datasource.hikari.maximum-pool-size");
     }
-
 }

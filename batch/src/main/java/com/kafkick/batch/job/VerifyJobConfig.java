@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
@@ -14,6 +15,7 @@ import org.springframework.batch.core.job.parameters.DefaultJobParametersValidat
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
+import org.springframework.batch.core.step.StepContribution;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
@@ -34,6 +36,8 @@ import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
+import com.kafkick.core.verification.ExpectedFindingRepository;
+import com.kafkick.core.verification.FindingKey;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
@@ -79,6 +83,8 @@ public class VerifyJobConfig {
 
     static final String FINGERPRINT_KEY = "dataset.fingerprint";
 
+    static final String SEED_RUN_ID_KEY = "manifest.seedRunId";
+
     /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. 지금 여섯 벌이다. */
     private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
 
@@ -97,7 +103,16 @@ public class VerifyJobConfig {
             "gradeViolationStep", FindingType.GRADE_VIOLATION);
 
     private static final String[] REQUIRED_PARAMETERS = {"asOf", "scope", "dataset", "attempt"};
-    private static final String[] OPTIONAL_PARAMETERS = {"fromTs"};
+
+    /**
+     * {@code seedRunId} 는 CLEAN 에는 필요 없다. <b>CORRUPT 는 반드시 명시해야 하고</b>
+     * 없으면 {@code startRunStep} 이 즉시 거부한다 — {@link #freezeSeedRunId} 가 이유를 적는다.
+     * "선택" 인 것은 데이터셋에 따라 갈리기 때문이지 기본값이 있어서가 아니다.
+     */
+    private static final String[] OPTIONAL_PARAMETERS = {"fromTs", "seedRunId"};
+
+    /** Step 종료 메시지에 실을 불일치 표본 수. batch 모듈에는 로깅 채널이 없다. */
+    private static final int SAMPLE_SIZE = 10;
 
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
@@ -272,15 +287,24 @@ public class VerifyJobConfig {
      * 거기에 판정을 남기면, 나중에 그 행만 보고 합격·불합격을 읽게 된다.
      * 앞 Step 이 죽으면 이 Step 이 안 돌아 <b>판정이 비어 있는 것 자체가 신호</b>가 된다.
      *
-     * <p><b>판정은 CLEAN 에서만 낸다.</b> 정상셋은 "검출 0건 = 통과" 가 규칙만으로 결정된다.
-     * 오염셋은 800행이 <b>정답 집합과 같은지</b>를 봐야 하는데 그 대조가 아직 없다 —
-     * 개수만 보면 오탐 400 + 누락 400 도 800 이라 통과한다. 그래서 CORRUPT 는
-     * 판정을 비워 두고 checksum·지문만 남긴다. 그것이 다음 티켓의 입력이다.
+     * <p><b>판정은 데이터셋마다 다르다.</b> CLEAN 은 검출 0건이 통과다({@link #verdictOfClean}).
+     * CORRUPT 는 {@link #judgeAgainstManifest} 가 {@code expected_findings} 와 양방향
+     * 집합 차를 내 <b>누락 0 · 오탐 0 일 때만</b> PASS 다 — 개수만 보면 오탐 400 + 누락 400 도
+     * 800 이라 통과한다.
+     *
+     * <p><b>불일치도 판정이다.</b> {@code verdict=FAIL} 과 함께 checksum·지문·종료 시각을
+     * 모두 남긴다 — 그 값들이 가장 필요한 순간이 여기다. <b>게이트가 읽는 것은 그
+     * {@code verdict} 다</b>({@code V1__init_schema.sql} 의 컬럼 주석). Step 종료 코드
+     * {@code FAILED} 는 배치 메타DB에 남는 표식일 뿐 <b>프로세스 종료코드가 아니다</b> —
+     * 근거는 {@link #judgeAgainstManifest} 에 적었다.
+     *
+     * <p>매니페스트 부재는 여기까지 오지 않는다 — {@code startRunStep} 이 실행 전에 죽인다.
      */
     @Bean
     public Step finalizeRunStep(
             VerificationRunRepository runs,
-            VerificationFindingRepository findings
+            VerificationFindingRepository findings,
+            ExpectedFindingRepository expected
     ) {
         return new StepBuilder("finalizeRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -306,9 +330,13 @@ public class VerifyJobConfig {
                     }
 
                     int detected = findings.countOf(runId);
+                    VerdictType verdict = dataset == DatasetType.CLEAN
+                            ? verdictOfClean(detected)
+                            : judgeAgainstManifest(runId, frozenSeedRunId(jobExecution),
+                                    detected, expected, contribution);
 
                     VerificationRun closed = run.finish(
-                            verdictOf(dataset, detected),
+                            verdict,
                             detected,
                             findings.checksumOf(runId),
                             frozenFingerprint(jobExecution),
@@ -332,20 +360,6 @@ public class VerifyJobConfig {
                 }, transactionManager)
                 .transactionAttribute(timeout)
                 .build();
-    }
-
-    /**
-     * CLEAN 은 검출 0건이 합격이다. CORRUPT 는 정답 집합과 대조하기 전까지 판정할 수 없어
-     * <b>실패로 둔다</b> — 통과로 두면 대조가 붙기 전까지 <b>오염셋이 무조건 합격</b>으로 기록된다.
-     *
-     * <p>{@code verdict} 컬럼은 nullable 이라 비워 둘 수도 있지만, 시드가 심는 CORRUPT run 이
-     * {@code FAIL} 이므로 같은 값을 쓴다 — 두 쪽 기록이 갈리면 대조 자체가 어려워진다.
-     */
-    static VerdictType verdictOf(DatasetType dataset, int detected) {
-        if (dataset != DatasetType.CLEAN) {
-            return VerdictType.FAIL;
-        }
-        return detected == 0 ? VerdictType.PASS : VerdictType.FAIL;
     }
 
     /**
@@ -524,7 +538,7 @@ public class VerifyJobConfig {
     @Bean
     public Step startRunStep(
             VerificationRunRepository runs,
-            VerificationFindingRepository findings,
+            ExpectedFindingRepository expectedFindings,
             ReplayHistoryRepository histories,
             VerificationRuleRepository rules,
             @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled
@@ -561,6 +575,7 @@ public class VerifyJobConfig {
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();
                     jobContext.putLong(RUN_ID_KEY, runId);
+                    freezeSeedRunId(jobContext, dataset, parameters, expectedFindings);
                     jobContext.putString(POLICY_DIGEST_KEY, rules.policyDigest());
                     scanRange.filter(ReplayScanRange::hasWindow)
                             .ifPresent(range -> freeze(jobContext, range));
@@ -800,6 +815,132 @@ public class VerifyJobConfig {
                         + "부분 결과일 수 있어 이어받지 않습니다. attempt 를 올리십시오 "
                         + "(시드가 CLEAN 1·2, CORRUPT 1 을 점유합니다). runId=" + existing.id()
                         + " attempt=" + existing.attempt());
+    }
+
+    /**
+     * <b>오염셋은 집합이 같아야 합격이다.</b> 개수만 보면 오탐 400 + 누락 400 도 800 이라,
+     * 정확히 검출한 것과 구분되지 않는다.
+     *
+     * <p><b>정답 묶음이 없으면 판정하지 않고 죽인다.</b> 그대로 두면 검출 전부가 오탐으로
+     * 잡혀 "오탐 800" 이라는 엉뚱한 결론이 나오고, 원인(주입을 안 돌렸다)이 안 보인다.
+     *
+     * <p><b>불일치는 예외가 아니라 판정이다.</b> 검증은 정상적으로 끝났고 답이 "다르다" 인 것이므로
+     * {@code FAIL} 을 돌려주고 checksum·지문도 함께 기록된다. 실행 실패({@code FAILED})와 구분한다.
+     * 무엇이 어긋났는지는 Step 종료 메시지에 싣는다 — batch 모듈에는 로깅 채널이 없다.
+     *
+     * <p><b>합격에도 메시지를 남긴다.</b> 판정 근거인 {@code seedRunId} 는 잡 실행 컨텍스트에만
+     * 있고 {@code verification_runs} 에는 컬럼이 없다. 그대로 두면 PASS 행 하나가
+     * <i>"어느 묶음과 대조해서 통과했는지"</i> 를 못 댄다 — 주입을 두 번 돌려 묶음이 둘인 DB 에서
+     * 정확히 그 질문이 온다.
+     *
+     * <p><b>Step 종료 코드는 프로세스 종료코드가 아니다.</b> 한때 이 자리에
+     * <i>"COMPLETED 면 Boot 가 종료코드 0 으로 매핑하니 CI 가 {@code $?} 만 보면 통과한다"</i>
+     * 고 적어 두었는데 셋 다 틀렸다 — ⑴ {@code JobExecutionExitCodeGenerator.getExitCode()} 가
+     * 읽는 것은 {@code ExitStatus} 가 아니라 {@code BatchStatus} 이고 {@code COMPLETED} 는
+     * {@code ordinal() == 0} 이다, ⑵ {@code BatchApplication.main} 이
+     * {@code System.exit(SpringApplication.exit(..))} 를 안 불러 생성기가 종료코드로 이어지지도
+     * 않는다, ⑶ {@code web-application-type: servlet} 이라 프로세스가 끝나지 않는다.
+     * 게다가 {@code SimpleJob} 은 잡 종료 코드를 <b>마지막 Step 값으로 대입</b>하므로
+     * ({@code javap -c SimpleJob}) 통계 Step 이 뒤에 붙는 순간 이 표식은 잡 수준에서 사라진다.
+     * <b>게이트는 {@code verification_runs.verdict} 를 읽어야 한다.</b> 여기 {@code ExitStatus}
+     * 는 배치 메타DB({@code BATCH_STEP_EXECUTION})에 남기는 표식일 뿐이다.
+     */
+    private static VerdictType judgeAgainstManifest(
+            long runId, long seedRunId, int detected,
+            ExpectedFindingRepository expected, StepContribution contribution) {
+        // startRunStep 이 이미 확인했다. 실행 중에 매니페스트가 지워진 경우만 여기 온다 —
+        // 그건 판정이 아니라 사고이므로 부재와 같은 코드로 죽인다.
+        if (!expected.exists(seedRunId)) {
+            throw new BusinessException(
+                    VerificationErrorCode.MANIFEST_ABSENT,
+                    "실행 중에 정답 매니페스트가 사라졌습니다. seedRunId=" + seedRunId);
+        }
+
+        List<FindingKey> missing = expected.missing(runId, seedRunId);
+        List<FindingKey> unexpected = expected.unexpected(runId, seedRunId);
+
+        if (missing.isEmpty() && unexpected.isEmpty()) {
+            contribution.setExitStatus(ExitStatus.COMPLETED.addExitDescription(
+                    "seedRunId=" + seedRunId + " · 정답 " + expected.countOf(seedRunId)
+                            + "건 / 검출 " + detected + "건 · 집합 일치"));
+
+            return VerdictType.PASS;
+        }
+
+        contribution.setExitStatus(new ExitStatus(ExitStatus.FAILED.getExitCode(),
+                "정답 " + expected.countOf(seedRunId) + "건 / 검출 " + detected
+                        + "건 · 누락 " + missing.size() + "건 " + sample(missing)
+                        + " · 오탐 " + unexpected.size() + "건 " + sample(unexpected)));
+
+        return VerdictType.FAIL;
+    }
+
+    /**
+     * 표본만 싣는다. 수천 건이 메시지를 덮으면 정작 개수를 못 읽는다.
+     *
+     * <p><b>양쪽을 함께 싣는다.</b> 한쪽만 보이면 상쇄된 오차를 못 읽는다 —
+     * 누락과 오탐이 같은 수면 검출 개수는 정답과 똑같다.
+     */
+    private static List<String> sample(List<FindingKey> keys) {
+        return keys.stream().limit(SAMPLE_SIZE).map(FindingKey::toString).toList();
+    }
+
+    /**
+     * <b>실행 전에 죽어야 한다.</b> 매니페스트가 없거나 {@code seedRunId} 가 틀린 것은
+     * 1초 만에 알 수 있는데, 마지막 Step 에서 알면 리플레이 300만 건과 규칙 여섯을
+     * 다 돌린 뒤라 그 실행을 통째로 버려야 한다 — 재사용도 못 하니 {@code attempt} 를
+     * 올려 처음부터다.
+     *
+     * <p><b>CORRUPT 는 {@code seedRunId} 를 반드시 받는다.</b> 기본값을 두면 정답 묶음이
+     * 둘 이상인 DB 에서 <b>조용히 낡은 묶음과 대조</b>한다 — 주입을 두 번 돌리면 실제로 그렇게 된다.
+     * 그 사고는 "누락 800 · 오탐 800" 으로 나타나 규칙을 의심하게 만든다.
+     *
+     * <p><b>참조 구현은 기본값 1 을 둔다</b>({@code cy-seed/bin/seed.py} 의 {@code --seed-run-id}).
+     * 여기서는 <b>일부러 다르게 간다</b> — 시드는 방금 주입한 묶음을 같은 프로세스 안에서
+     * 대조하지만, 배치는 <b>남의 DB 를 나중에 읽으므로</b> 기본값이 곧 "낡은 묶음과 조용히 대조" 다.
+     */
+    private static void freezeSeedRunId(
+            ExecutionContext jobContext,
+            DatasetType dataset,
+            JobParameters parameters,
+            ExpectedFindingRepository expected) {
+        if (dataset == DatasetType.CLEAN) {
+            return;
+        }
+
+        Long seedRunId = parameters.getLong("seedRunId");
+        if (seedRunId == null) {
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_RUN_PARAMS,
+                    "오염셋 검증에는 seedRunId 가 필요합니다. 기본값을 두면 정답 묶음이 여럿일 때 "
+                            + "낡은 것과 조용히 대조합니다. 예: seedRunId=1,java.lang.Long");
+        }
+        if (!expected.exists(seedRunId)) {
+            throw new BusinessException(
+                    VerificationErrorCode.MANIFEST_ABSENT,
+                    "정답 매니페스트가 없습니다. 오염 주입을 돌리지 않았거나 seedRunId 가 "
+                            + "틀렸습니다. seedRunId=" + seedRunId);
+        }
+
+        jobContext.putLong(SEED_RUN_ID_KEY, seedRunId);
+    }
+
+    /** {@code startRunStep} 이 얼려 둔 값. 거기서 존재 확인까지 끝냈다. */
+    private static long frozenSeedRunId(JobExecution jobExecution) {
+        Object value = jobExecution.getExecutionContext().get(SEED_RUN_ID_KEY);
+        if (value == null) {
+            throw new IllegalStateException(
+                    "seedRunId 가 없습니다. startRunStep 이 먼저 돌아야 합니다.");
+        }
+        return ((Number) value).longValue();
+    }
+
+    /**
+     * <b>CLEAN 전용이다.</b> 정상셋은 "검출 0건 = 통과" 가 규칙만으로 결정된다.
+     * 오염셋은 {@link #judgeAgainstManifest} 가 정답과의 집합 일치로 판정한다.
+     */
+    static VerdictType verdictOfClean(int detected) {
+        return detected == 0 ? VerdictType.PASS : VerdictType.FAIL;
     }
 
     private static long requireRunId(JobExecution jobExecution) {
