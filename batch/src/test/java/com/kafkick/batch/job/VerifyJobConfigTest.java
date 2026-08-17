@@ -77,6 +77,13 @@ class VerifyJobConfigTest {
      */
     static Long mutatePolicyAfterRead;
 
+    /**
+     * 같은 이유로 이력 축도 규칙이 읽은 뒤에 건드린다. 발급건 식별자를 담고,
+     * 얼린 상한보다 <b>큰 id</b> 로 {@code asOf} 이하 이력을 하나 넣는다 —
+     * 리플레이는 못 읽었는데 지문은 읽는 상태를 만든다.
+     */
+    static Long insertHistoryAfterFreeze;
+
     @TestConfiguration
     static class MutateAfterStockStepConfig {
 
@@ -100,6 +107,16 @@ class VerifyJobConfigTest {
                         jdbc.sql("UPDATE coupon_stocks SET updated_at = :at WHERE coupon_id = :couponId")
                                 .param("at", asOf.plusSeconds(1))
                                 .param("couponId", mutateStockAfterRead)
+                                .update();
+                    }
+                    if (insertHistoryAfterFreeze != null) {
+                        jdbc.sql("""
+                                        INSERT INTO issuance_histories
+                                            (issuance_id, event_type, from_status, to_status, created_at)
+                                        VALUES (:id, 'USE', 'ISSUED', 'USED', :at)
+                                        """)
+                                .param("id", insertHistoryAfterFreeze)
+                                .param("at", AS_OF.minusHours(1))
                                 .update();
                     }
                     if (mutatePolicyAfterRead != null) {
@@ -131,6 +148,7 @@ class VerifyJobConfigTest {
     void setUp() {
         mutateStockAfterRead = null;
         mutatePolicyAfterRead = null;
+        insertHistoryAfterFreeze = null;
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
@@ -475,6 +493,26 @@ class VerifyJobConfigTest {
     }
 
     /**
+     * <b>이력 축도 얼려야 한다.</b> 리플레이는 시작에 얼린 {@code maxHistoryId} 까지만 읽는데
+     * {@code dataset_fingerprint} 는 {@code MAX(id) WHERE created_at <= asOf} 를 다시 잰다.
+     * 그 사이 백데이트 이력이 들어오면 <b>리플레이는 못 읽고 지문은 읽어</b>,
+     * 같은 지문에 다른 검출이 나온다 — 판정표가 "검증기 버그" 로 잘못 읽는 칸이다.
+     */
+    @Test
+    @DisplayName("실행 중에 asOf 이하 이력이 끼어들면 끝 가드가 잡는다")
+    void failWhenBackdatedHistoryAppearsDuringRun() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(2));
+        insertHistoryAfterFreeze = issuanceId;
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(m -> m.contains("asOf 이하 이력이 추가됐습니다"));
+    }
+
+    /**
      * <b>라벨과 실제 스키마가 어긋나면 시작도 못 한다.</b> {@code dataset} 은
      * {@code verification_runs} 에 적히는 이름일 뿐이라, 이 가드가 없으면
      * <b>CLEAN DB 를 보면서 "CORRUPT 에서 검출 0건" 으로 기록</b>된다.
@@ -493,6 +531,39 @@ class VerifyJobConfigTest {
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(failureMessagesOf(execution))
                 .anyMatch(m -> m.contains("uk_coupon_member 가 살아 있습니다"));
+    }
+
+    /**
+     * <b>주입 700 이 정답 800 이 되는 자리다.</b> 유형 3(CANCEL_USE 이중 기록)만 두 규칙을
+     * 동시에 울린다 — {@code FindingType} 이 그 산술을 명시하는데, 그 조합을 실제로 세워
+     * <b>정확히 그 둘만</b> 나오는지 보는 테스트가 없었다.
+     *
+     * <p><b>침묵 쪽이 이 테스트의 본체다.</b> 접힌 최종 상태가 {@code ISSUED} 라 저장값과 맞아
+     * V3 가 조용해야 하고, 활성 사용이 없어 V5 도 조용해야 한다. 그래서
+     * {@code containsExactlyInAnyOrder} 여야 한다 — {@code contains} 면 오탐이 붙어도 초록이다.
+     *
+     * <p>다만 <b>접기가 {@code to_status} 를 따라가는지</b>는 이 시나리오로 확인되지 않는다.
+     * 여기서는 직전 상태가 이미 {@code ISSUED} 라 따라가든 안 가든 결과가 같다(돌연변이로 확인).
+     * 그 동작은 {@code completeDespiteIllegalTransition} 등 유형 4 테스트가 지킨다.
+     */
+    @Test
+    @DisplayName("CANCEL_USE 가 두 번이면 V4 와 V1 만 운다 — 주입 100 이 정답 200 이 되는 자리다")
+    void recordStockAndTransitionForDoubleCancelUse() throws Exception {
+        long couponId = seed.currentCouponIdOrCreate();
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        issued(issuanceId, AS_OF.minusHours(4));
+        seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, AS_OF.minusHours(3));
+        seed.history(issuanceId, IssuanceEventType.CANCEL_USE,
+                IssuanceStatus.USED, IssuanceStatus.ISSUED, AS_OF.minusHours(2));
+        long forged = seed.history(issuanceId, IssuanceEventType.CANCEL_USE,
+                IssuanceStatus.USED, IssuanceStatus.ISSUED, AS_OF.minusHours(1));
+        seed.overwriteStock(0);   // 재고 이중 복원 — 접기는 활성 1, 저장은 0
+
+        assertThat(launch(1).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(findingsOf()).containsExactlyInAnyOrder(
+                "ILLEGAL_TRANSITION:HISTORY:" + forged,
+                "STOCK_MISMATCH:COUPON:" + couponId);
     }
 
     // ─────────────────────────── V6 등급 자격 ───────────────────────────

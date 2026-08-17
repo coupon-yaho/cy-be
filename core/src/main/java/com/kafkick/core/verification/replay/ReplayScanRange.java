@@ -9,7 +9,9 @@ import java.time.LocalDateTime;
  * 창 위치에 따라 들어가기도 하고 빠지기도 합니다. 같은 asOf 를 두 번 돌려도 결과가 달라집니다.
  *
  * <p>그래서 {@code maxHistoryId} 로 상한을 겁니다. 실행 시작에 한 번 재고 끝까지 씁니다.
- * {@code dataset_fingerprint} 의 첫 재료와 같은 값이라 따로 스캔하지 않습니다.
+ * {@code dataset_fingerprint} 의 첫 재료와 같은 뜻이지만 <b>같은 값이라는 보장은 없습니다</b> —
+ * 지문은 {@code assertFrozenStep} 에서 다시 재고, 그 사이 백데이트 이력이 들어올 수 있습니다.
+ * 그 어긋남은 {@code hasHistoriesAddedBelow} 가 막습니다.
  *
  * <p><b>완전한 스냅샷은 아닙니다.</b> 우리가 최대값을 잰 뒤에 커밋되는, 그보다 작은 식별자가
  * 있을 수 있습니다(먼저 시작해 늦게 커밋한 트랜잭션). 창을 좁히는 것이지 닫는 것이 아닙니다.

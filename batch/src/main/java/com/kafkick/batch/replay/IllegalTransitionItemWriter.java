@@ -57,14 +57,16 @@ public class IllegalTransitionItemWriter implements ItemWriter<ReplayResult> {
                 .map(IllegalTransitionItemWriter::toFinding)
                 .toList();
 
-        findings.appendAll(runId, detected);
-
+        // 쓰기 전에 센다. 규칙 Step 은 limit + 1 을 요청해 넘침을 쓰기 전에 판정하는데,
+        // 여기만 쓰고 나서 던지면 폭주한 만큼을 일단 DB 에 밀어 넣게 된다.
         written += detected.size();
         if (written > maxFindings) {
             throw new IllegalStateException(
                     "V4 검출이 상한에 닿았습니다. 전이표를 의심하십시오. 상한=" + maxFindings
                             + " 누적=" + written);
         }
+
+        findings.appendAll(runId, detected);
     }
 
     private static VerificationFinding toFinding(IllegalTransition illegal) {

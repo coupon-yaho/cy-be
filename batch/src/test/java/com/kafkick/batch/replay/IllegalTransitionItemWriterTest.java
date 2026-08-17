@@ -4,9 +4,12 @@ package com.kafkick.batch.replay;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
 
 /**
@@ -23,9 +26,31 @@ import com.kafkick.core.verification.VerificationFindingRepository;
  */
 class IllegalTransitionItemWriterTest {
 
-    /** 저장소 관행대로 손으로 만든다. 상호작용을 검증하지 않으므로 빈 구현이면 충분하다. */
-    private final VerificationFindingRepository findings = (runId, detected) -> {
-    };
+    private final VerificationFindingRepository findings = new NoOpFindings();
+
+    /**
+     * 저장소 관행대로 손으로 만든다({@code IssuanceHistoryGroupReaderTest.FakeHistories} 와 같은 형태).
+     *
+     * <p>람다로 두면 포트에 메서드가 하나만 늘어도 <b>함수형 인터페이스가 아니라며 컴파일이 깨진다</b> —
+     * 실제로 {@code countOf}·{@code checksumOf} 가 붙으면서 그렇게 됐다.
+     * 이 테스트는 생성자 가드만 보므로 아무것도 안 하는 구현이면 충분하다.
+     */
+    private static final class NoOpFindings implements VerificationFindingRepository {
+
+        @Override
+        public void appendAll(long runId, List<VerificationFinding> detected) {
+        }
+
+        @Override
+        public int countOf(long runId) {
+            return 0;
+        }
+
+        @Override
+        public String checksumOf(long runId) {
+            return "";
+        }
+    }
 
     @Test
     @DisplayName("V4 라이터도 상한 0 과 음수를 거부한다 — 어댑터 다섯 규칙과 같은 규약이다")

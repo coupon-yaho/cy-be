@@ -47,7 +47,8 @@ class VerifyJobWiringTest {
 
     /** 규칙이 아닌 Step. 새 Step 은 반드시 둘 중 하나에 등록해야 한다. */
     private static final Set<String> INFRA_STEPS =
-            Set.of("startRunStep", "replayStep", "usageCountStep", "assertFrozenStep");
+            Set.of("startRunStep", "replayStep", "usageCountStep",
+                    "assertFrozenStep", "finalizeRunStep");
 
     @Autowired
     private Job verifyJob;
@@ -119,10 +120,24 @@ class VerifyJobWiringTest {
                         EnumSet.complementOf(EnumSet.of(FindingType.ILLEGAL_TRANSITION)));
     }
 
+    /**
+     * <b>얼림 확인은 규칙 전부보다 뒤, 판정보다 앞이다.</b> 현재 행을 읽는 규칙이 끝난 뒤에
+     * 봐야 그 사이 갱신을 잡고, 얼림이 깨진 실행에 판정을 남기면 나중에 그 행만 보고
+     * 합격·불합격을 읽게 된다.
+     */
     @Test
-    @DisplayName("얼림 확인이 항상 마지막이다 — 현재 행을 읽는 규칙이 전부 끝난 뒤여야 한다")
-    void assertFrozenLast() {
-        assertThat(stepNames()).last().isEqualTo("assertFrozenStep");
+    @DisplayName("얼림 확인 다음이 판정이고, 판정이 마지막이다")
+    void assertFrozenThenFinalize() {
+        List<String> names = stepNames();
+
+        assertThat(names).last().isEqualTo("finalizeRunStep");
+        assertThat(names.indexOf("assertFrozenStep"))
+                .as("얼림이 깨진 실행에 판정을 남기면 안 된다")
+                .isLessThan(names.indexOf("finalizeRunStep"));
+        assertThat(RULE_STEPS.keySet())
+                .allSatisfy(rule -> assertThat(names.indexOf(rule))
+                        .as("%s 가 얼림 확인보다 뒤에 있다", rule)
+                        .isLessThan(names.indexOf("assertFrozenStep")));
     }
 
     @Test
