@@ -184,7 +184,7 @@ class VerificationFindingJdbcAdapterTest {
         assertThat(keysOf(runId))
                 .as("건수만 보면 누락과 어긋난 키가 상쇄돼 통과한다 — 이 PR 이 판정에서 버린 바로 그 논리다")
                 .containsExactlyInAnyOrderElementsOf(LongStream.rangeClosed(1, size)
-                        .mapToObj(id -> "HISTORY:" + id)
+                        .mapToObj(id -> FindingType.ILLEGAL_TRANSITION + ":HISTORY:" + id)
                         .toList());
     }
 
@@ -201,12 +201,21 @@ class VerificationFindingJdbcAdapterTest {
                 .singleRow();
     }
 
-    /** 검출된 {@code target_key} 전부. 건수가 아니라 집합을 보려고 쓴다. */
+    /**
+     * 검출을 <b>{@code (finding_type, target_key)} 쌍</b>으로 전부. 건수가 아니라 집합을 본다.
+     *
+     * <p>키가 쌍인 것은 이 저장소 전체의 어휘다 — {@code uk_run_finding} 도, checksum 입력도,
+     * 정답 매니페스트 조인도 그 쌍이다. {@code target_key} 만 보면 종류가 틀려도 통과한다.
+     * 표기는 {@code ExpectedFindingJdbcAdapterTest} 와 같은 {@code FindingKey#toString} 이다.
+     */
     private List<String> keysOf(long targetRunId) {
-        return jdbcClient.sql(
-                        "SELECT target_key FROM verification_findings WHERE run_id = :runId")
+        return jdbcClient.sql("""
+                        SELECT finding_type, target_key
+                          FROM verification_findings WHERE run_id = :runId
+                        """)
                 .param("runId", targetRunId)
-                .query(String.class)
+                .query((rs, rowNum) ->
+                        rs.getString("finding_type") + ":" + rs.getString("target_key"))
                 .list();
     }
 
