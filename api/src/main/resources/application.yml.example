@@ -5,6 +5,7 @@ spring:
     import:
       - classpath:storage.yml
       - classpath:management.yml   # CY-09
+      - classpath:observation.yml  # OBS-3 · OBS-4 · OBS-8
 
   jackson:
     default-property-inclusion: non_null
