@@ -27,8 +27,8 @@ public class RequestIdFilter extends OncePerRequestFilter {
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        // 거부한 값은 로그에도 남기지 않는다. 남기면 막으려던 인젝션이 그대로 들어간다.
-        String requestId = HeaderValues.safe(request.getHeader(HEADER)).orElseGet(RequestIdFilter::generate);
+        // 내부 상관 ID는 클라이언트 입력과 분리해 요청마다 새로 생성한다.
+        String requestId = generate();
         MDC.put(REQUEST_ID, requestId);
         response.setHeader(HEADER, requestId);
         try {
