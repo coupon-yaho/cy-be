@@ -56,6 +56,18 @@ CREATE INDEX idx_issuance_coupon_grade ON issuances (coupon_id, issued_grade, st
 -- 통계가 리플레이와 같은 창(id <= 얼린 상한)을 쓰기 때문이다.
 CREATE INDEX idx_history_event_created ON issuance_histories (event_type, created_at, id);
 
--- 통계의 "ISSUE 이력 없는 발급건" 검산. NOT EXISTS 의 드라이빙이 issuances 이고
--- 컷이 updated_at 이라 선행 컬럼이 updated_at 인 축이 하나는 있어야 한다.
-CREATE INDEX idx_issuance_updated ON issuances (updated_at, id);
+-- 통계의 "ISSUE 이력 없는 발급건" 짝 비교. 축이 둘 필요하다 — 드라이빙과 프로브.
+--
+-- 드라이빙은 issuances 이고 컷이 updated_at 이다. id 는 적지 않는다 — InnoDB 보조 인덱스
+-- 리프는 PK 를 항상 담는다. CLEAN 에서 이 조건은 300만 행 거의 전부에 매치하므로
+-- 옵티마이저가 풀스캔을 고를 수 있다. EXPLAIN ANALYZE 로 확인하고 안 쓰이면 빼라.
+CREATE INDEX idx_issuance_updated ON issuances (updated_at);
+
+-- 프로브 축. 위 idx_history_issuance 는 (issuance_id, created_at) 이라 event_type = 'ISSUE'
+-- 를 확인하려고 발급건마다 PK 로 내려간다 — 300만 회 랜덤 룩업이다.
+-- event_type 을 두 번째에 넣어 커버링으로 만든다(h.id <= 얼린 상한은 리프의 PK 로 확인된다).
+--
+-- idx_history_issuance 를 고치지 않고 따로 만드는 이유 — 그쪽은 리플레이의
+-- ORDER BY issuance_id, created_at, id 몫이라 event_type 을 중간에 끼우면 그 정렬이
+-- 인덱스 순서를 잃는다.
+CREATE INDEX idx_history_issuance_event ON issuance_histories (issuance_id, event_type, created_at);

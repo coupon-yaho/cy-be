@@ -3,7 +3,11 @@ package com.kafkick.batch.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,16 +17,26 @@ import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.listener.StepExecutionListener;
 import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.core.step.AbstractStep;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.test.JobRepositoryTestUtils;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.verification.StatsRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -39,7 +53,7 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.verify.chunk-size=2",
         "batch.verify.replay-window-size=2"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, VerifyJobStatsTest.MidRunMutationConfig.class})
 class VerifyJobStatsTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
@@ -56,11 +70,18 @@ class VerifyJobStatsTest {
     @Autowired
     private JdbcClient jdbcClient;
 
+    @Autowired
+    private MidRunMutation midRunMutation;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     private VerificationSeed seed;
 
     @BeforeEach
     void setUp() {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+        midRunMutation.disarm();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
     }
@@ -191,11 +212,124 @@ class VerifyJobStatsTest {
                 .isEqualTo(second);
     }
 
+    /**
+     * <b>발급건마다 {@code ISSUE} 이력이 정확히 하나여야 한다.</b> 이력이 없는 발급건은
+     * {@code asof_state} 에 실리지 않아 V3·V5 의 시야 밖이고 V4 는 반대 방향(고아 이력)만 본다 —
+     * 규칙 여섯 중 아무도 이것을 보지 않으므로 통계가 잡는 자리다.
+     *
+     * <p>잡히지 않으면 요일·시각 합계가 발급 수보다 <b>적은</b> 스냅샷이 합격 표시를 달고 뷰에
+     * 걸린다. 대시보드에서는 데이터 파손이 아니라 "그 시각에 발급이 적었다" 로 보인다.
+     *
+     * <p><b>총합 비교로는 못 잡는다</b>는 것이 이 검사의 형태를 정한 근거다 — 이력 없는 발급건
+     * 하나와 이력이 둘인 발급건 하나가 있으면 총합이 같아 통과한다.
+     */
+    @Test
+    @DisplayName("ISSUE 이력이 없는 발급건이 있으면 통계가 실패한다")
+    void failWhenIssuanceHasNoIssueHistory() throws Exception {
+        cleanIssuance();
+        // 이력을 붙이지 않는다. 이것이 이 테스트의 전부다.
+        long orphan = seed.issuance(IssuanceStatus.ISSUED);
+        // 리플레이는 이 발급건을 못 보므로 접힌 활성은 여전히 1 이다. 맞추지 않으면 V1 이
+        // 울려 verdict = FAIL 이 되고, 통계는 판정 게이트에서 먼저 빠져나가 이 검사에 못 닿는다.
+        seed.matchStockToReplay(1);
+
+        JobExecution execution = launch("CLEAN", 1);
+
+        assertThat(execution.getStatus())
+                .as("구조 파손이다 — 판정 결과가 아니라 실행 실패로 끝나야 한다")
+                .isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(message -> message.contains("ISSUE 이력이 없는 발급건 1건")
+                        && message.contains(String.valueOf(orphan)));
+        assertThat(latestStatsRun())
+                .as("뷰가 가리킬 스냅샷이 없어야 한다 — stats_status 가 COMPLETE 로 안 닫힌다")
+                .isNull();
+    }
+
+    /**
+     * <b>지문과 스냅샷이 같은 데이터의 함수여야 한다.</b> {@code assertFrozenStep} 이
+     * {@code dataset_fingerprint} 를 캡처한 뒤 이 Step 이 집계하는데, 그 사이에 원본이 움직이면
+     * <b>한 행 안에서 지문과 통계가 서로 다른 데이터를 기술한다</b> — 그때 어느 쪽이 맞는지
+     * 구분할 근거가 아무 데도 없다.
+     *
+     * <p>움직임을 <b>{@code coupon_stocks.updated_at} 하나로</b> 만든다. 내용은 그대로고
+     * 시각만 바뀌는데도 얼린 스냅샷이 더 이상 그 데이터를 기술하지 않는다는 것이 요점이다.
+     */
+    @Test
+    @DisplayName("얼린 뒤 원본이 움직이면 통계가 실패한다")
+    void failWhenDatasetMovesAfterFreeze() throws Exception {
+        cleanIssuance();
+        // 통계 Step 직전에 재고 행을 건드린다. beforeStep 은 태스클릿 트랜잭션 밖에서 돌아
+        // 커밋이 먼저 끝나므로, 태스클릿의 읽기 뷰가 이 변경을 본다.
+        midRunMutation.armBefore("statsAggregateStep",
+                () -> seed.overwriteStock(1, AS_OF.plusHours(1)));
+
+        JobExecution execution = launch("CLEAN", 1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(message -> message.contains("판정 뒤 통계 집계 전에 데이터가 움직였습니다"));
+        assertThat(runStatsStatus(runIdOf(execution)))
+                .as("NULL 이어야 한다 — SKIPPED 는 '뜻이 없어 안 했다' 이고 이것은 사고다")
+                .isNull();
+    }
+
+    /**
+     * <b>집계 도중 커밋된 변경은 사전 검사가 못 본다.</b> 태스클릿의 읽기 뷰가 첫 읽기에서
+     * 고정되기 때문이다(MySQL 8.0.35 에 실측). 그래서 집계 뒤 <b>새 트랜잭션</b>에서 한 번 더
+     * 보는데, 이 테스트가 그 후검사만 지킨다 — 사전 검사로는 절대 초록이 안 된다.
+     *
+     * <p>움직이는 축을 {@code grades} 로 고른 이유가 있다. 집계는
+     * {@code coupons}·{@code coupon_stocks}·{@code issuances} 를 {@code INSERT … SELECT} 로
+     * 읽어 <b>공유 락을 쥐고</b> 있어서, 그 세 테이블을 밖에서 쓰려 들면 태스클릿이 커밋할 때까지
+     * 막힌다. {@code grades} 는 집계가 읽지 않으므로 막히지 않고, {@code policyDigest} 의
+     * 두 번째 항이 {@code grades} 의 행 수를 담아 등급 한 행만 넣어도 지문이 갈린다.
+     */
+    @Test
+    @DisplayName("집계 도중 원본이 움직이면 새 트랜잭션 후검사가 잡는다")
+    void failWhenDatasetMovesDuringAggregation() throws Exception {
+        cleanIssuance();
+        // 회차 집계가 끝난 뒤(등급 집계 직전) 밖에서 커밋한다. 사전 검사는 이미 지났다.
+        midRunMutation.armBeforeRepositoryCall("aggregateGradeStats", this::insertGradeOutsideTx);
+
+        JobExecution execution = launch("CLEAN", 1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .as("사전 검사가 아니라 후검사가 잡아야 한다 — 단계 이름으로 가른다")
+                .anyMatch(message -> message.contains("통계 집계 도중에 데이터가 움직였습니다"));
+        assertThat(runStatsStatus(runIdOf(execution)))
+                .as("COMPLETE 앞에서 죽어야 뷰가 이 스냅샷을 안 집는다")
+                .isNull();
+        assertThat(latestStatsRun()).isNull();
+    }
+
+    /** 태스클릿 트랜잭션 밖에서 커밋한다. 같은 트랜잭션에 붙으면 "밖에서 움직였다" 가 아니다. */
+    private void insertGradeOutsideTx() {
+        TransactionTemplate outside = new TransactionTemplate(transactionManager);
+        outside.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        outside.executeWithoutResult(ignored -> jdbcClient.sql(
+                        "INSERT INTO grades (code, bit_value) VALUES ('MID', 16)")
+                .update());
+    }
+
+    private List<String> failureMessagesOf(JobExecution execution) {
+        List<String> messages = new ArrayList<>();
+        for (Throwable failure : execution.getAllFailureExceptions()) {
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                messages.add(String.valueOf(cause.getMessage()));
+            }
+        }
+        return messages;
+    }
+
+    /** 아직 아무것도 안 닫힌 실행은 {@code NULL} 이다 — 그 자체가 구분해야 할 상태다. */
     private String runStatsStatus(long runId) {
         return jdbcClient.sql("SELECT stats_status FROM verification_runs WHERE id = :id")
                 .param("id", runId)
                 .query(String.class)
-                .single();
+                .optional()
+                .orElse(null);
     }
 
     /**
@@ -210,5 +344,99 @@ class VerifyJobStatsTest {
                 .addString("dataset", dataset)
                 .addLong("attempt", (long) attempt)
                 .toJobParameters());
+    }
+
+    /**
+     * <b>잡이 도는 중간에 원본을 건드리는 유일한 수단이다.</b> 얼림 재확인은 "얼린 뒤 데이터가
+     * 움직였다" 를 잡으므로, 밖에서 심어 두는 방식으로는 시험할 수 없다 — 잡 시작 전에 심으면
+     * 그것은 그냥 초기 데이터고 얼림이 그 상태를 얼린다.
+     *
+     * <p>기본은 아무것도 안 한다. 무장한 테스트만 영향을 받는다.
+     */
+    static final class MidRunMutation implements StepExecutionListener {
+
+        private String armedStep;
+        private String armedRepositoryMethod;
+        private Runnable action;
+
+        void armBefore(String stepName, Runnable action) {
+            this.armedStep = stepName;
+            this.action = action;
+        }
+
+        /**
+         * <b>Step 경계가 아니라 태스클릿 <i>안</i>에서 움직이게 한다.</b> "집계 도중" 은 Step
+         * 시작 전이 아니라 태스클릿 트랜잭션이 열린 뒤라야 재현된다.
+         */
+        void armBeforeRepositoryCall(String method, Runnable action) {
+            this.armedRepositoryMethod = method;
+            this.action = action;
+        }
+
+        void disarm() {
+            this.armedStep = null;
+            this.armedRepositoryMethod = null;
+            this.action = null;
+        }
+
+        @Override
+        public void beforeStep(StepExecution stepExecution) {
+            if (stepExecution.getStepName().equals(armedStep)) {
+                fire();
+            }
+        }
+
+        void onRepositoryCall(String method) {
+            if (method.equals(armedRepositoryMethod)) {
+                fire();
+            }
+        }
+
+        private void fire() {
+            Runnable armedAction = action;
+            // 한 번만 돈다. 재시작·재실행으로 두 번 도는 것이 테스트 의도가 아니다.
+            disarm();
+            armedAction.run();
+        }
+    }
+
+    /**
+     * 리스너를 {@code statsAggregateStep} 에 끼운다. {@code StepBuilder} 가 만든
+     * {@code TaskletStep} 은 {@link AbstractStep} 이라 만들어진 뒤에도 리스너를 붙일 수 있다 —
+     * 본 코드에 테스트용 훅을 남기지 않으려고 이 방식을 쓴다.
+     */
+    @TestConfiguration
+    static class MidRunMutationConfig {
+
+        @Bean
+        MidRunMutation midRunMutation() {
+            return new MidRunMutation();
+        }
+
+        @Bean
+        static BeanPostProcessor midRunMutationRegistrar(ObjectProvider<MidRunMutation> hook) {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (bean instanceof AbstractStep step) {
+                        step.registerStepExecutionListener(hook.getObject());
+                    }
+                    if (bean instanceof StatsRepository stats) {
+                        return Proxy.newProxyInstance(
+                                StatsRepository.class.getClassLoader(),
+                                new Class<?>[] {StatsRepository.class},
+                                (proxy, method, args) -> {
+                                    hook.getObject().onRepositoryCall(method.getName());
+                                    try {
+                                        return method.invoke(stats, args);
+                                    } catch (InvocationTargetException e) {
+                                        throw e.getCause();
+                                    }
+                                });
+                    }
+                    return bean;
+                }
+            };
+        }
     }
 }

@@ -3,7 +3,7 @@
 `SchemaParityTest` 가 읽는다. **손으로 고치지 않는다.**
 
 ```
-원본   coupon-yaho/cy-seed-data-generator @ c56e7f9  (2026-08-17)  ddl/
+원본   coupon-yaho/cy-seed-data-generator @ b9496d0  (2026-08-17)  ddl/
 사본   이 디렉터리                                  바이트 동일
 ```
 
@@ -38,7 +38,7 @@ CI 는 옆 저장소를 못 읽는다. 그렇다고 대조를 포기하면 두 D
 # 파일명을 하드코딩하지 않는다. 상류에 파일이 하나 늘면 하드코딩된 목록은 그것을 안 받고,
 # diff -r 은 양쪽에 없는 파일을 비교하지 않아 "같다" 를 출력한다.
 set -euo pipefail
-SHA=c56e7f9
+SHA=b9496d0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 

@@ -2,8 +2,8 @@
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.batch.core.ExitStatus;
@@ -27,6 +27,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
@@ -203,7 +205,7 @@ public class VerifyJobConfig {
     }
 
     /**
-     * 실행이 도는 동안 <b>세 축이 모두 얼어 있었는지</b> 끝에서 다시 본다 —
+     * 실행이 도는 동안 <b>세 축이 모두 얼어 있었는지</b> 규칙 뒤에 다시 본다 —
      * 발급건 · 재고 · 회차 정책.
      *
      * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다.
@@ -404,7 +406,10 @@ public class VerifyJobConfig {
      * 말라고 {@link #judgeAgainstManifest} 에 적어 둔 이유가 이것이다.
      */
     @Bean
-    public Step statsAggregateStep(StatsRepository stats, VerificationRunRepository runs) {
+    public Step statsAggregateStep(
+            StatsRepository stats,
+            VerificationRunRepository runs,
+            VerificationRuleRepository rules) {
         return new StepBuilder("statsAggregateStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
                     StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
@@ -447,28 +452,54 @@ public class VerifyJobConfig {
 
                     LocalDateTime asOf = jobExecution.getJobParameters()
                             .getLocalDateTime("asOf");
+                    long frozenMaxHistory = jobExecution.getExecutionContext()
+                            .getLong(SCAN_MAX_HISTORY_KEY, 0L);
+
+                    // assertFrozenStep 은 더 이상 체인 끝이 아니다. 그 Step 이 캡처한
+                    // dataset_fingerprint 와 이 스냅샷이 같은 데이터의 함수여야 하므로
+                    // 네 축을 여기서 다시 본다 — 안 보면 한 행 안에서 지문과 통계가
+                    // 서로 다른 데이터를 기술하고, 그때 구분할 근거가 아무 데도 없다.
+                    //
+                    // 덮는 창은 assertFrozenStep 커밋 ~ 이 트랜잭션의 첫 읽기까지다.
+                    // 그 뒤는 못 본다 — 근거는 assertStillFrozen javadoc 에 적었다.
+                    //
+                    // 짝 비교보다 **앞**에 둔다. 창이 엇갈려 고아가 나온 경우를
+                    // "구조 파손" 으로 오진하지 않게 하려는 것이다.
+                    assertStillFrozen(jobExecution, rules, asOf, frozenMaxHistory,
+                            "판정 뒤 통계 집계 전에");
+
                     stats.clear(runId);
 
-                    // 회차 수를 집계 **앞에서** 읽는다. 뒤에서 읽으면 그 사이 INSERT 가
-                    // 오탐을 만든다 — INSERT … SELECT 는 락 리드로 최신 커밋을 보고
-                    // 그다음 COUNT 는 컨시스턴트 리드다.
-                    int coupons = stats.couponCount();
+                    // 회차 수와 집계가 같은 컷을 쓴다. 순서로는 오탐 창이 닫히지 않는다 —
+                    // 읽기 뷰는 이 트랜잭션의 첫 컨시스턴트 리드(위 verdict 조회)에서 이미
+                    // 고정됐고, INSERT … SELECT 는 락 리드로 최신 커밋을 본다.
+                    //
+                    // 얼림 재확인도 그 창을 못 덮는다(같은 스냅샷을 읽는다). 이 등식이
+                    // 그 창에서 유일하게 남는 관측 수단이다 — 회차가 늘면 락 리드인
+                    // 집계만 그것을 보므로 couponRows > coupons 로 드러난다.
+                    int coupons = stats.couponCount(asOf);
                     int couponRows = stats.aggregateCouponStats(runId, asOf);
                     if (couponRows != coupons) {
-                        // 배선 실수가 아니다. 이 등식은 SQL 상 깨질 수 없고(재고 PK 가
-                        // coupon_id 라 팬아웃 없음, 컷은 파생테이블 안) 도달 가능한 유일한
-                        // 경로가 집계 도중 회차 추가·삭제다 — 그것은 데이터 변동이다.
+                        // 배선 실수가 아니다. 팬아웃은 없다 — 재고 PK 가 coupon_id 고
+                        // 발급 집계는 파생테이블이라 LEFT JOIN 이 행을 늘리지 않는다.
+                        //
+                        // 도달 경로는 셋이고 전부 데이터 변동이다:
+                        //   · 회차 삭제
+                        //   · created_at <= asOf 인 회차 추가(백데이트)
+                        //   · 재고 행이 asOf 이후로 갱신 — 컷이 집계 쪽에만 있어 그 회차만
+                        //     떨어진다. 이 비대칭이 의도된 것이다(couponCount javadoc).
+                        // 지금 시각으로 들어온 회차 추가는 여기서 안 잡힌다 — created_at 컷이
+                        // 양쪽에 다 걸려 두 문장이 함께 제외한다.
                         throw new BusinessException(
                                 VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
-                                "집계 도중 회차가 추가·삭제됐습니다. 쓴 행=" + couponRows
-                                        + " 회차=" + coupons);
+                                "집계 도중 회차 또는 재고가 움직였습니다. 이 스냅샷은 "
+                                        + "카탈로그의 일부만 담았으므로 대시보드가 읽으면 "
+                                        + "안 됩니다. 쓰기를 멈추고 다시 실행하십시오. 쓴 행="
+                                        + couponRows + " 회차=" + coupons);
                     }
                     int gradeRows = stats.aggregateGradeStats(runId, asOf);
 
-                    // 창은 리플레이와 같다 — 얼린 상한을 넘겨야 백데이트 이력이 통계에만
-                    // 들어오는 것을 막는다. 168행을 전부 쓴다: 없는 행과 0인 행은 다르다.
-                    long frozenMaxHistory = jobExecution.getExecutionContext()
-                            .getLong(SCAN_MAX_HISTORY_KEY, 0L);
+                    // 창은 리플레이와 같다. 168행을 전부 쓴다: 없는 행과 0인 행은 다르다.
                     List<HourlyIssued> hourly =
                             HourlyIssued.fillAll(stats.issuedByHour(frozenMaxHistory, asOf));
                     stats.appendHourlyStats(runId, hourly);
@@ -488,6 +519,19 @@ public class VerifyJobConfig {
                                         + stats.sampleIssuancesWithoutIssueHistory(
                                                 asOf, frozenMaxHistory, SAMPLE_SIZE));
                     }
+
+                    // 집계가 끝난 뒤 **새 트랜잭션**에서 네 축을 다시 본다. 위 사전 검사는
+                    // 이 트랜잭션의 스냅샷을 읽어 집계 도중 커밋을 못 보는데(근거는
+                    // assertStillFrozen javadoc), 새 트랜잭션은 읽기 뷰를 새로 잡아 **본다**.
+                    // 잠금 읽기로 갭 락을 거는 값을 치르지 않고 그 창을 닫는 방법이다.
+                    //
+                    // updateStatsStatus(COMPLETE) 앞이어야 뜻이 있다 — 뷰가 이 스냅샷을 집는
+                    // 것은 그 한 줄이므로, 그 앞에서 죽으면 어긋난 스냅샷은 조회되지 않는다.
+                    TransactionTemplate freshView = new TransactionTemplate(transactionManager);
+                    freshView.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    freshView.setReadOnly(true);
+                    freshView.executeWithoutResult(ignored -> assertStillFrozen(
+                            jobExecution, rules, asOf, frozenMaxHistory, "통계 집계 도중에"));
 
                     // 마지막이다. 여기까지 왔을 때만 뷰가 이 스냅샷을 가리킨다.
                     runs.updateStatsStatus(runId, StatsStatus.COMPLETE);
@@ -1121,6 +1165,53 @@ public class VerifyJobConfig {
 
         jobContext.putLong(SEED_RUN_ID_KEY, seedRunId);
         jobContext.putString(MANIFEST_DIGEST_KEY, expected.digestOf(seedRunId));
+    }
+
+    /**
+     * <b>{@code assertFrozenStep} 과 같은 네 축을 다시 본다.</b> 그 Step 은 규칙 뒤에 한 번
+     * 보는데, 통계 Step 이 그보다 뒤에 붙어서 <b>그 사이가 무방비</b>가 됐다.
+     * {@code rejectRunningSchedulers} 는 이 JVM 의 플래그만 보므로 api 프로세스는 그 플래그로
+     * 멈추지 않는다.
+     *
+     * <p>회차 축은 시각으로 못 본다({@code coupons} 에 {@code updated_at} 이 없다) — 그래서
+     * {@code policyDigest} 로 접어 대조한다. {@code assertFrozenStep} 과 같은 방식이다.
+     *
+     * <p><b>덮는 창을 정확히 적는다 — "집계 도중" 은 못 잡는다.</b> 네 축을 <b>비잠금 읽기</b>로
+     * 보는데, REPEATABLE READ 의 읽기 뷰는 이 트랜잭션의 <b>첫</b> 비잠금 읽기(위 {@code verdict}
+     * 조회)에서 고정된다. MySQL 8.0.35 에 재 봤다:
+     *
+     * <pre>
+     * A1  첫 비잠금 읽기            v=1     ← 뷰 고정
+     *       B 가 v=99 커밋
+     * A2  얼림 재확인(비잠금)       v=1     ← 못 본다
+     * A3  INSERT … SELECT 가 쓴 값  v=99    ← 본다
+     * </pre>
+     *
+     * 그래서 이 가드가 덮는 창은 <b>{@code assertFrozenStep} 커밋 ~ 이 트랜잭션의 첫 읽기</b>
+     * 까지다. Step 마다 트랜잭션이 다르고 그 사이에 {@code finalizeRunStep} 이 끼므로 실재하는
+     * 창이고, {@code failWhenDatasetMovesAfterFreeze} 가 재현하는 것도 그 창이다.
+     *
+     * <p>그 뒤(집계 진행 중)를 닫으려면 잠금 읽기여야 하는데, 300만 행 인덱스 구간에 갭 락을
+     * 거는 값을 치른다. 대신 <b>회차 수 등식</b>이 그 창의 관측 수단으로 남는다 — 집계는 락
+     * 리드라 늘어난 회차를 보고, 앞의 {@code couponCount} 는 못 봐서 수가 갈린다.
+     */
+    private static void assertStillFrozen(
+            JobExecution jobExecution,
+            VerificationRuleRepository rules,
+            LocalDateTime asOf,
+            long frozenMaxHistory,
+            String phase) {
+        String frozenPolicy = jobExecution.getExecutionContext().getString(POLICY_DIGEST_KEY);
+        if (rules.hasIssuancesUpdatedAfter(asOf)
+                || rules.hasStocksUpdatedAfter(asOf)
+                || rules.hasHistoriesAddedAbove(frozenMaxHistory, asOf)
+                || !frozenPolicy.equals(rules.policyDigest())) {
+            throw new BusinessException(
+                    VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                    phase + " 데이터가 움직였습니다. verdict 는 남고 stats_status 는 "
+                            + "NULL 로 남아 v_latest_stats_run 이 이 스냅샷을 가리키지 않습니다. "
+                            + "asOf=" + asOf);
+        }
     }
 
     /** {@code startRunStep} 이 얼려 둔 정답 묶음 지문. */

@@ -571,14 +571,29 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 돌고 **통계 Step 은 그 둘보다 뒤**다. 게다가 `rejectRunningSchedulers` 는 이 JVM 의
 `batch.scheduling.enabled` 만 보므로 **api 는 별도 프로세스라 그 플래그로 멈추지 않는다.**
 
-**두 원천이 서로를 검산한다.** CLEAN 에서는 발급건마다 `ISSUE` 이력이 정확히 하나이므로
+**발급건마다 `ISSUE` 이력이 정확히 하나여야 한다 — 짝으로 본다.** 총합 비교
+(`COUNT(issuances) == SUM(hourly_stats.issued_total)`)로는 **대칭 오차를 못 잡는다** —
+이력 없는 발급건 하나와 이력이 둘인 발급건 하나가 있으면 총합이 같아 통과한다.
+`finding_count` 비교를 거부한 것과 정확히 같은 형태다.
 
-```
-COUNT(issuances WHERE updated_at <= asOf)  ==  SUM(hourly_stats.issued_total)
-```
+`NOT EXISTS` 로 세고 발급건 id 표본을 실어 **`ISSUANCE_WITHOUT_ISSUE_HISTORY`(`VERIFICATION-010`)**
+로 죽는다. `DATASET_MUTATED_DURING_RUN` 과 가른 이유는 안내가 다르기 때문이다 — 그쪽은
+"런타임 멈추고 재실행", 이쪽은 구조 파손이라 멈춰도 같은 자리에서 죽는다.
 
-이 어긋나면 집계 도중에 데이터가 움직인 것이고 `DATASET_MUTATED_DURING_RUN` 으로 죽는다.
-얼림 가드가 이미 지나간 구간을 이 등식이 덮는다.
+이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력이 없는 발급건은 `asof_state` 에 안 실려
+V3·V5 의 시야 밖이고 V4 는 반대 방향(고아 이력)만 본다.
+
+**얼림을 통계 앞에서 다시 본다.** `assertFrozenStep` 이 체인 끝이 아니게 되면서, 그 Step 이 캡처한
+`dataset_fingerprint` 와 통계 스냅샷이 **다른 데이터의 함수**가 될 수 있다. 네 축(발급건·재고·
+회차 정책·이력)을 통계 앞에서 한 번 더 확인하고, 어긋나면 `DATASET_MUTATED_DURING_RUN` 이다.
+짝 비교보다 앞에 두어 창 엇갈림을 구조 파손으로 오진하지 않게 한다.
+
+**이 재확인이 덮는 창은 "집계 도중" 이 아니다.** 네 축을 비잠금 읽기로 보는데 REPEATABLE READ 의
+읽기 뷰는 그 트랜잭션의 **첫** 비잠금 읽기(`verdict` 조회)에서 고정된다 — MySQL 8.0.35 에 재 보니
+그 뒤 커밋을 재확인은 못 보고 `INSERT … SELECT`(락 리드)는 본다. 그래서 덮는 창은
+`assertFrozenStep` 커밋부터 통계 트랜잭션의 첫 읽기까지고, 그 사이에 `finalizeRunStep` 이 끼므로
+실재한다. 집계 진행 중 구간은 **회차 수 등식**이 관측 수단으로 남는다 — 집계만 늘어난 회차를 보므로
+수가 갈린다. 그 구간까지 막으려면 잠금 읽기여야 하는데 300만 행 구간에 갭 락을 거는 값을 치른다.
 
 **합격한 CLEAN 만 집계한다.** CORRUPT 를 건너뛴 근거가 *"오염 데이터 위의 집계는 뜻이 없다"* 인데,
 CLEAN 에서 검출이 났다는 것도 **그 데이터가 실제로 어긋났다**는 뜻이라 같은 근거가 적용된다.

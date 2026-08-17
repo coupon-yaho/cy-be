@@ -42,10 +42,19 @@ public interface StatsRepository {
     void clear(long runId);
 
     /**
-     * 회차 수. {@link #aggregateCouponStats} 가 쓴 행 수와 같아야 한다 —
-     * 그 등식이 "발급 0건 회차도 행을 받는다" 를 런타임에 지키는 유일한 수단이다.
+     * {@code asOf} 이하에 만들어진 회차 수. {@link #aggregateCouponStats} 가 쓴 행 수와 같아야
+     * 한다 — 그 등식이 "발급 0건 회차도 행을 받는다" 를 런타임에 지키는 유일한 수단이다.
+     *
+     * <p><b>{@code created_at} 컷은 두 자리에 같이 있어야 한다.</b> 한쪽에만 있으면 등식이 상시
+     * 오탐이고, 양쪽에 다 없으면 회차가 추가돼도 두 문장이 그것을 함께 보아 등식이 성립하고
+     * 검사가 침묵한다.
+     *
+     * <p><b>재고 컷은 일부러 집계 쪽에만 있다 — 대칭으로 맞추지 마라.</b> 그 비대칭이 집계 도중
+     * 재고가 움직인 것을 드러내는 유일한 수단이다. 집계는 {@code INSERT … SELECT} 라 잠금
+     * 읽기로 최신 커밋을 보고 이 {@code COUNT} 는 스냅샷을 보므로, 재고가 {@code asOf} 이후로
+     * 갱신되면 집계만 그 회차를 떨어뜨려 수가 갈린다. 맞추면 그 관측이 사라진다.
      */
-    int couponCount();
+    int couponCount(LocalDateTime asOf);
 
     /**
      * <b>{@code ISSUE} 이력이 없는 발급건.</b> CLEAN 에서는 발급건마다 그 이력이 정확히 하나이므로

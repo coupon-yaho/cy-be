@@ -73,9 +73,13 @@ class StatsJdbcAdapterTest {
      *
      * <p><b>발급 뒤에 불러야 한다.</b> 재고 행은 첫 발급이 만들고, 그 전에는 갱신할 행이 없다.
      */
-    private void capStockAt(int totalQuantity) {
-        jdbcClient.sql("UPDATE coupon_stocks SET total_quantity = :total")
+    private void capStockAt(long couponId, int totalQuantity) {
+        // 회차를 지목한다. WHERE 없이 두면 이름은 "이 회차의 상한" 인데 테이블 전체를 갱신해,
+        // 회차 둘을 쓰는 테스트가 늘어나는 날 다른 회차의 완판 판정이 조용히 따라 바뀐다.
+        jdbcClient.sql("UPDATE coupon_stocks SET total_quantity = :total "
+                        + "WHERE coupon_id = :couponId")
                 .param("total", totalQuantity)
+                .param("couponId", couponId)
                 .update();
     }
 
@@ -144,7 +148,7 @@ class StatsJdbcAdapterTest {
         seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(30));
         seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(90));
         // 발급 뒤에 낮춘다. 재고 행은 첫 발급이 만들므로 그 전에 UPDATE 하면 0행이다.
-        capStockAt(2);
+        capStockAt(couponId, 2);
 
         adapter.aggregateCouponStats(runId, AS_OF);
 
@@ -166,7 +170,7 @@ class StatsJdbcAdapterTest {
     void truncateSubSecondLikeSeed() {
         long couponId = seed.currentCouponIdOrCreate();
         seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(90).withNano(900_000_000));
-        capStockAt(1);
+        capStockAt(couponId, 1);
 
         adapter.aggregateCouponStats(runId, AS_OF);
 
@@ -321,6 +325,58 @@ class StatsJdbcAdapterTest {
         assertThat(adapter.issuedByHour(frozen, AS_OF))
                 .as("두 번째 이력은 asOf 이하지만 얼린 상한 밖이다 — 리플레이도 안 읽었다")
                 .containsExactly(new HourlyIssued("WED", 3, 1));
+    }
+
+    /**
+     * <b>완판이 조용히 미달로 뒤집히면 안 된다.</b> 컷을 {@code ON} 절에 두면 {@code LEFT JOIN}
+     * 이라 회차는 남고 {@code total_quantity} 만 {@code NULL} 이 되어, 한 행에서 앞 다섯 컬럼은
+     * 맞고 {@code sold_out_seconds} 만 거짓이 된다.
+     *
+     * <p>{@code WHERE} 로 옮기면 그 회차는 <b>행이 아예 안 써지고</b> 잡 수준의
+     * {@code couponRows != couponCount} 검사가 {@code DATASET_MUTATED_DURING_RUN} 으로 잡는다.
+     */
+    @Test
+    @DisplayName("asOf 이후에 갱신된 재고를 가진 회차는 행을 받지 않는다")
+    void excludeCouponWhenStockUpdatedAfterAsOf() {
+        seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(90));
+        seed.overwriteStock(1, AS_OF.plusSeconds(1));
+
+        assertThat(adapter.aggregateCouponStats(runId, AS_OF))
+                .as("값을 뭉개지 말고 행을 빼야 행 수 검사가 잡는다")
+                .isZero();
+    }
+
+    /** 재고 행이 <b>없는</b> 회차는 살려 둔다 — V1 이 그 회차를 잡는 것이 존재 이유다. */
+    @Test
+    @DisplayName("재고 행이 없는 회차는 행을 받는다 — 완판 판정만 NULL 이다")
+    void keepCouponWithoutStockRow() {
+        long couponId = seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED);
+        seed.removeStock();
+
+        assertThat(adapter.aggregateCouponStats(runId, AS_OF)).isEqualTo(1);
+        assertThat(couponStatRow(couponId))
+                .containsEntry("issued_total", 1)
+                .containsEntry("sold_out_seconds", null);
+    }
+
+    /** {@code asOf} 뒤에 만들어진 회차는 스냅샷에 없다 — 같은 asOf 재실행이 갈리면 안 된다. */
+    @Test
+    @DisplayName("asOf 이후에 만들어진 회차는 집계에서 빠진다")
+    void cutCouponsAtAsOf() {
+        seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED);
+        long late = seed.newCoupon();
+        jdbcClient.sql("UPDATE coupons SET created_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", late)
+                .update();
+
+        assertThat(adapter.aggregateCouponStats(runId, AS_OF)).isEqualTo(1);
+        assertThat(adapter.couponCount(AS_OF))
+                .as("두 자리에 같은 컷이 있어야 등식이 뜻을 갖는다")
+                .isEqualTo(1);
     }
 
     /**

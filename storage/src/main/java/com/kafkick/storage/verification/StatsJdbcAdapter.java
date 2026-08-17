@@ -27,8 +27,20 @@ import com.kafkick.core.verification.StatsRepository;
  *       한 행(마지막 상태)뿐이다.</li>
  * </ul>
  *
- * <p><b>세 집계가 모두 시각으로 잘린다.</b> 발급건은 {@code updated_at <= asOf},
- * 이력은 <b>리플레이가 얼린 창</b>({@link #issuedByHour})이다.
+ * <p><b>컷이 네 축에 걸린다.</b> 발급건은 {@code updated_at <= asOf}, 이력은
+ * <b>리플레이가 얼린 창</b>({@link #issuedByHour}), 회차는 {@code created_at <= asOf},
+ * 재고는 {@code coupon_stocks.updated_at <= asOf} 다.
+ *
+ * <p><b>{@code ON} 이냐 {@code WHERE} 냐를 고를 수 있었던 축은 재고뿐이다.</b> 회차 컷은
+ * 드라이빙 테이블({@code coupons}) 자체의 필터라 애초에 {@code ON} 에 넣을 자리가 없다 —
+ * 둘 다 {@code WHERE} 에 있지만 재고 쪽만 선택의 여지가 있었다.
+ * {@code LEFT JOIN} 의 {@code ON} 에 두면
+ * 조건이 거짓일 때 회차 행은 남고 {@code s.*} 만 {@code NULL} 이 되는데, 완판 판정이
+ * {@code issued_total >= s.total_quantity} 라 <b>완판 회차가 미달로 뒤집힌다</b> —
+ * 행 수는 그대로여서 {@code couponRows == couponCount} 검사도 통과하고, 어긋난 값이
+ * 조용히 {@code COMPLETE} 스냅샷에 들어간다. {@code WHERE} 에 두면 그 회차는 행 자체가
+ * 안 써져 그 등식이 실행을 죽인다. 재고 행이 <b>없는</b> 회차(발급 0건)와 재고가
+ * <b>움직인</b> 회차를 갈라야 해서 {@code s.updated_at IS NULL OR …} 형태다.
  *
  * <p>한때 발급건 쪽 컷을 <i>"{@code rejectIssuancesUpdatedAfterAsOf} 가 이미 거부하니 중복"</i>
  * 이라며 뺐는데 <b>틀렸다.</b> 그 가드는 {@code startRunStep} 과 {@code assertFrozenStep} 에서만
@@ -45,10 +57,20 @@ public class StatsJdbcAdapter implements StatsRepository {
      * <b>회차 전체를 드라이빙으로 둔다.</b> 발급이 0건인 회차도 행을 써야 하므로
      * {@code issuances} 를 드라이빙으로 하면 그 회차가 빠진다. 시드도 카탈로그 전체를 돈다.
      *
-     * <p><b>재고 행도 {@code LEFT JOIN} 이다.</b> 재고 행이 없는 회차를 {@code INNER JOIN} 으로
-     * 떨어뜨리면 그 회차가 통계에서 사라진다 — V1(재고 정합)이 {@code coupons} 를 드라이빙으로
-     * 고른 근거가 <b>바로 그 회차를 잡는 것</b>이라, 통계가 반대로 가면 안 된다.
-     * 그 회차의 완판 판정은 자연히 {@code NULL} 이다({@code NULL} 비교가 참이 아니다).
+     * <p><b>재고 컷을 {@code WHERE} 에 두고 {@code IS NULL} 을 명시한다.</b> V1 과 같은 모양이다.
+     * 한때 {@code ON} 절에 넣었는데 <b>모양이 틀렸다</b> — {@code LEFT JOIN} 이라 조건이 거짓이면
+     * 회차는 남고 {@code total_quantity} 만 {@code NULL} 이 되어, <b>완판 회차가 조용히 미달로
+     * 뒤집힌다.</b> 한 행에서 앞 다섯 컬럼은 맞고 {@code sold_out_seconds} 만 거짓이 된다.
+     *
+     * <p>{@code WHERE} 로 옮기면 그 회차는 <b>행이 아예 안 써지고</b>
+     * {@code couponRows != couponCount} 검사가 {@code DATASET_MUTATED_DURING_RUN} 으로 잡는다 —
+     * 값을 뭉개지 말고 죽인다. 재고 행이 <b>없는</b> 회차는 {@code IS NULL} 로 살려 둔다.
+     * V1 이 {@code coupons} 를 드라이빙으로 고른 근거가 그 회차를 잡는 것이라, 통계가 반대로
+     * 가면 안 된다 — 그 회차의 완판 판정만 {@code NULL} 이다.
+     *
+     * <p><b>{@code coupons} 도 {@code created_at} 으로 자른다.</b> {@code asOf} 시점에 없던
+     * 회차가 스냅샷에 들어오면 같은 {@code asOf} 재실행이 다른 행 수를 낸다.
+     * {@code couponCount} 도 같은 컷을 써야 등식이 뜻을 갖는다 — 양쪽에 다 없으면 서로 상쇄된다.
      *
      * <p><b>완판은 {@code total_quantity} 로 판정한다.</b> 시드가 완판을 정하는 식이
      * {@code issue_count >= total_quantity} 다({@code cy-seed/seedgen/catalog.py}).
@@ -75,8 +97,7 @@ public class StatsJdbcAdapter implements StatsRepository {
                         THEN TIMESTAMPDIFF(SECOND, c.open_at, a.last_issued_at)
                    END
               FROM coupons c
-              LEFT JOIN coupon_stocks s
-                     ON s.coupon_id = c.id AND s.updated_at <= :asOf
+              LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
               LEFT JOIN (SELECT coupon_id,
                                 COUNT(*)                        AS issued_total,
                                 SUM(status = 'ISSUED')          AS issued,
@@ -88,6 +109,8 @@ public class StatsJdbcAdapter implements StatsRepository {
                           WHERE updated_at <= :asOf
                           GROUP BY coupon_id) a
                      ON a.coupon_id = c.id
+             WHERE c.created_at <= :asOf
+               AND (s.updated_at IS NULL OR s.updated_at <= :asOf)
             """;
 
     /**
@@ -160,8 +183,11 @@ public class StatsJdbcAdapter implements StatsRepository {
     }
 
     @Override
-    public int couponCount() {
-        return jdbcClient.sql("SELECT COUNT(*) FROM coupons").query(Integer.class).single();
+    public int couponCount(LocalDateTime asOf) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM coupons WHERE created_at <= :asOf")
+                .param("asOf", asOf)
+                .query(Integer.class)
+                .single();
     }
 
     /**
