@@ -28,7 +28,7 @@ CREATE INDEX `idx_issuance_coupon` ON `issuances` (`coupon_id`);
 
 DROP INDEX `uk_coupon_member` ON `issuances`;
 
-DROP INDEX `code` ON `issuances`;
+DROP INDEX `uk_coupon_code` ON `issuances`;
 
 ALTER TABLE `coupon_stocks` DROP CHECK `ck_stock_range`;
 

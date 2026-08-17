@@ -635,7 +635,31 @@ checksum 에 안 들어간다** — 결정론 판정이 열린 채로 통과한�
 `updated_at <= asOf` 는 **집계 안팎에 모두** 건다. 안쪽을 안 자르면 `asOf` 이후 행이
 `COUNT(*)` 를 올려 **그 시점에는 없던 중복이 보인다.**
 
-### CORRUPT 스키마 모양은 시드 저장소가 원본이다
+### 스키마 주인은 cy-be 이고, 어긋남은 테스트가 잡는다
+
+**이 절의 결정이 CY-201 에서 뒤집혔다.** 원래는 *"CORRUPT 스키마 모양은 시드 저장소가 원본이다"* 였고
+근거는 *"cy-be 가 두 번째 주인처럼 보이면 둘이 어긋나도 아무도 모른다"* 였다.
+
+문제는 **모르는 것**이었으므로 답은 **알게 만드는 것**이다 — 주인을 한쪽으로 정하는 것으로는
+어긋남을 못 잡는다. 실제로 못 잡았다: `datetime` ↔ `datetime(6)` 세 컬럼과 제약 이름 두 개
+(`code`/`uk_coupon_code`, `email_hash`/`uk_email_hash`)가 아무 경고 없이 갈라져 있었다.
+
+```
+storage/src/main/resources/db/migration/   ← 스키마를 정의한다 (Flyway, cy-be 소유)
+cy-seed ddl/                               ← 로더의 적재 순서 최적화. 구조는 자유
+storage/src/test/.../seed-ddl/             ← 그 읽기 전용 사본
+SchemaParityTest                           ← 두 DDL 의 최종 상태를 information_schema 로 대조
+```
+
+**파일 구조가 아니라 최종 상태를 맞춘다.** 시드는 300만 건을 빠르게 넣으려고
+*테이블만 → 적재 → 제약* 으로 쪼개는데 그것은 로더의 사정이고, 만들어지는 스키마는 같아야 한다.
+`--with-perf-indexes` 처방전은 대조에서 뺀다 — 보조 인덱스 부재는 누락이 아니라 의도다.
+
+> 덤으로 알게 된 것: **InnoDB 는 FK 자동 인덱스를 스스로 지운다.** 선두가 일치하는 복합
+> 인덱스를 만들면 자동 생성된 단일 인덱스가 사라진다(실측 확인). 처방전을 넣은 쪽과 안 넣은 쪽의
+> 인덱스 목록이 두 군데서 달라 보이는 이유가 이것이다.
+
+### CLEAN 에서 못 심는 오염은 오버레이로 재현한다
 
 V2 가 잡는 두 케이스는 CLEAN 에서 **물리적으로 심을 수 없다.** 제약이 막는다.
 
@@ -647,6 +671,7 @@ ck_stock_range            유형 1(+1) · 3(-1) — 재고를 범위 밖으로
 
 시드 저장소가 `ddl/11_constraints_clean.sql`(거는 쪽)과 `ddl/12_constraints_corrupt.sql`
 (안 거는 쪽)으로 갈라 두었고, **실제 `coupon_corrupt` 스키마는 그쪽이 만든다.**
+정의가 cy-be 에 있다는 것과 인스턴스를 누가 만드느냐는 다른 얘기다.
 
 cy-be 는 그 모양을 테스트에서 재현할 뿐이라
 `storage/src/testFixtures/resources/db/corrupt/V900__drop_clean_only_constraints.sql` 에 둔다 —
