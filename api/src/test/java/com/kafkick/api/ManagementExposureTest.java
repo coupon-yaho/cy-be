@@ -28,7 +28,9 @@ import org.springframework.boot.test.web.server.LocalManagementPort;
         properties = {
                 "management.server.port=0",
                 "management.endpoints.web.exposure.include=*",
-                "management.endpoints.web.exposure.exclude=env,configprops,beans,heapdump"
+                "management.endpoints.web.exposure.exclude=env,configprops,beans,heapdump",
+                // 이 앱에는 관측 풀이 없다. obs 그룹 검증까지 켜면 노출 규칙과 무관한 이유로 깨진다.
+                "management.endpoint.health.validate-group-membership=false"
         })
 class ManagementExposureTest {
 
