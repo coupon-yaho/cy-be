@@ -12,11 +12,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.verification.VerificationRun;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
@@ -116,6 +118,37 @@ class VerificationRunJdbcAdapterTest {
         assertThat(found.verdict())
                 .as("통계 갱신이 판정을 지우면 게이트가 읽을 값이 사라진다")
                 .isEqualTo(VerdictType.PASS);
+    }
+
+    /**
+     * <b>조용히 넘어가면 판정이 안 써진 채 잡이 COMPLETED 로 끝난다.</b> 게이트가 읽는 것은
+     * {@code verification_runs.verdict} 라, 그 행이 NULL 이면 판정 불가가 된다.
+     *
+     * <p>코드가 <b>500대</b>인 것도 함께 지킨다. 404 로 두면 클라이언트 입력 오류로 분류돼
+     * 재고 소진 같은 정상 흐름 예외와 같은 취급을 받는다 — 이건 데이터 정합 사고다.
+     */
+    @Test
+    @DisplayName("지워진 실행을 갱신하면 RUN_ROW_VANISHED 로 죽는다")
+    void rejectUpdateOfDeletedRun() {
+        VerificationRun saved = adapter.save(fullRun());
+        jdbcClient.sql("DELETE FROM verification_runs WHERE id = :id")
+                .param("id", saved.id())
+                .update();
+
+        assertThatThrownBy(() -> adapter.update(
+                saved.finish(VerdictType.PASS, 0, null, null, STARTED_AT)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(VerificationErrorCode.RUN_ROW_VANISHED);
+    }
+
+    @Test
+    @DisplayName("없는 실행의 통계 상태를 갱신해도 죽는다 — 조용히 넘어가면 통계가 빈 채 끝난다")
+    void rejectStatsUpdateOfMissingRun() {
+        assertThatThrownBy(() -> adapter.updateStatsStatus(999_999L, StatsStatus.SKIPPED))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(VerificationErrorCode.RUN_ROW_VANISHED);
     }
 
     @Test

@@ -29,8 +29,11 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationRuleRepository;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 import com.kafkick.storage.verification.VerificationRuleJdbcAdapter;
@@ -198,6 +201,10 @@ class VerifyJobConfigTest {
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(failureMessagesOf(execution)).anyMatch(
                 m -> m.contains("asOf 이후에 갱신된 발급건이 있습니다"));
+        assertThat(errorCodesOf(execution))
+                .as("조치는 'asOf 를 고쳐라' 가 아니라 '쓰기를 멈춰라' 다. "
+                        + "INVALID_AS_OF 로 두면 운영자가 asOf 만 뒤로 밀며 헛돈다")
+                .contains(VerificationErrorCode.DATASET_MUTATED_DURING_RUN);
         assertThat(asOfStateCount()).isZero();
     }
 
@@ -784,6 +791,19 @@ class VerifyJobConfigTest {
                 .param("runId", targetRunId)
                 .query(String.class)
                 .list();
+    }
+
+    /** 실패에 실린 도메인 에러 코드. 메시지만 보면 코드를 바꿔 끼워도 안 잡힌다. */
+    private static List<ErrorCode> errorCodesOf(JobExecution execution) {
+        List<ErrorCode> codes = new ArrayList<>();
+        for (Throwable failure : execution.getAllFailureExceptions()) {
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                if (cause instanceof BusinessException business) {
+                    codes.add(business.getErrorCode());
+                }
+            }
+        }
+        return codes;
     }
 
     /**

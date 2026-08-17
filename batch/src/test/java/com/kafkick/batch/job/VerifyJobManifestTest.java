@@ -303,6 +303,33 @@ class VerifyJobManifestTest {
                 .isInstanceOf(JobInstanceAlreadyCompleteException.class);
     }
 
+    /**
+     * <b>설명은 방어가 아니다.</b> 오류 메시지에 "끝의 false 가 비식별이다" 를 적어 두었지만,
+     * 식별로 던져도 코드가 아무 말 없이 받으면 운영자는 그 문장을 볼 기회조차 없다 —
+     * 잡이 시작돼 {@code rejectExistingRun} 의 <i>"같은 파라미터의 실행이 이미 있습니다"</i> 로
+     * 죽어, 파라미터를 바꿔 던졌는데 그런 메시지를 보게 된다.
+     */
+    @Test
+    @DisplayName("seedRunId 를 식별로 던지면 거부한다 — 메시지로 설명만 하고 막지 않으면 소용없다")
+    void rejectIdentifyingSeedRunId() throws Exception {
+        expected("DUP_PER_MEMBER", plantDuplicate());
+
+        JobExecution execution = jobOperator.start(verifyJob, new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF)
+                .addString("scope", "FULL")
+                .addString("dataset", "CORRUPT")
+                .addLong("attempt", 1L)
+                .addLong("seedRunId", SEED_RUN)
+                .toJobParameters());
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failureMessagesOf(execution))
+                .anyMatch(m -> m.contains("seedRunId 는 비식별이어야 합니다"));
+        assertThat(execution.getStepExecutions())
+                .as("규칙을 다 돌린 뒤가 아니라 startRunStep 에서 막아야 한다")
+                .allMatch(step -> "startRunStep".equals(step.getStepName()));
+    }
+
     private JobExecution launch(int attempt) throws Exception {
         return launch(attempt, SEED_RUN);
     }

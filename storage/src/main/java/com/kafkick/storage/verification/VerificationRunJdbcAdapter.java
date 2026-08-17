@@ -136,7 +136,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
         // 갱신하려 할 때 판정이 안 써졌는데도 잡이 COMPLETED 로 끝난다.
         if (updated != 1) {
             throw new BusinessException(
-                    VerificationErrorCode.RUN_NOT_FOUND,
+                    VerificationErrorCode.RUN_ROW_VANISHED,
                     "검증 실행을 갱신하지 못했습니다. id=" + run.id() + " 갱신된 행=" + updated);
         }
     }
@@ -176,7 +176,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
 
         if (updated != 1) {
             throw new BusinessException(
-                    VerificationErrorCode.RUN_NOT_FOUND,
+                    VerificationErrorCode.RUN_ROW_VANISHED,
                     "통계 상태를 갱신하지 못했습니다. runId=" + runId + " 갱신행=" + updated);
         }
     }

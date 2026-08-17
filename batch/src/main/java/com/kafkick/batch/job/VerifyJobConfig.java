@@ -12,6 +12,7 @@ import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.job.parameters.DefaultJobParametersValidator;
+import org.springframework.batch.core.job.parameters.JobParameter;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
@@ -316,7 +317,7 @@ public class VerifyJobConfig {
                     long runId = requireRunId(jobExecution);
                     VerificationRun run = runs.findById(runId)
                             .orElseThrow(() -> new BusinessException(
-                                    VerificationErrorCode.RUN_NOT_FOUND,
+                                    VerificationErrorCode.RUN_ROW_VANISHED,
                                     "실행 행이 사라졌습니다. runId=" + runId));
 
                     // 합격 판정은 전수 실행만 진다. 지금은 startRunStep 이 INCREMENTAL 을
@@ -740,7 +741,7 @@ public class VerifyJobConfig {
     private static void rejectIssuancesUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
         if (updatedAfter) {
             throw new BusinessException(
-                    VerificationErrorCode.INVALID_AS_OF,
+                    VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
                     "asOf 이후에 갱신된 발급건이 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
                             + "asOf=" + asOf);
         }
@@ -756,7 +757,7 @@ public class VerifyJobConfig {
     private static void rejectStocksUpdatedAfterAsOf(LocalDateTime asOf, boolean updatedAfter) {
         if (updatedAfter) {
             throw new BusinessException(
-                    VerificationErrorCode.INVALID_AS_OF,
+                    VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
                     "asOf 이후에 갱신된 재고가 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
                             + "asOf=" + asOf);
         }
@@ -772,7 +773,7 @@ public class VerifyJobConfig {
     private static void rejectRunningSchedulers(boolean schedulingEnabled) {
         if (schedulingEnabled) {
             throw new BusinessException(
-                    VerificationErrorCode.INVALID_RUN_PARAMS,
+                    VerificationErrorCode.RUNTIME_NOT_QUIESCED,
                     "스케줄러가 켜진 상태에서는 검증할 수 없습니다. "
                             + "batch.scheduling.enabled=false 로 두고 다시 실행하십시오.");
         }
@@ -911,6 +912,17 @@ public class VerifyJobConfig {
             ExpectedFindingRepository expected) {
         if (dataset == DatasetType.CLEAN) {
             return;
+        }
+
+        JobParameter<?> parameter = parameters.getParameter("seedRunId");
+        if (parameter != null && parameter.identifying()) {
+            throw new BusinessException(
+                    VerificationErrorCode.INVALID_RUN_PARAMS,
+                    "seedRunId 는 비식별이어야 합니다. 식별로 넣으면 Spring Batch 가 새 JobInstance 로 "
+                            + "받아 잡을 시작하는데, uk_run_params(as_of, dataset, scope, attempt) 에는 "
+                            + "그 축이 없어 '같은 파라미터의 실행이 이미 있습니다' 로 죽습니다 — "
+                            + "파라미터를 바꿔 던졌는데 그런 메시지가 나옵니다. "
+                            + "seedRunId=" + parameter.value() + ",java.lang.Long,false 로 던지십시오.");
         }
 
         Long seedRunId = parameters.getLong("seedRunId");
