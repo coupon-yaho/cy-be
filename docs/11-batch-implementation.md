@@ -524,11 +524,47 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 `GROUP_CONCAT` 은 쓰지 않는다 — `group_concat_max_len` 기본 1024 바이트를 넘으면 경고만 내고 잘려서 **가드가 열린 채로 실패한다.** **CLEAN 147행이 실측 920 바이트로 한계의 90% 이고, CORRUPT 291행이면 약 1820 바이트로 이미 넘는다.**
 지금 안 잘리는 것은 `GROUP_CONCAT` 을 안 쓰기 때문이지 여유가 있어서가 아니다.
 
-뒤에 붙을 것 — **아직 구현되지 않았다.**
+### 통계는 판정 뒤에 온다 (CY-202)
 
 ```
-마지막        통계(CLEAN 만)
+… → assertFrozenStep → finalizeRunStep → statsAggregateStep(CLEAN 만)
 ```
+
+**판정을 먼저 쓴다.** 통계가 죽어도 `verdict` 는 남고, `stats_status` 가 `NULL` 이라
+`v_latest_stats_run` 이 그 스냅샷을 **물리적으로 안 보여 준다.** 반대 순서면 통계 문제로 판정을 잃는다.
+
+`PARTIAL` 은 쓰지 않는다 — 중간에 죽으면 손대지 않은 `NULL` 로 남고 뷰가 이미 걸러 낸다.
+"절반 쓰다 죽었다" 를 표현하려고 죽는 코드가 값을 쓸 수는 없다. 그건 트랜잭션이 할 일이다.
+
+> **PRD 의 `asof_state` 재사용 서술은 세 테이블 중 하나에도 해당하지 않는다.**
+> PRD 는 *"앞 Step 이 만든 `asof_state` 를 재사용하므로 원본 300만 건을 다시 읽지 않는다"* 고 적었지만,
+> ⑴ 통계가 세는 값은 `issuances.status` 이고 `asof_state.state` 와 **다를 수 있는 것이 검증 대상**이라
+> 통계가 검증 결과에 기대면 순환이 된다, ⑵ `asof_state.coupon_id` 는 **발급건 id** 라(어휘 반전)
+> 회차·등급으로 묶으려면 `issuances` 를 조인해야 해서 스캔이 조인으로 바뀔 뿐 이득이 없다,
+> ⑶ 요일·시각 분포는 `issuance_histories` 에만 있다.
+
+**값의 정본은 시드 구현이다.** `contract.json` 에 통계 조항이 없어 checksum·지문과 달리 계약으로
+고정돼 있지 않다. 그래서 필드마다 시드가 **실제로 읽는 컬럼**을 그대로 쓴다:
+
+| 필드 | 원천 | 시드 근거 |
+|---|---|---|
+| `hourly` | `ISSUE` 이력의 `created_at` | `_history()` 안에서 `event == EV_ISSUE` 일 때 센다 |
+| `sold_out_seconds` | `MAX(issuances.issued_at)` | 이력이 아니라 루프 변수 `last_issue_at` 을 쓴다 |
+| `issued/used/…` | `issuances.status` | 리플레이 상태가 아니다 |
+| 완판 판정 | `issued_total >= coupon_stocks.total_quantity` | `catalog.py` 의 `n >= c.total_quantity` |
+
+**`active_count` 로 완판을 판정하면 안 된다.** 그것은 *현재 보유량*(ISSUED + USED)이라 취소·만료로
+줄어든다 — 미달 회차도 0 이 될 수 있고 완판 회차도 0 이 아닐 수 있다.
+
+**요일 변환은 SQL 이 한다.** `WEEKDAY()` 는 0 = 월요일로 파이썬 `weekday()` 와 같아
+`ELT(WEEKDAY(x) + 1, 'MON', …)` 이 시드의 `DOW[at.weekday()]` 와 글자 단위로 대응한다.
+`DAYNAME()` 은 `lc_time_names` 세션 변수에 의존해 쓰지 않는다.
+
+**`hourly_stats` 는 168행을 전부 쓴다.** 없는 행과 0인 행은 다르다 — 빼면 대시보드가
+"그 시각에 데이터가 없다" 와 "0건이다" 를 구분할 수 없다.
+
+**이력을 읽는 창은 리플레이와 같다** — `id <= frozenMaxHistoryId AND created_at <= asOf`.
+`created_at` 만 걸면 다시 재는 것이라 백데이트 이력을 리플레이는 못 읽고 통계는 읽는다.
 
 ### 판정은 두 값의 조합으로만 뜻이 있다
 
