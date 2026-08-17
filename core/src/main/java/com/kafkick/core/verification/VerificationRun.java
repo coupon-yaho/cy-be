@@ -91,6 +91,11 @@ public record VerificationRun(
         if (finishedTime == null) {
             throw new IllegalArgumentException("검증 종료 시각이 필요합니다.");
         }
+        if (finishedTime.isBefore(startedAt)) {
+            throw new IllegalArgumentException(
+                    "종료 시각은 시작 시각보다 앞설 수 없습니다. 시작=" + startedAt
+                            + " 종료=" + finishedTime);
+        }
 
         return new VerificationRun(
                 id, asOf, fromTs, scope, dataset, attempt,

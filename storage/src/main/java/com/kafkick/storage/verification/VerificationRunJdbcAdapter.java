@@ -160,4 +160,18 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .optional();
     }
 
+    @Override
+    public void updateStatsStatus(long runId, StatsStatus status) {
+        int updated = jdbcClient.sql("""
+                        UPDATE verification_runs SET stats_status = :statsStatus WHERE id = :id
+                        """)
+                .param("statsStatus", status.name())
+                .param("id", runId)
+                .update();
+
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "통계 상태를 갱신하지 못했습니다. runId=" + runId + " 갱신행=" + updated);
+        }
+    }
 }
