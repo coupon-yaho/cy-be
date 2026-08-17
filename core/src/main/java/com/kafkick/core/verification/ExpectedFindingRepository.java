@@ -41,4 +41,11 @@ public interface ExpectedFindingRepository {
      * 누락·오탐이 400씩이면 {@code target_key} 포맷이 어긋난 것이다.
      */
     int countOf(long seedRunId);
+
+    /**
+     * 정답 묶음을 한 값으로 접는다. <b>판정 입력도 얼려야 한다</b> — 데이터 네 축(발급건·재고·
+     * 정책·이력)은 {@code assertFrozenStep} 이 얼리는데 매니페스트는 안 얼려, 실행 중에 주입을
+     * 다시 돌리면 <b>같은 데이터·같은 asOf 인데 판정만 달라진다.</b>
+     */
+    String digestOf(long seedRunId);
 }

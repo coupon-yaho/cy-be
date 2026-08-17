@@ -86,6 +86,9 @@ public class VerifyJobConfig {
 
     static final String SEED_RUN_ID_KEY = "manifest.seedRunId";
 
+    /** 시작 시점의 정답 묶음 지문. 판정 입력도 데이터 네 축처럼 얼려야 한다. */
+    static final String MANIFEST_DIGEST_KEY = "manifest.digest";
+
     /** 규칙마다 반복하면 한 곳만 고치고 나머지를 놓친다. 지금 여섯 벌이다. */
     private static final String MAX_FINDINGS = "${batch.verify.max-findings-per-rule:10000}";
 
@@ -862,6 +865,18 @@ public class VerifyJobConfig {
                     "실행 중에 정답 매니페스트가 사라졌습니다. seedRunId=" + seedRunId);
         }
 
+        // 판정 입력이 실행 중에 바뀌면 같은 데이터·같은 asOf 인데 판정만 달라진다.
+        // 데이터 네 축은 assertFrozenStep 이 얼리는데 매니페스트는 그 Step 뒤에 읽히므로
+        // 여기서 본다 — 아래 두 질의와 같은 트랜잭션이라 스냅샷이 일치한다.
+        String digest = expected.digestOf(seedRunId);
+        if (!frozenManifestDigest(contribution).equals(digest)) {
+            throw new BusinessException(
+                    VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                    "정답 매니페스트가 실행 중에 바뀌었습니다. 주입을 다시 돌렸다면 검증도 "
+                            + "다시 시작해야 합니다. seedRunId=" + seedRunId
+                            + " 시작=" + frozenManifestDigest(contribution) + " 지금=" + digest);
+        }
+
         List<FindingKey> missing = expected.missing(runId, seedRunId);
         List<FindingKey> unexpected = expected.unexpected(runId, seedRunId);
 
@@ -942,6 +957,18 @@ public class VerifyJobConfig {
         }
 
         jobContext.putLong(SEED_RUN_ID_KEY, seedRunId);
+        jobContext.putString(MANIFEST_DIGEST_KEY, expected.digestOf(seedRunId));
+    }
+
+    /** {@code startRunStep} 이 얼려 둔 정답 묶음 지문. */
+    private static String frozenManifestDigest(StepContribution contribution) {
+        Object value = contribution.getStepExecution().getJobExecution()
+                .getExecutionContext().get(MANIFEST_DIGEST_KEY);
+        if (value == null) {
+            throw new IllegalStateException(
+                    "매니페스트 지문이 없습니다. startRunStep 이 먼저 돌아야 합니다.");
+        }
+        return (String) value;
     }
 
     /** {@code startRunStep} 이 얼려 둔 값. 거기서 존재 확인까지 끝냈다. */

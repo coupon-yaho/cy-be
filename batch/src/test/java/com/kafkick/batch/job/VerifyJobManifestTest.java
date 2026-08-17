@@ -304,6 +304,43 @@ class VerifyJobManifestTest {
     }
 
     /**
+     * <b>판정 입력도 얼려야 한다.</b> 데이터 네 축(발급건·재고·정책·이력)은
+     * {@code assertFrozenStep} 이 얼리는데 매니페스트는 그 Step <b>뒤에</b> 읽힌다 —
+     * 실행 중에 주입을 다시 돌리면 같은 데이터·같은 asOf 인데 <b>판정만 달라진다.</b>
+     *
+     * <p>실행 중 변경을 트리거로 만든다. 규칙 Step 이 검출을 쓰는 순간
+     * ({@code startRunStep} 뒤, {@code finalizeRunStep} 앞) 정답이 한 건 늘어난다.
+     * 가드가 없으면 그 실행은 <b>"누락 1건" 으로 조용히 FAIL</b> 하고,
+     * 원인이 규칙인지 데이터가 움직인 것인지 가를 값이 하나도 없다.
+     */
+    @Test
+    @DisplayName("실행 중에 정답 묶음이 바뀌면 판정하지 않고 거부한다")
+    void rejectManifestMutatedDuringRun() throws Exception {
+        expected("DUP_PER_MEMBER", plantDuplicate());
+        jdbcClient.sql("""
+                        CREATE TRIGGER mutate_manifest AFTER INSERT ON verification_findings
+                        FOR EACH ROW INSERT INTO expected_findings
+                            (seed_run_id, corrupt_type, finding_type, target_key, note, created_at)
+                        VALUES (:seedRunId, 6, 'STOCK_MISMATCH',
+                                CONCAT('COUPON:', NEW.id), '-', :createdAt)
+                        """)
+                .param("seedRunId", SEED_RUN)
+                .param("createdAt", AS_OF)
+                .update();
+
+        try {
+            JobExecution execution = launch(1);
+
+            assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+            assertThat(failureMessagesOf(execution))
+                    .as("'누락 1건' 이 아니라 '매니페스트가 바뀌었다' 로 죽어야 원인이 보인다")
+                    .anyMatch(m -> m.contains("정답 매니페스트가 실행 중에 바뀌었습니다"));
+        } finally {
+            jdbcClient.sql("DROP TRIGGER IF EXISTS mutate_manifest").update();
+        }
+    }
+
+    /**
      * <b>설명은 방어가 아니다.</b> 오류 메시지에 "끝의 false 가 비식별이다" 를 적어 두었지만,
      * 식별로 던져도 코드가 아무 말 없이 받으면 운영자는 그 문장을 볼 기회조차 없다 —
      * 잡이 시작돼 {@code rejectExistingRun} 의 <i>"같은 파라미터의 실행이 이미 있습니다"</i> 로

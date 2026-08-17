@@ -181,6 +181,66 @@ class ExpectedFindingJdbcAdapterTest {
         assertThat(adapter.exists(SEED_RUN)).isTrue();
     }
 
+    /**
+     * <b>판정 입력을 얼리는 값이다.</b> 데이터 네 축은 {@code assertFrozenStep} 이 얼리는데
+     * 매니페스트는 그 뒤에 읽혀, 실행 중에 주입을 다시 돌리면 같은 데이터에 다른 판정이 나온다.
+     * 지문이 <b>내용에만</b> 반응해야 그 상황을 가릴 수 있다.
+     */
+    @Test
+    @DisplayName("같은 집합이면 같은 지문, 한 건만 늘어도 달라진다")
+    void foldManifestIntoOneValue() {
+        expected(FindingType.STOCK_MISMATCH, "COUPON:7", 7L, null);
+        String before = adapter.digestOf(SEED_RUN);
+
+        assertThat(adapter.digestOf(SEED_RUN))
+                .as("정상 재실행이 거부되면 안 된다")
+                .isEqualTo(before);
+
+        expected(FindingType.STOCK_MISMATCH, "COUPON:9", 9L, null);
+
+        assertThat(adapter.digestOf(SEED_RUN)).isNotEqualTo(before);
+    }
+
+    /**
+     * <b>내용이 같으면 묶음 번호가 달라도 같은 값이다.</b> {@code seed_run_id} 나 행 {@code id} 가
+     * 재료에 섞이면 "같은 정답인가" 를 물을 수 없고, 지문이 아니라 그냥 일련번호가 된다.
+     */
+    @Test
+    @DisplayName("지문은 내용에만 반응한다 — 묶음 번호도 삽입 순서도 안 탄다")
+    void reactToContentOnly() {
+        expected(FindingType.STOCK_MISMATCH, "COUPON:7", 7L, null);
+        expected(FindingType.DUP_PER_MEMBER, "COUPON:7|MEMBER:2", 7L, 2L);
+        String first = adapter.digestOf(SEED_RUN);
+
+        // 같은 두 건을 다른 묶음에 반대 순서로 심는다.
+        for (Object[] row : new Object[][] {
+                {FindingType.DUP_PER_MEMBER, "COUPON:7|MEMBER:2"},
+                {FindingType.STOCK_MISMATCH, "COUPON:7"}}) {
+            jdbcClient.sql("""
+                            INSERT INTO expected_findings
+                                (seed_run_id, corrupt_type, finding_type, target_key,
+                                 note, created_at)
+                            VALUES (2, 1, :findingType, :targetKey, '-', :createdAt)
+                            """)
+                    .param("findingType", ((FindingType) row[0]).name())
+                    .param("targetKey", row[1])
+                    .param("createdAt", AS_OF)
+                    .update();
+        }
+
+        assertThat(adapter.digestOf(2L)).isEqualTo(first);
+    }
+
+    /** 없는 묶음도 값을 낸다 — 부재는 {@code exists} 가 따로 가른다. */
+    @Test
+    @DisplayName("빈 묶음과 내용이 있는 묶음은 지문이 다르다")
+    void distinguishEmptyManifest() {
+        String empty = adapter.digestOf(99L);
+        expected(FindingType.STOCK_MISMATCH, "COUPON:7", 7L, null);
+
+        assertThat(adapter.digestOf(SEED_RUN)).isNotEqualTo(empty);
+    }
+
     /** 다른 실행의 검출은 이 실행의 대조에 안 들어간다. */
     @Test
     @DisplayName("다른 실행의 검출은 섞이지 않는다")

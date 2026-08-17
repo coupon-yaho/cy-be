@@ -58,6 +58,22 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
              ORDER BY CAST(f.finding_type AS BINARY), CAST(f.target_key AS BINARY)
             """;
 
+    /**
+     * <b>{@code BIT_XOR} 은 순서를 안 탄다.</b> 집합을 접는 데 정확히 맞는 성질이고,
+     * {@code uk_expected(seed_run_id, finding_type, target_key)} 가 중복을 막아
+     * "행 다중집합" 과 "키 집합" 이 같아진다 — 그 유니크가 없으면 이 값은 집합 지문이 아니다.
+     *
+     * <p>{@code GROUP_CONCAT} 을 안 쓰는 이유는 {@code policyDigest} 와 같다 —
+     * {@code group_concat_max_len} 을 넘으면 경고만 내고 잘려, 뒤쪽 정답이 지문에서 빠진다.
+     */
+    private static final String SELECT_DIGEST = """
+            SELECT CONCAT(COUNT(*), ':', LPAD(HEX(BIT_XOR(CAST(CONV(SUBSTR(
+                     SHA2(CONCAT_WS(0x1f, finding_type, target_key), 256), 1, 16), 16, 10)
+                     AS UNSIGNED))), 16, '0'))
+              FROM expected_findings
+             WHERE seed_run_id = :seedRunId
+            """;
+
     private static final String EXISTS_SEED_RUN = """
             SELECT EXISTS(SELECT 1 FROM expected_findings WHERE seed_run_id = :seedRunId)
             """;
@@ -95,6 +111,14 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
                 .single();
 
         return count == null ? 0 : count;
+    }
+
+    @Override
+    public String digestOf(long seedRunId) {
+        return jdbcClient.sql(SELECT_DIGEST)
+                .param("seedRunId", seedRunId)
+                .query(String.class)
+                .single();
     }
 
     private List<FindingKey> query(String sql, long runId, long seedRunId) {

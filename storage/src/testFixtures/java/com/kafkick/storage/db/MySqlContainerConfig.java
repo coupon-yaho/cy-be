@@ -52,6 +52,10 @@ public class MySqlContainerConfig {
                         // 테스트가 운영보다 느슨한 모드에서 돈다.
                         "--sql-mode=ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
                                 + "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
-                        "--local-infile=0");
+                        "--local-infile=0",
+                        // 위 주석대로 binlog 는 테스트에 불필요한데 이미지 기본값이 ON 이었다.
+                        // 켜져 있으면 SUPER 없는 계정이 트리거를 못 만들어(오류 1419),
+                        // "실행 중에 데이터가 바뀐다" 를 재현하는 테스트를 쓸 수 없다.
+                        "--skip-log-bin");
     }
 }
