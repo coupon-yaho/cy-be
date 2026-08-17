@@ -132,14 +132,15 @@ class VerifyJobFinalizeTest {
      * 같은 값</b>으로 보인다 — 시드도 {@code SKIPPED} 로 심는다.
      */
     @Test
-    @DisplayName("CLEAN 은 통계 상태를 판정 Step 이 건드리지 않는다 — 통계 Step 몫이다")
-    void leaveStatsStatusForCleanRun() throws Exception {
+    @DisplayName("CLEAN 의 통계 상태는 통계 Step 이 COMPLETE 로 닫는다")
+    void completeStatsStatusForCleanRun() throws Exception {
         cleanIssuance();
         launch(1);
 
         assertThat(runRow(1).get("stats_status"))
-                .as("통계 Step 이 붙으면 그쪽이 COMPLETE/PARTIAL 을 쓴다")
-                .isNull();
+                .as("판정 Step 은 CLEAN 의 이 값을 안 건드린다. 통계 Step 이 끝까지 갔을 때만 "
+                        + "COMPLETE 가 되고, 그때만 v_latest_stats_run 이 이 스냅샷을 가리킨다")
+                .isEqualTo("COMPLETE");
     }
 
     @Test
@@ -287,8 +288,8 @@ class VerifyJobFinalizeTest {
     }
 
     @Test
-    @DisplayName("판정 Step 이 체인 마지막이다 — 규칙과 얼림 확인이 전부 끝난 뒤다")
-    void runFinalizeLast() throws Exception {
+    @DisplayName("판정이 규칙·얼림 확인 뒤이고 통계보다 앞이다")
+    void runFinalizeAfterRulesAndBeforeStats() throws Exception {
         cleanIssuance();
 
         List<String> steps = launch(1).getStepExecutions().stream()
@@ -296,7 +297,12 @@ class VerifyJobFinalizeTest {
                 .map(StepExecution::getStepName)
                 .toList();
 
-        assertThat(steps).last().isEqualTo("finalizeRunStep");
+        assertThat(steps).last().isEqualTo("statsAggregateStep");
+        assertThat(steps.indexOf("finalizeRunStep"))
+                .as("통계가 죽어도 판정은 남아야 한다")
+                .isLessThan(steps.indexOf("statsAggregateStep"));
+        assertThat(steps.indexOf("assertFrozenStep"))
+                .isLessThan(steps.indexOf("finalizeRunStep"));
     }
 
     private List<String> failureMessagesOf(JobExecution execution) {

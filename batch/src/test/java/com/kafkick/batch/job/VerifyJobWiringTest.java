@@ -48,7 +48,7 @@ class VerifyJobWiringTest {
     /** 규칙이 아닌 Step. 새 Step 은 반드시 둘 중 하나에 등록해야 한다. */
     private static final Set<String> INFRA_STEPS =
             Set.of("startRunStep", "replayStep", "usageCountStep",
-                    "assertFrozenStep", "finalizeRunStep");
+                    "assertFrozenStep", "finalizeRunStep", "statsAggregateStep");
 
     @Autowired
     private Job verifyJob;
@@ -126,11 +126,16 @@ class VerifyJobWiringTest {
      * 합격·불합격을 읽게 된다.
      */
     @Test
-    @DisplayName("얼림 확인 다음이 판정이고, 판정이 마지막이다")
-    void assertFrozenThenFinalize() {
+    @DisplayName("얼림 확인 → 판정 → 통계 순이다")
+    void assertFrozenThenFinalizeThenStats() {
         List<String> names = stepNames();
 
-        assertThat(names).last().isEqualTo("finalizeRunStep");
+        // 통계가 마지막이다. 판정을 먼저 써야 통계가 죽어도 verdict 가 남고,
+        // stats_status 가 NULL 이라 v_latest_stats_run 이 그 스냅샷을 안 가리킨다.
+        assertThat(names).last().isEqualTo("statsAggregateStep");
+        assertThat(names.indexOf("finalizeRunStep"))
+                .as("통계 문제로 판정을 잃으면 안 된다")
+                .isLessThan(names.indexOf("statsAggregateStep"));
         assertThat(names.indexOf("assertFrozenStep"))
                 .as("얼림이 깨진 실행에 판정을 남기면 안 된다")
                 .isLessThan(names.indexOf("finalizeRunStep"));

@@ -40,7 +40,9 @@ import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
 import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.HourlyIssued;
 import com.kafkick.core.verification.ScopeType;
+import com.kafkick.core.verification.StatsRepository;
 import com.kafkick.core.verification.StatsStatus;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.verification.VerificationFinding;
@@ -179,7 +181,8 @@ public class VerifyJobConfig {
             Step stockMismatchStep,
             Step gradeViolationStep,
             Step assertFrozenStep,
-            Step finalizeRunStep
+            Step finalizeRunStep,
+            Step statsAggregateStep
     ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
@@ -195,6 +198,7 @@ public class VerifyJobConfig {
                 .next(gradeViolationStep)
                 .next(assertFrozenStep)
                 .next(finalizeRunStep)
+                .next(statsAggregateStep)
                 .build();
     }
 
@@ -364,6 +368,62 @@ public class VerifyJobConfig {
                         runs.recordComparedManifest(runId, frozenSeedRunId(jobExecution));
                         runs.updateStatsStatus(runId, StatsStatus.SKIPPED);
                     }
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
+                .build();
+    }
+
+    /**
+     * <b>판정 뒤에 온다.</b> 통계가 죽어도 {@code verdict} 는 이미 남고, {@code stats_status} 가
+     * {@code NULL} 이라 {@code v_latest_stats_run} 이 그 스냅샷을 <b>물리적으로 안 보여 준다</b> —
+     * 부분값을 섞어 읽는 사고가 그 자리에서 막힌다. 반대 순서면 통계 문제로 판정을 잃는다.
+     *
+     * <p><b>{@code PARTIAL} 은 쓰지 않는다.</b> 중간에 죽으면 {@code stats_status} 가 손대지 않은
+     * {@code NULL} 로 남고 뷰가 이미 걸러 낸다. 세 값 중 하나를 안 쓰는 것이 이상해 보이지만,
+     * "절반 쓰다 죽었다" 를 표현하려고 죽는 코드가 값을 쓸 수는 없다 — 그건 트랜잭션이 할 일이다.
+     *
+     * <p><b>CLEAN 전용이다.</b> 오염 데이터 위의 집계는 뜻이 없고 CORRUPT 는
+     * {@code finalizeRunStep} 이 {@code SKIPPED} 로 닫는다.
+     *
+     * <p><b>잡 종료 코드가 이 Step 값으로 덮인다.</b> {@code SimpleJob} 은 마지막 Step 의
+     * {@code ExitStatus} 를 <b>대입</b>하므로({@code javap -c SimpleJob}) 불일치 때
+     * {@code finalizeRunStep} 이 세운 {@code FAILED} 표식이 잡 수준에서 사라진다. 게이트가 읽는
+     * 것은 {@code verification_runs.verdict} 라 판정에는 영향이 없다 — 그 표식을 신호로 쓰지
+     * 말라고 {@link #judgeAgainstManifest} 에 적어 둔 이유가 이것이다.
+     */
+    @Bean
+    public Step statsAggregateStep(StatsRepository stats, VerificationRunRepository runs) {
+        return new StepBuilder("statsAggregateStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
+                    JobExecution jobExecution = stepExecution.getJobExecution();
+                    DatasetType dataset = DatasetType.valueOf(
+                            jobExecution.getJobParameters().getString("dataset"));
+                    if (dataset != DatasetType.CLEAN) {
+                        return RepeatStatus.FINISHED;
+                    }
+
+                    long runId = requireRunId(jobExecution);
+                    LocalDateTime asOf = jobExecution.getJobParameters()
+                            .getLocalDateTime("asOf");
+
+                    // 재시작하면 앞 실행의 부분 결과가 남아 있다. 그 위에 다시 쓰면
+                    // (run_id, coupon_id) 중복키로 죽거나 낡은 행이 섞인다.
+                    stats.clear(runId);
+                    stats.aggregateCouponStats(runId);
+                    stats.aggregateGradeStats(runId);
+
+                    // 창은 리플레이와 같다 — 얼린 상한을 넘겨야 백데이트 이력이 통계에만
+                    // 들어오는 것을 막는다. 168행을 전부 쓴다: 없는 행과 0인 행은 다르다.
+                    long frozenMaxHistory = jobExecution.getExecutionContext()
+                            .getLong(SCAN_MAX_HISTORY_KEY, 0L);
+                    stats.appendHourlyStats(runId, HourlyIssued.fillAll(
+                            stats.issuedByHour(frozenMaxHistory, asOf)));
+
+                    // 마지막이다. 여기까지 왔을 때만 뷰가 이 스냅샷을 가리킨다.
+                    runs.updateStatsStatus(runId, StatsStatus.COMPLETE);
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
