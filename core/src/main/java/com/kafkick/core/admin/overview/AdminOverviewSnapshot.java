@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.overview;
+package com.kafkick.core.admin.overview;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -308,6 +308,7 @@ public record AdminOverviewSnapshot(
      * @param campaignName 운영 화면에 표시할 캠페인 이름
      * @param opensAt 캠페인 오픈 시각; 오픈 시각이 없거나 확인할 수 없으면 null
      * @param severity 운영 조치 우선순위의 심각도
+     * @param customerImpact 고객 영향 범위
      * @param customerImpactText 현재 고객 영향을 설명하는 서버 제공 문구
      * @param detectedAt 위험을 최초 감지한 시각; 최초 시각을 알 수 없으면 null
      * @param duration 위험이 지속된 시간; 계산할 수 없으면 null
@@ -318,6 +319,7 @@ public record AdminOverviewSnapshot(
             String campaignName,
             Instant opensAt,
             Severity severity,
+            CustomerImpact customerImpact,
             String customerImpactText,
             Instant detectedAt,
             Duration duration,

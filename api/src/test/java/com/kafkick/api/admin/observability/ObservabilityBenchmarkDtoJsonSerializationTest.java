@@ -52,6 +52,7 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
 
         assertThat(json)
                 .contains("\"type\":\"GLOBAL\"")
+                .contains("\"window\":\"ONE_MINUTE\"")
                 .contains("\"phase\":\"LIVE\"")
                 .contains("\"verdict\":null")
                 .contains("\"issueAttemptRps\":{\"value\":null,\"state\":\"PENDING\"")

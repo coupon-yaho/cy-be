@@ -27,7 +27,7 @@ public final class AnalyticsRangeValidator implements ConstraintValidator<ValidA
         if (query.from().isAfter(query.to())) {
             return violation(context, "from은 to보다 늦을 수 없습니다.");
         }
-        if (query.to().isAfter(query.from().plusYears(1))) {
+        if (query.to().isAfter(query.from().plusYears(1).minusDays(1))) {
             return violation(context, "조회 기간은 최대 1년입니다.");
         }
         return true;

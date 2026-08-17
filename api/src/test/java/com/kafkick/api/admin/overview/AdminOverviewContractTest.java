@@ -15,6 +15,9 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.admin.overview.AdminOverviewProvider;
+import com.kafkick.core.admin.overview.AdminOverviewQuery;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
@@ -134,12 +137,14 @@ class AdminOverviewContractTest {
                 "딜리버리고 여름특가",
                 FROM,
                 Severity.CRITICAL,
+                AdminOverviewSnapshot.CustomerImpact.WIDESPREAD,
                 "입장 처리가 멈춰 고객 대기가 지속됩니다.",
                 TO,
                 Duration.ofSeconds(138),
                 action);
 
         assertThat(item.couponId()).isEqualTo(17L);
+        assertThat(item.customerImpact()).isEqualTo(AdminOverviewSnapshot.CustomerImpact.WIDESPREAD);
         assertThat(item.duration()).isEqualTo(Duration.ofMinutes(2).plusSeconds(18));
         assertThat(item.recommendedAction().code()).isEqualTo(AdminOverviewSnapshot.ActionCode.QUEUE_STALLED);
         assertThat(item.recommendedAction().displayText()).isEqualTo("D2에서 입장 처리 상태 확인");

@@ -20,9 +20,11 @@ import com.kafkick.api.admin.notification.dto.NotificationResendAcceptedResponse
 import com.kafkick.api.admin.observability.dto.AdminEventItem;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.support.LiveEventPollResponse;
+import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.member.Grade;
 import com.kafkick.core.observation.EventType;
+import com.kafkick.core.observation.SourceStatus;
 
 /** 관리자 API 공통 응답 초안이 선언한 JSON 필드 구조를 유지하는지 검증합니다. */
 class AdminDtoJsonSerializationTest {
@@ -32,7 +34,7 @@ class AdminDtoJsonSerializationTest {
     /** 각 도메인의 빈 응답 예시도 필수 필드와 nullable 구조를 빠뜨리지 않는지 확인합니다. */
     @Test
     void responseDraftsSerializeTheirDeclaredJsonFields() throws Exception {
-        assertThat(objectMapper.writeValueAsString(AdminOverviewResponse.draft(Instant.parse("2026-08-16T00:00:00Z"))))
+        assertThat(objectMapper.writeValueAsString(unavailableOverview()))
                 .contains("snapshotAt", "overallStatus");
         assertThat(objectMapper.writeValueAsString(CouponMetricsResponse.draft(1L, MetricsWindow.FIVE_MINUTES)))
                 .contains("couponId", "issuanceProgress");
@@ -52,6 +54,20 @@ class AdminDtoJsonSerializationTest {
                 .contains("nextAfterCursor", "eventsMayBeMissing");
         assertThat(objectMapper.writeValueAsString(BenchmarkListResponse.draft()))
                 .contains("items", "hasOlder");
+    }
+
+    /** 모든 운영 현황 원천이 미관측인 직렬화 입력을 테스트 범위에서만 생성합니다. */
+    private AdminOverviewResponse unavailableOverview() {
+        return new AdminOverviewResponse(
+                Instant.parse("2026-08-16T00:00:00Z"),
+                AdminOverviewResponse.OverallStatus.UNAVAILABLE,
+                unavailable(), unavailable(), unavailable(), unavailable(),
+                unavailable(), unavailable(), unavailable(), unavailable(),
+                unavailable(), unavailable(), unavailable());
+    }
+
+    private <T> ObservedValue<T> unavailable() {
+        return new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null);
     }
 
     /** 이벤트를 관리자용으로 투영할 때 등급과 두 queue 순번을 분리하고 원문 코드를 숨기는지 검증합니다. */

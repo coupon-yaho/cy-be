@@ -14,8 +14,8 @@ class AdminContractEnumTest {
     @Test
     void adminOwnedEnumsKeepTheirWireNames() {
         assertThat(names(QueueState.values())).containsExactly("IDLE", "QUEUEING", "DRAINING");
-        assertThat(Arrays.stream(MetricsWindow.values()).map(MetricsWindow::wireValue).toList())
-                .containsExactly("1m", "5m", "15m");
+        assertThat(names(MetricsWindow.values()))
+                .containsExactly("ONE_MINUTE", "FIVE_MINUTES", "FIFTEEN_MINUTES");
         assertThat(names(BenchmarkRunState.values())).containsExactly(
                 "CREATED", "RUNNING", "STOPPING", "STOPPED", "FINALIZING", "FINALIZED", "FAILED");
         assertThat(names(BrandCategory.values())).containsExactly("CAFE", "SHOP", "DELIVERY", "CULTURE");

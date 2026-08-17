@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability.dto;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.consistency.ConsistencyPhase;
@@ -69,7 +70,37 @@ public record AdminMetricsResponse(
      * @param couponId COUPON 범위의 쿠폰 식별자; 다른 범위이면 null
      * @param benchmarkRunId BENCHMARK_RUN 범위의 실행 식별자; 다른 범위이면 null
      */
-    public record MetricsScope(MetricsScopeType type, Long couponId, Long benchmarkRunId) { }
+    public record MetricsScope(MetricsScopeType type, Long couponId, Long benchmarkRunId) {
+
+        /**
+         * 범위 유형마다 허용되는 식별자 하나만 보유하도록 생성 시점에 검증합니다.
+         *
+         * @throws NullPointerException type이 null인 경우
+         * @throws IllegalArgumentException 범위에 필요한 식별자가 없거나 불필요한 식별자가 지정된 경우
+         */
+        public MetricsScope {
+            Objects.requireNonNull(type, "type");
+            switch (type) {
+                case GLOBAL -> {
+                    if (couponId != null || benchmarkRunId != null) {
+                        throw new IllegalArgumentException("GLOBAL 범위에는 식별자를 지정할 수 없습니다.");
+                    }
+                }
+                case COUPON -> {
+                    if (couponId == null || couponId <= 0 || benchmarkRunId != null) {
+                        throw new IllegalArgumentException(
+                                "COUPON 범위에는 양수 couponId만 지정해야 합니다.");
+                    }
+                }
+                case BENCHMARK_RUN -> {
+                    if (benchmarkRunId == null || benchmarkRunId <= 0 || couponId != null) {
+                        throw new IllegalArgumentException(
+                                "BENCHMARK_RUN 범위에는 양수 benchmarkRunId만 지정해야 합니다.");
+                    }
+                }
+            }
+        }
+    }
 
     /** 관리 지표가 표현하는 논리 범위입니다. */
     public enum MetricsScopeType { GLOBAL, COUPON, BENCHMARK_RUN }
@@ -102,7 +133,27 @@ public record AdminMetricsResponse(
             ObservedValue<Long> activeDbGap,
             ObservedValue<Long> dbCounterGap,
             ObservedValue<Long> persistGap
-    ) { }
+    ) {
+
+        /**
+         * LIVE 단계에는 최종 판정을 허용하지 않고 FINAL 단계에는 판정과 심각도를 모두 요구합니다.
+         *
+         * @throws NullPointerException phase가 null인 경우
+         * @throws IllegalArgumentException 단계와 verdict 또는 severity 조합이 유효하지 않은 경우
+         */
+        public ConsistencyResponse {
+            Objects.requireNonNull(phase, "phase");
+            if (phase == ConsistencyPhase.LIVE && verdict != null) {
+                throw new IllegalArgumentException("LIVE 단계에는 verdict를 지정할 수 없습니다.");
+            }
+            if (phase == ConsistencyPhase.FINAL && verdict == null) {
+                throw new IllegalArgumentException("FINAL 단계에는 verdict가 필요합니다.");
+            }
+            if (phase == ConsistencyPhase.FINAL && severity == null) {
+                throw new IllegalArgumentException("FINAL 단계에는 severity가 필요합니다.");
+            }
+        }
+    }
 
     /**
      * 발급 시도·성공·대기 수락·정책 거절·시스템 실패 처리량을 독립 관측값으로 제공합니다.

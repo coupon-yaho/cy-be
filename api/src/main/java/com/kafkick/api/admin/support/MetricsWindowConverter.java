@@ -9,6 +9,15 @@ public class MetricsWindowConverter implements Converter<String, MetricsWindow> 
 
     @Override
     public MetricsWindow convert(String source) {
-        return MetricsWindow.fromWireValue(source);
+        if (source == null) {
+            throw new IllegalArgumentException("지원하지 않는 metrics window입니다: null");
+        }
+        return switch (source) {
+            case "1m" -> MetricsWindow.ONE_MINUTE;
+            case "5m" -> MetricsWindow.FIVE_MINUTES;
+            case "15m" -> MetricsWindow.FIFTEEN_MINUTES;
+            default -> throw new IllegalArgumentException(
+                    "지원하지 않는 metrics window입니다: " + source);
+        };
     }
 }

@@ -4,14 +4,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.ActionCode;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.CampaignQueueAssessment;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.CustomerImpact;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.CustomerOutcomeType;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.IssuanceFlowState;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.TargetScreen;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot.TrendDirection;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.ActionCode;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CampaignQueueAssessment;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CustomerImpact;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CustomerOutcomeType;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.IssuanceFlowState;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.TargetScreen;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot.TrendDirection;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
@@ -30,7 +30,8 @@ import com.kafkick.core.coupon.CouponStatus;
  *
  * @param snapshotAt 이 응답이 나타내는 기준 시각
  * @param overallStatus 전체 응답 데이터의 완전성 상태
- * @param campaignRisk 캠페인 상태 기반 위험 요약과 해당 원천 상태
+ * @param actionRequired 조치 필요 캠페인의 전체·긴급·주의 수와 해당 원천 상태
+ * @param openingSoon 30분 내 오픈 및 준비 미완료 캠페인 수와 해당 원천 상태
  * @param queueRisk 대기열 기준 초과 요약과 해당 원천 상태
  * @param stockRisk 재고·소진 위험 요약과 해당 원천 상태
  * @param aggregateIssuanceRate 전체 캠페인의 현재·최고 발급률과 관측 상태
@@ -42,7 +43,9 @@ import com.kafkick.core.coupon.CouponStatus;
  * @param customerOutcomes 최근 관측 구간의 전 캠페인 O3 고객 결과 집계
  */
 public record AdminOverviewResponse(
-        Instant snapshotAt, OverallStatus overallStatus, ObservedValue<CampaignRiskSummary> campaignRisk,
+        Instant snapshotAt, OverallStatus overallStatus,
+        ObservedValue<ActionRequiredSummary> actionRequired,
+        ObservedValue<OpeningSoonSummary> openingSoon,
         ObservedValue<QueueRiskSummary> queueRisk, ObservedValue<StockRiskSummary> stockRisk,
         ObservedValue<AggregateIssuanceRate> aggregateIssuanceRate,
         ObservedValue<AggregateQueue> aggregateQueue,
@@ -52,41 +55,21 @@ public record AdminOverviewResponse(
         ObservedValue<List<CampaignOverview>> campaigns,
         ObservedValue<CustomerOutcomeSummary> customerOutcomes) {
     /**
-     * 모든 원천이 미수집 상태인 운영 개요 예시를 만듭니다.
+     * 조치가 필요한 캠페인의 전체·긴급·주의 건수를 구분한 요약입니다.
      *
-     * @param snapshotAt 예시에 사용할 기준 시각
-     * @return 모든 개별 관측값이 UNAVAILABLE/null인 운영 개요
+     * @param totalCount 전체 조치 필요 캠페인 수
+     * @param urgentCount 즉시 조치가 필요한 캠페인 수
+     * @param warningCount 주의 수준 캠페인 수
      */
-    public static AdminOverviewResponse draft(Instant snapshotAt) {
-        // 직렬화 계약 예시이므로 수집되지 않은 위험 수치를 0으로 채우지 않습니다.
-        return new AdminOverviewResponse(
-                snapshotAt,
-                OverallStatus.UNAVAILABLE,
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null),
-                new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null)
-        );
-    }
+    public record ActionRequiredSummary(long totalCount, long urgentCount, long warningCount) { }
 
     /**
-     * 긴급·경고·오픈 임박·준비 미완료 캠페인 수를 구분한 요약입니다.
+     * 30분 안에 오픈하는 캠페인과 준비 미완료 캠페인 수를 구분한 요약입니다.
      *
-     * @param actionRequiredCount 전체 조치 필요 캠페인 수
-     * @param urgentCampaignCount 즉시 조치가 필요한 캠페인 수
-     * @param warningCampaignCount 경고 수준 캠페인 수
-     * @param openingSoonCount 곧 오픈하지만 준비 확인이 필요한 캠페인 수
-     * @param preparationIncompleteCount 필수 준비가 끝나지 않은 캠페인 수
+     * @param totalCount 30분 안에 오픈하는 전체 캠페인 수
+     * @param preparationIncompleteCount 그중 준비 완료가 확인되지 않은 캠페인 수
      */
-    public record CampaignRiskSummary(long actionRequiredCount, long urgentCampaignCount,
-                                      long warningCampaignCount, long openingSoonCount,
-                                      long preparationIncompleteCount) { }
+    public record OpeningSoonSummary(long totalCount, long preparationIncompleteCount) { }
 
     /**
      * 대기열 기준을 초과한 것으로 판정된 캠페인 수입니다.

@@ -14,8 +14,8 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
-import com.kafkick.api.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
@@ -30,6 +30,7 @@ class AdminOverviewDtoJsonSerializationTest {
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-17T05:03:58Z");
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-17T05:03:57Z");
+    private static final Instant OPENING_OBSERVED_AT = Instant.parse("2026-08-17T05:03:56Z");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -41,9 +42,13 @@ class AdminOverviewDtoJsonSerializationTest {
                 SNAPSHOT_AT,
                 AdminOverviewResponse.OverallStatus.PARTIAL,
                 new ObservedValue<>(
-                        new AdminOverviewResponse.CampaignRiskSummary(2, 1, 1, 2, 1),
+                        new AdminOverviewResponse.ActionRequiredSummary(2, 1, 1),
                         SourceStatus.VALID,
                         OBSERVED_AT),
+                new ObservedValue<>(
+                        new AdminOverviewResponse.OpeningSoonSummary(2, 1),
+                        SourceStatus.STALE,
+                        OPENING_OBSERVED_AT),
                 new ObservedValue<>(
                         new AdminOverviewResponse.QueueRiskSummary(1, Duration.ofMinutes(12)),
                         SourceStatus.VALID,
@@ -78,8 +83,8 @@ class AdminOverviewDtoJsonSerializationTest {
 
         assertThat(json)
                 .contains("\"snapshotAt\":\"2026-08-17T05:03:58Z\"")
-                .contains("\"observedAt\":\"2026-08-17T05:03:57Z\"")
-                .contains("\"actionRequiredCount\":2")
+                .contains("\"actionRequired\":{\"value\":{\"totalCount\":2,\"urgentCount\":1,\"warningCount\":1},\"state\":\"VALID\",\"observedAt\":\"2026-08-17T05:03:57Z\"}")
+                .contains("\"openingSoon\":{\"value\":{\"totalCount\":2,\"preparationIncompleteCount\":1},\"state\":\"STALE\",\"observedAt\":\"2026-08-17T05:03:56Z\"}")
                 .contains("\"longestWait\":\"PT12M\"")
                 .contains("\"campaignName\":\"딜리버리고 여름특가\"")
                 .contains("\"duration\":\"PT2M18S\"")
@@ -97,7 +102,11 @@ class AdminOverviewDtoJsonSerializationTest {
                 SNAPSHOT_AT,
                 AdminOverviewResponse.OverallStatus.COMPLETE,
                 new ObservedValue<>(
-                        new AdminOverviewResponse.CampaignRiskSummary(0, 0, 0, 0, 0),
+                        new AdminOverviewResponse.ActionRequiredSummary(0, 0, 0),
+                        SourceStatus.VALID,
+                        OBSERVED_AT),
+                new ObservedValue<>(
+                        new AdminOverviewResponse.OpeningSoonSummary(0, 0),
                         SourceStatus.VALID,
                         OBSERVED_AT),
                 new ObservedValue<>(
@@ -176,7 +185,7 @@ class AdminOverviewDtoJsonSerializationTest {
         AdminOverviewResponse response = new AdminOverviewResponse(
                 SNAPSHOT_AT,
                 AdminOverviewResponse.OverallStatus.PARTIAL,
-                unavailable(), unavailable(), unavailable(),
+                unavailable(), unavailable(), unavailable(), unavailable(),
                 new ObservedValue<>(
                         new AdminOverviewResponse.AggregateIssuanceRate(612.0, 840.0),
                         SourceStatus.VALID, OBSERVED_AT),
