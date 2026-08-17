@@ -14,6 +14,7 @@ import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -75,6 +76,13 @@ class VerifyJobStatsTest {
         return execution.getExecutionContext().getLong(VerifyJobConfig.RUN_ID_KEY);
     }
 
+    private StepExecution statsStep(JobExecution execution) {
+        return execution.getStepExecutions().stream()
+                .filter(step -> "statsAggregateStep".equals(step.getStepName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("statsAggregateStep 이 안 돌았다"));
+    }
+
     private Long latestStatsRun() {
         return jdbcClient.sql("SELECT id FROM v_latest_stats_run")
                 .query(Long.class)
@@ -97,21 +105,70 @@ class VerifyJobStatsTest {
     @DisplayName("CLEAN 은 세 스냅샷을 남기고 뷰가 그 실행을 가리킨다")
     void writeSnapshotsAndPointViewAtRun() throws Exception {
         cleanIssuance();
+        // 발급이 없는 회차를 하나 더 둔다. 이것이 없으면 coupons 드라이빙을 issuances
+        // 드라이빙으로 바꾸는 회귀를 이 테스트가 못 잡는다.
+        seed.newCoupon();
 
         JobExecution execution = launch("CLEAN", 1);
         long runId = runIdOf(execution);
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(countIn("coupon_stats", runId))
-                .as("회차 하나 — 발급이 없는 회차도 행을 받는다")
+                .as("회차 둘 — 발급이 없는 회차도 행을 받는다")
+                .isEqualTo(2);
+        assertThat(countIn("grade_stats", runId))
+                .as("등급 쌍은 존재하는 것만 — 빈 회차는 쌍이 없다")
                 .isEqualTo(1);
-        assertThat(countIn("grade_stats", runId)).isEqualTo(1);
         assertThat(countIn("hourly_stats", runId))
                 .as("7 × 24. 빈 칸도 0 으로 쓴다")
                 .isEqualTo(168);
         assertThat(latestStatsRun())
                 .as("뷰가 이 실행을 가리켜야 대시보드가 이 스냅샷을 읽는다")
                 .isEqualTo(runId);
+        // batch 모듈에는 로깅 채널이 없어 Step 카운터와 종료 메시지가 유일한 관측 수단이다.
+        StepExecution stats = statsStep(execution);
+        assertThat(stats.getWriteCount())
+                .as("회차 2 + 등급쌍 1 + 요일시각 168")
+                .isEqualTo(171);
+        assertThat(stats.getExitStatus().getExitDescription())
+                .contains("회차 2").contains("등급쌍 1").contains("요일시각 168");
+    }
+
+    /**
+     * <b>불합격 데이터 위의 집계도 뜻이 없다.</b> CORRUPT 를 건너뛴 근거가 그것인데, CLEAN 에서
+     * 검출이 났다는 것은 <b>그 데이터가 실제로 어긋났다</b>는 뜻이라 같은 근거가 적용된다.
+     *
+     * <p>이것이 없으면 시연 직전 재고 불일치 한 건이 남은 상태로 검증을 돌릴 때, 대시보드가
+     * <b>"정합성 불합격 데이터로 만든 통계"</b> 를 아무 표시 없이 보여 준다 — 그 실행의
+     * {@code attempt} 가 더 크므로 뷰가 직전 합격 스냅샷 대신 그것을 가리킨다.
+     */
+    @Test
+    @DisplayName("검출이 있어 FAIL 로 닫힌 CLEAN 실행은 통계를 건너뛴다")
+    void skipStatsWhenVerdictIsFail() throws Exception {
+        cleanIssuance();
+        long passed = runIdOf(launch("CLEAN", 1));
+
+        // 재고를 어긋내 V1 을 하나 울린다 → verdict = FAIL
+        seed.overwriteStock(5);
+        JobExecution failedExecution = launch("CLEAN", 2);
+        long failed = runIdOf(failedExecution);
+
+        assertThat(runStatsStatus(failed))
+                .as("NULL 이 아니라 SKIPPED 여야 한다 — '통계 안 함' 과 '진행 중' 은 다르다")
+                .isEqualTo("SKIPPED");
+        assertThat(countIn("coupon_stats", failed)).isZero();
+        // docs/10 이 "if 로 감추지 않는다" 를 결정으로 못 박았다. 그 결정을 지키는 것이
+        // 이 단언뿐이다 — 없으면 setExitStatus 두 줄을 지워도 전부 초록이다.
+        StepExecution stats = statsStep(failedExecution);
+        assertThat(stats.getExitStatus().getExitCode()).isEqualTo("SKIPPED");
+        assertThat(stats.getExitStatus().getExitDescription()).contains("verdict=FAIL");
+        assertThat(failedExecution.getExitStatus().getExitCode())
+                .as("SimpleJob 이 마지막 Step 값을 잡에 대입한다 — "
+                        + "잡 종료 코드를 신호로 쓰면 안 되는 근거다")
+                .isEqualTo("SKIPPED");
+        assertThat(latestStatsRun())
+                .as("뷰는 직전 합격 스냅샷을 유지한다")
+                .isEqualTo(passed);
     }
 
     /**
@@ -132,6 +189,13 @@ class VerifyJobStatsTest {
         assertThat(latestStatsRun())
                 .as("같은 asOf 면 나중 attempt 가 답이다")
                 .isEqualTo(second);
+    }
+
+    private String runStatsStatus(long runId) {
+        return jdbcClient.sql("SELECT stats_status FROM verification_runs WHERE id = :id")
+                .param("id", runId)
+                .query(String.class)
+                .single();
     }
 
     /**

@@ -527,7 +527,7 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 ### 통계는 판정 뒤에 온다 (CY-202)
 
 ```
-… → assertFrozenStep → finalizeRunStep → statsAggregateStep(CLEAN 만)
+… → assertFrozenStep → finalizeRunStep → statsAggregateStep(PASS 인 CLEAN 만)
 ```
 
 **판정을 먼저 쓴다.** 통계가 죽어도 `verdict` 는 남고, `stats_status` 가 `NULL` 이라
@@ -565,6 +565,148 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 
 **이력을 읽는 창은 리플레이와 같다** — `id <= frozenMaxHistoryId AND created_at <= asOf`.
 `created_at` 만 걸면 다시 재는 것이라 백데이트 이력을 리플레이는 못 읽고 통계는 읽는다.
+
+**발급건 집계도 `updated_at <= asOf` 로 자른다.** 한때 *"`rejectIssuancesUpdatedAfterAsOf` 가
+이미 거부하니 중복"* 이라며 뺐는데 **틀렸다** — 그 가드는 `startRunStep` 과 `assertFrozenStep` 에서만
+돌고 **통계 Step 은 그 둘보다 뒤**다. 게다가 `rejectRunningSchedulers` 는 이 JVM 의
+`batch.scheduling.enabled` 만 보므로 **api 는 별도 프로세스라 그 플래그로 멈추지 않는다.**
+
+**두 원천이 서로를 검산한다.** CLEAN 에서는 발급건마다 `ISSUE` 이력이 정확히 하나이므로
+
+```
+COUNT(issuances WHERE updated_at <= asOf)  ==  SUM(hourly_stats.issued_total)
+```
+
+이 어긋나면 집계 도중에 데이터가 움직인 것이고 `DATASET_MUTATED_DURING_RUN` 으로 죽는다.
+얼림 가드가 이미 지나간 구간을 이 등식이 덮는다.
+
+**합격한 CLEAN 만 집계한다.** CORRUPT 를 건너뛴 근거가 *"오염 데이터 위의 집계는 뜻이 없다"* 인데,
+CLEAN 에서 검출이 났다는 것도 **그 데이터가 실제로 어긋났다**는 뜻이라 같은 근거가 적용된다.
+`verdict != PASS` 면 `stats_status = SKIPPED` 로 닫고 뷰는 직전 합격 스냅샷을 유지한다.
+
+### 게이트는 `verdict` 만으로 부족하다
+
+`finalizeRunStep` 이 체인 마지막이 아니게 되면서 **`verdict = PASS` 인데 통계가 통째로 실패한 실행**이
+정상적으로 생길 수 있다. 통계 Step 이 죽으면 트랜잭션이 롤백되어 `stats_status` 는 손대지 않은
+`NULL` 로 남고, `verdict` 만 읽는 게이트는 그것을 초록으로 읽는다. 대시보드는
+`v_latest_stats_run` 이 이전 run 을 가리켜 **조용히 옛 데이터를 보여 준다.**
+
+```sql
+-- D10 게이트가 읽어야 하는 조건
+SELECT verdict, stats_status
+  FROM verification_runs
+ WHERE id = :runId
+   AND verdict = 'PASS'
+   AND scope   = 'FULL'                                   -- 뷰와 같은 축을 봐야 한다
+   AND (dataset <> 'CLEAN' OR stats_status = 'COMPLETE');
+```
+
+`scope = 'FULL'` 이 필요한 이유는 `v_latest_stats_run` 이 그 조건을 거르기 때문이다. 빠뜨리면
+증분 티켓이 `rejectUnsupportedScope` 를 푸는 날 **게이트는 INCREMENTAL run 을 초록으로 읽고
+대시보드는 그것을 안 가리킨다** — 둘이 다른 run 을 본다.
+
+`stats_status = 'SKIPPED'` 는 **두 뜻**을 갖는다. 구분은 같은 행의 `dataset`·`verdict` 로 한다:
+
+| | 뜻 | |
+|---|---|---|
+| `dataset = CORRUPT` | 오염 데이터 위의 집계는 뜻이 없다 | 정상 |
+| `dataset = CLEAN` 이고 `verdict <> PASS` | **정합성 불합격 데이터 위의 집계도 뜻이 없다** | 경보 |
+
+뒤쪽은 조용히 넘어가면 안 되는 상태다. `stats_status` 하나만 보면 둘이 같아 보인다.
+
+> `StatsStatus.PARTIAL` 은 아직 아무도 쓰지 않는다. 통계 Step 이 죽으면 트랜잭션이 롤백되어
+> 부분 스냅샷이 **물리적으로 생기지 않으므로** 표현할 상태가 없다. 실패를 `PARTIAL` 로 남기려면
+> `StepExecutionListener` 에서 `REQUIRES_NEW` 트랜잭션으로 써야 한다 — 그 기계가 필요해지면
+> 그때 붙인다. 지금은 위 게이트 조건이 같은 사고를 막는다.
+
+### 시드 스냅샷과 배치 스냅샷을 대조한다 (런북)
+
+`contract.json` 에 통계 조항이 없어 두 구현이 갈려도 자동으로 안 잡힌다. CLEAN 셋에서 시드가 심은
+run(1·2)과 배치 run 을 양방향으로 대조한다 — 판정이 쓰는 집합 차와 같은 모양이다.
+
+```sql
+-- sold_out_seconds 는 <=> (NULL-safe equal) 로 비교해야 한다.
+-- NULL = NULL 이 UNKNOWN 이라 그냥 두면 완판 아닌 회차 전부가 "누락" 으로 뒤집힌다 —
+-- target_key 에서 이미 겪은 함정이다.
+SELECT 'seed 에만' AS side, a.coupon_id
+  FROM coupon_stats a
+  LEFT JOIN coupon_stats b
+         ON b.run_id = :batchRun
+        AND b.coupon_id        =   a.coupon_id
+        AND b.issued_total     =   a.issued_total
+        AND b.issued           =   a.issued
+        AND b.used             =   a.used
+        AND b.cancelled        =   a.cancelled
+        AND b.expired          =   a.expired
+        AND b.sold_out_seconds <=> a.sold_out_seconds
+ WHERE a.run_id = :seedRun AND b.coupon_id IS NULL
+UNION ALL
+SELECT 'batch 에만', b.coupon_id
+  FROM coupon_stats b
+  LEFT JOIN coupon_stats a
+         ON a.run_id = :seedRun
+        AND a.coupon_id        =   b.coupon_id
+        AND a.issued_total     =   b.issued_total
+        AND a.issued           =   b.issued
+        AND a.used             =   b.used
+        AND a.cancelled        =   b.cancelled
+        AND a.expired          =   b.expired
+        AND a.sold_out_seconds <=> b.sold_out_seconds
+ WHERE b.run_id = :batchRun AND a.coupon_id IS NULL;
+```
+
+**`grade_stats`·`hourly_stats` 는 "같은 모양" 이 아니다 — 그레인이 다르다.** 위 질의를 복사해
+조인 키만 남기면 등급이 둘 이상인 회차에서 팬아웃해 `IS NULL` 이 안 걸리고 **양쪽 0행이 나온다** —
+어긋난 데이터가 조용히 통과한다. 그대로 적어 둔다.
+
+```sql
+-- grade_stats : PK (run_id, coupon_id, grade)
+SELECT 'seed 에만' AS side, a.coupon_id, a.grade
+  FROM grade_stats a
+  LEFT JOIN grade_stats b
+         ON b.run_id = :batchRun
+        AND b.coupon_id    = a.coupon_id
+        AND b.grade        = a.grade
+        AND b.issued_total = a.issued_total
+        AND b.used_total   = a.used_total
+ WHERE a.run_id = :seedRun AND b.grade IS NULL
+UNION ALL
+SELECT 'batch 에만', b.coupon_id, b.grade
+  FROM grade_stats b
+  LEFT JOIN grade_stats a
+         ON a.run_id = :seedRun
+        AND a.coupon_id    = b.coupon_id
+        AND a.grade        = b.grade
+        AND a.issued_total = b.issued_total
+        AND a.used_total   = b.used_total
+ WHERE b.run_id = :batchRun AND a.grade IS NULL;
+```
+
+```sql
+-- hourly_stats : PK (run_id, day_of_week, hour)
+SELECT 'seed 에만' AS side, a.day_of_week, a.hour
+  FROM hourly_stats a
+  LEFT JOIN hourly_stats b
+         ON b.run_id = :batchRun
+        AND b.day_of_week  = a.day_of_week
+        AND b.hour         = a.hour
+        AND b.issued_total = a.issued_total
+ WHERE a.run_id = :seedRun AND b.hour IS NULL
+UNION ALL
+SELECT 'batch 에만', b.day_of_week, b.hour
+  FROM hourly_stats b
+  LEFT JOIN hourly_stats a
+         ON a.run_id = :seedRun
+        AND a.day_of_week  = b.day_of_week
+        AND a.hour         = b.hour
+        AND a.issued_total = b.issued_total
+ WHERE b.run_id = :batchRun AND a.hour IS NULL;
+```
+
+이 두 표에는 **NULL 허용 컬럼이 없어 `<=>` 가 필요 없다.** `coupon_stats` 에서만 쓰는 이유는
+`sold_out_seconds` 하나 때문이다 — 어디까지 써야 하는지 다시 판단하지 않게 적어 둔다.
+
+세 질의 모두 양쪽이 0행이어야 통과다.
 
 ### 판정은 두 값의 조합으로만 뜻이 있다
 

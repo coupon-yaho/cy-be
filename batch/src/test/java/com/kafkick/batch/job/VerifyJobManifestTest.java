@@ -131,6 +131,14 @@ class VerifyJobManifestTest {
                 .single())
                 .as("CLEAN COMPLETE 실행이 없으면 뷰는 비어 있다")
                 .isZero();
+        assertThat(execution.getStepExecutions())
+                .filteredOn(step -> "statsAggregateStep".equals(step.getStepName()))
+                .allSatisfy(step -> {
+                    assertThat(step.getExitStatus().getExitCode()).isEqualTo("SKIPPED");
+                    assertThat(step.getExitStatus().getExitDescription())
+                            .as("건너뛴 사실이 배치 메타에 남아야 한다 — if 로 감추지 않는다")
+                            .contains("dataset=CORRUPT");
+                });
         assertThat(exitMessageOf(execution))
                 .contains("seedRunId=1").contains("정답 1건 / 검출 1건");
         // dataset 은 여러 실행이 공유하는 라벨이다. 이 컬럼이 존재하는 이유가

@@ -146,7 +146,11 @@ verdict        PASS / FAIL                    규칙 기준. D10 게이트가 �
 stats_status   COMPLETE / PARTIAL / SKIPPED   대시보드가 읽는다
 ```
 
-**`CORRUPT` run 은 통계 Step 을 아예 실행하지 않는다.** 오염 데이터 위의 집계는 의미가 없고, 대시보드가 어차피 안 읽는다. `JobExecutionDecider` 로 분기해서 "건너뛴 사실"이 배치 메타에 기록되게 한다 — `if` 문으로 감추면 실행 이력에서 추론해야 한다.
+**`CORRUPT` run 은 통계를 만들지 않는다.** 오염 데이터 위의 집계는 의미가 없고, 대시보드가 어차피 안 읽는다.
+
+> **`JobExecutionDecider` 는 쓰지 않기로 했다 (CY-202).** 원래 이 절은 decider 로 분기해 *"건너뛴 사실"* 이 배치 메타에 남게 하라고 정했다. 그 **의도는 맞지만 수단은 못 쓴다** — `SimpleJobBuilder.next(JobExecutionDecider)` 는 `JobFlowBuilder` 를 돌려주어 잡이 `FlowJob` 이 되고, 암묵 전이 패턴이 `COMPLETED` 라 **불일치 때 `ExitStatus` 가 `FAILED` 인 `finalizeRunStep` 에서 흐름이 끊겨 잡 자체가 실패로 끝난다.** *"불일치는 실행 실패가 아니라 판정 결과다"* 라는 계약이 뒤집히고 그것을 못 박은 테스트가 있다(`VerifyJobManifestTest`).
+>
+> 대신 **의도를 종료 코드로 이룬다.** `statsAggregateStep` 이 건너뛸 때 `ExitStatus("SKIPPED", 이유)` 를 세우므로 `BATCH_STEP_EXECUTION.EXIT_CODE`·`EXIT_MESSAGE` 에 사실이 남는다 — `if` 로 감추지 않는다. 건너뛰는 조건은 둘이다: `dataset != CLEAN`, 그리고 `verdict != PASS`.
 
 > 🔴 **게이트 지적 — 영상 오염 구간에 통계 패널이 빈다.**
 >

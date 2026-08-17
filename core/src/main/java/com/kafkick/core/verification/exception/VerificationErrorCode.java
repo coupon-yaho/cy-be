@@ -65,6 +65,19 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-009",
             "런타임·스케줄러가 멈추지 않아 검증을 시작할 수 없습니다."
+    ),
+
+    /**
+     * 발급건에 {@code ISSUE} 이력이 없다. 데이터 정합 사고이므로 500 이다.
+     *
+     * <p><b>{@code DATASET_MUTATED_DURING_RUN} 과 갈라야 한다.</b> 그쪽 메시지는
+     * <i>"런타임·스케줄러를 멈추고 다시 실행하십시오"</i> 인데, 이 경우는 멈춰도 같은 자리에서
+     * 영원히 죽는다 — 원인이 데이터 변동이 아니라 구조 파손이다.
+     */
+    ISSUANCE_WITHOUT_ISSUE_HISTORY(
+            500,
+            "VERIFICATION-010",
+            "ISSUE 이력이 없는 발급건이 있습니다."
     );
 
     private final int status;

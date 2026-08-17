@@ -27,13 +27,16 @@ import com.kafkick.core.verification.StatsRepository;
  *       한 행(마지막 상태)뿐이다.</li>
  * </ul>
  *
- * <p><b>{@code asOf} 필터를 안 거는 자리가 있다.</b> {@code startRunStep} 의
- * {@code rejectIssuancesUpdatedAfterAsOf} 가 {@code updated_at > asOf} 인 발급건이 하나라도 있으면
- * 실행을 거부하므로, 통과했다면 <b>{@code issuances.status} 가 곧 {@code asOf} 시점 status</b> 다.
- * {@code docs/01-what-we-build.md} 결정 2번이 <i>"{@code asOf} 는 실행 순간 고정, 과거 조회 아님"</i>
- * 이라 정한 것과 같은 얘기다.
+ * <p><b>세 집계가 모두 시각으로 잘린다.</b> 발급건은 {@code updated_at <= asOf},
+ * 이력은 <b>리플레이가 얼린 창</b>({@link #issuedByHour})이다.
  *
- * <p>이력은 다르다 — 거기는 <b>리플레이가 얼린 창</b>을 그대로 써야 한다({@link #issuedByHour}).
+ * <p>한때 발급건 쪽 컷을 <i>"{@code rejectIssuancesUpdatedAfterAsOf} 가 이미 거부하니 중복"</i>
+ * 이라며 뺐는데 <b>틀렸다.</b> 그 가드는 {@code startRunStep} 과 {@code assertFrozenStep} 에서만
+ * 돌고 <b>통계 Step 은 그 둘보다 뒤</b>다. 게다가 {@code rejectRunningSchedulers} 는 이 JVM 의
+ * {@code batch.scheduling.enabled} 만 보므로 api 프로세스는 그 플래그로 멈추지 않는다 —
+ * 집계 도중 발급 한 건이 들어오면 발급건 집계에는 반영되고 이력 집계에는 안 들어가
+ * <b>같은 스냅샷 안에서 두 총합이 어긋난다.</b>
+ * {@code issuances} 를 읽는 규칙 여섯이 전부 같은 컷을 갖는 이유가 이것이다.
  */
 @Repository
 public class StatsJdbcAdapter implements StatsRepository {
@@ -72,7 +75,8 @@ public class StatsJdbcAdapter implements StatsRepository {
                         THEN TIMESTAMPDIFF(SECOND, c.open_at, a.last_issued_at)
                    END
               FROM coupons c
-              LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
+              LEFT JOIN coupon_stocks s
+                     ON s.coupon_id = c.id AND s.updated_at <= :asOf
               LEFT JOIN (SELECT coupon_id,
                                 COUNT(*)                        AS issued_total,
                                 SUM(status = 'ISSUED')          AS issued,
@@ -81,6 +85,7 @@ public class StatsJdbcAdapter implements StatsRepository {
                                 SUM(status = 'EXPIRED')         AS expired,
                                 MAX(issued_at)                  AS last_issued_at
                            FROM issuances
+                          WHERE updated_at <= :asOf
                           GROUP BY coupon_id) a
                      ON a.coupon_id = c.id
             """;
@@ -96,6 +101,7 @@ public class StatsJdbcAdapter implements StatsRepository {
             INSERT INTO grade_stats (run_id, coupon_id, grade, issued_total, used_total)
             SELECT :runId, coupon_id, issued_grade, COUNT(*), SUM(status = 'USED')
               FROM issuances
+             WHERE updated_at <= :asOf
              GROUP BY coupon_id, issued_grade
             """;
 
@@ -138,13 +144,61 @@ public class StatsJdbcAdapter implements StatsRepository {
     }
 
     @Override
-    public int aggregateCouponStats(long runId) {
-        return jdbcClient.sql(AGGREGATE_COUPON_STATS).param("runId", runId).update();
+    public int aggregateCouponStats(long runId, LocalDateTime asOf) {
+        return jdbcClient.sql(AGGREGATE_COUPON_STATS)
+                .param("runId", runId)
+                .param("asOf", asOf)
+                .update();
     }
 
     @Override
-    public int aggregateGradeStats(long runId) {
-        return jdbcClient.sql(AGGREGATE_GRADE_STATS).param("runId", runId).update();
+    public int aggregateGradeStats(long runId, LocalDateTime asOf) {
+        return jdbcClient.sql(AGGREGATE_GRADE_STATS)
+                .param("runId", runId)
+                .param("asOf", asOf)
+                .update();
+    }
+
+    @Override
+    public int couponCount() {
+        return jdbcClient.sql("SELECT COUNT(*) FROM coupons").query(Integer.class).single();
+    }
+
+    /**
+     * <b>짝으로 본다.</b> 총합 비교는 대칭 오차를 못 잡는다 —
+     * {@code StatsRepository#countIssuancesWithoutIssueHistory} javadoc 에 근거를 적었다.
+     */
+    private static final String SELECT_WITHOUT_ISSUE_HISTORY = """
+            SELECT %s
+              FROM issuances i
+             WHERE i.updated_at <= :asOf
+               AND NOT EXISTS (SELECT 1
+                                 FROM issuance_histories h
+                                WHERE h.issuance_id = i.id
+                                  AND h.event_type = 'ISSUE'
+                                  AND h.id <= :maxHistoryId
+                                  AND h.created_at <= :asOf)
+            """;
+
+    @Override
+    public int countIssuancesWithoutIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {
+        return jdbcClient.sql(SELECT_WITHOUT_ISSUE_HISTORY.formatted("COUNT(*)"))
+                .param("asOf", asOf)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .query(Integer.class)
+                .single();
+    }
+
+    @Override
+    public List<Long> sampleIssuancesWithoutIssueHistory(
+            LocalDateTime asOf, long frozenMaxHistoryId, int limit) {
+        return jdbcClient.sql(
+                        SELECT_WITHOUT_ISSUE_HISTORY.formatted("i.id")
+                                + " ORDER BY i.id LIMIT " + limit)
+                .param("asOf", asOf)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .query(Long.class)
+                .list();
     }
 
     @Override

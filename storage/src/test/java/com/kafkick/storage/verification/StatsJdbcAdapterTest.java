@@ -101,7 +101,7 @@ class StatsJdbcAdapterTest {
         seed.issuance(IssuanceStatus.ISSUED);
         long empty = seed.newCoupon();
 
-        assertThat(adapter.aggregateCouponStats(runId))
+        assertThat(adapter.aggregateCouponStats(runId, AS_OF))
                 .as("회차 수와 같아야 한다. issuances 를 드라이빙으로 잡으면 빈 회차가 빠진다")
                 .isEqualTo(2);
         assertThat(couponStatRow(empty))
@@ -121,7 +121,7 @@ class StatsJdbcAdapterTest {
         seed.issuance(IssuanceStatus.CANCELLED);
         seed.issuance(IssuanceStatus.EXPIRED);
 
-        adapter.aggregateCouponStats(runId);
+        adapter.aggregateCouponStats(runId, AS_OF);
 
         assertThat(couponStatRow(couponId))
                 .containsEntry("issued_total", 5)
@@ -136,18 +136,66 @@ class StatsJdbcAdapterTest {
      * {@code issue_count >= total_quantity} 다.
      */
     @Test
-    @DisplayName("완판이면 첫 발급까지 걸린 초를 적는다")
+    @DisplayName("완판이면 마지막 발급까지 걸린 초를 적는다 — MAX(issued_at) − open_at")
     void recordSoldOutSeconds() {
         long couponId = seed.currentCouponIdOrCreate();
+        // 두 건을 넣어야 MIN 과 MAX 가 갈린다. 한 건이면 SQL 을 MIN(issued_at) 으로
+        // 바꿔도 테스트가 통과해, 이름만 있고 지키는 것이 없다.
+        seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(30));
         seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(90));
         // 발급 뒤에 낮춘다. 재고 행은 첫 발급이 만들므로 그 전에 UPDATE 하면 0행이다.
-        capStockAt(1);
+        capStockAt(2);
 
-        adapter.aggregateCouponStats(runId);
+        adapter.aggregateCouponStats(runId, AS_OF);
 
         assertThat(couponStatRow(couponId))
-                .as("마지막 발급 시각 − open_at 의 초")
+                .as("30 이 나오면 MIN 을 쓰고 있다")
                 .containsEntry("sold_out_seconds", 90);
+    }
+
+    /**
+     * <b>절삭 방향이 시드와 같아야 한다.</b> 시드는
+     * {@code int((last_issue_at - open_at).total_seconds())} 로 <b>버리고</b>, 배치는
+     * {@code TIMESTAMPDIFF(SECOND, …)} 를 쓴다. 반올림이면 완판 회차의 값이 1초씩 갈린다.
+     *
+     * <p>{@code issued_at} 은 {@code datetime(6)} 이고 {@code open_at} 은 초 단위라
+     * 소수부는 발급 시각에서만 온다.
+     */
+    @Test
+    @DisplayName("소수 초는 버린다 — 반올림이면 시드와 1초 갈린다")
+    void truncateSubSecondLikeSeed() {
+        long couponId = seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED, OPEN_AT.plusSeconds(90).withNano(900_000_000));
+        capStockAt(1);
+
+        adapter.aggregateCouponStats(runId, AS_OF);
+
+        assertThat(couponStatRow(couponId))
+                .as("90.9초다. 반올림이면 91 이 된다")
+                .containsEntry("sold_out_seconds", 90);
+    }
+
+    /**
+     * <b>통계 Step 은 얼림 확인보다 뒤에 있다.</b> 그래서 컷이 없으면 집계 도중에 들어온 발급이
+     * 섞이는데, {@code rejectRunningSchedulers} 는 이 JVM 의 플래그만 보므로 api 프로세스가
+     * 살아 있으면 실제로 벌어진다.
+     */
+    @Test
+    @DisplayName("asOf 이후에 갱신된 발급건은 집계에서 빠진다")
+    void cutIssuancesAtAsOf() {
+        long couponId = seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED);
+        long late = seed.issuance(IssuanceStatus.ISSUED);
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", late)
+                .update();
+
+        adapter.aggregateCouponStats(runId, AS_OF);
+
+        assertThat(couponStatRow(couponId))
+                .as("컷이 없으면 2 가 된다")
+                .containsEntry("issued_total", 1);
     }
 
     /**
@@ -166,7 +214,7 @@ class StatsJdbcAdapterTest {
         long couponId = seed.currentCouponIdOrCreate();
         seed.issuance(IssuanceStatus.CANCELLED);
 
-        adapter.aggregateCouponStats(runId);
+        adapter.aggregateCouponStats(runId, AS_OF);
 
         assertThat(jdbcClient.sql("SELECT active_count FROM coupon_stocks WHERE coupon_id = :id")
                 .param("id", couponId)
@@ -191,7 +239,7 @@ class StatsJdbcAdapterTest {
         seed.issuance(IssuanceStatus.ISSUED, "VIP");
         seed.issuance(IssuanceStatus.ISSUED, "GOLD");
 
-        assertThat(adapter.aggregateGradeStats(runId))
+        assertThat(adapter.aggregateGradeStats(runId, AS_OF))
                 .as("등급 네 종이 있어도 쓰인 두 종만 행이 된다")
                 .isEqualTo(2);
         assertThat(jdbcClient.sql("""
@@ -275,15 +323,79 @@ class StatsJdbcAdapterTest {
                 .containsExactly(new HourlyIssued("WED", 3, 1));
     }
 
+    /**
+     * <b>이력 없는 발급건을 짝으로 찾는다.</b> 이 사각은 CY-196 이 기록해 둔 것이다 —
+     * 이력이 없는 발급건은 {@code asof_state} 에 안 실려 V3·V5 의 시야 밖이고, V4 는 반대
+     * 방향(고아 이력)만 본다. 규칙 여섯 중 아무도 이 방향을 안 본다.
+     */
+    @Test
+    @DisplayName("ISSUE 이력이 없는 발급건을 찾는다")
+    void findIssuanceWithoutIssueHistory() {
+        long withHistory = seed.issuance(IssuanceStatus.ISSUED);
+        seed.history(withHistory, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+        long orphan = seed.issuance(IssuanceStatus.ISSUED);
+
+        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT)).isEqualTo(1);
+        assertThat(adapter.sampleIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT, 10))
+                .as("메시지에 실을 표본이 그 발급건을 지목해야 한다")
+                .containsExactly(orphan);
+    }
+
+    /**
+     * <b>총합 비교가 놓치는 자리다.</b> 한때 이 검산을
+     * {@code COUNT(issuances) == SUM(hourly)} 로 뒀는데, 아래 데이터는 <b>총합이 같다</b> —
+     * 발급건 2건, {@code ISSUE} 이력 2건. 그래서 그 형태로는 그냥 통과했다.
+     *
+     * <p>이 저장소가 {@code finding_count} 비교를 거부한 것과 정확히 같은 형태다 —
+     * <i>"오탐 400 + 누락 400 도 800"</i>. 짝으로 봐야 잡힌다.
+     */
+    @Test
+    @DisplayName("이력 없는 발급건 하나 + 이력 둘인 발급건 하나 — 총합은 같지만 잡는다")
+    void catchAsymmetricMismatchThatSumsHide() {
+        long twoHistories = seed.issuance(IssuanceStatus.ISSUED);
+        seed.history(twoHistories, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+        seed.history(twoHistories, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(2));
+        long orphan = seed.issuance(IssuanceStatus.ISSUED);
+
+        int issueHistories = adapter.issuedByHour(NO_LIMIT, AS_OF).stream()
+                .mapToInt(HourlyIssued::issuedTotal)
+                .sum();
+        assertThat(issueHistories)
+                .as("발급건 2건 · ISSUE 이력 2건 — 총합 비교는 여기서 통과한다")
+                .isEqualTo(2);
+        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT))
+                .as("짝으로 보면 잡힌다")
+                .isEqualTo(1);
+        assertThat(adapter.sampleIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT, 10))
+                .containsExactly(orphan);
+    }
+
+    /** 창은 리플레이와 같다. 얼린 상한 밖의 이력은 "있다" 로 세지 않는다. */
+    @Test
+    @DisplayName("얼린 상한 밖의 ISSUE 이력은 짝으로 안 세어진다")
+    void respectFrozenBoundaryWhenPairing() {
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        long frozen = seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+
+        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, frozen)).isZero();
+        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, frozen - 1))
+                .as("그 이력이 창 밖이면 이 발급건은 이력이 없는 것과 같다")
+                .isEqualTo(1);
+    }
+
     /** 재시작하면 앞 실행의 부분 결과가 남는다. 그 위에 다시 쓰면 중복키로 죽는다. */
     @Test
     @DisplayName("같은 실행의 앞 스냅샷을 지우고 다시 쓴다")
     void clearBeforeRewrite() {
         seed.issuance(IssuanceStatus.ISSUED);
-        adapter.aggregateCouponStats(runId);
+        adapter.aggregateCouponStats(runId, AS_OF);
 
         adapter.clear(runId);
-        adapter.aggregateCouponStats(runId);
+        adapter.aggregateCouponStats(runId, AS_OF);
 
         assertThat(jdbcClient.sql("SELECT COUNT(*) FROM coupon_stats WHERE run_id = :runId")
                 .param("runId", runId)

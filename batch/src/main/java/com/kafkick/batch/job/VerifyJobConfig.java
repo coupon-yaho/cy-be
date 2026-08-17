@@ -384,8 +384,18 @@ public class VerifyJobConfig {
      * {@code NULL} 로 남고 뷰가 이미 걸러 낸다. 세 값 중 하나를 안 쓰는 것이 이상해 보이지만,
      * "절반 쓰다 죽었다" 를 표현하려고 죽는 코드가 값을 쓸 수는 없다 — 그건 트랜잭션이 할 일이다.
      *
-     * <p><b>CLEAN 전용이다.</b> 오염 데이터 위의 집계는 뜻이 없고 CORRUPT 는
-     * {@code finalizeRunStep} 이 {@code SKIPPED} 로 닫는다.
+     * <p><b>합격한 CLEAN 만이다.</b> 오염 데이터 위의 집계는 뜻이 없는데, <b>CLEAN 에서 검출이
+     * 났다는 것도 그 데이터가 실제로 어긋났다는 뜻</b>이라 같은 근거가 그대로 적용된다.
+     * 더 좁게는 이 Step 의 {@code asOf} 논거가 판정에 기댄다 — <i>"{@code issuances.status} 가 곧
+     * {@code asOf} 시점 status"</i> 를 보증하는 것은 V3 가 0건이라는 사실이다.
+     *
+     * <p><b>{@code JobExecutionDecider} 를 쓰지 않는다.</b> {@code docs/10-batch-design.md} 가
+     * 원래 그것을 요구했고 의도(건너뛴 사실을 배치 메타에 남긴다)는 맞다. 그런데
+     * {@code SimpleJobBuilder.next(JobExecutionDecider)} 는 {@code JobFlowBuilder} 를 돌려주어
+     * 잡이 {@code FlowJob} 이 되고, 암묵 전이 패턴이 {@code COMPLETED} 라 <b>불일치 때
+     * {@code ExitStatus} 가 {@code FAILED} 인 {@code finalizeRunStep} 에서 흐름이 끊겨 잡이
+     * 실패로 끝난다</b> — <i>"불일치는 실행 실패가 아니라 판정 결과다"</i> 가 뒤집힌다.
+     * 그래서 건너뛸 때 {@code ExitStatus("SKIPPED", 이유)} 를 세워 같은 목적을 이룬다.
      *
      * <p><b>잡 종료 코드가 이 Step 값으로 덮인다.</b> {@code SimpleJob} 은 마지막 Step 의
      * {@code ExitStatus} 를 <b>대입</b>하므로({@code javap -c SimpleJob}) 불일치 때
@@ -401,29 +411,93 @@ public class VerifyJobConfig {
                     JobExecution jobExecution = stepExecution.getJobExecution();
                     DatasetType dataset = DatasetType.valueOf(
                             jobExecution.getJobParameters().getString("dataset"));
+                    long runId = requireRunId(jobExecution);
+
+                    // 건너뛴 사실을 종료 코드로 남긴다. if 로만 빠지면 배치 메타에
+                    // "COMPLETED write=0" 만 남아, 의도적으로 건너뛴 것과 집계가 0행을 쓴 사고가
+                    // 같은 모양이 된다 — docs/10-batch-design.md 가 금지한 그 상태다.
+                    // JobExecutionDecider 를 쓰지 않는 이유는 이 메서드 javadoc 에 적었다.
                     if (dataset != DatasetType.CLEAN) {
+                        // 이 Step 은 stats_status 를 읽지 않는다. 읽지 않은 것을 "닫았다" 라고
+                        // 단정하면 finalizeRunStep 의 그 분기가 리팩터링으로 빠지는 날
+                        // 메시지가 거짓 증적이 된다.
+                        contribution.setExitStatus(new ExitStatus("SKIPPED",
+                                "dataset=" + dataset + " — 오염 데이터 위의 집계는 뜻이 없다"));
                         return RepeatStatus.FINISHED;
                     }
 
-                    long runId = requireRunId(jobExecution);
+                    // 불합격으로 닫힌 실행 위에서도 집계하면 안 된다. CORRUPT 를 건너뛴 근거가
+                    // "오염 데이터 위의 집계는 뜻이 없다" 인데, CLEAN 에서 검출이 났다는 것은
+                    // 그 데이터가 실제로 어긋났다는 뜻이라 같은 근거가 그대로 적용된다.
+                    //
+                    // 더 좁게는 이 Step 의 asOf 논거가 판정에 기댄다 — "issuances.status 가 곧
+                    // asOf 시점 status" 를 보증하는 것은 V3(REPLAY_MISMATCH)가 0건이라는 사실이다.
+                    VerdictType verdict = runs.findById(runId)
+                            .orElseThrow(() -> new BusinessException(
+                                    VerificationErrorCode.RUN_ROW_VANISHED,
+                                    "실행 행이 사라졌습니다. runId=" + runId))
+                            .verdict();
+                    if (verdict != VerdictType.PASS) {
+                        runs.updateStatsStatus(runId, StatsStatus.SKIPPED);
+                        contribution.setExitStatus(new ExitStatus("SKIPPED",
+                                "verdict=" + verdict + " — 불합격 데이터 위의 집계는 뜻이 없다. "
+                                        + "뷰는 직전 합격 스냅샷을 유지한다"));
+                        return RepeatStatus.FINISHED;
+                    }
+
                     LocalDateTime asOf = jobExecution.getJobParameters()
                             .getLocalDateTime("asOf");
-
-                    // 재시작하면 앞 실행의 부분 결과가 남아 있다. 그 위에 다시 쓰면
-                    // (run_id, coupon_id) 중복키로 죽거나 낡은 행이 섞인다.
                     stats.clear(runId);
-                    stats.aggregateCouponStats(runId);
-                    stats.aggregateGradeStats(runId);
+
+                    // 회차 수를 집계 **앞에서** 읽는다. 뒤에서 읽으면 그 사이 INSERT 가
+                    // 오탐을 만든다 — INSERT … SELECT 는 락 리드로 최신 커밋을 보고
+                    // 그다음 COUNT 는 컨시스턴트 리드다.
+                    int coupons = stats.couponCount();
+                    int couponRows = stats.aggregateCouponStats(runId, asOf);
+                    if (couponRows != coupons) {
+                        // 배선 실수가 아니다. 이 등식은 SQL 상 깨질 수 없고(재고 PK 가
+                        // coupon_id 라 팬아웃 없음, 컷은 파생테이블 안) 도달 가능한 유일한
+                        // 경로가 집계 도중 회차 추가·삭제다 — 그것은 데이터 변동이다.
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "집계 도중 회차가 추가·삭제됐습니다. 쓴 행=" + couponRows
+                                        + " 회차=" + coupons);
+                    }
+                    int gradeRows = stats.aggregateGradeStats(runId, asOf);
 
                     // 창은 리플레이와 같다 — 얼린 상한을 넘겨야 백데이트 이력이 통계에만
                     // 들어오는 것을 막는다. 168행을 전부 쓴다: 없는 행과 0인 행은 다르다.
                     long frozenMaxHistory = jobExecution.getExecutionContext()
                             .getLong(SCAN_MAX_HISTORY_KEY, 0L);
-                    stats.appendHourlyStats(runId, HourlyIssued.fillAll(
-                            stats.issuedByHour(frozenMaxHistory, asOf)));
+                    List<HourlyIssued> hourly =
+                            HourlyIssued.fillAll(stats.issuedByHour(frozenMaxHistory, asOf));
+                    stats.appendHourlyStats(runId, hourly);
+
+                    // 발급건마다 ISSUE 이력이 정확히 하나여야 한다. 총합 비교로 두면
+                    // 대칭 오차를 못 잡는다 — 이력 없는 발급건 하나와 이력이 둘인 발급건
+                    // 하나가 있으면 총합이 같아 통과한다. finding_count 비교를 거부한 것과
+                    // 같은 형태다.
+                    //
+                    // 이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력 없는 발급건은
+                    // asof_state 에 안 실려 V3·V5 의 시야 밖이고 V4 는 반대 방향만 본다.
+                    int orphaned = stats.countIssuancesWithoutIssueHistory(asOf, frozenMaxHistory);
+                    if (orphaned > 0) {
+                        throw new BusinessException(
+                                VerificationErrorCode.ISSUANCE_WITHOUT_ISSUE_HISTORY,
+                                "ISSUE 이력이 없는 발급건 " + orphaned + "건. 표본="
+                                        + stats.sampleIssuancesWithoutIssueHistory(
+                                                asOf, frozenMaxHistory, SAMPLE_SIZE));
+                    }
 
                     // 마지막이다. 여기까지 왔을 때만 뷰가 이 스냅샷을 가리킨다.
                     runs.updateStatsStatus(runId, StatsStatus.COMPLETE);
+
+                    contribution.incrementWriteCount(couponRows + gradeRows + hourly.size());
+                    contribution.setExitStatus(ExitStatus.COMPLETED.addExitDescription(
+                            "회차 " + couponRows + " · 등급쌍 " + gradeRows
+                                    + " · 요일시각 " + hourly.size()
+                                    + " · ISSUE 이력 " + hourly.stream()
+                                            .mapToInt(HourlyIssued::issuedTotal).sum() + "건"));
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
@@ -919,8 +993,13 @@ public class VerifyJobConfig {
      * 않는다, ⑶ {@code web-application-type: servlet} 이라 프로세스가 끝나지 않는다.
      * 게다가 {@code SimpleJob} 은 잡 종료 코드를 <b>마지막 Step 값으로 대입</b>하므로
      * ({@code javap -c SimpleJob}) 통계 Step 이 뒤에 붙는 순간 이 표식은 잡 수준에서 사라진다.
-     * <b>게이트는 {@code verification_runs.verdict} 를 읽어야 한다.</b> 여기 {@code ExitStatus}
-     * 는 배치 메타DB({@code BATCH_STEP_EXECUTION})에 남기는 표식일 뿐이다.
+     * <b>게이트는 {@code verification_runs} 를 읽어야 한다</b> — 여기 {@code ExitStatus} 는
+     * 배치 메타DB({@code BATCH_STEP_EXECUTION})에 남기는 표식일 뿐이다.
+     *
+     * <p>다만 {@code verdict} <b>하나로는 부족해졌다.</b> 통계 Step 이 이 Step 뒤에 붙어서,
+     * {@code verdict = PASS} 인데 통계가 통째로 실패한 실행이 정상적으로 생긴다. 게이트가
+     * 읽어야 하는 정확한 조건은 {@code docs/11-batch-implementation.md} 의
+     * <i>"게이트는 verdict 만으로 부족하다"</i> 절에 있다.
      */
     private static VerdictType judgeAgainstManifest(
             long runId, long seedRunId, int detected,
