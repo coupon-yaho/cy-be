@@ -36,6 +36,12 @@ class GapValueTest {
     }
 
     @Test
+    void rejectsObservationTimeForNotApplicable() {
+        assertThatThrownBy(() -> new GapValue(null, SourceStatus.N_A, OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void rejectsMissingValueOrTimeForValid() {
         assertThatThrownBy(() -> new GapValue(null, SourceStatus.VALID, OBSERVED_AT))
                 .isInstanceOf(IllegalArgumentException.class);

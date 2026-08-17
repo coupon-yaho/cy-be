@@ -79,11 +79,22 @@ class IssuanceFlowEventTest {
     }
 
     @Test
-    void factoryAndCanonicalConstructorAcceptValidBoundaryValues() {
-        IssuanceFlowEvent admitted = FACTORY.admitted(context(null, false), 0L);
-        IssuanceFlowEvent issued = FACTORY.issued(context("request-1", false), 1L, "A");
+    void canonicalConstructorAcceptsZeroQueueSequence() {
+        IssuanceFlowEvent admitted = event(
+                EventType.ENTRY_RESULT, 202, null, null,
+                null, 0L, 0L
+        );
 
         assertThat(admitted.queueSequence()).isZero();
+    }
+
+    @Test
+    void canonicalConstructorAcceptsMinimumIssuanceIdentity() {
+        IssuanceFlowEvent issued = event(
+                EventType.ISSUE_RESULT, 201, 1L, "A",
+                null, null, null
+        );
+
         assertThat(issued.issuanceId()).isEqualTo(1L);
         assertThat(issued.issuanceCode()).isEqualTo("A");
     }
