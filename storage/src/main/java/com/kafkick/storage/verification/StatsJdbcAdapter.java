@@ -42,6 +42,11 @@ public class StatsJdbcAdapter implements StatsRepository {
      * <b>회차 전체를 드라이빙으로 둔다.</b> 발급이 0건인 회차도 행을 써야 하므로
      * {@code issuances} 를 드라이빙으로 하면 그 회차가 빠진다. 시드도 카탈로그 전체를 돈다.
      *
+     * <p><b>재고 행도 {@code LEFT JOIN} 이다.</b> 재고 행이 없는 회차를 {@code INNER JOIN} 으로
+     * 떨어뜨리면 그 회차가 통계에서 사라진다 — V1(재고 정합)이 {@code coupons} 를 드라이빙으로
+     * 고른 근거가 <b>바로 그 회차를 잡는 것</b>이라, 통계가 반대로 가면 안 된다.
+     * 그 회차의 완판 판정은 자연히 {@code NULL} 이다({@code NULL} 비교가 참이 아니다).
+     *
      * <p><b>완판은 {@code total_quantity} 로 판정한다.</b> 시드가 완판을 정하는 식이
      * {@code issue_count >= total_quantity} 다({@code cy-seed/seedgen/catalog.py}).
      * {@code active_count} 로 판정하면 안 된다 — 그것은 <i>현재 보유량</i>(ISSUED + USED)이라
@@ -67,7 +72,7 @@ public class StatsJdbcAdapter implements StatsRepository {
                         THEN TIMESTAMPDIFF(SECOND, c.open_at, a.last_issued_at)
                    END
               FROM coupons c
-              JOIN coupon_stocks s ON s.coupon_id = c.id
+              LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
               LEFT JOIN (SELECT coupon_id,
                                 COUNT(*)                        AS issued_total,
                                 SUM(status = 'ISSUED')          AS issued,
