@@ -15,6 +15,14 @@ name: Build
 # 등록하지 않으면 이 워크플로는 돌기만 하고 실패해도 머지를 못 막는다 —
 # 그러면 이 파일의 존재 이유가 없다.
 #
+# ⚠️ 액션은 전체 커밋 SHA 로 고정한다. 뒤 주석이 사람이 읽을 버전이다.
+#    메이저 태그(@v5)는 **이동 가능한 참조**다 — 2025 년 tj-actions/changed-files 사건에서
+#    v35 이후 태그가 악성 커밋으로 재지정돼 수천 저장소의 시크릿이 유출됐다.
+#    이 워크플로는 ./gradlew build 로 임의 JVM 코드를 실행하는 유일한 자리라 특히 그렇다.
+#    올릴 때는 태그를 SHA 로 다시 풀어서 넣는다:
+#      git ls-remote --tags https://github.com/<owner>/<repo> | grep 'refs/tags/<major>'
+#    나머지 워크플로 넷은 아직 태그(security-audit 은 @main)라 별도로 맞춰야 한다.
+#
 # ⚠️ 이 파일은 에픽 브랜치에도 있어야 한다.
 #    pull_request 이벤트는 워크플로를 PR 의 head 에서 가져온다. main 에만 넣으면
 #    main 보다 앞서 갈라진 에픽에서 자른 브랜치에는 파일이 없어 돌지 않는다.
@@ -45,21 +53,19 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # v7 까지 있지만 이 저장소는 v5 가 다수다(conventions·security-audit). pages 만 v4 라
-      # 이미 갈라져 있는데, 더 벌리지 않는다 — 올릴 때 네 파일을 같이 올린다.
       #
       # persist-credentials: false — 기본값은 GITHUB_TOKEN 을 .git/config 에 남긴다.
       # 이 워크플로는 ./gradlew build 로 **임의 JVM 코드를 실제로 실행하는 유일한 자리**다
       # (빌드 스크립트 평가·애노테이션 프로세서·서드파티 플러그인). 오염된 의존성이 그 토큰을
       # 읽을 수 있으므로 남기지 않는다. 이후 git 조작이 없어 부작용도 없다.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
       # 툴체인은 build.gradle 이 Java 21 로 못 박아 뒀다(languageVersion = 21).
       # 여기서 같은 버전을 깔아 두면 Gradle 이 JDK 를 따로 내려받지 않는다.
       - name: Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -67,10 +73,10 @@ jobs:
       # 래퍼 JAR 이 바뀌지 않았는지 본다. gradle-wrapper.jar 는 바이너리라
       # 리뷰에서 내용을 읽을 수 없어, 교체되면 빌드가 임의 코드를 실행한다.
       - name: Gradle 래퍼 검증
-        uses: gradle/actions/wrapper-validation@v6
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
 
       - name: Gradle 설정·캐시
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
 
       # build 는 test 와 check 를 포함하고 jar·bootJar 까지 만든다 —
       # 테스트만 돌리면 패키징이 깨진 것을 머지 뒤에 안다.
@@ -117,7 +123,7 @@ jobs:
       #    업로드 경로를 좁혀야 한다.
       - name: 테스트 리포트
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-reports
           path: |

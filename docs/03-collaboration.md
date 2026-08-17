@@ -655,6 +655,7 @@ Settings → Actions → General
     conventions.yml             PR 제목·브랜치명 강제 / 커밋 경고  ⚠️ JIRA_KEY 설정
     coderabbit-slack.yml        CodeRabbit 리뷰 → Slack  (SLACK_WEBHOOK_URL 없으면 스킵)
     security-audit.yml          공식 보안 액션. D13 1회  (CLAUDE_API_KEY 없으면 스킵)
+    build.yml                   PR 마다 ./gradlew build  ⚠️ Ruleset 필수 체크 등록 필요
 
 (GitHub Issues 템플릿 없음 — 이슈 트래커는 Jira)
 docs/
