@@ -31,14 +31,22 @@ import com.kafkick.core.admin.MetricsWindow;
 public class AdminDashboardController {
 
     /**
-     * 관리자 첫 화면에 필요한 캠페인 위험, 대기열 위험, 재고 위험, 조치 항목 요약을 조회합니다.
+     * 관리자 운영 현황 화면의 상단 위험 요약과 캠페인별 운영 상태를 조회합니다.
      *
-     * <p>후속 운영 현황 구현에서 DB 기반 캠페인·재고 집계와 B Provider의 대기열·발급 흐름 데이터를 조립합니다.
-     * 현재는 데이터가 연결되지 않아 {@link AdminApiErrorCode#NOT_IMPLEMENTED}를 발생시킵니다.</p>
+     * <p>응답 계약에는 조치 필요·오픈 임박·대기 기준 초과·소진 위험 KPI와 조치 목록,
+     * 전체 발급률·대기열·응답 지연·캠페인 상태 집계가 포함됩니다. 또한 캠페인별 발급 흐름,
+     * 대기 상태, 전체 고객 결과 집계, 재고·소진 예상을 제공합니다.</p>
      *
-     * @return 후속 구현에서 사용할 운영 개요 응답 봉투
+     * <p>회원 발급 문의, 발급 상태 변경 이력, 고객 알림 발송 현황은 각각
+     * 별도의 관리자 API에서 조회하므로 이 응답에 중복해서 포함하지 않습니다.</p>
+     *
+     * <p>A-03에서는 {@code AdminOverviewProvider}, 조회 조건, 내부 Snapshot과 HTTP 응답 계약만
+     * 선구축합니다. 실제 DB·Redis·관제 데이터 조립과 Provider 주입은 A-06에서 연결하며,
+     * 연결 전까지 이 API는 {@code 501 / ADMIN-001}을 반환합니다.</p>
+     *
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
-     * @throws BusinessException 운영 현황 조립 구현이 아직 연결되지 않은 경우
+     * @return 후속 A-06 구현에서 사용할 운영 현황 응답 봉투
+     * @throws BusinessException 운영 현황 실제 조회 구현이 아직 연결되지 않은 경우
      */
     @GetMapping("/overview")
     public ResponseEnvelope<AdminOverviewResponse> overview(Caller caller) {
