@@ -1,4 +1,4 @@
-// 쿠폰 템플릿 저장 및 단건 조회 포트를 Spring Data JPA로 구현합니다.
+// 쿠폰 템플릿 저장 및 조회 포트를 Spring Data JPA로 구현합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.util.Optional;
@@ -6,10 +6,14 @@ import java.util.Optional;
 import jakarta.persistence.EntityManager;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
+import com.kafkick.core.coupon.port.CouponTemplatePage;
 import com.kafkick.core.coupon.port.CouponTemplateRepository;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.coupon.entity.CouponTemplateEntity;
@@ -55,5 +59,26 @@ public class CouponTemplateRepositoryImpl implements CouponTemplateRepository {
     public Optional<CouponTemplate> findById(Long id) {
         return jpaRepository.findById(id)
                 .map(CouponTemplateEntityMapper::toDomain);
+    }
+
+    @Override
+    public CouponTemplatePage findPageByIdAsc(int page, int size) {
+        PageRequest pageRequest = PageRequest.of(
+                page,
+                size,
+                Sort.by(Sort.Direction.ASC, "id")
+        );
+        Page<CouponTemplateEntity> entityPage =
+                jpaRepository.findAll(pageRequest);
+
+        return new CouponTemplatePage(
+                entityPage.getContent().stream()
+                        .map(CouponTemplateEntityMapper::toDomain)
+                        .toList(),
+                entityPage.getNumber(),
+                entityPage.getSize(),
+                entityPage.getTotalElements(),
+                entityPage.getTotalPages()
+        );
     }
 }

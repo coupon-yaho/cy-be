@@ -8,6 +8,7 @@ import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
+import com.kafkick.core.coupon.port.CouponTemplatePage;
 import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
@@ -22,6 +23,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalTime;
+import java.util.List;
 import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -350,6 +352,190 @@ class CouponTemplateControllerTest {
                         .value("COMMON-001"))
                 .andExpect(jsonPath("$.error.message")
                         .value("쿠폰 템플릿 ID는 0보다 커야 합니다."));
+
+        verifyNoInteractions(couponTemplateQueryService);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 목록을 조회하면 200과 기본 페이지 결과를 반환한다")
+    void findCouponTemplatePage() throws Exception {
+        CouponTemplate firstCouponTemplate = CouponTemplate.restore(
+                1L,
+                1L,
+                "골드 VIP 20% 할인",
+                CouponPolicyType.PERCENT_CAPPED,
+                20,
+                10_000,
+                null,
+                7,
+                2,
+                CouponDayOfWeek.WED,
+                LocalTime.of(10, 0),
+                2,
+                100,
+                Set.of(MembershipGrade.GOLD, MembershipGrade.VIP),
+                true
+        );
+        CouponTemplate secondCouponTemplate = CouponTemplate.restore(
+                2L,
+                1L,
+                "웰컴 실버 5천원 할인",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                5,
+                3,
+                CouponDayOfWeek.FRI,
+                LocalTime.of(12, 0),
+                3,
+                50,
+                Set.of(MembershipGrade.WELCOME, MembershipGrade.SILVER),
+                true
+        );
+
+        when(couponTemplateQueryService.findPage(0, 20))
+                .thenReturn(new CouponTemplatePage(
+                        List.of(
+                        firstCouponTemplate,
+                        secondCouponTemplate
+                        ),
+                        0,
+                        20,
+                        2,
+                        1
+                ));
+
+        mockMvc.perform(get("/api/v1/admin/coupon-templates")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content.length()").value(2))
+                .andExpect(jsonPath("$.data.content[0].id").value(1))
+                .andExpect(jsonPath("$.data.content[0].policyType")
+                        .value("PERCENT_CAPPED"))
+                .andExpect(jsonPath("$.data.content[0].eligibleGrades[0]")
+                        .value("GOLD"))
+                .andExpect(jsonPath("$.data.content[0].eligibleGrades[1]")
+                        .value("VIP"))
+                .andExpect(jsonPath("$.data.content[1].id").value(2))
+                .andExpect(jsonPath("$.data.content[1].policyType")
+                        .value("FIXED_AMOUNT"))
+                .andExpect(jsonPath("$.data.content[1].eligibleGrades[0]")
+                        .value("WELCOME"))
+                .andExpect(jsonPath("$.data.content[1].eligibleGrades[1]")
+                        .value("SILVER"))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.totalPages").value(1));
+
+        verify(couponTemplateQueryService).findPage(0, 20);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿이 없으면 200과 빈 페이지를 반환한다")
+    void findEmptyCouponTemplatePage() throws Exception {
+        when(couponTemplateQueryService.findPage(0, 20))
+                .thenReturn(new CouponTemplatePage(
+                        List.of(),
+                        0,
+                        20,
+                        0,
+                        0
+                ));
+
+        mockMvc.perform(get("/api/v1/admin/coupon-templates")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content").isArray())
+                .andExpect(jsonPath("$.data.content").isEmpty())
+                .andExpect(jsonPath("$.data.totalElements").value(0))
+                .andExpect(jsonPath("$.data.totalPages").value(0));
+
+        verify(couponTemplateQueryService).findPage(0, 20);
+    }
+
+    @Test
+    @DisplayName("요청한 페이지 번호와 크기로 쿠폰 템플릿을 조회한다")
+    void findRequestedCouponTemplatePage() throws Exception {
+        when(couponTemplateQueryService.findPage(1, 10))
+                .thenReturn(new CouponTemplatePage(
+                        List.of(),
+                        1,
+                        10,
+                        12,
+                        2
+                ));
+
+        mockMvc.perform(get("/api/v1/admin/coupon-templates")
+                        .param("page", "1")
+                        .param("size", "10")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(10));
+
+        verify(couponTemplateQueryService).findPage(1, 10);
+    }
+
+    @Test
+    @DisplayName("페이지 번호가 음수이면 400을 반환한다")
+    void rejectNegativePageNumber() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-templates")
+                        .param("page", "-1")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("페이지 번호는 0 이상이어야 합니다."));
+
+        verifyNoInteractions(couponTemplateQueryService);
+    }
+
+    @Test
+    @DisplayName("페이지 크기가 0이면 400을 반환한다")
+    void rejectNonPositivePageSize() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-templates")
+                        .param("size", "0")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("페이지 크기는 1 이상이어야 합니다."));
+
+        verifyNoInteractions(couponTemplateQueryService);
+    }
+
+    @Test
+    @DisplayName("페이지 크기가 최대값을 초과하면 400을 반환한다")
+    void rejectPageSizeOverMaximum() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-templates")
+                        .param("size", "101")
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        ))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("페이지 크기는 100 이하여야 합니다."));
 
         verifyNoInteractions(couponTemplateQueryService);
     }
