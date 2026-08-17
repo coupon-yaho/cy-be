@@ -122,10 +122,12 @@ public class StatsJdbcAdapter implements StatsRepository {
      */
     private static final String AGGREGATE_GRADE_STATS = """
             INSERT INTO grade_stats (run_id, coupon_id, grade, issued_total, used_total)
-            SELECT :runId, coupon_id, issued_grade, COUNT(*), SUM(status = 'USED')
-              FROM issuances
-             WHERE updated_at <= :asOf
-             GROUP BY coupon_id, issued_grade
+            SELECT :runId, i.coupon_id, i.issued_grade, COUNT(*), SUM(i.status = 'USED')
+              FROM issuances i
+              JOIN coupons c ON c.id = i.coupon_id
+             WHERE i.updated_at <= :asOf
+               AND c.created_at <= :asOf
+             GROUP BY i.coupon_id, i.issued_grade
             """;
 
     /**
@@ -147,6 +149,18 @@ public class StatsJdbcAdapter implements StatsRepository {
                AND id <= :maxHistoryId
                AND created_at <= :asOf
              GROUP BY day_of_week, hour_of_day
+            """;
+
+    private static final String SELECT_WITHOUT_ISSUE_HISTORY = """
+            SELECT %s
+              FROM issuances i
+             WHERE i.updated_at <= :asOf
+               AND NOT EXISTS (SELECT 1
+                                 FROM issuance_histories h
+                                WHERE h.issuance_id = i.id
+                                  AND h.event_type = 'ISSUE'
+                                  AND h.id <= :maxHistoryId
+                                  AND h.created_at <= :asOf)
             """;
 
     private final JdbcClient jdbcClient;
@@ -194,17 +208,6 @@ public class StatsJdbcAdapter implements StatsRepository {
      * <b>짝으로 본다.</b> 총합 비교는 대칭 오차를 못 잡는다 —
      * {@code StatsRepository#countIssuancesWithoutIssueHistory} javadoc 에 근거를 적었다.
      */
-    private static final String SELECT_WITHOUT_ISSUE_HISTORY = """
-            SELECT %s
-              FROM issuances i
-             WHERE i.updated_at <= :asOf
-               AND NOT EXISTS (SELECT 1
-                                 FROM issuance_histories h
-                                WHERE h.issuance_id = i.id
-                                  AND h.event_type = 'ISSUE'
-                                  AND h.id <= :maxHistoryId
-                                  AND h.created_at <= :asOf)
-            """;
 
     @Override
     public int countIssuancesWithoutIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {

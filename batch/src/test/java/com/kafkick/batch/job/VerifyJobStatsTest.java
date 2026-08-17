@@ -268,7 +268,8 @@ class VerifyJobStatsTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(failureMessagesOf(execution))
-                .anyMatch(message -> message.contains("판정 뒤 통계 집계 전에 데이터가 움직였습니다"));
+                .as("움직인 축이 재고라는 것까지 메시지에 남아야 한다")
+                .anyMatch(message -> message.contains("판정 뒤 통계 집계 전에 재고 축이 움직였습니다"));
         assertThat(runStatsStatus(runIdOf(execution)))
                 .as("NULL 이어야 한다 — SKIPPED 는 '뜻이 없어 안 했다' 이고 이것은 사고다")
                 .isNull();
@@ -296,8 +297,10 @@ class VerifyJobStatsTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(failureMessagesOf(execution))
-                .as("사전 검사가 아니라 후검사가 잡아야 한다 — 단계 이름으로 가른다")
-                .anyMatch(message -> message.contains("통계 집계 도중에 데이터가 움직였습니다"));
+                .as("사전 검사가 아니라 후검사가 잡아야 한다 — 단계 이름으로 가른다. "
+                        + "축은 회차 정책이다(grades 를 흔들어 policyDigest 가 갈렸다)")
+                .anyMatch(message ->
+                        message.contains("통계 집계 도중에 회차 정책 축이 움직였습니다"));
         assertThat(runStatsStatus(runIdOf(execution)))
                 .as("COMPLETE 앞에서 죽어야 뷰가 이 스냅샷을 안 집는다")
                 .isNull();

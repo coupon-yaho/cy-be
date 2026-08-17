@@ -10,6 +10,15 @@
 -- 불변식을 애플리케이션 로직이 아니라 DB 제약으로 표현한다(설계 원칙 1번).
 -- CLEAN 전용이 아니다 — 오염셋도 이 네 값만 쓴다(cy-seed 의 STATUSES).
 
+-- 적용 전 점검 둘. Flyway 가 이 구문을 돌릴 때 **기존 행을 전부 검사**하므로,
+-- 네 값 밖이 하나라도 있으면 마이그레이션이 error 3819 로 실패하고 그 자리에서 멈춘다.
+--
+--   SELECT status, COUNT(*) FROM issuances GROUP BY status;   -- 네 값뿐인지
+--   SELECT VERSION();                                          -- 8.0.16 이상인지
+--
+-- 8.0.16 미만은 CHECK 를 **파싱만 하고 무시한다** — 초록으로 통과하는데 아무것도 안 막는
+-- 상태가 되어 가장 나쁘다. 시드·테스트·CI 는 8.0.35 로 고정돼 있다.
+
 ALTER TABLE `issuances`
     ADD CONSTRAINT `ck_issuance_status`
         CHECK (`status` IN ('ISSUED', 'USED', 'CANCELLED', 'EXPIRED'));

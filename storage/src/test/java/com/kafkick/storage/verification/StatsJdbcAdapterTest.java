@@ -449,14 +449,49 @@ class StatsJdbcAdapterTest {
     void clearBeforeRewrite() {
         seed.issuance(IssuanceStatus.ISSUED);
         adapter.aggregateCouponStats(runId, AS_OF);
+        adapter.aggregateGradeStats(runId, AS_OF);
+        adapter.appendHourlyStats(runId, HourlyIssued.fillAll(List.of()));
 
         adapter.clear(runId);
-        adapter.aggregateCouponStats(runId, AS_OF);
 
-        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM coupon_stats WHERE run_id = :runId")
+        // 세 테이블을 다 본다. 하나만 보면 나머지 둘의 DELETE 가 빠져도 초록이다 —
+        // 그때 재실행이 (run_id, coupon_id) 중복키로 죽는다.
+        assertThat(rowsIn("coupon_stats")).isZero();
+        assertThat(rowsIn("grade_stats")).isZero();
+        assertThat(rowsIn("hourly_stats")).isZero();
+
+        assertThat(adapter.aggregateCouponStats(runId, AS_OF))
+                .as("지운 뒤 다시 쓸 수 있어야 한다")
+                .isEqualTo(1);
+    }
+
+    private int rowsIn(String table) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM " + table + " WHERE run_id = :runId")
                 .param("runId", runId)
                 .query(Integer.class)
-                .single())
+                .single();
+    }
+
+    /**
+     * <b>등급 집계도 회차 집합이 같아야 한다.</b> 회차 컷이 이쪽에만 없으면 {@code asOf} 뒤에
+     * 만들어진 회차의 발급건이 {@code grade_stats} 에만 남는다 — 회차 수 등식은 두 문장이 그
+     * 회차를 함께 제외해 침묵하므로 아무도 못 잡는다.
+     */
+    @Test
+    @DisplayName("asOf 이후에 만들어진 회차는 등급 집계에서도 빠진다")
+    void cutCouponsAtAsOfInGradeStats() {
+        seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED);
+        long late = seed.newCoupon();
+        jdbcClient.sql("UPDATE coupons SET created_at = :at WHERE id = :id")
+                .param("at", AS_OF.plusSeconds(1))
+                .param("id", late)
+                .update();
+        // 늦은 회차에 달린 발급건은 asOf 이하다 — 그래야 발급건 컷만으로는 안 걸린다.
+        seed.issuance(IssuanceStatus.ISSUED);
+
+        assertThat(adapter.aggregateGradeStats(runId, AS_OF))
+                .as("늦은 회차의 등급 쌍은 빠진다")
                 .isEqualTo(1);
     }
 }

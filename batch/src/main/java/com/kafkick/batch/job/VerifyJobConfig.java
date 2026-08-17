@@ -1202,15 +1202,24 @@ public class VerifyJobConfig {
             long frozenMaxHistory,
             String phase) {
         String frozenPolicy = jobExecution.getExecutionContext().getString(POLICY_DIGEST_KEY);
-        if (rules.hasIssuancesUpdatedAfter(asOf)
-                || rules.hasStocksUpdatedAfter(asOf)
-                || rules.hasHistoriesAddedAbove(frozenMaxHistory, asOf)
-                || !frozenPolicy.equals(rules.policyDigest())) {
+        // 네 축을 OR 로 합쳐 던지면 운영자가 무엇을 멈춰야 하는지 모른다 — 발급 경로를
+        // 멈출 일과 주입을 다시 돌린 일은 조치가 다르다. assertFrozenStep 은 축별로 던진다.
+        String movedAxis = null;
+        if (rules.hasIssuancesUpdatedAfter(asOf)) {
+            movedAxis = "발급건";
+        } else if (rules.hasStocksUpdatedAfter(asOf)) {
+            movedAxis = "재고";
+        } else if (rules.hasHistoriesAddedAbove(frozenMaxHistory, asOf)) {
+            movedAxis = "이력";
+        } else if (!frozenPolicy.equals(rules.policyDigest())) {
+            movedAxis = "회차 정책";
+        }
+        if (movedAxis != null) {
             throw new BusinessException(
                     VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
-                    phase + " 데이터가 움직였습니다. verdict 는 남고 stats_status 는 "
-                            + "NULL 로 남아 v_latest_stats_run 이 이 스냅샷을 가리키지 않습니다. "
-                            + "asOf=" + asOf);
+                    phase + " " + movedAxis + " 축이 움직였습니다. verdict 는 남고 "
+                            + "stats_status 는 NULL 로 남아 v_latest_stats_run 이 이 스냅샷을 "
+                            + "가리키지 않습니다. asOf=" + asOf);
         }
     }
 

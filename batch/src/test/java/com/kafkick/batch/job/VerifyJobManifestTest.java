@@ -133,7 +133,9 @@ class VerifyJobManifestTest {
                 .isZero();
         assertThat(execution.getStepExecutions())
                 .filteredOn(step -> "statsAggregateStep".equals(step.getStepName()))
-                .allSatisfy(step -> {
+                .as("통계 Step 이 체인에서 빠지면 아래 단언이 조용히 사라진다")
+                .singleElement()
+                .satisfies(step -> {
                     assertThat(step.getExitStatus().getExitCode()).isEqualTo("SKIPPED");
                     assertThat(step.getExitStatus().getExitDescription())
                             .as("건너뛴 사실이 배치 메타에 남아야 한다 — if 로 감추지 않는다")
