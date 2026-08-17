@@ -12,12 +12,14 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 
 /**
  * JPA 엔티티를 만들지 않고 JdbcClient 로 간다.
@@ -100,6 +102,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
 
         Number generated = keyHolder.getKey();
         if (generated == null) {
+            // 여기만 BusinessException 이 아니다. 행이 없다는 뜻이 아니라 INSERT 가 성공했는데
+            // 드라이버가 생성 키를 안 준 것이라, 업무 조건이 아니라 인프라 계약 위반이다.
             throw new IllegalStateException("검증 실행 ID가 생성되지 않았습니다.");
         }
 
@@ -131,7 +135,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
         // save() 는 실패를 예외로 알리는데 update() 만 조용히 넘어가면, 정리 배치가 지운 run 을
         // 갱신하려 할 때 판정이 안 써졌는데도 잡이 COMPLETED 로 끝난다.
         if (updated != 1) {
-            throw new IllegalStateException(
+            throw new BusinessException(
+                    VerificationErrorCode.RUN_ROW_VANISHED,
                     "검증 실행을 갱신하지 못했습니다. id=" + run.id() + " 갱신된 행=" + updated);
         }
     }
@@ -170,7 +175,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .update();
 
         if (updated != 1) {
-            throw new IllegalStateException(
+            throw new BusinessException(
+                    VerificationErrorCode.RUN_ROW_VANISHED,
                     "통계 상태를 갱신하지 못했습니다. runId=" + runId + " 갱신행=" + updated);
         }
     }

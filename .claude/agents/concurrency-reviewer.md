@@ -110,7 +110,9 @@ active_count = 현재 ISSUED + USED 개수  (취소·만료 시 감소)
 
 - `CouponStateMachine` 밖에서 상태를 직접 바꾸는 코드
 - 전이표에 없는 전이 (종단 상태 `CANCELLED`/`EXPIRED`에서 나가는 전이는 전부 위반)
-- **만료된 `USED`에 `CANCEL_USE`가 오는 경로**가 처리되는가 — `expires_at < now`면 `EXPIRED`로, 아니면 `ISSUED`로. 더미데이터 분포상 반드시 발생한다
+- **만료된 `USED`에 `CANCEL_USE`가 와도 `ISSUED`다** — 만료 여부를 보지 않는다. 전이표는 5행 고정이고 `CouponStateMachine`은 시각을 인자로 받지 않는다.
+  `expires_at < now`로 갈래를 나누는 2행 설계는 **기각됐다** — 같은 이력을 재실행할 때마다 판정이 달라져 검증이 성립하지 않기 때문이다 (`docs/01-what-we-build.md` 4번 결정).
+  그 갈래를 요구하는 지적은 정상 코드에 붙는 오탐이다. 실제로 CY-14에서 그렇게 틀린 blocker가 나갔다 (`.coderabbit.yaml`에 기록). 기준의 원문은 `docs/contract.json`의 `legal_transitions`(5개)다 — `.coderabbit.yaml`의 knowledge_base 규약이 계약 파일을 판단 근거로 못 박는다. `docs/01-what-we-build.md`의 전이표·4번 결정과 `CouponStateMachine.TABLE`은 그 사본이고, 셋이 갈리면 계약이 이긴다
 - 런타임과 검증 배치가 같은 상태머신을 쓰는가 (두 벌로 갈라지면 검증이 검증이 아니게 된다)
 
 ### 7. 멱등성

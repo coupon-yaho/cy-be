@@ -33,6 +33,27 @@ class VerificationRunTest {
         assertThat(incrementalRun().decidesVerdict()).isFalse();
     }
 
+    /**
+     * <b>종료가 시작보다 앞서면 소요 시간이 음수가 된다.</b> 가드는 있었지만 테스트가 없어,
+     * 지우면 아무도 모르는 상태였다.
+     *
+     * <p><b>같은 시각은 합법이다</b> — {@code finalizeRunStep} 이 판정 Step 의 시작 시각을
+     * 종료로 쓰므로 잡이 짧으면 시작과 같아질 수 있고, 이 저장소의 여러 테스트가 실제로
+     * 그렇게 쓴다. 여기서 막는 것은 <b>앞선</b> 경우뿐이라 {@code isBefore} 가 맞다.
+     * 1마이크로초가 {@code datetime(6)} 의 최소 단위다.
+     */
+    @Test
+    @DisplayName("종료 시각이 시작보다 앞서면 거부한다")
+    void rejectFinishedBeforeStarted() {
+        VerificationRun run = fullRun();
+
+        assertThatThrownBy(() -> run.finish(
+                VerdictType.PASS, 0, "checksum", "fingerprint",
+                run.startedAt().minusNanos(1_000)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("종료 시각은 시작 시각보다 앞설 수 없습니다");
+    }
+
     @Test
     @DisplayName("판정을 확정하면 검출 건수와 증적이 채워진다")
     void finishRun() {

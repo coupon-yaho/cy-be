@@ -2,7 +2,7 @@
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&useAffectedRows=false
     # 로컬 개발용 기본값. 운영은 환경변수로 최소 권한 계정을 주입한다.
     username: ${DB_USERNAME:app}
     password: ${DB_PASSWORD:app}

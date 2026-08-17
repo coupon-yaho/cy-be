@@ -164,6 +164,30 @@ class VerificationFindingJdbcAdapterTest {
         assertThat(countOf(runId)).isEqualTo(800);
     }
 
+    /**
+     * <b>800행은 분할 경계를 넘지 않는다.</b> {@code BATCH_SIZE} 가 1000 이라 위 테스트는
+     * 루프를 <b>한 번만</b> 돌리고 끝난다 — 두 번째 묶음의 오프셋 계산은 한 번도 실행된 적이 없었다.
+     *
+     * <p>규칙당 상한 기본값이 10000 이라 실제 실행은 경계를 쉽게 넘는다.
+     */
+    @Test
+    @DisplayName("분할 경계를 넘겨도 다 들어간다 — 두 번째 묶음이 실제로 돈다")
+    void appendAcrossBatchBoundary() {
+        int size = 1_001;
+        List<VerificationFinding> findings = LongStream.rangeClosed(1, size)
+                .mapToObj(id -> VerificationFinding.forHistory(
+                        FindingType.ILLEGAL_TRANSITION, id, "a", "b"))
+                .toList();
+
+        adapter.appendAll(runId, findings);
+
+        assertThat(keysOf(runId))
+                .as("건수만 보면 누락과 어긋난 키가 상쇄돼 통과한다 — 이 PR 이 판정에서 버린 바로 그 논리다")
+                .containsExactlyInAnyOrderElementsOf(LongStream.rangeClosed(1, size)
+                        .mapToObj(id -> FindingType.ILLEGAL_TRANSITION + ":HISTORY:" + id)
+                        .toList());
+    }
+
     private Map<String, Object> findByTargetKey(String targetKey) {
         return jdbcClient.sql("""
                         SELECT finding_type, target_key, campaign_id, member_id,
@@ -175,6 +199,24 @@ class VerificationFindingJdbcAdapterTest {
                 .param("targetKey", targetKey)
                 .query()
                 .singleRow();
+    }
+
+    /**
+     * 검출을 <b>{@code (finding_type, target_key)} 쌍</b>으로 전부. 건수가 아니라 집합을 본다.
+     *
+     * <p>키가 쌍인 것은 이 저장소 전체의 어휘다 — {@code uk_run_finding} 도, checksum 입력도,
+     * 정답 매니페스트 조인도 그 쌍이다. {@code target_key} 만 보면 종류가 틀려도 통과한다.
+     * 표기는 {@code ExpectedFindingJdbcAdapterTest} 와 같은 {@code FindingKey#toString} 이다.
+     */
+    private List<String> keysOf(long targetRunId) {
+        return jdbcClient.sql("""
+                        SELECT finding_type, target_key
+                          FROM verification_findings WHERE run_id = :runId
+                        """)
+                .param("runId", targetRunId)
+                .query((rs, rowNum) ->
+                        rs.getString("finding_type") + ":" + rs.getString("target_key"))
+                .list();
     }
 
     private int countOf(long targetRunId) {

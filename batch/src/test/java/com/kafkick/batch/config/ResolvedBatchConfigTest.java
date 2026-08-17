@@ -234,9 +234,9 @@ class ResolvedBatchConfigTest {
 
             assertThat(seen)
                     .as("VerifyJobConfig 의 @Value 키 집합이 달라졌다. 빠진 것이 있으면 "
-                            + "생성자·메서드 중 한쪽을 못 훑고 있는 것이고, 는 것이 있으면 여기에 추가해라")
+                            + "생성자·메서드 중 한쪽을 못 훑고 있는 것이고, 늘어난 것이 있으면 "
+                            + "여기에 추가해라")
                     .isEqualTo(EXPECTED_VALUE_KEYS);
-
         }
     }
 }

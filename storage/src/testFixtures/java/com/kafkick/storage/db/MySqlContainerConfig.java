@@ -35,6 +35,11 @@ public class MySqlContainerConfig {
                 .withUrlParam("characterEncoding", "UTF-8")
                 .withUrlParam("useUnicode", "true")
                 .withUrlParam("rewriteBatchedStatements", "true")
+                // UPDATE 반환값을 matched rows 로 고정한다. 기본값이지만 명시한다 —
+                // VerificationRunJdbcAdapter 가 "0행 = 실행 행이 없다" 로 해석하는데,
+                // 누가 UPSERT 반환값(삽입 1/갱신 2)을 쓰려고 useAffectedRows=true 를 붙이면
+                // 값이 같은 UPDATE 가 0행이 되어 멀쩡한 행에 RUN_ROW_VANISHED 가 난다.
+                .withUrlParam("useAffectedRows", "false")
                 // 운영 MySQL 서버 설정(my.cnf) 중 쿼리 결과에 영향을 주는 항목만 옮겼다.
                 // 메모리·로깅·binlog 는 테스트에 불필요하므로 제외. 서버 설정이 바뀌면 여기도 같이 본다.
                 .withCommand(
@@ -47,6 +52,10 @@ public class MySqlContainerConfig {
                         // 테스트가 운영보다 느슨한 모드에서 돈다.
                         "--sql-mode=ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
                                 + "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
-                        "--local-infile=0");
+                        "--local-infile=0",
+                        // 위 주석대로 binlog 는 테스트에 불필요한데 이미지 기본값이 ON 이었다.
+                        // 켜져 있으면 SUPER 없는 계정이 트리거를 못 만들어(오류 1419),
+                        // "실행 중에 데이터가 바뀐다" 를 재현하는 테스트를 쓸 수 없다.
+                        "--skip-log-bin");
     }
 }
