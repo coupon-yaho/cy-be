@@ -28,6 +28,16 @@ public interface VerificationRunRepository {
      */
     void updateStatsStatus(long runId, StatsStatus status);
 
+    /**
+     * <b>대조한 정답 묶음을 실행 행에 남긴다.</b> CORRUPT 전용이다.
+     *
+     * <p>{@code VerificationRun} 레코드에 넣지 않았다. 이 값을 읽는 코드가 없고 — 게이트는
+     * {@code verdict} 를 읽는다 — 사람이 나중에 <i>"어느 묶음과 대조해 통과했나"</i> 를 조회하는
+     * 증적이다. 레코드에 넣으면 {@code start}·{@code restore}·{@code finish} 와 그 호출자
+     * 24곳이 {@code null} 을 실어 나르게 된다. 필요해지는 날 그때 올린다.
+     */
+    void recordComparedManifest(long runId, long seedRunId);
+
     Optional<VerificationRun> findById(long id);
 
     /**

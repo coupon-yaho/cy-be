@@ -580,6 +580,12 @@ public class VerifyJobConfig {
                             stepExecution.getJobExecution().getExecutionContext();
                     jobContext.putLong(RUN_ID_KEY, runId);
                     freezeSeedRunId(jobContext, dataset, parameters, expectedFindings);
+                    // 컨텍스트만으로는 부족하다 — 잡 메타를 지우는 정리 배치가 돌면 사라진다.
+                    // 실행 행에 남겨야 PASS 하나로 "어느 묶음과 대조했나" 에 답할 수 있다.
+                    if (dataset != DatasetType.CLEAN) {
+                        runs.recordComparedManifest(runId, frozenSeedRunId(
+                                stepExecution.getJobExecution()));
+                    }
                     jobContext.putString(POLICY_DIGEST_KEY, rules.policyDigest());
                     scanRange.filter(ReplayScanRange::hasWindow)
                             .ifPresent(range -> freeze(jobContext, range));

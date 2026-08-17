@@ -151,6 +151,37 @@ class VerificationRunJdbcAdapterTest {
                 .isEqualTo(VerificationErrorCode.RUN_ROW_VANISHED);
     }
 
+    /**
+     * <b>PASS 행 하나로 "어느 묶음과 대조했나" 에 답할 수 있어야 한다.</b> 그 값이 잡 실행
+     * 컨텍스트에만 있으면 정리 배치가 한 번 돌면 영영 못 답한다.
+     */
+    @Test
+    @DisplayName("대조한 정답 묶음을 실행 행에 남긴다 — 판정은 건드리지 않는다")
+    void recordComparedManifest() {
+        VerificationRun saved = adapter.save(fullRun());
+        adapter.update(saved.finish(VerdictType.PASS, 0, null, null, STARTED_AT));
+
+        adapter.recordComparedManifest(saved.id(), 7L);
+
+        assertThat(jdbcClient.sql("SELECT seed_run_id FROM verification_runs WHERE id = :id")
+                .param("id", saved.id())
+                .query(Long.class)
+                .single())
+                .isEqualTo(7L);
+        assertThat(adapter.findById(saved.id()).orElseThrow().verdict())
+                .as("증적을 남기다가 판정을 지우면 게이트가 읽을 값이 사라진다")
+                .isEqualTo(VerdictType.PASS);
+    }
+
+    @Test
+    @DisplayName("없는 실행에 묶음을 기록하면 죽는다 — 조용히 넘어가면 증적이 빈다")
+    void rejectManifestRecordOfMissingRun() {
+        assertThatThrownBy(() -> adapter.recordComparedManifest(999_999L, 1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .isEqualTo(VerificationErrorCode.RUN_ROW_VANISHED);
+    }
+
     @Test
     @DisplayName("없는 실행을 찾으면 빈 값이다")
     void findMissingRun() {
@@ -199,6 +230,58 @@ class VerificationRunJdbcAdapterTest {
                 .update();
 
         assertThat(inserted).isEqualTo(1);
+    }
+
+    /**
+     * <b>PRD 의 뷰 정의는 시드가 만드는 상황에서 비결정적이다.</b> {@code PRD-v4.15.md:953} 이
+     * {@code ORDER BY as_of DESC LIMIT 1} 로 적었는데, 시드는 CLEAN 을 <b>같은 {@code as_of}</b> 에
+     * {@code attempt} 1·2 로 심고 둘 다 {@code stats_status = COMPLETE} 다(결정론 증명용).
+     * 그래서 {@code id} 를 두 번째 정렬 키로 넣어 "같은 시각이면 나중 시도" 로 못 박았다
+     * ({@code V8__latest_stats_run_view.sql}).
+     *
+     * <p><b>이 테스트가 그 절을 지키지는 못한다.</b> 돌연변이로 확인했다 — {@code id DESC} 를
+     * 지워도 MySQL 8.0.35 가 <b>우연히 같은 행</b>을 돌려줘 초록으로 남았다. 여기서 지키는 것은
+     * 뷰의 <i>계약</i>("같은 시각이면 나중 시도")이고, 그 계약이 MySQL 의 우연한 tie 순서가 아니라
+     * <b>SQL 의미로</b> 보장되게 만드는 것이 그 절의 몫이다.
+     *
+     * <p>바꿔 말하면 이 단언은 계약이 뒤집히는 것은 잡지만 절이 사라지는 것은 못 잡는다.
+     * 그것을 잡을 방법이 없다 — 정렬이 없을 때의 순서는 MySQL 이 정하고 버전마다 달라진다.
+     * 그래서 절을 두는 이유를 마이그레이션 주석에 적었다. 나중에 그 절을 지우려는 사람이
+     * 테스트가 초록인 것을 근거로 삼지 않게 하려는 것이다.
+     */
+    @Test
+    @DisplayName("최신 통계 뷰는 같은 as_of 면 나중 시도를 고른다 — PRD 정의만으로는 미정이다")
+    void pickLaterAttemptOnSameAsOf() {
+        long first = adapter.save(fullRun()).id();
+        long second = adapter.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 2, STARTED_AT)).id();
+        for (long id : new long[] {first, second}) {
+            adapter.update(adapter.findById(id).orElseThrow()
+                    .finish(VerdictType.PASS, 0, null, null, STARTED_AT)
+                    .withStatsStatus(StatsStatus.COMPLETE));
+        }
+
+        assertThat(latestStatsRun())
+                .as("두 행이 같은 as_of 에 COMPLETE 다. id 정렬이 없으면 어느 쪽인지 미정이다")
+                .isEqualTo(second);
+    }
+
+    /** 통계 스냅샷이 완결되지 않았으면 조회 자체가 안 돼야 한다 — 부분값을 섞어 읽지 않는다. */
+    @Test
+    @DisplayName("완결된 CLEAN 스냅샷이 없으면 뷰가 비어 있다")
+    void hideIncompleteSnapshot() {
+        adapter.update(adapter.findById(adapter.save(fullRun()).id()).orElseThrow()
+                .finish(VerdictType.PASS, 0, null, null, STARTED_AT)
+                .withStatsStatus(StatsStatus.PARTIAL));
+
+        assertThat(latestStatsRun()).isNull();
+    }
+
+    private Long latestStatsRun() {
+        return jdbcClient.sql("SELECT id FROM v_latest_stats_run")
+                .query(Long.class)
+                .optional()
+                .orElse(null);
     }
 
     private static VerificationRun fullRun() {

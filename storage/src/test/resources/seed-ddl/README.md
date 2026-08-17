@@ -3,7 +3,7 @@
 `SchemaParityTest` 가 읽는다. **손으로 고치지 않는다.**
 
 ```
-원본   coupon-yaho/cy-seed-data-generator @ 940e57a  (2026-08-17)  ddl/
+원본   coupon-yaho/cy-seed-data-generator @ 4d1a2a0  (2026-08-17)  ddl/
 사본   이 디렉터리                                  바이트 동일
 ```
 
@@ -36,7 +36,7 @@ CI 는 옆 저장소를 못 읽는다. 그렇다고 대조를 포기하면 두 D
 # 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
 set -o pipefail
 tmp=$(mktemp -d)
-SHA=940e57a
+SHA=4d1a2a0
 for f in 00_schema 10_constraints_common 11_constraints_clean \
          12_constraints_corrupt 90_perf_indexes_optional; do
   gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl/$f.sql?ref=$SHA" \
