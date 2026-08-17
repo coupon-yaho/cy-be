@@ -3,7 +3,7 @@
 `SchemaParityTest` 가 읽는다. **손으로 고치지 않는다.**
 
 ```
-원본   coupon-yaho/cy-seed-data-generator @ 4d1a2a0  (2026-08-17)  ddl/
+원본   coupon-yaho/cy-seed-data-generator @ a5032df  (2026-08-17)  ddl/
 사본   이 디렉터리                                  바이트 동일
 ```
 
@@ -34,29 +34,40 @@ CI 는 옆 저장소를 못 읽는다. 그렇다고 대조를 포기하면 두 D
 
 ```bash
 # 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
-set -o pipefail
+#
+# 파일명을 하드코딩하지 않는다. 상류에 파일이 하나 늘면 하드코딩된 목록은 그것을 안 받고,
+# diff -r 은 양쪽에 없는 파일을 비교하지 않아 "같다" 를 출력한다.
+set -euo pipefail
+SHA=a5032df
 tmp=$(mktemp -d)
-SHA=4d1a2a0
-for f in 00_schema 10_constraints_common 11_constraints_clean \
-         12_constraints_corrupt 90_perf_indexes_optional; do
-  gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl/$f.sql?ref=$SHA" \
-    --jq '.content' | base64 -d > "$tmp/$f.sql" || exit 1
+trap 'rm -rf "$tmp"' EXIT
+
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl?ref=$SHA" \
+  --jq '.[] | select(.name | endswith(".sql")) | .name' | while read -r f; do
+  gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl/$f?ref=$SHA" \
+    --jq '.content' | base64 -d > "$tmp/$f"
 done
-diff -r "$tmp" . --exclude=README.md && echo "사본이 원본과 같다"
-rm -rf "$tmp"
+
+# diff 를 마지막 명령으로 둔다. 뒤에 rm 을 붙이면 그 종료 코드가 diff 결과를 덮어
+# CI 나 훅에 붙였을 때 사본이 갈라져도 통과한다 (trap 이 정리를 맡는다).
+diff -r "$tmp" . --exclude=README.md
 ```
 
 ```bash
 # 갱신 — 원본이 새 리비전으로 올라갔을 때만. 위 표의 SHA 도 같이 고친다
-set -o pipefail
-tmp=$(mktemp -d)
+set -euo pipefail
 SHA=<새 SHA>
-for f in 00_schema 10_constraints_common 11_constraints_clean \
-         12_constraints_corrupt 90_perf_indexes_optional; do
-  gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl/$f.sql?ref=$SHA" \
-    --jq '.content' | base64 -d > "$tmp/$f.sql" || exit 1
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl?ref=$SHA" \
+  --jq '.[] | select(.name | endswith(".sql")) | .name' | while read -r f; do
+  gh api "repos/coupon-yaho/cy-seed-data-generator/contents/ddl/$f?ref=$SHA" \
+    --jq '.content' | base64 -d > "$tmp/$f"
 done
-cp "$tmp"/*.sql . && rm -rf "$tmp"
+
+# 사본에서 사라진 파일도 반영해야 하므로 지우고 다시 깐다
+rm -f ./*.sql && cp "$tmp"/*.sql .
 ```
 
 갱신 뒤 `SchemaParityTest` 가 빨개지면 **시드가 앞서 나간 것**이다.
@@ -65,5 +76,7 @@ cy-be 가 주인이므로, 시드를 되돌리든 Flyway 마이그레이션을 �
 
 ## 파일이 늘거나 줄면
 
-`SchemaParityTest.CLEAN_DDL` 목록도 같이 고친다. 목록에 없는 파일은 조용히 무시되므로,
-새 DDL 파일이 생겼는데 목록에 안 넣으면 **그 파일의 내용은 대조되지 않는다.**
+`SchemaParityTestBase` 의 `CLEAN_DDL`·`CORRUPT_DDL`·`EXCLUDED_DDL` 중 하나에 넣어야 한다.
+**사람의 규율에 맡기지 않는다** — `accountForEverySeedDdl` 이 이 디렉터리의 실제 내용과
+세 목록의 합집합이 같은지 단언하므로, 새 파일을 어디에도 안 넣으면 테스트가 빨개진다.
+제외한다면 왜인지 `EXCLUDED_DDL` javadoc 에 적는다.

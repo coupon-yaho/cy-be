@@ -33,8 +33,10 @@ public interface VerificationRunRepository {
      *
      * <p>{@code VerificationRun} 레코드에 넣지 않았다. 이 값을 읽는 코드가 없고 — 게이트는
      * {@code verdict} 를 읽는다 — 사람이 나중에 <i>"어느 묶음과 대조해 통과했나"</i> 를 조회하는
-     * 증적이다. 레코드에 넣으면 {@code start}·{@code restore}·{@code finish} 와 그 호출자
-     * 24곳이 {@code null} 을 실어 나르게 된다. 필요해지는 날 그때 올린다.
+     * 증적이다. 레코드에 넣으면 {@code start}·{@code restore}·{@code finish} 와 <b>그 호출자
+     * 전부</b>가 {@code null} 을 실어 나르게 된다 — 대부분 테스트다. 필요해지는 날 그때 올린다.
+     *
+     * <p>수치를 적지 않는다. 호출자 수는 테스트가 늘 때마다 바뀌어 <b>적는 순간 낡는다.</b>
      */
     void recordComparedManifest(long runId, long seedRunId);
 

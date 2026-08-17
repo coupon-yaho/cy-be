@@ -11,11 +11,12 @@
 --    테스트는 "검출 0건" 을 정상으로 읽습니다 — 규칙이 틀려도 초록입니다.
 --
 --    uk_coupon_member   오염 유형 6 — 동일 회원이 같은 회차에서 2건
---    code (인라인 UNIQUE)  오염 유형 5 — 같은 code 를 다른 회원에게 복제
+--    uk_coupon_code     오염 유형 5 — 같은 code 를 다른 회원에게 복제
 --    ck_stock_range     오염 유형 1(+1) · 3(-1) — 재고를 범위 밖으로 민다
 --
---    code 는 V1__init_schema.sql:73 에서 `code char(16) UNIQUE` 로 선언돼 이름을 안 줬습니다.
---    MySQL 은 그런 인덱스에 컬럼명을 그대로 씁니다.
+--    V1 은 `code char(16) UNIQUE` 로 선언해 이름을 안 줬고 MySQL 이 컬럼명을 그대로 썼습니다.
+--    V6__name_unique_constraints.sql 이 uk_coupon_code 로 개명했습니다 — 여기서 떨어뜨리는
+--    이름은 그 이후 이름입니다.
 
 -- ⚠️ 대체 인덱스를 먼저 깝니다. uk_coupon_member 는 (coupon_id, member_id) 라
 --    coupon_id FK 가 쓰는 유일한 인덱스이기도 해서, 그냥 떨어뜨리면 MySQL 이
@@ -24,7 +25,10 @@
 --    시드 저장소의 CORRUPT 스키마에는 uk_coupon_member 가 애초에 없고, FK 를 걸 때
 --    MySQL 이 coupon_id 인덱스를 자동으로 만듭니다. 여기서는 이미 있는 것을 떼는 순서라
 --    그 자동 생성분을 손으로 만들어 주는 셈입니다 — 최종 모양은 같습니다.
-CREATE INDEX `idx_issuance_coupon` ON `issuances` (`coupon_id`);
+-- 이름이 `coupon_id` 인 것은 우연이 아니다. 시드 CORRUPT 에는 uk_coupon_member 가 애초에
+-- 없어, FK 를 걸 때 MySQL 이 자식 컬럼에 인덱스를 자동 생성하고 그 이름이 `coupon_id` 다.
+-- 여기서 다른 이름을 주면 두 스키마의 최종 모양이 갈린다 — CorruptSchemaParityTest 가 잡는다.
+CREATE INDEX `coupon_id` ON `issuances` (`coupon_id`);
 
 DROP INDEX `uk_coupon_member` ON `issuances`;
 

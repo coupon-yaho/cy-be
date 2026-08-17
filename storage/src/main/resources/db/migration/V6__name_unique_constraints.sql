@@ -12,12 +12,11 @@
 -- 시드가 만든 CORRUPT DB 에서는 그 이름이 없어 같은 문장이 실패한다.
 --
 -- V1 을 직접 고치지 않는다 — 이미 적용된 마이그레이션의 체크섬을 바꾸면 Flyway 가 거부한다.
---
--- FK 의존 없음을 확인했다: `issuances.code` · `members.email_hash` 를 참조하는 FK 가 없어
--- (V1 의 REFERENCES 절 전수 확인) 인덱스를 떼도 MySQL 이 막지 않는다.
 
-ALTER TABLE `issuances` DROP INDEX `code`;
-CREATE UNIQUE INDEX `uk_coupon_code` ON `issuances` (`code`);
+-- RENAME INDEX 다. DROP 뒤 CREATE 로 쓰면 안 된다 — MySQL 의 DDL 은 트랜잭션이 아니라
+-- 각 문장이 암묵 커밋이다. 두 문장 사이에는 유니크가 없는 창이 열리고, 그 틈에 중복이
+-- 들어오면 CREATE 가 실패해 **인덱스만 사라진 상태**로 남는다. 이름을 바꾸는 일에
+-- 제약을 잠시 걷어낼 이유가 없다.
 
-ALTER TABLE `members` DROP INDEX `email_hash`;
-CREATE UNIQUE INDEX `uk_email_hash` ON `members` (`email_hash`);
+ALTER TABLE `issuances` RENAME INDEX `code`       TO `uk_coupon_code`;
+ALTER TABLE `members`   RENAME INDEX `email_hash` TO `uk_email_hash`;

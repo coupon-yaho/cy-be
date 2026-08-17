@@ -110,7 +110,7 @@ class CorruptSchemaShapeTest {
                         SELECT column_name
                           FROM information_schema.statistics
                          WHERE table_schema = DATABASE() AND table_name = 'issuances'
-                           AND index_name = 'idx_issuance_coupon'
+                           AND index_name = 'coupon_id'
                          ORDER BY seq_in_index
                         """)
                 .query(String.class)

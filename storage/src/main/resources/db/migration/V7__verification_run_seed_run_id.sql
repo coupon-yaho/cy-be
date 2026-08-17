@@ -15,3 +15,10 @@ ALTER TABLE `verification_runs`
     ADD COLUMN `seed_run_id` bigint NULL
         COMMENT '대조한 정답 묶음. CORRUPT 만 채운다 — CLEAN 은 대조 상대가 없다'
         AFTER `dataset`;
+
+-- 불변식을 애플리케이션 로직이 아니라 DB 제약으로 표현한다(설계 원칙 1번).
+-- CLEAN 은 대조할 묶음이 없으므로 이 컬럼이 채워지면 그 행은 앞뒤가 안 맞는다.
+-- 지금 방어는 호출자 분기 한 곳뿐이라, 다른 경로가 생기면 조용히 뚫린다.
+ALTER TABLE `verification_runs`
+    ADD CONSTRAINT `ck_seed_run_id_corrupt_only`
+        CHECK (`seed_run_id` IS NULL OR `dataset` = 'CORRUPT');

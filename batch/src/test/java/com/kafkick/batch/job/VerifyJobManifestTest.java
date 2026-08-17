@@ -121,8 +121,11 @@ class VerifyJobManifestTest {
         assertThat(run.get("stats_status")).isEqualTo("SKIPPED");
         assertThat(exitMessageOf(execution))
                 .contains("seedRunId=1").contains("정답 1건 / 검출 1건");
-        assertThat(jdbcClient.sql(
-                        "SELECT seed_run_id FROM verification_runs WHERE dataset = 'CORRUPT'")
+        // dataset 은 여러 실행이 공유하는 라벨이다. 이 컬럼이 존재하는 이유가
+        // "묶음이 둘인 DB" 인데, 그 상황을 재현하는 순간 .single() 이 깨진다.
+        long runId = execution.getExecutionContext().getLong(VerifyJobConfig.RUN_ID_KEY);
+        assertThat(jdbcClient.sql("SELECT seed_run_id FROM verification_runs WHERE id = :id")
+                .param("id", runId)
                 .query(Long.class)
                 .single())
                 .as("종료 메시지는 잡 메타와 함께 지워진다. 실행 행이 남는 증적이다")
