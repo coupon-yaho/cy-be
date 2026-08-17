@@ -404,7 +404,7 @@ AI 리뷰를 차단으로 올리자는 말이 나오면 여기로 돌아온다. 
 
 - [ ] **CodeRabbit 리뷰 품질 실측** — `.coderabbit.yaml` 의 `path_instructions` 가 실제로 먹히는지. 5절 검증 4c(UNIQUE 누락)가 첫 판정 지점이다
 - [ ] **profile 튜닝** — 현재 `assertive`. 노이즈가 많으면 `chill` 로 내린다. 반대로 놓치면 `path_instructions` 를 조인다
-- [ ] **빌드 게이트** — Gradle 빌드·테스트 CI. 코드가 생긴 뒤. 3.5a절 기준으로 **이건 차단**이다
+- [x] ~~**빌드 게이트**~~ — `build.yml` 로 붙였다 (CY-200). PR 마다 `./gradlew build` 를 돌린다. 3.5a절 기준대로 **차단**이라 Ruleset 필수 체크에 `빌드·테스트` 를 등록해야 뜻이 생긴다 — 워크플로만 있으면 실패해도 머지를 못 막는다
 - [x] ~~**함께 보기 규칙 실검증**~~ — 가짜 트리 리허설로 규칙 3개가 죽어 있던 것을 찾아 고쳤다 (3.5b절). 그 교훈(`**/` 접두사)은 `.coderabbit.yaml` 글롭에도 그대로 적용했다
 - [ ] **체크리스트 순회 보증** — 3.5c절. 자동 검사가 없어진 자리를 사람 리뷰로 메우고 있다. 더 나은 방법이 있는지
 - [ ] **security-audit 액션 SHA 고정** — 현재 `@main`. `gh api repos/anthropics/claude-code-security-review/commits/main --jq .sha`
@@ -530,8 +530,9 @@ Settings → Rules → Rulesets → New branch ruleset (target: `main`)
 - ✅ Require a pull request before merging — **Required approvals: 1**
 - ✅ Dismiss stale approvals when new commits are pushed
 - ❌ **Require review from Code Owners** ← **끈다.** 이유는 아래
-- ✅ Require status checks to pass → **`PR 제목 규약`**, **`브랜치명 규약`**
+- ✅ Require status checks to pass → **`PR 제목 규약`**, **`브랜치명 규약`**, **`빌드·테스트`**
   (`커밋 메시지 (경고)` 는 **등록하지 말 것** — 경고 전용)
+  (`빌드·테스트` 는 `build.yml`. 3.5a절이 차단으로 정한 유일한 코드 게이트다)
 - ✅ Block force pushes
 
 **왜 코드오너 승인 필수를 끄는가 — 안 끄면 대부분의 PR 이 영구 차단된다.**
@@ -654,6 +655,7 @@ Settings → Actions → General
     conventions.yml             PR 제목·브랜치명 강제 / 커밋 경고  ⚠️ JIRA_KEY 설정
     coderabbit-slack.yml        CodeRabbit 리뷰 → Slack  (SLACK_WEBHOOK_URL 없으면 스킵)
     security-audit.yml          공식 보안 액션. D13 1회  (CLAUDE_API_KEY 없으면 스킵)
+    build.yml                   PR 마다 ./gradlew build  ⚠️ Ruleset 필수 체크 등록 필요
 
 (GitHub Issues 템플릿 없음 — 이슈 트래커는 Jira)
 docs/
