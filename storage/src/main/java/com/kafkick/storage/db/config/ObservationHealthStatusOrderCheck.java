@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.health.contributor.Status;
 import org.springframework.core.env.Environment;
 
 /**
@@ -25,6 +26,16 @@ import org.springframework.core.env.Environment;
  * <b>하나라도</b> 있을 때만 검사한다. 관리 설정을 아예 안 하는 JVM(설정 파일 없이 뜨는 테스트
  * 컨텍스트가 그렇다)까지 막으면, 이 검사가 관측과 무관한 것을 죽인다. 낡은 파일은 최소한
  * {@code show-details} 같은 키를 갖고 있으므로 이 조건으로 걸린다.
+ *
+ * <p><b>일반 검증기가 아니다.</b> management 설정 전반을 검사하지 않고, 관측 계약이 성립하는 데
+ * 필요한 것만 본다. 우리 것이 아닌 {@code DOWN}·{@code OUT_OF_SERVICE} 의 서열까지 보는 이유는
+ * 하나뿐이다 — 이 PR 이전에는 아무도 {@code status.order} 를 건드릴 이유가 없었는데 우리가 그 줄을
+ * 만들었고, 그래서 그 줄을 잘못 쓸 확률을 우리가 올렸다.
+ *
+ * <p><b>고르지 않은 대안</b> — 순서를 설정 파일이 아니라 코드가 정하게 하면({@code StatusAggregator}
+ * 빈을 직접 정의) 어긋날 일 자체가 없어진다. 그러나 그 빈을 정의하는 순간
+ * {@code management.endpoint.health.status.order} 설정이 <b>조용히 무시된다</b> — 자동설정을 대체할 때
+ * 반복해서 겪은 그 구조다. 드리프트 위험을 "설정이 무시되는" 위험과 맞바꾸는 것이라 택하지 않았다.
  */
 class ObservationHealthStatusOrderCheck implements InitializingBean {
 
@@ -62,12 +73,45 @@ class ObservationHealthStatusOrderCheck implements InitializingBean {
         requireGroupReportsFailure(binder, code);
     }
 
-    /** 이게 없으면 관측 풀 장애가 합산 상태를 끌어내려 인스턴스가 로드밸런서에서 빠진다. */
+    /**
+     * 합산 상태는 이 목록에서 <b>가장 앞선 것</b>으로 정해진다. 그래서 우리 계약은 서열이다:
+     *
+     * <pre>DOWN · OUT_OF_SERVICE  &lt;  UP  &lt;  OBSERVATION_DOWN</pre>
+     *
+     * <p>포함 여부만 보면 부족하다. {@code OBSERVATION_DOWN} 이 {@code UP} 앞에 오면 관측 풀
+     * 장애만으로 인스턴스가 빠지고(실측), 반대로 {@code UP} 이 맨 앞이면 <b>운영 DB 가 죽어도
+     * 200 을 돌려준다</b>(실측). 뒤쪽이 더 큰 사고라 양쪽을 다 본다.
+     *
+     * <p><b>목록에 없는 상태는 "가장 안 심각" 으로 취급된다</b>(실측). 그래서 {@code DOWN} 이
+     * 빠진 것과 {@code DOWN} 이 {@code UP} 뒤에 있는 것은 결과가 같다 — 같은 실패로 다룬다.
+     */
     private static void requireSeverityOrder(Binder binder, String code) {
         List<String> order = binder.bind(STATUS_ORDER, Bindable.listOf(String.class)).orElseGet(List::of);
-        if (!order.contains(code)) {
-            throw stale(STATUS_ORDER + " 에 " + code + " 가 없다."
-                + " 관측 풀 장애가 그대로 합산돼 인스턴스가 로드밸런서에서 빠진다. (현재 값: " + order + ")");
+
+        int up = order.indexOf(Status.UP.getCode());
+        if (up < 0) {
+            throw stale(STATUS_ORDER + " 에 " + Status.UP.getCode() + " 가 없다."
+                + " 기준점이 없으면 나머지 순서를 판정할 수 없다. (현재 값: " + order + ")");
+        }
+
+        int observation = order.indexOf(code);
+        if (observation < 0 || observation < up) {
+            throw stale(STATUS_ORDER + " 에서 " + code + " 가 " + Status.UP.getCode() + " 보다 뒤가 아니다."
+                + " 관측 풀 장애가 합산 상태를 끌어내려 인스턴스가 로드밸런서에서 빠진다."
+                + " (현재 값: " + order + ")");
+        }
+
+        requireMoreSevereThanUp(order, Status.DOWN.getCode(), up);
+        requireMoreSevereThanUp(order, Status.OUT_OF_SERVICE.getCode(), up);
+    }
+
+    /** 빠져도, 뒤에 있어도 결과는 같다 — 진짜 장애가 UP 에 가려 200 으로 나간다. */
+    private static void requireMoreSevereThanUp(List<String> order, String failure, int up) {
+        int index = order.indexOf(failure);
+        if (index < 0 || index > up) {
+            throw stale(STATUS_ORDER + " 에서 " + failure + " 가 " + Status.UP.getCode() + " 보다 앞이 아니다"
+                + (index < 0 ? "(목록에 없다 — 없으면 가장 안 심각으로 취급된다)" : "")
+                + ". 운영 장애가 합산 상태에 묻혀 헬스체크가 200 을 돌려준다. (현재 값: " + order + ")");
         }
     }
 

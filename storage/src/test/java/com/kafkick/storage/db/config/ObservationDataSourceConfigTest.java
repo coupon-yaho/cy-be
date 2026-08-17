@@ -275,6 +275,24 @@ class ObservationDataSourceConfigTest {
             .run(context -> assertThat(context).hasFailed());
     }
 
+    /**
+     * url 하나만 비어도 막아야 한다. 계정까지 함께 비우는 테스트만 있으면 <b>url 가드를 지워도
+     * username 가드에 걸려 통과한다</b> — 실제로 지워 보고 확인했다.
+     */
+    @Test
+    void 운영_URL_만_비어도_기동에_실패한다() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withPropertyValues(
+                "observation.datasource.enabled=true",
+                "spring.datasource.username=app",
+                "spring.datasource.password=app",
+                "observation.datasource.url=jdbc:mysql://localhost:3306/app",
+                "observation.datasource.username=obs",
+                "observation.datasource.password=obs")
+            .run(context -> assertThat(context).hasFailed());
+    }
+
     /** 접속 정보 자동 주입이 채워 주면 storage.yml 에 값이 없어도 정상이다 — 컨테이너 테스트가 그 경로다. */
     @Test
     void 운영_접속_정보는_자동_주입으로_채워도_된다() {

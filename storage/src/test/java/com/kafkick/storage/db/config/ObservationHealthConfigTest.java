@@ -97,13 +97,66 @@ class ObservationHealthConfigTest {
     @Test
     void 낡은_management_설정으로는_기동하지_못한다() {
         runner.withPropertyValues(MANAGEMENT_YML)
-            .withPropertyValues("management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,UNKNOWN")
+            .withPropertyValues(order("DOWN,OUT_OF_SERVICE,UP,UNKNOWN"))
             .run(context -> assertThat(context).hasFailed());
     }
 
     @Test
     void 계약을_전부_갖춘_management_설정이면_기동한다() {
         runner.withPropertyValues(MANAGEMENT_YML).run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 합산 상태는 목록에서 가장 앞선 것으로 정해진다. 관측 상태가 UP 앞에 오면 관측 풀 장애만으로
+     * 인스턴스가 로드밸런서에서 빠진다 — 이 티켓이 막으려던 사고 그 자체다.
+     *
+     * <p>포함 여부만 보던 때는 이 설정이 통과했다.
+     */
+    @Test
+    void 관측_상태가_UP_보다_앞서면_기동하지_못한다() {
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues(order("OBSERVATION_DOWN,DOWN,OUT_OF_SERVICE,UP,UNKNOWN"))
+            .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * <b>반대 방향이 더 큰 사고다.</b> UP 이 맨 앞이면 운영 DB 가 죽어도 합산이 UP 이라
+     * 헬스체크가 200 을 돌려준다(실측). 관측 상태는 UP 뒤라 "관측만 보는" 검사는 통과한다.
+     */
+    @Test
+    void 운영_실패_상태가_UP_보다_뒤면_기동하지_못한다() {
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues(order("UP,DOWN,OUT_OF_SERVICE,OBSERVATION_DOWN,UNKNOWN"))
+            .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * 목록에 없는 상태는 "가장 안 심각" 으로 취급된다(실측). 그래서 DOWN 이 빠진 것은 DOWN 이
+     * UP 뒤에 있는 것과 결과가 같다 — 위치만 비교하는 검사는 이걸 놓친다(index 가 -1 이라
+     * "UP 보다 앞" 으로 읽힌다).
+     */
+    @Test
+    void 운영_실패_상태가_목록에_없으면_기동하지_못한다() {
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues(order("OUT_OF_SERVICE,UP,OBSERVATION_DOWN,UNKNOWN"))
+            .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * 기준점이 없으면 나머지 순서를 판정할 수 없다. 이때 UP 은 가장 안 심각해진다.
+     *
+     * <p><b>메시지까지 확인하는 이유</b> — UP 이 없으면 DOWN 검사도 어차피 걸린다(인덱스 -1 과
+     * 비교되므로). 그래서 "기동 실패" 만 보면 UP 기준점 검사를 지워도 이 테스트가 통과한다 —
+     * 실제로 지워 보고 확인했다. 그러면 진단 메시지가 "DOWN 이 UP 보다 앞이 아니다" 로 나가서,
+     * 정작 빠진 것이 UP 인데 엉뚱한 곳을 보게 만든다.
+     */
+    @Test
+    void UP_이_목록에_없으면_기동하지_못한다() {
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues(order("DOWN,OUT_OF_SERVICE,OBSERVATION_DOWN,UNKNOWN"))
+            .run(context -> assertThat(context).getFailure()
+                .rootCause()
+                .hasMessageContaining("기준점"));
     }
 
     /**
@@ -166,4 +219,9 @@ class ObservationHealthConfigTest {
                 assertThat(context).doesNotHaveBean("observationHealthStatusOrderCheck");
             });
     }
+
+    private static String order(String value) {
+        return "management.endpoint.health.status.order=" + value;
+    }
+
 }
