@@ -918,7 +918,9 @@ public class VerifyJobConfig {
             throw new BusinessException(
                     VerificationErrorCode.INVALID_RUN_PARAMS,
                     "오염셋 검증에는 seedRunId 가 필요합니다. 기본값을 두면 정답 묶음이 여럿일 때 "
-                            + "낡은 것과 조용히 대조합니다. 예: seedRunId=1,java.lang.Long");
+                            + "낡은 것과 조용히 대조합니다. 예: seedRunId=1,java.lang.Long,false "
+                            + "(끝의 false 가 비식별이다. 빼면 기본이 식별이라 JobInstance 축이 "
+                            + "uk_run_params 와 어긋나 재실행이 엉뚱한 이유로 죽는다)");
         }
         if (!expected.exists(seedRunId)) {
             throw new BusinessException(

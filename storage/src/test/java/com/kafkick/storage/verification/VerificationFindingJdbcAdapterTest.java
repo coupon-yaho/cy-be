@@ -181,9 +181,11 @@ class VerificationFindingJdbcAdapterTest {
 
         adapter.appendAll(runId, findings);
 
-        assertThat(countOf(runId))
-                .as("경계를 잘못 계산하면 마지막 1행이 새거나 중복키로 죽는다")
-                .isEqualTo(size);
+        assertThat(keysOf(runId))
+                .as("건수만 보면 누락과 어긋난 키가 상쇄돼 통과한다 — 이 PR 이 판정에서 버린 바로 그 논리다")
+                .containsExactlyInAnyOrderElementsOf(LongStream.rangeClosed(1, size)
+                        .mapToObj(id -> "HISTORY:" + id)
+                        .toList());
     }
 
     private Map<String, Object> findByTargetKey(String targetKey) {
@@ -197,6 +199,15 @@ class VerificationFindingJdbcAdapterTest {
                 .param("targetKey", targetKey)
                 .query()
                 .singleRow();
+    }
+
+    /** 검출된 {@code target_key} 전부. 건수가 아니라 집합을 보려고 쓴다. */
+    private List<String> keysOf(long targetRunId) {
+        return jdbcClient.sql(
+                        "SELECT target_key FROM verification_findings WHERE run_id = :runId")
+                .param("runId", targetRunId)
+                .query(String.class)
+                .list();
     }
 
     private int countOf(long targetRunId) {
