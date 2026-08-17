@@ -3,12 +3,17 @@ package com.kafkick.storage.db;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
+import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
  * @ServiceConnection 이 컨테이너에서 접속 정보를 읽어 storage.yml 의 url/계정/드라이버를 덮어쓴다.
  * 컨테이너 수명은 스프링 테스트 컨텍스트 캐싱에 맡긴다.
+ *
+ * <p>관측 풀은 @ServiceConnection 을 따르지 않는다 — URL 도 계정도. 자동 주입에 맡기면
+ * "관측은 SELECT 전용 계정" 이 조용히 무효가 되기 때문이다. 그래서 여기서 명시적으로 꽂아 준다.
+ * 관측 접속 정보는 @NotBlank 라, 이 등록을 빠뜨리면 컨테이너를 쓰는 테스트가 기동에서 죽는다.
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class MySqlContainerConfig {
@@ -35,5 +40,15 @@ public class MySqlContainerConfig {
                         "--sql-mode=STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
                                 + "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
                         "--local-infile=0");
+    }
+
+    /** 관측 풀 설정은 커밋되지 않는 storage.yml 에 있다. 컨테이너를 쓰는 테스트는 여기서 받는다. */
+    @Bean
+    DynamicPropertyRegistrar observationDataSourceProperties(MySQLContainer mySqlContainer) {
+        return registry -> {
+            registry.add("observation.datasource.url", mySqlContainer::getJdbcUrl);
+            registry.add("observation.datasource.username", mySqlContainer::getUsername);
+            registry.add("observation.datasource.password", mySqlContainer::getPassword);
+        };
     }
 }

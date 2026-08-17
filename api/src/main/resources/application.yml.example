@@ -18,3 +18,33 @@ logging:
     console: "%d{HH:mm:ss.SSS} %-5level [%X{requestId:-}] %logger{36} - %msg%n"
   level:
     com.kafkick: DEBUG
+
+---
+# ⚠️ 이 아래는 storage.yml 을 이길 수 있는 자리다.
+#
+# spring.config.import 로 들어온 문서는 그것을 선언한 문서보다 우선한다. 그래서 위쪽 문서에
+# 적은 값은 storage.yml 에 같은 키가 생기는 순간 조용히 진다. 모듈이 소유해야 하는 값 —
+# 다른 모듈과 값이 달라야 하는 값 — 은 전부 이 아래에 둔다.
+#
+# batch 도 같은 구조가 필요하다. 지금 batch 는 구분자 없이 위쪽에만 적어 두어, 공유 파일에
+# 같은 키가 다시 생기면 또 진다 — 별도 티켓이다(batch 담당자 소유).
+spring:
+  datasource:
+    hikari:
+      # 커넥션 예산의 근거는 storage.yml.example 의 hikari 주석에 있다. 이 값을 바꾸면
+      # 거기 계산도 같이 바꾼다.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+
+  # 마이그레이션 소유자는 api 하나다. batch 는 이미 만들어진 스키마 위에서 돈다.
+  flyway:
+    enabled: true
+
+# 대시보드 집계를 운영 풀에서 떼어 내는 관측 전용 풀을 켠다. 켠 모듈만 관측 계정
+# (DB_OBS_USERNAME · DB_OBS_PASSWORD)이 필요하고, 없으면 기동에서 죽는다.
+#
+# ⚠️ 이 스위치는 management.yml 의 health group.obs 와 한 쌍이다. 여기를 끄면 그 그룹이
+#    찾을 기여자(obsDb)가 사라져 기동이 실패한다. 끄려면 두 파일을 같이 고쳐야 한다.
+#    설정 값(풀 크기·타임아웃·계정)은 공유 파일인 storage.yml 이 정한다.
+observation:
+  datasource:
+    enabled: true
