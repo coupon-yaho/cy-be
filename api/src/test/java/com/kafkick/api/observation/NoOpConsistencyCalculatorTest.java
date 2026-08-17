@@ -1,5 +1,12 @@
-package com.kafkick.core.consistency;
+package com.kafkick.api.observation;
 
+import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyGapType;
+import com.kafkick.core.consistency.ConsistencyPhase;
+import com.kafkick.core.consistency.ConsistencyRawSnapshot;
+import com.kafkick.core.consistency.ConsistencyRawValues;
+import com.kafkick.core.consistency.GapValue;
+import com.kafkick.core.consistency.SourceObservation;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 import org.junit.jupiter.api.Test;

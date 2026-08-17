@@ -1,12 +1,9 @@
-package com.kafkick.core.observation.autoconfigure;
+package com.kafkick.api.observation;
 
 import com.kafkick.core.consistency.ConsistencyCalculator;
-import com.kafkick.core.consistency.NoOpConsistencyCalculator;
-import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.EventIdGenerator;
+import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
-import com.kafkick.core.observation.NoOpEventRecorder;
-import com.kafkick.core.observation.UuidEventIdGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -14,9 +11,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 
 @AutoConfiguration
-public class CoreObservationAutoConfiguration {
+public class ApiObservationAutoConfiguration {
 
-    private static final Logger log = LoggerFactory.getLogger(CoreObservationAutoConfiguration.class);
+    private static final Logger log = LoggerFactory.getLogger(ApiObservationAutoConfiguration.class);
 
     @Bean
     @ConditionalOnMissingBean(EventIdGenerator.class)

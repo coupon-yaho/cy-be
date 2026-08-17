@@ -4,6 +4,7 @@ import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -23,13 +24,17 @@ class RuntimeConfigContractTest {
         assertThatThrownBy(() -> command(EngineVersion.V3, ReleaseStage.V3, null, "admin"))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> command(EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, " "))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(RuntimeConfigErrorCode.INVALID_UPDATED_BY);
     }
 
     @Test
     void snapshotRejectsNegativeRevision() {
         assertThatThrownBy(() -> snapshot(-1, UPDATED_AT, "admin", SourceStatus.VALID))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(RuntimeConfigErrorCode.INVALID_REVISION);
     }
 
     @Test
@@ -37,7 +42,9 @@ class RuntimeConfigContractTest {
         assertThatThrownBy(() -> snapshot(0, null, "admin", SourceStatus.VALID))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> snapshot(0, UPDATED_AT, " ", SourceStatus.VALID))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo(RuntimeConfigErrorCode.INVALID_UPDATED_BY);
         assertThatThrownBy(() -> snapshot(0, UPDATED_AT, "admin", null))
                 .isInstanceOf(NullPointerException.class);
     }

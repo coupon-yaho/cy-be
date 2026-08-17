@@ -1,11 +1,17 @@
-package com.kafkick.core.consistency;
+package com.kafkick.api.observation;
 
+import com.kafkick.core.consistency.ConsistencyCalculator;
+import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyGapType;
+import com.kafkick.core.consistency.ConsistencyPhase;
+import com.kafkick.core.consistency.ConsistencyRawSnapshot;
+import com.kafkick.core.consistency.GapValue;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
 import java.util.Map;
 
-public class NoOpConsistencyCalculator implements ConsistencyCalculator {
+public final class NoOpConsistencyCalculator implements ConsistencyCalculator {
 
     private static final GapValue NOT_APPLICABLE = new GapValue(null, SourceStatus.N_A, null);
     private static final Map<ConsistencyGapType, GapValue> NOT_APPLICABLE_GAPS = Map.of(

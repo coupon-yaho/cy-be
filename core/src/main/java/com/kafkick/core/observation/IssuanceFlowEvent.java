@@ -50,6 +50,15 @@ public record IssuanceFlowEvent(
         requirePositive(memberId, "memberId");
         requirePositive(couponId, "couponId");
         requireText(producerInstanceId, 100, "producerInstanceId");
+        if (queueSequence != null && queueSequence < 0) {
+            throw new IllegalArgumentException("queueSequence는 0 이상이어야 합니다.");
+        }
+        if (issuanceId != null) {
+            requirePositive(issuanceId, "issuanceId");
+        }
+        if (issuanceCode != null) {
+            requireText(issuanceCode, 16, "issuanceCode");
+        }
         validateByEventType(eventType, requestId, issuanceId, issuanceCode, httpStatus,
                 reasonCode, dependency, queuePosition, queueSequence, replayed);
     }

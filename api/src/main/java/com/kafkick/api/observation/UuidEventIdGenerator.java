@@ -1,4 +1,6 @@
-package com.kafkick.core.observation;
+package com.kafkick.api.observation;
+
+import com.kafkick.core.observation.EventIdGenerator;
 
 import java.util.UUID;
 

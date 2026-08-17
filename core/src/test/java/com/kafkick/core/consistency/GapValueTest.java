@@ -28,6 +28,14 @@ class GapValueTest {
     }
 
     @Test
+    void pendingRejectsObservationTimeAcrossSourceAndGapContracts() {
+        assertThatThrownBy(() -> new SourceObservation(SourceStatus.PENDING, OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new GapValue(null, SourceStatus.PENDING, OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void rejectsMissingValueOrTimeForValid() {
         assertThatThrownBy(() -> new GapValue(null, SourceStatus.VALID, OBSERVED_AT))
                 .isInstanceOf(IllegalArgumentException.class);

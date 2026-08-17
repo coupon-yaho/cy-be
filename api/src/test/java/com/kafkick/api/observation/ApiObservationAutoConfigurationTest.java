@@ -1,21 +1,19 @@
-package com.kafkick.core.observation.autoconfigure;
+package com.kafkick.api.observation;
 
 import com.kafkick.core.consistency.ConsistencyCalculator;
-import com.kafkick.core.consistency.NoOpConsistencyCalculator;
-import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.EventIdGenerator;
+import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
-import com.kafkick.core.observation.NoOpEventRecorder;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class CoreObservationAutoConfigurationTest {
+class ApiObservationAutoConfigurationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(CoreObservationAutoConfiguration.class));
+            .withConfiguration(AutoConfigurations.of(ApiObservationAutoConfiguration.class));
 
     @Test
     void registersNoOpBeansWhenImplementationsAreMissing() {

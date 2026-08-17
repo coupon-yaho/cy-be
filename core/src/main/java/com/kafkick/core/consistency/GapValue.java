@@ -31,7 +31,9 @@ public record GapValue(Long value, SourceStatus state, Instant observedAt) {
                 || state == SourceStatus.N_A) && value != null) {
             throw new IllegalArgumentException(state + " 상태의 value는 null이어야 합니다.");
         }
-        if ((state == SourceStatus.UNAVAILABLE || state == SourceStatus.N_A) && observedAt != null) {
+        if ((state == SourceStatus.PENDING
+                || state == SourceStatus.UNAVAILABLE
+                || state == SourceStatus.N_A) && observedAt != null) {
             throw new IllegalArgumentException(state + " 상태의 observedAt은 null이어야 합니다.");
         }
     }

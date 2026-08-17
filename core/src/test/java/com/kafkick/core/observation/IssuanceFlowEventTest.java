@@ -47,6 +47,48 @@ class IssuanceFlowEventTest {
     }
 
     @Test
+    void canonicalConstructorRejectsNegativeQueueSequence() {
+        assertThatThrownBy(() -> event(
+                EventType.ENTRY_RESULT, 202, null, null,
+                null, 0L, -1L
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalConstructorRejectsNonPositiveIssuanceId() {
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_RESULT, 201, 0L, "ISSUANCE0000001",
+                null, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalConstructorRejectsBlankIssuanceCode() {
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_RESULT, 201, 1L, " ",
+                null, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalConstructorRejectsOverlongIssuanceCode() {
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_RESULT, 201, 1L, "12345678901234567",
+                null, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void factoryAndCanonicalConstructorAcceptValidBoundaryValues() {
+        IssuanceFlowEvent admitted = FACTORY.admitted(context(null, false), 0L);
+        IssuanceFlowEvent issued = FACTORY.issued(context("request-1", false), 1L, "A");
+
+        assertThat(admitted.queueSequence()).isZero();
+        assertThat(issued.issuanceId()).isEqualTo(1L);
+        assertThat(issued.issuanceCode()).isEqualTo("A");
+    }
+
+    @Test
     void failedHttpResultRequiresReasonCode() {
         assertThatThrownBy(() -> FACTORY.issueRejected(
                 context("request-1", false), 409, null, Dependency.NONE
