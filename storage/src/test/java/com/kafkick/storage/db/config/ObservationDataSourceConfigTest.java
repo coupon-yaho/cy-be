@@ -24,6 +24,7 @@ import com.zaxxer.hikari.HikariDataSource;
 class ObservationDataSourceConfigTest {
 
     private static final String[] STORAGE_YML = {
+        "observation.datasource.enabled=true",
         "spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver",
         "spring.datasource.url=jdbc:mysql://localhost:3306/app",
         "spring.datasource.username=app",
@@ -237,6 +238,7 @@ class ObservationDataSourceConfigTest {
             .withUserConfiguration(ObservationDataSourceConfig.class)
             .withBean(JdbcConnectionDetails.class, ObservationDataSourceConfigTest::superuserDetails)
             .withPropertyValues(
+                "observation.datasource.enabled=true",
                 "spring.datasource.url=jdbc:mysql://localhost:3306/app",
                 "spring.datasource.username=app",
                 "observation.datasource.username=obs",
@@ -250,6 +252,7 @@ class ObservationDataSourceConfigTest {
         new ApplicationContextRunner()
             .withUserConfiguration(ObservationDataSourceConfig.class)
             .withPropertyValues(
+                "observation.datasource.enabled=true",
                 "spring.datasource.url=jdbc:mysql://localhost:3306/app",
                 "spring.datasource.username=app",
                 "spring.datasource.password=app")
@@ -265,6 +268,7 @@ class ObservationDataSourceConfigTest {
         new ApplicationContextRunner()
             .withUserConfiguration(ObservationDataSourceConfig.class)
             .withPropertyValues(
+                "observation.datasource.enabled=true",
                 "observation.datasource.url=jdbc:mysql://localhost:3306/app",
                 "observation.datasource.username=obs",
                 "observation.datasource.password=obs")
@@ -278,10 +282,67 @@ class ObservationDataSourceConfigTest {
             .withUserConfiguration(ObservationDataSourceConfig.class)
             .withBean(JdbcConnectionDetails.class, ObservationDataSourceConfigTest::superuserDetails)
             .withPropertyValues(
+                "observation.datasource.enabled=true",
                 "observation.datasource.url=jdbc:mysql://localhost:3306/app",
                 "observation.datasource.username=obs",
                 "observation.datasource.password=obs")
             .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 관측을 켜지 않은 모듈(지금의 batch)은 이 PR 이전 동작 그대로여야 한다.
+     *
+     * <p>빈이 하나도 없어야 한다는 게 핵심이다. 관측 빈만 빠지고 운영 빈을 우리가 계속 만들면,
+     * 관측을 안 쓰는 모듈의 DataSource·JdbcTemplate·트랜잭션 매니저가 이유 없이 우리 것으로
+     * 바뀐다 — 자동설정을 대체한 대가만 지고 얻는 것은 없다.
+     */
+    @Test
+    void 관측을_켜지_않으면_이_설정은_통째로_건너뛴다() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withPropertyValues(
+                "spring.datasource.url=jdbc:mysql://localhost:3306/app",
+                "spring.datasource.username=app",
+                "spring.datasource.password=app")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).doesNotHaveBean("observationDataSource");
+                assertThat(context).doesNotHaveBean("mainDataSource");
+                assertThat(context).doesNotHaveBean("jdbcTemplate");
+                assertThat(context).doesNotHaveBean("namedParameterJdbcTemplate");
+                assertThat(context).doesNotHaveBean("transactionManager");
+            });
+    }
+
+    /**
+     * 관측을 안 쓰는 모듈이 관측 계정을 요구받으면 안 된다. 이게 리뷰에서 blocker 로 지적된 지점이고,
+     * 실제로 batch 와 "{@code .example} 만 복사한 로컬" 이 기동하지 못하던 원인이다.
+     */
+    @Test
+    void 관측을_켜지_않으면_관측_계정이_없어도_뜬다() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(ObservationDataSourceConfig.class, ObservationHealthConfig.class)
+            .withPropertyValues(
+                "spring.datasource.url=jdbc:mysql://localhost:3306/app",
+                "spring.datasource.username=app",
+                "spring.datasource.password=app",
+                // 낡은 storage.yml 처럼 관측 블록이 비어 있는 상태 그대로다.
+                "observation.datasource.url=",
+                "observation.datasource.username=",
+                "observation.datasource.password=")
+            .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /** {@code enabled: false} 는 "안 적음" 과 같아야 한다. 끄는 방법이 두 가지면 하나는 잊힌다. */
+    @Test
+    void 스위치를_false_로_두는_것과_안_적는_것은_같다() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withPropertyValues("observation.datasource.enabled=false")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).doesNotHaveBean("observationDataSource");
+            });
     }
 
     private static JdbcConnectionDetails superuserDetails() {

@@ -1,4 +1,4 @@
-package com.kafkick.api.observation;
+package com.kafkick.api.observation.datasource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,6 +40,11 @@ import com.kafkick.storage.db.config.ObservationHealthConfig;
  *
  * <p>DB 는 띄우지 않는다. 확인 대상은 "풀이 죽었을 때 무엇이 노출되는가" 이지 풀 자체가 아니라서,
  * 기여자를 가짜로 두는 편이 실패를 확정적으로 만든다.
+ *
+ * <p><b>여기서만 storage 를 컴파일 타임에 참조한다.</b> api 의 storage 의존은 {@code runtimeOnly} 라
+ * 본 코드는 storage 타입을 못 본다. 이 테스트는 예외이고, 그 예외를 {@code api/build.gradle} 의
+ * {@code testImplementation project(':storage')} 로 <b>선언해 두었다</b>. 상수를 문자열로 옮겨 적으면
+ * 이 클래스가 존재하는 이유 자체가 사라진다 — 그 순간 계약은 다시 두 파일에 따로 적힌 문자열이 된다.
  *
  * <p>읽는 파일이 {@code .yml} 이 아니라 {@code .yml.example} 인 이유 — 실제 {@code management.yml} 은
  * gitignore 대상이라 신규 클론과 CI 에 없다. {@code [.yml]} 은 확장자 힌트다.

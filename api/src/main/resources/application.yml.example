@@ -38,3 +38,13 @@ spring:
   # 마이그레이션 소유자는 api 하나다. batch 는 이미 만들어진 스키마 위에서 돈다.
   flyway:
     enabled: true
+
+# 대시보드 집계를 운영 풀에서 떼어 내는 관측 전용 풀을 켠다. 켠 모듈만 관측 계정
+# (DB_OBS_USERNAME · DB_OBS_PASSWORD)이 필요하고, 없으면 기동에서 죽는다.
+#
+# ⚠️ 이 스위치는 management.yml 의 health group.obs 와 한 쌍이다. 여기를 끄면 그 그룹이
+#    찾을 기여자(obsDb)가 사라져 기동이 실패한다. 끄려면 두 파일을 같이 고쳐야 한다.
+#    설정 값(풀 크기·타임아웃·계정)은 공유 파일인 storage.yml 이 정한다.
+observation:
+  datasource:
+    enabled: true

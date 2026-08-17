@@ -21,10 +21,19 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
  */
 class ObservationHealthConfigTest {
 
+    /** management.yml.example 이 선언하는 관측 계약 한 벌. 하나라도 빠지면 기동을 막아야 한다. */
+    private static final String[] MANAGEMENT_YML = {
+        "management.endpoint.health.show-details=never",
+        "management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,OBSERVATION_DOWN,UNKNOWN",
+        "management.endpoint.health.group.obs.include=obsDb",
+        "management.endpoint.health.group.obs.status.http-mapping.OBSERVATION_DOWN=503",
+    };
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
         .withUserConfiguration(ObservationDataSourceConfig.class, ObservationHealthConfig.class)
         .withConfiguration(AutoConfigurations.of(DataSourceHealthContributorAutoConfiguration.class))
         .withPropertyValues(
+            "observation.datasource.enabled=true",
             "spring.datasource.url=jdbc:mysql://localhost:3306/app",
             "spring.datasource.username=app",
             "spring.datasource.password=app",
@@ -87,18 +96,46 @@ class ObservationHealthConfigTest {
      */
     @Test
     void 낡은_management_설정으로는_기동하지_못한다() {
-        runner.withPropertyValues(
-                "management.endpoint.health.show-details=never",
-                "management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,UNKNOWN")
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues("management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,UNKNOWN")
             .run(context -> assertThat(context).hasFailed());
     }
 
     @Test
-    void 순서_목록에_관측_상태가_있으면_기동한다() {
+    void 계약을_전부_갖춘_management_설정이면_기동한다() {
+        runner.withPropertyValues(MANAGEMENT_YML).run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 창구가 없으면 관측 풀 장애가 <b>어디에도 안 드러난다</b>. 합산 상태는 설계대로 UP 이라
+     * 기본 헬스체크는 통과하고, 그룹이 그 상태를 보여 주는 유일한 자리이기 때문이다.
+     */
+    @Test
+    void 그룹이_관측_기여자를_지목하지_않으면_기동하지_못한다() {
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues("management.endpoint.health.group.obs.include=db")
+            .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * 가장 빠뜨리기 쉬운 자리다. OBSERVATION_DOWN 은 Boot 기본 매핑에 없는 상태라
+     * <b>안 적으면 200</b> 이 되고, 그러면 그룹은 있는데 늘 정상이라고 답한다 — 경보가 안 울린다.
+     */
+    @Test
+    void 그룹이_관측_상태를_실패로_매핑하지_않으면_기동하지_못한다() {
         runner.withPropertyValues(
                 "management.endpoint.health.show-details=never",
-                "management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,OBSERVATION_DOWN,UNKNOWN")
-            .run(context -> assertThat(context).hasNotFailed());
+                "management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,OBSERVATION_DOWN,UNKNOWN",
+                "management.endpoint.health.group.obs.include=obsDb")
+            .run(context -> assertThat(context).hasFailed());
+    }
+
+    /** 200 을 명시하는 것도 안 적은 것과 같다 — 그룹이 늘 정상이라고 답한다. */
+    @Test
+    void 그룹_매핑이_성공_코드면_기동하지_못한다() {
+        runner.withPropertyValues(MANAGEMENT_YML)
+            .withPropertyValues("management.endpoint.health.group.obs.status.http-mapping.OBSERVATION_DOWN=200")
+            .run(context -> assertThat(context).hasFailed());
     }
 
     /**
@@ -109,5 +146,24 @@ class ObservationHealthConfigTest {
     @Test
     void 관리_설정이_아예_없으면_검사하지_않는다() {
         runner.run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 관측을 켜지 않은 모듈에서는 나눌 풀 자체가 없다. 그런데도 기본 기여자를 대체하면, 관측과
+     * 무관한 모듈의 헬스체크 동작을 이유 없이 바꾸고 낡은 management.yml 까지 트집 잡는다.
+     */
+    @Test
+    void 관측을_켜지_않으면_헬스_설정도_건너뛴다() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(ObservationHealthConfig.class)
+            .withPropertyValues(
+                "management.endpoint.health.show-details=never",
+                "management.endpoint.health.status.order=DOWN,OUT_OF_SERVICE,UP,UNKNOWN")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).doesNotHaveBean("dbHealthContributor");
+                assertThat(context).doesNotHaveBean("obsDbHealthContributor");
+                assertThat(context).doesNotHaveBean("observationHealthStatusOrderCheck");
+            });
     }
 }

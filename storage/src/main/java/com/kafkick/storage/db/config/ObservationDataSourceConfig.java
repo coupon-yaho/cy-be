@@ -6,6 +6,7 @@ import jakarta.persistence.EntityManagerFactory;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
@@ -31,8 +32,28 @@ import com.zaxxer.hikari.HikariDataSource;
  *
  * <p>다만 풀만 분리했을 뿐 MySQL 의 CPU·I/O·버퍼풀은 여전히 공유다. 이 설정은 절반의 방어이고,
  * 나머지 절반은 관측 쿼리 자체가 무겁지 않은 것(OBS-16)이다.
+ *
+ * <h2>켠 모듈에서만 동작한다</h2>
+ *
+ * storage 를 얹은 모듈은 이 설정을 자동으로 물려받는다. 그대로 두면 관측을 쓰지 않는 batch 도
+ * 관측 풀을 만들고, {@link ObservationDbProperties} 의 {@code @NotBlank} 때문에 관측 계정 없이는
+ * <b>기동조차 못 한다.</b> 관측을 위한 설정이 관측과 무관한 모듈을 멈춰 세우는 셈이라, 이 티켓이
+ * 피하려던 것과 같은 사고다.
+ *
+ * <p>그래서 {@code observation.datasource.enabled} 로 <b>옵트인</b>한다. 대시보드를 그리는 api 만
+ * 켠다. 끈 모듈에서는 이 설정이 통째로 건너뛰어지고 Boot 자동설정이 원래 하던 일을 그대로 한다.
+ *
+ * <p><b>관측 빈만이 아니라 이 클래스 전체가 조건부인 이유</b> — 아래 빈들은 관측용만이 아니다.
+ * DataSource 를 직접 정의하는 순간 Boot 가 만들어 주던 JdbcTemplate · NamedParameterJdbcTemplate ·
+ * TransactionManager 가 물러나므로 운영용까지 여기서 만들고 있다. 관측을 안 쓰는 모듈에서는
+ * 그 대체 자체가 불필요하다 — 거기서는 DataSource 가 하나뿐이라 자동설정으로 충분하다.
+ *
+ * <p><b>반대 방향 실패</b> — 켜야 할 모듈이 스위치를 빠뜨리면 관측 빈이 통째로 없다. api 는
+ * {@code management.yml} 의 {@code group.obs} 가 {@code obsDb} 기여자를 찾지 못해 기동에서
+ * 걸리지만, 그 그룹을 쓰지 않는 모듈에는 그런 그물이 없다.
  */
 @Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty("observation.datasource.enabled")
 @EnableConfigurationProperties({ MainDbProperties.class, ObservationDbProperties.class, JdbcProperties.class })
 public class ObservationDataSourceConfig {
 

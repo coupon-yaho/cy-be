@@ -32,6 +32,15 @@ class ObservationHealthStatusOrderCheck implements InitializingBean {
 
     static final String STATUS_ORDER = HEALTH_PREFIX + ".status.order";
 
+    private static final String GROUP = HEALTH_PREFIX + ".group." + ObservationHealthConfig.HEALTH_GROUP;
+
+    static final String GROUP_INCLUDE = GROUP + ".include";
+
+    static final String GROUP_MAPPING = GROUP + ".status.http-mapping";
+
+    /** 200 을 돌려주는 그룹은 경보를 걸 수 없다. 실패로 보여야 한다. */
+    private static final int FAILURE_CODE_FLOOR = 400;
+
     private final Environment environment;
 
     ObservationHealthStatusOrderCheck(Environment environment) {
@@ -47,13 +56,49 @@ class ObservationHealthStatusOrderCheck implements InitializingBean {
             return;
         }
 
-        List<String> order = binder.bind(STATUS_ORDER, Bindable.listOf(String.class)).orElseGet(List::of);
         String code = ObservationHealthConfig.OBSERVATION_DOWN.getCode();
+        requireSeverityOrder(binder, code);
+        requireGroupMembership(binder);
+        requireGroupReportsFailure(binder, code);
+    }
+
+    /** 이게 없으면 관측 풀 장애가 합산 상태를 끌어내려 인스턴스가 로드밸런서에서 빠진다. */
+    private static void requireSeverityOrder(Binder binder, String code) {
+        List<String> order = binder.bind(STATUS_ORDER, Bindable.listOf(String.class)).orElseGet(List::of);
         if (!order.contains(code)) {
-            throw new IllegalStateException(
-                STATUS_ORDER + " 에 " + code + " 가 없다. 관측 풀 장애가 그대로 합산돼 인스턴스가"
-                    + " 로드밸런서에서 빠진다. management.yml 을 management.yml.example 로 다시 복사한다."
-                    + " (현재 값: " + order + ")");
+            throw stale(STATUS_ORDER + " 에 " + code + " 가 없다."
+                + " 관측 풀 장애가 그대로 합산돼 인스턴스가 로드밸런서에서 빠진다. (현재 값: " + order + ")");
         }
+    }
+
+    /** 이게 없으면 관측 풀 장애를 볼 창구가 사라진다 — 합산은 UP 이므로 어디에도 안 드러난다. */
+    private static void requireGroupMembership(Binder binder) {
+        List<String> include = binder.bind(GROUP_INCLUDE, Bindable.listOf(String.class)).orElseGet(List::of);
+        if (!include.contains(ObservationHealthConfig.CONTRIBUTOR_ID)) {
+            throw stale(GROUP_INCLUDE + " 가 " + ObservationHealthConfig.CONTRIBUTOR_ID + " 를 포함하지 않는다."
+                + " 관측 풀 장애를 볼 창구가 없다. (현재 값: " + include + ")");
+        }
+    }
+
+    /**
+     * 창구가 있어도 늘 200 을 돌려주면 경보를 걸 수 없다. 기본 매핑에는 이 상태가 없어서
+     * <b>적지 않으면 200 이 된다</b> — 빠뜨리기 가장 쉬운 자리다.
+     */
+    private static void requireGroupReportsFailure(Binder binder, String code) {
+        // 키를 프로퍼티 이름으로 직접 붙이면 안 된다 — OBSERVATION_DOWN 은 대문자·밑줄이라
+        // ConfigurationPropertyName 규칙에 맞지 않아 InvalidConfigurationPropertyNameException 이 난다.
+        // 맵으로 바인딩하면 상태 코드가 이름이 아니라 값이 되어 원문 그대로 들어온다.
+        Map<String, Integer> mapping = binder.bind(GROUP_MAPPING, Bindable.mapOf(String.class, Integer.class))
+            .orElseGet(Map::of);
+        Integer status = mapping.get(code);
+        if (status == null || status < FAILURE_CODE_FLOOR) {
+            throw stale(GROUP_MAPPING + " 의 " + code + " 가 실패 코드가 아니다(현재 값: " + status + ")."
+                + " 관측 풀이 죽어도 그룹이 200 을 돌려줘 경보가 울리지 않는다.");
+        }
+    }
+
+    private static IllegalStateException stale(String detail) {
+        return new IllegalStateException(
+            detail + " management.yml 을 management.yml.example 로 다시 복사한다.");
     }
 }

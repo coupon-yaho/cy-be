@@ -8,6 +8,7 @@ import org.springframework.boot.health.contributor.HealthContributor;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jdbc.health.DataSourceHealthIndicator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,7 +24,9 @@ import org.springframework.core.env.Environment;
  * <p>풀을 만든 모듈이 그 풀의 신호도 낸다. 신호를 어떻게 노출하고 로드밸런서가 무엇을 보는지는
  * api 의 management 설정이 정한다 — 생성은 여기, 해석은 거기다.
  *
- * <p>actuator 가 없는 JVM(지금의 batch)에서는 health 클래스가 없어 이 설정이 통째로 건너뛴다.
+ * <p>조건이 둘이다. actuator 가 없는 JVM 에서는 health 클래스가 없어 건너뛰고, 관측을 켜지 않은
+ * 모듈에서는 나눌 풀 자체가 없어 건너뛴다. 후자를 빠뜨리면 관측 풀이 없는데도 기본 기여자를
+ * 대체해 버려서, 관측과 무관한 모듈의 헬스체크 동작을 이유 없이 바꾼다.
  *
  * <p>그렇다고 관측 풀을 감시에서 빼기만 하면 반대쪽 구멍이 난다 — 비밀번호를 오타 낸 채 배포해도
  * 기동은 성공하고(Hikari 는 첫 조회까지 커넥션을 안 연다) 헬스도 UP 이라, 대시보드 첫 조회에서야
@@ -32,6 +35,7 @@ import org.springframework.core.env.Environment;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(HealthContributor.class)
+@ConditionalOnProperty("observation.datasource.enabled")
 public class ObservationHealthConfig {
 
     /**
@@ -40,6 +44,19 @@ public class ObservationHealthConfig {
      * 둘을 잇는 검증은 api 의 {@code ObservationHealthContractTest} 가 한다.
      */
     public static final Status OBSERVATION_DOWN = new Status("OBSERVATION_DOWN");
+
+    /** management.yml 의 {@code group.<이름>} 과 같아야 한다. */
+    static final String HEALTH_GROUP = "obs";
+
+    /**
+     * management.yml 의 {@code group.obs.include} 가 지목하는 이름. Boot 가 기여자 빈 이름에서
+     * {@code HealthContributor} 접미사를 떼어 만든다 — 즉 아래 {@code obsDbHealthContributor}
+     * 메서드 이름과 한 쌍이다.
+     *
+     * <p>메서드 이름만 바꾸면 이 상수와 어긋나는데, 그때는 Boot 자신이 "그룹이 지목한 기여자가
+     * 없다" 며 기동을 멈춘다. 조용히 깨지지 않으므로 여기서 따로 검사하지 않는다.
+     */
+    static final String CONTRIBUTOR_ID = "obsDb";
 
     /** 빈 이름이 {@code dbHealthContributor} 여야 전 DataSource 를 묶던 자동설정이 물러난다. */
     @Bean
