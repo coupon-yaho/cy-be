@@ -182,6 +182,33 @@ class ExpectedFindingJdbcAdapterTest {
     }
 
     /**
+     * <b>대소문자만 달라도 다른 키다.</b> 컬럼 콜레이션이 {@code utf8mb4_0900_ai_ci} 라
+     * 조인 등호가 대소문자를 무시한다 — 그대로 두면 어긋난 키가 <b>매칭으로 세어져 거짓 PASS</b>
+     * 가 난다. 검증기가 내면 안 되는 방향의 오류다.
+     *
+     * <p>참조 구현({@code cy-seed} 의 파이썬 {@code set} 차)은 바이트 정확이라, 여기서
+     * 느슨하면 두 구현이 같은 데이터에 다른 판정을 낸다.
+     */
+    @Test
+    @DisplayName("키가 대소문자만 달라도 누락·오탐으로 잡는다 — 콜레이션이 매칭으로 세면 거짓 PASS 다")
+    void separateKeysDifferingOnlyByCase() {
+        expected(FindingType.STOCK_MISMATCH, "COUPON:7", 7L, null);
+        findings.appendAll(runId, List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 7L, "a", "b")));
+        jdbcClient.sql("UPDATE verification_findings SET target_key = 'coupon:7' "
+                        + "WHERE run_id = :runId")
+                .param("runId", runId)
+                .update();
+
+        assertThat(keysOf(adapter.missing(runId, SEED_RUN)))
+                .as("정답 COUPON:7 을 잡은 검출이 없다")
+                .containsExactly("STOCK_MISMATCH:COUPON:7");
+        assertThat(keysOf(adapter.unexpected(runId, SEED_RUN)))
+                .as("검출 coupon:7 은 정답에 없다")
+                .containsExactly("STOCK_MISMATCH:coupon:7");
+    }
+
+    /**
      * <b>판정 입력을 얼리는 값이다.</b> 데이터 네 축은 {@code assertFrozenStep} 이 얼리는데
      * 매니페스트는 그 뒤에 읽혀, 실행 중에 주입을 다시 돌리면 같은 데이터에 다른 판정이 나온다.
      * 지문이 <b>내용에만</b> 반응해야 그 상황을 가릴 수 있다.

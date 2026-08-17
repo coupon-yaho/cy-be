@@ -22,6 +22,17 @@ import com.kafkick.core.verification.FindingKey;
  * target_key)} 과 {@code uk_expected(seed_run_id, finding_type, target_key)} 가 양쪽의 중복을
  * 막아 두 연산이 같아집니다 — CORRUPT 스키마에서도 이 둘은 살아 있습니다
  * ({@code ddl/12_constraints_corrupt.sql}). <b>둘 중 하나를 떼면 이 등식이 깨집니다.</b>
+ *
+ * <p><b>비교도 이진입니다.</b> 컬럼에 {@code COLLATE} 가 없어 서버 기본
+ * {@code utf8mb4_0900_ai_ci} 를 타는데, 그 콜레이션의 등호는 대소문자·악센트를 무시합니다 —
+ * 키가 대소문자만 달라도 <b>매칭된 것으로 세어 거짓 PASS 가 납니다.</b> 검증기가 내면 안 되는
+ * 방향의 오류입니다. 참조 구현은 파이썬 {@code set} 차라 <b>바이트 정확</b>이고, 두 구현이
+ * 갈리면 이 프로젝트가 기대는 교차 검증이 무의미해집니다.
+ *
+ * <p><b>대가는 인덱스입니다.</b> 캐스트를 씌우면 {@code uk_expected}·{@code uk_run_finding} 을
+ * 조인에 못 씁니다. 정답 800행 · 검출 상한 6만 행인 지금 규모에서는 문제가 아니지만, 커지면
+ * 컬럼 콜레이션을 {@code utf8mb4_bin} 으로 바꾸는 것이 답입니다 — 시드 저장소의 DDL 이라
+ * 함께 가야 합니다.
  */
 @Repository
 public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
@@ -38,8 +49,8 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
               FROM expected_findings e
               LEFT JOIN verification_findings f
                      ON f.run_id       = :runId
-                    AND f.finding_type = e.finding_type
-                    AND f.target_key   = e.target_key
+                    AND CAST(f.finding_type AS BINARY) = CAST(e.finding_type AS BINARY)
+                    AND CAST(f.target_key   AS BINARY) = CAST(e.target_key   AS BINARY)
              WHERE e.seed_run_id = :seedRunId
                AND f.id IS NULL
              ORDER BY CAST(e.finding_type AS BINARY), CAST(e.target_key AS BINARY)
@@ -51,8 +62,8 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
               FROM verification_findings f
               LEFT JOIN expected_findings e
                      ON e.seed_run_id  = :seedRunId
-                    AND e.finding_type = f.finding_type
-                    AND e.target_key   = f.target_key
+                    AND CAST(e.finding_type AS BINARY) = CAST(f.finding_type AS BINARY)
+                    AND CAST(e.target_key   AS BINARY) = CAST(f.target_key   AS BINARY)
              WHERE f.run_id = :runId
                AND e.id IS NULL
              ORDER BY CAST(f.finding_type AS BINARY), CAST(f.target_key AS BINARY)
