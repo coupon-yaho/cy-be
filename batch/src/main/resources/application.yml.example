@@ -20,3 +20,8 @@ spring:
 logging:
   level:
     com.kafkick: DEBUG
+
+coupon:
+  round-generation:
+    schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-days: ${COUPON_GENERATION_MAX_DAYS:30}
