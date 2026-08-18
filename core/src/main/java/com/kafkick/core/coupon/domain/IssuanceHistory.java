@@ -64,6 +64,7 @@ public record IssuanceHistory(
     public static IssuanceHistory use(
             Long issuanceId,
             IssuanceStatus fromStatus,
+            Instant expiresAt,
             String idempotencyKey,
             Instant createdAt
     ) {
@@ -75,7 +76,7 @@ public record IssuanceHistory(
                 CouponStateMachine.transition(
                         fromStatus,
                         IssuanceEventType.USE,
-                        null,
+                        expiresAt,
                         createdAt
                 ),
                 null,

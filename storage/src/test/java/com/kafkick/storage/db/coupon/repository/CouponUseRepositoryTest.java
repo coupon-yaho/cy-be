@@ -4,6 +4,8 @@ package com.kafkick.storage.db.coupon.repository;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +26,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,6 +38,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
@@ -47,6 +51,7 @@ import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @RepositoryTest
 @Import({
@@ -123,7 +128,7 @@ class CouponUseRepositoryTest {
         Map<String, Object> usage = jdbcTemplate.queryForMap(
                 """
                 SELECT issuance_id, order_id, discount_amount,
-                       used_at, canceled_at
+                       used_at, canceled_at, created_at
                 FROM issuance_usages
                 WHERE issuance_id = 100
                 """
@@ -153,6 +158,9 @@ class CouponUseRepositoryTest {
         assertThat(((Number) usage.get("discount_amount")).intValue())
                 .isEqualTo(5_000);
         assertThat(usage.get("canceled_at")).isNull();
+        assertThat(((LocalDateTime) usage.get("created_at"))
+                .toInstant(ZoneOffset.UTC))
+                .isEqualTo(USED_AT);
         assertThat(history.get("from_status")).isEqualTo("ISSUED");
         assertThat(history.get("to_status")).isEqualTo("USED");
         assertThat(history.get("request_id")).isEqualTo(IDEMPOTENCY_KEY);
@@ -163,6 +171,87 @@ class CouponUseRepositoryTest {
     }
 
     @Test
+    @DisplayName("DONE 멱등 레코드는 대상과 응답이 모두 있어야 한다")
+    void enforceDoneIdempotencyTargets() {
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                """
+                INSERT INTO idempotency_records (
+                    idem_key, member_id, issuance_id, request_hash,
+                    status, response_body, created_at
+                ) VALUES (?, NULL, NULL, ?, 'DONE', NULL, ?)
+                """,
+                "550e8400-e29b-41d4-a716-446655440010",
+                REQUEST_HASH,
+                Timestamp.from(USED_AT)
+        )).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @DisplayName("IN_PROGRESS 멱등 레코드는 완료 대상 값을 가질 수 없다")
+    void enforceInProgressIdempotencyTargets() {
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                """
+                INSERT INTO idempotency_records (
+                    idem_key, member_id, issuance_id, request_hash,
+                    status, response_body, created_at
+                ) VALUES (?, ?, ?, ?, 'IN_PROGRESS', NULL, ?)
+                """,
+                "550e8400-e29b-41d4-a716-446655440011",
+                20L,
+                100L,
+                REQUEST_HASH,
+                Timestamp.from(USED_AT)
+        )).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @DisplayName("회수된 멱등 선점은 이전 소유자의 완료를 거부한다")
+    void rejectCompletionFromPreviousClaimOwner() {
+        Instant reclaimedAt = USED_AT.plusSeconds(31);
+        transactionTemplate.executeWithoutResult(status ->
+                assertThat(idempotencyRepository.tryStart(
+                        IDEMPOTENCY_KEY,
+                        REQUEST_HASH,
+                        USED_AT
+                )).isTrue()
+        );
+
+        transactionTemplate.executeWithoutResult(status ->
+                assertThat(idempotencyRepository.tryReclaim(
+                        IDEMPOTENCY_KEY,
+                        REQUEST_HASH,
+                        USED_AT,
+                        reclaimedAt
+                )).isTrue()
+        );
+
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(
+                status -> idempotencyRepository.complete(
+                        IDEMPOTENCY_KEY,
+                        20L,
+                        100L,
+                        "stored-response",
+                        USED_AT
+                )
+        )).isInstanceOf(IdempotencyPersistenceException.class);
+
+        transactionTemplate.executeWithoutResult(status ->
+                idempotencyRepository.complete(
+                        IDEMPOTENCY_KEY,
+                        20L,
+                        100L,
+                        "stored-response",
+                        reclaimedAt
+                )
+        );
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM idempotency_records WHERE idem_key = ?",
+                String.class,
+                IDEMPOTENCY_KEY
+        )).isEqualTo("DONE");
+    }
+
+    @Test
     @DisplayName("같은 멱등키 동시 10회는 한 번만 사용하고 모두 같은 응답을 받는다")
     void replaySameResponseForConcurrentIdempotentRequests()
             throws Exception {
@@ -170,6 +259,7 @@ class CouponUseRepositoryTest {
         executor = Executors.newFixedThreadPool(requestCount);
         CountDownLatch ready = new CountDownLatch(requestCount);
         CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(1);
         List<Future<String>> futures = new ArrayList<>();
 
         for (int index = 0; index < requestCount; index++) {
@@ -180,9 +270,7 @@ class CouponUseRepositoryTest {
                             "동시 요청 시작 신호를 기다리지 못했습니다."
                     );
                 }
-                return transactionTemplate.execute(status ->
-                        processIdempotentRequest()
-                );
+                return processIdempotentRequest(completed);
             }));
         }
 
@@ -222,18 +310,19 @@ class CouponUseRepositoryTest {
                 }
                 try {
                     transactionTemplate.executeWithoutResult(status -> {
-                        idempotencyRepository.tryStart(
+                        assertThat(idempotencyRepository.tryStart(
                                 key,
                                 String.valueOf(sequence.incrementAndGet())
                                         .repeat(64),
                                 USED_AT
-                        );
+                        )).isTrue();
                         couponUseService.use(command(key));
                         idempotencyRepository.complete(
                                 key,
                                 20L,
                                 100L,
-                                "stored-response"
+                                "stored-response",
+                                USED_AT
                         );
                     });
                     return true;
@@ -260,6 +349,8 @@ class CouponUseRepositoryTest {
         assertThat(countRows("issuance_usages")).isEqualTo(1);
         assertThat(countUseHistories()).isEqualTo(1);
         assertThat(countRows("idempotency_records")).isEqualTo(1);
+        assertThat(issuanceStatus()).isEqualTo("USED");
+        assertThat(activeCount()).isEqualTo(1);
     }
 
     private CouponUseResult executeUse(String key, String requestHash) {
@@ -274,32 +365,50 @@ class CouponUseRepositoryTest {
                     key,
                     20L,
                     100L,
-                    "stored-response"
+                    "stored-response",
+                    USED_AT
             );
             return result;
         });
     }
 
-    private String processIdempotentRequest() {
-        boolean firstRequest = idempotencyRepository.tryStart(
-                IDEMPOTENCY_KEY,
-                REQUEST_HASH,
-                USED_AT
-        );
+    private String processIdempotentRequest(CountDownLatch completed)
+            throws InterruptedException {
+        boolean firstRequest = Boolean.TRUE.equals(transactionTemplate.execute(
+                status -> idempotencyRepository.tryStart(
+                        IDEMPOTENCY_KEY,
+                        REQUEST_HASH,
+                        USED_AT
+                )
+        ));
         if (firstRequest) {
-            couponUseService.use(command(IDEMPOTENCY_KEY));
-            idempotencyRepository.complete(
-                    IDEMPOTENCY_KEY,
-                    20L,
-                    100L,
-                    "stored-response"
-            );
-            return "stored-response";
+            try {
+                return transactionTemplate.execute(status -> {
+                    couponUseService.use(command(IDEMPOTENCY_KEY));
+                    idempotencyRepository.complete(
+                            IDEMPOTENCY_KEY,
+                            20L,
+                            100L,
+                            "stored-response",
+                            USED_AT
+                    );
+                    return "stored-response";
+                });
+            } finally {
+                completed.countDown();
+            }
         }
 
-        IdempotencyRecord record = idempotencyRepository
-                .findByKey(IDEMPOTENCY_KEY)
-                .orElseThrow();
+        if (!completed.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            throw new IllegalStateException(
+                    "최초 멱등 요청 완료를 기다리지 못했습니다."
+            );
+        }
+        IdempotencyRecord record = transactionTemplate.execute(
+                status -> idempotencyRepository
+                        .findByKey(IDEMPOTENCY_KEY)
+                        .orElseThrow()
+        );
         assertThat(record.status()).isEqualTo(IdempotencyStatus.DONE);
         assertThat(record.requestHash()).isEqualTo(REQUEST_HASH);
         return record.responseBody();
@@ -434,6 +543,13 @@ class CouponUseRepositoryTest {
         return jdbcTemplate.queryForObject(
                 "SELECT active_count FROM coupon_stocks WHERE coupon_id = 10",
                 Integer.class
+        );
+    }
+
+    private String issuanceStatus() {
+        return jdbcTemplate.queryForObject(
+                "SELECT status FROM issuances WHERE id = 100",
+                String.class
         );
     }
 

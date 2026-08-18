@@ -5,18 +5,13 @@ import java.time.Instant;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+
+import com.kafkick.storage.db.support.BaseEntity;
 
 @Entity
 @Table(name = "issuance_usages")
-public class IssuanceUsageEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+public class IssuanceUsageEntity extends BaseEntity {
 
     @Column(name = "issuance_id", nullable = false)
     private Long issuanceId;
@@ -44,16 +39,12 @@ public class IssuanceUsageEntity {
             Instant usedAt,
             Instant canceledAt
     ) {
-        this.id = id;
+        super(id, null);
         this.issuanceId = issuanceId;
         this.orderId = orderId;
         this.discountAmount = discountAmount;
         this.usedAt = usedAt;
         this.canceledAt = canceledAt;
-    }
-
-    public Long getId() {
-        return id;
     }
 
     public Long getIssuanceId() {

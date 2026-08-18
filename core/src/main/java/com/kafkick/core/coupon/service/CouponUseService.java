@@ -6,7 +6,6 @@ import java.util.Objects;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
-import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.IssuanceUsage;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
@@ -88,7 +87,8 @@ public class CouponUseService {
         );
         issuanceHistoryRepository.save(IssuanceHistory.use(
                 issuance.id(),
-                IssuanceStatus.ISSUED,
+                issuance.status(),
+                issuance.expiresAt(),
                 command.idempotencyKey(),
                 command.usedAt()
         ));

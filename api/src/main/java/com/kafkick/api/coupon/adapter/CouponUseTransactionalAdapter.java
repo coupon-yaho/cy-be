@@ -1,51 +1,57 @@
-// 멱등키 선점부터 쿠폰 사용·실적·이력·최초 응답 저장까지 한 트랜잭션으로 묶습니다.
+// 멱등 선점을 짧게 커밋하고 처리 중 요청을 제한 재조회한 뒤 쿠폰 사용 트랜잭션을 실행합니다.
 package com.kafkick.api.coupon.adapter;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.UUID;
-
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.ObjectMapper;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
+import com.kafkick.api.coupon.config.CouponIdempotencyProperties;
 import com.kafkick.api.coupon.dto.CouponUseRequest;
 import com.kafkick.api.coupon.dto.CouponUseResponse;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
-import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.service.CouponUseCommand;
-import com.kafkick.core.coupon.service.CouponUseResult;
-import com.kafkick.core.coupon.service.CouponUseService;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
 @Component
 public class CouponUseTransactionalAdapter {
 
-    private final CouponUseService couponUseService;
-    private final IdempotencyRepository idempotencyRepository;
+    private static final Pattern UUID_V4_PATTERN = Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-"
+                    + "[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    );
+
+    private final IdempotencyClaimTransactionalAdapter claimAdapter;
+    private final CouponUseTransactionExecutor transactionExecutor;
+    private final CouponUseResponseCodec responseCodec;
     private final TimeProvider timeProvider;
-    private final ObjectMapper objectMapper;
+    private final CouponIdempotencyProperties properties;
 
     public CouponUseTransactionalAdapter(
-            CouponUseService couponUseService,
-            IdempotencyRepository idempotencyRepository,
+            IdempotencyClaimTransactionalAdapter claimAdapter,
+            CouponUseTransactionExecutor transactionExecutor,
+            CouponUseResponseCodec responseCodec,
             TimeProvider timeProvider,
-            ObjectMapper objectMapper
+            CouponIdempotencyProperties properties
     ) {
-        this.couponUseService = couponUseService;
-        this.idempotencyRepository = idempotencyRepository;
+        this.claimAdapter = claimAdapter;
+        this.transactionExecutor = transactionExecutor;
+        this.responseCodec = responseCodec;
         this.timeProvider = timeProvider;
-        this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
-    @Transactional
     public CouponUseResponse use(
             Long issuanceId,
             Long memberId,
@@ -53,77 +59,180 @@ public class CouponUseTransactionalAdapter {
             CouponUseRequest request
     ) {
         validateIdempotencyKey(idempotencyKey);
-        String requestHash = hashRequest(
-                issuanceId,
-                memberId,
-                request
-        );
-        boolean firstRequest = idempotencyRepository.tryStart(
+        String requestHash = hashRequest(issuanceId, memberId, request);
+        Instant requestAt = currentTime();
+        boolean firstRequest = claimAdapter.tryStart(
                 idempotencyKey,
                 requestHash,
-                timeProvider.instant()
+                requestAt
         );
-        if (!firstRequest) {
-            return replay(idempotencyKey, requestHash);
+        if (firstRequest) {
+            return processClaimedRequest(
+                    issuanceId,
+                    memberId,
+                    idempotencyKey,
+                    requestHash,
+                    request,
+                    requestAt
+            );
         }
-
-        CouponUseResult result = couponUseService.use(
-                new CouponUseCommand(
-                        issuanceId,
-                        memberId,
-                        request.orderId(),
-                        request.orderAmount(),
-                        idempotencyKey,
-                        timeProvider.instant()
-                )
-        );
-        CouponUseResponse response = CouponUseResponse.from(result);
-        idempotencyRepository.complete(
-                idempotencyKey,
-                memberId,
+        return replayOrReclaim(
                 issuanceId,
-                writeResponse(response)
+                memberId,
+                idempotencyKey,
+                requestHash,
+                request,
+                requestAt
         );
-        return response;
     }
 
-    private CouponUseResponse replay(
+    private CouponUseResponse replayOrReclaim(
+            Long issuanceId,
+            Long memberId,
             String idempotencyKey,
-            String requestHash
+            String requestHash,
+            CouponUseRequest request,
+            Instant requestAt
     ) {
-        IdempotencyRecord record = idempotencyRepository
-                .findByKey(idempotencyKey)
-                .orElseThrow(() -> new BusinessException(
-                        CouponUseErrorCode.CONFLICT_IN_PROGRESS,
-                        "idempotencyKey=" + idempotencyKey
-                ));
+        long deadline = System.nanoTime()
+                + properties.waitTimeout().toNanos();
+
+        while (true) {
+            IdempotencyRecord record = claimAdapter
+                    .findByKey(idempotencyKey)
+                    .orElseThrow(() -> conflictInProgress(idempotencyKey));
+            validateRequestHash(record, requestHash, idempotencyKey);
+            if (record.status() == IdempotencyStatus.DONE) {
+                return responseCodec.read(record.responseBody());
+            }
+            if (isStale(record, requestAt)
+                    && claimAdapter.tryReclaim(
+                            idempotencyKey,
+                            requestHash,
+                            record.createdAt(),
+                            requestAt
+                    )) {
+                return processClaimedRequest(
+                        issuanceId,
+                        memberId,
+                        idempotencyKey,
+                        requestHash,
+                        request,
+                        requestAt
+                );
+            }
+            if (System.nanoTime() >= deadline) {
+                throw conflictInProgress(idempotencyKey);
+            }
+            pauseBeforeRetry(properties.pollInterval());
+        }
+    }
+
+    private CouponUseResponse processClaimedRequest(
+            Long issuanceId,
+            Long memberId,
+            String idempotencyKey,
+            String requestHash,
+            CouponUseRequest request,
+            Instant requestAt
+    ) {
+        try {
+            return transactionExecutor.execute(
+                    new CouponUseCommand(
+                            issuanceId,
+                            memberId,
+                            request.orderId(),
+                            request.orderAmount(),
+                            idempotencyKey,
+                            requestAt
+                    ),
+                    requestAt
+            );
+        } catch (RuntimeException processingException) {
+            releaseFailedClaim(
+                    idempotencyKey,
+                    requestHash,
+                    requestAt,
+                    processingException
+            );
+            throw processingException;
+        }
+    }
+
+    private void releaseFailedClaim(
+            String idempotencyKey,
+            String requestHash,
+            Instant claimedAt,
+            RuntimeException processingException
+    ) {
+        try {
+            claimAdapter.release(idempotencyKey, requestHash, claimedAt);
+        } catch (RuntimeException cleanupException) {
+            processingException.addSuppressed(cleanupException);
+        }
+    }
+
+    private boolean isStale(
+            IdempotencyRecord record,
+            Instant requestAt
+    ) {
+        Instant staleBoundary = requestAt.minus(properties.staleAfter());
+        return !record.createdAt().isAfter(staleBoundary);
+    }
+
+    private static void validateRequestHash(
+            IdempotencyRecord record,
+            String requestHash,
+            String idempotencyKey
+    ) {
         if (!record.requestHash().equals(requestHash)) {
             throw new BusinessException(
                     CouponUseErrorCode.IDEMPOTENCY_KEY_REUSED,
                     "idempotencyKey=" + idempotencyKey
             );
         }
-        if (record.status() != IdempotencyStatus.DONE
-                || record.responseBody() == null) {
-            throw new BusinessException(
-                    CouponUseErrorCode.CONFLICT_IN_PROGRESS,
-                    "idempotencyKey=" + idempotencyKey
-            );
-        }
-        return readResponse(record.responseBody());
+    }
+
+    private static BusinessException conflictInProgress(
+            String idempotencyKey
+    ) {
+        return new BusinessException(
+                CouponUseErrorCode.CONFLICT_IN_PROGRESS,
+                "idempotencyKey=" + idempotencyKey
+        );
     }
 
     private static void validateIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null
+                || !UUID_V4_PATTERN.matcher(idempotencyKey).matches()) {
+            throw invalidIdempotencyKey();
+        }
+        UUID uuid = UUID.fromString(idempotencyKey);
+        if (uuid.version() != 4) {
+            throw invalidIdempotencyKey();
+        }
+    }
+
+    private static BusinessException invalidIdempotencyKey() {
+        return new BusinessException(
+                CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
+                "Idempotency-Key must be UUID v4"
+        );
+    }
+
+    private Instant currentTime() {
+        return timeProvider.instant().truncatedTo(ChronoUnit.MICROS);
+    }
+
+    private static void pauseBeforeRetry(Duration interval) {
         try {
-            UUID uuid = UUID.fromString(idempotencyKey);
-            if (uuid.version() != 4
-                    || !uuid.toString().equalsIgnoreCase(idempotencyKey)) {
-                throw new IllegalArgumentException();
-            }
-        } catch (IllegalArgumentException | NullPointerException exception) {
+            TimeUnit.NANOSECONDS.sleep(interval.toNanos());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
             throw new BusinessException(
-                    CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
-                    "Idempotency-Key must be UUID v4"
+                    CouponUseErrorCode.CONFLICT_IN_PROGRESS,
+                    "멱등 요청 완료 대기가 중단되었습니다.",
+                    exception
             );
         }
     }
@@ -145,33 +254,6 @@ public class CouponUseTransactionalAdapter {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException(
                     "SHA-256 알고리즘을 사용할 수 없습니다.",
-                    exception
-            );
-        }
-    }
-
-    private String writeResponse(CouponUseResponse response) {
-        try {
-            return objectMapper.writeValueAsString(response);
-        } catch (JacksonException exception) {
-            throw new BusinessException(
-                    CouponUseErrorCode.IDEMPOTENCY_SAVE_FAILED,
-                    "쿠폰 사용 응답 직렬화에 실패했습니다.",
-                    exception
-            );
-        }
-    }
-
-    private CouponUseResponse readResponse(String responseBody) {
-        try {
-            return objectMapper.readValue(
-                    responseBody,
-                    CouponUseResponse.class
-            );
-        } catch (JacksonException exception) {
-            throw new BusinessException(
-                    CouponUseErrorCode.IDEMPOTENCY_SAVE_FAILED,
-                    "저장된 쿠폰 사용 응답을 읽지 못했습니다.",
                     exception
             );
         }

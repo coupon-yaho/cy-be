@@ -16,3 +16,9 @@ logging:
     console: "%d{HH:mm:ss.SSS} %-5level [%X{requestId:-}] %logger{36} - %msg%n"
   level:
     com.kafkick: DEBUG
+
+coupon:
+  idempotency:
+    wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
+    poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}
+    stale-after: ${COUPON_IDEMPOTENCY_STALE_AFTER:30s}

@@ -3,6 +3,7 @@ package com.kafkick.api.coupon.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
@@ -11,6 +12,7 @@ import com.kafkick.core.coupon.port.IssuanceUsageRepository;
 import com.kafkick.core.coupon.service.CouponUseService;
 
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(CouponIdempotencyProperties.class)
 public class CouponUseCaseConfiguration {
 
     @Bean

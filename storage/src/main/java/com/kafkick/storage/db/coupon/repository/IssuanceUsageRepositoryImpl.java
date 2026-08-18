@@ -1,8 +1,6 @@
 // 쿠폰 사용 실적을 상태 변경 트랜잭션 안에서 저장합니다.
 package com.kafkick.storage.db.coupon.repository;
 
-import jakarta.persistence.EntityManager;
-
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
@@ -19,14 +17,10 @@ public class IssuanceUsageRepositoryImpl
         implements IssuanceUsageRepository {
 
     private final IssuanceUsageJpaRepository usageJpaRepository;
-    private final EntityManager entityManager;
-
     public IssuanceUsageRepositoryImpl(
-            IssuanceUsageJpaRepository usageJpaRepository,
-            EntityManager entityManager
+            IssuanceUsageJpaRepository usageJpaRepository
     ) {
         this.usageJpaRepository = usageJpaRepository;
-        this.entityManager = entityManager;
     }
 
     @Override
@@ -36,7 +30,6 @@ public class IssuanceUsageRepositoryImpl
             IssuanceUsageEntity saved = usageJpaRepository.saveAndFlush(
                     IssuanceUsageEntityMapper.toEntity(usage)
             );
-            entityManager.refresh(saved);
             return IssuanceUsageEntityMapper.toDomain(saved);
         } catch (DataIntegrityViolationException exception) {
             throw new CouponUsePersistenceException(

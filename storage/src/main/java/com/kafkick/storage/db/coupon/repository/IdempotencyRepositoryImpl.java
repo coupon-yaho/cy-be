@@ -62,26 +62,64 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
             readOnly = true
     )
     public Optional<IdempotencyRecord> findByKey(String key) {
-        return jdbcTemplate.query(
-                """
-                SELECT idem_key, member_id, issuance_id, request_hash,
-                       status, response_body, created_at
-                FROM idempotency_records
-                WHERE idem_key = ?
-                """,
-                (resultSet, rowNumber) -> new IdempotencyRecord(
-                        resultSet.getString("idem_key"),
-                        resultSet.getObject("member_id", Long.class),
-                        resultSet.getObject("issuance_id", Long.class),
-                        resultSet.getString("request_hash"),
-                        IdempotencyStatus.valueOf(
-                                resultSet.getString("status")
-                        ),
-                        resultSet.getString("response_body"),
-                        resultSet.getTimestamp("created_at").toInstant()
-                ),
-                key
-        ).stream().findFirst();
+        try {
+            return jdbcTemplate.query(
+                    """
+                    SELECT idem_key, member_id, issuance_id, request_hash,
+                           status, response_body, created_at
+                    FROM idempotency_records
+                    WHERE idem_key = ?
+                    """,
+                    (resultSet, rowNumber) -> new IdempotencyRecord(
+                            resultSet.getString("idem_key"),
+                            resultSet.getObject("member_id", Long.class),
+                            resultSet.getObject("issuance_id", Long.class),
+                            resultSet.getString("request_hash"),
+                            IdempotencyStatus.valueOf(
+                                    resultSet.getString("status")
+                            ),
+                            resultSet.getString("response_body"),
+                            resultSet.getTimestamp("created_at").toInstant()
+                    ),
+                    key
+            ).stream().findFirst();
+        } catch (DataAccessException exception) {
+            throw new IdempotencyPersistenceException(
+                    "멱등 처리 상태 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean tryReclaim(
+            String key,
+            String requestHash,
+            Instant previousClaimedAt,
+            Instant reclaimedAt
+    ) {
+        try {
+            return jdbcTemplate.update(
+                    """
+                    UPDATE idempotency_records
+                    SET created_at = ?
+                    WHERE idem_key = ?
+                      AND request_hash = ?
+                      AND status = 'IN_PROGRESS'
+                      AND created_at = ?
+                    """,
+                    Timestamp.from(reclaimedAt),
+                    key,
+                    requestHash,
+                    Timestamp.from(previousClaimedAt)
+            ) == 1;
+        } catch (DataAccessException exception) {
+            throw new IdempotencyPersistenceException(
+                    "오래된 멱등 요청 회수에 실패했습니다.",
+                    exception
+            );
+        }
     }
 
     @Override
@@ -90,20 +128,32 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
             String key,
             Long memberId,
             Long issuanceId,
-            String responseBody
+            String responseBody,
+            Instant claimedAt
     ) {
+        if (memberId == null || memberId <= 0
+                || issuanceId == null || issuanceId <= 0
+                || responseBody == null || responseBody.isBlank()
+                || claimedAt == null) {
+            throw new IdempotencyPersistenceException(
+                    "완료할 멱등 레코드 대상 값이 올바르지 않습니다."
+            );
+        }
         try {
             int changed = jdbcTemplate.update(
                     """
                     UPDATE idempotency_records
                     SET member_id = ?, issuance_id = ?,
                         status = 'DONE', response_body = ?
-                    WHERE idem_key = ? AND status = 'IN_PROGRESS'
+                    WHERE idem_key = ?
+                      AND status = 'IN_PROGRESS'
+                      AND created_at = ?
                     """,
                     memberId,
                     issuanceId,
                     responseBody,
-                    key
+                    key,
+                    Timestamp.from(claimedAt)
             );
             if (changed != 1) {
                 throw new IdempotencyPersistenceException(
@@ -115,6 +165,34 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
         } catch (DataAccessException exception) {
             throw new IdempotencyPersistenceException(
                     "멱등 처리 결과 저장에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void release(
+            String key,
+            String requestHash,
+            Instant claimedAt
+    ) {
+        try {
+            jdbcTemplate.update(
+                    """
+                    DELETE FROM idempotency_records
+                    WHERE idem_key = ?
+                      AND request_hash = ?
+                      AND status = 'IN_PROGRESS'
+                      AND created_at = ?
+                    """,
+                    key,
+                    requestHash,
+                    Timestamp.from(claimedAt)
+            );
+        } catch (DataAccessException exception) {
+            throw new IdempotencyPersistenceException(
+                    "실패한 멱등 요청 정리에 실패했습니다.",
                     exception
             );
         }

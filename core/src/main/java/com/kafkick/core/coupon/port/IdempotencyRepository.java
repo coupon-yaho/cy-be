@@ -15,10 +15,24 @@ public interface IdempotencyRepository {
 
     Optional<IdempotencyRecord> findByKey(String key);
 
+    boolean tryReclaim(
+            String key,
+            String requestHash,
+            Instant previousClaimedAt,
+            Instant reclaimedAt
+    );
+
     void complete(
             String key,
             Long memberId,
             Long issuanceId,
-            String responseBody
+            String responseBody,
+            Instant claimedAt
+    );
+
+    void release(
+            String key,
+            String requestHash,
+            Instant claimedAt
     );
 }
