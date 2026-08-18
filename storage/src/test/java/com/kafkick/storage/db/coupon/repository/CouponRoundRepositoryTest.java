@@ -258,8 +258,8 @@ class CouponRoundRepositoryTest {
                 INSERT INTO coupons (
                     template_id, brand_id, name, policy_type,
                     discount_amount, valid_days, eligible_grades_mask,
-                    open_at, close_at, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_at, close_at, status, generated_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 template.id(),
                 template.brandId(),
@@ -271,6 +271,7 @@ class CouponRoundRepositoryTest {
                 LocalDateTime.of(2026, 9, 8, 7, 0),
                 LocalDateTime.of(2026, 9, 8, 5, 0),
                 CouponRoundStatus.SCHEDULED.name(),
+                LocalDateTime.of(2026, 8, 18, 0, 0),
                 LocalDateTime.of(2026, 8, 18, 0, 0)
         )).isInstanceOf(DataAccessException.class);
 
