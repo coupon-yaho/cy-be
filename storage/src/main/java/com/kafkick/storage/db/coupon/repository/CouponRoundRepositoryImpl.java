@@ -1,7 +1,7 @@
 // 쿠폰 회차와 최초 재고를 별도 새 트랜잭션에서 함께 저장합니다.
 package com.kafkick.storage.db.coupon.repository;
 
-import java.sql.SQLException;
+import java.util.Optional;
 
 import jakarta.persistence.EntityManager;
 
@@ -18,6 +18,7 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 import com.kafkick.storage.db.coupon.entity.CouponStockEntity;
 import com.kafkick.storage.db.coupon.mapper.CouponRoundEntityMapper;
+import com.kafkick.storage.db.support.SqlErrorInspector;
 
 @Repository
 public class CouponRoundRepositoryImpl implements CouponRoundRepository {
@@ -74,15 +75,15 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
     }
 
     private static boolean isDuplicateKey(Throwable throwable) {
-        Throwable cause = throwable;
-        while (cause != null) {
-            if (cause instanceof SQLException sqlException
-                    && sqlException.getErrorCode()
-                    == MYSQL_DUPLICATE_KEY_ERROR) {
-                return true;
-            }
-            cause = cause.getCause();
-        }
-        return false;
+        return SqlErrorInspector.hasErrorCode(
+                throwable,
+                MYSQL_DUPLICATE_KEY_ERROR
+        );
+    }
+
+    @Override
+    public Optional<CouponRound> findById(Long couponRoundId) {
+        return couponRoundJpaRepository.findById(couponRoundId)
+                .map(CouponRoundEntityMapper::toDomain);
     }
 }
