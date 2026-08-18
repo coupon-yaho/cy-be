@@ -126,6 +126,40 @@ public record CouponTemplate(
         return MembershipGrade.toMask(eligibleGrades);
     }
 
+    public CouponTemplate update(
+            Long brandId,
+            String name,
+            CouponPolicyType policyType,
+            Integer discountRate,
+            Integer maxDiscountAmount,
+            Integer discountAmount,
+            int validDays,
+            int nthWeek,
+            CouponDayOfWeek dayOfWeek,
+            LocalTime startTime,
+            int durationHours,
+            int stockPerOccurrence,
+            Set<MembershipGrade> eligibleGrades
+    ) {
+        return new CouponTemplate(
+                id,
+                brandId,
+                name,
+                policyType,
+                discountRate,
+                maxDiscountAmount,
+                discountAmount,
+                validDays,
+                nthWeek,
+                dayOfWeek,
+                startTime,
+                durationHours,
+                stockPerOccurrence,
+                eligibleGrades,
+                active
+        );
+    }
+
     private static void validateId(Long id) {
         if (id != null && id <= 0) {
             throw new IllegalArgumentException(

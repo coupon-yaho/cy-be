@@ -1,4 +1,4 @@
-// 관리자 쿠폰 템플릿 생성 및 조회 API를 공통 응답 형식으로 제공합니다.
+// 관리자 쿠폰 템플릿 생성·조회·수정 API를 공통 응답 형식으로 제공합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.net.URI;
@@ -12,15 +12,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.kafkick.api.coupon.adapter.CouponTemplateUpdateTransactionalAdapter;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
 import com.kafkick.api.coupon.dto.CouponTemplateDetailResponse;
 import com.kafkick.api.coupon.dto.CouponTemplatePageResponse;
+import com.kafkick.api.coupon.dto.CouponTemplateUpdateRequest;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
@@ -32,13 +35,19 @@ public class CouponTemplateController {
 
     private final CouponTemplateCreateService couponTemplateCreateService;
     private final CouponTemplateQueryService couponTemplateQueryService;
+    private final CouponTemplateUpdateTransactionalAdapter
+            couponTemplateUpdateTransactionalAdapter;
 
     public CouponTemplateController(
             CouponTemplateCreateService couponTemplateCreateService,
-            CouponTemplateQueryService couponTemplateQueryService
+            CouponTemplateQueryService couponTemplateQueryService,
+            CouponTemplateUpdateTransactionalAdapter
+                    couponTemplateUpdateTransactionalAdapter
     ) {
         this.couponTemplateCreateService = couponTemplateCreateService;
         this.couponTemplateQueryService = couponTemplateQueryService;
+        this.couponTemplateUpdateTransactionalAdapter =
+                couponTemplateUpdateTransactionalAdapter;
     }
 
     @PostMapping
@@ -86,6 +95,24 @@ public class CouponTemplateController {
                 CouponTemplatePageResponse.from(
                         couponTemplateQueryService.findPage(page, size)
                 )
+        );
+    }
+
+    @PutMapping("/{couponTemplateId}")
+    public ResponseEnvelope<CouponTemplateDetailResponse> update(
+            @PathVariable
+            @Positive(message = "쿠폰 템플릿 ID는 0보다 커야 합니다.")
+            Long couponTemplateId,
+            @Valid @RequestBody CouponTemplateUpdateRequest request
+    ) {
+        CouponTemplate updatedCouponTemplate =
+                couponTemplateUpdateTransactionalAdapter.update(
+                        couponTemplateId,
+                        request.toCommand()
+                );
+
+        return ResponseEnvelope.success(
+                CouponTemplateDetailResponse.from(updatedCouponTemplate)
         );
     }
 }
