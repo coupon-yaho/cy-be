@@ -10,11 +10,13 @@ import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
@@ -26,13 +28,15 @@ import com.kafkick.core.coupon.CouponStatus;
  * <p>이 테스트는 HTTP 응답 계약을 검증할 뿐이며, 현재 Overview API가 실제 데이터를
  * 조회하거나 200을 반환한다는 의미가 아닙니다.</p>
  */
+@AdminJsonTest
 class AdminOverviewDtoJsonSerializationTest {
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-17T05:03:58Z");
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-17T05:03:57Z");
     private static final Instant OPENING_OBSERVED_AT = Instant.parse("2026-08-17T05:03:56Z");
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /** KPI 누락 필드와 서버 권장 행동 구조가 JSON에서 손실되는 회귀를 방지합니다. */
     @Test
@@ -91,7 +95,7 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"code\":\"QUEUE_STALLED\"")
                 .contains("\"displayText\":\"D2에서 입장 처리 상태 확인\"")
                 .contains("\"targetScreen\":\"METRICS\"")
-                .contains("\"stockRisk\":{\"value\":null,\"state\":\"UNAVAILABLE\",\"observedAt\":null}");
+                .contains("\"stockRisk\":{\"state\":\"UNAVAILABLE\"}");
     }
 
     /** 관측된 빈 조치 목록과 미관측 nullable 시간값이 서로 다른 JSON 상태를 유지하는지 검증합니다. */
@@ -145,11 +149,10 @@ class AdminOverviewDtoJsonSerializationTest {
                         OBSERVED_AT));
 
         assertThat(objectMapper.writeValueAsString(response))
-                .contains("\"longestWait\":null")
-                .contains("\"nearestDepletion\":null")
                 .contains("\"topItems\":[]")
                 .contains("\"campaigns\":{\"value\":[],\"state\":\"VALID\"")
-                .contains("\"state\":\"NO_TRAFFIC\"");
+                .contains("\"state\":\"NO_TRAFFIC\"")
+                .doesNotContain("\"longestWait\":", "\"nearestDepletion\":");
     }
 
     /** 집계 4종, campaigns의 O1·O2·O4, 최상위 O3가 완전한 HTTP JSON 계약으로 직렬화되는지 검증합니다. */
@@ -221,12 +224,12 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"campaigns\":{\"value\":[{\"priority\":1,\"couponId\":17")
                 .contains("\"windowStart\":\"2026-08-17T04:53:58Z\"")
                 .contains("\"campaignQueueStatus\":{\"value\":{\"waitingCount\":3204")
-                .contains("\"estimatedWait\":null")
                 .contains("\"remainingRatio\":0.31")
                 .contains("\"customerOutcomes\":{\"value\":{\"windowStart\":")
                 .contains("\"totalCount\":12558")
                 .contains("\"type\":\"ISSUED\",\"count\":1847,\"ratio\":0.147")
-                .contains("\"campaigns\":{\"value\":[", "\"topItems\":[]");
+                .contains("\"campaigns\":{\"value\":[", "\"topItems\":[]")
+                .doesNotContain("\"admissionsPerMinute\":0.0,\"estimatedWait\":");
     }
 
     /** HTTP DTO도 Snapshot과 같은 O3 비율 범위를 유지하여 잘못된 JSON 생성을 차단하는지 검증합니다. */

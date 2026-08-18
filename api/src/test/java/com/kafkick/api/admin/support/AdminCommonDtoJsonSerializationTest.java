@@ -5,13 +5,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
 /** 과거 목록과 live polling이 서로 다른 cursor 및 복구 플래그 구조를 사용하는지 검증합니다. */
+@AdminJsonTest
 class AdminCommonDtoJsonSerializationTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /** 일반 과거 목록 응답이 nextBeforeCursor와 hasOlder를 제공하는지 검증합니다. */
     @Test

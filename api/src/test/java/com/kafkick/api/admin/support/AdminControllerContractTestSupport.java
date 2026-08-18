@@ -6,11 +6,14 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
+import org.springframework.validation.beanvalidation.SpringConstraintValidatorFactory;
 import org.springframework.format.support.DefaultFormattingConversionService;
 
+import com.kafkick.api.admin.support.config.AdminAnalyticsProperties;
 import com.kafkick.api.support.GlobalExceptionHandler;
 import com.kafkick.api.support.RequestIdFilter;
 import com.kafkick.api.caller.CallerArgumentResolver;
@@ -40,7 +43,10 @@ public final class AdminControllerContractTestSupport {
 
     private static MockMvc build(Object controller, boolean defaultAdminHeaders) {
         Clock fixedClock = Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"), ZoneOffset.UTC);
+        DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+        beanFactory.registerSingleton("adminAnalyticsProperties", new AdminAnalyticsProperties(1));
         LocalValidatorFactoryBean validator = new LocalValidatorFactoryBean();
+        validator.setConstraintValidatorFactory(new SpringConstraintValidatorFactory(beanFactory));
         validator.afterPropertiesSet();
         DefaultFormattingConversionService conversionService = new DefaultFormattingConversionService();
         conversionService.addConverter(new MetricsWindowConverter());

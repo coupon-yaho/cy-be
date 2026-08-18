@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -13,6 +14,7 @@ import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
 import com.kafkick.api.admin.issuance.dto.IssuanceHistoryPageResponse;
 import com.kafkick.api.admin.issuance.dto.IssuanceInquiryPageResponse;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
@@ -21,11 +23,13 @@ import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 대시보드 지표와 발급 조회 DTO의 중첩 관측값·마스킹·enum JSON 계약을 검증합니다. */
+@AdminJsonTest
 class DashboardIssuanceDtoJsonSerializationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-16T00:00:00Z");
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /** 쿠폰 지표가 원천별 상태와 관측 시각을 잃지 않고 확정 enum 이름으로 직렬화되는지 확인합니다. */
     @Test
@@ -56,9 +60,9 @@ class DashboardIssuanceDtoJsonSerializationTest {
                 .contains("\"couponId\":7")
                 .contains("\"window\":\"FIVE_MINUTES\"")
                 .contains("\"initialCount\":{\"value\":100,\"state\":\"VALID\"")
-                .contains("\"waitingCount\":{\"value\":null,\"state\":\"PENDING\"")
+                .contains("\"waitingCount\":{\"state\":\"PENDING\"")
                 .contains("\"status\":\"OPEN\"")
-                .contains("\"transitionRate\":{\"value\":null,\"state\":\"PENDING\"");
+                .contains("\"transitionRate\":{\"state\":\"PENDING\"");
     }
 
     /** 발급 문의·이력이 nullable 필드와 마스킹 코드를 보존하고 core enum을 재사용하는지 확인합니다. */
@@ -81,8 +85,10 @@ class DashboardIssuanceDtoJsonSerializationTest {
         );
 
         assertThat(objectMapper.writeValueAsString(inquiries))
-                .contains("\"httpStatus\":null", "\"reasonCode\":\"STOCK_EXHAUSTED\"", "\"currentStatus\":\"ISSUED\"");
+                .contains("\"reasonCode\":\"STOCK_EXHAUSTED\"", "\"currentStatus\":\"ISSUED\"")
+                .doesNotContain("\"httpStatus\":");
         assertThat(objectMapper.writeValueAsString(histories))
-                .contains("\"fromStatus\":null", "\"toStatus\":\"ISSUED\"", "\"eventType\":\"ISSUE\"");
+                .contains("\"toStatus\":\"ISSUED\"", "\"eventType\":\"ISSUE\"")
+                .doesNotContain("\"fromStatus\":");
     }
 }

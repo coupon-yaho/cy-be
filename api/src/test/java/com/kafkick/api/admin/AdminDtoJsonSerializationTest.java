@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -20,6 +21,7 @@ import com.kafkick.api.admin.notification.dto.NotificationResendAcceptedResponse
 import com.kafkick.api.admin.observability.dto.AdminEventItem;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.support.LiveEventPollResponse;
+import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.member.Grade;
@@ -27,9 +29,11 @@ import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관리자 API 공통 응답 초안이 선언한 JSON 필드 구조를 유지하는지 검증합니다. */
+@AdminJsonTest
 class AdminDtoJsonSerializationTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /** 각 도메인의 빈 응답 예시도 필수 필드와 nullable 구조를 빠뜨리지 않는지 확인합니다. */
     @Test
@@ -51,7 +55,8 @@ class AdminDtoJsonSerializationTest {
         assertThat(objectMapper.writeValueAsString(new LiveEventPollResponse(
                 List.of(AdminEventItem.draft(UUID.fromString("00000000-0000-0000-0000-000000000001"))),
                 null, false, false, false)))
-                .contains("nextAfterCursor", "eventsMayBeMissing");
+                .contains("eventsMayBeMissing")
+                .doesNotContain("nextAfterCursor");
         assertThat(objectMapper.writeValueAsString(BenchmarkListResponse.draft()))
                 .contains("items", "hasOlder");
     }

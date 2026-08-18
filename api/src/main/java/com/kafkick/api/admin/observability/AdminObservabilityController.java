@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
-import com.kafkick.api.admin.observability.dto.AdminEventItem;
 import com.kafkick.api.admin.support.LiveEventPollResponse;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.support.ResponseEnvelope;

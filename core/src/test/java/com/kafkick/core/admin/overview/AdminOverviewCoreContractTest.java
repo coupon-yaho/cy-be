@@ -6,7 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
@@ -73,5 +75,71 @@ class AdminOverviewCoreContractTest {
 
         assertThat(item.customerImpact()).isEqualTo(AdminOverviewSnapshot.CustomerImpact.LIMITED);
         assertThat(item.customerImpactText()).isEqualTo("일부 고객 대기");
+    }
+
+    /** Core 요약은 전체 건수와 우선 노출할 최대 20개를 별도로 보존합니다. */
+    @Test
+    void actionItemSnapshotPreservesTotalAndRanksTopItems() {
+        AdminOverviewSnapshot.OperationActionItem warn = actionItem(4L, Severity.WARN, FROM);
+        AdminOverviewSnapshot.OperationActionItem criticalNew = actionItem(3L, Severity.CRITICAL, TO);
+        AdminOverviewSnapshot.OperationActionItem criticalOld = actionItem(2L, Severity.CRITICAL, FROM);
+        AdminOverviewSnapshot.OperationActionItem criticalUnknown = actionItem(1L, Severity.CRITICAL, null);
+
+        AdminOverviewSnapshot.ActionItemSnapshot snapshot = new AdminOverviewSnapshot.ActionItemSnapshot(
+                100, List.of(warn, criticalNew, criticalUnknown, criticalOld));
+
+        assertThat(snapshot.totalCount()).isEqualTo(100);
+        assertThat(snapshot.topItems())
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                .containsExactly(2L, 3L, 1L, 4L);
+    }
+
+    /** 호출자가 원본 목록을 바꿔도 Snapshot의 상위 목록은 변하지 않습니다. */
+    @Test
+    void actionItemSnapshotDefensivelyCopiesTopItems() {
+        List<AdminOverviewSnapshot.OperationActionItem> items = new ArrayList<>();
+        items.add(actionItem(1L, Severity.WARN, FROM));
+
+        AdminOverviewSnapshot.ActionItemSnapshot snapshot =
+                new AdminOverviewSnapshot.ActionItemSnapshot(1, items);
+        items.clear();
+
+        assertThat(snapshot.topItems()).hasSize(1);
+        assertThatThrownBy(() -> snapshot.topItems().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /** 전체 건수와 상위 목록 크기가 서로 모순되거나 상위 목록이 20개를 넘으면 거부합니다. */
+    @Test
+    void actionItemSnapshotRejectsInvalidCounts() {
+        List<AdminOverviewSnapshot.OperationActionItem> twentyOneItems =
+                java.util.stream.LongStream.rangeClosed(1, 21)
+                        .mapToObj(id -> actionItem(id, Severity.WARN, FROM))
+                        .toList();
+
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.ActionItemSnapshot(-1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.ActionItemSnapshot(
+                0, List.of(actionItem(1L, Severity.WARN, FROM))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.ActionItemSnapshot(21, twentyOneItems))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private AdminOverviewSnapshot.OperationActionItem actionItem(
+            Long couponId, Severity severity, Instant detectedAt) {
+        return new AdminOverviewSnapshot.OperationActionItem(
+                couponId,
+                "캠페인 " + couponId,
+                FROM,
+                severity,
+                AdminOverviewSnapshot.CustomerImpact.LIMITED,
+                "일부 고객 대기",
+                detectedAt,
+                Duration.ofMinutes(1),
+                new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.QUEUE_STALLED,
+                        "대기열 확인",
+                        AdminOverviewSnapshot.TargetScreen.METRICS));
     }
 }

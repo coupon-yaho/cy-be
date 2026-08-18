@@ -6,12 +6,14 @@ import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.benchmark.dto.BenchmarkListResponse;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.admin.BenchmarkRunState;
 import com.kafkick.core.admin.MetricsWindow;
@@ -22,11 +24,13 @@ import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관측 지표와 Benchmark 목록 DTO의 독립 상태·nullable 판정 JSON 구조를 검증합니다. */
+@AdminJsonTest
 class ObservabilityBenchmarkDtoJsonSerializationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-16T00:00:00Z");
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /** 범위·정합성 단계와 각 트래픽 원천 상태가 독립적으로 직렬화되는지 검증합니다. */
     @Test
@@ -54,8 +58,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 .contains("\"type\":\"GLOBAL\"")
                 .contains("\"window\":\"ONE_MINUTE\"")
                 .contains("\"phase\":\"LIVE\"")
-                .contains("\"verdict\":null")
-                .contains("\"issueAttemptRps\":{\"value\":null,\"state\":\"PENDING\"")
+                .doesNotContain("\"verdict\":")
+                .contains("\"issueAttemptRps\":{\"state\":\"PENDING\"")
                 .contains("\"circuitBreakers\":[]");
     }
 
@@ -93,7 +97,7 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 .contains("\"persistGap\":{\"value\":0");
     }
 
-    /** 실행 중 Benchmark의 nullable verdict와 원천별 관측값이 그대로 유지되는지 검증합니다. */
+    /** 실행 중 Benchmark의 미확정 verdict는 생략하고 원천별 관측값은 유지합니다. */
     @Test
     void benchmarkSerializesObservedValuesAndNullableVerdict() throws Exception {
         BenchmarkListResponse response = new BenchmarkListResponse(
@@ -116,7 +120,7 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
 
         assertThat(objectMapper.writeValueAsString(response))
                 .contains("\"benchmarkRunId\":9")
-                .contains("\"verdict\":null")
+                .doesNotContain("\"verdict\":")
                 .contains("\"issueAttemptRps\":{\"value\":10.5,\"state\":\"VALID\"")
                 .contains("\"overIssuedCount\":{\"value\":0,\"state\":\"VALID\"");
     }

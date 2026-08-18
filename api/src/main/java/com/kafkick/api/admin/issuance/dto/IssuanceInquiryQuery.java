@@ -5,7 +5,6 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
-import com.kafkick.api.admin.support.CursorPageNormalizer;
 import com.kafkick.core.observation.ReasonCode;
 
 /**
@@ -13,14 +12,14 @@ import com.kafkick.core.observation.ReasonCode;
  *
  * <p>{@code memberId}만 필수이고, 쿠폰·HTTP 상태·사유 코드는 선택 조건입니다. HTTP 상태는 표준 범위를
  * 포함하는 100~599만 허용합니다. {@code beforeCursor}는 현재 페이지보다 오래된 결과를 가리키고,
- * {@code limit}은 누락 시 50, 최대 200으로 제한됩니다.</p>
+ * {@code limit}은 누락 시 설정된 기본값(초깃값 50), 최대 200으로 제한됩니다.</p>
  *
  * @param memberId 필수 회원 식별자
  * @param couponId 선택 쿠폰 캠페인 회차 필터
  * @param httpStatus 선택 HTTP 상태 필터
  * @param reasonCode 선택 실패·정책 결과 사유 필터
  * @param beforeCursor 현재 페이지보다 오래된 결과를 요청하는 불투명 cursor
- * @param limit 페이지 크기; 누락 시 50, 허용 범위 1~200
+ * @param limit 페이지 크기; 누락 시 설정된 기본값(초깃값 50), 허용 범위 1~200
  */
 public record IssuanceInquiryQuery(
         @NotNull(message = "memberId는 필수입니다.")
@@ -34,9 +33,9 @@ public record IssuanceInquiryQuery(
         @Max(value = 200, message = "limit은 200 이하여야 합니다.") Integer limit
 ) {
 
-    /** 누락된 limit에만 공통 기본값을 적용합니다. */
-    public IssuanceInquiryQuery {
-        // Spring binding에서 limit을 생략한 경우에만 공통 기본 페이지 크기를 적용합니다.
-        limit = CursorPageNormalizer.normalizeLimit(limit);
+    /** HTTP 어댑터가 설정으로 정규화한 limit을 반영한 복사본을 만듭니다. */
+    public IssuanceInquiryQuery withLimit(int normalizedLimit) {
+        return new IssuanceInquiryQuery(
+                memberId, couponId, httpStatus, reasonCode, beforeCursor, normalizedLimit);
     }
 }

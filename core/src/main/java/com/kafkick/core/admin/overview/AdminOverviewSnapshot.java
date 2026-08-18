@@ -2,6 +2,7 @@ package com.kafkick.core.admin.overview;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
@@ -21,6 +22,10 @@ import com.kafkick.core.coupon.CouponStatus;
  * 관제 Adapter가 만든 원천 데이터를 이 Snapshot으로 조립한 뒤 HTTP 응답으로 변환합니다.
  * 현재 Controller는 이 모델이나 Provider를 주입받지 않으며 계속 501을 반환합니다.</p>
  *
+ * <p>Core의 {@link Observation}은 Provider 경계의 의미 모델이며 API 모듈의 HTTP
+ * {@code ObservedValue}와 의도적으로 분리합니다. 후속 A-06의 전용 Mapper가 상태·값·관측 시각을
+ * 보존해 변환하며 Core가 API 표현 타입에 의존하지 않게 합니다.</p>
+ *
  * @param snapshotAt 여러 원천을 하나의 결과로 조립한 전체 기준 시각
  * @param actionRequired 조치 필요 캠페인의 전체·긴급·주의 수와 해당 관측 상태
  * @param openingSoon 30분 내 오픈 및 준비 미완료 캠페인 수와 해당 관측 상태
@@ -30,7 +35,7 @@ import com.kafkick.core.coupon.CouponStatus;
  * @param aggregateQueue 전체 캠페인의 대기 인원·입장 처리율·예상 대기시간과 관측 상태
  * @param latencySummary 성공·실패 응답 p99와 관측 구간 및 관측 상태
  * @param campaignStatusSummary 진행·예정·종료 캠페인 수와 관측 상태
- * @param actionItems 서버가 판정한 조치 목록과 해당 관측 상태; 관측 결과가 비어 있으면 값은 빈 목록
+ * @param actionItems 서버가 판정한 전체 건수와 상위 20개 조치 및 해당 관측 상태
  * @param campaigns 캠페인 기본 목록과 O1·O2·O4 중첩 관측값; 바깥 상태는 기본 목록 조회 상태만 의미
  * @param customerOutcomes 최근 관측 구간의 전체 캠페인 O3 고객 결과 집계와 관측 상태
  */
@@ -44,7 +49,7 @@ public record AdminOverviewSnapshot(
         Observation<AggregateQueue> aggregateQueue,
         Observation<LatencySummary> latencySummary,
         Observation<CampaignStatusSummary> campaignStatusSummary,
-        Observation<List<OperationActionItem>> actionItems,
+        Observation<ActionItemSnapshot> actionItems,
         Observation<List<CampaignOverview>> campaigns,
         Observation<CustomerOutcomeSummary> customerOutcomes) {
 
@@ -294,6 +299,43 @@ public record AdminOverviewSnapshot(
             if (!Double.isFinite(ratio) || ratio < 0.0 || ratio > 1.0) {
                 throw new IllegalArgumentException("ratio는 유한한 0 이상 1 이하 값이어야 합니다.");
             }
+        }
+    }
+
+    /**
+     * 전체 조치 건수와 관리자 첫 화면에 우선 노출할 상위 20개를 함께 전달합니다.
+     *
+     * <p>상위 항목은 심각도 내림차순, 최초 감지 시각 오름차순(null은 마지막), couponId 오름차순으로
+     * 정렬됩니다. 전체 건수와 상위 목록을 분리해 목록이 잘려도 전체 규모를 잃지 않습니다.</p>
+     *
+     * @param totalCount 전체 조치 필요 항목 수
+     * @param topItems 화면에 우선 노출할 최대 20개 항목
+     */
+    public record ActionItemSnapshot(long totalCount, List<OperationActionItem> topItems) {
+
+        private static final Comparator<OperationActionItem> PRIORITY_ORDER =
+                Comparator.comparing(
+                                OperationActionItem::severity,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(
+                                OperationActionItem::detectedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(
+                                OperationActionItem::couponId,
+                                Comparator.nullsLast(Comparator.naturalOrder()));
+
+        public ActionItemSnapshot {
+            Objects.requireNonNull(topItems, "topItems");
+            if (totalCount < 0) {
+                throw new IllegalArgumentException("totalCount는 음수일 수 없습니다.");
+            }
+            if (topItems.size() > 20) {
+                throw new IllegalArgumentException("topItems는 최대 20개입니다.");
+            }
+            if (totalCount < topItems.size()) {
+                throw new IllegalArgumentException("totalCount는 topItems 크기보다 작을 수 없습니다.");
+            }
+            topItems = topItems.stream().sorted(PRIORITY_ORDER).toList();
         }
     }
 

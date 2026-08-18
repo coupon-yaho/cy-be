@@ -6,14 +6,13 @@ import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
-import com.kafkick.api.admin.support.CursorPageNormalizer;
 import com.kafkick.core.observation.EngineVersion;
 
 /**
  * Benchmark 실행 목록의 선택 필터와 과거 방향 cursor를 바인딩하는 변경 가능한 선구축 초안입니다.
  *
  * <p>{@code from}/{@code to}는 선택 기간이며 둘 다 있을 때 역전될 수 없습니다. {@code beforeCursor}는
- * 현재 페이지의 마지막 실행보다 오래된 실행을 가리킵니다. {@code limit}은 누락 시 50으로 정규화되고
+ * 현재 페이지의 마지막 실행보다 오래된 실행을 가리킵니다. {@code limit}은 누락 시 설정값으로 정규화되고
  * 1~200 범위만 허용됩니다. 엔진 버전은 확정 enum이며 시나리오 코드는 실행 도구와 공유하는 식별 문자열입니다.</p>
  *
  * @param from 조회 시작일; 기간 필터를 사용하지 않으면 null
@@ -21,7 +20,7 @@ import com.kafkick.core.observation.EngineVersion;
  * @param engineVersion 엔진 버전 필터
  * @param scenarioCode 부하 시나리오 코드 필터
  * @param beforeCursor 현재 페이지보다 오래된 실행을 요청하는 불투명 cursor
- * @param limit 페이지 크기; 누락 시 50, 허용 범위 1~200
+ * @param limit 페이지 크기; 누락 시 설정된 기본값(초깃값 50), 허용 범위 1~200
  */
 public record BenchmarkListQuery(
         LocalDate from,
@@ -33,10 +32,10 @@ public record BenchmarkListQuery(
         @Max(value = 200, message = "limit은 200 이하여야 합니다.") Integer limit
 ) {
 
-    /** 누락된 limit에만 공통 기본값을 적용합니다. */
-    public BenchmarkListQuery {
-        // Spring binding에서 limit이 생략돼 null로 들어온 경우에만 공통 기본값을 적용합니다.
-        limit = CursorPageNormalizer.normalizeLimit(limit);
+    /** HTTP 어댑터가 설정으로 정규화한 limit을 반영한 복사본을 만듭니다. */
+    public BenchmarkListQuery withLimit(int normalizedLimit) {
+        return new BenchmarkListQuery(
+                from, to, engineVersion, scenarioCode, beforeCursor, normalizedLimit);
     }
 
     /**

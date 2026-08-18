@@ -28,6 +28,10 @@ import com.kafkick.core.coupon.CouponStatus;
  * {@code AdminOverviewProvider} 구현체를 연결한 뒤 조립하므로 이 DTO의 존재는 실제 조회 기능 완료를
  * 의미하지 않습니다. DB·Redis·Kafka의 원시 기술 값은 이 응답에 직접 노출하지 않습니다.</p>
  *
+ * <p>이 HTTP DTO는 Core Snapshot 타입을 직접 재사용하지 않습니다. 후속 A-06의 전용 Mapper가
+ * {@code AdminOverviewSnapshot.Observation}을 {@link ObservedValue}로 변환해 계층별 계약을 분리하고,
+ * 상태·값·관측 시각 및 ratio를 한 경로에서 전달합니다.</p>
+ *
  * @param snapshotAt 이 응답이 나타내는 기준 시각
  * @param overallStatus 전체 응답 데이터의 완전성 상태
  * @param actionRequired 조치 필요 캠페인의 전체·긴급·주의 수와 해당 원천 상태

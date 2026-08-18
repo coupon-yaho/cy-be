@@ -6,17 +6,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.core.observation.SourceStatus;
 
 /** 미수집 관측값을 정상값이나 가짜 0으로 바꾸지 않는 공통 DTO 규칙을 검증합니다. */
+@AdminJsonTest
 class ObservedValueTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Autowired
+    private ObjectMapper objectMapper;
 
-    /** PENDING 상태에서는 value와 observedAt이 null인 구조가 그대로 유지되는지 확인합니다. */
+    /** PENDING 상태에서는 null 필드를 생략하고 상태만 직렬화하는지 확인합니다. */
     @Test
     void pendingValueKeepsNullInsteadOfInventingZero() throws Exception {
         ObservedValue<Long> value = new ObservedValue<>(
@@ -25,9 +28,8 @@ class ObservedValueTest {
                 null
         );
 
-        assertThat(objectMapper.writeValueAsString(value)).isEqualTo(
-                "{\"value\":null,\"state\":\"PENDING\",\"observedAt\":null}"
-        );
+        assertThat(objectMapper.writeValueAsString(value))
+                .isEqualTo("{\"state\":\"PENDING\"}");
     }
 
     /** 실제 0은 미관측 null과 달리 상태와 실제 관측 시각을 함께 보존하는지 검증합니다. */

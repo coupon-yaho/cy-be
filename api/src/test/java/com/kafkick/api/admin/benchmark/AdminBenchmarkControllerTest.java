@@ -12,11 +12,15 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.api.admin.support.CursorPageNormalizer;
+import com.kafkick.api.admin.support.config.AdminPaginationProperties;
 
 /** Benchmark 조회와 네 가지 운영 명령의 독립 HTTP 계약 및 Validation을 검증합니다. */
 class AdminBenchmarkControllerTest {
 
-    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(new AdminBenchmarkController());
+    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
+            new AdminBenchmarkController(
+                    new CursorPageNormalizer(new AdminPaginationProperties(50))));
 
     /** 유효한 과거 방향 목록 조건은 실제 저장소 대신 명시적인 ADMIN-001을 반환해야 합니다. */
     @Test

@@ -201,7 +201,10 @@ class AdminOverviewContractTest {
                         SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.CampaignStatusSummary(3, 1, 12), SourceStatus.VALID, TO),
-                new AdminOverviewSnapshot.Observation<>(List.of(), SourceStatus.VALID, TO),
+                new AdminOverviewSnapshot.Observation<>(
+                        new AdminOverviewSnapshot.ActionItemSnapshot(0, List.of()),
+                        SourceStatus.VALID,
+                        TO),
                 new AdminOverviewSnapshot.Observation<>(List.of(campaign), SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(outcomes, SourceStatus.VALID, TO));
 
@@ -260,7 +263,8 @@ class AdminOverviewContractTest {
     void snapshotSupportsObservedEmptyActionList() {
         AdminOverviewSnapshot snapshot = snapshotWithActions(List.of());
 
-        assertThat(snapshot.actionItems().value()).isEmpty();
+        assertThat(snapshot.actionItems().value().totalCount()).isZero();
+        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
         assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
     }
 
@@ -285,7 +289,10 @@ class AdminOverviewContractTest {
                         SourceStatus.NO_TRAFFIC, TO),
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.CampaignStatusSummary(0, 0, 0), SourceStatus.VALID, TO),
-                new AdminOverviewSnapshot.Observation<>(actions, SourceStatus.VALID, TO),
+                new AdminOverviewSnapshot.Observation<>(
+                        new AdminOverviewSnapshot.ActionItemSnapshot(actions.size(), actions),
+                        SourceStatus.VALID,
+                        TO),
                 new AdminOverviewSnapshot.Observation<>(List.of(), SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.CustomerOutcomeSummary(FROM, TO, 0, List.of()),

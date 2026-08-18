@@ -33,6 +33,8 @@ class AdminMetricsResponseInvariantTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.COUPON, 0L, null))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.COUPON, -1L, null))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.COUPON, 1L, 2L))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -45,6 +47,8 @@ class AdminMetricsResponseInvariantTest {
         assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.BENCHMARK_RUN, null, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.BENCHMARK_RUN, null, -1L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.BENCHMARK_RUN, null, 0L))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope(AdminMetricsResponse.MetricsScopeType.BENCHMARK_RUN, 1L, 2L))
                 .isInstanceOf(IllegalArgumentException.class);
