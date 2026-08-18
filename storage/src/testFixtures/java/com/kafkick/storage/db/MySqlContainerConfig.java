@@ -13,8 +13,8 @@ import org.testcontainers.utility.DockerImageName;
 @TestConfiguration(proxyBeanMethods = false)
 public class MySqlContainerConfig {
 
-    /** latest 는 도커 허브가 가리키는 대상이 바뀌면 커밋이 그대로여도 테스트 결과가 달라진다. */
-    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:latest");
+    /** CHECK 제약을 실제로 적용하는 MySQL 8.0.16 이상의 고정 버전으로 검증합니다. */
+    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4.6");
 
     @Bean
     @ServiceConnection

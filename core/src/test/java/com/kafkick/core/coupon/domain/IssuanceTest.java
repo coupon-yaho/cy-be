@@ -6,6 +6,9 @@ import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.coupon.exception.CouponExpiredException;
+import com.kafkick.core.coupon.exception.CouponUseErrorCode;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -61,5 +64,46 @@ class IssuanceTest {
         ))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("쿠폰 발급 시각은 필수입니다.");
+    }
+
+    @Test
+    @DisplayName("사용 가능한 쿠폰은 상태 머신을 거쳐 USED로 전이한다")
+    void useIssuedCoupon() {
+        Issuance issuance = restoredIssuance();
+        Instant usedAt = Instant.parse("2026-08-20T05:00:00Z");
+
+        Issuance used = issuance.use(usedAt);
+
+        assertThat(used.status()).isEqualTo(IssuanceStatus.USED);
+        assertThat(used.updatedAt()).isEqualTo(usedAt);
+    }
+
+    @Test
+    @DisplayName("만료 시각이 지난 쿠폰은 사용할 수 없다")
+    void rejectExpiredCoupon() {
+        assertThatThrownBy(() -> restoredIssuance().use(
+                Instant.parse("2026-08-25T05:00:01Z")
+        ))
+                .isInstanceOfSatisfying(
+                        CouponExpiredException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(
+                                        CouponUseErrorCode.COUPON_EXPIRED
+                                )
+                );
+    }
+
+    private Issuance restoredIssuance() {
+        return Issuance.restore(
+                100L,
+                10L,
+                20L,
+                "ABCDEFGHJKLM2345",
+                MembershipGrade.GOLD,
+                IssuanceStatus.ISSUED,
+                Instant.parse("2026-08-18T05:00:00Z"),
+                Instant.parse("2026-08-25T05:00:00Z"),
+                Instant.parse("2026-08-18T05:00:00Z")
+        );
     }
 }

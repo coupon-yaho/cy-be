@@ -4,6 +4,8 @@ package com.kafkick.core.coupon.domain;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
+import com.kafkick.core.coupon.exception.CouponExpiredException;
+
 public record Issuance(
         Long id,
         Long couponRoundId,
@@ -118,6 +120,34 @@ public record Issuance(
                 issuedAt,
                 expiresAt,
                 updatedAt
+        );
+    }
+
+    public Issuance use(Instant usedAt) {
+        if (usedAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 사용 시각은 필수입니다."
+            );
+        }
+        if (usedAt.isAfter(expiresAt)) {
+            throw new CouponExpiredException(id);
+        }
+
+        return new Issuance(
+                id,
+                couponRoundId,
+                memberId,
+                code,
+                issuedGrade,
+                CouponStateMachine.transition(
+                        status,
+                        IssuanceEventType.USE,
+                        expiresAt,
+                        usedAt
+                ),
+                issuedAt,
+                expiresAt,
+                usedAt
         );
     }
 

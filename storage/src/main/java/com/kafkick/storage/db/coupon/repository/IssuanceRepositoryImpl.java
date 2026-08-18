@@ -1,6 +1,9 @@
 // 발급건을 저장하고 1인 1매 DB 제약 위반을 비즈니스 오류로 변환합니다.
 package com.kafkick.storage.db.coupon.repository;
 
+import java.time.Instant;
+import java.util.Optional;
+
 import jakarta.persistence.EntityManager;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -9,6 +12,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.Issuance;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
@@ -64,6 +68,30 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
                     exception
             );
         }
+    }
+
+    @Override
+    public Optional<Issuance> findById(Long issuanceId) {
+        return issuanceJpaRepository.findById(issuanceId)
+                .map(IssuanceEntityMapper::toDomain);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean updateStatusIfCurrent(
+            Long issuanceId,
+            Long memberId,
+            IssuanceStatus currentStatus,
+            IssuanceStatus nextStatus,
+            Instant updatedAt
+    ) {
+        return issuanceJpaRepository.updateStatusIfCurrent(
+                issuanceId,
+                memberId,
+                currentStatus,
+                nextStatus,
+                updatedAt
+        ) == 1;
     }
 
     private static boolean isMemberDuplicate(Throwable throwable) {

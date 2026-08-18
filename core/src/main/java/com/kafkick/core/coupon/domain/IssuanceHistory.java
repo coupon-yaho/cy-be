@@ -61,6 +61,30 @@ public record IssuanceHistory(
         );
     }
 
+    public static IssuanceHistory use(
+            Long issuanceId,
+            IssuanceStatus fromStatus,
+            Instant expiresAt,
+            String idempotencyKey,
+            Instant createdAt
+    ) {
+        return new IssuanceHistory(
+                null,
+                issuanceId,
+                IssuanceEventType.USE,
+                fromStatus,
+                CouponStateMachine.transition(
+                        fromStatus,
+                        IssuanceEventType.USE,
+                        expiresAt,
+                        createdAt
+                ),
+                null,
+                idempotencyKey,
+                createdAt
+        );
+    }
+
     private static void validateId(
             Long value,
             String fieldName,
