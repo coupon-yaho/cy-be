@@ -2,8 +2,8 @@
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.batch.core.ExitStatus;
@@ -27,6 +27,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
@@ -40,7 +42,9 @@ import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
 import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.HourlyIssued;
 import com.kafkick.core.verification.ScopeType;
+import com.kafkick.core.verification.StatsRepository;
 import com.kafkick.core.verification.StatsStatus;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.verification.VerificationFinding;
@@ -179,7 +183,8 @@ public class VerifyJobConfig {
             Step stockMismatchStep,
             Step gradeViolationStep,
             Step assertFrozenStep,
-            Step finalizeRunStep
+            Step finalizeRunStep,
+            Step statsAggregateStep
     ) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
@@ -195,11 +200,12 @@ public class VerifyJobConfig {
                 .next(gradeViolationStep)
                 .next(assertFrozenStep)
                 .next(finalizeRunStep)
+                .next(statsAggregateStep)
                 .build();
     }
 
     /**
-     * 실행이 도는 동안 <b>세 축이 모두 얼어 있었는지</b> 끝에서 다시 본다 —
+     * 실행이 도는 동안 <b>세 축이 모두 얼어 있었는지</b> 규칙 뒤에 다시 본다 —
      * 발급건 · 재고 · 회차 정책.
      *
      * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다.
@@ -364,6 +370,179 @@ public class VerifyJobConfig {
                         runs.recordComparedManifest(runId, frozenSeedRunId(jobExecution));
                         runs.updateStatsStatus(runId, StatsStatus.SKIPPED);
                     }
+
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
+                .build();
+    }
+
+    /**
+     * <b>판정 뒤에 온다.</b> 통계가 죽어도 {@code verdict} 는 이미 남고, {@code stats_status} 가
+     * {@code NULL} 이라 {@code v_latest_stats_run} 이 그 스냅샷을 <b>물리적으로 안 보여 준다</b> —
+     * 부분값을 섞어 읽는 사고가 그 자리에서 막힌다. 반대 순서면 통계 문제로 판정을 잃는다.
+     *
+     * <p><b>{@code PARTIAL} 은 쓰지 않는다.</b> 중간에 죽으면 {@code stats_status} 가 손대지 않은
+     * {@code NULL} 로 남고 뷰가 이미 걸러 낸다. 세 값 중 하나를 안 쓰는 것이 이상해 보이지만,
+     * "절반 쓰다 죽었다" 를 표현하려고 죽는 코드가 값을 쓸 수는 없다 — 그건 트랜잭션이 할 일이다.
+     *
+     * <p><b>합격한 CLEAN 만이다.</b> 오염 데이터 위의 집계는 뜻이 없는데, <b>CLEAN 에서 검출이
+     * 났다는 것도 그 데이터가 실제로 어긋났다는 뜻</b>이라 같은 근거가 그대로 적용된다.
+     * 더 좁게는 이 Step 의 {@code asOf} 논거가 판정에 기댄다 — <i>"{@code issuances.status} 가 곧
+     * {@code asOf} 시점 status"</i> 를 보증하는 것은 V3 가 0건이라는 사실이다.
+     *
+     * <p><b>{@code JobExecutionDecider} 를 쓰지 않는다.</b> {@code docs/10-batch-design.md} 가
+     * 원래 그것을 요구했고 의도(건너뛴 사실을 배치 메타에 남긴다)는 맞다. 그런데
+     * {@code SimpleJobBuilder.next(JobExecutionDecider)} 는 {@code JobFlowBuilder} 를 돌려주어
+     * 잡이 {@code FlowJob} 이 되고, 암묵 전이 패턴이 {@code COMPLETED} 라 <b>불일치 때
+     * {@code ExitStatus} 가 {@code FAILED} 인 {@code finalizeRunStep} 에서 흐름이 끊겨 잡이
+     * 실패로 끝난다</b> — <i>"불일치는 실행 실패가 아니라 판정 결과다"</i> 가 뒤집힌다.
+     * 그래서 건너뛸 때 {@code ExitStatus("SKIPPED", 이유)} 를 세워 같은 목적을 이룬다.
+     *
+     * <p><b>잡 종료 코드가 이 Step 값으로 덮인다.</b> {@code SimpleJob} 은 마지막 Step 의
+     * {@code ExitStatus} 를 <b>대입</b>하므로({@code javap -c SimpleJob}) 불일치 때
+     * {@code finalizeRunStep} 이 세운 {@code FAILED} 표식이 잡 수준에서 사라진다. 게이트가 읽는
+     * 것은 {@code verification_runs.verdict} 라 판정에는 영향이 없다 — 그 표식을 신호로 쓰지
+     * 말라고 {@link #judgeAgainstManifest} 에 적어 둔 이유가 이것이다.
+     */
+    @Bean
+    public Step statsAggregateStep(
+            StatsRepository stats,
+            VerificationRunRepository runs,
+            VerificationRuleRepository rules) {
+        return new StepBuilder("statsAggregateStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
+                    JobExecution jobExecution = stepExecution.getJobExecution();
+                    DatasetType dataset = DatasetType.valueOf(
+                            jobExecution.getJobParameters().getString("dataset"));
+                    long runId = requireRunId(jobExecution);
+
+                    // 건너뛴 사실을 종료 코드로 남긴다. if 로만 빠지면 배치 메타에
+                    // "COMPLETED write=0" 만 남아, 의도적으로 건너뛴 것과 집계가 0행을 쓴 사고가
+                    // 같은 모양이 된다 — docs/10-batch-design.md 가 금지한 그 상태다.
+                    // JobExecutionDecider 를 쓰지 않는 이유는 이 메서드 javadoc 에 적었다.
+                    if (dataset != DatasetType.CLEAN) {
+                        // 이 Step 은 stats_status 를 읽지 않는다. 읽지 않은 것을 "닫았다" 라고
+                        // 단정하면 finalizeRunStep 의 그 분기가 리팩터링으로 빠지는 날
+                        // 메시지가 거짓 증적이 된다.
+                        contribution.setExitStatus(new ExitStatus("SKIPPED",
+                                "dataset=" + dataset + " — 오염 데이터 위의 집계는 뜻이 없다"));
+                        return RepeatStatus.FINISHED;
+                    }
+
+                    // 불합격으로 닫힌 실행 위에서도 집계하면 안 된다. CORRUPT 를 건너뛴 근거가
+                    // "오염 데이터 위의 집계는 뜻이 없다" 인데, CLEAN 에서 검출이 났다는 것은
+                    // 그 데이터가 실제로 어긋났다는 뜻이라 같은 근거가 그대로 적용된다.
+                    //
+                    // 더 좁게는 이 Step 의 asOf 논거가 판정에 기댄다 — "issuances.status 가 곧
+                    // asOf 시점 status" 를 보증하는 것은 V3(REPLAY_MISMATCH)가 0건이라는 사실이다.
+                    VerdictType verdict = runs.findById(runId)
+                            .orElseThrow(() -> new BusinessException(
+                                    VerificationErrorCode.RUN_ROW_VANISHED,
+                                    "실행 행이 사라졌습니다. runId=" + runId))
+                            .verdict();
+                    if (verdict != VerdictType.PASS) {
+                        runs.updateStatsStatus(runId, StatsStatus.SKIPPED);
+                        contribution.setExitStatus(new ExitStatus("SKIPPED",
+                                "verdict=" + verdict + " — 불합격 데이터 위의 집계는 뜻이 없다. "
+                                        + "뷰는 직전 합격 스냅샷을 유지한다"));
+                        return RepeatStatus.FINISHED;
+                    }
+
+                    LocalDateTime asOf = jobExecution.getJobParameters()
+                            .getLocalDateTime("asOf");
+                    long frozenMaxHistory = jobExecution.getExecutionContext()
+                            .getLong(SCAN_MAX_HISTORY_KEY, 0L);
+
+                    // assertFrozenStep 은 더 이상 체인 끝이 아니다. 그 Step 이 캡처한
+                    // dataset_fingerprint 와 이 스냅샷이 같은 데이터의 함수여야 하므로
+                    // 네 축을 여기서 다시 본다 — 안 보면 한 행 안에서 지문과 통계가
+                    // 서로 다른 데이터를 기술하고, 그때 구분할 근거가 아무 데도 없다.
+                    //
+                    // 덮는 창은 assertFrozenStep 커밋 ~ 이 트랜잭션의 첫 읽기까지다.
+                    // 그 뒤는 못 본다 — 근거는 assertStillFrozen javadoc 에 적었다.
+                    //
+                    // 짝 비교보다 **앞**에 둔다. 창이 엇갈려 고아가 나온 경우를
+                    // "구조 파손" 으로 오진하지 않게 하려는 것이다.
+                    assertStillFrozen(jobExecution, rules, asOf, frozenMaxHistory,
+                            "판정 뒤 통계 집계 전에");
+
+                    stats.clear(runId);
+
+                    // 회차 수와 집계가 같은 컷을 쓴다. 순서로는 오탐 창이 닫히지 않는다 —
+                    // 읽기 뷰는 이 트랜잭션의 첫 컨시스턴트 리드(위 verdict 조회)에서 이미
+                    // 고정됐고, INSERT … SELECT 는 락 리드로 최신 커밋을 본다.
+                    //
+                    // 얼림 재확인도 그 창을 못 덮는다(같은 스냅샷을 읽는다). 이 등식이
+                    // 그 창에서 유일하게 남는 관측 수단이다 — 회차가 늘면 락 리드인
+                    // 집계만 그것을 보므로 couponRows > coupons 로 드러난다.
+                    int coupons = stats.couponCount(asOf);
+                    int couponRows = stats.aggregateCouponStats(runId, asOf);
+                    if (couponRows != coupons) {
+                        // 배선 실수가 아니다. 팬아웃은 없다 — 재고 PK 가 coupon_id 고
+                        // 발급 집계는 파생테이블이라 LEFT JOIN 이 행을 늘리지 않는다.
+                        //
+                        // 도달 경로는 셋이고 전부 데이터 변동이다:
+                        //   · 회차 삭제
+                        //   · created_at <= asOf 인 회차 추가(백데이트)
+                        //   · 재고 행이 asOf 이후로 갱신 — 컷이 집계 쪽에만 있어 그 회차만
+                        //     떨어진다. 이 비대칭이 의도된 것이다(couponCount javadoc).
+                        // 지금 시각으로 들어온 회차 추가는 여기서 안 잡힌다 — created_at 컷이
+                        // 양쪽에 다 걸려 두 문장이 함께 제외한다.
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "집계 도중 회차 또는 재고가 움직였습니다. 이 스냅샷은 "
+                                        + "카탈로그의 일부만 담았으므로 대시보드가 읽으면 "
+                                        + "안 됩니다. 쓰기를 멈추고 다시 실행하십시오. 쓴 행="
+                                        + couponRows + " 회차=" + coupons);
+                    }
+                    int gradeRows = stats.aggregateGradeStats(runId, asOf);
+
+                    // 창은 리플레이와 같다. 168행을 전부 쓴다: 없는 행과 0인 행은 다르다.
+                    List<HourlyIssued> hourly =
+                            HourlyIssued.fillAll(stats.issuedByHour(frozenMaxHistory, asOf));
+                    stats.appendHourlyStats(runId, hourly);
+
+                    // 발급건마다 ISSUE 이력이 정확히 하나여야 한다. 0건과 2건 이상을 함께
+                    // 본다 — 없는 쪽만 보면 이력이 둘인 발급건이 통과하고, hourly_stats 는
+                    // 이력 행을 세므로 과대 집계된 스냅샷이 COMPLETE 로 닫힌다.
+                    // 총합 비교로 두면 그 둘이 서로를 지워 아무것도 안 남는다 —
+                    // finding_count 비교를 거부한 것과 같은 형태다.
+                    //
+                    // 이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력 없는 발급건은
+                    // asof_state 에 안 실려 V3·V5 의 시야 밖이고 V4 는 반대 방향만 본다.
+                    int brokenPairs = stats.countIssuancesWithBrokenIssueHistory(asOf, frozenMaxHistory);
+                    if (brokenPairs > 0) {
+                        throw new BusinessException(
+                                VerificationErrorCode.ISSUE_HISTORY_NOT_EXACTLY_ONE,
+                                "ISSUE 이력이 정확히 하나가 아닌 발급건 " + brokenPairs + "건. 표본="
+                                        + stats.sampleIssuancesWithBrokenIssueHistory(
+                                                asOf, frozenMaxHistory, SAMPLE_SIZE));
+                    }
+
+                    // 집계가 끝난 뒤 **새 트랜잭션**에서 네 축을 다시 본다. 위 사전 검사는
+                    // 이 트랜잭션의 스냅샷을 읽어 집계 도중 커밋을 못 보는데(근거는
+                    // assertStillFrozen javadoc), 새 트랜잭션은 읽기 뷰를 새로 잡아 **본다**.
+                    // 잠금 읽기로 갭 락을 거는 값을 치르지 않고 그 창을 닫는 방법이다.
+                    //
+                    // updateStatsStatus(COMPLETE) 앞이어야 뜻이 있다 — 뷰가 이 스냅샷을 집는
+                    // 것은 그 한 줄이므로, 그 앞에서 죽으면 어긋난 스냅샷은 조회되지 않는다.
+                    TransactionTemplate freshView = new TransactionTemplate(transactionManager);
+                    freshView.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    freshView.setReadOnly(true);
+                    freshView.executeWithoutResult(ignored -> assertStillFrozen(
+                            jobExecution, rules, asOf, frozenMaxHistory, "통계 집계 도중에"));
+
+                    // 마지막이다. 여기까지 왔을 때만 뷰가 이 스냅샷을 가리킨다.
+                    runs.updateStatsStatus(runId, StatsStatus.COMPLETE);
+
+                    contribution.incrementWriteCount(couponRows + gradeRows + hourly.size());
+                    contribution.setExitStatus(ExitStatus.COMPLETED.addExitDescription(
+                            "회차 " + couponRows + " · 등급쌍 " + gradeRows
+                                    + " · 요일시각 " + hourly.size()
+                                    + " · ISSUE 이력 " + hourly.stream()
+                                            .mapToInt(HourlyIssued::issuedTotal).sum() + "건"));
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
@@ -859,8 +1038,13 @@ public class VerifyJobConfig {
      * 않는다, ⑶ {@code web-application-type: servlet} 이라 프로세스가 끝나지 않는다.
      * 게다가 {@code SimpleJob} 은 잡 종료 코드를 <b>마지막 Step 값으로 대입</b>하므로
      * ({@code javap -c SimpleJob}) 통계 Step 이 뒤에 붙는 순간 이 표식은 잡 수준에서 사라진다.
-     * <b>게이트는 {@code verification_runs.verdict} 를 읽어야 한다.</b> 여기 {@code ExitStatus}
-     * 는 배치 메타DB({@code BATCH_STEP_EXECUTION})에 남기는 표식일 뿐이다.
+     * <b>게이트는 {@code verification_runs} 를 읽어야 한다</b> — 여기 {@code ExitStatus} 는
+     * 배치 메타DB({@code BATCH_STEP_EXECUTION})에 남기는 표식일 뿐이다.
+     *
+     * <p>다만 {@code verdict} <b>하나로는 부족해졌다.</b> 통계 Step 이 이 Step 뒤에 붙어서,
+     * {@code verdict = PASS} 인데 통계가 통째로 실패한 실행이 정상적으로 생긴다. 게이트가
+     * 읽어야 하는 정확한 조건은 {@code docs/11-batch-implementation.md} 의
+     * <i>"게이트는 verdict 만으로 부족하다"</i> 절에 있다.
      */
     private static VerdictType judgeAgainstManifest(
             long runId, long seedRunId, int detected,
@@ -982,6 +1166,62 @@ public class VerifyJobConfig {
 
         jobContext.putLong(SEED_RUN_ID_KEY, seedRunId);
         jobContext.putString(MANIFEST_DIGEST_KEY, expected.digestOf(seedRunId));
+    }
+
+    /**
+     * <b>{@code assertFrozenStep} 과 같은 네 축을 다시 본다.</b> 그 Step 은 규칙 뒤에 한 번
+     * 보는데, 통계 Step 이 그보다 뒤에 붙어서 <b>그 사이가 무방비</b>가 됐다.
+     * {@code rejectRunningSchedulers} 는 이 JVM 의 플래그만 보므로 api 프로세스는 그 플래그로
+     * 멈추지 않는다.
+     *
+     * <p>회차 축은 시각으로 못 본다({@code coupons} 에 {@code updated_at} 이 없다) — 그래서
+     * {@code policyDigest} 로 접어 대조한다. {@code assertFrozenStep} 과 같은 방식이다.
+     *
+     * <p><b>덮는 창을 정확히 적는다 — "집계 도중" 은 못 잡는다.</b> 네 축을 <b>비잠금 읽기</b>로
+     * 보는데, REPEATABLE READ 의 읽기 뷰는 이 트랜잭션의 <b>첫</b> 비잠금 읽기(위 {@code verdict}
+     * 조회)에서 고정된다. MySQL 8.0.35 에 재 봤다:
+     *
+     * <pre>
+     * A1  첫 비잠금 읽기            v=1     ← 뷰 고정
+     *       B 가 v=99 커밋
+     * A2  얼림 재확인(비잠금)       v=1     ← 못 본다
+     * A3  INSERT … SELECT 가 쓴 값  v=99    ← 본다
+     * </pre>
+     *
+     * 그래서 이 가드가 덮는 창은 <b>{@code assertFrozenStep} 커밋 ~ 이 트랜잭션의 첫 읽기</b>
+     * 까지다. Step 마다 트랜잭션이 다르고 그 사이에 {@code finalizeRunStep} 이 끼므로 실재하는
+     * 창이고, {@code failWhenDatasetMovesAfterFreeze} 가 재현하는 것도 그 창이다.
+     *
+     * <p>그 뒤(집계 진행 중)를 닫으려면 잠금 읽기여야 하는데, 300만 행 인덱스 구간에 갭 락을
+     * 거는 값을 치른다. 대신 <b>회차 수 등식</b>이 그 창의 관측 수단으로 남는다 — 집계는 락
+     * 리드라 늘어난 회차를 보고, 앞의 {@code couponCount} 는 못 봐서 수가 갈린다.
+     */
+    private static void assertStillFrozen(
+            JobExecution jobExecution,
+            VerificationRuleRepository rules,
+            LocalDateTime asOf,
+            long frozenMaxHistory,
+            String phase) {
+        String frozenPolicy = jobExecution.getExecutionContext().getString(POLICY_DIGEST_KEY);
+        // 네 축을 OR 로 합쳐 던지면 운영자가 무엇을 멈춰야 하는지 모른다 — 발급 경로를
+        // 멈출 일과 주입을 다시 돌린 일은 조치가 다르다. assertFrozenStep 은 축별로 던진다.
+        String movedAxis = null;
+        if (rules.hasIssuancesUpdatedAfter(asOf)) {
+            movedAxis = "발급건";
+        } else if (rules.hasStocksUpdatedAfter(asOf)) {
+            movedAxis = "재고";
+        } else if (rules.hasHistoriesAddedAbove(frozenMaxHistory, asOf)) {
+            movedAxis = "이력";
+        } else if (!frozenPolicy.equals(rules.policyDigest())) {
+            movedAxis = "회차 정책";
+        }
+        if (movedAxis != null) {
+            throw new BusinessException(
+                    VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                    phase + " " + movedAxis + " 축이 움직였습니다. verdict 는 남고 "
+                            + "stats_status 는 NULL 로 남아 v_latest_stats_run 이 이 스냅샷을 "
+                            + "가리키지 않습니다. asOf=" + asOf);
+        }
     }
 
     /** {@code startRunStep} 이 얼려 둔 정답 묶음 지문. */

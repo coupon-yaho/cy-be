@@ -119,6 +119,28 @@ class VerifyJobManifestTest {
         assertThat(run.get("verdict")).isEqualTo("PASS");
         assertThat(run.get("finding_count")).isEqualTo(1);
         assertThat(run.get("stats_status")).isEqualTo("SKIPPED");
+        // 오염 데이터 위의 집계는 뜻이 없다. 통계 Step 이 체인에 붙었어도 CORRUPT 는
+        // 아무 스냅샷도 만들지 않고, 뷰가 COMPLETE 만 보므로 후보도 아니다.
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM hourly_stats")
+                .query(Integer.class)
+                .single())
+                .as("CORRUPT 가 통계를 만들면 대시보드가 오염 데이터를 읽는다")
+                .isZero();
+        assertThat(jdbcClient.sql("SELECT COUNT(*) FROM v_latest_stats_run")
+                .query(Integer.class)
+                .single())
+                .as("CLEAN COMPLETE 실행이 없으면 뷰는 비어 있다")
+                .isZero();
+        assertThat(execution.getStepExecutions())
+                .filteredOn(step -> "statsAggregateStep".equals(step.getStepName()))
+                .as("통계 Step 이 체인에서 빠지면 아래 단언이 조용히 사라진다")
+                .singleElement()
+                .satisfies(step -> {
+                    assertThat(step.getExitStatus().getExitCode()).isEqualTo("SKIPPED");
+                    assertThat(step.getExitStatus().getExitDescription())
+                            .as("건너뛴 사실이 배치 메타에 남아야 한다 — if 로 감추지 않는다")
+                            .contains("dataset=CORRUPT");
+                });
         assertThat(exitMessageOf(execution))
                 .contains("seedRunId=1").contains("정답 1건 / 검출 1건");
         // dataset 은 여러 실행이 공유하는 라벨이다. 이 컬럼이 존재하는 이유가

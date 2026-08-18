@@ -524,11 +524,210 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 `GROUP_CONCAT` 은 쓰지 않는다 — `group_concat_max_len` 기본 1024 바이트를 넘으면 경고만 내고 잘려서 **가드가 열린 채로 실패한다.** **CLEAN 147행이 실측 920 바이트로 한계의 90% 이고, CORRUPT 291행이면 약 1820 바이트로 이미 넘는다.**
 지금 안 잘리는 것은 `GROUP_CONCAT` 을 안 쓰기 때문이지 여유가 있어서가 아니다.
 
-뒤에 붙을 것 — **아직 구현되지 않았다.**
+### 통계는 판정 뒤에 온다 (CY-202)
 
 ```
-마지막        통계(CLEAN 만)
+… → assertFrozenStep → finalizeRunStep → statsAggregateStep(PASS 인 CLEAN 만)
 ```
+
+**판정을 먼저 쓴다.** 통계가 죽어도 `verdict` 는 남고, `stats_status` 가 `NULL` 이라
+`v_latest_stats_run` 이 그 스냅샷을 **물리적으로 안 보여 준다.** 반대 순서면 통계 문제로 판정을 잃는다.
+
+`PARTIAL` 은 쓰지 않는다 — 중간에 죽으면 손대지 않은 `NULL` 로 남고 뷰가 이미 걸러 낸다.
+"절반 쓰다 죽었다" 를 표현하려고 죽는 코드가 값을 쓸 수는 없다. 그건 트랜잭션이 할 일이다.
+
+> **PRD 의 `asof_state` 재사용 서술은 세 테이블 중 하나에도 해당하지 않는다.**
+> PRD 는 *"앞 Step 이 만든 `asof_state` 를 재사용하므로 원본 300만 건을 다시 읽지 않는다"* 고 적었지만,
+> ⑴ 통계가 세는 값은 `issuances.status` 이고 `asof_state.state` 와 **다를 수 있는 것이 검증 대상**이라
+> 통계가 검증 결과에 기대면 순환이 된다, ⑵ `asof_state.coupon_id` 는 **발급건 id** 라(어휘 반전)
+> 회차·등급으로 묶으려면 `issuances` 를 조인해야 해서 스캔이 조인으로 바뀔 뿐 이득이 없다,
+> ⑶ 요일·시각 분포는 `issuance_histories` 에만 있다.
+
+**값의 정본은 시드 구현이다.** `contract.json` 에 통계 조항이 없어 checksum·지문과 달리 계약으로
+고정돼 있지 않다. 그래서 필드마다 시드가 **실제로 읽는 컬럼**을 그대로 쓴다:
+
+| 필드 | 원천 | 시드 근거 |
+|---|---|---|
+| `hourly` | `ISSUE` 이력의 `created_at` | `_history()` 안에서 `event == EV_ISSUE` 일 때 센다 |
+| `sold_out_seconds` | `MAX(issuances.issued_at)` | 이력이 아니라 루프 변수 `last_issue_at` 을 쓴다 |
+| `issued/used/…` | `issuances.status` | 리플레이 상태가 아니다 |
+| 완판 판정 | `issued_total >= coupon_stocks.total_quantity` | `catalog.py` 의 `n >= c.total_quantity` |
+
+**`active_count` 로 완판을 판정하면 안 된다.** 그것은 *현재 보유량*(ISSUED + USED)이라 취소·만료로
+줄어든다 — 미달 회차도 0 이 될 수 있고 완판 회차도 0 이 아닐 수 있다.
+
+**요일 변환은 SQL 이 한다.** `WEEKDAY()` 는 0 = 월요일로 파이썬 `weekday()` 와 같아
+`ELT(WEEKDAY(x) + 1, 'MON', …)` 이 시드의 `DOW[at.weekday()]` 와 글자 단위로 대응한다.
+`DAYNAME()` 은 `lc_time_names` 세션 변수에 의존해 쓰지 않는다.
+
+**`hourly_stats` 는 168행을 전부 쓴다.** 없는 행과 0인 행은 다르다 — 빼면 대시보드가
+"그 시각에 데이터가 없다" 와 "0건이다" 를 구분할 수 없다.
+
+**이력을 읽는 창은 리플레이와 같다** — `id <= frozenMaxHistoryId AND created_at <= asOf`.
+`created_at` 만 걸면 다시 재는 것이라 백데이트 이력을 리플레이는 못 읽고 통계는 읽는다.
+
+**발급건 집계도 `updated_at <= asOf` 로 자른다.** 한때 *"`rejectIssuancesUpdatedAfterAsOf` 가
+이미 거부하니 중복"* 이라며 뺐는데 **틀렸다** — 그 가드는 `startRunStep` 과 `assertFrozenStep` 에서만
+돌고 **통계 Step 은 그 둘보다 뒤**다. 게다가 `rejectRunningSchedulers` 는 이 JVM 의
+`batch.scheduling.enabled` 만 보므로 **api 는 별도 프로세스라 그 플래그로 멈추지 않는다.**
+
+**발급건마다 `ISSUE` 이력이 정확히 하나여야 한다 — 짝으로 본다.** 총합 비교
+(`COUNT(issuances) == SUM(hourly_stats.issued_total)`)로는 **대칭 오차를 못 잡는다** —
+이력 없는 발급건 하나와 이력이 둘인 발급건 하나가 있으면 총합이 같아 통과한다.
+`finding_count` 비교를 거부한 것과 정확히 같은 형태다.
+
+**0건과 2건 이상을 한 질의로 같이 센다** — `COALESCE(ISSUE 이력 수, 0) <> 1`. 한때 `NOT EXISTS`
+로만 두어 없는 쪽만 봤는데, 그러면 이력이 둘인 발급건이 통과한다. `hourly_stats` 는 발급건이
+아니라 **이력 행**을 세므로 발급 1건에 2가 적히고, 대시보드에서는 파손이 아니라 "그 시각에
+발급이 많았다" 로 보이며 스냅샷은 `COMPLETE` 로 닫혀 뷰에 걸린다. **한 방향만 보는 것은 짝
+비교가 아니다** — 위에서 총합 비교를 거부한 대칭 오차 논거가 이 검사 안에서도 그대로 성립한다.
+
+발급건 id 표본을 실어 **`ISSUE_HISTORY_NOT_EXACTLY_ONE`(`VERIFICATION-010`)** 로 죽는다.
+`DATASET_MUTATED_DURING_RUN` 과 가른 이유는 재시도 가능성이 다르기 때문이다 — 그쪽은 쓰기를
+멈추고 다시 돌리면 통과하고, 이쪽은 구조 파손이라 멈춰도 같은 자리에서 죽는다.
+
+이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력이 없는 발급건은 `asof_state` 에 안 실려
+V3·V5 의 시야 밖이고 V4 는 반대 방향(고아 이력)만 본다.
+
+**얼림을 통계 앞에서 다시 본다.** `assertFrozenStep` 이 체인 끝이 아니게 되면서, 그 Step 이 캡처한
+`dataset_fingerprint` 와 통계 스냅샷이 **다른 데이터의 함수**가 될 수 있다. 네 축(발급건·재고·
+회차 정책·이력)을 통계 앞에서 한 번 더 확인하고, 어긋나면 `DATASET_MUTATED_DURING_RUN` 이다.
+짝 비교보다 앞에 두어 창 엇갈림을 구조 파손으로 오진하지 않게 한다.
+
+**이 재확인이 덮는 창은 "집계 도중" 이 아니다.** 네 축을 비잠금 읽기로 보는데 REPEATABLE READ 의
+읽기 뷰는 그 트랜잭션의 **첫** 비잠금 읽기(`verdict` 조회)에서 고정된다 — MySQL 8.0.35 에 재 보니
+그 뒤 커밋을 재확인은 못 보고 `INSERT … SELECT`(락 리드)는 본다. 그래서 덮는 창은
+`assertFrozenStep` 커밋부터 통계 트랜잭션의 첫 읽기까지고, 그 사이에 `finalizeRunStep` 이 끼므로
+실재한다. 집계 진행 중 구간은 **회차 수 등식**이 관측 수단으로 남는다 — 집계만 늘어난 회차를 보므로
+수가 갈린다. 그 구간까지 막으려면 잠금 읽기여야 하는데 300만 행 구간에 갭 락을 거는 값을 치른다.
+
+**합격한 CLEAN 만 집계한다.** CORRUPT 를 건너뛴 근거가 *"오염 데이터 위의 집계는 뜻이 없다"* 인데,
+CLEAN 에서 검출이 났다는 것도 **그 데이터가 실제로 어긋났다**는 뜻이라 같은 근거가 적용된다.
+`verdict != PASS` 면 `stats_status = SKIPPED` 로 닫고 뷰는 직전 합격 스냅샷을 유지한다.
+
+### 게이트는 `verdict` 만으로 부족하다
+
+`finalizeRunStep` 이 체인 마지막이 아니게 되면서 **`verdict = PASS` 인데 통계가 통째로 실패한 실행**이
+정상적으로 생길 수 있다. 통계 Step 이 죽으면 트랜잭션이 롤백되어 `stats_status` 는 손대지 않은
+`NULL` 로 남고, `verdict` 만 읽는 게이트는 그것을 초록으로 읽는다. 대시보드는
+`v_latest_stats_run` 이 이전 run 을 가리켜 **조용히 옛 데이터를 보여 준다.**
+
+```sql
+-- D10 게이트가 읽어야 하는 조건
+SELECT verdict, stats_status
+  FROM verification_runs
+ WHERE id = :runId
+   AND verdict = 'PASS'
+   AND scope   = 'FULL'                                   -- 뷰와 같은 축을 봐야 한다
+   AND (dataset <> 'CLEAN' OR stats_status = 'COMPLETE');
+```
+
+`scope = 'FULL'` 이 필요한 이유는 `v_latest_stats_run` 이 그 조건을 거르기 때문이다. 빠뜨리면
+증분 티켓이 `rejectUnsupportedScope` 를 푸는 날 **게이트는 INCREMENTAL run 을 초록으로 읽고
+대시보드는 그것을 안 가리킨다** — 둘이 다른 run 을 본다.
+
+`stats_status = 'SKIPPED'` 는 **두 뜻**을 갖는다. 구분은 같은 행의 `dataset`·`verdict` 로 한다:
+
+| | 뜻 | |
+|---|---|---|
+| `dataset = CORRUPT` | 오염 데이터 위의 집계는 뜻이 없다 | 정상 |
+| `dataset = CLEAN` 이고 `verdict <> PASS` | **정합성 불합격 데이터 위의 집계도 뜻이 없다** | 경보 |
+
+뒤쪽은 조용히 넘어가면 안 되는 상태다. `stats_status` 하나만 보면 둘이 같아 보인다.
+
+> `StatsStatus.PARTIAL` 은 아직 아무도 쓰지 않는다. 통계 Step 이 죽으면 트랜잭션이 롤백되어
+> 부분 스냅샷이 **물리적으로 생기지 않으므로** 표현할 상태가 없다. 실패를 `PARTIAL` 로 남기려면
+> `StepExecutionListener` 에서 `REQUIRES_NEW` 트랜잭션으로 써야 한다 — 그 기계가 필요해지면
+> 그때 붙인다. 지금은 위 게이트 조건이 같은 사고를 막는다.
+
+### 시드 스냅샷과 배치 스냅샷을 대조한다 (런북)
+
+`contract.json` 에 통계 조항이 없어 두 구현이 갈려도 자동으로 안 잡힌다. CLEAN 셋에서 시드가 심은
+run(1·2)과 배치 run 을 양방향으로 대조한다 — 판정이 쓰는 집합 차와 같은 모양이다.
+
+```sql
+-- sold_out_seconds 는 <=> (NULL-safe equal) 로 비교해야 한다.
+-- NULL = NULL 이 UNKNOWN 이라 그냥 두면 완판 아닌 회차 전부가 "누락" 으로 뒤집힌다 —
+-- target_key 에서 이미 겪은 함정이다.
+SELECT 'seed 에만' AS side, a.coupon_id
+  FROM coupon_stats a
+  LEFT JOIN coupon_stats b
+         ON b.run_id = :batchRun
+        AND b.coupon_id        =   a.coupon_id
+        AND b.issued_total     =   a.issued_total
+        AND b.issued           =   a.issued
+        AND b.used             =   a.used
+        AND b.cancelled        =   a.cancelled
+        AND b.expired          =   a.expired
+        AND b.sold_out_seconds <=> a.sold_out_seconds
+ WHERE a.run_id = :seedRun AND b.coupon_id IS NULL
+UNION ALL
+SELECT 'batch 에만', b.coupon_id
+  FROM coupon_stats b
+  LEFT JOIN coupon_stats a
+         ON a.run_id = :seedRun
+        AND a.coupon_id        =   b.coupon_id
+        AND a.issued_total     =   b.issued_total
+        AND a.issued           =   b.issued
+        AND a.used             =   b.used
+        AND a.cancelled        =   b.cancelled
+        AND a.expired          =   b.expired
+        AND a.sold_out_seconds <=> b.sold_out_seconds
+ WHERE b.run_id = :batchRun AND a.coupon_id IS NULL;
+```
+
+**`grade_stats`·`hourly_stats` 는 "같은 모양" 이 아니다 — 그레인이 다르다.** 위 질의를 복사해
+조인 키만 남기면 등급이 둘 이상인 회차에서 팬아웃해 `IS NULL` 이 안 걸리고 **양쪽 0행이 나온다** —
+어긋난 데이터가 조용히 통과한다. 그대로 적어 둔다.
+
+```sql
+-- grade_stats : PK (run_id, coupon_id, grade)
+SELECT 'seed 에만' AS side, a.coupon_id, a.grade
+  FROM grade_stats a
+  LEFT JOIN grade_stats b
+         ON b.run_id = :batchRun
+        AND b.coupon_id    = a.coupon_id
+        AND b.grade        = a.grade
+        AND b.issued_total = a.issued_total
+        AND b.used_total   = a.used_total
+ WHERE a.run_id = :seedRun AND b.grade IS NULL
+UNION ALL
+SELECT 'batch 에만', b.coupon_id, b.grade
+  FROM grade_stats b
+  LEFT JOIN grade_stats a
+         ON a.run_id = :seedRun
+        AND a.coupon_id    = b.coupon_id
+        AND a.grade        = b.grade
+        AND a.issued_total = b.issued_total
+        AND a.used_total   = b.used_total
+ WHERE b.run_id = :batchRun AND a.grade IS NULL;
+```
+
+```sql
+-- hourly_stats : PK (run_id, day_of_week, hour)
+SELECT 'seed 에만' AS side, a.day_of_week, a.hour
+  FROM hourly_stats a
+  LEFT JOIN hourly_stats b
+         ON b.run_id = :batchRun
+        AND b.day_of_week  = a.day_of_week
+        AND b.hour         = a.hour
+        AND b.issued_total = a.issued_total
+ WHERE a.run_id = :seedRun AND b.hour IS NULL
+UNION ALL
+SELECT 'batch 에만', b.day_of_week, b.hour
+  FROM hourly_stats b
+  LEFT JOIN hourly_stats a
+         ON a.run_id = :seedRun
+        AND a.day_of_week  = b.day_of_week
+        AND a.hour         = b.hour
+        AND a.issued_total = b.issued_total
+ WHERE b.run_id = :batchRun AND a.hour IS NULL;
+```
+
+이 두 표에는 **NULL 허용 컬럼이 없어 `<=>` 가 필요 없다.** `coupon_stats` 에서만 쓰는 이유는
+`sold_out_seconds` 하나 때문이다 — 어디까지 써야 하는지 다시 판단하지 않게 적어 둔다.
+
+세 질의 모두 양쪽이 0행이어야 통과다.
 
 ### 판정은 두 값의 조합으로만 뜻이 있다
 
