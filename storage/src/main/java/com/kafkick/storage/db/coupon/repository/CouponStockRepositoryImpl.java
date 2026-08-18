@@ -38,7 +38,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
         );
         if (affectedRows != 1) {
             throw new BusinessException(
-                    CouponIssueErrorCode.STOCK_EXHAUSTED,
+                    CouponIssueErrorCode.SOLD_OUT,
                     "couponRoundId=" + couponRoundId
             );
         }

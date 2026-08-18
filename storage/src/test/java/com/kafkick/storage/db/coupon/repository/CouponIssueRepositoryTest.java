@@ -195,7 +195,7 @@ class CouponIssueRepositoryTest {
         assertThat(results.stream().filter(result -> result == null).count())
                 .isEqualTo(10);
         assertThat(results.stream()
-                .filter(CouponIssueErrorCode.STOCK_EXHAUSTED::equals)
+                .filter(CouponIssueErrorCode.SOLD_OUT::equals)
                 .count()).isEqualTo(10);
         assertThat(countRows("issuances")).isEqualTo(10);
         assertThat(countRows("issuance_histories")).isEqualTo(10);
