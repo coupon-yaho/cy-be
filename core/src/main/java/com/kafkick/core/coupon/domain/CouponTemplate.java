@@ -160,6 +160,26 @@ public record CouponTemplate(
         );
     }
 
+    public CouponTemplate changeActivation(boolean active) {
+        return new CouponTemplate(
+                id,
+                brandId,
+                name,
+                policyType,
+                discountRate,
+                maxDiscountAmount,
+                discountAmount,
+                validDays,
+                nthWeek,
+                dayOfWeek,
+                startTime,
+                durationHours,
+                stockPerOccurrence,
+                eligibleGrades,
+                active
+        );
+    }
+
     private static void validateId(Long id) {
         if (id != null && id <= 0) {
             throw new IllegalArgumentException(

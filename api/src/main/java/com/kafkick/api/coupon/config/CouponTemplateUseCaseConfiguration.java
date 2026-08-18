@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.kafkick.core.coupon.port.CouponTemplateRepository;
+import com.kafkick.core.coupon.service.CouponTemplateActivationService;
 import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
 
 @Configuration(proxyBeanMethods = false)
@@ -15,5 +16,12 @@ public class CouponTemplateUseCaseConfiguration {
             CouponTemplateRepository couponTemplateRepository
     ) {
         return new CouponTemplateUpdateService(couponTemplateRepository);
+    }
+
+    @Bean
+    public CouponTemplateActivationService couponTemplateActivationService(
+            CouponTemplateRepository couponTemplateRepository
+    ) {
+        return new CouponTemplateActivationService(couponTemplateRepository);
     }
 }
