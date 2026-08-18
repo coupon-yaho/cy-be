@@ -18,6 +18,7 @@ import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
@@ -28,6 +29,7 @@ import java.time.LocalTime;
 import java.util.List;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -618,9 +620,30 @@ class CouponTemplateControllerTest {
                         .value("SILVER"))
                 .andExpect(jsonPath("$.data.active").value(true));
 
+        ArgumentCaptor<CouponTemplateUpdateCommand> commandCaptor =
+                ArgumentCaptor.forClass(CouponTemplateUpdateCommand.class);
         verify(couponTemplateUpdateService).update(
                 eq(100L),
-                any(CouponTemplateUpdateCommand.class)
+                commandCaptor.capture()
+        );
+
+        CouponTemplateUpdateCommand command = commandCaptor.getValue();
+        assertThat(command.brandId()).isEqualTo(2L);
+        assertThat(command.name()).isEqualTo("수정된 정액 쿠폰");
+        assertThat(command.policyType())
+                .isEqualTo(CouponPolicyType.FIXED_AMOUNT);
+        assertThat(command.discountRate()).isNull();
+        assertThat(command.maxDiscountAmount()).isNull();
+        assertThat(command.discountAmount()).isEqualTo(5_000);
+        assertThat(command.validDays()).isEqualTo(14);
+        assertThat(command.nthWeek()).isEqualTo(3);
+        assertThat(command.dayOfWeek()).isEqualTo(CouponDayOfWeek.FRI);
+        assertThat(command.startTime()).isEqualTo(LocalTime.of(12, 0));
+        assertThat(command.durationHours()).isEqualTo(3);
+        assertThat(command.stockPerOccurrence()).isEqualTo(50);
+        assertThat(command.eligibleGrades()).containsExactlyInAnyOrder(
+                MembershipGrade.WELCOME,
+                MembershipGrade.SILVER
         );
     }
 

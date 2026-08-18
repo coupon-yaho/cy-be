@@ -203,7 +203,22 @@ class CouponTemplateRepositoryTest {
                 .isEqualTo("수정된 20% 할인");
         assertThat(updatedCouponTemplate.policyType())
                 .isEqualTo(CouponPolicyType.PERCENT_CAPPED);
+        assertThat(updatedCouponTemplate.discountRate()).isEqualTo(20);
+        assertThat(updatedCouponTemplate.maxDiscountAmount())
+                .isEqualTo(10_000);
         assertThat(updatedCouponTemplate.discountAmount()).isNull();
+        assertThat(updatedCouponTemplate.validDays()).isEqualTo(14);
+        assertThat(updatedCouponTemplate.nthWeek()).isEqualTo(3);
+        assertThat(updatedCouponTemplate.dayOfWeek())
+                .isEqualTo(CouponDayOfWeek.FRI);
+        assertThat(updatedCouponTemplate.startTime())
+                .isEqualTo(LocalTime.of(12, 0));
+        assertThat(updatedCouponTemplate.durationHours()).isEqualTo(3);
+        assertThat(updatedCouponTemplate.stockPerOccurrence()).isEqualTo(50);
+        assertThat(updatedCouponTemplate.eligibleGrades()).containsExactly(
+                MembershipGrade.WELCOME,
+                MembershipGrade.SILVER
+        );
         assertThat(updatedCouponTemplate.active()).isTrue();
         assertThat(couponTemplatePage.totalElements()).isEqualTo(1);
     }
@@ -249,18 +264,25 @@ class CouponTemplateRepositoryTest {
                 LocalTime.of(12, 0),
                 3,
                 50,
-                Set.of(MembershipGrade.GOLD, MembershipGrade.VIP)
+                Set.of(MembershipGrade.WELCOME, MembershipGrade.SILVER)
         );
         couponTemplateRepository.save(updatedCouponTemplate);
 
         Map<String, Object> couponSnapshot = jdbcTemplate.queryForMap(
                 """
-                SELECT name, policy_type, discount_amount
+                SELECT name, policy_type, discount_amount,
+                       valid_days, eligible_grades_mask
                 FROM coupons
                 WHERE template_id = ?
                 """,
                 savedCouponTemplate.id()
         );
+        int snapshotValidDays = ((Number) couponSnapshot.get(
+                "valid_days"
+        )).intValue();
+        int snapshotEligibleGradesMask = ((Number) couponSnapshot.get(
+                "eligible_grades_mask"
+        )).intValue();
 
         assertThat(couponSnapshot.get("name"))
                 .isEqualTo(savedCouponTemplate.name());
@@ -268,6 +290,10 @@ class CouponTemplateRepositoryTest {
                 .isEqualTo(CouponPolicyType.FIXED_AMOUNT.name());
         assertThat(couponSnapshot.get("discount_amount"))
                 .isEqualTo(5_000);
+        assertThat(snapshotValidDays)
+                .isEqualTo(savedCouponTemplate.validDays());
+        assertThat(snapshotEligibleGradesMask)
+                .isEqualTo(savedCouponTemplate.eligibleGradesMask());
     }
 
     private CouponTemplate createCouponTemplate(Long brandId) {

@@ -1,4 +1,4 @@
-// 관리자 쿠폰 템플릿 생성 및 조회 API를 공통 응답 형식으로 제공합니다.
+// 관리자 쿠폰 템플릿 생성·조회·수정 API를 공통 응답 형식으로 제공합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.net.URI;
