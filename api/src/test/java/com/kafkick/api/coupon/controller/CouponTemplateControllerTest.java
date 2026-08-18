@@ -1,4 +1,4 @@
-// 쿠폰 템플릿 생성 및 단건 조회 API의 응답 계약을 테스트합니다.
+// 쿠폰 템플릿 생성·조회·수정 API의 응답 계약을 테스트합니다.
 package com.kafkick.api.coupon.controller;
 
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
@@ -12,6 +12,8 @@ import com.kafkick.core.coupon.port.CouponTemplatePage;
 import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
+import com.kafkick.core.coupon.service.CouponTemplateUpdateCommand;
+import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(CouponTemplateController.class)
@@ -43,6 +46,9 @@ class CouponTemplateControllerTest {
 
     @MockitoBean
     private CouponTemplateQueryService couponTemplateQueryService;
+
+    @MockitoBean
+    private CouponTemplateUpdateService couponTemplateUpdateService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -541,6 +547,167 @@ class CouponTemplateControllerTest {
     }
 
     @Test
+    @DisplayName("쿠폰 템플릿을 전체 수정하면 200과 수정 결과를 반환한다")
+    void updateCouponTemplate() throws Exception {
+        CouponTemplate updatedCouponTemplate = CouponTemplate.restore(
+                100L,
+                2L,
+                "수정된 정액 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                14,
+                3,
+                CouponDayOfWeek.FRI,
+                LocalTime.of(12, 0),
+                3,
+                50,
+                Set.of(MembershipGrade.WELCOME, MembershipGrade.SILVER),
+                true
+        );
+
+        when(couponTemplateUpdateService.update(
+                eq(100L),
+                any(CouponTemplateUpdateCommand.class)
+        )).thenReturn(updatedCouponTemplate);
+
+        String requestBody = """
+                {
+                  "brandId": 2,
+                  "name": "수정된 정액 쿠폰",
+                  "policyType": "FIXED_AMOUNT",
+                  "discountRate": null,
+                  "maxDiscountAmount": null,
+                  "discountAmount": 5000,
+                  "validDays": 14,
+                  "nthWeek": 3,
+                  "dayOfWeek": "FRI",
+                  "startTime": "12:00:00",
+                  "durationHours": 3,
+                  "stockPerOccurrence": 50,
+                  "eligibleGrades": ["WELCOME", "SILVER"]
+                }
+                """;
+
+        mockMvc.perform(put(
+                        "/api/v1/admin/coupon-templates/{id}",
+                        100L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(100))
+                .andExpect(jsonPath("$.data.brandId").value(2))
+                .andExpect(jsonPath("$.data.name")
+                        .value("수정된 정액 쿠폰"))
+                .andExpect(jsonPath("$.data.policyType")
+                        .value("FIXED_AMOUNT"))
+                .andExpect(jsonPath("$.data.discountRate")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.data.discountAmount")
+                        .value(5_000))
+                .andExpect(jsonPath("$.data.eligibleGrades[0]")
+                        .value("WELCOME"))
+                .andExpect(jsonPath("$.data.eligibleGrades[1]")
+                        .value("SILVER"))
+                .andExpect(jsonPath("$.data.active").value(true));
+
+        verify(couponTemplateUpdateService).update(
+                eq(100L),
+                any(CouponTemplateUpdateCommand.class)
+        );
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 쿠폰 템플릿 수정은 404를 반환한다")
+    void rejectUpdatingMissingCouponTemplate() throws Exception {
+        when(couponTemplateUpdateService.update(
+                eq(999L),
+                any(CouponTemplateUpdateCommand.class)
+        )).thenThrow(new BusinessException(
+                CouponTemplateErrorCode.COUPON_TEMPLATE_NOT_FOUND,
+                "couponTemplateId=999"
+        ));
+
+        String requestBody = validUpdateRequestBody();
+
+        mockMvc.perform(put(
+                        "/api/v1/admin/coupon-templates/{id}",
+                        999L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("COUPON-102"));
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 수정 ID가 0 이하면 400을 반환한다")
+    void rejectNonPositiveCouponTemplateIdWhenUpdating() throws Exception {
+        mockMvc.perform(put(
+                        "/api/v1/admin/coupon-templates/{id}",
+                        0L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validUpdateRequestBody()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("쿠폰 템플릿 ID는 0보다 커야 합니다."));
+
+        verifyNoInteractions(couponTemplateUpdateService);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 수정 필수값이 없으면 400을 반환한다")
+    void rejectInvalidCouponTemplateUpdateRequest() throws Exception {
+        String requestBody = """
+                {
+                  "brandId": 2,
+                  "name": "",
+                  "policyType": "FIXED_AMOUNT",
+                  "discountAmount": 5000,
+                  "validDays": 14,
+                  "nthWeek": 3,
+                  "dayOfWeek": "FRI",
+                  "startTime": "12:00:00",
+                  "durationHours": 3,
+                  "stockPerOccurrence": 50,
+                  "eligibleGrades": []
+                }
+                """;
+
+        mockMvc.perform(put(
+                        "/api/v1/admin/coupon-templates/{id}",
+                        100L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verifyNoInteractions(couponTemplateUpdateService);
+    }
+
+    @Test
     @DisplayName("관리자 역할 헤더가 없으면 403을 반환한다")
     void rejectRequestWithoutAdminRoleHeader() throws Exception {
         mockMvc.perform(get("/api/v1/admin/coupon-templates/{id}", 100L))
@@ -567,5 +734,25 @@ class CouponTemplateControllerTest {
                         .value("접근 권한이 없습니다."));
 
         verifyNoInteractions(couponTemplateQueryService);
+    }
+
+    private String validUpdateRequestBody() {
+        return """
+                {
+                  "brandId": 2,
+                  "name": "수정된 정액 쿠폰",
+                  "policyType": "FIXED_AMOUNT",
+                  "discountRate": null,
+                  "maxDiscountAmount": null,
+                  "discountAmount": 5000,
+                  "validDays": 14,
+                  "nthWeek": 3,
+                  "dayOfWeek": "FRI",
+                  "startTime": "12:00:00",
+                  "durationHours": 3,
+                  "stockPerOccurrence": 50,
+                  "eligibleGrades": ["WELCOME", "SILVER"]
+                }
+                """;
     }
 }

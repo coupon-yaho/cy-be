@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -21,10 +22,12 @@ import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
 import com.kafkick.api.coupon.dto.CouponTemplateDetailResponse;
 import com.kafkick.api.coupon.dto.CouponTemplatePageResponse;
+import com.kafkick.api.coupon.dto.CouponTemplateUpdateRequest;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
+import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
 
 @RestController
 @RequestMapping("/api/v1/admin/coupon-templates")
@@ -32,13 +35,16 @@ public class CouponTemplateController {
 
     private final CouponTemplateCreateService couponTemplateCreateService;
     private final CouponTemplateQueryService couponTemplateQueryService;
+    private final CouponTemplateUpdateService couponTemplateUpdateService;
 
     public CouponTemplateController(
             CouponTemplateCreateService couponTemplateCreateService,
-            CouponTemplateQueryService couponTemplateQueryService
+            CouponTemplateQueryService couponTemplateQueryService,
+            CouponTemplateUpdateService couponTemplateUpdateService
     ) {
         this.couponTemplateCreateService = couponTemplateCreateService;
         this.couponTemplateQueryService = couponTemplateQueryService;
+        this.couponTemplateUpdateService = couponTemplateUpdateService;
     }
 
     @PostMapping
@@ -86,6 +92,21 @@ public class CouponTemplateController {
                 CouponTemplatePageResponse.from(
                         couponTemplateQueryService.findPage(page, size)
                 )
+        );
+    }
+
+    @PutMapping("/{couponTemplateId}")
+    public ResponseEnvelope<CouponTemplateDetailResponse> update(
+            @PathVariable
+            @Positive(message = "쿠폰 템플릿 ID는 0보다 커야 합니다.")
+            Long couponTemplateId,
+            @Valid @RequestBody CouponTemplateUpdateRequest request
+    ) {
+        CouponTemplate updatedCouponTemplate = couponTemplateUpdateService
+                .update(couponTemplateId, request.toCommand());
+
+        return ResponseEnvelope.success(
+                CouponTemplateDetailResponse.from(updatedCouponTemplate)
         );
     }
 }

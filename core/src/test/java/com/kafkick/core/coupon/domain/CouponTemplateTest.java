@@ -280,4 +280,98 @@ class CouponTemplateTest {
                         "복원할 쿠폰 템플릿 ID는 0보다 커야 합니다."
                 );
     }
+
+    @Test
+    @DisplayName("쿠폰 템플릿을 수정하면 ID와 활성 상태를 보존한다")
+    void updateCouponTemplatePreservingIdentityAndActiveState() {
+        CouponTemplate couponTemplate = CouponTemplate.restore(
+                100L,
+                1L,
+                "수정 전 쿠폰",
+                CouponPolicyType.PERCENT_CAPPED,
+                20,
+                10_000,
+                null,
+                7,
+                2,
+                CouponDayOfWeek.WED,
+                LocalTime.of(10, 0),
+                2,
+                100,
+                Set.of(MembershipGrade.GOLD),
+                false
+        );
+
+        CouponTemplate updatedCouponTemplate = couponTemplate.update(
+                2L,
+                "수정된 정액 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                14,
+                3,
+                CouponDayOfWeek.FRI,
+                LocalTime.of(12, 0),
+                3,
+                50,
+                Set.of(MembershipGrade.WELCOME, MembershipGrade.SILVER)
+        );
+
+        assertThat(updatedCouponTemplate.id()).isEqualTo(100L);
+        assertThat(updatedCouponTemplate.active()).isFalse();
+        assertThat(updatedCouponTemplate.brandId()).isEqualTo(2L);
+        assertThat(updatedCouponTemplate.name()).isEqualTo("수정된 정액 쿠폰");
+        assertThat(updatedCouponTemplate.policyType())
+                .isEqualTo(CouponPolicyType.FIXED_AMOUNT);
+        assertThat(updatedCouponTemplate.discountAmount()).isEqualTo(5_000);
+        assertThat(updatedCouponTemplate.discountRate()).isNull();
+        assertThat(updatedCouponTemplate.eligibleGrades())
+                .containsExactly(
+                        MembershipGrade.WELCOME,
+                        MembershipGrade.SILVER
+                );
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 수정에도 할인 정책 검증을 적용한다")
+    void rejectInvalidPolicyWhenUpdatingCouponTemplate() {
+        CouponTemplate couponTemplate = CouponTemplate.restore(
+                100L,
+                1L,
+                "수정 전 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                7,
+                2,
+                CouponDayOfWeek.WED,
+                LocalTime.of(10, 0),
+                2,
+                100,
+                Set.of(MembershipGrade.GOLD),
+                true
+        );
+
+        assertThatThrownBy(() -> couponTemplate.update(
+                1L,
+                "잘못된 수정 쿠폰",
+                CouponPolicyType.PERCENT_CAPPED,
+                20,
+                10_000,
+                5_000,
+                7,
+                2,
+                CouponDayOfWeek.WED,
+                LocalTime.of(10, 0),
+                2,
+                100,
+                Set.of(MembershipGrade.GOLD)
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "퍼센트 할인에는 정액 할인 금액을 입력할 수 없습니다."
+                );
+    }
 }
