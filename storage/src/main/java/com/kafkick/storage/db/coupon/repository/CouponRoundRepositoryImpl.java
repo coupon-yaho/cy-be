@@ -2,6 +2,7 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.sql.SQLException;
+import java.util.Optional;
 
 import jakarta.persistence.EntityManager;
 
@@ -84,5 +85,11 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
             cause = cause.getCause();
         }
         return false;
+    }
+
+    @Override
+    public Optional<CouponRound> findById(Long couponRoundId) {
+        return couponRoundJpaRepository.findById(couponRoundId)
+                .map(CouponRoundEntityMapper::toDomain);
     }
 }

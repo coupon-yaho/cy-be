@@ -14,6 +14,18 @@ public abstract class UpdatableEntity extends BaseEntity {
     @Column(nullable = false)
     private Instant updatedAt;
 
+    protected UpdatableEntity() {
+    }
+
+    protected UpdatableEntity(
+            Long id,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
+        super(id, createdAt);
+        this.updatedAt = updatedAt;
+    }
+
     public Instant getUpdatedAt() {
         return updatedAt;
     }
