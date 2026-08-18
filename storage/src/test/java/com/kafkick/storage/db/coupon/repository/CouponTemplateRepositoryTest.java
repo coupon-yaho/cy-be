@@ -296,6 +296,55 @@ class CouponTemplateRepositoryTest {
                 .isEqualTo(savedCouponTemplate.eligibleGradesMask());
     }
 
+    @Test
+    @DisplayName("템플릿 비활성화는 기존 쿠폰 회차를 삭제하거나 변경하지 않는다")
+    void deactivateTemplateWithoutChangingExistingCoupon() {
+        CouponTemplate savedCouponTemplate =
+                couponTemplateRepository.save(createCouponTemplate(1L));
+        LocalDateTime openAt = LocalDateTime.of(2026, 8, 18, 14, 0);
+        jdbcTemplate.update(
+                """
+                INSERT INTO coupons (
+                    template_id, brand_id, name, policy_type,
+                    discount_amount, valid_days, eligible_grades_mask,
+                    open_at, close_at, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                savedCouponTemplate.id(),
+                savedCouponTemplate.brandId(),
+                savedCouponTemplate.name(),
+                savedCouponTemplate.policyType().name(),
+                savedCouponTemplate.discountAmount(),
+                savedCouponTemplate.validDays(),
+                savedCouponTemplate.eligibleGradesMask(),
+                openAt,
+                openAt.plusHours(2),
+                "SCHEDULED",
+                openAt.minusDays(1)
+        );
+
+        couponTemplateRepository.save(
+                savedCouponTemplate.changeActivation(false)
+        );
+
+        CouponTemplate deactivatedCouponTemplate = couponTemplateRepository
+                .findById(savedCouponTemplate.id())
+                .orElseThrow();
+        Map<String, Object> existingCoupon = jdbcTemplate.queryForMap(
+                """
+                SELECT name, status
+                FROM coupons
+                WHERE template_id = ?
+                """,
+                savedCouponTemplate.id()
+        );
+
+        assertThat(deactivatedCouponTemplate.active()).isFalse();
+        assertThat(existingCoupon.get("name"))
+                .isEqualTo(savedCouponTemplate.name());
+        assertThat(existingCoupon.get("status")).isEqualTo("SCHEDULED");
+    }
+
     private CouponTemplate createCouponTemplate(Long brandId) {
         return CouponTemplate.create(
                 brandId,

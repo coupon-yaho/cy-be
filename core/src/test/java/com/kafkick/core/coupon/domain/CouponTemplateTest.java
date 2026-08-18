@@ -374,4 +374,35 @@ class CouponTemplateTest {
                         "퍼센트 할인에는 정액 할인 금액을 입력할 수 없습니다."
                 );
     }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 비활성화는 다른 정책 값을 보존한다")
+    void deactivateCouponTemplatePreservingPolicy() {
+        CouponTemplate couponTemplate = CouponTemplate.restore(
+                100L,
+                1L,
+                "활성 쿠폰",
+                CouponPolicyType.PERCENT_CAPPED,
+                20,
+                10_000,
+                null,
+                7,
+                2,
+                CouponDayOfWeek.WED,
+                LocalTime.of(10, 0),
+                2,
+                100,
+                Set.of(MembershipGrade.GOLD, MembershipGrade.VIP),
+                true
+        );
+
+        CouponTemplate deactivatedCouponTemplate =
+                couponTemplate.changeActivation(false);
+
+        assertThat(deactivatedCouponTemplate.active()).isFalse();
+        assertThat(deactivatedCouponTemplate)
+                .usingRecursiveComparison()
+                .ignoringFields("active")
+                .isEqualTo(couponTemplate);
+    }
 }

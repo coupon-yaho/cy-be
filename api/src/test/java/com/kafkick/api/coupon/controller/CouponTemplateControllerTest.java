@@ -1,6 +1,7 @@
-// 쿠폰 템플릿 생성·조회·수정 API의 응답 계약을 테스트합니다.
+// 쿠폰 템플릿 생성·조회·수정·활성화 API의 응답 계약을 테스트합니다.
 package com.kafkick.api.coupon.controller;
 
+import com.kafkick.api.coupon.adapter.CouponTemplateActivationTransactionalAdapter;
 import com.kafkick.api.coupon.adapter.CouponTemplateUpdateTransactionalAdapter;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.support.AdminRequestHeaders;
@@ -10,6 +11,7 @@ import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
 import com.kafkick.core.coupon.port.CouponTemplatePage;
+import com.kafkick.core.coupon.service.CouponTemplateActivationCommand;
 import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
@@ -33,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -52,6 +55,10 @@ class CouponTemplateControllerTest {
     @MockitoBean
     private CouponTemplateUpdateTransactionalAdapter
             couponTemplateUpdateTransactionalAdapter;
+
+    @MockitoBean
+    private CouponTemplateActivationTransactionalAdapter
+            couponTemplateActivationTransactionalAdapter;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -729,6 +736,134 @@ class CouponTemplateControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
         verifyNoInteractions(couponTemplateUpdateTransactionalAdapter);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿을 비활성화하면 200과 변경 결과를 반환한다")
+    void deactivateCouponTemplate() throws Exception {
+        CouponTemplate deactivatedCouponTemplate = CouponTemplate.restore(
+                100L,
+                2L,
+                "비활성화 테스트 쿠폰",
+                CouponPolicyType.FIXED_AMOUNT,
+                null,
+                null,
+                5_000,
+                14,
+                3,
+                CouponDayOfWeek.FRI,
+                LocalTime.of(12, 0),
+                3,
+                50,
+                Set.of(MembershipGrade.GOLD, MembershipGrade.VIP),
+                false
+        );
+        when(couponTemplateActivationTransactionalAdapter.changeActivation(
+                eq(100L),
+                any(CouponTemplateActivationCommand.class)
+        )).thenReturn(deactivatedCouponTemplate);
+
+        mockMvc.perform(patch(
+                        "/api/v1/admin/coupon-templates/{id}/activation",
+                        100L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(100))
+                .andExpect(jsonPath("$.data.active").value(false));
+
+        ArgumentCaptor<CouponTemplateActivationCommand> commandCaptor =
+                ArgumentCaptor.forClass(
+                        CouponTemplateActivationCommand.class
+                );
+        verify(couponTemplateActivationTransactionalAdapter)
+                .changeActivation(eq(100L), commandCaptor.capture());
+        assertThat(commandCaptor.getValue().active()).isFalse();
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 쿠폰 템플릿 상태 변경은 404를 반환한다")
+    void rejectChangingActivationOfMissingCouponTemplate() throws Exception {
+        when(couponTemplateActivationTransactionalAdapter.changeActivation(
+                eq(999L),
+                any(CouponTemplateActivationCommand.class)
+        )).thenThrow(new BusinessException(
+                CouponTemplateErrorCode.COUPON_TEMPLATE_NOT_FOUND,
+                "couponTemplateId=999"
+        ));
+
+        mockMvc.perform(patch(
+                        "/api/v1/admin/coupon-templates/{id}/activation",
+                        999L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("COUPON-102"));
+    }
+
+    @Test
+    @DisplayName("활성화 상태 변경 요청에 active가 없으면 400을 반환한다")
+    void rejectActivationRequestWithoutActive() throws Exception {
+        mockMvc.perform(patch(
+                        "/api/v1/admin/coupon-templates/{id}/activation",
+                        100L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verifyNoInteractions(couponTemplateActivationTransactionalAdapter);
+    }
+
+    @Test
+    @DisplayName("활성화 상태 변경 ID가 0 이하면 400을 반환한다")
+    void rejectNonPositiveCouponTemplateIdWhenChangingActivation()
+            throws Exception {
+        mockMvc.perform(patch(
+                        "/api/v1/admin/coupon-templates/{id}/activation",
+                        0L
+                )
+                        .header(
+                                AdminRequestHeaders.USER_ROLE,
+                                AdminRequestHeaders.ADMIN_ROLE
+                        )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verifyNoInteractions(couponTemplateActivationTransactionalAdapter);
+    }
+
+    @Test
+    @DisplayName("관리자 역할 헤더가 없으면 활성화 상태를 변경할 수 없다")
+    void rejectActivationChangeWithoutAdminRoleHeader() throws Exception {
+        mockMvc.perform(patch(
+                        "/api/v1/admin/coupon-templates/{id}/activation",
+                        100L
+                )
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"active\":false}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("COMMON-005"));
+
+        verifyNoInteractions(couponTemplateActivationTransactionalAdapter);
     }
 
     @Test
