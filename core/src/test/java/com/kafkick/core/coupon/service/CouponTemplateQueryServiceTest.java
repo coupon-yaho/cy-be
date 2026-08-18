@@ -1,7 +1,8 @@
-// 쿠폰 템플릿 단건 조회 성공과 미존재 오류 처리를 검증합니다.
+// 쿠폰 템플릿 단건 및 목록 조회를 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.LocalTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -17,6 +18,7 @@ import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
+import com.kafkick.core.coupon.port.CouponTemplatePage;
 import com.kafkick.core.coupon.port.CouponTemplateRepository;
 import com.kafkick.core.support.exception.BusinessException;
 
@@ -71,6 +73,36 @@ class CouponTemplateQueryServiceTest {
                 });
 
         verify(couponTemplateRepository).findById(999L);
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 페이지를 저장소 조회 결과로 반환한다")
+    void findCouponTemplatePage() {
+        CouponTemplate firstCouponTemplate = createCouponTemplate(1L);
+        CouponTemplate secondCouponTemplate = createCouponTemplate(2L);
+        CouponTemplatePage expectedPage = new CouponTemplatePage(
+                List.of(firstCouponTemplate, secondCouponTemplate),
+                0,
+                20,
+                2,
+                1
+        );
+
+        when(couponTemplateRepository.findPageByIdAsc(0, 20))
+                .thenReturn(expectedPage);
+
+        CouponTemplatePage result =
+                couponTemplateQueryService.findPage(0, 20);
+
+        assertThat(result.content()).containsExactly(
+                firstCouponTemplate,
+                secondCouponTemplate
+        );
+        assertThat(result.page()).isZero();
+        assertThat(result.size()).isEqualTo(20);
+        assertThat(result.totalElements()).isEqualTo(2);
+        assertThat(result.totalPages()).isEqualTo(1);
+        verify(couponTemplateRepository).findPageByIdAsc(0, 20);
     }
 
     private CouponTemplate createCouponTemplate(Long id) {

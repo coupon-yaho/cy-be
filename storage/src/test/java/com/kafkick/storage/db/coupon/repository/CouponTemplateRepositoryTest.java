@@ -16,6 +16,7 @@ import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
+import com.kafkick.core.coupon.port.CouponTemplatePage;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
@@ -136,6 +137,36 @@ class CouponTemplateRepositoryTest {
                         MembershipGrade.GOLD,
                         MembershipGrade.VIP
                 );
+    }
+
+    @Test
+    @DisplayName("쿠폰 템플릿 페이지를 ID 오름차순으로 조회한다")
+    void findCouponTemplatePageByIdAsc() {
+        CouponTemplate firstCouponTemplate =
+                couponTemplateRepository.save(createCouponTemplate(1L));
+        CouponTemplate secondCouponTemplate =
+                couponTemplateRepository.save(createCouponTemplate(1L));
+
+        CouponTemplatePage firstPage =
+                couponTemplateRepository.findPageByIdAsc(0, 1);
+        CouponTemplatePage secondPage =
+                couponTemplateRepository.findPageByIdAsc(1, 1);
+
+        assertThat(firstPage.content())
+                .extracting(CouponTemplate::id)
+                .containsExactly(firstCouponTemplate.id());
+        assertThat(firstPage.page()).isZero();
+        assertThat(firstPage.size()).isEqualTo(1);
+        assertThat(firstPage.totalElements()).isEqualTo(2);
+        assertThat(firstPage.totalPages()).isEqualTo(2);
+
+        assertThat(secondPage.content())
+                .extracting(CouponTemplate::id)
+                .containsExactly(secondCouponTemplate.id());
+        assertThat(secondPage.page()).isEqualTo(1);
+        assertThat(secondPage.size()).isEqualTo(1);
+        assertThat(secondPage.totalElements()).isEqualTo(2);
+        assertThat(secondPage.totalPages()).isEqualTo(2);
     }
 
     private CouponTemplate createCouponTemplate(Long brandId) {
