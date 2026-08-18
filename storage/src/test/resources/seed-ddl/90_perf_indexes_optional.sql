@@ -14,7 +14,7 @@
 -- 진짜로 무인덱스인 축은 status · expires_at · canceled_at · created_at 이다.
 
 -- V1 / 회차별 상태 집계: 지금은 issuances 풀스캔 + 필터
-CREATE INDEX idx_issuance_coupon_status ON issuances (coupon_id, status, updated_at, issued_at);
+CREATE INDEX idx_issuance_coupon_status ON issuances (coupon_id, status);
 
 -- 만료 배치 · "만료 임박" 관측 지표: 지금은 300만 행 풀스캔
 CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
@@ -27,47 +27,3 @@ CREATE INDEX idx_usage_issuance_active ON issuance_usages (issuance_id, canceled
 
 -- 멱등 레코드 24시간 정리 배치: created_at 인덱스가 없으면 풀스캔 (ERD.sql:407)
 CREATE INDEX idx_idem_created ON idempotency_records (created_at);
-
--- V2 1인 1매 위반: 케이스 둘이 각각 issuances 를 통째로 집계한다.
--- HAVING COUNT(*) > 1 은 조기 종료가 불가능해 LIMIT 이 있어도 끝까지 돈다.
---
--- CORRUPT 에는 uk_coupon_member 도 uk_coupon_code 도 없어(11 vs 12 참조) 두 GROUP BY 가
--- 쓸 인덱스가 하나도 없다. FK 자동 인덱스는 issuances(coupon_id) 단일이라 못 쓴다.
--- updated_at 을 뒤에 붙이는 이유는 규칙이 updated_at <= as_of 로 대상을 자르기 때문이다 —
--- 안 붙이면 그룹마다 PK 로 다시 내려가 300만 번 랜덤 룩업이 된다.
-CREATE INDEX idx_issuance_coupon_member_updated ON issuances (coupon_id, member_id, updated_at);
-CREATE INDEX idx_issuance_coupon_code_updated   ON issuances (coupon_id, code, updated_at);
-
--- 통계 집계(cy-be CY-202). asof_state 를 재사용할 수 없어 원본을 다시 읽는다 —
--- 통계가 세는 값은 issuances.status 이고 asof_state.state 와 다를 수 있는 것이 검증
--- 대상이라 순환이 되며, 요일·시각 분포는 issuance_histories 에만 있다.
---
--- GROUP BY coupon_id, issued_grade 가 무인덱스 풀스캔이다. status 를 뒤에 붙이는 이유는
--- used_total 이 SUM(status = 'USED') 라, 없으면 그룹마다 PK 로 다시 내려간다.
---
--- updated_at 을 마지막에 붙인다. 통계 셋도 규칙 여섯과 같은 updated_at <= as_of 컷을 쓰므로,
--- 안 붙이면 인덱스로 그룹을 만들고도 행마다 PK 로 내려가 컷을 확인한다 —
--- idx_issuance_coupon_member_updated 가 같은 이유로 updated_at 을 담는다.
--- 위 idx_issuance_coupon_status 도 같은 이유로 (status, updated_at, issued_at) 까지 담는다
--- (issued_at 은 sold_out_seconds 의 MAX(issued_at) 몫이다).
-CREATE INDEX idx_issuance_coupon_grade ON issuances (coupon_id, issued_grade, status, updated_at);
-
--- event_type = 'ISSUE' 필터가 무인덱스인데 이력이 534만 행이다. id 를 뒤에 붙이는 이유는
--- 통계가 리플레이와 같은 창(id <= 얼린 상한)을 쓰기 때문이다.
-CREATE INDEX idx_history_event_created ON issuance_histories (event_type, created_at, id);
-
--- 통계의 "ISSUE 이력 없는 발급건" 짝 비교. 축이 둘 필요하다 — 드라이빙과 프로브.
---
--- 드라이빙은 issuances 이고 컷이 updated_at 이다. id 는 적지 않는다 — InnoDB 보조 인덱스
--- 리프는 PK 를 항상 담는다. CLEAN 에서 이 조건은 300만 행 거의 전부에 매치하므로
--- 옵티마이저가 풀스캔을 고를 수 있다. EXPLAIN ANALYZE 로 확인하고 안 쓰이면 빼라.
-CREATE INDEX idx_issuance_updated ON issuances (updated_at);
-
--- 프로브 축. 위 idx_history_issuance 는 (issuance_id, created_at) 이라 event_type = 'ISSUE'
--- 를 확인하려고 발급건마다 PK 로 내려간다 — 300만 회 랜덤 룩업이다.
--- event_type 을 두 번째에 넣어 커버링으로 만든다(h.id <= 얼린 상한은 리프의 PK 로 확인된다).
---
--- idx_history_issuance 를 고치지 않고 따로 만드는 이유 — 그쪽은 리플레이의
--- ORDER BY issuance_id, created_at, id 몫이라 event_type 을 중간에 끼우면 그 정렬이
--- 인덱스 순서를 잃는다.
-CREATE INDEX idx_history_issuance_event ON issuance_histories (issuance_id, event_type, created_at);
