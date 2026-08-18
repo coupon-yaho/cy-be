@@ -27,6 +27,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -208,19 +209,25 @@ class CouponUseRepositoryTest {
     @DisplayName("같은 발급 건과 주문의 사용 실적은 중복 저장할 수 없다")
     void rejectDuplicateIssuanceAndOrderUsage() {
         insertUsage(30L, USED_AT.plusSeconds(60));
+        int rowCountBeforeFailure = countRows("issuance_usages");
 
         assertThatThrownBy(() ->
                 insertUsage(30L, USED_AT.plusSeconds(120))
-        ).isInstanceOf(DataAccessException.class);
+        ).isInstanceOf(DuplicateKeyException.class);
+        assertThat(countRows("issuance_usages"))
+                .isEqualTo(rowCountBeforeFailure);
     }
 
     @Test
     @DisplayName("한 발급 건에는 활성 사용 실적을 하나만 저장할 수 있다")
     void rejectMultipleActiveUsagesForIssuance() {
         insertUsage(30L, null);
+        int rowCountBeforeFailure = countRows("issuance_usages");
 
         assertThatThrownBy(() -> insertUsage(31L, null))
-                .isInstanceOf(DataAccessException.class);
+                .isInstanceOf(DuplicateKeyException.class);
+        assertThat(countRows("issuance_usages"))
+                .isEqualTo(rowCountBeforeFailure);
     }
 
     @Test
@@ -229,15 +236,22 @@ class CouponUseRepositoryTest {
         insertUsage(30L, USED_AT.plusSeconds(60));
         insertUsage(31L, null);
 
-        assertThat(countRows("issuance_usages")).isEqualTo(2);
-        assertThat(jdbcTemplate.queryForObject(
+        List<Map<String, Object>> usages = jdbcTemplate.queryForList(
                 """
-                SELECT COUNT(*)
+                SELECT order_id, canceled_at
                 FROM issuance_usages
-                WHERE issuance_id = 100 AND canceled_at IS NULL
-                """,
-                Integer.class
-        )).isEqualTo(1);
+                WHERE issuance_id = 100
+                ORDER BY order_id
+                """
+        );
+
+        assertThat(usages).hasSize(2);
+        assertThat(((Number) usages.get(0).get("order_id")).longValue())
+                .isEqualTo(30L);
+        assertThat(usages.get(0).get("canceled_at")).isNotNull();
+        assertThat(((Number) usages.get(1).get("order_id")).longValue())
+                .isEqualTo(31L);
+        assertThat(usages.get(1).get("canceled_at")).isNull();
     }
 
     @Test
