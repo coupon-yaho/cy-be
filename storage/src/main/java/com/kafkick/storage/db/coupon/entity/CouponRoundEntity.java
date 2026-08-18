@@ -55,6 +55,9 @@ public class CouponRoundEntity extends BaseEntity {
     @Column(nullable = false, length = 20)
     private CouponRoundStatus status;
 
+    @Column(name = "generated_at", nullable = false, updatable = false)
+    private Instant generatedAt;
+
     protected CouponRoundEntity() {
     }
 
@@ -72,9 +75,9 @@ public class CouponRoundEntity extends BaseEntity {
             Instant openAt,
             Instant closeAt,
             CouponRoundStatus status,
-            Instant createdAt
+            Instant generatedAt
     ) {
-        super(id, createdAt);
+        super(id, null);
         this.templateId = templateId;
         this.brandId = brandId;
         this.name = name;
@@ -87,6 +90,7 @@ public class CouponRoundEntity extends BaseEntity {
         this.openAt = openAt;
         this.closeAt = closeAt;
         this.status = status;
+        this.generatedAt = generatedAt;
     }
 
     public Long getTemplateId() {
@@ -135,6 +139,10 @@ public class CouponRoundEntity extends BaseEntity {
 
     public CouponRoundStatus getStatus() {
         return status;
+    }
+
+    public Instant getGeneratedAt() {
+        return generatedAt;
     }
 
 }

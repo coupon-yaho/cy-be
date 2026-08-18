@@ -21,7 +21,7 @@ public record CouponRound(
         Instant openAt,
         Instant closeAt,
         CouponRoundStatus status,
-        Instant createdAt
+        Instant generatedAt
 ) {
 
     public CouponRound {
@@ -55,7 +55,7 @@ public record CouponRound(
                     "쿠폰 회차 상태는 필수입니다."
             );
         }
-        if (createdAt == null) {
+        if (generatedAt == null) {
             throw new IllegalArgumentException(
                     "쿠폰 회차 생성 시각은 필수입니다."
             );
@@ -70,7 +70,7 @@ public record CouponRound(
     public static CouponRound schedule(
             CouponTemplate template,
             Instant openAt,
-            Instant createdAt
+            Instant generatedAt
     ) {
         if (template == null || template.id() == null) {
             throw new IllegalArgumentException(
@@ -102,7 +102,7 @@ public record CouponRound(
                 openAt,
                 openAt.plus(template.durationHours(), ChronoUnit.HOURS),
                 CouponRoundStatus.SCHEDULED,
-                createdAt
+                generatedAt
         );
     }
 
@@ -120,7 +120,7 @@ public record CouponRound(
             Instant openAt,
             Instant closeAt,
             CouponRoundStatus status,
-            Instant createdAt
+            Instant generatedAt
     ) {
         if (id == null || id <= 0) {
             throw new IllegalArgumentException(
@@ -142,7 +142,7 @@ public record CouponRound(
                 openAt,
                 closeAt,
                 status,
-                createdAt
+                generatedAt
         );
     }
 

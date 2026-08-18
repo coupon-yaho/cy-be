@@ -41,7 +41,7 @@ class CouponRoundTest {
                 .isEqualTo(Instant.parse("2026-09-08T07:00:00Z"));
         assertThat(couponRound.status())
                 .isEqualTo(CouponRoundStatus.SCHEDULED);
-        assertThat(couponRound.createdAt()).isEqualTo(generatedAt);
+        assertThat(couponRound.generatedAt()).isEqualTo(generatedAt);
     }
 
     @Test

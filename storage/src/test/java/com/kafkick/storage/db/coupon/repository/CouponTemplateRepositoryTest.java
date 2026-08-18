@@ -235,8 +235,8 @@ class CouponTemplateRepositoryTest {
                 INSERT INTO coupons (
                     template_id, brand_id, name, policy_type,
                     discount_amount, valid_days, eligible_grades_mask,
-                    open_at, close_at, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_at, close_at, status, generated_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 savedCouponTemplate.id(),
                 savedCouponTemplate.brandId(),
@@ -248,6 +248,7 @@ class CouponTemplateRepositoryTest {
                 openAt,
                 openAt.plusHours(2),
                 "SCHEDULED",
+                openAt.minusDays(1),
                 openAt.minusDays(1)
         );
 
@@ -307,8 +308,8 @@ class CouponTemplateRepositoryTest {
                 INSERT INTO coupons (
                     template_id, brand_id, name, policy_type,
                     discount_amount, valid_days, eligible_grades_mask,
-                    open_at, close_at, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_at, close_at, status, generated_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 savedCouponTemplate.id(),
                 savedCouponTemplate.brandId(),
@@ -320,6 +321,7 @@ class CouponTemplateRepositoryTest {
                 openAt,
                 openAt.plusHours(2),
                 "SCHEDULED",
+                openAt.minusDays(1),
                 openAt.minusDays(1)
         );
 

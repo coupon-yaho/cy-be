@@ -25,7 +25,7 @@ public final class CouponRoundEntityMapper {
                 couponRound.openAt(),
                 couponRound.closeAt(),
                 couponRound.status(),
-                couponRound.createdAt()
+                couponRound.generatedAt()
         );
     }
 
@@ -44,7 +44,7 @@ public final class CouponRoundEntityMapper {
                 entity.getOpenAt(),
                 entity.getCloseAt(),
                 entity.getStatus(),
-                entity.getCreatedAt()
+                entity.getGeneratedAt()
         );
     }
 }

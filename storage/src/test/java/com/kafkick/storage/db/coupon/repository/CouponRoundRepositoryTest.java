@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -17,7 +18,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.auditing.DateTimeProvider;
+import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
@@ -40,12 +45,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @RepositoryTest
 @Import({
         CouponRoundRepositoryImpl.class,
-        CouponTemplateRepositoryImpl.class
+        CouponTemplateRepositoryImpl.class,
+        CouponRoundRepositoryTest.AuditTestConfig.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class CouponRoundRepositoryTest {
 
     private static final long CONCURRENCY_TIMEOUT_SECONDS = 10;
+    private static final Instant AUDIT_CREATED_AT =
+            Instant.parse("2030-01-01T00:00:00Z");
 
     @Autowired
     private CouponRoundRepositoryImpl couponRoundRepository;
@@ -71,10 +79,10 @@ class CouponRoundRepositoryTest {
     }
 
     @Test
-    @DisplayName("회차 정책 스냅샷과 active_count 0의 최초 재고를 함께 저장한다")
+    @DisplayName("회차 생성 기준 시각과 감사 시각을 분리해 최초 재고와 함께 저장한다")
     void saveCouponRoundWithInitialStock() {
         CouponTemplate template = saveTemplate();
-        Instant generatedAt = Instant.parse("2026-08-18T00:00:00Z");
+        Instant generatedAt = Instant.parse("2020-01-01T00:00:00Z");
         CouponRound couponRound = scheduledRound(template, generatedAt);
         CouponStock initialStock = CouponStock.initialize(
                 template.stockPerOccurrence(),
@@ -89,7 +97,8 @@ class CouponRoundRepositoryTest {
                 SELECT template_id, brand_id, name, policy_type,
                        discount_rate, max_discount_amount, discount_amount,
                        valid_days, eligible_grades_mask,
-                       open_at, close_at, status, created_at
+                       open_at, close_at, status,
+                       generated_at, created_at
                 FROM coupons
                 WHERE id = ?
                 """,
@@ -106,6 +115,7 @@ class CouponRoundRepositoryTest {
 
         assertThat(savedRound.id()).isPositive();
         assertThat(savedRound.status()).isEqualTo(CouponRoundStatus.SCHEDULED);
+        assertThat(savedRound.generatedAt()).isEqualTo(generatedAt);
         assertThat(((Number) roundRow.get("template_id")).longValue())
                 .isEqualTo(template.id());
         assertThat(((Number) roundRow.get("brand_id")).longValue())
@@ -127,8 +137,10 @@ class CouponRoundRepositoryTest {
                 .isEqualTo(LocalDateTime.of(2026, 9, 8, 7, 0));
         assertThat(roundRow.get("status"))
                 .isEqualTo(CouponRoundStatus.SCHEDULED.name());
+        assertThat(roundRow.get("generated_at"))
+                .isEqualTo(LocalDateTime.of(2020, 1, 1, 0, 0));
         assertThat(roundRow.get("created_at"))
-                .isEqualTo(LocalDateTime.of(2026, 8, 18, 0, 0));
+                .isEqualTo(LocalDateTime.of(2030, 1, 1, 0, 0));
         assertThat(((Number) stockRow.get("coupon_id")).longValue())
                 .isEqualTo(savedRound.id());
         assertThat(((Number) stockRow.get("total_quantity")).intValue())
@@ -136,7 +148,7 @@ class CouponRoundRepositoryTest {
         assertThat(((Number) stockRow.get("active_count")).intValue())
                 .isZero();
         assertThat(stockRow.get("updated_at"))
-                .isEqualTo(LocalDateTime.of(2026, 8, 18, 0, 0));
+                .isEqualTo(LocalDateTime.of(2020, 1, 1, 0, 0));
     }
 
     @Test
@@ -432,5 +444,17 @@ class CouponRoundRepositoryTest {
                 query,
                 Integer.class
         );
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    @EnableJpaAuditing(
+            dateTimeProviderRef = "couponRoundTestDateTimeProvider"
+    )
+    static class AuditTestConfig {
+
+        @Bean
+        DateTimeProvider couponRoundTestDateTimeProvider() {
+            return () -> Optional.of(AUDIT_CREATED_AT);
+        }
     }
 }
