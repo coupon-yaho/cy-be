@@ -58,11 +58,21 @@ public record Issuance(
             int validDays,
             Instant issuedAt
     ) {
+        if (issuedAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 발급 시각은 필수입니다."
+            );
+        }
         if (validDays <= 0) {
             throw new IllegalArgumentException(
                     "쿠폰 유효기간은 0보다 커야 합니다."
             );
         }
+
+        Instant expiresAt = issuedAt.plus(
+                validDays,
+                ChronoUnit.DAYS
+        );
 
         return new Issuance(
                 null,
@@ -73,10 +83,11 @@ public record Issuance(
                 CouponStateMachine.transition(
                         null,
                         IssuanceEventType.ISSUE,
-                        false
+                        expiresAt,
+                        issuedAt
                 ),
                 issuedAt,
-                issuedAt.plus(validDays, ChronoUnit.DAYS),
+                expiresAt,
                 issuedAt
         );
     }

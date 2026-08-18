@@ -14,7 +14,8 @@ public enum CouponIssueErrorCode implements ErrorCode {
     STOCK_EXHAUSTED(409, "COUPON-306", "쿠폰 재고가 모두 소진되었습니다."),
     COUPON_ISSUE_SAVE_FAILED(500, "COUPON-307", "쿠폰 발급 저장 중 오류가 발생했습니다."),
     COUPON_STOCK_NOT_FOUND(500, "COUPON-308", "쿠폰 재고 정보를 찾을 수 없습니다."),
-    MEMBER_NOT_FOUND(404, "COUPON-309", "회원을 찾을 수 없습니다.");
+    MEMBER_NOT_FOUND(404, "COUPON-309", "회원을 찾을 수 없습니다."),
+    INVALID_TRANSITION(409, "COUPON-310", "허용되지 않은 쿠폰 상태 전이입니다.");
 
     private final int status;
     private final String code;

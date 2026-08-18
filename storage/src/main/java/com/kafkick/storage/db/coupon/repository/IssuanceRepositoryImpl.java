@@ -1,8 +1,6 @@
 // 발급건을 저장하고 1인 1매 DB 제약 위반을 비즈니스 오류로 변환합니다.
 package com.kafkick.storage.db.coupon.repository;
 
-import java.sql.SQLException;
-
 import jakarta.persistence.EntityManager;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -17,6 +15,7 @@ import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
 import com.kafkick.storage.db.coupon.mapper.IssuanceEntityMapper;
+import com.kafkick.storage.db.support.SqlErrorInspector;
 
 @Repository
 public class IssuanceRepositoryImpl implements IssuanceRepository {
@@ -68,36 +67,18 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
     }
 
     private static boolean isMemberDuplicate(Throwable throwable) {
-        Throwable cause = throwable;
-        while (cause != null) {
-            if (cause instanceof SQLException sqlException
-                    && sqlException.getErrorCode()
-                    == MYSQL_DUPLICATE_KEY_ERROR
-                    && sqlException.getMessage() != null
-                    && sqlException.getMessage().contains(
-                    MEMBER_UNIQUE_KEY
-            )) {
-                return true;
-            }
-            cause = cause.getCause();
-        }
-        return false;
+        return SqlErrorInspector.hasErrorCode(
+                throwable,
+                MYSQL_DUPLICATE_KEY_ERROR,
+                MEMBER_UNIQUE_KEY
+        );
     }
 
     private static boolean isMissingMember(Throwable throwable) {
-        Throwable cause = throwable;
-        while (cause != null) {
-            if (cause instanceof SQLException sqlException
-                    && sqlException.getErrorCode()
-                    == MYSQL_FOREIGN_KEY_ERROR
-                    && sqlException.getMessage() != null
-                    && sqlException.getMessage().contains(
-                    MEMBER_FOREIGN_KEY
-            )) {
-                return true;
-            }
-            cause = cause.getCause();
-        }
-        return false;
+        return SqlErrorInspector.hasErrorCode(
+                throwable,
+                MYSQL_FOREIGN_KEY_ERROR,
+                MEMBER_FOREIGN_KEY
+        );
     }
 }

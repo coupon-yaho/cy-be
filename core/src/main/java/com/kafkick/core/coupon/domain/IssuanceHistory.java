@@ -52,7 +52,8 @@ public record IssuanceHistory(
                 CouponStateMachine.transition(
                         null,
                         IssuanceEventType.ISSUE,
-                        false
+                        null,
+                        createdAt
                 ),
                 null,
                 requestId,
