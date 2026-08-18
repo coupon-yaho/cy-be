@@ -56,21 +56,26 @@ class AdminBenchmarkControllerTest {
     @Test
     void exposesDetailAndFourIndependentBenchmarkOperations() throws Exception {
         mockMvc.perform(get("/api/v1/admin/benchmarks/1"))
-                .andExpect(status().isNotImplemented());
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
         mockMvc.perform(post("/api/v1/admin/benchmarks/start")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"engineVersion\":\"V3\",\"releaseStage\":\"V3\","
                                 + "\"queueMode\":\"ADAPTIVE\",\"scenarioCode\":\"LOAD_100K\"}"))
-                .andExpect(status().isNotImplemented());
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
         mockMvc.perform(post("/api/v1/admin/benchmarks/1/stop"))
-                .andExpect(status().isNotImplemented());
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
         mockMvc.perform(post("/api/v1/admin/benchmarks/1/finalize"))
-                .andExpect(status().isNotImplemented());
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
         mockMvc.perform(post("/api/v1/admin/benchmarks/1/k6-result")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"tps\":1847.2,\"p99Millis\":412.3,\"failureCount\":0,"
                                 + "\"failureRate\":0.0,\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
-                .andExpect(status().isNotImplemented());
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
     }
 
     /** k6 실패율의 확정 범위인 0~1을 벗어난 요청을 400으로 거부하는지 검증합니다. */
@@ -84,12 +89,22 @@ class AdminBenchmarkControllerTest {
                 .andExpect(status().isBadRequest());
     }
 
-    /** 알 수 없는 enum과 허용 형식에 맞지 않는 시나리오 코드를 시작 요청에서 거부합니다. */
+    /** 알 수 없는 enum을 시작 요청에서 거부합니다. */
     @Test
-    void benchmarkStartRejectsUnknownEnumsAndInvalidScenarioCode() throws Exception {
+    void benchmarkStartRejectsUnknownEnums() throws Exception {
         mockMvc.perform(post("/api/v1/admin/benchmarks/start")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"engineVersion\":\"UNKNOWN\",\"releaseStage\":\"V3\","
+                                + "\"queueMode\":\"ADAPTIVE\",\"scenarioCode\":\"LOAD_100K\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    /** 허용 형식에 맞지 않는 시나리오 코드를 시작 요청에서 독립적으로 거부합니다. */
+    @Test
+    void benchmarkStartRejectsInvalidScenarioCode() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/start")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"engineVersion\":\"V3\",\"releaseStage\":\"V3\","
                                 + "\"queueMode\":\"ADAPTIVE\",\"scenarioCode\":\"lower case\"}"))
                 .andExpect(status().isBadRequest());
     }

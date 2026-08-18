@@ -323,7 +323,8 @@ public record AdminOverviewSnapshot(
      * 전체 조치 건수와 관리자 첫 화면에 우선 노출할 상위 20개를 함께 전달합니다.
      *
      * <p>상위 항목은 심각도 내림차순, 최초 감지 시각 오름차순(null은 마지막), couponId 오름차순으로
-     * 정렬됩니다. 전체 건수와 상위 목록을 분리해 목록이 잘려도 전체 규모를 잃지 않습니다.</p>
+     * 정렬됩니다. couponId는 항목마다 유일해야 하므로 마지막 정렬 키가 항상 결정적인 순서를 만듭니다.
+     * 전체 건수와 상위 목록을 분리해 목록이 잘려도 전체 규모를 잃지 않습니다.</p>
      *
      * @param totalCount 전체 조치 필요 항목 수
      * @param topItems 화면에 우선 노출할 최대 20개 항목
@@ -352,6 +353,13 @@ public record AdminOverviewSnapshot(
             if (totalCount < topItems.size()) {
                 throw new IllegalArgumentException("totalCount는 topItems 크기보다 작을 수 없습니다.");
             }
+            long distinctCouponCount = topItems.stream()
+                    .map(OperationActionItem::couponId)
+                    .distinct()
+                    .count();
+            if (distinctCouponCount != topItems.size()) {
+                throw new IllegalArgumentException("topItems에는 동일한 couponId가 중복될 수 없습니다.");
+            }
             topItems = topItems.stream().sorted(PRIORITY_ORDER).toList();
         }
     }
@@ -363,7 +371,7 @@ public record AdminOverviewSnapshot(
      * 드러나는 {@link Duration}을 사용하고 계산할 수 없으면 null입니다. 권장 행동의 코드·표시 문구·버튼
      * 목적지는 서버가 {@link RecommendedAction}으로 함께 제공하므로 프론트가 문구를 재판정하지 않습니다.</p>
      *
-     * @param couponId 조치 대상 쿠폰 캠페인 회차 식별자
+     * @param couponId 조치 대상 쿠폰 캠페인 회차의 필수 식별자
      * @param campaignName 운영 화면에 표시할 캠페인 이름
      * @param opensAt 캠페인 오픈 시각; 오픈 시각이 없거나 확인할 수 없으면 null
      * @param severity 운영 조치 우선순위의 심각도
@@ -382,7 +390,12 @@ public record AdminOverviewSnapshot(
             String customerImpactText,
             Instant detectedAt,
             Duration duration,
-            RecommendedAction recommendedAction) { }
+            RecommendedAction recommendedAction) {
+
+        public OperationActionItem {
+            Objects.requireNonNull(couponId, "couponId는 필수입니다.");
+        }
+    }
 
     /**
      * 프론트가 임의로 조치 문구나 이동 위치를 조립하지 않도록 서버 판정 결과를 묶습니다.

@@ -113,6 +113,24 @@ class AdminOverviewCoreContractTest {
         assertThat(reversed.topItems()).isEqualTo(forward.topItems());
     }
 
+    /** 쿠폰에 연결되지 않은 조치 항목은 생성할 수 없습니다. */
+    @Test
+    void actionItemRejectsNullCouponId() {
+        assertThatThrownBy(() -> actionItem(null, Severity.CRITICAL, FROM))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    /** 쿠폰별 조치 항목은 최대 하나이므로 동일 couponId가 중복되면 거부합니다. */
+    @Test
+    void actionItemSnapshotRejectsDuplicateCouponIds() {
+        AdminOverviewSnapshot.OperationActionItem first = actionItem(1L, Severity.WARN, FROM);
+        AdminOverviewSnapshot.OperationActionItem duplicate = actionItem(1L, Severity.CRITICAL, TO);
+
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.ActionItemSnapshot(
+                2, List.of(first, duplicate)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     /** 호출자가 원본 목록을 바꿔도 Snapshot의 상위 목록은 변하지 않습니다. */
     @Test
     void actionItemSnapshotDefensivelyCopiesTopItems() {

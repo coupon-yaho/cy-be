@@ -250,6 +250,18 @@ class AdminOverviewDtoJsonSerializationTest {
         assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
                 AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, Double.POSITIVE_INFINITY, "잘못된 비율"))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, -0.1, "잘못된 비율"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, 1.1, "잘못된 비율"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, Double.NaN, "잘못된 비율"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, Double.NEGATIVE_INFINITY, "잘못된 비율"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /** O3 결과 enum이 HTTP JSON에서 확정된 7개 이름으로 그대로 노출되는지 검증합니다. */
