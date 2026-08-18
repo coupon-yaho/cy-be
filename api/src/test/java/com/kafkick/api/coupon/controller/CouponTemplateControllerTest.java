@@ -1,6 +1,7 @@
 // 쿠폰 템플릿 생성·조회·수정 API의 응답 계약을 테스트합니다.
 package com.kafkick.api.coupon.controller;
 
+import com.kafkick.api.coupon.adapter.CouponTemplateUpdateTransactionalAdapter;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.support.AdminRequestHeaders;
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;
@@ -13,7 +14,6 @@ import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
 import com.kafkick.core.coupon.service.CouponTemplateUpdateCommand;
-import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
@@ -50,7 +50,8 @@ class CouponTemplateControllerTest {
     private CouponTemplateQueryService couponTemplateQueryService;
 
     @MockitoBean
-    private CouponTemplateUpdateService couponTemplateUpdateService;
+    private CouponTemplateUpdateTransactionalAdapter
+            couponTemplateUpdateTransactionalAdapter;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -569,7 +570,7 @@ class CouponTemplateControllerTest {
                 true
         );
 
-        when(couponTemplateUpdateService.update(
+        when(couponTemplateUpdateTransactionalAdapter.update(
                 eq(100L),
                 any(CouponTemplateUpdateCommand.class)
         )).thenReturn(updatedCouponTemplate);
@@ -622,7 +623,7 @@ class CouponTemplateControllerTest {
 
         ArgumentCaptor<CouponTemplateUpdateCommand> commandCaptor =
                 ArgumentCaptor.forClass(CouponTemplateUpdateCommand.class);
-        verify(couponTemplateUpdateService).update(
+        verify(couponTemplateUpdateTransactionalAdapter).update(
                 eq(100L),
                 commandCaptor.capture()
         );
@@ -650,7 +651,7 @@ class CouponTemplateControllerTest {
     @Test
     @DisplayName("존재하지 않는 쿠폰 템플릿 수정은 404를 반환한다")
     void rejectUpdatingMissingCouponTemplate() throws Exception {
-        when(couponTemplateUpdateService.update(
+        when(couponTemplateUpdateTransactionalAdapter.update(
                 eq(999L),
                 any(CouponTemplateUpdateCommand.class)
         )).thenThrow(new BusinessException(
@@ -692,7 +693,7 @@ class CouponTemplateControllerTest {
                 .andExpect(jsonPath("$.error.message")
                         .value("쿠폰 템플릿 ID는 0보다 커야 합니다."));
 
-        verifyNoInteractions(couponTemplateUpdateService);
+        verifyNoInteractions(couponTemplateUpdateTransactionalAdapter);
     }
 
     @Test
@@ -727,7 +728,7 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verifyNoInteractions(couponTemplateUpdateService);
+        verifyNoInteractions(couponTemplateUpdateTransactionalAdapter);
     }
 
     @Test

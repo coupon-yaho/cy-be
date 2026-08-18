@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.kafkick.api.coupon.adapter.CouponTemplateUpdateTransactionalAdapter;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
 import com.kafkick.api.coupon.dto.CouponTemplateDetailResponse;
@@ -27,7 +28,6 @@ import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
-import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
 
 @RestController
 @RequestMapping("/api/v1/admin/coupon-templates")
@@ -35,16 +35,19 @@ public class CouponTemplateController {
 
     private final CouponTemplateCreateService couponTemplateCreateService;
     private final CouponTemplateQueryService couponTemplateQueryService;
-    private final CouponTemplateUpdateService couponTemplateUpdateService;
+    private final CouponTemplateUpdateTransactionalAdapter
+            couponTemplateUpdateTransactionalAdapter;
 
     public CouponTemplateController(
             CouponTemplateCreateService couponTemplateCreateService,
             CouponTemplateQueryService couponTemplateQueryService,
-            CouponTemplateUpdateService couponTemplateUpdateService
+            CouponTemplateUpdateTransactionalAdapter
+                    couponTemplateUpdateTransactionalAdapter
     ) {
         this.couponTemplateCreateService = couponTemplateCreateService;
         this.couponTemplateQueryService = couponTemplateQueryService;
-        this.couponTemplateUpdateService = couponTemplateUpdateService;
+        this.couponTemplateUpdateTransactionalAdapter =
+                couponTemplateUpdateTransactionalAdapter;
     }
 
     @PostMapping
@@ -102,8 +105,11 @@ public class CouponTemplateController {
             Long couponTemplateId,
             @Valid @RequestBody CouponTemplateUpdateRequest request
     ) {
-        CouponTemplate updatedCouponTemplate = couponTemplateUpdateService
-                .update(couponTemplateId, request.toCommand());
+        CouponTemplate updatedCouponTemplate =
+                couponTemplateUpdateTransactionalAdapter.update(
+                        couponTemplateId,
+                        request.toCommand()
+                );
 
         return ResponseEnvelope.success(
                 CouponTemplateDetailResponse.from(updatedCouponTemplate)
