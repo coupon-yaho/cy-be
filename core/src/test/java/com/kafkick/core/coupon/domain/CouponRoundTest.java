@@ -57,6 +57,18 @@ class CouponRoundTest {
     }
 
     @Test
+    @DisplayName("회차 시작 시각이 없으면 도메인 검증 예외를 반환한다")
+    void rejectMissingOpenAt() {
+        assertThatThrownBy(() -> CouponRound.schedule(
+                fixedAmountTemplate(true),
+                null,
+                Instant.parse("2026-08-18T00:00:00Z")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("쿠폰 회차 시작 시각은 필수입니다.");
+    }
+
+    @Test
     @DisplayName("최초 재고는 active_count 0으로 초기화한다")
     void initializeCouponStock() {
         Instant updatedAt = Instant.parse("2026-08-18T00:00:00Z");

@@ -82,6 +82,11 @@ public record CouponRound(
                     "비활성 쿠폰 템플릿으로 회차를 만들 수 없습니다."
             );
         }
+        if (openAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 회차 시작 시각은 필수입니다."
+            );
+        }
 
         return new CouponRound(
                 null,

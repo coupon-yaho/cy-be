@@ -3,6 +3,7 @@ package com.kafkick.batch.coupon.config;
 
 import java.time.ZoneId;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -13,17 +14,20 @@ import com.kafkick.core.coupon.service.CouponRoundGenerationService;
 @Configuration(proxyBeanMethods = false)
 public class CouponRoundUseCaseConfiguration {
 
-    private static final ZoneId BRAND_DAY_ZONE = ZoneId.of("Asia/Seoul");
-
     @Bean
     public CouponRoundGenerationService couponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
-            CouponRoundRepository couponRoundRepository
+            CouponRoundRepository couponRoundRepository,
+            @Value("${coupon.round-generation.schedule-zone:Asia/Seoul}")
+            String scheduleZone,
+            @Value("${coupon.round-generation.max-days:30}")
+            int maxGenerationDays
     ) {
         return new CouponRoundGenerationService(
                 couponTemplateRepository,
                 couponRoundRepository,
-                BRAND_DAY_ZONE
+                ZoneId.of(scheduleZone),
+                maxGenerationDays
         );
     }
 }

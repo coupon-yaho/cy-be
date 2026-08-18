@@ -11,6 +11,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class CouponRoundRepositoryTest {
+
+    private static final long CONCURRENCY_TIMEOUT_SECONDS = 10;
 
     @Autowired
     private CouponRoundRepositoryImpl couponRoundRepository;
@@ -272,7 +275,8 @@ class CouponRoundRepositoryTest {
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
 
-        try (ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
             Future<Class<?>> firstResult = executorService.submit(() ->
                     createConcurrently(
                             couponRound,
@@ -290,14 +294,33 @@ class CouponRoundRepositoryTest {
                     )
             );
 
-            ready.await();
+            assertThat(ready.await(
+                    CONCURRENCY_TIMEOUT_SECONDS,
+                    TimeUnit.SECONDS
+            )).isTrue();
             start.countDown();
 
-            assertThat(List.of(firstResult.get(), secondResult.get()))
+            assertThat(List.of(
+                    firstResult.get(
+                            CONCURRENCY_TIMEOUT_SECONDS,
+                            TimeUnit.SECONDS
+                    ),
+                    secondResult.get(
+                            CONCURRENCY_TIMEOUT_SECONDS,
+                            TimeUnit.SECONDS
+                    )
+            ))
                     .containsExactlyInAnyOrder(
                             CouponRound.class,
                             CouponRoundAlreadyExistsException.class
                     );
+        } finally {
+            start.countDown();
+            executorService.shutdownNow();
+            assertThat(executorService.awaitTermination(
+                    CONCURRENCY_TIMEOUT_SECONDS,
+                    TimeUnit.SECONDS
+            )).isTrue();
         }
 
         assertThat(countRows("coupons")).isEqualTo(1);
@@ -315,7 +338,14 @@ class CouponRoundRepositoryTest {
             CountDownLatch start
     ) throws InterruptedException {
         ready.countDown();
-        start.await();
+        if (!start.await(
+                CONCURRENCY_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS
+        )) {
+            throw new IllegalStateException(
+                    "동시성 테스트 시작 신호를 받지 못했습니다."
+            );
+        }
         try {
             couponRoundRepository.saveWithInitialStock(
                     couponRound,

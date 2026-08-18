@@ -24,11 +24,13 @@ public class CouponRoundGenerationService {
     private final CouponTemplateRepository couponTemplateRepository;
     private final CouponRoundRepository couponRoundRepository;
     private final ZoneId scheduleZone;
+    private final int maxGenerationDays;
 
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
             CouponRoundRepository couponRoundRepository,
-            ZoneId scheduleZone
+            ZoneId scheduleZone,
+            int maxGenerationDays
     ) {
         this.couponTemplateRepository = Objects.requireNonNull(
                 couponTemplateRepository
@@ -37,6 +39,12 @@ public class CouponRoundGenerationService {
                 couponRoundRepository
         );
         this.scheduleZone = Objects.requireNonNull(scheduleZone);
+        if (maxGenerationDays <= 0) {
+            throw new IllegalArgumentException(
+                    "최대 회차 생성 기간은 0보다 커야 합니다."
+            );
+        }
+        this.maxGenerationDays = maxGenerationDays;
     }
 
     public CouponRoundGenerationResult generate(
@@ -131,7 +139,7 @@ public class CouponRoundGenerationService {
         );
     }
 
-    private static void validateRange(
+    private void validateRange(
             LocalDate fromDate,
             LocalDate toDate,
             Instant generatedAt
@@ -146,9 +154,10 @@ public class CouponRoundGenerationService {
                     "회차 생성 종료일은 시작일보다 빠를 수 없습니다."
             );
         }
-        if (ChronoUnit.DAYS.between(fromDate, toDate) > 30) {
+        if (ChronoUnit.DAYS.between(fromDate, toDate)
+                > maxGenerationDays) {
             throw new IllegalArgumentException(
-                    "회차 생성 기간은 최대 30일 이후까지 지정할 수 있습니다."
+                    "회차 생성 기간이 허용 범위를 초과했습니다."
             );
         }
     }

@@ -7,21 +7,15 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.storage.db.support.BaseEntity;
 
 @Entity
 @Table(name = "coupons")
-public class CouponRoundEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+public class CouponRoundEntity extends BaseEntity {
 
     @Column(name = "template_id", nullable = false)
     private Long templateId;
@@ -61,9 +55,6 @@ public class CouponRoundEntity {
     @Column(nullable = false, length = 20)
     private CouponRoundStatus status;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private Instant createdAt;
-
     protected CouponRoundEntity() {
     }
 
@@ -83,7 +74,7 @@ public class CouponRoundEntity {
             CouponRoundStatus status,
             Instant createdAt
     ) {
-        this.id = id;
+        super(id, createdAt);
         this.templateId = templateId;
         this.brandId = brandId;
         this.name = name;
@@ -96,11 +87,6 @@ public class CouponRoundEntity {
         this.openAt = openAt;
         this.closeAt = closeAt;
         this.status = status;
-        this.createdAt = createdAt;
-    }
-
-    public Long getId() {
-        return id;
     }
 
     public Long getTemplateId() {
@@ -151,7 +137,4 @@ public class CouponRoundEntity {
         return status;
     }
 
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
 }
