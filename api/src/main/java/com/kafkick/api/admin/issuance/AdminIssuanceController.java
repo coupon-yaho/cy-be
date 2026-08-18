@@ -8,7 +8,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
-import com.kafkick.api.admin.support.CursorPageNormalizer;
 import com.kafkick.api.admin.issuance.dto.IssuanceHistoryQuery;
 import com.kafkick.api.admin.issuance.dto.IssuanceHistoryPageResponse;
 import com.kafkick.api.admin.issuance.dto.IssuanceInquiryQuery;
@@ -27,12 +26,6 @@ import com.kafkick.core.support.exception.BusinessException;
 @RequestMapping("/api/v1/admin")
 public class AdminIssuanceController {
 
-    private final CursorPageNormalizer cursorPageNormalizer;
-
-    public AdminIssuanceController(CursorPageNormalizer cursorPageNormalizer) {
-        this.cursorPageNormalizer = cursorPageNormalizer;
-    }
-
     /**
      * 회원의 발급 시도 결과와 현재 발급 상태를 최신 항목부터 과거 방향으로 조회합니다.
      *
@@ -48,7 +41,6 @@ public class AdminIssuanceController {
     @GetMapping("/members/issuance-inquiries")
     public ResponseEnvelope<IssuanceInquiryPageResponse> issuanceInquiries(
             @Valid @ModelAttribute IssuanceInquiryQuery query, Caller caller) {
-        query = query.withLimit(cursorPageNormalizer.normalizeLimit(query.limit()));
         throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
     }
 
@@ -67,7 +59,6 @@ public class AdminIssuanceController {
     @GetMapping("/issuance-histories")
     public ResponseEnvelope<IssuanceHistoryPageResponse> issuanceHistories(
             @Valid @ModelAttribute IssuanceHistoryQuery query, Caller caller) {
-        query = query.withLimit(cursorPageNormalizer.normalizeLimit(query.limit()));
         throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
     }
 }

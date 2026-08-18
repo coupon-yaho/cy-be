@@ -28,8 +28,12 @@ class DashboardIssuanceDtoJsonSerializationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-16T00:00:00Z");
 
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    DashboardIssuanceDtoJsonSerializationTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** 쿠폰 지표가 원천별 상태와 관측 시각을 잃지 않고 확정 enum 이름으로 직렬화되는지 확인합니다. */
     @Test

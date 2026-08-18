@@ -39,8 +39,12 @@ import com.kafkick.core.observation.SourceStatus;
 class AdminExtendedDtoJsonSerializationTest {
 
     private static final Instant AT = Instant.parse("2026-08-16T00:00:00Z");
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    AdminExtendedDtoJsonSerializationTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** 과거 방향 목록이 빈 배열과 이전 데이터 존재 여부를 유지하고 null cursor를 생략하는지 검증합니다. */
     @Test

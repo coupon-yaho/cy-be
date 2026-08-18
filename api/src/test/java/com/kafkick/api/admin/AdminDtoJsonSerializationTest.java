@@ -32,8 +32,12 @@ import com.kafkick.core.observation.SourceStatus;
 @AdminJsonTest
 class AdminDtoJsonSerializationTest {
 
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    AdminDtoJsonSerializationTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** 각 도메인의 빈 응답 예시도 필수 필드와 nullable 구조를 빠뜨리지 않는지 확인합니다. */
     @Test

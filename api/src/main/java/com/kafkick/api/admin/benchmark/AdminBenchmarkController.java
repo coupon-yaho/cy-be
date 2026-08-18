@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
-import com.kafkick.api.admin.support.CursorPageNormalizer;
 import com.kafkick.api.caller.Caller;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkListQuery;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkListResponse;
@@ -34,17 +33,11 @@ import com.kafkick.core.support.exception.BusinessException;
 @RequestMapping("/api/v1/admin")
 public class AdminBenchmarkController {
 
-    private final CursorPageNormalizer cursorPageNormalizer;
-
-    public AdminBenchmarkController(CursorPageNormalizer cursorPageNormalizer) {
-        this.cursorPageNormalizer = cursorPageNormalizer;
-    }
-
     /**
      * 기간·엔진 버전·시나리오 조건에 맞는 Benchmark 실행 목록을 최신 실행부터 과거 방향으로 조회합니다.
      *
      * <p>{@code beforeCursor}는 현재 페이지의 마지막 실행보다 더 오래된 실행을 요청하는 불투명 cursor이고,
-     * {@code limit}은 생략 시 설정된 기본값(초깃값 50), 최대 200입니다. 아직 결과 저장소와 Use Case가 연결되지 않았으므로
+     * {@code limit}은 선택값이며 최대 200입니다. 아직 결과 저장소와 Use Case가 연결되지 않았으므로
      * Validation을 통과한 요청에도 {@link AdminApiErrorCode#NOT_IMPLEMENTED}를 발생시킵니다.</p>
      *
      * @param query 조회 기간, 엔진 버전, 시나리오 코드, 과거 방향 cursor와 페이지 크기
@@ -55,7 +48,6 @@ public class AdminBenchmarkController {
     @GetMapping("/benchmarks")
     public ResponseEnvelope<BenchmarkListResponse> benchmarks(
             @Valid @ModelAttribute BenchmarkListQuery query, Caller caller) {
-        query = query.withLimit(cursorPageNormalizer.normalizeLimit(query.limit()));
         throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
     }
 

@@ -10,15 +10,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
-import com.kafkick.api.admin.support.CursorPageNormalizer;
-import com.kafkick.api.admin.support.config.AdminPaginationProperties;
 
 /** 회원 발급 문의와 발급 이력 조회의 필터·기간·cursor Validation을 검증합니다. */
 class AdminIssuanceControllerTest {
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminIssuanceController(
-                    new CursorPageNormalizer(new AdminPaginationProperties(50))));
+            new AdminIssuanceController());
 
     /** 발급 문의의 필수 회원 식별자를 생략하면 400으로 거부되는지 검증합니다. */
     @Test

@@ -29,8 +29,12 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-16T00:00:00Z");
 
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    ObservabilityBenchmarkDtoJsonSerializationTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** 범위·정합성 단계와 각 트래픽 원천 상태가 독립적으로 직렬화되는지 검증합니다. */
     @Test

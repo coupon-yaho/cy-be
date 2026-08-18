@@ -53,6 +53,13 @@ public record AdminOverviewSnapshot(
         Observation<List<CampaignOverview>> campaigns,
         Observation<CustomerOutcomeSummary> customerOutcomes) {
 
+    public AdminOverviewSnapshot {
+        if (campaigns != null && campaigns.value() != null) {
+            campaigns = new Observation<>(
+                    List.copyOf(campaigns.value()), campaigns.status(), campaigns.observedAt());
+        }
+    }
+
     /**
      * 의미 있는 값과 그 값을 만든 원천 상태·시각을 분리합니다.
      *
@@ -220,7 +227,12 @@ public record AdminOverviewSnapshot(
      */
     public record IssuanceFlow(double currentPerMinute, Instant windowStart, Instant windowEnd,
                                List<IssuanceRatePoint> points,
-                               IssuanceFlowState state, Duration stateDuration) { }
+                               IssuanceFlowState state, Duration stateDuration) {
+
+        public IssuanceFlow {
+            points = List.copyOf(points);
+        }
+    }
 
     /**
      * O1 발급 흐름 그래프의 한 관측점입니다.
@@ -277,7 +289,12 @@ public record AdminOverviewSnapshot(
      * @param outcomes 결과 유형별 건수·비율·설명; 결과가 없으면 빈 목록
      */
     public record CustomerOutcomeSummary(Instant windowStart, Instant windowEnd,
-                                         long totalCount, List<CustomerOutcome> outcomes) { }
+                                         long totalCount, List<CustomerOutcome> outcomes) {
+
+        public CustomerOutcomeSummary {
+            outcomes = List.copyOf(outcomes);
+        }
+    }
 
     /**
      * O3 고객 결과 유형 하나의 집계값입니다.

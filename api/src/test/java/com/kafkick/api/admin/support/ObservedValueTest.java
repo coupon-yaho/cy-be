@@ -16,8 +16,12 @@ import com.kafkick.core.observation.SourceStatus;
 @AdminJsonTest
 class ObservedValueTest {
 
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    ObservedValueTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** PENDING 상태에서는 null 필드를 생략하고 상태만 직렬화하는지 확인합니다. */
     @Test

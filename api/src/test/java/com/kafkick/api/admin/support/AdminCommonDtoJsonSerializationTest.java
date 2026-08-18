@@ -13,8 +13,12 @@ import tools.jackson.databind.ObjectMapper;
 @AdminJsonTest
 class AdminCommonDtoJsonSerializationTest {
 
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    AdminCommonDtoJsonSerializationTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** 일반 과거 목록 응답이 nextBeforeCursor와 hasOlder를 제공하는지 검증합니다. */
     @Test

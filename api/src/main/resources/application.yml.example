@@ -14,8 +14,6 @@ server:
   shutdown: graceful
 
 admin:
-  pagination:
-    default-limit: ${ADMIN_PAGINATION_DEFAULT_LIMIT:50}
   analytics:
     max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
 

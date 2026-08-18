@@ -13,7 +13,9 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 
 /** 운영 현황 Provider 계약이 Core 경계에서 안전하게 사용되는지 검증합니다. */
 class AdminOverviewCoreContractTest {
@@ -94,6 +96,23 @@ class AdminOverviewCoreContractTest {
                 .containsExactly(2L, 3L, 1L, 4L);
     }
 
+    /** 심각도와 감지 시각이 같아도 couponId가 입력 순서와 무관한 최종 순서를 결정합니다. */
+    @Test
+    void actionItemSnapshotUsesCouponIdAsDeterministicTieBreaker() {
+        AdminOverviewSnapshot.OperationActionItem lowerId = actionItem(1L, Severity.CRITICAL, FROM);
+        AdminOverviewSnapshot.OperationActionItem higherId = actionItem(2L, Severity.CRITICAL, FROM);
+
+        AdminOverviewSnapshot.ActionItemSnapshot forward =
+                new AdminOverviewSnapshot.ActionItemSnapshot(2, List.of(lowerId, higherId));
+        AdminOverviewSnapshot.ActionItemSnapshot reversed =
+                new AdminOverviewSnapshot.ActionItemSnapshot(2, List.of(higherId, lowerId));
+
+        assertThat(forward.topItems())
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                .containsExactly(1L, 2L);
+        assertThat(reversed.topItems()).isEqualTo(forward.topItems());
+    }
+
     /** 호출자가 원본 목록을 바꿔도 Snapshot의 상위 목록은 변하지 않습니다. */
     @Test
     void actionItemSnapshotDefensivelyCopiesTopItems() {
@@ -126,6 +145,55 @@ class AdminOverviewCoreContractTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /** 발급 흐름이 생성 후 원본 points 변경의 영향을 받지 않고 수정 불가능한 목록을 노출합니다. */
+    @Test
+    void issuanceFlowDefensivelyCopiesPoints() {
+        List<AdminOverviewSnapshot.IssuanceRatePoint> points = new ArrayList<>();
+        points.add(new AdminOverviewSnapshot.IssuanceRatePoint(FROM, 10.0));
+
+        AdminOverviewSnapshot.IssuanceFlow flow = new AdminOverviewSnapshot.IssuanceFlow(
+                10.0, FROM, TO, points,
+                AdminOverviewSnapshot.IssuanceFlowState.NORMAL, Duration.ZERO);
+        points.clear();
+
+        assertThat(flow.points()).hasSize(1);
+        assertThatThrownBy(() -> flow.points().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /** 고객 결과가 생성 후 원본 outcomes 변경의 영향을 받지 않고 수정 불가능한 목록을 노출합니다. */
+    @Test
+    void customerOutcomeSummaryDefensivelyCopiesOutcomes() {
+        List<AdminOverviewSnapshot.CustomerOutcome> outcomes = new ArrayList<>();
+        outcomes.add(new AdminOverviewSnapshot.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, 1.0, "정상 발급"));
+
+        AdminOverviewSnapshot.CustomerOutcomeSummary summary =
+                new AdminOverviewSnapshot.CustomerOutcomeSummary(FROM, TO, 1, outcomes);
+        outcomes.clear();
+
+        assertThat(summary.outcomes()).hasSize(1);
+        assertThatThrownBy(() -> summary.outcomes().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /** 전체 Snapshot이 생성 후 원본 campaigns 변경의 영향을 받지 않고 수정 불가능한 목록을 노출합니다. */
+    @Test
+    void snapshotDefensivelyCopiesCampaigns() {
+        List<AdminOverviewSnapshot.CampaignOverview> campaigns = new ArrayList<>();
+        campaigns.add(campaign(1L));
+        AdminOverviewSnapshot.Observation<List<AdminOverviewSnapshot.CampaignOverview>> observation =
+                new AdminOverviewSnapshot.Observation<>(campaigns, SourceStatus.VALID, FROM);
+
+        AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
+                FROM, null, null, null, null, null, null, null, null, null, observation, null);
+        campaigns.clear();
+
+        assertThat(snapshot.campaigns().value()).hasSize(1);
+        assertThatThrownBy(() -> snapshot.campaigns().value().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
     private AdminOverviewSnapshot.OperationActionItem actionItem(
             Long couponId, Severity severity, Instant detectedAt) {
         return new AdminOverviewSnapshot.OperationActionItem(
@@ -141,5 +209,11 @@ class AdminOverviewCoreContractTest {
                         AdminOverviewSnapshot.ActionCode.QUEUE_STALLED,
                         "대기열 확인",
                         AdminOverviewSnapshot.TargetScreen.METRICS));
+    }
+
+    private AdminOverviewSnapshot.CampaignOverview campaign(Long couponId) {
+        return new AdminOverviewSnapshot.CampaignOverview(
+                1, couponId, "캠페인", "브랜드", CouponStatus.OPEN, FROM, TO, Severity.NONE,
+                null, null, null, AdminOverviewSnapshot.CustomerImpact.NONE, "영향 없음", null);
     }
 }

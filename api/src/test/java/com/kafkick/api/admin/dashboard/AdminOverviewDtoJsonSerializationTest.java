@@ -35,8 +35,12 @@ class AdminOverviewDtoJsonSerializationTest {
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-17T05:03:57Z");
     private static final Instant OPENING_OBSERVED_AT = Instant.parse("2026-08-17T05:03:56Z");
 
+    private final ObjectMapper objectMapper;
+
     @Autowired
-    private ObjectMapper objectMapper;
+    AdminOverviewDtoJsonSerializationTest(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     /** KPI 누락 필드와 서버 권장 행동 구조가 JSON에서 손실되는 회귀를 방지합니다. */
     @Test
