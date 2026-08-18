@@ -205,6 +205,42 @@ class CouponUseRepositoryTest {
     }
 
     @Test
+    @DisplayName("같은 발급 건과 주문의 사용 실적은 중복 저장할 수 없다")
+    void rejectDuplicateIssuanceAndOrderUsage() {
+        insertUsage(30L, USED_AT.plusSeconds(60));
+
+        assertThatThrownBy(() ->
+                insertUsage(30L, USED_AT.plusSeconds(120))
+        ).isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @DisplayName("한 발급 건에는 활성 사용 실적을 하나만 저장할 수 있다")
+    void rejectMultipleActiveUsagesForIssuance() {
+        insertUsage(30L, null);
+
+        assertThatThrownBy(() -> insertUsage(31L, null))
+                .isInstanceOf(DataAccessException.class);
+    }
+
+    @Test
+    @DisplayName("취소된 사용 이력을 보존하면서 다른 주문으로 다시 사용할 수 있다")
+    void allowReuseAfterCanceledUsage() {
+        insertUsage(30L, USED_AT.plusSeconds(60));
+        insertUsage(31L, null);
+
+        assertThat(countRows("issuance_usages")).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM issuance_usages
+                WHERE issuance_id = 100 AND canceled_at IS NULL
+                """,
+                Integer.class
+        )).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("회수된 멱등 선점은 이전 소유자의 완료를 거부한다")
     void rejectCompletionFromPreviousClaimOwner() {
         Instant reclaimedAt = USED_AT.plusSeconds(31);
@@ -536,6 +572,23 @@ class CouponUseRepositoryTest {
                 LocalDateTime.of(2026, 8, 25, 5, 30),
                 LocalDateTime.of(2026, 8, 18, 5, 30),
                 LocalDateTime.of(2026, 8, 18, 5, 30)
+        );
+    }
+
+    private void insertUsage(Long orderId, Instant canceledAt) {
+        jdbcTemplate.update(
+                """
+                INSERT INTO issuance_usages (
+                    issuance_id, order_id, discount_amount,
+                    used_at, canceled_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                100L,
+                orderId,
+                5_000,
+                Timestamp.from(USED_AT),
+                canceledAt == null ? null : Timestamp.from(canceledAt),
+                Timestamp.from(USED_AT)
         );
     }
 

@@ -5,6 +5,8 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,6 +21,8 @@ import com.kafkick.core.coupon.port.IdempotencyRepository;
 
 @Repository
 public class IdempotencyRepositoryImpl implements IdempotencyRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyRepositoryImpl.class);
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -178,7 +182,7 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
             Instant claimedAt
     ) {
         try {
-            jdbcTemplate.update(
+            int deleted = jdbcTemplate.update(
                     """
                     DELETE FROM idempotency_records
                     WHERE idem_key = ?
@@ -190,6 +194,9 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
                     requestHash,
                     Timestamp.from(claimedAt)
             );
+            if (deleted == 0) {
+                log.debug("멱등 선점 해제 대상이 없습니다. idempotencyKey={}", key);
+            }
         } catch (DataAccessException exception) {
             throw new IdempotencyPersistenceException(
                     "실패한 멱등 요청 정리에 실패했습니다.",
