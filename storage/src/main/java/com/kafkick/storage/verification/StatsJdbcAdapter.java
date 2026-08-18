@@ -151,16 +151,17 @@ public class StatsJdbcAdapter implements StatsRepository {
              GROUP BY day_of_week, hour_of_day
             """;
 
-    private static final String SELECT_WITHOUT_ISSUE_HISTORY = """
+    private static final String SELECT_BROKEN_ISSUE_HISTORY = """
             SELECT %s
               FROM issuances i
+              LEFT JOIN (SELECT issuance_id, COUNT(*) AS issue_events
+                           FROM issuance_histories
+                          WHERE event_type = 'ISSUE'
+                            AND id <= :maxHistoryId
+                            AND created_at <= :asOf
+                          GROUP BY issuance_id) h ON h.issuance_id = i.id
              WHERE i.updated_at <= :asOf
-               AND NOT EXISTS (SELECT 1
-                                 FROM issuance_histories h
-                                WHERE h.issuance_id = i.id
-                                  AND h.event_type = 'ISSUE'
-                                  AND h.id <= :maxHistoryId
-                                  AND h.created_at <= :asOf)
+               AND COALESCE(h.issue_events, 0) <> 1
             """;
 
     private final JdbcClient jdbcClient;
@@ -206,12 +207,12 @@ public class StatsJdbcAdapter implements StatsRepository {
 
     /**
      * <b>짝으로 본다.</b> 총합 비교는 대칭 오차를 못 잡는다 —
-     * {@code StatsRepository#countIssuancesWithoutIssueHistory} javadoc 에 근거를 적었다.
+     * {@code StatsRepository#countIssuancesWithBrokenIssueHistory} javadoc 에 근거를 적었다.
      */
 
     @Override
-    public int countIssuancesWithoutIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {
-        return jdbcClient.sql(SELECT_WITHOUT_ISSUE_HISTORY.formatted("COUNT(*)"))
+    public int countIssuancesWithBrokenIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {
+        return jdbcClient.sql(SELECT_BROKEN_ISSUE_HISTORY.formatted("COUNT(*)"))
                 .param("asOf", asOf)
                 .param("maxHistoryId", frozenMaxHistoryId)
                 .query(Integer.class)
@@ -219,10 +220,10 @@ public class StatsJdbcAdapter implements StatsRepository {
     }
 
     @Override
-    public List<Long> sampleIssuancesWithoutIssueHistory(
+    public List<Long> sampleIssuancesWithBrokenIssueHistory(
             LocalDateTime asOf, long frozenMaxHistoryId, int limit) {
         return jdbcClient.sql(
-                        SELECT_WITHOUT_ISSUE_HISTORY.formatted("i.id")
+                        SELECT_BROKEN_ISSUE_HISTORY.formatted("i.id")
                                 + " ORDER BY i.id LIMIT " + limit)
                 .param("asOf", asOf)
                 .param("maxHistoryId", frozenMaxHistoryId)

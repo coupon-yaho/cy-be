@@ -504,19 +504,20 @@ public class VerifyJobConfig {
                             HourlyIssued.fillAll(stats.issuedByHour(frozenMaxHistory, asOf));
                     stats.appendHourlyStats(runId, hourly);
 
-                    // 발급건마다 ISSUE 이력이 정확히 하나여야 한다. 총합 비교로 두면
-                    // 대칭 오차를 못 잡는다 — 이력 없는 발급건 하나와 이력이 둘인 발급건
-                    // 하나가 있으면 총합이 같아 통과한다. finding_count 비교를 거부한 것과
-                    // 같은 형태다.
+                    // 발급건마다 ISSUE 이력이 정확히 하나여야 한다. 0건과 2건 이상을 함께
+                    // 본다 — 없는 쪽만 보면 이력이 둘인 발급건이 통과하고, hourly_stats 는
+                    // 이력 행을 세므로 과대 집계된 스냅샷이 COMPLETE 로 닫힌다.
+                    // 총합 비교로 두면 그 둘이 서로를 지워 아무것도 안 남는다 —
+                    // finding_count 비교를 거부한 것과 같은 형태다.
                     //
                     // 이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력 없는 발급건은
                     // asof_state 에 안 실려 V3·V5 의 시야 밖이고 V4 는 반대 방향만 본다.
-                    int orphaned = stats.countIssuancesWithoutIssueHistory(asOf, frozenMaxHistory);
-                    if (orphaned > 0) {
+                    int brokenPairs = stats.countIssuancesWithBrokenIssueHistory(asOf, frozenMaxHistory);
+                    if (brokenPairs > 0) {
                         throw new BusinessException(
-                                VerificationErrorCode.ISSUANCE_WITHOUT_ISSUE_HISTORY,
-                                "ISSUE 이력이 없는 발급건 " + orphaned + "건. 표본="
-                                        + stats.sampleIssuancesWithoutIssueHistory(
+                                VerificationErrorCode.ISSUE_HISTORY_NOT_EXACTLY_ONE,
+                                "ISSUE 이력이 정확히 하나가 아닌 발급건 " + brokenPairs + "건. 표본="
+                                        + stats.sampleIssuancesWithBrokenIssueHistory(
                                                 asOf, frozenMaxHistory, SAMPLE_SIZE));
                     }
 

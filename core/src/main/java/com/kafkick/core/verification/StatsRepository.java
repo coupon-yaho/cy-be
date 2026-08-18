@@ -57,24 +57,29 @@ public interface StatsRepository {
     int couponCount(LocalDateTime asOf);
 
     /**
-     * <b>{@code ISSUE} 이력이 없는 발급건.</b> CLEAN 에서는 발급건마다 그 이력이 정확히 하나이므로
-     * 0 이어야 한다 — 0 이 아니면 데이터가 구조적으로 깨진 것이다.
+     * <b>{@code ISSUE} 이력이 정확히 하나가 아닌 발급건.</b> CLEAN 에서는 발급건마다 그 이력이
+     * 하나이므로 0 이어야 한다 — 0 이 아니면 데이터가 구조적으로 깨진 것이다.
      *
-     * <p><b>총합 비교로 쓰면 안 된다.</b> 한때
+     * <p><b>0건과 2건 이상을 <i>같이</i> 본다.</b> 한때 {@code NOT EXISTS} 만 두어 없는 쪽만
+     * 봤는데, 이력이 둘인 발급건은 통과한다 — {@code hourly_stats} 는 이력 행을 세므로 그만큼
+     * <b>과대 집계된 스냅샷이 COMPLETE 로 닫힌다.</b> 한 방향만 보는 것은 짝 비교가 아니다.
+     *
+     * <p><b>총합 비교로 쓰면 안 된다.</b> 그 앞에는
      * {@code COUNT(issuances) == SUM(hourly)} 로 뒀는데 <b>대칭 오차를 못 잡는다</b> —
      * 이력 없는 발급건 하나와 이력이 둘인 발급건 하나가 있으면 총합이 같아 그냥 통과한다.
      * 이 저장소가 {@code finding_count} 비교를 거부한 것과 정확히 같은 형태다
-     * (<i>"오탐 400 + 누락 400 도 800"</i>).
+     * (<i>"오탐 400 + 누락 400 도 800"</i>). 그 대칭 오차는 <b>이 검사 안에서도</b> 성립해서,
+     * 두 방향을 한 질의로 함께 센다.
      *
      * <p>이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력이 없는 발급건은
      * {@code asof_state} 에 안 실려 V3·V5 의 시야 밖이고, V4 는 반대 방향(고아 이력)만 본다.
      *
      * <p>창은 리플레이와 같다 — {@code id <= maxHistoryId AND created_at <= asOf}.
      */
-    int countIssuancesWithoutIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId);
+    int countIssuancesWithBrokenIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId);
 
     /** 위 질의가 0 이 아닐 때 메시지에 실을 발급건 id 표본. */
-    List<Long> sampleIssuancesWithoutIssueHistory(
+    List<Long> sampleIssuancesWithBrokenIssueHistory(
             LocalDateTime asOf, long frozenMaxHistoryId, int limit);
 
     /**

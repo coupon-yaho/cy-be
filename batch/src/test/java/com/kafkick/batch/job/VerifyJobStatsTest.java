@@ -239,8 +239,9 @@ class VerifyJobStatsTest {
                 .as("구조 파손이다 — 판정 결과가 아니라 실행 실패로 끝나야 한다")
                 .isEqualTo(BatchStatus.FAILED);
         assertThat(failureMessagesOf(execution))
-                .anyMatch(message -> message.contains("ISSUE 이력이 없는 발급건 1건")
-                        && message.contains(String.valueOf(orphan)));
+                .anyMatch(message ->
+                        message.contains("ISSUE 이력이 정확히 하나가 아닌 발급건 1건")
+                                && message.contains(String.valueOf(orphan)));
         assertThat(latestStatsRun())
                 .as("뷰가 가리킬 스냅샷이 없어야 한다 — stats_status 가 COMPLETE 로 안 닫힌다")
                 .isNull();

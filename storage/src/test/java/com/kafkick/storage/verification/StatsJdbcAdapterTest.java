@@ -392,8 +392,8 @@ class StatsJdbcAdapterTest {
                 null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
         long orphan = seed.issuance(IssuanceStatus.ISSUED);
 
-        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT)).isEqualTo(1);
-        assertThat(adapter.sampleIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT, 10))
+        assertThat(adapter.countIssuancesWithBrokenIssueHistory(AS_OF, NO_LIMIT)).isEqualTo(1);
+        assertThat(adapter.sampleIssuancesWithBrokenIssueHistory(AS_OF, NO_LIMIT, 10))
                 .as("메시지에 실을 표본이 그 발급건을 지목해야 한다")
                 .containsExactly(orphan);
     }
@@ -407,7 +407,7 @@ class StatsJdbcAdapterTest {
      * <i>"오탐 400 + 누락 400 도 800"</i>. 짝으로 봐야 잡힌다.
      */
     @Test
-    @DisplayName("이력 없는 발급건 하나 + 이력 둘인 발급건 하나 — 총합은 같지만 잡는다")
+    @DisplayName("이력 없는 발급건 하나 + 이력 둘인 발급건 하나 — 총합은 같지만 둘 다 잡는다")
     void catchAsymmetricMismatchThatSumsHide() {
         long twoHistories = seed.issuance(IssuanceStatus.ISSUED);
         seed.history(twoHistories, IssuanceEventType.ISSUE,
@@ -422,11 +422,40 @@ class StatsJdbcAdapterTest {
         assertThat(issueHistories)
                 .as("발급건 2건 · ISSUE 이력 2건 — 총합 비교는 여기서 통과한다")
                 .isEqualTo(2);
-        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT))
-                .as("짝으로 보면 잡힌다")
+        assertThat(adapter.countIssuancesWithBrokenIssueHistory(AS_OF, NO_LIMIT))
+                .as("두 발급건이 다 깨져 있다. 없는 쪽만 보면 하나만 나온다")
+                .isEqualTo(2);
+        assertThat(adapter.sampleIssuancesWithBrokenIssueHistory(AS_OF, NO_LIMIT, 10))
+                .containsExactlyInAnyOrder(twoHistories, orphan);
+    }
+
+    /**
+     * <b>중복만 있는 경우.</b> {@code NOT EXISTS} 로만 두면 이 데이터가 <b>통째로 통과한다</b> —
+     * 이력 없는 발급건이 하나도 없어 짝이 다 맞는 것처럼 보인다.
+     *
+     * <p>그런데 {@code hourly_stats} 는 <b>이력 행</b>을 세므로 발급 1건에 2가 적힌다.
+     * 대시보드에서는 데이터 파손이 아니라 "그 시각에 발급이 많았다" 로 보이고, 스냅샷은
+     * {@code COMPLETE} 로 닫혀 뷰에 걸린다.
+     */
+    @Test
+    @DisplayName("ISSUE 이력이 둘인 발급건도 잡는다 — hourly 가 과대 집계된다")
+    void catchDuplicateIssueHistory() {
+        long duplicated = seed.issuance(IssuanceStatus.ISSUED);
+        seed.history(duplicated, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+        seed.history(duplicated, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(2));
+
+        assertThat(adapter.issuedByHour(NO_LIMIT, AS_OF).stream()
+                .mapToInt(HourlyIssued::issuedTotal)
+                .sum())
+                .as("발급은 1건인데 hourly 는 2를 적는다 — 이것이 막으려는 상태다")
+                .isEqualTo(2);
+        assertThat(adapter.countIssuancesWithBrokenIssueHistory(AS_OF, NO_LIMIT))
+                .as("이력 없는 발급건은 하나도 없다. 없는 쪽만 보면 0 이라 통과한다")
                 .isEqualTo(1);
-        assertThat(adapter.sampleIssuancesWithoutIssueHistory(AS_OF, NO_LIMIT, 10))
-                .containsExactly(orphan);
+        assertThat(adapter.sampleIssuancesWithBrokenIssueHistory(AS_OF, NO_LIMIT, 10))
+                .containsExactly(duplicated);
     }
 
     /** 창은 리플레이와 같다. 얼린 상한 밖의 이력은 "있다" 로 세지 않는다. */
@@ -437,8 +466,8 @@ class StatsJdbcAdapterTest {
         long frozen = seed.history(issuanceId, IssuanceEventType.ISSUE,
                 null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
 
-        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, frozen)).isZero();
-        assertThat(adapter.countIssuancesWithoutIssueHistory(AS_OF, frozen - 1))
+        assertThat(adapter.countIssuancesWithBrokenIssueHistory(AS_OF, frozen)).isZero();
+        assertThat(adapter.countIssuancesWithBrokenIssueHistory(AS_OF, frozen - 1))
                 .as("그 이력이 창 밖이면 이 발급건은 이력이 없는 것과 같다")
                 .isEqualTo(1);
     }

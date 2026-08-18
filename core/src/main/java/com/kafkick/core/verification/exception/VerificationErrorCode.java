@@ -68,7 +68,8 @@ public enum VerificationErrorCode implements ErrorCode {
     ),
 
     /**
-     * 발급건에 {@code ISSUE} 이력이 없다. 데이터 정합 사고이므로 500 이다.
+     * 발급건의 {@code ISSUE} 이력이 정확히 하나가 아니다(없거나 둘 이상).
+     * 데이터 정합 사고이므로 500 이다.
      *
      * <p><b>{@code DATASET_MUTATED_DURING_RUN} 과 갈라야 한다.</b> 그쪽은 <b>재시도로 낫는다</b> —
      * 쓰기를 멈추고 다시 돌리면 통과한다. 이쪽은 멈춰도 같은 자리에서 영원히 죽는다.
@@ -78,10 +79,10 @@ public enum VerificationErrorCode implements ErrorCode {
      * 없다 — 어느 자리는 조치를 적고 어느 자리는 왜 이 실행을 믿을 수 없는지만 적는다.
      * 가르는 기준은 문구가 아니라 <b>재시도 가능성</b>이다.
      */
-    ISSUANCE_WITHOUT_ISSUE_HISTORY(
+    ISSUE_HISTORY_NOT_EXACTLY_ONE(
             500,
             "VERIFICATION-010",
-            "ISSUE 이력이 없는 발급건이 있습니다."
+            "ISSUE 이력이 정확히 하나가 아닌 발급건이 있습니다."
     );
 
     private final int status;
