@@ -50,16 +50,6 @@ class ActuatorWildcardExposureTest {
     @LocalManagementPort
     private int managementPort;
 
-    private HttpResponse<String> get(String path) throws IOException, InterruptedException {
-        return CLIENT.send(
-                HttpRequest.newBuilder(
-                                URI.create("http://localhost:" + managementPort + "/actuator/" + path))
-                        .timeout(Duration.ofSeconds(10))
-                        .GET()
-                        .build(),
-                HttpResponse.BodyHandlers.ofString());
-    }
-
     @Test
     @DisplayName("include 가 * 여도 위험한 열하나는 닫혀 있다")
     void excludeStillClosesThemUnderWildcard() throws Exception {
@@ -81,5 +71,15 @@ class ActuatorWildcardExposureTest {
                     .as("/actuator/%s 가 열려 있다. exclude 가 지워졌거나 안 먹는다", path)
                     .isEqualTo(404);
         }
+    }
+
+    private HttpResponse<String> get(String path) throws IOException, InterruptedException {
+        return CLIENT.send(
+                HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + managementPort + "/actuator/" + path))
+                        .timeout(Duration.ofSeconds(10))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
     }
 }
