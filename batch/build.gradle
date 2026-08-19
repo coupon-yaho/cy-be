@@ -6,6 +6,7 @@ dependencies {
     // 어댑터는 런타임에만. 배치가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
     // 배치는 JPA 엔티티를 만들지 않고 DataSource + Spring Batch JDBC 리더/라이터로 간다.
     implementation project(':core')
+    testImplementation testFixtures(project(':core'))
     runtimeOnly project(':storage')
     testImplementation testFixtures(project(':storage'))
 
