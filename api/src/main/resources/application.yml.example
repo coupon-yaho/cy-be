@@ -51,5 +51,10 @@ spring:
 #    찾을 기여자(obsDb)가 사라져 기동이 실패한다. 끄려면 두 파일을 같이 고쳐야 한다.
 #    설정 값(풀 크기·타임아웃·계정)은 공유 파일인 storage.yml 이 정한다.
 observation:
+  # LIVE 정합성 심각도 임계값입니다. FINAL 판정의 0 기준에는 영향을 주지 않습니다.
+  consistency:
+    severity:
+      warn-threshold: ${CONSISTENCY_WARN_THRESHOLD:10}
+      critical-threshold: ${CONSISTENCY_CRITICAL_THRESHOLD:100}
   datasource:
     enabled: true

@@ -8,6 +8,18 @@ import java.util.EnumSet;
 import java.util.Map;
 import java.util.Objects;
 
+/**
+ * 한 스냅샷의 정합성 계산 결과입니다.
+ *
+ * <p>LIVE에서는 {@code verdict}가 없으며 현재 계산 가능한 값이 하나도 없으면
+ * {@code severity}도 {@code null}입니다. FINAL에서는 verdict와 severity가 항상 존재합니다.
+ *
+ * @param gaps 확정된 네 종류의 gap; 키는 항상 모두 포함됨
+ * @param overIssued 총 발급 수량을 초과한 활성 쿠폰 수
+ * @param phase 평가 단계
+ * @param verdict FINAL 합격 여부; LIVE에서는 {@code null}
+ * @param severity 현재 최고 심각도; LIVE에서 평가 가능한 값이 없으면 {@code null}
+ */
 public record ConsistencyEvaluation(
         Map<ConsistencyGapType, GapValue> gaps,
         GapValue overIssued,
@@ -16,6 +28,7 @@ public record ConsistencyEvaluation(
         Severity severity
 ) {
 
+    /** 단계별 필수 필드와 네 종류 gap의 완전성을 검증하고 맵을 불변으로 복사합니다. */
     public ConsistencyEvaluation {
         Objects.requireNonNull(gaps, "gaps");
         Objects.requireNonNull(overIssued, "overIssued");
