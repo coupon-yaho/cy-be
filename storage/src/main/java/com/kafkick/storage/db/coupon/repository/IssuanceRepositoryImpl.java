@@ -7,6 +7,7 @@ import java.util.Optional;
 import jakarta.persistence.EntityManager;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,8 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
+import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
+import com.kafkick.core.coupon.exception.CouponUsePersistenceException;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
 import com.kafkick.storage.db.coupon.mapper.IssuanceEntityMapper;
@@ -85,13 +88,26 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
             IssuanceStatus nextStatus,
             Instant updatedAt
     ) {
-        return issuanceJpaRepository.updateStatusIfCurrent(
-                issuanceId,
-                memberId,
-                currentStatus,
-                nextStatus,
-                updatedAt
-        ) == 1;
+        try {
+            return issuanceJpaRepository.updateStatusIfCurrent(
+                    issuanceId,
+                    memberId,
+                    currentStatus,
+                    nextStatus,
+                    updatedAt
+            ) == 1;
+        } catch (DataAccessException exception) {
+            if (currentStatus == IssuanceStatus.USED) {
+                throw new CouponCancelUsePersistenceException(
+                        "쿠폰 사용 취소 상태 저장에 실패했습니다.",
+                        exception
+                );
+            }
+            throw new CouponUsePersistenceException(
+                    "쿠폰 사용 상태 저장에 실패했습니다.",
+                    exception
+            );
+        }
     }
 
     private static boolean isMemberDuplicate(Throwable throwable) {
