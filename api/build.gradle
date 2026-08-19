@@ -35,6 +35,12 @@ dependencies {
 
     // 테스트는 scrape 출력과 레지스트리 빈을 직접 봐야 해서 컴파일 타임에 필요하다.
     testImplementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // PrometheusScrapeConfigContractTest 가 org.yaml.snakeyaml.Yaml 을 직접 쓴다. 지금은
+    // spring-boot-starter 가 전이로 끌어와서 선언 없이도 컴파일되지만, 그건 저쪽 사정이다 —
+    // Boot 가 이 전이 의존을 빼거나 좌표를 바꾸는 순간 우리 테스트가 컴파일에서 죽고,
+    // 원인은 우리 build.gradle 어디에도 안 적혀 있다. 버전은 BOM 이 정한다.
+    testImplementation 'org.yaml:snakeyaml'
 }
 
 bootJar {
@@ -43,4 +49,24 @@ bootJar {
 
 jar {
     enabled = false
+}
+
+tasks.named('test') {
+    // PrometheusScrapeConfigContractTest 는 저장소 루트의 설정 파일을 읽는다. 클래스패스 밖이라
+    // 선언하지 않으면 Gradle 이 그 파일들의 변경을 모르고 test 를 UP-TO-DATE 로 건너뛴다.
+    //
+    // 실측 — 선언 전에는 prometheus.yml 의 batch 대상 포트를 바꿔도 테스트가 아예 돌지 않아
+    // 초록불이었다(--rerun-tasks 를 주면 정상적으로 깨졌다). 가드가 있는데 안 도는 상태가
+    // 가드가 없는 것보다 나쁘다 — 초록불이 검사했다는 증거로 읽히기 때문이다.
+    inputs.files(
+            rootProject.file('infra/prometheus/prometheus.yml'),
+            rootProject.file('docker-compose.yml'),
+            rootProject.file('batch/src/main/resources/management.yml.example'),
+            // batch 의 관측 풀 스위치와 위 management.yml.example 이 한 쌍이다.
+            rootProject.file('batch/src/main/resources/application.yml.example'),
+            // api 자신의 example 은 이 모듈 리소스라 이미 입력이지만, 이 테스트가 읽는다는
+            // 사실을 목록에서 읽을 수 있게 명시한다. 리소스 취급이 바뀌어도 여기가 남는다.
+            file('src/main/resources/management.yml.example'))
+        .withPropertyName('prometheusScrapeContractInputs')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
