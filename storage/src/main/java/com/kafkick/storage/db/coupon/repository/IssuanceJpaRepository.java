@@ -3,6 +3,7 @@ package com.kafkick.storage.db.coupon.repository;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -14,6 +15,39 @@ import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
 
 public interface IssuanceJpaRepository
         extends JpaRepository<IssuanceEntity, Long> {
+
+    @Query(
+            value = """
+                    SELECT issuance.id AS issuanceId,
+                           issuance.couponId AS couponRoundId,
+                           issuance.code AS code,
+                           issuance.status AS status,
+                           couponRound.name AS name,
+                           couponRound.policyType AS policyType,
+                           couponRound.discountRate AS discountRate,
+                           couponRound.maxDiscountAmount AS maxDiscountAmount,
+                           couponRound.discountAmount AS discountAmount,
+                           issuance.issuedAt AS issuedAt,
+                           issuance.expiresAt AS expiresAt
+                    FROM IssuanceEntity issuance
+                    JOIN CouponRoundEntity couponRound
+                      ON couponRound.id = issuance.couponId
+                    WHERE issuance.memberId = :memberId
+                      AND (:status IS NULL OR issuance.status = :status)
+                    ORDER BY issuance.issuedAt DESC, issuance.id DESC
+                    """,
+            countQuery = """
+                    SELECT COUNT(issuance.id)
+                    FROM IssuanceEntity issuance
+                    WHERE issuance.memberId = :memberId
+                      AND (:status IS NULL OR issuance.status = :status)
+                    """
+    )
+    Page<MemberCouponProjection> findMemberCoupons(
+            @Param("memberId") Long memberId,
+            @Param("status") IssuanceStatus status,
+            Pageable pageable
+    );
 
     @Query("""
             SELECT issuance
