@@ -14,12 +14,18 @@ spring:
   config:
     import: classpath:storage.yml
 
-  # 지금은 컨트롤러가 0건이라 매핑 없는 톰캣만 뜬다. actuator 도 없어 헬스 엔드포인트가 없다.
+  # 지금은 컨트롤러가 0건이라 업무 포트에는 매핑 없는 톰캣만 뜬다.
   #
   # servlet 으로 두는 것은 뒤에 올 verify 온디맨드 트리거(POST /api/v1/admin/verify)를
-  # 미리 받기 위한 것이다. 관리 포트 분리(management.server.port)는 아직 없다 —
-  # 그 키는 storage.yml 에 없으니 생길 때 아래가 아니라 이 첫 문서에 둔다.
-  # Compose 에서 이 포트를 외부로 노출하지 않는 것이 admin 방어의 실체다.
+  # 미리 받기 위한 것이다. 관리 포트는 아래 management 블록이 따로 연다 —
+  # 그 키는 storage.yml 에 없으므로 예고대로 뒤 문서가 아니라 이 첫 문서에 둔다.
+  #
+  # ⚠️ 업무 포트는 이미 밖에서 닿는다. compose 가 BATCH_HOST_PORT 로 호스트에 내보낸다.
+  #   그러니 **admin 트리거를 이 포트에 평범한 컨트롤러로 두면 방어가 하나도 없다.**
+  #   PRD 는 그것을 /actuator/env 와 같은 급의 구멍으로 묶고 "관리 포트 분리" 를 대응으로 적었다.
+  #   어디에 둘지는 이 티켓 밖이다 — 커스텀 actuator 엔드포인트로 관리 포트에 올리거나,
+  #   compose 의 업무 포트 매핑을 없애거나 둘 중 하나를 그 티켓에서 정한다.
+  #   밖에 안 나가는 것은 관리 포트뿐이다. 그 이상을 이 파일이 약속하지 않는다.
   main:
     web-application-type: servlet
 
@@ -38,6 +44,52 @@ spring:
 
 server:
   port: ${BATCH_PORT:9090}
+  error:
+    # 이 티켓의 요청 범위 밖이지만 같은 파일·같은 성격이라 같이 넣는다.
+    # batch 는 starter-web 을 갖고 있어 예외가 응답으로 나갈 표면이 원래 있었다.
+    include-stacktrace: never
+
+# 업무 포트와 관측 포트를 나눈다. 한 포트에 얹으면 verify 트리거와 지표가 같은 문에 걸려,
+# 그 문을 열고 닫는 판단이 하나로 묶인다.
+#
+# ⚠️ compose 를 쓰는 사람에게 — 9091 이라는 숫자가 두 뜻이다.
+#
+#     호스트 9091  →  컨테이너 9090   업무 (verify 트리거).  이게 맞다
+#        내보내지 않음  컨테이너 9091   관리 (actuator)
+#
+#   `ports: - "9091:9091"` 로 쓰지 마라. 숫자가 맞아떨어져 보이지만 그러면
+#   **관리 포트가 호스트에 열리고** 업무 포트는 아무도 못 가리킨다. 한 번에 둘이 깨진다.
+#   호스트 쪽 번호는 BATCH_HOST_PORT 이고 우변은 언제나 9090 이다.
+#
+#   관제의 스크레이프 대상은 컨테이너 기준 batch:9091 이다 — 내부 네트워크에서 긁는다.
+#
+# Compose 에 이 포트를 매핑하지 마라. Prometheus 가 내부 네트워크에서 긁는다.
+# 호스트로 내보내면 인증 없이 전 지표가 열린다.
+management:
+  server:
+    port: ${BATCH_MANAGEMENT_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        # 지금 /actuator/env 를 막는 것은 exclude 가 아니라 include 다 — 화이트리스트라
+        # 여기 없는 것은 애초에 안 열린다. include 를 넓히지 마라. env 는 AES 키를 평문으로
+        # 내보낸다.
+        #
+        # exclude 는 그럼에도 남긴다. 누가 include 를 * 로 바꾸는 날의 이중 방어다.
+        # 그 상황을 ActuatorWildcardExposureTest 가 재현해서 이 줄을 지킨다.
+        include: health,metrics,prometheus
+        # include 가 * 로 넓어지는 날 실제로 열리는 것을 재 봤다 — 16개다. 그중 위험한 것을
+        # 전부 적는다. loggers 는 읽기가 아니라 **쓰기**다(POST 로 런타임 로그 레벨 변경).
+        # 나머지는 정찰용이다 — 마이그레이션 이력·의존성 목록·크론 구조·스레드 덤프.
+        #
+        # 이 목록이 방어의 본체는 아니다. 스프링이 엔드포인트를 추가하면 목록은 낡는다.
+        # 본체는 include 화이트리스트고, ActuatorExposureTest 가 **열린 것의 집합 전체**를
+        # 단언해 그것을 지킨다.
+        exclude: env,configprops,beans,heapdump,loggers,threaddump,mappings,scheduledtasks,conditions,flyway,sbom
+  endpoint:
+    health:
+      # 상세를 켜면 DB 접속 정보와 컴포넌트 구성이 그대로 나간다.
+      show-details: never
 
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 스케줄러가 멈춘다.

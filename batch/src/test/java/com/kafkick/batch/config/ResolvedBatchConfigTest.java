@@ -56,6 +56,9 @@ class ResolvedBatchConfigTest {
      */
     private static final String POOL_SIZE = "7";
 
+    /** 플레이스홀더 기본값(9091)과 다른 값. 같은 값을 주면 키 경로가 죽어도 구분이 안 된다. */
+    private static final String MANAGEMENT_PORT = "9391";
+
     /** 밀폐가 깨졌는지 보려고 일부러 심는 키. 설정 파일이 이기면 이 값은 안 보인다. */
     private static final String POLLUTED_KEY = "spring.flyway.enabled";
 
@@ -117,7 +120,8 @@ class ResolvedBatchConfigTest {
                 "--VERIFY_REPLAY_WINDOW_SIZE=11",
                 // 읽는 코드가 아직 없다. 키 경로가 살아 있는지만 본다 — 정리 Step 이 들어올 때
                 // 그 티켓은 손잡이가 연결돼 있다는 전제 위에서 시작한다.
-                "--ASOF_STATE_KEEP_RUNS=3")) {
+                "--ASOF_STATE_KEEP_RUNS=3",
+                "--BATCH_MANAGEMENT_PORT=" + MANAGEMENT_PORT)) {
             ConfigurableEnvironment environment = context.getEnvironment();
 
             assertThat(environment.getProperty("spring.flyway.enabled"))
@@ -142,7 +146,45 @@ class ResolvedBatchConfigTest {
             ResolvedConfigChecks.assertReadsResolvedStorage(environment);
             ResolvedConfigChecks.assertEveryPlaceholderResolves(environment);
             assertBatchKeysAreAlive(environment);
+            assertManagementSurfaceIsNarrow(environment);
         }
+    }
+
+    /**
+     * <b>관측 통로가 열려 있고 위험한 문은 닫혀 있는지 파일에서 확인한다.</b>
+     *
+     * <p>{@code security-audit} 워크플로와 {@code .coderabbit.yaml} 이 같은 것을 보지만
+     * 둘 다 <b>문자열 grep</b> 이다. 파일을 옮기거나 키 경로를 오타 내면 grep 은 통과하고
+     * 설정은 죽는다 — {@code batch.*} 가 조용히 죽던 방식과 같다.
+     *
+     * <p>여기서 보는 것은 <b>파일이 무엇을 말하는가</b>이고, 그 말대로 실제로 막히는지는
+     * {@link ActuatorExposureTest} 가 서버를 띄워 확인한다. 둘 중 하나만 있으면
+     * "적혀 있는데 안 먹는다" 또는 "먹는데 적혀 있지 않다" 를 못 잡는다.
+     */
+    private void assertManagementSurfaceIsNarrow(ConfigurableEnvironment environment) {
+        assertThat(environment.getProperty("management.server.port"))
+                .as("업무 포트와 같은 값이면 verify 트리거와 지표가 한 문에 걸린다")
+                .isEqualTo(MANAGEMENT_PORT)
+                .isNotEqualTo(environment.getProperty("server.port"));
+
+        assertThat(environment.getProperty("management.endpoints.web.exposure.include"))
+                .as("포함 여부가 아니라 **정확히 이 셋**이어야 한다. contains 로 두면 "
+                        + "누가 하나 더 넣거나 * 로 바꿔도 통과한다 — 그게 이 설정이 무너지는 방식이다")
+                .isEqualTo("health,metrics,prometheus");
+
+        assertThat(environment.getProperty("management.endpoints.web.exposure.exclude"))
+                .as("include 가 * 로 넓어지는 날의 이중 방어다. 지금 막고 있는 것은 include 다")
+                .contains("env", "configprops", "beans", "heapdump",
+                        "loggers", "threaddump", "mappings", "scheduledtasks",
+                        "conditions", "flyway", "sbom");
+
+        assertThat(environment.getProperty("server.error.include-stacktrace"))
+                .as("예외가 응답으로 나가면 내부 구조가 그대로 드러난다")
+                .isEqualTo("never");
+
+        assertThat(environment.getProperty("management.endpoint.health.show-details"))
+                .as("상세를 켜면 DB 접속 정보와 컴포넌트 구성이 그대로 나간다")
+                .isEqualTo("never");
     }
 
     /**
