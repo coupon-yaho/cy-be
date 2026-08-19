@@ -196,7 +196,9 @@ grade-vip · grade-gold · grade-silver · grade-welcome
 
 ### 4.1 엔드포인트 (PRD §11.1)
 
-공통 헤더 `Authorization: Bearer <HS256 JWT>` · **상태 변경은 `Idempotency-Key` 필수**
+공통 헤더 `X-User-Id` · `X-User-Grade` · **상태 변경은 `Idempotency-Key` 필수**
+관리자 API는 추가로 `X-User-Role: ADMIN`을 요구한다. 이 헤더들은 인증 토큰이 아니라
+회원·등급·역할을 구분하기 위한 요청 값이며 JWT는 사용하지 않는다.
 
 | Method | Path | 프론트 함수 |
 |---|---|---|
@@ -210,7 +212,7 @@ grade-vip · grade-gold · grade-silver · grade-welcome
 | POST | `/api/v1/coupons/{id}/cancel-use` | `postIssuanceAction('cancel-use')` |
 | POST | `/api/v1/coupons/{id}/cancel` | `postIssuanceAction('cancel')` |
 | CRUD | `/api/v1/admin/brands` · `/schedules` · `/campaigns` | `adminList*` / `adminSave*` |
-| POST | `/api/v1/admin/verify?asOf={ts}` | 검증 배치 |
+| POST | `/api/v1/admin/verify` | 검증 배치. JSON body `{asOf, dataset, scope}` → **202 + runId** |
 | GET | `/api/v1/admin/stats` | 통계 |
 | GET | `/api/v1/admin/metrics?window=` | 관제 시계열 — **폴링 1초** |
 | GET | `/api/v1/admin/benchmarks` | 버전별 측정 |
@@ -218,8 +220,9 @@ grade-vip · grade-gold · grade-silver · grade-welcome
 
 검증 실행은 브라우저가 Batch를 직접 호출하지 않는다. 브라우저는 API의
 `POST /api/v1/admin/verify`만 호출하고, API가 내부 네트워크에서 Batch 업무 포트
-`9091`의 verify 트리거를 호출한다. Batch Actuator는 관리 포트 `9092`에만 열며
-Prometheus가 내부에서 접근한다.
+`9091`의 verify 트리거에 같은 `{asOf, dataset, scope}` 명령을 전달한다. `asOf`를 query
+parameter로 보내지 않는다. Batch Actuator는 관리 포트 `9092`에만 열며 Prometheus가
+내부에서 접근한다.
 
 **★ 신규 2종**
 
