@@ -10,6 +10,10 @@ public class CouponExpirationPersistenceException
             String detail,
             Throwable cause
     ) {
-        super(CouponUseErrorCode.COUPON_EXPIRATION_SAVE_FAILED, detail, cause);
+        super(
+                CouponExpirationErrorCode.COUPON_EXPIRATION_SAVE_FAILED,
+                detail,
+                cause
+        );
     }
 }

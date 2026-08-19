@@ -71,25 +71,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
             Long couponRoundId,
             Instant updatedAt
     ) {
-        try {
-            int affectedRows = couponStockJpaRepository.releaseOne(
-                    couponRoundId,
-                    updatedAt
-            );
-            if (affectedRows == 1) {
-                return;
-            }
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId
-            );
-        } catch (DataAccessException exception) {
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId,
-                    exception
-            );
-        }
+        releaseAfterLock(couponRoundId, 1, updatedAt);
     }
 
     @Override

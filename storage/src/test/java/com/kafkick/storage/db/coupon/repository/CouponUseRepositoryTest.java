@@ -634,25 +634,77 @@ class CouponUseRepositoryTest {
                 21L,
                 "BCDEFGHJKLM23456",
                 "ISSUED",
-                Instant.parse("2026-08-27T05:30:00Z")
+                Instant.parse("2026-08-25T05:30:00Z")
         );
         insertIssuance(
                 102L,
                 22L,
                 "CDEFGHJKLM234567",
-                "USED",
+                "ISSUED",
                 Instant.parse("2026-08-25T05:30:00Z")
         );
 
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
-        List<Issuance> afterFirst = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 100L, 10);
+        List<Issuance> firstPage = issuanceRepository
+                .findExpiredIssuedAfterId(asOf, 0L, 1);
+        List<Issuance> secondPage = issuanceRepository
+                .findExpiredIssuedAfterId(asOf, 100L, 1);
+        List<Issuance> thirdPage = issuanceRepository
+                .findExpiredIssuedAfterId(asOf, 101L, 1);
+        List<Issuance> lastPage = issuanceRepository
+                .findExpiredIssuedAfterId(asOf, 102L, 1);
 
-        assertThat(candidates)
+        assertThat(firstPage)
                 .extracting(Issuance::id)
                 .containsExactly(100L);
-        assertThat(afterFirst).isEmpty();
+        assertThat(secondPage)
+                .extracting(Issuance::id)
+                .containsExactly(101L);
+        assertThat(thirdPage)
+                .extracting(Issuance::id)
+                .containsExactly(102L);
+        assertThat(lastPage).isEmpty();
+    }
+
+    @Test
+    @DisplayName("같은 회차의 다건 만료 수만큼 재고와 EXPIRE 이력을 반영한다")
+    void expireMultipleIssuancesInOneRound() {
+        Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
+        insertIssuance(
+                101L,
+                21L,
+                "BCDEFGHJKLM23456",
+                "ISSUED",
+                Instant.parse("2026-08-25T05:30:00Z")
+        );
+        insertIssuance(
+                102L,
+                22L,
+                "CDEFGHJKLM234567",
+                "ISSUED",
+                Instant.parse("2026-08-25T05:30:00Z")
+        );
+        jdbcTemplate.update(
+                "UPDATE coupon_stocks SET active_count = 3 WHERE coupon_id = 10"
+        );
+        List<Issuance> candidates = issuanceRepository
+                .findExpiredIssuedAfterId(asOf, 0L, 10);
+
+        CouponExpirationResult result = transactionTemplate.execute(status ->
+                couponExpirationService.expire(
+                        new CouponExpirationCommand(10L, candidates, asOf)
+                )
+        );
+
+        assertThat(result.expiredCount()).isEqualTo(3);
+        assertThat(activeCount()).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM issuances WHERE status = 'EXPIRED'",
+                Integer.class
+        )).isEqualTo(3);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM issuance_histories WHERE event_type = 'EXPIRE'",
+                Integer.class
+        )).isEqualTo(3);
     }
 
     @Test
@@ -770,6 +822,129 @@ class CouponUseRepositoryTest {
                 """,
                 Integer.class
         )).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("만료 3건과 신규 발급 3건이 경합해도 현재 보유량이 일치한다")
+    void keepStockInvariantDuringMultipleIssuesAndExpirations()
+            throws Exception {
+        Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
+        Instant issuedAt = USED_AT;
+        insertIssuance(
+                101L,
+                21L,
+                "BCDEFGHJKLM23456",
+                "ISSUED",
+                Instant.parse("2026-08-25T05:30:00Z")
+        );
+        insertIssuance(
+                102L,
+                22L,
+                "CDEFGHJKLM234567",
+                "ISSUED",
+                Instant.parse("2026-08-25T05:30:00Z")
+        );
+        jdbcTemplate.update(
+                "UPDATE coupon_stocks SET active_count = 3 WHERE coupon_id = 10"
+        );
+        jdbcTemplate.update(
+                """
+                UPDATE coupons
+                SET open_at = ?, close_at = ?, status = 'OPEN'
+                WHERE id = 10
+                """,
+                Timestamp.from(issuedAt.minusSeconds(3_600)),
+                Timestamp.from(issuedAt.plusSeconds(3_600))
+        );
+        for (long memberId = 23L; memberId <= 25L; memberId++) {
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO members (id, membership_grade, created_at)
+                    VALUES (?, 'GOLD', ?)
+                    """,
+                    memberId,
+                    Timestamp.from(issuedAt)
+            );
+        }
+        List<Issuance> candidates = issuanceRepository
+                .findExpiredIssuedAfterId(asOf, 0L, 10);
+        AtomicInteger codeSequence = new AtomicInteger();
+        CouponIssueService issueService = new CouponIssueService(
+                couponRoundRepository,
+                issuanceRepository,
+                couponStockRepository,
+                issuanceHistoryRepository,
+                () -> String.format(
+                        "E%015d",
+                        codeSequence.incrementAndGet()
+                )
+        );
+        executor = Executors.newFixedThreadPool(4);
+        CountDownLatch ready = new CountDownLatch(4);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+
+        futures.add(executor.submit(() -> {
+            ready.countDown();
+            awaitStart(start);
+            transactionTemplate.executeWithoutResult(status ->
+                    couponExpirationService.expire(
+                            new CouponExpirationCommand(
+                                    10L,
+                                    candidates,
+                                    asOf
+                            )
+                    )
+            );
+        }));
+        for (long memberId = 23L; memberId <= 25L; memberId++) {
+            long targetMemberId = memberId;
+            futures.add(executor.submit(() -> {
+                ready.countDown();
+                awaitStart(start);
+                transactionTemplate.executeWithoutResult(status ->
+                        issueService.issue(new CouponIssueCommand(
+                                10L,
+                                targetMemberId,
+                                MembershipGrade.GOLD,
+                                String.format(
+                                        "22300000-0000-4000-8000-%012d",
+                                        targetMemberId
+                                ),
+                                issuedAt
+                        ))
+                );
+            }));
+        }
+
+        assertThat(ready.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+        start.countDown();
+        for (Future<?> future : futures) {
+            future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        }
+
+        int activeIssuanceCount = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM issuances
+                WHERE coupon_id = 10 AND status IN ('ISSUED', 'USED')
+                """,
+                Integer.class
+        );
+        assertThat(activeCount()).isEqualTo(activeIssuanceCount);
+        assertThat(activeCount()).isEqualTo(3);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM issuances WHERE status = 'EXPIRED'",
+                Integer.class
+        )).isEqualTo(3);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM issuance_histories WHERE event_type = 'EXPIRE'",
+                Integer.class
+        )).isEqualTo(3);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM issuance_histories WHERE event_type = 'ISSUE'",
+                Integer.class
+        )).isEqualTo(3);
     }
 
     @Test

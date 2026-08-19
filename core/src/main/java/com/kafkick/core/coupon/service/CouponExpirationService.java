@@ -69,7 +69,7 @@ public class CouponExpirationService {
                     histories.size(),
                     command.asOf()
             );
-            issuanceHistoryRepository.saveAll(histories);
+            issuanceHistoryRepository.saveAllExpirations(histories);
         }
         return new CouponExpirationResult(
                 command.issuances().size(),

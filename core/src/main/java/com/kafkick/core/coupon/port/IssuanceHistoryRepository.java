@@ -8,5 +8,5 @@ public interface IssuanceHistoryRepository {
 
     void save(IssuanceHistory issuanceHistory);
 
-    void saveAll(List<IssuanceHistory> issuanceHistories);
+    void saveAllExpirations(List<IssuanceHistory> issuanceHistories);
 }

@@ -33,18 +33,8 @@ public class IssuanceHistoryRepositoryImpl
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public void save(IssuanceHistory history) {
-        IssuanceHistoryEntity entity = new IssuanceHistoryEntity(
-                history.id(),
-                history.issuanceId(),
-                history.eventType(),
-                history.fromStatus(),
-                history.toStatus(),
-                history.reason(),
-                history.requestId(),
-                history.createdAt()
-        );
         try {
-            historyJpaRepository.saveAndFlush(entity);
+            historyJpaRepository.saveAndFlush(toEntity(history));
         } catch (DataAccessException exception) {
             if (history.eventType() == IssuanceEventType.CANCEL) {
                 throw new CouponCancelPersistenceException(
@@ -73,7 +63,7 @@ public class IssuanceHistoryRepositoryImpl
 
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
-    public void saveAll(List<IssuanceHistory> histories) {
+    public void saveAllExpirations(List<IssuanceHistory> histories) {
         List<IssuanceHistoryEntity> entities = histories.stream()
                 .map(IssuanceHistoryRepositoryImpl::toEntity)
                 .toList();

@@ -26,6 +26,7 @@ coupon:
     cron: "${COUPON_EXPIRATION_CRON:0 * * * * *}"
     zone: ${COUPON_EXPIRATION_ZONE:UTC}
     chunk-size: ${COUPON_EXPIRATION_CHUNK_SIZE:500}
+    transaction-size: ${COUPON_EXPIRATION_TRANSACTION_SIZE:100}
 
   round-generation:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}

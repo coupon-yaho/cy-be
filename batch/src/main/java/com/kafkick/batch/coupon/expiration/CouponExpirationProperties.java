@@ -6,13 +6,14 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 
 @ConfigurationProperties(prefix = "coupon.expiration")
 public record CouponExpirationProperties(
-        @DefaultValue("500") int chunkSize
+        @DefaultValue("500") int chunkSize,
+        @DefaultValue("100") int transactionSize
 ) {
 
     public CouponExpirationProperties {
-        if (chunkSize <= 0) {
+        if (chunkSize <= 0 || transactionSize <= 0) {
             throw new IllegalArgumentException(
-                    "쿠폰 만료 배치 청크 크기는 0보다 커야 합니다."
+                    "쿠폰 만료 배치 크기는 0보다 커야 합니다."
             );
         }
     }

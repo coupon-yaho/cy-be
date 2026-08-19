@@ -21,6 +21,7 @@ import com.kafkick.core.coupon.service.CouponExpirationResult;
 import com.kafkick.core.support.TimeProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -48,7 +49,7 @@ class CouponExpirationRunnerTest {
                 issuanceRepository,
                 transactionExecutor,
                 timeProvider,
-                new CouponExpirationProperties(2)
+                new CouponExpirationProperties(3, 2)
         );
     }
 
@@ -59,13 +60,14 @@ class CouponExpirationRunnerTest {
         when(issuanceRepository.findExpiredIssuedAfterId(
                 AS_OF,
                 0L,
-                2
-        )).thenReturn(List.of(issuance(100L, 10L), issuance(101L, 10L)));
-        when(issuanceRepository.findExpiredIssuedAfterId(
-                AS_OF,
-                101L,
-                2
-        )).thenReturn(List.of(issuance(102L, 20L)));
+                3
+        )).thenReturn(List.of(
+                issuance(100L, 10L),
+                issuance(101L, 10L),
+                issuance(102L, 10L)
+        ));
+        when(issuanceRepository.findExpiredIssuedAfterId(AS_OF, 102L, 3))
+                .thenReturn(List.of());
         when(transactionExecutor.execute(org.mockito.ArgumentMatchers.any()))
                 .thenAnswer(invocation -> {
                     CouponExpirationCommand command = invocation.getArgument(0);
@@ -88,13 +90,24 @@ class CouponExpirationRunnerTest {
                 .execute(commandCaptor.capture());
         assertThat(commandCaptor.getAllValues())
                 .extracting(CouponExpirationCommand::couponRoundId)
-                .containsExactly(10L, 20L);
+                .containsExactly(10L, 10L);
         assertThat(commandCaptor.getAllValues().get(0).issuances())
                 .extracting(Issuance::id)
                 .containsExactly(100L, 101L);
+        assertThat(commandCaptor.getAllValues().get(1).issuances())
+                .extracting(Issuance::id)
+                .containsExactly(102L);
         assertThat(commandCaptor.getAllValues())
                 .allSatisfy(command -> assertThat(command.asOf())
                         .isEqualTo(AS_OF));
+    }
+
+    @Test
+    @DisplayName("트랜잭션 크기는 0보다 커야 한다")
+    void rejectNonPositiveTransactionSize() {
+        assertThatThrownBy(() -> new CouponExpirationProperties(500, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("쿠폰 만료 배치 크기는 0보다 커야 합니다.");
     }
 
     private static Issuance issuance(Long issuanceId, Long roundId) {

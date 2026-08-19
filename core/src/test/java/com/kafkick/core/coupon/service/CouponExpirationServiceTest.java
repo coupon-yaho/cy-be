@@ -113,7 +113,7 @@ class CouponExpirationServiceTest {
         ArgumentCaptor<List<IssuanceHistory>> historyCaptor =
                 ArgumentCaptor.forClass(List.class);
         ordered.verify(issuanceHistoryRepository)
-                .saveAll(historyCaptor.capture());
+                .saveAllExpirations(historyCaptor.capture());
         assertThat(historyCaptor.getValue())
                 .singleElement()
                 .satisfies(history -> {
@@ -152,7 +152,7 @@ class CouponExpirationServiceTest {
                 org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.any()
         );
-        verify(issuanceHistoryRepository, never()).saveAll(
+        verify(issuanceHistoryRepository, never()).saveAllExpirations(
                 org.mockito.ArgumentMatchers.anyList()
         );
     }

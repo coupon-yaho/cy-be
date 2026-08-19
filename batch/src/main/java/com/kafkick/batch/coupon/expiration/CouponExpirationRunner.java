@@ -58,14 +58,11 @@ public class CouponExpirationRunner {
             cursor = candidates.get(candidates.size() - 1).id();
             for (Map.Entry<Long, List<Issuance>> entry
                     : groupByRound(candidates).entrySet()) {
-                CouponExpirationResult result = transactionExecutor.execute(
-                        new CouponExpirationCommand(
-                                entry.getKey(),
-                                entry.getValue(),
-                                asOf
-                        )
+                expiredCount += expireInTransactions(
+                        entry.getKey(),
+                        entry.getValue(),
+                        asOf
                 );
-                expiredCount += result.expiredCount();
             }
 
             if (candidates.size() < properties.chunkSize()) {
@@ -77,6 +74,31 @@ public class CouponExpirationRunner {
                 scannedCount,
                 expiredCount
         );
+    }
+
+    private int expireInTransactions(
+            Long couponRoundId,
+            List<Issuance> issuances,
+            Instant asOf
+    ) {
+        int expiredCount = 0;
+        for (int fromIndex = 0;
+             fromIndex < issuances.size();
+             fromIndex += properties.transactionSize()) {
+            int toIndex = Math.min(
+                    fromIndex + properties.transactionSize(),
+                    issuances.size()
+            );
+            CouponExpirationResult result = transactionExecutor.execute(
+                    new CouponExpirationCommand(
+                            couponRoundId,
+                            List.copyOf(issuances.subList(fromIndex, toIndex)),
+                            asOf
+                    )
+            );
+            expiredCount += result.expiredCount();
+        }
+        return expiredCount;
     }
 
     private static Map<Long, List<Issuance>> groupByRound(
