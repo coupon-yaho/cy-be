@@ -130,6 +130,26 @@ class ObservationMetricsContractTest {
         }
     }
 
+    @Test
+    @DisplayName("OBS-4 latency Timer도 커밋된 설정에서 p99와 10초 expiry를 함께 받는다")
+    void customHttpLatencyUsesCommittedDistributionContract() throws IOException {
+        try (ConfigurableApplicationContext context = bootWithObservationYaml()) {
+            Timer timer = Timer.builder(MeterNames.HTTP_LATENCY)
+                    .tags("uri_group", "issue", "outcome", "success")
+                    .register(context.getBean(MeterRegistry.class));
+            for (int i = 0; i < 200; i++) {
+                timer.record(Duration.ofMillis(300));
+            }
+            MeterValueReader reader = new MeterValueReader(context.getBean(MeterRegistry.class));
+            assertThat(timer.getId().getTag("uri_group")).isEqualTo("issue");
+            assertThat(timer.getId().getTag("outcome")).isEqualTo("success");
+            assertThat(reader.percentileNanos(MeterNames.HTTP_LATENCY, P99)).isPresent();
+
+            context.getBean(MockClock.class).add(Duration.ofSeconds(11));
+            assertThat(reader.percentileNanos(MeterNames.HTTP_LATENCY, P99)).isEmpty();
+        }
+    }
+
     /**
      * 점 표기의 실패는 <b>절반만</b> 일어난다(실측). Boot 4.1 에서 {@code percentiles} 는 점
      * 표기로도 바인딩되지만 {@code expiry} 는 되지 않는다. 0.99 가 멀쩡히 나오니 설정이 먹은
@@ -190,6 +210,12 @@ class ObservationMetricsContractTest {
                 .isEqualTo("0.5, 0.95, 0.99");
         assertThat(yaml.getProperty(prefix + "expiry[" + MeterNames.HTTP_SERVER_REQUESTS + "]"))
                 .as("expiry 키 — 상수를 바꾸면 여기서 걸린다")
+                .isEqualTo("10s");
+        assertThat(yaml.getProperty(prefix + "percentiles[" + MeterNames.HTTP_LATENCY + "]"))
+                .as("OBS-4 백분위 키")
+                .isEqualTo("0.5, 0.95, 0.99");
+        assertThat(yaml.getProperty(prefix + "expiry[" + MeterNames.HTTP_LATENCY + "]"))
+                .as("OBS-4 expiry 키")
                 .isEqualTo("10s");
     }
 
