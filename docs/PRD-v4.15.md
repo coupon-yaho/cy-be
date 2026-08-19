@@ -642,7 +642,7 @@ Redis를 죽이면 v1만 살아남는다
 ``````
 | CRUD | /api/v1/admin/brands · /schedules · /campaigns | 관리자 화면 |
 ``
-| POST | /api/v1/admin/verify | 검증 배치 실행. body `{asOf?, dataset, scope, fromTs?}` → **202 + runId** |
+| POST | /api/v1/admin/verify | 검증 배치 실행. 브라우저는 API만 호출하고 API가 내부 Batch 9091 트리거를 호출. body `{asOf?, dataset, scope, fromTs?}` → **202 + runId** |
 ``
 | GET | /api/v1/admin/verify/runs/{runId} | 검증 결과 조회. 개발 중 리포트의 실체 |
 ``

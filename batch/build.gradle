@@ -12,8 +12,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-batch'
     // 300만 행 집계·리플레이는 전부 SQL 이다. starter-batch 가 끌어오지만 직접 쓰므로 명시한다.
     implementation 'org.springframework:spring-jdbc'
-    // 관리 포트의 verify 온디맨드 트리거용. Compose 에서 이 포트를 외부로 노출하지 않는다.
+    // 관제 API가 내부 네트워크에서 호출하는 verify 트리거를 제공한다.
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
 
     // JobLauncherTestUtils / JobRepositoryTestUtils
     testImplementation 'org.springframework.batch:spring-batch-test'

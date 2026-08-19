@@ -216,6 +216,11 @@ grade-vip · grade-gold · grade-silver · grade-welcome
 | GET | `/api/v1/admin/benchmarks` | 버전별 측정 |
 | GET | `/actuator/admission-capacity` | 입장 여력 |
 
+검증 실행은 브라우저가 Batch를 직접 호출하지 않는다. 브라우저는 API의
+`POST /api/v1/admin/verify`만 호출하고, API가 내부 네트워크에서 Batch 업무 포트
+`9091`의 verify 트리거를 호출한다. Batch Actuator는 관리 포트 `9092`에만 열며
+Prometheus가 내부에서 접근한다.
+
 **★ 신규 2종**
 
 | Method | Path | 용도 |
