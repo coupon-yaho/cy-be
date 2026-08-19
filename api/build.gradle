@@ -24,6 +24,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // /actuator/prometheus 를 만드는 레지스트리. 없으면 엔드포인트 자체가 생기지 않는다.
+    // 노출 allowlist 는 management.yml(OBS-20) 소유라 이 티켓에서 건드리지 않는다.
+    implementation 'io.micrometer:micrometer-registry-prometheus'
 }
 
 bootJar {
