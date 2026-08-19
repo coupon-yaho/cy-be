@@ -91,4 +91,40 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
             );
         }
     }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void releaseAfterLock(
+            Long couponRoundId,
+            int quantity,
+            Instant updatedAt
+    ) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException(
+                    "복원할 쿠폰 재고 수량은 0보다 커야 합니다."
+            );
+        }
+        try {
+            int affectedRows = couponStockJpaRepository.release(
+                    couponRoundId,
+                    quantity,
+                    updatedAt
+            );
+            if (affectedRows == 1) {
+                return;
+            }
+            throw new BusinessException(
+                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                    "couponRoundId=" + couponRoundId
+                            + ", quantity=" + quantity
+            );
+        } catch (DataAccessException exception) {
+            throw new BusinessException(
+                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                    "couponRoundId=" + couponRoundId
+                            + ", quantity=" + quantity,
+                    exception
+            );
+        }
+    }
 }

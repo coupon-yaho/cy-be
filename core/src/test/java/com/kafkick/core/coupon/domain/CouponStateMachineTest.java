@@ -97,4 +97,22 @@ class CouponStateMachineTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("만료 판정 시각은 필수입니다.");
     }
+
+    @Test
+    @DisplayName("만료 시각이 지나기 전에는 EXPIRE 전이를 거부한다")
+    void rejectExpireBeforeExpiration() {
+        assertThatThrownBy(() -> CouponStateMachine.transition(
+                IssuanceStatus.ISSUED,
+                IssuanceEventType.EXPIRE,
+                EXPIRES_AT,
+                BEFORE_EXPIRATION
+        ))
+                .isInstanceOfSatisfying(
+                        CouponInvalidTransitionException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(
+                                        CouponIssueErrorCode.INVALID_TRANSITION
+                                )
+                );
+    }
 }

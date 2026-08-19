@@ -1,6 +1,8 @@
 // 발급건 상태 전이 이력을 해당 트랜잭션 안에서 함께 저장합니다.
 package com.kafkick.storage.db.coupon.repository;
 
+import java.util.List;
+
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
@@ -12,6 +14,7 @@ import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
 import com.kafkick.core.coupon.exception.CouponCancelPersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponUsePersistenceException;
+import com.kafkick.core.coupon.exception.CouponExpirationPersistenceException;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.storage.db.coupon.entity.IssuanceHistoryEntity;
 
@@ -66,5 +69,36 @@ public class IssuanceHistoryRepositoryImpl
                     exception
             );
         }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void saveAll(List<IssuanceHistory> histories) {
+        List<IssuanceHistoryEntity> entities = histories.stream()
+                .map(IssuanceHistoryRepositoryImpl::toEntity)
+                .toList();
+        try {
+            historyJpaRepository.saveAllAndFlush(entities);
+        } catch (DataAccessException exception) {
+            throw new CouponExpirationPersistenceException(
+                    "쿠폰 만료 이력 일괄 저장에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    private static IssuanceHistoryEntity toEntity(
+            IssuanceHistory history
+    ) {
+        return new IssuanceHistoryEntity(
+                history.id(),
+                history.issuanceId(),
+                history.eventType(),
+                history.fromStatus(),
+                history.toStatus(),
+                history.reason(),
+                history.requestId(),
+                history.createdAt()
+        );
     }
 }

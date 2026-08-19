@@ -22,6 +22,11 @@ logging:
     com.kafkick: DEBUG
 
 coupon:
+  expiration:
+    cron: "${COUPON_EXPIRATION_CRON:0 * * * * *}"
+    zone: ${COUPON_EXPIRATION_ZONE:UTC}
+    chunk-size: ${COUPON_EXPIRATION_CHUNK_SIZE:500}
+
   round-generation:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
     max-days: ${COUPON_GENERATION_MAX_DAYS:30}

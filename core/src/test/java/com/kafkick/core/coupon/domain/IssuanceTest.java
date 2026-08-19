@@ -93,6 +93,17 @@ class IssuanceTest {
                 );
     }
 
+    @Test
+    @DisplayName("만료 시각이 지난 ISSUED 쿠폰은 EXPIRED로 전이한다")
+    void expireIssuedCoupon() {
+        Instant expiredAt = Instant.parse("2026-08-25T05:00:01Z");
+
+        Issuance expired = restoredIssuance().expire(expiredAt);
+
+        assertThat(expired.status()).isEqualTo(IssuanceStatus.EXPIRED);
+        assertThat(expired.updatedAt()).isEqualTo(expiredAt);
+    }
+
     private Issuance restoredIssuance() {
         return Issuance.restore(
                 100L,

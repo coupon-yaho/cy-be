@@ -204,6 +204,31 @@ public record Issuance(
         );
     }
 
+    public Issuance expire(Instant expiredAt) {
+        if (expiredAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 만료 처리 시각은 필수입니다."
+            );
+        }
+
+        return new Issuance(
+                id,
+                couponRoundId,
+                memberId,
+                code,
+                issuedGrade,
+                CouponStateMachine.transition(
+                        status,
+                        IssuanceEventType.EXPIRE,
+                        expiresAt,
+                        expiredAt
+                ),
+                issuedAt,
+                expiresAt,
+                expiredAt
+        );
+    }
+
     private static void validateId(
             Long value,
             String fieldName,

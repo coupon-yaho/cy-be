@@ -2,12 +2,14 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import jakarta.persistence.EntityManager;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +21,7 @@ import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
 import com.kafkick.core.coupon.exception.CouponCancelPersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
+import com.kafkick.core.coupon.exception.CouponExpirationPersistenceException;
 import com.kafkick.core.coupon.exception.CouponUsePersistenceException;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
@@ -81,6 +84,29 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
     }
 
     @Override
+    public List<Issuance> findExpiredIssuedAfterId(
+            Instant asOf,
+            Long afterId,
+            int limit
+    ) {
+        try {
+            return issuanceJpaRepository.findExpiredIssuedAfterId(
+                            IssuanceStatus.ISSUED,
+                            asOf,
+                            afterId,
+                            PageRequest.of(0, limit)
+                    ).stream()
+                    .map(IssuanceEntityMapper::toDomain)
+                    .toList();
+        } catch (DataAccessException exception) {
+            throw new CouponExpirationPersistenceException(
+                    "쿠폰 만료 대상 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean updateStatusIfCurrent(
             Long issuanceId,
@@ -98,6 +124,12 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
                     updatedAt
             ) == 1;
         } catch (DataAccessException exception) {
+            if (nextStatus == IssuanceStatus.EXPIRED) {
+                throw new CouponExpirationPersistenceException(
+                        "쿠폰 만료 상태 저장에 실패했습니다.",
+                        exception
+                );
+            }
             if (nextStatus == IssuanceStatus.CANCELLED) {
                 throw new CouponCancelPersistenceException(
                         "쿠폰 발급 취소 상태 저장에 실패했습니다.",

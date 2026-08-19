@@ -52,4 +52,18 @@ public interface CouponStockJpaRepository
             @Param("couponRoundId") Long couponRoundId,
             @Param("updatedAt") Instant updatedAt
     );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            UPDATE coupon_stocks
+            SET active_count = active_count - :quantity,
+                updated_at = :updatedAt
+            WHERE coupon_id = :couponRoundId
+              AND active_count >= :quantity
+            """, nativeQuery = true)
+    int release(
+            @Param("couponRoundId") Long couponRoundId,
+            @Param("quantity") int quantity,
+            @Param("updatedAt") Instant updatedAt
+    );
 }
