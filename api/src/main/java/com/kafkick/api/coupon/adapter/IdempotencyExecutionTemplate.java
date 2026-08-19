@@ -8,7 +8,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -185,10 +184,6 @@ public class IdempotencyExecutionTemplate {
     ) {
         if (idempotencyKey == null
                 || !UUID_V4_PATTERN.matcher(idempotencyKey).matches()) {
-            throw invalidIdempotencyKey(invalidRequestErrorCode);
-        }
-        UUID uuid = UUID.fromString(idempotencyKey);
-        if (uuid.version() != 4) {
             throw invalidIdempotencyKey(invalidRequestErrorCode);
         }
     }
