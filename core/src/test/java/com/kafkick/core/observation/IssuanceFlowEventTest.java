@@ -55,6 +55,29 @@ class IssuanceFlowEventTest {
     }
 
     @Test
+    void canonicalConstructorRejectsNonPositiveQueuePosition() {
+        assertThatThrownBy(() -> event(
+                EventType.ENTRY_RESULT, 202, null, null,
+                null, 0L, 10L
+        )).isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> event(
+                EventType.ENTRY_RESULT, 202, null, null,
+                null, -1L, 10L
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalConstructorAcceptsMinimumQueuePosition() {
+        IssuanceFlowEvent entry = event(
+                EventType.ENTRY_RESULT, 202, null, null,
+                null, 1L, 0L
+        );
+
+        assertThat(entry.queuePosition()).isEqualTo(1L);
+    }
+
+    @Test
     void canonicalConstructorRejectsNonPositiveIssuanceId() {
         assertThatThrownBy(() -> event(
                 EventType.ISSUE_RESULT, 201, 0L, "ISSUANCE0000001",
@@ -82,7 +105,7 @@ class IssuanceFlowEventTest {
     void canonicalConstructorAcceptsZeroQueueSequence() {
         IssuanceFlowEvent admitted = event(
                 EventType.ENTRY_RESULT, 202, null, null,
-                null, 0L, 0L
+                null, 1L, 0L
         );
 
         assertThat(admitted.queueSequence()).isZero();
@@ -97,6 +120,28 @@ class IssuanceFlowEventTest {
 
         assertThat(issued.issuanceId()).isEqualTo(1L);
         assertThat(issued.issuanceCode()).isEqualTo("A");
+    }
+
+    @Test
+    void contextCopiesAllFieldsAndReplacesOnlyOccurredAt() {
+        IssuanceFlowEvent.Ctx original = context("request-1", false);
+        Instant completedAt = Instant.parse("2026-08-15T05:02:35.120Z");
+
+        IssuanceFlowEvent.Ctx completed = original.withOccurredAt(completedAt);
+
+        assertThat(completed).isEqualTo(new IssuanceFlowEvent.Ctx(
+                original.requestId(),
+                original.memberId(),
+                original.couponId(),
+                original.grade(),
+                original.replayed(),
+                completedAt,
+                original.engineVersion(),
+                original.releaseStage(),
+                original.queueMode(),
+                original.benchmarkRunId(),
+                original.producerInstanceId()
+        ));
     }
 
     @Test
@@ -147,6 +192,16 @@ class IssuanceFlowEventTest {
                 EventType.ENTRY_RESULT, 200, null, null,
                 null, 12L, 18L
         )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsEntrySuccessStatusOtherThanOkOrAccepted() {
+        for (int invalidStatus : new int[]{199, 201, 204, 300, 302, 399}) {
+            assertThatThrownBy(() -> event(
+                    EventType.ENTRY_RESULT, invalidStatus, null, null,
+                    null, null, null
+            )).isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Test

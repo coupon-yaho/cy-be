@@ -53,6 +53,9 @@ public record IssuanceFlowEvent(
         if (queueSequence != null && queueSequence < 0) {
             throw new IllegalArgumentException("queueSequence는 0 이상이어야 합니다.");
         }
+        if (queuePosition != null && queuePosition < 1) {
+            throw new IllegalArgumentException("queuePosition은 1 이상이어야 합니다.");
+        }
         if (issuanceId != null) {
             requirePositive(issuanceId, "issuanceId");
         }
@@ -173,6 +176,9 @@ public record IssuanceFlowEvent(
             if (issuanceId != null || issuanceCode != null) {
                 throw new IllegalArgumentException("ENTRY_RESULT에는 발급 식별자를 넣을 수 없습니다.");
             }
+            if (httpStatus < 400 && httpStatus != 200 && httpStatus != 202) {
+                throw new IllegalArgumentException("성공 ENTRY_RESULT의 HTTP 상태는 200 또는 202여야 합니다.");
+            }
             if (httpStatus == 202 && (queuePosition == null || queueSequence == null)) {
                 throw new IllegalArgumentException("202 ENTRY_RESULT에는 대기열 순번이 필요합니다.");
             }
@@ -230,5 +236,30 @@ public record IssuanceFlowEvent(
             Long benchmarkRunId,
             String producerInstanceId
     ) {
+
+        /**
+         * 요청 식별 정보와 실행 설정을 유지하면서 이벤트 발생 시각만 교체합니다.
+         *
+         * <p>요청 시작 시 구성한 Context를 결과 이벤트에 사용할 때 시작 시각이 결과 시각으로
+         * 기록되지 않도록, 실제 결과가 확정된 시각을 반영하는 데 사용합니다.
+         *
+         * @param occurredAt 실제 관측 결과가 발생한 시각
+         * @return 발생 시각만 교체한 새로운 Context
+         */
+        public Ctx withOccurredAt(Instant occurredAt) {
+            return new Ctx(
+                    requestId,
+                    memberId,
+                    couponId,
+                    grade,
+                    replayed,
+                    Objects.requireNonNull(occurredAt, "occurredAt"),
+                    engineVersion,
+                    releaseStage,
+                    queueMode,
+                    benchmarkRunId,
+                    producerInstanceId
+            );
+        }
     }
 }
