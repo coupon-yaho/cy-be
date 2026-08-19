@@ -16,7 +16,9 @@ public enum CouponUseErrorCode implements ErrorCode {
     INVALID_COUPON_CANCEL_USE_REQUEST(400, "COUPON-408", "쿠폰 사용 취소 요청 값이 올바르지 않습니다."),
     ACTIVE_USAGE_NOT_FOUND(409, "COUPON-409", "취소할 쿠폰 사용 내역을 찾을 수 없습니다."),
     COUPON_CANCEL_USE_SAVE_FAILED(500, "COUPON-410", "쿠폰 사용 취소 저장 중 오류가 발생했습니다."),
-    COUPON_STOCK_RELEASE_FAILED(500, "COUPON-411", "쿠폰 재고 복원 중 오류가 발생했습니다.");
+    COUPON_STOCK_RELEASE_FAILED(500, "COUPON-411", "쿠폰 재고 복원 중 오류가 발생했습니다."),
+    INVALID_COUPON_CANCEL_REQUEST(400, "COUPON-412", "쿠폰 발급 취소 요청 값이 올바르지 않습니다."),
+    COUPON_CANCEL_SAVE_FAILED(500, "COUPON-413", "쿠폰 발급 취소 저장 중 오류가 발생했습니다.");
 
     private final int status;
     private final String code;

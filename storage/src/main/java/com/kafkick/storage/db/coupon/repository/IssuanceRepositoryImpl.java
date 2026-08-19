@@ -16,6 +16,7 @@ import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
 import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
+import com.kafkick.core.coupon.exception.CouponCancelPersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
 import com.kafkick.core.coupon.exception.CouponUsePersistenceException;
@@ -97,6 +98,12 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
                     updatedAt
             ) == 1;
         } catch (DataAccessException exception) {
+            if (nextStatus == IssuanceStatus.CANCELLED) {
+                throw new CouponCancelPersistenceException(
+                        "쿠폰 발급 취소 상태 저장에 실패했습니다.",
+                        exception
+                );
+            }
             if (currentStatus == IssuanceStatus.USED) {
                 throw new CouponCancelUsePersistenceException(
                         "쿠폰 사용 취소 상태 저장에 실패했습니다.",

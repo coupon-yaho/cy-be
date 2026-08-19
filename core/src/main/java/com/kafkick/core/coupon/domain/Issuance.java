@@ -176,6 +176,34 @@ public record Issuance(
         );
     }
 
+    public Issuance cancel(Instant canceledAt) {
+        if (canceledAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 발급 취소 시각은 필수입니다."
+            );
+        }
+        if (canceledAt.isAfter(expiresAt)) {
+            throw new CouponExpiredException(id);
+        }
+
+        return new Issuance(
+                id,
+                couponRoundId,
+                memberId,
+                code,
+                issuedGrade,
+                CouponStateMachine.transition(
+                        status,
+                        IssuanceEventType.CANCEL,
+                        expiresAt,
+                        canceledAt
+                ),
+                issuedAt,
+                expiresAt,
+                canceledAt
+        );
+    }
+
     private static void validateId(
             Long value,
             String fieldName,

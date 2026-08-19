@@ -12,6 +12,7 @@ import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
 import com.kafkick.core.coupon.service.CouponUseService;
 import com.kafkick.core.coupon.service.CouponCancelUseService;
+import com.kafkick.core.coupon.service.CouponCancelService;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(CouponIdempotencyProperties.class)
@@ -42,6 +43,19 @@ public class CouponUseCaseConfiguration {
         return new CouponCancelUseService(
                 issuanceRepository,
                 issuanceUsageRepository,
+                issuanceHistoryRepository,
+                couponStockRepository
+        );
+    }
+
+    @Bean
+    public CouponCancelService couponCancelService(
+            IssuanceRepository issuanceRepository,
+            IssuanceHistoryRepository issuanceHistoryRepository,
+            CouponStockRepository couponStockRepository
+    ) {
+        return new CouponCancelService(
+                issuanceRepository,
                 issuanceHistoryRepository,
                 couponStockRepository
         );
