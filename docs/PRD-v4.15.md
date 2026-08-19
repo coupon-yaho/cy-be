@@ -112,7 +112,7 @@ Must 10 / Should 9 / Could 2. 잘라야 할 때는 Could부터, 그다음 Should
 
 | Must | 등급 자격 검증 (요청 헤더) | 창의성 20점. 동시성 영향 없음 |
 ``````````
-| Must | 보안 필수 5건 — 관리 포트 분리 + `X-User-Role: ADMIN` · Entry-Token 1회성 · .gitignore · actuator 최소화 · 에러·로그 마스킹 | 합쳐 약 0.5일. /actuator/env가 AES 키를 노출하는 등 실제 구멍 |
+| Must | 보안 필수 — 관리 포트 분리 · Entry-Token 1회성 · .gitignore · actuator 최소화 · 에러·로그 마스킹 | /actuator/env가 AES 키를 노출하는 등 실제 구멍. 관리자 인증은 별도 후속 작업 |
 
 | Should | v3 Kafka · 대시보드 14차트 · 오염셋 700건 · 스케줄러 · 통계 · 워밍업 · 대기열 3모드 · 측정 3조합 · Chaos 1종 | 차별화와 배점 |
 
@@ -619,7 +619,9 @@ Redis를 죽이면 v1만 살아남는다
 ## API
 
 공통 헤더 `X-User-Id` · `X-User-Grade` · 상태 변경은 `Idempotency-Key`
-관리자 API는 `X-User-Role: ADMIN`을 추가로 요구한다. JWT · 세션은 사용하지 않는다.
+`X-User-Role`을 포함한 요청 헤더는 데모의 사용자·등급·역할 구분 값이며 인증 수단이 아니다.
+현재 `X-User-Role: ADMIN` 검사는 테스트·화면 계약일 뿐이고 관리자 접근을 보호하지 않는다.
+실제 인증 또는 외부 헤더를 제거·주입하는 신뢰된 게이트웨이 경계는 후속 작업이다.
 
 | Method | Path | 설명 |
 
@@ -1338,7 +1340,7 @@ Q&A는 별도. 합계 20분을 절대 초과할 수 없습니다. 여유가 0이
 ````
 | R11 | 스케줄러 캠페인 중복 생성 | 동일 open_at 캠페인 2건 | UNIQUE(template_id, open_at) | 제약 위반 로그로 즉시 발견. 중복 삭제 후 재실행 | ① |
 ````
-| R12 | 관리 API·Actuator 무인증 노출 | 코드 리뷰에서 /admin/* 역할 헤더 검사 부재 | 관리 포트 분리 + `X-User-Role: ADMIN` | Compose에서 관리 포트 노출 제거만으로 즉시 차단 | ③ |
+| R12 | 관리 API·Actuator 무인증 노출 | `/admin/*`가 클라이언트 역할 헤더만 검사 | Actuator는 관리 포트 분리·allowlist로 차단. 관리자 API 인증은 후속 작업 | 긴급 시 게이트웨이에서 `/api/v1/admin/**` 라우팅 차단. 관리 포트 차단만으로 관리자 API는 보호되지 않음 | ③ |
 ``
 | R13 | ④ D6~D10 과부하 | D8에 착수 못 한 잡 2개 이상 | 배치 잡 10개에 컷 순서를 미리 못박음 (10→6) | 컷 순서 발동. 결정자 ④, 당일 팀 공유 | ④ |
 
@@ -1703,8 +1705,8 @@ public enum Grade { WELCOME(1), SILVER(2), GOLD(4), VIP(8) }
 @Convert(converter = GradeSetConverter.class) // EnumSet ↔ TINYINT
 private EnumSet<Grade> eligibleGrades;
 
-// 발급 경로 — DB 접근 0
-campaign.getEligibleGrades().contains(jwtGrade)
+// 발급 경로 — X-User-Grade 파싱 결과를 사용하므로 DB 접근 0
+campaign.getEligibleGrades().contains(requestGrade)
 ```
 
 검증 배치만 4행짜리 `grades` 참조 테이블을 조인해 `(mask & bit_value) = 0` 으로 위반을 검출합니다. 조인 비용이 사실상 0입니다.
@@ -2036,8 +2038,9 @@ L3 결과는 별도 표로 분리합니다. 환경이 다르면 같은 표에 �
 
 | 가용성 | 대기열 우회·폭주 | 시연 중 서버 다운 |
 
-공격자 가정 — 부하 테스트 클라이언트를 조작할 수 있는 사람. 요청 헤더는 인증 수단이
-아니므로 실사용자 확인과 다계정 방어는 과제 범위에 포함하지 않습니다.
+공격자 가정 — 부하 테스트 클라이언트를 조작할 수 있는 사람. 따라서 `X-User-Role: ADMIN`도
+위조할 수 있고 현재 관리자 API는 인증되지 않았습니다. 실사용자 확인과 다계정 방어는 과제
+범위 밖이지만, 이 사실을 보안 대응책으로 포장하지 않고 관리자 인증 후속 작업으로 추적합니다.
 
 ## 🔴 설계에 비어 있던 구멍 3건
 
@@ -2055,16 +2058,20 @@ GET /actuator/env → 환경변수(= AES 키!) 노출
 `/actuator/env`가 특히 위험합니다. AES·HMAC 키를 Compose 환경변수로 주입하기로 했으므로 이 엔드포인트가 열려 있으면 키가 그대로 나갑니다.
 
 ```
-# ① 관리 포트 분리 — Compose 에서 외부 노출 안 함
+# API Actuator — 관리 포트 9090, Compose 에서 외부 노출 안 함
 management.server.port: 9090
-management.endpoints.web.exposure.include: health,metrics,admission-capacity
+management.endpoints.web.exposure.include: health,metrics,prometheus,admission-capacity
 management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 
-// ② /admin/* 는 정확한 관리자 역할 헤더 요구
-X-User-Role: ADMIN
+# Batch Actuator — 관리 포트 9092, Compose 에서 외부 노출 안 함
+management.server.port: 9092
+management.endpoints.web.exposure.include: health,metrics,prometheus
+management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 ```
 
 `exclude`를 명시하세요. `include`만 쓰면 나중에 누가 `*`로 바꿀 때 `env`가 함께 열립니다.
+관리 포트 분리는 Actuator만 보호합니다. 업무 포트 8080의 `/api/v1/admin/**`는 보호하지
+않으며, `X-User-Role: ADMIN` 단독 검사는 인증이 아니므로 보안 대응책에서 제외합니다.
 
 ② Entry-Token 재사용
 
@@ -2168,7 +2175,9 @@ redis.call('DECR', KEYS[1])
 | 항목 | 판정 |
 
 ``````
-| 관리 포트 분리 + `X-User-Role: ADMIN` · 1회성 토큰 · .gitignore · actuator 최소화 · PII 3계층 · 에러·로그 마스킹 | 필수 5건 합쳐서 약 0.5일. 대부분 설정과 어노테이션 |
+| 관리 포트 분리 · 1회성 토큰 · .gitignore · actuator 최소화 · PII 3계층 · 에러·로그 마스킹 | 채택. 대부분 설정과 어노테이션 |
+
+| 관리자 API 인증·인가 | 미적용. `X-User-Role` 단독 검사는 보안 작업으로 세지 않으며 후속 작업 |
 
 | IP rate limit(프로파일 분리) · 의존성 스캔 1회 | 채택 |
 
@@ -2176,7 +2185,9 @@ redis.call('DECR', KEYS[1])
 
 ## 발표에서 말할 것
 
-선착순 이벤트는 구조적으로 어뷰징 표적이라 세 겹으로 막았습니다. DB 유니크 제약이 1인 1매를 물리적으로 보장하고, 1회성 입장 토큰이 재고 카운터 반복 호출을 막고, 관리 포트 분리로 운영 API를 외부에서 못 건드리게 했습니다.
+선착순 이벤트는 구조적으로 어뷰징 표적입니다. DB 유니크 제약이 1인 1매를 물리적으로
+보장하고 1회성 입장 토큰이 재고 카운터 반복 호출을 막습니다. 관리 포트 분리는 Actuator를
+외부에서 차단하지만 업무 포트의 관리자 API를 보호하지 않으며, 관리자 인증은 후속 작업입니다.
 
 다만 AES 키를 환경변수로 주입하는 것이 저희 범위의 상한입니다. 컨테이너에 들어올 수 있으면 읽을 수 있어서, 실서비스라면 KMS로 런타임 주입하고 로테이션해야 합니다.
 

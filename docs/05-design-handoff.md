@@ -197,8 +197,9 @@ grade-vip · grade-gold · grade-silver · grade-welcome
 ### 4.1 엔드포인트 (PRD §11.1)
 
 공통 헤더 `X-User-Id` · `X-User-Grade` · **상태 변경은 `Idempotency-Key` 필수**
-관리자 API는 추가로 `X-User-Role: ADMIN`을 요구한다. 이 헤더들은 인증 토큰이 아니라
-회원·등급·역할을 구분하기 위한 요청 값이며 JWT는 사용하지 않는다.
+`X-User-Role`을 포함한 이 헤더들은 데모에서 회원·등급·역할을 구분하는 요청 값일 뿐
+인증·인가 수단이 아니다. 현재 관리자 API의 `X-User-Role: ADMIN` 검사는 테스트·화면 계약이며,
+클라이언트가 값을 위조할 수 있으므로 보안 경계로 간주하지 않는다. 관리자 인증은 후속 작업이다.
 
 | Method | Path | 프론트 함수 |
 |---|---|---|
