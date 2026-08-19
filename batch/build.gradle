@@ -6,14 +6,17 @@ dependencies {
     // 어댑터는 런타임에만. 배치가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
     // 배치는 JPA 엔티티를 만들지 않고 DataSource + Spring Batch JDBC 리더/라이터로 간다.
     implementation project(':core')
+    testImplementation testFixtures(project(':core'))
     runtimeOnly project(':storage')
     testImplementation testFixtures(project(':storage'))
 
     implementation 'org.springframework.boot:spring-boot-starter-batch'
     // 300만 행 집계·리플레이는 전부 SQL 이다. starter-batch 가 끌어오지만 직접 쓰므로 명시한다.
     implementation 'org.springframework:spring-jdbc'
-    // 관리 포트의 verify 온디맨드 트리거용. Compose 에서 이 포트를 외부로 노출하지 않는다.
+    // 관제 API가 내부 네트워크에서 호출하는 verify 트리거를 제공한다.
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
 
     // JobLauncherTestUtils / JobRepositoryTestUtils
     testImplementation 'org.springframework.batch:spring-batch-test'

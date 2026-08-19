@@ -2,10 +2,11 @@ spring:
   application:
     name: coupon-batch
   config:
-    import: classpath:storage.yml
+    import:
+      - classpath:storage.yml
+      - classpath:management.yml
 
-  # 관리 포트로만 뜬다. verify 온디맨드 트리거(POST /api/v1/admin/verify)가 필요해서 none 이 아니다.
-  # Compose 에서 이 포트를 외부로 노출하지 않는다 — 그게 admin 방어의 실체다.
+  # 관제 API의 내부 verify 요청을 받기 위해 servlet 로 실행한다.
   main:
     web-application-type: servlet
 
@@ -26,7 +27,8 @@ spring:
       pool-name: batch-pool
 
 server:
-  port: ${BATCH_PORT:9090}
+  # 관제 API가 내부 네트워크에서 호출하는 batch 업무 포트다.
+  port: ${BATCH_PORT:9091}
 
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 스케줄러가 멈춘다.

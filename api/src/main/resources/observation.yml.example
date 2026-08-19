@@ -2,10 +2,9 @@
 # management.metrics.* 밖으로 나가는 키를 추가할 때는 아래 tomcat 스위치처럼 왜 이 파일에
 # 있는지를 같이 적을 것.
 #
-# ⚠️ 지금 /actuator/prometheus 는 404 다. 노출 allowlist 가 management.yml(OBS-20) 소유이고
-#    아직 열리지 않았다 — 이 파일의 백분위·expiry 설정은 그때까지 스크레이프로 도달하지
-#    못한다. PrometheusExposureContractTest 가 그 상태를 고정하고, 열리는 순간 알려 준다.
-#    여기서 exposure 를 다시 쓰지 말 것 — 그쪽 exclude 가 지워져 /actuator/env 가 열린다.
+# /actuator/prometheus 는 management.yml(OBS-20) allowlist로 열려 있다.
+# PrometheusExposureContractTest 가 이 파일의 백분위 설정과 allowlist를 함께 로드해
+# 실제 HTTP scrape 결과를 검증한다. exposure는 여기서 재정의하지 않는다.
 #
 # 열리고 나면 Prometheus 가 이 미터들을 1초마다 긁어간다. 시계열 수집·보관은 Prometheus 가
 # 맡고 화면은 직접 만든다(Grafana 미사용 — 같은 격차 숫자가 v1 은 N_A, v2 는 오류, v3 는

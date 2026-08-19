@@ -1,0 +1,14 @@
+management:
+  server:
+    port: ${BATCH_MANAGEMENT_PORT:9092}
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+        exclude: env,configprops,beans,heapdump
+  endpoint:
+    health:
+      show-details: never
+
+# Compose 에 이 포트의 ports 매핑을 추가하지 않는다.
+# Prometheus 가 내부 네트워크에서 batch:9092 로 긁는다.

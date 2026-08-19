@@ -42,10 +42,10 @@ class ManagementConfigTest {
     }
 
     @Test
-    @DisplayName("allowlist 에 health · metrics · admission-capacity 만 있다")
+    @DisplayName("allowlist 에 health · metrics · prometheus · admission-capacity 만 있다")
     void exposureIncludeIsAllowlist() {
         assertThat(template().getProperty("management.endpoints.web.exposure.include"))
-                .isEqualTo("health,metrics,admission-capacity");
+                .isEqualTo("health,metrics,prometheus,admission-capacity");
     }
 
     @Test

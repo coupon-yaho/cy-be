@@ -4,9 +4,9 @@ management:
   endpoints:
     web:
       exposure:
-        # admission-capacity 는 아직 없다. 나중에 붙일 때 allowlist 를 다시 여는 걸 잊지 않으려고 미리 적는다.
-        include: health,metrics,admission-capacity
-        # include 만 두면 누가 * 로 바꾸는 순간 env 가 함께 열린다. exclude 가 그때의 방어선이다.
+        # admission-capacity는 후속 구현을 위한 예약값이며 현재 endpoint bean은 없다.
+        include: health,metrics,prometheus,admission-capacity
+        # allowlist 가 잘못 확장돼도 민감한 엔드포인트는 노출하지 않는다.
         exclude: env,configprops,beans,heapdump
   endpoint:
     health:

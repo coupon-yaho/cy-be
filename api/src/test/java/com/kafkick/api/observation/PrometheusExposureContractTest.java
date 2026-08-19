@@ -25,7 +25,6 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -77,72 +76,14 @@ class PrometheusExposureContractTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
-    /**
-     * 커밋된 설정 그대로 띄운다. allowlist 에 prometheus 가 없으므로 스크레이프는 닫혀 있다.
-     *
-     * <p><b>OBS-20 이 도착하면 깨지도록 일부러 만들었다.</b> 그러지 않으면 "우리 쪽은 다 됐는데
-     * 남의 티켓이 안 왔다" 는 상태가 아무 신호도 내지 않는다. allowlist 가 열리는 순간 빨간불이
-     * 켜지고, 그때 이 클래스를 지우면 된다.
-     */
+    /** 커밋된 OBS-20 allowlist와 OBS-3 백분위 설정을 함께 로드한다. */
     @SpringBootTest(
             classes = TestApp.class,
             webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
             properties = {CONFIG_LOCATION, EXCLUDE_DATASOURCE, "management.server.port=0",
                     "management.endpoint.health.validate-group-membership=false"})
     @Nested
-    class NotYetOpenedByObs20 {
-
-        @LocalManagementPort
-        int managementPort;
-
-        @Autowired
-        Environment environment;
-
-        @Autowired
-        org.springframework.context.ApplicationContext context;
-
-        @Test
-        @DisplayName("[의도된 트립와이어] OBS-20 이 allowlist 를 열면 이 테스트가 깨진다 —"
-                + " 버그가 아니라 신호다. 깨지면 NotYetOpenedByObs20 클래스를 통째로 지워라")
-        void scrapeIsStillClosed() throws Exception {
-            assertThat(environment.getProperty("management.endpoints.web.exposure.include"))
-                    .as("OBS-20 이 allowlist 를 열면 이 단언이 깨진다 — 그게 이 테스트의 목적이다."
-                            + " 깨지면 이 중첩 클래스를 지우고 OpenedByObs20 만 남겨라")
-                    .doesNotContain("prometheus");
-
-            assertThat(call(managementPort, "/actuator/prometheus").statusCode())
-                    .as("allowlist 가 닫혀 있는 동안은 404 여야 한다 — 200 이면 노출이 의도치"
-                            + " 않게 열린 것이다")
-                    .isEqualTo(404);
-        }
-
-        @Test
-        @DisplayName("닫힌 이유는 의존 누락이 아니라 allowlist 다 — 레지스트리는 이미 붙어 있다")
-        void theRegistryBeanIsAlreadyThere() {
-            assertThat(environment.getProperty("management.metrics.distribution.percentiles"
-                    + "[http.server.requests]"))
-                    .as("우리 쪽 설정은 로드돼 있다")
-                    .isNotNull();
-            assertThat(context.getBeanProvider(PrometheusMeterRegistry.class).getIfAvailable())
-                    .as("레지스트리 빈이 실제로 떠 있어야 한다 — 클래스 존재만 보면 의존을 빼도"
-                            + " 통과하는 헛단언이 된다")
-                    .isNotNull();
-        }
-    }
-
-    /**
-     * OBS-20 이 allowlist 를 연 뒤의 상태를 미리 고정한다. 우리 쪽(의존 · 백분위 설정)이
-     * 완성돼 있다는 증거이고, OBS-20 이 도착했을 때 무엇이 나와야 하는지의 기준이다.
-     */
-    @SpringBootTest(
-            classes = TestApp.class,
-            webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-            properties = {CONFIG_LOCATION, EXCLUDE_DATASOURCE, "management.server.port=0",
-                    "management.endpoint.health.validate-group-membership=false",
-                    "management.endpoints.web.exposure.include="
-                            + "health,metrics,admission-capacity,prometheus"})
-    @Nested
-    class OpenedByObs20 {
+    class PrometheusIncluded {
 
         @LocalManagementPort
         int managementPort;
@@ -151,7 +92,7 @@ class PrometheusExposureContractTest {
         int appPort;
 
         @Test
-        @DisplayName("allowlist 만 열리면 200 이고 quantile 라벨로 나온다 — _bucket 은 없다")
+        @DisplayName("커밋된 allowlist로 200 이고 quantile 라벨로 나온다 — _bucket 은 없다")
         void scrapeServesQuantileLabels() throws Exception {
             call(appPort, "/obs3-exposure-probe");
 
@@ -176,6 +117,31 @@ class PrometheusExposureContractTest {
          * exclude 를 실제로 검증하려면 include 를 * 로 넓혀야 하고, 커밋된 파일에 그 줄이
          * 남아 있는지는 ManagementConfigTest 가 본다(그쪽도 깨뜨려 확인했다).
          */
+    }
+
+    /** registry가 있어도 allowlist에서 제외하면 HTTP scrape가 닫히는지 검증한다. */
+    @SpringBootTest(
+            classes = TestApp.class,
+            webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+            properties = {CONFIG_LOCATION, EXCLUDE_DATASOURCE, "management.server.port=0",
+                    "management.endpoint.health.validate-group-membership=false",
+                    "management.endpoints.web.exposure.include="
+                            + "health,metrics,admission-capacity"})
+    @Nested
+    class PrometheusExcluded {
+
+        @LocalManagementPort
+        int managementPort;
+
+        @Autowired
+        PrometheusMeterRegistry registry;
+
+        @Test
+        @DisplayName("registry가 있어도 allowlist에서 제외하면 prometheus는 404다")
+        void scrapeIsClosedByAllowlist() throws Exception {
+            assertThat(registry).isNotNull();
+            assertThat(call(managementPort, "/actuator/prometheus").statusCode()).isEqualTo(404);
+        }
     }
 
     @SpringBootConfiguration
