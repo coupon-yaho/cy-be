@@ -1,6 +1,7 @@
 package com.kafkick.core.consistency;
 
 import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.support.exception.BusinessException;
 
 /**
  * 수집된 Redis·DB 원천값을 엔진 버전과 평가 단계에 맞는 정합성 결과로 변환합니다.
@@ -20,6 +21,11 @@ public interface ConsistencyCalculator {
      * @param phase 진행 중 추세를 위한 LIVE 또는 최종 합격 판정을 위한 FINAL
      * @param engineVersion gap 적용 범위와 LIVE 심각도 정책을 결정하는 발급 엔진 버전
      * @return gap 4종, 초과 발급 수, 단계별 verdict와 severity를 포함한 평가 결과
+     * @throws NullPointerException snapshot, phase 또는 engineVersion이 null인 경우
+     * @throws BusinessException 원천 상태가 지원되지 않는 경우
+     *         ({@link ConsistencyErrorCode#INVALID_SOURCE_STATE}), FINAL 값이 준비되지 않은 경우
+     *         ({@link ConsistencyErrorCode#FINAL_VALUE_UNAVAILABLE}), 또는 계산이 {@code long}
+     *         범위를 벗어난 경우({@link ConsistencyErrorCode#CALCULATION_OVERFLOW})
      */
     ConsistencyEvaluation evaluate(
             ConsistencyRawSnapshot snapshot,

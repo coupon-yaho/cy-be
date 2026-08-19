@@ -17,7 +17,7 @@ class DefaultConsistencyCalculatorTest {
     private static final Instant DATABASE_OBSERVED_AT = Instant.parse("2026-08-19T01:00:01Z");
 
     private final DefaultConsistencyCalculator calculator = new DefaultConsistencyCalculator(
-            ConsistencySeverityPolicy.defaults()
+            new ConsistencySeverityPolicy(10, 100)
     );
 
     @Test
@@ -110,6 +110,32 @@ class DefaultConsistencyCalculatorTest {
         assertThat(result.gaps().get(ConsistencyGapType.DB_COUNTER_GAP).observedAt())
                 .isEqualTo(DATABASE_OBSERVED_AT);
         assertThat(result.overIssued().observedAt()).isEqualTo(DATABASE_OBSERVED_AT);
+    }
+
+    @Test
+    void picksTheOldestObservationTimeWhenTheDatabaseSourceIsOlder() {
+        ConsistencyRawValues values = new ConsistencyRawValues(100, 40, 65, 64, 58, 63, 60);
+        Instant olderDatabaseObservedAt = REDIS_OBSERVED_AT.minusSeconds(5);
+
+        ConsistencyEvaluation result = calculator.evaluate(
+                new ConsistencyRawSnapshot(
+                        values,
+                        observation(SourceStatus.VALID, REDIS_OBSERVED_AT),
+                        observation(SourceStatus.VALID, olderDatabaseObservedAt)
+                ),
+                ConsistencyPhase.LIVE,
+                EngineVersion.V2
+        );
+
+        assertThat(result.gaps().get(ConsistencyGapType.ACTIVE_DB_GAP).observedAt())
+                .isEqualTo(olderDatabaseObservedAt);
+        assertThat(result.gaps().get(ConsistencyGapType.PERSIST_GAP).observedAt())
+                .isEqualTo(olderDatabaseObservedAt);
+        assertThat(result.gaps().get(ConsistencyGapType.LUA_GAP).observedAt())
+                .isEqualTo(REDIS_OBSERVED_AT);
+        assertThat(result.gaps().get(ConsistencyGapType.DB_COUNTER_GAP).observedAt())
+                .isEqualTo(olderDatabaseObservedAt);
+        assertThat(result.overIssued().observedAt()).isEqualTo(olderDatabaseObservedAt);
     }
 
     @Test

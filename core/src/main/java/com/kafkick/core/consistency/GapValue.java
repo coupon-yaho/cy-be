@@ -3,9 +3,7 @@ package com.kafkick.core.consistency;
 import com.kafkick.core.observation.SourceStatus;
 
 import java.time.Instant;
-import java.util.EnumSet;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * 계산된 값 하나와 그 값을 신뢰할 수 있는지를 함께 표현합니다.
@@ -19,18 +17,10 @@ import java.util.Set;
  */
 public record GapValue(Long value, SourceStatus state, Instant observedAt) {
 
-    private static final Set<SourceStatus> ALLOWED_STATES = EnumSet.of(
-            SourceStatus.VALID,
-            SourceStatus.PENDING,
-            SourceStatus.STALE,
-            SourceStatus.UNAVAILABLE,
-            SourceStatus.N_A
-    );
-
     /** 상태와 값·관측 시각 조합이 유효한지 검증합니다. */
     public GapValue {
         Objects.requireNonNull(state, "state");
-        if (!ALLOWED_STATES.contains(state)) {
+        if (!ConsistencyStatePolicy.isSupported(state)) {
             throw new IllegalArgumentException("GapValue에서 허용하지 않는 상태입니다: " + state);
         }
         if ((state == SourceStatus.VALID || state == SourceStatus.STALE)

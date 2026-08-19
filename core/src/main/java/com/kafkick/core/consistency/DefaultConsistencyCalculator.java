@@ -10,7 +10,6 @@ import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.LongSupplier;
 
 /**
@@ -25,13 +24,6 @@ public final class DefaultConsistencyCalculator implements ConsistencyCalculator
     private static final GapValue NOT_APPLICABLE = new GapValue(null, SourceStatus.N_A, null);
     private static final GapValue UNAVAILABLE = new GapValue(null, SourceStatus.UNAVAILABLE, null);
     private static final GapValue PENDING = new GapValue(null, SourceStatus.PENDING, null);
-    private static final Set<SourceStatus> CONSISTENCY_SOURCE_STATES = Set.of(
-            SourceStatus.VALID,
-            SourceStatus.PENDING,
-            SourceStatus.STALE,
-            SourceStatus.UNAVAILABLE,
-            SourceStatus.N_A
-    );
 
     private final ConsistencySeverityPolicy severityPolicy;
 
@@ -293,10 +285,24 @@ public final class DefaultConsistencyCalculator implements ConsistencyCalculator
      * @return 더 높은 심각도
      */
     private static Severity moreSevere(Severity current, Severity candidate) {
-        if (current == null || candidate.ordinal() > current.ordinal()) {
+        if (current == null || severityRank(candidate) > severityRank(current)) {
             return candidate;
         }
         return current;
+    }
+
+    /**
+     * enum 선언 순서와 무관한 운영 심각도 순위를 반환합니다.
+     *
+     * @param severity 순위를 확인할 심각도
+     * @return NONE은 0, WARN은 1, CRITICAL은 2
+     */
+    private static int severityRank(Severity severity) {
+        return switch (severity) {
+            case NONE -> 0;
+            case WARN -> 1;
+            case CRITICAL -> 2;
+        };
     }
 
     /**
@@ -355,7 +361,7 @@ public final class DefaultConsistencyCalculator implements ConsistencyCalculator
      * @throws BusinessException 정합성 계산에서 지원하지 않는 상태인 경우
      */
     private static void requireConsistencySourceState(SourceObservation observation) {
-        if (!CONSISTENCY_SOURCE_STATES.contains(observation.status())) {
+        if (!ConsistencyStatePolicy.isSupported(observation.status())) {
             throw new BusinessException(
                     ConsistencyErrorCode.INVALID_SOURCE_STATE,
                     "정합성 원천에 사용할 수 없는 상태입니다: " + observation.status()
