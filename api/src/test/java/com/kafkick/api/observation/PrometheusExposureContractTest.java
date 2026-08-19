@@ -98,6 +98,9 @@ class PrometheusExposureContractTest {
         @Autowired
         Environment environment;
 
+        @Autowired
+        org.springframework.context.ApplicationContext context;
+
         @Test
         @DisplayName("[의도된 트립와이어] OBS-20 이 allowlist 를 열면 이 테스트가 깨진다 —"
                 + " 버그가 아니라 신호다. 깨지면 NotYetOpenedByObs20 클래스를 통째로 지워라")
@@ -120,9 +123,10 @@ class PrometheusExposureContractTest {
                     + "[http.server.requests]"))
                     .as("우리 쪽 설정은 로드돼 있다")
                     .isNotNull();
-            assertThat(PrometheusMeterRegistry.class.getName())
-                    .as("micrometer-registry-prometheus 가 빠지면 컴파일 단계에서 먼저 깨진다")
-                    .isNotEmpty();
+            assertThat(context.getBeanProvider(PrometheusMeterRegistry.class).getIfAvailable())
+                    .as("레지스트리 빈이 실제로 떠 있어야 한다 — 클래스 존재만 보면 의존을 빼도"
+                            + " 통과하는 헛단언이 된다")
+                    .isNotNull();
         }
     }
 

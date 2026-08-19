@@ -56,7 +56,7 @@ class TestScaffoldingContainmentTest {
         Path module = moduleRoot();
         List<Path> mainFiles = filesUnder(module.resolve("src/main"));
 
-        for (Path candidate : filesUnder(module.resolve(OBSERVATION_PACKAGE))) {
+        for (Path candidate : javaFilesUnder(module.resolve(OBSERVATION_PACKAGE))) {
             String name = fileName(candidate);
             if (NAME_CONTRACTS.contains(name)) {
                 continue;
@@ -95,18 +95,29 @@ class TestScaffoldingContainmentTest {
             if (!containsStatement(source, "@SpringBootConfiguration")) {
                 continue;
             }
-            assertThat(statementLines(source))
+            // 줄 단위로 보면 애노테이션을 줄바꿈한 순간 빠져나간다. 공백을 지우고 통째로 본다.
+            String squashed = String.join("", statementLines(source)).replaceAll("\\s+", "");
+            assertThat(squashed)
                     .as("%s 의 중첩 설정 클래스는 com.kafkick 컴포넌트 스캔에 걸린다. 여기에"
-                            + " @EnableAutoConfiguration(exclude = ...) 를 달면 그 제외가 다른"
-                            + " 테스트의 컨텍스트까지 따라간다(실측). 제외가 필요하면"
+                            + " 자동설정 제외를 애노테이션으로 달면 그 제외가 다른 테스트의"
+                            + " 컨텍스트까지 따라간다(실측). 제외가 필요하면"
                             + " spring.autoconfigure.exclude 프로퍼티로 줘라", fileName(test))
-                    .noneMatch(line -> line.startsWith("@EnableAutoConfiguration(exclude"));
+                    // @ 를 앞에 붙여 찾으면 정규화 이름(@org.springframework...)이 빠져나간다.
+                    .doesNotContain("EnableAutoConfiguration(exclude")
+                    .doesNotContain("SpringBootApplication(exclude");
         }
     }
 
+    /**
+     * 목록이 가리키는 파일이 없으면 <b>실패</b>한다. 걸러 내면 rename 한 순간 검사가 0건이
+     * 되면서 초록불이 된다 — 아무것도 안 보는 가드가 가장 나쁘다.
+     */
     private List<Path> ownedTestFiles() {
         Path dir = moduleRoot().resolve("src/test/java/com/kafkick/api/observation");
-        return OWNED_TESTS.stream().map(dir::resolve).filter(Files::isRegularFile).toList();
+        List<Path> files = OWNED_TESTS.stream().map(dir::resolve).toList();
+        assertThat(files).allSatisfy(file ->
+                assertThat(file).as("OWNED_TESTS 가 실재하지 않는 파일을 가리킨다").isRegularFile());
+        return files;
     }
 
     /**
@@ -114,11 +125,11 @@ class TestScaffoldingContainmentTest {
      * 여럿이라, 문자열 포함 검사만 하면 전부 오탐이 된다(실제로 걸렸다).
      */
     private boolean containsStatement(String source, String token) {
+        // 애노테이션은 줄 시작에 온다. 메서드 호출은 줄 중간이라 이 검사로는 못 찾는다.
         return statementLines(source).stream().anyMatch(line -> line.startsWith(token));
     }
 
-    /** 애노테이션은 줄 시작으로 찾지만 메서드 호출은 줄 중간에 있다 — 섞으면 검사가 헛돈다. */
-
+    /** 주석·문자열이 아닌, 실제 코드로 보이는 줄만 남긴다. */
     private List<String> statementLines(String source) {
         return source.lines()
                 .map(String::strip)
@@ -149,6 +160,13 @@ class TestScaffoldingContainmentTest {
             }
         }
         return false;
+    }
+
+    /** 리소스나 편집기 임시 파일이 섞이면 이름 매칭이 어긋나 오탐이 난다. */
+    private List<Path> javaFilesUnder(Path root) throws IOException {
+        return filesUnder(root).stream()
+                .filter(path -> path.getFileName().toString().endsWith(".java"))
+                .toList();
     }
 
     private List<Path> filesUnder(Path root) throws IOException {

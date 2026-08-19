@@ -112,6 +112,13 @@ class AutoInstrumentedMetersTest {
         @Autowired
         MeterRegistry registry;
 
+        /**
+         * scrape 출력을 보려면 Prometheus 레지스트리 자체가 필요하다. {@code MeterRegistry} 를
+         * 캐스팅하면 레지스트리가 하나 더 붙어 composite 로 감싸이는 순간 깨진다.
+         */
+        @Autowired
+        PrometheusMeterRegistry prometheusRegistry;
+
         @Autowired
         DataSource dataSource;
 
@@ -158,7 +165,7 @@ class AutoInstrumentedMetersTest {
                             .as("observation.yml 의 percentiles 가 자동 계측 Timer 에 걸려야 한다")
                             .isPresent());
 
-            String scrape = ((PrometheusMeterRegistry) registry).scrape();
+            String scrape = prometheusRegistry.scrape();
             assertThat(scrape)
                     .as("Prometheus 가 긁어갈 형태 — 이 줄이 없으면 화면에서 0.99 를 볼 수 없다")
                     .contains("http_server_requests_seconds{")

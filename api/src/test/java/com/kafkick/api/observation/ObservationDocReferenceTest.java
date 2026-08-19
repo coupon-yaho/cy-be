@@ -26,8 +26,10 @@ import org.junit.jupiter.api.Test;
  * 컴파일은 통과하고 {@code javadoc} 태스크만 "reference not found" 로 깨진다 — 부패는 못 막고
  * 빌드만 잃는다(실측).
  *
- * <p><b>검사 범위는 OBS-3 소유 파일뿐이다.</b> api 의 main 전체로 넓히면 남의 티켓 주석이
- * 이 테스트를 깨뜨리게 된다. 규약을 모듈 전체로 넓힐지는 별도 결정이다.
+ * <p><b>검사 범위는 OBS-3 소유 파일뿐이다</b> — main 설정·상수({@link #OWNED_FILES})와 이
+ * 티켓이 만든 테스트 소스({@link #OWNED_JAVA})를 함께 본다. 검사마다 대상이 다르다: 클래스명
+ * 인용은 양쪽 전부, javadoc 위치와 TODO 는 자바 소스만, 결정 번호는
+ * {@link #FILES_CITING_DECISIONS}. api 전체로 넓히면 남의 티켓 주석이 이 테스트를 깨뜨린다.
  *
  * <p>결정 번호 인용도 함께 본다. 근거 문서 없이 번호만 적으면 읽는 사람이 찾아갈 곳이 없어
  * <b>저장소 안에 그 번호를 정의한 문서가 있을 때만</b> 허용한다.
@@ -81,6 +83,17 @@ class ObservationDocReferenceTest {
                     "src/test/java/com/kafkick/api/observation/ObservationMetricsContractTest.java"))
             .toList();
 
+    /** javadoc 검사 대상. 주석이 붙을 선언이 있는 자바 소스만 본다. */
+    private static final List<String> OWNED_JAVA = List.of(
+            "src/main/java/com/kafkick/api/observation/MeterNames.java",
+            "src/test/java/com/kafkick/api/observation/MeterValueReader.java",
+            "src/test/java/com/kafkick/api/observation/AutoInstrumentedMetersTest.java",
+            "src/test/java/com/kafkick/api/observation/MeterValueReaderTest.java",
+            "src/test/java/com/kafkick/api/observation/ObservationMetricsContractTest.java",
+            "src/test/java/com/kafkick/api/observation/PrometheusExposureContractTest.java",
+            "src/test/java/com/kafkick/api/observation/TestScaffoldingContainmentTest.java");
+
+
     @Test
     @DisplayName("OBS-3 소유 파일의 주석이 가리키는 테스트 클래스가 전부 실재한다")
     void everyReferencedTestClassExists() throws IOException {
@@ -98,16 +111,6 @@ class ObservationDocReferenceTest {
             }
         }
     }
-
-    /** javadoc 검사 대상. 주석이 붙을 선언이 있는 자바 소스만 본다. */
-    private static final List<String> OWNED_JAVA = List.of(
-            "src/main/java/com/kafkick/api/observation/MeterNames.java",
-            "src/test/java/com/kafkick/api/observation/MeterValueReader.java",
-            "src/test/java/com/kafkick/api/observation/AutoInstrumentedMetersTest.java",
-            "src/test/java/com/kafkick/api/observation/MeterValueReaderTest.java",
-            "src/test/java/com/kafkick/api/observation/ObservationMetricsContractTest.java",
-            "src/test/java/com/kafkick/api/observation/PrometheusExposureContractTest.java",
-            "src/test/java/com/kafkick/api/observation/TestScaffoldingContainmentTest.java");
 
     @Test
     @DisplayName("javadoc 이 제 선언에 붙어 있다 — 연달아 두 개면 앞의 것이 버려진다")
