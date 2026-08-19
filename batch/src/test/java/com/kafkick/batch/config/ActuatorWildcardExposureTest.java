@@ -63,8 +63,12 @@ class ActuatorWildcardExposureTest {
     @Test
     @DisplayName("include 가 * 여도 위험한 열하나는 닫혀 있다")
     void excludeStillClosesThemUnderWildcard() throws Exception {
-        assertThat(get("health").statusCode())
-                .as("별표가 실제로 넓혔는지 먼저 본다. 안 넓어졌으면 아래 단언이 헛돈다")
+        // 별표가 실제로 넓혔는지 먼저 본다. 안 넓어졌으면 아래 단언 전부가 헛돈다.
+        //
+        // health 로는 이것을 못 본다 — 스프링 기본 노출이 health 하나라, include 가 통째로
+        // 안 먹어도 200 이다. metrics 는 기본 미노출이라 별표가 먹었을 때만 열린다.
+        assertThat(get("metrics").statusCode())
+                .as("별표가 안 넓어졌다. 아래 404 들이 exclude 덕인지 알 수 없어진다")
                 .isEqualTo(200);
 
         // include 가 * 일 때 실제로 열리는 것을 재 보니 16개였다. 그중 위험한 것 전부다.

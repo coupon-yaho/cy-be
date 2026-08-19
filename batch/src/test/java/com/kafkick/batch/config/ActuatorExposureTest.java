@@ -45,26 +45,17 @@ import com.kafkick.storage.db.MySqlContainerConfig;
 @Import(MySqlContainerConfig.class)
 class ActuatorExposureTest {
 
-    @LocalManagementPort
-    private int managementPort;
-
-    @LocalServerPort
-    private int serverPort;
-
     // Boot 4 에는 TestRestTemplate 이 없다. JDK 클라이언트로 두면 스프링 버전에 안 묶이고,
     // 이 테스트가 보려는 것이 애초에 프레임워크가 아니라 HTTP 표면이다.
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
-    private HttpResponse<String> get(int port, String path) throws IOException, InterruptedException {
-        return CLIENT.send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
-                        .timeout(Duration.ofSeconds(10))
-                        .GET()
-                        .build(),
-                HttpResponse.BodyHandlers.ofString());
-    }
+    @LocalManagementPort
+    private int managementPort;
+
+    @LocalServerPort
+    private int serverPort;
 
     /**
      * <b>열린 것의 집합 전체를 못 박습니다.</b> 개별 엔드포인트를 하나씩 확인하면
@@ -87,18 +78,6 @@ class ActuatorExposureTest {
                 .containsExactlyInAnyOrder(
                         "self", "health", "health-path",
                         "metrics", "metrics-requiredMetricName", "prometheus");
-    }
-
-    /** 인덱스 본문의 {@code _links} 이름만 뽑는다. 순서는 보장되지 않으므로 집합으로 본다. */
-    private static java.util.Set<String> linkNamesOf(String body) {
-        java.util.Set<String> names = new java.util.LinkedHashSet<>();
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("\"([A-Za-z][A-Za-z0-9-]*)\"\\s*:\\s*\\{\"href\"")
-                .matcher(body);
-        while (m.find()) {
-            names.add(m.group(1));
-        }
-        return names;
     }
 
     /**
@@ -147,5 +126,26 @@ class ActuatorExposureTest {
 
         assertThat(get(serverPort, "/actuator/prometheus").statusCode())
                 .isEqualTo(404);
+    }
+
+    private HttpResponse<String> get(int port, String path) throws IOException, InterruptedException {
+        return CLIENT.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .timeout(Duration.ofSeconds(10))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** 인덱스 본문의 {@code _links} 이름만 뽑는다. 순서는 보장되지 않으므로 집합으로 본다. */
+    private static java.util.Set<String> linkNamesOf(String body) {
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"([A-Za-z][A-Za-z0-9-]*)\"\\s*:\\s*\\{\"href\"")
+                .matcher(body);
+        while (m.find()) {
+            names.add(m.group(1));
+        }
+        return names;
     }
 }
