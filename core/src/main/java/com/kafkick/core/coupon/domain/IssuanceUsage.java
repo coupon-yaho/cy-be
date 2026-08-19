@@ -3,6 +3,8 @@ package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
 
+import com.kafkick.core.coupon.exception.CouponInvalidTransitionException;
+
 public record IssuanceUsage(
         Long id,
         Long issuanceId,
@@ -61,6 +63,28 @@ public record IssuanceUsage(
             throw new IllegalArgumentException(
                     "복원할 쿠폰 사용 ID는 필수입니다."
             );
+        }
+        return new IssuanceUsage(
+                id,
+                issuanceId,
+                orderId,
+                discountAmount,
+                usedAt,
+                canceledAt
+        );
+    }
+
+    public IssuanceUsage cancel(Instant canceledAt) {
+        if (canceledAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 사용 취소 시각은 필수입니다."
+            );
+        }
+        if (this.canceledAt != null) {
+            throw new CouponInvalidTransitionException();
+        }
+        if (canceledAt.isBefore(usedAt)) {
+            throw new CouponInvalidTransitionException();
         }
         return new IssuanceUsage(
                 id,

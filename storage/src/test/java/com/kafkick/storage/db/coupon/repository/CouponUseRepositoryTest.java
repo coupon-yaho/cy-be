@@ -31,6 +31,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,9 +39,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
@@ -48,6 +51,9 @@ import com.kafkick.core.coupon.port.IssuanceUsageRepository;
 import com.kafkick.core.coupon.service.CouponUseCommand;
 import com.kafkick.core.coupon.service.CouponUseResult;
 import com.kafkick.core.coupon.service.CouponUseService;
+import com.kafkick.core.coupon.service.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.CouponCancelUseResult;
+import com.kafkick.core.coupon.service.CouponCancelUseService;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
@@ -57,6 +63,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @RepositoryTest
 @Import({
         CouponRoundRepositoryImpl.class,
+        CouponStockRepositoryImpl.class,
         IssuanceRepositoryImpl.class,
         IssuanceUsageRepositoryImpl.class,
         IssuanceHistoryRepositoryImpl.class,
@@ -75,6 +82,9 @@ class CouponUseRepositoryTest {
 
     @Autowired
     private CouponRoundRepository couponRoundRepository;
+
+    @Autowired
+    private CouponStockRepository couponStockRepository;
 
     @Autowired
     private IssuanceRepository issuanceRepository;
@@ -96,6 +106,7 @@ class CouponUseRepositoryTest {
 
     private TransactionTemplate transactionTemplate;
     private CouponUseService couponUseService;
+    private CouponCancelUseService couponCancelUseService;
     private ExecutorService executor;
 
     @BeforeEach
@@ -108,6 +119,12 @@ class CouponUseRepositoryTest {
                 couponRoundRepository,
                 issuanceUsageRepository,
                 issuanceHistoryRepository
+        );
+        couponCancelUseService = new CouponCancelUseService(
+                issuanceRepository,
+                issuanceUsageRepository,
+                issuanceHistoryRepository,
+                couponStockRepository
         );
     }
 
@@ -252,6 +269,23 @@ class CouponUseRepositoryTest {
         assertThat(((Number) usages.get(1).get("order_id")).longValue())
                 .isEqualTo(31L);
         assertThat(usages.get(1).get("canceled_at")).isNull();
+    }
+
+    @Test
+    @DisplayName("사용 시각보다 빠른 취소 시각은 DB 제약으로 거부한다")
+    void rejectCancellationBeforeUsageAtDatabase() {
+        assertThatThrownBy(() ->
+                insertUsage(30L, USED_AT.minusSeconds(1))
+        ).isInstanceOfSatisfying(
+                UncategorizedSQLException.class,
+                exception -> {
+                    assertThat(exception.getSQLException().getErrorCode())
+                            .isEqualTo(3819);
+                    assertThat(exception.getSQLException().getMessage())
+                            .contains("ck_issuance_usages_cancel_time");
+                }
+        );
+        assertThat(countRows("issuance_usages")).isZero();
     }
 
     @Test
@@ -403,6 +437,97 @@ class CouponUseRepositoryTest {
         assertThat(activeCount()).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("만료 전 사용 취소는 상태와 실적을 갱신하고 현재 보유량을 유지한다")
+    void cancelUseBeforeExpirationAtomically() {
+        Instant canceledAt = USED_AT.plusSeconds(60);
+        prepareUsedIssuance(Instant.parse("2026-08-25T05:30:00Z"));
+
+        CouponCancelUseResult result = executeCancelUse(
+                IDEMPOTENCY_KEY,
+                canceledAt
+        );
+
+        assertThat(result.status()).isEqualTo(IssuanceStatus.ISSUED);
+        assertThat(issuanceStatus()).isEqualTo("ISSUED");
+        assertThat(activeCount()).isEqualTo(1);
+        assertThat(activeUsageCount()).isZero();
+        assertThat(canceledAt(30L)).isNotNull();
+        assertThat(countCancelUseHistories()).isEqualTo(1);
+        assertThat(idempotencyStatus(IDEMPOTENCY_KEY)).isEqualTo("DONE");
+    }
+
+    @Test
+    @DisplayName("만료 후 사용 취소는 EXPIRED로 전이하고 현재 보유량을 한 번 감소시킨다")
+    void cancelExpiredUseAndReleaseStockAtomically() {
+        Instant canceledAt = USED_AT.plusSeconds(60);
+        prepareUsedIssuance(USED_AT.plusSeconds(30));
+
+        CouponCancelUseResult result = executeCancelUse(
+                IDEMPOTENCY_KEY,
+                canceledAt
+        );
+
+        assertThat(result.status()).isEqualTo(IssuanceStatus.EXPIRED);
+        assertThat(issuanceStatus()).isEqualTo("EXPIRED");
+        assertThat(activeCount()).isZero();
+        assertThat(activeUsageCount()).isZero();
+        assertThat(canceledAt(30L)).isNotNull();
+        assertThat(countCancelUseHistories()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("같은 만료 쿠폰 사용 취소를 동시에 5회 요청해도 재고와 이력은 한 번만 반영된다")
+    void cancelExpiredUseConcurrentlyOnlyOnce() throws Exception {
+        int requestCount = 5;
+        Instant canceledAt = USED_AT.plusSeconds(60);
+        prepareUsedIssuance(USED_AT.plusSeconds(30));
+        executor = Executors.newFixedThreadPool(requestCount);
+        CountDownLatch ready = new CountDownLatch(requestCount);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Boolean>> futures = new ArrayList<>();
+
+        for (int index = 0; index < requestCount; index++) {
+            String key = "550e8400-e29b-41d4-a716-44665544000" + index;
+            futures.add(executor.submit(() -> {
+                ready.countDown();
+                if (!start.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException(
+                            "동시 사용 취소 시작 신호를 기다리지 못했습니다."
+                    );
+                }
+                try {
+                    transactionTemplate.executeWithoutResult(status ->
+                            couponCancelUseService.cancelUse(
+                                    cancelCommand(key, canceledAt)
+                            )
+                    );
+                    return true;
+                } catch (BusinessException exception) {
+                    assertThat(exception.getErrorCode()).isEqualTo(
+                            CouponIssueErrorCode.INVALID_TRANSITION
+                    );
+                    return false;
+                }
+            }));
+        }
+
+        assertThat(ready.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+        start.countDown();
+
+        int successCount = 0;
+        for (Future<Boolean> future : futures) {
+            if (future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                successCount++;
+            }
+        }
+        assertThat(successCount).isEqualTo(1);
+        assertThat(issuanceStatus()).isEqualTo("EXPIRED");
+        assertThat(activeCount()).isZero();
+        assertThat(activeUsageCount()).isZero();
+        assertThat(countCancelUseHistories()).isEqualTo(1);
+    }
+
     private CouponUseResult executeUse(String key, String requestHash) {
         return transactionTemplate.execute(status -> {
             assertThat(idempotencyRepository.tryStart(
@@ -420,6 +545,42 @@ class CouponUseRepositoryTest {
             );
             return result;
         });
+    }
+
+    private CouponCancelUseResult executeCancelUse(
+            String key,
+            Instant canceledAt
+    ) {
+        return transactionTemplate.execute(status -> {
+            assertThat(idempotencyRepository.tryStart(
+                    key,
+                    REQUEST_HASH,
+                    canceledAt
+            )).isTrue();
+            CouponCancelUseResult result = couponCancelUseService.cancelUse(
+                    cancelCommand(key, canceledAt)
+            );
+            idempotencyRepository.complete(
+                    key,
+                    20L,
+                    100L,
+                    "stored-cancel-response",
+                    canceledAt
+            );
+            return result;
+        });
+    }
+
+    private CouponCancelUseCommand cancelCommand(
+            String key,
+            Instant canceledAt
+    ) {
+        return new CouponCancelUseCommand(
+                100L,
+                20L,
+                key,
+                canceledAt
+        );
     }
 
     private String processIdempotentRequest(CountDownLatch completed)
@@ -606,6 +767,19 @@ class CouponUseRepositoryTest {
         );
     }
 
+    private void prepareUsedIssuance(Instant expiresAt) {
+        jdbcTemplate.update(
+                """
+                UPDATE issuances
+                SET status = 'USED', expires_at = ?, updated_at = ?
+                WHERE id = 100
+                """,
+                Timestamp.from(expiresAt),
+                Timestamp.from(USED_AT)
+        );
+        insertUsage(30L, null);
+    }
+
     private int activeCount() {
         return jdbcTemplate.queryForObject(
                 "SELECT active_count FROM coupon_stocks WHERE coupon_id = 10",
@@ -628,6 +802,52 @@ class CouponUseRepositoryTest {
                 WHERE issuance_id = 100 AND event_type = 'USE'
                 """,
                 Integer.class
+        );
+    }
+
+    private int countCancelUseHistories() {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM issuance_histories
+                WHERE issuance_id = 100 AND event_type = 'CANCEL_USE'
+                """,
+                Integer.class
+        );
+    }
+
+    private int activeUsageCount() {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM issuance_usages
+                WHERE issuance_id = 100 AND canceled_at IS NULL
+                """,
+                Integer.class
+        );
+    }
+
+    private LocalDateTime canceledAt(Long orderId) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT canceled_at
+                FROM issuance_usages
+                WHERE issuance_id = 100 AND order_id = ?
+                """,
+                LocalDateTime.class,
+                orderId
+        );
+    }
+
+    private String idempotencyStatus(String key) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT status
+                FROM idempotency_records
+                WHERE idem_key = ?
+                """,
+                String.class,
+                key
         );
     }
 

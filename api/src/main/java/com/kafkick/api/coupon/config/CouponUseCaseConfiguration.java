@@ -6,10 +6,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
 import com.kafkick.core.coupon.service.CouponUseService;
+import com.kafkick.core.coupon.service.CouponCancelUseService;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(CouponIdempotencyProperties.class)
@@ -27,6 +29,21 @@ public class CouponUseCaseConfiguration {
                 couponRoundRepository,
                 issuanceUsageRepository,
                 issuanceHistoryRepository
+        );
+    }
+
+    @Bean
+    public CouponCancelUseService couponCancelUseService(
+            IssuanceRepository issuanceRepository,
+            IssuanceUsageRepository issuanceUsageRepository,
+            IssuanceHistoryRepository issuanceHistoryRepository,
+            CouponStockRepository couponStockRepository
+    ) {
+        return new CouponCancelUseService(
+                issuanceRepository,
+                issuanceUsageRepository,
+                issuanceHistoryRepository,
+                couponStockRepository
         );
     }
 }

@@ -151,6 +151,31 @@ public record Issuance(
         );
     }
 
+    public Issuance cancelUse(Instant canceledAt) {
+        if (canceledAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 사용 취소 시각은 필수입니다."
+            );
+        }
+
+        return new Issuance(
+                id,
+                couponRoundId,
+                memberId,
+                code,
+                issuedGrade,
+                CouponStateMachine.transition(
+                        status,
+                        IssuanceEventType.CANCEL_USE,
+                        expiresAt,
+                        canceledAt
+                ),
+                issuedAt,
+                expiresAt,
+                canceledAt
+        );
+    }
+
     private static void validateId(
             Long value,
             String fieldName,
