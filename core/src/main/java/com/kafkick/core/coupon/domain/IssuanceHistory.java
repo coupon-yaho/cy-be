@@ -16,6 +16,8 @@ public record IssuanceHistory(
 
     private static final String CANCEL_USE_REASON =
             "주문 취소로 사용 복원";
+    private static final String CANCEL_REASON =
+            "회원 요청으로 발급 취소";
 
     public IssuanceHistory {
         validateId(id, "발급 이력 ID", true);
@@ -107,6 +109,29 @@ public record IssuanceHistory(
                         createdAt
                 ),
                 CANCEL_USE_REASON,
+                idempotencyKey,
+                createdAt
+        );
+    }
+
+    public static IssuanceHistory cancel(
+            Long issuanceId,
+            IssuanceStatus fromStatus,
+            String idempotencyKey,
+            Instant createdAt
+    ) {
+        return new IssuanceHistory(
+                null,
+                issuanceId,
+                IssuanceEventType.CANCEL,
+                fromStatus,
+                CouponStateMachine.transition(
+                        fromStatus,
+                        IssuanceEventType.CANCEL,
+                        null,
+                        createdAt
+                ),
+                CANCEL_REASON,
                 idempotencyKey,
                 createdAt
         );
