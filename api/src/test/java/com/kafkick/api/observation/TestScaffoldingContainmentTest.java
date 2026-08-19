@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -87,24 +88,30 @@ class TestScaffoldingContainmentTest {
         }
     }
 
+    /**
+     * 자동설정을 제외하는 애노테이션. {@code @SpringBootApplication} 은
+     * {@code @SpringBootConfiguration} 을 메타 애노테이션으로 품고 있어 같은 누출을 만든다.
+     *
+     * <p>이름 앞의 {@code [A-Za-z0-9_.]*} 는 정규화 이름을, 괄호 안의 {@code [^)]*} 는
+     * {@code exclude} 앞에 다른 속성이 오는 경우를 받는다. {@code excludeName} 도 접두가 같아
+     * 함께 걸린다. 문자열 포함 검사로는 이 셋이 전부 빠져나갔다(실측).
+     */
+    private static final Pattern AUTOCONFIG_EXCLUDE = Pattern.compile(
+            "@[A-Za-z0-9_.]*(?:EnableAutoConfiguration|SpringBootApplication)\\([^)]*exclude");
+
     @Test
-    @DisplayName("중첩 @SpringBootConfiguration 에 자동설정 제외를 애노테이션으로 달지 않는다")
+    @DisplayName("테스트용 설정 클래스에 자동설정 제외를 애노테이션으로 달지 않는다")
     void nestedBootConfigurationDoesNotLeakAutoConfigurationExcludes() throws IOException {
         for (Path test : ownedTestFiles()) {
-            String source = Files.readString(test);
-            if (!containsStatement(source, "@SpringBootConfiguration")) {
-                continue;
-            }
             // 줄 단위로 보면 애노테이션을 줄바꿈한 순간 빠져나간다. 공백을 지우고 통째로 본다.
-            String squashed = String.join("", statementLines(source)).replaceAll("\\s+", "");
-            assertThat(squashed)
-                    .as("%s 의 중첩 설정 클래스는 com.kafkick 컴포넌트 스캔에 걸린다. 여기에"
-                            + " 자동설정 제외를 애노테이션으로 달면 그 제외가 다른 테스트의"
-                            + " 컨텍스트까지 따라간다(실측). 제외가 필요하면"
-                            + " spring.autoconfigure.exclude 프로퍼티로 줘라", fileName(test))
-                    // @ 를 앞에 붙여 찾으면 정규화 이름(@org.springframework...)이 빠져나간다.
-                    .doesNotContain("EnableAutoConfiguration(exclude")
-                    .doesNotContain("SpringBootApplication(exclude");
+            String squashed = String.join("", statementLines(Files.readString(test)))
+                    .replaceAll("\\s+", "");
+            assertThat(AUTOCONFIG_EXCLUDE.matcher(squashed).find())
+                    .as("%s 의 설정 클래스는 com.kafkick 컴포넌트 스캔에 걸린다. 여기에 자동설정"
+                            + " 제외를 애노테이션으로 달면 그 제외가 다른 테스트의 컨텍스트까지"
+                            + " 따라간다(실측). 제외가 필요하면 spring.autoconfigure.exclude"
+                            + " 프로퍼티로 줘라", fileName(test))
+                    .isFalse();
         }
     }
 

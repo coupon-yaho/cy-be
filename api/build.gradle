@@ -27,7 +27,13 @@ dependencies {
 
     // /actuator/prometheus 를 만드는 레지스트리. 없으면 엔드포인트 자체가 생기지 않는다.
     // 노출 allowlist 는 management.yml(OBS-20) 소유라 이 티켓에서 건드리지 않는다.
-    implementation 'io.micrometer:micrometer-registry-prometheus'
+    //
+    // 자동설정으로만 붙는다 — 본 코드는 이 타입을 컴파일 타임에 참조하지 않는다(참조 0건).
+    // implementation 으로 올리면 그 사실이 무너져도 아무도 모른다.
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+    // 테스트는 scrape 출력과 레지스트리 빈을 직접 봐야 해서 컴파일 타임에 필요하다.
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
 }
 
 bootJar {
