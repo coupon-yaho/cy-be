@@ -57,16 +57,20 @@ class CouponCancelUseTransactionalAdapterTest {
     @BeforeEach
     void setUp() {
         responseCodec = new CouponCancelUseResponseCodec(new ObjectMapper());
+        IdempotencyExecutionTemplate idempotencyTemplate =
+                new IdempotencyExecutionTemplate(
+                        claimAdapter,
+                        timeProvider,
+                        new CouponIdempotencyProperties(
+                                Duration.ofMillis(100),
+                                Duration.ofMillis(1),
+                                Duration.ofSeconds(30)
+                        )
+                );
         adapter = new CouponCancelUseTransactionalAdapter(
-                claimAdapter,
+                idempotencyTemplate,
                 transactionExecutor,
-                responseCodec,
-                timeProvider,
-                new CouponIdempotencyProperties(
-                        Duration.ofMillis(100),
-                        Duration.ofMillis(1),
-                        Duration.ofSeconds(30)
-                )
+                responseCodec
         );
     }
 

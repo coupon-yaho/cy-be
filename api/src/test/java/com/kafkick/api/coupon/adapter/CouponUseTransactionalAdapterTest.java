@@ -59,16 +59,20 @@ class CouponUseTransactionalAdapterTest {
     @BeforeEach
     void setUp() {
         responseCodec = new CouponUseResponseCodec(new ObjectMapper());
+        IdempotencyExecutionTemplate idempotencyTemplate =
+                new IdempotencyExecutionTemplate(
+                        claimAdapter,
+                        timeProvider,
+                        new CouponIdempotencyProperties(
+                                Duration.ofMillis(100),
+                                Duration.ofMillis(1),
+                                Duration.ofSeconds(30)
+                        )
+                );
         adapter = new CouponUseTransactionalAdapter(
-                claimAdapter,
+                idempotencyTemplate,
                 transactionExecutor,
-                responseCodec,
-                timeProvider,
-                new CouponIdempotencyProperties(
-                        Duration.ofMillis(100),
-                        Duration.ofMillis(1),
-                        Duration.ofSeconds(30)
-                )
+                responseCodec
         );
     }
 
@@ -301,6 +305,26 @@ class CouponUseTransactionalAdapterTest {
                         )
         );
         verify(claimAdapter, never()).tryStart(anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("잘못된 멱등키는 요청 해시 입력을 읽기 전에 거부한다")
+    void rejectInvalidIdempotencyKeyBeforeReadingRequest() {
+        assertThatThrownBy(() -> adapter.use(
+                100L,
+                20L,
+                "not-a-uuid",
+                null
+        )).isInstanceOfSatisfying(
+                BusinessException.class,
+                exception -> assertThat(exception.getErrorCode())
+                        .isEqualTo(
+                                CouponUseErrorCode.INVALID_COUPON_USE_REQUEST
+                        )
+        );
+        verify(claimAdapter, never()).tryStart(anyString(), anyString(), any());
+        verify(timeProvider, never()).instant();
+        verify(transactionExecutor, never()).execute(any(), any());
     }
 
     private IdempotencyRecord record(

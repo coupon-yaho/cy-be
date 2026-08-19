@@ -148,6 +148,32 @@ class CouponCancelUseServiceTest {
     }
 
     @Test
+    @DisplayName("취소 시각이 사용 시각보다 빠르면 INVALID_TRANSITION으로 거부한다")
+    void rejectCancellationBeforeUsedAt() {
+        when(issuanceRepository.findById(100L))
+                .thenReturn(Optional.of(issuance(expirationAfterCancel())));
+        when(issuanceUsageRepository.findActiveByIssuanceId(100L))
+                .thenReturn(Optional.of(IssuanceUsage.restore(
+                        200L,
+                        100L,
+                        30L,
+                        5_000,
+                        CANCELED_AT.plusSeconds(1),
+                        null
+                )));
+
+        assertErrorCode(command(), CouponIssueErrorCode.INVALID_TRANSITION);
+        verify(issuanceRepository, never()).updateStatusIfCurrent(
+                any(), any(), any(), any(), any()
+        );
+        verify(issuanceUsageRepository, never()).cancelIfActive(any(), any());
+        verifyNoInteractions(
+                issuanceHistoryRepository,
+                couponStockRepository
+        );
+    }
+
+    @Test
     @DisplayName("동시 상태 변경으로 조건부 UPDATE가 실패하면 취소 실적과 이력을 남기지 않는다")
     void rejectLostStatusTransition() {
         Issuance issuance = issuance(expirationAfterCancel());

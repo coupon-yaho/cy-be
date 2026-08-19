@@ -83,6 +83,9 @@ public record IssuanceUsage(
         if (this.canceledAt != null) {
             throw new CouponInvalidTransitionException();
         }
+        if (canceledAt.isBefore(usedAt)) {
+            throw new CouponInvalidTransitionException();
+        }
         return new IssuanceUsage(
                 id,
                 issuanceId,
