@@ -18,6 +18,8 @@ public record IssuanceHistory(
             "주문 취소로 사용 복원";
     private static final String CANCEL_REASON =
             "회원 요청으로 발급 취소";
+    private static final String EXPIRE_REASON =
+            "쿠폰 유효기간 만료";
 
     public IssuanceHistory {
         validateId(id, "발급 이력 ID", true);
@@ -133,6 +135,29 @@ public record IssuanceHistory(
                 ),
                 CANCEL_REASON,
                 idempotencyKey,
+                createdAt
+        );
+    }
+
+    public static IssuanceHistory expire(
+            Long issuanceId,
+            IssuanceStatus fromStatus,
+            Instant expiresAt,
+            Instant createdAt
+    ) {
+        return new IssuanceHistory(
+                null,
+                issuanceId,
+                IssuanceEventType.EXPIRE,
+                fromStatus,
+                CouponStateMachine.transition(
+                        fromStatus,
+                        IssuanceEventType.EXPIRE,
+                        expiresAt,
+                        createdAt
+                ),
+                EXPIRE_REASON,
+                null,
                 createdAt
         );
     }

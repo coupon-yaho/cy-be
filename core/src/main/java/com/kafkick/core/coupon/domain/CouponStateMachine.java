@@ -40,11 +40,24 @@ public final class CouponStateMachine {
                     currentStatus == IssuanceStatus.ISSUED,
                     IssuanceStatus.CANCELLED
             );
-            case EXPIRE -> require(
-                    currentStatus == IssuanceStatus.ISSUED,
-                    IssuanceStatus.EXPIRED
+            case EXPIRE -> expire(
+                    currentStatus,
+                    expiresAt,
+                    at
             );
         };
+    }
+
+    private static IssuanceStatus expire(
+            IssuanceStatus currentStatus,
+            Instant expiresAt,
+            Instant at
+    ) {
+        if (currentStatus != IssuanceStatus.ISSUED
+                || !isExpired(expiresAt, at)) {
+            throw new CouponInvalidTransitionException();
+        }
+        return IssuanceStatus.EXPIRED;
     }
 
     private static IssuanceStatus cancelUse(

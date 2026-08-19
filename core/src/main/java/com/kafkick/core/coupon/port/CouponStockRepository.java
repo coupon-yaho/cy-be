@@ -9,4 +9,10 @@ public interface CouponStockRepository {
     void lockForUpdate(Long couponRoundId);
 
     void releaseOneAfterLock(Long couponRoundId, Instant updatedAt);
+
+    void releaseAfterLock(
+            Long couponRoundId,
+            int quantity,
+            Instant updatedAt
+    );
 }
