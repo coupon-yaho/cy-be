@@ -249,9 +249,11 @@ reviews:
         `idempotency_records` 에 status 컬럼 없이 "완료 대기"를 구현했는지도 본다.
 
         상태 전이: `CouponStateMachine` 밖에서 상태를 직접 바꾸는 코드, 전이표에 없는 전이
-        (종단 상태 CANCELLED/EXPIRED 에서 나가는 전이는 전부 위반),
-        만료된 USED 에 CANCEL_USE 가 오는 경로 처리 여부(expires_at < asOf 면 EXPIRED,
-        아니면 ISSUED — 더미데이터 분포상 반드시 발생한다).
+        (종단 상태 CANCELLED/EXPIRED 에서 나가는 전이는 전부 위반).
+        **전이표는 시각을 인자로 받지 않는다** — 시간 기반 만료는 expireJob 이 EXPIRE 이력을
+        남겨서 표현하고, 이력에 없는 만료를 상태머신이 암묵적으로 적용하면 리플레이가
+        비결정적이 되고 "만료 누락은 정상"이라는 계약이 깨진다. USED 는 만료 대상이 아니다
+        (expireJob 은 status='ISSUED' 만 잡는다).
         런타임과 검증 배치가 같은 상태머신을 쓰는지도 본다.
 
         DB 제약: `UNIQUE (campaign_id, member_id)` 를 제거하거나 우회하는 변경은 무조건
@@ -418,10 +420,18 @@ reviews:
         새 설정 키를 추가했는데 대응하는 `.example` 갱신이 없으면 지적한다 —
         클론한 팀원의 앱이 뜨지 않는다.
 
+        인증: **회원가입·로그인은 과제 범위 밖이다.** 가상 회원 100만 명 중 누구인지를 가리려고
+        회원·등급을 요청 헤더로 받는 것이 확정된 설계다. 따라서 **인증 필터 부재 ·
+        Spring Security 의존성 부재 · `/api/v1/admin/**` 의 `hasRole` 부재 · JWT 도입 ·
+        헤더 서명은 지적하지 마라.** 관리 경로는 관리 포트를 외부에 노출하지 않는 것으로 막는다.
+        대신 서버가 헤더 등급을 회차의 `eligible_grades_mask` 와 대조하는지, 헤더 회원 ID 로
+        남의 쿠폰을 다룰 수 있는지는 본다 — 서명이 없으므로 그게 유일한 방어선이다.
+
         actuator: `management.endpoints.web.exposure.exclude` 가 명시되어 있는지 본다.
         include 만 쓰면 나중에 `*` 로 바뀔 때 env 가 함께 열린다. AES 키를 환경변수로
         주입하므로 `/actuator/env` 는 실제 유출 경로다.
         기대값: `exclude: env,configprops,beans,heapdump`, 관리 포트 분리(9090).
+        단 actuator 의존성이 없는 모듈에는 해당하지 않는다 — 없는 것을 막으라고 하지 마라.
 
         `server.error.include-stacktrace: never` 가 유지되는지.
         AES 키·JWT 시크릿·DB 비밀번호가 리터럴로 박혀 있는지(환경변수 주입이어야 한다).
