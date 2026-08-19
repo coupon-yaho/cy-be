@@ -15,6 +15,12 @@ dependencies {
     // 관리 포트의 verify 온디맨드 트리거용. Compose 에서 이 포트를 외부로 노출하지 않는다.
     implementation 'org.springframework.boot:spring-boot-starter-web'
 
+    // 관제가 Prometheus 로 batch JVM 을 직접 긁는다. 정합성 gap · 대기열 길이 · Kafka lag 은
+    // api 가 만들 수 없다 — 300만 행 집계라 발급 경로에 얹으면 성능 측정이 오염된다.
+    // 이 두 줄은 값이 나갈 통로만 연다. Gauge 등록은 관제 쪽 티켓(OBS-5)이 붙인다.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
     // JobLauncherTestUtils / JobRepositoryTestUtils
     testImplementation 'org.springframework.batch:spring-batch-test'
 }
