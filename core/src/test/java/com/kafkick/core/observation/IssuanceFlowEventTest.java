@@ -211,7 +211,9 @@ class IssuanceFlowEventTest {
         assertThatThrownBy(() -> event(
                 EventType.ISSUE_RESULT, invalidStatus, null, null,
                 null, null, null
-        )).isInstanceOf(IllegalArgumentException.class);
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("성공 ISSUE_RESULT의 HTTP 상태는 201이어야 합니다.");
     }
 
     @Test
