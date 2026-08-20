@@ -18,6 +18,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'io.micrometer:micrometer-registry-prometheus'
 
+    // 도메인 Gauge(OBS-5)가 Redis 재고 카운터를 읽는다. V1 회차는 Redis 자체가 없어 조회하지
+    // 않지만, V2·V3 에서 같은 코드가 그대로 돌아야 하므로 통로는 컴파일 타임에 열어 둔다.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+
     // JobLauncherTestUtils / JobRepositoryTestUtils
     testImplementation 'org.springframework.batch:spring-batch-test'
 }

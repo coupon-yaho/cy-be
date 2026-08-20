@@ -16,6 +16,25 @@ spring:
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
+  # Redis 접속·타임아웃. 값이 없으면 Lettuce 기본 커맨드 타임아웃(60초)이 걸리는데, 5초 주기
+  # 수집이 60초를 잡고 있으면 스케줄러 스레드를 그동안 점유한다. 예외도 안 나므로 UNAVAILABLE
+  # 전환도 안 걸리고, 마지막 값이 정상 그래프처럼 계속 긁혀 나간다.
+  # DB 는 connectTimeout·socketTimeout·query-timeout·max_execution_time 네 겹이 걸려 있다.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # 수집 주기(1초)보다 짧게. 주기보다 길면 다음 수집이 밀린다.
+      timeout: ${REDIS_TIMEOUT_MS:800}ms
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT_MS:500}ms
+
+  # ⚠️ 기본 스케줄러 풀은 1개다. 재고(1초)와 정합성(30초)이 한 스레드를 나눠 쓰면 느린 집계가
+  #    도는 동안 재고 갱신이 통째로 밀린다. 기존 배치 스케줄러(만료·검증·정리)도 같은 풀이다.
+  task:
+    scheduling:
+      pool:
+        size: ${SCHEDULER_POOL_SIZE:4}
+
   # 배치는 JPA 를 쓰지 않는다 — 엔티티 0개, JDBC 와 Spring Batch 로만 돈다(build.gradle).
   # TODO(엔티티 도입 담당): 엔티티가 생기면 이 제외와 아래 storage.jpa.auditing 스위치를 다시
   #   판단한다. 배치가 계속 JDBC 로만 돈다면 그대로 두는 게 맞다. 판단 시점은
