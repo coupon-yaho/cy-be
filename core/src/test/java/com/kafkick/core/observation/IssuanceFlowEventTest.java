@@ -2,6 +2,8 @@ package com.kafkick.core.observation;
 
 import com.kafkick.core.member.Grade;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -194,14 +196,22 @@ class IssuanceFlowEventTest {
         )).isInstanceOf(IllegalArgumentException.class);
     }
 
-    @Test
-    void rejectsEntrySuccessStatusOtherThanOkOrAccepted() {
-        for (int invalidStatus : new int[]{199, 201, 204, 300, 302, 399}) {
-            assertThatThrownBy(() -> event(
-                    EventType.ENTRY_RESULT, invalidStatus, null, null,
-                    null, null, null
-            )).isInstanceOf(IllegalArgumentException.class);
-        }
+    @ParameterizedTest
+    @ValueSource(ints = {199, 201, 204, 300, 302, 399})
+    void rejectsEntrySuccessStatusOtherThanOkOrAccepted(int invalidStatus) {
+        assertThatThrownBy(() -> event(
+                EventType.ENTRY_RESULT, invalidStatus, null, null,
+                null, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {199, 200, 202, 204, 300, 302, 399})
+    void rejectsIssueSuccessStatusOtherThanCreated(int invalidStatus) {
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_RESULT, invalidStatus, null, null,
+                null, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

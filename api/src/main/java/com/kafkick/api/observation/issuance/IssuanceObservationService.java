@@ -71,10 +71,12 @@ public final class IssuanceObservationService {
      *
      * @param context 입장 허용 대상과 실행 설정을 담은 공통 관측 정보
      * @param queueSequence 최초 입장 허용에 대응하는 안정적인 대기열 순번
+     * @throws NullPointerException context가 {@code null}인 경우
      */
     public void recordAdmitted(IssuanceFlowEvent.Ctx context, long queueSequence) {
+        IssuanceFlowEvent.Ctx requiredContext = Objects.requireNonNull(context, "context");
         try {
-            IssuanceFlowEvent.Ctx admittedContext = Objects.requireNonNull(context, "context")
+            IssuanceFlowEvent.Ctx admittedContext = requiredContext
                     .withOccurredAt(timeProvider.instant());
             IssuanceFlowEvent event = eventFactory.admitted(admittedContext, queueSequence);
             eventRecorder.record(event);

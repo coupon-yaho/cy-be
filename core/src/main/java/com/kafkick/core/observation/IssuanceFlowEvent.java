@@ -191,6 +191,9 @@ public record IssuanceFlowEvent(
         if (queuePosition != null || queueSequence != null) {
             throw new IllegalArgumentException("ISSUE_RESULT에는 대기열 순번을 넣을 수 없습니다.");
         }
+        if (httpStatus < 400 && httpStatus != 201) {
+            throw new IllegalArgumentException("성공 ISSUE_RESULT의 HTTP 상태는 201이어야 합니다.");
+        }
         if (httpStatus == 201 && (issuanceId == null || issuanceCode == null)) {
             throw new IllegalArgumentException("201 ISSUE_RESULT에는 발급 식별자가 필요합니다.");
         }

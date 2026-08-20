@@ -13,6 +13,9 @@ import com.kafkick.core.observation.ReleaseStage;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.ErrorCode;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -35,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@ExtendWith(OutputCaptureExtension.class)
 class IssuanceObservationSessionTest {
 
     private static final UUID EVENT_ID =
@@ -238,6 +242,19 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
+    void logsWarningWithRequestAndEventTypeWhenRecordingFails(CapturedOutput output) {
+        IssuanceObservationSession session = session(new CopyOnWriteArrayList<>());
+        session.completeIssued(301L, "TOO-LONG-ISSUANCE-CODE");
+
+        session.finish();
+
+        assertThat(output)
+                .contains("WARN")
+                .contains("requestId=request-1")
+                .contains("eventType=ISSUE_RESULT");
+    }
+
+    @Test
     void isolatesRecorderFailureFromTheCaller() {
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(() -> EVENT_ID);
         IssuanceObservationService service = new IssuanceObservationService(
@@ -330,6 +347,22 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
+    void recordsAtMostOnceWhenCompletionAndFinishRace() throws Exception {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationSession session = session(recordedEvents);
+
+        runConcurrently(20, index -> {
+            if (index % 2 == 0) {
+                session.completeIssued(301L, "ISSUE-CODE-301");
+            } else {
+                session.finish();
+            }
+        });
+
+        assertThat(recordedEvents).hasSizeLessThanOrEqualTo(1);
+    }
+
+    @Test
     void recordsQueueAdmittedThroughIndependentFailSafeBoundary() {
         List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
         IssuanceObservationService service = service(recordedEvents::add);
@@ -355,6 +388,33 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
+    void isolatesQueueAdmittedTimeFailureFromTheCaller() {
+        Clock unavailableClock = new Clock() {
+            @Override
+            public ZoneId getZone() {
+                return ZoneOffset.UTC;
+            }
+
+            @Override
+            public Clock withZone(ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                throw new IllegalStateException("clock unavailable");
+            }
+        };
+        IssuanceObservationService service = service(
+                event -> { },
+                new TimeProvider(unavailableClock)
+        );
+
+        assertThatCode(() -> service.recordAdmitted(context(), 41L))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void isolatesInvalidQueueAdmittedEventFromTheCaller() {
         List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
         IssuanceObservationService service = service(recordedEvents::add);
@@ -362,6 +422,15 @@ class IssuanceObservationSessionTest {
         assertThatCode(() -> service.recordAdmitted(context(), -1L))
                 .doesNotThrowAnyException();
         assertThat(recordedEvents).isEmpty();
+    }
+
+    @Test
+    void rejectsNullContextWhenRecordingQueueAdmission() {
+        IssuanceObservationService service = service(event -> { });
+
+        assertThatThrownBy(() -> service.recordAdmitted(null, 41L))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("context");
     }
 
     private static IssuanceObservationSession session(List<IssuanceFlowEvent> recordedEvents) {

@@ -2,6 +2,7 @@ package com.kafkick.api.observation.issuance;
 
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.EventRecorder;
+import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.IssuanceFlowEvent;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
 import com.kafkick.core.observation.ReasonCode;
@@ -141,9 +142,11 @@ public final class IssuanceObservationSession {
             IssuanceFlowEvent event = completed.createEvent(eventFactory, resultContext);
             eventRecorder.record(event);
         } catch (RuntimeException exception) {
-            log.debug(
-                    "발급 관측 이벤트 기록에 실패했습니다. 업무 흐름은 계속 진행합니다. requestId={}",
+            log.warn(
+                    "발급 관측 이벤트 기록에 실패했습니다. 업무 흐름은 계속 진행합니다. "
+                            + "requestId={}, eventType={}",
                     context.requestId(),
+                    completed.eventType(),
                     exception
             );
         }
@@ -205,6 +208,16 @@ public final class IssuanceObservationSession {
         Instant completedAt();
 
         /**
+         * 기록 실패 로그에 사용할 이벤트 종류를 반환합니다.
+         *
+         * <p>Factory 검증 중 이벤트 생성이 실패해도 보관된 완료 결과만으로 어떤 기록 경계에서
+         * 실패했는지 식별할 수 있게 합니다.
+         *
+         * @return 완료 결과가 생성하려던 발급 관측 이벤트 종류
+         */
+        EventType eventType();
+
+        /**
          * 보관된 결과를 공통 계약에 맞는 발급 관측 이벤트로 변환합니다.
          *
          * @param eventFactory 이벤트 식별자 생성과 필드 계약 검증을 담당하는 Factory
@@ -230,6 +243,12 @@ public final class IssuanceObservationSession {
             Instant completedAt
     ) implements Outcome {
 
+        /** 발급 성공 결과가 생성하는 이벤트 종류를 반환합니다. */
+        @Override
+        public EventType eventType() {
+            return EventType.ISSUE_RESULT;
+        }
+
         /** 발급 성공 결과를 HTTP 201의 ISSUE_RESULT 이벤트로 변환합니다. */
         @Override
         public IssuanceFlowEvent createEvent(
@@ -252,6 +271,12 @@ public final class IssuanceObservationSession {
             Dependency dependency,
             Instant completedAt
     ) implements Outcome {
+
+        /** 발급 실패 결과가 생성하는 이벤트 종류를 반환합니다. */
+        @Override
+        public EventType eventType() {
+            return EventType.ISSUE_RESULT;
+        }
 
         /**
          * 업무 오류를 관측용 사유로 변환해 실패 ISSUE_RESULT 이벤트를 생성합니다.
@@ -278,6 +303,12 @@ public final class IssuanceObservationSession {
      * @param completedAt 즉시 입장 결과가 완료된 시각
      */
     private record EntryAdmittedOutcome(Instant completedAt) implements Outcome {
+
+        /** 즉시 입장 결과가 생성하는 이벤트 종류를 반환합니다. */
+        @Override
+        public EventType eventType() {
+            return EventType.ENTRY_RESULT;
+        }
 
         /** 즉시 입장 결과를 HTTP 200의 ENTRY_RESULT 이벤트로 변환합니다. */
         @Override
@@ -309,6 +340,12 @@ public final class IssuanceObservationSession {
             Instant completedAt
     ) implements Outcome {
 
+        /** 대기열 등록 결과가 생성하는 이벤트 종류를 반환합니다. */
+        @Override
+        public EventType eventType() {
+            return EventType.ENTRY_RESULT;
+        }
+
         /** 대기열 등록 결과를 HTTP 202의 ENTRY_RESULT 이벤트로 변환합니다. */
         @Override
         public IssuanceFlowEvent createEvent(
@@ -338,6 +375,12 @@ public final class IssuanceObservationSession {
             Dependency dependency,
             Instant completedAt
     ) implements Outcome {
+
+        /** 진입 실패 결과가 생성하는 이벤트 종류를 반환합니다. */
+        @Override
+        public EventType eventType() {
+            return EventType.ENTRY_RESULT;
+        }
 
         /** ErrorCode의 상태와 관측 사유를 사용해 실패 ENTRY_RESULT 이벤트를 생성합니다. */
         @Override
