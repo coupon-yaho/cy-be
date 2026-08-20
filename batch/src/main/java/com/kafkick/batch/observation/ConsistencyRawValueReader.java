@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.connection.DataType;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -409,18 +410,28 @@ public class ConsistencyRawValueReader {
     }
 
     private Long size(String key) {
-        return switch (redisTemplate.type(key)) {
+        DataType type = redisTemplate.type(key);
+        return switch (type) {
             case SET -> redisTemplate.opsForSet().size(key);
             case ZSET -> redisTemplate.opsForZSet().size(key);
             case LIST -> redisTemplate.opsForList().size(key);
             case STRING -> number(key);
-            default -> null;
+            // 키가 없는 것(NONE)은 예열이고, 엉뚱한 자료형은 키를 잘못 가리킨 설정이다.
+            case NONE -> null;
+            default -> throw new InvalidRedisValueException(
+                "대기열·집합 키가 예상 밖 자료형이다: type=" + type);
         };
     }
 
     /**
-     * 값 하나가 숫자가 아니어도 나머지 원천까지 버리지 않는다. 값이 없는 것과 통로가 죽은 것은
-     * 다른 사건이라 상태도 달라야 한다.
+     * 값이 <b>없는 것</b>과 값이 <b>잘못된 것</b>을 가른다.
+     *
+     * <p>키가 아직 없는 것은 예열이라 곧 값이 나오지만, 숫자가 아닌 값이 들어 있는 것은 키를
+     * 잘못 가리킨 설정이라 영영 안 나온다. 둘을 같은 {@code null} 로 뭉개면 오설정이 "곧 나올
+     * 것" 으로 보여 아무 경보도 걸리지 않는다.
+     *
+     * @return 값이 없으면 {@code null}
+     * @throws InvalidRedisValueException 값이 있는데 숫자로 읽을 수 없는 경우
      */
     private static Long toLong(Object value) {
         if (value == null || Boolean.FALSE.equals(value)) {
@@ -436,7 +447,7 @@ public class ConsistencyRawValueReader {
             // 진단에 필요한 것은 "숫자가 아니었다" 는 사실뿐이다.
             log.warn("Redis 값이 숫자가 아니다: type={}, length={}",
                 value.getClass().getSimpleName(), value.toString().length());
-            return null;
+            throw new InvalidRedisValueException("Redis 값을 숫자로 읽을 수 없다");
         }
     }
 
@@ -466,6 +477,17 @@ public class ConsistencyRawValueReader {
     }
 
     /** 재고 행이 없으면 수량 둘이 null 이다. 회차 자체는 존재한다. */
+    /**
+     * 값이 잘못 들어 있는 상태. 호출부의 {@code catch (RuntimeException)} 이 이를 UNAVAILABLE 로
+     * 바꾼다 — 예열({@code null})과 달리 기다린다고 해결되지 않는다.
+     */
+    private static final class InvalidRedisValueException extends RuntimeException {
+
+        private InvalidRedisValueException(String message) {
+            super(message);
+        }
+    }
+
     private record CouponRow(long couponId, Long totalQuantity, Long storedActiveCount) {
 
         boolean hasStock() {

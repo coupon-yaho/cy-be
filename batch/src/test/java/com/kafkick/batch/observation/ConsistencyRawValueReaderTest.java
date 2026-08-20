@@ -208,6 +208,37 @@ class ConsistencyRawValueReaderTest {
     }
 
     @Test
+    @DisplayName("Redis 값이 숫자가 아니면 예열이 아니라 고장이다")
+    void nonNumericRedisValueIsAFailureNotWarmup() throws Exception {
+        givenCoupon(7L, 1000, 0);
+        givenAggregate(1000, 0, 0, 0, null);
+        given(redisTemplate.execute(any(RedisScript.class), anyList()))
+            .willReturn(List.of("abc", "40", 40L));
+
+        DomainRawSnapshot snapshot = reader(EngineVersion.V3).read();
+
+        assertThat(snapshot.consistency().redisObservation().status())
+            .as("오설정을 PENDING 으로 두면 영영 안 나올 값을 '곧 나온다' 로 보여준다")
+            .isEqualTo(SourceStatus.UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("대기열 키가 예상 밖 자료형이면 예열이 아니라 고장이다")
+    void unexpectedQueueKeyTypeIsAFailureNotWarmup() throws Exception {
+        givenCoupon(7L, 1000, 40);
+        ValueOperations<String, String> valueOperations = mock(ValueOperations.class);
+        given(redisTemplate.opsForValue()).willReturn(valueOperations);
+        given(valueOperations.get(anyString())).willReturn("960");
+        given(redisTemplate.type(anyString())).willReturn(DataType.HASH);
+
+        StockSnapshot stock = reader(EngineVersion.V3).readStock();
+
+        assertThat(stock.queueStatus())
+            .as("키를 잘못 가리킨 설정과 예열 중을 같은 상태로 두면 아무 경보도 안 걸린다")
+            .isEqualTo(SourceStatus.UNAVAILABLE);
+    }
+
+    @Test
     @DisplayName("Redis 통로가 죽으면 UNAVAILABLE 이다")
     void redisFailureIsUnavailable() throws Exception {
         givenCoupon(7L, 1000, 0);
