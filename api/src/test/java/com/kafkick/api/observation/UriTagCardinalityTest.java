@@ -3,6 +3,7 @@ package com.kafkick.api.observation;
 import static com.kafkick.testsupport.CommittedConfigStager.stage;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.awaitility.Awaitility;
 
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -107,32 +109,32 @@ class UriTagCardinalityTest {
                 call(appPort, "/cy213-uri-probe/" + id);
             }
 
-            String scrape = call(managementPort, "/actuator/prometheus").body();
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                String scrape = call(managementPort, "/actuator/prometheus").body();
+                assertThat(scrape)
+                        .as("템플릿으로 찍혀야 id 가 몇 개든 시계열이 하나다")
+                        .contains("uri=\"/cy213-uri-probe/{id}\"");
+                assertThat(scrape)
+                        .as("실제 id 가 라벨에 들어가면 쿠폰 수만큼 시계열이 생긴다 — 300만 개다."
+                                + " ObservationConvention · MeterFilter 로 uri 를 다시 쓰면 여기서"
+                                + " 깨진다")
+                        .doesNotContain("uri=\"/cy213-uri-probe/30000000\"");
 
-            assertThat(scrape)
-                    .as("템플릿으로 찍혀야 id 가 몇 개든 시계열이 하나다")
-                    .contains("uri=\"/cy213-uri-probe/{id}\"");
-            assertThat(scrape)
-                    .as("실제 id 가 라벨에 들어가면 쿠폰 수만큼 시계열이 생긴다 — 300만 개다."
-                            + " ObservationConvention · MeterFilter 로 uri 를 다시 쓰면 여기서"
-                            + " 깨진다")
-                    .doesNotContain("uri=\"/cy213-uri-probe/30000000\"");
-
-            long series = scrape.lines()
-                    .filter(line -> line.startsWith("http_server_requests_seconds_count"))
-                    .filter(line -> line.contains("/cy213-uri-probe/"))
-                    .count();
-            assertThat(series)
-                    .as("호출 3번이 시계열 3개가 되면 안 된다")
-                    .isEqualTo(1);
+                long series = scrape.lines()
+                        .filter(line -> line.startsWith("http_server_requests_seconds_count"))
+                        .filter(line -> line.contains("/cy213-uri-probe/"))
+                        .count();
+                assertThat(series).as("호출 3번이 시계열 3개가 되면 안 된다").isEqualTo(1);
+            });
         }
     }
 
     // ── 정적 ──────────────────────────────────────────────────────────────────
 
-    /** {@code @GetMapping("...")} 처럼 애노테이션에 적힌 경로 문자열. */
-    private static final Pattern MAPPING_PATH =
-            Pattern.compile("@(?:Request|Get|Post|Put|Patch|Delete)Mapping\\(\\s*(?:value\\s*=\\s*)?\"([^\"]*)\"");
+    /** 매핑 애노테이션의 괄호 내용. 경로 배열과 {@code path=} 도 검사한다. */
+    private static final Pattern MAPPING_ARGUMENTS = Pattern.compile(
+            "@(?:Request|Get|Post|Put|Patch|Delete)Mapping\\s*\\(([^)]*)\\)", Pattern.DOTALL);
+    private static final Pattern STRING_LITERAL = Pattern.compile("\"([^\"]*)\"");
 
     @Test
     @DisplayName("실제 컨트롤러 매핑에 와일드카드가 없다 — {} 가 아니면 uri 가 원본 경로로 찍힌다")
@@ -140,13 +142,18 @@ class UriTagCardinalityTest {
         List<String> offenders = new java.util.ArrayList<>();
 
         for (Path source : javaSourcesUnder(moduleRoot().resolve("src/main/java"))) {
-            Matcher matcher = MAPPING_PATH.matcher(Files.readString(source));
+            Matcher matcher = MAPPING_ARGUMENTS.matcher(Files.readString(source));
             while (matcher.find()) {
-                String path = matcher.group(1);
-                // ** 와 * 는 여러 경로를 하나의 매핑으로 받는다. 그러면 uri 라벨이 템플릿이
-                // 아니라 요청된 경로 그대로 찍혀 id 마다 시계열이 생긴다.
-                if (path.contains("*")) {
-                    offenders.add(source.getFileName() + " → " + path);
+                String arguments = matcher.group(1).strip();
+                Matcher pathArgument = Pattern.compile("(?:value|path)\\s*=\\s*(.*?)(?=,\\s*\\w+\\s*=|$)",
+                        Pattern.DOTALL).matcher(arguments);
+                String pathExpression = pathArgument.find() ? pathArgument.group(1) : arguments;
+                Matcher literal = STRING_LITERAL.matcher(pathExpression);
+                while (literal.find()) {
+                    String path = literal.group(1);
+                    if (path.contains("*")) {
+                        offenders.add(source.getFileName() + " → " + path);
+                    }
                 }
             }
         }

@@ -17,7 +17,7 @@ API와 Prometheus의 9090은 서로 다른 컨테이너에서 사용한다. 주�
 
 | 호출자 | 대상 | 주소 | 목적 |
 |---|---|---|---|
-| 외부 클라이언트 | API | `api:8080` | 업무·관리자 API 호출 |
+| 외부 클라이언트 | API | `배포 호스트/DNS:8080` | 업무·관리자 API 호출 |
 | 관제 API | Batch | `batch:9091`의 verify 트리거 | 검증 작업 실행 |
 | Prometheus | API | `api:9090/actuator/prometheus` | API 지표 수집 |
 | Prometheus | Batch | `batch:9092/actuator/prometheus` | Batch 지표·생존 상태 수집 |

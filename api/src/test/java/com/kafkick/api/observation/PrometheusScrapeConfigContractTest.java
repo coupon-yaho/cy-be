@@ -1,6 +1,9 @@
 package com.kafkick.api.observation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static com.kafkick.api.observation.ConfigContractFixture.defaultOf;
+import static com.kafkick.api.observation.ConfigContractFixture.loadYaml;
+import static com.kafkick.api.observation.ConfigContractFixture.repoRoot;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -54,14 +57,8 @@ class PrometheusScrapeConfigContractTest {
      */
     private static final String COMPOSE_FILE = "compose.yml";
 
-    /** 함께 있으면 무시되는 구식 이름. 있으면 안 된다. */
-    private static final String LEGACY_COMPOSE_FILE = "docker-compose.yml";
-
-    /** {@code ${VAR:기본값}} 에서 기본값만 꺼낸다 — 컨테이너는 env 주입 없이 뜬다. */
-    private static String defaultOf(String placeholder) {
-        int colon = placeholder.lastIndexOf(':');
-        return placeholder.substring(colon + 1, placeholder.length() - 1);
-    }
+    private static final List<String> OTHER_COMPOSE_FILES =
+            List.of("compose.yaml", "docker-compose.yaml", "docker-compose.yml");
 
     @Test
     @DisplayName("scrape 대상은 api · batch 둘이고 관리 포트를 가리킨다 — 앱 포트로 긁으면 404 다")
@@ -147,13 +144,17 @@ class PrometheusScrapeConfigContractTest {
                 .isNotNull();
 
         List<String> order = statusOrder(status.get("order"));
+        int up = order.indexOf("UP");
+        assertThat(up)
+                .as("status.order 에 UP 이 있어야 나머지 순서를 판정할 수 있다")
+                .isNotNegative();
         assertThat(order.indexOf("OBSERVATION_DOWN"))
                 .as("OBSERVATION_DOWN 이 UP 보다 뒤여야 관측 풀 장애만으로 인스턴스가"
                         + " 로드밸런서에서 빠지지 않는다")
-                .isGreaterThan(order.indexOf("UP"));
+                .isGreaterThan(up);
         assertThat(order.indexOf("DOWN"))
                 .as("반대로 DOWN 이 UP 보다 앞이어야 진짜 장애가 200 에 묻히지 않는다")
-                .isBetween(0, order.indexOf("UP") - 1);
+                .isBetween(0, up - 1);
 
         assertThat(healthNodeOf(management))
                 .as("group.obs 가 없으면 관측 풀 장애를 볼 창구가 사라진다 — 합산은 UP 이라"
@@ -191,10 +192,10 @@ class PrometheusScrapeConfigContractTest {
         // 실측 근거 — Docker Compose 는 compose.yaml · compose.yml · docker-compose.yaml ·
         // docker-compose.yml 순으로 찾고 먼저 맞는 하나만 쓴다. 둘을 같이 두면 경고 한 줄만
         // 나오고 뒤쪽 파일의 서비스는 없는 것처럼 동작한다. 에러가 아니라 침묵이라 더 나쁘다.
-        assertThat(repo.resolve(LEGACY_COMPOSE_FILE))
-                .as("docker-compose.yml 이 다시 생기면 둘 중 하나가 조용히 죽는다."
+        assertThat(OTHER_COMPOSE_FILES.stream().filter(name -> Files.exists(repo.resolve(name))))
+                .as("다른 기본 compose 이름이 생기면 둘 중 하나가 조용히 죽는다."
                         + " 서비스를 추가할 거면 %s 안에 넣어라", COMPOSE_FILE)
-                .doesNotExist();
+                .isEmpty();
     }
 
     @Test
@@ -381,13 +382,6 @@ class PrometheusScrapeConfigContractTest {
         return yaml.lines().map(String::strip).filter(l -> !l.startsWith("#")).toList();
     }
 
-    private Map<String, Object> loadYaml(Path file) throws IOException {
-        assertThat(file).as("계약에 걸린 파일이 없다").exists();
-        try (var in = Files.newInputStream(file)) {
-            return new Yaml().load(in);
-        }
-    }
-
     private Map<String, Object> globalOf(Map<String, Object> prometheus) {
         @SuppressWarnings("unchecked")
         Map<String, Object> global = (Map<String, Object>) prometheus.get("global");
@@ -561,20 +555,4 @@ class PrometheusScrapeConfigContractTest {
                 + " — 이 테스트가 읽을 수 있는 단위(ms · s)로 쓰거나 여기를 넓혀라");
     }
 
-    /**
-     * 설정 파일은 클래스패스가 아니라 저장소 루트에 있다. Gradle(모듈 디렉터리)과
-     * IDE(저장소 루트) 양쪽에서 실행되므로 {@code settings.gradle} 을 표지로 거슬러 올라간다 —
-     * 못 찾으면 skip 이 아니라 실패한다. skip 하면 아무것도 검사하지 않으면서 초록불이 된다.
-     */
-    private Path repoRoot() {
-        Path candidate = Path.of("").toAbsolutePath();
-        while (candidate != null) {
-            if (Files.isRegularFile(candidate.resolve("settings.gradle"))) {
-                return candidate;
-            }
-            candidate = candidate.getParent();
-        }
-        throw new IllegalStateException(
-                "저장소 루트를 찾지 못했다. 실행 디렉터리: " + Path.of("").toAbsolutePath());
-    }
 }

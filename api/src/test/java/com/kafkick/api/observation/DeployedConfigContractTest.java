@@ -1,6 +1,8 @@
 package com.kafkick.api.observation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static com.kafkick.api.observation.ConfigContractFixture.defaultOf;
+import static com.kafkick.api.observation.ConfigContractFixture.repoRoot;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -8,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -91,11 +94,14 @@ class DeployedConfigContractTest {
         List<String> offenders = new ArrayList<>();
         for (String line : Files.readAllLines(repoRoot().resolve(DEPLOYED))) {
             String stripped = line.strip();
-            if (stripped.startsWith("#") || !stripped.startsWith("password:")) {
+            int keyEnd = stripped.indexOf(':');
+            if (stripped.startsWith("#") || keyEnd < 0
+                    || !stripped.substring(0, keyEnd).toLowerCase(Locale.ROOT)
+                            .contains("password")) {
                 continue;
             }
             // ${VAR} 는 되고 ${VAR:literal} 은 안 된다 — 후자는 .env 가 없어도 조용히 뜬다.
-            if (stripped.contains(":") && stripped.matches(".*\\$\\{[A-Z_]+:[^}]+}.*")) {
+            if (stripped.matches(".*\\$\\{[A-Z_]+:[^}]+}.*")) {
                 offenders.add(stripped);
             }
         }
@@ -103,6 +109,21 @@ class DeployedConfigContractTest {
                 .as("기본 비밀번호가 박혀 있으면 .env 를 빠뜨린 배포가 에러 없이 약한 비번으로"
                         + " 기동한다. 그 상태는 로그에도 안 남는다")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("모든 실행 프로필은 오류 응답에 스택트레이스를 노출하지 않는다")
+    void everyRuntimeProfileHidesStacktraces() throws IOException {
+        for (String profile : List.of("api", "batch")) {
+            assertThat(serverErrorStacktrace(profile(profile)))
+                    .as("배포 %s 프로필의 server.error.include-stacktrace", profile)
+                    .isEqualTo("never");
+        }
+        for (String module : List.of("api", "batch")) {
+            assertThat(serverErrorStacktrace(loadModuleApplication(module)))
+                    .as("%s 모듈 example 의 server.error.include-stacktrace", module)
+                    .isEqualTo("never");
+        }
     }
 
     // ── 읽기 도우미 ───────────────────────────────────────────────────────────
@@ -148,6 +169,19 @@ class DeployedConfigContractTest {
         return server.get("port");
     }
 
+    private Map<String, Object> loadModuleApplication(String module) throws IOException {
+        return ConfigContractFixture.loadYaml(repoRoot().resolve(
+                module + "/src/main/resources/application.yml.example"));
+    }
+
+    private String serverErrorStacktrace(Map<String, Object> config) {
+        Object node = config;
+        for (String key : List.of("server", "error", "include-stacktrace")) {
+            node = ((Map<?, ?>) node).get(key);
+        }
+        return String.valueOf(node);
+    }
+
     private String moduleBatchManagementPort() throws IOException {
         return defaultOf(portFrom("batch/src/main/resources/management.yml.example",
                 List.of("management", "server", "port")));
@@ -189,27 +223,4 @@ class DeployedConfigContractTest {
         throw new AssertionError("prometheus.yml 에 job " + job + " 이 없다");
     }
 
-    /** {@code ${VAR:기본값}} 이면 기본값을, 아니면 값을 그대로. */
-    private String defaultOf(String value) {
-        if (!value.startsWith("${")) {
-            return value;
-        }
-        int colon = value.lastIndexOf(':');
-        if (colon < 0) {
-            throw new AssertionError("기본값 없는 플레이스홀더라 대조할 값이 없다: " + value);
-        }
-        return value.substring(colon + 1, value.length() - 1);
-    }
-
-    /** {@code settings.gradle} 을 표지로 저장소 루트를 찾는다. 못 찾으면 skip 이 아니라 실패다. */
-    private Path repoRoot() {
-        Path candidate = Path.of("").toAbsolutePath();
-        while (candidate != null) {
-            if (Files.isRegularFile(candidate.resolve("settings.gradle"))) {
-                return candidate;
-            }
-            candidate = candidate.getParent();
-        }
-        throw new IllegalStateException("저장소 루트를 찾지 못했다");
-    }
 }
