@@ -117,6 +117,32 @@ public final class HttpMetricsFilter extends OncePerRequestFilter {
             this.startedAt = startedAt;
         }
 
+        @Override
+        public void onComplete(AsyncEvent event) {
+            try {
+                recordOnce(response.getStatus());
+            } finally {
+                releaseOnce();
+            }
+        }
+
+        @Override
+        public void onTimeout(AsyncEvent event) {
+            // 요청 제한시간 안에 완료하지 못한 것은 응답 status와 무관하게 서버 실패다.
+            recordOnce(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        }
+
+        @Override
+        public void onError(AsyncEvent event) {
+            recordOnce(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        }
+
+        @Override
+        public void onStartAsync(AsyncEvent event) {
+            listenerAttached.set(false);
+            listen(event.getAsyncContext());
+        }
+
         private boolean isHandled() {
             return released.get() || listenerAttached.get();
         }
@@ -166,32 +192,6 @@ public final class HttpMetricsFilter extends OncePerRequestFilter {
             // URI 매핑이 없거나 계측 중 예외가 나도 in-flight는 먼저 반드시 원복한다.
             releaseOnce();
             recordOnce(status);
-        }
-
-        @Override
-        public void onComplete(AsyncEvent event) {
-            try {
-                recordOnce(response.getStatus());
-            } finally {
-                releaseOnce();
-            }
-        }
-
-        @Override
-        public void onTimeout(AsyncEvent event) {
-            // 요청 제한시간 안에 완료하지 못한 것은 응답 status와 무관하게 서버 실패다.
-            recordOnce(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-        }
-
-        @Override
-        public void onError(AsyncEvent event) {
-            recordOnce(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-        }
-
-        @Override
-        public void onStartAsync(AsyncEvent event) {
-            listenerAttached.set(false);
-            listen(event.getAsyncContext());
         }
     }
 
