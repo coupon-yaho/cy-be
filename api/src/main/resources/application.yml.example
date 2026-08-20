@@ -43,6 +43,12 @@ spring:
   # 마이그레이션 소유자는 api 하나다. batch 는 이미 만들어진 스키마 위에서 돈다.
   flyway:
     enabled: true
+    # A 는 V2__~V99__, B 는 V<YYYYMMDD><nn>__ 를 쓴다(대역 분리). 날짜 버전은 A 대역보다 항상 크므로,
+    # B 마이그레이션이 적용된 DB 에 A 가 나중에 더 낮은 번호를 추가하면 기본값(false)에서
+    # "Detected resolved migration not applied to database: N" 으로 기동이 죽는다.
+    # 대역을 나눈 순간 순서 보장은 이미 포기한 것이고, 두 대역 사이에 FK 의존이 없어 실행 순서는 무관하다.
+    # checksum 검증은 그대로 남으므로 적용된 파일의 내용이 바뀌면 여전히 실패한다.
+    out-of-order: true
 
 # 대시보드 집계를 운영 풀에서 떼어 내는 관측 전용 풀을 켠다. 켠 모듈만 관측 계정
 # (DB_OBS_USERNAME · DB_OBS_PASSWORD)이 필요하고, 없으면 기동에서 죽는다.
