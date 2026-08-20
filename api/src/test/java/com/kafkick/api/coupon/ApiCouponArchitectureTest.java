@@ -19,20 +19,23 @@ class ApiCouponArchitectureTest {
     );
 
     @Test
-    void couponApiOnlyHandlesHttpMappingAndAdapterConversion() throws IOException {
-        Path sourceRoot = Path.of(
-                "src", "main", "java", "com", "kafkick", "api", "coupon"
-        );
-
-        List<String> violations;
-        try (Stream<Path> paths = Files.walk(sourceRoot)) {
-            violations = paths
-                    .filter(path -> path.toString().endsWith(".java"))
-                    .filter(path -> !path.toString().contains(
-                            "coupon" + java.io.File.separator + "config"
-                    ))
-                    .flatMap(ApiCouponArchitectureTest::findViolations)
-                    .toList();
+    void couponApiOnlyHandlesHttpMappingAndDtoConversion() throws IOException {
+        List<String> violations = new java.util.ArrayList<>();
+        for (String domainPackage : List.of("coupon", "coupontemplate")) {
+            Path sourceRoot = Path.of(
+                    "src", "main", "java", "com", "kafkick", "api",
+                    domainPackage
+            );
+            try (Stream<Path> paths = Files.walk(sourceRoot)) {
+                violations.addAll(paths
+                        .filter(path -> path.toString().endsWith(".java"))
+                        .filter(path -> !path.toString().contains(
+                                java.io.File.separator + "config"
+                                        + java.io.File.separator
+                        ))
+                        .flatMap(ApiCouponArchitectureTest::findViolations)
+                        .toList());
+            }
         }
 
         assertThat(violations).isEmpty();

@@ -11,18 +11,41 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
-import com.kafkick.core.coupon.domain.CouponTemplate;
+import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
-import com.kafkick.core.coupon.port.CouponTemplateRepository;
+import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
+import com.kafkick.core.coupontemplate.port.CouponTemplateRepository;
 
+@Service
 public class CouponRoundGenerationService {
 
     private final CouponTemplateRepository couponTemplateRepository;
     private final CouponRoundCreationService couponRoundCreationService;
     private final ZoneId scheduleZone;
     private final int maxGenerationDays;
+
+    @Autowired
+    public CouponRoundGenerationService(
+            CouponTemplateRepository couponTemplateRepository,
+            CouponRoundCreationService couponRoundCreationService,
+            @Value("${coupon.round-generation.schedule-zone:Asia/Seoul}")
+            String scheduleZone,
+            @Value("${coupon.round-generation.max-days:30}")
+            int maxGenerationDays
+    ) {
+        this(
+                couponTemplateRepository,
+                couponRoundCreationService,
+                ZoneId.of(scheduleZone),
+                maxGenerationDays
+        );
+    }
 
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,

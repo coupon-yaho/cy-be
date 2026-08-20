@@ -2,6 +2,7 @@ package com.kafkick.core.coupon.service;
 
 import java.util.Objects;
 
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.Issuance;
@@ -11,8 +12,11 @@ import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponCancelCommand;
+import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.support.exception.BusinessException;
 
+@Service
 public class CouponCancelService {
 
     private final IssuanceRepository issuanceRepository;

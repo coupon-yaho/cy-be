@@ -2,7 +2,7 @@ package com.kafkick.core.coupon.query;
 
 import java.time.Instant;
 
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 public record MemberCouponSummary(

@@ -1,7 +1,7 @@
 package com.kafkick.storage.db.coupon.mapper;
 
 import com.kafkick.core.coupon.domain.CouponRound;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 
 public final class CouponRoundEntityMapper {

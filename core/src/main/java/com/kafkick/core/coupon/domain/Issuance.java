@@ -1,6 +1,8 @@
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
+
+import com.kafkick.core.membership.domain.MembershipGrade;
 import java.time.temporal.ChronoUnit;
 
 import com.kafkick.core.coupon.exception.CouponExpiredException;

@@ -10,23 +10,23 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.kafkick.api.coupon.CouponRequestHeaders;
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponUseAdapter;
-import com.kafkick.api.coupon.dto.CouponUseRequest;
-import com.kafkick.api.coupon.dto.CouponUseResponse;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.dto.request.CouponUseRequest;
+import com.kafkick.api.coupon.dto.response.CouponUseResponse;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponUseController {
 
-    private final CouponUseAdapter couponUseAdapter;
+    private final CouponOperationExecutionService executionService;
 
     public CouponUseController(
-            CouponUseAdapter couponUseAdapter
+            CouponOperationExecutionService executionService
     ) {
-        this.couponUseAdapter = couponUseAdapter;
+        this.executionService = executionService;
     }
 
     @PostMapping("/{issuanceId}/use")
@@ -41,11 +41,14 @@ public class CouponUseController {
             String idempotencyKey,
             @Valid @RequestBody CouponUseRequest request
     ) {
-        return ResponseEnvelope.success(couponUseAdapter.use(
-                issuanceId,
-                memberId,
-                idempotencyKey,
-                request
+        return ResponseEnvelope.success(CouponUseResponse.from(
+                executionService.use(
+                        issuanceId,
+                        memberId,
+                        request.orderId(),
+                        request.orderAmount(),
+                        idempotencyKey
+                )
         ));
     }
 }

@@ -10,8 +10,8 @@ import org.springframework.stereotype.Component;
 
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.port.CouponExpirationCandidateQueryPort;
-import com.kafkick.core.coupon.service.CouponExpirationCommand;
-import com.kafkick.core.coupon.service.CouponExpirationResult;
+import com.kafkick.core.coupon.service.command.CouponExpirationCommand;
+import com.kafkick.core.coupon.service.result.CouponExpirationResult;
 import com.kafkick.core.coupon.service.CouponExpirationService;
 import com.kafkick.core.support.TimeProvider;
 

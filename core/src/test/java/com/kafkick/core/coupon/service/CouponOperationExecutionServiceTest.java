@@ -9,9 +9,18 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
+import com.kafkick.core.coupon.service.command.CouponUseCommand;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
+import com.kafkick.core.coupon.service.result.CouponCancelResult;
+import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
+import com.kafkick.core.coupon.service.result.CouponUseResult;
+import com.kafkick.core.support.exception.BusinessException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -76,6 +85,34 @@ class CouponOperationExecutionServiceTest {
         assertThat(command.memberId()).isEqualTo(20L);
         assertThat(command.orderId()).isEqualTo(30L);
         assertThat(command.orderAmount()).isEqualTo(20_000);
+    }
+
+    @Test
+    void propagatesBusinessExceptionFromNestedCouponService() {
+        BusinessException expected = new BusinessException(
+                CouponIssueErrorCode.ALREADY_ISSUED,
+                "memberId=20, couponRoundId=100"
+        );
+        when(idempotencyExecutionService.execute(
+                eq(KEY), any(), any(), any(), any()
+        )).thenAnswer(invocation -> {
+            java.util.function.Function<Instant, CouponUseResult> claimed =
+                    invocation.getArgument(3);
+            return claimed.apply(AT);
+        });
+        when(operationService.execute(
+                eq(KEY), eq(20L), eq(100L), eq(AT), any(), eq(useCodec)
+        )).thenAnswer(invocation -> {
+            java.util.function.Supplier<CouponUseResult> operation =
+                    invocation.getArgument(4);
+            return operation.get();
+        });
+        when(couponUseService.use(any())).thenThrow(expected);
+        CouponOperationExecutionService service = service();
+
+        assertThatThrownBy(() -> service.use(
+                100L, 20L, 30L, 20_000, KEY
+        )).isSameAs(expected);
     }
 
     private CouponOperationExecutionService service() {

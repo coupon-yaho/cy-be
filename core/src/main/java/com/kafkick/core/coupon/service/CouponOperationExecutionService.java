@@ -1,8 +1,19 @@
 package com.kafkick.core.coupon.service;
 
+import org.springframework.stereotype.Service;
+
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
+import com.kafkick.core.coupon.service.command.CouponCancelCommand;
+import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.command.CouponUseCommand;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
+import com.kafkick.core.coupon.service.result.CouponCancelResult;
+import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
+import com.kafkick.core.coupon.service.result.CouponUseResult;
 
+@Service
 public class CouponOperationExecutionService {
 
     private final IdempotencyExecutionService idempotencyExecutionService;

@@ -10,11 +10,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import com.kafkick.api.coupon.CouponRequestHeaders;
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponCancelAdapter;
-import com.kafkick.api.coupon.dto.CouponCancelResponse;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.service.result.CouponCancelResult;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.support.TimeProvider;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -37,7 +37,7 @@ class CouponCancelControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponCancelAdapter cancelAdapter;
+    private CouponOperationExecutionService executionService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -45,8 +45,8 @@ class CouponCancelControllerTest {
     @Test
     @DisplayName("회원 소유 쿠폰의 발급을 취소하면 CANCELLED 상태를 반환한다")
     void cancelCouponIssuance() throws Exception {
-        when(cancelAdapter.cancel(100L, 20L, IDEMPOTENCY_KEY))
-                .thenReturn(new CouponCancelResponse(
+        when(executionService.cancel(100L, 20L, IDEMPOTENCY_KEY))
+                .thenReturn(new CouponCancelResult(
                         100L,
                         IssuanceStatus.CANCELLED,
                         Instant.parse("2026-08-20T05:00:00Z")
@@ -76,6 +76,6 @@ class CouponCancelControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verify(cancelAdapter, never()).cancel(any(), any(), any());
+        verify(executionService, never()).cancel(any(), any(), any());
     }
 }

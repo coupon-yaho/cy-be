@@ -7,13 +7,13 @@ public enum CouponRoundErrorCode implements ErrorCode {
 
     COUPON_ROUND_ALREADY_EXISTS(
             409,
-            "COUPON-201",
+            "COUPON_ROUND-201",
             "동일한 일정의 쿠폰 회차가 이미 존재합니다."
     ),
 
     COUPON_ROUND_SAVE_FAILED(
             500,
-            "COUPON-202",
+            "COUPON_ROUND-202",
             "쿠폰 회차 저장 중 오류가 발생했습니다."
     );
 

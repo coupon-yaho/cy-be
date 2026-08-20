@@ -7,7 +7,7 @@ import org.springframework.dao.DataAccessException;
 
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponStockReleasePersistenceException;
-import com.kafkick.core.coupon.port.CouponStockOccupationResult;
+import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 
 @Repository

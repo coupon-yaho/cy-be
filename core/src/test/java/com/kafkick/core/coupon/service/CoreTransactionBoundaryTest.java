@@ -5,6 +5,13 @@ import java.lang.reflect.Method;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
+
+import com.kafkick.core.coupon.service.idempotency.IdempotencyClaimService;
+import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
+import com.kafkick.core.coupontemplate.service.CouponTemplateActivationService;
+import com.kafkick.core.coupontemplate.service.CouponTemplateCreateService;
+import com.kafkick.core.coupontemplate.service.CouponTemplateQueryService;
+import com.kafkick.core.coupontemplate.service.CouponTemplateUpdateService;
 import org.springframework.transaction.annotation.Propagation;
 
 import static org.assertj.core.api.Assertions.assertThat;

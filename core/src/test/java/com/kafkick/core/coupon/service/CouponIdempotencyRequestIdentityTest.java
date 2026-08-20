@@ -3,6 +3,10 @@ package com.kafkick.core.coupon.service;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.coupon.service.command.CouponCancelCommand;
+import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.command.CouponUseCommand;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CouponIdempotencyRequestIdentityTest {

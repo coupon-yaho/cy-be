@@ -28,17 +28,18 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.kafkick.core.coupon.domain.CouponDayOfWeek;
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponDayOfWeek;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.domain.CouponStock;
-import com.kafkick.core.coupon.domain.CouponTemplate;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.coupontemplate.domain.CouponTemplate;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.exception.CouponRoundPersistenceException;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.storage.db.RepositoryTest;
+import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

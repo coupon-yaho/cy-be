@@ -8,22 +8,22 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.kafkick.api.coupon.CouponRequestHeaders;
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponCancelUseAdapter;
-import com.kafkick.api.coupon.dto.CouponCancelUseResponse;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.dto.response.CouponCancelUseResponse;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponCancelUseController {
 
-    private final CouponCancelUseAdapter cancelUseAdapter;
+    private final CouponOperationExecutionService executionService;
 
     public CouponCancelUseController(
-            CouponCancelUseAdapter cancelUseAdapter
+            CouponOperationExecutionService executionService
     ) {
-        this.cancelUseAdapter = cancelUseAdapter;
+        this.executionService = executionService;
     }
 
     @PostMapping("/{issuanceId}/cancel-use")
@@ -37,10 +37,12 @@ public class CouponCancelUseController {
             @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
             String idempotencyKey
     ) {
-        return ResponseEnvelope.success(cancelUseAdapter.cancelUse(
-                issuanceId,
-                memberId,
-                idempotencyKey
+        return ResponseEnvelope.success(CouponCancelUseResponse.from(
+                executionService.cancelUse(
+                        issuanceId,
+                        memberId,
+                        idempotencyKey
+                )
         ));
     }
 }

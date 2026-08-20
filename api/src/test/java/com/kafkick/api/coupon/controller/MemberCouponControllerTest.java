@@ -10,8 +10,8 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.query.MemberCouponPage;
 import com.kafkick.core.coupon.query.MemberCouponSummary;

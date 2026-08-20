@@ -2,6 +2,8 @@ package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
 
+import com.kafkick.core.membership.domain.MembershipGrade;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.Issuance;
@@ -12,8 +13,11 @@ import com.kafkick.core.coupon.exception.CouponExpirationErrorCode;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponExpirationCommand;
+import com.kafkick.core.coupon.service.result.CouponExpirationResult;
 import com.kafkick.core.support.exception.BusinessException;
 
+@Service
 public class CouponExpirationService {
 
     private final IssuanceRepository issuanceRepository;

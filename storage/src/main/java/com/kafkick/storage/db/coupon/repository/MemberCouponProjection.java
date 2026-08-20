@@ -2,7 +2,7 @@ package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
 
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 public interface MemberCouponProjection {

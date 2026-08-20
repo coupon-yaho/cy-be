@@ -11,15 +11,17 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import com.kafkick.api.coupon.CouponRequestHeaders;
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponUseAdapter;
-import com.kafkick.api.coupon.dto.CouponUseRequest;
-import com.kafkick.api.coupon.dto.CouponUseResponse;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.dto.request.CouponUseRequest;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.support.TimeProvider;
 
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,7 +42,7 @@ class CouponUseControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponUseAdapter couponUseAdapter;
+    private CouponOperationExecutionService executionService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -48,12 +50,13 @@ class CouponUseControllerTest {
     @Test
     @DisplayName("회원 소유 쿠폰을 사용하면 실제 할인액을 반환한다")
     void useCoupon() throws Exception {
-        when(couponUseAdapter.use(
+        when(executionService.use(
                 eq(100L),
                 eq(20L),
-                eq(IDEMPOTENCY_KEY),
-                any(CouponUseRequest.class)
-        )).thenReturn(new CouponUseResponse(
+                eq(30L),
+                eq(20_000),
+                eq(IDEMPOTENCY_KEY)
+        )).thenReturn(new CouponUseResult(
                 100L,
                 IssuanceStatus.USED,
                 30L,
@@ -99,8 +102,8 @@ class CouponUseControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verify(couponUseAdapter, never()).use(
-                any(), any(), any(), any()
+        verify(executionService, never()).use(
+                anyLong(), anyLong(), anyLong(), anyInt(), anyString()
         );
     }
 
@@ -124,8 +127,8 @@ class CouponUseControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verify(couponUseAdapter, never()).use(
-                any(), any(), any(), any()
+        verify(executionService, never()).use(
+                anyLong(), anyLong(), anyLong(), anyInt(), anyString()
         );
     }
 }

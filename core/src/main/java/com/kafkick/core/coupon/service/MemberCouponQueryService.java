@@ -2,12 +2,14 @@ package com.kafkick.core.coupon.service;
 
 import java.util.Objects;
 
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.query.MemberCouponPage;
 import com.kafkick.core.coupon.port.MemberCouponQueryPort;
 
+@Service
 public class MemberCouponQueryService {
 
     private final MemberCouponQueryPort memberCouponQueryPort;

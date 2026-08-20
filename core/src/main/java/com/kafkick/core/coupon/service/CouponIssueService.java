@@ -3,21 +3,24 @@ package com.kafkick.core.coupon.service;
 import java.time.Instant;
 import java.util.Objects;
 
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
-import com.kafkick.core.coupon.port.CouponCodeGenerator;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
-import com.kafkick.core.coupon.port.CouponStockOccupationResult;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
+import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.support.exception.BusinessException;
 
+@Service
 public class CouponIssueService {
 
     private final CouponRoundRepository couponRoundRepository;

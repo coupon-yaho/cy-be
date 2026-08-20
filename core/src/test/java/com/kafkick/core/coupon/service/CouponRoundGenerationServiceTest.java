@@ -15,14 +15,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.kafkick.core.coupon.domain.CouponDayOfWeek;
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponDayOfWeek;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
-import com.kafkick.core.coupon.domain.CouponTemplate;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.coupontemplate.domain.CouponTemplate;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
-import com.kafkick.core.coupon.port.CouponTemplateRepository;
+import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
+import com.kafkick.core.coupontemplate.port.CouponTemplateRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

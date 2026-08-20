@@ -17,7 +17,6 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
-import com.kafkick.api.coupon.exception.IdempotencyResponseCodecException;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.CommonErrorCode;
@@ -50,21 +49,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             // 재고 소진처럼 정상 흐름에서 대량 발생하므로 스택은 남기지 않는다.
             log.warn("[{}] {}", errorCode.getCode(), exception.getMessage());
         }
-        return ResponseEntity.status(errorCode.getStatus())
-                .body(ResponseEnvelope.fail(body(errorCode)));
-    }
-
-    @ExceptionHandler(IdempotencyResponseCodecException.class)
-    public ResponseEntity<ResponseEnvelope<Void>> handleIdempotencyCodecException(
-            IdempotencyResponseCodecException exception
-    ) {
-        ErrorCode errorCode = exception.getErrorCode();
-        log.error(
-                "[{}] {}",
-                errorCode.getCode(),
-                exception.getMessage(),
-                exception
-        );
         return ResponseEntity.status(errorCode.getStatus())
                 .body(ResponseEnvelope.fail(body(errorCode)));
     }
