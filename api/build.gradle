@@ -60,7 +60,14 @@ tasks.named('test') {
     // 가드가 없는 것보다 나쁘다 — 초록불이 검사했다는 증거로 읽히기 때문이다.
     inputs.files(
             rootProject.file('infra/prometheus/prometheus.yml'),
+            rootProject.file('compose.yml'),
+            // ⚠️ 아래 줄은 잔재가 아니다. 없어야 하는 파일도 입력으로 선언해야, 이게 새로
+            //    생겼을 때 Gradle 이 test 를 UP-TO-DATE 로 건너뛰지 않는다 — 지우면
+            //    onlyOneComposeFileExists 가 조용히 안 돈다(실측).
             rootProject.file('docker-compose.yml'),
+            rootProject.file('.github/CODEOWNERS'),
+            // 컨테이너에 마운트되는 배포 설정. DeployedConfigContractTest 가 읽는다.
+            rootProject.file('application.yml.example'),
             rootProject.file('batch/src/main/resources/management.yml.example'),
             // batch 의 관측 풀 스위치와 위 management.yml.example 이 한 쌍이다.
             rootProject.file('batch/src/main/resources/application.yml.example'),

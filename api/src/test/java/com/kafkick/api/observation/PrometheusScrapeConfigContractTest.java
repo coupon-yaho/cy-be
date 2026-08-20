@@ -18,7 +18,7 @@ import org.yaml.snakeyaml.Yaml;
  * <p>이 계약은 네 파일에 걸쳐 있다.
  * <ul>
  *   <li>{@code infra/prometheus/prometheus.yml} — 어느 호스트:포트를 긁을지
- *   <li>{@code docker-compose.yml} — 그 호스트 이름을 만드는 곳이자 설정 파일을 마운트하는 곳
+ *   <li>{@code compose.yml} — 그 호스트 이름을 만드는 곳이자 설정 파일을 마운트하는 곳
  *   <li>{@code api/src/main/resources/management.yml.example} — api 관리 포트 기본값
  *   <li>{@code batch/src/main/resources/management.yml.example} — batch 관리 포트 기본값
  * </ul>
@@ -40,10 +40,22 @@ import org.yaml.snakeyaml.Yaml;
  * env 로 옮기려면 compose 가 양쪽에 같은 값을 주입하는 구조가 되어야 하고, 그건 앱
  * 서비스가 compose 에 붙은 뒤의 일이다.
  *
- * <p>TODO(CY-213 후속, @SH-Seol): compose 에 api·batch 서비스가 붙으면 관리 포트를 compose
- * 의 한 곳에서 정의해 양쪽에 주입하고, 이 항목을 지운다.
+ * <p>compose 에는 이미 api·batch 서비스가 있으므로 구조상으로는 지금 할 수 있다 — 관리 포트를
+ * compose 가 한 곳에서 정의해 앱 env 와 prometheus.yml 양쪽에 주입하는 형태다. 다만
+ * prometheus.yml 쪽은 여전히 env 치환이 안 되므로 대상 주소를 compose 가 만들어 주입하는
+ * 설계가 필요하고, 그건 이 티켓의 범위를 넘는다.
+ * TODO(CY-213 후속, @SH-Seol): 관리 포트를 compose 한 곳에서 정의하는 구조로 옮길지 정한다.
  */
 class PrometheusScrapeConfigContractTest {
+
+    /**
+     * Docker Compose 가 실제로 읽는 이름. {@code docker-compose.yml} 을 함께 두면 이쪽만
+     * 읽히고 저쪽은 조용히 무시된다 — 그래서 이름을 하나로 고정하고 아래에서 부재를 본다.
+     */
+    private static final String COMPOSE_FILE = "compose.yml";
+
+    /** 함께 있으면 무시되는 구식 이름. 있으면 안 된다. */
+    private static final String LEGACY_COMPOSE_FILE = "docker-compose.yml";
 
     /** {@code ${VAR:기본값}} 에서 기본값만 꺼낸다 — 컨테이너는 env 주입 없이 뜬다. */
     private static String defaultOf(String placeholder) {
@@ -168,6 +180,24 @@ class PrometheusScrapeConfigContractTest {
     }
 
     @Test
+    @DisplayName("compose 파일은 하나다 — 둘을 두면 docker-compose.yml 이 조용히 무시된다")
+    void onlyOneComposeFileExists() {
+        Path repo = repoRoot();
+
+        assertThat(repo.resolve(COMPOSE_FILE))
+                .as("이 테스트가 읽는 파일이 실제로 있어야 한다")
+                .exists();
+
+        // 실측 근거 — Docker Compose 는 compose.yaml · compose.yml · docker-compose.yaml ·
+        // docker-compose.yml 순으로 찾고 먼저 맞는 하나만 쓴다. 둘을 같이 두면 경고 한 줄만
+        // 나오고 뒤쪽 파일의 서비스는 없는 것처럼 동작한다. 에러가 아니라 침묵이라 더 나쁘다.
+        assertThat(repo.resolve(LEGACY_COMPOSE_FILE))
+                .as("docker-compose.yml 이 다시 생기면 둘 중 하나가 조용히 죽는다."
+                        + " 서비스를 추가할 거면 %s 안에 넣어라", COMPOSE_FILE)
+                .doesNotExist();
+    }
+
+    @Test
     @DisplayName("Prometheus 를 호스트로 노출하지 않는다 — 인증이 없어 모든 지표가 열린다")
     void thePrometheusServicePublishesNoHostPort() throws IOException {
         Map<String, Object> service = prometheusService();
@@ -200,9 +230,104 @@ class PrometheusScrapeConfigContractTest {
     }
 
     @Test
+    @DisplayName("관리 포트와 batch 업무 포트를 호스트에 열지 않는다 — 인증이 없어 여는 순간 무방비다")
+    void noManagementOrBatchPortIsPublishedToTheHost() throws IOException {
+        // api 는 8080(업무)만 열고 9090(actuator)은 열지 않는다. actuator 에 인증이 없어서
+        // (Spring Security 미도입) 포트를 안 여는 것이 유일한 방어다 — allowlist 의 exclude
+        // 한 줄이 지워지면 /actuator/env 가 DB 비밀번호를 그대로 뱉는다(PRD R12).
+        assertThat(publishedContainerPorts("api"))
+                .as("api 는 업무 포트만 연다. 관리 포트 9090 을 열면 무인증 actuator 가"
+                        + " 0.0.0.0 에 붙는다 — docs/관측-Batch-포트-계약.md")
+                .containsExactly("8080");
+
+        // batch 는 아무것도 열지 않는다. 9091 에 붙는 verify 온디맨드 트리거가 무인증이라,
+        // 열어 두면 아무나 300만 행 검증 배치를 돌려 부하 측정 수치를 오염시킬 수 있다.
+        assertThat(publishedContainerPorts("batch"))
+                .as("batch 는 업무·관리 포트 모두 열지 않는다. 관제 API 가 내부 네트워크에서"
+                        + " batch:9091 로 호출하고 Prometheus 가 batch:9092 를 긁는다")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("CODEOWNERS 가 compose 파일을 덮는다 — 이름을 바꾸면 승인 없이 머지된다")
+    void codeownersCoversTheComposeFile() throws IOException {
+        // 이 파일이 관리 포트 노출 여부를 정하는 유일한 실물 설정이다. 코드오너가 안 걸리면
+        // 다음 PR 에서 ports 한 줄이 리뷰 없이 들어온다 — 위 가드가 CI 에서 잡더라도,
+        // 애초에 사람이 봐야 하는 변경이다.
+        List<String> patterns = Files.readAllLines(repoRoot().resolve(".github/CODEOWNERS"))
+                .stream()
+                .map(String::strip)
+                .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+                .map(line -> line.split("\\s+")[0])
+                .toList();
+
+        // 맨 위의 catch-all(`*`)은 세지 않는다. 그게 이미 전 파일을 덮고 있어서, 그것만
+        // 보면 무슨 이름을 쓰든 통과하는 헛단언이 된다 — 실제로 처음엔 그렇게 짰다가
+        // 깨뜨려 보고 알았다. 이 파일을 <b>이름으로 지목한</b> 줄이 있어야 한다.
+        assertThat(patterns.stream().filter(pattern -> pattern.contains("compose")).toList())
+                .as("CODEOWNERS 에 %s 를 이름으로 지목한 항목이 있어야 한다. catch-all 이"
+                        + " 덮고 있더라도, 그게 좁혀지는 날 이 파일만 소유자를 잃는다",
+                        COMPOSE_FILE)
+                .isNotEmpty()
+                .anyMatch(this::matchesComposeFile);
+    }
+
+    /** {@code /compose*.yml} 같은 루트 고정 글롭이 {@link #COMPOSE_FILE} 을 덮는지 본다. */
+    private boolean matchesComposeFile(String pattern) {
+        String normalized = pattern.startsWith("/") ? pattern.substring(1) : pattern;
+        if (normalized.contains("/")) {
+            return false;
+        }
+        String regex = java.util.Arrays.stream(normalized.split("\\*", -1))
+                .map(java.util.regex.Pattern::quote)
+                .reduce((left, right) -> left + "[^/]*" + right)
+                .orElse("");
+        return COMPOSE_FILE.matches(regex);
+    }
+
+    @Test
+    @DisplayName("compose 가 마운트하는 파일이 저장소에 실재한다 — 없으면 Docker 가 디렉터리를 만든다")
+    void everyBindMountSourceExists() throws IOException {
+        Path repo = repoRoot();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> services =
+                (Map<String, Object>) loadYaml(repo.resolve(COMPOSE_FILE)).get("services");
+
+        List<String> missing = new java.util.ArrayList<>();
+        for (Map.Entry<String, Object> entry : services.entrySet()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> definition = (Map<String, Object>) entry.getValue();
+            if (definition.get("volumes") == null) {
+                continue;
+            }
+            for (String mount : stringList(definition.get("volumes"))) {
+                String source = mount.split(":")[0];
+                // named volume 은 최상위 volumes 가 만든다. 여기서 보는 것은 bind mount 뿐이다.
+                if (!source.startsWith("./") && !source.startsWith("../")) {
+                    continue;
+                }
+                // gitignore 대상이면 커밋되는 .example 이 있어야 한다 — 각자 복사해 쓴다.
+                // 그 짝이 없으면 신규 클론은 만들 수 없는 파일을 마운트하게 된다.
+                if (Files.exists(repo.resolve(source))
+                        || Files.exists(repo.resolve(source + ".example"))) {
+                    continue;
+                }
+                missing.add(entry.getKey() + " → " + source);
+            }
+        }
+
+        assertThat(missing)
+                .as("실측 — 없는 경로를 bind mount 하면 Docker 가 그 이름의 디렉터리를 만들어"
+                        + " 마운트한다. 파일인 줄 알고 읽는 쪽은 설정이 통째로 비거나"
+                        + " 크래시루프에 빠지는데, 에러 메시지에는 그 원인이 안 나온다."
+                        + " 커밋 대상이 아니면 <경로>.example 을 커밋해 둘 것")
+                .isEmpty();
+    }
+
+    @Test
     @DisplayName("TSDB 는 named volume 위에 있다 — 컨테이너를 지워도 과거 회차가 남아야 한다")
     void theTsdbLivesOnANamedVolumeThatTheCommandActuallyWritesTo() throws IOException {
-        Map<String, Object> compose = loadYaml(repoRoot().resolve("docker-compose.yml"));
+        Map<String, Object> compose = loadYaml(repoRoot().resolve(COMPOSE_FILE));
         Map<String, Object> service = prometheusService();
 
         String tsdbPath = flagValue(commandOf(service), "--storage.tsdb.path");
@@ -288,8 +413,35 @@ class PrometheusScrapeConfigContractTest {
         return byJob;
     }
 
+    /**
+     * {@code "호스트:컨테이너"} 매핑에서 <b>컨테이너 쪽</b> 포트만 뽑는다. 호스트 쪽은
+     * {@code ${VAR}} 라 값을 모르지만, 무엇이 열리는지는 컨테이너 쪽이 정한다.
+     *
+     * <p>{@code ports} 키가 아예 없으면 빈 목록이다 — 그게 "아무것도 안 연다" 의 표현이다.
+     */
+    private List<String> publishedContainerPorts(String service) throws IOException {
+        Map<String, Object> definition = serviceNamed(service);
+        Object ports = definition.get("ports");
+        if (ports == null) {
+            return List.of();
+        }
+        return stringList(ports).stream()
+                .map(mapping -> mapping.substring(mapping.lastIndexOf(':') + 1))
+                .toList();
+    }
+
+    private Map<String, Object> serviceNamed(String service) throws IOException {
+        Map<String, Object> compose = loadYaml(repoRoot().resolve(COMPOSE_FILE));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> services = (Map<String, Object>) compose.get("services");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> definition = (Map<String, Object>) services.get(service);
+        assertThat(definition).as("compose 에 %s 서비스가 없다", service).isNotNull();
+        return definition;
+    }
+
     private Map<String, Object> prometheusService() throws IOException {
-        Map<String, Object> compose = loadYaml(repoRoot().resolve("docker-compose.yml"));
+        Map<String, Object> compose = loadYaml(repoRoot().resolve(COMPOSE_FILE));
         @SuppressWarnings("unchecked")
         Map<String, Object> services = (Map<String, Object>) compose.get("services");
         @SuppressWarnings("unchecked")
