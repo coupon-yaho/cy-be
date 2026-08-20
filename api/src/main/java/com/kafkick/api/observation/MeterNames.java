@@ -13,7 +13,7 @@ package com.kafkick.api.observation;
  */
 public final class MeterNames {
 
-    // ── OBS-4 가 직접 만드는 미터 (아직 없다. 이름만 먼저 고정한다) ──────────────
+    // ── OBS-4 가 직접 만드는 미터 ───────────────────────────────────────
     public static final String HTTP_LATENCY = "app.http.latency";
     public static final String HTTP_RESULT = "app.http.result";
     public static final String IN_FLIGHT = "app.http.inflight";
