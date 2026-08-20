@@ -1,4 +1,3 @@
-// 발급 쿠폰을 주문에 적용한 사용 실적을 표현합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;

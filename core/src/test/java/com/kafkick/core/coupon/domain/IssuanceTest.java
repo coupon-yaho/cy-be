@@ -1,4 +1,3 @@
-// 발급 시점 스냅샷과 유효기간 계산 규칙을 검증합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
@@ -11,6 +10,8 @@ import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+// 발급 시점 스냅샷과 유효기간 계산 규칙을 검증합니다.
 
 class IssuanceTest {
 

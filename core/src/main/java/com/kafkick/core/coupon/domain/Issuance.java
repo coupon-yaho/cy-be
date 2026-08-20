@@ -1,4 +1,3 @@
-// 회원에게 발급된 개별 쿠폰과 발급 시점 스냅샷을 표현합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;

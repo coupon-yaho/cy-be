@@ -1,17 +1,14 @@
-// 회차 재고 행 하나만 비관적으로 잠그고 현재 보유량을 1 증가시킵니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
 
 import org.springframework.stereotype.Repository;
 import org.springframework.dao.DataAccessException;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
-import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
-import com.kafkick.core.coupon.exception.CouponUseErrorCode;
+import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
+import com.kafkick.core.coupon.exception.CouponStockReleasePersistenceException;
+import com.kafkick.core.coupon.port.CouponStockOccupationResult;
 import com.kafkick.core.coupon.port.CouponStockRepository;
-import com.kafkick.core.support.exception.BusinessException;
 
 @Repository
 public class CouponStockRepositoryImpl implements CouponStockRepository {
@@ -25,58 +22,34 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void occupyOne(Long couponRoundId, Instant updatedAt) {
-        couponStockJpaRepository
-                .findByCouponIdForUpdate(couponRoundId)
-                .orElseThrow(() -> new BusinessException(
-                        CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
-                        "couponRoundId=" + couponRoundId
-                ));
-
-        int affectedRows = couponStockJpaRepository.occupyOne(
-                couponRoundId,
-                updatedAt
-        );
-        if (affectedRows != 1) {
-            throw new BusinessException(
-                    CouponIssueErrorCode.SOLD_OUT,
-                    "couponRoundId=" + couponRoundId
-            );
-        }
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void lockForUpdate(Long couponRoundId) {
+    public CouponStockOccupationResult occupy(
+            Long couponRoundId,
+            Instant updatedAt
+    ) {
         try {
-            couponStockJpaRepository
+            if (couponStockJpaRepository
                     .findByCouponIdForUpdate(couponRoundId)
-                    .orElseThrow(() -> new BusinessException(
-                            CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
-                            "couponRoundId=" + couponRoundId
-                    ));
+                    .isEmpty()) {
+                return CouponStockOccupationResult.NOT_FOUND;
+            }
+            int affectedRows = couponStockJpaRepository.occupyOne(
+                    couponRoundId,
+                    updatedAt
+            );
+            return affectedRows == 1
+                    ? CouponStockOccupationResult.OCCUPIED
+                    : CouponStockOccupationResult.SOLD_OUT;
         } catch (DataAccessException exception) {
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId,
+            throw new CouponIssuePersistenceException(
+                    "쿠폰 재고 점유에 실패했습니다. couponRoundId="
+                            + couponRoundId,
                     exception
             );
         }
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void releaseOneAfterLock(
-            Long couponRoundId,
-            Instant updatedAt
-    ) {
-        releaseAfterLock(couponRoundId, 1, updatedAt);
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void releaseAfterLock(
+    public boolean release(
             Long couponRoundId,
             int quantity,
             Instant updatedAt
@@ -92,19 +65,11 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
                     quantity,
                     updatedAt
             );
-            if (affectedRows == 1) {
-                return;
-            }
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId
-                            + ", quantity=" + quantity
-            );
+            return affectedRows == 1;
         } catch (DataAccessException exception) {
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId
-                            + ", quantity=" + quantity,
+            throw new CouponStockReleasePersistenceException(
+                    "쿠폰 재고 복원에 실패했습니다. couponRoundId="
+                            + couponRoundId + ", quantity=" + quantity,
                     exception
             );
         }

@@ -1,4 +1,3 @@
-// 실제 MySQL 비관적 락으로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -45,6 +44,8 @@ import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+// 실제 MySQL 비관적 락으로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
 
 @RepositoryTest
 @Import({
@@ -401,7 +402,7 @@ class CouponIssueRepositoryTest {
         return jdbcTemplate.queryForObject(query, Integer.class);
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
+    @TestConfiguration
     @EnableJpaAuditing(
             dateTimeProviderRef = "couponIssueTestDateTimeProvider"
     )

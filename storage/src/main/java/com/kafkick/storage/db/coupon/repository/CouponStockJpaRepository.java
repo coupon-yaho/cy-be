@@ -1,4 +1,3 @@
-// coupon_stocks 테이블의 Spring Data JPA 저장 계약입니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;

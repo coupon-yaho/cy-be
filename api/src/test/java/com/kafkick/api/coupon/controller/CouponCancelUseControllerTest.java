@@ -1,4 +1,3 @@
-// 쿠폰 사용 취소 API의 소유자 헤더·멱등키·응답 봉투 계약을 검증합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.time.Instant;
@@ -13,7 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.coupon.CouponRequestHeaders;
 import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponCancelUseTransactionalAdapter;
+import com.kafkick.api.coupon.adapter.CouponCancelUseAdapter;
 import com.kafkick.api.coupon.dto.CouponCancelUseResponse;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -26,6 +25,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+// 쿠폰 사용 취소 API의 소유자 헤더·멱등키·응답 봉투 계약을 검증합니다.
+
 @WebMvcTest(CouponCancelUseController.class)
 class CouponCancelUseControllerTest {
 
@@ -36,7 +37,7 @@ class CouponCancelUseControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponCancelUseTransactionalAdapter cancelUseAdapter;
+    private CouponCancelUseAdapter cancelUseAdapter;
 
     @MockitoBean
     private TimeProvider timeProvider;

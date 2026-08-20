@@ -1,4 +1,3 @@
-// 배치 모듈에 기술 독립적인 쿠폰 만료 유즈케이스와 스케줄링을 구성합니다.
 package com.kafkick.batch.coupon.config;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -12,7 +11,7 @@ import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.CouponExpirationService;
 
-@Configuration(proxyBeanMethods = false)
+@Configuration
 @EnableScheduling
 @EnableConfigurationProperties(CouponExpirationProperties.class)
 public class CouponExpirationConfiguration {

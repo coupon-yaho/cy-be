@@ -1,4 +1,3 @@
-// 사용자 보유 쿠폰 목록 조회 조건과 페이지 결과 전달을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -13,19 +12,21 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.port.MemberCouponPage;
-import com.kafkick.core.coupon.port.MemberCouponQueryRepository;
-import com.kafkick.core.coupon.port.MemberCouponSummary;
+import com.kafkick.core.coupon.query.MemberCouponPage;
+import com.kafkick.core.coupon.port.MemberCouponQueryPort;
+import com.kafkick.core.coupon.query.MemberCouponSummary;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+// 사용자 보유 쿠폰 목록 조회 조건과 페이지 결과 전달을 검증합니다.
+
 @ExtendWith(MockitoExtension.class)
 class MemberCouponQueryServiceTest {
 
     @Mock
-    private MemberCouponQueryRepository memberCouponQueryRepository;
+    private MemberCouponQueryPort memberCouponQueryPort;
 
     @InjectMocks
     private MemberCouponQueryService memberCouponQueryService;
@@ -34,7 +35,7 @@ class MemberCouponQueryServiceTest {
     @DisplayName("상태 조건 없이 회원의 보유 쿠폰 페이지를 조회한다")
     void findAllMemberCoupons() {
         MemberCouponPage expected = page();
-        when(memberCouponQueryRepository.findPageByMemberId(
+        when(memberCouponQueryPort.findPageByMemberId(
                 20L,
                 null,
                 0,
@@ -49,7 +50,7 @@ class MemberCouponQueryServiceTest {
         );
 
         assertThat(result).isSameAs(expected);
-        verify(memberCouponQueryRepository).findPageByMemberId(
+        verify(memberCouponQueryPort).findPageByMemberId(
                 20L,
                 null,
                 0,
@@ -61,7 +62,7 @@ class MemberCouponQueryServiceTest {
     @DisplayName("상태 조건으로 회원의 보유 쿠폰 페이지를 조회한다")
     void findMemberCouponsByStatus() {
         MemberCouponPage expected = page();
-        when(memberCouponQueryRepository.findPageByMemberId(
+        when(memberCouponQueryPort.findPageByMemberId(
                 20L,
                 IssuanceStatus.ISSUED,
                 1,
@@ -76,7 +77,7 @@ class MemberCouponQueryServiceTest {
         );
 
         assertThat(result).isSameAs(expected);
-        verify(memberCouponQueryRepository).findPageByMemberId(
+        verify(memberCouponQueryPort).findPageByMemberId(
                 20L,
                 IssuanceStatus.ISSUED,
                 1,

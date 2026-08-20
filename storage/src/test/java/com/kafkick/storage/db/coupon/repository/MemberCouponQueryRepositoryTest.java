@@ -1,4 +1,3 @@
-// 실제 MySQL에서 회원 소유권·상태·정렬 조건이 적용된 보유 쿠폰 페이지를 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.LocalDateTime;
@@ -14,17 +13,19 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.port.MemberCouponPage;
+import com.kafkick.core.coupon.query.MemberCouponPage;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+// 실제 MySQL에서 회원 소유권·상태·정렬 조건이 적용된 보유 쿠폰 페이지를 검증합니다.
+
 @RepositoryTest
-@Import(MemberCouponQueryRepositoryImpl.class)
+@Import(MemberCouponQueryAdapter.class)
 class MemberCouponQueryRepositoryTest {
 
     @Autowired
-    private MemberCouponQueryRepositoryImpl memberCouponQueryRepository;
+    private MemberCouponQueryAdapter memberCouponQueryRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -94,8 +95,8 @@ class MemberCouponQueryRepositoryTest {
     }
 
     @Test
-    @DisplayName("회원 쿠폰 최신순 조회를 지원하는 복합 인덱스가 존재한다")
-    void provideMemberCouponListIndex() {
+    @DisplayName("회원 쿠폰 조회용 보조 인덱스를 별도로 만들지 않는다")
+    void omitMemberCouponListIndex() {
         List<String> columns = jdbcTemplate.queryForList(
                 """
                 SELECT column_name
@@ -108,11 +109,7 @@ class MemberCouponQueryRepositoryTest {
                 String.class
         );
 
-        assertThat(columns).containsExactly(
-                "member_id",
-                "issued_at",
-                "id"
-        );
+        assertThat(columns).isEmpty();
     }
 
     private void insertReferenceData() {

@@ -1,4 +1,3 @@
-// 만료 후보를 ID keyset으로 조회해 청크 안에서 회차별로 처리합니다.
 package com.kafkick.batch.coupon.expiration;
 
 import java.time.Instant;
@@ -10,9 +9,10 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.coupon.domain.Issuance;
-import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.port.CouponExpirationCandidateQueryPort;
 import com.kafkick.core.coupon.service.CouponExpirationCommand;
 import com.kafkick.core.coupon.service.CouponExpirationResult;
+import com.kafkick.core.coupon.service.CouponExpirationService;
 import com.kafkick.core.support.TimeProvider;
 
 @Component
@@ -20,19 +20,19 @@ public class CouponExpirationRunner {
 
     private static final long INITIAL_CURSOR = 0L;
 
-    private final IssuanceRepository issuanceRepository;
-    private final CouponExpirationTransactionExecutor transactionExecutor;
+    private final CouponExpirationCandidateQueryPort candidateQueryPort;
+    private final CouponExpirationService expirationService;
     private final TimeProvider timeProvider;
     private final CouponExpirationProperties properties;
 
     public CouponExpirationRunner(
-            IssuanceRepository issuanceRepository,
-            CouponExpirationTransactionExecutor transactionExecutor,
+            CouponExpirationCandidateQueryPort candidateQueryPort,
+            CouponExpirationService expirationService,
             TimeProvider timeProvider,
             CouponExpirationProperties properties
     ) {
-        this.issuanceRepository = issuanceRepository;
-        this.transactionExecutor = transactionExecutor;
+        this.candidateQueryPort = candidateQueryPort;
+        this.expirationService = expirationService;
         this.timeProvider = timeProvider;
         this.properties = properties;
     }
@@ -44,7 +44,7 @@ public class CouponExpirationRunner {
         int expiredCount = 0;
 
         while (true) {
-            List<Issuance> candidates = issuanceRepository
+            List<Issuance> candidates = candidateQueryPort
                     .findExpiredIssuedAfterId(
                             asOf,
                             cursor,
@@ -89,7 +89,7 @@ public class CouponExpirationRunner {
                     fromIndex + properties.transactionSize(),
                     issuances.size()
             );
-            CouponExpirationResult result = transactionExecutor.execute(
+            CouponExpirationResult result = expirationService.expire(
                     new CouponExpirationCommand(
                             couponRoundId,
                             List.copyOf(issuances.subList(fromIndex, toIndex)),

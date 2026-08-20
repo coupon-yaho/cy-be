@@ -1,4 +1,3 @@
-// 가상 회원 헤더를 받아 공개된 회차의 쿠폰을 발급합니다.
 package com.kafkick.api.coupon.controller;
 
 import org.slf4j.MDC;
@@ -14,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponIssueTransactionalAdapter;
+import com.kafkick.api.coupon.adapter.CouponIssueAdapter;
 import com.kafkick.api.coupon.dto.CouponIssueResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.coupon.domain.Issuance;
@@ -26,10 +25,10 @@ public class CouponIssueController {
 
     private static final String REQUEST_ID = "requestId";
 
-    private final CouponIssueTransactionalAdapter issueAdapter;
+    private final CouponIssueAdapter issueAdapter;
 
     public CouponIssueController(
-            CouponIssueTransactionalAdapter issueAdapter
+            CouponIssueAdapter issueAdapter
     ) {
         this.issueAdapter = issueAdapter;
     }

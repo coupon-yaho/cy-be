@@ -1,4 +1,3 @@
-// 쿠폰 사용 취소 후 상태와 취소된 주문 실적을 반환합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.time.Instant;

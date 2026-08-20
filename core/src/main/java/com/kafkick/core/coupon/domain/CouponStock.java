@@ -1,4 +1,3 @@
-// 쿠폰 회차별 현재 재고 점유 수를 관리하는 도메인 모델입니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;

@@ -10,4 +10,16 @@ public record CouponUseCommand(
         String idempotencyKey,
         Instant usedAt
 ) {
+
+    public static String canonicalRequest(
+            Long issuanceId,
+            Long memberId,
+            Long orderId,
+            Integer orderAmount
+    ) {
+        return "USE|issuanceId=" + issuanceId
+                + "|memberId=" + memberId
+                + "|orderId=" + orderId
+                + "|orderAmount=" + orderAmount;
+    }
 }

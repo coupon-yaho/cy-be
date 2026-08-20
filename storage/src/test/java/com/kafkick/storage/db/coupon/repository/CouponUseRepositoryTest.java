@@ -1,4 +1,3 @@
-// 실제 MySQL에서 쿠폰 사용·멱등 응답·조건부 상태 전이의 원자성을 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -70,6 +69,8 @@ import com.kafkick.storage.db.RepositoryTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+// 실제 MySQL에서 쿠폰 사용·멱등 응답·조건부 상태 전이의 원자성을 검증합니다.
+
 @RepositoryTest
 @Import({
         CouponRoundRepositoryImpl.class,
@@ -97,7 +98,7 @@ class CouponUseRepositoryTest {
     private CouponStockRepository couponStockRepository;
 
     @Autowired
-    private IssuanceRepository issuanceRepository;
+    private IssuanceRepositoryImpl issuanceRepository;
 
     @Autowired
     private IssuanceUsageRepository issuanceUsageRepository;
@@ -1489,7 +1490,7 @@ class CouponUseRepositoryTest {
         return jdbcTemplate.queryForObject(query, Integer.class);
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
+    @TestConfiguration
     @EnableJpaAuditing(dateTimeProviderRef = "couponUseTestDateTimeProvider")
     static class AuditTestConfig {
 

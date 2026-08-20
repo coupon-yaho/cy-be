@@ -1,4 +1,3 @@
-// 기술 독립적인 쿠폰 사용 유즈케이스를 API 애플리케이션 빈으로 구성합니다.
 package com.kafkick.api.coupon.config;
 
 import org.springframework.context.annotation.Bean;
@@ -10,13 +9,54 @@ import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.port.IdempotencyRepository;
+import com.kafkick.core.coupon.service.IdempotencyClaimService;
+import com.kafkick.core.coupon.service.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.IdempotencyPolicy;
+import com.kafkick.core.coupon.service.IdempotentOperationService;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.CouponUseService;
 import com.kafkick.core.coupon.service.CouponCancelUseService;
 import com.kafkick.core.coupon.service.CouponCancelService;
+import com.kafkick.core.support.TimeProvider;
+import com.kafkick.api.coupon.adapter.CouponCancelResponseCodec;
+import com.kafkick.api.coupon.adapter.CouponCancelUseResponseCodec;
+import com.kafkick.api.coupon.adapter.CouponUseResponseCodec;
 
-@Configuration(proxyBeanMethods = false)
+@Configuration
 @EnableConfigurationProperties(CouponIdempotencyProperties.class)
 public class CouponUseCaseConfiguration {
+
+    @Bean
+    public IdempotencyClaimService idempotencyClaimService(
+            IdempotencyRepository idempotencyRepository
+    ) {
+        return new IdempotencyClaimService(idempotencyRepository);
+    }
+
+    @Bean
+    public IdempotencyExecutionService idempotencyExecutionService(
+            IdempotencyClaimService claimService,
+            TimeProvider timeProvider,
+            CouponIdempotencyProperties properties
+    ) {
+        return new IdempotencyExecutionService(
+                claimService,
+                timeProvider,
+                new IdempotencyPolicy(
+                        properties.waitTimeout(),
+                        properties.pollInterval(),
+                        properties.staleAfter()
+                )
+        );
+    }
+
+    @Bean
+    public IdempotentOperationService idempotentOperationService(
+            IdempotencyRepository idempotencyRepository
+    ) {
+        return new IdempotentOperationService(idempotencyRepository);
+    }
 
     @Bean
     public CouponUseService couponUseService(
@@ -58,6 +98,29 @@ public class CouponUseCaseConfiguration {
                 issuanceRepository,
                 issuanceHistoryRepository,
                 couponStockRepository
+        );
+    }
+
+    @Bean
+    public CouponOperationExecutionService couponOperationExecutionService(
+            IdempotencyExecutionService idempotencyExecutionService,
+            IdempotentOperationService idempotentOperationService,
+            CouponUseService couponUseService,
+            CouponCancelUseService couponCancelUseService,
+            CouponCancelService couponCancelService,
+            CouponUseResponseCodec useResponseCodec,
+            CouponCancelUseResponseCodec cancelUseResponseCodec,
+            CouponCancelResponseCodec cancelResponseCodec
+    ) {
+        return new CouponOperationExecutionService(
+                idempotencyExecutionService,
+                idempotentOperationService,
+                couponUseService,
+                couponCancelUseService,
+                couponCancelService,
+                useResponseCodec,
+                cancelUseResponseCodec,
+                cancelResponseCodec
         );
     }
 }

@@ -1,4 +1,3 @@
-// 사용자 쿠폰 조회 과정의 저장 실패를 표준 응답 코드로 정의합니다.
 package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.ErrorCode;

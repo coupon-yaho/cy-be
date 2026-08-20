@@ -1,4 +1,3 @@
-// CouponTemplate 도메인 모델과 JPA 엔티티 사이의 변환을 한 곳에서 담당합니다.
 package com.kafkick.storage.db.coupon.mapper;
 
 import com.kafkick.core.coupon.domain.CouponTemplate;

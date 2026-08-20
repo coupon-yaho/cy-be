@@ -1,4 +1,3 @@
-// 쿠폰 만료 배치의 keyset 청크 크기를 외부 설정으로 관리합니다.
 package com.kafkick.batch.coupon.expiration;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;

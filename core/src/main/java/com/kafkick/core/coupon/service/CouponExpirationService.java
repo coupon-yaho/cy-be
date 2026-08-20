@@ -1,15 +1,18 @@
-// 회차별 만료 상태 전이·재고 복원·EXPIRE 이력 저장을 조율합니다.
 package com.kafkick.core.coupon.service;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.transaction.annotation.Transactional;
+
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
+import com.kafkick.core.coupon.exception.CouponExpirationErrorCode;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.support.exception.BusinessException;
 
 public class CouponExpirationService {
 
@@ -31,6 +34,7 @@ public class CouponExpirationService {
         );
     }
 
+    @Transactional
     public CouponExpirationResult expire(CouponExpirationCommand command) {
         validateCommand(command);
         if (command.issuances().isEmpty()) {
@@ -40,8 +44,6 @@ public class CouponExpirationService {
         List<Issuance> expiredIssuances = command.issuances().stream()
                 .map(issuance -> issuance.expire(command.asOf()))
                 .toList();
-        couponStockRepository.lockForUpdate(command.couponRoundId());
-
         List<IssuanceHistory> histories = new ArrayList<>();
         for (int index = 0; index < command.issuances().size(); index++) {
             Issuance issuance = command.issuances().get(index);
@@ -64,11 +66,18 @@ public class CouponExpirationService {
         }
 
         if (!histories.isEmpty()) {
-            couponStockRepository.releaseAfterLock(
+            boolean stockReleased = couponStockRepository.release(
                     command.couponRoundId(),
                     histories.size(),
                     command.asOf()
             );
+            if (!stockReleased) {
+                throw new BusinessException(
+                        CouponExpirationErrorCode
+                                .COUPON_EXPIRATION_SAVE_FAILED,
+                        "couponRoundId=" + command.couponRoundId()
+                );
+            }
             issuanceHistoryRepository.saveAllExpirations(histories);
         }
         return new CouponExpirationResult(

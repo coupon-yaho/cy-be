@@ -1,4 +1,3 @@
-// 발급 취소 저장 실패가 전용 BusinessException으로 변환되는지 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -16,11 +15,13 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.exception.CouponCancelPersistenceException;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+
+// storage가 업무 이벤트와 무관한 공통 영속성 예외만 반환하는지 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponCancelPersistenceTranslationTest {
@@ -38,7 +39,7 @@ class CouponCancelPersistenceTranslationTest {
     private EntityManager entityManager;
 
     @Test
-    @DisplayName("CANCEL 상태 저장 실패를 발급 취소 저장 예외로 변환한다")
+    @DisplayName("CANCEL 상태 저장 실패를 공통 쿠폰 영속성 예외로 변환한다")
     void translateCancelStatusPersistenceFailure() {
         IssuanceRepositoryImpl repository = new IssuanceRepositoryImpl(
                 issuanceJpaRepository,
@@ -58,11 +59,11 @@ class CouponCancelPersistenceTranslationTest {
                 IssuanceStatus.ISSUED,
                 IssuanceStatus.CANCELLED,
                 CANCELED_AT
-        )).isInstanceOf(CouponCancelPersistenceException.class);
+        )).isInstanceOf(CouponPersistenceException.class);
     }
 
     @Test
-    @DisplayName("CANCEL 이력 저장 실패를 발급 취소 저장 예외로 변환한다")
+    @DisplayName("CANCEL 이력 저장 실패를 공통 쿠폰 영속성 예외로 변환한다")
     void translateCancelHistoryPersistenceFailure() {
         IssuanceHistoryRepositoryImpl repository =
                 new IssuanceHistoryRepositoryImpl(historyJpaRepository);
@@ -82,6 +83,6 @@ class CouponCancelPersistenceTranslationTest {
         );
 
         assertThatThrownBy(() -> repository.save(history))
-                .isInstanceOf(CouponCancelPersistenceException.class);
+                .isInstanceOf(CouponPersistenceException.class);
     }
 }

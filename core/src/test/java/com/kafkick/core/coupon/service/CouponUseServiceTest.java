@@ -1,4 +1,3 @@
-// 쿠폰 소유권·만료·조건부 상태 전이와 할인 계산을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -37,6 +36,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 쿠폰 소유권·만료·조건부 상태 전이와 할인 계산을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponUseServiceTest {

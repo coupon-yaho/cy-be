@@ -1,4 +1,3 @@
-// 활성 템플릿의 월간 반복 규칙으로 쿠폰 회차와 최초 재고를 생성합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.DayOfWeek;
@@ -16,27 +15,26 @@ import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
-import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.CouponTemplateRepository;
 
 public class CouponRoundGenerationService {
 
     private final CouponTemplateRepository couponTemplateRepository;
-    private final CouponRoundRepository couponRoundRepository;
+    private final CouponRoundCreationService couponRoundCreationService;
     private final ZoneId scheduleZone;
     private final int maxGenerationDays;
 
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
-            CouponRoundRepository couponRoundRepository,
+            CouponRoundCreationService couponRoundCreationService,
             ZoneId scheduleZone,
             int maxGenerationDays
     ) {
         this.couponTemplateRepository = Objects.requireNonNull(
                 couponTemplateRepository
         );
-        this.couponRoundRepository = Objects.requireNonNull(
-                couponRoundRepository
+        this.couponRoundCreationService = Objects.requireNonNull(
+                couponRoundCreationService
         );
         this.scheduleZone = Objects.requireNonNull(scheduleZone);
         if (maxGenerationDays <= 0) {
@@ -84,7 +82,7 @@ public class CouponRoundGenerationService {
                 );
 
                 try {
-                    couponRoundRepository.saveWithInitialStock(
+                    couponRoundCreationService.create(
                             couponRound,
                             initialStock
                     );

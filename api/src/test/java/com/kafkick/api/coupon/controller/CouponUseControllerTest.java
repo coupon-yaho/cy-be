@@ -1,4 +1,3 @@
-// 쿠폰 사용 API의 소유자·멱등키·주문 입력과 공통 응답 계약을 검증합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.time.Instant;
@@ -14,7 +13,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.coupon.CouponRequestHeaders;
 import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponUseTransactionalAdapter;
+import com.kafkick.api.coupon.adapter.CouponUseAdapter;
 import com.kafkick.api.coupon.dto.CouponUseRequest;
 import com.kafkick.api.coupon.dto.CouponUseResponse;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
@@ -29,6 +28,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+// 쿠폰 사용 API의 소유자·멱등키·주문 입력과 공통 응답 계약을 검증합니다.
+
 @WebMvcTest(CouponUseController.class)
 class CouponUseControllerTest {
 
@@ -39,7 +40,7 @@ class CouponUseControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponUseTransactionalAdapter couponUseAdapter;
+    private CouponUseAdapter couponUseAdapter;
 
     @MockitoBean
     private TimeProvider timeProvider;

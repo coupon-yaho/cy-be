@@ -1,4 +1,3 @@
-// 사용자 보유 쿠폰 목록의 헤더·필터·페이지 응답 계약을 검증합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.time.Instant;
@@ -14,8 +13,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.kafkick.api.coupon.MemberRequestHeaders;
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.port.MemberCouponPage;
-import com.kafkick.core.coupon.port.MemberCouponSummary;
+import com.kafkick.core.coupon.query.MemberCouponPage;
+import com.kafkick.core.coupon.query.MemberCouponSummary;
 import com.kafkick.core.coupon.service.MemberCouponQueryService;
 import com.kafkick.core.support.TimeProvider;
 
@@ -25,6 +24,8 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+// 사용자 보유 쿠폰 목록의 헤더·필터·페이지 응답 계약을 검증합니다.
 
 @WebMvcTest(MemberCouponController.class)
 class MemberCouponControllerTest {

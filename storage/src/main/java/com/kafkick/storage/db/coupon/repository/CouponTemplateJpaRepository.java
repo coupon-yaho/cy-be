@@ -1,4 +1,3 @@
-// 쿠폰 템플릿의 저장과 조회를 담당합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.util.List;

@@ -1,4 +1,3 @@
-// 중첩된 JDBC 예외에서 MySQL 오류 코드와 제약 이름을 일관되게 검사합니다.
 package com.kafkick.storage.db.support;
 
 import java.sql.SQLException;

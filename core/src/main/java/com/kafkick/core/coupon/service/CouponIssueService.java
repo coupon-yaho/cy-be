@@ -1,8 +1,9 @@
-// 회차 자격 검증 후 1인 1매 선점, 재고 점유, ISSUE 이력을 순서대로 처리합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
 import java.util.Objects;
+
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -11,6 +12,7 @@ import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.port.CouponCodeGenerator;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.port.CouponStockOccupationResult;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
@@ -48,6 +50,7 @@ public class CouponIssueService {
         );
     }
 
+    @Transactional
     public Issuance issue(CouponIssueCommand command) {
         validateCommand(command);
         CouponRound couponRound = couponRoundRepository
@@ -70,10 +73,12 @@ public class CouponIssueService {
 
         // UNIQUE(coupon_id, member_id)를 먼저 선점해야 중복 요청이 재고를 점유하지 않는다.
         Issuance savedIssuance = issuanceRepository.save(issuance);
-        couponStockRepository.occupyOne(
+        CouponStockOccupationResult occupationResult =
+                couponStockRepository.occupy(
                 couponRound.id(),
                 command.issuedAt()
         );
+        validateStockOccupation(couponRound.id(), occupationResult);
         issuanceHistoryRepository.save(IssuanceHistory.issue(
                 savedIssuance.id(),
                 command.requestId(),
@@ -81,6 +86,24 @@ public class CouponIssueService {
         ));
 
         return savedIssuance;
+    }
+
+    private static void validateStockOccupation(
+            Long couponRoundId,
+            CouponStockOccupationResult occupationResult
+    ) {
+        if (occupationResult == CouponStockOccupationResult.SOLD_OUT) {
+            throw new BusinessException(
+                    CouponIssueErrorCode.SOLD_OUT,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
+        if (occupationResult == CouponStockOccupationResult.NOT_FOUND) {
+            throw new BusinessException(
+                    CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
     }
 
     private static void validateCommand(CouponIssueCommand command) {

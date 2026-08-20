@@ -1,4 +1,3 @@
-// 쿠폰 사용 실적을 상태 변경 트랜잭션 안에서 저장합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -7,8 +6,6 @@ import java.util.Optional;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.IssuanceUsage;
 import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
@@ -29,7 +26,6 @@ public class IssuanceUsageRepositoryImpl
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public IssuanceUsage save(IssuanceUsage usage) {
         try {
             IssuanceUsageEntity saved = usageJpaRepository.saveAndFlush(
@@ -59,7 +55,6 @@ public class IssuanceUsageRepositoryImpl
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public boolean cancelIfActive(Long usageId, Instant canceledAt) {
         try {
             return usageJpaRepository.cancelIfActive(

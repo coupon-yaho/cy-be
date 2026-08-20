@@ -1,4 +1,3 @@
-// 중첩 SQLException의 오류 코드와 메시지 키워드 검사 규칙을 검증합니다.
 package com.kafkick.storage.db.support;
 
 import java.sql.SQLException;
@@ -7,6 +6,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
+// 중첩 SQLException의 오류 코드와 메시지 키워드 검사 규칙을 검증합니다.
 
 class SqlErrorInspectorTest {
 

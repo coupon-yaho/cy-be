@@ -1,5 +1,6 @@
-// 쿠폰 템플릿의 활성화 상태를 멱등하게 변경합니다.
 package com.kafkick.core.coupon.service;
+
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
@@ -16,6 +17,7 @@ public class CouponTemplateActivationService {
         this.couponTemplateRepository = couponTemplateRepository;
     }
 
+    @Transactional
     public CouponTemplate changeActivation(
             Long couponTemplateId,
             CouponTemplateActivationCommand command

@@ -1,4 +1,3 @@
-// 관리자 쿠폰 템플릿 생성 요청을 검증하고 코어 유즈케이스 명령으로 변환합니다.
 package com.kafkick.api.coupon.dto;
 
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;

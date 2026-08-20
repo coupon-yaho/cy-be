@@ -1,4 +1,3 @@
-// 쿠폰 사용으로 확정된 상태와 실제 할인 실적을 반환합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.time.Instant;

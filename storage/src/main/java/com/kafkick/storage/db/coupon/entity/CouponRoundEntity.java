@@ -1,4 +1,3 @@
-// coupons 테이블에 저장되는 쿠폰 회차 스냅샷을 표현합니다.
 package com.kafkick.storage.db.coupon.entity;
 
 import java.time.Instant;

@@ -1,9 +1,8 @@
-// 사용자 보유 쿠폰 목록과 페이지 메타데이터를 반환합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.util.List;
 
-import com.kafkick.core.coupon.port.MemberCouponPage;
+import com.kafkick.core.coupon.query.MemberCouponPage;
 
 public record MemberCouponPageResponse(
         List<MemberCouponResponse> content,

@@ -1,4 +1,3 @@
-// 쿠폰 템플릿 활성화 상태 변경의 조회·멱등성·저장 흐름을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.LocalTime;
@@ -27,6 +26,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+// 쿠폰 템플릿 활성화 상태 변경의 조회·멱등성·저장 흐름을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponTemplateActivationServiceTest {

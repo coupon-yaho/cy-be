@@ -1,4 +1,3 @@
-// 회원 소유의 발급 쿠폰을 주문에 멱등하게 사용하는 API를 제공합니다.
 package com.kafkick.api.coupon.controller;
 
 import jakarta.validation.Valid;
@@ -13,7 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.coupon.CouponRequestHeaders;
 import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponUseTransactionalAdapter;
+import com.kafkick.api.coupon.adapter.CouponUseAdapter;
 import com.kafkick.api.coupon.dto.CouponUseRequest;
 import com.kafkick.api.coupon.dto.CouponUseResponse;
 import com.kafkick.api.support.ResponseEnvelope;
@@ -22,10 +21,10 @@ import com.kafkick.api.support.ResponseEnvelope;
 @RequestMapping("/api/v1/coupons")
 public class CouponUseController {
 
-    private final CouponUseTransactionalAdapter couponUseAdapter;
+    private final CouponUseAdapter couponUseAdapter;
 
     public CouponUseController(
-            CouponUseTransactionalAdapter couponUseAdapter
+            CouponUseAdapter couponUseAdapter
     ) {
         this.couponUseAdapter = couponUseAdapter;
     }

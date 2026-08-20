@@ -1,4 +1,3 @@
-// 런타임과 검증 배치가 공유하는 합법 전이표와 종단 상태를 검증합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
@@ -11,6 +10,8 @@ import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+// 런타임과 검증 배치가 공유하는 합법 전이표와 종단 상태를 검증합니다.
 
 class CouponStateMachineTest {
 

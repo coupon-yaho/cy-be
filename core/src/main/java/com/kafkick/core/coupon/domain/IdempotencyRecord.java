@@ -1,4 +1,3 @@
-// 상태 변경 요청의 최초 결과를 재사용하기 위한 멱등 레코드입니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;

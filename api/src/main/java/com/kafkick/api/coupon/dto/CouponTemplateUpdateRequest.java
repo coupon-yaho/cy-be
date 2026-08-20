@@ -1,4 +1,3 @@
-// 관리자 쿠폰 템플릿 전체 수정 요청을 검증하고 코어 명령으로 변환합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.time.LocalTime;

@@ -37,6 +37,7 @@ import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.exception.CouponRoundPersistenceException;
+import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @RepositoryTest
 @Import({
         CouponRoundRepositoryImpl.class,
+        CouponRoundCreationService.class,
         CouponTemplateRepositoryImpl.class,
         CouponRoundRepositoryTest.AuditTestConfig.class
 })
@@ -56,7 +58,7 @@ class CouponRoundRepositoryTest {
             Instant.parse("2030-01-01T00:00:00Z");
 
     @Autowired
-    private CouponRoundRepositoryImpl couponRoundRepository;
+    private CouponRoundCreationService couponRoundCreationService;
 
     @Autowired
     private CouponTemplateRepositoryImpl couponTemplateRepository;
@@ -89,8 +91,8 @@ class CouponRoundRepositoryTest {
                 generatedAt
         );
 
-        CouponRound savedRound = couponRoundRepository
-                .saveWithInitialStock(couponRound, initialStock);
+        CouponRound savedRound = couponRoundCreationService
+                .create(couponRound, initialStock);
 
         Map<String, Object> roundRow = jdbcTemplate.queryForMap(
                 """
@@ -213,7 +215,7 @@ class CouponRoundRepositoryTest {
         CouponTemplate unsavedTemplate = template(999L);
         Instant generatedAt = Instant.parse("2026-08-18T00:00:00Z");
 
-        assertThatThrownBy(() -> couponRoundRepository.saveWithInitialStock(
+        assertThatThrownBy(() -> couponRoundCreationService.create(
                 scheduledRound(unsavedTemplate, generatedAt),
                 CouponStock.initialize(10_000, generatedAt)
         )).isInstanceOf(CouponRoundPersistenceException.class);
@@ -227,7 +229,7 @@ class CouponRoundRepositoryTest {
     void rejectStockInvariantViolationAtDatabase() {
         CouponTemplate template = saveTemplate();
         Instant generatedAt = Instant.parse("2026-08-18T00:00:00Z");
-        CouponRound savedRound = couponRoundRepository.saveWithInitialStock(
+        CouponRound savedRound = couponRoundCreationService.create(
                 scheduledRound(template, generatedAt),
                 CouponStock.initialize(10_000, generatedAt)
         );
@@ -360,7 +362,7 @@ class CouponRoundRepositoryTest {
             );
         }
         try {
-            couponRoundRepository.saveWithInitialStock(
+            couponRoundCreationService.create(
                     couponRound,
                     initialStock
             );

@@ -1,4 +1,3 @@
-// 발급 도메인과 issuances 엔티티의 변환을 담당합니다.
 package com.kafkick.storage.db.coupon.mapper;
 
 import com.kafkick.core.coupon.domain.Issuance;

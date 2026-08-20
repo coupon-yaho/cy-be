@@ -1,20 +1,19 @@
-// 쿠폰 템플릿 생성·조회·수정·활성화 API의 응답 계약을 테스트합니다.
 package com.kafkick.api.coupon.controller;
 
-import com.kafkick.api.coupon.adapter.CouponTemplateActivationTransactionalAdapter;
-import com.kafkick.api.coupon.adapter.CouponTemplateUpdateTransactionalAdapter;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.support.AdminRequestHeaders;
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;
 import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
-import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
-import com.kafkick.core.coupon.port.CouponTemplatePage;
-import com.kafkick.core.coupon.service.CouponTemplateActivationCommand;
-import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
+import com.kafkick.core.coupon.service.CouponTemplateActivationService;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
+import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
+import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
+import com.kafkick.core.coupon.query.CouponTemplatePage;
+import com.kafkick.core.coupon.service.CouponTemplateActivationCommand;
+import com.kafkick.core.coupon.service.CouponTemplateCreateCommand;
 import com.kafkick.core.coupon.service.CouponTemplateUpdateCommand;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
@@ -40,6 +39,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+// 쿠폰 템플릿 생성·조회·수정·활성화 API의 응답 계약을 테스트합니다.
+
 @WebMvcTest(CouponTemplateController.class)
 class CouponTemplateControllerTest {
 
@@ -53,12 +54,12 @@ class CouponTemplateControllerTest {
     private CouponTemplateQueryService couponTemplateQueryService;
 
     @MockitoBean
-    private CouponTemplateUpdateTransactionalAdapter
-            couponTemplateUpdateTransactionalAdapter;
+    private CouponTemplateUpdateService
+            couponTemplateUpdateService;
 
     @MockitoBean
-    private CouponTemplateActivationTransactionalAdapter
-            couponTemplateActivationTransactionalAdapter;
+    private CouponTemplateActivationService
+            couponTemplateActivationService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -577,7 +578,7 @@ class CouponTemplateControllerTest {
                 true
         );
 
-        when(couponTemplateUpdateTransactionalAdapter.update(
+        when(couponTemplateUpdateService.update(
                 eq(100L),
                 any(CouponTemplateUpdateCommand.class)
         )).thenReturn(updatedCouponTemplate);
@@ -630,7 +631,7 @@ class CouponTemplateControllerTest {
 
         ArgumentCaptor<CouponTemplateUpdateCommand> commandCaptor =
                 ArgumentCaptor.forClass(CouponTemplateUpdateCommand.class);
-        verify(couponTemplateUpdateTransactionalAdapter).update(
+        verify(couponTemplateUpdateService).update(
                 eq(100L),
                 commandCaptor.capture()
         );
@@ -658,7 +659,7 @@ class CouponTemplateControllerTest {
     @Test
     @DisplayName("존재하지 않는 쿠폰 템플릿 수정은 404를 반환한다")
     void rejectUpdatingMissingCouponTemplate() throws Exception {
-        when(couponTemplateUpdateTransactionalAdapter.update(
+        when(couponTemplateUpdateService.update(
                 eq(999L),
                 any(CouponTemplateUpdateCommand.class)
         )).thenThrow(new BusinessException(
@@ -700,7 +701,7 @@ class CouponTemplateControllerTest {
                 .andExpect(jsonPath("$.error.message")
                         .value("쿠폰 템플릿 ID는 0보다 커야 합니다."));
 
-        verifyNoInteractions(couponTemplateUpdateTransactionalAdapter);
+        verifyNoInteractions(couponTemplateUpdateService);
     }
 
     @Test
@@ -735,7 +736,7 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verifyNoInteractions(couponTemplateUpdateTransactionalAdapter);
+        verifyNoInteractions(couponTemplateUpdateService);
     }
 
     @Test
@@ -758,7 +759,7 @@ class CouponTemplateControllerTest {
                 Set.of(MembershipGrade.GOLD, MembershipGrade.VIP),
                 false
         );
-        when(couponTemplateActivationTransactionalAdapter.changeActivation(
+        when(couponTemplateActivationService.changeActivation(
                 eq(100L),
                 any(CouponTemplateActivationCommand.class)
         )).thenReturn(deactivatedCouponTemplate);
@@ -782,7 +783,7 @@ class CouponTemplateControllerTest {
                 ArgumentCaptor.forClass(
                         CouponTemplateActivationCommand.class
                 );
-        verify(couponTemplateActivationTransactionalAdapter)
+        verify(couponTemplateActivationService)
                 .changeActivation(eq(100L), commandCaptor.capture());
         assertThat(commandCaptor.getValue().active()).isFalse();
     }
@@ -790,7 +791,7 @@ class CouponTemplateControllerTest {
     @Test
     @DisplayName("존재하지 않는 쿠폰 템플릿 상태 변경은 404를 반환한다")
     void rejectChangingActivationOfMissingCouponTemplate() throws Exception {
-        when(couponTemplateActivationTransactionalAdapter.changeActivation(
+        when(couponTemplateActivationService.changeActivation(
                 eq(999L),
                 any(CouponTemplateActivationCommand.class)
         )).thenThrow(new BusinessException(
@@ -828,7 +829,7 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verifyNoInteractions(couponTemplateActivationTransactionalAdapter);
+        verifyNoInteractions(couponTemplateActivationService);
     }
 
     @Test
@@ -848,7 +849,7 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verifyNoInteractions(couponTemplateActivationTransactionalAdapter);
+        verifyNoInteractions(couponTemplateActivationService);
     }
 
     @Test
@@ -863,7 +864,7 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("COMMON-005"));
 
-        verifyNoInteractions(couponTemplateActivationTransactionalAdapter);
+        verifyNoInteractions(couponTemplateActivationService);
     }
 
     @Test

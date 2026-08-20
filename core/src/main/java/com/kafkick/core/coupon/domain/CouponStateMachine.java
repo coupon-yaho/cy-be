@@ -1,4 +1,3 @@
-// 런타임과 검증 배치가 공유할 수 있도록 발급건의 합법적인 상태 전이를 한곳에 정의합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;

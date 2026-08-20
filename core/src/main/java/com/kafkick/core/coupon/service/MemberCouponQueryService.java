@@ -1,31 +1,33 @@
-// 사용자 보유 쿠폰 목록 조회를 기술 독립적인 포트에 위임합니다.
 package com.kafkick.core.coupon.service;
 
 import java.util.Objects;
 
+import org.springframework.transaction.annotation.Transactional;
+
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.port.MemberCouponPage;
-import com.kafkick.core.coupon.port.MemberCouponQueryRepository;
+import com.kafkick.core.coupon.query.MemberCouponPage;
+import com.kafkick.core.coupon.port.MemberCouponQueryPort;
 
 public class MemberCouponQueryService {
 
-    private final MemberCouponQueryRepository memberCouponQueryRepository;
+    private final MemberCouponQueryPort memberCouponQueryPort;
 
     public MemberCouponQueryService(
-            MemberCouponQueryRepository memberCouponQueryRepository
+            MemberCouponQueryPort memberCouponQueryPort
     ) {
-        this.memberCouponQueryRepository = Objects.requireNonNull(
-                memberCouponQueryRepository
+        this.memberCouponQueryPort = Objects.requireNonNull(
+                memberCouponQueryPort
         );
     }
 
+    @Transactional(readOnly = true)
     public MemberCouponPage findPage(
             Long memberId,
             IssuanceStatus status,
             int page,
             int size
     ) {
-        return memberCouponQueryRepository.findPageByMemberId(
+        return memberCouponQueryPort.findPageByMemberId(
                 memberId,
                 status,
                 page,

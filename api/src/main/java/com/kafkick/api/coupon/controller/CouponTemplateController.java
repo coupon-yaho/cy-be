@@ -1,4 +1,3 @@
-// 관리자 쿠폰 템플릿 생성·조회·수정·활성화 API를 공통 응답 형식으로 제공합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.net.URI;
@@ -19,8 +18,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.kafkick.api.coupon.adapter.CouponTemplateActivationTransactionalAdapter;
-import com.kafkick.api.coupon.adapter.CouponTemplateUpdateTransactionalAdapter;
 import com.kafkick.api.coupon.dto.CouponTemplateActivationRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateRequest;
 import com.kafkick.api.coupon.dto.CouponTemplateCreateResponse;
@@ -29,34 +26,34 @@ import com.kafkick.api.coupon.dto.CouponTemplatePageResponse;
 import com.kafkick.api.coupon.dto.CouponTemplateUpdateRequest;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.coupon.domain.CouponTemplate;
+import com.kafkick.core.coupon.service.CouponTemplateActivationService;
 import com.kafkick.core.coupon.service.CouponTemplateCreateService;
 import com.kafkick.core.coupon.service.CouponTemplateQueryService;
+import com.kafkick.core.coupon.service.CouponTemplateUpdateService;
 
 @RestController
 @RequestMapping("/api/v1/admin/coupon-templates")
 public class CouponTemplateController {
 
-    private final CouponTemplateCreateService couponTemplateCreateService;
-    private final CouponTemplateQueryService couponTemplateQueryService;
-    private final CouponTemplateUpdateTransactionalAdapter
-            couponTemplateUpdateTransactionalAdapter;
-    private final CouponTemplateActivationTransactionalAdapter
-            couponTemplateActivationTransactionalAdapter;
+    private final CouponTemplateCreateService
+            couponTemplateCreateService;
+    private final CouponTemplateQueryService
+            couponTemplateQueryService;
+    private final CouponTemplateUpdateService couponTemplateUpdateService;
+    private final CouponTemplateActivationService
+            couponTemplateActivationService;
 
     public CouponTemplateController(
             CouponTemplateCreateService couponTemplateCreateService,
             CouponTemplateQueryService couponTemplateQueryService,
-            CouponTemplateUpdateTransactionalAdapter
-                    couponTemplateUpdateTransactionalAdapter,
-            CouponTemplateActivationTransactionalAdapter
-                    couponTemplateActivationTransactionalAdapter
+            CouponTemplateUpdateService couponTemplateUpdateService,
+            CouponTemplateActivationService couponTemplateActivationService
     ) {
         this.couponTemplateCreateService = couponTemplateCreateService;
         this.couponTemplateQueryService = couponTemplateQueryService;
-        this.couponTemplateUpdateTransactionalAdapter =
-                couponTemplateUpdateTransactionalAdapter;
-        this.couponTemplateActivationTransactionalAdapter =
-                couponTemplateActivationTransactionalAdapter;
+        this.couponTemplateUpdateService = couponTemplateUpdateService;
+        this.couponTemplateActivationService =
+                couponTemplateActivationService;
     }
 
     @PostMapping
@@ -115,7 +112,7 @@ public class CouponTemplateController {
             @Valid @RequestBody CouponTemplateUpdateRequest request
     ) {
         CouponTemplate updatedCouponTemplate =
-                couponTemplateUpdateTransactionalAdapter.update(
+                couponTemplateUpdateService.update(
                         couponTemplateId,
                         request.toCommand()
                 );
@@ -133,7 +130,7 @@ public class CouponTemplateController {
             @Valid @RequestBody CouponTemplateActivationRequest request
     ) {
         CouponTemplate couponTemplate =
-                couponTemplateActivationTransactionalAdapter
+                couponTemplateActivationService
                         .changeActivation(
                                 couponTemplateId,
                                 request.toCommand()

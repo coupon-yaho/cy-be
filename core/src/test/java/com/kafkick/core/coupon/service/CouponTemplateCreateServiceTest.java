@@ -1,4 +1,3 @@
-// 쿠폰 템플릿 생성 유즈케이스의 저장과 도메인 오류 변환을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.LocalTime;
@@ -26,6 +25,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 쿠폰 템플릿 생성 유즈케이스의 저장과 도메인 오류 변환을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponTemplateCreateServiceTest {

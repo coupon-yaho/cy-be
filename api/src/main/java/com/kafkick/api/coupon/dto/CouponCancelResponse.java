@@ -1,4 +1,3 @@
-// 쿠폰 발급 취소 결과를 외부 응답 규격으로 제공합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.time.Instant;

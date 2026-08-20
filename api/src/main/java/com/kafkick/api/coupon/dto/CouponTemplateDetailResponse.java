@@ -1,4 +1,3 @@
-// 조회한 쿠폰 템플릿 도메인 모델을 API 응답으로 변환합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.time.LocalTime;

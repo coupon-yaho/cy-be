@@ -4,13 +4,12 @@ import java.time.Instant;
 
 public interface CouponStockRepository {
 
-    void occupyOne(Long couponRoundId, Instant updatedAt);
+    CouponStockOccupationResult occupy(
+            Long couponRoundId,
+            Instant updatedAt
+    );
 
-    void lockForUpdate(Long couponRoundId);
-
-    void releaseOneAfterLock(Long couponRoundId, Instant updatedAt);
-
-    void releaseAfterLock(
+    boolean release(
             Long couponRoundId,
             int quantity,
             Instant updatedAt

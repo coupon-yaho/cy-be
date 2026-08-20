@@ -1,4 +1,3 @@
-// 사용 취소 상태 전이·재고 복원·실적 종료·이력 저장 규칙을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -33,6 +32,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 사용 취소 상태 전이·재고 복원·실적 종료·이력 저장 규칙을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponCancelUseServiceTest {
@@ -89,9 +90,9 @@ class CouponCancelUseServiceTest {
         CouponCancelUseResult result = cancelUseService.cancelUse(command());
 
         assertThat(result.status()).isEqualTo(IssuanceStatus.EXPIRED);
-        verify(couponStockRepository).lockForUpdate(10L);
-        verify(couponStockRepository).releaseOneAfterLock(
+        verify(couponStockRepository).release(
                 10L,
+                1,
                 CANCELED_AT
         );
         verifyStateAndHistory(IssuanceStatus.EXPIRED);
@@ -233,6 +234,10 @@ class CouponCancelUseServiceTest {
         )).thenReturn(true);
         when(issuanceUsageRepository.cancelIfActive(200L, CANCELED_AT))
                 .thenReturn(true);
+        if (nextStatus == IssuanceStatus.EXPIRED) {
+            when(couponStockRepository.release(10L, 1, CANCELED_AT))
+                    .thenReturn(true);
+        }
     }
 
     private void verifyStateAndHistory(IssuanceStatus nextStatus) {

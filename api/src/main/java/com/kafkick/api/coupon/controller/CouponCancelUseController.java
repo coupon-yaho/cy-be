@@ -1,4 +1,3 @@
-// 회원 소유 발급 쿠폰의 사용 취소를 멱등하게 처리하는 API를 제공합니다.
 package com.kafkick.api.coupon.controller;
 
 import jakarta.validation.constraints.Positive;
@@ -11,7 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.coupon.CouponRequestHeaders;
 import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponCancelUseTransactionalAdapter;
+import com.kafkick.api.coupon.adapter.CouponCancelUseAdapter;
 import com.kafkick.api.coupon.dto.CouponCancelUseResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 
@@ -19,10 +18,10 @@ import com.kafkick.api.support.ResponseEnvelope;
 @RequestMapping("/api/v1/coupons")
 public class CouponCancelUseController {
 
-    private final CouponCancelUseTransactionalAdapter cancelUseAdapter;
+    private final CouponCancelUseAdapter cancelUseAdapter;
 
     public CouponCancelUseController(
-            CouponCancelUseTransactionalAdapter cancelUseAdapter
+            CouponCancelUseAdapter cancelUseAdapter
     ) {
         this.cancelUseAdapter = cancelUseAdapter;
     }

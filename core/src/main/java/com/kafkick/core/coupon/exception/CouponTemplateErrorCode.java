@@ -1,4 +1,3 @@
-// 쿠폰 도메인에서 발생하는 비즈니스 오류 코드와 응답 정보를 정의합니다.
 package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.ErrorCode;

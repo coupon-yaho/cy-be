@@ -1,4 +1,3 @@
-// Storage 모듈의 JPA Entity와 Spring Data Repository 검색 범위를 설정합니다.
 package com.kafkick.storage.db.config;
 
 import com.kafkick.storage.db.coupon.entity.CouponTemplateEntity;

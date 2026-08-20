@@ -1,4 +1,3 @@
-// 발급건의 상태 전이를 재현할 수 있도록 ISSUE 이력을 표현합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;

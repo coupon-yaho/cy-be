@@ -1,9 +1,8 @@
-// 쿠폰 템플릿 목록과 페이지 메타데이터를 공통 응답 형식으로 제공합니다.
 package com.kafkick.api.coupon.dto;
 
 import java.util.List;
 
-import com.kafkick.core.coupon.port.CouponTemplatePage;
+import com.kafkick.core.coupon.query.CouponTemplatePage;
 
 public record CouponTemplatePageResponse(
         List<CouponTemplateDetailResponse> content,

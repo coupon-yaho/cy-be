@@ -1,4 +1,3 @@
-// 쿠폰 상태 변경 멱등 요청의 재조회 간격과 실패 선점 회수 시간을 외부 설정으로 관리합니다.
 package com.kafkick.api.coupon.config;
 
 import java.time.Duration;

@@ -1,4 +1,3 @@
-// 고정한 기준 시각으로 keyset 청크를 읽고 회차별 만료 트랜잭션을 실행하는지 검증합니다.
 package com.kafkick.batch.coupon.expiration;
 
 import java.time.Instant;
@@ -15,9 +14,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.MembershipGrade;
-import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.port.CouponExpirationCandidateQueryPort;
 import com.kafkick.core.coupon.service.CouponExpirationCommand;
 import com.kafkick.core.coupon.service.CouponExpirationResult;
+import com.kafkick.core.coupon.service.CouponExpirationService;
 import com.kafkick.core.support.TimeProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,6 +26,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+// 고정한 기준 시각으로 keyset 청크를 읽고 회차별 만료 트랜잭션을 실행하는지 검증합니다.
+
 @ExtendWith(MockitoExtension.class)
 class CouponExpirationRunnerTest {
 
@@ -33,10 +35,10 @@ class CouponExpirationRunnerTest {
             Instant.parse("2026-08-26T05:00:00.123456Z");
 
     @Mock
-    private IssuanceRepository issuanceRepository;
+    private CouponExpirationCandidateQueryPort expirationCandidateQueryPort;
 
     @Mock
-    private CouponExpirationTransactionExecutor transactionExecutor;
+    private CouponExpirationService expirationService;
 
     @Mock
     private TimeProvider timeProvider;
@@ -46,8 +48,8 @@ class CouponExpirationRunnerTest {
     @BeforeEach
     void setUp() {
         runner = new CouponExpirationRunner(
-                issuanceRepository,
-                transactionExecutor,
+                expirationCandidateQueryPort,
+                expirationService,
                 timeProvider,
                 new CouponExpirationProperties(3, 2)
         );
@@ -57,7 +59,7 @@ class CouponExpirationRunnerTest {
     @DisplayName("기준 시각을 한 번 고정하고 keyset 청크를 회차별로 묶어 만료한다")
     void expireCandidatesWithOneAsOfAndRoundGrouping() {
         when(timeProvider.instant()).thenReturn(AS_OF);
-        when(issuanceRepository.findExpiredIssuedAfterId(
+        when(expirationCandidateQueryPort.findExpiredIssuedAfterId(
                 AS_OF,
                 0L,
                 3
@@ -66,9 +68,13 @@ class CouponExpirationRunnerTest {
                 issuance(101L, 10L),
                 issuance(102L, 10L)
         ));
-        when(issuanceRepository.findExpiredIssuedAfterId(AS_OF, 102L, 3))
+        when(expirationCandidateQueryPort.findExpiredIssuedAfterId(
+                AS_OF,
+                102L,
+                3
+        ))
                 .thenReturn(List.of());
-        when(transactionExecutor.execute(org.mockito.ArgumentMatchers.any()))
+        when(expirationService.expire(org.mockito.ArgumentMatchers.any()))
                 .thenAnswer(invocation -> {
                     CouponExpirationCommand command = invocation.getArgument(0);
                     return new CouponExpirationResult(
@@ -86,8 +92,8 @@ class CouponExpirationRunnerTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<CouponExpirationCommand> commandCaptor =
                 ArgumentCaptor.forClass(CouponExpirationCommand.class);
-        verify(transactionExecutor, times(2))
-                .execute(commandCaptor.capture());
+        verify(expirationService, times(2))
+                .expire(commandCaptor.capture());
         assertThat(commandCaptor.getAllValues())
                 .extracting(CouponExpirationCommand::couponRoundId)
                 .containsExactly(10L, 10L);

@@ -1,7 +1,8 @@
-// 사용 취소 상태 전이·실적 종료·만료 재고 복원·이력 저장을 조율합니다.
 package com.kafkick.core.coupon.service;
 
 import java.util.Objects;
+
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
@@ -40,6 +41,7 @@ public class CouponCancelUseService {
         );
     }
 
+    @Transactional
     public CouponCancelUseResult cancelUse(CouponCancelUseCommand command) {
         validateCommand(command);
         Issuance issuance = issuanceRepository
@@ -61,10 +63,6 @@ public class CouponCancelUseService {
                 command.canceledAt()
         );
 
-        if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
-            couponStockRepository.lockForUpdate(issuance.couponRoundId());
-        }
-
         boolean statusChanged = issuanceRepository.updateStatusIfCurrent(
                 issuance.id(),
                 issuance.memberId(),
@@ -80,10 +78,17 @@ public class CouponCancelUseService {
         }
 
         if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
-            couponStockRepository.releaseOneAfterLock(
+            boolean stockReleased = couponStockRepository.release(
                     issuance.couponRoundId(),
+                    1,
                     command.canceledAt()
             );
+            if (!stockReleased) {
+                throw new BusinessException(
+                        CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                        "couponRoundId=" + issuance.couponRoundId()
+                );
+            }
         }
 
         boolean usageCanceled = issuanceUsageRepository.cancelIfActive(

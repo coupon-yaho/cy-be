@@ -1,4 +1,3 @@
-// 쿠폰 템플릿 저장 및 조회 포트를 Spring Data JPA로 구현합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.util.List;
@@ -15,10 +14,9 @@ import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.CouponPolicyType;
-import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
-import com.kafkick.core.coupon.port.CouponTemplatePage;
+import com.kafkick.core.coupon.exception.CouponTemplatePersistenceException;
+import com.kafkick.core.coupon.query.CouponTemplatePage;
 import com.kafkick.core.coupon.port.CouponTemplateRepository;
-import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.coupon.entity.CouponTemplateEntity;
 import com.kafkick.storage.db.coupon.mapper.CouponTemplateEntityMapper;
 
@@ -49,8 +47,7 @@ public class CouponTemplateRepositoryImpl implements CouponTemplateRepository {
 
             return CouponTemplateEntityMapper.toDomain(savedEntity);
         } catch (DataIntegrityViolationException exception) {
-            throw new BusinessException(
-                    CouponTemplateErrorCode.INVALID_COUPON_TEMPLATE,
+            throw new CouponTemplatePersistenceException(
                     "쿠폰 템플릿 저장 중 DB 제약 위반: brandId="
                             + couponTemplate.brandId(),
                     exception

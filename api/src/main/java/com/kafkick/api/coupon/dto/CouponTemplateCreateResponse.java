@@ -1,4 +1,3 @@
-// 저장이 완료된 쿠폰 템플릿 정보를 반환합니다.
 package com.kafkick.api.coupon.dto;
 
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;

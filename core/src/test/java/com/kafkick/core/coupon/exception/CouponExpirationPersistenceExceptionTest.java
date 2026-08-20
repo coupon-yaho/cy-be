@@ -1,10 +1,11 @@
-// 쿠폰 만료 저장 실패가 만료 전용 오류 코드로 변환되는지 검증합니다.
 package com.kafkick.core.coupon.exception;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
+// 쿠폰 만료 저장 실패가 만료 전용 오류 코드로 변환되는지 검증합니다.
 
 class CouponExpirationPersistenceExceptionTest {
 

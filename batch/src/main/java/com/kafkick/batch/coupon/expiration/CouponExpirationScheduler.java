@@ -1,4 +1,3 @@
-// 설정된 cron에 따라 쿠폰 만료 배치를 실행하고 집계 건수만 기록합니다.
 package com.kafkick.batch.coupon.expiration;
 
 import org.slf4j.Logger;

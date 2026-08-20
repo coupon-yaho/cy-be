@@ -1,4 +1,3 @@
-// 지정 기간의 쿠폰 회차 생성 결과 건수를 전달합니다.
 package com.kafkick.core.coupon.service;
 
 public record CouponRoundGenerationResult(
@@ -8,7 +7,9 @@ public record CouponRoundGenerationResult(
 ) {
 
     public CouponRoundGenerationResult {
-        if (creationTargets < 0 || createdCount < 0 || duplicateCount < 0) {
+        if (creationTargets < 0
+                || createdCount < 0
+                || duplicateCount < 0) {
             throw new IllegalArgumentException(
                     "쿠폰 회차 생성 결과 건수는 음수일 수 없습니다."
             );

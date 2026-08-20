@@ -1,4 +1,3 @@
-// 쿠폰 템플릿 단건 및 목록 조회를 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.LocalTime;
@@ -18,7 +17,7 @@ import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
-import com.kafkick.core.coupon.port.CouponTemplatePage;
+import com.kafkick.core.coupon.query.CouponTemplatePage;
 import com.kafkick.core.coupon.port.CouponTemplateRepository;
 import com.kafkick.core.support.exception.BusinessException;
 
@@ -26,6 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+// 쿠폰 템플릿 단건 및 목록 조회를 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponTemplateQueryServiceTest {

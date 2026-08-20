@@ -1,4 +1,3 @@
-// 관리자 쿠폰 템플릿의 핵심 정책과 생성 규칙을 관리하는 도메인 모델입니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.LocalTime;

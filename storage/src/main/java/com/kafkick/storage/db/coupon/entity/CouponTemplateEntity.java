@@ -1,4 +1,3 @@
-// coupon_templates 테이블의 영속 상태를 표현합니다.
 package com.kafkick.storage.db.coupon.entity;
 
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;
@@ -14,6 +13,12 @@ import jakarta.persistence.Table;
 
 import java.time.LocalTime;
 
+/**
+ * 반복 발급 규칙을 저장하는 템플릿 엔티티다.
+ *
+ * <p>현재 Flyway 테이블에는 공통 감사 컬럼이 없으므로 BaseEntity를
+ * 상속하지 않는다.</p>
+ */
 @Entity
 @Table(name = "coupon_templates")
 public class CouponTemplateEntity {

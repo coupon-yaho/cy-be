@@ -1,4 +1,3 @@
-// 실제 MySQL과 Flyway 스키마에서 쿠폰 템플릿 저장 및 DB 제약 변환을 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.LocalDateTime;
@@ -18,12 +17,15 @@ import com.kafkick.core.coupon.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponTemplate;
 import com.kafkick.core.coupon.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponTemplateErrorCode;
-import com.kafkick.core.coupon.port.CouponTemplatePage;
+import com.kafkick.core.coupon.exception.CouponTemplatePersistenceException;
+import com.kafkick.core.coupon.query.CouponTemplatePage;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+// 실제 MySQL과 Flyway 스키마에서 쿠폰 템플릿 저장 및 DB 제약 변환을 검증합니다.
 
 @RepositoryTest
 @Import(CouponTemplateRepositoryImpl.class)
@@ -107,7 +109,7 @@ class CouponTemplateRepositoryTest {
         assertThatThrownBy(
                 () -> couponTemplateRepository.save(couponTemplate)
         )
-                .isInstanceOf(BusinessException.class)
+                .isInstanceOf(CouponTemplatePersistenceException.class)
                 .satisfies(exception -> {
                     BusinessException businessException =
                             (BusinessException) exception;

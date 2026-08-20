@@ -1,4 +1,3 @@
-// 쿠폰 회차와 최초 재고를 별도 새 트랜잭션에서 함께 저장합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.util.Optional;
@@ -7,8 +6,6 @@ import jakarta.persistence.EntityManager;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
@@ -40,7 +37,6 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CouponRound saveWithInitialStock(
             CouponRound couponRound,
             CouponStock initialStock

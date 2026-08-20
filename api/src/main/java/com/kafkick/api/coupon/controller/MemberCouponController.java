@@ -1,4 +1,3 @@
-// 가상 회원 헤더로 본인 소유 쿠폰을 상태별 페이지로 조회합니다.
 package com.kafkick.api.coupon.controller;
 
 import jakarta.validation.constraints.Max;

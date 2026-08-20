@@ -1,4 +1,3 @@
-// 멱등키 선점과 최초 응답 저장을 현재 상태 변경 트랜잭션에서 처리합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.sql.Timestamp;
@@ -11,8 +10,6 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
@@ -31,7 +28,6 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public boolean tryStart(
             String key,
             String requestHash,
@@ -61,10 +57,6 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
     }
 
     @Override
-    @Transactional(
-            propagation = Propagation.MANDATORY,
-            readOnly = true
-    )
     public Optional<IdempotencyRecord> findByKey(String key) {
         try {
             return jdbcTemplate.query(
@@ -96,7 +88,6 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public boolean tryReclaim(
             String key,
             String requestHash,
@@ -127,7 +118,6 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public void complete(
             String key,
             Long memberId,
@@ -175,7 +165,6 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public void release(
             String key,
             String requestHash,

@@ -1,4 +1,3 @@
-// 쿠폰 사용에 필요한 주문 참조값과 결제 금액을 검증합니다.
 package com.kafkick.api.coupon.dto;
 
 import jakarta.validation.constraints.NotNull;

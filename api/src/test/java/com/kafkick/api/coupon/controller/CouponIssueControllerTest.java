@@ -1,4 +1,3 @@
-// 사용자 발급 API의 헤더 입력과 201 공통 응답 계약을 검증합니다.
 package com.kafkick.api.coupon.controller;
 
 import java.time.Instant;
@@ -12,7 +11,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponIssueTransactionalAdapter;
+import com.kafkick.api.coupon.adapter.CouponIssueAdapter;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.MembershipGrade;
@@ -27,6 +26,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+// 사용자 발급 API의 헤더 입력과 201 공통 응답 계약을 검증합니다.
+
 @WebMvcTest(CouponIssueController.class)
 class CouponIssueControllerTest {
 
@@ -34,7 +35,7 @@ class CouponIssueControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponIssueTransactionalAdapter issueAdapter;
+    private CouponIssueAdapter issueAdapter;
 
     @MockitoBean
     private TimeProvider timeProvider;
