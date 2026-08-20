@@ -102,7 +102,9 @@ CREATE TABLE `issue_attempts` (
         (`http_status` IS NULL AND `reason_code` IS NULL)
         OR (`http_status` IS NOT NULL AND `http_status` >= 400 AND `reason_code` IS NOT NULL)
         OR (`http_status` IS NOT NULL AND `http_status` <  400 AND `reason_code` IS NULL)
-    )
+    ),
+    CONSTRAINT `ck_attempt_replayed` CHECK (`replayed` IN (0, 1)),
+    CONSTRAINT `ck_attempt_kafka_coords` CHECK (`kafka_partition` >= 0 AND `kafka_offset` >= 0)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 
 -- NOT NULL 5개는 설계 스케치(AB-0 §6)가 NULL 로 적어둔 것을 좁힌 것이다
@@ -121,7 +123,7 @@ CREATE TABLE `issue_attempts` (
 --   http_status 가 NULL 이면 http_status = 201 · >= 400 이 전부 NULL 로 평가돼 식 전체가 NULL 이 된다.
 --   그러면 "http_status 가 없는데 issuance_id 가 있는" 행이 그대로 들어온다 — 막으려던 경로가 정확히 뚫린다.
 --
---   TODO(OBS-15): 이 CHECK 3종의 회귀 테스트는 Consumer 테스트와 함께 만든다.
+--   TODO(OBS-15): 이 CHECK 5종의 회귀 테스트는 Consumer 테스트와 함께 만든다.
 --   storage/src/testFixtures 의 MySqlContainerConfig 로 Flyway 적용 후 불법 INSERT 가 거부되는지 검증한다.
 
 -- 인덱스는 지금 쓰이는 용도가 확실한 것만 만든다 (설계 스케치의 6개 중 셋을 뺐다)
