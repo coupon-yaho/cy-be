@@ -29,6 +29,10 @@ class DomainMeterNamesTest {
             .isEqualTo(DomainMeterNames.STOCK_REMAINING + ".state");
         assertThat(DomainMeterNames.LAST_SUCCESSFUL_ISSUE_EPOCH_STATE)
             .isEqualTo(DomainMeterNames.LAST_SUCCESSFUL_ISSUE_EPOCH + ".state");
+        assertThat(DomainMeterNames.CONSISTENCY_SEVERITY_STATE)
+            .isEqualTo(DomainMeterNames.CONSISTENCY_SEVERITY + ".state");
+        assertThat(DomainMeterNames.CONSISTENCY_SOURCE_SKEW_SECONDS_STATE)
+            .isEqualTo(DomainMeterNames.CONSISTENCY_SOURCE_SKEW_SECONDS + ".state");
     }
 
     @Test

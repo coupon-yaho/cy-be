@@ -10,6 +10,15 @@ dependencies {
     runtimeOnly project(':storage')
     testImplementation testFixtures(project(':storage'))
 
+    // 테스트만 storage 를 본다. batch 가 끄는 관측 스위치의 키를 storage 가 소유해서, 둘을 잇는
+    // 테스트가 그 상수를 직접 참조해야 하기 때문이다(DomainGaugeConfigContractTest).
+    // 문자열로 옮겨 적으면 storage 가 키 이름을 바꿔도 CI 는 통과하고 기동만 조용히 죽는다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 storage 타입을 컴파일 타임에 못 본다.
+    //    testFixtures 가 이미 전이로 끌어와 이 줄이 없어도 컴파일되지만, 선언 없이 경계를 넘는
+    //    것보다 드러내 두는 편이 낫다 — api 가 같은 이유로 같은 줄을 갖고 있다.
+    testImplementation project(':storage')
+
     implementation 'org.springframework.boot:spring-boot-starter-batch'
     // 300만 행 집계·리플레이는 전부 SQL 이다. starter-batch 가 끌어오지만 직접 쓰므로 명시한다.
     implementation 'org.springframework:spring-jdbc'

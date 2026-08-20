@@ -96,6 +96,10 @@ class ObservationLogContractTest {
         new ConsistencyRawValueReader(observationJdbcTemplate, redisTemplate, properties, timeProvider)
             .read();
 
+        // 부재 단정만 두면 로그 경로가 통째로 사라져도 통과한다. 남는다는 것부터 고정한다.
+        assertThat(appender.list)
+            .as("숫자가 아니었다는 사실은 로그로 남아야 한다")
+            .anyMatch(event -> event.getFormattedMessage().contains("숫자가 아니다"));
         assertThat(appender.list)
             .as("진단에 필요한 것은 '숫자가 아니었다' 이지 그 내용이 아니다")
             .noneMatch(event -> event.getFormattedMessage().contains("SECRET-VALUE-9f2a"));

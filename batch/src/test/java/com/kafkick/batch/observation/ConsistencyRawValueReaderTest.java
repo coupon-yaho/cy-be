@@ -32,6 +32,7 @@ import org.springframework.jdbc.core.RowMapper;
 import com.kafkick.batch.observation.ConsistencyRawValueReader.DomainRawSnapshot;
 import com.kafkick.batch.observation.ConsistencyRawValueReader.StockSnapshot;
 import com.kafkick.core.consistency.ConsistencyRawValues;
+import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -73,6 +74,18 @@ class ConsistencyRawValueReaderTest {
         verify(observationJdbcTemplate).query(
             argThat(sql -> sql.contains("i.status IN ('ISSUED', 'USED')")),
             any(RowMapper.class), any(Object[].class));
+    }
+
+    @Test
+    @DisplayName("IssuanceStatus 가 늘면 누적 발급 목록을 다시 판단해야 한다")
+    void issuedEverContractCoversEveryKnownStatus() {
+        assertThat(IssuanceStatus.values())
+            .as("ConsistencyRawValues 계약이 네 상태를 열거한다. 상수가 늘면 그 상태가 '발급 이력' 에"
+                + " 포함되는지 사람이 정하고, core 의 계약 javadoc 과 ISSUED_EVER_STATUS_LIST 를"
+                + " 함께 고쳐야 한다 — 자동으로 따라가면 발급 전 단계까지 세어 persist gap 이 음수가 된다")
+            .containsExactlyInAnyOrder(
+                IssuanceStatus.ISSUED, IssuanceStatus.USED,
+                IssuanceStatus.CANCELLED, IssuanceStatus.EXPIRED);
     }
 
     @Test

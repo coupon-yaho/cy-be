@@ -213,10 +213,6 @@ public class DomainGaugeRegistrar {
             () -> SourceStatusCode.of(properties.engineVersion()));
     }
 
-    /**
-     * Micrometer Gauge 는 약한 참조가 기본이라 GC 가 지나가면 조용히 NaN 으로 굳는다.
-     * 부하 테스트 중간에 그래프가 끊기고 원인은 남지 않는다.
-     */
     /** 계산기의 LIVE 평가에서 나온 값. phase 라벨로 FINAL 판정과 구분한다. */
     private static void evaluationGauge(
         MeterRegistry registry, String name, String gapType, Supplier<Number> value
@@ -230,6 +226,10 @@ public class DomainGaugeRegistrar {
         builder.register(registry);
     }
 
+    /**
+     * Micrometer Gauge 는 약한 참조가 기본이라 GC 가 지나가면 조용히 NaN 으로 굳는다.
+     * 부하 테스트 중간에 그래프가 끊기고 원인은 남지 않는다.
+     */
     private static void gauge(MeterRegistry registry, String name, String gapType, Supplier<Number> value) {
         Gauge.Builder<Supplier<Number>> builder = Gauge.builder(name, value).strongReference(true);
         if (gapType != null) {

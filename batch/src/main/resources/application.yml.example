@@ -124,6 +124,12 @@ observation:
     # ⚠️ 회차 설정과 같은 값이어야 한다. 어긋나면 Redis 없는 회차에서 Redis 계열 gap 이
     #    UNAVAILABLE 로 경보를 올리거나, 반대로 실제 불일치가 N_A 로 숨는다.
     engine-version: ${ISSUANCE_ENGINE_VERSION:V1}
+    # Redis 키 규약. V2·V3 발급 구현이 정하는 이름이라 여기서 맞춰 둔다.
+    # {couponId} 는 관측 대상 회차로 치환된다.
+    remaining-key: ${DOMAIN_GAUGE_REMAINING_KEY:coupon:{couponId}:stock:remaining}
+    issued-ever-key: ${DOMAIN_GAUGE_ISSUED_EVER_KEY:coupon:{couponId}:issued}
+    member-ever-key: ${DOMAIN_GAUGE_MEMBER_EVER_KEY:coupon:{couponId}:members}
+    queue-key: ${DOMAIN_GAUGE_QUEUE_KEY:coupon:{couponId}:queue}
     # 이 횟수부터 수집 실패를 ERROR 로 올린다. 재고(1초)와 정합성(30초)은 같은 횟수라도 뜻하는
     # 시간이 다르므로, 경보가 시끄러우면 여기서 조인다.
     consecutive-failure-alarm: ${DOMAIN_GAUGE_FAILURE_ALARM:3}

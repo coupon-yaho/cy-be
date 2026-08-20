@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -50,8 +51,14 @@ public class ConsistencyRawValueReader {
      * 누적 발급의 분자. {@code ConsistencyRawValues} 계약이 네 상태를 <b>열거</b>하므로
      * {@code COUNT(*)} 로 세면 안 된다 — 계약 밖 상태가 생기면 그 행까지 세어 persist gap 이
      * 상시 음수가 된다.
+     *
+     * <p>enum 전체를 쓰지 않고 <b>네 개를 적어 둔다.</b> 자동으로 따라가면 발급 전 단계 같은 새
+     * 상태까지 세어 같은 실패로 돌아간다 — 새 상태가 "발급 이력" 인지는 사람이 정해야 한다.
+     * 그 시점은 {@code ConsistencyRawValueReaderTest} 가 알려 준다.
      */
-    private static final String ISSUED_EVER_STATUS_LIST = statusList(status -> true);
+    private static final String ISSUED_EVER_STATUS_LIST = statusList(EnumSet.of(
+        IssuanceStatus.ISSUED, IssuanceStatus.USED,
+        IssuanceStatus.CANCELLED, IssuanceStatus.EXPIRED)::contains);
 
     private static String statusList(java.util.function.Predicate<IssuanceStatus> filter) {
         return Arrays.stream(IssuanceStatus.values())
@@ -296,6 +303,14 @@ public class ConsistencyRawValueReader {
     }
 
     /**
+     * V1 에는 대기열 자체가 없다. 재고를 못 읽어도, 회차를 못 찾아도 대기열은 여전히 "해당 없음"
+     * 이다. 없는 기능을 장애로 표시하면 화면이 장애색을 칠한다.
+     */
+    private SourceStatus queueStatusFor(SourceStatus status) {
+        return properties.engineVersion() == EngineVersion.V1 ? SourceStatus.N_A : status;
+    }
+
+    /**
      * 관측 대상 회차를 못 찾았을 때의 상태.
      *
      * <p>회차를 <b>박았는데</b> 그 행이 없으면 오타이거나 지운 회차다 — 사람이 명시한 대상이
@@ -304,14 +319,6 @@ public class ConsistencyRawValueReader {
      *
      * <p>반대로 회차를 박지 않은 상태에서 아직 아무 회차도 없는 것은 측정 전 대기라 고장이 아니다.
      */
-    /**
-     * V1 에는 대기열 자체가 없다. 재고를 못 읽어도, 회차를 못 찾아도 대기열은 여전히 "해당 없음"
-     * 이다. 없는 기능을 장애로 표시하면 화면이 장애색을 칠한다.
-     */
-    private SourceStatus queueStatusFor(SourceStatus status) {
-        return properties.engineVersion() == EngineVersion.V1 ? SourceStatus.N_A : status;
-    }
-
     private SourceStatus missingCouponStatus() {
         if (properties.couponId() == null) {
             return SourceStatus.PENDING;
