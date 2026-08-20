@@ -58,6 +58,12 @@ class BatchBenchmarkRunsAssumptionTest {
                 "CREATE TABLE `issue_attempts` (`benchmark_run_id` bigint COMMENT 'benchmark_runs.id')"))
                 .isFalse();
         assertThat(createsBenchmarkRuns("-- benchmark_runs(OBS-14b)가 가져간다")).isFalse();
+        // DDL 이 문자열 안에 들어 있는 것은 생성이 아니다(감사 로그 시딩 등).
+        assertThat(createsBenchmarkRuns(
+                "INSERT INTO audit(sql_text) VALUES ('CREATE TABLE benchmark_runs (id bigint)')"))
+                .isFalse();
+        assertThat(createsBenchmarkRuns(
+                "CREATE TABLE `x` (`c` text COMMENT 'CREATE TABLE benchmark_runs (id)')")).isFalse();
     }
 
     @Test
@@ -88,10 +94,17 @@ class BatchBenchmarkRunsAssumptionTest {
         }
     }
 
-    /** 주석과 블록 주석을 걷어낸 뒤 테이블 이름 자리만 본다. */
+    /**
+     * 주석·블록 주석·문자열 리터럴을 걷어낸 뒤 테이블 이름 자리만 본다.
+     *
+     * <p>이름이 <b>등장</b>하는 것과 테이블이 <b>생기는</b> 것은 다르다. 지금까지 셋 다 실제로
+     * 걸렸다 — CY-253 의 {@code COMMENT} 언급, OBS-22 가 만들 {@code benchmark_runs_archive},
+     * 그리고 문자열 안에 든 DDL 텍스트.
+     */
     static boolean createsBenchmarkRuns(String sql) {
-        String withoutComments = sql.replaceAll("(?m)--.*$", "")
-                .replaceAll("(?s)/\\*.*?\\*/", "");
-        return CREATE_BENCHMARK_RUNS.matcher(withoutComments).find();
+        String executable = sql.replaceAll("(?m)--.*$", "")
+                .replaceAll("(?s)/\\*.*?\\*/", "")
+                .replaceAll("(?s)'(?:[^']|'')*'", "''");
+        return CREATE_BENCHMARK_RUNS.matcher(executable).find();
     }
 }

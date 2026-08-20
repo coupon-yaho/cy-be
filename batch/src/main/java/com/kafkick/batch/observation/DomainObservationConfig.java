@@ -45,6 +45,12 @@ public class DomainObservationConfig {
      * 임계치는 api 와 같은 키에서 읽는다. 여기에 숫자를 박으면 운영자가 api 쪽만 조정하고
      * batch 는 기본값으로 도는데, 두 JVM 이 같은 회차를 다른 기준으로 판정하게 된다.
      */
+    /*
+     * TODO(batch 자동설정 도입 담당): 이 조건은 일반 @Configuration 에 있어 빈 등록 순서에 의존한다.
+     *   batch 에 다른 ConsistencyCalculator 빈이 없어 지금은 갈릴 상황이 없지만, 자동설정이 생기거나
+     *   실제로 계산기를 재정의하는 코드가 들어오면 그 자동설정으로 옮긴다. 지금 옮기면 관측 배선
+     *   하나를 위해 기동 메커니즘을 하나 더 늘리게 된다.
+     */
     @Bean
     @ConditionalOnMissingBean(ConsistencyCalculator.class)
     public ConsistencyCalculator consistencyCalculator(ConsistencySeverityProperties severityProperties) {
