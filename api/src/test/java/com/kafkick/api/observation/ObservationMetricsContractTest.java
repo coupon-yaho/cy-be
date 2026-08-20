@@ -145,8 +145,16 @@ class ObservationMetricsContractTest {
             assertThat(timer.getId().getTag("outcome")).isEqualTo("success");
             assertThat(reader.percentileNanos(MeterNames.HTTP_LATENCY, P99)).isPresent();
 
-            context.getBean(MockClock.class).add(Duration.ofSeconds(11));
-            assertThat(reader.percentileNanos(MeterNames.HTTP_LATENCY, P99)).isEmpty();
+            MockClock clock = context.getBean(MockClock.class);
+            clock.add(Duration.ofSeconds(9));
+            assertThat(reader.percentileNanos(MeterNames.HTTP_LATENCY, P99))
+                    .as("10초 expiry 이전에는 p99가 유지된다")
+                    .isPresent();
+
+            clock.add(Duration.ofSeconds(2));
+            assertThat(reader.percentileNanos(MeterNames.HTTP_LATENCY, P99))
+                    .as("10초 expiry가 지난 뒤에는 p99가 제거된다")
+                    .isEmpty();
         }
     }
 

@@ -222,29 +222,35 @@ public final class HttpMetricsFilter extends OncePerRequestFilter {
             }
 
             String normalizedMethod = method.toUpperCase(Locale.ROOT);
-            if ("POST".equals(normalizedMethod) && isItemAction(pattern, "campaigns", "issue")) {
+            if (!"GET".equals(normalizedMethod) && !"POST".equals(normalizedMethod)) {
+                return Optional.empty();
+            }
+
+            String[] segments = pattern.split("/");
+            if ("POST".equals(normalizedMethod)
+                    && isItemAction(segments, "campaigns", "issue")) {
                 return Optional.of(ISSUE);
             }
-            if ("POST".equals(normalizedMethod) && isItemAction(pattern, "campaigns", "entry")) {
+            if ("POST".equals(normalizedMethod)
+                    && isItemAction(segments, "campaigns", "entry")) {
                 return Optional.of(ENTRY);
             }
-            if ("GET".equals(normalizedMethod) && isItemAction(pattern, "campaigns", "queue")) {
+            if ("GET".equals(normalizedMethod)
+                    && isItemAction(segments, "campaigns", "queue")) {
                 return Optional.of(QUEUE);
             }
             if ("GET".equals(normalizedMethod)) {
                 return Optional.of(READ);
             }
-            if ("POST".equals(normalizedMethod)
-                    && (isItemAction(pattern, "coupons", "use")
-                    || isItemAction(pattern, "coupons", "cancel-use")
-                    || isItemAction(pattern, "coupons", "cancel"))) {
+            if (isItemAction(segments, "coupons", "use")
+                    || isItemAction(segments, "coupons", "cancel-use")
+                    || isItemAction(segments, "coupons", "cancel")) {
                 return Optional.of(USE);
             }
             return Optional.empty();
         }
 
-        private static boolean isItemAction(String pattern, String resource, String action) {
-            String[] segments = pattern.split("/");
+        private static boolean isItemAction(String[] segments, String resource, String action) {
             int length = segments.length;
             return length >= 4
                     && resource.equals(segments[length - 3])
