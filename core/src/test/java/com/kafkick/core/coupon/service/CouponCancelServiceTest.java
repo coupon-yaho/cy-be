@@ -72,6 +72,7 @@ class CouponCancelServiceTest {
         Issuance issuance = issuance(CANCELED_AT.plusSeconds(1));
         when(issuanceRepository.findById(100L))
                 .thenReturn(Optional.of(issuance));
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.updateStatusIfCurrent(
                 100L,
                 20L,
@@ -92,6 +93,7 @@ class CouponCancelServiceTest {
                 issuanceRepository,
                 issuanceHistoryRepository
         );
+        ordered.verify(couponStockRepository).lockForUpdate(10L);
         ordered.verify(issuanceRepository).updateStatusIfCurrent(
                 100L,
                 20L,
@@ -169,6 +171,7 @@ class CouponCancelServiceTest {
                 .thenReturn(Optional.of(issuance(
                         CANCELED_AT.plusSeconds(1)
                 )));
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.updateStatusIfCurrent(
                 100L,
                 20L,

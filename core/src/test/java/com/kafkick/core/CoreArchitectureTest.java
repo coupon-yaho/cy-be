@@ -16,9 +16,15 @@ class CoreArchitectureTest {
             "import jakarta.persistence.",
             "import com.fasterxml.jackson.",
             "import tools.jackson.",
+            "import org.springframework.data.jpa.",
+            "import org.springframework.kafka.",
+            "import org.springframework.data.redis.",
             "import com.kafkick.api.",
             "import com.kafkick.batch.",
-            "import com.kafkick.storage."
+            "import com.kafkick.storage.",
+            "JpaRepository",
+            "KafkaTemplate",
+            "RedisTemplate"
     );
 
     @Test

@@ -34,6 +34,8 @@ class CouponCancelUseAdapterTest {
 
         assertThat(response.issuanceId()).isEqualTo(100L);
         assertThat(response.status()).isEqualTo(IssuanceStatus.ISSUED);
+        assertThat(response.orderId()).isEqualTo(30L);
+        assertThat(response.discountAmount()).isEqualTo(5_000);
         assertThat(response.canceledAt()).isEqualTo(canceledAt);
     }
 }

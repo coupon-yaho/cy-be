@@ -2,7 +2,9 @@ package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.support.AopUtils;
@@ -51,6 +53,12 @@ class IdempotencyClaimProxyTest {
             assertThat(transactionManager.propagations()).containsExactly(
                     TransactionDefinition.PROPAGATION_REQUIRED,
                     TransactionDefinition.PROPAGATION_REQUIRES_NEW
+            );
+            assertThat(transactionManager.events()).containsExactly(
+                    "begin:REQUIRED",
+                    "begin:REQUIRES_NEW",
+                    "commit:REQUIRES_NEW",
+                    "rollback:REQUIRED"
             );
         }
     }
@@ -109,25 +117,52 @@ class IdempotencyClaimProxyTest {
             implements PlatformTransactionManager {
 
         private final List<Integer> propagations = new ArrayList<>();
+        private final List<String> events = new ArrayList<>();
+        private final Map<TransactionStatus, Integer> propagationByStatus =
+                new IdentityHashMap<>();
 
         @Override
         public TransactionStatus getTransaction(
                 TransactionDefinition definition
         ) {
-            propagations.add(definition.getPropagationBehavior());
-            return new SimpleTransactionStatus();
+            int propagation = definition.getPropagationBehavior();
+            TransactionStatus status = new SimpleTransactionStatus();
+            propagations.add(propagation);
+            propagationByStatus.put(status, propagation);
+            events.add("begin:" + propagationName(propagation));
+            return status;
         }
 
         @Override
         public void commit(TransactionStatus status) {
+            events.add("commit:" + propagationName(
+                    propagationByStatus.get(status)
+            ));
         }
 
         @Override
         public void rollback(TransactionStatus status) {
+            events.add("rollback:" + propagationName(
+                    propagationByStatus.get(status)
+            ));
         }
 
         List<Integer> propagations() {
             return List.copyOf(propagations);
+        }
+
+        List<String> events() {
+            return List.copyOf(events);
+        }
+
+        private static String propagationName(int propagation) {
+            return switch (propagation) {
+                case TransactionDefinition.PROPAGATION_REQUIRED ->
+                        "REQUIRED";
+                case TransactionDefinition.PROPAGATION_REQUIRES_NEW ->
+                        "REQUIRES_NEW";
+                default -> "UNKNOWN(" + propagation + ")";
+            };
         }
     }
 }

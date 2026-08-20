@@ -98,7 +98,7 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 `@EnableBatchProcessing` 은 붙이지 않는다 — 붙이면 `BatchAutoConfiguration` 이 물러나
 `JobRepository` · `JobLauncher` 를 직접 정의해야 한다.
 
-메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
+메타 테이블은 `V11__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
 `spring.batch.jdbc.initialize-schema: never` 라 이 파일이 없으면 `JobRepository` 초기화가 즉시 실패한다.
 
 ---

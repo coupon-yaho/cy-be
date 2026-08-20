@@ -1,15 +1,21 @@
 package com.kafkick.storage.db.coupon.repository;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.auditing.DateTimeProvider;
+import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.kafkick.core.coupon.domain.CouponDayOfWeek;
@@ -28,8 +34,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // 실제 MySQL과 Flyway 스키마에서 쿠폰 템플릿 저장 및 DB 제약 변환을 검증합니다.
 
 @RepositoryTest
-@Import(CouponTemplateRepositoryImpl.class)
+@Import({
+        CouponTemplateRepositoryImpl.class,
+        CouponTemplateRepositoryTest.AuditTestConfig.class
+})
 class CouponTemplateRepositoryTest {
+
+    private static final Instant AUDIT_AT =
+            Instant.parse("2026-08-20T04:00:00Z");
 
     @Autowired
     private CouponTemplateRepositoryImpl couponTemplateRepository;
@@ -65,6 +77,16 @@ class CouponTemplateRepositoryTest {
                         MembershipGrade.GOLD,
                         MembershipGrade.VIP
                 );
+        Map<String, Object> auditColumns = jdbcTemplate.queryForMap(
+                """
+                SELECT created_at, updated_at
+                FROM coupon_templates
+                WHERE id = ?
+                """,
+                savedCouponTemplate.id()
+        );
+        assertThat(auditColumns.get("created_at")).isNotNull();
+        assertThat(auditColumns.get("updated_at")).isNotNull();
     }
 
     @Test
@@ -368,5 +390,17 @@ class CouponTemplateRepositoryTest {
                         MembershipGrade.VIP
                 )
         );
+    }
+
+    @TestConfiguration
+    @EnableJpaAuditing(
+            dateTimeProviderRef = "couponTemplateTestDateTimeProvider"
+    )
+    static class AuditTestConfig {
+
+        @Bean
+        DateTimeProvider couponTemplateTestDateTimeProvider() {
+            return () -> Optional.of(AUDIT_AT);
+        }
     }
 }

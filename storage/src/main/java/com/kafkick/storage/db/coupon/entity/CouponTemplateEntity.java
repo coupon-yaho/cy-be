@@ -6,26 +6,20 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.time.LocalTime;
 
+import com.kafkick.storage.db.support.UpdatableEntity;
+
 /**
  * 반복 발급 규칙을 저장하는 템플릿 엔티티다.
  *
- * <p>현재 Flyway 테이블에는 공통 감사 컬럼이 없으므로 BaseEntity를
- * 상속하지 않는다.</p>
+ * <p>생성·수정 시각은 공통 감사 엔티티 계약으로 관리한다.</p>
  */
 @Entity
 @Table(name = "coupon_templates")
-public class CouponTemplateEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+public class CouponTemplateEntity extends UpdatableEntity {
 
     @Column(name = "brand_id", nullable = false)
     private Long brandId;
@@ -91,7 +85,7 @@ public class CouponTemplateEntity {
             Byte eligibleGradesMask,
             boolean active
     ) {
-        this.id = id;
+        super(id, null, null);
         this.brandId = brandId;
         this.name = name;
         this.policyType = policyType;
@@ -106,10 +100,6 @@ public class CouponTemplateEntity {
         this.stockPerOccurrence = stockPerOccurrence;
         this.eligibleGradesMask = eligibleGradesMask;
         this.active = active;
-    }
-
-    public Long getId() {
-        return id;
     }
 
     public Long getBrandId() {

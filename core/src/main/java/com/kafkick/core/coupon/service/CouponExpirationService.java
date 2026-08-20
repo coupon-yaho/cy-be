@@ -44,6 +44,7 @@ public class CouponExpirationService {
         List<Issuance> expiredIssuances = command.issuances().stream()
                 .map(issuance -> issuance.expire(command.asOf()))
                 .toList();
+        lockStock(command.couponRoundId());
         List<IssuanceHistory> histories = new ArrayList<>();
         for (int index = 0; index < command.issuances().size(); index++) {
             Issuance issuance = command.issuances().get(index);
@@ -84,6 +85,15 @@ public class CouponExpirationService {
                 command.issuances().size(),
                 histories.size()
         );
+    }
+
+    private void lockStock(Long couponRoundId) {
+        if (!couponStockRepository.lockForUpdate(couponRoundId)) {
+            throw new BusinessException(
+                    CouponExpirationErrorCode.COUPON_EXPIRATION_SAVE_FAILED,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
     }
 
     private static void validateCommand(CouponExpirationCommand command) {

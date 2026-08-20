@@ -9,6 +9,8 @@ public interface CouponStockRepository {
             Instant updatedAt
     );
 
+    boolean lockForUpdate(Long couponRoundId);
+
     boolean release(
             Long couponRoundId,
             int quantity,

@@ -99,9 +99,9 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 `main` 브랜치 push 또는 `v*` 태그 push 시 GitHub Actions가 API와 배치 이미지를
 각각 빌드해 하나의 Docker Hub 저장소에 태그를 구분하여 올린다. 수동 실행도 가능하다.
 
-- 주소: `https://hub.docker.com/r/seol7/coupon-yaho`
-- API 이미지: `seol7/coupon-yaho:api-latest`
-- 배치 이미지: `seol7/coupon-yaho:batch-latest`
+- 주소: `https://hub.docker.com/r/${DOCKERHUB_USERNAME}/coupon-yaho`
+- API 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:api-latest`
+- 배치 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:batch-latest`
 
 GitHub 저장소의 **Settings → Secrets and variables → Actions**에 아래 값을 등록한다.
 

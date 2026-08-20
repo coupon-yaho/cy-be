@@ -11,7 +11,7 @@ spring:
 
   batch:
     jdbc:
-      initialize-schema: never   # 메타 테이블은 V2__batch_metadata.sql 이 만든다
+      initialize-schema: never   # 메타 테이블은 V11__batch_metadata.sql 이 만든다
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 

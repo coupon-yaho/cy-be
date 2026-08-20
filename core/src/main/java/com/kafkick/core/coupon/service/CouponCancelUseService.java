@@ -63,6 +63,10 @@ public class CouponCancelUseService {
                 command.canceledAt()
         );
 
+        if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
+            lockStock(issuance.couponRoundId());
+        }
+
         boolean statusChanged = issuanceRepository.updateStatusIfCurrent(
                 issuance.id(),
                 issuance.memberId(),
@@ -117,6 +121,15 @@ public class CouponCancelUseService {
                 canceledUsage.discountAmount(),
                 canceledUsage.canceledAt()
         );
+    }
+
+    private void lockStock(Long couponRoundId) {
+        if (!couponStockRepository.lockForUpdate(couponRoundId)) {
+            throw new BusinessException(
+                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
     }
 
     private static void validateCommand(CouponCancelUseCommand command) {

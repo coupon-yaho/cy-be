@@ -74,6 +74,7 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         )).thenReturn(false);
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(couponStockRepository.release(10L, 1, AS_OF))
                 .thenReturn(true);
 
@@ -92,6 +93,7 @@ class CouponExpirationServiceTest {
                 issuanceRepository,
                 issuanceHistoryRepository
         );
+        ordered.verify(couponStockRepository).lockForUpdate(10L);
         ordered.verify(issuanceRepository).updateStatusIfCurrent(
                 100L,
                 20L,
@@ -141,6 +143,7 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         )).thenReturn(false);
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
 
         CouponExpirationResult result = expirationService.expire(
                 new CouponExpirationCommand(10L, List.of(issuance), AS_OF)

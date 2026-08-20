@@ -49,6 +49,21 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
     }
 
     @Override
+    public boolean lockForUpdate(Long couponRoundId) {
+        try {
+            return couponStockJpaRepository
+                    .findByCouponIdForUpdate(couponRoundId)
+                    .isPresent();
+        } catch (DataAccessException exception) {
+            throw new CouponStockReleasePersistenceException(
+                    "쿠폰 재고 잠금에 실패했습니다. couponRoundId="
+                            + couponRoundId,
+                    exception
+            );
+        }
+    }
+
+    @Override
     public boolean release(
             Long couponRoundId,
             int quantity,
