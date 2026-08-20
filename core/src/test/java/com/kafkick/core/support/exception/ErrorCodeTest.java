@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.kafkick.core.observation.Dependency;
+
 class ErrorCodeTest {
 
     @Test
@@ -26,5 +28,6 @@ class ErrorCodeTest {
         };
 
         assertThat(errorCode.reasonCode()).isEmpty();
+        assertThat(errorCode.dependency()).isEqualTo(Dependency.NONE);
     }
 }
