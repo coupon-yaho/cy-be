@@ -59,6 +59,8 @@ spring:
 server:
   # 관제 API가 내부 네트워크에서 호출하는 batch 업무 포트다.
   port: ${BATCH_PORT:9091}
+  error:
+    include-stacktrace: never
 
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 쓰기 스케줄러가 멈춘다.
