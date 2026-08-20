@@ -5,15 +5,18 @@
 # 화면은 우리 API 가 만든다.
 #
 # ⚠️ 이 파일이 여는 포트를 호스트로 내보내지 말 것. Prometheus 에는 인증이 없어서 노출하는
-#    순간 모든 지표가 열린다. docker-compose.yml 의 prometheus 서비스에 ports: 가 없는 이유이고,
+#    순간 모든 지표가 열린다. compose.yml 의 prometheus 서비스에 ports: 가 없는 이유이고,
 #    관리 포트를 잠근 것(OBS-20)과 같은 이유다. PrometheusScrapeConfigContractTest 가 지킨다.
 #
-# ⚠️ 지금 두 대상 모두 up=0 이다. 노출은 열려 있다 — CY-246 이 api allowlist 를, CY-247 이
-#    batch 의 관리 포트와 actuator 를 이미 열었다. 남은 것은 하나뿐이다: docker-compose.yml 에
-#    api·batch 서비스가 없어 DNS 이름 api · batch 가 안 풀린다. 앱 서비스는 각자의 티켓이
-#    붙이므로 여기서는 대상 정의까지만 한다.
-#    TODO(CY-213 후속, @SH-Seol): 앱 서비스가 붙으면 up{job="api"}==1 · up{job="batch"}==1 을
-#    실측하고 이 주석을 지운다.
+# ⚠️ up=0 이 보이면 여기부터 의심하지 말 것. 설정 쪽 선행 조건은 다 끝났다 — CY-246 이 api
+#    allowlist 를, CY-247 이 batch 의 관리 포트와 actuator 를 열었고, compose.yml 에 api·batch
+#    서비스가 있어 DNS 이름도 풀린다.
+#
+#    남은 것은 이미지다. 컨테이너 이미지는 main 브랜치의 docker-publish 워크플로가 만드는데,
+#    CY-246·CY-247 이 아직 main 에 없어서 배포된 이미지에는 actuator 가 들어 있지 않다.
+#    그 상태에서는 /actuator/prometheus 가 404 라 무엇을 고쳐도 up=0 이다.
+#    TODO(CY-213 후속, @SH-Seol): CY-5 가 main 에 머지되고 이미지가 재빌드되면
+#    up{job="api"}==1 · up{job="batch"}==1 을 실측하고 이 문단을 지운다.
 
 global:
   # 1초. 실측 근거 — up 평균 1.0000 · 분당 60샘플 · scrape 평균 6.8ms(최대 45.3ms) ·

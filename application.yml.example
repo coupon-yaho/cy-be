@@ -1,0 +1,148 @@
+# 컨테이너에 마운트되는 배포 설정이다(compose.yml → /app/config/application.yml).
+#
+# ⚠️ 이미지 안에는 모듈의 *.yml.example 이 실제 이름으로 복사돼 들어 있다(Dockerfile 참고).
+#    이 파일은 그것을 <b>덮어쓰는 게 아니라 그 위에 겹친다</b> — 여기서 언급하지 않은 키는
+#    이미지 안 값이 그대로 살아남는다.
+#
+#    실측(2026-08) — batch 프로파일에 management 블록이 없어도 최종 해석값은 이렇다:
+#      management.server.port                    = 9092
+#      management.endpoints.web.exposure.include = health,metrics,prometheus
+#    batch/src/main/resources/application.yml.example 의 spring.config.import 가
+#    classpath:management.yml 을 끌어오기 때문이다. 그래서 여기에 management 블록을 다시
+#    적지 않는다 — 적으면 같은 값이 두 곳에 생기고, 한쪽만 고쳐도 아무도 모른다.
+#    이 계약은 DeployedConfigContractTest 가 지킨다.
+#
+# ⚠️ 이 파일이 모듈 *.yml.example 의 값을 상당 부분 복제하고 있다. 지금은 우연히 같지만,
+#    한쪽만 고치면 로컬 gradle 과 컨테이너가 조용히 갈라진다.
+#    TODO(CY-213 후속, @SH-Seol): 이 파일을 프로파일·${VAR} 매핑만 남기고 값은 모듈이
+#    소유하도록 정리할지 별도 티켓으로 정한다.
+
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:mysql}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&connectTimeout=${DB_CONNECT_TIMEOUT_MS:3000}&socketTimeout=${DB_SOCKET_TIMEOUT_MS:60000}
+    username: ${DB_USERNAME:app}
+    password: ${DB_PASSWORD}
+    hikari:
+      connection-timeout: 3000
+      validation-timeout: 3000
+      keepalive-time: 30000
+      max-lifetime: 580000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
+        default_batch_fetch_size: 100
+
+  flyway:
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    placeholder-replacement: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: api
+  application:
+    name: coupon-api
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+  flyway:
+    enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,admission-capacity
+        exclude: env,configprops,beans,heapdump
+  endpoint:
+    health:
+      show-details: never
+
+  metrics:
+    distribution:
+      percentiles:
+        "[http.server.requests]": 0.5,0.95,0.99
+      expiry:
+        "[http.server.requests]": 10s
+
+admin:
+  analytics:
+    max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
+
+observation:
+  datasource:
+    enabled: ${OBS_DATASOURCE_ENABLED:true}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:mysql}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=${OBS_CONNECT_TIMEOUT_MS:2000}&socketTimeout=${OBS_SOCKET_TIMEOUT_MS:5000}
+    username: ${DB_OBS_USERNAME:app}
+    password: ${DB_OBS_PASSWORD}
+    query-timeout: 3s
+    hikari:
+      pool-name: ${OBS_POOL_NAME:obs-pool}
+      maximum-pool-size: 2
+      connection-timeout: 2000
+      validation-timeout: 2000
+      keepalive-time: 30000
+      max-lifetime: 580000
+      read-only: true
+      connection-init-sql: SET SESSION max_execution_time = 3000
+
+---
+spring:
+  config:
+    activate:
+      on-profile: batch
+  application:
+    name: coupon-batch
+  main:
+    web-application-type: servlet
+  datasource:
+    hikari:
+      maximum-pool-size: ${BATCH_DB_POOL_SIZE:4}
+      pool-name: batch-pool
+  flyway:
+    enabled: false
+  batch:
+    jdbc:
+      initialize-schema: never
+    job:
+      enabled: false
+
+server:
+  # 9091 = verify 업무 포트. docs/관측-Batch-포트-계약.md 가 정한 값이고
+  # batch/src/main/resources/application.yml.example 의 기본값과 같아야 한다.
+  # 9090 은 이 저장소에서 api 관리 포트 관용값이라 여기 쓰면 읽는 사람이 헷갈린다.
+  port: ${BATCH_PORT:9091}
+
+batch:
+  scheduling:
+    enabled: ${BATCH_SCHEDULING_ENABLED:true}
+  schedule:
+    expire-cron: "0 */5 * * * *"
+    verify-incremental-cron: "0 */10 * * * *"
+    cleanup-cron: "0 0 * * * *"
+    coupon-open-cron: "0 * * * * *"
+    coupon-create-cron: "0 0 4 * * *"
+  verify:
+    asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
+    chunk-size: ${VERIFY_CHUNK_SIZE:200000}

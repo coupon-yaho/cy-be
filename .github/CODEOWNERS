@@ -104,3 +104,7 @@ core/src/main/java/**/support/config/TimeConfig.java   @HUHGEON @SH-Seol @parkji
 /README.md                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 /gradle/**                      @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
 /docker-compose*.yml            @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
+# CY-213 이 docker-compose.yml 을 compose.yml 로 옮겼다. 이름이 바뀌면 위 패턴이 안 걸린다 —
+# 이 파일이 관리 포트 노출 여부를 정하는 유일한 실물 설정이라 코드오너 승인이 필요하다.
+# PrometheusScrapeConfigContractTest.codeownersCoversTheComposeFile 이 둘을 잇는다.
+/compose*.yml                   @HUHGEON @SH-Seol @parkjihun5 @rudwnlee2 @UHeeJoon
