@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,9 @@ import org.springframework.util.StreamUtils;
  */
 class BatchBenchmarkRunsAssumptionTest {
 
+    private static final Pattern CREATE_BENCHMARK_RUNS =
+            Pattern.compile("(?i)create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?`?benchmark_runs`?");
+
     @Test
     @DisplayName("benchmark_runs 가 아직 없다 — 회차를 환경변수로 박는 임시 방편의 전제다")
     void benchmarkRunsTableDoesNotExistYet() throws Exception {
@@ -44,17 +48,23 @@ class BatchBenchmarkRunsAssumptionTest {
                 .getResources("classpath*:db/migration/*.sql");
 
         assertThat(migrations).as("마이그레이션을 하나도 못 읽었다면 이 감시는 무효다").isNotEmpty();
-        assertThat(Arrays.stream(migrations).filter(BatchBenchmarkRunsAssumptionTest::mentionsBenchmarkRuns))
+        assertThat(Arrays.stream(migrations).filter(BatchBenchmarkRunsAssumptionTest::createsBenchmarkRuns))
                 .as("benchmark_runs 가 생겼다. 회차 출처를 환경변수에서 진행 중인 run 으로 바꾼다"
                         + " — 클래스 주석의 세 항목을 보라")
                 .isEmpty();
     }
 
-    private static boolean mentionsBenchmarkRuns(Resource migration) {
+    /**
+     * 테이블이 <b>생겼는지</b>를 본다. 이름이 등장하는 것만으로는 아니다 — CY-253 이
+     * {@code benchmark_run_id} 컬럼을 만들며 {@code COMMENT} 안에 이 이름을 적었고, 그때 이
+     * 가드가 오탐했다. 그래서 {@code CREATE TABLE} 바로 뒤의 <b>이름 자리</b>만 본다.
+     */
+    private static boolean createsBenchmarkRuns(Resource migration) {
         try {
-            return StreamUtils.copyToString(migration.getInputStream(), StandardCharsets.UTF_8)
-                    .toLowerCase()
-                    .contains("benchmark_runs");
+            String sql = StreamUtils.copyToString(migration.getInputStream(), StandardCharsets.UTF_8);
+            String withoutComments = sql.replaceAll("(?m)--.*$", "")
+                    .replaceAll("(?s)/\\*.*?\\*/", "");
+            return CREATE_BENCHMARK_RUNS.matcher(withoutComments).find();
         } catch (Exception exception) {
             throw new IllegalStateException("마이그레이션을 읽지 못했다: " + migration, exception);
         }
