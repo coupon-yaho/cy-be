@@ -38,6 +38,14 @@ class IssueAttemptsMigrationTest {
     /** testFixtures 의 MySqlContainerConfig 는 latest 를 쓴다. 여기서는 운영(compose)과 같은 8.4 로 고정한다. */
     private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4");
 
+    /**
+     * uk_kafka 가 (topic, partition, offset) 유니크라 행마다 offset 이 달라야 서로 안 부딪힌다.
+     * Kafka 의 offset 을 흉내 내는 게 아니라 테스트 행을 가르는 일련번호다.
+     * 테스트가 병렬로 돌면 ++ 가 같은 값을 두 번 내주고 엉뚱한 테스트가 uk_kafka 로 실패한다.
+     */
+    private static final java.util.concurrent.atomic.AtomicLong ROW_SEQUENCE =
+            new java.util.concurrent.atomic.AtomicLong(1);
+
     private static MySQLContainer mysql;
 
     @BeforeAll
@@ -80,10 +88,18 @@ class IssueAttemptsMigrationTest {
     @DisplayName("마이그레이션 적용")
     class Migration {
 
+        /**
+         * 적용된 마이그레이션 목록 전체를 고정하지 않는다 — OBS-14b 의 V2026082002 처럼 이 테이블과
+         * 무관한 마이그레이션이 늘어도 깨지면 안 된다. 대신 A 대역 둘이 실제로 적용됐다는 것과
+         * 그 뒤에 이 마이그레이션이 왔다는 것을 따로 단언한다.
+         */
         @Test
         @DisplayName("날짜 버전이 A 대역보다 뒤에 성공으로 기록된다")
         void appliedAfterNumericBand() throws SQLException {
-            assertThat(appliedVersions()).containsExactly("1", "2", "2026082001");
+            assertThat(appliedVersions()).contains("1", "2", "2026082001");
+            assertThat(installedRank("2026082001"))
+                    .isGreaterThan(installedRank("1"))
+                    .isGreaterThan(installedRank("2"));
             assertThat(query("SELECT success FROM flyway_schema_history WHERE version = '2026082001'"))
                     .isEqualTo("1");
         }
@@ -110,6 +126,13 @@ class IssueAttemptsMigrationTest {
             assertRejected(issueResult().replayed(2), "ck_attempt_replayed");
             assertRejected(issueResult().replayed(127), "ck_attempt_replayed");
             assertRejected(issueResult().replayed(-1), "ck_attempt_replayed");
+        }
+
+        @Test
+        @DisplayName("schema_version 은 0 과 음수를 받지 않는다")
+        void schemaVersionIsPositive() {
+            assertRejected(issueResult().schemaVersion(0), "ck_attempt_schema_version");
+            assertRejected(issueResult().schemaVersion(-1), "ck_attempt_schema_version");
         }
 
         @Test
@@ -251,12 +274,13 @@ class IssueAttemptsMigrationTest {
                 issuance_id, issuance_code, http_status, reason_code, dependency, replayed,
                 occurred_at, engine_version, release_stage, queue_mode, producer_instance_id,
                 topic, kafka_partition, kafka_offset)
-            VALUES (1, UUID_TO_BIN(?), ?, ?, 1, 1, ?, ?, ?, ?, 'NONE', ?,
+            VALUES (?, UUID_TO_BIN(?), ?, ?, 1, 1, ?, ?, ?, ?, 'NONE', ?,
                     NOW(6), 'V1', 'V2_1', 'OFF', ?, ?, ?, ?)
             """;
 
     /** 컬럼 하나만 바꿔 가며 INSERT 하려고 둔 값 묶음이다. */
     private static final class Row {
+        int schemaVersion = 1;
         String eventId = java.util.UUID.randomUUID().toString();
         String eventType = "ISSUE_RESULT";
         String requestId = java.util.UUID.randomUUID().toString();
@@ -268,8 +292,9 @@ class IssueAttemptsMigrationTest {
         String producerInstanceId = "api-1";
         String topic = "coupon.issue.attempt";
         int partition = 0;
-        long offset = nextOffset++;
+        long offset = ROW_SEQUENCE.getAndIncrement();
 
+        Row schemaVersion(int v) { this.schemaVersion = v; return this; }
         Row eventId(String v) { this.eventId = v; return this; }
         Row status(Integer v) { this.httpStatus = v; return this; }
         Row reason(String v) { this.reasonCode = v; return this; }
@@ -285,8 +310,6 @@ class IssueAttemptsMigrationTest {
             return this;
         }
     }
-
-    private static long nextOffset = 1;
 
     private static Row issueResult() {
         return new Row();
@@ -330,18 +353,19 @@ class IssueAttemptsMigrationTest {
     }
 
     private static void bind(PreparedStatement ps, Row row) throws SQLException {
-        ps.setString(1, row.eventId);
-        ps.setString(2, row.eventType);
-        ps.setString(3, row.requestId);
-        ps.setObject(4, row.issuanceId);
-        ps.setString(5, row.issuanceCode);
-        ps.setObject(6, row.httpStatus);
-        ps.setString(7, row.reasonCode);
-        ps.setInt(8, row.replayed);
-        ps.setString(9, row.producerInstanceId);
-        ps.setString(10, row.topic);
-        ps.setInt(11, row.partition);
-        ps.setLong(12, row.offset);
+        ps.setInt(1, row.schemaVersion);
+        ps.setString(2, row.eventId);
+        ps.setString(3, row.eventType);
+        ps.setString(4, row.requestId);
+        ps.setObject(5, row.issuanceId);
+        ps.setString(6, row.issuanceCode);
+        ps.setObject(7, row.httpStatus);
+        ps.setString(8, row.reasonCode);
+        ps.setInt(9, row.replayed);
+        ps.setString(10, row.producerInstanceId);
+        ps.setString(11, row.topic);
+        ps.setInt(12, row.partition);
+        ps.setLong(13, row.offset);
     }
 
     private static long rowCount() {
@@ -350,6 +374,13 @@ class IssueAttemptsMigrationTest {
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static int installedRank(String version) throws SQLException {
+        java.util.List<String> ranks = queryList(
+                "SELECT installed_rank FROM flyway_schema_history WHERE version = '" + version + "'");
+        assertThat(ranks).as("마이그레이션 %s 가 적용되지 않았다", version).hasSize(1);
+        return Integer.parseInt(ranks.getFirst());
     }
 
     private static java.util.List<String> appliedVersions() throws SQLException {
