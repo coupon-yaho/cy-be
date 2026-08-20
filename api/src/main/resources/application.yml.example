@@ -45,6 +45,7 @@ spring:
   # 마이그레이션 소유자는 api 하나다. batch 는 이미 만들어진 스키마 위에서 돈다.
   flyway:
     enabled: true
+    out-of-order: true
 
 # 대시보드 집계를 운영 풀에서 떼어 내는 관측 전용 풀을 켠다. 켠 모듈만 관측 계정
 # (DB_OBS_USERNAME · DB_OBS_PASSWORD)이 필요하고, 없으면 기동에서 죽는다.
