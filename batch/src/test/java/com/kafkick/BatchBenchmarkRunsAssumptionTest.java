@@ -2,6 +2,7 @@ package com.kafkick;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.regex.Pattern;
@@ -39,7 +40,25 @@ import org.springframework.util.StreamUtils;
 class BatchBenchmarkRunsAssumptionTest {
 
     private static final Pattern CREATE_BENCHMARK_RUNS =
-            Pattern.compile("(?i)create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?`?benchmark_runs`?");
+            Pattern.compile("(?i)create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?"
+                    + "(?:[`\"]?\\w+[`\"]?\\s*\\.\\s*)?"      // 스키마 접두사
+                    + "[`\"]?benchmark_runs[`\"]?(?![\\w$])");      // 식별자 경계 — _archive 를 안 잡는다
+
+    @Test
+    @DisplayName("테이블 생성만 판정한다 — 이름이 스쳐 지나가는 것과 구분한다")
+    void onlyTableCreationCounts() {
+        assertThat(createsBenchmarkRuns("CREATE TABLE `benchmark_runs` (id bigint)")).isTrue();
+        assertThat(createsBenchmarkRuns("create table if not exists benchmark_runs (id bigint)")).isTrue();
+        assertThat(createsBenchmarkRuns("CREATE TABLE app.benchmark_runs (id bigint)")).isTrue();
+
+        // OBS-22 가 회차 archive 테이블을 만든다. 그건 이 가드의 대상이 아니다.
+        assertThat(createsBenchmarkRuns("CREATE TABLE `benchmark_runs_archive` (id bigint)")).isFalse();
+        // CY-253 이 실제로 이렇게 적었고, 그때 이 가드가 오탐했다.
+        assertThat(createsBenchmarkRuns(
+                "CREATE TABLE `issue_attempts` (`benchmark_run_id` bigint COMMENT 'benchmark_runs.id')"))
+                .isFalse();
+        assertThat(createsBenchmarkRuns("-- benchmark_runs(OBS-14b)가 가져간다")).isFalse();
+    }
 
     @Test
     @DisplayName("benchmark_runs 가 아직 없다 — 회차를 환경변수로 박는 임시 방편의 전제다")
@@ -61,12 +80,18 @@ class BatchBenchmarkRunsAssumptionTest {
      */
     private static boolean createsBenchmarkRuns(Resource migration) {
         try {
-            String sql = StreamUtils.copyToString(migration.getInputStream(), StandardCharsets.UTF_8);
-            String withoutComments = sql.replaceAll("(?m)--.*$", "")
-                    .replaceAll("(?s)/\\*.*?\\*/", "");
-            return CREATE_BENCHMARK_RUNS.matcher(withoutComments).find();
+            try (InputStream in = migration.getInputStream()) {
+                return createsBenchmarkRuns(StreamUtils.copyToString(in, StandardCharsets.UTF_8));
+            }
         } catch (Exception exception) {
             throw new IllegalStateException("마이그레이션을 읽지 못했다: " + migration, exception);
         }
+    }
+
+    /** 주석과 블록 주석을 걷어낸 뒤 테이블 이름 자리만 본다. */
+    static boolean createsBenchmarkRuns(String sql) {
+        String withoutComments = sql.replaceAll("(?m)--.*$", "")
+                .replaceAll("(?s)/\\*.*?\\*/", "");
+        return CREATE_BENCHMARK_RUNS.matcher(withoutComments).find();
     }
 }

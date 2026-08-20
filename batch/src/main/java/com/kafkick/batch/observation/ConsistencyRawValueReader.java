@@ -138,8 +138,12 @@ public class ConsistencyRawValueReader {
      * <p>왕복을 나누면 그 사이의 발급이 LUA_GAP 에 그대로 남는다. LUA_GAP 은 크기와 무관하게
      * CRITICAL 이라, 정상 동작 중에 원자성 위반 경보가 뜬다.
      *
-     * <p>회원 집합의 자료구조는 V2·V3 구현이 정하므로 여기서 하나로 못 박지 않는다.
+     * <p>회원 집합의 자료구조는 V2·V3 구현이 정하므로 여기서 하나로 못 박지 않는다. 다만 지원하지
+     * 않는 자료형은 {@link #INVALID_TYPE_MARKER} 로 돌려 예열과 구분한다.
      */
+    /** Lua 가 "이 키는 크기를 잴 수 없는 자료형" 을 알리는 표식. 예열(false)과 구분된다. */
+    private static final String INVALID_TYPE_MARKER = "INVALID_TYPE";
+
     private static final RedisScript<List> CONSISTENCY_SCRIPT = new DefaultRedisScript<>("""
         local function size(key)
           local t = redis.call('TYPE', key)['ok']
@@ -147,7 +151,10 @@ public class ConsistencyRawValueReader {
           elseif t == 'zset' then return redis.call('ZCARD', key)
           elseif t == 'list' then return redis.call('LLEN', key)
           elseif t == 'string' then return redis.call('GET', key)
-          else return false end
+          -- 키가 없는 것은 예열이라 곧 값이 나오지만, 엉뚱한 자료형은 키를 잘못 가리킨 설정이라
+          -- 영영 안 나온다. 둘을 같은 false 로 뭉개면 오설정이 예열로 위장한다.
+          elseif t == 'none' then return false
+          else return 'INVALID_TYPE' end
         end
         return { redis.call('GET', KEYS[1]), redis.call('GET', KEYS[2]), size(KEYS[3]) }
         """, List.class);
@@ -437,6 +444,9 @@ public class ConsistencyRawValueReader {
         if (value == null || Boolean.FALSE.equals(value)) {
             return null;
         }
+        if (INVALID_TYPE_MARKER.equals(value)) {
+            throw new InvalidRedisValueException("Redis 키가 크기를 잴 수 없는 자료형이다");
+        }
         if (value instanceof Number number) {
             return number.longValue();
         }
@@ -476,7 +486,6 @@ public class ConsistencyRawValueReader {
         return new ConsistencyRawValues(0, 0, 0, 0, 0, 0, 0);
     }
 
-    /** 재고 행이 없으면 수량 둘이 null 이다. 회차 자체는 존재한다. */
     /**
      * 값이 잘못 들어 있는 상태. 호출부의 {@code catch (RuntimeException)} 이 이를 UNAVAILABLE 로
      * 바꾼다 — 예열({@code null})과 달리 기다린다고 해결되지 않는다.
@@ -488,6 +497,7 @@ public class ConsistencyRawValueReader {
         }
     }
 
+    /** 재고 행이 없으면 수량 둘이 null 이다. 회차 자체는 존재한다. */
     private record CouponRow(long couponId, Long totalQuantity, Long storedActiveCount) {
 
         boolean hasStock() {
