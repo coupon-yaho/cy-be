@@ -142,25 +142,48 @@ class UriTagCardinalityTest {
         List<String> offenders = new java.util.ArrayList<>();
 
         for (Path source : javaSourcesUnder(moduleRoot().resolve("src/main/java"))) {
-            Matcher matcher = MAPPING_ARGUMENTS.matcher(Files.readString(source));
-            while (matcher.find()) {
-                String arguments = matcher.group(1).strip();
-                Matcher pathArgument = Pattern.compile("(?:value|path)\\s*=\\s*(.*?)(?=,\\s*\\w+\\s*=|$)",
-                        Pattern.DOTALL).matcher(arguments);
-                String pathExpression = pathArgument.find() ? pathArgument.group(1) : arguments;
-                Matcher literal = STRING_LITERAL.matcher(pathExpression);
-                while (literal.find()) {
-                    String path = literal.group(1);
-                    if (path.contains("*")) {
-                        offenders.add(source.getFileName() + " → " + path);
-                    }
-                }
-            }
+            wildcardMappings(Files.readString(source)).stream()
+                    .map(path -> source.getFileName() + " → " + path)
+                    .forEach(offenders::add);
         }
 
         assertThat(offenders)
                 .as("와일드카드 매핑은 uri 라벨을 폭발시킨다. 경로 변수({id})로 바꿔라")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("경로가 아닌 produces 속성의 와일드카드는 검사하지 않는다")
+    void ignoresWildcardInProducesAttribute() {
+        assertThat(wildcardMappings("@GetMapping(produces = \"application/*\")"))
+                .isEmpty();
+        assertThat(wildcardMappings(
+                "@RequestMapping({\"/a/**\", \"/b\"}, produces = \"application/*\")"))
+                .containsExactly("/a/**");
+    }
+
+    private List<String> wildcardMappings(String source) {
+        List<String> offenders = new java.util.ArrayList<>();
+        Matcher matcher = MAPPING_ARGUMENTS.matcher(source);
+        while (matcher.find()) {
+            String arguments = matcher.group(1).strip();
+            Matcher pathArgument = Pattern.compile("(?:value|path)\\s*=\\s*(.*?)(?=,\\s*\\w+\\s*=|$)",
+                    Pattern.DOTALL).matcher(arguments);
+            Matcher unnamedPath = Pattern.compile("^(.*?)(?=,\\s*\\w+\\s*=|$)", Pattern.DOTALL)
+                    .matcher(arguments);
+            String unnamedPathExpression = unnamedPath.find() ? unnamedPath.group(1) : "";
+            String pathExpression = pathArgument.find()
+                    ? pathArgument.group(1)
+                    : arguments.matches("^\\w+\\s*=.*") ? "" : unnamedPathExpression;
+            Matcher literal = STRING_LITERAL.matcher(pathExpression);
+            while (literal.find()) {
+                String path = literal.group(1);
+                if (path.contains("*")) {
+                    offenders.add(path);
+                }
+            }
+        }
+        return offenders;
     }
 
     private List<Path> javaSourcesUnder(Path root) throws Exception {

@@ -238,7 +238,7 @@ class PrometheusScrapeConfigContractTest {
         // 한 줄이 지워지면 /actuator/env 가 DB 비밀번호를 그대로 뱉는다(PRD R12).
         assertThat(publishedContainerPorts("api"))
                 .as("api 는 업무 포트만 연다. 관리 포트 9090 을 열면 무인증 actuator 가"
-                        + " 0.0.0.0 에 붙는다 — docs/관측-Batch-포트-계약.md")
+                        + " 0.0.0.0 에 붙는다")
                 .containsExactly("8080");
 
         // batch 는 아무것도 열지 않는다. 9091 에 붙는 verify 온디맨드 트리거가 무인증이라,

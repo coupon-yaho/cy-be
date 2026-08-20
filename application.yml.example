@@ -131,7 +131,7 @@ spring:
       enabled: false
 
 server:
-  # 9091 = verify 업무 포트. docs/관측-Batch-포트-계약.md 가 정한 값이고
+  # 9091 = verify 업무 포트. batch 모듈 설정과 계약 테스트가 정한 값이고
   # batch/src/main/resources/application.yml.example 의 기본값과 같아야 한다.
   # 9090 은 이 저장소에서 api 관리 포트 관용값이라 여기 쓰면 읽는 사람이 헷갈린다.
   port: ${BATCH_PORT:9091}

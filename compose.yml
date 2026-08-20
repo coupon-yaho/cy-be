@@ -67,7 +67,7 @@ services:
       #    (Spring Security 미도입), 포트를 안 여는 것이 유일한 방어다. allowlist 의
       #    exclude 한 줄이 지워지면 /actuator/env 가 DB 비밀번호를 그대로 뱉는다.
       #    Docker 는 인터페이스를 안 적으면 0.0.0.0 에 바인딩하므로 같은 네트워크의
-      #    아무나 접근한다. docs/관측-Batch-포트-계약.md 참고.
+      #    아무나 접근한다. PrometheusScrapeConfigContractTest 가 비노출을 고정한다.
       #
       #    확인은 컨테이너 안에서 한다:
       #      docker exec coupon-yaho-api-1 wget -qO- localhost:9090/actuator/health
@@ -95,7 +95,7 @@ services:
     #    무인증이라, 열어 두면 아무나 300만 행 검증 배치를 실행시킬 수 있다 — 부하 측정
     #    중에 그러면 비교표 수치가 오염된다. 관제 API 가 내부 네트워크에서 batch:9091 로
     #    호출한다. 관리 포트 9092 도 열지 않는다(Prometheus 가 내부에서 긁는다).
-    #    docs/관측-Batch-포트-계약.md 참고.
+    #    PrometheusScrapeConfigContractTest 가 비노출을 고정한다.
     depends_on:
       mysql:
         condition: service_healthy
