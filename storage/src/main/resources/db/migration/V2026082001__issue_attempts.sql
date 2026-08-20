@@ -40,7 +40,10 @@
 --   유니크 키가 둘이라 리밸런싱 후 재소비(정상 경로)에서 중복이 들어온다.
 --   평범한 배치 INSERT 면 청크 전체가 Duplicate entry 로 롤백되고 offset 을 못 넘겨 무한 재시도한다.
 --   ⚠️ INSERT IGNORE 는 쓰지 않는다 — 어느 키에 걸렸는지 구분하지 못해 uk_kafka 위반까지 함께 삼킨다.
---      무시된 건수는 affectedRows == 0 으로 세어 지표로 올린다(OBS-15).
+--   ⚠️ 무시된 건수를 affectedRows 로 세려면 URL 에 useAffectedRows=true 가 필요하다.
+--      Connector/J 는 기본으로 CLIENT_FOUND_ROWS 를 켜서 "값이 그대로인 갱신" 도 0 이 아니라 1 을 돌려준다.
+--      그 상태로는 신규 적재(1)와 중복 무시(1)가 같은 값이라 카운터가 아무것도 세지 못한다.
+--      플래그를 붙이거나, 설계 스케치처럼 건별 INSERT 의 DuplicateKeyException 을 잡아 센다(OBS-15).
 --      정상 재소비라면 이 값이 리밸런싱 직후에만 튀고, 그 밖의 구간에서 계속 오르면 키 설계를 의심한다.
 --
 -- 보존 기간 삭제는 ingested_at 으로 경계를 잡고 id 키셋으로 끊어 돈다
@@ -123,8 +126,8 @@ CREATE TABLE `issue_attempts` (
 --   http_status 가 NULL 이면 http_status = 201 · >= 400 이 전부 NULL 로 평가돼 식 전체가 NULL 이 된다.
 --   그러면 "http_status 가 없는데 issuance_id 가 있는" 행이 그대로 들어온다 — 막으려던 경로가 정확히 뚫린다.
 --
---   TODO(OBS-15): 이 CHECK 5종의 회귀 테스트는 Consumer 테스트와 함께 만든다.
---   storage/src/testFixtures 의 MySqlContainerConfig 로 Flyway 적용 후 불법 INSERT 가 거부되는지 검증한다.
+--   회귀 테스트는 IssueAttemptsMigrationTest 다. 실제 MySQL 에 이 마이그레이션을 적용한 뒤
+--   경계값을 원시 INSERT 로 확인한다.
 
 -- 인덱스는 지금 쓰이는 용도가 확실한 것만 만든다 (설계 스케치의 6개 중 셋을 뺐다)
 --   이 테이블은 유실이 가장 심한 부하 최고 구간에서 가장 빨리 적재돼야 하는데, 인덱스는 그 구간의 비용이다.
