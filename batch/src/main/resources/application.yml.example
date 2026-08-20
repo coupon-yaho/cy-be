@@ -16,6 +16,17 @@ spring:
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
+  # 배치는 JPA 를 쓰지 않는다 — 엔티티 0개, JDBC 와 Spring Batch 로만 돈다(build.gradle).
+  # TODO(엔티티 도입 담당): 엔티티가 생기면 이 제외와 아래 storage.jpa.auditing 스위치를 다시
+  #   판단한다. 배치가 계속 JDBC 로만 돈다면 그대로 두는 게 맞다. 판단 시점은
+  #   BatchJpaFreeAssumptionTest 가 깨지는 때다 — 주석은 아무도 안 읽어서 테스트로 묶어 뒀다.
+  # storage 를 얹으면 JPA 자동설정이 딸려 오는데, 관측 풀을 켜서 storage 가 DataSource 를 직접
+  # 정의하는 순간 EntityManagerFactory 를 못 만들어 기동이 멈춘다. 쓰지 않는 층을 통째로 뺀다.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
+
   # 마이그레이션 소유자는 api 하나로 고정한다. batch 는 이미 만들어진 스키마 위에서 돈다.
   flyway:
     enabled: false
@@ -31,7 +42,11 @@ server:
   port: ${BATCH_PORT:9091}
 
 batch:
-  # 판정 시점 동결 스위치. 이 하나로 전 스케줄러가 멈춘다.
+  # 판정 시점 동결 스위치. 이 하나로 전 쓰기 스케줄러가 멈춘다.
+  #
+  # ⚠️ 도메인 Gauge(OBS-5) 수집은 여기 걸리지 않는다. 읽기 전용이라 dataset_fingerprint 를
+  #    건드리지 않고, 오히려 동결 구간에도 값이 보여야 무엇을 동결했는지 확인할 수 있다.
+  #    그쪽 스위치는 observation.domain-gauge.enabled 다.
   # dataset_fingerprint 재료에 sum(active_count) 와 max(updated_at) 이 들어 있어
   # 회차 하나만 열려도 지문이 달라진다. 끌 것이 여러 개면 하나는 반드시 빠뜨린다.
   scheduling:
@@ -48,6 +63,15 @@ batch:
     # asof_state 는 run 당 300만 행이다. 방치하면 가장 빨리 커지는 테이블이다.
     asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
     chunk-size: ${VERIFY_CHUNK_SIZE:200000}
+
+storage:
+  # TODO(엔티티 도입 담당): 위 autoconfigure.exclude 와 한 쌍이다. 함께 판단한다.
+  # 배치는 JPA 엔티티를 만들지 않는다(build.gradle). storage 의 @EnableJpaAuditing 을 그대로
+  # 물려받으면 엔티티가 0개라 "JPA metamodel must not be empty" 로 기동이 멈춘다 — 관측 풀을 켜서
+  # storage 가 DataSource 를 직접 정의하는 순간 실제로 터진다.
+  jpa:
+    auditing:
+      enabled: false
 
 logging:
   level:
