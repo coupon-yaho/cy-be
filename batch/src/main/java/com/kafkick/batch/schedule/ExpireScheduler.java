@@ -213,7 +213,11 @@ public class ExpireScheduler {
             // 다만 IllegalStateException 은 이 잡 밖에서도 온다(커넥션이 안 붙는 경우 등).
             // 타입만 보고 INFO 로 내리면 진짜 실패를 삼킨다 — 실제로 그렇게 만들었다가
             // "시작하지 못하면 ERROR" 테스트가 잡았다. 인스턴스가 정말 생겼는지 물어서 가른다.
-            if (jobOperator.getJobInstance(expireJob.getName(), parameters) != null) {
+            //
+            // 조회 자체도 감싼다. 원래 실패가 DB 문제면 이 조회도 같이 죽는데, 그러면
+            // 아래 catch(Exception) 이 잡지 못하고 예외가 expire() 밖으로 나간다 —
+            // 이 메서드가 절대 하지 않기로 한 일이다(클래스 주석).
+            if (startedByAnotherNode(parameters, e)) {
                 log.info("다른 노드가 같은 asOf 를 이미 시작했습니다. asOf={}", asOf);
             } else {
                 log.error("만료 배치를 시작하지 못했습니다. asOf={}", asOf, e);
@@ -228,4 +232,24 @@ public class ExpireScheduler {
             log.error("만료 배치를 시작하지 못했습니다. asOf={}", asOf, e);
         }
     }
+
+    /**
+     * 이 {@code asOf} 의 인스턴스가 이미 있는가 — 즉 <b>중복 방지가 일한 것인가.</b>
+     *
+     * <p>조회가 던지면 <b>모른다</b>로 본다. 원래 실패가 커넥션 문제면 이 조회도 같이 죽는데,
+     * 그때 예외를 그대로 올리면 {@code expire()} 밖으로 나간다 — 이 메서드가 절대 하지 않기로
+     * 한 일이다. 모를 때는 사건 쪽(ERROR)으로 기운다. 중복을 ERROR 로 한 번 내는 것보다
+     * 진짜 실패를 INFO 로 삼키는 것이 나쁘다.
+     */
+    private boolean startedByAnotherNode(JobParameters parameters, RuntimeException cause) {
+        try {
+            return jobOperator.getJobInstance(expireJob.getName(), parameters) != null;
+        } catch (RuntimeException lookupFailed) {
+            // 원인 둘을 한 줄에 남긴다. 따로 두면 어느 쪽이 먼저인지 로그에서 안 보인다.
+            log.warn("실패 원인을 가르지 못했습니다(인스턴스 조회도 실패). 원래 원인={} 조회 실패={}",
+                    cause.toString(), lookupFailed.toString());
+            return false;
+        }
+    }
+
 }

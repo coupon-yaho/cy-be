@@ -258,6 +258,45 @@ class ExpireSchedulerReportingTest {
                 .contains("다른 노드가 같은 asOf 를 이미 시작했습니다");
     }
 
+    /**
+     * <b>실패 원인을 가르는 조회도 실패할 수 있다.</b> 그리고 하필 <b>가장 흔한 경우</b>가
+     * 그렇다 — 원래 실패가 커넥션 문제면 인스턴스 조회도 같이 죽는다.
+     *
+     * <p>그때 예외를 그대로 올리면 뒤의 {@code catch (Exception)} 이 못 잡고
+     * {@code expire()} 밖으로 나간다. 이 메서드가 절대 하지 않기로 한 일이다 —
+     * 스프링이 로그만 남기고 다음 주기를 계속 잡으므로 <b>재고를 쓰는 유일한 잡이
+     * 조용히 안 도는 상태</b>가 된다.
+     */
+    @Test
+    @DisplayName("원인을 가르는 조회까지 실패해도 예외가 밖으로 안 나간다")
+    void doesNotEscapeWhenTheDisambiguatingLookupAlsoFails() {
+        JobOperator operator = (JobOperator) Proxy.newProxyInstance(
+                JobOperator.class.getClassLoader(),
+                new Class<?>[] {JobOperator.class},
+                (proxy, method, args) -> {
+                    if ("start".equals(method.getName()) && args.length == 2) {
+                        throw new IllegalStateException("커넥션이 안 붙는다");
+                    }
+                    if ("getJobInstance".equals(method.getName())) {
+                        throw new IllegalStateException("조회도 같은 이유로 죽는다");
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+
+        // 던지면 여기서 테스트가 실패한다 — 그것이 이 테스트의 첫 번째 단언이다.
+        scheduler(operator).expire();
+
+        assertThat(logs.list)
+                .as("가르지 못했다는 사실(WARN)과 원래 실패(ERROR) 둘 다 남아야 "
+                        + "운영자가 무엇을 볼지 정할 수 있다")
+                .hasSize(2);
+        assertThat(logs.list.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(logs.list.get(0).getFormattedMessage()).contains("가르지 못했습니다");
+        assertThat(logs.list.get(1).getLevel())
+                .as("모를 때는 사건 쪽으로 기운다 — 진짜 실패를 INFO 로 삼키는 것이 더 나쁘다")
+                .isEqualTo(Level.ERROR);
+    }
+
     /** 남은 로그가 정확히 하나이고 기대한 레벨인지 확인한 뒤 본문을 돌려준다. */
     private String only(Level level) {
         assertThat(logs.list)

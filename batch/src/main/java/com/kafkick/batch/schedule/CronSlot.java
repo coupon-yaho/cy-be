@@ -30,7 +30,7 @@ import org.springframework.scheduling.support.CronExpression;
  * <b>뒤로 넓혀 가며</b> 찾는다. 그래도 못 찾으면 부르는 쪽이 정하도록 {@code null} 을 준다 —
  * 여기서 임의로 대체값을 만들면 그 값이 조용히 실행의 신원이 된다.
  */
-final class CronSlot {
+public final class CronSlot {
 
     /**
      * 되짚는 횟수 상한. 시작 창이 <b>간격 × 2</b> 이고 매번 두 배가 되므로, 5분 주기에서
@@ -46,17 +46,21 @@ final class CronSlot {
     /**
      * <b>슬롯 직전에 깨어난 것을 슬롯 안으로 본다.</b>
      *
+     * <p><b>이 값은 잡과의 계약이다.</b> 스케줄러가 이만큼 미래인 {@code asOf} 를 만들 수 있으므로,
+     * {@code ExpireJobConfig} 의 미래 {@code asOf} 가드도 같은 폭만큼 열려 있어야 한다.
+     * 한쪽만 바뀌면 스케줄러가 만든 값을 잡이 거부한다 — 그래서 여기 한 곳에서만 정의한다.
+     *
      * <p>발화 마감은 단조시계({@code System.nanoTime})로 잡히고 {@code now} 는 벽시계로 읽는다.
      * 기다리는 5분 사이에 벽시계가 뒤로 조정되면 <b>깨어난 순간 벽시계가 슬롯보다 이르다.</b>
      * 그대로 두면 직전 슬롯을 돌려주는데, 그 인스턴스는 이미 끝났으므로 그 주기가
      * INFO 한 줄로 사라진다 — 예전 {@code truncatedTo(MINUTES)} 는 이 오차에 관용적이었고
      * 슬롯 방식은 관용도가 0 이다.
      */
-    private static final Duration EARLY_FIRE_TOLERANCE = Duration.ofSeconds(2);
+    public static final Duration EARLY_FIRE_TOLERANCE = Duration.ofSeconds(2);
 
     private final CronExpression expression;
 
-    CronSlot(String cron) {
+    public CronSlot(String cron) {
         this.expression = CronExpression.parse(cron);
     }
 
@@ -67,7 +71,7 @@ final class CronSlot {
      * 를 넘기 직전까지 걸은 값을 쓴다. 시작점을 얼마나 뒤로 잡을지는 <b>다음 두 발화의 간격</b>
      * 으로 어림잡고, 못 찾으면 그 폭을 두 배씩 넓힌다.
      */
-    LocalDateTime atOrBefore(LocalDateTime now) {
+    public LocalDateTime atOrBefore(LocalDateTime now) {
         LocalDateTime upcoming = expression.next(now);
         if (upcoming != null
                 && Duration.between(now, upcoming).compareTo(EARLY_FIRE_TOLERANCE) <= 0) {
