@@ -85,7 +85,9 @@ coupon-yaho
 
 ### 설정 파일
 
-`application.yml`, `storage.yml`은 커밋하지 않는다. 클론 후 `.example`을 복사해야 앱이 뜬다.
+`application.yml`, `storage.yml`, `redis.yml` 등 실행용 설정은 커밋하지 않는다.
+클론 후 일부 파일만 고르지 말고 아래 명령으로 모든 `.yml.example`을 복사해야 앱이 뜬다.
+특히 `redis.yml`은 API가 필수 import하므로 빠지면 기동이 중단된다.
 
 ```bash
 find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
@@ -95,6 +97,22 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
 
 테스트는 Testcontainers 로 실제 MySQL 을 띄우므로 Docker 가 필요하다.
+
+### 신규 환경의 런타임 설정 초기화
+
+`config:runtime`은 애플리케이션이 자동으로 만들지 않는다. 신규 Redis 볼륨을 준비한
+환경에서는 API를 올리기 전에 Redis를 기동하고 다음 시드 작업을 명시적으로 한 번
+실행한다.
+
+```bash
+docker compose up -d redis
+docker compose --profile runtime-config-seed run --rm runtime-config-seed
+docker compose up -d
+```
+
+시드 작업은 `SET NX`를 사용하므로 이미 존재하는 설정과 revision을 덮어쓰지 않는다.
+이 절차는 **새 환경의 최초 초기화 전용**이다. 운영 중 키 유실이나 데이터 복구 상황에서
+revision을 0으로 되돌리는 복구 수단으로 사용하지 않는다.
 
 ### 새 코드를 어디에 둘 것인가
 
