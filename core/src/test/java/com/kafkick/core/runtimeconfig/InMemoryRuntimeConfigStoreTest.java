@@ -37,6 +37,23 @@ class InMemoryRuntimeConfigStoreTest {
     }
 
     @Test
+    void negativeExpectedRevisionIsRejectedWith400LikeTheRedisStore() {
+        InMemoryRuntimeConfigStore store = new InMemoryRuntimeConfigStore(
+                snapshot(0), Clock.fixed(NOW, ZoneOffset.UTC));
+        RuntimeConfigCommand command = new RuntimeConfigCommand(
+                EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1");
+
+        for (long negative : new long[]{-1, -42, Long.MIN_VALUE}) {
+            assertThatThrownBy(() -> store.update(command, negative))
+                    .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                        assertThat(exception.getErrorCode())
+                                .isEqualTo(RuntimeConfigErrorCode.INVALID_REVISION);
+                        assertThat(exception.getErrorCode().getStatus()).isEqualTo(400);
+                    });
+        }
+    }
+
+    @Test
     void readOnlyStoreRejectsUpdatesWith409() {
         RuntimeConfigCommand command = new RuntimeConfigCommand(
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1");

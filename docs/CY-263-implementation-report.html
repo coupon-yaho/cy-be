@@ -204,8 +204,8 @@ BUILD SUCCESSFUL</code></pre>
         <tr><td>Primary/Replica·Cluster</td><td><span class="badge defer">미합의</span></td><td>운영 토폴로지 확정 후 읽기 endpoint와 hash-slot 키 전략 설계</td></tr>
         <tr><td>STALE 관측</td><td><span class="badge scope">CY-264</span></td><td>health readiness와 분리한 상태 게이지·경보 추가</td></tr>
         <tr><td>Redis 인증</td><td><span class="badge defer">인프라</span></td><td>운영 네트워크·관리형 Redis 보안 정책과 함께 결정</td></tr>
-        <tr><td>Lua 부분 적용</td><td><span class="badge defer">설계 부채</span></td><td>엄격한 설정+감사 all-or-nothing이 필요하면 단일 저장 단위 재설계</td></tr>
-        <tr><td>에러 코드 표기</td><td><span class="badge defer">계약 충돌</span></td><td>저장소 숫자 규약과 AB-G0 확정 문자열을 A와 합의 후 정리</td></tr>
+        <tr><td>Lua 부분 적용</td><td><span class="badge done">해당 없음</span></td><td>실측: 감사 키 타입 불일치는 쓰기 전 <code>-3</code>으로 끊기고, OOM은 스크립트 전체가 거부된다. 두 경우 모두 <code>config:runtime</code>이 변경되지 않는다</td></tr>
+        <tr><td>에러 코드 표기</td><td><span class="badge done">확정</span></td><td><code>RUNTIME_CONFIG-001</code>~<code>-009</code>. 저장소 숫자 규약(<code>&lt;도메인&gt;-&lt;3자리&gt;</code>)으로 통일했다</td></tr>
       </tbody>
     </table>
     <div class="callout ok"><strong>최종 범위:</strong> 이 티켓은 저장소 어댑터와 그 운영 기반을 제공한다. 엔진 버전·큐 모드를 실제 도메인 처리에 연결하거나 관리 화면에서 변경하는 기능은 포함하지 않는다.</div>

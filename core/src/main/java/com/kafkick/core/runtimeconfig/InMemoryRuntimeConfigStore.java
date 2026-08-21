@@ -1,6 +1,7 @@
 package com.kafkick.core.runtimeconfig;
 
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 
 import java.time.Clock;
 import java.util.Objects;
@@ -24,6 +25,9 @@ public final class InMemoryRuntimeConfigStore implements RuntimeConfigStore {
 
     @Override
     public RuntimeConfigSnapshot update(RuntimeConfigCommand command, long expectedRevision) {
+        if (expectedRevision < 0) {
+            throw new BusinessException(RuntimeConfigErrorCode.INVALID_REVISION);
+        }
         RuntimeConfigSnapshot before = current.get();
         if (before.revision() != expectedRevision) {
             throw new RuntimeConfigRevisionConflictException(before.revision());
