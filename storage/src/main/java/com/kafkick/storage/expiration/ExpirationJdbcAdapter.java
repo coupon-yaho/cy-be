@@ -104,9 +104,25 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      *
      * <p><b>이 Step 은 READ COMMITTED 다.</b> 그래서 문장마다 스냅샷이 새로 잡힌다 —
      * 청크 트랜잭션 전체가 하나의 스냅샷을 공유하지 않는다. 그래도 우리 집합은 안전하다:
-     * {@code (afterId, lastId]} 안쪽은 {@code EXPIRE_BATCH} 가 X 락으로 쥐고 있고,
-     * 바깥 행이 {@code updated_at = :committedAt}({@code datetime(6)})과 마이크로초까지
-     * 일치할 길이 없다.
+     * {@code (afterId, lastId]} 안쪽은 {@code EXPIRE_BATCH} 가 X 락으로 쥐고 있다.
+     *
+     * <p><b>표식은 고유하지 않다 — 무엇이 그것을 메우는지 적어 둔다.</b>
+     * {@code committedAt} 은 {@code datetime(6)} 시각일 뿐이라, <b>원리적으로는</b> 다른
+     * 프로세스가 같은 마이크로초에 {@code EXPIRED} 를 써서 이 {@code MAX(id)} 를 밀어 올릴 수
+     * 있다. 그러면 뒤 문장 다섯의 창이 넓어진다. 지금 그것을 막는 것은 셋이다.
+     *
+     * <ol>
+     *   <li><b>같은 {@code asOf} 로 두 번 못 돈다.</b> {@code asOf} 가 잡 파라미터라 스프링
+     *       배치가 같은 파라미터의 동시 실행을 거부한다 — 인스턴스를 여러 대 띄워도 그렇다.</li>
+     *   <li><b>다른 {@code asOf} 면 {@code expires_at < :asOf} 가 갈라 준다.</b></li>
+     *   <li>창 밖으로 새는 방향은 나머지 다섯의 {@code id <= :lastId} 가 막는다
+     *       (그 축은 {@code ExpirationJdbcAdapterTest} 가 실제로 남의 행을 심어 확인한다).</li>
+     * </ol>
+     *
+     * <p><b>그래서 남는 구멍은 하나다</b> — 다른 프로세스가 <b>같은 마이크로초</b>에,
+     * <b>우리 창 안쪽</b> id 로 {@code EXPIRED} 를 쓰는 경우. 발급 경로가 만료를 안 쓰고
+     * 배치가 한 대인 지금은 닿을 수 없고, 그 전제가 바뀌면 표식을 시각이 아니라
+     * <b>실행 고유값</b>(run_id 컬럼)으로 올려야 한다. 스키마 변경이라 이 티켓 밖이다.
      */
     private static final String LAST_EXPIRED_ID = """
             SELECT COALESCE(MAX(id), :afterId)

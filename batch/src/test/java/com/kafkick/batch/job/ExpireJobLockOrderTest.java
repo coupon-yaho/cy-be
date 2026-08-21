@@ -50,12 +50,19 @@ import com.kafkick.storage.db.VerificationSeed;
  *       <td>+ <b>issuances S</b></td></tr>
  * </table>
  *
- * <p><b>RC 라 뒤 문장들이 {@code issuances} 에 락을 추가하지 않는다.</b> 실측: 여섯 문장이
- * 다 돌아도 첫 문장이 잡은 수에서 안 늘어난다. RR 에서는 늘어난다(42 → 62, 상한이 없으면 546).
- * 표를 격리별로 가른 이유가 그것이다 — 예전에는 RC 를 넣기 전 값을 "실측했다"고 적어 뒀다.
+ * <p><b>RC 라 뒤 문장들이 {@code issuances} 에 락을 추가하지 않는다.</b>
+ * {@code ExpirationLockScopeTest.eachStatementLocksTheTablesItsContractSays} 가 문장마다
+ * 테이블별 락 수를 떠서 그것을 지킨다 — 첫 문장이 잡은 수에서 안 늘어나고,
+ * {@code coupon_stocks} 는 <b>마지막 문장에서만</b> 나타난다.
+ *
+ * <p><b>{@code issuance_histories} 칸만 재지 못한다.</b> INSERT 로 들어가는 행의 락은 InnoDB 가
+ * 암묵적으로 잡아, 다른 세션이 부딪혀 실체화되기 전에는 {@code data_locks} 에 안 뜬다.
+ * 그 자리는 아래 <b>호출 순서</b>가 맡는다 — 두 테스트가 합쳐야 표 전체가 선다.
  *
  * <p><b>발급 경로가 맞춰야 하는 것은 왼쪽 열이다.</b> 다만 격리가 RR 로 되돌아가면 오른쪽이
  * 되므로, 순서 계약({@code issuances} 먼저)은 어느 쪽에서도 지켜야 한다.
+ * 오른쪽 열은 격리를 되돌려 본 값이 아니라 <b>InnoDB 문서가 말하는 동작</b>이다 —
+ * 우리 청크에서는 첫 문장이 이미 X 락을 쥔 행이라 RR 로 바꿔도 락이 새로 안 생겼다.
  *
  * <p><b>반대로 잡으면 실제로 터진다.</b> {@code mysql:latest} 컨테이너에 두 세션을 띄워
  * 한쪽은 {@code issuances} → {@code coupon_stocks} 로, 다른 쪽은 그 반대로 잡게 했더니
@@ -66,8 +73,11 @@ import com.kafkick.storage.db.VerificationSeed;
  * 스케줄러에 달려 있어 결과가 흔들린다. 순서를 고정해 두면 그 뒤집힘이 여기서 먼저 드러난다.
  *
  * <p><b>다만 호출 순서는 락 순서의 증거가 아니다.</b> 한 문장이 두 테이블을 잡는 경우
- * ({@code releaseStock} 이 그렇다)를 원리적으로 못 본다. 그 축을 재는 것은
- * {@code ExpirationLockScopeTest} 이고, 위 표는 거기서 잰 값이다.
+ * ({@code releaseStock} 이 그렇다)를 원리적으로 못 본다 — 이 테스트만 있으면
+ * {@code releaseStock} 이 안에서 {@code coupon_stocks} 를 먼저 잠가도 통과한다.
+ * 그 축을 재는 것이 위에 적은 테이블별 락 테스트다. 예전에는 <i>"거기서 잰 값"</i> 이라고
+ * 적어 뒀는데 <b>그 테스트는 {@code issuances} 만 세고 있었다</b> — 표를 뒷받침하는 것이
+ * 아무것도 없었다.
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",

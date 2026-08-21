@@ -14,6 +14,7 @@ import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException;
 import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -55,7 +56,13 @@ public class ExpireScheduler {
     private final Job expireJob;
     private final TimeProvider timeProvider;
 
-    public ExpireScheduler(JobOperator jobOperator, Job expireJob, TimeProvider timeProvider) {
+    // Job 빈이 expireJob·verifyJob 둘이다. 지금은 파라미터 이름으로 갈리지만(부트 그래들
+    // 플러그인이 -parameters 를 붙인다) 그 기본값에 기대는 대신 명시한다 — 셋째 Job 이
+    // 생기거나 컴파일 옵션이 바뀌면 조용히 다른 잡이 주입되고, 그때 5분마다 도는 것이
+    // 만료가 아니게 된다.
+    public ExpireScheduler(JobOperator jobOperator,
+            @Qualifier("expireJob") Job expireJob,
+            TimeProvider timeProvider) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;

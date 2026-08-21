@@ -4,7 +4,9 @@ package com.kafkick.batch.job;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,10 +24,14 @@ import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.exception.ExpirationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -45,10 +51,18 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=1"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, ExpireJobTest.FixedClockConfig.class})
 class ExpireJobTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /**
+     * <b>잡이 이력에 찍을 시각.</b> 시계를 고정해 두면 이 값을 그대로 단언할 수 있다 —
+     * 벽시계로 재면 "{@code AS_OF} 보다 뒤" 정도밖에 못 보고, 그 단언은 테스트를 돌리는
+     * 날짜가 {@code AS_OF} 를 지났다는 우연에 기댄다. {@code AS_OF} 를 미래로 옮기는 순간
+     * 코드가 멀쩡해도 빨개진다.
+     */
+    private static final LocalDateTime WROTE_AT = AS_OF.plusMinutes(3);
 
     @Autowired
     private JobOperator jobOperator;
@@ -142,6 +156,9 @@ class ExpireJobTest {
         JobExecution execution = launch();
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(JobFailures.errorCodesOf(execution))
+                .as("계약은 에러 코드다 — 문구만 보면 문구를 다듬을 때 깨진다")
+                .contains(ExpirationErrorCode.STOCK_ROW_MISSING.getCode());
         assertThat(JobFailures.messagesOf(execution))
                 .anyMatch(message -> message.contains("재고를 되돌리지 못한 회차가 있습니다"));
     }
@@ -165,8 +182,9 @@ class ExpireJobTest {
         launch();
 
         assertThat(historyCreatedAt(targets.get(0)))
-                .as("asOf 로 찍으면 잡이 도는 동안 들어온 이력보다 앞서게 된다")
-                .isAfter(AS_OF);
+                .as("asOf 로 찍으면 잡이 도는 동안 들어온 이력보다 앞서게 된다. "
+                        + "시계를 고정했으니 '뒤에 있다' 가 아니라 **정확히 그 값**을 본다")
+                .isEqualTo(WROTE_AT);
     }
 
     /**
@@ -264,8 +282,12 @@ class ExpireJobTest {
         JobExecution execution = launch();
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(JobFailures.errorCodesOf(execution))
+                .as("재고 행이 없는 경우와 **코드로** 갈려야 알림 규칙이 둘을 나눌 수 있다")
+                .contains(ExpirationErrorCode.STOCK_UNDERFLOW.getCode())
+                .doesNotContain(ExpirationErrorCode.STOCK_ROW_MISSING.getCode());
         assertThat(JobFailures.messagesOf(execution))
-                .as("재고 행이 없는 경우와 갈려야 운영자가 볼 곳이 정해진다")
+                .as("로그 문장도 갈려야 운영자가 볼 곳이 정해진다")
                 .anyMatch(message -> message.contains("재고가 음수가 되는 회차"))
                 .noneMatch(message -> message.contains("재고를 되돌리지 못한 회차"));
 
@@ -279,4 +301,21 @@ class ExpireJobTest {
                 .as("첫 건이 뺀 만큼만 줄어 있다")
                 .isZero();
     }
+
+    /**
+     * <b>잡이 쓰는 시각을 고정한다.</b> {@code TimeProvider} 를 통해 {@code committedAt} 이 되고,
+     * 그것이 곧 이력의 {@code created_at} 이다. 고정하지 않으면 시각 단언이 벽시계에 묶인다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            // 운영 TimeConfig 가 systemUTC 다. 여기서 기본 타임존을 쓰면 CI 와 로컬이
+            // 다른 값을 내고, 고정한 의미가 없어진다.
+            return Clock.fixed(WROTE_AT.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        }
+    }
+
 }

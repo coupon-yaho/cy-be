@@ -49,6 +49,7 @@ class ExpireSchedulerReportingTest {
 
     private ListAppender<ILoggingEvent> logs;
     private ch.qos.logback.classic.Logger schedulerLog;
+    private Level originalLevel;
 
     @BeforeEach
     void setUp() {
@@ -57,12 +58,18 @@ class ExpireSchedulerReportingTest {
         logs.start();
         schedulerLog = (ch.qos.logback.classic.Logger)
                 LoggerFactory.getLogger(ExpireScheduler.class);
+        // 레벨을 안 정하면 상위 로거 설정을 따라간다. application.yml 이나 루트가 WARN 으로
+        // 올라가는 순간 INFO 를 기대하는 단언이 깨지는데, 실패 메시지에는 "로그가 비었다" 만
+        // 남고 원인이 로깅 설정이라는 것은 안 나온다.
+        originalLevel = schedulerLog.getLevel();
+        schedulerLog.setLevel(Level.TRACE);
         schedulerLog.addAppender(logs);
     }
 
     @AfterEach
     void tearDown() {
         schedulerLog.detachAppender(logs);
+        schedulerLog.setLevel(originalLevel);
         logs.stop();
     }
 

@@ -1,8 +1,15 @@
 // 만료 잡 설정값이 기동 시점에 걸러지는지 확인합니다.
 package com.kafkick.batch.job;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,11 +64,73 @@ class ExpireJobSettingsTest {
                 .hasMessageContaining("batch.expire.step-timeout-ms");
     }
 
+    /**
+     * <b>경계 자체를 찍는다.</b> 위 두 테스트는 1000 <i>미만</i>과 1000 의 <i>배수가 아닌</i> 값만
+     * 본다. 조건이 {@code < 1000} 에서 {@code <= 1000} 으로 바뀌면 그것들은 그대로 통과하고,
+     * 정확히 1초짜리 설정만 조용히 거부된다.
+     */
     @Test
-    @DisplayName("설정 파일의 기본값 조합은 통과한다")
-    void acceptDefaults() {
-        assertThatCode(() -> new ExpireJobConfig(null, null, VALID_CHUNK, VALID_TIMEOUT))
+    @DisplayName("step-timeout-ms 가 정확히 1000 이면 통과한다 — 경계는 열려 있다")
+    void acceptExactlyOneSecondStepTimeout() {
+        assertThatCode(() -> new ExpireJobConfig(null, null, VALID_CHUNK, 1_000L))
+                .doesNotThrowAnyException();
+    }
+
+    /** {@code chunk-size} 도 같다. 1 은 거부가 아니라 허용이어야 한다. */
+    @Test
+    @DisplayName("chunk-size 가 1 이면 통과한다 — 경계는 열려 있다")
+    void acceptChunkSizeOfOne() {
+        assertThatCode(() -> new ExpireJobConfig(null, null, 1, VALID_TIMEOUT))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("step-timeout-ms 가 1000 의 배수가 아니면 기동하지 못한다")
+    void rejectStepTimeoutWithLostPrecision() {
+        assertThatThrownBy(() -> new ExpireJobConfig(null, null, VALID_CHUNK, 1_500L))
+                .as("스프링 트랜잭션 타임아웃은 초 단위라 나머지가 조용히 버려진다")
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("batch.expire.step-timeout-ms");
+    }
+
+    /**
+     * <b>기본값이라는 주장을 파일에서 확인한다.</b> 예전에는 이 상수 둘이 하드코딩이었고,
+     * {@code application.yml.example} 에서 값을 바꾸면 <i>테스트는 통과하는데 주석만 거짓</i>이
+     * 되었다. 이제 파일에서 읽으므로 갈리면 여기서 운다.
+     *
+     * <p>읽는 것은 {@code build.gradle} 의 {@code processTestResources} 가 복사한
+     * {@code resolved/application.yml} 이다 — 원본이 {@code .example} 이라 확장자로 파서를
+     * 못 고른다({@code ResolvedBatchConfigTest} 와 같은 자리).
+     */
+    @Test
+    @DisplayName("설정 파일에 적힌 기본값 조합이 스스로 막히지 않는다")
+    void acceptDefaultsFromTheSettingsFile() throws IOException {
+        int chunkSize = Integer.parseInt(defaultOf("EXPIRE_CHUNK_SIZE"));
+        long stepTimeout = Long.parseLong(defaultOf("EXPIRE_STEP_TIMEOUT_MS"));
+
+        assertThat(chunkSize)
+                .as("여기가 갈리면 아래 단언이 '기본값' 이 아닌 값을 검사하게 된다")
+                .isEqualTo(VALID_CHUNK);
+        assertThat(stepTimeout).isEqualTo(VALID_TIMEOUT);
+        assertThatCode(() -> new ExpireJobConfig(null, null, chunkSize, stepTimeout))
                 .as("application.yml.example 의 기본값이 스스로 막히면 안 된다")
                 .doesNotThrowAnyException();
+    }
+
+    /** {@code ${EXPIRE_CHUNK_SIZE:1000}} 의 콜론 뒤 기본값. */
+    private String defaultOf(String variable) throws IOException {
+        try (InputStream in = getClass().getResourceAsStream("/resolved/application.yml")) {
+            if (in == null) {
+                throw new IllegalStateException(
+                        "resolved/application.yml 이 없다 — build.gradle 의 processTestResources 가 "
+                                + "application.yml.example 을 복사하는 자리를 확인해라");
+            }
+            String yaml = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            Matcher matcher = Pattern.compile("\\$\\{" + variable + ":([^}]+)}").matcher(yaml);
+            if (!matcher.find()) {
+                throw new IllegalStateException(variable + " 의 기본값을 설정 파일에서 못 찾았다");
+            }
+            return matcher.group(1).trim();
+        }
     }
 }

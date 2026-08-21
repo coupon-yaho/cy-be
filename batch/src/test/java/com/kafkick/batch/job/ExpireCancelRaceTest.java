@@ -101,7 +101,12 @@ class ExpireCancelRaceTest {
                 .param("at", AS_OF.minusDays(1))
                 .param("id", target)
                 .update();
-        // 같은 회차에 기한이 남은 건을 더 심어 재고를 3 으로 만든다. 만료 대상은 여전히 하나다.
+        // 같은 회차에 기한이 남은 건 둘을 더 심는다. 만료 대상은 여전히 하나다.
+        //
+        // 재고를 3 으로 정하는 것은 아래 overwriteStock 이다. 이 둘은 **취소가 때릴 형제**를
+        // 만드는 것이고(마지막 하나만 sibling 으로 쓴다), 둘 다 심는 이유는 ISSUED 행 수와
+        // active_count 를 맞춰 두기 위해서다 — 어긋난 재고로 시작하면 이 테스트가 재는 것이
+        // 경합인지 처음부터 깨져 있던 픽스처인지 갈리지 않는다.
         for (int i = 0; i < 2; i++) {
             long alive = seed.issuance(IssuanceStatus.ISSUED);
             jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")

@@ -24,6 +24,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.exception.ExpirationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -80,7 +81,12 @@ class ExpireJobHistoryGuardTest {
                 .toJobParameters());
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(JobFailures.errorCodesOf(execution))
+                .as("**계약은 에러 코드다.** 메시지 문구만 보면 문구를 다듬을 때 깨지고, "
+                        + "코드가 바뀌어도 통과한다")
+                .contains(ExpirationErrorCode.EXPIRE_HISTORY_COUNT_MISMATCH.getCode());
         assertThat(JobFailures.messagesOf(execution))
+                .as("운영자가 로그에서 읽을 문장도 함께 남는다")
                 .anyMatch(message -> message.contains("만료 이력 수가 만료 건수와 다릅니다"));
     }
 

@@ -6,9 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.function.IntSupplier;
 
 import org.junit.jupiter.api.AfterEach;
@@ -73,7 +76,8 @@ class ExpirationLockScopeTest {
     private static final LocalDateTime EXPIRED_AT = AS_OF.minusDays(1);
     private static final LocalDateTime ALIVE_AT = AS_OF.plusDays(1);
     private static final LocalDateTime WROTE_AT = AS_OF.plusMinutes(3);
-    private static final int NO_LIMIT = 1000;
+    /** 픽스처보다 크다 — 청크가 잘리지 않게 하려는 것이지 무제한이라는 뜻이 아니다. */
+    private static final int LIMIT_ABOVE_FIXTURE = 1000;
 
     /** 회차 하나가 담을 수 있는 재고. 넘기면 {@code ck_stock_range} 가 거부한다. */
     private static final int STOCK_PER_COUPON = 100;
@@ -151,19 +155,42 @@ class ExpirationLockScopeTest {
                 .single();
     }
 
-    /** 어댑터를 트랜잭션으로 감싸고, 커밋으로 락이 풀리기 전에 센다. */
-    private int locksTakenBy(IntSupplier call, int expectedRows) {
+    /**
+     * 어댑터를 트랜잭션으로 감싸고, 커밋으로 락이 풀리기 전에 <b>락과 읽은 행을 함께</b> 센다.
+     *
+     * <p><b>락만 재면 검출력이 없다.</b> READ COMMITTED 는 매치 안 된 행의 락을 즉시 놓으므로
+     * 인덱스가 사라져도 락 수는 그대로 0 이다 — 실제로 {@code V11} 을 지우는 돌연변이가
+     * 락 단언을 전부 통과했다. 그때 유일하게 움직이는 것이 <b>읽은 행 수</b>다.
+     *
+     * <p>그래서 두 축을 한 번에 돌려주고, 부르는 쪽이 둘 다 단언한다. 락 축은 격리 수준이
+     * RR 로 되돌아가는 것을, 스캔 축은 인덱스가 사라지는 것을 잡는다 — 서로 못 대신한다.
+     */
+    private Measured measure(IntSupplier call, int expectedRows) {
         return transaction.execute(status -> {
+            long before = rowsRead();
             assertThat(call.getAsInt())
-                    .as("넘긴 건수가 먼저 맞아야 락 수치가 뜻을 갖는다")
+                    .as("넘긴 건수가 먼저 맞아야 두 수치가 뜻을 갖는다")
                     .isEqualTo(expectedRows);
-            return lockedRecords();
+            long scanned = rowsRead() - before;
+            return new Measured(lockedRecords(), scanned);
         });
+    }
+
+    /** 한 호출이 잡은 락과 읽은 행. 둘 다 있어야 인덱스와 격리를 함께 지킨다. */
+    private record Measured(int locks, long scanned) {
     }
 
     /**
      * <b>넘길 것이 하나도 없는 실행이 최악이었다.</b> {@code LIMIT} 이 발동할 일이 없어 끝까지
-     * 훑었고, 하나도 안 바꾸면서 지나간 행을 전부 잠갔다. 지금은 인덱스가 그 스캔을 없앤다.
+     * 훑었고, 하나도 안 바꾸면서 지나간 행을 전부 잠갔다. 하루 288회 중 대부분이 이 경로다.
+     *
+     * <p><b>두 축을 함께 본다.</b> 락 축은 격리가 REPEATABLE READ 로 되돌아가는 것을,
+     * 스캔 축은 인덱스가 사라지는 것을 잡는다. 실측(5,000행·만료 대상 0건·RC):
+     * 인덱스 없음 <b>5,017행</b> → 인덱스 있음 <b>1행</b>. 운영 300만 행이면 매 실행이
+     * 300만 행을 읽느냐 마느냐의 차이이고, 그것이 5분 주기를 지킬 수 있느냐를 가른다.
+     *
+     * <p>{@code Handler_read_*} 는 스토리지 엔진이 실제로 넘긴 행을 센다 —
+     * {@code EXPLAIN} 의 추정치가 아니라 실행 결과다.
      */
     @Test
     @DisplayName("넘길 것이 없는 실행은 훑지도 잠그지도 않는다")
@@ -171,11 +198,16 @@ class ExpirationLockScopeTest {
         int rows = 200;
         issuances(rows, IssuanceStatus.ISSUED, ALIVE_AT);
 
-        int locked = locksTakenBy(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT), 0);
+        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE), 0);
 
-        assertThat(locked)
-                .as("한 건도 안 넘겼으면 잠글 것도 없다. %d 에 가까워지면 인덱스가 사라진 것이다", rows)
+        assertThat(measured.locks())
+                .as("한 건도 안 넘겼으면 잠글 것도 없다. 여기가 %d 에 가까워지면 격리가 "
+                        + "REPEATABLE READ 로 되돌아간 것이다", rows)
                 .isLessThan(20);
+        assertThat(measured.scanned())
+                .as("**인덱스를 지키는 것은 이 축이다.** 위 단언은 RC 라 인덱스가 없어도 통과한다 — "
+                        + "인덱스가 사라지면 %d 행을 전부 읽는다", rows)
+                .isLessThan(rows / 4);
     }
 
     /**
@@ -192,11 +224,15 @@ class ExpirationLockScopeTest {
         issuances(settled, IssuanceStatus.EXPIRED, EXPIRED_AT);
         issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        int locked = locksTakenBy(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT), toExpire);
+        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE), toExpire);
 
-        assertThat(locked)
-                .as("%d 건만 넘겼다. 이미 끝난 %d 건까지 잠그면 앞 구간을 다시 훑은 것이다",
+        assertThat(measured.locks())
+                .as("%d 건만 넘겼다. 이미 끝난 %d 건까지 잠그면 격리가 되돌아간 것이다",
                         toExpire, settled)
+                .isLessThan(settled / 2);
+        assertThat(measured.scanned())
+                .as("**앞 구간을 다시 훑는지는 이 축에만 남는다.** 이미 끝난 %d 건을 지나가도 "
+                        + "RC 라 락은 안 잡히므로 위 단언이 그대로 통과한다", settled)
                 .isLessThan(settled / 2);
     }
 
@@ -276,7 +312,7 @@ class ExpirationLockScopeTest {
         Issuer issuer = anyIssuer();
 
         transaction.executeWithoutResult(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT))
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
                     .as("기한이 남았으니 한 건도 안 넘어간다 — 최악의 경로다")
                     .isZero();
 
@@ -309,9 +345,11 @@ class ExpirationLockScopeTest {
      */
     private void insertIssuanceOnSeparateConnection(long couponId, Issuer issuer) throws Exception {
         try (Connection connection = dataSource.getConnection()) {
-            try (Statement timeout = connection.createStatement()) {
-                timeout.execute("SET SESSION innodb_lock_wait_timeout = 2");
-            }
+            // 커넥션은 풀로 돌아가는데 HikariCP 는 임의 세션 변수를 안 되돌린다. 안 복원하면
+            // 뒤 테스트가 이 커넥션을 받아 락 대기가 2초에서 끊기고, 원인이 자기 코드가
+            // 아닌 자리에서 간헐 실패한다.
+            int original = sessionLockWaitTimeout(connection);
+            setSessionLockWaitTimeout(connection, 2);
             try (PreparedStatement insert = connection.prepareStatement("""
                     INSERT INTO issuances
                            (coupon_id, member_id, code, issued_grade, status,
@@ -325,42 +363,119 @@ class ExpirationLockScopeTest {
                 insert.setTimestamp(5, Timestamp.valueOf(ALIVE_AT));
                 insert.setTimestamp(6, Timestamp.valueOf(AS_OF));
                 insert.executeUpdate();
+            } finally {
+                setSessionLockWaitTimeout(connection, original);
             }
         }
     }
 
+    /** 지금 이 커넥션의 락 대기 초. 복원할 값을 먼저 읽어 둔다. */
+    private int sessionLockWaitTimeout(Connection connection) throws Exception {
+        try (Statement read = connection.createStatement();
+                ResultSet rs = read.executeQuery("SELECT @@SESSION.innodb_lock_wait_timeout")) {
+            rs.next();
+            return rs.getInt(1);
+        }
+    }
+
+    private void setSessionLockWaitTimeout(Connection connection, int seconds) throws Exception {
+        try (Statement write = connection.createStatement()) {
+            write.execute("SET SESSION innodb_lock_wait_timeout = " + seconds);
+        }
+    }
+
     /**
-     * <b>인덱스가 지키는 것은 락이 아니라 스캔이다.</b>
+     * <b>문장마다 어느 테이블을 잠그는지 잰다 — 락 순서 계약의 근거다.</b>
      *
-     * <p>READ COMMITTED 로 내린 뒤로는 매치되지 않은 행의 락을 즉시 놓으므로,
-     * <b>인덱스가 없어도 락 수는 0 이다.</b> 그래서 이 클래스의 다른 단언들로는 인덱스가
-     * 사라진 것을 못 잡는다 — 실제로 {@code V11} 을 지우는 돌연변이가 락 테스트를
-     * 전부 통과했다.
+     * <p>{@code ExpireJobLockOrderTest} 는 저장소 <b>호출 순서</b>만 본다. 그것으로는
+     * <i>"{@code releaseStock} 안에서 {@code coupon_stocks} 를 먼저 잠근다"</i> 같은 것을
+     * 원리적으로 못 본다 — 한 문장이 두 테이블을 잡는 경우가 그 밖에 있다. 그 클래스의
+     * 표는 <b>이 테스트가 재는 값</b>이고, 예전에는 그 표를 뒷받침하는 것이 아무것도 없었다.
      *
-     * <p>남는 차이는 <b>읽은 행 수</b>다. 실측(5,000행·만료 대상 0건·RC):
-     * 인덱스 없음 <b>5,017행</b> → 인덱스 있음 <b>1행</b>. 운영 300만 행이면 매 실행이
-     * 300만 행을 읽느냐 마느냐의 차이이고, 그것이 5분 주기를 지킬 수 있느냐를 가른다.
+     * <p><b>발급 경로가 맞춰야 하는 순서가 여기 박힌다.</b>
+     * {@code issuances} → {@code issuance_histories} → {@code coupon_stocks}.
+     * 반대로 잡으면 오류 1213 이 나고, 희생되는 쪽이 만료면 그 주기가 통째로 밀린다.
      *
-     * <p>{@code Handler_read_*} 는 스토리지 엔진이 실제로 넘긴 행을 센다 —
-     * {@code EXPLAIN} 의 추정치가 아니라 실행 결과다.
+     * <p><b>격리 수준은 이 테스트가 안 지킨다.</b> 뒤 문장들이 읽는 행은 첫 문장이 이미
+     * X 락을 잡아 둔 행이라, REPEATABLE READ 로 되돌려도 락이 새로 안 생긴다 — 실제로
+     * RR 로 바꾸는 돌연변이가 여기를 통과했다. 그 축을 잡는 것은
+     * {@link #issuanceInsertPassesWhileChunkIsOpen()} 이고, 그 돌연변이에서 실패한 것도
+     * 그 테스트 하나였다.
+     *
+     * <p><b>못 재는 것이 하나 있다.</b> {@code issuance_histories} 에 <i>넣는</i> 행의 락은
+     * InnoDB 가 <b>암묵적으로</b> 잡아서, 다른 세션이 부딪혀 실체화되기 전에는
+     * {@code data_locks} 에 뜨지 않는다. 그래서 이 축은 <b>이력이 언제 잠기는지</b>가 아니라
+     * <b>이력 INSERT 가 원본·재고를 건드리지 않는지</b>를 지킨다. 순서 계약에서 이력의 자리는
+     * 호출 순서({@code ExpireJobLockOrderTest})가 맡는다 — 둘이 합쳐야 표 전체가 선다.
      */
     @Test
-    @DisplayName("만료 대상이 없으면 행을 읽지도 않는다 — 인덱스가 지키는 축")
-    void scansNothingWhenNothingExpires() {
-        int rows = 200;
-        issuances(rows, IssuanceStatus.ISSUED, ALIVE_AT);
+    @DisplayName("문장마다 잠그는 테이블이 계약대로다 — issuances → histories → stocks")
+    void eachStatementLocksTheTablesItsContractSays() {
+        int toExpire = 5;
+        issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        long scanned = transaction.execute(status -> {
-            // FLUSH STATUS 는 PreparedStatement 로 못 돌고 RELOAD 권한도 필요하다.
-            // 전후 차이로 재면 둘 다 피한다 — 재는 질의 자신이 올리는 몫은 양쪽에 똑같이 섞인다.
-            long before = rowsRead();
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isZero();
-            return rowsRead() - before;
+        transaction.executeWithoutResult(status -> {
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
+                    .isEqualTo(toExpire);
+            assertThat(lockedTables())
+                    .as("첫 문장은 원본만 잡는다")
+                    .containsOnlyKeys("issuances");
+
+            int afterExpire = lockedTables().get("issuances");
+            long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+            assertThat(lockedTables())
+                    .as("경계를 구하는 문장은 평범한 SELECT 다 — 하나도 안 잡는다")
+                    .containsOnlyKeys("issuances")
+                    .containsEntry("issuances", afterExpire);
+
+            int afterFirst = lockedTables().get("issuances");
+
+            adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, lastId);
+            assertThat(lockedTables())
+                    .as("이력 INSERT 는 **원본의 락 범위를 안 넓힌다** — 청크 밖으로 번지면 "
+                            + "여기가 먼저 운다. 테이블 이름만이 아니라 개수까지 보는 이유다. "
+                            + "(넣은 이력 행 자체의 락은 암묵적이라 data_locks 에 안 뜬다 — "
+                            + "충돌이 나야 실체화된다)")
+                    .containsOnlyKeys("issuances")
+                    .containsEntry("issuances", afterFirst);
+
+            adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, lastId);
+            adapter.stockRowCount(AS_OF, WROTE_AT, 0L, lastId);
+            assertThat(lockedTables())
+                    .as("가드 둘은 세기만 한다 — 하나도 새로 안 잡는다")
+                    .containsOnlyKeys("issuances")
+                    .containsEntry("issuances", afterFirst);
+
+            adapter.releaseStock(AS_OF, WROTE_AT, 0L, lastId);
+            assertThat(lockedTables())
+                    .as("재고를 되돌리면서도 **원본의 락 범위는 그대로다** — "
+                            + "UPDATE ... JOIN 이 읽는 쪽으로 번지면 여기서 드러난다")
+                    .containsEntry("issuances", afterFirst);
+            assertThat(lockedTables().keySet())
+                    .as("**재고는 맨 마지막이다.** 이것이 앞으로 오면 발급 경로와 순서가 역전돼 "
+                            + "데드락이 난다")
+                    .containsExactlyInAnyOrder("issuances", "coupon_stocks");
         });
+    }
 
-        assertThat(scanned)
-                .as("인덱스가 없으면 %d 행을 전부 읽는다. 락은 RC 라 0 이어서 이 축만 남는다", rows)
-                .isLessThan(rows / 4);
+    /**
+     * 지금 트랜잭션이 잡고 있는 레코드 락을 <b>테이블별로</b> 센다.
+     *
+     * <p>{@link #lockedRecords()} 는 {@code issuances} 하나만 본다. 락 <b>순서</b> 계약은
+     * 여러 테이블에 걸쳐 있어서 그것으로는 못 지킨다.
+     */
+    private Map<String, Integer> lockedTables() {
+        return jdbcClient.sql("""
+                        SELECT OBJECT_NAME, COUNT(*)
+                          FROM performance_schema.data_locks
+                         WHERE LOCK_TYPE = 'RECORD'
+                           AND THREAD_ID = PS_CURRENT_THREAD_ID()
+                         GROUP BY OBJECT_NAME
+                        """)
+                .query((rs, rowNum) -> Map.entry(rs.getString(1), rs.getInt(2)))
+                .list()
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     /**
@@ -401,7 +516,7 @@ class ExpirationLockScopeTest {
         issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
 
         long scanned = transaction.execute(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isEqualTo(toExpire);
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(toExpire);
 
             long before = rowsRead();
             long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
@@ -418,7 +533,13 @@ class ExpirationLockScopeTest {
                 .isLessThan(settled / 3);
     }
 
-    /** 스토리지 엔진이 실제로 넘긴 행 수. 추정치가 아니라 실행 결과다. */
+    /**
+     * 스토리지 엔진이 실제로 넘긴 행 수. 추정치가 아니라 실행 결과다.
+     *
+     * <p>{@code FLUSH STATUS} 로 0 부터 세는 대신 <b>전후 차이</b>로 잰다 — 그 문장은
+     * {@code PreparedStatement} 로 못 돌고 {@code RELOAD} 권한도 필요하다. 재는 질의 자신이
+     * 올리는 몫은 양쪽에 똑같이 섞이므로 차이에서 상쇄된다.
+     */
     private long rowsRead() {
         return jdbcClient.sql("""
                         SELECT COALESCE(SUM(VARIABLE_VALUE), 0)

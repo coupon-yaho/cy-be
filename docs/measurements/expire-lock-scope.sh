@@ -12,7 +12,10 @@ C=cy-m-$$
 ROWS=5000; LIMIT=1000; WINDOW=1000
 docker run -d --name $C -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=t \
   mysql:latest --skip-log-bin >/dev/null
-trap "docker rm -f $C >/dev/null 2>&1" EXIT
+# 출력 파일은 mktemp 로 만든다. /tmp/pr_$$ 처럼 예측 가능한 이름은 같은 머신의
+# 다른 사용자가 미리 symlink 를 걸어 두면 그쪽으로 써진다.
+WORK=$(mktemp -d)
+trap "docker rm -f $C >/dev/null 2>&1; rm -rf \"$WORK\"" EXIT
 for i in $(seq 90); do docker exec $C mysql -proot -e "SELECT 1" >/dev/null 2>&1 && break; sleep 2; done
 echo "서버: $(docker exec $C mysqld --version 2>/dev/null | sed 's/.*Ver //;s/ for.*//')  ·  행 $ROWS · LIMIT $LIMIT · 스캔창 $WINDOW"
 docker exec -i $C mysql -proot t >/dev/null 2>&1 <<SQL
@@ -37,7 +40,7 @@ probe() {  # $1=대상 $2=인덱스 $3=격리 $4=스캔창 $5=라벨
   [ "$2" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
     <<<"CREATE INDEX idx_status_expires ON issuances (status, expires_at)"
   local UP=""; [ "$4" = "yes" ] && UP="AND id <= $WINDOW"
-  docker exec -i $C mysql -proot -N t > /tmp/pr_$$.txt 2>&1 <<SQL &
+  docker exec -i $C mysql -proot -N t > "$WORK/probe.txt" 2>&1 <<SQL &
 SET SESSION TRANSACTION ISOLATION LEVEL $3;
 START TRANSACTION;
 UPDATE issuances SET status='EXPIRED', updated_at='2026-01-15 09:03:00'
@@ -62,11 +65,11 @@ SQL
 )
   wait
   printf "%-30s 매치=%-5s 락=%-6s 발급INSERT=%-5s 사용UPDATE=%s\n" "$5" \
-    "$(grep -o 'm=[0-9]*' /tmp/pr_$$.txt | cut -d= -f2)" \
-    "$(grep -o 'l=[0-9]*' /tmp/pr_$$.txt | cut -d= -f2)" \
+    "$(grep -o 'm=[0-9]*' "$WORK/probe.txt" | cut -d= -f2)" \
+    "$(grep -o 'l=[0-9]*' "$WORK/probe.txt" | cut -d= -f2)" \
     "$([ "$ins" = "0" ] && echo 통과 || echo 1205)" \
     "$([ "$use" = "0" ] && echo 통과 || echo 1205)"
-  rm -f /tmp/pr_$$.txt
+  rm -f "$WORK/probe.txt"
 }
 echo; echo "── 만료 대상 0건 (하루 288회 중 대부분) ──"
 probe 0 no  "REPEATABLE READ" no  "현재 상태"

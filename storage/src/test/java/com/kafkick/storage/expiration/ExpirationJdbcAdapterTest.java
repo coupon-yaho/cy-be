@@ -38,7 +38,8 @@ class ExpirationJdbcAdapterTest {
 
     /** 실제로 쓴 시각. asOf 보다 뒤다 — 잡은 asOf 를 정해 놓고 그 뒤에 돈다. */
     private static final LocalDateTime WROTE_AT = AS_OF.plusMinutes(3);
-    private static final int NO_LIMIT = 1000;
+    /** 픽스처보다 크다 — 청크가 잘리지 않게 하려는 것이지 무제한이라는 뜻이 아니다. */
+    private static final int LIMIT_ABOVE_FIXTURE = 1000;
 
     @Autowired
     private ExpirationJdbcAdapter adapter;
@@ -109,7 +110,7 @@ class ExpirationJdbcAdapterTest {
         long used = issuance(IssuanceStatus.USED, EXPIRED_AT);
         long alive = issuance(IssuanceStatus.ISSUED, ALIVE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isEqualTo(1);
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
 
         assertThat(statusOf(target)).isEqualTo("EXPIRED");
         assertThat(statusOf(used)).as("사용된 건을 넘기면 재고가 두 번 돌아온다").isEqualTo("USED");
@@ -125,7 +126,7 @@ class ExpirationJdbcAdapterTest {
     void returnZeroWhenNothingLeft() {
         issuance(IssuanceStatus.ISSUED, ALIVE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isZero();
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE)).isZero();
     }
 
     /**
@@ -169,7 +170,7 @@ class ExpirationJdbcAdapterTest {
     @DisplayName("넘긴 건마다 EXPIRE 이력이 하나씩 남는다")
     void writeOneHistoryPerExpired() {
         long target = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
 
         assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).isEqualTo(1);
         assertThat(historyCount(target)).isEqualTo(1);
@@ -186,7 +187,7 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(2);
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
         assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).as("회차 하나를 갱신한다").isEqualTo(1);
 
         assertThat(activeCount()).as("2 에서 둘을 빼 0 이다").isZero();
@@ -212,7 +213,7 @@ class ExpirationJdbcAdapterTest {
         seed.history(target, IssuanceEventType.CANCEL_USE, IssuanceStatus.USED,
                 IssuanceStatus.ISSUED, AS_OF.plusMinutes(1));
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
         adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundaryAfter(0L));
 
         LocalDateTime expireAt = jdbcClient.sql("SELECT created_at FROM issuance_histories "
@@ -222,8 +223,11 @@ class ExpirationJdbcAdapterTest {
                 .single();
 
         assertThat(expireAt)
-                .as("asOf 로 찍으면 취소(asOf+1분)보다 앞서 리플레이가 EXPIRE 를 먼저 접는다")
-                .isAfter(AS_OF.plusMinutes(1));
+                .as("**넘긴 committedAt 그대로여야 한다.** asOf 로 찍으면 취소(asOf+1분)보다 "
+                        + "앞서 리플레이가 EXPIRE 를 먼저 접는다. 느슨하게 isAfter 만 보면 "
+                        + "어댑터가 SQL NOW() 로 바뀌어도 통과하는데, 그러면 같은 asOf 재실행이 "
+                        + "다른 값을 남겨 결정론이 깨진다")
+                .isEqualTo(WROTE_AT);
     }
 
     /**
@@ -242,7 +246,7 @@ class ExpirationJdbcAdapterTest {
         long ours = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         long theirs = issuance(IssuanceStatus.ISSUED, ALIVE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isEqualTo(1);
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
         long boundary = boundaryAfter(0L);
 
         // 런타임이 상태를 직접 넘긴 것을 흉내낸다. 우리 청크가 끝난 뒤 생긴 행이다.
@@ -273,7 +277,7 @@ class ExpirationJdbcAdapterTest {
         long theirs = issuance(IssuanceStatus.ISSUED, ALIVE_AT);
         long ours = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isEqualTo(1);
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
         long boundary = boundaryAfter(0L);
         assertThat(theirs).as("남의 행이 우리 구간 안에 있어야 이 겹을 시험한다").isLessThan(boundary);
 
@@ -299,7 +303,7 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.removeStock();
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
 
         assertThat(adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).isEqualTo(1);
         assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L)))
@@ -328,7 +332,7 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(4);
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
         assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).as("회차 둘을 갱신한다").isEqualTo(2);
 
         assertThat(activeCountOf(couponA)).as("5 에서 셋이 빠진다").isEqualTo(2);
@@ -351,7 +355,7 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(1);
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
         long boundary = boundaryAfter(0L);
 
         assertThat(adapter.stockRowCount(AS_OF, WROTE_AT, 0L, boundary))
@@ -405,7 +409,7 @@ class ExpirationJdbcAdapterTest {
                 .param("at", EXPIRED_AT)
                 .update();
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT))
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
                 .as("넘어가는 것은 ISSUED 하나뿐이다")
                 .isEqualTo(1);
 
@@ -522,7 +526,7 @@ class ExpirationJdbcAdapterTest {
                 .param("id", target)
                 .update();
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT))
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
                 .as("이번 청크는 건너뛴다. 다음 주기가 새 committedAt 으로 집는다")
                 .isZero();
         assertThat(statusOf(target)).isEqualTo(IssuanceStatus.ISSUED.name());
@@ -542,7 +546,7 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(3, WROTE_AT.plusSeconds(5));
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE);
         long boundary = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
         assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundary)).isEqualTo(1);
 
