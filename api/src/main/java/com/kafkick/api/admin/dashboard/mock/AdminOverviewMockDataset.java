@@ -3,7 +3,7 @@ package com.kafkick.api.admin.dashboard.mock;
 import java.util.List;
 import java.util.Objects;
 
-import com.kafkick.api.admin.dashboard.model.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 
 /**

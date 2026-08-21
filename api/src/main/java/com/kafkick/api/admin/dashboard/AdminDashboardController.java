@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.kafkick.api.admin.dashboard.dto.AnalyticsQuery;
 import com.kafkick.api.admin.dashboard.dto.AdminAnalyticsResponse;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
+import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.support.ResponseEnvelope;

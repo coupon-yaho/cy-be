@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
 
-import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.ActionCode;

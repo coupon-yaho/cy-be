@@ -5,15 +5,16 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Service;
 
-import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
-import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
-import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator.CampaignCalculation;
-import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator.ActionCalculation;
-import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset;
+import com.kafkick.core.admin.overview.AdminOverviewResult;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator.ActionCalculation;
+import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 

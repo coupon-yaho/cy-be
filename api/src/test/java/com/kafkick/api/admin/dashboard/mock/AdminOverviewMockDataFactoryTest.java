@@ -8,7 +8,7 @@ import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.api.admin.dashboard.model.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.CouponStatus;
 

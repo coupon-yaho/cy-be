@@ -14,9 +14,9 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.test.web.servlet.MockMvc;
 
-import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.support.TimeProvider;

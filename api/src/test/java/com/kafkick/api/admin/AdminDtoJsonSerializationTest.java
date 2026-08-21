@@ -13,7 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.benchmark.dto.BenchmarkListResponse;
 import com.kafkick.api.admin.dashboard.dto.AdminAnalyticsResponse;
-import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
 import com.kafkick.api.admin.issuance.dto.IssuanceHistoryPageResponse;

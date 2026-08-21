@@ -11,10 +11,11 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
-import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.AdminOverviewResult;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.CouponStatus;

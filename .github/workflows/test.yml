@@ -1,0 +1,45 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Prepare local configuration
+        run: >-
+          find . -type f -name '*.yml.example'
+          -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
+
+      - name: Verify Docker for Redis integration tests
+        run: docker version
+
+      - name: Verify actual Redis Lua contract
+        run: >-
+          ./gradlew :infra:redis:test
+          --tests '*RedisRuntimeConfigIntegrationTest'
+
+      - name: Run all tests
+        run: ./gradlew test

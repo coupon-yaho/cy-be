@@ -13,9 +13,9 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.kafkick.api.admin.dashboard.AdminDashboardController;
 import com.kafkick.api.admin.dashboard.AdminOverviewService;
-import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
-import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.support.TimeProvider;
 

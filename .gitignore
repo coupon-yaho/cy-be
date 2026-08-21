@@ -37,10 +37,15 @@ out/
 .vscode/
 
 ### 로컬 설정 — .example 만 커밋한다
+# 루트 application.yml 은 compose 가 컨테이너에 마운트하는 배포 설정이다. 값이 환경마다
+# 달라서 각자 .example 을 복사해 쓴다(.env 와 같은 방식).
+/application.yml
+!/application.yml.example
 **/src/main/resources/application.yml
 **/src/main/resources/storage.yml
 **/src/main/resources/observation.yml
 **/src/main/resources/management.yml
+**/src/main/resources/redis.yml
 
 ### 운영 DB 서버 설정 — 커밋하지 않는다
 infra/mysql/my.cnf

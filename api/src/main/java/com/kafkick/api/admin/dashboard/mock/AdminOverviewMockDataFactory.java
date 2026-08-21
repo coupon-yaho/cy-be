@@ -7,7 +7,7 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
-import com.kafkick.api.admin.dashboard.model.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.EngineVersion;

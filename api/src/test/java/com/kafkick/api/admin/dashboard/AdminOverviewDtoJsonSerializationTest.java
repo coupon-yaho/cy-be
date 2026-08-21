@@ -14,7 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
-import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
