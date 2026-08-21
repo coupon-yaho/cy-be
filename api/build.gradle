@@ -24,6 +24,11 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
+    // PromQueryClient 가 Prometheus 응답을 JsonNode 로 직접 훑는다. 응답 스키마가 우리 계약이
+    // 아니라 Prometheus 것이라 record 로 고정하면 필드가 하나 늘 때마다 파싱이 깨진다.
+    // starter-web 이 전이로 끌어오지만 그건 저쪽 사정이다 — 컴파일 타임에 쓰므로 선언한다.
+    implementation 'tools.jackson.core:jackson-databind'
+
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
     // /actuator/prometheus 를 만드는 레지스트리. 없으면 엔드포인트 자체가 생기지 않는다.
