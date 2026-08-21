@@ -13,7 +13,6 @@ import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.yaml.snakeyaml.Yaml;
 
 /**
  * P-1(CY-213) 이 세운 scrape 설정이 <b>스스로 모순되지 않는지</b>를 본다.
@@ -117,50 +116,13 @@ class PrometheusScrapeConfigContractTest {
         }
     }
 
-    @Test
-    @DisplayName("batch 는 관측 풀과 health 상태 계약을 함께 켠다 — 한쪽만 켜면 기동에서 죽는다")
-    void batchDoesNotEnableTheObservationPoolWithoutTheHealthContract() throws IOException {
-        Path repo = repoRoot();
-        Path application = repo.resolve("batch/src/main/resources/application.yml.example");
-        Path management = repo.resolve("batch/src/main/resources/management.yml.example");
-
-        if (!observationPoolEnabled(application)) {
-            // 지금 상태다. api 의 order/group 블록을 batch 에 미리 복사해 두면 안 된다 —
-            // 실측: group.obs 만 넣고 띄우면 Boot 가 "Health contributor 'obsDb' defined in
-            // 'management.endpoint.health.group.obs.include' does not exist" 로 기동을 멈춘다.
-            assertThat(healthNodeOf(management))
-                    .as("관측 풀이 꺼져 있는데 group 을 미리 적으면 batch 가 아예 못 뜬다")
-                    .doesNotContainKey("group");
-            return;
-        }
-
-        // 켜는 순간 두 파일이 한 쌍이 된다. 켜기만 하고 여기를 안 채우면 관측 풀 장애가 합산
-        // 상태를 끌어내려 /actuator/health 가 503 이 되고, 배치가 죽은 것처럼 보인다.
-        @SuppressWarnings("unchecked")
-        Map<String, Object> status = (Map<String, Object>) healthNodeOf(management).get("status");
-        assertThat(status)
-                .as("observation.datasource.enabled 를 켰으면 status.order 가 있어야 한다."
-                        + " 목록에 없는 상태는 '가장 안 심각' 으로 취급된다")
-                .isNotNull();
-
-        List<String> order = statusOrder(status.get("order"));
-        int up = order.indexOf("UP");
-        assertThat(up)
-                .as("status.order 에 UP 이 있어야 나머지 순서를 판정할 수 있다")
-                .isNotNegative();
-        assertThat(order.indexOf("OBSERVATION_DOWN"))
-                .as("OBSERVATION_DOWN 이 UP 보다 뒤여야 관측 풀 장애만으로 인스턴스가"
-                        + " 로드밸런서에서 빠지지 않는다")
-                .isGreaterThan(up);
-        assertThat(order.indexOf("DOWN"))
-                .as("반대로 DOWN 이 UP 보다 앞이어야 진짜 장애가 200 에 묻히지 않는다")
-                .isBetween(0, up - 1);
-
-        assertThat(healthNodeOf(management))
-                .as("group.obs 가 없으면 관측 풀 장애를 볼 창구가 사라진다 — 합산은 UP 이라"
-                        + " 어디에도 안 드러난다")
-                .containsKey("group");
-    }
+    // batch 의 관측 풀 ↔ health group 계약은 여기서 보지 않는다. 두 파일 다 batch 소유이고
+    // batch/observation/DomainGaugeConfigContractTest 가 같은 계약을 이미 지킨다. 두 곳에 적어 둔
+    // 동안 실제로 갈라졌다 — CY-309 가 스위치를 ${OBSERVATION_DATASOURCE_ENABLED:true} 로 열자
+    // 이쪽 판정만 그 표기를 못 읽어, 켜진 설정에 "꺼졌을 때만 유효한 금지 조항" 을 들이대며
+    // 빨간불이 됐다. 저쪽은 기본값을 뽑아 읽어서 멀쩡했다.
+    //
+    // 이 파일의 본업은 "scrape 대상이 실제로 긁히는가" 다. 남의 모듈 설정은 그 모듈이 지킨다.
 
     @Test
     @DisplayName("scrape_timeout 은 interval 보다 작다 — 크면 Prometheus 가 기동조차 못 한다")
@@ -471,21 +433,6 @@ class PrometheusScrapeConfigContractTest {
         return defaultOf(String.valueOf(server.get("port")));
     }
 
-    /**
-     * {@code status.order} 는 YAML 리스트로도, 쉼표 문자열로도 쓸 수 있다 — Spring 의 Binder 가
-     * 양쪽을 다 받는다. api 의 example 은 쉼표 문자열이다.
-     *
-     * <p>이걸 리스트로만 읽었다가 실제로 깨졌다: 올바른 설정을 넣어 봤더니 통과가 아니라
-     * ClassCastException 이 났다. 가드를 일부러 깨뜨려 보지 않았으면 못 봤다 — 잘못된 설정에서는
-     * 어차피 실패라 통과/실패만 보면 똑같아 보였다.
-     */
-    private List<String> statusOrder(Object value) {
-        if (value instanceof String commaSeparated) {
-            return List.of(commaSeparated.split("\\s*,\\s*"));
-        }
-        return stringList(value);
-    }
-
     /** {@code 30d} 같은 보관 기간을 일 수로 바꾼다. 다른 단위는 읽지 않는다 — 여기서 멈춘다. */
     private long days(String retention) {
         if (retention.endsWith("d")) {
@@ -493,41 +440,6 @@ class PrometheusScrapeConfigContractTest {
         }
         throw new AssertionError("모르는 보관 기간 단위: " + retention
                 + " — 일(d) 단위로 쓰거나 여기를 넓혀라");
-    }
-
-    /** {@code management.endpoint.health} 하위 노드. 없으면 빈 맵이다. */
-    private Map<String, Object> healthNodeOf(Path managementYml) throws IOException {
-        Map<String, Object> node = loadYaml(managementYml);
-        for (String key : List.of("management", "endpoint", "health")) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> next = (Map<String, Object>) node.get(key);
-            if (next == null) {
-                return Map.of();
-            }
-            node = next;
-        }
-        return node;
-    }
-
-    /**
-     * {@code observation.datasource.enabled} 는 여러 문서(---)에 흩어져 있을 수 있어 마지막
-     * 문서까지 훑는다. 첫 문서만 보면 나중에 켜도 못 알아챈다.
-     */
-    private boolean observationPoolEnabled(Path applicationYml) throws IOException {
-        try (var in = Files.newInputStream(applicationYml)) {
-            for (Object document : new Yaml().loadAll(in)) {
-                if (!(document instanceof Map<?, ?> map)) {
-                    continue;
-                }
-                Object observation = map.get("observation");
-                if (observation instanceof Map<?, ?> node
-                        && node.get("datasource") instanceof Map<?, ?> datasource
-                        && Boolean.TRUE.equals(datasource.get("enabled"))) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private String exposureInclude(Path managementYml) throws IOException {

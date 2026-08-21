@@ -2,6 +2,7 @@ package com.kafkick.batch.observation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import java.util.Properties;
 
 import org.junit.jupiter.api.DisplayName;
@@ -106,6 +107,48 @@ class DomainGaugeConfigContractTest {
         // 그런데 관측을 끄면 그 기여자가 사라진다. 검증이 켜져 있으면 그 순간 기동이 실패한다.
         assertThat(template.getProperty("management.endpoint.health.validate-group-membership"))
             .isEqualTo("false");
+    }
+
+    /**
+     * 관측 풀을 켠 JVM 은 합산 상태 순서까지 함께 정해야 한다.
+     *
+     * <p>순서를 안 적으면 목록에 없는 상태가 "가장 안 심각" 으로 취급되어, 관측 풀 장애가
+     * {@code /actuator/health} 를 503 으로 끌어내리고 배치가 죽은 것처럼 보인다. 반대로
+     * {@code OBSERVATION_DOWN} 을 {@code UP} 앞에 두면 관측 풀 하나 때문에 인스턴스가
+     * 로드밸런서에서 빠진다.
+     *
+     * <p>이 단언은 원래 api 의 {@code PrometheusScrapeConfigContractTest} 에 있었다. batch 파일의
+     * 계약을 남의 모듈이 보고 있었고, 스위치가 {@code ${VAR:기본값}} 표기로 바뀌자 그쪽만 값을
+     * 못 읽어 빨간불이 됐다. 계약은 파일을 소유한 모듈이 지킨다.
+     */
+    @Test
+    @DisplayName("관측 풀을 켰으면 합산 상태 순서를 함께 정한다 — 안 그러면 배치가 죽은 것처럼 보인다")
+    void observationPoolComesWithAStatusOrder() {
+        Properties template = managementTemplate();
+
+        assertThat(enabledDefaultOf(applicationTemplate().getProperty("observation.datasource.enabled")))
+            .as("이 테스트는 관측 풀이 켜진 전제다. 끄기로 했다면 group.obs 도 함께 빠져야 한다")
+            .isTrue();
+
+        List<String> order = List.of(template
+            .getProperty("management.endpoint.health.status.order")
+            .split("\\s*,\\s*"));
+        int up = order.indexOf("UP");
+        assertThat(up)
+            .as("status.order 에 UP 이 있어야 나머지 순서를 판정할 수 있다")
+            .isNotNegative();
+        assertThat(order.indexOf("OBSERVATION_DOWN"))
+            .as("OBSERVATION_DOWN 이 UP 보다 뒤여야 관측 풀 장애만으로 인스턴스가"
+                + " 로드밸런서에서 빠지지 않는다")
+            .isGreaterThan(up);
+        assertThat(order.indexOf("DOWN"))
+            .as("반대로 DOWN 이 UP 보다 앞이어야 진짜 장애가 200 에 묻히지 않는다")
+            .isBetween(0, up - 1);
+    }
+
+    /** {@code ${VAR:true}} 표기에서 기본값만 뽑는다. 리터럴 {@code true} 도 받는다. */
+    private static boolean enabledDefaultOf(String placeholder) {
+        return Boolean.parseBoolean(placeholder.replaceAll("^\\$\\{[^:}]+:([^}]*)\\}$", "$1"));
     }
 
     /** {@code ${VAR:1000}} 표기에서 기본값만 뽑는다. */
