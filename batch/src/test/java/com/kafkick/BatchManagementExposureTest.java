@@ -27,7 +27,9 @@ import org.springframework.context.annotation.Configuration;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
                 "spring.config.location=file:build/batch-management-exposure/management.yml",
-                "management.server.port=0"
+                "management.server.port=0",
+                // 이 앱에는 관측 풀이 없다. obs 그룹 검증까지 켜면 노출 규칙과 무관한 이유로 깨진다.
+                "management.endpoint.health.validate-group-membership=false"
         })
 class BatchManagementExposureTest {
 
