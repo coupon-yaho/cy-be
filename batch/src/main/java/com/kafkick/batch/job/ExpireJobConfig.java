@@ -135,41 +135,6 @@ public class ExpireJobConfig {
 
 
     /**
-     * 만료 Step 의 트랜잭션 속성. <b>타임아웃과 격리 수준 둘을 담는다.</b>
-     *
-     * 만료 Step 만 READ COMMITTED 로 내린다. 이 잡이 발급을 막지 않게 하는 유일한 수단이다.
-     *
-     * REPEATABLE READ 는 팬텀을 막으려고 gap 을 잠근다. 그래서 status='ISSUED' 를 찾다가
-     * 다음 값('USED')에 next-key 락을 잡고, 그 gap 이 새 'ISSUED' 가 들어갈 자리라
-     * **신규 발급 INSERT 가 오류 1205 로 죽는다.** 인덱스로도 안 풀린다 — 막는 것이
-     * 스캔 범위가 아니라 잠금 위치이기 때문이다.
-     *
-     * 실측(5,000행·만료 대상 0건): 락 2 → 0, 발급 INSERT 1205 → 통과.
-     * 전체 수치와 재는 방법은 docs/12-expire-lock-measurement.md.
-     *
-     * 정합성은 낮춰도 선다. 이 잡의 멱등성은 EXPIRE_BATCH 의 status='ISSUED' 조건이
-     * 지키고, 뒤 문장들은 표식과 id 구간으로 집합을 되찾은 뒤 다섯 값을 서로 대조한다 —
-     * 스냅샷 시점에 기대는 구조가 아니다. 전체 테스트로 확인했다.
-     *
-     * ⚠️ 전제: binlog_format 이 ROW 또는 MIXED 여야 한다. STATEMENT 면 MySQL 이
-     *    READ COMMITTED 에서 InnoDB DML 을 오류 1665 로 거부한다. MySQL 8 기본값은 ROW 라
-     *    대개 문제없지만, 레거시 my.cnf 를 가져오면 배포 후 첫 만료 주기에 터진다 —
-     *    공용 테스트 컨테이너는 binlog 를 꺼 두어 이 조합을 재현하지 못하므로,
-     *    {@code BinlogFormatGuard} 가 기동 때 막고 {@code BinlogFormatGuardTest} 가
-     *    컨테이너를 따로 띄워 양방향으로 확인한다.
-     *
-     * ⚠️ verifyJob 에는 걸지 마라. 그쪽은 판정 시점을 얼려야 하므로 격리 수준이
-     *    낮아지면 dataset_fingerprint 재료가 실행 중에 흔들린다.
-     */
-    private static TransactionAttribute expireStepTransaction(long millis) {
-        DefaultTransactionAttribute attribute = new DefaultTransactionAttribute();
-        attribute.setTimeout(Math.toIntExact(millis / 1_000));
-        attribute.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-
-        return attribute;
-    }
-
-    /**
      * 청크마다 여섯 문장이 한 트랜잭션에서 돈다 — 넘기고 · 경계를 찾고 · 이력을 남기고 ·
      * 회차를 세고 · 재고 행을 세고 · 재고를 되돌린다.
      *
@@ -266,5 +231,40 @@ public class ExpireJobConfig {
                 }, transactionManager)
                 .transactionAttribute(stepTransaction)
                 .build();
+    }
+
+    /**
+     * 만료 Step 의 트랜잭션 속성. <b>타임아웃과 격리 수준 둘을 담는다.</b>
+     *
+     * 만료 Step 만 READ COMMITTED 로 내린다. 이 잡이 발급을 막지 않게 하는 유일한 수단이다.
+     *
+     * REPEATABLE READ 는 팬텀을 막으려고 gap 을 잠근다. 그래서 status='ISSUED' 를 찾다가
+     * 다음 값('USED')에 next-key 락을 잡고, 그 gap 이 새 'ISSUED' 가 들어갈 자리라
+     * **신규 발급 INSERT 가 오류 1205 로 죽는다.** 인덱스로도 안 풀린다 — 막는 것이
+     * 스캔 범위가 아니라 잠금 위치이기 때문이다.
+     *
+     * 실측(5,000행·만료 대상 0건): 락 2 → 0, 발급 INSERT 1205 → 통과.
+     * 전체 수치와 재는 방법은 docs/12-expire-lock-measurement.md.
+     *
+     * 정합성은 낮춰도 선다. 이 잡의 멱등성은 EXPIRE_BATCH 의 status='ISSUED' 조건이
+     * 지키고, 뒤 문장들은 표식과 id 구간으로 집합을 되찾은 뒤 다섯 값을 서로 대조한다 —
+     * 스냅샷 시점에 기대는 구조가 아니다. 전체 테스트로 확인했다.
+     *
+     * ⚠️ 전제: binlog_format 이 ROW 또는 MIXED 여야 한다. STATEMENT 면 MySQL 이
+     *    READ COMMITTED 에서 InnoDB DML 을 오류 1665 로 거부한다. MySQL 8 기본값은 ROW 라
+     *    대개 문제없지만, 레거시 my.cnf 를 가져오면 배포 후 첫 만료 주기에 터진다 —
+     *    공용 테스트 컨테이너는 binlog 를 꺼 두어 이 조합을 재현하지 못하므로,
+     *    {@code BinlogFormatGuard} 가 기동 때 막고 {@code BinlogFormatGuardTest} 가
+     *    컨테이너를 따로 띄워 양방향으로 확인한다.
+     *
+     * ⚠️ verifyJob 에는 걸지 마라. 그쪽은 판정 시점을 얼려야 하므로 격리 수준이
+     *    낮아지면 dataset_fingerprint 재료가 실행 중에 흔들린다.
+     */
+    private static TransactionAttribute expireStepTransaction(long millis) {
+        DefaultTransactionAttribute attribute = new DefaultTransactionAttribute();
+        attribute.setTimeout(Math.toIntExact(millis / 1_000));
+        attribute.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+
+        return attribute;
     }
 }
