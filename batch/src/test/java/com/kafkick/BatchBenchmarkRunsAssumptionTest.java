@@ -72,6 +72,9 @@ class BatchBenchmarkRunsAssumptionTest {
         assertThat(createsBenchmarkRuns(
                 "-- don't do this\nCREATE TABLE `benchmark_runs` (id bigint);\nINSERT INTO t VALUES ('x');"))
                 .isTrue();
+        // MySQL 은 `/*!` 로 시작하는 블록을 주석이 아니라 코드로 실행한다(실측 확인).
+        assertThat(createsBenchmarkRuns(
+                "/*!80000 CREATE TABLE `benchmark_runs` (id bigint) */;")).isTrue();
         // 블록 주석 안의 DDL 도 생성이 아니다.
         assertThat(createsBenchmarkRuns("/* CREATE TABLE benchmark_runs (id) */")).isFalse();
         assertThat(createsBenchmarkRuns(
@@ -140,6 +143,11 @@ class BatchBenchmarkRunsAssumptionTest {
                     index++;
                 }
                 executable.append(' ');
+            } else if (sql.startsWith("/*!", index)) {
+                // MySQL 실행 주석. 서버가 이 안을 코드로 실행하므로 남긴다 — 버전 조건
+                // (`/*!80000 ...*/`)이 맞지 않아 건너뛰는 경우까지 구분하려면 서버 버전을 알아야
+                // 하는데, 한 번 더 울리는 것보다 놓치는 쪽이 나쁘다. 실측으로 확인했다.
+                index += 3;
             } else if (sql.startsWith("/*", index)) {
                 index += 2;
                 while (index < sql.length() && !sql.startsWith("*/", index)) {
