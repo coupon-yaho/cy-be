@@ -48,7 +48,7 @@ jobs:
   build:
     name: 빌드·테스트
     runs-on: ubuntu-latest
-    # 로컬 clean build 2분 20초. Testcontainers 가 mysql:8.0.35 를 내려받고
+    # 로컬 clean build 2분 20초. Testcontainers 가 mysql:latest 를 내려받고
     # 컨테이너를 여러 번 띄우므로 CI 는 그보다 오래 걸린다. 넉넉히 두되 무한은 아니다.
     timeout-minutes: 30
 

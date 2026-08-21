@@ -1,0 +1,73 @@
+# 배치 서버 알림 규칙. 관제(Prometheus)가 그대로 가져다 쓴다.
+#
+# 여기 적힌 메트릭은 우리가 만든 것이 아니라 Spring Batch 가 Micrometer 로 자동 등록하고,
+# 관리 포트(기본 9091)의 /actuator/prometheus 로 나간다. 그래서 의존성이 오르거나
+# 노출 목록이 좁아지면 **우리도 모르게 사라질 수 있다.** 그것을 막으려고
+# BatchMetricExposureTest 가 이 파일을 직접 읽어, 여기 쓰인 이름이 실제로 나오는지 대조한다.
+# 규칙을 추가할 때 새 메트릭을 쓰면 그 테스트가 먼저 확인해 준다.
+#
+# 세 규칙의 성격이 다르다.
+#   실패    — 신호가 있다. 잡이 FAILED 로 끝나면 로그(ERROR)와 메트릭 양쪽에 남는다.
+#   멈춤    — **신호가 없다.** 이것이 가장 위험하다. 서버가 죽었거나, 누가
+#             BATCH_SCHEDULING_ENABLED=false 로 띄웠거나, 크론이 틀렸을 때가 여기다.
+#             "일어난 일" 이 아니라 "안 일어난 일" 이라 없는 것을 감시해야 잡힌다.
+#   지연    — 주기보다 오래 끈다. 한 번은 넘어가도 이어지면 다음 주기와 겹친다.
+
+groups:
+  - name: cy-batch
+    rules:
+
+      # 잡이 스스로 멈춘 경우. 만료 배치에는 그런 자리가 셋 있다 —
+      # 이력 수가 만료 건수와 다를 때, 재고 행이 없는 회차가 있을 때,
+      # 뺄 재고가 만료 건수보다 적은 회차가 있을 때.
+      # 셋 다 데이터가 이미 어긋났다는 뜻이라 다시 돌린다고 낫지 않는다. 사람이 봐야 한다.
+      - alert: BatchJobFailed
+        expr: increase(spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "배치 잡이 실패했다 ({{ $labels.spring_batch_job_name }})"
+          description: >-
+            다시 돌린다고 낫는 실패가 아닐 수 있다.
+            배치 서버 로그에서 같은 시각의 ERROR 를 찾아 원인을 먼저 본다.
+
+      # 아예 안 도는 상태. 만료가 밀리면 기한 지난 쿠폰이 계속 살아 있고,
+      # 그만큼 재고(active_count)가 안 돌아와 발급 가능 수량이 줄어든 채로 유지된다.
+      #
+      # absent_over_time 을 or 로 붙인 이유 — 스크레이프 자체가 끊기면 시계열이 사라져서
+      # increase(...) == 0 은 **평가할 대상이 없어 조용해진다.** 서버가 죽은 경우가 그렇고,
+      # 그게 정확히 이 규칙이 잡아야 할 상황이다.
+      # sum by 로 접는 것이 핵심이다. 이 카운터는 spring_batch_job_status 라벨로 쪼개지므로,
+      # 접지 않으면 increase(...) == 0 이 **시계열마다** 평가된다. 잡이 한 번 FAILED 로 끝나면
+      # 그 계열이 계속 남아서, 이후 잡이 5분마다 정상 완료해도 {status="FAILED"} 쪽 증가분이 0 이라
+      # 조건이 참이 된다 — "안 돌았다" 가 실제로는 "최근 15분간 성공만 했다" 일 때 뜬다.
+      - alert: BatchJobNotRunning
+        expr: >-
+          sum by (spring_batch_job_name) (
+            increase(spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}[15m])
+          ) == 0
+          or absent_over_time(spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}[15m])
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "만료 배치가 15분째 안 돌았다 (주기는 5분)"
+          description: >-
+            배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지,
+            batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다.
+
+      # 주기보다 오래 끄는 상태. **겹치지는 않는다** — 스프링의 ReschedulingRunnable 이 다음
+      # 실행을 직전 실행이 끝난 뒤에 잡으므로, 5분을 넘기면 그 사이의 크론 슬롯이 통째로 사라진다.
+      # 로그에는 아무것도 안 남고 만료 주기만 조용히 길어진다(ExpireScheduler javadoc 참조).
+      # 그래서 이 알림이 지연을 아는 유일한 통로다.
+      - alert: BatchJobRunningTooLong
+        expr: spring_batch_job_active_seconds_max{spring_batch_job_name="expireJob"} > 300
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "만료 배치가 주기(5분)보다 오래 돌고 있다"
+          description: >-
+            넘길 대상이 밀려 있거나 한 청크가 오래 걸린다.
+            BATCH_STEP_EXECUTION 의 WRITE_COUNT 로 실제 처리량을 먼저 확인한다.
