@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,7 +48,7 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.expire.chunk-size=100"
 })
 @Import({MySqlContainerConfig.class, ExpireGuardTest.ShrinkStockRowCountConfig.class,
-        ExpireGuardTest.FixedClockConfig.class})
+        ExpireGuardTest.LeakingExclusionConfig.class, ExpireGuardTest.FixedClockConfig.class})
 class ExpireGuardTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
@@ -75,6 +76,7 @@ class ExpireGuardTest {
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
         ShrinkStockRowCountConfig.off();
+        LeakingExclusionConfig.off();
     }
 
     /**
@@ -172,6 +174,56 @@ class ExpireGuardTest {
                 .anyMatch(message -> message.contains("다음 주기가 알아서 지나갑니다"));
     }
 
+    /**
+     * <b>이 가드는 이제 데이터가 아니라 코드를 가리킨다.</b>
+     *
+     * <p>회차 격리가 들어오기 전에는 재고가 어긋난 회차를 <b>실제 데이터로</b> 심으면 여기
+     * 도달했다. 지금은 {@code blockedCoupons} 가 그런 회차를 창 밖으로 미리 빼므로,
+     * <b>데이터로는 이 분기에 갈 수 없다.</b> 그러면 <i>"도달할 수 없는 가드는 없는 가드와
+     * 같다"</i> 는 이 저장소의 기준에 걸린다 — 그래서 도달 경로를 주입으로 만든다.
+     *
+     * <p><b>주입하는 것이 반환값이 아니라 제외 목록인 것이 핵심이다.</b> 가드의 새 뜻이
+     * <i>"제외 논리가 틀렸거나 재고가 발밑에서 움직였다"</i> 이므로, 재현해야 하는 것도
+     * 정확히 그것 — <b>제외가 새는 상황</b>이다. {@code releaseStock} 의 반환값을 인위적으로
+     * 줄이면 숫자는 같지만 뜻이 다른 상황을 재게 된다.
+     *
+     * <p>누가 {@code blockedCoupons} 의 {@code active_count < pending} 을 {@code <=} 로
+     * 바꾸거나 {@code EXPIRE_BATCH} 의 {@code NOT IN} 절을 지우면 실제로 이 모양이 된다.
+     * 그때 <b>재고를 안 되돌린 {@code EXPIRED} 가 조용히 커밋되지 않고</b> 여기서 죽는다.
+     */
+    @Test
+    @DisplayName("제외 논리가 회차를 놓치면 그 자리에서 죽는다 — STOCK_UNDERFLOW")
+    void failsWhenExclusionLeaksACoupon() throws Exception {
+        long first = expiringIssuance();
+        long second = expiringIssuance();
+        seed.overwriteStock(1);
+
+        LeakingExclusionConfig.on();
+        JobExecution execution = launch(AS_OF);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(JobFailures.errorCodesOf(execution))
+                .as("재고 행은 있다. 모자란 것은 수량이라 사람이 볼 곳이 다르다")
+                .contains(ExpirationErrorCode.STOCK_UNDERFLOW.getCode())
+                .doesNotContain(ExpirationErrorCode.STOCK_ROW_MISSING.getCode());
+        assertThat(statusOf(first))
+                .as("청크가 통째로 되돌아간다 — 재고를 안 되돌린 EXPIRED 는 커밋되면 안 된다")
+                .isEqualTo(IssuanceStatus.ISSUED.name());
+        assertThat(statusOf(second)).isEqualTo(IssuanceStatus.ISSUED.name());
+        assertThat(activeCount())
+                .as("재고도 그대로다")
+                .isEqualTo(1);
+    }
+
+    private long expiringIssuance() {
+        long id = seed.issuance(IssuanceStatus.ISSUED);
+        jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
+                .param("at", AS_OF.minusDays(1))
+                .param("id", id)
+                .update();
+        return id;
+    }
+
     private JobExecution launch(LocalDateTime asOf) throws Exception {
         return jobOperator.start(expireJob, new JobParametersBuilder()
                 .addLocalDateTime("asOf", asOf)
@@ -206,6 +258,34 @@ class ExpireGuardTest {
         @Primary
         Clock fixedClock() {
             return Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        }
+    }
+
+    /**
+     * {@code blockedCoupons} 만 <b>빈 목록</b>으로 덮는다. 제외 논리가 샌 상태를 재현한다 —
+     * 어긋난 회차가 창 안으로 그대로 들어온다.
+     */
+    @TestConfiguration
+    static class LeakingExclusionConfig {
+
+        private static volatile boolean leak;
+
+        static void on() {
+            leak = true;
+        }
+
+        static void off() {
+            leak = false;
+        }
+
+        @Bean
+        static BeanPostProcessor leakExclusion() {
+            return ExpirationProxies.decorating((real, method, args) -> {
+                if (leak && "blockedCoupons".equals(method.getName())) {
+                    return List.of();
+                }
+                return ExpirationProxies.callThrough(real, method, args);
+            });
         }
     }
 

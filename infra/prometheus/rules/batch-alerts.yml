@@ -18,17 +18,22 @@ groups:
     rules:
 
       # 잡이 스스로 멈춘 경우. 만료 배치에는 그런 자리가 넷 있다 —
-      #   EXPIRE_HISTORY_COUNT_MISMATCH · STOCK_UNDERFLOW → 데이터가 이미 어긋났다. 사람이 본다
+      #   EXPIRE_HISTORY_COUNT_MISMATCH → 우리 쓰기가 어긋났다. 이력이 빠진 발급건을 찾는다
       #   EXPIRE_ASOF_IN_FUTURE  → 넘긴 파라미터가 틀렸다. 손 트리거에서만 열리고,
       #                            EXPIRED 는 종단이라 이미 넘어간 건은 되돌릴 수 없다
-      #   STOCK_ROW_MISSING      → **다음 주기가 지나갈 수 있다.** 누가 재고 행을 만드는
-      #                            중이면 자연 해소된다. 연속 두 주기 이상 나면 그때 사람이 본다
+      #   STOCK_ROW_MISSING · STOCK_UNDERFLOW
+      #                          → **CY-347 이후 뜻이 바뀌었다.** 이미 어긋난 재고는
+      #                            blockedCoupons 가 창 밖으로 빼므로 여기 안 온다.
+      #                            여기 왔다면 제외 논리가 새거나 실행 중 재고가 움직인 것이라
+      #                            봐야 할 곳은 데이터가 아니라 코드/동시 쓰기다.
       #
       # ⚠️ 넷을 갈라서 알릴 수단이 지금 메트릭에 없다 — spring_batch_job_seconds_count 에
       #    에러코드 라벨이 없어서, 이 알림은 넷을 한 덩어리로 본다.
-      # 이력 수가 만료 건수와 다를 때, 재고 행이 없는 회차가 있을 때,
-      # 뺄 재고가 만료 건수보다 적은 회차가 있을 때.
-      # 셋 다 데이터가 이미 어긋났다는 뜻이라 다시 돌린다고 낫지 않는다. 사람이 봐야 한다.
+      # 어느 자리였는지는 배치 서버 로그의 ERROR 에 EXPIRATION-00N 으로만 남는다.
+      # 위 목록이 각각 어디를 봐야 하는지 적고 있다 —
+      # 셋(HISTORY_COUNT_MISMATCH · STOCK_ROW_MISSING · STOCK_UNDERFLOW)은 코드를,
+      # ASOF_IN_FUTURE 는 넘긴 파라미터를 본다.
+      # **데이터를 보러 가는 자리는 이제 없다.**
       # increase() 만으로는 **첫 실패를 영원히 못 잡는다.** 이 카운터는 status 별로 시계열이
       # 갈리고 FAILED 계열은 첫 실패 때 값 1 로 태어난다. 창 안에 샘플이 하나뿐이면
       # 델타가 0 이라 조건이 거짓이다. 데드락으로 만료가 한 번 희생되는 일회성 실패가

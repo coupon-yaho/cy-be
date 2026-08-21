@@ -2,10 +2,15 @@
 package com.kafkick.batch.job;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.job.Job;
-import org.springframework.batch.core.job.parameters.DefaultJobParametersValidator;
 import org.springframework.batch.core.job.builder.JobBuilder;
+import org.springframework.batch.core.job.parameters.DefaultJobParametersValidator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
@@ -22,9 +27,9 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
 import com.kafkick.batch.config.BinlogFormatGuard;
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.expiration.ExpirationRepository;
-import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 /**
  * <b>재고를 쓰는 유일한 잡이다.</b> 나머지 배치는 원본을 읽기만 한다.
@@ -54,6 +59,8 @@ import com.kafkick.core.support.TimeProvider;
 @Configuration(proxyBeanMethods = false)
 public class ExpireJobConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(ExpireJobConfig.class);
+
     /**
      * 한 실행 안에서의 진도. 청크가 앞 구간을 다시 훑지 않게 한다.
      *
@@ -66,6 +73,25 @@ public class ExpireJobConfig {
      * 통과한 청크의 <b>맨 끝</b>에서만 옮겨진다. 롤백된 청크는 진도를 안 남긴다.
      */
     static final String AFTER_ID_KEY = "expire.afterId";
+
+    /**
+     * 이 실행에서 손대지 않을 회차. 쉼표로 이어 문맥에 싣는다.
+     *
+     * <p><b>실행당 한 번만 계산한다.</b> 이 질의는 남은 대기 <b>전체</b>를 회차별로 묶으므로
+     * 비용이 대기 건수에 비례한다. 청크마다 부르면 그것이 청크 수만큼 곱해지고, 한 번이면
+     * 스캔 하나가 늘 뿐이다 — <b>대기가 없는 날은 거의 공짜</b>이고 하루 288회 중 대부분이
+     * 그 경로다. (실제 소요는 300만 건을 적재한 뒤에 잰다. 축소 픽스처에서 잰 값은 운영
+     * 규모를 대변하지 못한다 — {@code docs/13-batch-follow-ups.md} 에 남겼다.)
+     *
+     * <p><b>값에 {@code JobExecution} 세대를 함께 싣는다.</b> Step 문맥은 청크 커밋마다
+     * 영속되고 <b>재시작이 그대로 복원한다.</b> 세대를 안 보면 재시작이 이전 실행의 목록을
+     * 쓰게 되어, 그 사이 새로 어긋난 회차를 못 보고 <b>같은 자리에서 영원히 죽는다</b> —
+     * 이 티켓이 없앤 모양이 재시작 축에 그대로 남는 것이다.
+     */
+    static final String BLOCKED_COUPONS_KEY = "expire.blockedCoupons";
+
+    /** 세대와 목록을 가르는 문자. 회차 id 에도 쉼표에도 안 나온다. */
+    private static final String GENERATION_SEPARATOR = "|";
 
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
@@ -133,10 +159,10 @@ public class ExpireJobConfig {
                 .build();
     }
 
-
     /**
      * 청크마다 여섯 문장이 한 트랜잭션에서 돈다 — 넘기고 · 경계를 찾고 · 이력을 남기고 ·
-     * 회차를 세고 · 재고 행을 세고 · 재고를 되돌린다.
+     * 회차를 세고 · 재고 행을 세고 · 재고를 되돌린다. <b>첫 청크만 일곱이다</b> —
+     * 그 앞에 제외 목록을 한 번 구한다.
      *
      * <p><b>나눠 담으면 중간 상태가 남는다.</b> 상태만 바뀌고 재고가 안 돌아온 채 죽으면
      * 검증이 그것을 재고 불일치로 잡는다. 실제로는 이 잡이 덜 끝난 것인데 데이터가 틀렸다고 나온다.
@@ -173,7 +199,12 @@ public class ExpireJobConfig {
                                         + "asOf=" + asOf + " now=" + committedAt);
                     }
 
-                    int expired = expirations.expireBatch(asOf, committedAt, afterId, chunkSize);
+                    long generation = chunkContext.getStepContext().getStepExecution()
+                            .getJobExecutionId();
+                    List<Long> blocked = blockedCoupons(context, expirations, asOf, generation);
+
+                    int expired = expirations.expireBatch(
+                            asOf, committedAt, afterId, chunkSize, blocked);
                     if (expired == 0) {
                         return RepeatStatus.FINISHED;
                     }
@@ -194,8 +225,11 @@ public class ExpireJobConfig {
                                         + "만료=" + expired + " 이력=" + histories);
                     }
 
-                    // 셋을 함께 봐야 두 실패가 갈린다. 하나로 뭉치면 원인이 섞인 메시지가
-                    // 나가고, 운영자가 없는 재고 행을 찾다가 실제로는 수량이 모자란 것을 놓친다.
+                    // 아래 둘은 이제 "오염 데이터를 만났다" 가 아니다 — 그것은 blockedCoupons 가
+                    // 애초에 창 밖으로 뺀다. 여기까지 왔다는 것은 **제외 논리가 틀렸거나 재고가
+                    // 발밑에서 움직였다** 는 뜻이고, 그건 판정이 아니라 사고라 실패가 맞다.
+                    // (취소·사용 경로가 붙으면 실행 도중 active_count 가 줄 수 있다.
+                    //  그 티켓에서 이 자리를 다시 본다.)
                     int coupons = expirations.expiredCouponCount(asOf, committedAt, afterId, lastId);
                     int stockRows = expirations.stockRowCount(asOf, committedAt, afterId, lastId);
                     if (stockRows != coupons) {
@@ -266,5 +300,52 @@ public class ExpireJobConfig {
         attribute.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
 
         return attribute;
+    }
+
+    /**
+     * 이 실행에서 손대지 않을 회차. <b>첫 청크에서 한 번 구하고 문맥에 실어 재사용한다.</b>
+     *
+     * <p><b>재고가 어긋난 회차를 애초에 창 밖으로 뺀다.</b> 예전에는 넘긴 뒤에 가드가 그것을
+     * 발견하고 청크를 통째로 되돌렸다 — 오염 회차 하나가 같은 청크의 남의 회차까지 되돌리고,
+     * 진도가 실행 사이로 안 넘어가니 다음 주기도 같은 자리에서 죽어 <b>그 뒤 id 의 만료가
+     * 영구히 밀렸다.</b> 설계는 <i>"데이터가 틀렸다는 판정이 나와도 배치는 정상 종료"</i> 로
+     * 정했는데 그 반대였다.
+     *
+     * <p><b>왜 청크마다 다시 안 구하나.</b> 그러면 남은 후보 전체를 매번 훑는다. 그리고
+     * 청크 기준으로 막힘을 정의하면 <b>제외한 만큼 {@code LIMIT} 자리가 비어 다른 행이
+     * 창 안으로 들어오는데</b>, 그 회차는 판정한 적이 없어 또 막혀 있을 수 있다 —
+     * 재고 없이 만료된 상태가 커밋된다. 남은 대기 전체와 견주면 제외 대상이 창 구성과
+     * 무관해져서, 밀려 들어오는 것은 언제나 성한 회차뿐이다.
+     *
+     * <p><b>그래서 차감이 반드시 성공한다.</b> 성한 회차는
+     * {@code Σ(청크별 만료 수) ≤ 대기 전체 ≤ active_count} 다. 오른쪽은 제외 조건이 준다.
+     * <b>왼쪽이 서려면 "대기 전체" 가 그 실행이 넘길 수 있는 모든 행의 상계여야 한다</b> —
+     * 그래서 {@link ExpirationRepository#blockedCoupons} 가 {@code committedAt} 창을
+     * 안 건다. 창을 걸면 뒤 청크의 창이 더 넓어져 왼쪽이 오른쪽의 부분집합이 아니게 되고,
+     * 차감 합계가 {@code active_count} 를 넘어 {@code STOCK_UNDERFLOW} 로 죽는다.
+     *
+     * <p><b>단서: {@code active_count} 가 실행 도중 줄면 이 부등식도 흔들린다.</b> 지금은
+     * 취소·사용 경로가 없어 줄이는 주체가 이 잡뿐이다. 그 경로가 붙는 티켓에서 다시 본다.
+     */
+    private static List<Long> blockedCoupons(ExecutionContext context,
+            ExpirationRepository expirations, LocalDateTime asOf, long generation) {
+        String prefix = generation + GENERATION_SEPARATOR;
+        String cached = context.getString(BLOCKED_COUPONS_KEY, "");
+        if (cached.startsWith(prefix)) {
+            String ids = cached.substring(prefix.length());
+            return ids.isEmpty() ? List.of()
+                    : Arrays.stream(ids.split(",")).map(Long::valueOf).toList();
+        }
+
+        List<Long> blocked = expirations.blockedCoupons(asOf);
+        context.putString(BLOCKED_COUPONS_KEY, prefix
+                + blocked.stream().map(String::valueOf).collect(Collectors.joining(",")));
+        if (!blocked.isEmpty()) {
+            // 배치는 정상 종료한다. 이것은 데이터를 봐야 하는 사건이지 서버를 볼 사건이 아니다.
+            log.warn("재고가 어긋나 이번 실행에서 건너뛰는 회차가 있습니다. "
+                    + "만료는 나머지 회차로 계속 진행합니다. 회차수={} 회차={}",
+                    blocked.size(), blocked);
+        }
+        return blocked;
     }
 }

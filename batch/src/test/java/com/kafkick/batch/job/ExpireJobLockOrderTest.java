@@ -128,6 +128,12 @@ class ExpireJobLockOrderTest {
         assertThat(RecordingConfig.CALLS)
                 .as("재고를 이력보다 먼저 잡으면 발급 경로와 순서가 역전돼 데드락이 난다")
                 .containsExactly(
+                        // 순서 계약 밖이다 — 락을 안 잡기 때문이다. 다만 **그 성질을
+                        // 지키는 것은 이 테스트가 아니다.** 여기는 이름의 순서만 보므로
+                        // FOR SHARE 가 붙어도 초록이다. 실제로 재는 것은
+                        // ExpirationLockScopeTest.readOnlyQueriesTakeNoLocks 다.
+                        // 여기 적는 이유는 따로다 — 호출이 하나 는 것을 이 목록이 잡는다.
+                        "blockedCoupons",
                         "expireBatch",
                         "lastExpiredId",
                         "appendExpireHistories",

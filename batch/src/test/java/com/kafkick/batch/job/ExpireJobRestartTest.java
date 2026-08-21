@@ -176,6 +176,65 @@ class ExpireJobRestartTest {
                 .isEqualTo(3);
     }
 
+    /**
+     * <b>재시작은 제외 목록을 다시 구해야 한다.</b>
+     *
+     * <p>제외 목록은 Step 의 {@code ExecutionContext} 에 실리는데, 그 문맥은 청크 커밋마다
+     * 영속되고 <b>재시작이 그대로 복원한다.</b> 그래서 아무 표식 없이 캐시하면 "실행당 한 번"
+     * 이 아니라 <b>"JobInstance 당 한 번"</b> 이 된다 — 첫 실행과 재시작 사이에 새로 어긋난
+     * 회차를 낡은 목록이 못 보고, 그 회차에서 또 죽고, 다음 재시작도 같은 낡은 목록을
+     * 복원해 <b>같은 자리에서 영원히 죽는다.</b> 이 티켓이 없앤 모양이 재시작 축에 그대로
+     * 남는 것이다.
+     *
+     * <p>반대 방향도 나쁘다 — 그 사이 사람이 재고를 고친 회차가 계속 제외된 것으로 잡혀
+     * {@code cy_expire_blocked_pending} 이 부풀고, 그만큼 누락 알림이 침묵한다.
+     *
+     * <p>그래서 값에 {@code JobExecution} 세대를 함께 싣고, 세대가 다르면 다시 계산한다.
+     */
+    @Test
+    @DisplayName("재시작은 제외 목록을 다시 구한다 — 낡은 목록으로 같은 자리에서 안 죽는다")
+    void recomputesExclusionOnRestart() throws Exception {
+        List<Long> healthy = expiredIssuances(5);
+        seed.overwriteStock(5);
+
+        FailAtChunkConfig.failFromCall(3);
+        JobExecution first = launch();
+        assertThat(first.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(expiredCount())
+                .as("첫 실행에는 어긋난 회차가 없어 제외 목록이 비어 있었다")
+                .isEqualTo(2);
+
+        // 첫 실행과 재시작 사이에 회차 하나가 어긋난다. 낡은 목록에는 이것이 없다.
+        long broken = seed.newCoupon();
+        long brokenFirst = expiredIssuance();
+        long brokenSecond = expiredIssuance();
+        seed.overwriteStock(1);
+
+        FailAtChunkConfig.neverFail();
+        JobExecution second = launch();
+
+        assertThat(second.getStatus())
+                .as("**낡은 목록을 쓰면 어긋난 회차가 창 안으로 들어와 STOCK_UNDERFLOW 로 "
+                        + "죽는다.** 그리고 다음 재시작도 같은 목록을 복원해 또 죽는다")
+                .isEqualTo(BatchStatus.COMPLETED);
+        assertThat(statusOf(brokenFirst))
+                .as("다시 구한 목록에는 회차 %d 가 들어 있어야 한다", broken)
+                .isEqualTo(IssuanceStatus.ISSUED.name());
+        assertThat(statusOf(brokenSecond)).isEqualTo(IssuanceStatus.ISSUED.name());
+        assertThat(statusOf(healthy.get(4)))
+                .as("성한 회차의 나머지는 그대로 넘어간다")
+                .isEqualTo(IssuanceStatus.EXPIRED.name());
+    }
+
+    private long expiredIssuance() {
+        long id = seed.issuance(IssuanceStatus.ISSUED);
+        jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
+                .param("at", AS_OF.minusDays(1))
+                .param("id", id)
+                .update();
+        return id;
+    }
+
     private List<Long> expiredIssuances(int count) {
         List<Long> ids = new ArrayList<>();
         for (int i = 0; i < count; i++) {
@@ -285,8 +344,9 @@ class ExpireJobRestartTest {
             // 파라미터 이름으로는 못 본다 — core 모듈은 -parameters 없이 컴파일돼
             // arg0..arg3 로만 남는다. 대신 타입 배치를 그대로 요구한다.
             Class<?>[] types = method.getParameterTypes();
-            boolean sameShape = types.length == 4 && args.length == 4
-                    && types[2] == long.class && types[3] == int.class;
+            boolean sameShape = types.length == 5 && args.length == 5
+                    && types[2] == long.class && types[3] == int.class
+                    && types[4] == List.class;
             if (!sameShape) {
                 throw new IllegalStateException(
                         "expireBatch 시그니처가 바뀌었다. 3번째 인자가 afterId 라는 전제로 진도를 "
