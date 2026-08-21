@@ -63,13 +63,21 @@ bash docs/measurements/expire-lock-scope.sh
 `issuances` 에는 보조 인덱스가 **없었다**. 300만 건에서 느린 쿼리를 직접 겪고 개선폭을 재서
 도입 시점을 정하려고 비워 둔 자리다(`cy-seed/ddl/90_perf_indexes_optional.sql`).
 
-만료 배치의 첫 문장이 이것이다.
+만료 배치의 첫 문장이 이것이었다.
 
 ```sql
 UPDATE issuances SET status = 'EXPIRED', updated_at = :committedAt
  WHERE status = 'ISSUED' AND expires_at < :asOf AND id > :afterId
  ORDER BY id LIMIT :limit
 ```
+
+> **지금 문장은 술어가 둘 더 있다.** `AND updated_at <= :committedAt`(캡처 창)과
+> `AND coupon_id NOT IN (:blockedCoupons)`(회차 격리, CY-347)이다. 아래 수치는 **그 둘이
+> 붙기 전에** 잰 값이고, 여기 적힌 결론(V11 을 고르느냐가 락과 스캔을 가른다)은 그대로다 —
+> 술어가 붙어도 실행계획이 안 바뀌는 것은 `ExpirationLockScopeTest` 의
+> `keepsScanBoundedWhenExclusionFiltersCandidates` 가 지킨다. 제외 판정 질의
+> (`BLOCKED_COUPONS`)는 `keepsBlockedCouponScanProportionalToPending` 이 따로 잰다.
+> **절대 수치 재측정은 300만 건 적재 후다**(`docs/13` §1 "남은 것").
 
 `status`·`expires_at` 에 인덱스가 없으니 PK 를 id 순으로 훑는다. 그러면서 **지나간 행을 잠근다.**
 
