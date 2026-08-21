@@ -502,4 +502,60 @@ class ExpirationJdbcAdapterTest {
                 .as("USED 에도 EXPIRE 가 열리면 EXPIRE_BATCH 의 status='ISSUED' 필터를 함께 고쳐야 한다")
                 .isEmpty();
     }
+
+    /**
+     * <b>{@code asOf} 백데이트 금지의 쌍둥이다.</b> 그쪽은 컷을, 이쪽은 <b>시각을 잡은 뒤의
+     * 창</b>을 막는다.
+     *
+     * <p>잡은 {@code committedAt} 을 먼저 잡고 그 뒤에 스캔을 돈다. 그 사이 런타임이 상태를
+     * 바꾼 행까지 매치하면 그 행에 <b>과거 시각이 찍히고</b>, 리플레이 정렬
+     * {@code (issuance_id, created_at, id)} 에서 우리 이력이 나중 사건보다 앞서게 된다.
+     * 더미데이터에 <i>"USED 중 20% 복원"</i> 이 있어 그 조합은 반드시 나온다.
+     */
+    @Test
+    @DisplayName("시각을 잡은 뒤에 바뀐 행은 이번 청크에서 빠진다")
+    void skipRowsChangedAfterCommittedAt() {
+        long target = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        // 우리가 committedAt 을 잡은 뒤 런타임이 이 행을 건드린 것을 흉내낸다.
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", WROTE_AT.plusSeconds(1))
+                .param("id", target)
+                .update();
+
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT))
+                .as("이번 청크는 건너뛴다. 다음 주기가 새 committedAt 으로 집는다")
+                .isZero();
+        assertThat(statusOf(target)).isEqualTo(IssuanceStatus.ISSUED.name());
+    }
+
+    /**
+     * <b>재고 시각은 뒤로 물러나면 안 된다.</b> 검증의 {@code hasStocksUpdatedAfter} 가
+     * 그 단조성 위에 서 있고, 이력 축과 달리 재고 축에는 백데이트 전용 가드가 없다.
+     *
+     * <p>{@code RELEASE_STOCK} 은 청크의 마지막 문장이라, 앞 다섯이 도는 동안 다른 트랜잭션이
+     * 더 늦은 시각을 써 둘 수 있다. {@code VerificationSeed.syncStock} 이 같은 이유로 이미
+     * {@code GREATEST} 를 쓴다 — 시드가 지키는 규약을 운영 SQL 이 안 지키고 있었다.
+     */
+    @Test
+    @DisplayName("재고 시각이 뒤로 물러나지 않는다")
+    void stockUpdatedAtNeverMovesBackward() {
+        issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        seed.overwriteStock(3, WROTE_AT.plusSeconds(5));
+
+        adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT);
+        long boundary = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+        assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundary)).isEqualTo(1);
+
+        assertThat(stockUpdatedAt())
+                .as("committedAt 으로 덮어쓰면 검증이 그 사이의 변경을 못 본다")
+                .isEqualTo(WROTE_AT.plusSeconds(5));
+        assertThat(activeCount()).as("값은 정상으로 빠진다").isEqualTo(2);
+    }
+
+    private LocalDateTime stockUpdatedAt() {
+        return jdbcClient.sql("SELECT updated_at FROM coupon_stocks WHERE coupon_id = :id")
+                .param("id", seed.currentCouponId())
+                .query(LocalDateTime.class)
+                .single();
+    }
 }

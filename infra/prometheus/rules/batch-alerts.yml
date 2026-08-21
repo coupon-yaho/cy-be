@@ -33,13 +33,20 @@ groups:
             increase(spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}[10m])
           ) > 0
           or (
-            sum by (spring_batch_job_name) (
-              spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}
+            (
+              sum by (spring_batch_job_name) (
+                spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}
+              )
+              unless
+              sum by (spring_batch_job_name) (
+                spring_batch_job_seconds_count{spring_batch_job_status="FAILED"} offset 10m
+              )
             )
-            unless
-            sum by (spring_batch_job_name) (
-              spring_batch_job_seconds_count{spring_batch_job_status="FAILED"} offset 10m
-            )
+            # "10분 전에 관제가 살아 있었다" 를 함께 본다. 이것이 없으면 스크레이프가 10분 넘게
+            # 끊겼다 복구될 때, FAILED 카운터가 0 이 아닌 모든 잡에 대해 옛 실패가 새 실패로
+            # 다시 울린다 — 재기동 오탐을 옆 규칙에서 없애고 여기 남겨 둘 이유가 없다.
+            and on (spring_batch_job_name)
+            sum by (spring_batch_job_name) (spring_batch_job_seconds_count offset 10m)
           )
         for: 0m
         labels:
@@ -66,6 +73,10 @@ groups:
       # 그 갈래가 아예 평가되지 않는다.
       #
       # absent_over_time 쪽 재기동 오탐은 for 를 주기의 3배로 올려 흡수한다.
+      #
+      # ⚠️ 그 대가로 최초 발화가 늦다. 조건 자체가 15분 창을 보고 for 가 다시 15분을 요구하므로
+      #    멈춘 시각으로부터 **약 30분** 뒤에 뜬다. 그 사이 크론 슬롯 6개가 지나간다.
+      #    더 빨리 알아야 하면 for 를 낮추고 재기동 오탐을 다른 방법으로 걸러야 한다.
         expr: >-
           (
             sum by (spring_batch_job_name) (
@@ -80,7 +91,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "만료 배치가 15분째 안 돌았다 (주기는 5분)"
+          summary: "만료 배치가 30분 넘게 안 돌았다 (주기는 5분)"
           description: >-
             배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지,
             batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다.

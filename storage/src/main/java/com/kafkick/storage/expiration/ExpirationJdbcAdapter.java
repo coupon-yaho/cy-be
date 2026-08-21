@@ -70,12 +70,23 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      *
      * <p>{@code ORDER BY id} 가 인덱스 순서와 달라 filesort 가 붙지만, 정렬량이
      * {@code LIMIT} 에 묶여 청크당 1,000행이다 — 후보가 아무리 많아도 그 이상 안 는다.
+     *
+     * <p><b>{@code updated_at <= :committedAt} 가 캡처 창을 닫는다.</b> 잡은 시각을 먼저 잡고
+     * 그 뒤에 스캔이 도는데, 그 사이에 상태가 바뀐 행까지 매치하면 <b>그 행에 과거 시각이
+     * 찍힌다.</b> 리플레이 정렬이 {@code (issuance_id, created_at, id)} 라 우리 이력이
+     * 나중에 일어난 취소보다 앞서게 되고, {@code USED → EXPIRE} 같은 전이표에 없는 조합이
+     * 만들어져 V4·V3·V1 이 한 행에서 함께 운다.
+     *
+     * <p>{@code asOf} 를 백데이트하지 않는 것과 <b>같은 사고를 다른 쪽에서 막는 것</b>이다 —
+     * 그쪽은 컷을, 이쪽은 시각을 잡은 뒤의 창을 막는다. 여기서 밀린 행은 다음 주기가
+     * 새 {@code committedAt} 으로 집는다(같은 실행 안에서는 {@code afterId} 가 지나갔다).
      */
     private static final String EXPIRE_BATCH = """
             UPDATE issuances
                SET status = 'EXPIRED', updated_at = :committedAt
              WHERE status = 'ISSUED'
                AND expires_at < :asOf
+               AND updated_at <= :committedAt
                AND id > :afterId
              ORDER BY id
              LIMIT :limit
@@ -125,6 +136,14 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      * 회차별로 센 만큼 뺀다. 회차마다 한 번만 갱신되도록 파생테이블에서 먼저 접는다 —
      * 건마다 갱신하면 같은 행을 여러 번 때리고, 그 사이 발급이 들어오면 순서에 따라 값이 갈린다.
      *
+     * <p><b>{@code updated_at} 은 {@code GREATEST} 로 민다.</b> 이 문장은 청크의 마지막이라,
+     * 앞 다섯 문장이 도는 동안 다른 트랜잭션이 같은 재고 행에 더 늦은 시각을 써 둘 수 있다.
+     * 그것을 덮어써서 <b>시각이 뒤로 물러나면</b> 검증의 {@code hasStocksUpdatedAfter} 가
+     * 그 변경을 못 본다 — 그 가드는 재고 시각이 단조 증가한다는 전제 위에 서 있고,
+     * 이력 축과 달리 재고 축에는 백데이트 전용 가드가 따로 없다.
+     * {@code VerificationSeed.syncStock} 이 같은 이유로 이미 {@code GREATEST} 를 쓴다 —
+     * 시드가 지키는 규약을 운영 SQL 이 안 지키고 있었다.
+     *
      * <p><b>{@code active_count >= x.expired} 가 음수를 막는다.</b> {@code ck_stock_range} 에만
      * 기대면 그 제약을 떼어 낸 CORRUPT 스키마에서 음수가 그대로 커밋된다 — 불변식을 DB 제약으로
      * 표현한다는 원칙이 스키마에 따라 무력해지는 자리다. 조건으로도 걸어 두면 어느 스키마에서든
@@ -140,7 +159,7 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
                        AND id > :afterId AND id <= :lastId
                      GROUP BY coupon_id) x ON x.coupon_id = s.coupon_id
                SET s.active_count = s.active_count - x.expired,
-                   s.updated_at   = :committedAt
+                   s.updated_at   = GREATEST(s.updated_at, :committedAt)
              WHERE s.active_count >= x.expired
             """;
 

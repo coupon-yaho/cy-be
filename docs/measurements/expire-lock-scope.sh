@@ -85,3 +85,41 @@ echo; echo "── 매치 1000건 (LIMIT 충족) ──"
 probe 1000 no  "REPEATABLE READ" no  "현재 상태"
 probe 1000 yes "REPEATABLE READ" no  "+ 인덱스"
 probe 1000 yes "READ COMMITTED"  no  "+ 인덱스 + RC"
+
+# ── 스캔 축 ─────────────────────────────────────────────────────────────────
+# 락이 아니라 **읽은 행 수**를 잰다. READ COMMITTED 로 내린 뒤로는 매치 안 된 행의 락을
+# 즉시 놓으므로 인덱스가 없어도 락이 0 이다 — 그 축으로는 인덱스를 지킬 수 없다.
+# docs/12 §4 · §5 의 수치가 여기서 나온다.
+scan_probe() {  # $1=대상 $2=인덱스 $3=라벨 $4=행수(기본 ROWS)
+  local rows=${4:-$ROWS}
+  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<SQL
+SET SESSION cte_max_recursion_depth = 1000000;
+TRUNCATE issuances;
+INSERT INTO issuances (id, coupon_id, status, expires_at, updated_at)
+WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < $rows)
+SELECT n, 1, IF(n > $rows - $1, 'ISSUED', 'USED'), '2020-01-01', '2020-01-01' FROM s;
+SQL
+  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"DROP INDEX idx_status_expires ON issuances"
+  [ "$2" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
+    <<<"CREATE INDEX idx_status_expires ON issuances (status, expires_at)"
+  docker exec -i $C mysql -proot -N t 2>/dev/null <<SQL | tr '\n' ' ' | sed "s/^/$3  /"
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+FLUSH STATUS;
+UPDATE issuances SET status='EXPIRED', updated_at='2026-01-15 09:03:00'
+ WHERE status='ISSUED' AND expires_at < '2026-08-19' AND id > 0 ORDER BY id LIMIT $LIMIT;
+SELECT CONCAT('넘김=', ROW_COUNT());
+SELECT CONCAT('읽은행=', SUM(VARIABLE_VALUE)) FROM performance_schema.session_status
+ WHERE VARIABLE_NAME IN ('Handler_read_next','Handler_read_rnd_next','Handler_read_first','Handler_read_key');
+SELECT CONCAT('정렬=', VARIABLE_VALUE) FROM performance_schema.session_status
+ WHERE VARIABLE_NAME='Sort_rows';
+SQL
+  echo
+}
+
+echo; echo "── 스캔 축 · 만료 대상 0건 (인덱스가 지키는 것) ──"
+scan_probe 0 no  "인덱스 없음:"
+scan_probe 0 yes "인덱스 있음:"
+
+echo; echo "── 스캔 축 · 200,000행 중 뒤 1,000건만 대상 (백로그 최악) ──"
+scan_probe 1000 no  "인덱스 없음:" 200000
+scan_probe 1000 yes "인덱스 있음:" 200000

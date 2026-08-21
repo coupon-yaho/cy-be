@@ -228,20 +228,29 @@ class ExpirationLockScopeTest {
 
             long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
             assertThat(lastId).as("경계를 못 구하면 뒤 문장이 전부 빈 집합을 본다").isPositive();
+
+            // lastExpiredId 는 상한을 못 가지므로(그것을 구하는 문장이다) 스캔 축 밖에 둔다.
+            long before = rowsRead();
             adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, lastId);
             adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, lastId);
             adapter.stockRowCount(AS_OF, WROTE_AT, 0L, lastId);
             adapter.releaseStock(AS_OF, WROTE_AT, 0L, lastId);
-            return new int[] {afterFirst, lockedRecords()};
+            long scanned = rowsRead() - before;
+
+            return new int[] {afterFirst, lockedRecords(), Math.toIntExact(scanned)};
         });
 
         assertThat(measured[0])
                 .as("LIMIT 이 앞에서 차므로 첫 문장은 그 구간만 잡는다")
                 .isLessThan(toExpire * 3);
         assertThat(measured[1])
-                .as("나머지 다섯 문장이 잡은 몫까지 합쳐도 구간 안이어야 한다. "
-                        + "심은 %d 행에 가까우면 상한이 빠져 위로 열린 것이다", toExpire + beyond)
+                .as("나머지 문장이 잡은 몫까지 합쳐도 구간 안이어야 한다")
                 .isLessThan(toExpire * 5);
+        assertThat(measured[2])
+                .as("**상한을 지키는 것은 이 축이다.** RC 라 뒤 문장들이 락을 안 잡아서 "
+                        + "위 두 단언은 상한을 지워도 그대로 통과한다 — 인덱스 쪽에서 겪은 것과 "
+                        + "같은 구멍이다. 상한이 빠지면 심은 %d 행을 다시 훑는다", toExpire + beyond)
+                .isLessThan((toExpire + beyond) / 2);
     }
 
     /**
@@ -329,7 +338,7 @@ class ExpirationLockScopeTest {
      * 전부 통과했다.
      *
      * <p>남는 차이는 <b>읽은 행 수</b>다. 실측(5,000행·만료 대상 0건·RC):
-     * 인덱스 없음 <b>5,004행</b> → 인덱스 있음 <b>0행</b>. 운영 300만 행이면 매 실행이
+     * 인덱스 없음 <b>5,017행</b> → 인덱스 있음 <b>1행</b>. 운영 300만 행이면 매 실행이
      * 300만 행을 읽느냐 마느냐의 차이이고, 그것이 5분 주기를 지킬 수 있느냐를 가른다.
      *
      * <p>{@code Handler_read_*} 는 스토리지 엔진이 실제로 넘긴 행을 센다 —

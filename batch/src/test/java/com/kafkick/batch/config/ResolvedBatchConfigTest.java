@@ -128,7 +128,7 @@ class ResolvedBatchConfigTest {
                 // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면
                 // 키 경로가 죽어 폴백해도 결과가 같아 구분이 안 된다.
                 "--EXPIRE_CHUNK_SIZE=13",
-                "--EXPIRE_STEP_TIMEOUT_MS=1003",
+                "--EXPIRE_STEP_TIMEOUT_MS=2000",
                 "--VERIFY_CHUNK_SIZE=7",
                 "--VERIFY_MAX_FINDINGS_PER_RULE=9",
                 "--VERIFY_STEP_TIMEOUT_MS=1001",
@@ -213,7 +213,7 @@ class ResolvedBatchConfigTest {
     private void assertBatchKeysAreAlive(ConfigurableEnvironment environment) {
         assertThat(environment.getProperty("batch.scheduling.enabled")).isEqualTo("true");
         assertThat(environment.getProperty("batch.expire.chunk-size")).isEqualTo("13");
-        assertThat(environment.getProperty("batch.expire.step-timeout-ms")).isEqualTo("1003");
+        assertThat(environment.getProperty("batch.expire.step-timeout-ms")).isEqualTo("2000");
         assertThat(environment.getProperty("batch.verify.chunk-size")).isEqualTo("7");
         assertThat(environment.getProperty("batch.verify.max-findings-per-rule")).isEqualTo("9");
         assertThat(environment.getProperty("batch.verify.step-timeout-ms")).isEqualTo("1001");

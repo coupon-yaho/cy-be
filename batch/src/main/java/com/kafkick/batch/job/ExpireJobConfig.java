@@ -90,6 +90,12 @@ public class ExpireJobConfig {
                     "batch.expire.chunk-size 는 1 이상이어야 합니다. LIMIT 0 은 오류 없이 0건을 "
                             + "돌려줘 만료가 조용히 멈춥니다. 받은 값=" + chunkSize);
         }
+        if (stepTimeoutMillis % 1_000 != 0) {
+            throw new IllegalArgumentException(
+                    "batch.expire.step-timeout-ms 는 1000 의 배수여야 합니다. 스프링의 트랜잭션 "
+                            + "타임아웃이 초 단위라 나머지가 조용히 버려집니다 — ms 라는 단위 이름이 "
+                            + "약속한 정밀도가 사라집니다. 받은 값=" + stepTimeoutMillis);
+        }
         if (stepTimeoutMillis < 1_000) {
             throw new IllegalArgumentException(
                     "batch.expire.step-timeout-ms 는 1000 이상이어야 합니다. 너무 짧으면 정상 청크가 "
@@ -210,15 +216,9 @@ public class ExpireJobConfig {
                     }
 
                     int released = expirations.releaseStock(asOf, committedAt, afterId, lastId);
-                    // 방향까지 본다. released > stockRows 는 두 문장 사이에 재고 행이
-                    // 생긴 경우라 재시도로 낫는데, 같은 메시지로 뭉치면 운영자가
-                    // 이미 고친 재고를 다시 들여다본다.
-                    if (released > stockRows) {
-                        throw new BusinessException(
-                                ExpirationErrorCode.STOCK_ROW_MISSING,
-                                "재고 행 수가 도중에 늘었습니다. 다시 돌리면 낫습니다. "
-                                        + "재고행=" + stockRows + " 되돌림=" + released);
-                    }
+                    // released > stockRows 는 스키마상 불가능하다 — coupon_stocks 의 PK 가
+                    // coupon_id 라 JOIN 이 1:1 이고, 파생테이블 행 수가 곧 stockRows 다.
+                    // 위 검사를 통과했으면 released <= stockRows 만 남는다.
                     if (released != stockRows) {
                         // active_count >= 차감량 조건에 걸린 회차가 있다. 재고가 이미 어긋나
                         // 있어서, 그대로 뺐다면 음수가 됐을 자리다.

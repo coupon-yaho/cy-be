@@ -18,6 +18,9 @@
 bash docs/measurements/expire-lock-scope.sh
 ```
 
+스크립트가 두 축을 잰다 — **락 축**(발급·사용이 막히는가)과 **스캔 축**(읽은 행 수).
+격리를 RC 로 내린 뒤로는 인덱스가 없어도 락이 0 이라, 인덱스의 값어치는 스캔 축에서만 보인다.
+
 - MySQL **26.7.0**(`mysql:latest`, 테스트 컨테이너와 같은 이미지), 기본 격리 **REPEATABLE READ**
 - `issuances` **5,000행**, `LIMIT 1000`
 - 만료 트랜잭션을 **커밋하지 않은 채** 열어 두고, 다른 커넥션이
@@ -105,6 +108,16 @@ CREATE INDEX `idx_issuance_status_expires` ON `issuances` (`status`, `expires_at
 > **인덱스는 스캔 비용의 문제를 풀지 잠금 위치의 문제를 풀지 않는다.**
 > 이것이 이 측정에서 가장 뜻밖이었던 부분이다.
 
+**다만 이 결론에는 조건이 있다.** 재현 스크립트는 모든 행의 `expires_at` 을 과거로 만들어서,
+`ISSUED` 이면서 기한이 남은 행이 **0건**이다. 그러면 범위 스캔이 `ISSUED` 구간 끝까지 가서
+다음 값(`'USED'`)에 next-key 락을 잡고, 새 발급이 정확히 그 gap 에 들어간다.
+
+운영 데이터는 기한이 남은 `ISSUED` 가 대다수라 스캔이 `('ISSUED', asOf)` 에서 멈추고,
+그 gap 은 "마지막 만료대상 ↔ 첫 미래만료" 사이다 — 신규 발급은 그 밖에 들어갈 수 있다.
+**즉 운영 형상에서는 인덱스만으로도 통과할 여지가 있다.** 아직 안 쟀다(§8).
+RC 결정 자체는 그와 별개로 유효하다 — `UPDATE … JOIN` 이 RR 에서 `coupon_stocks` 에
+잡는 락은 이 스크립트가 아예 재지 않았다.
+
 ---
 
 ## 4. 격리 수준까지 낮췄다
@@ -115,7 +128,8 @@ REPEATABLE READ 는 팬텀을 막으려고 gap 을 잠근다. READ COMMITTED 는
 만료 배치의 Step 에만 적용했다.
 
 ```java
-stepTimeout.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+// ExpireJobConfig.expireStepTransaction(long)
+attribute.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
 ```
 
 ### 나온 수치
@@ -203,7 +217,7 @@ PK 를 콕 집어 때려도 gap 락을 600개 잡는다. **`status` 를 바꾸�
 
 | 200,000행 · 앞 199,000 처리끝 / 뒤 1,000 만 대상 | 읽은 행 | 정렬 행 |
 |---|---:|---:|
-| 인덱스 없음 | **201,016** | 0 |
+| 인덱스 없음 | **201,000** | 0 |
 | 인덱스 있음 | **2,001** | **1,000** |
 
 정렬은 실제로 생긴다. 다만 **정렬량이 `LIMIT` 에 묶인다** — 후보가 50만 건이어도 청크당
@@ -260,7 +274,7 @@ INSERT INTO coupon_stats (…) SELECT … FROM issuances …   -- 잠금 읽기
 **처리했다**
 
 - 스키마 파리티 — `cy-seed` 의 처방전에서 이 인덱스만 `10_constraints_common.sql`(적재 **후**
-  적용)로 승격했다. 300만 건 적재 성능은 그대로다. **cy-seed 커밋이 따로 필요하다**
+  적용)로 승격했다. 300만 건 적재 성능은 그대로다. `cy-seed@4e961a8` 에서 처리했고 cy-be 의 `seed-ddl/` 사본도 함께 갱신했다(`SchemaParityTest` 가 지킨다)
 - 락 범위 테스트 — "현재 비용을 못 박는" 방향에서 **"개선된 상태를 지키는"** 방향으로 뒤집었다
 - 발급 INSERT 통과를 **직접 단언하는 테스트** — 별도 커넥션에서 실제로 INSERT 를 던진다.
   락 개수는 대리 지표라, supremum 하나만 잠겨도 개수로는 안 드러난다
