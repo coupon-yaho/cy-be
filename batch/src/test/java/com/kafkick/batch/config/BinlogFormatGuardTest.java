@@ -28,6 +28,11 @@ import org.testcontainers.utility.DockerImageName;
  *
  * <p>두 방향을 다 본다. STATEMENT 면 막고, ROW 면 통과해야 한다. 막는 쪽만 보면
  * <b>항상 던지는 가드</b>도 통과한다.
+ *
+ * <p><b>배선은 여기서 안 잰다.</b> 이 클래스는 객체를 직접 만들어 메서드를 부르므로
+ * {@code @Component} 나 {@code expireJob} 의 {@code listener(...)} 등록을 지워도 통과한다.
+ * 그 축은 {@code BinlogFormatGuardWiringTest} 가 실제 컨텍스트에서 잰다 —
+ * 가드가 <b>잡에 붙어 있는지</b>가 이 가드의 값어치 전부이기 때문이다.
  */
 class BinlogFormatGuardTest {
 

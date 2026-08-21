@@ -63,18 +63,23 @@ coupon-yaho
 │       │   └── port/                    어댑터가 구현할 인터페이스
 │       └── support/                     TimeProvider(UTC), ErrorCode, BusinessException
 │
-├── storage                              JPA 어댑터
+├── storage                              DB 어댑터
 │   ├── src/main/java/com/kafkick/storage/db
-│   │   ├── coupon/                      도메인별 묶음
+│   │   ├── coupon/                      JPA 도메인 — 엔티티가 있으므로 셋으로 가른다
 │   │   │   ├── entity/                  JPA 엔티티
 │   │   │   ├── repository/              JpaRepository + core port 구현체
 │   │   │   └── mapper/                  엔티티 ↔ 도메인 모델 변환
+│   │   ├── verification/                검증 JDBC 어댑터 — 평면
+│   │   ├── expiration/                  만료 JDBC 어댑터 — 평면
 │   │   ├── support/                     BaseEntity, UpdatableEntity
 │   │   └── config/                      JPA Auditing
 │   ├── src/main/resources
 │   │   ├── storage.yml.example          DataSource·JPA·Flyway 공통 설정
 │   │   └── db/migration/                Flyway DDL (V1__*.sql)
 │   └── src/testFixtures/java/…/db       테스트 컨테이너 설정, @RepositoryTest
+│
+│   ※ entity/repository/mapper 3분할은 JPA 도메인만이다. 검증·만료는 300만~534만 행을
+│     집계 SQL 로 훑느라 JPA 를 안 쓰기로 했고(엔티티도 매퍼도 없다) 평면으로 둔다.
 │
 ├── infra
 │   ├── mq                               Kafka 어댑터

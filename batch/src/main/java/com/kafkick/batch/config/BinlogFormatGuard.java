@@ -3,8 +3,8 @@ package com.kafkick.batch.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.batch.core.job.JobExecution;
+import org.springframework.batch.core.listener.JobExecutionListener;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
@@ -28,18 +28,24 @@ import org.springframework.stereotype.Component;
  * <p>기동을 막는 쪽으로 정했다. 이 서버에서는 만료가 <b>한 번도 성공할 수 없고</b>,
  * 재고를 되돌리는 유일한 배치가 조용히 안 도는 것보다 안 뜨는 것이 낫다.
  *
- * <p><b>{@code InitializingBean} 이지 {@code ApplicationReadyEvent} 가 아니다.</b> 그 이벤트는
- * 톰캣이 이미 바인드되고 {@code @Scheduled} 크론이 등록된 <b>뒤</b>에 온다 — 거기 걸면
- * "기동을 막는다" 가 아니라 <b>떴다가 죽는다</b> 가 되고, 그 사이 포트가 열리고 크론 경계가
- * 지나가면 만료가 한 번 시작한다. 여기서 던지면 컨텍스트 refresh 가 실패해 포트가 안 열린다.
+ * <p><b>기동이 아니라 {@code expireJob} 의 시작을 막는다.</b> 자리를 두 번 옮겼다.
  *
- * <p><b>만료가 도는 배포에만 건다.</b> 오류 1665 는 만료 Step 의 READ COMMITTED DML 에서만
- * 나고 {@code verifyJob} 은 REPEATABLE READ 라 이 전제가 필요 없다. 조건을 안 걸면 검증만
- * 돌리려고 띄운 서버까지 막아서, 오염셋 게이트를 한 번도 못 돌리게 된다.
+ * <ul>
+ *   <li>{@code ApplicationReadyEvent} — 톰캣 바인드와 크론 등록 <b>뒤</b>라 "기동을 막는다" 가
+ *       아니라 <b>떴다가 죽는다</b> 였다.</li>
+ *   <li>{@code InitializingBean} + {@code @ConditionalOnProperty(batch.scheduling.enabled)} —
+ *       포트 열리기 전에 막는 것은 됐는데, <b>스케줄러를 끈 배포에서는 빈이 아예 안 생겼다.</b>
+ *       그런데 이 저장소가 문서로 권하는 운영 절차가 정확히 그것이다 — 스케줄러를 끈 채
+ *       띄웠다가 밀린 만료를 손으로 따라잡는 것. 가드가 필요한 자리에 가드가 없었다.</li>
+ * </ul>
+ *
+ * <p>그래서 {@link JobExecutionListener} 로 {@code expireJob} 에 붙인다. 스케줄 실행이든
+ * 수동 트리거든 <b>만료가 도는 모든 경로</b>가 여기를 지나고, {@code verifyJob} 만 돌리는
+ * 서버는 안 막힌다({@code verifyJob} 은 REPEATABLE READ 라 이 전제가 필요 없다).
+ * 여기서 던지면 잡이 시작 전에 {@code FAILED} 로 끝나 {@code BatchJobFailed} 알림에 얹힌다.
  */
 @Component
-@ConditionalOnProperty(name = "batch.scheduling.enabled", havingValue = "true")
-public class BinlogFormatGuard implements InitializingBean {
+public class BinlogFormatGuard implements JobExecutionListener {
 
     private static final Logger log = LoggerFactory.getLogger(BinlogFormatGuard.class);
 
@@ -50,7 +56,7 @@ public class BinlogFormatGuard implements InitializingBean {
     }
 
     @Override
-    public void afterPropertiesSet() {
+    public void beforeJob(JobExecution jobExecution) {
         assertReadCommittedIsUsable();
     }
 

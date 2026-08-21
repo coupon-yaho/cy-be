@@ -15,6 +15,7 @@ import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException
 import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -108,15 +109,15 @@ public class ExpireScheduler {
      * 두 서버가 부딪힌다).
      *
      * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-254 가
- * {@code spring.task.scheduling.pool.size} 를 1 에서 4 로 올린다. 그것이 이 잡을 자기 자신과
- * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
- * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
- *
- * <p>그래서 재고를 쓰는 배치가 늘어나는 날 이 잡과 <b>동시에</b> 돈다. 설계상 재고를 쓰는 것은
- * 지금 이 잡뿐이고, 그 전제가 깨지면 락 순서 계약(`issuances` → `issuance_histories` →
- * {@code coupon_stocks})을 그쪽도 지켜야 한다 — {@code ExpirationRepository} 에 적어 뒀다.
- *
- * <p><b>그 보호는 동기 실행을 전제한다.</b> {@code JobOperator} 에 비동기
+     * {@code spring.task.scheduling.pool.size} 를 1 에서 4 로 올린다. 그것이 이 잡을 자기 자신과
+     * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
+     * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
+     *
+     * <p>그래서 재고를 쓰는 배치가 늘어나는 날 이 잡과 <b>동시에</b> 돈다. 설계상 재고를 쓰는 것은
+     * 지금 이 잡뿐이고, 그 전제가 깨지면 락 순서 계약(`issuances` → `issuance_histories` →
+     * {@code coupon_stocks})을 그쪽도 지켜야 한다 — {@code ExpirationRepository} 에 적어 뒀다.
+     *
+     * <p><b>그 보호는 동기 실행을 전제한다.</b> {@code JobOperator} 에 비동기
      * {@code TaskExecutor} 가 물리면 {@code start} 가 즉시 {@code STARTED} 를 돌려주고
      * 크론의 겹침 방지가 통째로 사라진다 — 그런데 {@code isUnsuccessful()} 은 그 상태를
      * 실패로 보지 않아 <b>아무 로그도 안 남는다.</b> 전제가 깨진 것을 그 자리에서 알리려고
@@ -151,6 +152,12 @@ public class ExpireScheduler {
             log.warn("앞 실행이 아직 돌고 있어 이번 주기를 건너뜁니다. asOf={}", asOf);
         } catch (JobInstanceAlreadyCompleteException e) {
             log.info("이미 끝난 asOf 라 건너뜁니다. asOf={}", asOf);
+        } catch (DuplicateKeyException e) {
+            // 다른 노드가 같은 asOf 로 먼저 JOB_INST_UN 을 잡았다. 중복 방지가 제 일을 한 것이라
+            // 사건이 아니다 — ERROR 로 내보내면 배치를 두 대로 늘리는 순간 하루 288번 울린다.
+            // (인스턴스 생성 격리를 READ COMMITTED 로 내려 둔 덕에 오류가 1062 로 좁혀진다.
+            //  SERIALIZABLE 이면 데드락 1213 이라 이 타입으로 안 온다 — BatchJobRepositoryConfig 참조)
+            log.info("다른 노드가 같은 asOf 를 이미 시작했습니다. asOf={}", asOf);
         } catch (Exception e) {
             log.error("만료 배치를 시작하지 못했습니다. asOf={}", asOf, e);
         }

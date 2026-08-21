@@ -25,6 +25,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -60,6 +61,9 @@ class ExpireGuardTest {
     @Autowired
     private JdbcClient jdbcClient;
 
+    @Autowired
+    private TimeProvider timeProvider;
+
     private VerificationSeed seed;
 
     @BeforeEach
@@ -85,9 +89,10 @@ class ExpireGuardTest {
                 .update();
         seed.overwriteStock(1);
 
-        // 고정 상수에 더하면 그 절대 시각을 벽시계가 지나는 날 미래가 아니게 된다.
-        // 그때 깨지는 원인이 코드가 아니라 달력이라, 단언을 느슨하게 고칠 위험이 크다.
-        JobExecution execution = launch(LocalDateTime.now().plusYears(1));
+        // 검사하는 쪽과 같은 시계를 쓴다. TimeProvider 는 systemUTC 이고 LocalDateTime.now()
+        // 는 시스템 기본 시간대라, 경계 근처를 재는 테스트로 이 패턴을 복사하면 시간대만큼
+        // 어긋난다. (고정 상수 + plusYears 는 그 절대 시각을 벽시계가 지나는 날 뒤집힌다)
+        JobExecution execution = launch(timeProvider.now().plusYears(1));
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(JobFailures.errorCodesOf(execution))

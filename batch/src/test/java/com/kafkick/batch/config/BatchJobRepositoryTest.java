@@ -20,6 +20,7 @@ import org.springframework.batch.core.repository.support.ResourcelessJobReposito
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -69,6 +70,9 @@ class BatchJobRepositoryTest {
 
     @Autowired
     private JdbcClient jdbcClient;
+
+    @Autowired
+    private ApplicationContext context;
 
     @BeforeEach
     void setUp() {
@@ -121,6 +125,33 @@ class BatchJobRepositoryTest {
                 .as("**막았다는 사실이 DB 에 있어야 다른 인스턴스도 그것을 본다.** "
                         + "메모리에만 있으면 배치를 두 대로 늘리는 순간 둘 다 돈다")
                 .isEqualTo(1);
+    }
+
+    /**
+     * <b>{@code JobOperator} 의 동기 실행 전제를 여기서 지킨다.</b>
+     *
+     * <p>{@code BatchRegistrar} 는 이름이 {@code taskExecutor} 인 빈 <b>정의가 있으면</b>
+     * 그것을 {@code JobOperator} 에 물린다. 그러면 {@code start} 가 즉시 {@code STARTED} 를
+     * 돌려주고, {@code ExpireScheduler} 의 겹침 방지 — 크론 트리거가 앞 실행이 끝난 뒤에야
+     * 다음을 잡는 것 — 가 통째로 사라져 만료가 자기 자신과 겹친다.
+     *
+     * <p><b>전용 {@code SyncTaskExecutor} 빈으로 못 박아 봤다가 되돌렸다.</b>
+     * {@code Executor} 타입 빈이 하나라도 생기면 Boot 의 {@code applicationTaskExecutor} 가
+     * 조건에서 떨어져 사라진다(실측). 그래서 배선을 건드리는 대신 <b>그 이름의 빈이 없다는
+     * 것</b>과 <b>Boot 기본 실행기가 살아 있다는 것</b>을 여기서 함께 단언한다.
+     */
+    @Test
+    @DisplayName("taskExecutor 라는 이름의 빈이 없고, Boot 기본 실행기는 살아 있다")
+    void keepsJobOperatorSynchronousWithoutStealingBootsExecutor() {
+        assertThat(context.containsBean("taskExecutor"))
+                .as("이 이름의 빈이 생기면 JobOperator 가 비동기가 되고 ExpireScheduler 의 "
+                        + "겹침 방지가 죽는다. 스프링 예제가 관례로 쓰는 이름이라 실제로 들어온다")
+                .isFalse();
+        assertThat(context.containsBean("applicationTaskExecutor"))
+                .as("**여기를 뺏으면 웹 계층이 다친다.** Executor 빈을 하나 정의하면 Boot 의 "
+                        + "이 빈이 조건에서 떨어져 MVC 비동기가 요청당 스레드로 폴백하고 "
+                        + "spring.task.execution.* 이 죽는다")
+                .isTrue();
     }
 
     private JobExecution launch() throws Exception {

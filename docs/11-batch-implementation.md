@@ -150,9 +150,10 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 `SpringBootBatchDefaultConfiguration` 의 오버라이드 둘뿐이고, `JobLauncherApplicationRunner`
 (`spring.batch.job.enabled`)는 별도 자동설정이라 그대로 산다.
 
-<!-- 아래는 낡은 서술이다 -->
-~~붙이면 `BatchAutoConfiguration` 이 물러나~~
-`JobRepository` · `JobLauncher` 를 직접 정의해야 한다.
+> ~~붙이면 `BatchAutoConfiguration` 이 물러나 `JobRepository` · `JobLauncher` 를 직접
+> 정의해야 한다~~ — 2026-08 정정. 직접 정의하면 `BatchRegistrar` 가 물러나 **그 빈이 조용히
+> 이긴다**(기동은 성공하고 메타가 0행이 된다). 그리고 `JobLauncher` 는 Spring Batch 6 에
+> 존재하지 않는 타입이다.
 
 메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
 `spring.batch.jdbc.*` 는 **Boot 4.1 에 존재하지 않는 키다.** 이 파일이 없어도 **기동은 성공하고**,

@@ -19,6 +19,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
+import com.kafkick.batch.config.BinlogFormatGuard;
 import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
@@ -120,10 +121,13 @@ public class ExpireJobConfig {
      * {@code verifyJob} 이 같은 이유로 검증기를 붙여 뒀다.
      */
     @Bean
-    public Job expireJob(Step expireStep) {
+    public Job expireJob(Step expireStep, BinlogFormatGuard binlogFormatGuard) {
         return new JobBuilder("expireJob", jobRepository)
                 .validator(new DefaultJobParametersValidator(
                         new String[] {"asOf"}, new String[0]))
+                // 이 Step 의 READ COMMITTED DML 이 STATEMENT binlog 서버에서 오류 1665 로
+                // 거부된다. 스케줄 실행이든 수동 트리거든 여기를 지나야 만료가 시작한다.
+                .listener(binlogFormatGuard)
                 .start(expireStep)
                 .build();
     }

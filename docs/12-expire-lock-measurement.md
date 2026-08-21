@@ -42,9 +42,10 @@ bash docs/measurements/expire-lock-scope.sh
 
 | 축 | 합산하는 `Handler_read_*` | 왜 |
 |---|---|---|
-| 락·스캔 (`probe`·`scan_probe`) | `next` `rnd_next` `first` `key` | 정방향 스캔 비용 |
-| **경계** (`boundary_probe`) | 위 넷 + **`last` `prev`** | `MAX(id)` 가 **역방향** 인덱스 스캔이다. 넷만 세면 `V12` 의 효과가 안 보인다 |
-| 테스트 `rowsRead()` | `next` `rnd_next` `first` | 상한 단언용이라 진입 횟수(`key`)를 뺀다 |
+| 락 (`probe`) | — **읽은 행을 안 잰다.** 락 수와 1205 여부만 본다 | READ COMMITTED |
+| 스캔 (`scan_probe`) | `next` `rnd_next` `first` `key` | `V11` |
+| **경계** (`boundary_probe`) | 위 넷 + **`last` `prev`** | `MAX(id)` 가 **역방향** 인덱스 스캔이라 그 둘이 이 문장의 실제 비용이다 |
+| 테스트 `rowsRead()` | `next` `rnd_next` `first` | 상한 단언용이라 진입 횟수(`key`)를 뺀다. 셋만으로도 `V12` 삭제는 잡힌다 — 돌연변이로 확인했다(310행 → 단언 실패) |
 
 스토리지 엔진이 실제로 넘긴 행이고 `EXPLAIN` 의 추정치가 아니다.
 
@@ -318,6 +319,15 @@ PK 를 콕 집어 때려도 gap 락을 600개 잡는다. **`status` 를 바꾸�
 
 **발급 INSERT 는 여전히 통과한다**(RC 라 gap 락이 없다). 막히는 것은 그 후보 행을 건드리는
 **취소·사용**이고, 그 경로는 아직 이 저장소에 없다.
+
+**그런데 "막힌다" 가 "느려진다" 가 아니다.** 이 락은 첫 문장부터 **청크가 커밋될 때까지**
+유지되고, 그 상한은 `batch.expire.step-timeout-ms`(기본 **120초**)다. 기다리는 쪽의
+MySQL 기본 `innodb_lock_wait_timeout` 은 **50초**다 — 청크가 50초를 넘기면 그 후보 행을
+건드리는 취소·사용은 대기가 아니라 **오류 1205 로 실패한다.** 사용자 요청 실패다.
+`chunk-size` 를 키우면 잠기는 행 수와 보유 시간이 함께 커진다.
+
+**아직 안 쟀다** — 후보 ≫ `LIMIT` 구간에서 청크 하나가 실제로 몇 초 걸리는지. 그 값이
+없으면 위 상한이 실제로 닿는지 판정할 수 없다.
 
 ### 어떻게 닫나 — 아직 안 했다
 

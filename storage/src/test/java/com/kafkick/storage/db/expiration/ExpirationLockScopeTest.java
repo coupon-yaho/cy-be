@@ -11,8 +11,10 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.Map;
-import java.util.stream.Collectors;
 import java.util.function.IntSupplier;
+import java.util.stream.Collectors;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,8 +22,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
-import javax.sql.DataSource;
-
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -406,6 +406,13 @@ class ExpirationLockScopeTest {
      * {@code issuances} → {@code issuance_histories} → {@code coupon_stocks}.
      * 반대로 잡으면 오류 1213 이 나고, 희생되는 쪽이 만료면 그 주기가 통째로 밀린다.
      *
+     * <p><b>정확한 락 개수는 못 박지 않는다.</b> {@code releaseStock} 의
+     * {@code UPDATE ... JOIN} 이 파생테이블로 {@code issuances} 를 읽는데, 그때 남는 S 락이
+     * 실행계획에 따라 뜨고 안 뜬다 — 단독 실행에서는 안 늘고 전체 스위트에서는 5 → 10 으로
+     * 늘었다(통계가 달라져 계획이 갈린다). 그래서 지키는 것은 <b>테이블 이름</b>과
+     * <b>청크에 묶이는 것</b>이지 개수의 동일성이 아니다. 개수를 못 박았다가 순서 의존
+     * 실패를 만들었고, 그것은 이 클래스가 재는 축과 무관한 빨간불이다.
+     *
      * <p><b>격리 수준은 이 테스트가 안 지킨다.</b> 뒤 문장들이 읽는 행은 첫 문장이 이미
      * X 락을 잡아 둔 행이라, REPEATABLE READ 로 되돌려도 락이 새로 안 생긴다 — 실제로
      * RR 로 바꾸는 돌연변이가 여기를 통과했다. 그 축을 잡는 것은
@@ -422,7 +429,10 @@ class ExpirationLockScopeTest {
     @DisplayName("문장마다 잠그는 테이블이 계약대로다 — issuances → histories → stocks")
     void eachStatementLocksTheTablesItsContractSays() {
         int toExpire = 5;
+        int beyond = 300;
         issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
+        // 청크 밖 행을 심어야 "구간에 묶인다" 는 단언에 힘이 생긴다.
+        issuances(beyond, IssuanceStatus.EXPIRED, EXPIRED_AT);
 
         transaction.executeWithoutResult(status -> {
             assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
@@ -438,29 +448,26 @@ class ExpirationLockScopeTest {
                     .containsOnlyKeys("issuances")
                     .containsEntry("issuances", afterExpire);
 
-            int afterFirst = lockedTables().get("issuances");
-
             adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, lastId);
             assertThat(lockedTables())
-                    .as("이력 INSERT 는 **원본의 락 범위를 안 넓힌다** — 청크 밖으로 번지면 "
-                            + "여기가 먼저 운다. 테이블 이름만이 아니라 개수까지 보는 이유다. "
+                    .as("이력은 자기 테이블에만 넣는다 — 재고로 번지면 락 순서가 뒤집힌다. "
                             + "(넣은 이력 행 자체의 락은 암묵적이라 data_locks 에 안 뜬다 — "
                             + "충돌이 나야 실체화된다)")
-                    .containsOnlyKeys("issuances")
-                    .containsEntry("issuances", afterFirst);
+                    .containsOnlyKeys("issuances");
 
             adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, lastId);
             adapter.stockRowCount(AS_OF, WROTE_AT, 0L, lastId);
             assertThat(lockedTables())
-                    .as("가드 둘은 세기만 한다 — 하나도 새로 안 잡는다")
-                    .containsOnlyKeys("issuances")
-                    .containsEntry("issuances", afterFirst);
+                    .as("가드 둘은 세기만 한다 — 새 테이블을 안 잡는다")
+                    .containsOnlyKeys("issuances");
 
             adapter.releaseStock(AS_OF, WROTE_AT, 0L, lastId);
-            assertThat(lockedTables())
-                    .as("재고를 되돌리면서도 **원본의 락 범위는 그대로다** — "
-                            + "UPDATE ... JOIN 이 읽는 쪽으로 번지면 여기서 드러난다")
-                    .containsEntry("issuances", afterFirst);
+            assertThat(lockedTables().get("issuances"))
+                    .as("**청크에 묶인다.** 심어 둔 %d 행 근처로 커지면 구간 밖으로 번진 것이다. "
+                            + "정확한 개수는 못 박지 않는다 — UPDATE ... JOIN 의 파생테이블 읽기가 "
+                            + "남기는 S 락이 실행계획에 따라 뜨고 안 뜬다(전체 스위트에서 5→10 으로 "
+                            + "갈리는 것을 겪었다)", toExpire + beyond)
+                    .isLessThan(toExpire * 5);
             assertThat(lockedTables().keySet())
                     .as("**재고는 맨 마지막이다.** 이것이 앞으로 오면 발급 경로와 순서가 역전돼 "
                             + "데드락이 난다")
