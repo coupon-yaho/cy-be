@@ -10,8 +10,8 @@ public enum RuntimeConfigErrorCode implements ErrorCode {
 
     INVALID_REVISION(400, "RUNTIME_CONFIG-001", "설정 revision은 0 이상이어야 합니다."),
     INVALID_UPDATED_BY(400, "RUNTIME_CONFIG-002", "설정 변경자를 입력해야 합니다."),
-    REVISION_CONFLICT(409, "RUNTIME_CONFIG_REVISION_CONFLICT", "런타임 설정 revision이 충돌했습니다."),
-    STORE_UNAVAILABLE(503, "RUNTIME_CONFIG_STORE_UNAVAILABLE", "런타임 설정 저장소를 사용할 수 없습니다.") {
+    REVISION_CONFLICT(409, "RUNTIME_CONFIG-003", "런타임 설정 revision이 충돌했습니다."),
+    STORE_UNAVAILABLE(503, "RUNTIME_CONFIG-004", "런타임 설정 저장소를 사용할 수 없습니다.") {
         @Override
         public Dependency dependency() {
             return Dependency.REDIS;
@@ -21,8 +21,8 @@ public enum RuntimeConfigErrorCode implements ErrorCode {
             return Optional.of(ReasonCode.TEMPORARILY_UNAVAILABLE);
         }
     },
-    READ_ONLY(409, "RUNTIME_CONFIG_READ_ONLY", "읽기 전용 런타임 설정 저장소에서는 변경할 수 없습니다."),
-    STORE_CORRUPTED(500, "RUNTIME_CONFIG_STORE_CORRUPTED", "런타임 설정 저장소의 값이 손상되었습니다.") {
+    READ_ONLY(409, "RUNTIME_CONFIG-005", "읽기 전용 런타임 설정 저장소에서는 변경할 수 없습니다."),
+    STORE_CORRUPTED(500, "RUNTIME_CONFIG-006", "런타임 설정 저장소의 값이 손상되었습니다.") {
         @Override
         public Dependency dependency() {
             return Dependency.REDIS;
@@ -32,7 +32,7 @@ public enum RuntimeConfigErrorCode implements ErrorCode {
             return Optional.of(ReasonCode.INTERNAL_ERROR);
         }
     },
-    STORE_MISSING(500, "RUNTIME_CONFIG_STORE_MISSING", "런타임 설정 저장소의 값이 유실되었습니다.") {
+    STORE_MISSING(500, "RUNTIME_CONFIG-007", "런타임 설정 저장소의 값이 유실되었습니다.") {
         @Override
         public Dependency dependency() {
             return Dependency.REDIS;
@@ -42,7 +42,7 @@ public enum RuntimeConfigErrorCode implements ErrorCode {
             return Optional.of(ReasonCode.INTERNAL_ERROR);
         }
     },
-    UPDATE_OUTCOME_UNKNOWN(503, "RUNTIME_CONFIG_UPDATE_OUTCOME_UNKNOWN", "런타임 설정 변경 결과를 확인할 수 없습니다.") {
+    UPDATE_OUTCOME_UNKNOWN(503, "RUNTIME_CONFIG-008", "런타임 설정 변경 결과를 확인할 수 없습니다.") {
         @Override
         public Dependency dependency() {
             return Dependency.REDIS;
@@ -52,7 +52,7 @@ public enum RuntimeConfigErrorCode implements ErrorCode {
             return Optional.of(ReasonCode.TEMPORARILY_UNAVAILABLE);
         }
     },
-    SERIALIZATION_FAILED(500, "RUNTIME_CONFIG_SERIALIZATION_FAILED", "런타임 설정을 직렬화할 수 없습니다.") {
+    SERIALIZATION_FAILED(500, "RUNTIME_CONFIG-009", "런타임 설정을 직렬화할 수 없습니다.") {
         @Override
         public Optional<ReasonCode> reasonCode() {
             return Optional.of(ReasonCode.INTERNAL_ERROR);

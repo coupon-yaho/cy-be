@@ -24,10 +24,9 @@ class InMemoryRuntimeConfigStoreTest {
     private static final Instant NOW = Instant.parse("2026-08-20T10:00:00Z");
 
     @Test
-    void inMemoryStoreUsesCasAndReadOnlyStoreRejectsUpdates() {
-        RuntimeConfigSnapshot initial = snapshot(0);
+    void inMemoryStoreRejectsStaleRevisionWithCurrentRevision() {
         InMemoryRuntimeConfigStore store = new InMemoryRuntimeConfigStore(
-                initial, Clock.fixed(NOW, ZoneOffset.UTC));
+                snapshot(0), Clock.fixed(NOW, ZoneOffset.UTC));
         RuntimeConfigCommand command = new RuntimeConfigCommand(
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1");
 
@@ -35,7 +34,14 @@ class InMemoryRuntimeConfigStoreTest {
         assertThatThrownBy(() -> store.update(command, 0))
                 .isInstanceOfSatisfying(RuntimeConfigRevisionConflictException.class,
                         exception -> assertThat(exception.getCurrentRevision()).isEqualTo(1));
-        assertThatThrownBy(() -> new ReadOnlyRuntimeConfigStore(initial).update(command, 0))
+    }
+
+    @Test
+    void readOnlyStoreRejectsUpdatesWith409() {
+        RuntimeConfigCommand command = new RuntimeConfigCommand(
+                EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1");
+
+        assertThatThrownBy(() -> new ReadOnlyRuntimeConfigStore(snapshot(0)).update(command, 0))
                 .isInstanceOfSatisfying(BusinessException.class, exception -> {
                     assertThat(exception.getErrorCode()).isEqualTo(RuntimeConfigErrorCode.READ_ONLY);
                     assertThat(exception.getErrorCode().getStatus()).isEqualTo(409);

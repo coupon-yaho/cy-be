@@ -21,7 +21,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.ValueOperations;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -44,7 +43,7 @@ import static org.mockito.Mockito.when;
 class RedisRuntimeConfigStoreTest {
 
     private static final Instant NOW = Instant.parse("2026-08-20T10:00:00Z");
-    private final ObjectMapper objectMapper = JsonMapper.builder().findAndAddModules().build();
+    private final ObjectMapper objectMapper = new RuntimeConfigJsonMapper().objectMapper();
 
     @AfterEach
     void clearMdc() {
@@ -150,7 +149,7 @@ class RedisRuntimeConfigStoreTest {
         assertThatThrownBy(store::get)
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_CORRUPTED");
+                .isEqualTo("RUNTIME_CONFIG-006");
     }
 
     @Test
@@ -226,7 +225,7 @@ class RedisRuntimeConfigStoreTest {
         assertThatThrownBy(() -> store(fake.template).update(command("admin:1"), 4))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_UPDATE_OUTCOME_UNKNOWN");
+                .isEqualTo("RUNTIME_CONFIG-008");
     }
 
     @Test
@@ -336,7 +335,7 @@ class RedisRuntimeConfigStoreTest {
                 .isInstanceOf(BusinessException.class)
                 .isInstanceOfSatisfying(BusinessException.class, exception -> {
                     assertThat(exception.getErrorCode().getCode())
-                            .isEqualTo("RUNTIME_CONFIG_SERIALIZATION_FAILED");
+                            .isEqualTo("RUNTIME_CONFIG-009");
                     assertThat(exception.getErrorCode().dependency())
                             .isEqualTo(com.kafkick.core.observation.Dependency.NONE);
                 });

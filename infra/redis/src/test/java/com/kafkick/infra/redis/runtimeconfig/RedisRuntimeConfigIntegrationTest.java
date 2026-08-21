@@ -19,7 +19,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -51,7 +50,7 @@ class RedisRuntimeConfigIntegrationTest {
         connectionFactory.afterPropertiesSet();
         redis = new StringRedisTemplate(connectionFactory);
         redis.afterPropertiesSet();
-        objectMapper = JsonMapper.builder().findAndAddModules().build();
+        objectMapper = new RuntimeConfigJsonMapper().objectMapper();
     }
 
     @AfterAll
@@ -164,7 +163,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 500))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_MISSING");
+                .isEqualTo("RUNTIME_CONFIG-007");
     }
 
     @Test
@@ -176,7 +175,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 0))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_MISSING");
+                .isEqualTo("RUNTIME_CONFIG-007");
     }
 
     @Test
@@ -189,7 +188,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 1))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_CORRUPTED");
+                .isEqualTo("RUNTIME_CONFIG-006");
     }
 
     @Test
@@ -206,7 +205,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 0))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_CORRUPTED");
+                .isEqualTo("RUNTIME_CONFIG-006");
     }
 
     @Test
@@ -236,7 +235,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 0))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_CORRUPTED");
+                .isEqualTo("RUNTIME_CONFIG-006");
     }
 
     @Test
@@ -251,7 +250,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 0))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_CORRUPTED");
+                .isEqualTo("RUNTIME_CONFIG-006");
         assertThat(store.get()).isEqualTo(before);
     }
 
@@ -265,7 +264,7 @@ class RedisRuntimeConfigIntegrationTest {
                 EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE, "admin:1"), 0))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
-                .isEqualTo("RUNTIME_CONFIG_STORE_CORRUPTED");
+                .isEqualTo("RUNTIME_CONFIG-006");
     }
 
     private static RuntimeConfigSnapshot snapshot(long revision) {

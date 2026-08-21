@@ -24,18 +24,17 @@ public final class InMemoryRuntimeConfigStore implements RuntimeConfigStore {
 
     @Override
     public RuntimeConfigSnapshot update(RuntimeConfigCommand command, long expectedRevision) {
-        while (true) {
-            RuntimeConfigSnapshot before = current.get();
-            if (before.revision() != expectedRevision) {
-                throw new RuntimeConfigRevisionConflictException(before.revision());
-            }
-            RuntimeConfigSnapshot after = new RuntimeConfigSnapshot(
-                    command.engineVersion(), command.releaseStage(), command.queueMode(),
-                    expectedRevision + 1, clock.instant(), command.updatedBy(), SourceStatus.VALID);
-            if (current.compareAndSet(before, after)) {
-                return after;
-            }
+        RuntimeConfigSnapshot before = current.get();
+        if (before.revision() != expectedRevision) {
+            throw new RuntimeConfigRevisionConflictException(before.revision());
         }
+        RuntimeConfigSnapshot after = new RuntimeConfigSnapshot(
+                command.engineVersion(), command.releaseStage(), command.queueMode(),
+                expectedRevision + 1, clock.instant(), command.updatedBy(), SourceStatus.VALID);
+        if (!current.compareAndSet(before, after)) {
+            throw new RuntimeConfigRevisionConflictException(current.get().revision());
+        }
+        return after;
     }
 
     @Override

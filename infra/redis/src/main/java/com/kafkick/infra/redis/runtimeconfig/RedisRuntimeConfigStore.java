@@ -18,6 +18,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -29,6 +30,8 @@ public final class RedisRuntimeConfigStore implements RuntimeConfigStore {
     private static final long CAS_SUCCESS = -1;
     private static final long CONFIG_MISSING = -2;
     private static final long CONFIG_CORRUPTED = -3;
+    // 저장(LTRIM)과 불확정 결과 확인(range)이 같은 범위를 봐야 한다. 상수 하나로 묶어 어긋나지 않게 한다.
+    private static final int AUDIT_RETENTION = 1000;
     private static final RedisScript<Long> CAS_SCRIPT = new DefaultRedisScript<>("""
             local configType = redis.call('TYPE', KEYS[1])['ok']
             if configType ~= 'none' and configType ~= 'string' then
@@ -64,7 +67,7 @@ public final class RedisRuntimeConfigStore implements RuntimeConfigStore {
             end
             redis.call('SET', KEYS[1], ARGV[2])
             redis.call('RPUSH', KEYS[2], ARGV[3])
-            redis.call('LTRIM', KEYS[2], -1000, -1)
+            redis.call('LTRIM', KEYS[2], -tonumber(ARGV[4]), -1)
             return -1
             """, Long.class);
 
@@ -74,9 +77,9 @@ public final class RedisRuntimeConfigStore implements RuntimeConfigStore {
     private final AtomicReference<RuntimeConfigSnapshot> lastKnownGood = new AtomicReference<>();
 
     public RedisRuntimeConfigStore(StringRedisTemplate redis, ObjectMapper objectMapper, Clock clock) {
-        this.redis = redis;
-        this.objectMapper = objectMapper;
-        this.clock = clock;
+        this.redis = Objects.requireNonNull(redis, "redis");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     @Override
@@ -119,7 +122,8 @@ public final class RedisRuntimeConfigStore implements RuntimeConfigStore {
         try {
             Long conflictRevision = redis.execute(
                     CAS_SCRIPT, List.of(CONFIG_KEY, AUDIT_KEY),
-                    Long.toString(expectedRevision), afterJson, auditJson);
+                    Long.toString(expectedRevision), afterJson, auditJson,
+                    Integer.toString(AUDIT_RETENTION));
             if (conflictRevision == null) {
                 throw unavailable(null);
             }
@@ -176,7 +180,7 @@ public final class RedisRuntimeConfigStore implements RuntimeConfigStore {
             throw outcomeUnknown(cause);
         }
         try {
-            List<String> recentAudits = redis.opsForList().range(AUDIT_KEY, -1_000, -1);
+            List<String> recentAudits = redis.opsForList().range(AUDIT_KEY, -AUDIT_RETENTION, -1);
             if (recentAudits != null) {
                 for (int index = recentAudits.size() - 1; index >= 0; index--) {
                     RuntimeConfigAuditLog audit = objectMapper.readValue(
