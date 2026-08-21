@@ -33,6 +33,20 @@ public class PromQueryClient implements PromQuery {
     private static final String NAME_LABEL = "__name__";
     private static final String QUERY_PARAM = "query";
 
+    /**
+     * 표본 시각의 허용 범위(epoch 초). Prometheus 표본 시각은 스크레이프 시각이라 epoch 이전일 수
+     * 없고, 먼 미래 값은 원천이 망가진 것이지 관측이 아니다.
+     *
+     * <p>범위를 안 보면 조용히 통과한다 — {@code Math.round} 는 범위를 넘길 때 예외 대신
+     * {@code Long.MAX_VALUE} 로 포화되고 {@code Instant.ofEpochMilli} 도 그 값을 받아
+     * {@code +292278994-08-17} 같은 시각을 만든다(실측). 그 표본이 가장 큰 값이라
+     * {@code snapshotAt} 으로 뽑히면 화면이 그것을 현재 시각으로 읽는다.
+     */
+    private static final double MIN_EPOCH_SECONDS = 0d;
+
+    /** 2100-01-01T00:00:00Z. 이 프로젝트 수명 밖의 시각은 관측이 아니라 고장이다. */
+    private static final double MAX_EPOCH_SECONDS = 4102444800d;
+
     /** Prometheus JSON 의 무한대 표기. 자바는 "Infinity" 만 받아 그대로 파싱하면 예외가 난다. */
     private static final String POSITIVE_INFINITY = "+Inf";
     private static final String NEGATIVE_INFINITY = "-Inf";
@@ -117,16 +131,30 @@ public class PromQueryClient implements PromQuery {
             }
         }
 
-        JsonNode timestamp = value.get(0);
+        double epochSeconds = epochSecondsOf(value.get(0));
+        // NaN·Inf 는 그대로 싣는다. 0 으로 바꾸면 "정상인데 0" 과 구분되지 않는다.
+        double sampleValue = parseValue(value.get(1).asString(""));
+        return new PromSample(
+                metricName, labels, sampleValue, Instant.ofEpochMilli(Math.round(epochSeconds * 1000)));
+    }
+
+    /**
+     * 표본 시각을 읽습니다. 숫자가 아니거나 관측일 수 없는 값이면 그 표본을 버립니다.
+     *
+     * @param timestamp 표본의 시각 노드
+     * @return epoch 초
+     * @throws PromQueryException 숫자가 아니거나 허용 범위 밖인 경우
+     */
+    private static double epochSecondsOf(JsonNode timestamp) {
         // asDouble() 은 숫자가 아니면 조용히 0.0 을 준다 — 그러면 관측 시각이 1970 년이 된다.
         if (!timestamp.isNumber() || !Double.isFinite(timestamp.doubleValue())) {
             throw new PromQueryException("표본 시각이 숫자가 아닙니다: " + timestamp.asString(""));
         }
         double epochSeconds = timestamp.doubleValue();
-        // NaN·Inf 는 그대로 싣는다. 0 으로 바꾸면 "정상인데 0" 과 구분되지 않는다.
-        double sampleValue = parseValue(value.get(1).asString(""));
-        return new PromSample(
-                metricName, labels, sampleValue, Instant.ofEpochMilli(Math.round(epochSeconds * 1000)));
+        if (epochSeconds < MIN_EPOCH_SECONDS || epochSeconds > MAX_EPOCH_SECONDS) {
+            throw new PromQueryException("표본 시각이 관측일 수 없는 값입니다: " + epochSeconds);
+        }
+        return epochSeconds;
     }
 
     private static double parseValue(String raw) {

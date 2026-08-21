@@ -170,6 +170,28 @@ class PromQueryClientTest {
         assertThat(samples.get(0).metricName()).isEqualTo("b");
     }
 
+    /**
+     * 유한한 숫자여도 관측일 수 없는 시각은 버린다.
+     *
+     * <p>실측 — {@code Math.round} 는 범위를 넘길 때 예외 대신 {@code Long.MAX_VALUE} 로 포화되고
+     * {@code Instant.ofEpochMilli} 도 그 값을 받아 {@code +292278994-08-17} 을 만든다. 조립기가
+     * 가장 큰 시각을 {@code snapshotAt} 으로 뽑으므로 표본 하나가 응답 전체의 기준 시각을 오염시킨다.</p>
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"1e18", "-1e18", "-1", "99999999999"})
+    @DisplayName("허용 범위 밖의 시각을 가진 표본은 버린다")
+    void dropsSampleWithOutOfRangeTimestamp(String epochSeconds) {
+        List<PromSample> samples = bind("""
+                {"status":"success","data":{"resultType":"vector","result":[
+                  {"metric":{"__name__":"a"},"value":[%s,"1"]},
+                  {"metric":{"__name__":"b"},"value":[1755000000,"2"]}]}}
+                """.formatted(epochSeconds), false).query("x");
+
+        assertThat(samples).hasSize(1);
+        assertThat(samples.get(0).metricName()).isEqualTo("b");
+        assertThat(samples.get(0).evaluatedAt()).isEqualTo(Instant.ofEpochSecond(1755000000L));
+    }
+
     /** 전송 실패도 예외로 나가야 조립하는 쪽이 UNAVAILABLE 로 바꿀 수 있다. */
     @Test
     @DisplayName("HTTP 오류는 PromQueryException 으로 바뀐다")
