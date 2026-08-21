@@ -21,6 +21,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.runtimeconfig.RuntimeConfigRevisionConflictException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.core.observation.Dependency;
@@ -56,7 +57,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             log.warn("[{}] {}", errorCode.getCode(), exception.getMessage());
         }
         return ResponseEntity.status(errorCode.getStatus())
-                .body(ResponseEnvelope.fail(body(errorCode)));
+                .body(ResponseEnvelope.fail(body(exception)));
     }
 
     @ExceptionHandler(ConstraintViolationException.class)
@@ -147,17 +148,29 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         };
         // status 는 매핑된 코드가 아니라 실제 statusCode 를 쓴다. 415·406 등이 400 으로 뭉개지지 않게.
         return new ErrorResponse(
-                statusCode.value(), mapped.getCode(), mapped.getMessage(), requestId(), timeProvider.instant());
+                statusCode.value(), mapped.getCode(), mapped.getMessage(), null,
+                requestId(), timeProvider.instant());
     }
 
     private ErrorResponse body(ErrorCode errorCode) {
         return ErrorResponse.of(errorCode, requestId(), timeProvider.instant());
     }
 
+    private ErrorResponse body(BusinessException exception) {
+        if (exception instanceof RuntimeConfigRevisionConflictException conflict) {
+            ErrorCode errorCode = conflict.getErrorCode();
+            return new ErrorResponse(
+                    errorCode.getStatus(), errorCode.getCode(), errorCode.getMessage(),
+                    conflict.getCurrentRevision(), requestId(), timeProvider.instant());
+        }
+        return body(exception.getErrorCode());
+    }
+
     private ErrorResponse validationBody(String message) {
         ErrorCode errorCode = CommonErrorCode.INVALID_INPUT;
         return new ErrorResponse(
-                errorCode.getStatus(), errorCode.getCode(), message, requestId(), timeProvider.instant());
+                errorCode.getStatus(), errorCode.getCode(), message, null,
+                requestId(), timeProvider.instant());
     }
 
     private String requestId() {
