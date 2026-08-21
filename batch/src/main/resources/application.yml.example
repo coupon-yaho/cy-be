@@ -45,6 +45,14 @@ spring:
     exclude:
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
       - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
+      # infra:redis 를 문 것은 명령 레이턴시 계측 때문인데(build.gradle), 그 모듈의 imports 에는
+      # 런타임 설정 CAS 어댑터도 함께 들어 있다. batch 는 RuntimeConfigStore 를 주입받는 곳이
+      # 없고 V1 에는 Redis 자체가 없다 — 쓰지 않는 층을 통째로 뺀다(위 JPA 와 같은 원칙).
+      #
+      # ⚠️ 빼지 않으면 쓰이지도 않는 RedisRuntimeConfigStore 빈이 생긴다. 지금은 생성자가 연결을
+      #    하지 않아 조용하지만, runtimeConfigStore 에 @ConditionalOnBean 가드가 없어서 나중에
+      #    누가 batch 에서 Redis 자동설정을 빼면 StringRedisTemplate 을 못 찾아 기동이 죽는다.
+      - com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration
 
   # 마이그레이션 소유자는 api 하나로 고정한다. batch 는 이미 만들어진 스키마 위에서 돈다.
   flyway:

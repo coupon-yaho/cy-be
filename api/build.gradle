@@ -7,6 +7,7 @@ dependencies {
     testImplementation testFixtures(project(':core'))
     // 어댑터는 런타임에만. api 가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
     runtimeOnly project(':storage')
+    // 이 줄이 지워지면 루트 build.gradle 의 cy.runtimeProjects 가드가 잡는다.
     runtimeOnly project(':infra:redis')
     runtimeOnly project(':infra:mq')
     testImplementation testFixtures(project(':storage'))
@@ -21,6 +22,15 @@ dependencies {
     //    가 이미 storage 본 코드를 전이로 끌어와서 없어도 컴파일된다. 강제가 아니라 의도 표시다.
 
     testImplementation project(':storage')
+
+    // 테스트만 infra:redis 를 본다. Redis 레이턴시 미터의 네임스페이스는 infra:redis 가 소유하고
+    // 관측 창 설정은 이 모듈의 observation.yml 이 소유해서, 둘을 잇는 테스트가 그 상수를 직접
+    // 참조해야 한다(RedisLatencyObservationYamlContractTest). 문자열로 옮겨 적으면 한쪽만 바뀌어도
+    // 계속 통과하고, 예외 없이 백분위만 조용히 사라진다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 이 모듈의 타입을 컴파일 타임에 못 본다.
+    testImplementation project(':infra:redis')
+    testImplementation testFixtures(project(':infra:redis'))
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
