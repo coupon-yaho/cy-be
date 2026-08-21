@@ -290,11 +290,25 @@ class ExpireSchedulerReportingTest {
                 .as("가르지 못했다는 사실(WARN)과 원래 실패(ERROR) 둘 다 남아야 "
                         + "운영자가 무엇을 볼지 정할 수 있다")
                 .hasSize(2);
-        assertThat(logs.list.get(0).getLevel()).isEqualTo(Level.WARN);
-        assertThat(logs.list.get(0).getFormattedMessage()).contains("가르지 못했습니다");
-        assertThat(logs.list.get(1).getLevel())
+
+        ILoggingEvent warn = logs.list.get(0);
+        assertThat(warn.getLevel()).isEqualTo(Level.WARN);
+        assertThat(warn.getFormattedMessage())
+                .as("**두 원인을 한 줄에 남긴다.** 따로 두면 어느 쪽이 먼저인지 로그에서 안 보인다")
+                .contains("가르지 못했습니다")
+                .contains("커넥션이 안 붙는다")
+                .contains("조회도 같은 이유로 죽는다");
+
+        ILoggingEvent error = logs.list.get(1);
+        assertThat(error.getLevel())
                 .as("모를 때는 사건 쪽으로 기운다 — 진짜 실패를 INFO 로 삼키는 것이 더 나쁘다")
                 .isEqualTo(Level.ERROR);
+        assertThat(error.getThrowableProxy())
+                .as("**원래 실패가 ERROR 에 실려 있어야 한다.** 레벨만 보면 예외를 빠뜨리는 "
+                        + "변경이 그대로 통과하고, 운영자는 스택 없이 한 줄만 받는다")
+                .isNotNull()
+                .extracting(ThrowableProxy -> ThrowableProxy.getMessage())
+                .isEqualTo("커넥션이 안 붙는다");
     }
 
     /** 남은 로그가 정확히 하나이고 기대한 레벨인지 확인한 뒤 본문을 돌려준다. */
