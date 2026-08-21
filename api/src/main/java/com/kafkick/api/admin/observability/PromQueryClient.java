@@ -31,6 +31,7 @@ public class PromQueryClient implements PromQuery {
 
     private static final String QUERY_PATH = "/api/v1/query";
     private static final String NAME_LABEL = "__name__";
+    private static final String QUERY_PARAM = "query";
 
     /** Prometheus JSON 의 무한대 표기. 자바는 "Infinity" 만 받아 그대로 파싱하면 예외가 난다. */
     private static final String POSITIVE_INFINITY = "+Inf";
@@ -54,7 +55,13 @@ public class PromQueryClient implements PromQuery {
         JsonNode body;
         try {
             body = restClient.get()
-                    .uri(uriBuilder -> uriBuilder.path(QUERY_PATH).queryParam("query", promQl).build())
+                    // ⚠️ PromQL 을 queryParam 값으로 직접 넣지 말 것. 셀렉터의 중괄호를 RestClient 가
+                    //    URI 템플릿 변수로 읽어 "Not enough variable values available to expand" 로
+                    //    죽는다. 질의 넷 중 셋이 중괄호를 쓰므로 운영에서 그대로 터진다.
+                    //    값을 변수로 넘겨야 템플릿 확장 대상에서 빠지고 인코딩도 함께 된다.
+                    .uri(uriBuilder -> uriBuilder.path(QUERY_PATH)
+                            .queryParam(QUERY_PARAM, "{" + QUERY_PARAM + "}")
+                            .build(promQl))
                     .retrieve()
                     .body(JsonNode.class);
         } catch (RestClientException failure) {

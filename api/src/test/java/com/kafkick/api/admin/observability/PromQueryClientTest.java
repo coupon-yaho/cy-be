@@ -13,6 +13,8 @@ import java.util.List;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -118,6 +120,37 @@ class PromQueryClientTest {
         assertThat(samples.get(1).value()).isEqualTo(Double.NEGATIVE_INFINITY);
         // 해석 불가 표본만 빠지고 뒤에 오는 정상 표본은 살아남는다.
         assertThat(samples.get(2).value()).isEqualTo(7d);
+    }
+
+    /**
+     * 셀렉터의 중괄호가 URI 템플릿 변수로 해석되면 안 된다.
+     *
+     * <p>실측 — {@code queryParam("query", promQl)} 로 넣으면 RestClient 가
+     * {@code {quantile!=""}} 를 템플릿 변수로 읽어 "Not enough variable values available to
+     * expand" 로 죽는다. 조립기가 보내는 질의 넷 중 셋이 중괄호를 쓰므로 운영에서 그대로
+     * 터지는데, 대역을 쓰는 조립기 테스트도 중괄호 없는 질의만 쓰던 이 파일도 못 잡았다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "app_http_latency_seconds{quantile!=\"\"}",
+            "max(time() - timestamp({__name__=~\"app_http_result_total|app_http_latency_seconds\"}))",
+            "{__name__=~\"app_consistency_gap|app_consistency_gap_state\"}"
+    })
+    @DisplayName("셀렉터 중괄호가 든 질의도 그대로 전달된다")
+    void passesSelectorsWithBracesUnchanged(String promQl) {
+        RestClient.Builder builder = RestClient.builder().baseUrl("http://prometheus:9090");
+        MockRestServiceServer expecting = MockRestServiceServer.bindTo(builder).build();
+        expecting.expect(requestTo(Matchers.containsString("/api/v1/query")))
+                // URI#getQuery 는 퍼센트 인코딩을 되돌린 값을 준다. 인코딩되어 나가되 서버가
+                // 읽는 값은 원본 그대로여야 한다.
+                .andExpect(request -> assertThat(request.getURI().getQuery())
+                        .isEqualTo("query=" + promQl))
+                .andRespond(withSuccess("""
+                        {"status":"success","data":{"resultType":"vector","result":[]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(new PromQueryClient(builder.build()).query(promQl)).isEmpty();
+        expecting.verify();
     }
 
     /** 전송 실패도 예외로 나가야 조립하는 쪽이 UNAVAILABLE 로 바꿀 수 있다. */
