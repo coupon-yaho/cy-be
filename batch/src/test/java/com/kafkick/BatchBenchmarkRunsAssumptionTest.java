@@ -64,6 +64,22 @@ class BatchBenchmarkRunsAssumptionTest {
                 .isFalse();
         assertThat(createsBenchmarkRuns(
                 "CREATE TABLE `x` (`c` text COMMENT 'CREATE TABLE benchmark_runs (id)')")).isFalse();
+
+        // 문자열 안의 `--` 가 같은 줄 뒤의 진짜 DDL 을 삼키면 안 된다.
+        assertThat(createsBenchmarkRuns(
+                "INSERT INTO t VALUES ('a -- b'); CREATE TABLE benchmark_runs (id bigint);")).isTrue();
+        // 반대로 주석 안의 어퍼스트로피가 뒤쪽 문자열까지 묶어 DDL 을 삼켜도 안 된다.
+        assertThat(createsBenchmarkRuns(
+                "-- don't do this\nCREATE TABLE `benchmark_runs` (id bigint);\nINSERT INTO t VALUES ('x');"))
+                .isTrue();
+        // 블록 주석 안의 DDL 도 생성이 아니다.
+        assertThat(createsBenchmarkRuns("/* CREATE TABLE benchmark_runs (id) */")).isFalse();
+        assertThat(createsBenchmarkRuns(
+                "/* 나중에 */ CREATE TABLE `benchmark_runs` (id bigint);")).isTrue();
+        // MySQL 은 `#` 도 줄 주석으로 인정한다.
+        assertThat(createsBenchmarkRuns("# CREATE TABLE benchmark_runs (id bigint)")).isFalse();
+        assertThat(createsBenchmarkRuns(
+                "# 나중에 만든다\nCREATE TABLE `benchmark_runs` (id bigint);")).isTrue();
     }
 
     @Test
@@ -95,16 +111,65 @@ class BatchBenchmarkRunsAssumptionTest {
     }
 
     /**
-     * 주석·블록 주석·문자열 리터럴을 걷어낸 뒤 테이블 이름 자리만 본다.
+     * 실행되는 SQL 만 남기고 테이블 이름 자리를 본다.
      *
-     * <p>이름이 <b>등장</b>하는 것과 테이블이 <b>생기는</b> 것은 다르다. 지금까지 셋 다 실제로
-     * 걸렸다 — CY-253 의 {@code COMMENT} 언급, OBS-22 가 만들 {@code benchmark_runs_archive},
-     * 그리고 문자열 안에 든 DDL 텍스트.
+     * <p>이름이 <b>등장</b>하는 것과 테이블이 <b>생기는</b> 것은 다르다. 실제로 걸린 것들 —
+     * CY-253 의 {@code COMMENT} 언급, OBS-22 가 만들 {@code benchmark_runs_archive},
+     * 문자열에 든 DDL 텍스트, 문자열 안 {@code --} 뒤의 진짜 DDL, MySQL 의 {@code #} 주석.
+     *
+     * <p><b>정규식을 차례로 적용하지 않는다.</b> 주석과 문자열은 서로를 품을 수 있어 어느 쪽을 먼저
+     * 지우든 반대 구멍이 남는다 — 주석을 먼저 지우면 문자열 속 {@code --} 뒤의 DDL 을 놓치고,
+     * 문자열을 먼저 지우면 주석 속 어퍼스트로피({@code don't})가 뒤쪽 문자열까지 한 리터럴로 묶어
+     * 그 사이의 DDL 을 삼킨다. 둘 다 실측으로 확인했다. 그래서 상태를 들고 <b>한 번만</b> 훑는다.
      */
     static boolean createsBenchmarkRuns(String sql) {
-        String executable = sql.replaceAll("(?m)--.*$", "")
-                .replaceAll("(?s)/\\*.*?\\*/", "")
-                .replaceAll("(?s)'(?:[^']|'')*'", "''");
-        return CREATE_BENCHMARK_RUNS.matcher(executable).find();
+        return CREATE_BENCHMARK_RUNS.matcher(executableSql(sql)).find();
+    }
+
+    /** 문자열 리터럴과 주석을 공백으로 바꾼 SQL. */
+    private static String executableSql(String sql) {
+        StringBuilder executable = new StringBuilder(sql.length());
+        int index = 0;
+        while (index < sql.length()) {
+            char current = sql.charAt(index);
+            if (current == '\'') {
+                index = skipStringLiteral(sql, index);
+                executable.append(' ');
+            } else if (sql.startsWith("--", index) || current == '#') {
+                while (index < sql.length() && sql.charAt(index) != '\n') {
+                    index++;
+                }
+                executable.append(' ');
+            } else if (sql.startsWith("/*", index)) {
+                index += 2;
+                while (index < sql.length() && !sql.startsWith("*/", index)) {
+                    index++;
+                }
+                index = Math.min(index + 2, sql.length());
+                executable.append(' ');
+            } else {
+                executable.append(current);
+                index++;
+            }
+        }
+        return executable.toString();
+    }
+
+    /**
+     * 여는 따옴표부터 닫는 따옴표까지 건너뛴다.
+     *
+     * <p>{@code ''}(이스케이프된 따옴표)를 따로 처리하지 않는다. 그렇게 하면 리터럴 하나가 인접한
+     * 리터럴 둘로 쪼개질 뿐 <b>건너뛰는 구간은 같아서</b> 판정이 달라지지 않는다 — 시뮬레이션으로
+     * 확인했다. 어떤 테스트로도 구분되지 않는 분기를 두면 "지키는 척하는 코드" 가 된다.
+     */
+    private static int skipStringLiteral(String sql, int start) {
+        int index = start + 1;
+        while (index < sql.length()) {
+            if (sql.charAt(index) == '\'') {
+                return index + 1;
+            }
+            index++;
+        }
+        return index;
     }
 }
