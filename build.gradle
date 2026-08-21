@@ -46,3 +46,25 @@ subprojects {
 jar {
     enabled = false
 }
+
+// 배선 가드가 쓰는 값. Gradle 이 해석한 런타임 프로젝트 목록을 테스트에 넘긴다 — 배선 선언을
+// build.gradle 문자열로 검사하면 주석 형태 하나로 뚫린다(근거는
+// RedisLatencyMeterTestSupport.assertOnRuntimeClasspath() javadoc).
+//
+// 쓰는 곳이 api·batch 둘뿐이라 subprojects 로 넓히지 않는다. 넓히면 나머지 모듈의 test
+// up-to-date 체크마다 필요 없는 의존성 해석이 붙는다.
+configure([project(':api'), project(':batch')]) {
+    tasks.named('test') {
+        def runtimeProjects = provider {
+            configurations.runtimeClasspath.incoming.resolutionResult.allComponents
+                    .collect { it.id }
+                    .findAll { it instanceof ProjectComponentIdentifier }
+                    .collect { it.projectPath }
+                    .join(',')
+        }
+        inputs.property('runtimeProjects', runtimeProjects)
+        doFirst {
+            systemProperty 'cy.runtimeProjects', runtimeProjects.get()
+        }
+    }
+}
