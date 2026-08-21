@@ -59,9 +59,9 @@ class RedisLatencyWiringContractTest {
     void distributionIsOwnedByTemplate() {
         Properties template = managementTemplate();
 
-        assertThat(template.getProperty(PERCENTILES_PREFIX + LETTUCE_DISTRIBUTION_KEY))
+        assertThat(normalizeCsv(template.getProperty(PERCENTILES_PREFIX + LETTUCE_DISTRIBUTION_KEY)))
             .as("없으면 백분위가 아예 나오지 않는다")
-            .isEqualTo("0.5, 0.95, 0.99");
+            .containsExactly("0.5", "0.95", "0.99");
         assertThat(template.getProperty(EXPIRY_PREFIX + LETTUCE_DISTRIBUTION_KEY))
             .as("빠지면 기본 2분이 걸려 HTTP p99(10초 창)와 같은 시점의 값이 아니게 된다")
             .isEqualTo("10s");
@@ -124,6 +124,12 @@ class RedisLatencyWiringContractTest {
     private static List<String> excludedAutoConfigurations() {
         Properties template = yaml(new ClassPathResource("application.yml.example"));
         List<String> excludes = new ArrayList<>();
+        // 목록 표기와 콤마 스칼라 표기를 Boot 는 같은 뜻으로 바인딩한다. 인덱스 키만 읽으면
+        // 스칼라로 바꿨을 때 제외가 실제로 동작하는데도 이 테스트가 거짓 실패한다.
+        String scalar = template.getProperty("spring.autoconfigure.exclude");
+        if (scalar != null) {
+            excludes.addAll(normalizeCsv(scalar));
+        }
         for (int i = 0; ; i++) {
             String value = template.getProperty("spring.autoconfigure.exclude[" + i + "]");
             if (value == null) {

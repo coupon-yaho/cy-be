@@ -15,6 +15,7 @@ import io.lettuce.core.protocol.CommandType;
 import io.lettuce.core.resource.ClientResources;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.distribution.ValueAtPercentile;
 
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.data.redis.autoconfigure.ClientResourcesBuilderCustomizer;
@@ -105,10 +106,18 @@ public final class RedisLatencyMeterTestSupport {
             .toList();
     }
 
-    /** 관측 창이 닫히면 값이 0 이 된다 — 미터 자체는 남으므로 존재 여부로는 못 가른다. */
+    /**
+     * 관측 창이 닫히면 값이 0 이 된다 — 미터 자체는 남으므로 존재 여부로는 못 가른다.
+     *
+     * <p>백분위가 아예 안 걸린 것은 창 판정 이전 문제다. 빈 배열을 false 로 돌려주면
+     * 설정 키가 사라져도 "창이 닫혔다" 를 단정하는 쪽이 그대로 통과한다.
+     */
     public static boolean hasPositivePercentile(MeterRegistry registry, String meter) {
-        return Arrays.stream(timer(registry, meter).takeSnapshot().percentileValues())
-            .anyMatch(value -> value.value(TimeUnit.NANOSECONDS) > 0);
+        ValueAtPercentile[] values = timer(registry, meter).takeSnapshot().percentileValues();
+        if (values.length == 0) {
+            throw new IllegalStateException(meter + " 에 백분위가 걸려 있지 않다 — 창 판정 이전 문제다");
+        }
+        return Arrays.stream(values).anyMatch(value -> value.value(TimeUnit.NANOSECONDS) > 0);
     }
 
     /** 없으면 던진다. 픽스처는 값과 예외만 내고, 단정은 호출하는 계약 테스트가 한다. */
@@ -144,9 +153,6 @@ public final class RedisLatencyMeterTestSupport {
         return merged;
     }
 
-    private static String[] splitExpressions(String onProfile) {
-        return Arrays.stream(onProfile.split(",")).map(String::trim).toArray(String[]::new);
-    }
 
     /**
      * {@code ---} 로 갈린 문서를 각각 읽는다.
@@ -191,6 +197,10 @@ public final class RedisLatencyMeterTestSupport {
             throw new IllegalStateException(resource + " 를 파싱하지 못했다");
         }
         return properties;
+    }
+
+    private static String[] splitExpressions(String onProfile) {
+        return Arrays.stream(onProfile.split(",")).map(String::trim).toArray(String[]::new);
     }
 
     private static Class<?> load(String name) {
