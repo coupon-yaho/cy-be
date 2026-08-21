@@ -4,6 +4,32 @@
 CREATE UNIQUE INDEX uk_email_hash  ON members  (email_hash);
 CREATE UNIQUE INDEX uk_template_open ON coupons (template_id, open_at);
 
+-- 보조 인덱스 중 이것만 기본으로 건다. 90_perf_indexes_optional.sql 에서 승격한 것이다.
+--
+-- 만료 배치가 없으면 이 인덱스도 없어도 된다. 그런데 만료 배치는 대상을 찾으려고
+-- issuances 를 훑고, 훑는 동안 지나간 행을 잠근다 — 넘길 것이 없는 실행이 최악이라
+-- 테이블 끝까지 훑고 supremum 까지 잠근다. 그러면 신규 발급 INSERT 가 오류 1205 로 죽는다.
+-- 성능이 아니라 가용성 문제라 "나중에 처방" 으로 미룰 수 없었다.
+--
+-- 실측(mysql:latest, 5,000행, 만료 대상 0건): 락 5,020 → 2.
+-- 수치와 재는 방법은 cy-be 의 docs/12-expire-lock-measurement.md 에 있다.
+--
+-- 여기(적재 후)에 두므로 300만 건 적재 성능은 그대로다.
+-- cy-be 의 V11__issuance_status_expires_index.sql 과 짝이고, 이름·컬럼이 같아야
+-- SchemaParityTest 가 통과한다.
+CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
+
+-- 만료 배치가 청크 경계를 구하는 문장(SELECT MAX(id) ... WHERE updated_at = :committedAt)이
+-- 쓰는 인덱스다. updated_at 이 어디에도 없으면 그 문장이 EXPIRED 전 건을 훑는다 —
+-- 이미 만료된 행이 쌓일수록 나빠지고, 진도는 JobInstance 안에서만 살아서
+-- 주기마다 asOf 가 달라지는 실행은 매번 첫 청크가 afterId = 0 이다.
+--
+-- 실측(200,000행 · 이미 EXPIRED 150,000 누적): 첫 청크 200,017행 → 1,001행.
+-- 수치는 cy-be 의 docs/12-expire-lock-measurement.md §5 에 있다.
+--
+-- cy-be 의 V12 와 짝이고, 이름·컬럼이 같아야 SchemaParityTest 가 통과한다.
+CREATE INDEX idx_issuance_updated_at ON issuances (updated_at, id);
+
 ALTER TABLE members             ADD FOREIGN KEY (membership_grade) REFERENCES grades (code);
 ALTER TABLE coupon_templates    ADD FOREIGN KEY (brand_id)   REFERENCES brands (id);
 ALTER TABLE coupons             ADD FOREIGN KEY (template_id) REFERENCES coupon_templates (id);

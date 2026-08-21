@@ -1,0 +1,470 @@
+// V1·V2·V3·V5·V6 판정 SQL 입니다. 규칙마다 드라이빙 테이블이 다릅니다.
+package com.kafkick.storage.db.verification;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.VerificationFinding;
+import com.kafkick.core.verification.VerificationRuleRepository;
+
+/**
+ * <b>{@code asof_state.coupon_id} 는 발급건({@code issuances.id})입니다.</b> 레거시 컬럼명이라
+ * 회차로 읽으면 조인이 통째로 어긋납니다.
+ *
+ * <p>{@code target_key} 를 SQL 에서 만들지 않습니다. 형식이 코드와 SQL 두 곳에 생기면
+ * 갈라지고, 그러면 개수는 맞는데 키만 달라져 누락과 오탐이 동시에 뜹니다.
+ * 여기서는 식별자만 꺼내고 키는 {@link VerificationFinding} 의 팩토리가 만듭니다.
+ */
+@Repository
+public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
+
+    /**
+     * 접은 상태와 저장된 상태가 다른 발급건.
+     *
+     * <p>{@code asof_state} 를 드라이빙 테이블로 잡는다. {@code issuances} 를 드라이빙으로 잡으면
+     * 접힌 상태가 없는 발급건이 {@code state IS NULL} 로 올라와, 기대 매트릭스에 없는 검출을 낸다.
+     *
+     * <p>{@code i.updated_at <= :asOf} 로 자른다. 접힌 상태는 asOf 로 얼어 있는데 저장 상태는
+     * 질의 순간의 현재값이라, 이 조건이 없으면 배치가 도는 동안 런타임이 건드린 발급건이
+     * 전부 어긋난 것으로 잡히고 재실행 결과도 달라진다.
+     *
+     * <p><b>이 조건이 실제로 무언가를 거르면 그건 이미 비정상이다.</b> 실행 시작에
+     * {@link #hasIssuancesUpdatedAfter} 로 거부하므로, 정상 경로에서는 여기서 걸러지는 행이 없다.
+     * 남는 것은 가드 통과 후 이 질의까지의 짧은 틈뿐이다.
+     */
+    // stored 는 MySQL 예약어다(GENERATED ... STORED). 별칭에 그대로 쓰면 문법 오류가 난다.
+    //
+    // 문장 상한은 여기 걸지 않는다. MAX_EXECUTION_TIME 은 read-only SELECT 에만 먹어서
+    // 이 잡에서 가장 무거운 문장(300만 행 UPDATE)을 못 덮는다. 상한은 Step 의 트랜잭션 속성으로
+    // 건다 — Spring 이 그 트랜잭션의 모든 Statement 에 setQueryTimeout 을 적용한다.
+    private static final String SELECT_REPLAY_MISMATCH = """
+            SELECT a.coupon_id AS issuance_id,
+                   a.state     AS replayed_state,
+                   i.status    AS stored_status
+              FROM asof_state a
+              JOIN issuances i ON i.id = a.coupon_id
+             WHERE a.run_id = :runId
+               AND i.updated_at <= :asOf
+               AND a.state <> i.status
+             ORDER BY a.coupon_id
+             LIMIT :limit
+            """;
+
+    /**
+     * 상태와 활성 사용 건수가 어긋나는 발급건.
+     *
+     * <p>불변식은 {@code USED} 면 1건, 아니면 0건이다. 한쪽 방향만 보면
+     * 이중 사용({@code USED} 인데 2건)을 놓친다.
+     *
+     * <p><b>{@code asof_state} 를 드라이빙으로 쓰므로 이력이 하나도 없는 발급건은 시야 밖이다.</b>
+     * 그런 발급건은 {@code asof_state} 행 자체가 안 생겨, 활성 사용 행이 남아 있어도 여기서
+     * 안 보인다(V3 도 같은 드라이빙이라 같이 못 본다). V1 이 회차 재고 집계로 간접 검출할 뿐
+     * 발급건 단위로는 아무도 지목하지 못한다. 계약의 오염 유형 7 은 ISSUE 이력이 있는 발급건에
+     * 심으므로 정답 매니페스트 대조는 영향을 받지 않는다 — 런타임 사고(발급건은 만들어졌는데
+     * 이력 INSERT 만 실패)에서만 벌어지는 사각이라 별도 관측 지표로 다룬다.
+     */
+    private static final String SELECT_USAGE_MISMATCH = """
+            SELECT a.coupon_id                                       AS issuance_id,
+                   a.active_usage_count                              AS actual_count,
+                   CASE WHEN a.state = 'USED' THEN 1 ELSE 0 END      AS expected_count
+              FROM asof_state a
+             WHERE a.run_id = :runId
+               AND a.active_usage_count <> CASE WHEN a.state = 'USED' THEN 1 ELSE 0 END
+             ORDER BY a.coupon_id
+             LIMIT :limit
+            """;
+
+    /**
+     * {@code updated_at} 에 인덱스가 없어 <b>이 문장도 0건일 때 300만 행을 끝까지 읽는다</b> —
+     * 정상 경로가 곧 최악 경로다. {@code EXISTS} 가 {@code COUNT(*)} 보다 나은 것은
+     * "갱신이 실제로 있는" 비정상 경로뿐이다.
+     *
+     * <p>처방은 {@code cy-seed/ddl/90_perf_indexes_optional.sql} 이고, 붙이기 전후
+     * {@code EXPLAIN ANALYZE} 가 과제의 일부다. 지금 이 주석은 <b>개선을 주장하지 않는다.</b>
+     */
+    private static final String EXISTS_UPDATED_AFTER = """
+            SELECT EXISTS(SELECT 1 FROM issuances WHERE updated_at > :asOf LIMIT 1)
+            """;
+
+    /**
+     * V6 판정이 읽는 <b>살아 있는 두 테이블</b>을 한 값으로 접는다.
+     *
+     * <p><b>축이 둘인 이유.</b> V6 은 {@code (coupons.eligible_grades_mask & grades.bit_value) = 0}
+     * 으로 판정한다 — AND 의 양쪽이 각각 다른 테이블이다. {@code coupons} 만 얼리면
+     * {@code SILVER} 의 {@code bit_value} 를 2→16 으로 옮기는 것만으로 검출 집합이 달라지는데
+     * 지문은 그대로다. 둘 다 {@code dataset_fingerprint} 재료에 없고 {@code updated_at} 도 없어
+     * 시각 비교를 못 하므로, 값 자체를 접는다. 회차 147~291행 · 등급 4행이라 비용이 없다.
+     *
+     * <p><b>{@code GROUP_CONCAT} 을 쓰지 않는다.</b> {@code group_concat_max_len} 기본값이
+     * 1024 바이트인데 <b>CLEAN 147행이 실측 920 바이트</b>(한계의 90%)이고
+     * <b>CORRUPT 291행이면 약 1820 바이트로 이미 한계를 넘는다.</b>
+     * 지금 잘리지 않는 것은 {@code GROUP_CONCAT} 을 안 쓰기 때문이지 여유가 있어서가 아니다.
+     * MySQL 은 넘치면
+     * <b>경고만 내고 조용히 자른다.</b> 뒤쪽 회차의 마스크가 바뀌어도 지문이 그대로가 되어
+     * <b>가드가 열린 채로 실패한다.</b> 세션 변수를 올릴 수도 있지만 커넥션 상태에 기대게 된다.
+     *
+     * <p>행별 해시를 {@code BIT_XOR} 로 접으면 길이 제한이 없다. PK 가 해시 재료에 있어
+     * 같은 해시가 둘 나올 수 없으니 상쇄도 없다. 행 수를 앞에 붙여 <b>INSERT·DELETE</b> 도 잡는다 —
+     * XOR 만으로는 두 행이 함께 사라지는 경우를 놓칠 수 있다. 종류 접두사({@code 'C'}/{@code 'G'})는
+     * 두 축의 해시 공간이 겹치지 않게 한다.
+     */
+    private static final String SELECT_POLICY_DIGEST = """
+            SELECT CONCAT(
+                     (SELECT CONCAT(COUNT(*), ':', LPAD(HEX(BIT_XOR(
+                          CAST(CONV(SUBSTR(
+                              SHA2(CONCAT_WS(0x1f, 'C', id, eligible_grades_mask), 256), 1, 16),
+                              16, 10) AS UNSIGNED))), 16, '0'))
+                        FROM coupons),
+                     0x1e,
+                     (SELECT CONCAT(COUNT(*), ':', LPAD(HEX(BIT_XOR(
+                          CAST(CONV(SUBSTR(
+                              SHA2(CONCAT_WS(0x1f, 'G', code, bit_value), 256), 1, 16),
+                              16, 10) AS UNSIGNED))), 16, '0'))
+                        FROM grades))
+            """;
+
+    /** 재고는 회차가 147~291행이라 훑는 비용이 없다. 그래도 형태는 발급건 쪽과 같이 둔다. */
+    private static final String EXISTS_STOCK_UPDATED_AFTER = """
+            SELECT EXISTS(SELECT 1 FROM coupon_stocks WHERE updated_at > :asOf LIMIT 1)
+            """;
+
+    /**
+     * 접은 활성 건수와 저장된 재고가 다른 회차.
+     *
+     * <p><b>{@code coupons} 가 드라이빙이다.</b> {@code asof_state} 를 잡으면 활성이 0인 회차가,
+     * {@code coupon_stocks} 를 잡으면 재고 행이 없는 회차가 각각 결과에서 빠진다 —
+     * 둘 다 잡아야 할 상태다. 재고 없이 발급이 쌓이는 것은 초과 발급의 가장 위험한 형태이고,
+     * 재고가 남았는데 발급이 0인 것은 오염 유형 1 이다. 회차가 147~291개라 전수 비용이 없다.
+     *
+     * <p>활성은 {@code ISSUED}·{@code USED} 다 — 컬럼 주석이 못 박은 <b>현재 보유량</b>이고
+     * 누적 발급 수가 아니다. {@code CANCELLED}·{@code EXPIRED} 는 재고로 돌아간 것이라 빠진다.
+     *
+     * <p>{@code s.updated_at <= :asOf} 로 자르는 이유는 V3 와 같다. 정상 경로에서는
+     * {@link #hasStocksUpdatedAfter} 가 시작에서 막으므로 여기서 걸러지는 행이 없다.
+     */
+    private static final String SELECT_STOCK_MISMATCH = """
+            SELECT c.id                            AS coupon_id,
+                   COALESCE(r.active_count, 0)     AS replayed_active,
+                   COALESCE(s.active_count, 0)     AS stored_active
+              FROM coupons c
+              LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
+              LEFT JOIN (
+                    SELECT i.coupon_id      AS coupon_id,
+                           COUNT(*)         AS active_count
+                      FROM asof_state a
+                      JOIN issuances i ON i.id = a.coupon_id
+                     WHERE a.run_id = :runId
+                       AND a.state IN ('ISSUED', 'USED')
+                     GROUP BY i.coupon_id
+                   ) r ON r.coupon_id = c.id
+             WHERE (s.updated_at IS NULL OR s.updated_at <= :asOf)
+               AND COALESCE(r.active_count, 0) <> COALESCE(s.active_count, 0)
+             ORDER BY c.id
+             LIMIT :limit
+            """;
+
+    /**
+     * 발급 시점 등급이 회차의 허용 등급에 없는 발급건.
+     *
+     * <p><b>{@code members} 를 조인하지 않는다.</b> 현재 등급으로 판정하면 회원이 강등되는 순간
+     * 정상 발급이 위반으로 잡힌다. 스냅샷 둘만 본다.
+     *
+     * <p><b>그래도 결정론은 아니다.</b> {@code coupons.eligible_grades_mask} 는 살아 있는 행이고
+     * 지문 재료에도 없다. 그래서 {@code i.updated_at <= :asOf} 로 "어떤 발급건을 볼지" 만이라도
+     * 고정한다 — <b>이 조건을 지우면 재실행이 갈린다.</b> 정책 축은 {@code policyDigest} 가 지킨다.
+     *
+     * <p><b>참조 구현과 갈리는 자리다.</b> {@code cy-seed/seedgen/verify.py} 는 INNER JOIN 이라
+     * 미등록 등급을 안 잡는다. 지금은 {@code issued_grade} 의 FK 가 그런 행의 발생 자체를 막아
+     * 두 집합이 같지만, <b>FK 가 빠지면 여기만 검출해 오탐이 된다.</b>
+     *
+     * <p><b>{@code grades} 를 LEFT JOIN 으로 잡는다.</b> INNER 로 잡으면 {@code grades} 에 없는
+     * 등급 문자열이 조용히 빠지는데, 그것이야말로 잡아야 할 위반이다.
+     * 오타든 새 등급이든 마스크에 자리가 없으면 발급되면 안 된다.
+     */
+    private static final String SELECT_GRADE_VIOLATION = """
+            SELECT i.id                    AS issuance_id,
+                   i.issued_grade          AS issued_grade,
+                   c.eligible_grades_mask  AS eligible_mask,
+                   g.bit_value             AS grade_bit
+              FROM issuances i
+              JOIN coupons c ON c.id = i.coupon_id
+              LEFT JOIN grades g ON g.code = i.issued_grade
+             WHERE i.updated_at <= :asOf
+               AND (g.bit_value IS NULL OR (c.eligible_grades_mask & g.bit_value) = 0)
+             ORDER BY i.id
+             LIMIT :limit
+            """;
+
+    /**
+     * V2 1인 1매 위반. 케이스 둘을 {@code UNION} 으로 합친다 —
+     * 한 회원이 두 케이스에 다 걸려도 {@code target_key} 가 같아 한 행이어야 한다.
+     * {@code UNION ALL} 을 쓰면 {@code uk_run_finding} 중복키로 잡 전체가 죽는다.
+     *
+     * <p><b>케이스 2 에서 {@code MIN(id)} 를 뺀다.</b> 같은 code 가 둘이면 먼저 발급된 쪽은
+     * 정상이고 복제본만 위반이다. 안 빼면 원본 회원까지 검출돼 <b>오탐이 오염 수만큼 늘어난다.</b>
+     *
+     * <p>두 케이스 모두 {@code updated_at <= :asOf} 로 자른다 — 어떤 발급건을 볼지가
+     * 고정돼야 재실행 결과가 같다. 집계 안팎에 모두 걸어야 한다:
+     * 안쪽을 안 자르면 {@code asOf} 이후 행이 {@code COUNT(*)} 를 올려 <b>없는 중복이 보인다.</b>
+     */
+    private static final String SELECT_DUPLICATE_ISSUANCE = """
+            SELECT coupon_id, member_id
+              FROM (
+                    SELECT coupon_id, member_id
+                      FROM issuances
+                     WHERE updated_at <= :asOf
+                     GROUP BY coupon_id, member_id
+                    HAVING COUNT(*) > 1
+
+                    UNION
+
+                    SELECT i.coupon_id, i.member_id
+                      FROM issuances i
+                      JOIN (
+                            SELECT coupon_id, code, MIN(id) AS original_id
+                              FROM issuances
+                             WHERE updated_at <= :asOf
+                             GROUP BY coupon_id, code
+                            HAVING COUNT(*) > 1
+                           ) d ON d.coupon_id = i.coupon_id AND d.code = i.code
+                     WHERE i.updated_at <= :asOf
+                       AND i.id <> d.original_id
+                   ) dup
+             ORDER BY coupon_id, member_id
+             LIMIT :limit
+            """;
+
+    /** 계약이 정한 재료 구분자. */
+    private static final String FINGERPRINT_SEPARATOR = "|";
+
+    /** 시드 참조 구현({@code stats.py})의 폴백. 갈리면 같은 데이터에 다른 지문이 나온다. */
+    private static final LocalDateTime EMPTY_DATASET_TIME = LocalDateTime.of(1970, 1, 1, 0, 0);
+
+    private static final DateTimeFormatter FINGERPRINT_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS");
+
+    /**
+     * 계약의 {@code fingerprint.formula} 를 재료 다섯으로 뽑는다. 이어 붙이기와 해싱은
+     * 자바가 한다 — 시각 포맷이 계약에 <b>문자열로</b> 정해져 있어 DB 의 기본 표현에 맡길 수 없다.
+     *
+     * <p>이력은 {@code created_at <= :asOf} 로 자른다. 나머지 넷은 <b>안 자른다</b> —
+     * 계약이 그 필터를 이력에만 걸었고, {@code coupon_stocks} 에는 그럴 컬럼도 없다.
+     * 대신 {@code assertFrozenStep} 이 실행 중 갱신을 막는다.
+     *
+     * <p>빈 데이터셋에서 {@code MAX}·{@code SUM} 은 NULL 이다. 그 자리는
+     * <b>시드 저장소의 참조 구현이 쓰는 값</b>을 그대로 쓴다 —
+     * {@code cy-seed/seedgen/stats.py#dataset_fingerprint} 가 숫자는 {@code 0},
+     * 시각은 {@code 1970-01-01 00:00:00.000000} 으로 접는다.
+     *
+     * <p><b>여기서 다른 값을 쓰면 안 된다.</b> 시드의 매니페스트와 배치의 지문은
+     * <b>대조하라고 있는 값</b>이라({@code seedgen/manifest.py}) 폴백이 갈리면
+     * 같은 데이터에 다른 지문이 나온다. 처음에 {@code "NULL"} 로 짰다가 참조 구현과 맞췄다.
+     */
+    private static final String SELECT_FINGERPRINT_INPUT = """
+            SELECT (SELECT MAX(id) FROM issuance_histories WHERE created_at <= :asOf) AS max_history_id,
+                   (SELECT COUNT(*) FROM issuance_histories WHERE created_at <= :asOf) AS history_count,
+                   (SELECT COUNT(*) FROM issuances)                                    AS issuance_count,
+                   (SELECT CAST(COALESCE(SUM(active_count), 0) AS SIGNED)
+                      FROM coupon_stocks)                                              AS active_total,
+                   (SELECT MAX(updated_at) FROM issuances)                             AS max_updated_at
+            """;
+
+    private static final RowMapper<VerificationFinding> REPLAY_MISMATCH_MAPPER =
+            (rs, rowNum) -> VerificationFinding.forIssuance(
+                    FindingType.REPLAY_MISMATCH,
+                    rs.getLong("issuance_id"),
+                    "replay=" + rs.getString("replayed_state"),
+                    "issuances.status=" + rs.getString("stored_status"));
+
+    private static final RowMapper<VerificationFinding> STOCK_MISMATCH_MAPPER =
+            (rs, rowNum) -> VerificationFinding.forCoupon(
+                    FindingType.STOCK_MISMATCH,
+                    rs.getLong("coupon_id"),
+                    "replay=" + rs.getInt("replayed_active"),
+                    "coupon_stocks.active_count=" + rs.getInt("stored_active"));
+
+    private static final RowMapper<VerificationFinding> DUPLICATE_ISSUANCE_MAPPER =
+            (rs, rowNum) -> VerificationFinding.forCouponMember(
+                    FindingType.DUP_PER_MEMBER,
+                    rs.getLong("coupon_id"),
+                    rs.getLong("member_id"),
+                    "발급 1건",
+                    "발급 2건 이상");
+
+    /** 등급 문자열이 {@code grades} 에 없으면 {@code grade_bit} 가 null 이다 — 그 사실을 증거에 남긴다. */
+    private static final RowMapper<VerificationFinding> GRADE_VIOLATION_MAPPER = (rs, rowNum) -> {
+        int mask = rs.getInt("eligible_mask");
+        int bit = rs.getInt("grade_bit");
+        String actualBit = rs.wasNull() ? "grades 에 없는 등급" : "bit=" + bit;
+
+        return VerificationFinding.forIssuance(
+                FindingType.GRADE_VIOLATION,
+                rs.getLong("issuance_id"),
+                "eligible_grades_mask=" + mask,
+                "issued_grade=" + rs.getString("issued_grade") + " " + actualBit);
+    };
+
+    private static final RowMapper<VerificationFinding> USAGE_MISMATCH_MAPPER =
+            (rs, rowNum) -> VerificationFinding.forIssuance(
+                    FindingType.USAGE_MISMATCH,
+                    rs.getLong("issuance_id"),
+                    "active_usage=" + rs.getInt("expected_count"),
+                    "active_usage=" + rs.getInt("actual_count"));
+
+    private final JdbcClient jdbcClient;
+
+    public VerificationRuleJdbcAdapter(JdbcClient jdbcClient) {
+        this.jdbcClient = jdbcClient;
+    }
+
+    @Override
+    public List<VerificationFinding> findReplayMismatches(long runId, LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_REPLAY_MISMATCH)
+                .param("runId", runId)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(REPLAY_MISMATCH_MAPPER)
+                .list();
+    }
+
+    @Override
+    public List<VerificationFinding> findUsageMismatches(long runId, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_USAGE_MISMATCH)
+                .param("runId", runId)
+                .param("limit", limit)
+                .query(USAGE_MISMATCH_MAPPER)
+                .list();
+    }
+
+    @Override
+    public List<VerificationFinding> findStockMismatches(long runId, LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_STOCK_MISMATCH)
+                .param("runId", runId)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(STOCK_MISMATCH_MAPPER)
+                .list();
+    }
+
+    @Override
+    public List<VerificationFinding> findGradeViolations(LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_GRADE_VIOLATION)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(GRADE_VIOLATION_MAPPER)
+                .list();
+    }
+
+    @Override
+    public List<VerificationFinding> findDuplicateIssuances(LocalDateTime asOf, int limit) {
+        requireLimit(limit);
+
+        return jdbcClient.sql(SELECT_DUPLICATE_ISSUANCE)
+                .param("asOf", asOf)
+                .param("limit", limit)
+                .query(DUPLICATE_ISSUANCE_MAPPER)
+                .list();
+    }
+
+    @Override
+    public String policyDigest() {
+        return jdbcClient.sql(SELECT_POLICY_DIGEST)
+                .query(String.class)
+                .single();
+    }
+
+    @Override
+    public boolean hasHistoriesAddedAbove(long frozenMaxHistoryId, LocalDateTime asOf) {
+        return Boolean.TRUE.equals(jdbcClient.sql("""
+                        SELECT EXISTS(
+                                 SELECT 1 FROM issuance_histories
+                                  WHERE id > :maxHistoryId AND created_at <= :asOf)
+                        """)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single());
+    }
+
+    @Override
+    public boolean hasCleanOnlyConstraints() {
+        return Boolean.TRUE.equals(jdbcClient.sql("""
+                        SELECT EXISTS(
+                                 SELECT 1
+                                   FROM information_schema.statistics
+                                  WHERE table_schema = DATABASE()
+                                    AND table_name = 'issuances'
+                                    AND index_name = 'uk_coupon_member')
+                        """)
+                .query(Boolean.class)
+                .single());
+    }
+
+    @Override
+    public String datasetFingerprint(LocalDateTime asOf) {
+        String material = jdbcClient.sql(SELECT_FINGERPRINT_INPUT)
+                .param("asOf", asOf)
+                .query((rs, rowNum) -> String.join(FINGERPRINT_SEPARATOR,
+                        text(rs.getObject("max_history_id")),
+                        text(rs.getObject("history_count")),
+                        text(rs.getObject("issuance_count")),
+                        text(rs.getObject("active_total")),
+                        timestamp(rs.getObject("max_updated_at", LocalDateTime.class))))
+                .single();
+
+        return DigestValues.sha256Hex(material);
+    }
+
+    @Override
+    public boolean hasStocksUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(EXISTS_STOCK_UPDATED_AFTER)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single();
+    }
+
+    @Override
+    public boolean hasIssuancesUpdatedAfter(LocalDateTime asOf) {
+        return jdbcClient.sql(EXISTS_UPDATED_AFTER)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single();
+    }
+
+    /** 참조 구현의 폴백은 {@code 0} 이다. {@code totals} 가 0 에서 시작하기 때문이다. */
+    private static String text(Object value) {
+        return value == null ? "0" : String.valueOf(value);
+    }
+
+    /**
+     * 계약이 정한 {@code %Y-%m-%d %H:%M:%S.%f} — 마이크로초 6자리다.
+     *
+     * <p><b>{@code getTimestamp} 를 쓰면 안 된다.</b> 그쪽은 {@code java.sql.Timestamp} 로 받아
+     * <b>JVM 기본 시간대로 변환</b>한다. 서버가 UTC 라도 배치를 KST 머신에서 돌리면 9시간이 얹혀,
+     * <b>같은 데이터가 머신마다 다른 지문</b>을 낸다 — 지문이 막으려던 바로 그 사고다.
+     * {@code LocalDateTime} 으로 직접 받으면 변환이 없다.
+     */
+    private static String timestamp(LocalDateTime value) {
+        return FINGERPRINT_TIME.format(value == null ? EMPTY_DATASET_TIME : value);
+    }
+
+    private static void requireLimit(int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("검출 상한은 1 이상이어야 합니다. 값=" + limit);
+        }
+    }
+}

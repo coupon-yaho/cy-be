@@ -1,0 +1,33 @@
+-- 만료 배치가 대상을 찾는 비용을 줄입니다.
+--
+-- 만료 배치의 첫 문장이 이것입니다.
+--
+--     UPDATE issuances SET status = 'EXPIRED', updated_at = :committedAt
+--      WHERE status = 'ISSUED' AND expires_at < :asOf AND id > :afterId
+--      ORDER BY id LIMIT :limit
+--
+-- 두 컬럼에 인덱스가 없으면 PK 를 id 순으로 훑고, 훑는 동안 지나간 행을 잠급니다.
+-- **넘길 것이 없는 실행이 최악입니다** — LIMIT 이 발동할 일이 없어 끝까지 훑기 때문입니다.
+-- 5분 주기라 하루 288회 중 대부분이 그 경로이고, 대상이 많은 날도 마지막 청크는 반드시 그렇습니다.
+--
+-- 실측(mysql:latest 26.7.0, 5,000행, 만료 대상 0건):
+--
+--     인덱스 없음   락 5,020   발급 INSERT 1205   사용 UPDATE 1205
+--     인덱스 있음   락     2   발급 INSERT 1205   사용 UPDATE 통과
+--
+-- 락이 5,020 에서 2 로 떨어집니다. 운영 300만 행이면 그 차이가 그대로 커집니다.
+--
+-- ⚠️ 이 인덱스만으로는 발급 INSERT 봉쇄가 안 풀립니다. 막는 것이 스캔 범위가 아니라
+--    보조 인덱스의 gap 락이기 때문입니다 — 'ISSUED' 를 찾다가 다음 값 'USED' 에 next-key
+--    락을 잡는데, 그 gap 이 새 'ISSUED' 항목이 들어갈 자리입니다.
+--    그쪽은 만료 Step 의 격리 수준을 READ COMMITTED 로 낮춰 풀었습니다(ExpireJobConfig).
+--    둘은 서로 다른 문제를 풉니다 — 인덱스는 스캔 비용, 격리 수준은 가용성.
+--
+-- 재는 방법과 전체 수치는 docs/12-expire-lock-measurement.md 에 있고,
+-- bash docs/measurements/expire-lock-scope.sh 로 다시 잴 수 있습니다.
+--
+-- 이름과 컬럼 순서는 시드 처방전(cy-seed/ddl/90_perf_indexes_optional.sql)이 예정해 둔 그대로입니다.
+-- 그 파일이 인덱스를 기본에서 뺀 것은 누락이 아니라 "느린 쿼리를 직접 겪고 개선폭을 재서
+-- 도입 시점을 정하라"는 의도였고, 위 실측이 그 절차입니다.
+
+CREATE INDEX `idx_issuance_status_expires` ON `issuances` (`status`, `expires_at`);

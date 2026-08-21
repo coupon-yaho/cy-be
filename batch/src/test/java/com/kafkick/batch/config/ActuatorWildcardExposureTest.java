@@ -33,19 +33,18 @@ import com.kafkick.storage.db.MySqlContainerConfig;
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
+                // exclude 는 파일에서 그대로 온다. 여기 복붙하면 파일에 열두 번째 항목이
+                // 늘어도 이 테스트는 옛 목록만 본다.
+                "spring.config.location=classpath:/resolved/application.yml",
                 "spring.batch.job.enabled=false",
                 "batch.scheduling.enabled=false",
+                "server.port=0",
                 "management.server.port=0",
-                // 사고를 재현한다. 운영 설정은 화이트리스트다.
-                "management.endpoints.web.exposure.include=*",
-                "management.endpoints.web.exposure.exclude=env,configprops,beans,heapdump,loggers,threaddump,mappings,scheduledtasks,conditions,flyway,sbom"
+                // 사고만 재현한다. 운영 설정은 화이트리스트다.
+                "management.endpoints.web.exposure.include=*"
         })
 @Import(MySqlContainerConfig.class)
 class ActuatorWildcardExposureTest {
-
-    private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .build();
 
     @LocalManagementPort
     private int managementPort;
@@ -57,7 +56,7 @@ class ActuatorWildcardExposureTest {
         //
         // health 로는 이것을 못 본다 — 스프링 기본 노출이 health 하나라, include 가 통째로
         // 안 먹어도 200 이다. metrics 는 기본 미노출이라 별표가 먹었을 때만 열린다.
-        assertThat(get("metrics").statusCode())
+        assertThat(ActuatorProbe.get(managementPort, "/actuator/metrics").statusCode())
                 .as("별표가 안 넓어졌다. 아래 404 들이 exclude 덕인지 알 수 없어진다")
                 .isEqualTo(200);
 
@@ -67,19 +66,10 @@ class ActuatorWildcardExposureTest {
                 "env", "configprops", "beans", "heapdump",
                 "loggers", "threaddump", "mappings", "scheduledtasks",
                 "conditions", "flyway", "sbom"}) {
-            assertThat(get(path).statusCode())
+            assertThat(ActuatorProbe.get(managementPort, "/actuator/" + path).statusCode())
                     .as("/actuator/%s 가 열려 있다. exclude 가 지워졌거나 안 먹는다", path)
                     .isEqualTo(404);
         }
     }
 
-    private HttpResponse<String> get(String path) throws IOException, InterruptedException {
-        return CLIENT.send(
-                HttpRequest.newBuilder(
-                                URI.create("http://localhost:" + managementPort + "/actuator/" + path))
-                        .timeout(Duration.ofSeconds(10))
-                        .GET()
-                        .build(),
-                HttpResponse.BodyHandlers.ofString());
-    }
 }

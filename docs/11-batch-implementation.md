@@ -144,11 +144,21 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 하나라도 해당하면 Spring Batch, 아니면 `@Scheduled`.
 템플릿 12행을 스캔하는 회차 생성을 Batch 로 만들면 **배치 메타 쓰기가 검증 대상 DB 를 때린다.**
 
-`@EnableBatchProcessing` 은 붙이지 않는다 — 붙이면 `BatchAutoConfiguration` 이 물러나
-`JobRepository` · `JobLauncher` 를 직접 정의해야 한다.
+~~`@EnableBatchProcessing` 은 붙이지 않는다~~ — **틀렸다. 붙인다**(`BatchJobRepositoryConfig`).
+안 붙이면 `JobRepository` 가 `ResourcelessJobRepository` 로 남아 `BATCH_*` 아홉 테이블이
+영원히 빈다(실측). 붙이면 `BatchAutoConfiguration` 이 물러나는 것은 맞지만 잃는 것은
+`SpringBootBatchDefaultConfiguration` 의 오버라이드 둘뿐이고, `JobLauncherApplicationRunner`
+(`spring.batch.job.enabled`)는 별도 자동설정이라 그대로 산다.
+
+> ~~붙이면 `BatchAutoConfiguration` 이 물러나 `JobRepository` · `JobLauncher` 를 직접
+> 정의해야 한다~~ — 2026-08 정정. 직접 정의하면 `BatchRegistrar` 가 물러나 **그 빈이 조용히
+> 이긴다**(기동은 성공하고 메타가 0행이 된다). 그리고 `JobLauncher` 는 Spring Batch 6.0.4 에
+> **아직 있지만 `@Deprecated(forRemoval)`** 이다(바이트코드로 확인) — 이 저장소는
+> `JobOperator` 를 쓴다.
 
 메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
-`spring.batch.jdbc.initialize-schema: never` 라 이 파일이 없으면 `JobRepository` 초기화가 즉시 실패한다.
+`spring.batch.jdbc.*` 는 **Boot 4.1 에 존재하지 않는 키다.** 이 파일이 없어도 **기동은 성공하고**,
+첫 잡 실행에서 `Table 'BATCH_JOB_INSTANCE' doesn't exist` 로 죽는다.
 
 ---
 
@@ -270,7 +280,7 @@ Flyway 를 끄는 이유는 계층 2 의 불변식이다 — 검증 배치가 DD
 *"원본 테이블에 쓰지 않는다"* 가 스키마 수준에서 깨진다.
 
 **대가는 배포 순서 의존인데, 지금은 그 위반이 조용하다.** batch 에는 `@Entity` 가 없어
-`ddl-auto: validate` 가 공허하게 통과하고 `initialize-schema: never` 라 메타 테이블도 안 본다.
+`ddl-auto: validate` 가 공허하게 통과하고, 메타 테이블 존재도 기동 때는 아무도 안 본다.
 `@Scheduled`·`@RestController` 도 아직 0건이다. 그래서 **빈 DB 에서도 기동이 그냥 성공한다.**
 실패는 잡 실행 시점의 "테이블 없음" SQL 에러로 늦게 나타나고, 스택트레이스가 SQL 계층이라
 *"배포 순서를 틀렸다"* 가 아니라 *"검증 배치가 깨졌다"* 로 읽힌다.

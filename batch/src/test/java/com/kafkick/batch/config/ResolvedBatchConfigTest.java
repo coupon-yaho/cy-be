@@ -4,11 +4,16 @@ package com.kafkick.batch.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+import com.kafkick.batch.job.ExpireJobConfig;
+import com.kafkick.batch.schedule.ExpireScheduler;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.storage.db.config.HermeticBoot;
 import com.kafkick.storage.db.config.ResolvedConfigChecks;
 import java.io.IOException;
+import java.time.Clock;
+import java.time.ZoneId;
 import java.lang.reflect.Executable;
+import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -23,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.scheduling.support.CronExpression;
@@ -56,14 +62,14 @@ class ResolvedBatchConfigTest {
      */
     private static final String POOL_SIZE = "7";
 
-    /** 플레이스홀더 기본값(9091)과 다른 값. 같은 값을 주면 키 경로가 죽어도 구분이 안 된다. */
+    /** 플레이스홀더 기본값(9092)과 다른 값. 같은 값을 주면 키 경로가 죽어도 구분이 안 된다. */
     private static final String MANAGEMENT_PORT = "9391";
 
     /** 밀폐가 깨졌는지 보려고 일부러 심는 키. 설정 파일이 이기면 이 값은 안 보인다. */
     private static final String POLLUTED_KEY = "spring.flyway.enabled";
 
     /**
-     * {@code VerifyJobConfig} 가 쓰는 {@code ${...}} 키 <b>집합</b>.
+     * 잡 설정 클래스들이 쓰는 {@code ${...}} 키 <b>집합</b>.
      *
      * <p>개수가 아니라 집합이다. 개수로 세면 {@code MAX_FINDINGS} 가 세 파라미터에 붙어 있어
      * 같은 키가 3 으로 계산되고, {@code @ConfigurationProperties} 로 묶는 정당한 리팩터에
@@ -76,7 +82,11 @@ class ResolvedBatchConfigTest {
             "batch.verify.max-findings-per-rule",
             "batch.scheduling.enabled",
             "batch.verify.chunk-size",
-            "batch.verify.replay-window-size");
+            "batch.verify.replay-window-size",
+            "batch.expire.chunk-size",
+            "batch.expire.step-timeout-ms",
+            // @Scheduled 애너테이션 안에 있어 @Value 파라미터 스캔으로는 안 잡히던 키.
+            "batch.schedule.expire-cron");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.
@@ -113,7 +123,18 @@ class ResolvedBatchConfigTest {
                 "--BATCH_DB_POOL_SIZE=" + POOL_SIZE,
                 // 전부 @Value 기본값과 다른 값이다. 같은 값을 주면 키 경로가 죽어 기본값으로
                 // 폴백해도 결과가 같아 구분이 안 된다 — 그게 batch.* 가 조용히 죽는 방식이다.
-                "--BATCH_SCHEDULING_ENABLED=false",
+                // 기본값이 false 라 여기서 false 를 주면 키 경로가 죽어도 같은 값이 나온다.
+                // 크론은 먼 미래로 밀어 둔다.
+                //
+                // 이 부팅기(HermeticBoot.EmptyConfig)에는 컴포넌트 스캔도 @EnableScheduling 도
+                // 없어서 스케줄러 빈이 애초에 안 만들어진다 — 지금 이 값이 막고 있는 것은
+                // 없다. 부팅기를 실제 컨텍스트로 바꾸는 날을 위한 예비 방어다.
+                "--BATCH_SCHEDULING_ENABLED=true",
+                "--batch.schedule.expire-cron=0 0 0 1 1 *",
+                // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면
+                // 키 경로가 죽어 폴백해도 결과가 같아 구분이 안 된다.
+                "--EXPIRE_CHUNK_SIZE=13",
+                "--EXPIRE_STEP_TIMEOUT_MS=2000",
                 "--VERIFY_CHUNK_SIZE=7",
                 "--VERIFY_MAX_FINDINGS_PER_RULE=9",
                 "--VERIFY_STEP_TIMEOUT_MS=1001",
@@ -173,10 +194,10 @@ class ResolvedBatchConfigTest {
                 .isEqualTo("health,metrics,prometheus");
 
         assertThat(environment.getProperty("management.endpoints.web.exposure.exclude"))
-                .as("include 가 * 로 넓어지는 날의 이중 방어다. 지금 막고 있는 것은 include 다")
-                .contains("env", "configprops", "beans", "heapdump",
-                        "loggers", "threaddump", "mappings", "scheduledtasks",
-                        "conditions", "flyway", "sbom");
+                .as("include 가 * 로 넓어지는 날의 이중 방어다. 지금 막고 있는 것은 include 다. "
+                        + "contains 로 두면 열두 번째 위험 엔드포인트가 늘어도 침묵한다")
+                .isEqualTo("env,configprops,beans,heapdump,loggers,threaddump,"
+                        + "mappings,scheduledtasks,conditions,flyway,sbom");
 
         assertThat(environment.getProperty("server.error.include-stacktrace"))
                 .as("예외가 응답으로 나가면 내부 구조가 그대로 드러난다")
@@ -196,7 +217,9 @@ class ResolvedBatchConfigTest {
      * 이 티켓을 만든 사고보다 한 단계 더 조용하다. 그래서 기본값과 <b>다른</b> 값으로 확인한다.
      */
     private void assertBatchKeysAreAlive(ConfigurableEnvironment environment) {
-        assertThat(environment.getProperty("batch.scheduling.enabled")).isEqualTo("false");
+        assertThat(environment.getProperty("batch.scheduling.enabled")).isEqualTo("true");
+        assertThat(environment.getProperty("batch.expire.chunk-size")).isEqualTo("13");
+        assertThat(environment.getProperty("batch.expire.step-timeout-ms")).isEqualTo("2000");
         assertThat(environment.getProperty("batch.verify.chunk-size")).isEqualTo("7");
         assertThat(environment.getProperty("batch.verify.max-findings-per-rule")).isEqualTo("9");
         assertThat(environment.getProperty("batch.verify.step-timeout-ms")).isEqualTo("1001");
@@ -241,7 +264,7 @@ class ResolvedBatchConfigTest {
      * <p>그래서 Java 쪽 리터럴을 읽어서 대조한다. 한 벌이면 그 클래스의 키가 전부 덮인다.
      */
     @Test
-    @DisplayName("VerifyJobConfig 의 @Value 키가 전부 설정에 실재한다")
+    @DisplayName("잡 설정의 @Value 키가 전부 설정에 실재한다")
     void everyValuePlaceholderResolves() {
         Pattern placeholder = Pattern.compile("\\$\\{([^:}]+)");
 
@@ -252,11 +275,35 @@ class ResolvedBatchConfigTest {
 
             // 생성자도 훑는다. step-timeout-ms 가 생성자 파라미터라 메서드만 보면 통째로 빠진다 —
             // 실제로 그 상태에서 돌연변이가 안 잡혔다.
+            // 잡 설정 클래스를 전부 훑는다. 한 클래스만 보면 새 잡이 들어올 때
+            // 그 잡의 키는 아무도 안 본다 — 이 테스트가 막으려던 폴백이 거기서 그대로 난다.
+            //
+            // 스케줄러도 훑는다. 크론 키는 @Value 가 아니라 @Scheduled 애너테이션 안에 있어서
+            // 파라미터만 보면 통째로 빠진다 — 그리고 그 기본값이 .example 값과 글자까지 같아
+            // 키 경로를 오타 내도 동작이 같고 로그도 없다. 이 테스트가 막으려던 그 모양이다.
             List<Executable> declared = new ArrayList<>();
-            declared.addAll(List.of(VerifyJobConfig.class.getDeclaredConstructors()));
-            declared.addAll(List.of(VerifyJobConfig.class.getDeclaredMethods()));
+            for (Class<?> config : List.of(
+                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class)) {
+                declared.addAll(List.of(config.getDeclaredConstructors()));
+                declared.addAll(List.of(config.getDeclaredMethods()));
+            }
 
             for (Executable executable : declared) {
+                // @Scheduled(cron = "${...}") 처럼 애너테이션 값에 박힌 키
+                if (executable instanceof Method method) {
+                    Scheduled scheduled = method.getAnnotation(Scheduled.class);
+                    if (scheduled != null && !scheduled.cron().isBlank()) {
+                        Matcher matcher = placeholder.matcher(scheduled.cron());
+                        while (matcher.find()) {
+                            String key = matcher.group(1);
+                            assertThat(environment.containsProperty(key))
+                                    .as(executable.getName() + " 의 @Scheduled cron " + key
+                                            + " 가 .example 에 없다 — 기본값으로 조용히 폴백한다")
+                                    .isTrue();
+                            seen.add(key);
+                        }
+                    }
+                }
                 for (Parameter parameter : executable.getParameters()) {
                     Value value = parameter.getAnnotation(Value.class);
                     if (value == null) {
@@ -275,10 +322,43 @@ class ResolvedBatchConfigTest {
             }
 
             assertThat(seen)
-                    .as("VerifyJobConfig 의 @Value 키 집합이 달라졌다. 빠진 것이 있으면 "
+                    .as("잡 설정의 @Value 키 집합이 달라졌다. 빠진 것이 있으면 "
                             + "생성자·메서드 중 한쪽을 못 훑고 있는 것이고, 늘어난 것이 있으면 "
                             + "여기에 추가해라")
                     .isEqualTo(EXPECTED_VALUE_KEYS);
         }
     }
+
+    /**
+     * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
+     * JVM 기본 타임존으로 크론을 풀고, {@code CronSlot} 은 {@code TimeProvider}
+     * ({@code Clock.systemUTC})가 준 값으로 푼다. 개발 기기가 KST 면 그 둘이 9시간 어긋난다.
+     *
+     * <p>지금 기본값 {@code 0 *}{@code /5 * * * *} 에서만 우연히 안 드러난다 — 실존하는 오프셋이
+     * 전부 15분 배수라 UTC 로 옮겨도 5분 슬롯 위에 떨어진다. <b>시(hour) 필드가 들어가는 순간
+     * 깨지고</b>, 그때 {@code asOf} 가 몇 시간 과거가 되는데 {@code asOf <= now} 는 계속
+     * 성립하므로 가드도 안 울린다.
+     */
+    @Test
+    @DisplayName("스케줄러의 존이 앱 시계의 존과 같다")
+    void schedulerZoneMatchesTheApplicationClock() throws Exception {
+        try (ConfigurableApplicationContext context = HermeticBoot.run(
+                LOCATION, "--spring.main.web-application-type=none")) {
+            // 상수가 아니라 **실제로 붙은 애너테이션**을 읽는다. 상수를 보면 그것을
+            // @Scheduled 에 안 쓰는 리팩터를 못 잡는다.
+            Scheduled scheduled = ExpireScheduler.class
+                    .getDeclaredMethod("expire")
+                    .getAnnotation(Scheduled.class);
+            String zone = context.getEnvironment().resolvePlaceholders(scheduled.zone());
+
+            // normalized() 로 견준다 — ZoneId.of("UTC") 와 systemUTC 의 "Z" 는 같은 시각인데
+            // 객체가 달라 equals 가 false 다. 여기서 보려는 것은 오프셋이 같은지다.
+            assertThat(ZoneId.of(zone).normalized())
+                    .as("CronSlot 은 systemUTC 의 LocalDateTime 으로 크론을 푼다. "
+                            + "@Scheduled 의 zone 이 다르면 같은 표현식이 두 좌표계에서 평가되고, "
+                            + "asOf 가 그 오프셋만큼 과거가 된다")
+                    .isEqualTo(Clock.systemUTC().getZone().normalized());
+        }
+    }
+
 }

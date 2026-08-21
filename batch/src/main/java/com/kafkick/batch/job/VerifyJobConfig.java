@@ -729,6 +729,10 @@ public class VerifyJobConfig {
             ExpectedFindingRepository expectedFindings,
             ReplayHistoryRepository histories,
             VerificationRuleRepository rules,
+            // 기본값이 true 인 것은 의도다. 여기서는 이 플래그를 "스케줄러가 도는 중인가" 로
+            // 읽어 검증을 거부하는 데 쓰므로, 모를 때는 도는 것으로 보고 막는 쪽이 안전하다.
+            // ExpireScheduler 는 같은 키를 반대로(없으면 안 돈다) 읽는다 — 거기서도 그쪽이
+            // 안전한 방향이다. 둘을 일관성 때문에 맞추면 한쪽은 반드시 위험해진다.
             @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled
     ) {
         return new StepBuilder("startRunStep", jobRepository)
