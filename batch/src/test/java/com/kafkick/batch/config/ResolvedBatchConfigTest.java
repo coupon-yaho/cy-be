@@ -57,7 +57,7 @@ class ResolvedBatchConfigTest {
      */
     private static final String POOL_SIZE = "7";
 
-    /** 플레이스홀더 기본값(9091)과 다른 값. 같은 값을 주면 키 경로가 죽어도 구분이 안 된다. */
+    /** 플레이스홀더 기본값(9092)과 다른 값. 같은 값을 주면 키 경로가 죽어도 구분이 안 된다. */
     private static final String MANAGEMENT_PORT = "9391";
 
     /** 밀폐가 깨졌는지 보려고 일부러 심는 키. 설정 파일이 이기면 이 값은 안 보인다. */
@@ -120,6 +120,10 @@ class ResolvedBatchConfigTest {
                 // 크론은 먼 미래로 밀어 둔다 — true 를 주면 스케줄러 빈이 실제로 생긴다.
                 "--BATCH_SCHEDULING_ENABLED=true",
                 "--batch.schedule.expire-cron=0 0 0 1 1 *",
+                // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면
+                // 키 경로가 죽어 폴백해도 결과가 같아 구분이 안 된다.
+                "--EXPIRE_CHUNK_SIZE=13",
+                "--EXPIRE_STEP_TIMEOUT_MS=1003",
                 "--VERIFY_CHUNK_SIZE=7",
                 "--VERIFY_MAX_FINDINGS_PER_RULE=9",
                 "--VERIFY_STEP_TIMEOUT_MS=1001",
@@ -203,6 +207,8 @@ class ResolvedBatchConfigTest {
      */
     private void assertBatchKeysAreAlive(ConfigurableEnvironment environment) {
         assertThat(environment.getProperty("batch.scheduling.enabled")).isEqualTo("true");
+        assertThat(environment.getProperty("batch.expire.chunk-size")).isEqualTo("13");
+        assertThat(environment.getProperty("batch.expire.step-timeout-ms")).isEqualTo("1003");
         assertThat(environment.getProperty("batch.verify.chunk-size")).isEqualTo("7");
         assertThat(environment.getProperty("batch.verify.max-findings-per-rule")).isEqualTo("9");
         assertThat(environment.getProperty("batch.verify.step-timeout-ms")).isEqualTo("1001");

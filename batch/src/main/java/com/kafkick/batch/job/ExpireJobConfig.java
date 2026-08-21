@@ -113,6 +113,11 @@ public class ExpireJobConfig {
         // 지키고, 뒤 문장들은 표식과 id 구간으로 집합을 되찾은 뒤 다섯 값을 서로 대조한다 —
         // 스냅샷 시점에 기대는 구조가 아니다. 전체 테스트로 확인했다.
         //
+        // ⚠️ 전제: binlog_format 이 ROW 또는 MIXED 여야 한다. STATEMENT 면 MySQL 이
+        //    READ COMMITTED 에서 InnoDB DML 을 오류 1665 로 거부한다. MySQL 8 기본값은 ROW 라
+        //    대개 문제없지만, 레거시 my.cnf 를 가져오면 배포 후 첫 만료 주기에 터진다 —
+        //    테스트 컨테이너는 binlog 를 꺼 두어 이 조합을 재현하지 못한다.
+        //
         // ⚠️ verifyJob 에는 걸지 마라. 그쪽은 판정 시점을 얼려야 하므로 격리 수준이
         //    낮아지면 dataset_fingerprint 재료가 실행 중에 흔들린다.
         this.stepTimeout.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -161,7 +166,7 @@ public class ExpireJobConfig {
                         return RepeatStatus.FINISHED;
                     }
 
-                    // 경계를 먼저 읽는다. 아래 세 문장이 같은 창(id > afterId)을 보므로
+                    // 경계를 먼저 읽는다. 아래 네 문장이 같은 창(id > afterId)을 보므로
                     // 진도를 먼저 옮기면 그 문장들이 방금 넘긴 것을 못 본다.
                     long lastId = expirations.lastExpiredId(asOf, committedAt, afterId);
 
@@ -192,6 +197,15 @@ public class ExpireJobConfig {
                     }
 
                     int released = expirations.releaseStock(asOf, committedAt, afterId, lastId);
+                    // 방향까지 본다. released > stockRows 는 두 문장 사이에 재고 행이
+                    // 생긴 경우라 재시도로 낫는데, 같은 메시지로 뭉치면 운영자가
+                    // 이미 고친 재고를 다시 들여다본다.
+                    if (released > stockRows) {
+                        throw new BusinessException(
+                                ExpirationErrorCode.STOCK_ROW_MISSING,
+                                "재고 행 수가 도중에 늘었습니다. 다시 돌리면 낫습니다. "
+                                        + "재고행=" + stockRows + " 되돌림=" + released);
+                    }
                     if (released != stockRows) {
                         // active_count >= 차감량 조건에 걸린 회차가 있다. 재고가 이미 어긋나
                         // 있어서, 그대로 뺐다면 음수가 됐을 자리다.

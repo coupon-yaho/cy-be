@@ -79,7 +79,7 @@ import com.kafkick.storage.db.MySqlContainerConfig;
         "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=false",
-        // 포트만 덮는다. 파일의 9090·9091 은 이미 뜬 컨테이너와 부딪힌다.
+        // 포트만 덮는다. 파일의 9090·9092 는 이미 뜬 컨테이너와 부딪힌다.
         "server.port=0",
         "management.server.port=0"
 })

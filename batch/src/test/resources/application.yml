@@ -19,4 +19,10 @@ spring:
       # 운영 기동에서 Schema-validation 으로 죽는다.
       #
       # 지금은 구체 @Entity 가 0개라 공허하게 통과한다. 엔티티가 생기는 날부터 일한다.
+      #
+      # ⚠️ CY-254 가 batch 에서 JPA 자동설정을 제외한다(HibernateJpaAutoConfiguration ·
+      #    DataJpaRepositoriesAutoConfiguration). 그러면 이 줄은 **영영 안 일한다** —
+      #    "엔티티가 생기는 날부터" 가 성립하지 않는다.
+      #    그쪽이 BatchJpaFreeAssumptionTest 로 대신한다고 했으니, 그 티켓이 머지되면
+      #    이 줄을 지우거나 그 테스트가 실제로 드리프트를 잡는지 확인해야 한다.
       ddl-auto: validate

@@ -19,19 +19,23 @@ import java.time.LocalDateTime;
  * 리플레이 정렬 {@code (issuance_id, created_at, id)} 이 뒤집힌다.
  *
  * <p><b>그리고 집합을 id 로 닫는다 — {@code (afterId, lastId]}.</b> 표식만으로 찾으면 질의가
- * 위쪽으로 열려 있어 테이블 끝까지 훑고, {@code INSERT … SELECT} 와 {@code UPDATE … JOIN} 은
- * 그 훑은 구간에 <b>공유 next-key 락</b>을 잡는다. supremum 까지 잠기므로
- * <b>{@code issuances} 로의 신규 INSERT — 발급 경로 자체가 막힌다.</b>
- * {@code mysql:latest} 에 재 봤다: 5,000행 중 1,000건을 넘길 때 상한이 없으면 락 5,020(S 4,016)
- * 이고 그 시각 발급 INSERT 가 오류 1205 로 죽는다. {@code id <= :lastId} 를 걸면 1,004 로 줄고
- * 발급이 통과한다. 지키는 것은 {@code ExpirationLockScopeTest} 다.
+ * 위쪽으로 열려 있어 테이블 끝까지 훑는다. 지금(READ COMMITTED)은 그것이 <b>스캔 비용</b>이고,
+ * 격리가 RR 로 되돌아가면 {@code INSERT … SELECT} 와 {@code UPDATE … JOIN} 이 supremum 까지
+ * 잠가 <b>발급 INSERT 를 죽인다</b> — 상한은 그날의 마지막 겹이기도 하다.
+ *
+ * <p><b>발급 봉쇄를 푼 것은 상한이 아니라 격리 수준이다.</b> 상한은 첫 문장에 걸 수도 없다.
+ * 수치와 그 경위는 {@code docs/12-expire-lock-measurement.md} 에 있다.
  *
  * <p><b>id 로 닫으면 표식의 전제도 함께 좁혀진다.</b> 예전에는 {@code EXPIRED} 를 쓰는 곳이
  * 이 잡뿐이어야 한다는 규칙에 기대야 했다 — 런타임이 같은 시각에 상태를 넘기면 남의 행이
- * 우리 집합에 섞였다. 이제 {@code (afterId, lastId]} 밖은 애초에 매치되지 않고,
- * 그 안쪽은 {@code expireBatch} 가 이미 X 락으로 쥐고 있어 남이 바꿀 수 없다.
- * {@code expires_at < :asOf} 를 함께 거는 것은 인덱스가 생겨 락 범위가 좁아지는 날을 위한
- * 두 번째 겹이다.
+ * 우리 집합에 섞였다. 이제 {@code (afterId, lastId]} 밖은 애초에 매치되지 않는다.
+ *
+ * <p><b>다만 id 구간은 범위를 좁힐 뿐 배타를 주지 않는다.</b> {@code expireBatch} 가 X 락으로
+ * 쥐는 것은 <b>매치된 {@code ISSUED} 행뿐</b>이고, 같은 구간의 {@code USED}·{@code CANCELLED} 는
+ * 안 잡는다(인덱스 범위 스캔이라 읽지도 않는다). 표식이 유일하다는 것을 실제로 보장하는 것은
+ * <b>{@code CouponStateMachine} 의 전이표에 {@code EXPIRED} 로 가는 길이
+ * {@code EXPIRE: ISSUED → EXPIRED} 하나뿐</b>이라는 사실이다.
+ * 그 전이표에 두 번째 길이 생기는 날 이 표식 방식을 다시 봐야 한다.
  *
  * <p><b>락 순서를 계약으로 못 박는다 — {@code issuances} → {@code issuance_histories}
  * → {@code coupon_stocks}.</b> 아래 여섯을 부르는 순서가 곧 이 순서다. 발급·사용·취소 경로도
@@ -93,6 +97,16 @@ public interface ExpirationRepository {
             long afterId, long lastId);
 
     /**
+     * 방금 넘어간 집합 중 <b>재고 행이 실제로 있는</b> 회차 수.
+     *
+     * <p>{@link #releaseStock} 이 갱신한 행 수와 짝을 이룬다. 셋을 함께 봐야 두 실패가 갈린다 —
+     * {@link #expiredCouponCount} 와 다르면 <b>재고 행이 없는 회차</b>, 이 값과
+     * {@link #releaseStock} 이 다르면 <b>뺄 재고가 모자란 회차</b>다. 하나로 뭉치면 원인이 섞인
+     * 메시지가 나가고, 운영자가 엉뚱한 곳을 본다.
+     */
+    int stockRowCount(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId);
+
+    /**
      * 넘어간 건수만큼 회차별 {@code active_count} 를 줄인다.
      *
      * <p><b>빼는 것이 맞다.</b> {@code active_count} 는 <i>ISSUED + USED 합계</i> 라
@@ -106,14 +120,4 @@ public interface ExpirationRepository {
      * @return 갱신된 회차 수. {@link #stockRowCount} 와 다르면 뺄 재고가 모자란 회차가 있다
      */
     int releaseStock(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId);
-
-    /**
-     * 방금 넘어간 집합 중 <b>재고 행이 실제로 있는</b> 회차 수.
-     *
-     * <p>{@link #releaseStock} 이 갱신한 행 수와 짝을 이룬다. 셋을 함께 봐야 두 실패가 갈린다 —
-     * {@link #expiredCouponCount} 와 다르면 <b>재고 행이 없는 회차</b>, 이 값과
-     * {@link #releaseStock} 이 다르면 <b>뺄 재고가 모자란 회차</b>다. 하나로 뭉치면 원인이 섞인
-     * 메시지가 나가고, 운영자가 엉뚱한 곳을 본다.
-     */
-    int stockRowCount(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId);
 }

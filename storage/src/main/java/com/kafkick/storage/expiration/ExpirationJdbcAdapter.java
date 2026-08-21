@@ -20,11 +20,20 @@ import com.kafkick.core.expiration.ExpirationRepository;
  * <p><b>{@code updated_at = :committedAt} 이 그 청크의 표식이다.</b> 뒤 문장들이 이 표식으로
  * 방금 넘어간 집합을 다시 찾고, {@code id > :afterId AND id <= :lastId} 로 그 구간을 닫는다.
  *
- * <p><b>상한이 빠지면 발급이 멈춘다.</b> {@code INSERT … SELECT}(이력)와
- * {@code UPDATE … JOIN}(재고)의 원본 읽기는 consistent read 가 아니라 <b>공유 next-key 잠금
- * 읽기</b>다. 위쪽이 열려 있으면 supremum 까지 잠겨 {@code issuances} 로의 신규 INSERT 가
- * 대기하다 오류 1205 로 죽는다. 실측(5,000행 중 1,000건 만료): 상한 없음 락 5,020(S 4,016) ·
- * 발급 INSERT 실패 → {@code id <= :lastId} 추가 시 락 1,004 · 발급 통과.
+ * <p><b>상한이 하는 일은 두 층이다.</b>
+ *
+ * <ol>
+ *   <li><b>지금(READ COMMITTED)</b> — 뒤 문장들의 <b>스캔 범위</b>를 청크로 닫는다.
+ *       상한이 없으면 그 문장들이 테이블 끝까지 훑는다.
+ *   <li><b>격리가 RR 로 되돌아가는 날</b> — {@code INSERT … SELECT} 와 {@code UPDATE … JOIN} 의
+ *       원본 읽기가 공유 next-key 잠금 읽기가 되어 supremum 까지 잠근다. 그때 이 상한이
+ *       발급 봉쇄를 막는 마지막 겹이다.
+ * </ol>
+ *
+ * <p><b>상한이 발급 봉쇄를 푼 것이 아니다.</b> 그것을 푼 것은 READ COMMITTED 이고, 상한은
+ * 첫 문장에 걸 수도 없다. 예전 주석이 "상한을 걸면 발급이 통과한다" 고 적었는데
+ * <b>만료 대상이 {@code LIMIT} 을 채우는 조건에서만 그랬다</b> —
+ * {@code docs/12-expire-lock-measurement.md} §9 가 그 문장을 철회했다.
  *
  * <p><b>여섯 중 셋이 상태를 바꾼다.</b> {@code LAST_EXPIRED_ID} · {@code EXPIRED_COUPON_COUNT} ·
  * {@code STOCK_ROW_COUNT} 는 짝을 만드는 가드용이라 아무것도 안 바꾼다 — 지우면 재고 행 없는
@@ -49,15 +58,18 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      * 여기서는 매치된 행이 전부 실제로 바뀌므로 두 값이 같다 — 같은 값을 다시 쓰는
      * {@code UPDATE} 를 여기 추가하면 그 등식이 깨진다.
      *
-     * <p><b>{@code status}·{@code expires_at} 에 인덱스가 없다.</b> 그래서 옵티마이저가 PRIMARY 를
-     * id 순으로 훑으면서 <b>지나간 행을 전부 X 락으로 잡는다.</b> 넘길 것이 하나도 없는 실행이
-     * 최악인데, {@code LIMIT} 이 발동할 일이 없어 끝까지 훑은 뒤 0 을 돌려주기 때문이다.
-     * 5분 주기라 하루 288회 중 대부분이 그 경로이고, 그동안 만료 대상이 아닌 발급건까지 걸린다.
+     * <p><b>{@code (status, expires_at)} 인덱스({@code V11})가 이 문장을 받친다.</b> 그것이
+     * 없으면 옵티마이저가 PRIMARY 를 id 순으로 훑는데, 넘길 것이 {@code LIMIT} 보다 적은
+     * 실행은 끝까지 훑고 supremum 까지 잠가 <b>신규 발급 INSERT 를 죽였다.</b>
+     * 실측(200,000행 중 뒤 1,000건만 대상): 읽은 행 201,016 → <b>2,001</b>.
      *
-     * <p><b>이것은 알고 두는 상태다.</b> 보조 인덱스를 뺀 것은 누락이 아니라, 느린 쿼리를 직접
-     * 겪고 개선폭을 수치로 재서 도입 시점을 정하기 위해서다(cy-seed 의
-     * {@code ddl/90_perf_indexes_optional.sql}). 지금 무엇을 얼마나 잠그는지는
-     * {@code ExpirationLockScopeTest} 가 수치로 못 박아 둔다 — 도입을 판단할 근거가 거기 있다.
+     * <p><b>인덱스만으로는 발급 봉쇄가 안 풀렸다.</b> 막던 것이 스캔 범위가 아니라 보조 인덱스의
+     * gap 이라, 만료 Step 의 격리를 READ COMMITTED 로 내려서 풀었다({@code ExpireJobConfig}).
+     * 둘은 서로 다른 문제를 푼다 — 인덱스는 스캔 비용, 격리는 가용성.
+     * 수치와 재현 방법은 {@code docs/12-expire-lock-measurement.md} 에 있다.
+     *
+     * <p>{@code ORDER BY id} 가 인덱스 순서와 달라 filesort 가 붙지만, 정렬량이
+     * {@code LIMIT} 에 묶여 청크당 1,000행이다 — 후보가 아무리 많아도 그 이상 안 는다.
      */
     private static final String EXPIRE_BATCH = """
             UPDATE issuances
@@ -77,8 +89,13 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      * 밀어 올리면 <b>그 창이 통째로 넓어진다.</b> 다른 다섯에만 걸고 여기를 빼 두면
      * 겹을 하나 세워 놓고 문을 열어 두는 셈이다. 대신 평범한
      * {@code SELECT} 라 REPEATABLE READ 의 consistent read 로 돌고 <b>락을 잡지 않는다</b> —
-     * 뒤 문장들과 달리 발급을 막지 않는다. 남는 것은 스캔 비용뿐이고, 그것은 인덱스가
-     * 들어오는 날 함께 해결된다.
+     * 뒤 문장들과 달리 발급을 막지 않는다.
+     *
+     * <p><b>이 Step 은 READ COMMITTED 다.</b> 그래서 문장마다 스냅샷이 새로 잡힌다 —
+     * 청크 트랜잭션 전체가 하나의 스냅샷을 공유하지 않는다. 그래도 우리 집합은 안전하다:
+     * {@code (afterId, lastId]} 안쪽은 {@code EXPIRE_BATCH} 가 X 락으로 쥐고 있고,
+     * 바깥 행이 {@code updated_at = :committedAt}({@code datetime(6)})과 마이크로초까지
+     * 일치할 길이 없다.
      */
     private static final String LAST_EXPIRED_ID = """
             SELECT COALESCE(MAX(id), :afterId)

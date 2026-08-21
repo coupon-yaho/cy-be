@@ -38,21 +38,24 @@ import com.kafkick.storage.db.VerificationSeed;
  * 저장소 메서드가 각각 어느 테이블을 잡는지는 이렇다.
  *
  * <table border="1">
- *   <caption>메서드와 잠그는 테이블 — 실측한 값이다</caption>
- *   <tr><td>{@code expireBatch}</td><td>issuances</td><td>X (구간)</td></tr>
- *   <tr><td>{@code lastExpiredId}</td><td>—</td><td>없음. consistent read</td></tr>
- *   <tr><td>{@code appendExpireHistories}</td><td>issuance_histories INSERT +
- *       <b>issuances S</b></td><td>파생 SELECT 가 잠금 읽기다</td></tr>
- *   <tr><td>{@code expiredCouponCount}</td><td>—</td><td>없음. consistent read</td></tr>
- *   <tr><td>{@code stockRowCount}</td><td>—</td><td>없음. consistent read</td></tr>
- *   <tr><td>{@code releaseStock}</td><td><b>issuances S</b> → coupon_stocks X</td>
- *       <td>한 문장이 두 테이블을 잡는다</td></tr>
+ *   <caption>메서드와 잠그는 테이블 — 격리에 따라 다르다</caption>
+ *   <tr><th></th><th>이 Step (READ COMMITTED)</th><th>REPEATABLE READ 였다면</th></tr>
+ *   <tr><td>{@code expireBatch}</td><td>issuances X (매치 행)</td><td>같음</td></tr>
+ *   <tr><td>{@code lastExpiredId}</td><td>없음</td><td>없음</td></tr>
+ *   <tr><td>{@code appendExpireHistories}</td><td>issuance_histories INSERT</td>
+ *       <td>+ <b>issuances S</b></td></tr>
+ *   <tr><td>{@code expiredCouponCount}</td><td>없음</td><td>없음</td></tr>
+ *   <tr><td>{@code stockRowCount}</td><td>없음</td><td>없음</td></tr>
+ *   <tr><td>{@code releaseStock}</td><td>coupon_stocks X</td>
+ *       <td>+ <b>issuances S</b></td></tr>
  * </table>
  *
- * <p><b>{@code INSERT … SELECT} 와 {@code UPDATE … JOIN} 의 원본 읽기가 잠금 읽기라는 것이
- * 이 표의 핵심이다.</b> 그것을 "이력만 쓴다 · 재고만 쓴다" 로 적어 두면, 발급 경로가
- * <i>"만료는 재고 갱신 때 issuances 를 안 잡는다"</i> 고 읽고 {@code coupon_stocks} 를 먼저
- * 잡는 순서를 고른다 — 그 순간이 정확히 데드락 지점이다.
+ * <p><b>RC 라 뒤 문장들이 {@code issuances} 에 락을 추가하지 않는다.</b> 실측: 여섯 문장이
+ * 다 돌아도 첫 문장이 잡은 수에서 안 늘어난다. RR 에서는 늘어난다(42 → 62, 상한이 없으면 546).
+ * 표를 격리별로 가른 이유가 그것이다 — 예전에는 RC 를 넣기 전 값을 "실측했다"고 적어 뒀다.
+ *
+ * <p><b>발급 경로가 맞춰야 하는 것은 왼쪽 열이다.</b> 다만 격리가 RR 로 되돌아가면 오른쪽이
+ * 되므로, 순서 계약({@code issuances} 먼저)은 어느 쪽에서도 지켜야 한다.
  *
  * <p><b>반대로 잡으면 실제로 터진다.</b> {@code mysql:latest} 컨테이너에 두 세션을 띄워
  * 한쪽은 {@code issuances} → {@code coupon_stocks} 로, 다른 쪽은 그 반대로 잡게 했더니

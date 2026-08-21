@@ -32,7 +32,7 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 그 클래스는 파일만 보고, 이 테스트가 자기 {@code properties} 에 뭘 적었는지는 아무도 안 봅니다.
  * 실제로 {@code exclude} 가 4개와 11개로 갈려 있었습니다. 파일을 직접 읽으면 그 틈이 없습니다.
  *
- * <p>포트만 덮습니다. 파일의 9090·9091 을 그대로 쓰면 이미 뜬 컨테이너와 부딪히고,
+ * <p>포트만 덮습니다. 파일의 9090·9092 를 그대로 쓰면 이미 뜬 컨테이너와 부딪히고,
  * 그 실패는 설정과 아무 상관이 없습니다.
  */
 @SpringBootTest(
@@ -43,7 +43,7 @@ import com.kafkick.storage.db.MySqlContainerConfig;
                 "spring.config.location=classpath:/resolved/application.yml",
                 "spring.batch.job.enabled=false",
                 "batch.scheduling.enabled=false",
-                // 포트만 덮는다. 파일의 9090·9091 을 그대로 쓰면 이미 뜬 컨테이너와 부딪히고,
+                // 포트만 덮는다. 파일의 9090·9092 를 그대로 쓰면 이미 뜬 컨테이너와 부딪히고,
                 // 그 실패는 설정과 아무 상관이 없다.
                 "server.port=0",
                 "management.server.port=0"

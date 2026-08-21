@@ -58,7 +58,8 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=1"
 })
-@Import({MySqlContainerConfig.class, ExpireCancelRaceTest.PauseAfterExpireConfig.class})
+@Import({MySqlContainerConfig.class, ExpireCancelRaceTest.PauseAfterExpireConfig.class,
+        ExpireCancelRaceTest.PauseBeforeReleaseConfig.class})
 class ExpireCancelRaceTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
@@ -83,6 +84,7 @@ class ExpireCancelRaceTest {
 
     private VerificationSeed seed;
     private long target;
+    private long sibling;
     private long couponId;
 
     @BeforeEach
@@ -91,6 +93,7 @@ class ExpireCancelRaceTest {
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
         PauseAfterExpireConfig.reset();
+        PauseBeforeReleaseConfig.reset();
 
         target = seed.issuance(IssuanceStatus.ISSUED);
         couponId = seed.currentCouponId();
@@ -105,6 +108,7 @@ class ExpireCancelRaceTest {
                     .param("at", AS_OF.plusDays(30))
                     .param("id", alive)
                     .update();
+            sibling = alive;
         }
         seed.overwriteStock(INITIAL_STOCK);
     }
@@ -112,6 +116,7 @@ class ExpireCancelRaceTest {
     @AfterEach
     void tearDown() {
         PauseAfterExpireConfig.reset();
+        PauseBeforeReleaseConfig.reset();
     }
 
     /**
@@ -151,11 +156,16 @@ class ExpireCancelRaceTest {
         ExecutorService worker = Executors.newSingleThreadExecutor();
         try {
             PauseAfterExpireConfig.arm();
+            // countDown 을 finally 에 둔다. 취소가 락에 걸리거나 데드락으로 죽으면 —
+            // 즉 이 테스트가 잡아야 할 상황이 실제로 일어나면 — 그 예외가 Future 에 갇히고
+            // 잡은 30초 뒤 "취소가 안 끝났다" 로 죽는다. 진짜 원인이 로그에서 사라진다.
             var cancelled = worker.submit(() -> {
-                assertThat(PauseAfterExpireConfig.EXPIRED.await(30, TimeUnit.SECONDS)).isTrue();
-                int changed = cancelIfStillIssued();
-                PauseAfterExpireConfig.CANCEL_DONE.countDown();
-                return changed;
+                try {
+                    assertThat(PauseAfterExpireConfig.EXPIRED.await(30, TimeUnit.SECONDS)).isTrue();
+                    return cancelIfStillIssued();
+                } finally {
+                    PauseAfterExpireConfig.CANCEL_DONE.countDown();
+                }
             });
 
             JobExecution execution = launch();
@@ -311,6 +321,114 @@ class ExpireCancelRaceTest {
                     EXPIRED.countDown();
                     if (!CANCEL_DONE.await(30, TimeUnit.SECONDS)) {
                         throw new IllegalStateException("취소가 30초 안에 안 끝났다");
+                    }
+                }
+                return result;
+            });
+        }
+    }
+
+    /**
+     * <b>진짜로 겹치는 경우다.</b> 앞 두 케이스는 순서를 갈라 놓았을 뿐 두 트랜잭션이 같은
+     * 시간에 살아 있지 않다. 만료 청크가 <b>열려 있는 동안</b> 재고가 움직이는 경로는
+     * 저장소 어디에서도 검사한 적이 없었다.
+     *
+     * <p><b>대상을 같은 발급건으로 두면 안 된다.</b> 그 행은 {@code expireBatch} 가 X 락으로
+     * 쥐고 있어 취소가 락을 기다리다 교착한다 — 실제로 그렇게 만들었다가 잡이 죽었다.
+     * 위험한 조합은 <b>같은 회차의 다른 발급건</b>이다. 그 행은 만료가 안 잡으므로
+     * 취소가 락 없이 통과해 <b>같은 {@code coupon_stocks} 행을 먼저 건드린다.</b>
+     *
+     * <p>지금 코드가 안전한 이유는 두 경로가 모두 <b>상대 차감</b>({@code active_count - N})을
+     * 쓰기 때문이다. 어느 쪽이든 "조회한 값에서 뺀 절대값" 으로 바뀌면 두 트랜잭션이 같은
+     * 값을 읽고 각각 써서 <b>재고가 한 번만 빠진다.</b> 그것을 잡는 것이 이 테스트다.
+     */
+    @Test
+    @DisplayName("청크가 열린 동안 같은 회차의 다른 건이 취소돼도 재고가 각각 빠진다")
+    void concurrentCancelOnSiblingKeepsBothDeductions() throws Exception {
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            PauseBeforeReleaseConfig.arm();
+            var cancelled = worker.submit(() -> {
+                try {
+                    assertThat(PauseBeforeReleaseConfig.PAUSED.await(30, TimeUnit.SECONDS)).isTrue();
+                    return cancelSibling();
+                } finally {
+                    PauseBeforeReleaseConfig.CANCEL_DONE.countDown();
+                }
+            });
+
+            JobExecution execution = launch();
+
+            assertThat(cancelled.get(30, TimeUnit.SECONDS))
+                    .as("형제 건은 만료가 안 잡으므로 취소가 락 없이 통과한다")
+                    .isEqualTo(1);
+            assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        } finally {
+            worker.shutdownNow();
+        }
+
+        assertThat(activeCount())
+                .as("만료 1건 + 취소 1건 = %d 에서 둘이 빠져 %d 여야 한다. "
+                        + "%d 면 두 경로가 같은 값을 읽고 각각 써서 한 번만 빠진 것이다",
+                        INITIAL_STOCK, INITIAL_STOCK - 2, INITIAL_STOCK - 1)
+                .isEqualTo(INITIAL_STOCK - 2);
+    }
+
+    /** 만료 대상이 아닌 형제 건을 취소한다. 회차가 같으므로 재고는 같은 행을 건드린다. */
+    private int cancelSibling() {
+        return new TransactionTemplate(transactionManager).execute(status -> {
+            int changed = jdbcClient.sql("""
+                            UPDATE issuances
+                               SET status = 'CANCELLED', updated_at = :at
+                             WHERE id = :id AND status = 'ISSUED'
+                            """)
+                    .param("at", AS_OF.plusMinutes(1))
+                    .param("id", sibling)
+                    .update();
+            if (changed == 0) {
+                return 0;
+            }
+            jdbcClient.sql("""
+                            UPDATE coupon_stocks
+                               SET active_count = active_count - 1, updated_at = :at
+                             WHERE coupon_id = :coupon AND active_count >= 1
+                            """)
+                    .param("at", AS_OF.plusMinutes(1))
+                    .param("coupon", couponId)
+                    .update();
+            return changed;
+        });
+    }
+
+    /**
+     * <b>{@code releaseStock} 직전에 멈춘다.</b> 그 자리는 청크 트랜잭션이 <b>열려 있고</b>
+     * 만료가 이미 대상 행을 넘긴 뒤라, 형제 건 취소와 재고 갱신이 실제로 겹친다.
+     */
+    @TestConfiguration
+    static class PauseBeforeReleaseConfig {
+
+        static volatile CountDownLatch PAUSED = new CountDownLatch(1);
+        static volatile CountDownLatch CANCEL_DONE = new CountDownLatch(1);
+        private static volatile boolean armed;
+
+        static void arm() {
+            armed = true;
+        }
+
+        static void reset() {
+            armed = false;
+            PAUSED = new CountDownLatch(1);
+            CANCEL_DONE = new CountDownLatch(1);
+        }
+
+        @Bean
+        static BeanPostProcessor pauseBeforeRelease() {
+            return ExpirationProxies.decorating((real, method, args) -> {
+                Object result = ExpirationProxies.callThrough(real, method, args);
+                if (armed && "stockRowCount".equals(method.getName())) {
+                    PAUSED.countDown();
+                    if (!CANCEL_DONE.await(30, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("형제 건 취소가 30초 안에 안 끝났다");
                     }
                 }
                 return result;

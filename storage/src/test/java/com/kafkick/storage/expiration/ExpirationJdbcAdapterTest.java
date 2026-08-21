@@ -35,6 +35,7 @@ class ExpirationJdbcAdapterTest {
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
     private static final LocalDateTime EXPIRED_AT = AS_OF.minusDays(1);
     private static final LocalDateTime ALIVE_AT = AS_OF.plusDays(1);
+
     /** 실제로 쓴 시각. asOf 보다 뒤다 — 잡은 asOf 를 정해 놓고 그 뒤에 돈다. */
     private static final LocalDateTime WROTE_AT = AS_OF.plusMinutes(3);
     private static final int NO_LIMIT = 1000;
@@ -442,5 +443,63 @@ class ExpirationJdbcAdapterTest {
         assertThat(adapter.lastExpiredId(AS_OF, WROTE_AT, 42L))
                 .as("빈 집합에서 0 을 주면 다음 청크가 앞 구간을 다시 훑는다")
                 .isEqualTo(42L);
+    }
+
+    /**
+     * <b>상한({@code id <= lastId})을 지키는 유일한 축이다.</b>
+     *
+     * <p>예전에는 {@code ExpirationLockScopeTest} 가 락 수로 이것을 지켰다. READ COMMITTED 로
+     * 내린 뒤로는 <b>뒤 문장들이 락을 아예 안 잡아서</b> 상한을 통째로 지워도 락 수가 그대로다
+     * — 실측으로 확인했다(RC: 상한 있음 40 · 없음 40, RR: 62 · 546). 그 축이 죽었으므로
+     * 상한이 지금 지키는 것을 직접 잰다: <b>남의 행이 우리 집합에 안 섞인다.</b>
+     *
+     * <p>구간 <b>위</b>에 같은 표식을 가진 행을 심는다. 상한이 빠지면 뒤 문장들이 그것까지
+     * 세어 이력 수가 만료 건수와 어긋나고, 잡은 {@code EXPIRE_HISTORY_COUNT_MISMATCH} 로 멈춘다.
+     */
+    @Test
+    @DisplayName("구간 위에 같은 표식이 있어도 뒤 문장들이 세지 않는다")
+    void boundaryExcludesRowsAboveLastId() {
+        long ours = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        long above = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, 1)).isEqualTo(1);
+        long boundary = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+        assertThat(boundary).as("첫 건만 넘어갔어야 구간 위가 생긴다").isEqualTo(ours);
+
+        // 남이 같은 표식으로 구간 위의 행을 넘긴 것을 흉내낸다.
+        jdbcClient.sql("UPDATE issuances SET status = 'EXPIRED', updated_at = :at WHERE id = :id")
+                .param("at", WROTE_AT)
+                .param("id", above)
+                .update();
+
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary))
+                .as("상한이 빠지면 2 가 되고, 잡이 이력 짝 검사에서 멈춘다")
+                .isEqualTo(1);
+        assertThat(adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, boundary))
+                .as("회차 수도 우리 구간만 센다")
+                .isEqualTo(1);
+        assertThat(historyCount(above))
+                .as("우리가 넘기지 않은 건에는 이력이 안 붙는다")
+                .isZero();
+    }
+
+    /**
+     * <b>SQL 이 전이표를 두 번째로 인코딩한다.</b> {@code EXPIRE_BATCH} 의
+     * {@code WHERE status='ISSUED' … SET status='EXPIRED'} 와 {@code APPEND_HISTORIES} 의
+     * {@code 'ISSUED','EXPIRED'} 상수가 그것이다. {@code CouponStateMachine} 을 참조하지 않는다.
+     *
+     * <p>지금은 두 벌이 일치하지만 그 일치를 확인하는 것이 없었다. 전이표가 바뀌는 날
+     * 리플레이와 검증은 새 규칙을 따르고 만료 SQL 만 옛 규칙으로 남는다 —
+     * 그러면 V4(불법 전이)가 만료 배치가 쓴 이력을 검출로 잡거나, 잡아야 할 것을 놓친다.
+     */
+    @Test
+    @DisplayName("만료 SQL 이 인코딩한 전이가 전이표와 같다")
+    void sqlMatchesStateMachine() {
+        assertThat(CouponStateMachine.next(IssuanceStatus.ISSUED, IssuanceEventType.EXPIRE))
+                .as("EXPIRE_BATCH 의 SET status='EXPIRED' 와 APPEND_HISTORIES 의 to_status 근거")
+                .contains(IssuanceStatus.EXPIRED);
+        assertThat(CouponStateMachine.next(IssuanceStatus.USED, IssuanceEventType.EXPIRE))
+                .as("USED 에도 EXPIRE 가 열리면 EXPIRE_BATCH 의 status='ISSUED' 필터를 함께 고쳐야 한다")
+                .isEmpty();
     }
 }

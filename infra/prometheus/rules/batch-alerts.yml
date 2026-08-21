@@ -1,7 +1,7 @@
 # 배치 서버 알림 규칙. 관제(Prometheus)가 그대로 가져다 쓴다.
 #
 # 여기 적힌 메트릭은 우리가 만든 것이 아니라 Spring Batch 가 Micrometer 로 자동 등록하고,
-# 관리 포트(기본 9091)의 /actuator/prometheus 로 나간다. 그래서 의존성이 오르거나
+# 관리 포트(기본 9092)의 /actuator/prometheus 로 나간다. 그래서 의존성이 오르거나
 # 노출 목록이 좁아지면 **우리도 모르게 사라질 수 있다.** 그것을 막으려고
 # BatchMetricExposureTest 가 이 파일을 직접 읽어, 여기 쓰인 이름이 실제로 나오는지 대조한다.
 # 규칙을 추가할 때 새 메트릭을 쓰면 그 테스트가 먼저 확인해 준다.
@@ -21,8 +21,26 @@ groups:
       # 이력 수가 만료 건수와 다를 때, 재고 행이 없는 회차가 있을 때,
       # 뺄 재고가 만료 건수보다 적은 회차가 있을 때.
       # 셋 다 데이터가 이미 어긋났다는 뜻이라 다시 돌린다고 낫지 않는다. 사람이 봐야 한다.
+      # increase() 만으로는 **첫 실패를 영원히 못 잡는다.** 이 카운터는 status 별로 시계열이
+      # 갈리고 FAILED 계열은 첫 실패 때 값 1 로 태어난다. 창 안에 샘플이 하나뿐이면
+      # 델타가 0 이라 조건이 거짓이다. 데드락으로 만료가 한 번 희생되는 일회성 실패가
+      # 정확히 그 경우다 — 두 번째 실패가 없으면 알림이 한 번도 안 뜬다.
+      #
+      # 그래서 "10분 전에는 없던 FAILED 계열" 갈래를 or 로 붙인다.
       - alert: BatchJobFailed
-        expr: increase(spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}[10m]) > 0
+        expr: >-
+          sum by (spring_batch_job_name) (
+            increase(spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}[10m])
+          ) > 0
+          or (
+            sum by (spring_batch_job_name) (
+              spring_batch_job_seconds_count{spring_batch_job_status="FAILED"}
+            )
+            unless
+            sum by (spring_batch_job_name) (
+              spring_batch_job_seconds_count{spring_batch_job_status="FAILED"} offset 10m
+            )
+          )
         for: 0m
         labels:
           severity: critical
@@ -38,17 +56,27 @@ groups:
       # absent_over_time 을 or 로 붙인 이유 — 스크레이프 자체가 끊기면 시계열이 사라져서
       # increase(...) == 0 은 **평가할 대상이 없어 조용해진다.** 서버가 죽은 경우가 그렇고,
       # 그게 정확히 이 규칙이 잡아야 할 상황이다.
-      # sum by 로 접는 것이 핵심이다. 이 카운터는 spring_batch_job_status 라벨로 쪼개지므로,
-      # 접지 않으면 increase(...) == 0 이 **시계열마다** 평가된다. 잡이 한 번 FAILED 로 끝나면
-      # 그 계열이 계속 남아서, 이후 잡이 5분마다 정상 완료해도 {status="FAILED"} 쪽 증가분이 0 이라
-      # 조건이 참이 된다 — "안 돌았다" 가 실제로는 "최근 15분간 성공만 했다" 일 때 뜬다.
+      # sum by 로 접는 것이 먼저다. 이 카운터는 status 라벨로 쪼개지므로 접지 않으면
+      # 조건이 시계열마다 평가되어, 잡이 한 번 FAILED 로 끝난 뒤로는 그 계열의 증가분이 0 이라
+      # "안 돌았다" 가 실제로는 "최근 15분간 성공만 했다" 일 때 뜬다.
       - alert: BatchJobNotRunning
+      # increase() 가 아니라 절대 델타를 쓴다. 재기동하면 카운터가 새로 태어나는데,
+      # increase() 로 재면 첫 완료부터 두 번째 완료까지(≈10분) 계열이 상수라 조건이 참이 되어
+      # **배포할 때마다 critical 이 뜬다.** 델타는 offset 쪽 계열이 없으면 결과가 비어
+      # 그 갈래가 아예 평가되지 않는다.
+      #
+      # absent_over_time 쪽 재기동 오탐은 for 를 주기의 3배로 올려 흡수한다.
         expr: >-
-          sum by (spring_batch_job_name) (
-            increase(spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}[15m])
+          (
+            sum by (spring_batch_job_name) (
+              spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}
+            )
+            - sum by (spring_batch_job_name) (
+              spring_batch_job_seconds_count{spring_batch_job_name="expireJob"} offset 15m
+            )
           ) == 0
           or absent_over_time(spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}[15m])
-        for: 5m
+        for: 15m
         labels:
           severity: critical
         annotations:

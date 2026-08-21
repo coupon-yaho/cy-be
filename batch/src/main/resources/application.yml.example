@@ -52,22 +52,26 @@ server:
 # 업무 포트와 관측 포트를 나눈다. 한 포트에 얹으면 verify 트리거와 지표가 같은 문에 걸려,
 # 그 문을 열고 닫는 판단이 하나로 묶인다.
 #
-# ⚠️ compose 를 쓰는 사람에게 — 9091 이라는 숫자가 두 뜻이다.
+# ⚠️ compose 를 쓰는 사람에게 — 세 숫자가 각각 다른 뜻이다.
 #
 #     호스트 9091  →  컨테이너 9090   업무 (verify 트리거).  이게 맞다
-#        내보내지 않음  컨테이너 9091   관리 (actuator)
+#        내보내지 않음  컨테이너 9092   관리 (actuator)
 #
-#   `ports: - "9091:9091"` 로 쓰지 마라. 숫자가 맞아떨어져 보이지만 그러면
-#   **관리 포트가 호스트에 열리고** 업무 포트는 아무도 못 가리킨다. 한 번에 둘이 깨진다.
-#   호스트 쪽 번호는 BATCH_HOST_PORT 이고 우변은 언제나 9090 이다.
+#   `ports:` 의 우변은 언제나 9090 이다. 호스트 쪽 번호는 BATCH_HOST_PORT 다.
+#   관리 포트를 호스트에 매핑하면 인증 없이 전 지표가 열린다.
 #
-#   관제의 스크레이프 대상은 컨테이너 기준 batch:9091 이다 — 내부 네트워크에서 긁는다.
+#   관제의 스크레이프 대상은 컨테이너 기준 batch:9092 다 — 내부 네트워크에서 긁는다.
+#   infra/prometheus/prometheus.yml 의 targets 와 같아야 한다.
+#
+#   9091 → 9092 로 옮긴 것은 CY-254 와 맞춘 것이다. 예전에는 관리 포트도 9091 이라
+#   호스트 업무 포트와 숫자가 겹쳐서, `ports: - "9091:9091"` 로 쓰면 관리 포트가
+#   호스트에 열리고 업무 포트는 아무도 못 가리키는 사고가 났다.
 #
 # Compose 에 이 포트를 매핑하지 마라. Prometheus 가 내부 네트워크에서 긁는다.
 # 호스트로 내보내면 인증 없이 전 지표가 열린다.
 management:
   server:
-    port: ${BATCH_MANAGEMENT_PORT:9091}
+    port: ${BATCH_MANAGEMENT_PORT:9092}
   endpoints:
     web:
       exposure:
@@ -104,7 +108,7 @@ batch:
   # 그래서 기본값이 false 다 — **주지 않으면 안 도는 쪽**이다. 두 사고의 무게가 다르기 때문이다.
   #   켜진 채 검증 셋을 보면  → 오염. 셋을 다시 만드는 것 말고 되돌릴 방법이 없다.
   #   꺼진 채 운영을 보면      → 만료가 밀린다. 나중에 돌리면 따라잡고,
-  #                             alerts/batch-alerts.yml 의 BatchJobNotRunning 이 잡아 준다.
+  #                             infra/prometheus/rules/batch-alerts.yml 의 BatchJobNotRunning 이 잡아 준다.
   # 되돌릴 수 있고 감지도 되는 쪽을 기본으로 둔다. 운영은 true 를 명시해서 띄운다.
   scheduling:
     enabled: ${BATCH_SCHEDULING_ENABLED:false}
@@ -128,7 +132,7 @@ batch:
     # 아무 상한도 되지 않는다. JobOperator.stop() 은 청크 경계에서만 반응해 단일 문장을 못 끊는다.
     # 재고를 쓰고 issuances 를 잠그는 유일한 잡이라 verify 보다 이쪽이 더 급하다.
     #
-    # ⚠️ 이것은 **청크 하나의 데다린**이지 잡 전체의 상한이 아니다. CONTINUABLE 로 돌아올 때마다
+    # ⚠️ 이것은 **청크 하나의 데드라인**이지 잡 전체의 상한이 아니다. CONTINUABLE 로 돌아올 때마다
     #    새 트랜잭션이 열려 매번 다시 센다 — chunk-size 를 키우면 이 값도 같이 키워야 하고,
     #    잡 전체는 (청크 수 × 이 값) 만큼 돌 수 있다. 실행 전체를 끊는 수단은 아직 없다.
     step-timeout-ms: ${EXPIRE_STEP_TIMEOUT_MS:120000}
