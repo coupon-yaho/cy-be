@@ -89,6 +89,19 @@ public interface ExpirationRepository {
     List<Long> blockedCoupons(LocalDateTime asOf);
 
     /**
+     * 기한이 지났는데 아직 {@code ISSUED} 인 발급건 수. <b>실행이 끝난 뒤 한 번 센다.</b>
+     *
+     * <p>스크레이프 때 세면 300만 행에 {@code COUNT(*)} 를 15초마다 때리는 꼴이다.
+     * 잡이 끝나는 시점이면 이미 같은 창을 훑고 있었다.
+     *
+     * <p>{@code blockedCouponIds} 를 받아 <b>둘로 갈라 센다</b> — 막힌 회차의 몫은 설계상
+     * 계속 남으므로, 합쳐서 알림을 걸면 사람이 재고를 고칠 때까지 24시간 울리고 그 알림은
+     * 곧 무시된다. 갈라야 <i>"배치가 일을 안 한다"</i> 와 <i>"데이터가 어긋나 있다"</i> 가
+     * 서로 다른 알림이 된다.
+     */
+    PendingExpiration countPending(LocalDateTime asOf, List<Long> blockedCouponIds);
+
+    /**
      * {@code id > afterId} 인 것 중 앞에서부터 {@code limit} 건을 만료로 넘긴다.
      *
      * <p><b>거르는 조건이 {@code UPDATE} 안에 있다.</b> 후보를 먼저 뽑았다가 그 사이 사용된 건을

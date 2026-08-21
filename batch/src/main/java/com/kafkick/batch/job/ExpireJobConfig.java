@@ -4,13 +4,16 @@ package com.kafkick.batch.job;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.job.Job;
+import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.job.parameters.DefaultJobParametersValidator;
+import org.springframework.batch.core.listener.JobExecutionListener;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
@@ -23,8 +26,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.batch.config.BinlogFormatGuard;
+import com.kafkick.batch.config.ExpireMetrics;
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
@@ -99,6 +104,24 @@ public class ExpireJobConfig {
     private final TransactionAttribute stepTransaction;
 
     /**
+     * <b>관측 질의의 데드라인.</b> {@code afterJob} 은 Step 밖이라 {@code stepTransaction} 의
+     * 타임아웃이 안 걸린다 — 그리고 그것을 대신할 것이 <b>아무것도 없다.</b>
+     *
+     * <p>Spring Batch 는 {@code afterJob} 을 부르기 <b>전에</b> 관측을 멈춘다. 그래서
+     * {@code spring_batch_job_seconds} 에도 이 시간이 안 들어가고,
+     * {@code BatchJobRunningTooLong} 이 못 본다. {@code JobOperator.stop()} 은 청크 경계에서만
+     * 반응하니 여기까지 안 온다. 상한이 없으면 <b>끊을 수단도 알 수단도 없다.</b>
+     *
+     * <p>그런데 {@code COUNT_PENDING} 은 상한도 {@code LIMIT} 도 없는 전수 집계이고 하루
+     * 288번 돈다. 대량 만료가 밀린 날 이것이 길어지면, 스케줄러가 동기 호출이라
+     * <b>다음 크론 슬롯이 통째로 사라진다</b> — 그것도 조용히.
+     *
+     * <p>읽기 전용이고, 터지면 {@code catch} 가 잡아 <i>"모름"</i> 으로 떨어진다.
+     * 관측이 판정을 방해하지 않는다는 계약이 그대로 선다.
+     */
+    private final TransactionTemplate observeTransaction;
+
+    /**
      * <b>두 값을 기동 시점에 거른다.</b> 둘 다 틀렸을 때 잡이 <i>조용히</i> 이상해지는 종류라,
      * 그때 가서는 아무도 모른다.
      *
@@ -138,6 +161,7 @@ public class ExpireJobConfig {
         this.transactionManager = transactionManager;
         this.chunkSize = chunkSize;
         this.stepTransaction = expireStepTransaction(stepTimeoutMillis);
+        this.observeTransaction = observeTransaction(transactionManager, stepTimeoutMillis);
 
     }
 
@@ -148,13 +172,16 @@ public class ExpireJobConfig {
      * {@code verifyJob} 이 같은 이유로 검증기를 붙여 뒀다.
      */
     @Bean
-    public Job expireJob(Step expireStep, BinlogFormatGuard binlogFormatGuard) {
+    public Job expireJob(Step expireStep, BinlogFormatGuard binlogFormatGuard,
+            ExpirationRepository expirations, ExpireMetrics metrics,
+            TimeProvider timeProvider) {
         return new JobBuilder("expireJob", jobRepository)
                 .validator(new DefaultJobParametersValidator(
                         new String[] {"asOf"}, new String[0]))
                 // 이 Step 의 READ COMMITTED DML 이 STATEMENT binlog 서버에서 오류 1665 로
                 // 거부된다. 스케줄 실행이든 수동 트리거든 여기를 지나야 만료가 시작한다.
                 .listener(binlogFormatGuard)
+                .listener(reportPending(expirations, metrics, timeProvider))
                 .start(expireStep)
                 .build();
     }
@@ -191,7 +218,14 @@ public class ExpireJobConfig {
                     // 수 있다. 그 폭을 여기 다시 적으면 한쪽만 바뀌는 날 스케줄러가 만든 값을
                     // 잡이 거부하므로, 정의한 곳에서 그대로 가져온다.
                     // 진짜로 막아야 하는 것은 손으로 친 값이다.
-                    if (asOf.isAfter(committedAt.plus(CronSlot.EARLY_FIRE_TOLERANCE))) {
+                    if (asOf == null) {
+                        // 파라미터 검증기가 막고 있어야 하는 자리다. 여기 오면 그쪽이 풀린 것이고,
+                        // 그것을 "미래 asOf" 로 알리면 운영자가 자기가 친 시각을 의심한다.
+                        throw new IllegalStateException(
+                                "asOf 파라미터가 없습니다. DefaultJobParametersValidator 가 "
+                                        + "막고 있어야 하는 자리입니다.");
+                    }
+                    if (isAsOfInFuture(asOf, committedAt)) {
                         throw new BusinessException(
                                 ExpirationErrorCode.EXPIRE_ASOF_IN_FUTURE,
                                 "asOf 가 현재보다 미래입니다. 기한이 남은 발급건까지 만료되고 "
@@ -294,12 +328,130 @@ public class ExpireJobConfig {
      * ⚠️ verifyJob 에는 걸지 마라. 그쪽은 판정 시점을 얼려야 하므로 격리 수준이
      *    낮아지면 dataset_fingerprint 재료가 실행 중에 흔들린다.
      */
+    /**
+     * 관측 질의를 감싸는 읽기 전용 트랜잭션. <b>여기 타임아웃을 걸어야 질의에 심긴다</b> —
+     * 트랜잭션 밖에서 부르면 {@code DataSourceUtils} 가 {@code queryTimeout} 을 안 붙인다.
+     *
+     * <p>청크와 같은 값을 쓴다. 이 질의가 청크 하나보다 오래 걸릴 이유가 없고, 값을 따로 두면
+     * 한쪽만 바뀌는 날 그 사실이 안 드러난다.
+     */
+    private static TransactionTemplate observeTransaction(
+            PlatformTransactionManager transactionManager, long millis) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setReadOnly(true);
+        template.setTimeout(Math.toIntExact(millis / 1_000));
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+
+        return template;
+    }
+
     private static TransactionAttribute expireStepTransaction(long millis) {
         DefaultTransactionAttribute attribute = new DefaultTransactionAttribute();
         attribute.setTimeout(Math.toIntExact(millis / 1_000));
         attribute.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
 
         return attribute;
+    }
+
+    /**
+     * <b>끝난 뒤 남은 것을 센다.</b> 잡의 생사만으로는 <i>"성공했는데 아무것도 안 했다"</i> 를
+     * 못 잡는다 — 기존 알림 셋이 전부 그 축이고, 셋 다 통과하면서 기한 지난 발급건이 계속
+     * 쌓이는 상태가 있다.
+     *
+     * <p><b>{@code afterJob} 이라 실패로 끝나도 남는다.</b> 오히려 그때 더 필요하다.
+     *
+     * <p><b>세는 것 자체가 실패의 이유가 되면 안 된다.</b> 이것은 관측이지 판정이 아니다 —
+     * 세다가 죽어서 잡이 실패하면, 정작 만료는 다 해 놓고 지표 때문에 빨간불이 난다.
+     * 프레임워크도 {@code afterJob} 예외를 삼키지만({@code AbstractJob}), 그때 나가는 것은
+     * 원인이 안 보이는 ERROR 라 여기서 먼저 잡아 뜻이 있는 문장을 남긴다.
+     *
+     * <p><b>믿을 수 없는 {@code asOf} 로는 세지 않는다.</b> 셋 다 <i>"모름"</i> 으로 되돌린다 —
+     * 0 은 <i>"밀린 것이 없다"</i> 라서 누락 알림을 침묵시키고, 미래 {@code asOf} 로 센 값은
+     * <i>"밀린 만료"</i> 가 아니라 <b>아직 기한이 남은 발급건</b>이라 수백만이 나온다.
+     * 그것을 그대로 내보내면 <b>파라미터를 잘못 친 사건이 "서버를 봐라" critical 로 나간다</b> —
+     * 이 잡이 세우려는 구분(서버 · 데이터 · 파라미터)이 바로 그 자리에서 뭉개진다.
+     */
+    private JobExecutionListener reportPending(ExpirationRepository expirations,
+            ExpireMetrics metrics, TimeProvider timeProvider) {
+        return new JobExecutionListener() {
+            @Override
+            public void afterJob(JobExecution jobExecution) {
+                try {
+                    LocalDateTime asOf = jobExecution.getJobParameters()
+                            .getLocalDateTime("asOf");
+                    if (asOf == null || isAsOfInFuture(asOf, timeProvider.now())) {
+                        metrics.markUnknown();
+                        return;
+                    }
+                    // 제외 목록을 못 읽었다는 것과 목록이 비었다는 것은 다르다.
+                    // 앞은 "판정할 재료가 없다", 뒤는 "막힌 회차가 없다" 다.
+                    Optional<List<Long>> blocked = blockedFrom(jobExecution);
+                    if (blocked.isEmpty()) {
+                        metrics.markUnknown();
+                        return;
+                    }
+                    metrics.record(asOf, observeTransaction.execute(
+                            status -> expirations.countPending(asOf, blocked.get())),
+                            blocked.get().size());
+                } catch (RuntimeException e) {
+                    // 직전 실행 값을 들고 있으면 관제가 그것을 이번 결과로 읽는다.
+                    metrics.markUnknown();
+                    log.warn("남은 만료 대기를 세지 못했습니다. 지표를 '모름' 으로 되돌립니다.", e);
+                }
+            }
+        };
+    }
+
+    /**
+     * Step 문맥에 실린 이번 실행의 제외 목록. <b>빈 {@code Optional} 은 "모른다" 다.</b>
+     *
+     * <p><b>못 읽은 것과 비어 있는 것을 가르는 것이 이 반환 타입의 전부다.</b> 예전에는 둘 다
+     * 빈 목록이었다. 그러면 Step 을 시작도 못 한 실행 — 오염 스키마 가드나 binlog 가드가
+     * 세웠거나 DB 가 안 붙은 경우 — 에서 <b>막힌 회차가 없다</b>고 판정하게 되고, 남은 대기가
+     * 전부 <i>"배치가 처리했어야 하는 몫"</i> 으로 나간다. 그 알림은 critical 이고
+     * <i>"서버를 봐야 한다"</i> 고 안내하는데, 실제로 고칠 곳은 접속 설정이다 —
+     * 이 잡이 세우려는 구분(서버 · 데이터 · 파라미터 · 설정)이 그 자리에서 뭉개진다.
+     *
+     * <p><b>세대가 다른 값은 안 읽는다.</b> 재시작한 Step 의 문맥에는 이전 실행이 남긴 값이
+     * 복원돼 있다. 태스클릿이 첫 청크에서 덮어쓰지만, 그 전에 죽으면 낡은 목록이 남는다 —
+     * 그것을 이번 실행의 판정으로 세면 <b>이미 고쳐진 회차가 계속 제외된 것처럼</b> 보여
+     * {@code blocked_pending} 이 부풀고 누락 알림이 침묵한다. 첫 청크가 <b>커밋 시점에</b>
+     * 롤백되는 경우({@code TaskletStep} 이 문맥을 청크 이전으로 되돌린다)도 여기로 떨어진다.
+     */
+    private static Optional<List<Long>> blockedFrom(JobExecution jobExecution) {
+        String prefix = jobExecution.getId() + GENERATION_SEPARATOR;
+        return jobExecution.getStepExecutions().stream()
+                .map(step -> step.getExecutionContext().getString(BLOCKED_COUPONS_KEY, ""))
+                .filter(raw -> raw.startsWith(prefix))
+                .map(raw -> raw.substring(prefix.length()))
+                .findFirst()
+                .map(ExpireJobConfig::parseCouponIds);
+    }
+
+    /** 빈 문자열은 <b>막힌 회차가 없다</b>는 뜻이다. 모른다는 뜻이 아니다. */
+    private static List<Long> parseCouponIds(String ids) {
+        return ids.isEmpty() ? List.of()
+                : Arrays.stream(ids.split(",")).map(Long::valueOf).toList();
+    }
+
+    /**
+     * <b>{@code asOf} 를 믿을 수 있나.</b> 태스클릿과 {@code afterJob} 이 <b>같은 것을 봐야
+     * 한다</b> — 한쪽만 관용 폭을 빼면 정상 주기가 한쪽에서만 통과한다.
+     *
+     * <p>실제로 그랬다. 태스클릿은 {@link CronSlot#EARLY_FIRE_TOLERANCE} 를 더해 비교하는데
+     * 리스너는 엄격 비교라, 조기 발화로 {@code asOf} 가 1초 미래인 주기가 <b>만료는 다 하고
+     * 정상 종료했는데 지표 넷이 통째로 {@code NaN}</b> 이 됐다. 그러면 누락 알림의
+     * {@code for} 타이머가 리셋되어 감시가 조용히 꺼진다.
+     *
+     * <p>폭을 여기 다시 적지 않고 정의한 곳에서 가져오는 이유는 {@link CronSlot} 이 적어 뒀다.
+     *
+     * <p><b>{@code null} 은 여기서 안 다룬다.</b> 두 호출자에게 뜻이 다르기 때문이다 —
+     * 태스클릿에서는 파라미터 검증기가 풀렸다는 <b>배선 사고</b>이고, {@code afterJob} 에서는
+     * 검증에 걸려 Step 이 안 돈 <b>정상적인 실패</b>다. 하나로 뭉치면 앞의 경우가
+     * <i>"미래 asOf"</i> 로 나가 운영자를 자기가 친 시각으로 보낸다.
+     */
+    private static boolean isAsOfInFuture(LocalDateTime asOf, LocalDateTime now) {
+        return asOf.isAfter(now.plus(CronSlot.EARLY_FIRE_TOLERANCE));
     }
 
     /**

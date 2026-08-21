@@ -1,4 +1,4 @@
-// 만료 처리 SQL 일곱입니다 — 청크가 쓰는 여섯과, 실행당 한 번 도는 제외 판정 하나입니다. 전부 집합 단위로 돌고, 행을 미리 골라 두는 잠금 읽기를 쓰지 않습니다.
+// 만료 처리 SQL 여덟입니다 — 청크가 쓰는 여섯과, 실행당 한 번 도는 읽기 둘입니다. 전부 집합 단위로 돌고, 행을 미리 골라 두는 잠금 읽기를 쓰지 않습니다.
 package com.kafkick.storage.db.expiration;
 
 import java.time.LocalDateTime;
@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.expiration.ExpirationRepository;
+import com.kafkick.core.expiration.PendingExpiration;
 
 /**
  * <b>여섯 문장이 하나의 청크를 이룬다.</b> 넘기고 · 경계를 찾고 · 이력을 남기고 · 회차를 세고 ·
@@ -95,6 +96,20 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
                AND coupon_id NOT IN (:blockedCoupons)
              ORDER BY id
              LIMIT :limit
+            """;
+
+    /**
+     * 만료 대기 건수를 막힌 몫과 함께 한 번에 센다.
+     *
+     * <p>두 번 세면 그 사이에 값이 움직여 {@code total < blocked} 같은 조합이 나올 수 있다 —
+     * 게이지 둘이 서로 어긋나면 알림 식({@code total - blocked})이 음수가 된다.
+     */
+    private static final String COUNT_PENDING = """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN coupon_id IN (:blockedCoupons) THEN 1 ELSE 0 END) AS blocked
+              FROM issuances
+             WHERE status = 'ISSUED'
+               AND expires_at < :asOf
             """;
 
     /** 회차 id 가 될 수 없는 값. auto-increment 라 음수가 나오지 않는다. */
@@ -283,6 +298,15 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
                 .param("asOf", asOf)
                 .query(Long.class)
                 .list();
+    }
+
+    @Override
+    public PendingExpiration countPending(LocalDateTime asOf, List<Long> blockedCouponIds) {
+        return jdbcClient.sql(COUNT_PENDING)
+                .param("asOf", asOf)
+                .param("blockedCoupons", withSentinel(blockedCouponIds))
+                .query((rs, rowNum) -> new PendingExpiration(rs.getLong(1), rs.getLong(2)))
+                .single();
     }
 
     @Override

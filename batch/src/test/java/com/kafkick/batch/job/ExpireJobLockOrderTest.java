@@ -141,7 +141,11 @@ class ExpireJobLockOrderTest {
                         "stockRowCount",
                         "releaseStock",
                         // 남은 대상이 없어 0 을 돌려주고 끝난다
-                        "expireBatch");
+                        "expireBatch",
+                        // 잡이 끝난 뒤 남은 대기를 센다(afterJob 리스너). 청크 트랜잭션
+                        // 밖이고 락을 안 잡아 순서 계약과 무관하다 — 그 성질도 위와 같이
+                        // ExpirationLockScopeTest 가 계측으로 지킨다.
+                        "countPending");
     }
 
     /** 저장소 호출 이름만 순서대로 적는다. 동작은 실제 저장소 그대로다. */

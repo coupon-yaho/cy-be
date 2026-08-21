@@ -58,6 +58,10 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * {@code application.yml} 에서 {@code prometheus} 가 빠져도 여기는 초록으로 지나간다 —
  * 정작 막아야 할 사고가 그것이다. 같은 이유로 {@code ActuatorExposureTest} 도 파일을 읽는다.
  *
+ * <p><b>{@code cy_*} 도 함께 본다.</b> 이 저장소가 직접 내보내는 지표가 생겼는데
+ * 정규식이 {@code spring_batch_*} 만 보면, 규칙 파일과 실제 노출을 잇는 것이 그쪽에는
+ * 없는 상태가 된다 — 이 클래스가 존재하는 이유가 정확히 그것이다.
+ *
  * <p><b>알림 규칙 파일을 직접 읽는다.</b> {@code infra/prometheus/rules/batch-alerts.yml} 의 규칙이 쓰는
  * 메트릭 이름을 뽑아 실제 노출과 대조한다. 이름 목록을 이 클래스에 복붙하면 규칙이 새 메트릭을
  * 쓰기 시작해도 여기는 초록으로 지나가고, <b>관제에서 규칙 하나가 영원히 안 뜨는 상태</b>가 된다 —
@@ -101,7 +105,7 @@ class BatchMetricExposureTest {
             Path.of("..", "infra", "prometheus", "rules", "batch-alerts.yml").normalize();
 
     /** 규칙 파일에 쓰인 메트릭 이름. 뒤따르는 {@code {태그}} 는 빼고 이름만 잡는다. */
-    private static final Pattern METRIC_NAME = Pattern.compile("spring_batch_[a-z_]+");
+    private static final Pattern METRIC_NAME = Pattern.compile("(?:spring_batch|cy)_[a-z_]+");
 
     @LocalManagementPort
     private int managementPort;

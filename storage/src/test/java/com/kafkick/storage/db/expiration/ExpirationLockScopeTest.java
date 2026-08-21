@@ -207,20 +207,28 @@ class ExpirationLockScopeTest {
      * {@code coupon_stocks} 를 쥐게 된다 — 발급 경로와 엇갈리면 <b>1213 데드락</b>이고,
      * 그때 희생되는 쪽이 만료면 그 주기가 통째로 밀린다.
      *
+     * <p>{@code countPending} 도 같다. 이쪽은 {@code afterJob} 에서 트랜잭션 밖으로 도는데,
+     * 락을 잡게 되면 <b>검증이 읽는 데이터를 관측이 건드리는</b> 모양이 된다.
      */
     @Test
-    @DisplayName("제외 판정은 락을 잡지 않는다 — 순서 계약 밖이다")
-    void blockedCouponLookupTakesNoLocks() {
+    @DisplayName("제외 판정과 대기 집계는 락을 잡지 않는다 — 순서 계약 밖이다")
+    void readOnlyQueriesTakeNoLocks() {
         issuances(200, IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        int locks = transaction.execute(status -> {
+        int[] locks = transaction.execute(status -> {
             adapter.blockedCoupons(AS_OF);
-            return lockedRecordsAnywhere();
+            int afterBlocked = lockedRecordsAnywhere();
+            adapter.countPending(AS_OF, List.of());
+            return new int[] {afterBlocked, lockedRecordsAnywhere()};
         });
 
-        assertThat(locks)
+        assertThat(locks[0])
                 .as("**FOR SHARE 를 붙이는 순간 여기가 움직인다.** 그러면 락 순서 계약의 "
                         + "중간(issuance_histories)을 건너뛰고 coupon_stocks 를 잡게 된다")
+                .isZero();
+        assertThat(locks[1])
+                .as("countPending 은 afterJob 에서 트랜잭션 밖으로 돈다. 여기서 락이 잡히면 "
+                        + "관측이 원본을 건드린다")
                 .isZero();
     }
 

@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.PendingExpiration;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -151,6 +152,81 @@ class BlockedCouponTest {
         assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
                 .isEqualTo(1);
         assertThat(statusOf(target)).isEqualTo(IssuanceStatus.EXPIRED.name());
+    }
+
+    /**
+     * <b>게이지를 가르지 않으면 알림이 영원히 울린다.</b> 막힌 회차의 건은 설계상 계속
+     * {@code ISSUED} 로 남으므로, 합쳐서 알림을 걸면 사람이 재고를 고칠 때까지 24시간 울리고
+     * 그 알림은 곧 무시된다. 갈라야 <i>"배치가 일을 안 한다"</i> 와
+     * <i>"데이터가 어긋나 있다"</i> 가 서로 다른 알림이 된다.
+     */
+    @Test
+    @DisplayName("남은 대기를 막힌 몫과 나머지로 가른다")
+    void splitsPendingIntoBlockedAndUnexplained() {
+        long broken = seed.newCoupon();
+        expiring();
+        expiring();
+        seed.overwriteStock(0);
+
+        seed.newCoupon();
+        expiring();
+        seed.overwriteStock(1);
+
+        PendingExpiration pending = adapter.countPending(AS_OF, List.of(broken));
+
+        assertThat(pending.total()).isEqualTo(3);
+        assertThat(pending.blocked()).isEqualTo(2);
+        assertThat(pending.unexplained())
+                .as("이 값이 0 이 아니면 **서버를 봐야 한다** — 배치가 처리했어야 하는 몫이다")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("막힌 회차가 없으면 남은 대기가 전부 설명 안 되는 몫이다")
+    void countsEverythingAsUnexplainedWhenNothingIsBlocked() {
+        seed.newCoupon();
+        expiring();
+        seed.overwriteStock(1);
+
+        PendingExpiration pending = adapter.countPending(AS_OF, List.of());
+
+        assertThat(pending.blocked())
+                .as("센티널이 실수로 회차 id 와 겹치면 여기가 1 이 된다")
+                .isZero();
+        assertThat(pending.unexplained()).isEqualTo(1);
+    }
+
+    /**
+     * <b>회귀 테스트다 — 캡처 창을 여기에 걸면 이 단언이 깨진다.</b>
+     *
+     * <p>{@code expireBatch} 는 {@code updated_at <= committedAt} 로 창을 닫고, 그
+     * {@code committedAt} 은 <b>청크마다 새로 잡힌다.</b> 제외 판정에도 같은 창을 걸면
+     * 판정은 첫 청크 시각으로 고정되고 만료는 그보다 넓은 창으로 도는데, 그 틈에 있는 행은
+     * <b>대기로 안 세졌는데 만료는 된다.</b> 그러면 회차별 차감 합계가 판정이 본 대기를 넘어
+     * {@code active_count} 를 초과하고 {@code STOCK_UNDERFLOW} 로 잡이 죽는다 —
+     * 이 제외 논리가 없애려던 바로 그 실패다.
+     *
+     * <p>창을 빼면 이 값이 <b>그 실행이 넘길 수 있는 모든 행의 상계</b>가 되어, 어떤
+     * {@code committedAt} 수열에서도 부등식이 선다.
+     */
+    @Test
+    @DisplayName("판정 시각 뒤에 갱신된 행도 대기로 센다 — 캡처 창을 안 건다")
+    void countsRowsUpdatedAfterTheCaptureWindow() {
+        long broken = seed.newCoupon();
+        expiring();
+        long later = expiring();
+        seed.overwriteStock(1);
+
+        // 첫 청크가 잡은 시각보다 뒤에 상태가 움직인 행. 뒤 청크의 창에는 들어온다.
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE id = :id")
+                .param("at", WROTE_AT.plusSeconds(30))
+                .param("id", later)
+                .update();
+
+        assertThat(adapter.blockedCoupons(AS_OF))
+                .as("창을 걸면 대기가 1로 보여 재고 1이 덮는 것처럼 되고 이 회차가 빠진다. "
+                        + "그러면 뒤 청크가 2건을 넘겨 재고가 음수가 되고 잡이 죽는다")
+                .containsExactly(broken);
     }
 
     /** 기한이 지난 발급건 하나. 현재 회차에 붙는다. */
