@@ -32,6 +32,7 @@ class PromMetricsAssemblerTest {
     private static final Instant EVALUATED = NOW;
     private static final TimeProvider FIXED_TIME = new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC));
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
+    private static final Duration BUDGET = Duration.ofMillis(900);
 
     private static final long FRESH_AGE_SECONDS = 3;
     private static final long STALE_AGE_SECONDS = 300;
@@ -186,6 +187,49 @@ class PromMetricsAssemblerTest {
         assertThat(success.state()).isEqualTo(SourceStatus.STALE);
         assertThat(success.value()).isEqualTo(40d);
         assertThat(success.observedAt()).isEqualTo(EVALUATED.minusSeconds(STALE_AGE_SECONDS));
+    }
+
+    /**
+     * 경계에서 부호가 바뀌어도(> 가 >= 로) 알아채야 합니다. 3초와 300초만 보면 그 변화가 안 잡힙니다.
+     */
+    @Test
+    @DisplayName("나이가 stale-after 와 정확히 같으면 아직 STALE 이 아니다")
+    void ageExactlyAtThresholdIsNotStaleYet() {
+        assertThat(trafficStateAtAge(STALE_AFTER.toSeconds())).isEqualTo(SourceStatus.VALID);
+        assertThat(trafficStateAtAge(STALE_AFTER.toSeconds() + 1)).isEqualTo(SourceStatus.STALE);
+    }
+
+    private static SourceStatus trafficStateAtAge(long ageSeconds) {
+        FakePromQuery client = respond(Map.of(
+                "rate(", List.of(rate("issue", "success", 40d, "api-1")),
+                "timestamp(", List.of(age(ageSeconds))));
+        return assemble(client, globalQuery()).traffic().issueSuccessTps().state();
+    }
+
+    /**
+     * 한 응답에 질의가 넷이라 질의별 타임아웃만으로는 응답이 폴링 간격을 넘길 수 있습니다.
+     * 예산을 넘기면 남은 질의를 <b>보내지 않고</b> 그 값만 비웁니다.
+     */
+    @Test
+    @DisplayName("응답 예산을 넘기면 남은 질의를 보내지 않고 UNAVAILABLE 로 내려보낸다")
+    void exhaustedBudgetSkipsRemainingQueries() {
+        FakePromQuery client = respond(Map.of(
+                "app_consistency_gap_state", List.of(
+                        gap("lua", 3d), gapState("lua", SourceStatus.VALID),
+                        collectSuccess(FRESH_AGE_SECONDS)),
+                "rate(", List.of(rate("issue", "success", 40d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        AdminMetricsResponse response = new PromMetricsAssembler(
+                client, FIXED_TIME, STALE_AFTER, Duration.ofNanos(1)).assemble(globalQuery());
+
+        // 예산이 1ns 라 첫 질의만 나가고 나머지는 잘린다.
+        assertThat(client.queries()).hasSize(1);
+        // 순서가 우선순위다 — 합격 판정을 가르는 정합성이 먼저 나간다.
+        assertThat(client.queries().get(0)).contains("app_consistency_gap_state");
+        assertThat(response.consistency().luaGap().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(response.traffic().issueSuccessTps().state()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(response.latency().success().state()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
     // ── 지연 ────────────────────────────────────────────────────────────────────
@@ -462,7 +506,7 @@ class PromMetricsAssemblerTest {
     // ── 도우미 ─────────────────────────────────────────────────────────────────
 
     private static AdminMetricsResponse assemble(PromQuery client, MetricsQuery query) {
-        return new PromMetricsAssembler(client, FIXED_TIME, STALE_AFTER).assemble(query);
+        return new PromMetricsAssembler(client, FIXED_TIME, STALE_AFTER, BUDGET).assemble(query);
     }
 
     private static MetricsQuery globalQuery() {

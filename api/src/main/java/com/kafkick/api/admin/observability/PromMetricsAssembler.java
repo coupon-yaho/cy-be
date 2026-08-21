@@ -80,11 +80,14 @@ public class PromMetricsAssembler {
     private final PromQuery client;
     private final TimeProvider timeProvider;
     private final Duration staleAfter;
+    private final Duration totalBudget;
 
-    public PromMetricsAssembler(PromQuery client, TimeProvider timeProvider, Duration staleAfter) {
+    public PromMetricsAssembler(
+            PromQuery client, TimeProvider timeProvider, Duration staleAfter, Duration totalBudget) {
         this.client = Objects.requireNonNull(client, "client");
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.staleAfter = Objects.requireNonNull(staleAfter, "staleAfter");
+        this.totalBudget = Objects.requireNonNull(totalBudget, "totalBudget");
     }
 
     /**
@@ -96,10 +99,16 @@ public class PromMetricsAssembler {
     public AdminMetricsResponse assemble(MetricsQuery query) {
         MetricsWindow window = query.window();
 
-        QueryResult latency = run(latencyQuery());
-        QueryResult results = run(resultRateQuery(window));
-        QueryResult httpAge = run(httpFreshnessQuery());
-        QueryResult consistency = run(consistencyQuery());
+        // 응답 한 장의 예산이다. 질의별 타임아웃만 두면 최악의 경우 4 × (connect + read) 가 걸려
+        // 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로 부하가 된다.
+        Deadline deadline = Deadline.startingNow(totalBudget);
+
+        // 순서가 우선순위다. 예산이 모자라면 뒤가 잘리므로, 합격 판정을 가르는 정합성을 먼저 받는다
+        // — 화면도 정합성을 KPI 첫 칸에 두어 최소한 그것만은 항상 보이게 한다.
+        QueryResult consistency = run(consistencyQuery(), deadline);
+        QueryResult latency = run(latencyQuery(), deadline);
+        QueryResult results = run(resultRateQuery(window), deadline);
+        QueryResult httpAge = run(httpFreshnessQuery(), deadline);
 
         Instant evaluatedAt = evaluatedAt(latency, results, httpAge, consistency)
                 .orElseGet(timeProvider::instant);
@@ -162,7 +171,41 @@ public class PromMetricsAssembler {
                 MetricAggregation.COLLECT_LAST_SUCCESS_EPOCH) + "\"}";
     }
 
-    private QueryResult run(String promQl) {
+    /**
+     * 응답 한 장에 쓸 수 있는 남은 시간. 경과는 벽시계가 아니라 단조 시계로 잰다.
+     *
+     * <p><b>첫 질의는 예산과 무관하게 보낸다.</b> 예산을 아무리 짧게 잡아도 응답이 통째로 비면
+     * 화면에 아무것도 안 남는다 — 그래서 우선순위가 가장 높은 질의 하나는 언제나 나간다.</p>
+     */
+    private static final class Deadline {
+
+        private final long expiresAtNanos;
+        private boolean anyIssued;
+
+        private Deadline(long expiresAtNanos) {
+            this.expiresAtNanos = expiresAtNanos;
+        }
+
+        static Deadline startingNow(Duration budget) {
+            return new Deadline(System.nanoTime() + budget.toNanos());
+        }
+
+        boolean allows() {
+            if (!anyIssued) {
+                anyIssued = true;
+                return true;
+            }
+            return System.nanoTime() - expiresAtNanos < 0;
+        }
+    }
+
+    private QueryResult run(String promQl, Deadline deadline) {
+        if (!deadline.allows()) {
+            // 보내지 않는다. 늦게라도 값을 채우는 것보다 이 값만 비우는 편이 낫다 —
+            // 응답이 폴링 간격을 넘기면 다음 폴링이 앞 요청을 따라잡는다.
+            log.warn("응답 예산을 넘겨 질의를 보내지 않고 UNAVAILABLE 로 내려보냅니다: {}", promQl);
+            return QueryResult.failed();
+        }
         try {
             return QueryResult.of(client.query(promQl));
         } catch (PromQueryException failure) {

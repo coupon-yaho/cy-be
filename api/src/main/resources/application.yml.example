@@ -72,5 +72,9 @@ observation:
     # 값이 실시간 값으로 그려진다. 수집 주기가 경로마다 달라(재고 1초·정합성 30초) 횟수가 아니라
     # 시각 기준이다 — DomainMeterNames.COLLECT_LAST_SUCCESS_EPOCH 가 제시한 120초를 따른다.
     stale-after: ${PROMETHEUS_STALE_AFTER:120s}
+    # 응답 한 장에 쓸 수 있는 전체 시간. 질의별 타임아웃만 두면 최악의 경우 4 × (connect + read)
+    # 가 걸려 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로
+    # 부하가 된다. 예산을 넘긴 뒤의 질의는 보내지 않고 UNAVAILABLE 로 내려보낸다.
+    total-budget: ${PROMETHEUS_TOTAL_BUDGET:900ms}
   datasource:
     enabled: true

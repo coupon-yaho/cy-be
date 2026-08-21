@@ -23,10 +23,11 @@ class AdminObservabilityControllerTest {
     private static final TimeProvider FIXED_TIME =
             new TimeProvider(Clock.fixed(Instant.parse("2026-08-21T00:00:00Z"), ZoneOffset.UTC));
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
+    private static final Duration BUDGET = Duration.ofMillis(900);
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
             new AdminObservabilityController(
-                    new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER)));
+                    new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET)));
 
     /** 유효한 집계 구간과 단일 관측 범위가 바인딩된 뒤 값마다 상태가 붙은 스냅샷이 나가는지 검증합니다. */
     @Test
@@ -58,7 +59,7 @@ class AdminObservabilityControllerTest {
     void metricsSurviveDownstreamFailure() throws Exception {
         MockMvc failing = AdminControllerContractTestSupport.mockMvc(
                 new AdminObservabilityController(
-                        new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER)));
+                        new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER, BUDGET)));
 
         failing.perform(get("/api/v1/admin/metrics").param("window", "1m"))
                 .andExpect(status().isOk())

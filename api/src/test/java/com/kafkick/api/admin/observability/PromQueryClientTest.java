@@ -118,6 +118,9 @@ class PromQueryClientTest {
         assertThat(samples).hasSize(3);
         assertThat(samples.get(0).value()).isEqualTo(Double.POSITIVE_INFINITY);
         assertThat(samples.get(1).value()).isEqualTo(Double.NEGATIVE_INFINITY);
+        // 무한대는 파싱은 되지만 값이 아니다. 통과시키면 Math.round 가 Long.MAX_VALUE 를 만든다.
+        assertThat(samples.get(0).hasNumericValue()).isFalse();
+        assertThat(samples.get(1).hasNumericValue()).isFalse();
         // 해석 불가 표본만 빠지고 뒤에 오는 정상 표본은 살아남는다.
         assertThat(samples.get(2).value()).isEqualTo(7d);
     }
@@ -151,6 +154,20 @@ class PromQueryClientTest {
 
         assertThat(new PromQueryClient(builder.build()).query(promQl)).isEmpty();
         expecting.verify();
+    }
+
+    /** 시각이 숫자가 아니면 asDouble() 이 0.0 을 줘 관측 시각이 1970 년이 된다. */
+    @Test
+    @DisplayName("표본 시각이 숫자가 아니면 그 표본을 버린다")
+    void dropsSampleWithNonNumericTimestamp() {
+        List<PromSample> samples = bind("""
+                {"status":"success","data":{"resultType":"vector","result":[
+                  {"metric":{"__name__":"a"},"value":["not-a-time","1"]},
+                  {"metric":{"__name__":"b"},"value":[1755000000,"2"]}]}}
+                """, false).query("x");
+
+        assertThat(samples).hasSize(1);
+        assertThat(samples.get(0).metricName()).isEqualTo("b");
     }
 
     /** 전송 실패도 예외로 나가야 조립하는 쪽이 UNAVAILABLE 로 바꿀 수 있다. */

@@ -117,7 +117,12 @@ public class PromQueryClient implements PromQuery {
             }
         }
 
-        double epochSeconds = value.get(0).asDouble();
+        JsonNode timestamp = value.get(0);
+        // asDouble() 은 숫자가 아니면 조용히 0.0 을 준다 — 그러면 관측 시각이 1970 년이 된다.
+        if (!timestamp.isNumber() || !Double.isFinite(timestamp.doubleValue())) {
+            throw new PromQueryException("표본 시각이 숫자가 아닙니다: " + timestamp.asString(""));
+        }
+        double epochSeconds = timestamp.doubleValue();
         // NaN·Inf 는 그대로 싣는다. 0 으로 바꾸면 "정상인데 0" 과 구분되지 않는다.
         double sampleValue = parseValue(value.get(1).asString(""));
         return new PromSample(

@@ -32,6 +32,7 @@ public class AdminObservabilityConfig {
     @Bean
     public PromMetricsAssembler promMetricsAssembler(
             PromQuery client, TimeProvider timeProvider, PrometheusQueryProperties properties) {
-        return new PromMetricsAssembler(client, timeProvider, properties.staleAfter());
+        return new PromMetricsAssembler(
+                client, timeProvider, properties.staleAfter(), properties.totalBudget());
     }
 }
