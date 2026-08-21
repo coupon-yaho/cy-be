@@ -222,3 +222,49 @@ SQL
 
 echo; echo "── 후보 ≫ LIMIT · 200,000행 · LIMIT $LIMIT · 넘기는 것은 언제나 $LIMIT 건 ──"
 for c in 1000 2000 5000 20000 50000; do limit_probe $c; done
+
+# ── 시드 분포 축 ────────────────────────────────────────────────────────────
+# 위 boundary_probe 는 EXPIRED 75% 라는 극단에서 쟀다. 실제 시드는 15% 다
+# (cy-seed/seedgen/config.py 의 STATUS_MIX). 비율이 다르면 옵티마이저 선택이 달라지므로
+# 시연 데이터 그대로의 분포에서 한 번 더 잰다. docs/12 §5 의 마지막 표가 여기서 나온다.
+seed_shape_probe() {  # $1 = V12 여부(yes/no)
+  docker exec -i $C mysql -proot t >/dev/null 2>&1 <<'SQL'
+SET SESSION cte_max_recursion_depth = 1000000;
+DROP TABLE IF EXISTS issuances;
+CREATE TABLE issuances (id bigint PRIMARY KEY AUTO_INCREMENT, coupon_id bigint,
+  status varchar(12), expires_at datetime(6), updated_at datetime(6));
+INSERT INTO issuances (id, coupon_id, status, expires_at, updated_at)
+WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < 200000)
+SELECT n, 1,
+       CASE WHEN n % 20 < 8 THEN 'ISSUED' WHEN n % 20 < 15 THEN 'USED'
+            WHEN n % 20 < 18 THEN 'EXPIRED' ELSE 'CANCELLED' END,
+       CASE WHEN n % 20 < 8 AND n > 195000 THEN '2020-01-01'
+            WHEN n % 20 < 8 THEN '2030-01-01'
+            ELSE '2020-01-01' END,
+       '2019-01-01'
+  FROM s;
+CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
+SQL
+  [ "$1" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
+    <<<"CREATE INDEX idx_issuance_updated_at ON issuances (updated_at, id)"
+  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"ANALYZE TABLE issuances"
+  printf "  V12 %-4s → 읽은 행 %s\n" "$1" "$(docker exec -i $C mysql -proot -N t 2>/dev/null <<'SQL' | sed -n '2p'
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+UPDATE issuances SET status='EXPIRED', updated_at='2026-01-15 09:03:00'
+ WHERE status='ISSUED' AND expires_at < '2026-08-19'
+   AND updated_at <= '2026-01-15 09:03:00' AND id > 0
+ ORDER BY id LIMIT 1000;
+FLUSH STATUS;
+SELECT COALESCE(MAX(id), 0) FROM issuances
+ WHERE status='EXPIRED' AND updated_at='2026-01-15 09:03:00'
+   AND expires_at < '2026-08-19' AND id > 0;
+SELECT SUM(VARIABLE_VALUE) FROM performance_schema.session_status
+ WHERE VARIABLE_NAME IN ('Handler_read_next','Handler_read_rnd_next','Handler_read_first',
+                         'Handler_read_key','Handler_read_last','Handler_read_prev');
+SQL
+)"
+}
+
+echo; echo "── 시드 분포(EXPIRED 15%) · 200,000행 · 첫 청크 ──"
+seed_shape_probe no
+seed_shape_probe yes

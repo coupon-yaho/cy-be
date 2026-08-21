@@ -234,6 +234,30 @@ SELECT COALESCE(MAX(id), :afterId) FROM issuances
 
 (같은 `asOf` 를 다시 돌리는 경우, 즉 재시작만 죽은 자리에서 이어받는다.)
 
+### 시연 데이터가 이미 그 조건이다
+
+이 비용이 "몇 달 뒤 쌓이면" 나는 것이 아니다. **시드를 적재한 그 순간부터**다.
+
+```python
+# cy-seed/seedgen/config.py
+ISSUANCES  = 3_000_000
+STATUS_MIX = {ISSUED: 0.40, USED: 0.35, EXPIRED: 0.15, CANCELLED: 0.10}   # IPF 로 정확히 맞춘다
+
+# cy-seed/seedgen/catalog.py — EXPIRED 는 기한이 이미 지난 회차에만 배정한다
+c.expirable = c.close_at + timedelta(days=c.valid_days) < cat.as_of
+```
+
+**300만 × 15% = 약 45만 행이 `EXPIRED` 로 깔려 있고, 그 전부가 `expires_at < asOf` 다** —
+`LAST_EXPIRED_ID` 가 거르는 술어와 정확히 겹친다.
+
+그 비율로 다시 쟀더니 **테이블 전체**를 훑는다. `EXPIRED` 가 15%나 되면 옵티마이저가 보조
+인덱스를 버리고 풀스캔으로 간다 — 누적된 `EXPIRED` 만이 아니다.
+
+| 시드 분포(`EXPIRED` 15%) · 200,000행 · 첫 청크 | 읽은 행 |
+|---|---:|
+| `V12` 없음 | **200,017** (= 전 행) |
+| `V12` 있음 | **1,001** |
+
 ### 판단 — 넣는다
 
 ```sql
@@ -360,7 +384,9 @@ UPDATE issuances SET … WHERE … AND id > :afterId AND id <= :ceiling;   -- �
   통과한다면 격리 인하의 근거가 약해진다 — 다만 `UPDATE … JOIN` 이 RR 에서 `coupon_stocks` 에
   잡는 락은 이 스크립트가 아예 재지 않았으므로 RC 결정 자체는 별개로 유효하다
 - **인덱스 둘이 적재·발급 경로에 주는 쓰기 비용.** 인덱스가 하나 늘 때마다 커지는 축이라,
-  더 붙이기 전에 따로 봐야 한다
+  더 붙이기 전에 따로 봐야 한다. **인덱스를 세 번째로 붙이자는 말이 나오면 여기부터 재고
+  시작한다** — 지금 둘은 각각 가용성(발급 1205)과 5분 주기라는 근거로 섰지, 쓰기 비용을
+  본 적은 없다
 - **RC 에서 만료 × 발급이 실제로 동시에 도는 부하 시험.** 단위 테스트는 통과했지만
   300만 행 + 동시 발급 부하는 아직 안 돌렸다
 - **표식(`updated_at = committedAt`)이 시각이라 고유하지 않다.** 다른 프로세스가 같은

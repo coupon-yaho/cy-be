@@ -120,6 +120,12 @@ batch:
     expire-cron: "0 */5 * * * *"          # 만료 5분
     verify-incremental-cron: "0 */10 * * * *"  # 증분 검증 10분
     cleanup-cron: "0 0 * * * *"           # 정리 1시간
+    #
+    # ⚠️ 정리 잡을 만들 때 BATCH_* 도 함께 본다. JobRepository 를 JDBC 로 배선한 뒤로
+    #    실제로 쌓인다 — 만료가 5분마다 새 asOf 로 도니 하루 288 인스턴스이고,
+    #    인스턴스 하나에 실행·스텝실행·두 문맥·파라미터가 딸린다.
+    #    3주 시연 규모(약 3.6만 행)에서는 무시할 수 있어 이 티켓에서 안 만들었다.
+    #    보존 기간 키를 여기 둘 자리다 — batch.metadata.keep-days
     coupon-open-cron: "0 * * * * *"       # 회차 상태 전이 1분
     coupon-create-cron: "0 0 4 * * *"     # 회차 생성 매일 04:00
 
