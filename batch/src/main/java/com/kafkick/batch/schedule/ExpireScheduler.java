@@ -2,7 +2,6 @@
 package com.kafkick.batch.schedule;
 
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +14,7 @@ import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException
 import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -47,10 +47,16 @@ import com.kafkick.core.support.TimeProvider;
  * {@code dataset_fingerprint} 재료인 {@code sum(active_count)} 가 바뀌어
  * <b>판정이 데이터 변동으로 죽는다.</b>
  *
- * <p><b>{@code asOf} 를 분 단위로 자른다.</b> Spring Batch 는 같은 파라미터로 완료된 실행을
- * 다시 돌리지 않으므로 이 값이 곧 실행의 신원이자 중복 방지 장치가 된다. 초를 남기면
- * 매 실행이 서로 다른 신원을 갖게 되어 <b>그 방지가 아예 안 걸린다</b> — 배포 직후처럼
- * 같은 주기에 두 번 뜨는 상황에서 둘 다 돈다.
+ * <p><b>{@code asOf} 를 크론 슬롯에서 뽑는다.</b> Spring Batch 는 같은 파라미터로 완료된
+ * 실행을 다시 돌리지 않으므로 이 값이 곧 실행의 신원이자 중복 방지 장치다
+ * (그 방지가 성립하려면 {@code BATCH_JOB_INSTANCE} 가 DB 에 남아야 한다 —
+ * {@code BatchJobRepositoryConfig}).
+ *
+ * <p>예전에는 {@code now().truncatedTo(MINUTES)} 였다. <b>실행된 시각</b>을 자른 것이라
+ * 두 가지가 어긋났다 — 노드마다 실행이 밀리는 정도가 달라 {@code asOf} 가 갈리면 서로 다른
+ * JobInstance 가 되어 <b>중복 방지가 아예 발동하지 않고</b>, 주기를 1분 미만으로 줄이면
+ * 두 발화가 같은 분에 들어가 <b>절반이 조용히 건너뛰어진다.</b> 슬롯에서 뽑으면 늦게 떠도
+ * 같은 슬롯이면 같은 값이고, 주기가 짧아지면 슬롯도 촘촘해진다. {@link CronSlot} 참조.
  */
 @Component
 @ConditionalOnProperty(name = "batch.scheduling.enabled", havingValue = "true",
@@ -62,6 +68,8 @@ public class ExpireScheduler {
     private final JobOperator jobOperator;
     private final Job expireJob;
     private final TimeProvider timeProvider;
+    private final CronSlot cronSlot;
+    private final String expireCron;
 
     // Job 빈이 expireJob·verifyJob 둘이다. 지금은 파라미터 이름으로 갈리지만(부트 그래들
     // 플러그인이 -parameters 를 붙인다) 그 기본값에 기대는 대신 명시한다 — 셋째 Job 이
@@ -69,10 +77,14 @@ public class ExpireScheduler {
     // 만료가 아니게 된다.
     public ExpireScheduler(JobOperator jobOperator,
             @Qualifier("expireJob") Job expireJob,
-            TimeProvider timeProvider) {
+            TimeProvider timeProvider,
+            @Value("${batch.schedule.expire-cron:0 */5 * * * *}") String expireCron) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
+        // @Scheduled 와 같은 표현식을 읽는다. 둘이 갈리면 asOf 가 슬롯을 안 가리킨다.
+        this.cronSlot = new CronSlot(expireCron);
+        this.expireCron = expireCron;
     }
 
     /**
@@ -128,7 +140,15 @@ public class ExpireScheduler {
      */
     @Scheduled(cron = "${batch.schedule.expire-cron:0 */5 * * * *}")
     public void expire() {
-        LocalDateTime asOf = timeProvider.now().truncatedTo(ChronoUnit.MINUTES);
+        LocalDateTime now = timeProvider.now();
+        LocalDateTime asOf = cronSlot.atOrBefore(now);
+        if (asOf == null) {
+            // 슬롯을 못 구했다. 여기서 대체값을 만들면 그 값이 조용히 실행의 신원이 되고,
+            // 노드마다 다른 값이 나와 중복 방지가 발동하지 않는다. 도는 것보다 안 도는 것이 낫다.
+            log.error("크론 슬롯을 구하지 못해 이번 주기를 건너뜁니다. cron={} now={}",
+                    expireCron, now);
+            return;
+        }
         try {
             JobExecution execution = jobOperator.start(expireJob, new JobParametersBuilder()
                     .addLocalDateTime("asOf", asOf)

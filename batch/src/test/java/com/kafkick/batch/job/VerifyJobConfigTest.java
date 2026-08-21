@@ -3,6 +3,8 @@ package com.kafkick.batch.job;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +22,7 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -36,7 +39,6 @@ import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
-import com.kafkick.storage.db.verification.VerificationRuleJdbcAdapter;
 
 /**
  * Step 0 의 종단 확인이다. 잡을 실제로 돌려 {@code asof_state} 가 생기는지 본다.
@@ -92,45 +94,69 @@ class VerifyJobConfigTest {
     static class MutateAfterStockStepConfig {
 
         /**
-         * <b>인터페이스가 아니라 어댑터를 상속한다.</b> 인터페이스를 손으로 구현하면
-         * 메서드가 늘 때 {@code default} 로 추가된 것을 조용히 안 위임해서,
-         * 이 클래스만 다른 세계를 보게 된다 — 정작 잡 전체 배선을 확인하는 유일한 테스트가 여기다.
-         * 상속이면 새 메서드가 자동으로 진짜 구현을 탄다.
+         * <b>어댑터를 상속하지 않는다 — {@code batch} 는 {@code storage} 를 컴파일 시 참조하지
+         * 않는다.</b> {@code build.gradle} 이 {@code runtimeOnly project(':storage')} 로 그
+         * 경계를 세워 뒀는데, 테스트는 {@code testFixtures} 를 통해 그 클래스가 보여서
+         * 예전에는 {@code VerificationRuleJdbcAdapter} 를 직접 상속했다.
+         *
+         * <p><b>그렇다고 인터페이스를 손으로 구현할 수도 없다.</b> 포트에 메서드가 늘면
+         * 이 클래스만 조용히 옛 세계를 보게 된다 — 잡 전체 배선을 확인하는 유일한 테스트가
+         * 여기라 그 침묵의 대가가 크다.
+         *
+         * <p>그래서 <b>프록시로 감싼다.</b> 안 가로챈 메서드는 자동으로 진짜 구현으로 가므로
+         * 상속의 장점이 남고, 컴파일 시 보이는 타입은 {@code core} 포트 하나다.
+         * {@code ExpirationProxies} 가 같은 자리에서 같은 이유로 쓰는 방식이다.
          */
         @Bean
-        @Primary
-        VerificationRuleJdbcAdapter mutatingRules(JdbcClient jdbc) {
-            return new VerificationRuleJdbcAdapter(jdbc) {
-
+        static BeanPostProcessor mutatingRules(JdbcClient jdbc) {
+            return new BeanPostProcessor() {
                 @Override
-                public List<VerificationFinding> findStockMismatches(
-                        long runId, LocalDateTime asOf, int limit) {
-                    List<VerificationFinding> found = super.findStockMismatches(runId, asOf, limit);
-
-                    if (mutateStockAfterRead != null) {
-                        jdbc.sql("UPDATE coupon_stocks SET updated_at = :at WHERE coupon_id = :couponId")
-                                .param("at", asOf.plusSeconds(1))
-                                .param("couponId", mutateStockAfterRead)
-                                .update();
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (!(bean instanceof VerificationRuleRepository real)) {
+                        return bean;
                     }
-                    if (insertHistoryAfterFreeze != null) {
-                        jdbc.sql("""
-                                        INSERT INTO issuance_histories
-                                            (issuance_id, event_type, from_status, to_status, created_at)
-                                        VALUES (:id, 'USE', 'ISSUED', 'USED', :at)
-                                        """)
-                                .param("id", insertHistoryAfterFreeze)
-                                .param("at", AS_OF.minusHours(1))
-                                .update();
-                    }
-                    if (mutatePolicyAfterRead != null) {
-                        jdbc.sql("UPDATE coupons SET eligible_grades_mask = 7 WHERE id = :couponId")
-                                .param("couponId", mutatePolicyAfterRead)
-                                .update();
-                    }
-                    return found;
+                    return Proxy.newProxyInstance(
+                            VerificationRuleRepository.class.getClassLoader(),
+                            new Class<?>[] {VerificationRuleRepository.class},
+                            (proxy, method, args) -> {
+                                Object result;
+                                try {
+                                    result = method.invoke(real, args);
+                                } catch (InvocationTargetException e) {
+                                    throw e.getCause();
+                                }
+                                if ("findStockMismatches".equals(method.getName())) {
+                                    mutateAfterStockRead((LocalDateTime) args[1], jdbc);
+                                }
+                                return result;
+                            });
                 }
             };
+        }
+
+        /** 규칙이 읽은 <b>뒤</b>에 데이터를 흔든다. 얼린 상한 밖을 만드는 것이 목적이다. */
+        private static void mutateAfterStockRead(LocalDateTime asOf, JdbcClient jdbc) {
+            if (mutateStockAfterRead != null) {
+                jdbc.sql("UPDATE coupon_stocks SET updated_at = :at WHERE coupon_id = :couponId")
+                        .param("at", asOf.plusSeconds(1))
+                        .param("couponId", mutateStockAfterRead)
+                        .update();
+            }
+            if (insertHistoryAfterFreeze != null) {
+                jdbc.sql("""
+                                INSERT INTO issuance_histories
+                                    (issuance_id, event_type, from_status, to_status, created_at)
+                                VALUES (:id, 'USE', 'ISSUED', 'USED', :at)
+                                """)
+                        .param("id", insertHistoryAfterFreeze)
+                        .param("at", AS_OF.minusHours(1))
+                        .update();
+            }
+            if (mutatePolicyAfterRead != null) {
+                jdbc.sql("UPDATE coupons SET eligible_grades_mask = 7 WHERE id = :couponId")
+                        .param("couponId", mutatePolicyAfterRead)
+                        .update();
+            }
         }
     }
 

@@ -198,7 +198,7 @@ public class ExpireJobConfig {
                     if (asOf.isAfter(committedAt)) {
                         throw new BusinessException(
                                 ExpirationErrorCode.EXPIRE_ASOF_IN_FUTURE,
-                                "asOf 가 현재보다 앞섭니다. 기한이 남은 발급건까지 만료되고 "
+                                "asOf 가 현재보다 미래입니다. 기한이 남은 발급건까지 만료되고 "
                                         + "EXPIRED 는 되돌릴 수 없습니다. "
                                         + "asOf=" + asOf + " now=" + committedAt);
                     }

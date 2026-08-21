@@ -3,7 +3,9 @@ package com.kafkick.batch.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,11 +23,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
-import com.kafkick.core.support.TimeProvider;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -44,10 +46,14 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=100"
 })
-@Import({MySqlContainerConfig.class, ExpireGuardTest.ShrinkStockRowCountConfig.class})
+@Import({MySqlContainerConfig.class, ExpireGuardTest.ShrinkStockRowCountConfig.class,
+        ExpireGuardTest.FixedClockConfig.class})
 class ExpireGuardTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 가드가 {@code asOf} 를 이 값과 견준다. */
+    private static final LocalDateTime NOW = AS_OF.plusMinutes(3);
 
     @Autowired
     private JobOperator jobOperator;
@@ -60,9 +66,6 @@ class ExpireGuardTest {
 
     @Autowired
     private JdbcClient jdbcClient;
-
-    @Autowired
-    private TimeProvider timeProvider;
 
     private VerificationSeed seed;
 
@@ -89,10 +92,9 @@ class ExpireGuardTest {
                 .update();
         seed.overwriteStock(1);
 
-        // 검사하는 쪽과 같은 시계를 쓴다. TimeProvider 는 systemUTC 이고 LocalDateTime.now()
-        // 는 시스템 기본 시간대라, 경계 근처를 재는 테스트로 이 패턴을 복사하면 시간대만큼
-        // 어긋난다. (고정 상수 + plusYears 는 그 절대 시각을 벽시계가 지나는 날 뒤집힌다)
-        JobExecution execution = launch(timeProvider.now().plusYears(1));
+        // 시계를 고정했으니 "미래" 가 실행 날짜와 무관하다. 경계 바로 밖을 찍는다 —
+        // plusYears 같은 큰 값은 조건이 isAfter 에서 isAfterOrEqual 로 바뀌어도 통과한다.
+        JobExecution execution = launch(NOW.plusSeconds(1));
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(JobFailures.errorCodesOf(execution))
@@ -103,6 +105,25 @@ class ExpireGuardTest {
         assertThat(activeCount())
                 .as("재고도 그대로여야 한다")
                 .isEqualTo(1);
+    }
+
+    /**
+     * <b>경계는 열려 있어야 한다.</b> 스케줄러가 주는 {@code asOf} 는 {@code now} 를 분 단위로
+     * 자른 값이라 같은 순간이 될 수 있다. 그것까지 막으면 정상 주기가 안 돈다.
+     *
+     * <p>위 테스트와 짝이다 — 막는 쪽만 보면 <b>항상 던지는 가드</b>도 통과한다.
+     */
+    @Test
+    @DisplayName("asOf 가 정확히 현재면 통과한다 — 경계는 열려 있다")
+    void acceptsAsOfEqualToNow() throws Exception {
+        long alive = seed.issuance(IssuanceStatus.ISSUED);
+        jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
+                .param("at", NOW.plusDays(30))
+                .param("id", alive)
+                .update();
+        seed.overwriteStock(1);
+
+        assertThat(launch(NOW).getStatus()).isEqualTo(BatchStatus.COMPLETED);
     }
 
     /**
@@ -161,6 +182,24 @@ class ExpireGuardTest {
         return jdbcClient.sql("SELECT active_count FROM coupon_stocks ORDER BY coupon_id LIMIT 1")
                 .query(Integer.class)
                 .single();
+    }
+
+    /**
+     * <b>시계를 고정한다.</b> 가드는 {@code asOf.isAfter(timeProvider.now())} 로 판정하므로,
+     * 시계가 벽시계면 이 테스트의 "미래" 가 실행하는 날짜에 달린다. 고정하면 판정에 들어가는
+     * 두 값이 모두 테스트가 정한 값이 된다.
+     *
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 다 — 기본 타임존을 쓰면 CI 와 로컬이
+     * 다른 값을 내고 고정한 의미가 없어진다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        }
     }
 
     /** {@code stockRowCount} 만 한 건 적게 돌려준다. 나머지는 실제 저장소 그대로다. */

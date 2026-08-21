@@ -47,6 +47,9 @@ class ExpireSchedulerReportingTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 1, 15, 9, 3, 27);
 
+    /** 운영 기본값과 같은 5분 크론. 슬롯 판정이 이 표현식에 달려 있다. */
+    private static final String EXPIRE_CRON = "0 */5 * * * *";
+
     private ListAppender<ILoggingEvent> logs;
     private ch.qos.logback.classic.Logger schedulerLog;
     private Level originalLevel;
@@ -152,10 +155,16 @@ class ExpireSchedulerReportingTest {
         assertThat(only(Level.ERROR)).contains("시작하지 못했습니다");
     }
 
-    /** <b>기준 시각을 분 단위로 자른다.</b> 초가 남으면 중복 방지가 아예 안 걸린다. */
+    /**
+     * <b>기준 시각을 크론 슬롯에서 뽑는다.</b>
+     *
+     * <p>예전에는 분 단위로 잘랐다. 그러면 <b>실행된 시각</b>이 기준이라, 노드마다 밀리는
+     * 정도가 다르면 {@code asOf} 가 갈려 중복 방지가 아예 발동하지 않는다.
+     * 슬롯에서 뽑으면 <b>늦게 떠도 같은 슬롯이면 같은 값</b>이다.
+     */
     @Test
-    @DisplayName("기준 시각의 초를 버린다")
-    void truncatesAsOfToMinute() {
+    @DisplayName("기준 시각이 크론 슬롯이다 — 늦게 떠도 같은 값")
+    void usesTheCronSlotAsAsOf() {
         JobParameters[] used = new JobParameters[1];
         scheduler(operator((job, params) -> {
             used[0] = params;
@@ -163,8 +172,38 @@ class ExpireSchedulerReportingTest {
         })).expire();
 
         assertThat(used[0].getLocalDateTime("asOf"))
-                .as("09:03:27 로 띄워도 09:03:00 이어야 같은 분의 두 번째 실행이 막힌다")
-                .isEqualTo(NOW.withSecond(0));
+                .as("09:03:27 에 떠도 5분 크론의 슬롯은 09:00 이다. 분 단위 절단이면 09:03 이 "
+                        + "되어, 09:00 슬롯에 제때 뜬 노드와 값이 갈린다")
+                .isEqualTo(NOW.withMinute(0).withSecond(0));
+    }
+
+    /**
+     * <b>슬롯이 같으면 값이 같다 — 그것이 이 방식의 전부다.</b> 한 노드는 슬롯 직후에,
+     * 다른 노드는 앞 실행이 밀려 한참 뒤에 떠도 같은 {@code asOf} 를 만들어야
+     * {@code JOB_INST_UN} 이 둘 중 하나를 거부할 수 있다.
+     */
+    @Test
+    @DisplayName("같은 슬롯 안에서는 언제 떠도 asOf 가 같다")
+    void keepsTheSameAsOfAcrossTheWholeSlot() {
+        LocalDateTime early = NOW.withMinute(0).withSecond(1);
+        LocalDateTime late = NOW.withMinute(4).withSecond(59);
+
+        assertThat(asOfAt(early))
+                .as("슬롯 안에서 언제 뜨든 같아야 두 노드가 같은 JobInstance 를 노린다")
+                .isEqualTo(asOfAt(late))
+                .isEqualTo(NOW.withMinute(0).withSecond(0));
+    }
+
+    /** 주어진 시각에 떴을 때 스케줄러가 만드는 {@code asOf}. */
+    private LocalDateTime asOfAt(LocalDateTime at) {
+        JobParameters[] used = new JobParameters[1];
+        Clock fixed = Clock.fixed(at.atZone(ZoneId.systemDefault()).toInstant(),
+                ZoneId.systemDefault());
+        new ExpireScheduler(operator((job, params) -> {
+            used[0] = params;
+            return execution(BatchStatus.COMPLETED, null);
+        }), null, new TimeProvider(fixed), EXPIRE_CRON).expire();
+        return used[0].getLocalDateTime("asOf");
     }
 
     /** 남은 로그가 정확히 하나이고 기대한 레벨인지 확인한 뒤 본문을 돌려준다. */
@@ -180,7 +219,7 @@ class ExpireSchedulerReportingTest {
     private ExpireScheduler scheduler(JobOperator operator) {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(),
                 ZoneId.systemDefault());
-        return new ExpireScheduler(operator, null, new TimeProvider(fixed));
+        return new ExpireScheduler(operator, null, new TimeProvider(fixed), EXPIRE_CRON);
     }
 
     private JobExecution execution(BatchStatus status, Throwable failure) {

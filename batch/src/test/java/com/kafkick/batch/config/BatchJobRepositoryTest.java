@@ -5,6 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,6 +28,7 @@ import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -152,6 +160,63 @@ class BatchJobRepositoryTest {
                         + "이 빈이 조건에서 떨어져 MVC 비동기가 요청당 스레드로 폴백하고 "
                         + "spring.task.execution.* 이 죽는다")
                 .isTrue();
+    }
+
+    /**
+     * <b>순차 재실행 거부만으로는 다중 노드를 못 지킨다.</b> 위 테스트는 한 스레드가 끝낸 뒤
+     * 다시 부른다 — {@code ResourcelessJobRepository} 도 같은 JVM 안에서는 그것을 막았다.
+     *
+     * <p>실제로 지켜야 하는 것은 <b>두 노드가 같은 순간에 같은 {@code asOf} 로 시작하는 것</b>
+     * 이다. 그때 막는 것은 격리 수준이 아니라 {@code V2__batch_metadata.sql} 의
+     * {@code JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)} 이고, 그 인덱스를 지우면 두 노드가 각자
+     * 인스턴스를 만든다.
+     *
+     * <p><b>예외 타입이 갈리는 것도 여기서 확인된다.</b> 인스턴스 생성 격리를
+     * {@code READ_COMMITTED} 로 내려 뒀기에 진 쪽이 {@code DuplicateKeyException} 을 받는다 —
+     * 기본값 {@code SERIALIZABLE} 이면 gap 락 때문에 데드락({@code 1213})이라 다른 타입이 오고,
+     * {@code ExpireScheduler} 의 INFO 갈래를 못 탄다.
+     */
+    @Test
+    @DisplayName("두 노드가 같은 asOf 로 동시에 시작해도 인스턴스는 하나다")
+    void twoSimultaneousStartsProduceExactlyOneInstance() throws Exception {
+        int racers = 2;
+        CountDownLatch fire = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(racers);
+        List<Future<Object>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < racers; i++) {
+                results.add(pool.submit(() -> {
+                    fire.await();
+                    try {
+                        return launch();
+                    } catch (Exception e) {
+                        return e;
+                    }
+                }));
+            }
+            fire.countDown();
+
+            List<Object> outcomes = new ArrayList<>();
+            for (Future<Object> future : results) {
+                outcomes.add(future.get(60, TimeUnit.SECONDS));
+            }
+
+            assertThat(outcomes).filteredOn(JobExecution.class::isInstance)
+                    .as("둘 다 돌면 같은 300만 행을 나란히 훑으며 서로의 X 락을 기다린다")
+                    .hasSize(1);
+            assertThat(outcomes).filteredOn(Throwable.class::isInstance)
+                    .as("**타입까지 본다.** 인스턴스 생성 격리를 기본값(SERIALIZABLE)으로 되돌리면 "
+                            + "gap 락 때문에 데드락이 나서 DeadlockLoserDataAccessException 이 "
+                            + "오고, ExpireScheduler 의 INFO 갈래를 못 타 ERROR 로 나간다")
+                    .singleElement()
+                    .isInstanceOf(DuplicateKeyException.class);
+            assertThat(rowCount("BATCH_JOB_INSTANCE"))
+                    .as("**막았다는 사실이 DB 에 하나로 남아야 한다.** JOB_INST_UN 을 지우면 "
+                            + "여기가 2 가 된다")
+                    .isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private JobExecution launch() throws Exception {

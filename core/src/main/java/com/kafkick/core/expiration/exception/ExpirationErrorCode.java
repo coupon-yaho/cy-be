@@ -69,7 +69,7 @@ public enum ExpirationErrorCode implements ErrorCode {
     ),
 
     /**
-     * {@code asOf} 가 현재보다 앞선다.
+     * {@code asOf} 가 현재보다 <b>미래</b>다.
      *
      * <p><b>이것이 이 잡에서 가장 되돌리기 어려운 사고다.</b> {@code asOf} 는 만료 여부를
      * 가르는 컷이라, 미래로 주면 기한이 남은 {@code ISSUED} 가 전부 컷 안에 들어온다.
@@ -86,7 +86,7 @@ public enum ExpirationErrorCode implements ErrorCode {
     EXPIRE_ASOF_IN_FUTURE(
             500,
             "EXPIRATION-004",
-            "asOf 가 현재보다 앞섭니다."
+            "asOf 가 현재보다 미래입니다."
     );
 
     private final int status;
