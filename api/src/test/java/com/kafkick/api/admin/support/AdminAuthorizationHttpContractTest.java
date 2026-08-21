@@ -13,7 +13,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import com.kafkick.api.admin.dashboard.AdminDashboardController;
 import com.kafkick.api.admin.dashboard.AdminOverviewService;
+import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
+import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
 import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.support.TimeProvider;
 
 /** 관리자 헤더 검사가 실제 HTTP 실패 봉투의 400·403 상태로 변환되는지 검증합니다. */
@@ -23,6 +26,9 @@ class AdminAuthorizationHttpContractTest {
             .mockMvcWithoutAdminHeaders(new AdminDashboardController(
                     new AdminOverviewService(
                             new TimeProvider(Clock.systemUTC()),
+                            new AdminOverviewMockDataFactory(),
+                            new CampaignOverviewCalculator(),
+                            new OperationActionCalculator(),
                             new OverviewStatusCalculator())));
 
     /** 관리자 역할 누락 또는 정확하지 않은 대소문자 값을 ADMIN-002로 거부하는지 검증합니다. */

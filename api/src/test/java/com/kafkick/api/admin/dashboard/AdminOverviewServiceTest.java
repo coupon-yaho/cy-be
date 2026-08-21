@@ -12,43 +12,72 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
+import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
+import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
 import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 
-/**
- * 실제 운영 원천이 연결되기 전 관리자 운영현황 Service의 기본 응답 규칙을 검증합니다.
- *
- * <p>미수집 값을 숫자 0이나 빈 목록으로 대신하면 화면은 실제 정상 관측 결과로 해석할 수 있습니다.
- * 따라서 Service는 응답 조립 시각만 제공하고, 원천이 필요한 모든 영역은 명시적인
- * {@link SourceStatus#UNAVAILABLE} 상태로 유지해야 합니다.</p>
- */
+/** Mock 캠페인 계산값과 미연결 관측값을 함께 조립하는 관리자 운영현황 Service를 검증합니다. */
 class AdminOverviewServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-20T03:15:00Z");
 
-    /**
-     * 원천이 없는 상태를 빈 정상값으로 위장하거나 응답 조립 시각을 누락하는 회귀를 방지합니다.
-     */
+    /** 계산 가능한 캠페인 값까지 미수집으로 버리거나 관측 영역을 가짜 0으로 만드는 회귀를 방지합니다. */
     @Test
-    @DisplayName("운영 원천 미연결 시 조립 시각과 모든 영역의 UNAVAILABLE 상태를 반환한다")
-    void returnsUnavailableOverviewUntilOperationalSourcesAreConnected() {
+    @DisplayName("Mock 캠페인 계산값과 미연결 관측 상태를 PARTIAL 운영현황으로 조립한다")
+    void assemblesMockCampaignSourcesAsPartialOverview() {
         AdminOverviewService service = service();
 
         AdminOverviewResult result = service.getOverview();
         AdminOverviewSnapshot snapshot = result.snapshot();
 
         assertThat(snapshot.snapshotAt()).isEqualTo(NOW);
-        assertThat(result.overallStatus()).isEqualTo(OverallStatus.UNAVAILABLE);
-        assertThat(observations(snapshot))
-                .allSatisfy(observation -> {
-                    assertThat(observation.value()).isNull();
-                    assertThat(observation.status()).isEqualTo(SourceStatus.UNAVAILABLE);
-                    assertThat(observation.observedAt()).isNull();
+        assertThat(result.overallStatus()).isEqualTo(OverallStatus.PARTIAL);
+        assertThat(snapshot.campaignStatusSummary().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.campaignStatusSummary().value())
+                .isEqualTo(new AdminOverviewSnapshot.CampaignStatusSummary(1, 2, 1));
+        assertThat(snapshot.openingSoon().value())
+                .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(2, 1));
+        assertThat(snapshot.actionRequired().value())
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1));
+        assertThat(snapshot.actionItems().value().topItems())
+                .singleElement()
+                .satisfies(action -> assertThat(action.couponId()).isEqualTo(103L));
+        assertThat(snapshot.campaigns().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.campaigns().value()).hasSize(4);
+        assertThat(snapshot.campaigns().value())
+                .extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
+                .containsExactly(103L, 101L, 102L, 104L);
+        assertThat(snapshot.campaigns().value().getFirst())
+                .satisfies(campaign -> {
+                    assertThat(campaign.priority()).isEqualTo(1);
+                    assertThat(campaign.severity()).isEqualTo(Severity.WARN);
+                    assertThat(campaign.stockForecast().status())
+                            .isEqualTo(SourceStatus.UNAVAILABLE);
                 });
+        assertThat(snapshot.campaigns().value())
+                .filteredOn(campaign -> campaign.couponId().equals(101L))
+                .singleElement()
+                .satisfies(campaign -> assertThat(campaign.stockForecast().value())
+                        .isEqualTo(new AdminOverviewSnapshot.StockForecast(
+                                300L, 1_000L, 0.3, null)));
+        assertThat(List.of(
+                snapshot.queueRisk(),
+                snapshot.stockRisk(),
+                snapshot.aggregateIssuanceRate(),
+                snapshot.aggregateQueue(),
+                snapshot.latencySummary(),
+                snapshot.customerOutcomes()
+        )).allSatisfy(observation -> {
+            assertThat(observation.value()).isNull();
+            assertThat(observation.status()).isEqualTo(SourceStatus.UNAVAILABLE);
+            assertThat(observation.observedAt()).isNull();
+        });
     }
 
     /** 계산이 끝난 내부 값이 HTTP 변환 과정에서 누락되거나 전체 상태가 낮아지는 회귀를 방지합니다. */
@@ -259,7 +288,13 @@ class AdminOverviewServiceTest {
     private static AdminOverviewService service() {
         TimeProvider timeProvider = new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC));
         OverviewStatusCalculator statusCalculator = new OverviewStatusCalculator();
-        return new AdminOverviewService(timeProvider, statusCalculator);
+        return new AdminOverviewService(
+                timeProvider,
+                new AdminOverviewMockDataFactory(),
+                new CampaignOverviewCalculator(),
+                new OperationActionCalculator(),
+                statusCalculator
+        );
     }
 
     private static AdminOverviewSnapshot completeSnapshot(

@@ -14,7 +14,10 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
+import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
 import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.support.TimeProvider;
 
@@ -26,21 +29,42 @@ class AdminDashboardControllerTest {
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
             new AdminDashboardController(new AdminOverviewService(
                     new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
+                    new AdminOverviewMockDataFactory(),
+                    new CampaignOverviewCalculator(),
+                    new OperationActionCalculator(),
                     new OverviewStatusCalculator()))
     );
 
-    /** 개요 조회가 Service의 기준 시각과 미수집 상태를 성공 봉투에 보존하는지 검증합니다. */
+    /** 개요 조회가 계산된 캠페인 값과 미연결 관측 상태를 성공 봉투에 보존하는지 검증합니다. */
     @Test
-    @DisplayName("관리자 개요 조회는 Service의 UNAVAILABLE 운영현황을 성공 봉투로 반환한다")
-    void overviewReturnsUnavailableServiceResponse() throws Exception {
+    @DisplayName("관리자 개요 조회는 Mock 캠페인 계산 결과를 PARTIAL 응답으로 반환한다")
+    void overviewReturnsCalculatedMockCampaignResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/overview"))
                 .andExpect(status().isOk())
                 .andExpect(header().exists("X-Request-Id"))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
-                .andExpect(jsonPath("$.data.overallStatus").value("UNAVAILABLE"))
-                .andExpect(jsonPath("$.data.actionRequired.state").value("UNAVAILABLE"))
-                .andExpect(jsonPath("$.data.campaigns.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.overallStatus").value("PARTIAL"))
+                .andExpect(jsonPath("$.data.actionRequired.state").value("VALID"))
+                .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(1))
+                .andExpect(jsonPath("$.data.openingSoon.value.totalCount").value(2))
+                .andExpect(jsonPath("$.data.openingSoon.value.preparationIncompleteCount").value(1))
+                .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaignStatusSummary.value.openCount").value(1))
+                .andExpect(jsonPath("$.data.campaignStatusSummary.value.scheduledCount").value(2))
+                .andExpect(jsonPath("$.data.campaignStatusSummary.value.closedCount").value(1))
+                .andExpect(jsonPath("$.data.actionItems.value.topItems[0].couponId").value(103))
+                .andExpect(jsonPath("$.data.campaigns.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value.length()").value(4))
+                .andExpect(jsonPath("$.data.campaigns.value[0].couponId").value(103))
+                .andExpect(jsonPath("$.data.campaigns.value[0].priority").value(1))
+                .andExpect(jsonPath("$.data.campaigns.value[0].severity").value("WARN"))
+                .andExpect(jsonPath("$.data.campaigns.value[0].stockForecast.state")
+                        .value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.campaigns.value[1].couponId").value(101))
+                .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.value.remainingQuantity")
+                        .value(300))
                 .andExpect(jsonPath("$.data.customerOutcomes.state").value("UNAVAILABLE"))
                 .andExpect(jsonPath("$.error").isEmpty());
     }

@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.springframework.stereotype.Component;
+
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 
@@ -15,10 +17,8 @@ import com.kafkick.core.observation.Severity;
  * <p>이 계산기는 대기열 중단이나 재고 위험의 임계치를 직접 판정하지 않습니다. 각 원천의 정책이
  * 생성한 조치 후보를 받아 캠페인별 대표 판정을 선택하고, 동일한 모집단에서 KPI와 목록을 함께
  * 생성합니다. Repository나 관측 저장소를 조회하지 않는 순수 계산 경계입니다.</p>
- *
- * <p>TODO: 실제 조치 후보 생성 원천이 연결되면 Spring Bean으로 등록하고
- * {@code AdminOverviewService.getOverview()}의 조립 흐름에서 호출합니다.</p>
  */
+@Component
 public class OperationActionCalculator {
 
     private static final Comparator<AdminOverviewSnapshot.OperationActionItem> ACTION_PRIORITY =
@@ -58,6 +58,9 @@ public class OperationActionCalculator {
                     .thenComparing(
                             OperationActionCalculator::actionDisplayText,
                             Comparator.nullsLast(Comparator.naturalOrder()));
+
+    /** 상태가 없는 순수 집계 계산기로 생성합니다. */
+    public OperationActionCalculator() { }
 
     /**
      * 조치 후보를 캠페인별로 중복 제거한 뒤 심각도 KPI와 상위 20개 목록을 계산합니다.

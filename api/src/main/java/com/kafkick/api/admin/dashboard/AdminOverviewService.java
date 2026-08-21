@@ -6,7 +6,13 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
+import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator;
+import com.kafkick.api.admin.dashboard.calculator.CampaignOverviewCalculator.CampaignCalculation;
+import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator;
+import com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator.ActionCalculation;
 import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
+import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
+import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -14,51 +20,78 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * 관리자 첫 화면에 필요한 운영현황 조회와 결과 조립 흐름을 담당합니다.
  *
- * <p>후속 캠페인 Repository와 B 관측 조회 구성요소가 준비되면 이 Service에 직접 연결하고,
- * 원천별 결과를 Calculator에 전달해 {@link AdminOverviewResult}를 생성합니다. 계산식과 정책 판정은
- * 전용 Calculator가 담당하며 Service는 조회 순서와 결과 조립만 조정합니다.</p>
+ * <p>현재 캠페인 Repository가 준비되기 전까지 Mock Factory에서 원천을 조회하고, 원천별 결과를
+ * Calculator에 전달해 {@link AdminOverviewResult}를 생성합니다. 계산식과 정책 판정은 전용
+ * Calculator가 담당하며 Service는 조회 순서와 결과 조립만 조정합니다.</p>
  *
- * <p>현재는 실제 운영 원천이 연결되지 않았으므로 관측하지 않은 수치를 0으로 위조하지 않고
- * 미수집 {@link AdminOverviewSnapshot}을 생성합니다. 이 상태에서도 {@code snapshotAt}은 원천 관측
- * 시각이 아니라 Service가 결과를 조립한 시각으로 제공합니다.</p>
+ * <p>캠페인 Repository가 병합되면 Mock Factory 호출을 실제 조회와 캠페인 계산 입력 변환으로
+ * 교체합니다. Calculator와 Snapshot 조립은 유지하며, 아직 연결되지 않은 관측 영역은 수치를
+ * 추정하지 않고 {@link SourceStatus#UNAVAILABLE}로 제공합니다.</p>
  */
 @Service
 public class AdminOverviewService {
 
     private final TimeProvider timeProvider;
+    private final AdminOverviewMockDataFactory mockDataFactory;
+    private final CampaignOverviewCalculator campaignOverviewCalculator;
+    private final OperationActionCalculator operationActionCalculator;
     private final OverviewStatusCalculator overviewStatusCalculator;
 
     /**
-     * 조회 시각과 현재 Service 흐름에서 사용하는 전체 상태 계산기를 주입받습니다.
-     *
-     * <p>조치 후보 집계는 실제 후보 원천이 아직 연결되지 않았으므로 Service의 불필요한 의존성으로
-     * 추가하지 않습니다. 후속 후보 생성 흐름이 구현되면
-     * {@link com.kafkick.api.admin.dashboard.calculator.OperationActionCalculator}를 이 생성자에 추가하고
-     * {@code getOverview()}에서 사용합니다.</p>
+     * Mock 원천 조회와 캠페인·조치·전체 상태 계산에 필요한 협력 객체를 주입받습니다.
      *
      * @param timeProvider 테스트와 운영 환경에서 동일한 시간 계약을 제공하는 공통 공급자
+     * @param mockDataFactory Repository 연결 전 캠페인 원천과 조치 후보를 제공하는 Factory
+     * @param campaignOverviewCalculator 캠페인 상태·오픈 임박·V1 재고 계산기
+     * @param operationActionCalculator 판정 완료 조치 후보의 KPI·목록 집계 계산기
      * @param overviewStatusCalculator 원천 상태를 전체 응답 완전성으로 계산하는 구성요소
      */
     public AdminOverviewService(
             TimeProvider timeProvider,
+            AdminOverviewMockDataFactory mockDataFactory,
+            CampaignOverviewCalculator campaignOverviewCalculator,
+            OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator
     ) {
         this.timeProvider = timeProvider;
+        this.mockDataFactory = mockDataFactory;
+        this.campaignOverviewCalculator = campaignOverviewCalculator;
+        this.operationActionCalculator = operationActionCalculator;
         this.overviewStatusCalculator = overviewStatusCalculator;
     }
 
     /**
      * 현재 시점의 관리자 운영현황을 반환합니다.
      *
-     * <p>후속 원천 연결 전에는 모든 관측 영역을 {@code UNAVAILABLE}로 반환합니다. 캠페인 Repository와
-     * 관측 조회가 구현되면 이 메서드에서 명시적 결과 타입으로 원천을 조회하고 각 Calculator를 호출한
-     * 뒤 Snapshot을 조립합니다.</p>
+     * <p>Mock 캠페인에서 계산할 수 있는 캠페인 상태·오픈 임박·V1 재고·조치 결과는 값과 관측 시각을
+     * 제공하고, 발급·대기열·고객 결과처럼 원천이 없는 영역은 {@code UNAVAILABLE}로 함께 반환합니다.
+     * 전체 상태는 조립된 모든 원천 상태를 기준으로 계산합니다.</p>
      *
      * @return Snapshot과 전체 데이터 완전성을 포함한 운영현황 Service 결과
      */
     public AdminOverviewResult getOverview() {
+        // 한 응답 안의 시간 경계가 달라지지 않도록 기준 시각은 최초 한 번만 조회합니다.
         Instant snapshotAt = timeProvider.instant();
-        AdminOverviewSnapshot snapshot = unavailableSnapshot(snapshotAt);
+        AdminOverviewMockDataset dataset = mockDataFactory.create(snapshotAt);
+        CampaignCalculation campaignCalculation = campaignOverviewCalculator.calculate(
+                snapshotAt, dataset.campaigns());
+        ActionCalculation actionCalculation = operationActionCalculator.calculate(
+                dataset.actionCandidates());
+
+        AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
+                snapshotAt,
+                validObservation(actionCalculation.required(), snapshotAt),
+                validObservation(campaignCalculation.openingSoon(), snapshotAt),
+                unavailableObservation(),
+                unavailableObservation(),
+                unavailableObservation(),
+                unavailableObservation(),
+                unavailableObservation(),
+                validObservation(campaignCalculation.campaignStatusSummary(), snapshotAt),
+                validObservation(actionCalculation.items(), snapshotAt),
+                validObservation(campaignCalculation.campaigns(), snapshotAt),
+                unavailableObservation()
+        );
         return assemble(snapshot);
     }
 
@@ -78,25 +111,15 @@ public class AdminOverviewService {
         return new AdminOverviewResult(snapshot, overallStatus);
     }
 
-    /** 운영 원천 미연결 상태를 가짜 0 없이 Core Snapshot으로 표현합니다. */
-    private static AdminOverviewSnapshot unavailableSnapshot(Instant snapshotAt) {
-        return new AdminOverviewSnapshot(
-                snapshotAt,
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation(),
-                unavailableObservation()
-        );
+    /** 계산이 끝난 값을 공통 Core 관측 계약의 정상 상태와 기준 시각으로 감쌉니다. */
+    private static <T> AdminOverviewSnapshot.Observation<T> validObservation(
+            T value,
+            Instant observedAt
+    ) {
+        return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, observedAt);
     }
 
-    /** 실제로 관측하지 않은 독립 원천을 공통 Core 상태 규칙에 맞춰 생성합니다. */
+    /** 실제로 관측하지 않은 독립 원천을 가짜 0 없이 공통 Core 상태 규칙에 맞춰 생성합니다. */
     private static <T> AdminOverviewSnapshot.Observation<T> unavailableObservation() {
         return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null);
     }
