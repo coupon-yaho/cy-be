@@ -96,6 +96,29 @@ find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.exa
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
 
+### Docker 이미지
+
+`main` 브랜치 push 또는 `v*` 태그 push 시 GitHub Actions가 API와 배치 이미지를
+각각 빌드해 하나의 Docker Hub 저장소에 태그를 구분하여 올린다. 수동 실행도 가능하다.
+
+- 주소: `https://hub.docker.com/r/seol7/coupon-yaho`
+- API 이미지: `seol7/coupon-yaho:api-latest`
+- 배치 이미지: `seol7/coupon-yaho:batch-latest`
+
+GitHub 저장소의 **Settings → Secrets and variables → Actions**에 아래 값을 등록한다.
+
+- Variable `DOCKERHUB_USERNAME`: Docker Hub 사용자명 또는 조직명
+- Secret `DOCKERHUB_TOKEN`: Docker Hub의 read/write 권한 Personal access token
+
+Docker Hub에는 `coupon-yaho` 저장소를 한 번 생성해야 한다.
+
+로컬 빌드는 다음과 같다.
+
+```bash
+docker build --build-arg APP_MODULE=api -t coupon-yaho-api .
+docker build --build-arg APP_MODULE=batch -t coupon-yaho-batch .
+```
+
 테스트는 Testcontainers 로 실제 MySQL 을 띄우므로 Docker 가 필요하다.
 
 ### 신규 환경의 런타임 설정 초기화
