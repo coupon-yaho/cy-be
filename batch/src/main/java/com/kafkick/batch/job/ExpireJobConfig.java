@@ -29,6 +29,7 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.batch.config.BinlogFormatGuard;
+import com.kafkick.batch.config.CleanSchemaGuard;
 import com.kafkick.batch.config.ExpireMetrics;
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.expiration.ExpirationRepository;
@@ -173,14 +174,17 @@ public class ExpireJobConfig {
      */
     @Bean
     public Job expireJob(Step expireStep, BinlogFormatGuard binlogFormatGuard,
-            ExpirationRepository expirations, ExpireMetrics metrics,
-            TimeProvider timeProvider) {
+            CleanSchemaGuard cleanSchemaGuard, ExpirationRepository expirations,
+            ExpireMetrics metrics, TimeProvider timeProvider) {
         return new JobBuilder("expireJob", jobRepository)
                 .validator(new DefaultJobParametersValidator(
                         new String[] {"asOf"}, new String[0]))
                 // 이 Step 의 READ COMMITTED DML 이 STATEMENT binlog 서버에서 오류 1665 로
                 // 거부된다. 스케줄 실행이든 수동 트리거든 여기를 지나야 만료가 시작한다.
                 .listener(binlogFormatGuard)
+                // 만료는 원본을 쓰는 유일한 배치다. 오염셋을 보게 띄우면 정답지가 무너진다 —
+                // 그것도 "검증기가 틀렸다" 로 보이는 모양으로. 시작 전에 자른다.
+                .listener(cleanSchemaGuard)
                 .listener(reportPending(expirations, metrics, timeProvider))
                 .start(expireStep)
                 .build();

@@ -3,6 +3,8 @@ package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
@@ -17,13 +19,18 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalManagementPort;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -54,7 +61,7 @@ import com.kafkick.storage.db.VerificationSeed;
         "server.port=0",
         "management.server.port=0"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, ExpireMetricExposureTest.SchemaShapeConfig.class})
 class ExpireMetricExposureTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
@@ -84,6 +91,7 @@ class ExpireMetricExposureTest {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
+        SchemaShapeConfig.pretendClean();
         // 지표는 싱글턴이고 스프링 컨텍스트가 메서드 사이에 공유된다. 그리고 record 는
         // **더 오래된 asOf 의 결과를 버린다** — 여기서 안 비우면 벽시계 asOf 를 쓰는 테스트가
         // 먼저 도는 순서에서 뒤 테스트의 record 가 통째로 거부되고, 실패 메시지는
@@ -214,6 +222,42 @@ class ExpireMetricExposureTest {
     }
 
     /**
+     * <b>판정할 재료가 없는 실행이 "밀린 것이 있다" 로 나가면 안 된다.</b>
+     *
+     * <p>{@code CleanSchemaGuard} 가 {@code beforeJob} 에서 세우면 Step 은 안 돌지만
+     * {@code afterJob} 은 그대로 돈다. 그때 제외 목록을 못 읽은 것을 <i>"막힌 회차가 없다"</i>
+     * 로 읽으면, 오염 DB 의 남은 대기가 <b>전부</b> {@code unexplained} 로 나간다 —
+     * 오염셋에 만료 대기가 남아 있는 것은 계약상 <b>정상</b>인데도 말이다
+     * ({@code docs/contract.json} 의 {@code not_verified}: <i>"만료 누락 — 별도 관측 지표"</i>).
+     *
+     * <p>그 알림은 critical 이고 <i>"서버를 봐야 한다"</i> 고 안내하는데, 실제로 고칠 곳은
+     * 접속 설정이다. 같은 가드의 javadoc 이 <i>"고칠 곳은 데이터가 아니라 접속 설정"</i> 이라고
+     * 적어 두고 지표는 정반대 버킷으로 보내는 모양이 된다. 미래 {@code asOf} 축에서 이미
+     * 한 번 막은 것과 <b>같은 종류의 사고</b>다.
+     */
+    @Test
+    @DisplayName("오염 스키마로 죽으면 세지 않고 '모름' 으로 남긴다")
+    void keepsGaugesUnknownOnCorruptSchema() throws Exception {
+        seed.newCoupon();
+        expiring();
+        expiring();
+        seed.overwriteStock(5);
+
+        SchemaShapeConfig.pretendCorrupt();
+        JobExecution execution = launch();
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(body, "cy_expire_unexplained_pending"))
+                .as("여기서 2.0 이 나오면 접속 설정 사고가 '서버를 봐라' critical 로 나간다")
+                .isNaN();
+        assertThat(metric(body, "cy_expire_blocked_coupons"))
+                .as("Step 을 시작도 못 했으니 막힌 회차를 **모른다**. 0 은 '없다' 라 거짓말이다")
+                .isNaN();
+    }
+
+    /**
      * <b>조기 발화한 정상 주기가 감시를 끄면 안 된다.</b>
      *
      * <p>{@code CronSlot} 은 크론이 슬롯 직전에 깨어나는 것을 관용해 <b>최대 2초 미래</b>인
@@ -245,6 +289,45 @@ class ExpireMetricExposureTest {
                 .as("**NaN 이면 정상 주기가 감시를 끈다.** 태스클릿과 리스너가 같은 폭을 봐야 한다")
                 .isZero();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
+    }
+
+    /**
+     * {@code hasCleanOnlyConstraints} 만 덮는다. 나머지는 실제 저장소로 흘려보낸다.
+     *
+     * <p>인덱스를 실제로 떼지 않는다 — 공용 컨테이너를 여러 테스트가 나눠 쓰므로,
+     * 되돌리기 전에 이 테스트가 죽는 날 <b>다른 테스트를 조용히 오염시킨다.</b>
+     */
+    @TestConfiguration
+    static class SchemaShapeConfig {
+
+        private static volatile boolean corrupt;
+
+        static void pretendCorrupt() {
+            corrupt = true;
+        }
+
+        static void pretendClean() {
+            corrupt = false;
+        }
+
+        @Bean
+        @Primary
+        VerificationRuleRepository schemaShapeOverride(
+                @Qualifier("verificationRuleJdbcAdapter") VerificationRuleRepository real) {
+            return (VerificationRuleRepository) Proxy.newProxyInstance(
+                    VerificationRuleRepository.class.getClassLoader(),
+                    new Class<?>[] {VerificationRuleRepository.class},
+                    (proxy, method, args) -> {
+                        if ("hasCleanOnlyConstraints".equals(method.getName())) {
+                            return !corrupt;
+                        }
+                        try {
+                            return method.invoke(real, args);
+                        } catch (InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    });
+        }
     }
 
     /** 기한이 남은 발급건 하나. 미래 asOf 의 컷 안에는 들어온다. */

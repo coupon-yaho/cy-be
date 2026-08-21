@@ -6,10 +6,10 @@ import com.kafkick.core.support.exception.ErrorCode;
 /**
  * <b>검증 코드를 빌려 쓰지 않는다.</b> {@code DATASET_MUTATED_DURING_RUN} 은
  * <i>재시도로 낫는다</i> 로 정의된 코드다 — 쓰기를 멈추고 다시 돌리면 통과한다.
- * 아래 넷 중 {@code EXPIRE_HISTORY_COUNT_MISMATCH}·{@code STOCK_UNDERFLOW}·
- * {@code EXPIRE_ASOF_IN_FUTURE} 셋은 다시 돌려도 같은 자리에서 죽는다 — 원인이 데이터
- * 구조이거나(앞 둘) 넘긴 파라미터(셋째)이기 때문이다.
- * {@code STOCK_ROW_MISSING} 만 예외다(그 항목의 설명 참조).
+ * 아래 <b>다섯</b> 중 {@code EXPIRE_HISTORY_COUNT_MISMATCH}·{@code STOCK_UNDERFLOW}·
+ * {@code EXPIRE_ASOF_IN_FUTURE}·{@code EXPIRE_ON_CORRUPT_SCHEMA} 넷은 다시 돌려도 같은
+ * 자리에서 죽는다 — 원인이 데이터 구조이거나(앞 둘) 넘긴 파라미터(셋째) 또는
+ * 접속 설정(넷째)이기 때문이다. {@code STOCK_ROW_MISSING} 만 예외다(그 항목의 설명 참조).
  *
  * <p>가르는 기준이 문구가 아니라 <b>재시도 가능성</b>이라는 것은
  * {@code VerificationErrorCode} 가 스스로 못 박아 둔 것이다. 그 규칙을 여기서 지킨다.
@@ -105,6 +105,31 @@ public enum ExpirationErrorCode implements ErrorCode {
             500,
             "EXPIRATION-004",
             "asOf 가 현재보다 미래입니다."
+    ),
+
+    /**
+     * <b>오염 스키마를 보고 있다.</b> 이 배치는 CLEAN 스키마에서만 돈다.
+     *
+     * <p><b>왜 여기서 죽어야 하나.</b> 만료는 원본을 <b>쓰는</b> 유일한 배치다. 오염셋을 보게
+     * 띄우면 오염 유형 2·7(둘 다 {@code status = 'ISSUED'})의 발급건을 {@code EXPIRED} 로
+     * 넘기고 {@code EXPIRE} 이력까지 붙인다. 그러면 리플레이가 {@code USED → EXPIRED} 라는
+     * 전이표에 없는 조합을 만나 <b>{@code expected_findings} 에 없는 검출이 생기고</b>,
+     * {@code dataset_fingerprint} 도 함께 움직인다 — 누락 0 · 오탐 0 이 합격 조건인데
+     * 그것이 <b>검증기 버그처럼 보이는 모양</b>으로 깨진다.
+     *
+     * <p><b>회차 격리가 이 위험을 넓혔다.</b> 예전에는 첫 오염 회차에서 잡이 죽어 그 뒤로는
+     * 아무것도 안 건드렸다. 지금은 막힌 회차만 빼고 <b>나머지 전부</b>를 넘긴다 —
+     * 그 폭을 넓힌 변경이 그 폭을 막는 가드도 함께 진다.
+     *
+     * <p><b>이것은 판정이 아니다.</b> <i>"데이터가 틀렸다"</i> 가 아니라 <i>"여기서 돌면
+     * 안 되는 배치가 돌았다"</i> 이고, 원인은 데이터가 아니라 접속 설정이라 실패가 맞다.
+     * {@code verifyJob} 의 {@code rejectDatasetMismatch} 와 같은 자리이고 같은 근거
+     * ({@code uk_coupon_member} 의 존재)를 쓴다.
+     */
+    EXPIRE_ON_CORRUPT_SCHEMA(
+            500,
+            "EXPIRATION-005",
+            "오염 스키마에서는 만료 배치를 돌리지 않습니다."
     );
 
     private final int status;
