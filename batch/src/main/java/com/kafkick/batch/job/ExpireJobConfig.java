@@ -31,10 +31,11 @@ import com.kafkick.core.support.TimeProvider;
  * 넘겼는지가 남고, {@code asOf} 없이는 시작하지 못하며, 같은 파라미터의 완료된 실행을 다시
  * 돌리지 못한다. 5분마다 도는 잡이라 그 기록이 곧 운영 근거다.
  *
- * <p><b>재스캔 비용은 이유가 아니다 — 실행 사이로는 안 넘어간다.</b> {@code afterId} 는 한 번의
- * 실행 안에서만 산다. 죽은 실행의 값이 JobRepository 에 저장되기는 하는데 다음 실행의
- * {@code ExecutionContext} 로 복원되지 않는다. {@code start} 와 {@code restart} 를 둘 다 재
- * 봤고 결과가 같았다 — {@code ExpireJobRestartTest} 에 그 실측을 적어 뒀다.
+ * <p><b>재스캔 비용은 이유가 아니다.</b> {@code afterId} 는 <b>JobInstance 안에서만</b> 산다.
+ * 스케줄러는 주기마다 {@code asOf} 를 새로 잡아 매번 다른 인스턴스를 만들므로, 5분마다 오는
+ * 실행은 언제나 {@code id > 0} 부터 훑는다. 이어받는 것은 <b>같은 {@code asOf} 를 다시 도는
+ * 경우</b>, 즉 재시작뿐이고 그때는 커밋된 데까지만 건너뛴다
+ * — {@code ExpireJobRestartTest} 가 두 방향을 다 재 뒀다.
  *
  * <p><b>정합성은 진도가 아니라 SQL 이 지킨다.</b> 이중 차감을 막는 것은
  * {@code EXPIRE_BATCH} 의 {@code status = 'ISSUED'} 조건이다 — 이미 넘어간 행은 진도를
@@ -54,9 +55,13 @@ public class ExpireJobConfig {
     /**
      * 한 실행 안에서의 진도. 청크가 앞 구간을 다시 훑지 않게 한다.
      *
-     * <p><b>실행 사이로는 안 넘어간다.</b> 죽은 뒤 다시 띄우면 이 값 없이 0 부터 시작한다 —
-     * 그래도 결과는 같다. 멱등성을 지키는 것은 이 값이 아니라 {@code EXPIRE_BATCH} 의
+     * <p><b>JobInstance 안에서만 산다.</b> 주기 실행은 {@code asOf} 가 매번 달라 새 인스턴스라
+     * 0 부터 시작하고, 같은 {@code asOf} 로 다시 돌리는 재시작만 이 값을 이어받는다.
+     * 어느 쪽이든 결과는 같다 — 멱등성을 지키는 것은 이 값이 아니라 {@code EXPIRE_BATCH} 의
      * {@code status = 'ISSUED'} 조건이다.
+     *
+     * <p><b>이어받아도 누락이 없는 이유는 옮기는 자리에 있다.</b> 이 값은 가드 셋을 전부
+     * 통과한 청크의 <b>맨 끝</b>에서만 옮겨진다. 롤백된 청크는 진도를 안 남긴다.
      */
     static final String AFTER_ID_KEY = "expire.afterId";
 
@@ -90,16 +95,16 @@ public class ExpireJobConfig {
                     "batch.expire.chunk-size 는 1 이상이어야 합니다. LIMIT 0 은 오류 없이 0건을 "
                             + "돌려줘 만료가 조용히 멈춥니다. 받은 값=" + chunkSize);
         }
-        if (stepTimeoutMillis % 1_000 != 0) {
+        // 두 조건을 한 갈래로 묶는다. 갈라 두면 순서 때문에 뒤 갈래에 도달할 수 있는 값이
+        // 0 과 음의 1000 배수뿐이라, `< 1_000` 을 `< 0` 으로 바꾸는 돌연변이가 살아남았다 —
+        // 테스트 이름은 "1초 미만이면 막는다" 인데 실제로 걸리는 것은 앞 갈래였다.
+        if (stepTimeoutMillis < 1_000 || stepTimeoutMillis % 1_000 != 0) {
             throw new IllegalArgumentException(
-                    "batch.expire.step-timeout-ms 는 1000 의 배수여야 합니다. 스프링의 트랜잭션 "
-                            + "타임아웃이 초 단위라 나머지가 조용히 버려집니다 — ms 라는 단위 이름이 "
-                            + "약속한 정밀도가 사라집니다. 받은 값=" + stepTimeoutMillis);
-        }
-        if (stepTimeoutMillis < 1_000) {
-            throw new IllegalArgumentException(
-                    "batch.expire.step-timeout-ms 는 1000 이상이어야 합니다. 너무 짧으면 정상 청크가 "
-                            + "끊겨 만료가 진행되지 않습니다. 받은 값=" + stepTimeoutMillis);
+                    "batch.expire.step-timeout-ms 는 1000 이상이면서 1000 의 배수여야 합니다. "
+                            + "너무 짧으면 정상 청크가 끊겨 만료가 진행되지 않고, 배수가 아니면 "
+                            + "스프링의 트랜잭션 타임아웃이 초 단위라 나머지가 조용히 버려집니다 — "
+                            + "ms 라는 단위 이름이 약속한 정밀도가 사라집니다. "
+                            + "받은 값=" + stepTimeoutMillis);
         }
         this.jobRepository = jobRepository;
         this.transactionManager = transactionManager;
@@ -180,6 +185,18 @@ public class ExpireJobConfig {
                     // 청크마다 새로 잡아 표식으로도 쓴다.
                     LocalDateTime committedAt = timeProvider.now();
 
+                    // asOf 는 "만료 여부를 가르는 컷" 이다. 미래로 주면 기한이 남은 ISSUED 가
+                    // 전부 컷 안에 들어와 정상 완료로 넘어가는데, EXPIRED 는 종단 상태라
+                    // 되돌릴 전이가 없다. 파라미터 검증기는 키 존재만 보므로 여기서 자른다.
+                    // 스케줄러가 주는 값은 now 를 분 단위로 자른 것이라 항상 과거다.
+                    if (asOf.isAfter(committedAt)) {
+                        throw new BusinessException(
+                                ExpirationErrorCode.EXPIRE_ASOF_IN_FUTURE,
+                                "asOf 가 현재보다 앞섭니다. 기한이 남은 발급건까지 만료되고 "
+                                        + "EXPIRED 는 되돌릴 수 없습니다. "
+                                        + "asOf=" + asOf + " now=" + committedAt);
+                    }
+
                     int expired = expirations.expireBatch(asOf, committedAt, afterId, chunkSize);
                     if (expired == 0) {
                         return RepeatStatus.FINISHED;
@@ -211,14 +228,17 @@ public class ExpireJobConfig {
                         throw new BusinessException(
                                 ExpirationErrorCode.STOCK_ROW_MISSING,
                                 "재고를 되돌리지 못한 회차가 있습니다. 재고 행이 없는 회차가 섞였습니다. "
-                                        + "다시 돌려도 그 행은 여전히 없습니다. "
+                                        + "그 행을 만들어야 합니다 — 지금 누가 만들고 있는 중이라면 "
+                                        + "다음 주기가 알아서 지나갑니다. "
                                         + "회차=" + coupons + " 재고행=" + stockRows);
                     }
 
                     int released = expirations.releaseStock(asOf, committedAt, afterId, lastId);
-                    // released > stockRows 는 스키마상 불가능하다 — coupon_stocks 의 PK 가
-                    // coupon_id 라 JOIN 이 1:1 이고, 파생테이블 행 수가 곧 stockRows 다.
-                    // 위 검사를 통과했으면 released <= stockRows 만 남는다.
+                    // released > stockRows 는 위 가드를 통과한 뒤에는 나올 수 없다.
+                    // coupon_stocks 의 PK 가 coupon_id 라 JOIN 이 1:1 이고, stockRows == coupons
+                    // 를 이미 확인했으므로 되돌린 수가 그보다 커질 길이 없다. 청크 도중에 재고
+                    // 행이 생기는 경우(RC 라 문장마다 스냅샷이 갱신된다)도 이 자리가 아니라
+                    // 위 STOCK_ROW_MISSING 으로 나간다 — 그쪽 메시지가 그 사실을 적고 있다.
                     if (released != stockRows) {
                         // active_count >= 차감량 조건에 걸린 회차가 있다. 재고가 이미 어긋나
                         // 있어서, 그대로 뺐다면 음수가 됐을 자리다.

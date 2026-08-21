@@ -59,7 +59,10 @@ class ExpireJobSettingsTest {
     @Test
     @DisplayName("step-timeout-ms 가 1초 미만이면 기동하지 못한다")
     void rejectTooShortStepTimeout() {
-        assertThatThrownBy(() -> new ExpireJobConfig(null, null, VALID_CHUNK, 500L))
+        // 0 이어야 이 갈래를 실제로 밟는다. 500 은 "1000 의 배수가 아니다" 쪽에 먼저 걸려
+        // 하한 검사를 지워도 통과했다 — 테스트 이름이 주장하는 것과 거는 가드가 달랐다.
+        assertThatThrownBy(() -> new ExpireJobConfig(null, null, VALID_CHUNK, 0L))
+                .as("0 은 1000 의 배수라 배수 검사로는 안 걸린다. 하한이 유일한 방어다")
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("batch.expire.step-timeout-ms");
     }

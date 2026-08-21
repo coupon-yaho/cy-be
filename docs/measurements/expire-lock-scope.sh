@@ -180,3 +180,45 @@ SQL
 echo; echo "── LAST_EXPIRED_ID · 이미 EXPIRED 150,000 누적 / 이번 대상 5,000 ──"
 boundary_probe no  "① 현재 (V11 인덱스만)"
 boundary_probe yes "② + (updated_at, id) 인덱스"
+
+# ── 후보 ≫ LIMIT 축 ─────────────────────────────────────────────────────────
+# ORDER BY id LIMIT 은 **정렬량**만 청크에 묶는다. 잘려 나간 후보도 WHERE 를 만족하므로
+# RC 가 그 락을 안 놓는다 — 잠그는 것은 넘긴 건수가 아니라 후보 수다.
+# docs/12 §7 의 표가 여기서 나온다.
+limit_probe() {  # $1 = 후보 수(뒤쪽에 몰아 심는다)
+  local cand=$1 start=$((200000-$1))
+  docker exec -i $C mysql -proot t >/dev/null 2>&1 <<SQL
+SET SESSION cte_max_recursion_depth = 1000000;
+DROP TABLE IF EXISTS issuances;
+CREATE TABLE issuances (id bigint PRIMARY KEY AUTO_INCREMENT, coupon_id bigint,
+  status varchar(12), expires_at datetime(6), updated_at datetime(6));
+INSERT INTO issuances (id, coupon_id, status, expires_at, updated_at)
+WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < 200000)
+SELECT n, 1, CASE WHEN n > $start THEN 'ISSUED' ELSE 'EXPIRED' END, '2020-01-01', '2020-01-01'
+  FROM s;
+CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
+ANALYZE TABLE issuances;
+SQL
+  docker exec -i $C mysql -proot -N t > /dev/null 2>&1 <<SQL &
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+START TRANSACTION;
+UPDATE issuances SET status='EXPIRED', updated_at='2026-01-15 09:03:00'
+ WHERE status='ISSUED' AND expires_at < '2026-08-19'
+   AND updated_at <= '2026-01-15 09:03:00' AND id > 0
+ ORDER BY id LIMIT $LIMIT;
+SELECT SLEEP(10);
+COMMIT;
+SQL
+  sleep 6
+  printf "  후보 %6d → %s\n" "$cand" \
+    "$(docker exec -i $C mysql -proot -N t 2>/dev/null <<'SQL'
+SELECT GROUP_CONCAT(CONCAT(INDEX_NAME,'=',c) ORDER BY INDEX_NAME SEPARATOR ' ') FROM (
+  SELECT INDEX_NAME, COUNT(*) c FROM performance_schema.data_locks
+   WHERE OBJECT_NAME='issuances' AND LOCK_TYPE='RECORD' GROUP BY INDEX_NAME) t;
+SQL
+)"
+  wait
+}
+
+echo; echo "── 후보 ≫ LIMIT · 200,000행 · LIMIT $LIMIT · 넘기는 것은 언제나 $LIMIT 건 ──"
+for c in 1000 2000 5000 20000 50000; do limit_probe $c; done

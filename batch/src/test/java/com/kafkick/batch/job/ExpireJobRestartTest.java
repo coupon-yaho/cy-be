@@ -47,18 +47,20 @@ import com.kafkick.storage.db.VerificationSeed;
  * <p>재고 하나로 둘을 다 잡는다. 대상 다섯에 재고 다섯이면 <b>정확히 0</b> 이어야 한다 —
  * 이중 차감이면 모자라고 누락이면 남는다.
  *
- * <p><b>여기서 실측으로 드러난 것이 하나 있다 — 재시작이 진도를 이어받지 않는다.</b>
- * 죽은 실행의 {@code expire.afterId} 는 JobRepository 에 제대로 저장되는데(직접 읽어 확인했다),
- * 다음 실행의 {@link org.springframework.batch.infrastructure.item.ExecutionContext} 에는 그 키가
- * 아예 없이 시작한다. {@code JobOperator.start} 와 {@code JobOperator.restart} 가 똑같았고,
- * 같은 JobInstance 를 이어받는 것까지는 맞다. Spring Batch 6.0.4 · Boot 4 조합이다.
+ * <p><b>예전에 여기 "재시작이 진도를 이어받지 않는다" 고 적혀 있었다. 틀렸다.</b>
+ * 그때 {@code JobRepository} 가 {@code ResourcelessJobRepository} 여서 <b>아무것도 저장되지
+ * 않고 있었다</b> — {@code BATCH_JOB_EXECUTION} 이 0행이었고 {@code instanceId} 는 언제나 1
+ * 이었다. "저장은 되는데 복원이 안 된다" 는 진단 자체가 그 상태의 부산물이었다.
+ * {@code BatchJobRepositoryConfig} 가 JDBC 저장소를 배선한 뒤로 <b>진도가 이어진다.</b>
  *
- * <p><b>그래도 결과는 정확하다.</b> 멱등성을 지키는 것이 진도가 아니라
- * {@code EXPIRE_BATCH} 의 {@code status = 'ISSUED'} 조건이기 때문이다 — 이미 넘어간 앞 구간은
- * 다시 훑어도 매치되지 않는다. 잃는 것은 <b>그 앞 구간을 다시 훑는 비용</b>뿐이다.
+ * <p><b>이어받는 것이 옳다.</b> 진도({@code putLong})는 가드 셋을 전부 통과한 청크 끝에서만
+ * 옮겨지므로, 롤백된 청크의 진도는 애초에 안 남는다. 그래서 재시작은 <b>커밋된 데까지만</b>
+ * 건너뛴다 — 위의 "누락" 위험이 여기서 닫힌다.
  *
- * <p>그래서 아래 단언은 <b>이어받지 않는다</b> 를 확인한다. 지금 사실을 못 박아 두는 것이고,
- * 어느 날 이어받게 되면 빨간불로 알려 준다.
+ * <p><b>주기 실행은 여전히 0 부터다.</b> 스케줄러가 {@code asOf} 를 분 단위로 새로 잡으므로
+ * 주기마다 <b>다른 JobInstance</b> 이고, 진도는 인스턴스 안에서만 산다. 이어받는 것은
+ * <b>같은 {@code asOf} 를 다시 돌릴 때</b>뿐이다 — 그것이 곧 재시작이다.
+ * ({@code rescanFromScratchDeductsOnce} 가 0 부터 다시 훑는 쪽을 따로 지킨다.)
  *
  * <p><b>실패는 청크 경계에서 준다.</b> {@code expireBatch} 를 세 번째 호출부터 던지게 만들면
  * 청크 둘이 커밋된 뒤 셋째가 롤백된다. 청크 크기를 1 로 둔 것은 그 경계를 눈에 보이게
@@ -129,8 +131,11 @@ class ExpireJobRestartTest {
                 .as("같은 파라미터라 새 인스턴스가 아니라 죽은 인스턴스를 이어받는다")
                 .isEqualTo(first.getJobInstance().getInstanceId());
         assertThat(FailAtChunkConfig.scannedFrom())
-                .as("진도를 이어받지 않고 0 부터 다시 훑는다. 이어받게 되면 여기가 먼저 운다")
-                .startsWith(0L);
+                .as("**죽은 자리에서 이어받는다.** 커밋된 청크 둘(%s, %s)은 다시 안 집는다 — "
+                        + "0 이 다시 나오면 저장소 배선이 풀려 메타데이터가 안 남는 상태로 "
+                        + "돌아간 것이다", targets.get(0), targets.get(1))
+                .startsWith(targets.get(1))
+                .doesNotContain(0L);
         assertThat(expiredCount()).isEqualTo(5);
         assertThat(activeCount())
                 .as("다섯이 정확히 한 번씩 빠졌다. 겹치면 모자라고 빠뜨리면 남는다")

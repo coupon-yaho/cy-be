@@ -32,9 +32,10 @@ import com.kafkick.storage.db.VerificationSeed;
  * 그 값에서는 오염 회차 하나가 <b>같은 청크에 실린 남의 회차까지 함께 되돌린다.</b>
  * 그 크기를 코드로 못 박아 두지 않으면 <i>"한 회차 문제"</i> 로 읽힌다.
  *
- * <p><b>그리고 다음 주기도 같은 자리에서 죽는다.</b> 진도({@code afterId})는 실행 사이로
- * 안 넘어가므로({@code ExpireJobRestartTest}) 다시 {@code id > 0} 부터 훑다가 같은 회차에
- * 도달한다 — <b>그 뒤 id 의 만료가 영구히 밀린다.</b> 만료 누락은 검증 finding 이 아니라서
+ * <p><b>그리고 다음 주기도 같은 자리에서 죽는다.</b> 주기마다 {@code asOf} 가 달라
+ * <b>새 JobInstance</b> 이고 진도({@code afterId})는 인스턴스 안에서만 사니, 다시
+ * {@code id > 0} 부터 훑다가 같은 회차에 도달한다 — <b>그 뒤 id 의 만료가 영구히 밀린다.</b>
+ * (같은 {@code asOf} 로 다시 돌리는 재시작이라면 이어받지만, 스케줄러는 그러지 않는다.) 만료 누락은 검증 finding 이 아니라서
  * (설계상 관측 지표로 뺐다) 검증 배치도 이것을 안 잡아 준다.
  *
  * <p>지금은 사람이 재고를 손보는 것 말고 방법이 없고, 알림이 그 사실을 아는 유일한 통로다.
@@ -98,7 +99,7 @@ class ExpireUnderflowBlastRadiusTest {
                 .as("멀쩡한 회차의 재고도 안 돌아왔다")
                 .isEqualTo(5);
 
-        // 진도가 실행 사이로 안 넘어가므로 다음 주기도 id > 0 부터 훑다 같은 자리에 닿는다.
+        // asOf 가 달라 새 JobInstance 다. 진도는 인스턴스 안에서만 사니 다시 id > 0 부터다.
         JobExecution second = launchAt(AS_OF.plusMinutes(5));
 
         assertThat(second.getStatus())

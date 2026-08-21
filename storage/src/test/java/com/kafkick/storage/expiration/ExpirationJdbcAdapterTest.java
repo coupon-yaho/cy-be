@@ -505,6 +505,11 @@ class ExpirationJdbcAdapterTest {
         assertThat(CouponStateMachine.next(IssuanceStatus.USED, IssuanceEventType.EXPIRE))
                 .as("USED 에도 EXPIRE 가 열리면 EXPIRE_BATCH 의 status='ISSUED' 필터를 함께 고쳐야 한다")
                 .isEmpty();
+        assertThat(IssuanceEventType.EXPIRE.name())
+                .as("**APPEND_HISTORIES 가 박는 event_type 리터럴이다.** 컬럼이 자유 varchar 라 "
+                        + "이름을 바꿔도 INSERT 는 성공한다 — 그러면 리플레이가 만료 이력 전체를 "
+                        + "모르는 사건으로 읽고 V3·V4 가 한꺼번에 운다")
+                .isEqualTo("EXPIRE");
     }
 
     /**

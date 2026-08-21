@@ -108,7 +108,8 @@ batch:
   # 그래서 기본값이 false 다 — **주지 않으면 안 도는 쪽**이다. 두 사고의 무게가 다르기 때문이다.
   #   켜진 채 검증 셋을 보면  → 오염. 셋을 다시 만드는 것 말고 되돌릴 방법이 없다.
   #   꺼진 채 운영을 보면      → 만료가 밀린다. 나중에 돌리면 따라잡고,
-  #                             infra/prometheus/rules/batch-alerts.yml 의 BatchJobNotRunning 이 잡아 준다.
+  #                             infra/prometheus/rules/batch-alerts.yml 에 BatchJobNotRunning 규칙을 써 뒀지만
+  #                             그것을 읽는 Prometheus 가 아직 없다 — 지금은 감지 수단이 없다.
   # 되돌릴 수 있고 감지도 되는 쪽을 기본으로 둔다. 운영은 true 를 명시해서 띄운다.
   scheduling:
     enabled: ${BATCH_SCHEDULING_ENABLED:false}

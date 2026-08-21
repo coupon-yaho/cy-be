@@ -28,7 +28,13 @@ import com.kafkick.core.support.TimeProvider;
  *
  * <p><b>속성이 아예 없으면 안 돈다({@code matchIfMissing = false}).</b> 두 사고의 무게가
  * 다르기 때문이다 — 켜진 채 검증 셋을 보면 되돌릴 수 없고, 꺼진 채 운영을 보면 나중에 돌려
- * 따라잡을 수 있는 데다 {@code BatchJobNotRunning} 알림이 잡아 준다.
+ * 따라잡을 수 있기 때문이다.
+ *
+ * <p><b>예전에 여기 "{@code BatchJobNotRunning} 알림이 잡아 준다" 고 적었다. 아직 아니다.</b>
+ * 규칙 파일은 {@code infra/prometheus/rules/batch-alerts.yml} 에 있지만 <b>그것을 읽는
+ * Prometheus 가 아직 배선돼 있지 않다</b>({@code infra/prometheus/prometheus.yml} 이 그 사실을
+ * 적어 두었다). compose 가 들어오는 티켓 전까지 이 기본값의 반대편 사고 — 스케줄러가 꺼진 채
+ * 뜨는 것 — 는 <b>감지 수단이 없다.</b>
  *
  * <p><b>{@code VerifyJobConfig} 의 같은 키는 기본값이 반대({@code :true})이고 그것이 맞다.</b>
  * 거기서는 이 플래그를 <i>"스케줄러가 도는 중인가"</i> 로 읽어 검증을 <b>거부</b>하는 데 쓴다.

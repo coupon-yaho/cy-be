@@ -61,7 +61,7 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      * <p><b>{@code (status, expires_at)} 인덱스({@code V11})가 이 문장을 받친다.</b> 그것이
      * 없으면 옵티마이저가 PRIMARY 를 id 순으로 훑는데, 넘길 것이 {@code LIMIT} 보다 적은
      * 실행은 끝까지 훑고 supremum 까지 잠가 <b>신규 발급 INSERT 를 죽였다.</b>
-     * 실측(200,000행 중 뒤 1,000건만 대상): 읽은 행 201,016 → <b>2,001</b>.
+     * 실측(200,000행 중 뒤 1,000건만 대상): 읽은 행 201,000 → <b>2,001</b>.
      *
      * <p><b>인덱스만으로는 발급 봉쇄가 안 풀렸다.</b> 막던 것이 스캔 범위가 아니라 보조 인덱스의
      * gap 이라, 만료 Step 의 격리를 READ COMMITTED 로 내려서 풀었다({@code ExpireJobConfig}).
@@ -113,11 +113,17 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      *
      * <ol>
      *   <li><b>같은 {@code asOf} 로 두 번 못 돈다.</b> {@code asOf} 가 잡 파라미터라 스프링
-     *       배치가 같은 파라미터의 동시 실행을 거부한다 — 인스턴스를 여러 대 띄워도 그렇다.</li>
-     *   <li><b>다른 {@code asOf} 면 {@code expires_at < :asOf} 가 갈라 준다.</b></li>
+     *       배치가 같은 파라미터의 실행을 거부한다. <b>단, 그 사실이 DB 에 남아야 성립한다</b> —
+     *       {@code BatchJobRepositoryConfig} 가 없으면 저장소가
+     *       {@code ResourcelessJobRepository} 라 인스턴스가 한 줄도 안 남고, 프로세스가 둘이면
+     *       서로를 못 본다.</li>
      *   <li>창 밖으로 새는 방향은 나머지 다섯의 {@code id <= :lastId} 가 막는다
      *       (그 축은 {@code ExpirationJdbcAdapterTest} 가 실제로 남의 행을 심어 확인한다).</li>
      * </ol>
+     *
+     * <p><b>여기 <i>"다른 {@code asOf} 면 {@code expires_at < :asOf} 가 갈라 준다"</i> 고 셋째
+     * 겹을 적었었다. 틀렸다.</b> 그 술어는 단조 <b>포함</b>이다 — {@code asOf} 가 이른 쪽의
+     * 집합이 늦은 쪽의 부분집합이라, 어느 방향으로도 두 실행을 가르지 못한다. 겹은 둘이다.
      *
      * <p><b>그래서 남는 구멍은 하나다</b> — 다른 프로세스가 <b>같은 마이크로초</b>에,
      * <b>우리 창 안쪽</b> id 로 {@code EXPIRED} 를 쓰는 경우. 발급 경로가 만료를 안 쓰고
