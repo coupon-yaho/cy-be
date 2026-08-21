@@ -1,0 +1,34 @@
+-- 만료 배치가 청크 경계를 구하는 비용을 줄입니다.
+--
+-- 여섯 문장 중 다섯은 (afterId, lastId] 로 닫혀 있는데, 경계를 구하는 이 문장만 닫을 수 없습니다.
+--
+--     SELECT COALESCE(MAX(id), :afterId) FROM issuances
+--      WHERE status = 'EXPIRED' AND updated_at = :committedAt
+--        AND expires_at < :asOf AND id > :afterId
+--
+-- updated_at 이 어느 인덱스에도 없어서, 옵티마이저가 V11(status, expires_at)을 고르면
+-- **EXPIRED 이면서 기한이 지난 행 전부**를 범위로 잡고 각 행에서 updated_at 을 확인합니다.
+--
+-- ⚠️ 이 비용은 **이미 만료된 행이 쌓여야** 드러납니다. 처음 재 봤을 때는 안 보였습니다 —
+--    만료 대상만 있고 기존 EXPIRED 가 없는 데이터였기 때문입니다. 운영은 시간이 지날수록
+--    EXPIRED 가 누적됩니다.
+--
+-- 실측(200,000행 · 이미 EXPIRED 150,000 누적 · 이번 대상 5,000 · chunk 1000):
+--
+--     인덱스 없음   청크1 200,017행   3청크 합계 207,019행
+--     인덱스 있음   청크1   1,001행   3청크 합계   3,003행
+--
+-- 첫 청크의 afterId = 0 이 결정적입니다. 진도는 실행 사이로 안 넘어가므로
+-- **매 실행의 첫 청크가 이 비용을 냅니다** — 하루 288회입니다.
+--
+-- 이 문장은 락을 잡지 않으므로(평범한 SELECT) 발급을 막지는 않습니다. 순수한 스캔 비용인데,
+-- 그것이 테이블 크기를 따라가고 5분 주기를 지켜야 하는 잡에서 매번 납니다. 실행이 5분을 넘기면
+-- 크론 슬롯이 통째로 사라지고 로그에 한 줄도 안 남습니다.
+--
+-- 컬럼 순서가 (updated_at, id) 인 이유 — updated_at 이 등호 조건이고 id 가 MAX 대상이라,
+-- 등호로 좁힌 뒤 id 역순 첫 행에서 멈출 수 있습니다.
+--
+-- 재는 방법과 전체 수치는 docs/12-expire-lock-measurement.md §5 에 있고,
+-- bash docs/measurements/expire-lock-scope.sh 로 다시 잴 수 있습니다.
+
+CREATE INDEX `idx_issuance_updated_at` ON `issuances` (`updated_at`, `id`);

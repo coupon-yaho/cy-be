@@ -89,7 +89,7 @@ probe 1000 yes "READ COMMITTED"  no  "+ 인덱스 + RC"
 # ── 스캔 축 ─────────────────────────────────────────────────────────────────
 # 락이 아니라 **읽은 행 수**를 잰다. READ COMMITTED 로 내린 뒤로는 매치 안 된 행의 락을
 # 즉시 놓으므로 인덱스가 없어도 락이 0 이다 — 그 축으로는 인덱스를 지킬 수 없다.
-# docs/12 §4 · §5 의 수치가 여기서 나온다.
+# docs/12 §2 의 수치가 여기서 나온다.
 scan_probe() {  # $1=대상 $2=인덱스 $3=라벨 $4=행수(기본 ROWS)
   local rows=${4:-$ROWS}
   docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<SQL
@@ -123,3 +123,57 @@ scan_probe 0 yes "인덱스 있음:"
 echo; echo "── 스캔 축 · 200,000행 중 뒤 1,000건만 대상 (백로그 최악) ──"
 scan_probe 1000 no  "인덱스 없음:" 200000
 scan_probe 1000 yes "인덱스 있음:" 200000
+
+# ── LAST_EXPIRED_ID 축 ──────────────────────────────────────────────────────
+# 여섯 문장 중 상한을 못 가지는 유일한 문장이다(상한을 구하는 것이 그 일이라서).
+# 비용은 **이미 EXPIRED 인 행이 얼마나 쌓였는지**에 달렸다 — 그 행이 없으면 안 드러난다.
+# docs/12 §5 의 수치가 여기서 나온다.
+boundary_probe() {  # $1=updated_at 인덱스(yes/no) $2=라벨
+  docker exec -i $C mysql -proot t >/dev/null 2>&1 <<'SQL'
+SET SESSION cte_max_recursion_depth = 1000000;
+DROP TABLE IF EXISTS issuances;
+CREATE TABLE issuances (id bigint PRIMARY KEY AUTO_INCREMENT, coupon_id bigint,
+  status varchar(12), expires_at datetime(6), updated_at datetime(6));
+INSERT INTO issuances (id, coupon_id, status, expires_at, updated_at)
+WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < 200000)
+SELECT n, 1,
+       CASE WHEN n <= 150000 THEN 'EXPIRED' WHEN n <= 195000 THEN 'USED' ELSE 'ISSUED' END,
+       '2020-01-01',
+       CASE WHEN n <= 150000 THEN '2025-06-01' ELSE '2020-01-01' END
+  FROM s;
+CREATE INDEX idx_status_expires ON issuances (status, expires_at);
+SQL
+  [ "$1" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
+    <<<"CREATE INDEX idx_issuance_updated_at ON issuances (updated_at, id)"
+  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"ANALYZE TABLE issuances"
+  local after=0 total=0 out last scanned
+  echo "$2"
+  for c in 1 2 3; do
+    docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<SQL
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+UPDATE issuances SET status='EXPIRED', updated_at='2026-01-15 09:03:00'
+ WHERE status='ISSUED' AND expires_at < '2026-08-19'
+   AND updated_at <= '2026-01-15 09:03:00' AND id > $after
+ ORDER BY id LIMIT $LIMIT;
+SQL
+    out=$(docker exec -i $C mysql -proot -N t 2>/dev/null <<SQL
+FLUSH STATUS;
+SELECT COALESCE(MAX(id), $after) FROM issuances
+ WHERE status='EXPIRED' AND updated_at='2026-01-15 09:03:00'
+   AND expires_at < '2026-08-19' AND id > $after;
+SELECT SUM(VARIABLE_VALUE) FROM performance_schema.session_status
+ WHERE VARIABLE_NAME IN ('Handler_read_next','Handler_read_rnd_next','Handler_read_first',
+                         'Handler_read_key','Handler_read_last','Handler_read_prev');
+SQL
+)
+    last=$(echo "$out" | sed -n '1p'); scanned=$(echo "$out" | sed -n '2p')
+    printf "  청크 %d: afterId=%-7s 읽은행=%s\n" "$c" "$after" "$scanned"
+    total=$((total + scanned)); after=$last
+  done
+  echo "  ── 3청크 합계 $total 행"
+  echo
+}
+
+echo; echo "── LAST_EXPIRED_ID · 이미 EXPIRED 150,000 누적 / 이번 대상 5,000 ──"
+boundary_probe no  "① 현재 (V11 인덱스만)"
+boundary_probe yes "② + (updated_at, id) 인덱스"

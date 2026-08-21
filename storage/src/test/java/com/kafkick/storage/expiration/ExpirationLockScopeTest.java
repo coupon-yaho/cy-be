@@ -363,6 +363,61 @@ class ExpirationLockScopeTest {
                 .isLessThan(rows / 4);
     }
 
+    /**
+     * <b>경계를 구하는 문장은 상한을 가질 수 없다 — 그 상한을 구하는 것이 이 문장이다.</b>
+     *
+     * <p>여섯 문장 중 다섯은 {@code (afterId, lastId]} 로 닫혀 있어
+     * {@link #locksStayWithinTheChunkAcrossAllStatements()} 의 스캔 축이 지킨다.
+     * {@code lastExpiredId} 만 그 축 밖에 있고, 그래서 여기서 따로 잰다.
+     *
+     * <pre>
+     *   SELECT COALESCE(MAX(id), :afterId) FROM issuances
+     *    WHERE status = 'EXPIRED' AND updated_at = :committedAt
+     *      AND expires_at &lt; :asOf AND id &gt; :afterId
+     * </pre>
+     *
+     * <p>{@code V11(status, expires_at)} 은 이 문장을 <b>안 돕는다.</b> 옵티마이저가 그것을
+     * 고르면 <b>EXPIRED 이면서 기한이 지난 행 전부</b>를 범위로 잡고 각 행에서
+     * {@code updated_at} 을 확인한다. 좁히는 것은 {@code V12(updated_at, id)} 다.
+     *
+     * <p><b>이미 만료된 행이 쌓여야 드러난다.</b> 처음 잰 데이터에는 만료 대상만 있고 기존
+     * {@code EXPIRED} 가 없어서 아무 문제도 안 보였다 — 그래서 이 테스트는 <b>운영 형상</b>,
+     * 즉 지난 주기들이 남긴 {@code EXPIRED} 가 누적된 상태를 만든다.
+     * 실측(200,000행·누적 150,000·대상 5,000): 청크1 <b>200,017행</b> → <b>1,001행</b>.
+     *
+     * <p><b>매 실행의 첫 청크가 이 비용을 낸다.</b> 진도는 실행 사이로 안 넘어가므로
+     * 언제나 {@code afterId = 0} 부터 시작한다 — 하루 288회다.
+     */
+    @Test
+    @DisplayName("경계를 구하는 문장이 누적된 EXPIRED 를 다시 훑지 않는다 — V12 가 지키는 축")
+    void boundaryStatementDoesNotRescanAccumulatedExpirations() {
+        int settled = 300;
+        int toExpire = 10;
+        issuances(settled, IssuanceStatus.EXPIRED, EXPIRED_AT);
+        // 지난 주기들이 남긴 것이다. 이번 표식(WROTE_AT)과 갈라야 운영 형상이 된다.
+        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE status = 'EXPIRED'")
+                .param("at", AS_OF.minusDays(2))
+                .update();
+        issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
+
+        long scanned = transaction.execute(status -> {
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, NO_LIMIT)).isEqualTo(toExpire);
+
+            long before = rowsRead();
+            long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+            long read = rowsRead() - before;
+
+            assertThat(lastId).as("경계를 못 구하면 뒤 문장이 전부 빈 집합을 본다").isPositive();
+            return read;
+        });
+
+        assertThat(scanned)
+                .as("이번에 넘긴 %d 건만 보면 된다. 누적된 %d 건까지 읽으면 비용이 테이블 크기를 "
+                        + "따라간다 — 5분 주기를 지켜야 하는 잡에서 매 실행 첫 청크마다 난다",
+                        toExpire, settled)
+                .isLessThan(settled / 3);
+    }
+
     /** 스토리지 엔진이 실제로 넘긴 행 수. 추정치가 아니라 실행 결과다. */
     private long rowsRead() {
         return jdbcClient.sql("""
