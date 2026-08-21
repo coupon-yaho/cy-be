@@ -11,7 +11,7 @@ import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**
- * Provider가 반환하는 기술 중립 관리자 운영 현황 결과입니다.
+ * 관리자 운영현황 Service와 순수 Calculator가 조립하는 기술 중립 결과입니다.
  *
  * <p>HTTP 응답 DTO를 그대로 복제하지 않고 상단 위험 KPI, 전체 발급·대기·지연·캠페인 상태 집계,
  * 조치 목록, 캠페인별 O1·O2·O4, 전체 캠페인 O3 결과 집계로 구성합니다. 각 의미 단위는
@@ -19,12 +19,13 @@ import com.kafkick.core.coupon.CouponStatus;
  * 정상 상태로 위조하지 않고 {@code value=null}과 적절한 {@link SourceStatus}로 전달할 수 있습니다.</p>
  *
  * <p>이 모델은 DB Entity, Redis 자료구조, Kafka record, Micrometer meter에 직접 의존하지 않습니다.
- * 관제 Adapter가 만든 원천 데이터를 이 Snapshot으로 조립한 뒤 HTTP 응답으로 변환합니다.
- * 현재 Controller는 이 모델이나 Provider를 주입받지 않으며 계속 501을 반환합니다.</p>
+ * 캠페인 Repository와 관측 조회 구성요소가 만든 의미 값을 이 Snapshot으로 조립한 뒤 HTTP 응답으로
+ * 변환합니다. 실제 운영 원천이 연결되기 전에는 값을 0으로 대신하지 않고 각 영역을 명시적인
+ * {@code UNAVAILABLE} 상태로 표현합니다.</p>
  *
- * <p>Core의 {@link Observation}은 Provider 경계의 의미 모델이며 API 모듈의 HTTP
- * {@code ObservedValue}와 의도적으로 분리합니다. 후속 A-06의 전용 Mapper가 상태·값·관측 시각을
- * 보존해 변환하며 Core가 API 표현 타입에 의존하지 않게 합니다.</p>
+ * <p>Core의 {@link Observation}은 운영 의미 모델이며 API 모듈의 HTTP {@code ObservedValue}와
+ * 의도적으로 분리합니다. 구체 Service가 이 Snapshot을 반환하면 Controller가 DTO의 정적 팩토리를
+ * 호출해 상태·값·관측 시각을 보존하며 Core가 API 표현 타입에 의존하지 않게 합니다.</p>
  *
  * @param snapshotAt 여러 원천을 하나의 결과로 조립한 전체 기준 시각
  * @param actionRequired 조치 필요 캠페인의 전체·긴급·주의 수와 해당 관측 상태

@@ -5,29 +5,44 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.kafkick.api.admin.dashboard.calculator.OverviewStatusCalculator;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.core.support.TimeProvider;
 
-/** 관리자 개요·쿠폰 지표·분석 조회의 요청 경계와 선구축 501 응답을 검증합니다. */
+/** 관리자 개요 Service 연결과 나머지 선구축 조회의 요청 경계를 검증합니다. */
 class AdminDashboardControllerTest {
 
-    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(new AdminDashboardController());
+    private static final Instant NOW = Instant.parse("2026-08-20T03:15:00Z");
 
-    /** 데이터 연결 전 개요 조회가 가짜 성공 대신 ADMIN-001 실패 봉투를 반환하는지 검증합니다. */
+    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
+            new AdminDashboardController(new AdminOverviewService(
+                    new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
+                    new OverviewStatusCalculator()))
+    );
+
+    /** 개요 조회가 Service의 기준 시각과 미수집 상태를 성공 봉투에 보존하는지 검증합니다. */
     @Test
-    @DisplayName("관리자 개요 조회는 현재 ADMIN-001 선구축 오류를 반환한다")
-    void overviewReturnsNotImplementedEnvelope() throws Exception {
+    @DisplayName("관리자 개요 조회는 Service의 UNAVAILABLE 운영현황을 성공 봉투로 반환한다")
+    void overviewReturnsUnavailableServiceResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/overview"))
-                .andExpect(status().isNotImplemented())
+                .andExpect(status().isOk())
                 .andExpect(header().exists("X-Request-Id"))
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.data").isEmpty())
-                .andExpect(jsonPath("$.error.status").value(501))
-                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
+                .andExpect(jsonPath("$.data.overallStatus").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.actionRequired.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.campaigns.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.customerOutcomes.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.error").isEmpty());
     }
 
     /** 쿠폰 지표의 필수 집계 구간을 생략하면 400으로 거부되는지 검증합니다. */

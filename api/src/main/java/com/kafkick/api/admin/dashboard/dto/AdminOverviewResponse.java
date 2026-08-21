@@ -3,8 +3,12 @@ package com.kafkick.api.admin.dashboard.dto;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Function;
 
+import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.ActionCode;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CampaignQueueAssessment;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CustomerImpact;
@@ -24,13 +28,10 @@ import com.kafkick.core.coupon.CouponStatus;
  * 위조하지 않으며 value를 null로 유지합니다. 완전성·심각도·조치 유형·고객 영향·대상 화면은
  * 명시적 enum으로 고정해 오타나 임의 코드를 허용하지 않습니다.</p>
  *
- * <p>이 계약은 화면이 요구하는 데이터 형태만 고정합니다. 실제 값은
- * {@code AdminOverviewProvider} 구현체를 연결한 뒤 조립하므로 이 DTO의 존재는 실제 조회 기능 완료를
- * 의미하지 않습니다. DB·Redis·Kafka의 원시 기술 값은 이 응답에 직접 노출하지 않습니다.</p>
- *
- * <p>이 HTTP DTO는 Core Snapshot 타입을 직접 재사용하지 않습니다. 후속 A-06의 전용 Mapper가
- * {@code AdminOverviewSnapshot.Observation}을 {@link ObservedValue}로 변환해 계층별 계약을 분리하고,
- * 상태·값·관측 시각 및 ratio를 한 경로에서 전달합니다.</p>
+ * <p>구체 {@code AdminOverviewService}가 캠페인 Repository와 관측 조회 결과를
+ * {@code AdminOverviewResult}로 조립하면 Controller가 이 DTO의 정적 팩토리로 응답을 생성합니다.
+ * 별도 Provider·Service 인터페이스·Mapper 계층을 두지 않으며, DB·Redis·Kafka의 원시 기술 값은
+ * HTTP 응답에 직접 노출하지 않습니다.</p>
  *
  * @param snapshotAt 이 응답이 나타내는 기준 시각
  * @param overallStatus 전체 응답 데이터의 완전성 상태
@@ -58,6 +59,261 @@ public record AdminOverviewResponse(
         ObservedValue<ActionItemSummary> actionItems,
         ObservedValue<List<CampaignOverview>> campaigns,
         ObservedValue<CustomerOutcomeSummary> customerOutcomes) {
+
+    /**
+     * Controller가 전달한 Service 계산 결과를 HTTP 응답으로 변환합니다.
+     *
+     * <p>이 메서드는 위험도, KPI, 전체 완전성을 다시 계산하지 않습니다. Service가 확정한
+     * {@code overallStatus}와 Core 값들을 그대로 보존하면서 API 전용 record로 옮기는 역할만 합니다.
+     * 별도 Mapper 계층 없이 DTO가 자신의 변환 규칙을 소유하되, 원천 조회나 운영 정책은 DTO에
+     * 들어오지 않도록 경계를 유지합니다.</p>
+     *
+     * @param snapshot Service 결과에 포함된 운영현황 Snapshot
+     * @param overallStatus Service 결과에 포함된 전체 완전성
+     * @return 값·원천 상태·관측 시각을 보존한 HTTP 응답
+     */
+    public static AdminOverviewResponse from(
+            AdminOverviewSnapshot snapshot,
+            OverallStatus overallStatus
+    ) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        Objects.requireNonNull(overallStatus, "overallStatus");
+        return new AdminOverviewResponse(
+                snapshot.snapshotAt(),
+                overallStatus,
+                fromObservation(snapshot.actionRequired(), AdminOverviewResponse::toActionRequiredSummary),
+                fromObservation(snapshot.openingSoon(), AdminOverviewResponse::toOpeningSoonSummary),
+                fromObservation(snapshot.queueRisk(), AdminOverviewResponse::toQueueRiskSummary),
+                fromObservation(snapshot.stockRisk(), AdminOverviewResponse::toStockRiskSummary),
+                fromObservation(
+                        snapshot.aggregateIssuanceRate(),
+                        AdminOverviewResponse::toAggregateIssuanceRate),
+                fromObservation(snapshot.aggregateQueue(), AdminOverviewResponse::toAggregateQueue),
+                fromObservation(snapshot.latencySummary(), AdminOverviewResponse::toLatencySummary),
+                fromObservation(
+                        snapshot.campaignStatusSummary(),
+                        AdminOverviewResponse::toCampaignStatusSummary),
+                fromObservation(snapshot.actionItems(), AdminOverviewResponse::toActionItemSummary),
+                fromObservation(snapshot.campaigns(), AdminOverviewResponse::toCampaignOverviews),
+                fromObservation(
+                        snapshot.customerOutcomes(),
+                        AdminOverviewResponse::toCustomerOutcomeSummary)
+        );
+    }
+
+    /**
+     * 운영 원천이 아직 연결되지 않은 관리자 운영현황 응답을 생성합니다.
+     *
+     * <p>응답 조립 시각인 {@code snapshotAt}은 유지하되, 실제로 관측하지 않은 KPI와 목록을
+     * 숫자 0이나 빈 목록으로 만들지 않습니다. 모든 독립 관측 영역을
+     * {@link SourceStatus#UNAVAILABLE}로 표시해 화면이 미수집 상태를 실제 정상값과 구분하도록 합니다.</p>
+     *
+     * @param snapshotAt Service가 응답을 조립한 기준 시각
+     * @return 값과 관측 시각이 없고 전체 상태가 {@link OverallStatus#UNAVAILABLE}인 응답
+     */
+    public static AdminOverviewResponse unavailable(Instant snapshotAt) {
+        return new AdminOverviewResponse(
+                snapshotAt,
+                OverallStatus.UNAVAILABLE,
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue(),
+                unavailableValue()
+        );
+    }
+
+    /** 실제 관측값과 시각이 없는 독립 원천을 공통 계약에 맞춰 생성합니다. */
+    private static <T> ObservedValue<T> unavailableValue() {
+        return new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null);
+    }
+
+    /**
+     * Core 관측 Wrapper의 값·상태·관측 시각을 API 관측 Wrapper로 옮깁니다.
+     *
+     * <p>값이 없는 상태에서는 변환기를 호출하지 않으므로 {@code UNAVAILABLE}, {@code PENDING},
+     * {@code N_A}의 null 의미가 유지됩니다. Snapshot 조립 과정에서 관측 영역 자체가 누락된 경우도
+     * 미수집으로 표현해 응답 조립이 가짜 정상값을 만들지 않도록 합니다.</p>
+     */
+    private static <S, T> ObservedValue<T> fromObservation(
+            AdminOverviewSnapshot.Observation<S> source,
+            Function<S, T> converter
+    ) {
+        if (source == null) {
+            return unavailableValue();
+        }
+        T value = source.value() == null ? null : converter.apply(source.value());
+        return new ObservedValue<>(value, source.status(), source.observedAt());
+    }
+
+    private static ActionRequiredSummary toActionRequiredSummary(
+            AdminOverviewSnapshot.ActionRequiredSummary source
+    ) {
+        return new ActionRequiredSummary(
+                source.totalCount(), source.urgentCount(), source.warningCount());
+    }
+
+    private static OpeningSoonSummary toOpeningSoonSummary(
+            AdminOverviewSnapshot.OpeningSoonSummary source
+    ) {
+        return new OpeningSoonSummary(source.totalCount(), source.preparationIncompleteCount());
+    }
+
+    private static QueueRiskSummary toQueueRiskSummary(AdminOverviewSnapshot.QueueRiskSummary source) {
+        return new QueueRiskSummary(source.thresholdExceededCount(), source.longestWait());
+    }
+
+    private static StockRiskSummary toStockRiskSummary(AdminOverviewSnapshot.StockRiskSummary source) {
+        return new StockRiskSummary(source.depletionRiskCount(), source.nearestDepletion());
+    }
+
+    private static AggregateIssuanceRate toAggregateIssuanceRate(
+            AdminOverviewSnapshot.AggregateIssuanceRate source
+    ) {
+        return new AggregateIssuanceRate(source.currentPerSecond(), source.sessionPeakPerSecond());
+    }
+
+    private static AggregateQueue toAggregateQueue(AdminOverviewSnapshot.AggregateQueue source) {
+        return new AggregateQueue(
+                source.waitingCount(), source.admissionsPerSecond(), source.estimatedWait());
+    }
+
+    private static LatencySummary toLatencySummary(AdminOverviewSnapshot.LatencySummary source) {
+        return new LatencySummary(
+                source.successfulP99(), source.failedP99(), source.windowStart(), source.windowEnd());
+    }
+
+    private static CampaignStatusSummary toCampaignStatusSummary(
+            AdminOverviewSnapshot.CampaignStatusSummary source
+    ) {
+        return new CampaignStatusSummary(
+                source.openCount(), source.scheduledCount(), source.closedCount());
+    }
+
+    private static ActionItemSummary toActionItemSummary(
+            AdminOverviewSnapshot.ActionItemSnapshot source
+    ) {
+        return new ActionItemSummary(
+                source.totalCount(),
+                source.topItems().stream()
+                        .map(AdminOverviewResponse::toOperationActionItem)
+                        .toList());
+    }
+
+    private static List<CampaignOverview> toCampaignOverviews(
+            List<AdminOverviewSnapshot.CampaignOverview> source
+    ) {
+        return source.stream().map(AdminOverviewResponse::toCampaignOverview).toList();
+    }
+
+    private static CampaignOverview toCampaignOverview(
+            AdminOverviewSnapshot.CampaignOverview source
+    ) {
+        return new CampaignOverview(
+                source.priority(),
+                source.couponId(),
+                source.campaignName(),
+                source.brandName(),
+                source.status(),
+                source.opensAt(),
+                source.closesAt(),
+                source.severity(),
+                fromObservation(source.issuanceFlow(), AdminOverviewResponse::toIssuanceFlow),
+                fromObservation(
+                        source.campaignQueueStatus(),
+                        AdminOverviewResponse::toCampaignQueueStatus),
+                fromObservation(source.stockForecast(), AdminOverviewResponse::toStockForecast),
+                source.customerImpact(),
+                source.customerImpactText(),
+                toRecommendedAction(source.recommendedAction())
+        );
+    }
+
+    private static IssuanceFlow toIssuanceFlow(AdminOverviewSnapshot.IssuanceFlow source) {
+        return new IssuanceFlow(
+                source.currentPerMinute(),
+                source.windowStart(),
+                source.windowEnd(),
+                source.points().stream()
+                        .map(AdminOverviewResponse::toIssuanceRatePoint)
+                        .toList(),
+                source.state(),
+                source.stateDuration());
+    }
+
+    private static IssuanceRatePoint toIssuanceRatePoint(
+            AdminOverviewSnapshot.IssuanceRatePoint source
+    ) {
+        return new IssuanceRatePoint(source.observedAt(), source.issuancesPerMinute());
+    }
+
+    private static CampaignQueueStatus toCampaignQueueStatus(
+            AdminOverviewSnapshot.CampaignQueueStatus source
+    ) {
+        return new CampaignQueueStatus(
+                source.waitingCount(),
+                source.trend(),
+                source.waitingDeltaPerMinute(),
+                source.admissionsPerMinute(),
+                source.estimatedWait(),
+                source.assessment());
+    }
+
+    private static StockForecast toStockForecast(AdminOverviewSnapshot.StockForecast source) {
+        return new StockForecast(
+                source.remainingQuantity(),
+                source.totalQuantity(),
+                source.remainingRatio(),
+                source.estimatedDepletion());
+    }
+
+    private static CustomerOutcomeSummary toCustomerOutcomeSummary(
+            AdminOverviewSnapshot.CustomerOutcomeSummary source
+    ) {
+        return new CustomerOutcomeSummary(
+                source.windowStart(),
+                source.windowEnd(),
+                source.totalCount(),
+                source.outcomes().stream()
+                        .map(AdminOverviewResponse::toCustomerOutcome)
+                        .toList());
+    }
+
+    private static CustomerOutcome toCustomerOutcome(AdminOverviewSnapshot.CustomerOutcome source) {
+        return new CustomerOutcome(
+                source.type(), source.count(), source.ratio(), source.displayText());
+    }
+
+    private static OperationActionItem toOperationActionItem(
+            AdminOverviewSnapshot.OperationActionItem source
+    ) {
+        return new OperationActionItem(
+                source.couponId(),
+                source.campaignName(),
+                source.opensAt(),
+                source.severity(),
+                source.customerImpact(),
+                source.customerImpactText(),
+                source.detectedAt(),
+                source.duration(),
+                toRecommendedAction(source.recommendedAction()));
+    }
+
+    private static RecommendedAction toRecommendedAction(
+            AdminOverviewSnapshot.RecommendedAction source
+    ) {
+        if (source == null) {
+            return null;
+        }
+        return new RecommendedAction(source.code(), source.displayText(), source.targetScreen());
+    }
+
     /**
      * 조치가 필요한 캠페인의 전체·긴급·주의 건수를 구분한 요약입니다.
      *
@@ -306,8 +562,5 @@ public record AdminOverviewResponse(
      * @param targetScreen 권장 행동 버튼이 이동할 관리자 화면
      */
     public record RecommendedAction(ActionCode code, String displayText, TargetScreen targetScreen) { }
-
-    /** 전체 응답에 포함된 원천 데이터의 완전성입니다. */
-    public enum OverallStatus { COMPLETE, PARTIAL, UNAVAILABLE }
 
 }

@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import tools.jackson.databind.ObjectMapper;
 
+import com.kafkick.api.admin.dashboard.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
@@ -48,7 +49,7 @@ class AdminOverviewDtoJsonSerializationTest {
     void overviewSerializesDurationsAndServerRecommendedAction() throws Exception {
         AdminOverviewResponse response = new AdminOverviewResponse(
                 SNAPSHOT_AT,
-                AdminOverviewResponse.OverallStatus.PARTIAL,
+                OverallStatus.PARTIAL,
                 new ObservedValue<>(
                         new AdminOverviewResponse.ActionRequiredSummary(2, 1, 1),
                         SourceStatus.VALID,
@@ -108,7 +109,7 @@ class AdminOverviewDtoJsonSerializationTest {
     void overviewPreservesEmptyActionsAndNullableDurations() throws Exception {
         AdminOverviewResponse response = new AdminOverviewResponse(
                 SNAPSHOT_AT,
-                AdminOverviewResponse.OverallStatus.COMPLETE,
+                OverallStatus.COMPLETE,
                 new ObservedValue<>(
                         new AdminOverviewResponse.ActionRequiredSummary(0, 0, 0),
                         SourceStatus.VALID,
@@ -191,7 +192,7 @@ class AdminOverviewDtoJsonSerializationTest {
                         AdminOverviewSnapshot.TargetScreen.METRICS));
         AdminOverviewResponse response = new AdminOverviewResponse(
                 SNAPSHOT_AT,
-                AdminOverviewResponse.OverallStatus.PARTIAL,
+                OverallStatus.PARTIAL,
                 unavailable(), unavailable(), unavailable(), unavailable(),
                 new ObservedValue<>(
                         new AdminOverviewResponse.AggregateIssuanceRate(612.0, 840.0),
