@@ -59,5 +59,23 @@ observation:
     severity:
       warn-threshold: ${CONSISTENCY_WARN_THRESHOLD:10}
       critical-threshold: ${CONSISTENCY_CRITICAL_THRESHOLD:100}
+  prometheus:
+    # 관제 API 가 시계열을 읽는 유일한 통로다. compose 네트워크 안의 서비스 이름으로만 닿는다 —
+    # Prometheus 에는 인증이 없어 호스트로 포트를 내보내지 않는다(infra/prometheus/prometheus.yml).
+    base-url: ${PROMETHEUS_BASE_URL:http://prometheus:9090}
+    # ⚠️ 세 값은 한 묶음이다. total-budget + connect-timeout + read-timeout 이 화면의 폴링
+    #    간격(1초)을 넘으면 안 된다 — 예산은 "새 질의를 시작하지 않는 시점" 이라, 예산 종료
+    #    직전에 시작한 질의가 자기 타임아웃만큼 더 돈다. 관계가 깨지면 기동에서 죽는다.
+    connect-timeout: ${PROMETHEUS_CONNECT_TIMEOUT:100ms}
+    read-timeout: ${PROMETHEUS_READ_TIMEOUT:300ms}
+    # 마지막 관측 이후 이 시간이 지나면 값을 STALE 로 내려보낸다. instant query 는 스크레이프가
+    # 멈춰도 staleness lookback(기본 5분) 동안 값을 계속 돌려주므로, 이게 없으면 죽은 원천의
+    # 값이 실시간 값으로 그려진다. 수집 주기가 경로마다 달라(재고 1초·정합성 30초) 횟수가 아니라
+    # 시각 기준이다 — DomainMeterNames.COLLECT_LAST_SUCCESS_EPOCH 가 제시한 120초를 따른다.
+    stale-after: ${PROMETHEUS_STALE_AFTER:120s}
+    # 응답 한 장에 쓸 수 있는 전체 시간. 질의별 타임아웃만 두면 최악의 경우 4 × (connect + read)
+    # 가 걸려 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로
+    # 부하가 된다. 예산을 넘긴 뒤의 질의는 보내지 않고 UNAVAILABLE 로 내려보낸다.
+    total-budget: ${PROMETHEUS_TOTAL_BUDGET:500ms}
   datasource:
     enabled: true

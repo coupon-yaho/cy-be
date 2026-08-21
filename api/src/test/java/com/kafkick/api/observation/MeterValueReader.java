@@ -65,6 +65,9 @@ public final class MeterValueReader {
      * 으로 읽는다.
      *
      * <p>대가 — 나노초 미만으로 측정되는 초고속 Timer 에 쓰면 진짜 값도 없음으로 읽힌다.
+     *
+     * <p>같은 규칙이 프로덕션 경로의 {@code PromMetricsAssembler} 에도 있다. 저쪽은 Prometheus 를
+     * 읽어 원천이 달라 코드를 공유할 수 없으니, 한쪽만 고치지 말 것 — 두 경로가 다른 값을 그린다.
      */
     public OptionalDouble percentileNanos(String name, double percentile, String... tags) {
         Timer timer = registry.find(name).tags(Tags.of(tags)).timer();

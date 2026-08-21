@@ -58,4 +58,41 @@ public final class SourceStatusCode {
             case N_A -> 7;
         };
     }
+
+    /**
+     * 상태 Gauge 가 실어 보낸 고정 코드를 상태로 되돌린다. {@link #of(SourceStatus)} 의 역이며
+     * 두 방향이 어긋나면 조회 쪽이 조용히 다른 상태로 읽으므로 왕복은 테스트가 지킨다.
+     *
+     * @param code 상태 Gauge 값
+     * @return 코드에 대응하는 상태
+     * @throws IllegalArgumentException 정의되지 않은 코드인 경우
+     */
+    public static SourceStatus statusOf(int code) {
+        return switch (code) {
+            case 1 -> SourceStatus.VALID;
+            case 2 -> SourceStatus.PENDING;
+            case 3 -> SourceStatus.WARMING_UP;
+            case 4 -> SourceStatus.STALE;
+            case 5 -> SourceStatus.NO_TRAFFIC;
+            case 6 -> SourceStatus.UNAVAILABLE;
+            case 7 -> SourceStatus.N_A;
+            default -> throw new IllegalArgumentException("정의되지 않은 상태 코드입니다: " + code);
+        };
+    }
+
+    /**
+     * 심각도 Gauge 값을 심각도로 되돌린다. {@link #of(Severity)} 의 역이다.
+     *
+     * @param code 심각도 Gauge 값
+     * @return 코드에 대응하는 심각도
+     * @throws IllegalArgumentException 정의되지 않은 코드인 경우
+     */
+    public static Severity severityOf(int code) {
+        return switch (code) {
+            case 0 -> Severity.NONE;
+            case 1 -> Severity.WARN;
+            case 2 -> Severity.CRITICAL;
+            default -> throw new IllegalArgumentException("정의되지 않은 심각도 코드입니다: " + code);
+        };
+    }
 }

@@ -16,34 +16,46 @@ import com.kafkick.api.admin.support.LiveEventPollResponse;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.caller.Caller;
+import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.support.exception.BusinessException;
 
 /**
  * 개발자·운영 엔지니어가 현재 서비스 상태와 최근 발급 이벤트를 조회하는 관제 HTTP 계약을 선구축합니다.
  *
- * <p>Redis, Kafka, DB, Micrometer 등 원천 수집과 정합성 계산은 B 소유 OBS 구현에서 연결합니다.
- * 이 Controller는 원천에 직접 접근하지 않으며, 연결 전에는 유효 요청도 {@code 501 / ADMIN-001}로 응답합니다.</p>
+ * <p>{@code GET /metrics}는 OBS-6 에서 연결했습니다. 원천은 Prometheus 하나이며 Redis·Kafka·DB 를
+ * 직접 읽지 않습니다. {@code GET /events}는 아직 원천이 없어 {@code 501 / ADMIN-001}로 응답합니다(OBS-15).</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminObservabilityController {
 
+    private final PromMetricsAssembler assembler;
+
+    public AdminObservabilityController(PromMetricsAssembler assembler) {
+        this.assembler = assembler;
+    }
+
     /**
      * 전체 서비스, 특정 쿠폰, 또는 특정 Benchmark 실행 범위의 트래픽·지연·정합성 지표를 조회합니다.
      *
-     * <p>{@code window}는 필수이며 {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다.
-     * {@code couponId}와 {@code benchmarkRunId}는 서로 다른 관측 범위이므로 동시에 지정할 수 없습니다.
-     * 실제 지표 수집과 LIVE/FINAL 판정은 후속 OBS 구현에서 연결합니다.</p>
+     * <p>{@code window}는 필수이며 {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다. 되돌아볼
+     * 범위가 아니라 <b>비율을 계산할 집계 창</b>입니다 — 응답은 한 시점 스냅샷이고 차트의 과거
+     * 구간은 화면이 1 초 폴링으로 누적합니다. 지연 백분위에는 걸리지 않습니다({@link MetricsWindow}
+     * 참고). {@code couponId}와 {@code benchmarkRunId}는 서로 다른 관측 범위이므로 동시에 지정할
+     * 수 없습니다.</p>
+     *
+     * <p>원천은 Prometheus 하나입니다. 이 안에서 Redis·DB 를 다시 읽지 않습니다 — 관리자 다섯 명이
+     * 보면 초당 다섯 번 재수집이 됩니다. Prometheus 질의가 실패해도 500 이 아니라 해당 값만
+     * {@code UNAVAILABLE} 로 나갑니다.</p>
      *
      * @param query 집계 구간과 선택적인 쿠폰 또는 Benchmark 실행 범위
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
-     * @return 후속 구현에서 사용할 관리자 관측 지표 응답 봉투
-     * @throws BusinessException 관측 지표 조회 구현이 아직 연결되지 않은 경우
+     * @return 값마다 상태가 붙은 한 시점 지표 스냅샷
      */
     @GetMapping("/metrics")
     public ResponseEnvelope<AdminMetricsResponse> metrics(
             @Valid @ModelAttribute MetricsQuery query, Caller caller) {
-        throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
+        return ResponseEnvelope.success(assembler.assemble(query));
     }
 
     /**
