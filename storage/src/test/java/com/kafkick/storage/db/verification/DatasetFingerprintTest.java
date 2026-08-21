@@ -1,5 +1,5 @@
 // 데이터셋 지문이 계약 공식과 같고 재료 다섯에 모두 반응하는지 확인합니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

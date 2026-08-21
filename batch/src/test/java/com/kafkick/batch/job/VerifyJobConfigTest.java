@@ -36,7 +36,7 @@ import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
-import com.kafkick.storage.verification.VerificationRuleJdbcAdapter;
+import com.kafkick.storage.db.verification.VerificationRuleJdbcAdapter;
 
 /**
  * Step 0 의 종단 확인이다. 잡을 실제로 돌려 {@code asof_state} 가 생기는지 본다.

@@ -1,5 +1,5 @@
 // 정답 매니페스트 대조가 집합 차를 정확히 내는지 확인합니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -1,5 +1,5 @@
 // 통계 스냅샷이 시드 구현과 같은 값을 내는지 확인합니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

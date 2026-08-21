@@ -85,7 +85,9 @@ class ExpireGuardTest {
                 .update();
         seed.overwriteStock(1);
 
-        JobExecution execution = launch(AS_OF.plusYears(1));
+        // 고정 상수에 더하면 그 절대 시각을 벽시계가 지나는 날 미래가 아니게 된다.
+        // 그때 깨지는 원인이 코드가 아니라 달력이라, 단언을 느슨하게 고칠 위험이 크다.
+        JobExecution execution = launch(LocalDateTime.now().plusYears(1));
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(JobFailures.errorCodesOf(execution))

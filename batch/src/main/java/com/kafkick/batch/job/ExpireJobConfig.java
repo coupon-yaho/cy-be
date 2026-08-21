@@ -149,7 +149,9 @@ public class ExpireJobConfig {
      * ⚠️ 전제: binlog_format 이 ROW 또는 MIXED 여야 한다. STATEMENT 면 MySQL 이
      *    READ COMMITTED 에서 InnoDB DML 을 오류 1665 로 거부한다. MySQL 8 기본값은 ROW 라
      *    대개 문제없지만, 레거시 my.cnf 를 가져오면 배포 후 첫 만료 주기에 터진다 —
-     *    테스트 컨테이너는 binlog 를 꺼 두어 이 조합을 재현하지 못한다.
+     *    공용 테스트 컨테이너는 binlog 를 꺼 두어 이 조합을 재현하지 못하므로,
+     *    {@code BinlogFormatGuard} 가 기동 때 막고 {@code BinlogFormatGuardTest} 가
+     *    컨테이너를 따로 띄워 양방향으로 확인한다.
      *
      * ⚠️ verifyJob 에는 걸지 마라. 그쪽은 판정 시점을 얼려야 하므로 격리 수준이
      *    낮아지면 dataset_fingerprint 재료가 실행 중에 흔들린다.

@@ -1,5 +1,5 @@
 // 검증 어댑터들이 공유하는 컬럼 변환입니다. null 을 그대로 통과시키는 것이 전부입니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.util.function.Function;
 

@@ -1,5 +1,5 @@
 // 검증 어댑터들이 공유하는 SHA-256 계산입니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

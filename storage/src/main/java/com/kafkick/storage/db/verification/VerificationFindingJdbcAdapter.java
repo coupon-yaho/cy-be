@@ -1,5 +1,5 @@
 // 검출 결과 쓰기 어댑터입니다. 오염셋에서 800행이 한 실행에 쌓입니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

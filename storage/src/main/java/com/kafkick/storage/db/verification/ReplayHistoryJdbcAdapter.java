@@ -1,7 +1,7 @@
 // 리플레이 입력 읽기 어댑터입니다. issuance_histories 를 아는 유일한 곳입니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
-import static com.kafkick.storage.verification.ColumnValues.toEnum;
+import static com.kafkick.storage.db.verification.ColumnValues.toEnum;
 
 import java.time.LocalDateTime;
 import java.util.List;

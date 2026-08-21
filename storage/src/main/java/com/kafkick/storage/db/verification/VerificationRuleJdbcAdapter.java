@@ -1,5 +1,5 @@
 // V1·V2·V3·V5·V6 판정 SQL 입니다. 규칙마다 드라이빙 테이블이 다릅니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;

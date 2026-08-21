@@ -28,7 +28,7 @@ bash docs/measurements/expire-lock-scope.sh
   **사용 UPDATE**(만료 대상이 아닌 행)를 시도한다
 - `innodb_lock_wait_timeout = 2` 초. 통과하면 `통과`, 막히면 `1205`
 
-스크립트가 **세 축**을 잰다.
+스크립트가 **네 축**을 잰다.
 
 | 축 | 무엇을 보나 | 어느 처방의 근거인가 |
 |---|---|---|
@@ -37,10 +37,16 @@ bash docs/measurements/expire-lock-scope.sh
 | 경계 (`boundary_probe`) | `LAST_EXPIRED_ID` 가 읽는 행 | `V12` |
 | 후보 (`limit_probe`) | 후보 ≫ `LIMIT` 일 때 잠그는 행 | §7 의 대가 |
 
-**"읽은 행" 의 정의** — `Handler_read_next` + `Handler_read_rnd_next` + `Handler_read_first`
-+ `Handler_read_key`. 스토리지 엔진이 실제로 넘긴 행이고 `EXPLAIN` 의 추정치가 아니다.
-(테스트 쪽 `rowsRead()` 는 인덱스 진입 횟수인 `Handler_read_key` 를 빼고 세므로 값이 몇씩
-작다 — 상한 단언에는 영향이 없지만, 두 수치를 나란히 놓고 비교하면 안 된다.)
+**"읽은 행" 의 정의는 축마다 다르다.** 같은 이름으로 다른 것을 세고 있으니 표를 가로질러
+비교하면 안 된다.
+
+| 축 | 합산하는 `Handler_read_*` | 왜 |
+|---|---|---|
+| 락·스캔 (`probe`·`scan_probe`) | `next` `rnd_next` `first` `key` | 정방향 스캔 비용 |
+| **경계** (`boundary_probe`) | 위 넷 + **`last` `prev`** | `MAX(id)` 가 **역방향** 인덱스 스캔이다. 넷만 세면 `V12` 의 효과가 안 보인다 |
+| 테스트 `rowsRead()` | `next` `rnd_next` `first` | 상한 단언용이라 진입 횟수(`key`)를 뺀다 |
+
+스토리지 엔진이 실제로 넘긴 행이고 `EXPLAIN` 의 추정치가 아니다.
 
 **축을 나눈 이유가 있다.** 격리를 RC 로 내린 뒤로는 매치 안 된 행의 락을 즉시 놓으므로
 **인덱스가 없어도 락이 0** 이다. 락 축만 보면 인덱스가 사라진 것을 못 잡는다 —
@@ -141,7 +147,7 @@ CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
 
 운영 데이터는 기한이 남은 `ISSUED` 가 대다수라 스캔이 `('ISSUED', asOf)` 에서 멈추고,
 그 gap 은 "마지막 만료대상 ↔ 첫 미래만료" 사이다 — 신규 발급은 그 밖에 들어갈 수 있다.
-**즉 운영 형상에서는 인덱스만으로도 통과할 여지가 있다.** 아직 안 쟀다(§7).
+**즉 운영 형상에서는 인덱스만으로도 통과할 여지가 있다.** 아직 안 쟀다(§8).
 
 ---
 
@@ -185,6 +191,10 @@ attribute.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
 | 만료 기능 테스트 전부 | **통과** — 청크 이어짐 · 재시작 · 이력 짝 · 재고 짝 · 락 순서 · 만료×취소 경합 |
 | 락 범위 테스트 | **의도된 실패** — 락이 떨어져 "현재 비용" 단언이 뒤집혔다. "개선된 상태를 지키는" 방향으로 고쳤다 |
 | 스키마 파리티 | **의도된 실패** — 인덱스가 생겨 시드 DDL 과 갈렸다. 시드에 승격해 맞췄다 |
+
+**이 전제는 기동 때 확인한다** — `BinlogFormatGuard` 가 `STATEMENT` 면 기동을 막는다.
+공용 컨테이너는 `--skip-log-bin` 이라 못 재므로, `BinlogFormatGuardTest` 가 `STATEMENT`·`ROW`
+컨테이너를 따로 띄워 양방향으로 확인한다.
 
 **전제 하나** — `binlog_format` 이 `ROW` 또는 `MIXED` 여야 한다. `STATEMENT` 면 MySQL 이
 READ COMMITTED 에서 InnoDB DML 을 오류 1665 로 거부한다. MySQL 8 기본값은 `ROW` 지만
@@ -391,7 +401,7 @@ INSERT INTO coupon_stats (…) SELECT … FROM issuances …   -- 잠금 읽기
 
 ## 10. 실측이 뒤집은 것
 
-작업 중에 코드와 리뷰에 이렇게 적혀 있었다. 셋 다 그럴듯했고 셋 다 틀렸다.
+작업 중에 코드와 리뷰에 이렇게 적혀 있었다. 다섯 다 그럴듯했고 다섯 다 틀렸다.
 
 > *"`id <= :lastId` 를 걸면 락이 1,004 로 줄고 **발급이 통과한다**"*
 
@@ -420,4 +430,4 @@ supremum 에 닿지 않았다 — 그래서 문제가 안 보였다. 발급 봉�
 
 **후보 수에 비례한다.** `ORDER BY id LIMIT` 은 정렬량만 묶는다(§7).
 
-넷 다 실행해 보기 전에는 맞는 말처럼 읽혔다. 그래서 이 문서가 있다.
+다섯 다 실행해 보기 전에는 맞는 말처럼 읽혔다. 그래서 이 문서가 있다.

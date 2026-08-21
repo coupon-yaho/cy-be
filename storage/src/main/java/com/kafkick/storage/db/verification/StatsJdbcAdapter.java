@@ -1,5 +1,5 @@
 // 통계 스냅샷 세 테이블을 집계 SQL 로 채웁니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.time.LocalDateTime;
 import java.util.List;

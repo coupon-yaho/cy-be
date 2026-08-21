@@ -122,7 +122,11 @@ class ResolvedBatchConfigTest {
                 // 전부 @Value 기본값과 다른 값이다. 같은 값을 주면 키 경로가 죽어 기본값으로
                 // 폴백해도 결과가 같아 구분이 안 된다 — 그게 batch.* 가 조용히 죽는 방식이다.
                 // 기본값이 false 라 여기서 false 를 주면 키 경로가 죽어도 같은 값이 나온다.
-                // 크론은 먼 미래로 밀어 둔다 — true 를 주면 스케줄러 빈이 실제로 생긴다.
+                // 크론은 먼 미래로 밀어 둔다.
+                //
+                // 이 부팅기(HermeticBoot.EmptyConfig)에는 컴포넌트 스캔도 @EnableScheduling 도
+                // 없어서 스케줄러 빈이 애초에 안 만들어진다 — 지금 이 값이 막고 있는 것은
+                // 없다. 부팅기를 실제 컨텍스트로 바꾸는 날을 위한 예비 방어다.
                 "--BATCH_SCHEDULING_ENABLED=true",
                 "--batch.schedule.expire-cron=0 0 0 1 1 *",
                 // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면

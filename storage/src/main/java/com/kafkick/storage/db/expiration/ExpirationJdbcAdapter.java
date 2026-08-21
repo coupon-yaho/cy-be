@@ -1,5 +1,5 @@
 // 만료 처리 SQL 여섯입니다. 전부 집합 단위로 돌고, 행을 미리 골라 두는 잠금 읽기를 쓰지 않습니다.
-package com.kafkick.storage.expiration;
+package com.kafkick.storage.db.expiration;
 
 import java.time.LocalDateTime;
 
@@ -33,7 +33,8 @@ import com.kafkick.core.expiration.ExpirationRepository;
  * <p><b>상한이 발급 봉쇄를 푼 것이 아니다.</b> 그것을 푼 것은 READ COMMITTED 이고, 상한은
  * 첫 문장에 걸 수도 없다. 예전 주석이 "상한을 걸면 발급이 통과한다" 고 적었는데
  * <b>만료 대상이 {@code LIMIT} 을 채우는 조건에서만 그랬다</b> —
- * {@code docs/12-expire-lock-measurement.md} §9 가 그 문장을 철회했다.
+ * {@code docs/12-expire-lock-measurement.md} 의 <i>"실측이 뒤집은 것"</i> 절이 그 문장을
+ * 철회했다.
  *
  * <p><b>여섯 중 셋이 상태를 바꾼다.</b> {@code LAST_EXPIRED_ID} · {@code EXPIRED_COUPON_COUNT} ·
  * {@code STOCK_ROW_COUNT} 는 짝을 만드는 가드용이라 아무것도 안 바꾼다 — 지우면 재고 행 없는
@@ -62,6 +63,7 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      * 없으면 옵티마이저가 PRIMARY 를 id 순으로 훑는데, 넘길 것이 {@code LIMIT} 보다 적은
      * 실행은 끝까지 훑고 supremum 까지 잠가 <b>신규 발급 INSERT 를 죽였다.</b>
      * 실측(200,000행 중 뒤 1,000건만 대상): 읽은 행 201,000 → <b>2,001</b>.
+     * (스캔 축 정의 — {@code Handler_read_next|rnd_next|first|key} 합)
      *
      * <p><b>인덱스만으로는 발급 봉쇄가 안 풀렸다.</b> 막던 것이 스캔 범위가 아니라 보조 인덱스의
      * gap 이라, 만료 Step 의 격리를 READ COMMITTED 로 내려서 풀었다({@code ExpireJobConfig}).
@@ -109,7 +111,8 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      * <p><b>표식은 고유하지 않다 — 무엇이 그것을 메우는지 적어 둔다.</b>
      * {@code committedAt} 은 {@code datetime(6)} 시각일 뿐이라, <b>원리적으로는</b> 다른
      * 프로세스가 같은 마이크로초에 {@code EXPIRED} 를 써서 이 {@code MAX(id)} 를 밀어 올릴 수
-     * 있다. 그러면 뒤 문장 다섯의 창이 넓어진다. 지금 그것을 막는 것은 셋이다.
+     * 있다. 그러면 뒤 문장 다섯의 창이 넓어진다. 지금 그것을 막는 것은 <b>둘</b>이고,
+     * 그중 창 안쪽까지 막는 것은 <b>첫째뿐이다.</b>
      *
      * <ol>
      *   <li><b>같은 {@code asOf} 로 두 번 못 돈다.</b> {@code asOf} 가 잡 파라미터라 스프링

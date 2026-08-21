@@ -1,5 +1,5 @@
 // 정답 매니페스트와 검출을 양방향으로 대조합니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.util.List;
 

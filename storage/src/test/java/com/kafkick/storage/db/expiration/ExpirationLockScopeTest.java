@@ -1,5 +1,5 @@
 // 만료 SQL 이 무엇을 잠그는지 확인합니다. 무엇을 넘겼는지는 ExpirationJdbcAdapterTest 가 봅니다.
-package com.kafkick.storage.expiration;
+package com.kafkick.storage.db.expiration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;

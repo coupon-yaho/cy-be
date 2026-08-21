@@ -1,4 +1,4 @@
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

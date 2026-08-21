@@ -86,7 +86,8 @@ class ExpireSchedulerReportingTest {
 
     /**
      * <b>이 갈래가 없으면 잡 실패가 조용히 지나간다.</b> 지금 이 잡이 스스로 멈추는 자리가
-     * 셋 있는데(이력 짝 불일치 · 재고 행 누락 · 재고 부족) 셋 다 예외가 아니라 {@code FAILED} 상태로만 온다.
+     * 넷 있는데(이력 짝 불일치 · 재고 행 누락 · 재고 부족 · {@code asOf} 가 미래)
+     * 넷 다 예외가 아니라 {@code FAILED} 상태로만 온다.
      */
     @Test
     @DisplayName("잡이 실패로 끝나면 원인과 함께 ERROR 로 남긴다")

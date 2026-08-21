@@ -6,7 +6,10 @@ import com.kafkick.core.support.exception.ErrorCode;
 /**
  * <b>검증 코드를 빌려 쓰지 않는다.</b> {@code DATASET_MUTATED_DURING_RUN} 은
  * <i>재시도로 낫는다</i> 로 정의된 코드다 — 쓰기를 멈추고 다시 돌리면 통과한다.
- * 아래 셋은 다시 돌려도 같은 자리에서 죽는다. 원인이 경합이 아니라 데이터 구조이기 때문이다.
+ * 아래 넷 중 {@code EXPIRE_HISTORY_COUNT_MISMATCH}·{@code STOCK_UNDERFLOW}·
+ * {@code EXPIRE_ASOF_IN_FUTURE} 셋은 다시 돌려도 같은 자리에서 죽는다 — 원인이 경합이 아니라
+ * 데이터 구조이거나(앞 둘) 넘긴 파라미터(마지막)이기 때문이다.
+ * {@code STOCK_ROW_MISSING} 만 예외다(그 항목의 설명 참조).
  *
  * <p>가르는 기준이 문구가 아니라 <b>재시도 가능성</b>이라는 것은
  * {@code VerificationErrorCode} 가 스스로 못 박아 둔 것이다. 그 규칙을 여기서 지킨다.
@@ -29,8 +32,14 @@ public enum ExpirationErrorCode implements ErrorCode {
     /**
      * 재고 행이 없는 회차의 발급건이 만료로 넘어갔다.
      *
-     * <p>{@code JOIN} 이 그 회차를 조용히 건너뛰므로 되돌릴 재고가 없다. 다시 돌려도
-     * 재고 행은 여전히 없다 — 사람이 그 회차를 손봐야 끝난다.
+     * <p>{@code JOIN} 이 그 회차를 조용히 건너뛰므로 되돌릴 재고가 없다. 보통은 사람이 그
+     * 회차를 손봐야 끝난다.
+     *
+     * <p><b>다만 이 코드만 재시도 불가 집합의 예외다.</b> 누가 지금 그 재고 행을 만들고 있는
+     * 중일 수도 있다 — 만료 Step 은 READ COMMITTED 라 문장마다 스냅샷이 갱신되므로 그 창이
+     * 실제로 열린다. 그때는 다음 주기가 알아서 지나간다. 그래서 던지는 메시지도
+     * <i>"다시 돌려도 없다"</i> 로 단정하지 않는다 — 단정하면 운영자가 방금 자기가 넣은 행을
+     * 다시 의심한다. 알림 규칙에서 즉시 호출로 올릴 때 이 예외를 함께 봐야 한다.
      */
     STOCK_ROW_MISSING(
             500,

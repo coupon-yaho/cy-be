@@ -13,6 +13,7 @@ import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
@@ -20,6 +21,8 @@ import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
@@ -33,7 +36,7 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 일어날 수 있다. 의존성 버전이 오르거나 노출 목록이 좁아지면 관제 쪽에서 먼저 비는데,
  * 그때는 이미 며칠 지난 뒤다.
  *
- * <p><b>세 축을 본다.</b>
+ * <p><b>두 축을 본다.</b>
  *
  * <table border="1">
  *   <caption>관제가 읽는 메트릭</caption>
@@ -108,6 +111,21 @@ class BatchMetricExposureTest {
 
     @Autowired
     private Job expireJob;
+
+    @Autowired
+    private JobRepository jobRepository;
+
+    /**
+     * <b>배선 전에는 이 정리가 필요 없었다.</b> {@code JobRepository} 가
+     * {@code ResourcelessJobRepository} 라 아무것도 안 남았기 때문이다. 이제 인스턴스가 실제로
+     * 남으므로, 같은 {@code asOf} 로 도는 두 번째 테스트를 넣는 순간
+     * {@code JobInstanceAlreadyCompleteException} 이 난다 — 실패 메시지가 메트릭이 아니라
+     * 배치 메타 얘기를 해서 원인이 안 보인다. 잡을 띄우는 다른 테스트 열다섯이 이미 이렇게 한다.
+     */
+    @BeforeEach
+    void setUp() {
+        new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+    }
 
     @Test
     @DisplayName("잡이 한 번 돌면 실행 횟수·상태·잡 이름이 메트릭으로 나온다")

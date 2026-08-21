@@ -36,9 +36,9 @@ SQL
 }
 probe() {  # $1=대상 $2=인덱스 $3=격리 $4=스캔창 $5=라벨
   load "$1"
-  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"DROP INDEX idx_status_expires ON issuances"
+  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"DROP INDEX idx_issuance_status_expires ON issuances"
   [ "$2" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
-    <<<"CREATE INDEX idx_status_expires ON issuances (status, expires_at)"
+    <<<"CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at)"
   local UP=""; [ "$4" = "yes" ] && UP="AND id <= $WINDOW"
   docker exec -i $C mysql -proot -N t > "$WORK/probe.txt" 2>&1 <<SQL &
 SET SESSION TRANSACTION ISOLATION LEVEL $3;
@@ -102,9 +102,9 @@ INSERT INTO issuances (id, coupon_id, status, expires_at, updated_at)
 WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < $rows)
 SELECT n, 1, IF(n > $rows - $1, 'ISSUED', 'USED'), '2020-01-01', '2020-01-01' FROM s;
 SQL
-  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"DROP INDEX idx_status_expires ON issuances"
+  docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"DROP INDEX idx_issuance_status_expires ON issuances"
   [ "$2" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
-    <<<"CREATE INDEX idx_status_expires ON issuances (status, expires_at)"
+    <<<"CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at)"
   docker exec -i $C mysql -proot -N t 2>/dev/null <<SQL | tr '\n' ' ' | sed "s/^/$3  /"
 SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
 FLUSH STATUS;
@@ -144,7 +144,7 @@ SELECT n, 1,
        '2020-01-01',
        CASE WHEN n <= 150000 THEN '2025-06-01' ELSE '2020-01-01' END
   FROM s;
-CREATE INDEX idx_status_expires ON issuances (status, expires_at);
+CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
 SQL
   [ "$1" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
     <<<"CREATE INDEX idx_issuance_updated_at ON issuances (updated_at, id)"

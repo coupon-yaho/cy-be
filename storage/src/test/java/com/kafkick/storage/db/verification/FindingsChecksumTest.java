@@ -1,5 +1,5 @@
 // 검출 checksum 이 계약 인코딩과 바이트 단위로 같은지 확인합니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

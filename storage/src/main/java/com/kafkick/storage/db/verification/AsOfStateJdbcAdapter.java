@@ -1,5 +1,5 @@
 // asof_state 쓰기 어댑터입니다. 300만 행이라 단건 왕복이 아니라 배치로 씁니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import java.time.LocalDateTime;
 import java.util.List;

@@ -1,7 +1,7 @@
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
-import static com.kafkick.storage.verification.ColumnValues.toEnum;
-import static com.kafkick.storage.verification.ColumnValues.toName;
+import static com.kafkick.storage.db.verification.ColumnValues.toEnum;
+import static com.kafkick.storage.db.verification.ColumnValues.toName;
 
 import java.time.LocalDateTime;
 import java.util.Optional;

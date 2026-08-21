@@ -1,5 +1,5 @@
 // 만료 SQL 여섯이 무엇을 건드리고 무엇을 안 건드리는지 확인합니다.
-package com.kafkick.storage.expiration;
+package com.kafkick.storage.db.expiration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

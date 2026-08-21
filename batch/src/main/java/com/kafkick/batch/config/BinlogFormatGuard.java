@@ -3,8 +3,8 @@ package com.kafkick.batch.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
@@ -27,9 +27,19 @@ import org.springframework.stereotype.Component;
  *
  * <p>기동을 막는 쪽으로 정했다. 이 서버에서는 만료가 <b>한 번도 성공할 수 없고</b>,
  * 재고를 되돌리는 유일한 배치가 조용히 안 도는 것보다 안 뜨는 것이 낫다.
+ *
+ * <p><b>{@code InitializingBean} 이지 {@code ApplicationReadyEvent} 가 아니다.</b> 그 이벤트는
+ * 톰캣이 이미 바인드되고 {@code @Scheduled} 크론이 등록된 <b>뒤</b>에 온다 — 거기 걸면
+ * "기동을 막는다" 가 아니라 <b>떴다가 죽는다</b> 가 되고, 그 사이 포트가 열리고 크론 경계가
+ * 지나가면 만료가 한 번 시작한다. 여기서 던지면 컨텍스트 refresh 가 실패해 포트가 안 열린다.
+ *
+ * <p><b>만료가 도는 배포에만 건다.</b> 오류 1665 는 만료 Step 의 READ COMMITTED DML 에서만
+ * 나고 {@code verifyJob} 은 REPEATABLE READ 라 이 전제가 필요 없다. 조건을 안 걸면 검증만
+ * 돌리려고 띄운 서버까지 막아서, 오염셋 게이트를 한 번도 못 돌리게 된다.
  */
 @Component
-public class BinlogFormatGuard {
+@ConditionalOnProperty(name = "batch.scheduling.enabled", havingValue = "true")
+public class BinlogFormatGuard implements InitializingBean {
 
     private static final Logger log = LoggerFactory.getLogger(BinlogFormatGuard.class);
 
@@ -39,7 +49,11 @@ public class BinlogFormatGuard {
         this.jdbcClient = jdbcClient;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
+    @Override
+    public void afterPropertiesSet() {
+        assertReadCommittedIsUsable();
+    }
+
     public void assertReadCommittedIsUsable() {
         // binlog 가 꺼져 있으면 format 값과 무관하게 제약이 없다. 테스트 컨테이너가 그 경로다.
         boolean binlogOn = jdbcClient.sql("SELECT @@GLOBAL.log_bin")

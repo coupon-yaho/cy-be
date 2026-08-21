@@ -1,5 +1,5 @@
 // V2 1인 1매 위반 규칙을 CORRUPT 스키마(제약 셋이 없는) 위에서 검증합니다.
-package com.kafkick.storage.verification;
+package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
