@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.kafkick.batch.job.ExpireJobConfig;
+import com.kafkick.batch.schedule.ExpireScheduler;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.storage.db.config.HermeticBoot;
 import com.kafkick.storage.db.config.ResolvedConfigChecks;
 import java.io.IOException;
 import java.lang.reflect.Executable;
+import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.scheduling.support.CronExpression;
@@ -79,7 +82,9 @@ class ResolvedBatchConfigTest {
             "batch.verify.chunk-size",
             "batch.verify.replay-window-size",
             "batch.expire.chunk-size",
-            "batch.expire.step-timeout-ms");
+            "batch.expire.step-timeout-ms",
+            // @Scheduled 애너테이션 안에 있어 @Value 파라미터 스캔으로는 안 잡히던 키.
+            "batch.schedule.expire-cron");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.
@@ -266,13 +271,33 @@ class ResolvedBatchConfigTest {
             // 실제로 그 상태에서 돌연변이가 안 잡혔다.
             // 잡 설정 클래스를 전부 훑는다. 한 클래스만 보면 새 잡이 들어올 때
             // 그 잡의 키는 아무도 안 본다 — 이 테스트가 막으려던 폴백이 거기서 그대로 난다.
+            //
+            // 스케줄러도 훑는다. 크론 키는 @Value 가 아니라 @Scheduled 애너테이션 안에 있어서
+            // 파라미터만 보면 통째로 빠진다 — 그리고 그 기본값이 .example 값과 글자까지 같아
+            // 키 경로를 오타 내도 동작이 같고 로그도 없다. 이 테스트가 막으려던 그 모양이다.
             List<Executable> declared = new ArrayList<>();
-            for (Class<?> config : List.of(VerifyJobConfig.class, ExpireJobConfig.class)) {
+            for (Class<?> config : List.of(
+                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class)) {
                 declared.addAll(List.of(config.getDeclaredConstructors()));
                 declared.addAll(List.of(config.getDeclaredMethods()));
             }
 
             for (Executable executable : declared) {
+                // @Scheduled(cron = "${...}") 처럼 애너테이션 값에 박힌 키
+                if (executable instanceof Method method) {
+                    Scheduled scheduled = method.getAnnotation(Scheduled.class);
+                    if (scheduled != null && !scheduled.cron().isBlank()) {
+                        Matcher matcher = placeholder.matcher(scheduled.cron());
+                        while (matcher.find()) {
+                            String key = matcher.group(1);
+                            assertThat(environment.containsProperty(key))
+                                    .as(executable.getName() + " 의 @Scheduled cron " + key
+                                            + " 가 .example 에 없다 — 기본값으로 조용히 폴백한다")
+                                    .isTrue();
+                            seen.add(key);
+                        }
+                    }
+                }
                 for (Parameter parameter : executable.getParameters()) {
                     Value value = parameter.getAnnotation(Value.class);
                     if (value == null) {
