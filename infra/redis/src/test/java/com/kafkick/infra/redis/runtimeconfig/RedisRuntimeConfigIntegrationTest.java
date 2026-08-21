@@ -267,6 +267,52 @@ class RedisRuntimeConfigIntegrationTest {
                 .isEqualTo("RUNTIME_CONFIG-006");
     }
 
+    // 시드 JSON 이 스냅샷 포맷과 어긋나면 update 가 아니라 첫 조회에서 드러나야 한다.
+    // 신규 환경은 기동 직후 읽기부터 하므로, 이 경로가 조용하면 잘못된 시드가 잠복한다.
+    @Test
+    void seedThatDoesNotMatchTheSnapshotFormatSurfacesOnTheFirstRead() {
+        redis.opsForValue().set("config:runtime", "{\"engineVersion\":\"V1\",\"revision\":0}");
+        RedisRuntimeConfigStore store = new RedisRuntimeConfigStore(
+                redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        assertThatThrownBy(store::get)
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
+                .isEqualTo("RUNTIME_CONFIG-006");
+    }
+
+    @Test
+    void seedWrittenByComposeIsReadableAsASnapshotWithRevisionZero() {
+        redis.opsForValue().set("config:runtime", composeSeedJson());
+        RedisRuntimeConfigStore store = new RedisRuntimeConfigStore(
+                redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        RuntimeConfigSnapshot seeded = store.get();
+
+        assertThat(seeded.revision()).isZero();
+        assertThat(seeded.status()).isEqualTo(com.kafkick.core.observation.SourceStatus.VALID);
+        assertThat(seeded.queueMode()).isEqualTo(QueueMode.OFF);
+    }
+
+    // compose.yml 의 시드 명령에서 JSON 을 그대로 읽어온다. 문자열을 여기에 다시 적으면
+    // compose 와 테스트가 각자 흘러가 드리프트를 못 잡는다.
+    private static String composeSeedJson() {
+        String compose;
+        try {
+            compose = java.nio.file.Files.readString(
+                    java.nio.file.Path.of("../..").toAbsolutePath().normalize().resolve("compose.yml"));
+        } catch (java.io.IOException exception) {
+            throw new java.io.UncheckedIOException(exception);
+        }
+        int begin = compose.indexOf("{\\\"engineVersion");
+        assertThat(begin).as("compose.yml 의 시드 JSON").isNotNegative();
+        int end = compose.indexOf("\" NX", begin);
+        assertThat(end).as("compose.yml 시드 JSON 의 끝").isGreaterThan(begin);
+        return compose.substring(begin, end)
+                .replace("\\\"", "\"")
+                .replace("$${seeded_at}", NOW.toString());
+    }
+
     private static RuntimeConfigSnapshot snapshot(long revision) {
         return new RuntimeConfigSnapshot(
                 EngineVersion.V2, ReleaseStage.V2_2, QueueMode.OFF, revision,
