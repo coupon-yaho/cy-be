@@ -7,6 +7,7 @@ dependencies {
     testImplementation testFixtures(project(':core'))
     // 어댑터는 런타임에만. api 가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
     runtimeOnly project(':storage')
+    runtimeOnly project(':infra:redis')
     runtimeOnly project(':infra:mq')
     testImplementation testFixtures(project(':storage'))
 

@@ -45,6 +45,7 @@ out/
 **/src/main/resources/storage.yml
 **/src/main/resources/observation.yml
 **/src/main/resources/management.yml
+**/src/main/resources/redis.yml
 
 ### 운영 DB 서버 설정 — 커밋하지 않는다
 infra/mysql/my.cnf

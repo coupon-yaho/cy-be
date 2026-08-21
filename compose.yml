@@ -50,6 +50,48 @@ services:
       retries: 30
       start_period: 20s
 
+  # CY-263 로컬 개발용 단일 Redis다. 운영 HA(Primary/Replica + Sentinel 또는 관리형
+  # Redis)는 팀 합의 후 별도로 구성한다. RuntimeConfig는 revision 일관성이 필요하므로
+  # replica를 일반 읽기 endpoint로 사용하지 않는다.
+  #
+  # AOF는 프로세스·컨테이너 재시작 뒤 데이터를 복구하고, noeviction은 메모리 부족 때
+  # config:runtime을 조용히 축출하지 않고 쓰기를 실패시킨다. 서로 다른 유실 원인을 막는다.
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - coupon-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 신규 로컬 환경에서 명시적으로 한 번만 실행한다:
+  #   docker compose --profile runtime-config-seed run --rm runtime-config-seed
+  # 일반 기동에는 포함되지 않으며 SET NX라 기존 revision을 덮어쓰지 않는다.
+  runtime-config-seed:
+    image: redis:7.4-alpine
+    profiles: ["runtime-config-seed"]
+    restart: "no"
+    depends_on:
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        seeded_at="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        redis-cli -h redis SET config:runtime \
+          "{\"engineVersion\":\"V1\",\"releaseStage\":\"V1\",\"queueMode\":\"OFF\",\"revision\":0,\"updatedAt\":\"$${seeded_at}\",\"updatedBy\":\"system:bootstrap\",\"status\":\"VALID\"}" NX
+
   api:
     image: ${COUPON_IMAGE}:${API_IMAGE_TAG}
     pull_policy: always
@@ -59,6 +101,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: api
       SPRING_FLYWAY_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
     volumes:
       - ./application.yml:/app/config/application.yml:ro
     ports:
@@ -73,6 +117,8 @@ services:
       #      docker exec coupon-yaho-api-1 wget -qO- localhost:9090/actuator/health
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   batch:
@@ -144,6 +190,7 @@ services:
 
 volumes:
   coupon-mysql-data:
-  # 두 볼륨 다 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
+  coupon-redis-data:
+  # 세 볼륨 모두 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
   # 한쪽만 프로젝트 밖으로 공유되는 상태가 된다.
   prometheus-data:
