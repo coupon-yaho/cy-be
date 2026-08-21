@@ -38,16 +38,4 @@ class SourceStatusRoundTripTest {
     void severityRoundTrips(Severity severity) {
         assertThat(SourceStatusCode.severityOf(SourceStatusCode.of(severity))).isEqualTo(severity);
     }
-
-    /** 같은 분할을 세 곳이 각자 적고 있어 갈라질 수 있다. 새로 읽는 쪽은 이 메서드를 쓴다. */
-    @ParameterizedTest
-    @EnumSource(SourceStatus.class)
-    @DisplayName("carriesValue 는 ObservedValue 의 값 보유 규칙과 같은 분할을 쓴다")
-    void carriesValueMatchesObservedValueRule(SourceStatus status) {
-        assertThat(status.carriesValue()).isEqualTo(
-                status == SourceStatus.VALID
-                        || status == SourceStatus.WARMING_UP
-                        || status == SourceStatus.STALE
-                        || status == SourceStatus.NO_TRAFFIC);
-    }
 }

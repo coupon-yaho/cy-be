@@ -42,7 +42,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("표본이 하나도 없으면 모든 값이 PENDING 이고 0을 만들지 않는다")
     void emptySamplesYieldPending() {
-        AdminMetricsResponse response = assemble(FakePromQueryClient.empty(), globalQuery());
+        AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
 
         assertThat(response.traffic().issueAttemptRps().state()).isEqualTo(SourceStatus.PENDING);
         assertThat(response.traffic().issueAttemptRps().value()).isNull();
@@ -57,7 +57,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("질의가 실패하면 예외가 아니라 UNAVAILABLE 로 나간다")
     void queryFailureBecomesUnavailable() {
-        AdminMetricsResponse response = assemble(FakePromQueryClient.down(), globalQuery());
+        AdminMetricsResponse response = assemble(FakePromQuery.down(), globalQuery());
 
         assertThat(response.traffic().issueSuccessTps().state()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(response.latency().success().state()).isEqualTo(SourceStatus.UNAVAILABLE);
@@ -72,7 +72,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("신선도 미터가 없으면 값이 있어도 PENDING 이다")
     void unknownObservationTimeYieldsPending() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "rate(", List.of(rate("issue", "success", 40d, "api-1")),
                 "app_consistency_gap_state", List.of(gap("lua", 3d), gapState("lua", SourceStatus.VALID))));
 
@@ -88,7 +88,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("셀렉터로 묶어 응답 한 장에 질의를 네 번만 보낸다")
     void usesSelectorsToLimitQueries() {
-        FakePromQueryClient client = FakePromQueryClient.empty();
+        FakePromQuery client = FakePromQuery.empty();
         assemble(client, globalQuery());
 
         assertThat(client.queries()).hasSize(4);
@@ -103,8 +103,8 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("window 를 바꿔도 백분위 질의는 그대로다")
     void windowDoesNotReachPercentileQuery() {
-        FakePromQueryClient oneMinute = FakePromQueryClient.empty();
-        FakePromQueryClient fifteen = FakePromQueryClient.empty();
+        FakePromQuery oneMinute = FakePromQuery.empty();
+        FakePromQuery fifteen = FakePromQuery.empty();
         assemble(oneMinute, globalQuery());
         assemble(fifteen, new MetricsQuery(MetricsWindow.FIFTEEN_MINUTES, null, null));
 
@@ -118,7 +118,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("결과 rate 는 uri 그룹으로 쪼갠 뒤 인스턴스를 합산한다")
     void resultRatesSumAcrossInstances() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "rate(", List.of(
                         rate("issue", "success", 40d, "api-1"),
                         rate("issue", "success", 60d, "api-2"),
@@ -143,7 +143,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("그룹 전체 rate 가 0이면 NO_TRAFFIC 으로 나간다")
     void zeroTotalRateIsNoTraffic() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "rate(", List.of(rate("issue", "success", 0d, "api-1")),
                 "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
 
@@ -160,7 +160,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("트래픽이 있는데 하위 분류만 0이면 NO_TRAFFIC 이 아니라 VALID 다")
     void zeroSubclassWithTrafficIsValid() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "rate(", List.of(
                         rate("issue", "success", 5000d, "api-1"),
                         rate("issue", "application_failure", 0d, "api-1")),
@@ -177,7 +177,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("마지막 스크레이프가 오래되면 값을 싣되 STALE 로 내려보낸다")
     void oldScrapeIsStale() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "rate(", List.of(rate("issue", "success", 40d, "api-1")),
                 "timestamp(", List.of(age(STALE_AGE_SECONDS))));
 
@@ -194,7 +194,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("백분위는 인스턴스 최댓값을 쓰고 ms 로 환산한다")
     void percentilesTakeInstanceMax() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "quantile!=", List.of(
                         quantile("0.5", 0.010d, "api-1"),
                         quantile("0.5", 0.020d, "api-2"),
@@ -214,7 +214,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("관측 창이 비어 백분위가 0이면 0ms 가 아니라 PENDING 이다")
     void zeroPercentileIsPendingNotZeroLatency() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "quantile!=", List.of(
                         quantile("0.5", 0d, "api-1"),
                         quantile("0.95", 0d, "api-1"),
@@ -233,7 +233,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("정합성 gap 은 값 미터와 상태 미터를 짝으로 읽는다")
     void consistencyPairsValueAndState() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -269,7 +269,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("상태는 값을 요구하는데 값이 NaN 이면 장애색이 아니라 표시 없음이다")
     void oneTickSkewIsPendingNotUnavailable() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", Double.NaN),
                         gapState("lua", SourceStatus.VALID),
@@ -285,7 +285,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("batch 수집 성공이 오래되면 gap 이 STALE 로 나간다")
     void oldCollectionIsStale() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -304,7 +304,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("SINGLE 규칙이 깨져도 그 값만 UNAVAILABLE 이고 응답은 살아남는다")
     void brokenSingleRuleDoesNotKillTheResponse() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -327,7 +327,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("요청 쿠폰과 batch 가 관측 중인 쿠폰이 다르면 N_A 로 나간다")
     void mismatchedCouponScopeIsNotApplicable() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -349,7 +349,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("phase=live 가 아닌 표본은 정합성 값에 섞이지 않는다")
     void finalPhaseSamplesAreNotMixedIntoLive() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -371,7 +371,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("신선도 미터의 SINGLE 규칙이 깨져도 응답은 살아남는다")
     void brokenFreshnessRuleDoesNotKillTheResponse() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -397,7 +397,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("신선도 질의만 실패하면 PENDING 이 아니라 UNAVAILABLE 이다")
     void freshnessQueryFailureIsUnavailableNotPending() {
-        FakePromQueryClient client = new FakePromQueryClient(promQl -> {
+        FakePromQuery client = new FakePromQuery(promQl -> {
             if (promQl.contains("timestamp(")) {
                 throw new PromQueryException("시험용 장애");
             }
@@ -416,7 +416,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("severity 가 낡았으면 값을 내지 않는다")
     void staleSeverityIsNotReported() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         domain(MetricAggregation.CONSISTENCY_SEVERITY,
                                 live(), SourceStatusCode.of(Severity.NONE)),
@@ -431,7 +431,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("무한대 표본은 값이 아니라 표시 없음으로 처리한다")
     void infiniteSampleIsNotAValue() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", Double.POSITIVE_INFINITY),
                         gapState("lua", SourceStatus.VALID),
@@ -447,7 +447,7 @@ class PromMetricsAssemblerTest {
     @Test
     @DisplayName("COUPON 범위인데 관측 회차를 모르면 N_A 다")
     void unknownObservedCouponIsNotApplicable() {
-        FakePromQueryClient client = respond(Map.of(
+        FakePromQuery client = respond(Map.of(
                 "app_consistency_gap_state", List.of(
                         gap("lua", 3d),
                         gapState("lua", SourceStatus.VALID),
@@ -461,7 +461,7 @@ class PromMetricsAssemblerTest {
 
     // ── 도우미 ─────────────────────────────────────────────────────────────────
 
-    private static AdminMetricsResponse assemble(PromQueryClient client, MetricsQuery query) {
+    private static AdminMetricsResponse assemble(PromQuery client, MetricsQuery query) {
         return new PromMetricsAssembler(client, FIXED_TIME, STALE_AFTER).assemble(query);
     }
 
@@ -469,17 +469,17 @@ class PromMetricsAssemblerTest {
         return new MetricsQuery(MetricsWindow.ONE_MINUTE, null, null);
     }
 
-    private static String percentileQuery(FakePromQueryClient client) {
+    private static String percentileQuery(FakePromQuery client) {
         return client.queries().stream().filter(q -> q.contains("quantile!=")).findFirst().orElseThrow();
     }
 
-    private static String rateQuery(FakePromQueryClient client) {
+    private static String rateQuery(FakePromQuery client) {
         return client.queries().stream().filter(q -> q.startsWith("rate(")).findFirst().orElseThrow();
     }
 
     /** 질의 문자열에 포함된 조각으로 응답을 고르는 fake 를 만듭니다. */
-    private static FakePromQueryClient respond(Map<String, List<PromSample>> byQueryFragment) {
-        return new FakePromQueryClient(promQl -> {
+    private static FakePromQuery respond(Map<String, List<PromSample>> byQueryFragment) {
+        return new FakePromQuery(promQl -> {
             List<PromSample> matched = new ArrayList<>();
             byQueryFragment.forEach((fragment, samples) -> {
                 if (promQl.contains(fragment)) {

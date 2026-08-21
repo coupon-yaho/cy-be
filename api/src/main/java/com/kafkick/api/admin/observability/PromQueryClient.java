@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -24,7 +25,7 @@ import tools.jackson.databind.JsonNode;
  * <p>실패는 예외로 나갑니다. HTTP 500 으로 번역하지 말고 조립하는 쪽이 잡아 해당 값만
  * {@code UNAVAILABLE} 로 내려보냅니다.</p>
  */
-public class PromQueryClient {
+public class PromQueryClient implements PromQuery {
 
     private static final Logger log = LoggerFactory.getLogger(PromQueryClient.class);
 
@@ -34,7 +35,7 @@ public class PromQueryClient {
     private final RestClient restClient;
 
     public PromQueryClient(RestClient restClient) {
-        this.restClient = restClient;
+        this.restClient = Objects.requireNonNull(restClient, "restClient");
     }
 
     /**
@@ -44,6 +45,7 @@ public class PromQueryClient {
      * @return 벡터 결과의 표본 목록; 일치하는 시계열이 없으면 빈 목록
      * @throws PromQueryException 호출이 실패했거나 Prometheus 가 success 가 아닌 상태를 돌려준 경우
      */
+    @Override
     public List<PromSample> query(String promQl) {
         JsonNode body;
         try {

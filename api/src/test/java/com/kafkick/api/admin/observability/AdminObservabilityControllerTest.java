@@ -26,7 +26,7 @@ class AdminObservabilityControllerTest {
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
             new AdminObservabilityController(
-                    new PromMetricsAssembler(FakePromQueryClient.empty(), FIXED_TIME, STALE_AFTER)));
+                    new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER)));
 
     /** 유효한 집계 구간과 단일 관측 범위가 바인딩된 뒤 값마다 상태가 붙은 스냅샷이 나가는지 검증합니다. */
     @Test
@@ -58,7 +58,7 @@ class AdminObservabilityControllerTest {
     void metricsSurviveDownstreamFailure() throws Exception {
         MockMvc failing = AdminControllerContractTestSupport.mockMvc(
                 new AdminObservabilityController(
-                        new PromMetricsAssembler(FakePromQueryClient.down(), FIXED_TIME, STALE_AFTER)));
+                        new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER)));
 
         failing.perform(get("/api/v1/admin/metrics").param("window", "1m"))
                 .andExpect(status().isOk())

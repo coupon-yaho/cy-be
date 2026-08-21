@@ -77,11 +77,11 @@ public class PromMetricsAssembler {
     private static final String Q_P95 = "0.95";
     private static final String Q_P99 = "0.99";
 
-    private final PromQueryClient client;
+    private final PromQuery client;
     private final TimeProvider timeProvider;
     private final Duration staleAfter;
 
-    public PromMetricsAssembler(PromQueryClient client, TimeProvider timeProvider, Duration staleAfter) {
+    public PromMetricsAssembler(PromQuery client, TimeProvider timeProvider, Duration staleAfter) {
         this.client = Objects.requireNonNull(client, "client");
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.staleAfter = Objects.requireNonNull(staleAfter, "staleAfter");
