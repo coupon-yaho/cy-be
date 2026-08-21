@@ -211,15 +211,18 @@ class BatchJobRepositoryTest {
                             + "돌연변이가 여기를 통과한다")
                     .isEqualTo(BatchStatus.COMPLETED);
             assertThat(outcomes).filteredOn(Throwable.class::isInstance)
-                    .as("**진 쪽이 받는 타입은 인터리빙에 따라 둘로 갈린다.** 인스턴스 생성이 "
-                            + "READ COMMITTED 라 진 쪽의 SELECT 가 안 막히므로, 상대가 아직 "
+                    .as("**진 쪽이 받는 타입은 인터리빙에 따라 셋으로 갈린다.** 인스턴스 생성이 "
+                            + "READ COMMITTED 라 진 쪽의 SELECT 가 안 막힌다 — 상대가 아직 "
                             + "커밋 전이면 INSERT 까지 가서 1062(DuplicateKey), 이미 커밋했으면 "
-                            + "그 앞의 Assert.state 에서 IllegalState 다. 둘 다 '중복 방지가 "
-                            + "일했다' 이고 ExpireScheduler 가 둘 다 INFO 로 받는다.\n"
-                            + "격리를 기본값(SERIALIZABLE)으로 되돌리면 gap 락 데드락이라 "
-                            + "DeadlockLoser 가 오고, 그것은 ERROR 로 나간다 — 그래서 배제한다")
+                            + "그 앞의 Assert.state 에서 IllegalState, **잡까지 끝냈으면** "
+                            + "바깥에서 JobInstanceAlreadyComplete 다. 이 픽스처는 만료 대상이 "
+                            + "0건이라 잡이 수 ms 에 끝나므로 느린 CI 에서 셋째가 실제로 나온다.\n"
+                            + "셋 다 '중복 방지가 일했다' 이고 ExpireScheduler 가 전부 INFO 로 "
+                            + "받는다. 격리를 기본값(SERIALIZABLE)으로 되돌리면 gap 락 데드락이라 "
+                            + "DeadlockLoser 가 오고 그것만 ERROR 로 나간다 — 그래서 배제한다")
                     .singleElement()
-                    .isInstanceOfAny(DuplicateKeyException.class, IllegalStateException.class)
+                    .isInstanceOfAny(DuplicateKeyException.class, IllegalStateException.class,
+                            JobInstanceAlreadyCompleteException.class)
                     .isNotInstanceOf(DeadlockLoserDataAccessException.class);
             assertThat(rowCount("BATCH_JOB_INSTANCE"))
                     .as("**막았다는 사실이 DB 에 하나로 남아야 한다.** JOB_INST_UN 을 지우면 "
