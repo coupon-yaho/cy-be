@@ -32,6 +32,10 @@ public class PromQueryClient implements PromQuery {
     private static final String QUERY_PATH = "/api/v1/query";
     private static final String NAME_LABEL = "__name__";
 
+    /** Prometheus JSON 의 무한대 표기. 자바는 "Infinity" 만 받아 그대로 파싱하면 예외가 난다. */
+    private static final String POSITIVE_INFINITY = "+Inf";
+    private static final String NEGATIVE_INFINITY = "-Inf";
+
     private final RestClient restClient;
 
     public PromQueryClient(RestClient restClient) {
@@ -58,10 +62,6 @@ public class PromQueryClient implements PromQuery {
         }
         return parse(body, promQl);
     }
-
-    /** Prometheus JSON 의 무한대 표기. 자바는 "Infinity" 만 받아 그대로 파싱하면 예외가 난다. */
-    private static final String POSITIVE_INFINITY = "+Inf";
-    private static final String NEGATIVE_INFINITY = "-Inf";
 
     private static List<PromSample> parse(JsonNode body, String promQl) {
         if (body == null) {
