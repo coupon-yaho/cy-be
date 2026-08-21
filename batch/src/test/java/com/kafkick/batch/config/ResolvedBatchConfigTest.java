@@ -10,6 +10,8 @@ import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.storage.db.config.HermeticBoot;
 import com.kafkick.storage.db.config.ResolvedConfigChecks;
 import java.io.IOException;
+import java.time.Clock;
+import java.time.ZoneId;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -326,4 +328,37 @@ class ResolvedBatchConfigTest {
                     .isEqualTo(EXPECTED_VALUE_KEYS);
         }
     }
+
+    /**
+     * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
+     * JVM 기본 타임존으로 크론을 풀고, {@code CronSlot} 은 {@code TimeProvider}
+     * ({@code Clock.systemUTC})가 준 값으로 푼다. 개발 기기가 KST 면 그 둘이 9시간 어긋난다.
+     *
+     * <p>지금 기본값 {@code 0 *}{@code /5 * * * *} 에서만 우연히 안 드러난다 — 실존하는 오프셋이
+     * 전부 15분 배수라 UTC 로 옮겨도 5분 슬롯 위에 떨어진다. <b>시(hour) 필드가 들어가는 순간
+     * 깨지고</b>, 그때 {@code asOf} 가 몇 시간 과거가 되는데 {@code asOf <= now} 는 계속
+     * 성립하므로 가드도 안 울린다.
+     */
+    @Test
+    @DisplayName("스케줄러의 존이 앱 시계의 존과 같다")
+    void schedulerZoneMatchesTheApplicationClock() throws Exception {
+        try (ConfigurableApplicationContext context = HermeticBoot.run(
+                LOCATION, "--spring.main.web-application-type=none")) {
+            // 상수가 아니라 **실제로 붙은 애너테이션**을 읽는다. 상수를 보면 그것을
+            // @Scheduled 에 안 쓰는 리팩터를 못 잡는다.
+            Scheduled scheduled = ExpireScheduler.class
+                    .getDeclaredMethod("expire")
+                    .getAnnotation(Scheduled.class);
+            String zone = context.getEnvironment().resolvePlaceholders(scheduled.zone());
+
+            // normalized() 로 견준다 — ZoneId.of("UTC") 와 systemUTC 의 "Z" 는 같은 시각인데
+            // 객체가 달라 equals 가 false 다. 여기서 보려는 것은 오프셋이 같은지다.
+            assertThat(ZoneId.of(zone).normalized())
+                    .as("CronSlot 은 systemUTC 의 LocalDateTime 으로 크론을 푼다. "
+                            + "@Scheduled 의 zone 이 다르면 같은 표현식이 두 좌표계에서 평가되고, "
+                            + "asOf 가 그 오프셋만큼 과거가 된다")
+                    .isEqualTo(Clock.systemUTC().getZone().normalized());
+        }
+    }
+
 }

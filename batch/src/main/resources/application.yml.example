@@ -117,6 +117,13 @@ batch:
     enabled: ${BATCH_SCHEDULING_ENABLED:false}
 
   schedule:
+    # ⚠️ 크론을 어느 좌표계로 푸는가. @Scheduled 는 이 값을 안 주면 JVM 기본 타임존을 쓰는데,
+    #    asOf 를 만드는 CronSlot 은 TimeProvider(Clock.systemUTC) 의 값으로 푼다.
+    #    둘이 갈리면 asOf 가 발화 시각보다 그 오프셋만큼 과거가 되고, asOf <= now 는 계속
+    #    성립하므로 EXPIRE_ASOF_IN_FUTURE 가드도 안 울린다 — 조용히 그만큼 밀린다.
+    #    지금 5분 크론에서만 우연히 안 드러난다(오프셋이 15분 배수라 슬롯에 그대로 떨어진다).
+    #    시(hour) 필드가 들어가는 순간 깨진다 — 아래 coupon-create-cron 이 그 모양이다.
+    zone: "UTC"
     expire-cron: "0 */5 * * * *"          # 만료 5분
     verify-incremental-cron: "0 */10 * * * *"  # 증분 검증 10분
     cleanup-cron: "0 0 * * * *"           # 정리 1시간

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -22,12 +23,12 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceEventType;
@@ -107,8 +108,25 @@ class VerifyJobConfigTest {
          * 상속의 장점이 남고, 컴파일 시 보이는 타입은 {@code core} 포트 하나다.
          * {@code ExpirationProxies} 가 같은 자리에서 같은 이유로 쓰는 방식이다.
          */
+        /**
+         * 포트 시그니처를 <b>여기서</b> 고정한다. 이름만 보고 {@code args[1]} 을 캐스팅하면
+         * 인자 순서가 바뀌어도 컴파일이 통과하고 런타임에 {@code ClassCastException} 이 나는데,
+         * 그것은 프록시 밖에서 {@code UndeclaredThrowableException} 으로 감싸져 원인이 안 보인다.
+         * 여기서 잡으면 클래스 로딩 때 죽는다.
+         */
+        private static final Method FIND_STOCK_MISMATCHES = stockMismatchMethod();
+
+        private static Method stockMismatchMethod() {
+            try {
+                return VerificationRuleRepository.class.getMethod(
+                        "findStockMismatches", long.class, LocalDateTime.class, int.class);
+            } catch (NoSuchMethodException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
         @Bean
-        static BeanPostProcessor mutatingRules(JdbcClient jdbc) {
+        static BeanPostProcessor mutatingRules(ObjectProvider<JdbcClient> jdbc) {
             return new BeanPostProcessor() {
                 @Override
                 public Object postProcessAfterInitialization(Object bean, String beanName) {
@@ -125,8 +143,8 @@ class VerifyJobConfigTest {
                                 } catch (InvocationTargetException e) {
                                     throw e.getCause();
                                 }
-                                if ("findStockMismatches".equals(method.getName())) {
-                                    mutateAfterStockRead((LocalDateTime) args[1], jdbc);
+                                if (FIND_STOCK_MISMATCHES.equals(method)) {
+                                    mutateAfterStockRead((LocalDateTime) args[1], jdbc.getObject());
                                 }
                                 return result;
                             });

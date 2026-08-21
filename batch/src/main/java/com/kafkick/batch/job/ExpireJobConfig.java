@@ -194,8 +194,11 @@ public class ExpireJobConfig {
                     // asOf 는 "만료 여부를 가르는 컷" 이다. 미래로 주면 기한이 남은 ISSUED 가
                     // 전부 컷 안에 들어와 정상 완료로 넘어가는데, EXPIRED 는 종단 상태라
                     // 되돌릴 전이가 없다. 파라미터 검증기는 키 존재만 보므로 여기서 자른다.
-                    // 스케줄러가 주는 값은 now 를 분 단위로 자른 것이라 항상 과거다.
-                    if (asOf.isAfter(committedAt)) {
+                    // 스케줄러가 주는 값은 now 이하의 크론 슬롯이라 여기 안 걸린다. 다만
+                    // 발화가 슬롯 직전에 깨어나는 경우를 CronSlot 이 관용하므로 몇 초 미래일
+                    // 수 있다 — 그 폭(CronSlot.EARLY_FIRE_TOLERANCE)만 열어 둔다.
+                    // 진짜로 막아야 하는 것은 손으로 친 값이다.
+                    if (asOf.isAfter(committedAt.plusSeconds(2))) {
                         throw new BusinessException(
                                 ExpirationErrorCode.EXPIRE_ASOF_IN_FUTURE,
                                 "asOf 가 현재보다 미래입니다. 기한이 남은 발급건까지 만료되고 "

@@ -93,8 +93,11 @@ class ExpireGuardTest {
         seed.overwriteStock(1);
 
         // 시계를 고정했으니 "미래" 가 실행 날짜와 무관하다. 경계 바로 밖을 찍는다 —
-        // plusYears 같은 큰 값은 조건이 isAfter 에서 isAfterOrEqual 로 바뀌어도 통과한다.
-        JobExecution execution = launch(NOW.plusSeconds(1));
+        // plusYears 같은 큰 값은 조건을 한 칸 옮겨도 통과한다.
+        //
+        // 가드는 CronSlot 의 조기 발화 관용 폭(2초)만큼 열려 있다. 그 안은 스케줄러가 실제로
+        // 만들 수 있는 값이라 막으면 정상 주기가 죽는다. 여기서는 그 밖을 찍는다.
+        JobExecution execution = launch(NOW.plusSeconds(3));
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
         assertThat(JobFailures.errorCodesOf(execution))
@@ -108,8 +111,8 @@ class ExpireGuardTest {
     }
 
     /**
-     * <b>경계는 열려 있어야 한다.</b> 스케줄러가 주는 {@code asOf} 는 {@code now} 를 분 단위로
-     * 자른 값이라 같은 순간이 될 수 있다. 그것까지 막으면 정상 주기가 안 돈다.
+     * <b>경계는 열려 있어야 한다.</b> 스케줄러가 주는 {@code asOf} 는 <b>크론 슬롯 시각</b>이라,
+     * 정시에 뜨면 {@code now} 와 같은 순간이 된다. 그것까지 막으면 정상 주기가 안 돈다.
      *
      * <p>위 테스트와 짝이다 — 막는 쪽만 보면 <b>항상 던지는 가드</b>도 통과한다.
      */
@@ -124,6 +127,10 @@ class ExpireGuardTest {
         seed.overwriteStock(1);
 
         assertThat(launch(NOW).getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        assertThat(launch(NOW.plusSeconds(2)).getStatus())
+                .as("조기 발화 관용 폭(CronSlot.EARLY_FIRE_TOLERANCE) 안은 스케줄러가 실제로 "
+                        + "만드는 값이다. 막으면 시계가 조금 흔들린 주기가 통째로 죽는다")
+                .isEqualTo(BatchStatus.COMPLETED);
     }
 
     /**

@@ -32,8 +32,27 @@ import org.springframework.scheduling.support.CronExpression;
  */
 final class CronSlot {
 
-    /** 되짚는 횟수 상한. 매번 두 배로 넓히므로 5분 주기에서 약 5개월 전까지 본다. */
-    private static final int MAX_WIDENING = 16;
+    /**
+     * 되짚는 횟수 상한. 시작 창이 <b>간격 × 2</b> 이고 매번 두 배가 되므로, 5분 주기에서
+     * 마지막 시도의 창은 {@code 10분 × 2^11 ≈ 14일} 이다. 주 단위 크론(평일만, 월요일만)까지
+     * 품는 폭이고, 그보다 드문 크론은 만료 배치의 주기로 쓸 값이 아니다.
+     *
+     * <p>더 넓히지 않는 이유는 <b>비용</b>이다. 못 찾을 때마다 처음부터 다시 걷기 때문에
+     * 마지막 창의 발화 수만큼 {@code next()} 를 부르는데, 그것이 {@code @Scheduled} 스레드
+     * 위에서 돈다 — 풀 크기가 1 이면 그동안 batch 의 모든 스케줄러가 멈춘다.
+     */
+    private static final int MAX_WIDENING = 11;
+
+    /**
+     * <b>슬롯 직전에 깨어난 것을 슬롯 안으로 본다.</b>
+     *
+     * <p>발화 마감은 단조시계({@code System.nanoTime})로 잡히고 {@code now} 는 벽시계로 읽는다.
+     * 기다리는 5분 사이에 벽시계가 뒤로 조정되면 <b>깨어난 순간 벽시계가 슬롯보다 이르다.</b>
+     * 그대로 두면 직전 슬롯을 돌려주는데, 그 인스턴스는 이미 끝났으므로 그 주기가
+     * INFO 한 줄로 사라진다 — 예전 {@code truncatedTo(MINUTES)} 는 이 오차에 관용적이었고
+     * 슬롯 방식은 관용도가 0 이다.
+     */
+    private static final Duration EARLY_FIRE_TOLERANCE = Duration.ofSeconds(2);
 
     private final CronExpression expression;
 
@@ -49,6 +68,11 @@ final class CronSlot {
      * 으로 어림잡고, 못 찾으면 그 폭을 두 배씩 넓힌다.
      */
     LocalDateTime atOrBefore(LocalDateTime now) {
+        LocalDateTime upcoming = expression.next(now);
+        if (upcoming != null
+                && Duration.between(now, upcoming).compareTo(EARLY_FIRE_TOLERANCE) <= 0) {
+            return upcoming;
+        }
         Duration span = estimateSpan(now);
         for (int i = 0; i < MAX_WIDENING; i++) {
             LocalDateTime found = lastFireIn(now.minus(span), now);

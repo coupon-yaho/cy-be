@@ -50,6 +50,23 @@ class ExpireSchedulerReportingTest {
     /** 운영 기본값과 같은 5분 크론. 슬롯 판정이 이 표현식에 달려 있다. */
     private static final String EXPIRE_CRON = "0 */5 * * * *";
 
+    /**
+     * <b>이름만 있는 잡.</b> 예전에는 여기에 {@code null} 을 넘겼는데, 스케줄러가 실패를
+     * 가르려고 {@code expireJob.getName()} 을 쓰기 시작하면서 NPE 가 났다 — 필수 협력자에
+     * {@code null} 을 주면 그 협력자를 쓰는 코드가 생기는 날 엉뚱한 곳에서 터진다.
+     */
+    private static final Job EXPIRE_JOB = new Job() {
+        @Override
+        public String getName() {
+            return "expireJob";
+        }
+
+        @Override
+        public void execute(JobExecution execution) {
+            throw new UnsupportedOperationException("이 테스트는 JobOperator 를 대신 세운다");
+        }
+    };
+
     private ListAppender<ILoggingEvent> logs;
     private ch.qos.logback.classic.Logger schedulerLog;
     private Level originalLevel;
@@ -186,7 +203,8 @@ class ExpireSchedulerReportingTest {
     @DisplayName("같은 슬롯 안에서는 언제 떠도 asOf 가 같다")
     void keepsTheSameAsOfAcrossTheWholeSlot() {
         LocalDateTime early = NOW.withMinute(0).withSecond(1);
-        LocalDateTime late = NOW.withMinute(4).withSecond(59);
+        // 09:04:59 는 안 쓴다 — 다음 슬롯과 1초 차이라 조기 발화 관용 폭에 걸려 09:05 가 된다.
+        LocalDateTime late = NOW.withMinute(4).withSecond(30);
 
         assertThat(asOfAt(early))
                 .as("슬롯 안에서 언제 뜨든 같아야 두 노드가 같은 JobInstance 를 노린다")
@@ -202,8 +220,42 @@ class ExpireSchedulerReportingTest {
         new ExpireScheduler(operator((job, params) -> {
             used[0] = params;
             return execution(BatchStatus.COMPLETED, null);
-        }), null, new TimeProvider(fixed), EXPIRE_CRON).expire();
+        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON).expire();
         return used[0].getLocalDateTime("asOf");
+    }
+
+    /**
+     * <b>{@code IllegalStateException} 은 두 뜻으로 온다.</b> 인스턴스 생성이 READ COMMITTED 라
+     * 진 쪽의 SELECT 가 안 막히고, 상대가 이미 커밋했으면 1062 대신
+     * {@code Assert.state("JobInstance must not already exist")} 로 온다 — 그것은 중복 방지가
+     * 일한 것이라 사건이 아니다.
+     *
+     * <p>그런데 같은 타입이 커넥션 문제 같은 <b>진짜 실패</b>로도 온다. 타입만 보고 INFO 로
+     * 내렸다가 위 "시작하지 못하면 ERROR" 테스트가 그것을 잡았다. 그래서 인스턴스가 정말
+     * 생겼는지 물어서 가른다 — 이 테스트가 그 갈래의 반대쪽이다.
+     */
+    @Test
+    @DisplayName("인스턴스가 이미 있으면 IllegalStateException 도 INFO 다")
+    void treatsLostRaceAsInfo() {
+        JobOperator operator = (JobOperator) Proxy.newProxyInstance(
+                JobOperator.class.getClassLoader(),
+                new Class<?>[] {JobOperator.class},
+                (proxy, method, args) -> {
+                    if ("start".equals(method.getName()) && args.length == 2) {
+                        throw new IllegalStateException("JobInstance must not already exist");
+                    }
+                    if ("getJobInstance".equals(method.getName())) {
+                        // 다른 노드가 이미 만들어 둔 상태
+                        return new JobInstance(1L, "expireJob");
+                    }
+                    throw new UnsupportedOperationException(method.getName());
+                });
+
+        scheduler(operator).expire();
+
+        assertThat(only(Level.INFO))
+                .as("ERROR 로 내보내면 배치를 두 대로 늘리는 순간 하루 288번 울린다")
+                .contains("다른 노드가 같은 asOf 를 이미 시작했습니다");
     }
 
     /** 남은 로그가 정확히 하나이고 기대한 레벨인지 확인한 뒤 본문을 돌려준다. */
@@ -219,7 +271,7 @@ class ExpireSchedulerReportingTest {
     private ExpireScheduler scheduler(JobOperator operator) {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(),
                 ZoneId.systemDefault());
-        return new ExpireScheduler(operator, null, new TimeProvider(fixed), EXPIRE_CRON);
+        return new ExpireScheduler(operator, EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON);
     }
 
     private JobExecution execution(BatchStatus status, Throwable failure) {
@@ -253,6 +305,12 @@ class ExpireSchedulerReportingTest {
                 (proxy, method, args) -> {
                     if ("start".equals(method.getName()) && args.length == 2) {
                         return behavior.start((Job) args[0], (JobParameters) args[1]);
+                    }
+                    if ("getJobInstance".equals(method.getName())) {
+                        // 스케줄러가 IllegalStateException 을 "중복 방지가 일한 것" 과
+                        // "진짜 실패" 로 가를 때 이것을 묻는다. 여기서는 아무도 인스턴스를
+                        // 안 만들었으므로 없다 — 즉 진짜 실패 쪽이다.
+                        return null;
                     }
                     throw new UnsupportedOperationException(method.getName());
                 });

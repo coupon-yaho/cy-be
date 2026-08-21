@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
+import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException;
 import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
@@ -65,6 +66,28 @@ public class ExpireScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(ExpireScheduler.class);
 
+    /**
+     * <b>{@code @Scheduled} 와 생성자가 같은 문자열을 읽어야 한다.</b> 둘이 갈리면 트리거는
+     * A 크론으로 발화하는데 {@code CronSlot} 은 B 크론 슬롯을 계산해, 노드마다 다른
+     * {@code asOf} 가 나오고 중복 방지가 아예 발동하지 않는다. 리터럴을 두 곳에 적어 두면
+     * 한쪽만 고치는 실수를 아무것도 안 막으므로 상수로 묶는다({@code @Scheduled} 는 컴파일
+     * 상수만 받는다).
+     */
+    static final String CRON = "${batch.schedule.expire-cron:0 */5 * * * *}";
+
+    /**
+     * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
+     * <b>JVM 기본 타임존</b>으로 크론을 풀고, {@code CronSlot} 은 {@code TimeProvider}
+     * ({@code Clock.systemUTC})가 준 값으로 푼다. 개발 기기가 KST 면 그 둘이 9시간 어긋난다.
+     *
+     * <p>지금 기본값 {@code 0 *}{@code /5 * * * *} 에서만 우연히 안 드러난다 — 실존하는 오프셋이
+     * 전부 15분 배수라 UTC 로 옮겨도 5분 슬롯 위에 그대로 떨어지기 때문이다.
+     * <b>시(hour) 필드가 들어가는 순간 깨진다</b>({@code coupon-create-cron} 이 이미 그 모양이다).
+     * 그때 {@code asOf} 가 발화 시각보다 몇 시간 과거가 되고, {@code asOf <= now} 는 계속
+     * 성립하므로 {@code EXPIRE_ASOF_IN_FUTURE} 가드도 안 울린다 — <b>조용히 그만큼 밀린다.</b>
+     */
+    static final String ZONE = "${batch.schedule.zone:UTC}";
+
     private final JobOperator jobOperator;
     private final Job expireJob;
     private final TimeProvider timeProvider;
@@ -78,11 +101,19 @@ public class ExpireScheduler {
     public ExpireScheduler(JobOperator jobOperator,
             @Qualifier("expireJob") Job expireJob,
             TimeProvider timeProvider,
-            @Value("${batch.schedule.expire-cron:0 */5 * * * *}") String expireCron) {
+            @Value(CRON) String expireCron) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
-        // @Scheduled 와 같은 표현식을 읽는다. 둘이 갈리면 asOf 가 슬롯을 안 가리킨다.
+        if (Scheduled.CRON_DISABLED.equals(expireCron)) {
+            // @Scheduled 는 "-" 를 "이 트리거를 끈다" 로 받지만 CronSlot 은 asOf 를 못 만든다.
+            // 그대로 두면 CronExpression.parse 가 던져 batch 앱 전체가 기동에 실패하고,
+            // verifyJob 까지 같이 못 뜬다. 무엇을 써야 하는지 여기서 말한다.
+            throw new IllegalArgumentException(
+                    "만료를 끄려면 batch.scheduling.enabled=false 를 쓰십시오. "
+                            + "batch.schedule.expire-cron 의 \"-\" 는 트리거만 끄고 "
+                            + "asOf 를 만들 근거가 사라집니다.");
+        }
         this.cronSlot = new CronSlot(expireCron);
         this.expireCron = expireCron;
     }
@@ -138,7 +169,7 @@ public class ExpireScheduler {
      * <p>알림 경로가 붙는 티켓이 이 자리를 쓴다 — 멘토가 말한 <i>"사람이 어떻게 알 수 있느냐"</i>
      * 가 여기고, 그때 필요한 것은 <b>레벨이 이미 갈려 있는 로그</b>다.
      */
-    @Scheduled(cron = "${batch.schedule.expire-cron:0 */5 * * * *}")
+    @Scheduled(cron = CRON, zone = ZONE)
     public void expire() {
         LocalDateTime now = timeProvider.now();
         LocalDateTime asOf = cronSlot.atOrBefore(now);
@@ -149,10 +180,11 @@ public class ExpireScheduler {
                     expireCron, now);
             return;
         }
+        JobParameters parameters = new JobParametersBuilder()
+                .addLocalDateTime("asOf", asOf)
+                .toJobParameters();
         try {
-            JobExecution execution = jobOperator.start(expireJob, new JobParametersBuilder()
-                    .addLocalDateTime("asOf", asOf)
-                    .toJobParameters());
+            JobExecution execution = jobOperator.start(expireJob, parameters);
             BatchStatus status = execution.getStatus();
             if (status.isRunning()) {
                 // 동기 전제가 깨졌다. 크론의 겹침 방지가 사라진 상태라, 다음 주기가
@@ -172,6 +204,20 @@ public class ExpireScheduler {
             log.warn("앞 실행이 아직 돌고 있어 이번 주기를 건너뜁니다. asOf={}", asOf);
         } catch (JobInstanceAlreadyCompleteException e) {
             log.info("이미 끝난 asOf 라 건너뜁니다. asOf={}", asOf);
+        } catch (IllegalStateException e) {
+            // JdbcJobInstanceDao.createJobInstance 의 Assert.state("JobInstance must not already
+            // exist"). 인스턴스 생성이 READ COMMITTED 라 진 쪽의 SELECT 가 안 막히고, 상대가
+            // 이미 커밋했으면 1062 대신 여기로 온다 — 노드가 둘이면 프로세스 간 지연이 커서
+            // 오히려 이쪽이 흔하다.
+            //
+            // 다만 IllegalStateException 은 이 잡 밖에서도 온다(커넥션이 안 붙는 경우 등).
+            // 타입만 보고 INFO 로 내리면 진짜 실패를 삼킨다 — 실제로 그렇게 만들었다가
+            // "시작하지 못하면 ERROR" 테스트가 잡았다. 인스턴스가 정말 생겼는지 물어서 가른다.
+            if (jobOperator.getJobInstance(expireJob.getName(), parameters) != null) {
+                log.info("다른 노드가 같은 asOf 를 이미 시작했습니다. asOf={}", asOf);
+            } else {
+                log.error("만료 배치를 시작하지 못했습니다. asOf={}", asOf, e);
+            }
         } catch (DuplicateKeyException e) {
             // 다른 노드가 같은 asOf 로 먼저 JOB_INST_UN 을 잡았다. 중복 방지가 제 일을 한 것이라
             // 사건이 아니다 — ERROR 로 내보내면 배치를 두 대로 늘리는 순간 하루 288번 울린다.
