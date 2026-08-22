@@ -12,12 +12,18 @@ import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.ReleaseStage;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.ErrorCode;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import com.kafkick.api.observation.ApiObservationAutoConfiguration;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -494,7 +500,9 @@ class IssuanceObservationSessionTest {
         assertThat(output).contains("WARN");
         assertThat(output).contains("requestId=request-1");
         assertThat(output).contains("eventType=ISSUE_ATTEMPT");
-        assertThat(output).contains("IllegalStateException: recorder unavailable");
+        // 예외 메시지는 싣지 않는다 — EventRecorder 구현이 무엇을 담을지 이쪽이 통제하지 못한다.
+        assertThat(output).contains("cause=IllegalStateException");
+        assertThat(output).doesNotContain("recorder unavailable");
     }
 
     @Test
@@ -522,6 +530,7 @@ class IssuanceObservationSessionTest {
                     throw new IllegalStateException("recorder unavailable");
                 },
                 TIME_PROVIDER,
+                Duration.ofSeconds(10),
                 nanos::get
         );
 
@@ -552,6 +561,7 @@ class IssuanceObservationSessionTest {
                     throw new IllegalStateException("recorder unavailable");
                 },
                 TIME_PROVIDER,
+                Duration.ofSeconds(10),
                 () -> 0L
         );
 
@@ -583,6 +593,40 @@ class IssuanceObservationSessionTest {
         assertThatThrownBy(() -> service.recordIssueAttempt(null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("context");
+    }
+
+    @Nested
+    @DisplayName("실패 로그 간격 설정 바인딩")
+    class LogIntervalBinding {
+
+        private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(ApiObservationAutoConfiguration.class));
+
+        @Test
+        void bindsIntervalFromConfiguration() {
+            contextRunner
+                    .withPropertyValues("observation.issuance.attempt-failure-log-interval=1s")
+                    .run(context -> assertThat(context.getBean(IssuanceObservationService.class)
+                            .attemptFailureLogInterval()).isEqualTo(Duration.ofSeconds(1)));
+        }
+
+        @Test
+        void usesTenSecondsWhenPropertyIsAbsent() {
+            contextRunner.run(context -> assertThat(
+                    context.getBean(IssuanceObservationService.class).attemptFailureLogInterval())
+                    .isEqualTo(Duration.ofSeconds(10)));
+        }
+
+        @Test
+        void rejectsNonPositiveInterval() {
+            contextRunner
+                    .withPropertyValues("observation.issuance.attempt-failure-log-interval=0s")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(context.getStartupFailure())
+                                .hasRootCauseInstanceOf(IllegalArgumentException.class);
+                    });
+        }
     }
 
     private static IssuanceObservationSession session(List<IssuanceFlowEvent> recordedEvents) {

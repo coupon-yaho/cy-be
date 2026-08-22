@@ -20,7 +20,7 @@ import org.springframework.context.annotation.Bean;
 import java.time.Clock;
 
 @AutoConfiguration
-@EnableConfigurationProperties(ConsistencySeverityProperties.class)
+@EnableConfigurationProperties({ConsistencySeverityProperties.class, ObservationIssuanceProperties.class})
 public class ApiObservationAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(ApiObservationAutoConfiguration.class);
@@ -86,6 +86,7 @@ public class ApiObservationAutoConfiguration {
      * @param eventFactory 발급 관측 이벤트 생성기
      * @param eventRecorder 완성된 이벤트를 전달할 기록 포트
      * @param timeProvider 결과 발생 시각을 제공하는 시간 공급자
+     * @param issuanceProperties 기록 실패 로그의 유량 제한 간격 등 발급 관측 운영 임계치
      * @return 발급 관측 Session 생성 서비스
      */
     @Bean
@@ -93,9 +94,15 @@ public class ApiObservationAutoConfiguration {
     public IssuanceObservationService issuanceObservationService(
             IssuanceFlowEventFactory eventFactory,
             EventRecorder eventRecorder,
-            TimeProvider timeProvider
+            TimeProvider timeProvider,
+            ObservationIssuanceProperties issuanceProperties
     ) {
-        return new IssuanceObservationService(eventFactory, eventRecorder, timeProvider);
+        return new IssuanceObservationService(
+                eventFactory,
+                eventRecorder,
+                timeProvider,
+                issuanceProperties.resolvedAttemptFailureLogInterval()
+        );
     }
 
     @Bean

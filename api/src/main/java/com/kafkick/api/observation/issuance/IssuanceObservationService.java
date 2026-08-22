@@ -8,8 +8,8 @@ import com.kafkick.core.support.TimeProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
@@ -26,12 +26,14 @@ public final class IssuanceObservationService {
 
     private static final Logger log = LoggerFactory.getLogger(IssuanceObservationService.class);
 
-    private static final long LOG_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
+    /** 설정이 없을 때 쓰는 기본 간격. 값의 근거는 {@link #logFailureAtMostOncePerInterval} 참고. */
+    public static final Duration DEFAULT_LOG_INTERVAL = Duration.ofSeconds(10);
 
     private final IssuanceFlowEventFactory eventFactory;
     private final EventRecorder eventRecorder;
     private final TimeProvider timeProvider;
     private final LongSupplier timeSource;
+    private final Duration logInterval;
     private final AtomicLong attemptFailures = new AtomicLong();
     private final AtomicLong nextFailureLogAtNanos;
 
@@ -40,7 +42,24 @@ public final class IssuanceObservationService {
             EventRecorder eventRecorder,
             TimeProvider timeProvider
     ) {
-        this(eventFactory, eventRecorder, timeProvider, System::nanoTime);
+        this(eventFactory, eventRecorder, timeProvider, DEFAULT_LOG_INTERVAL);
+    }
+
+    /**
+     * 기록 실패 로그의 유량 제한 간격을 외부 설정에서 받는 생성자입니다.
+     *
+     * <p>부하 회차 중에는 로그가 측정을 오염시키지 않는 선까지 간격을 늘려야 하고, 디버깅
+     * 중에는 줄여야 합니다. 코드에 박아 두면 그때마다 재기동이 필요합니다.
+     *
+     * @param logInterval 같은 실패를 다시 로그로 남기기까지의 최소 간격
+     */
+    public IssuanceObservationService(
+            IssuanceFlowEventFactory eventFactory,
+            EventRecorder eventRecorder,
+            TimeProvider timeProvider,
+            Duration logInterval
+    ) {
+        this(eventFactory, eventRecorder, timeProvider, logInterval, System::nanoTime);
     }
 
     /** 유량 제한 간격을 검증할 수 있게 단조 시계를 주입받는 생성자입니다. */
@@ -48,11 +67,13 @@ public final class IssuanceObservationService {
             IssuanceFlowEventFactory eventFactory,
             EventRecorder eventRecorder,
             TimeProvider timeProvider,
+            Duration logInterval,
             LongSupplier timeSource
     ) {
         this.eventFactory = Objects.requireNonNull(eventFactory, "eventFactory");
         this.eventRecorder = Objects.requireNonNull(eventRecorder, "eventRecorder");
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
+        this.logInterval = requirePositive(logInterval);
         this.timeSource = Objects.requireNonNull(timeSource, "timeSource");
         this.nextFailureLogAtNanos = new AtomicLong(timeSource.getAsLong());
     }
@@ -118,8 +139,21 @@ public final class IssuanceObservationService {
         }
     }
 
+    /** 설정으로 들어온 간격을 확인할 수 있게 노출합니다. */
+    Duration attemptFailureLogInterval() {
+        return logInterval;
+    }
+
+    private static Duration requirePositive(Duration logInterval) {
+        Objects.requireNonNull(logInterval, "logInterval");
+        if (logInterval.isZero() || logInterval.isNegative()) {
+            throw new IllegalArgumentException("logInterval은 양수여야 합니다.");
+        }
+        return logInterval;
+    }
+
     /**
-     * attempt 기록 실패를 최대 10초에 한 번만 남깁니다.
+     * attempt 기록 실패를 설정된 간격에 한 번만 남깁니다.
      *
      * <p>레벨을 {@code warn}으로 둔 이유는 attempt 가 무트래픽과 발급 중단을 가르는 값이라
      * 전량 소실이 화면에서 0과 구분되지 않기 때문입니다({@code recordAdmitted}가 {@code debug}인
@@ -128,8 +162,9 @@ public final class IssuanceObservationService {
      * 스레드를 붙잡아 측정 자체를 오염시킵니다. {@code AttemptFailureCounter}가 같은 이유로
      * 같은 간격을 씁니다.
      *
-     * <p>스택트레이스를 넘기지 않습니다. 포맷 비용을 요청 스레드가 뭅니다.
-     * 누적 건수를 함께 실어 조인 만큼이 침묵으로 남지 않게 합니다.
+     * <p>스택트레이스도 예외 메시지도 넘기지 않습니다. 포맷 비용을 요청 스레드가 물고,
+     * {@link EventRecorder} 구현이 메시지에 무엇을 담을지 이 클래스가 통제하지 못합니다.
+     * 남기는 것은 예외 타입 이름뿐이며, 누적 건수를 함께 실어 조인 만큼이 침묵으로 남지 않게 합니다.
      */
     private void logFailureAtMostOncePerInterval(
             IssuanceFlowEvent.Ctx context,
@@ -139,7 +174,7 @@ public final class IssuanceObservationService {
         long now = timeSource.getAsLong();
         long due = nextFailureLogAtNanos.get();
         // 실패가 몰릴 때 이 자리에 락을 두면 그 락이 발급 경로의 병목이 된다.
-        if (now - due < 0 || !nextFailureLogAtNanos.compareAndSet(due, now + LOG_INTERVAL_NANOS)) {
+        if (now - due < 0 || !nextFailureLogAtNanos.compareAndSet(due, now + logInterval.toNanos())) {
             return;
         }
         log.warn(
@@ -148,7 +183,7 @@ public final class IssuanceObservationService {
                 total,
                 context.requestId(),
                 EventType.ISSUE_ATTEMPT,
-                exception.toString()
+                exception.getClass().getSimpleName()
         );
     }
 
