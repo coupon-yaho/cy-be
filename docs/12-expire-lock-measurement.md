@@ -74,9 +74,11 @@ UPDATE issuances SET status = 'EXPIRED', updated_at = :committedAt
 > **지금 문장은 술어가 둘 더 있다.** `AND updated_at <= :committedAt`(캡처 창)과
 > `AND coupon_id NOT IN (:blockedCoupons)`(회차 격리, CY-347)이다. 아래 수치는 **그 둘이
 > 붙기 전에** 잰 값이고, 여기 적힌 결론(V11 을 고르느냐가 락과 스캔을 가른다)은 그대로다 —
-> 술어가 붙어도 실행계획이 안 바뀌는 것은 `ExpirationLockScopeTest` 의
-> `keepsScanBoundedWhenExclusionFiltersCandidates` 가 지킨다. 제외 판정 질의
-> (`BLOCKED_COUPONS`)는 `keepsBlockedCouponScanProportionalToPending` 이 따로 잰다.
+> 술어가 붙어도 **훑는 양이 상한 안이라는 것**은 `ExpirationLockScopeTest` 의
+> `keepsScanBoundedWhenExclusionFiltersCandidates` 가 지킨다 — 재는 것은
+> `Handler_read_*` 로 센 **읽은 행 수**이지 실행계획 자체가 아니다. 계획을 바꾸는 변경이
+> 읽은 행을 안 늘리면 그 테스트는 통과한다. 제외 판정 질의(`BLOCKED_COUPONS`)는
+> `keepsBlockedCouponScanProportionalToPending` 이 같은 축으로 따로 잰다.
 > **절대 수치 재측정은 300만 건 적재 후다**(`docs/13` §1 "남은 것").
 
 `status`·`expires_at` 에 인덱스가 없으니 PK 를 id 순으로 훑는다. 그러면서 **지나간 행을 잠근다.**

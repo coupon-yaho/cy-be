@@ -219,6 +219,10 @@ class ExpireMetricExposureTest {
                 .as("여기서 2.0 이 나오면 파라미터 오타가 누락 critical 로 나간다는 뜻이다")
                 .isNaN();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isNaN();
+        assertThat(metric(body, "cy_expire_blocked_pending"))
+                .as("넷을 한 스냅샷으로 묶은 것이 여기서 뜻을 갖는다 — 하나만 살아남으면 "
+                        + "서로 다른 실행의 값이 섞인 샘플이 된다")
+                .isNaN();
         assertThat(metric(body, "cy_expire_blocked_coupons")).isNaN();
     }
 
@@ -253,6 +257,7 @@ class ExpireMetricExposureTest {
         assertThat(metric(body, "cy_expire_unexplained_pending"))
                 .as("여기서 2.0 이 나오면 접속 설정 사고가 '서버를 봐라' critical 로 나간다")
                 .isNaN();
+        assertThat(metric(body, "cy_expire_blocked_pending")).isNaN();
         assertThat(metric(body, "cy_expire_blocked_coupons"))
                 .as("Step 을 시작도 못 했으니 막힌 회차를 **모른다**. 0 은 '없다' 라 거짓말이다")
                 .isNaN();
