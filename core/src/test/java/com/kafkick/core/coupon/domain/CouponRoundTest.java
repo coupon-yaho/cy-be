@@ -1,4 +1,3 @@
-// 쿠폰 템플릿 스냅샷과 최초 재고 불변식을 검증합니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
@@ -17,6 +16,7 @@ import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+// 쿠폰 템플릿 스냅샷, 예약 구간과 최초 재고 불변식을 검증합니다.
 class CouponRoundTest {
 
     @Test
@@ -75,6 +75,92 @@ class CouponRoundTest {
     }
 
     @Test
+    @DisplayName("단발성 예약은 명시한 종료 시각으로 SCHEDULED 회차를 만든다")
+    void scheduleOneTimeCouponRoundWithExplicitCloseAt() {
+        Instant openAt = Instant.parse("2026-08-25T00:00:00Z");
+        Instant closeAt = Instant.parse("2026-08-25T03:00:00Z");
+
+        CouponRound couponRound = CouponRound.schedule(
+                fixedAmountTemplate(true),
+                openAt,
+                closeAt,
+                Instant.parse("2026-08-20T00:00:00Z")
+        );
+
+        assertThat(couponRound.openAt()).isEqualTo(openAt);
+        assertThat(couponRound.closeAt()).isEqualTo(closeAt);
+        assertThat(couponRound.status())
+                .isEqualTo(CouponRoundStatus.SCHEDULED);
+    }
+
+    @Test
+    @DisplayName("신규 예약 시작이 기존 예약 안에 들어오면 겹친다")
+    void overlapWhenNewRoundStartsInsideExistingRound() {
+        CouponRound couponRound = scheduledRound();
+
+        boolean overlaps = couponRound.overlaps(
+                Instant.parse("2026-08-25T02:00:00Z"),
+                Instant.parse("2026-08-25T04:00:00Z")
+        );
+
+        assertThat(overlaps).isTrue();
+    }
+
+    @Test
+    @DisplayName("신규 예약이 기존 예약 전체를 포함하면 겹친다")
+    void overlapWhenNewRoundContainsExistingRound() {
+        CouponRound couponRound = scheduledRound();
+
+        boolean overlaps = couponRound.overlaps(
+                Instant.parse("2026-08-24T23:00:00Z"),
+                Instant.parse("2026-08-25T04:00:00Z")
+        );
+
+        assertThat(overlaps).isTrue();
+    }
+
+    @Test
+    @DisplayName("신규 예약 시작이 기존 종료 시각과 같으면 겹치지 않는다")
+    void allowRoundStartingAtExistingCloseAt() {
+        CouponRound couponRound = scheduledRound();
+
+        boolean overlaps = couponRound.overlaps(
+                Instant.parse("2026-08-25T03:00:00Z"),
+                Instant.parse("2026-08-25T04:00:00Z")
+        );
+
+        assertThat(overlaps).isFalse();
+    }
+
+    @Test
+    @DisplayName("단발성 예약 종료 시각이 시작 시각과 같으면 거부한다")
+    void rejectOneTimeRoundWithoutPositiveDuration() {
+        Instant openAt = Instant.parse("2026-08-25T00:00:00Z");
+
+        assertThatThrownBy(() -> CouponRound.schedule(
+                fixedAmountTemplate(true),
+                openAt,
+                openAt,
+                Instant.parse("2026-08-20T00:00:00Z")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("쿠폰 회차 종료 시각은 시작 시각보다 늦어야 합니다.");
+    }
+
+    @Test
+    @DisplayName("단발성 예약 시간이 24시간을 초과하면 거부한다")
+    void rejectOneTimeRoundLongerThanTwentyFourHours() {
+        assertThatThrownBy(() -> CouponRound.schedule(
+                fixedAmountTemplate(true),
+                Instant.parse("2026-08-25T00:00:00Z"),
+                Instant.parse("2026-08-26T00:00:01Z"),
+                Instant.parse("2026-08-20T00:00:00Z")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("쿠폰 회차 진행 시간은 24시간 이하여야 합니다.");
+    }
+
+    @Test
     @DisplayName("최초 재고는 active_count 0으로 초기화한다")
     void initializeCouponStock() {
         Instant updatedAt = Instant.parse("2026-08-18T00:00:00Z");
@@ -105,6 +191,15 @@ class CouponRoundTest {
                 10_000,
                 Set.of(MembershipGrade.GOLD, MembershipGrade.VIP),
                 active
+        );
+    }
+
+    private CouponRound scheduledRound() {
+        return CouponRound.schedule(
+                fixedAmountTemplate(true),
+                Instant.parse("2026-08-25T00:00:00Z"),
+                Instant.parse("2026-08-25T03:00:00Z"),
+                Instant.parse("2026-08-20T00:00:00Z")
         );
     }
 }

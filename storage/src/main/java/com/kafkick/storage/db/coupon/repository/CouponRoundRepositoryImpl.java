@@ -1,9 +1,12 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.util.Optional;
+import java.time.Instant;
+import java.util.EnumSet;
 
 import jakarta.persistence.EntityManager;
 
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
@@ -11,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
@@ -84,5 +88,45 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
     public Optional<CouponRound> findById(Long couponRoundId) {
         return couponRoundJpaRepository.findById(couponRoundId)
                 .map(CouponRoundEntityMapper::toDomain);
+    }
+
+    @Override
+    public boolean existsByTemplateIdAndOpenAt(
+            Long templateId,
+            Instant openAt
+    ) {
+        try {
+            return couponRoundJpaRepository.existsByTemplateIdAndOpenAt(
+                    templateId,
+                    openAt
+            );
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "동일 쿠폰 회차 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
+    public boolean existsOverlappingSchedule(
+            Instant openAt,
+            Instant closeAt
+    ) {
+        try {
+            return couponRoundJpaRepository.countOverlappingSchedule(
+                    openAt,
+                    closeAt,
+                    EnumSet.of(
+                            CouponRoundStatus.SCHEDULED,
+                            CouponRoundStatus.OPEN
+                    )
+            ) > 0;
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "쿠폰 회차 예약 시간 충돌 조회에 실패했습니다.",
+                    exception
+            );
+        }
     }
 }

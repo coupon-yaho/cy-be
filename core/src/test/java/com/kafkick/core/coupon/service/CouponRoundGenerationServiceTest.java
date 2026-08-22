@@ -22,6 +22,7 @@ import com.kafkick.core.coupon.domain.CouponStock;
 import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
+import com.kafkick.core.coupon.exception.CouponRoundScheduleConflictException;
 import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
 import com.kafkick.core.coupontemplate.port.CouponTemplateRepository;
 
@@ -107,7 +108,7 @@ class CouponRoundGenerationServiceTest {
                     assertThat(stock.updatedAt()).isEqualTo(generatedAt);
                 });
         assertThat(result).isEqualTo(
-                new CouponRoundGenerationResult(2, 2, 0)
+                new CouponRoundGenerationResult(2, 2, 0, 0)
         );
     }
 
@@ -128,7 +129,28 @@ class CouponRoundGenerationServiceTest {
                 );
 
         assertThat(result).isEqualTo(
-                new CouponRoundGenerationResult(1, 0, 1)
+                new CouponRoundGenerationResult(1, 0, 1, 0)
+        );
+    }
+
+    @Test
+    @DisplayName("다른 브랜드 회차와 시간이 겹치는 반복 예약은 정상적으로 건너뛴다")
+    void skipConflictingCouponRound() {
+        when(couponTemplateRepository.findAllActiveByIdAsc())
+                .thenReturn(List.of(template(100L, true)));
+        doThrow(new CouponRoundScheduleConflictException("시간 충돌"))
+                .when(couponRoundCreationService)
+                .create(any(), any());
+
+        CouponRoundGenerationResult result = couponRoundGenerationService
+                .generate(
+                        LocalDate.of(2026, 9, 1),
+                        LocalDate.of(2026, 9, 30),
+                        Instant.parse("2026-08-18T00:00:00Z")
+                );
+
+        assertThat(result).isEqualTo(
+                new CouponRoundGenerationResult(1, 0, 0, 1)
         );
     }
 
@@ -170,7 +192,7 @@ class CouponRoundGenerationServiceTest {
                 );
 
         assertThat(result).isEqualTo(
-                new CouponRoundGenerationResult(0, 0, 0)
+                new CouponRoundGenerationResult(0, 0, 0, 0)
         );
     }
 
