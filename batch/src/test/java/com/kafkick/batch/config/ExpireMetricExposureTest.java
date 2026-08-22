@@ -357,7 +357,10 @@ class ExpireMetricExposureTest {
                 .map(line -> Double.parseDouble(line.substring(line.lastIndexOf(' ') + 1)))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(
-                        name + " 가 /actuator/prometheus 에 없다. 노출 목록이나 게이지 등록을 확인해라"));
+                        name + " 가 /actuator/prometheus 에 없다. 노출 목록이나 게이지 등록을 "
+                                + "확인해라. 실제로 나간 cy_* 는 " + body.lines()
+                                        .filter(line -> line.startsWith("cy_"))
+                                        .toList()));
     }
 
     private long expiring() {
