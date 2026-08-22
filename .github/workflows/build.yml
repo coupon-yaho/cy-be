@@ -127,9 +127,22 @@ jobs:
         run: |
           docker compose -f base.yml config -q
           docker compose -f base.yml -f batch.yml config -q
+          docker compose -f base.yml -f batch.yml -f batch-expose.yml config -q
+
+          # 오버레이를 얹은 조합까지 본다. 그것이 업무 포트를 여는 유일한 경로라,
+          # 안 보면 정작 위험한 쪽이 검사 밖에 남는다.
+          loopback_only() {
+            docker compose "$@" config --format json \
+              | jq -e '[.services[].ports[]?.host_ip] | length > 0 and all(. == "127.0.0.1")' > /dev/null \
+              || { echo "::error::호스트 포트가 127.0.0.1 에 묶이지 않았다: $*"; exit 1; }
+          }
+          loopback_only -f base.yml -f batch.yml
+          loopback_only -f base.yml -f batch.yml -f batch-expose.yml
+
+          # 기본 조합은 업무 포트를 아예 안 내보내야 한다. admin 트리거에 인증이 없어서다.
           docker compose -f base.yml -f batch.yml config --format json \
-            | jq -e '[.services[].ports[]?.host_ip] | length > 0 and all(. == "127.0.0.1")' \
-            > /dev/null || { echo "::error::호스트 포트가 127.0.0.1 에 묶이지 않았다"; exit 1; }
+            | jq -e '(.services.batch.ports // []) | length == 0' \
+            > /dev/null || { echo "::error::batch 업무 포트가 기본으로 노출됐다. batch-expose.yml 로 가른다"; exit 1; }
 
       # 사본이 상류와 같은지 본다. 이게 없으면 SchemaParityTest 의 초록이
       # "게이트가 도는 스키마와 같다" 가 아니라 "누가 언젠가 복사한 파일과 같다" 로

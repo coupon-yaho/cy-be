@@ -12,7 +12,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-batch'
     // 300만 행 집계·리플레이는 전부 SQL 이다. starter-batch 가 끌어오지만 직접 쓰므로 명시한다.
     implementation 'org.springframework:spring-jdbc'
-    // 관리 포트의 verify 온디맨드 트리거용. Compose 에서 이 포트를 외부로 노출하지 않는다.
+    // 업무 포트의 verify 온디맨드 트리거용 — POST /api/v1/admin/verify (CY-368).
+    // **관리 포트가 아니다.** 프론트 계약(docs/05)이 그 경로로 고정돼 있어 옮기면 계약이
+    // 깨진다. 대신 batch.yml 이 그 포트를 기본으로 안 내보낸다 — 근거는 docs/15 결정 1.
+    // ⚠️ 인증이 없다. 노출 축소가 막는 것은 인터넷뿐이고 compose 네트워크 안은 그대로다.
     implementation 'org.springframework.boot:spring-boot-starter-web'
 
     // 관제가 Prometheus 로 batch JVM 을 직접 긁는다. 정합성 gap · 대기열 길이 · Kafka lag 은
