@@ -3,6 +3,7 @@ package com.kafkick.batch.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -23,8 +24,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.FixedClock;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
@@ -84,10 +87,13 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=10"
 })
-@Import({MySqlContainerConfig.class, ExpireJobLockOrderTest.RecordingConfig.class})
+@Import({ExpireJobLockOrderTest.FixedClockConfig.class, MySqlContainerConfig.class, ExpireJobLockOrderTest.RecordingConfig.class})
 class ExpireJobLockOrderTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 태스클릿이 asOf 를 이 값과 견주므로 벽시계면 실행 날짜에 딸린다. */
+    private static final LocalDateTime NOW = AS_OF.plusDays(1);
 
     @Autowired
     private JobOperator jobOperator;
@@ -160,6 +166,23 @@ class ExpireJobLockOrderTest {
                 CALLS.add(method.getName());
                 return ExpirationProxies.callThrough(real, method, args);
             });
+        }
+    }
+
+    /**
+     * <b>시계를 고정한다.</b> 이 테스트는 {@code expireJob} 을 실제로 돌리고, 태스클릿은
+     * {@code asOf} 가 현재보다 미래면 {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는다. 벽시계로 두면
+     * 재는 축과 무관한 이유(<b>실행하는 날짜</b>)로 결과가 갈린다.
+     *
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 라는 것은 {@link FixedClock} 이 진다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return FixedClock.at(NOW);
         }
     }
 }
