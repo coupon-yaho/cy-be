@@ -16,15 +16,10 @@ public record SourceObservation(SourceStatus status, Instant observedAt) {
     /** 원천 상태와 관측 시각 조합이 유효한지 검증합니다. */
     public SourceObservation {
         Objects.requireNonNull(status, "status");
-        if ((status == SourceStatus.VALID
-                || status == SourceStatus.WARMING_UP
-                || status == SourceStatus.STALE
-                || status == SourceStatus.NO_TRAFFIC) && observedAt == null) {
+        if (status.carriesValue() && observedAt == null) {
             throw new IllegalArgumentException(status + " 상태에는 실제 관측 시각이 필요합니다.");
         }
-        if ((status == SourceStatus.PENDING
-                || status == SourceStatus.UNAVAILABLE
-                || status == SourceStatus.N_A) && observedAt != null) {
+        if (!status.carriesValue() && observedAt != null) {
             throw new IllegalArgumentException(status + " 상태의 observedAt은 null이어야 합니다.");
         }
     }
