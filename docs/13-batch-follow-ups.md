@@ -193,13 +193,36 @@ cy_expire_blocked_coupons   게이지. 이번 실행이 제외한 회차 수
 
 ```
 cy_verification_verdict{dataset,scope}    마지막 실행의 판정 (PASS=0, FAIL=1)
-cy_verification_findings_total{dataset}   검출 건수
+cy_verification_findings{dataset,scope}   검출 건수
 ```
+
+> **이름에 `_total` 을 붙이면 안 된다.** 처음에는 `cy_verification_findings_total` 로 적어
+> 뒀는데, 그것은 카운터 규약이라 Micrometer 의 Prometheus 렌더러가 **게이지에서는 떼어
+> 낸다** — 코드가 부르는 이름과 관제가 보는 이름이 갈려 알림이 영원히 안 뜬다.
+> CY-347 에서 실제로 그렇게 만들었다가 노출 테스트가 잡았다(`ExpireMetrics` javadoc 참조).
+> 이 둘은 <b>마지막 실행의 값</b>을 들고 있는 게이지이지 누적 카운터가 아니다.
+
+> **라벨은 `{dataset, scope}` 둘 다 단다.** `DatasetType{CLEAN,CORRUPT}` ×
+> `ScopeType{FULL,INCREMENTAL}` 이라 최대 4 시계열이다. `findings` 에 `scope` 를 빼면
+> FULL 결과를 INCREMENTAL 이 덮어써서 <b>어느 범위의 검출인지 안 갈린다.</b>
 
 | 알림 | 조건 | 대응 |
 |---|---|---|
 | `VerificationCannotJudge` | 잡 `FAILED` | **서버를 본다** — 데이터가 움직였거나 런타임이 안 멈췄다 |
 | `VerificationVerdictFailed` | `verdict = FAIL` | **데이터를 본다** — 판정은 났고 불일치가 있다 |
+
+**CY-347 에서 값을 치른 것 셋을 그대로 적용한다.**
+
+1. **판정을 못 낸 실행은 `0` 이 아니라 `NaN`(모름)이다.** `0` 은 `PASS` 라 <b>합격으로
+   읽힌다</b> — 잡이 죽어 판정이 없는데 관제는 통과로 본다. `ExpireMetrics.markUnknown()`
+   과 같은 자리다.
+2. **두 지표를 따로 `set` 하지 않는다.** 스크레이프가 사이에 끼면 `verdict` 는 새 실행,
+   `findings` 는 앞 실행 값인 샘플이 나온다. 한 스냅샷으로 묶는다.
+3. **알림 식에서 계산하지 않는다.** 필요한 값은 코드에서 만들어 <b>한 시계열</b>로 낸다.
+
+**붙일 자리** — `verifyJob` 에는 지금 `JobExecutionListener` 가 <b>하나도 없다</b>
+(`expireJob` 과 다르다). `runId` 는 `jobExecutionContext[verify.runId]` 에 실려 있어
+`afterJob` 에서 꺼내 `verification_runs` 를 되읽을 수 있다.
 
 ### 2b. 만료 누락
 
@@ -261,7 +284,25 @@ expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pe
 ### 2e. Prometheus 가 규칙을 아직 안 읽는다 — **위 전부의 선행 조건**
 
 규칙 파일은 있는데 **읽는 프로세스가 없다.** `prometheus.yml` 이 그 사실을 스스로 적어 뒀다.
-**언제** — compose 티켓. 그 전까지 위 알림을 아무리 잘 써도 아무도 안 본다.
+**언제** — CY-359. 단계와 검증 계약은 `docs/14-observability-wiring.md` 에 있다.
+그 전까지 위 알림을 아무리 잘 써도 아무도 안 본다.
+
+**받는 쪽은 Slack 이 아니라 mock 리시버다.** 근거 둘 —
+
+- PRD 의 제약이 *"외부 연동 Mocking"* 이고, 실시간 드리프트 계층도 *"알람(Mock)"* 으로
+  정해져 있다(영역 ①). 배치 알림만 실제 외부를 붙일 이유가 없고, 두 계층이 같은 방식을
+  쓰는 편이 낫다.
+- **이 저장소는 PUBLIC 이다.** Slack 을 붙이면 웹훅 URL 이 시크릿으로 들어가고 compose 에
+  그 참조가 남는다.
+
+> CI 의 `Slack 전송` 은 **GitHub Actions 가 PR 리뷰를 알리는 것**이지 앱 런타임과 무관하다.
+> 앱 쪽에는 Slack·웹훅 설정이 하나도 없다. 그것을 선례로 삼지 마라.
+
+mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 것</b>, 그리고 이 설계의 핵심인
+`severity: critical`(서버를 봐라)과 `warning`(데이터를 봐라)이 <b>서로 다른 경로로 갈리는 것</b>.
+
+**`prometheus.yml` 이 이미 배선을 전제하고 있다.** compose 의 서비스 이름이 여기 맞아야 한다 —
+알림은 `alertmanager:9093`, 스크레이프 대상은 `batch:9092`(= `BATCH_MANAGEMENT_PORT`).
 
 ---
 
