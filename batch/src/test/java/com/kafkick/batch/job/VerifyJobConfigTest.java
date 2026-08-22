@@ -91,23 +91,23 @@ class VerifyJobConfigTest {
      */
     static Long insertHistoryAfterFreeze;
 
+    /**
+     * <b>어댑터를 상속하지 않는다 — {@code batch} 는 {@code storage} 를 컴파일 시 참조하지
+     * 않는다.</b> {@code build.gradle} 이 {@code runtimeOnly project(':storage')} 로 그
+     * 경계를 세워 뒀는데, 테스트는 {@code testFixtures} 를 통해 그 클래스가 보여서
+     * 예전에는 {@code VerificationRuleJdbcAdapter} 를 직접 상속했다.
+     *
+     * <p><b>그렇다고 인터페이스를 손으로 구현할 수도 없다.</b> 포트에 메서드가 늘면
+     * 이 클래스만 조용히 옛 세계를 보게 된다 — 잡 전체 배선을 확인하는 유일한 테스트가
+     * 여기라 그 침묵의 대가가 크다.
+     *
+     * <p>그래서 <b>프록시로 감싼다.</b> 안 가로챈 메서드는 자동으로 진짜 구현으로 가므로
+     * 상속의 장점이 남고, 컴파일 시 보이는 타입은 {@code core} 포트 하나다.
+     * {@code ExpirationProxies} 가 같은 자리에서 같은 이유로 쓰는 방식이다.
+     */
     @TestConfiguration
     static class MutateAfterStockStepConfig {
 
-        /**
-         * <b>어댑터를 상속하지 않는다 — {@code batch} 는 {@code storage} 를 컴파일 시 참조하지
-         * 않는다.</b> {@code build.gradle} 이 {@code runtimeOnly project(':storage')} 로 그
-         * 경계를 세워 뒀는데, 테스트는 {@code testFixtures} 를 통해 그 클래스가 보여서
-         * 예전에는 {@code VerificationRuleJdbcAdapter} 를 직접 상속했다.
-         *
-         * <p><b>그렇다고 인터페이스를 손으로 구현할 수도 없다.</b> 포트에 메서드가 늘면
-         * 이 클래스만 조용히 옛 세계를 보게 된다 — 잡 전체 배선을 확인하는 유일한 테스트가
-         * 여기라 그 침묵의 대가가 크다.
-         *
-         * <p>그래서 <b>프록시로 감싼다.</b> 안 가로챈 메서드는 자동으로 진짜 구현으로 가므로
-         * 상속의 장점이 남고, 컴파일 시 보이는 타입은 {@code core} 포트 하나다.
-         * {@code ExpirationProxies} 가 같은 자리에서 같은 이유로 쓰는 방식이다.
-         */
         /**
          * 포트 시그니처를 <b>여기서</b> 고정한다. 이름만 보고 {@code args[1]} 을 캐스팅하면
          * 인자 순서가 바뀌어도 컴파일이 통과하고 런타임에 {@code ClassCastException} 이 나는데,

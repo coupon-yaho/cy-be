@@ -32,7 +32,7 @@ graph TD
 | 모듈 | 역할 |
 |---|---|
 | `api` | HTTP 진입점. 요청/응답 변환, 전역 예외 처리 |
-| `batch` | 스케줄 작업 (쿠폰 만료·정산 등) |
+| `batch` | 스케줄 작업 (쿠폰 만료 등) + 검증 배치. 관리용 HTTP 트리거를 연다 — **인증 없음, 기본 비노출** |
 | `core` | 도메인 모델, 유즈케이스, 포트 인터페이스 |
 | `storage` | JPA 어댑터, Flyway 마이그레이션 |
 | `infra:mq` | Kafka 프로듀서·컨슈머 어댑터 |
@@ -51,9 +51,15 @@ coupon-yaho
 │       ├── ApiApplication.java          스캔·자동설정 기준 패키지라 한 단계 위에 둠
 │       └── api/support/                 응답 봉투, 전역 예외 처리, requestId 필터
 │
-├── batch                                스케줄 작업
+├── batch                                스케줄 작업 + 검증 배치
 │   └── src/main/java/com/kafkick
-│       └── BatchApplication.java
+│       ├── BatchApplication.java
+│       └── batch/
+│           ├── api/                     verify 온디맨드 트리거·조회 (docs/15)
+│           ├── config/                  기동 가드, 지표, 전용 실행기
+│           ├── job/                     Spring Batch 잡 정의
+│           ├── replay/                  이력 리플레이
+│           └── schedule/                @Scheduled 진입점
 │
 ├── core                                 도메인 + 유즈케이스
 │   └── src/main/java/com/kafkick/core
@@ -90,6 +96,7 @@ coupon-yaho
 ├── Dockerfile                           배치 서버 이미지 (관제가 컨테이너 이름으로 긁는다)
 ├── base.yml                             부하 중에도 그대로 뜨는 인프라 + 관제
 ├── batch.yml                            배치 서버 오버레이 (부하 중에는 안 올린다)
+├── batch-expose.yml                     업무 포트를 호스트에 여는 오버레이 (필요할 때만)
 │
 └── build.gradle, settings.gradle
 ```
@@ -113,6 +120,14 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 docker compose -f base.yml up                     # DB·관제만. batch 는 안 뜬다
 DB_HOST=127.0.0.1 ./gradlew :api:bootRun          # ← 마이그레이션. 한 번만 (아래 참조)
 docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올린다
+```
+
+**배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
+(`POST /api/v1/admin/verify`)가 있는데 **인증이 없다** — batch 에 Spring Security 가 없고
+토큰 규약은 다른 영역의 몫이라 혼자 정하면 두 벌이 된다. 그래서 열 때만 오버레이를 얹는다.
+
+```bash
+docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
 ```
 
 **가운데 줄을 빼면 batch 가 기동에서 죽는다.** `base.yml` 의 mysql 은 **빈 DB** 만 만들고,
@@ -146,7 +161,7 @@ Alertmanager 와 기본 비밀번호를 쓰는 MySQL 이 그대로 노출된다.
 
 | 서비스 | 호스트 | 용도 |
 |---|---|---|
-| `batch` | `9090` | 업무 포트 |
+| `batch` | `9090` | 업무 포트 — **기본으로 안 내보낸다.** `batch-expose.yml` 을 얹을 때만 열린다 |
 | `mysql` | `3306` | |
 | `prometheus` | `9490` | 규칙·타깃 확인 (`/api/v1/rules`, `/api/v1/targets`) |
 | `alertmanager` | `9493` | |

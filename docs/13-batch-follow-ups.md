@@ -358,7 +358,7 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 | 무엇 | 언제 |
 |---|---|
 | `BATCH_*` 정리 | **`cleanupJob` 티켓.** 하루 288 인스턴스. 3주 시연(약 3.6만 행)은 무시할 수 있다. `batch.metadata.keep-days` 자리를 설정에 예고해 뒀다 |
-| 업무 포트 노출 | ~~compose 티켓~~ **CY-359 에서 결정했다.** `batch.yml` 이 `127.0.0.1:${BATCH_HOST_PORT:-9090}:9090` 으로 업무 포트만 루프백에 묶고 관리 포트(9092)는 호스트에 아예 안 올린다. 관제는 컨테이너 네트워크에서 `batch:9092` 를 긁는다 |
+| 업무 포트 노출 | ~~compose 티켓~~ ~~CY-359~~ **CY-368 에서 다시 정했다.** 그 포트에 인증 없는 admin 트리거가 열려 `batch.yml` 은 업무 포트를 **아예 안 내보낸다** — 필요할 때만 `batch-expose.yml` 을 얹어 `127.0.0.1:${BATCH_HOST_PORT:-9090}:9090` 으로 연다. 관리 포트(9092)는 어느 경우에도 안 올린다 |
 
 ---
 
@@ -389,6 +389,21 @@ CY-359 는 `SchemaPresenceGuard` 로 그것을 **기동 시점에 드러내고 �
 전부 없다. CY-359 는 README 에 `api` 를 한 번 띄우는 단계를 박는 것으로 닫았다.
 `base.yml` 에 원샷 서비스를 넣는 쪽은 `api` 이미지(Dockerfile)가 아직 없어 미뤘다 —
 그것이 생기는 날 위 표의 둘째로 옮기면 두 구멍이 한 번에 닫힌다.
+
+---
+
+## 4b. 응답 봉투가 두 벌이다 (CY-368 이 만들었다)
+
+`api` 의 `ResponseEnvelope`·`ErrorResponse`·`GlobalExceptionHandler` 는 `com.kafkick.api.support`
+에 있고, batch 는 `core` 만 의존한다. 그래서 CY-368 이 트리거 API 를 열면서 **같은 규약을
+batch 쪽에 다시 세웠다**(`BatchApiExceptionHandler.BatchErrorResponse`).
+
+**같은 사실을 두 곳이 각자 정의하면 언젠가 어긋난다** — 이 저장소가 반복해서 없애 온 모양이다.
+지금은 필드를 맞춰 뒀지만(`requestId` 제외 — batch 에는 `RequestIdFilter` 가 없다), 한쪽만
+고치는 날 프론트가 두 형식을 다뤄야 한다.
+
+답은 봉투를 `core` 로 올리는 것인데, `api` 모듈의 파일을 옮겨야 해서 CY-368 밖이었다.
+**옮기는 쪽이 `api` 담당과 겹치므로 팀에서 정한다.**
 
 ---
 
