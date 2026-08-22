@@ -2,17 +2,25 @@
 package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.context.ApplicationContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.config.ScheduledTaskHolder;
 
 import com.kafkick.core.verification.DatasetType;
@@ -41,7 +49,17 @@ import com.kafkick.storage.db.MySqlContainerConfig;
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=false",
         "server.port=0",
-        "management.server.port=0"
+        "management.server.port=0",
+        // 테스트는 refresh() 를 손으로 부른다. 그런데 @EnableScheduling 이 살아 있어
+        // 기본 60초 주기의 되읽기가 같은 DB 를 함께 읽는다. 지금은 값이 같아 아무 단언도
+        // 안 뒤집히지만, "행을 심지 않은 상태에서 특정 값을 단언" 하는 케이스가 붙으면
+        // 값의 출처가 둘이 되어 원인을 못 찾는 플레이크가 된다. 배선을 지키는
+        // refreshIsWiredAsAScheduledTask 는 등록 여부만 보므로 주기를 늘려도 통과한다.
+        //
+        // 상한(MAX_REFRESH_MILLIS = 2분)까지만 올린다. 그보다 크면 생성자가 거부한다 —
+        // 그 상한은 VerificationMetricsStale 이 발화 조건을 채울 수 있게 지키는 것이고,
+        // 테스트 편의로 뚫으면 그 가드가 프로덕션에서만 도는 것이 된다.
+        "batch.verify.metrics-refresh-ms=120000"
 })
 @Import(MySqlContainerConfig.class)
 class VerificationMetricExposureTest {
@@ -62,6 +80,15 @@ class VerificationMetricExposureTest {
 
     @Autowired
     private ScheduledTaskHolder taskHolder;
+
+    @Autowired
+    private ApplicationContext context;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private ThreadPoolTaskScheduler taskScheduler;
 
     @Autowired
     private JdbcClient jdbcClient;
@@ -155,6 +182,13 @@ class VerificationMetricExposureTest {
 
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_verification_verdict", metrics.served())).isNaN();
+        // 게이지 하나만 보면 SELECT_LATEST_CLOSED 의 `verdict IS NOT NULL` 을 지워도 초록이다
+        // — VerdictCode.of(null) 이 어차피 NaN 이라서다. 그런데 findings 는 그 행의 0 을
+        // 그대로 내보내므로, 절이 죽으면 verdict=NaN 인데 findings=0 인 샘플이 나간다.
+        // 둘을 한 덩어리로 바꾼다는 이 클래스의 전제가 깨진 상태다.
+        assertThat(metric(body, "cy_verification_findings", metrics.served()))
+                .as("verdict IS NOT NULL 이 빠지면 여기가 0 이 되어 verdict=NaN 과 짝이 안 맞는다")
+                .isNaN();
     }
 
     /**
@@ -225,6 +259,97 @@ class VerificationMetricExposureTest {
                 // 등록 이름은 "<클래스>.<메서드>" 형식이라 그것으로 잇는다.
                 .anyMatch(task -> task.getTask().getRunnable().toString()
                         .startsWith(VerificationMetricsRefresher.class.getName() + ".refresh"));
+    }
+
+    /**
+     * <b>스케줄러 풀이 실제로 둘인지 본다.</b>
+     *
+     * <p>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 어떤
+     * {@code @Value} 에도 리터럴로 안 나온다 — {@code ResolvedBatchConfigTest} 의 키 스캔이
+     * <b>구조적으로 못 잡는다.</b> 그래서 문자열이 아니라 <b>빈의 실제 크기</b>로 잇는다.
+     *
+     * <p>1 이면 만료가 도는 내내 되읽기가 멈추고, 되읽기가 커넥션을 기다리는 동안 만료 크론
+     * 발화가 밀린다. 키 경로를 오타 내면 Boot 가 조용히 1 로 폴백하는데, 그때 드러나는 것은
+     * <i>"지표가 가끔 안 갱신된다"</i> 뿐이라 원인까지 가는 길이 없다.
+     */
+    @Test
+    @DisplayName("스케줄러 풀이 둘이다 — 만료와 되읽기가 서로를 막지 않게")
+    void schedulerPoolFitsBothScheduledTasks() {
+        // 정확히 2 를 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
+        // 있으면 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵고, 세 번째
+        // @Scheduled 가 생겨 정당하게 올리는 날에도 깨진다. 정확한 값은
+        // ResolvedBatchConfigTest 가 키 경로로 지키고, 여기가 막는 것은 "1 로 폴백" 이다.
+        assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
+                .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
+                        + "폴백한다. 그러면 두 @Scheduled 가 스레드 하나를 다툰다")
+                .isGreaterThanOrEqualTo(2);
+    }
+
+    /**
+     * <b>{@link SchemaPresenceGuard} 가 부팅 경로에 실제로 얹히는지 본다.</b>
+     *
+     * <p>{@code SchemaPresenceGuardTest} 는 인스턴스를 손으로 만들어 {@code run()} 을 부르므로
+     * <b>판정 로직</b>만 지킨다. {@code @Component} 를 떼거나 클래스를 컴포넌트 스캔 밖
+     * 패키지로 옮기면 <b>전 저장소가 초록인 채로 가드가 안 돈다</b> — 나머지 배치 테스트는
+     * 전부 스키마를 갖춘 컨테이너 위에서 통과 경로만 밟기 때문에 빈이 없어도 초록이다.
+     *
+     * <p>순서도 함께 본다. {@code JobLauncherApplicationRunner} 의 정렬값이 0 이라,
+     * 가드에 정렬값을 안 주면 {@code LOWEST_PRECEDENCE} 로 그 뒤에 온다 — 가드가 말하기 전에
+     * 잡이 SQL 에러로 죽는다. 지금은 {@code spring.batch.job.enabled} 가 {@code false} 라
+     * 안 터지지만, 그 결합을 설정 한 줄에 맡겨 두지 않는다.
+     */
+    @Test
+    @DisplayName("스키마 가드가 러너로 배선되고 잡보다 먼저 온다")
+    void schemaGuardRunsBeforeAnyJob() {
+        List<ApplicationRunner> runners = context.getBeanProvider(ApplicationRunner.class)
+                .orderedStream()
+                .toList();
+
+        assertThat(runners)
+                .as("@Component 를 떼거나 스캔 밖으로 옮기면 가드가 안 돈다")
+                .hasAtLeastOneElementOfType(SchemaPresenceGuard.class);
+
+        int guard = indexOfType(runners, SchemaPresenceGuard.class);
+        runners.stream()
+                .filter(r -> r.getClass().getName().contains("JobLauncherApplicationRunner"))
+                .findFirst()
+                .ifPresent(jobRunner -> assertThat(guard)
+                        .as("잡이 먼저 돌면 가드가 말하기 전에 SQL 에러로 죽는다")
+                        .isLessThan(runners.indexOf(jobRunner)));
+    }
+
+    /**
+     * <b>주기와 알림 창은 한 덩어리다.</b> {@code VerificationMetricsStale} 은 10분 창에서
+     * 실패 증분 3 을 보는데, 주기를 5분으로 올리면 창 안에 두 번밖에 시도하지 않아
+     * <b>되읽기가 100% 실패해도 3 을 못 채운다</b>. 그러면 게이지가 낡은 {@code PASS} 를
+     * 계속 들고 있는데 아무 알림도 안 뜬다 — 그 카운터를 만든 이유가 통째로 사라진다.
+     *
+     * <p>가드를 {@code .example} 값만 보는 테스트에 두지 않은 이유가 여기 있다. 이 값이
+     * 실제로 커지는 경로는 <b>운영에서 환경변수로 주는 것</b>이고, 그건 설정 파일 검사가
+     * 구조적으로 못 본다. 그래서 빈을 만드는 자리에서 막는다.
+     */
+    @Test
+    @DisplayName("되읽기 주기가 알림 창을 넘으면 기동을 거부한다")
+    void rejectsARefreshPeriodTheAlertWindowCannotCover() {
+        assertThatThrownBy(() -> new VerificationMetricsRefresher(
+                runs, metrics, new SimpleMeterRegistry(), transactionManager, 5_000L, 300_000L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .as("규칙 이름이 없으면 왜 거부됐는지 알 수 없다")
+                .hasMessageContaining("VerificationMetricsStale");
+
+        assertThatCode(() -> new VerificationMetricsRefresher(
+                runs, metrics, new SimpleMeterRegistry(), transactionManager, 5_000L, 120_000L))
+                .as("상한 자체는 통과해야 한다 — 경계에서 막으면 이 클래스가 안 뜬다")
+                .doesNotThrowAnyException();
+    }
+
+    private static int indexOfType(List<ApplicationRunner> runners, Class<?> type) {
+        for (int i = 0; i < runners.size(); i++) {
+            if (type.isInstance(runners.get(i))) {
+                return i;
+            }
+        }
+        throw new AssertionError(type.getSimpleName() + " 이 러너 목록에 없다");
     }
 
     private void closedRun(DatasetType dataset, VerdictType verdict, int findings,

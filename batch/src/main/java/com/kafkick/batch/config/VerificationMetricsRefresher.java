@@ -74,11 +74,34 @@ public class VerificationMetricsRefresher {
      *
      * <p>읽기 전용이고, 터지면 {@code catch} 가 잡아 <i>"모름"</i> 으로 떨어진다.
      */
+    /**
+     * {@code VerificationMetricsStale} 의 창(10분)에서 증분 3 을 채우려면 최소 세 번은
+     * 시도해야 한다. 2분이면 창 안에 다섯 번이라 여유가 있다.
+     */
+    private static final long MAX_REFRESH_MILLIS = 120_000;
+
     private final TransactionTemplate readLatest;
 
     public VerificationMetricsRefresher(VerificationRunRepository runs, VerificationMetrics metrics,
             MeterRegistry registry, PlatformTransactionManager transactionManager,
-            @Value("${batch.verify.metrics-timeout-ms:5000}") long timeoutMillis) {
+            @Value("${batch.verify.metrics-timeout-ms:5000}") long timeoutMillis,
+            @Value("${batch.verify.metrics-refresh-ms:60000}") long refreshMillis) {
+        // 주기가 알림 창을 넘으면 VerificationMetricsStale 이 영영 안 뜬다.
+        //
+        // 그 규칙은 10분 창에서 실패 증분 3 을 본다. 60초 주기면 창 안에 열 번 시도하므로
+        // 3 은 "세 번 연속 실패" 를 넘긴 것인데, 주기를 5분으로 올리면 시도가 두 번뿐이라
+        // **되읽기가 100% 실패해도 3 을 못 채운다.** 그리고 그 상태는 규칙 본문이 적었듯
+        // 다른 어떤 알림에도 안 걸린다 — 게이지가 낡은 PASS 를 계속 들고 있어서다.
+        //
+        // 여기서 막는다. .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을
+        // 못 잡는다 — 그게 실제로 이 값이 커지는 경로다.
+        if (refreshMillis > MAX_REFRESH_MILLIS) {
+            throw new IllegalArgumentException(
+                    "batch.verify.metrics-refresh-ms 는 " + MAX_REFRESH_MILLIS + " 이하여야 합니다. "
+                            + "그보다 길면 VerificationMetricsStale(10분 창, 증분 3)이 발화 조건을 "
+                            + "채울 수 없어 되읽기가 계속 실패해도 아무 알림도 안 뜹니다. "
+                            + "받은 값=" + refreshMillis);
+        }
         if (timeoutMillis < 1_000 || timeoutMillis % 1_000 != 0) {
             throw new IllegalArgumentException(
                     "batch.verify.metrics-timeout-ms 는 1000 이상이면서 1000 의 배수여야 합니다. "
@@ -116,17 +139,36 @@ public class VerificationMetricsRefresher {
             readLatest.execute(status -> runs.findLatestClosed(dataset, SCOPE))
                     .ifPresentOrElse(metrics::record, metrics::markUnknown);
             failures.set(0);
-        } catch (RuntimeException | Error e) {
-            // 같은 원인이 이어지면 스택트레이스를 매번 남기지 않는다 — 시연 로그가 덮인다.
-            long streak = failures.incrementAndGet();
+        } catch (RuntimeException e) {
+            recordFailure(dataset, e);
+        } catch (Error e) {
+            // Error 도 카운터는 올린다. 안 올리면 이 알림이 Error 경로에서만 통째로 꺼진다.
+            //
+            // 게이지는 어느 쪽이든 낡은 값을 그대로 든다 — markUnknown() 은 "닫힌 실행이
+            // 없다" 분기에서만 불리고 예외 경로에서는 아무도 안 건드린다. 그러니 밖으로
+            // 던지는 것만으로는 "관제에 정상으로 보이는 상태" 가 없어지지 않는다.
+            // 없애는 것은 카운터고, 그것을 VerificationMetricsStale 이 본다.
+            //
+            // 그러고 나서 다시 던진다. Spring 은 그 실행만 흡수하고 다음 주기를 잡으므로
+            // 되읽기 동작은 같고, 스택트레이스가 ERROR 로 남아 원인이 보인다.
             refreshFailures.increment();
-            if (streak == 1) {
-                log.warn("검증 판정을 되읽지 못했습니다. 직전 값을 유지합니다. dataset={}",
-                        dataset, e);
-            } else {
-                log.warn("검증 판정을 계속 되읽지 못하고 있습니다. dataset={} 연속={} 원인={}",
-                        dataset, streak, e.toString());
-            }
+            failures.incrementAndGet();
+            throw e;
+        }
+    }
+
+    /**
+     * 같은 원인이 이어지면 스택트레이스를 매번 남기지 않는다 — 시연 로그가 덮인다.
+     */
+    private void recordFailure(DatasetType dataset, RuntimeException e) {
+        long streak = failures.incrementAndGet();
+        refreshFailures.increment();
+        if (streak == 1) {
+            log.warn("검증 판정을 되읽지 못했습니다. 직전 값을 유지합니다. dataset={}",
+                    dataset, e);
+        } else {
+            log.warn("검증 판정을 계속 되읽지 못하고 있습니다. dataset={} 연속={} 원인={}",
+                    dataset, streak, e.toString());
         }
     }
 

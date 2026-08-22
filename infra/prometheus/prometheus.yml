@@ -28,3 +28,20 @@ scrape_configs:
     metrics_path: /actuator/prometheus
     static_configs:
       - targets: ["batch:9092"]
+
+  # 알림이 실제로 리시버까지 가는지 본다.
+  #
+  # 이 티켓의 제목이 "알림을 mock 리시버로 보낸다" 인데, 정작 **마지막 구간만 감시 밖**이었다.
+  # alert-sink 가 죽으면 Prometheus 는 계속 firing 이고 Alertmanager 는 실패를 자기 로그에만
+  # 남긴다 — `logs alert-sink` 에 새 줄이 없는 것을 사람은 "규칙이 틀렸다" 로 읽는다.
+  #
+  # 이 저장소가 ExpireMetricsUnknown·VerificationMetricsUnknown 으로 두 번 세운 축과 같다:
+  # **감시가 꺼진 것을 감시한다.**
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  # 규칙 평가와 알림 발송이 도는지. Prometheus 가 스스로를 못 긁으면 나머지도 못 믿는다.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

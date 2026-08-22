@@ -132,6 +132,16 @@ class ResolvedBatchConfigTest {
                 // 없어서 스케줄러 빈이 애초에 안 만들어진다 — 지금 이 값이 막고 있는 것은
                 // 없다. 부팅기를 실제 컨텍스트로 바꾸는 날을 위한 예비 방어다.
                 "--BATCH_SCHEDULING_ENABLED=true",
+                // CY-359 가 넣은 셋. 이름만 EXPECTED_VALUE_KEYS 에 있으면 **키 경로**는
+                // 지켜지지만 .example 이 참조하는 **환경변수 이름**은 한 번도 실행되지 않는다
+                // — .example 기본값과 @Value 기본값이 60000/5000 으로 글자까지 같아서,
+                // 환경변수 이름을 오타 내도 결과가 똑같다. 위 문단이 경계한 그 상황이다.
+                "--VERIFY_METRICS_REFRESH_MS=61000",
+                "--VERIFY_METRICS_TIMEOUT_MS=6000",
+                // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
+                // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
+                // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
+                "--BATCH_SCHEDULER_POOL_SIZE=3",
                 "--batch.schedule.expire-cron=0 0 0 1 1 *",
                 // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면
                 // 키 경로가 죽어 폴백해도 결과가 같아 구분이 안 된다.
@@ -227,6 +237,12 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.verify.step-timeout-ms")).isEqualTo("1001");
         assertThat(environment.getProperty("batch.verify.replay-window-size")).isEqualTo("11");
         assertThat(environment.getProperty("batch.verify.asof-state-keep-runs")).isEqualTo("3");
+        assertThat(environment.getProperty("batch.verify.metrics-refresh-ms")).isEqualTo("61000");
+        assertThat(environment.getProperty("batch.verify.metrics-timeout-ms")).isEqualTo("6000");
+        assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
+                .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
+                        + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
+                .isEqualTo("3");
     }
 
     @Test
