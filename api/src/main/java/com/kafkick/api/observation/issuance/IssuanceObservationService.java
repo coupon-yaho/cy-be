@@ -34,6 +34,7 @@ public final class IssuanceObservationService {
     private final TimeProvider timeProvider;
     private final LongSupplier timeSource;
     private final Duration logInterval;
+    private final long logIntervalNanos;
     private final AtomicLong attemptFailures = new AtomicLong();
     private final AtomicLong nextFailureLogAtNanos;
 
@@ -74,6 +75,7 @@ public final class IssuanceObservationService {
         this.eventRecorder = Objects.requireNonNull(eventRecorder, "eventRecorder");
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.logInterval = requirePositive(logInterval);
+        this.logIntervalNanos = toNanosOrReject(this.logInterval);
         this.timeSource = Objects.requireNonNull(timeSource, "timeSource");
         this.nextFailureLogAtNanos = new AtomicLong(timeSource.getAsLong());
     }
@@ -144,6 +146,21 @@ public final class IssuanceObservationService {
         return logInterval;
     }
 
+    /**
+     * 나노초 변환을 기동 시점으로 앞당깁니다.
+     *
+     * <p>{@link Duration#toNanos()}는 양수여도 범위를 넘으면 {@link ArithmeticException}을 던집니다.
+     * 이 변환이 기록 실패를 삼키는 {@code catch} 안에서 일어나면 그 예외가 발급 흐름으로 전파돼,
+     * 관측이 업무를 깨지 않는다는 이 클래스의 보증이 정확히 그 자리에서 무너집니다.
+     */
+    private static long toNanosOrReject(Duration logInterval) {
+        try {
+            return logInterval.toNanos();
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException("logInterval이 나노초 범위를 넘습니다.", overflow);
+        }
+    }
+
     private static Duration requirePositive(Duration logInterval) {
         Objects.requireNonNull(logInterval, "logInterval");
         if (logInterval.isZero() || logInterval.isNegative()) {
@@ -174,7 +191,7 @@ public final class IssuanceObservationService {
         long now = timeSource.getAsLong();
         long due = nextFailureLogAtNanos.get();
         // 실패가 몰릴 때 이 자리에 락을 두면 그 락이 발급 경로의 병목이 된다.
-        if (now - due < 0 || !nextFailureLogAtNanos.compareAndSet(due, now + logInterval.toNanos())) {
+        if (now - due < 0 || !nextFailureLogAtNanos.compareAndSet(due, now + logIntervalNanos)) {
             return;
         }
         log.warn(

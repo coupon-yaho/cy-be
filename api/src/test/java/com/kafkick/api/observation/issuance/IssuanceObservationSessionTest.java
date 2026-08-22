@@ -490,6 +490,20 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
+    void neverPropagatesWhenLogIntervalOverflowsNanoseconds() {
+        IssuanceObservationService service = new IssuanceObservationService(
+                new IssuanceFlowEventFactory(() -> EVENT_ID),
+                event -> {
+                    throw new IllegalStateException("recorder unavailable");
+                },
+                TIME_PROVIDER,
+                Duration.ofSeconds(10)
+        );
+
+        assertThatCode(() -> service.recordIssueAttempt(context())).doesNotThrowAnyException();
+    }
+
+    @Test
     void logsWarningWithRequestIdWhenIssueAttemptRecordingFails(CapturedOutput output) {
         IssuanceObservationService service = service(event -> {
             throw new IllegalStateException("recorder unavailable");
@@ -615,6 +629,21 @@ class IssuanceObservationSessionTest {
             contextRunner.run(context -> assertThat(
                     context.getBean(IssuanceObservationService.class).attemptFailureLogInterval())
                     .isEqualTo(Duration.ofSeconds(10)));
+        }
+
+        @Test
+        void rejectsIntervalThatOverflowsNanoseconds() {
+            // 양수여도 toNanos() 가 던진다. 그 예외가 기록 실패를 삼키는 catch 안에서 나면
+            // 관측 실패가 발급 흐름으로 전파된다 — 기동에서 막는다.
+            contextRunner
+                    .withPropertyValues("observation.issuance.attempt-failure-log-interval=10000000000s")
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        // 원인 사슬은 그대로 남긴다 — 어떤 변환이 넘쳤는지가 진단에 필요하다.
+                        assertThat(context.getStartupFailure())
+                                .hasMessageContaining("logInterval이 나노초 범위를 넘습니다.")
+                                .hasRootCauseInstanceOf(ArithmeticException.class);
+                    });
         }
 
         @Test
