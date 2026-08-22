@@ -15,8 +15,30 @@ PORT = 5001
 
 class Sink(BaseHTTPRequestHandler):
 
+    # 느린 바디 전송을 끊는다. 상한만으로는 한 연결이 오래 붙잡는 것을 못 막는다.
+    timeout = 5
+
+    # 바디 상한. alertmanager 가 보내는 payload 는 수 KB 라 넉넉하다.
+    # 상한이 없으면 Content-Length 가 말하는 만큼 통째로 메모리에 올린다.
+    MAX_BODY = 1 << 20
+
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            # 숫자가 아니면 예외가 요청 하나를 죽이고 트레이스백만 남는다 —
+            # 알림 줄만 보이게 하려고 만든 로그가 그걸로 덮인다.
+            self.send_response(400)
+            self.end_headers()
+            print("[!] Content-Length 가 숫자가 아니다", flush=True)
+            return
+
+        if length > self.MAX_BODY:
+            self.send_response(413)
+            self.end_headers()
+            print(f"[!] 바디가 상한을 넘었다 ({length} > {self.MAX_BODY})", flush=True)
+            return
+
         raw = self.rfile.read(length)
         self.send_response(200)
         self.end_headers()

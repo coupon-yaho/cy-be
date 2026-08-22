@@ -318,7 +318,13 @@ expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pe
 > 앱 쪽에는 Slack·웹훅 설정이 하나도 없다. 그것을 선례로 삼지 마라.
 
 mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 것</b>, 그리고 이 설계의 핵심인
-`severity: critical`(서버를 봐라)과 `warning`(데이터를 봐라)이 <b>서로 다른 경로로 갈리는 것</b>.
+`channel: server`(서버를 봐라)와 `channel: data`(데이터를 봐라)가 <b>서로 다른 경로로
+갈리는 것</b>.
+
+> **가르는 축은 `severity` 가 아니다.** warning 셋 중 데이터 축은
+> `ExpireSkippingBrokenCoupons` 하나뿐이고 나머지 둘은 서버 축이라, severity 로 가르면
+> *"데이터를 봐라"* 로 라우팅된 것의 원인이 접속 URL 인 상황이 나온다.
+> `severity` 는 긴급도로 남긴다.
 
 **`prometheus.yml` 이 이미 배선을 전제하고 있다.** compose 의 서비스 이름이 여기 맞아야 한다 —
 알림은 `alertmanager:9093`, 스크레이프 대상은 `batch:9092`(= `BATCH_MANAGEMENT_PORT`).

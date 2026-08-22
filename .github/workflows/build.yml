@@ -104,6 +104,12 @@ jobs:
             --entrypoint promtool prom/prometheus:v3.5.0 \
             check config /etc/prometheus/prometheus.yml
 
+      # mock 리시버는 이 저장소 최초의 파이썬 파일이고, 실행 가능한 코드인데 Java 쪽
+      # ./gradlew build 같은 게이트가 없다. 최소한 문법은 CI 가 본다 —
+      # 들여쓰기 하나가 틀어져도 compose 를 직접 띄우기 전까지 아무도 모르는 상태를 막는다.
+      - name: mock 리시버 구문 검사
+        run: python3 -m py_compile infra/alertmanager/alert-sink.py
+
       # 라우팅도 파싱한다. 여기가 깨지면 규칙은 평가되는데 알림이 아무 데도 안 간다.
       - name: 알림 라우팅 검사
         run: |

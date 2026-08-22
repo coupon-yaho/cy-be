@@ -15,7 +15,7 @@
 |---|---|
 | **한다** | Prometheus·Alertmanager·mock 리시버를 compose 로 띄운다 |
 | **한다** | 규칙이 **실제로 로드됐는지** 확인한다 (`/api/v1/rules`) |
-| **한다** | `severity` 로 경로를 가른다 — critical(서버) / warning(데이터) |
+| **한다** | `channel` 라벨로 경로를 가른다 — `server` / `data`. `severity` 는 긴급도로만 남긴다 |
 | **한다** | 검증 판정을 지표로 낸다 (`docs/13` §2a, *"가장 큰 구멍"*) |
 | **안 한다** | Slack 연동 (`docs/13` §2e 에 근거) |
 | **한다** | `batch` 를 컨테이너로 띄운다 — **아래 "왜 앱까지 하나"** |
@@ -209,7 +209,8 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 ## 검증 계약
 
 - **규칙 로드** — 파일이 있는 것이 아니라 Prometheus 가 **읽었다**는 것을 응답으로 확인
-- **경로 분기** — critical 과 warning 이 리시버에서 갈리는 것을 확인
+- **경로 분기** — `channel: server` / `channel: data` 로 갈리는 것을 확인한다.
+  `severity` 는 관계없다 — warning 셋 중 둘이 서버 축이다
 - **지표 이름** — `BatchMetricExposureTest` 가 규칙 파일에서 이름을 뽑아 `/actuator/prometheus`
   본문과 대조한다. 다만 그것이 보는 것은 **이름뿐**이다 — 리스너를 안 걸어도, 값이 늘
   `NaN` 이어도 초록이다. **값이 실제로 설정되는지는 `VerifyJob*Test` 가 따로 본다**

@@ -14,13 +14,18 @@ COPY core/build.gradle core/
 COPY storage/build.gradle storage/
 COPY batch/build.gradle batch/
 COPY api/build.gradle api/
-COPY infra infra
+# infra 는 mq·redis 만 Gradle 프로젝트다. 디렉터리 전체를 넣으면 관제 설정
+# (prometheus/rules, alertmanager)이 바뀔 때마다 아래 의존성 레이어가 통째로 무효화된다 —
+# 바로 위 주석이 "소스만 바뀌면 이 계층은 그대로다" 라고 약속한 것과 어긋난다.
+COPY infra/mq/build.gradle infra/mq/
+COPY infra/redis/build.gradle infra/redis/
 RUN ./gradlew --no-daemon :batch:dependencies --quiet || true
 
 COPY core core
 COPY storage storage
 COPY batch batch
 COPY api api
+COPY infra infra
 
 # README 가 정한 절차 그대로다 — .example 을 실제 이름으로 복사한다.
 # resolved/ 는 processTestResources 가 만드는 테스트 전용이라 런타임에는 없다.
