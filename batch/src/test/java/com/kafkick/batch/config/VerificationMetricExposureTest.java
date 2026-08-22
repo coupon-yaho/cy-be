@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.annotation.OrderUtils;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -232,8 +233,11 @@ class VerificationMetricExposureTest {
         refresher.refresh();
 
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        // 리터럴로 박으면 CORRUPT 스키마 컨테이너에서 이 테스트만 깨진다 —
+        // served() 는 uk_coupon_member 존재로 정해진다. 나머지 테스트도 전부 그것을 쓴다.
         assertThat(body)
-                .contains("cy_verification_verdict{dataset=\"CLEAN\",scope=\"FULL\"}");
+                .contains("cy_verification_verdict{dataset=\""
+                        + metrics.served().name() + "\",scope=\"FULL\"}");
     }
 
     /**
@@ -309,13 +313,15 @@ class VerificationMetricExposureTest {
                 .as("@Component 를 떼거나 스캔 밖으로 옮기면 가드가 안 돈다")
                 .hasAtLeastOneElementOfType(SchemaPresenceGuard.class);
 
-        int guard = indexOfType(runners, SchemaPresenceGuard.class);
-        runners.stream()
-                .filter(r -> r.getClass().getName().contains("JobLauncherApplicationRunner"))
-                .findFirst()
-                .ifPresent(jobRunner -> assertThat(guard)
-                        .as("잡이 먼저 돌면 가드가 말하기 전에 SQL 에러로 죽는다")
-                        .isLessThan(runners.indexOf(jobRunner)));
+        // 순서는 정렬값으로 직접 본다. 이 컨텍스트는 spring.batch.job.enabled=false 라
+        // JobLauncherApplicationRunner 빈이 아예 없어서, 그 빈을 찾아 인덱스를 비교하는
+        // 방식이면 단언이 한 번도 안 돈다 — 지키겠다고 적은 결합이 실제로는 안 지켜진다.
+        assertThat(OrderUtils.getOrder(SchemaPresenceGuard.class))
+                .as("JobLauncherApplicationRunner 의 정렬값은 0 이다. @Order 를 떼면 "
+                        + "LOWEST_PRECEDENCE 라 잡이 먼저 돌고, 가드가 말하기 전에 "
+                        + "SQL 에러로 죽는다")
+                .isNotNull()
+                .isLessThan(0);
     }
 
     /**
@@ -343,14 +349,6 @@ class VerificationMetricExposureTest {
                 .doesNotThrowAnyException();
     }
 
-    private static int indexOfType(List<ApplicationRunner> runners, Class<?> type) {
-        for (int i = 0; i < runners.size(); i++) {
-            if (type.isInstance(runners.get(i))) {
-                return i;
-            }
-        }
-        throw new AssertionError(type.getSimpleName() + " 이 러너 목록에 없다");
-    }
 
     private void closedRun(DatasetType dataset, VerdictType verdict, int findings,
             LocalDateTime asOf) {

@@ -47,6 +47,17 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
     private static final List<String> BATCH_META_TABLES =
             List.of("BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION");
 
+    /**
+     * <b>테이블이 있다고 컬럼도 있는 것은 아니다.</b> 여기 넣는 기준은 <i>"이것이 없으면
+     * 그 경로가 매번 SQL 에러로 죽는가"</i> 다 — 스키마 최신성 전반이 아니라, 배치가
+     * 질의문에 <b>이름으로 박아 둔</b> 컬럼만 본다.
+     *
+     * <p>{@code origin} 은 cy-seed {@code 1f217b5} 부터 생겼고, 그 이전 검증용 셋에는
+     * 테이블은 다 있고 이것만 없다. Flyway 가 그 DB 에 안 닿아 재생성 말고는 답이 없다.
+     */
+    private static final List<String> CRITICAL_COLUMNS =
+            List.of("verification_runs.origin");
+
     private static final List<String> CORE_TABLES =
             Stream.concat(DATA_TABLES.stream(), BATCH_META_TABLES.stream()).toList();
 
@@ -456,6 +467,22 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .query(String.class)
                 .list();
         return CORE_TABLES.stream()
+                .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
+                .toList();
+    }
+
+    @Override
+    public List<String> missingCriticalColumns() {
+        List<String> present = jdbcClient.sql("""
+                        SELECT CONCAT(table_name, '.', column_name)
+                          FROM information_schema.columns
+                         WHERE table_schema = DATABASE()
+                           AND CONCAT(table_name, '.', column_name) IN (:names)
+                        """)
+                .param("names", CRITICAL_COLUMNS)
+                .query(String.class)
+                .list();
+        return CRITICAL_COLUMNS.stream()
                 .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
                 .toList();
     }

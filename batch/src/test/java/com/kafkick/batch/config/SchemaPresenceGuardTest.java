@@ -117,6 +117,23 @@ class SchemaPresenceGuardTest {
                 .hasMessageContaining("coupon_clean");
     }
 
+    /**
+     * <b>테이블이 다 있다고 컬럼도 있는 것은 아니다.</b> cy-seed {@code 1f217b5} 이전에 만든
+     * 검증용 셋이 정확히 그 모양이다 — 그대로 띄우면 기동은 통과하고 되읽기만 매 주기
+     * 조용히 실패한다. 조치도 다르다: 재생성 말고는 답이 없다.
+     */
+    @Test
+    @DisplayName("테이블은 다 있고 컬럼만 없으면 재생성하라고 한다")
+    void tellsToRebuildTheDatasetWhenOnlyAColumnIsMissing() {
+        assertThatThrownBy(() -> new SchemaPresenceGuard(
+                stub("coupon_clean", List.of(), List.of("verification_runs.origin"))).run(null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("verification_runs.origin")
+                .as("테이블이 멀쩡한데 배포 순서를 의심하게 하면 안 된다")
+                .hasMessageNotContaining("api 를 먼저 띄워")
+                .hasMessageContaining("다시 만드십시오");
+    }
+
     @Test
     @DisplayName("전부 있으면 통과한다")
     void passesWhenNothingIsMissing() {
@@ -138,18 +155,24 @@ class SchemaPresenceGuardTest {
      * {@code UnsupportedOperationException} 이라, 가드가 조용히 다른 축을 보게 되면 드러난다.
      */
     private static VerificationRuleRepository missing(List<String> tables) {
-        return stub("app", tables);
+        return stub("app", tables, List.of());
     }
 
     private static VerificationRuleRepository stub(String schema, List<String> tables) {
+        return stub(schema, tables, List.of());
+    }
+
+    private static VerificationRuleRepository stub(String schema, List<String> tables,
+            List<String> columns) {
         return (VerificationRuleRepository) java.lang.reflect.Proxy.newProxyInstance(
                 VerificationRuleRepository.class.getClassLoader(),
                 new Class<?>[] {VerificationRuleRepository.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "missingCoreTables" -> tables;
+                    case "missingCriticalColumns" -> columns;
                     case "currentSchema" -> schema;
                     default -> throw new UnsupportedOperationException(
-                            "가드는 missingCoreTables·currentSchema 만 봐야 한다: " + method.getName());
+                            "가드가 예상 밖의 축을 본다: " + method.getName());
                 });
     }
 }

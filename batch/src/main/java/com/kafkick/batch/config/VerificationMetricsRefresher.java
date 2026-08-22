@@ -67,6 +67,12 @@ public class VerificationMetricsRefresher {
     private final AtomicLong failures = new AtomicLong();
 
     /**
+     * {@code VerificationMetricsStale} 의 창(10분)에서 증분 3 을 채우려면 최소 세 번은
+     * 시도해야 한다. 2분이면 창 안에 다섯 번이라 여유가 있다.
+     */
+    private static final long MAX_REFRESH_MILLIS = 120_000;
+
+    /**
      * <b>되읽기에 데드라인을 준다.</b> 이 조회는 스케줄러 스레드에서 트랜잭션 밖으로 도는데,
      * 그러면 {@code DataSourceUtils} 가 {@code queryTimeout} 을 안 붙여 <b>끊을 수단이
      * 없다.</b> 커넥션 풀이 마르거나 테이블이 잠긴 날 이 스레드가 붙잡히면 다음 주기도
@@ -74,12 +80,6 @@ public class VerificationMetricsRefresher {
      *
      * <p>읽기 전용이고, 터지면 {@code catch} 가 잡아 <i>"모름"</i> 으로 떨어진다.
      */
-    /**
-     * {@code VerificationMetricsStale} 의 창(10분)에서 증분 3 을 채우려면 최소 세 번은
-     * 시도해야 한다. 2분이면 창 안에 다섯 번이라 여유가 있다.
-     */
-    private static final long MAX_REFRESH_MILLIS = 120_000;
-
     private final TransactionTemplate readLatest;
 
     public VerificationMetricsRefresher(VerificationRunRepository runs, VerificationMetrics metrics,

@@ -196,6 +196,20 @@ public interface VerificationRuleRepository {
     String currentSchema();
 
     /**
+     * 배치가 <b>이름으로 짚는 컬럼</b> 중 지금 스키마에 없는 것을 {@code 테이블.컬럼} 으로
+     * 돌려줍니다. 전부 있으면 빈 목록입니다.
+     *
+     * <p>테이블이 있다고 컬럼도 있는 것은 아닙니다. {@code verification_runs.origin} 은
+     * cy-seed {@code 1f217b5} 부터 생겼는데, 그 이전에 만든 검증용 셋에는 <b>테이블은 다
+     * 있고 이 컬럼만 없습니다.</b> Flyway 는 그 DB 에 닿지 않아 마이그레이션으로 못 고칩니다.
+     *
+     * <p>그 상태로 띄우면 기동은 통과하고 되읽기가 <b>매 주기 {@code Unknown column} 으로
+     * 실패</b>합니다. 게이지는 직전 값을 유지하므로 조용하고, 알림이 뜨기까지 최소 15분이
+     * 걸립니다. 기동 시점에 잡으면 즉시, 그리고 조치까지 함께 말할 수 있습니다.
+     */
+    List<String> missingCriticalColumns();
+
+    /**
      * 이 실행이 <b>어떤 데이터를 봤는지</b>를 한 값으로 접습니다.
      *
      * <p>계약({@code docs/contract.json} 의 {@code fingerprint})이 정한 공식을 글자 그대로 씁니다.

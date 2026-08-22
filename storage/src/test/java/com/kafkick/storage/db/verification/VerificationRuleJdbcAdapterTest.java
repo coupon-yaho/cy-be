@@ -752,6 +752,36 @@ class VerificationRuleJdbcAdapterTest {
                 .isGreaterThanOrEqualTo(3);
     }
 
+    /**
+     * 컬럼 축도 두 방향을 본다. 갖춰진 스키마에서 비는 것, 그리고 그 컬럼이 없는 스키마에서
+     * 실제로 <b>없다고</b> 답하는 것. 뒤 축이 없으면 {@code return List.of()} 로 바꿔도 초록이다.
+     */
+    @Test
+    @DisplayName("갖춰진 스키마에서는 없는 컬럼이 없다")
+    void reportsNoMissingColumnOnAMigratedSchema() {
+        assertThat(adapter.missingCriticalColumns()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("그 컬럼이 없는 스키마에서는 없다고 답한다")
+    void detectsAMissingCriticalColumn() throws Exception {
+        try (Connection connection = dataSource.getConnection()) {
+            String original = connection.getCatalog();
+            try {
+                connection.setCatalog("information_schema");
+                VerificationRuleJdbcAdapter probe = new VerificationRuleJdbcAdapter(
+                        JdbcClient.create(new SingleConnectionDataSource(connection, true)));
+
+                assertThat(probe.missingCriticalColumns())
+                        .as("이게 비면 origin 없는 구 데이터셋이 기동을 통과한다")
+                        .containsExactly("verification_runs.origin");
+            } finally {
+                connection.setCatalog(original);
+            }
+            assertThat(connection.getCatalog()).isEqualTo(original);
+        }
+    }
+
     @Test
     @DisplayName("접속 스키마 이름을 답한다 — 메시지가 원인을 가르는 근거다")
     void reportsTheSchemaItIsLookingAt() {

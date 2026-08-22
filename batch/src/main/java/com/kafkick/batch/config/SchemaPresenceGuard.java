@@ -87,12 +87,24 @@ public class SchemaPresenceGuard implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         String schema = rules.currentSchema();
         List<String> missing = rules.missingCoreTables();
-        if (missing.isEmpty()) {
-            log.info("스키마 확인 완료 — 배치 핵심 테이블이 전부 있습니다. schema={}", schema);
-            return;
+        if (!missing.isEmpty()) {
+            throw new BusinessException(VerificationErrorCode.SCHEMA_NOT_MIGRATED,
+                    message(schema, missing));
         }
-        throw new BusinessException(VerificationErrorCode.SCHEMA_NOT_MIGRATED,
-                message(schema, missing));
+        // 테이블이 다 있다고 컬럼도 있는 것은 아니다. cy-seed 1f217b5 이전에 만든 검증용
+        // 셋이 정확히 그 모양이다 — 그대로 띄우면 기동은 통과하고 되읽기가 매 주기
+        // Unknown column 으로 실패한다. 게이지가 직전 값을 유지하므로 조용하고,
+        // 알림이 뜨기까지 최소 15분이다. 여기서 잡으면 즉시, 조치까지 함께 말한다.
+        List<String> missingColumns = rules.missingCriticalColumns();
+        if (!missingColumns.isEmpty()) {
+            throw new BusinessException(VerificationErrorCode.SCHEMA_NOT_MIGRATED,
+                    "배치가 보는 스키마(" + schema + ")에 컬럼이 없습니다: "
+                            + String.join(", ", missingColumns)
+                            + ". 테이블은 전부 있으므로 배포 순서 문제가 아닙니다 — "
+                            + "cy-seed 1f217b5 이전에 만든 검증용 셋입니다. Flyway 가 그 DB 에 "
+                            + "닿지 않아 마이그레이션으로는 못 고칩니다. 데이터셋을 다시 만드십시오.");
+        }
+        log.info("스키마 확인 완료 — 배치 핵심 테이블과 컬럼이 전부 있습니다. schema={}", schema);
     }
 
     /**

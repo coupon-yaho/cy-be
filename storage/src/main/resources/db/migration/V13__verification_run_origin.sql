@@ -26,3 +26,14 @@
 ALTER TABLE verification_runs
   ADD COLUMN origin varchar(6) NOT NULL DEFAULT 'BATCH'
   COMMENT 'SEED / BATCH — 시드가 심은 기준 행인가, 배치가 만든 실행인가';
+
+-- 불변식을 DB 제약으로 표현한다. varchar(6) 은 무엇이든 받는데, 되읽기가
+-- WHERE origin = 'BATCH' 로 좁히므로 두 값 밖의 값은 그 실행을 지표에서
+-- 조용히 지운다 — "판정이 없다"(NaN) 와 구분이 안 된다.
+--
+-- 시드 쪽에서 위치가 밀리는 경로가 실재한다. 로더가 컬럼 목록 없이 LOAD DATA 로
+-- 넣기 때문에 15번째 자리가 한 칸 밀리면 엉뚱한 값이 여기 앉는다.
+-- cy-seed 의 ddl/10_constraints_common.sql 에 같은 제약이 있다.
+ALTER TABLE verification_runs
+  ADD CONSTRAINT ck_verification_run_origin
+  CHECK (origin IN ('SEED', 'BATCH'));
