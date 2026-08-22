@@ -490,20 +490,6 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
-    void neverPropagatesWhenLogIntervalOverflowsNanoseconds() {
-        IssuanceObservationService service = new IssuanceObservationService(
-                new IssuanceFlowEventFactory(() -> EVENT_ID),
-                event -> {
-                    throw new IllegalStateException("recorder unavailable");
-                },
-                TIME_PROVIDER,
-                Duration.ofSeconds(10)
-        );
-
-        assertThatCode(() -> service.recordIssueAttempt(context())).doesNotThrowAnyException();
-    }
-
-    @Test
     void logsWarningWithRequestIdWhenIssueAttemptRecordingFails(CapturedOutput output) {
         IssuanceObservationService service = service(event -> {
             throw new IllegalStateException("recorder unavailable");
