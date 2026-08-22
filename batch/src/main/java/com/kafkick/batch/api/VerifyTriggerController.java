@@ -237,13 +237,13 @@ public class VerifyTriggerController {
         // 어느 operator 로 시작했든 멈춘다 — 검사가 없으면 /verify/ 경로가 expireJob 을
         // 멈출 수 있다. 만료는 재고를 쓰는 유일한 잡이고, 중간에 멈추면 다음 검증의
         // 판정 근거가 흔들린다. 둘은 같은 BATCH_JOB_EXECUTION 시퀀스를 공유해 번호가 섞인다.
-        requireVerifyExecution(executionId);
+        JobExecution execution = requireVerifyExecution(executionId);
         try {
-            boolean signalled = verifyJobOperator.stop(executionId);
+            // id 오버로드는 Spring Batch 6 에서 deprecated 다. 그리고 그것을 쓰면
+            // operator 가 같은 조회를 한 번 더 한다 — 이미 읽어 온 것을 넘긴다.
+            boolean signalled = verifyJobOperator.stop(execution);
             return ResponseEntity.accepted()
                     .body(ResponseEnvelope.success(new StopRequested(executionId, signalled)));
-        } catch (org.springframework.batch.core.launch.NoSuchJobExecutionException e) {
-            throw notFound(executionId);
         } catch (org.springframework.batch.core.launch.JobExecutionNotRunningException e) {
             throw new BusinessException(VerificationErrorCode.VERIFY_NOT_RUNNING,
                     "executionId=" + executionId, e);
@@ -294,17 +294,16 @@ public class VerifyTriggerController {
         }
     }
 
-    /**
-     * {@code SimpleJobOperator} 는 <b>도는 실행이 0건이고</b> 레지스트리에도 이름이 없을 때에만
-     * {@code NoSuchJobException} 을 던진다. 예외가 났다는 것이 곧 0건이라 빈 집합이 항상 맞다.
-     * {@code MapJobRegistry} 가 {@code Job} 빈을 자동 등록하므로 실제로는 안 던진다.
-     */
+    /** 지금 도는 검증 실행의 {@code executionId}. 하드킬로 남은 행도 여기 잡힌다. */
     private Set<Long> runningExecutions() {
-        try {
-            return verifyJobOperator.getRunningExecutions(VerifyJobConfig.JOB_NAME);
-        } catch (org.springframework.batch.core.launch.NoSuchJobException e) {
-            return Set.of();
-        }
+        // JobOperator.getRunningExecutions(String) 은 Spring Batch 6 에서 제거 예정이다.
+        // JobRepository 쪽이 대체이고, 레지스트리에 이름이 없어도 안 던져서 갈래가 하나 준다.
+        //
+        // 이것이 보는 것은 **DB 의 STATUS IN ('STARTING','STARTED','STOPPING')** 이다 —
+        // 그래서 하드킬로 남은 행이 여기 잡히고, abandon 이 그 해제 경로가 된다.
+        return jobRepository.findRunningJobExecutions(VerifyJobConfig.JOB_NAME).stream()
+                .map(JobExecution::getId)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     /**
@@ -368,15 +367,13 @@ public class VerifyTriggerController {
                             + "버릴 것이 없습니다(트리거를 막지 않습니다). executionId=" + executionId);
         }
         try {
-            verifyJobOperator.abandon(executionId);
+            verifyJobOperator.abandon(execution);
             log.warn("검증 실행을 버렸습니다. 하드킬로 남은 행을 걷어내는 복구 절차입니다. "
                     + "executionId={}", executionId);
             // stop 과 달리 **완료 동작**이라 200 이다. 202 + StopRequested 를 재사용하면
             // "신호만 보냈다" 는 그쪽 뜻이 여기서는 거짓이 된다.
             return ResponseEntity.ok(ResponseEnvelope.success(
                     new Abandoned(executionId, BatchStatus.ABANDONED.name())));
-        } catch (org.springframework.batch.core.launch.NoSuchJobExecutionException e) {
-            throw notFound(executionId);
         } catch (org.springframework.batch.core.launch.JobExecutionAlreadyRunningException e) {
             // 위 검사와 이 호출 사이에 상태가 바뀐 경우다. 같은 답을 준다.
             throw new BusinessException(VerificationErrorCode.VERIFY_NOT_ABANDONABLE,

@@ -346,7 +346,8 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    docker compose -f base.yml -f batch.yml -f batch-expose.yml up -d batch
 
    curl -X POST "http://127.0.0.1:9090/api/v1/admin/verify?asOf=<시드의 as_of>"
-   # → 202 {"executionId":41,"asOf":...,"dataset":"CLEAN","scope":"FULL","attempt":3}
+   # → 202 {"success":true,"data":{"executionId":41,"asOf":...,"dataset":"CLEAN",
+   #                                 "scope":"FULL","attempt":3},"error":null}
    ```
 
    `dataset`·`scope`·`attempt` 는 안 줘도 된다 — 서버가 붙어 있는 스키마와 다음 빈 번호로
@@ -354,8 +355,9 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
    ```bash
    curl "http://127.0.0.1:9090/api/v1/admin/verify/runs/41"
-   # → {"executionId":41,"runId":null,"status":"STARTED", ...}
-   # → {"executionId":41,"runId":1207,"status":"COMPLETED","verdict":"PASS","findingCount":0, ...}
+   # → {"success":true,"data":{"executionId":41,"runId":null,"status":"STARTED", ...}}
+   # → {"success":true,"data":{"executionId":41,"runId":1207,"status":"COMPLETED",
+   #                           "verdict":"PASS","findingCount":0, ...}}
    ```
 
    위는 CLEAN 이라 **0건이 정상**이다. 검증 알림(`VerificationVerdictFailed`)을 실제로
@@ -363,7 +365,9 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
    ```bash
    curl -X POST "http://127.0.0.1:9090/api/v1/admin/verify?asOf=<시드의 as_of>&dataset=CORRUPT&seedRunId=<시드 run>"
-   # → 판정 뒤: {"verdict":"FAIL","findingCount":800, ...}   ← 정답 800행과 일치하는 것이 합격이다
+   # → 판정 뒤 조회하면:
+   #   {"success":true,"data":{"verdict":"FAIL","findingCount":800, ...},"error":null}
+   #   ← 정답 800행과 일치하는 것이 합격이다
    ```
 
    **`runId` 가 `null` 인 것도 정보다** — 아직 판정 단계에 못 갔거나, 가드에 걸려 끝까지

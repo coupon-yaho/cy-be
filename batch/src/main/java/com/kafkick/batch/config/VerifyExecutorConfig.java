@@ -43,44 +43,6 @@ public class VerifyExecutorConfig implements DisposableBean {
     private ThreadPoolTaskExecutor executor;
 
     /**
-     * <b>스레드 하나, 큐 없음. 그리고 빈이 아니다.</b>
-     *
-     * <p><b>{@code @Bean} 으로 빼면 웹 계층이 다친다.</b> {@code Executor} 타입 빈이 하나라도
-     * 생기면 Boot 의 {@code applicationTaskExecutor} 가 조건에서 떨어져 사라지고, MVC 비동기가
-     * 요청당 스레드로 폴백하며 {@code spring.task.execution.*} 이 죽는다. 이 저장소가
-     * <b>이미 한 번 겪고 되돌린 사고</b>이고, {@code BatchJobRepositoryTest} 가 그것을
-     * 단언으로 못 박아 뒀다 — 여기서 다시 밟았다가 그 테스트가 잡았다.
-     *
-     * <p>이름도 조심한다. {@code BatchRegistrar} 는 이름이 {@code taskExecutor} 인 빈 정의가
-     * 있으면 그것을 <b>공용 {@code JobOperator} 에 물린다</b> — 그러면 만료 배치까지 비동기가
-     * 되어 이 클래스가 막으려는 바로 그 상태가 된다. 빈이 아니면 그 경로도 닫힌다.
-     *
-     * <p><b>왜 큐가 없나.</b> 큐가 있으면 <i>"받아 놓고 나중에"</i> 가 되는데, 그 사이
-     * {@code asOf} 가 지나가 <b>접수 시점과 실행 시점이 다른 데이터를 본다.</b> 판정의 기준
-     * 시각이 요청자가 의도한 것과 달라지므로 미루는 것보다 <b>거절이 맞다</b> —
-     * 컨트롤러가 그것을 429 로 옮긴다.
-     *
-     * <p>{@code setWaitForTasksToCompleteOnShutdown} 은 켜지 않는다. 300만 전수가 도는 중에
-     * 종료 신호가 오면 <b>기다리는 쪽이 더 나쁘다</b> — 컨테이너가 SIGKILL 로 넘어가 잡이
-     * 어느 Step 중간에서 끊기고, 그 상태는 {@code BATCH_STEP_EXECUTION} 에 남지도 않는다.
-     * 대신 {@code stop} 엔드포인트로 사람이 먼저 멈춘다.
-     */
-    private static ThreadPoolTaskExecutor createExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(1);
-        executor.setMaxPoolSize(1);
-        executor.setQueueCapacity(0);
-        executor.setThreadNamePrefix("verify-");
-        // 풀이 차면 호출 스레드에서 대신 돌리는 정책을 쓰면 톰캣 스레드가 300만 전수를
-        // 동기로 돌게 된다. 던지게 두고 429 로 옮긴다.
-        executor.setRejectedExecutionHandler((task, pool) -> {
-            throw new RejectedExecutionException("검증이 이미 실행 중입니다.");
-        });
-        executor.initialize();
-        return executor;
-    }
-
-    /**
      * <b>{@code start} 가 즉시 {@link org.springframework.batch.core.job.JobExecution} 을
      * 돌려준다.</b> 그 안의 {@code getId()} 가 202 에 실리는 값이다.
      *
@@ -125,5 +87,43 @@ public class VerifyExecutorConfig implements DisposableBean {
     @Bean
     JobRegistry verifyJobRegistry() {
         return new MapJobRegistry();
+    }
+
+    /**
+     * <b>스레드 하나, 큐 없음. 그리고 빈이 아니다.</b>
+     *
+     * <p><b>{@code @Bean} 으로 빼면 웹 계층이 다친다.</b> {@code Executor} 타입 빈이 하나라도
+     * 생기면 Boot 의 {@code applicationTaskExecutor} 가 조건에서 떨어져 사라지고, MVC 비동기가
+     * 요청당 스레드로 폴백하며 {@code spring.task.execution.*} 이 죽는다. 이 저장소가
+     * <b>이미 한 번 겪고 되돌린 사고</b>이고, {@code BatchJobRepositoryTest} 가 그것을
+     * 단언으로 못 박아 뒀다 — 여기서 다시 밟았다가 그 테스트가 잡았다.
+     *
+     * <p>이름도 조심한다. {@code BatchRegistrar} 는 이름이 {@code taskExecutor} 인 빈 정의가
+     * 있으면 그것을 <b>공용 {@code JobOperator} 에 물린다</b> — 그러면 만료 배치까지 비동기가
+     * 되어 이 클래스가 막으려는 바로 그 상태가 된다. 빈이 아니면 그 경로도 닫힌다.
+     *
+     * <p><b>왜 큐가 없나.</b> 큐가 있으면 <i>"받아 놓고 나중에"</i> 가 되는데, 그 사이
+     * {@code asOf} 가 지나가 <b>접수 시점과 실행 시점이 다른 데이터를 본다.</b> 판정의 기준
+     * 시각이 요청자가 의도한 것과 달라지므로 미루는 것보다 <b>거절이 맞다</b> —
+     * 컨트롤러가 그것을 429 로 옮긴다.
+     *
+     * <p>{@code setWaitForTasksToCompleteOnShutdown} 은 켜지 않는다. 300만 전수가 도는 중에
+     * 종료 신호가 오면 <b>기다리는 쪽이 더 나쁘다</b> — 컨테이너가 SIGKILL 로 넘어가 잡이
+     * 어느 Step 중간에서 끊기고, 그 상태는 {@code BATCH_STEP_EXECUTION} 에 남지도 않는다.
+     * 대신 {@code stop} 엔드포인트로 사람이 먼저 멈춘다.
+     */
+    private static ThreadPoolTaskExecutor createExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(0);
+        executor.setThreadNamePrefix("verify-");
+        // 풀이 차면 호출 스레드에서 대신 돌리는 정책을 쓰면 톰캣 스레드가 300만 전수를
+        // 동기로 돌게 된다. 던지게 두고 429 로 옮긴다.
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            throw new RejectedExecutionException("검증이 이미 실행 중입니다.");
+        });
+        executor.initialize();
+        return executor;
     }
 }
