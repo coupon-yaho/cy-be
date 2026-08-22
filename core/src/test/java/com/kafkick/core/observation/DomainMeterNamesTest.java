@@ -10,7 +10,8 @@ import org.junit.jupiter.api.Test;
 import com.kafkick.core.consistency.ConsistencyGapType;
 
 /**
- * 미터 이름과 상태 코드는 등록하는 쪽(batch)과 읽는 쪽(조회 API)이 함께 쓰는 공개 계약이다.
+ * 미터 이름과 상태 코드는 등록하는 쪽(batch · infra:mq)과 읽는 쪽(조회 API)이 함께 쓰는
+ * 공개 계약이다.
  * 바뀌면 예외 없이 화면만 비므로 골든값으로 고정한다.
  */
 class DomainMeterNamesTest {
@@ -33,6 +34,17 @@ class DomainMeterNamesTest {
             .isEqualTo(DomainMeterNames.CONSISTENCY_SEVERITY + ".state");
         assertThat(DomainMeterNames.CONSISTENCY_SOURCE_SKEW_SECONDS_STATE)
             .isEqualTo(DomainMeterNames.CONSISTENCY_SOURCE_SKEW_SECONDS + ".state");
+
+        // OBS-17. 운영 지침(kafka.yml.example)이 노출 이름을 손으로 적고 있어 계약의 무게가 같다.
+        assertThat(DomainMeterNames.KAFKA_ATTEMPT_PUBLISH_FAILURES)
+            .isEqualTo("app.kafka.attempt.publish.failures");
+        assertThat(DomainMeterNames.KAFKA_TOPICS_PROVISIONED)
+            .isEqualTo("app.kafka.topics.provisioned");
+        assertThat(DomainMeterNames.KAFKA_TOPICS_PROVISIONED_STATE)
+            .isEqualTo(DomainMeterNames.KAFKA_TOPICS_PROVISIONED + ".state");
+        assertThat(DomainMeterNames.KAFKA_TOPICS_PROVISIONED_CAUSE)
+            .isEqualTo(DomainMeterNames.KAFKA_TOPICS_PROVISIONED + ".cause");
+        assertThat(DomainMeterNames.TAG_CAUSE).isEqualTo("cause");
     }
 
     @Test
