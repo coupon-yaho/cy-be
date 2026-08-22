@@ -150,7 +150,7 @@
 | `blockedCoupons` 소요 실측 | 축소 픽스처에서 잰 값은 운영 규모를 대변하지 못한다. 코드 주석에서 근거 없는 수치를 뺐다. **실행계획 축은 `keepsBlockedCouponScanProportionalToPending` 이 잡는다** — `uk_coupon_member` 를 타면 깨진다 |
 | `unexplained` 이 캡처 창 지연분을 포함한다 | `COUNT_PENDING` 은 `updated_at` 창을 안 걸어, 설계상 다음 주기로 미룬 행도 "배치가 안 한 몫" 으로 센다. **지금은 도달 불가다** — `issuances` 를 쓰는 문장이 `EXPIRE_BATCH` 하나뿐이다. `CANCEL_USE`(`USED → ISSUED`)가 붙는 취소·사용 티켓에서 가른다 |
 | `(coupon_id, status, expires_at)` 인덱스 | 막힌 회차의 대기 행이 매 주기 재스캔된다. **인덱스 도입은 실측 뒤 별도 판단이다** |
-| 나머지 배치 테스트의 시계 고정 | 만료 테스트 여섯은 `FixedClock` 으로 고정했다. `ExpireJobLockOrderTest`·`ExpireCancelRaceTest`·`ExpireJobHistoryGuardTest`·`ExpireJobIsolationTest`·`VerifyJob*` 은 아직 벽시계다. 이 티켓이 안 건드린 파일이라 여기서 안 넓혔다 |
+| 나머지 배치 테스트의 시계 고정 | 이 티켓이 건드린 테스트 중 **잡을 실제로 돌리는 것은 전부** `FixedClock` 으로 고정했다. `ExpireCancelRaceTest`·`ExpireJobHistoryGuardTest`·`ExpireJobIsolationTest`·`VerifyJob*` 은 아직 벽시계인데, 이 티켓이 안 건드린 파일이라 여기서 안 넓혔다. (storage 의 만료 테스트는 `asOf` 가 SQL 바인드 파라미터일 뿐이라 시계와 무관하다) |
 | 리뷰 반복 결함의 기계적 검사 | 이 티켓의 리뷰에서 **같은 종류가 반복해서 나왔다** — 떠 있는 javadoc(4회), 개명 뒤 끊긴 문서 참조, 개수 주장과 실제 불일치("넷"↔"다섯"), 지표 단언 누락. 넷 다 파일을 읽어 기계적으로 잡을 수 있다. `BatchMetricExposureTest` 가 규칙 파일↔노출을 잇는 것과 같은 방식으로 테스트화할 자리다 |
 | `README` 의 batch 패키지 트리 | `config`/`job`/`schedule`/`replay` 는 CY-347 **이전부터** 있었고 이 티켓은 새 패키지를 안 만든다. README 가 침묵일 뿐 모순이 아니라, 채우는 것은 소유자가 정할 별도 티켓이다 |
 

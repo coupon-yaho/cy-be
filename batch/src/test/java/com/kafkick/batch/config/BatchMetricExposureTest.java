@@ -167,7 +167,7 @@ class BatchMetricExposureTest {
     }
 
     /**
-     * 알림 규칙 파일에서 {@code spring_batch_*} 이름을 전부 뽑는다.
+     * 알림 규칙 파일에서 {@code spring_batch_*} 과 {@code cy_*} 이름을 전부 뽑는다.
      *
      * <p>태그가 붙은 형태({@code ..._count{job="x"}})로 쓰이므로 이름 부분만 취한다.
      * 규칙에 새 메트릭이 등장하면 여기 자동으로 딸려 와, 그 이름도 함께 검사받는다.
