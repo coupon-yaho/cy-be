@@ -53,7 +53,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
                         new ObservedValue<>(null, SourceStatus.PENDING, null),
                         new ObservedValue<>(null, SourceStatus.PENDING, null)
                 ),
-                new CouponMetricsResponse.CampaignRuntimeSummary(CouponStatus.OPEN, null),
+                new CouponMetricsResponse.CampaignRuntimeSummary(CouponStatus.OPEN, OBSERVED_AT),
                 new ObservedValue<>(0.2, SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(new CouponMetricsResponse.IssuanceStatusCounts(10, 5, 1, 2),
                         SourceStatus.VALID, OBSERVED_AT),
@@ -94,9 +94,11 @@ class DashboardIssuanceDtoJsonSerializationTest {
                 .contains("\"currentPerSecond\":12.5")
                 .contains("\"peakPerSecond\":20.0")
                 .contains("\"estimatedWaitMillis\":{\"value\":1250")
+                .contains("\"opensAt\":\"2026-08-16T00:00:00Z\"")
+                .contains("\"unusedCount\":8")
                 .contains("\"usePerSecond\":2.5")
                 .contains("\"cancelUsePerSecond\":1.5")
-                .doesNotContain("\"useCount\":");
+                .doesNotContain("\"openedAt\":", "\"issuedCount\":", "\"useCount\":");
     }
 
     /** 발급 문의·이력이 nullable 필드와 마스킹 코드를 보존하고 core enum을 재사용하는지 확인합니다. */

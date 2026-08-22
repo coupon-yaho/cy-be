@@ -85,7 +85,7 @@ public record CouponMetricsResponse(
                         observed(snapshot.queue().waitingCount()),
                         observed(snapshot.queue().estimatedWait(), Duration::toMillis)),
                 new CampaignRuntimeSummary(
-                        snapshot.campaign().status(), snapshot.campaign().openedAt()),
+                        snapshot.campaign().status(), snapshot.campaign().opensAt()),
                 observed(snapshot.usageRatio()),
                 observed(snapshot.holdingCounts(), counts -> new IssuanceStatusCounts(
                         counts.issued(), counts.used(), counts.cancelled(), counts.expired())),
@@ -169,32 +169,33 @@ public record CouponMetricsResponse(
     }
 
     /**
-     * 권위 DB의 캠페인 상태와 실제 오픈 시각이며 오픈 전이면 openedAt은 null일 수 있습니다.
+     * 권위 DB의 캠페인 상태와 설정된 오픈 시각입니다.
      *
      * @param status 권위 DB의 캠페인 상태
-     * @param openedAt 실제 오픈 시각; 오픈 전이면 null
+     * @param opensAt 설정된 캠페인 오픈 시각
      */
-    public record CampaignRuntimeSummary(CouponStatus status, Instant openedAt) {
+    public record CampaignRuntimeSummary(CouponStatus status, Instant opensAt) {
 
         /** 캠페인 상태가 항상 존재하는지 검증합니다. */
         public CampaignRuntimeSummary {
             Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(opensAt, "opensAt");
         }
     }
 
     /**
      * 발급권의 현재 상태별 보유 건수입니다.
      *
-     * @param issuedCount 발급 완료 후 미사용 건수
+     * @param unusedCount 발급 완료 후 미사용 건수
      * @param usedCount 사용 완료 건수
      * @param cancelledCount 취소 건수
      * @param expiredCount 만료 건수
      */
-    public record IssuanceStatusCounts(long issuedCount, long usedCount, long cancelledCount, long expiredCount) {
+    public record IssuanceStatusCounts(long unusedCount, long usedCount, long cancelledCount, long expiredCount) {
 
         /** 모든 상태별 보유량이 음수가 아닌지 검증합니다. */
         public IssuanceStatusCounts {
-            requireCount(issuedCount, "issuedCount");
+            requireCount(unusedCount, "unusedCount");
             requireCount(usedCount, "usedCount");
             requireCount(cancelledCount, "cancelledCount");
             requireCount(expiredCount, "expiredCount");

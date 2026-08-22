@@ -55,6 +55,27 @@ class CouponMetricsCalculatorTest {
     }
 
     @Test
+    void rejectsTransitionBucketsThatPartiallyOverlapRequestedWindow() {
+        CouponMetricsSource.TransitionBucket partialBucket =
+                new CouponMetricsSource.TransitionBucket(
+                        SNAPSHOT_AT.minus(Duration.ofMinutes(5)).minusSeconds(30),
+                        SNAPSHOT_AT.minus(Duration.ofMinutes(4)).minusSeconds(30),
+                        60L, 0L, 0L, 0L);
+        CouponMetricsSource source = sourceWith(
+                observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
+                observed(new CouponMetricsSource.QueueCounts(
+                        0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
+                observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
+                observed(issuanceSamples()),
+                observed(List.of(partialBucket)));
+
+        assertThatThrownBy(() -> calculator.calculate(
+                source, MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("부분");
+    }
+
+    @Test
     void returnsNotApplicableUsageWhenNoIssuedOrUsedCouponsExist() {
         CouponMetricsSource source = sourceWith(
                 observed(new CouponMetricsSource.StockCounts(0L, 0L)),

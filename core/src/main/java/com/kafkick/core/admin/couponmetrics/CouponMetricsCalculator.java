@@ -54,7 +54,7 @@ public class CouponMetricsCalculator {
                 issuanceProgress(source.stock()),
                 issuanceRate(source.issuanceSamples(), windowStart, snapshotAt),
                 queue(source.queue()),
-                new CampaignRuntimeSummary(source.campaign().status(), source.campaign().openedAt()),
+                new CampaignRuntimeSummary(source.campaign().status(), source.campaign().opensAt()),
                 usageRatio(source.holdingCounts()),
                 holdingCounts(source.holdingCounts()),
                 transitionRates(source.transitions(), windowStart, snapshotAt));
@@ -222,6 +222,11 @@ public class CouponMetricsCalculator {
                     ? bucket.windowEnd() : snapshotAt;
             if (!overlapEnd.isAfter(overlapStart)) {
                 continue;
+            }
+            if (!overlapStart.equals(bucket.windowStart())
+                    || !overlapEnd.equals(bucket.windowEnd())) {
+                throw new IllegalArgumentException(
+                        "요청 구간과 부분적으로 겹치는 상태 전이 버킷은 계산할 수 없습니다.");
             }
             use = Math.addExact(use, bucket.use());
             cancelUse = Math.addExact(cancelUse, bucket.cancelUse());

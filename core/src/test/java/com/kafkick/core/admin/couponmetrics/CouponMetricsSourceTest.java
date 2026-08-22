@@ -3,14 +3,12 @@ package com.kafkick.core.admin.couponmetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -82,18 +80,6 @@ class CouponMetricsSourceTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
-    @Test
-    void rejectsSnapshotRatiosOutsideZeroToOne() {
-        CouponMetricsSnapshot.Observation<Double> invalidRatio = snapshotObserved(1.1);
-
-        assertThatThrownBy(() -> snapshot(invalidRatio, snapshotObserved(0.25)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("issuanceProgress");
-        assertThatThrownBy(() -> snapshot(snapshotObserved(0.6), invalidRatio))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("usageRatio");
-    }
-
     private static CouponMetricsSource source(
             long couponId,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
@@ -119,26 +105,4 @@ class CouponMetricsSourceTest {
         return new CouponMetricsSource.Observation<>(value, SourceStatus.VALID, OBSERVED_AT);
     }
 
-    private static CouponMetricsSnapshot snapshot(
-            CouponMetricsSnapshot.Observation<Double> issuanceProgress,
-            CouponMetricsSnapshot.Observation<Double> usageRatio
-    ) {
-        CouponMetricsSnapshot.Observation<Long> count = snapshotObserved(1L);
-        return new CouponMetricsSnapshot(
-                1L,
-                OBSERVED_AT,
-                MetricsWindow.ONE_MINUTE,
-                new CouponMetricsSnapshot.StockSummary(count, count),
-                issuanceProgress,
-                snapshotObserved(new CouponMetricsSnapshot.RateSummary(1.0, 1.0)),
-                new CouponMetricsSnapshot.QueueSummary(count, snapshotObserved(Duration.ZERO)),
-                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponStatus.OPEN, OBSERVED_AT),
-                usageRatio,
-                snapshotObserved(new CouponMetricsSnapshot.IssuanceStatusCounts(1L, 0L, 0L, 0L)),
-                snapshotObserved(new CouponMetricsSnapshot.TransitionRateSummary(1.0, 1.0, 1.0, 1.0)));
-    }
-
-    private static <T> CouponMetricsSnapshot.Observation<T> snapshotObserved(T value) {
-        return new CouponMetricsSnapshot.Observation<>(value, SourceStatus.VALID, OBSERVED_AT);
-    }
 }

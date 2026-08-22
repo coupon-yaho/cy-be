@@ -104,8 +104,8 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.window").value("FIVE_MINUTES"))
                 .andExpect(jsonPath("$.data.stock.remainingCount.state").value("VALID"))
                 .andExpect(jsonPath("$.data.stock.remainingCount.value").value(4_650))
-                .andExpect(jsonPath("$.data.issuanceRate.value.currentPerSecond").isNumber())
-                .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").isNumber())
+                .andExpect(jsonPath("$.data.issuanceRate.value.currentPerSecond").value(10.0))
+                .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").value(0.65))
                 .andExpect(jsonPath("$.error").isEmpty());
     }
 

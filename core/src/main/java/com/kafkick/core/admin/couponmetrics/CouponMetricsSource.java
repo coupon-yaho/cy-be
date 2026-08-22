@@ -83,13 +83,13 @@ public record CouponMetricsSource(
         }
     }
 
-    /** 캠페인의 실행 상태와 실제 오픈 시각입니다. */
-    public record CampaignRuntime(CouponStatus status, Instant openedAt) {
+    /** 캠페인의 실행 상태와 설정된 오픈 시각입니다. */
+    public record CampaignRuntime(CouponStatus status, Instant opensAt) {
 
         /** 필수 캠페인 정보를 검증합니다. */
         public CampaignRuntime {
             Objects.requireNonNull(status, "status");
-            Objects.requireNonNull(openedAt, "openedAt");
+            Objects.requireNonNull(opensAt, "opensAt");
         }
     }
 
