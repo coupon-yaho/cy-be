@@ -415,6 +415,7 @@ public record AdminOverviewSnapshot(
         CAMPAIGN_NOT_READY,
         QUEUE_STALLED,
         ISSUANCE_STOPPED,
+        CONSISTENCY_FAILURE,
         STOCK_DEPLETING,
         DATA_UNAVAILABLE
     }

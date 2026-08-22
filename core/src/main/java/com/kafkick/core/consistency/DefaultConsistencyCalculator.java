@@ -153,7 +153,7 @@ public final class DefaultConsistencyCalculator implements ConsistencyCalculator
             );
         }
         for (Map.Entry<ConsistencyGapType, GapValue> entry : gaps.entrySet()) {
-            if (isApplicable(entry.getKey(), engineVersion)
+            if (entry.getKey().isApplicable(engineVersion)
                     && entry.getValue().state() != SourceStatus.VALID) {
                 throw new BusinessException(
                         ConsistencyErrorCode.FINAL_VALUE_UNAVAILABLE,
@@ -181,19 +181,8 @@ public final class DefaultConsistencyCalculator implements ConsistencyCalculator
             return true;
         }
         return gaps.entrySet().stream()
-                .filter(entry -> isApplicable(entry.getKey(), engineVersion))
+                .filter(entry -> entry.getKey().isApplicable(engineVersion))
                 .anyMatch(entry -> entry.getValue().value() != 0);
-    }
-
-    /**
-     * 발급 엔진 버전에서 지정한 gap을 평가하는지 확인합니다.
-     *
-     * @param gapType 확인할 gap 종류
-     * @param engineVersion 발급 엔진 버전
-     * @return 평가 대상이면 {@code true}
-     */
-    private static boolean isApplicable(ConsistencyGapType gapType, EngineVersion engineVersion) {
-        return engineVersion != EngineVersion.V1 || gapType == ConsistencyGapType.DB_COUNTER_GAP;
     }
 
     /**

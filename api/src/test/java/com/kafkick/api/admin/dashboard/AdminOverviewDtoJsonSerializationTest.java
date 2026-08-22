@@ -160,6 +160,40 @@ class AdminOverviewDtoJsonSerializationTest {
                 .doesNotContain("\"longestWait\":", "\"nearestDepletion\":");
     }
 
+    /** 정합성 실패 권장 행동의 공개 enum 코드가 Overview JSON에서 바뀌지 않아야 합니다. */
+    @Test
+    @DisplayName("Overview JSON은 CONSISTENCY_FAILURE 권장 행동 코드를 그대로 직렬화한다")
+    void overviewSerializesConsistencyFailureActionCode() throws Exception {
+        AdminOverviewResponse response = new AdminOverviewResponse(
+                SNAPSHOT_AT,
+                OverallStatus.PARTIAL,
+                unavailable(), unavailable(), unavailable(), unavailable(),
+                unavailable(), unavailable(), unavailable(), unavailable(),
+                new ObservedValue<>(
+                        new AdminOverviewResponse.ActionItemSummary(
+                                1,
+                                List.of(new AdminOverviewResponse.OperationActionItem(
+                                        17L,
+                                        "정합성 확인 쿠폰",
+                                        null,
+                                        Severity.CRITICAL,
+                                        AdminOverviewSnapshot.CustomerImpact.LIMITED,
+                                        "정합성 불일치를 확인해야 합니다.",
+                                        OBSERVED_AT,
+                                        null,
+                                        new AdminOverviewResponse.RecommendedAction(
+                                                AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE,
+                                                "정합성 확인",
+                                                AdminOverviewSnapshot.TargetScreen.METRICS)))),
+                        SourceStatus.VALID,
+                        OBSERVED_AT),
+                unavailable(),
+                unavailable());
+
+        assertThat(objectMapper.writeValueAsString(response))
+                .contains("\"code\":\"CONSISTENCY_FAILURE\"");
+    }
+
     /** 집계 4종, campaigns의 O1·O2·O4, 최상위 O3가 완전한 HTTP JSON 계약으로 직렬화되는지 검증합니다. */
     @Test
     @DisplayName("Overview JSON은 전체 집계와 campaigns O1 O2 O4 및 O3 결과를 직렬화한다")
