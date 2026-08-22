@@ -21,9 +21,12 @@ class AdminDashboardControllerTest {
 
     private static final Instant NOW = Instant.parse("2026-08-20T03:15:00Z");
 
+    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminDashboardController(AdminControllerContractTestSupport.overviewService(
-                    Clock.fixed(NOW, ZoneOffset.UTC)))
+            new AdminDashboardController(
+                    AdminControllerContractTestSupport.overviewService(CLOCK),
+                    AdminControllerContractTestSupport.couponMetricsService(CLOCK))
     );
 
     /** 개요 조회가 조립된 O1~O4·O3와 대표 조치를 성공 봉투에 보존하는지 검증합니다. */
@@ -89,13 +92,32 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.error.status").value(400));
     }
 
-    /** 허용된 집계 구간은 정상 바인딩된 뒤 미연결 상태인 501로 도달하는지 검증합니다. */
+    /** 허용된 집계 구간으로 상세 Mock 계산 결과를 성공 봉투에 반환하는지 검증합니다. */
     @Test
-    @DisplayName("쿠폰 지표 조회는 허용 window 요청에 ADMIN-001 선구축 오류를 반환한다")
-    void couponMetricsReturnsNotImplementedEnvelope() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 1L).param("window", "5m"))
-                .andExpect(status().isNotImplemented())
-                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+    @DisplayName("쿠폰 지표 조회는 요청 window로 계산한 상세 Mock 결과를 반환한다")
+    void couponMetricsReturnsCalculatedMockResponse() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 101L).param("window", "5m"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.couponId").value(101))
+                .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
+                .andExpect(jsonPath("$.data.window").value("FIVE_MINUTES"))
+                .andExpect(jsonPath("$.data.stock.remainingCount.state").value("VALID"))
+                .andExpect(jsonPath("$.data.stock.remainingCount.value").value(4_650))
+                .andExpect(jsonPath("$.data.issuanceRate.value.currentPerSecond").value(10.0))
+                .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").value(0.65))
+                .andExpect(jsonPath("$.error").isEmpty());
+    }
+
+    /** Overview 모집단에 없는 couponId를 공통 404 봉투로 반환하는지 검증합니다. */
+    @Test
+    @DisplayName("쿠폰 지표 조회는 없는 캠페인에 COMMON-002를 반환한다")
+    void couponMetricsReturns404ForUnknownCoupon() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 999_999L)
+                        .param("window", "1m"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-002"));
     }
 
     /** 유효한 기간·브랜드·쿠폰 필터가 분석 조회 계약에 바인딩되는지 검증합니다. */
