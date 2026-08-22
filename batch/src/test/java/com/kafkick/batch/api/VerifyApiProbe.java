@@ -71,13 +71,17 @@ final class VerifyApiProbe {
     static void awaitUntil(Duration timeout, String what, BooleanSupplier condition)
             throws InterruptedException {
         long deadline = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadline) {
+        while (true) {
             if (condition.getAsBoolean()) {
                 return;
             }
+            // 데드라인 검사를 sleep **뒤**에 둔다. 앞에 두면 마지막 200ms 창에서 조건이
+            // 참이 되어도 재평가 없이 실패한다 — CI 부하 시 간헐 실패의 전형이다.
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError(timeout.toSeconds() + "초 안에 " + what);
+            }
             Thread.sleep(200);
         }
-        throw new AssertionError(timeout.toSeconds() + "초 안에 " + what);
     }
 
     private HttpRequest.Builder request(String path) {

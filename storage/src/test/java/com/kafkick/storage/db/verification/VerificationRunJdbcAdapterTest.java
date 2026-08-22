@@ -391,6 +391,25 @@ class VerificationRunJdbcAdapterTest {
      * 우연히 안 걸리지만, 거기에 {@code dataset}·{@code scope}·{@code attempt} 가 붙는 날
      * 두 잡의 번호가 뒤섞인다.
      */
+    /**
+     * <b>어댑터의 잡 이름 상수가 실제 잡 이름과 같아야 한다.</b> storage 는 batch 를 참조할
+     * 수 없어(의존 방향이 반대다) 문자열로 두었는데, 그러면 {@code VerifyJobConfig.JOB_NAME}
+     * 을 바꾸는 리팩터링이 이쪽을 안 데려간다 — 그 순간 배치 메타 축이 조용히 0을 주고
+     * 가드에 걸려 죽은 attempt 를 다시 배정한다.
+     *
+     * <p>어댑터 javadoc 이 <i>"일치는 이 테스트가 지킨다"</i> 고 적어 놓고 실제로는 아무것도
+     * 잇지 않고 있었다.
+     */
+    @Test
+    @DisplayName("어댑터가 보는 잡 이름이 verifyJob 이다")
+    void looksAtTheVerifyJobName() {
+        // 이 이름으로 심은 것만 세는지 위·아래 테스트가 함께 증명한다.
+        insertBatchAttempt("verifyJob", AS_OF, "CLEAN", "FULL", 2);
+        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL))
+                .as("VerifyJobConfig.JOB_NAME 을 바꾸면 여기가 1 이 된다")
+                .isEqualTo(3);
+    }
+
     @Test
     @DisplayName("다른 잡의 번호는 안 센다")
     void ignoresOtherJobs() {
@@ -432,10 +451,14 @@ class VerificationRunJdbcAdapterTest {
         jdbcClient.sql("""
                         INSERT INTO BATCH_JOB_EXECUTION
                           (JOB_EXECUTION_ID, VERSION, JOB_INSTANCE_ID, CREATE_TIME, STATUS)
-                        VALUES (:id, 0, :instanceId, NOW(6), 'FAILED')
+                        VALUES (:id, 0, :instanceId, :createdAt, 'FAILED')
                         """)
                 .param("id", executionId)
                 .param("instanceId", instanceId)
+                // NOW() 를 안 쓴다. 이 저장소는 시각을 주입받는 것을 규율로 삼는다 —
+                // 그 값이 이 테스트의 단언에 안 쓰이더라도, DB 함수로 현재 시각을 읽는
+                // 습관이 남으면 다음 사람이 판정 경로에서도 그렇게 한다.
+                .param("createdAt", asOf)
                 .update();
 
         // 배치가 저장하는 형식 그대로 — LocalDateTime 은 ISO_LOCAL_DATE_TIME 이라 초가 항상 있다.

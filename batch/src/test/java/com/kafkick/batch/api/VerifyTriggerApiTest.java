@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,6 +70,10 @@ import com.kafkick.storage.db.VerificationSeed;
 class VerifyTriggerApiTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 3, 1, 9, 0);
+
+    /** {@code BatchStatus} 중 더 안 바뀌는 것들. STARTING·STARTED·STOPPING 은 진행 중이다. */
+    private static final Set<String> TERMINAL =
+            Set.of("COMPLETED", "FAILED", "STOPPED", "ABANDONED", "UNKNOWN");
 
     @LocalServerPort
     private int port;
@@ -531,12 +536,18 @@ class VerifyTriggerApiTest {
         return body(response, VerifyRunView.class);
     }
 
-    /** 잡이 비동기라 종단 상태까지 기다린다. 못 가면 AssertionError 로 끝난다. */
+    /**
+     * 잡이 비동기라 <b>종단 상태</b>까지 기다린다. 못 가면 {@code AssertionError} 로 끝난다.
+     *
+     * <p><b>"STARTED 가 아니다" 로 판정하면 안 된다.</b> 시작 전 상태인 {@code STARTING} 을
+     * 종료로 오인해서, 느린 러너에서만 아직 안 끝난 잡의 상태를 단언하게 된다 — CI 에서만
+     * 깨지는 플레이크를 실제로 그렇게 만들었다. 종단 목록을 명시한다.
+     */
     private void awaitTerminal(long executionId) throws Exception {
         awaitUntil(Duration.ofSeconds(90), "잡이 끝나지 않았습니다. executionId=" + executionId,
                 () -> {
                     try {
-                        return !"STARTED".equals(find(executionId).status());
+                        return TERMINAL.contains(find(executionId).status());
                     } catch (Exception e) {
                         throw new IllegalStateException(e);
                     }
