@@ -9,6 +9,7 @@ import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
+import com.kafkick.core.observation.CampaignLifecycleRecorder;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -29,7 +30,7 @@ import org.springframework.context.annotation.Bean;
 @AutoConfiguration(
         after = { MetricsAutoConfiguration.class, CompositeMeterRegistryAutoConfiguration.class },
         afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
-@EnableConfigurationProperties(ConsistencySeverityProperties.class)
+@EnableConfigurationProperties({ConsistencySeverityProperties.class, ObservationIssuanceProperties.class})
 public class ApiObservationAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(ApiObservationAutoConfiguration.class);
@@ -51,6 +52,20 @@ public class ApiObservationAutoConfiguration {
     public EventRecorder eventRecorder() {
         log.warn("EventRecorder 실구현이 없어 no-op을 사용합니다.");
         return new NoOpEventRecorder();
+    }
+
+    /**
+     * 캠페인 수명 통지를 받을 기본 포트를 등록합니다.
+     *
+     * <p>실구현(OBS-26)이 들어오기 전에도 호출부를 붙일 수 있게 무동작 구현을 기본값으로 둡니다.
+     *
+     * @return 통지를 버리는 기본 수명 기록 포트
+     */
+    @Bean
+    @ConditionalOnMissingBean(CampaignLifecycleRecorder.class)
+    public CampaignLifecycleRecorder campaignLifecycleRecorder() {
+        log.warn("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+        return new NoOpCampaignLifecycleRecorder();
     }
 
     /**
@@ -119,6 +134,7 @@ public class ApiObservationAutoConfiguration {
      * @param eventFactory 발급 관측 이벤트 생성기
      * @param eventRecorder 완성된 이벤트를 전달할 기록 포트
      * @param timeProvider 결과 발생 시각을 제공하는 시간 공급자
+     * @param issuanceProperties 기록 실패 로그의 유량 제한 간격 등 발급 관측 운영 임계치
      * @return 발급 관측 Session 생성 서비스
      */
     @Bean
@@ -126,9 +142,15 @@ public class ApiObservationAutoConfiguration {
     public IssuanceObservationService issuanceObservationService(
             IssuanceFlowEventFactory eventFactory,
             EventRecorder eventRecorder,
-            TimeProvider timeProvider
+            TimeProvider timeProvider,
+            ObservationIssuanceProperties issuanceProperties
     ) {
-        return new IssuanceObservationService(eventFactory, eventRecorder, timeProvider);
+        return new IssuanceObservationService(
+                eventFactory,
+                eventRecorder,
+                timeProvider,
+                issuanceProperties.resolvedAttemptFailureLogInterval()
+        );
     }
 
     @Bean

@@ -33,6 +33,71 @@ class IssuanceFlowEventTest {
     }
 
     @Test
+    void issueAttemptFactoryCarriesOnlyStageFields() {
+        IssuanceFlowEvent event = FACTORY.issueAttempt(context("request-1", false));
+
+        assertThat(event.eventType()).isEqualTo(EventType.ISSUE_ATTEMPT);
+        assertThat(event.schemaVersion()).isEqualTo(IssuanceFlowEvent.CURRENT_SCHEMA_VERSION);
+        assertThat(event.requestId()).isEqualTo("request-1");
+        assertThat(event.memberId()).isEqualTo(7L);
+        assertThat(event.couponId()).isEqualTo(9L);
+        assertThat(event.dependency()).isEqualTo(Dependency.NONE);
+        assertThat(event.httpStatus()).isNull();
+        assertThat(event.reasonCode()).isNull();
+        assertThat(event.issuanceId()).isNull();
+        assertThat(event.issuanceCode()).isNull();
+        assertThat(event.queuePosition()).isNull();
+        assertThat(event.queueSequence()).isNull();
+    }
+
+    @Test
+    void issueAttemptKeepsReplayedFlagFromContext() {
+        IssuanceFlowEvent event = FACTORY.issueAttempt(context("request-1", true));
+
+        assertThat(event.replayed()).isTrue();
+    }
+
+    @Test
+    void issueAttemptRequiresRequestId() {
+        assertThatThrownBy(() -> FACTORY.issueAttempt(context(null, false)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> FACTORY.issueAttempt(context("x".repeat(37), false)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalConstructorRejectsResultFieldsOnIssueAttempt() {
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_ATTEMPT, 201, null, null, null, null, null
+        )).isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("ISSUE_ATTEMPT 필드 계약을 위반했습니다.");
+
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_ATTEMPT, null, 101L, "ISSUANCE0000001", null, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_ATTEMPT, null, null, null,
+                ReasonCode.STOCK_EXHAUSTED, null, null
+        )).isInstanceOf(IllegalArgumentException.class);
+
+        assertThatThrownBy(() -> event(
+                EventType.ISSUE_ATTEMPT, null, null, null, null, 12L, 18L
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void canonicalConstructorRejectsDependencyOnIssueAttempt() {
+        assertThatThrownBy(() -> new IssuanceFlowEvent(
+                1, EVENT_ID, EventType.ISSUE_ATTEMPT, "request-1", 7L, 9L,
+                null, null, Grade.GOLD, null, null, Dependency.REDIS,
+                null, null, false, OCCURRED_AT, EngineVersion.V3, ReleaseStage.V3,
+                QueueMode.ADAPTIVE, null, "api-1"
+        )).isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("ISSUE_ATTEMPT 필드 계약을 위반했습니다.");
+    }
+
+    @Test
     void admittedFactoryRejectsReplayedContext() {
         assertThatThrownBy(() -> FACTORY.admitted(context(null, true), 18L))
                 .isInstanceOf(IllegalArgumentException.class);
