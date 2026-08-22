@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 import java.util.function.UnaryOperator;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.apache.kafka.clients.CommonClientConfigs;
@@ -256,7 +257,7 @@ public class KafkaTopicConfig {
     }
 
     /** 꼬리표 값은 등록 시점에 고정된다 — 그래서 닫힌 3값을 각각 한 시계열로 낸다. */
-    private static final List<String> PROVISION_CAUSES = List.of("none", "unconfirmed", "mismatched");
+    private static final List<String> PROVISION_CAUSES = List.of("none", "unconfirmed", "mismatched", "shutdown");
 
     /**
      * 생성과 확인을 한 걸음으로 묶는다. <b>람다로 두면 이 결합에 가드를 걸 수 없다</b> —
@@ -267,7 +268,13 @@ public class KafkaTopicConfig {
      * 스텁할 수 없기 때문이다. 단락 평가도 계약이다 — 만들지 못했으면 확인하러 가지 않는다.
      */
     static Supplier<ProvisionOutcome> provisioningStep(BooleanSupplier create, KafkaAdmin admin) {
-        return provisioningStep(create, admin, brokerConfigs(admin));
+        // 인자로 넘기면 즉시 평가되어 빈 생성(= refresh) 중에 브로커를 조회한다. 시도마다 읽는다.
+        return () -> {
+            if (!create.getAsBoolean()) {
+                return ProvisionOutcome.UNCONFIRMED;
+            }
+            return verifyDeclaration(admin, brokerConfigs(admin));
+        };
     }
 
     static Supplier<ProvisionOutcome> provisioningStep(
@@ -357,10 +364,18 @@ public class KafkaTopicConfig {
         return ProvisionOutcome.PROVISIONED;
     }
 
+    /**
+     * 어드민 클라이언트 생성 지점. <b>테스트가 "기동 중에 만들어졌는가" 를 세기 위한 이음새다</b> —
+     * 시간으로 재면 DNS·타임아웃·CI 부하에 따라 결함이 그대로인데 초록이 뜬다.
+     */
+    static final Function<Map<String, Object>, Admin> DEFAULT_ADMIN_FACTORY = Admin::create;
+
+    static Function<Map<String, Object>, Admin> adminFactory = DEFAULT_ADMIN_FACTORY;
+
     /** {@code KafkaAdmin} 은 {@code describeConfigs} 를 열어 주지 않아 어드민을 직접 연다. */
     private static UnaryOperator<String> brokerConfigs(KafkaAdmin admin) {
         Map<String, String> floors = new HashMap<>();
-        try (Admin client = Admin.create(admin.getConfigurationProperties())) {
+        try (Admin client = adminFactory.apply(admin.getConfigurationProperties())) {
             List<ConfigResource> resources = allTopics().stream()
                     .map(topic -> new ConfigResource(ConfigResource.Type.TOPIC, topic))
                     .toList();

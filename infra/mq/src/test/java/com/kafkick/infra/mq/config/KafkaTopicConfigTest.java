@@ -3,6 +3,7 @@ package com.kafkick.infra.mq.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Map;
 
 import org.apache.kafka.clients.admin.NewTopic;
@@ -251,6 +252,39 @@ class KafkaTopicConfigTest {
     void provisionerIsOnWhenThePropertyIsAbsent() {
         runner.withPropertyValues("kafka.enabled=true").run(context ->
                 assertThat(context).hasSingleBean(KafkaTopicProvisioner.class));
+    }
+
+    /**
+     * <b>시간이 아니라 사실을 잰다.</b> 위의 예산 단언은 {@code provision-topics=false} 인
+     * 회차만 덮는데, 정작 느려지는 조합은 프로비저너를 <b>켠</b> 회차다. 그런데 그 조합에
+     * 시간 단언을 걸면 DNS·타임아웃·CI 부하에 따라 결함이 그대로인데 초록이 뜬다 —
+     * 결함을 못 잡는 가드는 없는 가드보다 나쁘다. 있다고 믿게 만들기 때문이다.
+     *
+     * <p>그래서 어드민 클라이언트가 <b>기동 중에 만들어졌는지</b>를 센다. 0 이 아니면
+     * 브로커 조회가 refresh 경로로 들어온 것이고, 그 순간 "토픽 작업을 기동 밖으로" 라는
+     * 이 계층의 전제가 깨진다.
+     */
+    @Test
+    @DisplayName("기동 중에는 어드민 클라이언트를 만들지 않는다")
+    void noAdminClientIsOpenedDuringRefresh() {
+        AtomicInteger created = new AtomicInteger();
+        KafkaTopicConfig.adminFactory = config -> {
+            created.incrementAndGet();
+            throw new IllegalStateException("기동 중에 브로커에 접속하려 했다");
+        };
+        try {
+            runner.withPropertyValues("kafka.enabled=true").run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).hasSingleBean(KafkaTopicProvisioner.class);
+            });
+        } finally {
+            KafkaTopicConfig.adminFactory = KafkaTopicConfig.DEFAULT_ADMIN_FACTORY;
+        }
+
+        assertThat(created.get())
+                .as("브로커 조회가 빈 생성 시점으로 올라오면 기동이 그만큼 막히고,"
+                        + " 그때의 실패가 통째로 캡처되어 재시도가 영원히 성공하지 못한다")
+                .isZero();
     }
 
     /** 선언값을 보는 테스트가 있지도 않은 브로커에 접속을 시도할 이유가 없다. */

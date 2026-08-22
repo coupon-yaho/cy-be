@@ -154,7 +154,11 @@ public class KafkaTopicProvisioner implements ApplicationRunner {
             if (!sleep(backoff)) {
                 // 종료 중이다. PENDING 으로 두면 "아직 확인 전" 이라 경보가 안 걸린다 —
                 // 실제로는 확인을 포기한 것이다. 이미 VALID 면 덮지 않는다.
-                state.compareAndSet(new Snapshot(SourceStatus.PENDING, "none"), new Snapshot(SourceStatus.UNAVAILABLE, "unconfirmed"));
+                // compareAndSet 은 참조 비교다 — 기대값을 새로 만들면 절대 일치하지 않는다.
+                Snapshot current = state.get();
+                if (current.status() == SourceStatus.PENDING) {
+                    state.compareAndSet(current, new Snapshot(SourceStatus.UNAVAILABLE, "shutdown"));
+                }
                 return;
             }
             backoff = backoff.multipliedBy(2);

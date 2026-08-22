@@ -216,9 +216,12 @@ class TopicDeclarationVerificationTest {
                 .isEqualTo(ProvisionOutcome.UNCONFIRMED);
     }
 
+    /**
+     * attempt 를 <b>포함해서</b> 만든다. 여기서 빼 두면 "하한 미선언 토픽은 건너뛴다" 테스트의
+     * {@code remove} 가 아무것도 지우지 않아, 그 테스트의 입력이 성공 경로와 똑같아진다.
+     */
     private static Map<String, String> declaredFloors() {
         return KafkaTopicConfig.allTopics().stream()
-                .filter(topic -> !KafkaTopicConfig.ISSUE_ATTEMPT.equals(topic))
                 .collect(Collectors.toMap(Function.identity(), topic -> "2"));
     }
 

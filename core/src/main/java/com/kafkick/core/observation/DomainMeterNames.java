@@ -151,7 +151,10 @@ public final class DomainMeterNames {
     /** attempt 발행 실패의 원인. 값은 닫힌 집합이라 예외 종류가 늘어도 시계열이 안 늘어난다. */
     public static final String TAG_REASON = "reason";
 
-    /** 확인 실패의 종류. 값은 닫힌 3개라 시계열이 늘지 않는다. */
+    /**
+     * 확인 실패의 종류. 값은 {@code none · unconfirmed · mismatched · shutdown} 넷으로 닫혀 있다.
+     * {@code shutdown} 은 브로커 문제가 아니라 <b>우리가 종료 중이라 그만둔 것</b>이다.
+     */
     public static final String TAG_CAUSE = "cause";
 
     /** 미터가 가리키는 토픽 이름. */

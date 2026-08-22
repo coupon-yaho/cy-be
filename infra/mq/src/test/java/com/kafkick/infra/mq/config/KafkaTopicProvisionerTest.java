@@ -14,6 +14,8 @@ import java.util.function.Supplier;
 import com.kafkick.core.observation.SourceStatus;
 
 import org.junit.jupiter.api.AfterEach;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -245,11 +247,6 @@ class KafkaTopicProvisionerTest {
     }
 
     /**
-     * 실행기를 호출마다 새로 만들면 닫는 자리가 없어진다. 지금 테스트들은 {@code provisionOnce()}
-     * 를 직접 부르므로 실행기를 쓰지 않지만, 나중에 {@code run()} 경로 테스트가 추가되면 백오프
-     * 중인 스레드가 남아 Gradle 워커가 종료를 기다린다.
-     */
-    /**
      * 두 미터는 각각 {@code status()} 와 {@code cause()} 를 <b>따로</b> 읽는다. 둘이 원자적으로
      * 움직이지 않으면 한 scrape 안에 존재하지 않는 조합이 잡힌다 — 예를 들어
      * {@code state=PENDING}("그대로 두면 낫는다") 인데 {@code cause=mismatched}("재기동으로
@@ -285,6 +282,40 @@ class KafkaTopicProvisionerTest {
         assertThat(provisioner.status())
                 .as("죽은 태스크가 PENDING 이면 아무도 경보를 못 건다 — 그동안 RF1 토픽이 생긴다")
                 .isEqualTo(SourceStatus.UNAVAILABLE);
+    }
+
+    /**
+     * {@code AtomicReference.compareAndSet} 은 <b>참조 동일성</b>으로 비교한다. 기대값으로
+     * 새 {@code Snapshot} 을 만들어 넘기면 초기 인스턴스와 다른 객체라 절대 일치하지 않고,
+     * 종료 중 전환이 조용히 실패해 상태가 {@code PENDING} 에 남는다 — PENDING 은 "아직 확인 전,
+     * 곧 나아진다" 로 읽히기로 못박은 값이라 경보가 안 걸린다.
+     *
+     * <p>사유도 함께 본다. 종료는 "브로커가 아직 안 떴다"({@code unconfirmed})가 아니라
+     * <b>우리가 그만둔 것</b>이다. 그 둘을 같은 값으로 내면 화면이 "기다리면 낫는다" 로 안내하는데
+     * 그 프로세스는 이미 죽고 있다.
+     */
+    @Test
+    @DisplayName("종료 중이면 PENDING 이 아니라 중단으로 남는다")
+    void shutdownLeavesAnHonestState() throws Exception {
+        var pool = Executors.newSingleThreadExecutor();
+        KafkaTopicProvisioner provisioner = new KafkaTopicProvisioner(
+                () -> ProvisionOutcome.UNCONFIRMED, pool, 99, Duration.ofSeconds(30));
+        try {
+            Future<?> running = pool.submit(provisioner::provisionOnce);
+            Thread.ofVirtual().start(() -> { }).join();
+            pool.shutdownNow();
+            assertThat(pool.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+            running.cancel(true);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(provisioner.status())
+                .as("종료 중 전환이 실패하면 PENDING 에 남아 아무도 경보를 못 건다")
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(provisioner.snapshot().cause())
+                .as("우리가 그만둔 것을 '브로커 대기중' 으로 내면 운영자가 기다리기만 한다")
+                .isEqualTo("shutdown");
     }
 
     private KafkaTopicProvisioner provisioner(
