@@ -19,6 +19,17 @@ import com.kafkick.api.support.RequestIdFilter;
 import com.kafkick.api.caller.CallerArgumentResolver;
 import com.kafkick.api.caller.CallerFilter;
 import com.kafkick.api.caller.HeaderCallerResolver;
+import com.kafkick.core.admin.overview.AdminOverviewService;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.support.TimeProvider;
 
 /**
@@ -34,6 +45,22 @@ public final class AdminControllerContractTestSupport {
 
     public static MockMvc mockMvc(Object controller) {
         return build(controller, true);
+    }
+
+    /** 지정한 Clock으로 관리자 Overview의 실제 Service 조립을 재사용합니다. */
+    public static AdminOverviewService overviewService(Clock clock) {
+        return new AdminOverviewService(
+                new TimeProvider(clock),
+                new AdminOverviewMockDataFactory(),
+                new IssuanceFlowCalculator(),
+                new IssuanceActionCalculator(),
+                new CampaignQueueCalculator(),
+                new CustomerOutcomeCalculator(),
+                new StockRiskCalculator(),
+                new CampaignOverviewCalculator(),
+                new ConsistencyActionCalculator(),
+                new OperationActionCalculator(),
+                new OverviewStatusCalculator());
     }
 
     /** 인증 실패 HTTP 상태를 검증할 때 기본 관리자 헤더 없이 MockMvc를 구성합니다. */

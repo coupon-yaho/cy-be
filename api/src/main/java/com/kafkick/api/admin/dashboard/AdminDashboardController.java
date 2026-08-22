@@ -17,18 +17,32 @@ import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.caller.Caller;
-import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.admin.overview.AdminOverviewResult;
+import com.kafkick.core.admin.overview.AdminOverviewService;
+import com.kafkick.core.support.exception.BusinessException;
 
 /**
- * 운영 담당자가 사용하는 관리자 현황·쿠폰 지표·분석 API의 HTTP 계약을 선구축합니다.
+ * 운영 담당자가 사용하는 관리자 현황·쿠폰 지표·분석 API의 HTTP 경계입니다.
  *
- * <p>이 단계에서는 요청 형식과 응답 DTO만 고정하고 Service, Provider, Repository를 호출하지 않습니다.
- * 실제 DB 집계와 B 소유 관제 데이터가 연결되기 전까지 모든 유효 요청은 {@code 501 / ADMIN-001}을 반환합니다.</p>
+ * <p>운영현황 계산·조립은 구체 {@link AdminOverviewService}에 위임하고, 반환된
+ * {@link AdminOverviewResult}는 Controller에서 HTTP DTO로 변환합니다. 쿠폰 지표와 분석 조회는
+ * 실제 집계 원천이 연결되기 전까지 {@code 501 / ADMIN-001}을 반환합니다.</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminDashboardController {
+
+    private final AdminOverviewService adminOverviewService;
+
+    /**
+     * 운영현황 HTTP 요청을 구체 Service에 위임하고 결과를 HTTP DTO로 변환하도록 구성합니다.
+     *
+     * @param adminOverviewService 관리자 첫 화면 응답을 조립하는 구체 Service
+     */
+    public AdminDashboardController(AdminOverviewService adminOverviewService) {
+        this.adminOverviewService = adminOverviewService;
+    }
 
     /**
      * 관리자 운영 현황 화면의 상단 위험 요약과 캠페인별 운영 상태를 조회합니다.
@@ -40,17 +54,20 @@ public class AdminDashboardController {
      * <p>회원 발급 문의, 발급 상태 변경 이력, 고객 알림 발송 현황은 각각
      * 별도의 관리자 API에서 조회하므로 이 응답에 중복해서 포함하지 않습니다.</p>
      *
-     * <p>A-03에서는 {@code AdminOverviewProvider}, 조회 조건, 내부 Snapshot과 HTTP 응답 계약만
-     * 선구축합니다. 실제 DB·Redis·관제 데이터 조립과 Provider 주입은 A-06에서 연결하며,
-     * 연결 전까지 이 API는 {@code 501 / ADMIN-001}을 반환합니다.</p>
+     * <p>현재 Service는 운영 원천이 연결되지 않은 영역을 {@code UNAVAILABLE}로 명시합니다.
+     * 후속 캠페인 Repository와 관측 조회 구성요소가 연결되면 같은 응답 계약에서 실제 값을 제공합니다.</p>
      *
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
-     * @return 후속 A-06 구현에서 사용할 운영 현황 응답 봉투
-     * @throws BusinessException 운영 현황 실제 조회 구현이 아직 연결되지 않은 경우
+     * @return Service 계산 결과를 HTTP DTO로 변환한 성공 응답 봉투
      */
     @GetMapping("/overview")
     public ResponseEnvelope<AdminOverviewResponse> overview(Caller caller) {
-        throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
+        AdminOverviewResult result = adminOverviewService.getOverview();
+
+        return ResponseEnvelope.success(
+                AdminOverviewResponse.from(
+                        result.snapshot(), result.overallStatus())
+        );
     }
 
     /**

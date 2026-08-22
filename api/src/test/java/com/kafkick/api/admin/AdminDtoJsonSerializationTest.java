@@ -13,6 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.benchmark.dto.BenchmarkListResponse;
 import com.kafkick.api.admin.dashboard.dto.AdminAnalyticsResponse;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
 import com.kafkick.api.admin.issuance.dto.IssuanceHistoryPageResponse;
@@ -69,7 +70,7 @@ class AdminDtoJsonSerializationTest {
     private AdminOverviewResponse unavailableOverview() {
         return new AdminOverviewResponse(
                 Instant.parse("2026-08-16T00:00:00Z"),
-                AdminOverviewResponse.OverallStatus.UNAVAILABLE,
+                OverallStatus.UNAVAILABLE,
                 unavailable(), unavailable(), unavailable(), unavailable(),
                 unavailable(), unavailable(), unavailable(), unavailable(),
                 unavailable(), unavailable(), unavailable());

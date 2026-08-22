@@ -30,17 +30,11 @@ public record ObservedValue<T>(T value, SourceStatus state, Instant observedAt) 
      */
     public ObservedValue {
         Objects.requireNonNull(state, "state");
-        switch (state) {
-            case VALID, WARMING_UP, STALE, NO_TRAFFIC -> {
-                if (value == null || observedAt == null) {
-                    throw new IllegalArgumentException(state + " 상태에는 value와 observedAt이 필요합니다.");
-                }
-            }
-            case PENDING, UNAVAILABLE, N_A -> {
-                if (value != null || observedAt != null) {
-                    throw new IllegalArgumentException(state + " 상태의 value와 observedAt은 null이어야 합니다.");
-                }
-            }
+        if (state.carriesValue() && (value == null || observedAt == null)) {
+            throw new IllegalArgumentException(state + " 상태에는 value와 observedAt이 필요합니다.");
+        }
+        if (!state.carriesValue() && (value != null || observedAt != null)) {
+            throw new IllegalArgumentException(state + " 상태의 value와 observedAt은 null이어야 합니다.");
         }
     }
 }

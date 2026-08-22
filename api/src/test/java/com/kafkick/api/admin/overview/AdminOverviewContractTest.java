@@ -3,71 +3,31 @@ package com.kafkick.api.admin.overview;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.admin.overview.AdminOverviewProvider;
-import com.kafkick.core.admin.overview.AdminOverviewQuery;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.CouponStatus;
 
 /**
- * 운영 현황 Adapter 경계가 후속 인프라 구현과 분리되는지 검증합니다.
+ * 운영현황 Snapshot 계약이 후속 인프라 구현과 분리되는지 검증합니다.
  *
- * <p>이 테스트의 통과는 Provider 인터페이스와 내부 Snapshot 계약이 준비됐다는 뜻이며,
- * 실제 데이터 조회나 {@code GET /api/v1/admin/overview} 기능 구현 완료를 뜻하지 않습니다.</p>
+ * <p>이 테스트는 기술 중립 Snapshot과 상태 불변식을 검증하며 실제 Repository나 관측 원천 연결
+ * 완료를 의미하지 않습니다.</p>
  */
 class AdminOverviewContractTest {
 
     private static final Instant FROM = Instant.parse("2026-08-17T00:00:00Z");
     private static final Instant TO = Instant.parse("2026-08-17T01:00:00Z");
-
-    /** Provider 메서드명·인자·반환 타입이 확정된 대표 시그니처와 정확히 일치하는지 검증합니다. */
-    @Test
-    @DisplayName("AdminOverviewProvider는 확정된 getOverview 시그니처를 제공한다")
-    void providerKeepsDocumentedSignature() throws Exception {
-        Method method = AdminOverviewProvider.class.getDeclaredMethod("getOverview", AdminOverviewQuery.class);
-
-        assertThat(method.getReturnType()).isEqualTo(AdminOverviewSnapshot.class);
-        assertThat(AdminOverviewProvider.class.getDeclaredMethods()).containsExactly(method);
-    }
-
-    /** 문서에서 확정한 세 조회 성분을 HTTP annotation이나 임의 기본값 없이 그대로 보존하는지 검증합니다. */
-    @Test
-    @DisplayName("AdminOverviewQuery는 기간과 couponId 집합을 그대로 보존한다")
-    void queryPreservesConfirmedComponents() {
-        Set<Long> couponIds = Set.of(11L, 22L);
-
-        AdminOverviewQuery query = new AdminOverviewQuery(FROM, TO, couponIds);
-
-        assertThat(query.from()).isEqualTo(FROM);
-        assertThat(query.to()).isEqualTo(TO);
-        assertThat(query.couponIds()).containsExactlyInAnyOrder(11L, 22L);
-    }
-
-    /** null과 빈 집합의 의미가 아직 확정되지 않았으므로 생성 단계에서 임의 정규화하지 않는지 검증합니다. */
-    @Test
-    @DisplayName("AdminOverviewQuery는 미확정 null과 빈 집합 규칙을 강제하지 않는다")
-    void queryDoesNotInventUnconfirmedNullOrEmptyRules() {
-        AdminOverviewQuery nullable = new AdminOverviewQuery(null, null, null);
-        AdminOverviewQuery empty = new AdminOverviewQuery(FROM, TO, Set.of());
-
-        assertThat(nullable.from()).isNull();
-        assertThat(nullable.to()).isNull();
-        assertThat(nullable.couponIds()).isNull();
-        assertThat(empty.couponIds()).isEmpty();
-    }
 
     /** 실제 0과 미관측 null이 동일한 숫자로 축약되는 회귀를 방지합니다. */
     @Test
