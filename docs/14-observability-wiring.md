@@ -355,9 +355,11 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
    ```bash
    curl "http://127.0.0.1:9090/api/v1/admin/verify/runs/41"
-   # → {"success":true,"data":{"executionId":41,"runId":null,"status":"STARTED", ...}}
-   # → {"success":true,"data":{"executionId":41,"runId":1207,"status":"COMPLETED",
-   #                           "verdict":"PASS","findingCount":0, ...}}
+   # 같은 요청을 **종료 상태까지 반복**한다. 41 은 POST 응답의 data.executionId 다.
+   #
+   # 도는 중:   {"success":true,"data":{"executionId":41,"runId":null,"status":"STARTED", ...}}
+   # 끝난 뒤:   {"success":true,"data":{"executionId":41,"runId":1207,"status":"COMPLETED",
+   #                                    "verdict":"PASS","findingCount":0, ...}}
    ```
 
    위는 CLEAN 이라 **0건이 정상**이다. 검증 알림(`VerificationVerdictFailed`)을 실제로
