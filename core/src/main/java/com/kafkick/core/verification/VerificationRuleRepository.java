@@ -171,8 +171,29 @@ public interface VerificationRuleRepository {
      * {@code ck_stock_range} 는 {@code NOT ENFORCED} 로 살아 있을 수 있고
      * {@code code} 유일 인덱스는 이름이 저장소마다 다릅니다.
      */
-
     boolean hasCleanOnlyConstraints();
+
+    /**
+     * 배치가 쓰는 <b>핵심 테이블 중 지금 스키마에 없는 것</b>을 이름으로 돌려줍니다.
+     * 전부 있으면 빈 목록입니다.
+     *
+     * <p><b>왜 {@link #hasCleanOnlyConstraints()} 로 대신할 수 없나.</b> 그것은 인덱스
+     * <b>하나의 존재</b>를 묻는 {@code EXISTS} 라 <b>테이블이 하나도 없어도 예외 없이
+     * {@code false}</b> 를 돌려줍니다. 그러면 <i>"스키마가 없다"</i> 와 <i>"CORRUPT 스키마다"</i>
+     * 가 한 값으로 접힙니다 — 이 프로젝트가 반복해서 막아 온 <b>"0건이 두 뜻을 갖는다"</b> 와
+     * 같은 종류입니다. 두 축을 갈라 놓아야 기동 시점에 앞의 것을 따로 잡을 수 있습니다.
+     */
+    List<String> missingCoreTables();
+
+    /**
+     * 지금 접속이 보고 있는 <b>스키마 이름</b>. URL 에 DB 이름이 없으면 {@code null} 입니다.
+     *
+     * <p>{@link #missingCoreTables()} 만으로는 <b>같은 증상이 두 원인을 갖습니다</b> —
+     * 스키마를 안 만든 것과, 접속 URL 에 DB 이름을 안 준 것. 뒤의 경우
+     * {@code table_schema = DATABASE()} 가 {@code NULL} 비교라 UNKNOWN 이 되어
+     * <b>전부 없다</b>고 답하는데, 그때 필요한 조치는 마이그레이션이 아니라 URL 수정입니다.
+     */
+    String currentSchema();
 
     /**
      * 이 실행이 <b>어떤 데이터를 봤는지</b>를 한 값으로 접습니다.
