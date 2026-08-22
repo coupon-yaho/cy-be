@@ -26,6 +26,7 @@ import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCalculation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowCalculation;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
@@ -77,7 +78,7 @@ class AdminOverviewServiceTest {
                     assertThat(campaign.priority()).isEqualTo(1);
                     assertThat(campaign.severity()).isEqualTo(Severity.CRITICAL);
                     assertThat(campaign.recommendedAction().code())
-                            .isEqualTo(AdminOverviewSnapshot.ActionCode.QUEUE_STALLED);
+                            .isEqualTo(AdminOverviewSnapshot.ActionCode.ISSUANCE_STOPPED);
                     assertThat(campaign.campaignQueueStatus().value().assessment())
                             .isEqualTo(AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED);
                 });
@@ -134,21 +135,23 @@ class AdminOverviewServiceTest {
         RecordingTimeProvider timeProvider = new RecordingTimeProvider(events);
         RecordingMockDataFactory factory = new RecordingMockDataFactory(events);
         RecordingIssuanceFlowCalculator issuance = new RecordingIssuanceFlowCalculator(events);
+        RecordingIssuanceActionCalculator issuanceAction = new RecordingIssuanceActionCalculator(events);
         RecordingQueueCalculator queue = new RecordingQueueCalculator(events);
         RecordingOutcomeCalculator outcome = new RecordingOutcomeCalculator(events);
         RecordingStockRiskCalculator stock = new RecordingStockRiskCalculator(events);
         RecordingCampaignOverviewCalculator campaign = new RecordingCampaignOverviewCalculator(events);
         RecordingActionCalculator action = new RecordingActionCalculator(events);
         RecordingOverviewStatusCalculator status = new RecordingOverviewStatusCalculator(events);
-        AdminOverviewService service = new AdminOverviewService(timeProvider, factory, issuance, queue, outcome,
+        AdminOverviewService service = new AdminOverviewService(timeProvider, factory, issuance, issuanceAction, queue, outcome,
                 stock, campaign, action, status);
 
         AdminOverviewSnapshot snapshot = service.getOverview().snapshot();
 
         assertThat(events).containsExactly(
-                "time", "factory", "issuance", "queue", "outcome", "stock", "action", "campaign", "status");
+                "time", "factory", "issuance", "issuanceAction", "queue", "outcome", "stock", "action", "campaign", "status");
         assertThat(factory.createCount).isEqualTo(1);
         assertThat(issuance.calculateCount).isEqualTo(1);
+        assertThat(issuanceAction.calculateCount).isEqualTo(1);
         assertThat(queue.calculateCount).isEqualTo(1);
         assertThat(outcome.calculateCount).isEqualTo(1);
         assertThat(stock.calculateCount).isEqualTo(1);
@@ -183,9 +186,10 @@ class AdminOverviewServiceTest {
             assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
             assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
             if (status.carriesValue()) {
-                assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(1L);
+                assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(2L);
                 assertThat(result.snapshot().actionItems().value().topItems())
-                        .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+                        .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                        .containsExactly(101L, 105L);
                 assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW);
                 assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW);
             } else {
@@ -195,7 +199,7 @@ class AdminOverviewServiceTest {
                 assertThat(result.snapshot().actionItems().observedAt()).isNull();
             }
             assertThat(campaignForCoupon(result, 101L).campaignQueueStatus().status()).isEqualTo(status);
-            assertThat(campaignForCoupon(result, 101L).severity()).isEqualTo(Severity.NONE);
+            assertThat(campaignForCoupon(result, 101L).severity()).isEqualTo(Severity.CRITICAL);
             if (!status.carriesValue()) {
                 assertThat(campaignForCoupon(result, 105L).severity()).isEqualTo(Severity.WARN);
                 assertThat(campaignForCoupon(result, 105L).recommendedAction().code())
@@ -214,6 +218,91 @@ class AdminOverviewServiceTest {
             assertThat(campaignForCoupon(result, 102L).campaignQueueStatus().status()).isEqualTo(status);
             assertThat(campaignForCoupon(result, 101L).severity()).isEqualTo(Severity.CRITICAL);
         }
+    }
+
+    /** O1 중단 후보가 기존 O2·준비 미완료 후보와 같은 대표 모집단을 쓰는지 검증합니다. */
+    @Test
+    @DisplayName("VALID STOPPED O1은 조치 KPI 목록과 캠페인 행에 같은 대표 조치로 연결된다")
+    void combinesStoppedIssuanceActionWithExistingActionPopulation() {
+        AdminOverviewResult result = serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
+                        .map(input -> input.couponId().equals(103L)
+                                ? stoppedIssuanceInput(input, snapshotAt) : input)
+                        .toList();
+                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                        issuanceInputs, base.queueInputs(), base.outcomeInput(), base.campaigns(),
+                        base.preparationActionCandidates());
+            }
+        }).getOverview();
+
+        assertThat(campaignForCoupon(result, 103L).issuanceFlow().value().state())
+                .isEqualTo(AdminOverviewSnapshot.IssuanceFlowState.STOPPED);
+        AdminOverviewSnapshot.OperationActionItem issuanceAction = result.snapshot().actionItems().value().topItems()
+                .stream()
+                .filter(action -> action.couponId().equals(103L))
+                .findFirst()
+                .orElseThrow();
+        assertThat(result.snapshot().actionRequired().value())
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(3, 2, 1));
+        assertThat(issuanceAction.recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.ISSUANCE_STOPPED);
+        assertThat(issuanceAction.campaignName()).isEqualTo("정상 발급 감소 대기 쿠폰");
+        assertThat(issuanceAction.opensAt()).isEqualTo(NOW.minus(Duration.ofMinutes(10)));
+        assertThat(issuanceAction.detectedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(10)));
+        assertThat(campaignForCoupon(result, 103L).recommendedAction()).isSameAs(issuanceAction.recommendedAction());
+        assertThat(campaignForCoupon(result, 103L).severity()).isEqualTo(Severity.CRITICAL);
+    }
+
+    /** O1 원천의 값 없음·최신성 상태가 O2만으로 만든 정상 조치 KPI를 덮는지 검증합니다. */
+    @Test
+    @DisplayName("O1 원천 상태는 Action KPI 목록의 완전성과 가장 오래된 관측 시각에 반영된다")
+    void propagatesIssuanceCompletenessToActionObservations() {
+        for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP)) {
+            AdminOverviewResult result = serviceWithIssuanceStatus(102L, status).getOverview();
+
+            assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
+            assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
+            assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(2L);
+            assertThat(result.snapshot().actionItems().value().topItems())
+                    .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                    .containsExactly(101L, 105L);
+            assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(5)));
+            assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(5)));
+        }
+        for (SourceStatus status : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE)) {
+            AdminOverviewResult result = serviceWithIssuanceStatus(102L, status).getOverview();
+
+            assertThat(result.snapshot().actionRequired())
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
+            assertThat(result.snapshot().actionItems())
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
+        }
+    }
+
+    /** O1·O2의 혼합 원천 상태 우선순위와 적용 대상 없는 경계를 Action 관측 계약으로 고정합니다. */
+    @Test
+    @DisplayName("Action 상태는 O1 O2 혼합 우선순위와 전체 N_A NO_TRAFFIC 의미를 보존한다")
+    void combinesAllActionSourceStatusesWithoutHidingPreparationActions() {
+        assertActionSourceStatus(SourceStatus.UNAVAILABLE, SourceStatus.PENDING, SourceStatus.UNAVAILABLE, null);
+        assertActionSourceStatus(SourceStatus.PENDING, SourceStatus.STALE, SourceStatus.PENDING, null);
+        assertActionSourceStatus(SourceStatus.STALE, SourceStatus.WARMING_UP, SourceStatus.STALE,
+                NOW.minus(Duration.ofMinutes(5)));
+
+        AdminOverviewResult allNotApplicable = serviceWithAllActionSourceStatus(SourceStatus.N_A).getOverview();
+        assertThat(allNotApplicable.snapshot().actionRequired())
+                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1)));
+        assertThat(allNotApplicable.snapshot().actionItems().value().topItems())
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+
+        AdminOverviewResult allNoTraffic = serviceWithAllActionSourceStatus(SourceStatus.NO_TRAFFIC).getOverview();
+        // NO_TRAFFIC은 O1·O2 흐름에만 해당하고 준비 미완료 조치는 독립 원천이므로 정상값으로 보존합니다.
+        assertThat(allNoTraffic.snapshot().actionRequired())
+                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1)));
+        assertThat(allNoTraffic.snapshot().actionItems().value().topItems())
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
     }
 
     /** 명시적인 재고 최신성·미수집 상태가 O4 행과 전역 위험에 손실 없이 전달되는지 검증합니다. */
@@ -441,6 +530,7 @@ class AdminOverviewServiceTest {
                 timeProvider,
                 new AdminOverviewMockDataFactory(),
                 new IssuanceFlowCalculator(),
+                new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(),
                 new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(),
@@ -487,9 +577,69 @@ class AdminOverviewServiceTest {
         });
     }
 
+    private static AdminOverviewService serviceWithIssuanceStatus(Long couponId, SourceStatus status) {
+        return serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<IssuanceFlowInput> inputs = base.issuanceFlowInputs().stream()
+                        .map(input -> input.couponId().equals(couponId)
+                                ? issuanceWithStatus(input, status, snapshotAt) : input)
+                        .toList();
+                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(), inputs,
+                        base.queueInputs(), base.outcomeInput(), base.campaigns(),
+                        base.preparationActionCandidates());
+            }
+        });
+    }
+
+    /** O1 한 원천과 O2 한 원천만 적용 대상으로 남겨 Action 상태 합성 우선순위를 검증합니다. */
+    private static AdminOverviewService serviceWithActionSourceStatuses(
+            SourceStatus issuanceStatus,
+            SourceStatus queueStatus
+    ) {
+        return serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
+                        .map(input -> issuanceSourceInput(input,
+                                input.couponId().equals(101L) ? issuanceStatus : SourceStatus.N_A, snapshotAt))
+                        .toList();
+                List<QueueInput> queueInputs = base.queueInputs().stream()
+                        .map(input -> queueSourceInput(input,
+                                input.couponId().equals(102L) ? queueStatus : SourceStatus.N_A, snapshotAt))
+                        .toList();
+                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                        issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
+                        base.preparationActionCandidates());
+            }
+        });
+    }
+
+    /** 모든 O1·O2 원천을 같은 상태로 바꿔 전체 N_A·NO_TRAFFIC 분기를 검증합니다. */
+    private static AdminOverviewService serviceWithAllActionSourceStatus(SourceStatus status) {
+        return serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
+                        .map(input -> issuanceSourceInput(input, status, snapshotAt))
+                        .toList();
+                List<QueueInput> queueInputs = base.queueInputs().stream()
+                        .map(input -> queueSourceInput(input, status, snapshotAt))
+                        .toList();
+                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                        issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
+                        base.preparationActionCandidates());
+            }
+        });
+    }
+
     private static AdminOverviewService serviceWithDataset(AdminOverviewMockDataFactory factory) {
         return new AdminOverviewService(new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), factory,
-                new IssuanceFlowCalculator(), new CampaignQueueCalculator(), new CustomerOutcomeCalculator(),
+                new IssuanceFlowCalculator(), new IssuanceActionCalculator(), new CampaignQueueCalculator(),
+                new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(), new CampaignOverviewCalculator(), new OperationActionCalculator(),
                 new OverviewStatusCalculator());
     }
@@ -501,6 +651,91 @@ class AdminOverviewServiceTest {
         return new QueueInput(input.couponId(), input.currentWaitingCount(), input.previousWaitingCount(),
                 input.admittedCount(), input.windowStart(), input.windowEnd(), input.lastAdmissionAt(),
                 input.admissionStoppedStartedAt(), status, input.observedAt());
+    }
+
+    /** 테스트에서 O1 중단만 바꾸고 같은 쿠폰의 실제 관측 구간·원천 상태는 유지합니다. */
+    private static IssuanceFlowInput stoppedIssuanceInput(IssuanceFlowInput input, Instant snapshotAt) {
+        return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), input.stockAvailable(),
+                input.windowStart(), input.windowEnd(), input.attemptedCount(), 0L,
+                input.comparisonCompletedCount(), input.comparisonWindowStart(), input.comparisonWindowEnd(),
+                List.of(), null, snapshotAt.minus(Duration.ofMinutes(10)), SourceStatus.VALID, snapshotAt);
+    }
+
+    /** 값 있는 최신성 상태는 더 오래된 실제 O1 관측 시각을 포함하고 값 없는 상태는 null로 만듭니다. */
+    private static IssuanceFlowInput issuanceWithStatus(
+            IssuanceFlowInput input,
+            SourceStatus status,
+            Instant snapshotAt
+    ) {
+        if (!status.carriesValue()) {
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null,
+                    null, null, null, null, null, null, null, null, status, null);
+        }
+        Instant observedAt = snapshotAt.minus(Duration.ofMinutes(5));
+        Instant windowStart = observedAt.minus(Duration.ofMinutes(1));
+        Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
+        return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
+                10L, 10L, 10L, comparisonWindowStart, windowStart,
+                List.of(new IssuanceFlowCalculator.IssuanceBucket(windowStart, observedAt, 10L)), observedAt,
+                windowStart, status, observedAt);
+    }
+
+    /** 혼합 상태 테스트용으로 실제 O1 관측 상태와 시각을 명시적으로 만듭니다. */
+    private static IssuanceFlowInput issuanceSourceInput(
+            IssuanceFlowInput input,
+            SourceStatus status,
+            Instant snapshotAt
+    ) {
+        if (!status.carriesValue()) {
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null,
+                    null, null, null, null, null, null, null, null, status, null);
+        }
+        Instant observedAt = snapshotAt.minus(Duration.ofMinutes(5));
+        Instant windowStart = observedAt.minus(Duration.ofMinutes(1));
+        Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
+        if (status == SourceStatus.NO_TRAFFIC) {
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
+                    0L, 0L, 0L, comparisonWindowStart, windowStart, List.of(), null, windowStart, status, observedAt);
+        }
+        return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
+                10L, 10L, 10L, comparisonWindowStart, windowStart,
+                List.of(new IssuanceFlowCalculator.IssuanceBucket(windowStart, observedAt, 10L)), observedAt,
+                windowStart, status, observedAt);
+    }
+
+    /** 혼합 상태 테스트용으로 실제 O2 관측 상태와 시각을 명시적으로 만듭니다. */
+    private static QueueInput queueSourceInput(QueueInput input, SourceStatus status, Instant snapshotAt) {
+        if (!status.carriesValue()) {
+            return new QueueInput(input.couponId(), null, null, null, null, null, null, null, status, null);
+        }
+        Instant observedAt = snapshotAt.minus(Duration.ofMinutes(3));
+        Instant windowStart = observedAt.minus(Duration.ofMinutes(1));
+        return new QueueInput(input.couponId(), 0L, 0L, 0L, windowStart, observedAt, null, null, status, observedAt);
+    }
+
+    /** Action 값의 상태·시각을 함께 검증해 혼합 상태 우선순위가 바뀌는 회귀를 막습니다. */
+    private static void assertActionSourceStatus(
+            SourceStatus issuanceStatus,
+            SourceStatus queueStatus,
+            SourceStatus expectedStatus,
+            Instant expectedObservedAt
+    ) {
+        AdminOverviewResult result = serviceWithActionSourceStatuses(issuanceStatus, queueStatus).getOverview();
+        if (!expectedStatus.carriesValue()) {
+            assertThat(result.snapshot().actionRequired())
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, expectedStatus, null));
+            assertThat(result.snapshot().actionItems())
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, expectedStatus, null));
+            return;
+        }
+        assertThat(result.snapshot().actionRequired().status()).isEqualTo(expectedStatus);
+        assertThat(result.snapshot().actionItems().status()).isEqualTo(expectedStatus);
+        assertThat(result.snapshot().actionRequired().value())
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1));
+        assertThat(result.snapshot().actionItems().value().topItems())
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+        assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(expectedObservedAt);
+        assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(expectedObservedAt);
     }
 
     private static AdminOverviewSnapshot completeSnapshot(
@@ -692,6 +927,26 @@ class AdminOverviewServiceTest {
             events.add("issuance");
             result = super.calculate(policy, inputs);
             return result;
+        }
+    }
+
+    /** 실제 O1 조치 후보를 보존하면서 후보 계산 호출 횟수와 순서를 기록합니다. */
+    private static final class RecordingIssuanceActionCalculator extends IssuanceActionCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+
+        private RecordingIssuanceActionCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public List<AdminOverviewSnapshot.OperationActionItem> calculate(
+                Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows
+        ) {
+            calculateCount++;
+            events.add("issuanceAction");
+            return super.calculate(issuanceFlows);
         }
     }
 

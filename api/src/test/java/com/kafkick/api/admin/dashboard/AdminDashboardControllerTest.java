@@ -18,6 +18,7 @@ import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
@@ -35,6 +36,7 @@ class AdminDashboardControllerTest {
                     new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
                     new AdminOverviewMockDataFactory(),
                     new IssuanceFlowCalculator(),
+                    new IssuanceActionCalculator(),
                     new CampaignQueueCalculator(),
                     new CustomerOutcomeCalculator(),
                     new StockRiskCalculator(),
@@ -62,11 +64,15 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.scheduledCount").value(2))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.closedCount").value(1))
                 .andExpect(jsonPath("$.data.actionItems.value.topItems[0].couponId").value(101))
+                .andExpect(jsonPath("$.data.actionItems.value.topItems[0].recommendedAction.code")
+                        .value("ISSUANCE_STOPPED"))
                 .andExpect(jsonPath("$.data.campaigns.state").value("VALID"))
                 .andExpect(jsonPath("$.data.campaigns.value.length()").value(6))
                 .andExpect(jsonPath("$.data.campaigns.value[0].couponId").value(101))
                 .andExpect(jsonPath("$.data.campaigns.value[0].priority").value(1))
                 .andExpect(jsonPath("$.data.campaigns.value[0].severity").value("CRITICAL"))
+                .andExpect(jsonPath("$.data.campaigns.value[0].recommendedAction.code")
+                        .value("ISSUANCE_STOPPED"))
                 .andExpect(jsonPath("$.data.campaigns.value[0].campaignQueueStatus.value.assessment")
                         .value("ADMISSION_STOPPED"))
                 .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(102))

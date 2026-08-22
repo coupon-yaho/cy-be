@@ -17,6 +17,7 @@ import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
@@ -32,6 +33,7 @@ class AdminAuthorizationHttpContractTest {
                             new TimeProvider(Clock.systemUTC()),
                             new AdminOverviewMockDataFactory(),
                             new IssuanceFlowCalculator(),
+                            new IssuanceActionCalculator(),
                             new CampaignQueueCalculator(),
                             new CustomerOutcomeCalculator(),
                             new StockRiskCalculator(),

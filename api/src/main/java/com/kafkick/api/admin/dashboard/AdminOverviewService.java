@@ -22,6 +22,7 @@ import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCalculation;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowCalculation;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator.ActionCalculation;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
@@ -48,6 +49,7 @@ public class AdminOverviewService {
     private final TimeProvider timeProvider;
     private final AdminOverviewMockDataFactory mockDataFactory;
     private final IssuanceFlowCalculator issuanceFlowCalculator;
+    private final IssuanceActionCalculator issuanceActionCalculator;
     private final CampaignQueueCalculator campaignQueueCalculator;
     private final CustomerOutcomeCalculator customerOutcomeCalculator;
     private final StockRiskCalculator stockRiskCalculator;
@@ -61,6 +63,7 @@ public class AdminOverviewService {
      * @param timeProvider 테스트와 운영 환경에서 동일한 시간 계약을 제공하는 공통 공급자
      * @param mockDataFactory Repository 연결 전 캠페인 원천과 조치 후보를 제공하는 Factory
      * @param issuanceFlowCalculator O1 발급 흐름 계산기
+     * @param issuanceActionCalculator O1 발급 중단 조치 후보 계산기
      * @param campaignQueueCalculator O2 대기열·대기 위험·조치 후보 계산기
      * @param customerOutcomeCalculator O3 고객 결과 계산기
      * @param stockRiskCalculator O4 V1 재고·소진 위험 계산기
@@ -72,6 +75,7 @@ public class AdminOverviewService {
             TimeProvider timeProvider,
             AdminOverviewMockDataFactory mockDataFactory,
             IssuanceFlowCalculator issuanceFlowCalculator,
+            IssuanceActionCalculator issuanceActionCalculator,
             CampaignQueueCalculator campaignQueueCalculator,
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
@@ -82,6 +86,7 @@ public class AdminOverviewService {
         this.timeProvider = timeProvider;
         this.mockDataFactory = mockDataFactory;
         this.issuanceFlowCalculator = issuanceFlowCalculator;
+        this.issuanceActionCalculator = issuanceActionCalculator;
         this.campaignQueueCalculator = campaignQueueCalculator;
         this.customerOutcomeCalculator = customerOutcomeCalculator;
         this.stockRiskCalculator = stockRiskCalculator;
@@ -94,7 +99,7 @@ public class AdminOverviewService {
      * 현재 시점의 관리자 운영현황을 반환합니다.
      *
      * <p>기준 시각과 Dataset을 한 번씩만 만든 뒤 O1, O2, O3, O4를 순서대로 계산합니다. O4는 같은
-     * couponId의 O1 계산 결과를 그대로 사용하며, O2 후보와 준비 미완료 후보를 합쳐 Action 계산기를
+     * couponId의 O1 계산 결과를 그대로 사용하며, O1·O2 후보와 준비 미완료 후보를 합쳐 Action 계산기를
      * 한 번만 호출합니다. 이후 Action 전체 대표 Map을 캠페인 행 조립에 전달해 KPI·목록·행이 같은
      * 판정을 재사용하도록 합니다. aggregateIssuanceRate와 latencySummary는 아직 원천이 없어
      * UNAVAILABLE을 유지합니다.</p>
@@ -108,15 +113,17 @@ public class AdminOverviewService {
         // O1~O3는 서로 독립된 원천을 한 번씩 계산하고 O1 결과는 뒤의 O4에서 재사용합니다.
         IssuanceFlowCalculation issuanceCalculation = issuanceFlowCalculator.calculate(
                 dataset.policy(), dataset.issuanceFlowInputs());
+        List<AdminOverviewSnapshot.OperationActionItem> issuanceActionCandidates = issuanceActionCalculator
+                .calculate(issuanceCalculation.issuanceFlows());
         QueueCalculation queueCalculation = campaignQueueCalculator.calculate(
                 dataset.policy(), dataset.queueInputs());
         OutcomeCalculation outcomeCalculation = customerOutcomeCalculator.calculate(dataset.outcomeInput());
         // O4를 별도 발급 조회 없이 같은 couponId의 O1 계산 결과와 재고 원천으로 만듭니다.
         StockRiskCalculation stockCalculation = stockRiskCalculator.calculate(
                 dataset.policy(), stockInputs(dataset.campaigns(), issuanceCalculation.issuanceFlows()));
-        // 대기 중단과 준비 미완료 후보를 합쳐 캠페인별 대표 조치를 한 번만 선택합니다.
+        // O1 중단·O2 대기 중단·준비 미완료 후보를 합쳐 대표 조치를 한 번만 선택합니다.
         List<AdminOverviewSnapshot.OperationActionItem> actionCandidates = actionCandidates(
-                dataset.campaigns(), queueCalculation.actionCandidates(),
+                dataset.campaigns(), issuanceActionCandidates, queueCalculation.actionCandidates(),
                 dataset.preparationActionCandidates());
         ActionCalculation actionCalculation = operationActionCalculator.calculate(actionCandidates);
         // 상단 KPI를 만든 동일 결과 Map으로 캠페인 행을 조립해 화면 영역 간 판정을 맞춥니다.
@@ -128,7 +135,8 @@ public class AdminOverviewService {
         // 아직 연결되지 않은 독립 원천은 0이 아닌 UNAVAILABLE로 명시해 PARTIAL 판정에 반영합니다.
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
                 snapshotAt,
-                actionObservation(actionCalculation.required(), queueCalculation.queueRisk(), snapshotAt),
+                actionObservation(actionCalculation.required(), queueCalculation.queueRisk(),
+                        issuanceCalculation.issuanceFlows(), snapshotAt),
                 validObservation(campaignCalculation.openingSoon(), snapshotAt),
                 queueCalculation.queueRisk(),
                 stockCalculation.stockRisk(),
@@ -136,7 +144,8 @@ public class AdminOverviewService {
                 queueCalculation.aggregateQueue(),
                 unavailableObservation(),
                 validObservation(campaignCalculation.campaignStatusSummary(), snapshotAt),
-                actionObservation(actionCalculation.items(), queueCalculation.queueRisk(), snapshotAt),
+                actionObservation(actionCalculation.items(), queueCalculation.queueRisk(),
+                        issuanceCalculation.issuanceFlows(), snapshotAt),
                 validObservation(campaignCalculation.campaigns(), snapshotAt),
                 outcomeCalculation.customerOutcomes()
         );
@@ -169,31 +178,43 @@ public class AdminOverviewService {
     }
 
     /**
-     * O2와 준비 미완료 후보를 한 Action 계산 호출의 같은 모집단으로 결합합니다.
+     * O1·O2와 준비 미완료 후보를 한 Action 계산 호출의 같은 모집단으로 결합합니다.
      *
-     * <p>O2 계산기는 기술 중립성을 위해 이름·오픈 시각 없이 후보를 만들 수 있으므로, 이 조립 경계에서
+     * <p>O1·O2 계산기는 기술 중립성을 위해 이름·오픈 시각 없이 후보를 만들 수 있으므로, 이 조립 경계에서
      * 같은 couponId의 기존 캠페인 기본 정보만 채웁니다. 정책에서 확정한 심각도·영향·권장 행동은 바꾸지
      * 않으며, 목록의 상위 20개를 여기서 참조하지 않습니다.</p>
      */
     private static List<AdminOverviewSnapshot.OperationActionItem> actionCandidates(
             List<CampaignOverviewSource> campaigns,
+            List<AdminOverviewSnapshot.OperationActionItem> issuanceCandidates,
             List<AdminOverviewSnapshot.OperationActionItem> queueCandidates,
             List<AdminOverviewSnapshot.OperationActionItem> preparationCandidates
     ) {
         Map<Long, CampaignOverviewSource> campaignByCoupon = campaigns.stream()
                 .collect(java.util.stream.Collectors.toMap(CampaignOverviewSource::couponId, campaign -> campaign));
         List<AdminOverviewSnapshot.OperationActionItem> candidates = new ArrayList<>();
-        for (AdminOverviewSnapshot.OperationActionItem candidate : queueCandidates) {
+        candidates.addAll(withCampaignDisplay(issuanceCandidates, campaignByCoupon));
+        candidates.addAll(withCampaignDisplay(queueCandidates, campaignByCoupon));
+        candidates.addAll(preparationCandidates);
+        return List.copyOf(candidates);
+    }
+
+    /** 기술 중립 O1·O2 후보에 동일 couponId의 화면 표시용 캠페인 정보를 보강합니다. */
+    private static List<AdminOverviewSnapshot.OperationActionItem> withCampaignDisplay(
+            List<AdminOverviewSnapshot.OperationActionItem> candidates,
+            Map<Long, CampaignOverviewSource> campaignByCoupon
+    ) {
+        List<AdminOverviewSnapshot.OperationActionItem> displayedCandidates = new ArrayList<>();
+        for (AdminOverviewSnapshot.OperationActionItem candidate : candidates) {
             CampaignOverviewSource campaign = campaignByCoupon.get(candidate.couponId());
-            // 기술 중립 O2 후보에 화면 표시용 캠페인 이름과 오픈 시각만 보강합니다.
-            candidates.add(new AdminOverviewSnapshot.OperationActionItem(candidate.couponId(),
+            // 기술 중립 후보에 화면 표시용 캠페인 이름과 오픈 시각만 보강합니다.
+            displayedCandidates.add(new AdminOverviewSnapshot.OperationActionItem(candidate.couponId(),
                     campaign == null ? candidate.campaignName() : campaign.campaignName(),
                     campaign == null ? candidate.opensAt() : campaign.opensAt(), candidate.severity(),
                     candidate.customerImpact(), candidate.customerImpactText(), candidate.detectedAt(),
                     candidate.duration(), candidate.recommendedAction()));
         }
-        candidates.addAll(preparationCandidates);
-        return List.copyOf(candidates);
+        return List.copyOf(displayedCandidates);
     }
 
     /**
@@ -220,22 +241,61 @@ public class AdminOverviewService {
         return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, observedAt);
     }
 
-    /** O2 모집단 완전성을 Action KPI·목록 상태에 반영하되 확정 대표 Map은 행 조립에 유지합니다. */
+    /** O1·O2 모집단 완전성을 Action KPI·목록 상태에 반영하되 확정 대표 Map은 행 조립에 유지합니다. */
     private static <T> AdminOverviewSnapshot.Observation<T> actionObservation(
             T value,
             AdminOverviewSnapshot.Observation<?> queueRisk,
+            Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows,
             Instant snapshotAt
     ) {
-        SourceStatus status = queueRisk.status();
-        if (status == SourceStatus.UNAVAILABLE || status == SourceStatus.PENDING) {
-            // O2 모집단이 불완전하면 계산 가능한 조치 일부를 전체 KPI처럼 노출하지 않습니다.
+        List<AdminOverviewSnapshot.Observation<?>> sources = new ArrayList<>();
+        sources.add(queueRisk);
+        sources.addAll(issuanceFlows.values());
+        SourceStatus status = actionSourceStatus(sources);
+        if (status == SourceStatus.N_A) {
+            // 적용 대상이 없는 O1·O2 원천은 준비 미완료 같은 별도 후보의 완전성을 낮추지 않습니다.
+            return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, snapshotAt);
+        }
+        if (!status.carriesValue()) {
+            // O1·O2 적용 모집단이 불완전하면 계산 가능한 일부를 전체 KPI처럼 노출하지 않습니다.
             return new AdminOverviewSnapshot.Observation<>(null, status, null);
         }
+        Instant observedAt = sources.stream()
+                .filter(source -> source.status() != SourceStatus.N_A)
+                .map(AdminOverviewSnapshot.Observation::observedAt)
+                .filter(Objects::nonNull)
+                .min(Instant::compareTo)
+                .orElse(snapshotAt);
         if (status == SourceStatus.STALE || status == SourceStatus.WARMING_UP) {
-            // 참고 가능한 값은 보존하되 상태와 관측 시각으로 최신 판정이 아님을 드러냅니다.
-            return new AdminOverviewSnapshot.Observation<>(value, status, queueRisk.observedAt());
+            // 참고 가능한 값은 보존하되 가장 오래된 원천 시각으로 최신 판정이 아님을 드러냅니다.
+            return new AdminOverviewSnapshot.Observation<>(value, status, observedAt);
         }
         return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, snapshotAt);
+    }
+
+    /** 적용 대상 N_A를 제외한 O1·O2 상태에서 Action 모집단의 완전성을 합성합니다. */
+    private static SourceStatus actionSourceStatus(List<AdminOverviewSnapshot.Observation<?>> sources) {
+        List<SourceStatus> statuses = sources.stream()
+                .map(AdminOverviewSnapshot.Observation::status)
+                .filter(status -> status != SourceStatus.N_A)
+                .toList();
+        if (statuses.isEmpty()) {
+            return SourceStatus.N_A;
+        }
+        if (statuses.contains(SourceStatus.UNAVAILABLE)) {
+            return SourceStatus.UNAVAILABLE;
+        }
+        if (statuses.contains(SourceStatus.PENDING)) {
+            return SourceStatus.PENDING;
+        }
+        if (statuses.contains(SourceStatus.STALE)) {
+            return SourceStatus.STALE;
+        }
+        if (statuses.contains(SourceStatus.WARMING_UP)) {
+            return SourceStatus.WARMING_UP;
+        }
+        return statuses.stream().allMatch(status -> status == SourceStatus.NO_TRAFFIC)
+                ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
     }
 
     /** 실제로 관측하지 않은 독립 원천을 가짜 0 없이 공통 Core 상태 규칙에 맞춰 생성합니다. */

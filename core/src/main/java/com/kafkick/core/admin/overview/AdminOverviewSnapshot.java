@@ -224,7 +224,7 @@ public record AdminOverviewSnapshot(
      * @param windowEnd 시계열 관측 구간 종료 시각
      * @param points 화면 그래프에 표시할 시각별 분당 발급 건수; 관측된 점이 없으면 빈 목록
      * @param state 화면에 표시할 발급 중단·감소·정상 판정
-     * @param stateDuration 현재 판정이 지속된 시간; 최초 판정 시각을 알 수 없으면 null
+     * @param stateDuration 현재 판정이 지속된 0 이상의 시간; 최초 판정 시각을 알 수 없으면 null
      */
     public record IssuanceFlow(double currentPerMinute, Instant windowStart, Instant windowEnd,
                                List<IssuanceRatePoint> points,
@@ -232,6 +232,9 @@ public record AdminOverviewSnapshot(
 
         public IssuanceFlow {
             points = List.copyOf(points);
+            if (stateDuration != null && stateDuration.isNegative()) {
+                throw new IllegalArgumentException("stateDuration은 음수일 수 없습니다.");
+            }
         }
     }
 
@@ -411,6 +414,7 @@ public record AdminOverviewSnapshot(
     public enum ActionCode {
         CAMPAIGN_NOT_READY,
         QUEUE_STALLED,
+        ISSUANCE_STOPPED,
         STOCK_DEPLETING,
         DATA_UNAVAILABLE
     }
