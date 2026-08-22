@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.testcontainers.mysql.MySQLContainer;
@@ -325,6 +326,77 @@ class JdbcBenchmarkRunRepositoryTest {
             assertThat(repository.markFinalized(id, START.plusSeconds(70))).isTrue();
             assertThat(repository.findById(id).orElseThrow().finalizedAt())
                     .isEqualTo(START.plusSeconds(70));
+        }
+    }
+
+    @Nested
+    @DisplayName("DB CHECK 위반은 500 이 아니라 도메인 오류로 나간다")
+    class ConstraintTranslation {
+
+        /**
+         * 앱이 미리 못 막는 경로다. 회차를 연 인스턴스와 부하를 끊는 인스턴스가 다르면 <b>시계 차이</b>로
+         * {@code load_stopped_at < started_at} 이 만들어진다. 번역하지 않으면
+         * {@code DataIntegrityViolationException} 이 그대로 올라가 회차 도중에 원인이 안 적힌 500 이 뜬다.
+         */
+        @Test
+        @DisplayName("인스턴스 시계가 뒤로 가면 시각 역전을 도메인 오류로 알린다")
+        void clockSkewIsTranslated() {
+            long id = repository.open(command("V3-MAIN-01"), START);
+
+            assertThatThrownBy(() -> repository.markLoadStopped(id, START.minusSeconds(3), null))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(it -> {
+                        assertThat(((BusinessException) it).getErrorCode())
+                                .isEqualTo(BenchmarkErrorCode.RUN_VALUE_REJECTED);
+                        assertThat(it).hasMessageContaining("ck_run_time_order");
+                    });
+        }
+
+        /**
+         * detail 에 <b>제약 이름만</b> 넣는다. detail 은 로그로 나가고, 거기에 원문 값이 섞이면
+         * 회차를 연 계정 식별자를 비롯한 입력이 로그에 남는다.
+         */
+        @Test
+        @DisplayName("detail 에 값이 섞이지 않는다")
+        void detailCarriesOnlyTheConstraintName() {
+            long id = repository.open(command("V3-MAIN-01"), START);
+            repository.markLoadStopped(id, START.plusSeconds(5), null);
+
+            assertThatThrownBy(() -> repository.markObserved(id, START.plusSeconds(65), 7))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(it -> {
+                        assertThat(it).hasMessageContaining("ck_run_lag_gate");
+                        assertThat(it.getMessage()).doesNotContain("7").doesNotContain("tester");
+                    });
+        }
+
+        /**
+         * 인프라 장애까지 도메인 오류로 바꾸면 안 된다. 커넥션이 끊긴 것과 값이 잘못된 것은
+         * 조치가 정반대다 — 재시도하면 되는 상황과 값을 고쳐야 하는 상황이 한 코드로 뭉쳐진다.
+         * 그래서 제약 이름을 찾은 경우에만 번역한다.
+         */
+        @Test
+        @DisplayName("제약 위반이 아닌 장애는 그대로 올려 보낸다")
+        void infrastructureFailureIsNotTranslated() {
+            HikariDataSource dead = hikari(mysql.getUsername(), mysql.getPassword());
+            dead.close();
+            JdbcBenchmarkRunRepository broken =
+                    new JdbcBenchmarkRunRepository(new JdbcTemplate(dead), observationJdbcTemplate);
+
+            assertThatThrownBy(() -> broken.updateArchiveStatus(1L, BenchmarkArchiveStatus.DONE, null))
+                    .isInstanceOf(DataAccessException.class)
+                    .isNotInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("archive 실패 이유 누락도 도메인 오류다")
+        void archiveReasonViolationIsTranslated() {
+            long id = finalizedRun();
+
+            assertThatThrownBy(() -> repository.updateArchiveStatus(
+                    id, BenchmarkArchiveStatus.FAILED, null))
+                    .satisfies(it -> assertThat(((BusinessException) it).getErrorCode())
+                            .isEqualTo(BenchmarkErrorCode.RUN_VALUE_REJECTED));
         }
     }
 

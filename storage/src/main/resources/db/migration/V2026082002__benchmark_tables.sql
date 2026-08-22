@@ -101,7 +101,10 @@ CREATE TABLE `benchmark_runs` (
     `observation_stopped_at`    datetime(6)  NULL COMMENT '관측 종료. PromQL 질의 범위와 OBS-22 archive 구간의 오른쪽 끝이다',
     `finalized_at`              datetime(6)  NULL,
 
-    `requested_by`              varchar(100) NOT NULL COMMENT '회차를 연 사람. 감사 주체이지 인스턴스 식별자가 아니다',
+    -- 계정 식별자만 넣는다. 이름·이메일 같은 개인 식별 정보를 넣지 않는다 — 이 값은 회차 목록 응답과
+    -- 오류 detail 로그를 타고 밖으로 나간다. 호출자 식별은 Caller(record Caller(long memberId)) 가
+    -- members.id 하나로 하므로, 그 값을 문자열로 넣으면 충분하다.
+    `requested_by`              varchar(100) NOT NULL COMMENT '회차를 연 계정 식별자(members.id). 이름·이메일 금지 — 감사 주체이지 인스턴스 식별자가 아니다',
     `load_stop_reason`          varchar(200) NULL COMMENT '부하를 왜 끊었는지. 계획대로 끝난 회차는 NULL 이다',
     `archive_failure_reason`    varchar(200) NULL COMMENT 'archive_status = FAILED 의 이유. 재실행 판단 근거다',
 
@@ -156,9 +159,20 @@ CREATE TABLE `benchmark_runs` (
     UNIQUE KEY `uk_run_key` (`run_key`),
     UNIQUE KEY `uk_run_running` (`running_guard`),
 
-    CONSTRAINT `ck_run_status` CHECK (`run_status` IN ('RUNNING', 'LOAD_STOPPED', 'OBSERVED', 'FINALIZED')),
-    CONSTRAINT `ck_run_archive_status` CHECK (`archive_status` IN ('NONE', 'DONE', 'FAILED')),
-    CONSTRAINT `ck_run_type` CHECK (`run_type` IN ('WARMUP', 'MAIN', 'CHAOS')),
+    -- COLLATE 를 붙이는 이유 — 테이블 콜레이션이 utf8mb4_0900_ai_ci 라 IN 비교가 대소문자를 무시한다.
+    --   실측: run_status = 'running' 이 CHECK 를 통과하고 소문자 그대로 저장된다. 그런데 읽는 쪽은
+    --   BenchmarkRunStatus.valueOf 라 "No enum constant ... running" 으로 죽는다.
+    --   값은 들어가는데 읽을 때 죽는 행이 만들어지는 것이고, 하필 이 CHECK 들이 존재하는 유일한 이유가
+    --   그 경로(백필·수동 보정)다. as_cs 로 바꾸면 대소문자가 다른 값은 애초에 못 들어온다.
+    --
+    --   running_guard 는 그대로 둔다. ai_ci 덕에 'running' 도 매칭돼 동시 RUNNING 가드는 안 뚫렸고,
+    --   위 CHECK 가 소문자를 막으면 그 입력 자체가 사라진다.
+    CONSTRAINT `ck_run_status` CHECK (
+        `run_status` COLLATE utf8mb4_0900_as_cs IN ('RUNNING', 'LOAD_STOPPED', 'OBSERVED', 'FINALIZED')),
+    CONSTRAINT `ck_run_archive_status` CHECK (
+        `archive_status` COLLATE utf8mb4_0900_as_cs IN ('NONE', 'DONE', 'FAILED')),
+    CONSTRAINT `ck_run_type` CHECK (
+        `run_type` COLLATE utf8mb4_0900_as_cs IN ('WARMUP', 'MAIN', 'CHAOS')),
 
     -- 상태와 시각이 어긋난 행을 만들 수 없다. 양쪽 다 NOT NULL 인 run_status 로만 판정하므로
     -- NULL 통과 구멍이 없다 — IS NOT NULL 은 1/0 을 내고 IN 도 1/0 을 낸다.

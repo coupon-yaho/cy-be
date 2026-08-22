@@ -420,6 +420,28 @@ class BenchmarkRunsMigrationTest {
             assertThatThrownBy(() -> insert(zero)).hasMessageContaining("ck_run_topology");
         }
 
+        /**
+         * 테이블 콜레이션이 utf8mb4_0900_ai_ci 라 IN 비교가 <b>대소문자를 무시한다.</b>
+         * COLLATE 를 안 붙이면 'running' 이 통과해 소문자 그대로 저장되고, 읽는 쪽의
+         * BenchmarkRunStatus.valueOf 가 "No enum constant ... running" 으로 죽는다 —
+         * 값은 들어가는데 읽을 때 죽는 행이다. 실측으로 확인하고 as_cs 를 붙였다.
+         */
+        @ParameterizedTest(name = "{0} = {1}")
+        @CsvSource({
+                "run_status,     running, ck_run_status",
+                "run_status,     Running, ck_run_status",
+                "run_type,       main,    ck_run_type",
+                "archive_status, done,    ck_run_archive_status",
+                "archive_status, None,    ck_run_archive_status",
+        })
+        @DisplayName("대소문자가 다른 상태 값도 거부한다")
+        void statusValuesAreCaseSensitive(String column, String value, String constraint) {
+            // 작은따옴표는 @CsvSource 의 quote 문자라 여기서 붙인다. CSV 에 적으면 벗겨져서
+            // SQL 이 문자열이 아니라 컬럼 참조가 되고(Unknown column), 제약이 아니라 문법에서 죽는다.
+            assertThatThrownBy(() -> insert(Map.of(column, "'" + value + "'")))
+                    .hasMessageContaining(constraint);
+        }
+
         @Test
         @DisplayName("정의에 없는 상태 값을 쓸 수 없다")
         void statusValuesAreClosed() {

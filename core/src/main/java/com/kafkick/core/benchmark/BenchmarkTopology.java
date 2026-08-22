@@ -1,5 +1,7 @@
 package com.kafkick.core.benchmark;
 
+import com.kafkick.core.support.exception.BusinessException;
+
 /**
  * 회차가 돌던 자원 조건. <b>기록이 없으면 나중에 "이 수치가 어떤 조건에서 나왔는지" 재현이 안 된다.</b>
  *
@@ -44,7 +46,7 @@ public record BenchmarkTopology(
         requirePositiveIfPresent(memoryMbTotal, "memoryMbTotal");
         requirePositiveIfPresent(tomcatMaxConnections, "tomcatMaxConnections");
         if (tomcatAcceptCount != null && tomcatAcceptCount < 0) {
-            throw new IllegalArgumentException("tomcatAcceptCount 는 0 이상이어야 한다: " + tomcatAcceptCount);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,"tomcatAcceptCount 는 0 이상이어야 한다: " + tomcatAcceptCount);
         }
     }
 
@@ -61,13 +63,13 @@ public record BenchmarkTopology(
 
     private static void requirePositive(int value, String name) {
         if (value <= 0) {
-            throw new IllegalArgumentException(name + " 는 0 보다 커야 한다: " + value);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,name + " 는 0 보다 커야 한다: " + value);
         }
     }
 
     private static void requirePositiveIfPresent(Integer value, String name) {
         if (value != null && value <= 0) {
-            throw new IllegalArgumentException(name + " 는 0 보다 커야 한다: " + value);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,name + " 는 0 보다 커야 한다: " + value);
         }
     }
 }

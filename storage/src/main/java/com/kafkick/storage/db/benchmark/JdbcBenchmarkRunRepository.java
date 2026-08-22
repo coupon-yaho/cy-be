@@ -10,12 +10,16 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
@@ -65,6 +69,69 @@ import com.kafkick.core.support.exception.BusinessException;
 @ConditionalOnProperty("observation.datasource.enabled")
 public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
+    private static final String INSERT = """
+            INSERT INTO benchmark_runs (
+                run_key, run_type, scenario_code,
+                engine_version, release_stage, queue_mode, coupon_id,
+                run_status, archive_status, started_at, requested_by,
+                app_replicas, available_processors, cpu_millicores_total, memory_mb_total,
+                tomcat_workers_total, tomcat_max_connections, tomcat_accept_count,
+                hikari_pool_total, mysql_max_connections,
+                offered_rps, load_hold_seconds, observation_hold_seconds,
+                stock_total, generator_idle_rtt_millis,
+                load_tool, load_tool_version, load_script_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', 'NONE', ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """;
+
+    private static final String SELECT = "SELECT * FROM benchmark_runs";
+
+    /** {@code Check constraint 'ck_run_time_order' is violated} 에서 이름만 뽑는다. */
+    private static final Pattern CONSTRAINT_NAME =
+            Pattern.compile("[Cc]heck constraint '([^']+)' is violated");
+
+    private static final RowMapper<BenchmarkRun> MAPPER = (rs, rowNumber) -> new BenchmarkRun(
+            rs.getLong("id"),
+            rs.getString("run_key"),
+            BenchmarkRunType.valueOf(rs.getString("run_type")),
+            rs.getString("scenario_code"),
+            EngineVersion.valueOf(rs.getString("engine_version")),
+            ReleaseStage.valueOf(rs.getString("release_stage")),
+            QueueMode.valueOf(rs.getString("queue_mode")),
+            nullableLong(rs, "coupon_id"),
+            BenchmarkRunStatus.valueOf(rs.getString("run_status")),
+            BenchmarkArchiveStatus.valueOf(rs.getString("archive_status")),
+            rs.getString("archive_failure_reason"),
+            instant(rs, "started_at"),
+            instant(rs, "load_stopped_at"),
+            instant(rs, "observation_stopped_at"),
+            instant(rs, "finalized_at"),
+            rs.getString("requested_by"),
+            rs.getString("load_stop_reason"),
+            new BenchmarkTopology(
+                    rs.getInt("app_replicas"),
+                    rs.getInt("available_processors"),
+                    nullableInt(rs, "cpu_millicores_total"),
+                    nullableInt(rs, "memory_mb_total"),
+                    rs.getInt("tomcat_workers_total"),
+                    nullableInt(rs, "tomcat_max_connections"),
+                    nullableInt(rs, "tomcat_accept_count"),
+                    rs.getInt("hikari_pool_total"),
+                    rs.getInt("mysql_max_connections")),
+            new LoadProfile(
+                    rs.getInt("offered_rps"),
+                    rs.getInt("load_hold_seconds"),
+                    rs.getInt("observation_hold_seconds"),
+                    nullableInt(rs, "stock_total"),
+                    nullableDouble(rs, "generator_idle_rtt_millis")),
+            new LoadToolMeta(
+                    rs.getString("load_tool"),
+                    rs.getString("load_tool_version"),
+                    rs.getString("load_script_hash")),
+            clientSummary(rs),
+            serverSummary(rs),
+            nullableLong(rs, "observed_lag_total"));
+
     /**
      * 전이·적재 전용. 운영 풀이다.
      */
@@ -83,31 +150,13 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
         this.observationJdbcTemplate = observationJdbcTemplate;
     }
 
-    private static final String INSERT = """
-            INSERT INTO benchmark_runs (
-                run_key, run_type, scenario_code,
-                engine_version, release_stage, queue_mode, coupon_id,
-                run_status, archive_status, started_at, requested_by,
-                app_replicas, available_processors, cpu_millicores_total, memory_mb_total,
-                tomcat_workers_total, tomcat_max_connections, tomcat_accept_count,
-                hikari_pool_total, mysql_max_connections,
-                offered_rps, load_hold_seconds, observation_hold_seconds,
-                stock_total, generator_idle_rtt_millis,
-                load_tool, load_tool_version, load_script_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'RUNNING', 'NONE', ?, ?,
-                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """;
-
-    private static final String SELECT = "SELECT * FROM benchmark_runs";
-
     @Override
     public long open(StartBenchmarkRunCommand command, Instant startedAt) {
         BenchmarkTopology topology = command.topology();
         LoadProfile profile = command.loadProfile();
         LoadToolMeta tool = command.toolMeta();
         try {
-            org.springframework.jdbc.support.GeneratedKeyHolder keys =
-                    new org.springframework.jdbc.support.GeneratedKeyHolder();
+            GeneratedKeyHolder keys = new GeneratedKeyHolder();
             writeJdbcTemplate.update(connection -> {
                 PreparedStatement statement =
                         connection.prepareStatement(INSERT, Statement.RETURN_GENERATED_KEYS);
@@ -147,6 +196,8 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
             return key.longValue();
         } catch (DuplicateKeyException exception) {
             throw conflict(command.runKey(), exception);
+        } catch (DataAccessException exception) {
+            throw valueRejected(exception);
         }
     }
 
@@ -194,7 +245,7 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
     @Override
     public boolean markLoadStopped(long id, Instant loadStoppedAt, String reason) {
-        return 1 == writeJdbcTemplate.update("""
+        return update("""
                 UPDATE benchmark_runs
                    SET run_status = 'LOAD_STOPPED', load_stopped_at = ?, load_stop_reason = ?
                  WHERE id = ? AND run_status = 'RUNNING'
@@ -203,7 +254,7 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
     @Override
     public boolean markObserved(long id, Instant observationStoppedAt, long observedLagTotal) {
-        return 1 == writeJdbcTemplate.update("""
+        return update("""
                 UPDATE benchmark_runs
                    SET run_status = 'OBSERVED', observation_stopped_at = ?, observed_lag_total = ?
                  WHERE id = ? AND run_status = 'LOAD_STOPPED'
@@ -217,7 +268,7 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
      */
     @Override
     public boolean markFinalized(long id, Instant finalizedAt) {
-        return 1 == writeJdbcTemplate.update("""
+        return update("""
                 UPDATE benchmark_runs
                    SET run_status = 'FINALIZED', finalized_at = ?
                  WHERE id = ? AND run_status = 'OBSERVED' AND client_measured_at IS NOT NULL
@@ -226,7 +277,7 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
     @Override
     public boolean updateClientSummary(long id, ClientLoadSummary summary) {
-        return 1 == writeJdbcTemplate.update("""
+        return update("""
                 UPDATE benchmark_runs
                    SET client_request_count = ?, client_failure_count = ?, client_dropped_iterations = ?,
                        client_tps = ?, client_p95_millis = ?, client_p99_millis = ?, client_measured_at = ?
@@ -239,7 +290,7 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
     @Override
     public boolean updateServerSummary(long id, ServerLoadSummary summary) {
-        return 1 == writeJdbcTemplate.update("""
+        return update("""
                 UPDATE benchmark_runs
                    SET server_request_count = ?, server_failure_count = ?,
                        server_tps = ?, server_p95_millis = ?, server_p99_millis = ?, server_measured_at = ?
@@ -256,9 +307,65 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
      */
     @Override
     public boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason) {
-        return 1 == writeJdbcTemplate.update("""
+        return update("""
                 UPDATE benchmark_runs SET archive_status = ?, archive_failure_reason = ? WHERE id = ?
                 """, status.name(), failureReason, id);
+    }
+
+    /**
+     * 조건부 UPDATE 한 문장을 돌리고, 갱신 행 수가 1 인지 돌려준다.
+     *
+     * <p><b>상태 조건과 값 조건은 막는 주체가 다르다.</b> 상태는 WHERE 절이 보고 0행으로 알리지만,
+     * 값은 DB CHECK 만 본다. 번역하지 않으면 {@code DataIntegrityViolationException} 이 그대로 올라가
+     * {@code GlobalExceptionHandler} 의 {@code @ExceptionHandler(Exception.class)} 에서 500 이 된다 —
+     * 회차 도중에 원인이 안 적힌 서버 오류가 뜬다.
+     *
+     * <p>서비스와 값 객체를 지나면 대부분 여기 안 걸린다. 그런데 <b>안 걸린다고 단정할 수 없는 경로가
+     * 하나 있다</b> — 회차를 연 인스턴스와 부하를 끊는 인스턴스가 다르면 시계 차이로
+     * {@code load_stopped_at < started_at} 이 만들어져 {@code ck_run_time_order} 에 걸린다.
+     * 앱이 미리 못 막는 조건이라 여기서 받는 게 맞다.
+     */
+    private boolean update(String sql, Object... args) {
+        try {
+            return 1 == writeJdbcTemplate.update(sql, args);
+        } catch (DataAccessException exception) {
+            throw valueRejected(exception);
+        }
+    }
+
+    /**
+     * 어떤 제약이 거부했는지만 남긴다. <b>값은 넣지 않는다</b> — detail 은 로그로 나가고,
+     * 거기에는 회차를 연 사람의 식별자를 비롯해 원문 값이 섞여 있다.
+     */
+    private static RuntimeException valueRejected(DataAccessException exception) {
+        String constraint = constraintName(exception);
+        if (constraint == null) {
+            // 제약 이름이 없으면 CHECK 위반이 아니다 — 커넥션 끊김·타임아웃 같은 진짜 장애다.
+            // 그런 것까지 도메인 오류로 바꾸면 인프라 장애가 "값이 잘못됐다" 로 보고되고,
+            // 재시도하면 되는 상황과 값을 고쳐야 하는 상황이 한 코드로 뭉쳐진다.
+            return exception;
+        }
+        return new BusinessException(BenchmarkErrorCode.RUN_VALUE_REJECTED,
+                "constraint=" + constraint, exception);
+    }
+
+    /**
+     * MySQL 의 CHECK 위반 메시지는 {@code Check constraint 'ck_run_time_order' is violated} 형태다.
+     *
+     * <p><b>예외 타입으로 가르지 않는다.</b> MySQL 의 CHECK 위반(3819)은 Spring 의 MySQL 에러코드
+     * 매핑에 없어서 {@code DataIntegrityViolationException} 이 아니라
+     * {@code UncategorizedSQLException} 으로 올라온다(실측). 타입으로 잡으려다 놓치면 그대로 500 이 된다.
+     *
+     * <p>이름을 못 찾으면 {@code null} 이다. 지어내지 않는다 — 없는 제약 이름이 로그에 남으면
+     * 그걸 찾느라 시간을 쓴다.
+     *
+     * @param exception 저장소가 던진 예외
+     * @return 위반된 CHECK 제약 이름; CHECK 위반이 아니면 null
+     */
+    private static String constraintName(DataAccessException exception) {
+        Throwable cause = exception.getMostSpecificCause();
+        Matcher matcher = CONSTRAINT_NAME.matcher(String.valueOf(cause.getMessage()));
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     /**
@@ -298,47 +405,6 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
         }
     }
 
-    private static final RowMapper<BenchmarkRun> MAPPER = (rs, rowNumber) -> new BenchmarkRun(
-            rs.getLong("id"),
-            rs.getString("run_key"),
-            BenchmarkRunType.valueOf(rs.getString("run_type")),
-            rs.getString("scenario_code"),
-            EngineVersion.valueOf(rs.getString("engine_version")),
-            ReleaseStage.valueOf(rs.getString("release_stage")),
-            QueueMode.valueOf(rs.getString("queue_mode")),
-            nullableLong(rs, "coupon_id"),
-            BenchmarkRunStatus.valueOf(rs.getString("run_status")),
-            BenchmarkArchiveStatus.valueOf(rs.getString("archive_status")),
-            rs.getString("archive_failure_reason"),
-            instant(rs, "started_at"),
-            instant(rs, "load_stopped_at"),
-            instant(rs, "observation_stopped_at"),
-            instant(rs, "finalized_at"),
-            rs.getString("requested_by"),
-            rs.getString("load_stop_reason"),
-            new BenchmarkTopology(
-                    rs.getInt("app_replicas"),
-                    rs.getInt("available_processors"),
-                    nullableInt(rs, "cpu_millicores_total"),
-                    nullableInt(rs, "memory_mb_total"),
-                    rs.getInt("tomcat_workers_total"),
-                    nullableInt(rs, "tomcat_max_connections"),
-                    nullableInt(rs, "tomcat_accept_count"),
-                    rs.getInt("hikari_pool_total"),
-                    rs.getInt("mysql_max_connections")),
-            new LoadProfile(
-                    rs.getInt("offered_rps"),
-                    rs.getInt("load_hold_seconds"),
-                    rs.getInt("observation_hold_seconds"),
-                    nullableInt(rs, "stock_total"),
-                    nullableDouble(rs, "generator_idle_rtt_millis")),
-            new LoadToolMeta(
-                    rs.getString("load_tool"),
-                    rs.getString("load_tool_version"),
-                    rs.getString("load_script_hash")),
-            clientSummary(rs),
-            serverSummary(rs),
-            nullableLong(rs, "observed_lag_total"));
 
     /**
      * 요약은 통째로 있거나 통째로 없다({@code ck_run_*_summary_atomic}). 그래서 측정 시각 하나로

@@ -14,6 +14,12 @@ import com.kafkick.core.observation.ReleaseStage;
  * <p>여기 담기는 것은 <b>회차 메타와 공식 요약뿐</b>이다. 1초 시계열은 Prometheus 가 보관하고
  * (retention 30d), 완료 회차의 MySQL 사본은 OBS-22 가 따로 다룬다.
  *
+ * <p><b>여기의 위반은 {@link IllegalArgumentException} 으로 남긴다.</b> 다른 값 객체
+ * ({@code StartBenchmarkRunCommand} · {@code BenchmarkTopology} · 요약 둘)는 사람이 넣은 입력이라
+ * {@code BENCHMARK-008}(400)로 번역하지만, 이 레코드는 <b>이미 저장된 행에서 조립된다</b>.
+ * 여기서 불변식이 깨졌다면 DB CHECK 를 우회한 행이 있다는 뜻이라 데이터 손상이지 요청의 잘못이
+ * 아니다. 400·409 로 번역하면 손상을 "값을 고쳐 다시 보내면 되는 상황" 으로 오보하게 된다.
+ *
  * <p>불변식을 DB CHECK 와 <b>양쪽에</b> 둔다. DB 쪽은 백필·수동 보정처럼 이 코드를 지나지 않는
  * 경로를 막고, 여기 있는 것은 그 경로를 지나는 코드가 잘못된 행을 만들기 전에 막는다.
  * 한쪽만 두면 다른 쪽 경로가 그대로 뚫린다.
@@ -34,7 +40,8 @@ import com.kafkick.core.observation.ReleaseStage;
  * @param loadStoppedAt 부하 종료
  * @param observationStoppedAt 관측 종료. PromQL 질의 범위와 archive 구간의 오른쪽 끝이다
  * @param finalizedAt 확정 시각
- * @param requestedBy 회차를 연 사람
+ * @param requestedBy 회차를 연 <b>계정 식별자</b>({@code members.id}). 이름·이메일을 넣지 않는다 —
+ *        이 값은 회차 목록 응답과 오류 detail 로그를 타고 밖으로 나간다
  * @param loadStopReason 부하를 왜 끊었는지. 계획대로 끝났으면 비어 있다
  * @param topology 자원·토폴로지 조건
  * @param loadProfile 부하 입력

@@ -25,6 +25,16 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     private final Map<Long, Row> rows = new LinkedHashMap<>();
     private long sequence;
 
+    /**
+     * {@code markFinalized} 가 0행을 낸 <b>직후</b>에 끼어드는 다른 인스턴스를 흉내 낸다.
+     * 서비스가 다시 읽기 전에 행이 바뀌는 창이 실재하는데, 순차 테스트로는 그 창을 만들 수 없다.
+     */
+    private java.util.function.LongConsumer onFinalizeRejected = id -> { };
+
+    void onFinalizeRejected(java.util.function.LongConsumer hook) {
+        this.onFinalizeRejected = hook;
+    }
+
     @Override
     public long open(StartBenchmarkRunCommand command, Instant startedAt) {
         if (rows.values().stream().anyMatch(it -> it.runKey.equals(command.runKey()))) {
@@ -89,6 +99,7 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     public boolean markFinalized(long id, Instant finalizedAt) {
         Row row = rows.get(id);
         if (row == null || row.status != BenchmarkRunStatus.OBSERVED || row.client == null) {
+            onFinalizeRejected.accept(id);
             return false;
         }
         row.status = BenchmarkRunStatus.FINALIZED;

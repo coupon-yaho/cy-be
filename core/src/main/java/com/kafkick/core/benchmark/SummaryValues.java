@@ -3,6 +3,8 @@ package com.kafkick.core.benchmark;
 import java.time.Instant;
 import java.util.Objects;
 
+import com.kafkick.core.support.exception.BusinessException;
+
 /**
  * {@link ClientLoadSummary} · {@link ServerLoadSummary} 가 공유하는 값 검증.
  *
@@ -24,20 +26,20 @@ final class SummaryValues {
         requireFinite(side, "p95Millis", p95Millis);
         requireFinite(side, "p99Millis", p99Millis);
         if (failureCount > requestCount) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     side + " failureCount 가 requestCount 보다 크다: " + failureCount + " > " + requestCount);
         }
         // p99 < p95 는 산식을 잘못 적용했거나 두 값을 다른 표본에서 뽑았다는 뜻이다.
         // 통과시키면 그 회차만 꼬리가 뒤집힌 채 비교표에 들어가고, 눈으로는 안 보인다.
         if (p99Millis < p95Millis) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     side + " p99 가 p95 보다 작다: " + p99Millis + " < " + p95Millis);
         }
     }
 
     private static void requireNotNegative(String side, String name, long value) {
         if (value < 0) {
-            throw new IllegalArgumentException(side + " " + name + " 는 0 이상이어야 한다: " + value);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,side + " " + name + " 는 0 이상이어야 한다: " + value);
         }
     }
 
@@ -48,10 +50,10 @@ final class SummaryValues {
      */
     private static void requireFinite(String side, String name, double value) {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
-            throw new IllegalArgumentException(side + " " + name + " 가 유한한 값이 아니다: " + value);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,side + " " + name + " 가 유한한 값이 아니다: " + value);
         }
         if (value < 0) {
-            throw new IllegalArgumentException(side + " " + name + " 는 0 이상이어야 한다: " + value);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,side + " " + name + " 는 0 이상이어야 한다: " + value);
         }
     }
 }

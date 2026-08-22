@@ -6,6 +6,8 @@ import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
 
+import com.kafkick.core.support.exception.BusinessException;
+
 /**
  * 회차를 여는 명령. 회차의 조건은 여기서 <b>전부</b> 고정된다.
  *
@@ -19,7 +21,7 @@ import com.kafkick.core.observation.ReleaseStage;
  * @param releaseStage 릴리스 단계
  * @param queueMode 대기열 모드
  * @param couponId 이 회차가 쓸 쿠폰. 회차마다 새로 만들므로 재고 리셋 절차가 없다
- * @param requestedBy 회차를 여는 사람
+ * @param requestedBy 회차를 여는 <b>계정 식별자</b>({@code members.id}). 이름·이메일 금지
  * @param topology 자원·토폴로지 조건
  * @param loadProfile 부하 입력
  * @param toolMeta 부하 도구 메타. 모르면 {@link LoadToolMeta#unknown()}
@@ -57,11 +59,11 @@ public record StartBenchmarkRunCommand(
      */
     private static String requireText(String value, String name, int maxLength) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(name + " 를 입력해야 한다");
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,name + " 를 입력해야 한다");
         }
         String trimmed = value.strip();
         if (trimmed.length() > maxLength) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     name + " 는 " + maxLength + "자를 넘을 수 없다: " + trimmed.length());
         }
         return trimmed;

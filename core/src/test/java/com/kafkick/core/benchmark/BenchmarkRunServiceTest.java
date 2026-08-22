@@ -136,6 +136,25 @@ class BenchmarkRunServiceTest {
             assertThat(service.get(run.id()).observationStoppedAt()).isNull();
         }
 
+        /**
+         * 500 이 아니라 400 이어야 한다. IllegalArgumentException 으로 두면
+         * GlobalExceptionHandler 의 @ExceptionHandler(Exception.class) 가 500 으로 뭉개서,
+         * 값을 고쳐 다시 보내면 되는 상황이 서버 장애로 보고된다.
+         */
+        @Test
+        @DisplayName("음수 백로그는 400 이다 — 500 으로 뭉개지지 않는다")
+        void negativeBacklogIsAClientError() {
+            BenchmarkRun run = service.start(command("V3-MAIN-01"));
+            service.stopLoad(run.id(), null);
+
+            assertThatThrownBy(() -> service.stopObservation(run.id(), -1))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(it -> {
+                        assertThat(codeOf(it)).isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION);
+                        assertThat(codeOf(it).getStatus()).isEqualTo(400);
+                    });
+        }
+
         @Test
         @DisplayName("백로그가 0 으로 수렴하면 관측이 닫히고 그 값이 남는다")
         void drainedBacklogClosesObservation() {
@@ -168,6 +187,21 @@ class BenchmarkRunServiceTest {
 
             assertThatThrownBy(() -> service.finalizeRun(run.id()))
                     .satisfies(it -> assertThat(codeOf(it)).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
+        }
+
+        /**
+         * markFinalized 가 0행을 낸 뒤 다시 읽는 사이에 다른 인스턴스가 요약을 붙일 수 있다.
+         * 그때 "공식 결과가 없다" 고 말하면 거짓이다 — 다시 시도하면 되는 상황이라 그렇게 알린다.
+         */
+        @Test
+        @DisplayName("확정 도중 다른 인스턴스가 요약을 붙이면 요약 없음이라고 하지 않는다")
+        void concurrentSummaryIsNotReportedAsMissing() {
+            BenchmarkRun observed = drainedRun("V3-MAIN-01");
+            repository.onFinalizeRejected(id -> service.recordClientSummary(id, clientSummary(0)));
+
+            assertThatThrownBy(() -> service.finalizeRun(observed.id()))
+                    .satisfies(it -> assertThat(codeOf(it))
+                            .isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
         }
 
         @Test
@@ -266,7 +300,20 @@ class BenchmarkRunServiceTest {
 
             assertThatThrownBy(() -> service.recordArchiveResult(
                     finalized.id(), BenchmarkArchiveStatus.FAILED, null))
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .satisfies(it -> assertThat(codeOf(it))
+                            .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
+        }
+
+        /** XOR 의 반대 방향. 성공한 archive 에 실패 이유가 남아 있으면 재실행 판단이 거짓이 된다. */
+        @Test
+        @DisplayName("DONE 에 실패 이유를 붙이면 받지 않는다")
+        void successCannotCarryAReason() {
+            BenchmarkRun finalized = finalizedRun("V3-MAIN-01");
+
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                    finalized.id(), BenchmarkArchiveStatus.DONE, "timeout"))
+                    .satisfies(it -> assertThat(codeOf(it))
+                            .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
         }
     }
 

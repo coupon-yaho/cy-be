@@ -1,5 +1,7 @@
 package com.kafkick.core.benchmark;
 
+import com.kafkick.core.support.exception.BusinessException;
+
 /**
  * 회차에 건 부하의 입력값. <b>램프가 아니라 스파이크다.</b>
  *
@@ -26,20 +28,20 @@ public record LoadProfile(
 
     public LoadProfile {
         if (offeredRps <= 0) {
-            throw new IllegalArgumentException("offeredRps 는 0 보다 커야 한다: " + offeredRps);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,"offeredRps 는 0 보다 커야 한다: " + offeredRps);
         }
         if (loadHoldSeconds <= 0) {
-            throw new IllegalArgumentException("loadHoldSeconds 는 0 보다 커야 한다: " + loadHoldSeconds);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,"loadHoldSeconds 는 0 보다 커야 한다: " + loadHoldSeconds);
         }
         if (observationHoldSeconds < 0) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     "observationHoldSeconds 는 0 이상이어야 한다: " + observationHoldSeconds);
         }
         if (stockTotal != null && stockTotal < 0) {
-            throw new IllegalArgumentException("stockTotal 은 0 이상이어야 한다: " + stockTotal);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,"stockTotal 은 0 이상이어야 한다: " + stockTotal);
         }
         if (generatorIdleRttMillis != null && generatorIdleRttMillis < 0) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     "generatorIdleRttMillis 는 0 이상이어야 한다: " + generatorIdleRttMillis);
         }
     }

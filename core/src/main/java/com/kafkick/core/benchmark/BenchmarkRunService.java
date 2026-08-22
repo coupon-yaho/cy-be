@@ -88,7 +88,8 @@ public class BenchmarkRunService {
      */
     public BenchmarkRun stopObservation(long id, long observedLagTotal) {
         if (observedLagTotal < 0) {
-            throw new IllegalArgumentException("observedLagTotal 은 0 이상이어야 한다: " + observedLagTotal);
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
+                    "benchmarkRunId=" + id + " backlog=" + observedLagTotal);
         }
         if (observedLagTotal != 0) {
             throw new BusinessException(BenchmarkErrorCode.BACKLOG_NOT_DRAINED,
@@ -149,8 +150,13 @@ public class BenchmarkRunService {
         if (run.runStatus() != BenchmarkRunStatus.OBSERVED) {
             throw illegalTransition(id, run.runStatus(), BenchmarkRunStatus.OBSERVED);
         }
-        // OBSERVED 인데 못 넘어갔다면 남은 이유는 공식 요약이 없다는 것뿐이다.
-        throw new BusinessException(BenchmarkErrorCode.OFFICIAL_SUMMARY_MISSING, "benchmarkRunId=" + id);
+        if (run.client().isEmpty()) {
+            throw new BusinessException(BenchmarkErrorCode.OFFICIAL_SUMMARY_MISSING, "benchmarkRunId=" + id);
+        }
+        // 다시 읽었더니 조건이 다 맞다 — 0행이던 사이에 다른 인스턴스가 행을 바꿨다는 뜻이다.
+        // 여기서 "요약이 없다" 고 말하면 거짓이 된다. 다시 시도하면 되는 상황이라 그대로 알린다.
+        throw new BusinessException(BenchmarkErrorCode.ILLEGAL_TRANSITION,
+                "benchmarkRunId=" + id + " 확정 도중 다른 인스턴스가 회차를 바꿨다. 다시 시도한다");
     }
 
     /**
@@ -166,7 +172,7 @@ public class BenchmarkRunService {
     public BenchmarkRun recordArchiveResult(long id, BenchmarkArchiveStatus status, String failureReason) {
         Objects.requireNonNull(status, "status");
         if ((status == BenchmarkArchiveStatus.FAILED) != (failureReason != null)) {
-            throw new IllegalArgumentException(
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     "archive 실패 이유는 FAILED 일 때만, 그리고 FAILED 이면 반드시 있어야 한다: " + status);
         }
         if (!repository.updateArchiveStatus(id, status, failureReason)) {

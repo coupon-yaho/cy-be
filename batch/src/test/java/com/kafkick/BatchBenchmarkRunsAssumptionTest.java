@@ -91,7 +91,7 @@ class BatchBenchmarkRunsAssumptionTest {
 
     @Test
     @DisplayName("benchmark_runs 가 생겼다 — 회차 출처를 환경변수에서 진행 중인 run 으로 바꿀 차례다")
-    void benchmarkRunsTableExistsNow() throws Exception {
+    void migrationCreatesBenchmarkRunsTable() throws Exception {
         Resource[] migrations = new PathMatchingResourcePatternResolver()
                 .getResources("classpath*:db/migration/*.sql");
 
