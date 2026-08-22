@@ -111,8 +111,26 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 
 ```bash
 docker compose -f base.yml up                     # DB·관제만. batch 는 안 뜬다
+DB_HOST=127.0.0.1 ./gradlew :api:bootRun          # ← 마이그레이션. 한 번만 (아래 참조)
 docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올린다
 ```
+
+**가운데 줄을 빼면 batch 가 기동에서 죽는다.** `base.yml` 의 mysql 은 **빈 DB** 만 만들고,
+스택 어디에도 마이그레이션을 돌리는 것이 없다 — `depends_on: service_healthy` 가 보장하는
+것은 `mysqladmin ping` 뿐이다. batch 는 `flyway.enabled:false` 라(마이그레이션 소유자는
+`api` 하나로 고정) 스스로 만들지 않는다.
+
+예전에는 그 상태로도 **기동이 그냥 성공**하고 첫 잡 실행에서 SQL 에러로 죽었다.
+지금은 `SchemaPresenceGuard` 가 기동 시점에 막고 **무엇이 없는지와 조치를 말한다** —
+`api` 를 먼저 띄우라는 것인지, `V2__batch_metadata.sql` 만 부으면 되는지, 접속 URL 에서
+DB 이름을 빠뜨린 것인지 셋을 가른다.
+
+`api` 를 한 번 띄우는 것이 번거로우면 마이그레이션만 직접 부어도 된다. Flyway 이력이
+남지 않으므로 **로컬 실험용으로만** 쓴다.
+
+> 검증용 셋(`coupon_clean`·`coupon_corrupt`)은 cy-seed 로 만드는데 거기에는 Spring Batch
+> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V2__batch_metadata.sql` 을 따로
+> 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
 
 **둘로 가른 것은 k6 측정 때문이다.** 부하 중에는 배치가 재고를 건드리면 안 되는데, 그 정지
 수단이 설정이 아니라 컨테이너다 — `base.yml` 이 한 글자도 안 바뀌어야 부하 비교표의

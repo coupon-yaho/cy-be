@@ -14,6 +14,15 @@
 --
 -- DEFAULT 'BATCH' 라 배치 INSERT 는 안 바뀐다. 시드만 명시적으로 'SEED' 를 쓴다 —
 -- 뜻을 스키마에 남기면 대시보드와 게이트도 같은 구분을 쓸 수 있다.
+-- ⚠️ 기존 행을 백필하지 않는다. MySQL 이 NOT NULL DEFAULT 로 전부 'BATCH' 로 채우는데,
+--    이 마이그레이션이 도는 DB 에는 시드 행이 없으므로 그게 맞다 — 시드 데이터셋은 Flyway 가
+--    아니라 cy-seed 의 ddl/00_schema.sql 로 만들어지고, 거기에는 이 컬럼이 처음부터 있다.
+--
+--    바꿔 말하면 **이 마이그레이션은 시드 데이터셋을 고치지 못한다.** cy-seed 1f217b5 이전에
+--    만든 데이터셋에는 컬럼 자체가 없고 Flyway 가 그 DB 에 닿지 않는다. 그 DB 에 배치를 붙이면
+--    findLatestClosed 의 `AND origin = 'BATCH'` 가 매번 Unknown column 으로 실패한다 —
+--    되읽기가 직전 값을 유지하므로 조용하고, VerificationMetricsStale 이 그때 유일한 신호다.
+--    **재생성이 유일한 답이다.** docs/14 시연 절차 2번에 그 판별 쿼리를 적어 뒀다.
 ALTER TABLE verification_runs
   ADD COLUMN origin varchar(6) NOT NULL DEFAULT 'BATCH'
   COMMENT 'SEED / BATCH — 시드가 심은 기준 행인가, 배치가 만든 실행인가';

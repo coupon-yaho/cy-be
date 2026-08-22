@@ -21,7 +21,7 @@
 | **한다** | `batch` 를 컨테이너로 띄운다 — **아래 "왜 앱까지 하나"** |
 | **한다** | 기동 가드와 업무 포트 결정 — 세 문서가 이 티켓에 예약해 뒀다 |
 | **안 한다** | 아직 없는 잡(`cleanupJob`·회차 생성/전이)의 알림 — 그 잡을 만들 때 단다 |
-| **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. Flyway 순서만 가드로 다룬다 |
+| **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. 배포 순서 위반은 `batch` 쪽 기동 가드로 잡는다 |
 
 > **범용인 것은 `BatchJobFailed` 하나뿐이다.** 셀렉터에 잡 이름이 없어 새 잡이 Spring Batch
 > 잡이기만 하면 그날 바로 커버된다. **나머지 둘은 `expireJob` 에 박혀 있다** —
@@ -48,7 +48,7 @@
   스크레이프되지 않아</b> 알림이 뜨는 것을 이 티켓 안에서 확인할 수 없다.
 
 그리고 **세 문서가 이 티켓을 가리키고 있다** — `application.yml.example`(기동 가드),
-`docs/11`(같은 가드를 `ApplicationRunner` 로), `docs/13` §3(업무 포트 노출). 그것을 안 하면
+`docs/11`(같은 가드를 `ApplicationRunner` 로), `docs/13` §4(업무 포트 노출). 그것을 안 하면
 예약된 일이 티켓 사이로 떨어진다.
 
 > `Dockerfile` 은 저장소에 **아직 없다.** 이 티켓이 만든다.
@@ -142,16 +142,18 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
 **여기서 새로 알게 된 것** — `BATCH_SCHEDULING_ENABLED=false`(batch.yml 의 기본)로 띄우면
 `BatchJobNotRunning` 이 15분 뒤 발화한다. 만료가 안 도는 것이 그 설정에서는 정상인데
-알림은 사고로 본다. 4단계에서 `inhibit_rules` 로 다룰 대상이 하나 더 늘었다.
+알림은 사고로 본다. **4단계에서 silence 로 결정했다** — 규칙에 예외를 파면 *일부러 껐다* 와
+*꺼져 버렸다* 가 같은 값이 된다. 시연 절차 2번에 명령을 박아 뒀다.
 
 ### 3·4단계 실측 (2026-08-22)
 
 | 확인 | 결과 |
 |---|---|
-| 규칙 수 | 6 → **8** (`promtool check config` 통과) |
-| 이름↔노출 대조 | `BatchMetricExposureTest` 가 새 이름 둘을 자동으로 잡는다 — 게이지를 미리 등록해서 잡을 안 돌려도 본문에 있다 |
+| 규칙 수 | 6 → **10** (`promtool check config` 통과) |
+| 이름↔노출 대조 | `BatchMetricExposureTest` 가 새 이름 **셋**(`cy_verification_verdict`·`cy_verification_findings`·`cy_verification_refresh_failures_total`)을 자동으로 잡는다 — 게이지와 카운터를 미리 등록해서 잡을 안 돌려도 본문에 있다 |
 | 값 | `VerificationMetricExposureTest`. PASS=0 · FAIL=1 · 검출 건수 · 안 닫힌 실행 제외 · 판정 없는 행 제외 · **시드 행 제외** · 최신 선택 · 라벨 |
 | 돌연변이 | 넷을 심어 **전부 검출** — 모름을 0 으로 · `finished_at` 조건 제거 · 데이터셋 한 칸에 · 정렬 반전 |
+| 돌연변이 (리뷰 라운드) | 다섯을 더 심었다. 넷은 검출 — 스케줄러 풀 키 경로 · compose 의 `127.0.0.1:` 제거 · `.example` 의 환경변수 이름 오타 · 가드의 `isEmpty()` 무력화. **하나는 살아남았다** — 어댑터의 `missingCoreTables()` 를 `return List.of()` 로 바꿔도 전부 초록이었다(가드가 있는데 아무것도 안 막는 상태). `catalog` 를 `information_schema` 로 갈아 끼우는 테스트를 더해 막았다 |
 
 ### 3단계 — 검증 판정을 지표로 낸다
 
@@ -178,9 +180,15 @@ cy_verification_findings{dataset,scope}   검출 건수
 `INCREMENTAL` 은 `rejectUnsupportedScope` 가 막고 있어 만들면 **영원히 `NaN`** 이라
 집계에 전염된다.
 
-**리스너/조회는 `runId` 없이도 동작해야 한다.** 키는 `VerifyJobConfig.RUN_ID_KEY`(값은
-`"runId"`)이고, `startRunStep` 이 **가드 여덟을 전부 통과한 뒤에야** 심는다 —
-`runId` 가 없는 실행이 곧 <i>판정을 못 낸 실행</i>이다. 라벨은 `JobParameters` 에서 뽑는다.
+> **아래 한 문단은 최종 구현이 아니다.** 3단계는 리스너가 아니라 **주기 되읽기**로 갔고
+> (`VerificationMetricsRefresher`), 라벨은 `JobParameters` 가 아니라 붙어 있는 스키마
+> (`rules.hasCleanOnlyConstraints()`)로 정한다 — `CleanSchemaGuard`·`rejectDatasetMismatch`
+> 와 **같은 사실**을 본다. `docs/13` §2a 에 같은 무효화 표시를 달아 뒀다. 초안을 남기는 것은
+> *왜 리스너로 안 갔나* 가 다음 사람에게 근거로 필요해서다.
+>
+> ~~리스너/조회는 `runId` 없이도 동작해야 한다. 키는 `VerifyJobConfig.RUN_ID_KEY`(값은
+> `"runId"`)이고, `startRunStep` 이 가드 여덟을 전부 통과한 뒤에야 심는다. 라벨은
+> `JobParameters` 에서 뽑는다.~~
 
 **CY-347 에서 값을 치른 것 셋을 그대로 지킨다** — 자세한 근거는 `docs/13` §2a.
 
@@ -192,12 +200,22 @@ cy_verification_findings{dataset,scope}   검출 건수
 안 고쳐도 뜻이 바뀌므로, 매핑을 한 곳에 모으고 `VerdictType.values().length == 2` 를
 단언하는 가드 테스트를 함께 둔다.
 
-### 4단계 — 알림 둘을 더한다
+### 4단계 — 알림 넷을 더한다
 
 | 알림 | 조건 | channel | 대응 |
 |---|---|---|---|
 | `VerificationVerdictFailed` | `cy_verification_verdict == 1` | `data` | 판정은 났고 불일치가 있다 |
 | `VerificationMetricsUnknown` | `cy_verification_verdict != itself` | `server` | 판정을 지표로 못 내고 있다 |
+| `VerificationMetricsStale` | `(cy_verification_refresh_failures_total - … offset 10m) >= 3` | `server` | 되읽기가 실패해 값이 낡고 있다 |
+| `AlertDeliveryFailing` | `(alertmanager_notifications_failed_total - … offset 10m) > 0` | `server` | 알림이 리시버까지 못 가고 있다 |
+
+**셋째가 없으면 되읽기 설계에 구멍이 남는다.** 갱신기는 실패해도 게이지를 **안 지운다** —
+지우면 정상 재기동 한 번에 판정이 사라져 관제와 DB 가 갈리기 때문이다. 그 대가로
+*낡은 값이 현재 값처럼 보이는* 상태가 생기는데, 그때 `verdict` 는 어제의 `0`(PASS) 이라
+`VerificationVerdictFailed` 도 `VerificationMetricsUnknown` 도 조용하고 잡이 안 돈 것도
+아니라 `BatchJobFailed` 도 아니다. **게이트가 FAIL 인데 관제는 통과라고 말한다** —
+이 지표를 만든 이유가 그 상태를 없애는 것이었다. 카운터만 내보내고 보는 사람이 없으면
+"축을 진다" 는 선언이 문장으로만 남는다.
 
 **판정 알림을 "잡 `FAILED`" 로 정의하면 안 된다.** Step 체인이
 `finalizeRunStep → statsAggregateStep` 이라, 통계 Step 이 죽으면 **잡은 `FAILED` 인데
@@ -215,7 +233,55 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 박히고 그것이 다음 사람에게 기준으로 읽힌다. 300만 건을 적재한 뒤 실제 소요를 재서
 그때 정한다 — `docs/13` §3 의 다른 실측 항목과 같은 자리다.
 
-**부하 중 `BatchJobNotRunning` 은 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
+### 배포 순서는 compose 가 아니라 `SchemaPresenceGuard` 가 잡는다
+
+`batch` 는 `flyway.enabled:false` 다 — 마이그레이션 소유자는 `api` 하나로 고정돼 있다.
+그런데 **빈 DB 에서도 기동이 그냥 성공한다**(`docs/11` 의 "`application.yml` 은 문서가
+둘이다" 절). `@Entity` 가 없어
+`ddl-auto: validate` 가 공허하게 통과하기 때문이다. compose 로도 못 막는다 —
+`batch.yml` 의 `depends_on: mysql: condition: service_healthy` 는 **mysqld 가 살아 있다**
+까지만 보장하고, `base.yml` 에는 마이그레이션을 돌릴 `api` 서비스도 없다.
+
+**이 티켓이 그 침묵을 한 단계 더 나쁘게 만들었다.** `VerificationMetrics` 는 자기가 보는
+데이터셋을 `rules.hasCleanOnlyConstraints()` 로 정하는데, 그 구현은 인덱스 하나를 묻는
+`EXISTS` 라 **테이블이 하나도 없으면 예외 없이 `false`** 를 준다. 그러면 빈 DB 에 붙은
+프로세스가 `cy_verification_verdict{dataset="CORRUPT"}` 를 내보내고, 30분 뒤
+`VerificationMetricsUnknown` 이 그 라벨로 뜬다 — 실제 원인은 *"스키마가 없다"* 인데 사람은
+*"CORRUPT 셋 검증이 안 돌았다"* 로 읽는다. **"0건이 두 뜻을 갖는다" 와 같은 종류다.**
+
+그래서 `docs/11` 이 예약해 둔 가드를 여기서 만든다. `ApplicationRunner` 로 두어
+`FlywayMigrationInitializer` 보다 확실히 뒤에 오게 하고(`InitializingBean` 은 그 순서가
+보장되지 않는다), `@Order(HIGHEST_PRECEDENCE)` 로 `JobLauncherApplicationRunner`(정렬값 0)
+보다 앞에 세운다 — 잡이 먼저 돌면 가드가 말하기 전에 SQL 에러로 죽는다.
+
+**그 과정에서 이 티켓의 범위 밖 사실이 하나 드러났다 — 검증용 셋에는 Spring Batch 메타
+테이블이 없다.** `coupon_clean`·`coupon_corrupt` 는 cy-seed 의 `ddl/` 로 만들어지는데
+거기에 `BATCH_*` 가 하나도 없고(`CREATE TABLE` 17개 중 0개), 그 DB 를 보게 배치를 띄우는
+것이 설정 파일이 문서화한 정상 절차다. 즉 **데이터 넷은 다 있고 메타만 없는 상태가 정상
+절차에서 생긴다.** 지금은 기동이 통과하고 첫 `verifyJob` 트리거에서
+`Table 'BATCH_JOB_INSTANCE' doesn't exist` 로 죽는다 — `docs/11` 이 배포 순서 위반의
+증상으로 지목한 그 문자열이다.
+
+그래서 가드는 두 축을 함께 보고 **메시지를 갈라 준다**. 메타만 없으면 *"V2 를 이 스키마에
+부으십시오"*, 데이터가 없으면 *"api 를 먼저 띄우십시오"*, 접속 스키마가 아예 없으면
+(`DATABASE()` 가 `NULL` — URL 에서 DB 이름을 빠뜨린 것) *"URL 을 확인하십시오"*. 같은 증상에
+조치가 셋인데 한 문장으로 접으면 사람이 엉뚱한 것을 재배포하며 시간을 쓴다.
+
+목록은 그 일곱에서 멈춘다 — 넓히면 가드가 *배포 순서* 가 아니라 *스키마 최신성* 을 보게
+되고 그건 Flyway 의 몫이다.
+
+### `BATCH_SCHEDULING_ENABLED=false` 의 상시 critical — silence 로 간다
+
+`batch.yml` 의 기본값이 `false` 라, README 가 안내하는 그대로 띄우면 `expireJob` 시계열이
+아예 안 태어나 `absent_over_time` 이 **영구히 참**이다. 15분 뒤 critical 이 뜨고
+`repeat_interval` 대로 한 시간마다 다시 온다.
+
+**그래도 규칙에 예외를 안 판다.** 지표에 "스케줄러가 꺼져 있다" 는 축이 없어서 `unless` 로
+가르려면 `cy_batch_scheduling_enabled` 게이지를 새로 내보내야 하는데, 그러면 *일부러 껐다* 와
+*꺼져 버렸다* 가 같은 값이 된다 — 후자가 정확히 이 알림이 잡아야 하는 것이다.
+아래 시연 절차 2번처럼 **끄는 구간에만 사람이 silence 를 건다.**
+
+**부하 중 `BatchJobNotRunning` 도 같은 이유로 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
 <b>일부러</b> 없는 것이라 알림이 뜨는 게 맞다 — 규칙이 틀린 것이 아니다. `inhibit_rules` 로
 자동 억제하면 <i>진짜로 배치가 죽은 것</i>까지 함께 가려진다. 부하 구간에만 사람이
 `amtool silence add` 로 끄고, 끝나면 푼다.
@@ -231,8 +297,10 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
   본문과 대조한다. 다만 그것이 보는 것은 **이름뿐**이다 — 갱신기를 안 걸어도, 값이 늘
   `NaN` 이어도 초록이다. **값은 `VerificationMetricExposureTest` 가 행을 심고 `refresh()`
   를 부른 뒤 본문에서 읽어 본다**
-- **모름 축** — 판정 없는 실행이 `0` 이 아니라 `NaN` 인 것. `startRunStep` 을 실패시켜(예:
-  `seedRunId` 누락) 확인한다
+- **모름 축** — 판정 없는 실행이 `0` 이 아니라 `NaN` 인 것. `verification_runs` 를 비우고
+  `refresh()` 를 부른 뒤 본문에서 읽어 확인한다
+  (`VerificationMetricExposureTest.reportsUnknownWhenNothingHasBeenJudged`). 닫혔는데
+  `verdict` 가 비어 있는 행, 안 닫힌 행도 각각 같은 방식으로 본다
 - **배선 가드** — `VerificationMetricsRefresher` 가 `@Scheduled` 로 실제 등록되는 것.
   그리고 그 등록이 `batch.scheduling.enabled` 에 <b>안 묶이는 것</b> — 묶이면 스케줄러를
   끈 채 `verifyJob` 을 돌리는 정상 절차에서 지표가 통째로 죽는다
@@ -245,7 +313,7 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 |---|---|
 | Slack | `docs/13` §2e — PRD 제약(외부 연동 Mocking) + PUBLIC 저장소 |
 | Grafana | 우리 대시보드는 Grafana 가 아니다 — PRD 상 Chart.js 폴링 커스텀이고 영역 ⑤ 몫이다 |
-| `api` 컨테이너 | 스크레이프 대상이 아니다. 다만 **Flyway 순서**는 다룬다 — `batch` 가 먼저 뜨면 "테이블 없음" SQL 에러로 죽고 스택트레이스가 SQL 계층이라 *"검증 배치가 깨졌다"* 로 읽힌다 |
+| `api` 컨테이너 | 스크레이프 대상이 아니다. **마이그레이션을 compose 가 돌려 주지도 않는다** — `depends_on: service_healthy` 가 보장하는 것은 `mysqladmin ping` 뿐이다. 대신 `batch` 쪽에서 잡는다(바로 아래) |
 
 ## 시연 절차 — 한 기동으로는 둘 다 못 본다
 
@@ -253,7 +321,68 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 `rejectRunningSchedulers` 가 `verifyJob` 을 거부하고, `false` 면 그 반대다.
 
 1. `BATCH_SCHEDULING_ENABLED=true` — 만료 알림 축 확인
+
 2. `false` 로 재기동 + `verifyJob` 트리거 — 검증 알림 축 확인
 
-2 구간에서 만료 쪽 critical 이 배경에 깔리는 것이 정상이다. 리시버 로그에서 방금 넣은 알림을
-눈으로 가를 수 있게 `inhibit_rules` 로 억제할지 4단계에서 정한다.
+   **먼저 만료 쪽 critical 을 재운다.** 스케줄러가 꺼져 있으면 `expireJob` 시계열이 아예
+   안 태어나 `BatchJobNotRunning` 이 15분 뒤부터 영구히 뜬다. 규칙이 틀린 게 아니라
+   그 설정에서 정상인 상태라, 재우는 쪽이 맞다.
+
+   ```bash
+   docker compose -f base.yml exec alertmanager \
+     amtool silence add alertname=BatchJobNotRunning \
+     --duration=2h --comment="scheduling disabled for verify demo" \
+     --alertmanager.url=http://localhost:9093
+   ```
+
+   **`attempt` 는 시드가 점유한 값을 피한다.** 시드는 CLEAN 에 `(FULL,1)`·`(FULL,2)`·
+   `(INCREMENTAL,1)` 을, CORRUPT 에 `(FULL,1)` 을 심는다. `uk_run_params` 와
+   `rejectExistingRun` 이 그것을 막으므로 `attempt=1` 로 돌리면 `INVALID_RUN_PARAMS` 로
+   잡이 죽고 — **보여 주려던 축 대신 `BatchJobFailed` 가 뜬다.**
+
+   > **⚠️ 이 구간은 아직 손으로 못 돈다.** `verifyJob` 을 트리거하는 HTTP 경로가
+   > **저장소에 없다** — batch 모듈의 `@RestController` 는 0건이고, 예고된 경로
+   > (`POST /api/v1/admin/verify`)는 별도 티켓이다. 여기에 명령을 지어 적지 않는다.
+   >
+   > **그래서 이 티켓은 검증 알림 축을 시연이 아니라 테스트로 증명했다** —
+   > `VerificationMetricExposureTest` 가 행을 심고 `refresh()` 를 부른 뒤
+   > `/actuator/prometheus` 본문에서 값을 읽어 본다(PASS=0 · FAIL=1 · 모름=NaN ·
+   > 시드 행 제외 · 라벨). 돌연변이 넷을 심어 전부 검출되는 것도 확인했다.
+   > 규칙이 그 이름을 실제로 짚는 것은 `BatchMetricExposureTest` 가 잇는다.
+   >
+   > 리시버까지 흐르는 것을 눈으로 보려면 트리거 API 티켓을 기다리거나, 아래처럼
+   > 닫힌 `FAIL` 행을 손으로 넣고 되읽기 주기(기본 60초)를 기다린다 — 지금 가능한
+   > 유일한 경로다.
+
+   ```sql
+   -- 되읽기가 집는 것은 "가장 최근에 닫힌 BATCH 실행" 하나다.
+   INSERT INTO verification_runs
+     (as_of, dataset, scope, attempt, verdict, finding_count, started_at, finished_at, origin)
+   VALUES (NOW(), 'CLEAN', 'FULL', 99, 'FAIL', 3, NOW(), NOW(), 'BATCH');
+   ```
+
+   **검증용 셋에는 Spring Batch 메타 테이블이 없다.** cy-seed 의 `ddl/` 이 안 만든다.
+   `SchemaPresenceGuard` 가 기동 시점에 그것을 말해 주므로 배치가 아예 안 뜬다 —
+   그 스키마에 `V2__batch_metadata.sql` 을 한 번 부어야 한다.
+
+   ```bash
+   # 변수 이름에 주의. MYSQL_ROOT_PASSWORD 는 **컨테이너 안** 이름이고, 호스트 셸이
+   # 펼치는 것은 DB_ROOT_PASSWORD 다. 전자를 쓰면 빈 문자열이 되어 mysql 이 대화형
+   # 프롬프트로 가고, stdin 은 SQL 파일이라 첫 줄을 비밀번호로 읽고 죽는다.
+   # -p 를 인자로 주면 ps 에 남으므로 MYSQL_PWD 로 넘긴다.
+   docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
+     mysql -uroot coupon_clean \
+     < storage/src/main/resources/db/migration/V2__batch_metadata.sql
+   ```
+
+   `as_of` 는 시드가 심은 기준 행에서 얻는다. `origin` 으로 좁히는 것은 cy-seed 의
+   `bin/seed.py` 가 자가검증에서 같은 이유로 이미 그렇게 하기 때문이다.
+
+   ```sql
+   SELECT MAX(as_of) FROM verification_runs WHERE origin = 'SEED';
+   ```
+
+   **이 조회가 `Unknown column 'origin'` 으로 죽으면 데이터셋이 cy-seed `1f217b5` 이전
+   것이다.** 그 DB 는 cy-seed 의 `ddl/00_schema.sql` 로 만들어져 cy-be 의 Flyway `V13` 이
+   닿지 않으므로, 마이그레이션으로는 못 고친다 — **데이터셋을 다시 만드는 것이 유일한
+   답이다.** 그대로 두면 되읽기가 매번 실패하고 `VerificationMetricsStale` 이 뜬다.

@@ -209,7 +209,6 @@ public class StatsJdbcAdapter implements StatsRepository {
      * <b>짝으로 본다.</b> 총합 비교는 대칭 오차를 못 잡는다 —
      * {@code StatsRepository#countIssuancesWithBrokenIssueHistory} javadoc 에 근거를 적었다.
      */
-
     @Override
     public int countIssuancesWithBrokenIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {
         return jdbcClient.sql(SELECT_BROKEN_ISSUE_HISTORY.formatted("COUNT(*)"))
