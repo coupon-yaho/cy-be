@@ -23,6 +23,9 @@ class IssuanceFlowEventJsonTest {
     private static final IssuanceFlowEventFactory ISSUE_FACTORY = factory(
             "33333333-3333-3333-3333-333333333333"
     );
+    private static final IssuanceFlowEventFactory ATTEMPT_FACTORY = factory(
+            "44444444-4444-4444-4444-444444444444"
+    );
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class));
@@ -43,6 +46,11 @@ class IssuanceFlowEventJsonTest {
             assertFixture(objectMapper, "queue-admitted.json", ADMITTED_FACTORY.admitted(
                     IssuanceFlowEventTest.context(null, false),
                     18L
+            ));
+            // attempt 는 값 없는 결과 필드 6개가 통째로 빠진 형태로 나간다. 그게 계약이라는
+            // 증거를 여기 둔다 — @JsonInclude 설정이 바뀌면 이 종만 조용히 통과하지 않게.
+            assertFixture(objectMapper, "issue-attempt.json", ATTEMPT_FACTORY.issueAttempt(
+                    IssuanceFlowEventTest.context("request-4", false)
             ));
             assertFixture(objectMapper, "issue-result.json", ISSUE_FACTORY.issued(
                     IssuanceFlowEventTest.context("request-2", false),
