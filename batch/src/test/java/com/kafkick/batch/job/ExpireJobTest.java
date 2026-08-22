@@ -45,7 +45,8 @@ import com.kafkick.storage.db.VerificationSeed;
  *
  * <p><b>재고가 어긋난 회차를 만났을 때의 계약은 여기 없다.</b> 예전에는 그것이 잡을
  * 실패시켜서 이 클래스가 두 케이스로 지켰는데, 지금은 그 회차만 창 밖으로 빠지고 배치는
- * 정상 종료한다 — {@code ExpireBlockedCouponIsolationTest} 가 그 축을 통째로 맡는다.
+ * 정상 종료한다 — 격리 계약은 {@code ExpireBlockedCouponIsolationTest} 가,
+ * {@code STOCK_ROW_MISSING}·{@code STOCK_UNDERFLOW} 가드는 {@code ExpireGuardTest} 가 맡는다.
  *
  * <p>청크 크기를 1 로 두어 여러 번 돌게 만든다. 기본값(1000)이면 한 번에 끝나
  * 이어지는지 아닌지를 구분할 수 없다.

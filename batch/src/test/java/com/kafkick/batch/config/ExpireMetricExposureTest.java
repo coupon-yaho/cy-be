@@ -3,6 +3,8 @@ package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.LocalDateTime;
 
@@ -18,6 +20,7 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -28,6 +31,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -60,6 +64,7 @@ import com.kafkick.storage.db.VerificationSeed;
 })
 @ExtendWith(SchemaShapeConfig.class)
 @Import({MySqlContainerConfig.class, SchemaShapeConfig.class,
+        ExpireMetricExposureTest.CountFailureConfig.class,
         ExpireMetricExposureTest.FixedClockConfig.class})
 class ExpireMetricExposureTest {
 
@@ -353,7 +358,87 @@ class ExpireMetricExposureTest {
         return id;
     }
 
-    /** 어떤 asOf 로도 이미 기한이 지난 발급건. 벽시계로 도는 테스트에 쓴다. */
+    /**
+     * <b>세다가 죽은 과거 실행도 최신 값을 못 지운다.</b>
+     *
+     * <p>{@link #keepsNewerSnapshotWhenAnOlderRunFails} 는 <b>시작 전에</b> 죽은 실행을
+     * 덮는다. 그런데 {@code catch} 로 오는 실패는 대부분 <b>세는 단계</b>이고, 그 시점에
+     * {@code asOf} 는 이미 유효하게 읽혀 있다 — 그 축을 안 재면 {@code catch} 만 순서를
+     * 우회해도 아무도 모른다.
+     */
+    @Test
+    @DisplayName("세다가 죽은 과거 실행도 최신 값을 못 지운다")
+    void keepsNewerSnapshotWhenAnOlderCountFails() throws Exception {
+        seed.newCoupon();
+        expiring();
+        expiring();
+        seed.overwriteStock(0);
+
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        CountFailureConfig.on();
+        try {
+            JobExecution stale = jobOperator.start(expireJob, new JobParametersBuilder()
+                    .addLocalDateTime("asOf", AS_OF.minusDays(1))
+                    .toJobParameters());
+            assertThat(stale.getStatus())
+                    .as("세는 것은 관측이지 판정이 아니다 — 세다 죽어도 잡은 끝난다")
+                    .isEqualTo(BatchStatus.COMPLETED);
+        } finally {
+            CountFailureConfig.off();
+        }
+
+        String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(body, "cy_expire_blocked_coupons"))
+                .as("**catch 도 순서를 지켜야 한다.** 여기가 NaN 이면 과거 asOf 손 트리거가 "
+                        + "세다 죽는 것만으로 주기 실행의 감시를 끈다")
+                .isEqualTo(1.0);
+        assertThat(metric(body, "cy_expire_pending")).isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_blocked_pending")).isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
+    }
+
+    /** {@code countPending} 만 던지게 한다. 나머지는 실제 저장소 그대로다. */
+    @TestConfiguration
+    static class CountFailureConfig {
+
+        private static volatile boolean fail;
+
+        static void on() {
+            fail = true;
+        }
+
+        static void off() {
+            fail = false;
+        }
+
+        @Bean
+        static BeanPostProcessor failCountPending() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String name) {
+                    if (!(bean instanceof ExpirationRepository real)) {
+                        return bean;
+                    }
+                    return Proxy.newProxyInstance(
+                            ExpirationRepository.class.getClassLoader(),
+                            new Class<?>[] {ExpirationRepository.class},
+                            (proxy, method, args) -> {
+                                if (fail && "countPending".equals(method.getName())) {
+                                    throw new IllegalStateException("관측 질의가 끊겼다");
+                                }
+                                try {
+                                    return method.invoke(real, args);
+                                } catch (InvocationTargetException e) {
+                                    throw e.getCause();
+                                }
+                            });
+                }
+            };
+        }
+    }
+
+    /** 어떤 asOf 로도 이미 기한이 지난 발급건. 조기 발화 테스트가 쓴다. */
     private long longExpiredIssuance() {
         long id = seed.issuance(IssuanceStatus.ISSUED);
         jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")

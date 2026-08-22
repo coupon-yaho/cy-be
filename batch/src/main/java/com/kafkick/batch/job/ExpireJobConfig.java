@@ -380,9 +380,11 @@ public class ExpireJobConfig {
         return new JobExecutionListener() {
             @Override
             public void afterJob(JobExecution jobExecution) {
+                // try 밖에서 읽는다. catch 에 도달하는 실패는 대부분 세는 단계이고, 그때
+                // asOf 는 이미 유효하게 읽혀 있다 — 그것을 못 쓰면 과거 asOf 손 트리거가
+                // 실패하는 것만으로 방금 끝난 주기의 값을 지운다.
+                LocalDateTime asOf = asOfOf(jobExecution);
                 try {
-                    LocalDateTime asOf = jobExecution.getJobParameters()
-                            .getLocalDateTime("asOf");
                     if (asOf == null || isAsOfInFuture(asOf, timeProvider.now())) {
                         metrics.markUnknown();
                         return;
@@ -399,8 +401,12 @@ public class ExpireJobConfig {
                             blocked.get().size());
                 } catch (RuntimeException e) {
                     // 직전 실행 값을 들고 있으면 관제가 그것을 이번 결과로 읽는다.
-                    // asOf 를 못 읽었을 수도 있어 순서 없는 쪽으로 간다.
-                    metrics.markUnknown();
+                    // asOf 를 아는 실패는 순서를 지킨다.
+                    if (asOf == null) {
+                        metrics.markUnknown();
+                    } else {
+                        metrics.markUnknown(asOf);
+                    }
                     log.warn("남은 만료 대기를 세지 못했습니다. 지표를 '모름' 으로 되돌립니다.", e);
                 }
             }
@@ -459,6 +465,20 @@ public class ExpireJobConfig {
         String ids = raw.substring(prefix.length());
         return Optional.of(ids.isEmpty() ? List.of()
                 : Arrays.stream(ids.split(",")).map(Long::valueOf).toList());
+    }
+
+    /**
+     * 잡 파라미터의 {@code asOf}. <b>없거나 타입이 다르면 {@code null} 이다.</b>
+     *
+     * <p>여기서 던지면 관측이 판정을 방해한다 — 만료는 다 해 놓고 지표 때문에 빨간불이 난다.
+     * 못 읽은 것은 <i>"모른다"</i> 로 흘려보내고, 그 판단은 부르는 쪽이 한다.
+     */
+    private static LocalDateTime asOfOf(JobExecution jobExecution) {
+        try {
+            return jobExecution.getJobParameters().getLocalDateTime("asOf");
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /**
