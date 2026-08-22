@@ -99,9 +99,9 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 `main` 브랜치 push 또는 `v*` 태그 push 시 GitHub Actions가 API와 배치 이미지를
 각각 빌드해 하나의 Docker Hub 저장소에 태그를 구분하여 올린다. 수동 실행도 가능하다.
 
-- 주소: `https://hub.docker.com/r/seol7/coupon-yaho`
-- API 이미지: `seol7/coupon-yaho:api-latest`
-- 배치 이미지: `seol7/coupon-yaho:batch-latest`
+- 주소: `https://hub.docker.com/r/${DOCKERHUB_USERNAME}/coupon-yaho`
+- API 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:api-latest`
+- 배치 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:batch-latest`
 
 GitHub 저장소의 **Settings → Secrets and variables → Actions**에 아래 값을 등록한다.
 
@@ -125,22 +125,40 @@ docker build --build-arg APP_MODULE=batch -t coupon-yaho-batch .
 
 ```
 core/coupon/
-    domain/     Coupon, CouponStock          도메인 모델
+    domain/     CouponRound, Issuance        발급 쿠폰 도메인 모델
     service/    CouponIssueService           유즈케이스
-    port/       CouponRepository             인터페이스만. 구현은 어댑터가
+    port/       IssuanceRepository           인터페이스만. 구현은 어댑터가
+
+core/coupontemplate/
+    domain/     CouponTemplate               쿠폰 템플릿 도메인 모델
+    service/    CouponTemplateCreateService  템플릿 유즈케이스
+    port/       CouponTemplateRepository     템플릿 저장 인터페이스
 
 storage/db/coupon/
-    entity/     CouponEntity
-    repository/ CouponJpaRepository
-                CouponRepositoryImpl         core 의 port 구현
-    mapper/     CouponEntityMapper           엔티티 ↔ 도메인 모델 변환
+    entity/     IssuanceEntity
+    repository/ IssuanceJpaRepository
+                IssuanceRepositoryImpl       core 의 port 구현
+    mapper/     IssuanceEntityMapper         엔티티 ↔ 도메인 모델 변환
+
+storage/db/coupontemplate/
+    entity/     CouponTemplateEntity
+    repository/ CouponTemplateJpaRepository
+                CouponTemplateRepositoryImpl core 의 port 구현
+    mapper/     CouponTemplateEntityMapper   엔티티 ↔ 도메인 모델 변환
 
 infra/mq/coupon/
     CouponEventPublisher                     core 의 port 구현
 
 api/coupon/
     controller/  CouponController
-    dto/         CouponIssueRequest/Response
+    dto/request/ CouponUseRequest
+    dto/response/CouponIssueResponse
+
+api/coupontemplate/
+    controller/  CouponTemplateController
+    dto/request/ CouponTemplateCreateRequest
+    dto/response/CouponTemplateDetailResponse
 ```
 
 각 모듈의 `support/` 패키지는 그 모듈 안의 횡단 관심사를 담는다.
+
