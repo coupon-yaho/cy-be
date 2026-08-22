@@ -137,6 +137,9 @@ class AutoInstrumentedMetersTest {
             assertThat(reader.exists(MeterNames.JVM_MEMORY_USED)).as("jvm.memory").isTrue();
             assertThat(reader.exists(MeterNames.CPU_USAGE)).as("process.cpu").isTrue();
             assertThat(reader.exists(MeterNames.TOMCAT_BUSY)).as("tomcat.threads").isTrue();
+            // busy 의 짝이다. 이 줄이 없으면 상수 이름이 틀려도 ResourceProviderTest 는 자기가
+            // 등록한 게이지를 자기가 읽어 통과하고, 배포에서만 TOMCAT_THREADS 행이 조용히 빈다.
+            assertThat(reader.exists(MeterNames.TOMCAT_MAX)).as("tomcat.threads.config.max").isTrue();
         }
 
         /**
