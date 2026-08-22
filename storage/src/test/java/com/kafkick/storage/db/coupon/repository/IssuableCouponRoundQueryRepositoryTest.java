@@ -47,7 +47,16 @@ class IssuableCouponRoundQueryRepositoryTest {
                 "2026-08-22 07:00:00", "2026-08-22 09:00:00", 10, 0);
         insertRound(16L, "이미 발급", "OPEN", 4,
                 "2026-08-22 08:06:00", "2026-08-22 10:00:00", 10, 1);
-        insertIssuance(100L, 16L, 20L);
+        insertRound(18L, "사용 완료", "OPEN", 4,
+                "2026-08-22 08:08:00", "2026-08-22 10:00:00", 10, 1);
+        insertRound(19L, "발급 취소", "OPEN", 4,
+                "2026-08-22 08:09:00", "2026-08-22 10:00:00", 10, 0);
+        insertRound(20L, "만료 완료", "OPEN", 4,
+                "2026-08-22 08:10:00", "2026-08-22 10:00:00", 10, 0);
+        insertIssuance(100L, 16L, 20L, "ISSUED");
+        insertIssuance(102L, 18L, 20L, "USED");
+        insertIssuance(103L, 19L, 20L, "CANCELLED");
+        insertIssuance(104L, 20L, 20L, "EXPIRED");
     }
 
     @Test
@@ -78,7 +87,7 @@ class IssuableCouponRoundQueryRepositoryTest {
     @Test
     @DisplayName("다른 회원이 발급받은 회차는 현재 회원에게 계속 노출한다")
     void doNotExcludeRoundIssuedToAnotherMember() {
-        insertIssuance(101L, 10L, 21L);
+        insertIssuance(101L, 10L, 21L, "ISSUED");
 
         IssuableCouponRoundPage result = queryAdapter.findPage(
                 20L,
@@ -91,6 +100,22 @@ class IssuableCouponRoundQueryRepositoryTest {
         assertThat(result.content())
                 .extracting(summary -> summary.couponRoundId())
                 .contains(10L);
+    }
+
+    @Test
+    @DisplayName("회원의 발급 이력이 있으면 모든 발급 상태에서 회차를 제외한다")
+    void excludeRoundsForEveryIssuanceStatus() {
+        IssuableCouponRoundPage result = queryAdapter.findPage(
+                20L,
+                4,
+                AS_OF,
+                0,
+                20
+        );
+
+        assertThat(result.content())
+                .extracting(summary -> summary.couponRoundId())
+                .doesNotContain(16L, 18L, 19L, 20L);
     }
 
     @Test
@@ -212,18 +237,24 @@ class IssuableCouponRoundQueryRepositoryTest {
         );
     }
 
-    private void insertIssuance(Long id, Long couponId, Long memberId) {
+    private void insertIssuance(
+            Long id,
+            Long couponId,
+            Long memberId,
+            String status
+    ) {
         jdbcTemplate.update(
                 """
                 INSERT INTO issuances (
                     id, coupon_id, member_id, code, issued_grade, status,
                     issued_at, expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'GOLD', 'ISSUED', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'GOLD', ?, ?, ?, ?, ?)
                 """,
                 id,
                 couponId,
                 memberId,
                 "CODE" + id,
+                status,
                 "2026-08-22 08:30:00",
                 "2026-08-29 08:30:00",
                 "2026-08-22 08:30:00",
