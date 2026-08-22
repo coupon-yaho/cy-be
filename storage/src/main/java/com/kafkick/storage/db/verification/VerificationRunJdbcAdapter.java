@@ -33,7 +33,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     /**
      * {@code VerifyJobConfig.JOB_NAME} 과 같아야 한다. 의존 방향이 반대라
      * ({@code batch} 가 {@code storage} 를 보지 그 반대가 아니다) 문자열로 둔다 —
-     * 일치는 {@code VerificationRunJdbcAdapterTest} 가 지킨다.
+     * 일치는 {@code VerificationRunJdbcAdapterTest.ignoresOtherJobs} 가 지킨다 — 이름이 어긋나면 배치 메타 축이 0을 준다.
      */
     private static final String VERIFY_JOB_NAME = "verifyJob";
 

@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.response.ErrorResponse;
@@ -77,7 +78,15 @@ public class BatchApiExceptionHandler {
     @ExceptionHandler(org.springframework.beans.TypeMismatchException.class)
     public ResponseEntity<ResponseEnvelope<Void>> handleTypeMismatch(
             org.springframework.beans.TypeMismatchException exception) {
-        log.info("검증 API 가 요청을 거절했습니다. detail={}", exception.getMessage());
+        // getMessage() 는 **요청값을 그대로 담는다.** 이 API 의 파라미터에 PII 는 없지만,
+        // 값을 로그에 남기는 습관이 남으면 다음 컨트롤러에서도 그렇게 한다 —
+        // 규율은 "detail 에 PII 를 넣지 않는다" 다. 진단에 필요한 것은 이름과 타입이다.
+        if (exception instanceof MethodArgumentTypeMismatchException mismatch) {
+            log.info("검증 API 가 요청을 거절했습니다. 파라미터={} 기대타입={}",
+                    mismatch.getName(), mismatch.getRequiredType());
+        } else {
+            log.info("검증 API 가 요청을 거절했습니다. 파라미터 타입이 맞지 않습니다.");
+        }
         return respond(CommonErrorCode.INVALID_INPUT, 400);
     }
 
@@ -98,8 +107,9 @@ public class BatchApiExceptionHandler {
         if (exception instanceof org.springframework.web.ErrorResponse error) {
             int status = error.getStatusCode().value();
             if (status < 500) {
-                log.info("검증 API 가 요청을 거절했습니다. status={} detail={}",
-                        status, exception.getMessage());
+                // 같은 이유로 메시지를 안 남긴다 — 그 안에 요청값이 들어간다.
+                log.info("검증 API 가 요청을 거절했습니다. status={} type={}",
+                        status, exception.getClass().getSimpleName());
                 return respond(CommonErrorCode.INVALID_INPUT, status);
             }
         }

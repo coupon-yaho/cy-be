@@ -392,24 +392,14 @@ class VerificationRunJdbcAdapterTest {
      * 두 잡의 번호가 뒤섞인다.
      */
     /**
-     * <b>어댑터의 잡 이름 상수가 실제 잡 이름과 같아야 한다.</b> storage 는 batch 를 참조할
-     * 수 없어(의존 방향이 반대다) 문자열로 두었는데, 그러면 {@code VerifyJobConfig.JOB_NAME}
-     * 을 바꾸는 리팩터링이 이쪽을 안 데려간다 — 그 순간 배치 메타 축이 조용히 0을 주고
-     * 가드에 걸려 죽은 attempt 를 다시 배정한다.
+     * <b>다른 잡의 번호는 안 센다.</b> 이것이 어댑터의 잡 이름 상수를 지키는 축이기도 하다 —
+     * storage 는 batch 를 참조할 수 없어({@code VerifyJobConfig} 는 의존 방향 반대편이다)
+     * 이름을 문자열로 두었는데, 그것이 어긋나면 배치 메타 축이 조용히 0을 주고 가드에 걸려
+     * 죽은 {@code attempt} 를 다시 배정한다.
      *
-     * <p>어댑터 javadoc 이 <i>"일치는 이 테스트가 지킨다"</i> 고 적어 놓고 실제로는 아무것도
-     * 잇지 않고 있었다.
+     * <p>지금 {@code expireJob} 은 {@code asOf} 하나만 써서 우연히 안 걸리지만, 거기에
+     * {@code dataset}·{@code scope}·{@code attempt} 가 붙는 날 두 잡의 번호가 뒤섞인다.
      */
-    @Test
-    @DisplayName("어댑터가 보는 잡 이름이 verifyJob 이다")
-    void looksAtTheVerifyJobName() {
-        // 이 이름으로 심은 것만 세는지 위·아래 테스트가 함께 증명한다.
-        insertBatchAttempt("verifyJob", AS_OF, "CLEAN", "FULL", 2);
-        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL))
-                .as("VerifyJobConfig.JOB_NAME 을 바꾸면 여기가 1 이 된다")
-                .isEqualTo(3);
-    }
-
     @Test
     @DisplayName("다른 잡의 번호는 안 센다")
     void ignoresOtherJobs() {
