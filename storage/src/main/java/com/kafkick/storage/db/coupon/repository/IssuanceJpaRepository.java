@@ -2,6 +2,7 @@ package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -47,6 +48,29 @@ public interface IssuanceJpaRepository
             @Param("memberId") Long memberId,
             @Param("status") IssuanceStatus status,
             Pageable pageable
+    );
+
+    @Query("""
+            SELECT issuance.id AS issuanceId,
+                   issuance.couponId AS couponRoundId,
+                   issuance.code AS code,
+                   issuance.status AS status,
+                   couponRound.name AS name,
+                   couponRound.policyType AS policyType,
+                   couponRound.discountRate AS discountRate,
+                   couponRound.maxDiscountAmount AS maxDiscountAmount,
+                   couponRound.discountAmount AS discountAmount,
+                   issuance.issuedAt AS issuedAt,
+                   issuance.expiresAt AS expiresAt
+            FROM IssuanceEntity issuance
+            JOIN CouponRoundEntity couponRound
+              ON couponRound.id = issuance.couponId
+            WHERE issuance.memberId = :memberId
+              AND issuance.id = :issuanceId
+            """)
+    Optional<MemberCouponProjection> findMemberCoupon(
+            @Param("memberId") Long memberId,
+            @Param("issuanceId") Long issuanceId
     );
 
     @Query("""

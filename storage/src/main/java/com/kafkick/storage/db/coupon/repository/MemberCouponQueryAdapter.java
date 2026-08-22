@@ -1,5 +1,7 @@
 package com.kafkick.storage.db.coupon.repository;
 
+import java.util.Optional;
+
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -49,6 +51,25 @@ public class MemberCouponQueryAdapter implements MemberCouponQueryPort {
         } catch (DataAccessException exception) {
             throw new CouponPersistenceException(
                     "사용자 보유 쿠폰 목록 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
+    public Optional<MemberCouponSummary> findByMemberIdAndIssuanceId(
+            Long memberId,
+            Long issuanceId
+    ) {
+        try {
+            return issuanceJpaRepository.findMemberCoupon(
+                            memberId,
+                            issuanceId
+                    )
+                    .map(MemberCouponQueryAdapter::toSummary);
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "사용자 보유 쿠폰 단건 조회에 실패했습니다.",
                     exception
             );
         }
