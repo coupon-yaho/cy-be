@@ -1,4 +1,3 @@
-// 실제 MySQL에서 쿠폰 회차 스냅샷과 최초 재고의 원자 저장 및 중복 방어를 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -37,17 +36,23 @@ import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
+import com.kafkick.core.coupon.exception.CouponRoundScheduleConflictException;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
+import com.kafkick.core.coupon.service.CouponRoundLifecycleService;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+// 실제 MySQL에서 회차 스냅샷과 전역 예약 잠금의 원자성을 검증합니다.
 @RepositoryTest
 @Import({
         CouponRoundRepositoryImpl.class,
+        CouponRoundScheduleLockAdapter.class,
+        CouponRoundLifecycleAdapter.class,
         CouponRoundCreationService.class,
+        CouponRoundLifecycleService.class,
         CouponTemplateRepositoryImpl.class,
         CouponRoundRepositoryTest.AuditTestConfig.class
 })
@@ -60,6 +65,8 @@ class CouponRoundRepositoryTest {
 
     @Autowired
     private CouponRoundCreationService couponRoundCreationService;
+    @Autowired
+    private CouponRoundLifecycleService couponRoundLifecycleService;
 
     @Autowired
     private CouponTemplateRepositoryImpl couponTemplateRepository;
@@ -282,11 +289,29 @@ class CouponRoundRepositoryTest {
     }
 
     @Test
-    @DisplayName("동일 회차를 동시에 두 번 생성해도 DB 유니크 제약으로 한 건만 남긴다")
+    @DisplayName("겹치는 회차를 동시에 두 번 예약해도 전역 잠금으로 한 건만 남긴다")
     void createSameCouponRoundConcurrentlyOnce() throws Exception {
-        CouponTemplate template = saveTemplate();
+        CouponTemplate firstTemplate = saveTemplate();
+        jdbcTemplate.update(
+                "INSERT INTO brands (id, name, category) VALUES (?, ?, ?)",
+                2L,
+                "두 번째 테스트 브랜드",
+                "카페"
+        );
+        CouponTemplate secondTemplate = saveTemplate(
+                101L,
+                2L,
+                "다른 브랜드 골드 VIP 5천원 할인"
+        );
         Instant generatedAt = Instant.parse("2026-08-18T00:00:00Z");
-        CouponRound couponRound = scheduledRound(template, generatedAt);
+        CouponRound firstRound = scheduledRound(
+                firstTemplate,
+                generatedAt
+        );
+        CouponRound secondRound = scheduledRound(
+                secondTemplate,
+                generatedAt
+        );
         CouponStock initialStock = CouponStock.initialize(10_000, generatedAt);
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
@@ -295,7 +320,7 @@ class CouponRoundRepositoryTest {
         try {
             Future<Class<?>> firstResult = executorService.submit(() ->
                     createConcurrently(
-                            couponRound,
+                            firstRound,
                             initialStock,
                             ready,
                             start
@@ -303,7 +328,7 @@ class CouponRoundRepositoryTest {
             );
             Future<Class<?>> secondResult = executorService.submit(() ->
                     createConcurrently(
-                            couponRound,
+                            secondRound,
                             initialStock,
                             ready,
                             start
@@ -328,7 +353,7 @@ class CouponRoundRepositoryTest {
             ))
                     .containsExactlyInAnyOrder(
                             CouponRound.class,
-                            CouponRoundAlreadyExistsException.class
+                            CouponRoundScheduleConflictException.class
                     );
         } finally {
             start.countDown();
@@ -368,12 +393,66 @@ class CouponRoundRepositoryTest {
                     initialStock
             );
             return CouponRound.class;
-        } catch (CouponRoundAlreadyExistsException exception) {
-            return CouponRoundAlreadyExistsException.class;
+        } catch (CouponRoundScheduleConflictException exception) {
+            return CouponRoundScheduleConflictException.class;
         }
     }
 
     private CouponTemplate saveTemplate() {
+        return saveTemplate(100L, 1L, "골드 VIP 5천원 할인");
+    }
+
+    @Test
+    @DisplayName("인접한 예약 회차를 시작·종료 시각에 맞춰 하나씩 연다")
+    void synchronizeAdjacentRoundLifecycle() {
+        CouponTemplate template = saveTemplate();
+        Instant generatedAt = Instant.parse("2026-08-20T00:00:00Z");
+        CouponRound first = CouponRound.schedule(
+                template,
+                Instant.parse("2026-09-08T05:00:00Z"),
+                Instant.parse("2026-09-08T06:00:00Z"),
+                generatedAt
+        );
+        CouponRound second = CouponRound.schedule(
+                template,
+                Instant.parse("2026-09-08T06:00:00Z"),
+                Instant.parse("2026-09-08T07:00:00Z"),
+                generatedAt
+        );
+        CouponStock stock = CouponStock.initialize(100, generatedAt);
+        CouponRound savedFirst = couponRoundCreationService.create(
+                first,
+                stock
+        );
+        CouponRound savedSecond = couponRoundCreationService.create(
+                second,
+                stock
+        );
+
+        couponRoundLifecycleService.synchronize(
+                Instant.parse("2026-09-08T05:30:00Z")
+        );
+
+        assertThat(statusOf(savedFirst.id()))
+                .isEqualTo(CouponRoundStatus.OPEN.name());
+        assertThat(statusOf(savedSecond.id()))
+                .isEqualTo(CouponRoundStatus.SCHEDULED.name());
+
+        couponRoundLifecycleService.synchronize(
+                Instant.parse("2026-09-08T06:00:00Z")
+        );
+
+        assertThat(statusOf(savedFirst.id()))
+                .isEqualTo(CouponRoundStatus.CLOSED.name());
+        assertThat(statusOf(savedSecond.id()))
+                .isEqualTo(CouponRoundStatus.OPEN.name());
+    }
+
+    private CouponTemplate saveTemplate(
+            Long id,
+            Long brandId,
+            String name
+    ) {
         jdbcTemplate.update(
                 """
                 INSERT INTO coupon_templates (
@@ -384,9 +463,9 @@ class CouponRoundRepositoryTest {
                     eligible_grades_mask, active
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                100L,
-                1L,
-                "골드 VIP 5천원 할인",
+                id,
+                brandId,
+                name,
                 CouponPolicyType.FIXED_AMOUNT.name(),
                 null,
                 null,
@@ -400,14 +479,22 @@ class CouponRoundRepositoryTest {
                 12,
                 true
         );
-        return template(100L);
+        return template(id, brandId, name);
     }
 
     private CouponTemplate template(Long id) {
+        return template(id, 1L, "골드 VIP 5천원 할인");
+    }
+
+    private CouponTemplate template(
+            Long id,
+            Long brandId,
+            String name
+    ) {
         return CouponTemplate.restore(
                 id,
-                1L,
-                "골드 VIP 5천원 할인",
+                brandId,
+                name,
                 CouponPolicyType.FIXED_AMOUNT,
                 null,
                 null,
@@ -450,7 +537,15 @@ class CouponRoundRepositoryTest {
         );
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
+    private String statusOf(Long couponRoundId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT status FROM coupons WHERE id = ?",
+                String.class,
+                couponRoundId
+        );
+    }
+
+    @TestConfiguration
     @EnableJpaAuditing(
             dateTimeProviderRef = "couponRoundTestDateTimeProvider"
     )

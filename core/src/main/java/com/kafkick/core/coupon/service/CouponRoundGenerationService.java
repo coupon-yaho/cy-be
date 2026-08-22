@@ -19,6 +19,7 @@ import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
 import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
+import com.kafkick.core.coupon.exception.CouponRoundScheduleConflictException;
 import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
 import com.kafkick.core.coupontemplate.port.CouponTemplateRepository;
 
@@ -78,6 +79,7 @@ public class CouponRoundGenerationService {
         int creationTargets = 0;
         int createdCount = 0;
         int duplicateCount = 0;
+        int conflictCount = 0;
         List<CouponTemplate> activeTemplates =
                 couponTemplateRepository.findAllActiveByIdAsc();
 
@@ -112,6 +114,8 @@ public class CouponRoundGenerationService {
                     createdCount++;
                 } catch (CouponRoundAlreadyExistsException exception) {
                     duplicateCount++;
+                } catch (CouponRoundScheduleConflictException exception) {
+                    conflictCount++;
                 }
             }
         }
@@ -119,7 +123,8 @@ public class CouponRoundGenerationService {
         return new CouponRoundGenerationResult(
                 creationTargets,
                 createdCount,
-                duplicateCount
+                duplicateCount,
+                conflictCount
         );
     }
 
@@ -176,7 +181,7 @@ public class CouponRoundGenerationService {
             );
         }
         if (ChronoUnit.DAYS.between(fromDate, toDate)
-                > maxGenerationDays) {
+                >= maxGenerationDays) {
             throw new IllegalArgumentException(
                     "회차 생성 기간이 허용 범위를 초과했습니다."
             );

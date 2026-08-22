@@ -1,7 +1,7 @@
-// 템플릿 생성 시점의 정책을 고정해 보관하는 단일 쿠폰 회차 도메인입니다.
 package com.kafkick.core.coupon.domain;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -54,6 +54,13 @@ public record CouponRound(
                     "쿠폰 회차 종료 시각은 시작 시각보다 늦어야 합니다."
             );
         }
+        if (Duration.between(openAt, closeAt).compareTo(
+                Duration.ofHours(24)
+        ) > 0) {
+            throw new IllegalArgumentException(
+                    "쿠폰 회차 진행 시간은 24시간 이하여야 합니다."
+            );
+        }
         if (status == null) {
             throw new IllegalArgumentException(
                     "쿠폰 회차 상태는 필수입니다."
@@ -76,16 +83,7 @@ public record CouponRound(
             Instant openAt,
             Instant generatedAt
     ) {
-        if (template == null || template.id() == null) {
-            throw new IllegalArgumentException(
-                    "저장된 쿠폰 템플릿이 필요합니다."
-            );
-        }
-        if (!template.active()) {
-            throw new IllegalArgumentException(
-                    "비활성 쿠폰 템플릿으로 회차를 만들 수 없습니다."
-            );
-        }
+        validateSchedulableTemplate(template);
         if (openAt == null) {
             throw new IllegalArgumentException(
                     "쿠폰 회차 시작 시각은 필수입니다."
@@ -105,6 +103,37 @@ public record CouponRound(
                 template.eligibleGrades(),
                 openAt,
                 openAt.plus(template.durationHours(), ChronoUnit.HOURS),
+                CouponRoundStatus.SCHEDULED,
+                generatedAt
+        );
+    }
+
+    public static CouponRound schedule(
+            CouponTemplate template,
+            Instant openAt,
+            Instant closeAt,
+            Instant generatedAt
+    ) {
+        validateSchedulableTemplate(template);
+        if (openAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 회차 시작 시각은 필수입니다."
+            );
+        }
+
+        return new CouponRound(
+                null,
+                template.id(),
+                template.brandId(),
+                template.name(),
+                template.policyType(),
+                template.discountRate(),
+                template.maxDiscountAmount(),
+                template.discountAmount(),
+                template.validDays(),
+                template.eligibleGrades(),
+                openAt,
+                closeAt,
                 CouponRoundStatus.SCHEDULED,
                 generatedAt
         );
@@ -152,6 +181,31 @@ public record CouponRound(
 
     public int eligibleGradesMask() {
         return MembershipGrade.toMask(eligibleGrades);
+    }
+
+    public boolean overlaps(Instant otherOpenAt, Instant otherCloseAt) {
+        if (otherOpenAt == null
+                || otherCloseAt == null
+                || !otherCloseAt.isAfter(otherOpenAt)) {
+            throw new IllegalArgumentException(
+                    "비교할 예약 종료 시각은 시작 시각보다 늦어야 합니다."
+            );
+        }
+        return openAt.isBefore(otherCloseAt)
+                && otherOpenAt.isBefore(closeAt);
+    }
+
+    private static void validateSchedulableTemplate(CouponTemplate template) {
+        if (template == null || template.id() == null) {
+            throw new IllegalArgumentException(
+                    "저장된 쿠폰 템플릿이 필요합니다."
+            );
+        }
+        if (!template.active()) {
+            throw new IllegalArgumentException(
+                    "비활성 쿠폰 템플릿으로 회차를 만들 수 없습니다."
+            );
+        }
     }
 
     private static void validateId(Long id) {
