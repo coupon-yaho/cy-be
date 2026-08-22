@@ -943,7 +943,7 @@ hourly_stats(run_id, day_of_week, hour, issued)
 
 검증 배치의 마지막 Step에서 만듭니다
 
-앞 Step이 이력을 리플레이해 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다. "왜 사전 집계인가"를 발표에서 설명할 수 있는 것이 차트를 다섯 개 더 그린 것보다 점수에 가깝습니다.
+앞 Step이 이력을 리플레이해 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다. "왜 사전 집계인가"를 발표에서 설명할 수 있는 것이 차트를 다섯 개 더 그린 것보다 점수에 가깝습니다. *(→ `docs/11-batch-implementation.md` 에서 정정됨 — 통계는 `asof_state` 를 재사용하지 않는다. 통계가 세는 값은 `issuances.status` 이고 `asof_state.state` 와 다를 수 있는 것이 검증 대상이라 순환이 된다.)*
 
 run_id를 PK 앞에 붙여 스냅샷으로 쌓습니다
 
@@ -1647,7 +1647,7 @@ coupon_usages 에 여러 행이 생기는 이유
 ``````
 | hourly_stats | run_id+day_of_week+hour PK · issued | 요일×시간 히트맵 |
 
-집계 3종은 검증 배치의 **마지막 Step**에서 산출합니다. 앞 Step이 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다.
+집계 3종은 검증 배치의 **마지막 Step**에서 산출합니다. 앞 Step이 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다. *(→ `docs/11-batch-implementation.md` 에서 정정됨 — 통계는 `asof_state` 를 재사용하지 않는다. 통계가 세는 값은 `issuances.status` 이고 `asof_state.state` 와 다를 수 있는 것이 검증 대상이라 순환이 된다.)*
 
 별도 Step으로 둔 이유는 dataset=CORRUPT일 때 건너뛰기 위해서입니다 — 오염 데이터 위의 집계는 의미가 없고 대시보드가 읽지도 않습니다. 그리고 통계가 병목으로 확인되면 이 Step만 별도 Job으로 떼어낼 수 있습니다.
 

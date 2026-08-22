@@ -1,51 +1,190 @@
+#
+# ⚠️ 이 파일은 문서가 둘이다. 맨 아래 `---` 를 지우지 마라.
+#
+#   spring.config.import 로 들어온 storage.yml 은 **그것을 선언한 문서보다 우선한다.**
+#   그래서 이 첫 문서에 storage.yml 과 같은 키를 적으면 조용히 무시된다 — 에러도 경고도 없다.
+#   실제로 spring.flyway.enabled: false 와 maximum-pool-size: 4 가 그렇게 죽어 있었다.
+#
+#   storage.yml 을 덮어쓸 값만 `---` 아래 두 번째 문서에 둔다. 뒤 문서가 이긴다.
+#   나머지는 전부 이 첫 문서에 둔다 — 그래야 BatchConfigPrecedenceTest 의 충돌 검사를 받는다.
+#
 spring:
   application:
     name: coupon-batch
   config:
     import: classpath:storage.yml
 
-  # 관리 포트로만 뜬다. verify 온디맨드 트리거(POST /api/v1/admin/verify)가 필요해서 none 이 아니다.
-  # Compose 에서 이 포트를 외부로 노출하지 않는다 — 그게 admin 방어의 실체다.
+  # 지금은 컨트롤러가 0건이라 업무 포트에는 매핑 없는 톰캣만 뜬다.
+  #
+  # servlet 으로 두는 것은 뒤에 올 verify 온디맨드 트리거(POST /api/v1/admin/verify)를
+  # 미리 받기 위한 것이다. 관리 포트는 아래 management 블록이 따로 연다 —
+  # 그 키는 storage.yml 에 없으므로 예고대로 뒤 문서가 아니라 이 첫 문서에 둔다.
+  #
+  # ⚠️ 업무 포트는 이미 밖에서 닿는다. compose 가 BATCH_HOST_PORT 로 호스트에 내보낸다.
+  #   그러니 **admin 트리거를 이 포트에 평범한 컨트롤러로 두면 방어가 하나도 없다.**
+  #   PRD 는 그것을 /actuator/env 와 같은 급의 구멍으로 묶고 "관리 포트 분리" 를 대응으로 적었다.
+  #   어디에 둘지는 이 티켓 밖이다 — 커스텀 actuator 엔드포인트로 관리 포트에 올리거나,
+  #   compose 의 업무 포트 매핑을 없애거나 둘 중 하나를 그 티켓에서 정한다.
+  #   밖에 안 나가는 것은 관리 포트뿐이다. 그 이상을 이 파일이 약속하지 않는다.
   main:
     web-application-type: servlet
 
   batch:
-    jdbc:
-      initialize-schema: never   # 메타 테이블은 V2__batch_metadata.sql 이 만든다
+    # spring.batch.jdbc.* 는 두지 않는다 — Boot 4.1 에 그 프로퍼티 그룹이 없다.
+    # BatchProperties 의 중첩 클래스가 Job(name) 하나뿐이고 배치 스키마 이니셜라이저도
+    # 모듈에서 사라졌다. 예전에 initialize-schema: never 를 적어 두었는데 아무것도
+    # 안 읽고 있었다. 메타 테이블은 V2__batch_metadata.sql 이 만든다.
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
-  # 마이그레이션 소유자는 api 하나로 고정한다. batch 는 이미 만들어진 스키마 위에서 돈다.
-  flyway:
-    enabled: false
-
   datasource:
     hikari:
-      # 런타임과 풀을 나눈다. HikariCP 사용률이 v1 병목의 증거인데 배치가 나눠 쓰면 증거가 흐려진다.
-      maximum-pool-size: ${BATCH_DB_POOL_SIZE:4}
+      # 미터의 pool 태그가 api 것인지 batch 것인지 가른다.
+      # storage.yml 에 같은 키가 없어 덮어쓰기가 아니다 — 그래서 아래가 아니라 여기에 둔다.
+      # storage.yml 이 나중에 pool-name 을 정의하면 충돌 검사가 잡는다.
       pool-name: batch-pool
 
 server:
   port: ${BATCH_PORT:9090}
+  error:
+    # 이 티켓의 요청 범위 밖이지만 같은 파일·같은 성격이라 같이 넣는다.
+    # batch 는 starter-web 을 갖고 있어 예외가 응답으로 나갈 표면이 원래 있었다.
+    include-stacktrace: never
+
+# 업무 포트와 관측 포트를 나눈다. 한 포트에 얹으면 verify 트리거와 지표가 같은 문에 걸려,
+# 그 문을 열고 닫는 판단이 하나로 묶인다.
+#
+# ⚠️ compose 를 쓰는 사람에게 — 세 숫자가 각각 다른 뜻이다.
+#
+#     호스트 9091  →  컨테이너 9090   업무 (verify 트리거).  이게 맞다
+#        내보내지 않음  컨테이너 9092   관리 (actuator)
+#
+#   `ports:` 의 우변은 언제나 9090 이다. 호스트 쪽 번호는 BATCH_HOST_PORT 다.
+#   관리 포트를 호스트에 매핑하면 인증 없이 전 지표가 열린다.
+#
+#   관제의 스크레이프 대상은 컨테이너 기준 batch:9092 다 — 내부 네트워크에서 긁는다.
+#   infra/prometheus/prometheus.yml 의 targets 와 같아야 한다.
+#
+#   9091 → 9092 로 옮긴 것은 CY-254 와 맞춘 것이다. 예전에는 관리 포트도 9091 이라
+#   호스트 업무 포트와 숫자가 겹쳐서, `ports: - "9091:9091"` 로 쓰면 관리 포트가
+#   호스트에 열리고 업무 포트는 아무도 못 가리키는 사고가 났다.
+#
+# Compose 에 이 포트를 매핑하지 마라. Prometheus 가 내부 네트워크에서 긁는다.
+# 호스트로 내보내면 인증 없이 전 지표가 열린다.
+management:
+  server:
+    port: ${BATCH_MANAGEMENT_PORT:9092}
+  endpoints:
+    web:
+      exposure:
+        # 지금 /actuator/env 를 막는 것은 exclude 가 아니라 include 다 — 화이트리스트라
+        # 여기 없는 것은 애초에 안 열린다. include 를 넓히지 마라. env 는 AES 키를 평문으로
+        # 내보낸다.
+        #
+        # exclude 는 그럼에도 남긴다. 누가 include 를 * 로 바꾸는 날의 이중 방어다.
+        # 그 상황을 ActuatorWildcardExposureTest 가 재현해서 이 줄을 지킨다.
+        include: health,metrics,prometheus
+        # include 가 * 로 넓어지는 날 실제로 열리는 것을 재 봤다 — 16개다. 그중 위험한 것을
+        # 전부 적는다. loggers 는 읽기가 아니라 **쓰기**다(POST 로 런타임 로그 레벨 변경).
+        # 나머지는 정찰용이다 — 마이그레이션 이력·의존성 목록·크론 구조·스레드 덤프.
+        #
+        # 이 목록이 방어의 본체는 아니다. 스프링이 엔드포인트를 추가하면 목록은 낡는다.
+        # 본체는 include 화이트리스트고, ActuatorExposureTest 가 **열린 것의 집합 전체**를
+        # 단언해 그것을 지킨다.
+        exclude: env,configprops,beans,heapdump,loggers,threaddump,mappings,scheduledtasks,conditions,flyway,sbom
+  endpoint:
+    health:
+      # 상세를 켜면 DB 접속 정보와 컴포넌트 구성이 그대로 나간다.
+      show-details: never
 
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 스케줄러가 멈춘다.
   # dataset_fingerprint 재료에 sum(active_count) 와 max(updated_at) 이 들어 있어
   # 회차 하나만 열려도 지문이 달라진다. 끌 것이 여러 개면 하나는 반드시 빠뜨린다.
+  #
+  # ⚠️ 검증용 DB(coupon_clean · coupon_corrupt)를 보게 띄울 때는 반드시 false 로 준다.
+  #    만료 배치는 재고를 쓰는 유일한 잡이라, 켜진 채로 검증 셋을 보면 검증 대상 데이터를
+  #    직접 고친다. CORRUPT 셋에서는 일부러 심은 오염까지 건드려 expected 집합과 어긋나고,
+  #    그때는 셋을 다시 만드는 것 말고 되돌릴 방법이 없다.
+  #
+  # 그래서 기본값이 false 다 — **주지 않으면 안 도는 쪽**이다. 두 사고의 무게가 다르기 때문이다.
+  #   켜진 채 검증 셋을 보면  → 오염. 셋을 다시 만드는 것 말고 되돌릴 방법이 없다.
+  #   꺼진 채 운영을 보면      → 만료가 밀린다. 나중에 돌리면 따라잡고,
+  #                             infra/prometheus/rules/batch-alerts.yml 에 BatchJobNotRunning 규칙을 써 뒀지만
+  #                             그것을 읽는 Prometheus 가 아직 없다 — 지금은 감지 수단이 없다.
+  # 되돌릴 수 있고 감지도 되는 쪽을 기본으로 둔다. 운영은 true 를 명시해서 띄운다.
   scheduling:
-    enabled: ${BATCH_SCHEDULING_ENABLED:true}
+    enabled: ${BATCH_SCHEDULING_ENABLED:false}
 
   schedule:
+    # ⚠️ 크론을 어느 좌표계로 푸는가. @Scheduled 는 이 값을 안 주면 JVM 기본 타임존을 쓰는데,
+    #    asOf 를 만드는 CronSlot 은 TimeProvider(Clock.systemUTC) 의 값으로 푼다.
+    #    둘이 갈리면 asOf 가 발화 시각보다 그 오프셋만큼 과거가 되고, asOf <= now 는 계속
+    #    성립하므로 EXPIRE_ASOF_IN_FUTURE 가드도 안 울린다 — 조용히 그만큼 밀린다.
+    #    지금 5분 크론에서만 우연히 안 드러난다(오프셋이 15분 배수라 슬롯에 그대로 떨어진다).
+    #    시(hour) 필드가 들어가는 순간 깨진다 — 아래 coupon-create-cron 이 그 모양이다.
+    zone: "UTC"
     expire-cron: "0 */5 * * * *"          # 만료 5분
     verify-incremental-cron: "0 */10 * * * *"  # 증분 검증 10분
     cleanup-cron: "0 0 * * * *"           # 정리 1시간
+    #
+    # ⚠️ 정리 잡을 만들 때 BATCH_* 도 함께 본다. JobRepository 를 JDBC 로 배선한 뒤로
+    #    실제로 쌓인다 — 만료가 5분마다 새 asOf 로 도니 하루 288 인스턴스이고,
+    #    인스턴스 하나에 실행·스텝실행·두 문맥·파라미터가 딸린다.
+    #    3주 시연 규모(약 3.6만 행)에서는 무시할 수 있어 이 티켓에서 안 만들었다.
+    #    보존 기간 키를 여기 둘 자리다 — batch.metadata.keep-days
     coupon-open-cron: "0 * * * * *"       # 회차 상태 전이 1분
     coupon-create-cron: "0 0 4 * * *"     # 회차 생성 매일 04:00
 
+  # 재고를 쓰는 유일한 잡이다. 청크 하나가 한 트랜잭션이고, 죽으면 그 경계에서 이어 간다.
+  expire:
+    # 한 청크가 넘기는 건수. 트랜잭션 크기이자 재시작 단위다.
+    # 크게 잡으면 죽었을 때 되돌리는 양이 늘고, 작게 잡으면 왕복이 늘어난다.
+    chunk-size: ${EXPIRE_CHUNK_SIZE:1000}
+
+    # 폭주한 문장을 끊는 유일한 수단이다.
+    #
+    # innodb_lock_wait_timeout 은 **기다리는 쪽**에 걸리는 값이라, 잠그고 있는 이 잡에는
+    # 아무 상한도 되지 않는다. JobOperator.stop() 은 청크 경계에서만 반응해 단일 문장을 못 끊는다.
+    # 재고를 쓰고 issuances 를 잠그는 유일한 잡이라 verify 보다 이쪽이 더 급하다.
+    #
+    # ⚠️ 이것은 **청크 하나의 데드라인**이지 잡 전체의 상한이 아니다. CONTINUABLE 로 돌아올 때마다
+    #    새 트랜잭션이 열려 매번 다시 센다 — chunk-size 를 키우면 이 값도 같이 키워야 하고,
+    #    잡 전체는 (청크 수 × 이 값) 만큼 돌 수 있다. 실행 전체를 끊는 수단은 아직 없다.
+    step-timeout-ms: ${EXPIRE_STEP_TIMEOUT_MS:120000}
+
   verify:
     # asof_state 는 run 당 300만 행이다. 방치하면 가장 빨리 커지는 테이블이다.
+    #
+    # ⚠️ 정리 Step 이 들어오기 전까지 이 값은 아무 데서도 읽히지 않는다 — 지금 줘도 효과가 없다.
+    # 키 경로가 살아 있는지만 ResolvedBatchConfigTest 가 확인한다.
     asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
-    chunk-size: ${VERIFY_CHUNK_SIZE:200000}
+
+    # 한 트랜잭션에 쓰는 발급건 수. 이만큼이 메모리에 올라가고 실패하면 이만큼 되돌린다.
+    chunk-size: ${VERIFY_CHUNK_SIZE:1000}
+
+    # 규칙 하나가 낼 수 있는 검출 상한. 여기 닿으면 잡을 멈춘다.
+    #
+    # 이것은 폭주 방어지 고장 감지 임계값이 아니다. 오염셋 기대는 규칙당 최대 200건
+    # (V1 200·V2 200·V3 100·V4 200·V5 100·V6 0, 합계 800)이고, 이 상한은 그보다 50배 크다 —
+    # 검출이 300만 발급건만큼 쏟아지는 것을 막는 자리다. 200 을 기준으로 조이면
+    # 정상셋·운영 데이터의 기대치가 달라 거짓 중단이 난다.
+    max-findings-per-rule: ${VERIFY_MAX_FINDINGS_PER_RULE:10000}
+
+    # Step 트랜잭션의 데드라인. 없으면 폭주한 문장이 커넥션을 물고 늘어져
+    # 배치 풀(아래 maximum-pool-size)과 공유 MySQL 이 함께 막힌다.
+    # JobOperator.stop() 은 청크 경계에서만 반응해서 단일 문장에는 안 걸린다.
+    #
+    # 문장 단위가 아니라 트랜잭션 단위다. 청크 Step 에서는 청크 하나의 데드라인이므로
+    # chunk-size 를 키우면 이 값도 같이 키워야 한다.
+    # MySQL 힌트(MAX_EXECUTION_TIME)를 안 쓰는 이유는 그것이 read-only SELECT 에만 먹어서
+    # 이 잡에서 가장 무거운 문장(asof_state 300만 행 UPDATE)을 못 덮기 때문이다.
+    step-timeout-ms: ${VERIFY_STEP_TIMEOUT_MS:600000}
+
+    # 이력을 한 번에 읽어 올 발급건 식별자 폭.
+    # 이력 식별자가 아니라 발급건 식별자로 잘라야 한 발급건의 이력이 두 창에 걸치지 않는다.
+    # 크게 잡을수록 왕복은 줄지만 한 번에 올라오는 이력 행이 는다 — 발급건당 평균 1.8행이다.
+    replay-window-size: ${VERIFY_REPLAY_WINDOW_SIZE:50000}
 
 logging:
   level:
@@ -53,3 +192,37 @@ logging:
   pattern:
     # runId 를 MDC 에 심어 한 run 의 모든 Step 로그를 같은 키로 묶는다.
     console: "%d{HH:mm:ss.SSS} %-5level [%X{runId:-}] %logger{36} - %msg%n"
+
+---
+#
+# ⚠️ storage.yml 을 덮어쓰는 값만 여기 둔다. storage.yml 과 무관한 키를 여기 두면
+#   위 문서의 충돌 검사를 받지 않아, 나중에 storage.yml 에 같은 키가 생겨도 아무도 모른다.
+#
+# CY-179(관측 전용 DataSource)가 머지되면 관측 풀 이름은 이렇게 가른다 —
+#   storage.yml 이 observation.datasource.hikari.pool-name 을 정의하면  -> 여기(덮어쓰기)
+#   정의하지 않으면                                                    -> 첫 문서(새 키)
+# 인수인계 문서는 storage.yml 이 정의한다고 했지만 아직 어느 브랜치에도 없다.
+# 주석을 믿지 말고 BatchConfigPrecedenceTest 가 어느 쪽이라고 하는지를 믿어라.
+# 그 키가 생기기 전까지 OBS_POOL_NAME 은 아무 데서도 읽히지 않는다. 지금 줘도 효과가 없다.
+#
+spring:
+  # 마이그레이션 소유자는 api 하나로 고정한다. batch 는 이미 만들어진 스키마 위에서 돈다.
+  #
+  # 검증 배치가 DDL 권한을 쥐면 "계층 2 는 원본 테이블에 쓰지 않는다" 가 스키마 수준에서 깨진다.
+  #
+  # 대가는 배포 순서 의존이다. 그런데 **기동은 조용히 성공한다** — batch 에는 @Entity 가 없어
+  # ddl-auto: validate 가 공허하게 통과하고, 메타 테이블 존재도 기동 때는 아무도 안 본다.
+  # api 보다 먼저 뜨면 기동은 그냥 성공한다 — actuator 가 없어 확인할 헬스 엔드포인트조차 없다.
+  # 실패는 잡 실행 시점의 "테이블 없음" SQL 에러로 늦게 드러난다.
+  # 기동 시점에 잡아 주는 가드는 compose 가 들어오는 티켓에서 함께 만든다.
+  flyway:
+    enabled: false
+
+  datasource:
+    hikari:
+      # 런타임과 풀을 나눈다. HikariCP 사용률이 v1 병목의 증거인데 배치가 나눠 쓰면 증거가 흐려진다.
+      # 배치는 단일 스레드 청크라 스텝 트랜잭션 1 + JobRepository 1 이면 된다.
+      #
+      # 이 변경 전에는 storage.yml 이 이겨서 batch 풀도 DB_POOL_SIZE 가 움직였다.
+      # 이제 손잡이는 BATCH_DB_POOL_SIZE 다 — DB_POOL_SIZE 만 주던 배포는 10 에서 4 로 바뀐다.
+      maximum-pool-size: ${BATCH_DB_POOL_SIZE:4}
