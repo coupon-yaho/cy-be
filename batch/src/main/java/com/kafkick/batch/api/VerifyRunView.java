@@ -3,6 +3,8 @@ package com.kafkick.batch.api;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.batch.core.job.JobExecution;
 
@@ -52,6 +54,13 @@ public record VerifyRunView(
         String failure
 ) {
 
+    /** 우리가 정의한 도메인 에러코드. 원문에서 이것만 그대로 통과시킨다. */
+    private static final Pattern DOMAIN_CODE = Pattern.compile("VERIFICATION-\\d{3}");
+
+    /** 그 밖에는 예외 <b>이름</b>만 남긴다. 메시지에는 SQL 조각이 섞일 수 있다. */
+    private static final Pattern EXCEPTION_TYPE =
+            Pattern.compile("([A-Za-z]+(?:Exception|Error))");
+
     public static VerifyRunView of(long executionId, JobExecution execution, Long runId,
             Optional<VerificationRun> run) {
         return new VerifyRunView(
@@ -73,38 +82,39 @@ public record VerifyRunView(
     }
 
     /**
-     * <b>실패 원인을 한 줄로 싣는다.</b> 없으면 {@code null} 이다.
+     * <b>어느 Step 에서 죽었는지와, 우리 도메인 코드가 있으면 그것을 싣는다.</b>
      *
      * <p><b>{@code getAllFailureExceptions()} 를 쓰면 안 된다 — 언제나 비어 있다.</b>
-     * 그 필드는 영속되지 않고, 이 {@code JobExecution} 은 DB 에서 새로 만든 객체다
-     * ({@code JdbcJobExecutionDao} 의 SELECT 에 실패 예외 컬럼이 없다). 처음에 그것을
-     * 썼다가 <b>모든 실패가 {@code failure: null} 로 나가는 것</b>을 실측으로 확인했다 —
-     * 트리거를 연 이유가 <i>"폴링해야 원인을 안다"</i> 를 없애는 것이었는데 절반만 됐다.
+     * 그 필드는 영속되지 않고 이 {@code JobExecution} 은 DB 에서 새로 만든 객체다.
+     * 처음에 그것을 썼다가 <b>모든 실패가 {@code failure: null} 로 나가는 것</b>을 실측으로
+     * 확인했다 — 트리거를 연 이유가 <i>"폴링해야 원인을 안다"</i> 를 없애는 것이었는데
+     * 절반만 됐던 자리다.
      *
-     * <p>대신 {@code EXIT_MESSAGE} 로 영속되는 {@code exitDescription} 을 읽는다.
-     * <b>첫 줄만 싣는다.</b> 그 값에는 스택트레이스가 통째로 들어가고, 이 API 에는 인증이
-     * 없어서 SQL 조각이나 제약 이름이 그대로 나가면 내부 구조를 정찰당한다 —
-     * {@code server.error.include-stacktrace: never} 와 같은 규율이다.
-     *
-     * <p>Step 이름을 함께 준다. <i>"어느 가드에 걸렸나"</i> 가 첫 질문이라 그것이 없으면
-     * 한 줄이 있어도 어디를 봐야 할지 모른다.
+     * <p><b>그렇다고 {@code exitDescription} 을 그대로 실을 수도 없다.</b> 거기에는
+     * 스택트레이스가 통째로 들어가고 첫 줄에도 SQL 조각·드라이버 오류·제약 이름이 섞인다.
+     * 이 API 에는 인증이 없다. 그래서 <b>허용 목록만 통과시킨다</b> — 그 안에서 우리가
+     * 정의한 {@code VERIFICATION-0xx} 코드를 찾아 싣고, 없으면 예외 <b>클래스 이름</b>만
+     * 남긴다. 자세한 원인은 서버 로그가 진다.
      */
     private static String firstFailure(JobExecution execution) {
         return execution.getStepExecutions().stream()
                 .filter(step -> step.getStatus().isUnsuccessful())
                 .findFirst()
-                .map(step -> step.getStepName() + ": " + firstLineOf(
-                        step.getExitStatus().getExitDescription()))
-                .orElseGet(() -> firstLineOf(execution.getExitStatus().getExitDescription()));
+                .map(step -> step.getStepName() + ": "
+                        + summarize(step.getExitStatus().getExitDescription()))
+                .orElse(null);
     }
 
-    /** 스택트레이스 전체가 아니라 첫 줄만. 없으면 {@code null}. */
-    private static String firstLineOf(String description) {
+    /** 도메인 에러코드가 보이면 그것을, 아니면 예외 클래스 이름만. 둘 다 없으면 {@code null}. */
+    private static String summarize(String description) {
         if (description == null || description.isBlank()) {
-            return null;
+            return "원인이 기록되지 않았습니다";
         }
-        int newline = description.indexOf('\n');
-        String line = newline < 0 ? description : description.substring(0, newline);
-        return line.strip();
+        Matcher code = DOMAIN_CODE.matcher(description);
+        if (code.find()) {
+            return code.group();
+        }
+        Matcher type = EXCEPTION_TYPE.matcher(description);
+        return type.find() ? type.group(1) : "알 수 없는 오류";
     }
 }

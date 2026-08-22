@@ -3,6 +3,7 @@ package com.kafkick.batch.api;
 
 import static com.kafkick.batch.api.VerifyApiProbe.awaitUntil;
 import static com.kafkick.batch.api.VerifyApiProbe.body;
+import static com.kafkick.batch.api.VerifyApiProbe.error;
 import static com.kafkick.batch.api.VerifyApiProbe.json;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -240,7 +241,7 @@ class VerifyTriggerApiTest {
         HttpResponse<String> response = probe.get("/api/v1/admin/verify/runs/999999");
 
         assertThat(response.statusCode()).isEqualTo(404);
-        assertThat(json(response).path("code").asText()).isEqualTo("VERIFICATION-014");
+        assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-014");
     }
 
     /**
@@ -257,7 +258,7 @@ class VerifyTriggerApiTest {
                 probe.post("/api/v1/admin/verify/runs/" + executionId + "/stop");
 
         assertThat(response.statusCode()).isEqualTo(409);
-        assertThat(json(response).path("code").asText()).isEqualTo("VERIFICATION-015");
+        assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-015");
     }
 
     /**
@@ -267,14 +268,21 @@ class VerifyTriggerApiTest {
     @Test
     @DisplayName("에러 본문에 status·code·message·timestamp 가 있다")
     void errorsCarryTheSameShape() throws Exception {
-        var error = json(probe.get("/api/v1/admin/verify/runs/999999"));
+        HttpResponse<String> response = probe.get("/api/v1/admin/verify/runs/999999");
 
-        assertThat(error.path("status").asInt()).isEqualTo(404);
-        assertThat(error.path("code").asText()).isEqualTo("VERIFICATION-014");
-        assertThat(error.path("message").asText()).isNotBlank();
-        assertThat(error.path("timestamp").isMissingNode())
-                .as("api 의 ErrorResponse 와 같은 필드여야 봉투를 core 로 올리는 날 옮기기만 하면 된다")
-                .isFalse();
+        // 저장소 규약: 응답은 항상 ResponseEnvelope 다 — 성공도 실패도 같은 봉투.
+        assertThat(json(response).path("success").asBoolean()).isFalse();
+        assertThat(json(response).path("data").isNull()).isTrue();
+
+        var body = error(response);
+        assertThat(body.path("status").asInt()).isEqualTo(404);
+        assertThat(body.path("code").asText()).isEqualTo("VERIFICATION-014");
+        assertThat(body.path("message").asText()).isNotBlank();
+        assertThat(body.path("timestamp").isMissingNode()).isFalse();
+        assertThat(body.path("detail").isMissingNode())
+                .as("detail 은 로그용이다. 클라이언트에 나가는 문구는 카탈로그 메시지뿐이고, "
+                        + "이 API 에는 인증이 없어 더 지켜야 한다")
+                .isTrue();
     }
 
     /**
@@ -335,7 +343,7 @@ class VerifyTriggerApiTest {
                 "/api/v1/admin/verify?asOf=" + AS_OF + "&dataset=CORRUPT");
 
         assertThat(response.statusCode()).isEqualTo(400);
-        assertThat(json(response).path("code").asText()).isEqualTo("VERIFICATION-002");
+        assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-002");
     }
 
     /**
@@ -446,10 +454,12 @@ class VerifyTriggerApiTest {
         assertThat(blocked.statusCode())
                 .as("도는 것이 있으면 접수를 거절해야 한다. 본문=%s", blocked.body())
                 .isEqualTo(429);
-        assertThat(json(blocked).path("code").asText()).isEqualTo("VERIFICATION-013");
-        assertThat(json(blocked).path("detail").asText())
-                .as("막고 있는 id 가 응답에 없으면 abandon 을 부를 수 없다 — 사람이 DB 를 "
-                        + "뒤져야 하는데 업무 포트는 기본으로 안 열려 있다")
+        assertThat(error(blocked).path("code").asText()).isEqualTo("VERIFICATION-013");
+        // 규약이 응답 문구를 카탈로그 메시지로 제한하므로 id 는 본문에 안 실린다.
+        // 대신 조회 경로가 그것을 준다 — 없으면 abandon 을 부를 방법이 없다.
+        assertThat(json(probe.get("/api/v1/admin/verify/runs/running")).path("data").toString())
+                .as("막고 있는 id 를 얻을 경로가 없으면 사람이 DB 를 뒤져야 하는데 "
+                        + "업무 포트는 기본으로 안 열려 있다")
                 .contains(String.valueOf(stranded.getId()));
 
         // STOPPING 이 되기 전에는 못 버린다.
@@ -467,7 +477,7 @@ class VerifyTriggerApiTest {
                 .as("stop 만으로는 STOPPING 이라 여전히 429 다 — abandon 이 유일한 해제 경로다. "
                         + "그리고 완료 동작이라 202 가 아니라 200 이다")
                 .isEqualTo(200);
-        assertThat(json(abandoned).path("status").asText()).isEqualTo("ABANDONED");
+        assertThat(json(abandoned).path("data").path("status").asText()).isEqualTo("ABANDONED");
 
         assertThat(probe.post("/api/v1/admin/verify?asOf=" + AS_OF).statusCode())
                 .as("버린 뒤에는 다시 접수돼야 한다. 안 그러면 하드킬 한 번에 트리거가 영구히 막힌다")
@@ -490,7 +500,7 @@ class VerifyTriggerApiTest {
                 probe.post("/api/v1/admin/verify/runs/" + executionId + "/abandon");
 
         assertThat(response.statusCode()).isEqualTo(409);
-        assertThat(json(response).path("code").asText()).isEqualTo("VERIFICATION-016");
+        assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-016");
     }
 
     private TriggerAccepted triggerCorrupt() throws Exception {

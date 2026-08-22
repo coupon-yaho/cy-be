@@ -50,8 +50,17 @@ final class VerifyApiProbe {
         return MAPPER.readTree(response.body());
     }
 
+    /**
+     * <b>봉투를 벗겨 {@code data} 를 준다.</b> 저장소 규약이 모든 응답을
+     * {@code ResponseEnvelope} 로 감싸므로, 테스트가 매번 그 경로를 적지 않게 여기서 푼다.
+     */
     static <T> T body(HttpResponse<String> response, Class<T> type) {
-        return MAPPER.readValue(response.body(), type);
+        return MAPPER.treeToValue(json(response).path("data"), type);
+    }
+
+    /** 에러 응답의 {@code error} 노드. 규약상 {@code status}·{@code code}·{@code message} 가 있다. */
+    static JsonNode error(HttpResponse<String> response) {
+        return json(response).path("error");
     }
 
     /**

@@ -392,18 +392,50 @@ CY-359 는 `SchemaPresenceGuard` 로 그것을 **기동 시점에 드러내고 �
 
 ---
 
-## 4b. 응답 봉투가 두 벌이다 (CY-368 이 만들었다)
+## 4b. ~~응답 봉투가 두 벌이다~~ 해결됨 (CY-368)
 
-`api` 의 `ResponseEnvelope`·`ErrorResponse`·`GlobalExceptionHandler` 는 `com.kafkick.api.support`
-에 있고, batch 는 `core` 만 의존한다. 그래서 CY-368 이 트리거 API 를 열면서 **같은 규약을
-batch 쪽에 다시 세웠다**(`BatchApiExceptionHandler.BatchErrorResponse`).
+batch 에 컨트롤러를 열면서 `api` 의 `ResponseEnvelope`·`ErrorResponse` 를 못 써
+같은 규약을 batch 쪽에 다시 세울 뻔했다. `.coderabbit.yaml` 이 전 Java 공통으로
+**"응답은 항상 `ResponseEnvelope` 로 감싼다"** 를 못 박아 뒀고, batch 는 `core` 만
+의존하므로 **그 봉투를 `core/support/response` 로 옮기는 것**이 규약을 지키는 유일한
+길이었다. `api` 는 import 만 바뀌고 동작은 같다.
 
-**같은 사실을 두 곳이 각자 정의하면 언젠가 어긋난다** — 이 저장소가 반복해서 없애 온 모양이다.
-지금은 필드를 맞춰 뒀지만(`requestId` 제외 — batch 에는 `RequestIdFilter` 가 없다), 한쪽만
-고치는 날 프론트가 두 형식을 다뤄야 한다.
+`core` 에 `jackson-annotations` 하나가 늘었다 — `@JsonProperty("success")` 때문이다.
+컴포넌트 이름을 `success` 로 바꿔 없애려 했지만 정적 팩토리 `success(T)` 와 accessor 가
+충돌한다. 직렬화 구현이 아니라 애노테이션 jar 라 도메인 모듈이 무거워지지 않는다.
 
-답은 봉투를 `core` 로 올리는 것인데, `api` 모듈의 파일을 옮겨야 해서 CY-368 밖이었다.
-**옮기는 쪽이 `api` 담당과 겹치므로 팀에서 정한다.**
+`requestId` 는 batch 에서 `null` 이다 — 그것을 MDC 에 심는 `RequestIdFilter` 가 없다.
+
+---
+
+## 4c. 전체 빌드가 5분이다 — 캐시·병렬이 꺼져 있다 (CY-368 이 실측)
+
+**테스트 메서드 합계는 100초 남짓인데 `./gradlew build` 는 5분이다.** 나머지는
+Testcontainers MySQL 기동과 Spring 컨텍스트 로딩이다.
+
+| 무엇 | 지금 | 왜 |
+|---|---|---|
+| `gradle.properties` | **한 번도 만든 적이 없다** | Spring Initializr 가 안 만드는 파일이다. 지운 게 아니라 처음부터 없어서 병렬·캐시가 전부 기본값(꺼짐)이다. `.gitignore` 의 `.gradle` 은 캐시 **디렉터리**라 무관하다 |
+| Testcontainers `withReuse` | 안 켬 | 클래스마다 컨테이너를 새로 띄운다 |
+| Spring 컨텍스트 | 배치만 6벌 | `@SpringBootTest` 의 `properties` 조합이 다르면 캐시가 안 걸린다 |
+
+**병렬은 효과가 제한적일 수 있다.** 느린 것은 `storage`(73초)와 `batch` 인데 둘 다 같은
+MySQL 컨테이너 자원을 두고 경쟁하고, `batch` 는 `storage` 의 `testFixtures` 에 의존해
+완전 병렬이 안 된다. **캐시 쪽이 실효가 커 보인다** — 문서만 고친 라운드에서 Java 테스트를
+통째로 건너뛸 수 있다. 다만 **둘 다 재 보고 정한다.** 근거 없는 수치를 넣지 않는다.
+
+**앞의 둘은 검토 대상이고 셋째는 대체로 불가피하다.** 예컨대 `batch.scheduling.enabled` 가
+`true`/`false` 로 갈린 두 클래스는 그 축을 재려고 일부러 나눈 것이다 — 합치면 검증이 사라진다.
+다만 조합을 줄일 여지가 있는지는 한 번 훑을 값어치가 있다.
+
+**`withReuse` 는 격리와 맞바꾼다.** 컨테이너를 재사용하면 앞 테스트가 남긴 데이터가
+다음으로 넘어가는데, 이 저장소는 이미 그 경계에서 여러 번 데였다(`VerificationSeed.clear()`
+가 존재하는 이유, 그리고 CY-368 이 비동기 잡으로 남의 테스트를 깨뜨린 일). **켤 거면
+정리 규율을 먼저 세운다.**
+
+> 착수 조건 — 지금 당장 급하지 않다. CI 는 8분에 돌고 사람은 개발 중 `--tests` 로 좁혀
+> 돌리면 20초다. **전체 빌드는 커밋 직전 1회면 충분하다.** 이 항목이 값어치를 갖는 것은
+> 그 1회가 병목이 될 만큼 잦아지는 때 — 예컨대 잡이 늘어 컨텍스트가 열 벌을 넘길 때다.
 
 ---
 

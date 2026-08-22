@@ -2,7 +2,10 @@
 package com.kafkick.batch.api;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import static java.util.stream.Collectors.joining;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +31,7 @@ import com.kafkick.batch.config.VerifyExecutorConfig;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
@@ -93,7 +97,7 @@ public class VerifyTriggerController {
      * 아무 값이나 성립해서 <b>조용히 다른 것을 판정한다.</b>
      */
     @PostMapping
-    public ResponseEntity<TriggerAccepted> trigger(
+    public ResponseEntity<ResponseEnvelope<TriggerAccepted>> trigger(
             // ISO.DATE_TIME 을 쓰면 안 된다. 그 포맷터는 오프셋이 붙은 문자열을 파싱에
             // 성공시킨 뒤 지역 부분만 뽑는다 — 2026-03-01T09:00:00Z 가 조용히 09:00 이 된다.
             // JS 의 toISOString() 은 항상 Z 를 붙이므로 프론트가 보내면 KST 기준으로
@@ -188,8 +192,23 @@ public class VerifyTriggerController {
                 execution.getId(), asOf, resolvedDataset, resolvedScope, resolvedAttempt);
 
         return ResponseEntity.accepted()
-                .body(new TriggerAccepted(execution.getId(), asOf,
-                        resolvedDataset, resolvedScope, resolvedAttempt));
+                .body(ResponseEnvelope.success(new TriggerAccepted(execution.getId(), asOf,
+                        resolvedDataset, resolvedScope, resolvedAttempt)));
+    }
+
+    /**
+     * <b>지금 도는 검증 실행.</b> 429 를 받은 클라이언트가 <b>무엇이 막고 있는지</b> 알아야
+     * {@code stop}·{@code abandon} 을 부를 수 있다.
+     *
+     * <p>그 id 를 429 응답 본문에 실을 수는 없다 — 저장소 규약이 <i>"클라이언트에 나가는
+     * 문구는 {@code errorCode.getMessage()}"</i> 로 못 박았고, 이 API 에는 인증이 없어
+     * 자유 문장에 내부 값을 담지 않는 편이 맞다. 그래서 <b>조회 경로를 따로 연다.</b>
+     *
+     * <p>하드킬로 남은 실행도 여기 보인다 — 그것이 이 엔드포인트의 주 사용처다.
+     */
+    @GetMapping("/runs/running")
+    public ResponseEnvelope<List<Long>> running() {
+        return ResponseEnvelope.success(runningExecutions().stream().sorted().toList());
     }
 
     /**
@@ -197,15 +216,15 @@ public class VerifyTriggerController {
      * 가드에 걸려 <b>끝까지 못 가는</b> 실행이라는 뜻이다.
      */
     @GetMapping("/runs/{executionId}")
-    public VerifyRunView find(@PathVariable long executionId) {
+    public ResponseEnvelope<VerifyRunView> find(@PathVariable long executionId) {
         JobExecution execution = requireVerifyExecution(executionId);
 
         Long runId = execution.getExecutionContext().containsKey(VerifyJobConfig.RUN_ID_KEY)
                 ? execution.getExecutionContext().getLong(VerifyJobConfig.RUN_ID_KEY)
                 : null;
 
-        return VerifyRunView.of(executionId, execution, runId,
-                runId == null ? Optional.empty() : runs.findById(runId));
+        return ResponseEnvelope.success(VerifyRunView.of(executionId, execution, runId,
+                runId == null ? Optional.empty() : runs.findById(runId)));
     }
 
     /**
@@ -213,7 +232,7 @@ public class VerifyTriggerController {
      * 잡이 그것을 보고 멈춘다 — 그래서 200 이 아니라 202 다. 실제로 멈췄는지는 조회로 본다.
      */
     @PostMapping("/runs/{executionId}/stop")
-    public ResponseEntity<StopRequested> stop(@PathVariable long executionId) {
+    public ResponseEntity<ResponseEnvelope<StopRequested>> stop(@PathVariable long executionId) {
         // 이 실행이 verifyJob 인지 먼저 본다. 중단 신호는 **공유 JobRepository** 에 쓰이므로
         // 어느 operator 로 시작했든 멈춘다 — 검사가 없으면 /verify/ 경로가 expireJob 을
         // 멈출 수 있다. 만료는 재고를 쓰는 유일한 잡이고, 중간에 멈추면 다음 검증의
@@ -221,12 +240,13 @@ public class VerifyTriggerController {
         requireVerifyExecution(executionId);
         try {
             boolean signalled = verifyJobOperator.stop(executionId);
-            return ResponseEntity.accepted().body(new StopRequested(executionId, signalled));
+            return ResponseEntity.accepted()
+                    .body(ResponseEnvelope.success(new StopRequested(executionId, signalled)));
         } catch (org.springframework.batch.core.launch.NoSuchJobExecutionException e) {
             throw notFound(executionId);
         } catch (org.springframework.batch.core.launch.JobExecutionNotRunningException e) {
             throw new BusinessException(VerificationErrorCode.VERIFY_NOT_RUNNING,
-                    "executionId=" + executionId);
+                    "executionId=" + executionId, e);
         }
     }
 
@@ -264,24 +284,26 @@ public class VerifyTriggerController {
      * 클라이언트는 202 를 받아 놓고 <i>왜 실패했는지 모르는 채</i> 폴링한다.
      */
     private void rejectIfAlreadyRunning() {
-        java.util.Set<Long> running;
-        try {
-            running = verifyJobOperator.getRunningExecutions(VerifyJobConfig.JOB_NAME);
-        } catch (org.springframework.batch.core.launch.NoSuchJobException e) {
-            // SimpleJobOperator 는 **도는 실행이 0건이고** 레지스트리에도 이름이 없을 때에만
-            // 이 예외를 던진다. 예외가 났다는 것이 곧 0건이라 빈 집합이 항상 맞다.
-            // MapJobRegistry 가 컨텍스트의 Job 빈을 자동 등록하므로 실제로는 여기 안 온다.
-            running = java.util.Set.of();
-        }
+        Set<Long> running = runningExecutions();
         if (!running.isEmpty()) {
-            // 무엇이 막고 있는지 말한다. 하드킬로 남은 행이면 그 id 로 stop → abandon 을
-            // 부를 수 있어야 하는데, id 를 안 주면 사람이 DB 를 뒤져야 한다.
+            // 막고 있는 id 는 detail(로그용)에만 남긴다. 클라이언트는 GET /runs/running 으로
+            // 얻는다 — 규약이 응답 문구를 카탈로그 메시지로 제한한다.
             throw new BusinessException(VerificationErrorCode.VERIFY_ALREADY_RUNNING,
                     "앞 실행이 아직 돌고 있습니다: executionId="
-                            + running.stream().map(String::valueOf)
-                                    .collect(java.util.stream.Collectors.joining(","))
-                            + ". 끝나기를 기다리거나 stop 으로 멈추십시오. 프로세스가 하드킬로 "
-                            + "죽어 남은 행이면 stop 뒤 abandon 을 부릅니다.");
+                            + running.stream().map(String::valueOf).collect(joining(",")));
+        }
+    }
+
+    /**
+     * {@code SimpleJobOperator} 는 <b>도는 실행이 0건이고</b> 레지스트리에도 이름이 없을 때에만
+     * {@code NoSuchJobException} 을 던진다. 예외가 났다는 것이 곧 0건이라 빈 집합이 항상 맞다.
+     * {@code MapJobRegistry} 가 {@code Job} 빈을 자동 등록하므로 실제로는 안 던진다.
+     */
+    private Set<Long> runningExecutions() {
+        try {
+            return verifyJobOperator.getRunningExecutions(VerifyJobConfig.JOB_NAME);
+        } catch (org.springframework.batch.core.launch.NoSuchJobException e) {
+            return Set.of();
         }
     }
 
@@ -326,7 +348,7 @@ public class VerifyTriggerController {
      * 안 집는 것이 맞고({@code verdict IS NOT NULL}), 판정으로도 안 센다.
      */
     @PostMapping("/runs/{executionId}/abandon")
-    public ResponseEntity<Abandoned> abandon(@PathVariable long executionId) {
+    public ResponseEntity<ResponseEnvelope<Abandoned>> abandon(@PathVariable long executionId) {
         JobExecution execution = requireVerifyExecution(executionId);
 
         // **중단된 것만 버린다.** Spring Batch 는 status.isLessThan(STOPPING) 일 때만
@@ -351,13 +373,14 @@ public class VerifyTriggerController {
                     + "executionId={}", executionId);
             // stop 과 달리 **완료 동작**이라 200 이다. 202 + StopRequested 를 재사용하면
             // "신호만 보냈다" 는 그쪽 뜻이 여기서는 거짓이 된다.
-            return ResponseEntity.ok(new Abandoned(executionId, BatchStatus.ABANDONED.name()));
+            return ResponseEntity.ok(ResponseEnvelope.success(
+                    new Abandoned(executionId, BatchStatus.ABANDONED.name())));
         } catch (org.springframework.batch.core.launch.NoSuchJobExecutionException e) {
             throw notFound(executionId);
         } catch (org.springframework.batch.core.launch.JobExecutionAlreadyRunningException e) {
             // 위 검사와 이 호출 사이에 상태가 바뀐 경우다. 같은 답을 준다.
             throw new BusinessException(VerificationErrorCode.VERIFY_NOT_ABANDONABLE,
-                    "먼저 stop 으로 중단 신호를 보내십시오. executionId=" + executionId);
+                    "먼저 stop 으로 중단 신호를 보내십시오. executionId=" + executionId, e);
         }
     }
 
@@ -392,14 +415,14 @@ public class VerifyTriggerController {
         } catch (org.springframework.batch.core.launch.JobExecutionAlreadyRunningException
                 | org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException e) {
             // 같은 파라미터로 이미 돌았거나 돌고 있다. attempt 를 올리면 새 인스턴스다.
-            throw new BusinessException(VerificationErrorCode.INVALID_RUN_PARAMS, e.getMessage());
+            throw new BusinessException(VerificationErrorCode.INVALID_RUN_PARAMS,
+                    e.getMessage(), e);
         } catch (org.springframework.batch.core.job.parameters.InvalidJobParametersException
                 | org.springframework.batch.core.launch.JobRestartException e) {
-            throw new BusinessException(VerificationErrorCode.INVALID_RUN_PARAMS, e.getMessage());
-        } catch (BusinessException e) {
-            // 잡 안의 가드가 접수 단계에서 터진 경우다. 그대로 올려 보내면
-            // 핸들러가 도메인 에러코드로 옮긴다.
-            throw e;
+            throw new BusinessException(VerificationErrorCode.INVALID_RUN_PARAMS,
+                    e.getMessage(), e);
         }
+        // BusinessException 은 위 어느 catch 타입에도 안 걸려 그대로 전파된다 —
+        // 핸들러가 도메인 에러코드로 옮긴다. 다시 던지는 절은 죽은 코드라 두지 않는다.
     }
 }

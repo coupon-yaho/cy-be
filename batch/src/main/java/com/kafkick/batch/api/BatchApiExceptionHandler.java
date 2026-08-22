@@ -1,8 +1,6 @@
 // batch 업무 포트의 에러를 도메인 에러코드로 옮깁니다.
 package com.kafkick.batch.api;
 
-import java.time.Instant;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +8,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.response.ErrorResponse;
+import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;
@@ -24,9 +24,10 @@ import com.kafkick.core.support.exception.ErrorCode;
  * {@code core} 만 의존하고 {@code api} 는 안 본다 — 반대로 의존을 걸면 배치가 웹 계층을
  * 끌고 온다. 그래서 <b>같은 규약을 batch 쪽에서 다시 세운다.</b>
  *
- * <p><b>이건 부채다.</b> 같은 응답 봉투를 두 곳이 각자 정의하면 언젠가 어긋난다 — 이
- * 저장소가 반복해서 없애 온 모양이다. 봉투를 {@code core} 로 올리는 것이 답인데, 그러면
- * {@code api} 모듈의 파일을 옮겨야 해서 이 티켓 밖이다. {@code docs/13} 에 남겼다.
+ * <p><b>봉투는 {@code core} 로 올렸다.</b> 처음에는 batch 전용 레코드를 따로 뒀는데,
+ * 같은 규약을 두 곳이 각자 정의하면 언젠가 어긋난다 — 저장소 규약도 <i>"응답은 항상
+ * {@code ResponseEnvelope} 로 감싼다"</i> 로 한 벌을 요구한다. {@code api} 모듈의 파일을
+ * 옮기는 것이 그 규약을 지키는 유일한 길이었다.
  *
  * <p><b>메시지는 카탈로그 것만 나간다.</b> 예외의 {@code detail} 은 로그에만 남긴다 —
  * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 인증이
@@ -43,19 +44,15 @@ public class BatchApiExceptionHandler {
         this.timeProvider = timeProvider;
     }
 
-    /**
-     * <b>도메인 예외의 detail 은 응답에 싣는다.</b> 그 문장은 우리가 쓴 것이라 내부 구조가
-     * 안 샌다 — <i>"앞 실행이 아직 돌고 있습니다: executionId=41"</i> 처럼 <b>다음 조치의
-     * 입력값</b>이 거기 들어 있다. 카탈로그 메시지만 내보내면 사람이 DB 를 뒤져야 한다.
-     *
-     * <p><b>5xx 는 안 싣는다.</b> 그쪽 detail 에는 SQL 조각이나 제약 이름이 섞일 수 있고,
-     * 이 API 에는 인증이 없다.
-     */
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<BatchErrorResponse> handleBusiness(BusinessException exception) {
+    public ResponseEntity<ResponseEnvelope<Void>> handleBusiness(BusinessException exception) {
         ErrorCode code = exception.getErrorCode();
         // 4xx 는 요청이 잘못된 것이라 사건이 아니다. 5xx 만 스택을 남긴다 —
         // 안 가르면 트리거를 잘못 부른 것만으로 ERROR 로그가 쌓여 진짜가 묻힌다.
+        //
+        // detail 은 **로그에만** 남긴다. 클라이언트에 나가는 문구는 errorCode.getMessage()
+        // 다 — 저장소 규약이고, 이 API 에는 인증이 없어 더 지켜야 한다. detail 에는
+        // 설정 키·가드 이름·실행 id 가 들어간다.
         if (code.getStatus() >= 500) {
             log.error("검증 API 가 실패했습니다. code={} detail={}",
                     code.getCode(), exception.getMessage(), exception);
@@ -63,10 +60,7 @@ public class BatchApiExceptionHandler {
             log.info("검증 API 가 요청을 거절했습니다. code={} detail={}",
                     code.getCode(), exception.getMessage());
         }
-        return ResponseEntity.status(code.getStatus())
-                .body(new BatchErrorResponse(code.getStatus(), code.getCode(), code.getMessage(),
-                        code.getStatus() < 500 ? exception.getMessage() : null,
-                        timeProvider.now().toInstant(java.time.ZoneOffset.UTC)));
+        return respond(code, code.getStatus());
     }
 
     /**
@@ -81,7 +75,7 @@ public class BatchApiExceptionHandler {
      * 구현해서 아래에서 걸린다.
      */
     @ExceptionHandler(org.springframework.beans.TypeMismatchException.class)
-    public ResponseEntity<BatchErrorResponse> handleTypeMismatch(
+    public ResponseEntity<ResponseEnvelope<Void>> handleTypeMismatch(
             org.springframework.beans.TypeMismatchException exception) {
         log.info("검증 API 가 요청을 거절했습니다. detail={}", exception.getMessage());
         return respond(CommonErrorCode.INVALID_INPUT, 400);
@@ -100,7 +94,7 @@ public class BatchApiExceptionHandler {
      * 아니기 때문이다. 그래서 여기서 가른다.
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<BatchErrorResponse> handleUnexpected(Exception exception) {
+    public ResponseEntity<ResponseEnvelope<Void>> handleUnexpected(Exception exception) {
         if (exception instanceof org.springframework.web.ErrorResponse error) {
             int status = error.getStatusCode().value();
             if (status < 500) {
@@ -113,26 +107,15 @@ public class BatchApiExceptionHandler {
         return respond(CommonErrorCode.INTERNAL_ERROR);
     }
 
-    private ResponseEntity<BatchErrorResponse> respond(ErrorCode code) {
+    private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code) {
         return respond(code, code.getStatus());
     }
 
-    private ResponseEntity<BatchErrorResponse> respond(ErrorCode code, int status) {
+    private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code, int status) {
+        // requestId 는 null 이다 — batch 에는 그것을 MDC 에 심는 RequestIdFilter 가 없다.
         return ResponseEntity.status(status)
-                .body(new BatchErrorResponse(status, code.getCode(), code.getMessage(), null,
-                        timeProvider.now().toInstant(java.time.ZoneOffset.UTC)));
+                .body(ResponseEnvelope.fail(ErrorResponse.of(code, null,
+                        timeProvider.now().toInstant(java.time.ZoneOffset.UTC))));
     }
 
-    /**
-     * {@code api} 의 {@code ErrorResponse} 와 <b>같은 필드</b>다({@code requestId} 제외 —
-     * batch 에는 그것을 채우는 {@code RequestIdFilter} 가 없다). 모양을 맞춰 두면 봉투를
-     * {@code core} 로 올리는 날 옮기기만 하면 된다.
-     *
-     * <p>{@code detail} 하나가 더 있다. <b>4xx 에서만 채운다</b> — 거기에는 다음 조치의
-     * 입력값(막고 있는 {@code executionId} 등)이 들어가고, 그 문장은 우리가 쓴 것이라
-     * 내부 구조가 안 샌다. 5xx 는 {@code null} 이다.
-     */
-    public record BatchErrorResponse(int status, String code, String message, String detail,
-            Instant timestamp) {
-    }
 }

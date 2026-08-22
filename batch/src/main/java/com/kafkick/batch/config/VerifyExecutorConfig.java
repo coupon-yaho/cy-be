@@ -35,11 +35,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @Configuration(proxyBeanMethods = false)
 public class VerifyExecutorConfig implements DisposableBean {
 
-    /** 빈이 아니다 — 위 {@link #createExecutor()} 의 이유. 그래서 여기서 들고 정리한다. */
-    private ThreadPoolTaskExecutor executor;
 
     /** 빈 이름을 문자열로 두 곳에 적지 않는다. 주입하는 쪽이 이것을 참조한다. */
     public static final String OPERATOR = "verifyJobOperator";
+
+    /** 빈이 아니다 — 아래 {@link #createExecutor()} 의 이유. 그래서 여기서 들고 정리한다. */
+    private ThreadPoolTaskExecutor executor;
 
     /**
      * <b>스레드 하나, 큐 없음. 그리고 빈이 아니다.</b>

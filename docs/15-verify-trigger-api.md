@@ -219,11 +219,13 @@ POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPING → ABANDONED
 `verification_runs` 행은 `verdict` 없이 열린 채 남는다(되읽기가 `verdict IS NOT NULL` 로
 안 집는 것이 맞다).
 
-**429 응답의 `detail` 에 막고 있는 `executionId` 를 싣는다.** 안 실으면 사람이 DB 를 뒤져야
-그 두 명령을 부를 수 있는데, 업무 포트는 기본으로 안 열려 있어 컨테이너에 들어가야 한다.
+**막고 있는 `executionId` 는 `GET /runs/running` 으로 얻는다.** 429 응답 본문에는 안 싣는다 —
+저장소 규약이 *"클라이언트에 나가는 문구는 `errorCode.getMessage()`"* 로 못 박았고, 인증이
+없는 API 라 자유 문장에 내부 값을 담지 않는 편이 맞다. 그 id 없이는 `stop`·`abandon` 을
+부를 방법이 없으므로 **조회 경로를 따로 연다.**
 
-에러 응답의 `detail` 은 **4xx 에서만** 채운다 — 그 문장은 우리가 쓴 것이라 내부 구조가 안
-샌다. 5xx 의 detail 에는 SQL 조각이 섞일 수 있고 이 API 에는 인증이 없다.
+응답은 성공도 실패도 `ResponseEnvelope` 다. 이것도 규약이고, batch 가 그것을 쓰려면
+`core` 에 있어야 해서 이 티켓이 `api` 모듈에서 옮겼다.
 
 ---
 

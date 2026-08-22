@@ -1,7 +1,7 @@
 // 만료 스케줄러가 도는 동안에는 검증 트리거가 거절되는지 확인합니다.
 package com.kafkick.batch.api;
 
-import static com.kafkick.batch.api.VerifyApiProbe.json;
+import static com.kafkick.batch.api.VerifyApiProbe.error;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
@@ -69,7 +69,7 @@ class VerifyTriggerSchedulerGuardTest {
         assertThat(response.statusCode())
                 .as("만료가 도는 동안의 판정은 근거가 검증 중에 바뀐다")
                 .isEqualTo(409);
-        assertThat(json(response).path("code").asText()).isEqualTo("VERIFICATION-012");
+        assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-012");
     }
 
     /**
