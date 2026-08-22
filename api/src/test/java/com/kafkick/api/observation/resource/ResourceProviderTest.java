@@ -269,7 +269,9 @@ class ResourceProviderTest {
         provider.snapshot();
         provider.snapshot();
 
-        assertThat(countOf(output.getAll(), "자원 원천 getActiveConnections 조회 실패")).isEqualTo(2);
+        // 총 2회만 보면 억제가 통째로 깨져 같은 원인이 두 번 찍혀도 통과한다. 원인별로 나눠 센다.
+        assertThat(countOf(output.getAll(), "IllegalStateException: first cause")).isEqualTo(1);
+        assertThat(countOf(output.getAll(), "IllegalArgumentException: second cause")).isEqualTo(1);
     }
 
     /** 첫 호출은 IllegalStateException, 다음부터는 IllegalArgumentException 을 던진다. */
