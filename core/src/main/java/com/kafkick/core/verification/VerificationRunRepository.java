@@ -51,4 +51,19 @@ public interface VerificationRunRepository {
      */
     Optional<VerificationRun> findByParams(
             LocalDateTime asOf, DatasetType dataset, ScopeType scope, int attempt);
+
+    /**
+     * 이 조합에서 <b>가장 최근에 닫힌</b> 실행. 없으면 빈 값이다.
+     *
+     * <p><b>지표가 이것을 읽는다.</b> 판정을 잡 실행 중에 게이지로 밀어 넣는 방식이 아니라,
+     * 주기적으로 이 행을 되읽어 채운다. 만료 배치는 5분 크론이라 프로세스 게이지가 재시작
+     * 뒤 곧 복구되지만, 검증은 <b>사람이 손으로, 드물게</b> 돌린다 — 컨테이너를 재배포하면
+     * 판정이 지표에서 사라지는데 이 테이블에는 남아 있어 <b>관제와 진실이 갈린다.</b>
+     * 금요일 {@code FAIL} 이 주말 재시작으로 없어지는 모양이다.
+     *
+     * <p><b>닫힌 것만 본다.</b> {@code finished_at} 이 없는 행은 돌다 말았거나 지금 도는
+     * 중이라 판정이 아니다. 그것을 섞으면 <i>"판정이 없다"</i> 와 <i>"아직 안 끝났다"</i> 가
+     * 한 값으로 뭉친다.
+     */
+    Optional<VerificationRun> findLatestClosed(DatasetType dataset, ScopeType scope);
 }

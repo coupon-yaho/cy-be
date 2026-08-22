@@ -85,8 +85,10 @@ class ResolvedBatchConfigTest {
             "batch.verify.replay-window-size",
             "batch.expire.chunk-size",
             "batch.expire.step-timeout-ms",
+            "batch.verify.metrics-timeout-ms",
             // @Scheduled 애너테이션 안에 있어 @Value 파라미터 스캔으로는 안 잡히던 키.
-            "batch.schedule.expire-cron");
+            "batch.schedule.expire-cron",
+            "batch.verify.metrics-refresh-ms");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.
@@ -283,7 +285,8 @@ class ResolvedBatchConfigTest {
             // 키 경로를 오타 내도 동작이 같고 로그도 없다. 이 테스트가 막으려던 그 모양이다.
             List<Executable> declared = new ArrayList<>();
             for (Class<?> config : List.of(
-                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class)) {
+                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
+                    VerificationMetricsRefresher.class)) {
                 declared.addAll(List.of(config.getDeclaredConstructors()));
                 declared.addAll(List.of(config.getDeclaredMethods()));
             }
@@ -292,8 +295,13 @@ class ResolvedBatchConfigTest {
                 // @Scheduled(cron = "${...}") 처럼 애너테이션 값에 박힌 키
                 if (executable instanceof Method method) {
                     Scheduled scheduled = method.getAnnotation(Scheduled.class);
-                    if (scheduled != null && !scheduled.cron().isBlank()) {
-                        Matcher matcher = placeholder.matcher(scheduled.cron());
+                    // cron 만 보면 fixedDelayString 에 박힌 키가 통째로 샌다 —
+                    // 실제로 VerificationMetricsRefresher 의 주기 키가 그렇게 빠져 있었다.
+                    String annotated = scheduled == null ? "" : String.join(" ",
+                            scheduled.cron(), scheduled.fixedDelayString(),
+                            scheduled.fixedRateString(), scheduled.initialDelayString());
+                    if (!annotated.isBlank()) {
+                        Matcher matcher = placeholder.matcher(annotated);
                         while (matcher.find()) {
                             String key = matcher.group(1);
                             assertThat(environment.containsProperty(key))

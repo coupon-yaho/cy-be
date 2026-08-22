@@ -144,6 +144,15 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 `BatchJobNotRunning` 이 15분 뒤 발화한다. 만료가 안 도는 것이 그 설정에서는 정상인데
 알림은 사고로 본다. 4단계에서 `inhibit_rules` 로 다룰 대상이 하나 더 늘었다.
 
+### 3·4단계 실측 (2026-08-22)
+
+| 확인 | 결과 |
+|---|---|
+| 규칙 수 | 6 → **8** (`promtool check config` 통과) |
+| 이름↔노출 대조 | `BatchMetricExposureTest` 가 새 이름 둘을 자동으로 잡는다 — 게이지를 미리 등록해서 잡을 안 돌려도 본문에 있다 |
+| 값 | `VerificationMetricExposureTest`. PASS=0 · FAIL=1 · 검출 건수 · 안 닫힌 실행 제외 · 판정 없는 행 제외 · **시드 행 제외** · 최신 선택 · 라벨 |
+| 돌연변이 | 넷을 심어 **전부 검출** — 모름을 0 으로 · `finished_at` 조건 제거 · 데이터셋 한 칸에 · 정렬 반전 |
+
 ### 3단계 — 검증 판정을 지표로 낸다
 
 ```
@@ -190,7 +199,7 @@ cy_verification_findings{dataset,scope}   검출 건수
 | `VerificationVerdictFailed` | `cy_verification_verdict == 1` | `data` | 판정은 났고 불일치가 있다 |
 | `VerificationMetricsUnknown` | `cy_verification_verdict != itself` | `server` | 판정을 지표로 못 내고 있다 |
 
-**`VerificationCannotJudge` 를 "잡 `FAILED`" 로 정의하면 안 된다.** Step 체인이
+**판정 알림을 "잡 `FAILED`" 로 정의하면 안 된다.** Step 체인이
 `finalizeRunStep → statsAggregateStep` 이라, 통계 Step 이 죽으면 **잡은 `FAILED` 인데
 verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 거짓이고, 실제 조치는
 *"쓰기를 멈추고 다시 실행"* 이다. 반대로 `verdict = FAIL` 인 실행은 잡이 `COMPLETED` 다 —
@@ -201,8 +210,15 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 "안 돌았다" 축이 없고, 지표가 `NaN` 이면 **어떤 알림도 안 뜬다** — CY-347 이
 `ExpireMetricsUnknown` 으로 값을 치른 그 자리다.
 
-`verifyJob` 의 `BatchJobRunningTooLong` 임계를 여기서 정한다 — 300만 전수라 만료와 소요가
-다르다. 부하 중(`batch` 미기동) `BatchJobNotRunning` 을 어떻게 다룰지도 여기서 정한다.
+**`verifyJob` 의 `BatchJobRunningTooLong` 은 안 만든다.** 300만 전수라 만료(300초)와 소요가
+다른데, **그 값을 잴 근거가 아직 없다.** 지금 임계를 정하면 근거 없는 수치가 규칙 파일에
+박히고 그것이 다음 사람에게 기준으로 읽힌다. 300만 건을 적재한 뒤 실제 소요를 재서
+그때 정한다 — `docs/13` §3 의 다른 실측 항목과 같은 자리다.
+
+**부하 중 `BatchJobNotRunning` 은 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
+<b>일부러</b> 없는 것이라 알림이 뜨는 게 맞다 — 규칙이 틀린 것이 아니다. `inhibit_rules` 로
+자동 억제하면 <i>진짜로 배치가 죽은 것</i>까지 함께 가려진다. 부하 구간에만 사람이
+`amtool silence add` 로 끄고, 끝나면 푼다.
 
 ---
 
@@ -212,11 +228,16 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 - **경로 분기** — `channel: server` / `channel: data` 로 갈리는 것을 확인한다.
   `severity` 는 관계없다 — warning 셋 중 둘이 서버 축이다
 - **지표 이름** — `BatchMetricExposureTest` 가 규칙 파일에서 이름을 뽑아 `/actuator/prometheus`
-  본문과 대조한다. 다만 그것이 보는 것은 **이름뿐**이다 — 리스너를 안 걸어도, 값이 늘
-  `NaN` 이어도 초록이다. **값이 실제로 설정되는지는 `VerifyJob*Test` 가 따로 본다**
+  본문과 대조한다. 다만 그것이 보는 것은 **이름뿐**이다 — 갱신기를 안 걸어도, 값이 늘
+  `NaN` 이어도 초록이다. **값은 `VerificationMetricExposureTest` 가 행을 심고 `refresh()`
+  를 부른 뒤 본문에서 읽어 본다**
 - **모름 축** — 판정 없는 실행이 `0` 이 아니라 `NaN` 인 것. `startRunStep` 을 실패시켜(예:
   `seedRunId` 누락) 확인한다
-- **배선 가드** — `verifyJob` 에 판정 리스너가 실제로 걸려 있는 것
+- **배선 가드** — `VerificationMetricsRefresher` 가 `@Scheduled` 로 실제 등록되는 것.
+  그리고 그 등록이 `batch.scheduling.enabled` 에 <b>안 묶이는 것</b> — 묶이면 스케줄러를
+  끈 채 `verifyJob` 을 돌리는 정상 절차에서 지표가 통째로 죽는다
+- **설정 키 생존** — `ResolvedBatchConfigTest` 가 `@Value` 와 `@Scheduled` 의 플레이스홀더를
+  전부 훑어 `.example` 에 실재하는지 본다. `fixedDelayString` 축이 안 훑기고 있었다
 
 ## 안 하기로 한 것과 이유
 

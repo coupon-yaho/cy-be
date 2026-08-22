@@ -186,6 +186,26 @@ batch:
     # 크게 잡을수록 왕복은 줄지만 한 번에 올라오는 이력 행이 는다 — 발급건당 평균 1.8행이다.
     replay-window-size: ${VERIFY_REPLAY_WINDOW_SIZE:50000}
 
+    # 판정을 되읽는 주기.
+    #
+    # 판정을 잡이 밀어 넣지 않고 verification_runs 에서 되읽는다. 만료는 5분 크론이라
+    # 프로세스 게이지가 재시작 뒤 곧 복구되지만, 검증은 **사람이 손으로 드물게** 돌린다 —
+    # 재배포하면 판정이 지표에서 사라지는데 DB 에는 남아 관제와 진실이 갈린다.
+    # 되읽으면 재시작해도 한 주기면 복구된다.
+    metrics-refresh-ms: ${VERIFY_METRICS_REFRESH_MS:60000}
+
+    # 그 되읽기의 데드라인.
+    #
+    # 스케줄러 스레드에서 트랜잭션 밖으로 돌면 queryTimeout 이 안 붙어 끊을 수단이 없다.
+    # 1000 이상이면서 1000 의 배수여야 한다 — 스프링의 트랜잭션 타임아웃이 초 단위라
+    # 나머지가 조용히 버려진다. 아니면 기동에서 거부한다.
+    metrics-timeout-ms: ${VERIFY_METRICS_TIMEOUT_MS:5000}
+
+# @Scheduled 가 둘이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다)와
+# VerificationMetricsRefresher.refresh(DB 를 읽는다). 기본값 1 이면 만료가 도는 내내
+# 되읽기가 멈추고, 되읽기가 커넥션을 기다리는 동안 만료 크론 발화가 밀린다.
+spring.task.scheduling.pool.size: ${BATCH_SCHEDULER_POOL_SIZE:2}
+
 logging:
   level:
     com.kafkick: DEBUG

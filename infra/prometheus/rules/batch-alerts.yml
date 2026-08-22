@@ -219,3 +219,60 @@ groups:
             어느 회차인지는 만료 잡의 WARN 로그에 회차 id 로 남습니다(회차 id 오름차순).
             **방치하면 그 회차의 대기 행을 매 주기 다시 훑습니다.** 만료가 끝나도 그 행들은
             ISSUED 로 남아 다음 실행의 스캔 대상이 되므로, 오래 두면 잡 시간이 늘어납니다.
+
+      # ──────────────────────────────────────────────────────────────────────
+      # 검증 판정. verdict = FAIL 은 **정상 종료**라 위 알림이 하나도 안 울린다 —
+      # 판정이 verification_runs 에 남을 뿐이라 누가 조회하기 전까지 아무도 모른다.
+      # 게이트 판정의 본체인데 통로가 없었다.
+      #
+      # ⚠️ 조건을 "잡 FAILED" 로 잡으면 안 된다. Step 체인이
+      #    finalizeRunStep → statsAggregateStep 이라, 통계 Step 이 죽으면 **잡은 FAILED 인데
+      #    판정은 이미 커밋돼 있다.** 반대로 verdict = FAIL 인 실행은 잡이 COMPLETED 다.
+      #    두 축이 서로 독립이므로 여기서는 **판정 자체**를 본다.
+      # ──────────────────────────────────────────────────────────────────────
+
+      - alert: VerificationVerdictFailed
+        # == 1 로 쓴다. > 0 으로 두면 판정이 셋이 되는 날 새 값도 FAIL 로 울린다 —
+        # 그 인코딩이 값 둘에 기대고 있다는 것은 VerdictCodeTest 가 지킨다.
+        expr: cy_verification_verdict == 1
+        # 판정은 온디맨드라 주기가 없다. 되읽기가 1분이므로 두 번은 봐야 한다.
+        for: 5m
+        labels:
+          severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: data
+        annotations:
+          # 라벨을 안 좁히면 first 가 어느 시계열을 집을지 보장되지 않는다 —
+          # 다른 데이터셋의 숫자나 NaN 이 찍히고, 사람이 그 숫자로 첫 판단을 한다.
+          summary: >-
+            검증이 불일치를 찾았습니다 ({{ $labels.dataset }} 검출
+            {{ with query (printf "cy_verification_findings{dataset='%s',scope='%s'}" $labels.dataset $labels.scope) }}{{ . | first | value | printf "%.0f" }}{{ end }}건)
+          description: >-
+            **판정은 났고 데이터가 어긋났습니다.** 배치가 실패한 것이 아닙니다 —
+            불일치를 판정으로 남기고 정상 종료하는 것이 설계입니다.
+            verification_findings 의 (finding_type, target_key) 를 봅니다.
+            CORRUPT 는 정답 800행과의 집합 비교라 FAIL 이 곧 사고는 아닙니다.
+
+      # NaN 을 감시한다. 이것이 없으면 "판정 감시가 꺼진 것" 을 아무도 모른다.
+      #
+      # verifyJob 은 크론이 없어 BatchJobNotRunning 같은 "안 돌았다" 축이 아예 없다.
+      # 그래서 지표가 NaN 이면 **어떤 알림도 뜨지 않는다** — CY-347 이 ExpireMetricsUnknown
+      # 으로 값을 치른 그 자리다.
+      #
+      # NaN 은 시리즈로 존재하므로 absent() 로는 못 잡는다. NaN != NaN 이 참인 것을 쓴다.
+      - alert: VerificationMetricsUnknown
+        expr: cy_verification_verdict != cy_verification_verdict
+        # 기동 직후에는 아직 되읽기 전이라 NaN 이 정상이다. 그 구간을 넘긴다.
+        # 그리고 "그 데이터셋을 아직 한 번도 안 돌렸다" 도 여기 걸린다 — 그것이 맞다.
+        # 검증을 한 번도 안 돌린 채 게이트를 통과했다고 믿는 것이 이 알림이 막는 것이다.
+        for: 30m
+        labels:
+          severity: warning
+          # 판정을 못 내는 것은 데이터가 아니라 배선·설정 문제다.
+          channel: server
+        annotations:
+          summary: "검증 판정을 지표로 못 내고 있습니다 ({{ $labels.dataset }})"
+          description: >-
+            **판정 감시가 꺼져 있습니다.** 그 데이터셋으로 닫힌 검증 실행이 아직 없거나,
+            되읽기가 실패하고 있습니다. 후자면 배치 로그에 WARN 이 남습니다.
+            이 동안 VerificationVerdictFailed 는 울릴 수 없습니다.

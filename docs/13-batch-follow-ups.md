@@ -196,6 +196,10 @@ cy_verification_verdict{dataset,scope}    마지막 실행의 판정 (PASS=0, FA
 cy_verification_findings{dataset,scope}   검출 건수
 ```
 
+> **접두는 `cy_` 다.** 지금 나가는 것 전부가 그 접두이고, 다른 영역이 배치 지표를 더할
+> 때도 맞춘다(관제 파트 OBS-23 문의로 정했다). Micrometer 이름의 `.` 은 `_` 로 변환되므로
+> 처음부터 `_` 로 적는 편이 헷갈림이 적다.
+
 > **이름에 `_total` 을 붙이면 안 된다.** 처음에는 `cy_verification_findings_total` 로 적어
 > 뒀는데, 그것은 카운터 규약이라 Micrometer 의 Prometheus 렌더러가 **게이지에서는 떼어
 > 낸다** — 코드가 부르는 이름과 관제가 보는 이름이 갈려 알림이 영원히 안 뜬다.
@@ -210,7 +214,7 @@ cy_verification_findings{dataset,scope}   검출 건수
 
 | 알림 | 조건 | 대응 |
 |---|---|---|
-| `VerificationCannotJudge` | 잡 `FAILED` | **서버를 본다** — 데이터가 움직였거나 런타임이 안 멈췄다 |
+| ~~`VerificationCannotJudge`~~ | ~~잡 `FAILED`~~ | **안 만들었다.** 통계 Step 이 죽으면 잡은 `FAILED` 인데 판정은 이미 커밋돼 있어 *"판정을 못 냈다"* 가 거짓이 된다. 두 축이 독립이라 지표로 본다 — `VerificationMetricsUnknown`(`docs/14` 4단계) |
 | `VerificationVerdictFailed` | `verdict = FAIL` | **데이터를 본다** — 판정은 났고 불일치가 있다 |
 
 **CY-347 에서 값을 치른 것 셋을 그대로 적용한다.**
@@ -221,6 +225,11 @@ cy_verification_findings{dataset,scope}   검출 건수
 2. **두 지표를 따로 `set` 하지 않는다.** 스크레이프가 사이에 끼면 `verdict` 는 새 실행,
    `findings` 는 앞 실행 값인 샘플이 나온다. 한 스냅샷으로 묶는다.
 3. **알림 식에서 계산하지 않는다.** 필요한 값은 코드에서 만들어 <b>한 시계열</b>로 낸다.
+
+> **3단계는 리스너가 아니라 주기 되읽기로 갔다.** 아래 리스너 설계는 그 결정 전의
+> 초안이다 — 최종 구현과 근거는 `docs/14` 3단계에 있다. 검증은 사람이 손으로 드물게
+> 돌려서, 프로세스 게이지로 두면 재배포에 판정이 사라지는데 DB 에는 남아 관제와 진실이
+> 갈린다. 그리고 되읽기는 **시드가 심은 기준 행을 걸러야 한다**(`origin='BATCH'`).
 
 **붙일 자리** — `verifyJob` 에는 지금 `JobExecutionListener` 가 <b>하나도 없다</b>
 (`expireJob` 과 다르다).
