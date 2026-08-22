@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -297,25 +298,58 @@ class KafkaTopicProvisionerTest {
     @Test
     @DisplayName("종료 중이면 PENDING 이 아니라 중단으로 남는다")
     void shutdownLeavesAnHonestState() throws Exception {
+        // 경보 임계치를 99 로 둬서 아직 PENDING 인 채로 백오프에 들어가게 한다.
+        assertThat(shutDownWhileRetrying(99).status())
+                .as("종료 중 전환이 실패하면 PENDING 에 남아 아무도 경보를 못 건다")
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(shutDownWhileRetrying(99).cause())
+                .as("우리가 그만둔 것을 '브로커 대기중' 으로 내면 운영자가 기다리기만 한다")
+                .isEqualTo("shutdown");
+    }
+
+    /**
+     * 경보 임계치를 지나면 상태는 이미 {@code UNAVAILABLE/unconfirmed} 다. 그 뒤에 종료하면
+     * <b>PENDING 만 보는 전환은 아무것도 하지 않고</b> 사유가 "브로커 대기중" 으로 남는다 —
+     * 방금 고친 것의 나머지 절반이다. 화면은 여전히 "기다리면 낫는다" 로 안내한다.
+     */
+    @Test
+    @DisplayName("경보를 지난 뒤 종료해도 사유가 중단으로 바뀐다")
+    void shutdownOverwritesTheAlertedCause() throws Exception {
+        KafkaTopicProvisioner.Snapshot after = shutDownWhileRetrying(1);
+
+        assertThat(after.status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(after.cause())
+                .as("경보가 이미 걸린 뒤 종료하면 사유가 unconfirmed 에 그대로 남는다")
+                .isEqualTo("shutdown");
+    }
+
+    /**
+     * 재시도 중인 프로비저너를 종료시키고 마지막 스냅샷을 준다.
+     *
+     * <p>제출 직후 {@code shutdownNow()} 를 부르면 작업이 아직 큐에 있어 <b>취소</b>될 수 있고,
+     * 그러면 상태가 PENDING 으로 남아 테스트가 타이밍에 따라 다르게 답한다. 래치로 첫 시도가
+     * 실제로 들어온 것을 확인한 뒤에 종료한다.
+     */
+    private static KafkaTopicProvisioner.Snapshot shutDownWhileRetrying(int alertAfterAttempts)
+            throws Exception {
         var pool = Executors.newSingleThreadExecutor();
-        KafkaTopicProvisioner provisioner = new KafkaTopicProvisioner(
-                () -> ProvisionOutcome.UNCONFIRMED, pool, 99, Duration.ofSeconds(30));
+        CountDownLatch attempted = new CountDownLatch(1);
+        KafkaTopicProvisioner provisioner = new KafkaTopicProvisioner(() -> {
+            attempted.countDown();
+            return ProvisionOutcome.UNCONFIRMED;
+        }, pool, alertAfterAttempts, Duration.ofMinutes(5));
         try {
-            Future<?> running = pool.submit(provisioner::provisionOnce);
-            Thread.ofVirtual().start(() -> { }).join();
+            pool.submit(provisioner::provisionOnce);
+            assertThat(attempted.await(5, TimeUnit.SECONDS))
+                    .as("작업이 시작조차 안 했으면 이 테스트는 종료 경로를 보지 못한다")
+                    .isTrue();
             pool.shutdownNow();
             assertThat(pool.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
-            running.cancel(true);
         } finally {
             pool.shutdownNow();
         }
+        return provisioner.snapshot();
 
-        assertThat(provisioner.status())
-                .as("종료 중 전환이 실패하면 PENDING 에 남아 아무도 경보를 못 건다")
-                .isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(provisioner.snapshot().cause())
-                .as("우리가 그만둔 것을 '브로커 대기중' 으로 내면 운영자가 기다리기만 한다")
-                .isEqualTo("shutdown");
     }
 
     private KafkaTopicProvisioner provisioner(

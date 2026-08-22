@@ -58,10 +58,10 @@ class KafkaMeterScrapeContractTest {
      * 같은 6 으로 보인다. 이 스택에는 로그를 모아 보는 도구가 없어서 "로그로 가르라"는 지침이
      * 화면에서는 닿지 않는다 — 그래서 원인을 지표로 낸다.
      *
-     * <p>꼬리표 값은 등록 시점에 고정되므로 닫힌 3값을 각각 한 시계열로 내고 현재 원인만 1 이다.
+     * <p>꼬리표 값은 등록 시점에 고정되므로 닫힌 4값을 각각 한 시계열로 내고 현재 원인만 1 이다.
      */
     @Test
-    @DisplayName("확인 실패의 원인이 닫힌 3개 시계열로 나온다")
+    @DisplayName("확인 실패의 원인이 닫힌 4개 시계열로 나온다")
     void theCauseOfTheFailureIsScrapable() {
         provisioner = new KafkaTopicProvisioner(
                 () -> ProvisionOutcome.MISMATCHED, executor, 1, Duration.ofMillis(1));

@@ -248,15 +248,18 @@ public class KafkaTopicConfig {
         return provisioner == null ? Double.NaN : provisioner.provisionedValue();
     }
 
-    /** 프로비저너가 없다는 것은 이 회차가 프로비저닝을 하지 않기로 했다는 뜻이다 — 실패가 아니다. */
-    /** 상태와 원인을 한 번에 읽는다 — 둘을 따로 읽으면 한 scrape 안에서 어긋난다. */
+    /**
+     * 상태와 원인을 한 번에 읽는다 — 둘을 따로 읽으면 한 scrape 안에서 어긋난다.
+     *
+     * <p>프로비저너가 없다는 것은 이 회차가 프로비저닝을 하지 않기로 했다는 뜻이다 — 실패가 아니다.
+     */
     private static KafkaTopicProvisioner.Snapshot snapshot(KafkaTopicProvisioner provisioner) {
         return provisioner == null
                 ? new KafkaTopicProvisioner.Snapshot(SourceStatus.N_A, "none")
                 : provisioner.snapshot();
     }
 
-    /** 꼬리표 값은 등록 시점에 고정된다 — 그래서 닫힌 3값을 각각 한 시계열로 낸다. */
+    /** 꼬리표 값은 등록 시점에 고정된다 — 그래서 닫힌 4값을 각각 한 시계열로 낸다. */
     private static final List<String> PROVISION_CAUSES = List.of("none", "unconfirmed", "mismatched", "shutdown");
 
     /**

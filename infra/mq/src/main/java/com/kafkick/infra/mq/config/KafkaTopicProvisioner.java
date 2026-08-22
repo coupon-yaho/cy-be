@@ -155,8 +155,9 @@ public class KafkaTopicProvisioner implements ApplicationRunner {
                 // 종료 중이다. PENDING 으로 두면 "아직 확인 전" 이라 경보가 안 걸린다 —
                 // 실제로는 확인을 포기한 것이다. 이미 VALID 면 덮지 않는다.
                 // compareAndSet 은 참조 비교다 — 기대값을 새로 만들면 절대 일치하지 않는다.
+                // PENDING 만 보면 경보를 지난 뒤 종료할 때 사유가 "브로커 대기중" 으로 남는다.
                 Snapshot current = state.get();
-                if (current.status() == SourceStatus.PENDING) {
+                if (current.status() != SourceStatus.VALID) {
                     state.compareAndSet(current, new Snapshot(SourceStatus.UNAVAILABLE, "shutdown"));
                 }
                 return;
@@ -192,7 +193,7 @@ public class KafkaTopicProvisioner implements ApplicationRunner {
     }
 
     /**
-     * 마지막 실패의 종류. 상태 미터의 꼬리표 값이다 — <b>닫힌 3값</b>이라 시계열이 늘지 않는다.
+     * 마지막 실패의 종류. 상태 미터의 꼬리표 값이다 — <b>닫힌 4값</b>이라 시계열이 늘지 않는다.
      *
      * <p>{@code unconfirmed} 는 재기동으로 나을 수 있고, {@code mismatched} 는 낫지 않는다
      * (토픽을 다시 만들거나 재배치해야 한다).
