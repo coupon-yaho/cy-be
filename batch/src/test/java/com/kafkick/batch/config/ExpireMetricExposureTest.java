@@ -187,6 +187,7 @@ class ExpireMetricExposureTest {
         assertThat(metric(body, "cy_expire_unexplained_pending"))
                 .as("관제가 빼지 않는다. 여기서 이미 뺀 값이 나가야 스크레이프 틈이 없다")
                 .isEqualTo(1.0);
+        assertThat(metric(body, "cy_expire_blocked_coupons")).isEqualTo(1.0);
     }
 
     /**
@@ -257,6 +258,7 @@ class ExpireMetricExposureTest {
         assertThat(metric(body, "cy_expire_unexplained_pending"))
                 .as("여기서 2.0 이 나오면 접속 설정 사고가 '서버를 봐라' critical 로 나간다")
                 .isNaN();
+        assertThat(metric(body, "cy_expire_pending")).isNaN();
         assertThat(metric(body, "cy_expire_blocked_pending")).isNaN();
         assertThat(metric(body, "cy_expire_blocked_coupons"))
                 .as("Step 을 시작도 못 했으니 막힌 회차를 **모른다**. 0 은 '없다' 라 거짓말이다")
@@ -296,7 +298,9 @@ class ExpireMetricExposureTest {
         assertThat(metric(body, "cy_expire_pending"))
                 .as("**NaN 이면 정상 주기가 감시를 끈다.** 태스클릿과 리스너가 같은 폭을 봐야 한다")
                 .isZero();
+        assertThat(metric(body, "cy_expire_blocked_pending")).isZero();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
+        assertThat(metric(body, "cy_expire_blocked_coupons")).isZero();
     }
 
     /**
@@ -335,6 +339,8 @@ class ExpireMetricExposureTest {
                         + "트리거가 주기 실행의 감시를 끈다")
                 .isEqualTo(1.0);
         assertThat(metric(body, "cy_expire_pending")).isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_blocked_pending")).isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
     }
 
     /** 기한이 남은 발급건 하나. 미래 asOf 의 컷 안에는 들어온다. */
