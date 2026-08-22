@@ -26,12 +26,13 @@ class StorageCouponArchitectureTest {
     @Test
     void issuancePersistenceDoesNotChooseBusinessErrorByStatusOrEvent()
             throws IOException {
-        Path repositoryDirectory = Path.of(
+        Path storageDbDirectory = Path.of(
                 "src", "main", "java", "com", "kafkick", "storage",
-                "db", "coupon", "repository"
+                "db"
         );
-        try (var sources = Files.walk(repositoryDirectory)) {
+        try (var sources = Files.walk(storageDbDirectory)) {
             for (Path sourcePath : sources
+                    .filter(StorageCouponArchitectureTest::isRepositorySource)
                     .filter(path -> path.toString().endsWith(".java"))
                     .toList()) {
                 String source = Files.readString(sourcePath);
@@ -41,5 +42,12 @@ class StorageCouponArchitectureTest {
                         .noneMatch(source::contains);
             }
         }
+    }
+
+    private static boolean isRepositorySource(Path path) {
+        return path.toString().contains(
+                java.io.File.separator + "repository"
+                        + java.io.File.separator
+        );
     }
 }

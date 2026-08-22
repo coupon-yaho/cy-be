@@ -168,6 +168,8 @@ class CouponIssueServiceTest {
                 issuanceHistoryRepository,
                 couponCodeGenerator
         );
+        verify(couponStockRepository, never())
+                .occupyAfterLock(any(), any());
     }
 
     @Test

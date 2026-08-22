@@ -3,10 +3,16 @@ package com.kafkick.batch.coupon.expiration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component
+@ConditionalOnProperty(
+        prefix = "batch.scheduling",
+        name = "enabled",
+        havingValue = "true"
+)
 public class CouponExpirationScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(

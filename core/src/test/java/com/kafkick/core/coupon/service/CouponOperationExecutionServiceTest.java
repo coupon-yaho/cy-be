@@ -167,7 +167,11 @@ class CouponOperationExecutionServiceTest {
         )).thenAnswer(invocation -> {
             java.util.function.Supplier<CouponUseResult> operation =
                     invocation.getArgument(3);
-            return operation.get();
+            CouponUseResult result = operation.get();
+            java.util.function.Function<CouponUseResult, Long> targetId =
+                    invocation.getArgument(5);
+            assertThat(targetId.apply(result)).isEqualTo(100L);
+            return result;
         });
         when(couponUseService.use(any())).thenReturn(expected);
         CouponOperationExecutionService service = service();
