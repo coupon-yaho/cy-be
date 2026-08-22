@@ -77,7 +77,7 @@ coupon-yaho
 │   └── src/testFixtures/java/…/db       테스트 컨테이너 설정, @RepositoryTest
 │
 ├── infra
-│   ├── mq                               Kafka 어댑터
+│   ├── mq                               Kafka 어댑터 (토픽·프로듀서 설정 계층)
 │   └── redis                            Redis 어댑터
 │
 └── build.gradle, settings.gradle
@@ -85,9 +85,10 @@ coupon-yaho
 
 ### 설정 파일
 
-`application.yml`, `storage.yml`, `redis.yml` 등 실행용 설정은 커밋하지 않는다.
+`application.yml`, `storage.yml`, `redis.yml`, `kafka.yml` 등 실행용 설정은 커밋하지 않는다.
 클론 후 일부 파일만 고르지 말고 아래 명령으로 모든 `.yml.example`을 복사해야 앱이 뜬다.
-특히 `redis.yml`은 API가 필수 import하므로 빠지면 기동이 중단된다.
+**설정 파일이 늘어나는 브랜치를 받은 뒤에도 다시 돌린다** — `spring.config.import`는 optional이
+아니라서 파일 하나가 없으면 기동이 중단된다(`redis.yml`·`kafka.yml`이 그렇다).
 
 ```bash
 find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;

@@ -7,6 +7,7 @@ spring:
       - classpath:management.yml   # CY-09
       - classpath:observation.yml  # OBS-3 · OBS-4 · OBS-8
       - classpath:redis.yml
+      - classpath:kafka.yml        # OBS-17
 
   jackson:
     default-property-inclusion: non_null

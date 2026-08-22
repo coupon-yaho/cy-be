@@ -3,10 +3,11 @@ package com.kafkick.core.observation;
 import com.kafkick.core.consistency.ConsistencyGapType;
 
 /**
- * batch 가 등록하고 조회 API(OBS-6)가 읽는 도메인 Gauge 이름. 양쪽이 문자열을 각자 옮겨 적으면
+ * batch·infra:mq 가 등록하고 조회 API(OBS-6)가 읽는 도메인 Gauge 이름. 양쪽이 문자열을 각자 옮겨 적으면
  * 한쪽만 바뀌어도 예외 없이 "값 없음" 만 오고 앱은 정상 기동한다 — 로그도 없이 화면만 빈다.
  *
- * <p>등록하는 쪽은 batch 이고 읽는 쪽은 api 라 두 모듈이 함께 보는 core 에 둔다.
+ * <p>읽는 쪽이 api 면 이름은 여기다 — 등록 주체가 batch 든 infra:mq 든 상관없다. api 는 그
+ * 모듈들을 {@code runtimeOnly} 로만 의존해서 저쪽 상수를 컴파일 타임에 볼 수 없기 때문이다.
  * {@code api/observation/MeterNames} 는 api 가 직접 만드는 HTTP 미터의 자리다.
  *
  * <p><b>값과 상태를 항상 짝으로 낸다.</b> Prometheus 샘플은 숫자 하나뿐이라 "값 없음" 의 이유
@@ -71,10 +72,47 @@ public final class DomainMeterNames {
      */
     public static final String CONSISTENCY_SOURCE_SKEW_SECONDS = "app.consistency.source.skew.seconds";
 
-    // TODO(OBS-17 후속 티켓): Kafka persist lag 미터가 여기 하나 더 붙는다. 관측-Batch 포트 계약은
-    //   batch 산출물을 4종(정합성 gap · 대기열 · 재고 · Kafka persist lag)으로 적는데, 이 티켓은
-    //   앞의 3종만 낸다 — lag 은 AdminClient 배선이 필요하고 그건 OBS-17 소유다. 그 통로가 열리는
-    //   시점은 BatchKafkaLagAssumptionTest 가 알려 준다.
+    // TODO(OBS-17 후속 티켓, @rudwnlee2): Kafka persist lag 미터가 여기 하나 더 붙는다. 관측-Batch
+    //   포트 계약은 batch 산출물을 4종(정합성 gap · 대기열 · 재고 · Kafka persist lag)으로 적는데
+    //   지금은 앞의 3종뿐이다 — lag 은 AdminClient 배선이 필요하고, OBS-17 은 프로듀서까지만 세웠다.
+    //   그 통로가 열리는 시점은 BatchKafkaLagAssumptionTest 가 알려 준다.
+
+    // ── Kafka 계층(OBS-17). 등록은 infra:mq 이고 읽는 쪽은 api 라 여기 둔다 ──────────────
+    //
+    // api 는 infra:mq 를 runtimeOnly 로만 의존해서 그 모듈의 상수를 컴파일 타임에 볼 수 없다.
+    // 이름을 저쪽에 두면 조회하는 쪽이 문자열을 옮겨 적는 것 말고는 방법이 없다.
+
+    /**
+     * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
+     *
+     * <p>0 이 아니면 화면의 attempt 수치가 이미 비어 있다는 뜻이다. 다만 이 값으로 TPS·성공률을
+     * 보정하면 안 된다 — attempt 는 판정 원천이 아니다.
+     */
+    public static final String KAFKA_ATTEMPT_PUBLISH_FAILURES = "app.kafka.attempt.publish.failures";
+
+    /**
+     * 토픽 선언이 브로커에 반영됐는지. 반영 확인 전에는 값이 없고(NaN) 이유는 상태 미터가 낸다.
+     *
+     * <p>확인되지 않은 채로 발급이 시작되면 브로커가 토픽을 대신 만든다
+     * ({@code auto.create.topics.enable} 기본값 true, RF 1). 그러면 RF3·ISR2·파티션6 계약이
+     * 무효가 되고 <b>RF 는 되돌릴 수 없다</b>.
+     */
+    public static final String KAFKA_TOPICS_PROVISIONED = "app.kafka.topics.provisioned";
+
+    /**
+     * 위 값이 없는 이유. {@code N_A}=프로비저닝을 끈 회차 · {@code PENDING}=아직 확인 전 ·
+     * {@code UNAVAILABLE}=확인하지 못했다({@link #KAFKA_TOPICS_PROVISIONED_CAUSE} 가 원인을 가른다) · {@code VALID}=반영됨.
+     */
+    public static final String KAFKA_TOPICS_PROVISIONED_STATE = "app.kafka.topics.provisioned.state";
+
+    /**
+     * 확인 실패의 <b>종류</b>. {@link #TAG_CAUSE} 가 {@code none · unconfirmed · mismatched}
+     * 셋으로 닫혀 있고, 현재 원인만 1 이다.
+     *
+     * <p>상태 미터의 {@code UNAVAILABLE} 하나로는 "브로커가 아직 안 떴다"(재기동·대기로 낫는다)와
+     * "선언과 다른 토픽이 이미 있다"(토픽을 다시 만들어야 낫는다)가 같은 값으로 보인다.
+     */
+    public static final String KAFKA_TOPICS_PROVISIONED_CAUSE = "app.kafka.topics.provisioned.cause";
 
     /**
      * batch 가 믿고 있는 발급 엔진 버전(V1=1 · V2=2 · V3=3).
@@ -109,6 +147,18 @@ public final class DomainMeterNames {
     public static final String TAG_PHASE = "phase";
 
     public static final String PHASE_LIVE = "live";
+
+    /** attempt 발행 실패의 원인. 값은 닫힌 집합이라 예외 종류가 늘어도 시계열이 안 늘어난다. */
+    public static final String TAG_REASON = "reason";
+
+    /**
+     * 확인 실패의 종류. 값은 {@code none · unconfirmed · mismatched · shutdown} 넷으로 닫혀 있다.
+     * {@code shutdown} 은 브로커 문제가 아니라 <b>우리가 종료 중이라 그만둔 것</b>이다.
+     */
+    public static final String TAG_CAUSE = "cause";
+
+    /** 미터가 가리키는 토픽 이름. */
+    public static final String TAG_TOPIC = "topic";
 
     /** 수집 경로 라벨. 값은 {@link #PATH_CONSISTENCY} · {@link #PATH_STOCK} 둘로 고정이다. */
     public static final String TAG_COLLECT_PATH = "path";

@@ -2,4 +2,14 @@ dependencies {
     implementation project(':core')
 
     implementation 'org.springframework.kafka:spring-kafka'
+
+    // 이벤트 직렬화가 core 의 골든 픽스처와 같은 매퍼를 타야 해서 JsonMapper 를 컴파일 타임에 본다.
+    implementation 'org.springframework.boot:spring-boot-starter-jackson'
+
+    // 실패 카운터와 Kafka 클라이언트 메트릭. 레지스트리 구현은 api 의 actuator 가 준다.
+    implementation 'io.micrometer:micrometer-core'
+
+    // 미터 이름이 실제 scrape 출력에서 어떻게 보이는지 대조하는 계약 테스트가 쓴다.
+    // 점→밑줄 변환과 Counter 의 _total 접미사가 어긋나면 조회 쪽이 조용히 빈다.
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
 }
