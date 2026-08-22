@@ -80,6 +80,12 @@ hs_err_pid*
 replay_pid*
 *.hprof
 
+### 파이썬
+# CY-359 가 mock 알림 리시버(infra/alertmanager/alert-sink.py)로 저장소 최초의 파이썬
+# 파일을 들여왔다. CI 의 py_compile 스텝과 로컬 실행이 여기에 바이트코드를 남긴다.
+__pycache__/
+*.py[cod]
+
 ### OS
 .DS_Store
 Thumbs.db
