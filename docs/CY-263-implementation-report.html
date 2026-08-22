@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CY-263 · RuntimeConfigStore Redis Adapter 구현 보고서</title>
+  <style>
+    :root {
+      --ink:#17202a; --muted:#637083; --line:#dce3ea; --paper:#fff;
+      --navy:#172b4d; --blue:#1769aa; --blue-soft:#eaf4fb; --green:#157347;
+      --green-soft:#eaf7f0; --amber:#a85d00; --amber-soft:#fff4df; --red:#b42318;
+      --red-soft:#fff0ee; --code:#102033; --bg:#f3f6f8;
+    }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:var(--blue); text-decoration:none; }
+    .shell { max-width:1180px; margin:auto; padding:36px 28px 80px; }
+    .hero { color:white; padding:48px; border-radius:22px; background:linear-gradient(135deg,#14213d,#174f78 70%,#1a7a78); box-shadow:0 18px 55px #17304c28; }
+    .eyebrow { font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; opacity:.78; }
+    h1 { margin:10px 0 12px; font-size:clamp(30px,5vw,52px); line-height:1.12; letter-spacing:-.04em; }
+    .hero p { max-width:800px; margin:0; color:#dbeaf3; font-size:17px; }
+    .meta { display:flex; flex-wrap:wrap; gap:9px; margin-top:25px; }
+    .chip { padding:6px 11px; border:1px solid #ffffff35; border-radius:999px; background:#ffffff12; font-size:12px; font-weight:700; }
+    nav { position:sticky; top:10px; z-index:3; margin:20px 0; padding:12px 16px; border:1px solid var(--line); border-radius:14px; background:#ffffffed; backdrop-filter:blur(10px); box-shadow:0 7px 20px #22364d12; }
+    nav a { display:inline-block; margin:4px 16px 4px 0; color:#435064; font-size:13px; font-weight:700; }
+    section { margin-top:22px; padding:30px; border:1px solid var(--line); border-radius:18px; background:var(--paper); box-shadow:0 7px 24px #2032480a; }
+    h2 { margin:0 0 18px; color:var(--navy); font-size:26px; line-height:1.25; letter-spacing:-.025em; }
+    h3 { margin:24px 0 8px; color:#243852; font-size:17px; }
+    p { margin:8px 0 12px; }
+    .lead { color:#455268; font-size:16px; }
+    .grid { display:grid; gap:14px; grid-template-columns:repeat(3,1fr); }
+    .grid.two { grid-template-columns:repeat(2,1fr); }
+    .card { padding:18px; border:1px solid var(--line); border-radius:14px; background:#fbfcfd; }
+    .card strong { display:block; margin-bottom:5px; color:var(--navy); font-size:16px; }
+    .metric { font-size:28px; font-weight:850; color:var(--blue); line-height:1.1; }
+    .muted { color:var(--muted); }
+    .flow { display:grid; grid-template-columns:1fr 38px 1fr 38px 1fr; align-items:stretch; gap:7px; margin:20px 0; }
+    .step { padding:18px 15px; border:1px solid #cddbe7; border-radius:14px; background:var(--blue-soft); }
+    .step b { display:block; color:var(--navy); margin-bottom:5px; }
+    .arrow { display:grid; place-items:center; color:#7790a9; font-size:22px; font-weight:800; }
+    .callout { margin:16px 0; padding:15px 18px; border-left:4px solid var(--blue); border-radius:5px 12px 12px 5px; background:var(--blue-soft); }
+    .callout.warn { border-color:var(--amber); background:var(--amber-soft); }
+    .callout.risk { border-color:var(--red); background:var(--red-soft); }
+    .callout.ok { border-color:var(--green); background:var(--green-soft); }
+    code { padding:2px 5px; border-radius:5px; background:#edf1f5; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    pre { overflow:auto; margin:13px 0; padding:18px; border-radius:13px; color:#dce9f4; background:var(--code); font:12px/1.62 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    pre code { padding:0; color:inherit; background:none; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:13px; }
+    th,td { padding:11px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:#526073; background:#f7f9fb; font-size:12px; }
+    .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; font-weight:800; white-space:nowrap; }
+    .done { color:var(--green); background:var(--green-soft); }
+    .defer { color:var(--amber); background:var(--amber-soft); }
+    .scope { color:var(--blue); background:var(--blue-soft); }
+    ul { padding-left:21px; }
+    footer { padding:28px 4px 0; color:var(--muted); text-align:center; font-size:12px; }
+    @media (max-width:820px) { .grid,.grid.two { grid-template-columns:1fr; } .flow { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); } .hero { padding:32px 25px; } section { padding:23px 19px; } nav { position:static; } }
+    @media print { body { background:white; } .shell { max-width:none; padding:0; } .hero,section { box-shadow:none; break-inside:avoid; } nav { display:none; } a { color:inherit; } }
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="hero">
+    <div class="eyebrow">Implementation Report · OBS-19</div>
+    <h1>CY-263<br>RuntimeConfigStore Redis Adapter</h1>
+    <p>엔진 버전·릴리스 단계·대기열 모드를 여러 애플리케이션 인스턴스에서 일관되게 변경하기 위한 Redis 저장소 어댑터 구현 결과와 운영 경계를 정리한다.</p>
+    <div class="meta"><span class="chip">branch feature/CY-263</span><span class="chip">base a03877d</span><span class="chip">Redis Lua CAS</span><span class="chip">LKG fallback</span><span class="chip">audit 1,000</span></div>
+  </header>
+
+  <nav aria-label="보고서 목차">
+    <a href="#summary">요약</a><a href="#architecture">구조</a><a href="#write">쓰기</a><a href="#read">읽기·LKG</a><a href="#audit">감사</a><a href="#errors">오류 계약</a><a href="#deploy">배포</a><a href="#tests">검증</a><a href="#limits">남은 경계</a>
+  </nav>
+
+  <section id="summary">
+    <h2>1. 실행 요약</h2>
+    <p class="lead">raw Redis 키 접근을 어댑터 내부로 가두고, revision CAS와 장애 폴백을 <code>RuntimeConfigStore</code> 포트 하나로 제공했다.</p>
+    <div class="grid">
+      <div class="card"><div class="metric">1</div><strong>공유 설정 키</strong><span class="muted"><code>config:runtime</code>을 단일 권위값으로 사용한다.</span></div>
+      <div class="card"><div class="metric">CAS</div><strong>경쟁 변경 보호</strong><span class="muted">Lua 한 번으로 revision 비교와 설정 교체를 수행한다.</span></div>
+      <div class="card"><div class="metric">1,000</div><strong>최근 변경 감사</strong><span class="muted">성공한 설정 변경의 before/after와 요청 식별자를 보존한다.</span></div>
+    </div>
+    <div class="callout ok"><strong>결과:</strong> 관리자 두 명이 같은 revision을 기준으로 동시에 변경해도 한 명만 성공하며, 충돌 응답에는 현재 revision이 포함된다.</div>
+  </section>
+
+  <section id="architecture">
+    <h2>2. 구성과 책임 경계</h2>
+    <div class="flow">
+      <div class="step"><b>API / 후속 관리자 기능</b><span>포트만 호출하고 Redis 키를 알지 못한다.</span></div><div class="arrow">→</div>
+      <div class="step"><b>RuntimeConfigStore</b><span><code>get</code>, <code>update</code>, <code>getLastKnownGood</code></span></div><div class="arrow">→</div>
+      <div class="step"><b>Redis 어댑터</b><span>키·Lua·JSON 포맷·감사 로그·LKG를 소유한다.</span></div>
+    </div>
+    <div class="grid two">
+      <div class="card"><strong>프로덕션</strong><code>RedisRuntimeConfigStore</code>를 자동설정한다. API는 <code>runtimeOnly project(':infra:redis')</code>로 어댑터 구현을 컴파일 시점에 직접 참조하지 않는다.</div>
+      <div class="card"><strong>로컬·테스트 계약</strong><code>InMemoryRuntimeConfigStore</code>는 CAS 가능한 테스트 구현, <code>ReadOnlyRuntimeConfigStore</code>는 저장 없는 거짓 성공을 금지하는 구현이다.</div>
+    </div>
+    <p>저장 JSON은 웹 전역 <code>ObjectMapper</code>와 분리된 전용 매퍼를 사용한다. API 응답 naming 설정이 바뀌어도 Redis 영속 포맷이 함께 바뀌지 않는다.</p>
+  </section>
+
+  <section id="write">
+    <h2>3. 쓰기 경로 — revision CAS</h2>
+    <div class="flow">
+      <div class="step"><b>입력</b><span>command + expectedRevision + requestId</span></div><div class="arrow">→</div>
+      <div class="step"><b>Lua</b><span>타입·JSON·정수 revision 검사 후 비교</span></div><div class="arrow">→</div>
+      <div class="step"><b>결과</b><span>성공, 현재 revision 충돌, missing, corrupted</span></div>
+    </div>
+    <pre><code>local rev = tonumber(currentConfig['revision'])
+if rev == nil or rev &lt; 0 or rev ~= math.floor(rev) then
+  return -3                 -- 손상된 저장값
+end
+if rev ~= tonumber(ARGV[1]) then
+  return rev                -- 충돌: 현재 revision 반환
+end
+redis.call('SET', KEYS[1], ARGV[2])
+redis.call('RPUSH', KEYS[2], ARGV[3])
+redis.call('LTRIM', KEYS[2], -1000, -1)</code></pre>
+    <table>
+      <thead><tr><th>Lua 반환</th><th>의미</th><th>Java 처리</th></tr></thead>
+      <tbody><tr><td><code>-1</code></td><td>CAS 성공</td><td>새 스냅샷 반환</td></tr><tr><td><code>-2</code></td><td>설정 키 없음</td><td><code>STORE_MISSING</code></td></tr><tr><td><code>-3</code></td><td>키 타입·JSON·revision 손상</td><td><code>STORE_CORRUPTED</code></td></tr><tr><td><code>0 이상</code></td><td>현재 revision</td><td>409 충돌 + <code>currentRevision</code></td></tr></tbody>
+    </table>
+    <div class="callout"><strong>암묵적 시딩 금지:</strong> 키가 없을 때 expectedRevision=0 쓰기로 rev1을 만들지 않는다. 신규 환경은 명시적 <code>SET NX</code> 시드만 허용한다.</div>
+  </section>
+
+  <section id="read">
+    <h2>4. 읽기와 Last Known Good</h2>
+    <table>
+      <thead><tr><th>상황</th><th>반환</th><th>이유</th></tr></thead>
+      <tbody>
+        <tr><td>Redis 정상·JSON 정상</td><td><code>VALID</code></td><td>Redis를 권위값으로 읽고 LKG를 갱신</td></tr>
+        <tr><td>Redis 장애·LKG 있음</td><td><code>STALE</code></td><td>마지막 정상 스냅샷으로 읽기 가용성 유지</td></tr>
+        <tr><td>Redis 장애·LKG 없음</td><td>503</td><td>기동 직후에는 반환할 검증된 값이 없음</td></tr>
+        <tr><td>JSON 손상</td><td>500</td><td>일시 장애로 숨기지 않고 손상으로 노출</td></tr>
+      </tbody>
+    </table>
+    <h3>로컬 revision 하한을 제거한 이유</h3>
+    <p>LKG는 각 인스턴스 메모리이므로 A는 rev12, 새로 기동한 B는 LKG 없음일 수 있다. 이를 Redis 전역 revision의 하한으로 쓰면 동일한 Redis rev3을 A는 500, B는 정상으로 처리한다. 따라서 LKG는 장애 폴백에만 사용하고 정상 연결 상태에서는 Redis를 권위값으로 삼는다.</p>
+    <div class="callout"><strong>동시성 보호는 유지:</strong> 느린 과거 읽기가 그 사이 완료된 최신 update의 LKG를 덮지 않도록, 읽기·쓰기 시작 시 참조값을 기준으로 <code>compareAndSet</code>한다.</div>
+  </section>
+
+  <section id="audit">
+    <h2>5. 감사 로그와 불확실한 쓰기</h2>
+    <p>감사 로그 한 건은 “사용자 요청 전체”가 아니라 <strong>성공한 런타임 설정 변경 한 번</strong>을 뜻한다.</p>
+    <div class="grid two">
+      <div class="card"><strong>7개 필드</strong><span class="muted">previousRevision, newRevision, beforeConfig, afterConfig, changedBy, changedAt, requestId</span></div>
+      <div class="card"><strong>보존 정책</strong><span class="muted"><code>RPUSH</code> 후 <code>LTRIM -1000 -1</code>로 최근 1,000회 변경만 유지</span></div>
+    </div>
+    <h3>응답이 유실된 쓰기 확정</h3>
+    <p>Redis가 커밋한 뒤 네트워크 응답만 사라질 수 있다. 예외 타입만으로 실행 전·후를 판별하지 않고, 최근 감사 로그에서 동일한 <code>requestId</code>와 기대 결과를 찾아 성공 여부를 확인한다.</p>
+    <pre><code>if (requestId.equals(audit.requestId())
+        &amp;&amp; expected.equals(audit.afterConfig())) {
+    return audit.afterConfig();
+}
+throw UPDATE_OUTCOME_UNKNOWN;</code></pre>
+    <div class="callout warn"><strong>보수적 판정:</strong> Redis 연결 획득 전에 실패해 실제로 미실행된 경우도 실행 시점을 증명할 수 없으면 <code>UPDATE_OUTCOME_UNKNOWN</code>이다. 잘못된 “미적용” 확정보다 안전한 방향을 택했다.</div>
+    <div class="callout risk"><strong>남은 원자성 경계:</strong> Redis Lua는 격리 실행되지만 명령 오류를 롤백하지 않는다. <code>SET</code> 성공 후 <code>RPUSH</code>가 OOM이면 설정만 바뀔 수 있다. 순서를 뒤집으면 반대로 거짓 감사 기록이 생기므로 단순 재정렬로 해결하지 않았다.</div>
+  </section>
+
+  <section id="errors">
+    <h2>6. 오류와 API 응답 계약</h2>
+    <table>
+      <thead><tr><th>코드</th><th>HTTP</th><th>의미</th></tr></thead>
+      <tbody><tr><td>REVISION_CONFLICT</td><td>409</td><td>다른 변경이 먼저 성공. 응답에 현재 revision 포함</td></tr><tr><td>STORE_UNAVAILABLE</td><td>503</td><td>저장소 사용 불가</td></tr><tr><td>UPDATE_OUTCOME_UNKNOWN</td><td>503</td><td>변경 결과를 확정할 수 없음</td></tr><tr><td>STORE_MISSING</td><td>500</td><td>명시적 시드가 없거나 키가 유실됨</td></tr><tr><td>STORE_CORRUPTED</td><td>500</td><td>키 타입·JSON·revision 손상</td></tr><tr><td>READ_ONLY</td><td>409</td><td>읽기 전용 구현에서 변경 시도</td></tr></tbody>
+    </table>
+    <p><code>GlobalExceptionHandler</code>는 <code>RuntimeConfigRevisionConflictException</code>일 때만 <code>currentRevision</code>을 채운다. 일반 BusinessException에서는 null이며 전역 NON_NULL 설정으로 JSON에서 생략된다.</p>
+  </section>
+
+  <section id="deploy">
+    <h2>7. 실행 환경과 최초 시드</h2>
+    <div class="grid two">
+      <div class="card"><strong>타임아웃</strong><span class="muted">connect 1초 · command 500ms. 실측 전 임시 안전 기본값이며 부하·Chaos 결과로 조정한다.</span></div>
+      <div class="card"><strong>로컬 Redis</strong><span class="muted">Redis 7.4 · AOF 활성화 · noeviction · loopback 포트 · 영속 볼륨</span></div>
+    </div>
+    <pre><code>docker compose up -d redis
+docker compose --profile runtime-config-seed run --rm runtime-config-seed
+docker compose up -d</code></pre>
+    <p>시드는 <code>SET config:runtime ... NX</code>로 한 번만 실행한다. 애플리케이션 자동 시딩은 하지 않으며 운영 중 키 유실을 revision 0 재시드로 복구하지 않는다.</p>
+    <div class="callout"><code>redis.yml</code>은 커밋하지 않고 <code>redis.yml.example</code>만 추적한다. 새 클론은 README의 일괄 복사 명령으로 모든 <code>*.yml.example</code>을 실제 설정 파일로 복사해야 한다.</div>
+  </section>
+
+  <section id="tests">
+    <h2>8. 검증 범위</h2>
+    <table>
+      <thead><tr><th>검증 축</th><th>주요 시나리오</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td>코어</td><td>InMemory CAS 승자 1명, ReadOnly 변경 거부, null 초기값 차단</td><td><span class="badge done">통과</span></td></tr>
+        <tr><td>실제 Redis Lua</td><td>다중 스레드 CAS, 실제 before 감사, 손상·missing, 1,000건 보존</td><td><span class="badge done">통과</span></td></tr>
+        <tr><td>장애 결과</td><td>timeout, connection failure, RedisSystemException, 다른 요청 동일값 오인 방지</td><td><span class="badge done">통과</span></td></tr>
+        <tr><td>API</td><td>일반 오류 currentRevision 생략, 충돌에서만 실제 revision 제공</td><td><span class="badge done">통과</span></td></tr>
+        <tr><td>배포 계약</td><td>Redis health 비활성 가드, example 설정, Docker 필수 CI Lua 테스트</td><td><span class="badge done">통과</span></td></tr>
+      </tbody>
+    </table>
+    <pre><code>./gradlew :core:test :infra:redis:test :api:test
+BUILD SUCCESSFUL</code></pre>
+    <h3>커밋 구성</h3>
+    <table><tbody><tr><td><code>89d6e6e</code></td><td>feat(CY-333): 코어 저장소 구현과 오류 계약 추가</td></tr><tr><td><code>128cb6a</code></td><td>feat(CY-334): Redis 런타임 설정 CAS 어댑터 구현</td></tr><tr><td><code>6f10477</code></td><td>feat(CY-335): revision 충돌 응답에 현재 revision 추가</td></tr><tr><td><code>2f535ae</code></td><td>chore(CY-336): Redis 실행 환경과 시딩 절차 구성</td></tr></tbody></table>
+  </section>
+
+  <section id="limits">
+    <h2>9. 범위 밖과 남은 결정</h2>
+    <table>
+      <thead><tr><th>항목</th><th>현재 결정</th><th>후속 조건</th></tr></thead>
+      <tbody>
+        <tr><td>관리자 변경 API</td><td><span class="badge defer">후속</span></td><td>이 어댑터 완료 후 활성화. HTTP 재시도 간 동일 멱등 ID 계약 필요</td></tr>
+        <tr><td>Primary/Replica·Cluster</td><td><span class="badge defer">미합의</span></td><td>운영 토폴로지 확정 후 읽기 endpoint와 hash-slot 키 전략 설계</td></tr>
+        <tr><td>STALE 관측</td><td><span class="badge scope">CY-264</span></td><td>health readiness와 분리한 상태 게이지·경보 추가</td></tr>
+        <tr><td>Redis 인증</td><td><span class="badge defer">인프라</span></td><td>운영 네트워크·관리형 Redis 보안 정책과 함께 결정</td></tr>
+        <tr><td>Lua 부분 적용</td><td><span class="badge done">해당 없음</span></td><td>실측: 감사 키 타입 불일치는 쓰기 전 <code>-3</code>으로 끊기고, OOM은 스크립트 전체가 거부된다. 두 경우 모두 <code>config:runtime</code>이 변경되지 않는다</td></tr>
+        <tr><td>에러 코드 표기</td><td><span class="badge done">확정</span></td><td><code>RUNTIME_CONFIG-001</code>~<code>-009</code>. 저장소 숫자 규약(<code>&lt;도메인&gt;-&lt;3자리&gt;</code>)으로 통일했다</td></tr>
+      </tbody>
+    </table>
+    <div class="callout ok"><strong>최종 범위:</strong> 이 티켓은 저장소 어댑터와 그 운영 기반을 제공한다. 엔진 버전·큐 모드를 실제 도메인 처리에 연결하거나 관리 화면에서 변경하는 기능은 포함하지 않는다.</div>
+  </section>
+
+  <footer>CY-263 Implementation Report · generated 2026-08-21 · self-contained HTML</footer>
+</main>
+</body>
+</html>

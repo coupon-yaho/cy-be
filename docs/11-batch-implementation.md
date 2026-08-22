@@ -171,7 +171,7 @@ batch/src/main/java/com/kafkick/batch/
   seed/       생성기 · PII 암호화 · 분포
   corrupt/    유형별 주입 · expected_findings
   support/    지문 · 체크섬
-  api/        관리 포트 트리거
+  api/        내부 업무 포트 verify 트리거
 
 core/src/main/java/com/kafkick/core/
   coupon/       IssuanceStatus · IssuanceEventType · CouponStatus · CouponStateMachine
@@ -312,15 +312,23 @@ Step 7 통계(CLEAN 만)   Step 8 finalize
 **회원가입·로그인은 과제 범위 밖이다.** 가상 회원 100만 명 중 지금 누가 요청하는지를 가려야 하므로
 **회원과 권한을 요청 헤더로 받는다.** 인증 체계가 아니라 사용자 구분 수단이다.
 
-서명이 없으므로 클라이언트가 무엇이든 주장할 수 있다. 그래서 방어선은 둘이다.
+서명이 없으므로 클라이언트가 무엇이든 주장할 수 있다. 네트워크 경계는 다음처럼 나눈다.
 
 | 무엇 | 어떻게 |
 |---|---|
-| 관리 경로 `/api/v1/admin/**` | **관리 포트를 Compose 에서 외부에 노출하지 않는다** |
+| 관리 화면 `/api/v1/admin/**` | 브라우저는 API 8080만 호출하고, API가 Batch 9091을 내부 호출한다 |
+| Actuator | API 9090·Batch 9092를 호스트에 노출하지 않고 Prometheus만 내부 접근한다 |
 | 사용자 경로 | 서버가 헤더 등급을 회차의 `eligible_grades_mask` 와 **대조**한다 |
 
 서명 없는 역할 클레임(`hasRole`)은 방어가 아니라 장식이므로 넣지 않는다.
 JWT · 세션 · Spring Security 도 도입하지 않는다.
+`X-User-Role: ADMIN` 문자열 검사도 호출자를 인증하지 않으므로 관리자 API의 보안 방어선으로
+간주하지 않는다. 실제 관리자 인증 또는 신뢰된 게이트웨이 경계는 후속 작업이다.
+
+> TODO(CY-209 배포 확인): 이 저장소에는 Compose가 없다. 배포 저장소에서
+> API 9090·Batch 9091·9092가 호스트에 매핑되지 않음을 확인하기 전에는 이 경계가
+> 보장된 것으로 간주하지 않는다. 브라우저가 Batch 9091을 직접 호출하도록
+> 라우팅해도 이 경계는 무효다.
 
 > 앱이 헤더 등급을 대조하지 않으면 부적격 등급이 발급되고 그 값이 `issuances.issued_grade`
 > 스냅샷에 그대로 박힌다. **검증 배치 `V6` 가 그것을 잡는다** — 즉 `V6` 는 시드 데이터 검사가 아니라

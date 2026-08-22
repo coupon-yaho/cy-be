@@ -1,0 +1,2 @@
+com.kafkick.infra.redis.observation.RedisLatencyAutoConfiguration
+com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration
