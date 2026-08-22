@@ -116,13 +116,24 @@ public class ExpireMetrics {
      * 관제는 그것을 이번 실행의 결과로 읽는다. 0 을 내면 더 나쁘다 —
      * <i>"밀린 것이 없다"</i> 가 되어 누락 알림이 영원히 조용해진다.
      *
-     * <p><b>{@code asOf} 로 따지지 않고 무조건 지운다.</b> 여기 오는 실행은 자기 {@code asOf}
-     * 조차 못 믿거나(미래·부재) 판정할 재료가 없는 경우다 — 순서를 따질 근거가 없다.
-     * 낡은 값을 이번 결과로 읽히는 것보다 <b>모른다고 말하는 편이 낫고</b>, 다음 주기가
-     * 성공하면 5분 안에 복구된다.
+     * <p><b>{@code asOf} 를 아는 실행은 순서를 지킨다.</b> {@link #record} 와 같은 규칙이다 —
+     * 더 최신 {@code asOf} 의 결과가 이미 있으면 이 실패가 그것을 못 지운다. 안 그러면
+     * 과거 {@code asOf} 로 친 손 트리거가 실패하는 것만으로 <b>방금 끝난 주기의 멀쩡한 값을
+     * 지워</b> 그 사이 누락 감시가 꺼진다. {@code record} 에만 순서를 두고 여기 안 두면
+     * 같은 우회로가 열린다.
      *
      * <p>이 상태를 감시하는 것은 {@code ExpireMetricsUnknown} 이다. {@code NaN} 은 시리즈로
      * 존재하되 {@code > 0} 비교가 거짓이라 <b>다른 알림이 전부 조용해지기 때문</b>이다.
+     */
+    public void markUnknown(LocalDateTime asOf) {
+        latest.accumulateAndGet(null,
+                (current, ignored) -> current == null || !current.asOf().isAfter(asOf)
+                        ? null : current);
+    }
+
+    /**
+     * <b>{@code asOf} 조차 못 믿는 실행.</b> 파라미터가 없거나 미래라 순서를 따질 근거가
+     * 없으므로 무조건 지운다 — 그 값으로 센 수는 이 데이터셋의 수가 아니다.
      */
     public void markUnknown() {
         latest.set(null);

@@ -391,7 +391,7 @@ public class ExpireJobConfig {
                     // 앞은 "판정할 재료가 없다", 뒤는 "막힌 회차가 없다" 다.
                     Optional<List<Long>> blocked = blockedFrom(jobExecution);
                     if (blocked.isEmpty()) {
-                        metrics.markUnknown();
+                        metrics.markUnknown(asOf);
                         return;
                     }
                     metrics.record(asOf, observeTransaction.execute(
@@ -399,6 +399,7 @@ public class ExpireJobConfig {
                             blocked.get().size());
                 } catch (RuntimeException e) {
                     // 직전 실행 값을 들고 있으면 관제가 그것을 이번 결과로 읽는다.
+                    // asOf 를 못 읽었을 수도 있어 순서 없는 쪽으로 간다.
                     metrics.markUnknown();
                     log.warn("남은 만료 대기를 세지 못했습니다. 지표를 '모름' 으로 되돌립니다.", e);
                 }

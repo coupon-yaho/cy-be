@@ -3,8 +3,8 @@ package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,7 +20,10 @@ import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.schedule.CronSlot;
@@ -56,10 +59,14 @@ import com.kafkick.storage.db.VerificationSeed;
         "management.server.port=0"
 })
 @ExtendWith(SchemaShapeConfig.class)
-@Import({MySqlContainerConfig.class, SchemaShapeConfig.class})
+@Import({MySqlContainerConfig.class, SchemaShapeConfig.class,
+        ExpireMetricExposureTest.FixedClockConfig.class})
 class ExpireMetricExposureTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 조기 발화 관용 폭을 재려면 두 값이 모두 테스트 것이어야 한다. */
+    private static final LocalDateTime NOW = AS_OF.plusMinutes(3);
 
     @LocalManagementPort
     private int managementPort;
@@ -270,8 +277,10 @@ class ExpireMetricExposureTest {
         seed.overwriteStock(1);
 
         // 스케줄러가 실제로 만드는 값이다. 막으면 정상 주기의 감시가 통째로 꺼진다.
+        // **시계를 고정해야 이 값이 실제로 미래다.** 벽시계로 잡으면 평가 시점엔 이미
+        // 과거가 되어, 관용 폭을 지워도 이 테스트가 통과한다 — 재는 축을 안 지나간다.
         JobExecution execution = jobOperator.start(expireJob, new JobParametersBuilder()
-                .addLocalDateTime("asOf", LocalDateTime.now(ZoneOffset.UTC).plusSeconds(1))
+                .addLocalDateTime("asOf", NOW.plusSeconds(1))
                 .toJobParameters());
 
         assertThat(execution.getStatus())
@@ -283,6 +292,44 @@ class ExpireMetricExposureTest {
                 .as("**NaN 이면 정상 주기가 감시를 끈다.** 태스클릿과 리스너가 같은 폭을 봐야 한다")
                 .isZero();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
+    }
+
+    /**
+     * <b>실패한 과거 실행이 방금 끝난 주기의 값을 지우면 안 된다.</b>
+     *
+     * <p>밀린 만료를 따라잡으려고 <b>과거 {@code asOf} 로 손 트리거를 치는 것</b>이 이 저장소가
+     * 권하는 운영 절차다. 그 실행이 실패하면 {@code afterJob} 은 <i>"모른다"</i> 를 내보내는데,
+     * 그것을 순서 없이 적용하면 <b>방금 끝난 주기의 멀쩡한 값이 지워진다.</b>
+     *
+     * <p>{@code record} 에만 순서를 두고 여기 안 두면 같은 우회로가 열린다 — 성공은 못 덮는데
+     * 실패는 덮는 모양이다. 그 사이 {@code ExpireLeavesWorkBehind} 는 {@code NaN > 0} 이
+     * 거짓이라 <b>울릴 수 없다.</b>
+     */
+    @Test
+    @DisplayName("실패한 과거 실행이 최신 값을 못 지운다")
+    void keepsNewerSnapshotWhenAnOlderRunFails() throws Exception {
+        seed.newCoupon();
+        expiring();
+        expiring();
+        seed.overwriteStock(0);
+
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        String healthy = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(healthy, "cy_expire_blocked_coupons")).isEqualTo(1.0);
+
+        // 과거 asOf 로 친 손 트리거가 오염 스키마를 만나 시작 전에 죽는다.
+        SchemaShapeConfig.pretendCorrupt();
+        JobExecution stale = jobOperator.start(expireJob, new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF.minusDays(1))
+                .toJobParameters());
+        assertThat(stale.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(body, "cy_expire_blocked_coupons"))
+                .as("**더 최신 asOf 의 결과가 살아 있어야 한다.** 여기가 NaN 이면 실패한 손 "
+                        + "트리거가 주기 실행의 감시를 끈다")
+                .isEqualTo(1.0);
+        assertThat(metric(body, "cy_expire_pending")).isEqualTo(2.0);
     }
 
     /** 기한이 남은 발급건 하나. 미래 asOf 의 컷 안에는 들어온다. */
@@ -331,5 +378,22 @@ class ExpireMetricExposureTest {
         return jobOperator.start(expireJob, new JobParametersBuilder()
                 .addLocalDateTime("asOf", AS_OF)
                 .toJobParameters());
+    }
+
+    /**
+     * <b>시계를 고정한다.</b> 조기 발화 관용 폭은 {@code asOf} 와 {@code now} 의 차로
+     * 판정되므로, 한쪽이 벽시계면 <b>그 차가 실행 지연에 딸린다.</b> 둘 다 테스트가 정하는
+     * 값이어야 관용 폭을 지우는 돌연변이가 잡힌다.
+     *
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 라는 것은 {@link FixedClock} 이 진다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return FixedClock.at(NOW);
+        }
     }
 }
