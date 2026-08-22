@@ -18,10 +18,13 @@ import com.kafkick.api.admin.dashboard.AdminDashboardController;
 /** 관리자 헤더 검사가 실제 HTTP 실패 봉투의 400·403 상태로 변환되는지 검증합니다. */
 class AdminAuthorizationHttpContractTest {
 
+    private static final Clock CLOCK = Clock.fixed(
+            Instant.parse("2026-08-22T00:00:00Z"), ZoneOffset.UTC);
+
     private final MockMvc mockMvc = AdminControllerContractTestSupport
             .mockMvcWithoutAdminHeaders(new AdminDashboardController(
-                    AdminControllerContractTestSupport.overviewService(
-                            Clock.fixed(Instant.parse("2026-08-22T00:00:00Z"), ZoneOffset.UTC))));
+                    AdminControllerContractTestSupport.overviewService(CLOCK),
+                    AdminControllerContractTestSupport.couponMetricsService(CLOCK)));
 
     /** 관리자 역할 누락 또는 정확하지 않은 대소문자 값을 ADMIN-002로 거부하는지 검증합니다. */
     @Test

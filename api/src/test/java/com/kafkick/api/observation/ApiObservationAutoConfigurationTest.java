@@ -1,6 +1,7 @@
 package com.kafkick.api.observation;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
@@ -15,6 +16,11 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
+import javax.sql.DataSource;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -154,6 +160,57 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
+    // 빈 이름이 mainDataSource 인 것은 우연이 아니다. 자동설정이 @Qualifier("mainDataSource") 로
+    // 운영 풀을 지목하므로, 이름을 바꾸면 주입 대상이 사라져 이 테스트가 먼저 깨진다.
+    void resourceProviderRequiresBothDataSourceAndMeterRegistry() {
+        contextRunner.run(context -> assertThat(context).doesNotHaveBean(ResourceProvider.class));
+
+        contextRunner
+                .withBean("mainDataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
+                .run(context -> assertThat(context).doesNotHaveBean(ResourceProvider.class));
+
+        contextRunner
+                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+                .run(context -> assertThat(context).doesNotHaveBean(ResourceProvider.class));
+
+        contextRunner
+                .withBean("mainDataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
+                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+                .run(context -> assertThat(context).hasSingleBean(ResourceProvider.class));
+    }
+
+    /**
+     * 조건과 주입이 어긋나면 컨텍스트가 통째로 죽는다. 조건을 타입으로 두었을 때 실제로 그랬다 —
+     * Boot 기본 {@code dataSource} 빈이 타입 조건을 통과시키고 이름 주입만 실패했다.
+     *
+     * <p>여기서 고정하는 것은 "빈이 없다" 가 아니라 "<b>기동은 살아 있다</b>" 쪽이다.
+     */
+    @Test
+    void resourceProviderIsSkippedInsteadOfFailingWhenTheMainPoolIsAbsent() {
+        contextRunner
+                .withBean("dataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
+                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+                .run(context -> assertThat(context)
+                        .hasNotFailed()
+                        .doesNotHaveBean(ResourceProvider.class));
+    }
+
+    /** 나머지 빈과 같은 오버라이드 규약을 따른다 — 사용자가 등록하면 자동설정이 물러난다. */
+    @Test
+    void userDefinedResourceProviderWins() {
+        ResourceProvider stub = new ResourceProvider(
+                dataSource(), new SimpleMeterRegistry(), TIME_PROVIDER);
+
+        contextRunner
+                .withBean("mainDataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
+                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+                .withBean("myResourceProvider", ResourceProvider.class, () -> stub)
+                .run(context -> assertThat(context)
+                        .hasSingleBean(ResourceProvider.class)
+                        .getBean(ResourceProvider.class).isSameAs(stub));
+    }
+
+    @Test
     void bindsConsistencySeverityThresholdsFromConfiguration() {
         contextRunner
                 .withPropertyValues(
@@ -210,5 +267,9 @@ class ApiObservationAutoConfigurationTest {
                     assertThat(context.getBean(ConsistencyCalculator.class)).isSameAs(calculator);
                     assertThat(context.getBean(ConsistencySeverityPolicy.class)).isSameAs(policy);
                 });
+    }
+
+    private static DataSource dataSource() {
+        return org.mockito.Mockito.mock(DataSource.class);
     }
 }

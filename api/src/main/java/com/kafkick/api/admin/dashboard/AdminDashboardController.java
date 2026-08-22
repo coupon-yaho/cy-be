@@ -18,6 +18,7 @@ import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.caller.Caller;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
 import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.support.exception.BusinessException;
@@ -26,22 +27,28 @@ import com.kafkick.core.support.exception.BusinessException;
  * 운영 담당자가 사용하는 관리자 현황·쿠폰 지표·분석 API의 HTTP 경계입니다.
  *
  * <p>운영현황 계산·조립은 구체 {@link AdminOverviewService}에 위임하고, 반환된
- * {@link AdminOverviewResult}는 Controller에서 HTTP DTO로 변환합니다. 쿠폰 지표와 분석 조회는
- * 실제 집계 원천이 연결되기 전까지 {@code 501 / ADMIN-001}을 반환합니다.</p>
+ * {@link AdminOverviewResult}는 Controller에서 HTTP DTO로 변환합니다. 쿠폰 지표는 상세 Service의
+ * 계산 결과를 반환하며, 분석 조회만 실제 집계 원천이 연결되기 전까지 {@code 501 / ADMIN-001}을 반환합니다.</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminDashboardController {
 
     private final AdminOverviewService adminOverviewService;
+    private final AdminCouponMetricsService adminCouponMetricsService;
 
     /**
-     * 운영현황 HTTP 요청을 구체 Service에 위임하고 결과를 HTTP DTO로 변환하도록 구성합니다.
+     * 운영현황과 캠페인 상세 요청을 각 구체 Service에 위임하도록 구성합니다.
      *
      * @param adminOverviewService 관리자 첫 화면 응답을 조립하는 구체 Service
+     * @param adminCouponMetricsService 캠페인 상세 지표를 계산하는 구체 Service
      */
-    public AdminDashboardController(AdminOverviewService adminOverviewService) {
+    public AdminDashboardController(
+            AdminOverviewService adminOverviewService,
+            AdminCouponMetricsService adminCouponMetricsService
+    ) {
         this.adminOverviewService = adminOverviewService;
+        this.adminCouponMetricsService = adminCouponMetricsService;
     }
 
     /**
@@ -74,21 +81,22 @@ public class AdminDashboardController {
      * 특정 쿠폰 회차의 재고·발급 진행률·대기열·보유 상태 지표를 지정된 관측 구간으로 조회합니다.
      *
      * <p>{@code couponId}는 캠페인 회차 식별자이며 양수만 허용합니다. {@code window}는
-     * {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다. 실제 DB 집계와 관제 Provider가 연결되기 전까지
-     * 유효 요청에도 {@link AdminApiErrorCode#NOT_IMPLEMENTED}를 발생시킵니다.</p>
+     * {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다. 현재는 Overview와 같은 Mock 모집단의
+     * 원천 수량을 Core Service가 계산하며, 후속 실제 원천 연결 뒤에도 같은 응답 계약을 유지합니다.</p>
      *
      * @param couponId 조회할 쿠폰 캠페인 회차 식별자
      * @param window 지표 집계 구간
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
-     * @return 후속 구현에서 사용할 쿠폰 운영 지표 응답 봉투
-     * @throws BusinessException 쿠폰 지표 조회 구현이 아직 연결되지 않은 경우
+     * @return 계산한 쿠폰 운영 지표 성공 응답 봉투
+     * @throws BusinessException Overview 모집단에 쿠폰 ID가 없는 경우
      */
     @GetMapping("/coupons/{couponId}/metrics")
     public ResponseEnvelope<CouponMetricsResponse> couponMetrics(
             @PathVariable @Positive(message = "couponId는 양수여야 합니다.") Long couponId,
             @RequestParam MetricsWindow window,
             Caller caller) {
-        throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
+        return ResponseEnvelope.success(CouponMetricsResponse.from(
+                adminCouponMetricsService.getCouponMetrics(couponId, window)));
     }
 
     /**

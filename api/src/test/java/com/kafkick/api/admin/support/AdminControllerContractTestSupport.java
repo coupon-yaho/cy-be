@@ -19,6 +19,9 @@ import com.kafkick.api.support.RequestIdFilter;
 import com.kafkick.api.caller.CallerArgumentResolver;
 import com.kafkick.api.caller.CallerFilter;
 import com.kafkick.api.caller.HeaderCallerResolver;
+import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
+import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
+import com.kafkick.core.admin.couponmetrics.mock.AdminCouponMetricsMockDataFactory;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
@@ -61,6 +64,14 @@ public final class AdminControllerContractTestSupport {
                 new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
                 new OverviewStatusCalculator());
+    }
+
+    /** 지정한 Clock과 Overview 모집단으로 캠페인 상세 지표 실제 Service를 구성합니다. */
+    public static AdminCouponMetricsService couponMetricsService(Clock clock) {
+        return new AdminCouponMetricsService(
+                new TimeProvider(clock),
+                new AdminCouponMetricsMockDataFactory(new AdminOverviewMockDataFactory()),
+                new CouponMetricsCalculator());
     }
 
     /** 인증 실패 HTTP 상태를 검증할 때 기본 관리자 헤더 없이 MockMvc를 구성합니다. */

@@ -15,19 +15,20 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.util.StreamUtils;
 
 /**
- * 관측 대상 회차를 환경변수로 박는 것은 {@code benchmark_runs} 가 없기 때문에 쓰는 임시 방편이다.
- * 그 테이블이 생기는 순간이 곧 이 방편을 걷어낼 때다.
+ * 관측 대상 회차를 환경변수로 박는 것은 {@code benchmark_runs} 가 없어서 쓰던 임시 방편이었다.
+ * <b>OBS-14b(CY-377)가 그 테이블을 만들었다 — 이제 이 감시는 방편이 아직 안 걷혔다는 것을 지킨다.</b>
  *
- * <p>측정 시작(benchmark start)은 batch 가 이미 떠 있는 뒤에 일어난다. 그래서 환경변수로 박으려면
- * 회차마다 batch 를 재시작해야 한다. {@code benchmark_runs} 가 생기면 <b>진행 중인 행</b>
- * ({@code stopped_at IS NULL})에서 회차를 읽는 쪽이 맞다 — 재시작도, 사람이 값을 넣는 절차도 없어진다.
+ * <p>측정 시작(benchmark start)은 batch 가 이미 떠 있는 뒤에 일어난다. 그래서 환경변수로 박으면
+ * 회차마다 batch 를 재시작해야 한다. 테이블이 생겼으므로 <b>진행 중인 행</b>
+ * ({@code run_status = 'RUNNING'})에서 회차를 읽는 쪽이 맞다 — 재시작도, 사람이 값을 넣는 절차도 없어진다.
  *
- * <p>{@code benchmark_runs} 행에는 회차뿐 아니라 <b>엔진 버전</b>도 함께 들어간다
- * ({@code BenchmarkStartRequest} 가 engineVersion·queueMode 를 받는다). 지금은 batch 가 둘 다
- * 기동 시점 환경변수로 고정하고 있어, 측정 회차와 어긋나도 알 방법이 없다 — 그래서 지금 믿고 있는
+ * <p>{@code benchmark_runs} 행에는 회차뿐 아니라 <b>엔진 버전</b>도 들어간다. 지금은 batch 가 둘 다
+ * 기동 시점 환경변수로 고정하고 있어 측정 회차와 어긋나도 알 방법이 없다 — 그래서 지금 믿고 있는
  * 값을 {@code app.observation.engine.version} 으로 내보내 사람이 대조하게 해 뒀다.
  *
- * <p>이 테스트가 깨지면 OBS-14b 가 붙었다는 뜻이다. 그때 할 일 —
+ * <p><b>남은 일(별도 티켓 · batch 소유).</b> OBS-14b 는 저장소·서비스까지만 세운다 — 아래는 batch
+ * 관측 경로를 고치는 작업이라 이 티켓의 경계 밖이고, {@code core/observation} 과
+ * {@code batch/observation} 은 지금 다른 워크트리(CY-370)가 잡고 있다.
  * <ul>
  *   <li>{@code ConsistencyRawValueReader} 의 회차 선택을 진행 중인 run 기준으로 바꾼다.
  *   <li><b>엔진 버전도 같은 행에서 읽는다.</b> 회차 도중 런타임 토글이 바뀌어도 그 회차의 기준은
@@ -36,6 +37,9 @@ import org.springframework.util.StreamUtils;
  *       수동 탈출구로만 남긴다(회차 없이 관측만 돌려 볼 때).
  *   <li>run 이 없는 동안의 동작을 정한다 — 지금처럼 "가장 최근 열린 회차" 인지, 값을 안 내는지.
  * </ul>
+ *
+ * <p>그 작업이 끝나면 이 클래스는 통째로 지운다. 여기 남은 파서는 "테이블이 생겼는지" 를 판정하는
+ * 물건이라, 방편이 걷힌 뒤에는 지킬 것이 없다.
  */
 class BatchBenchmarkRunsAssumptionTest {
 
@@ -86,16 +90,16 @@ class BatchBenchmarkRunsAssumptionTest {
     }
 
     @Test
-    @DisplayName("benchmark_runs 가 아직 없다 — 회차를 환경변수로 박는 임시 방편의 전제다")
-    void benchmarkRunsTableDoesNotExistYet() throws Exception {
+    @DisplayName("benchmark_runs 가 생겼다 — 회차 출처를 환경변수에서 진행 중인 run 으로 바꿀 차례다")
+    void migrationCreatesBenchmarkRunsTable() throws Exception {
         Resource[] migrations = new PathMatchingResourcePatternResolver()
                 .getResources("classpath*:db/migration/*.sql");
 
         assertThat(migrations).as("마이그레이션을 하나도 못 읽었다면 이 감시는 무효다").isNotEmpty();
         assertThat(Arrays.stream(migrations).filter(BatchBenchmarkRunsAssumptionTest::createsBenchmarkRuns))
-                .as("benchmark_runs 가 생겼다. 회차 출처를 환경변수에서 진행 중인 run 으로 바꾼다"
-                        + " — 클래스 주석의 세 항목을 보라")
-                .isEmpty();
+                .as("benchmark_runs 를 만드는 마이그레이션이 사라졌다. 회차를 진행 중인 run 에서 읽기로 한"
+                        + " 전제가 무너졌으므로, 환경변수 방편을 되살릴지부터 다시 정한다")
+                .isNotEmpty();
     }
 
     /**
