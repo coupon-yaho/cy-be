@@ -699,7 +699,7 @@ class VerificationRuleJdbcAdapterTest {
      * 그래서 복구를 마지막에 단언으로 못 박는다.
      */
     @Test
-    @DisplayName("핵심 테이블이 없는 스키마에서는 일곱을 전부 없다고 답한다")
+    @DisplayName("핵심 테이블이 없는 스키마에서는 여덟을 전부 없다고 답한다")
     void reportsEveryCoreTableMissingOnAForeignSchema() throws Exception {
         try (Connection connection = dataSource.getConnection()) {
             String original = connection.getCatalog();
@@ -715,7 +715,9 @@ class VerificationRuleJdbcAdapterTest {
                         .as("이게 비면 SchemaPresenceGuard 가 빈 DB 를 통과시킨다")
                         .containsExactlyInAnyOrder(
                                 "issuances", "issuance_histories", "verification_runs", "coupon_stocks",
-                                "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION");
+                                "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION",
+                                // CY-368 이 nextAttempt 의 필수 의존으로 승격시켰다.
+                                "BATCH_JOB_EXECUTION_PARAMS");
             } finally {
                 connection.setCatalog(original);
             }

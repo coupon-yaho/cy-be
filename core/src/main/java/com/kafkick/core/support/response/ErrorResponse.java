@@ -1,4 +1,4 @@
-package com.kafkick.api.support;
+package com.kafkick.core.support.response;
 
 import java.time.Instant;
 

@@ -334,4 +334,147 @@ class VerificationRunJdbcAdapterTest {
         return VerificationRun.start(
                 AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 1, STARTED_AT);
     }
+
+    /**
+     * <b>{@code nextAttempt} 는 두 소스를 함께 본다.</b> {@code verification_runs} 행은 잡의
+     * 가드를 통과한 뒤에야 생기는데 배치 메타는 시작 즉시 생긴다 — 앞만 보면 가드에 걸려
+     * 죽은 번호를 다시 줘서 {@code preventRestart} 가 <b>같은 요청을 영원히 거절</b>한다.
+     *
+     * <p>여기서 각 축을 따로 잰다. HTTP 테스트 하나로는 조합 하나만 밟아
+     * {@code dataset}·{@code scope} 필터가 실제로 거르는지 아무도 안 본다.
+     */
+    @Test
+    @DisplayName("아무 실행도 없으면 1 이다")
+    void startsAtOne() {
+        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("verification_runs 의 마지막 번호 다음을 준다")
+    void continuesAfterTheLastPersistedRun() {
+        adapter.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 3, AS_OF));
+
+        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL)).isEqualTo(4);
+    }
+
+    /**
+     * <b>가드에 걸려 죽은 시도는 {@code verification_runs} 에 흔적이 없다.</b> 배치 메타만
+     * 보고도 그 번호를 피해야 한다 — 안 그러면 같은 요청이 영원히 400 이다.
+     */
+    @Test
+    @DisplayName("verification_runs 에 없어도 배치 메타의 번호를 피한다")
+    void avoidsAttemptsThatOnlyExistInBatchMetadata() {
+        insertBatchAttempt("verifyJob", AS_OF, "CLEAN", "FULL", 2);
+
+        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL))
+                .as("이 축이 죽으면 가드에 한 번 걸린 asOf 를 다시 못 돌린다")
+                .isEqualTo(3);
+    }
+
+    /**
+     * <b>다른 데이터셋·scope 의 번호는 안 센다.</b> 이 필터가 죽으면 CLEAN 트리거가 CORRUPT 가
+     * 태운 번호까지 피해 배정하고, {@code attempt} 열이 설명 안 되는 값으로 채워진다 —
+     * 유니크 위반이 안 나서 <b>조용하다.</b>
+     */
+    @Test
+    @DisplayName("다른 dataset·scope 의 번호는 안 센다")
+    void ignoresOtherDatasetsAndScopes() {
+        insertBatchAttempt("verifyJob", AS_OF, "CORRUPT", "FULL", 7);
+        insertBatchAttempt("verifyJob", AS_OF, "CLEAN", "INCREMENTAL", 9);
+
+        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL)).isEqualTo(1);
+    }
+
+    /**
+     * <b>다른 잡의 번호도 안 센다.</b> 지금 {@code expireJob} 은 {@code asOf} 하나만 써서
+     * 우연히 안 걸리지만, 거기에 {@code dataset}·{@code scope}·{@code attempt} 가 붙는 날
+     * 두 잡의 번호가 뒤섞인다.
+     */
+    /**
+     * <b>다른 잡의 번호는 안 센다.</b> 이것이 어댑터의 잡 이름 상수를 지키는 축이기도 하다 —
+     * storage 는 batch 를 참조할 수 없어({@code VerifyJobConfig} 는 의존 방향 반대편이다)
+     * 이름을 문자열로 두었는데, 그것이 어긋나면 배치 메타 축이 조용히 0을 주고 가드에 걸려
+     * 죽은 {@code attempt} 를 다시 배정한다.
+     *
+     * <p>지금 {@code expireJob} 은 {@code asOf} 하나만 써서 우연히 안 걸리지만, 거기에
+     * {@code dataset}·{@code scope}·{@code attempt} 가 붙는 날 두 잡의 번호가 뒤섞인다.
+     */
+    @Test
+    @DisplayName("다른 잡의 번호는 안 센다")
+    void ignoresOtherJobs() {
+        insertBatchAttempt("expireJob", AS_OF, "CLEAN", "FULL", 5);
+
+        assertThat(adapter.nextAttempt(AS_OF, DatasetType.CLEAN, ScopeType.FULL)).isEqualTo(1);
+    }
+
+    /**
+     * <b>초가 0 이 아닌 시각도 맞아야 한다.</b> 위 케이스들의 {@code AS_OF} 는 초가 0이라
+     * {@code LocalDateTime.toString()} 이 초를 생략하는 위험한 축을 이미 밟고 있다 —
+     * 문자열 비교로 되돌리면 그것들이 먼저 빨개진다. 여기서는 반대쪽을 본다.
+     */
+    @Test
+    @DisplayName("초가 있는 asOf 도 배치 메타와 맞춘다")
+    void matchesAnAsOfWithSeconds() {
+        LocalDateTime withSeconds = LocalDateTime.of(2026, 8, 15, 14, 30, 45);
+        insertBatchAttempt("verifyJob", withSeconds, "CLEAN", "FULL", 4);
+
+        assertThat(adapter.nextAttempt(withSeconds, DatasetType.CLEAN, ScopeType.FULL))
+                .isEqualTo(5);
+    }
+
+    /** 배치 메타에 실행 하나와 그 파라미터 넷을 심는다. 잡을 실제로 돌리지 않는다. */
+    private void insertBatchAttempt(String jobName, LocalDateTime asOf,
+            String dataset, String scope, int attempt) {
+        long instanceId = nextMetaId("BATCH_JOB_INSTANCE", "JOB_INSTANCE_ID");
+        jdbcClient.sql("""
+                        INSERT INTO BATCH_JOB_INSTANCE
+                          (JOB_INSTANCE_ID, VERSION, JOB_NAME, JOB_KEY)
+                        VALUES (:id, 0, :jobName, :key)
+                        """)
+                .param("id", instanceId)
+                .param("jobName", jobName)
+                .param("key", "k" + instanceId)
+                .update();
+
+        long executionId = nextMetaId("BATCH_JOB_EXECUTION", "JOB_EXECUTION_ID");
+        jdbcClient.sql("""
+                        INSERT INTO BATCH_JOB_EXECUTION
+                          (JOB_EXECUTION_ID, VERSION, JOB_INSTANCE_ID, CREATE_TIME, STATUS)
+                        VALUES (:id, 0, :instanceId, :createdAt, 'FAILED')
+                        """)
+                .param("id", executionId)
+                .param("instanceId", instanceId)
+                // NOW() 를 안 쓴다. 이 저장소는 시각을 주입받는 것을 규율로 삼는다 —
+                // 그 값이 이 테스트의 단언에 안 쓰이더라도, DB 함수로 현재 시각을 읽는
+                // 습관이 남으면 다음 사람이 판정 경로에서도 그렇게 한다.
+                .param("createdAt", asOf)
+                .update();
+
+        // 배치가 저장하는 형식 그대로 — LocalDateTime 은 ISO_LOCAL_DATE_TIME 이라 초가 항상 있다.
+        param(executionId, "asOf", "java.time.LocalDateTime",
+                asOf.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        param(executionId, "dataset", "java.lang.String", dataset);
+        param(executionId, "scope", "java.lang.String", scope);
+        param(executionId, "attempt", "java.lang.Long", String.valueOf(attempt));
+    }
+
+    private void param(long executionId, String name, String type, String value) {
+        jdbcClient.sql("""
+                        INSERT INTO BATCH_JOB_EXECUTION_PARAMS
+                          (JOB_EXECUTION_ID, PARAMETER_NAME, PARAMETER_TYPE, PARAMETER_VALUE, IDENTIFYING)
+                        VALUES (:id, :name, :type, :value, 'Y')
+                        """)
+                .param("id", executionId)
+                .param("name", name)
+                .param("type", type)
+                .param("value", value)
+                .update();
+    }
+
+    private long nextMetaId(String table, String column) {
+        return jdbcClient.sql("SELECT COALESCE(MAX(" + column + "), 0) + 1 FROM " + table)
+                .query(Long.class)
+                .single();
+    }
 }

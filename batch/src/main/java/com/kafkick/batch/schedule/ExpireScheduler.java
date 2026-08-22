@@ -98,7 +98,10 @@ public class ExpireScheduler {
     // 플러그인이 -parameters 를 붙인다) 그 기본값에 기대는 대신 명시한다 — 셋째 Job 이
     // 생기거나 컴파일 옵션이 바뀌면 조용히 다른 잡이 주입되고, 그때 5분마다 도는 것이
     // 만료가 아니게 된다.
-    public ExpireScheduler(JobOperator jobOperator,
+    // JobOperator 빈도 둘이다. CY-368 이 verify 전용 비동기 빈을 더했다 —
+    // 이 잡은 반드시 **공용(동기)** 빈이어야 한다. 비동기 빈이 주입되면 아래
+    // status.isRunning() 검사가 매번 걸리고, 그 전에 이미 겹침 방지가 사라진 상태다.
+    public ExpireScheduler(@Qualifier("jobOperator") JobOperator jobOperator,
             @Qualifier("expireJob") Job expireJob,
             TimeProvider timeProvider,
             @Value(CRON) String expireCron) {

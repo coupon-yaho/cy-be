@@ -20,10 +20,16 @@ services:
       # 기본은 끈다. verifyJob 은 rejectRunningSchedulers 가 스케줄러 켜진 상태의 실행을
       # 거부하므로, 두 잡의 알림을 한 기동으로는 못 본다 — docs/14 의 시연 절차를 따른다.
       BATCH_SCHEDULING_ENABLED: ${BATCH_SCHEDULING_ENABLED:-false}
-    ports:
-      # 우변은 언제나 9090 이다(업무 포트). 관리 포트 9092 는 호스트로 안 내보낸다 —
-      # 매핑하면 인증 없이 전 지표가 열린다. 관제는 내부 네트워크에서 batch:9092 로 긁는다.
-      - "127.0.0.1:${BATCH_HOST_PORT:-9090}:9090"
+    # ports 가 없다. **업무 포트를 기본으로 안 내보낸다.**
+    #
+    # CY-368 이 그 포트에 admin 트리거(POST /api/v1/admin/verify)를 열었는데 인증이 없다 —
+    # batch 에 Spring Security 가 없고 토큰 규약은 영역 ③의 몫이라 여기서 혼자 정하면
+    # 두 벌이 된다. PRD 보안 ①이 그 상태를 /actuator/env 와 같은 급의 구멍으로 묶었다.
+    #
+    # 필요할 때만 오버레이를 하나 더 얹는다:
+    #   docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
+    #
+    # 관리 포트 9092 는 어느 경우에도 안 내보낸다. 관제는 내부 네트워크에서 batch:9092 를 긁는다.
     depends_on:
       mysql:
         condition: service_healthy

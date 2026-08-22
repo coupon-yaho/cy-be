@@ -37,15 +37,22 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * 만들어지는데 거기에 {@code BATCH_*} 가 하나도 없습니다. 데이터 넷은 다 있고 메타만
      * 없는 상태가 정상 절차에서 실제로 생깁니다.
      *
-     * <p>아홉 개 전부가 아니라 셋만 봅니다. {@code V2__batch_metadata.sql} 은 원본 그대로라
-     * 부분 적용되는 경로가 없어, 셋이 있으면 나머지도 있습니다.
+     * <p>아홉 개 전부가 아니라 <b>넷만</b> 봅니다. {@code V2__batch_metadata.sql} 은 원본
+     * 그대로라 부분 적용되는 경로가 없어, 이 넷이 있으면 나머지도 있습니다. 넷째
+     * ({@code BATCH_JOB_EXECUTION_PARAMS})는 CY-368 이 더했습니다 — {@code nextAttempt} 가
+     * 그 테이블을 읽으므로 접수 경로의 필수 의존이 됐습니다.
      */
     private static final List<String> DATA_TABLES =
             List.of("issuances", "issuance_histories", "verification_runs", "coupon_stocks");
 
     /** {@code V2__batch_metadata.sql} 이 만듭니다. 없으면 잡 실행 시점에 SQL 에러로 죽습니다. */
-    private static final List<String> BATCH_META_TABLES =
-            List.of("BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION");
+    private static final List<String> BATCH_META_TABLES = List.of(
+            "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION",
+            // CY-368 이 이 테이블을 **접수 경로의 필수 의존**으로 승격시켰다 —
+            // nextAttempt 가 배치 메타의 attempt 를 여기서 읽는다. 목록이 안 따라가면
+            // 기동은 초록인데 첫 트리거가 "Table ... doesn't exist" 로 죽는다.
+            // 이 가드가 없애려는 늦은 실패 그 자체다.
+            "BATCH_JOB_EXECUTION_PARAMS");
 
     /**
      * <b>테이블이 있다고 컬럼도 있는 것은 아니다.</b> 여기 넣는 기준은 <i>"이것이 없으면

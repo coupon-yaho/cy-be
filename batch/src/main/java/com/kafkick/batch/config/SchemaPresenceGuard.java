@@ -44,7 +44,7 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
  *
  * <p><b>이 가드가 보는 것은 "테이블이 있나" 지 "스키마가 최신인가" 가 아니다.</b> 목록을
  * 넓히면 스키마가 자랄 때마다 기동이 막혀 Flyway 의 몫을 뺏는다. 그래서 배치가 없으면
- * 아무것도 못 하는 것만 본다 — 데이터 넷과 Spring Batch 메타 셋이다.
+ * 아무것도 못 하는 것만 본다 — 데이터 넷과 Spring Batch 메타 넷이다.
  *
  * <p><b>메타 축이 데이터 축과 따로 빈다.</b> 검증용 셋({@code coupon_clean}·
  * {@code coupon_corrupt})은 cy-seed 의 {@code ddl/} 로 만들어지는데 거기에

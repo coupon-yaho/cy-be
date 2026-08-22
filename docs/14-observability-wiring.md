@@ -267,7 +267,7 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 (`DATABASE()` 가 `NULL` — URL 에서 DB 이름을 빠뜨린 것) *"URL 을 확인하십시오"*. 같은 증상에
 조치가 셋인데 한 문장으로 접으면 사람이 엉뚱한 것을 재배포하며 시간을 쓴다.
 
-목록은 그 일곱에서 멈춘다 — 넓히면 가드가 *배포 순서* 가 아니라 *스키마 최신성* 을 보게
+목록은 그 여덟(데이터 넷 + Spring Batch 메타 넷)에서 멈춘다 — 넓히면 가드가 *배포 순서* 가 아니라 *스키마 최신성* 을 보게
 되고 그건 Flyway 의 몫이다.
 
 ### `BATCH_SCHEDULING_ENABLED=false` 의 상시 critical — silence 로 간다
@@ -340,26 +340,41 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    `rejectExistingRun` 이 그것을 막으므로 `attempt=1` 로 돌리면 `INVALID_RUN_PARAMS` 로
    잡이 죽고 — **보여 주려던 축 대신 `BatchJobFailed` 가 뜬다.**
 
-   > **⚠️ 이 구간은 아직 손으로 못 돈다.** `verifyJob` 을 트리거하는 HTTP 경로가
-   > **저장소에 없다** — batch 모듈의 `@RestController` 는 0건이고, 예고된 경로
-   > (`POST /api/v1/admin/verify`)는 별도 티켓이다. 여기에 명령을 지어 적지 않는다.
-   >
-   > **그래서 이 티켓은 검증 알림 축을 시연이 아니라 테스트로 증명했다** —
-   > `VerificationMetricExposureTest` 가 행을 심고 `refresh()` 를 부른 뒤
-   > `/actuator/prometheus` 본문에서 값을 읽어 본다(PASS=0 · FAIL=1 · 모름=NaN ·
-   > 시드 행 제외 · 라벨). 돌연변이 넷을 심어 전부 검출되는 것도 확인했다.
-   > 규칙이 그 이름을 실제로 짚는 것은 `BatchMetricExposureTest` 가 잇는다.
-   >
-   > 리시버까지 흐르는 것을 눈으로 보려면 트리거 API 티켓을 기다리거나, 아래처럼
-   > 닫힌 `FAIL` 행을 손으로 넣고 되읽기 주기(기본 60초)를 기다린다 — 지금 가능한
-   > 유일한 경로다.
+   **CY-368 이 트리거 API 를 열었다.** 업무 포트가 기본으로 안 열리므로 오버레이를 얹는다.
 
-   ```sql
-   -- 되읽기가 집는 것은 "가장 최근에 닫힌 BATCH 실행" 하나다.
-   INSERT INTO verification_runs
-     (as_of, dataset, scope, attempt, verdict, finding_count, started_at, finished_at, origin)
-   VALUES (NOW(), 'CLEAN', 'FULL', 99, 'FAIL', 3, NOW(), NOW(), 'BATCH');
+   ```bash
+   docker compose -f base.yml -f batch.yml -f batch-expose.yml up -d batch
+
+   curl -X POST "http://127.0.0.1:9090/api/v1/admin/verify?asOf=<시드의 as_of>"
+   # → 202 {"success":true,"data":{"executionId":41,"asOf":...,"dataset":"CLEAN",
+   #                                 "scope":"FULL","attempt":3},"error":null}
    ```
+
+   `dataset`·`scope`·`attempt` 는 안 줘도 된다 — 서버가 붙어 있는 스키마와 다음 빈 번호로
+   채운다. **`attempt` 를 손으로 줄 때만** 시드가 점유한 값(CLEAN 1·2, CORRUPT 1)을 피해야 한다.
+
+   ```bash
+   curl "http://127.0.0.1:9090/api/v1/admin/verify/runs/41"
+   # 같은 요청을 **종료 상태까지 반복**한다. 41 은 POST 응답의 data.executionId 다.
+   #
+   # 도는 중:   {"success":true,"data":{"executionId":41,"runId":null,"status":"STARTED", ...}}
+   # 끝난 뒤:   {"success":true,"data":{"executionId":41,"runId":1207,"status":"COMPLETED",
+   #                                    "verdict":"PASS","findingCount":0, ...}}
+   ```
+
+   위는 CLEAN 이라 **0건이 정상**이다. 검증 알림(`VerificationVerdictFailed`)을 실제로
+   띄우려면 오염셋을 돌린다 — 그쪽은 `seedRunId` 가 필수다.
+
+   ```bash
+   curl -X POST "http://127.0.0.1:9090/api/v1/admin/verify?asOf=<시드의 as_of>&dataset=CORRUPT&seedRunId=<시드 run>"
+   # → 판정 뒤 조회하면:
+   #   {"success":true,"data":{"verdict":"FAIL","findingCount":800, ...},"error":null}
+   #   ← 정답 800행과 일치하는 것이 합격이다
+   ```
+
+   **`runId` 가 `null` 인 것도 정보다** — 아직 판정 단계에 못 갔거나, 가드에 걸려 끝까지
+   못 가는 실행이라는 뜻이다. `status`(잡이 돌았나)와 `verdict`(데이터가 맞나)는 독립이라
+   따로 읽는다. 근거는 `docs/15`.
 
    **검증용 셋에는 Spring Batch 메타 테이블이 없다.** cy-seed 의 `ddl/` 이 안 만든다.
    `SchemaPresenceGuard` 가 기동 시점에 그것을 말해 주므로 배치가 아예 안 뜬다 —

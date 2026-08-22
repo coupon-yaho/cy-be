@@ -18,6 +18,8 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.response.ErrorResponse;
+import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;

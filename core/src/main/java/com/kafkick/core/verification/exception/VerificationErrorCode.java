@@ -93,6 +93,55 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-011",
             "배치가 보는 스키마에 핵심 테이블이 없습니다."
+    ),
+
+    /**
+     * 트리거 API 가 접수 단계에서 먼저 답하는 것이다. 같은 판정을 {@code startRunStep} 의
+     * {@code rejectRunningSchedulers} 가 다시 하므로, 이 검사를 지워도 잡은 여전히 거절한다.
+     *
+     * <p><b>{@link #RUNTIME_NOT_QUIESCED}(500) 와 같은 조건이다.</b> 상태 코드가 다른 것은
+     * 의도한 것이다 — 저쪽은 잡 안에서 나고 <i>"파라미터를 고쳐 재시도"</i> 루프를 막으려고
+     * 5xx 를 골랐다. 이쪽은 HTTP 접수 단계라 <b>409(지금 상태가 아니다)</b> 가 맞고, 그것은
+     * 재시도 루프 논거와 충돌하지 않는다. 둘 중 하나를 고칠 때는 반드시 함께 본다.
+     */
+    VERIFY_SCHEDULER_RUNNING(
+            409,
+            "VERIFICATION-012",
+            "만료 스케줄러가 도는 동안에는 검증을 시작할 수 없습니다."
+    ),
+
+    /**
+     * 실행기가 스레드 하나 · 큐 없음이라 미루지 않고 거절한다. 큐에 넣으면 그 사이
+     * {@code asOf} 가 지나가 <b>접수 시점과 실행 시점이 다른 데이터를 본다.</b>
+     */
+    VERIFY_ALREADY_RUNNING(
+            429,
+            "VERIFICATION-013",
+            "검증이 이미 실행 중입니다."
+    ),
+
+    /** 조회·중단이 못 찾은 경우다. {@code runId} 가 아니라 {@code executionId} 로 찾는다. */
+    VERIFY_EXECUTION_NOT_FOUND(
+            404,
+            "VERIFICATION-014",
+            "검증 실행을 찾을 수 없습니다."
+    ),
+
+    /** 이미 끝난 실행은 멈출 수 없다. 사건이 아니라 상태다. */
+    VERIFY_NOT_RUNNING(
+            409,
+            "VERIFICATION-015",
+            "그 검증 실행은 이미 끝났습니다."
+    ),
+
+    /**
+     * {@code abandon} 은 {@code STARTED} 를 거부한다 — 살아 있는 프로세스가 정말 돌고 있을
+     * 수도 있어 함부로 못 버린다. 먼저 {@code stop} 으로 {@code STOPPING} 을 만들어야 한다.
+     */
+    VERIFY_NOT_ABANDONABLE(
+            409,
+            "VERIFICATION-016",
+            "먼저 중단 신호를 보내야 그 실행을 버릴 수 있습니다."
     );
 
     private final int status;

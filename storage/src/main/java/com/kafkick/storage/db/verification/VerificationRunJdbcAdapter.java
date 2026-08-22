@@ -30,6 +30,13 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
 @Repository
 public class VerificationRunJdbcAdapter implements VerificationRunRepository {
 
+    /**
+     * {@code VerifyJobConfig.JOB_NAME} 과 같아야 한다. 의존 방향이 반대라
+     * ({@code batch} 가 {@code storage} 를 보지 그 반대가 아니다) 문자열로 둔다 —
+     * 일치는 {@code VerificationRunJdbcAdapterTest.ignoresOtherJobs} 가 지킨다 — 이름이 어긋나면 배치 메타 축이 0을 준다.
+     */
+    private static final String VERIFY_JOB_NAME = "verifyJob";
+
     private static final String INSERT = """
             INSERT INTO verification_runs
                 (as_of, from_ts, scope, dataset, attempt, finding_count, started_at)
@@ -236,5 +243,62 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                     VerificationErrorCode.RUN_ROW_VANISHED,
                     "통계 상태를 갱신하지 못했습니다. runId=" + runId + " 갱신행=" + updated);
         }
+    }
+
+    @Override
+    public int nextAttempt(LocalDateTime asOf, DatasetType dataset, ScopeType scope) {
+        // 두 소스를 함께 본다.
+        //
+        // verification_runs 는 startRunStep 이 **가드 여덟을 통과한 뒤에야** INSERT 한다.
+        // 반면 BATCH_JOB_INSTANCE 는 잡이 시작하는 순간 만들어진다. 그래서 가드에 걸려
+        // 죽은 시도는 앞 테이블에 흔적이 없고 뒤 테이블에만 남는다.
+        //
+        // 앞만 보면 그 번호를 다시 주는데, verifyJob 은 preventRestart 라 같은 파라미터
+        // 조합을 거절한다 — **몇 번을 눌러도 400 이고 자기 치유가 없다.** attempt 를 손으로
+        // 넣지 않게 하려고 만든 것이 오히려 트리거를 영구히 막는다. 실측으로 확인했다.
+        //
+        // 배치 메타는 값을 전부 문자열로 저장한다. 그래서 두 번 정규화한다.
+        //
+        // attempt 는 숫자로 캐스팅하고, asOf 는 **시각으로** 캐스팅한다 — 문자열로 비교하면
+        // 안 된다. LocalDateTime.toString() 은 초가 0이면 생략해 "2026-03-01T09:00" 을 주는데
+        // 배치는 언제나 "2026-03-01T09:00:00" 으로 적는다. 같은 시각인데 문자열이 다르다.
+        // 실측으로 확인했다.
+        return jdbcClient.sql("""
+                        SELECT GREATEST(
+                                 (SELECT COALESCE(MAX(attempt), 0)
+                                    FROM verification_runs
+                                   WHERE as_of = :asOf AND dataset = :dataset AND scope = :scope),
+                                 (SELECT COALESCE(MAX(CAST(a.PARAMETER_VALUE AS UNSIGNED)), 0)
+                                    FROM BATCH_JOB_EXECUTION_PARAMS a
+                                    JOIN BATCH_JOB_EXECUTION e
+                                      ON e.JOB_EXECUTION_ID = a.JOB_EXECUTION_ID
+                                    JOIN BATCH_JOB_INSTANCE i
+                                      ON i.JOB_INSTANCE_ID = e.JOB_INSTANCE_ID
+                                     AND i.JOB_NAME = :jobName
+                                    JOIN BATCH_JOB_EXECUTION_PARAMS o
+                                      ON o.JOB_EXECUTION_ID = a.JOB_EXECUTION_ID
+                                     AND o.PARAMETER_NAME = 'asOf'
+                                    JOIN BATCH_JOB_EXECUTION_PARAMS d
+                                      ON d.JOB_EXECUTION_ID = a.JOB_EXECUTION_ID
+                                     AND d.PARAMETER_NAME = 'dataset'
+                                    JOIN BATCH_JOB_EXECUTION_PARAMS s
+                                      ON s.JOB_EXECUTION_ID = a.JOB_EXECUTION_ID
+                                     AND s.PARAMETER_NAME = 'scope'
+                                   WHERE a.PARAMETER_NAME = 'attempt'
+                                     AND CAST(REPLACE(o.PARAMETER_VALUE, 'T', ' ')
+                                              AS DATETIME(6)) = :asOf
+                                     AND d.PARAMETER_VALUE = :dataset
+                                     AND s.PARAMETER_VALUE = :scope)
+                               ) + 1
+                        """)
+                .param("asOf", asOf)
+                // 잡 이름을 안 보면 질문이 "누구든 그 네 이름의 파라미터를 그 값으로
+                // 쓴 적 있나" 로 넓어진다. 지금 expireJob 은 asOf 하나만 써서 우연히
+                // 안 걸릴 뿐이고, 거기에 dataset·scope·attempt 가 붙는 날 뒤섞인다.
+                .param("jobName", VERIFY_JOB_NAME)
+                .param("dataset", dataset.name())
+                .param("scope", scope.name())
+                .query(Integer.class)
+                .single();
     }
 }

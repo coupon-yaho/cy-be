@@ -1,4 +1,8 @@
 dependencies {
     api 'org.springframework.boot:spring-boot-starter'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // ResponseEnvelope 의 @JsonProperty 하나 때문이다. 직렬화 구현이 아니라 애노테이션
+    // jar 라 core 가 웹 계층을 끌고 오지 않는다. 그 봉투가 여기 있는 이유는 batch 도
+    // 같은 규약을 써야 하기 때문이다 — batch 는 core 만 의존한다.
+    api 'com.fasterxml.jackson.core:jackson-annotations'
 }

@@ -66,4 +66,25 @@ public interface VerificationRunRepository {
      * 한 값으로 뭉친다.
      */
     Optional<VerificationRun> findLatestClosed(DatasetType dataset, ScopeType scope);
+
+    /**
+     * 같은 {@code (asOf, dataset, scope)} 에서 <b>마지막으로 쓰인 attempt + 1</b>.
+     * 하나도 없으면 1 입니다. <b>중간의 빈 번호는 재사용하지 않습니다</b> — 번호를
+     * 시간순으로 읽을 수 있게 두는 편이 낫습니다.
+     *
+     * <p><b>두 소스를 함께 봅니다.</b> {@code verification_runs} 행은 가드를 통과한 뒤에야
+     * 생기는데 배치 메타(`BATCH_JOB_INSTANCE`)는 시작 즉시 생깁니다. 앞만 보면 가드에 걸려
+     * 죽은 번호를 다시 줘서 <b>같은 요청이 영원히 거절</b>됩니다({@code preventRestart}).
+     * 메타 쪽은 {@code verifyJob} 실행만 셉니다 — 잡 이름을 안 보면 다른 잡이 같은 이름의
+     * 파라미터를 쓰는 날 번호가 뒤섞입니다.
+     *
+     * <p>{@code uk_run_params} 가 넷을 묶어 유일성을 걸므로 재실행에는 새 {@code attempt} 가
+     * 필요한데, <b>시드가 앞 번호를 점유한다</b> — CLEAN 은 1·2, CORRUPT 는 1. 사람이 그것을
+     * 외우고 있어야 한다면 트리거 API 가 매번 {@code INVALID_RUN_PARAMS} 로 죽는다.
+     *
+     * <p>이 값은 <b>제안일 뿐 보증이 아니다.</b> 조회와 INSERT 사이에 다른 실행이 끼면
+     * 여전히 유니크 위반이 나는데, 그때 막는 것은 이 메서드가 아니라 인덱스다 — 판정을
+     * 애플리케이션으로 옮기지 않는다.
+     */
+    int nextAttempt(LocalDateTime asOf, DatasetType dataset, ScopeType scope);
 }
