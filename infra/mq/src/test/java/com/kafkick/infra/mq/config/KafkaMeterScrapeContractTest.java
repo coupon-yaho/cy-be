@@ -75,7 +75,8 @@ class KafkaMeterScrapeContractTest {
                 .as("원인을 못 가르면 재기동으로 낫지 않는 실패에 재기동을 반복한다")
                 .contains("app_kafka_topics_provisioned_cause{cause=\"mismatched\"} 1.0")
                 .contains("app_kafka_topics_provisioned_cause{cause=\"unconfirmed\"} 0.0")
-                .contains("app_kafka_topics_provisioned_cause{cause=\"none\"} 0.0");
+                .contains("app_kafka_topics_provisioned_cause{cause=\"none\"} 0.0")
+                .contains("app_kafka_topics_provisioned_cause{cause=\"shutdown\"} 0.0");
     }
 
     @Test

@@ -299,10 +299,14 @@ class KafkaTopicProvisionerTest {
     @DisplayName("종료 중이면 PENDING 이 아니라 중단으로 남는다")
     void shutdownLeavesAnHonestState() throws Exception {
         // 경보 임계치를 99 로 둬서 아직 PENDING 인 채로 백오프에 들어가게 한다.
-        assertThat(shutDownWhileRetrying(99).status())
+        // 두 번 돌려 하나씩 보면 두 값이 같은 순간의 것이라는 보장이 없다 — 이 클래스가
+        // 스냅샷 하나로 든 이유가 정확히 그것이라 테스트도 한 실행에서 둘을 본다.
+        KafkaTopicProvisioner.Snapshot after = shutDownWhileRetrying(99);
+
+        assertThat(after.status())
                 .as("종료 중 전환이 실패하면 PENDING 에 남아 아무도 경보를 못 건다")
                 .isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(shutDownWhileRetrying(99).cause())
+        assertThat(after.cause())
                 .as("우리가 그만둔 것을 '브로커 대기중' 으로 내면 운영자가 기다리기만 한다")
                 .isEqualTo("shutdown");
     }

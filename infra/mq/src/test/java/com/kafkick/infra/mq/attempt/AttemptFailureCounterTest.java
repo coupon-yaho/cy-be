@@ -107,7 +107,7 @@ class AttemptFailureCounterTest {
             pool.shutdownNow();
         }
 
-        assertThat(registry.get("app.kafka.attempt.publish.failures")
+        assertThat(registry.get(AttemptFailureCounter.FAILURE_COUNTER)
                 .tag("reason", "timeout").counter().count())
                 .as("집계가 스레드에 따라 새면 지표가 실패를 축소해서 보고한다")
                 .isEqualTo(threads * perThread);

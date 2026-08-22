@@ -2,6 +2,9 @@ package com.kafkick.api.mq;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.file.Path;
+
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,6 +15,7 @@ import org.springframework.context.annotation.Import;
 import com.kafkick.ApiApplication;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.storage.db.MySqlContainerConfig;
+import com.kafkick.testsupport.CommittedConfigStager;
 
 /**
  * OBS-17 의 설정 계층이 api 컨텍스트에 실제로 실리는지 본다. infra:mq 는 {@code runtimeOnly}
@@ -25,10 +29,26 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * ({@code ManagementExposureTest.TestApp})이 먼저 잡힌다. 그 앱에는 스캔 대상이 없어서
  * 이 테스트가 검사하려던 것이 통째로 사라진다.
  */
-@SpringBootTest(classes = ApiApplication.class,
-        properties = { "kafka.enabled=true", "kafka.provision-topics=false" })
+@SpringBootTest(classes = ApiApplication.class, properties = {
+        "spring.config.location=file:build/cy266-kafka-wiring/kafka.yml",
+        "kafka.enabled=true",
+        "kafka.provision-topics=false"
+})
 @Import(MySqlContainerConfig.class)
 class KafkaLayerWiringTest {
+
+    private static final Path STAGED_CONFIG = Path.of("build/cy266-kafka-wiring/kafka.yml");
+
+    /**
+     * <b>커밋된 {@code .example} 을 깔고 그것만 읽는다.</b> 실행용 {@code *.yml} 은 전부
+     * gitignore 라, 개발자가 손으로 복사해 둔 로컬 파일에 기대면 갓 클론한 환경에서는 이 테스트가
+     * {@code kafka.bootstrap-servers} 를 못 찾아 컨텍스트 기동에서 죽는다(실측 — 8개를 치우고
+     * 돌리니 {@code Assert} 에서 멈췄다). 이 저장소의 다른 api 테스트들과 같은 방식이다.
+     */
+    @BeforeAll
+    static void stageKafkaConfig() throws Exception {
+        CommittedConfigStager.stage(STAGED_CONFIG, "kafka.yml.example");
+    }
 
     @Autowired
     private ApplicationContext context;
