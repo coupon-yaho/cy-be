@@ -151,9 +151,16 @@ public final class ResourceProvider {
         }
     }
 
-    /** 같은 원인은 한 번만 남긴다. 원인은 호출 지점과 예외 타입으로 구분한다. */
+    /**
+     * 같은 원인은 한 번만 남긴다. 원인은 호출 지점과 예외 타입으로 구분한다.
+     *
+     * <p>리플렉션 호출 실패는 원인이 무엇이든 {@link InvocationTargetException} 으로 싸여 오므로
+     * 그것을 벗겨 낸 타입으로 센다. 안 벗기면 이 자리의 첫 실패가 이후의 다른 원인을 전부 덮는다.
+     */
     private void logOnce(String source, Exception ex) {
-        if (loggedFailures.add(source + "|" + ex.getClass().getName())) {
+        Throwable cause = ex instanceof InvocationTargetException wrapped && wrapped.getCause() != null
+                ? wrapped.getCause() : ex;
+        if (loggedFailures.add(source + "|" + cause.getClass().getName())) {
             log.warn("자원 원천 {} 조회 실패 — 해당 값은 UNAVAILABLE 로 내보낸다."
                     + " 동일 원인은 다시 로그하지 않는다.", source, ex);
         }

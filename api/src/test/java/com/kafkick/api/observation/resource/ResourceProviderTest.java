@@ -256,6 +256,52 @@ class ResourceProviderTest {
         assertThat(countOf(output.getAll(), "자원 원천 getThreadsAwaitingConnection 조회 실패")).isEqualTo(1);
     }
 
+    /**
+     * 리플렉션 호출 실패는 원인이 무엇이든 InvocationTargetException 으로 싸여 온다. 그것만으로
+     * 키를 만들면 첫 원인이 이후의 다른 원인을 전부 덮어 아무도 두 번째 장애를 모른다.
+     */
+    @Test
+    @DisplayName("같은 자리라도 실패 원인이 다르면 각각 한 번씩 남는다")
+    void differentCausesAreLoggedSeparately(CapturedOutput output) {
+        ResourceProvider provider = new ResourceProvider(
+                new SwitchingPoolDataSource(), new SimpleMeterRegistry(), timeProvider());
+
+        provider.snapshot();
+        provider.snapshot();
+
+        assertThat(countOf(output.getAll(), "자원 원천 getActiveConnections 조회 실패")).isEqualTo(2);
+    }
+
+    /** 첫 호출은 IllegalStateException, 다음부터는 IllegalArgumentException 을 던진다. */
+    public static final class SwitchingPoolDataSource extends AbstractDataSource {
+
+        private final SwitchingPool pool = new SwitchingPool();
+
+        public SwitchingPool getHikariPoolMXBean() {
+            return pool;
+        }
+    }
+
+    public static final class SwitchingPool {
+
+        private int calls;
+
+        public int getActiveConnections() {
+            if (calls++ == 0) {
+                throw new IllegalStateException("first cause");
+            }
+            throw new IllegalArgumentException("second cause");
+        }
+
+        public int getTotalConnections() {
+            return 12;
+        }
+
+        public int getThreadsAwaitingConnection() {
+            return 0;
+        }
+    }
+
     private static int countOf(String haystack, String needle) {
         int count = 0;
         for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
