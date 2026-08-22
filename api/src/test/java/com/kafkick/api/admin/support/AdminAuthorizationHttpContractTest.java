@@ -5,6 +5,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,7 +20,8 @@ class AdminAuthorizationHttpContractTest {
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport
             .mockMvcWithoutAdminHeaders(new AdminDashboardController(
-                    AdminControllerContractTestSupport.overviewService(Clock.systemUTC())));
+                    AdminControllerContractTestSupport.overviewService(
+                            Clock.fixed(Instant.parse("2026-08-22T00:00:00Z"), ZoneOffset.UTC))));
 
     /** 관리자 역할 누락 또는 정확하지 않은 대소문자 값을 ADMIN-002로 거부하는지 검증합니다. */
     @Test

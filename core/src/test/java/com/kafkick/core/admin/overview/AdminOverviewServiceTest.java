@@ -347,6 +347,14 @@ class AdminOverviewServiceTest {
                 .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(102L, 103L, 105L);
     }
 
+    /** 정상 Action 값도 조립 시각이 아닌 실제 O1·O2 원천 중 가장 오래된 시각을 쓰는지 검증합니다. */
+    @Test
+    @DisplayName("Action VALID 값은 가장 오래된 실제 원천 관측 시각을 보존한다")
+    void preservesOldestObservedAtForValidActionSources() {
+        assertActionSourceStatus(SourceStatus.VALID, SourceStatus.VALID, SourceStatus.VALID,
+                NOW.minus(Duration.ofMinutes(5)));
+    }
+
     /** 명시적인 재고 최신성·미수집 상태가 O4 행과 전역 위험에 손실 없이 전달되는지 검증합니다. */
     @Test
     @DisplayName("재고 STALE WARMING_UP PENDING 상태는 Service O4 행과 전역 위험에 전파된다")

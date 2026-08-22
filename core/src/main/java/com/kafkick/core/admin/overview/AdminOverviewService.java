@@ -280,7 +280,7 @@ public class AdminOverviewService {
             // 값이 있는 비정상 상태는 가장 오래된 원천 시각과 함께 원래 의미를 보존합니다.
             return new AdminOverviewSnapshot.Observation<>(value, status, observedAt);
         }
-        return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, snapshotAt);
+        return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, observedAt);
     }
 
     /** 적용 대상 N_A를 제외한 O1·O2 상태에서 Action 모집단의 완전성을 합성합니다. */
