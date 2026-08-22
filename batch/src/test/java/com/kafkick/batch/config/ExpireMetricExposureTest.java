@@ -3,14 +3,13 @@ package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
@@ -19,18 +18,13 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalManagementPort;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.coupon.IssuanceStatus;
-import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -61,7 +55,8 @@ import com.kafkick.storage.db.VerificationSeed;
         "server.port=0",
         "management.server.port=0"
 })
-@Import({MySqlContainerConfig.class, ExpireMetricExposureTest.SchemaShapeConfig.class})
+@ExtendWith(SchemaShapeConfig.class)
+@Import({MySqlContainerConfig.class, SchemaShapeConfig.class})
 class ExpireMetricExposureTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
@@ -91,7 +86,6 @@ class ExpireMetricExposureTest {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
-        SchemaShapeConfig.pretendClean();
         // 지표는 싱글턴이고 스프링 컨텍스트가 메서드 사이에 공유된다. 그리고 record 는
         // **더 오래된 asOf 의 결과를 버린다** — 여기서 안 비우면 벽시계 asOf 를 쓰는 테스트가
         // 먼저 도는 순서에서 뒤 테스트의 record 가 통째로 거부되고, 실패 메시지는
@@ -289,45 +283,6 @@ class ExpireMetricExposureTest {
                 .as("**NaN 이면 정상 주기가 감시를 끈다.** 태스클릿과 리스너가 같은 폭을 봐야 한다")
                 .isZero();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
-    }
-
-    /**
-     * {@code hasCleanOnlyConstraints} 만 덮는다. 나머지는 실제 저장소로 흘려보낸다.
-     *
-     * <p>인덱스를 실제로 떼지 않는다 — 공용 컨테이너를 여러 테스트가 나눠 쓰므로,
-     * 되돌리기 전에 이 테스트가 죽는 날 <b>다른 테스트를 조용히 오염시킨다.</b>
-     */
-    @TestConfiguration
-    static class SchemaShapeConfig {
-
-        private static volatile boolean corrupt;
-
-        static void pretendCorrupt() {
-            corrupt = true;
-        }
-
-        static void pretendClean() {
-            corrupt = false;
-        }
-
-        @Bean
-        @Primary
-        VerificationRuleRepository schemaShapeOverride(
-                @Qualifier("verificationRuleJdbcAdapter") VerificationRuleRepository real) {
-            return (VerificationRuleRepository) Proxy.newProxyInstance(
-                    VerificationRuleRepository.class.getClassLoader(),
-                    new Class<?>[] {VerificationRuleRepository.class},
-                    (proxy, method, args) -> {
-                        if ("hasCleanOnlyConstraints".equals(method.getName())) {
-                            return !corrupt;
-                        }
-                        try {
-                            return method.invoke(real, args);
-                        } catch (InvocationTargetException e) {
-                            throw e.getCause();
-                        }
-                    });
-        }
     }
 
     /** 기한이 남은 발급건 하나. 미래 asOf 의 컷 안에는 들어온다. */

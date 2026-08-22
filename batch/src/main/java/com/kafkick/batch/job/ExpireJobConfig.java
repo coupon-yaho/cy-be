@@ -425,17 +425,39 @@ public class ExpireJobConfig {
     private static Optional<List<Long>> blockedFrom(JobExecution jobExecution) {
         String prefix = jobExecution.getId() + GENERATION_SEPARATOR;
         return jobExecution.getStepExecutions().stream()
-                .map(step -> step.getExecutionContext().getString(BLOCKED_COUPONS_KEY, ""))
-                .filter(raw -> raw.startsWith(prefix))
-                .map(raw -> raw.substring(prefix.length()))
-                .findFirst()
-                .map(ExpireJobConfig::parseCouponIds);
+                .map(step -> blockedFor(
+                        step.getExecutionContext().getString(BLOCKED_COUPONS_KEY, ""), prefix))
+                .flatMap(Optional::stream)
+                .findFirst();
     }
 
-    /** 빈 문자열은 <b>막힌 회차가 없다</b>는 뜻이다. 모른다는 뜻이 아니다. */
-    private static List<Long> parseCouponIds(String ids) {
-        return ids.isEmpty() ? List.of()
-                : Arrays.stream(ids.split(",")).map(Long::valueOf).toList();
+    /**
+     * 문맥 값에서 <b>이 세대의</b> 목록만 꺼낸다. 세대가 다르면 빈 {@code Optional} 이다.
+     *
+     * <p><b>한 곳에 모으는 이유가 있다.</b> 이 포맷을 판정({@code blockedCoupons})과
+     * 관측({@code blockedFrom})이 함께 읽는다. 두 벌로 두면 포맷을 바꾸는 날 한쪽만 고쳐지고,
+     * 그 어긋남은 <b>지표만 조용히 틀리게</b> 만든다 — 잡은 멀쩡히 돈다.
+     *
+     * <p><b>두 가지 "빈 것" 을 가른다.</b> 이 메서드에 오는 것은 문맥 값 전체(`raw`)이지
+     * id 목록이 아니다.
+     *
+     * <pre>
+     *   raw = ""        접두사가 안 맞는다 → Optional.empty()  <b>모른다</b>
+     *   raw = "7|"      이 세대가 판정했고 목록이 비었다        <b>막힌 회차가 없다</b>
+     *   raw = "6|3,9"   남의 세대다 → Optional.empty()          <b>모른다</b>
+     * </pre>
+     *
+     * 그 구분이 관측의 전부다 — <i>"못 읽었다"</i> 를 <i>"막힌 회차가 없다"</i> 로 읽으면
+     * 남은 대기가 전부 <i>"배치가 처리했어야 하는 몫"</i> 으로 나가고, 그 알림은
+     * <b>서버를 보라</b>고 안내한다.
+     */
+    private static Optional<List<Long>> blockedFor(String raw, String prefix) {
+        if (!raw.startsWith(prefix)) {
+            return Optional.empty();
+        }
+        String ids = raw.substring(prefix.length());
+        return Optional.of(ids.isEmpty() ? List.of()
+                : Arrays.stream(ids.split(",")).map(Long::valueOf).toList());
     }
 
     /**
@@ -486,11 +508,10 @@ public class ExpireJobConfig {
     private static List<Long> blockedCoupons(ExecutionContext context,
             ExpirationRepository expirations, LocalDateTime asOf, long generation) {
         String prefix = generation + GENERATION_SEPARATOR;
-        String cached = context.getString(BLOCKED_COUPONS_KEY, "");
-        if (cached.startsWith(prefix)) {
-            String ids = cached.substring(prefix.length());
-            return ids.isEmpty() ? List.of()
-                    : Arrays.stream(ids.split(",")).map(Long::valueOf).toList();
+        Optional<List<Long>> cached =
+                blockedFor(context.getString(BLOCKED_COUPONS_KEY, ""), prefix);
+        if (cached.isPresent()) {
+            return cached.get();
         }
 
         List<Long> blocked = expirations.blockedCoupons(asOf);

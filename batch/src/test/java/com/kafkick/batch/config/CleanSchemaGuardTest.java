@@ -3,13 +3,13 @@ package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
+import java.time.Clock;
 import java.time.LocalDateTime;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
@@ -18,7 +18,6 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -29,7 +28,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import com.kafkick.batch.job.JobFailures;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
-import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -55,10 +53,15 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=100"
 })
-@Import({MySqlContainerConfig.class, CleanSchemaGuardTest.CorruptShapedSchemaConfig.class})
+@ExtendWith(SchemaShapeConfig.class)
+@Import({MySqlContainerConfig.class, SchemaShapeConfig.class,
+        CleanSchemaGuardTest.FixedClockConfig.class})
 class CleanSchemaGuardTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 태스클릿이 {@code asOf} 를 이 값과 견준다. */
+    private static final LocalDateTime NOW = AS_OF.plusMinutes(3);
 
     @Autowired
     private JobOperator jobOperator;
@@ -79,7 +82,6 @@ class CleanSchemaGuardTest {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
-        CorruptShapedSchemaConfig.pretendClean();
     }
 
     /**
@@ -93,7 +95,7 @@ class CleanSchemaGuardTest {
         long target = expiring();
         seed.overwriteStock(1);
 
-        CorruptShapedSchemaConfig.pretendCorrupt();
+        SchemaShapeConfig.pretendCorrupt();
         JobExecution execution = launch();
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
@@ -154,42 +156,20 @@ class CleanSchemaGuardTest {
     }
 
     /**
-     * {@code hasCleanOnlyConstraints} 만 덮는다. 나머지 호출은 실제 저장소로 흘려보낸다.
+     * <b>시계를 고정한다.</b> 태스클릿은 {@code asOf} 가 현재보다 미래면
+     * {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는다. 벽시계로 두면 이 테스트의 통과 여부가
+     * <b>실행하는 날짜</b>에 딸린다 — 지금은 {@code AS_OF} 가 과거라 통과하지만, 그것은
+     * 이 테스트가 지키려는 성질(오염 스키마를 막는가)과 아무 상관이 없는 이유다.
      *
-     * <p><b>인덱스를 실제로 떼지 않는 것이 결정이다.</b> 공용 컨테이너를 여러 테스트가 나눠
-     * 쓰므로, {@code uk_coupon_member} 를 지웠다가 되돌리는 방식은 이 테스트가 중간에 죽는
-     * 날 <b>다른 테스트를 조용히 오염시킨다.</b>
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 라 오프셋도 UTC 로 맞춘다.
      */
-    @TestConfiguration
-    static class CorruptShapedSchemaConfig {
-
-        private static volatile boolean corrupt;
-
-        static void pretendCorrupt() {
-            corrupt = true;
-        }
-
-        static void pretendClean() {
-            corrupt = false;
-        }
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
 
         @Bean
         @Primary
-        VerificationRuleRepository schemaShapeOverride(
-                @Qualifier("verificationRuleJdbcAdapter") VerificationRuleRepository real) {
-            return (VerificationRuleRepository) Proxy.newProxyInstance(
-                    VerificationRuleRepository.class.getClassLoader(),
-                    new Class<?>[] {VerificationRuleRepository.class},
-                    (proxy, method, args) -> {
-                        if ("hasCleanOnlyConstraints".equals(method.getName())) {
-                            return !corrupt;
-                        }
-                        try {
-                            return method.invoke(real, args);
-                        } catch (InvocationTargetException e) {
-                            throw e.getCause();
-                        }
-                    });
+        Clock fixedClock() {
+            return FixedClock.at(NOW);
         }
     }
 }

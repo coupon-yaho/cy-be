@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,6 +29,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.FixedClock;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
@@ -246,7 +246,7 @@ class ExpireJobTest {
         Clock fixedClock() {
             // 운영 TimeConfig 가 systemUTC 다. 여기서 기본 타임존을 쓰면 CI 와 로컬이
             // 다른 값을 내고, 고정한 의미가 없어진다.
-            return Clock.fixed(WROTE_AT.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+            return FixedClock.at(WROTE_AT);
         }
     }
 

@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +26,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.FixedClock;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
@@ -257,7 +257,7 @@ class ExpireGuardTest {
         @Bean
         @Primary
         Clock fixedClock() {
-            return Clock.fixed(NOW.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+            return FixedClock.at(NOW);
         }
     }
 
