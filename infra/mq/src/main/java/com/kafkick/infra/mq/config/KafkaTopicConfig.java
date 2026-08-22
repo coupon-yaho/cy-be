@@ -124,6 +124,9 @@ public class KafkaTopicConfig {
     private static final int PROVISION_ALERT_AFTER_ATTEMPTS = 5;
     private static final Duration PROVISION_INITIAL_BACKOFF = Duration.ofSeconds(3);
 
+    /** 꼬리표 값은 등록 시점에 고정된다 — 그래서 닫힌 4값을 각각 한 시계열로 낸다. */
+    private static final List<String> PROVISION_CAUSES = List.of("none", "unconfirmed", "mismatched", "shutdown");
+
     /**
      * 토픽 생성을 기동 경로에서 떼어 낸다.
      *
@@ -258,9 +261,6 @@ public class KafkaTopicConfig {
                 ? new KafkaTopicProvisioner.Snapshot(SourceStatus.N_A, "none")
                 : provisioner.snapshot();
     }
-
-    /** 꼬리표 값은 등록 시점에 고정된다 — 그래서 닫힌 4값을 각각 한 시계열로 낸다. */
-    private static final List<String> PROVISION_CAUSES = List.of("none", "unconfirmed", "mismatched", "shutdown");
 
     /**
      * 생성과 확인을 한 걸음으로 묶는다. <b>람다로 두면 이 결합에 가드를 걸 수 없다</b> —
