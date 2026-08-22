@@ -62,14 +62,15 @@ class SchemaPresenceGuardTest {
 
     /**
      * 목록 <b>전체</b>가 메시지에 실려야 한다. 하나만 싣고 죽으면 사람이 고친 뒤 다시 뜨고
-     * 다음 것에서 또 죽는다 — 빈 DB 는 일곱이 한꺼번에 없는 상태다.
+     * 다음 것에서 또 죽는다 — 빈 DB 는 여덟이 한꺼번에 없는 상태다.
      */
     @Test
     @DisplayName("빈 스키마면 없는 테이블을 전부 알려 준다")
     void namesEveryMissingTable() {
         List<String> all = List.of(
                 "issuances", "issuance_histories", "verification_runs", "coupon_stocks",
-                "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION");
+                "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION",
+                "BATCH_JOB_EXECUTION_PARAMS");
 
         assertThatThrownBy(() -> new SchemaPresenceGuard(missing(all)).run(null))
                 .isInstanceOf(BusinessException.class)
