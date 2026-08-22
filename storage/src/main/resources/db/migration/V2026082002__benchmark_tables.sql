@@ -264,10 +264,17 @@ CREATE TABLE `benchmark_runs` (
     ),
 
     -- IS NOT NULL 만으로는 부족하다. '' 도 NOT NULL 이라 "이유 없는 FAILED" 가 그대로 들어온다 —
-    -- 재실행 판단의 유일한 근거가 빈 문자열로 남는다. TRIM 은 결정적 함수라 CHECK 에서 쓸 수 있다.
+    -- 재실행 판단의 유일한 근거가 빈 문자열로 남는다.
+    --
+    -- TRIM 도 부족하다. MySQL 의 TRIM 은 기본으로 <b>스페이스(CHAR(32))만</b> 자르고 탭·줄바꿈은
+    -- 그대로 둔다(실측: '\t' · '\n' 만 있는 이유가 통과했다). 그러면 앱의 isBlank 와 DB 의 판정이
+    -- 갈린다 — 서비스를 지나는 요청은 막히는데 백필·수동 보정은 통과한다. 하필 그 경로가 이
+    -- CHECK 가 존재하는 유일한 이유다. REGEXP_LIKE 의 [:space:] 는 탭·줄바꿈·캐리지리턴을 포함하므로
+    -- "공백 아닌 문자가 하나라도 있는가" 를 묻는 쪽으로 바꾼다.
     CONSTRAINT `ck_run_archive_reason` CHECK (
         (`archive_status` = 'FAILED')
-            = (`archive_failure_reason` IS NOT NULL AND TRIM(`archive_failure_reason`) <> '')
+            = (`archive_failure_reason` IS NOT NULL
+               AND REGEXP_LIKE(`archive_failure_reason`, '[^[:space:]]'))
     )
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 

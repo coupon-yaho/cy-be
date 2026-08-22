@@ -321,6 +321,13 @@ class BenchmarkRunServiceTest {
                     finalized.id(), BenchmarkArchiveStatus.FAILED, ""))
                     .satisfies(it -> assertThat(codeOf(it))
                             .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
+
+            // 탭·줄바꿈도 같이 본다. DB 의 ck_run_archive_reason 이 REGEXP_LIKE 로 같은 판정을
+            // 하므로, 여기서 통과시키면 두 층의 기준이 갈린다 — TRIM 을 쓰던 동안 실제로 갈려 있었다.
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                    finalized.id(), BenchmarkArchiveStatus.FAILED, "\t\n"))
+                    .satisfies(it -> assertThat(codeOf(it))
+                            .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
         }
 
         /** XOR 의 반대 방향. 성공한 archive 에 실패 이유가 남아 있으면 재실행 판단이 거짓이 된다. */
