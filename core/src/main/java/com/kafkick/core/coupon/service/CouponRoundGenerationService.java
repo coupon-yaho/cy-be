@@ -181,7 +181,7 @@ public class CouponRoundGenerationService {
             );
         }
         if (ChronoUnit.DAYS.between(fromDate, toDate)
-                > maxGenerationDays) {
+                >= maxGenerationDays) {
             throw new IllegalArgumentException(
                     "회차 생성 기간이 허용 범위를 초과했습니다."
             );

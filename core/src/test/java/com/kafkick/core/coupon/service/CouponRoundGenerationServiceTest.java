@@ -66,7 +66,7 @@ class CouponRoundGenerationServiceTest {
         CouponRoundGenerationResult result = couponRoundGenerationService
                 .generate(
                         LocalDate.of(2026, 8, 10),
-                        LocalDate.of(2026, 9, 9),
+                        LocalDate.of(2026, 9, 8),
                         generatedAt
                 );
 
@@ -167,11 +167,11 @@ class CouponRoundGenerationServiceTest {
     }
 
     @Test
-    @DisplayName("최대 생성 기간 30일을 초과하는 범위를 거부한다")
+    @DisplayName("시작일을 포함해 31일이 되는 생성 범위를 거부한다")
     void rejectTooLongDateRange() {
         assertThatThrownBy(() -> couponRoundGenerationService.generate(
                 LocalDate.of(2026, 8, 18),
-                LocalDate.of(2026, 9, 18),
+                LocalDate.of(2026, 9, 17),
                 Instant.parse("2026-08-18T00:00:00Z")
         ))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -179,7 +179,7 @@ class CouponRoundGenerationServiceTest {
     }
 
     @Test
-    @DisplayName("정확히 30일 이후까지의 생성 범위를 허용한다")
+    @DisplayName("시작일을 포함한 정확히 30일 생성 범위를 허용한다")
     void acceptMaximumDateRange() {
         when(couponTemplateRepository.findAllActiveByIdAsc())
                 .thenReturn(List.of());
@@ -187,7 +187,7 @@ class CouponRoundGenerationServiceTest {
         CouponRoundGenerationResult result = couponRoundGenerationService
                 .generate(
                         LocalDate.of(2026, 8, 18),
-                        LocalDate.of(2026, 9, 17),
+                        LocalDate.of(2026, 9, 16),
                         Instant.parse("2026-08-18T00:00:00Z")
                 );
 
