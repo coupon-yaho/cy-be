@@ -26,17 +26,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Import(MemberCouponQueryAdapter.class)
 class MemberCouponQueryRepositoryTest {
 
-    private final MemberCouponQueryAdapter memberCouponQueryRepository;
-    private final JdbcTemplate jdbcTemplate;
+    @Autowired
+    private MemberCouponQueryAdapter memberCouponQueryRepository;
 
     @Autowired
-    MemberCouponQueryRepositoryTest(
-            MemberCouponQueryAdapter memberCouponQueryRepository,
-            JdbcTemplate jdbcTemplate
-    ) {
-        this.memberCouponQueryRepository = memberCouponQueryRepository;
-        this.jdbcTemplate = jdbcTemplate;
-    }
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void setUp() {
