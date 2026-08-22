@@ -117,28 +117,17 @@ public class BatchApiExceptionHandler {
                 // 같은 이유로 메시지를 안 남긴다 — 그 안에 요청값이 들어간다.
                 log.info("검증 API 가 요청을 거절했습니다. status={} type={}",
                         status, exception.getClass().getSimpleName());
-                return respond(commonCodeFor(status));
+                // INVALID_INPUT(400) 고정이라 헤더와 본문이 갈릴 것 같지만, **이 갈래로
+                // 오는 4xx 는 전부 400 이다.** 스프링이 내는 404·405·406 은 컨트롤러가
+                // 정해지기 전에 나서 assignableTypes 로 묶인 이 advice 에 도달하지 않고,
+                // 415 는 이 API 가 body 를 안 받아 발생 자체가 없다 — 넷 다 실측했다.
+                // 우리 도메인 404(VERIFY_EXECUTION_NOT_FOUND)는 handleBusiness 가 잡고
+                // 그쪽은 코드 자신이 상태를 들고 있어 어긋날 여지가 없다.
+                return respond(CommonErrorCode.INVALID_INPUT);
             }
         }
         log.error("검증 API 에서 예상 못 한 오류가 났습니다.", exception);
         return respond(CommonErrorCode.INTERNAL_ERROR);
-    }
-
-    /**
-     * <b>HTTP 상태와 본문의 {@code status} 를 일치시킨다.</b> {@code ErrorResponse.of} 는
-     * 본문 상태를 {@code errorCode.getStatus()} 에서 읽으므로, 405 응답에
-     * {@code INVALID_INPUT}(400)을 쓰면 <b>헤더는 405 인데 본문은 400</b> 이 된다 —
-     * 클라이언트가 둘 중 무엇을 믿어야 할지 모른다.
-     *
-     * <p>그 밖의 4xx 는 {@code INVALID_INPUT} 으로 접는다. 여기 오는 것은 스프링이 이미
-     * 상태를 정한 웹 예외이고, 우리 카탈로그에 대응 코드가 없는 자리다 — 대부분 400 이다.
-     */
-    private static ErrorCode commonCodeFor(int status) {
-        // 405 는 여기 안 온다 — 위 javadoc 이 적은 대로 컨트롤러가 정해지기 전에 나는
-        // 예외라 이 advice 밖이다(실측). 도달 못 하는 분기를 방어로 두면 다음 사람이
-        // "405 도 우리 형식으로 나간다" 고 믿는다. 필요해지는 날 — advice 범위를
-        // 넓히는 날 — 그때 넣는다.
-        return status == 404 ? CommonErrorCode.NOT_FOUND : CommonErrorCode.INVALID_INPUT;
     }
 
     private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code) {
