@@ -4,6 +4,7 @@ package com.kafkick.batch.job;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Method;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,8 +27,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.FixedClock;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
@@ -71,10 +74,13 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=1"
 })
-@Import({MySqlContainerConfig.class, ExpireJobRestartTest.FailAtChunkConfig.class})
+@Import({MySqlContainerConfig.class, ExpireJobRestartTest.FixedClockConfig.class, ExpireJobRestartTest.FailAtChunkConfig.class})
 class ExpireJobRestartTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 태스클릿이 asOf 를 이 값과 견주므로 벽시계면 실행 날짜에 딸린다. */
+    private static final LocalDateTime NOW = AS_OF.plusDays(1);
 
     @Autowired
     private JobOperator jobOperator;
@@ -176,15 +182,69 @@ class ExpireJobRestartTest {
                 .isEqualTo(3);
     }
 
+    /**
+     * <b>재시작은 제외 목록을 다시 구해야 한다.</b>
+     *
+     * <p>제외 목록은 Step 의 {@code ExecutionContext} 에 실리는데, 그 문맥은 청크 커밋마다
+     * 영속되고 <b>재시작이 그대로 복원한다.</b> 그래서 아무 표식 없이 캐시하면 "실행당 한 번"
+     * 이 아니라 <b>"JobInstance 당 한 번"</b> 이 된다 — 첫 실행과 재시작 사이에 새로 어긋난
+     * 회차를 낡은 목록이 못 보고, 그 회차에서 또 죽고, 다음 재시작도 같은 낡은 목록을
+     * 복원해 <b>같은 자리에서 영원히 죽는다.</b> 이 티켓이 없앤 모양이 재시작 축에 그대로
+     * 남는 것이다.
+     *
+     * <p>반대 방향도 나쁘다 — 그 사이 사람이 재고를 고친 회차가 계속 제외된 것으로 잡혀
+     * {@code cy_expire_blocked_pending} 이 부풀고, 그만큼 누락 알림이 침묵한다.
+     *
+     * <p>그래서 값에 {@code JobExecution} 세대를 함께 싣고, 세대가 다르면 다시 계산한다.
+     */
+    @Test
+    @DisplayName("재시작은 제외 목록을 다시 구한다 — 낡은 목록으로 같은 자리에서 안 죽는다")
+    void recomputesExclusionOnRestart() throws Exception {
+        List<Long> healthy = expiredIssuances(5);
+        seed.overwriteStock(5);
+
+        FailAtChunkConfig.failFromCall(3);
+        JobExecution first = launch();
+        assertThat(first.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(expiredCount())
+                .as("첫 실행에는 어긋난 회차가 없어 제외 목록이 비어 있었다")
+                .isEqualTo(2);
+
+        // 첫 실행과 재시작 사이에 회차 하나가 어긋난다. 낡은 목록에는 이것이 없다.
+        long broken = seed.newCoupon();
+        long brokenFirst = expiredIssuance();
+        long brokenSecond = expiredIssuance();
+        seed.overwriteStock(1);
+
+        FailAtChunkConfig.neverFail();
+        JobExecution second = launch();
+
+        assertThat(second.getStatus())
+                .as("**낡은 목록을 쓰면 어긋난 회차가 창 안으로 들어와 STOCK_UNDERFLOW 로 "
+                        + "죽는다.** 그리고 다음 재시작도 같은 목록을 복원해 또 죽는다")
+                .isEqualTo(BatchStatus.COMPLETED);
+        assertThat(statusOf(brokenFirst))
+                .as("다시 구한 목록에는 회차 %d 가 들어 있어야 한다", broken)
+                .isEqualTo(IssuanceStatus.ISSUED.name());
+        assertThat(statusOf(brokenSecond)).isEqualTo(IssuanceStatus.ISSUED.name());
+        assertThat(statusOf(healthy.get(4)))
+                .as("성한 회차의 나머지는 그대로 넘어간다")
+                .isEqualTo(IssuanceStatus.EXPIRED.name());
+    }
+
+    private long expiredIssuance() {
+        long id = seed.issuance(IssuanceStatus.ISSUED);
+        jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
+                .param("at", AS_OF.minusDays(1))
+                .param("id", id)
+                .update();
+        return id;
+    }
+
     private List<Long> expiredIssuances(int count) {
         List<Long> ids = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            long id = seed.issuance(IssuanceStatus.ISSUED);
-            jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
-                    .param("at", AS_OF.minusDays(1))
-                    .param("id", id)
-                    .update();
-            ids.add(id);
+            ids.add(expiredIssuance());
         }
         return ids;
     }
@@ -276,23 +336,43 @@ class ExpireJobRestartTest {
 
         /**
          * <b>인자 위치를 인덱스로 집는 것이 이 테스트의 급소다.</b>
-         * {@code expireBatch(asOf, committedAt, afterId, limit)} 에서 파라미터가 하나
-         * 늘거나 순서가 바뀌면, {@code afterId} 와 {@code limit} 이 둘 다 정수라
-         * <b>캐스팅이 조용히 성공한다</b> — {@code AFTER_IDS} 에 진도가 아닌 값이 쌓이고
-         * 진도 단언이 <b>거짓으로 통과</b>한다. 시그니처가 바뀐 그 자리에서 멈추게 한다.
+         * {@code expireBatch(asOf, committedAt, afterId, limit, blockedCoupons)} 에서
+         * 파라미터가 하나 늘거나 순서가 바뀌면, {@code afterId} 와 {@code limit} 이 둘 다
+         * 정수라 <b>캐스팅이 조용히 성공한다</b> — {@code AFTER_IDS} 에 진도가 아닌 값이
+         * 쌓이고 진도 단언이 <b>거짓으로 통과</b>한다. 시그니처가 바뀐 그 자리에서 멈추게 한다.
+         *
+         * <p>실제로 한 번 걸렸다 — 회차 격리가 다섯째 파라미터를 더했을 때 이 가드가 먼저 울렸다.
          */
         private static long afterIdOf(Method method, Object[] args) {
             // 파라미터 이름으로는 못 본다 — core 모듈은 -parameters 없이 컴파일돼
-            // arg0..arg3 로만 남는다. 대신 타입 배치를 그대로 요구한다.
+            // arg0..arg4 로만 남는다. 대신 타입 배치를 그대로 요구한다.
             Class<?>[] types = method.getParameterTypes();
-            boolean sameShape = types.length == 4 && args.length == 4
-                    && types[2] == long.class && types[3] == int.class;
+            boolean sameShape = types.length == 5 && args.length == 5
+                    && types[2] == long.class && types[3] == int.class
+                    && types[4] == List.class;
             if (!sameShape) {
                 throw new IllegalStateException(
                         "expireBatch 시그니처가 바뀌었다. 3번째 인자가 afterId 라는 전제로 진도를 "
                                 + "읽고 있으니 이 프록시부터 고쳐라. 지금 시그니처=" + method);
             }
             return (Long) args[2];
+        }
+    }
+
+    /**
+     * <b>시계를 고정한다.</b> 태스클릿은 {@code asOf} 가 현재보다 미래면
+     * {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는다. 벽시계로 두면 이 테스트가 재는 축과 무관한
+     * 이유(<b>실행하는 날짜</b>)로 결과가 갈린다.
+     *
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 라는 것은 {@link FixedClock} 이 진다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return FixedClock.at(NOW);
         }
     }
 }

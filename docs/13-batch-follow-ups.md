@@ -18,18 +18,25 @@
 검증 배치는 이 원칙대로 서 있다 — 불일치는 `verdict=FAIL` 로 남기고 계속 가고,
 판정 불가(`DATASET_MUTATED_DURING_RUN`·`RUNTIME_NOT_QUIESCED` 등 7종)일 때만 죽는다.
 
-**만료 배치는 아직 아니다.** 그것이 아래 1번이다.
+**만료 배치도 데이터 축에서는 이제 그렇다.** 재고가 어긋난 회차는 판정으로 남기고 배치는
+정상 종료한다 — 어떻게 맞췄는지가 아래 1번이다.
+
+> **만료가 죽는 자리는 그대로 남아 있고, 그것이 맞다.** `EXPIRE_HISTORY_COUNT_MISMATCH` 는
+> <b>우리 쓰기가 어긋났다</b>는 뜻이라 판정이 아니라 사고다. `EXPIRE_ASOF_IN_FUTURE` 는 넘긴
+> 파라미터가, `EXPIRE_ON_CORRUPT_SCHEMA` 는 접속 설정이 틀린 것이다. 셋 다 <i>"판정을 내지
+> 못한 경우"</i> 에 든다. 정상 종료로 바뀐 것은 <b>`STOCK_*` 축, 즉 데이터가 이미 어긋나
+> 있다는 판정</b> 하나다.
 
 ---
 
-## 1. 만료 배치 — 회차 격리 (다음 티켓)
+## 1. 만료 배치 — 회차 격리 (완료 · CY-347)
 
-### 무엇이 문제인가
+### 무엇이 문제였나
 
-가드 셋이 전부 예외를 던져 **잡을 실패**시킨다. 그중 둘은 *"데이터가 이미 어긋나 있다"* 인데,
-그 판정을 내고도 배치를 죽인다 — 위 원칙과 반대다.
+가드 셋이 전부 예외를 던져 **잡을 실패**시켰다. 그중 둘은 *"데이터가 이미 어긋나 있다"* 인데,
+그 판정을 내고도 배치를 죽였다 — 위 원칙과 반대였다.
 
-| 가드 | 뜻 | 지금 | 원칙대로면 |
+| 가드 | 뜻 | CY-347 전 | 지금 |
 |---|---|---|---|
 | `EXPIRE_HISTORY_COUNT_MISMATCH` | **우리 쓰기가 어긋났다** | 실패 | **실패 유지** |
 | `STOCK_ROW_MISSING` | 재고 행 없는 회차가 섞였다 | 실패 | **성공 + 알림** |
@@ -38,53 +45,121 @@
 첫째만 성격이 다르다. 넘긴 건수와 쓴 이력 수가 다르다는 것은 **이 잡이 방금 깨뜨렸다**는
 뜻이라, 성공으로 넘기면 이력 없는 발급건이 커밋된다. 그건 판정이 아니라 사고다.
 
-### 대가가 얼마나 큰가
+### 대가가 얼마나 컸나
 
-오염 회차 **하나**가 그 뒤 id **전부**의 만료를 영구히 막는다.
+오염 회차 **하나**가 그 뒤 id **전부**의 만료를 영구히 막았다.
 
-- 청크 단위로 롤백되므로 **같은 청크에 실린 남의 회차까지** 되돌아간다
+- 청크 단위로 롤백되므로 **같은 청크에 실린 남의 회차까지** 되돌아갔다
   (운영 `chunk-size` 는 1000 이다)
 - 진도는 JobInstance 안에서만 살고 주기마다 새 인스턴스라, 다음 주기도 `id > 0` 부터 훑다
-  **같은 자리에서 죽는다** — 하루 288회, 사람이 손볼 때까지
-- 만료 누락은 검증 finding 이 아니므로(설계상 관측 지표) **검증도 안 잡아 준다**
+  **같은 자리에서 죽었다** — 하루 288회, 사람이 손볼 때까지
+- 만료 누락은 검증 finding 이 아니므로(설계상 관측 지표) **검증도 안 잡아 줬다**
 
 그리고 이 프로젝트는 그 상태가 **존재한다고 전제한다** — CORRUPT 스키마가 `ck_stock_range` 를
 일부러 떼고 오염 유형이 `active_count` 를 흔든다. 검증용 DB 를 보게 띄운 배치는 **확실히**
-이 경로에 들어간다.
+이 경로에 들어갔다. 그 자리는 이제 `CleanSchemaGuard` 가 막는다.
 
-지금 그 대가는 `ExpireUnderflowBlastRadiusTest` 가 단언으로 못 박고 있다.
+그 대가는 `ExpireUnderflowBlastRadiusTest` 가 단언으로 못 박고 있었다. 그 파일은
+`ExpireBlockedCouponIsolationTest` 로 바뀌었고 단언이 뒤집혔다 — javadoc 이 예고한 대로다.
 
-### 어떻게 바꾸나
+### 어떻게 바꿨나
 
-**건너뛰는 단위가 청크가 아니라 회차여야 한다.** 넘긴 뒤에 재고만 빼먹으면
-`EXPIRED` 인데 재고는 안 돌아온 상태가 커밋된다 — 지금 롤백이 막고 있는 바로 그 상태다.
+**건너뛰는 단위가 청크가 아니라 회차다.** 넘긴 뒤에 재고만 빼먹으면
+`EXPIRED` 인데 재고는 안 돌아온 상태가 커밋된다 — 예전에 롤백이 막고 있던 바로 그 상태다.
 
 ```
-청크 시작
-  → 이 구간에서 재고가 어긋난 회차를 먼저 구한다
-      (STOCK_ROW_COUNT 와 같은 파생테이블에 WHERE s.active_count < x.expired 또는
-       재고 행 부재 조건을 걸어 coupon_id 를 받는다)
+잡 시작(첫 청크)
+  → 남은 대기 **전체**를 회차별로 묶어 재고가 어긋난 회차를 한 번 구한다
+      (issuances 파생테이블 LEFT JOIN coupon_stocks,
+       WHERE s.coupon_id IS NULL OR s.active_count < x.pending)
+  → 결과를 JobExecution 세대와 함께 ExecutionContext 에 실어 그 실행 내내 재사용
   → EXPIRE_BATCH 에 AND coupon_id NOT IN (:blocked) 를 붙여 그 회차를 애초에 제외
   → 나머지는 정상 커밋. 잡은 COMPLETED
   → 제외한 회차를 메트릭·로그로 내보낸다
 ```
 
+> **원래 이 문서가 지시한 "이 청크 구간에서" 를 안 썼다.** 청크 기준으로 막힘을 정의하면
+> **제외한 만큼 `LIMIT` 자리가 비어 다른 회차의 행이 창 안으로 들어오는데**, 그 회차는
+> 판정한 적이 없어 또 막혀 있을 수 있다 — 재고 없이 만료된 상태가 커밋된다. 남은 대기
+> 전체와 견주면 제외 대상이 창 구성과 무관해져서, 밀려 들어오는 것은 언제나 성한 회차뿐이다.
+> 성능을 이유로 청크 스코프로 되돌리려는 다음 사람은 이 문단을 먼저 읽어라.
+
+> **`updated_at <= :committedAt` 캡처 창도 일부러 안 걸었다.** `committedAt` 은 청크마다
+> 새로 잡혀 **뒤 청크의 창이 더 넓다.** 판정에 창을 걸면 그 틈의 행이 대기로 안 세졌는데
+> 만료는 되어, 회차별 차감 합계가 판정이 본 대기를 넘고 `STOCK_UNDERFLOW` 로 죽는다 —
+> 이 티켓이 없애려던 그 실패다. 창을 빼면 그 값이 **상계**가 되어 어떤 `committedAt`
+> 수열에서도 부등식이 선다. 회귀 테스트는
+> `BlockedCouponTest.countsRowsUpdatedAfterTheCaptureWindow` 다.
+
 ### 무엇을 함께 손대야 하나
 
 | 대상 | 왜 |
 |---|---|
-| `ExpirationRepository` · `ExpirationJdbcAdapter` | 막힌 회차를 구하는 포트가 하나 는다. 락 순서 계약(`issuances` → `issuance_histories` → `coupon_stocks`)을 지켜야 한다 |
-| `ExpireJobConfig` 태스클릿 | 가드 둘이 예외에서 **제외 + 집계**로 바뀐다 |
-| `ExpireUnderflowBlastRadiusTest` | **단언이 뒤집힌다.** javadoc 이 "도입하는 날 이 단언이 뒤집히면서 도입 사실을 알린다" 고 예고해 뒀다 |
-| `ExpirationErrorCode` | 둘이 예외가 아니게 되면 코드의 뜻이 바뀐다. 지우지 말고 **무엇으로 대체됐는지** 남긴다 |
-| `docs/12` · `batch-alerts.yml` | 실패 자리가 넷에서 둘로 준다 |
+| `ExpirationRepository` · `ExpirationJdbcAdapter` | ✅ 포트가 둘 늘었다(`blockedCoupons`·`countPending`). **둘 다 락을 안 잡는 읽기라 락 순서 계약 밖**이고 — 계약을 지는 것은 쓰는 셋뿐이다 — 그 성질을 `ExpirationLockScopeTest.readOnlyQueriesTakeNoLocks` 가 계측으로 지킨다 |
+| `ExpireJobConfig` 태스클릿 | ✅ 가드 둘이 예외에서 **제외 + 집계**로 바뀌었다 |
+| `ExpireUnderflowBlastRadiusTest` | ✅ `ExpireBlockedCouponIsolationTest` 로 개명 + 단언 반전 |
+| `ExpirationErrorCode` | ✅ 두 코드의 javadoc 에 "CY-347 이후 뜻이 바뀌었다 — 도달했다면 제외 논리가 샌 것" 을 적었다 |
+| `batch-alerts.yml` | ✅ 머리말의 실패 자리 목록을 새 뜻으로 고쳤다 |
+| `CleanSchemaGuard` (신규) | ✅ **이 변경이 넓힌 폭을 막는다.** 아래 참조 |
+| `docs/12` | ⏸ 아래 "남은 것" 참조 |
 
-### 검증
+### 함께 막은 것 — 오염 스키마 가드
 
-- **락 범위·스캔 축을 다시 잰다.** `NOT IN` 이 붙으면 실행계획이 바뀔 수 있다.
-  `docs/12` 의 수치가 그대로인지 확인 — 특히 `V11` 선택 여부
-- **멱등성** — 제외된 회차가 다음 주기에 다시 대상이 되는지, 그때 이중 차감이 없는지
-- **돌연변이** — 제외 조건을 지우면 `ExpireUnderflowBlastRadiusTest` 의 새 단언이 깨져야 한다
+**회차 격리가 오염셋을 갈아엎을 위험을 넓혔다.** 예전에는 첫 오염 회차에서 잡이 죽어
+그 뒤로는 아무것도 안 건드렸다. 지금은 막힌 회차만 빼고 **나머지 전부**를 넘긴다.
+
+만료는 원본을 **쓰는** 유일한 배치이고, 오염 유형 2(`history 는 USED 인데 status 는 ISSUED`)와
+7(`status 는 ISSUED 인데 활성 usages 행이 남아 있음`)은 **둘 다 `ISSUED`** 다 — 합쳐 200건.
+그것이 `EXPIRED` 로 넘어가고 `EXPIRE` 이력이 붙으면 리플레이가 `USED → EXPIRED` 라는
+전이표에 없는 조합을 만나 **`expected_findings` 800행에 없는 검출**이 생기고
+`dataset_fingerprint` 도 움직인다.
+
+> **나쁜 것은 모양이다.** 누락 0 · 오탐 0 이 합격 조건인데, 그것이 *"검증기가 틀렸다"* 로
+> 보이는 형태로 깨진다. 실제 원인은 **만료가 한 번 지나간 것**이고 그 사실은 어디에도 안 적힌다.
+> `verifyJob` 의 `rejectRunningSchedulers` 로는 못 막는다 — 그것은 *검증이 도는 동안* 을
+> 막지, 그 **전에** 만료가 지나간 것은 못 본다.
+
+`uk_coupon_member` 존재 여부로 가르고, 판정 근거는 `VerificationRuleRepository`
+(`verifyJob` 의 `rejectDatasetMismatch` 와 **같은 것**)를 빌려 쓴다. 같은 사실을 두 곳이
+각자 판정하면 둘이 어긋나는 날 어느 쪽이 맞는지 아무도 모른다.
+
+이것은 **판정이 아니라 실패**다 — *"데이터가 틀렸다"* 가 아니라 *"여기서 돌면 안 되는 배치가
+돌았다"* 이고, 고칠 곳은 데이터가 아니라 접속 설정이다.
+
+### 검증 (완료)
+
+- **락 범위·스캔 축** — `ExpirationLockScopeTest.keepsScanBoundedWhenExclusionFiltersCandidates`
+  가 제외 목록이 **채워진** 상태로 락과 읽은 행을 잰다. 제외 술어가 `V11 (status, expires_at)`
+  선택을 흔들면 스캔 축이 깨진다
+- **읽기 문장이 락을 안 잡는다** — `readOnlyQueriesTakeNoLocks`. 주석으로만 적혀 있으면
+  누가 `FOR SHARE` 를 붙여도 초록이라, `performance_schema.data_locks` 로 실제로 잰다
+- **멱등성** — `keepsRunningOnLaterCycles`. 재고를 3 으로 두는 것이 검출력의 전부다.
+  1 이면 하한 가드가 0 에서 클램프해 **이중 차감과 정상이 같은 값으로 끝난다**
+- **청크 이어짐** — `ExpireBlockedCouponChunkingTest`(`chunk-size=1`). 위 두 논거는
+  청크가 2개 이상일 때만 뜻이 있다
+- **재시작** — `recomputesExclusionOnRestart`. Step 문맥이 복원되므로 세대를 안 보면
+  "실행당 한 번" 이 "JobInstance 당 한 번" 이 된다
+- **가드 도달성** — `ExpireGuardTest.failsWhenExclusionLeaksACoupon`. 이제 데이터로는
+  `STOCK_UNDERFLOW` 에 갈 수 없어 제외 목록을 비우는 주입으로 도달시킨다
+- **오염 스키마** — `CleanSchemaGuardTest`(`batch.config`). 한 건도 안 넘기고 죽는지, 그리고 정상
+  스키마에서는 그대로 도는지 짝으로 본다(막는 쪽만 보면 **항상 던지는 가드**도 통과한다)
+- **돌연변이 (실측)** — 여덟을 심어 **일곱이 검출됨**: 캡처 창 복원 · 세대 표식 무시 ·
+  미래 `asOf` 그대로 집계 · `NOT IN` 절 제거 · 오염 스키마 가드 배선 제거 ·
+  제외 판정을 `uk_coupon_member` 로 강제 · 만료를 `PRIMARY` 로 강제.
+  **여덟째 `ORDER BY` 제거는 어떤 테스트도 깨뜨리지 못했다** — 지금 실행계획이 회차 id 순으로
+  내보내기 때문이다. 깨지지 않는 단언은 두지 않았고, 그 사실을 SQL javadoc 에 적었다
+
+### 남은 것
+
+| 무엇 | 왜 미뤘나 |
+|---|---|
+| `docs/12` 재측정 절 추가 | 락·스캔 축은 위 테스트가 잡는다. 문서의 **절대 수치**는 300만 건 적재 후에 다시 재야 뜻이 있다 |
+| `blockedCoupons` 소요 실측 | 축소 픽스처에서 잰 값은 운영 규모를 대변하지 못한다. 코드 주석에서 근거 없는 수치를 뺐다. **실행계획 축은 `keepsBlockedCouponScanProportionalToPending` 이 잡는다** — `uk_coupon_member` 를 타면 깨진다 |
+| `unexplained` 이 캡처 창 지연분을 포함한다 | `COUNT_PENDING` 은 `updated_at` 창을 안 걸어, 설계상 다음 주기로 미룬 행도 "배치가 안 한 몫" 으로 센다. **지금은 도달 불가다** — `issuances` 를 쓰는 문장이 `EXPIRE_BATCH` 하나뿐이다. `CANCEL_USE`(`USED → ISSUED`)가 붙는 취소·사용 티켓에서 가른다 |
+| `(coupon_id, status, expires_at)` 인덱스 | 막힌 회차의 대기 행이 매 주기 재스캔된다. **인덱스 도입은 실측 뒤 별도 판단이다** |
+| 나머지 배치 테스트의 시계 고정 | 이 티켓이 건드린 테스트 중 **잡을 실제로 돌리는 것은 전부** `FixedClock` 으로 고정했다. `ExpireCancelRaceTest`·`ExpireJobHistoryGuardTest`·`ExpireJobIsolationTest`·`VerifyJob*` 은 아직 벽시계인데, 이 티켓이 안 건드린 파일이라 여기서 안 넓혔다. (storage 의 만료 테스트는 `asOf` 가 SQL 바인드 파라미터일 뿐이라 시계와 무관하다) |
+| 리뷰 반복 결함의 기계적 검사 | 이 티켓의 리뷰에서 **같은 종류가 반복해서 나왔다** — 떠 있는 javadoc(4회), 개명 뒤 끊긴 문서 참조, 개수 주장과 실제 불일치("넷"↔"다섯"), 지표 단언 누락. 넷 다 파일을 읽어 기계적으로 잡을 수 있다. `BatchMetricExposureTest` 가 규칙 파일↔노출을 잇는 것과 같은 방식으로 테스트화할 자리다 |
+| `README` 의 batch 패키지 트리 | `config`/`job`/`schedule`/`replay` 는 CY-347 **이전부터** 있었고 이 티켓은 새 패키지를 안 만든다. README 가 침묵일 뿐 모순이 아니라, 채우는 것은 소유자가 정할 별도 티켓이다 |
 
 ### 알림
 
@@ -106,8 +181,9 @@ cy_expire_blocked_coupons   게이지. 이번 실행이 제외한 회차 수
 
 ## 2. 알림 — "성공했는데 맞게 했나" 를 아무도 안 본다
 
-지금 규칙 셋은 전부 **잡의 생사**만 본다(`BatchJobFailed`·`BatchJobNotRunning`·
-`BatchJobRunningTooLong`). 셋 다 통과하면서 아무것도 안 하는 상태가 있다.
+규칙 여섯 중 셋(`BatchJobFailed`·`BatchJobNotRunning`·`BatchJobRunningTooLong`)은
+**잡의 생사**만 본다. 셋 다 통과하면서 아무것도 안 하는 상태가 있고, 2b 가 그 축 밖을 메웠다
+(`ExpireLeavesWorkBehind`·`ExpireSkippingBrokenCoupons`·`ExpireMetricsUnknown`).
 
 ### 2a. 검증 판정이 알림으로 안 나간다 — 가장 큰 구멍
 
@@ -131,13 +207,26 @@ cy_verification_findings_total{dataset}   검출 건수
 1번의 오염 회차 말고도 원인이 여럿이다(슬롯 계산 오류, 설정 실수).
 
 ```
-cy_expire_pending_total   기한이 지났는데 아직 ISSUED 인 발급건 수
+cy_expire_pending              기한이 지났는데 아직 ISSUED 인 발급건 수
+cy_expire_blocked_pending      그중 막힌 회차의 몫
+cy_expire_unexplained_pending  그 둘의 차. **알림이 보는 것은 이것 하나다**
 ```
+
+> **이름에 `_total` 을 붙이면 안 된다.** 카운터 규약이라 Micrometer 의 Prometheus 렌더러가
+> 게이지에서 **떼어 낸다** — 붙이면 코드가 부르는 이름과 관제가 보는 이름이 갈린다.
+> 실제로 그렇게 만들었다가 노출 테스트가 잡았다.
+
+> **차를 알림 식에서 빼면 안 된다.** 게이지 둘을 따로 `set` 하는 사이에 스크레이프가 끼면
+> 한쪽만 새 값인 샘플이 나온다. 한 문장에서 세어 한 시계열로 내보낸다.
 
 > **스크레이프 때 세면 안 된다.** 300만 행에 `COUNT(*)` 를 15초마다 때리는 꼴이다.
 > 잡이 끝나는 시점에 한 번 세서 게이지에 넣는다 — 그때 이미 같은 창을 훑고 있다.
 
-`for: 15m`(세 주기). 한 주기 밀리는 것은 정상이다.
+`for: 10m`(두 주기). **한 실행이 대상을 다 비운다** — 청크는 0 이 나올 때까지 반복하므로
+"대상이 많아 다음 주기로 넘어간다" 는 일이 없다. 그래도 남는 것은 막힌 회차의 몫(이미
+뺐다)이거나 step-timeout 으로 청크가 끊긴 경우뿐이라 길게 볼 이유가 없다.
+
+**2b 는 CY-347 에서 함께 구현했다.**
 
 ### 2c. 처리량 — "돌기는 도는데 안 줄어든다"
 
@@ -149,18 +238,25 @@ cy_expire_processed_total   카운터. 청크마다 넘긴 건수를 더한다
 ```
 
 ```yaml
-expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_pending_total > 0
+expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pending > 0
 ```
 
 두 조건을 **AND 로 묶는 것이 핵심**이다. 처리량 0 자체는 정상이다 — 만료할 게 없는 날이
 대부분이다. 남은 대상이 있는데 0 인 것이 사건이다.
 
+> **`cy_expire_pending` 이 아니라 `cy_expire_unexplained_pending` 이다.** 막힌 회차의 대기는
+> 설계상 계속 남으므로, 전체를 보면 그 회차를 사람이 고칠 때까지 **처리량이 정상인 날에도
+> 정체 알림이 뜬다.** 회차 격리가 세운 구분(배치가 안 한 몫 vs 데이터가 어긋난 몫)이
+> 여기서도 그대로 적용된다.
+
 ### 2d. 실패 원인을 알림이 못 가른다
 
-`spring_batch_job_seconds_count` 에 **에러코드 라벨이 없다.** `BatchJobFailed` 의 description 이
-"다시 돌린다고 낫지 않는다" 로 단정하는데 `STOCK_ROW_MISSING` 은 그것이 거짓이다 —
-누가 재고 행을 만드는 중이면 다음 주기가 지나간다. 새벽 헛호출이 난다.
-(1번이 들어오면 이 코드는 예외가 아니게 되므로 함께 정리된다.)
+`spring_batch_job_seconds_count` 에 **에러코드 라벨이 없다.** 그래서 만료의 실패 자리 **다섯**이
+한 시계열로 뭉쳐 나오고, 어느 자리였는지는 배치 로그의 `EXPIRATION-00N` 으로만 갈린다.
+각각 봐야 할 곳이 다르다 — 셋은 코드, 하나는 넘긴 파라미터, 하나는 접속 URL 이다.
+
+> 코드의 **뜻**이 어긋나던 문제는 CY-347 에서 정리했다(`ExpirationErrorCode` 와 알림 머리말).
+> 여기 남은 것은 라벨 하나뿐이다.
 
 ### 2e. Prometheus 가 규칙을 아직 안 읽는다 — **위 전부의 선행 조건**
 

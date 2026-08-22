@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -16,8 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
-import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.job.parameters.InvalidJobParametersException;
+import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.StepExecution;
@@ -26,12 +25,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.FixedClock;
 import com.kafkick.core.coupon.IssuanceStatus;
-import com.kafkick.core.expiration.exception.ExpirationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -43,6 +42,11 @@ import com.kafkick.storage.db.VerificationSeed;
  * 시작하고, 같은 {@code asOf} 로 다시 돌리는 재시작만 이어받는다 —
  * {@code ExpireJobRestartTest} 가 그 둘을 갈라서 잰다. 여기서 보는 것은 <b>한 실행 안</b>의
  * 이어짐이다.
+ *
+ * <p><b>재고가 어긋난 회차를 만났을 때의 계약은 여기 없다.</b> 예전에는 그것이 잡을
+ * 실패시켜서 이 클래스가 두 케이스로 지켰는데, 지금은 그 회차만 창 밖으로 빠지고 배치는
+ * 정상 종료한다 — 격리 계약은 {@code ExpireBlockedCouponIsolationTest} 가,
+ * {@code STOCK_ROW_MISSING}·{@code STOCK_UNDERFLOW} 가드는 {@code ExpireGuardTest} 가 맡는다.
  *
  * <p>청크 크기를 1 로 두어 여러 번 돌게 만든다. 기본값(1000)이면 한 번에 끝나
  * 이어지는지 아닌지를 구분할 수 없다.
@@ -144,27 +148,6 @@ class ExpireJobTest {
     }
 
     /**
-     * <b>재고 행이 없는 회차가 섞이면 멈춰야 한다.</b> {@code JOIN} 이 그 회차를 조용히 건너뛰어
-     * 발급건은 만료로 넘어가는데 되돌릴 재고가 없다. 그대로 두면 검증이 나중에 재고 불일치로
-     * 잡는데, 그때는 원인이 이 잡이라는 것이 안 드러난다.
-     */
-    @Test
-    @DisplayName("재고 행이 없는 회차가 섞이면 잡이 실패한다")
-    void failWhenStockRowIsMissing() throws Exception {
-        expiredIssuances(1);
-        seed.removeStock();
-
-        JobExecution execution = launch();
-
-        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
-        assertThat(JobFailures.errorCodesOf(execution))
-                .as("계약은 에러 코드다 — 문구만 보면 문구를 다듬을 때 깨진다")
-                .contains(ExpirationErrorCode.STOCK_ROW_MISSING.getCode());
-        assertThat(JobFailures.messagesOf(execution))
-                .anyMatch(message -> message.contains("재고를 되돌리지 못한 회차가 있습니다"));
-    }
-
-    /**
      * <b>이력 시각을 {@code asOf} 로 백데이트하면 리플레이가 순서를 뒤집는다.</b>
      *
      * <p>리플레이는 {@code created_at} 을 1순위로 접는다. 잡이 도는 동안 들어온 이력보다
@@ -253,57 +236,6 @@ class ExpireJobTest {
     }
 
     /**
-     * <b>세 번째 가드다.</b> 재고가 이미 어긋난 회차에 만료가 오면 빼는 쪽이 음수가 되는데,
-     * SQL 조건({@code active_count >= 차감량})이 그 회차를 갱신에서 빼고 호출자가 그 차이를 잡는다.
-     *
-     * <p><b>도달시키는 것이 이 테스트의 목적이다.</b> 어댑터 테스트는 {@code releaseStock} 이
-     * 0 을 돌려주는 것까지만 본다 — 잡이 그 0 을 예외로 번역하는지는 아무도 안 봤다.
-     * 도달할 수 없는 가드는 없는 가드와 같다는 것이 이 저장소의 기준이고,
-     * 나머지 두 가드에는 각각 테스트가 있다.
-     *
-     * <p><b>죽은 청크만 되돌아온다 — 앞 청크는 커밋된 채로 남는다.</b> 이 클래스는
-     * {@code chunk-size=1} 이라 그 경계가 눈에 보인다. 재고 1 에 만료 대상 2건이면
-     * 첫 건은 정상으로 빠지고({@code active_count} 1 → 0), 둘째에서 뺄 것이 없어 멈춘다.
-     * 청크가 트랜잭션 단위라는 설계의 직접적인 결과다.
-     *
-     * <p><b>그리고 이것이 다음 주기에도 같은 자리에서 멈춘다.</b> 주기마다 {@code asOf} 가
-     * 달라 <b>새 JobInstance</b> 이고, 진도는 인스턴스 안에서만 사니 다시 {@code id > 0} 부터
-     * 훑다가 이 회차에서 또 죽는다 — <b>그 뒤 회차의 만료가 밀린다.</b>
-     * 지금은 사람이 재고를 손보는 것 말고 방법이 없고, 알림이 그 사실을 알리는 유일한 통로다.
-     *
-     * <p><b>{@code STOCK_ROW_MISSING} 과 갈리는 것도 함께 본다.</b> 두 메시지가 섞이면
-     * 운영자가 없는 재고 행을 찾으러 가는데 실제 원인은 수량 부족이다.
-     */
-    @Test
-    @DisplayName("뺄 재고가 모자란 회차에서 멈춘다 — 죽은 청크만 되돌아온다")
-    void failWhenStockUnderflows() throws Exception {
-        List<Long> targets = expiredIssuances(2);
-        seed.overwriteStock(1);
-
-        JobExecution execution = launch();
-
-        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
-        assertThat(JobFailures.errorCodesOf(execution))
-                .as("재고 행이 없는 경우와 **코드로** 갈려야 알림 규칙이 둘을 나눌 수 있다")
-                .contains(ExpirationErrorCode.STOCK_UNDERFLOW.getCode())
-                .doesNotContain(ExpirationErrorCode.STOCK_ROW_MISSING.getCode());
-        assertThat(JobFailures.messagesOf(execution))
-                .as("로그 문장도 갈려야 운영자가 볼 곳이 정해진다")
-                .anyMatch(message -> message.contains("재고가 음수가 되는 회차"))
-                .noneMatch(message -> message.contains("재고를 되돌리지 못한 회차"));
-
-        assertThat(statusOf(targets.get(0)))
-                .as("첫 청크는 뺄 재고가 있었으므로 정상으로 커밋된다")
-                .isEqualTo(IssuanceStatus.EXPIRED.name());
-        assertThat(statusOf(targets.get(1)))
-                .as("둘째 청크가 통째로 되돌아온다. EXPIRED 로 남으면 재고 없이 만료된 건이 생긴다")
-                .isEqualTo(IssuanceStatus.ISSUED.name());
-        assertThat(activeCount())
-                .as("첫 건이 뺀 만큼만 줄어 있다")
-                .isZero();
-    }
-
-    /**
      * <b>잡이 쓰는 시각을 고정한다.</b> {@code TimeProvider} 를 통해 {@code committedAt} 이 되고,
      * 그것이 곧 이력의 {@code created_at} 이다. 고정하지 않으면 시각 단언이 벽시계에 묶인다.
      */
@@ -315,7 +247,7 @@ class ExpireJobTest {
         Clock fixedClock() {
             // 운영 TimeConfig 가 systemUTC 다. 여기서 기본 타임존을 쓰면 CI 와 로컬이
             // 다른 값을 내고, 고정한 의미가 없어진다.
-            return Clock.fixed(WROTE_AT.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+            return FixedClock.at(WROTE_AT);
         }
     }
 

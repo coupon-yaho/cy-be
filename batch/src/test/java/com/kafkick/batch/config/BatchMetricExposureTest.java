@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.TreeSet;
@@ -25,8 +26,11 @@ import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalManagementPort;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 
 import com.kafkick.storage.db.MySqlContainerConfig;
 
@@ -58,6 +62,10 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * {@code application.yml} 에서 {@code prometheus} 가 빠져도 여기는 초록으로 지나간다 —
  * 정작 막아야 할 사고가 그것이다. 같은 이유로 {@code ActuatorExposureTest} 도 파일을 읽는다.
  *
+ * <p><b>{@code cy_*} 도 함께 본다.</b> 이 저장소가 직접 내보내는 지표가 생겼는데
+ * 정규식이 {@code spring_batch_*} 만 보면, 규칙 파일과 실제 노출을 잇는 것이 그쪽에는
+ * 없는 상태가 된다 — 이 클래스가 존재하는 이유가 정확히 그것이다.
+ *
  * <p><b>알림 규칙 파일을 직접 읽는다.</b> {@code infra/prometheus/rules/batch-alerts.yml} 의 규칙이 쓰는
  * 메트릭 이름을 뽑아 실제 노출과 대조한다. 이름 목록을 이 클래스에 복붙하면 규칙이 새 메트릭을
  * 쓰기 시작해도 여기는 초록으로 지나가고, <b>관제에서 규칙 하나가 영원히 안 뜨는 상태</b>가 된다 —
@@ -86,10 +94,13 @@ import com.kafkick.storage.db.MySqlContainerConfig;
         "server.port=0",
         "management.server.port=0"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, BatchMetricExposureTest.FixedClockConfig.class})
 class BatchMetricExposureTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 태스클릿이 asOf 를 이 값과 견주므로 벽시계면 실행 날짜에 딸린다. */
+    private static final LocalDateTime NOW = AS_OF.plusDays(1);
 
     /**
      * 관제가 실제로 읽는 규칙 파일. <b>클래스패스가 아니라 배포 산출물이다</b> —
@@ -101,7 +112,7 @@ class BatchMetricExposureTest {
             Path.of("..", "infra", "prometheus", "rules", "batch-alerts.yml").normalize();
 
     /** 규칙 파일에 쓰인 메트릭 이름. 뒤따르는 {@code {태그}} 는 빼고 이름만 잡는다. */
-    private static final Pattern METRIC_NAME = Pattern.compile("spring_batch_[a-z_]+");
+    private static final Pattern METRIC_NAME = Pattern.compile("(?:spring_batch|cy)_[a-z_]+");
 
     @LocalManagementPort
     private int managementPort;
@@ -156,7 +167,7 @@ class BatchMetricExposureTest {
     }
 
     /**
-     * 알림 규칙 파일에서 {@code spring_batch_*} 이름을 전부 뽑는다.
+     * 알림 규칙 파일에서 {@code spring_batch_*} 과 {@code cy_*} 이름을 전부 뽑는다.
      *
      * <p>태그가 붙은 형태({@code ..._count{job="x"}})로 쓰이므로 이름 부분만 취한다.
      * 규칙에 새 메트릭이 등장하면 여기 자동으로 딸려 와, 그 이름도 함께 검사받는다.
@@ -183,5 +194,22 @@ class BatchMetricExposureTest {
                 .filter(line -> line.startsWith(metric))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(metric + " 데이터 줄이 없다"));
+    }
+
+    /**
+     * <b>시계를 고정한다.</b> 이 테스트는 {@code expireJob} 을 실제로 돌리고, 태스클릿은
+     * {@code asOf} 가 현재보다 미래면 {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는다. 벽시계로 두면
+     * 재는 축과 무관한 이유(<b>실행하는 날짜</b>)로 결과가 갈린다.
+     *
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 라는 것은 {@link FixedClock} 이 진다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return FixedClock.at(NOW);
+        }
     }
 }

@@ -1,12 +1,15 @@
-// 만료 처리 SQL 여섯입니다. 전부 집합 단위로 돌고, 행을 미리 골라 두는 잠금 읽기를 쓰지 않습니다.
+// 만료 처리 SQL 여덟입니다 — 청크가 쓰는 여섯과, 실행당 한 번 도는 읽기 둘입니다. 전부 집합 단위로 돌고, 행을 미리 골라 두는 잠금 읽기를 쓰지 않습니다.
 package com.kafkick.storage.db.expiration;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.expiration.ExpirationRepository;
+import com.kafkick.core.expiration.PendingExpiration;
 
 /**
  * <b>여섯 문장이 하나의 청크를 이룬다.</b> 넘기고 · 경계를 찾고 · 이력을 남기고 · 회차를 세고 ·
@@ -90,8 +93,65 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
                AND expires_at < :asOf
                AND updated_at <= :committedAt
                AND id > :afterId
+               AND coupon_id NOT IN (:blockedCoupons)
              ORDER BY id
              LIMIT :limit
+            """;
+
+    /**
+     * 만료 대기 건수를 막힌 몫과 함께 한 번에 센다.
+     *
+     * <p>두 번 세면 그 사이에 값이 움직여 {@code total < blocked} 같은 조합이 나올 수 있다 —
+     * 게이지 둘이 서로 어긋나면 알림 식({@code total - blocked})이 음수가 된다.
+     */
+    private static final String COUNT_PENDING = """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN coupon_id IN (:blockedCoupons) THEN 1 ELSE 0 END) AS blocked
+              FROM issuances
+             WHERE status = 'ISSUED'
+               AND expires_at < :asOf
+            """;
+
+    /** 회차 id 가 될 수 없는 값. auto-increment 라 음수가 나오지 않는다. */
+    private static final long NOT_A_COUPON_ID = -1L;
+
+    /**
+     * <b>지금 만료시킬 수 없는 회차.</b> 재고 행이 없거나, 남은 대기를 다 빼면 음수가 된다.
+     *
+     * <p><b>{@code LEFT JOIN} 이라야 한다.</b> 안쪽 조인이면 재고 행 없는 회차가 조용히
+     * 빠져서 — 그것이 정확히 찾으려는 대상 하나다 — 가려는 두 경우 중 하나를 못 본다.
+     *
+     * <p><b>{@code EXPIRE_BATCH} 의 {@code updated_at <= :committedAt} 창을 여기서는
+     * 일부러 안 건다.</b> 창을 걸면 이 값이 <i>"첫 청크 시각 기준의 대기"</i> 가 되는데,
+     * {@code committedAt} 은 청크마다 새로 잡혀 <b>뒤 청크의 창이 더 넓다.</b> 그러면
+     * 그 사이에 {@code updated_at} 이 갱신된 행이 여기 안 세졌는데 만료는 되어,
+     * 회차별 차감 합계가 여기서 센 값을 넘고 {@code STOCK_UNDERFLOW} 로 잡이 죽는다 —
+     * 이 제외 논리가 없애려던 바로 그 실패다.
+     *
+     * <p>창을 빼면 이 값은 <b>그 실행이 넘길 수 있는 모든 행의 상계</b>가 된다.
+     * {@code committedAt} 이 뒤로 밀려도 제외는 보수적인 쪽으로만 움직인다.
+     *
+     * <p><b>{@code ORDER BY} 는 로그를 위한 것이다.</b> 알림이 <i>"어느 회차인지는 WARN
+     * 로그에 있다"</i> 로 사람을 보내는데, 순서가 실행마다 달라지면 두 실행의 로그를
+     * 견주는 흔한 동작이 안 통한다. 회차는 수백 개라 정렬 비용이 없다.
+     *
+     * <p><b>이 정렬을 테스트로 못 박지는 않았다.</b> 지금 실행계획은 파생테이블을 회차 id
+     * 순으로 내보내서, {@code ORDER BY} 를 지워도 결과가 안 바뀐다 — 실제로 지워 보고
+     * 확인했다. 깨지지 않는 단언은 없는 단언과 같아서 두지 않는다. 여기서 지키는 것은
+     * <b>순서가 우연이 아니라 계약이 되게 하는 것</b>이고, 알림이 실제로 가리키는 WARN
+     * 로그 쪽은 {@code ExpireBlockedCouponIsolationTest} 가 문구까지 잡는다.
+     */
+    private static final String BLOCKED_COUPONS = """
+            SELECT x.coupon_id
+              FROM (SELECT coupon_id, COUNT(*) AS pending
+                      FROM issuances
+                     WHERE status = 'ISSUED'
+                       AND expires_at < :asOf
+                     GROUP BY coupon_id) x
+              LEFT JOIN coupon_stocks s ON s.coupon_id = x.coupon_id
+             WHERE s.coupon_id IS NULL
+                OR s.active_count < x.pending
+             ORDER BY x.coupon_id
             """;
 
     /**
@@ -221,13 +281,32 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
     }
 
     @Override
-    public int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, int limit) {
+    public int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, int limit,
+            List<Long> blockedCoupons) {
         return jdbcClient.sql(EXPIRE_BATCH)
                 .param("asOf", asOf)
                 .param("committedAt", committedAt)
                 .param("afterId", afterId)
                 .param("limit", limit)
+                .param("blockedCoupons", withSentinel(blockedCoupons))
                 .update();
+    }
+
+    @Override
+    public List<Long> blockedCoupons(LocalDateTime asOf) {
+        return jdbcClient.sql(BLOCKED_COUPONS)
+                .param("asOf", asOf)
+                .query(Long.class)
+                .list();
+    }
+
+    @Override
+    public PendingExpiration countPending(LocalDateTime asOf, List<Long> blockedCouponIds) {
+        return jdbcClient.sql(COUNT_PENDING)
+                .param("asOf", asOf)
+                .param("blockedCoupons", withSentinel(blockedCouponIds))
+                .query((rs, rowNum) -> new PendingExpiration(rs.getLong(1), rs.getLong(2)))
+                .single();
     }
 
     @Override
@@ -266,6 +345,20 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
         return chunk(STOCK_ROW_COUNT, asOf, committedAt, afterId, lastId)
                 .query(Integer.class)
                 .single();
+    }
+
+    /**
+     * <b>{@code NOT IN ()} 은 문법 오류다</b>(1064). 목록이 비는 것이 정상이므로 —
+     * 오염이 없는 날이 대부분이다 — 빈 목록을 그대로 넘길 수 없다.
+     *
+     * <p>SQL 을 두 벌로 가르는 대신 <b>회차 id 가 될 수 없는 값</b>을 항상 넣는다.
+     * {@code coupons.id} 는 auto-increment 라 음수가 없다. 문자열을 두 벌로 두면
+     * 한쪽만 고치는 사고가 나고, 그 사고는 조건이 통째로 빠진 채 조용히 돈다.
+     */
+    private static List<Long> withSentinel(List<Long> blockedCoupons) {
+        List<Long> withSentinel = new ArrayList<>(blockedCoupons);
+        withSentinel.add(NOT_A_COUPON_ID);
+        return withSentinel;
     }
 
     /**

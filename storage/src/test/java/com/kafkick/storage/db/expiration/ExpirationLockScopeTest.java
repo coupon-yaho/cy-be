@@ -10,6 +10,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.function.IntSupplier;
 import java.util.stream.Collectors;
@@ -181,6 +182,138 @@ class ExpirationLockScopeTest {
     }
 
     /**
+     * <b>테이블을 가리지 않고</b> 지금 트랜잭션이 잡은 레코드 락 수.
+     * {@link #lockedRecords()} 는 {@code issuances} 만 세므로 <b>읽기 문장이
+     * {@code coupon_stocks} 를 잡는 것을 못 본다</b> — 그 축을 재려면 이쪽이 필요하다.
+     */
+    private int lockedRecordsAnywhere() {
+        return jdbcClient.sql("""
+                        SELECT COUNT(*)
+                          FROM performance_schema.data_locks
+                         WHERE LOCK_TYPE = 'RECORD'
+                           AND THREAD_ID = PS_CURRENT_THREAD_ID()
+                        """)
+                .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * <b>"락을 안 잡는다" 를 주석이 아니라 계측으로 고정한다.</b>
+     *
+     * <p>{@code ExpireJobLockOrderTest} 는 호출 <b>이름의 순서</b>만 본다. 그래서 누가
+     * 성능이나 경합을 이유로 이 두 문장에 {@code FOR SHARE} 를 붙여도 그 테스트는 초록이다.
+     * 그런데 {@code BLOCKED_COUPONS} 는 {@code issuances} 파생테이블에 {@code coupon_stocks}
+     * 를 {@code LEFT JOIN} 하므로, 락을 잡는 순간 청크 트랜잭션 맨 앞에서
+     * {@code coupon_stocks} 를 쥐게 된다 — 발급 경로와 엇갈리면 <b>1213 데드락</b>이고,
+     * 그때 희생되는 쪽이 만료면 그 주기가 통째로 밀린다.
+     *
+     * <p>{@code countPending} 도 같다. 이쪽은 {@code afterJob} 에서 트랜잭션 밖으로 도는데,
+     * 락을 잡게 되면 <b>검증이 읽는 데이터를 관측이 건드리는</b> 모양이 된다.
+     */
+    @Test
+    @DisplayName("제외 판정과 대기 집계는 락을 잡지 않는다 — 순서 계약 밖이다")
+    void readOnlyQueriesTakeNoLocks() {
+        issuances(200, IssuanceStatus.ISSUED, EXPIRED_AT);
+
+        int[] locks = transaction.execute(status -> {
+            adapter.blockedCoupons(AS_OF);
+            int afterBlocked = lockedRecordsAnywhere();
+            adapter.countPending(AS_OF, List.of());
+            return new int[] {afterBlocked, lockedRecordsAnywhere()};
+        });
+
+        assertThat(locks[0])
+                .as("**FOR SHARE 를 붙이는 순간 여기가 움직인다.** 그러면 락 순서 계약의 "
+                        + "중간(issuance_histories)을 건너뛰고 coupon_stocks 를 잡게 된다")
+                .isZero();
+        assertThat(locks[1])
+                .as("countPending 은 afterJob 에서 트랜잭션 밖으로 돈다. 여기서 락이 잡히면 "
+                        + "관측이 원본을 건드린다")
+                .isZero();
+    }
+
+    /**
+     * <b>{@code NOT IN} 이 붙어도 실행계획이 그대로여야 한다.</b>
+     *
+     * <p>{@code EXPIRE_BATCH} 의 락을 5,020 에서 2 로 떨어뜨린 것은 {@code V11
+     * (status, expires_at)} 인덱스다. 술어가 하나 늘면 옵티마이저가 그 인덱스를 안 고를 수
+     * 있고, 그러면 <b>발급 봉쇄가 그대로 되돌아온다.</b>
+     *
+     * <p><b>제외가 실제로 후보를 걸러내는 픽스처라야 뜻이 있다.</b> 처음엔 기한이 남은 행만
+     * 심어 이 자리를 재려 했는데, 그러면 {@code expires_at < :asOf} 에 하나도 안 걸려
+     * <b>{@code NOT IN} 이 평가될 행 자체가 없었다.</b> 락 단언도 0행 갱신이라 무엇을
+     * 바꿔도 참이었다 — 깨지지 않는 단언은 없는 단언과 같다.
+     *
+     * <p>그래서 <b>막힌 회차에 대기를 잔뜩 쌓고</b> 성한 회차 것만 넘긴다. 이 픽스처가
+     * 재는 것은 두 가지다 — 인덱스를 계속 고르는가(스캔), 그리고 <b>버릴 행까지 잠그지는
+     * 않는가</b>(락). 뒤엣것이 이번 변경이 새로 만든 축이다.
+     */
+    @Test
+    @DisplayName("제외한 회차의 대기 행을 잠그지 않는다 — 훑기는 한다")
+    void keepsScanBoundedWhenExclusionFiltersCandidates() {
+        int blockedRows = 40;
+        long blockedCoupon = seed.newCoupon();
+        for (int i = 0; i < blockedRows; i++) {
+            issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        }
+
+        int target = 5;
+        seed.newCoupon();
+        for (int i = 0; i < target; i++) {
+            issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        }
+
+        // 컷 밖의 행. 인덱스를 버리면 이것까지 읽으므로 스캔 축에 검출력이 생긴다.
+        int outsideCut = 150;
+        issuances(outsideCut, IssuanceStatus.ISSUED, ALIVE_AT);
+
+        Measured measured = measure(() -> adapter.expireBatch(
+                AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of(blockedCoupon)), target);
+
+        assertThat(measured.locks())
+                .as("**버릴 행을 잠그면 안 된다.** 막힌 회차의 %d 행까지 잠그면 그 회차를 "
+                        + "건드리는 다른 경로가 만료가 도는 내내 막힌다", blockedRows)
+                .isLessThan(target * 4);
+        assertThat(measured.scanned())
+                .as("**인덱스 축이다.** NOT IN 때문에 옵티마이저가 V11 을 버리면 컷 밖의 "
+                        + "%d 행까지 읽는다", outsideCut)
+                .isLessThan(blockedRows + target + outsideCut / 2);
+    }
+
+    /**
+     * <b>제외 판정이 테이블 전체를 훑지 않아야 한다.</b>
+     *
+     * <p>이 질의는 매 실행 첫 청크 트랜잭션 <b>안에서</b> 돌고 {@code LIMIT} 도 id 범위도
+     * 없다. 그런데 {@code V11 (status, expires_at)} 에는 {@code coupon_id} 가 없어서,
+     * 옵티마이저가 {@code GROUP BY coupon_id} 를 임시테이블 없이 끝내려고
+     * <b>{@code uk_coupon_member (coupon_id, member_id)} 순서로 인덱스 풀스캔</b>을 고를
+     * 여지가 있다. 그러면 대기가 0건인 날에도 테이블 전체를 읽는다 —
+     * <i>"대기가 없는 날은 거의 공짜"</i> 라는 전제가 정확히 뒤집힌다.
+     *
+     * <p>그 날 첫 청크가 {@code step-timeout-ms} 에 걸려 끊기면 만료가 <b>한 건도 못 하고</b>
+     * 실패한다. 이 잡이 없애려던 <i>"그 뒤 id 의 만료가 밀린다"</i> 와 같은 자리다.
+     */
+    @Test
+    @DisplayName("제외 판정이 대기 없는 날 테이블을 훑지 않는다")
+    void keepsBlockedCouponScanProportionalToPending() {
+        int rows = 200;
+        issuances(rows, IssuanceStatus.ISSUED, ALIVE_AT);
+
+        long scanned = transaction.execute(status -> {
+            long before = rowsRead();
+            assertThat(adapter.blockedCoupons(AS_OF))
+                    .as("대기가 0건이라 막힌 회차도 없다")
+                    .isEmpty();
+            return rowsRead() - before;
+        });
+
+        assertThat(scanned)
+                .as("uk_coupon_member 로 GROUP BY 를 푸는 계획을 고르면 %d 행을 전부 읽는다. "
+                        + "이 질의는 매 실행 첫 청크 안에서 돈다", rows)
+                .isLessThan(rows / 4);
+    }
+
+    /**
      * <b>넘길 것이 하나도 없는 실행이 최악이었다.</b> {@code LIMIT} 이 발동할 일이 없어 끝까지
      * 훑었고, 하나도 안 바꾸면서 지나간 행을 전부 잠갔다. 하루 288회 중 대부분이 이 경로다.
      *
@@ -198,7 +331,7 @@ class ExpirationLockScopeTest {
         int rows = 200;
         issuances(rows, IssuanceStatus.ISSUED, ALIVE_AT);
 
-        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE), 0);
+        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()), 0);
 
         assertThat(measured.locks())
                 .as("한 건도 안 넘겼으면 잠글 것도 없다. 여기가 %d 에 가까워지면 격리가 "
@@ -234,7 +367,7 @@ class ExpirationLockScopeTest {
         issuances(settled, IssuanceStatus.EXPIRED, EXPIRED_AT);
         issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE), toExpire);
+        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()), toExpire);
 
         assertThat(measured.locks())
                 .as("%d 건만 넘겼다. 이미 끝난 %d 건까지 잠그면 격리가 되돌아간 것이다",
@@ -269,7 +402,7 @@ class ExpirationLockScopeTest {
         issuances(beyond, IssuanceStatus.EXPIRED, EXPIRED_AT);
 
         int[] measured = transaction.execute(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, toExpire)).isEqualTo(toExpire);
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, toExpire, List.of())).isEqualTo(toExpire);
             int afterFirst = lockedRecords();
 
             long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
@@ -322,7 +455,7 @@ class ExpirationLockScopeTest {
         Issuer issuer = anyIssuer();
 
         transaction.executeWithoutResult(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
                     .as("기한이 남았으니 한 건도 안 넘어간다 — 최악의 경로다")
                     .isZero();
 
@@ -435,7 +568,7 @@ class ExpirationLockScopeTest {
         issuances(beyond, IssuanceStatus.EXPIRED, EXPIRED_AT);
 
         transaction.executeWithoutResult(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE))
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
                     .isEqualTo(toExpire);
             assertThat(lockedTables())
                     .as("첫 문장은 원본만 잡는다")
@@ -534,7 +667,7 @@ class ExpirationLockScopeTest {
         issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
 
         long scanned = transaction.execute(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(toExpire);
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of())).isEqualTo(toExpire);
 
             long before = rowsRead();
             long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);

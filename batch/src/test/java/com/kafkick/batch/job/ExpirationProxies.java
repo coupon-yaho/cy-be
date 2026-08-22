@@ -22,14 +22,14 @@ import com.kafkick.core.expiration.ExpirationRepository;
  * 프록시가 {@code UndeclaredThrowableException} 을 던져서, 잡은 제대로 실패했는데
  * <b>메시지가 안 맞아</b> 단언이 깨진다 — 원인이 프록시 배선이라는 것은 로그에 안 나온다.
  */
-final class ExpirationProxies {
+public final class ExpirationProxies {
 
     private ExpirationProxies() {
     }
 
     /** 저장소 호출 하나를 가로챈다. {@code real} 을 부를지 말지는 구현이 정한다. */
     @FunctionalInterface
-    interface Around {
+    public interface Around {
         Object invoke(ExpirationRepository real, Method method, Object[] args) throws Throwable;
     }
 
@@ -40,7 +40,7 @@ final class ExpirationProxies {
      * {@code BusinessException} 을 원래 모습으로 받고, {@link JobFailures} 가 평치는 원인
      * 체인에 그 메시지가 들어온다.
      */
-    static Object callThrough(ExpirationRepository real, Method method, Object[] args)
+    public static Object callThrough(ExpirationRepository real, Method method, Object[] args)
             throws Throwable {
         try {
             return method.invoke(real, args);
@@ -55,7 +55,7 @@ final class ExpirationProxies {
      * <p>{@code @Bean static} 으로 등록해야 한다 — {@code BeanPostProcessor} 는 다른 빈보다
      * 먼저 만들어져야 하고, 인스턴스 메서드로 두면 그 설정 클래스가 조기 초기화된다.
      */
-    static BeanPostProcessor decorating(Around around) {
+    public static BeanPostProcessor decorating(Around around) {
         return new BeanPostProcessor() {
             @Override
             public Object postProcessAfterInitialization(Object bean, String beanName) {

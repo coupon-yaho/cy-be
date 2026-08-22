@@ -15,7 +15,7 @@ import com.kafkick.core.support.exception.BusinessException;
  * 같은 코드가 여러 테스트에 복붙돼 있었다. 파싱 방식을 바꿔야 할 때 — 이를테면 원인 체인이
  * 아니라 억제된 예외까지 봐야 할 때 — 한쪽만 고치면 나머지가 조용히 옛 방식으로 남는다.
  */
-final class JobFailures {
+public final class JobFailures {
 
     private JobFailures() {
     }
@@ -31,7 +31,7 @@ final class JobFailures {
      * <p>같음이 아니라 <b>동일성</b>으로 본다({@link IdentityHashMap}). {@code equals} 를
      * 재정의한 예외가 체인에 있으면 서로 다른 인스턴스가 하나로 접혀 메시지가 빠진다.
      */
-    static List<String> messagesOf(JobExecution execution) {
+    public static List<String> messagesOf(JobExecution execution) {
         List<String> messages = new ArrayList<>();
         for (Throwable failure : execution.getAllFailureExceptions()) {
             Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -51,7 +51,7 @@ final class JobFailures {
      * 잡이 무엇 때문에 죽었는지의 계약은 {@code ExpirationErrorCode} 이고, 알림·관제가
      * 무엇을 갈라 보는지도 그 코드다.
      */
-    static List<String> errorCodesOf(JobExecution execution) {
+    public static List<String> errorCodesOf(JobExecution execution) {
         List<String> codes = new ArrayList<>();
         for (Throwable failure : execution.getAllFailureExceptions()) {
             Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
