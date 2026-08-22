@@ -3,8 +3,6 @@ package com.kafkick.batch.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.LocalDateTime;
 
@@ -29,9 +27,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.job.ExpirationProxies;
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.coupon.IssuanceStatus;
-import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -414,27 +412,12 @@ class ExpireMetricExposureTest {
 
         @Bean
         static BeanPostProcessor failCountPending() {
-            return new BeanPostProcessor() {
-                @Override
-                public Object postProcessAfterInitialization(Object bean, String name) {
-                    if (!(bean instanceof ExpirationRepository real)) {
-                        return bean;
-                    }
-                    return Proxy.newProxyInstance(
-                            ExpirationRepository.class.getClassLoader(),
-                            new Class<?>[] {ExpirationRepository.class},
-                            (proxy, method, args) -> {
-                                if (fail && "countPending".equals(method.getName())) {
-                                    throw new IllegalStateException("관측 질의가 끊겼다");
-                                }
-                                try {
-                                    return method.invoke(real, args);
-                                } catch (InvocationTargetException e) {
-                                    throw e.getCause();
-                                }
-                            });
+            return ExpirationProxies.decorating((real, method, args) -> {
+                if (fail && "countPending".equals(method.getName())) {
+                    throw new IllegalStateException("관측 질의가 끊겼다");
                 }
-            };
+                return ExpirationProxies.callThrough(real, method, args);
+            });
         }
     }
 

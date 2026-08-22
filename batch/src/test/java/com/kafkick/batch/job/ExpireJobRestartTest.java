@@ -244,12 +244,7 @@ class ExpireJobRestartTest {
     private List<Long> expiredIssuances(int count) {
         List<Long> ids = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            long id = seed.issuance(IssuanceStatus.ISSUED);
-            jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
-                    .param("at", AS_OF.minusDays(1))
-                    .param("id", id)
-                    .update();
-            ids.add(id);
+            ids.add(expiredIssuance());
         }
         return ids;
     }
