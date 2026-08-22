@@ -14,32 +14,40 @@ import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @JsonTest
-class CouponResponseCodecTest {
+class CouponResultCodecTest {
 
     private static final Instant AT = Instant.parse("2026-08-20T05:00:00Z");
 
     private final ObjectMapper objectMapper;
 
     @Autowired
-    CouponResponseCodecTest(ObjectMapper objectMapper) {
+    CouponResultCodecTest(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
     @Test
     void roundTripsCoreOperationResults() {
-        CouponUseResponseCodec useCodec = new CouponUseResponseCodec(
+        CouponIssueResultCodec issueCodec = new CouponIssueResultCodec(
                 objectMapper
         );
-        CouponCancelUseResponseCodec cancelUseCodec =
-                new CouponCancelUseResponseCodec(objectMapper);
-        CouponCancelResponseCodec cancelCodec = new CouponCancelResponseCodec(
+        CouponUseResultCodec useCodec = new CouponUseResultCodec(
                 objectMapper
+        );
+        CouponCancelUseResultCodec cancelUseCodec =
+                new CouponCancelUseResultCodec(objectMapper);
+        CouponCancelResultCodec cancelCodec = new CouponCancelResultCodec(
+                objectMapper
+        );
+        CouponIssueResult issue = new CouponIssueResult(
+                1L, 10L, "ABCDEFGHJKLM2345", IssuanceStatus.ISSUED,
+                AT, AT.plusSeconds(604_800)
         );
         CouponUseResult use = new CouponUseResult(
                 1L, IssuanceStatus.USED, 10L, 5_000, AT
@@ -51,6 +59,7 @@ class CouponResponseCodecTest {
                 1L, IssuanceStatus.CANCELLED, AT
         );
 
+        assertThat(issueCodec.read(issueCodec.write(issue))).isEqualTo(issue);
         assertThat(useCodec.read(useCodec.write(use))).isEqualTo(use);
         assertThat(cancelUseCodec.read(cancelUseCodec.write(cancelUse)))
                 .isEqualTo(cancelUse);
@@ -61,9 +70,10 @@ class CouponResponseCodecTest {
     @Test
     void mapsAllCodecFailuresToIdempotencyErrorCode() {
         List<IdempotencyResultCodec<?>> codecs = List.of(
-                new CouponUseResponseCodec(objectMapper),
-                new CouponCancelUseResponseCodec(objectMapper),
-                new CouponCancelResponseCodec(objectMapper)
+                new CouponIssueResultCodec(objectMapper),
+                new CouponUseResultCodec(objectMapper),
+                new CouponCancelUseResultCodec(objectMapper),
+                new CouponCancelResultCodec(objectMapper)
         );
 
         for (IdempotencyResultCodec<?> codec : codecs) {

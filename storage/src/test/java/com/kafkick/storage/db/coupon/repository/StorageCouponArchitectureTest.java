@@ -13,9 +13,7 @@ class StorageCouponArchitectureTest {
 
     private static final List<String> OPERATION_SPECIFIC_FAILURES = List.of(
             "CouponUsePersistenceException",
-            "CouponCancelUsePersistenceException",
-            "CouponCancelPersistenceException",
-            "CouponExpirationPersistenceException"
+            "CouponCancelUsePersistenceException"
     );
 
     @Test

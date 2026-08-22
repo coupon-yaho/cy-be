@@ -15,6 +15,8 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
@@ -39,11 +41,11 @@ public class IdempotencyExecutionService {
     public IdempotencyExecutionService(
             IdempotencyClaimService claimService,
             TimeProvider timeProvider,
-            @Value("${coupon.idempotency.wait-timeout:2s}")
+            @Value("${coupon.idempotency.wait-timeout}")
             Duration waitTimeout,
-            @Value("${coupon.idempotency.poll-interval:50ms}")
+            @Value("${coupon.idempotency.poll-interval}")
             Duration pollInterval,
-            @Value("${coupon.idempotency.stale-after:30s}")
+            @Value("${coupon.idempotency.stale-after}")
             Duration staleAfter
     ) {
         this(
@@ -67,6 +69,7 @@ public class IdempotencyExecutionService {
         this.policy = policy;
     }
 
+    @Transactional(propagation = Propagation.NEVER)
     public <R> R execute(
             String idempotencyKey,
             Supplier<String> canonicalRequestSupplier,

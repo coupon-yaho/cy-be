@@ -6,6 +6,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.dao.DataAccessException;
 
 import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
+import com.kafkick.core.coupon.exception.CouponStockLockPersistenceException;
 import com.kafkick.core.coupon.exception.CouponStockReleasePersistenceException;
 import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.port.CouponStockRepository;
@@ -55,7 +56,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
                     .findByCouponIdForUpdate(couponRoundId)
                     .isPresent();
         } catch (DataAccessException exception) {
-            throw new CouponStockReleasePersistenceException(
+            throw new CouponStockLockPersistenceException(
                     "쿠폰 재고 잠금에 실패했습니다. couponRoundId="
                             + couponRoundId,
                     exception

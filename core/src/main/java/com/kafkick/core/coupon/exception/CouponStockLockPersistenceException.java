@@ -2,15 +2,14 @@ package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.BusinessException;
 
-public class CouponExpirationPersistenceException
-        extends BusinessException {
+public class CouponStockLockPersistenceException extends BusinessException {
 
-    public CouponExpirationPersistenceException(
+    public CouponStockLockPersistenceException(
             String detail,
             Throwable cause
     ) {
         super(
-                CouponExpirationErrorCode.COUPON_EXPIRATION_SAVE_FAILED,
+                CouponUseErrorCode.COUPON_STOCK_LOCK_FAILED,
                 detail,
                 cause
         );

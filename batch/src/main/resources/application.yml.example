@@ -55,6 +55,11 @@ logging:
     console: "%d{HH:mm:ss.SSS} %-5level [%X{runId:-}] %logger{36} - %msg%n"
 
 coupon:
+  idempotency:
+    wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
+    poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}
+    stale-after: ${COUPON_IDEMPOTENCY_STALE_AFTER:30s}
+
   expiration:
     cron: "${COUPON_EXPIRATION_CRON:0 * * * * *}"
     zone: ${COUPON_EXPIRATION_ZONE:UTC}

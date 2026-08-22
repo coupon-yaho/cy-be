@@ -5,11 +5,25 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.coupon.service.command.CouponCancelCommand;
 import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
+import com.kafkick.core.membership.domain.MembershipGrade;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CouponIdempotencyRequestIdentityTest {
+
+    @Test
+    @DisplayName("쿠폰 발급 요청의 동일성은 회차·회원·발급 등급으로 결정한다")
+    void canonicalizeCouponIssueRequest() {
+        assertThat(CouponIssueCommand.canonicalRequest(
+                10L,
+                20L,
+                MembershipGrade.GOLD
+        )).isEqualTo(
+                "ISSUE|couponRoundId=10|memberId=20|membershipGrade=GOLD"
+        );
+    }
 
     @Test
     @DisplayName("쿠폰 사용 요청의 동일성은 발급건·회원·주문·주문금액으로 결정한다")

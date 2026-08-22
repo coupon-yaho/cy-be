@@ -84,7 +84,7 @@ public class CouponIssueService {
         validateStockOccupation(couponRound.id(), occupationResult);
         issuanceHistoryRepository.save(IssuanceHistory.issue(
                 savedIssuance.id(),
-                command.requestId(),
+                command.idempotencyKey(),
                 command.issuedAt()
         ));
 

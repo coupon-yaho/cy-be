@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.service.idempotency.IdempotencyClaimService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
 import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
 import com.kafkick.core.coupontemplate.service.CouponTemplateActivationService;
 import com.kafkick.core.coupontemplate.service.CouponTemplateCreateService;
@@ -73,6 +74,19 @@ class CoreTransactionBoundaryTest {
             assertThat(transactional.propagation())
                     .isEqualTo(Propagation.REQUIRES_NEW);
         }
+    }
+
+    @Test
+    @DisplayName("멱등 완료 대기는 외부 트랜잭션 없이 실행한다")
+    void idempotencyExecutionRejectsOuterTransaction() throws Exception {
+        Transactional transactional = findMethod(
+                IdempotencyExecutionService.class,
+                "execute"
+        ).getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.propagation())
+                .isEqualTo(Propagation.NEVER);
     }
 
     private static void assertTransactional(

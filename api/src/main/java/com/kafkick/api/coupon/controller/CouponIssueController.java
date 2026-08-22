@@ -1,7 +1,5 @@
 package com.kafkick.api.coupon.controller;
 
-import org.slf4j.MDC;
-
 import jakarta.validation.constraints.Positive;
 
 import org.springframework.http.HttpStatus;
@@ -13,29 +11,23 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.coupon.dto.response.CouponIssueResponse;
 import com.kafkick.api.support.ResponseEnvelope;
-import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.membership.domain.MembershipGrade;
-import com.kafkick.core.coupon.service.command.CouponIssueCommand;
-import com.kafkick.core.coupon.service.CouponIssueService;
-import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponIssueController {
 
-    private static final String REQUEST_ID = "requestId";
-
-    private final CouponIssueService couponIssueService;
-    private final TimeProvider timeProvider;
+    private final CouponOperationExecutionService operationExecutionService;
 
     public CouponIssueController(
-            CouponIssueService couponIssueService,
-            TimeProvider timeProvider
+            CouponOperationExecutionService operationExecutionService
     ) {
-        this.couponIssueService = couponIssueService;
-        this.timeProvider = timeProvider;
+        this.operationExecutionService = operationExecutionService;
     }
 
     @PostMapping("/{couponRoundId}/issue")
@@ -47,26 +39,20 @@ public class CouponIssueController {
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
             @RequestHeader(MemberRequestHeaders.MEMBERSHIP_GRADE)
-            MembershipGrade membershipGrade
+            MembershipGrade membershipGrade,
+            @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
+            String idempotencyKey
     ) {
-        Issuance issuance = couponIssueService.issue(new CouponIssueCommand(
+        CouponIssueResult result = operationExecutionService.issue(
                 couponRoundId,
                 memberId,
                 membershipGrade,
-                normalizeRequestId(MDC.get(REQUEST_ID)),
-                timeProvider.instant()
-        ));
+                idempotencyKey
+        );
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ResponseEnvelope.success(
-                        CouponIssueResponse.from(issuance)
+                        CouponIssueResponse.from(result)
                 ));
-    }
-
-    private static String normalizeRequestId(String requestId) {
-        if (requestId == null || requestId.length() > 36) {
-            return null;
-        }
-        return requestId;
     }
 }

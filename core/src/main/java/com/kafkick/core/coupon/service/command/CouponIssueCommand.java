@@ -8,7 +8,17 @@ public record CouponIssueCommand(
         Long couponRoundId,
         Long memberId,
         MembershipGrade membershipGrade,
-        String requestId,
+        String idempotencyKey,
         Instant issuedAt
 ) {
+
+    public static String canonicalRequest(
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade
+    ) {
+        return "ISSUE|couponRoundId=" + couponRoundId
+                + "|memberId=" + memberId
+                + "|membershipGrade=" + membershipGrade;
+    }
 }

@@ -2,8 +2,8 @@ package com.kafkick.api.coupon.dto.response;
 
 import java.time.Instant;
 
-import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
 
 public record CouponIssueResponse(
         Long issuanceId,
@@ -14,14 +14,14 @@ public record CouponIssueResponse(
         Instant expiresAt
 ) {
 
-    public static CouponIssueResponse from(Issuance issuance) {
+    public static CouponIssueResponse from(CouponIssueResult result) {
         return new CouponIssueResponse(
-                issuance.id(),
-                issuance.couponRoundId(),
-                issuance.code(),
-                issuance.status(),
-                issuance.issuedAt(),
-                issuance.expiresAt()
+                result.issuanceId(),
+                result.couponRoundId(),
+                result.code(),
+                result.status(),
+                result.issuedAt(),
+                result.expiresAt()
         );
     }
 }
