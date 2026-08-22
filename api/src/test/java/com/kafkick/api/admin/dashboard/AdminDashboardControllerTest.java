@@ -23,7 +23,8 @@ import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
-import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
+import com.kafkick.core.admin.overview.AdminOverviewService;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.support.TimeProvider;
 

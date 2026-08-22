@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.dashboard;
+package com.kafkick.core.admin.overview;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,10 +13,9 @@ import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
-import com.kafkick.core.admin.overview.CampaignOverviewSource;
-import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataset;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
@@ -37,8 +36,6 @@ import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockInput;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockRiskCalculation;
-import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
-import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
@@ -268,13 +265,13 @@ class AdminOverviewServiceTest {
     void combinesStoppedIssuanceActionWithExistingActionPopulation() {
         AdminOverviewResult result = serviceWithDataset(new AdminOverviewMockDataFactory() {
             @Override
-            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
-                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
                 List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
                         .map(input -> input.couponId().equals(103L)
                                 ? stoppedIssuanceInput(input, snapshotAt) : input)
                         .toList();
-                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                return new AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, base.queueInputs(), base.outcomeInput(), base.campaigns(),
                         base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
                         base.latencySummary());
@@ -587,13 +584,13 @@ class AdminOverviewServiceTest {
     private static AdminOverviewService serviceWithQueueStatus(Long couponId, SourceStatus status) {
         return serviceWithDataset(new AdminOverviewMockDataFactory() {
             @Override
-            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
-                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
                 List<QueueInput> inputs = base.queueInputs().stream()
                         .map(input -> input.couponId().equals(couponId)
                                 ? queueWithStatus(input, status) : input)
                         .toList();
-                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                return new AdminOverviewMockDataset(base.policy(),
                         base.issuanceFlowInputs(), inputs, base.outcomeInput(), base.campaigns(),
                         base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
                         base.latencySummary());
@@ -604,8 +601,8 @@ class AdminOverviewServiceTest {
     private static AdminOverviewService serviceWithStockStatus(SourceStatus status) {
         return serviceWithDataset(new AdminOverviewMockDataFactory() {
             @Override
-            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
-                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
                 List<CampaignOverviewSource> campaigns = base.campaigns().stream()
                         .map(source -> source.couponId().equals(103L)
                                 ? new CampaignOverviewSource(source.couponId(), source.campaignName(),
@@ -615,7 +612,7 @@ class AdminOverviewServiceTest {
                                 status.carriesValue() ? snapshotAt : null, status,
                                 source.preparationCompleted()) : source)
                         .toList();
-                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                return new AdminOverviewMockDataset(base.policy(),
                         base.issuanceFlowInputs(), base.queueInputs(), base.outcomeInput(), campaigns,
                         base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
                         base.latencySummary());
@@ -626,13 +623,13 @@ class AdminOverviewServiceTest {
     private static AdminOverviewService serviceWithIssuanceStatus(Long couponId, SourceStatus status) {
         return serviceWithDataset(new AdminOverviewMockDataFactory() {
             @Override
-            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
-                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
                 List<IssuanceFlowInput> inputs = base.issuanceFlowInputs().stream()
                         .map(input -> input.couponId().equals(couponId)
                                 ? issuanceWithStatus(input, status, snapshotAt) : input)
                         .toList();
-                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(), inputs,
+                return new AdminOverviewMockDataset(base.policy(), inputs,
                         base.queueInputs(), base.outcomeInput(), base.campaigns(),
                         base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
                         base.latencySummary());
@@ -647,8 +644,8 @@ class AdminOverviewServiceTest {
     ) {
         return serviceWithDataset(new AdminOverviewMockDataFactory() {
             @Override
-            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
-                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
                 List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
                         .map(input -> issuanceSourceInput(input,
                                 input.couponId().equals(101L) ? issuanceStatus : SourceStatus.N_A, snapshotAt))
@@ -657,7 +654,7 @@ class AdminOverviewServiceTest {
                         .map(input -> queueSourceInput(input,
                                 input.couponId().equals(102L) ? queueStatus : SourceStatus.N_A, snapshotAt))
                         .toList();
-                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                return new AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
                         base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
                         base.latencySummary());
@@ -669,15 +666,15 @@ class AdminOverviewServiceTest {
     private static AdminOverviewService serviceWithAllActionSourceStatus(SourceStatus status) {
         return serviceWithDataset(new AdminOverviewMockDataFactory() {
             @Override
-            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
-                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
                 List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
                         .map(input -> issuanceSourceInput(input, status, snapshotAt))
                         .toList();
                 List<QueueInput> queueInputs = base.queueInputs().stream()
                         .map(input -> queueSourceInput(input, status, snapshotAt))
                         .toList();
-                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                return new AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
                         base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
                         base.latencySummary());
@@ -953,7 +950,7 @@ class AdminOverviewServiceTest {
         }
 
         @Override
-        public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+        public AdminOverviewMockDataset create(Instant snapshotAt) {
             createCount++;
             events.add("factory");
             return super.create(snapshotAt);

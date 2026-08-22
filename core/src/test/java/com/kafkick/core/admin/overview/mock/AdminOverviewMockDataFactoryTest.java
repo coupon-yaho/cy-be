@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.dashboard.mock;
+package com.kafkick.core.admin.overview.mock;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

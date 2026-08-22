@@ -13,13 +13,14 @@ import org.springframework.web.bind.annotation.RestController;
 import com.kafkick.api.admin.dashboard.dto.AnalyticsQuery;
 import com.kafkick.api.admin.dashboard.dto.AdminAnalyticsResponse;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
-import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.caller.Caller;
-import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.admin.overview.AdminOverviewResult;
+import com.kafkick.core.admin.overview.AdminOverviewService;
+import com.kafkick.core.support.exception.BusinessException;
 
 /**
  * 운영 담당자가 사용하는 관리자 현황·쿠폰 지표·분석 API의 HTTP 경계입니다.

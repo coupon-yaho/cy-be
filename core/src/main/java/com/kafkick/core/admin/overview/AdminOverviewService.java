@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.dashboard;
+package com.kafkick.core.admin.overview;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -8,29 +8,26 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Service;
 
-import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
-import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset;
-import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
-import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.admin.overview.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueCalculation;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCalculation;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowCalculation;
-import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator.ActionCalculation;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockInput;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockRiskCalculation;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataset;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 

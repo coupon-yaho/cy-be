@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.dashboard.mock;
+package com.kafkick.core.admin.overview.mock;
 
 import java.util.HashSet;
 import java.util.List;
@@ -6,9 +6,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
-import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
