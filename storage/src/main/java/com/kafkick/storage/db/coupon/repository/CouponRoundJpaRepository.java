@@ -3,6 +3,8 @@ package com.kafkick.storage.db.coupon.repository;
 import java.time.Instant;
 import java.util.Set;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -15,6 +17,64 @@ public interface CouponRoundJpaRepository
         extends JpaRepository<CouponRoundEntity, Long> {
 
     boolean existsByTemplateIdAndOpenAt(Long templateId, Instant openAt);
+
+    @Query(
+            value = """
+                    SELECT coupon.id AS couponRoundId,
+                           coupon.brand_id AS brandId,
+                           coupon.name AS name,
+                           coupon.policy_type AS policyType,
+                           coupon.discount_rate AS discountRate,
+                           coupon.max_discount_amount AS maxDiscountAmount,
+                           coupon.discount_amount AS discountAmount,
+                           coupon.valid_days AS validDays,
+                           coupon.open_at AS openAt,
+                           coupon.close_at AS closeAt,
+                           stock.total_quantity - stock.active_count
+                               AS remainingQuantity
+                    FROM coupons coupon
+                    JOIN coupon_stocks stock
+                      ON stock.coupon_id = coupon.id
+                    WHERE coupon.status = 'OPEN'
+                      AND coupon.open_at <= :asOf
+                      AND coupon.close_at > :asOf
+                      AND (coupon.eligible_grades_mask
+                           & :membershipGradeBit) <> 0
+                      AND stock.active_count < stock.total_quantity
+                      AND NOT EXISTS (
+                            SELECT 1
+                            FROM issuances issuance
+                            WHERE issuance.coupon_id = coupon.id
+                              AND issuance.member_id = :memberId
+                      )
+                    ORDER BY coupon.close_at ASC, coupon.id ASC
+                    """,
+            countQuery = """
+                    SELECT COUNT(*)
+                    FROM coupons coupon
+                    JOIN coupon_stocks stock
+                      ON stock.coupon_id = coupon.id
+                    WHERE coupon.status = 'OPEN'
+                      AND coupon.open_at <= :asOf
+                      AND coupon.close_at > :asOf
+                      AND (coupon.eligible_grades_mask
+                           & :membershipGradeBit) <> 0
+                      AND stock.active_count < stock.total_quantity
+                      AND NOT EXISTS (
+                            SELECT 1
+                            FROM issuances issuance
+                            WHERE issuance.coupon_id = coupon.id
+                              AND issuance.member_id = :memberId
+                      )
+                    """,
+            nativeQuery = true
+    )
+    Page<IssuableCouponRoundProjection> findIssuableCouponRounds(
+            @Param("memberId") Long memberId,
+            @Param("membershipGradeBit") int membershipGradeBit,
+            @Param("asOf") Instant asOf,
+            Pageable pageable
+    );
 
     @Query("""
             select count(roundEntity)
