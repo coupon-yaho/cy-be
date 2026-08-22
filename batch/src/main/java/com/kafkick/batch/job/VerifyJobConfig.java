@@ -77,7 +77,12 @@ public class VerifyJobConfig {
 
     public static final String JOB_NAME = "verifyJob";
 
-    static final String RUN_ID_KEY = "runId";
+    /**
+     * 잡 {@code ExecutionContext} 에 {@code runId} 를 심는 키. 트리거 API 의 조회가 이것을
+     * 읽으므로 {@code public} 이다 — 리터럴로 복제하면 키를 바꾸는 리팩터링이 그쪽을
+     * 안 데려간다.
+     */
+    public static final String RUN_ID_KEY = "runId";
     static final String SCAN_MIN_KEY = "replay.scan.minIssuanceId";
     static final String SCAN_MAX_KEY = "replay.scan.maxIssuanceId";
     static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
