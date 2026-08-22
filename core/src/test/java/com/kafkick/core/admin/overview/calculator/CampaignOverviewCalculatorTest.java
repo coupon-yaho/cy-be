@@ -1,10 +1,12 @@
 package com.kafkick.core.admin.overview.calculator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,10 +71,10 @@ class CampaignOverviewCalculatorTest {
                 .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(2, 1));
     }
 
-    /** V1 DB 재고에서 잔여 수량과 0~1 비율을 올바르게 계산하는지 검증합니다. */
+    /** O4는 Campaign Calculator 내부 V1 수량 계산이 아니라 전달받은 O4 결과만 조립하는지 검증합니다. */
     @Test
-    @DisplayName("V1 캠페인은 전체 수량과 활성 수량으로 잔여 재고를 계산한다")
-    void calculatesV1Stock() {
+    @DisplayName("O4 Map이 없으면 V1 수량이 있어도 재고를 UNAVAILABLE로 유지한다")
+    void keepsStockUnavailableWithoutCalculatedO4Map() {
         CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
                 SNAPSHOT_AT,
                 List.of(source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
@@ -82,33 +84,20 @@ class CampaignOverviewCalculatorTest {
         AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast> observation =
                 result.campaigns().getFirst().stockForecast();
 
-        assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
-        assertThat(observation.observedAt()).isEqualTo(SNAPSHOT_AT.minusSeconds(2));
-        assertThat(observation.value()).isEqualTo(
-                new AdminOverviewSnapshot.StockForecast(300L, 1_000L, 0.3, null));
+        assertThat(observation.status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(observation.value()).isNull();
     }
 
-    /** 누락·역전된 재고를 실제 0 재고로 보정해 노출하는 회귀를 방지합니다. */
+    /** 잘못된 V1 재고는 O4 계산 전 원천 경계에서 거부해 0 재고로 보정하지 않습니다. */
     @Test
-    @DisplayName("불완전하거나 유효하지 않은 V1 재고는 UNAVAILABLE로 유지한다")
-    void keepsInvalidV1StockUnavailable() {
-        List<CampaignOverviewSource> sources = List.of(
-                source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
-                        100L, null, SNAPSHOT_AT, true),
-                source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
-                        0L, 0L, SNAPSHOT_AT, true),
-                source(3L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
-                        100L, -1L, SNAPSHOT_AT, true),
-                source(4L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
-                        100L, 101L, SNAPSHOT_AT, true)
-        );
-
-        CampaignOverviewCalculator.CampaignCalculation result =
-                calculator.calculate(SNAPSHOT_AT, sources);
-
-        assertThat(result.campaigns())
-                .extracting(campaign -> campaign.stockForecast().status())
-                .containsOnly(SourceStatus.UNAVAILABLE);
+    @DisplayName("불완전하거나 유효하지 않은 V1 재고는 Source 경계에서 거부한다")
+    void rejectsInvalidV1StockAtSourceBoundary() {
+        assertThatThrownBy(() -> source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                100L, null, SNAPSHOT_AT, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                100L, -1L, SNAPSHOT_AT, true)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> source(3L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                100L, 101L, SNAPSHOT_AT, true)).isInstanceOf(IllegalArgumentException.class);
     }
 
     /** Redis 재고가 필요한 엔진을 V1 DB 수량으로 대신 계산하는 회귀를 방지합니다. */
@@ -134,14 +123,20 @@ class CampaignOverviewCalculatorTest {
     @Test
     @DisplayName("준비 미완료 WARN 캠페인은 정상 캠페인보다 먼저 노출한다")
     void prioritizesWarningCampaignBeforeNormalCampaign() {
+        AdminOverviewSnapshot.OperationActionItem warning = new AdminOverviewSnapshot.OperationActionItem(
+                2L, "캠페인 2", SNAPSHOT_AT.plusSeconds(10),
+                com.kafkick.core.observation.Severity.WARN, AdminOverviewSnapshot.CustomerImpact.NONE,
+                "준비 미완료", SNAPSHOT_AT, null, new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY, "준비 확인",
+                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL));
         CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
                 SNAPSHOT_AT,
                 List.of(
                         source(1L, CouponStatus.OPEN, SNAPSHOT_AT.minusSeconds(10),
                                 EngineVersion.V1, 100L, 20L, SNAPSHOT_AT, true),
                         source(2L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
-                                EngineVersion.V1, 100L, 0L, SNAPSHOT_AT, false)
-                )
+                                EngineVersion.V1, 100L, 0L, SNAPSHOT_AT, false)),
+                Map.of(), Map.of(), Map.of(), Map.of(2L, warning)
         );
 
         assertThat(result.campaigns())
@@ -165,11 +160,19 @@ class CampaignOverviewCalculatorTest {
         CampaignOverviewSource normalEarlier = source(
                 1L, CouponStatus.OPEN, SNAPSHOT_AT.minusSeconds(10),
                 EngineVersion.V1, 100L, 20L, SNAPSHOT_AT, true);
+        AdminOverviewSnapshot.OperationActionItem representative = new AdminOverviewSnapshot.OperationActionItem(
+                2L, "캠페인 2", warning.opensAt(), com.kafkick.core.observation.Severity.WARN,
+                AdminOverviewSnapshot.CustomerImpact.NONE, "준비 미완료", SNAPSHOT_AT, null,
+                new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY, "준비 확인",
+                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL));
 
         CampaignOverviewCalculator.CampaignCalculation first = calculator.calculate(
-                SNAPSHOT_AT, List.of(normalLater, warning, normalEarlier));
+                SNAPSHOT_AT, List.of(normalLater, warning, normalEarlier),
+                Map.of(), Map.of(), Map.of(), Map.of(2L, representative));
         CampaignOverviewCalculator.CampaignCalculation second = calculator.calculate(
-                SNAPSHOT_AT, List.of(normalEarlier, warning, normalLater));
+                SNAPSHOT_AT, List.of(normalEarlier, warning, normalLater),
+                Map.of(), Map.of(), Map.of(), Map.of(2L, representative));
 
         assertThat(first.campaigns())
                 .extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
@@ -183,6 +186,47 @@ class CampaignOverviewCalculatorTest {
         assertThat(second.campaigns())
                 .extracting(AdminOverviewSnapshot.CampaignOverview::priority)
                 .containsExactly(1, 2, 3);
+    }
+
+    /** O1·O2·O4 Map과 상위 20개가 아닌 전체 대표 Map이 한 행과 우선순위를 함께 결정하는지 검증합니다. */
+    @Test
+    @DisplayName("계산 Map을 조립하고 전체 대표 조치 Map으로 행 표시와 정렬을 결정한다")
+    void assemblesCalculationMapsAndRepresentativeActions() {
+        AdminOverviewSnapshot.OperationActionItem representative = new AdminOverviewSnapshot.OperationActionItem(
+                2L, "캠페인 2", SNAPSHOT_AT, com.kafkick.core.observation.Severity.CRITICAL,
+                AdminOverviewSnapshot.CustomerImpact.WIDESPREAD, "입장 중단", SNAPSHOT_AT,
+                Duration.ofMinutes(2), new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.QUEUE_STALLED, "대기열 확인",
+                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL));
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow> issuance =
+                new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.IssuanceFlow(
+                        44.0, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT, List.of(),
+                        AdminOverviewSnapshot.IssuanceFlowState.DECREASING, Duration.ofMinutes(2)),
+                        SourceStatus.VALID, SNAPSHOT_AT);
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast> stock =
+                new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.StockForecast(
+                        350L, 7_000L, 0.05, Duration.ofSeconds(478)), SourceStatus.VALID, SNAPSHOT_AT);
+
+        CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(SNAPSHOT_AT,
+                List.of(source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                                100L, 20L, SNAPSHOT_AT, true),
+                        source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                                7_000L, 6_650L, SNAPSHOT_AT, true)),
+                Map.of(2L, issuance),
+                Map.of(2L, new AdminOverviewSnapshot.Observation<>(null, SourceStatus.N_A, null)),
+                Map.of(2L, stock), Map.of(2L, representative));
+
+        assertThat(result.campaigns()).extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
+                .containsExactly(2L, 1L);
+        assertThat(result.campaigns().getFirst()).satisfies(campaign -> {
+            assertThat(campaign.issuanceFlow()).isSameAs(issuance);
+            assertThat(campaign.campaignQueueStatus().status()).isEqualTo(SourceStatus.N_A);
+            assertThat(campaign.stockForecast()).isSameAs(stock);
+            assertThat(campaign.severity()).isEqualTo(com.kafkick.core.observation.Severity.CRITICAL);
+            assertThat(campaign.customerImpact()).isEqualTo(AdminOverviewSnapshot.CustomerImpact.WIDESPREAD);
+            assertThat(campaign.recommendedAction()).isEqualTo(representative.recommendedAction());
+        });
+        assertThat(result.campaigns().get(1).issuanceFlow().status()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
     private static CampaignOverviewSource source(

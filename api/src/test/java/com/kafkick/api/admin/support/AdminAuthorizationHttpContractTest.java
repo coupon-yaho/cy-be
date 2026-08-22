@@ -14,8 +14,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import com.kafkick.api.admin.dashboard.AdminDashboardController;
 import com.kafkick.api.admin.dashboard.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.support.TimeProvider;
 
@@ -27,6 +31,10 @@ class AdminAuthorizationHttpContractTest {
                     new AdminOverviewService(
                             new TimeProvider(Clock.systemUTC()),
                             new AdminOverviewMockDataFactory(),
+                            new IssuanceFlowCalculator(),
+                            new CampaignQueueCalculator(),
+                            new CustomerOutcomeCalculator(),
+                            new StockRiskCalculator(),
                             new CampaignOverviewCalculator(),
                             new OperationActionCalculator(),
                             new OverviewStatusCalculator())));

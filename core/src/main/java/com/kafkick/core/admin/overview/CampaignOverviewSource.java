@@ -1,9 +1,11 @@
 package com.kafkick.core.admin.overview;
 
 import java.time.Instant;
+import java.util.Objects;
 
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.SourceStatus;
 
 /**
  * 관리자 운영현황 계산에 필요한 캠페인 단위 원천값입니다.
@@ -22,6 +24,7 @@ import com.kafkick.core.observation.EngineVersion;
  * @param totalQuantity 발급 가능한 전체 수량; 아직 수집하지 못했으면 {@code null}
  * @param activeCount 현재 활성 발급 수량; 아직 수집하지 못했으면 {@code null}
  * @param stockObservedAt 재고 수량을 관측한 시각; 재고를 수집하지 못했으면 {@code null}
+ * @param stockStatus 기술 원천과 분리한 재고 관측 상태
  * @param preparationCompleted 필수 준비 항목을 모두 완료했는지 여부
  */
 public record CampaignOverviewSource(
@@ -35,5 +38,38 @@ public record CampaignOverviewSource(
         Long totalQuantity,
         Long activeCount,
         Instant stockObservedAt,
+        SourceStatus stockStatus,
         boolean preparationCompleted
-) { }
+) {
+
+    /** 캠페인 기본 정보와 재고 상태·수량·관측 시각의 canonical 조합을 강제합니다. */
+    public CampaignOverviewSource {
+        Objects.requireNonNull(couponId, "couponId");
+        Objects.requireNonNull(campaignName, "campaignName");
+        Objects.requireNonNull(brandName, "brandName");
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(opensAt, "opensAt");
+        Objects.requireNonNull(engineVersion, "engineVersion");
+        Objects.requireNonNull(stockStatus, "stockStatus");
+        if (stockStatus.carriesValue()) {
+            if (totalQuantity == null || activeCount == null || stockObservedAt == null) {
+                throw new IllegalArgumentException("값 있는 재고 상태는 수량과 observedAt이 모두 필요합니다.");
+            }
+            if (totalQuantity <= 0L || activeCount < 0L || activeCount > totalQuantity) {
+                throw new IllegalArgumentException("재고 수량 관계가 유효하지 않습니다.");
+            }
+        } else if (totalQuantity != null || activeCount != null || stockObservedAt != null) {
+            throw new IllegalArgumentException("값 없는 재고 상태는 수량과 observedAt이 모두 null이어야 합니다.");
+        }
+    }
+
+    /** 명시적 재고 상태가 없던 기존 호출을 값·시각 유무에 따른 호환 입력으로 변환합니다. */
+    public CampaignOverviewSource(Long couponId, String campaignName, String brandName, CouponStatus status,
+                                  Instant opensAt, Instant closesAt, EngineVersion engineVersion,
+                                  Long totalQuantity, Long activeCount, Instant stockObservedAt,
+                                  boolean preparationCompleted) {
+        this(couponId, campaignName, brandName, status, opensAt, closesAt, engineVersion, totalQuantity,
+                activeCount, stockObservedAt,
+                stockObservedAt == null ? SourceStatus.UNAVAILABLE : SourceStatus.VALID, preparationCompleted);
+    }
+}

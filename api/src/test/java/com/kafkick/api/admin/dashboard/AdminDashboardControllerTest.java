@@ -15,8 +15,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.support.TimeProvider;
@@ -30,14 +34,18 @@ class AdminDashboardControllerTest {
             new AdminDashboardController(new AdminOverviewService(
                     new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
                     new AdminOverviewMockDataFactory(),
+                    new IssuanceFlowCalculator(),
+                    new CampaignQueueCalculator(),
+                    new CustomerOutcomeCalculator(),
+                    new StockRiskCalculator(),
                     new CampaignOverviewCalculator(),
                     new OperationActionCalculator(),
                     new OverviewStatusCalculator()))
     );
 
-    /** 개요 조회가 계산된 캠페인 값과 미연결 관측 상태를 성공 봉투에 보존하는지 검증합니다. */
+    /** 개요 조회가 조립된 O1~O4·O3와 대표 조치를 성공 봉투에 보존하는지 검증합니다. */
     @Test
-    @DisplayName("관리자 개요 조회는 Mock 캠페인 계산 결과를 PARTIAL 응답으로 반환한다")
+    @DisplayName("관리자 개요 조회는 Mock 계산 결과를 PARTIAL 응답으로 반환한다")
     void overviewReturnsCalculatedMockCampaignResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/overview"))
                 .andExpect(status().isOk())
@@ -46,26 +54,38 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
                 .andExpect(jsonPath("$.data.overallStatus").value("PARTIAL"))
                 .andExpect(jsonPath("$.data.actionRequired.state").value("VALID"))
-                .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(1))
+                .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(2))
                 .andExpect(jsonPath("$.data.openingSoon.value.totalCount").value(2))
                 .andExpect(jsonPath("$.data.openingSoon.value.preparationIncompleteCount").value(1))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaignStatusSummary.value.openCount").value(1))
+                .andExpect(jsonPath("$.data.campaignStatusSummary.value.openCount").value(3))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.scheduledCount").value(2))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.closedCount").value(1))
-                .andExpect(jsonPath("$.data.actionItems.value.topItems[0].couponId").value(103))
+                .andExpect(jsonPath("$.data.actionItems.value.topItems[0].couponId").value(101))
                 .andExpect(jsonPath("$.data.campaigns.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value.length()").value(4))
-                .andExpect(jsonPath("$.data.campaigns.value[0].couponId").value(103))
+                .andExpect(jsonPath("$.data.campaigns.value.length()").value(6))
+                .andExpect(jsonPath("$.data.campaigns.value[0].couponId").value(101))
                 .andExpect(jsonPath("$.data.campaigns.value[0].priority").value(1))
-                .andExpect(jsonPath("$.data.campaigns.value[0].severity").value("WARN"))
-                .andExpect(jsonPath("$.data.campaigns.value[0].stockForecast.state")
-                        .value("UNAVAILABLE"))
-                .andExpect(jsonPath("$.data.campaigns.value[1].couponId").value(101))
-                .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.value.remainingQuantity")
-                        .value(300))
-                .andExpect(jsonPath("$.data.customerOutcomes.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.campaigns.value[0].severity").value("CRITICAL"))
+                .andExpect(jsonPath("$.data.campaigns.value[0].campaignQueueStatus.value.assessment")
+                        .value("ADMISSION_STOPPED"))
+                .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(102))
+                .andExpect(jsonPath("$.data.campaigns.value[2].issuanceFlow.value.currentPerMinute")
+                        .value(44.0))
+                .andExpect(jsonPath("$.data.campaigns.value[2].stockForecast.value.estimatedDepletion")
+                        .value("PT7M58S"))
+                .andExpect(jsonPath("$.data.queueRisk.state").value("VALID"))
+                .andExpect(jsonPath("$.data.stockRisk.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.stockRisk.value").doesNotExist())
+                .andExpect(jsonPath("$.data.stockRisk.observedAt").doesNotExist())
+                .andExpect(jsonPath("$.data.campaigns.value[3].couponId").value(103))
+                .andExpect(jsonPath("$.data.campaigns.value[3].stockForecast.state").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.campaigns.value[3].stockForecast.value").doesNotExist())
+                .andExpect(jsonPath("$.data.campaigns.value[3].stockForecast.observedAt").doesNotExist())
+                .andExpect(jsonPath("$.data.campaigns.value[3].issuanceFlow.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value[3].campaignQueueStatus.state").value("VALID"))
+                .andExpect(jsonPath("$.data.customerOutcomes.state").value("VALID"))
+                .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(7))
                 .andExpect(jsonPath("$.error").isEmpty());
     }
 

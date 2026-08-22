@@ -1,9 +1,11 @@
 package com.kafkick.core.admin.overview.calculator;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -86,6 +88,21 @@ class OperationActionCalculatorTest {
 
         assertThat(forward.items().topItems()).containsExactly(widespread);
         assertThat(reversed.items().topItems()).containsExactly(widespread);
+    }
+
+    /** KPI와 top 20이 대표 Map과 다른 모집단을 사용하면 동일 캠페인이 다시 섞이는 회귀를 방지합니다. */
+    @Test
+    @DisplayName("대표 판정 Map은 불변이며 KPI와 목록의 유일한 모집단이다")
+    void returnsImmutableRepresentativeMapUsedByKpisAndItems() {
+        OperationActionCalculator.ActionCalculation result = new OperationActionCalculator().calculate(List.of(
+                action(31L, Severity.WARN), action(31L, Severity.CRITICAL), action(32L, Severity.NONE)));
+
+        assertThat(result.representativeByCoupon()).isEqualTo(Map.of(31L, action(31L, Severity.CRITICAL)));
+        assertThat(result.required().totalCount()).isEqualTo(result.representativeByCoupon().size());
+        assertThat(result.items().topItems()).containsExactlyElementsOf(
+                result.representativeByCoupon().values());
+        assertThatThrownBy(() -> result.representativeByCoupon().put(33L, action(33L, Severity.WARN)))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     /** 테스트에 필요한 캠페인 식별자와 심각도만 달리해 실제 조치 후보를 생성합니다. */

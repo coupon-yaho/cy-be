@@ -85,12 +85,14 @@ public class OperationActionCalculator {
             if (!requiresAction(decision)) {
                 continue;
             }
+            // 한 캠페인의 여러 이상 신호를 동일한 결정 규칙으로 대표 한 건에 축약합니다.
             representativeByCoupon.merge(
                     decision.couponId(),
                     decision,
                     OperationActionCalculator::selectRepresentativeAction);
         }
 
+        // KPI와 화면 목록이 동일 모집단을 사용하도록 대표 Map에서 한 번만 정렬합니다.
         List<AdminOverviewSnapshot.OperationActionItem> actions =
                 representativeByCoupon.values().stream()
                         .sorted(ACTION_PRIORITY)
@@ -108,8 +110,9 @@ public class OperationActionCalculator {
                         totalCount, urgentCount, warningCount);
         AdminOverviewSnapshot.ActionItemSnapshot items =
                 new AdminOverviewSnapshot.ActionItemSnapshot(
+                        // 전체 건수는 유지하고 화면에 즉시 노출할 목록만 상위 20개로 제한합니다.
                         totalCount, actions.stream().limit(20).toList());
-        return new ActionCalculation(required, items);
+        return new ActionCalculation(required, items, representativeByCoupon);
     }
 
     /** WARN·CRITICAL로 확정된 후보만 실제 조치 모집단에 포함합니다. */
@@ -165,9 +168,19 @@ public class OperationActionCalculator {
      *
      * @param required 전체·긴급·주의 캠페인 수
      * @param items 전체 건수와 우선 노출할 최대 20개 조치 항목
+     * @param representativeByCoupon KPI와 목록을 만든 couponId별 대표 조치의 불변 모집단
      */
     public record ActionCalculation(
             AdminOverviewSnapshot.ActionRequiredSummary required,
-            AdminOverviewSnapshot.ActionItemSnapshot items
-    ) { }
+            AdminOverviewSnapshot.ActionItemSnapshot items,
+            Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeByCoupon
+    ) {
+
+        /** 대표 모집단을 불변 복사하여 KPI·목록·캠페인 행이 같은 판정을 재사용하게 합니다. */
+        public ActionCalculation {
+            Objects.requireNonNull(required, "required");
+            Objects.requireNonNull(items, "items");
+            representativeByCoupon = Map.copyOf(representativeByCoupon);
+        }
+    }
 }

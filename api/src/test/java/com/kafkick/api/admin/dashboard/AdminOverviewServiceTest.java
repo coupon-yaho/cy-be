@@ -6,16 +6,34 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
+import com.kafkick.core.admin.overview.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueCalculation;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCalculation;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowCalculation;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator.ActionCalculation;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockInput;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockRiskCalculation;
 import com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.CouponStatus;
@@ -28,10 +46,10 @@ class AdminOverviewServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-20T03:15:00Z");
 
-    /** 계산 가능한 캠페인 값까지 미수집으로 버리거나 관측 영역을 가짜 0으로 만드는 회귀를 방지합니다. */
+    /** O1~O4와 Action의 같은 계산 결과가 KPI·목록·행에 재사용되는지 검증합니다. */
     @Test
-    @DisplayName("Mock 캠페인 계산값과 미연결 관측 상태를 PARTIAL 운영현황으로 조립한다")
-    void assemblesMockCampaignSourcesAsPartialOverview() {
+    @DisplayName("Mock O1 O2 O3 O4 결과와 대표 조치를 PARTIAL 운영현황으로 조립한다")
+    void assemblesMockCalculationResultsAsPartialOverview() {
         AdminOverviewService service = service();
 
         AdminOverviewResult result = service.getOverview();
@@ -41,44 +59,174 @@ class AdminOverviewServiceTest {
         assertThat(result.overallStatus()).isEqualTo(OverallStatus.PARTIAL);
         assertThat(snapshot.campaignStatusSummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.campaignStatusSummary().value())
-                .isEqualTo(new AdminOverviewSnapshot.CampaignStatusSummary(1, 2, 1));
+                .isEqualTo(new AdminOverviewSnapshot.CampaignStatusSummary(3, 2, 1));
         assertThat(snapshot.openingSoon().value())
                 .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(2, 1));
         assertThat(snapshot.actionRequired().value())
-                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1));
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(2, 1, 1));
         assertThat(snapshot.actionItems().value().topItems())
-                .singleElement()
-                .satisfies(action -> assertThat(action.couponId()).isEqualTo(103L));
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                .containsExactly(101L, 105L);
         assertThat(snapshot.campaigns().status()).isEqualTo(SourceStatus.VALID);
-        assertThat(snapshot.campaigns().value()).hasSize(4);
+        assertThat(snapshot.campaigns().value()).hasSize(6);
         assertThat(snapshot.campaigns().value())
                 .extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
-                .containsExactly(103L, 101L, 102L, 104L);
+                .containsExactly(101L, 105L, 102L, 103L, 104L, 106L);
         assertThat(snapshot.campaigns().value().getFirst())
                 .satisfies(campaign -> {
                     assertThat(campaign.priority()).isEqualTo(1);
-                    assertThat(campaign.severity()).isEqualTo(Severity.WARN);
-                    assertThat(campaign.stockForecast().status())
-                            .isEqualTo(SourceStatus.UNAVAILABLE);
+                    assertThat(campaign.severity()).isEqualTo(Severity.CRITICAL);
+                    assertThat(campaign.recommendedAction().code())
+                            .isEqualTo(AdminOverviewSnapshot.ActionCode.QUEUE_STALLED);
+                    assertThat(campaign.campaignQueueStatus().value().assessment())
+                            .isEqualTo(AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED);
                 });
         assertThat(snapshot.campaigns().value())
-                .filteredOn(campaign -> campaign.couponId().equals(101L))
+                .filteredOn(campaign -> campaign.couponId().equals(102L))
                 .singleElement()
-                .satisfies(campaign -> assertThat(campaign.stockForecast().value())
+                .satisfies(campaign -> {
+                    assertThat(campaign.issuanceFlow().value().currentPerMinute()).isEqualTo(44.0);
+                    assertThat(campaign.stockForecast().value())
                         .isEqualTo(new AdminOverviewSnapshot.StockForecast(
-                                300L, 1_000L, 0.3, null)));
+                                350L, 7_000L, 0.05, Duration.ofSeconds(478)));
+                });
+        assertThat(snapshot.campaigns().value())
+                .filteredOn(campaign -> campaign.couponId().equals(103L))
+                .singleElement()
+                .satisfies(campaign -> {
+                    assertThat(campaign.campaignQueueStatus().value().estimatedWait())
+                            .isEqualTo(Duration.ofSeconds(40));
+                    assertThat(campaign.stockForecast().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+                });
+        assertThat(snapshot.campaigns().value())
+                .filteredOn(campaign -> campaign.couponId().equals(104L))
+                .singleElement()
+                .satisfies(campaign -> {
+                    assertThat(campaign.issuanceFlow().status()).isEqualTo(SourceStatus.N_A);
+                    assertThat(campaign.campaignQueueStatus().status()).isEqualTo(SourceStatus.N_A);
+                    assertThat(campaign.stockForecast().status()).isEqualTo(SourceStatus.N_A);
+                });
+        assertThat(snapshot.queueRisk().value())
+                .isEqualTo(new AdminOverviewSnapshot.QueueRiskSummary(1, null));
+        assertThat(snapshot.stockRisk()).isEqualTo(unavailable());
+        assertThat(snapshot.aggregateQueue().value())
+                .isEqualTo(new AdminOverviewSnapshot.AggregateQueue(3_388L, 4.6, null));
+        assertThat(snapshot.customerOutcomes().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.customerOutcomes().value().outcomes()).hasSize(7);
         assertThat(List.of(
-                snapshot.queueRisk(),
-                snapshot.stockRisk(),
                 snapshot.aggregateIssuanceRate(),
-                snapshot.aggregateQueue(),
-                snapshot.latencySummary(),
-                snapshot.customerOutcomes()
+                snapshot.latencySummary()
         )).allSatisfy(observation -> {
             assertThat(observation.value()).isNull();
             assertThat(observation.status()).isEqualTo(SourceStatus.UNAVAILABLE);
             assertThat(observation.observedAt()).isNull();
         });
+    }
+
+    /**
+     * 한 요청에서 각 협력자를 한 번씩만 호출하고 Calculator가 만든 Observation 객체를 새로 감싸지
+     * 않고 Snapshot과 Campaign 행에 그대로 재사용하는지 검증합니다.
+     */
+    @Test
+    @DisplayName("Service는 Calculator를 한 번씩 호출하고 O1 O2 O3 O4 Observation을 그대로 조립한다")
+    void invokesCollaboratorsOnceAndPreservesCalculatedObservationIdentity() {
+        List<String> events = new ArrayList<>();
+        RecordingTimeProvider timeProvider = new RecordingTimeProvider(events);
+        RecordingMockDataFactory factory = new RecordingMockDataFactory(events);
+        RecordingIssuanceFlowCalculator issuance = new RecordingIssuanceFlowCalculator(events);
+        RecordingQueueCalculator queue = new RecordingQueueCalculator(events);
+        RecordingOutcomeCalculator outcome = new RecordingOutcomeCalculator(events);
+        RecordingStockRiskCalculator stock = new RecordingStockRiskCalculator(events);
+        RecordingCampaignOverviewCalculator campaign = new RecordingCampaignOverviewCalculator(events);
+        RecordingActionCalculator action = new RecordingActionCalculator(events);
+        RecordingOverviewStatusCalculator status = new RecordingOverviewStatusCalculator(events);
+        AdminOverviewService service = new AdminOverviewService(timeProvider, factory, issuance, queue, outcome,
+                stock, campaign, action, status);
+
+        AdminOverviewSnapshot snapshot = service.getOverview().snapshot();
+
+        assertThat(events).containsExactly(
+                "time", "factory", "issuance", "queue", "outcome", "stock", "action", "campaign", "status");
+        assertThat(factory.createCount).isEqualTo(1);
+        assertThat(issuance.calculateCount).isEqualTo(1);
+        assertThat(queue.calculateCount).isEqualTo(1);
+        assertThat(outcome.calculateCount).isEqualTo(1);
+        assertThat(stock.calculateCount).isEqualTo(1);
+        assertThat(action.calculateCount).isEqualTo(1);
+        assertThat(campaign.calculateCount).isEqualTo(1);
+        assertThat(status.calculateCount).isEqualTo(1);
+        assertThat(stock.inputs.stream()
+                .filter(input -> input.couponId().equals(101L))
+                .findFirst()
+                .orElseThrow()
+                .issuanceFlow())
+                .isSameAs(issuance.result.issuanceFlows().get(101L));
+        assertThat(snapshot.queueRisk()).isSameAs(queue.result.queueRisk());
+        assertThat(snapshot.aggregateQueue()).isSameAs(queue.result.aggregateQueue());
+        assertThat(snapshot.stockRisk()).isSameAs(stock.result.stockRisk());
+        assertThat(snapshot.customerOutcomes()).isSameAs(outcome.result.customerOutcomes());
+        assertThat(snapshot.campaigns().value().stream()
+                .filter(row -> row.couponId().equals(101L))
+                .findFirst()
+                .orElseThrow()
+                .campaignQueueStatus())
+                .isSameAs(queue.result.queueStatuses().get(101L));
+    }
+
+    /** O2 모집단 상태가 Action KPI의 부분 합계 노출 여부와 최신성 상태를 결정하는지 검증합니다. */
+    @Test
+    @DisplayName("O2 상태는 Action KPI에 VALID STALE WARMING_UP 또는 값 없는 상태로 전파된다")
+    void propagatesQueueCompletenessToActionObservations() {
+        for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP,
+                SourceStatus.UNAVAILABLE, SourceStatus.PENDING)) {
+            AdminOverviewResult result = serviceWithQueueStatus(101L, status).getOverview();
+            assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
+            assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
+            if (status.carriesValue()) {
+                assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(1L);
+                assertThat(result.snapshot().actionItems().value().topItems())
+                        .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+                assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW);
+                assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW);
+            } else {
+                assertThat(result.snapshot().actionRequired().value()).isNull();
+                assertThat(result.snapshot().actionItems().value()).isNull();
+                assertThat(result.snapshot().actionRequired().observedAt()).isNull();
+                assertThat(result.snapshot().actionItems().observedAt()).isNull();
+            }
+            assertThat(campaignForCoupon(result, 101L).campaignQueueStatus().status()).isEqualTo(status);
+            assertThat(campaignForCoupon(result, 101L).severity()).isEqualTo(Severity.NONE);
+            if (!status.carriesValue()) {
+                assertThat(campaignForCoupon(result, 105L).severity()).isEqualTo(Severity.WARN);
+                assertThat(campaignForCoupon(result, 105L).recommendedAction().code())
+                        .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
+            }
+        }
+        for (SourceStatus status : List.of(SourceStatus.N_A, SourceStatus.VALID, SourceStatus.NO_TRAFFIC)) {
+            AdminOverviewResult result = serviceWithQueueStatus(102L, status).getOverview();
+            assertThat(result.snapshot().actionRequired().status()).isEqualTo(SourceStatus.VALID);
+            assertThat(result.snapshot().actionItems().status()).isEqualTo(SourceStatus.VALID);
+            assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(2L);
+            assertThat(result.snapshot().actionItems().value().topItems())
+                    .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(101L, 105L);
+            assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW);
+            assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW);
+            assertThat(campaignForCoupon(result, 102L).campaignQueueStatus().status()).isEqualTo(status);
+            assertThat(campaignForCoupon(result, 101L).severity()).isEqualTo(Severity.CRITICAL);
+        }
+    }
+
+    /** 명시적인 재고 최신성·미수집 상태가 O4 행과 전역 위험에 손실 없이 전달되는지 검증합니다. */
+    @Test
+    @DisplayName("재고 STALE WARMING_UP PENDING 상태는 Service O4 행과 전역 위험에 전파된다")
+    void propagatesExplicitStockSourceStates() {
+        for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP, SourceStatus.PENDING)) {
+            AdminOverviewResult result = serviceWithStockStatus(status).getOverview();
+            AdminOverviewSnapshot.CampaignOverview campaign = result.snapshot().campaigns().value().stream()
+                    .filter(row -> row.couponId().equals(103L)).findFirst().orElseThrow();
+            assertThat(campaign.stockForecast().status()).isEqualTo(status);
+            assertThat(result.snapshot().stockRisk().status()).isEqualTo(status);
+        }
     }
 
     /** 계산이 끝난 내부 값이 HTTP 변환 과정에서 누락되거나 전체 상태가 낮아지는 회귀를 방지합니다. */
@@ -292,10 +440,67 @@ class AdminOverviewServiceTest {
         return new AdminOverviewService(
                 timeProvider,
                 new AdminOverviewMockDataFactory(),
+                new IssuanceFlowCalculator(),
+                new CampaignQueueCalculator(),
+                new CustomerOutcomeCalculator(),
+                new StockRiskCalculator(),
                 new CampaignOverviewCalculator(),
                 new OperationActionCalculator(),
                 statusCalculator
         );
+    }
+
+    private static AdminOverviewService serviceWithQueueStatus(Long couponId, SourceStatus status) {
+        return serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<QueueInput> inputs = base.queueInputs().stream()
+                        .map(input -> input.couponId().equals(couponId)
+                                ? queueWithStatus(input, status) : input)
+                        .toList();
+                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                        base.issuanceFlowInputs(), inputs, base.outcomeInput(), base.campaigns(),
+                        base.preparationActionCandidates());
+            }
+        });
+    }
+
+    private static AdminOverviewService serviceWithStockStatus(SourceStatus status) {
+        return serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+                com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<CampaignOverviewSource> campaigns = base.campaigns().stream()
+                        .map(source -> source.couponId().equals(103L)
+                                ? new CampaignOverviewSource(source.couponId(), source.campaignName(),
+                                source.brandName(), source.status(), source.opensAt(), source.closesAt(),
+                                source.engineVersion(), status.carriesValue() ? 10_000L : null,
+                                status.carriesValue() ? 3_700L : null,
+                                status.carriesValue() ? snapshotAt : null, status,
+                                source.preparationCompleted()) : source)
+                        .toList();
+                return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
+                        base.issuanceFlowInputs(), base.queueInputs(), base.outcomeInput(), campaigns,
+                        base.preparationActionCandidates());
+            }
+        });
+    }
+
+    private static AdminOverviewService serviceWithDataset(AdminOverviewMockDataFactory factory) {
+        return new AdminOverviewService(new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), factory,
+                new IssuanceFlowCalculator(), new CampaignQueueCalculator(), new CustomerOutcomeCalculator(),
+                new StockRiskCalculator(), new CampaignOverviewCalculator(), new OperationActionCalculator(),
+                new OverviewStatusCalculator());
+    }
+
+    private static QueueInput queueWithStatus(QueueInput input, SourceStatus status) {
+        if (!status.carriesValue()) {
+            return new QueueInput(input.couponId(), null, null, null, null, null, null, null, status, null);
+        }
+        return new QueueInput(input.couponId(), input.currentWaitingCount(), input.previousWaitingCount(),
+                input.admittedCount(), input.windowStart(), input.windowEnd(), input.lastAdmissionAt(),
+                input.admissionStoppedStartedAt(), status, input.observedAt());
     }
 
     private static AdminOverviewSnapshot completeSnapshot(
@@ -409,6 +614,13 @@ class AdminOverviewServiceTest {
         );
     }
 
+    private static AdminOverviewSnapshot.CampaignOverview campaignForCoupon(AdminOverviewResult result, long couponId) {
+        return result.snapshot().campaigns().value().stream()
+                .filter(row -> row.couponId().equals(couponId))
+                .findFirst()
+                .orElseThrow();
+    }
+
     private static <T> AdminOverviewSnapshot.Observation<T> valid(T value) {
         return observed(value, SourceStatus.VALID);
     }
@@ -426,5 +638,181 @@ class AdminOverviewServiceTest {
 
     private static <T> AdminOverviewSnapshot.Observation<T> notApplicable() {
         return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.N_A, null);
+    }
+
+    /** 실제 TimeProvider 동작을 보존하면서 요청 시간 경계 호출 횟수와 순서를 기록합니다. */
+    private static final class RecordingTimeProvider extends TimeProvider {
+
+        private final List<String> events;
+
+        private RecordingTimeProvider(List<String> events) {
+            super(Clock.fixed(NOW, ZoneOffset.UTC));
+            this.events = events;
+        }
+
+        @Override
+        public Instant instant() {
+            events.add("time");
+            return super.instant();
+        }
+    }
+
+    /** 실제 Mock Factory의 Dataset 생성 결과를 보존하면서 호출 횟수와 순서를 기록합니다. */
+    private static final class RecordingMockDataFactory extends AdminOverviewMockDataFactory {
+
+        private final List<String> events;
+        private int createCount;
+
+        private RecordingMockDataFactory(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset create(Instant snapshotAt) {
+            createCount++;
+            events.add("factory");
+            return super.create(snapshotAt);
+        }
+    }
+
+    /** 실제 O1 계산 결과를 유지하는 호출 계수기입니다. */
+    private static final class RecordingIssuanceFlowCalculator extends IssuanceFlowCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+        private IssuanceFlowCalculation result;
+
+        private RecordingIssuanceFlowCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public IssuanceFlowCalculation calculate(OverviewCalculationPolicy policy, List<IssuanceFlowInput> inputs) {
+            calculateCount++;
+            events.add("issuance");
+            result = super.calculate(policy, inputs);
+            return result;
+        }
+    }
+
+    /** 실제 O2 계산 결과를 유지하는 호출 계수기입니다. */
+    private static final class RecordingQueueCalculator extends CampaignQueueCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+        private QueueCalculation result;
+
+        private RecordingQueueCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public QueueCalculation calculate(OverviewCalculationPolicy policy, List<QueueInput> inputs) {
+            calculateCount++;
+            events.add("queue");
+            result = super.calculate(policy, inputs);
+            return result;
+        }
+    }
+
+    /** 실제 O3 계산 결과를 유지하는 호출 계수기입니다. */
+    private static final class RecordingOutcomeCalculator extends CustomerOutcomeCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+        private OutcomeCalculation result;
+
+        private RecordingOutcomeCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public OutcomeCalculation calculate(OutcomeInput input) {
+            calculateCount++;
+            events.add("outcome");
+            result = super.calculate(input);
+            return result;
+        }
+    }
+
+    /** 실제 O4 계산 결과를 유지하고 같은 O1 Observation이 전달됐는지 확인할 입력을 기록합니다. */
+    private static final class RecordingStockRiskCalculator extends StockRiskCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+        private List<StockInput> inputs;
+        private StockRiskCalculation result;
+
+        private RecordingStockRiskCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public StockRiskCalculation calculate(OverviewCalculationPolicy policy, List<StockInput> inputs) {
+            calculateCount++;
+            events.add("stock");
+            this.inputs = List.copyOf(inputs);
+            result = super.calculate(policy, inputs);
+            return result;
+        }
+    }
+
+    /** 실제 Campaign 조립 결과를 유지하는 호출 계수기입니다. */
+    private static final class RecordingCampaignOverviewCalculator extends CampaignOverviewCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+
+        private RecordingCampaignOverviewCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public CampaignCalculation calculate(Instant snapshotAt, List<CampaignOverviewSource> campaigns,
+                Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows,
+                Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus>> queueStatuses,
+                Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast>> stockForecasts,
+                Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeActions) {
+            calculateCount++;
+            events.add("campaign");
+            return super.calculate(snapshotAt, campaigns, issuanceFlows, queueStatuses, stockForecasts,
+                    representativeActions);
+        }
+    }
+
+    /** 실제 Action 집계 결과를 유지하는 호출 계수기입니다. */
+    private static final class RecordingActionCalculator extends OperationActionCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+
+        private RecordingActionCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public ActionCalculation calculate(List<AdminOverviewSnapshot.OperationActionItem> decisions) {
+            calculateCount++;
+            events.add("action");
+            return super.calculate(decisions);
+        }
+    }
+
+    /** 실제 전체 상태 계산 결과를 유지하는 호출 계수기입니다. */
+    private static final class RecordingOverviewStatusCalculator extends OverviewStatusCalculator {
+
+        private final List<String> events;
+        private int calculateCount;
+
+        private RecordingOverviewStatusCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public OverallStatus calculate(AdminOverviewSnapshot snapshot) {
+            calculateCount++;
+            events.add("status");
+            return super.calculate(snapshot);
+        }
     }
 }
