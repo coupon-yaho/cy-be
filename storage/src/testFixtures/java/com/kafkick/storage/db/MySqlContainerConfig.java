@@ -10,7 +10,7 @@ import org.testcontainers.utility.DockerImageName;
  * @ServiceConnection 이 컨테이너에서 접속 정보를 읽어 storage.yml 의 url/계정/드라이버를 덮어쓴다.
  * 컨테이너 수명은 스프링 테스트 컨텍스트 캐싱에 맡긴다.
  */
-@TestConfiguration(proxyBeanMethods = false)
+@TestConfiguration
 public class MySqlContainerConfig {
 
     /** CHECK 제약을 실제로 적용하는 MySQL 8.0.16 이상의 고정 버전으로 검증합니다. */

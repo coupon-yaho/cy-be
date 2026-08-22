@@ -1,4 +1,3 @@
-// issuances 테이블의 회원별 쿠폰 발급건과 발급 시점 스냅샷을 표현합니다.
 package com.kafkick.storage.db.coupon.entity;
 
 import java.time.Instant;
@@ -10,7 +9,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.storage.db.support.UpdatableEntity;
 
 @Entity

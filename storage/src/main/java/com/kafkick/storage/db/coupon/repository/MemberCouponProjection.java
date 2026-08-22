@@ -1,9 +1,8 @@
-// 발급건과 쿠폰 회차 스냅샷 조인 결과를 필요한 컬럼만 투영합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
 
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 public interface MemberCouponProjection {

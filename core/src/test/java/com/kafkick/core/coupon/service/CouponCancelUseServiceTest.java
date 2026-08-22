@@ -1,4 +1,3 @@
-// 사용 취소 상태 전이·재고 복원·실적 종료·이력 저장 규칙을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -9,6 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -17,22 +17,27 @@ import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.IssuanceUsage;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
 import com.kafkick.core.support.exception.BusinessException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 사용 취소 상태 전이·재고 복원·실적 종료·이력 저장 규칙을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponCancelUseServiceTest {
@@ -89,9 +94,21 @@ class CouponCancelUseServiceTest {
         CouponCancelUseResult result = cancelUseService.cancelUse(command());
 
         assertThat(result.status()).isEqualTo(IssuanceStatus.EXPIRED);
-        verify(couponStockRepository).lockForUpdate(10L);
-        verify(couponStockRepository).releaseOneAfterLock(
+        InOrder ordered = inOrder(
+                couponStockRepository,
+                issuanceRepository
+        );
+        ordered.verify(couponStockRepository).lockForUpdate(10L);
+        ordered.verify(issuanceRepository).updateStatusIfCurrent(
+                100L,
+                20L,
+                IssuanceStatus.USED,
+                IssuanceStatus.EXPIRED,
+                CANCELED_AT
+        );
+        ordered.verify(couponStockRepository).release(
                 10L,
+                1,
                 CANCELED_AT
         );
         verifyStateAndHistory(IssuanceStatus.EXPIRED);
@@ -233,6 +250,12 @@ class CouponCancelUseServiceTest {
         )).thenReturn(true);
         when(issuanceUsageRepository.cancelIfActive(200L, CANCELED_AT))
                 .thenReturn(true);
+        if (nextStatus == IssuanceStatus.EXPIRED) {
+            when(couponStockRepository.lockForUpdate(10L))
+                    .thenReturn(true);
+            when(couponStockRepository.release(10L, 1, CANCELED_AT))
+                    .thenReturn(true);
+        }
     }
 
     private void verifyStateAndHistory(IssuanceStatus nextStatus) {

@@ -1,4 +1,3 @@
-// 쿠폰 사용 과정의 비즈니스 실패를 공통 응답 코드로 정의합니다.
 package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.ErrorCode;
@@ -18,7 +17,8 @@ public enum CouponUseErrorCode implements ErrorCode {
     COUPON_CANCEL_USE_SAVE_FAILED(500, "COUPON-410", "쿠폰 사용 취소 저장 중 오류가 발생했습니다."),
     COUPON_STOCK_RELEASE_FAILED(500, "COUPON-411", "쿠폰 재고 복원 중 오류가 발생했습니다."),
     INVALID_COUPON_CANCEL_REQUEST(400, "COUPON-412", "쿠폰 발급 취소 요청 값이 올바르지 않습니다."),
-    COUPON_CANCEL_SAVE_FAILED(500, "COUPON-413", "쿠폰 발급 취소 저장 중 오류가 발생했습니다.");
+    COUPON_CANCEL_SAVE_FAILED(500, "COUPON-413", "쿠폰 발급 취소 저장 중 오류가 발생했습니다."),
+    COUPON_STOCK_LOCK_FAILED(500, "COUPON-416", "쿠폰 재고 잠금 중 오류가 발생했습니다.");
 
     private final int status;
     private final String code;

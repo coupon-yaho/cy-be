@@ -7,6 +7,10 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Set;
 
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponTemplate;
+import com.kafkick.core.membership.domain.MembershipGrade;
+
 public record CouponRound(
         Long id,
         Long templateId,

@@ -1,4 +1,3 @@
-// issuance_histories 테이블에 발급 상태 전이 이력을 추가 전용으로 저장합니다.
 package com.kafkick.storage.db.coupon.entity;
 
 import java.time.Instant;

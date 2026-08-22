@@ -1,4 +1,3 @@
-// 활성 템플릿 반복 규칙의 회차 계산, 스냅샷, 중복 건너뛰기를 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -16,15 +15,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.kafkick.core.coupon.domain.CouponDayOfWeek;
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponDayOfWeek;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
-import com.kafkick.core.coupon.domain.CouponTemplate;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.coupontemplate.domain.CouponTemplate;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
-import com.kafkick.core.coupon.port.CouponRoundRepository;
-import com.kafkick.core.coupon.port.CouponTemplateRepository;
+import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
+import com.kafkick.core.coupontemplate.port.CouponTemplateRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,6 +32,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+// 활성 템플릿 반복 규칙의 회차 계산, 중복과 전역 충돌 건너뛰기를 검증합니다.
 @ExtendWith(MockitoExtension.class)
 class CouponRoundGenerationServiceTest {
 
@@ -40,7 +40,7 @@ class CouponRoundGenerationServiceTest {
     private CouponTemplateRepository couponTemplateRepository;
 
     @Mock
-    private CouponRoundRepository couponRoundRepository;
+    private CouponRoundCreationService couponRoundCreationService;
 
     private CouponRoundGenerationService couponRoundGenerationService;
 
@@ -48,7 +48,7 @@ class CouponRoundGenerationServiceTest {
     void setUp() {
         couponRoundGenerationService = new CouponRoundGenerationService(
                 couponTemplateRepository,
-                couponRoundRepository,
+                couponRoundCreationService,
                 ZoneId.of("Asia/Seoul"),
                 30
         );
@@ -73,8 +73,8 @@ class CouponRoundGenerationServiceTest {
                 ArgumentCaptor.forClass(CouponRound.class);
         ArgumentCaptor<CouponStock> stockCaptor =
                 ArgumentCaptor.forClass(CouponStock.class);
-        verify(couponRoundRepository, org.mockito.Mockito.times(2))
-                .saveWithInitialStock(
+        verify(couponRoundCreationService, org.mockito.Mockito.times(2))
+                .create(
                         roundCaptor.capture(),
                         stockCaptor.capture()
                 );
@@ -117,8 +117,8 @@ class CouponRoundGenerationServiceTest {
         when(couponTemplateRepository.findAllActiveByIdAsc())
                 .thenReturn(List.of(template(100L, true)));
         doThrow(new CouponRoundAlreadyExistsException("중복", null))
-                .when(couponRoundRepository)
-                .saveWithInitialStock(any(), any());
+                .when(couponRoundCreationService)
+                .create(any(), any());
 
         CouponRoundGenerationResult result = couponRoundGenerationService
                 .generate(

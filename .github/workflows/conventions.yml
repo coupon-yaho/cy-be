@@ -79,7 +79,7 @@ jobs:
           > 키가 있어야 Jira 이슈에 PR이 자동 연결됩니다.
           EOF
 
-          echo "::error title=PR 제목 규약 위반::형식은 [JIRA-KEY] <type>(<scope>): <요약> 입니다. Summary 참고."
+          echo "::error title=PR 제목 규약 위반::형식은 <type>/<JIRA-KEY> <요약> 입니다. Summary 참고."
           exit 1
 
   # ─────────────────────────────────────────────────────────

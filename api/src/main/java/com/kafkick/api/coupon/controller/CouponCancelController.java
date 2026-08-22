@@ -1,4 +1,3 @@
-// 회원 소유 발급 쿠폰을 멱등하게 취소하는 API를 제공합니다.
 package com.kafkick.api.coupon.controller;
 
 import jakarta.validation.constraints.Positive;
@@ -9,22 +8,22 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.kafkick.api.coupon.CouponRequestHeaders;
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponCancelTransactionalAdapter;
-import com.kafkick.api.coupon.dto.CouponCancelResponse;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.dto.response.CouponCancelResponse;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponCancelController {
 
-    private final CouponCancelTransactionalAdapter cancelAdapter;
+    private final CouponOperationExecutionService executionService;
 
     public CouponCancelController(
-            CouponCancelTransactionalAdapter cancelAdapter
+            CouponOperationExecutionService executionService
     ) {
-        this.cancelAdapter = cancelAdapter;
+        this.executionService = executionService;
     }
 
     @PostMapping("/{issuanceId}/cancel")
@@ -38,10 +37,12 @@ public class CouponCancelController {
             @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
             String idempotencyKey
     ) {
-        return ResponseEnvelope.success(cancelAdapter.cancel(
-                issuanceId,
-                memberId,
-                idempotencyKey
+        return ResponseEnvelope.success(CouponCancelResponse.from(
+                executionService.cancel(
+                        issuanceId,
+                        memberId,
+                        idempotencyKey
+                )
         ));
     }
 }

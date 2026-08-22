@@ -1,8 +1,7 @@
-// 쿠폰 회차 도메인과 coupons 엔티티의 변환을 담당합니다.
 package com.kafkick.storage.db.coupon.mapper;
 
 import com.kafkick.core.coupon.domain.CouponRound;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 
 public final class CouponRoundEntityMapper {

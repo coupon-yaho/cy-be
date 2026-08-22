@@ -1,4 +1,3 @@
-// 쿠폰 발급 취소의 상태 전이·재고 복원·이력 저장 규칙을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -17,23 +16,29 @@ import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponCancelCommand;
+import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.ErrorCode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 쿠폰 발급 취소의 상태 전이·재고 복원·이력 저장 규칙을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponCancelServiceTest {
@@ -64,11 +69,12 @@ class CouponCancelServiceTest {
     }
 
     @Test
-    @DisplayName("ISSUED 쿠폰을 취소하면 재고 잠금 후 CANCELLED로 전이하고 재고와 이력을 한 번 변경한다")
+    @DisplayName("ISSUED 쿠폰을 취소하면 CANCELLED로 전이하고 재고와 이력을 한 번 변경한다")
     void cancelIssuedCouponAndReleaseStock() {
         Issuance issuance = issuance(CANCELED_AT.plusSeconds(1));
         when(issuanceRepository.findById(100L))
                 .thenReturn(Optional.of(issuance));
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.updateStatusIfCurrent(
                 100L,
                 20L,
@@ -76,6 +82,8 @@ class CouponCancelServiceTest {
                 IssuanceStatus.CANCELLED,
                 CANCELED_AT
         )).thenReturn(true);
+        when(couponStockRepository.release(10L, 1, CANCELED_AT))
+                .thenReturn(true);
 
         CouponCancelResult result = cancelService.cancel(command());
 
@@ -95,8 +103,9 @@ class CouponCancelServiceTest {
                 IssuanceStatus.CANCELLED,
                 CANCELED_AT
         );
-        ordered.verify(couponStockRepository).releaseOneAfterLock(
+        ordered.verify(couponStockRepository).release(
                 10L,
+                1,
                 CANCELED_AT
         );
         ArgumentCaptor<IssuanceHistory> historyCaptor =
@@ -164,6 +173,7 @@ class CouponCancelServiceTest {
                 .thenReturn(Optional.of(issuance(
                         CANCELED_AT.plusSeconds(1)
                 )));
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.updateStatusIfCurrent(
                 100L,
                 20L,
@@ -174,9 +184,8 @@ class CouponCancelServiceTest {
 
         assertErrorCode(command(), CouponIssueErrorCode.INVALID_TRANSITION);
 
-        verify(couponStockRepository).lockForUpdate(10L);
-        verify(couponStockRepository, never()).releaseOneAfterLock(
-                any(), any()
+        verify(couponStockRepository, never()).release(
+                anyLong(), anyInt(), any()
         );
         verifyNoInteractions(issuanceHistoryRepository);
     }

@@ -1,4 +1,3 @@
-// 쿠폰 발급 과정의 비즈니스 실패를 공통 응답 코드로 정의합니다.
 package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.ErrorCode;

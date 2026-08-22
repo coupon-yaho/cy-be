@@ -1,4 +1,3 @@
-// 쿠폰 사용 도메인과 issuance_usages 엔티티를 상호 변환합니다.
 package com.kafkick.storage.db.coupon.mapper;
 
 import com.kafkick.core.coupon.domain.IssuanceUsage;

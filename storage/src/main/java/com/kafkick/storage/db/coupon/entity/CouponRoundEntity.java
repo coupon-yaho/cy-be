@@ -1,4 +1,3 @@
-// coupons 테이블에 저장되는 쿠폰 회차 스냅샷을 표현합니다.
 package com.kafkick.storage.db.coupon.entity;
 
 import java.time.Instant;
@@ -9,7 +8,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.storage.db.support.BaseEntity;
 

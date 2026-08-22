@@ -1,7 +1,9 @@
-// 소유권·만료·상태를 검증하고 쿠폰 사용 실적과 USE 이력을 저장합니다.
 package com.kafkick.core.coupon.service;
 
 import java.util.Objects;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.Issuance;
@@ -13,8 +15,11 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.service.command.CouponUseCommand;
+import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.support.exception.BusinessException;
 
+@Service
 public class CouponUseService {
 
     private final IssuanceRepository issuanceRepository;
@@ -42,6 +47,7 @@ public class CouponUseService {
         );
     }
 
+    @Transactional
     public CouponUseResult use(CouponUseCommand command) {
         validateCommand(command);
         Issuance issuance = issuanceRepository

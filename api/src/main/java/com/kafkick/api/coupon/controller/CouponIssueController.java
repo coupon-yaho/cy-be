@@ -1,7 +1,4 @@
-// 가상 회원 헤더를 받아 공개된 회차의 쿠폰을 발급합니다.
 package com.kafkick.api.coupon.controller;
-
-import org.slf4j.MDC;
 
 import jakarta.validation.constraints.Positive;
 
@@ -13,25 +10,24 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.adapter.CouponIssueTransactionalAdapter;
-import com.kafkick.api.coupon.dto.CouponIssueResponse;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.coupon.dto.response.CouponIssueResponse;
 import com.kafkick.api.support.ResponseEnvelope;
-import com.kafkick.core.coupon.domain.Issuance;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponIssueController {
 
-    private static final String REQUEST_ID = "requestId";
-
-    private final CouponIssueTransactionalAdapter issueAdapter;
+    private final CouponOperationExecutionService operationExecutionService;
 
     public CouponIssueController(
-            CouponIssueTransactionalAdapter issueAdapter
+            CouponOperationExecutionService operationExecutionService
     ) {
-        this.issueAdapter = issueAdapter;
+        this.operationExecutionService = operationExecutionService;
     }
 
     @PostMapping("/{couponRoundId}/issue")
@@ -43,18 +39,20 @@ public class CouponIssueController {
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
             @RequestHeader(MemberRequestHeaders.MEMBERSHIP_GRADE)
-            MembershipGrade membershipGrade
+            MembershipGrade membershipGrade,
+            @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
+            String idempotencyKey
     ) {
-        Issuance issuance = issueAdapter.issue(
+        CouponIssueResult result = operationExecutionService.issue(
                 couponRoundId,
                 memberId,
                 membershipGrade,
-                MDC.get(REQUEST_ID)
+                idempotencyKey
         );
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ResponseEnvelope.success(
-                        CouponIssueResponse.from(issuance)
+                        CouponIssueResponse.from(result)
                 ));
     }
 }

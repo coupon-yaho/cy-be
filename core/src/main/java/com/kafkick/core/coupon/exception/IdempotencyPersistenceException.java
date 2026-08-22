@@ -1,4 +1,3 @@
-// 멱등 레코드 영속화 실패를 공통 500 오류로 변환합니다.
 package com.kafkick.core.coupon.exception;
 
 import com.kafkick.core.support.exception.BusinessException;

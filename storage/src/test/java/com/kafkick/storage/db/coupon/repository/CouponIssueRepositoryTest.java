@@ -1,4 +1,3 @@
-// 실제 MySQL 비관적 락으로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -32,19 +31,21 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.coupon.domain.Issuance;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
-import com.kafkick.core.coupon.service.CouponIssueCommand;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+// 실제 MySQL 비관적 락으로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
 
 @RepositoryTest
 @Import({
@@ -401,7 +402,7 @@ class CouponIssueRepositoryTest {
         return jdbcTemplate.queryForObject(query, Integer.class);
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
+    @TestConfiguration
     @EnableJpaAuditing(
             dateTimeProviderRef = "couponIssueTestDateTimeProvider"
     )

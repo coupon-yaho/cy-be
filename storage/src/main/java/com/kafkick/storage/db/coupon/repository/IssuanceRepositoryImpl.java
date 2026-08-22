@@ -1,4 +1,3 @@
-// 발급건을 저장하고 1인 1매 DB 제약 위반을 비즈니스 오류로 변환합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -11,25 +10,21 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
-import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
-import com.kafkick.core.coupon.exception.CouponCancelPersistenceException;
-import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
-import com.kafkick.core.coupon.exception.CouponExpirationPersistenceException;
-import com.kafkick.core.coupon.exception.CouponUsePersistenceException;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.port.CouponExpirationCandidateQueryPort;
 import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
 import com.kafkick.storage.db.coupon.mapper.IssuanceEntityMapper;
 import com.kafkick.storage.db.support.SqlErrorInspector;
 
 @Repository
-public class IssuanceRepositoryImpl implements IssuanceRepository {
+public class IssuanceRepositoryImpl
+        implements IssuanceRepository, CouponExpirationCandidateQueryPort {
 
     private static final int MYSQL_DUPLICATE_KEY_ERROR = 1062;
     private static final int MYSQL_FOREIGN_KEY_ERROR = 1452;
@@ -48,7 +43,6 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public Issuance save(Issuance issuance) {
         try {
             IssuanceEntity saved = issuanceJpaRepository.saveAndFlush(
@@ -70,7 +64,7 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
                         exception
                 );
             }
-            throw new CouponIssuePersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 발급건 저장에 실패했습니다.",
                     exception
             );
@@ -99,7 +93,7 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
                     .map(IssuanceEntityMapper::toDomain)
                     .toList();
         } catch (DataAccessException exception) {
-            throw new CouponExpirationPersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 만료 대상 조회에 실패했습니다.",
                     exception
             );
@@ -107,7 +101,6 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public boolean updateStatusIfCurrent(
             Long issuanceId,
             Long memberId,
@@ -124,26 +117,8 @@ public class IssuanceRepositoryImpl implements IssuanceRepository {
                     updatedAt
             ) == 1;
         } catch (DataAccessException exception) {
-            if (nextStatus == IssuanceStatus.EXPIRED) {
-                throw new CouponExpirationPersistenceException(
-                        "쿠폰 만료 상태 저장에 실패했습니다.",
-                        exception
-                );
-            }
-            if (nextStatus == IssuanceStatus.CANCELLED) {
-                throw new CouponCancelPersistenceException(
-                        "쿠폰 발급 취소 상태 저장에 실패했습니다.",
-                        exception
-                );
-            }
-            if (currentStatus == IssuanceStatus.USED) {
-                throw new CouponCancelUsePersistenceException(
-                        "쿠폰 사용 취소 상태 저장에 실패했습니다.",
-                        exception
-                );
-            }
-            throw new CouponUsePersistenceException(
-                    "쿠폰 사용 상태 저장에 실패했습니다.",
+            throw new CouponPersistenceException(
+                    "쿠폰 상태 저장에 실패했습니다.",
                     exception
             );
         }

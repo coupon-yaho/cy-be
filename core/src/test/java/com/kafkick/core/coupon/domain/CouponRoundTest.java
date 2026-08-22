@@ -5,8 +5,14 @@ import java.time.Instant;
 import java.time.LocalTime;
 import java.util.Set;
 
+import com.kafkick.core.membership.domain.MembershipGrade;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import com.kafkick.core.coupontemplate.domain.CouponDayOfWeek;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

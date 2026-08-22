@@ -2,15 +2,18 @@ package com.kafkick.core.coupon.port;
 
 import java.time.Instant;
 
+import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
+
 public interface CouponStockRepository {
 
-    void occupyOne(Long couponRoundId, Instant updatedAt);
+    CouponStockOccupationResult occupyAfterLock(
+            Long couponRoundId,
+            Instant updatedAt
+    );
 
-    void lockForUpdate(Long couponRoundId);
+    boolean lockForUpdate(Long couponRoundId);
 
-    void releaseOneAfterLock(Long couponRoundId, Instant updatedAt);
-
-    void releaseAfterLock(
+    boolean release(
             Long couponRoundId,
             int quantity,
             Instant updatedAt

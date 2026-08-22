@@ -1,4 +1,3 @@
-// 발급 검증 순서와 1인 1매 선점 후 재고·이력 처리 계약을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -14,17 +13,19 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
-import com.kafkick.core.coupon.port.CouponCodeGenerator;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
+import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
@@ -38,6 +39,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 발급 검증 순서와 1인 1매 선점 후 재고·이력 처리 계약을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponIssueServiceTest {
@@ -74,17 +77,20 @@ class CouponIssueServiceTest {
     }
 
     @Test
-    @DisplayName("발급건을 선점한 뒤 재고를 점유하고 ISSUE 이력을 저장한다")
+    @DisplayName("재고를 잠근 뒤 발급건 선점과 재고 차감, ISSUE 이력을 저장한다")
     void issueCouponInRequiredOrder() {
         CouponRound couponRound = couponRound(CouponRoundStatus.OPEN);
         when(couponRoundRepository.findById(10L))
                 .thenReturn(Optional.of(couponRound));
         when(couponCodeGenerator.generate())
                 .thenReturn("ABCDEFGHJKLM2345");
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.save(any(Issuance.class)))
                 .thenAnswer(invocation -> persisted(
                         invocation.getArgument(0)
                 ));
+        when(couponStockRepository.occupyAfterLock(10L, ISSUED_AT))
+                .thenReturn(CouponStockOccupationResult.OCCUPIED);
 
         Issuance result = couponIssueService.issue(command(
                 MembershipGrade.GOLD,
@@ -98,8 +104,9 @@ class CouponIssueServiceTest {
                 issuanceHistoryRepository
         );
         order.verify(couponRoundRepository).findById(10L);
+        order.verify(couponStockRepository).lockForUpdate(10L);
         order.verify(issuanceRepository).save(any(Issuance.class));
-        order.verify(couponStockRepository).occupyOne(10L, ISSUED_AT);
+        order.verify(couponStockRepository).occupyAfterLock(10L, ISSUED_AT);
         order.verify(issuanceHistoryRepository)
                 .save(any(IssuanceHistory.class));
 
@@ -122,6 +129,47 @@ class CouponIssueServiceTest {
         assertThat(historyCaptor.getValue().toStatus())
                 .isEqualTo(IssuanceStatus.ISSUED);
         assertThat(result.id()).isEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("재고 점유 결과가 소진이면 core가 SOLD_OUT으로 판단한다")
+    void rejectSoldOutStockInCore() {
+        when(couponRoundRepository.findById(10L))
+                .thenReturn(Optional.of(couponRound(CouponRoundStatus.OPEN)));
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
+        when(couponCodeGenerator.generate()).thenReturn("ABCDEFGHJKLM2345");
+        when(issuanceRepository.save(any(Issuance.class)))
+                .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
+        when(couponStockRepository.occupyAfterLock(10L, ISSUED_AT))
+                .thenReturn(CouponStockOccupationResult.SOLD_OUT);
+
+        assertErrorCode(
+                command(MembershipGrade.GOLD, ISSUED_AT),
+                CouponIssueErrorCode.SOLD_OUT
+        );
+
+        verifyNoInteractions(issuanceHistoryRepository);
+    }
+
+    @Test
+    @DisplayName("재고 행이 없으면 core가 재고 정보 없음으로 판단한다")
+    void rejectMissingStockInCore() {
+        when(couponRoundRepository.findById(10L))
+                .thenReturn(Optional.of(couponRound(CouponRoundStatus.OPEN)));
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(false);
+
+        assertErrorCode(
+                command(MembershipGrade.GOLD, ISSUED_AT),
+                CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND
+        );
+
+        verifyNoInteractions(
+                issuanceRepository,
+                issuanceHistoryRepository,
+                couponCodeGenerator
+        );
+        verify(couponStockRepository, never())
+                .occupyAfterLock(any(), any());
     }
 
     @Test

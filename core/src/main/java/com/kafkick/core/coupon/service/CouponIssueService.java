@@ -1,21 +1,26 @@
-// 회차 자격 검증 후 1인 1매 선점, 재고 점유, ISSUE 이력을 순서대로 처리합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
 import java.util.Objects;
 
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
-import com.kafkick.core.coupon.port.CouponCodeGenerator;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
+import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.support.exception.BusinessException;
 
+@Service
 public class CouponIssueService {
 
     private final CouponRoundRepository couponRoundRepository;
@@ -48,6 +53,7 @@ public class CouponIssueService {
         );
     }
 
+    @Transactional
     public Issuance issue(CouponIssueCommand command) {
         validateCommand(command);
         CouponRound couponRound = couponRoundRepository
@@ -58,6 +64,12 @@ public class CouponIssueService {
                 ));
 
         validateIssuable(couponRound, command);
+        if (!couponStockRepository.lockForUpdate(couponRound.id())) {
+            throw new BusinessException(
+                    CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
+                    "couponRoundId=" + couponRound.id()
+            );
+        }
 
         Issuance issuance = Issuance.issue(
                 couponRound.id(),
@@ -68,19 +80,40 @@ public class CouponIssueService {
                 command.issuedAt()
         );
 
-        // UNIQUE(coupon_id, member_id)를 먼저 선점해야 중복 요청이 재고를 점유하지 않는다.
+        // 재고 행을 먼저 잠가 발급·취소·만료 경로의 잠금 순서를 통일한다.
+        // 이후 발급건 선점과 재고 차감은 동일 트랜잭션에서 함께 커밋·롤백된다.
         Issuance savedIssuance = issuanceRepository.save(issuance);
-        couponStockRepository.occupyOne(
+        CouponStockOccupationResult occupationResult =
+                couponStockRepository.occupyAfterLock(
                 couponRound.id(),
                 command.issuedAt()
         );
+        validateStockOccupation(couponRound.id(), occupationResult);
         issuanceHistoryRepository.save(IssuanceHistory.issue(
                 savedIssuance.id(),
-                command.requestId(),
+                command.idempotencyKey(),
                 command.issuedAt()
         ));
 
         return savedIssuance;
+    }
+
+    private static void validateStockOccupation(
+            Long couponRoundId,
+            CouponStockOccupationResult occupationResult
+    ) {
+        if (occupationResult == CouponStockOccupationResult.SOLD_OUT) {
+            throw new BusinessException(
+                    CouponIssueErrorCode.SOLD_OUT,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
+        if (occupationResult == CouponStockOccupationResult.NOT_FOUND) {
+            throw new BusinessException(
+                    CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
     }
 
     private static void validateCommand(CouponIssueCommand command) {

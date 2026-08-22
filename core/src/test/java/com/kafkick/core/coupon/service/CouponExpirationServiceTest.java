@@ -1,4 +1,3 @@
-// 회차별 만료 성공 건수만큼 재고와 EXPIRE 이력이 반영되는지 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -17,16 +16,20 @@ import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponExpirationCommand;
+import com.kafkick.core.coupon.service.result.CouponExpirationResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+// 회차별 만료 성공 건수만큼 재고와 EXPIRE 이력이 반영되는지 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponExpirationServiceTest {
@@ -73,6 +76,9 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         )).thenReturn(false);
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
+        when(couponStockRepository.release(10L, 1, AS_OF))
+                .thenReturn(true);
 
         CouponExpirationResult result = expirationService.expire(
                 new CouponExpirationCommand(
@@ -104,7 +110,7 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         );
-        ordered.verify(couponStockRepository).releaseAfterLock(
+        ordered.verify(couponStockRepository).release(
                 10L,
                 1,
                 AS_OF
@@ -139,6 +145,7 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         )).thenReturn(false);
+        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
 
         CouponExpirationResult result = expirationService.expire(
                 new CouponExpirationCommand(10L, List.of(issuance), AS_OF)
@@ -146,8 +153,7 @@ class CouponExpirationServiceTest {
 
         assertThat(result.requestedCount()).isEqualTo(1);
         assertThat(result.expiredCount()).isZero();
-        verify(couponStockRepository).lockForUpdate(10L);
-        verify(couponStockRepository, never()).releaseAfterLock(
+        verify(couponStockRepository, never()).release(
                 org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.any()

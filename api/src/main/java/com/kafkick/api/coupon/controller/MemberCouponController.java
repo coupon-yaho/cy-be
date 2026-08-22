@@ -1,4 +1,3 @@
-// 가상 회원 헤더로 본인 소유 쿠폰을 상태별 페이지로 조회합니다.
 package com.kafkick.api.coupon.controller;
 
 import jakarta.validation.constraints.Max;
@@ -11,8 +10,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.kafkick.api.coupon.MemberRequestHeaders;
-import com.kafkick.api.coupon.dto.MemberCouponPageResponse;
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.dto.response.MemberCouponPageResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.service.MemberCouponQueryService;

@@ -1,7 +1,9 @@
-// 사용 취소 상태 전이·실적 종료·만료 재고 복원·이력 저장을 조율합니다.
 package com.kafkick.core.coupon.service;
 
 import java.util.Objects;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
@@ -13,8 +15,11 @@ import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
 import com.kafkick.core.support.exception.BusinessException;
 
+@Service
 public class CouponCancelUseService {
 
     private final IssuanceRepository issuanceRepository;
@@ -40,6 +45,7 @@ public class CouponCancelUseService {
         );
     }
 
+    @Transactional
     public CouponCancelUseResult cancelUse(CouponCancelUseCommand command) {
         validateCommand(command);
         Issuance issuance = issuanceRepository
@@ -62,7 +68,7 @@ public class CouponCancelUseService {
         );
 
         if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
-            couponStockRepository.lockForUpdate(issuance.couponRoundId());
+            lockStock(issuance.couponRoundId());
         }
 
         boolean statusChanged = issuanceRepository.updateStatusIfCurrent(
@@ -80,10 +86,17 @@ public class CouponCancelUseService {
         }
 
         if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
-            couponStockRepository.releaseOneAfterLock(
+            boolean stockReleased = couponStockRepository.release(
                     issuance.couponRoundId(),
+                    1,
                     command.canceledAt()
             );
+            if (!stockReleased) {
+                throw new BusinessException(
+                        CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                        "couponRoundId=" + issuance.couponRoundId()
+                );
+            }
         }
 
         boolean usageCanceled = issuanceUsageRepository.cancelIfActive(
@@ -112,6 +125,15 @@ public class CouponCancelUseService {
                 canceledUsage.discountAmount(),
                 canceledUsage.canceledAt()
         );
+    }
+
+    private void lockStock(Long couponRoundId) {
+        if (!couponStockRepository.lockForUpdate(couponRoundId)) {
+            throw new BusinessException(
+                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                    "couponRoundId=" + couponRoundId
+            );
+        }
     }
 
     private static void validateCommand(CouponCancelUseCommand command) {

@@ -9,7 +9,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 
 import com.kafkick.core.support.TimeProvider;
 
-@Configuration(proxyBeanMethods = false)
+@Configuration
 @EnableJpaAuditing(dateTimeProviderRef = "auditingDateTimeProvider")
 public class JpaAuditConfig {
 

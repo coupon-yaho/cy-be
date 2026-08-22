@@ -94,6 +94,29 @@ find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.exa
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
 
+### Docker 이미지
+
+`main` 브랜치 push 또는 `v*` 태그 push 시 GitHub Actions가 API와 배치 이미지를
+각각 빌드해 하나의 Docker Hub 저장소에 태그를 구분하여 올린다. 수동 실행도 가능하다.
+
+- 주소: `https://hub.docker.com/r/${DOCKERHUB_USERNAME}/coupon-yaho`
+- API 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:api-latest`
+- 배치 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:batch-latest`
+
+GitHub 저장소의 **Settings → Secrets and variables → Actions**에 아래 값을 등록한다.
+
+- Variable `DOCKERHUB_USERNAME`: Docker Hub 사용자명 또는 조직명
+- Secret `DOCKERHUB_TOKEN`: Docker Hub의 read/write 권한 Personal access token
+
+Docker Hub에는 `coupon-yaho` 저장소를 한 번 생성해야 한다.
+
+로컬 빌드는 다음과 같다.
+
+```bash
+docker build --build-arg APP_MODULE=api -t coupon-yaho-api .
+docker build --build-arg APP_MODULE=batch -t coupon-yaho-batch .
+```
+
 테스트는 Testcontainers 로 실제 MySQL 을 띄우므로 Docker 가 필요하다.
 
 ### 새 코드를 어디에 둘 것인가
@@ -102,22 +125,39 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 
 ```
 core/coupon/
-    domain/     Coupon, CouponStock          도메인 모델
+    domain/     CouponRound, Issuance        발급 쿠폰 도메인 모델
     service/    CouponIssueService           유즈케이스
-    port/       CouponRepository             인터페이스만. 구현은 어댑터가
+    port/       IssuanceRepository           인터페이스만. 구현은 어댑터가
+
+core/coupontemplate/
+    domain/     CouponTemplate               쿠폰 템플릿 도메인 모델
+    service/    CouponTemplateCreateService  템플릿 유즈케이스
+    port/       CouponTemplateRepository     템플릿 저장 인터페이스
 
 storage/db/coupon/
-    entity/     CouponEntity
-    repository/ CouponJpaRepository
-                CouponRepositoryImpl         core 의 port 구현
-    mapper/     CouponEntityMapper           엔티티 ↔ 도메인 모델 변환
+    entity/     IssuanceEntity
+    repository/ IssuanceJpaRepository
+                IssuanceRepositoryImpl       core 의 port 구현
+    mapper/     IssuanceEntityMapper         엔티티 ↔ 도메인 모델 변환
+
+storage/db/coupontemplate/
+    entity/     CouponTemplateEntity
+    repository/ CouponTemplateJpaRepository
+                CouponTemplateRepositoryImpl core 의 port 구현
+    mapper/     CouponTemplateEntityMapper   엔티티 ↔ 도메인 모델 변환
 
 infra/mq/coupon/
     CouponEventPublisher                     core 의 port 구현
 
 api/coupon/
     controller/  CouponController
-    dto/         CouponIssueRequest/Response
+    dto/request/ CouponUseRequest
+    dto/response/CouponIssueResponse
+
+api/coupontemplate/
+    controller/  CouponTemplateController
+    dto/request/ CouponTemplateCreateRequest
+    dto/response/CouponTemplateDetailResponse
 ```
 
 각 모듈의 `support/` 패키지는 그 모듈 안의 횡단 관심사를 담는다.

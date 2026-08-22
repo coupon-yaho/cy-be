@@ -1,4 +1,3 @@
-// 실제 MySQL에서 쿠폰 사용·멱등 응답·조건부 상태 전이의 원자성을 검증합니다.
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
@@ -41,7 +40,7 @@ import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
@@ -50,25 +49,27 @@ import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
-import com.kafkick.core.coupon.service.CouponUseCommand;
-import com.kafkick.core.coupon.service.CouponUseResult;
+import com.kafkick.core.coupon.service.command.CouponUseCommand;
+import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.coupon.service.CouponUseService;
-import com.kafkick.core.coupon.service.CouponCancelUseCommand;
-import com.kafkick.core.coupon.service.CouponCancelUseResult;
+import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
+import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
 import com.kafkick.core.coupon.service.CouponCancelUseService;
-import com.kafkick.core.coupon.service.CouponCancelCommand;
-import com.kafkick.core.coupon.service.CouponCancelResult;
+import com.kafkick.core.coupon.service.command.CouponCancelCommand;
+import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.CouponCancelService;
-import com.kafkick.core.coupon.service.CouponExpirationCommand;
-import com.kafkick.core.coupon.service.CouponExpirationResult;
+import com.kafkick.core.coupon.service.command.CouponExpirationCommand;
+import com.kafkick.core.coupon.service.result.CouponExpirationResult;
 import com.kafkick.core.coupon.service.CouponExpirationService;
-import com.kafkick.core.coupon.service.CouponIssueCommand;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+// 실제 MySQL에서 쿠폰 사용·멱등 응답·조건부 상태 전이의 원자성을 검증합니다.
 
 @RepositoryTest
 @Import({
@@ -97,7 +98,7 @@ class CouponUseRepositoryTest {
     private CouponStockRepository couponStockRepository;
 
     @Autowired
-    private IssuanceRepository issuanceRepository;
+    private IssuanceRepositoryImpl issuanceRepository;
 
     @Autowired
     private IssuanceUsageRepository issuanceUsageRepository;
@@ -1489,7 +1490,7 @@ class CouponUseRepositoryTest {
         return jdbcTemplate.queryForObject(query, Integer.class);
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
+    @TestConfiguration
     @EnableJpaAuditing(dateTimeProviderRef = "couponUseTestDateTimeProvider")
     static class AuditTestConfig {
 

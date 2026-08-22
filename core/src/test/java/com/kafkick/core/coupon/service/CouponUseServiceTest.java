@@ -1,4 +1,3 @@
-// 쿠폰 소유권·만료·조건부 상태 전이와 할인 계산을 검증합니다.
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
@@ -13,7 +12,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.kafkick.core.coupon.domain.CouponPolicyType;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.domain.Issuance;
@@ -21,12 +20,14 @@ import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.IssuanceUsage;
-import com.kafkick.core.coupon.domain.MembershipGrade;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.command.CouponUseCommand;
+import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
 import com.kafkick.core.support.exception.BusinessException;
 
@@ -37,6 +38,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+// 쿠폰 소유권·만료·조건부 상태 전이와 할인 계산을 검증합니다.
 
 @ExtendWith(MockitoExtension.class)
 class CouponUseServiceTest {
