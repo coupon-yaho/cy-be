@@ -29,6 +29,7 @@ import com.kafkick.core.observation.SourceStatus;
 class DashboardIssuanceDtoJsonSerializationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-16T00:00:00Z");
+    private static final Instant CAMPAIGN_OPENS_AT = Instant.parse("2026-08-15T23:00:00Z");
 
     private final ObjectMapper objectMapper;
 
@@ -82,7 +83,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
                 snapshotObserved(0.6),
                 snapshotObserved(new CouponMetricsSnapshot.RateSummary(12.5, 20.0)),
                 new CouponMetricsSnapshot.QueueSummary(count, snapshotObserved(Duration.ofMillis(1_250L))),
-                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponStatus.OPEN, OBSERVED_AT),
+                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponStatus.OPEN, CAMPAIGN_OPENS_AT),
                 snapshotObserved(0.2),
                 snapshotObserved(new CouponMetricsSnapshot.IssuanceStatusCounts(8L, 2L, 1L, 1L)),
                 snapshotObserved(new CouponMetricsSnapshot.TransitionRateSummary(2.5, 1.5, 0.5, 0.25)));
@@ -91,10 +92,11 @@ class DashboardIssuanceDtoJsonSerializationTest {
 
         assertThat(json)
                 .contains("\"window\":\"FIVE_MINUTES\"")
+                .contains("\"snapshotAt\":\"2026-08-16T00:00:00Z\"")
                 .contains("\"currentPerSecond\":12.5")
                 .contains("\"peakPerSecond\":20.0")
                 .contains("\"estimatedWaitMillis\":{\"value\":1250")
-                .contains("\"opensAt\":\"2026-08-16T00:00:00Z\"")
+                .contains("\"opensAt\":\"2026-08-15T23:00:00Z\"")
                 .contains("\"unusedCount\":8")
                 .contains("\"usePerSecond\":2.5")
                 .contains("\"cancelUsePerSecond\":1.5")
