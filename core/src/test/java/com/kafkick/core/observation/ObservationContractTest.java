@@ -19,7 +19,7 @@ class ObservationContractTest {
         assertThat(names(Dependency.values())).containsExactly("NONE", "REDIS", "MYSQL", "KAFKA");
         assertThat(names(Grade.values())).containsExactly("WELCOME", "SILVER", "GOLD", "VIP");
         assertThat(names(EventType.values()))
-                .containsExactly("ENTRY_RESULT", "QUEUE_ADMITTED", "ISSUE_RESULT");
+                .containsExactly("ENTRY_RESULT", "QUEUE_ADMITTED", "ISSUE_ATTEMPT", "ISSUE_RESULT");
         assertThat(names(SourceStatus.values())).containsExactly(
                 "VALID", "PENDING", "WARMING_UP", "STALE", "NO_TRAFFIC", "UNAVAILABLE", "N_A"
         );

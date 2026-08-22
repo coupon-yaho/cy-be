@@ -32,6 +32,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -433,6 +434,157 @@ class IssuanceObservationSessionTest {
                 .hasMessage("context");
     }
 
+    @Test
+    void recordsIssueAttemptThroughIndependentFailSafeBoundary() {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationService service = service(recordedEvents::add);
+
+        service.recordIssueAttempt(context());
+
+        assertThat(recordedEvents).singleElement().satisfies(event -> {
+            assertThat(event.eventType()).isEqualTo(EventType.ISSUE_ATTEMPT);
+            assertThat(event.httpStatus()).isNull();
+            assertThat(event.queueSequence()).isNull();
+            assertThat(event.occurredAt()).isEqualTo(COMPLETED_AT);
+        });
+    }
+
+    @Test
+    void keepsSessionResultAfterIssueAttemptIsRecorded() {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationService service = service(recordedEvents::add);
+        IssuanceObservationSession session = service.begin(context());
+
+        service.recordIssueAttempt(context());
+        session.completeIssued(301L, "ISSUE-CODE-301");
+        session.finish();
+
+        assertThat(recordedEvents).extracting(IssuanceFlowEvent::eventType)
+                .containsExactly(EventType.ISSUE_ATTEMPT, EventType.ISSUE_RESULT);
+    }
+
+    @Test
+    void isolatesIssueAttemptRecorderFailureFromTheCaller() {
+        IssuanceObservationService service = service(event -> {
+            throw new IllegalStateException("recorder unavailable");
+        });
+
+        assertThatCode(() -> service.recordIssueAttempt(context()))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void isolatesInvalidIssueAttemptEventFromTheCaller() {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationService service = service(recordedEvents::add);
+
+        assertThatCode(() -> service.recordIssueAttempt(contextWithoutRequestId()))
+                .doesNotThrowAnyException();
+        assertThat(recordedEvents).isEmpty();
+    }
+
+    @Test
+    void logsWarningWithRequestIdWhenIssueAttemptRecordingFails(CapturedOutput output) {
+        IssuanceObservationService service = service(event -> {
+            throw new IllegalStateException("recorder unavailable");
+        });
+
+        service.recordIssueAttempt(context());
+
+        assertThat(output).contains("WARN");
+        assertThat(output).contains("requestId=request-1");
+        assertThat(output).contains("eventType=ISSUE_ATTEMPT");
+        assertThat(output).contains("IllegalStateException: recorder unavailable");
+    }
+
+    @Test
+    void logsIssueAttemptFailureAtMostOncePerInterval(CapturedOutput output) {
+        IssuanceObservationService service = service(event -> {
+            throw new IllegalStateException("recorder unavailable");
+        });
+
+        for (int attempt = 0; attempt < 50; attempt++) {
+            service.recordIssueAttempt(context());
+        }
+
+        // 계약 위반은 요청마다 재발한다. 20,000 RPS 스파이크에서 건당 WARN 은 동기 appender 가
+        // 요청 스레드를 붙잡아 측정 자체를 오염시킨다.
+        assertThat(countOccurrences(output.toString(), "발급 시도 관측 이벤트 기록에 실패했습니다"))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void logsIssueAttemptFailureAgainAfterIntervalElapses(CapturedOutput output) {
+        AtomicLong nanos = new AtomicLong();
+        IssuanceObservationService service = new IssuanceObservationService(
+                new IssuanceFlowEventFactory(() -> EVENT_ID),
+                event -> {
+                    throw new IllegalStateException("recorder unavailable");
+                },
+                TIME_PROVIDER,
+                nanos::get
+        );
+
+        service.recordIssueAttempt(context());
+        service.recordIssueAttempt(context());
+        nanos.addAndGet(TimeUnit.SECONDS.toNanos(10));
+        service.recordIssueAttempt(context());
+
+        // 조인 것이 영구 침묵이 되면 안 된다. 창이 다시 열리고 누적 건수가 실린다.
+        assertThat(countOccurrences(output.toString(), "발급 시도 관측 이벤트 기록에 실패했습니다"))
+                .isEqualTo(2);
+        assertThat(output).contains("누적 3건");
+    }
+
+    @Test
+    void keepsIssueAttemptFailureLogThrottledUnderConcurrentFailures(CapturedOutput output)
+            throws Exception {
+        // 시계를 세워 둔다. 흐르는 시계면 첫 스레드가 창을 밀어 놓은 뒤 도착한 스레드가
+        // 시각 비교에서 먼저 걸러진다.
+        //
+        // 이 테스트가 보장하는 것은 동시 실패에서도 창이 한 번만 열린다는 것까지다.
+        // CAS 를 set 으로 퇴화시키면 20회 중 9회만 빨간불이 난다(실측) — 두 스레드가 같은 due 를
+        // 읽는 순간을 강제할 수 없어서다. CAS 삭제 회귀를 CI 1회 실행이 놓칠 확률이 55% 이므로
+        // 이 테스트를 CAS 검증으로 읽으면 안 된다.
+        IssuanceObservationService service = new IssuanceObservationService(
+                new IssuanceFlowEventFactory(() -> EVENT_ID),
+                event -> {
+                    throw new IllegalStateException("recorder unavailable");
+                },
+                TIME_PROVIDER,
+                () -> 0L
+        );
+
+        runConcurrently(20, index -> service.recordIssueAttempt(context()));
+
+        // 창을 잡은 스레드가 그 시점의 누적을 싣는다. 20 이 아니라 1~20 중 하나다 —
+        // 로그가 세는 것은 억제된 건수가 아니라 누적 건수다.
+        assertThat(countOccurrences(output.toString(), "발급 시도 관측 이벤트 기록에 실패했습니다"))
+                .isEqualTo(1);
+        assertThat(output.toString()).containsPattern("누적 (?:[1-9]|1[0-9]|20)건");
+    }
+
+    @Test
+    void doesNotFormatStackTraceWhenIssueAttemptRecordingFails(CapturedOutput output) {
+        IssuanceObservationService service = service(event -> {
+            throw new IllegalStateException("recorder unavailable");
+        });
+
+        service.recordIssueAttempt(context());
+
+        // 발급 요청 스레드가 포맷 비용을 문다. 계약 위반은 요청마다 결정론적으로 재발한다.
+        assertThat(output).doesNotContain("at com.kafkick.api.observation");
+    }
+
+    @Test
+    void rejectsNullContextWhenRecordingIssueAttempt() {
+        IssuanceObservationService service = service(event -> { });
+
+        assertThatThrownBy(() -> service.recordIssueAttempt(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("context");
+    }
+
     private static IssuanceObservationSession session(List<IssuanceFlowEvent> recordedEvents) {
         return service(recordedEvents::add).begin(context());
     }
@@ -462,6 +614,31 @@ class IssuanceObservationSessionTest {
                 QueueMode.ADAPTIVE,
                 901L,
                 "api-1"
+        );
+    }
+
+    private static int countOccurrences(String text, String token) {
+        int count = 0;
+        for (int index = text.indexOf(token); index >= 0; index = text.indexOf(token, index + 1)) {
+            count++;
+        }
+        return count;
+    }
+
+    private static IssuanceFlowEvent.Ctx contextWithoutRequestId() {
+        IssuanceFlowEvent.Ctx context = context();
+        return new IssuanceFlowEvent.Ctx(
+                null,
+                context.memberId(),
+                context.couponId(),
+                context.grade(),
+                context.replayed(),
+                context.occurredAt(),
+                context.engineVersion(),
+                context.releaseStage(),
+                context.queueMode(),
+                context.benchmarkRunId(),
+                context.producerInstanceId()
         );
     }
 

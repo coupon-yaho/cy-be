@@ -4,6 +4,7 @@ import com.kafkick.api.observation.issuance.IssuanceObservationService;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
+import com.kafkick.core.observation.CampaignLifecycleRecorder;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -41,6 +42,20 @@ public class ApiObservationAutoConfiguration {
     public EventRecorder eventRecorder() {
         log.warn("EventRecorder 실구현이 없어 no-op을 사용합니다.");
         return new NoOpEventRecorder();
+    }
+
+    /**
+     * 캠페인 수명 통지를 받을 기본 포트를 등록합니다.
+     *
+     * <p>실구현(OBS-26)이 들어오기 전에도 호출부를 붙일 수 있게 무동작 구현을 기본값으로 둡니다.
+     *
+     * @return 통지를 버리는 기본 수명 기록 포트
+     */
+    @Bean
+    @ConditionalOnMissingBean(CampaignLifecycleRecorder.class)
+    public CampaignLifecycleRecorder campaignLifecycleRecorder() {
+        log.warn("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+        return new NoOpCampaignLifecycleRecorder();
     }
 
     /**

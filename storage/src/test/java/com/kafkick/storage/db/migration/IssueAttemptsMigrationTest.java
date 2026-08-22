@@ -175,10 +175,30 @@ class IssueAttemptsMigrationTest {
             assertRejected(issueResult().status(202).reason("STOCK_EXHAUSTED"), "ck_attempt_reason");
         }
 
+        /**
+         * OBS-24 가 EventType 을 4종으로 늘리며 "DDL 변경 불필요" 로 판단한 근거를 실제 DB 로 닫는다.
+         * varchar(20) 수용과 CHECK 3종의 NULL 갈래 통과를 손계산이 아니라 여기서 확인한다.
+         */
+        @Test
+        @DisplayName("ISSUE_ATTEMPT 행이 DDL 변경 없이 적재된다")
+        void issueAttemptRowIsAccepted() throws SQLException {
+            assertAccepted(issueAttempt());
+
+            assertThat(query("SELECT event_type FROM issue_attempts")).isEqualTo("ISSUE_ATTEMPT");
+        }
+
+        @Test
+        @DisplayName("ISSUE_ATTEMPT 도 결과 컬럼을 가질 수 없다 — http_status 가 NULL 이라 NULL 갈래로 샌다")
+        void issueAttemptCannotCarryResultColumns() {
+            assertRejected(issueAttempt().issuance(7L, "CODE0123456789AB"), "ck_attempt_issue_ids");
+            assertRejected(issueAttempt().reason("STOCK_EXHAUSTED"), "ck_attempt_reason");
+        }
+
         @Test
         @DisplayName("이벤트 유형별 정상 조합은 모두 통과한다")
         void validRowsPass() {
             assertAccepted(queueAdmitted());
+            assertAccepted(issueAttempt());
             assertAccepted(issueResult().status(201).reason(null).issuance(7L, "CODE0123456789AB"));
             assertAccepted(issueResult().status(409).reason("STOCK_EXHAUSTED"));
             assertAccepted(issueResult().status(202).reason(null));
@@ -315,11 +335,26 @@ class IssueAttemptsMigrationTest {
         return new Row();
     }
 
-    /** QUEUE_ADMITTED 는 http_status 도 reason_code 도 없는 유일한 유형이다. */
+    /** QUEUE_ADMITTED 는 http_status 도 reason_code 도 없다. ISSUE_ATTEMPT 도 같다(OBS-24). */
     private static Row queueAdmitted() {
         Row row = new Row();
         row.eventType = "QUEUE_ADMITTED";
         row.requestId = null;
+        row.httpStatus = null;
+        row.reasonCode = null;
+        return row;
+    }
+
+    /**
+     * ISSUE_ATTEMPT 는 결과가 아니라 단계라 결과 컬럼이 전부 NULL 이다.
+     *
+     * <p>여기서 request_id 를 채우는 것은 자바 계약({@code IssuanceFlowEvent})이 요구하기 때문이고,
+     * <b>DB 는 강제하지 않는다</b> — request_id 는 NULL 허용이고 CHECK 5종 어디에도 없다. 백필과
+     * DLT 수동 보정은 request_id 없는 attempt 행을 넣을 수 있다.
+     */
+    private static Row issueAttempt() {
+        Row row = new Row();
+        row.eventType = "ISSUE_ATTEMPT";
         row.httpStatus = null;
         row.reasonCode = null;
         return row;

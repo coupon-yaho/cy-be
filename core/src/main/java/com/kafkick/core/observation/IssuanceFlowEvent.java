@@ -102,6 +102,11 @@ public record IssuanceFlowEvent(
                 reasonCode, dependency, queuePosition, queueSequence, context.replayed());
     }
 
+    static IssuanceFlowEvent issueAttempt(UUID eventId, Ctx context) {
+        return create(eventId, context, EventType.ISSUE_ATTEMPT, null, null, null,
+                null, Dependency.NONE, null, null, context.replayed());
+    }
+
     static IssuanceFlowEvent admitted(UUID eventId, Ctx context, long queueSequence) {
         if (queueSequence < 0) {
             throw new IllegalArgumentException("queueSequence는 0 이상이어야 합니다.");
@@ -167,6 +172,18 @@ public record IssuanceFlowEvent(
                 throw new IllegalArgumentException("QUEUE_ADMITTED 필드 계약을 위반했습니다.");
             }
             Objects.requireNonNull(queueSequence, "queueSequence");
+            return;
+        }
+
+        if (eventType == EventType.ISSUE_ATTEMPT) {
+            // 결과가 아니라 단계다. 결과 필드가 하나라도 있으면 잘못 만든 이벤트다.
+            // replayed 는 위 QUEUE_ADMITTED 와 달리 거부하지 않는다 — 근거는 EventType javadoc.
+            if (httpStatus != null || issuanceId != null || issuanceCode != null
+                    || reasonCode != null || queuePosition != null || queueSequence != null
+                    || dependency != Dependency.NONE) {
+                throw new IllegalArgumentException("ISSUE_ATTEMPT 필드 계약을 위반했습니다.");
+            }
+            requireText(requestId, 36, "requestId");
             return;
         }
 

@@ -4,6 +4,7 @@ import com.kafkick.api.observation.issuance.IssuanceObservationService;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
+import com.kafkick.core.observation.CampaignLifecycleRecorder;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -20,6 +21,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(OutputCaptureExtension.class)
 class ApiObservationAutoConfigurationTest {
@@ -42,12 +45,85 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context).hasSingleBean(IssuanceFlowEventFactory.class);
             assertThat(context).hasSingleBean(IssuanceObservationService.class);
             assertThat(context).hasSingleBean(TimeProvider.class);
+            assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
             assertThat(context.getBean(EventRecorder.class)).isInstanceOf(NoOpEventRecorder.class);
+            assertThat(context.getBean(CampaignLifecycleRecorder.class))
+                    .isInstanceOf(NoOpCampaignLifecycleRecorder.class);
             assertThat(context.getBean(ConsistencyCalculator.class))
                     .isInstanceOf(DefaultConsistencyCalculator.class);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).warnThreshold()).isEqualTo(10);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).criticalThreshold()).isEqualTo(100);
         });
+    }
+
+    @Test
+    void defaultCampaignLifecycleRecorderDoesNothing() {
+        contextRunner.run(context -> {
+            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+            Instant closedAt = Instant.parse("2026-08-19T01:00:00Z");
+
+            assertThatCode(() -> recorder.retireCampaign(201L, closedAt))
+                    .doesNotThrowAnyException();
+        });
+    }
+
+    @Test
+    void warnsWhenCampaignLifecycleRecorderFallsBackToNoOp(CapturedOutput output) {
+        contextRunner.run(context -> {
+            assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
+            assertThat(output).contains("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+        });
+    }
+
+    @Test
+    void defaultCampaignLifecycleRecorderWarnsInsteadOfThrowingOnNonPositiveCampaignCouponId(
+            CapturedOutput output
+    ) {
+        contextRunner.run(context -> {
+            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+            Instant closedAt = Instant.parse("2026-08-19T01:00:00Z");
+
+            // 관측 통지가 캠페인 종료 트랜잭션을 롤백시키면 안 된다. 대신 조용하지도 않아야 한다.
+            assertThatCode(() -> recorder.retireCampaign(0L, closedAt))
+                    .doesNotThrowAnyException();
+            assertThat(output).contains("캠페인 수명 통지의 값 계약을 위반했습니다");
+            assertThat(output).contains("campaignCouponId=0");
+        });
+    }
+
+    @Test
+    void defaultCampaignLifecycleRecorderWarnsInsteadOfThrowingOnNullClosedAt(
+            CapturedOutput output
+    ) {
+        contextRunner.run(context -> {
+            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+
+            assertThatCode(() -> recorder.retireCampaign(201L, null))
+                    .doesNotThrowAnyException();
+            assertThat(output).contains("캠페인 수명 통지의 값 계약을 위반했습니다");
+            assertThat(output).contains("closedAt=null");
+        });
+    }
+
+    @Test
+    void defaultCampaignLifecycleRecorderStaysSilentOnValidNotification(CapturedOutput output) {
+        contextRunner.run(context -> {
+            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+
+            recorder.retireCampaign(201L, Instant.parse("2026-08-19T01:00:00Z"));
+
+            assertThat(output).doesNotContain("캠페인 수명 통지의 값 계약을 위반했습니다");
+        });
+    }
+
+    @Test
+    void backsOffWhenCampaignLifecycleRecorderExists() {
+        CampaignLifecycleRecorder recorder = (couponId, closedAt) -> { };
+
+        contextRunner
+                .withBean(CampaignLifecycleRecorder.class, () -> recorder)
+                .run(context -> assertThat(context.getBean(CampaignLifecycleRecorder.class))
+                        .isSameAs(recorder));
     }
 
     @Test
