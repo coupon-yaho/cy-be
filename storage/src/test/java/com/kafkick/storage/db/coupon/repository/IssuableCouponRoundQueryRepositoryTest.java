@@ -88,6 +88,14 @@ class IssuableCouponRoundQueryRepositoryTest {
     @DisplayName("다른 회원이 발급받은 회차는 현재 회원에게 계속 노출한다")
     void doNotExcludeRoundIssuedToAnotherMember() {
         insertIssuance(101L, 10L, 21L, "ISSUED");
+        jdbcTemplate.update(
+                """
+                UPDATE coupon_stocks
+                SET active_count = active_count + 1
+                WHERE coupon_id = ?
+                """,
+                10L
+        );
 
         IssuableCouponRoundPage result = queryAdapter.findPage(
                 20L,
@@ -100,6 +108,11 @@ class IssuableCouponRoundQueryRepositoryTest {
         assertThat(result.content())
                 .extracting(summary -> summary.couponRoundId())
                 .contains(10L);
+        assertThat(result.content().stream()
+                .filter(summary -> summary.couponRoundId().equals(10L))
+                .findFirst()
+                .orElseThrow()
+                .remainingQuantity()).isEqualTo(7);
     }
 
     @Test
