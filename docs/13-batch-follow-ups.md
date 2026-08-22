@@ -229,11 +229,16 @@ cy_expire_processed_total   카운터. 청크마다 넘긴 건수를 더한다
 ```
 
 ```yaml
-expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_pending > 0
+expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pending > 0
 ```
 
 두 조건을 **AND 로 묶는 것이 핵심**이다. 처리량 0 자체는 정상이다 — 만료할 게 없는 날이
 대부분이다. 남은 대상이 있는데 0 인 것이 사건이다.
+
+> **`cy_expire_pending` 이 아니라 `cy_expire_unexplained_pending` 이다.** 막힌 회차의 대기는
+> 설계상 계속 남으므로, 전체를 보면 그 회차를 사람이 고칠 때까지 **처리량이 정상인 날에도
+> 정체 알림이 뜬다.** 회차 격리가 세운 구분(배치가 안 한 몫 vs 데이터가 어긋난 몫)이
+> 여기서도 그대로 적용된다.
 
 ### 2d. 실패 원인을 알림이 못 가른다
 
