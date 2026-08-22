@@ -24,7 +24,7 @@ class StorageCouponArchitectureTest {
     );
 
     @Test
-    void issuancePersistenceDoesNotChooseBusinessErrorByStatusOrEvent()
+    void storageRepositoriesDoNotUseOperationSpecificPersistenceExceptions()
             throws IOException {
         Path storageDbDirectory = Path.of(
                 "src", "main", "java", "com", "kafkick", "storage",
