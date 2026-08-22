@@ -131,14 +131,14 @@ public class BatchApiExceptionHandler {
      * 클라이언트가 둘 중 무엇을 믿어야 할지 모른다.
      *
      * <p>그 밖의 4xx 는 {@code INVALID_INPUT} 으로 접는다. 여기 오는 것은 스프링이 이미
-     * 상태를 정한 웹 예외이고, 우리 카탈로그에 대응 코드가 없는 자리다.
+     * 상태를 정한 웹 예외이고, 우리 카탈로그에 대응 코드가 없는 자리다 — 대부분 400 이다.
      */
     private static ErrorCode commonCodeFor(int status) {
-        return switch (status) {
-            case 404 -> CommonErrorCode.NOT_FOUND;
-            case 405 -> CommonErrorCode.METHOD_NOT_ALLOWED;
-            default -> CommonErrorCode.INVALID_INPUT;
-        };
+        // 405 는 여기 안 온다 — 위 javadoc 이 적은 대로 컨트롤러가 정해지기 전에 나는
+        // 예외라 이 advice 밖이다(실측). 도달 못 하는 분기를 방어로 두면 다음 사람이
+        // "405 도 우리 형식으로 나간다" 고 믿는다. 필요해지는 날 — advice 범위를
+        // 넓히는 날 — 그때 넣는다.
+        return status == 404 ? CommonErrorCode.NOT_FOUND : CommonErrorCode.INVALID_INPUT;
     }
 
     private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code) {
