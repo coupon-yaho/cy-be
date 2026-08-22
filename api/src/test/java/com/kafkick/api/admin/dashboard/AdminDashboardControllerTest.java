@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
@@ -41,6 +42,7 @@ class AdminDashboardControllerTest {
                     new CustomerOutcomeCalculator(),
                     new StockRiskCalculator(),
                     new CampaignOverviewCalculator(),
+                    new ConsistencyActionCalculator(),
                     new OperationActionCalculator(),
                     new OverviewStatusCalculator()))
     );
@@ -56,7 +58,7 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
                 .andExpect(jsonPath("$.data.overallStatus").value("COMPLETE"))
                 .andExpect(jsonPath("$.data.actionRequired.state").value("VALID"))
-                .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(2))
+                .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(4))
                 .andExpect(jsonPath("$.data.openingSoon.value.totalCount").value(2))
                 .andExpect(jsonPath("$.data.openingSoon.value.preparationIncompleteCount").value(1))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("VALID"))
@@ -75,10 +77,10 @@ class AdminDashboardControllerTest {
                         .value("ISSUANCE_STOPPED"))
                 .andExpect(jsonPath("$.data.campaigns.value[0].campaignQueueStatus.value.assessment")
                         .value("ADMISSION_STOPPED"))
-                .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(102))
-                .andExpect(jsonPath("$.data.campaigns.value[2].issuanceFlow.value.currentPerMinute")
+                .andExpect(jsonPath("$.data.campaigns.value[1].couponId").value(102))
+                .andExpect(jsonPath("$.data.campaigns.value[1].issuanceFlow.value.currentPerMinute")
                         .value(44.0))
-                .andExpect(jsonPath("$.data.campaigns.value[2].stockForecast.value.estimatedDepletion")
+                .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.value.estimatedDepletion")
                         .value("PT7M58S"))
                 .andExpect(jsonPath("$.data.queueRisk.state").value("VALID"))
                 .andExpect(jsonPath("$.data.stockRisk.state").value("VALID"))
@@ -89,10 +91,10 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.latencySummary.value.successfulP99").isString())
                 .andExpect(jsonPath("$.data.latencySummary.value.failedP99").isString())
                 .andExpect(jsonPath("$.data.latencySummary.value.windowEnd").value(NOW.toString()))
-                .andExpect(jsonPath("$.data.campaigns.value[3].couponId").value(103))
-                .andExpect(jsonPath("$.data.campaigns.value[3].stockForecast.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value[3].issuanceFlow.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value[3].campaignQueueStatus.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(103))
+                .andExpect(jsonPath("$.data.campaigns.value[2].stockForecast.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value[2].issuanceFlow.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value[2].campaignQueueStatus.state").value("VALID"))
                 .andExpect(jsonPath("$.data.customerOutcomes.state").value("VALID"))
                 .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(7))
                 .andExpect(jsonPath("$.error").isEmpty());

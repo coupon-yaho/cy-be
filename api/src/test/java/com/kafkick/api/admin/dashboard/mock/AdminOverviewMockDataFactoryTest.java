@@ -14,7 +14,11 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
+import com.kafkick.core.consistency.ConsistencyGapType;
+import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
@@ -35,7 +39,8 @@ class AdminOverviewMockDataFactoryTest {
 
         assertThat(AdminOverviewMockDataset.class.getRecordComponents()).extracting(RecordComponent::getName)
                 .containsExactly("policy", "issuanceFlowInputs", "queueInputs", "outcomeInput", "campaigns",
-                        "preparationActionCandidates", "aggregateIssuanceRate", "latencySummary");
+                        "preparationActionCandidates", "consistencyActionContexts", "aggregateIssuanceRate",
+                        "latencySummary");
         assertThat(dataset.policy().issuanceDecreaseRatio()).isEqualTo(0.50);
         assertThat(dataset.issuanceFlowInputs()).hasSize(6);
         assertThat(dataset.queueInputs()).hasSize(6);
@@ -65,6 +70,11 @@ class AdminOverviewMockDataFactoryTest {
                     assertThat(observation.observedAt()).isEqualTo(SNAPSHOT_AT);
                 });
         assertThatThrownBy(() -> dataset.queueInputs().add(null))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(dataset.consistencyActionContexts())
+                .extracting(ConsistencyActionContext::couponId)
+                .containsExactly(101L, 102L, 103L);
+        assertThatThrownBy(() -> dataset.consistencyActionContexts().add(null))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
@@ -106,6 +116,64 @@ class AdminOverviewMockDataFactoryTest {
                 });
     }
 
+    /** FINAL PASS·일반 gap 실패·초과 발급 실패가 캠페인 엔진과 같은 적용 gap 계약을 보존해야 합니다. */
+    @Test
+    @DisplayName("Mock Dataset은 FINAL PASS 일반 gap 실패와 초과 발급 실패 Context를 불변으로 보유한다")
+    void createsImmutableFinalConsistencyActionContexts() {
+        AdminOverviewMockDataset dataset = new AdminOverviewMockDataFactory().create(SNAPSHOT_AT);
+
+        assertThat(dataset.consistencyActionContexts()).hasSize(3);
+        assertThat(dataset.consistencyActionContexts()).filteredOn(context -> context.couponId().equals(101L))
+                .singleElement()
+                .satisfies(context -> {
+                    assertThat(context.engineVersion()).isEqualTo(EngineVersion.V1);
+                    assertThat(context.evaluation().verdict()).isEqualTo(Verdict.PASS);
+                    assertThat(context.evaluation().overIssued().value()).isZero();
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.DB_COUNTER_GAP).state())
+                            .isEqualTo(SourceStatus.VALID);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.ACTIVE_DB_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.LUA_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.PERSIST_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                });
+        assertThat(dataset.consistencyActionContexts()).filteredOn(context -> context.couponId().equals(102L))
+                .singleElement()
+                .satisfies(context -> {
+                    assertThat(context.engineVersion()).isEqualTo(EngineVersion.V1);
+                    assertThat(context.evaluation().verdict()).isEqualTo(Verdict.FAIL);
+                    assertThat(context.evaluation().overIssued().value()).isZero();
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.DB_COUNTER_GAP).value())
+                            .isPositive();
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.ACTIVE_DB_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.LUA_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.PERSIST_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                });
+        assertThat(dataset.consistencyActionContexts()).filteredOn(context -> context.couponId().equals(103L))
+                .singleElement()
+                .satisfies(context -> {
+                    assertThat(context.engineVersion()).isEqualTo(EngineVersion.V1);
+                    assertThat(context.evaluation().verdict()).isEqualTo(Verdict.FAIL);
+                    assertThat(context.evaluation().overIssued().value()).isPositive();
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.DB_COUNTER_GAP).value())
+                            .isZero();
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.ACTIVE_DB_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.LUA_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                    assertThat(context.evaluation().gaps().get(ConsistencyGapType.PERSIST_GAP).state())
+                            .isEqualTo(SourceStatus.N_A);
+                });
+        assertThat(dataset.consistencyActionContexts()).allSatisfy(context -> assertThat(dataset.campaigns())
+                .filteredOn(campaign -> campaign.couponId().equals(context.couponId()))
+                .singleElement()
+                .satisfies(campaign -> assertThat(context.engineVersion()).isEqualTo(campaign.engineVersion())));
+    }
+
     /** Dataset 경계에서 O1·O2·캠페인·준비 후보가 정확히 같은 couponId 모집단을 써야 합니다. */
     @Test
     @DisplayName("Dataset은 중복·누락·여분 couponId와 캠페인 밖 준비 후보를 거부한다")
@@ -136,6 +204,21 @@ class AdminOverviewMockDataFactoryTest {
                         null, null);
         assertThatThrownBy(() -> datasetWith(dataset, dataset.campaigns(), dataset.issuanceFlowInputs(),
                 dataset.queueInputs(), List.of(foreignCandidate)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> datasetWithContexts(dataset, null))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> datasetWithContexts(dataset, List.of((ConsistencyActionContext) null)))
+                .isInstanceOf(NullPointerException.class);
+        ConsistencyActionContext existingContext = dataset.consistencyActionContexts().getFirst();
+        assertThatThrownBy(() -> datasetWithContexts(dataset, List.of(existingContext, existingContext)))
+                .isInstanceOf(IllegalArgumentException.class);
+        ConsistencyActionContext foreignContext = new ConsistencyActionContext(999L, "외부", null, SNAPSHOT_AT,
+                EngineVersion.V2, existingContext.evaluation());
+        assertThatThrownBy(() -> datasetWithContexts(dataset, List.of(foreignContext)))
+                .isInstanceOf(IllegalArgumentException.class);
+        ConsistencyActionContext differentEngineContext = new ConsistencyActionContext(101L, "입장 중단 쿠폰",
+                SNAPSHOT_AT, SNAPSHOT_AT, EngineVersion.V2, existingContext.evaluation());
+        assertThatThrownBy(() -> datasetWithContexts(dataset, List.of(differentEngineContext)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -214,6 +297,17 @@ class AdminOverviewMockDataFactoryTest {
             List<AdminOverviewSnapshot.OperationActionItem> preparationCandidates
     ) {
         return new AdminOverviewMockDataset(base.policy(), issuanceInputs, queueInputs, base.outcomeInput(),
-                campaigns, preparationCandidates, base.aggregateIssuanceRate(), base.latencySummary());
+                campaigns, preparationCandidates, base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                base.latencySummary());
+    }
+
+    /** 정합성 Context 목록만 바꾼 Dataset 경계 불변식을 검증하는 보조 메서드입니다. */
+    private static AdminOverviewMockDataset datasetWithContexts(
+            AdminOverviewMockDataset base,
+            List<ConsistencyActionContext> contexts
+    ) {
+        return new AdminOverviewMockDataset(base.policy(), base.issuanceFlowInputs(), base.queueInputs(),
+                base.outcomeInput(), base.campaigns(), base.preparationActionCandidates(), contexts,
+                base.aggregateIssuanceRate(), base.latencySummary());
     }
 }

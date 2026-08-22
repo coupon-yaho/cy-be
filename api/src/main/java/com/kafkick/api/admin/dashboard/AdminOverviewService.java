@@ -16,6 +16,8 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueCalculation;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -54,6 +56,7 @@ public class AdminOverviewService {
     private final CustomerOutcomeCalculator customerOutcomeCalculator;
     private final StockRiskCalculator stockRiskCalculator;
     private final CampaignOverviewCalculator campaignOverviewCalculator;
+    private final ConsistencyActionCalculator consistencyActionCalculator;
     private final OperationActionCalculator operationActionCalculator;
     private final OverviewStatusCalculator overviewStatusCalculator;
 
@@ -68,6 +71,7 @@ public class AdminOverviewService {
      * @param customerOutcomeCalculator O3 고객 결과 계산기
      * @param stockRiskCalculator O4 V1 재고·소진 위험 계산기
      * @param campaignOverviewCalculator 캠페인 상태·오픈 임박·계산 완료 관측 조립기
+     * @param consistencyActionCalculator FINAL 정합성 조치 후보 계산기
      * @param operationActionCalculator 판정 완료 조치 후보의 KPI·목록 집계 계산기
      * @param overviewStatusCalculator 원천 상태를 전체 응답 완전성으로 계산하는 구성요소
      */
@@ -80,6 +84,7 @@ public class AdminOverviewService {
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
             CampaignOverviewCalculator campaignOverviewCalculator,
+            ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator
     ) {
@@ -91,6 +96,7 @@ public class AdminOverviewService {
         this.customerOutcomeCalculator = customerOutcomeCalculator;
         this.stockRiskCalculator = stockRiskCalculator;
         this.campaignOverviewCalculator = campaignOverviewCalculator;
+        this.consistencyActionCalculator = consistencyActionCalculator;
         this.operationActionCalculator = operationActionCalculator;
         this.overviewStatusCalculator = overviewStatusCalculator;
     }
@@ -99,7 +105,7 @@ public class AdminOverviewService {
      * 현재 시점의 관리자 운영현황을 반환합니다.
      *
      * <p>기준 시각과 Dataset을 한 번씩만 만든 뒤 O1, O2, O3, O4를 순서대로 계산합니다. O4는 같은
-     * couponId의 O1 계산 결과를 그대로 사용하며, O1·O2 후보와 준비 미완료 후보를 합쳐 Action 계산기를
+     * couponId의 O1 계산 결과를 그대로 사용하며, O1·O2·FINAL 정합성 후보와 준비 미완료 후보를 합쳐 Action 계산기를
      * 한 번만 호출합니다. 이후 Action 전체 대표 Map을 캠페인 행 조립에 전달해 KPI·목록·행이 같은
      * 판정을 재사용하도록 합니다. 독립 전체 발급률과 지연 원천은 Dataset Observation을 그대로
      * Snapshot에 전달합니다.</p>
@@ -121,10 +127,15 @@ public class AdminOverviewService {
         // O4를 별도 발급 조회 없이 같은 couponId의 O1 계산 결과와 재고 원천으로 만듭니다.
         StockRiskCalculation stockCalculation = stockRiskCalculator.calculate(
                 dataset.policy(), stockInputs(dataset.campaigns(), issuanceCalculation.issuanceFlows()));
-        // O1 중단·O2 대기 중단·준비 미완료 후보를 합쳐 대표 조치를 한 번만 선택합니다.
+        List<AdminOverviewSnapshot.OperationActionItem> consistencyActionCandidates = new ArrayList<>();
+        for (ConsistencyActionContext context : dataset.consistencyActionContexts()) {
+            // FINAL 문맥은 요청마다 정확히 한 번만 기존 정책 계산기로 조치 후보에 변환합니다.
+            consistencyActionCandidates.addAll(consistencyActionCalculator.calculate(context));
+        }
+        // O1·O2·FINAL 정합성·준비 미완료 후보를 합쳐 대표 조치를 한 번만 선택합니다.
         List<AdminOverviewSnapshot.OperationActionItem> actionCandidates = actionCandidates(
                 dataset.campaigns(), issuanceActionCandidates, queueCalculation.actionCandidates(),
-                dataset.preparationActionCandidates());
+                dataset.preparationActionCandidates(), consistencyActionCandidates);
         ActionCalculation actionCalculation = operationActionCalculator.calculate(actionCandidates);
         // 상단 KPI를 만든 동일 결과 Map으로 캠페인 행을 조립해 화면 영역 간 판정을 맞춥니다.
         CampaignCalculation campaignCalculation = campaignOverviewCalculator.calculate(
@@ -178,7 +189,7 @@ public class AdminOverviewService {
     }
 
     /**
-     * O1·O2와 준비 미완료 후보를 한 Action 계산 호출의 같은 모집단으로 결합합니다.
+     * O1·O2·FINAL 정합성과 준비 미완료 후보를 한 Action 계산 호출의 같은 모집단으로 결합합니다.
      *
      * <p>O1·O2 계산기는 기술 중립성을 위해 이름·오픈 시각 없이 후보를 만들 수 있으므로, 이 조립 경계에서
      * 같은 couponId의 기존 캠페인 기본 정보만 채웁니다. 정책에서 확정한 심각도·영향·권장 행동은 바꾸지
@@ -188,7 +199,8 @@ public class AdminOverviewService {
             List<CampaignOverviewSource> campaigns,
             List<AdminOverviewSnapshot.OperationActionItem> issuanceCandidates,
             List<AdminOverviewSnapshot.OperationActionItem> queueCandidates,
-            List<AdminOverviewSnapshot.OperationActionItem> preparationCandidates
+            List<AdminOverviewSnapshot.OperationActionItem> preparationCandidates,
+            List<AdminOverviewSnapshot.OperationActionItem> consistencyCandidates
     ) {
         Map<Long, CampaignOverviewSource> campaignByCoupon = campaigns.stream()
                 .collect(java.util.stream.Collectors.toMap(CampaignOverviewSource::couponId, campaign -> campaign));
@@ -196,6 +208,7 @@ public class AdminOverviewService {
         candidates.addAll(withCampaignDisplay(issuanceCandidates, campaignByCoupon));
         candidates.addAll(withCampaignDisplay(queueCandidates, campaignByCoupon));
         candidates.addAll(preparationCandidates);
+        candidates.addAll(consistencyCandidates);
         return List.copyOf(candidates);
     }
 

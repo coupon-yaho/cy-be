@@ -15,6 +15,7 @@ import com.kafkick.api.admin.dashboard.AdminDashboardController;
 import com.kafkick.api.admin.dashboard.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
@@ -38,6 +39,7 @@ class AdminAuthorizationHttpContractTest {
                             new CustomerOutcomeCalculator(),
                             new StockRiskCalculator(),
                             new CampaignOverviewCalculator(),
+                            new ConsistencyActionCalculator(),
                             new OperationActionCalculator(),
                             new OverviewStatusCalculator())));
 

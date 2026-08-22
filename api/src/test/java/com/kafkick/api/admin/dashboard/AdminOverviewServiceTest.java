@@ -22,6 +22,8 @@ import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.Cam
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueCalculation;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCalculation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
@@ -64,15 +66,33 @@ class AdminOverviewServiceTest {
         assertThat(snapshot.openingSoon().value())
                 .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(2, 1));
         assertThat(snapshot.actionRequired().value())
-                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(2, 1, 1));
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(4, 3, 1));
         assertThat(snapshot.actionItems().value().topItems())
                 .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
-                .containsExactly(101L, 105L);
+                .containsExactly(101L, 102L, 103L, 105L);
+        assertThat(snapshot.actionItems().value().topItems())
+                .filteredOn(action -> action.couponId().equals(102L))
+                .singleElement()
+                .satisfies(action -> {
+                    assertThat(action.customerImpact()).isEqualTo(
+                            AdminOverviewSnapshot.CustomerImpact.LIMITED);
+                    assertThat(action.recommendedAction().code()).isEqualTo(
+                            AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
+                });
+        assertThat(snapshot.actionItems().value().topItems())
+                .filteredOn(action -> action.couponId().equals(103L))
+                .singleElement()
+                .satisfies(action -> {
+                    assertThat(action.customerImpact()).isEqualTo(
+                            AdminOverviewSnapshot.CustomerImpact.WIDESPREAD);
+                    assertThat(action.recommendedAction().code()).isEqualTo(
+                            AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
+                });
         assertThat(snapshot.campaigns().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.campaigns().value()).hasSize(6);
         assertThat(snapshot.campaigns().value())
                 .extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
-                .containsExactly(101L, 105L, 102L, 103L, 104L, 106L);
+                .containsExactly(101L, 102L, 103L, 105L, 104L, 106L);
         assertThat(snapshot.campaigns().value().getFirst())
                 .satisfies(campaign -> {
                     assertThat(campaign.priority()).isEqualTo(1);
@@ -90,6 +110,11 @@ class AdminOverviewServiceTest {
                     assertThat(campaign.stockForecast().value())
                         .isEqualTo(new AdminOverviewSnapshot.StockForecast(
                                 350L, 7_000L, 0.05, Duration.ofSeconds(478)));
+                    assertThat(campaign.severity()).isEqualTo(Severity.CRITICAL);
+                    assertThat(campaign.customerImpact()).isEqualTo(
+                            AdminOverviewSnapshot.CustomerImpact.LIMITED);
+                    assertThat(campaign.recommendedAction().code()).isEqualTo(
+                            AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
                 });
         assertThat(snapshot.campaigns().value())
                 .filteredOn(campaign -> campaign.couponId().equals(103L))
@@ -98,6 +123,11 @@ class AdminOverviewServiceTest {
                     assertThat(campaign.campaignQueueStatus().value().estimatedWait())
                             .isEqualTo(Duration.ofSeconds(40));
                     assertThat(campaign.stockForecast().status()).isEqualTo(SourceStatus.VALID);
+                    assertThat(campaign.severity()).isEqualTo(Severity.CRITICAL);
+                    assertThat(campaign.customerImpact()).isEqualTo(
+                            AdminOverviewSnapshot.CustomerImpact.WIDESPREAD);
+                    assertThat(campaign.recommendedAction().code()).isEqualTo(
+                            AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
                 });
         assertThat(snapshot.campaigns().value())
                 .filteredOn(campaign -> campaign.couponId().equals(104L))
@@ -146,21 +176,26 @@ class AdminOverviewServiceTest {
         RecordingOutcomeCalculator outcome = new RecordingOutcomeCalculator(events);
         RecordingStockRiskCalculator stock = new RecordingStockRiskCalculator(events);
         RecordingCampaignOverviewCalculator campaign = new RecordingCampaignOverviewCalculator(events);
+        RecordingConsistencyActionCalculator consistency = new RecordingConsistencyActionCalculator(events);
         RecordingActionCalculator action = new RecordingActionCalculator(events);
         RecordingOverviewStatusCalculator status = new RecordingOverviewStatusCalculator(events);
         AdminOverviewService service = new AdminOverviewService(timeProvider, factory, issuance, issuanceAction, queue, outcome,
-                stock, campaign, action, status);
+                stock, campaign, consistency, action, status);
 
         AdminOverviewSnapshot snapshot = service.getOverview().snapshot();
 
         assertThat(events).containsExactly(
-                "time", "factory", "issuance", "issuanceAction", "queue", "outcome", "stock", "action", "campaign", "status");
+                "time", "factory", "issuance", "issuanceAction", "queue", "outcome", "stock", "consistency",
+                "consistency", "consistency", "action", "campaign", "status");
         assertThat(factory.createCount).isEqualTo(1);
         assertThat(issuance.calculateCount).isEqualTo(1);
         assertThat(issuanceAction.calculateCount).isEqualTo(1);
         assertThat(queue.calculateCount).isEqualTo(1);
         assertThat(outcome.calculateCount).isEqualTo(1);
         assertThat(stock.calculateCount).isEqualTo(1);
+        assertThat(consistency.calculateCount).isEqualTo(3);
+        assertThat(consistency.contexts).extracting(ConsistencyActionContext::couponId)
+                .containsExactly(101L, 102L, 103L);
         assertThat(action.calculateCount).isEqualTo(1);
         assertThat(campaign.calculateCount).isEqualTo(1);
         assertThat(status.calculateCount).isEqualTo(1);
@@ -192,10 +227,10 @@ class AdminOverviewServiceTest {
             assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
             assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
             if (status.carriesValue()) {
-                assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(2L);
+                assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(4L);
                 assertThat(result.snapshot().actionItems().value().topItems())
                         .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
-                        .containsExactly(101L, 105L);
+                        .containsExactly(101L, 102L, 103L, 105L);
                 assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW);
                 assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW);
             } else {
@@ -216,9 +251,10 @@ class AdminOverviewServiceTest {
             AdminOverviewResult result = serviceWithQueueStatus(102L, status).getOverview();
             assertThat(result.snapshot().actionRequired().status()).isEqualTo(SourceStatus.VALID);
             assertThat(result.snapshot().actionItems().status()).isEqualTo(SourceStatus.VALID);
-            assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(2L);
+            assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(4L);
             assertThat(result.snapshot().actionItems().value().topItems())
-                    .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(101L, 105L);
+                    .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                    .containsExactly(101L, 102L, 103L, 105L);
             assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW);
             assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW);
             assertThat(campaignForCoupon(result, 102L).campaignQueueStatus().status()).isEqualTo(status);
@@ -240,7 +276,8 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, base.queueInputs(), base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
+                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                        base.latencySummary());
             }
         }).getOverview();
 
@@ -252,7 +289,7 @@ class AdminOverviewServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(result.snapshot().actionRequired().value())
-                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(3, 2, 1));
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(4, 3, 1));
         assertThat(issuanceAction.recommendedAction().code())
                 .isEqualTo(AdminOverviewSnapshot.ActionCode.ISSUANCE_STOPPED);
         assertThat(issuanceAction.campaignName()).isEqualTo("정상 발급 감소 대기 쿠폰");
@@ -271,10 +308,10 @@ class AdminOverviewServiceTest {
 
             assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
             assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
-            assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(2L);
+            assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(4L);
             assertThat(result.snapshot().actionItems().value().topItems())
                     .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
-                    .containsExactly(101L, 105L);
+                    .containsExactly(101L, 102L, 103L, 105L);
             assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(5)));
             assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(5)));
         }
@@ -299,16 +336,16 @@ class AdminOverviewServiceTest {
 
         AdminOverviewResult allNotApplicable = serviceWithAllActionSourceStatus(SourceStatus.N_A).getOverview();
         assertThat(allNotApplicable.snapshot().actionRequired())
-                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1)));
+                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(3, 2, 1)));
         assertThat(allNotApplicable.snapshot().actionItems().value().topItems())
-                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(102L, 103L, 105L);
 
         AdminOverviewResult allNoTraffic = serviceWithAllActionSourceStatus(SourceStatus.NO_TRAFFIC).getOverview();
-        // NO_TRAFFIC은 O1·O2 흐름에만 해당하고 준비 미완료 조치는 독립 원천이므로 정상값으로 보존합니다.
+        // NO_TRAFFIC은 O1·O2 흐름에만 해당하고 FINAL·준비 미완료 조치는 독립 원천이므로 정상값으로 보존합니다.
         assertThat(allNoTraffic.snapshot().actionRequired())
-                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1)));
+                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(3, 2, 1)));
         assertThat(allNoTraffic.snapshot().actionItems().value().topItems())
-                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(102L, 103L, 105L);
     }
 
     /** 명시적인 재고 최신성·미수집 상태가 O4 행과 전역 위험에 손실 없이 전달되는지 검증합니다. */
@@ -541,6 +578,7 @@ class AdminOverviewServiceTest {
                 new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(),
                 new CampaignOverviewCalculator(),
+                new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
                 statusCalculator
         );
@@ -557,7 +595,8 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         base.issuanceFlowInputs(), inputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
+                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                        base.latencySummary());
             }
         });
     }
@@ -578,7 +617,8 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         base.issuanceFlowInputs(), base.queueInputs(), base.outcomeInput(), campaigns,
-                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
+                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                        base.latencySummary());
             }
         });
     }
@@ -594,7 +634,8 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(), inputs,
                         base.queueInputs(), base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
+                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                        base.latencySummary());
             }
         });
     }
@@ -618,7 +659,8 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
+                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                        base.latencySummary());
             }
         });
     }
@@ -637,7 +679,8 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
+                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
+                        base.latencySummary());
             }
         });
     }
@@ -646,7 +689,8 @@ class AdminOverviewServiceTest {
         return new AdminOverviewService(new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), factory,
                 new IssuanceFlowCalculator(), new IssuanceActionCalculator(), new CampaignQueueCalculator(),
                 new CustomerOutcomeCalculator(),
-                new StockRiskCalculator(), new CampaignOverviewCalculator(), new OperationActionCalculator(),
+                new StockRiskCalculator(), new CampaignOverviewCalculator(), new ConsistencyActionCalculator(),
+                new OperationActionCalculator(),
                 new OverviewStatusCalculator());
     }
 
@@ -737,9 +781,9 @@ class AdminOverviewServiceTest {
         assertThat(result.snapshot().actionRequired().status()).isEqualTo(expectedStatus);
         assertThat(result.snapshot().actionItems().status()).isEqualTo(expectedStatus);
         assertThat(result.snapshot().actionRequired().value())
-                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1));
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(3, 2, 1));
         assertThat(result.snapshot().actionItems().value().topItems())
-                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(105L);
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(102L, 103L, 105L);
         assertThat(result.snapshot().actionRequired().observedAt()).isEqualTo(expectedObservedAt);
         assertThat(result.snapshot().actionItems().observedAt()).isEqualTo(expectedObservedAt);
     }
@@ -1038,6 +1082,26 @@ class AdminOverviewServiceTest {
             events.add("campaign");
             return super.calculate(snapshotAt, campaigns, issuanceFlows, queueStatuses, stockForecasts,
                     representativeActions);
+        }
+    }
+
+    /** 실제 FINAL 조치 결과를 유지하며 문맥별 호출 횟수를 기록합니다. */
+    private static final class RecordingConsistencyActionCalculator extends ConsistencyActionCalculator {
+
+        private final List<String> events;
+        private final List<ConsistencyActionContext> contexts = new ArrayList<>();
+        private int calculateCount;
+
+        private RecordingConsistencyActionCalculator(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public List<AdminOverviewSnapshot.OperationActionItem> calculate(ConsistencyActionContext context) {
+            calculateCount++;
+            contexts.add(context);
+            events.add("consistency");
+            return super.calculate(context);
         }
     }
 
