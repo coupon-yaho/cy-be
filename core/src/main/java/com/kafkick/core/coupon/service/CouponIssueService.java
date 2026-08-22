@@ -64,6 +64,12 @@ public class CouponIssueService {
                 ));
 
         validateIssuable(couponRound, command);
+        if (!couponStockRepository.lockForUpdate(couponRound.id())) {
+            throw new BusinessException(
+                    CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
+                    "couponRoundId=" + couponRound.id()
+            );
+        }
 
         Issuance issuance = Issuance.issue(
                 couponRound.id(),
@@ -74,10 +80,11 @@ public class CouponIssueService {
                 command.issuedAt()
         );
 
-        // UNIQUE(coupon_id, member_id)를 먼저 선점해야 중복 요청이 재고를 점유하지 않는다.
+        // 재고 행을 먼저 잠가 발급·취소·만료 경로의 잠금 순서를 통일한다.
+        // 이후 발급건 선점과 재고 차감은 동일 트랜잭션에서 함께 커밋·롤백된다.
         Issuance savedIssuance = issuanceRepository.save(issuance);
         CouponStockOccupationResult occupationResult =
-                couponStockRepository.occupy(
+                couponStockRepository.occupyAfterLock(
                 couponRound.id(),
                 command.issuedAt()
         );

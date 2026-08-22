@@ -72,7 +72,6 @@ public class CouponOperationExecutionService {
                 claimedAt -> operationService.execute(
                         idempotencyKey,
                         memberId,
-                        couponRoundId,
                         claimedAt,
                         () -> CouponIssueResult.from(
                                 couponIssueService.issue(
@@ -85,7 +84,8 @@ public class CouponOperationExecutionService {
                                         )
                                 )
                         ),
-                        issueCodec
+                        issueCodec,
+                        CouponIssueResult::issuanceId
                 ),
                 issueCodec::read
         );
@@ -107,7 +107,6 @@ public class CouponOperationExecutionService {
                 claimedAt -> operationService.execute(
                         idempotencyKey,
                         memberId,
-                        issuanceId,
                         claimedAt,
                         () -> couponUseService.use(new CouponUseCommand(
                                 issuanceId,
@@ -117,7 +116,8 @@ public class CouponOperationExecutionService {
                                 idempotencyKey,
                                 claimedAt
                         )),
-                        useCodec
+                        useCodec,
+                        CouponUseResult::issuanceId
                 ),
                 useCodec::read
         );
@@ -137,7 +137,6 @@ public class CouponOperationExecutionService {
                 claimedAt -> operationService.execute(
                         idempotencyKey,
                         memberId,
-                        issuanceId,
                         claimedAt,
                         () -> couponCancelUseService.cancelUse(
                                 new CouponCancelUseCommand(
@@ -147,7 +146,8 @@ public class CouponOperationExecutionService {
                                         claimedAt
                                 )
                         ),
-                        cancelUseCodec
+                        cancelUseCodec,
+                        CouponCancelUseResult::issuanceId
                 ),
                 cancelUseCodec::read
         );
@@ -167,7 +167,6 @@ public class CouponOperationExecutionService {
                 claimedAt -> operationService.execute(
                         idempotencyKey,
                         memberId,
-                        issuanceId,
                         claimedAt,
                         () -> couponCancelService.cancel(
                                 new CouponCancelCommand(
@@ -177,7 +176,8 @@ public class CouponOperationExecutionService {
                                         claimedAt
                                 )
                         ),
-                        cancelCodec
+                        cancelCodec,
+                        CouponCancelResult::issuanceId
                 ),
                 cancelCodec::read
         );

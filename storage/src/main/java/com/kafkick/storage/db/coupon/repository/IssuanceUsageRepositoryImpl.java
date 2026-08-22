@@ -8,8 +8,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.coupon.domain.IssuanceUsage;
-import com.kafkick.core.coupon.exception.CouponCancelUsePersistenceException;
-import com.kafkick.core.coupon.exception.CouponUsePersistenceException;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
 import com.kafkick.storage.db.coupon.entity.IssuanceUsageEntity;
 import com.kafkick.storage.db.coupon.mapper.IssuanceUsageEntityMapper;
@@ -33,7 +32,7 @@ public class IssuanceUsageRepositoryImpl
             );
             return IssuanceUsageEntityMapper.toDomain(saved);
         } catch (DataIntegrityViolationException exception) {
-            throw new CouponUsePersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 사용 실적 저장에 실패했습니다.",
                     exception
             );
@@ -47,7 +46,7 @@ public class IssuanceUsageRepositoryImpl
                     .findByIssuanceIdAndCanceledAtIsNull(issuanceId)
                     .map(IssuanceUsageEntityMapper::toDomain);
         } catch (DataAccessException exception) {
-            throw new CouponCancelUsePersistenceException(
+            throw new CouponPersistenceException(
                     "활성 쿠폰 사용 실적 조회에 실패했습니다.",
                     exception
             );
@@ -62,7 +61,7 @@ public class IssuanceUsageRepositoryImpl
                     canceledAt
             ) == 1;
         } catch (DataAccessException exception) {
-            throw new CouponCancelUsePersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 사용 실적 취소에 실패했습니다.",
                     exception
             );

@@ -13,22 +13,33 @@ class StorageCouponArchitectureTest {
 
     private static final List<String> OPERATION_SPECIFIC_FAILURES = List.of(
             "CouponUsePersistenceException",
-            "CouponCancelUsePersistenceException"
+            "CouponCancelUsePersistenceException",
+            "CouponCancelPersistenceException",
+            "CouponExpirationPersistenceException",
+            "CouponIssuePersistenceException",
+            "CouponQueryPersistenceException",
+            "CouponRoundPersistenceException",
+            "CouponStockLockPersistenceException",
+            "CouponStockReleasePersistenceException"
     );
 
     @Test
     void issuancePersistenceDoesNotChooseBusinessErrorByStatusOrEvent()
             throws IOException {
-        for (String fileName : List.of(
-                "IssuanceRepositoryImpl.java",
-                "IssuanceHistoryRepositoryImpl.java"
-        )) {
-            String source = Files.readString(Path.of(
-                    "src", "main", "java", "com", "kafkick", "storage",
-                    "db", "coupon", "repository", fileName
-            ));
-            assertThat(OPERATION_SPECIFIC_FAILURES)
-                    .noneMatch(source::contains);
+        Path repositoryDirectory = Path.of(
+                "src", "main", "java", "com", "kafkick", "storage",
+                "db", "coupon", "repository"
+        );
+        try (var sources = Files.walk(repositoryDirectory)) {
+            for (Path sourcePath : sources
+                    .filter(path -> path.toString().endsWith(".java"))
+                    .toList()) {
+                String source = Files.readString(sourcePath);
+                assertThat(OPERATION_SPECIFIC_FAILURES)
+                        .as("storage repository must use a common persistence "
+                                + "exception: %s", sourcePath)
+                        .noneMatch(source::contains);
+            }
         }
     }
 }

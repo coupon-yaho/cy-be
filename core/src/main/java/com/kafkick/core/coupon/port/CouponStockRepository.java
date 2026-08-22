@@ -6,7 +6,7 @@ import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 
 public interface CouponStockRepository {
 
-    CouponStockOccupationResult occupy(
+    CouponStockOccupationResult occupyAfterLock(
             Long couponRoundId,
             Instant updatedAt
     );

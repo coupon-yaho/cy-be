@@ -6,7 +6,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.exception.CouponQueryPersistenceException;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.port.MemberCouponQueryPort;
 import com.kafkick.core.coupon.query.MemberCouponPage;
 import com.kafkick.core.coupon.query.MemberCouponSummary;
@@ -47,7 +47,7 @@ public class MemberCouponQueryAdapter implements MemberCouponQueryPort {
                     result.getTotalPages()
             );
         } catch (DataAccessException exception) {
-            throw new CouponQueryPersistenceException(
+            throw new CouponPersistenceException(
                     "사용자 보유 쿠폰 목록 조회에 실패했습니다.",
                     exception
             );

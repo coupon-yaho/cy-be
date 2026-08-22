@@ -27,6 +27,8 @@ spring:
 
 server:
   port: ${BATCH_PORT:9090}
+  error:
+    include-stacktrace: never
 
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 스케줄러가 멈춘다.

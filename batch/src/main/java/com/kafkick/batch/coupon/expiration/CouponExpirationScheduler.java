@@ -20,8 +20,8 @@ public class CouponExpirationScheduler {
     }
 
     @Scheduled(
-            cron = "${coupon.expiration.cron:0 * * * * *}",
-            zone = "${coupon.expiration.zone:UTC}"
+            cron = "${coupon.expiration.cron}",
+            zone = "${coupon.expiration.zone}"
     )
     public void expireCoupons() {
         CouponExpirationBatchResult result = runner.runOnce();

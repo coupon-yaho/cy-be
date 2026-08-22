@@ -55,6 +55,8 @@ infra/mysql/my.cnf
 *.key
 application-local.yml
 application-local.yaml
+application-prod.yml
+application-prod.yaml
 application-secret*.yml
 **/secrets/
 jwt_tokens.csv

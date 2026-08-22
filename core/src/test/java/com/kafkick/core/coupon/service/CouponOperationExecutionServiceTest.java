@@ -77,11 +77,15 @@ class CouponOperationExecutionServiceTest {
             return claimed.apply(AT);
         });
         when(operationService.execute(
-                eq(KEY), eq(20L), eq(10L), eq(AT), any(), eq(issueCodec)
+                eq(KEY), eq(20L), eq(AT), any(), eq(issueCodec), any()
         )).thenAnswer(invocation -> {
             java.util.function.Supplier<CouponIssueResult> operation =
-                    invocation.getArgument(4);
-            return operation.get();
+                    invocation.getArgument(3);
+            CouponIssueResult result = operation.get();
+            java.util.function.Function<CouponIssueResult, Long> targetId =
+                    invocation.getArgument(5);
+            assertThat(targetId.apply(result)).isEqualTo(100L);
+            return result;
         });
         when(couponIssueService.issue(any())).thenReturn(Issuance.restore(
                 100L,
@@ -159,10 +163,10 @@ class CouponOperationExecutionServiceTest {
             return claimed.apply(AT);
         });
         when(operationService.execute(
-                eq(KEY), eq(20L), eq(100L), eq(AT), any(), eq(useCodec)
+                eq(KEY), eq(20L), eq(AT), any(), eq(useCodec), any()
         )).thenAnswer(invocation -> {
             java.util.function.Supplier<CouponUseResult> operation =
-                    invocation.getArgument(4);
+                    invocation.getArgument(3);
             return operation.get();
         });
         when(couponUseService.use(any())).thenReturn(expected);
@@ -197,10 +201,10 @@ class CouponOperationExecutionServiceTest {
             return claimed.apply(AT);
         });
         when(operationService.execute(
-                eq(KEY), eq(20L), eq(100L), eq(AT), any(), eq(useCodec)
+                eq(KEY), eq(20L), eq(AT), any(), eq(useCodec), any()
         )).thenAnswer(invocation -> {
             java.util.function.Supplier<CouponUseResult> operation =
-                    invocation.getArgument(4);
+                    invocation.getArgument(3);
             return operation.get();
         });
         when(couponUseService.use(any())).thenThrow(expected);

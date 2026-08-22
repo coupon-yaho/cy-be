@@ -34,10 +34,10 @@ class IdempotentOperationServiceTest {
         String result = service.execute(
                 "550e8400-e29b-41d4-a716-446655440000",
                 20L,
-                100L,
                 claimedAt,
                 () -> "result",
-                resultCodec
+                resultCodec,
+                ignored -> 100L
         );
 
         assertThat(result).isEqualTo("result");

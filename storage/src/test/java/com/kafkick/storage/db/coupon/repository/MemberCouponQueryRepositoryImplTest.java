@@ -9,7 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.domain.Pageable;
 
-import com.kafkick.core.coupon.exception.CouponQueryErrorCode;
+import com.kafkick.core.coupon.exception.CouponPersistenceErrorCode;
 import com.kafkick.core.support.exception.BusinessException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,7 +30,7 @@ class MemberCouponQueryRepositoryImplTest {
     private MemberCouponQueryAdapter memberCouponQueryRepository;
 
     @Test
-    @DisplayName("회원 쿠폰 조회 DB 오류를 COUPON-415로 변환한다")
+    @DisplayName("회원 쿠폰 조회 DB 오류를 공통 쿠폰 영속성 오류로 변환한다")
     void convertDataAccessException() {
         when(issuanceJpaRepository.findMemberCoupons(
                 eq(20L),
@@ -43,6 +43,8 @@ class MemberCouponQueryRepositoryImplTest {
                 .isInstanceOf(BusinessException.class)
                 .satisfies(exception -> assertThat(
                         ((BusinessException) exception).getErrorCode()
-                ).isEqualTo(CouponQueryErrorCode.COUPON_QUERY_FAILED));
+                ).isEqualTo(
+                        CouponPersistenceErrorCode.COUPON_PERSISTENCE_FAILED
+                ));
     }
 }

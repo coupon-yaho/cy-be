@@ -2,6 +2,7 @@ package com.kafkick.core.coupon.service.idempotency;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.springframework.stereotype.Service;
@@ -27,12 +28,16 @@ public class IdempotentOperationService {
     public <R> R execute(
             String idempotencyKey,
             Long memberId,
-            Long issuanceId,
             Instant claimedAt,
             Supplier<R> operation,
-            IdempotencyResultCodec<R> resultCodec
+            IdempotencyResultCodec<R> resultCodec,
+            Function<R, Long> issuanceIdExtractor
     ) {
         R result = operation.get();
+        Long issuanceId = Objects.requireNonNull(
+                issuanceIdExtractor.apply(result),
+                "issuanceId"
+        );
         idempotencyRepository.complete(
                 idempotencyKey,
                 memberId,

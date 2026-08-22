@@ -34,9 +34,9 @@ public class CouponRoundGenerationService {
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
             CouponRoundCreationService couponRoundCreationService,
-            @Value("${coupon.round-generation.schedule-zone:Asia/Seoul}")
+            @Value("${coupon.round-generation.schedule-zone}")
             String scheduleZone,
-            @Value("${coupon.round-generation.max-days:30}")
+            @Value("${coupon.round-generation.max-days}")
             int maxGenerationDays
     ) {
         this(

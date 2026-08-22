@@ -5,10 +5,8 @@ import java.time.Instant;
 import org.springframework.stereotype.Repository;
 import org.springframework.dao.DataAccessException;
 
-import com.kafkick.core.coupon.exception.CouponIssuePersistenceException;
-import com.kafkick.core.coupon.exception.CouponStockLockPersistenceException;
-import com.kafkick.core.coupon.exception.CouponStockReleasePersistenceException;
 import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 
 @Repository
@@ -23,16 +21,11 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
     }
 
     @Override
-    public CouponStockOccupationResult occupy(
+    public CouponStockOccupationResult occupyAfterLock(
             Long couponRoundId,
             Instant updatedAt
     ) {
         try {
-            if (couponStockJpaRepository
-                    .findByCouponIdForUpdate(couponRoundId)
-                    .isEmpty()) {
-                return CouponStockOccupationResult.NOT_FOUND;
-            }
             int affectedRows = couponStockJpaRepository.occupyOne(
                     couponRoundId,
                     updatedAt
@@ -41,7 +34,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
                     ? CouponStockOccupationResult.OCCUPIED
                     : CouponStockOccupationResult.SOLD_OUT;
         } catch (DataAccessException exception) {
-            throw new CouponIssuePersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 재고 점유에 실패했습니다. couponRoundId="
                             + couponRoundId,
                     exception
@@ -56,7 +49,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
                     .findByCouponIdForUpdate(couponRoundId)
                     .isPresent();
         } catch (DataAccessException exception) {
-            throw new CouponStockLockPersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 재고 잠금에 실패했습니다. couponRoundId="
                             + couponRoundId,
                     exception
@@ -83,7 +76,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
             );
             return affectedRows == 1;
         } catch (DataAccessException exception) {
-            throw new CouponStockReleasePersistenceException(
+            throw new CouponPersistenceException(
                     "쿠폰 재고 복원에 실패했습니다. couponRoundId="
                             + couponRoundId + ", quantity=" + quantity,
                     exception

@@ -36,7 +36,7 @@ import com.kafkick.core.coupon.domain.CouponStock;
 import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
-import com.kafkick.core.coupon.exception.CouponRoundPersistenceException;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
@@ -219,7 +219,7 @@ class CouponRoundRepositoryTest {
         assertThatThrownBy(() -> couponRoundCreationService.create(
                 scheduledRound(unsavedTemplate, generatedAt),
                 CouponStock.initialize(10_000, generatedAt)
-        )).isInstanceOf(CouponRoundPersistenceException.class);
+        )).isInstanceOf(CouponPersistenceException.class);
 
         assertThat(countRows("coupons")).isZero();
         assertThat(countRows("coupon_stocks")).isZero();
