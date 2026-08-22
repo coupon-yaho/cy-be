@@ -202,9 +202,11 @@ cy_verification_findings{dataset,scope}   검출 건수
 > CY-347 에서 실제로 그렇게 만들었다가 노출 테스트가 잡았다(`ExpireMetrics` javadoc 참조).
 > 이 둘은 <b>마지막 실행의 값</b>을 들고 있는 게이지이지 누적 카운터가 아니다.
 
-> **라벨은 `{dataset, scope}` 둘 다 단다.** `DatasetType{CLEAN,CORRUPT}` ×
-> `ScopeType{FULL,INCREMENTAL}` 이라 최대 4 시계열이다. `findings` 에 `scope` 를 빼면
-> FULL 결과를 INCREMENTAL 이 덮어써서 <b>어느 범위의 검출인지 안 갈린다.</b>
+> **라벨은 `{dataset, scope}` 둘 다 단다.** 다만 <b>지금 실제로 생기는 것은 둘</b>이다 —
+> `rejectUnsupportedScope` 가 `INCREMENTAL` 을 시작 전에 거부하고(`VerifyJobConfig`),
+> `finalizeRunStep` 도 <i>"증분 판정 규칙이 정해지기 전까지 이 경로는 열리면 안 된다"</i> 로
+> 막는다. `scope` 를 미리 다는 것은 <b>증분이 열릴 때 지표 이름을 안 바꾸려는 것</b>이고,
+> 그때 두 범위가 한 시계열을 덮어쓰는 것을 막는다.
 
 | 알림 | 조건 | 대응 |
 |---|---|---|
@@ -221,8 +223,25 @@ cy_verification_findings{dataset,scope}   검출 건수
 3. **알림 식에서 계산하지 않는다.** 필요한 값은 코드에서 만들어 <b>한 시계열</b>로 낸다.
 
 **붙일 자리** — `verifyJob` 에는 지금 `JobExecutionListener` 가 <b>하나도 없다</b>
-(`expireJob` 과 다르다). `runId` 는 `jobExecutionContext[verify.runId]` 에 실려 있어
-`afterJob` 에서 꺼내 `verification_runs` 를 되읽을 수 있다.
+(`expireJob` 과 다르다).
+
+> **키는 `runId` 다.** 처음에 `verify.runId` 로 적어 뒀는데 그런 키는 없다 —
+> `VerifyJobConfig.RUN_ID_KEY` 의 값이 그냥 `"runId"` 다(접두사를 쓰는 것은
+> `manifest.seedRunId` 쪽이다). `ExecutionContext.get` 은 없는 키에 예외가 아니라
+> <b>{@code null}</b> 을 주므로, 그대로 구현했으면 <b>모든 실행이 조용히 "모름"</b> 이 됐다.
+> 문자열을 다시 쓰지 말고 상수를 참조한다.
+
+> **`runId` 가 없는 실행이 곧 "판정을 못 낸 실행" 이다.** `startRunStep` 은 가드 여덟
+> (`rejectDatasetMismatch`·`rejectUnsupportedScope`·`rejectRunningSchedulers`·
+> `rejectAsOfBeforeLatestHistory`·`rejectIssuancesUpdatedAfterAsOf`·
+> `rejectStocksUpdatedAfterAsOf`·`validateSeedRunId`·`rejectExistingRun`)를 <b>전부
+> 통과한 뒤에야</b> 컨텍스트에 심는다. 리스너는 `runId` 없이도 동작해야 하고, 없으면
+> 그것이 <i>모름</i>이다 — 라벨은 `JobParameters` 에서 뽑는다.
+
+> **`afterJob` 이 아예 안 불리는 경로가 있다.** 파라미터 검증 실패와 `preventRestart()` 는
+> `JobExecution` 이 만들어지기 <b>전에</b> 런처에서 던진다. 그때는 잡 메트릭도 안 오르고
+> 리스너도 안 불려 <b>앞 실행 값이 그대로 남는다.</b> 이 축은 지표로 못 덮으므로
+> 트리거 경로가 책임진다.
 
 ### 2b. 만료 누락
 
