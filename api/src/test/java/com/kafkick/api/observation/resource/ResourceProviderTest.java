@@ -253,6 +253,7 @@ class ResourceProviderTest {
 
         assertThat(countOf(output.getAll(), "자원 원천 getActiveConnections 조회 실패")).isEqualTo(1);
         assertThat(countOf(output.getAll(), "자원 원천 getTotalConnections 조회 실패")).isEqualTo(1);
+        assertThat(countOf(output.getAll(), "자원 원천 getThreadsAwaitingConnection 조회 실패")).isEqualTo(1);
     }
 
     private static int countOf(String haystack, String needle) {

@@ -9,23 +9,33 @@ import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestConstructor;
 
 @SpringBootTest(classes = ApiApplication.class)
 @Import(MySqlContainerConfig.class)
+// 생성자 주입을 쓰려면 이 선언이 있어야 한다 — 없으면 JUnit 이 파라미터를 못 풀고
+// ParameterResolutionException 으로 죽는다.
+@TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 class ResourceProviderMySqlIntegrationTest {
 
-    // ResourceProvider 가 재는 것과 같은 풀이어야 한다. 여기서 딴 풀의 커넥션을 열면
-    // 아래 total >= 1 단언이 무엇을 검증하는지 알 수 없어진다.
-    @Autowired
-    @Qualifier("mainDataSource")
-    DataSource dataSource;
+    private final DataSource dataSource;
 
-    @Autowired
-    ResourceProvider resourceProvider;
+    private final ResourceProvider resourceProvider;
+
+    /**
+     * @param dataSource ResourceProvider 가 재는 것과 같은 풀이어야 한다. 여기서 딴 풀의
+     *                   커넥션을 열면 아래 total >= 1 단언이 무엇을 검증하는지 알 수 없어진다.
+     */
+    ResourceProviderMySqlIntegrationTest(
+            @Qualifier("mainDataSource") DataSource dataSource,
+            ResourceProvider resourceProvider
+    ) {
+        this.dataSource = dataSource;
+        this.resourceProvider = resourceProvider;
+    }
 
     @Test
     @DisplayName("실제 MySQL에 기동한 HikariPoolMXBean의 active · total · awaiting을 읽는다")
