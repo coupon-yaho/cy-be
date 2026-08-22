@@ -336,14 +336,16 @@ class ExpireJobRestartTest {
 
         /**
          * <b>인자 위치를 인덱스로 집는 것이 이 테스트의 급소다.</b>
-         * {@code expireBatch(asOf, committedAt, afterId, limit)} 에서 파라미터가 하나
-         * 늘거나 순서가 바뀌면, {@code afterId} 와 {@code limit} 이 둘 다 정수라
-         * <b>캐스팅이 조용히 성공한다</b> — {@code AFTER_IDS} 에 진도가 아닌 값이 쌓이고
-         * 진도 단언이 <b>거짓으로 통과</b>한다. 시그니처가 바뀐 그 자리에서 멈추게 한다.
+         * {@code expireBatch(asOf, committedAt, afterId, limit, blockedCoupons)} 에서
+         * 파라미터가 하나 늘거나 순서가 바뀌면, {@code afterId} 와 {@code limit} 이 둘 다
+         * 정수라 <b>캐스팅이 조용히 성공한다</b> — {@code AFTER_IDS} 에 진도가 아닌 값이
+         * 쌓이고 진도 단언이 <b>거짓으로 통과</b>한다. 시그니처가 바뀐 그 자리에서 멈추게 한다.
+         *
+         * <p>실제로 한 번 걸렸다 — 회차 격리가 다섯째 파라미터를 더했을 때 이 가드가 먼저 울렸다.
          */
         private static long afterIdOf(Method method, Object[] args) {
             // 파라미터 이름으로는 못 본다 — core 모듈은 -parameters 없이 컴파일돼
-            // arg0..arg3 로만 남는다. 대신 타입 배치를 그대로 요구한다.
+            // arg0..arg4 로만 남는다. 대신 타입 배치를 그대로 요구한다.
             Class<?>[] types = method.getParameterTypes();
             boolean sameShape = types.length == 5 && args.length == 5
                     && types[2] == long.class && types[3] == int.class
