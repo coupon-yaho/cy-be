@@ -40,9 +40,13 @@ public record LoadProfile(
         if (stockTotal != null && stockTotal < 0) {
             throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,"stockTotal 은 0 이상이어야 한다: " + stockTotal);
         }
-        if (generatorIdleRttMillis != null && generatorIdleRttMillis < 0) {
+        // NaN 은 < 0 을 통과한다. 통과시키면 BigDecimal.valueOf(NaN) 이 적재 시점에
+        // NumberFormatException 으로 죽는데, 그때는 회차를 이미 연 뒤라 사람이 다시 입력해야 한다.
+        // SummaryValues 가 요약 값에 같은 검사를 한다 — 여기만 빠져 있었다.
+        if (generatorIdleRttMillis != null
+                && (!Double.isFinite(generatorIdleRttMillis) || generatorIdleRttMillis < 0)) {
             throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
-                    "generatorIdleRttMillis 는 0 이상이어야 한다: " + generatorIdleRttMillis);
+                    "generatorIdleRttMillis 는 0 이상의 유한한 값이어야 한다: " + generatorIdleRttMillis);
         }
     }
 }

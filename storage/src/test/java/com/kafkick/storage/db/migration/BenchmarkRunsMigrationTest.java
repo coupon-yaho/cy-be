@@ -364,6 +364,19 @@ class BenchmarkRunsMigrationTest {
                     .hasMessageContaining("ck_run_archive_reason");
         }
 
+        /**
+         * {@code IS NOT NULL} 만으로는 부족하다 — {@code ''} 도 NOT NULL 이라 통과한다.
+         * 이유 없는 FAILED 를 막으려던 제약이 정확히 그걸로 뚫린다.
+         */
+        @ParameterizedTest(name = "이유 = [{0}]")
+        @CsvSource(value = { "''", "'   '" }, quoteCharacter = '#')
+        @DisplayName("빈 실패 이유는 이유가 없는 것이다")
+        void blankReasonIsRejected(String reason) {
+            assertThatThrownBy(() -> insert(Map.of(
+                    "archive_status", "'FAILED'", "archive_failure_reason", reason)))
+                    .hasMessageContaining("ck_run_archive_reason");
+        }
+
         @Test
         @DisplayName("성공한 archive 에 실패 이유가 남아 있을 수 없다")
         void doneCannotCarryReason() {

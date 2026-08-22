@@ -263,8 +263,11 @@ CREATE TABLE `benchmark_runs` (
              OR `server_failure_count` <= `server_request_count`)
     ),
 
+    -- IS NOT NULL 만으로는 부족하다. '' 도 NOT NULL 이라 "이유 없는 FAILED" 가 그대로 들어온다 —
+    -- 재실행 판단의 유일한 근거가 빈 문자열로 남는다. TRIM 은 결정적 함수라 CHECK 에서 쓸 수 있다.
     CONSTRAINT `ck_run_archive_reason` CHECK (
-        (`archive_status` = 'FAILED') = (`archive_failure_reason` IS NOT NULL)
+        (`archive_status` = 'FAILED')
+            = (`archive_failure_reason` IS NOT NULL AND TRIM(`archive_failure_reason`) <> '')
     )
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
 

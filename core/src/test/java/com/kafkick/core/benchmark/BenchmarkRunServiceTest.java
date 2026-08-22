@@ -304,6 +304,25 @@ class BenchmarkRunServiceTest {
                             .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
         }
 
+        /**
+         * "" 는 {@code != null} 이라 XOR 을 통과한다. 통과시키면 이유 없는 FAILED 가 그대로 남고,
+         * 재실행 판단의 유일한 근거가 빈 문자열이 된다.
+         */
+        @Test
+        @DisplayName("공백뿐인 실패 이유는 이유가 없는 것이다")
+        void blankReasonIsNoReason() {
+            BenchmarkRun finalized = finalizedRun("V3-MAIN-01");
+
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                    finalized.id(), BenchmarkArchiveStatus.FAILED, "   "))
+                    .satisfies(it -> assertThat(codeOf(it))
+                            .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                    finalized.id(), BenchmarkArchiveStatus.FAILED, ""))
+                    .satisfies(it -> assertThat(codeOf(it))
+                            .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
+        }
+
         /** XOR 의 반대 방향. 성공한 archive 에 실패 이유가 남아 있으면 재실행 판단이 거짓이 된다. */
         @Test
         @DisplayName("DONE 에 실패 이유를 붙이면 받지 않는다")

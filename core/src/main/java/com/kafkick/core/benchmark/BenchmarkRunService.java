@@ -171,7 +171,9 @@ public class BenchmarkRunService {
      */
     public BenchmarkRun recordArchiveResult(long id, BenchmarkArchiveStatus status, String failureReason) {
         Objects.requireNonNull(status, "status");
-        if ((status == BenchmarkArchiveStatus.FAILED) != (failureReason != null)) {
+        // isBlank 로 본다. "" 는 != null 이라 XOR 을 통과하는데, 이유 없는 FAILED 를 막으려던
+        // 제약이 정확히 그걸로 뚫린다 — 재실행 판단의 유일한 근거가 빈 문자열로 남는다.
+        if ((status == BenchmarkArchiveStatus.FAILED) != (failureReason != null && !failureReason.isBlank())) {
             throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
                     "archive 실패 이유는 FAILED 일 때만, 그리고 FAILED 이면 반드시 있어야 한다: " + status);
         }
