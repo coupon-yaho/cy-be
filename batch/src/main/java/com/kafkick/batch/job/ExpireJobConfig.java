@@ -306,6 +306,23 @@ public class ExpireJobConfig {
     }
 
     /**
+     * 관측 질의를 감싸는 읽기 전용 트랜잭션. <b>여기 타임아웃을 걸어야 질의에 심긴다</b> —
+     * 트랜잭션 밖에서 부르면 {@code DataSourceUtils} 가 {@code queryTimeout} 을 안 붙인다.
+     *
+     * <p>청크와 같은 값을 쓴다. 이 질의가 청크 하나보다 오래 걸릴 이유가 없고, 값을 따로 두면
+     * 한쪽만 바뀌는 날 그 사실이 안 드러난다.
+     */
+    private static TransactionTemplate observeTransaction(
+            PlatformTransactionManager transactionManager, long millis) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setReadOnly(true);
+        template.setTimeout(Math.toIntExact(millis / 1_000));
+        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+
+        return template;
+    }
+
+    /**
      * 만료 Step 의 트랜잭션 속성. <b>타임아웃과 격리 수준 둘을 담는다.</b>
      *
      * 만료 Step 만 READ COMMITTED 로 내린다. 이 잡이 발급을 막지 않게 하는 유일한 수단이다.
@@ -332,23 +349,6 @@ public class ExpireJobConfig {
      * ⚠️ verifyJob 에는 걸지 마라. 그쪽은 판정 시점을 얼려야 하므로 격리 수준이
      *    낮아지면 dataset_fingerprint 재료가 실행 중에 흔들린다.
      */
-    /**
-     * 관측 질의를 감싸는 읽기 전용 트랜잭션. <b>여기 타임아웃을 걸어야 질의에 심긴다</b> —
-     * 트랜잭션 밖에서 부르면 {@code DataSourceUtils} 가 {@code queryTimeout} 을 안 붙인다.
-     *
-     * <p>청크와 같은 값을 쓴다. 이 질의가 청크 하나보다 오래 걸릴 이유가 없고, 값을 따로 두면
-     * 한쪽만 바뀌는 날 그 사실이 안 드러난다.
-     */
-    private static TransactionTemplate observeTransaction(
-            PlatformTransactionManager transactionManager, long millis) {
-        TransactionTemplate template = new TransactionTemplate(transactionManager);
-        template.setReadOnly(true);
-        template.setTimeout(Math.toIntExact(millis / 1_000));
-        template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-
-        return template;
-    }
-
     private static TransactionAttribute expireStepTransaction(long millis) {
         DefaultTransactionAttribute attribute = new DefaultTransactionAttribute();
         attribute.setTimeout(Math.toIntExact(millis / 1_000));
