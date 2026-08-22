@@ -1,0 +1,43 @@
+# 알림을 어디로 보낼지 정합니다.
+#
+# ⚠️ Slack 이 아니라 mock 리시버다. 근거는 docs/13-batch-follow-ups.md §2e —
+#    PRD 의 제약이 "외부 연동 Mocking" 이고, 이 저장소는 PUBLIC 이라 웹훅 URL 이
+#    시크릿으로 들어간다.
+#
+# ⚠️ 가르는 축이 severity 가 아니라 channel 이다.
+#    severity 로 가르면 warning 수신함에 서버 문제와 데이터 문제가 섞인다 —
+#    BatchJobRunningTooLong(성능)·ExpireMetricsUnknown(설정)이 warning 인데 서버 축이고,
+#    데이터 축은 ExpireSkippingBrokenCoupons 하나뿐이다.
+#    severity 는 긴급도로 남기고, "어디를 봐야 하나" 는 channel 이 진다.
+
+route:
+  # 라벨이 없는 알림이 조용히 사라지지 않게 기본 경로를 둔다. 여기로 오는 것이 있으면
+  # 규칙에 channel 을 안 단 것이므로, 그것 자체가 고쳐야 할 신호다.
+  receiver: sink-unrouted
+  group_by: ["alertname", "spring_batch_job_name"]
+  group_wait: 10s
+  group_interval: 1m
+  # 같은 알림을 다시 보내는 간격. 짧으면 mock 리시버 로그가 금방 읽기 어려워진다.
+  repeat_interval: 1h
+
+  routes:
+    - matchers: ["channel = server"]
+      receiver: sink-server
+    - matchers: ["channel = data"]
+      receiver: sink-data
+
+receivers:
+  - name: sink-server
+    webhook_configs:
+      - url: http://alert-sink:5001/server
+        send_resolved: true
+
+  - name: sink-data
+    webhook_configs:
+      - url: http://alert-sink:5001/data
+        send_resolved: true
+
+  - name: sink-unrouted
+    webhook_configs:
+      - url: http://alert-sink:5001/unrouted
+        send_resolved: true

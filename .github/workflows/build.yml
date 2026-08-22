@@ -86,6 +86,31 @@ jobs:
       - name: 빌드·테스트
         run: ./gradlew build --stacktrace
 
+      # 알림 규칙을 실제로 파싱한다.
+      #
+      # 이게 없으면 규칙 파일을 읽는 자동 검사가 BatchMetricExposureTest 의 정규식뿐인데,
+      # 그것은 Files.readString + 패턴 매칭이라 **YAML 도 PromQL 도 파싱하지 않는다.**
+      # BatchJobFailed 는 or/unless/and on(...) 이 겹친 열 줄짜리 식이라, 다음 편집에서
+      # 괄호 하나가 틀어지면 Prometheus 가 그 **파일 전체를 거부**하고(rule_files 로드
+      # 실패는 config 로드 실패다) 알림이 통째로 사라진다 — 그런데 PR 은 초록이다.
+      #
+      # check config 는 rule_files 글롭을 config 디렉터리 기준으로 풀어 규칙까지 함께 본다.
+      #
+      # ⚠️ 이미지 태그는 base.yml 의 prometheus 와 **같아야** 한다. 다르면 CI 가 통과한
+      #    규칙을 운영 Prometheus 가 거부할 수 있다.
+      - name: 알림 규칙 검사
+        run: |
+          docker run --rm -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 \
+            check config /etc/prometheus/prometheus.yml
+
+      # 라우팅도 파싱한다. 여기가 깨지면 규칙은 평가되는데 알림이 아무 데도 안 간다.
+      - name: 알림 라우팅 검사
+        run: |
+          docker run --rm -v "$PWD/infra/alertmanager:/etc/alertmanager:ro" \
+            --entrypoint amtool prom/alertmanager:v0.28.1 \
+            check-config /etc/alertmanager/alertmanager.yml
+
       # 사본이 상류와 같은지 본다. 이게 없으면 SchemaParityTest 의 초록이
       # "게이트가 도는 스키마와 같다" 가 아니라 "누가 언젠가 복사한 파일과 같다" 로
       # 조용히 뜻이 바뀐다 — 그 테스트를 세운 이유 자체가 무력해지는 유일한 축이다.

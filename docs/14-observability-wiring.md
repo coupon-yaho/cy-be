@@ -122,6 +122,28 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 > `batch-alerts.yml` 에 스모크 규칙을 넣지 마라 — `BatchMetricExposureTest` 가 그 파일에서
 > `cy_*`·`spring_batch_*` 이름을 뽑아 노출 단언에 넣으므로 가짜 지표명을 쓰면 CI 가 깨진다.
 
+### 1·2단계 실측 (2026-08-22)
+
+문서의 주장이 아니라 **띄워서 확인한 것**이다.
+
+| 확인 | 방법 | 결과 |
+|---|---|---|
+| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 |
+| 타깃 (batch 없이) | `/api/v1/targets` | `down` — `lookup batch` 실패 |
+| 타깃 (batch 띄운 뒤) | 같은 것 | `up` |
+| 지표 도달 | `cy_expire_unexplained_pending` 조회 | `NaN` — 잡이 한 번도 안 돌았다는 뜻이 관제에 그대로 보인다 |
+| 라우팅 | `amtool alert add` 셋 | `[server]` · `[data]` · `[unrouted]` 로 갈림 |
+| 실제 알림 | 규칙 상태 | `BatchJobNotRunning`·`ExpireMetricsUnknown` 이 `pending` |
+
+> **타깃 DOWN 이 추정이 아니라 관측이다.** batch 를 안 띄운 상태에서 실제로
+> `dial tcp: lookup batch` 가 났다 — 앱 컨테이너화가 이 티켓에 필요한 이유가 확정됐다.
+
+> **`channel` 을 빠뜨린 알림은 `unrouted` 로 잡힌다.** 조용히 사라지지 않는다.
+
+**여기서 새로 알게 된 것** — `BATCH_SCHEDULING_ENABLED=false`(batch.yml 의 기본)로 띄우면
+`BatchJobNotRunning` 이 15분 뒤 발화한다. 만료가 안 도는 것이 그 설정에서는 정상인데
+알림은 사고로 본다. 4단계에서 `inhibit_rules` 로 다룰 대상이 하나 더 늘었다.
+
 ### 3단계 — 검증 판정을 지표로 낸다
 
 ```

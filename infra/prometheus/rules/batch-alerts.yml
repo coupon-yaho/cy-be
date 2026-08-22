@@ -12,6 +12,13 @@
 #             BATCH_SCHEDULING_ENABLED=false 로 띄웠거나, 크론이 틀렸을 때가 여기다.
 #             "일어난 일" 이 아니라 "안 일어난 일" 이라 없는 것을 감시해야 잡힌다.
 #   지연    — 주기보다 오래 끈다. 한 번은 넘어가도 이어지면 다음 주기와 겹친다.
+#
+# ⚠️ 알림마다 channel 라벨이 붙는다 — alertmanager 가 그것으로 수신함을 가른다.
+#    severity 로 가르면 안 된다. warning 셋 중 데이터 축은 ExpireSkippingBrokenCoupons
+#    하나뿐이고, BatchJobRunningTooLong(성능)·ExpireMetricsUnknown(설정)은 서버 축이다.
+#    섞이면 "데이터를 봐라" 로 라우팅된 것의 실제 원인이 접속 URL 인 상황이 나온다 —
+#    CY-347 이 없애려 한 오진이 라우팅 계층에서 되살아난다.
+#    새 알림을 더할 때 channel 을 빼면 alertmanager 의 sink-unrouted 로 떨어진다.
 
 groups:
   - name: cy-batch
@@ -69,6 +76,8 @@ groups:
         for: 0m
         labels:
           severity: critical
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "배치 잡이 실패했다 ({{ $labels.spring_batch_job_name }})"
           description: >-
@@ -108,6 +117,8 @@ groups:
         for: 15m
         labels:
           severity: critical
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료 배치가 30분 넘게 안 돌았다 (주기는 5분)"
           description: >-
@@ -123,6 +134,8 @@ groups:
         for: 1m
         labels:
           severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료 배치가 주기(5분)보다 오래 돌고 있다"
           description: >-
@@ -153,6 +166,8 @@ groups:
         for: 10m
         labels:
           severity: critical
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료가 밀리고 있습니다 (남은 대기 {{ $value }}건)"
           description: >-
@@ -177,6 +192,8 @@ groups:
         for: 15m
         labels:
           severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료 대기를 세지 못하고 있습니다 — 밀림 감시가 꺼져 있습니다"
           description: >-
@@ -191,6 +208,8 @@ groups:
         for: 10m
         labels:
           severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: data
         annotations:
           summary: "재고가 어긋난 회차 {{ $value }}개를 건너뛰고 있습니다"
           description: >-
