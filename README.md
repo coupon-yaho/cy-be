@@ -83,7 +83,13 @@ coupon-yaho
 │
 ├── infra
 │   ├── mq                               Kafka 어댑터
-│   └── redis                            Redis 어댑터
+│   ├── redis                            Redis 어댑터
+│   ├── prometheus                       관제 설정 + 알림 규칙 (rules/*.yml)
+│   └── alertmanager                     알림 라우팅 + mock 리시버
+│
+├── Dockerfile                           배치 서버 이미지 (관제가 컨테이너 이름으로 긁는다)
+├── base.yml                             부하 중에도 그대로 뜨는 인프라 + 관제
+├── batch.yml                            배치 서버 오버레이 (부하 중에는 안 올린다)
 │
 └── build.gradle, settings.gradle
 ```
@@ -100,6 +106,51 @@ DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`�
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
 
 테스트는 Testcontainers 로 실제 MySQL 을 띄우므로 Docker 가 필요하다.
+
+### 컨테이너로 띄우기
+
+```bash
+docker compose -f base.yml up                     # DB·관제만. batch 는 안 뜬다
+DB_HOST=127.0.0.1 ./gradlew :api:bootRun          # ← 마이그레이션. 한 번만 (아래 참조)
+docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올린다
+```
+
+**가운데 줄을 빼면 batch 가 기동에서 죽는다.** `base.yml` 의 mysql 은 **빈 DB** 만 만들고,
+스택 어디에도 마이그레이션을 돌리는 것이 없다 — `depends_on: service_healthy` 가 보장하는
+것은 `mysqladmin ping` 뿐이다. batch 는 `flyway.enabled:false` 라(마이그레이션 소유자는
+`api` 하나로 고정) 스스로 만들지 않는다.
+
+예전에는 그 상태로도 **기동이 그냥 성공**하고 첫 잡 실행에서 SQL 에러로 죽었다.
+지금은 `SchemaPresenceGuard` 가 기동 시점에 막고 **무엇이 없는지와 조치를 말한다** —
+`api` 를 먼저 띄우라는 것인지, `V2__batch_metadata.sql` 만 부으면 되는지, 접속 URL 에서
+DB 이름을 빠뜨린 것인지 셋을 가른다.
+
+`api` 를 한 번 띄우는 것이 번거로우면 마이그레이션만 직접 부어도 된다. Flyway 이력이
+남지 않으므로 **로컬 실험용으로만** 쓴다.
+
+> 검증용 셋(`coupon_clean`·`coupon_corrupt`)은 cy-seed 로 만드는데 거기에는 Spring Batch
+> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V2__batch_metadata.sql` 을 따로
+> 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
+
+**둘로 가른 것은 k6 측정 때문이다.** 부하 중에는 배치가 재고를 건드리면 안 되는데, 그 정지
+수단이 설정이 아니라 컨테이너다 — `base.yml` 이 한 글자도 안 바뀌어야 부하 비교표의
+*"동일 리소스 limit"* 이 유지된다(`docs/11-batch-implementation.md`).
+
+`.example` 복사는 이미지 안에서 **다시 한 번** 일어난다(`Dockerfile`). 위 `find` 명령이 로컬
+실행용이라면, 컨테이너는 자기 빌드 컨텍스트에서 같은 절차를 밟는다 — 로컬에서 만든
+`application.yml` 은 `.dockerignore` 가 막아 이미지에 안 들어간다.
+
+**포트는 전부 `127.0.0.1` 에만 묶는다.** `0.0.0.0` 으로 열면 인증이 없는 Prometheus·
+Alertmanager 와 기본 비밀번호를 쓰는 MySQL 이 그대로 노출된다. 배치의 **관리 포트(9092)는
+호스트로 안 내보낸다** — 관제는 컨테이너 네트워크에서 `batch:9092` 로 긁는다.
+
+| 서비스 | 호스트 | 용도 |
+|---|---|---|
+| `batch` | `9090` | 업무 포트 |
+| `mysql` | `3306` | |
+| `prometheus` | `9490` | 규칙·타깃 확인 (`/api/v1/rules`, `/api/v1/targets`) |
+| `alertmanager` | `9493` | |
+| `alert-sink` | 없음 | 받은 알림은 `docker compose logs alert-sink` 로 본다 |
 
 ### 새 코드를 어디에 둘 것인가
 

@@ -64,6 +64,38 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                AND scope = :scope AND attempt = :attempt
             """;
 
+    /**
+     * 닫힌 실행 중 가장 최근 것 하나.
+     *
+     * <p><b>{@code finished_at} 으로 고른다.</b> {@code started_at} 은 돌다 만 실행도 갖고
+     * 있어서, 그것으로 고르면 판정 없는 행이 최신으로 올라온다.
+     *
+     * <p>동률이면 {@code id} 로 가른다 — 같은 초에 둘이 닫히면 순서가 실행마다 달라져
+     * 지표가 흔들린다.
+     *
+     * <p><b>{@code origin = 'BATCH'} 가 없으면 시드가 심은 기준 행을 판정으로 읽는다.</b>
+     * 시드는 완결된 과거 run 을 일부러 심는다 — CLEAN 은 {@code PASS}, CORRUPT 는
+     * {@code FAIL} 과 정답 800행이다. 그것을 읽으면 <b>검증을 한 번도 안 돌려도 통과가
+     * 나가고</b>, CORRUPT 쪽은 알림이 영원히 안 꺼진다. {@code rejectExistingRun} 이 같은
+     * 함정을 이미 막고 있었는데 이 경로에는 그 방어가 없었다.
+     *
+     * <p><b>{@code verdict IS NOT NULL} 도 함께 건다.</b> 컬럼이 nullable 이라 닫혔는데
+     * 판정이 없는 행이 있을 수 있고, 그것을 {@code FAIL} 로 접으면 가짜 알림이 뜬다 —
+     * <i>"판정이 아니다"</i> 라는 뜻은 {@code finished_at} 축과 같다.
+     */
+    private static final String SELECT_LATEST_CLOSED = """
+            SELECT id, as_of, from_ts, scope, dataset, attempt,
+                   verdict, stats_status, finding_count,
+                   findings_checksum, dataset_fingerprint, started_at, finished_at
+              FROM verification_runs
+             WHERE dataset = :dataset AND scope = :scope
+               AND origin = 'BATCH'
+               AND verdict IS NOT NULL
+               AND finished_at IS NOT NULL
+             ORDER BY finished_at DESC, id DESC
+             LIMIT 1
+            """;
+
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(
             rs.getLong("id"),
             rs.getObject("as_of", LocalDateTime.class),
@@ -161,6 +193,15 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     public Optional<VerificationRun> findById(long id) {
         return jdbcClient.sql(SELECT_BY_ID)
                 .param("id", id)
+                .query(ROW_MAPPER)
+                .optional();
+    }
+
+    @Override
+    public Optional<VerificationRun> findLatestClosed(DatasetType dataset, ScopeType scope) {
+        return jdbcClient.sql(SELECT_LATEST_CLOSED)
+                .param("dataset", dataset.name())
+                .param("scope", scope.name())
                 .query(ROW_MAPPER)
                 .optional();
     }

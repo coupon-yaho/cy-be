@@ -151,8 +151,10 @@ public class ExpireScheduler {
      * 남겨 두는 것은 다중 인스턴스로 늘어나는 날을 위해서다(그때는 같은 {@code asOf} 로
      * 두 서버가 부딪힌다).
      *
-     * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-254 가
-     * {@code spring.task.scheduling.pool.size} 를 1 에서 4 로 올린다. 그것이 이 잡을 자기 자신과
+     * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-359 가
+     * {@code spring.task.scheduling.pool.size} 를 <b>2</b> 로 올렸다 — {@code @Scheduled} 가
+     * 둘이라서다(이 잡과 검증 판정 되읽기). 근거는 {@code application.yml.example} 의 그 키에
+     * 적혀 있다. 그것이 이 잡을 자기 자신과
      * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
      * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
      *

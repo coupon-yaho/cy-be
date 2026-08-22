@@ -12,6 +12,13 @@
 #             BATCH_SCHEDULING_ENABLED=false 로 띄웠거나, 크론이 틀렸을 때가 여기다.
 #             "일어난 일" 이 아니라 "안 일어난 일" 이라 없는 것을 감시해야 잡힌다.
 #   지연    — 주기보다 오래 끈다. 한 번은 넘어가도 이어지면 다음 주기와 겹친다.
+#
+# ⚠️ 알림마다 channel 라벨이 붙는다 — alertmanager 가 그것으로 수신함을 가른다.
+#    severity 로 가르면 안 된다. warning 셋 중 데이터 축은 ExpireSkippingBrokenCoupons
+#    하나뿐이고, BatchJobRunningTooLong(성능)·ExpireMetricsUnknown(설정)은 서버 축이다.
+#    섞이면 "데이터를 봐라" 로 라우팅된 것의 실제 원인이 접속 URL 인 상황이 나온다 —
+#    CY-347 이 없애려 한 오진이 라우팅 계층에서 되살아난다.
+#    새 알림을 더할 때 channel 을 빼면 alertmanager 의 sink-unrouted 로 떨어진다.
 
 groups:
   - name: cy-batch
@@ -69,6 +76,8 @@ groups:
         for: 0m
         labels:
           severity: critical
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "배치 잡이 실패했다 ({{ $labels.spring_batch_job_name }})"
           description: >-
@@ -108,6 +117,8 @@ groups:
         for: 15m
         labels:
           severity: critical
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료 배치가 30분 넘게 안 돌았다 (주기는 5분)"
           description: >-
@@ -123,6 +134,8 @@ groups:
         for: 1m
         labels:
           severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료 배치가 주기(5분)보다 오래 돌고 있다"
           description: >-
@@ -153,6 +166,8 @@ groups:
         for: 10m
         labels:
           severity: critical
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료가 밀리고 있습니다 (남은 대기 {{ $value }}건)"
           description: >-
@@ -177,6 +192,8 @@ groups:
         for: 15m
         labels:
           severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: server
         annotations:
           summary: "만료 대기를 세지 못하고 있습니다 — 밀림 감시가 꺼져 있습니다"
           description: >-
@@ -191,6 +208,8 @@ groups:
         for: 10m
         labels:
           severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: data
         annotations:
           summary: "재고가 어긋난 회차 {{ $value }}개를 건너뛰고 있습니다"
           description: >-
@@ -200,3 +219,126 @@ groups:
             어느 회차인지는 만료 잡의 WARN 로그에 회차 id 로 남습니다(회차 id 오름차순).
             **방치하면 그 회차의 대기 행을 매 주기 다시 훑습니다.** 만료가 끝나도 그 행들은
             ISSUED 로 남아 다음 실행의 스캔 대상이 되므로, 오래 두면 잡 시간이 늘어납니다.
+
+      # ──────────────────────────────────────────────────────────────────────
+      # 검증 판정. verdict = FAIL 은 **정상 종료**라 위 알림이 하나도 안 울린다 —
+      # 판정이 verification_runs 에 남을 뿐이라 누가 조회하기 전까지 아무도 모른다.
+      # 게이트 판정의 본체인데 통로가 없었다.
+      #
+      # ⚠️ 조건을 "잡 FAILED" 로 잡으면 안 된다. Step 체인이
+      #    finalizeRunStep → statsAggregateStep 이라, 통계 Step 이 죽으면 **잡은 FAILED 인데
+      #    판정은 이미 커밋돼 있다.** 반대로 verdict = FAIL 인 실행은 잡이 COMPLETED 다.
+      #    두 축이 서로 독립이므로 여기서는 **판정 자체**를 본다.
+      # ──────────────────────────────────────────────────────────────────────
+
+      - alert: VerificationVerdictFailed
+        # == 1 로 쓴다. > 0 으로 두면 판정이 셋이 되는 날 새 값도 FAIL 로 울린다 —
+        # 그 인코딩이 값 둘에 기대고 있다는 것은 VerdictCodeTest 가 지킨다.
+        expr: cy_verification_verdict == 1
+        # 판정은 온디맨드라 주기가 없다. 되읽기가 1분이므로 두 번은 봐야 한다.
+        for: 5m
+        labels:
+          severity: warning
+          # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
+          channel: data
+        annotations:
+          # 라벨을 안 좁히면 first 가 어느 시계열을 집을지 보장되지 않는다 —
+          # 다른 데이터셋의 숫자나 NaN 이 찍히고, 사람이 그 숫자로 첫 판단을 한다.
+          summary: >-
+            검증이 불일치를 찾았습니다 ({{ $labels.dataset }} 검출
+            {{ with query (printf "cy_verification_findings{dataset='%s',scope='%s'}" $labels.dataset $labels.scope) }}{{ . | first | value | printf "%.0f" }}{{ end }}건)
+          description: >-
+            **판정은 났고 데이터가 어긋났습니다.** 배치가 실패한 것이 아닙니다 —
+            불일치를 판정으로 남기고 정상 종료하는 것이 설계입니다.
+            verification_findings 의 (finding_type, target_key) 를 봅니다.
+            CORRUPT 는 정답 800행과의 집합 비교라 FAIL 이 곧 사고는 아닙니다.
+
+      # NaN 을 감시한다. 이것이 없으면 "판정 감시가 꺼진 것" 을 아무도 모른다.
+      #
+      # verifyJob 은 크론이 없어 BatchJobNotRunning 같은 "안 돌았다" 축이 아예 없다.
+      # 그래서 지표가 NaN 이면 **어떤 알림도 뜨지 않는다** — CY-347 이 ExpireMetricsUnknown
+      # 으로 값을 치른 그 자리다.
+      #
+      # NaN 은 시리즈로 존재하므로 absent() 로는 못 잡는다. NaN != NaN 이 참인 것을 쓴다.
+      - alert: VerificationMetricsUnknown
+        expr: cy_verification_verdict != cy_verification_verdict
+        # 기동 직후에는 아직 되읽기 전이라 NaN 이 정상이다. 그 구간을 넘긴다.
+        # 그리고 "그 데이터셋을 아직 한 번도 안 돌렸다" 도 여기 걸린다 — 그것이 맞다.
+        # 검증을 한 번도 안 돌린 채 게이트를 통과했다고 믿는 것이 이 알림이 막는 것이다.
+        for: 30m
+        labels:
+          severity: warning
+          # 판정을 못 내는 것은 데이터가 아니라 배선·설정 문제다.
+          channel: server
+        annotations:
+          summary: "검증 판정을 지표로 못 내고 있습니다 ({{ $labels.dataset }})"
+          description: >-
+            **판정 감시가 꺼져 있습니다.** 그 데이터셋으로 닫힌 검증 실행이 아직 없거나,
+            되읽기가 실패하고 있습니다. 후자면 배치 로그에 WARN 이 남습니다.
+            이 동안 VerificationVerdictFailed 는 울릴 수 없습니다.
+
+      # 되읽기가 실패해도 게이지를 안 지운다 — 지우면 정상 재기동 한 번에 판정이 사라져
+      # 관제와 DB 가 갈린다. 그 결정의 대가가 이것이다: **낡은 값이 현재 값처럼 보인다.**
+      #
+      # 그 상태는 다른 어떤 알림에도 안 걸린다. verdict 가 어제의 0(PASS) 으로 유지되므로
+      # VerificationVerdictFailed(== 1) 도, VerificationMetricsUnknown(NaN) 도 조용하다.
+      # 잡이 안 돈 것도 아니라 BatchJobFailed 도 아니다. 이 카운터가 그 축을 진다.
+      #
+      # BatchJobNotRunning 과 같은 이유로 increase() 가 아니라 **절대 델타**를 쓴다.
+      # 재기동하면 카운터가 0 에서 새로 태어나는데, increase() 는 리셋을 감지해 리셋 직전
+      # 값을 더하므로 누적 실패를 들고 있던 프로세스를 재배포하면 창이 리셋을 품는 동안
+      # 조건이 참이 된다 — **배포할 때마다 뜬다.** 델타는 offset 쪽 계열이 없으면 결과가
+      # 비어 그 갈래가 아예 평가되지 않고, 재기동 뒤에는 음수라 조건이 거짓이다.
+      #
+      # 임계 3 은 되읽기 주기에서 나온 수다. batch.verify.metrics-refresh-ms 가 기본 60초라
+      # 10분 창에 열 번 시도하므로, 3 은 "세 번 연속 실패" 를 넘긴 것이다. 한 번 튄 것
+      # (순간 잠금, 커넥션 재수립)으로는 안 울린다.
+      # ⚠️ 그 프로퍼티를 올리면 여기도 함께 봐야 한다. 주기가 창(10분)보다 길어지면
+      #    증분이 창 안에 3 을 못 채워 지속 실패인데도 영영 안 뜬다.
+      #
+      # for 를 창보다 짧게 둔다. 둘이 같으면 조건이 참인 구간과 for 요구가 같아져
+      # 발화 여부가 평가 타이밍 정렬에 달린다 — 뜰지 안 뜰지가 우연이 된다.
+      - alert: VerificationMetricsStale
+        expr: >-
+          (
+            cy_verification_refresh_failures_total
+            - cy_verification_refresh_failures_total offset 10m
+          ) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          # 값이 틀린 것이 아니라 값이 안 갱신되는 것이다 — 배선·설정 축이다.
+          channel: server
+        annotations:
+          summary: "검증 판정을 되읽지 못하고 있습니다 — 지표가 낡고 있습니다"
+          description: >-
+            게이지는 마지막으로 성공한 되읽기 값을 그대로 들고 있습니다.
+            **지금 DB 의 verdict 와 다를 수 있습니다.** 배치 로그의 WARN 이 원인을 답합니다.
+            흔한 원인은 시드 데이터셋이 cy-seed 1f217b5 이전 것이라 verification_runs 에
+            origin 컬럼이 없는 경우입니다 — 그때는 데이터셋을 다시 만들어야 합니다.
+
+      # 알림이 리시버까지 못 가는 것. 규칙도 라우팅도 멀쩡한데 마지막 한 홉이 끊긴 상태다.
+      #
+      # 이것만 다른 축이다 — 나머지 여덟은 batch 를 보고, 이것은 **관제 자신**을 본다.
+      # 그래서 이 알림이 뜨려면 관제가 최소한 살아 있어야 한다. 그 한계는 여기서 못 없앤다
+      # (Prometheus 가 통째로 죽은 것은 밖에서 봐야 안다 — 지금 스택에 그 축은 없다).
+      #
+      # 절대 델타를 쓰는 이유는 BatchJobNotRunning·VerificationMetricsStale 과 같다.
+      # 재기동하면 카운터가 새로 태어나는데 increase() 는 리셋 직전 값을 더해 배포마다 뜬다.
+      - alert: AlertDeliveryFailing
+        expr: >-
+          (
+            sum(alertmanager_notifications_failed_total)
+            - sum(alertmanager_notifications_failed_total offset 10m)
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+          # 데이터가 틀린 게 아니라 배선이 끊긴 것이다.
+          channel: server
+        annotations:
+          summary: "알림이 리시버까지 못 가고 있습니다"
+          description: >-
+            Alertmanager 가 webhook 전송에 실패하고 있습니다. **지금 뜬 다른 알림도
+            리시버에 안 닿았을 수 있습니다.** alert-sink 컨테이너가 살아 있는지
+            (`docker compose -f base.yml ps alert-sink`) 먼저 봅니다.

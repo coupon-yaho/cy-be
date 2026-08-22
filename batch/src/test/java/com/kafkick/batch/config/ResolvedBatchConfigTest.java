@@ -85,8 +85,10 @@ class ResolvedBatchConfigTest {
             "batch.verify.replay-window-size",
             "batch.expire.chunk-size",
             "batch.expire.step-timeout-ms",
+            "batch.verify.metrics-timeout-ms",
             // @Scheduled 애너테이션 안에 있어 @Value 파라미터 스캔으로는 안 잡히던 키.
-            "batch.schedule.expire-cron");
+            "batch.schedule.expire-cron",
+            "batch.verify.metrics-refresh-ms");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.
@@ -130,6 +132,16 @@ class ResolvedBatchConfigTest {
                 // 없어서 스케줄러 빈이 애초에 안 만들어진다 — 지금 이 값이 막고 있는 것은
                 // 없다. 부팅기를 실제 컨텍스트로 바꾸는 날을 위한 예비 방어다.
                 "--BATCH_SCHEDULING_ENABLED=true",
+                // CY-359 가 넣은 셋. 이름만 EXPECTED_VALUE_KEYS 에 있으면 **키 경로**는
+                // 지켜지지만 .example 이 참조하는 **환경변수 이름**은 한 번도 실행되지 않는다
+                // — .example 기본값과 @Value 기본값이 60000/5000 으로 글자까지 같아서,
+                // 환경변수 이름을 오타 내도 결과가 똑같다. 위 문단이 경계한 그 상황이다.
+                "--VERIFY_METRICS_REFRESH_MS=61000",
+                "--VERIFY_METRICS_TIMEOUT_MS=6000",
+                // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
+                // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
+                // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
+                "--BATCH_SCHEDULER_POOL_SIZE=3",
                 "--batch.schedule.expire-cron=0 0 0 1 1 *",
                 // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면
                 // 키 경로가 죽어 폴백해도 결과가 같아 구분이 안 된다.
@@ -225,6 +237,12 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.verify.step-timeout-ms")).isEqualTo("1001");
         assertThat(environment.getProperty("batch.verify.replay-window-size")).isEqualTo("11");
         assertThat(environment.getProperty("batch.verify.asof-state-keep-runs")).isEqualTo("3");
+        assertThat(environment.getProperty("batch.verify.metrics-refresh-ms")).isEqualTo("61000");
+        assertThat(environment.getProperty("batch.verify.metrics-timeout-ms")).isEqualTo("6000");
+        assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
+                .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
+                        + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
+                .isEqualTo("3");
     }
 
     @Test
@@ -283,7 +301,8 @@ class ResolvedBatchConfigTest {
             // 키 경로를 오타 내도 동작이 같고 로그도 없다. 이 테스트가 막으려던 그 모양이다.
             List<Executable> declared = new ArrayList<>();
             for (Class<?> config : List.of(
-                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class)) {
+                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
+                    VerificationMetricsRefresher.class)) {
                 declared.addAll(List.of(config.getDeclaredConstructors()));
                 declared.addAll(List.of(config.getDeclaredMethods()));
             }
@@ -292,8 +311,13 @@ class ResolvedBatchConfigTest {
                 // @Scheduled(cron = "${...}") 처럼 애너테이션 값에 박힌 키
                 if (executable instanceof Method method) {
                     Scheduled scheduled = method.getAnnotation(Scheduled.class);
-                    if (scheduled != null && !scheduled.cron().isBlank()) {
-                        Matcher matcher = placeholder.matcher(scheduled.cron());
+                    // cron 만 보면 fixedDelayString 에 박힌 키가 통째로 샌다 —
+                    // 실제로 VerificationMetricsRefresher 의 주기 키가 그렇게 빠져 있었다.
+                    String annotated = scheduled == null ? "" : String.join(" ",
+                            scheduled.cron(), scheduled.fixedDelayString(),
+                            scheduled.fixedRateString(), scheduled.initialDelayString());
+                    if (!annotated.isBlank()) {
+                        Matcher matcher = placeholder.matcher(annotated);
                         while (matcher.find()) {
                             String key = matcher.group(1);
                             assertThat(environment.containsProperty(key))

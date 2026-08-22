@@ -288,9 +288,14 @@ Flyway 를 끄는 이유는 계층 2 의 불변식이다 — 검증 배치가 DD
 관측할 신호도 없다 — actuator 의존성이 저장소에 없어 **헬스 엔드포인트 자체가 없다.**
 톰캣만 뜨고 매핑은 0개다. 프로세스가 살아 있다는 것 말고는 밖에서 알 수 있는 게 없다.
 
-기동 시점 가드는 **compose 가 들어오는 티켓의 몫**으로 남긴다. 지금은 compose 파일 자체가 없어
-강제할 순서도 없고, 배치를 띄우는 경로가 테스트 말고 없다. 넣을 때는 `ApplicationRunner` 로
-둔다 — 컨텍스트 refresh 이후에 돌아 `FlywayMigrationInitializer` 보다 확실히 뒤에 온다.
+> **CY-359 가 이 가드를 만들었다** — `SchemaPresenceGuard`. 아래 설계를 그대로 따랐고,
+> `ApplicationRunner` 를 고른 근거도 그대로다. compose 는 `base.yml`·`batch.yml` 로 들어왔지만
+> **순서를 강제하지는 못한다** — `depends_on: service_healthy` 는 `mysqladmin ping` 까지만
+> 보장하고 `base.yml` 에 마이그레이션을 돌릴 `api` 서비스가 없다. 그래서 배포 순서 위반은
+> compose 가 아니라 batch 자신이 기동 시점에 잡는다. 근거는 `docs/14`.
+
+기동 시점 가드는 `ApplicationRunner` 로 둔다 — 컨텍스트 refresh 이후에 돌아
+`FlywayMigrationInitializer` 보다 확실히 뒤에 온다.
 `InitializingBean` 은 그 순서가 보장되지 않으니 쓰지 않는다.
 
 ### 풀 크기 손잡이가 바뀌었다

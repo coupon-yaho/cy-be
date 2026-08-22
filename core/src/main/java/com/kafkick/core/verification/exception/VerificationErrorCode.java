@@ -83,6 +83,16 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-010",
             "ISSUE 이력이 정확히 하나가 아닌 발급건이 있습니다."
+    ),
+
+    /**
+     * 기동 시점 가드다. 잡 실행 중이 아니라 <b>컨텍스트가 뜨는 동안</b> 나므로 HTTP 로 나갈 일이
+     * 없지만, 규약상 status 를 비워 둘 수 없어 500 을 쓴다.
+     */
+    SCHEMA_NOT_MIGRATED(
+            500,
+            "VERIFICATION-011",
+            "배치가 보는 스키마에 핵심 테이블이 없습니다."
     );
 
     private final int status;

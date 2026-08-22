@@ -3,6 +3,7 @@ package com.kafkick.storage.db.verification;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.Connection;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,7 +19,10 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import javax.sql.DataSource;
+
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.verification.DatasetType;
@@ -43,6 +47,9 @@ class VerificationRuleJdbcAdapterTest {
 
     @Autowired
     private VerificationRunJdbcAdapter runAdapter;
+
+    @Autowired
+    private DataSource dataSource;
 
     @Autowired
     private JdbcClient jdbcClient;
@@ -655,5 +662,129 @@ class VerificationRuleJdbcAdapterTest {
                     .update();
         }
         return issuanceId;
+    }
+
+    /**
+     * <b>이 질의가 죽으면 {@code SchemaPresenceGuard} 가 조용히 무력해진다.</b> 가드는
+     * 빈 목록을 "전부 있다" 로 읽으므로, 질의가 늘 빈 목록을 주는 형태로 망가지면
+     * <b>기동은 언제나 통과</b>한다 — 가드가 있는데 아무것도 안 막는 상태다.
+     *
+     * <p>그래서 두 축을 함께 본다. 갖춰진 스키마에서 빈 목록인 것, 그리고 실재하지 않는
+     * 이름은 실제로 <b>없다고</b> 답하는 것. 뒤 축이 없으면 {@code return List.of()} 로
+     * 바꿔도 이 테스트가 초록이다.
+     */
+    @Test
+    @DisplayName("갖춰진 스키마에서는 없는 테이블이 없다")
+    void reportsNoMissingTableOnAMigratedSchema() {
+        assertThat(adapter.missingCoreTables()).isEmpty();
+    }
+
+    /**
+     * <b>검출 쪽 축이다.</b> 위 테스트만 있으면 {@code return List.of()} 로 바꿔도 초록이라
+     * 가드가 아무것도 안 막는 상태를 아무도 모른다 — 돌연변이로 확인한 사실이다.
+     *
+     * <p>핵심 테이블이 하나도 없는 스키마가 필요한데, 컨테이너에서 테이블을 지울 수는 없다
+     * (같은 스키마를 쓰는 다른 테스트가 죽는다). {@code CREATE DATABASE} 도 안 쓴다 —
+     * Testcontainers 계정 권한에 기대게 된다. 대신 {@code catalog} 만 갈아 끼운다.
+     * {@code information_schema} 는 어디에나 있고 읽기 권한이 보장되며 배치의 핵심 테이블은
+     * 당연히 없다. MySQL 에서 {@code setCatalog} 는 {@code USE} 와 같아 어댑터 질의의
+     * {@code DATABASE()} 가 그것을 따라간다.
+     *
+     * <p><b>⚠️ 되돌리는 것은 아래 {@code finally} 하나뿐이다.</b> HikariCP 는
+     * {@code catalog} 프로퍼티가 설정돼 있지 않으면 반환된 커넥션의 catalog 를
+     * <b>복구하지 않는다</b>({@code PoolBase.resetConnectionState} 가 그 필드가 null 이면
+     * 건너뛴다 — 바이트코드로 확인). 이 컨텍스트에는 그 프로퍼티가 없다. 그러니 저 줄을
+     * 지우면 오염된 커넥션이 풀에 남고, {@code @RepositoryTest} 는 컨텍스트를 캐시해 풀을
+     * 공유하므로 <b>다른 테스트 클래스가 실행마다 다르게 빨개진다</b> — 원인을 아무도 못 찾는다.
+     * 그래서 복구를 마지막에 단언으로 못 박는다.
+     */
+    @Test
+    @DisplayName("핵심 테이블이 없는 스키마에서는 일곱을 전부 없다고 답한다")
+    void reportsEveryCoreTableMissingOnAForeignSchema() throws Exception {
+        try (Connection connection = dataSource.getConnection()) {
+            String original = connection.getCatalog();
+            try {
+                connection.setCatalog("information_schema");
+                VerificationRuleJdbcAdapter probe = new VerificationRuleJdbcAdapter(
+                        JdbcClient.create(new SingleConnectionDataSource(connection, true)));
+
+                assertThat(probe.currentSchema())
+                        .as("실제로 다른 스키마를 보고 있어야 아래 단언이 뜻을 갖는다")
+                        .isEqualTo("information_schema");
+                assertThat(probe.missingCoreTables())
+                        .as("이게 비면 SchemaPresenceGuard 가 빈 DB 를 통과시킨다")
+                        .containsExactlyInAnyOrder(
+                                "issuances", "issuance_histories", "verification_runs", "coupon_stocks",
+                                "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION");
+            } finally {
+                connection.setCatalog(original);
+            }
+            assertThat(connection.getCatalog())
+                    .as("여기서 안 돌려놓으면 Hikari 도 안 돌려놓는다 — 풀에 오염된 커넥션이 남는다")
+                    .isEqualTo(original);
+        }
+    }
+
+    /**
+     * <b>메타만 빈 상태가 정상 절차에서 실제로 생긴다.</b> 검증용 셋은 cy-seed 의
+     * {@code ddl/} 로 만들어지는데 거기에 {@code BATCH_*} 가 하나도 없다. 데이터 넷은 다
+     * 있고 메타만 없으면 기동은 통과하고 <b>첫 잡 실행에서</b> SQL 에러로 죽는다 —
+     * 가드가 없애려는 바로 그 늦은 실패다.
+     */
+    @Test
+    @DisplayName("메타 테이블도 함께 본다 — 검증용 셋에는 그것이 없다")
+    void watchesBatchMetadataTablesToo() {
+        assertThat(adapter.missingCoreTables())
+                .as("이 컨테이너는 V2 까지 적용돼 있어 비어야 한다")
+                .isEmpty();
+
+        Integer metaTables = jdbcClient.sql("""
+                        SELECT COUNT(*)
+                          FROM information_schema.tables
+                         WHERE table_schema = DATABASE()
+                           AND table_name LIKE 'BATCH\\_%'
+                        """)
+                .query(Integer.class)
+                .single();
+
+        assertThat(metaTables)
+                .as("메타가 애초에 없으면 위 단언이 '메타를 안 본다' 여도 통과한다")
+                .isGreaterThanOrEqualTo(3);
+    }
+
+    /**
+     * 컬럼 축도 두 방향을 본다. 갖춰진 스키마에서 비는 것, 그리고 그 컬럼이 없는 스키마에서
+     * 실제로 <b>없다고</b> 답하는 것. 뒤 축이 없으면 {@code return List.of()} 로 바꿔도 초록이다.
+     */
+    @Test
+    @DisplayName("갖춰진 스키마에서는 없는 컬럼이 없다")
+    void reportsNoMissingColumnOnAMigratedSchema() {
+        assertThat(adapter.missingCriticalColumns()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("그 컬럼이 없는 스키마에서는 없다고 답한다")
+    void detectsAMissingCriticalColumn() throws Exception {
+        try (Connection connection = dataSource.getConnection()) {
+            String original = connection.getCatalog();
+            try {
+                connection.setCatalog("information_schema");
+                VerificationRuleJdbcAdapter probe = new VerificationRuleJdbcAdapter(
+                        JdbcClient.create(new SingleConnectionDataSource(connection, true)));
+
+                assertThat(probe.missingCriticalColumns())
+                        .as("이게 비면 origin 없는 구 데이터셋이 기동을 통과한다")
+                        .containsExactly("verification_runs.origin");
+            } finally {
+                connection.setCatalog(original);
+            }
+            assertThat(connection.getCatalog()).isEqualTo(original);
+        }
+    }
+
+    @Test
+    @DisplayName("접속 스키마 이름을 답한다 — 메시지가 원인을 가르는 근거다")
+    void reportsTheSchemaItIsLookingAt() {
+        assertThat(adapter.currentSchema()).isEqualTo("app");
     }
 }

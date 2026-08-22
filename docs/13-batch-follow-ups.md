@@ -193,13 +193,64 @@ cy_expire_blocked_coupons   게이지. 이번 실행이 제외한 회차 수
 
 ```
 cy_verification_verdict{dataset,scope}    마지막 실행의 판정 (PASS=0, FAIL=1)
-cy_verification_findings_total{dataset}   검출 건수
+cy_verification_findings{dataset,scope}   검출 건수
 ```
+
+> **접두는 `cy_` 다.** 지금 나가는 것 전부가 그 접두이고, 다른 영역이 배치 지표를 더할
+> 때도 맞춘다(관제 파트 OBS-23 문의로 정했다). Micrometer 이름의 `.` 은 `_` 로 변환되므로
+> 처음부터 `_` 로 적는 편이 헷갈림이 적다.
+
+> **이름에 `_total` 을 붙이면 안 된다.** 처음에는 `cy_verification_findings_total` 로 적어
+> 뒀는데, 그것은 카운터 규약이라 Micrometer 의 Prometheus 렌더러가 **게이지에서는 떼어
+> 낸다** — 코드가 부르는 이름과 관제가 보는 이름이 갈려 알림이 영원히 안 뜬다.
+> CY-347 에서 실제로 그렇게 만들었다가 노출 테스트가 잡았다(`ExpireMetrics` javadoc 참조).
+> 이 둘은 <b>마지막 실행의 값</b>을 들고 있는 게이지이지 누적 카운터가 아니다.
+
+> **라벨은 `{dataset, scope}` 둘 다 단다.** 다만 <b>지금 실제로 생기는 것은 둘</b>이다 —
+> `rejectUnsupportedScope` 가 `INCREMENTAL` 을 시작 전에 거부하고(`VerifyJobConfig`),
+> `finalizeRunStep` 도 <i>"증분 판정 규칙이 정해지기 전까지 이 경로는 열리면 안 된다"</i> 로
+> 막는다. `scope` 를 미리 다는 것은 <b>증분이 열릴 때 지표 이름을 안 바꾸려는 것</b>이고,
+> 그때 두 범위가 한 시계열을 덮어쓰는 것을 막는다.
 
 | 알림 | 조건 | 대응 |
 |---|---|---|
-| `VerificationCannotJudge` | 잡 `FAILED` | **서버를 본다** — 데이터가 움직였거나 런타임이 안 멈췄다 |
+| ~~`VerificationCannotJudge`~~ | ~~잡 `FAILED`~~ | **안 만들었다.** 통계 Step 이 죽으면 잡은 `FAILED` 인데 판정은 이미 커밋돼 있어 *"판정을 못 냈다"* 가 거짓이 된다. 두 축이 독립이라 지표로 본다 — `VerificationMetricsUnknown`(`docs/14` 4단계) |
 | `VerificationVerdictFailed` | `verdict = FAIL` | **데이터를 본다** — 판정은 났고 불일치가 있다 |
+
+**CY-347 에서 값을 치른 것 셋을 그대로 적용한다.**
+
+1. **판정을 못 낸 실행은 `0` 이 아니라 `NaN`(모름)이다.** `0` 은 `PASS` 라 <b>합격으로
+   읽힌다</b> — 잡이 죽어 판정이 없는데 관제는 통과로 본다. `ExpireMetrics.markUnknown()`
+   과 같은 자리다.
+2. **두 지표를 따로 `set` 하지 않는다.** 스크레이프가 사이에 끼면 `verdict` 는 새 실행,
+   `findings` 는 앞 실행 값인 샘플이 나온다. 한 스냅샷으로 묶는다.
+3. **알림 식에서 계산하지 않는다.** 필요한 값은 코드에서 만들어 <b>한 시계열</b>로 낸다.
+
+> **3단계는 리스너가 아니라 주기 되읽기로 갔다.** 아래 리스너 설계는 그 결정 전의
+> 초안이다 — 최종 구현과 근거는 `docs/14` 3단계에 있다. 검증은 사람이 손으로 드물게
+> 돌려서, 프로세스 게이지로 두면 재배포에 판정이 사라지는데 DB 에는 남아 관제와 진실이
+> 갈린다. 그리고 되읽기는 **시드가 심은 기준 행을 걸러야 한다**(`origin='BATCH'`).
+
+**붙일 자리** — `verifyJob` 에는 지금 `JobExecutionListener` 가 <b>하나도 없다</b>
+(`expireJob` 과 다르다).
+
+> **키는 `runId` 다.** 처음에 `verify.runId` 로 적어 뒀는데 그런 키는 없다 —
+> `VerifyJobConfig.RUN_ID_KEY` 의 값이 그냥 `"runId"` 다(접두사를 쓰는 것은
+> `manifest.seedRunId` 쪽이다). `ExecutionContext.get` 은 없는 키에 예외가 아니라
+> <b>{@code null}</b> 을 주므로, 그대로 구현했으면 <b>모든 실행이 조용히 "모름"</b> 이 됐다.
+> 문자열을 다시 쓰지 말고 상수를 참조한다.
+
+> **`runId` 가 없는 실행이 곧 "판정을 못 낸 실행" 이다.** `startRunStep` 은 가드 여덟
+> (`rejectDatasetMismatch`·`rejectUnsupportedScope`·`rejectRunningSchedulers`·
+> `rejectAsOfBeforeLatestHistory`·`rejectIssuancesUpdatedAfterAsOf`·
+> `rejectStocksUpdatedAfterAsOf`·`validateSeedRunId`·`rejectExistingRun`)를 <b>전부
+> 통과한 뒤에야</b> 컨텍스트에 심는다. 리스너는 `runId` 없이도 동작해야 하고, 없으면
+> 그것이 <i>모름</i>이다 — 라벨은 `JobParameters` 에서 뽑는다.
+
+> **`afterJob` 이 아예 안 불리는 경로가 있다.** 파라미터 검증 실패와 `preventRestart()` 는
+> `JobExecution` 이 만들어지기 <b>전에</b> 런처에서 던진다. 그때는 잡 메트릭도 안 오르고
+> 리스너도 안 불려 <b>앞 실행 값이 그대로 남는다.</b> 이 축은 지표로 못 덮으므로
+> 트리거 경로가 책임진다.
 
 ### 2b. 만료 누락
 
@@ -261,7 +312,31 @@ expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pe
 ### 2e. Prometheus 가 규칙을 아직 안 읽는다 — **위 전부의 선행 조건**
 
 규칙 파일은 있는데 **읽는 프로세스가 없다.** `prometheus.yml` 이 그 사실을 스스로 적어 뒀다.
-**언제** — compose 티켓. 그 전까지 위 알림을 아무리 잘 써도 아무도 안 본다.
+**언제** — CY-359. 단계와 검증 계약은 `docs/14-observability-wiring.md` 에 있다.
+그 전까지 위 알림을 아무리 잘 써도 아무도 안 본다.
+
+**받는 쪽은 Slack 이 아니라 mock 리시버다.** 근거 둘 —
+
+- PRD 의 제약이 *"외부 연동 Mocking"* 이고, 실시간 드리프트 계층도 *"알람(Mock)"* 으로
+  정해져 있다(영역 ①). 배치 알림만 실제 외부를 붙일 이유가 없고, 두 계층이 같은 방식을
+  쓰는 편이 낫다.
+- **이 저장소는 PUBLIC 이다.** Slack 을 붙이면 웹훅 URL 이 시크릿으로 들어가고 compose 에
+  그 참조가 남는다.
+
+> CI 의 `Slack 전송` 은 **GitHub Actions 가 PR 리뷰를 알리는 것**이지 앱 런타임과 무관하다.
+> 앱 쪽에는 Slack·웹훅 설정이 하나도 없다. 그것을 선례로 삼지 마라.
+
+mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 것</b>, 그리고 이 설계의 핵심인
+`channel: server`(서버를 봐라)와 `channel: data`(데이터를 봐라)가 <b>서로 다른 경로로
+갈리는 것</b>.
+
+> **가르는 축은 `severity` 가 아니다.** warning 셋 중 데이터 축은
+> `ExpireSkippingBrokenCoupons` 하나뿐이고 나머지 둘은 서버 축이라, severity 로 가르면
+> *"데이터를 봐라"* 로 라우팅된 것의 원인이 접속 URL 인 상황이 나온다.
+> `severity` 는 긴급도로 남긴다.
+
+**`prometheus.yml` 이 이미 배선을 전제하고 있다.** compose 의 서비스 이름이 여기 맞아야 한다 —
+알림은 `alertmanager:9093`, 스크레이프 대상은 `batch:9092`(= `BATCH_MANAGEMENT_PORT`).
 
 ---
 
@@ -283,7 +358,37 @@ expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pe
 | 무엇 | 언제 |
 |---|---|
 | `BATCH_*` 정리 | **`cleanupJob` 티켓.** 하루 288 인스턴스. 3주 시연(약 3.6만 행)은 무시할 수 있다. `batch.metadata.keep-days` 자리를 설정에 예고해 뒀다 |
-| 업무 포트 노출 | **compose 티켓.** 커스텀 actuator 로 관리 포트에 올리거나 매핑을 없애거나 |
+| 업무 포트 노출 | ~~compose 티켓~~ **CY-359 에서 결정했다.** `batch.yml` 이 `127.0.0.1:${BATCH_HOST_PORT:-9090}:9090` 으로 업무 포트만 루프백에 묶고 관리 포트(9092)는 호스트에 아예 안 올린다. 관제는 컨테이너 네트워크에서 `batch:9092` 를 긁는다 |
+
+---
+
+## 4a. 검증용 셋에 Spring Batch 메타 테이블이 없다 (CY-359 가 발견)
+
+`coupon_clean`·`coupon_corrupt` 는 cy-seed 의 `ddl/00_schema.sql` 로 만들어지는데
+`CREATE TABLE` 17개 중 **`BATCH_*` 는 0개**다. cy-be 의 `V2__batch_metadata.sql` 은
+Flyway 소유자인 `api` 만 돌리고, 검증용 셋은 그 Flyway 가 닿는 DB 가 아니다.
+
+그런데 그 DB 를 보게 배치를 띄우는 것이 `application.yml.example` 이 문서화한 정상 절차다.
+**데이터 테이블은 다 있고 메타만 없는 상태가 정상 절차에서 생긴다.** 그러면 기동은 통과하고
+첫 잡 실행에서 `Table 'BATCH_JOB_INSTANCE' doesn't exist` 로 죽는다.
+
+CY-359 는 `SchemaPresenceGuard` 로 그것을 **기동 시점에 드러내고 메시지로 조치를 가르는**
+데까지만 했다. 남은 결정은 **누가 언제 붓는가** 다.
+
+| 후보 | 대가 |
+|---|---|
+| 시드 생성 절차에 `V2` 를 넣는다 (cy-seed 쪽) | 시드 저장소가 cy-be 의 마이그레이션 파일을 알아야 한다 — 지금은 스키마 주인이 cy-be 라는 규율과 맞물려 사본 관리가 하나 더 는다 |
+| compose 에 마이그레이션 원샷 서비스를 넣는다 | `api` 이미지를 `--spring.batch.job.enabled=false` 로 한 번 돌린다. `base.yml` 이 `api` 를 알아야 한다 |
+| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차 2번에 명령을 박아 뒀다. 사람이 빠뜨리면 가드가 잡는다 |
+
+지금은 셋째다 — 가드가 있어 **조용히 실패하지는 않는다**. 검증을 자동으로 돌리는 티켓이
+열리면 그때 앞의 둘 중 하나로 간다.
+
+**같은 구멍이 README 경로에도 있었다.** 검증용 셋만의 문제가 아니다 — `base.yml` 의 mysql 은
+빈 `app` DB 만 만들고 스택에 마이그레이션 주체가 없어서, README 대로 띄우면 데이터 넷까지
+전부 없다. CY-359 는 README 에 `api` 를 한 번 띄우는 단계를 박는 것으로 닫았다.
+`base.yml` 에 원샷 서비스를 넣는 쪽은 `api` 이미지(Dockerfile)가 아직 없어 미뤘다 —
+그것이 생기는 날 위 표의 둘째로 옮기면 두 구멍이 한 번에 닫힌다.
 
 ---
 

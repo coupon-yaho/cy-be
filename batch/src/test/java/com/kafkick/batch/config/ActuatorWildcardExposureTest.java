@@ -35,7 +35,12 @@ import com.kafkick.storage.db.MySqlContainerConfig;
         properties = {
                 // exclude 는 파일에서 그대로 온다. 여기 복붙하면 파일에 열두 번째 항목이
                 // 늘어도 이 테스트는 옛 목록만 본다.
-                "spring.config.location=classpath:/resolved/application.yml",
+                // classpath:/application.yml 을 함께 읽는다. 이걸 빼면 test/resources 의
+                // flyway.enabled:true 가 덮여 **빈 스키마 위에서** 컨텍스트가 뜬다.
+                // 그건 이 테스트의 의도가 아니라 부작용이었고, SchemaPresenceGuard 가
+                // 들어오면서 드러났다 — 실제 기동은 마이그레이션이 끝난 DB 를 본다.
+                // management.* 는 그 파일에 없으므로 노출 목록은 resolved 것이 그대로 산다.
+                "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
                 "spring.batch.job.enabled=false",
                 "batch.scheduling.enabled=false",
                 "server.port=0",

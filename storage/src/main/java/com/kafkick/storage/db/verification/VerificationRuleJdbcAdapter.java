@@ -4,6 +4,7 @@ package com.kafkick.storage.db.verification;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.stream.Stream;
 
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -23,6 +24,42 @@ import com.kafkick.core.verification.VerificationRuleRepository;
  */
 @Repository
 public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
+
+    /**
+     * <b>배치가 없으면 아무것도 못 하는 테이블</b>만 넣습니다. 목록을 넓히면 스키마가
+     * 조금씩 자랄 때마다 기동이 막혀, 가드가 "배포 순서" 가 아니라 "스키마 최신성" 을
+     * 보게 됩니다 — 그건 Flyway 의 몫입니다.
+     *
+     * <p><b>Spring Batch 메타 테이블을 함께 봅니다.</b> {@code docs/11} 이 배포 순서 위반의
+     * 증상으로 지목한 문자열이 바로 {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 이고,
+     * 그것 없이는 <b>어떤 잡도 못 돕니다</b>. 그리고 이 축은 데이터 테이블과 <b>따로 빕니다</b> —
+     * 검증용 셋({@code coupon_clean}·{@code coupon_corrupt})은 cy-seed 의 {@code ddl/} 로
+     * 만들어지는데 거기에 {@code BATCH_*} 가 하나도 없습니다. 데이터 넷은 다 있고 메타만
+     * 없는 상태가 정상 절차에서 실제로 생깁니다.
+     *
+     * <p>아홉 개 전부가 아니라 셋만 봅니다. {@code V2__batch_metadata.sql} 은 원본 그대로라
+     * 부분 적용되는 경로가 없어, 셋이 있으면 나머지도 있습니다.
+     */
+    private static final List<String> DATA_TABLES =
+            List.of("issuances", "issuance_histories", "verification_runs", "coupon_stocks");
+
+    /** {@code V2__batch_metadata.sql} 이 만듭니다. 없으면 잡 실행 시점에 SQL 에러로 죽습니다. */
+    private static final List<String> BATCH_META_TABLES =
+            List.of("BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION");
+
+    /**
+     * <b>테이블이 있다고 컬럼도 있는 것은 아니다.</b> 여기 넣는 기준은 <i>"이것이 없으면
+     * 그 경로가 매번 SQL 에러로 죽는가"</i> 다 — 스키마 최신성 전반이 아니라, 배치가
+     * 질의문에 <b>이름으로 박아 둔</b> 컬럼만 본다.
+     *
+     * <p>{@code origin} 은 cy-seed {@code 1f217b5} 부터 생겼고, 그 이전 검증용 셋에는
+     * 테이블은 다 있고 이것만 없다. Flyway 가 그 DB 에 안 닿아 재생성 말고는 답이 없다.
+     */
+    private static final List<String> CRITICAL_COLUMNS =
+            List.of("verification_runs.origin");
+
+    private static final List<String> CORE_TABLES =
+            Stream.concat(DATA_TABLES.stream(), BATCH_META_TABLES.stream()).toList();
 
     /**
      * 접은 상태와 저장된 상태가 다른 발급건.
@@ -412,6 +449,50 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                         """)
                 .query(Boolean.class)
                 .single());
+    }
+
+    /**
+     * {@code information_schema} 한 번으로 끝냅니다. 테이블마다 물으면 왕복이 늘고, 무엇보다
+     * <b>없는 테이블에 {@code SELECT} 를 날리면 예외</b>라 "없다" 를 값으로 못 받습니다.
+     */
+    @Override
+    public List<String> missingCoreTables() {
+        List<String> present = jdbcClient.sql("""
+                        SELECT table_name
+                          FROM information_schema.tables
+                         WHERE table_schema = DATABASE()
+                           AND table_name IN (:names)
+                        """)
+                .param("names", CORE_TABLES)
+                .query(String.class)
+                .list();
+        return CORE_TABLES.stream()
+                .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
+                .toList();
+    }
+
+    @Override
+    public List<String> missingCriticalColumns() {
+        List<String> present = jdbcClient.sql("""
+                        SELECT CONCAT(table_name, '.', column_name)
+                          FROM information_schema.columns
+                         WHERE table_schema = DATABASE()
+                           AND CONCAT(table_name, '.', column_name) IN (:names)
+                        """)
+                .param("names", CRITICAL_COLUMNS)
+                .query(String.class)
+                .list();
+        return CRITICAL_COLUMNS.stream()
+                .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
+                .toList();
+    }
+
+    @Override
+    public String currentSchema() {
+        return jdbcClient.sql("SELECT DATABASE()")
+                .query(String.class)
+                .optional()
+                .orElse(null);
     }
 
     @Override
