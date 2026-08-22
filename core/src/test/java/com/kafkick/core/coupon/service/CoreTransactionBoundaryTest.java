@@ -42,6 +42,7 @@ class CoreTransactionBoundaryTest {
         assertReadOnly(CouponTemplateQueryService.class, "findById");
         assertReadOnly(CouponTemplateQueryService.class, "findPage");
         assertReadOnly(MemberCouponQueryService.class, "findPage");
+        assertReadOnly(MemberCouponQueryService.class, "findOne");
     }
 
     @Test
