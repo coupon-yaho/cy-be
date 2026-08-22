@@ -30,6 +30,13 @@ import com.kafkick.core.support.exception.ErrorCode;
  * {@code ResponseEnvelope} 로 감싼다"</i> 로 한 벌을 요구한다. {@code api} 모듈의 파일을
  * 옮기는 것이 그 규약을 지키는 유일한 길이었다.
  *
+ * <p><b>이 advice 가 못 잡는 4xx 가 있다.</b> {@code assignableTypes} 로 이 컨트롤러에
+ * 묶여 있어서, <b>컨트롤러가 정해지기 전에 나는 예외</b>는 여기 안 온다 — 없는 경로(404)나
+ * 허용 안 된 메서드(405)가 그것이다. 그때는 스프링 기본 형식
+ * ({@code {timestamp,status,error,path}})이 나간다(실측). 범위를 넓히면 다른 컨트롤러가
+ * 생기는 날 그쪽 규약까지 이 클래스가 지게 되므로 지금은 그대로 둔다 — 다만
+ * <b>클라이언트가 두 형식을 만날 수 있다는 것은 사실</b>이다.
+ *
  * <p><b>메시지는 카탈로그 것만 나간다.</b> 예외의 {@code detail} 은 로그에만 남긴다 —
  * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 인증이
  * 없으므로 내부 사정을 더 조심해서 다룬다.
@@ -61,7 +68,7 @@ public class BatchApiExceptionHandler {
             log.info("검증 API 가 요청을 거절했습니다. code={} detail={}",
                     code.getCode(), exception.getMessage());
         }
-        return respond(code, code.getStatus());
+        return respond(code);
     }
 
     /**
@@ -87,7 +94,7 @@ public class BatchApiExceptionHandler {
         } else {
             log.info("검증 API 가 요청을 거절했습니다. 파라미터 타입이 맞지 않습니다.");
         }
-        return respond(CommonErrorCode.INVALID_INPUT, 400);
+        return respond(CommonErrorCode.INVALID_INPUT);
     }
 
     /**
@@ -110,18 +117,32 @@ public class BatchApiExceptionHandler {
                 // 같은 이유로 메시지를 안 남긴다 — 그 안에 요청값이 들어간다.
                 log.info("검증 API 가 요청을 거절했습니다. status={} type={}",
                         status, exception.getClass().getSimpleName());
-                return respond(CommonErrorCode.INVALID_INPUT, status);
+                return respond(commonCodeFor(status));
             }
         }
         log.error("검증 API 에서 예상 못 한 오류가 났습니다.", exception);
         return respond(CommonErrorCode.INTERNAL_ERROR);
     }
 
-    private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code) {
-        return respond(code, code.getStatus());
+    /**
+     * <b>HTTP 상태와 본문의 {@code status} 를 일치시킨다.</b> {@code ErrorResponse.of} 는
+     * 본문 상태를 {@code errorCode.getStatus()} 에서 읽으므로, 405 응답에
+     * {@code INVALID_INPUT}(400)을 쓰면 <b>헤더는 405 인데 본문은 400</b> 이 된다 —
+     * 클라이언트가 둘 중 무엇을 믿어야 할지 모른다.
+     *
+     * <p>그 밖의 4xx 는 {@code INVALID_INPUT} 으로 접는다. 여기 오는 것은 스프링이 이미
+     * 상태를 정한 웹 예외이고, 우리 카탈로그에 대응 코드가 없는 자리다.
+     */
+    private static ErrorCode commonCodeFor(int status) {
+        return switch (status) {
+            case 404 -> CommonErrorCode.NOT_FOUND;
+            case 405 -> CommonErrorCode.METHOD_NOT_ALLOWED;
+            default -> CommonErrorCode.INVALID_INPUT;
+        };
     }
 
-    private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code, int status) {
+    private ResponseEntity<ResponseEnvelope<Void>> respond(ErrorCode code) {
+        int status = code.getStatus();
         // requestId 는 null 이다 — batch 에는 그것을 MDC 에 심는 RequestIdFilter 가 없다.
         return ResponseEntity.status(status)
                 .body(ResponseEnvelope.fail(ErrorResponse.of(code, null,

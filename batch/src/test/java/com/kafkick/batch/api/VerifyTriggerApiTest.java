@@ -508,6 +508,28 @@ class VerifyTriggerApiTest {
         assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-016");
     }
 
+    /**
+     * <b>헤더의 상태와 본문의 {@code status} 가 같아야 한다.</b> {@code ErrorResponse.of} 는
+     * 본문 상태를 {@code errorCode.getStatus()} 에서 읽으므로, 실제 상태와 다른 코드를 고르면
+     * <b>헤더와 본문이 갈린다</b> — 클라이언트가 둘 중 무엇을 믿어야 할지 모른다.
+     *
+     * <p>도메인 예외는 코드 자신이 상태를 들고 있어 어긋날 여지가 없다. 위험한 것은
+     * <b>스프링이 상태를 정한 웹 예외</b>를 우리 카탈로그 코드로 옮길 때다.
+     */
+    @Test
+    @DisplayName("헤더와 본문의 status 가 같다")
+    void keepsTheBodyStatusInSyncWithTheHeader() throws Exception {
+        // 400 — 스프링이 정한 상태(파라미터 누락)를 우리 코드로 옮기는 경로
+        HttpResponse<String> missing = probe.post("/api/v1/admin/verify");
+        assertThat(missing.statusCode()).isEqualTo(400);
+        assertThat(error(missing).path("status").asInt()).isEqualTo(400);
+
+        // 404 · 409 — 도메인 코드가 상태를 들고 있는 경로
+        HttpResponse<String> notFound = probe.get("/api/v1/admin/verify/runs/999999");
+        assertThat(notFound.statusCode()).isEqualTo(404);
+        assertThat(error(notFound).path("status").asInt()).isEqualTo(404);
+    }
+
     private TriggerAccepted triggerCorrupt() throws Exception {
         HttpResponse<String> response = probe.post(
                 "/api/v1/admin/verify?asOf=" + AS_OF + "&dataset=CORRUPT&seedRunId=1");
