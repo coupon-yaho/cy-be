@@ -101,8 +101,8 @@ public class AdminOverviewService {
      * <p>기준 시각과 Dataset을 한 번씩만 만든 뒤 O1, O2, O3, O4를 순서대로 계산합니다. O4는 같은
      * couponId의 O1 계산 결과를 그대로 사용하며, O1·O2 후보와 준비 미완료 후보를 합쳐 Action 계산기를
      * 한 번만 호출합니다. 이후 Action 전체 대표 Map을 캠페인 행 조립에 전달해 KPI·목록·행이 같은
-     * 판정을 재사용하도록 합니다. aggregateIssuanceRate와 latencySummary는 아직 원천이 없어
-     * UNAVAILABLE을 유지합니다.</p>
+     * 판정을 재사용하도록 합니다. 독립 전체 발급률과 지연 원천은 Dataset Observation을 그대로
+     * Snapshot에 전달합니다.</p>
      *
      * @return Snapshot과 전체 데이터 완전성을 포함한 운영현황 Service 결과
      */
@@ -132,7 +132,7 @@ public class AdminOverviewService {
                 queueCalculation.queueStatuses(), stockCalculation.stockForecasts(),
                 actionCalculation.representativeByCoupon());
 
-        // 아직 연결되지 않은 독립 원천은 0이 아닌 UNAVAILABLE로 명시해 PARTIAL 판정에 반영합니다.
+        // Dataset 원천의 값·상태·관측 시각을 그대로 유지해 Snapshot 완전성 계산에 사용합니다.
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
                 snapshotAt,
                 actionObservation(actionCalculation.required(), queueCalculation.queueRisk(),
@@ -140,9 +140,9 @@ public class AdminOverviewService {
                 validObservation(campaignCalculation.openingSoon(), snapshotAt),
                 queueCalculation.queueRisk(),
                 stockCalculation.stockRisk(),
-                unavailableObservation(),
+                dataset.aggregateIssuanceRate(),
                 queueCalculation.aggregateQueue(),
-                unavailableObservation(),
+                dataset.latencySummary(),
                 validObservation(campaignCalculation.campaignStatusSummary(), snapshotAt),
                 actionObservation(actionCalculation.items(), queueCalculation.queueRisk(),
                         issuanceCalculation.issuanceFlows(), snapshotAt),
@@ -298,8 +298,4 @@ public class AdminOverviewService {
                 ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
     }
 
-    /** 실제로 관측하지 않은 독립 원천을 가짜 0 없이 공통 Core 상태 규칙에 맞춰 생성합니다. */
-    private static <T> AdminOverviewSnapshot.Observation<T> unavailableObservation() {
-        return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null);
-    }
 }

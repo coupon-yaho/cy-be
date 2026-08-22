@@ -29,25 +29,41 @@ class AdminOverviewMockDataFactoryTest {
      * 전달하는 계약을 고정합니다.
      */
     @Test
-    @DisplayName("Mock Dataset은 화면 조립에 필요한 O1 O2 O3 입력과 정책을 함께 보유한다")
+    @DisplayName("Mock Dataset은 화면 조립에 필요한 O1 O2 O3와 전체 관측값 및 정책을 함께 보유한다")
     void exposesAllOverviewCalculationInputsInOneDataset() {
         AdminOverviewMockDataset dataset = new AdminOverviewMockDataFactory().create(SNAPSHOT_AT);
 
         assertThat(AdminOverviewMockDataset.class.getRecordComponents()).extracting(RecordComponent::getName)
                 .containsExactly("policy", "issuanceFlowInputs", "queueInputs", "outcomeInput", "campaigns",
-                        "preparationActionCandidates");
+                        "preparationActionCandidates", "aggregateIssuanceRate", "latencySummary");
         assertThat(dataset.policy().issuanceDecreaseRatio()).isEqualTo(0.50);
         assertThat(dataset.issuanceFlowInputs()).hasSize(6);
         assertThat(dataset.queueInputs()).hasSize(6);
         assertThat(dataset.issuanceFlowInputs())
                 .filteredOn(input -> input.couponId().equals(102L))
                 .singleElement()
-                .satisfies(input -> assertThat(input.completedCount()).isEqualTo(44L));
+                .satisfies(input -> assertThat(input.completedCount()).isEqualTo(440L));
         assertThat(dataset.issuanceFlowInputs())
                 .filteredOn(input -> input.couponId().equals(104L))
                 .singleElement()
                 .satisfies(input -> assertThat(input.sourceStatus()).isEqualTo(SourceStatus.N_A));
         assertThat(dataset.outcomeInput().counts()).hasSize(7);
+        assertThat(dataset.aggregateIssuanceRate())
+                .satisfies(observation -> {
+                    assertThat(observation.value().currentPerSecond()).isGreaterThan(0.0);
+                    assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
+                    assertThat(observation.observedAt()).isEqualTo(SNAPSHOT_AT);
+                });
+        assertThat(dataset.latencySummary())
+                .satisfies(observation -> {
+                    assertThat(observation.value().successfulP99()).isPositive();
+                    assertThat(observation.value().failedP99()).isPositive();
+                    assertThat(observation.value().windowStart())
+                            .isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(5)));
+                    assertThat(observation.value().windowEnd()).isEqualTo(SNAPSHOT_AT);
+                    assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
+                    assertThat(observation.observedAt()).isEqualTo(SNAPSHOT_AT);
+                });
         assertThatThrownBy(() -> dataset.queueInputs().add(null))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
@@ -144,7 +160,7 @@ class AdminOverviewMockDataFactoryTest {
 
     /** 비교 count와 중단 지속 시간은 실제로 분리된 관측 구간·마지막 성공 시각으로 표현해야 합니다. */
     @Test
-    @DisplayName("Mock O1은 직전 비교 구간과 중단 시작 이전의 마지막 성공 시각을 사용한다")
+    @DisplayName("Mock O1은 직전 비교 구간과 최근 10분 다중 버킷을 사용한다")
     void createsConsistentIssuanceTimeSources() {
         AdminOverviewMockDataset dataset = new AdminOverviewMockDataFactory().create(SNAPSHOT_AT);
         IssuanceFlowInput decreasing = dataset.issuanceFlowInputs().stream()
@@ -154,23 +170,32 @@ class AdminOverviewMockDataFactoryTest {
         IssuanceFlowInput stopped = dataset.issuanceFlowInputs().getFirst();
 
         assertThat(decreasing.comparisonWindowEnd()).isEqualTo(decreasing.windowStart());
-        assertThat(decreasing.comparisonWindowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(2)));
+        assertThat(decreasing.windowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(10)));
+        assertThat(decreasing.comparisonWindowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(20)));
+        assertThat(decreasing.buckets()).hasSize(10);
+        assertThat(decreasing.buckets())
+                .allSatisfy(bucket -> assertThat(bucket.windowEnd().minus(Duration.ofMinutes(1)))
+                        .isEqualTo(bucket.windowStart()));
+        assertThat(decreasing.buckets().getFirst().windowStart()).isEqualTo(decreasing.windowStart());
+        assertThat(decreasing.buckets().getLast().windowEnd()).isEqualTo(decreasing.windowEnd());
+        assertThat(decreasing.buckets().stream().mapToLong(bucket -> bucket.completedCount()).sum())
+                .isLessThanOrEqualTo(decreasing.completedCount());
         assertThat(stopped.lastCompletedAt()).isNull();
     }
 
     /** 한 독립 재고 원천만 미수집이어도 같은 OPEN 캠페인의 O1·O2 입력은 보존해야 합니다. */
     @Test
-    @DisplayName("Mock은 OPEN 캠페인의 재고만 UNAVAILABLE이고 O1 O2는 유지되는 시나리오를 제공한다")
-    void createsUnavailableStockOnlyScenario() {
+    @DisplayName("Mock은 모든 OPEN 캠페인의 재고·O1·O2를 정상 관측값으로 제공한다")
+    void createsCompleteOpenCampaignScenario() {
         AdminOverviewMockDataset dataset = new AdminOverviewMockDataFactory().create(SNAPSHOT_AT);
 
         assertThat(dataset.campaigns()).filteredOn(source -> source.couponId().equals(103L))
                 .singleElement()
                 .satisfies(source -> {
-                    assertThat(source.stockStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
-                    assertThat(source.totalQuantity()).isNull();
-                    assertThat(source.activeCount()).isNull();
-                    assertThat(source.stockObservedAt()).isNull();
+                    assertThat(source.stockStatus()).isEqualTo(SourceStatus.VALID);
+                    assertThat(source.totalQuantity()).isEqualTo(1_000L);
+                    assertThat(source.activeCount()).isEqualTo(620L);
+                    assertThat(source.stockObservedAt()).isEqualTo(SNAPSHOT_AT);
                 });
         assertThat(dataset.issuanceFlowInputs()).filteredOn(input -> input.couponId().equals(103L))
                 .singleElement()
@@ -189,6 +214,6 @@ class AdminOverviewMockDataFactoryTest {
             List<AdminOverviewSnapshot.OperationActionItem> preparationCandidates
     ) {
         return new AdminOverviewMockDataset(base.policy(), issuanceInputs, queueInputs, base.outcomeInput(),
-                campaigns, preparationCandidates);
+                campaigns, preparationCandidates, base.aggregateIssuanceRate(), base.latencySummary());
     }
 }

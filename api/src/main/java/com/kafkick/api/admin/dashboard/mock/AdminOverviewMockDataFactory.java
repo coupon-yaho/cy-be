@@ -84,10 +84,10 @@ public class AdminOverviewMockDataFactory {
                 snapshotAt.minus(Duration.ofMinutes(10)),
                 snapshotAt.plus(Duration.ofHours(3)),
                 EngineVersion.V1,
-                null,
-                null,
-                null,
-                UNAVAILABLE,
+                1_000L,
+                620L,
+                snapshotAt,
+                VALID,
                 true
         );
         CampaignOverviewSource readyScheduledCampaign = new CampaignOverviewSource(
@@ -134,8 +134,7 @@ public class AdminOverviewMockDataFactory {
         List<IssuanceFlowInput> issuanceFlowInputs = List.of(
                 issuanceInput(101L, CouponStatus.OPEN, true, 20L, 0L, 40L,
                         snapshotAt.minus(Duration.ofMinutes(12)), null, windowStart, snapshotAt),
-                issuanceInput(102L, CouponStatus.OPEN, true, 60L, 44L, 100L,
-                        snapshotAt.minus(Duration.ofMinutes(3)), snapshotAt, windowStart, snapshotAt),
+                recentTenMinuteIssuanceInput(102L, snapshotAt),
                 issuanceInput(103L, CouponStatus.OPEN, true, 700L, 612L, 1_000L,
                         snapshotAt.minus(Duration.ofMinutes(1)), snapshotAt, windowStart, snapshotAt),
                 notApplicableIssuance(104L, CouponStatus.SCHEDULED),
@@ -164,7 +163,25 @@ public class AdminOverviewMockDataFactory {
         return new AdminOverviewMockDataset(policy, issuanceFlowInputs, queueInputs, outcomeInput,
                 List.of(admissionStoppedCampaign, depletionCampaign, decreasingQueueCampaign,
                         readyScheduledCampaign, incompleteCampaign, closedCampaign),
-                List.of(incompleteAction));
+                List.of(incompleteAction),
+                aggregateIssuanceRate(snapshotAt), latencySummary(snapshotAt));
+    }
+
+    /** 전체 발급률은 HTTP 성공률이 아니라 관측 구간의 실제 신규 발급 완료율로 제공합니다. */
+    private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateIssuanceRate>
+    aggregateIssuanceRate(Instant snapshotAt) {
+        return new AdminOverviewSnapshot.Observation<>(
+                new AdminOverviewSnapshot.AggregateIssuanceRate(656.0 / 60.0, 14.2), VALID, snapshotAt);
+    }
+
+    /** 성공·실패 요청의 p99와 같은 관측 구간 경계를 보존한 지연 원천을 제공합니다. */
+    private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary>
+    latencySummary(Instant snapshotAt) {
+        return new AdminOverviewSnapshot.Observation<>(
+                new AdminOverviewSnapshot.LatencySummary(
+                        Duration.ofMillis(84), Duration.ofMillis(132),
+                        snapshotAt.minus(Duration.ofMinutes(5)), snapshotAt),
+                VALID, snapshotAt);
     }
 
     /** 실제 1분 관측 구간에서 O1 상태와 그래프 점을 만드는 화면 시나리오 보조 메서드입니다. */
@@ -176,6 +193,26 @@ public class AdminOverviewMockDataFactory {
                 attemptedCount, completedCount, comparisonCompletedCount, comparisonWindowStart, windowStart,
                 List.of(new IssuanceBucket(windowStart, snapshotAt, completedCount)), lastCompletedAt,
                 conditionStartedAt, VALID, snapshotAt);
+    }
+
+    /** O1 OPEN 감소 시나리오에 최근 10분의 1분 단위 완료 버킷을 제공합니다. */
+    private static IssuanceFlowInput recentTenMinuteIssuanceInput(long couponId, Instant snapshotAt) {
+        Instant windowStart = snapshotAt.minus(Duration.ofMinutes(10));
+        Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(10));
+        List<IssuanceBucket> buckets = List.of(
+                new IssuanceBucket(windowStart, windowStart.plus(Duration.ofMinutes(1)), 37L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(1)), windowStart.plus(Duration.ofMinutes(2)), 40L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(2)), windowStart.plus(Duration.ofMinutes(3)), 41L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(3)), windowStart.plus(Duration.ofMinutes(4)), 43L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(4)), windowStart.plus(Duration.ofMinutes(5)), 44L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(5)), windowStart.plus(Duration.ofMinutes(6)), 45L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(6)), windowStart.plus(Duration.ofMinutes(7)), 46L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(7)), windowStart.plus(Duration.ofMinutes(8)), 47L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(8)), windowStart.plus(Duration.ofMinutes(9)), 48L),
+                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(9)), snapshotAt, 49L));
+        return new IssuanceFlowInput(couponId, CouponStatus.OPEN, true, windowStart, snapshotAt,
+                600L, 440L, 1_000L, comparisonWindowStart, windowStart, buckets, snapshotAt,
+                snapshotAt.minus(Duration.ofMinutes(3)), VALID, snapshotAt);
     }
 
     /** SCHEDULED·CLOSED 캠페인의 비적용 O1 원천을 N_A로 명시합니다. */

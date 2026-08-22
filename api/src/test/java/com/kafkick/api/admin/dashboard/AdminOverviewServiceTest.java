@@ -49,15 +49,15 @@ class AdminOverviewServiceTest {
 
     /** O1~O4와 Action의 같은 계산 결과가 KPI·목록·행에 재사용되는지 검증합니다. */
     @Test
-    @DisplayName("Mock O1 O2 O3 O4 결과와 대표 조치를 PARTIAL 운영현황으로 조립한다")
-    void assemblesMockCalculationResultsAsPartialOverview() {
+    @DisplayName("Mock O1 O2 O3 O4 결과와 전체 관측값을 COMPLETE 운영현황으로 조립한다")
+    void assemblesMockCalculationResultsAsCompleteOverview() {
         AdminOverviewService service = service();
 
         AdminOverviewResult result = service.getOverview();
         AdminOverviewSnapshot snapshot = result.snapshot();
 
         assertThat(snapshot.snapshotAt()).isEqualTo(NOW);
-        assertThat(result.overallStatus()).isEqualTo(OverallStatus.PARTIAL);
+        assertThat(result.overallStatus()).isEqualTo(OverallStatus.COMPLETE);
         assertThat(snapshot.campaignStatusSummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.campaignStatusSummary().value())
                 .isEqualTo(new AdminOverviewSnapshot.CampaignStatusSummary(3, 2, 1));
@@ -97,7 +97,7 @@ class AdminOverviewServiceTest {
                 .satisfies(campaign -> {
                     assertThat(campaign.campaignQueueStatus().value().estimatedWait())
                             .isEqualTo(Duration.ofSeconds(40));
-                    assertThat(campaign.stockForecast().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+                    assertThat(campaign.stockForecast().status()).isEqualTo(SourceStatus.VALID);
                 });
         assertThat(snapshot.campaigns().value())
                 .filteredOn(campaign -> campaign.couponId().equals(104L))
@@ -109,19 +109,25 @@ class AdminOverviewServiceTest {
                 });
         assertThat(snapshot.queueRisk().value())
                 .isEqualTo(new AdminOverviewSnapshot.QueueRiskSummary(1, null));
-        assertThat(snapshot.stockRisk()).isEqualTo(unavailable());
+        assertThat(snapshot.stockRisk().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.aggregateQueue().value())
                 .isEqualTo(new AdminOverviewSnapshot.AggregateQueue(3_388L, 4.6, null));
         assertThat(snapshot.customerOutcomes().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.customerOutcomes().value().outcomes()).hasSize(7);
-        assertThat(List.of(
-                snapshot.aggregateIssuanceRate(),
-                snapshot.latencySummary()
-        )).allSatisfy(observation -> {
-            assertThat(observation.value()).isNull();
-            assertThat(observation.status()).isEqualTo(SourceStatus.UNAVAILABLE);
-            assertThat(observation.observedAt()).isNull();
-        });
+        assertThat(snapshot.aggregateIssuanceRate())
+                .satisfies(observation -> {
+                    assertThat(observation.value().currentPerSecond()).isGreaterThan(0.0);
+                    assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
+                    assertThat(observation.observedAt()).isEqualTo(NOW);
+                });
+        assertThat(snapshot.latencySummary())
+                .satisfies(observation -> {
+                    assertThat(observation.value().successfulP99()).isPositive();
+                    assertThat(observation.value().failedP99()).isPositive();
+                    assertThat(observation.value().windowEnd()).isEqualTo(NOW);
+                    assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
+                    assertThat(observation.observedAt()).isEqualTo(NOW);
+                });
     }
 
     /**
@@ -234,7 +240,7 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, base.queueInputs(), base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates());
+                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
             }
         }).getOverview();
 
@@ -551,7 +557,7 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         base.issuanceFlowInputs(), inputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates());
+                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
             }
         });
     }
@@ -572,7 +578,7 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         base.issuanceFlowInputs(), base.queueInputs(), base.outcomeInput(), campaigns,
-                        base.preparationActionCandidates());
+                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
             }
         });
     }
@@ -588,7 +594,7 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(), inputs,
                         base.queueInputs(), base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates());
+                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
             }
         });
     }
@@ -612,7 +618,7 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates());
+                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
             }
         });
     }
@@ -631,7 +637,7 @@ class AdminOverviewServiceTest {
                         .toList();
                 return new com.kafkick.api.admin.dashboard.mock.AdminOverviewMockDataset(base.policy(),
                         issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates());
+                        base.preparationActionCandidates(), base.aggregateIssuanceRate(), base.latencySummary());
             }
         });
     }

@@ -24,6 +24,8 @@ import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.Issuanc
  * @param outcomeInput 전체 캠페인 O3 고객 결과 원천
  * @param campaigns 캠페인 상태·오픈 임박·재고 계산에 사용할 원천 목록
  * @param preparationActionCandidates 준비 미완료 판정에서 파생된 조치 후보 목록
+ * @param aggregateIssuanceRate 전체 신규 발급 완료율 원천 관측값
+ * @param latencySummary 성공·실패 응답 p99 원천 관측값
  */
 public record AdminOverviewMockDataset(
         OverviewCalculationPolicy policy,
@@ -31,7 +33,9 @@ public record AdminOverviewMockDataset(
         List<QueueInput> queueInputs,
         OutcomeInput outcomeInput,
         List<CampaignOverviewSource> campaigns,
-        List<AdminOverviewSnapshot.OperationActionItem> preparationActionCandidates
+        List<AdminOverviewSnapshot.OperationActionItem> preparationActionCandidates,
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateIssuanceRate> aggregateIssuanceRate,
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> latencySummary
 ) {
 
     /** 외부 변경으로 한 응답의 Mock 모집단이 달라지지 않도록 모든 컬렉션을 불변 복사합니다. */
@@ -42,6 +46,8 @@ public record AdminOverviewMockDataset(
         Objects.requireNonNull(outcomeInput, "outcomeInput");
         Objects.requireNonNull(campaigns, "campaigns");
         Objects.requireNonNull(preparationActionCandidates, "preparationActionCandidates");
+        Objects.requireNonNull(aggregateIssuanceRate, "aggregateIssuanceRate");
+        Objects.requireNonNull(latencySummary, "latencySummary");
         issuanceFlowInputs = List.copyOf(issuanceFlowInputs);
         queueInputs = List.copyOf(queueInputs);
         campaigns = List.copyOf(campaigns);
