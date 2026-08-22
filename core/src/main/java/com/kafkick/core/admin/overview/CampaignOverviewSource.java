@@ -62,14 +62,4 @@ public record CampaignOverviewSource(
             throw new IllegalArgumentException("값 없는 재고 상태는 수량과 observedAt이 모두 null이어야 합니다.");
         }
     }
-
-    /** 명시적 재고 상태가 없던 기존 호출을 값·시각 유무에 따른 호환 입력으로 변환합니다. */
-    public CampaignOverviewSource(Long couponId, String campaignName, String brandName, CouponStatus status,
-                                  Instant opensAt, Instant closesAt, EngineVersion engineVersion,
-                                  Long totalQuantity, Long activeCount, Instant stockObservedAt,
-                                  boolean preparationCompleted) {
-        this(couponId, campaignName, brandName, status, opensAt, closesAt, engineVersion, totalQuantity,
-                activeCount, stockObservedAt,
-                stockObservedAt == null ? SourceStatus.UNAVAILABLE : SourceStatus.VALID, preparationCompleted);
-    }
 }

@@ -276,8 +276,8 @@ public class AdminOverviewService {
                 .filter(Objects::nonNull)
                 .min(Instant::compareTo)
                 .orElse(snapshotAt);
-        if (status == SourceStatus.STALE || status == SourceStatus.WARMING_UP) {
-            // 참고 가능한 값은 보존하되 가장 오래된 원천 시각으로 최신 판정이 아님을 드러냅니다.
+        if (status != SourceStatus.VALID) {
+            // 값이 있는 비정상 상태는 가장 오래된 원천 시각과 함께 원래 의미를 보존합니다.
             return new AdminOverviewSnapshot.Observation<>(value, status, observedAt);
         }
         return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, snapshotAt);

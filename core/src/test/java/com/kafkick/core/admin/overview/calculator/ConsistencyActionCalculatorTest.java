@@ -28,14 +28,6 @@ class ConsistencyActionCalculatorTest {
     private static final Instant OPENS_AT = Instant.parse("2026-08-22T00:00:00Z");
     private static final Instant EVALUATED_AT = Instant.parse("2026-08-22T03:00:00Z");
 
-    /** 정합성 실패 조치는 프론트 문구와 분리된 안정적인 서버 코드를 가져야 합니다. */
-    @Test
-    @DisplayName("정합성 실패 조치에는 명시적인 행동 코드가 있다")
-    void exposesExplicitConsistencyFailureActionCode() {
-        assertThat(AdminOverviewSnapshot.ActionCode.valueOf("CONSISTENCY_FAILURE"))
-                .hasToString("CONSISTENCY_FAILURE");
-    }
-
     /** FINAL 합격은 실제 0값을 정상으로 보존할 뿐 조치 후보를 만들지 않아야 합니다. */
     @Test
     @DisplayName("모든 FINAL 값이 유효하고 PASS이며 초과 발급이 0이면 조치가 없다")
@@ -106,10 +98,10 @@ class ConsistencyActionCalculatorTest {
     void rejectsUnavailableFinalGapInsteadOfReturningNoAction() {
         for (SourceStatus status : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE, SourceStatus.STALE)) {
             Map<ConsistencyGapType, GapValue> gaps = gaps(valid(0L));
-            gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, unavailable(status));
+            gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, gapWithStatus(status));
             ConsistencyEvaluation evaluation = finalEvaluation(Verdict.PASS, valid(0L), gaps);
 
-            assertThatIllegalArgumentException().isThrownBy(() ->
+            assertThatIllegalArgumentException().as("status=%s", status).isThrownBy(() ->
                     new ConsistencyActionCalculator().calculate(context(evaluation)));
         }
     }
@@ -119,7 +111,7 @@ class ConsistencyActionCalculatorTest {
     @DisplayName("계산 불가 FINAL 초과 발급 값은 조치 없음으로 축약하지 않고 거부한다")
     void rejectsUnavailableFinalOverIssuanceInsteadOfReturningNoAction() {
         ConsistencyEvaluation evaluation = finalEvaluation(
-                Verdict.PASS, unavailable(SourceStatus.PENDING), gaps(valid(0L)));
+                Verdict.PASS, gapWithStatus(SourceStatus.PENDING), gaps(valid(0L)));
 
         assertThatIllegalArgumentException().isThrownBy(() ->
                 new ConsistencyActionCalculator().calculate(context(evaluation)));
@@ -130,9 +122,9 @@ class ConsistencyActionCalculatorTest {
     @DisplayName("V1 FINAL의 N_A gap은 PASS 조치 없음으로 유지한다")
     void allowsNotApplicableGapsFromV1FinalEvaluation() {
         Map<ConsistencyGapType, GapValue> gaps = gaps(valid(0L));
-        gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, unavailable(SourceStatus.N_A));
-        gaps.put(ConsistencyGapType.LUA_GAP, unavailable(SourceStatus.N_A));
-        gaps.put(ConsistencyGapType.PERSIST_GAP, unavailable(SourceStatus.N_A));
+        gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, gapWithStatus(SourceStatus.N_A));
+        gaps.put(ConsistencyGapType.LUA_GAP, gapWithStatus(SourceStatus.N_A));
+        gaps.put(ConsistencyGapType.PERSIST_GAP, gapWithStatus(SourceStatus.N_A));
 
         assertThat(new ConsistencyActionCalculator().calculate(
                 context(EngineVersion.V1, finalEvaluation(Verdict.PASS, valid(0L), gaps)))).isEmpty();
@@ -143,9 +135,9 @@ class ConsistencyActionCalculatorTest {
     @DisplayName("V1 V2 V3의 적용 gap 상태가 정상 FINAL 계약이면 PASS 조치가 없다")
     void acceptsEngineSpecificFinalGapContracts() {
         Map<ConsistencyGapType, GapValue> v1Gaps = gaps(valid(0L));
-        v1Gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, unavailable(SourceStatus.N_A));
-        v1Gaps.put(ConsistencyGapType.LUA_GAP, unavailable(SourceStatus.N_A));
-        v1Gaps.put(ConsistencyGapType.PERSIST_GAP, unavailable(SourceStatus.N_A));
+        v1Gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, gapWithStatus(SourceStatus.N_A));
+        v1Gaps.put(ConsistencyGapType.LUA_GAP, gapWithStatus(SourceStatus.N_A));
+        v1Gaps.put(ConsistencyGapType.PERSIST_GAP, gapWithStatus(SourceStatus.N_A));
 
         for (EngineVersion engineVersion : List.of(EngineVersion.V2, EngineVersion.V3)) {
             assertThat(new ConsistencyActionCalculator().calculate(
@@ -162,14 +154,14 @@ class ConsistencyActionCalculatorTest {
     void rejectsNotApplicableStateForEngineApplicableGap() {
         for (EngineVersion engineVersion : List.of(EngineVersion.V2, EngineVersion.V3)) {
             Map<ConsistencyGapType, GapValue> gaps = gaps(valid(0L));
-            gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, unavailable(SourceStatus.N_A));
+            gaps.put(ConsistencyGapType.ACTIVE_DB_GAP, gapWithStatus(SourceStatus.N_A));
 
             assertThatIllegalArgumentException().isThrownBy(() ->
                     new ConsistencyActionCalculator().calculate(
                             context(engineVersion, finalEvaluation(Verdict.PASS, valid(0L), gaps))));
         }
         Map<ConsistencyGapType, GapValue> v1Gaps = gaps(valid(0L));
-        v1Gaps.put(ConsistencyGapType.DB_COUNTER_GAP, unavailable(SourceStatus.N_A));
+        v1Gaps.put(ConsistencyGapType.DB_COUNTER_GAP, gapWithStatus(SourceStatus.N_A));
 
         assertThatIllegalArgumentException().isThrownBy(() ->
                 new ConsistencyActionCalculator().calculate(
@@ -290,7 +282,7 @@ class ConsistencyActionCalculatorTest {
     }
 
     /** FINAL에서 거부하거나 비적용으로 보존할 값 없는 상태를 만듭니다. */
-    private static GapValue unavailable(SourceStatus status) {
+    private static GapValue gapWithStatus(SourceStatus status) {
         if (status == SourceStatus.STALE) {
             return new GapValue(0L, status, EVALUATED_AT);
         }

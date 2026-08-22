@@ -14,19 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.test.web.servlet.MockMvc;
 
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
-import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
-import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
-import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
-import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
-import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
-import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
-import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
-import com.kafkick.core.admin.overview.AdminOverviewService;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
-import com.kafkick.core.support.TimeProvider;
 
 /** 관리자 개요 Service 연결과 나머지 선구축 조회의 요청 경계를 검증합니다. */
 class AdminDashboardControllerTest {
@@ -34,18 +22,8 @@ class AdminDashboardControllerTest {
     private static final Instant NOW = Instant.parse("2026-08-20T03:15:00Z");
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminDashboardController(new AdminOverviewService(
-                    new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
-                    new AdminOverviewMockDataFactory(),
-                    new IssuanceFlowCalculator(),
-                    new IssuanceActionCalculator(),
-                    new CampaignQueueCalculator(),
-                    new CustomerOutcomeCalculator(),
-                    new StockRiskCalculator(),
-                    new CampaignOverviewCalculator(),
-                    new ConsistencyActionCalculator(),
-                    new OperationActionCalculator(),
-                    new OverviewStatusCalculator()))
+            new AdminDashboardController(AdminControllerContractTestSupport.overviewService(
+                    Clock.fixed(NOW, ZoneOffset.UTC)))
     );
 
     /** 개요 조회가 조립된 O1~O4·O3와 대표 조치를 성공 봉투에 보존하는지 검증합니다. */

@@ -34,8 +34,10 @@ class CampaignQueueCalculatorTest {
         assertThat(queue.estimatedWait()).isEqualTo(Duration.ofSeconds(165));
         assertThat(queue.assessment())
                 .isEqualTo(AdminOverviewSnapshot.CampaignQueueAssessment.GUIDANCE_THRESHOLD_EXCEEDED);
-        assertThat(result.aggregateQueue().value()).isEqualTo(
-                new AdminOverviewSnapshot.AggregateQueue(11L, 0.06666666666666667, Duration.ofSeconds(165)));
+        assertThat(result.aggregateQueue().value().waitingCount()).isEqualTo(11L);
+        assertThat(result.aggregateQueue().value().admissionsPerSecond())
+                .isCloseTo(4.0 / 60.0, org.assertj.core.data.Offset.offset(0.000000000000001));
+        assertThat(result.aggregateQueue().value().estimatedWait()).isEqualTo(Duration.ofSeconds(165));
     }
 
     /** 대기자가 있으나 입장률이 0이면 ETA를 무한대나 0으로 표시하지 않고 중단 후보를 만듭니다. */
@@ -101,12 +103,17 @@ class CampaignQueueCalculatorTest {
                 .isEqualTo(SourceStatus.N_A);
     }
 
-    /** STALE 값은 전역 계산에 포함하되 전역 상태로 숨기지 않고, 미래 중단 시작 시각은 거부합니다. */
+    /** STALE 값은 전역 계산에 포함하되 최신 정상값으로 바꾸지 않습니다. */
     @Test
-    void preservesStaleAggregateStatusAndRejectsFutureConditionTime() {
+    void preservesStaleAggregateStatus() {
         CampaignQueueCalculator.QueueCalculation stale = new CampaignQueueCalculator().calculate(
                 POLICY, List.of(input(8L, 1L, 1L, 1L, SourceStatus.STALE)));
         assertThat(stale.aggregateQueue().status()).isEqualTo(SourceStatus.STALE);
+    }
+
+    /** 미래의 연속 무입장 시작 시각은 현재 판정 근거가 될 수 없습니다. */
+    @Test
+    void rejectsFutureConditionTime() {
         assertThatThrownBy(() -> new CampaignQueueCalculator.QueueInput(
                 9L, 1L, 1L, 0L, NOW.minus(Duration.ofMinutes(1)), NOW, null, NOW.plusSeconds(1),
                 SourceStatus.VALID, NOW)).isInstanceOf(IllegalArgumentException.class);
@@ -145,9 +152,9 @@ class CampaignQueueCalculatorTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 실제 입장 count와 lastAdmissionAt은 같은 폐구간을 공유해야 거짓 중단을 만들지 않습니다. */
+    /** 실제 입장이 있으면 count 구간 양 끝의 마지막 입장 시각을 허용합니다. */
     @Test
-    void validatesLastAdmissionAgainstAdmissionCountWindowBoundaries() {
+    void acceptsLastAdmissionAtAdmissionCountWindowBoundaries() {
         Instant windowStart = NOW.minus(Duration.ofMinutes(1));
         Instant stoppedStartedAt = NOW.minusSeconds(30);
 
@@ -158,6 +165,14 @@ class CampaignQueueCalculatorTest {
         assertThat(new CampaignQueueCalculator.QueueInput(
                 33L, 4L, 4L, 0L, windowStart, NOW, windowStart.minusNanos(1), stoppedStartedAt,
                 SourceStatus.VALID, NOW)).isNotNull();
+    }
+
+    /** 입장 count와 마지막 입장 시각이 서로 모순되면 원천 경계에서 거부합니다. */
+    @Test
+    void rejectsLastAdmissionOutsideAdmissionCountWindow() {
+        Instant windowStart = NOW.minus(Duration.ofMinutes(1));
+        Instant stoppedStartedAt = NOW.minusSeconds(30);
+
         assertThatThrownBy(() -> new CampaignQueueCalculator.QueueInput(
                 34L, 1L, 1L, 1L, windowStart, NOW, null, null, SourceStatus.VALID, NOW))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -170,14 +185,24 @@ class CampaignQueueCalculatorTest {
         assertThatThrownBy(() -> new CampaignQueueCalculator.QueueInput(
                 37L, 4L, 4L, 0L, windowStart, NOW, NOW, stoppedStartedAt,
                 SourceStatus.VALID, NOW)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 생성자를 통과한 무입장 원천은 정책 임계시간을 넘기면 입장 중단으로 계산합니다. */
+    @Test
+    void appliesAdmissionStoppedPolicyAfterCanonicalInputValidation() {
+        Instant windowStart = NOW.minus(Duration.ofMinutes(1));
         OverviewCalculationPolicy shortStoppedPolicy = new OverviewCalculationPolicy(
                 0.50, Duration.ofMinutes(3), Duration.ofMinutes(2), Duration.ofSeconds(20),
                 Duration.ofMinutes(10));
-        assertThatThrownBy(() -> new CampaignQueueCalculator().calculate(shortStoppedPolicy, List.of(
-                new CampaignQueueCalculator.QueueInput(
-                        38L, 4L, 4L, 0L, windowStart, NOW, windowStart.plusSeconds(15),
-                        windowStart.plusSeconds(30), SourceStatus.VALID, NOW))))
-                .isInstanceOf(IllegalArgumentException.class);
+        CampaignQueueCalculator.QueueInput input = new CampaignQueueCalculator.QueueInput(
+                38L, 4L, 4L, 0L, windowStart, NOW, windowStart.minusNanos(1),
+                windowStart.plusSeconds(30), SourceStatus.VALID, NOW);
+
+        CampaignQueueCalculator.QueueCalculation result =
+                new CampaignQueueCalculator().calculate(shortStoppedPolicy, List.of(input));
+
+        assertThat(result.queueStatuses().get(38L).value().assessment())
+                .isEqualTo(AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED);
     }
 
     /** UNAVAILABLE은 PENDING보다 우선하고 stale 값은 확정 긴급 조치 후보가 될 수 없습니다. */
@@ -207,33 +232,58 @@ class CampaignQueueCalculatorTest {
                 SourceStatus.NO_TRAFFIC, NOW)).isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 감소·변화 없음 추세, 대기 0 미중단, 음수·합계 overflow와 PENDING 전파를 고정합니다. */
+    /** 감소 추세와 대기 0의 정상 판정을 각각 계산합니다. */
     @Test
-    void coversTrendAndNumericBoundaries() {
+    void calculatesDecreasingTrendAndNormalEmptyQueue() {
         CampaignQueueCalculator calculator = new CampaignQueueCalculator();
         CampaignQueueCalculator.QueueCalculation result = calculator.calculate(POLICY, List.of(
-                input(16L, 1L, 2L, 1L, SourceStatus.VALID), input(17L, 0L, 0L, 0L, SourceStatus.VALID),
-                new CampaignQueueCalculator.QueueInput(18L, null, null, null, null, null, null,
-                        null, SourceStatus.PENDING, null)));
+                input(16L, 1L, 2L, 1L, SourceStatus.VALID),
+                input(17L, 0L, 0L, 0L, SourceStatus.VALID)));
         assertThat(result.queueStatuses().get(16L).value().trend())
                 .isEqualTo(AdminOverviewSnapshot.TrendDirection.DECREASING);
         assertThat(result.queueStatuses().get(17L).value().assessment())
                 .isEqualTo(AdminOverviewSnapshot.CampaignQueueAssessment.NORMAL);
+    }
+
+    /** 적용 캠페인 하나가 PENDING이면 전체 대기 합계를 부분 정상값으로 노출하지 않습니다. */
+    @Test
+    void propagatesPendingToAggregateQueue() {
+        CampaignQueueCalculator.QueueCalculation result = new CampaignQueueCalculator().calculate(POLICY, List.of(
+                input(16L, 1L, 2L, 1L, SourceStatus.VALID),
+                new CampaignQueueCalculator.QueueInput(18L, null, null, null, null, null, null,
+                        null, SourceStatus.PENDING, null)));
+
         assertThat(result.aggregateQueue().status()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    /** 음수 대기 수량은 원천 경계에서 거부합니다. */
+    @Test
+    void rejectsNegativeQueueCounts() {
         assertThatThrownBy(() -> new CampaignQueueCalculator.QueueInput(19L, -1L, 0L, 0L,
                 NOW.minus(Duration.ofMinutes(1)), NOW, null, NOW.minus(Duration.ofMinutes(1)),
                 SourceStatus.VALID, NOW))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 캠페인별 대기 수량 합계가 long 범위를 넘으면 조용히 감싸지 않습니다. */
+    @Test
+    void rejectsAggregateQueueOverflow() {
+        CampaignQueueCalculator calculator = new CampaignQueueCalculator();
         assertThatThrownBy(() -> calculator.calculate(POLICY, List.of(
                 input(20L, Long.MAX_VALUE, 0L, Long.MAX_VALUE, SourceStatus.VALID),
                 input(21L, 1L, 0L, Long.MAX_VALUE, SourceStatus.VALID)))).isInstanceOf(ArithmeticException.class);
     }
 
-    /** 0초·역전 구간은 거부하고 동일 count는 UNCHANGED 추세를 반환합니다. */
+    /** 현재·이전 대기 수가 같으면 변화 없음 추세를 반환합니다. */
     @Test
-    void rejectsNonPositiveWindowsAndReturnsUnchangedTrend() {
+    void returnsUnchangedTrendForEqualQueueCounts() {
         assertThat(new CampaignQueueCalculator().calculate(POLICY, List.of(input(22L, 3L, 3L, 1L, SourceStatus.VALID)))
                 .queueStatuses().get(22L).value().trend()).isEqualTo(AdminOverviewSnapshot.TrendDirection.UNCHANGED);
+    }
+
+    /** 0초 또는 역전된 입장 관측 구간은 속도 계산 전에 거부합니다. */
+    @Test
+    void rejectsNonPositiveAdmissionWindows() {
         assertThatThrownBy(() -> new CampaignQueueCalculator.QueueInput(23L, 0L, 0L, 0L, NOW, NOW,
                 null, NOW.minusSeconds(1), SourceStatus.VALID, NOW)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CampaignQueueCalculator.QueueInput(24L, 0L, 0L, 0L, NOW,

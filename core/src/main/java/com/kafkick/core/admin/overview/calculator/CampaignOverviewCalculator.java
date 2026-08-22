@@ -90,7 +90,6 @@ public class CampaignOverviewCalculator {
         List<AdminOverviewSnapshot.CampaignOverview> calculatedCampaigns = new ArrayList<>();
         for (int index = 0; index < prioritizedSources.size(); index++) {
             CampaignOverviewSource campaign = prioritizedSources.get(index);
-            boolean openingSoon = isOpeningSoon(campaign, snapshotAt);
             // 위험도 정렬이 끝난 목록에 순번을 부여해 입력 조회 순서가 priority에 새지 않게 합니다.
             calculatedCampaigns.add(toCampaignOverview(index + 1, campaign, issuanceFlows, queueStatuses,
                     stockForecasts, representativeActions));
@@ -103,18 +102,6 @@ public class CampaignOverviewCalculator {
                         openCount, scheduledCount, closedCount),
                 calculatedCampaigns
         );
-    }
-
-    /**
-     * O1·O2·O4 조립 입력을 아직 제공하지 않는 기존 호출을 모두 미연결 상태로 조립합니다.
-     *
-     * <p>이 호환 경로는 재고를 자체 계산하지 않습니다. 따라서 호출자는 값이 필요하면 Map을 받는
-     * {@link #calculate(Instant, List, java.util.Map, java.util.Map, java.util.Map, java.util.Map)}를
-     * 사용해야 하며, 누락 영역은 명시적으로 UNAVAILABLE입니다.</p>
-     */
-    public CampaignCalculation calculate(Instant snapshotAt, List<CampaignOverviewSource> campaigns) {
-        return calculate(snapshotAt, campaigns, java.util.Map.of(), java.util.Map.of(), java.util.Map.of(),
-                java.util.Map.of());
     }
 
     /** 정확히 30분 뒤에 오픈하는 예약 캠페인까지 운영자의 사전 확인 대상으로 포함합니다. */
@@ -134,10 +121,10 @@ public class CampaignOverviewCalculator {
             Instant snapshotAt,
             java.util.Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeActions
     ) {
-        return Comparator.comparing(
-                        (CampaignOverviewSource campaign) -> severityOf(
-                                campaign, snapshotAt, representativeActions),
-                        Comparator.reverseOrder())
+        return Comparator.comparingInt(
+                        (CampaignOverviewSource campaign) -> severityRank(
+                                severityOf(campaign, snapshotAt, representativeActions)))
+                .reversed()
                 .thenComparingInt(campaign -> statusPriority(campaign.status()))
                 .thenComparing(
                         CampaignOverviewSource::opensAt,
@@ -155,6 +142,15 @@ public class CampaignOverviewCalculator {
     ) {
         AdminOverviewSnapshot.OperationActionItem action = representativeActions.get(campaign.couponId());
         return action == null ? Severity.NONE : action.severity();
+    }
+
+    /** enum 선언 순서와 무관하게 캠페인 위험 노출 순위를 고정합니다. */
+    private static int severityRank(Severity severity) {
+        return switch (severity) {
+            case NONE -> 0;
+            case WARN -> 1;
+            case CRITICAL -> 2;
+        };
     }
 
     /** 같은 위험도에서는 운영 중, 오픈 예정, 종료 캠페인 순으로 확인하도록 상태 순위를 반환합니다. */

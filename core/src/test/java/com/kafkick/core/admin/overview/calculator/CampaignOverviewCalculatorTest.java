@@ -28,8 +28,7 @@ class CampaignOverviewCalculatorTest {
     @Test
     @DisplayName("캠페인의 확정 상태로 OPEN·SCHEDULED·CLOSED 건수를 계산한다")
     void countsCampaignStatuses() {
-        CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
-                SNAPSHOT_AT,
+        CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(
                         source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                                 100L, 20L, SNAPSHOT_AT, true),
@@ -50,8 +49,7 @@ class CampaignOverviewCalculatorTest {
     @Test
     @DisplayName("오픈 임박은 현재보다 늦고 30분 이하인 예약 캠페인만 포함한다")
     void calculatesOpeningSoonAtThirtyMinuteBoundary() {
-        CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
-                SNAPSHOT_AT,
+        CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(
                         source(1L, CouponStatus.SCHEDULED, SNAPSHOT_AT,
                                 EngineVersion.V1, null, null, null, false),
@@ -75,8 +73,7 @@ class CampaignOverviewCalculatorTest {
     @Test
     @DisplayName("O4 Map이 없으면 V1 수량이 있어도 재고를 UNAVAILABLE로 유지한다")
     void keepsStockUnavailableWithoutCalculatedO4Map() {
-        CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
-                SNAPSHOT_AT,
+        CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                         1_000L, 700L, SNAPSHOT_AT.minusSeconds(2), true))
         );
@@ -104,8 +101,7 @@ class CampaignOverviewCalculatorTest {
     @Test
     @DisplayName("Redis 원천이 없는 V2·V3 캠페인 재고는 UNAVAILABLE로 유지한다")
     void keepsRedisEngineStockUnavailable() {
-        CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
-                SNAPSHOT_AT,
+        CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(
                         source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V2,
                                 100L, 20L, SNAPSHOT_AT, true),
@@ -250,7 +246,13 @@ class CampaignOverviewCalculatorTest {
                 totalQuantity,
                 activeCount,
                 stockObservedAt,
+                stockObservedAt == null ? SourceStatus.UNAVAILABLE : SourceStatus.VALID,
                 preparationCompleted
         );
+    }
+
+    /** 조립 Map이 필요 없는 계산 계약도 공개 6인자 경계를 통해 검증합니다. */
+    private CampaignOverviewCalculator.CampaignCalculation calculate(List<CampaignOverviewSource> campaigns) {
+        return calculator.calculate(SNAPSHOT_AT, campaigns, Map.of(), Map.of(), Map.of(), Map.of());
     }
 }

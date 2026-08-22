@@ -257,15 +257,25 @@ class IssuanceFlowCalculatorTest {
                 34L, CouponStatus.OPEN, true, windowStart, END, 1L, 0L, 2L,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), END, conditionStartedAt,
                 SourceStatus.VALID, END)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 생성자를 통과한 무완료 원천은 정책 임계시간을 넘기면 STOPPED로 계산합니다. */
+    @Test
+    void appliesStoppedPolicyAfterCanonicalInputValidation() {
+        Instant windowStart = END.minus(Duration.ofMinutes(1));
         OverviewCalculationPolicy shortStoppedPolicy = new OverviewCalculationPolicy(
                 0.50, Duration.ofSeconds(20), Duration.ofMinutes(5), Duration.ofMinutes(2),
                 Duration.ofMinutes(10));
-        assertThatThrownBy(() -> new IssuanceFlowCalculator().calculate(shortStoppedPolicy, List.of(
-                new IssuanceFlowCalculator.IssuanceFlowInput(
-                        35L, CouponStatus.OPEN, true, windowStart, END, 1L, 0L, 2L,
-                        END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart.plusSeconds(15),
-                        windowStart.plusSeconds(30), SourceStatus.VALID, END))))
-                .isInstanceOf(IllegalArgumentException.class);
+        IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
+                35L, CouponStatus.OPEN, true, windowStart, END, 1L, 0L, 2L,
+                END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart.minusNanos(1),
+                windowStart.plusSeconds(30), SourceStatus.VALID, END);
+
+        IssuanceFlowCalculator.IssuanceFlowCalculation result =
+                new IssuanceFlowCalculator().calculate(shortStoppedPolicy, List.of(input));
+
+        assertThat(result.issuanceFlows().get(35L).value().state())
+                .isEqualTo(AdminOverviewSnapshot.IssuanceFlowState.STOPPED);
     }
 
     private static IssuanceFlowCalculator.IssuanceFlowInput input(

@@ -100,6 +100,13 @@ class CustomerOutcomeCalculatorTest {
                         new CustomerOutcomeCalculator.OutcomeCount(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, Long.MAX_VALUE),
                         new CustomerOutcomeCalculator.OutcomeCount(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1L)),
                 SourceStatus.VALID, END))).isInstanceOf(ArithmeticException.class);
+        assertThatThrownBy(() -> calculator.calculate(new CustomerOutcomeCalculator.OutcomeInput(
+                END.minusSeconds(1), END, List.of(
+                        new CustomerOutcomeCalculator.OutcomeCount(
+                                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, Long.MAX_VALUE),
+                        new CustomerOutcomeCalculator.OutcomeCount(
+                                AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 1L)),
+                SourceStatus.VALID, END))).isInstanceOf(ArithmeticException.class);
         assertThat(calculator.calculate(new CustomerOutcomeCalculator.OutcomeInput(
                 END.minusSeconds(1), END, List.of(), SourceStatus.WARMING_UP, END)).customerOutcomes().status())
                 .isEqualTo(SourceStatus.WARMING_UP);

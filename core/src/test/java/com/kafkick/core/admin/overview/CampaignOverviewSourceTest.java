@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.coupon.CouponStatus;
@@ -17,6 +18,7 @@ class CampaignOverviewSourceTest {
 
     /** 값 없는 재고 상태는 수량과 관측 시각을 함께 비워야 합니다. */
     @Test
+    @DisplayName("값 없는 재고 상태에 수량이나 관측 시각이 있으면 거부한다")
     void rejectsRawStockValuesForNonCarryingStatus() {
         assertThatThrownBy(() -> source(100L, 10L, 5L, NOW, SourceStatus.UNAVAILABLE))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -24,6 +26,7 @@ class CampaignOverviewSourceTest {
 
     /** 값 있는 재고 상태는 두 수량과 원천 관측 시각을 모두 요구합니다. */
     @Test
+    @DisplayName("값 있는 재고 상태의 수량과 관측 시각이 불완전하면 거부한다")
     void rejectsIncompleteOrInconsistentCarryingStockValues() {
         assertThatThrownBy(() -> source(101L, null, 5L, NOW, SourceStatus.VALID))
                 .isInstanceOf(IllegalArgumentException.class);

@@ -99,7 +99,7 @@ class IssuanceActionCalculatorTest {
                         Duration.ofMinutes(6))));
 
         assertThat(result).extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
-                .containsExactlyInAnyOrder(17L, 18L);
+                .containsExactly(17L, 18L);
     }
 
     /** O1 Observation의 상태별 값 보유 계약을 지키는 고정 입력을 만듭니다. */

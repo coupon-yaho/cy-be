@@ -101,34 +101,6 @@ public record AdminOverviewResponse(
         );
     }
 
-    /**
-     * 운영 원천이 아직 연결되지 않은 관리자 운영현황 응답을 생성합니다.
-     *
-     * <p>응답 조립 시각인 {@code snapshotAt}은 유지하되, 실제로 관측하지 않은 KPI와 목록을
-     * 숫자 0이나 빈 목록으로 만들지 않습니다. 모든 독립 관측 영역을
-     * {@link SourceStatus#UNAVAILABLE}로 표시해 화면이 미수집 상태를 실제 정상값과 구분하도록 합니다.</p>
-     *
-     * @param snapshotAt Service가 응답을 조립한 기준 시각
-     * @return 값과 관측 시각이 없고 전체 상태가 {@link OverallStatus#UNAVAILABLE}인 응답
-     */
-    public static AdminOverviewResponse unavailable(Instant snapshotAt) {
-        return new AdminOverviewResponse(
-                snapshotAt,
-                OverallStatus.UNAVAILABLE,
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue(),
-                unavailableValue()
-        );
-    }
-
     /** 실제 관측값과 시각이 없는 독립 원천을 공통 계약에 맞춰 생성합니다. */
     private static <T> ObservedValue<T> unavailableValue() {
         return new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null);

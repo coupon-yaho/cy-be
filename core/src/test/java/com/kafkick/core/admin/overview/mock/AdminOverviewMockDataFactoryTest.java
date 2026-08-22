@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
@@ -207,7 +208,8 @@ class AdminOverviewMockDataFactoryTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> datasetWithContexts(dataset, null))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> datasetWithContexts(dataset, List.of((ConsistencyActionContext) null)))
+        assertThatThrownBy(() -> datasetWithContexts(dataset,
+                Collections.singletonList((ConsistencyActionContext) null)))
                 .isInstanceOf(NullPointerException.class);
         ConsistencyActionContext existingContext = dataset.consistencyActionContexts().getFirst();
         assertThatThrownBy(() -> datasetWithContexts(dataset, List.of(existingContext, existingContext)))

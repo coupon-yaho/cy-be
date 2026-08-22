@@ -22,9 +22,9 @@ import com.kafkick.core.observation.Severity;
 public class OperationActionCalculator {
 
     private static final Comparator<AdminOverviewSnapshot.OperationActionItem> ACTION_PRIORITY =
-            Comparator.comparing(
-                            AdminOverviewSnapshot.OperationActionItem::severity,
-                            Comparator.reverseOrder())
+            Comparator.comparingInt(
+                            (AdminOverviewSnapshot.OperationActionItem action) -> severityRank(action.severity()))
+                    .reversed()
                     .thenComparing(
                             AdminOverviewSnapshot.OperationActionItem::detectedAt,
                             Comparator.nullsLast(Comparator.naturalOrder()))
@@ -132,12 +132,21 @@ public class OperationActionCalculator {
             AdminOverviewSnapshot.OperationActionItem left,
             AdminOverviewSnapshot.OperationActionItem right
     ) {
-        int severityComparison = right.severity().compareTo(left.severity());
+        int severityComparison = Integer.compare(severityRank(right.severity()), severityRank(left.severity()));
         if (severityComparison != 0) {
             return severityComparison > 0 ? right : left;
         }
 
         return REPRESENTATIVE_PRIORITY.compare(left, right) <= 0 ? left : right;
+    }
+
+    /** enum 선언 순서와 무관하게 대표 조치와 목록의 심각도 우선순위를 고정합니다. */
+    private static int severityRank(Severity severity) {
+        return switch (severity) {
+            case NONE -> 0;
+            case WARN -> 1;
+            case CRITICAL -> 2;
+        };
     }
 
     /** 권장 행동이 없는 후보도 안정적으로 비교할 수 있도록 nullable 행동 코드 이름을 반환합니다. */

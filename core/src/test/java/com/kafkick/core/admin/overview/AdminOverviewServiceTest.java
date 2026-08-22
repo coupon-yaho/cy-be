@@ -221,8 +221,8 @@ class AdminOverviewServiceTest {
         for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP,
                 SourceStatus.UNAVAILABLE, SourceStatus.PENDING)) {
             AdminOverviewResult result = serviceWithQueueStatus(101L, status).getOverview();
-            assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
-            assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
+            assertThat(result.snapshot().actionRequired().status()).as("status=%s", status).isEqualTo(status);
+            assertThat(result.snapshot().actionItems().status()).as("status=%s", status).isEqualTo(status);
             if (status.carriesValue()) {
                 assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(4L);
                 assertThat(result.snapshot().actionItems().value().topItems())
@@ -246,8 +246,10 @@ class AdminOverviewServiceTest {
         }
         for (SourceStatus status : List.of(SourceStatus.N_A, SourceStatus.VALID, SourceStatus.NO_TRAFFIC)) {
             AdminOverviewResult result = serviceWithQueueStatus(102L, status).getOverview();
-            assertThat(result.snapshot().actionRequired().status()).isEqualTo(SourceStatus.VALID);
-            assertThat(result.snapshot().actionItems().status()).isEqualTo(SourceStatus.VALID);
+            assertThat(result.snapshot().actionRequired().status()).as("status=%s", status)
+                    .isEqualTo(SourceStatus.VALID);
+            assertThat(result.snapshot().actionItems().status()).as("status=%s", status)
+                    .isEqualTo(SourceStatus.VALID);
             assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(4L);
             assertThat(result.snapshot().actionItems().value().topItems())
                     .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
@@ -271,10 +273,7 @@ class AdminOverviewServiceTest {
                         .map(input -> input.couponId().equals(103L)
                                 ? stoppedIssuanceInput(input, snapshotAt) : input)
                         .toList();
-                return new AdminOverviewMockDataset(base.policy(),
-                        issuanceInputs, base.queueInputs(), base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
-                        base.latencySummary());
+                return withIssuanceFlowInputs(base, issuanceInputs);
             }
         }).getOverview();
 
@@ -303,8 +302,8 @@ class AdminOverviewServiceTest {
         for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP)) {
             AdminOverviewResult result = serviceWithIssuanceStatus(102L, status).getOverview();
 
-            assertThat(result.snapshot().actionRequired().status()).isEqualTo(status);
-            assertThat(result.snapshot().actionItems().status()).isEqualTo(status);
+            assertThat(result.snapshot().actionRequired().status()).as("status=%s", status).isEqualTo(status);
+            assertThat(result.snapshot().actionItems().status()).as("status=%s", status).isEqualTo(status);
             assertThat(result.snapshot().actionRequired().value().totalCount()).isEqualTo(4L);
             assertThat(result.snapshot().actionItems().value().topItems())
                     .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
@@ -315,9 +314,9 @@ class AdminOverviewServiceTest {
         for (SourceStatus status : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE)) {
             AdminOverviewResult result = serviceWithIssuanceStatus(102L, status).getOverview();
 
-            assertThat(result.snapshot().actionRequired())
+            assertThat(result.snapshot().actionRequired()).as("status=%s", status)
                     .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
-            assertThat(result.snapshot().actionItems())
+            assertThat(result.snapshot().actionItems()).as("status=%s", status)
                     .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
         }
     }
@@ -338,9 +337,12 @@ class AdminOverviewServiceTest {
                 .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(102L, 103L, 105L);
 
         AdminOverviewResult allNoTraffic = serviceWithAllActionSourceStatus(SourceStatus.NO_TRAFFIC).getOverview();
-        // NO_TRAFFIC은 O1·O2 흐름에만 해당하고 FINAL·준비 미완료 조치는 독립 원천이므로 정상값으로 보존합니다.
-        assertThat(allNoTraffic.snapshot().actionRequired())
-                .isEqualTo(valid(new AdminOverviewSnapshot.ActionRequiredSummary(3, 2, 1)));
+        assertThat(allNoTraffic.snapshot().actionRequired().status()).isEqualTo(SourceStatus.NO_TRAFFIC);
+        assertThat(allNoTraffic.snapshot().actionRequired().observedAt())
+                .isEqualTo(NOW.minus(Duration.ofMinutes(5)));
+        assertThat(allNoTraffic.snapshot().actionItems().status()).isEqualTo(SourceStatus.NO_TRAFFIC);
+        assertThat(allNoTraffic.snapshot().actionItems().observedAt())
+                .isEqualTo(NOW.minus(Duration.ofMinutes(5)));
         assertThat(allNoTraffic.snapshot().actionItems().value().topItems())
                 .extracting(AdminOverviewSnapshot.OperationActionItem::couponId).containsExactly(102L, 103L, 105L);
     }
@@ -353,8 +355,8 @@ class AdminOverviewServiceTest {
             AdminOverviewResult result = serviceWithStockStatus(status).getOverview();
             AdminOverviewSnapshot.CampaignOverview campaign = result.snapshot().campaigns().value().stream()
                     .filter(row -> row.couponId().equals(103L)).findFirst().orElseThrow();
-            assertThat(campaign.stockForecast().status()).isEqualTo(status);
-            assertThat(result.snapshot().stockRisk().status()).isEqualTo(status);
+            assertThat(campaign.stockForecast().status()).as("status=%s", status).isEqualTo(status);
+            assertThat(result.snapshot().stockRisk().status()).as("status=%s", status).isEqualTo(status);
         }
     }
 
@@ -590,10 +592,7 @@ class AdminOverviewServiceTest {
                         .map(input -> input.couponId().equals(couponId)
                                 ? queueWithStatus(input, status) : input)
                         .toList();
-                return new AdminOverviewMockDataset(base.policy(),
-                        base.issuanceFlowInputs(), inputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
-                        base.latencySummary());
+                return withQueueInputs(base, inputs);
             }
         });
     }
@@ -612,10 +611,7 @@ class AdminOverviewServiceTest {
                                 status.carriesValue() ? snapshotAt : null, status,
                                 source.preparationCompleted()) : source)
                         .toList();
-                return new AdminOverviewMockDataset(base.policy(),
-                        base.issuanceFlowInputs(), base.queueInputs(), base.outcomeInput(), campaigns,
-                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
-                        base.latencySummary());
+                return withCampaigns(base, campaigns);
             }
         });
     }
@@ -629,10 +625,7 @@ class AdminOverviewServiceTest {
                         .map(input -> input.couponId().equals(couponId)
                                 ? issuanceWithStatus(input, status, snapshotAt) : input)
                         .toList();
-                return new AdminOverviewMockDataset(base.policy(), inputs,
-                        base.queueInputs(), base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
-                        base.latencySummary());
+                return withIssuanceFlowInputs(base, inputs);
             }
         });
     }
@@ -654,10 +647,7 @@ class AdminOverviewServiceTest {
                         .map(input -> queueSourceInput(input,
                                 input.couponId().equals(102L) ? queueStatus : SourceStatus.N_A, snapshotAt))
                         .toList();
-                return new AdminOverviewMockDataset(base.policy(),
-                        issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
-                        base.latencySummary());
+                return withActionInputs(base, issuanceInputs, queueInputs);
             }
         });
     }
@@ -674,10 +664,7 @@ class AdminOverviewServiceTest {
                 List<QueueInput> queueInputs = base.queueInputs().stream()
                         .map(input -> queueSourceInput(input, status, snapshotAt))
                         .toList();
-                return new AdminOverviewMockDataset(base.policy(),
-                        issuanceInputs, queueInputs, base.outcomeInput(), base.campaigns(),
-                        base.preparationActionCandidates(), base.consistencyActionContexts(), base.aggregateIssuanceRate(),
-                        base.latencySummary());
+                return withActionInputs(base, issuanceInputs, queueInputs);
             }
         });
     }
@@ -689,6 +676,51 @@ class AdminOverviewServiceTest {
                 new StockRiskCalculator(), new CampaignOverviewCalculator(), new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
                 new OverviewStatusCalculator());
+    }
+
+    /** O1 입력만 교체하고 나머지 Dataset 원천은 그대로 보존합니다. */
+    private static AdminOverviewMockDataset withIssuanceFlowInputs(
+            AdminOverviewMockDataset base,
+            List<IssuanceFlowInput> issuanceFlowInputs
+    ) {
+        return copyDataset(base, issuanceFlowInputs, base.queueInputs(), base.campaigns());
+    }
+
+    /** O2 입력만 교체하고 나머지 Dataset 원천은 그대로 보존합니다. */
+    private static AdminOverviewMockDataset withQueueInputs(
+            AdminOverviewMockDataset base,
+            List<QueueInput> queueInputs
+    ) {
+        return copyDataset(base, base.issuanceFlowInputs(), queueInputs, base.campaigns());
+    }
+
+    /** 캠페인 원천만 교체하고 나머지 Dataset 원천은 그대로 보존합니다. */
+    private static AdminOverviewMockDataset withCampaigns(
+            AdminOverviewMockDataset base,
+            List<CampaignOverviewSource> campaigns
+    ) {
+        return copyDataset(base, base.issuanceFlowInputs(), base.queueInputs(), campaigns);
+    }
+
+    /** Action 상태 합성 테스트에서 O1·O2 입력만 함께 교체합니다. */
+    private static AdminOverviewMockDataset withActionInputs(
+            AdminOverviewMockDataset base,
+            List<IssuanceFlowInput> issuanceFlowInputs,
+            List<QueueInput> queueInputs
+    ) {
+        return copyDataset(base, issuanceFlowInputs, queueInputs, base.campaigns());
+    }
+
+    /** 이름 있는 테스트 헬퍼에서만 Dataset의 전체 canonical 생성자를 호출합니다. */
+    private static AdminOverviewMockDataset copyDataset(
+            AdminOverviewMockDataset base,
+            List<IssuanceFlowInput> issuanceFlowInputs,
+            List<QueueInput> queueInputs,
+            List<CampaignOverviewSource> campaigns
+    ) {
+        return new AdminOverviewMockDataset(base.policy(), issuanceFlowInputs, queueInputs, base.outcomeInput(),
+                campaigns, base.preparationActionCandidates(), base.consistencyActionContexts(),
+                base.aggregateIssuanceRate(), base.latencySummary());
     }
 
     private static QueueInput queueWithStatus(QueueInput input, SourceStatus status) {
