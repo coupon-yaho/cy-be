@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.eq;
@@ -66,6 +67,7 @@ class RunTimeseriesArchiverTest {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
         when(runs.findById(7)).thenReturn(Optional.of(failedRun));
+        when(runs.claimFailedArchive(7)).thenReturn(true);
         RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> {
             if (metric == Metric.LATENCY_P99) throw new IllegalStateException("prometheus down");
             return List.of(new Sample(metric, 0, start, 0d, State.VALID, null));
@@ -83,10 +85,27 @@ class RunTimeseriesArchiverTest {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
         when(runs.findById(7)).thenReturn(Optional.of(failedRun));
+        when(runs.claimFailedArchive(7)).thenReturn(true);
 
         new RunTimeseriesArchiver(runs, new CapturingSource(), new RecordingStore()).retry(7);
 
         verify(runs).updateArchiveStatus(7, BenchmarkArchiveStatus.DONE, null);
+    }
+
+    @Test
+    void concurrentRetryCannotArchiveWithoutOwningFailedStatus() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
+        when(runs.findById(7)).thenReturn(Optional.of(failedRun));
+        when(runs.claimFailedArchive(7)).thenReturn(false);
+        RunTimeseriesArchiver.RangeSource source = mock(RunTimeseriesArchiver.RangeSource.class);
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+                runs, source, new RecordingStore()).retry(7))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
+
+        verifyNoInteractions(source);
     }
 
     @Test

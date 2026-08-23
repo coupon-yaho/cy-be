@@ -64,6 +64,9 @@ public class RunTimeseriesArchiver {
         if (run.archiveStatus() != BenchmarkArchiveStatus.FAILED) {
             throw illegalTransition(benchmarkRunId, "archiveStatus=" + run.archiveStatus());
         }
+        if (!runs.claimFailedArchive(benchmarkRunId)) {
+            throw illegalTransition(benchmarkRunId, "archive retry is already claimed");
+        }
         archive(benchmarkRunId);
     }
 

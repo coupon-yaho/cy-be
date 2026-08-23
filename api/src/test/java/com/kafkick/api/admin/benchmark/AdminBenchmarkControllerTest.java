@@ -130,7 +130,10 @@ class AdminBenchmarkControllerTest {
     void retryArchiveRejectsNonPositiveIdBeforeInvocation() throws Exception {
         mockMvc.perform(post("/api/v1/admin/benchmarks/0/archive/retry"))
                 .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/v1/admin/benchmarks/-1/archive/retry"))
+                .andExpect(status().isBadRequest());
         verify(archiver, never()).retry(0L);
+        verify(archiver, never()).retry(-1L);
     }
 
     @Test
