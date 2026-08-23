@@ -102,6 +102,26 @@ public class RunningJobProbe {
     }
 
     /**
+     * 진도가 멈춘 채 실행 중으로 남은 행의 수 — <b>가드가 무시하기로 한 것들</b>이다.
+     *
+     * <p>가드가 그것을 무시할 때 남기는 것은 WARN 로그뿐인데, 로그는 감시 수단이 아니다.
+     * 게다가 <b>가드 경로에서만</b> 나온다 — 검증을 하루 한 번 돌리면 그 사이 며칠은 아무
+     * 신호가 없다. 그래서 같은 판정을 지표로도 낸다. <b>여기서는 로그를 안 남긴다</b> —
+     * 되읽기 주기마다 같은 줄이 쌓이면 그것이 다른 로그를 밀어낸다.
+     *
+     * <p>임계와 판정 규칙을 이 클래스에 두는 이유는 하나다 — 두 곳에 적으면 갈린다.
+     */
+    public int stuckExecutionCount(String jobName) {
+        // blockingExecutions 와 같은 이유로 LocalDateTime.now() 다 — 배치 메타의 시각이
+        // 그 좌표계로 찍히기 때문이고, TimeProvider(UTC)로 바꾸면 KST 기기에서 아홉 시간
+        // 어긋나 판정이 통째로 뒤집힌다. NoWallClockInBatchTest 가 이 파일을 예외로 둔다.
+        LocalDateTime now = LocalDateTime.now();
+        return (int) jobRepository.findRunningJobExecutions(jobName).stream()
+                .filter(execution -> isStuck(jobName, execution, now))
+                .count();
+    }
+
+    /**
      * <b>나이가 아니라 진도로 판정한다.</b>
      *
      * <p>배치 메타에는 종료 표시를 못 남기고 죽은 실행이 {@code STARTED} 로 <b>영원히</b>
@@ -133,25 +153,42 @@ public class RunningJobProbe {
      * 한때 아래쪽에서, 그다음 위쪽에서 같은 사고를 냈다. 지금은 생성자가 검사한다.
      */
     private boolean isAlive(String jobName, JobExecution execution, LocalDateTime now) {
-        LocalDateTime since = lastProgress(execution);
-
-        if (since == null) {
-            // 여기 오면 배치 메타가 계약을 깬 것이다(CREATE_TIME 은 NOT NULL). 모를 때는
-            // 막는 쪽으로 기운다 — 헛도는 실행 하나가 조용히 틀린 판정보다 싸다.
+        if (lastProgress(execution) == null) {
+            // 여기 오면 배치 메타가 계약을 깬 것이다 — CREATE_TIME 은 NOT NULL 이라
+            // 실제로는 도달하지 않는다. 모를 때는 막는 쪽으로 기운다.
             log.warn("{} 실행의 시각이 전부 비어 있어 도는 중으로 봅니다. executionId={}",
                     jobName, execution.getId());
             return true;
         }
-
-        if (Duration.between(since, now).compareTo(stuckAfter) <= 0) {
+        if (!isStuck(jobName, execution, now)) {
             return true;
         }
-
+        // **로그는 가드 경로에서만 남긴다.** 되읽기(BatchRunMetricsRefresher)도 같은 판정을
+        // 쓰는데, 거기서 찍으면 시체 행 하나가 남은 것만으로 WARN 이 하루 1,440줄 나온다 —
+        // 그러면 알림 description 이 가리키는 "만료 슬롯을 건너뜁니다" WARN 이 그 안에 묻힌다.
+        // 되읽기 쪽은 로그 없이 같은 사실을 지표로 낸다.
         log.warn("{} 실행의 진도가 {}초째 멈춰 있어 무시합니다. 종료 표시를 못 남기고 죽은 "
                         + "실행일 수 있습니다 — BATCH_JOB_EXECUTION 과 BATCH_STEP_EXECUTION 을 "
                         + "확인하십시오. executionId={} 마지막진도={}",
-                jobName, stuckAfter.toSeconds(), execution.getId(), since);
+                jobName, stuckAfter.toSeconds(), execution.getId(), lastProgress(execution));
         return false;
+    }
+
+    /**
+     * 진도가 멈췄는가 — <b>판정만 한다.</b> 로그는 부르는 쪽이 정한다.
+     *
+     * <p>가드와 되읽기가 같은 판정을 써야 지표와 동작이 갈리지 않는데, 로깅까지 같이 하면
+     * 되읽기 주기마다 같은 줄이 나온다. 그래서 판정과 로깅을 여기서 가른다.
+     *
+     * <p><b>{@code jobName} 은 안 쓴다.</b> 시그니처에 남겨 둔 것은 호출부가 무엇을 재는지
+     * 읽히게 하기 위해서다 — 로그가 이 메서드를 떠났으므로 값 자체는 필요 없다.
+     */
+    private boolean isStuck(String jobName, JobExecution execution, LocalDateTime now) {
+        LocalDateTime since = lastProgress(execution);
+        // 시각을 하나도 못 구한 행은 "멈췄다" 로 안 센다 — 모를 때는 막는 쪽이고,
+        // 그 판단의 로그는 가드 경로(isAlive)가 남긴다. 여기서 찍으면 되읽기 주기마다
+        // 같은 줄이 쌓여, 이 클래스가 막으려던 로그 홍수가 다른 갈래로 되살아난다.
+        return since != null && Duration.between(since, now).compareTo(stuckAfter) > 0;
     }
 
     /**

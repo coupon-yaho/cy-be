@@ -1,0 +1,29 @@
+-- 마지막 성공 시각 조회가 배치 메타 이력 전체를 훑지 않게 한다.
+--
+-- CY-392 가 cy_batch_last_success_seconds 를 내면서 이 질의를 60초마다 돌린다:
+--   SELECT MAX(e.END_TIME) ... WHERE e.STATUS='COMPLETED'
+--                                AND e.END_TIME > DATE_SUB(NOW(), INTERVAL 7 DAY)
+--                                AND i.JOB_NAME = ?
+--
+-- V2 가 만든 인덱스는 PK 와 JOB_INST_EXEC_FK(JOB_INSTANCE_ID) 뿐이라, STATUS·END_TIME
+-- 조건이 인덱스로 안 내려간다. 그러면 7일 창을 걸어도 아무 효과가 없다.
+--
+-- ⚠️ **선두 컬럼이 END_TIME 쪽이어야 한다.** 처음에 (JOB_INSTANCE_ID, STATUS, END_TIME)
+--    으로 썼다가 EXPLAIN 으로 재보고 고쳤다 — 90일치(실행 25,920 / 창 안 2,016)에서:
+--
+--      (JOB_INSTANCE_ID, STATUS, END_TIME)  type=index  rows=25,950   ← 이력 전체
+--      (STATUS, END_TIME)                   type=range  rows=2,016    ← 창 그대로
+--
+--    앞엣것은 인스턴스 쪽이 구동 테이블이 되어 **인덱스 dive 횟수가 곧 누적 인스턴스 수**다.
+--    창은 dive 안쪽에서만 작용해 스캔량을 못 줄인다.
+--
+-- 그 조회는 run-timeout-ms(5초) 데드라인 안에서 도는데, 넘기면 게이지가 통째로 NaN 이 되고
+-- ExpireNotSucceeding 이 critical 로 뜬다. **조회가 느려지는 것이 곧 오탐 알림**이라
+-- 비용이 그냥 비용이 아니다. 만료는 하루 288 인스턴스를 만들고 배치 메타를 정리하는 잡이
+-- 아직 없다(docs/13 §6).
+--
+-- ⚠️ 이것은 배치 메타 인덱스다. ddl/90_perf_indexes_optional.sql 이 일부러 미룬
+--    "발급 경로 보조 인덱스" 와 다른 축이다 — 그쪽은 개선폭 측정이 과제의 일부이고,
+--    이쪽은 관제 조회라 측정 대상이 아니다.
+CREATE INDEX IX_JOB_EXEC_STATUS_END
+    ON BATCH_JOB_EXECUTION (STATUS, END_TIME);
