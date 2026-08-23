@@ -34,6 +34,10 @@ class PromMetricsAssemblerTest {
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
     private static final Duration BUDGET = Duration.ofMillis(900);
 
+    /** 조립기가 응답 한 장에 보내는 질의 수. 예산이 넉넉하면 네 개가 모두 나간다. */
+    private static final long QUERY_COUNT = 4;
+    private static final long QUERY_DELAY_MILLIS = 20;
+
     private static final long FRESH_AGE_SECONDS = 3;
     private static final long STALE_AGE_SECONDS = 300;
 
@@ -67,7 +71,7 @@ class PromMetricsAssemblerTest {
     void metaMeasuresCollectionDuration() {
         PromQuery slow = promQl -> {
             try {
-                Thread.sleep(20);
+                Thread.sleep(QUERY_DELAY_MILLIS);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
             }
@@ -76,7 +80,10 @@ class PromMetricsAssemblerTest {
 
         AdminMetricsResponse response = assemble(slow, globalQuery());
 
-        assertThat(response.meta().collectionDurationMs()).isGreaterThanOrEqualTo(20);
+        // 질의 하나가 아니라 네 개를 합친 시간이어야 한다. 하한만 보므로 CI 가 느릴수록
+        // 더 확실히 통과한다 — 느려서 깨질 수 있는 상한 단언이 아니다.
+        assertThat(response.meta().collectionDurationMs())
+                .isGreaterThanOrEqualTo(QUERY_DELAY_MILLIS * QUERY_COUNT);
     }
 
     // ── 값이 없을 때 ────────────────────────────────────────────────────────────

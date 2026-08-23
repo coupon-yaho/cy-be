@@ -37,9 +37,9 @@ class MetricsWindowConverterTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 지원하지 않는 query 값은 묵시적 기본값 없이 거부합니다. */
+    /** 지원하지 않는 값과 빈 값을 묵시적 기본값 없이 거부합니다. */
     @Test
-    void rejectsUnsupportedHttpValue() {
+    void rejectsUnsupportedOrBlankValues() {
         assertThatThrownBy(() -> converter.convert("24h"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("지원하지 않는 metrics window");
