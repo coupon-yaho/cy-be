@@ -52,12 +52,8 @@ class BatchStructuralContractTest {
         try (Stream<Path> files = Files.walk(CONFIG)) {
             List<String> offenders = files
                     .filter(path -> path.toString().endsWith(".java"))
-                    .flatMap(path -> read(path).lines()
+                    .flatMap(path -> stripComments(read(path)).lines()
                             .map(String::strip)
-                            // 주석 안의 언급은 의존이 아니다. 줄 앞의 // 와 * 와 /* 를
-                            // 걷어내고 본다 — NoWallClockInBatchTest 가 쓰는 관행과 같다.
-                            .filter(line -> !line.startsWith("//") && !line.startsWith("*")
-                                    && !line.startsWith("/*"))
                             .filter(line -> FORBIDDEN.stream().anyMatch(line::contains))
                             .map(line -> path.getFileName() + ": " + line))
                     .toList();
@@ -109,6 +105,20 @@ class BatchStructuralContractTest {
 
     private static final Pattern WRITE_CALL =
             Pattern.compile("\\.(record|markUnknown|recordSchema)\\s*\\(");
+
+    /**
+     * <b>주석을 걷어낸다.</b> 블록 주석을 통째로 지우고 줄 주석은 끝까지 자른다 —
+     * 줄 앞의 {@code //} 만 면제하면 {@code code; // com.kafkick.batch.job.X 참고} 같은
+     * 꼬리 주석이 위반으로 잡혀 <b>설명을 못 쓰게 된다.</b>
+     *
+     * <p><b>문자열 리터럴은 안 지운다.</b> 지우자는 지적이 있었지만, 정규화된 이름이
+     * 문자열 안에 있으면 그것은 대개 {@code Class.forName} 같은 <b>진짜 의존</b>이다 —
+     * 지우면 이 자물쇠를 문자열로 우회할 수 있다. 오탐(테스트가 빨개진다)보다
+     * 누락(순환이 조용히 들어온다)이 나쁘다.
+     */
+    private static String stripComments(String body) {
+        return body.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\\n]*", "");
+    }
 
     private static String read(Path path) {
         try {
