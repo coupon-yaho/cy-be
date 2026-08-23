@@ -63,6 +63,8 @@ public class CleanupScheduler {
     private final JobOperator jobOperator;
     private final Job cleanupJob;
     private final TimeProvider timeProvider;
+    private final CronSlot cronSlot;
+    private final String cleanupCron;
 
     /**
      * <b>주기와 SLA 를 한자리에서 맞춘다.</b> {@code CleanupNotSucceeding} 은
@@ -89,7 +91,9 @@ public class CleanupScheduler {
                             + "batch.schedule.cleanup-cron 의 \"-\" 는 트리거만 끄고 "
                             + "CleanupNotSucceeding 은 그대로 울립니다.");
         }
-        Duration worstGap = new CronSlot(cleanupCron)
+        this.cronSlot = new CronSlot(cleanupCron);
+        this.cleanupCron = cleanupCron;
+        Duration worstGap = this.cronSlot
                 .maxGap(timeProvider.now(), SLA_CHECK_HORIZON)
                 .map(gap -> gap.plusMillis(refreshMillis))
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -125,7 +129,15 @@ public class CleanupScheduler {
      */
     @Scheduled(cron = CRON, zone = ZONE)
     public void cleanup() {
-        LocalDateTime firedAt = timeProvider.now();
+        // **슬롯에 맞춘다.** 원값을 쓰면 노드마다 값이 갈려 JOB_INST_UN 이 아무것도 거부하지
+        // 못한다 — 겹침 방지가 한 JVM 안에서만 성립한다. ExpireScheduler 가 asOf 에 같은
+        // 이유로 같은 모양을 쓴다. 삭제는 멱등이라 지금 손상은 없지만, 배치를 두 대로
+        // 늘리는 날 같은 대상을 둘이 훑는다.
+        LocalDateTime firedAt = cronSlot.atOrBefore(timeProvider.now());
+        if (firedAt == null) {
+            log.error("정리 크론 슬롯을 구하지 못해 이번 주기를 건너뜁니다. cron={}", cleanupCron);
+            return;
+        }
         JobParameters parameters = new JobParametersBuilder()
                 .addLocalDateTime("firedAt", firedAt)
                 .toJobParameters();

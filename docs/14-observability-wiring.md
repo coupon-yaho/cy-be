@@ -450,9 +450,14 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    # 펼치는 것은 DB_ROOT_PASSWORD 다. 전자를 쓰면 빈 문자열이 되어 mysql 이 대화형
    # 프롬프트로 가고, stdin 은 SQL 파일이라 첫 줄을 비밀번호로 읽고 죽는다.
    # -p 를 인자로 주면 ps 에 남으므로 MYSQL_PWD 로 넘긴다.
-   docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
-     mysql -uroot coupon_clean \
-     < storage/src/main/resources/db/migration/V2__batch_metadata.sql
+   #
+   # ⚠️ **두 스키마에 다 부어야 한다.** 아래 CORRUPT 트리거는 coupon_corrupt 를 보는
+   #    기동에서 돌리는데, 그 스키마에도 BATCH_* 가 없어 첫 실행이 메타 테이블 오류로 죽는다.
+   for SCHEMA in coupon_clean coupon_corrupt; do
+     docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
+       mysql -uroot "$SCHEMA" \
+       < storage/src/main/resources/db/migration/V2__batch_metadata.sql
+   done
    ```
 
    `as_of` 는 시드가 심은 기준 행에서 얻는다. `origin` 으로 좁히는 것은 cy-seed 의

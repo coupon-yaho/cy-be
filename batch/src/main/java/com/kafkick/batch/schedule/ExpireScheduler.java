@@ -85,7 +85,7 @@ public class ExpireScheduler {
      * 한쪽만 고치는 실수를 아무것도 안 막으므로 상수로 묶는다({@code @Scheduled} 는 컴파일
      * 상수만 받는다).
      */
-    static final String CRON = "${batch.schedule.expire-cron:0 */5 * * * *}";
+    static final String CRON = "${batch.schedule.expire-cron:0 10 4 * * *}";
 
     /**
      * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
@@ -139,7 +139,7 @@ public class ExpireScheduler {
             RunningJobProbe runningJobs,
             ExpireMetrics metrics,
             @Value("${batch.schedule.max-expire-skips:1}") int maxSkips,
-            @Value("${batch.metrics.expire-sla-seconds:900}") long slaSeconds,
+            @Value("${batch.metrics.expire-sla-seconds:180000}") long slaSeconds,
             @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;

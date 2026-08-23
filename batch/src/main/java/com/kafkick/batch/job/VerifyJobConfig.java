@@ -38,7 +38,6 @@ import com.kafkick.batch.replay.IllegalTransitionItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
-import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ExpectedFindingRepository;
@@ -321,8 +320,7 @@ public class VerifyJobConfig {
     public Step finalizeRunStep(
             VerificationRunRepository runs,
             VerificationFindingRepository findings,
-            ExpectedFindingRepository expected,
-            TimeProvider timeProvider
+            ExpectedFindingRepository expected
     ) {
         return new StepBuilder("finalizeRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -358,11 +356,11 @@ public class VerifyJobConfig {
                             detected,
                             findings.checksumOf(runId),
                             frozenFingerprint(jobExecution),
-                            // started_at 과 **같은 시계**여야 한다. 잡이 아직 안 끝나
-                            // getEndTime() 은 null 이고, 배치 메타의 START_TIME 은 JVM 기본
-                            // 존이라 UTC 인 started_at 과 좌표계가 갈린다(그러면 KST 기기에서
-                            // 소요가 -9시간으로 나와 finish() 의 순서 가드에 걸린다).
-                            timeProvider.now());
+                            // 판정 Step 이 시작한 시각을 종료로 쓴다. 잡이 아직 안 끝나
+                            // getEndTime() 은 null 이고, 검증 배치는 now() 를 금지한다 —
+                            // .coderabbit.yaml 이 이 두 컬럼의 출처를 명시한다.
+                            // 이 뒤에 남은 것은 UPDATE 한 건뿐이라 차이가 작다.
+                            stepExecution.getStartTime());
 
                     runs.update(closed);
 
@@ -714,16 +712,16 @@ public class VerifyJobConfig {
     /**
      * 실행 행을 만들고, 훑을 경계를 얼려 잡 실행 컨텍스트에 심는다.
      *
-     * <p>실행 시작 시각은 <b>{@code TimeProvider}(UTC)</b> 로 찍는다(CY-397). 배치 메타의
-     * {@code START_TIME} 은 {@code AbstractJob} 이 인자 없는 {@code LocalDateTime.now()},
-     * 즉 <b>JVM 기본 존</b>으로 찍는 값이라, 그것을 쓰면 같은 행의 {@code as_of}(UTC)와
-     * 좌표계가 갈린다 — {@code validateAsOfNotInFuture} 와 정리 배치의
-     * {@code abandoned-after-hours} 컷오프가 둘 다 이 컬럼을 UTC 로 읽는다.
+     * <p>실행 시작 시각은 Spring Batch 가 이미 기록한 값을 쓴다. 여기서 현재 시각을 부르면
+     * 검증 배치에 시각 의존이 생기고, 다음 사람이 규칙에서도 부르게 된다 —
+     * {@code .coderabbit.yaml} 이 주입된 시계까지 같은 위반으로 못 박았다.
      *
-     * <p><b>규칙 안에서 시각을 부르는 것은 여전히 금지다.</b> 판정이 현재 시각에 기대면 같은
-     * {@code asOf} 두 실행이 다른 답을 낸다. {@code NoWallClockInBatchTest} 가 JDK 벽시계를
-     * 막고, 이 클래스가 주입된 시계({@link TimeProvider#now})를 부르는 <b>자리 수</b>까지
-     * 함께 못 박는다 — 그 검사는 소스를 정규식으로 세므로 주석에도 그 형태를 안 쓴다.
+     * <p>⚠️ <b>그 값은 JVM 기본 존이다.</b> 같은 행의 {@code as_of} 와 정리 배치의
+     * {@code abandoned-after-hours} 컷오프는 UTC 라, <b>JVM 기본 존이 UTC 여야</b> 세 축이
+     * 한 좌표계에 선다({@code batch.yml} 의 {@code TZ=UTC}, {@code bootRun} 의
+     * {@code user.timezone}). 테스트 JVM 만 일부러 KST 인데(CY-392), 그쪽에서는 어긋남이
+     * <b>보호 창이 넓어지는 방향</b>이라 안전하다. 존을 기동 때 강제하는 가드는
+     * 그 KST 테스트와 부딪혀 {@code docs/13} 으로 미뤘다.
      *
      * <p>실행 행은 있으면 찾고 없으면 만든다. 다만 <b>닫힌 실행은 이어받지 않는다.</b>
      *
@@ -746,8 +744,7 @@ public class VerifyJobConfig {
             ExpectedFindingRepository expectedFindings,
             ReplayHistoryRepository histories,
             VerificationRuleRepository rules,
-            RunningJobProbe runningJobs,
-            TimeProvider timeProvider
+            RunningJobProbe runningJobs
     ) {
         return new StepBuilder("startRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -779,15 +776,17 @@ public class VerifyJobConfig {
                             .orElseGet(() -> runs.save(VerificationRun.start(
                                     asOf, parameters.getLocalDateTime("fromTs"),
                                     scope, dataset, attempt,
-                                    // 배치 메타의 START_TIME 이 아니라 **도메인 시계**로 찍는다.
-                                    // 전자는 AbstractJob 이 인자 없는 LocalDateTime.now() 로
-                                    // 찍는 JVM 기본 존 값이고, 드라이버는 LocalDateTime 을
-                                    // 시프트하지 않는다(TimestampMappingTest 가 잰다) — 그대로
-                                    // 쓰면 같은 행의 as_of(UTC)와 좌표계가 갈린다.
-                                    // 그 어긋남을 validateAsOfNotInFuture 가 이미 밟고 있고,
-                                    // 정리 배치의 abandoned-after-hours 보호 창도 이 컬럼을
-                                    // UTC 컷오프와 비교한다.
-                                    timeProvider.now())).id());
+                                    // Spring Batch 가 이미 기록한 시각을 쓴다 —
+                                    // .coderabbit.yaml 이 이 컬럼의 출처를 명시한다.
+                                    //
+                                    // ⚠️ 그 값은 AbstractJob 이 인자 없는 LocalDateTime.now() 로
+                                    //    찍는 **JVM 기본 존** 이고, 드라이버는 LocalDateTime 을
+                                    //    시프트하지 않는다(TimestampMappingTest 가 잰다).
+                                    //    같은 행의 as_of 와 정리 배치의 컷오프는 UTC 라,
+                                    //    **JVM 기본 존이 UTC 여야 세 축이 한 좌표계에 선다** —
+                                    //    batch.yml 의 TZ=UTC 와 bootRun 의 user.timezone 이
+                                    //    그것을 고정한다. 그 줄을 지우면 여기가 어긋난다.
+                                    stepExecution.getJobExecution().getStartTime())).id());
 
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();

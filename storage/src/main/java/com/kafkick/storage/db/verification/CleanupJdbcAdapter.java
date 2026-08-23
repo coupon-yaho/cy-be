@@ -110,13 +110,13 @@ public class CleanupJdbcAdapter implements CleanupRepository {
                            AND r.verdict IS NULL
                            AND r.started_at < :olderThan
                            AND r.id NOT IN (SELECT id FROM v_latest_stats_run)
+                           -- 걷을 파생 행이 남았나. 위에서 verdict IS NULL 을 이미 걸었으므로
+                           -- 검출 행은 **무조건 삭제 대상**이다 — purgeableRunIds 쪽의
+                           -- deleteFindings 짝 조건이 여기서는 항상 참이라 안 적는다.
                            AND (EXISTS (SELECT 1 FROM asof_state a WHERE a.run_id = r.id)
                                 OR EXISTS (SELECT 1 FROM coupon_stats c WHERE c.run_id = r.id)
                                 OR EXISTS (SELECT 1 FROM verification_findings f
-                                            WHERE f.run_id = r.id
-                                              AND (r.verdict IS NULL
-                                                   OR (r.dataset = 'CLEAN'
-                                                       AND r.verdict = 'PASS'))))
+                                            WHERE f.run_id = r.id))
                          ORDER BY r.id
                         """)
                 .param("olderThan", olderThan)

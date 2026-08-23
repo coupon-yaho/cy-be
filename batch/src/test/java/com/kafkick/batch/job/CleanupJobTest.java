@@ -3,6 +3,7 @@ package com.kafkick.batch.job;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -22,6 +23,9 @@ import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
@@ -48,8 +52,26 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.cleanup.chunk-size=3",
         "batch.cleanup.abandoned-after-hours=24"
 })
-@Import(MySqlContainerConfig.class)
+@Import({MySqlContainerConfig.class, CleanupJobTest.FixedClockConfig.class})
 class CleanupJobTest {
+
+    /**
+     * <b>창 판정을 실제 벽시계에 맡기지 않는다.</b> {@code abandoned-after-hours} 는
+     * {@code TimeProvider} 로 컷오프를 만드는데, 픽스처는 {@code AS_OF} 기준 상수로 심는다 —
+     * 두 축이 갈리면 <b>CI 가 도는 시각에 따라 창 안팎이 뒤집힌다.</b> 지금은 {@code AS_OF} 가
+     * 과거라 우연히 통과하는데, 우연으로 통과하는 단언은 언젠가 우연히 깨진다.
+     *
+     * <p>{@code TimeConfig} 의 {@code Clock} 빈을 {@code AS_OF} 에 고정해 둘을 한 축에 세운다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return Clock.fixed(AS_OF.toInstant(ZoneOffset.UTC), ZoneOffset.UTC);
+        }
+    }
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 4, 1, 9, 0);
 
@@ -567,14 +589,11 @@ class CleanupJobTest {
     }
 
     /**
-     * <b>잡과 같은 시계를 쓴다.</b> 잡은 {@code TimeProvider}({@code Clock.systemUTC})로
-     * 창을 자르는데, 이 테스트 JVM 은 {@code user.timezone=Asia/Seoul} 로 고정돼 있어
-     * ({@code batch/build.gradle}) 인자 없는 {@code now()} 는 아홉 시간 어긋난다.
-     * 지금은 어긋나는 방향이 <b>안전한 쪽</b>이라 통과하지만, 그것은 우연이다 —
-     * 우연으로 통과하는 단언은 반대 방향 존에서 조용히 뒤집힌다.
+     * <b>잡이 보는 "지금" 이다.</b> 위 {@code FixedClockConfig} 가 {@code TimeProvider} 를
+     * {@code AS_OF} 에 묶어 뒀으므로, 픽스처도 여기서 파생해야 두 축이 같은 좌표에 선다.
      */
     private static LocalDateTime nowUtc() {
-        return LocalDateTime.now(ZoneOffset.UTC);
+        return AS_OF;
     }
 
     private long run(LocalDateTime asOf, String verdict, LocalDateTime startedAt) {

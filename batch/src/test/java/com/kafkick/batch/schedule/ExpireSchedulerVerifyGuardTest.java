@@ -10,8 +10,16 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
@@ -82,6 +90,35 @@ class ExpireSchedulerVerifyGuardTest {
     @Autowired
     private ExpireMetrics metrics;
 
+    /**
+     * <b>이 PR 이 더한 분기는 로그 문구로만 관측된다.</b> 반환값만 보면
+     * {@code maxSkips == 0} 갈래를 지워도 초록이다 — 건너뛰기가 꺼진 것과 상한을 넘긴 것이
+     * 같은 결과(만료를 돌린다)를 내기 때문이다. 사고를 되짚는 사람이 보게 될 유일한 단서라
+     * 문구 자체가 요지다. {@code ExpireSchedulerReportingTest} 가 같은 방식을 쓴다.
+     */
+    private ListAppender<ILoggingEvent> logs;
+    private ch.qos.logback.classic.Logger schedulerLog;
+    private Level originalLevel;
+
+    @BeforeEach
+    void captureLogs() {
+        logs = new ListAppender<>();
+        logs.setContext((LoggerContext) LoggerFactory.getILoggerFactory());
+        logs.start();
+        schedulerLog = (ch.qos.logback.classic.Logger)
+                LoggerFactory.getLogger(ExpireScheduler.class);
+        originalLevel = schedulerLog.getLevel();
+        schedulerLog.setLevel(Level.TRACE);
+        schedulerLog.addAppender(logs);
+    }
+
+    @AfterEach
+    void releaseLogs() {
+        schedulerLog.detachAppender(logs);
+        schedulerLog.setLevel(originalLevel);
+        logs.stop();
+    }
+
     @Test
     @DisplayName("검증이 도는 중이면 만료 슬롯을 건너뛴다")
     void skipsTheSlotWhileVerifyIsRunning() {
@@ -142,6 +179,15 @@ class ExpireSchedulerVerifyGuardTest {
             assertThat(started)
                     .as("상한을 넘으면 재고 쪽을 택한다 — 안 그러면 만료가 무한히 굶는다")
                     .hasSize(1);
+
+            assertThat(logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.ERROR)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList())
+                    .as("상한을 넘어 뚫은 것과 건너뛰기가 꺼진 것은 다른 사건이라 문구가 갈린다")
+                    .singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+                    .contains("연속 건너뛰었습니다")
+                    .doesNotContain("max-expire-skips=0");
         }
     }
 
@@ -166,11 +212,26 @@ class ExpireSchedulerVerifyGuardTest {
             scheduler(started, 0).expire();
 
             assertThat(started)
-                    .as("건너뛴 적이 없으므로 '0슬롯 연속 건너뛰었습니다' 는 거짓말이다 — "
-                            + "그 문구를 가르는 분기가 이 경로에 있다. 검증 실행 id="
+                    .as("건너뛰기가 꺼져 있으므로 첫 슬롯부터 뚫고 지나간다. 검증 실행 id="
                             + verify.executionId())
                     .hasSize(1);
+
+            String message = onlyError();
+            assertThat(message)
+                    .as("건너뛴 적이 없는데 '0슬롯 연속 건너뛰었습니다' 라고 하면, 사고를 "
+                            + "되짚는 사람이 보게 될 유일한 단서가 거짓말을 한다")
+                    .contains("max-expire-skips=0")
+                    .doesNotContain("연속 건너뛰었습니다");
         }
+    }
+
+    /** ERROR 갈래가 하나여야 한다 — 뭉쳐 있으면 여기서 개수가 어긋난다. */
+    private String onlyError() {
+        List<ILoggingEvent> errors = logs.list.stream()
+                .filter(event -> event.getLevel() == Level.ERROR)
+                .toList();
+        assertThat(errors).hasSize(1);
+        return errors.get(0).getFormattedMessage();
     }
 
     /**

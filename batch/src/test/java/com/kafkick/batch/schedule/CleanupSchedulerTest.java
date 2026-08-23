@@ -9,10 +9,19 @@ import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
@@ -58,16 +67,58 @@ class CleanupSchedulerTest {
     @Qualifier("cleanupJob")
     private Job cleanupJob;
 
+    /** 클래스 최상단 속성으로 뜬 컨텍스트다 — {@code batch.scheduling.enabled=false} 다. */
+    @Autowired
+    private ApplicationContext context;
+
+    private ListAppender<ILoggingEvent> logs;
+    private ch.qos.logback.classic.Logger schedulerLog;
+    private Level originalLevel;
+
+    /**
+     * 실패 분기는 <b>로그로만</b> 관측된다 — {@code cleanup()} 은 어떤 경우에도 예외를 안
+     * 던지므로, 레벨과 문구를 안 재면 <i>"조용히 안 도는 상태"</i> 를 만든 변경이 통과한다.
+     */
+    @BeforeEach
+    void captureLogs() {
+        logs = new ListAppender<>();
+        logs.setContext((LoggerContext) LoggerFactory.getILoggerFactory());
+        logs.start();
+        schedulerLog = (ch.qos.logback.classic.Logger)
+                LoggerFactory.getLogger(CleanupScheduler.class);
+        originalLevel = schedulerLog.getLevel();
+        schedulerLog.setLevel(Level.TRACE);
+        schedulerLog.addAppender(logs);
+    }
+
+    @AfterEach
+    void releaseLogs() {
+        schedulerLog.detachAppender(logs);
+        schedulerLog.setLevel(originalLevel);
+        logs.stop();
+    }
+
     /**
      * <b>{@code JobOperator.start} 는 잡이 실패로 끝나도 예외를 안 던진다</b> — 실행 결과를
      * 돌려줄 뿐이다. 그래서 스케줄러가 상태를 직접 보는데, 그 분기가 안 재지면
      * <i>"매일 실패하는데 로그도 조용한"</i> 상태가 열린다.
      */
     @Test
+    @DisplayName("꺼져 있으면 스케줄러 빈이 아예 없다")
+    void schedulerBeanIsAbsentWhenDisabled() {
+        assertThat(context.getBeanNamesForType(CleanupScheduler.class))
+                .as("메서드 안에서 검사하고 빠져나오는 방식이면, 그 검사를 안 넣은 경로가 "
+                        + "나중에 하나 생기는 순간 조용히 돈다")
+                .isEmpty();
+    }
+
+    @Test
     @DisplayName("잡이 실패로 끝나도 예외가 밖으로 안 나간다")
     void swallowsFailedJobStatus() {
         assertThatCode(() -> scheduler(BatchStatus.FAILED, null).cleanup())
                 .doesNotThrowAnyException();
+
+        assertThat(onlyError()).contains("정리 배치가 끝내지 못했습니다");
     }
 
     /**
@@ -79,6 +130,8 @@ class CleanupSchedulerTest {
     void swallowsStartFailure() {
         assertThatCode(() -> scheduler(null, new IllegalStateException("DB 가 없다")).cleanup())
                 .doesNotThrowAnyException();
+
+        assertThat(onlyError()).contains("정리 배치를 시작하지 못했습니다");
     }
 
     /**
@@ -90,6 +143,10 @@ class CleanupSchedulerTest {
     void survivesAsyncOperator() {
         assertThatCode(() -> scheduler(BatchStatus.STARTED, null).cleanup())
                 .doesNotThrowAnyException();
+
+        assertThat(onlyError())
+                .as("겹침 방지가 사라진 상태라 그 사실을 그 자리에서 알려야 한다")
+                .contains("비동기로 떴습니다");
     }
 
     /**
@@ -124,7 +181,12 @@ class CleanupSchedulerTest {
     }
 
     private CleanupScheduler scheduler(BatchStatus status, RuntimeException failure) {
-        JobOperator stub = (JobOperator) Proxy.newProxyInstance(
+        return new CleanupScheduler(stubOperator(status, failure), cleanupJob, utcClock(),
+                DAILY_CRON, DAILY_SLA_SECONDS, 60_000L);
+    }
+
+    private static JobOperator stubOperator(BatchStatus status, RuntimeException failure) {
+        return (JobOperator) Proxy.newProxyInstance(
                 JobOperator.class.getClassLoader(),
                 new Class<?>[] {JobOperator.class},
                 (proxy, method, args) -> {
@@ -139,12 +201,21 @@ class CleanupSchedulerTest {
                     execution.setStatus(status);
                     return execution;
                 });
-        return new CleanupScheduler(stub, cleanupJob, utcClock(), DAILY_CRON,
-                DAILY_SLA_SECONDS, 60_000L);
     }
 
+    /** 협력자에 {@code null} 을 안 넘긴다 — 쓰는 코드가 생기는 날 엉뚱한 자리에서 NPE 가 난다. */
     private CleanupScheduler build(String cron, long slaSeconds) {
-        return new CleanupScheduler(null, cleanupJob, utcClock(), cron, slaSeconds, 60_000L);
+        return new CleanupScheduler(stubOperator(BatchStatus.COMPLETED, null), cleanupJob,
+                utcClock(), cron, slaSeconds, 60_000L);
+    }
+
+    /** ERROR 갈래가 하나여야 한다 — 뭉쳐 있으면 여기서 개수가 어긋난다. */
+    private String onlyError() {
+        List<ILoggingEvent> errors = logs.list.stream()
+                .filter(event -> event.getLevel() == Level.ERROR)
+                .toList();
+        assertThat(errors).hasSize(1);
+        return errors.get(0).getFormattedMessage();
     }
 
     private static TimeProvider utcClock() {
@@ -206,12 +277,4 @@ class CleanupSchedulerTest {
      * 끄는 스위치가 <b>빈 자체를 없애는지</b> 본다. 메서드 안에서 검사하고 빠져나오는
      * 방식이면 그 검사를 안 넣은 경로가 나중에 하나 생기는 순간 조용히 돈다.
      */
-    @Test
-    @DisplayName("꺼져 있으면 스케줄러 빈이 아예 없다")
-    void schedulerBeanIsAbsentWhenDisabled() {
-        assertThat(disabledContext.getBeanNamesForType(CleanupScheduler.class)).isEmpty();
-    }
-
-    @Autowired
-    private ApplicationContext disabledContext;
 }

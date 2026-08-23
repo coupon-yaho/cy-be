@@ -65,6 +65,33 @@ class NoWallClockInBatchTest {
     private static final Set<String> ALLOWED =
             Set.of("com/kafkick/batch/config/RunningJobProbe.java");
 
+    /** 주입된 시계 호출. JDK 직접 호출과 달리 금지가 아니라 <b>파일별 예산</b>이다. */
+    private static final Pattern INJECTED_CLOCK =
+            Pattern.compile("\\btimeProvider\\s*\\.\\s*now\\s*\\(");
+
+    /**
+     * 예산에 없는 파일에서 한 건이라도 나오면 실패다. 늘릴 때는 <b>그 시각이 판정에 안
+     * 들어간다는 근거</b>를 그 자리에 함께 적는다.
+     *
+     * <pre>
+     * VerifyJobConfig      0  판정 잡이다 — .coderabbit.yaml 이 주입 시계까지 금지한다
+     * ExpireJobConfig      2  asOf 가드와 커밋 시각 — 판정이 아니라 만료 대상 선정이다
+     * CleanupJobConfig     1  버려진 실행 컷오프 — 정리는 판정을 안 낸다
+     * ExpireScheduler      2  크론 슬롯 계산과 기동 가드 — 잡 밖이다
+     * CleanupScheduler     2  같은 축
+     * VerifyTriggerController 1  asOf 미래 검사 — 접수 단계다
+     * BatchApiExceptionHandler 1  응답 timestamp
+     * </pre>
+     */
+    private static final Map<String, Integer> INJECTED_CLOCK_BUDGET = Map.of(
+            "com/kafkick/batch/job/ExpireJobConfig.java", 2,
+            "com/kafkick/batch/job/CleanupJobConfig.java", 1,
+            "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
+            "com/kafkick/batch/schedule/CleanupScheduler.java", 2,
+            "com/kafkick/batch/api/VerifyTriggerController.java", 1,
+            "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1);
+
+
     /**
      * <b>주입된 시계도 예산을 갖는다.</b> {@code timeProvider.now()} 는 위 정규식에 안 걸리고,
      * 걸려서도 안 된다 — 그것이 이 규칙이 안내하는 대체 수단이다. 그런데 CY-397 이
@@ -79,9 +106,9 @@ class NoWallClockInBatchTest {
      * <p>세는 방식이 정규식이라 <b>주석 안의 같은 형태도 함께 센다.</b> 그래서 본문 주석은
      * 그 자리를 {@code TimeProvider#now} 로 적는다 — 값싼 검사의 대가다.
      *
-     * <p>{@code verifyJob} 의 둘은 {@code started_at}·{@code finished_at} 을 찍는 자리이고
-     * 판정에 안 들어간다. 그 컬럼들은 {@code as_of}(UTC)와 좌표계를 맞춰야 해서 도메인
-     * 시계를 쓴다 — 배치 메타의 {@code START_TIME} 은 JVM 기본 존이다.
+     * <p><b>{@code verifyJob} 의 예산은 0 이다.</b> {@code .coderabbit.yaml} 이 판정 배치에서는
+     * 주입된 시계도 같은 위반으로 못 박았고, {@code started_at}·{@code finished_at} 조차
+     * Spring Batch 가 이미 기록한 시각을 쓰라고 출처를 지정한다.
      */
     @Test
     @DisplayName("주입된 시계를 부르는 파일과 횟수가 예산과 정확히 같다")
@@ -107,33 +134,6 @@ class NoWallClockInBatchTest {
                     .isEmpty();
         }
     }
-
-    /** 주입된 시계 호출. JDK 직접 호출과 달리 금지가 아니라 <b>파일별 예산</b>이다. */
-    private static final Pattern INJECTED_CLOCK =
-            Pattern.compile("\\btimeProvider\\s*\\.\\s*now\\s*\\(");
-
-    /**
-     * 예산에 없는 파일에서 한 건이라도 나오면 실패다. 늘릴 때는 <b>그 시각이 판정에 안
-     * 들어간다는 근거</b>를 그 자리에 함께 적는다.
-     *
-     * <pre>
-     * VerifyJobConfig      2  started_at · finished_at — as_of 와 좌표계를 맞춘다
-     * ExpireJobConfig      2  asOf 가드와 커밋 시각 — 판정이 아니라 만료 대상 선정이다
-     * CleanupJobConfig     1  버려진 실행 컷오프 — 정리는 판정을 안 낸다
-     * ExpireScheduler      2  크론 슬롯 계산과 기동 가드 — 잡 밖이다
-     * CleanupScheduler     2  같은 축
-     * VerifyTriggerController 1  asOf 미래 검사 — 접수 단계다
-     * BatchApiExceptionHandler 1  응답 timestamp
-     * </pre>
-     */
-    private static final Map<String, Integer> INJECTED_CLOCK_BUDGET = Map.of(
-            "com/kafkick/batch/job/VerifyJobConfig.java", 2,
-            "com/kafkick/batch/job/ExpireJobConfig.java", 2,
-            "com/kafkick/batch/job/CleanupJobConfig.java", 1,
-            "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
-            "com/kafkick/batch/schedule/CleanupScheduler.java", 2,
-            "com/kafkick/batch/api/VerifyTriggerController.java", 1,
-            "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1);
 
     @Test
     @DisplayName("배치 본문의 벽시계 호출은 허용 목록 안에만 있다")
