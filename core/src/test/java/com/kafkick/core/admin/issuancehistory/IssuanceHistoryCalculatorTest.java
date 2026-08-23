@@ -15,6 +15,7 @@ import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.History
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 
 class IssuanceHistoryCalculatorTest {
 
@@ -100,15 +101,15 @@ class IssuanceHistoryCalculatorTest {
     @Test
     void rejectsInvalidQueryAndResultInvariants() {
         assertThatThrownBy(() -> query(0L, null, null, null, null, 1))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> query(null, T2, T2, null, null, 1))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> query(null, T3, T2, null, null, 1))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> query(null, null, null, null, null, 0))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> query(null, null, null, null, null, 201))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> new HistoryPosition(T1, 0L))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AdminIssuanceHistoryResult(

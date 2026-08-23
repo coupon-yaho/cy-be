@@ -119,14 +119,18 @@ class DashboardIssuanceDtoJsonSerializationTest {
                         IssuanceEventType.ISSUE, OBSERVED_AT
                 )),
                 null,
-                false
+                false,
+                new IssuanceHistoryPageResponse.IssuanceHistorySummary(1L, 1L, 0L, 0L, 0L, 0L)
         );
 
         assertThat(objectMapper.writeValueAsString(inquiries))
                 .contains("\"reasonCode\":\"STOCK_EXHAUSTED\"", "\"currentStatus\":\"ISSUED\"")
                 .doesNotContain("\"httpStatus\":");
         assertThat(objectMapper.writeValueAsString(histories))
-                .contains("\"toStatus\":\"ISSUED\"", "\"eventType\":\"ISSUE\"")
+                .contains(
+                        "\"toStatus\":\"ISSUED\"",
+                        "\"eventType\":\"ISSUE\"",
+                        "\"summary\":{\"totalCount\":1,\"issueCount\":1")
                 .doesNotContain("\"fromStatus\":");
     }
 

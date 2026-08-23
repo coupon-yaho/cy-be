@@ -36,16 +36,6 @@ public record IssuanceHistoryPageResponse(
         Objects.requireNonNull(summary, "summary");
     }
 
-    /** 기존 선구축 호출부에 비어 있지 않은 기본 요약을 제공하는 호환 생성자입니다. */
-    public IssuanceHistoryPageResponse(
-            List<IssuanceHistoryItem> items,
-            String nextBeforeCursor,
-            boolean hasOlder
-    ) {
-        this(items, nextBeforeCursor, hasOlder,
-                new IssuanceHistorySummary(0L, 0L, 0L, 0L, 0L, 0L));
-    }
-
     /**
      * 선구축 단계의 JSON 필드 계약을 검증하기 위한 빈 목록 예시를 만듭니다.
      *
