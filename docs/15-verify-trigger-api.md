@@ -12,9 +12,13 @@
 | **안 한다** | 인증·인가 — batch 에 Spring Security 가 없다. 아래 "남긴 것" |
 | **안 한다** | 리포트 덤프 — 별도 티켓(영역 ④ 범위표의 "리포트") |
 
-> **전제 — 검증은 만료가 멈춘 상태에서만 돈다.** `startRunStep` 의 가드가
-> `batch.scheduling.enabled=true` 면 거절한다. 트리거를 여는 것이 그 제약을 푸는 것은
-> 아니다. 아래 "아무 때나 못 돈다" 절에 근거가 있다.
+> **전제 — 검증은 만료가 도는 동안에는 안 돈다.** `startRunStep` 의 가드가 배치 메타에
+> 실행 중인 만료가 있으면 거절한다. 트리거를 여는 것이 그 제약을 푸는 것은 아니다.
+> 아래 "아무 때나 못 돈다" 절에 근거가 있다.
+>
+> **CY-384 가 이 가드의 근거를 바꿨다.** 그전에는 `batch.scheduling.enabled=true` 이기만
+> 해도 거절했다 — 운영은 늘 true 라 **검증이 영영 못 돌았고**, 그것이 검증을 온디맨드로
+> 밀어낸 원인이었다.
 
 ---
 
@@ -170,20 +174,104 @@ if (status.isRunning()) {
 
 ---
 
-## API 를 열어도 아무 때나 못 돈다 — `rejectRunningSchedulers`
+## API 를 열어도 아무 때나 못 돈다 — `rejectRunningExpire`
 
-`startRunStep` 의 가드 여덟 중 하나가 **스케줄러가 켜져 있으면 거절**한다.
+`startRunStep` 의 가드 여덟 중 하나가 **만료가 도는 중이면 거절**한다.
 
 ```java
-rejectRunningSchedulers(schedulingEnabled);   // batch.scheduling.enabled
+rejectRunningExpire(runningJobs);   // RunningJobProbe.blockingExecutions("expireJob")
 ```
 
 만료가 도는 동안 검증하면 **판정 근거가 검증 중에 바뀐다** — 만료는 재고를 쓰는 유일한
 잡이고, `dataset_fingerprint` 재료에 `sum(active_count)` 와 `max(updated_at)` 이 들어 있다.
 
-그래서 이 API 는 **운영 중(스케줄러 켜짐)에는 409 로 거절한다.** 트리거를 여는 것이
-그 제약을 푸는 것은 아니다. `docs/14` 시연 절차가 *"`false` 로 재기동 + `verifyJob` 트리거"*
-인 이유가 이것이고, API 가 생겨도 순서는 같다.
+**근거는 배치 메타다.** `JobRepository.findRunningJobExecutions("expireJob")` 이
+`STATUS IN ('STARTING','STARTED','STOPPING')` 인 행을 준다(6.0.4 바이트코드로 확인).
+
+### 이 가드는 정확성의 근거가 아니다
+
+통과한 **직후**에 만료 크론이 발화하면 이 검사는 못 막는다. 그 자리를 지키는 것은
+`assertFrozenStep` 이다 — 규칙이 다 돈 뒤에 발급건·재고·회차 정책·이력 네 축을 다시 보고,
+하나라도 움직였으면 `DATASET_MUTATED_DURING_RUN` 으로 **판정을 버린다.**
+
+그러면 이 가드는 무엇을 하나 — **헛돌지 않게 한다.** 3분 뒤에 버릴 실행을 시작 전에 끝내고,
+`attempt` 를 태우지 않는다.
+
+### 그래서 배제는 양방향이다
+
+검증만 만료를 피하면 그 창이 **예외가 아니라 대부분**이 된다. 검증 소요가 수 분인데 만료
+크론이 5분이므로, 겹칠 확률은 *"지금 만료가 도는가"*(수 초/주기 ≈ 2%)가 아니라
+**"내 실행 시간 안에 크론이 발화하는가"**(≈ 60%)다.
+
+그리고 겹치면 그 `asOf` 는 **영구히 못 쓴다.** 만료가 찍은 `updated_at` 은 지워지지 않으므로
+`rejectIssuancesUpdatedAfterAsOf` 가 그 `asOf` 이하로는 영원히 참이다. 재시도해도 같다 —
+`asOf` 를 만료 시각 뒤로 올려야만 지나간다.
+
+그래서 **만료 스케줄러가 검증이 도는 중이면 그 슬롯을 건너뛴다.**
+
+```java
+// ExpireScheduler.expire()
+List<Long> verifying = runningJobs.blockingExecutions(VerifyJobConfig.JOB_NAME);
+if (!verifying.isEmpty()) { log.warn(...); return; }
+```
+
+**대상이 유실되지는 않는다.** 스케줄러는 주기마다 `asOf` 를 새로 잡고 만료는
+`expires_at < asOf` 를 `id > 0` 부터 훑으므로, **건너뛴 슬롯의 몫을 다음에 도는 슬롯이
+통째로 가져간다.**
+
+**그래도 상한을 둔다** — `batch.schedule.max-expire-skips`(기본 1). 한때 여기에
+*"최대 지연이 정확히 크론 주기 하나"* 라고 적었는데 **거짓이었다**: 매 슬롯마다 다시 묻기
+때문에 검증이 주기보다 오래 돌면 그 사이 슬롯이 **전부** 죽는다. 300만에서의 검증 소요는
+아직 실측 전이라(`docs/13` §6 의 D) 그 지연의 상한을 모른다.
+
+상한을 두면 최대 지연이 **`(상한 + 1) × 크론 주기`** 로 **구조적으로** 정해진다 — 실측이
+필요 없다. 기본 1·5분 크론이면 10분이고, `BatchJobNotRunning` 의 15분 창 안쪽이다.
+
+**상한을 넘으면 만료를 돌린다.** 재고는 운영의 진실이고 검증 실행은 진단이다 — 둘 중 하나를
+버려야 하면 진단 쪽이다. 그 선택은 ERROR 로 남는다. 긴 전수 검증은 여전히 스케줄러를 끄고
+돌리는 것이 맞다.
+
+**건너뛸 때 대기 지표를 "모름" 으로 되돌린다.** `reportPending` 은 `afterJob` 리스너라
+**잡이 안 뜨면 안 불린다** — 그대로 두면 게이지가 직전 실행 값에 얼어붙어, 백로그가 쌓이는
+바로 그 구간에 관제가 *"밀린 것이 없다"* 를 본다.
+
+**그래도 마이크로초짜리 창은 남는다** — 양쪽 검사 사이. 그 자리는 `assertFrozenStep` 이
+받고, 구조적으로 없애는 것은 일정 분리다(만료 04:10 · 검증 05:00, `docs/13` §6 의 C).
+
+### 죽은 실행을 어떻게 가려내나 — 나이가 아니라 진도
+
+위 질의에는 `END_TIME` 검사도 시간 상한도 **없다.** 프로세스가 종료 표시를 못 남기고 죽으면
+`STARTED` 행이 영원히 남고, 상한이 없으면 `docker compose down` 이 만료 한복판에 한 번
+걸린 것만으로 **검증이 그 뒤로 영영 거절된다.** 만료 실행에는 해제 경로도 없다 —
+`abandon` 엔드포인트는 `verifyJob` 으로 필터링돼 있다.
+
+**그런데 "시작한 지 오래됐다" 는 "죽었다" 가 아니다.** 처음엔 임계로
+`batch-alerts.yml` 의 `BatchJobRunningTooLong`(300초)을 그대로 썼는데, **그 논거는 거꾸로였다** —
+그 알림이 읽는 `spring_batch_job_active_seconds_max` 는 JVM 안의 게이지라, 그것이 우는 상태는
+정의상 **"살아서 느리게 돌고 있다"** 이다. 나이로 자르면 만료가 밀려 오래 도는 날 —
+**가드가 가장 필요한 날** — 가드가 스스로 꺼진다. 300만 적재 직후 첫 만료가 그 상황이다.
+
+**그래서 진도를 본다.** `SimpleJobRepository.update(StepExecution)` 이 청크 커밋마다
+`BATCH_STEP_EXECUTION.LAST_UPDATED` 를 다시 찍는다(6.0.4 바이트코드로 확인). 살아 있는 잡은
+이 값이 계속 앞으로 가고, 하드킬된 잡은 죽은 순간에 멈춘다. `expireStep` 은
+`RepeatStatus.CONTINUABLE` 로 청크마다 트랜잭션을 끊으므로 실제로 움직인다.
+
+추가 질의는 없다 — `SimpleJobExplorer.findRunningJobExecutions` 가
+`fillStepExecutionDependencies` 까지 돌려 **StepExecution 을 채워서 준다**(같은 방법으로 확인).
+
+| | 값 | 뜻 |
+|---|---|---|
+| `BatchJobRunningTooLong` | 300초 | **살아서** 느리게 돌고 있다 |
+| `batch.stuck-job-after-ms` | 600,000ms | 진도가 멈췄다 — 죽은 것으로 본다 |
+
+**뒤가 앞보다 반드시 커야 한다.** 같은 숫자를 쓰면 *"살아 있다"* 와 *"죽었다"* 가 한 값을
+공유한다. `.example` 에 그 제약을 적어 뒀다.
+
+`STARTING` 에서 죽어 Step 이 하나도 없는 행은 실행 시작 시각(없으면 생성 시각)으로 물러난다.
+그 갈래가 없으면 그런 행이 영원히 막는다.
+
+> ⚠️ **무시했다는 사실을 알리는 것은 WARN 로그뿐이다.** 위 알림은 프로세스가 죽으면 지표째
+> 사라져 시체를 못 잡는다. 지표·알림 축은 `docs/13` §6 의 B 가 진다.
 
 **컨트롤러가 그것을 미리 보고 답한다.** 잡을 띄운 뒤 Step 안에서 죽으면 클라이언트는 202 를
 받아 놓고 폴링해야 원인을 안다 — 시작조차 못 할 것이 뻔한 요청은 **접수 단계에서 거절**하는

@@ -116,7 +116,7 @@
 
 > **나쁜 것은 모양이다.** 누락 0 · 오탐 0 이 합격 조건인데, 그것이 *"검증기가 틀렸다"* 로
 > 보이는 형태로 깨진다. 실제 원인은 **만료가 한 번 지나간 것**이고 그 사실은 어디에도 안 적힌다.
-> `verifyJob` 의 `rejectRunningSchedulers` 로는 못 막는다 — 그것은 *검증이 도는 동안* 을
+> `verifyJob` 의 `rejectRunningExpire` 로는 못 막는다 — 그것은 *검증이 도는 동안* 을
 > 막지, 그 **전에** 만료가 지나간 것은 못 본다.
 
 `uk_coupon_member` 존재 여부로 가르고, 판정 근거는 `VerificationRuleRepository`
@@ -241,7 +241,7 @@ cy_verification_findings{dataset,scope}   검출 건수
 > 문자열을 다시 쓰지 말고 상수를 참조한다.
 
 > **`runId` 가 없는 실행이 곧 "판정을 못 낸 실행" 이다.** `startRunStep` 은 가드 여덟
-> (`rejectDatasetMismatch`·`rejectUnsupportedScope`·`rejectRunningSchedulers`·
+> (`rejectDatasetMismatch`·`rejectUnsupportedScope`·`rejectRunningExpire`·
 > `rejectAsOfBeforeLatestHistory`·`rejectIssuancesUpdatedAfterAsOf`·
 > `rejectStocksUpdatedAfterAsOf`·`validateSeedRunId`·`rejectExistingRun`)를 <b>전부
 > 통과한 뒤에야</b> 컨텍스트에 심는다. 리스너는 `runId` 없이도 동작해야 하고, 없으면
@@ -424,8 +424,8 @@ MySQL 컨테이너 자원을 두고 경쟁하고, `batch` 는 `storage` 의 `tes
 완전 병렬이 안 된다. **캐시 쪽이 실효가 커 보인다** — 문서만 고친 라운드에서 Java 테스트를
 통째로 건너뛸 수 있다. 다만 **둘 다 재 보고 정한다.** 근거 없는 수치를 넣지 않는다.
 
-**앞의 둘은 검토 대상이고 셋째는 대체로 불가피하다.** 예컨대 `batch.scheduling.enabled` 가
-`true`/`false` 로 갈린 두 클래스는 그 축을 재려고 일부러 나눈 것이다 — 합치면 검증이 사라진다.
+**앞의 둘은 검토 대상이고 셋째는 대체로 불가피하다.** 예컨대 실행 중인 만료를 심는 클래스와
+안 심는 클래스는 그 축을 재려고 일부러 나눈 것이다 — 합치면 검증이 사라진다.
 다만 조합을 줄일 여지가 있는지는 한 번 훑을 값어치가 있다.
 
 **`withReuse` 는 격리와 맞바꾼다.** 컨테이너를 재사용하면 앞 테스트가 남긴 데이터가
@@ -446,7 +446,76 @@ MySQL 컨테이너 자원을 두고 경쟁하고, `batch` 는 `storage` 의 `tes
 근거가 되므로 격리를 내리면 집계 중에 원본이 바뀐다.
 
 **결정할 것** — 검증 중에는 발급도 멈추는 운영 규율로 갈지, 통계 Step 도 격리를 내릴지.
-지금 막아 주는 `rejectRunningSchedulers` 는 **배치 JVM 의 플래그만 본다.**
+지금 막아 주는 `rejectRunningExpire` 가 보는 것은 **배치 메타의 만료 실행뿐**이라
+api 의 쓰기는 애초에 안 잡힌다.
+
+---
+
+## 6. 배치 주기를 실무 기준으로 되돌린다 (CY-384 가 첫 단계)
+
+**지금 주기는 실무 세 칸 중 어디에도 안 맞는다.** 실무의 배치는 준실시간(초~분) ·
+배치 창(일 1회 새벽) · 온디맨드로 갈리는데, **만료·검증·정리는 셋 다 배치 창**이다.
+
+| | 지금 | 가야 할 곳 |
+|---|---|---|
+| 만료 | 5분 크론 | 배치 창 04:10 (일 1회) |
+| 검증 | 온디맨드만 | 배치 창 05:00 (일 1회 전수) |
+| 정리 | 1시간 | 배치 창 04:30 (일 1회) |
+
+**만료가 5분인 대가를 실측했다.** `valid_days` 30~180(평균 105)에 ISSUED 약 66만이면
+하루 만료는 약 6,300건이고, **5분 실행 한 번이 손대는 것은 약 22건** — 청크 크기 1000의
+2%다. 이벤트 진행 중 만료는 **0건**이다(열린 회차의 쿠폰은 방금 발급된 것이라 기한이 남았다).
+`idx_issuance_status_expires` 도 이미 있다.
+
+**검증이 온디맨드인 것은 절반이 우리가 만든 제약이었다.** 크론을 못 건 이유가
+`rejectRunningSchedulers` 였고, **CY-384 가 그것을 풀었다.** 남은 것은 아래 순서다.
+
+### 순서를 바꾸면 안 된다
+
+| | 무엇 | 선행 |
+|---|---|---|
+| **A** | ~~검증 가드를 실행 중 검사로~~ **완료 · CY-384** | — |
+| **B** | `expire`·`verify` 의 `last_success_seconds` 게이지 + SLA 알림. `BatchJobNotRunning` 대체. **진도가 멈춘 실행(`cy_stuck_executions`)도 여기서 지표로 낸다** — 지금은 WARN 로그가 유일한 신호다 | — |
+| **C** | 만료 04:10 · 정리 04:30 으로 이동 + 시연용 크론 override. **정리에 `asof_state` 를 넣는다** — 아래 참조 | A · B |
+| **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계도 여기서 | C · 300만 적재 |
+
+**B 없이 C 를 하면 감시 공백이 생긴다.** `BatchJobNotRunning` 은 15분 창의 증분으로 보는데,
+일 1회로 옮기면 그 창이 **하루의 대부분 비어** 영구 critical 이 된다. 규칙이 틀린 게 아니라
+축이 안 맞는 것이라, 먼저 *"마지막 성공이 언제였나"* 로 갈아야 한다.
+
+**C 가 A 의 남은 창도 닫는다.** `rejectRunningExpire` 는 통과 직후 만료가 발화하는 창을
+못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`). 만료 04:10 · 검증 05:00 이면
+겹칠 구조 자체가 사라지므로, 상호 배제를 더 만들 필요가 없다.
+
+### C 가 함께 져야 하는 것 — 버려진 실행의 `asof_state`
+
+`assertFrozenStep` 이 판정을 버리면 `finalizeRunStep` 이 안 돌아 실행 행이 열린 채 남는데
+(설계 의도다), **그 실행이 이미 쓴 `asof_state` 최대 300만 행은 아무도 안 지운다.**
+`DELETE FROM asof_state` 는 저장소의 테스트 밖에 존재하지 않는다.
+
+CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기동에서는 검증이 시작조차 못 했다.
+지금은 양방향 가드가 대부분을 막지만 **마이크로초짜리 창과 하드킬은 남으므로**, 정리 잡이
+`verdict IS NULL AND started_at < NOW() - INTERVAL 1 DAY` 를 훑어 파생 행을 걷어야 한다.
+한 문장으로 300만을 지우면 언두 로그가 터지므로 `LIMIT` 으로 나눠 지운다.
+
+**정리 잡이 오기 전까지는 손으로 한다.** 그 티켓이 최소 둘 뒤라, 지금 이 상황을 만난
+운영자가 칠 것을 여기 적어 둔다.
+
+```sql
+-- 버려진 실행 찾기. 지우기 전에 반드시 눈으로 본다.
+SELECT r.id, r.as_of, r.dataset, r.scope, r.attempt, r.started_at,
+       (SELECT COUNT(*) FROM asof_state s WHERE s.run_id = r.id) AS asof_rows
+  FROM verification_runs r
+ WHERE r.verdict IS NULL
+   AND r.started_at < NOW() - INTERVAL 1 DAY
+ ORDER BY r.id;
+
+-- 파생 행 걷기. 0행이 나올 때까지 반복한다.
+DELETE FROM asof_state WHERE run_id = :runId LIMIT 50000;
+```
+
+**언제** — B 는 지금. C 는 B 뒤. D 는 300만 적재 뒤.
+`asof_state` 정리만은 B 를 안 기다려도 된다 — 이 티켓이 그 누수를 처음 도달 가능하게 만들었다.
 
 ---
 
