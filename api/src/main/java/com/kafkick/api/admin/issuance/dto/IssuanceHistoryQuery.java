@@ -1,13 +1,21 @@
 package com.kafkick.api.admin.issuance.dto;
 
+import java.time.DateTimeException;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 
+import com.kafkick.api.admin.issuance.IssuanceHistoryCursorCodec;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
 import com.kafkick.core.coupon.IssuanceEventType;
+import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.support.exception.CommonErrorCode;
 
 /**
  * 발급 상태 이력의 선택 필터와 과거 방향 cursor를 바인딩하는 변경 가능한 선구축 초안입니다.
@@ -33,6 +41,8 @@ public record IssuanceHistoryQuery(
         IssuanceEventType eventType
 ) {
 
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
     /**
      * from과 to가 모두 존재할 때 시작일이 종료일보다 늦지 않은지 확인합니다.
      *
@@ -41,5 +51,34 @@ public record IssuanceHistoryQuery(
     @AssertTrue(message = "from은 to보다 늦을 수 없습니다.")
     public boolean hasChronologicalRange() {
         return from == null || to == null || !from.isAfter(to);
+    }
+
+    /**
+     * HTTP 날짜와 cursor를 Core의 절대 시각 범위와 Keyset 위치로 변환합니다.
+     *
+     * @param cursorCodec 불투명 HTTP cursor 변환기
+     * @return Core 발급 이력 조회 조건
+     * @throws BusinessException 날짜를 유효한 Instant 조회 범위로 변환할 수 없는 경우
+     */
+    public AdminIssuanceHistoryQuery toCoreQuery(IssuanceHistoryCursorCodec cursorCodec) {
+        Instant fromInclusive;
+        Instant toExclusive;
+        try {
+            // 조회 날짜는 KST 00:00 포함 경계와 다음 날 00:00 제외 경계로 고정합니다.
+            fromInclusive = from == null ? null : from.atStartOfDay(KST).toInstant();
+            toExclusive = to == null ? null : to.plusDays(1L).atStartOfDay(KST).toInstant();
+        } catch (DateTimeException exception) {
+            // 클라이언트 날짜의 산술·변환 범위 오류를 내부 실패가 아닌 공통 400으로 통일합니다.
+            throw new BusinessException(
+                    CommonErrorCode.INVALID_INPUT,
+                    "유효하지 않은 발급 이력 조회 기간입니다.",
+                    exception);
+        }
+        HistoryPosition before = beforeCursor == null || beforeCursor.isBlank()
+                ? null
+                : cursorCodec.decode(beforeCursor);
+        int resolvedLimit = limit == null ? AdminIssuanceHistoryQuery.DEFAULT_LIMIT : limit;
+        return new AdminIssuanceHistoryQuery(
+                couponId, fromInclusive, toExclusive, eventType, before, resolvedLimit);
     }
 }
