@@ -5,6 +5,8 @@ import java.time.Clock;
 import javax.sql.DataSource;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.issuance.CompositeEventRecorder;
+import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
@@ -26,6 +28,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration;
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 
 @AutoConfiguration(
         after = { MetricsAutoConfiguration.class, CompositeMeterRegistryAutoConfiguration.class },
@@ -47,10 +50,37 @@ public class ApiObservationAutoConfiguration {
         return new IssuanceFlowEventFactory(eventIdGenerator);
     }
 
+    @Bean(name = "meterEventRecorder")
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(value = EventRecorder.class,
+            ignoredType = "com.kafkick.infra.mq.attempt.AttemptEventPublisher")
+    public MeterEventRecorder meterEventRecorder(
+            MeterRegistry meterRegistry,
+            ObservationIssuanceProperties issuanceProperties
+    ) {
+        return new MeterEventRecorder(
+                meterRegistry,
+                issuanceProperties.resolvedAttemptFailureLogInterval()
+        );
+    }
+
+    @Bean
+    @Primary
+    @ConditionalOnBean(name = "attemptEventPublisher")
+    public CompositeEventRecorder eventRecorder(
+            ObjectProvider<MeterEventRecorder> meterRecorderProvider,
+            @Qualifier("attemptEventPublisher") EventRecorder attemptEventPublisher
+    ) {
+        MeterEventRecorder meterRecorder = meterRecorderProvider.getIfAvailable();
+        return meterRecorder == null
+                ? new CompositeEventRecorder(attemptEventPublisher)
+                : new CompositeEventRecorder(meterRecorder, attemptEventPublisher);
+    }
+
     @Bean
     @ConditionalOnMissingBean(EventRecorder.class)
-    public EventRecorder eventRecorder() {
-        log.warn("EventRecorder 실구현이 없어 no-op을 사용합니다.");
+    public EventRecorder fallbackEventRecorder() {
+        log.warn("MeterRegistry와 Kafka EventRecorder가 없어 no-op을 사용합니다.");
         return new NoOpEventRecorder();
     }
 

@@ -1,6 +1,8 @@
 package com.kafkick.api.observation;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.issuance.CompositeEventRecorder;
+import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
@@ -25,7 +27,13 @@ import javax.sql.DataSource;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import com.kafkick.core.member.Grade;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.IssuanceFlowEvent;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -39,6 +47,10 @@ class ApiObservationAutoConfigurationTest {
     ));
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(ApiObservationAutoConfiguration.class))
+            .withBean(MeterRegistry.class, SimpleMeterRegistry::new);
+
+    private final ApplicationContextRunner withoutMeterRegistryRunner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(ApiObservationAutoConfiguration.class));
 
     @Test
@@ -52,7 +64,7 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context).hasSingleBean(IssuanceObservationService.class);
             assertThat(context).hasSingleBean(TimeProvider.class);
             assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
-            assertThat(context.getBean(EventRecorder.class)).isInstanceOf(NoOpEventRecorder.class);
+            assertThat(context.getBean(EventRecorder.class)).isInstanceOf(MeterEventRecorder.class);
             assertThat(context.getBean(CampaignLifecycleRecorder.class))
                     .isInstanceOf(NoOpCampaignLifecycleRecorder.class);
             assertThat(context.getBean(ConsistencyCalculator.class))
@@ -60,6 +72,72 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context.getBean(ConsistencySeverityPolicy.class).warnThreshold()).isEqualTo(10);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).criticalThreshold()).isEqualTo(100);
         });
+    }
+
+    @Test
+    void remainsStartableWithoutAMeterRegistry() {
+        withoutMeterRegistryRunner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).hasSingleBean(EventRecorder.class);
+            assertThat(context.getBean(EventRecorder.class)).isInstanceOf(NoOpEventRecorder.class);
+        });
+    }
+
+    @Test
+    void warnsWhenObservationFallsBackToNoOp(CapturedOutput output) {
+        withoutMeterRegistryRunner.run(context -> assertThat(output)
+                .contains("MeterRegistry와 Kafka EventRecorder가 없어 no-op을 사용합니다."));
+    }
+
+    @Test
+    void keepsKafkaPublisherUsableWhenMeterRegistryIsAbsent() {
+        AtomicInteger publisherCalls = new AtomicInteger();
+
+        withoutMeterRegistryRunner
+                .withBean("attemptEventPublisher", EventRecorder.class,
+                        () -> event -> publisherCalls.incrementAndGet())
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(MeterEventRecorder.class);
+                    assertThat(context.getBean(EventRecorder.class))
+                            .isInstanceOf(CompositeEventRecorder.class);
+
+                    context.getBean(EventRecorder.class).record(context
+                            .getBean(IssuanceFlowEventFactory.class).issueAttempt(new IssuanceFlowEvent.Ctx(
+                                    "publisher-only", 101L, 201L, Grade.GOLD, false,
+                                    Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3,
+                                    ReleaseStage.V3, QueueMode.ADAPTIVE, 901L, "api-1"
+                            )));
+
+                    assertThat(publisherCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void fansOutToTheCampaignMeterAndKafkaPublisher() {
+        AtomicInteger publisherCalls = new AtomicInteger();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MeterEventRecorder meterRecorder = new MeterEventRecorder(registry);
+
+        contextRunner
+                .withBean("meterEventRecorder", MeterEventRecorder.class, () -> meterRecorder)
+                .withBean("attemptEventPublisher", EventRecorder.class,
+                        () -> event -> publisherCalls.incrementAndGet())
+                .run(context -> {
+                    IssuanceFlowEvent.Ctx eventContext = new IssuanceFlowEvent.Ctx(
+                            "fanout", 101L, 201L, Grade.GOLD, false,
+                            Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
+                            QueueMode.ADAPTIVE, 901L, "api-1"
+                    );
+
+                    context.getBean(EventRecorder.class).record(context
+                            .getBean(IssuanceFlowEventFactory.class).issueAttempt(eventContext));
+
+                    assertThat(publisherCalls).hasValue(1);
+                    assertThat(registry.find(MeterNames.ISSUANCE_FLOW)
+                            .tags("coupon_id", "201", "stage", "attempt").counter().count())
+                            .isEqualTo(1.0);
+                });
     }
 
     @Test
@@ -162,21 +240,22 @@ class ApiObservationAutoConfigurationTest {
     @Test
     // 빈 이름이 mainDataSource 인 것은 우연이 아니다. 자동설정이 @Qualifier("mainDataSource") 로
     // 운영 풀을 지목하므로, 이름을 바꾸면 주입 대상이 사라져 이 테스트가 먼저 깨진다.
-    void resourceProviderRequiresBothDataSourceAndMeterRegistry() {
+    void resourceProviderRequiresTheNamedDataSource() {
         contextRunner.run(context -> assertThat(context).doesNotHaveBean(ResourceProvider.class));
 
         contextRunner
                 .withBean("mainDataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
-                .run(context -> assertThat(context).doesNotHaveBean(ResourceProvider.class));
-
-        contextRunner
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
-                .run(context -> assertThat(context).doesNotHaveBean(ResourceProvider.class));
-
-        contextRunner
-                .withBean("mainDataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .run(context -> assertThat(context).hasSingleBean(ResourceProvider.class));
+    }
+
+    @Test
+    void resourceProviderStillRequiresAMeterRegistry() {
+        withoutMeterRegistryRunner
+                .withBean("mainDataSource", DataSource.class,
+                        ApiObservationAutoConfigurationTest::dataSource)
+                .run(context -> assertThat(context)
+                        .hasNotFailed()
+                        .doesNotHaveBean(ResourceProvider.class));
     }
 
     /**
@@ -189,7 +268,6 @@ class ApiObservationAutoConfigurationTest {
     void resourceProviderIsSkippedInsteadOfFailingWhenTheMainPoolIsAbsent() {
         contextRunner
                 .withBean("dataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .run(context -> assertThat(context)
                         .hasNotFailed()
                         .doesNotHaveBean(ResourceProvider.class));
@@ -203,7 +281,6 @@ class ApiObservationAutoConfigurationTest {
 
         contextRunner
                 .withBean("mainDataSource", DataSource.class, ApiObservationAutoConfigurationTest::dataSource)
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .withBean("myResourceProvider", ResourceProvider.class, () -> stub)
                 .run(context -> assertThat(context)
                         .hasSingleBean(ResourceProvider.class)

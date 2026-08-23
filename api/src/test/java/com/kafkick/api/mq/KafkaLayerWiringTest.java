@@ -13,6 +13,8 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 
 import com.kafkick.ApiApplication;
+import com.kafkick.api.observation.issuance.CompositeEventRecorder;
+import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.testsupport.CommittedConfigStager;
@@ -54,12 +56,14 @@ class KafkaLayerWiringTest {
     private ApplicationContext context;
 
     @Test
-    @DisplayName("프로듀서 두 벌과 발행기가 api 컨텍스트에 올라온다")
+    @DisplayName("Kafka 발행기와 캠페인 미터 합성기가 함께 api 컨텍스트에 올라온다")
     void kafkaConfigLayerIsScannedFromTheApiContext() {
         assertThat(context.getBeanNamesForType(EventRecorder.class))
-                .as("빈이 있는 것과 발급 경로가 그걸 잡는 것은 다르다 — 자동설정의 NoOp 이 이기면"
-                        + " 발급은 정상인데 화면의 attempt 만 영원히 0 이다")
-                .containsExactly("attemptEventPublisher");
+                .as("발급 이벤트는 Kafka 발행과 JVM 내 미터를 함께 지나야 한다")
+                .contains("attemptEventPublisher", "eventRecorder");
+        assertThat(context.getBean(EventRecorder.class)).isInstanceOf(CompositeEventRecorder.class);
+        assertThat(context.getBeansOfType(MeterEventRecorder.class)).hasSize(1);
+        assertThat(context.containsBean("fallbackEventRecorder")).isFalse();
 
         assertThat(context.containsBean("attemptKafkaTemplate")).isTrue();
         assertThat(context.containsBean("persistKafkaTemplate")).isTrue();
