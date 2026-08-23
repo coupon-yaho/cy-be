@@ -26,6 +26,7 @@ import com.kafkick.api.support.ErrorResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.CommonErrorCode;
 
 public final class MockMetricsServer {
 
@@ -34,7 +35,7 @@ public final class MockMetricsServer {
     private static final Set<String> SCENARIOS =
             Set.of("", "loaded", "idle", "stale", "promDown", "budget");
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
-    private static final Duration RESPONSE_BUDGET = Duration.ofMillis(80);
+    private static final Duration RESPONSE_BUDGET = Duration.ofMillis(500);
 
     private final JsonMapper jsonMapper = MockJsonMapper.create();
     private final long startedAtNanos = System.nanoTime();
@@ -54,42 +55,51 @@ public final class MockMetricsServer {
     }
 
     private void handle(HttpExchange exchange) throws IOException {
-        addCors(exchange);
-        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
-            exchange.sendResponseHeaders(204, -1);
-            exchange.close();
-            return;
-        }
+        try {
+            addCors(exchange);
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+                return;
+            }
 
-        String path = exchange.getRequestURI().getPath();
-        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-            sendFailure(exchange, 404, "MOCK-404", "요청 경로를 찾을 수 없습니다.");
-            return;
+            String path = exchange.getRequestURI().getPath();
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendFailure(exchange, CommonErrorCode.METHOD_NOT_ALLOWED,
+                        CommonErrorCode.METHOD_NOT_ALLOWED.getMessage());
+                return;
+            }
+            if (METRICS_PATH.equals(path)) {
+                handleMetrics(exchange);
+                return;
+            }
+            if (EVENTS_PATH.equals(path)) {
+                ErrorResponse error = ErrorResponse.of(
+                        AdminApiErrorCode.NOT_IMPLEMENTED, requestId(exchange), Instant.now());
+                send(exchange, 501, ResponseEnvelope.fail(error));
+                return;
+            }
+            sendFailure(exchange, CommonErrorCode.NOT_FOUND, CommonErrorCode.NOT_FOUND.getMessage());
+        } catch (Exception failure) {
+            try {
+                sendFailure(exchange, CommonErrorCode.INTERNAL_ERROR,
+                        CommonErrorCode.INTERNAL_ERROR.getMessage());
+            } catch (IOException ignored) {
+            }
         }
-        if (METRICS_PATH.equals(path)) {
-            handleMetrics(exchange);
-            return;
-        }
-        if (EVENTS_PATH.equals(path)) {
-            ErrorResponse error = ErrorResponse.of(
-                    AdminApiErrorCode.NOT_IMPLEMENTED, requestId(exchange), Instant.now());
-            send(exchange, 501, ResponseEnvelope.fail(error));
-            return;
-        }
-        sendFailure(exchange, 404, "MOCK-404", "요청 경로를 찾을 수 없습니다.");
     }
 
     private void handleMetrics(HttpExchange exchange) throws IOException {
         Map<String, String> parameters = queryParameters(exchange.getRequestURI());
         String windowValue = parameters.get("window");
         if (windowValue == null || windowValue.isBlank()) {
-            sendFailure(exchange, 400, "MOCK-400", "window는 필수입니다.");
+            sendFailure(exchange, CommonErrorCode.INVALID_INPUT, "window는 필수입니다.");
             return;
         }
 
         MetricsWindow window = parseWindow(windowValue);
         if (window == null) {
-            sendFailure(exchange, 400, "MOCK-400", "지원하지 않는 window입니다: " + windowValue);
+            sendFailure(exchange, CommonErrorCode.INVALID_INPUT, "지원하지 않는 window입니다: " + windowValue);
             return;
         }
 
@@ -97,18 +107,18 @@ public final class MockMetricsServer {
         Long benchmarkRunId = parsePositiveLong(parameters.get("benchmarkRunId"));
         if ((parameters.containsKey("couponId") && couponId == null)
                 || (parameters.containsKey("benchmarkRunId") && benchmarkRunId == null)) {
-            sendFailure(exchange, 400, "MOCK-400", "조회 식별자는 양수여야 합니다.");
+            sendFailure(exchange, CommonErrorCode.INVALID_INPUT, "조회 식별자는 양수여야 합니다.");
             return;
         }
         if (couponId != null && benchmarkRunId != null) {
-            sendFailure(exchange, 400, "MOCK-400",
+            sendFailure(exchange, CommonErrorCode.INVALID_INPUT,
                     "couponId와 benchmarkRunId는 동시에 지정할 수 없습니다.");
             return;
         }
 
         String scenario = parameters.getOrDefault("scenario", "");
         if (!SCENARIOS.contains(scenario)) {
-            sendFailure(exchange, 400, "MOCK-400", "지원하지 않는 scenario입니다: " + scenario);
+            sendFailure(exchange, CommonErrorCode.INVALID_INPUT, "지원하지 않는 scenario입니다: " + scenario);
             return;
         }
 
@@ -122,19 +132,20 @@ public final class MockMetricsServer {
                 assembler.assemble(new MetricsQuery(window, couponId, benchmarkRunId))));
     }
 
-    private void sendFailure(HttpExchange exchange, int status, String code, String message)
+    private void sendFailure(HttpExchange exchange, CommonErrorCode errorCode, String message)
             throws IOException {
         ErrorResponse error = new ErrorResponse(
-                status, code, message, null, requestId(exchange), Instant.now());
-        send(exchange, status, ResponseEnvelope.fail(error));
+                errorCode.getStatus(), errorCode.getCode(), message, null, requestId(exchange), Instant.now());
+        send(exchange, errorCode.getStatus(), ResponseEnvelope.fail(error));
     }
 
     private void send(HttpExchange exchange, int status, Object body) throws IOException {
-        byte[] bytes = jsonMapper.writeValueAsBytes(body);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-        exchange.sendResponseHeaders(status, bytes.length);
-        exchange.getResponseBody().write(bytes);
-        exchange.close();
+        try (exchange) {
+            byte[] bytes = jsonMapper.writeValueAsBytes(body);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            exchange.sendResponseHeaders(status, bytes.length);
+            exchange.getResponseBody().write(bytes);
+        }
     }
 
     private static void addCors(HttpExchange exchange) {

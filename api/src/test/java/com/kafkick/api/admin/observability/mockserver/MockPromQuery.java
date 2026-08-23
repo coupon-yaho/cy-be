@@ -49,7 +49,9 @@ public final class MockPromQuery implements PromQuery {
         if (promQl.contains("time() - timestamp")) {
             return freshnessSamples();
         }
-        throw new IllegalArgumentException("지원하지 않는 Prometheus 질의입니다: " + promQl);
+        String message = "지원하지 않는 Prometheus 질의입니다: " + promQl;
+        System.err.println(message);
+        throw new PromQueryException(message);
     }
 
     private void delayForBudgetScenario() {
@@ -57,7 +59,7 @@ public final class MockPromQuery implements PromQuery {
             return;
         }
         try {
-            Thread.sleep(120);
+            Thread.sleep(600);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new PromQueryException("mock budget delay interrupted", interrupted);
@@ -147,7 +149,7 @@ public final class MockPromQuery implements PromQuery {
 
     private List<PromSample> freshnessSamples() {
         Instant now = Instant.now();
-        return List.of(sample(MetricAggregation.HTTP_FRESHNESS_AGE_SECONDS, Map.of("instance", "mock-1"),
+        return List.of(sample(MetricAggregation.HTTP_FRESHNESS_AGE_SECONDS, Map.of("instance", instanceName(1)),
                 "stale".equals(scenario) ? 300 : 0, now));
     }
 
