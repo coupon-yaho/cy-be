@@ -121,11 +121,6 @@ public class RunningJobProbe {
      * 뛴다. 그래서 무진도 구간의 상한이 {@code batch.verify.step-timeout-ms} 이고,
      * 생성자가 그 관계를 기동 때 검사한다.
      *
-     * <p><b>{@code verifyJob} 쪽은 사정이 다르다.</b> Step 열하나 중 청크는
-     * {@code replayStep} 뿐이고 나머지 열은 단발 태스클릿이라, 하트비트가 <b>Step 경계에서만</b>
-     * 뛴다. 그래서 무진도 구간의 상한이 {@code batch.verify.step-timeout-ms} 이고,
-     * 생성자가 그 관계를 기동 때 검사한다.
-     *
      * <p>추가 질의는 없다 — {@code SimpleJobExplorer.findRunningJobExecutions} 가
      * {@code fillStepExecutionDependencies} 까지 돌려 <b>StepExecution 을 채워서 준다</b>
      * (같은 방법으로 확인).

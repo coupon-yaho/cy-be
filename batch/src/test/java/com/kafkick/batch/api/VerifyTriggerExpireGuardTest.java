@@ -27,6 +27,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.config.RunningJobFixture;
 import com.kafkick.batch.job.ExpireJobConfig;
+import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
@@ -95,7 +96,8 @@ class VerifyTriggerExpireGuardTest {
     @AfterEach
     void tearDown() throws Exception {
         awaitUntil(Duration.ofSeconds(90), "검증 잡이 안 끝났습니다",
-                () -> jobRepository.findRunningJobExecutions("verifyJob").isEmpty());
+                () -> jobRepository.findRunningJobExecutions(
+                        VerifyJobConfig.JOB_NAME).isEmpty());
         new VerificationSeed(jdbcClient).clear();
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
     }

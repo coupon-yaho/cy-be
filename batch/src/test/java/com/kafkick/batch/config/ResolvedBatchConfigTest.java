@@ -257,6 +257,11 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.verify.asof-state-keep-runs")).isEqualTo("3");
         assertThat(environment.getProperty("batch.verify.metrics-refresh-ms")).isEqualTo("61000");
         assertThat(environment.getProperty("batch.verify.metrics-timeout-ms")).isEqualTo("6000");
+        // CY-384 가 넣은 둘. 이름만 EXPECTED_VALUE_KEYS 에 있으면 키 경로는 지켜지지만
+        // .example 이 참조하는 **환경변수 이름**은 한 번도 실행되지 않는다 —
+        // 오타를 내도 기본값 폴백이라 결과가 같다. 위 문단이 경계한 그 상황이다.
+        assertThat(environment.getProperty("batch.stuck-job-after-ms")).isEqualTo("1801000");
+        assertThat(environment.getProperty("batch.schedule.max-expire-skips")).isEqualTo("2");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")

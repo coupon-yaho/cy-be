@@ -82,21 +82,32 @@ public final class RunningJobFixture implements AutoCloseable {
         step.setStatus(BatchStatus.STARTED);
         jobRepository.update(step);
 
-        int backdated = jdbcClient.sql(
-                        "UPDATE BATCH_STEP_EXECUTION "
-                        + "SET LAST_UPDATED = DATE_SUB(LAST_UPDATED, INTERVAL :seconds SECOND) "
-                        + "WHERE STEP_EXECUTION_ID = :id")
-                .param("seconds", progressAgo.toSeconds())
-                .param("id", step.getId())
-                .update();
-        if (backdated != 1) {
-            // 조용히 0행이 되면 진도가 현재 시각으로 남아, "시체" 테스트가 이유 없이
-            // 초록이 아니라 이유 없이 빨개진다 — 원인을 찾는 데 오래 걸린다.
-            throw new IllegalStateException(
-                    "심은 Step 의 진도를 되돌리지 못했습니다. stepExecutionId=" + step.getId());
-        }
-
         fixture.jdbcClient = jdbcClient;
+
+        // **여기서 던지면 픽스처가 호출자에게 안 간다** — try-with-resources 에 들어가지
+        // 못하므로 close() 도 안 불리고, 방금 심은 두 행이 공유 컨테이너에 그대로 남는다.
+        // 그러면 아무 상관 없는 다음 테스트가 "그 잡이 도는 중" 으로 거절당한다 —
+        // 이 클래스가 막으려던 바로 그 상태다. 던지기 전에 치운다.
+        try {
+            int backdated = jdbcClient.sql(
+                            "UPDATE BATCH_STEP_EXECUTION "
+                            + "SET LAST_UPDATED = "
+                            + "DATE_SUB(LAST_UPDATED, INTERVAL :seconds SECOND) "
+                            + "WHERE STEP_EXECUTION_ID = :id")
+                    .param("seconds", progressAgo.toSeconds())
+                    .param("id", step.getId())
+                    .update();
+            if (backdated != 1) {
+                // 조용히 0행이 되면 진도가 현재 시각으로 남아, "시체" 테스트가 이유 없이
+                // 빨개진다 — 원인을 찾는 데 오래 걸린다.
+                throw new IllegalStateException(
+                        "심은 Step 의 진도를 되돌리지 못했습니다. stepExecutionId="
+                                + step.getId());
+            }
+        } catch (RuntimeException e) {
+            fixture.close();
+            throw e;
+        }
         return fixture;
     }
 
