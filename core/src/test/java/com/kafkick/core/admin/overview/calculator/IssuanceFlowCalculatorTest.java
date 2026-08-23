@@ -54,6 +54,24 @@ class IssuanceFlowCalculatorTest {
                 .isEqualTo(AdminOverviewSnapshot.IssuanceFlowState.NORMAL);
     }
 
+    /** 서로 다른 모집단인 성공 수가 시도 수보다 커도 트래픽이 있는 정상 관측으로 보존합니다. */
+    @Test
+    void acceptsSuccessCountGreaterThanAttemptWithoutMarkingNoTraffic() {
+        Instant windowStart = END.minus(Duration.ofMinutes(1));
+        IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
+                36L, CouponStatus.OPEN, true, windowStart, END, 0L, 1L, 1L,
+                END.minus(Duration.ofMinutes(2)), windowStart,
+                List.of(bucket(windowStart, END, 1L)), END,
+                END.minus(Duration.ofMinutes(3)), SourceStatus.VALID, END);
+
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow> observation =
+                new IssuanceFlowCalculator().calculate(POLICY, List.of(input)).issuanceFlows().get(36L);
+
+        assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
+        assertThat(observation.value().currentPerMinute()).isEqualTo(1.0);
+        assertThat(observation.value().state()).isEqualTo(AdminOverviewSnapshot.IssuanceFlowState.NORMAL);
+    }
+
     /** 명시적 연속 조건 시작 시각으로 중단 지속 시간을 계산하며 STALE 값도 수치 그대로 보존합니다. */
     @Test
     void calculatesStoppedDurationFromConditionStartAndPreservesStaleValue() {
@@ -114,13 +132,10 @@ class IssuanceFlowCalculatorTest {
                 .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, SourceStatus.N_A, null));
     }
 
-    /** 상호 모순 count·미래 조건 시각·중첩 버킷은 계약 오류입니다. */
+    /** 미래 조건 시각과 중첩 버킷은 계약 오류입니다. */
     @Test
-    void rejectsInconsistentCountsFutureConditionAndOverlappingBuckets() {
+    void rejectsFutureConditionAndOverlappingBuckets() {
         IssuanceFlowCalculator calculator = new IssuanceFlowCalculator();
-        assertThatThrownBy(() -> calculator.calculate(POLICY, List.of(input(
-                13L, 0L, 1L, 1L, CouponStatus.OPEN, true, SourceStatus.VALID, END,
-                END.minusSeconds(1), List.of())))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> calculator.calculate(POLICY, List.of(new IssuanceFlowCalculator.IssuanceFlowInput(
                 14L, CouponStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END, 1L, 1L, 1L,
                 END.minus(Duration.ofMinutes(1)), END, List.of(), null, END.plusSeconds(1), SourceStatus.VALID, END))))

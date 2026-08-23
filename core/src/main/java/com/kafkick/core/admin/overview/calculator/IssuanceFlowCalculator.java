@@ -71,8 +71,9 @@ public class IssuanceFlowCalculator {
                         bucket.windowEnd(), perMinute(
                                 bucket.completedCount(), bucket.windowStart(), bucket.windowEnd())))
                 .toList();
-        // 정상 수집됐지만 시도 자체가 없으면 장애가 아닌 무트래픽 상태로 구분합니다.
-        SourceStatus status = input.attemptedCount() == 0L && input.sourceStatus() == SourceStatus.VALID
+        // 시도와 성공의 모집단이 다르므로 두 값이 모두 0일 때만 무트래픽으로 판정합니다.
+        boolean noTraffic = input.attemptedCount() == 0L && input.completedCount() == 0L;
+        SourceStatus status = noTraffic && input.sourceStatus() == SourceStatus.VALID
                 ? SourceStatus.NO_TRAFFIC : input.sourceStatus();
         AdminOverviewSnapshot.IssuanceFlowState state = stateOf(policy, input);
         Duration duration = state == AdminOverviewSnapshot.IssuanceFlowState.NORMAL
@@ -152,7 +153,8 @@ public class IssuanceFlowCalculator {
      * @param stockAvailable 실제 재고가 남아 발급 중단 판정 대상인지 여부
      * @param windowStart 현재 발급 완료 수를 센 구간 시작 시각
      * @param windowEnd 현재 발급 완료 수를 센 구간 종료 시각
-     * @param attemptedCount 현재 구간 실제 발급 시도 수; 0은 NO_TRAFFIC 후보
+     * @param attemptedCount 현재 구간 정책 검증을 통과한 실제 발급 시도 수;
+     *                       완료 수와 모집단이 달라 둘 다 0일 때만 NO_TRAFFIC 후보
      * @param completedCount 현재 구간 실제 완료 수; 0은 관측값
      * @param comparisonCompletedCount 비교 구간 실제 완료 수
      * @param comparisonWindowStart 비교 완료 수를 센 구간 시작 시각
@@ -190,9 +192,8 @@ public class IssuanceFlowCalculator {
                 Objects.requireNonNull(comparisonWindowEnd, "comparisonWindowEnd");
                 Objects.requireNonNull(buckets, "buckets");
                 Objects.requireNonNull(conditionStartedAt, "conditionStartedAt");
-                if (attemptedCount < 0L || completedCount < 0L || comparisonCompletedCount < 0L
-                        || completedCount > attemptedCount) {
-                    throw new IllegalArgumentException("발급 count 관계가 유효하지 않습니다.");
+                if (attemptedCount < 0L || completedCount < 0L || comparisonCompletedCount < 0L) {
+                    throw new IllegalArgumentException("발급 count는 음수일 수 없습니다.");
                 }
                 if (sourceStatus == SourceStatus.NO_TRAFFIC
                         && (attemptedCount != 0L || completedCount != 0L)) {
