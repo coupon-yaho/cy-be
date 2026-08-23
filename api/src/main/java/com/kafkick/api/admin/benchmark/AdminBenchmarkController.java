@@ -140,7 +140,7 @@ public class AdminBenchmarkController {
     @PostMapping("/benchmarks/{benchmarkRunId}/archive/retry")
     public ResponseEnvelope<Void> retryArchive(
             @PathVariable @Positive Long benchmarkRunId, Caller caller) {
-        timeseriesArchiver.orElseThrow(() -> new IllegalStateException("archive 기능이 비활성화되어 있습니다"))
+        timeseriesArchiver.orElseThrow(this::notImplemented)
                 .retry(benchmarkRunId);
         return ResponseEnvelope.success();
     }

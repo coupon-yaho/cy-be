@@ -36,6 +36,9 @@ public class RunTimeseriesArchiver {
             for (Metric metric : Metric.values()) {
                 List<Sample> metricSamples = source.queryRange(
                         metric, run.startedAt(), run.observationStoppedAt(), 1);
+                if (metric != Metric.LATENCY_P99 && metricSamples.isEmpty()) {
+                    throw new IllegalStateException("필수 Prometheus 시계열이 비어 있습니다: " + metric);
+                }
                 validate(metric, run.startedAt(), run.observationStoppedAt(), metricSamples);
                 samples.addAll(metricSamples);
             }

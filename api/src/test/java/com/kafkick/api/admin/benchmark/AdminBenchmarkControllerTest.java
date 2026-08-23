@@ -134,12 +134,12 @@ class AdminBenchmarkControllerTest {
     }
 
     @Test
-    void retryArchiveReturnsServerErrorWhenFeatureIsUnavailable() throws Exception {
+    void retryArchiveReturnsNotImplementedWhenFeatureIsUnavailable() throws Exception {
         MockMvc unavailable = AdminControllerContractTestSupport.mockMvc(
                 new AdminBenchmarkController(Optional.empty()));
         unavailable.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.kafkick.core.benchmark;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.eq;
@@ -38,19 +39,36 @@ class RunTimeseriesArchiverTest {
         assertThat(source.ends).containsOnly(OBSERVATION_STOP);
         assertThat(source.steps).containsOnly(1);
         // 빈 range는 0이나 UNAVAILABLE 행으로 메우지 않는다.
-        assertThat(store.inserted).hasSize(1);
+        assertThat(store.inserted).hasSize(2);
         assertThat(store.inserted.get(0).value()).isEqualTo(0d);
         verify(runs).updateArchiveStatus(7, BenchmarkArchiveStatus.DONE, null);
     }
 
     @Test
-    void failureLeavesFailedAndRetryCanReachDone() {
+    void missingRequiredSeriesFailsBeforeReplacingExistingArchive() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> List.of();
+        RunTimeseriesArchiver.ArchiveStore store = mock(RunTimeseriesArchiver.ArchiveStore.class);
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(runs, source, store).archive(7))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("STOCK_REMAINING");
+
+        verify(store, never()).deleteForRun(7);
+        verify(runs).updateArchiveStatus(eq(7L), eq(BenchmarkArchiveStatus.FAILED),
+                org.mockito.ArgumentMatchers.contains("STOCK_REMAINING"));
+    }
+
+    @Test
+    void failedRetryRemainsFailedWhenPrometheusFailsAgain() {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
         when(runs.findById(7)).thenReturn(Optional.of(failedRun));
         RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> {
             if (metric == Metric.LATENCY_P99) throw new IllegalStateException("prometheus down");
-            return List.of();
+            return List.of(new Sample(metric, 0, start, 0d, State.VALID, null));
         };
         RunTimeseriesArchiver archiver = new RunTimeseriesArchiver(runs, source, new RecordingStore());
 
@@ -157,7 +175,7 @@ class RunTimeseriesArchiverTest {
         @Override
         public List<Sample> queryRange(Metric metric, Instant start, Instant end, int stepSeconds) {
             ends.add(end); steps.add(stepSeconds);
-            if (metric != Metric.STOCK_REMAINING) return List.of();
+            if (metric == Metric.LATENCY_P99) return List.of();
             return List.of(new Sample(metric, 0, start, 0d, State.VALID, null));
         }
     }

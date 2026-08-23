@@ -1,6 +1,7 @@
 package com.kafkick.api.admin.observability;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -77,8 +78,100 @@ class PromQueryClientRangeTest {
             String decoded = URLDecoder.decode(rawQuery.get(), StandardCharsets.UTF_8);
             assertThat(decoded).contains("start=1787443200.123456");
             assertThat(decoded).contains("end=1787443265.654321");
+            assertThat(decoded).contains("hikaricp_connections_active{job=\"api\",pool!=\"obs-pool\"}");
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void rejectsMultipleValueSeriesAtTheSameTimestamp() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v1/query_range", exchange -> {
+            byte[] response = """
+                    {"status":"success","data":{"resultType":"matrix","result":[
+                      {"metric":{"__name__":"app_coupon_stock_remaining","instance":"api-1"},
+                       "values":[[1787414400,"100"]]},
+                      {"metric":{"__name__":"app_coupon_stock_remaining","instance":"api-2"},
+                       "values":[[1787414400,"7"]]}
+                    ]}}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            PromQueryClient client = new PromQueryClient(RestClient.builder()
+                    .baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).build());
+
+            assertThatThrownBy(() -> client.queryRange(Metric.STOCK_REMAINING,
+                    Instant.ofEpochSecond(1787414400), Instant.ofEpochSecond(1787414401), 1))
+                    .isInstanceOf(PromQueryException.class)
+                    .hasMessageContaining("중복");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void preservesFractionalMatrixTimestamp() throws Exception {
+        HttpServer server = rangeServer("""
+                {"status":"success","data":{"resultType":"matrix","result":[
+                  {"metric":{"__name__":"app_http_latency_seconds","instance":"api-1"},
+                   "values":[[1787414400.123456,"1"]]}
+                ]}}
+                """);
+        try {
+            PromQueryClient client = client(server);
+
+            assertThat(client.queryRange(Metric.LATENCY_P99,
+                    Instant.parse("2026-08-22T16:00:00.123456Z"),
+                    Instant.parse("2026-08-22T16:00:01.123456Z"), 1).get(0).observedAt())
+                    .isEqualTo(Instant.parse("2026-08-22T16:00:00.123456Z"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsValueAndStateSeriesWithDifferentLabels() throws Exception {
+        HttpServer server = rangeServer("""
+                {"status":"success","data":{"resultType":"matrix","result":[
+                  {"metric":{"__name__":"app_coupon_stock_remaining","instance":"api-1"},
+                   "values":[[1787414400,"100"]]},
+                  {"metric":{"__name__":"app_coupon_stock_remaining_state","instance":"api-2"},
+                   "values":[[1787414400,"1"]]}
+                ]}}
+                """);
+        try {
+            PromQueryClient client = client(server);
+
+            assertThatThrownBy(() -> client.queryRange(Metric.STOCK_REMAINING,
+                    Instant.ofEpochSecond(1787414400), Instant.ofEpochSecond(1787414401), 1))
+                    .isInstanceOf(PromQueryException.class)
+                    .hasMessageContaining("라벨");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static HttpServer rangeServer(String body) throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v1/query_range", exchange -> {
+            byte[] response = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        return server;
+    }
+
+    private static PromQueryClient client(HttpServer server) {
+        return new PromQueryClient(RestClient.builder()
+                .baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).build());
     }
 }

@@ -1,6 +1,7 @@
 package com.kafkick.api.admin.observability;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -100,7 +101,8 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
             case STOCK_REMAINING -> "{__name__=~\"app_coupon_stock_remaining|app_coupon_stock_remaining_state\"}";
             // publishPercentiles만 있으므로 bucket 합산은 할 수 없다. topk가 최댓값의 instance 라벨을 보존한다.
             case LATENCY_P99 -> "topk(1, app_http_latency_seconds{quantile=\"0.99\"}) * 1000";
-            case DB_POOL_USAGE -> "sum(hikaricp_connections_active) / sum(hikaricp_connections_max)";
+            case DB_POOL_USAGE -> "sum(hikaricp_connections_active{job=\"api\",pool!=\"obs-pool\"})"
+                    + " / sum(hikaricp_connections_max{job=\"api\",pool!=\"obs-pool\"})";
         };
         JsonNode body;
         try {
@@ -136,22 +138,42 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
 
         TreeMap<Instant, MutableRangeSample> byTime = new TreeMap<>();
         for (JsonNode series : data.path("result")) {
-            String name = series.path("metric").path(NAME_LABEL).asString("");
-            String instance = series.path("metric").path("instance").asString(null);
+            JsonNode labels = series.path("metric");
+            String name = labels.path(NAME_LABEL).asString("");
+            String instance = labels.path("instance").asString(null);
+            Map<String, String> seriesLabels = labelsWithoutName(labels);
             boolean stateSeries = name.endsWith("_state");
             for (JsonNode pair : series.path("values")) {
                 if (!pair.isArray() || pair.size() != 2) {
                     continue;
                 }
-                double seconds = epochSecondsOf(pair.get(0));
-                Instant observedAt = Instant.ofEpochMilli(Math.round(seconds * 1000));
+                Instant observedAt = instantOfEpochSeconds(pair.get(0));
                 double value = parseValue(pair.get(1).asString(""));
                 MutableRangeSample sample = byTime.computeIfAbsent(observedAt, ignored -> new MutableRangeSample());
                 if (stateSeries) {
+                    if (sample.stateSeen) {
+                        throw new PromQueryException("같은 시각의 상태 시리즈가 중복됐습니다: " + metric
+                                + " at " + observedAt);
+                    }
+                    sample.stateSeen = true;
+                    sample.stateLabels = seriesLabels;
                     sample.state = archiveState(value);
-                } else if (Double.isFinite(value)) {
-                    sample.value = value;
-                    sample.instance = instance;
+                } else {
+                    if (sample.valueSeen) {
+                        throw new PromQueryException("같은 시각의 값 시리즈가 중복됐습니다: " + metric
+                                + " at " + observedAt);
+                    }
+                    sample.valueSeen = true;
+                    sample.valueLabels = seriesLabels;
+                    if (Double.isFinite(value)) {
+                        sample.value = value;
+                        sample.instance = instance;
+                    }
+                }
+                if (sample.valueLabels != null && sample.stateLabels != null
+                        && !sample.valueLabels.equals(sample.stateLabels)) {
+                    throw new PromQueryException("값과 상태 시리즈의 라벨이 다릅니다: " + metric
+                            + " at " + observedAt);
                 }
             }
         }
@@ -169,6 +191,29 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
                     entry.getKey(), value, state, raw.instance));
         }
         return List.copyOf(samples);
+    }
+
+    private static Map<String, String> labelsWithoutName(JsonNode metric) {
+        Map<String, String> labels = new TreeMap<>();
+        for (Map.Entry<String, JsonNode> field : metric.properties()) {
+            if (!NAME_LABEL.equals(field.getKey())) {
+                labels.put(field.getKey(), field.getValue().asString(""));
+            }
+        }
+        return Map.copyOf(labels);
+    }
+
+    private static Instant instantOfEpochSeconds(JsonNode timestamp) {
+        epochSecondsOf(timestamp);
+        BigDecimal decimal = timestamp.decimalValue();
+        BigDecimal wholeSeconds = decimal.setScale(0, RoundingMode.FLOOR);
+        long seconds = wholeSeconds.longValueExact();
+        int nanos = decimal.subtract(wholeSeconds).movePointRight(9)
+                .setScale(0, RoundingMode.HALF_UP).intValueExact();
+        if (nanos == 1_000_000_000) {
+            return Instant.ofEpochSecond(Math.addExact(seconds, 1));
+        }
+        return Instant.ofEpochSecond(seconds, nanos);
     }
 
     private static State archiveState(double code) {
@@ -191,6 +236,10 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
         private Double value;
         private State state;
         private String instance;
+        private boolean valueSeen;
+        private boolean stateSeen;
+        private Map<String, String> valueLabels;
+        private Map<String, String> stateLabels;
     }
 
     private static List<PromSample> parse(JsonNode body, String promQl) {
