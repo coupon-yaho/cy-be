@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability.dto;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import com.kafkick.api.admin.support.ObservedValue;
@@ -18,6 +19,7 @@ import com.kafkick.core.observation.SourceStatus;
  * 상태와 관측 시각을 유지합니다. 정합성 {@code phase}가 LIVE이면 {@code verdict}는 null이고, FINAL이면
  * PASS 또는 FAIL이어야 합니다. 범위·구간·단계·심각도와 세부 지표는 모두 명시적 enum·record 계약입니다.</p>
  *
+ * @param meta 원천 상태와 무관하게 항상 채워지는 스냅샷 메타데이터
  * @param scope GLOBAL, COUPON, BENCHMARK_RUN 중 실제 관측 범위
  * @param snapshotAt 응답 지표의 기준 시각
  * @param window 집계 구간
@@ -29,6 +31,7 @@ import com.kafkick.core.observation.SourceStatus;
  * @param circuitBreakers 회로 차단기별 상태 목록
  */
 public record AdminMetricsResponse(
+        Meta meta,
         MetricsScope scope,
         Instant snapshotAt,
         MetricsWindow window,
@@ -50,6 +53,7 @@ public record AdminMetricsResponse(
         // 직렬화 초안에서는 아직 수집되지 않은 비율을 0이 아닌 PENDING/null로 표현합니다.
         ObservedValue<Double> pendingRate = new ObservedValue<>(null, SourceStatus.PENDING, null);
         return new AdminMetricsResponse(
+                Meta.of(Instant.EPOCH, window, 0L),
                 new MetricsScope(MetricsScopeType.GLOBAL, null, null),
                 Instant.EPOCH,
                 window,
@@ -60,6 +64,54 @@ public record AdminMetricsResponse(
                 new ObservedValue<>(null, SourceStatus.PENDING, null),
                 List.of()
         );
+    }
+
+
+    /**
+     * 스냅샷 자체에 대한 사실입니다. 원천이 실패해도 이 값들은 항상 알 수 있으므로
+     * {@link ObservedValue}로 감싸지 않습니다 — 감싸면 화면이 여기서도 상태 분기를 타야 합니다.
+     *
+     * @param schemaVersion 화면 계약이 리터럴 1로 고정한 응답 스키마 판
+     * @param snapshotAt 응답 지표의 기준 시각
+     * @param windowStart 집계 창의 시작 시각
+     * @param windowEnd 집계 창의 끝 시각
+     * @param collectionDurationMs 조립에 실제로 걸린 시간(ms). 응답 예산에 얼마나 근접했는지가
+     *        이 값으로만 보이므로 상수로 채우지 않습니다
+     * @param sources 원천별 상태 자리. 상태는 값마다 붙는 {@code ObservedValue.state}가 정본이라
+     *        같은 사실을 두 곳에 두지 않기 위해 비워 둡니다
+     */
+    public record Meta(
+            int schemaVersion,
+            Instant snapshotAt,
+            Instant windowStart,
+            Instant windowEnd,
+            long collectionDurationMs,
+            Map<String, SourceStatus> sources
+    ) {
+
+        /** 화면 타입이 {@code number}가 아니라 리터럴 {@code 1}입니다. */
+        public static final int SCHEMA_VERSION = 1;
+
+        /**
+         * 기준 시각과 집계 창으로 메타데이터를 만듭니다.
+         *
+         * @param snapshotAt 응답 지표의 기준 시각
+         * @param window 집계 창
+         * @param collectionDurationMs 조립에 걸린 시간(ms)
+         * @return 창 경계가 계산된 메타데이터
+         */
+        public static Meta of(Instant snapshotAt, MetricsWindow window, long collectionDurationMs) {
+            Objects.requireNonNull(snapshotAt, "snapshotAt");
+            Objects.requireNonNull(window, "window");
+            return new Meta(
+                    SCHEMA_VERSION,
+                    snapshotAt,
+                    snapshotAt.minus(window.duration()),
+                    snapshotAt,
+                    collectionDurationMs,
+                    // null 이면 default-property-inclusion: non_null 이 키를 지워 화면이 undefined 를 읽는다.
+                    Map.of());
+        }
     }
 
     /**

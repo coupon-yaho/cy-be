@@ -19,6 +19,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencyMe
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencySnapshot;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.PersistenceLagSummary;
@@ -116,6 +117,9 @@ public class PromMetricsAssembler {
         Freshness domain = domainFreshness(consistency, evaluatedAt);
 
         return new AdminMetricsResponse(
+                // 예산에 얼마나 근접했는지가 이 값으로만 보인다. 잘려서 UNAVAILABLE 이 나오기
+                // 시작하면 화면이 그 원인을 여기서 읽는다.
+                Meta.of(evaluatedAt, window, deadline.elapsedMillis()),
                 scope(query),
                 evaluatedAt,
                 window,
@@ -179,15 +183,22 @@ public class PromMetricsAssembler {
      */
     private static final class Deadline {
 
+        private final long startedAtNanos;
         private final long expiresAtNanos;
         private boolean anyIssued;
 
-        private Deadline(long expiresAtNanos) {
+        private Deadline(long startedAtNanos, long expiresAtNanos) {
+            this.startedAtNanos = startedAtNanos;
             this.expiresAtNanos = expiresAtNanos;
         }
 
         static Deadline startingNow(Duration budget) {
-            return new Deadline(System.nanoTime() + budget.toNanos());
+            long now = System.nanoTime();
+            return new Deadline(now, now + budget.toNanos());
+        }
+
+        long elapsedMillis() {
+            return Duration.ofNanos(System.nanoTime() - startedAtNanos).toMillis();
         }
 
         boolean allows() {

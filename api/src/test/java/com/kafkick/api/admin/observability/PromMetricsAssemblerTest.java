@@ -34,8 +34,57 @@ class PromMetricsAssemblerTest {
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
     private static final Duration BUDGET = Duration.ofMillis(900);
 
+    /** 조립기가 응답 한 장에 보내는 질의 수. 예산이 넉넉하면 네 개가 모두 나간다. */
+    private static final long QUERY_COUNT = 4;
+    private static final long QUERY_DELAY_MILLIS = 20;
+
     private static final long FRESH_AGE_SECONDS = 3;
     private static final long STALE_AGE_SECONDS = 300;
+
+    // ── meta ───────────────────────────────────────────────────────────────────
+
+    /** 창 경계는 관측 시각과 집계 창에서 나오고, 창이 바뀌면 시작 시각도 바뀝니다. */
+    @Test
+    @DisplayName("meta 의 창 경계는 관측 시각과 집계 창을 따른다")
+    void metaCarriesWindowBounds() {
+        AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
+
+        assertThat(response.meta().schemaVersion()).isEqualTo(1);
+        assertThat(response.meta().snapshotAt()).isEqualTo(response.snapshotAt());
+        assertThat(response.meta().windowEnd()).isEqualTo(response.snapshotAt());
+        assertThat(response.meta().windowStart())
+                .isEqualTo(response.snapshotAt().minus(Duration.ofMinutes(1)));
+        assertThat(response.meta().sources()).isEmpty();
+
+        AdminMetricsResponse wider = assemble(
+                FakePromQuery.empty(), new MetricsQuery(MetricsWindow.FIFTEEN_MINUTES, null, null));
+        assertThat(wider.meta().windowStart())
+                .isEqualTo(wider.snapshotAt().minus(Duration.ofMinutes(15)));
+    }
+
+    /**
+     * 시계는 고정돼 있어도 조립 시간은 실측이어야 합니다 — 벽시계로 재면 이 값이 0 으로 굳어
+     * 예산에 얼마나 근접했는지가 보이지 않습니다.
+     */
+    @Test
+    @DisplayName("collectionDurationMs 는 고정 시계와 무관하게 실제 경과를 잰다")
+    void metaMeasuresCollectionDuration() {
+        PromQuery slow = promQl -> {
+            try {
+                Thread.sleep(QUERY_DELAY_MILLIS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            return List.of();
+        };
+
+        AdminMetricsResponse response = assemble(slow, globalQuery());
+
+        // 질의 하나가 아니라 네 개를 합친 시간이어야 한다. 하한만 보므로 CI 가 느릴수록
+        // 더 확실히 통과한다 — 느려서 깨질 수 있는 상한 단언이 아니다.
+        assertThat(response.meta().collectionDurationMs())
+                .isGreaterThanOrEqualTo(QUERY_DELAY_MILLIS * QUERY_COUNT);
+    }
 
     // ── 값이 없을 때 ────────────────────────────────────────────────────────────
 
