@@ -144,10 +144,12 @@ public class IssuanceInquiryCalculator {
             Map<RequestScope, RawHistoryLink> issueHistoryByRequest
     ) {
         RawIssuance direct = issuanceById.get(attempt.issuanceId());
-        if (direct != null) {
+        if (direct != null
+                && direct.memberId() == attempt.memberId()
+                && direct.couponId() == attempt.couponId()) {
             return direct;
         }
-        // 직접 ID가 없을 때만 ISSUE 이력이 보존한 동일 requestId를 보조 연결 키로 사용한다.
+        // 직접 ID가 없거나 문의 범위와 다르면 ISSUE 이력의 동일 requestId로 보조 연결한다.
         RawHistoryLink history = issueHistoryByRequest.get(RequestScope.of(attempt));
         return history == null ? null : issuanceById.get(history.issuanceId());
     }

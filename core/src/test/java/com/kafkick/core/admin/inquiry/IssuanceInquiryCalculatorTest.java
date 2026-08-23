@@ -48,6 +48,37 @@ class IssuanceInquiryCalculatorTest {
     }
 
     @Test
+    void rejectsDirectIssuanceOutsideAttemptScopeAndFallsBackToIssueHistory() {
+        RawAttempt attempt = issueResult(
+                15L, "scope-mismatch", 101L, 201L, 999L,
+                201, null, BASE.plusSeconds(12));
+        RawIssuance outsideScope = issuance(
+                999L, 202L, 201L, IssuanceStatus.USED, BASE.plusSeconds(8));
+        RawIssuance historyTarget = issuance(
+                305L, 101L, 201L, IssuanceStatus.CANCELLED, BASE.plusSeconds(9));
+        RawHistoryLink history = new RawHistoryLink(
+                44L,
+                305L,
+                IssuanceEventType.ISSUE,
+                "scope-mismatch",
+                BASE.plusSeconds(9));
+
+        AdminIssuanceInquiryResult result = calculator.calculate(
+                source(
+                        List.of(attempt),
+                        List.of(outsideScope, historyTarget),
+                        List.of(history)),
+                query(101L, null, null, null, null, 50));
+
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.issuanceId()).isEqualTo(305L);
+            assertThat(item.currentStatus()).isEqualTo(IssuanceStatus.CANCELLED);
+            assertThat(item.position()).isEqualTo(new InquiryPosition(
+                    BASE.plusSeconds(12), SourceKind.ATTEMPT, 15L));
+        });
+    }
+
+    @Test
     void enrichesAttemptByExactIssueHistoryRequestId() {
         RawAttempt attempt = new RawAttempt(
                 12L,
