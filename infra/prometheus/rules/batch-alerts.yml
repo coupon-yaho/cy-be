@@ -87,43 +87,207 @@ groups:
       # 아예 안 도는 상태. 만료가 밀리면 기한 지난 쿠폰이 계속 살아 있고,
       # 그만큼 재고(active_count)가 안 돌아와 발급 가능 수량이 줄어든 채로 유지된다.
       #
-      # absent_over_time 을 or 로 붙인 이유 — 스크레이프 자체가 끊기면 시계열이 사라져서
-      # increase(...) == 0 은 **평가할 대상이 없어 조용해진다.** 서버가 죽은 경우가 그렇고,
-      # 그게 정확히 이 규칙이 잡아야 할 상황이다.
-      # sum by 로 접는 것이 먼저다. 이 카운터는 status 라벨로 쪼개지므로 접지 않으면
-      # 조건이 시계열마다 평가되어, 잡이 한 번 FAILED 로 끝난 뒤로는 그 계열의 증가분이 0 이라
-      # "안 돌았다" 가 실제로는 "최근 15분간 성공만 했다" 일 때 뜬다.
-      - alert: BatchJobNotRunning
-      # increase() 가 아니라 절대 델타를 쓴다. 재기동하면 카운터가 새로 태어나는데,
-      # increase() 로 재면 첫 완료부터 두 번째 완료까지(≈10분) 계열이 상수라 조건이 참이 되어
-      # **배포할 때마다 critical 이 뜬다.** 델타는 offset 쪽 계열이 없으면 결과가 비어
-      # 그 갈래가 아예 평가되지 않는다.
+      # ⚠️ **증분 창을 쓰지 않는다.** 예전 BatchJobNotRunning 은
+      #    spring_batch_job_seconds_count 의 15분 창 절대 델타가 0 인지로 봤는데, 그것은
+      #    **주기가 5분일 때만 성립하는 축**이다. 만료를 배치 창(일 1회)으로 옮기면 그 창이
+      #    하루의 대부분 비어 **영구 critical** 이 된다 — 규칙이 틀린 게 아니라 축이 안 맞는다.
       #
-      # absent_over_time 쪽 재기동 오탐은 for 를 주기의 3배로 올려 흡수한다.
+      #    마지막 성공 시각은 그 축을 안 탄다. 주기가 5분이든 하루든 질문이 하나이고,
+      #    아래 SLA 숫자만 주기에 맞춰 바꾸면 된다.
       #
-      # ⚠️ 그 대가로 최초 발화가 늦다. 조건 자체가 15분 창을 보고 for 가 다시 15분을 요구하므로
-      #    멈춘 시각으로부터 **약 30분** 뒤에 뜬다. 그 사이 크론 슬롯 6개가 지나간다.
-      #    더 빨리 알아야 하면 for 를 낮추고 재기동 오탐을 다른 방법으로 걸러야 한다.
+      # ⚠️ 근거는 DB 다. cy_batch_last_success_seconds 는 BATCH_JOB_EXECUTION 을 읽어 내므로
+      #    **재기동해도 값이 그대로** 살아 있다. JVM 안 카운터였다면 배포 직후 최대 한 주기
+      #    동안 "모름" 이고, 일 1회에서는 그것이 하루다.
+      #
+      # SLA 900 = 만료 크론 5분 × 3. 검증이 도는 동안 슬롯을 건너뛰는데(max-expire-skips)
+      # 그 최대 지연이 (상한+1) × 주기 = 10분이라, 그 위에 한 슬롯의 여유를 둔 값이다.
+      # **주기를 배치 창으로 옮기는 티켓이 이 숫자를 함께 고친다.**
+      - alert: ExpireNotSucceeding
         expr: >-
-          (
-            sum by (spring_batch_job_name) (
-              spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}
-            )
-            - sum by (spring_batch_job_name) (
-              spring_batch_job_seconds_count{spring_batch_job_name="expireJob"} offset 15m
-            )
-          ) == 0
-          or absent_over_time(spring_batch_job_seconds_count{spring_batch_job_name="expireJob"}[15m])
-        for: 15m
+          (time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 900
+          or (cy_batch_last_success_seconds{spring_batch_job_name="expireJob"} - time()) > 60
+        # 나이 갈래는 이미 900초를 기다린 뒤라 여기서 더 길게 볼 이유가 없다 —
+        # 총 발화 지연이 20분이고, 예전 규칙(15분 창 + for 15m ≈ 30분)보다 빠르다.
+        #
+        # ⚠️ 스크레이프가 끊긴 갈래는 여기 안 넣는다. 그때 프로메테우스가 이 게이지에
+        #    stale 마커를 넣어 두 갈래가 전부 빈 결과가 되고 for 타이머가 리셋된다.
+        #    그 사건은 아래 BatchTargetDown 이 up 계열로 따로 진다 — up 은 스크레이프
+        #    실패에도 0 이 계속 생성되므로 계열이 안 끊긴다.
+        #
+        # ⚠️ NaN 갈래도 여기 없다. 그쪽은 예산이 다르다 — 빈 스키마 첫 기동에서는
+        #    첫 크론 슬롯(300초) + 되읽기 한 주기(60초)를 기다려야 값이 생긴다.
+        #    이 for(5분)를 그대로 주면 **정상 기동인데 critical 이 났다가 스스로 꺼진다.**
+        #    아래 ExpireNeverSucceeded 가 그 예산을 갖고 진다.
+        for: 5m
         labels:
           severity: critical
           # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
           channel: server
         annotations:
-          summary: "만료 배치가 30분 넘게 안 돌았다 (주기는 5분)"
+          summary: "만료 배치가 SLA(15분) 안에 성공하지 못했습니다"
           description: >-
-            배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지,
-            batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다.
+            갈래가 셋이라 먼저 어느 쪽인지 가른다.
+            **값이 오래됐으면** 배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로
+            뜨지 않았는지, batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다.
+            검증이 도는 동안 슬롯을 건너뛰는 것도 지연을 만드는데, 그쪽은 로그의
+            "만료 슬롯을 건너뜁니다" WARN 이 답한다.
+            **NaN 이면** 갈래가 셋이다. 먼저
+            `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 —
+            증가했으면 되읽기 실패다. 안 증가했으면 7일 창(되읽기 질의의 조회 범위) 안에
+            성공한 실행이 없는 것이고, 8일 넘게 안 돈 경우가 여기다 —
+            BATCH_JOB_EXECUTION 을 직접 조회해 가른다.
+            **미래 시각이면** 원인은 언제나 시간대 설정이다. 드라이버가 쓸 때 쓰는 존과
+            UNIX_TIMESTAMP 가 읽을 때 쓰는 세션 존이 갈린 것이다 —
+            storage.yml URL 의 serverTimezone(Connector/J 8.0.23+ 에서 connectionTimeZone 의
+            별칭이다)과 `SELECT @@session.time_zone, @@global.time_zone` 을 함께 본다.
+            둘이 다르면 그 차이가 그대로 오차다. 과거 방향으로 어긋나면 위 "값이 오래됐으면"
+            갈래로 나오므로, 그쪽을 다 뒤져도 원인이 안 나오면 이 축을 본다.
+
+      # 성공 이력을 아직 못 본 상태. 신규 스키마 · BATCH_SCHEDULING_ENABLED=false ·
+      # 7일 창 밖(8일 넘게 안 돎)이 전부 여기다. 되읽기 실패도 같은 모양이라
+      # BatchRunMetricsStale 을 함께 본다.
+      - alert: ExpireNeverSucceeded
+        expr: >-
+          cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}
+          != cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}
+        # 크론 슬롯 한 번(300초) + 되읽기 한 주기(60초) + 여유. 이 예산이 없으면
+        # 빈 스키마 첫 기동이 정상인데도 뜬다.
+        for: 10m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "만료 배치의 성공 이력이 아직 없습니다"
+          description: >-
+            먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 —
+            증가했으면 되읽기 실패이지 만료 문제가 아니다.
+            안 증가했으면 진짜로 성공 이력이 없는 것이다:
+            BATCH_SCHEDULING_ENABLED 가 false 로 떴거나(batch.yml 의 기본값이다),
+            스키마가 새로 만들어졌거나, 7일 넘게 성공이 없는 것이다.
+
+      # **시계열이 아예 없는 경우.** 라벨 축이나 잡 이름이 어긋나면 위 규칙들의 셀렉터가
+      # 아무것과도 안 맞아 **전부 빈 벡터**가 되고, 그 결과는 오탐이 아니라 **영구 침묵**이다.
+      # 감시 축에서는 그쪽이 더 나쁘다 — 만료가 며칠 안 돌아도 아무 신호가 없다.
+      # 타깃이 살아 있는 것을 함께 확인해 BatchTargetDown 과 겹치지 않게 한다.
+      - alert: ExpireGaugeMissing
+        expr: >-
+          absent(cy_batch_last_success_seconds{spring_batch_job_name="expireJob"})
+          and on() (min_over_time(up{job="cy-batch"}[5m]) == 1)
+        for: 5m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "expireJob 의 마지막 성공 시각 게이지가 아예 없습니다 — 라벨이 어긋났습니다"
+          description: >-
+            배치는 떠 있는데 이 시계열이 없습니다. 잡 이름(ExpireJobConfig.JOB_NAME)이
+            바뀌었거나, 지표 태그 축이 바뀌었거나, 스크레이프에 relabel 이 붙은 것입니다.
+            /actuator/prometheus 본문에서 cy_batch_last_success_seconds 의 라벨을 직접 봅니다.
+
+      # 스크레이프가 끊긴 것. 위 규칙에서 갈라 둔 이유는 for 예산이 다르기 때문이다 —
+      # 배치 재기동은 이미지 pull 이 느린 날 십 분을 넘길 수 있고, 그것은 사건이 아니다.
+      # docs/14 가 부하 구간(batch 미기동)을 silence 로 다루기로 한 것도 이 축이다.
+      # **absent() 로는 크래시루프를 못 잡는다.** 컨테이너가 15분 안에 잠깐씩 뜨면
+      # 샘플이 하나만 들어와도 absent() 가 거짓이 되어 for 타이머가 리셋되고,
+      # 그동안 ExpireNotSucceeding 쪽도 시계열이 끊겨 자기 for 를 못 채운다 —
+      # 두 규칙이 서로의 사각을 만든다(promtool test rules 로 65분간 알림 0건을 재현했다).
+      #
+      # up 은 프로메테우스가 스크레이프마다 스스로 만드는 계열이라 끊기지 않는다.
+      # 창 평균이 0.9 미만이면 15분 중 1분 30초 넘게 못 긁은 것이다.
+      #
+      # unless 절이 **복구를 빠르게 푼다.** 창 평균만 쓰면 타깃이 올라온 뒤에도 15분 창에서
+      # 0 구간이 다 빠져나갈 때까지(최대 13분 30초) 조건이 참으로 남는다 — 부하 측정 뒤
+      # silence 를 푸는 절차(docs/14)가 그 구간과 겹쳐 오탐 critical 이 나간다.
+      # 크래시루프는 정의상 5분 연속 up=1 이 안 나오므로 감지는 유지된다.
+      #
+      # ⚠️ job 값은 infra/prometheus/prometheus.yml 의 job_name 과 같아야 한다.
+      #    다르면 이 규칙이 조용히 안 뜬다. (이것은 프로메테우스가 붙이는 **타깃 라벨**이라,
+      #    우리가 내보내는 지표에 job 태그를 달지 말라는 금지와 다른 축이다.)
+      - alert: BatchTargetDown
+        expr: >-
+          avg_over_time(up{job="cy-batch"}[15m]) < 0.9
+          unless min_over_time(up{job="cy-batch"}[5m]) == 1
+        for: 5m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "배치의 실행 지표가 아예 안 보입니다 — 서버가 떠 있는지 봅니다"
+          description: >-
+            시계열이 사라졌습니다. 배치 컨테이너가 안 떠 있거나 스크레이프가 끊긴 것입니다.
+            부하 측정 구간처럼 batch 를 일부러 안 띄우는 때는 정상이므로 그 구간에만
+            silence 를 겁니다 — docs/14 에 명령이 있습니다.
+
+      # 간헐 실패를 잡는다. 되읽기가 성공/실패를 번갈아 하면 게이지가 정상 ↔ NaN 을 오가고,
+      # 아래 BatchRunMetricsUnknown 과 BatchStuckExecution 의 for 타이머가 **서로 반대편 값에
+      # 리셋되어 둘 다 영영 안 찬다** — 시체 실행이 있는데도 28분간 알림 0건인 것을
+      # promtool test rules 로 재현했다. 카운터는 리셋을 안 타므로 그 구간을 문다.
+      #
+      # 절대 델타를 쓰는 이유는 VerificationMetricsStale 과 같다 — 재기동하면 카운터가
+      # 새로 태어나는데 increase() 는 리셋 직전 값을 더해 배포마다 뜬다.
+      #
+      # 임계 3 은 되읽기 주기 상한(120초)에서도 10분 창에 다섯 번 시도한다는 계산이다.
+      - alert: BatchRunMetricsStale
+        expr: >-
+          (
+            cy_batch_refresh_failures_total
+            - cy_batch_refresh_failures_total offset 10m
+          ) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "배치 실행 지표 되읽기가 반복 실패하고 있습니다"
+          description: >-
+            게이지가 정상과 NaN 을 오가는 동안은 NaN 감시도 시체 감시도 for 를 못 채웁니다.
+            배치 로그의 "배치 실행 지표를 되읽지 못했습니다" 가 원인을 답합니다.
+            흔한 원인은 커넥션 풀 고갈과 배치 메타 잠금입니다.
+
+      # 되읽기가 실패해 지표가 NaN 인 상태. 이것이 없으면 BatchStuckExecution 이
+      # 조용히 꺼진다 — NaN > 0 은 거짓이라 그 규칙이 발화 조건 자체를 못 만든다.
+      # CY-347 이 ExpireMetricsUnknown 으로 값을 치른 그 자리와 같은 모양이다.
+      # for 를 ExpireNotSucceeding 과 **같은 5분으로 맞춘다.** 되읽기가 실패하면
+      # markUnknown() 이 두 게이지를 동시에 떨어뜨리므로 둘은 같은 사건인데, for 가 다르면
+      # 그 사이 구간에서 저쪽 runbook 의 "함께 떠 있으면 되읽기 실패다" 감별이
+      # **구조적으로 거짓**이 된다. 기동 직후 NaN 구간은 되읽기 주기(최대 120초)라 5분이면 덮인다.
+      - alert: BatchRunMetricsUnknown
+        expr: cy_batch_stuck_executions != cy_batch_stuck_executions
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "{{ $labels.spring_batch_job_name }} 의 실행 지표를 못 읽고 있습니다 — BatchStuckExecution 이 꺼져 있습니다"
+          description: >-
+            되읽기가 실패해 게이지가 NaN 입니다. 이 동안 BatchStuckExecution 은 울릴 수 없고,
+            만료↔검증 상호 배제가 꺼진 것을 알 수단이 없습니다.
+            배치 로그의 "배치 실행 지표를 되읽지 못했습니다" 와
+            cy_batch_refresh_failures_total 증분을 함께 봅니다.
+
+      # 종료 표시를 못 남기고 죽은 실행. 그 행은 STATUS 조회에 END_TIME 검사도 시간 상한도
+      # 없어 **영원히** 남고, 만료↔검증 상호 배제가 그것을 시체로 보고 무시한다(CY-384).
+      # 무시했다는 사실을 알리는 것이 그동안 WARN 로그 하나뿐이었다 — 게다가 그 로그는
+      # **누가 가드를 부를 때만** 나와서, 검증을 하루 한 번 돌리면 며칠씩 신호가 없다.
+      #
+      # 상호 배제가 꺼진 상태라 "만료가 검증 한복판을 지나가는" 사고가 열려 있다.
+      # 만료 실행에는 abandon 경로도 없어 사람이 SQL 로 걷어야 한다.
+      - alert: BatchStuckExecution
+        expr: cy_batch_stuck_executions > 0
+        for: 10m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "{{ $labels.spring_batch_job_name }} 에 진도가 멈춘 실행이 남아 있습니다"
+          description: >-
+            BATCH_JOB_EXECUTION 에서 STATUS 가 STARTING/STARTED/STOPPING 인데
+            BATCH_STEP_EXECUTION.LAST_UPDATED 가 batch.stuck-job-after-ms 넘게 안 움직인
+            행입니다. 대개 docker compose down 이 잡 한복판에 걸린 흔적입니다.
+            **이 행이 있는 동안 만료와 검증의 상호 배제가 그만큼 꺼져 있습니다.**
+            docs/13 §6 의 "시체 실행 걷어내기" 로 확인하고 걷어냅니다 —
+            그 절의 SQL 이 BATCH_JOB_EXECUTION 을 봅니다.
+            같은 §6 의 asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
 
       # 주기보다 오래 끄는 상태. **겹치지는 않는다** — 스프링의 ReschedulingRunnable 이 다음
       # 실행을 직전 실행이 끝난 뒤에 잡으므로, 5분을 넘기면 그 사이의 크론 슬롯이 통째로 사라진다.
@@ -255,7 +419,10 @@ groups:
 
       # NaN 을 감시한다. 이것이 없으면 "판정 감시가 꺼진 것" 을 아무도 모른다.
       #
-      # verifyJob 은 크론이 없어 BatchJobNotRunning 같은 "안 돌았다" 축이 아예 없다.
+      # verifyJob 은 크론이 없어 "안 돌았다" 축의 **알림**이 없다. CY-392 가
+      # cy_batch_last_success_seconds{spring_batch_job_name="verifyJob"} 게이지는 냈지만,
+      # 크론이 없는 동안은
+      # "안 도는 것이 정상" 이라 SLA 를 걸 수 없다 — 걸면 영구 발화다.
       # 그래서 지표가 NaN 이면 **어떤 알림도 뜨지 않는다** — CY-347 이 ExpireMetricsUnknown
       # 으로 값을 치른 그 자리다.
       #
@@ -284,7 +451,7 @@ groups:
       # VerificationVerdictFailed(== 1) 도, VerificationMetricsUnknown(NaN) 도 조용하다.
       # 잡이 안 돈 것도 아니라 BatchJobFailed 도 아니다. 이 카운터가 그 축을 진다.
       #
-      # BatchJobNotRunning 과 같은 이유로 increase() 가 아니라 **절대 델타**를 쓴다.
+      # 재기동에 카운터가 새로 태어나기 때문에 increase() 가 아니라 **절대 델타**를 쓴다.
       # 재기동하면 카운터가 0 에서 새로 태어나는데, increase() 는 리셋을 감지해 리셋 직전
       # 값을 더하므로 누적 실패를 들고 있던 프로세스를 재배포하면 창이 리셋을 품는 동안
       # 조건이 참이 된다 — **배포할 때마다 뜬다.** 델타는 offset 쪽 계열이 없으면 결과가
@@ -323,7 +490,7 @@ groups:
       # 그래서 이 알림이 뜨려면 관제가 최소한 살아 있어야 한다. 그 한계는 여기서 못 없앤다
       # (Prometheus 가 통째로 죽은 것은 밖에서 봐야 안다 — 지금 스택에 그 축은 없다).
       #
-      # 절대 델타를 쓰는 이유는 BatchJobNotRunning·VerificationMetricsStale 과 같다.
+      # 절대 델타를 쓰는 이유는 VerificationMetricsStale 과 같다.
       # 재기동하면 카운터가 새로 태어나는데 increase() 는 리셋 직전 값을 더해 배포마다 뜬다.
       - alert: AlertDeliveryFailing
         expr: >-
