@@ -66,6 +66,16 @@ spring:
       # storage.yml 이 나중에 pool-name 을 정의하면 충돌 검사가 잡는다.
       pool-name: batch-pool
 
+      # ⚠️ **HikariCP 는 minimum-idle 기본이 maximum-pool-size 다.** 안 주면 컨텍스트가
+      #    뜨자마자 풀 크기만큼 전부 열고 놓지 않는다. 운영은 프로세스가 하나라 상관없지만,
+      #    테스트는 스프링 컨텍스트가 캐시돼 동시에 여러 개가 살아 있어서 그 수만큼 곱해진다 —
+      #    풀을 4 에서 8 로 올린 순간 공유 MySQL 의 커넥션이 말라 컨테이너가 연결을 끊었고,
+      #    그 증상이 "테스트가 틀렸다" 가 아니라 기동 실패로 보여 원인까지 가는 길이 멀었다.
+      #
+      #    2 면 평소에는 둘만 들고 있다가 필요할 때 maximum-pool-size 까지 늘린다.
+      #    storage.yml 에 같은 키가 없어 덮어쓰기가 아니다 — 그래서 아래가 아니라 여기에 둔다.
+      minimum-idle: ${BATCH_DB_MIN_IDLE:2}
+
 server:
   port: ${BATCH_PORT:9090}
   error:

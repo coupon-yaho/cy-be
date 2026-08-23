@@ -59,16 +59,6 @@ public class MySqlContainerConfig {
                 // 메모리·로깅·binlog 는 테스트에 불필요하므로 제외. 서버 설정이 바뀌면 여기도 같이 본다.
                 .withCommand(
                         "--default-time-zone=+00:00",
-                        // 컨테이너 하나를 **모든 테스트 클래스가 공유**하는데, 스프링 테스트
-                        // 컨텍스트는 캐시돼 동시에 여러 개가 살아 있다. Hikari 는 기본이
-                        // minimumIdle = maximumPoolSize 라 컨텍스트마다 풀 크기만큼 **즉시**
-                        // 커넥션을 연다 — 컨텍스트 20개 × 풀 8 이면 160 으로 MySQL 기본값
-                        // 151 을 넘고, 그때 새 컨텍스트가 EOFException 으로 죽는다.
-                        // 그 증상은 "테스트가 틀렸다" 가 아니라 컨테이너 기동 실패로 보여서
-                        // 원인까지 가는 길이 멀다(CI 에서 실제로 두 번 그렇게 깨졌다).
-                        //
-                        // 운영 값이 아니라 **공유 컨테이너의 산술**이라 여기서만 올린다.
-                        "--max-connections=500",
                         "--character-set-server=utf8mb4",
                         "--collation-server=utf8mb4_0900_ai_ci",
                         "--default-storage-engine=InnoDB",
