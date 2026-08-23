@@ -22,12 +22,12 @@ class AdminIssuanceInquiryServiceTest {
     @Test
     void readsTimeCreatesSourceAndCalculatesExactlyOnce() {
         RecordingTimeProvider timeProvider = new RecordingTimeProvider();
-        RecordingFactory factory = new RecordingFactory();
+        RecordingReader reader = new RecordingReader();
         AdminIssuanceInquiryResult expected = new AdminIssuanceInquiryResult(
                 List.of(), null, false);
         RecordingCalculator calculator = new RecordingCalculator(expected);
         AdminIssuanceInquiryService service = new AdminIssuanceInquiryService(
-                timeProvider, factory, calculator);
+                timeProvider, reader, calculator);
         AdminIssuanceInquiryQuery query = query(
                 1_001L, null, null, null, null, 50);
 
@@ -35,10 +35,10 @@ class AdminIssuanceInquiryServiceTest {
 
         assertThat(result).isSameAs(expected);
         assertThat(timeProvider.instantCount).isEqualTo(1);
-        assertThat(factory.createCount).isEqualTo(1);
-        assertThat(factory.lastSnapshotAt).isEqualTo(SNAPSHOT_AT);
+        assertThat(reader.createCount).isEqualTo(1);
+        assertThat(reader.lastSnapshotAt).isEqualTo(SNAPSHOT_AT);
         assertThat(calculator.calculateCount).isEqualTo(1);
-        assertThat(calculator.lastSource).isSameAs(factory.source);
+        assertThat(calculator.lastSource).isSameAs(reader.source);
         assertThat(calculator.lastQuery).isSameAs(query);
     }
 
@@ -152,7 +152,7 @@ class AdminIssuanceInquiryServiceTest {
         }
     }
 
-    private static final class RecordingFactory extends AdminIssuanceInquiryMockDataFactory {
+    private static final class RecordingReader implements AdminIssuanceInquirySourceReader {
 
         private int createCount;
         private Instant lastSnapshotAt;

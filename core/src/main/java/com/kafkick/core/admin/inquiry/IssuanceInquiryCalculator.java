@@ -44,8 +44,8 @@ public class IssuanceInquiryCalculator {
         for (RawIssuance issuance : source.issuances()) {
             issuanceById.put(issuance.issuanceId(), issuance);
         }
-        Map<String, RawHistoryLink> issueHistoryByRequest = newestIssueHistoryByRequest(
-                source.histories());
+        Map<RequestScope, RawHistoryLink> issueHistoryByRequest = newestIssueHistoryByRequest(
+                source.histories(), issuanceById);
         Set<Long> linkedIssuanceIds = new HashSet<>();
         List<InquiryItem> joined = new ArrayList<>();
 
@@ -85,11 +85,13 @@ public class IssuanceInquiryCalculator {
 
     /** 결과 이벤트가 있으면 시도 이벤트보다 우선하고, 같은 종류에서는 최신 행을 고릅니다. */
     private static List<RawAttempt> representativeAttempts(List<RawAttempt> attempts) {
-        Map<String, RawAttempt> representativeByRequest = new HashMap<>();
+        Map<RequestScope, RawAttempt> representativeByRequest = new HashMap<>();
         for (RawAttempt attempt : attempts) {
-            // requestId가 다른 재시도는 같은 회원·캠페인이어도 서로 다른 문의 행으로 유지된다.
+            // 회원·캠페인·requestId 범위가 다른 재시도는 서로 다른 문의 행으로 유지된다.
             representativeByRequest.merge(
-                    attempt.requestId(), attempt, IssuanceInquiryCalculator::newerRepresentative);
+                    RequestScope.of(attempt),
+                    attempt,
+                    IssuanceInquiryCalculator::newerRepresentative);
         }
         return List.copyOf(representativeByRequest.values());
     }
@@ -112,12 +114,19 @@ public class IssuanceInquiryCalculator {
     }
 
     /** 같은 requestId에 비정상적으로 여러 ISSUE 이력이 있으면 최신 연결 행을 사용합니다. */
-    private static Map<String, RawHistoryLink> newestIssueHistoryByRequest(
-            List<RawHistoryLink> histories
+    private static Map<RequestScope, RawHistoryLink> newestIssueHistoryByRequest(
+            List<RawHistoryLink> histories,
+            Map<Long, RawIssuance> issuanceById
     ) {
-        Map<String, RawHistoryLink> byRequest = new HashMap<>();
+        Map<RequestScope, RawHistoryLink> byRequest = new HashMap<>();
         for (RawHistoryLink history : histories) {
-            byRequest.merge(history.requestId(), history, (left, right) -> {
+            RawIssuance issuance = issuanceById.get(history.issuanceId());
+            if (issuance == null) {
+                continue;
+            }
+            RequestScope scope = new RequestScope(
+                    issuance.memberId(), issuance.couponId(), history.requestId());
+            byRequest.merge(scope, history, (left, right) -> {
                 int occurredComparison = left.occurredAt().compareTo(right.occurredAt());
                 if (occurredComparison != 0) {
                     return occurredComparison > 0 ? left : right;
@@ -132,14 +141,14 @@ public class IssuanceInquiryCalculator {
     private static RawIssuance findLinkedIssuance(
             RawAttempt attempt,
             Map<Long, RawIssuance> issuanceById,
-            Map<String, RawHistoryLink> issueHistoryByRequest
+            Map<RequestScope, RawHistoryLink> issueHistoryByRequest
     ) {
         RawIssuance direct = issuanceById.get(attempt.issuanceId());
         if (direct != null) {
             return direct;
         }
         // 직접 ID가 없을 때만 ISSUE 이력이 보존한 동일 requestId를 보조 연결 키로 사용한다.
-        RawHistoryLink history = issueHistoryByRequest.get(attempt.requestId());
+        RawHistoryLink history = issueHistoryByRequest.get(RequestScope.of(attempt));
         return history == null ? null : issuanceById.get(history.issuanceId());
     }
 
@@ -195,5 +204,14 @@ public class IssuanceInquiryCalculator {
             InquiryPosition before
     ) {
         return before == null || NEWEST_POSITION_FIRST.compare(position, before) > 0;
+    }
+
+    /** requestId 재사용이 다른 회원·캠페인의 문의 행을 합치지 못하게 하는 연결 범위입니다. */
+    private record RequestScope(long memberId, long couponId, String requestId) {
+
+        private static RequestScope of(RawAttempt attempt) {
+            return new RequestScope(
+                    attempt.memberId(), attempt.couponId(), attempt.requestId());
+        }
     }
 }

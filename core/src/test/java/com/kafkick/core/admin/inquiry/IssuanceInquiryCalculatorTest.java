@@ -165,6 +165,47 @@ class IssuanceInquiryCalculatorTest {
     }
 
     @Test
+    void keepsSameRequestIdSeparateAcrossMembersAndRejectsCrossMemberHistoryLink() {
+        RawAttempt firstMember = issueFailure(
+                70L, "shared-request", 101L, 203L, 409,
+                ReasonCode.ALREADY_ISSUED, BASE.plusSeconds(1));
+        RawAttempt secondMember = issueFailure(
+                71L, "shared-request", 202L, 203L, 500,
+                ReasonCode.INTERNAL_ERROR, BASE.plusSeconds(2));
+
+        AdminIssuanceInquiryResult separated = calculator.calculate(
+                source(List.of(firstMember, secondMember), List.of(), List.of()),
+                query(101L, null, null, null, null, 50));
+
+        assertThat(separated.items()).singleElement().satisfies(item -> {
+            assertThat(item.memberId()).isEqualTo(101L);
+            assertThat(item.position().sourceId()).isEqualTo(70L);
+        });
+
+        RawAttempt historyCandidate = new RawAttempt(
+                72L, EventType.ENTRY_RESULT, "history-shared",
+                101L, 203L, null, 200, null, BASE.plusSeconds(4));
+        RawIssuance otherMemberIssuance = issuance(
+                501L, 202L, 203L, IssuanceStatus.ISSUED, BASE.plusSeconds(3));
+        RawHistoryLink otherMemberHistory = new RawHistoryLink(
+                91L, 501L, IssuanceEventType.ISSUE,
+                "history-shared", BASE.plusSeconds(3));
+
+        AdminIssuanceInquiryResult unlinked = calculator.calculate(
+                source(
+                        List.of(historyCandidate),
+                        List.of(otherMemberIssuance),
+                        List.of(otherMemberHistory)),
+                query(101L, null, null, null, null, 50));
+
+        assertThat(unlinked.items()).singleElement().satisfies(item -> {
+            assertThat(item.memberId()).isEqualTo(101L);
+            assertThat(item.issuanceId()).isNull();
+            assertThat(item.currentStatus()).isNull();
+        });
+    }
+
+    @Test
     void prefersAResultEvenWhenAnAttemptForTheSameRequestWasRecordedLater() {
         RawAttempt result = issueFailure(
                 25L, "result-wins", 101L, 203L, 500,

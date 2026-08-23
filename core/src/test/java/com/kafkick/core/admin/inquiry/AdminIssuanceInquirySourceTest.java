@@ -103,6 +103,22 @@ class AdminIssuanceInquirySourceTest {
     @Test
     void rejectsEventsOutsideInquiryPopulationAndInvalidFieldRelationships() {
         assertThatThrownBy(() -> new RawAttempt(
+                1L, EventType.ISSUE_ATTEMPT, "r".repeat(37), 1L, 2L,
+                null, null, null, OCCURRED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RawAttempt(
+                1L, EventType.ISSUE_RESULT, "request-1", 1L, 2L,
+                null, 99, null, OCCURRED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RawAttempt(
+                1L, EventType.ISSUE_RESULT, "request-1", 1L, 2L,
+                null, 600, ReasonCode.INTERNAL_ERROR, OCCURRED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RawAttempt(
+                1L, EventType.ENTRY_RESULT, "request-1", 1L, 2L,
+                null, 302, null, OCCURRED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RawAttempt(
                 1L, EventType.QUEUE_ADMITTED, "request-1", 1L, 2L,
                 null, null, null, OCCURRED_AT))
                 .isInstanceOf(IllegalArgumentException.class);

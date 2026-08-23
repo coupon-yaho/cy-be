@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
 
 import org.junit.jupiter.api.Test;
 
@@ -88,7 +89,8 @@ class AdminIssuanceInquiryMockDataFactoryTest {
         assertThat(source.issuances()).filteredOn(row -> row.issuanceId() == 5_003L)
                 .singleElement()
                 .satisfies(row -> assertThat(source.attempts())
-                        .noneMatch(attempt -> row.issuanceId() == nullableLong(attempt.issuanceId())));
+                        .noneMatch(attempt -> Objects.equals(
+                                attempt.issuanceId(), row.issuanceId())));
         assertThat(attempt(source, 106L)).satisfies(row -> {
             assertThat(row.httpStatus()).isEqualTo(201);
             assertThat(row.issuanceId()).isEqualTo(5_999L);
@@ -121,7 +123,4 @@ class AdminIssuanceInquiryMockDataFactoryTest {
                 .orElseThrow();
     }
 
-    private static long nullableLong(Long value) {
-        return value == null ? Long.MIN_VALUE : value;
-    }
 }

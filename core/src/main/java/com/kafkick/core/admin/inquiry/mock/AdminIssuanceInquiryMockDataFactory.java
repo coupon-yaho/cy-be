@@ -8,6 +8,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySourceReader;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawHistoryLink;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawIssuance;
@@ -18,7 +19,7 @@ import com.kafkick.core.observation.ReasonCode;
 
 /** 실제 Repository를 대신해 세 DB 테이블 형태의 고정 문의 원천 행을 제공합니다. */
 @Component
-public class AdminIssuanceInquiryMockDataFactory {
+public class AdminIssuanceInquiryMockDataFactory implements AdminIssuanceInquirySourceReader {
 
     private static final Instant FIXTURE_V1_ANCHOR = Instant.parse("2026-08-23T00:00:00Z");
     // 요청 시각이 바뀌어도 같은 Cursor가 같은 행을 가리키도록 행 시각은 기준점에 고정한다.
@@ -30,6 +31,7 @@ public class AdminIssuanceInquiryMockDataFactory {
      * @param snapshotAt 한 요청에서 확정한 관측 기준 시각
      * @return issue_attempts, issuances, issuance_histories 형태의 원천 행
      */
+    @Override
     public AdminIssuanceInquirySource create(Instant snapshotAt) {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         if (snapshotAt.isBefore(NEWEST_FIXED_ROW)) {

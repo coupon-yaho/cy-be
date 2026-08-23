@@ -32,7 +32,7 @@ public record AdminIssuanceInquiryQuery(
             throw invalidInput("httpStatus는 100~599여야 합니다.");
         }
         if (limit < 1 || limit > MAX_LIMIT) {
-            throw invalidInput("limit은 1~200이어야 합니다.");
+            throw invalidInput("limit은 1~" + MAX_LIMIT + "이어야 합니다.");
         }
     }
 

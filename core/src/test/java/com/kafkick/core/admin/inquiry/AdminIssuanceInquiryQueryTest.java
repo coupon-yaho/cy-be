@@ -26,6 +26,13 @@ class AdminIssuanceInquiryQueryTest {
     }
 
     @Test
+    void limitErrorMessageUsesThePublishedMaximum() {
+        assertThatThrownBy(() -> query(
+                1L, null, null, null, AdminIssuanceInquiryQuery.MAX_LIMIT + 1))
+                .hasMessage("limit은 1~" + AdminIssuanceInquiryQuery.MAX_LIMIT + "이어야 합니다.");
+    }
+
+    @Test
     void acceptsEverySupportedFilterTogether() {
         InquiryPosition before = new InquiryPosition(
                 Instant.parse("2026-08-23T00:00:00Z"), SourceKind.ATTEMPT, 10L);
