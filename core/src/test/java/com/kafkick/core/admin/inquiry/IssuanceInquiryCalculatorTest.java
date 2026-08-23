@@ -79,6 +79,36 @@ class IssuanceInquiryCalculatorTest {
     }
 
     @Test
+    void rejectsDirectIssuanceOutsideCouponScopeAndFallsBackToIssueHistory() {
+        RawAttempt attempt = issueResult(
+                16L, "coupon-scope-mismatch", 101L, 201L, 998L,
+                201, null, BASE.plusSeconds(13));
+        RawIssuance outsideCouponScope = issuance(
+                998L, 101L, 202L, IssuanceStatus.USED, BASE.plusSeconds(8));
+        RawIssuance historyTarget = issuance(
+                306L, 101L, 201L, IssuanceStatus.CANCELLED, BASE.plusSeconds(9));
+        RawHistoryLink history = new RawHistoryLink(
+                45L,
+                306L,
+                IssuanceEventType.ISSUE,
+                "coupon-scope-mismatch",
+                BASE.plusSeconds(9));
+
+        AdminIssuanceInquiryResult result = calculator.calculate(
+                source(
+                        List.of(attempt),
+                        List.of(outsideCouponScope, historyTarget),
+                        List.of(history)),
+                query(101L, 201L, null, null, null, 50));
+
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.issuanceId()).isEqualTo(306L);
+            assertThat(item.currentStatus()).isEqualTo(IssuanceStatus.CANCELLED);
+            assertThat(item.position().sourceKind()).isEqualTo(SourceKind.ATTEMPT);
+        });
+    }
+
+    @Test
     void enrichesAttemptByExactIssueHistoryRequestId() {
         RawAttempt attempt = new RawAttempt(
                 12L,
