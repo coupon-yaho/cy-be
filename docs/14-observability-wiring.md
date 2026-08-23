@@ -23,15 +23,18 @@
 | **안 한다** | 아직 없는 잡(`cleanupJob`·회차 생성/전이)의 알림 — 그 잡을 만들 때 단다 |
 | **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. 배포 순서 위반은 `batch` 쪽 기동 가드로 잡는다 |
 
-> **범용인 것은 `BatchJobFailed` 하나뿐이다.** 셀렉터에 잡 이름이 없어 새 잡이 Spring Batch
-> 잡이기만 하면 그날 바로 커버된다. **나머지 둘은 `expireJob` 에 박혀 있다** —
-> `BatchJobNotRunning` 은 `sum by (spring_batch_job_name)` 으로 접기는 하지만 셀렉터 셋이
-> 전부 `{spring_batch_job_name="expireJob"}` 이고, `BatchJobRunningTooLong` 도 같다.
-> `by` 는 접기이지 셀렉터가 아니다.
+> **범용인 것은 `BatchJobFailed` 와 `BatchStuckExecution` 둘이다.** 셀렉터에 잡 이름이 없어
+> 새 잡이 생기면 그날 바로 커버된다 — 뒤엣것은 CY-392 가 `job` 라벨로 냈고, 지켜보는 잡을
+> `Job` 빈에서 모으므로 잡이 늘면 시계열도 따라 는다.
 >
-> 그리고 **`verifyJob` 에는 아직 `BatchJobNotRunning` 을 붙이면 안 된다.** 크론이 없어
-> <b>"안 도는 것이 정상"</b>이라 붙이면 영구 critical 이다. 대신 마지막 판정의 나이로
-> 본다(4단계).
+> **`ExpireNotSucceeding`·`BatchJobRunningTooLong` 은 `expireJob` 에 박혀 있다.**
+> 둘 다 `{spring_batch_job_name="expireJob"}` 로 좁힌다 — 앞엣것은 우리 게이지의 라벨이고
+> 뒤엣것은 스프링 배치가 내는 라벨인데, CY-392 가 이름을 맞춰 뒀다.
+>
+> 그리고 **`verifyJob` 에는 아직 SLA 알림을 붙이면 안 된다.** 크론이 없어
+> <b>"안 도는 것이 정상"</b>이라 붙이면 영구 critical 이다. CY-392 가 게이지
+> (`cy_batch_last_success_seconds{spring_batch_job_name="verifyJob"}`)는 미리 냈다 — 검증을 야간 크론으로
+> 옮기는 티켓이 <b>감시를 나중에 붙이는 상태로 시작하지 않게</b> 하려는 것이다.
 >
 > **CY-384 전에는 이유가 하나 더 있었다** — `rejectRunningSchedulers` 가 스케줄러 켜진
 > 상태의 실행을 아예 거부해, 크론을 붙일 수 있는 조합 자체가 없었다. 그 제약은 풀렸고,
@@ -47,7 +50,8 @@
   만드는 것은 compose 서비스뿐이다. 앱이 호스트 JVM 이면 컨테이너에서 해석이 안 된다.
 - `application.yml.example` 이 이미 그렇게 적어 뒀다 — *"관제의 스크레이프 대상은
   **컨테이너 기준** `batch:9092` 다 — 내부 네트워크에서 긁는다"*.
-- 타깃이 DOWN 이면 `absent_over_time(...)` 이 참이 되어 **`BatchJobNotRunning` critical 이
+- 타깃이 DOWN 이면 `up{job="cy-batch"}` 가 `0` 이 되어 `BatchTargetDown` 의
+  `avg_over_time(up[15m]) < 0.9` 가 참이 되고, **critical 이
   영구히 걸린 채 스택이 산다.** 그 상태로는 3·4단계에서 넣을 지표가 <b>한 번도
   스크레이프되지 않아</b> 알림이 뜨는 것을 이 티켓 안에서 확인할 수 없다.
 
@@ -69,7 +73,7 @@ docker compose -f base.yml -f batch.yml up batch  # 부하 종료 후 겹쳐 올
 
 *"`base.yml` 은 한 글자도 안 바뀌므로 비교표의 동일 리소스 limit 이 유지된다"* 가 그 근거다.
 
-**관제는 `base.yml` 에 둔다.** 부하 중(batch 미기동)에는 `BatchJobNotRunning` 이 뜨는데,
+**관제는 `base.yml` 에 둔다.** 부하 중(batch 미기동)에는 `BatchTargetDown` 이 뜨는데,
 그것이 정상임을 alertmanager `inhibit_rules` 나 silence 로 다룬다 — 4단계에서 정한다.
 
 ---
@@ -116,7 +120,9 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
 | 알림 | channel |
 |---|---|
-| `BatchJobFailed` · `BatchJobNotRunning` · `BatchJobRunningTooLong` | `server` |
+| `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
+| `ExpireGaugeMissing` · `BatchTargetDown` · `BatchJobRunningTooLong` | `server` |
+| `BatchStuckExecution` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
 | `ExpireSkippingBrokenCoupons` | `data` |
 
@@ -132,7 +138,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
 | 확인 | 방법 | 결과 |
 |---|---|---|
-| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 |
+| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 (그날 기준. 지금은 16개) |
 | 타깃 (batch 없이) | `/api/v1/targets` | `down` — `lookup batch` 실패 |
 | 타깃 (batch 띄운 뒤) | 같은 것 | `up` |
 | 지표 도달 | `cy_expire_unexplained_pending` 조회 | `NaN` — 잡이 한 번도 안 돌았다는 뜻이 관제에 그대로 보인다 |
@@ -145,9 +151,14 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 > **`channel` 을 빠뜨린 알림은 `unrouted` 로 잡힌다.** 조용히 사라지지 않는다.
 
 **여기서 새로 알게 된 것** — `BATCH_SCHEDULING_ENABLED=false`(batch.yml 의 기본)로 띄우면
-`BatchJobNotRunning` 이 15분 뒤 발화한다. 만료가 안 도는 것이 그 설정에서는 정상인데
-알림은 사고로 본다. **4단계에서 silence 로 결정했다** — 규칙에 예외를 파면 *일부러 껐다* 와
-*꺼져 버렸다* 가 같은 값이 된다. 시연 절차 2번에 명령을 박아 뒀다.
+그날의 `BatchJobNotRunning`(15분 창 + `for` 15분)이 발화한다. 만료가 안 도는 것이 그
+설정에서는 정상인데 알림은 사고로 본다. **4단계에서 silence 로 결정했다** — 규칙에 예외를
+파면 *일부러 껐다* 와 *꺼져 버렸다* 가 같은 값이 된다. 시연 절차 2번에 명령을 박아 뒀다.
+
+> ⚠️ **이 표는 2026-08-22 의 관측이다.** CY-392 가 그 규칙을 `ExpireNotSucceeding`(마지막
+> 성공 시각 축)으로 갈았으므로 위 이름과 발화 지연은 <b>지금 것이 아니다</b>. 새 규칙의
+> 발화는 아직 <b>띄워서 확인하지 않았다</b> — 확인하면 아래에 별도 절로 적는다.
+> 계산값을 이 표에 써 넣지 않는다. 그러면 다음 사람이 그것을 관측 근거로 인용한다.
 
 ### 3·4단계 실측 (2026-08-22)
 
@@ -285,7 +296,7 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 *꺼져 버렸다* 가 같은 값이 된다 — 후자가 정확히 이 알림이 잡아야 하는 것이다.
 아래 시연 절차 2번처럼 **끄는 구간에만 사람이 silence 를 건다.**
 
-**부하 중 `BatchJobNotRunning` 도 같은 이유로 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
+**부하 중 `BatchTargetDown` 도 같은 이유로 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
 <b>일부러</b> 없는 것이라 알림이 뜨는 게 맞다 — 규칙이 틀린 것이 아니다. `inhibit_rules` 로
 자동 억제하면 <i>진짜로 배치가 죽은 것</i>까지 함께 가려진다. 부하 구간에만 사람이
 `amtool silence add` 로 끄고, 끝나면 푼다.
@@ -349,12 +360,14 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    > 아니라 **더 뒤의 `asOf`** 로 불러야 한다.
 
    > **스케줄러를 끈 채 시연하려면** `expireJob` 시계열이 아예 안 태어나
-   > `BatchJobNotRunning` 이 15분 뒤부터 영구히 뜬다. 규칙이 틀린 게 아니라 그 설정에서
+   > `ExpireNeverSucceeded` 가 `for`(10분) 뒤부터 영구히 뜬다 — 시계열은 태어나되 값이
+   > `NaN` 이라서다(`BatchRunMetrics` 가 `Job` 빈에서 이름을 받아 무조건 등록한다).
+   > 규칙이 틀린 게 아니라 그 설정에서
    > 정상인 상태라, 그 구간에만 재운다.
    >
    > ```bash
    > docker compose -f base.yml exec alertmanager \
-   >   amtool silence add alertname=BatchJobNotRunning \
+   >   amtool silence add alertname=ExpireNeverSucceeded \
    >   --duration=2h --comment="scheduling disabled for verify demo" \
    >   --alertmanager.url=http://localhost:9093
    > ```
