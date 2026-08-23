@@ -101,11 +101,17 @@ public class ExpireScheduler {
     static final String ZONE = "${batch.schedule.zone:UTC}";
 
     /**
-     * SLA 예산 검사가 크론을 들여다보는 창. 주 단위 크론(평일만·월요일만)까지 품는 폭이다.
-     * 이보다 드물게 도는 것은 만료 배치의 주기로 쓸 값이 아니다 — {@code CronSlot} 이
-     * 되짚기 상한을 정한 근거와 같다.
+     * SLA 예산 검사가 크론을 들여다보는 창.
+     *
+     * <p><b>연 단위까지 품는다.</b> 좁게 잡으면 드문 크론이 "간격을 못 잼" 으로 빠지는데,
+     * 그것을 통과로 접으면 SLA 를 못 맞추는 설정이 조용히 뜨고 거절로 접으면 발화를 막으려
+     * 먼 미래 크론을 쓰는 테스트가 통째로 막힌다. <b>측정 가능하게 만들어 판정은 SLA 값이
+     * 하게 하는 것</b>이 두 문제를 한 번에 없앤다 — 연 1회 크론은 SLA 를 그만큼 크게 주면
+     * 통과하고, 안 주면 거절된다.
+     *
+     * <p>걷는 비용은 {@code CronSlot} 이 발화 수로 따로 묶는다.
      */
-    private static final Duration SLA_CHECK_HORIZON = Duration.ofDays(8);
+    private static final Duration SLA_CHECK_HORIZON = Duration.ofDays(400);
 
     private final JobOperator jobOperator;
     private final Job expireJob;
@@ -163,13 +169,19 @@ public class ExpireScheduler {
         Duration worstDelay = cronSlot
                 .maxGap(timeProvider.now(), SLA_CHECK_HORIZON)
                 .map(gap -> gap.multipliedBy(maxSkips + 1L).plusMillis(refreshMillis))
-                // 창 안에 한 번도 안 도는 크론이면 이 검사가 성립하지 않는다.
-                // 조용히 넘기지 않고 남긴다 — 운영에서 그런 크론이 뜨면 그 자체가 사건이다.
-                .orElseGet(() -> {
-                    log.warn("만료 크론이 {}일 안에 한 번도 안 돕니다. SLA 예산 검사를 "
-                                    + "건너뜁니다. cron={}", SLA_CHECK_HORIZON.toDays(), expireCron);
-                    return Duration.ZERO;
-                });
+                // **창 안에 한 번도 안 도는 크론은 통과가 아니라 거절이다.** 그런 크론은
+                // 어떤 SLA 도 만족시킬 수 없다 — 만료가 8일에 한 번도 안 도는데 "성공이
+                // 오래됐다" 알림이 조용할 수는 없기 때문이다. 여기서 Duration.ZERO 로 접으면
+                // 그 설정이 조용히 뜨고, 알림은 배포 직후부터 영구히 운다.
+                //
+                // 테스트가 발화를 막으려고 먼 미래 크론을 주는 관행이 있는데, 그쪽은
+                // batch.metrics.expire-sla-seconds 를 함께 올려 "이 크론에서는 SLA 검사가
+                // 뜻이 없다" 를 명시한다 — 조용히 넘기는 것과 다르다.
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "만료 크론이 " + SLA_CHECK_HORIZON.toDays() + "일 안에 한 번도 안 돕니다. "
+                                + "그런 주기로는 ExpireNotSucceeding 의 SLA(" + slaSeconds
+                                + "초)를 만족할 수 없습니다 — 만료를 끄려면 "
+                                + "batch.scheduling.enabled=false 를 쓰십시오. cron=" + expireCron));
         if (worstDelay.toSeconds() >= slaSeconds) {
             throw new IllegalArgumentException(
                     "만료 지연 상한이 ExpireNotSucceeding 의 SLA 를 넘습니다. "

@@ -53,6 +53,10 @@ import com.kafkick.storage.db.VerificationSeed;
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=true",
         "batch.schedule.expire-cron=0 0 0 1 1 *",
+        // 발화를 막으려고 먼 미래 크론을 쓴다. 그 주기로는 어떤 SLA 도 못 맞추므로
+        // 기동 가드가 거절하는데, 이 클래스가 재는 것은 SLA 가 아니다 — 그 검사가
+        // 뜻이 없다는 것을 값으로 명시한다.
+        "batch.metrics.expire-sla-seconds=999999999",
         "server.port=0",
         "management.server.port=0",
         "batch.verify.metrics-refresh-ms=120000"

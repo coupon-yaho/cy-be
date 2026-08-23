@@ -45,6 +45,18 @@ public final class CronSlot {
     private static final int MAX_WIDENING = 11;
 
     /**
+     * {@link #maxGap} 이 걸어 보는 발화 수 상한.
+     *
+     * <p><b>창을 다 걷지 않는다.</b> 5분 크론에 400일 창을 주면 115,200번을 걷는데, 그것이
+     * 기동 경로에서 돈다. 2,000번이면 5분 크론에서 약 7일이라 <b>주 단위 패턴</b>
+     * ({@code MON-FRI} 의 금~월 72시간 같은 것)까지 잡힌다 — 최대 간격이 그보다 뒤에서
+     * 처음 나타나는 크론은 만료 배치의 주기로 쓸 값이 아니다.
+     *
+     * <p>드문 크론(연 1회 등)은 발화 자체가 몇 번뿐이라 이 상한에 안 걸린다.
+     */
+    private static final int MAX_FIRINGS_WALKED = 2_000;
+
+    /**
      * <b>슬롯 직전에 깨어난 것을 슬롯 안으로 본다.</b>
      *
      * <p><b>이 값은 잡과의 계약이다.</b> 스케줄러가 이만큼 미래인 {@code asOf} 를 만들 수 있으므로,
@@ -81,15 +93,15 @@ public final class CronSlot {
         LocalDateTime end = from.plus(horizon);
         LocalDateTime first = expression.next(from);
         if (first == null || !first.isBefore(end)) {
-            // 창 안에 한 번도 안 돈다. 테스트가 발화를 막으려고 먼 미래 크론
-            // (0 0 0 1 1 *)을 주는 것이 이 저장소의 관행이고, 그때 "간격" 은 뜻이 없다.
-            // 비어 있음을 그대로 돌려줘 부르는 쪽이 판단하게 한다 —
-            // 0 을 돌려주면 "간격이 없다(=즉시 반복)" 와 구분되지 않는다.
+            // 창 안에 한 번도 안 돈다. 그때 "간격" 은 뜻이 없으므로 비어 있음을 그대로
+            // 돌려줘 부르는 쪽이 판단하게 한다 — 0 을 돌려주면 "간격이 없다(=즉시 반복)"
+            // 와 구분되지 않는다.
             return Optional.empty();
         }
 
         Duration worst = Duration.between(from, first);
-        for (LocalDateTime cursor = first; cursor.isBefore(end); ) {
+        int walked = 0;
+        for (LocalDateTime cursor = first; cursor.isBefore(end) && walked < MAX_FIRINGS_WALKED; ) {
             LocalDateTime next = expression.next(cursor);
             if (next == null) {
                 break;
@@ -99,6 +111,7 @@ public final class CronSlot {
                 worst = gap;
             }
             cursor = next;
+            walked++;
         }
         return Optional.of(worst);
     }

@@ -55,7 +55,11 @@ class ExpireSchedulerTest {
             "spring.batch.job.enabled=false",
             "batch.scheduling.enabled=true",
             // 크론을 먼 미래로 밀어 테스트 중에 실제로 돌지 않게 한다. 빈 존재만 본다.
-            "batch.schedule.expire-cron=0 0 0 1 1 *"
+            "batch.schedule.expire-cron=0 0 0 1 1 *",
+        // 발화를 막으려고 먼 미래 크론을 쓴다. 그 주기로는 어떤 SLA 도 못 맞추므로
+        // 기동 가드가 거절하는데, 이 클래스가 재는 것은 SLA 가 아니다 — 그 검사가
+        // 뜻이 없다는 것을 값으로 명시한다.
+        "batch.metrics.expire-sla-seconds=999999999"
     })
     @Import(MySqlContainerConfig.class)
     @DisplayName("켜져 있을 때")
