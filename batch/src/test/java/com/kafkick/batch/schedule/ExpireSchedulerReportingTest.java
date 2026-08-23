@@ -375,7 +375,7 @@ class ExpireSchedulerReportingTest {
                 new Class<?>[] {JobRepository.class},
                 (proxy, method, args) ->
                         "findRunningJobExecutions".equals(method.getName()) ? Set.of() : null);
-        return new RunningJobProbe(repository, 1_800_000L, 600_000L, 120_000L);
+        return new RunningJobProbe(repository, 1_800_000L, 600_000L, 120_000L, 120_000L);
     }
 
     private JobOperator operator(StartBehavior behavior) {

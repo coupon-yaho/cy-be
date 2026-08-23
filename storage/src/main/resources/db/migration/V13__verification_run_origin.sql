@@ -22,7 +22,7 @@
 --    만든 데이터셋에는 컬럼 자체가 없고 Flyway 가 그 DB 에 닿지 않는다. 그 DB 에 배치를 붙이면
 --    findLatestClosed 의 `AND origin = 'BATCH'` 가 매번 Unknown column 으로 실패한다 —
 --    되읽기가 직전 값을 유지하므로 조용하고, VerificationMetricsStale 이 그때 유일한 신호다.
---    **재생성이 유일한 답이다.** docs/14 시연 절차 2번에 그 판별 쿼리를 적어 뒀다.
+--    **재생성이 유일한 답이다.** docs/14 시연 절차의 as_of 조회 블록에 그 판별 쿼리를 적어 뒀다.
 ALTER TABLE verification_runs
   ADD COLUMN origin varchar(6) NOT NULL DEFAULT 'BATCH'
   COMMENT 'SEED / BATCH — 시드가 심은 기준 행인가, 배치가 만든 실행인가';

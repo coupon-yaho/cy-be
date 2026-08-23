@@ -99,15 +99,27 @@ groups:
       #    **재기동해도 값이 그대로** 살아 있다. JVM 안 카운터였다면 배포 직후 최대 한 주기
       #    동안 "모름" 이고, 일 1회에서는 그것이 하루다.
       #
-      # SLA 900 = 만료 크론 5분 × 3. 검증이 도는 동안 슬롯을 건너뛰는데(max-expire-skips)
-      # 그 최대 지연이 (상한+1) × 주기 = 10분이라, 그 위에 한 슬롯의 여유를 둔 값이다.
-      # **주기를 배치 창으로 옮기는 티켓이 이 숫자를 함께 고친다.**
+      # SLA 180,000(50시간) = (max-expire-skips 1 + 1) × 일 1회 크론(86,400) + 되읽기 한
+      # 주기(60) = 172,860 위에 두 시간 남짓 여유. 만료가 이틀을 건너뛰면 50시간째에 운다.
+      #
+      # ⚠️ **이 값이 무딘 것은 건너뛰기를 켜 둔 대가다.** 검증이 도는 중이면 만료 슬롯을 한 번
+      #    건너뛴다 — 뚫고 지나가면 그 검증의 asOf 를 영구히 못 쓰기 때문이다(재시딩 말고
+      #    복구가 없다). 만료가 하루 밀리는 것은 다음 슬롯이 밀린 대상을 함께 가져간다.
+      #    docs/13 §6 의 D 가 검증 크론(05:00)을 세우면 일정 분리가 겹침을 막으므로,
+      #    그때 MAX_EXPIRE_SKIPS 를 0 으로 내리고 이 값을 90,000(25시간)으로 되돌린다.
+      #
+      # ⚠️ **batch.metrics.expire-sla-seconds 와 같은 값이어야 한다.** 프로메테우스는 앱
+      #    설정을 못 읽으므로 두 곳이 손으로 맞춰져 있고, 앱 쪽은 그 값으로
+      #    (max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms < SLA 를 기동 때 검사한다.
+      #    한쪽만 바꾸면 기동은 되는데 알림이 어긋나거나, 알림은 맞는데 기동이 거절된다.
+      #
+      # 시연처럼 5분 크론으로 되돌릴 때는 **셋을 함께** 바꾼다 —
+      # EXPIRE_CRON · MAX_EXPIRE_SKIPS · EXPIRE_SLA_SECONDS(그리고 이 식).
       - alert: ExpireNotSucceeding
         expr: >-
-          (time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 900
+          (time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 180000
           or (cy_batch_last_success_seconds{spring_batch_job_name="expireJob"} - time()) > 60
-        # 나이 갈래는 이미 900초를 기다린 뒤라 여기서 더 길게 볼 이유가 없다 —
-        # 총 발화 지연이 20분이고, 예전 규칙(15분 창 + for 15m ≈ 30분)보다 빠르다.
+        # 나이 갈래는 이미 SLA 만큼 기다린 뒤라 여기서 더 길게 볼 이유가 없다.
         #
         # ⚠️ 스크레이프가 끊긴 갈래는 여기 안 넣는다. 그때 프로메테우스가 이 게이지에
         #    stale 마커를 넣어 두 갈래가 전부 빈 결과가 되고 for 타이머가 리셋된다.
@@ -124,7 +136,7 @@ groups:
           # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
           channel: server
         annotations:
-          summary: "만료 배치가 SLA(15분) 안에 성공하지 못했습니다"
+          summary: "만료 배치가 SLA(50시간) 안에 성공하지 못했습니다"
           description: >-
             갈래가 셋이라 먼저 어느 쪽인지 가른다.
             **값이 오래됐으면** 배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로
@@ -143,6 +155,90 @@ groups:
             둘이 다르면 그 차이가 그대로 오차다. 과거 방향으로 어긋나면 위 "값이 오래됐으면"
             갈래로 나오므로, 그쪽을 다 뒤져도 원인이 안 나오면 이 축을 본다.
 
+      # 정리도 배치 창에 크론이 있으므로 같은 축을 건다.
+      #
+      # SLA 90,000(25시간) = 일 1회 크론(86,400) + 되읽기 한 주기(60) 위에 한 시간 여유.
+      # 만료보다 20분 뒤라는 사실은 여기 안 들어간다 — 이 식은 **정리 자신의 마지막 성공**
+      # 에서 재므로 만료와의 간격은 예산과 무관하다.
+      #
+      # ⚠️ **정리에는 만료의 max-expire-skips 같은 상한이 없다.** 검증이 도는 중이면 정리는
+      #    횟수 제한 없이 물러난다(종료 코드 YIELDED). 그 상태를 잡는 것이 바로 이 알림이다 —
+      #    물러난 실행은 마지막 성공에 안 실리므로 25시간째에 여기서 운다. 즉 SLA 부등식이
+      #    yield 를 모델링하지 않는 대신, **반복되는 yield 는 이 알림이 진다.**
+      #
+      # ⚠️ **batch.metrics.cleanup-sla-seconds 와 같은 값이어야 한다.** CleanupScheduler
+      #    생성자가 그 값으로 "크론 최대간격 + run-refresh-ms < SLA" 를 기동 때 검사한다.
+      #    한쪽만 바꾸면 CLEANUP_CRON 을 주 1회로 돌리는 것만으로 정상 상태에서 매일 운다.
+      #
+      # ⚠️ NaN 갈래는 여기 없다. 아래 CleanupNeverSucceeded 가 그 예산을 갖고 진다 —
+      #    비교 필터가 NaN 을 떨어뜨려서, 한 번도 성공한 적 없는 상태는 이 식으로 **영구 침묵**이다.
+      #
+      # ⚠️ 정리가 안 도는 것은 만료가 안 도는 것과 무게가 다르다. 재고가 안 돌아오는 것이
+      #    아니라 디스크가 차는 것이라, severity 를 warning 으로 둔다.
+      - alert: CleanupNotSucceeding
+        expr: >-
+          (time() - cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"}) > 90000
+          or (cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"} - time()) > 60
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "정리 배치가 SLA(25시간) 안에 성공하지 못했습니다"
+          description: >-
+            검증이 남긴 파생 행이 안 걷히고 있습니다. 실행당 최대 300만 행인 asof_state 가
+            쌓이므로 며칠이면 디스크가 눈에 띄게 준다.
+            배치 로그의 "정리 배치를 시작하지 못했습니다" 와 "정리 배치가 끝내지 못했습니다" 를
+            먼저 봅니다. BATCH_SCHEDULING_ENABLED 가 false 면 만료도 함께 안 돕니다.
+            "검증이 도는 중이라 정리를 여기서 멈춥니다" WARN 이 반복되면 정리가 아니라
+            열린 채 남은 검증이 원인입니다.
+            성공 이력이 아예 없는 상태는 이 알림이 아니라 CleanupNeverSucceeded 가 집니다.
+
+      # 성공 이력을 아직 못 본 상태. 신규 스키마 · BATCH_SCHEDULING_ENABLED=false ·
+      # 7일 창 밖이 전부 여기다. 만료 쪽 ExpireNeverSucceeded 와 같은 모양이고,
+      # **이것이 없으면 "한 번도 안 돈 정리" 가 영구 침묵이다** — 그 상태가 정확히
+      # CleanupJobConfig javadoc 이 "가장 나쁜 결말" 이라고 적은 것이다.
+      #
+      # for 는 만료와 같은 이유로 짧게 둔다 — 자세한 근거는 ExpireNeverSucceeded 쪽에 적었다.
+      # 요약하면 **크론 슬롯을 예산으로 쓰면 재기동마다 타이머가 리셋돼 영원히 안 뜬다.**
+      # 콜드 스타트는 시연 절차 첫 단계의 silence 가 덮는다. 만료(10분)보다 길게 둔 것은
+      # warning 이라 급히 울릴 이유가 없어서다.
+      - alert: CleanupNeverSucceeded
+        expr: >-
+          cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"}
+          != cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"}
+        for: 30m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "정리 배치의 성공 이력이 아직 없습니다"
+          description: >-
+            먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 —
+            증가했으면 되읽기 실패이지 정리 문제가 아니다.
+            안 증가했으면 진짜로 성공 이력이 없는 것이다:
+            BATCH_SCHEDULING_ENABLED 가 false 로 떴거나(batch.yml 의 기본값이다),
+            스키마가 새로 만들어졌거나, 8일 넘게 성공이 없는 것이다.
+            매일 실패하는 경우 8일째에 BatchJobFailed 가 아니라 이 알림으로 넘어온다.
+
+      # 시계열이 아예 없는 경우. 근거는 ExpireGaugeMissing 과 같다 — 셀렉터가 안 맞으면
+      # 위 둘이 전부 빈 벡터가 되고, 그 결과는 오탐이 아니라 **영구 침묵**이다.
+      - alert: CleanupGaugeMissing
+        expr: >-
+          absent(cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"})
+          and on() (min_over_time(up{job="cy-batch"}[5m]) == 1)
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "cleanupJob 의 마지막 성공 시각 게이지가 아예 없습니다 — 라벨이 어긋났습니다"
+          description: >-
+            배치는 떠 있는데 이 시계열이 없습니다. 잡 이름(CleanupJobConfig.JOB_NAME)이
+            바뀌었거나, cleanupJob 빈이 컨텍스트에서 사라진 것입니다 —
+            BatchRunMetrics 는 List<Job> 빈에서 이름을 모으므로 빈이 없으면 게이지도 없습니다.
+            /actuator/prometheus 본문에서 cy_batch_last_success_seconds 의 라벨을 직접 봅니다.
+
       # 성공 이력을 아직 못 본 상태. 신규 스키마 · BATCH_SCHEDULING_ENABLED=false ·
       # 7일 창 밖(8일 넘게 안 돎)이 전부 여기다. 되읽기 실패도 같은 모양이라
       # BatchRunMetricsStale 을 함께 본다.
@@ -150,8 +246,19 @@ groups:
         expr: >-
           cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}
           != cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}
-        # 크론 슬롯 한 번(300초) + 되읽기 한 주기(60초) + 여유. 이 예산이 없으면
-        # 빈 스키마 첫 기동이 정상인데도 뜬다.
+        # ⚠️ **이 예산은 크론 슬롯이 아니다.** 크론이 일 1회가 되면서 "슬롯 한 번" 을
+        #    예산으로 삼으면 25시간인데, **그 값으로는 이 알림이 영원히 안 뜬다** —
+        #    배치가 재기동하면 이 게이지에 stale 마커가 들어가 식이 빈 결과가 되고
+        #    for 타이머가 0 으로 리셋된다(위 ExpireNotSucceeding 주석이 같은 메커니즘을
+        #    적어 뒀다). 25시간을 채우려면 그동안 재배포가 한 번도 없어야 하는데,
+        #    시연 주간에는 그쪽이 오히려 어렵다. 한 번 그렇게 올렸다가 되돌렸다.
+        #
+        # **그래서 콜드 스타트는 규칙이 아니라 silence 로 다룬다.** 볼륨을 지우고 띄우면
+        # 다음 슬롯까지 최대 하루 동안 이 알림이 뜨는데, 그것은 "일부러 껐다" 와 같은 종류의
+        # 상태다 — 이 저장소는 그 경우 **규칙에 예외를 안 파고 사람이 재운다**(docs/14 의
+        # BATCH_SCHEDULING_ENABLED 절이 같은 결정을 적었다). 시연 절차 첫 단계가 그 명령이다.
+        #
+        # 10분은 되읽기 한 주기(60초)의 여유다.
         for: 10m
         labels:
           severity: critical
@@ -289,22 +396,48 @@ groups:
             그 절의 SQL 이 BATCH_JOB_EXECUTION 을 봅니다.
             같은 §6 의 asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
 
-      # 주기보다 오래 끄는 상태. **겹치지는 않는다** — 스프링의 ReschedulingRunnable 이 다음
-      # 실행을 직전 실행이 끝난 뒤에 잡으므로, 5분을 넘기면 그 사이의 크론 슬롯이 통째로 사라진다.
-      # 로그에는 아무것도 안 남고 만료 주기만 조용히 길어진다(ExpireScheduler javadoc 참조).
-      # 그래서 이 알림이 지연을 아는 유일한 통로다.
+      # 한 실행이 지나치게 오래 끄는 상태.
+      #
+      # **임계를 주기에서 떼어 냈다.** 5분 크론일 때는 "주기보다 오래" 가 곧 "슬롯이 사라진다"
+      # 였지만, 일 1회에서 그 기준은 24시간이라 아무것도 못 잡는다. 대신 **일감의 크기**에서
+      # 잡는다 — 하루치 만료가 약 6,300건이고 청크가 1,000이라 일곱 청크다. 600초는 그보다
+      # 두 자릿수 여유이고, 그것을 넘으면 넘길 대상이 밀렸거나 한 청크가 막힌 것이다.
+      #
+      # ⚠️ **batch.stuck-job-after-ms(30분)보다 작아야 한다.** 그 값을 넘으면 만료↔검증
+      #    상호 배제가 이 실행을 "죽었다" 로 보고 무시하기 시작한다 — 살아 있는데 느린 것을
+      #    먼저 알려 주는 것이 이 알림의 몫이다.
       - alert: BatchJobRunningTooLong
-        expr: spring_batch_job_active_seconds_max{spring_batch_job_name="expireJob"} > 300
+        expr: spring_batch_job_active_seconds_max{spring_batch_job_name="expireJob"} > 600
         for: 1m
         labels:
           severity: warning
           # 라우팅 축. severity 는 긴급도이고, 어디를 봐야 하는지는 이것이 진다.
           channel: server
         annotations:
-          summary: "만료 배치가 주기(5분)보다 오래 돌고 있다"
+          summary: "만료 배치가 600초 넘게 돌고 있다 — 하루치는 일곱 청크다"
           description: >-
             넘길 대상이 밀려 있거나 한 청크가 오래 걸린다.
             BATCH_STEP_EXECUTION 의 WRITE_COUNT 로 실제 처리량을 먼저 확인한다.
+
+      # 정리는 임계가 다르다. 지우는 양이 실행당 최대 300만 행이라 만료의 하루치(6,300건)와
+      # 자릿수가 다르고, 그동안 asof_state 를 물고 있어 검증과 겹치면 서로 기다린다.
+      # 900초는 stuck-job-after-ms(30분)보다 작아 "살아서 느림" 을 먼저 알린다.
+      #
+      # ⚠️ 잡 축을 정규식으로 합치지 않는다. 임계가 다르면 규칙도 갈라야, 한쪽을 조정할 때
+      #    다른 쪽 임계가 조용히 따라 움직이지 않는다.
+      - alert: CleanupRunningTooLong
+        expr: spring_batch_job_active_seconds_max{spring_batch_job_name="cleanupJob"} > 900
+        for: 1m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "정리 배치가 900초 넘게 돌고 있다 — asof_state 를 물고 있다"
+          description: >-
+            보존 창 밖 실행이 몰렸거나 청크 하나가 오래 걸린다.
+            BATCH_STEP_EXECUTION 의 WRITE_COUNT 로 실제 삭제량을 먼저 확인하고,
+            CLEANUP_CHUNK_SIZE 와 CLEANUP_STEP_TIMEOUT_MS 의 관계를 본다
+            (청크를 키우면 데드라인도 같이 키워야 한다).
 
       # ──────────────────────────────────────────────────────────────────────
       # 여기까지는 전부 "잡이 죽었나 / 도는가" 축이다. 셋 다 통과하면서 기한 지난 발급건이
@@ -350,9 +483,26 @@ groups:
       #   **잡이 COMPLETED 로 끝나면서 밀림 감시만 조용히 꺼지는 상태가 있다.**
       #   NaN 은 시리즈로 존재하므로 absent() 로는 못 잡는다. NaN != NaN 이 참인 것을 쓴다.
       # ──────────────────────────────────────────────────────────────────────
+      # ⚠️ **이 게이지는 프로세스 게이지다 — 만료를 일 1회로 옮기면서 성질이 바뀌었다(CY-397).**
+      #    cy_expire_* 넷은 JVM 안 AtomicReference 라 afterJob 에서만 채워진다. 5분 크론일
+      #    때는 NaN 창이 아래 for(15분)보다 짧아 구조적으로 발화 불가였는데, 일 1회에서는
+      #    **재기동부터 다음 04:10 까지 최대 하루**가 NaN 이다. CY-392 가 마지막 성공 시각을
+      #    DB 되읽기로 옮긴 근거(BatchRunMetrics javadoc)가 이 게이지에는 아직 적용 안 됐다.
+      #
+      #    그래서 **기동 나이**를 조인 축으로 건다 — 재기동 직후의 "아직 모른다" 는 사고가
+      #    아니라 정상이고, 그것을 알림으로 내면 배포 시각을 보고 우는 알림이 된다.
+      #    process_start_time_seconds 는 Boot 의 UptimeMetrics 가 내고, 그 이름이 실제로
+      #    노출되는지는 BatchMetricExposureTest 가 스크레이프 본문에서 확인한다.
+      #
+      # ⚠️ **남은 빚:** 그 창 동안 ExpireLeavesWorkBehind 도 발화할 수 없다(NaN > 0 은 거짓).
+      #    즉 "백로그가 쌓인다" 축이 재기동 뒤 하루까지 눈이 먼다. 근본 해결은 이 넷도
+      #    DB 되읽기로 옮기는 것이고 docs/13 §6 에 항목으로 남겼다 — 이 티켓 밖이다.
       - alert: ExpireMetricsUnknown
-        expr: cy_expire_unexplained_pending != cy_expire_unexplained_pending
-        # 세 주기. 기동 직후 첫 주기를 아직 안 돈 상태도 여기 걸리므로 짧게 두면 안 뜬다.
+        expr: >-
+          (cy_expire_unexplained_pending != cy_expire_unexplained_pending)
+          and on(job, instance)
+          (time() - process_start_time_seconds{job="cy-batch"} > 86400)
+        # 기동 나이가 이미 갈래를 지므로 여기서는 스크레이프 흔들림만 흡수한다.
         for: 15m
         labels:
           severity: warning

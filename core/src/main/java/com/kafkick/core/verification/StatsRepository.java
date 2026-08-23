@@ -38,6 +38,14 @@ public interface StatsRepository {
      * 같은 {@code runId} 의 두 번째 집계를 막는다 — 같은 파일이 <i>"재사용이 막으려던 것은
      * {@code preventRestart()} 때문에 도달할 수 없다"</i> 고 이미 적어 놨다. 그 둘 중 하나가
      * 풀리는 날 {@code (run_id, coupon_id)} 중복키로 죽는 것을 막는 자리이므로 남긴다.
+     *
+     * <p><b>{@code stats_status} 도 함께 내린다.</b> 세 테이블만 비우면
+     * {@code verification_runs} 는 <i>"완결된 스냅샷"</i> 이라고 계속 말하는데 그 행이 하나도
+     * 없다 — {@code v_latest_stats_run} 이 {@code stats_status = 'COMPLETE'} 만 보므로
+     * <b>물리적으로 조회되지 않는다</b>는 {@code V8} 의 계약이 그 자리에서 깨진다.
+     * 스냅샷을 지우는 것과 그 사실을 표시하는 것은 <b>같은 사실</b>이라 한자리에서 한다.
+     * 집계 직전에 부르는 경로({@code statsAggregateStep})에서는 아직 {@code COMPLETE} 가
+     * 아니라 무해하고, 정리 배치에서는 이것이 불변식을 지키는 유일한 문장이다.
      */
     void clear(long runId);
 

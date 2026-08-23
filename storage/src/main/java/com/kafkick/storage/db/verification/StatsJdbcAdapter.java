@@ -179,6 +179,23 @@ public class StatsJdbcAdapter implements StatsRepository {
                     .param("runId", runId)
                     .update();
         }
+        // 포인터를 함께 내린다. 근거는 StatsRepository#clear 에 적었다 — 세 테이블만 비우면
+        // v_latest_stats_run 이 행 0개짜리 실행을 "완결된 최신 스냅샷" 으로 가리킨다.
+        //
+        // ⚠️ **COMPLETE 였던 행만 내린다.** SKIPPED 는 지우면 안 되는 값이다 — CORRUPT 는
+        //    "오염셋이라 집계를 안 했다", CLEAN 인데 verdict != PASS 면 "불합격이라 안 했다"
+        //    를 뜻하고 뒤쪽은 경보다(StatsStatus javadoc · docs/11). 무조건 NULL 로 덮으면
+        //    그 둘과 "통계 Step 이 죽었다(NULL)" 가 한 값으로 접혀, finalizeRunStep 이
+        //    컬럼을 쓴 이유가 사라진다. 뷰는 COMPLETE 만 보므로 이 조건으로 충분하다.
+        //
+        // updateStatsStatus(runId, ...) 를 안 쓴다. StatsStatus 에 "없음" 값이 없어서다 —
+        // 여기서 필요한 상태는 NULL, 즉 "이제 스냅샷이 없다" 다.
+        jdbcClient.sql("""
+                        UPDATE verification_runs SET stats_status = NULL
+                         WHERE id = :runId AND stats_status = 'COMPLETE'
+                        """)
+                .param("runId", runId)
+                .update();
     }
 
     @Override

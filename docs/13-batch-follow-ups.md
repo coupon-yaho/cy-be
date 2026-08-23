@@ -379,7 +379,7 @@ CY-359 는 `SchemaPresenceGuard` 로 그것을 **기동 시점에 드러내고 �
 |---|---|
 | 시드 생성 절차에 `V2` 를 넣는다 (cy-seed 쪽) | 시드 저장소가 cy-be 의 마이그레이션 파일을 알아야 한다 — 지금은 스키마 주인이 cy-be 라는 규율과 맞물려 사본 관리가 하나 더 는다 |
 | compose 에 마이그레이션 원샷 서비스를 넣는다 | `api` 이미지를 `--spring.batch.job.enabled=false` 로 한 번 돌린다. `base.yml` 이 `api` 를 알아야 한다 |
-| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차 2번에 명령을 박아 뒀다. 사람이 빠뜨리면 가드가 잡는다 |
+| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차의 V2 주입 단계에 명령을 박아 뒀다. 사람이 빠뜨리면 가드가 잡는다 |
 
 지금은 셋째다 — 가드가 있어 **조용히 실패하지는 않는다**. 검증을 자동으로 돌리는 티켓이
 열리면 그때 앞의 둘 중 하나로 간다.
@@ -456,11 +456,15 @@ api 의 쓰기는 애초에 안 잡힌다.
 **지금 주기는 실무 세 칸 중 어디에도 안 맞는다.** 실무의 배치는 준실시간(초~분) ·
 배치 창(일 1회 새벽) · 온디맨드로 갈리는데, **만료·검증·정리는 셋 다 배치 창**이다.
 
-| | 지금 | 가야 할 곳 |
+| | 처음 | 지금 |
 |---|---|---|
-| 만료 | 5분 크론 | 배치 창 04:10 (일 1회) |
-| 검증 | 온디맨드만 | 배치 창 05:00 (일 1회 전수) |
-| 정리 | 1시간 | 배치 창 04:30 (일 1회) |
+| 만료 | 5분 크론 | **배치 창 04:10 (일 1회)** — CY-397 |
+| 정리 | **잡이 없었다** | **배치 창 04:30 (일 1회)** — CY-397 이 만들었다 |
+| 검증 | 온디맨드만 | 온디맨드 — 크론은 D 몫 (05:00 예정) |
+
+> ⚠️ **"정리 1시간" 은 사실이 아니었다.** `.example` 에 `cleanup-cron` 값과
+> `asof-state-keep-runs` 가 있었을 뿐 **읽는 코드가 하나도 없었다.** 옮길 대상이 아니라
+> 만들 대상이었다 — 이 표가 그것을 "지금 1시간" 으로 적고 있었다.
 
 **만료가 5분인 대가를 실측했다.** `valid_days` 30~180(평균 105)에 ISSUED 약 66만이면
 하루 만료는 약 6,300건이고, **5분 실행 한 번이 손대는 것은 약 22건** — 청크 크기 1000의
@@ -476,8 +480,31 @@ api 의 쓰기는 애초에 안 잡힌다.
 |---|---|---|
 | **A** | ~~검증 가드를 실행 중 검사로~~ **완료 · CY-384** | — |
 | **B** | ~~배치 감시를 마지막 성공 시각으로~~ **완료 · CY-392** — 지표 셋(`cy_batch_last_success_seconds{spring_batch_job_name}`·`cy_batch_stuck_executions{spring_batch_job_name}`·`cy_batch_refresh_failures_total`) + 규칙 일곱(`ExpireNotSucceeding`·`ExpireNeverSucceeded`·`ExpireGaugeMissing`·`BatchTargetDown`·`BatchStuckExecution`·`BatchRunMetricsUnknown`·`BatchRunMetricsStale`) | — |
-| **C** | 만료 04:10 · 정리 04:30 으로 이동 + 시연용 크론 override. **정리에 `asof_state` 를 넣는다** — 아래 참조. `ExpireNotSucceeding` 의 SLA(지금 900초)·`BatchJobRunningTooLong` 의 `expireJob` 임계·`verifyJob` SLA 알림을 여기서 함께 세운다. ⚠️ **`verifyJob` SLA 는 `(dataset=CLEAN, scope=FULL)` 그레인이어야 한다** — 지금 게이지는 잡 이름 그레인이라 `CORRUPT` 손트리거 한 번이 SLA 를 리셋한다 | A · B |
-| **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계도 여기서 | C · 300만 적재 |
+| **C** | ~~만료·정리를 배치 창으로~~ **완료 · CY-397** — 만료 04:10 · `cleanupJob` 신설 04:30 · 만료 SLA 180,000(50h) · `max-expire-skips` 1 · `BatchJobRunningTooLong` 600초 · 규칙 넷 신설(`CleanupNotSucceeding`·`CleanupNeverSucceeded`·`CleanupGaugeMissing`·`CleanupRunningTooLong`) · `NeverSucceeded` 의 `for` 는 10분·30분 유지(크론 슬롯을 예산으로 쓰면 재기동마다 리셋돼 영원히 안 뜬다 — 시도했다가 되돌린 근거는 `batch-alerts.yml` 의 그 규칙 주석) · `started_at`/`finished_at` 을 도메인 시계로 | A · B |
+| **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계, **`verifyJob` SLA 알림**, 그리고 **C 가 미룬 셋** — `max-expire-skips` 를 0 으로 · 만료 SLA 를 25h 로 · `cleanup.abandoned-after-hours`(24h) 재산정 | C · 300만 적재 |
+
+> **만료 지표가 아직 프로세스 게이지인 것도 C 의 빚이다.** `cy_expire_pending` 등 넷은
+> JVM 안 `AtomicReference` 라 `afterJob` 에서만 채워진다. 5분 크론일 때는 재기동 뒤 몇 분이면
+> 값이 돌아왔는데, **일 1회로 옮긴 지금은 다음 04:10 까지 최대 하루가 `NaN`** 이다.
+> 그 사이 `ExpireLeavesWorkBehind`(백로그가 쌓인다)가 **발화할 수 없다** —
+> CY-392 가 마지막 성공 시각을 DB 되읽기로 옮긴 근거(`BatchRunMetrics` javadoc)가 이 넷에는
+> 아직 적용되지 않았다. C 는 오탐 쪽만 막았다(`ExpireMetricsUnknown` 에 기동 나이 조인).
+> **D 또는 별도 티켓이 `ExpirePendingRefresher` 를 세워 넷을 되읽기로 옮긴다** —
+> `ExpirationRepository` 에 이미 있는 대기 건수 질의를 주기로 부르면 되고,
+> `idx_issuance_status_expires` 가 있으므로 비용은 실측으로 확인한다.
+
+> **만료 SLA 가 50시간인 것은 C 의 남은 빚이다.** 일 1회에서 `max-expire-skips=1` 이면
+> 최대 지연이 이틀이라 SLA 가 그만큼 무뎌진다. 한때 그 손잡이를 0 으로 내려 25시간을
+> 지키려 했는데, 그 근거가 *"겹침은 일정 분리가 막는다(만료 04:10 · 검증 05:00)"* 였다 —
+> **검증 05:00 크론이 아직 없다.** 검증을 띄우는 유일한 경로는 손 트리거이고 04:10 UTC 는
+> **13:10 KST**, 즉 시연 시간대다. 뚫린 검증의 `asOf` 는 `rejectIssuancesUpdatedAfterAsOf`
+> 때문에 **영구히 못 쓴다**(재시딩 말고 복구가 없다). 만료가 하루 밀리는 것은 다음 슬롯이
+> 밀린 대상을 함께 가져가므로, 값이 다른 두 사고 중 되돌릴 수 없는 쪽을 지켰다.
+> D 가 검증 크론을 세우면 그때 둘을 함께 되돌린다.
+
+> **`verifyJob` SLA 는 C 가 못 세웠다.** 크론이 없는 동안은 *"안 도는 게 정상"* 이라 걸면
+> 영구 발화다. 그리고 걸 때는 **`(dataset=CLEAN, scope=FULL)` 그레인**이어야 한다 — 지금
+> 게이지는 잡 이름 그레인이라 `CORRUPT` 손트리거 한 번이 SLA 를 리셋한다.
 
 **B 없이 C 를 하면 감시 공백이 생긴다.** 예전 `BatchJobNotRunning` 은 15분 창의 증분으로 봤는데,
 일 1회로 옮기면 그 창이 **하루의 대부분 비어** 영구 critical 이 된다. 규칙이 틀린 게 아니라
@@ -487,11 +514,14 @@ api 의 쓰기는 애초에 안 잡힌다.
 **`.example` 여섯**(설명 둘 + 산술 넷), `docs/15` 하나, 그리고
 **`BatchRunMetricsRefresher` 의 javadoc 과 기동 거절 예외 메시지 둘**
 (여기가 틀리면 진단 문장이 거짓 숫자를 말한다) —
-`BatchJobRunningTooLong` 의 `expireJob` 임계(`> 300`)와 그 summary 의 *"주기(5분)"* 도 함께
-다시 세워야 한다 — 한 실행의 처리량이 **약 22건에서 약 6,300건으로** 늘기 때문이다.
-`BatchRunMetricsRefresher` 의 조회 창(7일)과 `verifyJob` SLA 의 그레인도 같은 티켓 몫이다.
+`BatchJobRunningTooLong` 의 `expireJob` 임계는 **`> 300` → `> 600`** 으로, summary 는
+*"주기(5분)보다 오래"* → *"600초 넘게"* 로 축을 갈았다 — 일 1회에서 *"주기보다 오래"* 는
+24시간이라 아무것도 못 잡으므로, 대신 **일감의 크기**(하루 약 6,300건 = 일곱 청크)에서 잡는다.
+**`BatchRunMetricsRefresher` 의 조회 창(7일)과 `verifyJob` SLA 의 그레인은 D 몫으로 남았다.**
 
-**같이 풀 것 — SLA 예산을 기동 때 검사하는 곳이 없다.** 지금 성립해야 하는 관계는
+**~~같이 풀 것 — SLA 예산을 기동 때 검사하는 곳이 없다.~~ 완료 · CY-392(만료)·CY-397(정리).**
+`ExpireScheduler`·`CleanupScheduler` 생성자가 `CronSlot.maxGap` 으로 각자 검사하고 안 맞으면
+기동을 거절한다. 아래는 그 결정을 남긴 기록이다. 성립해야 하는 관계는
 `(max-expire-skips + 1) × 크론 주기 + run-refresh-ms < SLA` 인데, 앞의 두 항이
 환경변수로 자유롭게 커진다. `MAX_EXPIRE_SKIPS=3` 만 줘도 `4 × 300 + 60 = 1260 > 900` 이라
 **아무 사고 없이 critical 이 하루 몇 번씩 뜬다.** `run-refresh-ms` 에는 상한 가드가 있는데
@@ -499,20 +529,30 @@ api 의 쓰기는 애초에 안 잡힌다.
 한 값을 보게 하면 위의 아홉 자리도 함께 접힌다. **CY-392 는 여기까지 안 했다** —
 `CronSlot` 이 주기를 안 내주어 계산 수단부터 만들어야 하기 때문이다.
 
-**C 가 A 의 남은 창도 닫는다.** `rejectRunningExpire` 는 통과 직후 만료가 발화하는 창을
-못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`). 만료 04:10 · 검증 05:00 이면
-겹칠 구조 자체가 사라지므로, 상호 배제를 더 만들 필요가 없다.
+**C 는 A 의 남은 창을 못 닫았다 — D 몫이다.** `rejectRunningExpire` 는 통과 직후 만료가
+발화하는 창을 못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`). *"만료 04:10 · 검증
+05:00 이면 겹칠 구조가 사라진다"* 고 적었는데, **그 검증 크론이 아직 없다.** 검증은 손
+트리거뿐이라 시각을 안 가리고, 그래서 C 는 상호 배제를 **끄는 대신 남겼다**
+(`max-expire-skips=1`). 겹칠 구조가 실제로 사라지는 것은 D 가 05:00 슬롯을 배정한 뒤다.
 
 ### C 가 함께 져야 하는 것 — 버려진 실행의 `asof_state`
 
 `assertFrozenStep` 이 판정을 버리면 `finalizeRunStep` 이 안 돌아 실행 행이 열린 채 남는데
-(설계 의도다), **그 실행이 이미 쓴 `asof_state` 최대 300만 행은 아무도 안 지운다.**
-`DELETE FROM asof_state` 는 저장소의 테스트 밖에 존재하지 않는다.
+(설계 의도다), **그 실행이 이미 쓴 `asof_state` 최대 300만 행을 아무도 안 지웠다.**
 
 CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기동에서는 검증이 시작조차 못 했다.
-지금은 양방향 가드가 대부분을 막지만 **마이크로초짜리 창과 하드킬은 남으므로**, 정리 잡이
-`verdict IS NULL AND started_at < NOW() - INTERVAL 1 DAY` 를 훑어 파생 행을 걷어야 한다.
-한 문장으로 300만을 지우면 언두 로그가 터지므로 `LIMIT` 으로 나눠 지운다.
+지금은 양방향 가드가 대부분을 막지만 **마이크로초짜리 창과 하드킬은 남는다.**
+
+**CY-397 의 `cleanupJob` 이 그 축을 진다.** 대상은 둘이다 —
+`purgeableRunIds`(보존 창 밖)와 `abandonedRunIds`(`verdict IS NULL` 이면서 하루 지난 것).
+`DELETE FROM asof_state` 는 이제 `CleanupJdbcAdapter#deleteAsOfStateChunk` 하나뿐이고,
+**태스클릿 한 번이 청크 하나**라 커밋이 나뉜다(한 트랜잭션으로 300만을 지우면 `LIMIT` 을
+붙여도 언두와 잠금은 전량을 통째로 든다).
+
+> ⚠️ **하루라는 창의 근거는 미측정이다.** 300만 전수의 소요를 아직 안 쟀으므로(D) 고른
+> 값이라, 그것 하나에 파괴적 삭제를 맡기지 않는다 — 정리 Step 이 청크마다
+> `RunningJobProbe` 로 *"지금 검증이 도는가"* 를 먼저 묻고, 돌면 거기서 멈춘다.
+> D 가 실측하면 이 값을 다시 정한다.
 
 ### 시체 실행 걷어내기 — `BatchStuckExecution` 이 가리키는 절
 
@@ -557,29 +597,51 @@ UPDATE BATCH_JOB_EXECUTION
 ```
 
 > `BATCH_STEP_EXECUTION` 행은 `STARTED` 로 남는다. 지금 판정 경로가 그것을 안 보므로
-> 그대로 둬도 되지만, 나중에 붙는 정리 잡이 이 축도 져야 한다.
+> 그대로 둬도 된다. **`cleanupJob` 도 이 축은 아직 안 진다** — `BATCH_*` 메타 정리는
+> 아래 §7 과 같은 축이라 뒤로 미뤘고, 만료가 일 1회로 바뀌어 인스턴스 증가가 하루 288 에서
+> 1 로 줄었다.
 
 > ⚠️ **아래 `asof_state` DELETE 와 헷갈리지 마라.** 그쪽은 버려진 **검증 실행**이 남긴
 > 파생 행을 걷는 것이고 이 절과 다른 사고다.
 
-**정리 잡이 오기 전까지는 손으로 한다.** 그 티켓이 최소 둘 뒤라, 지금 이 상황을 만난
-운영자가 칠 것을 여기 적어 둔다.
+**잡이 꺼져 있을 때(`BATCH_SCHEDULING_ENABLED=false`)의 수동 절차.** 평소에는
+`cleanupJob` 이 04:30 에 같은 일을 하므로 손으로 칠 일이 없다 — 스케줄러를 끈 채 띄운
+환경이나, `CleanupNotSucceeding` 이 울고 있는데 원인을 못 찾은 경우가 이 절의 대상이다.
 
 ```sql
 -- 버려진 실행 찾기. 지우기 전에 반드시 눈으로 본다.
+-- **잡과 같은 조건을 쓴다**(CleanupJdbcAdapter#abandonedRunIds). 조건이 갈리면 손 SQL 이
+-- 잡은 안 건드리는 행까지 지운다 — 특히 origin='SEED' 는 게이트의 기준값이라 재시딩 말고
+-- 복구가 없고, v_latest_stats_run 이 가리키는 행을 지우면 대시보드가 조용히 빈다.
 SELECT r.id, r.as_of, r.dataset, r.scope, r.attempt, r.started_at,
        (SELECT COUNT(*) FROM asof_state s WHERE s.run_id = r.id) AS asof_rows
   FROM verification_runs r
- WHERE r.verdict IS NULL
+ WHERE r.origin = 'BATCH'
+   AND r.verdict IS NULL
    AND r.started_at < NOW() - INTERVAL 1 DAY
+   AND r.id NOT IN (SELECT id FROM v_latest_stats_run)
  ORDER BY r.id;
 
 -- 파생 행 걷기. 0행이 나올 때까지 반복한다.
-DELETE FROM asof_state WHERE run_id = :runId LIMIT 50000;
+-- LIMIT 은 batch.cleanup.chunk-size 와 같은 값을 쓴다 — 손과 잡이 다른 크기를 쓰면
+-- 어느 쪽이 계약인지 모호해진다.
+DELETE FROM asof_state WHERE run_id = :runId LIMIT 10000;
 ```
 
-**언제** — B 는 지금. C 는 B 뒤. D 는 300만 적재 뒤.
-`asof_state` 정리만은 B 를 안 기다려도 된다 — 이 티켓이 그 누수를 처음 도달 가능하게 만들었다.
+> ⚠️ **통계 셋은 손으로 지우지 마라.** 잡은 통계를 지울 때 `stats_status` 를 함께 내리는데
+> (안 내리면 `v_latest_stats_run` 이 행 0개짜리 실행을 *"완결된 최신 스냅샷"* 으로 가리킨다),
+> 그 짝을 손 SQL 로 맞추기 어렵다. **`COMPLETE` 였던 행만** 내려야 하는 것도 함께 지켜야 한다 —
+> `SKIPPED` 는 *"오염셋이라 안 했다"* · *"불합격이라 안 했다"* 라는 뜻이 실린 값이다.
+>
+> 위 조회로 찾은 **버려진 실행**의 검출 행은 손으로 지워도 된다 — 설명할 판정이 없기 때문이다.
+> ```sql
+> DELETE FROM verification_findings WHERE run_id = :runId;   -- verdict IS NULL 인 실행만
+> ```
+> **판정이 있는 실행의 검출 행은 절대 지우지 마라.** `FAIL` 은 무엇이 틀렸는지의 유일한 근거이고
+> (`VerificationVerdictFailed` 의 runbook 이 그 행을 가리킨다), 오염셋의 `PASS` 800행은
+> *"누락 0 · 오탐 0"* 을 보여 주는 이 과제의 산출물이다.
+
+**언제** — A·B·C 완료. D 는 300만 적재 뒤.
 
 ---
 

@@ -62,15 +62,29 @@ public class RunningJobProbe {
     public RunningJobProbe(JobRepository jobRepository,
             @Value("${batch.stuck-job-after-ms:1800000}") long stuckAfterMs,
             @Value("${batch.verify.step-timeout-ms:600000}") long verifyStepTimeoutMs,
-            @Value("${batch.expire.step-timeout-ms:120000}") long expireStepTimeoutMs) {
-        long longestSilentStep = Math.max(verifyStepTimeoutMs, expireStepTimeoutMs);
+            @Value("${batch.expire.step-timeout-ms:120000}") long expireStepTimeoutMs,
+            @Value("${batch.cleanup.step-timeout-ms:120000}") long cleanupStepTimeoutMs) {
+        // 침묵할 수 있는 Step 을 전부 세지 않으면 이 가드가 지키는 관계가 조용히 깨진다.
+        // 새 잡이 생길 때마다 여기 인자가 하나 는다 — 그것이 이 가드의 값이다.
+        String longestName = "verify";
+        long longestSilentStep = verifyStepTimeoutMs;
+        if (expireStepTimeoutMs > longestSilentStep) {
+            longestName = "expire";
+            longestSilentStep = expireStepTimeoutMs;
+        }
+        if (cleanupStepTimeoutMs > longestSilentStep) {
+            longestName = "cleanup";
+            longestSilentStep = cleanupStepTimeoutMs;
+        }
         if (stuckAfterMs <= longestSilentStep) {
             throw new IllegalArgumentException(
                     "batch.stuck-job-after-ms 는 가장 긴 Step 데드라인보다 커야 합니다. "
-                            + "verifyJob 의 Step 열 개는 단발 태스클릿이라 Step 이 도는 동안 "
-                            + "하트비트가 한 번도 안 뛰고, 그 침묵을 시체로 읽으면 만료가 "
-                            + "검증 한복판을 지나갑니다. stuck-job-after-ms=" + stuckAfterMs
-                            + " 가장긴Step=" + longestSilentStep);
+                            + "verifyJob 의 Step 열 개와 cleanupJob 의 정리 Step 은 하트비트가 "
+                            + "청크 커밋에만 뛰어서, 그 사이 침묵을 시체로 읽으면 만료가 "
+                            + "검증 한복판을 지나가거나 살아 있는 정리가 시체로 신고됩니다. "
+                            + "stuck-job-after-ms=" + stuckAfterMs
+                            + " 가장긴Step=batch." + longestName + ".step-timeout-ms("
+                            + longestSilentStep + ")");
         }
         this.jobRepository = jobRepository;
         this.stuckAfter = Duration.ofMillis(stuckAfterMs);
@@ -145,12 +159,17 @@ public class RunningJobProbe {
      * {@code fillStepExecutionDependencies} 까지 돌려 <b>StepExecution 을 채워서 준다</b>
      * (같은 방법으로 확인).
      *
-     * <p>⚠️ <b>양쪽에서 눌린다.</b> 아래로는 {@code BatchJobRunningTooLong}(300초)보다
-     * 커야 한다 — 그 알림이 읽는 {@code spring_batch_job_active_seconds_max} 는 JVM 안의
-     * 게이지라, 그것이 우는 상태는 정의상 <b>"살아서 느리게 돌고 있다"</b>이다.
-     * 위로는 <b>가장 긴 Step 데드라인보다 커야 한다</b>({@code batch.verify.step-timeout-ms}).
+     * <p>⚠️ <b>양쪽에서 눌린다.</b> 아래로는 {@code BatchJobRunningTooLong}(600초)과
+     * {@code CleanupRunningTooLong}(900초)보다 커야 한다 — <b>그쪽은 손으로 맞춘다.</b>
+     * 알림 임계는 프로메테우스에 있어 앱이 못 읽으므로 검사하는 코드가 없다.
+     * 아래 생성자가 보는 것은 <b>위쪽 관계뿐</b>이다. 그 알림들이 읽는
+     * {@code spring_batch_job_active_seconds_max} 는 JVM 안의 게이지라, 그것이 우는 상태는
+     * 정의상 <b>"살아서 느리게 돌고 있다"</b>이다.
+     * 위로는 <b>가장 긴 Step 데드라인보다 커야 한다</b> — {@code batch.verify}·
+     * {@code batch.expire}·{@code batch.cleanup} 의 {@code step-timeout-ms} <b>셋 다</b>이고,
+     * 생성자가 그 셋을 인자로 받아 검사한다(잡이 늘면 인자가 는다).
      * 어느 쪽이든 붙여 놓으면 <i>"살아 있다"</i>와 <i>"죽었다"</i>가 같은 숫자를 쓴다 —
-     * 한때 아래쪽에서, 그다음 위쪽에서 같은 사고를 냈다. 지금은 생성자가 검사한다.
+     * 한때 아래쪽에서, 그다음 위쪽에서 같은 사고를 냈다.
      */
     private boolean isAlive(String jobName, JobExecution execution, LocalDateTime now) {
         if (lastProgress(execution) == null) {

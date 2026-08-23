@@ -127,7 +127,7 @@ public class ExpireScheduler {
 
     // Job 빈이 expireJob·verifyJob 둘이다. 지금은 파라미터 이름으로 갈리지만(부트 그래들
     // 플러그인이 -parameters 를 붙인다) 그 기본값에 기대는 대신 명시한다 — 셋째 Job 이
-    // 생기거나 컴파일 옵션이 바뀌면 조용히 다른 잡이 주입되고, 그때 5분마다 도는 것이
+    // 생기거나 컴파일 옵션이 바뀌면 조용히 다른 잡이 주입되고, 그때 크론마다 도는 것이
     // 만료가 아니게 된다.
     // JobOperator 빈도 둘이다. CY-368 이 verify 전용 비동기 빈을 더했다 —
     // 이 잡은 반드시 **공용(동기)** 빈이어야 한다. 비동기 빈이 주입되면 아래
@@ -207,7 +207,7 @@ public class ExpireScheduler {
      * 실행 결과를 돌려줄 뿐이다. 그래서 상태를 직접 봐야 한다. 안 보면 이력 짝 불일치나
      * 재고 행 누락으로 잡이 멈춰도 <b>로그가 한 줄도 남지 않는다.</b>
      *
-     * <p><b>네 갈래를 레벨로 가른다.</b> 뭉쳐 두면 알림이 붙는 순간 하루 288번 중 대부분이
+     * <p><b>네 갈래를 레벨로 가른다.</b> 뭉쳐 두면 알림이 붙는 순간 발화의 대부분이
      * 소음이 되고, 진짜 사건이 그 안에 묻힌다.
      *
      * <table border="1">
@@ -231,8 +231,8 @@ public class ExpireScheduler {
      * 두 서버가 부딪힌다).
      *
      * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-359 가
-     * {@code spring.task.scheduling.pool.size} 를 <b>2</b> 로 올렸다 — {@code @Scheduled} 가
-     * 둘이라서다(이 잡과 검증 판정 되읽기). 근거는 {@code application.yml.example} 의 그 키에
+     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>4</b> 이고
+     * {@code @Scheduled} 도 넷이다(만료 · 정리 · 검증 판정 되읽기 · 실행 지표 되읽기). 근거는 {@code application.yml.example} 의 그 키에
      * 적혀 있다. 그것이 이 잡을 자기 자신과
      * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
      * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
@@ -312,7 +312,7 @@ public class ExpireScheduler {
             }
         } catch (DuplicateKeyException e) {
             // 다른 노드가 같은 asOf 로 먼저 JOB_INST_UN 을 잡았다. 중복 방지가 제 일을 한 것이라
-            // 사건이 아니다 — ERROR 로 내보내면 배치를 두 대로 늘리는 순간 하루 288번 울린다.
+            // 사건이 아니다 — ERROR 로 내보내면 배치를 두 대로 늘리는 순간 슬롯마다 울린다.
             // (인스턴스 생성 격리를 READ COMMITTED 로 내려 둔 덕에 오류가 1062 로 좁혀진다.
             //  SERIALIZABLE 이면 데드락 1213 이라 이 타입으로 안 온다 — BatchJobRepositoryConfig 참조)
             log.info("다른 노드가 같은 asOf 를 이미 시작했습니다. asOf={}", asOf);
@@ -327,7 +327,8 @@ public class ExpireScheduler {
      * <p>검증 중에 만료가 지나가면 판정 근거가 판정 도중에 바뀌고, {@code assertFrozenStep} 이
      * 그것을 잡아 <b>판정을 통째로 버린다.</b> 게다가 만료가 찍은 {@code updated_at} 은
      * 지워지지 않아 <b>그 {@code asOf} 를 영구히 못 쓰게</b> 만든다. 한 슬롯 미루는 편이 훨씬
-     * 싸다 — 5분 실행 한 번이 손대는 것은 약 22건이다.
+     * 싸다 — 만료 한 실행이 손대는 것은 하루치 약 6,300건이고, 그 몫은 다음 슬롯이
+     * 함께 가져간다(배치 창으로 옮기기 전에는 5분 실행 한 번에 약 22건이었다).
      *
      * <p><b>대상이 유실되지는 않는다.</b> 이 스케줄러는 주기마다 {@code asOf} 를 새로 잡고
      * 만료는 {@code expires_at < asOf} 를 {@code id > 0} 부터 훑으므로, 건너뛴 슬롯의 몫을
@@ -351,6 +352,17 @@ public class ExpireScheduler {
         List<Long> verifying = runningJobs.blockingExecutions(VerifyJobConfig.JOB_NAME);
         if (verifying.isEmpty()) {
             consecutiveSkips = 0;
+            return false;
+        }
+
+        if (maxSkips == 0) {
+            // 0 은 "건너뛰기를 끈다" 다. 위 분기와 같은 문구를 쓰면 **건너뛴 적이 없는데**
+            // "0슬롯 연속 건너뛰었습니다" 라는 앞뒤 안 맞는 줄이 남는다 — 사고를 되짚는
+            // 사람이 보게 될 유일한 단서라 사실이어야 한다.
+            log.error("max-expire-skips=0 이라 검증을 뚫고 만료를 돌립니다. 이 검증의 판정은 "
+                            + "assertFrozenStep 에서 버려지고, 만료가 찍은 updated_at 은 "
+                            + "지워지지 않아 그 asOf 를 다시 못 씁니다. "
+                            + "asOf={} verifyExecutionIds={}", asOf, verifying);
             return false;
         }
 

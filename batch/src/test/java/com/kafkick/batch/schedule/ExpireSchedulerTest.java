@@ -63,6 +63,12 @@ class ExpireSchedulerTest {
         //
         // 연 단위 크론으로는 어떤 SLA 도 못 맞춰 기동 가드가 거절하므로,
         // 그 검사가 여기서 뜻이 없다는 것을 값으로 명시한다.
+        // 정리 크론도 함께 민다. 그러지 않으면 04:30 UTC(13:30 KST)를 지나며 도는 CI 에서
+        // 진짜 정리가 발화해 asof_state · verification_findings · 통계 세 테이블을 지운다 —
+        // MySqlContainerConfig 는 컨테이너를 공유하므로 무관한 검증 테스트가 그날만 빨개진다.
+        // 연 1회 크론은 CleanupScheduler 의 SLA 가드에 걸리므로 SLA 도 함께 올린다.
+        "batch.schedule.cleanup-cron=0 0 0 1 1 *",
+        "batch.metrics.cleanup-sla-seconds=999999999",
         "batch.metrics.expire-sla-seconds=999999999"
     })
     @Import(MySqlContainerConfig.class)

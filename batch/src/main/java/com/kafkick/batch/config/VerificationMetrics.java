@@ -33,7 +33,9 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 잡았다. 이 둘은 <b>마지막 실행의 값</b>이지 누적이 아니다.
  *
  * <p><b>값을 잡 실행 중에 밀어 넣지 않고 되읽는다.</b> 만료는 5분 크론이라 프로세스
- * 게이지가 재시작 뒤 곧 복구되지만, 검증은 <b>사람이 손으로, 드물게</b> 돌린다. 재배포하면
+ * 게이지가 재시작 뒤 곧 복구된다고 봤는데, <b>CY-397 이 그것을 배치 창(일 1회)으로 옮겨
+ * 그 근거가 깨졌다</b>({@code VerificationMetricsRefresher} 에 자세히 적었다).
+ * 검증은 그와 별개로 <b>사람이 손으로, 드물게</b> 돌린다. 재배포하면
  * 판정이 지표에서 사라지는데 DB 에는 남아 <b>관제와 진실이 갈린다</b> — 금요일 {@code FAIL}
  * 이 주말 재시작으로 없어지는 모양이다. {@code VerificationMetricsRefresher} 가 주기적으로
  * 이 클래스를 채운다.

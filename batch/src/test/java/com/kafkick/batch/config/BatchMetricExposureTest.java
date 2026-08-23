@@ -164,6 +164,14 @@ class BatchMetricExposureTest {
                 .as("잡 이름과 상태가 태그로 갈려야 알림 규칙을 잡별로 쓸 수 있다")
                 .contains("spring_batch_job_name=\"expireJob\"")
                 .contains("spring_batch_job_status=\"COMPLETED\"");
+
+        // 위 자동 수집은 spring_batch_*·cy_* 접두사만 본다. ExpireMetricsUnknown 이
+        // 기동 나이를 조인 축으로 쓰므로 그 이름은 여기서 따로 못 박는다 — 안 나오면
+        // and 조인이 통째로 빈 벡터가 되어 그 알림이 **영원히 침묵**한다.
+        assertThat(metricLine(body, "process_start_time_seconds"))
+                .as("Boot 의 UptimeMetrics 가 내는 값이다. 이것이 없으면 재기동 직후의 "
+                        + "'아직 모른다' 와 진짜 고장을 가를 수단이 사라진다")
+                .isNotBlank();
     }
 
     /**

@@ -20,7 +20,7 @@
 | **안 한다** | Slack 연동 (`docs/13` §2e 에 근거) |
 | **한다** | `batch` 를 컨테이너로 띄운다 — **아래 "왜 앱까지 하나"** |
 | **한다** | 기동 가드와 업무 포트 결정 — 세 문서가 이 티켓에 예약해 뒀다 |
-| **안 한다** | 아직 없는 잡(`cleanupJob`·회차 생성/전이)의 알림 — 그 잡을 만들 때 단다 |
+| **안 한다** | 아직 없는 잡(회차 생성/전이)의 알림 — 그 잡을 만들 때 단다. `cleanupJob` 은 CY-397 이 만들면서 규칙 넷을 함께 달았다 |
 | **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. 배포 순서 위반은 `batch` 쪽 기동 가드로 잡는다 |
 
 > **범용인 것은 `BatchJobFailed` 와 `BatchStuckExecution` 둘이다.** 셀렉터에 잡 이름이 없어
@@ -30,6 +30,14 @@
 > **`ExpireNotSucceeding`·`BatchJobRunningTooLong` 은 `expireJob` 에 박혀 있다.**
 > 둘 다 `{spring_batch_job_name="expireJob"}` 로 좁힌다 — 앞엣것은 우리 게이지의 라벨이고
 > 뒤엣것은 스프링 배치가 내는 라벨인데, CY-392 가 이름을 맞춰 뒀다.
+>
+> **그래서 `cleanupJob` 은 자기 판을 따로 갖는다**(CY-397) —
+> `CleanupNotSucceeding`(SLA 25h) · `CleanupNeverSucceeded`(NaN) · `CleanupGaugeMissing`(absent)
+> · `CleanupRunningTooLong`(900초). **잡 축을 정규식으로 합치지 않았다** — SLA 도 임계도
+> 만료와 값이 달라서, 합치면 한쪽을 조정할 때 다른 쪽이 조용히 따라 움직인다.
+> 뒤 셋이 만료 판을 그대로 복제한 이유는 비교 필터가 `NaN` 을 떨어뜨리기 때문이다 —
+> `CleanupNotSucceeding` 만 두면 *"한 번도 안 돈 정리"* 가 **영구 침묵**이고, 그 상태가
+> 정확히 이 잡의 가장 나쁜 결말이다. `promtool` 유닛 테스트가 그 짝을 못 박아 둔다.
 >
 > 그리고 **`verifyJob` 에는 아직 SLA 알림을 붙이면 안 된다.** 크론이 없어
 > <b>"안 도는 것이 정상"</b>이라 붙이면 영구 critical 이다. CY-392 가 게이지
@@ -123,6 +131,8 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
 | `ExpireGaugeMissing` · `BatchTargetDown` · `BatchJobRunningTooLong` | `server` |
 | `BatchStuckExecution` · `BatchRunMetricsUnknown` · `BatchRunMetricsStale` | `server` |
+| `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
+| `CleanupRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
 | `ExpireSkippingBrokenCoupons` | `data` |
 
@@ -153,7 +163,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 **여기서 새로 알게 된 것** — `BATCH_SCHEDULING_ENABLED=false`(batch.yml 의 기본)로 띄우면
 그날의 `BatchJobNotRunning`(15분 창 + `for` 15분)이 발화한다. 만료가 안 도는 것이 그
 설정에서는 정상인데 알림은 사고로 본다. **4단계에서 silence 로 결정했다** — 규칙에 예외를
-파면 *일부러 껐다* 와 *꺼져 버렸다* 가 같은 값이 된다. 시연 절차 2번에 명령을 박아 뒀다.
+파면 *일부러 껐다* 와 *꺼져 버렸다* 가 같은 값이 된다. 시연 절차 **1번**에 명령을 박아 뒀다.
 
 > ⚠️ **이 표는 2026-08-22 의 관측이다.** CY-392 가 그 규칙을 `ExpireNotSucceeding`(마지막
 > 성공 시각 축)으로 갈았으므로 위 이름과 발화 지연은 <b>지금 것이 아니다</b>. 새 규칙의
@@ -177,8 +187,9 @@ cy_verification_verdict{dataset,scope}    PASS=0, FAIL=1
 cy_verification_findings{dataset,scope}   검출 건수
 ```
 
-**값을 `afterJob` 이 아니라 주기 조회로 채운다.** `expireJob` 은 5분 크론이라 재시작해도
-곧 복구되지만 `verifyJob` 은 **사람이 손으로, 드물게** 돌린다. 프로세스 게이지로 두면
+**값을 `afterJob` 이 아니라 주기 조회로 채운다.** 프로세스 게이지였다면 재시작 뒤 다음
+실행까지 값이 비는데, 만료·정리가 배치 창으로 옮긴 지금 그 공백이 **최대 하루**다(CY-397).
+`verifyJob` 은 아예 **사람이 손으로, 드물게** 돌린다. 프로세스 게이지로 두면
 컨테이너를 재배포하는 순간 판정이 사라지는데 `verification_runs.verdict` 는 DB 에 남아 있다 —
 **관제와 진실이 갈린다.** 금요일 FAIL 이 주말 재시작으로 없어지는 모양이다.
 
@@ -287,14 +298,20 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
 ### `BATCH_SCHEDULING_ENABLED=false` 의 상시 critical — silence 로 간다
 
-`batch.yml` 의 기본값이 `false` 라, README 가 안내하는 그대로 띄우면 `expireJob` 시계열이
-아예 안 태어나 `absent_over_time` 이 **영구히 참**이다. 15분 뒤 critical 이 뜨고
-`repeat_interval` 대로 한 시간마다 다시 온다.
+`batch.yml` 의 기본값이 `false` 라, README 가 안내하는 그대로 띄우면 만료·정리가 한 번도
+안 돈다.
+
+> ⚠️ **이 문단은 2026-08-22 의 규칙 기준이다.** 그때는 `absent_over_time` 이 영구히 참이
+> 되어 15분 뒤 critical 이었다. CY-392 가 축을 *"마지막 성공 시각"* 으로 갈면서 시계열은
+> **태어나되 값이 `NaN`** 이 됐고(게이지를 `Job` 빈에서 무조건 등록한다), 지금 그 상태를
+> 지는 것은 `ExpireNeverSucceeded`(NaN, `for` 10분) · `CleanupNeverSucceeded`(NaN, 30분)와
+> `ExpireGaugeMissing`(absent + `up`, 5분)이다. **결론은 그대로다** — 규칙에 예외를 안 파고
+> 사람이 재운다.
 
 **그래도 규칙에 예외를 안 판다.** 지표에 "스케줄러가 꺼져 있다" 는 축이 없어서 `unless` 로
 가르려면 `cy_batch_scheduling_enabled` 게이지를 새로 내보내야 하는데, 그러면 *일부러 껐다* 와
 *꺼져 버렸다* 가 같은 값이 된다 — 후자가 정확히 이 알림이 잡아야 하는 것이다.
-아래 시연 절차 2번처럼 **끄는 구간에만 사람이 silence 를 건다.**
+아래 시연 절차의 *"먼저 두 알림을 재운다"* 처럼 **끄는 구간에만 사람이 silence 를 건다.**
 
 **부하 중 `BatchTargetDown` 도 같은 이유로 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
 <b>일부러</b> 없는 것이라 알림이 뜨는 게 맞다 — 규칙이 틀린 것이 아니다. `inhibit_rules` 로
@@ -337,40 +354,47 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 요구했다 — `true` 면 만료가 5분마다 돌지만 `rejectRunningSchedulers` 가 `verifyJob` 을
 거부하고, `false` 면 그 반대였다. 그래서 축 하나를 보려면 재기동해야 했다.
 
-지금 검증을 막는 것은 그 플래그가 아니라 **실제로 도는 만료 실행**이다. 만료는 5분 크론에
-한 번 수 초를 쓰므로, 그 사이 아무 때나 검증을 트리거하면 된다.
+지금 검증을 막는 것은 그 플래그가 아니라 **실제로 도는 만료 실행**이다. 만료는 배치 창
+(04:10 UTC = **13:10 KST**)에 하루 한 번 도므로 그 시각만 피하면 언제든 트리거된다 —
+정리도 20분 뒤(13:30 KST)라 함께 피한다. 그 시각에 걸면 정리가 첫 청크에서 물러나
+**한 행도 안 걷는다**(종료 코드 `YIELDED`).
 
-1. `BATCH_SCHEDULING_ENABLED=true` 로 띄운다 — 만료 알림 축이 살아난다
+1. **먼저 두 알림을 재운다.** `BATCH_SCHEDULING_ENABLED` 를 켜든 끄든 필요하다 —
+   만료·정리가 배치 창(04:10 · 04:30 UTC)으로 옮겨(CY-397) **크론 슬롯 한 번이 하루**이므로,
+   볼륨을 지우고 새로 띄우면 다음 슬롯까지 최대 하루 동안 게이지가 `NaN` 이다.
+   규칙의 `for` 는 10분·30분이라 **이 구간을 못 덮는다** — 콜드 스타트는 오직 이 silence 가
+   막는다. 크론 슬롯(25h·26h)을 `for` 예산으로 쓰면 재기동마다 stale 마커로 타이머가
+   리셋돼 알림이 **영원히 안 뜬다**(근거는 `batch-alerts.yml` 의 `ExpireNeverSucceeded` 주석).
 
-2. **같은 기동에서** `verifyJob` 을 트리거한다 — 검증 알림 축 확인
+   ```bash
+   docker compose -f base.yml exec alertmanager \
+     amtool silence add 'alertname=~"ExpireMetricsUnknown|(Expire|Cleanup)NeverSucceeded"' \
+     --duration=26h --comment="daily batch window; fresh DB has no run yet" \
+     --alertmanager.url=http://localhost:9093
+   ```
+
+2. `BATCH_SCHEDULING_ENABLED=true` 로 띄운다 — 만료 알림 축이 살아난다
+
+3. **같은 기동에서** `verifyJob` 을 트리거한다 — 검증 알림 축 확인
 
    마침 만료가 도는 중이면 `409 VERIFICATION-012` 가 온다. **그것도 보여 줄 것이다** —
    재고를 쓰는 잡과 판정하는 잡이 서로를 아는 것이 설계이고, 응답 본문에 그 이유가 있다.
-   만료는 한 주기에 수 초라 몇 초 뒤 다시 부르면 접수된다.
+   만료는 한 실행에 수 초라 몇 초 뒤 다시 부르면 접수된다.
 
-   > **접수된 뒤가 더 중요하다.** 검증은 수 분 도는데 만료 크론은 5분이라, 한쪽 가드만
-   > 있으면 **대부분의 실행이 크론에 물려 `DATASET_MUTATED_DURING_RUN` 으로 버려진다.**
-   > 그래서 만료 스케줄러가 **검증이 도는 동안 그 슬롯을 건너뛴다** — 건너뛴 몫은 다음에
-   > 도는 슬롯이 통째로 가져간다. 다만 연속 스킵에 상한이 있어(`max-expire-skips`, 기본 1)
-   > 최대 지연이 `(상한 + 1) × 크론 주기` 로 묶인다. 상한을 넘으면 재고 쪽을 택해 만료를
-   > 돌리고, 그때 그 검증은 버려진다.
+   > **접수된 뒤가 더 중요하다.** 만료가 배치 창으로 옮긴 뒤에도 손 트리거는 시각을 안
+   > 가리므로, 한쪽 가드만 있으면 **13:10 KST 에 걸린 실행이 크론에 물려
+   > `DATASET_MUTATED_DURING_RUN` 으로 버려진다.** 그래서 만료 스케줄러가 **검증이 도는 동안
+   > 그 슬롯을 건너뛴다** — 건너뛴 몫은 다음에 도는 슬롯이 통째로 가져간다. 다만 연속 스킵에
+   > 상한이 있어(`max-expire-skips`, 기본 1) 최대 지연이 `(상한 + 1) × 크론 최대간격`,
+   > 즉 이틀로 묶인다. 상한을 넘으면 재고 쪽을 택해 만료를 돌리고, 그때 그 검증은 버려진다.
    >
    > 버려지면 그 `asOf` 는 **영구히 못 쓴다.** 만료가 찍은 `updated_at` 이 지워지지 않아
    > `rejectIssuancesUpdatedAfterAsOf` 가 그 `asOf` 이하로 영원히 참이 된다 — 재시도가
    > 아니라 **더 뒤의 `asOf`** 로 불러야 한다.
 
-   > **스케줄러를 끈 채 시연하려면** `expireJob` 시계열이 아예 안 태어나
-   > `ExpireNeverSucceeded` 가 `for`(10분) 뒤부터 영구히 뜬다 — 시계열은 태어나되 값이
-   > `NaN` 이라서다(`BatchRunMetrics` 가 `Job` 빈에서 이름을 받아 무조건 등록한다).
-   > 규칙이 틀린 게 아니라 그 설정에서
-   > 정상인 상태라, 그 구간에만 재운다.
-   >
-   > ```bash
-   > docker compose -f base.yml exec alertmanager \
-   >   amtool silence add alertname=ExpireNeverSucceeded \
-   >   --duration=2h --comment="scheduling disabled for verify demo" \
-   >   --alertmanager.url=http://localhost:9093
-   > ```
+   > **스케줄러를 끈 채 시연하면** 두 게이지가 계속 `NaN` 이다 — 시계열은 태어나되 값이
+   > 없다(`BatchRunMetrics` 가 `Job` 빈에서 이름을 받아 무조건 등록한다). 규칙이 틀린 게
+   > 아니라 그 설정에서 정상인 상태라, 위 1번의 silence 가 그 구간을 덮는다.
 
    **`attempt` 는 시드가 점유한 값을 피한다.** 시드는 CLEAN 에 `(FULL,1)`·`(FULL,2)`·
    `(INCREMENTAL,1)` 을, CORRUPT 에 `(FULL,1)` 을 심는다. `uk_run_params` 와
@@ -405,8 +429,12 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    ```bash
    curl -X POST "http://127.0.0.1:9090/api/v1/admin/verify?asOf=<시드의 as_of>&dataset=CORRUPT&seedRunId=<시드 run>"
    # → 판정 뒤 조회하면:
-   #   {"success":true,"data":{"verdict":"FAIL","findingCount":800, ...},"error":null}
-   #   ← 정답 800행과 일치하는 것이 합격이다
+   #   {"success":true,"data":{"verdict":"PASS","findingCount":800,"statsStatus":"SKIPPED",...}}
+   #   ← 검출 800건이 정답 매니페스트와 **양방향으로** 일치했다는 뜻이다(누락 0 · 오탐 0).
+   #     judgeAgainstManifest 는 집합이 정확히 같을 때 PASS 를 낸다 — 오염셋에서 FAIL 은
+   #     합격이 아니라 **집합이 어긋났다**는 뜻이고, 그때 VerificationVerdictFailed 가 운다.
+   #     그 알림을 실제로 띄워 보려면 expected_findings 를 한 행 지운 사본으로 돌린다.
+   #     statsStatus 가 SKIPPED 인 것도 정상이다 — 오염 데이터 위의 집계는 뜻이 없다.
    ```
 
    **`runId` 가 `null` 인 것도 정보다** — 아직 판정 단계에 못 갔거나, 가드에 걸려 끝까지

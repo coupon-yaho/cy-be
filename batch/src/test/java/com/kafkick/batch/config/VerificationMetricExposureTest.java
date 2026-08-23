@@ -294,14 +294,14 @@ class VerificationMetricExposureTest {
     @Test
     @DisplayName("스케줄러 풀이 @Scheduled 수를 감당한다 — 서로를 막지 않게")
     void schedulerPoolFitsScheduledTaskCount() {
-        // 정확히 3 을 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
+        // 정확히 4 를 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
         // 있으면 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵고, 세 번째
         // @Scheduled 가 생겨 정당하게 올리는 날에도 깨진다. 정확한 값은
         // ResolvedBatchConfigTest 가 키 경로로 지키고, 여기가 막는 것은 "1 로 폴백" 이다.
         assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
                 .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
-                        + "폴백한다. 그러면 세 @Scheduled 가 스레드 하나를 다툰다")
-                .isGreaterThanOrEqualTo(3);
+                        + "폴백한다. 그러면 네 @Scheduled 가 스레드 하나를 다툰다")
+                .isGreaterThanOrEqualTo(4);
     }
 
     /**
