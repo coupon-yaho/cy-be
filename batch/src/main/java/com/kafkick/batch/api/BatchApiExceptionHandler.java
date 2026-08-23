@@ -18,7 +18,7 @@ import com.kafkick.core.support.exception.ErrorCode;
 /**
  * <b>이게 없으면 모든 도메인 예외가 500 으로 나간다.</b> {@code BusinessException} 이
  * {@code ErrorCode.getStatus()} 를 들고 있어도, 그것을 읽어 HTTP 로 옮기는 것이 없으면
- * 스프링은 그냥 서버 오류로 접는다 — <i>"스케줄러가 켜져 있어서 거절"</i>(409)과
+ * 스프링은 그냥 서버 오류로 접는다 — <i>"만료가 도는 중이라 거절"</i>(409)과
  * <i>"스키마가 없음"</i>(500)이 클라이언트에게 같은 것으로 보인다.
  *
  * <p><b>{@code api} 모듈의 {@code GlobalExceptionHandler} 를 쓸 수 없다.</b> batch 는

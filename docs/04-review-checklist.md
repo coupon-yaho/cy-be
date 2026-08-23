@@ -163,7 +163,7 @@
 | 발급 서비스 · 락 · Lua<br>`**/*Issu*` `**/*Stock*` `**/*Lock*` `**/*Redis*` `**/*.lua` | 재고 엔티티, 마이그레이션 DDL 전체, `CouponStateMachine`, 멱등성 클래스 | 재고 · 1인1매 · 멱등성 · 상태전이 · 개인정보 |
 | 검증 · 배치 · 시드<br>`**/*Verif*` `**/*Batch*` `**/*Seed*` `**/*Corrupt*` `**/*Stats*` | `CouponStateMachine`, 검증 엔티티, 오염셋 정의, 마이그레이션 DDL | 검증결정론 · 상태전이 · 개인정보 |
 | 마이그레이션<br>`**/db/migration/*.sql` `**/schema*.sql` | **마이그레이션 이력 전체** (이전 것과의 순서가 판정에 필요), 대응 엔티티 | 재고 · 1인1매 · 멱등성 · 검증결정론 |
-| 도메인 · 상태전이<br>`**/domain/*.java` `**/coupon/*.java` `**/*StateMachine*` `**/*Campaign*` `**/scheduler/*.java` | 마이그레이션 DDL, 발급 서비스, 검증 배치 | 재고 · 상태전이 · 검증결정론 |
+| 도메인 · 상태전이<br>`**/domain/*.java` `**/coupon/*.java` `**/*StateMachine*` `**/*Campaign*` `**/schedule/*.java` | 마이그레이션 DDL, 발급 서비스, 검증 배치 | 재고 · 상태전이 · 검증결정론 |
 | 컨트롤러 · DTO<br>`**/controller/*.java` · `**/api/*.java` `**/dto/*.java` `**/*Api.java` | 마스킹 유틸, 응답 코드 정의, 대상 서비스 | 개인정보 · 측정 · 1인1매 · 컨벤션 |
 | 설정<br>`**/application*.yml*` `**/logback*.xml` `**/build.gradle` | **전 프로파일 yml** (하나만 보면 값 차이를 모른다), `build.gradle` | 설정복원력 · 개인정보 · 측정 |
 | 대시보드 · 부하 · Chaos<br>`**/static/**` `loadtest/**` `chaos/**` | 응답 코드 정의, 마스킹 유틸 | 개인정보 · 측정 · 컨벤션 |

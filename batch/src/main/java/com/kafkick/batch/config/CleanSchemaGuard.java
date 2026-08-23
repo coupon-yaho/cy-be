@@ -28,7 +28,7 @@ import com.kafkick.core.verification.VerificationRuleRepository;
  * 그 뒤로는 아무것도 안 건드렸다. 지금은 막힌 회차만 빼고 <b>나머지 전부</b>를 넘긴다 —
  * 폭을 넓힌 변경이 그 폭을 막는 가드도 함께 진다.
  *
- * <p><b>{@code verifyJob} 의 {@code rejectRunningSchedulers} 로는 못 막는다.</b> 그것은
+ * <p><b>{@code verifyJob} 의 {@code rejectRunningExpire} 로는 못 막는다.</b> 그것은
  * <i>검증이 도는 동안</i> 을 막지, 그 <b>전에</b> 만료가 한 번 지나간 것은 못 본다.
  *
  * <p><b>왜 검증 포트를 빌려 쓰나.</b> <i>"지금 어느 스키마를 보고 있나"</i> 를 판정하는 근거

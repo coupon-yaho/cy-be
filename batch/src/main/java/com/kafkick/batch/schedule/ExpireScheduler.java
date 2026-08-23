@@ -2,6 +2,7 @@
 package com.kafkick.batch.schedule;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +22,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.kafkick.batch.config.ExpireMetrics;
+import com.kafkick.batch.config.RunningJobProbe;
+import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
 
 /**
@@ -32,16 +36,23 @@ import com.kafkick.core.support.TimeProvider;
  * 다르기 때문이다 — 켜진 채 검증 셋을 보면 되돌릴 수 없고, 꺼진 채 운영을 보면 나중에 돌려
  * 따라잡을 수 있기 때문이다.
  *
- * <p><b>예전에 여기 "{@code BatchJobNotRunning} 알림이 잡아 준다" 고 적었다. 아직 아니다.</b>
- * 규칙 파일은 {@code infra/prometheus/rules/batch-alerts.yml} 에 있지만 <b>그것을 읽는
- * Prometheus 가 아직 배선돼 있지 않다</b>({@code infra/prometheus/prometheus.yml} 이 그 사실을
- * 적어 두었다). compose 가 들어오는 티켓 전까지 이 기본값의 반대편 사고 — 스케줄러가 꺼진 채
- * 뜨는 것 — 는 <b>감지 수단이 없다.</b>
+ * <p><b>{@code BatchJobNotRunning} 은 CY-359 부터 실제로 평가된다</b>
+ * ({@code infra/prometheus/prometheus.yml} 이 그 사실을 적어 두었고 {@code base.yml} 이
+ * 규칙 디렉터리를 마운트한다). 그래서 이 기본값의 반대편 사고 — 스케줄러가 꺼진 채 뜨는 것 —
+ * 는 감지된다.
  *
- * <p><b>{@code VerifyJobConfig} 의 같은 키는 기본값이 반대({@code :true})이고 그것이 맞다.</b>
- * 거기서는 이 플래그를 <i>"스케줄러가 도는 중인가"</i> 로 읽어 검증을 <b>거부</b>하는 데 쓴다.
- * 모를 때 도는 것으로 보고 거부하는 쪽이 안전하다. 두 기본값을 일관성 때문에 맞추면
- * <b>한쪽은 반드시 위험한 방향이 된다.</b>
+ * <p><b>그 알림은 아래 슬롯 건너뛰기를 거짓으로 운다.</b> 만료가 안 도는 것이 <i>의도</i>인
+ * 구간이기 때문이다. 15분 창이라, 건너뛰기에 상한을 둔 이유가 여기에도 있다.
+ *
+ * <p><b>{@code VerifyJobConfig} 는 이제 이 키를 안 읽는다.</b> 한때 거기서 이 플래그를
+ * <i>"스케줄러가 도는 중인가"</i> 로 읽어 검증을 거부했는데, 그것은 <i>"빈이 만들어졌는가"</i>
+ * 라서 운영처럼 늘 켜 두는 환경에서는 <b>검증이 영영 못 돌았다.</b> 지금 그쪽이 보는 것은
+ * 배치 메타의 <b>실제 만료 실행</b>이다({@link RunningJobProbe}).
+ *
+ * <p><b>그래서 배제가 양방향이다.</b> 검증은 만료가 도는 중이면 거절하고, 이 스케줄러는
+ * 검증이 도는 중이면 <b>그 슬롯을 건너뛴다.</b> 한쪽만 있으면 접수는 됐는데 그 뒤 크론이
+ * 발화해 판정이 버려지는 창이 남는데, 검증 소요(수 분)가 크론 주기(5분)에 가까워 그 창이
+ * 예외가 아니라 <b>대부분</b>이 된다.
  *
  * <p><b>끌 것이 하나여야 하는 이유가 이 잡에 있다.</b> 만료는 재고를 쓴다.
  * 부하 측정 중에 돌면 같은 DB 를 때려 측정값이 흔들리고, 검증이 도는 중에 돌면
@@ -93,6 +104,12 @@ public class ExpireScheduler {
     private final TimeProvider timeProvider;
     private final CronSlot cronSlot;
     private final String expireCron;
+    private final RunningJobProbe runningJobs;
+    private final ExpireMetrics metrics;
+    private final int maxSkips;
+
+    /** {@code @Scheduled} 는 이 빈에 대해 단일 스레드라 동기화가 필요 없다. */
+    private int consecutiveSkips;
 
     // Job 빈이 expireJob·verifyJob 둘이다. 지금은 파라미터 이름으로 갈리지만(부트 그래들
     // 플러그인이 -parameters 를 붙인다) 그 기본값에 기대는 대신 명시한다 — 셋째 Job 이
@@ -104,7 +121,10 @@ public class ExpireScheduler {
     public ExpireScheduler(@Qualifier("jobOperator") JobOperator jobOperator,
             @Qualifier("expireJob") Job expireJob,
             TimeProvider timeProvider,
-            @Value(CRON) String expireCron) {
+            @Value(CRON) String expireCron,
+            RunningJobProbe runningJobs,
+            ExpireMetrics metrics,
+            @Value("${batch.schedule.max-expire-skips:1}") int maxSkips) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
@@ -119,6 +139,9 @@ public class ExpireScheduler {
         }
         this.cronSlot = new CronSlot(expireCron);
         this.expireCron = expireCron;
+        this.runningJobs = runningJobs;
+        this.metrics = metrics;
+        this.maxSkips = maxSkips;
     }
 
     /**
@@ -189,6 +212,13 @@ public class ExpireScheduler {
                 .addLocalDateTime("asOf", asOf)
                 .toJobParameters();
         try {
+            // **이 질의도 try 안이다.** 밖에 두면 커넥션이 안 붙는 날 예외가 expire() 밖으로
+            // 나가고, 그러면 이 클래스가 설계한 레벨 구분이 통째로 사라진다 — 스프링의
+            // 기본 핸들러가 asOf 도 크론도 없는 로그 한 줄을 남길 뿐이다.
+            // startedByAnotherNode 가 같은 이유로 조회를 감싸 뒀다.
+            if (skipForRunningVerify(asOf)) {
+                return;
+            }
             JobExecution execution = jobOperator.start(expireJob, parameters);
             BatchStatus status = execution.getStatus();
             if (status.isRunning()) {
@@ -236,6 +266,56 @@ public class ExpireScheduler {
         } catch (Exception e) {
             log.error("만료 배치를 시작하지 못했습니다. asOf={}", asOf, e);
         }
+    }
+
+    /**
+     * 검증이 도는 중이면 이번 슬롯을 건너뛴다 — <b>다만 무한히는 아니다.</b>
+     *
+     * <p>검증 중에 만료가 지나가면 판정 근거가 판정 도중에 바뀌고, {@code assertFrozenStep} 이
+     * 그것을 잡아 <b>판정을 통째로 버린다.</b> 게다가 만료가 찍은 {@code updated_at} 은
+     * 지워지지 않아 <b>그 {@code asOf} 를 영구히 못 쓰게</b> 만든다. 한 슬롯 미루는 편이 훨씬
+     * 싸다 — 5분 실행 한 번이 손대는 것은 약 22건이다.
+     *
+     * <p><b>대상이 유실되지는 않는다.</b> 이 스케줄러는 주기마다 {@code asOf} 를 새로 잡고
+     * 만료는 {@code expires_at < asOf} 를 {@code id > 0} 부터 훑으므로, 건너뛴 슬롯의 몫을
+     * 다음에 실제로 도는 슬롯이 통째로 가져간다.
+     *
+     * <p><b>그래도 상한이 필요하다.</b> 한때 여기에 <i>"최대 지연이 정확히 크론 주기 하나"</i>
+     * 라고 적었는데 <b>거짓이었다</b> — 매 슬롯마다 다시 묻기 때문에, 검증이 주기보다 오래 돌면
+     * 그 사이 슬롯이 <b>전부</b> 죽는다. 300만에서의 검증 소요는 아직 실측 전이라
+     * ({@code docs/13} §6 의 D) 그 지연의 상한을 모른다. 상한을 두면 최대 지연이
+     * <b>{@code (상한 + 1) × 크론 주기}</b> 로 <b>구조적으로</b> 정해진다 — 실측이 필요 없다.
+     *
+     * <p>상한을 넘으면 <b>만료를 돌린다.</b> 재고는 운영의 진실이고 검증 실행은 진단이다 —
+     * 둘 중 하나를 버려야 하면 진단 쪽이다. 그 선택을 ERROR 로 남긴다.
+     *
+     * <p><b>건너뛸 때 대기 지표를 "모름" 으로 되돌린다.</b> {@code reportPending} 은
+     * {@code afterJob} 리스너라 <b>잡이 안 뜨면 안 불린다</b> — 그대로 두면 게이지가 직전
+     * 실행 값에 얼어붙어, 백로그가 쌓이는 바로 그 구간에 관제가 <i>"밀린 것이 없다"</i> 를 본다.
+     * {@code ExpireMetrics.markUnknown} 의 javadoc 이 정확히 그 위험을 적어 뒀다.
+     */
+    private boolean skipForRunningVerify(LocalDateTime asOf) {
+        List<Long> verifying = runningJobs.blockingExecutions(VerifyJobConfig.JOB_NAME);
+        if (verifying.isEmpty()) {
+            consecutiveSkips = 0;
+            return false;
+        }
+
+        if (consecutiveSkips >= maxSkips) {
+            log.error("검증 때문에 만료를 {}슬롯 연속 건너뛰었습니다. 이번 슬롯은 돌립니다 — "
+                            + "그 대가로 이 검증은 assertFrozenStep 에서 버려지고 그 asOf 는 "
+                            + "다시 못 씁니다. 재고를 되돌리는 쪽을 택했습니다. "
+                            + "asOf={} verifyExecutionIds={}", consecutiveSkips, asOf, verifying);
+            consecutiveSkips = 0;
+            return false;
+        }
+
+        consecutiveSkips++;
+        log.warn("검증이 도는 중이라 이번 만료 슬롯을 건너뜁니다. 다음에 도는 슬롯이 밀린 "
+                        + "대상을 함께 가져갑니다. asOf={} 연속={}/{} verifyExecutionIds={}",
+                asOf, consecutiveSkips, maxSkips, verifying);
+        metrics.markUnknown(asOf);
+        return true;
     }
 
     /**

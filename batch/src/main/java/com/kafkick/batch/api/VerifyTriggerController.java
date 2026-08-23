@@ -17,7 +17,6 @@ import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,7 +26,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.config.VerifyExecutorConfig;
+import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
@@ -70,7 +71,7 @@ public class VerifyTriggerController {
     private final VerificationRunRepository runs;
     private final VerificationRuleRepository rules;
     private final TimeProvider timeProvider;
-    private final boolean schedulingEnabled;
+    private final RunningJobProbe runningJobs;
 
     public VerifyTriggerController(
             @Qualifier(VerifyExecutorConfig.OPERATOR) JobOperator verifyJobOperator,
@@ -79,14 +80,14 @@ public class VerifyTriggerController {
             VerificationRunRepository runs,
             VerificationRuleRepository rules,
             TimeProvider timeProvider,
-            @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled) {
+            RunningJobProbe runningJobs) {
         this.verifyJobOperator = verifyJobOperator;
         this.verifyJob = verifyJob;
         this.jobRepository = jobRepository;
         this.runs = runs;
         this.rules = rules;
         this.timeProvider = timeProvider;
-        this.schedulingEnabled = schedulingEnabled;
+        this.runningJobs = runningJobs;
     }
 
     /**
@@ -112,13 +113,17 @@ public class VerifyTriggerController {
             @RequestParam(required = false)
             @DateTimeFormat(pattern = "yyyy-MM-dd'T'HH:mm[:ss][.SSS]") LocalDateTime fromTs) {
 
-        // 잡 안의 rejectRunningSchedulers 가 어차피 막는다. 여기서 먼저 답하는 것은
+        // 잡 안의 rejectRunningExpire 가 어차피 막는다. 여기서 먼저 답하는 것은
         // 클라이언트가 202 를 받아 놓고 폴링해야 원인을 아는 상황을 없애기 위해서다.
         // 진실은 여전히 잡 안에 있다 — 이 검사를 지워도 잡은 거절한다.
-        if (schedulingEnabled) {
-            throw new BusinessException(VerificationErrorCode.VERIFY_SCHEDULER_RUNNING,
-                    "batch.scheduling.enabled 가 true 입니다. 만료가 도는 동안 검증하면 "
-                            + "판정 근거가 검증 중에 바뀝니다 — false 로 재기동한 뒤 부르십시오.");
+        //
+        // 예전에는 batch.scheduling.enabled 를 봤다. 그 플래그는 "만료 스케줄러 빈이
+        // 만들어졌는가" 라서, 운영처럼 늘 켜 두는 환경에서는 이 API 가 **항상 409** 였다.
+        List<Long> runningExpire = runningJobs.blockingExecutions(ExpireJobConfig.JOB_NAME);
+        if (!runningExpire.isEmpty()) {
+            throw new BusinessException(VerificationErrorCode.VERIFY_EXPIRE_RUNNING,
+                    "만료 배치가 실행 중입니다. 그 동안 검증하면 판정 근거가 검증 중에 "
+                            + "바뀝니다 — 끝난 뒤 다시 부르십시오. executionIds=" + runningExpire);
         }
 
         // 이미 도는 것이 있으면 여기서 끝낸다. 아래 start() 의 catch 로는 못 잡는다 —

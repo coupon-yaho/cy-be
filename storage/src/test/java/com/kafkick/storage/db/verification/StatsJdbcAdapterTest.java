@@ -181,7 +181,7 @@ class StatsJdbcAdapterTest {
 
     /**
      * <b>통계 Step 은 얼림 확인보다 뒤에 있다.</b> 그래서 컷이 없으면 집계 도중에 들어온 발급이
-     * 섞이는데, {@code rejectRunningSchedulers} 는 이 JVM 의 플래그만 보므로 api 프로세스가
+     * 섞이는데, {@code rejectRunningExpire} 는 배치 메타의 만료 실행만 보므로 api 프로세스가
      * 살아 있으면 실제로 벌어진다.
      */
     @Test

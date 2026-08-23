@@ -65,6 +65,13 @@ import com.kafkick.core.support.exception.BusinessException;
 @Configuration(proxyBeanMethods = false)
 public class ExpireJobConfig {
 
+    /**
+     * <b>{@code RunningJobProbe} 가 이 이름으로 배치 메타를 조회한다.</b> 리터럴을 두 곳에
+     * 적어 두면 한쪽만 고치는 실수를 아무것도 막지 못하는데, 그때 조회는 <b>빈 집합</b>을
+     * 돌려주고 <i>"만료가 안 돌고 있다"</i> 와 구분되지 않는다 — 가드가 조용히 꺼진다.
+     */
+    public static final String JOB_NAME = "expireJob";
+
     private static final Logger log = LoggerFactory.getLogger(ExpireJobConfig.class);
 
     /**
@@ -176,7 +183,7 @@ public class ExpireJobConfig {
     public Job expireJob(Step expireStep, BinlogFormatGuard binlogFormatGuard,
             CleanSchemaGuard cleanSchemaGuard, ExpirationRepository expirations,
             ExpireMetrics metrics, TimeProvider timeProvider) {
-        return new JobBuilder("expireJob", jobRepository)
+        return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
                         new String[] {"asOf"}, new String[0]))
                 // 이 Step 의 READ COMMITTED DML 이 STATEMENT binlog 서버에서 오류 1665 로

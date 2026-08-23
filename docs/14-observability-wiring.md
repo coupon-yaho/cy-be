@@ -29,9 +29,13 @@
 > 전부 `{spring_batch_job_name="expireJob"}` 이고, `BatchJobRunningTooLong` 도 같다.
 > `by` 는 접기이지 셀렉터가 아니다.
 >
-> 그리고 **`verifyJob` 에는 `BatchJobNotRunning` 을 붙이면 안 된다.** 크론이 없고,
-> `rejectRunningSchedulers` 가 스케줄러 켜진 상태의 실행을 거부하므로 <b>"안 도는 것이
-> 정상"</b>이다. 붙이면 영구 critical 이다. 대신 마지막 판정의 나이로 본다(4단계).
+> 그리고 **`verifyJob` 에는 아직 `BatchJobNotRunning` 을 붙이면 안 된다.** 크론이 없어
+> <b>"안 도는 것이 정상"</b>이라 붙이면 영구 critical 이다. 대신 마지막 판정의 나이로
+> 본다(4단계).
+>
+> **CY-384 전에는 이유가 하나 더 있었다** — `rejectRunningSchedulers` 가 스케줄러 켜진
+> 상태의 실행을 아예 거부해, 크론을 붙일 수 있는 조합 자체가 없었다. 그 제약은 풀렸고,
+> 검증을 야간 크론으로 옮기는 티켓이 이 알림도 함께 다시 쓴다.
 
 ---
 
@@ -303,7 +307,8 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
   `verdict` 가 비어 있는 행, 안 닫힌 행도 각각 같은 방식으로 본다
 - **배선 가드** — `VerificationMetricsRefresher` 가 `@Scheduled` 로 실제 등록되는 것.
   그리고 그 등록이 `batch.scheduling.enabled` 에 <b>안 묶이는 것</b> — 묶이면 스케줄러를
-  끈 채 `verifyJob` 을 돌리는 정상 절차에서 지표가 통째로 죽는다
+  끈 채 띄우는 기동(부하 측정 중이거나 검증 셋을 볼 때)에서 지표가 통째로 죽는다.
+  그때야말로 판정을 봐야 하는 자리다
 - **설정 키 생존** — `ResolvedBatchConfigTest` 가 `@Value` 와 `@Scheduled` 의 플레이스홀더를
   전부 훑어 `.example` 에 실재하는지 본다. `fixedDelayString` 축이 안 훑기고 있었다
 
@@ -315,25 +320,44 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 | Grafana | 우리 대시보드는 Grafana 가 아니다 — PRD 상 Chart.js 폴링 커스텀이고 영역 ⑤ 몫이다 |
 | `api` 컨테이너 | 스크레이프 대상이 아니다. **마이그레이션을 compose 가 돌려 주지도 않는다** — `depends_on: service_healthy` 가 보장하는 것은 `mysqladmin ping` 뿐이다. 대신 `batch` 쪽에서 잡는다(바로 아래) |
 
-## 시연 절차 — 한 기동으로는 둘 다 못 본다
+## 시연 절차 — 한 기동으로 둘 다 본다
 
-`batch.scheduling.enabled` 가 두 잡에 **정반대**를 요구한다. `true` 면 만료가 5분마다 돌지만
-`rejectRunningSchedulers` 가 `verifyJob` 을 거부하고, `false` 면 그 반대다.
+**CY-384 전에는 그럴 수 없었다.** `batch.scheduling.enabled` 가 두 잡에 **정반대**를
+요구했다 — `true` 면 만료가 5분마다 돌지만 `rejectRunningSchedulers` 가 `verifyJob` 을
+거부하고, `false` 면 그 반대였다. 그래서 축 하나를 보려면 재기동해야 했다.
 
-1. `BATCH_SCHEDULING_ENABLED=true` — 만료 알림 축 확인
+지금 검증을 막는 것은 그 플래그가 아니라 **실제로 도는 만료 실행**이다. 만료는 5분 크론에
+한 번 수 초를 쓰므로, 그 사이 아무 때나 검증을 트리거하면 된다.
 
-2. `false` 로 재기동 + `verifyJob` 트리거 — 검증 알림 축 확인
+1. `BATCH_SCHEDULING_ENABLED=true` 로 띄운다 — 만료 알림 축이 살아난다
 
-   **먼저 만료 쪽 critical 을 재운다.** 스케줄러가 꺼져 있으면 `expireJob` 시계열이 아예
-   안 태어나 `BatchJobNotRunning` 이 15분 뒤부터 영구히 뜬다. 규칙이 틀린 게 아니라
-   그 설정에서 정상인 상태라, 재우는 쪽이 맞다.
+2. **같은 기동에서** `verifyJob` 을 트리거한다 — 검증 알림 축 확인
 
-   ```bash
-   docker compose -f base.yml exec alertmanager \
-     amtool silence add alertname=BatchJobNotRunning \
-     --duration=2h --comment="scheduling disabled for verify demo" \
-     --alertmanager.url=http://localhost:9093
-   ```
+   마침 만료가 도는 중이면 `409 VERIFICATION-012` 가 온다. **그것도 보여 줄 것이다** —
+   재고를 쓰는 잡과 판정하는 잡이 서로를 아는 것이 설계이고, 응답 본문에 그 이유가 있다.
+   만료는 한 주기에 수 초라 몇 초 뒤 다시 부르면 접수된다.
+
+   > **접수된 뒤가 더 중요하다.** 검증은 수 분 도는데 만료 크론은 5분이라, 한쪽 가드만
+   > 있으면 **대부분의 실행이 크론에 물려 `DATASET_MUTATED_DURING_RUN` 으로 버려진다.**
+   > 그래서 만료 스케줄러가 **검증이 도는 동안 그 슬롯을 건너뛴다** — 건너뛴 몫은 다음에
+   > 도는 슬롯이 통째로 가져간다. 다만 연속 스킵에 상한이 있어(`max-expire-skips`, 기본 1)
+   > 최대 지연이 `(상한 + 1) × 크론 주기` 로 묶인다. 상한을 넘으면 재고 쪽을 택해 만료를
+   > 돌리고, 그때 그 검증은 버려진다.
+   >
+   > 버려지면 그 `asOf` 는 **영구히 못 쓴다.** 만료가 찍은 `updated_at` 이 지워지지 않아
+   > `rejectIssuancesUpdatedAfterAsOf` 가 그 `asOf` 이하로 영원히 참이 된다 — 재시도가
+   > 아니라 **더 뒤의 `asOf`** 로 불러야 한다.
+
+   > **스케줄러를 끈 채 시연하려면** `expireJob` 시계열이 아예 안 태어나
+   > `BatchJobNotRunning` 이 15분 뒤부터 영구히 뜬다. 규칙이 틀린 게 아니라 그 설정에서
+   > 정상인 상태라, 그 구간에만 재운다.
+   >
+   > ```bash
+   > docker compose -f base.yml exec alertmanager \
+   >   amtool silence add alertname=BatchJobNotRunning \
+   >   --duration=2h --comment="scheduling disabled for verify demo" \
+   >   --alertmanager.url=http://localhost:9093
+   > ```
 
    **`attempt` 는 시드가 점유한 값을 피한다.** 시드는 CLEAN 에 `(FULL,1)`·`(FULL,2)`·
    `(INCREMENTAL,1)` 을, CORRUPT 에 `(FULL,1)` 을 심는다. `uk_run_params` 와

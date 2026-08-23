@@ -65,7 +65,7 @@ class BinlogFormatGuardWiringTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(CountingGuardConfig.CALLS.get())
-                .as("**스케줄러를 끈 채 손으로 돌리는 것이 이 저장소가 권하는 절차다.** "
+                .as("**스케줄러를 끈 채 손으로 돌리는 기동이 실제로 쓰인다.** "
                         + "그 경로에서 가드가 안 불리면, 오류 1665 가 나는 서버에서 "
                         + "화면에 뜨는 것은 그 숫자뿐이다")
                 .isEqualTo(1);

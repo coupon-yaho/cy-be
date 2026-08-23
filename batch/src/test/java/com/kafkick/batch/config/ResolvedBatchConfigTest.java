@@ -16,11 +16,13 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -69,7 +72,8 @@ class ResolvedBatchConfigTest {
     private static final String POLLUTED_KEY = "spring.flyway.enabled";
 
     /**
-     * 잡 설정 클래스들이 쓰는 {@code ${...}} 키 <b>집합</b>.
+     * 잡 설정 클래스들이 참조하는 설정 키 <b>집합</b> — {@code @Value} 파라미터 ·
+     * {@code @Scheduled} · 클래스에 붙은 {@code @ConditionalOnProperty} 세 축을 합친 것이다.
      *
      * <p>개수가 아니라 집합이다. 개수로 세면 {@code MAX_FINDINGS} 가 세 파라미터에 붙어 있어
      * 같은 키가 3 으로 계산되고, {@code @ConfigurationProperties} 로 묶는 정당한 리팩터에
@@ -77,7 +81,17 @@ class ResolvedBatchConfigTest {
      *
      * <p>집합이면 빠진 키·는 키가 메시지에 그대로 나온다.
      */
+    /**
+     * 설정 키를 읽는 클래스들. <b>한 곳에만 적는다</b> — 두 루프가 각자 적고 있었는데,
+     * 새 클래스가 들어올 때 한쪽만 고치면 그쪽 축이 통째로 안 훑긴다.
+     */
+    private static final List<Class<?>> CONFIG_CLASSES = List.of(
+            VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
+            VerificationMetricsRefresher.class, RunningJobProbe.class);
+
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
+            "batch.stuck-job-after-ms",
+            "batch.schedule.max-expire-skips",
             "batch.verify.step-timeout-ms",
             "batch.verify.max-findings-per-rule",
             "batch.scheduling.enabled",
@@ -154,6 +168,10 @@ class ResolvedBatchConfigTest {
                 // 읽는 코드가 아직 없다. 키 경로가 살아 있는지만 본다 — 정리 Step 이 들어올 때
                 // 그 티켓은 손잡이가 연결돼 있다는 전제 위에서 시작한다.
                 "--ASOF_STATE_KEEP_RUNS=3",
+                // 기본값과 다른 값이어야 키 경로가 죽은 것을 구분할 수 있다.
+                // step-timeout(600000)보다 커야 RunningJobProbe 생성자 검사를 통과한다.
+                "--BATCH_STUCK_JOB_AFTER_MS=1801000",
+                "--MAX_EXPIRE_SKIPS=2",
                 "--BATCH_MANAGEMENT_PORT=" + MANAGEMENT_PORT)) {
             ConfigurableEnvironment environment = context.getEnvironment();
 
@@ -239,6 +257,11 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.verify.asof-state-keep-runs")).isEqualTo("3");
         assertThat(environment.getProperty("batch.verify.metrics-refresh-ms")).isEqualTo("61000");
         assertThat(environment.getProperty("batch.verify.metrics-timeout-ms")).isEqualTo("6000");
+        // CY-384 가 넣은 둘. 이름만 EXPECTED_VALUE_KEYS 에 있으면 키 경로는 지켜지지만
+        // .example 이 참조하는 **환경변수 이름**은 한 번도 실행되지 않는다 —
+        // 오타를 내도 기본값 폴백이라 결과가 같다. 위 문단이 경계한 그 상황이다.
+        assertThat(environment.getProperty("batch.stuck-job-after-ms")).isEqualTo("1801000");
+        assertThat(environment.getProperty("batch.schedule.max-expire-skips")).isEqualTo("2");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
@@ -300,11 +323,38 @@ class ResolvedBatchConfigTest {
             // 파라미터만 보면 통째로 빠진다 — 그리고 그 기본값이 .example 값과 글자까지 같아
             // 키 경로를 오타 내도 동작이 같고 로그도 없다. 이 테스트가 막으려던 그 모양이다.
             List<Executable> declared = new ArrayList<>();
-            for (Class<?> config : List.of(
-                    VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
-                    VerificationMetricsRefresher.class)) {
+            for (Class<?> config : CONFIG_CLASSES) {
                 declared.addAll(List.of(config.getDeclaredConstructors()));
                 declared.addAll(List.of(config.getDeclaredMethods()));
+            }
+
+            // 클래스에 붙은 @ConditionalOnProperty 축. CY-384 가 verifyJob 의
+            // @Value("${batch.scheduling.enabled:true}") 를 지우면서, 이 키를 참조하는 자리가
+            // ExpireScheduler 의 이 애너테이션 **하나만** 남았다 — 파라미터만 훑으면
+            // 키가 집합에서 통째로 사라진다.
+            //
+            // 그냥 EXPECTED_VALUE_KEYS 에서 빼면 안 된다. 이 키는 matchIfMissing = false 라
+            // **.example 에서 오타가 나면 스케줄러가 조용히 안 돈다** — 이 테스트가 막으려는
+            // 사고 중 가장 나쁜 모양이고, 하필 이 키에서 그 방어를 잃게 된다.
+            for (Class<?> config : CONFIG_CLASSES) {
+                ConditionalOnProperty conditional =
+                        config.getAnnotation(ConditionalOnProperty.class);
+                if (conditional == null) {
+                    continue;
+                }
+                // name 과 value 는 별칭이라 둘 다 훑는다. 한쪽만 보면 표기를 바꾸는 순간 샌다.
+                for (String name : Stream.concat(
+                        Arrays.stream(conditional.name()),
+                        Arrays.stream(conditional.value())).toList()) {
+                    String key = conditional.prefix().isBlank()
+                            ? name
+                            : conditional.prefix() + "." + name;
+                    assertThat(environment.containsProperty(key))
+                            .as(config.getSimpleName() + " 의 @ConditionalOnProperty " + key
+                                    + " 가 .example 에 없다 — 빈이 조용히 안 만들어진다")
+                            .isTrue();
+                    seen.add(key);
+                }
             }
 
             for (Executable executable : declared) {
@@ -346,9 +396,9 @@ class ResolvedBatchConfigTest {
             }
 
             assertThat(seen)
-                    .as("잡 설정의 @Value 키 집합이 달라졌다. 빠진 것이 있으면 "
-                            + "생성자·메서드 중 한쪽을 못 훑고 있는 것이고, 늘어난 것이 있으면 "
-                            + "여기에 추가해라")
+                    .as("잡 설정이 참조하는 설정 키 집합이 달라졌다. 빠진 것이 있으면 "
+                            + "세 축(@Value 파라미터·@Scheduled·@ConditionalOnProperty) 중 "
+                            + "하나를 못 훑고 있는 것이고, 늘어난 것이 있으면 여기에 추가해라")
                     .isEqualTo(EXPECTED_VALUE_KEYS);
         }
     }

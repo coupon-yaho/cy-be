@@ -107,6 +107,15 @@ batch.scheduling.enabled: false   # 전 스케줄러를 @ConditionalOnProperty �
 
 스케줄러가 전부 batch 에 있으므로 끌 것이 하나다. 두 앱에 흩어져 있으면 하나는 반드시 빠뜨린다.
 
+> **결정론 증명에서는 이 플래그가 여전히 필요하다.** 양방향 가드는 한 실행 **안**을 지키지,
+> 두 실행 **사이**에 만료가 지나가는 것은 못 막는다.
+>
+> 그때 **2회차는 지문을 내지 못한다.** `startRunStep` 의 `rejectIssuancesUpdatedAfterAsOf` 가
+> 아홉 Step 앞에서 죽이므로, 비교할 두 번째 `dataset_fingerprint` 자체가 안 생긴다 —
+> *"지문이 갈렸다"* 가 아니라 **행이 하나뿐**인 상태가 되고, 그것은 *"증명을 안 돌렸다"* 와
+> 구분되지 않는다. 그리고 만료가 찍은 `updated_at` 은 지워지지 않으므로 **그 `asOf` 는 그
+> 뒤로 영구히 못 쓴다.**
+
 ---
 
 ## 2. JPA 를 쓰지 않는다
@@ -583,8 +592,8 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 
 **발급건 집계도 `updated_at <= asOf` 로 자른다.** 한때 *"`rejectIssuancesUpdatedAfterAsOf` 가
 이미 거부하니 중복"* 이라며 뺐는데 **틀렸다** — 그 가드는 `startRunStep` 과 `assertFrozenStep` 에서만
-돌고 **통계 Step 은 그 둘보다 뒤**다. 게다가 `rejectRunningSchedulers` 는 이 JVM 의
-`batch.scheduling.enabled` 만 보므로 **api 는 별도 프로세스라 그 플래그로 멈추지 않는다.**
+돌고 **통계 Step 은 그 둘보다 뒤**다. 게다가 `rejectRunningExpire` 가 보는 것은 배치 메타의
+**만료 실행뿐**이라 **api 의 쓰기는 애초에 그 조회에 안 잡힌다.**
 
 **발급건마다 `ISSUE` 이력이 정확히 하나여야 한다 — 짝으로 본다.** 총합 비교
 (`COUNT(issuances) == SUM(hourly_stats.issued_total)`)로는 **대칭 오차를 못 잡는다** —

@@ -51,11 +51,15 @@ import com.kafkick.storage.db.VerificationSeed;
  *       ({@code verdict}) 는 독립이다
  *   <li><b>실행기가 격리돼 있다</b> — 공용 {@link JobOperator} 를 비동기로 바꾸면
  *       만료 배치의 겹침 방지가 무너진다
- *   <li><b>스케줄러가 켜져 있으면 거절</b> — 만료가 도는 동안의 판정은 근거가 흔들린다
  * </ul>
  *
- * <p>{@code batch.scheduling.enabled=false} 로 띄운다. 그것이 {@code verifyJob} 이 도는
- * 유일한 조건이고, 트리거를 여는 것이 그 제약을 푸는 것은 아니다.
+ * <p><b>만료가 도는 중이면 거절하는 축은 여기 없다.</b> 이 클래스에는 실행 중인 만료가
+ * 없어 그 가드를 구조적으로 밟을 수 없다 — {@code VerifyTriggerExpireGuardTest} 가 그 축을
+ * 따로 진다.
+ *
+ * <p>{@code batch.scheduling.enabled=false} 로 띄우는 것은 진짜 만료 크론이 테스트 도중에
+ * 발화해 위 가드에 걸리는 것을 막기 위해서다. 그 플래그가 <b>검증의 조건이었던 것은
+ * CY-384 까지</b>다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",

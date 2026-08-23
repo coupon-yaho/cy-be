@@ -44,8 +44,8 @@ import com.kafkick.core.verification.StatsRepository;
  *
  * <p>한때 발급건 쪽 컷을 <i>"{@code rejectIssuancesUpdatedAfterAsOf} 가 이미 거부하니 중복"</i>
  * 이라며 뺐는데 <b>틀렸다.</b> 그 가드는 {@code startRunStep} 과 {@code assertFrozenStep} 에서만
- * 돌고 <b>통계 Step 은 그 둘보다 뒤</b>다. 게다가 {@code rejectRunningSchedulers} 는 이 JVM 의
- * {@code batch.scheduling.enabled} 만 보므로 api 프로세스는 그 플래그로 멈추지 않는다 —
+ * 돌고 <b>통계 Step 은 그 둘보다 뒤</b>다. 게다가 {@code rejectRunningExpire} 는 배치 메타에서
+ * <b>만료 잡의 실행</b>만 보므로 api 프로세스의 발급 트래픽은 애초에 그 조회에 안 잡힌다 —
  * 집계 도중 발급 한 건이 들어오면 발급건 집계에는 반영되고 이력 집계에는 안 들어가
  * <b>같은 스냅샷 안에서 두 총합이 어긋난다.</b>
  * {@code issuances} 를 읽는 규칙 여섯이 전부 같은 컷을 갖는 이유가 이것이다.
