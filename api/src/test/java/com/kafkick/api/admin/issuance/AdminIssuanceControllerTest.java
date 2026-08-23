@@ -189,7 +189,9 @@ class AdminIssuanceControllerTest {
         assertThat(firstPosition.historyId()).isEqualTo(1_008L);
         assertThat(secondPosition.historyId()).isEqualTo(1_007L);
         assertThat(thirdPosition.historyId()).isEqualTo(1_006L);
+        // 첫 두 행은 동률이고, 세 번째 행부터는 더 오래된 시각으로 이동해야 합니다.
         assertThat(secondPosition.occurredAt()).isEqualTo(firstPosition.occurredAt());
+        assertThat(thirdPosition.occurredAt()).isBefore(secondPosition.occurredAt());
         assertThat(issuanceIds).containsExactly(5_004, 6_003, 6_002).doesNotHaveDuplicates();
         assertThat(eventTypes).containsExactly("CANCEL", "ISSUE", "ISSUE");
     }
