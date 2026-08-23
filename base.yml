@@ -78,8 +78,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      # silence 가 재기동을 넘어 살아야 한다. docs/14 시연 절차 2번이 만료 critical 을
-      # 두 시간 재우는데, 볼륨이 없으면 스택을 한 번 올렸다 내리는 것으로 되살아난다.
+      # silence 가 재기동을 넘어 살아야 한다. docs/14 시연 절차 첫 단계가 만료·정리 알림을
+      # **26시간** 재우는데, 볼륨이 없으면 스택을 한 번 올렸다 내리는 것으로 되살아난다.
       - alertmanager-data:/alertmanager
     ports:
       # 인증이 없다. 열면 누구나 silence 를 걸거나 알림을 주입할 수 있다 —

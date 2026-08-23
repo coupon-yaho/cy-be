@@ -17,6 +17,23 @@ services:
       DB_USERNAME: ${DB_USERNAME:-app}
       DB_PASSWORD: ${DB_PASSWORD:-app}
       BATCH_MANAGEMENT_PORT: 9092
+      # **JVM 기본 존을 고정한다.** 배치는 시계를 둘 쓴다 — TimeProvider(Clock.systemUTC)와,
+      # 스프링 배치가 메타에 찍는 인자 없는 LocalDateTime.now()(= JVM 기본 존)다.
+      #
+      # ⚠️ **드라이버는 이 사이에 끼지 않는다.** LocalDateTime 파라미터는 존 변환 없이 벽시계
+      #    그대로 오간다 — TimestampMappingTest 가 JVM 존을 Asia/Seoul 로 바꾼 채 그것을
+      #    단언한다. 그래서 어긋남은 "드라이버가 민다" 가 아니라 **두 시계가 다른 벽시계를
+      #    쓴다** 는 것이다. (한때 여기에 드라이버 변환을 원인으로 적었는데 사실이 아니었다.)
+      #
+      # 판정에 쓰이는 컬럼(verification_runs.started_at · finished_at)은 CY-397 이
+      # TimeProvider 로 옮겨 이 존과 무관해졌다. 남은 것은 **배치 메타 자신**이다 —
+      # RunningJobProbe 의 시체 판정, BatchStuckExecution, 로그 시각이 전부 JVM 기본 존이고,
+      # MySQL 세션 존은 base.yml 이 UTC 로 못 박았다. 그 둘을 같은 값으로 두면 배치 메타를
+      # 손으로 조회할 때 보이는 시각과 로그가 일치한다.
+      #
+      # 실측: TZ 를 안 주면 호스트 존이 그대로 JVM 기본 존이 된다(KST 기기에서 Asia/Seoul).
+      # 그래서 bootRun 쪽에도 같은 값을 박아 뒀다 — batch/build.gradle.
+      TZ: UTC
       # 기본은 끈다. 근거는 application.yml.example 에 있다 — 만료가 검증 셋을 보면
       # 되돌릴 수 없고, 안 도는 쪽은 따라잡을 수 있다.
       #

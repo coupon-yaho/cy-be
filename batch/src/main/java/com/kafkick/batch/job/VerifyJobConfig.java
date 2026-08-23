@@ -357,7 +357,8 @@ public class VerifyJobConfig {
                             findings.checksumOf(runId),
                             frozenFingerprint(jobExecution),
                             // 판정 Step 이 시작한 시각을 종료로 쓴다. 잡이 아직 안 끝나
-                            // getEndTime() 은 null 이고, 검증 배치는 now() 를 금지한다.
+                            // getEndTime() 은 null 이고, 검증 배치는 now() 를 금지한다 —
+                            // .coderabbit.yaml 이 이 두 컬럼의 출처를 명시한다.
                             // 이 뒤에 남은 것은 UPDATE 한 건뿐이라 차이가 작다.
                             stepExecution.getStartTime());
 
@@ -711,8 +712,16 @@ public class VerifyJobConfig {
     /**
      * 실행 행을 만들고, 훑을 경계를 얼려 잡 실행 컨텍스트에 심는다.
      *
-     * <p>실행 시작 시각은 Spring Batch 가 이미 기록한 값을 쓴다. 여기서 {@code now()} 를 부르면
-     * 검증 배치에 현재 시각 의존이 생기고, 다음 사람이 규칙에서도 부르게 된다.
+     * <p>실행 시작 시각은 Spring Batch 가 이미 기록한 값을 쓴다. 여기서 현재 시각을 부르면
+     * 검증 배치에 시각 의존이 생기고, 다음 사람이 규칙에서도 부르게 된다 —
+     * {@code .coderabbit.yaml} 이 주입된 시계까지 같은 위반으로 못 박았다.
+     *
+     * <p>⚠️ <b>그 값은 JVM 기본 존이다.</b> 같은 행의 {@code as_of} 와 정리 배치의
+     * {@code abandoned-after-hours} 컷오프는 UTC 라, <b>JVM 기본 존이 UTC 여야</b> 세 축이
+     * 한 좌표계에 선다({@code batch.yml} 의 {@code TZ=UTC}, {@code bootRun} 의
+     * {@code user.timezone}). 테스트 JVM 만 일부러 KST 인데(CY-392), 그쪽에서는 어긋남이
+     * <b>보호 창이 넓어지는 방향</b>이라 안전하다. 존을 기동 때 강제하는 가드는
+     * 그 KST 테스트와 부딪혀 {@code docs/13} 으로 미뤘다.
      *
      * <p>실행 행은 있으면 찾고 없으면 만든다. 다만 <b>닫힌 실행은 이어받지 않는다.</b>
      *
@@ -767,6 +776,16 @@ public class VerifyJobConfig {
                             .orElseGet(() -> runs.save(VerificationRun.start(
                                     asOf, parameters.getLocalDateTime("fromTs"),
                                     scope, dataset, attempt,
+                                    // Spring Batch 가 이미 기록한 시각을 쓴다 —
+                                    // .coderabbit.yaml 이 이 컬럼의 출처를 명시한다.
+                                    //
+                                    // ⚠️ 그 값은 AbstractJob 이 인자 없는 LocalDateTime.now() 로
+                                    //    찍는 **JVM 기본 존** 이고, 드라이버는 LocalDateTime 을
+                                    //    시프트하지 않는다(TimestampMappingTest 가 잰다).
+                                    //    같은 행의 as_of 와 정리 배치의 컷오프는 UTC 라,
+                                    //    **JVM 기본 존이 UTC 여야 세 축이 한 좌표계에 선다** —
+                                    //    batch.yml 의 TZ=UTC 와 bootRun 의 user.timezone 이
+                                    //    그것을 고정한다. 그 줄을 지우면 여기가 어긋난다.
                                     stepExecution.getJobExecution().getStartTime())).id());
 
                     ExecutionContext jobContext =

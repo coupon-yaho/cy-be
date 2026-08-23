@@ -151,10 +151,14 @@ public class VerifyTriggerController {
         // 컨트롤러가 현재 시각을 보는 것은 결정론을 안 깬다. 잡에 실리는 asOf 는 요청값
         // 그대로이고, 잡 안에서는 여전히 실행 시작 시각으로 판정한다.
         //
-        // ⚠️ 두 시계의 좌표계가 다르다. TimeProvider 는 Clock.systemUTC() 이고, 잡 쪽
-        //    기준(JobExecution.getStartTime())은 JVM 기본 타임존이다. 컨테이너에는 TZ 를
-        //    안 주므로 둘 다 UTC 라 지금은 일치하지만, KST 기기에서 bootRun 으로 띄우면
-        //    최근 9시간이 여기서만 400 이 된다 — 잡은 그 값을 받아들인다.
+        // **잡 안의 가드와 같은 좌표계다.** 잡 쪽 기준인 verification_runs.started_at 을
+        // CY-397 이 TimeProvider(Clock.systemUTC)로 옮겨서, 이 검사와
+        // validateAsOfNotInFuture 의 엄격도가 같아졌다. 그전에는 잡 쪽이 JVM 기본 존이라
+        // KST 기기에서 아홉 시간 느슨했고, 그때는 여기가 유일한 실질 방어였다.
+        //
+        // 그래도 여기서 먼저 막는 이유는 정확성이 아니라 **실패가 attempt 를 태우기 때문**이다.
+        // 배치 메타 자신의 시각(START_TIME 등)은 여전히 JVM 기본 존이지만 이 판정에 안 쓰이고,
+        // 그 존은 batch.yml 의 TZ=UTC 와 batch/build.gradle 의 bootRun user.timezone 이 고정한다.
         if (asOf.isAfter(timeProvider.now())) {
             throw new BusinessException(VerificationErrorCode.INVALID_AS_OF,
                     "검증 기준 시각은 미래일 수 없습니다. asOf=" + asOf);

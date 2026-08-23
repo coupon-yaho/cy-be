@@ -85,7 +85,7 @@ public class ExpireScheduler {
      * 한쪽만 고치는 실수를 아무것도 안 막으므로 상수로 묶는다({@code @Scheduled} 는 컴파일
      * 상수만 받는다).
      */
-    static final String CRON = "${batch.schedule.expire-cron:0 */5 * * * *}";
+    static final String CRON = "${batch.schedule.expire-cron:0 10 4 * * *}";
 
     /**
      * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
@@ -127,7 +127,7 @@ public class ExpireScheduler {
 
     // Job 빈이 expireJob·verifyJob 둘이다. 지금은 파라미터 이름으로 갈리지만(부트 그래들
     // 플러그인이 -parameters 를 붙인다) 그 기본값에 기대는 대신 명시한다 — 셋째 Job 이
-    // 생기거나 컴파일 옵션이 바뀌면 조용히 다른 잡이 주입되고, 그때 5분마다 도는 것이
+    // 생기거나 컴파일 옵션이 바뀌면 조용히 다른 잡이 주입되고, 그때 크론마다 도는 것이
     // 만료가 아니게 된다.
     // JobOperator 빈도 둘이다. CY-368 이 verify 전용 비동기 빈을 더했다 —
     // 이 잡은 반드시 **공용(동기)** 빈이어야 한다. 비동기 빈이 주입되면 아래
@@ -139,7 +139,7 @@ public class ExpireScheduler {
             RunningJobProbe runningJobs,
             ExpireMetrics metrics,
             @Value("${batch.schedule.max-expire-skips:1}") int maxSkips,
-            @Value("${batch.metrics.expire-sla-seconds:900}") long slaSeconds,
+            @Value("${batch.metrics.expire-sla-seconds:180000}") long slaSeconds,
             @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
@@ -161,9 +161,15 @@ public class ExpireScheduler {
         // 벌어진다. 게이지도 되읽기 주기만큼 늦게 갱신되므로 그 몫까지 더해야 한다.
         //
         // max-expire-skips 는 "검증이 자꾸 밀린다" 고 느낀 운영자가 가장 먼저 올리는
-        // 손잡이인데, 기본 크론(5분)에서 **2 로만 올려도 960 > 900 이라 정상 상태에서
-        // 오탐 critical 이 난다.** 그러면 그 알림이 무시되기 시작하고, 진짜 만료 정지가
-        // 같은 알림으로 뜰 때 아무도 안 본다 — 이 저장소가 없애려는 바로 그 상태다.
+        // 손잡이인데, 기본값(일 1회 · 상한 1)에서 이미 여유가 얼마 없다 — **한 칸만 올려도
+        // 부등식이 깨지고 아래에서 기동을 거절한다.** SLA 를 함께 올려야 한다.
+        //
+        // **가드가 없던 시절에는 대신 정상 상태에서 오탐 critical 이 났다** — 그러면 그
+        // 알림이 무시되기 시작하고 진짜 만료 정지가 같은 알림으로 뜰 때 아무도 안 본다.
+        // 그 상태를 없애려고 이 검사를 세웠다: 조용히 뜨느니 안 뜨는 쪽이다.
+        //
+        // 절대값을 적지 않는다. 크론이 5분에서 배치 창으로 옮겨 가며 이 부등식의 항이
+        // 두 자릿수 배로 움직였고, 그때 숫자를 적어 둔 자리가 먼저 낡았다.
         //
         // .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다.
         Duration worstDelay = cronSlot
@@ -189,7 +195,8 @@ public class ExpireScheduler {
                             + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
                             + "정상 상태에서 오탐 critical 이 납니다 — "
                             + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "
-                            + "올리십시오(알림 식의 900 도 함께 고쳐야 합니다). "
+                            + "올리십시오(batch-alerts.yml 의 ExpireNotSucceeding 식도 "
+                            + "같은 값으로 함께 고쳐야 합니다). "
                             + "cron=" + expireCron + " max-expire-skips=" + maxSkips);
         }
         this.runningJobs = runningJobs;
@@ -207,7 +214,7 @@ public class ExpireScheduler {
      * 실행 결과를 돌려줄 뿐이다. 그래서 상태를 직접 봐야 한다. 안 보면 이력 짝 불일치나
      * 재고 행 누락으로 잡이 멈춰도 <b>로그가 한 줄도 남지 않는다.</b>
      *
-     * <p><b>네 갈래를 레벨로 가른다.</b> 뭉쳐 두면 알림이 붙는 순간 하루 288번 중 대부분이
+     * <p><b>네 갈래를 레벨로 가른다.</b> 뭉쳐 두면 알림이 붙는 순간 발화의 대부분이
      * 소음이 되고, 진짜 사건이 그 안에 묻힌다.
      *
      * <table border="1">
@@ -231,8 +238,8 @@ public class ExpireScheduler {
      * 두 서버가 부딪힌다).
      *
      * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-359 가
-     * {@code spring.task.scheduling.pool.size} 를 <b>2</b> 로 올렸다 — {@code @Scheduled} 가
-     * 둘이라서다(이 잡과 검증 판정 되읽기). 근거는 {@code application.yml.example} 의 그 키에
+     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>4</b> 이고
+     * {@code @Scheduled} 도 넷이다(만료 · 정리 · 검증 판정 되읽기 · 실행 지표 되읽기). 근거는 {@code application.yml.example} 의 그 키에
      * 적혀 있다. 그것이 이 잡을 자기 자신과
      * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
      * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
@@ -312,7 +319,7 @@ public class ExpireScheduler {
             }
         } catch (DuplicateKeyException e) {
             // 다른 노드가 같은 asOf 로 먼저 JOB_INST_UN 을 잡았다. 중복 방지가 제 일을 한 것이라
-            // 사건이 아니다 — ERROR 로 내보내면 배치를 두 대로 늘리는 순간 하루 288번 울린다.
+            // 사건이 아니다 — ERROR 로 내보내면 배치를 두 대로 늘리는 순간 슬롯마다 울린다.
             // (인스턴스 생성 격리를 READ COMMITTED 로 내려 둔 덕에 오류가 1062 로 좁혀진다.
             //  SERIALIZABLE 이면 데드락 1213 이라 이 타입으로 안 온다 — BatchJobRepositoryConfig 참조)
             log.info("다른 노드가 같은 asOf 를 이미 시작했습니다. asOf={}", asOf);
@@ -327,7 +334,8 @@ public class ExpireScheduler {
      * <p>검증 중에 만료가 지나가면 판정 근거가 판정 도중에 바뀌고, {@code assertFrozenStep} 이
      * 그것을 잡아 <b>판정을 통째로 버린다.</b> 게다가 만료가 찍은 {@code updated_at} 은
      * 지워지지 않아 <b>그 {@code asOf} 를 영구히 못 쓰게</b> 만든다. 한 슬롯 미루는 편이 훨씬
-     * 싸다 — 5분 실행 한 번이 손대는 것은 약 22건이다.
+     * 싸다 — 만료 한 실행이 손대는 것은 하루치 약 6,300건이고, 그 몫은 다음 슬롯이
+     * 함께 가져간다(배치 창으로 옮기기 전에는 5분 실행 한 번에 약 22건이었다).
      *
      * <p><b>대상이 유실되지는 않는다.</b> 이 스케줄러는 주기마다 {@code asOf} 를 새로 잡고
      * 만료는 {@code expires_at < asOf} 를 {@code id > 0} 부터 훑으므로, 건너뛴 슬롯의 몫을
@@ -351,6 +359,17 @@ public class ExpireScheduler {
         List<Long> verifying = runningJobs.blockingExecutions(VerifyJobConfig.JOB_NAME);
         if (verifying.isEmpty()) {
             consecutiveSkips = 0;
+            return false;
+        }
+
+        if (maxSkips == 0) {
+            // 0 은 "건너뛰기를 끈다" 다. 위 분기와 같은 문구를 쓰면 **건너뛴 적이 없는데**
+            // "0슬롯 연속 건너뛰었습니다" 라는 앞뒤 안 맞는 줄이 남는다 — 사고를 되짚는
+            // 사람이 보게 될 유일한 단서라 사실이어야 한다.
+            log.error("max-expire-skips=0 이라 검증을 뚫고 만료를 돌립니다. 이 검증의 판정은 "
+                            + "assertFrozenStep 에서 버려지고, 만료가 찍은 updated_at 은 "
+                            + "지워지지 않아 그 asOf 를 다시 못 씁니다. "
+                            + "asOf={} verifyExecutionIds={}", asOf, verifying);
             return false;
         }
 

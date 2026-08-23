@@ -88,7 +88,9 @@ import org.springframework.transaction.annotation.Isolation;
  * 이름이다 — 거기서 빨간불이 뜬다.
  *
  * <p><b>배선의 대가</b> — 이제 {@code BATCH_*} 가 실제로 쌓인다. 만료가 5분마다 새 {@code asOf}
- * 로 도므로 하루 288 인스턴스 × 여섯 테이블이다. 정리 경로는 아직 없다(cleanup 티켓에서 본다).
+ * 로 돌던 시절에는 하루 288 인스턴스 × 여섯 테이블이었다. CY-397 이 배치 창(일 1회)으로
+ * 옮겨 <b>하루 1 인스턴스</b>가 됐다. {@code BATCH_*} 정리 경로는 그래서 뒤로 미뤘다
+ * ({@code docs/13} §7).
  */
 @Configuration(proxyBeanMethods = false)
 @EnableBatchProcessing

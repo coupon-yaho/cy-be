@@ -188,7 +188,7 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
   reportDump          관리 API      최종 1회
 
 계층 3 · 지운다
-  cleanupJob          @Scheduled    1시간   멱등 · 토큰 · 스냅샷 · asof_state
+  cleanupJob          Spring Batch  04:30   검증 파생 행(asof_state · 통계 셋 · findings)
   dltReprocessJob     수동          ③ Kafka 계약 대기
 
 일회성
@@ -247,7 +247,20 @@ core/src/main/java/com/kafkick/core/
 ```
 
 `job/` 과 `schedule/` 을 가르면 *"이건 Batch 인가 Scheduled 인가"* 를 폴더가 답한다.
-한 폴더에 몰면 다음 사람이 `cleanupJob` 도 Spring Batch 로 만든다.
+
+> **`cleanupJob` 은 Spring Batch 로 만들었다 — 규칙의 입력이 바뀌었다(CY-397).**
+> 위 분류 기준은 *"청크 재시작 · 실행 이력이 판정 근거 · 파라미터 재실행 증명 중 하나도
+> 없으면 `@Scheduled`"* 였고, 그때 정리는 셋 다 해당 없었다. 그런데 **CY-392 가 감시를
+> 전부 배치 메타 위에 세웠다** — `BatchRunMetrics` 가 `List<Job>` 빈에서 이름을 모아 잡마다
+> 마지막 성공 시각 게이지를 자동으로 만들고, `BatchJobFailed`·`BatchStuckExecution` 은
+> 셀렉터에 잡 이름이 없어 새 잡을 그날 바로 덮는다. `@Scheduled` 로 만들면
+> `BATCH_JOB_EXECUTION` 행이 안 남아 **그 감시가 전부 비껴간다.** 정리는 300만 행을 지우는
+> 일이라 *"조용히 안 도는 것"* 이 가장 나쁜 결말이라, 감시를 택했다.
+> 그리고 실제로 청크 재시작도 쓴다 — 태스클릿 한 번이 청크 하나다.
+>
+> **멱등성 레코드와 토큰은 정리 대상이 아니다.** 위 표가 한때 그 둘을 적었는데
+> 계획이었지 현재 상태가 아니었다 — `idempotency_records` 는 읽고 쓰는 프로덕션 코드가
+> 저장소에 **0건**이고(영역 ③ 몫), 토큰 테이블은 마이그레이션 어디에도 **없다**(Redis 축).
 
 `CouponStateMachine` 이 `core/coupon` 에 있는 이유는 **런타임도 같은 클래스를 써야 하기 때문**이다.
 검증 전용 패키지에 두면 두 벌로 갈라져 같은 버그를 양쪽이 재현한다.

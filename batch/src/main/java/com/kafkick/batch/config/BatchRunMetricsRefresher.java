@@ -64,9 +64,14 @@ public class BatchRunMetricsRefresher {
 
     /**
      * <b>되읽기 주기가 SLA 예산을 그대로 갉아먹는다.</b> 게이지는 <i>"마지막 되읽기 시점에
-     * 알던 마지막 성공 시각"</i> 이지 실시간 값이 아니다. 알림이 {@code time() - 게이지 > 900}
-     * 이므로 이 주기만큼 나이가 부풀고, 거기에 {@code max-expire-skips} 최대 지연(600초)이
-     * 겹치면 <b>정상 상태에서 오탐 critical</b> 이 난다.
+     * 알던 마지막 성공 시각"</i> 이지 실시간 값이 아니다. 알림이
+     * {@code time() - 게이지 > batch.metrics.expire-sla-seconds}
+     * 이므로 이 주기만큼 나이가 부풀고, 거기에 {@code max-expire-skips} 최대 지연
+     * ({@code (상한 + 1) × 크론 최대간격})이 겹치면 <b>정상 상태에서 오탐 critical</b> 이 난다.
+     *
+     * <p>절대값을 여기 안 적는다 — 크론이 5분에서 배치 창(일 1회)으로 옮겨 가며 그 숫자가
+     * 두 자릿수 배로 움직였다(CY-397). 성립해야 하는 <b>관계</b>는
+     * {@code ExpireScheduler} 생성자가 기동 때 검사한다.
      *
      * <p>{@code .example} 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다 —
      * 그게 실제로 이 값이 커지는 경로다. {@code VerificationMetricsRefresher} 가 같은 이유로
@@ -113,8 +118,9 @@ public class BatchRunMetricsRefresher {
                     "batch.metrics.run-refresh-ms 는 " + MIN_REFRESH_MILLIS + "~"
                             + MAX_REFRESH_MILLIS + " 이어야 합니다. "
                             + "게이지는 마지막 되읽기 시점의 값이라 이 주기가 "
-                            + "ExpireNotSucceeding 의 SLA(900초) 예산을 그대로 갉아먹습니다. "
-                            + "만료 슬롯 건너뛰기의 최대 지연(600초)과 겹치면 정상 상태에서 "
+                            + "ExpireNotSucceeding 의 SLA(batch.metrics.expire-sla-seconds) "
+                            + "예산을 그대로 갉아먹습니다. "
+                            + "만료 슬롯 건너뛰기의 최대 지연과 겹치면 정상 상태에서 "
                             + "오탐 critical 이 납니다. 받은 값=" + refreshMillis);
         }
         if (timeoutMillis < 1_000 || timeoutMillis % 1_000 != 0) {
@@ -199,6 +205,20 @@ public class BatchRunMetricsRefresher {
      * 비교는 참이 아니기 때문이다. {@code COMPLETED} 인데 종료 시각이 없는 것은 배치 메타가
      * 깨진 것인데, 그런 행이 {@code MAX} 에 섞이면 <b>더 오래된 실행이 마지막 성공으로
      * 보인다</b> — 창이 그 자리를 겸한다.
+     *
+     * <p><b>{@code YIELDED} 는 성공이 아니다.</b> 정리 잡은 검증이 도는 중이면 <b>한 행도
+     * 안 걷고</b> {@code COMPLETED} 로 닫힌다 — 실패가 아니므로 상태를 바꿀 수 없지만,
+     * 그것을 성공으로 세면 <i>"매일 돌았고 매일 아무것도 안 지웠다"</i> 가 모든 알림을
+     * 초록으로 통과한다. 종료 코드로 그 하나만 뺀다.
+     *
+     * <p>다른 코드는 안 본다. {@code = 'COMPLETED'} 로 좁히면 {@code statsAggregateStep} 이
+     * 내는 {@code ExitStatus("SKIPPED")} 가 <b>verifyJob 의 마지막 Step 이라</b> 잡 종료
+     * 코드가 되어, CORRUPT 검증이 통째로 성공에서 빠진다(Step 순서로 확인했다).
+     *
+     * <p><b>{@code EXIT_CODE} 는 nullable 이라 NULL 을 따로 받는다</b>({@code V2} 의 DDL).
+     * {@code <> 'YIELDED'} 만 쓰면 NULL 비교가 UNKNOWN 이라 그 행이 통째로 떨어지는데,
+     * 그것은 <b>성공을 못 본 것</b>이라 없는 사고로 알림이 뜬다. 같은 함정을
+     * {@code deleteFindings} 에서 한 번 밟았다.
      */
     private double lastSuccessEpochSeconds(String jobName) {
         Optional<Double> epochSeconds = jdbcClient.sql("""
@@ -206,6 +226,7 @@ public class BatchRunMetricsRefresher {
                           FROM BATCH_JOB_EXECUTION e
                           JOIN BATCH_JOB_INSTANCE i ON i.JOB_INSTANCE_ID = e.JOB_INSTANCE_ID
                          WHERE e.STATUS = 'COMPLETED'
+                           AND (e.EXIT_CODE IS NULL OR e.EXIT_CODE <> 'YIELDED')
                            AND e.END_TIME > DATE_SUB(NOW(), INTERVAL 7 DAY)
                            AND i.JOB_NAME = :jobName
                         """)
@@ -214,7 +235,8 @@ public class BatchRunMetricsRefresher {
                 .optional();
         // 창 밖은 어차피 SLA 위반이라 NaN 과 같은 판정이다. 창을 두는 이유는 이 질의가
         // BATCH_JOB_INSTANCE 이력 전체에 비례해 자라는 것을 막기 위해서다 — 배치 메타를
-        // 정리하는 잡이 아직 없고(docs/13 §6), 만료는 하루 288 인스턴스를 만든다.
+        // 정리하는 잡이 아직 없다(docs/13 §7). 만료가 배치 창으로 옮겨 하루 1 인스턴스라
+        // 급하지 않지만, 창을 없애면 이 질의가 이력 전체에 비례한다.
         // V14 의 (STATUS, END_TIME) 인덱스가 이 창을 range 스캔으로 만든다 — 90일치에서
         // 25,950행 → 2,016행으로 줄어드는 것을 EXPLAIN 으로 쟀다. 선두 컬럼이 인스턴스
         // 쪽이면 창이 아무 효과가 없다(그렇게 썼다가 재보고 고쳤다).

@@ -10,8 +10,16 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
@@ -82,6 +90,35 @@ class ExpireSchedulerVerifyGuardTest {
     @Autowired
     private ExpireMetrics metrics;
 
+    /**
+     * <b>이 PR 이 더한 분기는 로그 문구로만 관측된다.</b> 반환값만 보면
+     * {@code maxSkips == 0} 갈래를 지워도 초록이다 — 건너뛰기가 꺼진 것과 상한을 넘긴 것이
+     * 같은 결과(만료를 돌린다)를 내기 때문이다. 사고를 되짚는 사람이 보게 될 유일한 단서라
+     * 문구 자체가 요지다. {@code ExpireSchedulerReportingTest} 가 같은 방식을 쓴다.
+     */
+    private ListAppender<ILoggingEvent> logs;
+    private ch.qos.logback.classic.Logger schedulerLog;
+    private Level originalLevel;
+
+    @BeforeEach
+    void captureLogs() {
+        logs = new ListAppender<>();
+        logs.setContext((LoggerContext) LoggerFactory.getILoggerFactory());
+        logs.start();
+        schedulerLog = (ch.qos.logback.classic.Logger)
+                LoggerFactory.getLogger(ExpireScheduler.class);
+        originalLevel = schedulerLog.getLevel();
+        schedulerLog.setLevel(Level.TRACE);
+        schedulerLog.addAppender(logs);
+    }
+
+    @AfterEach
+    void releaseLogs() {
+        schedulerLog.detachAppender(logs);
+        schedulerLog.setLevel(originalLevel);
+        logs.stop();
+    }
+
     @Test
     @DisplayName("검증이 도는 중이면 만료 슬롯을 건너뛴다")
     void skipsTheSlotWhileVerifyIsRunning() {
@@ -142,7 +179,59 @@ class ExpireSchedulerVerifyGuardTest {
             assertThat(started)
                     .as("상한을 넘으면 재고 쪽을 택한다 — 안 그러면 만료가 무한히 굶는다")
                     .hasSize(1);
+
+            assertThat(logs.list.stream()
+                    .filter(event -> event.getLevel() == Level.ERROR)
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList())
+                    .as("상한을 넘어 뚫은 것과 건너뛰기가 꺼진 것은 다른 사건이라 문구가 갈린다")
+                    .singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+                    .contains("연속 건너뛰었습니다")
+                    .doesNotContain("max-expire-skips=0");
         }
+    }
+
+    /**
+     * <b>0 은 "건너뛰기를 끈다" 다.</b> {@code consecutiveSkips >= maxSkips} 를 먼저 보므로
+     * 첫 충돌에서 바로 뚫고 지나간다 — 건너뛰기 분기에 <b>한 번도 도달하지 않는다.</b>
+     *
+     * <p>운영 기본값이 한때 0 이었는데 그 근거가 <i>"겹침은 일정 분리가 막는다
+     * (만료 04:10 · 검증 05:00)"</i> 였다. 검증 05:00 크론은 아직 없고 검증을 띄우는 유일한
+     * 경로는 손 트리거라, 막는 것이 없는데 그것을 근거로 배제를 껐던 것이다. 지금 기본값은
+     * 1 로 되돌렸지만 <b>0 은 여전히 설정으로 도달 가능</b>하고, 그때 무슨 일이 일어나는지를
+     * 여기서 못 박는다 — 상한 2 만 재던 시절에는 이 동작이 어디에서도 안 재졌다.
+     */
+    @Test
+    @DisplayName("상한이 0 이면 검증이 돌고 있어도 첫 슬롯부터 만료를 돌린다")
+    void runsThroughVerifyWhenSkippingIsDisabled() {
+        List<JobParameters> started = new ArrayList<>();
+
+        try (RunningJobFixture verify = RunningJobFixture.plant(
+                jobRepository, jdbcClient, VerifyJobConfig.JOB_NAME, KEY.plusHours(2))) {
+
+            scheduler(started, 0).expire();
+
+            assertThat(started)
+                    .as("건너뛰기가 꺼져 있으므로 첫 슬롯부터 뚫고 지나간다. 검증 실행 id="
+                            + verify.executionId())
+                    .hasSize(1);
+
+            String message = onlyError();
+            assertThat(message)
+                    .as("건너뛴 적이 없는데 '0슬롯 연속 건너뛰었습니다' 라고 하면, 사고를 "
+                            + "되짚는 사람이 보게 될 유일한 단서가 거짓말을 한다")
+                    .contains("max-expire-skips=0")
+                    .doesNotContain("연속 건너뛰었습니다");
+        }
+    }
+
+    /** ERROR 갈래가 하나여야 한다 — 뭉쳐 있으면 여기서 개수가 어긋난다. */
+    private String onlyError() {
+        List<ILoggingEvent> errors = logs.list.stream()
+                .filter(event -> event.getLevel() == Level.ERROR)
+                .toList();
+        assertThat(errors).hasSize(1);
+        return errors.get(0).getFormattedMessage();
     }
 
     /**
@@ -150,6 +239,10 @@ class ExpireSchedulerVerifyGuardTest {
      * 데이터에 기대게 되는데, 여기서 재려는 것은 <b>뜨느냐 안 뜨느냐</b> 하나다.
      */
     private ExpireScheduler scheduler(List<JobParameters> started) {
+        return scheduler(started, MAX_SKIPS);
+    }
+
+    private ExpireScheduler scheduler(List<JobParameters> started, int maxSkips) {
         Clock fixed = Clock.fixed(
                 LocalDateTime.of(2026, 2, 1, 9, 5)
                         .atZone(ZoneId.systemDefault()).toInstant(),
@@ -170,7 +263,7 @@ class ExpireSchedulerVerifyGuardTest {
                 });
 
         return new ExpireScheduler(recording, expireJob, new TimeProvider(fixed),
-                "0 */5 * * * *", runningJobs, metrics, MAX_SKIPS,
+                "0 */5 * * * *", runningJobs, metrics, maxSkips,
                 // 상한 2 · 5분 크론이면 최악 지연 900초라 SLA 를 넉넉히 올려 준다 —
                 // 이 클래스가 재는 것은 SLA 가드가 아니라 슬롯 건너뛰기다.
                 2_000L, 60_000L);

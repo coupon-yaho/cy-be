@@ -17,6 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.job.CleanupJobConfig;
 import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.storage.db.MySqlContainerConfig;
@@ -142,6 +143,55 @@ class BatchRunMetricsRefresherTest {
                             + "NaN 이 되어 알림이 매일 뜬다")
                     .isEqualTo(recent.endTime().atZone(ZoneId.systemDefault()).toEpochSecond());
         }
+    }
+
+    /**
+     * <b>물러난 실행은 성공이 아니다.</b> 정리 잡은 검증이 도는 중이면 한 행도 안 걷고
+     * {@code COMPLETED} 로 닫힌다 — 실패가 아니므로 상태를 바꿀 수 없지만, 그것을 성공으로
+     * 세면 <i>"매일 돌았고 매일 아무것도 안 지웠다"</i> 가 모든 알림을 초록으로 통과한다.
+     */
+    @Test
+    @DisplayName("YIELDED 로 닫힌 실행은 마지막 성공으로 안 센다")
+    void yieldedExecutionIsNotSuccess() {
+        try (RunningJobFixture yielded = RunningJobFixture.plantCompleted(
+                jobRepository, CleanupJobConfig.JOB_NAME, KEY, Duration.ofHours(1))) {
+            setExitCode(yielded.executionId(), CleanupJobConfig.YIELDED_EXIT_CODE);
+
+            refresher.refresh();
+
+            assertThat(lastSuccess(CleanupJobConfig.JOB_NAME))
+                    .as("실행 id=" + yielded.executionId() + " 는 돌긴 했지만 한 행도 안 걷었다")
+                    .isNaN();
+        }
+    }
+
+    /**
+     * <b>{@code EXIT_CODE} 는 nullable 이다.</b> {@code <> 'YIELDED'} 만 쓰면 NULL 비교가
+     * UNKNOWN 이라 그 행이 떨어지는데, 그것은 성공을 못 본 것이라 <b>없는 사고로 알림이
+     * 뜬다.</b> 같은 NULL 함정을 이 티켓의 {@code deleteFindings} 에서 한 번 밟았다.
+     */
+    @Test
+    @DisplayName("종료 코드가 비어 있어도 COMPLETED 면 성공으로 센다")
+    void nullExitCodeStillCountsAsSuccess() {
+        try (RunningJobFixture completed = RunningJobFixture.plantCompleted(
+                jobRepository, CleanupJobConfig.JOB_NAME, KEY, Duration.ofHours(1))) {
+            setExitCode(completed.executionId(), null);
+
+            refresher.refresh();
+
+            assertThat(lastSuccess(CleanupJobConfig.JOB_NAME))
+                    .as("배치 메타가 비어 있는 것을 사고로 바꿔 읽으면 안 된다")
+                    .isEqualTo(completed.endTime().atZone(ZoneId.systemDefault()).toEpochSecond());
+        }
+    }
+
+    /** 배치 메타를 직접 손댄다 — JobRepository 로는 NULL 종료 코드를 만들 수 없다. */
+    private void setExitCode(long executionId, String exitCode) {
+        jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET EXIT_CODE = :code "
+                        + "WHERE JOB_EXECUTION_ID = :id")
+                .param("code", exitCode)
+                .param("id", executionId)
+                .update();
     }
 
     /**

@@ -45,6 +45,16 @@ tasks.named('test') {
     systemProperty 'user.timezone', 'Asia/Seoul'
 }
 
+tasks.matching { it.name == 'bootRun' }.configureEach {
+    // **컨테이너와 같은 존으로 띄운다.** batch.yml 이 TZ=UTC 를 주는데 bootRun 은 그 파일을
+    // 안 읽으므로, 개발 기기 존이 그대로 JVM 기본 존이 된다(KST 기기에서 Asia/Seoul — 실측).
+    //
+    // 판정 컬럼은 TimeProvider 로 옮겨 이 값과 무관해졌지만, 배치 메타의 시각은 여전히
+    // 인자 없는 LocalDateTime.now() 다 — RunningJobProbe 의 시체 판정이 그 위에 선다.
+    // 로컬에서만 다른 존으로 돌면 그 가드의 동작이 운영과 달라진다.
+    systemProperty 'user.timezone', 'UTC'
+}
+
 bootJar {
     enabled = true
 }
