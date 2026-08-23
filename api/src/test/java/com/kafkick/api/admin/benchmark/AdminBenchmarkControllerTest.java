@@ -4,6 +4,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,12 +14,16 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.core.benchmark.RunTimeseriesArchiver;
+import static org.mockito.Mockito.mock;
+import java.util.Optional;
 
 /** Benchmark 조회와 네 가지 운영 명령의 독립 HTTP 계약 및 Validation을 검증합니다. */
 class AdminBenchmarkControllerTest {
 
+    private final RunTimeseriesArchiver archiver = mock(RunTimeseriesArchiver.class);
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminBenchmarkController());
+            new AdminBenchmarkController(Optional.of(archiver)));
 
     /** 유효한 과거 방향 목록 조건은 실제 저장소 대신 명시적인 ADMIN-001을 반환해야 합니다. */
     @Test
@@ -107,5 +113,29 @@ class AdminBenchmarkControllerTest {
                         .content("{\"engineVersion\":\"V3\",\"releaseStage\":\"V3\","
                                 + "\"queueMode\":\"ADAPTIVE\",\"scenarioCode\":\"lower case\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void retryArchiveInvokesArchiver() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+        verify(archiver).retry(7L);
+    }
+
+    @Test
+    void retryArchiveRejectsNonPositiveIdBeforeInvocation() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/0/archive/retry"))
+                .andExpect(status().isBadRequest());
+        verify(archiver, never()).retry(0L);
+    }
+
+    @Test
+    void retryArchiveReturnsServerErrorWhenFeatureIsUnavailable() throws Exception {
+        MockMvc unavailable = AdminControllerContractTestSupport.mockMvc(
+                new AdminBenchmarkController(Optional.empty()));
+        unavailable.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.success").value(false));
     }
 }

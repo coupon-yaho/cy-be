@@ -1,5 +1,7 @@
 package com.kafkick.api.admin.benchmark;
 
+import java.util.Optional;
+
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 
@@ -20,6 +22,7 @@ import com.kafkick.api.admin.benchmark.dto.BenchmarkCommandAcceptedResponse;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkDetailResponse;
 import com.kafkick.api.admin.benchmark.dto.K6ResultUploadRequest;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.core.benchmark.RunTimeseriesArchiver;
 import com.kafkick.core.support.exception.BusinessException;
 
 /**
@@ -32,6 +35,12 @@ import com.kafkick.core.support.exception.BusinessException;
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminBenchmarkController {
+
+    private final Optional<RunTimeseriesArchiver> timeseriesArchiver;
+
+    public AdminBenchmarkController(Optional<RunTimeseriesArchiver> timeseriesArchiver) {
+        this.timeseriesArchiver = timeseriesArchiver;
+    }
 
     /**
      * 기간·엔진 버전·시나리오 조건에 맞는 Benchmark 실행 목록을 최신 실행부터 과거 방향으로 조회합니다.
@@ -125,6 +134,15 @@ public class AdminBenchmarkController {
             @Valid @RequestBody K6ResultUploadRequest request,
             Caller caller) {
         throw notImplemented();
+    }
+
+    /** archive_status=FAILED인 완료 회차의 Prometheus 사본 생성을 다시 실행합니다. */
+    @PostMapping("/benchmarks/{benchmarkRunId}/archive/retry")
+    public ResponseEnvelope<Void> retryArchive(
+            @PathVariable @Positive Long benchmarkRunId, Caller caller) {
+        timeseriesArchiver.orElseThrow(() -> new IllegalStateException("archive 기능이 비활성화되어 있습니다"))
+                .retry(benchmarkRunId);
+        return ResponseEnvelope.success();
     }
 
     private BusinessException notImplemented() {
