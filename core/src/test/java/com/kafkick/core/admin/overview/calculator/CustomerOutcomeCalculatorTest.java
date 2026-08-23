@@ -112,9 +112,9 @@ class CustomerOutcomeCalculatorTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 합산 overflow는 공개 Infinity가 될 수 없고 원본 목록 변경도 입력을 바꿀 수 없습니다. */
+    /** 개별 값은 유한해도 합산 결과가 발산하면 공개 Infinity가 될 수 없습니다. */
     @Test
-    void rejectsNonFiniteSumsCopiesInputAndPreservesWarmingUpZero() {
+    void rejectsNonFiniteOutcomeSums() {
         CustomerOutcomeCalculator calculator = new CustomerOutcomeCalculator();
         assertThatThrownBy(() -> calculator.calculate(new CustomerOutcomeCalculator.OutcomeInput(
                 END.minusSeconds(1), END, List.of(
@@ -130,6 +130,11 @@ class CustomerOutcomeCalculatorTest {
                         new CustomerOutcomeCalculator.OutcomeCount(
                                 AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, Double.MAX_VALUE)),
                 SourceStatus.VALID, END))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 입력 목록을 바꿔도 이미 생성된 계산 입력이 함께 변하지 않습니다. */
+    @Test
+    void copiesOutcomeInputDefensively() {
         List<CustomerOutcomeCalculator.OutcomeCount> mutable = new ArrayList<>(List.of(
                 new CustomerOutcomeCalculator.OutcomeCount(
                         AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0.1d)));
@@ -139,6 +144,13 @@ class CustomerOutcomeCalculatorTest {
 
         assertThat(copied.counts()).hasSize(1);
         assertThatThrownBy(() -> copied.counts().clear()).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /** 아직 안정화 중인 무트래픽 입력은 임의의 NO_TRAFFIC으로 바꾸지 않습니다. */
+    @Test
+    void preservesWarmingUpWhenOutcomeCountsAreEmpty() {
+        CustomerOutcomeCalculator calculator = new CustomerOutcomeCalculator();
+
         assertThat(calculator.calculate(new CustomerOutcomeCalculator.OutcomeInput(
                 END.minusSeconds(1), END, List.of(), SourceStatus.WARMING_UP, END)).customerOutcomes().status())
                 .isEqualTo(SourceStatus.WARMING_UP);

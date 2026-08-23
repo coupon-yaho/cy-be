@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -37,14 +38,6 @@ import com.kafkick.core.observation.SourceStatus;
 public class PromOverviewObservationSource implements OverviewObservationSource {
 
     private static final Logger log = LoggerFactory.getLogger(PromOverviewObservationSource.class);
-    private static final Duration CURRENT_WINDOW = Duration.ofMinutes(1);
-    private static final Duration COMPARISON_OFFSET = Duration.ofMinutes(1);
-    private static final Duration TREND_WINDOW = Duration.ofMinutes(10);
-    private static final Duration TREND_STEP = Duration.ofMinutes(1);
-    private static final Duration OUTCOME_WINDOW = Duration.ofMinutes(5);
-    private static final Duration LATENCY_WINDOW = Duration.ofSeconds(10);
-    private static final int EXPECTED_TREND_BUCKETS = 10;
-
     private static final Map<String, AdminOverviewSnapshot.CustomerOutcomeType> OUTCOME_TYPES =
             outcomeTypes();
 
@@ -99,17 +92,21 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
     public OverviewObservationData observe(OverviewObservationRequest request) {
         Objects.requireNonNull(request, "request");
         QueryBudget budget = new QueryBudget(totalBudget, nanoTime);
-        List<IssuanceFlowInput> flowInputs = observeFlows(request, budget);
-        OutcomeInput outcomeInput = observeOutcomes(request.snapshotAt(), budget);
+        // Prometheus range 평가점과 같은 밀리초 경계로 한 번 정규화해 endpoint 조회가 어긋나지 않게 합니다.
+        Instant evaluationAt = request.snapshotAt().truncatedTo(ChronoUnit.MILLIS);
+        List<IssuanceFlowInput> flowInputs = observeFlows(request, evaluationAt, budget);
+        OutcomeInput outcomeInput = observeOutcomes(evaluationAt, budget);
         // 세션 peak 경계가 분리되기 전에는 현재값 옆에 가짜 peak를 놓지 않습니다.
         Observation<AggregateIssuanceRate> aggregateRate =
                 new Observation<>(null, SourceStatus.PENDING, null);
-        Observation<LatencySummary> latency = observeLatency(request.snapshotAt(), budget);
+        Observation<LatencySummary> latency = observeLatency(evaluationAt, budget);
         return new OverviewObservationData(request, flowInputs, outcomeInput, aggregateRate, latency);
     }
 
     /** OPEN 캠페인은 grouped 결과로 조립하고 그 밖의 캠페인은 질의 없이 N_A로 만듭니다. */
-    private List<IssuanceFlowInput> observeFlows(OverviewObservationRequest request, QueryBudget budget) {
+    private List<IssuanceFlowInput> observeFlows(
+            OverviewObservationRequest request, Instant evaluationAt, QueryBudget budget
+    ) {
         List<CampaignObservationTarget> openTargets = request.campaignTargets().stream()
                 .filter(target -> target.campaignStatus() == CouponStatus.OPEN)
                 .toList();
@@ -122,20 +119,21 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         try {
             List<PromRangeSeries> trend = rangeQuery(
                     budget, OverviewPrometheusContract.flowTrend(),
-                    request.snapshotAt().minus(TREND_WINDOW), request.snapshotAt(), TREND_STEP);
+                    evaluationAt.minus(OverviewPrometheusContract.TREND_WINDOW), evaluationAt,
+                    OverviewPrometheusContract.TREND_STEP);
             List<PromSample> lastSuccess = query(
-                    budget, OverviewPrometheusContract.lastSuccessEpoch(), request.snapshotAt());
+                    budget, OverviewPrometheusContract.lastSuccessEpoch(), evaluationAt);
             List<PromSample> freshness = query(
-                    budget, OverviewPrometheusContract.flowFreshnessEpoch(), request.snapshotAt());
+                    budget, OverviewPrometheusContract.flowFreshnessEpoch(), evaluationAt);
             List<PromSample> publishFailures = query(
-                    budget, OverviewPrometheusContract.attemptPublishFailures(), request.snapshotAt());
+                    budget, OverviewPrometheusContract.attemptPublishFailures(), evaluationAt);
             List<PromSample> publishFailureFreshness = query(
                     budget, OverviewPrometheusContract.attemptPublishFailureFreshnessEpoch(),
-                    request.snapshotAt());
+                    evaluationAt);
             openInputs = buildOpenFlows(
-                    request.snapshotAt(), request.policy(), openTargets, trend,
+                    evaluationAt, request.policy(), openTargets, trend,
                     lastSuccess, freshness, publishFailures, publishFailureFreshness);
-        } catch (PromQueryException | IllegalArgumentException | ArithmeticException failure) {
+        } catch (PromQueryException failure) {
             logAreaFailure("O1", failure);
             openInputs = missingFlows(openTargets, SourceStatus.UNAVAILABLE);
         }
@@ -204,7 +202,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 trendByStage.get(new StageKey(couponId, OverviewPrometheusContract.ATTEMPT));
         List<PromRangePoint> successTrend =
                 trendByStage.get(new StageKey(couponId, OverviewPrometheusContract.SUCCESS));
-        Instant comparisonEnd = snapshotAt.minus(CURRENT_WINDOW);
+        Instant comparisonEnd = snapshotAt.minus(OverviewPrometheusContract.COMPARISON_OFFSET);
         Double attempts = valueAt(attemptTrend, snapshotAt);
         Double successes = valueAt(successTrend, snapshotAt);
         Double comparisonSuccesses = valueAt(successTrend, comparisonEnd);
@@ -222,9 +220,9 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             observedAt = target.stockObservedAt();
         }
 
-        Instant currentStart = snapshotAt.minus(CURRENT_WINDOW);
-        Instant comparisonStart = comparisonEnd.minus(COMPARISON_OFFSET);
-        Instant trendStart = snapshotAt.minus(TREND_WINDOW);
+        Instant currentStart = snapshotAt.minus(OverviewPrometheusContract.CURRENT_WINDOW);
+        Instant comparisonStart = comparisonEnd.minus(OverviewPrometheusContract.CURRENT_WINDOW);
+        Instant trendStart = snapshotAt.minus(OverviewPrometheusContract.TREND_WINDOW);
         ConditionKind conditionKind = conditionKind(
                 target.stockAvailable(), attempts, successes, comparisonSuccesses,
                 policy.issuanceDecreaseRatio());
@@ -283,14 +281,15 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         Map<Instant, Double> attempts = pointCounts(attemptPoints, trendStart, trendEnd);
         Map<Instant, Double> successes = pointCounts(successPoints, trendStart, trendEnd);
         List<IssuanceBucket> buckets = new ArrayList<>();
-        for (int index = EXPECTED_TREND_BUCKETS - 1; index >= 0; index--) {
-            Instant bucketEnd = trendEnd.minus(TREND_STEP.multipliedBy(index));
+        for (int index = OverviewPrometheusContract.expectedTrendBuckets() - 1; index >= 0; index--) {
+            Instant bucketEnd = trendEnd.minus(OverviewPrometheusContract.TREND_STEP.multipliedBy(index));
             if (attempts.containsKey(bucketEnd) && successes.containsKey(bucketEnd)) {
                 buckets.add(new IssuanceBucket(
-                        bucketEnd.minus(TREND_STEP), bucketEnd, successes.get(bucketEnd)));
+                        bucketEnd.minus(OverviewPrometheusContract.TREND_STEP),
+                        bucketEnd, successes.get(bucketEnd)));
             }
         }
-        Instant conditionStartedAt = trendEnd.minus(CURRENT_WINDOW);
+        Instant conditionStartedAt = trendEnd.minus(OverviewPrometheusContract.CURRENT_WINDOW);
         boolean warmingUpRequired = false;
         if (conditionKind == ConditionKind.STOPPED) {
             boolean historyMissing = false;
@@ -305,8 +304,8 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 if (attempt == 0d || success != 0d) {
                     break;
                 }
-                conditionStartedAt = bucketEnd.minus(TREND_STEP);
-                bucketEnd = bucketEnd.minus(TREND_STEP);
+                conditionStartedAt = bucketEnd.minus(OverviewPrometheusContract.TREND_STEP);
+                bucketEnd = bucketEnd.minus(OverviewPrometheusContract.TREND_STEP);
             }
             Duration provenDuration = Duration.between(conditionStartedAt, trendEnd);
             boolean leftCensored = historyMissing || conditionStartedAt.equals(trendStart);
@@ -316,7 +315,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             conditionStartedAt = trendEnd;
             Instant currentEnd = trendEnd;
             while (currentEnd.isAfter(trendStart)) {
-                Instant previousEnd = currentEnd.minus(TREND_STEP);
+                Instant previousEnd = currentEnd.minus(OverviewPrometheusContract.TREND_STEP);
                 Double current = successes.get(currentEnd);
                 Double previous = successes.get(previousEnd);
                 if (current == null || previous == null) {
@@ -327,7 +326,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                         || current > previous * (1.0 - policy.issuanceDecreaseRatio())) {
                     break;
                 }
-                conditionStartedAt = currentEnd.minus(TREND_STEP);
+                conditionStartedAt = currentEnd.minus(OverviewPrometheusContract.TREND_STEP);
                 currentEnd = previousEnd;
             }
             if (conditionStartedAt.equals(trendStart)) {
@@ -397,9 +396,10 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 counts.add(new OutcomeCount(type, value));
             }
             Instant actualObservedAt = observedAt.get();
-            return new OutcomeInput(snapshotAt.minus(OUTCOME_WINDOW), snapshotAt, counts,
+            return new OutcomeInput(
+                    snapshotAt.minus(OverviewPrometheusContract.OUTCOME_WINDOW), snapshotAt, counts,
                     statusAt(snapshotAt, actualObservedAt), actualObservedAt);
-        } catch (PromQueryException | IllegalArgumentException failure) {
+        } catch (PromQueryException failure) {
             logAreaFailure("O3", failure);
             return missingOutcome(SourceStatus.UNAVAILABLE);
         }
@@ -439,7 +439,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         for (PromSample sample : samples) {
             double value = sample.value();
             if (!Double.isFinite(value) || value < 0d) {
-                throw new IllegalArgumentException("O3 increase는 유한한 비음수여야 합니다.");
+                throw new PromQueryException("O3 increase는 유한한 비음수여야 합니다.");
             }
             String rawOutcome = sample.label(OverviewPrometheusContract.OUTCOME);
             if (values.put(rawOutcome, value) != null) {
@@ -476,14 +476,24 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 return missingObservation(SourceStatus.PENDING);
             }
             Instant actualObservedAt = observedAt.get();
-            Duration successfulP99 = Duration.ofNanos(Math.round(maximum.getAsDouble() * 1_000_000_000d));
+            Duration successfulP99 = latencyDuration(maximum.getAsDouble());
             return new Observation<>(
-                    new LatencySummary(successfulP99, null, snapshotAt.minus(LATENCY_WINDOW), snapshotAt),
+                    new LatencySummary(successfulP99, null,
+                            snapshotAt.minus(OverviewPrometheusContract.LATENCY_WINDOW), snapshotAt),
                     statusAt(snapshotAt, actualObservedAt), actualObservedAt);
-        } catch (PromQueryException | IllegalArgumentException | ArithmeticException failure) {
+        } catch (PromQueryException failure) {
             logAreaFailure("latency", failure);
             return missingObservation(SourceStatus.UNAVAILABLE);
         }
+    }
+
+    /** Prometheus 초 단위 지연을 포화 없이 {@link Duration}으로 변환합니다. */
+    private static Duration latencyDuration(double seconds) {
+        double nanos = seconds * 1_000_000_000d;
+        if (!Double.isFinite(nanos) || nanos > Long.MAX_VALUE) {
+            throw new PromQueryException("성공 p99가 나노초 변환 범위를 넘습니다: " + seconds);
+        }
+        return Duration.ofNanos(Math.round(nanos));
     }
 
     /** 폴링 WARN에는 원인 한 줄만 남기고 stacktrace는 DEBUG에서만 제공합니다. */

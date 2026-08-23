@@ -33,6 +33,7 @@ import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 /**
  * 관리자 첫 화면에 필요한 운영현황 조회와 결과 조립 흐름을 담당합니다.
@@ -121,7 +122,9 @@ public class AdminOverviewService {
         // O1·O3·지연·전체 발급률이 같은 평가 경계를 갖도록 묶음 원천은 정확히 한 번 조회합니다.
         OverviewObservationData observationData = observationSource.observe(observationRequest);
         if (!observationRequest.equals(observationData.request())) {
-            throw new IllegalStateException("관측 응답 request가 현재 Overview 요청과 일치해야 합니다.");
+            throw new BusinessException(
+                    AdminOverviewErrorCode.OBSERVATION_REQUEST_MISMATCH,
+                    "관측 응답 request가 현재 Overview 요청과 일치해야 합니다.");
         }
         // 실 O1은 화면 행·발급 조치·Action 완전성에만 사용합니다.
         IssuanceFlowCalculation issuanceCalculation = issuanceFlowCalculator.calculate(

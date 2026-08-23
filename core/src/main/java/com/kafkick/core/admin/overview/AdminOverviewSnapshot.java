@@ -296,51 +296,10 @@ public record AdminOverviewSnapshot(
                                          double totalCount, List<CustomerOutcome> outcomes) {
 
         public CustomerOutcomeSummary {
-            Objects.requireNonNull(windowStart, "windowStart");
-            Objects.requireNonNull(windowEnd, "windowEnd");
-            Objects.requireNonNull(outcomes, "outcomes");
-            if (!windowEnd.isAfter(windowStart)) {
-                throw new IllegalArgumentException("O3 집계 구간은 양수여야 합니다.");
-            }
-            if (!Double.isFinite(totalCount) || totalCount < 0d) {
-                throw new IllegalArgumentException("totalCount는 유한한 비음수여야 합니다.");
-            }
-            outcomes = List.copyOf(outcomes);
-            if ((totalCount == 0d) != outcomes.isEmpty()) {
-                throw new IllegalArgumentException("totalCount가 0일 때만 outcomes가 비어야 합니다.");
-            }
-            if (totalCount > 0d) {
-                java.util.EnumSet<CustomerOutcomeType> types =
-                        java.util.EnumSet.noneOf(CustomerOutcomeType.class);
-                double sum = 0d;
-                for (CustomerOutcome outcome : outcomes) {
-                    if (!types.add(outcome.type())) {
-                        throw new IllegalArgumentException("O3 outcome type은 중복될 수 없습니다.");
-                    }
-                    sum += outcome.count();
-                    if (!Double.isFinite(sum)) {
-                        throw new IllegalArgumentException("O3 outcome count 합계는 유한해야 합니다.");
-                    }
-                    if (!equalWithinAccumulationUlps(
-                            outcome.ratio(), outcome.count() / totalCount, 1)) {
-                        throw new IllegalArgumentException("O3 outcome ratio가 count/totalCount와 맞지 않습니다.");
-                    }
-                }
-                if (!equalWithinAccumulationUlps(sum, totalCount, outcomes.size())) {
-                    throw new IllegalArgumentException("O3 outcome count 합이 totalCount와 맞지 않습니다.");
-                }
-            }
-        }
-
-        /** 각 합산 항마다 최대 1 ULP의 반올림 차이만 허용합니다. */
-        private static boolean equalWithinAccumulationUlps(
-                double left, double right, int termCount
-        ) {
-            if (left == right) {
-                return true;
-            }
-            double tolerance = Math.max(Math.ulp(left), Math.ulp(right)) * termCount;
-            return Math.abs(left - right) <= tolerance;
+            outcomes = List.copyOf(Objects.requireNonNull(outcomes, "outcomes"));
+            CustomerOutcomeInvariants.validate(
+                    windowStart, windowEnd, totalCount, outcomes,
+                    CustomerOutcome::type, CustomerOutcome::count, CustomerOutcome::ratio);
         }
     }
 

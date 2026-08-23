@@ -272,6 +272,24 @@ class PromOverviewObservationSourceTest {
                 SNAPSHOT.minus(Duration.ofMinutes(10)), SNAPSHOT, Duration.ofMinutes(1)));
     }
 
+    /** Prometheus range 평가 경계는 밀리초이므로 나노초 요청도 같은 endpoint 표본을 찾아야 합니다. */
+    @Test
+    @DisplayName("나노초 snapshot도 밀리초 range endpoint의 현재값과 일치한다")
+    void matchesNanosecondSnapshotToMillisecondRangeEndpoint() {
+        Instant nanosecondSnapshot = SNAPSHOT.plusNanos(456_789L);
+        OverviewObservationRequest request = new OverviewObservationRequest(
+                nanosecondSnapshot,
+                List.of(new CampaignObservationTarget(
+                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)),
+                POLICY);
+
+        OverviewObservationData data = observe(this::happyInstant, this::happyRange, request);
+
+        assertThat(input(data, 101L).sourceStatus()).isEqualTo(SourceStatus.VALID);
+        assertThat(input(data, 101L).attemptedCount()).isEqualTo(2d);
+        assertThat(input(data, 101L).completedCount()).isEqualTo(5d);
+    }
+
     /** scrape freshness가 step과 어긋나도 snapshot grid의 10개 버킷이 Core 입력으로 유효해야 합니다. */
     @Test
     @DisplayName("비정렬 scrape 시각에서도 snapshot 기준 10분 추세가 Core 계산기를 통과한다")
@@ -661,6 +679,19 @@ class PromOverviewObservationSourceTest {
         }
     }
 
+    /** Adapter 호출 계약 위반은 외부 Prometheus 장애처럼 UNAVAILABLE로 숨기지 않습니다. */
+    @Test
+    @DisplayName("내부 range 계약 위반은 관측 장애로 삼키지 않는다")
+    void propagatesInternalRangeContractViolation() {
+        assertThatThrownBy(() -> observe(
+                this::happyInstant,
+                query -> {
+                    throw new IllegalArgumentException("내부 range 계약 위반");
+                }))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("내부 range 계약 위반");
+    }
+
     /** O1은 fractional increase를 그대로 보존해야 ratio 임계에서 거짓 DECREASING을 만들지 않습니다. */
     @Test
     @DisplayName("O1 fractional increase와 실제 감소 비율을 그대로 보존한다")
@@ -846,6 +877,22 @@ class PromOverviewObservationSourceTest {
         assertThat(data.latencySummary().value()).isNull();
     }
 
+    /** 나노초 변환 범위를 넘는 유한값도 포화된 Duration으로 노출하지 않습니다. */
+    @Test
+    @DisplayName("나노초 변환 범위를 넘는 p99는 latency만 UNAVAILABLE이다")
+    void rejectsP99BeyondNanosecondConversionRange() {
+        OverviewObservationData data = observe(
+                query -> query.equals(OverviewPrometheusContract.successfulP99())
+                        ? List.of(sample(Map.of("instance", "api-1"), Double.MAX_VALUE))
+                        : happyInstant(query),
+                this::happyRange);
+
+        assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(data.latencySummary().value()).isNull();
+        assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
+        assertThat(input(data, 101L).sourceStatus()).isEqualTo(SourceStatus.VALID);
+    }
+
     /** 실제 timed HTTP parser의 p99 손상은 낮은 max로 축소되지 않고 latency에 격리됩니다. */
     @Test
     @DisplayName("실제 timed client의 mixed malformed p99는 latency만 UNAVAILABLE이다")
@@ -994,21 +1041,6 @@ class PromOverviewObservationSourceTest {
         return List.of(
                 new PromRangePoint(SNAPSHOT.minus(Duration.ofMinutes(1)), comparison),
                 new PromRangePoint(SNAPSHOT, current));
-    }
-
-    /** 지정 값의 1분 간격 10개 추세 점을 만듭니다. */
-    private static List<PromRangePoint> points(double value) {
-        return pointsAt(SNAPSHOT, value);
-    }
-
-    /** 지정 종료 시각까지 1분 간격 10개 추세 점을 만듭니다. */
-    private static List<PromRangePoint> pointsAt(Instant end, double value) {
-        List<PromRangePoint> points = new ArrayList<>();
-        Instant start = end.minus(Duration.ofMinutes(9));
-        for (int index = 0; index < 10; index++) {
-            points.add(new PromRangePoint(start.plus(Duration.ofMinutes(index)), value));
-        }
-        return List.copyOf(points);
     }
 
     /** query_range 폐구간의 11개 평가점에서 시작점은 이전값 문맥으로만 사용하는 fixture입니다. */

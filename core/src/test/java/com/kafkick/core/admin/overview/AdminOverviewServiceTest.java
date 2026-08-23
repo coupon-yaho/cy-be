@@ -47,6 +47,7 @@ import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 /** 실 O1·O3·지연과 Mock 캠페인·O2·O4·FINAL을 함께 조립하는 Overview Service를 검증합니다. */
 class AdminOverviewServiceTest {
@@ -313,8 +314,13 @@ class AdminOverviewServiceTest {
         };
 
         assertThatThrownBy(() -> serviceWithSources(factory, mismatched).getOverview())
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("관측 응답 request");
+                .isInstanceOfSatisfying(BusinessException.class, failure -> {
+                    assertThat(failure.getErrorCode().getStatus()).isEqualTo(500);
+                    assertThat(failure.getErrorCode().getCode()).isEqualTo("OVERVIEW-001");
+                    assertThat(failure.getErrorCode().getMessage())
+                            .isEqualTo("운영현황 관측 결과를 처리할 수 없습니다.");
+                    assertThat(failure).hasMessageContaining("관측 응답 request");
+                });
     }
 
     /**

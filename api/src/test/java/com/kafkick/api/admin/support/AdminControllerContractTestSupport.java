@@ -90,13 +90,21 @@ public final class AdminControllerContractTestSupport {
             AdminOverviewMockDataset dataset = factory.create(request.snapshotAt());
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateIssuanceRate> aggregatePending =
                     new AdminOverviewSnapshot.Observation<>(null, SourceStatus.PENDING, null);
-            AdminOverviewSnapshot.LatencySummary sourceLatency = dataset.latencySummary().value();
-            // 실 Prom 경계와 같이 성공 p99만 값으로 싣고 미관측 실패 p99는 null로 유지합니다.
-            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> observedLatency =
-                    new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.LatencySummary(
-                            sourceLatency.successfulP99(), null,
-                            sourceLatency.windowStart(), sourceLatency.windowEnd()),
-                            dataset.latencySummary().status(), dataset.latencySummary().observedAt());
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> sourceObservation =
+                    dataset.latencySummary();
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> observedLatency;
+            if (!sourceObservation.status().carriesValue()) {
+                // 값 없는 상태는 null 값·시각 계약까지 포함하므로 새 Observation으로 다시 만들지 않습니다.
+                observedLatency = sourceObservation;
+            } else {
+                AdminOverviewSnapshot.LatencySummary sourceLatency = sourceObservation.value();
+                // 실 Prom 경계와 같이 성공 p99만 값으로 싣고 미관측 실패 p99는 null로 유지합니다.
+                observedLatency = new AdminOverviewSnapshot.Observation<>(
+                        new AdminOverviewSnapshot.LatencySummary(
+                                sourceLatency.successfulP99(), null,
+                                sourceLatency.windowStart(), sourceLatency.windowEnd()),
+                        sourceObservation.status(), sourceObservation.observedAt());
+            }
             return new OverviewObservationData(
                     request,
                     dataset.issuanceFlowInputs(),
