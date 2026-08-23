@@ -4,6 +4,8 @@ package com.kafkick.batch.schedule;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Proxy;
+import java.util.Set;
+import org.springframework.batch.core.repository.JobRepository;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -28,6 +30,9 @@ import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException
 import org.springframework.batch.core.launch.JobOperator;
 
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.batch.config.RunningJobProbe;
+import com.kafkick.batch.config.ExpireMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * <b>5분마다 도는 잡이라 로그가 곧 알림이다.</b> 네 갈래를 한 레벨로 뭉쳐 두면 알림이 붙는
@@ -220,7 +225,7 @@ class ExpireSchedulerReportingTest {
         new ExpireScheduler(operator((job, params) -> {
             used[0] = params;
             return execution(BatchStatus.COMPLETED, null);
-        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON).expire();
+        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON, noVerifyRunning(), throwawayMetrics(), 1).expire();
         return used[0].getLocalDateTime("asOf");
     }
 
@@ -324,7 +329,8 @@ class ExpireSchedulerReportingTest {
     private ExpireScheduler scheduler(JobOperator operator) {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(),
                 ZoneId.systemDefault());
-        return new ExpireScheduler(operator, EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON);
+        return new ExpireScheduler(operator, EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON,
+                noVerifyRunning(), throwawayMetrics(), 1);
     }
 
     private JobExecution execution(BatchStatus status, Throwable failure) {
@@ -351,6 +357,27 @@ class ExpireSchedulerReportingTest {
      * {@code start(Job, JobParameters)} 만 갈아 끼운다. 나머지는 부르면 터지게 두어,
      * 스케줄러가 몰래 다른 것을 쓰기 시작하면 그 자리에서 드러나게 한다.
      */
+    /**
+     * 이 클래스는 만료 쪽 로그 갈래만 잰다. 지표는 그 축이 아니라 버리는 레지스트리에 붙인다 —
+     * 스킵 경로의 지표 갱신은 {@code ExpireSchedulerVerifyGuardTest} 가 진다.
+     */
+    private static ExpireMetrics throwawayMetrics() {
+        return new ExpireMetrics(new SimpleMeterRegistry());
+    }
+
+    /**
+     * <b>검증이 안 도는 상태.</b> 이 클래스의 축은 만료 쪽 로그 갈래라, 반대 방향 가드는 늘
+     * 통과시킨다. 그 가드 자체는 {@code ExpireSchedulerVerifyGuardTest} 가 따로 잰다.
+     */
+    private static RunningJobProbe noVerifyRunning() {
+        JobRepository repository = (JobRepository) Proxy.newProxyInstance(
+                JobRepository.class.getClassLoader(),
+                new Class<?>[] {JobRepository.class},
+                (proxy, method, args) ->
+                        "findRunningJobExecutions".equals(method.getName()) ? Set.of() : null);
+        return new RunningJobProbe(repository, 1_800_000L, 600_000L, 120_000L);
+    }
+
     private JobOperator operator(StartBehavior behavior) {
         return (JobOperator) Proxy.newProxyInstance(
                 JobOperator.class.getClassLoader(),

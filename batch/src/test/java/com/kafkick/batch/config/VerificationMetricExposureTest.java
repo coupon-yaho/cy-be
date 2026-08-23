@@ -246,9 +246,8 @@ class VerificationMetricExposureTest {
      *
      * <p><b>{@code batch.scheduling.enabled} 에 안 묶이는 것까지 함께 지킨다.</b> 이 테스트는
      * 그 값이 {@code false} 인 컨텍스트에서 도는데, 그래도 태스크가 <b>있어야</b> 한다.
-     * 묶어 버리면 스케줄러를 끈 채 {@code verifyJob} 을 돌리는 <b>정상 절차</b>에서 지표가
-     * 통째로 죽는다 — 그 절차는 {@code rejectRunningSchedulers} 가 강제하는 것이라
-     * 예외가 아니라 기본이다.
+     * 묶어 버리면 스케줄러를 끈 채 띄우는 기동 — 부하 측정 중이거나 검증만 손으로 돌릴 때 —
+     * 에서 지표가 통째로 죽는다. 그때야말로 판정을 봐야 하는 자리라 예외가 아니라 기본이다.
      */
     @Test
     @DisplayName("되읽기가 스케줄 태스크로 실제 등록된다 — 스케줄러를 꺼도")
