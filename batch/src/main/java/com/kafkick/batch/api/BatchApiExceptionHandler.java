@@ -33,15 +33,21 @@ import com.kafkick.core.support.exception.ErrorCode;
  * <p><b>이 advice 가 못 잡는 4xx 가 있다.</b> {@code assignableTypes} 로 이 컨트롤러에
  * 묶여 있어서, <b>컨트롤러가 정해지기 전에 나는 예외</b>는 여기 안 온다 — 없는 경로(404)나
  * 허용 안 된 메서드(405)가 그것이다. 그때는 스프링 기본 형식
- * ({@code {timestamp,status,error,path}})이 나간다(실측). 범위를 넓히면 다른 컨트롤러가
- * 생기는 날 그쪽 규약까지 이 클래스가 지게 되므로 지금은 그대로 둔다 — 다만
- * <b>클라이언트가 두 형식을 만날 수 있다는 것은 사실</b>이다.
+ * ({@code {timestamp,status,error,path}})이 나간다(실측). <b>클라이언트가 두 형식을 만날
+ * 수 있다는 것은 사실이다.</b>
+ *
+ * <p><b>그 "다른 컨트롤러가 생기는 날" 이 왔다</b>(CY-429 의 {@code ExpireAdminController}).
+ * 그래서 {@code assignableTypes} 에 둘을 함께 적는다 — <b>패키지 전체로 넓히지 않는다.</b>
+ * 넓히면 다음에 붙는 컨트롤러가 이 규약을 <b>의식하지 않고도</b> 따라오는데, 그때
+ * 어긋나는 것은 <i>"에러 형식이 두 벌"</i> 이라 클라이언트에서만 드러난다.
+ * 이름을 하나씩 적으면 새 컨트롤러를 만든 사람이 <b>이 파일을 열어 보게 된다.</b>
  *
  * <p><b>메시지는 카탈로그 것만 나간다.</b> 예외의 {@code detail} 은 로그에만 남긴다 —
  * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 인증이
  * 없으므로 내부 사정을 더 조심해서 다룬다.
  */
-@RestControllerAdvice(assignableTypes = VerifyTriggerController.class)
+@RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
+        ExpireAdminController.class})
 public class BatchApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(BatchApiExceptionHandler.class);
@@ -62,10 +68,10 @@ public class BatchApiExceptionHandler {
         // 다 — 저장소 규약이고, 이 API 에는 인증이 없어 더 지켜야 한다. detail 에는
         // 설정 키·가드 이름·실행 id 가 들어간다.
         if (code.getStatus() >= 500) {
-            log.error("검증 API 가 실패했습니다. code={} detail={}",
+            log.error("batch admin API 가 실패했습니다. code={} detail={}",
                     code.getCode(), exception.getMessage(), exception);
         } else {
-            log.info("검증 API 가 요청을 거절했습니다. code={} detail={}",
+            log.info("batch admin API 가 요청을 거절했습니다. code={} detail={}",
                     code.getCode(), exception.getMessage());
         }
         return respond(code);
@@ -89,10 +95,10 @@ public class BatchApiExceptionHandler {
         // 값을 로그에 남기는 습관이 남으면 다음 컨트롤러에서도 그렇게 한다 —
         // 규율은 "detail 에 PII 를 넣지 않는다" 다. 진단에 필요한 것은 이름과 타입이다.
         if (exception instanceof MethodArgumentTypeMismatchException mismatch) {
-            log.info("검증 API 가 요청을 거절했습니다. 파라미터={} 기대타입={}",
+            log.info("batch admin API 가 요청을 거절했습니다. 파라미터={} 기대타입={}",
                     mismatch.getName(), mismatch.getRequiredType());
         } else {
-            log.info("검증 API 가 요청을 거절했습니다. 파라미터 타입이 맞지 않습니다.");
+            log.info("batch admin API 가 요청을 거절했습니다. 파라미터 타입이 맞지 않습니다.");
         }
         return respond(CommonErrorCode.INVALID_INPUT);
     }
@@ -115,7 +121,7 @@ public class BatchApiExceptionHandler {
             int status = error.getStatusCode().value();
             if (status < 500) {
                 // 같은 이유로 메시지를 안 남긴다 — 그 안에 요청값이 들어간다.
-                log.info("검증 API 가 요청을 거절했습니다. status={} type={}",
+                log.info("batch admin API 가 요청을 거절했습니다. status={} type={}",
                         status, exception.getClass().getSimpleName());
                 // INVALID_INPUT(400) 고정이라 헤더와 본문이 갈릴 것 같지만, **이 갈래로
                 // 오는 4xx 는 전부 400 이다.** 스프링이 내는 404·405·406 은 컨트롤러가
@@ -126,7 +132,7 @@ public class BatchApiExceptionHandler {
                 return respond(CommonErrorCode.INVALID_INPUT);
             }
         }
-        log.error("검증 API 에서 예상 못 한 오류가 났습니다.", exception);
+        log.error("batch admin API 에서 예상 못 한 오류가 났습니다.", exception);
         return respond(CommonErrorCode.INTERNAL_ERROR);
     }
 

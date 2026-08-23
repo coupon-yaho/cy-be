@@ -23,6 +23,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.kafkick.batch.config.BatchJobRepositoryConfig;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
@@ -130,7 +131,7 @@ public class ExpireScheduler {
     // JobOperator 빈도 둘이다. CY-368 이 verify 전용 비동기 빈을 더했다 —
     // 이 잡은 반드시 **공용(동기)** 빈이어야 한다. 비동기 빈이 주입되면 아래
     // status.isRunning() 검사가 매번 걸리고, 그 전에 이미 겹침 방지가 사라진 상태다.
-    public ExpireScheduler(@Qualifier("jobOperator") JobOperator jobOperator,
+    public ExpireScheduler(@Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
             @Qualifier("expireJob") Job expireJob,
             TimeProvider timeProvider,
             @Value(CRON) String expireCron,

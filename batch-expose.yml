@@ -3,7 +3,8 @@
 #   docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
 #
 # batch.yml 이 기본으로 안 내보내는 이유는 그 파일에 적혀 있다 — 그 포트에 열린
-# admin 트리거(POST /api/v1/admin/verify)에 **인증이 없다.**
+# admin API 에 **인증이 없다.** — POST /api/v1/admin/verify(트리거)와
+# /api/v1/admin/expire/runs/**(복구). 복구는 실행 이력을 FAILED 로 닫는 쓰기다.
 #
 # ⚠️ 127.0.0.1 을 빼면 안 된다. compose 의 짧은 문법은 IP 를 안 적으면 0.0.0.0 에 묶는다 —
 #    공인 IP 가 붙은 호스트에서 띄우는 순간 인터넷 어디서든 검증 배치를 돌릴 수 있다.

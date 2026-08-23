@@ -1,4 +1,4 @@
-// 만료 배치가 멈춰야 하는 상황들입니다.
+// 만료 배치가 멈춰야 하는 상황과, 만료 복구 API 의 거절 사유입니다.
 package com.kafkick.core.expiration.exception;
 
 import com.kafkick.core.support.exception.ErrorCode;
@@ -6,13 +6,18 @@ import com.kafkick.core.support.exception.ErrorCode;
 /**
  * <b>검증 코드를 빌려 쓰지 않는다.</b> {@code DATASET_MUTATED_DURING_RUN} 은
  * <i>재시도로 낫는다</i> 로 정의된 코드다 — 쓰기를 멈추고 다시 돌리면 통과한다.
- * 아래 <b>다섯</b> 중 {@code EXPIRE_HISTORY_COUNT_MISMATCH}·{@code STOCK_UNDERFLOW}·
+ * 아래 <b>잡 실패 다섯</b> 중 {@code EXPIRE_HISTORY_COUNT_MISMATCH}·{@code STOCK_UNDERFLOW}·
  * {@code EXPIRE_ASOF_IN_FUTURE}·{@code EXPIRE_ON_CORRUPT_SCHEMA} 넷은 다시 돌려도 같은
  * 자리에서 죽는다 — 원인이 데이터 구조이거나(앞 둘) 넘긴 파라미터(셋째) 또는
  * 접속 설정(넷째)이기 때문이다. {@code STOCK_ROW_MISSING} 만 예외다(그 항목의 설명 참조).
  *
  * <p>가르는 기준이 문구가 아니라 <b>재시도 가능성</b>이라는 것은
  * {@code VerificationErrorCode} 가 스스로 못 박아 둔 것이다. 그 규칙을 여기서 지킨다.
+ *
+ * <p><b>006·007 은 잡 실패가 아니다.</b> {@code ExpireAdminController}(CY-429)의 거절
+ * 사유이고, 위 재시도 가능성 분류는 그 둘에 적용되지 않는다 — 고쳐야 하는 것이 데이터도
+ * 파라미터도 아니라 <b>부른 대상이거나 시점</b>이기 때문이다. 잡이 낼 수 있는 코드를
+ * 순회하는 쪽(예: 지표 라벨)은 그 둘을 빼야 한다.
  *
  * <p><b>CY-347 이후 재고 코드 둘의 뜻이 바뀌었다.</b> 재고가 어긋난 회차는
  * {@code ExpirationRepository.blockedCoupons} 가 <b>창 밖으로 미리 뺀다</b> — 그것은 이제
@@ -130,6 +135,45 @@ public enum ExpirationErrorCode implements ErrorCode {
             500,
             "EXPIRATION-005",
             "오염 스키마에서는 만료 배치를 돌리지 않습니다."
+    ),
+
+    /**
+     * 그 실행 번호가 없거나 만료 잡이 아니다.
+     *
+     * <p><b>둘을 같은 404 로 접는다.</b> 남의 잡이라는 것을 알려 주면 인증 없는 이 API 가
+     * 배치 메타의 실행 번호 공간을 훑는 수단이 된다. {@code VerifyTriggerController} 가
+     * 같은 근거로 같은 선택을 했다.
+     */
+    EXPIRE_EXECUTION_NOT_FOUND(
+            404,
+            "EXPIRATION-006",
+            "해당 만료 실행을 찾을 수 없습니다."
+    ),
+
+    /**
+     * <b>지금 걷어낼 수 있는 실행이 아니다.</b> 진도가 돌고 있거나, 이미 끝났다.
+     *
+     * <p><b>"이미 걷어냈다" 는 여기 안 온다.</b> 그것은 200 + {@code alreadyRecovered=true}
+     * 다({@code ExpireRecoveryService} 가 실행 상태로 먼저 가른다) — 복구 API 의 재시도가
+     * 에러를 내면 운영자가 첫 호출이 실패했다고 읽고 손 SQL 로 되돌아간다.
+     *
+     * <p>이 API 는 <i>복구</i>다 — 종료 표시를 못 남기고 죽은 실행을 닫는 것이지 도는
+     * 배치를 멈추는 수단이 아니다. 만료는 <b>재고를 쓰는 유일한 잡</b>이라 중간에 끊으면
+     * 다음 검증의 판정 근거가 흔들린다({@code VerifyTriggerController} 가 {@code /verify/}
+     * 경로로 만료를 멈추지 못하게 막아 둔 것과 같은 이유다).
+     *
+     * <p>판정은 나이가 아니라 <b>진도</b>이고 {@code RunningJobProbe.stuckExecutions} 하나가
+     * 그 임계를 진다. 손 SQL 이 임계를 따로 적어야 했던 자리를 이 코드가 대신한다.
+     *
+     * <p><b>문구가 갈래를 단정하지 않는 이유가 있다.</b> 클라이언트에 나가는 것은 이
+     * 문장뿐이라({@code detail} 은 로그 전용) <i>"진도가 도는 실행이다"</i> 로 못 박으면
+     * 이미 끝난 실행에 대해서도 그렇게 나가 <b>운영자가 시체를 살아 있다고 믿는다.</b>
+     * 다음 동작은 {@code /runs/stuck} 을 다시 보는 것 하나이므로 그것을 문구에 담는다.
+     */
+    EXPIRE_EXECUTION_NOT_STUCK(
+            409,
+            "EXPIRATION-007",
+            "지금 걷어낼 수 있는 실행이 아닙니다. /runs/stuck 을 다시 확인하십시오."
     );
 
     private final int status;

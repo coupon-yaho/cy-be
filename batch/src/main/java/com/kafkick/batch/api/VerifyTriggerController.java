@@ -360,8 +360,12 @@ public class VerifyTriggerController {
         JobExecution execution = requireVerifyExecution(executionId);
 
         // **중단된 것만 버린다.** Spring Batch 는 status.isLessThan(STOPPING) 일 때만
-        // 거부하므로 FAILED·COMPLETED·ABANDONED 까지 통과시킨다 — 그대로 두면 이미 끝난
-        // 실패 이력을 ABANDONED 로 덮어쓰고 END_TIME 을 현재로 다시 쓴다. 이 저장소는
+        // 거부한다. BatchStatus 순서가 COMPLETED(0)·STARTING(1)·STARTED(2)·STOPPING(3)·
+        // STOPPED(4)·FAILED(5)·ABANDONED(6) 이라, 통과하는 것은 **STOPPING·STOPPED·FAILED·
+        // ABANDONED 넷**이고 우리는 뒤의 둘을 막는다 — COMPLETED 는 프레임워크가 이미 막는다(6.0.4 에서 직접 찍었다. 한때 여기
+        // 주석이 COMPLETED 도 통과한다고 적었는데 거짓이었고, CY-429 가 같은 문장을
+        // 복제한 뒤 돌연변이 테스트가 잡았다). 그대로 두면 실패 이력을 ABANDONED 로
+        // 덮어쓰고 END_TIME 을 현재로 다시 쓴다. 이 저장소는
         // 실행 이력을 판정 근거로 삼으므로(docs/11) 그것은 증거를 조용히 바꾸는 일이다.
         //
         // STOPPING 과 STOPPED 를 둘 다 받는다. stop 은 도는 잡이 있으면 STOPPING 을

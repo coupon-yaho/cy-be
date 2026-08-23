@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
  * 판정이 현재 시각에 기대는 순간 같은 {@code asOf} 두 실행이 다른 답을 낼 수 있고,
  * 그것이 이 저장소가 증명해야 하는 결정론을 정면으로 깬다.
  *
- * <p><b>예외가 하나 생겼다.</b> {@link RunningJobProbe} 는 배치 메타에 찍힌 시각과 나이를
+ * <p><b>예외가 하나 있다.</b> {@link RunningJobProbe} 는 배치 메타에 찍힌 시각과 나이를
  * 비교하는데, 그 시각을 찍는 것이 인자 없는 {@code LocalDateTime.now()}
  * ({@code AbstractJob} 과 {@code SimpleJobRepository}, 6.0.4 바이트코드로 확인)라
  * {@code TimeProvider}(UTC)로 비교하면 KST 기기에서 아홉 시간 어긋나 <b>가드가 통째로 꺼진다.</b>

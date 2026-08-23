@@ -169,7 +169,7 @@ class VerifyJobExpireGuardTest {
      * 프로세스가 종료 표시를 못 남기고 죽으면 {@code STARTED} 행이 <b>영원히</b> 남는다 —
      * 조회에 {@code END_TIME} 검사도 시간 상한도 없기 때문이다. 상한이 없으면
      * {@code docker compose down} 이 만료 한복판에 한 번 걸린 것만으로 <b>검증이 그 뒤로
-     * 영영 거절된다.</b> 게다가 만료 실행에는 {@code abandon} 경로가 없다.
+     * 영영 거절된다.</b> 게다가 그 행은 CY-429 의 복구 API 로 걷는다.
      */
     @Test
     @DisplayName("진도가 멈춘 만료 실행은 검증을 막지 않는다")
@@ -192,7 +192,7 @@ class VerifyJobExpireGuardTest {
     /**
      * <b>{@code STARTING} 에서 죽으면 Step 이 하나도 없다.</b> 그때 진도를 물을 곳이 없으므로
      * 프로브가 실행 시작 시각으로 물러난다. 그 폴백이 없으면 이런 행이 <b>영원히</b> 막고,
-     * 만료에는 해제 경로가 없어 SQL 을 직접 치는 수밖에 없다.
+     * 그 행은 CY-429 의 복구 API 로 걷는다.
      */
     @Test
     @DisplayName("Step 이 없는 실행은 시작 시각으로 나이를 잰다")
