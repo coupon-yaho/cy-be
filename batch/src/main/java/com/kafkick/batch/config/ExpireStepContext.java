@@ -1,0 +1,91 @@
+// 만료 잡이 Step 문맥에 남기는 값의 포맷입니다. 잡과 되읽기가 함께 씁니다.
+package com.kafkick.batch.config;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.batch.core.job.JobExecution;
+
+/**
+ * <b>만료 잡과 지표 되읽기가 함께 아는 계약.</b> 잡 이름 하나와 Step 문맥 값 하나뿐이다.
+ *
+ * <h2>왜 {@code ExpireJobConfig} 에 두지 않나</h2>
+ *
+ * <p>되읽기({@code ExpirePendingRefresher})가 이 둘을 쓴다. 그것을 잡 설정에서 직접 가져오면
+ * <b>{@code batch.config → batch.job} 화살표가 생기는데, 그 방향은 이 저장소에 없었다</b> —
+ * 잡 설정 셋이 전부 {@code config} 를 쓰는 단방향이었다. 한 번 순환이 생기면 다음 티켓이
+ * <i>"이미 그렇게 하고 있다"</i> 를 근거로 삼고, {@code batch.job} 을 떼어 내려는 날 못 뗀다.
+ *
+ * <p>그리고 {@code @Configuration} 클래스에 {@code public static} 유틸을 매달면 그 클래스가
+ * <b>잡 정의와 문맥 포맷 라이브러리 둘</b>이 된다. 계약은 계약이 있을 자리에 둔다.
+ *
+ * <p>형제 되읽기가 같은 규율을 이미 지킨다 — {@code BatchRunMetricsRefresher} 는 잡 이름을
+ * 잡 설정이 아니라 {@code BatchRunMetrics.watchedJobNames()} 에서 받는다.
+ */
+public final class ExpireStepContext {
+
+    /** 스케줄러·되읽기·검증 가드가 모두 이 이름으로 배치 메타를 조회한다. */
+    public static final String JOB_NAME = "expireJob";
+
+    /**
+     * <b>이 실행에서 손대지 않기로 한 회차 목록.</b> 첫 청크가 한 번 구해 여기 싣고, 이후
+     * 청크와 되읽기가 그것을 읽는다.
+     *
+     * <p><b>값에 {@code JobExecution} 세대를 함께 싣는다.</b> Step 문맥은 청크 커밋마다
+     * 영속되고 <b>재시작이 그대로 복원한다.</b> 세대를 안 보면 재시작이 이전 실행의 목록을
+     * 쓰게 되어, 그 사이 새로 어긋난 회차를 못 보고 <b>같은 자리에서 영원히 죽는다.</b>
+     */
+    public static final String BLOCKED_COUPONS_KEY = "expire.blockedCoupons";
+
+    /** 세대와 목록을 가르는 문자. 회차 id 에도 쉼표에도 안 나온다. */
+    public static final String GENERATION_SEPARATOR = "|";
+
+    private ExpireStepContext() {
+    }
+
+    /**
+     * <b>이 실행이 건너뛴 회차 목록을 배치 메타에서 꺼낸다.</b>
+     *
+     * <p><b>재기동을 넘어 읽힌다.</b> 값은 {@code BATCH_STEP_EXECUTION_CONTEXT} 에 영속되고,
+     * {@code JobRepository.getJobExecution(long)} 이 지난 실행을 불러올 때 Step 문맥을 함께
+     * 채운다({@code fillStepExecutionDependencies}).
+     */
+    public static Optional<List<Long>> blockedFrom(JobExecution jobExecution) {
+        String prefix = jobExecution.getId() + GENERATION_SEPARATOR;
+        return jobExecution.getStepExecutions().stream()
+                .map(step -> blockedFor(
+                        step.getExecutionContext().getString(BLOCKED_COUPONS_KEY, ""), prefix))
+                .flatMap(Optional::stream)
+                .findFirst();
+    }
+
+    /**
+     * 문맥 값에서 <b>이 세대의</b> 목록만 꺼낸다. 세대가 다르면 빈 {@code Optional} 이다.
+     *
+     * <p><b>한 곳에 모으는 이유가 있다.</b> 이 포맷을 판정({@code blockedCoupons})과
+     * 관측({@link #blockedFrom})이 함께 읽는다. 두 벌로 두면 포맷을 바꾸는 날 한쪽만
+     * 고쳐지고, 그 어긋남은 <b>지표만 조용히 틀리게</b> 만든다 — 잡은 멀쩡히 돈다.
+     *
+     * <p><b>두 가지 "빈 것" 을 가른다.</b> 여기 오는 것은 문맥 값 전체({@code raw})이지
+     * id 목록이 아니다.
+     *
+     * <pre>
+     *   raw = ""        접두사가 안 맞는다 → Optional.empty()  <b>모른다</b>
+     *   raw = "7|"      이 세대가 판정했고 목록이 비었다        <b>막힌 회차가 없다</b>
+     *   raw = "6|3,9"   남의 세대다 → Optional.empty()          <b>모른다</b>
+     * </pre>
+     *
+     * 그 구분이 관측의 전부다 — <i>"못 읽었다"</i> 를 <i>"막힌 회차가 없다"</i> 로 읽으면
+     * 남은 대기가 전부 <i>"배치가 처리했어야 하는 몫"</i> 으로 나가고, 그 알림은
+     * <b>서버를 보라</b>고 안내한다.
+     */
+    public static Optional<List<Long>> blockedFor(String raw, String prefix) {
+        if (!raw.startsWith(prefix)) {
+            return Optional.empty();
+        }
+        String ids = raw.substring(prefix.length());
+        return Optional.of(ids.isEmpty() ? List.of()
+                : Arrays.stream(ids.split(",")).map(Long::valueOf).toList());
+    }
+}

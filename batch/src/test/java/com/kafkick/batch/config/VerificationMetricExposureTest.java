@@ -281,6 +281,22 @@ class VerificationMetricExposureTest {
     }
 
     /**
+     * <b>이 배선이 끊기면 CY-421 이 통째로 되돌아간다.</b> 게이지는 영원히 {@code NaN} 이고
+     * {@code ExpireLeavesWorkBehind} 는 {@code NaN > 0} 이 거짓이라 발화할 수 없다 —
+     * 정확히 그 티켓 이전 상태다. 그런데 {@code ExpireMetricExposureTest} 는 모든 케이스가
+     * {@code refresh()} 를 <b>손으로</b> 부르므로 애너테이션을 지워도 전부 초록이다.
+     */
+    @Test
+    @DisplayName("만료 대기 되읽기가 @Scheduled 로 실제 등록된다")
+    void expirePendingRefreshIsScheduled() {
+        assertThat(taskHolder.getScheduledTasks())
+                .as("등록된 태스크=%s", taskHolder.getScheduledTasks().stream()
+                        .map(task -> task.getTask().getRunnable().toString()).toList())
+                .anyMatch(task -> task.getTask().getRunnable().toString()
+                        .startsWith(ExpirePendingRefresher.class.getName() + ".refresh"));
+    }
+
+    /**
      * <b>스케줄러 풀이 @Scheduled 수를 감당하는지 본다.</b>
      *
      * <p>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 어떤
@@ -294,14 +310,14 @@ class VerificationMetricExposureTest {
     @Test
     @DisplayName("스케줄러 풀이 @Scheduled 수를 감당한다 — 서로를 막지 않게")
     void schedulerPoolFitsScheduledTaskCount() {
-        // 정확히 4 를 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
+        // 정확히 5 를 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
         // 있으면 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵고, 세 번째
         // @Scheduled 가 생겨 정당하게 올리는 날에도 깨진다. 정확한 값은
         // ResolvedBatchConfigTest 가 키 경로로 지키고, 여기가 막는 것은 "1 로 폴백" 이다.
         assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
                 .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
-                        + "폴백한다. 그러면 네 @Scheduled 가 스레드 하나를 다툰다")
-                .isGreaterThanOrEqualTo(4);
+                        + "폴백한다. 그러면 다섯 @Scheduled 가 스레드 하나를 다툰다")
+                .isGreaterThanOrEqualTo(5);
     }
 
     /**

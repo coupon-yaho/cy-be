@@ -90,12 +90,17 @@ class ResolvedBatchConfigTest {
     private static final List<Class<?>> CONFIG_CLASSES = List.of(
             VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
             VerificationMetricsRefresher.class, RunningJobProbe.class,
-            BatchRunMetricsRefresher.class, CleanupJobConfig.class, CleanupScheduler.class);
+            BatchRunMetricsRefresher.class, CleanupJobConfig.class, CleanupScheduler.class,
+            ExpirePendingRefresher.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
             "batch.schedule.max-expire-skips",
             "batch.metrics.run-refresh-ms",
+            "batch.metrics.expire-pending-refresh-ms",
+            // 운영에서는 0 이다. 테스트가 스케줄 틱과 손 호출의 경합을 닫는 데 쓴다.
+            "batch.metrics.expire-pending-initial-delay-ms",
+            "batch.metrics.expire-pending-timeout-ms",
             "batch.metrics.run-timeout-ms",
             "batch.metrics.expire-sla-seconds",
             "batch.metrics.cleanup-sla-seconds",
@@ -167,9 +172,12 @@ class ResolvedBatchConfigTest {
                 // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
                 // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
                 // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
-                // 기본값(4)과 달라야 키 경로가 죽은 것을 구분할 수 있다.
-                "--BATCH_SCHEDULER_POOL_SIZE=5",
+                // 기본값(5)과 달라야 키 경로가 죽은 것을 구분할 수 있다.
+                "--BATCH_SCHEDULER_POOL_SIZE=6",
                 "--BATCH_RUN_METRICS_REFRESH_MS=62000",
+                "--EXPIRE_PENDING_REFRESH_MS=63000",
+                "--EXPIRE_PENDING_INITIAL_DELAY_MS=64000",
+                "--EXPIRE_PENDING_TIMEOUT_MS=8000",
                 "--BATCH_RUN_METRICS_TIMEOUT_MS=7000",
                 "--EXPIRE_SLA_SECONDS=90001",
                 "--CLEANUP_SLA_SECONDS=90002",
@@ -289,6 +297,12 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.schedule.expire-cron")).isEqualTo("0 0 0 1 1 *");
         assertThat(environment.getProperty("batch.schedule.max-expire-skips")).isEqualTo("2");
         assertThat(environment.getProperty("batch.metrics.run-refresh-ms")).isEqualTo("62000");
+        assertThat(environment.getProperty("batch.metrics.expire-pending-refresh-ms"))
+                .isEqualTo("63000");
+        assertThat(environment.getProperty("batch.metrics.expire-pending-initial-delay-ms"))
+                .isEqualTo("64000");
+        assertThat(environment.getProperty("batch.metrics.expire-pending-timeout-ms"))
+                .isEqualTo("8000");
         assertThat(environment.getProperty("batch.metrics.run-timeout-ms")).isEqualTo("7000");
         assertThat(environment.getProperty("batch.metrics.expire-sla-seconds")).isEqualTo("90001");
         assertThat(environment.getProperty("batch.metrics.cleanup-sla-seconds")).isEqualTo("90002");
@@ -299,7 +313,7 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
-                .isEqualTo("5");
+                .isEqualTo("6");
     }
 
     @Test

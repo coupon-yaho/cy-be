@@ -23,7 +23,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import com.kafkick.batch.config.ExpireMetrics;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
@@ -119,7 +118,6 @@ public class ExpireScheduler {
     private final CronSlot cronSlot;
     private final String expireCron;
     private final RunningJobProbe runningJobs;
-    private final ExpireMetrics metrics;
     private final int maxSkips;
 
     /** {@code @Scheduled} 는 이 빈에 대해 단일 스레드라 동기화가 필요 없다. */
@@ -137,7 +135,6 @@ public class ExpireScheduler {
             TimeProvider timeProvider,
             @Value(CRON) String expireCron,
             RunningJobProbe runningJobs,
-            ExpireMetrics metrics,
             @Value("${batch.schedule.max-expire-skips:1}") int maxSkips,
             @Value("${batch.metrics.expire-sla-seconds:180000}") long slaSeconds,
             @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
@@ -195,12 +192,12 @@ public class ExpireScheduler {
                             + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
                             + "정상 상태에서 오탐 critical 이 납니다 — "
                             + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "
-                            + "올리십시오(batch-alerts.yml 의 ExpireNotSucceeding 식도 "
-                            + "같은 값으로 함께 고쳐야 합니다). "
+                            + "올리십시오(batch-alerts.yml 의 ExpireNotSucceeding 과 "
+                            + "ExpireMetricsBackdated 식 둘 다 같은 값으로 함께 고쳐야 "
+                            + "합니다 — 한쪽만 고치면 나머지가 상시 오탐이 됩니다). "
                             + "cron=" + expireCron + " max-expire-skips=" + maxSkips);
         }
         this.runningJobs = runningJobs;
-        this.metrics = metrics;
         this.maxSkips = maxSkips;
     }
 
@@ -238,8 +235,9 @@ public class ExpireScheduler {
      * 두 서버가 부딪힌다).
      *
      * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-359 가
-     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>4</b> 이고
-     * {@code @Scheduled} 도 넷이다(만료 · 정리 · 검증 판정 되읽기 · 실행 지표 되읽기). 근거는 {@code application.yml.example} 의 그 키에
+     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>5</b> 이고
+     * {@code @Scheduled} 도 다섯이다(만료 · 정리 · 검증 판정 되읽기 · 실행 지표 되읽기 ·
+     * 만료 대기 되읽기). 근거는 {@code application.yml.example} 의 그 키에
      * 적혀 있다. 그것이 이 잡을 자기 자신과
      * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
      * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
@@ -350,10 +348,12 @@ public class ExpireScheduler {
      * <p>상한을 넘으면 <b>만료를 돌린다.</b> 재고는 운영의 진실이고 검증 실행은 진단이다 —
      * 둘 중 하나를 버려야 하면 진단 쪽이다. 그 선택을 ERROR 로 남긴다.
      *
-     * <p><b>건너뛸 때 대기 지표를 "모름" 으로 되돌린다.</b> {@code reportPending} 은
-     * {@code afterJob} 리스너라 <b>잡이 안 뜨면 안 불린다</b> — 그대로 두면 게이지가 직전
-     * 실행 값에 얼어붙어, 백로그가 쌓이는 바로 그 구간에 관제가 <i>"밀린 것이 없다"</i> 를 본다.
-     * {@code ExpireMetrics.markUnknown} 의 javadoc 이 정확히 그 위험을 적어 뒀다.
+     * <p><b>건너뛸 때 대기 지표는 안 건드린다.</b> 한때 여기서 {@code markUnknown} 을
+     * 불렀다 — 관측이 {@code afterJob} 리스너라 <i>잡이 안 뜨면 안 불려</i> 게이지가 직전
+     * 실행 값에 얼어붙었기 때문이다. <b>CY-421 이 관측을 되읽기로 옮기면서 그 근거가
+     * 사라졌다</b>: 게이지는 이제 <i>"마지막으로 성공한 실행이 남긴 몫"</i> 이고, 슬롯을
+     * 건너뛰어도 그 값은 여전히 사실이다. 건너뛴 슬롯은 이 WARN 과
+     * {@code ExpireNotSucceeding} 이 진다.
      */
     private boolean skipForRunningVerify(LocalDateTime asOf) {
         List<Long> verifying = runningJobs.blockingExecutions(VerifyJobConfig.JOB_NAME);
@@ -386,7 +386,9 @@ public class ExpireScheduler {
         log.warn("검증이 도는 중이라 이번 만료 슬롯을 건너뜁니다. 다음에 도는 슬롯이 밀린 "
                         + "대상을 함께 가져갑니다. asOf={} 연속={}/{} verifyExecutionIds={}",
                 asOf, consecutiveSkips, maxSkips, verifying);
-        metrics.markUnknown(asOf);
+        // 대기 지표를 "모름" 으로 되돌리지 않는다 — CY-421 이 그 계약을 바꿨다.
+        // 게이지는 이제 **마지막으로 성공한 실행이 남긴 몫**이고, 슬롯을 건너뛰어도 그 사실은
+        // 그대로 유효하다. 건너뛴 슬롯 자체는 여기 WARN 과 ExpireNotSucceeding 이 진다.
         return true;
     }
 

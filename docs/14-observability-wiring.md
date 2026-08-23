@@ -131,6 +131,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
 | `ExpireGaugeMissing` · `BatchTargetDown` · `BatchJobRunningTooLong` | `server` |
 | `BatchStuckExecution` · `BatchRunMetricsUnknown` · `BatchRunMetricsStale` | `server` |
+| `ExpireMetricsStale` · `ExpireMetricsBackdated` | `server` |
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
@@ -148,12 +149,18 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
 | 확인 | 방법 | 결과 |
 |---|---|---|
-| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 (그날 기준. 지금은 16개) |
+| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 (그날 기준. 지금은 22개) |
 | 타깃 (batch 없이) | `/api/v1/targets` | `down` — `lookup batch` 실패 |
 | 타깃 (batch 띄운 뒤) | 같은 것 | `up` |
 | 지표 도달 | `cy_expire_unexplained_pending` 조회 | `NaN` — 잡이 한 번도 안 돌았다는 뜻이 관제에 그대로 보인다 |
 | 라우팅 | `amtool alert add` 셋 | `[server]` · `[data]` · `[unrouted]` 로 갈림 |
 | 실제 알림 | 규칙 상태 | `BatchJobNotRunning`·`ExpireMetricsUnknown` 이 `pending` |
+
+> ⚠️ **`NaN` 의 뜻이 하나에서 넷이 됐다**(CY-421). 지표가 되읽기로 바뀌면서 —
+> 성공한 실행이 7일 창 안에 없거나, 오염 스키마를 보고 있거나, 제외 목록을 못 읽었거나,
+> 되읽기가 실패한 것이다. 가르는 순서는 `ExpireMetricsUnknown` 의 description 에 있다.
+> 그리고 값이 **0 이어도 어제 것일 수 있다** — `cy_expire_measured_at_seconds` 가
+> 그 기준 `asOf` 를 낸다.
 
 > **타깃 DOWN 이 추정이 아니라 관측이다.** batch 를 안 띄운 상태에서 실제로
 > `dial tcp: lookup batch` 가 났다 — 앱 컨테이너화가 이 티켓에 필요한 이유가 확정됐다.
@@ -189,7 +196,8 @@ cy_verification_findings{dataset,scope}   검출 건수
 
 **값을 `afterJob` 이 아니라 주기 조회로 채운다.** 프로세스 게이지였다면 재시작 뒤 다음
 실행까지 값이 비는데, 만료·정리가 배치 창으로 옮긴 지금 그 공백이 **최대 하루**다(CY-397).
-`verifyJob` 은 아예 **사람이 손으로, 드물게** 돌린다. 프로세스 게이지로 두면
+`verifyJob` 은 아예 **사람이 손으로, 드물게** 돌린다. 만료 대기 지표 넷도 같은 이유로
+되읽기가 됐다(CY-421) — 그쪽은 **마지막으로 성공한 실행의 `asOf`** 로 다시 센다. 프로세스 게이지로 두면
 컨테이너를 재배포하는 순간 판정이 사라지는데 `verification_runs.verdict` 는 DB 에 남아 있다 —
 **관제와 진실이 갈린다.** 금요일 FAIL 이 주말 재시작으로 없어지는 모양이다.
 
@@ -372,6 +380,11 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
      --duration=26h --comment="daily batch window; fresh DB has no run yet" \
      --alertmanager.url=http://localhost:9093
    ```
+
+   > **`ExpireMetricsBackdated`·`ExpireMetricsStale` 은 왜 안 넣나.** 둘 다 콜드 스타트에서
+   > 뜰 수 없다 — 앞엣것은 `cy_expire_measured_at_seconds` 가 `NaN` 이라 비교가 거짓이고,
+   > 뒤엣것은 `cy_expire_refresh_failures_total` 이 0 에서 시작해 델타가 안 생긴다.
+   > 위 셋과 달리 **"값이 아직 없다" 가 곧 침묵**인 식이라 재우지 않아도 조용하다.
 
 2. `BATCH_SCHEDULING_ENABLED=true` 로 띄운다 — 만료 알림 축이 살아난다
 

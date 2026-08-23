@@ -165,13 +165,10 @@ class BatchMetricExposureTest {
                 .contains("spring_batch_job_name=\"expireJob\"")
                 .contains("spring_batch_job_status=\"COMPLETED\"");
 
-        // 위 자동 수집은 spring_batch_*·cy_* 접두사만 본다. ExpireMetricsUnknown 이
-        // 기동 나이를 조인 축으로 쓰므로 그 이름은 여기서 따로 못 박는다 — 안 나오면
-        // and 조인이 통째로 빈 벡터가 되어 그 알림이 **영원히 침묵**한다.
-        assertThat(metricLine(body, "process_start_time_seconds"))
-                .as("Boot 의 UptimeMetrics 가 내는 값이다. 이것이 없으면 재기동 직후의 "
-                        + "'아직 모른다' 와 진짜 고장을 가를 수단이 사라진다")
-                .isNotBlank();
+        // ⚠️ 여기 손으로 박는 이름은 **규칙 파일에 없는 것만**이다. 한때
+        //    process_start_time_seconds 를 박아 뒀는데, 그것을 쓰던 조인을 CY-421 이
+        //    걷어내면서 죽은 계약을 지키는 단언이 됐다. 규칙이 다시 접두사 밖의 이름을
+        //    쓰기 시작하면 그때 같은 모양으로 다시 넣는다 — 지금은 없다.
     }
 
     /**

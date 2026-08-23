@@ -17,10 +17,11 @@ spring:
   task:
     scheduling:
       pool:
-        # @Scheduled 가 넷이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
+        # @Scheduled 가 다섯이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
         # CleanupScheduler.cleanup(정리 잡을 동기로 끝까지 돌린다),
         # VerificationMetricsRefresher.refresh(판정을 되읽는다),
-        # BatchRunMetricsRefresher.refresh(마지막 성공 시각과 멈춘 실행 수를 되읽는다).
+        # BatchRunMetricsRefresher.refresh(마지막 성공 시각과 멈춘 실행 수를 되읽는다),
+        # ExpirePendingRefresher.refresh(만료 대기 건수를 되읽는다).
         #
         # 만료(04:10)와 정리(04:30)는 20분 떨어져 있어 서로를 막지 않지만, 되읽기 둘은
         # 그 사이에도 돌아야 한다 — 그 구간이 관제가 가장 볼 값어치가 있는 시간이다.
@@ -30,15 +31,16 @@ spring:
         #
         # **여유를 안 둔다 — DB 풀과 다른 축이다.** 커넥션 풀은 keepalive·health 체크처럼
         # 우리가 안 세는 소비자가 붙어서 여유 둘을 뒀지만, 이 풀을 쓰는 것은 @Scheduled
-        # **넷뿐**이고 다섯째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
+        # **다섯뿐**이고 여섯째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
         # 신호가 되도록 정확히 그 수로 둔다 — 여유를 두면 그 신호가 사라진다.
+        # (CY-421 이 ExpirePendingRefresher 를 더하면서 넷에서 다섯이 됐다. 신호가 일했다.)
         #
         # ⚠️ 이 키는 Boot 가 직접 소비해서 @Value 스캔에 안 잡힌다. 그래서 둘이 함께 지킨다 —
         #    ResolvedBatchConfigTest 가 해석된 Environment 값을(키 경로),
         #    VerificationMetricExposureTest.schedulerPoolFitsBothScheduledTasks 가
         #    실제 스케줄러 빈의 코어 크기를(값이 정말 쓰이는지) 본다.
         #    앞의 것만으로는 "적힌 값이 떴다" 까지고, 그 값을 스케줄러가 쓴다는 보장이 아니다.
-        size: ${BATCH_SCHEDULER_POOL_SIZE:4}
+        size: ${BATCH_SCHEDULER_POOL_SIZE:5}
 
   # CY-368 이 업무 포트에 검증 트리거 컨트롤러를 열었다(POST /api/v1/admin/verify).
   # 인증이 없어서 compose 가 그 포트를 **기본으로 호스트에 안 내보낸다** —
@@ -178,7 +180,33 @@ batch:
     #    expire-sla-seconds 예산을 그대로 갉아먹는다. 만료 슬롯 건너뛰기의 최대 지연과
     #    겹치면 정상 상태에서 오탐 critical 이 난다 — 그래서 120000 을 넘으면 기동을 거절한다.
     run-refresh-ms: ${BATCH_RUN_METRICS_REFRESH_MS:60000}
-    # 그 되읽기의 데드라인. 스케줄러 스레드에서 도는 조회라 끊을 수단이 없으면
+    # 만료 대기 건수를 원본에서 되읽는 주기. 위 run-refresh-ms 와 **다른 키**다 —
+    # 그쪽은 배치 메타를 읽고 이쪽은 issuances 를 읽어, 무거워지는 이유가 다르다.
+    #
+    # 실측(발급 40만 · 대기 800건): COUNT_PENDING 은 idx_issuance_status_expires 의
+    # range 스캔이라 **전체 행이 아니라 대기 건수에 비례**해 1ms 다.
+    # BLOCKED_COUPONS 는 여기서 안 돈다 — 잡의 태스클릿이 부르고, 되읽기는
+    # 그 결과를 배치 메타에서 읽는다.
+    # 훑는 범위는 "성공한 실행이 못 걷은 몫" 이지 하루치가 아니다.
+    # 한 주기가 내는 문장은 여덟 남짓이고 무거운 쪽은 실행 문맥 blob
+    # 역직렬화다 — 근거는 ExpirePendingRefresher 의 비용 절에 적었다.
+    #
+    # ⚠️ **10000~120000 만 받는다 — 기동 때 거절한다.** 알림의 for 예산이 이 주기의
+    #    배수로 잡혀 있다: ExpireLeavesWorkBehind(10분 = 열 주기) ·
+    #    ExpireMetricsUnknown(15분 = 열다섯 주기). 상한(120초)에서도 각각 다섯 · 7.5
+    #    주기라 스크레이프 흔들림 한 번에 타이머가 안 깨진다. 그보다 늘리면 그 여유가
+    #    사라지고, 줄이면 위 실측이 전제한 비용을 넘는다.
+    expire-pending-refresh-ms: ${EXPIRE_PENDING_REFRESH_MS:60000}
+    # 첫 발화까지 미루는 시간. **운영에서는 0 이고 테스트만 쓴다** —
+    # @EnableScheduling 이 모든 테스트 컨텍스트에서 살아 있어, 이 되읽기가
+    # 테스트가 손으로 부르는 refresh() 와 같은 빈에서 경합한다. 주기를 늘리는
+    # 것은 확률만 줄이므로 실행 시간보다 긴 지연으로 창을 닫는다.
+    expire-pending-initial-delay-ms: ${EXPIRE_PENDING_INITIAL_DELAY_MS:0}
+    # 그 되읽기의 데드라인. 배치 메타 되읽기와 **별도 키**다 — 읽는 대상이 달라 무거워지는
+    # 이유가 다르고, 한 손잡이로 묶으면 한쪽 때문에 다른 쪽을 조인다.
+    # 스프링 트랜잭션 타임아웃이 초 단위라 1000 의 배수여야 한다(999 는 0 초, 즉 즉시 만료).
+    expire-pending-timeout-ms: ${EXPIRE_PENDING_TIMEOUT_MS:5000}
+    # 배치 메타 되읽기의 데드라인. 스케줄러 스레드에서 도는 조회라 끊을 수단이 없으면
     # 커넥션 풀이 마른 날 다음 주기도 안 돈다. 스프링 트랜잭션 타임아웃이 초 단위라
     # 1000 의 배수여야 한다 — 아니면 기동 때 거절한다.
     run-timeout-ms: ${BATCH_RUN_METRICS_TIMEOUT_MS:5000}
@@ -366,10 +394,13 @@ batch:
 
     # 판정을 되읽는 주기.
     #
-    # 판정을 잡이 밀어 넣지 않고 verification_runs 에서 되읽는다. 만료는 5분 크론이라
-    # 프로세스 게이지가 재시작 뒤 곧 복구되지만, 검증은 **사람이 손으로 드물게** 돌린다 —
-    # 재배포하면 판정이 지표에서 사라지는데 DB 에는 남아 관제와 진실이 갈린다.
-    # 되읽으면 재시작해도 한 주기면 복구된다.
+    # 판정을 잡이 밀어 넣지 않고 verification_runs 에서 되읽는다. 검증은 **사람이 손으로
+    # 드물게** 돌리므로, 프로세스 게이지로 두면 재배포하는 순간 판정이 지표에서 사라지는데
+    # DB 에는 남아 관제와 진실이 갈린다. 되읽으면 재시작해도 한 주기면 복구된다.
+    #
+    # 만료 지표도 CY-421 이 같은 이유로 되읽기가 됐다 — 위 expire-pending-refresh-ms.
+    # (한때 "만료는 5분 크론이라 프로세스 게이지도 곧 복구된다" 를 근거로 뒀는데,
+    #  배치 창으로 옮기면서 그 근거가 깨졌다.)
     metrics-refresh-ms: ${VERIFY_METRICS_REFRESH_MS:60000}
 
     # 그 되읽기의 데드라인.
@@ -421,18 +452,18 @@ spring:
   datasource:
     hikari:
       # 런타임과 풀을 나눈다. HikariCP 사용률이 v1 병목의 증거인데 배치가 나눠 쓰면 증거가 흐려진다.
-      # 최악 동시 소비자는 **여덟**이다 — 검증 스텝 tx 1 + 검증 JobRepository 1 +
+      # 최악 동시 소비자는 **아홉**이다 — 검증 스텝 tx 1 + 검증 JobRepository 1 +
       # 만료 스텝 tx 1 + 만료 JobRepository 1 + **정리 스텝 tx 1 + 정리 JobRepository 1** +
-      # 되읽기 2. 크론은 04:10 · 04:30 으로 갈라 뒀지만 검증은 손 트리거라 시각을 안 가리고,
-      # 만료가 밀리면 정리와 겹칠 수 있어 최악을 기준으로 잡는다.
+      # 되읽기 **3**(판정 · 배치 실행 · 만료 대기). 크론은 04:10 · 04:30 으로 갈라 뒀지만
+      # 검증은 손 트리거라 시각을 안 가리고, 만료가 밀리면 정리와 겹칠 수 있어 최악을 기준으로 잡는다.
       #
-      # 4 면 그 경로에서 커넥션이 마르고, 8 이면 여유가 0 이다. 하나만 더 붙어도
+      # 4 면 그 경로에서 커넥션이 마르고, 9 면 여유가 0 이다. 하나만 더 붙어도
       # (Hikari keepalive 재수립, 기동 가드, actuator health 의 DB 체크) connection-timeout
       # (3초)에 걸리는데, 그렇게 걸리는 쪽이 하필 되읽기다 — 게이지가 통째로 NaN 이 되고
       # 배치는 멀쩡한데 "만료가 SLA 안에 성공하지 못했습니다" critical 이 나간다.
-      # 그래서 여유 둘을 둬 10 이다. api 10 + batch 10 = 20 으로, storage.yml 주석이 적은
+      # 그래서 여유 둘을 둬 11 이다. api 10 + batch 11 = 21 로, storage.yml 주석이 적은
       # max_connections=50 안이다(그 값은 주석일 뿐 강제되지 않는다 — 합계를 검사하는 곳이 없다).
       #
       # 이 변경 전에는 storage.yml 이 이겨서 batch 풀도 DB_POOL_SIZE 가 움직였다.
       # 이제 손잡이는 BATCH_DB_POOL_SIZE 다 — DB_POOL_SIZE 만 주던 배포도 10 그대로다.
-      maximum-pool-size: ${BATCH_DB_POOL_SIZE:10}
+      maximum-pool-size: ${BATCH_DB_POOL_SIZE:11}

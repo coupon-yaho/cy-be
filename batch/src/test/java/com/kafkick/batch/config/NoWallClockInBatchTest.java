@@ -75,16 +75,22 @@ class NoWallClockInBatchTest {
      *
      * <pre>
      * VerifyJobConfig      0  판정 잡이다 — .coderabbit.yaml 이 주입 시계까지 금지한다
-     * ExpireJobConfig      2  asOf 가드와 커밋 시각 — 판정이 아니라 만료 대상 선정이다
+     * ExpireJobConfig      1  청크의 커밋 시각 — 판정이 아니라 만료 대상 선정이다
+     *                            (CY-421 이 관측 리스너를 걷어내며 둘에서 하나가 됐다)
      * CleanupJobConfig     1  버려진 실행 컷오프 — 정리는 판정을 안 낸다
      * ExpireScheduler      2  크론 슬롯 계산과 기동 가드 — 잡 밖이다
      * CleanupScheduler     2  같은 축
      * VerifyTriggerController 1  asOf 미래 검사 — 접수 단계다
      * BatchApiExceptionHandler 1  응답 timestamp
+     *
+     * ExpirePendingRefresher 는 <b>주입 시계</b>를 안 쓴다(예산 0) — 시각을 배치 메타에서
+     * 읽어 오기 때문이고, 그것이 그 클래스의 요지다. 다만 7일 창은 SQL 의 {@code NOW()} 라
+     * <b>이 정규식이 못 보는 축</b>이고, MySQL 세션 존({@code --default-time-zone=+00:00})
+     * 에 기대는 것은 {@code BatchRunMetricsRefresher} 와 같다.
      * </pre>
      */
     private static final Map<String, Integer> INJECTED_CLOCK_BUDGET = Map.of(
-            "com/kafkick/batch/job/ExpireJobConfig.java", 2,
+            "com/kafkick/batch/job/ExpireJobConfig.java", 1,
             "com/kafkick/batch/job/CleanupJobConfig.java", 1,
             "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
             "com/kafkick/batch/schedule/CleanupScheduler.java", 2,

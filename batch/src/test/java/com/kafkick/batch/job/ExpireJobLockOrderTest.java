@@ -85,6 +85,9 @@ import com.kafkick.storage.db.VerificationSeed;
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=false",
+        // 되읽기가 같은 ExpirationRepository 프록시에 countPending 을 부른다 —
+        // 백그라운드 틱이 호출 기록에 끼면 재현 불가로 빨개진다.
+        "batch.metrics.expire-pending-initial-delay-ms=3600000",
         "batch.expire.chunk-size=10"
 })
 @Import({ExpireJobLockOrderTest.FixedClockConfig.class, MySqlContainerConfig.class, ExpireJobLockOrderTest.RecordingConfig.class})
@@ -147,11 +150,12 @@ class ExpireJobLockOrderTest {
                         "stockRowCount",
                         "releaseStock",
                         // 남은 대상이 없어 0 을 돌려주고 끝난다
-                        "expireBatch",
-                        // 잡이 끝난 뒤 남은 대기를 센다(afterJob 리스너). 청크 트랜잭션
-                        // 밖이고 락을 안 잡아 순서 계약과 무관하다 — 그 성질도 위와 같이
-                        // ExpirationLockScopeTest 가 계측으로 지킨다.
-                        "countPending");
+                        "expireBatch");
+        // countPending 은 여기 없다 — CY-421 이 관측을 잡 밖의 되읽기로 옮겼다.
+        // **잡이 자기 결과를 세지 않는 것이 요지다**: 그 값이 프로세스와 함께 죽으면
+        // 만료가 일 1회인 지금 재기동부터 다음 창까지 백로그 감시가 통째로 꺼진다.
+        // 그 호출은 이제 ExpirePendingRefresher 가 60초 주기로 하고,
+        // ExpireMetricExposureTest 가 값을 잰다.
     }
 
     /** 저장소 호출 이름만 순서대로 적는다. 동작은 실제 저장소 그대로다. */

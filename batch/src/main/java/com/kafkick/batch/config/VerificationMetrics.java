@@ -36,9 +36,8 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 60초마다 채운다). 검증은 <b>사람이 손으로, 드물게</b> 돌리므로 프로세스 게이지로 두면
  * 재배포하는 순간 판정이 지표에서 사라진다.
  *
- * <p>만료 지표는 아직 {@code afterJob} 에서 채운다 — <b>그쪽은 CY-397 이 만료를 배치 창으로
- * 옮기면서 같은 문제가 생긴 자리</b>이고, 그 빚은 {@code VerificationMetricsRefresher} 와
- * {@code docs/13} §6 에 적었다. 이 클래스와는 축이 다르다. 재배포하면
+ * <p>만료 지표도 같은 이유로 되읽기가 됐다(CY-421) — 그쪽은 <i>마지막으로 성공한 실행의
+ * {@code asOf}</i> 로 다시 센다. 이 클래스와는 재는 대상이 다를 뿐 축은 같다. 재배포하면
  * 판정이 지표에서 사라지는데 DB 에는 남아 <b>관제와 진실이 갈린다</b> — 금요일 {@code FAIL}
  * 이 주말 재시작으로 없어지는 모양이다. {@code VerificationMetricsRefresher} 가 주기적으로
  * 이 클래스를 채운다.

@@ -155,7 +155,8 @@
 |---|---|
 | `docs/12` 재측정 절 추가 | 락·스캔 축은 위 테스트가 잡는다. 문서의 **절대 수치**는 300만 건 적재 후에 다시 재야 뜻이 있다 |
 | `blockedCoupons` 소요 실측 | 축소 픽스처에서 잰 값은 운영 규모를 대변하지 못한다. 코드 주석에서 근거 없는 수치를 뺐다. **실행계획 축은 `keepsBlockedCouponScanProportionalToPending` 이 잡는다** — `uk_coupon_member` 를 타면 깨진다 |
-| `unexplained` 이 캡처 창 지연분을 포함한다 | `COUNT_PENDING` 은 `updated_at` 창을 안 걸어, 설계상 다음 주기로 미룬 행도 "배치가 안 한 몫" 으로 센다. **지금은 도달 불가다** — `issuances` 를 쓰는 문장이 `EXPIRE_BATCH` 하나뿐이다. `CANCEL_USE`(`USED → ISSUED`)가 붙는 취소·사용 티켓에서 가른다 |
+| `unexplained` 이 캡처 창 지연분을 포함한다 | `COUNT_PENDING` 은 `updated_at` 창을 안 걸어, 설계상 다음 주기로 미룬 행도 "배치가 안 한 몫" 으로 센다. **지금은 도달 불가다** — `issuances` 의 상태를 쓰는 문장이 `EXPIRE_BATCH` 하나뿐이다. `CANCEL_USE`(`USED → ISSUED`)가 붙는 취소·사용 티켓에서 가른다 |
+| ↑ **CY-421 이 그 축을 알림 경로로 넓혔다** | 되읽기가 `COUNT_PENDING` 을 60초마다 다시 치므로, 실행이 끝난 **뒤에** `CANCEL_USE` 로 되돌아온 행이 새로 세어진다. 그 회차는 얼린 제외 목록에 없어 `unexplained` 로 들어가고 `ExpireLeavesWorkBehind`(critical · server)가 뜬다 — **배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.** `afterJob` 이 종료 시점에 한 번 세던 시절에는 구조적으로 불가능했다. 같은 티켓에서 `updated_at` 창과 함께 본다. **선행 조건이 있다** — `EXPIRE_BATCH` 의 창은 `updated_at <= :committedAt` 인데 그 `committedAt` 은 청크마다 새로 잡히고 영속되지 않아, 되읽기가 같은 창을 걸려면 마지막 청크의 값을 Step 문맥에 먼저 실어야 한다 |
 | `(coupon_id, status, expires_at)` 인덱스 | 막힌 회차의 대기 행이 매 주기 재스캔된다. **인덱스 도입은 실측 뒤 별도 판단이다** |
 | 나머지 배치 테스트의 시계 고정 | 이 티켓이 건드린 테스트 중 **잡을 실제로 돌리는 것은 전부** `FixedClock` 으로 고정했다. `ExpireCancelRaceTest`·`ExpireJobHistoryGuardTest`·`ExpireJobIsolationTest`·`VerifyJob*` 은 아직 벽시계인데, 이 티켓이 안 건드린 파일이라 여기서 안 넓혔다. (storage 의 만료 테스트는 `asOf` 가 SQL 바인드 파라미터일 뿐이라 시계와 무관하다) |
 | 리뷰 반복 결함의 기계적 검사 | 이 티켓의 리뷰에서 **같은 종류가 반복해서 나왔다** — 떠 있는 javadoc(4회), 개명 뒤 끊긴 문서 참조, 개수 주장과 실제 불일치("넷"↔"다섯"), 지표 단언 누락. 넷 다 파일을 읽어 기계적으로 잡을 수 있다. `BatchMetricExposureTest` 가 규칙 파일↔노출을 잇는 것과 같은 방식으로 테스트화할 자리다 |
@@ -164,13 +165,14 @@
 ### 알림
 
 ```
-cy_expire_blocked_coupons   게이지. 이번 실행이 제외한 회차 수
+cy_expire_blocked_coupons   게이지. **마지막으로 성공한 실행이** 제외한 회차 수
 ```
 
 ```yaml
 - alert: ExpireSkippingBrokenCoupons
   expr: cy_expire_blocked_coupons > 0
-  for: 10m          # 두 주기. 누가 재고를 고치는 중이면 자연 해소된다
+  for: 10m          # 두 주기. **재고를 고쳐도 다음 만료(04:10)가 성공해야 내려간다** —
+                    # 게이지가 마지막으로 성공한 실행의 결정이라서다(CY-421)
   severity: warning # 배치는 성공했다. 데이터를 봐야 하는 상황이다
 ```
 
@@ -258,10 +260,21 @@ cy_verification_findings{dataset,scope}   검출 건수
 1번의 오염 회차 말고도 원인이 여럿이다(슬롯 계산 오류, 설정 실수).
 
 ```
-cy_expire_pending              기한이 지났는데 아직 ISSUED 인 발급건 수
-cy_expire_blocked_pending      그중 막힌 회차의 몫
-cy_expire_unexplained_pending  그 둘의 차. **알림이 보는 것은 이것 하나다**
+cy_expire_pending                 기한이 지났는데 아직 ISSUED 인 발급건 수
+cy_expire_blocked_pending         그중 막힌 회차의 몫
+cy_expire_unexplained_pending     그 둘의 차. **알림이 보는 것은 이것 하나다**
+cy_expire_blocked_coupons         그 실행이 건너뛴 회차 수
+cy_expire_measured_at_seconds     위 넷이 기준으로 삼은 asOf. **0 이어도 어제 것일 수 있다**
+cy_expire_clean_schema            되읽기가 붙은 스키마 (1 정상 · 0 오염 · NaN 모름)
+cy_expire_refresh_failures_total  되읽기 실패 횟수(카운터)
 ```
+
+> **계약 셋 (CY-421).** ① **기록자는 `ExpirePendingRefresher` 하나다** — 잡도 스케줄러도
+> 게이지를 안 건드린다. 그래서 순서 규칙 없이 마지막 기록이 곧 진실이다.
+> ② **실린 것은 "마지막으로 성공한 실행" 뿐이다** — `STATUS='COMPLETED'` 로 좁히므로
+> 실패한 실행의 잔여는 여기 안 뜬다. 그 축은 `BatchJobFailed`·`ExpireNotSucceeding` 이 진다.
+> ③ **제외 목록은 그 실행의 결정이라 재고를 고쳐도 안 바뀐다** — 다시 만들면 데이터를 고친
+> 것이 서버 critical 로 나간다. 얼리는 것은 **목록**이고 **행 수는 매 주기 다시 센다.**
 
 > **이름에 `_total` 을 붙이면 안 된다.** 카운터 규약이라 Micrometer 의 Prometheus 렌더러가
 > 게이지에서 **떼어 낸다** — 붙이면 코드가 부르는 이름과 관제가 보는 이름이 갈린다.
@@ -271,7 +284,9 @@ cy_expire_unexplained_pending  그 둘의 차. **알림이 보는 것은 이것 
 > 한쪽만 새 값인 샘플이 나온다. 한 문장에서 세어 한 시계열로 내보낸다.
 
 > **스크레이프 때 세면 안 된다.** 300만 행에 `COUNT(*)` 를 15초마다 때리는 꼴이다.
-> 잡이 끝나는 시점에 한 번 세서 게이지에 넣는다 — 그때 이미 같은 창을 훑고 있다.
+> 한때 잡이 끝나는 시점에 한 번 세서 게이지에 넣었는데, 그러면 **값이 프로세스와 함께
+> 죽는다.** 지금은 되읽기가 60초 주기로 <b>마지막으로 성공한 실행의 `asOf`</b> 로 다시
+> 센다(CY-421) — 그 비용이 대기 건수에 비례한다는 것은 실측했다(§6 의 그 항목).
 
 `for: 10m`(두 주기). **한 실행이 대상을 다 비운다** — 청크는 0 이 나올 때까지 반복하므로
 "대상이 많아 다음 주기로 넘어간다" 는 일이 없다. 그래도 남는 것은 막힌 회차의 몫(이미
@@ -481,17 +496,22 @@ api 의 쓰기는 애초에 안 잡힌다.
 | **A** | ~~검증 가드를 실행 중 검사로~~ **완료 · CY-384** | — |
 | **B** | ~~배치 감시를 마지막 성공 시각으로~~ **완료 · CY-392** — 지표 셋(`cy_batch_last_success_seconds{spring_batch_job_name}`·`cy_batch_stuck_executions{spring_batch_job_name}`·`cy_batch_refresh_failures_total`) + 규칙 일곱(`ExpireNotSucceeding`·`ExpireNeverSucceeded`·`ExpireGaugeMissing`·`BatchTargetDown`·`BatchStuckExecution`·`BatchRunMetricsUnknown`·`BatchRunMetricsStale`) | — |
 | **C** | ~~만료·정리를 배치 창으로~~ **완료 · CY-397** — 만료 04:10 · `cleanupJob` 신설 04:30 · 만료 SLA 180,000(50h) · `max-expire-skips` 1 · `BatchJobRunningTooLong` 600초 · 규칙 넷 신설(`CleanupNotSucceeding`·`CleanupNeverSucceeded`·`CleanupGaugeMissing`·`CleanupRunningTooLong`) · `NeverSucceeded` 의 `for` 는 10분·30분 유지(크론 슬롯을 예산으로 쓰면 재기동마다 리셋돼 영원히 안 뜬다 — 시도했다가 되돌린 근거는 `batch-alerts.yml` 의 그 규칙 주석) · `started_at`/`finished_at` 을 도메인 시계로 | A · B |
-| **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계, **`verifyJob` SLA 알림**, 그리고 **C 가 미룬 셋** — `max-expire-skips` 를 0 으로 · 만료 SLA 를 25h 로 · `cleanup.abandoned-after-hours`(24h) 재산정 | C · 300만 적재 |
+| **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계, **`verifyJob` SLA 알림**, 그리고 **C 가 미룬 셋** — `max-expire-skips` 를 0 으로 · 만료 SLA 를 25h 로(**`ExpireNotSucceeding` 과 `ExpireMetricsBackdated` 식 둘 다** 같이 고친다 — 기동 가드가 그 둘을 이름으로 부른다) · `cleanup.abandoned-after-hours`(24h) 재산정 | C · 300만 적재 |
 
-> **만료 지표가 아직 프로세스 게이지인 것도 C 의 빚이다.** `cy_expire_pending` 등 넷은
-> JVM 안 `AtomicReference` 라 `afterJob` 에서만 채워진다. 5분 크론일 때는 재기동 뒤 몇 분이면
-> 값이 돌아왔는데, **일 1회로 옮긴 지금은 다음 04:10 까지 최대 하루가 `NaN`** 이다.
-> 그 사이 `ExpireLeavesWorkBehind`(백로그가 쌓인다)가 **발화할 수 없다** —
-> CY-392 가 마지막 성공 시각을 DB 되읽기로 옮긴 근거(`BatchRunMetrics` javadoc)가 이 넷에는
-> 아직 적용되지 않았다. C 는 오탐 쪽만 막았다(`ExpireMetricsUnknown` 에 기동 나이 조인).
-> **D 또는 별도 티켓이 `ExpirePendingRefresher` 를 세워 넷을 되읽기로 옮긴다** —
-> `ExpirationRepository` 에 이미 있는 대기 건수 질의를 주기로 부르면 되고,
-> `idx_issuance_status_expires` 가 있으므로 비용은 실측으로 확인한다.
+> **~~만료 지표가 아직 프로세스 게이지다~~ 완료 · CY-421.** `cy_expire_*` 넷이 `afterJob`
+> 에서만 채워져, 일 1회로 옮긴 뒤 재기동부터 다음 04:10 까지 **최대 하루가 `NaN`** 이었고
+> 그 사이 `ExpireLeavesWorkBehind` 가 발화할 수 없었다. `ExpirePendingRefresher` 가 60초마다
+> **마지막으로 성공한 실행의 `asOf`** 로 다시 세어 그 창을 닫았다.
+>
+> 그 티켓이 함께 정한 것 둘 — **기록자를 하나로** 했고(잡의 `afterJob` 관측 리스너와
+> 스케줄러의 `markUnknown` 을 걷어냈다), **`blocked` 는 다시 계산하지 않고 배치 메타에서
+> 가져온다.** 다시 계산하면 어긋난 재고를 고치는 순간 그 몫이 `unexplained` 로 옮겨 가
+> *데이터를 고쳤더니 서버 critical 이 뜨는* 모양이 된다.
+>
+> 비용은 실측했다 — 발급 40만·대기 800건에서 `COUNT_PENDING` 한 질의가
+> `idx_issuance_status_expires` 의 range 스캔이라 **전체 행이 아니라 대기 건수에**
+> 비례해 1ms 다. `BLOCKED_COUPONS` 는 되읽기 경로에 없다 — 잡의 태스클릿이
+> 부르고 되읽기는 그 결과를 배치 메타에서 읽는다.
 
 > **만료 SLA 가 50시간인 것은 C 의 남은 빚이다.** 일 1회에서 `max-expire-skips=1` 이면
 > 최대 지연이 이틀이라 SLA 가 그만큼 무뎌진다. 한때 그 손잡이를 0 으로 내려 25시간을
