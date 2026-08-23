@@ -136,8 +136,27 @@ class PrometheusExposureContractTest {
         @DisplayName("커밋된 allowlist로 200 이고 quantile 라벨로 나온다 — _bucket 은 없다")
         void scrapeServesQuantileLabels() throws Exception {
             call(appPort, "/obs3-exposure-probe");
+
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                HttpResponse<String> scrape = call(managementPort, "/actuator/prometheus");
+
+                assertThat(scrape.statusCode()).isEqualTo(200);
+                assertThat(scrape.body())
+                        .as("백분위가 HTTP 로 도달해야 이 티켓의 percentiles 설정이 의미를 갖는다")
+                        .contains("http_server_requests_seconds{")
+                        .contains("quantile=\"0.99\"");
+                assertThat(scrape.body())
+                        .as("publishPercentiles 는 버킷을 만들지 않는다 — histogram_quantile 로"
+                                + " 병합할 수 없고, 그래서 인스턴스 최댓값을 쓴다")
+                        .doesNotContain("http_server_requests_seconds_bucket");
+            });
+        }
+
+        @Test
+        @DisplayName("캠페인 발급 미터 6종이 이름 · 라벨 · 값 그대로 scrape 에 실린다")
+        void scrapeServesCampaignIssuanceMeters() {
             IssuanceFlowEvent.Ctx context = new IssuanceFlowEvent.Ctx(
-                    "obs25-exposure", 101L, 201L, Grade.GOLD, false,
+                    "obs25-exposure", 101L, 202L, Grade.GOLD, false,
                     Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
                     QueueMode.ADAPTIVE, 901L, "api-1"
             );
@@ -149,27 +168,19 @@ class PrometheusExposureContractTest {
                 HttpResponse<String> scrape = call(managementPort, "/actuator/prometheus");
 
                 assertThat(scrape.statusCode()).isEqualTo(200);
-                assertThat(scrape.body())
-                        .as("백분위가 HTTP 로 도달해야 이 티켓의 percentiles 설정이 의미를 갖는다")
-                        .contains("http_server_requests_seconds{")
-                        .contains("quantile=\"0.99\"");
                 assertMetricSample(scrape.body(), "app_issuance_flow_total", 1.0,
-                        "coupon_id", "201", "stage", "attempt");
+                        "coupon_id", "202", "stage", "attempt");
                 assertMetricSample(scrape.body(), "app_issuance_flow_total", 1.0,
-                        "coupon_id", "201", "stage", "success");
+                        "coupon_id", "202", "stage", "success");
                 assertMetricSample(scrape.body(), "app_queue_admitted_total", 1.0,
-                        "coupon_id", "201");
+                        "coupon_id", "202");
                 assertMetricSample(scrape.body(), "app_issuance_outcome_total", 1.0,
                         "outcome", "ISSUED");
                 assertMetricSample(scrape.body(), "app_issuance_event_last_success_epoch", 1_787_443_200d,
-                        "coupon_id", "201");
+                        "coupon_id", "202");
                 assertMetricSample(scrape.body(), "app_queue_event_last_admitted_epoch", 1_787_443_200d,
-                        "coupon_id", "201");
+                        "coupon_id", "202");
                 assertMetricSample(scrape.body(), "app_observation_campaign_limit_exceeded_total", 0.0);
-                assertThat(scrape.body())
-                        .as("publishPercentiles 는 버킷을 만들지 않는다 — histogram_quantile 로"
-                                + " 병합할 수 없고, 그래서 인스턴스 최댓값을 쓴다")
-                        .doesNotContain("http_server_requests_seconds_bucket");
             });
         }
 

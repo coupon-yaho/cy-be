@@ -3,6 +3,7 @@ package com.kafkick.api.observation.issuance;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -51,6 +52,26 @@ class CompositeEventRecorderTest {
         assertThat(delivered).hasValue(2);
         assertThat(output).contains("발급 관측 전달에 실패했습니다").contains("recorder=");
         assertThat(occurrences(output.getAll(), "발급 관측 전달에 실패했습니다")).isEqualTo(1);
+    }
+
+    @Test
+    void appliesTheConfiguredFailureLogInterval(CapturedOutput output) {
+        EventRecorder failing = ignored -> { throw new IllegalStateException("unavailable"); };
+
+        CompositeEventRecorder recorder = new CompositeEventRecorder(Duration.ofNanos(1), failing);
+        recorder.record(event());
+        recorder.record(event());
+
+        assertThat(occurrences(output.getAll(), "발급 관측 전달에 실패했습니다")).isEqualTo(2);
+    }
+
+    @Test
+    void rejectsNonPositiveFailureLogIntervals() {
+        EventRecorder delegate = ignored -> { };
+
+        assertThatThrownBy(() -> new CompositeEventRecorder(Duration.ZERO, delegate))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("failureLogInterval must be positive");
     }
 
     private static IssuanceFlowEvent event() {

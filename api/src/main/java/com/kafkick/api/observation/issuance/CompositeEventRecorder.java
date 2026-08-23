@@ -1,9 +1,10 @@
 package com.kafkick.api.observation.issuance;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.OptionalLong;
 
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEvent;
@@ -14,14 +15,25 @@ import org.slf4j.LoggerFactory;
 public final class CompositeEventRecorder implements EventRecorder {
 
     private static final Logger log = LoggerFactory.getLogger(CompositeEventRecorder.class);
-    private static final long FAILURE_LOG_INTERVAL_NANOS =
-            IssuanceObservationService.DEFAULT_LOG_INTERVAL.toNanos();
 
     private final List<EventRecorder> delegates;
-    private final AtomicLong failures = new AtomicLong();
-    private final AtomicLong nextFailureLogAtNanos = new AtomicLong(System.nanoTime());
+    private final FailureLogThrottle failureLog;
 
     public CompositeEventRecorder(EventRecorder... delegates) {
+        this(IssuanceObservationService.DEFAULT_LOG_INTERVAL, delegates);
+    }
+
+    /**
+     * 전달 실패 로그의 유량 제한 간격을 외부 설정에서 받는 생성자다.
+     *
+     * <p>{@link MeterEventRecorder} 와 같은 값을 쓴다 — 두 기록기가 서로 다른 간격으로 짖으면
+     * 부하 회차마다 한쪽만 튜닝되어 로그량이 갈린다.
+     *
+     * @param failureLogInterval 같은 실패를 다시 로그로 남기기까지의 최소 간격
+     * @param delegates 이벤트를 함께 받을 관측 sink 들
+     */
+    public CompositeEventRecorder(Duration failureLogInterval, EventRecorder... delegates) {
+        this.failureLog = new FailureLogThrottle(failureLogInterval);
         this.delegates = Arrays.stream(Objects.requireNonNull(delegates, "delegates"))
                 .map(delegate -> Objects.requireNonNull(delegate, "delegate"))
                 .toList();
@@ -42,15 +54,12 @@ public final class CompositeEventRecorder implements EventRecorder {
     }
 
     private void logFailureAtMostOncePerInterval(EventRecorder delegate, RuntimeException exception) {
-        long total = failures.incrementAndGet();
-        long now = System.nanoTime();
-        long due = nextFailureLogAtNanos.get();
-        if (now - due < 0 || !nextFailureLogAtNanos.compareAndSet(
-                due, now + FAILURE_LOG_INTERVAL_NANOS)) {
+        OptionalLong total = failureLog.recordFailure();
+        if (total.isEmpty()) {
             return;
         }
         log.warn("발급 관측 전달에 실패했습니다. 다른 관측기는 계속 기록합니다. "
                         + "누적 {}건, recorder={}, cause={}",
-                total, delegate.getClass().getName(), exception.getClass().getSimpleName());
+                total.getAsLong(), delegate.getClass().getName(), exception.getClass().getSimpleName());
     }
 }

@@ -56,7 +56,6 @@ class ApiObservationAutoConfigurationTest {
     @Test
     void registersDefaultBeansWhenImplementationsAreMissing() {
         contextRunner.run(context -> {
-            assertThat(context).hasSingleBean(EventRecorder.class);
             assertThat(context).hasSingleBean(ConsistencyCalculator.class);
             assertThat(context).hasSingleBean(ConsistencySeverityPolicy.class);
             assertThat(context).hasSingleBean(EventIdGenerator.class);
@@ -64,7 +63,9 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context).hasSingleBean(IssuanceObservationService.class);
             assertThat(context).hasSingleBean(TimeProvider.class);
             assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
-            assertThat(context.getBean(EventRecorder.class)).isInstanceOf(MeterEventRecorder.class);
+            assertThat(context).hasSingleBean(MeterEventRecorder.class);
+            assertThat(context.getBean(EventRecorder.class))
+                    .isInstanceOf(CompositeEventRecorder.class);
             assertThat(context.getBean(CampaignLifecycleRecorder.class))
                     .isInstanceOf(NoOpCampaignLifecycleRecorder.class);
             assertThat(context.getBean(ConsistencyCalculator.class))
@@ -114,29 +115,79 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
+        // 미터 기록기를 직접 주입하지 않는다. 그러면 "MeterRegistry → meterEventRecorder →
+        // 합성 빈" 배선이 끊겨도 테스트가 통과한다 — 단언 대상은 컨텍스트의 레지스트리다.
     void fansOutToTheCampaignMeterAndKafkaPublisher() {
         AtomicInteger publisherCalls = new AtomicInteger();
-        SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder meterRecorder = new MeterEventRecorder(registry);
 
         contextRunner
-                .withBean("meterEventRecorder", MeterEventRecorder.class, () -> meterRecorder)
                 .withBean("attemptEventPublisher", EventRecorder.class,
                         () -> event -> publisherCalls.incrementAndGet())
                 .run(context -> {
-                    IssuanceFlowEvent.Ctx eventContext = new IssuanceFlowEvent.Ctx(
-                            "fanout", 101L, 201L, Grade.GOLD, false,
-                            Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
-                            QueueMode.ADAPTIVE, 901L, "api-1"
-                    );
-
                     context.getBean(EventRecorder.class).record(context
-                            .getBean(IssuanceFlowEventFactory.class).issueAttempt(eventContext));
+                            .getBean(IssuanceFlowEventFactory.class)
+                            .issueAttempt(eventContext("fanout")));
 
                     assertThat(publisherCalls).hasValue(1);
-                    assertThat(registry.find(MeterNames.ISSUANCE_FLOW)
+                    assertThat(context.getBean(MeterRegistry.class).find(MeterNames.ISSUANCE_FLOW)
                             .tags("coupon_id", "201", "stage", "attempt").counter().count())
                             .isEqualTo(1.0);
+                });
+    }
+
+    @Test
+        // 사용자가 자기 기록기에 붙일 법한 첫 번째 이름이 eventRecorder 다. 자동설정이 그 이름을
+        // 쥐고 있으면 정의 덮어쓰기 금지에 걸려 기동이 죽는다.
+    void doesNotClaimTheEventRecorderBeanNameForItself() {
+        AtomicInteger auditCalls = new AtomicInteger();
+
+        contextRunner
+                .withBean("eventRecorder", EventRecorder.class,
+                        () -> event -> auditCalls.incrementAndGet())
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(EventRecorder.class))
+                            .isInstanceOf(CompositeEventRecorder.class);
+
+                    context.getBean(EventRecorder.class).record(context
+                            .getBean(IssuanceFlowEventFactory.class)
+                            .issueAttempt(eventContext("name-clash")));
+
+                    assertThat(auditCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void includesAUserSuppliedRecorderInTheFanOut() {
+        AtomicInteger publisherCalls = new AtomicInteger();
+        AtomicInteger auditCalls = new AtomicInteger();
+
+        contextRunner
+                .withBean("attemptEventPublisher", EventRecorder.class,
+                        () -> event -> publisherCalls.incrementAndGet())
+                .withBean("auditEventRecorder", EventRecorder.class,
+                        () -> event -> auditCalls.incrementAndGet())
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(MeterEventRecorder.class);
+
+                    context.getBean(EventRecorder.class).record(context
+                            .getBean(IssuanceFlowEventFactory.class).issueAttempt(eventContext("fanout")));
+
+                    assertThat(publisherCalls).hasValue(1);
+                    assertThat(auditCalls).hasValue(1);
+                });
+    }
+
+    @Test
+    void startsWithAUserSuppliedRecorderWhileKafkaIsDisabled() {
+        contextRunner
+                .withBean("auditEventRecorder", EventRecorder.class, () -> event -> { })
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(MeterEventRecorder.class);
+                    assertThat(context.getBean(EventRecorder.class))
+                            .isInstanceOf(CompositeEventRecorder.class);
                 });
     }
 
@@ -319,6 +370,8 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
+    // EventRecorder 만 예외다. 나머지는 사용자 빈이 자동설정을 대체하지만, 기록기는 대체가
+    // 아니라 합류한다 — 관측 sink 를 하나 얹었다고 캠페인 미터가 사라지면 안 된다.
     void backsOffWhenImplementationsExist() {
         EventRecorder eventRecorder = event -> { };
         IssuanceFlowEventFactory eventFactory = new IssuanceFlowEventFactory(
@@ -336,14 +389,23 @@ class ApiObservationAutoConfigurationTest {
                 .withBean(ConsistencyCalculator.class, () -> calculator)
                 .withBean(ConsistencySeverityPolicy.class, () -> policy)
                 .run(context -> {
-                    assertThat(context).hasSingleBean(EventRecorder.class);
                     assertThat(context).hasSingleBean(ConsistencyCalculator.class);
-                    assertThat(context.getBean(EventRecorder.class)).isSameAs(eventRecorder);
+                    assertThat(context.getBean(EventRecorder.class))
+                            .isInstanceOf(CompositeEventRecorder.class);
+                    assertThat(context.getBeansOfType(EventRecorder.class)).containsValue(eventRecorder);
                     assertThat(context.getBean(IssuanceObservationService.class))
                             .isSameAs(observationService);
                     assertThat(context.getBean(ConsistencyCalculator.class)).isSameAs(calculator);
                     assertThat(context.getBean(ConsistencySeverityPolicy.class)).isSameAs(policy);
                 });
+    }
+
+    private static IssuanceFlowEvent.Ctx eventContext(String requestId) {
+        return new IssuanceFlowEvent.Ctx(
+                requestId, 101L, 201L, Grade.GOLD, false,
+                Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
+                QueueMode.ADAPTIVE, 901L, "api-1"
+        );
     }
 
     private static DataSource dataSource() {

@@ -60,7 +60,7 @@ class KafkaLayerWiringTest {
     void kafkaConfigLayerIsScannedFromTheApiContext() {
         assertThat(context.getBeanNamesForType(EventRecorder.class))
                 .as("발급 이벤트는 Kafka 발행과 JVM 내 미터를 함께 지나야 한다")
-                .contains("attemptEventPublisher", "eventRecorder");
+                .contains("attemptEventPublisher", "meterEventRecorder", "issuanceEventRecorder");
         assertThat(context.getBean(EventRecorder.class)).isInstanceOf(CompositeEventRecorder.class);
         assertThat(context.getBeansOfType(MeterEventRecorder.class)).hasSize(1);
         assertThat(context.containsBean("fallbackEventRecorder")).isFalse();

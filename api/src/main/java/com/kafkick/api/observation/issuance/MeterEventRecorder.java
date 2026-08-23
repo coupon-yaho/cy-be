@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.atomic.AtomicLong;
@@ -36,9 +37,7 @@ public final class MeterEventRecorder implements EventRecorder {
     private final Counter issuedOutcome;
     private final Counter queuedOutcome;
     private final Counter campaignLimitExceeded;
-    private final long failureLogIntervalNanos;
-    private final AtomicLong recordFailures = new AtomicLong();
-    private final AtomicLong nextFailureLogAtNanos = new AtomicLong(System.nanoTime());
+    private final FailureLogThrottle failureLog;
 
     public MeterEventRecorder(MeterRegistry meterRegistry) {
         this(meterRegistry, IssuanceObservationService.DEFAULT_LOG_INTERVAL);
@@ -46,7 +45,7 @@ public final class MeterEventRecorder implements EventRecorder {
 
     public MeterEventRecorder(MeterRegistry meterRegistry, Duration failureLogInterval) {
         this.meterRegistry = Objects.requireNonNull(meterRegistry, "meterRegistry");
-        this.failureLogIntervalNanos = requirePositive(failureLogInterval).toNanos();
+        this.failureLog = new FailureLogThrottle(failureLogInterval);
         for (ReasonCode reasonCode : ReasonCode.values()) {
             rejectedOutcomes.put(reasonCode, outcomeCounter(reasonCode.name()));
         }
@@ -185,16 +184,13 @@ public final class MeterEventRecorder implements EventRecorder {
             IssuanceFlowEvent event,
             RuntimeException exception
     ) {
-        long total = recordFailures.incrementAndGet();
-        long now = System.nanoTime();
-        long due = nextFailureLogAtNanos.get();
-        if (now - due < 0 || !nextFailureLogAtNanos.compareAndSet(
-                due, now + failureLogIntervalNanos)) {
+        OptionalLong total = failureLog.recordFailure();
+        if (total.isEmpty()) {
             return;
         }
         log.warn("캠페인 발급 미터 기록에 실패했습니다. 업무 흐름은 계속 진행합니다. "
                         + "누적 {}건, eventType={}, couponId={}, cause={}",
-                total,
+                total.getAsLong(),
                 event == null ? null : event.eventType(),
                 event == null ? null : event.couponId(),
                 exception.getClass().getSimpleName());
@@ -203,14 +199,6 @@ public final class MeterEventRecorder implements EventRecorder {
     private static double epochValue(AtomicLong epoch) {
         long value = epoch.get();
         return value == NO_EVENT_EPOCH ? Double.NaN : value;
-    }
-
-    private static Duration requirePositive(Duration interval) {
-        Objects.requireNonNull(interval, "failureLogInterval");
-        if (interval.isZero() || interval.isNegative()) {
-            throw new IllegalArgumentException("failureLogInterval must be positive");
-        }
-        return interval;
     }
 
     private record CampaignMeters(

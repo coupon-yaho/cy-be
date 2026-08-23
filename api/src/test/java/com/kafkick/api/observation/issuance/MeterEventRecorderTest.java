@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -94,7 +95,6 @@ class MeterEventRecorderTest {
 
         recorder.record(factory.issueAttempt(context(201L)));
         recorder.record(factory.issueAttempt(context(201L)));
-        System.gc();
 
         assertThat(registry.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "201").counters())
                 .hasSize(2);
@@ -186,16 +186,29 @@ class MeterEventRecorderTest {
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
         int countersBeforeCampaignRegistration = registry.counterCreations.get();
         int gaugesBeforeCampaignRegistration = registry.gaugeCreations.get();
-        var executor = Executors.newFixedThreadPool(8);
+        // 스레드를 순차 소비하면 대부분 등록이 끝난 뒤 실행되어 최초 등록 경합 창이 닫힌다.
+        // 32개를 모두 띄워 놓고 한 번에 발사해야 campaignMeters 진입이 실제로 겹친다.
+        int concurrency = 32;
+        CountDownLatch ready = new CountDownLatch(concurrency);
+        CountDownLatch fire = new CountDownLatch(1);
+        var executor = Executors.newFixedThreadPool(concurrency);
         try {
             List<Callable<Void>> tasks = new ArrayList<>();
-            for (int index = 0; index < 32; index++) {
+            for (int index = 0; index < concurrency; index++) {
                 tasks.add(() -> {
+                    ready.countDown();
+                    if (!fire.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("발사 신호가 오지 않았다");
+                    }
                     recorder.record(factory.issueAttempt(context(201L)));
                     return null;
                 });
             }
-            executor.invokeAll(tasks).forEach(future -> {
+            List<java.util.concurrent.Future<Void>> futures = new ArrayList<>();
+            tasks.forEach(task -> futures.add(executor.submit(task)));
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            fire.countDown();
+            futures.forEach(future -> {
                 try {
                     future.get();
                 } catch (Exception exception) {
@@ -213,6 +226,13 @@ class MeterEventRecorderTest {
                 "coupon_id", "201", "stage", "attempt")).isEqualTo(32.0);
         assertThat(registry.counterCreations).hasValue(countersBeforeCampaignRegistration + 3);
         assertThat(registry.gaugeCreations).hasValue(gaugesBeforeCampaignRegistration + 2);
+
+        // 미터 개수만 세면 등록이 겹쳐도 통과한다 — Micrometer 가 같은 id 를 합쳐 주기 때문이다.
+        // 겹치면 갈라지는 것은 gauge 가 읽는 홀더다. 등록이 두 번 일어나면 맵에 남은 CampaignMeters
+        // 의 홀더와 registry 가 붙든 홀더가 달라져, 성공을 아무리 기록해도 gauge 는 NaN 에 멈춘다.
+        recorder.record(factory.issued(context(201L), 1L, "coupon-code-0001"));
+        assertThat(gauge(registry, MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH, "coupon_id", "201"))
+                .isEqualTo(1_787_443_200d);
     }
 
     @Test
