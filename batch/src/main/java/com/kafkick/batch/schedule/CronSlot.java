@@ -2,6 +2,7 @@
 package com.kafkick.batch.schedule;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.time.LocalDateTime;
 
 import org.springframework.scheduling.support.CronExpression;
@@ -62,6 +63,44 @@ public final class CronSlot {
 
     public CronSlot(String cron) {
         this.expression = CronExpression.parse(cron);
+    }
+
+    /**
+     * 앞으로 {@code horizon} 동안 나타나는 <b>연속 발화 사이의 최대 간격.</b>
+     *
+     * <p><b>"주기" 라고 안 부르는 이유가 있다.</b> 크론에 주기가 늘 있는 것이 아니다 —
+     * {@code 0 0 4 * * MON-FRI} 는 금요일과 월요일 사이가 72시간이라, 연속 두 발화의 차로는
+     * 최악을 못 잡는다. 그래서 창을 걷어 <b>가장 넓은 간격</b>을 돌려준다.
+     *
+     * <p>쓰는 곳은 하나다 — 만료가 검증을 피해 슬롯을 건너뛸 때 생기는 <b>최대 지연</b>이
+     * {@code ExpireNotSucceeding} 의 SLA 예산 안에 드는지 기동 때 검사하는 자리다.
+     * 그 검사가 없으면 {@code max-expire-skips} 를 2 로만 올려도 정상 상태에서 오탐
+     * critical 이 난다.
+     */
+    public Optional<Duration> maxGap(LocalDateTime from, Duration horizon) {
+        LocalDateTime end = from.plus(horizon);
+        LocalDateTime first = expression.next(from);
+        if (first == null || !first.isBefore(end)) {
+            // 창 안에 한 번도 안 돈다. 테스트가 발화를 막으려고 먼 미래 크론
+            // (0 0 0 1 1 *)을 주는 것이 이 저장소의 관행이고, 그때 "간격" 은 뜻이 없다.
+            // 비어 있음을 그대로 돌려줘 부르는 쪽이 판단하게 한다 —
+            // 0 을 돌려주면 "간격이 없다(=즉시 반복)" 와 구분되지 않는다.
+            return Optional.empty();
+        }
+
+        Duration worst = Duration.between(from, first);
+        for (LocalDateTime cursor = first; cursor.isBefore(end); ) {
+            LocalDateTime next = expression.next(cursor);
+            if (next == null) {
+                break;
+            }
+            Duration gap = Duration.between(cursor, next);
+            if (gap.compareTo(worst) > 0) {
+                worst = gap;
+            }
+            cursor = next;
+        }
+        return Optional.of(worst);
     }
 
     /**

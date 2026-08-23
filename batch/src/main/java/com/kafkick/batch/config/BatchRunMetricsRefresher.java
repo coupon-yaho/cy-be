@@ -48,6 +48,13 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 되읽기가 멈춘 순간 그 값이 <b>얼어붙어 임계 아래에 머문다</b> — 감시가 꺼진 채 조용하다.
  * 시각을 내면 {@code time() - 게이지} 가 계속 자라 알림이 뜬다.
  *
+ * <p><b>SQL 을 여기서 직접 친다 — 포트를 안 만든다.</b> 이 저장소의 "리포지토리 밖 raw SQL"
+ * 규약은 <b>도메인 데이터</b>에 대한 것이다(같은 절의 나머지가 컨트롤러·서비스·엔티티·DTO·
+ * Redis/Kafka 다). {@code BATCH_JOB_EXECUTION} 은 도메인이 아니라 <b>프레임워크 메타</b>라,
+ * 그것을 {@code core} 의 포트 뒤로 넣으면 도메인이 스프링 배치 스키마를 알게 된다 —
+ * 레이어링이 나아지는 것이 아니라 반대로 간다. 같은 패키지의 {@code BinlogFormatGuard} 도
+ * 같은 이유로 {@code JdbcClient} 를 직접 쓴다.
+ *
  * <p><b>{@code batch.scheduling.enabled} 에 묶지 않는다.</b> 그 스위치는 <i>원본을 쓰는 잡을
  * 돌릴 것인가</i> 를 정하는데 이것은 읽기만 한다. 묶으면 스케줄러를 끈 채 띄우는 기동에서
  * 지표가 통째로 죽고, 그때야말로 <i>"마지막으로 언제 돌았나"</i> 를 봐야 하는 자리다.

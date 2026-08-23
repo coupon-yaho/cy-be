@@ -146,11 +146,18 @@ public final class RunningJobFixture implements AutoCloseable {
      */
     public static RunningJobFixture plantCompleted(JobRepository jobRepository, String jobName,
             LocalDateTime key, Duration endedAgo) {
+        // now() 를 한 번만 읽는다. 두 번 읽으면 시작 시각과 종료 시각이 서로 다른 기준을
+        // 갖고, 창 경계(7일) 테스트가 그 사이 오차만큼 흔들린다.
+        //
+        // 고정 시계(Clock.fixed)는 여기서 쓸 수 없다. 조회 창이 **DB 의 NOW()** 를 기준으로
+        // 자르므로, 심는 값이 그 시계와 같은 흐름 위에 있어야 한다 — 고정 시계로 심으면
+        // 테스트가 도는 시점에 따라 창 안팎이 뒤집힌다. 그래서 상대(Duration)로 받는다.
+        LocalDateTime endedAt = LocalDateTime.now().minus(endedAgo);
         RunningJobFixture fixture = plantWithoutStep(
-                jobRepository, jobName, key, LocalDateTime.now().minus(endedAgo).minusMinutes(1));
+                jobRepository, jobName, key, endedAt.minusMinutes(1));
 
         fixture.execution.setStatus(BatchStatus.COMPLETED);
-        fixture.execution.setEndTime(LocalDateTime.now().minus(endedAgo));
+        fixture.execution.setEndTime(endedAt);
         jobRepository.update(fixture.execution);
 
         return fixture;

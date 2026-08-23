@@ -262,7 +262,7 @@ if (!verifying.isEmpty()) { log.warn(...); return; }
 | | 값 | 뜻 |
 |---|---|---|
 | `BatchJobRunningTooLong` | 300초 | **살아서** 느리게 돌고 있다 |
-| `batch.stuck-job-after-ms` | 600,000ms | 진도가 멈췄다 — 죽은 것으로 본다 |
+| `batch.stuck-job-after-ms` | 1,800,000ms | 진도가 멈췄다 — 죽은 것으로 본다 |
 
 **뒤가 앞보다 반드시 커야 한다.** 같은 숫자를 쓰면 *"살아 있다"* 와 *"죽었다"* 가 한 값을
 공유한다. `.example` 에 그 제약을 적어 뒀다.

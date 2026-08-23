@@ -133,6 +133,14 @@ batch:
     # 커넥션 풀이 마른 날 다음 주기도 안 돈다. 스프링 트랜잭션 타임아웃이 초 단위라
     # 1000 의 배수여야 한다 — 아니면 기동 때 거절한다.
     run-timeout-ms: ${BATCH_RUN_METRICS_TIMEOUT_MS:5000}
+    # ExpireNotSucceeding 이 쓰는 SLA. **알림 식의 900 과 같은 값이어야 한다** —
+    # 프로메테우스는 앱 설정을 못 읽으므로 두 곳이 손으로 맞춰져 있다.
+    #
+    # 여기 있는 이유는 기동 가드 때문이다. ExpireScheduler 생성자가
+    #   (max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms  <  이 값
+    # 을 검사해 안 맞으면 기동을 거절한다. 그 검사가 없으면 max-expire-skips 를 2 로만
+    # 올려도 정상 상태에서 오탐 critical 이 난다(960 > 900).
+    expire-sla-seconds: ${EXPIRE_SLA_SECONDS:900}
 
   # 실행 중으로 남은 잡을 언제부터 "시체" 로 볼 것인가. 만료↔검증 상호 배제가 이 값을 쓴다.
   #

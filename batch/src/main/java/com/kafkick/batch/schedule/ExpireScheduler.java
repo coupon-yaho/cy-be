@@ -1,6 +1,7 @@
 // 만료 잡을 주기로 띄웁니다. 부하 중에는 이 빈이 아예 만들어지지 않습니다.
 package com.kafkick.batch.schedule;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -99,6 +100,13 @@ public class ExpireScheduler {
      */
     static final String ZONE = "${batch.schedule.zone:UTC}";
 
+    /**
+     * SLA 예산 검사가 크론을 들여다보는 창. 주 단위 크론(평일만·월요일만)까지 품는 폭이다.
+     * 이보다 드물게 도는 것은 만료 배치의 주기로 쓸 값이 아니다 — {@code CronSlot} 이
+     * 되짚기 상한을 정한 근거와 같다.
+     */
+    private static final Duration SLA_CHECK_HORIZON = Duration.ofDays(8);
+
     private final JobOperator jobOperator;
     private final Job expireJob;
     private final TimeProvider timeProvider;
@@ -124,7 +132,9 @@ public class ExpireScheduler {
             @Value(CRON) String expireCron,
             RunningJobProbe runningJobs,
             ExpireMetrics metrics,
-            @Value("${batch.schedule.max-expire-skips:1}") int maxSkips) {
+            @Value("${batch.schedule.max-expire-skips:1}") int maxSkips,
+            @Value("${batch.metrics.expire-sla-seconds:900}") long slaSeconds,
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
@@ -139,6 +149,37 @@ public class ExpireScheduler {
         }
         this.cronSlot = new CronSlot(expireCron);
         this.expireCron = expireCron;
+
+        // **건너뛰기가 SLA 예산을 먹는다.** ExpireNotSucceeding 은
+        // time() - 마지막성공 > SLA 로 보는데, 여기서 슬롯을 건너뛰면 그만큼 성공 간격이
+        // 벌어진다. 게이지도 되읽기 주기만큼 늦게 갱신되므로 그 몫까지 더해야 한다.
+        //
+        // max-expire-skips 는 "검증이 자꾸 밀린다" 고 느낀 운영자가 가장 먼저 올리는
+        // 손잡이인데, 기본 크론(5분)에서 **2 로만 올려도 960 > 900 이라 정상 상태에서
+        // 오탐 critical 이 난다.** 그러면 그 알림이 무시되기 시작하고, 진짜 만료 정지가
+        // 같은 알림으로 뜰 때 아무도 안 본다 — 이 저장소가 없애려는 바로 그 상태다.
+        //
+        // .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다.
+        Duration worstDelay = cronSlot
+                .maxGap(timeProvider.now(), SLA_CHECK_HORIZON)
+                .map(gap -> gap.multipliedBy(maxSkips + 1L).plusMillis(refreshMillis))
+                // 창 안에 한 번도 안 도는 크론이면 이 검사가 성립하지 않는다.
+                // 조용히 넘기지 않고 남긴다 — 운영에서 그런 크론이 뜨면 그 자체가 사건이다.
+                .orElseGet(() -> {
+                    log.warn("만료 크론이 {}일 안에 한 번도 안 돕니다. SLA 예산 검사를 "
+                                    + "건너뜁니다. cron={}", SLA_CHECK_HORIZON.toDays(), expireCron);
+                    return Duration.ZERO;
+                });
+        if (worstDelay.toSeconds() >= slaSeconds) {
+            throw new IllegalArgumentException(
+                    "만료 지연 상한이 ExpireNotSucceeding 의 SLA 를 넘습니다. "
+                            + "(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms = "
+                            + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
+                            + "정상 상태에서 오탐 critical 이 납니다 — "
+                            + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "
+                            + "올리십시오(알림 식의 900 도 함께 고쳐야 합니다). "
+                            + "cron=" + expireCron + " max-expire-skips=" + maxSkips);
+        }
         this.runningJobs = runningJobs;
         this.metrics = metrics;
         this.maxSkips = maxSkips;

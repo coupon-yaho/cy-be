@@ -225,7 +225,7 @@ class ExpireSchedulerReportingTest {
         new ExpireScheduler(operator((job, params) -> {
             used[0] = params;
             return execution(BatchStatus.COMPLETED, null);
-        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON, noVerifyRunning(), throwawayMetrics(), 1).expire();
+        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON, noVerifyRunning(), throwawayMetrics(), 1, 900L, 60_000L).expire();
         return used[0].getLocalDateTime("asOf");
     }
 
@@ -330,7 +330,7 @@ class ExpireSchedulerReportingTest {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(),
                 ZoneId.systemDefault());
         return new ExpireScheduler(operator, EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON,
-                noVerifyRunning(), throwawayMetrics(), 1);
+                noVerifyRunning(), throwawayMetrics(), 1, 900L, 60_000L);
     }
 
     private JobExecution execution(BatchStatus status, Throwable failure) {
