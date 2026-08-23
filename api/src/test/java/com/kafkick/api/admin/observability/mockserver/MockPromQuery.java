@@ -120,7 +120,10 @@ public final class MockPromQuery implements PromQuery {
         double clientInvalid = total * 0.012;
         double dependencyFailure = total * 0.004;
         double applicationFailure = total * 0.002;
-        double success = Math.max(0, total * 0.93);
+        // issue 그룹 행의 합이 곧 attempts 다(PromMetricsAssembler.traffic).
+        // success 를 고정 비율로 두면 합계가 total 에서 어긋난다 — 나머지를 뺀 값으로 둔다.
+        double success = Math.max(
+                0, total - policyReject - clientInvalid - dependencyFailure - applicationFailure);
         double queueAccepted = total * 0.052;
 
         List<PromSample> samples = new ArrayList<>();
