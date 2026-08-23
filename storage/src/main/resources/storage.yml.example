@@ -21,7 +21,9 @@ spring:
     properties:
       hibernate:
         jdbc:
-          time_zone: UTC   # 서버 default-time-zone='+00:00' 과 일치
+          # base.yml 이 mysql 을 --default-time-zone=+00:00 으로 띄운다(CY-392 가 박았다).
+          # 그 전에는 이 줄이 없는 사실을 적고 있었다 — 서버 기본은 time_zone=SYSTEM 이다.
+          time_zone: UTC
           batch_size: 100
         order_inserts: true
         order_updates: true

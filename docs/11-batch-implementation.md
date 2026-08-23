@@ -265,6 +265,10 @@ core/src/main/java/com/kafkick/core/
 | `spring.datasource.hikari.maximum-pool-size` | `4` | `10` | storage.yml 이 이김 |
 | `spring.datasource.hikari.pool-name` | `batch-pool` | `batch-pool` | storage.yml 에 같은 키가 없음 |
 
+> ⚠️ **이 표는 그때의 관측이다.** `4` 는 당시 batch 가 적던 값이고, 지금 기본값은 `8` 이다
+> (CY-392 가 되읽기 스케줄러를 늘리며 올렸다). 관측 기록에는 그날의 값을 남긴다 —
+> 계산값이나 현재값으로 덮으면 다음 사람이 그것을 관측 근거로 인용한다.
+
 **에러도 경고도 없다.** 기동은 되고 값만 다르다. 그래서 두 결정이 동시에 깨져 있었다 —
 마이그레이션 소유자를 api 하나로 두기로 한 것과, 배치 풀을 런타임과 나누기로 한 것.
 
@@ -310,7 +314,12 @@ Flyway 를 끄는 이유는 계층 2 의 불변식이다 — 검증 배치가 DD
 ### 풀 크기 손잡이가 바뀌었다
 
 이 변경 전에는 storage.yml 이 이겨서 **batch 풀도 `DB_POOL_SIZE` 가 움직였다.**
-이제 `BATCH_DB_POOL_SIZE` 다. `DB_POOL_SIZE` 만 주던 배포는 batch 쪽이 10 에서 4 로 바뀐다.
+이제 `BATCH_DB_POOL_SIZE` 다. `DB_POOL_SIZE` 만 주던 배포는 batch 쪽이 10 에서 8 로 바뀐다.
+
+> **4 였다가 8 이 됐다(CY-392).** 되읽기 스케줄러가 둘로 늘면서 최악 동시 소비자가
+> 여섯이 됐기 때문이다 — 검증 스텝 tx · 검증 JobRepository · 만료 스텝 tx ·
+> 만료 JobRepository · 되읽기 둘. 두 잡이 겹치는 것은 예외가 아니라 설계다
+> (`max-expire-skips` 상한을 넘으면 만료를 돌린다). 근거는 `.example` 에 적었다.
 
 ### 테스트가 지킨다 — 실패 원인이 갈리도록 나눴다
 

@@ -1,6 +1,7 @@
 // 만료 잡을 주기로 띄웁니다. 부하 중에는 이 빈이 아예 만들어지지 않습니다.
 package com.kafkick.batch.schedule;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -36,7 +37,7 @@ import com.kafkick.core.support.TimeProvider;
  * 다르기 때문이다 — 켜진 채 검증 셋을 보면 되돌릴 수 없고, 꺼진 채 운영을 보면 나중에 돌려
  * 따라잡을 수 있기 때문이다.
  *
- * <p><b>{@code BatchJobNotRunning} 은 CY-359 부터 실제로 평가된다</b>
+ * <p><b>{@code ExpireNotSucceeding} 은 CY-359 부터 실제로 평가된다</b>
  * ({@code infra/prometheus/prometheus.yml} 이 그 사실을 적어 두었고 {@code base.yml} 이
  * 규칙 디렉터리를 마운트한다). 그래서 이 기본값의 반대편 사고 — 스케줄러가 꺼진 채 뜨는 것 —
  * 는 감지된다.
@@ -99,6 +100,19 @@ public class ExpireScheduler {
      */
     static final String ZONE = "${batch.schedule.zone:UTC}";
 
+    /**
+     * SLA 예산 검사가 크론을 들여다보는 창.
+     *
+     * <p><b>연 단위까지 품는다.</b> 좁게 잡으면 드문 크론이 "간격을 못 잼" 으로 빠지는데,
+     * 그것을 통과로 접으면 SLA 를 못 맞추는 설정이 조용히 뜨고 거절로 접으면 발화를 막으려
+     * 먼 미래 크론을 쓰는 테스트가 통째로 막힌다. <b>측정 가능하게 만들어 판정은 SLA 값이
+     * 하게 하는 것</b>이 두 문제를 한 번에 없앤다 — 연 1회 크론은 SLA 를 그만큼 크게 주면
+     * 통과하고, 안 주면 거절된다.
+     *
+     * <p>걷는 비용은 {@code CronSlot} 이 발화 수로 따로 묶는다.
+     */
+    private static final Duration SLA_CHECK_HORIZON = Duration.ofDays(400);
+
     private final JobOperator jobOperator;
     private final Job expireJob;
     private final TimeProvider timeProvider;
@@ -124,7 +138,9 @@ public class ExpireScheduler {
             @Value(CRON) String expireCron,
             RunningJobProbe runningJobs,
             ExpireMetrics metrics,
-            @Value("${batch.schedule.max-expire-skips:1}") int maxSkips) {
+            @Value("${batch.schedule.max-expire-skips:1}") int maxSkips,
+            @Value("${batch.metrics.expire-sla-seconds:900}") long slaSeconds,
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
@@ -139,6 +155,43 @@ public class ExpireScheduler {
         }
         this.cronSlot = new CronSlot(expireCron);
         this.expireCron = expireCron;
+
+        // **건너뛰기가 SLA 예산을 먹는다.** ExpireNotSucceeding 은
+        // time() - 마지막성공 > SLA 로 보는데, 여기서 슬롯을 건너뛰면 그만큼 성공 간격이
+        // 벌어진다. 게이지도 되읽기 주기만큼 늦게 갱신되므로 그 몫까지 더해야 한다.
+        //
+        // max-expire-skips 는 "검증이 자꾸 밀린다" 고 느낀 운영자가 가장 먼저 올리는
+        // 손잡이인데, 기본 크론(5분)에서 **2 로만 올려도 960 > 900 이라 정상 상태에서
+        // 오탐 critical 이 난다.** 그러면 그 알림이 무시되기 시작하고, 진짜 만료 정지가
+        // 같은 알림으로 뜰 때 아무도 안 본다 — 이 저장소가 없애려는 바로 그 상태다.
+        //
+        // .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다.
+        Duration worstDelay = cronSlot
+                .maxGap(timeProvider.now(), SLA_CHECK_HORIZON)
+                .map(gap -> gap.multipliedBy(maxSkips + 1L).plusMillis(refreshMillis))
+                // **창 안에 한 번도 안 도는 크론은 통과가 아니라 거절이다.** 그런 크론은
+                // 어떤 SLA 도 만족시킬 수 없다 — 만료가 8일에 한 번도 안 도는데 "성공이
+                // 오래됐다" 알림이 조용할 수는 없기 때문이다. 여기서 Duration.ZERO 로 접으면
+                // 그 설정이 조용히 뜨고, 알림은 배포 직후부터 영구히 운다.
+                //
+                // 테스트가 발화를 막으려고 먼 미래 크론을 주는 관행이 있는데, 그쪽은
+                // batch.metrics.expire-sla-seconds 를 함께 올려 "이 크론에서는 SLA 검사가
+                // 뜻이 없다" 를 명시한다 — 조용히 넘기는 것과 다르다.
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "만료 크론이 " + SLA_CHECK_HORIZON.toDays() + "일 안에 한 번도 안 돕니다. "
+                                + "그런 주기로는 ExpireNotSucceeding 의 SLA(" + slaSeconds
+                                + "초)를 만족할 수 없습니다 — 만료를 끄려면 "
+                                + "batch.scheduling.enabled=false 를 쓰십시오. cron=" + expireCron));
+        if (worstDelay.toSeconds() >= slaSeconds) {
+            throw new IllegalArgumentException(
+                    "만료 지연 상한이 ExpireNotSucceeding 의 SLA 를 넘습니다. "
+                            + "(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms = "
+                            + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
+                            + "정상 상태에서 오탐 critical 이 납니다 — "
+                            + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "
+                            + "올리십시오(알림 식의 900 도 함께 고쳐야 합니다). "
+                            + "cron=" + expireCron + " max-expire-skips=" + maxSkips);
+        }
         this.runningJobs = runningJobs;
         this.metrics = metrics;
         this.maxSkips = maxSkips;

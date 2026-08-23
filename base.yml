@@ -6,7 +6,7 @@
 # "base.yml 은 한 글자도 안 바뀌므로 비교표의 동일 리소스 limit 이 유지된다" 가 그 근거라,
 # 여기에 batch 를 넣으면 k6 측정 프로토콜이 깨진다.
 #
-# ⚠️ 관제도 base 에 둔다. 부하 중에는 batch 가 없어 BatchJobNotRunning 이 뜨는데,
+# ⚠️ 관제도 base 에 둔다. 부하 중에는 batch 가 없어 BatchTargetDown 이 뜨는데,
 #    그것은 silence 로 다룬다 — 규칙에 예외를 파면 "일부러 껐다" 와 "꺼져 버렸다" 가
 #    같은 값이 된다. docs/14 4단계에 결정과 명령이 있다.
 #
@@ -19,6 +19,17 @@ name: cy
 services:
   mysql:
     image: mysql:8.4
+    # ⚠️ 세션 존을 못 박는다. CY-392 의 cy_batch_last_success_seconds 가
+    #    UNIX_TIMESTAMP(END_TIME) 으로 에폭을 내는데, 그 값은 **저장된 값을 세션 존으로**
+    #    해석한 것이다. 드라이버는 URL 의 serverTimezone(UTC)으로 변환해 쓰므로,
+    #    둘이 갈리면 게이지가 그 차이만큼 어긋난다 — 과거 방향이면 ExpireNotSucceeding 이
+    #    영구 발화하고, 배치는 멀쩡한데 "만료가 SLA 안에 성공하지 못했습니다" 가 나간다.
+    #
+    #    mysql:8.4 의 기본은 time_zone=SYSTEM 이라 **컨테이너 OS 존**을 따른다.
+    #    지금까지 맞았던 것은 그것이 우연히 UTC 였기 때문이다. TZ 를 얹거나
+    #    /etc/localtime 을 마운트하는 순간 깨진다. 테스트 컨테이너는 이미 같은 값을 쓴다
+    #    (MySqlContainerConfig 의 --default-time-zone=+00:00).
+    command: ["--default-time-zone=+00:00"]
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: ${DB_NAME:-app}

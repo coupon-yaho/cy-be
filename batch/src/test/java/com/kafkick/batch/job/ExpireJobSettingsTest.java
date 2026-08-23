@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
  * 있으니 이쪽도 막는다.
  *
  * <p>감지 수단이 없다는 것이 근거다 — 잡은 {@code COMPLETED} 라 스케줄러가 로그를 안 남기고,
- * {@code BatchJobNotRunning} 알림은 잡이 <i>도는지</i>만 보므로 울리지 않는다.
+ * {@code ExpireNotSucceeding} 알림은 잡이 <i>성공했는지</i>만 보므로 울리지 않는다.
  * 검증도 안 잡는다(만료 지연은 finding 이 아니라 관측 지표로 정해 뒀다).
  *
  * <p><b>컨텍스트를 안 띄운다.</b> 이 검사는 생성자 안에 있고, 그것을 확인하는 데 컨테이너가

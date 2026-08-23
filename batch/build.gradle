@@ -31,6 +31,20 @@ dependencies {
     testImplementation 'org.springframework.batch:spring-batch-test'
 }
 
+tasks.named('test') {
+    // **JVM 존을 DB 와 일부러 어긋나게 둔다.**
+    //
+    // MySqlContainerConfig 가 컨테이너를 --default-time-zone=+00:00 로 띄우는데, CI 러너의
+    // JVM 존도 UTC 라 둘이 같아진다. 그러면 드라이버의 존 변환이 항등이 되어
+    // **시간대 버그를 재현할 수 없다** — BatchRunMetricsRefresher 가 UNIX_TIMESTAMP 를 쓰는
+    // 대신 자바에서 변환하도록 되돌려도 CI 는 초록이다. 실제로 이 프로젝트에서 그 자리가
+    // 아홉 시간 어긋난 적이 있고(CY-392), 그때 잡아 준 것이 개발 기기의 KST 뿐이었다.
+    //
+    // user.timezone 은 JVM 기동 시점에 잡혀야 Connector/J 가 캐시하는 기본 존과도 맞는다 —
+    // 테스트 안에서 TimeZone.setDefault 로 바꾸면 이미 열린 커넥션이 옛 존을 들고 있다.
+    systemProperty 'user.timezone', 'Asia/Seoul'
+}
+
 bootJar {
     enabled = true
 }

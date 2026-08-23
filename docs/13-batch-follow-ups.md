@@ -475,13 +475,29 @@ api 의 쓰기는 애초에 안 잡힌다.
 | | 무엇 | 선행 |
 |---|---|---|
 | **A** | ~~검증 가드를 실행 중 검사로~~ **완료 · CY-384** | — |
-| **B** | `expire`·`verify` 의 `last_success_seconds` 게이지 + SLA 알림. `BatchJobNotRunning` 대체. **진도가 멈춘 실행(`cy_stuck_executions`)도 여기서 지표로 낸다** — 지금은 WARN 로그가 유일한 신호다 | — |
-| **C** | 만료 04:10 · 정리 04:30 으로 이동 + 시연용 크론 override. **정리에 `asof_state` 를 넣는다** — 아래 참조 | A · B |
+| **B** | ~~배치 감시를 마지막 성공 시각으로~~ **완료 · CY-392** — 지표 셋(`cy_batch_last_success_seconds{spring_batch_job_name}`·`cy_batch_stuck_executions{spring_batch_job_name}`·`cy_batch_refresh_failures_total`) + 규칙 일곱(`ExpireNotSucceeding`·`ExpireNeverSucceeded`·`ExpireGaugeMissing`·`BatchTargetDown`·`BatchStuckExecution`·`BatchRunMetricsUnknown`·`BatchRunMetricsStale`) | — |
+| **C** | 만료 04:10 · 정리 04:30 으로 이동 + 시연용 크론 override. **정리에 `asof_state` 를 넣는다** — 아래 참조. `ExpireNotSucceeding` 의 SLA(지금 900초)·`BatchJobRunningTooLong` 의 `expireJob` 임계·`verifyJob` SLA 알림을 여기서 함께 세운다. ⚠️ **`verifyJob` SLA 는 `(dataset=CLEAN, scope=FULL)` 그레인이어야 한다** — 지금 게이지는 잡 이름 그레인이라 `CORRUPT` 손트리거 한 번이 SLA 를 리셋한다 | A · B |
 | **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계도 여기서 | C · 300만 적재 |
 
-**B 없이 C 를 하면 감시 공백이 생긴다.** `BatchJobNotRunning` 은 15분 창의 증분으로 보는데,
+**B 없이 C 를 하면 감시 공백이 생긴다.** 예전 `BatchJobNotRunning` 은 15분 창의 증분으로 봤는데,
 일 1회로 옮기면 그 창이 **하루의 대부분 비어** 영구 critical 이 된다. 규칙이 틀린 게 아니라
-축이 안 맞는 것이라, 먼저 *"마지막 성공이 언제였나"* 로 갈아야 한다.
+축이 안 맞는 것이라, 먼저 *"마지막 성공이 언제였나"* 로 갈아야 했다 — **CY-392 가 그것을 했다.**
+`ExpireNotSucceeding` 은 주기를 안 타므로 **축은 그대로다.** 다만 C 가 손댈 곳은 하나가 아니다 —
+숫자가 **열세 자리**에 박혀 있고 — `batch-alerts.yml` 넷(주석 둘·식·summary),
+**`.example` 여섯**(설명 둘 + 산술 넷), `docs/15` 하나, 그리고
+**`BatchRunMetricsRefresher` 의 javadoc 과 기동 거절 예외 메시지 둘**
+(여기가 틀리면 진단 문장이 거짓 숫자를 말한다) —
+`BatchJobRunningTooLong` 의 `expireJob` 임계(`> 300`)와 그 summary 의 *"주기(5분)"* 도 함께
+다시 세워야 한다 — 한 실행의 처리량이 **약 22건에서 약 6,300건으로** 늘기 때문이다.
+`BatchRunMetricsRefresher` 의 조회 창(7일)과 `verifyJob` SLA 의 그레인도 같은 티켓 몫이다.
+
+**같이 풀 것 — SLA 예산을 기동 때 검사하는 곳이 없다.** 지금 성립해야 하는 관계는
+`(max-expire-skips + 1) × 크론 주기 + run-refresh-ms < SLA` 인데, 앞의 두 항이
+환경변수로 자유롭게 커진다. `MAX_EXPIRE_SKIPS=3` 만 줘도 `4 × 300 + 60 = 1260 > 900` 이라
+**아무 사고 없이 critical 이 하루 몇 번씩 뜬다.** `run-refresh-ms` 에는 상한 가드가 있는데
+훨씬 큰 항이 무방비다. `batch.metrics.expire-sla-seconds` 설정 키를 파서 규칙·코드·문서가
+한 값을 보게 하면 위의 아홉 자리도 함께 접힌다. **CY-392 는 여기까지 안 했다** —
+`CronSlot` 이 주기를 안 내주어 계산 수단부터 만들어야 하기 때문이다.
 
 **C 가 A 의 남은 창도 닫는다.** `rejectRunningExpire` 는 통과 직후 만료가 발화하는 창을
 못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`). 만료 04:10 · 검증 05:00 이면
@@ -497,6 +513,54 @@ CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기�
 지금은 양방향 가드가 대부분을 막지만 **마이크로초짜리 창과 하드킬은 남으므로**, 정리 잡이
 `verdict IS NULL AND started_at < NOW() - INTERVAL 1 DAY` 를 훑어 파생 행을 걷어야 한다.
 한 문장으로 300만을 지우면 언두 로그가 터지므로 `LIMIT` 으로 나눠 지운다.
+
+### 시체 실행 걷어내기 — `BatchStuckExecution` 이 가리키는 절
+
+종료 표시를 못 남기고 죽은 실행은 `STATUS` 조회에 `END_TIME` 검사도 시간 상한도 없어
+**영원히** 남는다. 그동안 만료↔검증 상호 배제가 그 실행에 대해 꺼져 있다(CY-384).
+`verifyJob` 은 `abandon` 엔드포인트가 있지만 **`expireJob` 은 손으로 닫아야 한다.**
+
+```sql
+-- 찾기. **임계를 SQL 에 건다** — 안 걸면 지금 정상적으로 도는 실행도 함께 나온다.
+-- verifyJob 은 Step 열하나 중 열이 단발 태스클릿이라, 300만 전수 검증이 도는 내내
+-- last_progress 가 정상인데도 몇십 분 전이다. 그것을 시체와 구별해 주지 않으면
+-- 운영자가 살아 있는 검증을 걷어낸다.
+SELECT e.JOB_EXECUTION_ID, i.JOB_NAME, e.STATUS, e.CREATE_TIME, e.START_TIME,
+       p.last_progress
+  FROM BATCH_JOB_EXECUTION e
+  JOIN BATCH_JOB_INSTANCE i ON i.JOB_INSTANCE_ID = e.JOB_INSTANCE_ID
+  LEFT JOIN (SELECT JOB_EXECUTION_ID, MAX(LAST_UPDATED) AS last_progress
+               FROM BATCH_STEP_EXECUTION GROUP BY JOB_EXECUTION_ID) p
+    ON p.JOB_EXECUTION_ID = e.JOB_EXECUTION_ID
+ WHERE e.STATUS IN ('STARTING','STARTED','STOPPING')
+   AND (p.last_progress IS NULL
+        OR p.last_progress < NOW() - INTERVAL 30 MINUTE)   -- batch.stuck-job-after-ms
+ ORDER BY e.JOB_EXECUTION_ID;
+```
+
+**닫기 전에 셋을 확인한다.**
+
+1. **배치가 떠 있으면 먼저 `docker compose ps batch` 를 본다.** 아래 UPDATE 는 `VERSION` 을
+   올리므로 **살아 있는 실행의 다음 `jobRepository.update()` 를 터뜨린다** — 잡이 중간에
+   죽고, 그 실행이 쓴 `asof_state` 최대 300만 행이 아래 절의 상태로 남는다.
+2. **`verifyJob` 이면 `abandon` 엔드포인트를 쓴다.** 손 SQL 은 `expireJob` 전용이다.
+3. **`ABANDONED` 는 되돌릴 수 없다.** 그 상태는 `COMPLETED` 와 같은 취급이라
+   (Spring Batch 6.0.4 의 실행 시작 경로가 그렇게 가른다) **그 JobInstance 를 같은
+   파라미터로 다시 못 돌린다.** 만료는 `asOf` 가 식별 파라미터이므로 그 크론 슬롯을
+   손으로 재시도할 방법이 사라진다 — 다시 돌려야 하면 인접 슬롯의 `asOf` 를 쓴다.
+
+```sql
+-- 닫기. ABANDONED 로 두는 이유는 그 상태가 위 조회의 STATUS IN (...) 에서 빠지기 때문이다.
+UPDATE BATCH_JOB_EXECUTION
+   SET STATUS = 'ABANDONED', END_TIME = NOW(6), VERSION = VERSION + 1
+ WHERE JOB_EXECUTION_ID = :id;
+```
+
+> `BATCH_STEP_EXECUTION` 행은 `STARTED` 로 남는다. 지금 판정 경로가 그것을 안 보므로
+> 그대로 둬도 되지만, 나중에 붙는 정리 잡이 이 축도 져야 한다.
+
+> ⚠️ **아래 `asof_state` DELETE 와 헷갈리지 마라.** 그쪽은 버려진 **검증 실행**이 남긴
+> 파생 행을 걷는 것이고 이 절과 다른 사고다.
 
 **정리 잡이 오기 전까지는 손으로 한다.** 그 티켓이 최소 둘 뒤라, 지금 이 상황을 만난
 운영자가 칠 것을 여기 적어 둔다.
@@ -516,6 +580,40 @@ DELETE FROM asof_state WHERE run_id = :runId LIMIT 50000;
 
 **언제** — B 는 지금. C 는 B 뒤. D 는 300만 적재 뒤.
 `asof_state` 정리만은 B 를 안 기다려도 된다 — 이 티켓이 그 누수를 처음 도달 가능하게 만들었다.
+
+---
+
+## 7. 테스트 컨테이너를 스프링 컨텍스트마다 띄우고 있다
+
+**실측(2026-08-23).** `:batch:test` 가 도는 동안 `docker ps` 로 세었다.
+
+| | |
+|---|---|
+| 동시에 떠 있는 MySQL 컨테이너 | **18개** |
+| 컨테이너당 메모리 | 약 **450MB** |
+| 합계 | 약 **8GB** |
+| 개발 기기 Docker VM 가용 | **7.65GB** |
+
+`MySqlContainerConfig` 가 `@Bean` 이라 **스프링 컨텍스트마다 컨테이너를 하나씩** 만든다
+(`static` 홀더도 `withReuse` 도 없다). 스프링 테스트는 컨텍스트를 캐시하고 기본 상한이 32 라,
+실제로 그 수만큼 mysqld 가 동시에 산다.
+
+**그 선을 넘으면 컨테이너가 죽고 다음 컨텍스트가 `Connection refused` 로 실패한다.**
+증상이 *"테스트가 틀렸다"* 가 아니라 **컨테이너 기동 실패**로 보여서 원인까지 가는 길이 멀다 —
+실패 문자열의 `total=0, idle=0` 이 *"풀이 말랐다"* 가 아니라 *"서버가 없다"* 를 뜻한다는 것이
+유일한 단서였다. CI 에서 실제로 세 번 그렇게 깨졌다(CY-392).
+
+**지금은 `spring.test.context.cache.maxSize=4` 로 묶어 뒀다**(루트 `build.gradle`).
+밀려난 컨텍스트가 닫히면 그 컨테이너도 내려간다 — 18개가 4개가 되는 것을 확인했다.
+대가는 재생성 비용이고, 빌드가 여전히 5분대다.
+
+**근본 해결은 컨테이너를 컨텍스트마다 안 띄우는 것이다.** 다만 단순 싱글턴이 안 된다 —
+이 저장소는 **정상 스키마와 오염 스키마를 나눠** 써야 하고(`CorruptRepositoryTest` 가 그것을
+명시한다), 락 측정 테스트는 `performance_schema` 를 요구한다. 그래서 **스키마 종류별로 갈린
+JVM 싱글턴**이 필요하다.
+
+**언제** — 빌드 시간이 발표 준비를 막을 때. 지금은 상한으로 버틴다.
+`docs/13` §4c(빌드 캐시·병렬)와 같은 축이므로 함께 보는 것이 낫다.
 
 ---
 

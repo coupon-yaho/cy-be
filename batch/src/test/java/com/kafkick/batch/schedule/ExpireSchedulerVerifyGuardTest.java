@@ -53,8 +53,10 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
-        "batch.scheduling.enabled=true",
-        "batch.schedule.expire-cron=0 0 0 1 1 *",
+        // **스케줄러 빈을 안 쓴다.** 아래 scheduler() 가 직접 만들어 쓰므로 끄는 것이 맞다 —
+        // 켜 두면 진짜 크론이 테스트 도중에 발화할 수 있고, 그 위험을 없앨 이유가 있는데
+        // 굳이 남길 이유는 없다.
+        "batch.scheduling.enabled=false",
         // step-timeout(600000)보다 커야 한다 — RunningJobProbe 생성자가 검사한다.
         "batch.stuck-job-after-ms=1800000"
 })
@@ -168,6 +170,9 @@ class ExpireSchedulerVerifyGuardTest {
                 });
 
         return new ExpireScheduler(recording, expireJob, new TimeProvider(fixed),
-                "0 */5 * * * *", runningJobs, metrics, MAX_SKIPS);
+                "0 */5 * * * *", runningJobs, metrics, MAX_SKIPS,
+                // 상한 2 · 5분 크론이면 최악 지연 900초라 SLA 를 넉넉히 올려 준다 —
+                // 이 클래스가 재는 것은 SLA 가드가 아니라 슬롯 건너뛰기다.
+                2_000L, 60_000L);
     }
 }

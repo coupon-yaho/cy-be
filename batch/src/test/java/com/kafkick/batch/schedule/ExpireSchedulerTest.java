@@ -55,7 +55,15 @@ class ExpireSchedulerTest {
             "spring.batch.job.enabled=false",
             "batch.scheduling.enabled=true",
             // 크론을 먼 미래로 밀어 테스트 중에 실제로 돌지 않게 한다. 빈 존재만 본다.
-            "batch.schedule.expire-cron=0 0 0 1 1 *"
+            "batch.schedule.expire-cron=0 0 0 1 1 *",
+        // 이 클래스는 스케줄러 빈이 만들어지는지만 본다 — 그래서 플래그를 켜 둬야 한다.
+        // 발화는 크론을 1월 1일로 밀어 막는다. **그 시각에 도는 CI 는 이 잡을 한 번
+        // 실행한다** — 연 1회 1초짜리 창이고, 스케줄러를 끄면 이 클래스가 재려는
+        // 축이 사라지므로 그 창을 남긴다. 없애려면 크론이 아니라 트리거를 갈아야 한다.
+        //
+        // 연 단위 크론으로는 어떤 SLA 도 못 맞춰 기동 가드가 거절하므로,
+        // 그 검사가 여기서 뜻이 없다는 것을 값으로 명시한다.
+        "batch.metrics.expire-sla-seconds=999999999"
     })
     @Import(MySqlContainerConfig.class)
     @DisplayName("켜져 있을 때")
@@ -78,7 +86,7 @@ class ExpireSchedulerTest {
      * {@code matchIfMissing} 만 남는 상황이고, 그 값이 이 결정의 전부다.
      *
      * <p>되돌리면 여기가 빨개진다. 꺼진 채 운영을 보는 반대편 사고는 나중에 돌려 따라잡을 수 있고
-     * {@code BatchJobNotRunning} 알림도 잡아 주므로, 무게가 같지 않다.
+     * {@code ExpireNotSucceeding} 알림도 잡아 주므로, 무게가 같지 않다.
      */
     @Nested
     @SpringBootTest(properties = "spring.batch.job.enabled=false")

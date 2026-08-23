@@ -15,7 +15,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 /**
  * <b>잡의 생사만으로는 "성공했는데 아무것도 안 했다" 를 못 잡는다.</b>
  *
- * <p>기존 알림 셋({@code BatchJobFailed}·{@code BatchJobNotRunning}·
+ * <p>기존 알림 셋({@code BatchJobFailed}·{@code ExpireNotSucceeding}·
  * {@code BatchJobRunningTooLong})은 전부 그 축이다. 셋 다 통과하면서 기한 지난 발급건이
  * 계속 쌓이는 상태가 있고, 그것이 이 잡의 가장 나쁜 실패 모드다 — 재고를 되돌리는 유일한
  * 배치가 조용히 일을 안 한다.

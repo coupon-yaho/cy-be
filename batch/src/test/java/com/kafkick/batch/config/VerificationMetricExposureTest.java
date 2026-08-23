@@ -265,7 +265,23 @@ class VerificationMetricExposureTest {
     }
 
     /**
-     * <b>스케줄러 풀이 실제로 둘인지 본다.</b>
+     * <b>새 되읽기도 같은 방식으로 잇는다.</b> 풀 크기 단언(아래)은 이 태스크가
+     * {@code @Scheduled} 에서 빠져도 통과한다 — 그러면 마지막 성공 시각 게이지가 영원히
+     * 첫 값에 머물고, {@code ExpireNotSucceeding} 이 <b>배치가 멀쩡한데</b> 뜬다.
+     * 나머지 테스트는 {@code refresh()} 를 직접 부르므로 그때도 초록이다.
+     */
+    @Test
+    @DisplayName("배치 실행 지표 되읽기가 @Scheduled 로 실제 등록된다")
+    void batchRunMetricsRefreshIsScheduled() {
+        assertThat(taskHolder.getScheduledTasks())
+                .as("등록된 태스크=%s", taskHolder.getScheduledTasks().stream()
+                        .map(task -> task.getTask().getRunnable().toString()).toList())
+                .anyMatch(task -> task.getTask().getRunnable().toString()
+                        .startsWith(BatchRunMetricsRefresher.class.getName() + ".refresh"));
+    }
+
+    /**
+     * <b>스케줄러 풀이 @Scheduled 수를 감당하는지 본다.</b>
      *
      * <p>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 어떤
      * {@code @Value} 에도 리터럴로 안 나온다 — {@code ResolvedBatchConfigTest} 의 키 스캔이
@@ -276,16 +292,16 @@ class VerificationMetricExposureTest {
      * <i>"지표가 가끔 안 갱신된다"</i> 뿐이라 원인까지 가는 길이 없다.
      */
     @Test
-    @DisplayName("스케줄러 풀이 둘이다 — 만료와 되읽기가 서로를 막지 않게")
-    void schedulerPoolFitsBothScheduledTasks() {
-        // 정확히 2 를 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
+    @DisplayName("스케줄러 풀이 @Scheduled 수를 감당한다 — 서로를 막지 않게")
+    void schedulerPoolFitsScheduledTaskCount() {
+        // 정확히 3 을 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
         // 있으면 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵고, 세 번째
         // @Scheduled 가 생겨 정당하게 올리는 날에도 깨진다. 정확한 값은
         // ResolvedBatchConfigTest 가 키 경로로 지키고, 여기가 막는 것은 "1 로 폴백" 이다.
         assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
                 .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
-                        + "폴백한다. 그러면 두 @Scheduled 가 스레드 하나를 다툰다")
-                .isGreaterThanOrEqualTo(2);
+                        + "폴백한다. 그러면 세 @Scheduled 가 스레드 하나를 다툰다")
+                .isGreaterThanOrEqualTo(3);
     }
 
     /**

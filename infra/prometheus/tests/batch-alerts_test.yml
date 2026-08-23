@@ -1,0 +1,89 @@
+# 알림 규칙의 **동작**을 못 박는다.
+#
+# promtool check rules 는 문법만 본다. 그래서 규칙이 "문법은 맞는데 영원히 안 뜨는" 상태로
+# 바뀌어도 CI 가 초록이다 — CY-392 가 실제로 두 번 그 상태를 만들었고, 둘 다 리뷰가
+# 재현해서 잡았다. 그 재현을 주석이 아니라 파일로 남긴다.
+#
+# ⚠️ 이 디렉터리는 rules/ 밖이다. prometheus.yml 의 rule_files 글롭(rules/*.yml)에 걸리면
+#    프로메테우스가 이 파일을 규칙으로 읽으려다 기동에 실패한다.
+rule_files:
+  - ../rules/batch-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 크래시루프: 컨테이너가 15분 안에 잠깐씩 뜬다 ──────────────────────────
+  #
+  # absent() 기반이었을 때는 샘플이 하나만 들어와도 조건이 거짓이 되어 for 타이머가
+  # 리셋됐고, 그동안 ExpireNotSucceeding 쪽도 시계열이 끊겨 자기 for 를 못 채웠다 —
+  # 두 규칙이 서로의 사각을 만들어 65분간 알림이 0건이었다.
+  - interval: 1m
+    name: "크래시루프에서 BatchTargetDown 이 뜬다"
+    input_series:
+      - series: 'up{job="cy-batch", instance="batch:9092"}'
+        # 12분마다 1분씩만 뜬다.
+        values: '0x11 1 0x11 1 0x11 1 0x11 1 0x11 1'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BatchTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              job: cy-batch
+              instance: batch:9092
+            exp_annotations:
+              summary: "배치의 실행 지표가 아예 안 보입니다 — 서버가 떠 있는지 봅니다"
+              description: "시계열이 사라졌습니다. 배치 컨테이너가 안 떠 있거나 스크레이프가 끊긴 것입니다. 부하 측정 구간처럼 batch 를 일부러 안 띄우는 때는 정상이므로 그 구간에만 silence 를 겁니다 — docs/14 에 명령이 있습니다."
+
+  # ── 복구: 타깃이 올라오면 곧 풀려야 한다 ────────────────────────────────
+  #
+  # 창 평균만 쓰면 15분 창에서 0 구간이 빠져나갈 때까지(최대 13분 30초) 참으로 남아,
+  # 부하 측정 뒤 silence 를 푸는 절차와 겹쳐 오탐 critical 이 나간다.
+  # unless min_over_time(up[5m]) == 1 이 그것을 끊는다.
+  - interval: 1m
+    name: "타깃이 복구되면 창이 다 차기 전에 풀린다"
+    input_series:
+      - series: 'up{job="cy-batch", instance="batch:9092"}'
+        values: '0x19 1x20'
+    alert_rule_test:
+      # 20분간 죽어 있었으니 뜬다.
+      - eval_time: 19m
+        alertname: BatchTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              job: cy-batch
+              instance: batch:9092
+            exp_annotations:
+              summary: "배치의 실행 지표가 아예 안 보입니다 — 서버가 떠 있는지 봅니다"
+              description: "시계열이 사라졌습니다. 배치 컨테이너가 안 떠 있거나 스크레이프가 끊긴 것입니다. 부하 측정 구간처럼 batch 를 일부러 안 띄우는 때는 정상이므로 그 구간에만 silence 를 겁니다 — docs/14 에 명령이 있습니다."
+      # 복구 6분 뒤 — 창 평균은 아직 0.9 미만이지만 unless 가 끊는다.
+      - eval_time: 26m
+        alertname: BatchTargetDown
+        exp_alerts: []
+
+  # ── 되읽기 간헐 실패: 게이지가 정상 ↔ NaN 을 오간다 ──────────────────────
+  #
+  # 그 상태에서는 NaN 을 보는 규칙도 시체를 보는 규칙도 for 타이머를 못 채운다 —
+  # 서로 반대편 값에 리셋되기 때문이다. 카운터는 리셋을 안 타므로 그 구간을 문다.
+  - interval: 1m
+    name: "되읽기가 간헐 실패하면 BatchRunMetricsStale 이 문다"
+    input_series:
+      - series: 'cy_batch_refresh_failures_total{spring_batch_job_name="expireJob", instance="batch:9092", job="cy-batch"}'
+        # 2분에 한 번씩 실패 — 10분 창에서 증분이 3 을 넘는다.
+        values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: BatchRunMetricsStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              spring_batch_job_name: expireJob
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "배치 실행 지표 되읽기가 반복 실패하고 있습니다"
+              description: "게이지가 정상과 NaN 을 오가는 동안은 NaN 감시도 시체 감시도 for 를 못 채웁니다. 배치 로그의 \"배치 실행 지표를 되읽지 못했습니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈과 배치 메타 잠금입니다."

@@ -50,6 +50,14 @@ import com.kafkick.storage.db.VerificationSeed;
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=true",
         "batch.schedule.expire-cron=0 0 0 1 1 *",
+        // 이 클래스는 플래그가 켜져도 가드가 안 막는 것을 잰다 — 그래서 플래그를 켜 둬야 한다.
+        // 발화는 크론을 1월 1일로 밀어 막는다. **그 시각에 도는 CI 는 이 잡을 한 번
+        // 실행한다** — 연 1회 1초짜리 창이고, 스케줄러를 끄면 이 클래스가 재려는
+        // 축이 사라지므로 그 창을 남긴다. 없애려면 크론이 아니라 트리거를 갈아야 한다.
+        //
+        // 연 단위 크론으로는 어떤 SLA 도 못 맞춰 기동 가드가 거절하므로,
+        // 그 검사가 여기서 뜻이 없다는 것을 값으로 명시한다.
+        "batch.metrics.expire-sla-seconds=999999999",
         // 테스트가 이 값을 직접 계산에 쓴다. 기본값(10분)에 기대면 기본값이 바뀔 때
         // 이 클래스가 왜 깨지는지 알 수 없다.
         // step-timeout(600000)보다 커야 한다 — RunningJobProbe 생성자가 검사한다.

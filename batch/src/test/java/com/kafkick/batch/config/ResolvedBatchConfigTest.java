@@ -87,11 +87,15 @@ class ResolvedBatchConfigTest {
      */
     private static final List<Class<?>> CONFIG_CLASSES = List.of(
             VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
-            VerificationMetricsRefresher.class, RunningJobProbe.class);
+            VerificationMetricsRefresher.class, RunningJobProbe.class,
+            BatchRunMetricsRefresher.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
             "batch.schedule.max-expire-skips",
+            "batch.metrics.run-refresh-ms",
+            "batch.metrics.run-timeout-ms",
+            "batch.metrics.expire-sla-seconds",
             "batch.verify.step-timeout-ms",
             "batch.verify.max-findings-per-rule",
             "batch.scheduling.enabled",
@@ -155,7 +159,11 @@ class ResolvedBatchConfigTest {
                 // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
                 // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
                 // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
-                "--BATCH_SCHEDULER_POOL_SIZE=3",
+                // 기본값(3)과 달라야 키 경로가 죽은 것을 구분할 수 있다.
+                "--BATCH_SCHEDULER_POOL_SIZE=4",
+                "--BATCH_RUN_METRICS_REFRESH_MS=62000",
+                "--BATCH_RUN_METRICS_TIMEOUT_MS=7000",
+                "--EXPIRE_SLA_SECONDS=901",
                 "--batch.schedule.expire-cron=0 0 0 1 1 *",
                 // batch.expire.* 도 기본값과 다른 값으로 준다. 같은 값이면
                 // 키 경로가 죽어 폴백해도 결과가 같아 구분이 안 된다.
@@ -262,10 +270,13 @@ class ResolvedBatchConfigTest {
         // 오타를 내도 기본값 폴백이라 결과가 같다. 위 문단이 경계한 그 상황이다.
         assertThat(environment.getProperty("batch.stuck-job-after-ms")).isEqualTo("1801000");
         assertThat(environment.getProperty("batch.schedule.max-expire-skips")).isEqualTo("2");
+        assertThat(environment.getProperty("batch.metrics.run-refresh-ms")).isEqualTo("62000");
+        assertThat(environment.getProperty("batch.metrics.run-timeout-ms")).isEqualTo("7000");
+        assertThat(environment.getProperty("batch.metrics.expire-sla-seconds")).isEqualTo("901");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
-                .isEqualTo("3");
+                .isEqualTo("4");
     }
 
     @Test

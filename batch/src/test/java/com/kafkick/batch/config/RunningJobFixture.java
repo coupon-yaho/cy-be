@@ -137,6 +137,37 @@ public final class RunningJobFixture implements AutoCloseable {
         return new RunningJobFixture(jobRepository, instance, execution);
     }
 
+    /**
+     * <b>이미 끝난 성공 실행</b>을 심는다. 마지막 성공 시각 축이 쓰는 모양이다.
+     *
+     * <p>{@code END_TIME} 은 <b>프레임워크 쓰기 경로로</b> 넣는다 — 드라이버가 지역시각을
+     * UTC 로 옮기고 읽을 때 되돌리므로 그 경로로 넣어야 왕복이 맞는다. SQL 로 절대 시각을
+     * 넣으면 읽기 변환만 한 번 더 먹어 <b>아홉 시간 미래</b>로 되살아난다(실측했다).
+     */
+    public static RunningJobFixture plantCompleted(JobRepository jobRepository, String jobName,
+            LocalDateTime key, Duration endedAgo) {
+        // now() 를 한 번만 읽는다. 두 번 읽으면 시작 시각과 종료 시각이 서로 다른 기준을
+        // 갖고, 창 경계(7일) 테스트가 그 사이 오차만큼 흔들린다.
+        //
+        // 고정 시계(Clock.fixed)는 여기서 쓸 수 없다. 조회 창이 **DB 의 NOW()** 를 기준으로
+        // 자르므로, 심는 값이 그 시계와 같은 흐름 위에 있어야 한다 — 고정 시계로 심으면
+        // 테스트가 도는 시점에 따라 창 안팎이 뒤집힌다. 그래서 상대(Duration)로 받는다.
+        LocalDateTime endedAt = LocalDateTime.now().minus(endedAgo);
+        RunningJobFixture fixture = plantWithoutStep(
+                jobRepository, jobName, key, endedAt.minusMinutes(1));
+
+        fixture.execution.setStatus(BatchStatus.COMPLETED);
+        fixture.execution.setEndTime(endedAt);
+        jobRepository.update(fixture.execution);
+
+        return fixture;
+    }
+
+    /** 심은 실행의 종료 시각. 게이지가 이 값을 에폭으로 내야 한다. */
+    public LocalDateTime endTime() {
+        return execution.getEndTime();
+    }
+
     public long executionId() {
         return execution.getId();
     }
