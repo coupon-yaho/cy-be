@@ -420,11 +420,12 @@ relaxed 표기가 그대로 들어오기 때문이다.
 **여기서 멈춘 기준은 "지적이 0건인가" 가 아니라 "배포 동작이나 거짓 초록에 영향이 있는가" 다.**
 전자를 종료 조건으로 두면 고칠 때마다 새 코드가 생기고 리뷰어가 그것을 또 보므로 구조적으로 안 끝난다.
 
-> ⚠️ **이것들을 돌리는 CI 가 아직 없다.** `.github/workflows/` 넷 중 Gradle 을 실행하는 것이 하나도 없어
-> (`grep -rn gradlew .github/workflows/` → 0건), 지금 이 방어선은 **사람이 로컬에서 돌릴 때만** 선다.
-> 빌드 잡 추가는 저장소 전체 사안이라 별도 티켓이다.
+> ~~⚠️ **이것들을 돌리는 CI 가 아직 없다.**~~ **해결됐다** — `.github/workflows/build.yml` 이
+> `./gradlew build`(전 모듈)를 돌리고, promtool `check config`·`test rules`, amtool 라우팅,
+> compose 설정 검사까지 함께 본다. 워크플로도 넷이 아니라 다섯이다.
 >
-> 그 티켓은 **`./gradlew test`(전 모듈)를 불러야 한다.** 겹침 판정을 지키는
+> **CI 는 루트에서 `./gradlew build` 를 부른다 — 반드시 전 모듈이어야 한다.**
+> 모듈을 좁히는 최적화를 하려면 `:storage:test` 를 명시적으로 포함해야 한다. 겹침 판정을 지키는
 > `ConfigImportPrecedenceOverlapTest` 는 `:storage:test` 에 있는데, `batch`·`api` 는 storage 의
 > **testFixtures 산출물**에만 의존하지 그 모듈의 test 태스크에 의존하지 않는다.
 > `./gradlew :batch:test` 만 돌리면 판정기가 헐거워져도 아무 신호가 없다.

@@ -1,4 +1,4 @@
-# CY-368 · 검증 배치를 온디맨드로 트리거하고 결과를 조회한다
+# CY-368 · 검증 배치 온디맨드 트리거 / CY-429 · 만료 복구 API
 
 `verifyJob` 을 사람이 돌릴 수 있게 한다. 지금은 **batch 에 `@RestController` 가 0건**이라
 검증을 손으로 시작할 방법이 테스트 말고 없다 — CY-359 가 시연 절차에서 막힌 자리다.
@@ -335,6 +335,87 @@ POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPING → ABANDONED
 
 ---
 
+## 만료 쪽에도 복구 경로를 냈다 — `expireJob` (CY-429)
+
+`BatchStuckExecution` 은 **울리는데 처방이 손 SQL 뿐이었다.** 위 두 엔드포인트는
+`verifyJob` 으로 필터링돼 있고, 만료는 `docs/13` §6 의
+`UPDATE BATCH_JOB_EXECUTION ... VERSION = VERSION + 1` 을 사람이 직접 쳐야 했다.
+
+```bash
+GET  /api/v1/admin/expire/runs/stuck            # 진도가 멈춘 실행 + 얼마나 멎었는지
+POST /api/v1/admin/expire/runs/{id}/recover     # 한 번. 재시도해도 안전하다
+```
+
+### 안전 근거는 `VERSION` 이 아니라 판정이다
+
+**손 SQL 과 이 API 는 같은 성격의 쓰기를 한다** — 둘 다 `VERSION` 을 올린다
+(API 는 선점 UPDATE + `recover` 의 갱신으로 JOB 행 기준 **+2**, 손 SQL 은 +1)
+(`JdbcJobExecutionDao` 의 `UPDATE ... VERSION = VERSION + 1 WHERE ... AND VERSION = ?`).
+그러니 *"API 는 `VERSION` 을 안 올려서 안전하다"* 는 말은 거짓이다.
+
+다른 것은 하나다 — **선행 조건이 코드에 있다.** `RunningJobProbe.stuckExecutions` 가
+시체로 판정한 실행에만 그 쓰기를 한다. 손 SQL 은 그 임계를 사람이 SQL 에 직접 적어야
+했고, 그 숫자가 코드와 갈리는 순간 운영자가 **살아 있는 만료를 걷어낸다.**
+따라서 **`batch.stuck-job-after-ms` 를 내리는 변경은 이 API 의 안전을 직접 깎는다.**
+
+판정은 **나이가 아니라 진도**다(위 "죽은 실행을 어떻게 가려내나" 절과 같은 근거).
+
+### 왜 `abandon` 이 아니라 `recover` 인가
+
+`JobOperator.recover` 가 **정확히 이 용도로 있다**(6.0.4). 돌던 `StepExecution` 을 전부
+`FAILED` + `END_TIME` 으로 닫고, `JobExecution` 도 그렇게 닫고, 실행 문맥에
+`batch.recovered` 를 남긴다.
+
+> **그 플래그는 멱등의 근거로 못 쓴다.** `JobRepository.update(JobExecution)` 이 문맥을
+> 영속하지 않아 DB 에 안 남고(별도 메서드 `updateExecutionContext` 가 그 일을 한다),
+> 억지로 영속시키면 **다음 실행이 그것을 물려받는다** — `TaskExecutorJobLauncher` 가 새
+> 실행을 만들 때 직전 실행의 문맥을 그대로 복사한다(6.0.4 바이트코드). 그러면 재실행이
+> 시체가 돼도 복구가 아무것도 안 한 채 200 을 낸다. 그래서 `ExpireRecoveryService` 는
+> **실행 상태**(`FAILED` + `END_TIME`)로 판정한다 — 실행마다 새로 생기는 값이라 안 상속된다. 처음에는 위 verify 모양을 그대로 옮겨 `stop → abandon`
+2단계로 지었는데, 리뷰가 이 메서드를 짚었다. 넷이 낫다.
+
+| | 2단계 `abandon` | `recover` |
+|---|---|---|
+| 호출 | `stop` → `abandon` | **한 번** |
+| 재시도 | 두 번째가 409, 문구가 상황과 반대로 나감 | **실행 상태로 멱등**(200) |
+| 동시 요청 | 낙관적 락에 기댔다(Step 없는 실행엔 검사 0개) | **조건부 갱신의 affected rows** |
+| 결과 | `ABANDONED` — 그 `asOf` 슬롯 영구 소각 | **`FAILED` — 그 문을 안 닫음** |
+| Step 행 | `STARTED` 로 남음 | **함께 닫힘** |
+
+`ABANDONED` 가 되돌릴 수 없는 근거는 `TaskExecutorJobLauncher` 다 — 마지막 실행이
+`COMPLETED` **또는 `ABANDONED`** 면 `JobInstanceAlreadyCompleteException` 을 던진다.
+만료는 `asOf` 가 식별 파라미터라 그 크론 슬롯이 통째로 사라진다.
+
+> `stop` 은 **언제나 `STOPPING` 을 남긴다** — `SimpleJobOperator.stop` 이
+> `setStatus(STOPPING)`·`setExitStatus(STOPPED)`·`setEndTime(now)` 를 함께 쓴다(6.0.4
+> 바이트코드). 한때 이 문서와 두 컨트롤러 주석이 *"하드킬이면 곧바로 `STOPPED`"* 라고
+> 적었는데, `STATUS` 와 `EXIT_CODE` 를 혼동한 것이었다.
+
+### ⚠️ 트리거는 열지 않는다
+
+이 컨트롤러에 **만료를 띄우는 엔드포인트를 추가하면 안 된다.** CY-421 이
+`ExpirePendingRefresher` 의 조회를 `asOf` 가 아니라 `END_TIME` 정렬로 바꾼 **유일한 근거가
+"만료 손 트리거가 이 저장소에 없다"** 이다. 트리거가 생기면 과거 `asOf` 실행이 나중에 끝날
+수 있고, 그때 게이지가 **더 좁은 창의 더 작은 값**을 내 관제가 그것을 *"밀린 것이 없다"* 로
+읽는다. `ExpireRecoveryTest.exposesExactlyTheRecoveryEndpoints` 가 이 컨트롤러의 매핑
+**전체**를 단언하므로, 엔드포인트를 더하는 티켓은 그 목록을 고치며 이 결정을 함께 본다.
+
+### 에러 형식이 두 벌이 되지 않게
+
+`BatchApiExceptionHandler` 는 `assignableTypes` 로 컨트롤러를 **이름으로** 묶는다. 그 javadoc 이
+*"다른 컨트롤러가 생기는 날 그쪽 규약까지 이 클래스가 지게 된다"* 고 예고했고, 그날이 왔다.
+**패키지 전체로 넓히지 않는다** — 넓히면 다음 컨트롤러가 이 규약을 의식하지 않고도 따라오는데,
+그때 어긋나는 것은 *"에러 형식이 두 벌"* 이라 클라이언트에서만 드러난다.
+
+### `cleanupJob` 은 아직 없다
+
+`BatchStuckExecution` 은 `Job` 빈 **셋 전부**에 뜨는데(`BatchRunMetrics` 가 `List<Job>` 에서
+이름을 모은다) 컨트롤러는 둘이다. `cleanupJob` 시체는 여전히 `docs/13` §6 의 손 SQL 이
+유일한 길이고, 알림 description 이 그 사실을 명시한다. 잡 이름을 경로 변수로 받는 형태로
+일반화하는 것은 별도 티켓이다 — 그때 "트리거는 열지 않는다" 규율도 함께 옮겨야 한다.
+
+---
+
 ## 검증 계약
 
 이 티켓이 초록이라고 말하려면 아래가 각각 **깨졌을 때 빨개져야** 한다.
@@ -359,6 +440,27 @@ POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPING → ABANDONED
 - **노출** — 기본 조합에 `batch` 포트가 **없는** 것, 그리고 오버레이를 얹어도 `127.0.0.1` 인 것
 
 ---
+
+**CY-429 (만료 복구)** — 아래도 깨지면 빨개져야 한다.
+
+- **시체 판정** — 진도가 도는 만료 실행에 `recover` 를 부르면 409/`EXPIRATION-007`,
+  상태가 그대로다(`VERSION` 도 안 움직인다)
+- **멱등** — 이미 걷어낸 실행에 다시 불러도 이력이 다시 안 쓰인다
+- **`FAILED` 로 닫는다** — `ABANDONED` 면 그 `asOf` 슬롯을 영원히 못 돌린다.
+  돌던 Step 행도 함께 닫혀야 한다
+- **잡 격리** — `verifyJob` 의 `executionId` 를 `/expire/` 경로로 부르면 404,
+  없는 번호와 **같은 코드**
+- **Step 없는 실행** — 표시(`lastProgress`)가 판정과 같은 폴백(`START_TIME`)을 따른다
+- **트리거 부재** — 이 컨트롤러의 매핑이 조회 하나 + 복구 하나뿐이다(CY-421 의 정렬 근거)
+- **동시 요청** — 같은 실행에 요청 둘이 동시에 와도 실제 쓰기는 **정확히 하나**다.
+  Step 행이 없는 실행에서도 그렇다 — 근거는 조건부 갱신의 `affected rows` 이지 낙관적
+  락이 아니다(`update(JobExecution)` 은 쓰기 직전 `synchronizeStatus` 로 버전을
+  재동기화해 `WHERE VERSION = ?` 이 항상 통과한다. 버전 검사는 `update(StepExecution)`
+  뿐이라 Step 없는 실행엔 검사가 0개다)
+- **실행 중 상태 셋** — `STARTING`·`STARTED`·`STOPPING` 을 모두 걷는다.
+  선점문의 목록에서 하나만 빠져도 그 상태의 시체가 조용히 안 걷힌다
+- **정상 완료는 대상이 아니다** — `COMPLETED` 에 `recover` 를 부르면 409 다.
+  200 이 나가면 실행 번호 오타 한 자리가 진짜 시체를 놓치게 만든다
 
 ## 남긴 것
 
