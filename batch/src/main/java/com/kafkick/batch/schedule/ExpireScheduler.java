@@ -161,9 +161,13 @@ public class ExpireScheduler {
         // 벌어진다. 게이지도 되읽기 주기만큼 늦게 갱신되므로 그 몫까지 더해야 한다.
         //
         // max-expire-skips 는 "검증이 자꾸 밀린다" 고 느낀 운영자가 가장 먼저 올리는
-        // 손잡이인데, 기본 크론(5분)에서 **2 로만 올려도 960 > 900 이라 정상 상태에서
-        // 오탐 critical 이 난다.** 그러면 그 알림이 무시되기 시작하고, 진짜 만료 정지가
-        // 같은 알림으로 뜰 때 아무도 안 본다 — 이 저장소가 없애려는 바로 그 상태다.
+        // 손잡이인데, **한 칸만 올려도 정상 상태에서 오탐 critical 이 난다** — 기본값
+        // (일 1회 · 상한 1)에서 이미 172,860 초로 SLA 180,000 의 여유가 7,140 초뿐이다.
+        // 그러면 그 알림이 무시되기 시작하고, 진짜 만료 정지가 같은 알림으로 뜰 때
+        // 아무도 안 본다 — 이 저장소가 없애려는 바로 그 상태다.
+        //
+        // 절대값을 더 적지 않는다. 크론이 5분에서 배치 창으로 옮겨 가며 이 부등식의 항이
+        // 두 자릿수 배로 움직였고, 그때 숫자를 적어 둔 자리가 먼저 낡았다.
         //
         // .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다.
         Duration worstDelay = cronSlot
@@ -189,7 +193,8 @@ public class ExpireScheduler {
                             + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
                             + "정상 상태에서 오탐 critical 이 납니다 — "
                             + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "
-                            + "올리십시오(알림 식의 900 도 함께 고쳐야 합니다). "
+                            + "올리십시오(batch-alerts.yml 의 ExpireNotSucceeding 식도 "
+                            + "같은 값으로 함께 고쳐야 합니다). "
                             + "cron=" + expireCron + " max-expire-skips=" + maxSkips);
         }
         this.runningJobs = runningJobs;
