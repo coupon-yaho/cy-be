@@ -120,9 +120,32 @@ management:
       show-details: never
 
 batch:
-  # 판정 시점 동결 스위치. 이 하나로 전 스케줄러가 멈춘다.
-  # dataset_fingerprint 재료에 sum(active_count) 와 max(updated_at) 이 들어 있어
-  # 회차 하나만 열려도 지문이 달라진다. 끌 것이 여러 개면 하나는 반드시 빠뜨린다.
+  # 실행 중으로 남은 잡을 언제부터 "시체" 로 볼 것인가. 만료↔검증 상호 배제가 이 값을 쓴다.
+  #
+  # 판정 기준은 나이가 아니라 **진도**다 — BATCH_STEP_EXECUTION.LAST_UPDATED 가 청크 커밋마다
+  # 다시 찍히므로, 이 값만큼 진도가 멈춰 있으면 종료 표시를 못 남기고 죽은 것으로 본다.
+  # 상한이 아예 없으면 docker compose down 이 잡 한복판에 한 번 걸린 것만으로 상호 배제가
+  # 영구히 막힌다(그 조회에는 END_TIME 검사도 시간 상한도 없다).
+  #
+  # ⚠️ 양쪽에서 눌린다. 어느 쪽이든 붙여 놓으면 "살아 있다" 와 "죽었다" 가 같은 숫자를 쓴다.
+  #    아래: batch-alerts.yml 의 BatchJobRunningTooLong(300초)보다 커야 한다 — 그 알림이 읽는
+  #          지표는 JVM 안의 게이지라, 그것이 우는 상태는 정의상 "살아서 느리게 돌고 있다" 다.
+  #    위:   batch.verify.step-timeout-ms 보다 커야 한다 — verifyJob 의 Step 열 개는 단발
+  #          태스클릿이라 Step 이 도는 내내 하트비트가 안 뛴다. 붙여 놓으면 정상적으로 오래
+  #          도는 검증이 시체로 판정돼 만료가 검증 한복판을 지나간다.
+  #    RunningJobProbe 생성자가 위쪽 관계를 기동 때 검사한다 — 어기면 안 뜬다.
+  stuck-job-after-ms: ${BATCH_STUCK_JOB_AFTER_MS:1800000}
+
+  # 스케줄러 스위치. 이 하나로 전 스케줄러가 멈춘다. 끌 것이 여러 개면 하나는 반드시 빠뜨린다.
+  #
+  # ⚠️ **이것은 검증의 가드가 아니다.** CY-384 전에는 verifyJob 이 이 값을 읽어 true 면
+  #    거절했는데, 운영은 늘 true 라 검증이 영영 못 돌았다. 지금 검증을 막는 것은
+  #    실제로 도는 만료 실행이다(VerifyJobConfig.rejectRunningExpire).
+  #
+  # 그래도 결정론 증명(같은 asOf 로 두 번) 앞에서는 여전히 이 값을 끈다. 양방향 가드는
+  # 한 실행 "안" 을 지키지, 두 실행 "사이" 에 만료가 지나가는 것은 못 막는다.
+  # 그때 2회차는 startRunStep 의 rejectIssuancesUpdatedAfterAsOf 에서 죽어 지문을 아예 못 낸다
+  # — 비교할 두 번째 값이 안 생기고, 그 asOf 는 그 뒤로 영구히 못 쓴다.
   #
   # ⚠️ 검증용 DB(coupon_clean · coupon_corrupt)를 보게 띄울 때는 반드시 false 로 준다.
   #    만료 배치는 재고를 쓰는 유일한 잡이라, 켜진 채로 검증 셋을 보면 검증 대상 데이터를
@@ -150,6 +173,11 @@ batch:
     #    시(hour) 필드가 들어가는 순간 깨진다 — 아래 coupon-create-cron 이 그 모양이다.
     zone: "UTC"
     expire-cron: "0 */5 * * * *"          # 만료 5분
+    # 검증이 도는 동안 만료 슬롯을 몇 번까지 연속으로 건너뛸 것인가.
+    # 최대 지연이 (이 값 + 1) × 크론 주기로 **구조적으로** 묶인다 — 검증 소요 실측이 필요 없다.
+    # 기본 1 · 5분 크론이면 10분이고, BatchJobNotRunning 의 15분 창 안쪽이다.
+    # 넘으면 만료를 돌린다 — 재고는 운영의 진실이고 검증 실행은 진단이다.
+    max-expire-skips: ${MAX_EXPIRE_SKIPS:1}
     verify-incremental-cron: "0 */10 * * * *"  # 증분 검증 10분
     cleanup-cron: "0 0 * * * *"           # 정리 1시간
     #
@@ -204,6 +232,8 @@ batch:
     # chunk-size 를 키우면 이 값도 같이 키워야 한다.
     # MySQL 힌트(MAX_EXECUTION_TIME)를 안 쓰는 이유는 그것이 read-only SELECT 에만 먹어서
     # 이 잡에서 가장 무거운 문장(asof_state 300만 행 UPDATE)을 못 덮기 때문이다.
+    # ⚠️ batch.stuck-job-after-ms 보다 **반드시 작아야 한다.** 이 값을 키울 때는 그 값도
+    #    함께 키운다 — 안 그러면 살아 있는 검증이 시체로 판정된다. 기동 때 검사한다.
     step-timeout-ms: ${VERIFY_STEP_TIMEOUT_MS:600000}
 
     # 이력을 한 번에 읽어 올 발급건 식별자 폭.

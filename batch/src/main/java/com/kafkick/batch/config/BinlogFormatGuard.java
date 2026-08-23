@@ -35,8 +35,8 @@ import org.springframework.stereotype.Component;
  *       아니라 <b>떴다가 죽는다</b> 였다.</li>
  *   <li>{@code InitializingBean} + {@code @ConditionalOnProperty(batch.scheduling.enabled)} —
  *       포트 열리기 전에 막는 것은 됐는데, <b>스케줄러를 끈 배포에서는 빈이 아예 안 생겼다.</b>
- *       그런데 이 저장소가 문서로 권하는 운영 절차가 정확히 그것이다 — 스케줄러를 끈 채
- *       띄웠다가 밀린 만료를 손으로 따라잡는 것. 가드가 필요한 자리에 가드가 없었다.</li>
+ *       그런데 이 저장소는 스케줄러를 끈 기동을 실제로 쓴다 — 검증 셋을 보게 띄울 때가
+ *       그렇고, 그때 밀린 만료를 손으로 따라잡는다. 가드가 필요한 자리에 가드가 없었다.</li>
  * </ul>
  *
  * <p>그래서 {@link JobExecutionListener} 로 {@code expireJob} 에 붙인다. 스케줄 실행이든

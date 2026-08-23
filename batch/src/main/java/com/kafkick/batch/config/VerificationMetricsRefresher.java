@@ -36,9 +36,9 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 잡이 {@code COMPLETED} 다. 두 축이 서로 독립이므로 지표는 <b>판정 자체</b>를 본다.
  *
  * <p><b>{@code batch.scheduling.enabled} 에 묶지 않는다.</b> 그 스위치는 <i>원본을 쓰는
- * 잡을 돌릴 것인가</i> 를 정하는데, 이것은 읽기만 한다. 묶으면 스케줄러를 끈 채
- * {@code verifyJob} 을 돌리는 <b>정상 운영 절차</b>에서 지표가 통째로 죽는다 —
- * 그 절차는 {@code rejectRunningSchedulers} 가 강제하는 것이라 예외가 아니라 기본이다.
+ * 잡을 돌릴 것인가</i> 를 정하는데, 이것은 읽기만 한다. 묶으면 스케줄러를 끈 채 띄우는
+ * 기동 — 부하 측정 중이거나 검증만 손으로 돌릴 때 — 에서 <b>지표가 통째로 죽는다.</b>
+ * 그때야말로 판정을 봐야 하는 자리라 예외가 아니라 기본이다.
  */
 @Component
 public class VerificationMetricsRefresher {
