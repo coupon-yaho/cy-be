@@ -79,6 +79,12 @@ public class ExpireRecoveryService {
      * 글자까지 같다). 하나라도 빠지면 그 상태의 시체가 <b>아무것도 안 한 채 200</b> 을
      * 받는다 — {@code STARTING} 에서 죽은 행이 이 API 의 주 대상이라 특히 그렇다.
      *
+     * <p><b>폴백까지 그대로 옮긴다.</b> {@code RunningJobProbe.lastProgress} 가
+     * {@code MAX(LAST_UPDATED)} → {@code START_TIME} → {@code CREATE_TIME} 순으로
+     * 떨어지는데, {@code NOT EXISTS} 로만 쓰면 <b>Step 행이 없는 실행에서 무조건 참</b>이
+     * 되어 방금 뜬 {@code STARTING} 실행도 닫는다. 그 모양이 이 API 의 주 대상이라 특히
+     * 위험하다.
+     *
      * <p><b>진도 조건을 여기 함께 건다.</b> 판정({@code requireStuck})과 쓰기가 따로면
      * 그 사이에 실행이 되살아날 수 있고 — 락 대기가 풀리는 경우가 그렇다 — 그때
      * <b>살아 있는 만료를 {@code FAILED} 로 닫는다.</b> 만료는 재고를 쓰는 유일한 잡이라
@@ -92,9 +98,9 @@ public class ExpireRecoveryService {
                SET je.VERSION = je.VERSION + 1
              WHERE je.JOB_EXECUTION_ID = :id
                AND je.STATUS IN ('STARTING','STARTED','STOPPING')
-               AND NOT EXISTS (SELECT 1 FROM BATCH_STEP_EXECUTION se
-                                WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID
-                                  AND se.LAST_UPDATED > :stuckBefore)
+               AND COALESCE((SELECT MAX(se.LAST_UPDATED) FROM BATCH_STEP_EXECUTION se
+                              WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID),
+                            je.START_TIME, je.CREATE_TIME) <= :stuckBefore
             """;
 
     /** 선점에 진 뒤 <b>현재 읽기</b>로 상태를 본다. 스냅샷 읽기는 옛 값을 준다(RR). */

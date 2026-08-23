@@ -91,7 +91,8 @@ class ExpireRecoveryTest {
      * 정리가 한 번 실패하면 그 뒤 전부가 <b>심기 단계</b>에서 깨지고, 원인이 안 드러난다.
      */
     private static LocalDateTime key(int slot) {
-        return LocalDateTime.of(2026, 5, slot, 4, 10);
+        // 슬롯이 28 을 넘어도 되게 시(時)로 넓힌다 — 일(日)로만 만들면 32 에서 죽는다.
+        return LocalDateTime.of(2026, 5, 1, 0, 0).plusHours(slot);
     }
 
     /**
@@ -500,6 +501,53 @@ class ExpireRecoveryTest {
             assertThat(jobRepository.getJobExecution(dead.executionId()).getStatus())
                     .isEqualTo(BatchStatus.STARTED);
         }
+    }
+
+    /**
+     * <b>Step 이 없으면 선점이 {@code START_TIME} 으로 판정한다.</b>
+     *
+     * <p>{@code NOT EXISTS (LAST_UPDATED > stuckBefore)} 로만 쓰면 <b>Step 행이 없을 때
+     * 무조건 참</b>이라 방금 뜬 {@code STARTING} 실행도 닫힌다 — 하필 그 모양이 이 API 의
+     * 주 대상이라 위험이 크다. 판정({@code RunningJobProbe.lastProgress})은
+     * {@code START_TIME} 으로 떨어지는데 선점문이 그 폴백을 안 따라가면 둘이 갈린다.
+     *
+     * <p><b>기준 시각을 DB 에서 읽어 만든다.</b> 프레임워크가 쓴 {@code START_TIME} 은
+     * 드라이버의 존 정규화를 타는데 파라미터로 넣는 값은 안 탄다 — 테스트 JVM 이 KST 라
+     * (CY-392 가 일부러 그렇게 뒀다) 자바 쪽 {@code now()} 로 만든 값과 <b>아홉 시간
+     * 어긋난다</b>(실측: {@code stuckBefore=01:07} vs {@code START_TIME=16:37}).
+     * 그래서 그 컬럼을 읽어 <b>상대로</b> 밀어 술어만 잰다. 운영은 {@code TZ=UTC} 라
+     * 두 축이 같다.
+     */
+    @Test
+    @DisplayName("Step 이 없으면 START_TIME 으로 가른다 — 없다는 이유만으로 닫지 않는다")
+    void claimFallsBackToStartTimeWhenNoStepExists() throws Exception {
+        try (RunningJobFixture fresh = RunningJobFixture.plantWithoutStep(
+                jobRepository, ExpireStepContext.JOB_NAME, key(31), LocalDateTime.now(),
+                BatchStatus.STARTING)) {
+
+            LocalDateTime startTime = jdbcClient
+                    .sql("SELECT START_TIME FROM BATCH_JOB_EXECUTION "
+                            + "WHERE JOB_EXECUTION_ID = :id")
+                    .param("id", fresh.executionId())
+                    .query(LocalDateTime.class).single();
+
+            assertThat(claim(fresh.executionId(), startTime.minusMinutes(1)))
+                    .as("START_TIME 이 임계보다 뒤면 살아 있는 것이다 — "
+                            + "폴백이 없으면 Step 행이 없다는 이유만으로 닫힌다")
+                    .isZero();
+
+            assertThat(claim(fresh.executionId(), startTime.plusMinutes(1)))
+                    .as("임계를 넘겼으면 걷힌다 — 폴백이 아예 안 걸리는 것도 아니어야 한다")
+                    .isEqualTo(1);
+        }
+    }
+
+    /** 선점문을 그대로 쳐서 대상 여부만 잰다. 흐름 테스트로는 못 만드는 창을 여기서 본다. */
+    private int claim(long executionId, LocalDateTime stuckBefore) {
+        return jdbcClient.sql(ExpireRecoveryService.CLAIM)
+                .param("id", executionId)
+                .param("stuckBefore", stuckBefore)
+                .update();
     }
 
     /**

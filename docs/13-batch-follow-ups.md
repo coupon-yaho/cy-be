@@ -638,8 +638,12 @@ SELECT e.JOB_EXECUTION_ID, i.JOB_NAME, e.STATUS, e.CREATE_TIME, e.START_TIME,
                FROM BATCH_STEP_EXECUTION GROUP BY JOB_EXECUTION_ID) p
     ON p.JOB_EXECUTION_ID = e.JOB_EXECUTION_ID
  WHERE e.STATUS IN ('STARTING','STARTED','STOPPING')
-   AND (p.last_progress IS NULL
-        OR p.last_progress < NOW() - INTERVAL 30 MINUTE)   -- batch.stuck-job-after-ms
+   -- ⚠️ **폴백을 여기 그대로 옮긴다** — RunningJobProbe.lastProgress 가
+   --    MAX(LAST_UPDATED) → START_TIME → CREATE_TIME 순으로 떨어진다.
+   --    `p.last_progress IS NULL` 로 두면 **Step 행이 아직 없는 실행이 무조건 나온다** —
+   --    방금 뜬 STARTING 실행이 그 모양이라 살아 있는 잡을 시체로 신고한다.
+   AND COALESCE(p.last_progress, e.START_TIME, e.CREATE_TIME)
+       < NOW() - INTERVAL 30 MINUTE                        -- batch.stuck-job-after-ms
  ORDER BY e.JOB_EXECUTION_ID;
 ```
 
@@ -678,9 +682,11 @@ UPDATE BATCH_JOB_EXECUTION je
  WHERE je.JOB_EXECUTION_ID = :id
    AND i.JOB_NAME = 'expireJob'
    AND je.STATUS IN ('STARTING','STARTED','STOPPING')
-   AND NOT EXISTS (SELECT 1 FROM (SELECT * FROM BATCH_STEP_EXECUTION) se
-                    WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID
-                      AND se.LAST_UPDATED > :stuckBefore);
+   -- 위 찾기와 **같은 판정**이어야 한다. NOT EXISTS 만 쓰면 Step 행이 없는 실행에서
+   -- 무조건 참이 되어 :stuckBefore 와 무관하게 닫힌다.
+   AND COALESCE((SELECT MAX(se.LAST_UPDATED) FROM BATCH_STEP_EXECUTION se
+                  WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID),
+                je.START_TIME, je.CREATE_TIME) <= :stuckBefore;
 
 -- recover 는 Step 행도 닫는다. 손 SQL 도 같이 해야 두 경로의 산출물이 같다.
 -- 위 UPDATE 가 1행일 때만 친다.
