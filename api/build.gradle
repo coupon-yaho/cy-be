@@ -95,3 +95,8 @@ tasks.named('test') {
         .withPropertyName('prometheusScrapeContractInputs')
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+tasks.register('mockServer', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.kafkick.api.admin.observability.mockserver.MockMetricsServer'
+}
