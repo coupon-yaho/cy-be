@@ -157,7 +157,13 @@ public final class MockMetricsServer {
     private static void addCors(HttpExchange exchange) {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-User-Id");
+        // 실서버의 CallerFilter 는 X-User-Id 만 읽고 나머지 헤더는 무시한다 — 거부하지 않는다.
+        // 목이 허용 목록을 심사하면 실서버보다 엄격해져, 화면이 헤더를 하나 더 붙일 때마다 막힌다.
+        String requested = exchange.getRequestHeaders().getFirst("Access-Control-Request-Headers");
+        exchange.getResponseHeaders().set(
+                "Access-Control-Allow-Headers",
+                requested == null || requested.isBlank() ? "Content-Type, X-User-Id" : requested);
+        exchange.getResponseHeaders().set("Access-Control-Max-Age", "600");
     }
 
     private static Map<String, String> queryParameters(URI uri) {
