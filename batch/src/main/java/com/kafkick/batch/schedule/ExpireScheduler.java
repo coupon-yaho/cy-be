@@ -36,7 +36,7 @@ import com.kafkick.core.support.TimeProvider;
  * 다르기 때문이다 — 켜진 채 검증 셋을 보면 되돌릴 수 없고, 꺼진 채 운영을 보면 나중에 돌려
  * 따라잡을 수 있기 때문이다.
  *
- * <p><b>{@code BatchJobNotRunning} 은 CY-359 부터 실제로 평가된다</b>
+ * <p><b>{@code ExpireNotSucceeding} 은 CY-359 부터 실제로 평가된다</b>
  * ({@code infra/prometheus/prometheus.yml} 이 그 사실을 적어 두었고 {@code base.yml} 이
  * 규칙 디렉터리를 마운트한다). 그래서 이 기본값의 반대편 사고 — 스케줄러가 꺼진 채 뜨는 것 —
  * 는 감지된다.
