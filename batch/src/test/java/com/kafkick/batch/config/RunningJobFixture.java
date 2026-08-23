@@ -137,6 +137,30 @@ public final class RunningJobFixture implements AutoCloseable {
         return new RunningJobFixture(jobRepository, instance, execution);
     }
 
+    /**
+     * <b>이미 끝난 성공 실행</b>을 심는다. 마지막 성공 시각 축이 쓰는 모양이다.
+     *
+     * <p>{@code END_TIME} 은 <b>프레임워크 쓰기 경로로</b> 넣는다 — 드라이버가 지역시각을
+     * UTC 로 옮기고 읽을 때 되돌리므로 그 경로로 넣어야 왕복이 맞는다. SQL 로 절대 시각을
+     * 넣으면 읽기 변환만 한 번 더 먹어 <b>아홉 시간 미래</b>로 되살아난다(실측했다).
+     */
+    public static RunningJobFixture plantCompleted(JobRepository jobRepository, String jobName,
+            LocalDateTime key, Duration endedAgo) {
+        RunningJobFixture fixture = plantWithoutStep(
+                jobRepository, jobName, key, LocalDateTime.now().minus(endedAgo).minusMinutes(1));
+
+        fixture.execution.setStatus(BatchStatus.COMPLETED);
+        fixture.execution.setEndTime(LocalDateTime.now().minus(endedAgo));
+        jobRepository.update(fixture.execution);
+
+        return fixture;
+    }
+
+    /** 심은 실행의 종료 시각. 게이지가 이 값을 에폭으로 내야 한다. */
+    public LocalDateTime endTime() {
+        return execution.getEndTime();
+    }
+
     public long executionId() {
         return execution.getId();
     }

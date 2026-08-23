@@ -78,7 +78,7 @@ class ExpireSchedulerTest {
      * {@code matchIfMissing} 만 남는 상황이고, 그 값이 이 결정의 전부다.
      *
      * <p>되돌리면 여기가 빨개진다. 꺼진 채 운영을 보는 반대편 사고는 나중에 돌려 따라잡을 수 있고
-     * {@code BatchJobNotRunning} 알림도 잡아 주므로, 무게가 같지 않다.
+     * {@code ExpireNotSucceeding} 알림도 잡아 주므로, 무게가 같지 않다.
      */
     @Nested
     @SpringBootTest(properties = "spring.batch.job.enabled=false")

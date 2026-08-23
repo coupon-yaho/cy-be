@@ -28,6 +28,11 @@ import org.junit.jupiter.api.Test;
  * {@code now()} 를 부르며 <i>"프로브도 쓴다"</i> 를 근거로 삼는다 — 예외가 선례가 되는
  * 자리를 여기서 끊는다. 늘리려면 이 목록을 고쳐야 하고, 그때 리뷰가 걸린다.
  *
+ * <p><b>SQL 안의 {@code NOW()} 는 안 본다.</b> 패턴이 자바 호출만 잡는다.
+ * {@code BatchRunMetricsRefresher} 의 조회 창이 {@code DATE_SUB(NOW(), INTERVAL 7 DAY)} 를
+ * 쓰는데, 그것은 <b>판정이 아니라 조회 범위</b>라 규칙 밖이다 — 판정에 쓰이면 같은 금지가
+ * 적용되어야 하고, 그때는 이 테스트가 못 잡는다는 것을 알고 있어야 한다.
+ *
  * <p><b>이 모듈만 훑는다.</b> 검증 규칙 SQL 이 사는 {@code storage} 와 도메인이 사는
  * {@code core} 는 범위 밖이다 — 지금 그쪽에 위반이 없는 것은 확인했지만, 이 테스트가
  * 그것을 지켜 주지는 않는다. {@code core} 는 {@code TimeProvider} 정의부가 정당하게
