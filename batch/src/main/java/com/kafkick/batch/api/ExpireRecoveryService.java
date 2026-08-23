@@ -166,6 +166,18 @@ public class ExpireRecoveryService {
                         "선점에 실패했고 실행이 아직 돌고 있습니다. 지금=" + status
                                 + " executionId=" + executionId);
             }
+            if (BatchStatus.valueOf(status) != BatchStatus.FAILED) {
+                // 그 사이 정상 종료했다. 아무도 걷어내지 않았으므로 성공이 아니다 —
+                // 선점 전 경로가 같은 상태에 409 를 내는 것과 답이 같아야 한다.
+                //
+                // **이 갈래는 테스트가 못 잡는다.** 선점 전 검사가 종단 상태를 먼저
+                // 막으므로, 여기 오려면 그 읽기와 선점 사이에 잡이 스스로 끝나야 한다 —
+                // 밖에서 결정적으로 만들 수 없는 창이다. 돌연변이도 살아남는 것을
+                // 확인했다. 그래도 두는 이유는 답이 갈리면 안 되기 때문이다.
+                throw new BusinessException(ExpirationErrorCode.EXPIRE_EXECUTION_NOT_STUCK,
+                        "그 사이 실행이 끝났습니다. 지금=" + status
+                                + " executionId=" + executionId);
+            }
             log.info("다른 요청이 먼저 걷어냈습니다. executionId={} status={}",
                     executionId, status);
             return new Outcome(status, true);

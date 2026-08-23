@@ -137,8 +137,9 @@ public final class RunningJobFixture implements AutoCloseable {
         JobExecution execution =
                 jobRepository.createJobExecution(instance, parameters, new ExecutionContext());
 
-        // createJobExecution 은 STARTING 으로 만든다. 그것도 가드가 보는 상태지만, 실제로
-        // 막는 상황은 대부분 STARTED 이므로 그쪽을 재현한다.
+        // createJobExecution 은 STARTING 으로 만든다. 상태는 인자로 정한다 — 위임
+        // 오버로드가 STARTED 를 기본으로 주고, 복구 API 테스트는 STARTING·STOPPING 도
+        // 심는다(선점문의 STATUS 목록을 재려면 셋이 다 필요하다).
         execution.setStatus(status);
         execution.setStartTime(startedAt);
         jobRepository.update(execution);

@@ -197,7 +197,7 @@ cy_expire_blocked_coupons   게이지. **마지막으로 성공한 실행이** �
 > `cy_verification_findings` 가 노출되고 규칙도 걸렸다. 판정 근거를 남기려고
 > 본문을 그대로 두지만, **읽는 사람은 미완으로 오해하지 말 것.**
 
-`verdict = FAIL` 은 **정상 종료**다(원칙대로). 그래서 **알림이 하나도 안 울린다.**
+`verdict = FAIL` 은 **정상 종료**다(원칙대로). 그래서 **그때는 알림이 하나도 안 울렸다.**
 `verification_runs.verdict` 가 DB 에 남을 뿐, 누가 그 행을 조회하기 전까지 아무도 모른다.
 게이트 판정의 본체인데 통로가 없다.
 
@@ -337,7 +337,7 @@ expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pe
 > 규칙 22개가 로드되고 mock 리시버까지 배선됐다. CI 가 `promtool check config` 와
 > `test rules` 를 매번 돌린다. **아래는 그때의 초안이다.**
 
-규칙 파일은 있는데 **읽는 프로세스가 없다.** `prometheus.yml` 이 그 사실을 스스로 적어 뒀다.
+그때는 규칙 파일은 있는데 **읽는 프로세스가 없었다.** `prometheus.yml` 이 그 사실을 스스로 적어 뒀다.
 **언제** — CY-359. 단계와 검증 계약은 `docs/14-observability-wiring.md` 에 있다.
 그 전까지 위 알림을 아무리 잘 써도 아무도 안 본다.
 
@@ -667,11 +667,23 @@ SELECT e.JOB_EXECUTION_ID, i.JOB_NAME, e.STATUS, e.CREATE_TIME, e.START_TIME,
 -- 그 asOf 슬롯을 영원히 태운다.
 -- EXIT_CODE 는 안 건드린다 — recover 도 setExitStatus 를 안 부르므로 하드킬된 행은
 -- 'UNKNOWN' 인 채로 남는다(6.0.4). 두 경로의 산출물을 같게 두려면 여기도 그래야 한다.
-UPDATE BATCH_JOB_EXECUTION
-   SET STATUS = 'FAILED', END_TIME = NOW(6), VERSION = VERSION + 1
- WHERE JOB_EXECUTION_ID = :id;
+-- ⚠️ **API 의 선점문과 같은 조건을 건다.** id 만 걸면 한 자리 오타가 **남의 잡**을,
+--    또는 **살아 있는 실행**을 닫는다 — 그러면 그 실행의 다음 update() 가 낙관적 락에
+--    걸려 죽고, 만료는 재고를 쓰는 유일한 잡이다.
+--    :stuckBefore 는 batch.stuck-job-after-ms 만큼 과거다(기본 30분).
+-- **변경 행 수를 반드시 확인한다.** 0이면 대상이 아니었다는 뜻이므로 멈춘다.
+UPDATE BATCH_JOB_EXECUTION je
+  JOIN BATCH_JOB_INSTANCE i ON i.JOB_INSTANCE_ID = je.JOB_INSTANCE_ID
+   SET je.STATUS = 'FAILED', je.END_TIME = NOW(6), je.VERSION = je.VERSION + 1
+ WHERE je.JOB_EXECUTION_ID = :id
+   AND i.JOB_NAME = 'expireJob'
+   AND je.STATUS IN ('STARTING','STARTED','STOPPING')
+   AND NOT EXISTS (SELECT 1 FROM (SELECT * FROM BATCH_STEP_EXECUTION) se
+                    WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID
+                      AND se.LAST_UPDATED > :stuckBefore);
 
 -- recover 는 Step 행도 닫는다. 손 SQL 도 같이 해야 두 경로의 산출물이 같다.
+-- 위 UPDATE 가 1행일 때만 친다.
 UPDATE BATCH_STEP_EXECUTION
    SET STATUS = 'FAILED', END_TIME = NOW(6), VERSION = VERSION + 1
  WHERE JOB_EXECUTION_ID = :id AND STATUS IN ('STARTING','STARTED','STOPPING');

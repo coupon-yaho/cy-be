@@ -357,19 +357,25 @@ class ExpireRecoveryTest {
             var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
             var start = new java.util.concurrent.CountDownLatch(1);
             var results = new java.util.concurrent.CopyOnWriteArrayList<Boolean>();
+            // Future 를 모아 get() 으로 다시 던진다. 안 받으면 워커의 예외와 단언 실패가
+            // Future 안에 갇혀, 남는 신호가 results 크기 불일치 하나뿐이라 원인이 안 보인다.
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<Void>>();
             for (int i = 0; i < 2; i++) {
-                pool.submit(() -> {
+                futures.add(pool.submit(() -> {
                     start.await();
                     var res = api().post(path);
                     assertThat(res.statusCode()).isEqualTo(200);
                     results.add(VerifyApiProbe.json(res).path("data")
                             .path("alreadyRecovered").asBoolean());
                     return null;
-                });
+                }));
             }
             start.countDown();
             pool.shutdown();
             assertThat(pool.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            for (var future : futures) {
+                future.get();
+            }
 
             assertThat(results).as("둘 다 200 이어야 한다").hasSize(2);
             assertThat(results.stream().filter(already -> !already).count())
