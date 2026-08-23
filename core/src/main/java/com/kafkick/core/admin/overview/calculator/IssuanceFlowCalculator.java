@@ -173,7 +173,7 @@ public class IssuanceFlowCalculator {
                                     List<IssuanceBucket> buckets, Instant lastCompletedAt,
                                     Instant conditionStartedAt, SourceStatus sourceStatus,
                                     Instant observedAt) {
-        /** 입력의 식별자·수량·상태·시간 관계를 검증하고 버킷 목록을 불변 복사합니다. */
+        /** 입력의 식별자·수량·상태·시간 관계를 검증하고 존재하는 버킷 목록을 불변 복사합니다. */
         public IssuanceFlowInput {
             Objects.requireNonNull(couponId, "couponId");
             Objects.requireNonNull(campaignStatus, "campaignStatus");
@@ -226,6 +226,8 @@ public class IssuanceFlowCalculator {
                         && lastCompletedAt.isAfter(conditionStartedAt)) {
                     throw new IllegalArgumentException("lastCompletedAt은 무발급 conditionStartedAt 이후일 수 없습니다.");
                 }
+            }
+            if (buckets != null) {
                 buckets = List.copyOf(buckets);
             }
         }

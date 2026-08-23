@@ -77,7 +77,7 @@ public class CustomerOutcomeCalculator {
      */
     public record OutcomeInput(Instant windowStart, Instant windowEnd, List<OutcomeCount> counts,
                                SourceStatus sourceStatus, Instant observedAt) {
-        /** 필수 시간·목록·상태와 값 있는 상태의 관측 시각을 검증합니다. */
+        /** 필수 시간·목록·상태와 값 있는 상태의 관측 시각을 검증하고 존재하는 목록을 불변 복사합니다. */
         public OutcomeInput {
             Objects.requireNonNull(sourceStatus, "sourceStatus");
             if (sourceStatus.carriesValue() != (observedAt != null)) {
@@ -94,6 +94,8 @@ public class CustomerOutcomeCalculator {
                         && counts.stream().mapToLong(OutcomeCount::count).anyMatch(count -> count != 0L)) {
                     throw new IllegalArgumentException("NO_TRAFFIC 결과 count는 0이어야 합니다.");
                 }
+            }
+            if (counts != null) {
                 counts = List.copyOf(counts);
             }
         }
