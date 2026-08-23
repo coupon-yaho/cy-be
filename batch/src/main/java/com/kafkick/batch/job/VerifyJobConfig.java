@@ -32,6 +32,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
+import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.replay.AsOfStateItemWriter;
 import com.kafkick.batch.replay.IllegalTransitionItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
@@ -734,11 +735,7 @@ public class VerifyJobConfig {
             ExpectedFindingRepository expectedFindings,
             ReplayHistoryRepository histories,
             VerificationRuleRepository rules,
-            // 기본값이 true 인 것은 의도다. 여기서는 이 플래그를 "스케줄러가 도는 중인가" 로
-            // 읽어 검증을 거부하는 데 쓰므로, 모를 때는 도는 것으로 보고 막는 쪽이 안전하다.
-            // ExpireScheduler 는 같은 키를 반대로(없으면 안 돈다) 읽는다 — 거기서도 그쪽이
-            // 안전한 방향이다. 둘을 일관성 때문에 맞추면 한쪽은 반드시 위험해진다.
-            @Value("${batch.scheduling.enabled:true}") boolean schedulingEnabled
+            RunningJobProbe runningJobs
     ) {
         return new StepBuilder("startRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -752,7 +749,7 @@ public class VerifyJobConfig {
                     int attempt = parameters.getLong("attempt").intValue();
 
                     rejectUnsupportedScope(scope);
-                    rejectRunningSchedulers(schedulingEnabled);
+                    rejectRunningExpire(runningJobs);
 
                     // 창이 없어도 마지막 이력 시각은 온다. ifPresent 안에 검사를 넣으면
                     // asOf 가 모든 이력보다 앞서는 경우 — 거부해야 하는 바로 그 경우 — 를 건너뛴다.
@@ -941,7 +938,10 @@ public class VerifyJobConfig {
         if (updatedAfter) {
             throw new BusinessException(
                     VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
-                    "asOf 이후에 갱신된 발급건이 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
+                    "asOf 이후에 갱신된 발급건이 있습니다. 이 asOf 로는 다시 검증할 수 "
+                            + "없습니다 — 만료가 찍은 updated_at 은 지워지지 않습니다. "
+                            + "다음 asOf 의 하한은 SELECT MAX(updated_at) FROM issuances 입니다. "
+                            + "갱신을 멈춘 뒤 그보다 뒤로 부르십시오. "
                             + "asOf=" + asOf);
         }
     }
@@ -957,24 +957,50 @@ public class VerifyJobConfig {
         if (updatedAfter) {
             throw new BusinessException(
                     VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
-                    "asOf 이후에 갱신된 재고가 있습니다. 런타임과 스케줄러를 멈추고 다시 실행하십시오. "
+                    "asOf 이후에 갱신된 재고가 있습니다. 이 asOf 로는 다시 검증할 수 "
+                            + "없습니다 — 만료가 찍은 updated_at 은 지워지지 않습니다. "
+                            + "다음 asOf 의 하한은 SELECT MAX(updated_at) FROM coupon_stocks 입니다. "
+                            + "갱신을 멈춘 뒤 그보다 뒤로 부르십시오. "
                             + "asOf=" + asOf);
         }
     }
 
     /**
-     * 스케줄러가 켜진 채로는 검증하지 않는다.
+     * 만료가 <b>도는 중이면</b> 검증하지 않는다.
      *
-     * <p>스케줄러가 이 프로세스 안에 함께 있다. 만료 스케줄러가 5분마다 {@code issuances} 를
-     * 건드리므로, 켜둔 채로 돌리면 실행 도중 갱신이 거의 확실히 일어난다. 런북이 "먼저 끈다" 를
-     * 요구하는데 지금까지 그것을 강제하는 수단이 없었다.
+     * <p>예전에는 {@code batch.scheduling.enabled} 를 봤다. 그것은 <i>"만료 스케줄러 빈이
+     * 만들어졌는가"</i>라서, 운영처럼 늘 켜 두는 환경에서는 <b>검증이 영영 못 돌았다</b> —
+     * 검증이 온디맨드로 밀린 이유가 여기였고 감시 공백의 절반이 그 결과였다.
+     *
+     * <p>만료는 재고를 쓰는 유일한 배치이고, 판정 근거인 {@code dataset_fingerprint} 재료에
+     * {@code sum(active_count)} 와 {@code max(updated_at)} 이 들어 있다. 검증 중에 만료가
+     * 지나가면 <b>판정의 입력이 판정 도중에 바뀐다.</b>
+     *
+     * <p><b>이 가드가 그것을 보장하지는 않는다.</b> 통과 직후에 만료 크론이 발화하는 창이
+     * 남고, 그 창은 {@code assertFrozenStep} 이 잡는다. 여기서 미리 답하는 것은
+     * <b>3분 뒤에 버릴 실행을 시작 전에 끝내기 위해서</b>다.
+     * 자세한 것은 {@link com.kafkick.batch.config.RunningJobProbe} 에 적었다.
      */
-    private static void rejectRunningSchedulers(boolean schedulingEnabled) {
-        if (schedulingEnabled) {
+    private void rejectRunningExpire(RunningJobProbe runningJobs) {
+        // **이 트랜잭션의 읽기 뷰로 보면 안 된다.** REPEATABLE READ 의 뷰는 이 트랜잭션의
+        // 첫 비잠금 읽기에서 고정된다(assertStillFrozen 이 MySQL 8.0.35 실측으로 적어 뒀다).
+        // 이 가드는 "지금 커밋된 최신 상태" 를 물어야 하므로, 앞에서 무엇을 읽었든 상관없이
+        // 새 뷰로 읽는다 — statsAggregateStep 이 같은 이유로 쓰는 패턴이다.
+        //
+        // (앞선 rejectDatasetMismatch 가 information_schema 만 치는데 그것이 InnoDB 읽기 뷰를
+        //  여는지는 안 쟀다. 그래서 "이미 고정됐다" 를 근거로 쓰지 않는다 — REQUIRES_NEW 는
+        //  그 답과 무관하게 성립한다.)
+        TransactionTemplate freshView = new TransactionTemplate(transactionManager);
+        freshView.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        freshView.setReadOnly(true);
+        List<Long> running = freshView.execute(
+                ignored -> runningJobs.blockingExecutions(ExpireJobConfig.JOB_NAME));
+
+        if (running != null && !running.isEmpty()) {
             throw new BusinessException(
                     VerificationErrorCode.RUNTIME_NOT_QUIESCED,
-                    "스케줄러가 켜진 상태에서는 검증할 수 없습니다. "
-                            + "batch.scheduling.enabled=false 로 두고 다시 실행하십시오.");
+                    "만료 배치가 실행 중이라 검증할 수 없습니다. 끝난 뒤 다시 실행하십시오. "
+                            + "executionIds=" + running);
         }
     }
 
@@ -1180,8 +1206,8 @@ public class VerifyJobConfig {
     /**
      * <b>{@code assertFrozenStep} 과 같은 네 축을 다시 본다.</b> 그 Step 은 규칙 뒤에 한 번
      * 보는데, 통계 Step 이 그보다 뒤에 붙어서 <b>그 사이가 무방비</b>가 됐다.
-     * {@code rejectRunningSchedulers} 는 이 JVM 의 플래그만 보므로 api 프로세스는 그 플래그로
-     * 멈추지 않는다.
+     * {@code rejectRunningExpire} 는 배치 메타의 만료 실행만 보므로 api 프로세스의 발급
+     * 트래픽은 애초에 그 조회에 안 잡힌다.
      *
      * <p>회차 축은 시각으로 못 본다({@code coupons} 에 {@code updated_at} 이 없다) — 그래서
      * {@code policyDigest} 로 접어 대조한다. {@code assertFrozenStep} 과 같은 방식이다.
