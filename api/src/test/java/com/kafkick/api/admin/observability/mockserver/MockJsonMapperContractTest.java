@@ -43,7 +43,7 @@ class MockJsonMapperContractTest {
     }
 
     @Test
-    void mockMapperMatchesSpringMapperForEveryNullableContractCombination() throws Exception {
+    void mockMapperMatchesSpringMapperForAllScopeTypesAndSourceStatuses() throws Exception {
         AdminMetricsResponse comprehensive = comprehensiveResponse();
         List<AdminMetricsResponse> responses = List.of(
                 comprehensive,

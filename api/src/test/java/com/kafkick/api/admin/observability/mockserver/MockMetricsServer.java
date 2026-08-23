@@ -90,7 +90,13 @@ public final class MockMetricsServer {
     }
 
     private void handleMetrics(HttpExchange exchange) throws IOException {
-        Map<String, String> parameters = queryParameters(exchange.getRequestURI());
+        Map<String, String> parameters;
+        try {
+            parameters = queryParameters(exchange.getRequestURI());
+        } catch (IllegalArgumentException invalidQuery) {
+            sendFailure(exchange, CommonErrorCode.INVALID_INPUT, "잘못된 쿼리 파라미터입니다.");
+            return;
+        }
         String windowValue = parameters.get("window");
         if (windowValue == null || windowValue.isBlank()) {
             sendFailure(exchange, CommonErrorCode.INVALID_INPUT, "window는 필수입니다.");
