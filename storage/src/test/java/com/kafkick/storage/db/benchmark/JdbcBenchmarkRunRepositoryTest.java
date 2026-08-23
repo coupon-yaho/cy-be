@@ -479,6 +479,19 @@ class JdbcBenchmarkRunRepositoryTest {
             assertThat(done.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.DONE);
             assertThat(done.archiveFailureReason()).isNull();
         }
+
+        @Test
+        @DisplayName("FAILED archive 재시도 소유권은 한 요청만 얻는다")
+        void failedArchiveCanBeClaimedOnlyOnce() {
+            long id = finalizedRun();
+            repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "timeout");
+
+            assertThat(repository.claimFailedArchive(id)).isTrue();
+            assertThat(repository.claimFailedArchive(id)).isFalse();
+            BenchmarkRun claimed = repository.findById(id).orElseThrow();
+            assertThat(claimed.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.NONE);
+            assertThat(claimed.archiveFailureReason()).isNull();
+        }
     }
 
     // ── 고정값 ───────────────────────────────────────────────────────────────

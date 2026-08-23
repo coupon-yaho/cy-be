@@ -116,4 +116,7 @@ public interface BenchmarkRunRepository {
      * @return 실제로 갱신했으면 true
      */
     boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason);
+
+    /** FAILED를 NONE으로 원자 전이해 archive 재시도 소유권을 얻는다. */
+    boolean claimFailedArchive(long id);
 }

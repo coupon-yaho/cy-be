@@ -68,3 +68,9 @@ server:
   tomcat:
     mbeanregistry:
       enabled: true
+
+observation:
+  prometheus:
+    archive:
+      connect-timeout: 1s
+      read-timeout: 10s

@@ -312,6 +312,15 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
                 """, status.name(), failureReason, id);
     }
 
+    @Override
+    public boolean claimFailedArchive(long id) {
+        return update("""
+                UPDATE benchmark_runs
+                SET archive_status = 'NONE', archive_failure_reason = NULL
+                WHERE id = ? AND archive_status = 'FAILED'
+                """, id);
+    }
+
     /**
      * 조건부 UPDATE 한 문장을 돌리고, 갱신 행 수가 1 인지 돌려준다.
      *

@@ -138,6 +138,17 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
         return true;
     }
 
+    @Override
+    public boolean claimFailedArchive(long id) {
+        Row row = rows.get(id);
+        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.FAILED) {
+            return false;
+        }
+        row.archiveStatus = BenchmarkArchiveStatus.NONE;
+        row.archiveFailureReason = null;
+        return true;
+    }
+
     private static final class Row {
 
         private final long id;
