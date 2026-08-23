@@ -116,6 +116,46 @@ public class RunningJobProbe {
     }
 
     /**
+     * <b>진도가 멈춘 채 남은 실행 하나.</b> {@code JobExecution} 만 주면 부르는 쪽이
+     * "마지막 진도" 를 다시 계산해야 하는데, <b>그 폴백이 갈리면 판정과 표시가 다른 컬럼을
+     * 가리킨다</b> — 실제로 그렇게 썼다가 리뷰가 잡았다. 판정에 쓴 값을 그대로 싣는다.
+     *
+     * <p>{@code stalledSeconds} 도 여기서 낸다. 배치 메타의 시각은 프레임워크가 <b>JVM 기본
+     * 존</b>으로 찍으므로({@link #blockingExecutions} 의 근거) 그 뺄셈은 이 파일의 좌표계에서
+     * 해야 한다. 부르는 쪽으로 넘기면 벽시계 예외가 한 파일 더 늘어난다.
+     */
+    public record StuckRun(JobExecution execution, LocalDateTime lastProgress,
+            long stalledSeconds, LocalDateTime stuckBefore) {
+    }
+
+    /**
+     * <b>진도가 멈춘 채 남은 실행들.</b> {@link #stuckExecutionCount} 가 세는 것과
+     * <b>같은 판정</b>이고, 그것을 수(數)가 아니라 목록으로 낸다.
+     *
+     * <p>{@code BatchStuckExecution} 알림이 <i>"몇 건 있다"</i> 까지만 말해 준다. 그다음
+     * <b>어느 실행인지</b>와 <b>진짜 죽었는지</b>를 사람이 봐야 하는데, 그 길이 지금까지
+     * {@code docs/13} 의 손 SQL 뿐이었다 — 그 SQL 은 살아 있는 실행을 함께 뽑지 않으려고
+     * 임계를 직접 적어야 했고, <b>그 숫자가 이 클래스와 갈리는 순간 운영자가 살아 있는
+     * 잡을 걷어낸다.</b> 여기서 내면 임계가 한 곳에 남는다.
+     *
+     * <p>추가 질의는 없다 — {@code findRunningJobExecutions} 가 StepExecution 을 채워서
+     * 주므로 마지막 진도까지 이 객체 안에 있다.
+     */
+    public List<StuckRun> stuckExecutions(String jobName) {
+        LocalDateTime now = LocalDateTime.now();
+        return jobRepository.findRunningJobExecutions(jobName).stream()
+                .filter(execution -> isStuck(jobName, execution, now))
+                .sorted(Comparator.comparing(JobExecution::getId))
+                .map(execution -> {
+                    LocalDateTime progress = lastProgress(execution);
+                    return new StuckRun(execution, progress,
+                            Duration.between(progress, now).toSeconds(),
+                            now.minus(stuckAfter));
+                })
+                .toList();
+    }
+
+    /**
      * 진도가 멈춘 채 실행 중으로 남은 행의 수 — <b>가드가 무시하기로 한 것들</b>이다.
      *
      * <p>가드가 그것을 무시할 때 남기는 것은 WARN 로그뿐인데, 로그는 감시 수단이 아니다.
@@ -124,6 +164,8 @@ public class RunningJobProbe {
      * 되읽기 주기마다 같은 줄이 쌓이면 그것이 다른 로그를 밀어낸다.
      *
      * <p>임계와 판정 규칙을 이 클래스에 두는 이유는 하나다 — 두 곳에 적으면 갈린다.
+     *
+     * <p>목록이 필요하면 {@link #stuckExecutions} 다 — 같은 판정이다.
      */
     public int stuckExecutionCount(String jobName) {
         // blockingExecutions 와 같은 이유로 LocalDateTime.now() 다 — 배치 메타의 시각이
@@ -215,8 +257,7 @@ public class RunningJobProbe {
      * 생성 시각으로 물러난다.
      *
      * <p>{@code STARTING} 에서 죽어 Step 도 {@code START_TIME} 도 없는 행이 있는데,
-     * 그 갈래가 없으면 그런 행이 <b>영원히</b> 막는다. 만료 실행에는 {@code abandon} 경로가
-     * 없어(그 엔드포인트는 {@code verifyJob} 로 필터링돼 있다) SQL 을 직접 치는 수밖에 없다.
+     * 그 갈래가 없으면 그런 행이 <b>영원히</b> 막는다. 그 행은 CY-429 의 복구 API 로 걷는다.
      */
     private static LocalDateTime lastProgress(JobExecution execution) {
         return execution.getStepExecutions().stream()

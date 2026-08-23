@@ -115,11 +115,20 @@ public final class RunningJobFixture implements AutoCloseable {
      * <b>{@code STARTING} 에서 죽어 Step 이 하나도 없는 실행</b>을 심는다.
      *
      * <p>이 갈래가 있어야 프로브의 폴백({@code startTime} → {@code createTime})이 재진다.
-     * 폴백이 없으면 이런 행이 <b>영원히</b> 가드를 켜 두고, 만료 실행에는 {@code abandon}
-     * 경로가 없어 SQL 을 직접 치는 수밖에 없다.
+     * 폴백이 없으면 이런 행이 <b>영원히</b> 가드를 켜 두고, 그 행은 CY-429 의 복구 API 로 걷는다.
      */
     public static RunningJobFixture plantWithoutStep(JobRepository jobRepository, String jobName,
             LocalDateTime key, LocalDateTime startedAt) {
+        return plantWithoutStep(jobRepository, jobName, key, startedAt, BatchStatus.STARTED);
+    }
+
+    /**
+     * <b>상태를 골라 심는다.</b> 복구 API 의 선점문이 {@code STATUS IN (…)} 을 손으로 적는데,
+     * 픽스처가 {@code STARTED} 만 심으면 그 목록에서 하나를 빼도 테스트가 초록이다 —
+     * 하필 {@code STARTING} 에서 죽은 행이 그 API 의 주 대상이다.
+     */
+    public static RunningJobFixture plantWithoutStep(JobRepository jobRepository, String jobName,
+            LocalDateTime key, LocalDateTime startedAt, BatchStatus status) {
         JobParameters parameters = new JobParametersBuilder()
                 .addLocalDateTime("asOf", key)
                 .toJobParameters();
@@ -128,9 +137,10 @@ public final class RunningJobFixture implements AutoCloseable {
         JobExecution execution =
                 jobRepository.createJobExecution(instance, parameters, new ExecutionContext());
 
-        // createJobExecution 은 STARTING 으로 만든다. 그것도 가드가 보는 상태지만, 실제로
-        // 막는 상황은 대부분 STARTED 이므로 그쪽을 재현한다.
-        execution.setStatus(BatchStatus.STARTED);
+        // createJobExecution 은 STARTING 으로 만든다. 상태는 인자로 정한다 — 위임
+        // 오버로드가 STARTED 를 기본으로 주고, 복구 API 테스트는 STARTING·STOPPING 도
+        // 심는다(선점문의 STATUS 목록을 재려면 셋이 다 필요하다).
+        execution.setStatus(status);
         execution.setStartTime(startedAt);
         jobRepository.update(execution);
 

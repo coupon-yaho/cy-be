@@ -96,4 +96,14 @@ import org.springframework.transaction.annotation.Isolation;
 @EnableBatchProcessing
 @EnableJdbcJobRepository(isolationLevelForCreate = Isolation.READ_COMMITTED)
 public class BatchJobRepositoryConfig {
+
+    /**
+     * <b>@EnableBatchProcessing 이 등록하는 공용 {@link org.springframework.batch.core.launch.JobOperator}
+     * 의 빈 이름.</b> 그 타입 빈이 둘이라({@code VerifyExecutorConfig.OPERATOR} 가 둘째)
+     * 주입부가 <b>반드시 명시해야 한다</b> — 타입만 쓰면 파라미터 이름 폴백에 기동이
+     * 매달리고, 실패하면 배치 프로세스 전체가 안 뜬다.
+     *
+     * <p>문자열을 세 곳(스케줄러 둘 · 만료 복구 API)에 적지 않으려고 여기 둔다.
+     */
+    public static final String SHARED_OPERATOR = "jobOperator";
 }

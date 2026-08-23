@@ -18,6 +18,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.kafkick.batch.config.BatchJobRepositoryConfig;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.core.support.TimeProvider;
 
@@ -77,7 +78,7 @@ public class CleanupScheduler {
      * 빈이 물리면 크론의 겹침 방지가 사라지고, 정리가 자기 자신과 겹쳐 같은 대상을 두 번
      * 훑는다({@code CleanupSchedulerTest} 가 그 배선을 못 박아 둔다).
      */
-    public CleanupScheduler(@Qualifier("jobOperator") JobOperator jobOperator,
+    public CleanupScheduler(@Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
             @Qualifier("cleanupJob") Job cleanupJob,
             TimeProvider timeProvider,
             @Value(CRON) String cleanupCron,

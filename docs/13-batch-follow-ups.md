@@ -153,14 +153,18 @@
 
 | 무엇 | 왜 미뤘나 |
 |---|---|
-| `docs/12` 재측정 절 추가 | 락·스캔 축은 위 테스트가 잡는다. 문서의 **절대 수치**는 300만 건 적재 후에 다시 재야 뜻이 있다 |
+| `docs/12` 절대 수치 재측정 | 재측정이 필요하다는 **주석은 들어갔다**(`docs/12` 상단). 락·스캔 축은 위 테스트가 잡는다. 남은 것은 300만 적재 후의 **실제 재측정**이다 |
 | `blockedCoupons` 소요 실측 | 축소 픽스처에서 잰 값은 운영 규모를 대변하지 못한다. 코드 주석에서 근거 없는 수치를 뺐다. **실행계획 축은 `keepsBlockedCouponScanProportionalToPending` 이 잡는다** — `uk_coupon_member` 를 타면 깨진다 |
 | `unexplained` 이 캡처 창 지연분을 포함한다 | `COUNT_PENDING` 은 `updated_at` 창을 안 걸어, 설계상 다음 주기로 미룬 행도 "배치가 안 한 몫" 으로 센다. **지금은 도달 불가다** — `issuances` 의 상태를 쓰는 문장이 `EXPIRE_BATCH` 하나뿐이다. `CANCEL_USE`(`USED → ISSUED`)가 붙는 취소·사용 티켓에서 가른다 |
 | ↑ **CY-421 이 그 축을 알림 경로로 넓혔다** | 되읽기가 `COUNT_PENDING` 을 60초마다 다시 치므로, 실행이 끝난 **뒤에** `CANCEL_USE` 로 되돌아온 행이 새로 세어진다. 그 회차는 얼린 제외 목록에 없어 `unexplained` 로 들어가고 `ExpireLeavesWorkBehind`(critical · server)가 뜬다 — **배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.** `afterJob` 이 종료 시점에 한 번 세던 시절에는 구조적으로 불가능했다. 같은 티켓에서 `updated_at` 창과 함께 본다. **선행 조건이 있다** — `EXPIRE_BATCH` 의 창은 `updated_at <= :committedAt` 인데 그 `committedAt` 은 청크마다 새로 잡히고 영속되지 않아, 되읽기가 같은 창을 걸려면 마지막 청크의 값을 Step 문맥에 먼저 실어야 한다 |
 | `(coupon_id, status, expires_at)` 인덱스 | 막힌 회차의 대기 행이 매 주기 재스캔된다. **인덱스 도입은 실측 뒤 별도 판단이다** |
 | 나머지 배치 테스트의 시계 고정 | 이 티켓이 건드린 테스트 중 **잡을 실제로 돌리는 것은 전부** `FixedClock` 으로 고정했다. `ExpireCancelRaceTest`·`ExpireJobHistoryGuardTest`·`ExpireJobIsolationTest`·`VerifyJob*` 은 아직 벽시계인데, 이 티켓이 안 건드린 파일이라 여기서 안 넓혔다. (storage 의 만료 테스트는 `asOf` 가 SQL 바인드 파라미터일 뿐이라 시계와 무관하다) |
+| JVM 기본 존을 UTC 로 강제하는 기동 가드 | `VerifyJobConfig` 가 *"이 문서로 미뤘다"* 고 가리키는데 **여기 항목이 없었다**(CY-429 가 세운다). **미룬 이유는 `batch/build.gradle` 의 `test` 태스크가 `user.timezone=Asia/Seoul` 을 일부러 준다는 것이다**(CY-392 — 존 버그를 재현하려고 DB(UTC)와 어긋나게 뒀다). 기동 가드를 넣으면 batch 의 모든 `@SpringBootTest` 가 거절당하므로, 그 테스트를 어떻게 면제할지 먼저 정해야 한다. 지금 UTC 를 지키는 것은 `batch.yml` 의 `TZ` 와 `build.gradle` 의 `bootRun user.timezone` 둘이고, 사각은 IDE 실행과 `java -jar` 다 |
+| admin API 에 읽기 타임아웃이 없다 | `VerifyTriggerController` 도 `ExpireAdminController` 도 톰캣 스레드에서 `jobRepository` 를 맨몸으로 부른다 — 형제인 `BatchRunMetricsRefresher` 는 readOnly + 초 단위 타임아웃으로 감싼다. **이 API 들은 정확히 DB 가 아플 때 불리는데** 그때 진단 도구가 매달린다. 만료 쪽에만 걸면 admin API 둘의 신뢰성 계약이 갈리므로 **함께** 정해야 하고, 뿌리는 JDBC URL 에 `socketTimeout` 이 **전 저장소에 0건**인 것이라 storage 레벨 결정이다 |
+| `cleanupJob` 시체를 걷을 API | `BatchStuckExecution` 은 `Job` 빈 셋 전부에 뜨는데(`BatchRunMetrics` 가 `List<Job>` 에서 이름을 모은다) 컨트롤러는 둘이다. `cleanupJob` 만 손 SQL 이 유일한 길이고 알림이 그 사실을 명시한다. 잡 이름을 경로 변수로 받는 형태로 일반화할 때 **"트리거는 열지 않는다"(`docs/15`) 규율도 함께 옮겨야 한다** |
+| `verifyJob` 의 `stop` 에 시체 판정이 없다 | 만료 쪽은 CY-429 가 `RunningJobProbe.stuckExecutions` 를 통과한 실행만 건드리는데, verify 의 `stop` 은 그 판정을 안 지난다 — **살아서 도는 300만 전수 검증을 아무나 멈출 수 있다.** 알림 description 이 그 차이를 명시하지만, 코드로 막는 것이 맞다 |
 | 리뷰 반복 결함의 기계적 검사 | 이 티켓의 리뷰에서 **같은 종류가 반복해서 나왔다** — 떠 있는 javadoc(4회), 개명 뒤 끊긴 문서 참조, 개수 주장과 실제 불일치("넷"↔"다섯"), 지표 단언 누락. 넷 다 파일을 읽어 기계적으로 잡을 수 있다. `BatchMetricExposureTest` 가 규칙 파일↔노출을 잇는 것과 같은 방식으로 테스트화할 자리다 |
-| `README` 의 batch 패키지 트리 | `config`/`job`/`schedule`/`replay` 는 CY-347 **이전부터** 있었고 이 티켓은 새 패키지를 안 만든다. README 가 침묵일 뿐 모순이 아니라, 채우는 것은 소유자가 정할 별도 티켓이다 |
+| ~~`README` 의 batch 패키지 트리~~ | **해결됐다** — README 에 `api`/`config`/`job`/`replay`/`schedule` 트리가 들어갔다 |
 
 ### 알림
 
@@ -187,9 +191,13 @@ cy_expire_blocked_coupons   게이지. **마지막으로 성공한 실행이** �
 **잡의 생사**만 본다. 셋 다 통과하면서 아무것도 안 하는 상태가 있고, 2b 가 그 축 밖을 메웠다
 (`ExpireLeavesWorkBehind`·`ExpireSkippingBrokenCoupons`·`ExpireMetricsUnknown`).
 
-### 2a. 검증 판정이 알림으로 안 나간다 — 가장 큰 구멍
+### 2a. ~~검증 판정이 알림으로 안 나간다~~ **완료 · CY-359**
 
-`verdict = FAIL` 은 **정상 종료**다(원칙대로). 그래서 **알림이 하나도 안 울린다.**
+> **아래는 그때의 설계 초안이다.** `cy_verification_verdict{dataset,scope}` ·
+> `cy_verification_findings` 가 노출되고 규칙도 걸렸다. 판정 근거를 남기려고
+> 본문을 그대로 두지만, **읽는 사람은 미완으로 오해하지 말 것.**
+
+`verdict = FAIL` 은 **정상 종료**다(원칙대로). 그래서 **그때는 알림이 하나도 안 울렸다.**
 `verification_runs.verdict` 가 DB 에 남을 뿐, 누가 그 행을 조회하기 전까지 아무도 모른다.
 게이트 판정의 본체인데 통로가 없다.
 
@@ -324,9 +332,12 @@ expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pe
 > 코드의 **뜻**이 어긋나던 문제는 CY-347 에서 정리했다(`ExpirationErrorCode` 와 알림 머리말).
 > 여기 남은 것은 라벨 하나뿐이다.
 
-### 2e. Prometheus 가 규칙을 아직 안 읽는다 — **위 전부의 선행 조건**
+### 2e. ~~Prometheus 가 규칙을 아직 안 읽는다~~ **완료 · CY-359**
 
-규칙 파일은 있는데 **읽는 프로세스가 없다.** `prometheus.yml` 이 그 사실을 스스로 적어 뒀다.
+> 규칙 22개가 로드되고 mock 리시버까지 배선됐다. CI 가 `promtool check config` 와
+> `test rules` 를 매번 돌린다. **아래는 그때의 초안이다.**
+
+그때는 규칙 파일은 있는데 **읽는 프로세스가 없었다.** `prometheus.yml` 이 그 사실을 스스로 적어 뒀다.
 **언제** — CY-359. 단계와 검증 계약은 `docs/14-observability-wiring.md` 에 있다.
 그 전까지 위 알림을 아무리 잘 써도 아무도 안 본다.
 
@@ -546,8 +557,15 @@ api 의 쓰기는 애초에 안 잡힌다.
 환경변수로 자유롭게 커진다. `MAX_EXPIRE_SKIPS=3` 만 줘도 `4 × 300 + 60 = 1260 > 900` 이라
 **아무 사고 없이 critical 이 하루 몇 번씩 뜬다.** `run-refresh-ms` 에는 상한 가드가 있는데
 훨씬 큰 항이 무방비다. `batch.metrics.expire-sla-seconds` 설정 키를 파서 규칙·코드·문서가
-한 값을 보게 하면 위의 아홉 자리도 함께 접힌다. **CY-392 는 여기까지 안 했다** —
-`CronSlot` 이 주기를 안 내주어 계산 수단부터 만들어야 하기 때문이다.
+한 값을 보게 하면 위의 아홉 자리도 함께 접힌다.
+
+> **그 절반은 이미 됐다** — `CY-392`(`ac23406`)가 설정 키와 `CronSlot.maxGap` 을 넣고
+> `(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms < SLA` 를 기동 때 검사한다.
+> (값을 배치 창에 맞춰 180000 으로 다시 잡은 것은 CY-397 이다.)
+> 남은 절반은 규칙 파일이다 — 프로메테우스는 앱 설정을 못 읽으므로
+> `batch-alerts.yml` 이 아직 `180000`·`90000` 을 세 자리에 박고 있다. 기동 가드의 거절
+> 메시지가 그 규칙들을 **이름으로 부르는 것**이 지금의 방어이고, 그것을 기계 검사로
+> 바꾸는 것이 남았다.
 
 **C 는 A 의 남은 창을 못 닫았다 — D 몫이다.** `rejectRunningExpire` 는 통과 직후 만료가
 발화하는 창을 못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`). *"만료 04:10 · 검증
@@ -578,7 +596,34 @@ CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기�
 
 종료 표시를 못 남기고 죽은 실행은 `STATUS` 조회에 `END_TIME` 검사도 시간 상한도 없어
 **영원히** 남는다. 그동안 만료↔검증 상호 배제가 그 실행에 대해 꺼져 있다(CY-384).
-`verifyJob` 은 `abandon` 엔드포인트가 있지만 **`expireJob` 은 손으로 닫아야 한다.**
+
+> **CY-429 가 `expireJob` 쪽에도 API 를 냈다.** 아래 손 SQL 은 이제 **참고용**이다 —
+> 그 SQL 은 `VERSION` 을 올려 **살아 있는 실행의 다음 `update()` 를 터뜨리는데**,
+> 새벽에 알림을 받고 깨어난 사람에게 그 판단을 맡기고 있었다.
+> API 도 **같은 쓰기를 한다.** 다른 것은 임계가 코드에 있다는 것뿐이고, 그 판정은
+> `LAST_UPDATED` 하트비트 휴리스틱이지 증명이 아니다 — `batch.stuck-job-after-ms` 를
+> 내리는 변경은 이 API 의 안전을 직접 깎는다.
+
+```bash
+# ① 무엇이 남아 있나. 도는 실행은 여기 안 나온다.
+curl -s localhost:9090/api/v1/admin/expire/runs/stuck | jq .data
+#   [{ "executionId": 41, "status": "STARTED", "createTime": "...", "startTime": "...",
+#      "lastProgress": "...", "stalledSeconds": 7412 }]
+
+# ② 한 번이면 된다. 재시도해도 안전하다(FAILED + END_TIME 으로 판정한다).
+curl -s -XPOST localhost:9090/api/v1/admin/expire/runs/41/recover | jq '.data, .error'
+#   409 / EXPIRATION-007 이면 걷어낼 대상이 아니다 — ① 을 다시 본다.
+#   404 / EXPIRATION-006 이면 만료 실행이 아니거나 없는 번호다.
+```
+
+`recover` 는 돌던 Step 까지 `FAILED` 로 닫는다. **`ABANDONED` 로 만들지 않는 것이 계약이다** —
+그 상태는 `COMPLETED` 와 같은 취급이라 그 `JobInstance` 를 같은 `asOf` 로 영원히 못 돌린다.
+
+업무 포트가 안 열려 있으면 `batch-expose.yml` 을 얹는다(§4). `verifyJob` 쪽은
+`/api/v1/admin/verify` 에 `stop → abandon` 이 있다 — **그쪽 `stop` 에는 시체 판정이 없으므로**
+프로세스 부재를 먼저 확인한다. `cleanupJob` 은 아직 API 가 없어 아래 손 SQL 이 유일한 길이다.
+
+**아래는 API 가 없던 시절의 절차다.** 배치가 안 떠 있어 API 를 못 부르는 경우에만 쓴다.
 
 ```sql
 -- 찾기. **임계를 SQL 에 건다** — 안 걸면 지금 정상적으로 도는 실행도 함께 나온다.
@@ -593,8 +638,12 @@ SELECT e.JOB_EXECUTION_ID, i.JOB_NAME, e.STATUS, e.CREATE_TIME, e.START_TIME,
                FROM BATCH_STEP_EXECUTION GROUP BY JOB_EXECUTION_ID) p
     ON p.JOB_EXECUTION_ID = e.JOB_EXECUTION_ID
  WHERE e.STATUS IN ('STARTING','STARTED','STOPPING')
-   AND (p.last_progress IS NULL
-        OR p.last_progress < NOW() - INTERVAL 30 MINUTE)   -- batch.stuck-job-after-ms
+   -- ⚠️ **폴백을 여기 그대로 옮긴다** — RunningJobProbe.lastProgress 가
+   --    MAX(LAST_UPDATED) → START_TIME → CREATE_TIME 순으로 떨어진다.
+   --    `p.last_progress IS NULL` 로 두면 **Step 행이 아직 없는 실행이 무조건 나온다** —
+   --    방금 뜬 STARTING 실행이 그 모양이라 살아 있는 잡을 시체로 신고한다.
+   AND COALESCE(p.last_progress, e.START_TIME, e.CREATE_TIME)
+       < NOW() - INTERVAL 30 MINUTE                        -- batch.stuck-job-after-ms
  ORDER BY e.JOB_EXECUTION_ID;
 ```
 
@@ -603,21 +652,50 @@ SELECT e.JOB_EXECUTION_ID, i.JOB_NAME, e.STATUS, e.CREATE_TIME, e.START_TIME,
 1. **배치가 떠 있으면 먼저 `docker compose ps batch` 를 본다.** 아래 UPDATE 는 `VERSION` 을
    올리므로 **살아 있는 실행의 다음 `jobRepository.update()` 를 터뜨린다** — 잡이 중간에
    죽고, 그 실행이 쓴 `asof_state` 최대 300만 행이 아래 절의 상태로 남는다.
-2. **`verifyJob` 이면 `abandon` 엔드포인트를 쓴다.** 손 SQL 은 `expireJob` 전용이다.
+2. **API 를 먼저 쓴다.** `expireJob` 이면 `POST /api/v1/admin/expire/runs/{id}/recover`
+   **한 번**이다(CY-429). `verifyJob` 이면 `/api/v1/admin/verify` 의 `stop → abandon`
+   이다(CY-368). **모양이 다르다** — 만료 쪽은 `FAILED` 로 닫아 `asOf` 슬롯을 안 태운다(3번).
+   `cleanupJob` 은 API 가 없어 아래 SQL 이 유일한 길이다.
+   손 SQL 은 배치가 안 떠 있을 때만이다.
 3. **`ABANDONED` 는 되돌릴 수 없다.** 그 상태는 `COMPLETED` 와 같은 취급이라
    (Spring Batch 6.0.4 의 실행 시작 경로가 그렇게 가른다) **그 JobInstance 를 같은
    파라미터로 다시 못 돌린다.** 만료는 `asOf` 가 식별 파라미터이므로 그 크론 슬롯을
-   손으로 재시도할 방법이 사라진다 — 다시 돌려야 하면 인접 슬롯의 `asOf` 를 쓴다.
+   손으로 재시도할 방법이 사라진다. **그래서 API 는 `recover`(→ `FAILED`)를 쓴다** —
+   `FAILED` 는 그 문을 안 닫는다. 만료 트리거는 일부러 안 만들었으므로(`docs/15`
+   "트리거는 열지 않는다") 어느 쪽이든 손 재시도는 없고, 남은 대상은 다음 슬롯이
+   함께 가져간다.
 
 ```sql
--- 닫기. ABANDONED 로 두는 이유는 그 상태가 위 조회의 STATUS IN (...) 에서 빠지기 때문이다.
-UPDATE BATCH_JOB_EXECUTION
-   SET STATUS = 'ABANDONED', END_TIME = NOW(6), VERSION = VERSION + 1
- WHERE JOB_EXECUTION_ID = :id;
+-- 닫기. **FAILED 다 — ABANDONED 가 아니다.** 둘 다 위 조회의 STATUS IN (...) 에서
+-- 빠지는데, ABANDONED 는 TaskExecutorJobLauncher 가 COMPLETED 와 함께 막아(6.0.4)
+-- 그 asOf 슬롯을 영원히 태운다.
+-- EXIT_CODE 는 안 건드린다 — recover 도 setExitStatus 를 안 부르므로 하드킬된 행은
+-- 'UNKNOWN' 인 채로 남는다(6.0.4). 두 경로의 산출물을 같게 두려면 여기도 그래야 한다.
+-- ⚠️ **API 의 선점문과 같은 조건을 건다.** id 만 걸면 한 자리 오타가 **남의 잡**을,
+--    또는 **살아 있는 실행**을 닫는다 — 그러면 그 실행의 다음 update() 가 낙관적 락에
+--    걸려 죽고, 만료는 재고를 쓰는 유일한 잡이다.
+--    :stuckBefore 는 batch.stuck-job-after-ms 만큼 과거다(기본 30분).
+-- **변경 행 수를 반드시 확인한다.** 0이면 대상이 아니었다는 뜻이므로 멈춘다.
+UPDATE BATCH_JOB_EXECUTION je
+  JOIN BATCH_JOB_INSTANCE i ON i.JOB_INSTANCE_ID = je.JOB_INSTANCE_ID
+   SET je.STATUS = 'FAILED', je.END_TIME = NOW(6), je.VERSION = je.VERSION + 1
+ WHERE je.JOB_EXECUTION_ID = :id
+   AND i.JOB_NAME = 'expireJob'
+   AND je.STATUS IN ('STARTING','STARTED','STOPPING')
+   -- 위 찾기와 **같은 판정**이어야 한다. NOT EXISTS 만 쓰면 Step 행이 없는 실행에서
+   -- 무조건 참이 되어 :stuckBefore 와 무관하게 닫힌다.
+   AND COALESCE((SELECT MAX(se.LAST_UPDATED) FROM BATCH_STEP_EXECUTION se
+                  WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID),
+                je.START_TIME, je.CREATE_TIME) <= :stuckBefore;
+
+-- recover 는 Step 행도 닫는다. 손 SQL 도 같이 해야 두 경로의 산출물이 같다.
+-- 위 UPDATE 가 1행일 때만 친다.
+UPDATE BATCH_STEP_EXECUTION
+   SET STATUS = 'FAILED', END_TIME = NOW(6), VERSION = VERSION + 1
+ WHERE JOB_EXECUTION_ID = :id AND STATUS IN ('STARTING','STARTED','STOPPING');
 ```
 
-> `BATCH_STEP_EXECUTION` 행은 `STARTED` 로 남는다. 지금 판정 경로가 그것을 안 보므로
-> 그대로 둬도 된다. **`cleanupJob` 도 이 축은 아직 안 진다** — `BATCH_*` 메타 정리는
+> **`cleanupJob` 도 이 축은 아직 안 진다** — `BATCH_*` 메타 정리는
 > 아래 §7 과 같은 축이라 뒤로 미뤘고, 만료가 일 1회로 바뀌어 인스턴스 증가가 하루 288 에서
 > 1 로 줄었다.
 

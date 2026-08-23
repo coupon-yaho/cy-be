@@ -55,7 +55,7 @@ coupon-yaho
 │   └── src/main/java/com/kafkick
 │       ├── BatchApplication.java
 │       └── batch/
-│           ├── api/                     verify 온디맨드 트리거·조회 (docs/15)
+│           ├── api/                     admin API — verify 트리거·조회, expire 복구 (docs/15)
 │           ├── config/                  기동 가드, 지표, 전용 실행기
 │           ├── job/                     Spring Batch 잡 정의
 │           ├── replay/                  이력 리플레이
@@ -123,7 +123,7 @@ docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올�
 ```
 
 **배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
-(`POST /api/v1/admin/verify`)가 있는데 **인증이 없다** — batch 에 Spring Security 가 없고
+(`POST /api/v1/admin/verify` 트리거와 `/api/v1/admin/expire/runs/**` 복구)가 있는데 **인증이 없다** — batch 에 Spring Security 가 없고
 토큰 규약은 다른 영역의 몫이라 혼자 정하면 두 벌이 된다. 그래서 열 때만 오버레이를 얹는다.
 
 ```bash
