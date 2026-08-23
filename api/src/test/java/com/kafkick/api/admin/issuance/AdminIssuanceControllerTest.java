@@ -23,6 +23,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryService;
+import com.kafkick.core.admin.inquiry.IssuanceInquiryCalculator;
+import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
 import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
@@ -36,8 +39,9 @@ class AdminIssuanceControllerTest {
     private static final Clock CLOCK = Clock.fixed(
             Instant.parse("2026-08-23T00:00:00Z"), ZoneOffset.UTC);
     private final IssuanceHistoryCursorCodec cursorCodec = new IssuanceHistoryCursorCodec();
+    private final IssuanceInquiryCursorCodec inquiryCursorCodec = new IssuanceInquiryCursorCodec();
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminIssuanceController(historyService(), cursorCodec));
+            controller(historyService(), inquiryService(), cursorCodec, inquiryCursorCodec));
 
     /** 발급 문의의 필수 회원 식별자를 생략하면 400으로 거부되는지 검증합니다. */
     @Test
@@ -45,18 +49,124 @@ class AdminIssuanceControllerTest {
     void issuanceInquiriesRejectMissingMemberId() throws Exception {
         mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
-    /** 유효한 문의 필터가 바인딩된 뒤 미연결 상태를 ADMIN-001로 반환하는지 검증합니다. */
+    /** 유효한 문의가 실제 Mock DB 행을 계산한 성공 페이지를 반환하는지 검증합니다. */
     @Test
-    @DisplayName("발급 문의 조회는 유효 요청에 ADMIN-001 선구축 오류를 반환한다")
-    void issuanceInquiriesReturnNotImplementedEnvelope() throws Exception {
+    @DisplayName("발급 문의 조회는 유효 요청에 실제 Core 결과의 200 성공 봉투를 반환한다")
+    void issuanceInquiriesReturnSuccessfulCoreResult() throws Exception {
         mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
-                        .param("memberId", "1")
+                        .param("memberId", "1001")
                         .param("limit", "50"))
-                .andExpect(status().isNotImplemented())
-                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.items.length()").value(10))
+                .andExpect(jsonPath("$.data.items[0].httpStatus").value(503))
+                .andExpect(jsonPath("$.data.items[1].httpStatus").value(500))
+                .andExpect(jsonPath("$.data.hasOlder").value(false))
+                .andExpect(jsonPath("$.data.nextBeforeCursor").doesNotExist());
+    }
+
+    /** 같은 시각의 서로 다른 시도가 cursor 경계에서 중복·누락 없이 이어지는지 검증합니다. */
+    @Test
+    @DisplayName("발급 문의 조회는 동일 시각 결과를 limit 1 cursor로 빠짐없이 반환한다")
+    void issuanceInquiriesPageTiedAttemptsWithoutDuplicatesOrGaps() throws Exception {
+        MvcResult firstResult = mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("couponId", "2006")
+                        .param("limit", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].httpStatus").value(503))
+                .andExpect(jsonPath("$.data.hasOlder").value(true))
+                .andReturn();
+        String cursor = JsonPath.read(
+                firstResult.getResponse().getContentAsString(), "$.data.nextBeforeCursor");
+        Clock laterClock = Clock.fixed(CLOCK.instant().plus(Duration.ofHours(1)), ZoneOffset.UTC);
+        MockMvc laterInstanceMockMvc = AdminControllerContractTestSupport.mockMvc(
+                controller(
+                        historyService(),
+                        inquiryService(laterClock),
+                        new IssuanceHistoryCursorCodec(),
+                        new IssuanceInquiryCursorCodec()));
+
+        laterInstanceMockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("couponId", "2006")
+                        .param("limit", "1")
+                        .param("beforeCursor", cursor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].httpStatus").value(500))
+                .andExpect(jsonPath("$.data.hasOlder").value(false))
+                .andExpect(jsonPath("$.data.nextBeforeCursor").doesNotExist());
+    }
+
+    /** 시도 로그 없는 실제 발급이 nullable 로그 필드와 DB 현재 상태로 보존되는지 검증합니다. */
+    @Test
+    @DisplayName("발급 문의 조회는 DB 단독 발급의 로그 필드를 꾸미지 않고 현재 상태를 반환한다")
+    void issuanceInquiriesPreserveDbOnlyIssuance() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("couponId", "2005"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].issuanceId").value(5003))
+                .andExpect(jsonPath("$.data.items[0].currentStatus").value("EXPIRED"))
+                .andExpect(jsonPath("$.data.items[0].httpStatus").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].reasonCode").doesNotExist());
+    }
+
+    /** 성공 로그만으로 실제 발급 ID나 현재 상태를 추정하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("발급 문의 조회는 DB 미확인 성공 로그를 실제 발급으로 추정하지 않는다")
+    void issuanceInquiriesDoNotInferIssuanceFromSuccessfulLog() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("couponId", "2003")
+                        .param("httpStatus", "201"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].httpStatus").value(201))
+                .andExpect(jsonPath("$.data.items[0].issuanceId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].currentStatus").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].reasonCode").doesNotExist());
+    }
+
+    /** 같은 회원·캠페인의 서로 다른 재시도가 별도 문의 행으로 유지되는지 검증합니다. */
+    @Test
+    @DisplayName("발급 문의 조회는 같은 회원과 캠페인의 재시도 두 건을 합치지 않는다")
+    void issuanceInquiriesKeepRetriesAsSeparateRows() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("couponId", "2004"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].httpStatus").value(503))
+                .andExpect(jsonPath("$.data.items[0].reasonCode")
+                        .value("TEMPORARILY_UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[1].httpStatus").value(409))
+                .andExpect(jsonPath("$.data.items[1].reasonCode").value("ALREADY_ISSUED"))
+                .andExpect(jsonPath("$.data.items[0].issuanceId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[1].issuanceId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].currentStatus").doesNotExist())
+                .andExpect(jsonPath("$.data.items[1].currentStatus").doesNotExist());
+    }
+
+    /** HTTP 상태와 사유 필터가 null을 임의 값으로 보정하지 않고 함께 적용되는지 검증합니다. */
+    @Test
+    @DisplayName("발급 문의 조회는 httpStatus와 reasonCode를 정확히 필터링한다")
+    void issuanceInquiriesApplyHttpStatusAndReasonCodeFilters() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("httpStatus", "409")
+                        .param("reasonCode", "ALREADY_ISSUED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].issuanceId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].currentStatus").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].reasonCode").value("ALREADY_ISSUED"));
     }
 
     /** 유효한 발급 이력 조회가 실제 Core 결과와 성공 봉투를 반환하는지 검증합니다. */
@@ -138,7 +248,9 @@ class AdminIssuanceControllerTest {
                                 firstTimeProvider,
                                 new AdminIssuanceHistoryMockDataFactory(),
                                 new IssuanceHistoryCalculator(new IssuanceCodeMasker())),
-                        cursorCodec));
+                        cursorCodec,
+                        inquiryService(),
+                        inquiryCursorCodec));
         AdvancingClock laterClock = new AdvancingClock(
                 CLOCK.instant().plus(Duration.ofMinutes(1)), ZoneOffset.UTC);
         TimeProvider laterTimeProvider = new TimeProvider(laterClock);
@@ -148,7 +260,9 @@ class AdminIssuanceControllerTest {
                                 laterTimeProvider,
                                 new AdminIssuanceHistoryMockDataFactory(),
                                 new IssuanceHistoryCalculator(new IssuanceCodeMasker())),
-                        cursorCodec));
+                        cursorCodec,
+                        inquiryService(laterClock),
+                        inquiryCursorCodec));
 
         MvcResult firstResult = firstInstanceMockMvc.perform(get("/api/v1/admin/issuance-histories")
                         .param("limit", "1"))
@@ -226,7 +340,42 @@ class AdminIssuanceControllerTest {
                         .param("memberId", "1")
                         .param("httpStatus", "99"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+    }
+
+    /** 빈 값·공백을 포함한 잘못된 발급 문의 cursor를 공통 입력 오류로 거부합니다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"", " ", "invalid"})
+    @DisplayName("발급 문의 조회는 잘못된 cursor를 400 COMMON-001로 거부한다")
+    void issuanceInquiriesRejectInvalidCursor(String cursor) throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("beforeCursor", cursor))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+    }
+
+    /** 회원 문의의 양수 couponId와 페이지 범위를 HTTP 경계에서 검증합니다. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "201"})
+    @DisplayName("발급 문의 조회는 limit 0과 201을 400 COMMON-001로 거부한다")
+    void issuanceInquiriesRejectOutOfRangeLimit(String limit) throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("limit", limit))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+    }
+
+    @Test
+    @DisplayName("발급 문의 조회는 0 이하 couponId를 400 COMMON-001로 거부한다")
+    void issuanceInquiriesRejectNonPositiveCouponId() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
+                        .param("memberId", "1001")
+                        .param("couponId", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
     /** 발급 이력의 시작일이 종료일보다 늦은 기간 조건을 400 COMMON-001로 거부하는지 검증합니다. */
@@ -260,6 +409,28 @@ class AdminIssuanceControllerTest {
                 timeProvider,
                 new AdminIssuanceHistoryMockDataFactory(),
                 new IssuanceHistoryCalculator(new IssuanceCodeMasker()));
+    }
+
+    /** 고정 DB 형태의 Mock 원천을 사용하는 실제 Core 발급 문의 Service를 구성합니다. */
+    private static AdminIssuanceInquiryService inquiryService() {
+        return inquiryService(CLOCK);
+    }
+
+    private static AdminIssuanceInquiryService inquiryService(Clock clock) {
+        return new AdminIssuanceInquiryService(
+                new TimeProvider(clock),
+                new AdminIssuanceInquiryMockDataFactory(),
+                new IssuanceInquiryCalculator());
+    }
+
+    private static AdminIssuanceController controller(
+            AdminIssuanceHistoryService historyService,
+            AdminIssuanceInquiryService inquiryService,
+            IssuanceHistoryCursorCodec historyCursorCodec,
+            IssuanceInquiryCursorCodec inquiryCursorCodec
+    ) {
+        return new AdminIssuanceController(
+                historyService, historyCursorCodec, inquiryService, inquiryCursorCodec);
     }
 
     /** 테스트 요청 사이에서만 명시적으로 진행시킬 수 있는 Clock입니다. */

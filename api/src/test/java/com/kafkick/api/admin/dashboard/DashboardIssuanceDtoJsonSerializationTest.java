@@ -12,10 +12,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
+import com.kafkick.api.admin.issuance.IssuanceInquiryCursorCodec;
 import com.kafkick.api.admin.issuance.dto.IssuanceHistoryPageResponse;
 import com.kafkick.api.admin.issuance.dto.IssuanceInquiryPageResponse;
+import com.kafkick.api.admin.issuance.dto.IssuanceInquiryQuery;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.InquiryPosition;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.SourceKind;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryResult;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
@@ -108,7 +114,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
     void issuanceDtosKeepNullableFieldsAndReuseCoreEnums() throws Exception {
         IssuanceInquiryPageResponse inquiries = new IssuanceInquiryPageResponse(
                 List.of(new IssuanceInquiryPageResponse.IssuanceInquiryItem(
-                        1L, null, 3L, null, ReasonCode.STOCK_EXHAUSTED, IssuanceStatus.ISSUED, OBSERVED_AT
+                        1L, 7L, null, 409, ReasonCode.STOCK_EXHAUSTED, null, OBSERVED_AT
                 )),
                 null,
                 false
@@ -124,14 +130,90 @@ class DashboardIssuanceDtoJsonSerializationTest {
         );
 
         assertThat(objectMapper.writeValueAsString(inquiries))
-                .contains("\"reasonCode\":\"STOCK_EXHAUSTED\"", "\"currentStatus\":\"ISSUED\"")
-                .doesNotContain("\"httpStatus\":");
+                .contains("\"httpStatus\":409", "\"reasonCode\":\"STOCK_EXHAUSTED\"")
+                .doesNotContain("\"issuanceId\":", "\"currentStatus\":");
         assertThat(objectMapper.writeValueAsString(histories))
                 .contains(
                         "\"toStatus\":\"ISSUED\"",
                         "\"eventType\":\"ISSUE\"",
                         "\"summary\":{\"totalCount\":1,\"issueCount\":1")
                 .doesNotContain("\"fromStatus\":");
+    }
+
+    /** 생략한 limit과 cursor를 Core의 기본 페이지 조건으로 변환하는지 확인합니다. */
+    @Test
+    void issuanceInquiryQueryUsesDefaultLimitAndNoPosition() {
+        IssuanceInquiryQuery query = new IssuanceInquiryQuery(
+                1_001L, 2_001L, 201, null, null, null);
+
+        AdminIssuanceInquiryQuery coreQuery = query.toCoreQuery(new IssuanceInquiryCursorCodec());
+
+        assertThat(coreQuery.memberId()).isEqualTo(1_001L);
+        assertThat(coreQuery.couponId()).isEqualTo(2_001L);
+        assertThat(coreQuery.httpStatus()).isEqualTo(201);
+        assertThat(coreQuery.reasonCode()).isNull();
+        assertThat(coreQuery.before()).isNull();
+        assertThat(coreQuery.limit()).isEqualTo(AdminIssuanceInquiryQuery.DEFAULT_LIMIT);
+    }
+
+    /** HTTP cursor와 명시 limit을 Core 위치와 페이지 크기로 변환하는지 확인합니다. */
+    @Test
+    void issuanceInquiryQueryDecodesCursorAndExplicitLimit() {
+        IssuanceInquiryCursorCodec cursorCodec = new IssuanceInquiryCursorCodec();
+        InquiryPosition position = new InquiryPosition(OBSERVED_AT, SourceKind.ISSUANCE, 5_003L);
+        IssuanceInquiryQuery query = new IssuanceInquiryQuery(
+                1_001L, null, null, ReasonCode.INTERNAL_ERROR,
+                cursorCodec.encode(position), 17);
+
+        AdminIssuanceInquiryQuery coreQuery = query.toCoreQuery(cursorCodec);
+
+        assertThat(coreQuery.before()).isEqualTo(position);
+        assertThat(coreQuery.limit()).isEqualTo(17);
+        assertThat(coreQuery.reasonCode()).isEqualTo(ReasonCode.INTERNAL_ERROR);
+    }
+
+    /** Core 위치는 cursor로만 변환되고 공개 JSON 항목에는 노출되지 않는지 확인합니다. */
+    @Test
+    void issuanceInquiryResponseConvertsCorePageWithoutExposingPosition() throws Exception {
+        IssuanceInquiryCursorCodec cursorCodec = new IssuanceInquiryCursorCodec();
+        InquiryPosition position = new InquiryPosition(OBSERVED_AT, SourceKind.ATTEMPT, 102L);
+        AdminIssuanceInquiryResult result = new AdminIssuanceInquiryResult(
+                List.of(new AdminIssuanceInquiryResult.InquiryItem(
+                        1_001L, 2_001L, 5_001L, 201, null,
+                        IssuanceStatus.USED, OBSERVED_AT, position)),
+                position,
+                true);
+
+        IssuanceInquiryPageResponse response = IssuanceInquiryPageResponse.from(result, cursorCodec);
+        String json = objectMapper.writeValueAsString(response);
+
+        assertThat(response.nextBeforeCursor()).isEqualTo(cursorCodec.encode(position));
+        assertThat(json).isEqualTo(
+                "{\"items\":[{\"memberId\":1001,\"couponId\":2001,\"issuanceId\":5001,"
+                        + "\"httpStatus\":201,\"currentStatus\":\"USED\","
+                        + "\"occurredAt\":\"2026-08-16T00:00:00Z\"}],"
+                        + "\"nextBeforeCursor\":\"" + cursorCodec.encode(position) + "\","
+                        + "\"hasOlder\":true}");
+    }
+
+    /** 로그가 유실된 실제 발급은 nullable 로그 필드와 DB 현재 상태를 그대로 보존합니다. */
+    @Test
+    void issuanceInquiryResponsePreservesDbOnlyIssuanceNullLogFields() throws Exception {
+        InquiryPosition position = new InquiryPosition(OBSERVED_AT, SourceKind.ISSUANCE, 5_003L);
+        AdminIssuanceInquiryResult result = new AdminIssuanceInquiryResult(
+                List.of(new AdminIssuanceInquiryResult.InquiryItem(
+                        1_001L, 2_005L, 5_003L, null, null,
+                        IssuanceStatus.EXPIRED, OBSERVED_AT, position)),
+                null,
+                false);
+
+        String json = objectMapper.writeValueAsString(
+                IssuanceInquiryPageResponse.from(result, new IssuanceInquiryCursorCodec()));
+
+        assertThat(json).isEqualTo(
+                "{\"items\":[{\"memberId\":1001,\"couponId\":2005,\"issuanceId\":5003,"
+                        + "\"currentStatus\":\"EXPIRED\","
+                        + "\"occurredAt\":\"2026-08-16T00:00:00Z\"}],\"hasOlder\":false}");
     }
 
     private static <T> CouponMetricsSnapshot.Observation<T> snapshotObserved(T value) {
