@@ -90,30 +90,41 @@ class AdminIssuanceControllerTest {
                 .andExpect(jsonPath("$.data.summary.issueCount").value(2));
     }
 
-    /** 첫 페이지 cursor로 조회한 다음 페이지에 앞 페이지 항목이 반복되지 않는지 검증합니다. */
+    /** 동일 발급건의 서로 다른 상태 전이가 페이지 경계를 넘어 순서대로 반환되는지 검증합니다. */
     @Test
-    @DisplayName("첫 페이지의 nextBeforeCursor는 중복 없는 다음 과거 페이지를 반환한다")
-    void issuanceHistoriesPageBackwardWithoutDuplicates() throws Exception {
+    @DisplayName("첫 페이지의 nextBeforeCursor는 동일 발급건의 더 오래된 상태 전이를 반환한다")
+    void issuanceHistoriesPageBackwardByHistoryPosition() throws Exception {
         MvcResult firstResult = mockMvc.perform(get("/api/v1/admin/issuance-histories")
-                        .param("limit", "2"))
+                        .param("couponId", "101")
+                        .param("limit", "4"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.hasOlder").value(true))
                 .andExpect(jsonPath("$.data.nextBeforeCursor").isNotEmpty())
                 .andReturn();
         String firstJson = firstResult.getResponse().getContentAsString();
         String nextBeforeCursor = JsonPath.read(firstJson, "$.data.nextBeforeCursor");
-        List<Integer> firstIds = JsonPath.read(firstJson, "$.data.items[*].issuanceId");
+        List<Integer> firstIssuanceIds = JsonPath.read(
+                firstJson, "$.data.items[*].issuanceId");
+        List<String> firstEventTypes = JsonPath.read(
+                firstJson, "$.data.items[*].eventType");
 
         MvcResult secondResult = mockMvc.perform(get("/api/v1/admin/issuance-histories")
-                        .param("limit", "2")
+                        .param("couponId", "101")
+                        .param("limit", "4")
                         .param("beforeCursor", nextBeforeCursor))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andReturn();
-        List<Integer> secondIds = JsonPath.read(
-                secondResult.getResponse().getContentAsString(), "$.data.items[*].issuanceId");
+        String secondJson = secondResult.getResponse().getContentAsString();
+        List<Integer> secondIssuanceIds = JsonPath.read(
+                secondJson, "$.data.items[*].issuanceId");
+        List<String> secondEventTypes = JsonPath.read(
+                secondJson, "$.data.items[*].eventType");
 
-        assertThat(secondIds).doesNotContainAnyElementsOf(firstIds);
+        assertThat(firstIssuanceIds).containsExactly(5_004, 5_003, 5_002, 5_001);
+        assertThat(firstEventTypes).containsExactly("CANCEL", "CANCEL", "CANCEL_USE", "USE");
+        assertThat(secondIssuanceIds).containsExactly(5_001);
+        assertThat(secondEventTypes).containsExactly("ISSUE");
     }
 
     /** 서로 다른 Factory와 진행하는 요청 시각에서도 동률 이력이 한 번씩 반환되는지 검증합니다. */
