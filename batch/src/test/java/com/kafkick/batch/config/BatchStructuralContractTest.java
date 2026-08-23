@@ -53,13 +53,13 @@ class BatchStructuralContractTest {
             List<String> offenders = files
                     .filter(path -> path.toString().endsWith(".java"))
                     .flatMap(path -> read(path).lines()
-                            // javadoc 의 {@code ...} 언급은 의존이 아니다. 실제 참조만 본다.
-                            .filter(line -> FORBIDDEN.stream().anyMatch(pkg ->
-                                    line.startsWith("import " + pkg)
-                                            // javadoc 의 {@code ...} 언급은 의존이 아니다.
-                                            || (line.contains(pkg)
-                                                    && !line.trim().startsWith("*"))))
-                            .map(line -> path.getFileName() + ": " + line.trim()))
+                            .map(String::strip)
+                            // 주석 안의 언급은 의존이 아니다. 줄 앞의 // 와 * 와 /* 를
+                            // 걷어내고 본다 — NoWallClockInBatchTest 가 쓰는 관행과 같다.
+                            .filter(line -> !line.startsWith("//") && !line.startsWith("*")
+                                    && !line.startsWith("/*"))
+                            .filter(line -> FORBIDDEN.stream().anyMatch(line::contains))
+                            .map(line -> path.getFileName() + ": " + line))
                     .toList();
 
             assertThat(offenders)
