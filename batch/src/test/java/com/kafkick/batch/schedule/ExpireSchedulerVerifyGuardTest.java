@@ -53,12 +53,10 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
-        "batch.scheduling.enabled=true",
-        "batch.schedule.expire-cron=0 0 0 1 1 *",
-        // 발화를 막으려고 먼 미래 크론을 쓴다. 그 주기로는 어떤 SLA 도 못 맞추므로
-        // 기동 가드가 거절하는데, 이 클래스가 재는 것은 SLA 가 아니다 — 그 검사가
-        // 뜻이 없다는 것을 값으로 명시한다.
-        "batch.metrics.expire-sla-seconds=999999999",
+        // **스케줄러 빈을 안 쓴다.** 아래 scheduler() 가 직접 만들어 쓰므로 끄는 것이 맞다 —
+        // 켜 두면 진짜 크론이 테스트 도중에 발화할 수 있고, 그 위험을 없앨 이유가 있는데
+        // 굳이 남길 이유는 없다.
+        "batch.scheduling.enabled=false",
         // step-timeout(600000)보다 커야 한다 — RunningJobProbe 생성자가 검사한다.
         "batch.stuck-job-after-ms=1800000"
 })
