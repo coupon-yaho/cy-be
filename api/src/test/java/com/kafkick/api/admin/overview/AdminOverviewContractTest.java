@@ -143,9 +143,13 @@ class AdminOverviewContractTest {
                         AdminOverviewSnapshot.TargetScreen.METRICS));
         AdminOverviewSnapshot.CustomerOutcomeSummary outcomes = new AdminOverviewSnapshot.CustomerOutcomeSummary(
                 FROM, TO, 12558,
-                List.of(new AdminOverviewSnapshot.CustomerOutcome(
-                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED,
-                        1847, 0.147, "쿠폰이 정상 발급됨")));
+                List.of(
+                        new AdminOverviewSnapshot.CustomerOutcome(
+                                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED,
+                                1847, 1847d / 12558d, "쿠폰이 정상 발급됨"),
+                        new AdminOverviewSnapshot.CustomerOutcome(
+                                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE,
+                                10711, 10711d / 12558d, "시스템 실패")));
 
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
                 TO,
@@ -173,7 +177,8 @@ class AdminOverviewContractTest {
         assertThat(snapshot.latencySummary().value().successfulP99()).isEqualTo(Duration.ofMillis(84));
         assertThat(snapshot.campaignStatusSummary().value().openCount()).isEqualTo(3);
         assertThat(snapshot.campaigns().value()).containsExactly(campaign);
-        assertThat(snapshot.customerOutcomes().value().outcomes().getFirst().ratio()).isEqualTo(0.147);
+        assertThat(snapshot.customerOutcomes().value().outcomes().getFirst().ratio())
+                .isEqualTo(1847d / 12558d);
         assertThat(Arrays.stream(AdminOverviewSnapshot.class.getRecordComponents())
                 .map(RecordComponent::getName))
                 .doesNotContain("issuanceInquiries", "issuanceHistories", "notificationSummary", "events");

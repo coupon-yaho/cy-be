@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.support.TimeProvider;
 
 /**
@@ -20,13 +21,47 @@ public class AdminObservabilityConfig {
 
     @Bean
     public PromQueryClient promQueryClient(PrometheusQueryProperties properties) {
+        return new PromQueryClient(prometheusRestClient(properties));
+    }
+
+    /**
+     * instant-vector 계약을 약화하지 않는 별도 matrix range client를 등록합니다.
+     *
+     * @param properties Prometheus 접속·타임아웃 설정
+     * @return 최대 1시간·1,000점 기본 상한을 가진 range client
+     */
+    @Bean
+    public PromRangeQueryClient promRangeQueryClient(PrometheusQueryProperties properties) {
+        return new PromRangeQueryClient(prometheusRestClient(properties));
+    }
+
+    /**
+     * Prometheus 결과를 Core의 기술 중립 Overview 입력으로 바꾸는 원천을 등록합니다.
+     *
+     * @param instantQuery Overview snapshot 평가 시각을 명시하는 instant-vector 경계
+     * @param rangeQuery 별도 matrix range 경계
+     * @param properties stale·전체 시작 예산 설정
+     * @return Core가 의존할 기술 중립 관측 원천
+     */
+    @Bean
+    public OverviewObservationSource promOverviewObservationSource(
+            PromTimeQuery instantQuery,
+            PromRangeQuery rangeQuery,
+            PrometheusQueryProperties properties
+    ) {
+        return new PromOverviewObservationSource(
+                instantQuery, rangeQuery, properties.staleAfter(), properties.totalBudget());
+    }
+
+    /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */
+    private static RestClient prometheusRestClient(PrometheusQueryProperties properties) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(properties.connectTimeout());
         requestFactory.setReadTimeout(properties.readTimeout());
-        return new PromQueryClient(RestClient.builder()
+        return RestClient.builder()
                 .baseUrl(properties.baseUrl())
                 .requestFactory(requestFactory)
-                .build());
+                .build();
     }
 
     @Bean

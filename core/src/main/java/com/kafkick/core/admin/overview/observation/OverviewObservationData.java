@@ -102,26 +102,61 @@ public record OverviewObservationData(
         for (IssuanceFlowInput issuanceFlowInput : issuanceFlowInputs) {
             validateObservedAtNoLaterThan(request.snapshotAt(), issuanceFlowInput.sourceStatus(),
                     issuanceFlowInput.observedAt(), "O1");
+            validateFlowEvaluationBoundary(request.snapshotAt(), issuanceFlowInput);
         }
         validateObservedAtNoLaterThan(request.snapshotAt(), outcomeInput.sourceStatus(),
                 outcomeInput.observedAt(), "O3");
+        if (outcomeInput.sourceStatus().carriesValue()) {
+            validateEvaluationEnd(request.snapshotAt(), outcomeInput.windowEnd(), "O3 관측 구간");
+        }
         validateObservedAtNoLaterThan(request.snapshotAt(), aggregateIssuanceRate.status(),
                 aggregateIssuanceRate.observedAt(), "전체 발급률");
         validateObservedAtNoLaterThan(request.snapshotAt(), latencySummary.status(),
                 latencySummary.observedAt(), "지연");
-        validateLatencyWindow(latencySummary);
+        validateLatencyWindow(request.snapshotAt(), latencySummary);
     }
 
-    /** 값 있는 지연 관측의 구간이 양수이고 해당 원천 관측 시각 이후를 포함하지 않는지 검증합니다. */
-    private static void validateLatencyWindow(Observation<LatencySummary> latencyObservation) {
+    /** O1의 모든 평가 구간·이벤트 시각이 요청 snapshot을 넘지 않는지 검증합니다. */
+    private static void validateFlowEvaluationBoundary(
+            Instant snapshotAt,
+            IssuanceFlowInput input
+    ) {
+        if (!input.sourceStatus().carriesValue()) {
+            return;
+        }
+        validateEvaluationEnd(snapshotAt, input.windowEnd(), "O1 현재 구간");
+        validateEvaluationEnd(snapshotAt, input.trendWindowEnd(), "O1 추세 구간");
+        validateEvaluationEnd(snapshotAt, input.comparisonWindowEnd(), "O1 비교 구간");
+        validateEvaluationEnd(snapshotAt, input.conditionStartedAt(), "O1 조건 시작 시각");
+        if (input.lastCompletedAt() != null) {
+            validateEvaluationEnd(snapshotAt, input.lastCompletedAt(), "O1 마지막 완료 시각");
+        }
+        for (com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceBucket bucket
+                : input.buckets()) {
+            validateEvaluationEnd(snapshotAt, bucket.windowEnd(), "O1 추세 버킷");
+        }
+    }
+
+    /** 값 있는 지연 관측의 구간이 양수이고 요청 snapshot 이후를 포함하지 않는지 검증합니다. */
+    private static void validateLatencyWindow(
+            Instant snapshotAt,
+            Observation<LatencySummary> latencyObservation
+    ) {
         if (!latencyObservation.status().carriesValue()) {
             return;
         }
         LatencySummary latencySummary = latencyObservation.value();
         if (latencySummary.windowStart() == null || latencySummary.windowEnd() == null
-                || !latencySummary.windowEnd().isAfter(latencySummary.windowStart())
-                || latencySummary.windowEnd().isAfter(latencyObservation.observedAt())) {
-            throw new IllegalArgumentException("지연 관측 구간은 양수이고 observedAt 이후일 수 없습니다.");
+                || !latencySummary.windowEnd().isAfter(latencySummary.windowStart())) {
+            throw new IllegalArgumentException("지연 관측 구간은 양수여야 합니다.");
+        }
+        validateEvaluationEnd(snapshotAt, latencySummary.windowEnd(), "지연 관측 구간");
+    }
+
+    /** 평가 구간 종료·이벤트 시각이 요청 snapshot 이후이면 거부합니다. */
+    private static void validateEvaluationEnd(Instant snapshotAt, Instant end, String name) {
+        if (end.isAfter(snapshotAt)) {
+            throw new IllegalArgumentException(name + "은 snapshotAt 이후일 수 없습니다.");
         }
     }
 

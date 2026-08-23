@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
+import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
+
 /**
  * 하나의 운영현황 Snapshot을 위한 관측 기준 시각과 고유 캠페인 모집단입니다.
  *
@@ -13,16 +15,19 @@ import java.util.Set;
  *
  * @param snapshotAt 여러 관측 원천을 같은 운영현황으로 조립할 기준 시각
  * @param campaignTargets O1 관측 대상인 고유 캠페인 목록
+ * @param policy O1 연속 감소·중단 조건을 Core 계산기와 같은 기준으로 도출할 정책
  */
 public record OverviewObservationRequest(
         Instant snapshotAt,
-        List<CampaignObservationTarget> campaignTargets
+        List<CampaignObservationTarget> campaignTargets,
+        OverviewCalculationPolicy policy
 ) {
 
     /** 기준 시각과 중복 없는 캠페인 대상 목록을 검증하고 불변 복사합니다. */
     public OverviewObservationRequest {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         campaignTargets = List.copyOf(Objects.requireNonNull(campaignTargets, "campaignTargets"));
+        Objects.requireNonNull(policy, "policy");
         validateUniqueCouponIds(campaignTargets);
     }
 

@@ -57,6 +57,90 @@ class PromQueryClientTest {
         server.verify();
     }
 
+    /** Overview snapshot 질의는 서버 현재 시각이 아니라 요청 기준 시각에서 평가되어야 합니다. */
+    @Test
+    @DisplayName("명시한 시각을 Prometheus instant query 평가 시각으로 전달한다")
+    void sendsExplicitInstantEvaluationTime() {
+        Instant evaluationAt = Instant.parse("2026-08-23T03:00:00Z");
+        RestClient.Builder builder = RestClient.builder().baseUrl("http://prometheus:9090");
+        MockRestServiceServer expecting = MockRestServiceServer.bindTo(builder).build();
+        expecting.expect(requestTo(Matchers.containsString("/api/v1/query")))
+                .andExpect(request -> {
+                    assertThat(request.getURI().getQuery()).isEqualTo(
+                            "query=sum(increase(metric{stage=\"success\"}[1m]))"
+                                    + "&time=2026-08-23T03:00:00Z");
+                    assertThat(request.getURI().getRawQuery())
+                            .contains("%7B", "%22")
+                            .doesNotContain("{", "\"");
+                })
+                .andRespond(withSuccess("""
+                        {"status":"success","data":{"resultType":"vector","result":[]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(new PromQueryClient(builder.build()).query(
+                "sum(increase(metric{stage=\"success\"}[1m]))", evaluationAt)).isEmpty();
+        expecting.verify();
+    }
+
+    /** Overview timed p99는 손상된 인스턴스를 버리고 낮은 max를 게시하면 안 됩니다. */
+    @Test
+    @DisplayName("시각 고정 p99 질의는 valid와 malformed 표본이 섞이면 전체를 거부한다")
+    void timedQueryRejectsMixedValidAndMalformedP99Members() {
+        PromQueryClient timed = bind("""
+                {"status":"success","data":{"resultType":"vector","result":[
+                  {"metric":{"instance":"api-1"},"value":[1755000000,"0.2"]},
+                  {"metric":{"instance":"api-2"},"value":[1755000000,"broken"]}]}}
+                """, false);
+
+        assertThatThrownBy(() -> timed.query(
+                OverviewPrometheusContract.successfulP99(),
+                Instant.parse("2026-08-23T03:00:00Z")))
+                .isInstanceOf(PromQueryException.class)
+                .hasMessageContaining("표본 값을 해석할 수 없습니다");
+    }
+
+    /** malformed unknown outcome을 건너뛰면 정확히 13개 known 표본만 남아 거짓 VALID가 됩니다. */
+    @Test
+    @DisplayName("시각 고정 O3 질의는 13 known와 malformed unknown 표본이 섞이면 전체를 거부한다")
+    void timedQueryRejectsThirteenKnownAndMalformedUnknownOutcomeMember() {
+        PromQueryClient timed = bind("""
+                {"status":"success","data":{"resultType":"vector","result":[
+                  {"metric":{"outcome":"ISSUED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"QUEUED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"QUEUE_REQUIRED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"ALREADY_ISSUED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"STOCK_EXHAUSTED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"NOT_OPENED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"CAMPAIGN_CLOSED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"GRADE_NOT_ELIGIBLE"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"NO_ENTRY_TOKEN"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"ENTRY_TOKEN_EXPIRED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"TEMPORARILY_UNAVAILABLE"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"INTERNAL_ERROR"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"UNMAPPED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"NEW_RESULT"},"value":[1755000000,"broken"]}]}}
+                """, false);
+
+        assertThatThrownBy(() -> timed.query(
+                OverviewPrometheusContract.outcomes(),
+                Instant.parse("2026-08-23T03:00:00Z")))
+                .isInstanceOf(PromQueryException.class)
+                .hasMessageContaining("표본 값을 해석할 수 없습니다");
+    }
+
+    /** missing/non-array result를 빈 vector로 보면 손상과 미배포를 구분할 수 없습니다. */
+    @Test
+    @DisplayName("시각 고정 질의는 result container가 array가 아니면 거부한다")
+    void timedQueryRejectsMalformedResultContainer() {
+        PromQueryClient timed = bind("""
+                {"status":"success","data":{"resultType":"vector","result":{}}}
+                """, false);
+
+        assertThatThrownBy(() -> timed.query("metric", Instant.parse("2026-08-23T03:00:00Z")))
+                .isInstanceOf(PromQueryException.class)
+                .hasMessageContaining("result");
+    }
+
     /** batch 는 값이 없을 때 NaN 을 싣고 이유는 상태 미터가 낸다. 0 으로 바꾸면 이유가 사라진다. */
     @Test
     @DisplayName("NaN 표본을 0으로 바꾸지 않고 그대로 보존한다")

@@ -11,6 +11,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
+import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.coupon.CouponStatus;
@@ -21,6 +22,21 @@ class OverviewObservationContractTest {
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-23T03:00:00Z");
     private static final Instant WINDOW_START = SNAPSHOT_AT.minus(Duration.ofMinutes(1));
+    private static final OverviewCalculationPolicy POLICY = new OverviewCalculationPolicy(
+            0.5, Duration.ofMinutes(2), Duration.ofMinutes(3),
+            Duration.ofMinutes(2), Duration.ofMinutes(5));
+
+    /** 관측 원천이 Core와 같은 감소·중단 판정 기준으로 연속 조건을 도출하도록 정책을 보존합니다. */
+    @Test
+    void requestRequiresCalculationPolicy() {
+        OverviewObservationRequest request = new OverviewObservationRequest(
+                SNAPSHOT_AT, List.of(target(10L)), POLICY);
+
+        assertThat(request.policy()).isSameAs(POLICY);
+        assertThatThrownBy(() -> new OverviewObservationRequest(
+                SNAPSHOT_AT, List.of(target(10L)), null))
+                .isInstanceOf(NullPointerException.class);
+    }
 
     /** 요청은 원본 대상 목록 변경과 외부 수정을 차단하고 유효한 고유 캠페인만 받습니다. */
     @Test
@@ -28,21 +44,21 @@ class OverviewObservationContractTest {
         List<CampaignObservationTarget> targets = new ArrayList<>();
         targets.add(target(11L));
 
-        OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT_AT, targets);
+        OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT_AT, targets, POLICY);
 
         targets.clear();
 
         assertThat(request.campaignTargets()).containsExactly(target(11L));
         assertThatThrownBy(() -> request.campaignTargets().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT, null))
+        assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT, null, POLICY))
                 .isInstanceOf(NullPointerException.class);
         List<CampaignObservationTarget> targetsWithNull = new ArrayList<>();
         targetsWithNull.add(null);
-        assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT, targetsWithNull))
+        assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT, targetsWithNull, POLICY))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(target(11L), target(11L))))
+                List.of(target(11L), target(11L)), POLICY))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CampaignObservationTarget(0L, CouponStatus.OPEN, true))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -101,7 +117,7 @@ class OverviewObservationContractTest {
         assertThat(data.issuanceFlowInputs()).extracting(IssuanceFlowCalculator.IssuanceFlowInput::couponId)
                 .containsExactly(21L);
         assertThat(data.issuanceFlowInputs().getFirst().attemptedCount()).isZero();
-        assertThat(data.issuanceFlowInputs().getFirst().completedCount()).isEqualTo(1L);
+        assertThat(data.issuanceFlowInputs().getFirst().completedCount()).isEqualTo(1d);
         assertThatThrownBy(() -> data.issuanceFlowInputs().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
     }
@@ -127,7 +143,7 @@ class OverviewObservationContractTest {
     void dataRejectsO1InputThatContradictsRequestedCampaignStateOrOpenStock() {
         OverviewObservationRequest openRequest = request(37L);
         OverviewObservationRequest closedRequest = new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(new CampaignObservationTarget(38L, CouponStatus.CLOSED, null)));
+                List.of(new CampaignObservationTarget(38L, CouponStatus.CLOSED, null)), POLICY);
 
         assertThatThrownBy(() -> data(openRequest, List.of(flowInput(
                 37L, CouponStatus.CLOSED, false, 1L, 1L, SNAPSHOT_AT)),
@@ -185,6 +201,64 @@ class OverviewObservationContractTest {
         assertThat(data.outcomeInput().observedAt()).isEqualTo(observedAt);
         assertThat(data.aggregateIssuanceRate().observedAt()).isEqualTo(observedAt);
         assertThat(data.latencySummary().observedAt()).isEqualTo(observedAt);
+    }
+
+    /** 평가 구간과 원시 scrape 시각은 서로 다른 축이며 둘 다 snapshot 경계 안이면 유효합니다. */
+    @Test
+    void dataAcceptsSnapshotEvaluationWindowsAfterRawScrapeTime() {
+        Instant observedAt = SNAPSHOT_AT.minusSeconds(17);
+        IssuanceFlowCalculator.IssuanceFlowInput flow = new IssuanceFlowCalculator.IssuanceFlowInput(
+                72L, CouponStatus.OPEN, true, WINDOW_START, SNAPSHOT_AT,
+                SNAPSHOT_AT.minus(Duration.ofMinutes(10)), SNAPSHOT_AT,
+                1d, 0d, 1d, SNAPSHOT_AT.minus(Duration.ofMinutes(2)), WINDOW_START,
+                List.of(), null, WINDOW_START, SourceStatus.VALID, observedAt);
+        CustomerOutcomeCalculator.OutcomeInput outcome = new CustomerOutcomeCalculator.OutcomeInput(
+                SNAPSHOT_AT.minus(Duration.ofMinutes(5)), SNAPSHOT_AT, List.of(),
+                SourceStatus.VALID, observedAt);
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> latency =
+                new AdminOverviewSnapshot.Observation<>(
+                        new AdminOverviewSnapshot.LatencySummary(Duration.ofMillis(10), null,
+                                SNAPSHOT_AT.minusSeconds(10), SNAPSHOT_AT),
+                        SourceStatus.VALID, observedAt);
+
+        OverviewObservationData data = data(request(72L), List.of(flow), outcome,
+                aggregateIssuanceRate(SourceStatus.PENDING), latency);
+
+        assertThat(data.issuanceFlowInputs().getFirst().windowEnd()).isEqualTo(SNAPSHOT_AT);
+        assertThat(data.outcomeInput().windowEnd()).isEqualTo(SNAPSHOT_AT);
+        assertThat(data.latencySummary().value().windowEnd()).isEqualTo(SNAPSHOT_AT);
+        assertThat(data.latencySummary().observedAt()).isEqualTo(observedAt);
+    }
+
+    /** 값 있는 모든 평가 구간은 raw scrape 시각과 무관하게 request snapshot을 넘을 수 없습니다. */
+    @Test
+    void dataRejectsEvaluationWindowsAfterRequestSnapshot() {
+        Instant future = SNAPSHOT_AT.plusSeconds(1);
+
+        assertThatThrownBy(() -> data(request(73L), List.of(
+                new IssuanceFlowCalculator.IssuanceFlowInput(
+                        73L, CouponStatus.OPEN, true, WINDOW_START, future,
+                        SNAPSHOT_AT.minus(Duration.ofMinutes(10)), SNAPSHOT_AT,
+                        1d, 0d, 1d, SNAPSHOT_AT.minus(Duration.ofMinutes(2)), WINDOW_START,
+                        List.of(), null, WINDOW_START, SourceStatus.VALID, SNAPSHOT_AT)),
+                outcomeInput(), aggregateIssuanceRate(SourceStatus.PENDING),
+                latencySummary(SourceStatus.PENDING)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("snapshotAt");
+        assertThatThrownBy(() -> data(request(74L), List.of(flowInput(74L, 1L, 1L)),
+                new CustomerOutcomeCalculator.OutcomeInput(
+                        WINDOW_START, future, List.of(), SourceStatus.VALID, SNAPSHOT_AT),
+                aggregateIssuanceRate(SourceStatus.PENDING), latencySummary(SourceStatus.PENDING)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("snapshotAt");
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> futureLatency =
+                new AdminOverviewSnapshot.Observation<>(
+                        new AdminOverviewSnapshot.LatencySummary(Duration.ofMillis(10), null,
+                                WINDOW_START, future), SourceStatus.VALID, SNAPSHOT_AT);
+        assertThatThrownBy(() -> data(request(75L), List.of(flowInput(75L, 1L, 1L)),
+                outcomeInput(), aggregateIssuanceRate(SourceStatus.PENDING), futureLatency))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("snapshotAt");
     }
 
     /** 지연 외부 관측 시각이 기준 시각이어도 포함한 관측 구간은 미래로 끝날 수 없습니다. */
@@ -281,12 +355,12 @@ class OverviewObservationContractTest {
         for (long couponId : couponIds) {
             targets.add(target(couponId));
         }
-        return new OverviewObservationRequest(SNAPSHOT_AT, targets);
+        return new OverviewObservationRequest(SNAPSHOT_AT, targets, POLICY);
     }
 
     /** 독립 시도·성공 모집단을 갖는 값 있는 O1 입력을 만듭니다. */
     private static IssuanceFlowCalculator.IssuanceFlowInput flowInput(
-            long couponId, long attemptedCount, long completedCount
+            long couponId, double attemptedCount, double completedCount
     ) {
         return flowInput(couponId, CouponStatus.OPEN, true, attemptedCount, completedCount, SNAPSHOT_AT);
     }
@@ -296,14 +370,15 @@ class OverviewObservationContractTest {
             long couponId,
             CouponStatus campaignStatus,
             boolean stockAvailable,
-            long attemptedCount,
-            long completedCount,
+            double attemptedCount,
+            double completedCount,
             Instant observedAt
     ) {
         return new IssuanceFlowCalculator.IssuanceFlowInput(
                 couponId, campaignStatus, stockAvailable, WINDOW_START, SNAPSHOT_AT,
+                WINDOW_START, SNAPSHOT_AT,
                 attemptedCount, completedCount, completedCount,
-                WINDOW_START, SNAPSHOT_AT, List.of(), completedCount == 0L ? null : SNAPSHOT_AT,
+                WINDOW_START, SNAPSHOT_AT, List.of(), completedCount == 0d ? null : SNAPSHOT_AT,
                 WINDOW_START, SourceStatus.VALID, observedAt);
     }
 
@@ -315,7 +390,8 @@ class OverviewObservationContractTest {
     ) {
         return new IssuanceFlowCalculator.IssuanceFlowInput(
                 couponId, CouponStatus.OPEN, true, windowStart, observedAt,
-                1L, 1L, 1L, windowStart, observedAt, List.of(), observedAt,
+                windowStart, observedAt,
+                1d, 1d, 1d, windowStart, observedAt, List.of(), observedAt,
                 windowStart, SourceStatus.STALE, observedAt);
     }
 
@@ -325,7 +401,7 @@ class OverviewObservationContractTest {
             List<IssuanceFlowCalculator.IssuanceBucket> buckets
     ) {
         return new IssuanceFlowCalculator.IssuanceFlowInput(
-                couponId, CouponStatus.OPEN, null, null, null,
+                couponId, CouponStatus.OPEN, null, null, null, null, null,
                 null, null, null, null, null, buckets, null,
                 null, SourceStatus.PENDING, null);
     }

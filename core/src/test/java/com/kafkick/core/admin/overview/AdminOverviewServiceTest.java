@@ -103,10 +103,10 @@ class AdminOverviewServiceTest {
                 .filteredOn(campaign -> campaign.couponId().equals(102L))
                 .singleElement()
                 .satisfies(campaign -> {
-                    assertThat(campaign.issuanceFlow().value().currentPerMinute()).isEqualTo(44.0);
+                    assertThat(campaign.issuanceFlow().value().currentPerMinute()).isEqualTo(49.0);
                     assertThat(campaign.stockForecast().value())
                         .isEqualTo(new AdminOverviewSnapshot.StockForecast(
-                                350L, 7_000L, 0.05, Duration.ofSeconds(478)));
+                                350L, 7_000L, 0.05, Duration.ofSeconds(429)));
                     assertThat(campaign.severity()).isEqualTo(Severity.CRITICAL);
                     assertThat(campaign.customerImpact()).isEqualTo(
                             AdminOverviewSnapshot.CustomerImpact.LIMITED);
@@ -743,7 +743,8 @@ class AdminOverviewServiceTest {
     /** 테스트에서 O1 중단만 바꾸고 같은 쿠폰의 실제 관측 구간·원천 상태는 유지합니다. */
     private static IssuanceFlowInput stoppedIssuanceInput(IssuanceFlowInput input, Instant snapshotAt) {
         return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), input.stockAvailable(),
-                input.windowStart(), input.windowEnd(), input.attemptedCount(), 0L,
+                input.windowStart(), input.windowEnd(), input.trendWindowStart(), input.trendWindowEnd(),
+                input.attemptedCount(), 0d,
                 input.comparisonCompletedCount(), input.comparisonWindowStart(), input.comparisonWindowEnd(),
                 List.of(), null, snapshotAt.minus(Duration.ofMinutes(10)), SourceStatus.VALID, snapshotAt);
     }
@@ -755,14 +756,15 @@ class AdminOverviewServiceTest {
             Instant snapshotAt
     ) {
         if (!status.carriesValue()) {
-            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null,
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null, null, null,
                     null, null, null, null, null, null, null, null, status, null);
         }
         Instant observedAt = snapshotAt.minus(Duration.ofMinutes(5));
         Instant windowStart = observedAt.minus(Duration.ofMinutes(1));
         Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
         return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
-                10L, 10L, 10L, comparisonWindowStart, windowStart,
+                windowStart, observedAt,
+                10d, 10d, 10d, comparisonWindowStart, windowStart,
                 List.of(new IssuanceFlowCalculator.IssuanceBucket(windowStart, observedAt, 10L)), observedAt,
                 windowStart, status, observedAt);
     }
@@ -774,7 +776,7 @@ class AdminOverviewServiceTest {
             Instant snapshotAt
     ) {
         if (!status.carriesValue()) {
-            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null,
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null, null, null,
                     null, null, null, null, null, null, null, null, status, null);
         }
         Instant observedAt = snapshotAt.minus(Duration.ofMinutes(5));
@@ -782,10 +784,12 @@ class AdminOverviewServiceTest {
         Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
         if (status == SourceStatus.NO_TRAFFIC) {
             return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
-                    0L, 0L, 0L, comparisonWindowStart, windowStart, List.of(), null, windowStart, status, observedAt);
+                    windowStart, observedAt,
+                    0d, 0d, 0d, comparisonWindowStart, windowStart, List.of(), null, windowStart, status, observedAt);
         }
         return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
-                10L, 10L, 10L, comparisonWindowStart, windowStart,
+                windowStart, observedAt,
+                10d, 10d, 10d, comparisonWindowStart, windowStart,
                 List.of(new IssuanceFlowCalculator.IssuanceBucket(windowStart, observedAt, 10L)), observedAt,
                 windowStart, status, observedAt);
     }

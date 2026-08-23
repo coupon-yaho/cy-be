@@ -468,21 +468,70 @@ public record AdminOverviewResponse(
      *
      * @param windowStart 집계 구간 시작 시각
      * @param windowEnd 집계 구간 종료 시각
-     * @param totalCount 결과별 비율의 전체 분모
+     * @param totalCount Prometheus가 추정한 결과별 비율의 전체 분모
      * @param outcomes 결과 유형별 건수·비율·표시 설명; 결과가 없으면 빈 목록
      */
     public record CustomerOutcomeSummary(Instant windowStart, Instant windowEnd,
-                                         long totalCount, List<CustomerOutcome> outcomes) { }
+                                         double totalCount, List<CustomerOutcome> outcomes) {
+
+        /** 비유한·음수 추정치와 mutable 목록이 HTTP 응답으로 누출되는 것을 차단합니다. */
+        public CustomerOutcomeSummary {
+            Objects.requireNonNull(windowStart, "windowStart");
+            Objects.requireNonNull(windowEnd, "windowEnd");
+            if (!windowEnd.isAfter(windowStart)) {
+                throw new IllegalArgumentException("O3 집계 구간은 양수여야 합니다.");
+            }
+            if (!Double.isFinite(totalCount) || totalCount < 0d) {
+                throw new IllegalArgumentException("totalCount는 유한한 0 이상이어야 합니다.");
+            }
+            outcomes = List.copyOf(Objects.requireNonNull(outcomes, "outcomes"));
+            if ((totalCount == 0d) != outcomes.isEmpty()) {
+                throw new IllegalArgumentException("totalCount가 0일 때만 outcomes가 비어야 합니다.");
+            }
+            if (totalCount > 0d) {
+                java.util.EnumSet<CustomerOutcomeType> types =
+                        java.util.EnumSet.noneOf(CustomerOutcomeType.class);
+                double sum = 0d;
+                for (CustomerOutcome outcome : outcomes) {
+                    if (!types.add(outcome.type())) {
+                        throw new IllegalArgumentException("O3 outcome type은 중복될 수 없습니다.");
+                    }
+                    sum += outcome.count();
+                    if (!Double.isFinite(sum)) {
+                        throw new IllegalArgumentException("O3 outcome count 합계는 유한해야 합니다.");
+                    }
+                    if (!equalWithinAccumulationUlps(
+                            outcome.ratio(), outcome.count() / totalCount, 1)) {
+                        throw new IllegalArgumentException("O3 outcome ratio가 count/totalCount와 맞지 않습니다.");
+                    }
+                }
+                if (!equalWithinAccumulationUlps(sum, totalCount, outcomes.size())) {
+                    throw new IllegalArgumentException("O3 outcome count 합이 totalCount와 맞지 않습니다.");
+                }
+            }
+        }
+
+        /** 각 합산 항마다 최대 1 ULP의 반올림 차이만 허용합니다. */
+        private static boolean equalWithinAccumulationUlps(
+                double left, double right, int termCount
+        ) {
+            if (left == right) {
+                return true;
+            }
+            double tolerance = Math.max(Math.ulp(left), Math.ulp(right)) * termCount;
+            return Math.abs(left - right) <= tolerance;
+        }
+    }
 
     /**
      * O3 고객 결과 유형 하나의 집계값입니다.
      *
      * @param type 고객 결과 코드
-     * @param count 해당 결과 건수; 실제 발생하지 않았으면 0
+     * @param count Prometheus가 추정한 해당 결과 발생 건수; 관측된 활동이 없으면 0
      * @param ratio 전체 {@code totalCount} 대비 0~1 비율; NaN과 무한대는 허용하지 않음
      * @param displayText 운영자에게 표시할 결과 의미 설명
      */
-    public record CustomerOutcome(CustomerOutcomeType type, long count,
+    public record CustomerOutcome(CustomerOutcomeType type, double count,
                                   double ratio, String displayText) {
 
         /**
@@ -491,6 +540,10 @@ public record AdminOverviewResponse(
          * @throws IllegalArgumentException ratio가 유한하지 않거나 0 미만 또는 1 초과인 경우
          */
         public CustomerOutcome {
+            Objects.requireNonNull(type, "type");
+            if (!Double.isFinite(count) || count < 0d) {
+                throw new IllegalArgumentException("count는 유한한 0 이상이어야 합니다.");
+            }
             if (!Double.isFinite(ratio) || ratio < 0.0 || ratio > 1.0) {
                 throw new IllegalArgumentException("ratio는 유한한 0 이상 1 이하 값이어야 합니다.");
             }
