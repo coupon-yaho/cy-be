@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import com.kafkick.core.support.exception.BusinessException;
 
 /** 관측이 끝난 회차의 세 발표용 시계열을 Prometheus에서 MySQL로 복제한다. */
 public class RunTimeseriesArchiver {
@@ -24,9 +25,9 @@ public class RunTimeseriesArchiver {
     /** FAILED 회차를 포함해 완료된 관측 구간을 다시 복제한다. */
     public void archive(long benchmarkRunId) {
         BenchmarkRun run = runs.findById(benchmarkRunId)
-                .orElseThrow(() -> new IllegalArgumentException("회차가 없습니다: " + benchmarkRunId));
+                .orElseThrow(() -> notFound(benchmarkRunId));
         if (run.observationStoppedAt() == null) {
-            throw new IllegalStateException("관측 종료 전에는 archive 할 수 없습니다: " + benchmarkRunId);
+            throw illegalTransition(benchmarkRunId, "observation_stopped_at is null");
         }
 
         try {
@@ -56,9 +57,9 @@ public class RunTimeseriesArchiver {
     /** 관리자 재실행 경로. 실패한 archive만 다시 실행한다. */
     public void retry(long benchmarkRunId) {
         BenchmarkRun run = runs.findById(benchmarkRunId)
-                .orElseThrow(() -> new IllegalArgumentException("회차가 없습니다: " + benchmarkRunId));
+                .orElseThrow(() -> notFound(benchmarkRunId));
         if (run.archiveStatus() != BenchmarkArchiveStatus.FAILED) {
-            throw new IllegalStateException("FAILED archive만 재실행할 수 있습니다: " + benchmarkRunId);
+            throw illegalTransition(benchmarkRunId, "archiveStatus=" + run.archiveStatus());
         }
         archive(benchmarkRunId);
     }
@@ -76,6 +77,15 @@ public class RunTimeseriesArchiver {
             }
             previous = sample.sequence();
         }
+    }
+
+    private static BusinessException notFound(long id) {
+        return new BusinessException(BenchmarkErrorCode.RUN_NOT_FOUND, "benchmarkRunId=" + id);
+    }
+
+    private static BusinessException illegalTransition(long id, String actual) {
+        return new BusinessException(BenchmarkErrorCode.ILLEGAL_TRANSITION,
+                "benchmarkRunId=" + id + " " + actual);
     }
 
     public enum Metric { STOCK_REMAINING, LATENCY_P99, DB_POOL_USAGE }

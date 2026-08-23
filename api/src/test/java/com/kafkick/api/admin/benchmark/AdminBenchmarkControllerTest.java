@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.doThrow;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
+import com.kafkick.core.benchmark.BenchmarkErrorCode;
+import com.kafkick.core.support.exception.BusinessException;
 import static org.mockito.Mockito.mock;
 import java.util.Optional;
 
@@ -137,5 +140,25 @@ class AdminBenchmarkControllerTest {
         unavailable.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void retryArchiveMapsMissingRunToNotFound() throws Exception {
+        doThrow(new BusinessException(BenchmarkErrorCode.RUN_NOT_FOUND, "benchmarkRunId=404"))
+                .when(archiver).retry(404L);
+
+        mockMvc.perform(post("/api/v1/admin/benchmarks/404/archive/retry"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("BENCHMARK-003"));
+    }
+
+    @Test
+    void retryArchiveMapsInvalidStateToConflict() throws Exception {
+        doThrow(new BusinessException(BenchmarkErrorCode.ILLEGAL_TRANSITION, "archiveStatus=DONE"))
+                .when(archiver).retry(7L);
+
+        mockMvc.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("BENCHMARK-004"));
     }
 }

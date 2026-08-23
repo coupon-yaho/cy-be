@@ -51,4 +51,34 @@ class PromQueryClientRangeTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void preservesFractionalRangeBoundaries() throws Exception {
+        AtomicReference<String> rawQuery = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v1/query_range", exchange -> {
+            rawQuery.set(exchange.getRequestURI().getRawQuery());
+            byte[] response = """
+                    {"status":"success","data":{"resultType":"matrix","result":[]}}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            PromQueryClient client = new PromQueryClient(RestClient.builder()
+                    .baseUrl("http://127.0.0.1:" + server.getAddress().getPort()).build());
+            client.queryRange(Metric.DB_POOL_USAGE,
+                    Instant.parse("2026-08-23T00:00:00.123456Z"),
+                    Instant.parse("2026-08-23T00:01:05.654321Z"), 1);
+
+            String decoded = URLDecoder.decode(rawQuery.get(), StandardCharsets.UTF_8);
+            assertThat(decoded).contains("start=1787443200.123456");
+            assertThat(decoded).contains("end=1787443265.654321");
+        } finally {
+            server.stop(0);
+        }
+    }
 }

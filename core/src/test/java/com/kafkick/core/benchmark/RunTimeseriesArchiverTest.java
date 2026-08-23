@@ -18,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.Metric;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.Sample;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.State;
+import com.kafkick.core.support.exception.BusinessException;
 
 class RunTimeseriesArchiverTest {
 
@@ -79,8 +80,31 @@ class RunTimeseriesArchiverTest {
 
         assertThatThrownBy(() -> new RunTimeseriesArchiver(
                 runs, new CapturingSource(), new RecordingStore()).archive(7))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("관측 종료 전");
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
+    }
+
+    @Test
+    void reportsMissingRunAsNotFound() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        when(runs.findById(404)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+                runs, new CapturingSource(), new RecordingStore()).archive(404))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.RUN_NOT_FOUND));
+    }
+
+    @Test
+    void reportsRetryOfNonFailedRunAsIllegalTransition() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun done = run(BenchmarkArchiveStatus.DONE);
+        when(runs.findById(7)).thenReturn(Optional.of(done));
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+                runs, new CapturingSource(), new RecordingStore()).retry(7))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
     }
 
     @Test

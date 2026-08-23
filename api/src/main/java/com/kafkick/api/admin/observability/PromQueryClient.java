@@ -1,5 +1,6 @@
 package com.kafkick.api.admin.observability;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -109,12 +110,19 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
                             .queryParam("start", "{start}")
                             .queryParam("end", "{end}")
                             .queryParam("step", "{step}")
-                            .build(promQl, start.getEpochSecond(), end.getEpochSecond(), stepSeconds))
+                            .build(promQl, epochSeconds(start), epochSeconds(end), stepSeconds))
                     .retrieve().body(JsonNode.class);
         } catch (RestClientException failure) {
             throw new PromQueryException("Prometheus range 질의에 실패했습니다: " + promQl, failure);
         }
         return parseRange(body, metric, start, promQl);
+    }
+
+    private static String epochSeconds(Instant instant) {
+        return BigDecimal.valueOf(instant.getEpochSecond())
+                .add(BigDecimal.valueOf(instant.getNano(), 9))
+                .stripTrailingZeros()
+                .toPlainString();
     }
 
     private static List<Sample> parseRange(JsonNode body, Metric metric, Instant start, String promQl) {
