@@ -171,19 +171,27 @@ class AdminIssuanceControllerTest {
                         .param("beforeCursor", secondCursor))
                 .andExpect(status().isOk())
                 .andReturn();
+        String thirdJson = thirdResult.getResponse().getContentAsString();
+        String thirdCursor = JsonPath.read(thirdJson, "$.data.nextBeforeCursor");
 
         List<Integer> issuanceIds = List.of(
                 JsonPath.read(firstJson, "$.data.items[0].issuanceId"),
                 JsonPath.read(secondJson, "$.data.items[0].issuanceId"),
-                JsonPath.read(thirdResult.getResponse().getContentAsString(),
-                        "$.data.items[0].issuanceId"));
+                JsonPath.read(thirdJson, "$.data.items[0].issuanceId"));
+        List<String> eventTypes = List.of(
+                JsonPath.read(firstJson, "$.data.items[0].eventType"),
+                JsonPath.read(secondJson, "$.data.items[0].eventType"),
+                JsonPath.read(thirdJson, "$.data.items[0].eventType"));
         HistoryPosition firstPosition = cursorCodec.decode(firstCursor);
         HistoryPosition secondPosition = cursorCodec.decode(secondCursor);
+        HistoryPosition thirdPosition = cursorCodec.decode(thirdCursor);
 
         assertThat(firstPosition.historyId()).isEqualTo(1_008L);
         assertThat(secondPosition.historyId()).isEqualTo(1_007L);
+        assertThat(thirdPosition.historyId()).isEqualTo(1_006L);
         assertThat(secondPosition.occurredAt()).isEqualTo(firstPosition.occurredAt());
         assertThat(issuanceIds).containsExactly(5_004, 6_003, 6_002).doesNotHaveDuplicates();
+        assertThat(eventTypes).containsExactly("CANCEL", "ISSUE", "ISSUE");
     }
 
     /** LocalDate의 다음 날 계산 범위를 넘는 to 입력을 400으로 통일하는지 검증합니다. */
@@ -219,26 +227,28 @@ class AdminIssuanceControllerTest {
                 .andExpect(jsonPath("$.success").value(false));
     }
 
-    /** 발급 이력의 시작일이 종료일보다 늦은 기간 조건을 400으로 거부하는지 검증합니다. */
+    /** 발급 이력의 시작일이 종료일보다 늦은 기간 조건을 400 COMMON-001로 거부하는지 검증합니다. */
     @Test
-    @DisplayName("발급 이력 조회는 역전된 기간을 400 실패 봉투로 거부한다")
+    @DisplayName("발급 이력 조회는 역전된 기간을 400 COMMON-001로 거부한다")
     void issuanceHistoriesRejectReversedRange() throws Exception {
         mockMvc.perform(get("/api/v1/admin/issuance-histories")
                         .param("from", "2026-08-16")
                         .param("to", "2026-01-01"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
-    /** 페이지 크기의 최솟값과 최댓값 바깥을 모두 400으로 거부하는지 검증합니다. */
+    /** 페이지 크기의 최솟값과 최댓값 바깥을 모두 400 COMMON-001로 거부하는지 검증합니다. */
     @ParameterizedTest
     @ValueSource(strings = {"0", "201"})
-    @DisplayName("발급 이력 조회는 limit 0과 201을 400으로 거부한다")
+    @DisplayName("발급 이력 조회는 limit 0과 201을 400 COMMON-001로 거부한다")
     void issuanceHistoriesRejectOutOfRangeLimit(String limit) throws Exception {
         mockMvc.perform(get("/api/v1/admin/issuance-histories")
                         .param("limit", limit))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
     /** 고정 시각의 Mock 원천을 사용하는 실제 Core 발급 이력 Service를 구성합니다. */
