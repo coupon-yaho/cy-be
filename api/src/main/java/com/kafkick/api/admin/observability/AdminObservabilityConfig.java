@@ -6,6 +6,17 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import com.kafkick.core.admin.overview.AdminOverviewService;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
+import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
+import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
+import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
+import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
+import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
+import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.support.TimeProvider;
 
@@ -51,6 +62,29 @@ public class AdminObservabilityConfig {
     ) {
         return new PromOverviewObservationSource(
                 instantQuery, rangeQuery, properties.staleAfter(), properties.totalBudget());
+    }
+
+    /** API 전용 Prom 관측 원천과 Core 계산기를 기술 중립 Overview Service에 명시적으로 배선합니다. */
+    @Bean
+    public AdminOverviewService adminOverviewService(
+            TimeProvider timeProvider,
+            AdminOverviewMockDataFactory mockDataFactory,
+            OverviewObservationSource observationSource,
+            IssuanceFlowCalculator issuanceFlowCalculator,
+            IssuanceActionCalculator issuanceActionCalculator,
+            CampaignQueueCalculator campaignQueueCalculator,
+            CustomerOutcomeCalculator customerOutcomeCalculator,
+            StockRiskCalculator stockRiskCalculator,
+            CampaignOverviewCalculator campaignOverviewCalculator,
+            ConsistencyActionCalculator consistencyActionCalculator,
+            OperationActionCalculator operationActionCalculator,
+            OverviewStatusCalculator overviewStatusCalculator
+    ) {
+        return new AdminOverviewService(
+                timeProvider, mockDataFactory, observationSource, issuanceFlowCalculator,
+                issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
+                stockRiskCalculator, campaignOverviewCalculator, consistencyActionCalculator,
+                operationActionCalculator, overviewStatusCalculator);
     }
 
     /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */

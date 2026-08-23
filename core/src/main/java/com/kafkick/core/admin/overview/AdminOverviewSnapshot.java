@@ -192,8 +192,8 @@ public record AdminOverviewSnapshot(
      * @param opensAt 캠페인 오픈 시각
      * @param closesAt 예정 종료 시각; 종료 미지정이면 null
      * @param severity 운영 조치 우선순위를 색상으로 표현할 심각도
-     * @param issuanceFlow O1 캠페인별 발급 흐름과 해당 원천 상태; O4의 최근 분당 발급 속도도
-     *                     이 값의 {@link IssuanceFlow#currentPerMinute()}를 사용
+     * @param issuanceFlow O1 캠페인별 실관측 발급 흐름과 해당 원천 상태; CY-413의 O4 ETA는
+     *                     이 값이 아닌 별도 Mock O1 입력으로 계산
      * @param campaignQueueStatus O2 캠페인별 대기 상태와 해당 원천 상태
      * @param stockForecast O4 캠페인별 재고·소진 예상과 해당 원천 상태
      * @param customerImpact 고객 영향 범위
@@ -271,10 +271,10 @@ public record AdminOverviewSnapshot(
      * O4 캠페인별 재고와 예상 소진 상태입니다.
      *
      * <p>V1은 MySQL 재고, V2·V3는 Redis 재고를 사용하지만 이 계약에는 기술 원천을 노출하지
-     * 않습니다. 원천 선택과 실제 계산은 구현체가 담당합니다. O4 화면에서 함께 표시하는 최근
-     * 분당 발급 속도는 같은 {@link CampaignOverview}의 {@link CampaignOverview#issuanceFlow()}에 있는
-     * {@link IssuanceFlow#currentPerMinute()}를 사용합니다. 재고 원천과 발급 원천의 상태·관측 시각을
-     * 독립적으로 유지하기 위해 이 record에 발급 속도를 중복 저장하지 않습니다.</p>
+     * 않습니다. 원천 선택과 실제 계산은 구현체가 담당합니다. CY-413 동안 O4 예상 소진은 같은 행의
+     * 실관측 {@link CampaignOverview#issuanceFlow()}가 아니라 별도로 유지한 Mock O1 입력으로 계산합니다.
+     * 재고 원천과 화면 O1의 상태·관측 시각을 독립적으로 유지하기 위해 이 record에 발급 속도를
+     * 중복 저장하지 않습니다.</p>
      *
      * @param remainingQuantity 현재 잔여 수량; 실제 소진이면 0
      * @param totalQuantity 캠페인의 전체 발급 가능 수량

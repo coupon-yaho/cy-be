@@ -29,6 +29,7 @@ public record OverviewObservationRequest(
         campaignTargets = List.copyOf(Objects.requireNonNull(campaignTargets, "campaignTargets"));
         Objects.requireNonNull(policy, "policy");
         validateUniqueCouponIds(campaignTargets);
+        validateStockObservationBoundary(snapshotAt, campaignTargets);
     }
 
     /** 동일 쿠폰을 둘 이상 요청해 O1 모집단 의미가 모호해지는 것을 막습니다. */
@@ -37,6 +38,19 @@ public record OverviewObservationRequest(
         for (CampaignObservationTarget campaignTarget : campaignTargets) {
             if (!couponIds.add(campaignTarget.couponId())) {
                 throw new IllegalArgumentException("campaignTargets의 couponId는 중복될 수 없습니다.");
+            }
+        }
+    }
+
+    /** 값 있는 재고 관측이 요청 Snapshot 이후의 미래 정보를 포함하지 않는지 검증합니다. */
+    private static void validateStockObservationBoundary(
+            Instant snapshotAt,
+            List<CampaignObservationTarget> campaignTargets
+    ) {
+        for (CampaignObservationTarget campaignTarget : campaignTargets) {
+            if (campaignTarget.stockStatus().carriesValue()
+                    && campaignTarget.stockObservedAt().isAfter(snapshotAt)) {
+                throw new IllegalArgumentException("stockObservedAt은 snapshotAt 이후일 수 없습니다.");
             }
         }
     }

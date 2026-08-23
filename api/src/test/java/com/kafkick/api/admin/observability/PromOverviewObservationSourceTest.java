@@ -1,6 +1,7 @@
 package com.kafkick.api.admin.observability;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -47,6 +48,34 @@ class PromOverviewObservationSourceTest {
             0.5, Duration.ofMinutes(2), Duration.ofMinutes(3),
             Duration.ofMinutes(2), Duration.ofMinutes(5));
 
+    /** 미래 재고 시각이 더 이른 Prom provenance의 min 처리로 숨겨지는 회귀를 요청 경계에서 막습니다. */
+    @Test
+    @DisplayName("미래 stock 시각과 과거 metric 조합은 Prom 관측 전에 거부한다")
+    void rejectsFutureStockBeforePromMinimumCanHideItsProvenance() {
+        PromOverviewObservationSource source = new PromOverviewObservationSource(
+                new RecordingPromQuery(query -> {
+                    List<PromSample> samples = happyInstant(query);
+                    if (!query.contains("timestamp(")) {
+                        return samples;
+                    }
+                    return samples.stream()
+                            .map(sample -> new PromSample(
+                                    sample.metricName(), sample.labels(),
+                                    SNAPSHOT.minusSeconds(1L).getEpochSecond(), sample.evaluatedAt()))
+                            .toList();
+                }),
+                new RecordingRangeQuery(this::happyRange),
+                Duration.ofMinutes(2), Duration.ofSeconds(10));
+
+        assertThatThrownBy(() -> source.observe(new OverviewObservationRequest(
+                SNAPSHOT,
+                List.of(new CampaignObservationTarget(
+                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT.plusNanos(1L))),
+                POLICY)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stockObservedAt");
+    }
+
     /** Overview의 모든 instant 값과 freshness는 한 snapshot 평가 시각을 공유해야 합니다. */
     @Test
     @DisplayName("모든 instant query를 request snapshotAt에 고정한다")
@@ -62,6 +91,93 @@ class PromOverviewObservationSourceTest {
         assertThat(instant.evaluationTimes).containsOnly(SNAPSHOT);
     }
 
+    /** OPEN 재고 미관측은 수치로 추정하지 않고 해당 캠페인의 O1 상태로 그대로 보존합니다. */
+    @Test
+    @DisplayName("OPEN 재고 PENDING UNAVAILABLE을 캠페인 O1 값 없는 상태로 보존한다")
+    void preservesMissingOpenStockStatusAsMissingFlow() {
+        for (SourceStatus stockStatus : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE)) {
+            OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
+                    new CampaignObservationTarget(101L, CouponStatus.OPEN, null, stockStatus)), POLICY);
+
+            OverviewObservationData data = new PromOverviewObservationSource(
+                    new RecordingPromQuery(this::happyInstant),
+                    new RecordingRangeQuery(this::happyRange),
+                    Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(request);
+
+            assertThat(input(data, 101L).sourceStatus()).isEqualTo(stockStatus);
+            assertThat(input(data, 101L).stockAvailable()).isNull();
+            assertThat(input(data, 101L).observedAt()).isNull();
+            assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
+            assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
+        }
+    }
+
+    /** O1 metric과 재고 중 값 없는 상태가 겹치면 UNAVAILABLE을 PENDING보다 우선합니다. */
+    @Test
+    @DisplayName("OPEN 재고와 O1 metric 상태 중 더 나쁜 값 없는 상태를 보존한다")
+    void preservesWorseStatusBetweenStockAndFlowMetric() {
+        OverviewObservationRequest pendingStockRequest = new OverviewObservationRequest(SNAPSHOT, List.of(
+                new CampaignObservationTarget(101L, CouponStatus.OPEN, null, SourceStatus.PENDING)), POLICY);
+        OverviewObservationRequest unavailableStockRequest = new OverviewObservationRequest(SNAPSHOT, List.of(
+                new CampaignObservationTarget(101L, CouponStatus.OPEN, null, SourceStatus.UNAVAILABLE)), POLICY);
+
+        OverviewObservationData metricUnavailable = new PromOverviewObservationSource(
+                new RecordingPromQuery(this::happyInstant),
+                new RecordingRangeQuery(query -> {
+                    throw new PromQueryException("range failure");
+                }), Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(pendingStockRequest);
+        OverviewObservationData metricPending = observe(
+                query -> query.equals(OverviewPrometheusContract.flowFreshnessEpoch())
+                        ? List.of() : happyInstant(query),
+                this::happyRange,
+                unavailableStockRequest);
+
+        assertThat(input(metricUnavailable, 101L).sourceStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(input(metricPending, 101L).sourceStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
+    }
+
+    /** 값 있는 재고 최신성이 fresh STOPPED metric에 의해 VALID로 승격되는 회귀를 막습니다. */
+    @Test
+    @DisplayName("값 있는 재고 상태와 fresh O1 metric을 보수적으로 합성한다")
+    void combinesValueCarryingStockStatusConservativelyWithFreshStoppedMetric() {
+        for (Map.Entry<SourceStatus, SourceStatus> expectation : Map.of(
+                SourceStatus.VALID, SourceStatus.VALID,
+                SourceStatus.STALE, SourceStatus.STALE,
+                SourceStatus.WARMING_UP, SourceStatus.WARMING_UP,
+                SourceStatus.NO_TRAFFIC, SourceStatus.WARMING_UP).entrySet()) {
+            Instant stockObservedAt = expectation.getKey() == SourceStatus.STALE
+                    ? SNAPSHOT.minus(Duration.ofMinutes(3))
+                    : expectation.getKey() == SourceStatus.VALID
+                    ? SNAPSHOT : SNAPSHOT.minus(Duration.ofMinutes(1));
+            OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
+                    new CampaignObservationTarget(
+                            101L, CouponStatus.OPEN, true, expectation.getKey(), stockObservedAt)), POLICY);
+            OverviewObservationData data = new PromOverviewObservationSource(
+                    new RecordingPromQuery(this::happyInstant),
+                    new RecordingRangeQuery(query -> List.of(
+                            new PromRangeSeries(Map.of("coupon_id", "101", "stage", "attempt"),
+                                    gridPoints(1d)),
+                            new PromRangeSeries(Map.of("coupon_id", "101", "stage", "success"),
+                                    gridPoints(0d)))),
+                    Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(request);
+
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow> calculated =
+                    new IssuanceFlowCalculator().calculate(POLICY, List.of(input(data, 101L)))
+                            .issuanceFlows().get(101L);
+
+            assertThat(input(data, 101L).sourceStatus()).as("stock=%s", expectation.getKey())
+                    .isEqualTo(expectation.getValue());
+            assertThat(input(data, 101L).observedAt()).as("stock=%s", expectation.getKey())
+                    .isEqualTo(stockObservedAt);
+            assertThat(calculated.value().state()).isEqualTo(
+                    AdminOverviewSnapshot.IssuanceFlowState.STOPPED);
+            if (expectation.getValue() != SourceStatus.VALID) {
+                assertThat(new com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator()
+                        .calculate(Map.of(101L, calculated))).isEmpty();
+            }
+        }
+    }
+
     /** 캠페인 수와 무관한 grouped 조회로 1분 현재값·10분 추세·O3·성공 p99를 조립합니다. */
     @Test
     @DisplayName("grouped query 결과를 모든 Overview 관측 입력으로 변환한다")
@@ -71,9 +187,12 @@ class PromOverviewObservationSourceTest {
         PromOverviewObservationSource source = new PromOverviewObservationSource(
                 instant, range, Duration.ofMinutes(2), Duration.ofSeconds(10));
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponStatus.OPEN, true),
-                new CampaignObservationTarget(102L, CouponStatus.OPEN, false),
-                new CampaignObservationTarget(103L, CouponStatus.CLOSED, null)), POLICY);
+                new CampaignObservationTarget(
+                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT),
+                new CampaignObservationTarget(
+                        102L, CouponStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT),
+                new CampaignObservationTarget(
+                        103L, CouponStatus.CLOSED, null, SourceStatus.N_A, null)), POLICY);
 
         OverviewObservationData data = source.observe(request);
 
@@ -370,7 +489,8 @@ class PromOverviewObservationSourceTest {
                 new PromRangeSeries(Map.of("coupon_id", "101", "stage", "success"),
                         endpointPoints(0d, 0d))));
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponStatus.OPEN, false)), POLICY);
+                new CampaignObservationTarget(
+                        101L, CouponStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT)), POLICY);
 
         IssuanceFlowInput flow = input(new PromOverviewObservationSource(
                 instant, range, Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(request), 101L);
@@ -956,9 +1076,18 @@ class PromOverviewObservationSourceTest {
             Function<String, List<PromSample>> instantResponder,
             Function<String, List<PromRangeSeries>> rangeResponder
     ) {
+        return observe(instantResponder, rangeResponder, request());
+    }
+
+    /** 지정 요청과 응답 대역을 함께 사용해 adapter 상태 경계를 관측합니다. */
+    private OverviewObservationData observe(
+            Function<String, List<PromSample>> instantResponder,
+            Function<String, List<PromRangeSeries>> rangeResponder,
+            OverviewObservationRequest request
+    ) {
         return new PromOverviewObservationSource(
                 new RecordingPromQuery(instantResponder), new RecordingRangeQuery(rangeResponder),
-                Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(request());
+                Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(request);
     }
 
     /** 하나의 target query만 실제 HTTP timed client로 통과시켜 parser와 source 격리를 함께 검증합니다. */
@@ -981,7 +1110,8 @@ class PromOverviewObservationSourceTest {
     /** adapter 경계 상태 시험에 사용할 한 OPEN 캠페인 요청입니다. */
     private static OverviewObservationRequest request() {
         return new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponStatus.OPEN, true)), POLICY);
+                new CampaignObservationTarget(
+                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)), POLICY);
     }
 
     /** instant query를 기록하고 지정 응답 함수를 호출하는 작은 대역입니다. */

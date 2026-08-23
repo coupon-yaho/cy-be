@@ -39,6 +39,25 @@ class IssuanceActionCalculatorTest {
                         "발급 흐름 확인", AdminOverviewSnapshot.TargetScreen.ISSUANCE_INQUIRY)));
     }
 
+    /** raw scrape가 평가 종료보다 이르더라도 감지 시각은 평가 timeline의 조건 시작을 사용합니다. */
+    @Test
+    @DisplayName("STOPPED 감지 시각은 raw scrape가 아니라 평가 windowEnd에서 duration을 뺀다")
+    void derivesDetectedAtFromEvaluationWindowEndInsteadOfRawScrape() {
+        Instant windowEnd = OBSERVED_AT;
+        Instant rawScrapeAt = windowEnd.minus(Duration.ofMinutes(1));
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow> observation =
+                observation(SourceStatus.VALID, AdminOverviewSnapshot.IssuanceFlowState.STOPPED,
+                        Duration.ofMinutes(10), windowEnd, rawScrapeAt);
+
+        List<AdminOverviewSnapshot.OperationActionItem> result =
+                new IssuanceActionCalculator().calculate(Map.of(17L, observation));
+
+        assertThat(result).singleElement().satisfies(action -> {
+            assertThat(action.detectedAt()).isEqualTo(windowEnd.minus(Duration.ofMinutes(10)));
+            assertThat(action.duration()).isEqualTo(Duration.ofMinutes(10));
+        });
+    }
+
     /** 최초 중단 시각을 알 수 없는 관측을 임의의 현재 시각으로 바꾸는 회귀를 막습니다. */
     @Test
     @DisplayName("VALID STOPPED O1의 stateDuration이 없으면 감지 시각과 지속 시간도 null이다")
@@ -114,5 +133,18 @@ class IssuanceActionCalculatorTest {
         return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.IssuanceFlow(
                 0.0, OBSERVED_AT.minus(Duration.ofMinutes(1)), OBSERVED_AT, List.of(), state, duration),
                 status, OBSERVED_AT);
+    }
+
+    /** 평가 종료와 raw scrape 시각을 분리한 O1 관측을 만듭니다. */
+    private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow> observation(
+            SourceStatus status,
+            AdminOverviewSnapshot.IssuanceFlowState state,
+            Duration duration,
+            Instant windowEnd,
+            Instant observedAt
+    ) {
+        return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.IssuanceFlow(
+                0.0, windowEnd.minus(Duration.ofMinutes(1)), windowEnd, List.of(), state, duration),
+                status, observedAt);
     }
 }

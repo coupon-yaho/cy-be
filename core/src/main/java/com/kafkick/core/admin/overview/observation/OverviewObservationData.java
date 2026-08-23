@@ -20,9 +20,10 @@ import com.kafkick.core.observation.SourceStatus;
  * 관리자 운영현황 계산기로 전달할 O1·O3·전체 관측의 기술 중립 묶음입니다.
  *
  * <p>O1 입력은 요청한 각 캠페인을 정확히 한 번씩 포함하고, 같은 캠페인 상태를 유지해야 합니다. 진행
- * 캠페인의 값 있는 O1 입력은 대상의 명시 재고 가능 여부도 유지합니다. 진행 중이 아닌 대상의 재고는
- * O1 상태 판정에 의미가 없으므로 기존 입력이 가진 값을 정규화하거나 비교하지 않습니다. 전체 발급률과
- * 지연 관측은 기존 {@link Observation} 생성자가 보장하는 상태·값·관측 시각 규칙을 그대로 사용합니다.</p>
+ * 캠페인의 O1 입력은 대상의 명시 재고 값 또는 값 없는 상태보다 나아질 수 없습니다. 진행 중이 아닌
+ * 대상의 재고는 O1 상태 판정에 의미가 없으므로 기존 입력이 가진 값을 정규화하거나 비교하지 않습니다.
+ * 전체 발급률과 지연 관측은 기존 {@link Observation} 생성자가 보장하는 상태·값·관측 시각 규칙을
+ * 그대로 사용합니다.</p>
  *
  * @param request 이 관측 묶음이 응답하는 기준 시각과 캠페인 모집단
  * @param issuanceFlowInputs 요청 캠페인마다 하나씩 존재하는 O1 입력
@@ -83,11 +84,22 @@ public record OverviewObservationData(
         if (campaignTarget.campaignStatus() != issuanceFlowInput.campaignStatus()) {
             throw new IllegalArgumentException("O1 입력의 campaignStatus가 요청 대상과 일치해야 합니다.");
         }
-        // 값 없는 OPEN 입력은 기존 O1 계약에 따라 stockAvailable이 null이므로 원천 미관측을 보존합니다.
-        if (campaignTarget.campaignStatus() == CouponStatus.OPEN
-                && issuanceFlowInput.sourceStatus().carriesValue()
-                && !campaignTarget.stockAvailable().equals(issuanceFlowInput.stockAvailable())) {
-            throw new IllegalArgumentException("진행 중 O1 입력의 stockAvailable이 요청 대상과 일치해야 합니다.");
+        if (campaignTarget.campaignStatus() != CouponStatus.OPEN) {
+            return;
+        }
+        if (campaignTarget.stockStatus().carriesValue()) {
+            // 값 있는 O1은 실제 재고 boolean·최신성·가장 오래된 provenance를 함께 보존해야 합니다.
+            if (issuanceFlowInput.sourceStatus().carriesValue()
+                    && !campaignTarget.stockAvailable().equals(issuanceFlowInput.stockAvailable())) {
+                throw new IllegalArgumentException("진행 중 O1 입력의 stockAvailable이 요청 대상과 일치해야 합니다.");
+            }
+            if (issuanceFlowInput.sourceStatus().carriesValue()
+                    && issuanceFlowInput.observedAt().isAfter(campaignTarget.stockObservedAt())) {
+                throw new IllegalArgumentException("O1 observedAt은 재고 관측 시각보다 뒤일 수 없습니다.");
+            }
+        }
+        if (campaignTarget.rejectsFlowStatus(issuanceFlowInput.sourceStatus())) {
+            throw new IllegalArgumentException("재고 원천보다 O1 입력 상태가 나을 수 없습니다.");
         }
     }
 

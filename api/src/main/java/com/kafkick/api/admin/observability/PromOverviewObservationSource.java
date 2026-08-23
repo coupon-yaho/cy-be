@@ -212,8 +212,15 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 || flowObservedAt == null || attemptTrend == null || successTrend == null) {
             return missingFlow(target, SourceStatus.PENDING);
         }
+        if (!target.stockStatus().carriesValue()) {
+            // 재고 미관측 OPEN은 발급 count가 있어도 STOPPED/NORMAL 값을 추정하지 않습니다.
+            return missingFlow(target, target.stockStatus());
+        }
         Instant observedAt = flowObservedAt.isBefore(failureObservedAt)
                 ? flowObservedAt : failureObservedAt;
+        if (target.stockObservedAt().isBefore(observedAt)) {
+            observedAt = target.stockObservedAt();
+        }
 
         Instant currentStart = snapshotAt.minus(CURRENT_WINDOW);
         Instant comparisonStart = comparisonEnd.minus(COMPARISON_OFFSET);
@@ -235,12 +242,33 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         if (status == SourceStatus.VALID && alignment.warmingUpRequired()) {
             status = SourceStatus.WARMING_UP;
         }
+        status = combineValueFlowAndStockStatus(
+                status, target.stockStatus(), attempts > 0d || successes > 0d);
         return new IssuanceFlowInput(
                 couponId, target.campaignStatus(), target.stockAvailable(),
                 currentStart, snapshotAt, trendStart, snapshotAt,
                 attempts, successes, comparisonSuccesses,
                 comparisonStart, comparisonEnd, alignment.buckets(), lastCompletedAt,
                 alignment.conditionStartedAt(), status, observedAt);
+    }
+
+    /** 값 있는 O1 metric과 재고에서 STALE·WARMING_UP·모순된 NO_TRAFFIC 순으로 보수 상태를 고릅니다. */
+    private static SourceStatus combineValueFlowAndStockStatus(
+            SourceStatus flowStatus,
+            SourceStatus stockStatus,
+            boolean flowHasTraffic
+    ) {
+        if (flowStatus == SourceStatus.STALE || stockStatus == SourceStatus.STALE) {
+            return SourceStatus.STALE;
+        }
+        if (flowStatus == SourceStatus.WARMING_UP || stockStatus == SourceStatus.WARMING_UP) {
+            return SourceStatus.WARMING_UP;
+        }
+        if (stockStatus == SourceStatus.NO_TRAFFIC) {
+            // 값 있는 O1 traffic과 재고 NO_TRAFFIC의 모순은 확정 상태 대신 준비 중으로 격리합니다.
+            return flowHasTraffic ? SourceStatus.WARMING_UP : SourceStatus.NO_TRAFFIC;
+        }
+        return flowStatus;
     }
 
     /** attempt/success range 점을 시각으로 맞추고 성공 그래프와 보수적 조건 시작점을 만듭니다. */
@@ -612,10 +640,25 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         if (status.carriesValue()) {
             throw new IllegalArgumentException("값 없는 O1 상태가 아닙니다: " + status);
         }
+        SourceStatus combinedStatus = combineMissingFlowAndStockStatus(target, status);
         return new IssuanceFlowInput(
                 target.couponId(), target.campaignStatus(), null,
                 null, null, null, null, null, null, null,
-                null, null, List.of(), null, null, status, null);
+                null, null, List.of(), null, null, combinedStatus, null);
+    }
+
+    /** 값 없는 O1 metric과 OPEN 재고 상태 중 UNAVAILABLE, PENDING 순으로 더 나쁜 상태를 선택합니다. */
+    private static SourceStatus combineMissingFlowAndStockStatus(
+            CampaignObservationTarget target,
+            SourceStatus flowStatus
+    ) {
+        if (target.campaignStatus() != CouponStatus.OPEN || target.stockStatus().carriesValue()) {
+            return flowStatus;
+        }
+        if (flowStatus == SourceStatus.UNAVAILABLE || target.stockStatus() == SourceStatus.UNAVAILABLE) {
+            return SourceStatus.UNAVAILABLE;
+        }
+        return SourceStatus.PENDING;
     }
 
     /** 값 없는 O3 입력을 만듭니다. */
