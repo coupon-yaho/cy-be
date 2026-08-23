@@ -88,8 +88,10 @@ public class ApiObservationAutoConfiguration {
      * 붙일 법한 첫 번째 후보이고, 겹치는 순간 정의 덮어쓰기 금지에 걸려 컨텍스트가 통째로 죽거나
      * (덮어쓰기를 허용한 프로세스라면) 이 합성 빈이 조용히 사라진다.
      *
-     * <p>자기 자신은 목록에서 빠진다. 스프링이 주입 시 self-reference 를 걸러 내고, 혹시 다른
-     * 합성 기록기가 등록돼 있어도 타입으로 한 번 더 배제해 이벤트가 두 번 흐르지 않게 한다.
+     * <p>자기 자신은 스프링의 self-reference 배제로 목록에서 빠진다. 그 밖에는 타입을 보지
+     * 않는다 — 합성 기록기라는 이유로 걸러 내면, 컨텍스트에 있는 유일한 기록기가 합성 기록기일 때
+     * delegate 가 0개가 되어 기동이 죽는다. 남의 합성 기록기는 그냥 sink 하나로 취급하면 되고,
+     * 그 안의 leaf 는 여전히 이벤트를 한 번만 받는다.
      *
      * @param recorders 컨텍스트에 등록된 모든 기록기
      * @param issuanceProperties 전달 실패 로그의 유량 제한 간격
@@ -102,9 +104,7 @@ public class ApiObservationAutoConfiguration {
             ObjectProvider<EventRecorder> recorders,
             ObservationIssuanceProperties issuanceProperties
     ) {
-        EventRecorder[] delegates = recorders.orderedStream()
-                .filter(recorder -> !(recorder instanceof CompositeEventRecorder))
-                .toArray(EventRecorder[]::new);
+        EventRecorder[] delegates = recorders.orderedStream().toArray(EventRecorder[]::new);
         return new CompositeEventRecorder(
                 issuanceProperties.resolvedAttemptFailureLogInterval(), delegates);
     }

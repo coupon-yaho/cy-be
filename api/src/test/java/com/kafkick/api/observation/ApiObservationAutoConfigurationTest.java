@@ -192,6 +192,26 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
+        // 유일한 기록기가 합성 기록기이면 delegate 목록이 비어 기동이 죽었다.
+    void startsWhenTheOnlyRecorderIsItselfAComposite() {
+        AtomicInteger auditCalls = new AtomicInteger();
+        CompositeEventRecorder userComposite =
+                new CompositeEventRecorder(event -> auditCalls.incrementAndGet());
+
+        withoutMeterRegistryRunner
+                .withBean("auditEventRecorder", CompositeEventRecorder.class, () -> userComposite)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    context.getBean(EventRecorder.class).record(context
+                            .getBean(IssuanceFlowEventFactory.class)
+                            .issueAttempt(eventContext("nested-composite")));
+
+                    assertThat(auditCalls).hasValue(1);
+                });
+    }
+
+    @Test
     void defaultCampaignLifecycleRecorderDoesNothing() {
         contextRunner.run(context -> {
             CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
