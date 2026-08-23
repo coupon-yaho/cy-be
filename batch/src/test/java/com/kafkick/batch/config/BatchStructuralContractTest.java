@@ -107,17 +107,100 @@ class BatchStructuralContractTest {
             Pattern.compile("\\.(record|markUnknown|recordSchema)\\s*\\(");
 
     /**
-     * <b>주석을 걷어낸다.</b> 블록 주석을 통째로 지우고 줄 주석은 끝까지 자른다 —
-     * 줄 앞의 {@code //} 만 면제하면 {@code code; // com.kafkick.batch.job.X 참고} 같은
-     * 꼬리 주석이 위반으로 잡혀 <b>설명을 못 쓰게 된다.</b>
-     *
-     * <p><b>문자열 리터럴은 안 지운다.</b> 지우자는 지적이 있었지만, 정규화된 이름이
-     * 문자열 안에 있으면 그것은 대개 {@code Class.forName} 같은 <b>진짜 의존</b>이다 —
-     * 지우면 이 자물쇠를 문자열로 우회할 수 있다. 오탐(테스트가 빨개진다)보다
-     * 누락(순환이 조용히 들어온다)이 나쁘다.
+     * <b>주석 제거가 문자열을 안 건드리는지 잰다.</b> 앞선 정규식 판이 정확히 여기서 깨졌고,
+     * 그 실패 모드가 <b>오탐이 아니라 누락</b>이라 자물쇠가 조용히 열린다.
      */
-    private static String stripComments(String body) {
-        return body.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\\n]*", "");
+    @Test
+    @DisplayName("주석만 지우고 문자열 안의 마커는 주석으로 안 읽는다")
+    void stripsCommentsWithoutEatingStringLiterals() {
+        String pkg = "com.kafkick.batch.job.Real";
+
+        assertThat(stripComments("String s = \"//\"; " + pkg + " x;"))
+                .as("문자열 안의 // 가 뒤를 삼키면 진짜 의존을 놓친다 — "
+                        + "SchemaPresenceGuard 의 jdbc:mysql:// 가 이미 그 모양이다")
+                .contains(pkg);
+
+        assertThat(stripComments("String a = \"/*\";\n" + pkg + " x;\nString b = \"*/\";"))
+                .as("문자열 둘 사이가 블록 주석으로 읽히면 그 사이가 통째로 사라진다")
+                .contains(pkg);
+
+        assertThat(stripComments("char c = '/'; " + pkg + " x;"))
+                .as("문자 리터럴도 같다")
+                .contains(pkg);
+
+        assertThat(stripComments("String t = \"\"\"\n/*\n\"\"\";\n" + pkg + " x;"))
+                .as("텍스트 블록 안의 마커도 주석이 아니다")
+                .contains(pkg);
+
+        assertThat(stripComments("// " + pkg + "\nString s = \"ok\";"))
+                .as("진짜 줄 주석은 지워야 한다")
+                .doesNotContain(pkg);
+
+        assertThat(stripComments("int x = 1; // " + pkg + " 참고"))
+                .as("꼬리 주석도 지워야 한다")
+                .doesNotContain(pkg);
+
+        assertThat(stripComments("/* " + pkg + " */\nint x = 1;"))
+                .as("진짜 블록 주석도 지워야 한다")
+                .doesNotContain(pkg);
+    }
+
+    /**
+     * <b>주석만 걷어내고 문자열은 그대로 둔다.</b>
+     *
+     * <p>정규식으로 {@code //...} 와 {@code /*...*}{@code /} 를 지우는 것으로는 안 된다 —
+     * <b>문자열 안의 마커까지 주석 시작으로 읽는다.</b> 이 저장소에 이미 그런 리터럴이 있다:
+     * {@code SchemaPresenceGuard} 의 {@code "jdbc:mysql://host:3306/<db>"}. 그 뒤에 참조가
+     * 오면 통째로 삼켜져 <b>순환이 조용히 통과한다.</b> {@code "/*"} 와 {@code "*}{@code /"}
+     * 가 서로 다른 줄에 있으면 그 사이가 전부 사라진다.
+     *
+     * <p>그래서 한 글자씩 훑으며 <b>문자열·문자·텍스트 블록 안에서는 마커를 안 본다.</b>
+     * 지워진 주석 자리에 공백을 남겨 줄 번호와 토큰 경계를 보존한다.
+     *
+     * <p><b>문자열 내용은 남긴다.</b> 정규화된 이름이 문자열 안에 있으면 그것은 대개
+     * {@code Class.forName} 같은 진짜 의존이라, 지우면 이 자물쇠를 문자열로 우회할 수 있다.
+     * 오탐(테스트가 빨개진다)보다 누락(순환을 놓친다)이 나쁘다.
+     *
+     * <p>형제 {@code NoWallClockInBatchTest} 는 줄 앞의 {@code //}·{@code *} 만 걷어내는
+     * 더 성긴 방식이다. 그쪽이 세는 것은 {@code TimeProvider#now} 라 마커와 얽힐 일이
+     * 없어서 아직 안 옮겼다 — 옮기려면 이 메서드를 공용으로 빼면 된다.
+     */
+    static String stripComments(String body) {
+        StringBuilder out = new StringBuilder(body.length());
+        int i = 0;
+        while (i < body.length()) {
+            char c = body.charAt(i);
+            if (body.startsWith("\"\"\"", i)) {
+                int end = body.indexOf("\"\"\"", i + 3);
+                end = end < 0 ? body.length() : end + 3;
+                out.append(body, i, end);
+                i = end;
+            } else if (c == '"' || c == '\'') {
+                int j = i + 1;
+                while (j < body.length() && body.charAt(j) != c) {
+                    j += body.charAt(j) == '\\' ? 2 : 1;
+                }
+                j = Math.min(j + 1, body.length());
+                out.append(body, i, j);
+                i = j;
+            } else if (body.startsWith("//", i)) {
+                while (i < body.length() && body.charAt(i) != '\n') {
+                    i++;
+                }
+            } else if (body.startsWith("/*", i)) {
+                int end = body.indexOf("*/", i + 2);
+                end = end < 0 ? body.length() : end + 2;
+                // 줄 번호가 밀리지 않게 개행은 남긴다.
+                body.substring(i, end).chars()
+                        .filter(ch -> ch == '\n')
+                        .forEach(ch -> out.append('\n'));
+                i = end;
+            } else {
+                out.append(c);
+                i++;
+            }
+        }
+        return out.toString();
     }
 
     private static String read(Path path) {
