@@ -52,6 +52,9 @@ import com.kafkick.storage.db.VerificationSeed;
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=false",
+        // 되읽기가 같은 ExpirationRepository 프록시에 countPending 을 부른다 —
+        // 백그라운드 틱이 호출 기록에 끼면 재현 불가로 빨개진다.
+        "batch.metrics.expire-pending-initial-delay-ms=3600000",
         // 한 건씩 넘긴다 — 성한 회차 3건이 세 청크로 갈린다.
         "batch.expire.chunk-size=1"
 })

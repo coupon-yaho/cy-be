@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -57,6 +58,17 @@ import com.kafkick.storage.db.VerificationSeed;
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=100",
+        // **되읽기 스케줄을 끈다.** @EnableScheduling 이 살아 있어
+        // (batch.scheduling.enabled 는 두 스케줄러만 끈다) 백그라운드 틱이 손으로 부른
+        // observe() 와 섞인다 — dropsGaugesWhenTheReadFails 의 누적 카운터 단언과, off()
+        // 뒤 스크레이프 왕복 사이의 NaN 단언이 그때 뒤집힌다.
+        //
+        // 한때 주기를 상한(120초)까지 늘려 두는 것으로 뭉갰는데, 그것은 **확률을 줄인
+        // 것이지 창을 닫은 것이 아니다.** 게다가 MAX_REFRESH_MILLIS 가드를 테스트 편의로
+        // 쓰는 셈이라 그 가드가 무뎌진다. 이 클래스는 refresh() 를 손으로 부르므로
+        // 잃는 축이 없고, 배선이 살아 있다는 것은 VerificationMetricExposureTest 의
+        // expirePendingRefreshIsScheduled 가 별도 컨텍스트에서 진다.
+        "batch.metrics.expire-pending-initial-delay-ms=3600000",
         "server.port=0",
         "management.server.port=0"
 })
@@ -89,6 +101,17 @@ class ExpireMetricExposureTest {
     @Autowired
     private ExpireMetrics metrics;
 
+    /**
+     * <b>이제 게이지를 채우는 것은 이 되읽기 하나다</b>(CY-421). 잡이 {@code afterJob} 에서
+     * 자기 결과를 밀어 넣던 구조였는데, 그러면 값이 프로세스와 함께 죽어 만료가 일 1회가 된
+     * 지금 재기동부터 다음 창까지 백로그 감시가 통째로 꺼진다.
+     *
+     * <p>그래서 이 클래스의 모든 테스트가 <b>잡을 돌린 뒤 {@link #observe()} 를 부른다</b> —
+     * 운영에서는 60초 주기가 그 자리를 대신한다.
+     */
+    @Autowired
+    private ExpirePendingRefresher refresher;
+
     private VerificationSeed seed;
 
     @BeforeEach
@@ -96,10 +119,11 @@ class ExpireMetricExposureTest {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
-        // 지표는 싱글턴이고 스프링 컨텍스트가 메서드 사이에 공유된다. 그리고 record 는
-        // **더 오래된 asOf 의 결과를 버린다** — 여기서 안 비우면 벽시계 asOf 를 쓰는 테스트가
-        // 먼저 도는 순서에서 뒤 테스트의 record 가 통째로 거부되고, 실패 메시지는
-        // "게이지를 안 갈랐다" 로 보인다. JUnit 은 메서드 순서를 보장하지 않는다.
+        // 지표는 싱글턴이고 스프링 컨텍스트가 메서드 사이에 공유된다. record 는 순서를
+        // 안 따지므로(CY-421 이 그 규칙을 지웠다 — ExpireMetricsTest.olderAsOfStillReplaces)
+        // **앞 테스트의 값이 그대로 남고**, 뒤 테스트가 observe() 전에 스크레이프하면
+        // 그것을 읽는다. 실패 메시지는 "게이지를 안 갈랐다" 로 보인다.
+        // JUnit 은 메서드 순서를 보장하지 않으므로 재현이 안 된다.
         metrics.markUnknown();
     }
 
@@ -121,6 +145,8 @@ class ExpireMetricExposureTest {
         assertThat(execution.getStatus())
                 .as("데이터가 틀렸다는 판정은 실패가 아니다")
                 .isEqualTo(BatchStatus.COMPLETED);
+
+        observe();
 
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_pending"))
@@ -152,11 +178,16 @@ class ExpireMetricExposureTest {
 
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
+        observe();
+
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_pending")).isZero();
         assertThat(metric(body, "cy_expire_blocked_pending")).isZero();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
         assertThat(metric(body, "cy_expire_blocked_coupons")).isZero();
+        assertThat(metric(body, "cy_expire_clean_schema"))
+                .as("1 이 아니면 ExpireMetricsUnknown 의 조인 축이 죽어 밀림 감시가 조용해진다")
+                .isEqualTo(1.0);
     }
 
     /**
@@ -184,6 +215,8 @@ class ExpireMetricExposureTest {
 
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
+        observe();
+
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_pending")).isEqualTo(3.0);
         assertThat(metric(body, "cy_expire_blocked_pending")).isEqualTo(2.0);
@@ -196,12 +229,14 @@ class ExpireMetricExposureTest {
     /**
      * <b>파라미터를 잘못 친 사건이 "서버를 봐라" critical 로 나가면 안 된다.</b>
      *
-     * <p>{@code asOf} 를 미래로 주면 잡은 {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는데,
-     * {@code afterJob} 은 그래도 돈다. 그 미래 컷으로 세면 <b>기한이 남은 발급건이 전부</b>
-     * 대기로 잡혀 수백만이 나가고, 알림은 그것을 <i>"배치가 일을 안 한다"</i> 로 읽는다.
-     * 사람이 볼 곳은 서버가 아니라 자기가 친 파라미터인데 말이다.
+     * <p>{@code asOf} 를 미래로 주면 잡은 {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는다. 그 미래
+     * 컷으로 세면 <b>기한이 남은 발급건이 전부</b> 대기로 잡혀 수백만이 나가고, 알림은 그것을
+     * <i>"배치가 일을 안 한다"</i> 로 읽는다. 사람이 볼 곳은 서버가 아니라 자기가 친
+     * 파라미터인데 말이다.
      *
-     * <p>그래서 믿을 수 없는 {@code asOf} 로는 세지 않고 <b>{@code NaN}(모름)</b> 으로 둔다.
+     * <p><b>새 계약에서는 그 방어가 구조로 온다</b>(CY-421). 되읽기는 <b>성공한 실행만</b>
+     * 읽으므로 믿을 수 없는 {@code asOf} 를 애초에 손에 넣지 못한다 — 한때 리스너가 미래
+     * 여부를 직접 판정했는데, 그 판정을 지워도 아무도 모르는 자리였다. 그 축을 여기서 잰다.
      * 잡이 죽은 것 자체는 {@code BatchJobFailed} 가 이미 알린다.
      */
     @Test
@@ -218,6 +253,8 @@ class ExpireMetricExposureTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
 
+        observe();
+
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_pending"))
                 .as("여기서 2.0 이 나오면 파라미터 오타가 누락 critical 로 나간다는 뜻이다")
@@ -233,9 +270,9 @@ class ExpireMetricExposureTest {
     /**
      * <b>판정할 재료가 없는 실행이 "밀린 것이 있다" 로 나가면 안 된다.</b>
      *
-     * <p>{@code CleanSchemaGuard} 가 {@code beforeJob} 에서 세우면 Step 은 안 돌지만
-     * {@code afterJob} 은 그대로 돈다. 그때 제외 목록을 못 읽은 것을 <i>"막힌 회차가 없다"</i>
-     * 로 읽으면, 오염 DB 의 남은 대기가 <b>전부</b> {@code unexplained} 로 나간다 —
+     * <p>{@code CleanSchemaGuard} 가 {@code beforeJob} 에서 세우면 잡이 실패로 끝난다.
+     * 그때 제외 목록을 못 읽은 것을 <i>"막힌 회차가 없다"</i> 로 읽으면, 오염 DB 의 남은
+     * 대기가 <b>전부</b> {@code unexplained} 로 나간다 —
      * 오염셋에 만료 대기가 남아 있는 것은 계약상 <b>정상</b>인데도 말이다
      * ({@code docs/contract.json} 의 {@code not_verified}: <i>"만료 누락 — 별도 관측 지표"</i>).
      *
@@ -252,15 +289,35 @@ class ExpireMetricExposureTest {
         expiring();
         seed.overwriteStock(5);
 
+        // **먼저 CLEAN 으로 한 번 성공시킨다.** 성공한 실행이 하나도 없으면 되읽기는
+        // 오염 스키마 가드를 안 지나고도 NaN 을 내므로, 이 테스트가 "오염 스키마를 보고
+        // 있다" 가 아니라 "성공한 실행이 없다" 를 재게 된다 — 그 순서로는 가드를 지워도
+        // 초록이었다.
+        JobExecution warmUp = jobOperator.start(expireJob, new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF.minusDays(1))
+                .toJobParameters());
+        assertThat(warmUp.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        observe();
+        assertThat(metric(ActuatorProbe.get(managementPort, "/actuator/prometheus").body(),
+                "cy_expire_pending"))
+                .as("전제 — 오염으로 바꾸기 전에 **값이** 있어야 한다(NaN 이 아니라)")
+                .isZero();
+
         SchemaShapeConfig.pretendCorrupt();
         JobExecution execution = launch();
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
 
+        observe();
+
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_unexplained_pending"))
                 .as("여기서 2.0 이 나오면 접속 설정 사고가 '서버를 봐라' critical 로 나간다")
                 .isNaN();
+        // **위 정상셋 단언과 짝이다.** 한쪽만 두면 늘 같은 값을 내는 배선도 통과한다.
+        assertThat(metric(body, "cy_expire_clean_schema"))
+                .as("1 이면 오염셋 기동 내내 ExpireMetricsUnknown 이 상시 warning 이 된다")
+                .isZero();
         assertThat(metric(body, "cy_expire_pending")).isNaN();
         assertThat(metric(body, "cy_expire_blocked_pending")).isNaN();
         assertThat(metric(body, "cy_expire_blocked_coupons"))
@@ -273,11 +330,11 @@ class ExpireMetricExposureTest {
      *
      * <p>{@code CronSlot} 은 크론이 슬롯 직전에 깨어나는 것을 관용해 <b>최대 2초 미래</b>인
      * {@code asOf} 를 만든다. 태스클릿은 그 폭을 {@link CronSlot#EARLY_FIRE_TOLERANCE} 로
-     * 관용하는데 {@code afterJob} 이 엄격 비교를 하면, <b>만료는 다 하고 정상 종료했는데
-     * 지표 넷이 통째로 {@code NaN}</b> 이 된다. 그러면 누락 알림의 {@code for} 타이머가
-     * 리셋되어 감시가 조용히 꺼진다 — 실제로 그 상태였다.
+     * 관용한다 — 그 실행은 <b>정상 종료</b>하므로 되읽기가 그것을 마지막 성공으로 집고
+     * 값을 낸다. 여기가 {@code NaN} 이면 정상 주기가 감시를 끄는 것이고, 누락 알림의
+     * {@code for} 타이머가 리셋되어 감시가 조용히 꺼진다 — 한때 실제로 그 상태였다.
      *
-     * <p>위 테스트의 짝이다. 막는 쪽만 보면 <b>항상 모른다고 하는 리스너</b>도 통과한다.
+     * <p>위 테스트의 짝이다. 막는 쪽만 보면 <b>항상 모른다고 하는 되읽기</b>도 통과한다.
      */
     @Test
     @DisplayName("조기 발화 관용 폭 안의 asOf 는 정상으로 센다")
@@ -297,9 +354,11 @@ class ExpireMetricExposureTest {
                 .as("태스클릿은 이 폭을 관용한다 — 여기가 FAILED 면 계약이 한쪽만 바뀐 것이다")
                 .isEqualTo(BatchStatus.COMPLETED);
 
+        observe();
+
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_pending"))
-                .as("**NaN 이면 정상 주기가 감시를 끈다.** 태스클릿과 리스너가 같은 폭을 봐야 한다")
+                .as("**NaN 이면 정상 주기가 감시를 끈다.** 조기 발화를 관용한 실행도 성공이다")
                 .isZero();
         assertThat(metric(body, "cy_expire_blocked_pending")).isZero();
         assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
@@ -309,36 +368,41 @@ class ExpireMetricExposureTest {
     /**
      * <b>실패한 과거 실행이 방금 끝난 주기의 값을 지우면 안 된다.</b>
      *
-     * <p>밀린 만료를 따라잡으려고 <b>과거 {@code asOf} 로 손 트리거를 치는 것</b>이 이 저장소가
-     * 권하는 운영 절차다. 그 실행이 실패하면 {@code afterJob} 은 <i>"모른다"</i> 를 내보내는데,
-     * 그것을 순서 없이 적용하면 <b>방금 끝난 주기의 멀쩡한 값이 지워진다.</b>
+     * <p>되읽기는 <b>성공한 실행만</b> 본다. 그 필터가 없으면 방금 실패한 실행이
+     * <i>가장 최신 {@code asOf}</i> 라는 이유로 뽑혀, 판정할 재료가 없다는 이유로
+     * 게이지가 통째로 {@code NaN} 이 된다 — <b>실패 한 번이 감시를 끄는</b> 모양이다.
+     * 한때 리스너가 실패마다 <i>"모른다"</i> 를 내보내서 같은 우회로가 있었다.
      *
-     * <p>{@code record} 에만 순서를 두고 여기 안 두면 같은 우회로가 열린다 — 성공은 못 덮는데
-     * 실패는 덮는 모양이다. 그 사이 {@code ExpireLeavesWorkBehind} 는 {@code NaN > 0} 이
-     * 거짓이라 <b>울릴 수 없다.</b>
+     * <p>그 사이 {@code ExpireLeavesWorkBehind} 는 {@code NaN > 0} 이 거짓이라
+     * <b>울릴 수 없다</b> — 그래서 이 축이 감시의 유무를 가른다.
      */
     @Test
-    @DisplayName("실패한 과거 실행이 최신 값을 못 지운다")
-    void keepsNewerSnapshotWhenAnOlderRunFails() throws Exception {
+    @DisplayName("실패한 실행은 asOf 가 더 최신이어도 값을 못 지운다")
+    void ignoresFailedRunsEvenWhenTheirAsOfIsNewer() throws Exception {
         seed.newCoupon();
         expiring();
         expiring();
         seed.overwriteStock(0);
 
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        observe();
         String healthy = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(healthy, "cy_expire_blocked_coupons")).isEqualTo(1.0);
 
-        // 과거 asOf 로 친 손 트리거가 오염 스키마를 만나 시작 전에 죽는다.
-        SchemaShapeConfig.pretendCorrupt();
-        JobExecution stale = jobOperator.start(expireJob, new JobParametersBuilder()
-                .addLocalDateTime("asOf", AS_OF.minusDays(1))
+        // **더 최신 asOf** 로 친 손 트리거가 미래 컷이라 태스클릿에서 죽는다.
+        // 과거 asOf 로 두면 정렬만으로도 걸러져 STATUS 필터를 안 지나간다 — 돌연변이로 확인했다.
+        // 오염 스키마로 죽이지 않는 이유는 그쪽이 **되읽기의 다른 가드**(오염 스키마)에도
+        // 걸려, 이 테스트가 재려는 축을 안 지나가기 때문이다.
+        JobExecution failed = jobOperator.start(expireJob, new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF.plusYears(1))
                 .toJobParameters());
-        assertThat(stale.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(failed.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        observe();
 
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
         assertThat(metric(body, "cy_expire_blocked_coupons"))
-                .as("**더 최신 asOf 의 결과가 살아 있어야 한다.** 여기가 NaN 이면 실패한 손 "
+                .as("**성공한 실행의 결과가 살아 있어야 한다.** 여기가 NaN 이면 실패한 손 "
                         + "트리거가 주기 실행의 감시를 끈다")
                 .isEqualTo(1.0);
         assertThat(metric(body, "cy_expire_pending")).isEqualTo(2.0);
@@ -357,16 +421,135 @@ class ExpireMetricExposureTest {
     }
 
     /**
-     * <b>세다가 죽은 과거 실행도 최신 값을 못 지운다.</b>
+     * <b>되읽기는 가장 나중에 끝난 성공 실행을 고른다.</b>
      *
-     * <p>{@link #keepsNewerSnapshotWhenAnOlderRunFails} 는 <b>시작 전에</b> 죽은 실행을
-     * 덮는다. 그런데 {@code catch} 로 오는 실패는 대부분 <b>세는 단계</b>이고, 그 시점에
-     * {@code asOf} 는 이미 유효하게 읽혀 있다 — 그 축을 안 재면 {@code catch} 만 순서를
-     * 우회해도 아무도 모른다.
+     * <p>한때 {@code asOf} 로 골랐다. 근거는 <i>"밀린 만료를 따라잡으려고 과거 {@code asOf}
+     * 로 손 트리거를 치는 것이 권장 절차"</i> 였는데 — <b>만료를 손으로 띄우는 경로가 이
+     * 저장소에 없다.</b> 없는 시나리오 때문에 문자열 정렬과 {@code PARAMETER_TYPE} 전제를
+     * 지고 있었고, 그 정렬이 {@code record} 의 순서 규칙과 맞물려 <b>게이지를 영구히
+     * 얼리는 문</b>이 됐다(7일 창이 앞을 자르면 최대 {@code asOf} 가 뒤로 간다).
+     *
+     * <p>⚠️ <b>만료 손 트리거가 생기는 티켓은 이 테스트를 다시 봐야 한다.</b> 그때는 과거
+     * {@code asOf} 실행이 나중에 끝날 수 있고, 이 계약대로면 게이지가 <b>더 좁은 창의 더
+     * 작은 값</b>을 낸다 — 관제는 그것을 <i>"밀린 것이 없다"</i> 로 읽는다.
+     * 크론만 있는 지금은 두 순서가 같아 그 창이 없다.
      */
     @Test
-    @DisplayName("세다가 죽은 과거 실행도 최신 값을 못 지운다")
-    void keepsNewerSnapshotWhenAnOlderCountFails() throws Exception {
+    @DisplayName("나중에 끝난 성공 실행이 이긴다 — 크론만 있는 지금은 곧 최신 asOf 다")
+    void picksTheRunThatFinishedLast() throws Exception {
+        seed.newCoupon();
+        expiring();
+        expiring();
+        seed.overwriteStock(0);
+
+        // 과거 asOf 로 먼저 돌린다. 그 컷에는 아무것도 안 걸려 0 을 낸다.
+        JobExecution older = jobOperator.start(expireJob, new JobParametersBuilder()
+                .addLocalDateTime("asOf", AS_OF.minusDays(10))
+                .toJobParameters());
+        assertThat(older.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        // 그다음 주기 실행. 나중에 끝났으므로 이쪽이 이겨야 한다.
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        observe();
+
+        String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(body, "cy_expire_blocked_coupons"))
+                .as("나중에 끝난 실행을 안 집으면 게이지가 옛 창의 값에 머문다")
+                .isEqualTo(1.0);
+        assertThat(metric(body, "cy_expire_pending")).isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_blocked_pending")).isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
+        assertThat(metric(body, "cy_expire_measured_at_seconds"))
+                .as("어느 시점의 사실인지가 함께 움직여야 한다")
+                .isEqualTo(AS_OF.toEpochSecond(ZoneOffset.UTC));
+
+        // ── 여기까지는 END_TIME 정렬을 재지 못한다 ────────────────────────────
+        //
+        // 두 실행이 수백 ms 안에 끝나 **END_TIME 순서와 id 순서가 같다.** 그래서
+        // `ORDER BY e.END_TIME DESC` 를 통째로 지워도 타이브레이커(JOB_EXECUTION_ID DESC)
+        // 가 같은 행을 집어 위 단언이 전부 초록이다 — 테스트 이름이 주장하는 축이
+        // 안 걸린다.
+        //
+        // 두 축을 **반대로 벌려** 다시 잰다. id 가 큰 주기 실행을 먼저 끝난 것으로
+        // 되돌리면, END_TIME 정렬은 older(과거 asOf · 대상 0건)를 집어야 한다.
+        jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET END_TIME = DATE_SUB(END_TIME, "
+                        + "INTERVAL 1 HOUR) WHERE JOB_EXECUTION_ID > :id")
+                .param("id", older.getId())
+                .update();
+
+        observe();
+
+        String reordered = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(reordered, "cy_expire_measured_at_seconds"))
+                .as("END_TIME 항을 지우면 id 순으로 최신 실행을 집어 이 단언이 깨진다")
+                .isEqualTo(AS_OF.minusDays(10).toEpochSecond(ZoneOffset.UTC));
+        assertThat(metric(reordered, "cy_expire_blocked_coupons"))
+                .as("과거 asOf 실행은 아무것도 안 건너뛰었다")
+                .isZero();
+    }
+
+
+    /**
+     * <b>세다가 실패하면 직전 값을 들고 있으면 안 된다.</b>
+     *
+     * <p>되읽기가 실패했는데 게이지가 그대로면 관제는 그것을 <b>지금 상태</b>로 읽는다 —
+     * 백로그 축에서 그 오해는 <i>"밀린 것이 없다"</i> 이고, 그 알림은 영원히 조용해진다.
+     * 0 을 내는 것은 더 나쁘다. 그래서 {@code NaN}(모름) 으로 떨어뜨린다.
+     *
+     * <p>잡은 이 실패에 <b>영향을 안 받는다.</b> 관측이 잡 밖으로 나온 것이 CY-421 의 요지다 —
+     * 한때 이 실패가 {@code afterJob} 안에 있어서, 그 자리를 조금만 잘못 만지면
+     * <b>만료는 다 해 놓고 지표 때문에 빨간불</b>이 났다.
+     */
+    @Test
+    @DisplayName("되읽기가 세다 실패하면 게이지를 모름으로 떨어뜨린다")
+    void dropsGaugesWhenTheReadFails() throws Exception {
+        seed.newCoupon();
+        expiring();
+        expiring();
+        seed.overwriteStock(0);
+
+        assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        observe();
+        assertThat(metric(ActuatorProbe.get(managementPort, "/actuator/prometheus").body(),
+                "cy_expire_blocked_coupons"))
+                .as("전제 — 떨어뜨릴 값이 먼저 있어야 한다")
+                .isEqualTo(1.0);
+
+        CountFailureConfig.on();
+        try {
+            observe();
+        } finally {
+            CountFailureConfig.off();
+        }
+
+        String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
+        assertThat(metric(body, "cy_expire_unexplained_pending"))
+                .as("직전 값을 들고 있으면 관제가 그것을 지금 상태로 읽는다")
+                .isNaN();
+        assertThat(metric(body, "cy_expire_pending")).isNaN();
+        assertThat(metric(body, "cy_expire_blocked_pending")).isNaN();
+        assertThat(metric(body, "cy_expire_blocked_coupons")).isNaN();
+        assertThat(metric(body, "cy_expire_refresh_failures_total"))
+                .as("로그는 감시 수단이 아니다 — 되읽기 실패는 지표로도 나가야 한다")
+                .isEqualTo(1.0);
+    }
+
+    /**
+     * <b>{@code blocked} 는 그 실행에 대한 사실이지 지금 재고 상태가 아니다.</b>
+     *
+     * <p>되읽기가 {@code blockedCoupons(asOf)} 를 다시 부르면, 04:10 에 어긋났던 재고를
+     * 10:00 에 고치는 순간 그 몫이 {@code blocked} 에서 {@code unexplained} 로 옮겨 간다 —
+     * <b>데이터를 고쳤더니 서버 critical 이 뜬다.</b> {@code ExpireMetrics} 가 세운
+     * <i>"서버를 고칠 상황과 데이터를 볼 상황을 같은 알람으로 묶지 않는다"</i> 를 정면으로
+     * 어기고, 만료가 일 1회라 그 오탐이 <b>최대 하루</b> 간다.
+     *
+     * <p>그래서 목록은 {@code BATCH_STEP_EXECUTION_CONTEXT} 에서 그대로 가져오고, 다시 재는
+     * 것은 {@code countPending} 하나다. 그 결정을 무는 것이 이 테스트다.
+     */
+    @Test
+    @DisplayName("실행 뒤에 재고를 고쳐도 막힌 몫은 그 실행의 값 그대로다")
+    void keepsBlockedAsTheRunSawIt() throws Exception {
         seed.newCoupon();
         expiring();
         expiring();
@@ -374,26 +557,19 @@ class ExpireMetricExposureTest {
 
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
-        CountFailureConfig.on();
-        try {
-            JobExecution stale = jobOperator.start(expireJob, new JobParametersBuilder()
-                    .addLocalDateTime("asOf", AS_OF.minusDays(1))
-                    .toJobParameters());
-            assertThat(stale.getStatus())
-                    .as("세는 것은 관측이지 판정이 아니다 — 세다 죽어도 잡은 끝난다")
-                    .isEqualTo(BatchStatus.COMPLETED);
-        } finally {
-            CountFailureConfig.off();
-        }
+        // 사람이 재고를 고쳤다. 이제 blockedCoupons(asOf) 는 이 회차를 안 낸다.
+        seed.overwriteStock(5);
+        observe();
 
         String body = ActuatorProbe.get(managementPort, "/actuator/prometheus").body();
-        assertThat(metric(body, "cy_expire_blocked_coupons"))
-                .as("**catch 도 순서를 지켜야 한다.** 여기가 NaN 이면 과거 asOf 손 트리거가 "
-                        + "세다 죽는 것만으로 주기 실행의 감시를 끈다")
-                .isEqualTo(1.0);
-        assertThat(metric(body, "cy_expire_pending")).isEqualTo(2.0);
-        assertThat(metric(body, "cy_expire_blocked_pending")).isEqualTo(2.0);
-        assertThat(metric(body, "cy_expire_unexplained_pending")).isZero();
+        assertThat(metric(body, "cy_expire_blocked_pending"))
+                .as("다시 계산하면 여기가 0 이 되고, 그 2건이 unexplained 로 옮겨 간다")
+                .isEqualTo(2.0);
+        assertThat(metric(body, "cy_expire_unexplained_pending"))
+                .as("**데이터를 고친 것이 서버 critical 로 나가면 안 된다.** 남은 2건은 "
+                        + "다음 창에서 걷히고, 그 사이는 ExpireSkippingBrokenCoupons 의 몫이다")
+                .isZero();
+        assertThat(metric(body, "cy_expire_blocked_coupons")).isEqualTo(1.0);
     }
 
     /** {@code countPending} 만 던지게 한다. 나머지는 실제 저장소 그대로다. */
@@ -451,6 +627,14 @@ class ExpireMetricExposureTest {
                 .param("id", id)
                 .update();
         return id;
+    }
+
+    /**
+     * <b>관측 한 바퀴.</b> 운영의 {@code @Scheduled} 주기를 테스트가 손으로 돌린다 —
+     * 주기를 기다리면 이 클래스가 시간에 기대게 되고, 재는 축은 주기가 아니라 <b>값</b>이다.
+     */
+    private void observe() {
+        refresher.refresh();
     }
 
     private JobExecution launch() throws Exception {

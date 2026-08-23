@@ -114,7 +114,8 @@ groups:
       #    한쪽만 바꾸면 기동은 되는데 알림이 어긋나거나, 알림은 맞는데 기동이 거절된다.
       #
       # 시연처럼 5분 크론으로 되돌릴 때는 **셋을 함께** 바꾼다 —
-      # EXPIRE_CRON · MAX_EXPIRE_SKIPS · EXPIRE_SLA_SECONDS(그리고 이 식).
+      # EXPIRE_CRON · MAX_EXPIRE_SKIPS · EXPIRE_SLA_SECONDS
+      # (그리고 **식 둘** — 이 규칙과 ExpireMetricsBackdated).
       - alert: ExpireNotSucceeding
         expr: >-
           (time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 180000
@@ -457,7 +458,9 @@ groups:
         # 한쪽만 새 값인 샘플이 나와 식이 음수가 되거나 헛되이 참이 된다.
         # 한 문장에서 세어 한 시계열로 내보낸 값을 그대로 본다.
         expr: cy_expire_unexplained_pending > 0
-        # 두 주기. **한 실행이 대상을 다 비운다** — 청크는 0 이 나올 때까지 반복하므로
+        # 열 주기(되읽기 60초). **만료 주기가 아니다** — 만료는 일 1회이고, 이 값이 재는
+        # 것은 "되읽기가 몇 번 같은 값을 확인했나" 다.
+        # **한 실행이 대상을 다 비운다** — 청크는 0 이 나올 때까지 반복하므로
         # "대상이 많아서 다음 주기로 넘어간다" 는 일이 없다. 그래도 남는 것은 막힌 회차의
         # 몫(이미 뺐다)이거나 step-timeout 으로 청크가 끊긴 경우뿐이라, 길게 볼 이유가 없다.
         for: 10m
@@ -468,41 +471,54 @@ groups:
         annotations:
           summary: "만료가 밀리고 있습니다 (남은 대기 {{ $value }}건)"
           description: >-
-            기한 지난 발급건이 남아 있습니다. **BatchJobFailed 가 함께 떠 있는지 먼저 봅니다** —
-            첫 청크가 커밋된 뒤 죽은 실행도 여기까지 세므로, 그때는 두 알림이 한 사건입니다.
+            기한 지난 발급건이 남아 있습니다.
+            **값은 마지막으로 성공한 만료 실행의 asOf 기준입니다**(cy_expire_measured_at_seconds).
+            실패한 실행의 잔여는 여기 안 뜹니다 — 그 시각이 하루 이상 낡았으면
+            BatchJobFailed·ExpireNotSucceeding 을 먼저 봅니다. 마지막 성공 이후의 밀림은
+            이 알림이 아니라 그쪽이 집니다.
             내역은 진단용 게이지 둘로 갈립니다 —
             cy_expire_pending(전체) 과 cy_expire_blocked_pending(막힌 회차의 몫).
             재고가 어긋난 회차의 몫은 이미 뺀 값이라, **서버를 봐야 하는 상황**입니다.
             진도가 막혔거나(BATCH_STEP_EXECUTION 의 WRITE_COUNT 확인),
             asOf 가 엉뚱한 시각을 가리키고 있을 수 있습니다.
+            **취소·사용 경로가 붙은 뒤라면** 마지막 성공 이후 CANCEL_USE(USED → ISSUED)로
+            되돌아온 건이 여기 섞일 수 있습니다 — 그 회차는 얼린 제외 목록에 없어
+            unexplained 로 들어옵니다. 그때는 배치가 아니라 이 규칙을 고쳐야 합니다.
 
       # ──────────────────────────────────────────────────────────────────────
       # 감시가 꺼진 것을 감시한다.
-      #   위 두 알림은 전부 `> 0` 비교다. 그런데 판정할 재료가 없었던 실행은 게이지를
-      #   NaN 으로 되돌리고(ExpireMetrics.markUnknown), `NaN > 0` 은 거짓이다 —
-      #   **잡이 COMPLETED 로 끝나면서 밀림 감시만 조용히 꺼지는 상태가 있다.**
+      #   위 두 알림은 전부 `> 0` 비교이고 `NaN > 0` 은 거짓이다 —
+      #   **게이지가 NaN 인 동안 밀림 감시가 조용히 꺼진다.**
       #   NaN 은 시리즈로 존재하므로 absent() 로는 못 잡는다. NaN != NaN 이 참인 것을 쓴다.
       # ──────────────────────────────────────────────────────────────────────
-      # ⚠️ **이 게이지는 프로세스 게이지다 — 만료를 일 1회로 옮기면서 성질이 바뀌었다(CY-397).**
-      #    cy_expire_* 넷은 JVM 안 AtomicReference 라 afterJob 에서만 채워진다. 5분 크론일
-      #    때는 NaN 창이 아래 for(15분)보다 짧아 구조적으로 발화 불가였는데, 일 1회에서는
-      #    **재기동부터 다음 04:10 까지 최대 하루**가 NaN 이다. CY-392 가 마지막 성공 시각을
-      #    DB 되읽기로 옮긴 근거(BatchRunMetrics javadoc)가 이 게이지에는 아직 적용 안 됐다.
+      # **이 게이지는 이제 DB 되읽기다**(CY-421). 한때 afterJob 에서만 채워지는 JVM
+      # 게이지라, 만료를 일 1회로 옮긴 뒤(CY-397) 재기동부터 다음 04:10 까지 **최대 하루**가
+      # NaN 이었다. ExpirePendingRefresher 가 60초마다 마지막으로 성공한 실행의 asOf 로
+      # 다시 세므로 그 창이 사라졌다.
       #
-      #    그래서 **기동 나이**를 조인 축으로 건다 — 재기동 직후의 "아직 모른다" 는 사고가
-      #    아니라 정상이고, 그것을 알림으로 내면 배포 시각을 보고 우는 알림이 된다.
-      #    process_start_time_seconds 는 Boot 의 UptimeMetrics 가 내고, 그 이름이 실제로
-      #    노출되는지는 BatchMetricExposureTest 가 스크레이프 본문에서 확인한다.
+      # NaN 이 뜻하는 것은 넷인데, **둘은 사건이 아니다.**
+      #   ① 성공한 실행이 7일 창 안에 없다 — 볼륨을 지우고 띄우면 다음 04:10 까지 정상이다.
+      #      되읽기가 닫은 창은 "성공한 실행이 DB 에 있는데 프로세스가 재기동했다" 하나뿐이고
+      #      **아예 한 번도 안 돈 창은 그대로다.** 규칙에 예외를 안 파고 시연 절차 첫 단계의
+      #      silence 가 덮는다 — BATCH_SCHEDULING_ENABLED 에 대해 이미 내린 결정과 같다.
+      #   ② 오염셋을 보고 있다 — 문서화된 정상 절차다(docs/14 의 "검증용 셋에 Spring Batch
+      #      메타 테이블이 없다" 절). 이쪽은 silence 로 두면 사유가 ①과 달라 섞이므로
+      #      **지표로 가른다**: cy_expire_clean_schema 로 조인한다.
       #
-      # ⚠️ **남은 빚:** 그 창 동안 ExpireLeavesWorkBehind 도 발화할 수 없다(NaN > 0 은 거짓).
-      #    즉 "백로그가 쌓인다" 축이 재기동 뒤 하루까지 눈이 먼다. 근본 해결은 이 넷도
-      #    DB 되읽기로 옮기는 것이고 docs/13 §6 에 항목으로 남겼다 — 이 티켓 밖이다.
+      # ⚠️ 조인을 `== 1`(정상셋으로 확인된 것만)로 걸면 **이 규칙이 갈래 ④를 스스로 죽인다.**
+      #    되읽기가 recordSchema 에 닿기 전에 매번 죽으면 그 게이지도 NaN 이고, PromQL 에서
+      #    NaN == 1 은 거짓이라 우변이 빈 벡터가 되어 좌변이 NaN 인 동안에도 못 뜬다.
+      #    그래서 `unless == 0`(**오염셋으로 확인된 것만 뺀다**)으로 건다 — 빼겠다는 의도는
+      #    그대로이고, "아직 모른다" 가 알림을 죽이지 않는다.
+      #   ③ 제외 목록을 못 읽었다  ④ 되읽기가 실패했다 — 둘 다 사건이다.
+      #
+      # ③과 ④를 가르는 것이 실패 카운터다. ③은 다음 만료 창까지 안 변하는 **지속 상태**라
+      # 카운터를 안 올린다(안 올리면 하루 1,440 이 쌓여 ExpireMetricsStale 이 엉뚱하게 뜬다).
       - alert: ExpireMetricsUnknown
         expr: >-
           (cy_expire_unexplained_pending != cy_expire_unexplained_pending)
-          and on(job, instance)
-          (time() - process_start_time_seconds{job="cy-batch"} > 86400)
-        # 기동 나이가 이미 갈래를 지므로 여기서는 스크레이프 흔들림만 흡수한다.
+          unless on(job, instance) (cy_expire_clean_schema == 0)
+        # 열다섯 주기(되읽기 60초). 주기는 기동 때 10~120초로 강제되므로 최악에도 7.5주기다.
         for: 15m
         labels:
           severity: warning
@@ -511,14 +527,93 @@ groups:
         annotations:
           summary: "만료 대기를 세지 못하고 있습니다 — 밀림 감시가 꺼져 있습니다"
           description: >-
-            잡은 끝났는데 남은 대기를 판정하지 못했습니다. 오염 스키마를 보고 있거나,
-            Step 을 시작도 못 했거나, 세다가 실패한 경우입니다.
-            **이 동안 ExpireLeavesWorkBehind 는 울릴 수 없습니다.**
-            만료 잡의 WARN 로그와 BatchJobFailed 를 함께 봅니다.
+            만료 대기 건수를 되읽지 못하고 있습니다. **이 동안 ExpireLeavesWorkBehind 는
+            울릴 수 없습니다.** 갈래가 넷이라 먼저 어느 쪽인지 가릅니다.
+            먼저 `increase(cy_expire_refresh_failures_total[10m]) > 0` 을 봅니다 —
+            증가했으면 되읽기 실패이고, 배치 로그의
+            "만료 대기 지표를 되읽지 못했습니다" 가 원인을 답합니다(흔한 원인은 커넥션 풀 고갈).
+            **ExpireNeverSucceeded 가 함께 떠 있으면 같은 사건입니다** — 만료가 아직 한 번도
+            성공하지 않은 것이고, 볼륨을 새로 띄운 직후가 여기입니다.
+            안 증가했으면 갈래가 둘입니다 — 7일 창 안에 COMPLETED 로 끝난 expireJob 이
+            없거나, 그 실행의 제외 목록을 Step 문맥에서 못 읽은 것입니다.
+            BATCH_JOB_EXECUTION 조회와 배치 로그의
+            "제외 목록을 Step 문맥에서 못 읽었습니다" WARN 으로 가릅니다.
+            오염셋을 보고 있는 경우는 이 알림에서 구조적으로 빠집니다(cy_expire_clean_schema).
+            **볼륨을 지우고 띄운 직후는 정상입니다** — 그 구간은 시연 절차 첫 단계의
+            silence 가 덮습니다.
 
+      # **게이지가 0 인데 그 0 이 어제 것일 수 있다.** 계약이 "마지막으로 성공한 실행이 남긴
+      # 몫" 이라, 오늘 만료가 실패하거나 슬롯을 건너뛰면 넷은 어제 기준으로 정상인 0 을 낸다 —
+      # ExpireLeavesWorkBehind 는 조용하고, 값이 있으니 ExpireMetricsUnknown 도 조용하고,
+      # 되읽기가 멀쩡하니 ExpireMetricsStale 도 조용하다. 그 창을 이 규칙이 진다.
+      #
+      # ⚠️ ExpireNotSucceeding 과 **다른 시간 축**이다 — 그쪽은 MAX(END_TIME)(잡이 돌았나),
+      #    이쪽은 asOf(그 값이 어느 시점의 사실인가). 만료 손 트리거가 생기면 두 축이 갈린다.
+      #
+      # ⚠️ **batch.metrics.expire-sla-seconds 와 같은 값이어야 한다** — ExpireNotSucceeding
+      #    과 같은 이유이고, 기동 가드의 거절 메시지가 이 규칙도 함께 이름으로 부른다.
+      #    그보다 짧으면 정상적인 슬롯 건너뛰기에서 뜨고, 길면 하루치 백데이팅을 못 본다.
+      #    **이 축에는 여유가 더 붙는다** — SLA 가 재는 END_TIME 과 달리 이쪽은 asOf 라
+      #    잡 소요와 expire-pending-refresh-ms(최대 120초)만큼 늘 뒤에 있다.
+      - alert: ExpireMetricsBackdated
+        expr: >-
+          (time() - cy_expire_measured_at_seconds) > 180000
+          or (cy_expire_measured_at_seconds - time()) > 60
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "만료 대기 게이지가 너무 오래된 asOf 기준입니다"
+          description: >-
+            게이지 넷이 마지막으로 성공한 만료 실행의 asOf 로 계산됩니다.
+            그 시각이 SLA(50시간)보다 낡았다는 것은 **그 뒤로 만료가 성공하지 못했다**는
+            뜻이고, 그동안 쌓인 백로그는 ExpireLeavesWorkBehind 에 안 나옵니다.
+            BatchJobFailed 와 ExpireNotSucceeding 을 함께 봅니다 — 뒤엣것은 잡의 종료 시각
+            축이라 과거 asOf 실행이 성공하면 조용해질 수 있습니다.
+            미래 시각이면 원인은 시간대 설정입니다.
+
+      # 되읽기가 성공/실패를 번갈아 하면 게이지가 정상 ↔ NaN 을 오간다. 그 구간에서
+      # ExpireLeavesWorkBehind 는 NaN 샘플에, ExpireMetricsUnknown 은 정상 샘플에 각각
+      # for 타이머가 깨져 **둘 다 영영 안 찬다** — 카운터는 리셋을 안 타므로 그 구간을 문다.
+      # BatchRunMetricsStale 이 같은 실패 모드를 promtool 로 재현해 세운 규칙이고,
+      # **이 실패 모드는 CY-421 이 만들었다** — 예전 게이지는 하루 한 번만 바뀌어
+      # 플래핑이 구조적으로 불가능했다.
+      #
+      # 절대 델타를 쓰는 이유는 형제와 같다 — 재기동하면 카운터가 0 으로 다시 태어나
+      # increase() 가 그 구간을 못 본다.
+      - alert: ExpireMetricsStale
+        expr: >-
+          (
+            cy_expire_refresh_failures_total
+            - cy_expire_refresh_failures_total offset 10m
+          ) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "만료 대기 지표 되읽기가 반복 실패하고 있습니다"
+          description: >-
+            게이지가 정상과 NaN 을 오가는 동안은 ExpireLeavesWorkBehind 도
+            ExpireMetricsUnknown 도 for 를 못 채웁니다.
+            배치 로그의 "만료 대기 지표를 되읽지 못했습니다" 가 원인을 답합니다.
+            흔한 원인은 커넥션 풀 고갈과 배치 메타 잠금입니다.
+
+      # ⚠️ **노출 창이 하루가 됐다.** 만료가 5분 크론이던 시절에는 재고를 고치면 다음 슬롯
+      #    (5분)이 그 회차를 넘겨 자연 해소됐다. 배치 창(일 1회)으로 옮긴 뒤로는 고쳐도
+      #    **다음 04:10 까지 안 만료된다** — 그동안 그 회차의 active_count 는 실제보다 크다.
+      #    **앞당길 수단은 없다.** 만료를 손으로 띄우는 경로가 이 저장소에 없다(컨트롤러는
+      #    검증용 하나뿐이고 spring.batch.job.enabled 도 false 다). 그 경로가 생기는 티켓은
+      #    ExpirePendingRefresher 의 END_TIME 정렬도 함께 봐야 한다.
+      #
+      # **고친 뒤에도 이 알림이 계속 뜨는 것이 맞다.** 게이지는 마지막으로 성공한 실행이
+      # 건너뛴 회차 수이고(CY-421), 그것은 그 실행에 대한 사실이라 재고를 고쳐도 안 바뀐다.
+      # 다음 실행이 성공하면 그때 0 이 된다. 그 값을 지금 재고로 다시 계산하면
+      # **데이터를 고친 것이 서버 critical(ExpireLeavesWorkBehind)로 나간다.**
       - alert: ExpireSkippingBrokenCoupons
         expr: cy_expire_blocked_coupons > 0
-        # 두 주기. 누가 재고를 고치는 중이면 자연 해소된다.
+        # 열 주기(되읽기 60초). 최악(120초)에도 다섯 주기다.
         for: 10m
         labels:
           severity: warning
@@ -531,6 +626,8 @@ groups:
             회차라, 그 회차만 빼고 나머지는 계속 만료시킵니다.
             데이터를 봐야 하는 상황이고 서버 문제가 아닙니다.
             어느 회차인지는 만료 잡의 WARN 로그에 회차 id 로 남습니다(회차 id 오름차순).
+            재고를 고쳐도 이 알림은 다음 만료(04:10)가 성공할 때까지 그대로입니다 —
+            게이지가 "마지막으로 성공한 실행이 건너뛴 회차" 라서입니다.
             **방치하면 그 회차의 대기 행을 매 주기 다시 훑습니다.** 만료가 끝나도 그 행들은
             ISSUED 로 남아 다음 실행의 스캔 대상이 되므로, 오래 두면 잡 시간이 늘어납니다.
 
