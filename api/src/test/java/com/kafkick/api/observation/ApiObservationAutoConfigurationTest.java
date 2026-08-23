@@ -212,6 +212,28 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
+        // 사용자 합성 기록기가 컨텍스트에 이미 있는 leaf 를 감싸면, fan-out 이 leaf 를 직접
+        // 한 번 + 합성기를 통해 한 번 불러 그 sink 의 값이 두 배가 된다.
+    void deliversEachLeafOnceEvenWhenAUserCompositeWrapsIt() {
+        AtomicInteger leafCalls = new AtomicInteger();
+        EventRecorder leaf = event -> leafCalls.incrementAndGet();
+
+        withoutMeterRegistryRunner
+                .withBean("auditEventRecorder", EventRecorder.class, () -> leaf)
+                .withBean("auditFanOut", CompositeEventRecorder.class,
+                        () -> new CompositeEventRecorder(leaf))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    context.getBean(EventRecorder.class).record(context
+                            .getBean(IssuanceFlowEventFactory.class)
+                            .issueAttempt(eventContext("nested-leaf")));
+
+                    assertThat(leafCalls).hasValue(1);
+                });
+    }
+
+    @Test
     void defaultCampaignLifecycleRecorderDoesNothing() {
         contextRunner.run(context -> {
             CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);

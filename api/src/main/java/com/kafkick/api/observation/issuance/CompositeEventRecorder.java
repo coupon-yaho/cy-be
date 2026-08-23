@@ -1,10 +1,13 @@
 package com.kafkick.api.observation.issuance;
 
 import java.time.Duration;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalLong;
+import java.util.Set;
 
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEvent;
@@ -34,11 +37,40 @@ public final class CompositeEventRecorder implements EventRecorder {
      */
     public CompositeEventRecorder(Duration failureLogInterval, EventRecorder... delegates) {
         this.failureLog = new FailureLogThrottle(failureLogInterval);
-        this.delegates = Arrays.stream(Objects.requireNonNull(delegates, "delegates"))
-                .map(delegate -> Objects.requireNonNull(delegate, "delegate"))
-                .toList();
+        this.delegates = flatten(Objects.requireNonNull(delegates, "delegates"));
         if (this.delegates.isEmpty()) {
             throw new IllegalArgumentException("delegates must not be empty");
+        }
+    }
+
+    /**
+     * 중첩된 합성 기록기를 펼치고 같은 sink 를 한 번만 남긴다.
+     *
+     * <p>fan-out 은 컨텍스트에 등록된 기록기를 전부 모으므로, 누군가 자기 합성 기록기로 이미
+     * 빈으로 올라와 있는 sink 를 감싸면 그 sink 가 두 번 불린다 — 미터라면 값이 그대로 두 배가
+     * 되고, 예외가 아니라 그래프로만 드러난다. 동일성은 {@code equals} 가 아니라 참조로 본다.
+     */
+    private static List<EventRecorder> flatten(EventRecorder[] delegates) {
+        List<EventRecorder> leaves = new ArrayList<>();
+        Set<EventRecorder> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (EventRecorder delegate : delegates) {
+            expand(delegate, leaves, seen);
+        }
+        return List.copyOf(leaves);
+    }
+
+    private static void expand(
+            EventRecorder delegate,
+            List<EventRecorder> leaves,
+            Set<EventRecorder> seen
+    ) {
+        Objects.requireNonNull(delegate, "delegate");
+        if (delegate instanceof CompositeEventRecorder composite) {
+            composite.delegates.forEach(nested -> expand(nested, leaves, seen));
+            return;
+        }
+        if (seen.add(delegate)) {
+            leaves.add(delegate);
         }
     }
 

@@ -42,10 +42,13 @@ class CompositeEventRecorderTest {
     @Test
     void isolatesMultipleFailuresAndDeliversToHealthyDelegates(CapturedOutput output) {
         AtomicInteger delivered = new AtomicInteger();
+        // 같은 인스턴스를 두 번 넘기면 합성기가 하나로 합친다. 실패 sink 가 둘인 상황을 재려면
+        // 서로 다른 인스턴스여야 한다.
         EventRecorder failing = ignored -> { throw new IllegalStateException("unavailable"); };
+        EventRecorder alsoFailing = ignored -> { throw new IllegalStateException("unavailable"); };
 
         CompositeEventRecorder recorder = new CompositeEventRecorder(
-                failing, failing, ignored -> delivered.incrementAndGet());
+                failing, alsoFailing, ignored -> delivered.incrementAndGet());
         recorder.record(event());
         recorder.record(event());
 
@@ -72,6 +75,18 @@ class CompositeEventRecorderTest {
         assertThatThrownBy(() -> new CompositeEventRecorder(Duration.ZERO, delegate))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("failureLogInterval must be positive");
+    }
+
+    @Test
+    void deliversOnceToADelegateThatAlsoAppearsInsideANestedComposite() {
+        AtomicInteger leafCalls = new AtomicInteger();
+        EventRecorder leaf = ignored -> leafCalls.incrementAndGet();
+
+        CompositeEventRecorder recorder = new CompositeEventRecorder(
+                leaf, new CompositeEventRecorder(leaf));
+        recorder.record(event());
+
+        assertThat(leafCalls).hasValue(1);
     }
 
     private static IssuanceFlowEvent event() {
