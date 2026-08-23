@@ -4,6 +4,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.doThrow;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,12 +15,18 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.core.benchmark.RunTimeseriesArchiver;
+import com.kafkick.core.benchmark.BenchmarkErrorCode;
+import com.kafkick.core.support.exception.BusinessException;
+import static org.mockito.Mockito.mock;
+import java.util.Optional;
 
 /** Benchmark 조회와 네 가지 운영 명령의 독립 HTTP 계약 및 Validation을 검증합니다. */
 class AdminBenchmarkControllerTest {
 
+    private final RunTimeseriesArchiver archiver = mock(RunTimeseriesArchiver.class);
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminBenchmarkController());
+            new AdminBenchmarkController(Optional.of(archiver)));
 
     /** 유효한 과거 방향 목록 조건은 실제 저장소 대신 명시적인 ADMIN-001을 반환해야 합니다. */
     @Test
@@ -107,5 +116,52 @@ class AdminBenchmarkControllerTest {
                         .content("{\"engineVersion\":\"V3\",\"releaseStage\":\"V3\","
                                 + "\"queueMode\":\"ADAPTIVE\",\"scenarioCode\":\"lower case\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void retryArchiveInvokesArchiver() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+        verify(archiver).retry(7L);
+    }
+
+    @Test
+    void retryArchiveRejectsNonPositiveIdBeforeInvocation() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/0/archive/retry"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/v1/admin/benchmarks/-1/archive/retry"))
+                .andExpect(status().isBadRequest());
+        verify(archiver, never()).retry(0L);
+        verify(archiver, never()).retry(-1L);
+    }
+
+    @Test
+    void retryArchiveReturnsNotImplementedWhenFeatureIsUnavailable() throws Exception {
+        MockMvc unavailable = AdminControllerContractTestSupport.mockMvc(
+                new AdminBenchmarkController(Optional.empty()));
+        unavailable.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
+                .andExpect(status().isNotImplemented())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+    }
+
+    @Test
+    void retryArchiveMapsMissingRunToNotFound() throws Exception {
+        doThrow(new BusinessException(BenchmarkErrorCode.RUN_NOT_FOUND, "benchmarkRunId=404"))
+                .when(archiver).retry(404L);
+
+        mockMvc.perform(post("/api/v1/admin/benchmarks/404/archive/retry"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("BENCHMARK-003"));
+    }
+
+    @Test
+    void retryArchiveMapsInvalidStateToConflict() throws Exception {
+        doThrow(new BusinessException(BenchmarkErrorCode.ILLEGAL_TRANSITION, "archiveStatus=DONE"))
+                .when(archiver).retry(7L);
+
+        mockMvc.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("BENCHMARK-004"));
     }
 }

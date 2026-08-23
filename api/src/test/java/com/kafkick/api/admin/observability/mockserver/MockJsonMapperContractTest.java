@@ -18,6 +18,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencyMe
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencySnapshot;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.PersistenceLagSummary;
@@ -66,6 +67,7 @@ class MockJsonMapperContractTest {
         ObservedValue<Long> pending = absent(SourceStatus.PENDING);
 
         return new AdminMetricsResponse(
+                Meta.of(OBSERVED_AT, MetricsWindow.ONE_MINUTE, 217L),
                 new MetricsScope(MetricsScopeType.GLOBAL, null, null),
                 OBSERVED_AT,
                 MetricsWindow.ONE_MINUTE,
@@ -95,6 +97,7 @@ class MockJsonMapperContractTest {
 
     private static AdminMetricsResponse withScope(AdminMetricsResponse response, MetricsScope scope) {
         return new AdminMetricsResponse(
+                response.meta(),
                 scope,
                 response.snapshotAt(),
                 response.window(),

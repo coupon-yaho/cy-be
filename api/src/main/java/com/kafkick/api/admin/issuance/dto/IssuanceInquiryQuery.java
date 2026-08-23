@@ -1,10 +1,14 @@
 package com.kafkick.api.admin.issuance.dto;
 
+import java.util.Objects;
+
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
+import com.kafkick.api.admin.issuance.IssuanceInquiryCursorCodec;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery;
 import com.kafkick.core.observation.ReasonCode;
 
 /**
@@ -33,4 +37,19 @@ public record IssuanceInquiryQuery(
         @Max(value = 200, message = "limit은 200 이하여야 합니다.") Integer limit
 ) {
 
+    /** 검증된 HTTP 필터와 cursor를 Core 조회 조건으로 변환합니다. */
+    public AdminIssuanceInquiryQuery toCoreQuery(IssuanceInquiryCursorCodec cursorCodec) {
+        Objects.requireNonNull(cursorCodec, "cursorCodec");
+        int resolvedLimit = limit == null
+                ? AdminIssuanceInquiryQuery.DEFAULT_LIMIT
+                : limit;
+        return new AdminIssuanceInquiryQuery(
+                Objects.requireNonNull(memberId, "memberId"),
+                couponId,
+                httpStatus,
+                reasonCode,
+                // null만 파라미터 생략이다. 빈 값·공백은 잘못된 Cursor로 Codec에서 거부한다.
+                beforeCursor == null ? null : cursorCodec.decode(beforeCursor),
+                resolvedLimit);
+    }
 }

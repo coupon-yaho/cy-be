@@ -53,10 +53,12 @@ class AdminObservabilityConfigTest {
     @DisplayName("ApplicationContext가 Prom 원천을 AdminOverviewService까지 단일 경로로 배선한다")
     void wiresPromObservationSourceIntoOverviewServiceInRealSpringContext() {
         contextRunner.run(context -> {
-            assertThat(context).hasSingleBean(PromQueryClient.class);
+            assertThat(context).hasBean("promQueryClient");
+            assertThat(context).hasBean("archivePromQueryClient");
             assertThat(context).hasSingleBean(PromRangeQueryClient.class);
             assertThat(context).hasSingleBean(OverviewObservationSource.class);
-            assertThat(context.getBean(PromTimeQuery.class)).isSameAs(context.getBean(PromQueryClient.class));
+            assertThat(context.getBean("promQueryClient", PromTimeQuery.class))
+                    .isSameAs(context.getBean("promQueryClient", PromQueryClient.class));
             assertThat(context.getBean(PromRangeQuery.class)).isSameAs(context.getBean(PromRangeQueryClient.class));
             assertThat(context.getBean(OverviewObservationSource.class))
                     .isInstanceOf(PromOverviewObservationSource.class);

@@ -1,11 +1,14 @@
 package com.kafkick.api.admin.observability;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -15,21 +18,29 @@ import org.slf4j.LoggerFactory;
 
 import tools.jackson.databind.JsonNode;
 
+import com.kafkick.core.benchmark.RunTimeseriesArchiver;
+import com.kafkick.core.benchmark.RunTimeseriesArchiver.Metric;
+import com.kafkick.core.benchmark.RunTimeseriesArchiver.Sample;
+import com.kafkick.core.benchmark.RunTimeseriesArchiver.State;
+import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.observation.SourceStatusCode;
+
 /**
- * Prometheus 의 instant query({@code /api/v1/query})를 호출하고 벡터 결과를 표본 목록으로 바꿉니다.
+ * Prometheus instant query와 완료 회차 range query를 호출해 표본 목록으로 바꿉니다.
  *
- * <p><b>{@code query_range} 를 쓰지 않습니다.</b> 응답은 한 시점 스냅샷이고 차트의 과거 구간은
- * 화면이 1초 폴링으로 누적합니다. 비율·백분위의 집계 창은 질의 문자열 안의 구간 표기
- * ({@code rate(...[60s])})로 들어갑니다.</p>
+ * <p>D2 조회는 {@code /api/v1/query} 한 시점 스냅샷이고 화면이 1초 폴링으로 누적합니다.
+ * archive는 회차가 끝난 뒤 {@code /api/v1/query_range}로 과거 표본 자체의 시각을 읽습니다.
+ * 두 경로의 응답 크기와 시간 예산이 다르므로 설정에서 서로 다른 RestClient 인스턴스로 배선합니다.</p>
  *
  * <p>실패는 예외로 나갑니다. HTTP 500 으로 번역하지 말고 조립하는 쪽이 잡아 해당 값만
  * {@code UNAVAILABLE} 로 내려보냅니다.</p>
  */
-public class PromQueryClient implements PromQuery, PromTimeQuery {
+public class PromQueryClient implements PromQuery, PromTimeQuery, RunTimeseriesArchiver.RangeSource {
 
     private static final Logger log = LoggerFactory.getLogger(PromQueryClient.class);
 
     private static final String QUERY_PATH = "/api/v1/query";
+    private static final String RANGE_QUERY_PATH = "/api/v1/query_range";
     private static final String NAME_LABEL = "__name__";
     private static final String QUERY_PARAM = "query";
 
@@ -111,6 +122,153 @@ public class PromQueryClient implements PromQuery, PromTimeQuery {
             throw new PromQueryException("Prometheus 시각 고정 질의에 실패했습니다: " + promQl, failure);
         }
         return parseStrict(body, promQl);
+    }
+
+    @Override
+    public List<Sample> queryRange(Metric metric, Instant start, Instant end, int stepSeconds) {
+        String promQl = switch (metric) {
+            case STOCK_REMAINING -> "{__name__=~\"app_coupon_stock_remaining|app_coupon_stock_remaining_state\"}";
+            // publishPercentiles만 있으므로 bucket 합산은 할 수 없다. topk가 최댓값의 instance 라벨을 보존한다.
+            case LATENCY_P99 -> "topk(1, app_http_latency_seconds{quantile=\"0.99\"}) * 1000";
+            case DB_POOL_USAGE -> "sum(hikaricp_connections_active{job=\"api\",pool!=\"obs-pool\"})"
+                    + " / sum(hikaricp_connections_max{job=\"api\",pool!=\"obs-pool\"})";
+        };
+        JsonNode body;
+        try {
+            body = restClient.get()
+                    .uri(uriBuilder -> uriBuilder.path(RANGE_QUERY_PATH)
+                            .queryParam(QUERY_PARAM, "{" + QUERY_PARAM + "}")
+                            .queryParam("start", "{start}")
+                            .queryParam("end", "{end}")
+                            .queryParam("step", "{step}")
+                            .build(promQl, epochSeconds(start), epochSeconds(end), stepSeconds))
+                    .retrieve().body(JsonNode.class);
+        } catch (RestClientException failure) {
+            throw new PromQueryException("Prometheus range 질의에 실패했습니다: " + promQl, failure);
+        }
+        return parseRange(body, metric, start, promQl);
+    }
+
+    private static String epochSeconds(Instant instant) {
+        return BigDecimal.valueOf(instant.getEpochSecond())
+                .add(BigDecimal.valueOf(instant.getNano(), 9))
+                .stripTrailingZeros()
+                .toPlainString();
+    }
+
+    private static List<Sample> parseRange(JsonNode body, Metric metric, Instant start, String promQl) {
+        if (body == null || !"success".equals(body.path("status").asString(""))) {
+            throw new PromQueryException("Prometheus range 응답이 실패했습니다: " + promQl);
+        }
+        JsonNode data = body.path("data");
+        if (!"matrix".equals(data.path("resultType").asString(""))) {
+            throw new PromQueryException("matrix 가 아닌 range 결과입니다: " + promQl);
+        }
+
+        TreeMap<Instant, MutableRangeSample> byTime = new TreeMap<>();
+        for (JsonNode series : data.path("result")) {
+            JsonNode labels = series.path("metric");
+            String name = labels.path(NAME_LABEL).asString("");
+            String instance = labels.path("instance").asString(null);
+            Map<String, String> seriesLabels = labelsWithoutName(labels);
+            boolean stateSeries = name.endsWith("_state");
+            for (JsonNode pair : series.path("values")) {
+                if (!pair.isArray() || pair.size() != 2) {
+                    continue;
+                }
+                Instant observedAt = instantOfEpochSeconds(pair.get(0));
+                double value = parseValue(pair.get(1).asString(""));
+                MutableRangeSample sample = byTime.computeIfAbsent(observedAt, ignored -> new MutableRangeSample());
+                if (stateSeries) {
+                    if (sample.stateSeen) {
+                        throw new PromQueryException("같은 시각의 상태 시리즈가 중복됐습니다: " + metric
+                                + " at " + observedAt);
+                    }
+                    sample.stateSeen = true;
+                    sample.stateLabels = seriesLabels;
+                    sample.state = archiveState(value);
+                } else {
+                    if (sample.valueSeen) {
+                        throw new PromQueryException("같은 시각의 값 시리즈가 중복됐습니다: " + metric
+                                + " at " + observedAt);
+                    }
+                    sample.valueSeen = true;
+                    sample.valueLabels = seriesLabels;
+                    if (Double.isFinite(value)) {
+                        sample.value = value;
+                        sample.instance = instance;
+                    }
+                }
+                if (sample.valueLabels != null && sample.stateLabels != null
+                        && !sample.valueLabels.equals(sample.stateLabels)) {
+                    throw new PromQueryException("값과 상태 시리즈의 라벨이 다릅니다: " + metric
+                            + " at " + observedAt);
+                }
+            }
+        }
+
+        List<Sample> samples = new ArrayList<>();
+        for (Map.Entry<Instant, MutableRangeSample> entry : byTime.entrySet()) {
+            MutableRangeSample raw = entry.getValue();
+            State state = raw.state == null ? (raw.value == null ? State.UNAVAILABLE : State.VALID) : raw.state;
+            Double value = state == State.VALID ? raw.value : null;
+            // 값 시계열이 비었는데 상태만 VALID인 표본을 정상 0으로 만들지 않는다.
+            if (value == null && state == State.VALID) {
+                state = State.UNAVAILABLE;
+            }
+            samples.add(new Sample(metric, entry.getKey().getEpochSecond() - start.getEpochSecond(),
+                    entry.getKey(), value, state, raw.instance));
+        }
+        return List.copyOf(samples);
+    }
+
+    private static Map<String, String> labelsWithoutName(JsonNode metric) {
+        Map<String, String> labels = new TreeMap<>();
+        for (Map.Entry<String, JsonNode> field : metric.properties()) {
+            if (!NAME_LABEL.equals(field.getKey())) {
+                labels.put(field.getKey(), field.getValue().asString(""));
+            }
+        }
+        return Map.copyOf(labels);
+    }
+
+    private static Instant instantOfEpochSeconds(JsonNode timestamp) {
+        epochSecondsOf(timestamp);
+        BigDecimal decimal = timestamp.decimalValue();
+        BigDecimal wholeSeconds = decimal.setScale(0, RoundingMode.FLOOR);
+        long seconds = wholeSeconds.longValueExact();
+        int nanos = decimal.subtract(wholeSeconds).movePointRight(9)
+                .setScale(0, RoundingMode.HALF_UP).intValueExact();
+        if (nanos == 1_000_000_000) {
+            return Instant.ofEpochSecond(Math.addExact(seconds, 1));
+        }
+        return Instant.ofEpochSecond(seconds, nanos);
+    }
+
+    private static State archiveState(double code) {
+        if (!Double.isFinite(code) || code != Math.rint(code)) {
+            return State.UNAVAILABLE;
+        }
+        try {
+            SourceStatus status = SourceStatusCode.statusOf((int) code);
+            return switch (status) {
+                case N_A -> State.N_A;
+                case VALID, WARMING_UP, STALE, NO_TRAFFIC -> State.VALID;
+                case PENDING, UNAVAILABLE -> State.UNAVAILABLE;
+            };
+        } catch (IllegalArgumentException unknown) {
+            return State.UNAVAILABLE;
+        }
+    }
+
+    private static final class MutableRangeSample {
+        private Double value;
+        private State state;
+        private String instance;
+        private boolean valueSeen;
+        private boolean stateSeen;
+        private Map<String, String> valueLabels;
+        private Map<String, String> stateLabels;
     }
 
     /** 기존 no-time 사용자를 위해 손상 멤버만 건너뛰는 tolerant vector parser입니다. */
