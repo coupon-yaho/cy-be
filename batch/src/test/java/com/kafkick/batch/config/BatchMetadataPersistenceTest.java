@@ -29,7 +29,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.DeadlockLoserDataAccessException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -111,8 +111,13 @@ class BatchMetadataPersistenceTest {
      * {@code JobInstanceAlreadyComplete} 다. 셋 다 "중복 방지가 일했다" 이고 잡 실행 진입점이
      * 전부 INFO 로 받는다({@code ExpireScheduler}, feature/CY-15).
      *
-     * <p>기본값으로 되돌리면 gap 락 데드락이라 {@code DeadlockLoser} 가 오고 <b>그것만
-     * ERROR 로 나간다</b> — 그래서 그 타입을 명시적으로 배제한다.
+     * <p><b>기본값으로 되돌리면 gap 락 경합이라 잠금 실패 계열이 온다.</b> 실측하면
+     * {@code CannotAcquireLockException} 이었다 — 처음에 {@code DeadlockLoserDataAccessException}
+     * 만 배제했는데 그 형제 타입이라 안 걸린다. 둘의 공통 부모인
+     * {@code PessimisticLockingFailureException} 으로 배제해야 격리를 되돌린 것이 정확히 잡힌다.
+     *
+     * <p>그 계열은 잡 실행 진입점의 INFO 갈래를 타지 못하고 ERROR 로 나간다 — 중복 방지가
+     * 제 일을 한 것인데 사고처럼 보인다. 그것이 격리를 내린 이유다.
      *
      * <p>CY-15 의 {@code BatchJobRepositoryTest} 가 실제 만료 잡으로 같은 것을 본다.
      * 합류하면 이 메서드는 그쪽이 대신한다.
@@ -158,7 +163,7 @@ class BatchMetadataPersistenceTest {
                     .singleElement()
                     .isInstanceOfAny(DuplicateKeyException.class, IllegalStateException.class,
                             JobInstanceAlreadyCompleteException.class)
-                    .isNotInstanceOf(DeadlockLoserDataAccessException.class);
+                    .isNotInstanceOf(PessimisticLockingFailureException.class);
             assertThat(instanceCount() - before)
                     .as("막았다는 사실이 DB 에 하나로 남아야 한다. JOB_INST_UN 을 지우면 2 가 된다")
                     .isEqualTo(1);

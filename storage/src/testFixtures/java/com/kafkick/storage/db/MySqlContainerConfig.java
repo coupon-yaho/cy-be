@@ -19,6 +19,30 @@ import org.testcontainers.utility.MountableFile;
 @TestConfiguration(proxyBeanMethods = false)
 public class MySqlContainerConfig {
 
+    /** {@code infra/mysql/initdb/20-obs-account.sh} 에 env 로 건네는 값이다. */
+    private static final String OBSERVATION_USERNAME = "obs";
+
+    /**
+     * <b>일부러 까다로운 값이다.</b> 초기화 스크립트가 이 비밀번호를 root 로 도는 SQL 문에
+     * 리터럴로 박으므로, 이스케이프가 한 문자라도 빠지면 <b>컨테이너가 아예 안 뜬다</b> —
+     * 그러면 컨테이너를 쓰는 모든 테스트가 그 자리에서 빨간불이 된다.
+     *
+     * <p>두 문자가 각각 다른 실패를 만든다.
+     * <ul>
+     *   <li>{@code '} — 문자열을 조기에 닫는다. 배가({@code ''})로 막는다</li>
+     *   <li>{@code \} — MySQL 은 {@code NO_BACKSLASH_ESCAPES} 가 꺼진 기본값에서 이 문자를
+     *       이스케이프 문자로 읽는다. 값이 이것으로 <b>끝나면</b> 닫는 따옴표가 escape 되어
+     *       문자열이 다음 줄까지 삼킨다. 실측하면 {@code ERROR 1064} 로 죽는다</li>
+     * </ul>
+     *
+     * <p>그래서 <b>백슬래시가 마지막 문자다.</b> 가운데 두면 그 실패가 재현되지 않아
+     * 이스케이프를 지워도 테스트가 통과한다 — 실제로 그 상태였고, 변이로 확인했다.
+     *
+     * <p>평범한 값(예: {@code "obs"})으로 두면 이스케이프 경로를 아예 타지 않아
+     * <b>이 저장소에 그 회귀를 잡는 그물이 하나도 없게 된다.</b>
+     */
+    private static final String OBSERVATION_PASSWORD = "o'bs\\";
+
     /** latest 는 도커 허브가 가리키는 대상이 바뀌면 커밋이 그대로여도 테스트 결과가 달라진다. */
     private static final DockerImageName IMAGE = DockerImageName.parse("mysql:latest");
 
@@ -108,28 +132,4 @@ public class MySqlContainerConfig {
         throw new IllegalStateException(
                 "저장소 루트를 찾지 못했다. 실행 디렉터리: " + java.nio.file.Path.of("").toAbsolutePath());
     }
-
-    /** {@code infra/mysql/initdb/20-obs-account.sh} 에 env 로 건네는 값이다. */
-    private static final String OBSERVATION_USERNAME = "obs";
-
-    /**
-     * <b>일부러 까다로운 값이다.</b> 초기화 스크립트가 이 비밀번호를 root 로 도는 SQL 문에
-     * 리터럴로 박으므로, 이스케이프가 한 문자라도 빠지면 <b>컨테이너가 아예 안 뜬다</b> —
-     * 그러면 컨테이너를 쓰는 모든 테스트가 그 자리에서 빨간불이 된다.
-     *
-     * <p>두 문자가 각각 다른 실패를 만든다.
-     * <ul>
-     *   <li>{@code '} — 문자열을 조기에 닫는다. 배가({@code ''})로 막는다</li>
-     *   <li>{@code \} — MySQL 은 {@code NO_BACKSLASH_ESCAPES} 가 꺼진 기본값에서 이 문자를
-     *       이스케이프 문자로 읽는다. 값이 이것으로 <b>끝나면</b> 닫는 따옴표가 escape 되어
-     *       문자열이 다음 줄까지 삼킨다. 실측하면 {@code ERROR 1064} 로 죽는다</li>
-     * </ul>
-     *
-     * <p>그래서 <b>백슬래시가 마지막 문자다.</b> 가운데 두면 그 실패가 재현되지 않아
-     * 이스케이프를 지워도 테스트가 통과한다 — 실제로 그 상태였고, 변이로 확인했다.
-     *
-     * <p>평범한 값(예: {@code "obs"})으로 두면 이스케이프 경로를 아예 타지 않아
-     * <b>이 저장소에 그 회귀를 잡는 그물이 하나도 없게 된다.</b>
-     */
-    private static final String OBSERVATION_PASSWORD = "o'bs\\";
 }

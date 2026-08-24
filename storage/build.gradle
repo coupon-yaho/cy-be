@@ -40,4 +40,21 @@ tasks.named('test') {
     inputs.files(rootProject.file('infra/mysql/initdb/20-obs-account.sh'))
         .withPropertyName('obsAccountInitScript')
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // ObservationQueryScopeTest 는 settings.gradle 과 **모든 모듈의 자바 원본**을 읽는다.
+    // 다른 모듈의 소스는 이 모듈 test 의 입력이 아니라, 선언하지 않으면 api 에 members 질의를
+    // 하나 넣어도 :storage:test 가 UP-TO-DATE 로 건너뛴다 — 가드가 있는데 안 도는 상태다.
+    //
+    // 모듈 목록은 그 테스트의 MODULES 상수와 한 쌍이고, settings.gradle 과 어긋나면
+    // moduleListMatchesSettingsGradle 이 잡는다.
+    inputs.files(
+            rootProject.file('settings.gradle'),
+            rootProject.file('api/src/main/java'),
+            rootProject.file('batch/src/main/java'),
+            rootProject.file('core/src/main/java'),
+            rootProject.file('storage/src/main/java'),
+            rootProject.file('infra/mq/src/main/java'),
+            rootProject.file('infra/redis/src/main/java'))
+        .withPropertyName('observationQueryScopeInputs')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

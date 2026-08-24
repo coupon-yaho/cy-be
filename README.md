@@ -148,18 +148,21 @@ revision을 0으로 되돌리는 복구 수단으로 사용하지 않는다.
 관측 조회가 첫 요청에서 `Access denied` 로 죽는다. 기존 볼륨을 쓰는 사람에게는
 재현이 안 되므로 *"내 로컬은 되는데"* 가 되기 쉬운 자리다.
 
-그때는 한 번만 손으로 준다.
+그때는 **초기화 스크립트를 그대로 한 번 돌린다.** SQL 을 손으로 옮겨 적지 않는다 —
+그 스크립트가 식별자 검증·따옴표와 백슬래시 이스케이프·`ALTER USER`(비밀번호 회전)를
+전부 갖고 있고, 손으로 적은 명령은 그것을 잃는다.
 
 ```bash
-docker compose exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql \
-  mysql -uroot -e "
-    CREATE USER IF NOT EXISTS '$DB_OBS_USERNAME'@'%' IDENTIFIED BY '$DB_OBS_PASSWORD';
-    GRANT SELECT ON \`$MYSQL_DATABASE\`.* TO '$DB_OBS_USERNAME'@'%';"
+set -a; . ./.env; set +a          # DB_OBS_USERNAME · DB_OBS_PASSWORD · MYSQL_* 를 셸에 올린다
+
+docker compose exec \
+  -e MYSQL_ROOT_PASSWORD -e MYSQL_DATABASE -e DB_OBS_USERNAME -e DB_OBS_PASSWORD \
+  mysql sh /docker-entrypoint-initdb.d/20-obs-account.sh
 ```
 
-비밀번호를 `-p` 로 주지 않는다 — 컨테이너 안 `ps` 에 그대로 보인다.
-계정 이름·비밀번호에 `'` 가 들어가면 위 문장이 깨지므로 그때는 값을 먼저 확인한다
-(초기화 스크립트는 이스케이프한다).
+`compose.yml` 이 그 스크립트를 이미 `/docker-entrypoint-initdb.d/` 에 마운트하고 있어
+컨테이너 안에 그대로 있다. 몇 번을 돌려도 같은 결과다 —
+`CREATE USER IF NOT EXISTS` 뒤에 `ALTER USER` 가 붙어 있어 비밀번호도 매번 맞춰진다.
 
 **GRANT 는 스키마 단위여야 한다.** 테이블 단위로 열거하면 새 테이블이 생길 때마다 조용히
 빠진다 — 배치 이력 조회가 읽는 `BATCH_JOB_EXECUTION` · `BATCH_JOB_INSTANCE` 는 Spring Batch 가
