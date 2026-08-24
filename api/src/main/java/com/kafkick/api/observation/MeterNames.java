@@ -18,6 +18,17 @@ public final class MeterNames {
     public static final String HTTP_RESULT = "app.http.result";
     public static final String IN_FLIGHT = "app.http.inflight";
 
+    // ── OBS-25 가 직접 만드는 캠페인 발급 미터 ─────────────────────────────
+    public static final String ISSUANCE_FLOW = "app.issuance.flow";
+    public static final String QUEUE_ADMITTED = "app.queue.admitted";
+    public static final String ISSUANCE_OUTCOME = "app.issuance.outcome";
+    public static final String ISSUANCE_EVENT_LAST_SUCCESS_EPOCH =
+            "app.issuance.event.last.success.epoch";
+    public static final String QUEUE_EVENT_LAST_ADMITTED_EPOCH =
+            "app.queue.event.last.admitted.epoch";
+    public static final String CAMPAIGN_LIMIT_EXCEEDED =
+            "app.observation.campaign.limit.exceeded";
+
     // ── 자동 계측. 아래 이름은 우리가 정한 게 아니라 Micrometer 바인더가 정한 것이다 ──
     /** Spring Boot 자동 계측 Timer. observation.yml 이 이 이름으로 백분위 · expiry 를 건다. */
     public static final String HTTP_SERVER_REQUESTS = "http.server.requests";

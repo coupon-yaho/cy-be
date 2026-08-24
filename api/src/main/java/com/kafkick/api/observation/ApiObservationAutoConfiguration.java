@@ -5,6 +5,8 @@ import java.time.Clock;
 import javax.sql.DataSource;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.issuance.CompositeEventRecorder;
+import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
@@ -26,6 +28,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration;
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 
 @AutoConfiguration(
         after = { MetricsAutoConfiguration.class, CompositeMeterRegistryAutoConfiguration.class },
@@ -47,10 +50,69 @@ public class ApiObservationAutoConfiguration {
         return new IssuanceFlowEventFactory(eventIdGenerator);
     }
 
+    /**
+     * MeterRegistry 가 있는 프로세스에 JVM 내 캠페인 미터 기록기를 등록합니다.
+     *
+     * <p>조건은 {@link MeterRegistry} 하나뿐입니다. 다른 {@link EventRecorder} 가 있다고 해서
+     * 물러서지 않습니다 — 이 기록기는 대체재가 아니라 병렬 sink 이고, 아래 fan-out 이 모두를
+     * 함께 호출합니다. 예전처럼 "다른 EventRecorder 가 있으면 등록하지 않는다" 로 두면 사용자가
+     * 자기 기록기를 하나 얹는 순간 캠페인 미터가 통째로, <b>로그 한 줄 없이</b> 사라집니다.
+     *
+     * @param meterRegistry 캠페인 미터를 등록할 레지스트리
+     * @param issuanceProperties 기록 실패 로그의 유량 제한 간격
+     * @return 캠페인별 발급 미터 기록기
+     */
+    @Bean(name = "meterEventRecorder")
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(MeterEventRecorder.class)
+    public MeterEventRecorder meterEventRecorder(
+            MeterRegistry meterRegistry,
+            ObservationIssuanceProperties issuanceProperties
+    ) {
+        return new MeterEventRecorder(
+                meterRegistry,
+                issuanceProperties.resolvedAttemptFailureLogInterval()
+        );
+    }
+
+    /**
+     * 등록된 모든 {@link EventRecorder} 를 하나로 묶어 발급 경로가 잡을 단일 진입점을 만듭니다.
+     *
+     * <p><b>목록을 손으로 적지 않는 이유.</b> 예전에는 {@code attemptEventPublisher} 와
+     * {@code meterEventRecorder} 두 이름만 delegate 로 넣었다. 그러면 제3의 기록기는 컨텍스트에
+     * 있는데도 {@code @Primary} 인 이 빈에 가려 한 번도 호출되지 않는다. 이름·타입 문자열이
+     * 어긋나도 마찬가지로 조용히 빠진다 — 관측이 빠지는 실패는 예외가 아니라 빈 그래프로만
+     * 드러나므로, 배선은 열거가 아니라 수집이어야 한다.
+     *
+     * <p><b>빈 이름을 {@code eventRecorder} 로 두지 않는다.</b> 그 이름은 사용자가 자기 기록기에
+     * 붙일 법한 첫 번째 후보이고, 겹치는 순간 정의 덮어쓰기 금지에 걸려 컨텍스트가 통째로 죽거나
+     * (덮어쓰기를 허용한 프로세스라면) 이 합성 빈이 조용히 사라진다.
+     *
+     * <p>자기 자신은 스프링의 self-reference 배제로 목록에서 빠진다. 그 밖에는 타입을 보지
+     * 않는다 — 합성 기록기라는 이유로 걸러 내면, 컨텍스트에 있는 유일한 기록기가 합성 기록기일 때
+     * delegate 가 0개가 되어 기동이 죽는다. 남의 합성 기록기는 그냥 sink 하나로 취급하면 되고,
+     * 그 안의 leaf 는 여전히 이벤트를 한 번만 받는다.
+     *
+     * @param recorders 컨텍스트에 등록된 모든 기록기
+     * @param issuanceProperties 전달 실패 로그의 유량 제한 간격
+     * @return 모든 sink 로 이벤트를 병렬 전달하는 기록기
+     */
+    @Bean
+    @Primary
+    @ConditionalOnBean(EventRecorder.class)
+    public CompositeEventRecorder issuanceEventRecorder(
+            ObjectProvider<EventRecorder> recorders,
+            ObservationIssuanceProperties issuanceProperties
+    ) {
+        EventRecorder[] delegates = recorders.orderedStream().toArray(EventRecorder[]::new);
+        return new CompositeEventRecorder(
+                issuanceProperties.resolvedAttemptFailureLogInterval(), delegates);
+    }
+
     @Bean
     @ConditionalOnMissingBean(EventRecorder.class)
-    public EventRecorder eventRecorder() {
-        log.warn("EventRecorder 실구현이 없어 no-op을 사용합니다.");
+    public EventRecorder fallbackEventRecorder() {
+        log.warn("MeterRegistry와 Kafka EventRecorder가 없어 no-op을 사용합니다.");
         return new NoOpEventRecorder();
     }
 

@@ -11,7 +11,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 
+import com.kafkick.core.member.Grade;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.EventRecorder;
+import com.kafkick.core.observation.IssuanceFlowEvent;
+import com.kafkick.core.observation.IssuanceFlowEventFactory;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeAll;
@@ -76,6 +85,32 @@ class PrometheusExposureContractTest {
                 HttpResponse.BodyHandlers.ofString());
     }
 
+    private static void assertMetricSample(
+            String scrape,
+            String metricName,
+            double expectedValue,
+            String... expectedTags
+    ) {
+        List<String> samples = scrape.lines()
+                .filter(line -> line.startsWith(metricName + "{") || line.startsWith(metricName + " "))
+                .filter(line -> containsTags(line, expectedTags))
+                .toList();
+
+        assertThat(samples).as(metricName).hasSize(1);
+        String sample = samples.getFirst();
+        assertThat(Double.parseDouble(sample.substring(sample.lastIndexOf(' ') + 1)))
+                .isEqualTo(expectedValue);
+    }
+
+    private static boolean containsTags(String sample, String... expectedTags) {
+        for (int index = 0; index < expectedTags.length; index += 2) {
+            if (!sample.contains(expectedTags[index] + "=\"" + expectedTags[index + 1] + "\"")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** 커밋된 OBS-20 allowlist와 OBS-3 백분위 설정을 함께 로드한다. */
     @SpringBootTest(
             classes = TestApp.class,
@@ -90,6 +125,12 @@ class PrometheusExposureContractTest {
 
         @LocalServerPort
         int appPort;
+
+        @Autowired
+        EventRecorder eventRecorder;
+
+        @Autowired
+        IssuanceFlowEventFactory eventFactory;
 
         @Test
         @DisplayName("커밋된 allowlist로 200 이고 quantile 라벨로 나온다 — _bucket 은 없다")
@@ -108,6 +149,38 @@ class PrometheusExposureContractTest {
                         .as("publishPercentiles 는 버킷을 만들지 않는다 — histogram_quantile 로"
                                 + " 병합할 수 없고, 그래서 인스턴스 최댓값을 쓴다")
                         .doesNotContain("http_server_requests_seconds_bucket");
+            });
+        }
+
+        @Test
+        @DisplayName("캠페인 발급 미터 6종이 이름 · 라벨 · 값 그대로 scrape 에 실린다")
+        void scrapeServesCampaignIssuanceMeters() {
+            IssuanceFlowEvent.Ctx context = new IssuanceFlowEvent.Ctx(
+                    "obs25-exposure", 101L, 202L, Grade.GOLD, false,
+                    Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
+                    QueueMode.ADAPTIVE, 901L, "api-1"
+            );
+            eventRecorder.record(eventFactory.issueAttempt(context));
+            eventRecorder.record(eventFactory.admitted(context, 7L));
+            eventRecorder.record(eventFactory.issued(context, 1L, "coupon-code-0001"));
+
+            Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+                HttpResponse<String> scrape = call(managementPort, "/actuator/prometheus");
+
+                assertThat(scrape.statusCode()).isEqualTo(200);
+                assertMetricSample(scrape.body(), "app_issuance_flow_total", 1.0,
+                        "coupon_id", "202", "stage", "attempt");
+                assertMetricSample(scrape.body(), "app_issuance_flow_total", 1.0,
+                        "coupon_id", "202", "stage", "success");
+                assertMetricSample(scrape.body(), "app_queue_admitted_total", 1.0,
+                        "coupon_id", "202");
+                assertMetricSample(scrape.body(), "app_issuance_outcome_total", 1.0,
+                        "outcome", "ISSUED");
+                assertMetricSample(scrape.body(), "app_issuance_event_last_success_epoch", 1_787_443_200d,
+                        "coupon_id", "202");
+                assertMetricSample(scrape.body(), "app_queue_event_last_admitted_epoch", 1_787_443_200d,
+                        "coupon_id", "202");
+                assertMetricSample(scrape.body(), "app_observation_campaign_limit_exceeded_total", 0.0);
             });
         }
 
