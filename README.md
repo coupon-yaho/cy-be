@@ -86,13 +86,23 @@ coupon-yaho
 ### 설정 파일
 
 `application.yml`, `storage.yml`, `redis.yml`, `kafka.yml` 등 실행용 설정은 커밋하지 않는다.
-클론 후 일부 파일만 고르지 말고 아래 명령으로 모든 `.yml.example`을 복사해야 앱이 뜬다.
-**설정 파일이 늘어나는 브랜치를 받은 뒤에도 다시 돌린다** — `spring.config.import`는 optional이
-아니라서 파일 하나가 없으면 기동이 중단된다(`redis.yml`·`kafka.yml`이 그렇다).
+`spring.config.import`는 optional이 아니라서 파일 하나가 없으면 기동이 중단된다
+(`redis.yml`·`kafka.yml`이 그렇다).
+
+**Gradle 빌드·테스트는 이 복사를 알아서 한다.** 루트 `build.gradle`의 `processResources`가
+빌드 산출물에서 빠진 이름을 `.example`로 채운다 — 신규 클론에서 `./gradlew build`가 아무 수동
+단계 없이 통과한다. 소스 트리에는 쓰지 않으므로, 각자 만든 실제 파일이 있으면 그쪽이 이긴다.
+
+앱을 Gradle 밖에서 띄우거나(IDE가 Gradle에 위임하지 않는 설정) 파일을 직접 고쳐 쓰려면
+아래로 복사한다. **설정 파일이 늘어나는 브랜치를 받은 뒤에도 다시 돌린다.**
 
 ```bash
 find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
 ```
+
+⚠️ 이 복사를 빼먹어도 앱은 **죽지 않고 설정 없이 뜬다.** `application.yml`이 없으면 그 안의
+`spring.config.import`가 통째로 안 돌아서, 나머지 파일이 없다는 사실조차 드러나지 않는다.
+그 상태의 증상은 조건부 빈이 사라지는 것뿐이라 원인을 찾기 어렵다 — 위 자동 복사를 둔 이유다.
 
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
