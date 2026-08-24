@@ -9,7 +9,6 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
@@ -18,7 +17,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * <p>여기서 요청을 막지 않는다. 이 값은 인증 결과가 아니라 사용자 구분 수단이라
  * <b>거부 판정은 각 유즈케이스가</b> 한다 — 발급 경로는 등급을 회차 조건과 대조하는 식이다.
  */
-@Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class CallerFilter extends OncePerRequestFilter {
 

@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistoryItem;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.support.exception.BusinessException;
 
 class IssuanceHistoryCalculatorTest {

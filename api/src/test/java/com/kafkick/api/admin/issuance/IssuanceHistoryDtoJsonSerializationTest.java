@@ -24,8 +24,8 @@ import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryP
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistoryItem;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /** 발급 이력 요청의 Core 변환과 응답 JSON 경계를 검증합니다. */
 @AdminJsonTest

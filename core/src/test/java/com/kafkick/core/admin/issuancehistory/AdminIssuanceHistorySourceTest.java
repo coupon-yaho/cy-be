@@ -10,8 +10,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 class AdminIssuanceHistorySourceTest {
 

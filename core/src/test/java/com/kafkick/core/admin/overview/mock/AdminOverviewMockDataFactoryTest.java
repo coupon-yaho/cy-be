@@ -18,7 +18,7 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.Verdict;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
@@ -88,12 +88,12 @@ class AdminOverviewMockDataFactoryTest {
         assertThat(dataset.campaigns())
                 .extracting(CampaignOverviewSource::status)
                 .containsExactly(
-                        CouponStatus.OPEN,
-                        CouponStatus.OPEN,
-                        CouponStatus.OPEN,
-                        CouponStatus.SCHEDULED,
-                        CouponStatus.SCHEDULED,
-                        CouponStatus.CLOSED);
+                        CouponRoundStatus.OPEN,
+                        CouponRoundStatus.OPEN,
+                        CouponRoundStatus.OPEN,
+                        CouponRoundStatus.SCHEDULED,
+                        CouponRoundStatus.SCHEDULED,
+                        CouponRoundStatus.CLOSED);
         assertThat(dataset.campaigns().get(3).opensAt())
                 .isEqualTo(SNAPSHOT_AT.plus(Duration.ofMinutes(20)));
         assertThat(dataset.campaigns().get(4).opensAt())
@@ -231,7 +231,7 @@ class AdminOverviewMockDataFactoryTest {
         AdminOverviewMockDataset dataset = new AdminOverviewMockDataFactory().create(SNAPSHOT_AT);
         List<IssuanceFlowInput> issuanceInputs = new ArrayList<>(dataset.issuanceFlowInputs());
         List<QueueInput> queueInputs = new ArrayList<>(dataset.queueInputs());
-        issuanceInputs.set(0, new IssuanceFlowInput(101L, CouponStatus.OPEN, null, null, null, null, null,
+        issuanceInputs.set(0, new IssuanceFlowInput(101L, CouponRoundStatus.OPEN, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, SourceStatus.UNAVAILABLE, null));
         queueInputs.set(0, new QueueInput(101L, null, null, null, null, null, null, null,
                 SourceStatus.UNAVAILABLE, null));

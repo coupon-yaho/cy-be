@@ -6,9 +6,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-import com.kafkick.core.coupon.CouponStateMachine;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.CouponStateMachine;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /** 저장 기술에 독립적인 관리자 발급 상태 변경 이력 원천값입니다. */
 public record AdminIssuanceHistorySource(List<RawHistory> histories) {

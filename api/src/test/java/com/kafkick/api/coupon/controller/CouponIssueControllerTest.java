@@ -1,0 +1,240 @@
+package com.kafkick.api.coupon.controller;
+
+import java.time.Instant;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.coupon.monitoring.CouponIssueMetrics;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
+
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+// 사용자 발급 API의 헤더 입력과 201 공통 응답 계약을 검증합니다.
+
+@WebMvcTest(CouponIssueController.class)
+class CouponIssueControllerTest {
+
+    private static final String IDEMPOTENCY_KEY =
+            "550e8400-e29b-41d4-a716-446655440000";
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private CouponOperationExecutionService operationExecutionService;
+
+    @MockitoBean
+    private CouponIssueMetrics couponIssueMetrics;
+
+    @MockitoBean
+    private TimeProvider timeProvider;
+
+    @Test
+    @DisplayName("회원과 등급 헤더로 쿠폰을 발급하면 201을 반환한다")
+    void issueCoupon() throws Exception {
+        CouponIssueResult result = issueResult();
+        when(operationExecutionService.issue(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).thenReturn(result);
+
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "GOLD"
+                        )
+                        .header(
+                                CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                IDEMPOTENCY_KEY
+                        ))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.issuanceId").value(100))
+                .andExpect(jsonPath("$.data.couponRoundId").value(10))
+                .andExpect(jsonPath("$.data.code")
+                        .value("ABCDEFGHJKLM2345"))
+                .andExpect(jsonPath("$.data.status").value("ISSUED"))
+                .andExpect(jsonPath("$.error").doesNotExist());
+
+        verify(operationExecutionService).issue(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+        verify(couponIssueMetrics).recordStarted(10L, 20L);
+        verify(couponIssueMetrics).recordSuccess(
+                org.mockito.ArgumentMatchers.eq(10L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.longThat(duration -> duration >= 0)
+        );
+    }
+
+    @Test
+    @DisplayName("동일한 멱등키로 재시도하면 같은 발급 응답을 반환한다")
+    void replayIssueWithSameIdempotencyKey() throws Exception {
+        when(operationExecutionService.issue(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).thenReturn(issueResult());
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            mockMvc.perform(post("/api/v1/coupons/10/issue")
+                            .header(MemberRequestHeaders.MEMBER_ID, "20")
+                            .header(
+                                    MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                    "GOLD"
+                            )
+                            .header(
+                                    CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                    IDEMPOTENCY_KEY
+                            ))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.data.issuanceId").value(100))
+                    .andExpect(jsonPath("$.data.code")
+                            .value("ABCDEFGHJKLM2345"));
+        }
+
+        verify(operationExecutionService, times(2)).issue(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+    }
+
+    @Test
+    @DisplayName("재고가 소진되면 품절 메트릭을 기록하고 409를 반환한다")
+    void recordSoldOutMetric() throws Exception {
+        BusinessException soldOut = new BusinessException(
+                CouponIssueErrorCode.SOLD_OUT
+        );
+        when(operationExecutionService.issue(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).thenThrow(soldOut);
+        when(timeProvider.instant()).thenReturn(
+                Instant.parse("2026-08-24T00:00:00Z")
+        );
+
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "GOLD"
+                        )
+                        .header(
+                                CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                IDEMPOTENCY_KEY
+                        ))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("COUPON-306"));
+
+        verify(couponIssueMetrics).recordBusinessFailure(
+                org.mockito.ArgumentMatchers.eq(10L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.eq(
+                        CouponIssueErrorCode.SOLD_OUT
+                ),
+                org.mockito.ArgumentMatchers.longThat(duration -> duration >= 0)
+        );
+    }
+
+    @Test
+    @DisplayName("회원 헤더가 없으면 400을 반환한다")
+    void rejectMissingMemberHeader() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "GOLD"
+                        )
+                        .header(
+                                CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                IDEMPOTENCY_KEY
+                        ))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(operationExecutionService, never())
+                .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("지원하지 않는 등급 헤더는 400을 반환한다")
+    void rejectInvalidMembershipGrade() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "PLATINUM"
+                        )
+                        .header(
+                                CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                IDEMPOTENCY_KEY
+                        ))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+    }
+
+    @Test
+    @DisplayName("멱등키 헤더가 없으면 400을 반환한다")
+    void rejectMissingIdempotencyKey() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "GOLD"
+                        ))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(operationExecutionService, never())
+                .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    private CouponIssueResult issueResult() {
+        return new CouponIssueResult(
+                100L,
+                10L,
+                "ABCDEFGHJKLM2345",
+                IssuanceStatus.ISSUED,
+                Instant.parse("2026-08-18T05:30:00Z"),
+                Instant.parse("2026-08-25T05:30:00Z")
+        );
+    }
+}

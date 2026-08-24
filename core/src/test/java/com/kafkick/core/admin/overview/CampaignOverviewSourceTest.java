@@ -7,7 +7,7 @@ import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -39,7 +39,7 @@ class CampaignOverviewSourceTest {
     private static CampaignOverviewSource source(
             long couponId, Long totalQuantity, Long activeCount, Instant stockObservedAt, SourceStatus stockStatus
     ) {
-        return new CampaignOverviewSource(couponId, "캠페인", "브랜드", CouponStatus.OPEN,
+        return new CampaignOverviewSource(couponId, "캠페인", "브랜드", CouponRoundStatus.OPEN,
                 NOW, NOW.plusSeconds(60), EngineVersion.V1, totalQuantity, activeCount, stockObservedAt,
                 stockStatus, true);
     }

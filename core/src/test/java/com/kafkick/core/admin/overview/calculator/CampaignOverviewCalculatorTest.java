@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -30,13 +30,13 @@ class CampaignOverviewCalculatorTest {
     void countsCampaignStatuses() {
         CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(
-                        source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                        source(1L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                                 100L, 20L, SNAPSHOT_AT, true),
-                        source(2L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
+                        source(2L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
                                 EngineVersion.V1, 100L, 0L, SNAPSHOT_AT, true),
-                        source(3L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(20),
+                        source(3L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(20),
                                 EngineVersion.V1, null, null, null, false),
-                        source(4L, CouponStatus.CLOSED, SNAPSHOT_AT.minusSeconds(10),
+                        source(4L, CouponRoundStatus.CLOSED, SNAPSHOT_AT.minusSeconds(10),
                                 EngineVersion.V1, 100L, 100L, SNAPSHOT_AT, true)
                 )
         );
@@ -51,16 +51,16 @@ class CampaignOverviewCalculatorTest {
     void calculatesOpeningSoonAtThirtyMinuteBoundary() {
         CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(
-                        source(1L, CouponStatus.SCHEDULED, SNAPSHOT_AT,
+                        source(1L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT,
                                 EngineVersion.V1, null, null, null, false),
-                        source(2L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(1),
+                        source(2L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(1),
                                 EngineVersion.V1, null, null, null, false),
-                        source(3L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plus(Duration.ofMinutes(30)),
+                        source(3L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plus(Duration.ofMinutes(30)),
                                 EngineVersion.V1, null, null, null, true),
-                        source(4L, CouponStatus.SCHEDULED,
+                        source(4L, CouponRoundStatus.SCHEDULED,
                                 SNAPSHOT_AT.plus(Duration.ofMinutes(30)).plusSeconds(1),
                                 EngineVersion.V1, null, null, null, false),
-                        source(5L, CouponStatus.OPEN, SNAPSHOT_AT.plus(Duration.ofMinutes(10)),
+                        source(5L, CouponRoundStatus.OPEN, SNAPSHOT_AT.plus(Duration.ofMinutes(10)),
                                 EngineVersion.V1, 100L, 10L, SNAPSHOT_AT, false)
                 )
         );
@@ -74,7 +74,7 @@ class CampaignOverviewCalculatorTest {
     @DisplayName("O4 Map이 없으면 V1 수량이 있어도 재고를 UNAVAILABLE로 유지한다")
     void keepsStockUnavailableWithoutCalculatedO4Map() {
         CampaignOverviewCalculator.CampaignCalculation result = calculate(
-                List.of(source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                List.of(source(1L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                         1_000L, 700L, SNAPSHOT_AT.minusSeconds(2), true))
         );
 
@@ -89,11 +89,11 @@ class CampaignOverviewCalculatorTest {
     @Test
     @DisplayName("불완전하거나 유효하지 않은 V1 재고는 Source 경계에서 거부한다")
     void rejectsInvalidV1StockAtSourceBoundary() {
-        assertThatThrownBy(() -> source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+        assertThatThrownBy(() -> source(1L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                 100L, null, SNAPSHOT_AT, true)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+        assertThatThrownBy(() -> source(2L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                 100L, -1L, SNAPSHOT_AT, true)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> source(3L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+        assertThatThrownBy(() -> source(3L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                 100L, 101L, SNAPSHOT_AT, true)).isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -103,9 +103,9 @@ class CampaignOverviewCalculatorTest {
     void keepsRedisEngineStockUnavailable() {
         CampaignOverviewCalculator.CampaignCalculation result = calculate(
                 List.of(
-                        source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V2,
+                        source(2L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V2,
                                 100L, 20L, SNAPSHOT_AT, true),
-                        source(3L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V3,
+                        source(3L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V3,
                                 100L, 20L, SNAPSHOT_AT, true)
                 )
         );
@@ -128,9 +128,9 @@ class CampaignOverviewCalculatorTest {
         CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(
                 SNAPSHOT_AT,
                 List.of(
-                        source(1L, CouponStatus.OPEN, SNAPSHOT_AT.minusSeconds(10),
+                        source(1L, CouponRoundStatus.OPEN, SNAPSHOT_AT.minusSeconds(10),
                                 EngineVersion.V1, 100L, 20L, SNAPSHOT_AT, true),
-                        source(2L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
+                        source(2L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
                                 EngineVersion.V1, 100L, 0L, SNAPSHOT_AT, false)),
                 Map.of(), Map.of(), Map.of(), Map.of(2L, warning)
         );
@@ -148,13 +148,13 @@ class CampaignOverviewCalculatorTest {
     @DisplayName("입력 순서가 달라도 위험도·운영상태·오픈 시각·ID 기준 우선순위는 동일하다")
     void assignsPriorityIndependentlyOfInputOrder() {
         CampaignOverviewSource normalLater = source(
-                3L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plus(Duration.ofHours(2)),
+                3L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plus(Duration.ofHours(2)),
                 EngineVersion.V1, 100L, 0L, SNAPSHOT_AT, true);
         CampaignOverviewSource warning = source(
-                2L, CouponStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
+                2L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT.plusSeconds(10),
                 EngineVersion.V1, 100L, 0L, SNAPSHOT_AT, false);
         CampaignOverviewSource normalEarlier = source(
-                1L, CouponStatus.OPEN, SNAPSHOT_AT.minusSeconds(10),
+                1L, CouponRoundStatus.OPEN, SNAPSHOT_AT.minusSeconds(10),
                 EngineVersion.V1, 100L, 20L, SNAPSHOT_AT, true);
         AdminOverviewSnapshot.OperationActionItem representative = new AdminOverviewSnapshot.OperationActionItem(
                 2L, "캠페인 2", warning.opensAt(), com.kafkick.core.observation.Severity.WARN,
@@ -204,9 +204,9 @@ class CampaignOverviewCalculatorTest {
                         350L, 7_000L, 0.05, Duration.ofSeconds(478)), SourceStatus.VALID, SNAPSHOT_AT);
 
         CampaignOverviewCalculator.CampaignCalculation result = calculator.calculate(SNAPSHOT_AT,
-                List.of(source(1L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                List.of(source(1L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                                 100L, 20L, SNAPSHOT_AT, true),
-                        source(2L, CouponStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
+                        source(2L, CouponRoundStatus.OPEN, SNAPSHOT_AT, EngineVersion.V1,
                                 7_000L, 6_650L, SNAPSHOT_AT, true)),
                 Map.of(2L, issuance),
                 Map.of(2L, new AdminOverviewSnapshot.Observation<>(null, SourceStatus.N_A, null)),
@@ -227,7 +227,7 @@ class CampaignOverviewCalculatorTest {
 
     private static CampaignOverviewSource source(
             long couponId,
-            CouponStatus status,
+            CouponRoundStatus status,
             Instant opensAt,
             EngineVersion engineVersion,
             Long totalQuantity,

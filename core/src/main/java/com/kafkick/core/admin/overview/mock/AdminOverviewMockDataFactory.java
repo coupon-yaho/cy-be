@@ -18,7 +18,7 @@ import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.Outc
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceBucket;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.ConsistencyPhase;
@@ -60,7 +60,7 @@ public class AdminOverviewMockDataFactory {
                 101L,
                 "입장 중단 쿠폰",
                 "카프킥",
-                CouponStatus.OPEN,
+                CouponRoundStatus.OPEN,
                 snapshotAt.minus(Duration.ofHours(1)),
                 snapshotAt.plus(Duration.ofHours(2)),
                 EngineVersion.V1,
@@ -74,7 +74,7 @@ public class AdminOverviewMockDataFactory {
                 102L,
                 "소진 임박 쿠폰",
                 "카프킥",
-                CouponStatus.OPEN,
+                CouponRoundStatus.OPEN,
                 snapshotAt.minus(Duration.ofMinutes(30)),
                 snapshotAt.plus(Duration.ofHours(4)),
                 EngineVersion.V1,
@@ -88,7 +88,7 @@ public class AdminOverviewMockDataFactory {
                 103L,
                 "정상 발급 감소 대기 쿠폰",
                 "카프킥",
-                CouponStatus.OPEN,
+                CouponRoundStatus.OPEN,
                 snapshotAt.minus(Duration.ofMinutes(10)),
                 snapshotAt.plus(Duration.ofHours(3)),
                 EngineVersion.V1,
@@ -102,7 +102,7 @@ public class AdminOverviewMockDataFactory {
                 104L,
                 "준비 완료 예약 쿠폰",
                 "카프킥",
-                CouponStatus.SCHEDULED,
+                CouponRoundStatus.SCHEDULED,
                 snapshotAt.plus(Duration.ofMinutes(20)),
                 snapshotAt.plus(Duration.ofHours(3)),
                 EngineVersion.V1,
@@ -113,11 +113,11 @@ public class AdminOverviewMockDataFactory {
                 true
         );
         CampaignOverviewSource incompleteCampaign = new CampaignOverviewSource(
-                105L, "준비 미완료 예약 쿠폰", "카프킥", CouponStatus.SCHEDULED,
+                105L, "준비 미완료 예약 쿠폰", "카프킥", CouponRoundStatus.SCHEDULED,
                 snapshotAt.plus(Duration.ofMinutes(10)), snapshotAt.plus(Duration.ofHours(3)),
                 EngineVersion.V1, null, null, null, N_A, false);
         CampaignOverviewSource closedCampaign = new CampaignOverviewSource(
-                106L, "종료된 시즌 쿠폰", "카프킥", CouponStatus.CLOSED,
+                106L, "종료된 시즌 쿠폰", "카프킥", CouponRoundStatus.CLOSED,
                 snapshotAt.minus(Duration.ofHours(5)), snapshotAt.minus(Duration.ofHours(1)),
                 EngineVersion.V1, null, null, null, N_A, true);
 
@@ -140,14 +140,14 @@ public class AdminOverviewMockDataFactory {
 
         Instant windowStart = snapshotAt.minus(Duration.ofMinutes(1));
         List<IssuanceFlowInput> issuanceFlowInputs = List.of(
-                issuanceInput(101L, CouponStatus.OPEN, true, 20L, 0L, 40L,
+                issuanceInput(101L, CouponRoundStatus.OPEN, true, 20L, 0L, 40L,
                         snapshotAt.minus(Duration.ofMinutes(12)), null, windowStart, snapshotAt),
                 recentTenMinuteIssuanceInput(102L, snapshotAt),
-                issuanceInput(103L, CouponStatus.OPEN, true, 700L, 612L, 1_000L,
+                issuanceInput(103L, CouponRoundStatus.OPEN, true, 700L, 612L, 1_000L,
                         snapshotAt.minus(Duration.ofMinutes(1)), snapshotAt, windowStart, snapshotAt),
-                notApplicableIssuance(104L, CouponStatus.SCHEDULED),
-                notApplicableIssuance(105L, CouponStatus.SCHEDULED),
-                notApplicableIssuance(106L, CouponStatus.CLOSED));
+                notApplicableIssuance(104L, CouponRoundStatus.SCHEDULED),
+                notApplicableIssuance(105L, CouponRoundStatus.SCHEDULED),
+                notApplicableIssuance(106L, CouponRoundStatus.CLOSED));
         List<QueueInput> queueInputs = List.of(
                 queueInput(101L, 3_204L, 3_000L, 0L,
                         snapshotAt.minus(Duration.ofMinutes(12)), windowStart, snapshotAt),
@@ -239,7 +239,7 @@ public class AdminOverviewMockDataFactory {
     }
 
     /** 실제 1분 관측 구간에서 O1 상태와 그래프 점을 만드는 화면 시나리오 보조 메서드입니다. */
-    private static IssuanceFlowInput issuanceInput(long couponId, CouponStatus status, boolean stockAvailable,
+    private static IssuanceFlowInput issuanceInput(long couponId, CouponRoundStatus status, boolean stockAvailable,
             double attemptedCount, double completedCount, double comparisonCompletedCount, Instant conditionStartedAt,
             Instant lastCompletedAt, Instant windowStart, Instant snapshotAt) {
         Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
@@ -266,14 +266,14 @@ public class AdminOverviewMockDataFactory {
                 new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(7)), trendWindowStart.plus(Duration.ofMinutes(8)), 47L),
                 new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(8)), trendWindowStart.plus(Duration.ofMinutes(9)), 48L),
                 new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(9)), snapshotAt, 49L));
-        return new IssuanceFlowInput(couponId, CouponStatus.OPEN, true, windowStart, snapshotAt,
+        return new IssuanceFlowInput(couponId, CouponRoundStatus.OPEN, true, windowStart, snapshotAt,
                 trendWindowStart, snapshotAt,
                 60d, 49d, 100d, comparisonWindowStart, windowStart, buckets, snapshotAt,
                 snapshotAt.minus(Duration.ofMinutes(3)), VALID, snapshotAt);
     }
 
     /** SCHEDULED·CLOSED 캠페인의 비적용 O1 원천을 N_A로 명시합니다. */
-    private static IssuanceFlowInput notApplicableIssuance(long couponId, CouponStatus status) {
+    private static IssuanceFlowInput notApplicableIssuance(long couponId, CouponRoundStatus status) {
         return new IssuanceFlowInput(couponId, status, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, N_A, null);
     }

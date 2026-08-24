@@ -3,7 +3,7 @@ package com.kafkick.core.admin.issuancehistory;
 import java.time.Instant;
 import java.util.Objects;
 
-import com.kafkick.core.coupon.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 

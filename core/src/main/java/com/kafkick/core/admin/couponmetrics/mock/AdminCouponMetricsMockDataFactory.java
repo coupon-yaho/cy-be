@@ -17,7 +17,7 @@ import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataset;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
@@ -75,7 +75,7 @@ public class AdminCouponMetricsMockDataFactory {
             QueueInput queue,
             Instant snapshotAt
     ) {
-        if (campaign.status() != CouponStatus.OPEN) {
+        if (campaign.status() != CouponRoundStatus.OPEN) {
             return notApplicable(campaign);
         }
         return new CouponMetricsSource(

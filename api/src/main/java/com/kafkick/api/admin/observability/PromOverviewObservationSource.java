@@ -31,7 +31,7 @@ import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /** Prometheus의 B 지표 계약을 Core의 기술 중립 Overview 관측 입력으로 변환합니다. */
@@ -143,7 +143,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             OverviewObservationRequest request, Instant evaluationAt, QueryBudget budget
     ) {
         List<CampaignObservationTarget> openTargets = request.campaignTargets().stream()
-                .filter(target -> target.campaignStatus() == CouponStatus.OPEN)
+                .filter(target -> target.campaignStatus() == CouponRoundStatus.OPEN)
                 .toList();
         if (openTargets.isEmpty()) {
             return request.campaignTargets().stream()
@@ -176,7 +176,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
 
         List<IssuanceFlowInput> result = new ArrayList<>();
         for (CampaignObservationTarget target : request.campaignTargets()) {
-            result.add(target.campaignStatus() == CouponStatus.OPEN
+            result.add(target.campaignStatus() == CouponRoundStatus.OPEN
                     ? openInputs.get(target.couponId())
                     : missingFlow(target, SourceStatus.N_A));
         }
@@ -699,7 +699,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             CampaignObservationTarget target,
             SourceStatus flowStatus
     ) {
-        if (target.campaignStatus() != CouponStatus.OPEN || target.stockStatus().carriesValue()) {
+        if (target.campaignStatus() != CouponRoundStatus.OPEN || target.stockStatus().carriesValue()) {
             return flowStatus;
         }
         if (flowStatus == SourceStatus.UNAVAILABLE || target.stockStatus() == SourceStatus.UNAVAILABLE) {

@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.InquiryPosition;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.SourceKind;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryResult.InquiryItem;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 class AdminIssuanceInquiryResultTest {
 

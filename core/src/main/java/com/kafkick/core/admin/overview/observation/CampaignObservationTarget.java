@@ -3,7 +3,7 @@ package com.kafkick.core.admin.overview.observation;
 import java.time.Instant;
 import java.util.Objects;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
@@ -20,7 +20,7 @@ import com.kafkick.core.observation.SourceStatus;
  */
 public record CampaignObservationTarget(
         Long couponId,
-        CouponStatus campaignStatus,
+        CouponRoundStatus campaignStatus,
         Boolean stockAvailable,
         SourceStatus stockStatus,
         Instant stockObservedAt
@@ -34,7 +34,7 @@ public record CampaignObservationTarget(
         if (couponId <= 0L) {
             throw new IllegalArgumentException("couponId는 양수여야 합니다.");
         }
-        if (campaignStatus == CouponStatus.OPEN) {
+        if (campaignStatus == CouponRoundStatus.OPEN) {
             if (stockStatus == SourceStatus.N_A) {
                 throw new IllegalArgumentException("진행 중인 캠페인의 stockStatus는 N_A일 수 없습니다.");
             }
@@ -53,7 +53,7 @@ public record CampaignObservationTarget(
     /** 값 없는 OPEN과 비진행 N_A 호출자가 관측 시각 없이 같은 의미를 생성하도록 호환합니다. */
     public CampaignObservationTarget(
             Long couponId,
-            CouponStatus campaignStatus,
+            CouponRoundStatus campaignStatus,
             Boolean stockAvailable,
             SourceStatus stockStatus
     ) {

@@ -22,9 +22,9 @@ import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.InquiryPosition;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.SourceKind;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryResult;
-import com.kafkick.core.coupon.CouponStatus;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot;
 import com.kafkick.core.observation.ReasonCode;
@@ -60,7 +60,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
                         new ObservedValue<>(null, SourceStatus.PENDING, null),
                         new ObservedValue<>(null, SourceStatus.PENDING, null)
                 ),
-                new CouponMetricsResponse.CampaignRuntimeSummary(CouponStatus.OPEN, OBSERVED_AT),
+                new CouponMetricsResponse.CampaignRuntimeSummary(CouponRoundStatus.OPEN, OBSERVED_AT),
                 new ObservedValue<>(0.2, SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(new CouponMetricsResponse.IssuanceStatusCounts(10, 5, 1, 2),
                         SourceStatus.VALID, OBSERVED_AT),
@@ -89,7 +89,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
                 snapshotObserved(0.6),
                 snapshotObserved(new CouponMetricsSnapshot.RateSummary(12.5, 20.0)),
                 new CouponMetricsSnapshot.QueueSummary(count, snapshotObserved(Duration.ofMillis(1_250L))),
-                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponStatus.OPEN, CAMPAIGN_OPENS_AT),
+                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponRoundStatus.OPEN, CAMPAIGN_OPENS_AT),
                 snapshotObserved(0.2),
                 snapshotObserved(new CouponMetricsSnapshot.IssuanceStatusCounts(8L, 2L, 1L, 1L)),
                 snapshotObserved(new CouponMetricsSnapshot.TransitionRateSummary(2.5, 1.5, 0.5, 0.25)));

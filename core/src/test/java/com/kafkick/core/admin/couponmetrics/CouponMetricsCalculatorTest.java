@@ -11,7 +11,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 class CouponMetricsCalculatorTest {
@@ -294,7 +294,7 @@ class CouponMetricsCalculatorTest {
         return new CouponMetricsSource(
                 101L,
                 new CouponMetricsSource.CampaignRuntime(
-                        CouponStatus.OPEN, SNAPSHOT_AT.minus(Duration.ofHours(1))),
+                        CouponRoundStatus.OPEN, SNAPSHOT_AT.minus(Duration.ofHours(1))),
                 stock,
                 samples,
                 queue,

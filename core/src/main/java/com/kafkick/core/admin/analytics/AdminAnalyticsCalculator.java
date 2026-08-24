@@ -25,7 +25,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsResult.HourlyHeatmapCell;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.IssuanceStatusDistribution;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.Observation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.StatusCount;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.exception.BusinessException;
 

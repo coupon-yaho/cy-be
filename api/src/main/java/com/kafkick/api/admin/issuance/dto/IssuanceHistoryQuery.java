@@ -13,7 +13,7 @@ import jakarta.validation.constraints.Positive;
 import com.kafkick.api.admin.issuance.IssuanceHistoryCursorCodec;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
-import com.kafkick.core.coupon.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 

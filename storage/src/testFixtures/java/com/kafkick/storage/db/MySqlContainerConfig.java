@@ -15,11 +15,11 @@ import org.testcontainers.utility.DockerImageName;
  * "관측은 SELECT 전용 계정" 이 조용히 무효가 되기 때문이다. 그래서 여기서 명시적으로 꽂아 준다.
  * 관측 접속 정보는 @NotBlank 라, 이 등록을 빠뜨리면 컨테이너를 쓰는 테스트가 기동에서 죽는다.
  */
-@TestConfiguration(proxyBeanMethods = false)
+@TestConfiguration
 public class MySqlContainerConfig {
 
-    /** latest 는 도커 허브가 가리키는 대상이 바뀌면 커밋이 그대로여도 테스트 결과가 달라진다. */
-    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:latest");
+    /** CHECK 제약을 실제로 적용하는 MySQL 8.0.16 이상의 고정 버전으로 검증합니다. */
+    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4.6");
 
     @Bean
     @ServiceConnection
