@@ -107,8 +107,7 @@ public interface BenchmarkRunRepository {
     boolean updateServerSummary(long id, ServerLoadSummary summary);
 
     /**
-     * archive 결과를 남긴다. 회차 상태를 보지 않는다 — archive 는 회차 수명주기와 독립이고,
-     * 실패해도 회차는 완료다.
+     * claim 전에 발생한 archive 실패만 남긴다. DONE은 표본 적재와 같은 fencing 트랜잭션에서 기록한다.
      *
      * @param id 회차 식별자
      * @param status archive 결과
@@ -117,6 +116,9 @@ public interface BenchmarkRunRepository {
      */
     boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason);
 
-    /** FAILED를 NONE으로 원자 전이해 archive 재시도 소유권을 얻는다. */
-    boolean claimFailedArchive(long id);
+    /** NONE·FAILED 또는 lease가 만료된 IN_PROGRESS를 원자 claim하고 UUID v4 fencing token을 돌려준다. */
+    java.util.Optional<String> claimArchive(long id, java.time.Duration lease);
+
+    /** 현재 fencing token의 archive만 FAILED로 끝낸다. */
+    boolean failArchive(long id, String claimToken, String failureReason);
 }

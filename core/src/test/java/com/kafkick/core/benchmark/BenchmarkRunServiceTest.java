@@ -281,16 +281,26 @@ class BenchmarkRunServiceTest {
         }
 
         @Test
-        @DisplayName("실패한 archive 를 다시 돌려 성공으로 덮을 수 있다")
-        void archiveIsRetryable() {
+        void secondInitialFailureIsAnIllegalTransition() {
             BenchmarkRun finalized = finalizedRun("V3-MAIN-01");
-            service.recordArchiveResult(finalized.id(), BenchmarkArchiveStatus.FAILED, "timeout");
+            service.recordArchiveResult(
+                finalized.id(), BenchmarkArchiveStatus.FAILED, "first failure");
 
-            BenchmarkRun retried = service.recordArchiveResult(
-                    finalized.id(), BenchmarkArchiveStatus.DONE, null);
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                finalized.id(), BenchmarkArchiveStatus.FAILED, "second failure"))
+                .satisfies(it -> assertThat(codeOf(it))
+                    .isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
+        }
 
-            assertThat(retried.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.DONE);
-            assertThat(retried.archiveFailureReason()).isNull();
+        @Test
+        @DisplayName("DONE 은 표본 적재 트랜잭션 밖에서 기록할 수 없다")
+        void doneCannotBypassTheArchiveStoreTransaction() {
+            BenchmarkRun finalized = finalizedRun("V3-MAIN-01");
+
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                    finalized.id(), BenchmarkArchiveStatus.DONE, null))
+                .satisfies(it -> assertThat(codeOf(it))
+                    .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
         }
 
         @Test
@@ -340,6 +350,28 @@ class BenchmarkRunServiceTest {
                     finalized.id(), BenchmarkArchiveStatus.DONE, "timeout"))
                     .satisfies(it -> assertThat(codeOf(it))
                             .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
+        }
+
+        @Test
+        void doneCannotBypassFencingEvenWhileArchiveIsActive() {
+            BenchmarkRun finalized = finalizedRun("V3-MAIN-01");
+            assertThat(repository.claimArchive(
+                finalized.id(), Duration.ofMinutes(5))).isPresent();
+
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                finalized.id(), BenchmarkArchiveStatus.DONE, null))
+                .satisfies(it -> assertThat(codeOf(it))
+                    .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
+        }
+
+        @Test
+        void inProgressCanOnlyBeEnteredThroughClaimArchive() {
+            BenchmarkRun finalized = finalizedRun("V3-MAIN-01");
+
+            assertThatThrownBy(() -> service.recordArchiveResult(
+                finalized.id(), BenchmarkArchiveStatus.IN_PROGRESS, null))
+                .satisfies(it -> assertThat(codeOf(it))
+                    .isEqualTo(BenchmarkErrorCode.INVALID_RUN_CONDITION));
         }
     }
 

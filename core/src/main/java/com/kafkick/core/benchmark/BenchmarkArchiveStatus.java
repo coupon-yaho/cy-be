@@ -12,6 +12,9 @@ public enum BenchmarkArchiveStatus {
     /** 아직 돌지 않았다. 회차가 확정되기 전에는 정상 상태다. */
     NONE,
 
+    /** retry 소유권을 얻어 실행 중이다. lease가 만료되면 다른 프로세스가 회수할 수 있다. */
+    IN_PROGRESS,
+
     DONE,
 
     /** 실패 이유를 반드시 함께 남긴다 — 재실행 판단의 유일한 근거다. */

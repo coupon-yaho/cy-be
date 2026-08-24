@@ -66,7 +66,7 @@ import com.kafkick.core.support.exception.BusinessException;
  * 트랜잭션으로 묶어도 그 창은 남는다 — 원자성은 문장 하나에서 나온다.
  */
 @Repository
-@ConditionalOnProperty("observation.datasource.enabled")
+@ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
     private static final String INSERT = """
@@ -301,24 +301,51 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
                 timestamp(summary.measuredAt()), id);
     }
 
-    /**
-     * 회차 상태를 WHERE 절에 넣지 않는다. archive 는 회차 수명주기와 독립이라 확정된 회차에도
-     * 다시 돌 수 있어야 한다 — 그게 Prometheus 에 원본을 남겨 두는 이유다.
-     */
+    /** claim 전에 난 최초 실패만 NONE에서 기록한다. DONE은 표본 적재 트랜잭션이 직접 기록한다. */
     @Override
     public boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason) {
+        if (status != BenchmarkArchiveStatus.FAILED) {
+            throw new IllegalArgumentException("DONE/IN_PROGRESS는 fencing된 ArchiveStore로만 기록한다");
+        }
         return update("""
-                UPDATE benchmark_runs SET archive_status = ?, archive_failure_reason = ? WHERE id = ?
+                UPDATE benchmark_runs
+                SET archive_status = ?, archive_failure_reason = ?,
+                    archive_claimed_at = NULL, archive_claim_token = NULL
+                WHERE id = ? AND archive_status = 'NONE'
                 """, status.name(), failureReason, id);
     }
 
     @Override
-    public boolean claimFailedArchive(long id) {
+    public java.util.Optional<String> claimArchive(long id, java.time.Duration lease) {
+        if (lease.compareTo(java.time.Duration.ofDays(365)) > 0) {
+            throw new IllegalArgumentException("archive claim lease가 지원 상한을 넘었다");
+        }
+        long leaseSeconds = lease.getSeconds();
+        if (leaseSeconds <= 0) {
+            throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
+        }
+        String token = java.util.UUID.randomUUID().toString();
+        boolean claimed = update("""
+                UPDATE benchmark_runs
+                SET archive_status = 'IN_PROGRESS', archive_failure_reason = NULL,
+                    archive_claimed_at = CURRENT_TIMESTAMP(6), archive_claim_token = ?
+                WHERE id = ? AND (
+                    archive_status IN ('NONE', 'FAILED')
+                    OR (archive_status = 'IN_PROGRESS'
+                        AND archive_claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6)))
+                )
+                """, token, id, -leaseSeconds);
+        return claimed ? java.util.Optional.of(token) : java.util.Optional.empty();
+    }
+
+    @Override
+    public boolean failArchive(long id, String claimToken, String failureReason) {
         return update("""
                 UPDATE benchmark_runs
-                SET archive_status = 'NONE', archive_failure_reason = NULL
-                WHERE id = ? AND archive_status = 'FAILED'
-                """, id);
+                SET archive_status = 'FAILED', archive_failure_reason = ?,
+                    archive_claimed_at = NULL, archive_claim_token = NULL
+                WHERE id = ? AND archive_status = 'IN_PROGRESS' AND archive_claim_token = ?
+                """, failureReason, id, claimToken);
     }
 
     /**

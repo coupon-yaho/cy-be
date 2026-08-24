@@ -4,22 +4,43 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.time.Duration;
 
 import com.kafkick.core.support.exception.BusinessException;
 
 /** 관측이 끝난 회차의 세 발표용 시계열을 Prometheus에서 MySQL로 복제한다. */
 public class RunTimeseriesArchiver {
 
+    private static final org.slf4j.Logger log =
+        org.slf4j.LoggerFactory.getLogger(RunTimeseriesArchiver.class);
+
     static final int WRITE_CHUNK_SIZE = 500;
+    static final Duration MAX_CLAIM_LEASE = Duration.ofDays(365);
 
     private final BenchmarkRunRepository runs;
     private final RangeSource source;
     private final ArchiveStore store;
+    private final Duration claimLease;
+    private final int maxArchiveSamples;
 
-    public RunTimeseriesArchiver(BenchmarkRunRepository runs, RangeSource source, ArchiveStore store) {
+    public RunTimeseriesArchiver(
+        BenchmarkRunRepository runs, RangeSource source, ArchiveStore store, Duration claimLease,
+        int maxArchiveSamples
+    ) {
         this.runs = Objects.requireNonNull(runs);
         this.source = Objects.requireNonNull(source);
         this.store = Objects.requireNonNull(store);
+        this.claimLease = Objects.requireNonNull(claimLease);
+        if (claimLease.compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
+        }
+        if (claimLease.compareTo(MAX_CLAIM_LEASE) > 0) {
+            throw new IllegalArgumentException("archive claim lease가 지원 상한을 넘었다");
+        }
+        if (maxArchiveSamples <= 0) {
+            throw new IllegalArgumentException("archive 표본 상한은 양수여야 한다");
+        }
+        this.maxArchiveSamples = maxArchiveSamples;
     }
 
     /** FAILED 회차를 포함해 완료된 관측 구간을 다시 복제한다. */
@@ -29,6 +50,9 @@ public class RunTimeseriesArchiver {
         if (run.observationStoppedAt() == null) {
             throw illegalTransition(benchmarkRunId, "observation_stopped_at is null");
         }
+        String claimToken = runs.claimArchive(benchmarkRunId, claimLease)
+                .orElseThrow(() -> illegalTransition(
+                    benchmarkRunId, "archive is already claimed or completed"));
 
         try {
             // 외부 HTTP와 검증은 DB 쓰기보다 먼저 끝낸다. Prometheus 지연 중 커넥션을 잡지 않는다.
@@ -41,31 +65,38 @@ public class RunTimeseriesArchiver {
                 }
                 validate(metric, run.startedAt(), run.observationStoppedAt(), metricSamples);
                 samples.addAll(metricSamples);
+                if (samples.size() > maxArchiveSamples) {
+                    throw new IllegalStateException(
+                        "archive 표본 상한을 넘었습니다: max=" + maxArchiveSamples
+                            + " actual=" + samples.size());
+                }
             }
 
-            store.deleteForRun(benchmarkRunId);
-            for (int from = 0; from < samples.size(); from += WRITE_CHUNK_SIZE) {
-                store.insert(benchmarkRunId,
-                        samples.subList(from, Math.min(from + WRITE_CHUNK_SIZE, samples.size())));
-            }
-            runs.updateArchiveStatus(benchmarkRunId, BenchmarkArchiveStatus.DONE, null);
+            store.replaceForRun(benchmarkRunId, claimToken, samples, WRITE_CHUNK_SIZE);
         } catch (RuntimeException failure) {
-            String reason = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
-            runs.updateArchiveStatus(benchmarkRunId, BenchmarkArchiveStatus.FAILED,
-                    reason.substring(0, Math.min(reason.length(), 500)));
+            String message = failure.getMessage();
+            String reason = message == null || message.isBlank()
+                    ? failure.getClass().getSimpleName() : message;
+            try {
+                boolean recorded = runs.failArchive(benchmarkRunId, claimToken,
+                    reason.substring(0, Math.min(reason.length(), 200)));
+                if (!recorded) {
+                    log.warn("archive failure status was not recorded: benchmarkRunId={} tokenPrefix={}",
+                        benchmarkRunId, claimToken.substring(0, Math.min(8, claimToken.length())));
+                }
+            } catch (RuntimeException statusFailure) {
+                failure.addSuppressed(statusFailure);
+            }
             throw failure;
         }
     }
 
-    /** 관리자 재실행 경로. 실패한 archive만 다시 실행한다. */
+    /** 실패했거나 lease가 만료된 archive를 재실행한다. DONE 원본은 불변이다. */
     public void retry(long benchmarkRunId) {
         BenchmarkRun run = runs.findById(benchmarkRunId)
                 .orElseThrow(() -> notFound(benchmarkRunId));
-        if (run.archiveStatus() != BenchmarkArchiveStatus.FAILED) {
+        if (run.archiveStatus() == BenchmarkArchiveStatus.DONE) {
             throw illegalTransition(benchmarkRunId, "archiveStatus=" + run.archiveStatus());
-        }
-        if (!runs.claimFailedArchive(benchmarkRunId)) {
-            throw illegalTransition(benchmarkRunId, "archive retry is already claimed");
         }
         archive(benchmarkRunId);
     }
@@ -110,9 +141,8 @@ public class RunTimeseriesArchiver {
         List<Sample> queryRange(Metric metric, Instant start, Instant end, int stepSeconds);
     }
 
-    /** 구현은 운영 풀에만 쓴다. 각 호출은 짧은 독립 트랜잭션이다. */
+    /** 구현은 기존 원본 삭제와 전체 대체 입력을 한 트랜잭션으로 처리한다. */
     public interface ArchiveStore {
-        void deleteForRun(long benchmarkRunId);
-        void insert(long benchmarkRunId, List<Sample> samples);
+        void replaceForRun(long benchmarkRunId, String claimToken, List<Sample> samples, int chunkSize);
     }
 }

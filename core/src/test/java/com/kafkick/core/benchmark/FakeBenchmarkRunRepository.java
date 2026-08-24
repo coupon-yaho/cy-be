@@ -130,7 +130,8 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     @Override
     public boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason) {
         Row row = rows.get(id);
-        if (row == null) {
+        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.NONE
+                || status != BenchmarkArchiveStatus.FAILED) {
             return false;
         }
         row.archiveStatus = status;
@@ -139,13 +140,34 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     }
 
     @Override
-    public boolean claimFailedArchive(long id) {
+    public java.util.Optional<String> claimArchive(long id, java.time.Duration lease) {
         Row row = rows.get(id);
-        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.FAILED) {
+        Instant now = Instant.now();
+        boolean expired = row != null && row.archiveStatus == BenchmarkArchiveStatus.IN_PROGRESS
+            && row.archiveClaimedAt != null && row.archiveClaimedAt.isBefore(now.minus(lease));
+        if (row == null || (row.archiveStatus != BenchmarkArchiveStatus.NONE
+                && row.archiveStatus != BenchmarkArchiveStatus.FAILED && !expired)) {
+            return java.util.Optional.empty();
+        }
+        String token = java.util.UUID.randomUUID().toString();
+        row.archiveStatus = BenchmarkArchiveStatus.IN_PROGRESS;
+        row.archiveFailureReason = null;
+        row.archiveClaimedAt = now;
+        row.archiveClaimToken = token;
+        return java.util.Optional.of(token);
+    }
+
+    @Override
+    public boolean failArchive(long id, String claimToken, String failureReason) {
+        Row row = rows.get(id);
+        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.IN_PROGRESS
+                || !java.util.Objects.equals(row.archiveClaimToken, claimToken)) {
             return false;
         }
-        row.archiveStatus = BenchmarkArchiveStatus.NONE;
-        row.archiveFailureReason = null;
+        row.archiveStatus = BenchmarkArchiveStatus.FAILED;
+        row.archiveFailureReason = failureReason;
+        row.archiveClaimedAt = null;
+        row.archiveClaimToken = null;
         return true;
     }
 
@@ -159,6 +181,8 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
         private BenchmarkRunStatus status = BenchmarkRunStatus.RUNNING;
         private BenchmarkArchiveStatus archiveStatus = BenchmarkArchiveStatus.NONE;
         private String archiveFailureReason;
+        private Instant archiveClaimedAt;
+        private String archiveClaimToken;
         private Instant loadStoppedAt;
         private Instant observationStoppedAt;
         private Instant finalizedAt;
