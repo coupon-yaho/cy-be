@@ -84,9 +84,21 @@ public class VerifyTriggerController {
     private final CronExpression expireCron;
 
     /**
-     * <b>검증 한 번이 끝나기까지 걸릴 최악의 시간.</b> 그 안에 만료가 뜨면 겹친다.
+     * <b>검증이 정상 상태에서 넘지 않아야 할 시간.</b> 그 안에 만료가 뜨면 겹친다고 본다.
      * {@code VerifyRunningTooLong} 임계와 같은 값을 쓴다 — 그 값이 이미 <i>"정상 상태에서
      * 이보다 오래 걸리면 사람이 본다"</i> 는 선언이라, 두 자리가 한 축 위에 선다.
+     *
+     * <p>⚠️ <b>보장이 아니라 어림이다.</b> 이 저장소에는 <b>실행 전체를 끊는 수단이 없다</b> —
+     * {@code batch.verify.step-timeout-ms} 는 청크 하나의 데드라인이라 잡 전체는
+     * {@code 청크 수 × 그 값}만큼 돌 수 있다({@code .example} 의 {@code expire.step-timeout-ms}
+     * 주석이 같은 사실을 적는다). 그래서 실측 472초의 2.5배를 넘겨 도는 실행은 이 가드를
+     * 통과한 뒤에도 만료와 겹칠 수 있고, 그때는 {@code max-expire-skips=0} 이라 만료가
+     * 지나간다.
+     *
+     * <p><b>그래도 안 하는 것보다 낫다.</b> 이 가드가 없으면 <b>시연 시간대에 누른 검증이
+     * 반드시 버려지는데</b>(만료 04:10 UTC = 13:10 KST), 있으면 그 경우가 접수 단계에서
+     * 걸러진다. 남은 창 — 정상 상한을 넘겨 도는 실행 — 은 잡 전체 데드라인이 생기는 날
+     * 닫힌다. {@code docs/13} 에 그 자리를 남겨 뒀다.
      */
     private final Duration verifyWorstCase;
 
@@ -99,12 +111,21 @@ public class VerifyTriggerController {
             TimeProvider timeProvider,
             RunningJobProbe runningJobs,
             @Value(ExpireStepContext.CRON) String expireCron,
+            @Value("${batch.scheduling.enabled:false}") boolean schedulingEnabled,
             @Value("${batch.metrics.verify-running-too-long-seconds:1200}")
             long verifyWorstCaseSeconds) {
-        // 만료 크론이 꺼져 있으면("-") 그 축의 충돌 자체가 없다. CronSlot 은 그 값을 못 파싱하니
-        // 여기서 가른다 — ExpireScheduler 는 같은 값을 기동 거절로 다루지만, 이 컨트롤러는
-        // batch.scheduling.enabled=false 로 스케줄러를 끈 기동에서도 살아 있어야 한다.
-        this.expireCron = CronExpression.isValidExpression(expireCron)
+        // **스케줄러가 꺼져 있으면 만료가 아예 안 뜬다.** ExpireScheduler 는
+        // @ConditionalOnProperty 라 빈 자체가 안 만들어지므로, 크론 값이 유효해도 그 시각에
+        // 아무 일도 안 일어난다 — 그 상태에서 이 가드가 409 를 내면 **부하 측정이나 손 검증
+        // 때 API 가 통째로 막힌다.**
+        //
+        // "-" 로 끈 경우도 함께 가른다. 그때는 CronExpression 이 파싱을 못 한다.
+        //
+        // ⚠️ 문자열 비교가 아니라 boolean 바인딩이다. @Value 의 변환은 1·yes·on 도 참으로
+        //    받는데, @ConditionalOnProperty 는 havingValue 와 문자열 비교라 그 셋을 거절한다 —
+        //    즉 BATCH_SCHEDULING_ENABLED=1 이면 **스케줄러는 없는데 여기는 켜졌다고 읽는다.**
+        //    그 방향(가드가 더 보수적)은 안전하다: 안 뜰 만료 때문에 거절할 뿐 반대는 아니다.
+        this.expireCron = schedulingEnabled && CronExpression.isValidExpression(expireCron)
                 ? CronExpression.parse(expireCron)
                 : null;
         this.verifyWorstCase = Duration.ofSeconds(verifyWorstCaseSeconds);
@@ -342,9 +363,8 @@ public class VerifyTriggerController {
      */
     private void rejectIfExpireIsAboutToFire() {
         if (expireCron == null) {
-            // 만료 크론이 꺼져 있다("-"). 그 축의 충돌 자체가 없다 — ExpireScheduler 는 같은
-            // 값을 기동 거절로 다루지만, 이 컨트롤러는 batch.scheduling.enabled=false 로
-            // 스케줄러를 끈 기동에서도 살아 있어야 한다.
+            // 스케줄러가 꺼졌거나 만료 크론이 "-" 다. 어느 쪽이든 만료가 안 떠서 충돌 자체가
+            // 없다 — 생성자가 그 판정을 이미 했다.
             return;
         }
         LocalDateTime now = timeProvider.now();

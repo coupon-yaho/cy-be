@@ -15,6 +15,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.annotation.OrderUtils;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
@@ -57,13 +58,19 @@ class SchedulerPoolGuardTest {
 
         assertThat(runners)
                 .as("빈이 없으면 이 가드는 아무 일도 안 한다")
-                .anyMatch(SchedulerPoolGuard.class::isInstance);
-        assertThat(runners.indexOf(runners.stream()
-                .filter(SchedulerPoolGuard.class::isInstance)
-                .findFirst()
-                .orElseThrow()))
-                .as("잡보다 뒤면 잡이 먼저 뜨고 나서 가드가 말한다")
-                .isLessThan(runners.size());
+                .hasAtLeastOneElementOfType(SchedulerPoolGuard.class);
+
+        // ⚠️ **인덱스로 보면 안 된다.** 이 컨텍스트는 spring.batch.job.enabled=false 라
+        //    JobLauncherApplicationRunner 빈이 아예 없다 — 그 빈을 찾아 인덱스를 비교하는
+        //    방식이면 단언이 한 번도 안 돌고, `indexOf(...) < size()` 는 목록에 있는
+        //    원소면 **언제나 참**이라 아무것도 안 지킨다(CodeRabbit 이 그 상태를 잡았다).
+        //    SchemaPresenceGuard 가 같은 이유로 정렬값을 직접 본다.
+        assertThat(OrderUtils.getOrder(SchedulerPoolGuard.class))
+                .as("JobLauncherApplicationRunner 의 정렬값은 0 이다. @Order 를 떼면 "
+                        + "LOWEST_PRECEDENCE 라 잡이 먼저 돌고, 풀이 모자란 채로 "
+                        + "그 잡이 뜬다")
+                .isNotNull()
+                .isLessThan(0);
     }
 
     /**

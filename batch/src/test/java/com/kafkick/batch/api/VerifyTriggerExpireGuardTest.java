@@ -208,12 +208,22 @@ class VerifyTriggerExpireGuardTest {
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
             "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
             "spring.batch.job.enabled=false",
-            // 스케줄러는 끈다 — 재려는 것은 **크론 표현식**이지 실제 발화가 아니고,
-            // 켜 두면 아래 1분 크론이 CI 에서 진짜 만료를 돌린다.
-            "batch.scheduling.enabled=false",
+            // **스케줄러를 켜야 한다.** 꺼져 있으면 만료가 아예 안 떠서 이 가드가 통째로
+            // 비활성이다(CodeRabbit 지적) — 그 상태로 재면 항상 202 라 아무것도 안 지킨다.
+            "batch.scheduling.enabled=true",
             // 1분마다 뜬다. 접수 시각에서 다음 발화까지가 언제나 60초 이내라,
             // 검증 최악 소요(1,200초)보다 짧아 반드시 거절 갈래로 간다.
+            //
+            // ⚠️ **CI 에서 진짜 만료가 1분마다 돈다.** 이 잡은 기한 지난 발급건만 손대고
+            //    이 컨텍스트의 픽스처에는 그런 건이 없어 0건으로 끝난다 — 그래도 배치 메타에
+            //    실행이 쌓이므로, 크론을 늘리는 대신 이 클래스가 짧게 끝나는 데 기댄다.
             "batch.schedule.expire-cron=0 * * * * *",
+            // 1분 크론에 소요 항 600 을 더하면 660 이라 SLA 가드가 기본값(90,000)에서
+            // 통과한다 — 그래도 명시해 둔다. 이 클래스가 재는 것은 SLA 가 아니다.
+            "batch.schedule.cleanup-cron=0 0 0 1 1 *",
+            "batch.metrics.cleanup-sla-seconds=999999999",
+            "batch.schedule.verify-cron=0 0 0 1 1 *",
+            "batch.metrics.verify-sla-seconds=999999999",
             "batch.metrics.expire-sla-seconds=999999999",
             "server.port=0",
             "management.server.port=0",
