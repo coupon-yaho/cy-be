@@ -19,7 +19,8 @@ spring:
   # Redis 접속·타임아웃. 값이 없으면 Lettuce 기본 커맨드 타임아웃(60초)이 걸리는데, 5초 주기
   # 수집이 60초를 잡고 있으면 스케줄러 스레드를 그동안 점유한다. 예외도 안 나므로 UNAVAILABLE
   # 전환도 안 걸리고, 마지막 값이 정상 그래프처럼 계속 긁혀 나간다.
-  # DB 는 connectTimeout·socketTimeout·query-timeout·max_execution_time 네 겹이 걸려 있다.
+  # 관측 풀은 connectTimeout·socketTimeout·query-timeout·max_execution_time 네 겹, 운영 풀은
+  # 앞 두 겹만이다(CY-488 에서 뒤 두 겹을 의도적으로 비웠다 — storage.yml.example 참고).
   data:
     redis:
       host: ${REDIS_HOST:localhost}
