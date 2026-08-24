@@ -29,7 +29,8 @@ class AdminDashboardControllerTest {
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvcWithNonNullJson(
             new AdminDashboardController(
                     AdminControllerContractTestSupport.overviewService(CLOCK),
-                    AdminControllerContractTestSupport.couponMetricsService(CLOCK))
+                    AdminControllerContractTestSupport.couponMetricsService(CLOCK),
+                    AdminControllerContractTestSupport.analyticsService(CLOCK))
     );
 
     /** 개요 조회가 연결된 O1·O3·지연과 Mock O2·O4·FINAL을 성공 봉투에 보존하는지 검증합니다. */
@@ -124,17 +125,81 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-002"));
     }
 
-    /** 유효한 기간·브랜드·쿠폰 필터가 분석 조회 계약에 바인딩되는지 검증합니다. */
+    /** 유효한 기간·브랜드·쿠폰 필터가 실제 독립 분석 결과로 변환되는지 검증합니다. */
     @Test
-    @DisplayName("분석 조회는 유효한 기간과 선택 필터에서 ADMIN-001 선구축 오류를 반환한다")
-    void analyticsReturnsNotImplementedEnvelope() throws Exception {
+    @DisplayName("분석 조회는 유효한 기간과 선택 필터에서 Mock 계산 결과를 반환한다")
+    void analyticsReturnsCalculatedMockResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/analytics")
                         .param("from", "2026-01-01")
-                        .param("to", "2026-08-16")
+                        .param("to", "2026-03-31")
+                        .param("brandId", "1")
+                        .param("couponId", "101"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.sourceType").value("MOCK"))
+                .andExpect(jsonPath("$.data.range.from").value("2026-01-01"))
+                .andExpect(jsonPath("$.data.filters.brandId").value(1))
+                .andExpect(jsonPath("$.data.brands[0].brandName").value("북스토리"))
+                .andExpect(jsonPath("$.data.brandTrends.state").value("VALID"))
+                .andExpect(jsonPath("$.data.brandTrends.value.length()").value(3))
+                .andExpect(jsonPath("$.data.hourlyHeatmap.state").value("VALID"))
+                .andExpect(jsonPath("$.data.hourlyHeatmap.value.length()").value(168))
+                .andExpect(jsonPath("$.data.hourlyHeatmap.value[0].dayOfWeek").value(1))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.state").value("VALID"))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(20))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.currentlyIssued").value(10))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.statuses[0].status")
+                        .value("ISSUED"))
+                .andExpect(jsonPath("$.error").doesNotExist());
+    }
+
+    /** 브랜드와 캠페인의 소속이 다르면 존재 여부를 노출하지 않고 공통 404로 반환하는지 검증합니다. */
+    @Test
+    @DisplayName("분석 조회는 브랜드와 캠페인 소속이 다르면 COMMON-002를 반환한다")
+    void analyticsRejectsCampaignOutsideRequestedBrand() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/analytics")
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-03-31")
                         .param("brandId", "2")
-                        .param("couponId", "3"))
-                .andExpect(status().isNotImplemented())
-                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+                        .param("couponId", "101"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("COMMON-002"));
+    }
+
+    /** 브랜드와 캠페인 필터를 각각 단독 적용해도 해당 모집단만 반환하는지 검증합니다. */
+    @Test
+    @DisplayName("분석 조회는 브랜드 또는 캠페인 단독 필터를 적용한다")
+    void analyticsAppliesSingleOptionalFilter() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/analytics")
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-03-31")
+                        .param("brandId", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.brands.length()").value(1))
+                .andExpect(jsonPath("$.data.brands[0].brandId").value(2))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(10));
+
+        mockMvc.perform(get("/api/v1/admin/analytics")
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-03-31")
+                        .param("couponId", "101"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.filters.brandId").doesNotExist())
+                .andExpect(jsonPath("$.data.filters.couponId").value(101))
+                .andExpect(jsonPath("$.data.brands[0].brandId").value(1))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(20));
+    }
+
+    /** 존재하지 않는 선택 식별자를 빈 통계로 숨기지 않고 공통 404로 반환하는지 검증합니다. */
+    @Test
+    @DisplayName("분석 조회는 존재하지 않는 브랜드를 COMMON-002로 반환한다")
+    void analyticsRejectsUnknownBrand() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/analytics")
+                        .param("from", "2026-01-01")
+                        .param("to", "2026-03-31")
+                        .param("brandId", "999999"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("COMMON-002"));
     }
 
     /** 분석 시작일이 종료일보다 늦은 요청을 400으로 거부하는지 검증합니다. */

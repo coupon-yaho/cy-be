@@ -3,6 +3,8 @@ package com.kafkick.api.admin.dashboard;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 
+import java.time.ZoneId;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,10 +16,12 @@ import com.kafkick.api.admin.dashboard.dto.AnalyticsQuery;
 import com.kafkick.api.admin.dashboard.dto.AdminAnalyticsResponse;
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.dashboard.dto.CouponMetricsResponse;
-import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.caller.Caller;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.admin.analytics.AdminAnalyticsQuery;
+import com.kafkick.core.admin.analytics.AdminAnalyticsResult;
+import com.kafkick.core.admin.analytics.AdminAnalyticsService;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
 import com.kafkick.core.admin.overview.AdminOverviewResult;
 import com.kafkick.core.admin.overview.AdminOverviewService;
@@ -27,28 +31,34 @@ import com.kafkick.core.support.exception.BusinessException;
  * 운영 담당자가 사용하는 관리자 현황·쿠폰 지표·분석 API의 HTTP 경계입니다.
  *
  * <p>운영현황 계산·조립은 구체 {@link AdminOverviewService}에 위임하고, 반환된
- * {@link AdminOverviewResult}는 Controller에서 HTTP DTO로 변환합니다. 쿠폰 지표는 상세 Service의
- * 계산 결과를 반환하며, 분석 조회만 실제 집계 원천이 연결되기 전까지 {@code 501 / ADMIN-001}을 반환합니다.</p>
+ * {@link AdminOverviewResult}는 Controller에서 HTTP DTO로 변환합니다. 쿠폰 지표와 브랜드 분석도 각각의
+ * Core Service가 계산하며 Controller는 HTTP 입력·출력 변환만 담당합니다.</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminDashboardController {
 
+    private static final ZoneId ANALYTICS_ZONE = ZoneId.of("Asia/Seoul");
+
     private final AdminOverviewService adminOverviewService;
     private final AdminCouponMetricsService adminCouponMetricsService;
+    private final AdminAnalyticsService adminAnalyticsService;
 
     /**
-     * 운영현황과 캠페인 상세 요청을 각 구체 Service에 위임하도록 구성합니다.
+     * 운영현황·캠페인 상세·브랜드 분석 요청을 각 구체 Service에 위임하도록 구성합니다.
      *
      * @param adminOverviewService 관리자 첫 화면 응답을 조립하는 구체 Service
      * @param adminCouponMetricsService 캠페인 상세 지표를 계산하는 구체 Service
+     * @param adminAnalyticsService 브랜드 분석 조회와 계산을 조립하는 구체 Service
      */
     public AdminDashboardController(
             AdminOverviewService adminOverviewService,
-            AdminCouponMetricsService adminCouponMetricsService
+            AdminCouponMetricsService adminCouponMetricsService,
+            AdminAnalyticsService adminAnalyticsService
     ) {
         this.adminOverviewService = adminOverviewService;
         this.adminCouponMetricsService = adminCouponMetricsService;
+        this.adminAnalyticsService = adminAnalyticsService;
     }
 
     /**
@@ -101,20 +111,23 @@ public class AdminDashboardController {
     }
 
     /**
-     * 기간별 브랜드 추이, 시간대 히트맵, 발급 퍼널 분석 데이터를 조회합니다.
+     * 기간별 브랜드 추이, 시간대 히트맵, 발급 현재 상태 분포를 조회합니다.
      *
      * <p>{@code from}과 {@code to}는 필수이며 역전될 수 없고 최대 조회 범위는 1년입니다.
-     * {@code brandId}와 {@code couponId}는 선택 필터로 함께 사용할 수 있습니다. 쿠폰의 브랜드 소속 확인과
-     * 실제 집계 조회는 후속 분석 Use Case에서 연결하며 현재는 {@code 501 / ADMIN-001}을 반환합니다.</p>
+     * {@code brandId}와 {@code couponId}는 선택 필터로 함께 사용할 수 있습니다. 날짜·시간 해석은
+     * 관리자 화면 계약인 Asia/Seoul을 사용하며, Core Service가 존재와 소속 관계를 확인합니다.</p>
      *
      * @param query 조회 기간과 선택적인 브랜드·쿠폰 필터
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
-     * @return 후속 구현에서 사용할 관리자 분석 응답 봉투
-     * @throws BusinessException 분석 조회 구현이 아직 연결되지 않은 경우
+     * @return 분석별 상태와 계산값을 포함한 관리자 분석 성공 응답 봉투
+     * @throws BusinessException 요청한 브랜드·캠페인이 없거나 소속 관계가 다른 경우
      */
     @GetMapping("/analytics")
     public ResponseEnvelope<AdminAnalyticsResponse> analytics(
             @Valid @ModelAttribute AnalyticsQuery query, Caller caller) {
-        throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
+        AdminAnalyticsQuery coreQuery = new AdminAnalyticsQuery(
+                query.from(), query.to(), query.brandId(), query.couponId(), ANALYTICS_ZONE);
+        AdminAnalyticsResult result = adminAnalyticsService.getAnalytics(coreQuery);
+        return ResponseEnvelope.success(AdminAnalyticsResponse.from(result));
     }
 }

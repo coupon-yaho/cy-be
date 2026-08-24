@@ -48,7 +48,9 @@ class AdminDtoJsonSerializationTest {
         assertThat(objectMapper.writeValueAsString(CouponMetricsResponse.draft(1L, MetricsWindow.FIVE_MINUTES)))
                 .contains("couponId", "issuanceProgress");
         assertThat(objectMapper.writeValueAsString(AdminAnalyticsResponse.draft()))
-                .contains("range", "hourlyHeatmap");
+                .contains("range", "sourceType", "brandTrends", "hourlyHeatmap",
+                        "issuanceStatusDistribution")
+                .doesNotContain("issuanceFunnel");
         assertThat(objectMapper.writeValueAsString(IssuanceInquiryPageResponse.draft()))
                 .contains("items", "hasOlder");
         assertThat(objectMapper.writeValueAsString(IssuanceHistoryPageResponse.draft()))
