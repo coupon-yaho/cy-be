@@ -13,8 +13,8 @@ import org.junit.jupiter.api.Test;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawHistoryLink;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawIssuance;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.ReasonCode;
 

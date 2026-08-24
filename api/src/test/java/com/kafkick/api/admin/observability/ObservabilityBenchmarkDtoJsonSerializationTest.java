@@ -62,7 +62,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
                 List.of(),
-                AdminMetricsResponse.ErrorMetrics.draft()
+                AdminMetricsResponse.ErrorMetrics.draft(),
+                AdminMetricsResponse.SaturationPanel.draft()
         );
 
         String json = objectMapper.writeValueAsString(response);
@@ -117,6 +118,36 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
     }
 
     /**
+     * saturation 블록의 <b>키 이름이 화면 계약</b>입니다(cy-fe {@code types.ts:571-601}). 이름이
+     * 어긋나면 예외 없이 화면만 빕니다 — 프론트는 {@code saturation?} 을 optional 로 두고 있어
+     * 블록이 통째로 없는 것과 이름이 틀린 것을 구분하지 못합니다.
+     */
+    @Test
+    void saturationSerializesContractFieldNames() throws Exception {
+        String json = objectMapper.writeValueAsString(
+                AdminMetricsResponse.SaturationPanel.draft());
+
+        assertThat(json)
+                .contains("\"resources\":[")
+                .contains("\"name\":\"Hikari\"")
+                .contains("\"warnAt\":80")
+                .contains("\"warnAt\":75")
+                .contains("\"utilization\":{\"state\":\"PENDING\"")
+                .contains("\"inFlight\":{")
+                .contains("\"globalSum\":")
+                .contains("\"instanceMax\":")
+                .contains("\"activeInstances\":0")
+                .contains("\"admitThreshold\":0")
+                .contains("\"releaseThreshold\":0")
+                .contains("\"zone\":\"Admission\"")
+                .contains("\"zone\":\"Persistence\"")
+                .contains("\"zone\":\"Telemetry\"")
+                .contains("\"thresholds\":{\"warn\":60,\"high\":75,\"critical\":85}");
+        // 값이 없는 자리를 0 으로 채우면 화면이 '여유' 를 그린다.
+        assertThat(json).doesNotContain("\"value\":0");
+    }
+
+    /**
      * meta의 여섯 필드가 모두 직렬화되고, 창 경계가 집계 구간만큼 벌어지며,
      * sources가 null이 아니라 빈 객체로 남는지 검증합니다.
      */
@@ -168,7 +199,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
                 List.of(),
-                AdminMetricsResponse.ErrorMetrics.draft());
+                AdminMetricsResponse.ErrorMetrics.draft(),
+                AdminMetricsResponse.SaturationPanel.draft());
 
         assertThat(objectMapper.writeValueAsString(response))
                 .contains("\"phase\":\"FINAL\"")

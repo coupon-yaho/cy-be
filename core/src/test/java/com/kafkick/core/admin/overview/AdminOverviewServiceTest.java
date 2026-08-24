@@ -43,7 +43,7 @@ import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -280,17 +280,17 @@ class AdminOverviewServiceTest {
             assertThat(request.policy()).isEqualTo(factory.create(NOW).policy());
             assertThat(request.campaignTargets()).containsExactly(
                     new CampaignObservationTarget(
-                            101L, CouponStatus.OPEN, true, SourceStatus.VALID, NOW),
+                            101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, NOW),
                     new CampaignObservationTarget(
-                            102L, CouponStatus.OPEN, false, SourceStatus.VALID, NOW),
+                            102L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, NOW),
                     new CampaignObservationTarget(
-                            103L, CouponStatus.OPEN, true, SourceStatus.VALID, NOW),
+                            103L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, NOW),
                     new CampaignObservationTarget(
-                            104L, CouponStatus.SCHEDULED, null, SourceStatus.N_A, null),
+                            104L, CouponRoundStatus.SCHEDULED, null, SourceStatus.N_A, null),
                     new CampaignObservationTarget(
-                            105L, CouponStatus.SCHEDULED, null, SourceStatus.N_A, null),
+                            105L, CouponRoundStatus.SCHEDULED, null, SourceStatus.N_A, null),
                     new CampaignObservationTarget(
-                            106L, CouponStatus.CLOSED, null, SourceStatus.N_A, null));
+                            106L, CouponRoundStatus.CLOSED, null, SourceStatus.N_A, null));
         });
     }
 
@@ -889,7 +889,7 @@ class AdminOverviewServiceTest {
             IssuanceFlowInput input,
             CampaignObservationTarget target
     ) {
-        if (!input.sourceStatus().carriesValue() || input.campaignStatus() != CouponStatus.OPEN) {
+        if (!input.sourceStatus().carriesValue() || input.campaignStatus() != CouponRoundStatus.OPEN) {
             return input;
         }
         if (!target.stockStatus().carriesValue()) {
@@ -1300,7 +1300,7 @@ class AdminOverviewServiceTest {
                 17L,
                 "여름 특가",
                 "쿠폰야호",
-                CouponStatus.OPEN,
+                CouponRoundStatus.OPEN,
                 NOW.minus(Duration.ofHours(1)),
                 NOW.plus(Duration.ofHours(2)),
                 Severity.CRITICAL,

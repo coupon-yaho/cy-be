@@ -7,6 +7,7 @@ dependencies {
 
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-jackson'
 
     compileOnly 'org.springframework.boot:spring-boot-health'
     testImplementation 'org.springframework.boot:spring-boot-health'
@@ -17,6 +18,7 @@ dependencies {
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
     testFixturesApi 'org.springframework.boot:spring-boot-starter-test'
     testFixturesApi 'org.springframework.boot:spring-boot-testcontainers'
     testFixturesApi 'org.springframework.boot:spring-boot-data-jpa-test'

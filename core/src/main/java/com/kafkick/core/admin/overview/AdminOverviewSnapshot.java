@@ -8,7 +8,7 @@ import java.util.Objects;
 
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 관리자 운영현황 Service와 순수 Calculator가 조립하는 기술 중립 결과입니다.
@@ -171,9 +171,9 @@ public record AdminOverviewSnapshot(
     /**
      * 현재 조립 시각을 기준으로 한 캠페인 회차 상태별 건수입니다.
      *
-     * @param openCount 현재 진행 중인 {@link CouponStatus#OPEN} 캠페인 수
-     * @param scheduledCount 오픈 예정인 {@link CouponStatus#SCHEDULED} 캠페인 수
-     * @param closedCount 종료된 {@link CouponStatus#CLOSED} 캠페인 수
+     * @param openCount 현재 진행 중인 {@link CouponRoundStatus#OPEN} 캠페인 수
+     * @param scheduledCount 오픈 예정인 {@link CouponRoundStatus#SCHEDULED} 캠페인 수
+     * @param closedCount 종료된 {@link CouponRoundStatus#CLOSED} 캠페인 수
      */
     public record CampaignStatusSummary(long openCount, long scheduledCount, long closedCount) { }
 
@@ -205,7 +205,7 @@ public record AdminOverviewSnapshot(
             Long couponId,
             String campaignName,
             String brandName,
-            CouponStatus status,
+            CouponRoundStatus status,
             Instant opensAt,
             Instant closesAt,
             Severity severity,

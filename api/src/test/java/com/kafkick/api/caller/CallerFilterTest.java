@@ -10,8 +10,19 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 class CallerFilterTest {
+
+    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withUserConfiguration(CallerFilterConfiguration.class)
+            .withBean(CallerResolver.class, HeaderCallerResolver::new);
+
+    @Test
+    @DisplayName("운영 필터 설정이 CallerFilter를 등록한다")
+    void filterConfigurationRegistersFilter() {
+        contextRunner.run(context -> assertThat(context).hasSingleBean(CallerFilter.class));
+    }
 
     @Test
     @DisplayName("X-User-Id 가 members.id 형식이면 요청 속성에 심는다")

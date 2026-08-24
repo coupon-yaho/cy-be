@@ -80,14 +80,16 @@ class ObservationDataSourceWiringTest {
     }
 
     /**
-     * 같은 패키지의 JpaAuditConfig 는 제외한다 — TimeProvider(core)를 요구하는데 이 검증과 무관하고,
-     * 엔티티가 0개라 어차피 못 뜬다. 타입이 아니라 이름 패턴으로 거르는 것은 storage 에 대한
-     * 컴파일 의존을 만들지 않기 위해서다.
+     * 같은 패키지의 JPA 설정은 제외한다 — 이 검증은 DataSource 배선만 확인하며 엔티티나
+     * EntityManagerFactory를 올리지 않는다. 타입이 아니라 이름 패턴으로 거르는 것은 storage 에
+     * 대한 컴파일 의존을 만들지 않기 위해서다.
      */
     @SpringBootConfiguration
     @ComponentScan(
         basePackages = "com.kafkick.storage.db.config",
-        excludeFilters = @Filter(type = FilterType.REGEX, pattern = ".*JpaAuditConfig"))
+        excludeFilters = @Filter(
+            type = FilterType.REGEX,
+            pattern = ".*(JpaAuditConfig|CouponStorageConfig)"))
     static class TestApp {
     }
 }

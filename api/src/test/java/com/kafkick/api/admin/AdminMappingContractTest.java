@@ -39,7 +39,7 @@ class AdminMappingContractTest {
 
     private static final Set<String> EXPECTED_ROUTES = Set.of(
             "GET /api/v1/admin/overview",
-            "GET /api/v1/admin/coupons/{couponId}/metrics",
+            "GET /api/v1/admin/coupon-metrics",
             "GET /api/v1/admin/analytics",
             "GET /api/v1/admin/members/issuance-inquiries",
             "GET /api/v1/admin/issuance-histories",

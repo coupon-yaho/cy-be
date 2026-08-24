@@ -21,7 +21,7 @@ import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 운영 현황 응답 초안의 JSON 필드, enum 이름, null과 빈 목록 표현을 고정합니다.
@@ -199,7 +199,7 @@ class AdminOverviewDtoJsonSerializationTest {
     @DisplayName("Overview JSON은 전체 집계와 campaigns O1 O2 O4 및 O3 결과를 직렬화한다")
     void overviewSerializesAggregatesCampaignsAndCustomerOutcomes() throws Exception {
         AdminOverviewResponse.CampaignOverview campaign = new AdminOverviewResponse.CampaignOverview(
-                1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponStatus.OPEN,
+                1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.OPEN,
                 Instant.parse("2026-08-17T04:40:00Z"), null, Severity.CRITICAL,
                 new ObservedValue<>(
                         new AdminOverviewResponse.IssuanceFlow(

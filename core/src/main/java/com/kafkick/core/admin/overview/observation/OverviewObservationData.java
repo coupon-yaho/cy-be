@@ -13,7 +13,7 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot.LatencySummary;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.Observation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
@@ -84,7 +84,7 @@ public record OverviewObservationData(
         if (campaignTarget.campaignStatus() != issuanceFlowInput.campaignStatus()) {
             throw new IllegalArgumentException("O1 입력의 campaignStatus가 요청 대상과 일치해야 합니다.");
         }
-        if (campaignTarget.campaignStatus() != CouponStatus.OPEN) {
+        if (campaignTarget.campaignStatus() != CouponRoundStatus.OPEN) {
             return;
         }
         if (campaignTarget.stockStatus().carriesValue()) {

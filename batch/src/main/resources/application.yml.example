@@ -12,7 +12,7 @@ spring:
 
   batch:
     jdbc:
-      initialize-schema: never   # 메타 테이블은 V2__batch_metadata.sql 이 만든다
+      initialize-schema: never   # 메타 테이블은 V11__batch_metadata.sql 이 만든다
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
@@ -171,3 +171,19 @@ logging:
   pattern:
     # runId 를 MDC 에 심어 한 run 의 모든 Step 로그를 같은 키로 묶는다.
     console: "%d{HH:mm:ss.SSS} %-5level [%X{runId:-}] %logger{36} - %msg%n"
+
+coupon:
+  idempotency:
+    wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
+    poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}
+    stale-after: ${COUPON_IDEMPOTENCY_STALE_AFTER:30s}
+
+  expiration:
+    cron: "${COUPON_EXPIRATION_CRON:0 * * * * *}"
+    zone: ${COUPON_EXPIRATION_ZONE:UTC}
+    chunk-size: ${COUPON_EXPIRATION_CHUNK_SIZE:500}
+    transaction-size: ${COUPON_EXPIRATION_TRANSACTION_SIZE:100}
+
+  round-generation:
+    schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-days: ${COUPON_GENERATION_MAX_DAYS:30}

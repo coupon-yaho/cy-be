@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * 실제 Repository 조회를 대신할 fixture-v1 관리자 발급 상태 변경 이력 원천을 만듭니다.

@@ -9,7 +9,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 class CouponMetricsSourceTest {
@@ -88,7 +88,7 @@ class CouponMetricsSourceTest {
     ) {
         return new CouponMetricsSource(
                 couponId,
-                new CouponMetricsSource.CampaignRuntime(CouponStatus.OPEN, OBSERVED_AT.minusSeconds(60)),
+                new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN, OBSERVED_AT.minusSeconds(60)),
                 stock,
                 samples,
                 observed(new CouponMetricsSource.QueueCounts(

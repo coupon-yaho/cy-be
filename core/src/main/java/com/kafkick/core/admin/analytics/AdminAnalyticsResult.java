@@ -9,7 +9,7 @@ import java.util.Objects;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.BrandRef;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관리자 브랜드 분석 계산 결과와 분석별 관측 상태를 제공합니다. */

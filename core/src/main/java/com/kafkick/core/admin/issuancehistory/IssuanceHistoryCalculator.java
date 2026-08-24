@@ -10,7 +10,7 @@ import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryP
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistoryItem;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
-import com.kafkick.core.coupon.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
 
 /** 발급 상태 변경 이력을 기술 중립 조회 페이지와 이벤트별 요약으로 계산합니다. */
 @Component

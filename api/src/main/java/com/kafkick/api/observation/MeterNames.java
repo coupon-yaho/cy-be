@@ -35,7 +35,14 @@ public final class MeterNames {
 
     public static final String HIKARI_ACTIVE = "hikaricp.connections.active";
     public static final String HIKARI_PENDING = "hikaricp.connections.pending";
+    /** 풀 정원. 사용률의 분모라 값 미터만으로는 포화를 판정할 수 없다. */
+    public static final String HIKARI_MAX = "hikaricp.connections.max";
     public static final String JVM_MEMORY_USED = "jvm.memory.used";
+    /**
+     * 영역별 상한. G1 에서는 Eden · Survivor 가 {@code -1} 을 내고 Old Gen 만 힙 전체 상한을
+     * 낸다(실측) — 영역 값을 더하면 안 된다.
+     */
+    public static final String JVM_MEMORY_MAX = "jvm.memory.max";
     public static final String CPU_USAGE = "process.cpu.usage";
     /** {@code server.tomcat.mbeanregistry.enabled=true} 일 때만 등록된다. */
     public static final String TOMCAT_BUSY = "tomcat.threads.busy";

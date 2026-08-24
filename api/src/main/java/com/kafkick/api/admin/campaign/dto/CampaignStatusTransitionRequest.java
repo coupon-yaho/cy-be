@@ -4,7 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 일반 수정과 분리된 캠페인 운영 상태 전환 요청입니다.
@@ -13,6 +13,6 @@ import com.kafkick.core.coupon.CouponStatus;
  * @param reason 감사 로그에 남길 운영 사유
  */
 public record CampaignStatusTransitionRequest(
-        @NotNull CouponStatus targetStatus,
+        @NotNull CouponRoundStatus targetStatus,
         @NotBlank @Size(max = 200) String reason) {
 }

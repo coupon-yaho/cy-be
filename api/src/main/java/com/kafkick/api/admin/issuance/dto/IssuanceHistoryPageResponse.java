@@ -7,8 +7,8 @@ import java.util.Objects;
 import com.kafkick.api.admin.issuance.IssuanceHistoryCursorCodec;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * 쿠폰 발급 상태 전이를 최신 발생 시각부터 과거 방향으로 반환하는 목록 응답 초안입니다.

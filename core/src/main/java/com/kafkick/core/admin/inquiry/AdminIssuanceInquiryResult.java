@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.InquiryPosition;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.ReasonCode;
 
 /** 연결·필터·정렬을 마친 회원 발급 문의의 한 페이지입니다. */

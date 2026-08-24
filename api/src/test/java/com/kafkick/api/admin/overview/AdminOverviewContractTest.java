@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 운영현황 Snapshot 계약이 후속 인프라 구현과 분리되는지 검증합니다.
@@ -116,7 +116,7 @@ class AdminOverviewContractTest {
     @DisplayName("Snapshot은 전체 집계 4종과 campaigns의 O1 O2 O4 및 최상위 O3를 표현한다")
     void snapshotRepresentsAllOverviewOwnedSections() {
         AdminOverviewSnapshot.CampaignOverview campaign = new AdminOverviewSnapshot.CampaignOverview(
-                1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponStatus.OPEN, FROM, TO,
+                1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.OPEN, FROM, TO,
                 Severity.CRITICAL,
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.IssuanceFlow(

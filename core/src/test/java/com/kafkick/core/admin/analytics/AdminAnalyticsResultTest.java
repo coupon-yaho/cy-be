@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.IssuanceStatusDistribution;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.StatusCount;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /** 외부로 공개되는 분석 결과가 현재 상태 분포 불변식을 보존하는지 검증합니다. */
 class AdminAnalyticsResultTest {

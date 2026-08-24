@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -66,7 +66,7 @@ public class CampaignOverviewCalculator {
         for (int index = 0; index < campaigns.size(); index++) {
             CampaignOverviewSource campaign = Objects.requireNonNull(
                     campaigns.get(index), "campaigns에는 null을 포함할 수 없습니다.");
-            CouponStatus status = Objects.requireNonNull(campaign.status(), "campaign.status");
+            CouponRoundStatus status = Objects.requireNonNull(campaign.status(), "campaign.status");
 
             switch (status) {
                 case OPEN -> openCount++;
@@ -110,7 +110,7 @@ public class CampaignOverviewCalculator {
             Instant snapshotAt
     ) {
         Instant opensAt = campaign.opensAt();
-        return campaign.status() == CouponStatus.SCHEDULED
+        return campaign.status() == CouponRoundStatus.SCHEDULED
                 && opensAt != null
                 && opensAt.isAfter(snapshotAt)
                 && !opensAt.isAfter(snapshotAt.plus(OPENING_SOON_WINDOW));
@@ -154,7 +154,7 @@ public class CampaignOverviewCalculator {
     }
 
     /** 같은 위험도에서는 운영 중, 오픈 예정, 종료 캠페인 순으로 확인하도록 상태 순위를 반환합니다. */
-    private static int statusPriority(CouponStatus status) {
+    private static int statusPriority(CouponRoundStatus status) {
         return switch (status) {
             case OPEN -> 0;
             case SCHEDULED -> 1;

@@ -112,14 +112,36 @@ find . -path '*/src/main/resources/*.yml.example' \
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
 
+### API 모니터링
+
+API Actuator는 애플리케이션 포트와 분리된 관리 포트(기본 `9090`)에서만 노출한다.
+노출 엔드포인트는 `health`, `metrics`, `prometheus`이며 `env`, `configprops`,
+`beans`, `heapdump`는 명시적으로 차단한다.
+
+```bash
+curl http://localhost:9090/actuator/health
+curl http://localhost:9090/actuator/metrics/coupon.issue.operation.requests
+curl http://localhost:9090/actuator/metrics/coupon.issue.operation.duration
+curl http://localhost:9090/actuator/metrics/hikaricp.connections.active
+curl http://localhost:9090/actuator/metrics/http.server.requests
+```
+
+쿠폰 발급 시작·종료 과정 로그는 `COUPON_ISSUE_LOG_LEVEL=TRACE`일 때만 출력한다.
+부하 테스트에서는 로그 I/O가 측정값을 오염시키지 않도록 기본값 `INFO`를 유지한다.
+커스텀 `operation` 지표는 서버 내부 유즈케이스 시간을 뜻하며, 최종 성능 판정 기준은
+Locust가 클라이언트 응답 수신 시점에 측정한 값이다.
+
+API와 배치를 로컬에서 동시에 실행해 `9090` 포트가 겹치면 API에
+`MANAGEMENT_SERVER_PORT=19090`을 지정한다.
+
 ### Docker 이미지
 
 `main` 브랜치 push 또는 `v*` 태그 push 시 GitHub Actions가 API와 배치 이미지를
 각각 빌드해 하나의 Docker Hub 저장소에 태그를 구분하여 올린다. 수동 실행도 가능하다.
 
-- 주소: `https://hub.docker.com/r/seol7/coupon-yaho`
-- API 이미지: `seol7/coupon-yaho:api-latest`
-- 배치 이미지: `seol7/coupon-yaho:batch-latest`
+- 주소: `https://hub.docker.com/r/${DOCKERHUB_USERNAME}/coupon-yaho`
+- API 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:api-latest`
+- 배치 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:batch-latest`
 
 GitHub 저장소의 **Settings → Secrets and variables → Actions**에 아래 값을 등록한다.
 
@@ -212,22 +234,39 @@ total 0
 
 ```
 core/coupon/
-    domain/     Coupon, CouponStock          도메인 모델
+    domain/     CouponRound, Issuance        발급 쿠폰 도메인 모델
     service/    CouponIssueService           유즈케이스
-    port/       CouponRepository             인터페이스만. 구현은 어댑터가
+    port/       IssuanceRepository           인터페이스만. 구현은 어댑터가
+
+core/coupontemplate/
+    domain/     CouponTemplate               쿠폰 템플릿 도메인 모델
+    service/    CouponTemplateCreateService  템플릿 유즈케이스
+    port/       CouponTemplateRepository     템플릿 저장 인터페이스
 
 storage/db/coupon/
-    entity/     CouponEntity
-    repository/ CouponJpaRepository
-                CouponRepositoryImpl         core 의 port 구현
-    mapper/     CouponEntityMapper           엔티티 ↔ 도메인 모델 변환
+    entity/     IssuanceEntity
+    repository/ IssuanceJpaRepository
+                IssuanceRepositoryImpl       core 의 port 구현
+    mapper/     IssuanceEntityMapper         엔티티 ↔ 도메인 모델 변환
+
+storage/db/coupontemplate/
+    entity/     CouponTemplateEntity
+    repository/ CouponTemplateJpaRepository
+                CouponTemplateRepositoryImpl core 의 port 구현
+    mapper/     CouponTemplateEntityMapper   엔티티 ↔ 도메인 모델 변환
 
 infra/mq/coupon/
     CouponEventPublisher                     core 의 port 구현
 
 api/coupon/
     controller/  CouponController
-    dto/         CouponIssueRequest/Response
+    dto/request/ CouponUseRequest
+    dto/response/CouponIssueResponse
+
+api/coupontemplate/
+    controller/  CouponTemplateController
+    dto/request/ CouponTemplateCreateRequest
+    dto/response/CouponTemplateDetailResponse
 ```
 
 각 모듈의 `support/` 패키지는 그 모듈 안의 횡단 관심사를 담는다.

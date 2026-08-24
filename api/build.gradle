@@ -60,6 +60,9 @@ dependencies {
     // Boot 가 이 전이 의존을 빼거나 좌표를 바꾸는 순간 우리 테스트가 컴파일에서 죽고,
     // 원인은 우리 build.gradle 어디에도 안 적혀 있다. 버전은 BOM 이 정한다.
     testImplementation 'org.yaml:snakeyaml'
+    implementation 'org.springframework:spring-tx'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 }
 
 bootJar {

@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
@@ -84,7 +84,7 @@ public record CouponMetricsSource(
     }
 
     /** 캠페인의 실행 상태와 설정된 오픈 시각입니다. */
-    public record CampaignRuntime(CouponStatus status, Instant opensAt) {
+    public record CampaignRuntime(CouponRoundStatus status, Instant opensAt) {
 
         /** 필수 캠페인 정보를 검증합니다. */
         public CampaignRuntime {

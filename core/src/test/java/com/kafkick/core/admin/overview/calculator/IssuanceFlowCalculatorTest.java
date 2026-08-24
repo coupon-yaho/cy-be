@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /** O1 발급률의 실제 경과 시간 보정과 상태 보존 규칙을 검증합니다. */
@@ -35,7 +35,7 @@ class IssuanceFlowCalculatorTest {
                         1L))
                 .toList();
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                40L, CouponStatus.OPEN, true,
+                40L, CouponRoundStatus.OPEN, true,
                 currentStart, END, trendStart, END,
                 2d, 2d, 4d,
                 END.minus(Duration.ofMinutes(2)), currentStart,
@@ -56,7 +56,7 @@ class IssuanceFlowCalculatorTest {
     void calculatesRatesFromActualWindowAndBucketDurations() {
         IssuanceFlowCalculator.IssuanceFlowCalculation result = new IssuanceFlowCalculator().calculate(
                 POLICY,
-                List.of(input(7L, 10L, 9L, 20L, CouponStatus.OPEN, true, SourceStatus.VALID,
+                List.of(input(7L, 10L, 9L, 20L, CouponRoundStatus.OPEN, true, SourceStatus.VALID,
                         END, END.minusSeconds(90), List.of(bucket(END.minusSeconds(90), END, 9L)))))
                 ;
 
@@ -73,7 +73,7 @@ class IssuanceFlowCalculatorTest {
     void preservesNoTrafficInsteadOfClassifyingItAsStopped() {
         IssuanceFlowCalculator.IssuanceFlowCalculation result = new IssuanceFlowCalculator().calculate(
                 POLICY,
-                List.of(input(8L, 0L, 0L, 3L, CouponStatus.OPEN, true, SourceStatus.VALID,
+                List.of(input(8L, 0L, 0L, 3L, CouponRoundStatus.OPEN, true, SourceStatus.VALID,
                         END, END.minus(Duration.ofMinutes(1)), List.of())));
 
         assertThat(result.issuanceFlows().get(8L).status()).isEqualTo(SourceStatus.NO_TRAFFIC);
@@ -87,7 +87,7 @@ class IssuanceFlowCalculatorTest {
     void acceptsSuccessCountGreaterThanAttemptWithoutMarkingNoTraffic() {
         Instant windowStart = END.minus(Duration.ofMinutes(1));
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                36L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 0d, 1d, 1d,
+                36L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 0d, 1d, 1d,
                 END.minus(Duration.ofMinutes(2)), windowStart,
                 List.of(bucket(windowStart, END, 1L)), END,
                 END.minus(Duration.ofMinutes(3)), SourceStatus.VALID, END);
@@ -105,7 +105,7 @@ class IssuanceFlowCalculatorTest {
     void calculatesStoppedDurationFromConditionStartAndPreservesStaleValue() {
         IssuanceFlowCalculator.IssuanceFlowCalculation result = new IssuanceFlowCalculator().calculate(
                 POLICY,
-                List.of(input(9L, 5L, 0L, 2L, CouponStatus.OPEN, true, SourceStatus.STALE,
+                List.of(input(9L, 5L, 0L, 2L, CouponRoundStatus.OPEN, true, SourceStatus.STALE,
                         END, END.minus(Duration.ofMinutes(1)), List.of())));
 
         AdminOverviewSnapshot.IssuanceFlow flow = result.issuanceFlows().get(9L).value();
@@ -120,7 +120,7 @@ class IssuanceFlowCalculatorTest {
         IssuanceFlowCalculator calculator = new IssuanceFlowCalculator();
 
         assertThatThrownBy(() -> calculator.calculate(POLICY, List.of(input(
-                10L, 1L, 1L, 1L, CouponStatus.OPEN, true, SourceStatus.VALID,
+                10L, 1L, 1L, 1L, CouponRoundStatus.OPEN, true, SourceStatus.VALID,
                 END, END, List.of()))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -129,7 +129,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void rejectsReversedObservationWindow() {
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                26L, CouponStatus.OPEN, true, END, END.minusSeconds(1), END, END.minusSeconds(1),
+                26L, CouponRoundStatus.OPEN, true, END, END.minusSeconds(1), END, END.minusSeconds(1),
                 1d, 1d, 1d,
                 END.minusSeconds(2), END.minusSeconds(1), List.of(), null,
                 END.minus(Duration.ofMinutes(3)), SourceStatus.VALID, END))
@@ -140,7 +140,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void comparesCurrentAndComparisonRatesRatherThanRawCounts() {
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                11L, CouponStatus.OPEN, true, END.minusSeconds(30), END, END.minusSeconds(30), END,
+                11L, CouponRoundStatus.OPEN, true, END.minusSeconds(30), END, END.minusSeconds(30), END,
                 3d, 3d, 10d,
                 END.minus(Duration.ofMinutes(5)), END, List.of(), END,
                 END.minus(Duration.ofMinutes(3)), SourceStatus.VALID, END);
@@ -154,7 +154,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void preservesNonCarryingStatusWithoutInventedRawValues() {
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                12L, CouponStatus.OPEN, null, null, null, null, null, null, null, null, null, null,
+                12L, CouponRoundStatus.OPEN, null, null, null, null, null, null, null, null, null, null,
                 null, null, null, SourceStatus.N_A, null);
 
         assertThat(new IssuanceFlowCalculator().calculate(POLICY, List.of(input))
@@ -166,7 +166,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void rejectsConditionAfterCurrentWindowEndInIsolation() {
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                14L, CouponStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
+                14L, CouponRoundStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
                 END.minus(Duration.ofMinutes(1)), END, 1d, 1d, 1d,
                 END.minus(Duration.ofMinutes(1)), END, List.of(), END,
                 END.plusSeconds(1), SourceStatus.VALID, END))
@@ -178,7 +178,7 @@ class IssuanceFlowCalculatorTest {
     void rejectsOverlappingBucketsInIsolation() {
         IssuanceFlowCalculator calculator = new IssuanceFlowCalculator();
         assertThatThrownBy(() -> calculator.calculate(POLICY, List.of(new IssuanceFlowCalculator.IssuanceFlowInput(
-                15L, CouponStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
+                15L, CouponRoundStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
                 END.minus(Duration.ofMinutes(1)), END, 1d, 1d, 1d,
                 END.minus(Duration.ofMinutes(1)), END, List.of(bucket(END.minusSeconds(40), END.minusSeconds(10), 1L),
                         bucket(END.minusSeconds(20), END, 1L)), END,
@@ -190,7 +190,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void acceptsRawObservationBeforeEvaluationWindowEnd() {
         assertThat(new IssuanceFlowCalculator.IssuanceFlowInput(
-                16L, CouponStatus.OPEN, true, END.minusSeconds(30), END, END.minusSeconds(30), END,
+                16L, CouponRoundStatus.OPEN, true, END.minusSeconds(30), END, END.minusSeconds(30), END,
                 1d, 0d, 1d,
                 END.minusSeconds(30), END, List.of(), null, END.minusSeconds(1),
                 SourceStatus.VALID, END.minusSeconds(1))).isNotNull();
@@ -201,7 +201,7 @@ class IssuanceFlowCalculatorTest {
     void keepsMaximumFiniteCountRepresentableOverOneMinute() {
         Instant start = END.minus(Duration.ofMinutes(1));
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                41L, CouponStatus.OPEN, true, start, END, start, END,
+                41L, CouponRoundStatus.OPEN, true, start, END, start, END,
                 Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE,
                 start.minus(Duration.ofMinutes(1)), start, List.of(), END, start,
                 SourceStatus.VALID, END);
@@ -216,7 +216,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void calculatesFiniteRateAcrossExtremeDuration() {
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                42L, CouponStatus.OPEN, true, Instant.MIN, Instant.MAX, Instant.MIN, Instant.MAX,
+                42L, CouponRoundStatus.OPEN, true, Instant.MIN, Instant.MAX, Instant.MIN, Instant.MAX,
                 1d, 1d, 1d, Instant.MIN, Instant.MAX, List.of(), END, Instant.MIN,
                 SourceStatus.VALID, END);
 
@@ -232,13 +232,13 @@ class IssuanceFlowCalculatorTest {
         Instant nanosStart = END.minusNanos(1);
         IssuanceFlowCalculator.IssuanceFlowInput currentOverflow =
                 new IssuanceFlowCalculator.IssuanceFlowInput(
-                        43L, CouponStatus.OPEN, true, nanosStart, END, nanosStart, END,
+                        43L, CouponRoundStatus.OPEN, true, nanosStart, END, nanosStart, END,
                         Double.MAX_VALUE, Double.MAX_VALUE, 1d,
                         END.minusSeconds(2), END.minusSeconds(1), List.of(), END, nanosStart,
                         SourceStatus.VALID, END);
         IssuanceFlowCalculator.IssuanceFlowInput bucketOverflow =
                 new IssuanceFlowCalculator.IssuanceFlowInput(
-                        44L, CouponStatus.OPEN, true, END.minusSeconds(1), END,
+                        44L, CouponRoundStatus.OPEN, true, END.minusSeconds(1), END,
                         END.minusSeconds(1), END,
                         1d, 1d, 1d, END.minusSeconds(2), END.minusSeconds(1),
                         List.of(bucket(nanosStart, END, Double.MAX_VALUE)), END,
@@ -256,12 +256,12 @@ class IssuanceFlowCalculatorTest {
     @Test
     void validatesExplicitNoTrafficAndDoesNotStopWhenStockIsEmpty() {
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                17L, CouponStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
+                17L, CouponRoundStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
                 END.minus(Duration.ofMinutes(1)), END, 1d, 1d, 1d,
                 END.minus(Duration.ofMinutes(1)), END, List.of(), null, END.minusSeconds(1),
                 SourceStatus.NO_TRAFFIC, END)).isInstanceOf(IllegalArgumentException.class);
         assertThat(new IssuanceFlowCalculator().calculate(POLICY, List.of(input(
-                18L, 1L, 0L, 1L, CouponStatus.OPEN, false, SourceStatus.VALID, END,
+                18L, 1L, 0L, 1L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, END,
                 END.minus(Duration.ofMinutes(1)), List.of()))).issuanceFlows().get(18L).value().state())
                 .isEqualTo(AdminOverviewSnapshot.IssuanceFlowState.NORMAL);
     }
@@ -271,10 +271,10 @@ class IssuanceFlowCalculatorTest {
     void preservesUnavailableStatusesAndSortsBuckets() {
         IssuanceFlowCalculator calculator = new IssuanceFlowCalculator();
         IssuanceFlowCalculator.IssuanceFlowInput pending = new IssuanceFlowCalculator.IssuanceFlowInput(
-                19L, CouponStatus.OPEN, null, null, null, null, null, null, null, null, null, null, null,
+                19L, CouponRoundStatus.OPEN, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, SourceStatus.PENDING, null);
         IssuanceFlowCalculator.IssuanceFlowInput unordered = new IssuanceFlowCalculator.IssuanceFlowInput(
-                20L, CouponStatus.OPEN, true, END.minusSeconds(40), END, END.minusSeconds(40), END,
+                20L, CouponRoundStatus.OPEN, true, END.minusSeconds(40), END, END.minusSeconds(40), END,
                 2d, 2d, 2d,
                 END.minusSeconds(40), END, List.of(bucket(END.minusSeconds(20), END, 1L),
                         bucket(END.minusSeconds(40), END.minusSeconds(20), 1L)), END,
@@ -291,7 +291,7 @@ class IssuanceFlowCalculatorTest {
     void preservesHistoricalTrendForCurrentNoTrafficAndRejectsBucketOutsideTrendRange() {
         IssuanceFlowCalculator calculator = new IssuanceFlowCalculator();
         IssuanceFlowCalculator.IssuanceFlowInput noTraffic = new IssuanceFlowCalculator.IssuanceFlowInput(
-                21L, CouponStatus.OPEN, true,
+                21L, CouponRoundStatus.OPEN, true,
                 END.minusSeconds(30), END, END.minus(Duration.ofMinutes(2)), END,
                 0d, 0d, 0d, END.minus(Duration.ofMinutes(1)), END.minusSeconds(30),
                 List.of(
@@ -302,7 +302,7 @@ class IssuanceFlowCalculatorTest {
         assertThat(calculator.calculate(POLICY, List.of(noTraffic)).issuanceFlows().get(21L).value().points())
                 .hasSize(2);
         assertThatThrownBy(() -> calculator.calculate(POLICY, List.of(new IssuanceFlowCalculator.IssuanceFlowInput(
-                23L, CouponStatus.OPEN, true,
+                23L, CouponRoundStatus.OPEN, true,
                 END.minusSeconds(30), END, END.minusSeconds(30), END,
                 1d, 1d, 1d, END.minusSeconds(30), END,
                 List.of(bucket(END.minusSeconds(31), END.minusSeconds(1), 1L)), null,
@@ -314,11 +314,11 @@ class IssuanceFlowCalculatorTest {
     void preservesUnavailableAndRejectsFutureLastCompletion() {
         IssuanceFlowCalculator calculator = new IssuanceFlowCalculator();
         assertThat(calculator.calculate(POLICY, List.of(new IssuanceFlowCalculator.IssuanceFlowInput(
-                24L, CouponStatus.OPEN, null, null, null, null, null, null, null, null, null, null, null,
+                24L, CouponRoundStatus.OPEN, null, null, null, null, null, null, null, null, null, null, null,
                 null, null, SourceStatus.UNAVAILABLE, null))).issuanceFlows().get(24L).status())
                 .isEqualTo(SourceStatus.UNAVAILABLE);
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                25L, CouponStatus.OPEN, true, END.minusSeconds(1), END, END.minusSeconds(1), END,
+                25L, CouponRoundStatus.OPEN, true, END.minusSeconds(1), END, END.minusSeconds(1), END,
                 1d, 1d, 1d,
                 END.minusSeconds(1), END, List.of(), END.plusSeconds(1), END.minusSeconds(1),
                 SourceStatus.VALID, END)).isInstanceOf(IllegalArgumentException.class);
@@ -328,7 +328,7 @@ class IssuanceFlowCalculatorTest {
     @Test
     void rejectsLastCompletionAfterStoppedConditionStarted() {
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                27L, CouponStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
+                27L, CouponRoundStatus.OPEN, true, END.minus(Duration.ofMinutes(1)), END,
                 END.minus(Duration.ofMinutes(1)), END, 1d, 0d, 2d,
                 END.minus(Duration.ofMinutes(2)), END.minus(Duration.ofMinutes(1)), List.of(),
                 END.minusSeconds(30), END.minus(Duration.ofMinutes(12)), SourceStatus.VALID, END))
@@ -350,31 +350,31 @@ class IssuanceFlowCalculatorTest {
         Instant conditionStartedAt = END.minusSeconds(30);
 
         assertThat(new IssuanceFlowCalculator.IssuanceFlowInput(
-                28L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
+                28L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart, conditionStartedAt,
                 SourceStatus.VALID, END)).isNotNull();
         assertThat(new IssuanceFlowCalculator.IssuanceFlowInput(
-                29L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
+                29L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), END, conditionStartedAt,
                 SourceStatus.VALID, END)).isNotNull();
         assertThat(new IssuanceFlowCalculator.IssuanceFlowInput(
-                30L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
+                30L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart.minusNanos(1),
                 conditionStartedAt, SourceStatus.VALID, END)).isNotNull();
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                31L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
+                31L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), null, conditionStartedAt,
                 SourceStatus.VALID, END)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                32L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
+                32L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 1d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart.minusNanos(1),
                 conditionStartedAt, SourceStatus.VALID, END)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                33L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
+                33L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart, conditionStartedAt,
                 SourceStatus.VALID, END)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new IssuanceFlowCalculator.IssuanceFlowInput(
-                34L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
+                34L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), END, conditionStartedAt,
                 SourceStatus.VALID, END)).isInstanceOf(IllegalArgumentException.class);
     }
@@ -387,7 +387,7 @@ class IssuanceFlowCalculatorTest {
                 0.50, Duration.ofSeconds(20), Duration.ofMinutes(5), Duration.ofMinutes(2),
                 Duration.ofMinutes(10));
         IssuanceFlowCalculator.IssuanceFlowInput input = new IssuanceFlowCalculator.IssuanceFlowInput(
-                35L, CouponStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
+                35L, CouponRoundStatus.OPEN, true, windowStart, END, windowStart, END, 1d, 0d, 2d,
                 END.minus(Duration.ofMinutes(2)), windowStart, List.of(), windowStart.minusNanos(1),
                 windowStart.plusSeconds(30), SourceStatus.VALID, END);
 
@@ -400,7 +400,7 @@ class IssuanceFlowCalculatorTest {
 
     private static IssuanceFlowCalculator.IssuanceFlowInput input(
             long couponId, double attemptedCount, double completedCount, double comparisonCompletedCount,
-            CouponStatus status, boolean stockAvailable, SourceStatus sourceStatus, Instant observedAt,
+            CouponRoundStatus status, boolean stockAvailable, SourceStatus sourceStatus, Instant observedAt,
             Instant windowStart, List<IssuanceFlowCalculator.IssuanceBucket> buckets
     ) {
         return new IssuanceFlowCalculator.IssuanceFlowInput(

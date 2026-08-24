@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
-import com.kafkick.core.coupon.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
 
 /** Verifies the deterministic raw issuance-history rows supplied to the Core calculator. */
 class AdminIssuanceHistoryMockDataFactoryTest {
