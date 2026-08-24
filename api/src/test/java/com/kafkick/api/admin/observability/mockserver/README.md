@@ -40,7 +40,7 @@ HTML 오류 응답 파싱 방어는 계속 필요합니다.
 | `meta` | 구현 완료 | CY-416 |
 | `errors` | 구현 완료 | CY-448 |
 | `totalRps` | 만들지 않기로 함 | 프론트가 폐기한 필드 (OBS-38) |
-| `clientInvalid` | 구현 완료 | CY-448 의 `errors.errorClasses` 키로 흡수됨. 최상위 필드로는 만들지 않습니다 |
+| `clientInvalid` | 구현 완료 | CY-448 의 `errors.classes[].key` 로 흡수됨. 최상위 필드로는 만들지 않습니다 |
 | `percentileMode` | 만들지 않기로 함 | 프론트에 대응 필드 없음 (OBS-38) |
 | `series` | 진행 중 | OBS-33 |
 | `markers` | 진행 중 | OBS-34 |
