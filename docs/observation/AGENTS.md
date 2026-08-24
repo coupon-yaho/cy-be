@@ -66,5 +66,10 @@ CY-5가 `main`에 병합되어 Docker 배포 워크플로가 성공하면, `api-
 - analytics·benchmarks·runtime-config의 501은 이미지 노후가 아니라 CY-5 코드의 명시적
   미구현이다. OBS-28 범위에서 구현하지 않으며, 각각의 Use Case·Provider/CAS 소유 티켓에서
   해결한다.
+- 실제 원천 전환 소유는 기존 A 티켓에 있다. overview는 A-06, 회원 발급 문의는 A-07,
+  발급 이력은 A-08, coupon-metrics는 A-10, analytics는 A-11이다. OBS-40은 이 구현을
+  중복하지 않고 fixture가 운영에 남지 않는지와 실제 Repository 인계를 검증한다.
+- benchmarks 목록 501은 OBS-43, runtime-config GET·PUT 501은 보안·DTO 결정을 먼저 거치는
+  OBS-41, 재시도 미터·retire 복구는 OBS-39, compose 포트 변수 정본화는 OBS-42에서 다룬다.
 - 로컬 호스트의 3306(MySQL)과 6379(Redis)는 다른 프로세스가 점유했다. coupon-yaho 스택의
   호스트 공개 포트만 3307·6380으로 옮겼고, 컨테이너 내부 DB·Redis 포트는 계속 3306·6379다.
