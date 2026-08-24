@@ -321,7 +321,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             Instant bucketEnd = trendEnd.minus(overviewProperties.trendStep().multipliedBy(index));
             if (attempts.containsKey(bucketEnd) && successes.containsKey(bucketEnd)) {
                 buckets.add(new IssuanceBucket(
-                        bucketEnd.minus(overviewProperties.trendStep()),
+                        bucketEnd.minus(overviewProperties.currentWindow()),
                         bucketEnd, successes.get(bucketEnd)));
             }
         }

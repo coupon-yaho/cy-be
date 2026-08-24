@@ -53,6 +53,10 @@ public record OverviewPrometheusProperties(
         if (trendWindow.toSeconds() % trendStep.toSeconds() != 0L) {
             throw new IllegalArgumentException("trend-window는 trend-step으로 나누어져야 합니다.");
         }
+        if (!currentWindow.equals(trendStep)) {
+            // 각 Prometheus increase 구간과 화면 버킷 폭이 달라지면 추세 값이 겹치거나 비게 됩니다.
+            throw new IllegalArgumentException("current-window와 trend-step은 같아야 합니다.");
+        }
         if (comparisonOffset.compareTo(trendWindow) > 0
                 || comparisonOffset.toSeconds() % trendStep.toSeconds() != 0L) {
             // 비교 endpoint가 query_range grid에 없으면 값이 있어도 O1이 PENDING으로 오판됩니다.

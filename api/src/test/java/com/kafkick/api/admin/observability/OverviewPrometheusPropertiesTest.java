@@ -36,10 +36,22 @@ class OverviewPrometheusPropertiesTest {
     @DisplayName("비교 offset이 추세 평가점과 맞지 않으면 설정을 거부한다")
     void rejectsComparisonOffsetOutsideTrendGrid() {
         assertThatThrownBy(() -> new OverviewPrometheusProperties(
-                Duration.ofMinutes(1), Duration.ofMinutes(3), Duration.ofMinutes(10),
+                Duration.ofMinutes(2), Duration.ofMinutes(3), Duration.ofMinutes(10),
                 Duration.ofMinutes(2), Duration.ofMinutes(5), Duration.ofSeconds(10),
                 Duration.ofHours(1), 1_000))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("comparison-offset");
+    }
+
+    @Test
+    @DisplayName("현재 집계 구간과 추세 step이 다르면 설정을 거부한다")
+    void rejectsCurrentWindowDifferentFromTrendStep() {
+        assertThatThrownBy(() -> new OverviewPrometheusProperties(
+                Duration.ofMinutes(2), Duration.ofMinutes(1), Duration.ofMinutes(10),
+                Duration.ofMinutes(1), Duration.ofMinutes(5), Duration.ofSeconds(10),
+                Duration.ofHours(1), 1_000))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("current-window")
+                .hasMessageContaining("trend-step");
     }
 }
