@@ -77,7 +77,7 @@ class NoWallClockInBatchTest {
      * VerifyJobConfig      0  판정 잡이다 — .coderabbit.yaml 이 주입 시계까지 금지한다
      * ExpireJobConfig      1  청크의 커밋 시각 — 판정이 아니라 만료 대상 선정이다
      *                            (CY-421 이 관측 리스너를 걷어내며 둘에서 하나가 됐다)
-     * CleanupJobConfig     1  버려진 실행 컷오프 — 정리는 판정을 안 낸다
+     * CleanupJobConfig     2  버려진 실행 컷오프 · 배치 메타 보존 컷오프
      * ExpireScheduler      2  크론 슬롯 계산과 기동 가드 — 잡 밖이다
      * CleanupScheduler     2  같은 축
      * VerifyTriggerController 1  asOf 미래 검사 — 접수 단계다
@@ -91,12 +91,13 @@ class NoWallClockInBatchTest {
      */
     private static final Map<String, Integer> INJECTED_CLOCK_BUDGET = Map.of(
             "com/kafkick/batch/job/ExpireJobConfig.java", 1,
-            "com/kafkick/batch/job/CleanupJobConfig.java", 1,
+            // 둘이다 — 버려진 검증 컷오프(abandoned-after-hours)와
+            // 배치 메타 보존 컷오프(batch.cleanup.metadata-keep-days). Step 이 갈려 있어 각자 잡는다.
+            "com/kafkick/batch/job/CleanupJobConfig.java", 2,
             "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
             "com/kafkick/batch/schedule/CleanupScheduler.java", 2,
             "com/kafkick/batch/api/VerifyTriggerController.java", 1,
             "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1);
-
 
     /**
      * <b>주입된 시계도 예산을 갖는다.</b> {@code timeProvider.now()} 는 위 정규식에 안 걸리고,

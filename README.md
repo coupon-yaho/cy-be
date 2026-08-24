@@ -137,15 +137,17 @@ docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
 
 예전에는 그 상태로도 **기동이 그냥 성공**하고 첫 잡 실행에서 SQL 에러로 죽었다.
 지금은 `SchemaPresenceGuard` 가 기동 시점에 막고 **무엇이 없는지와 조치를 말한다** —
-`api` 를 먼저 띄우라는 것인지, `V2__batch_metadata.sql` 만 부으면 되는지, 접속 URL 에서
+`api` 를 먼저 띄우라는 것인지, 배치 메타 마이그레이션 셋만 부으면 되는지, 접속 URL 에서
 DB 이름을 빠뜨린 것인지 셋을 가른다.
 
 `api` 를 한 번 띄우는 것이 번거로우면 마이그레이션만 직접 부어도 된다. Flyway 이력이
 남지 않으므로 **로컬 실험용으로만** 쓴다.
 
 > 검증용 셋(`coupon_clean`·`coupon_corrupt`)은 cy-seed 로 만드는데 거기에는 Spring Batch
-> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V2__batch_metadata.sql` 을 따로
-> 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
+> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V2__batch_metadata.sql` 과 인덱스
+> 둘(`V14__ix_batch_job_execution_lookup.sql` · `V15__ix_batch_job_execution_history.sql`)을
+> 따로 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
+> **인덱스는 기동 가드가 못 본다** — 빠뜨려도 통과하고 나중에 지표·정리 잡에서만 드러난다.
 
 **둘로 가른 것은 k6 측정 때문이다.** 부하 중에는 배치가 재고를 건드리면 안 되는데, 그 정지
 수단이 설정이 아니라 컨테이너다 — `base.yml` 이 한 글자도 안 바뀌어야 부하 비교표의

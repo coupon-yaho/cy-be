@@ -23,8 +23,12 @@ import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.core.support.TimeProvider;
 
 /**
- * <b>만료 뒤 20분에 둔다.</b> 순서가 필요해서가 아니다 — 정리는 검증이 남긴 파생 행만 걷고
- * 만료가 만드는 것을 하나도 안 읽는다. 20분은 <b>자원 분리</b>다. 만료가 밀려도 겹치지
+ * <b>만료 뒤 20분에 둔다.</b> 순서가 필요해서가 아니다 — 정리는 검증이 남긴 파생 행과
+ * <b>보존 기간이 지난 배치 메타</b>를 걷는다. 뒤엣것은 잡 이름을 안 가려서 <b>만료가 남긴
+ * {@code BATCH_*} 행도 대상</b>이지만 <b>끝난 실행만</b> 본다
+ * ({@code END_TIME IS NOT NULL AND END_TIME < cutoff}) — 도는 만료의 행은
+ * {@code END_TIME} 이 {@code NULL} 이라 애초에 대상이 아니다.
+ * <b>도는 만료를 지키는 것은 이 20분이 아니라 그 술어다.</b> 20분은 <b>자원 분리</b>다. 만료가 밀려도 겹치지
  * 않을 폭이고, 그 경계를 {@code BatchJobRunningTooLong} 이 600초에서 지킨다.
  *
  * <p><b>도는 검증을 안 걷는 것은 이 클래스가 아니라 잡 안의 두 방어선이다.</b> 스케줄러는

@@ -383,7 +383,10 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 
 | 무엇 | 언제 |
 |---|---|
-| `BATCH_*` 정리 | **`cleanupJob` 티켓.** 하루 288 인스턴스. 3주 시연(약 3.6만 행)은 무시할 수 있다. `batch.metadata.keep-days` 자리를 설정에 예고해 뒀다 |
+| ~~`BATCH_*` 정리~~ | **완료 · CY-436.** `cleanupJob` 의 `purgeBatchMetadataStep` 이 `batch.cleanup.metadata-keep-days`(기본 30, **최소 8 = 되읽기 창 7일 초과, 기동 거절**)로 걷는다. 딸린 행을 FK 역순으로, 고아 `JobInstance` 를 같은 트랜잭션에서 함께 지운다. `END_TIME` 이 비어 있는 행(시체)은 대상이 아니다 — 그 축은 §6 시체 절이 지고 CY-429 의 복구 API 가 닫는다. 청크는 `batch.cleanup.metadata-chunk-size`(기본 500, **잡 실행 수**, 1..5000)다. **삭제는 `IN` 목록이 아니라 id 하나씩** — `IN` 목록이 테이블 행 수 대비 커지면 옵티마이저가 풀스캔을 골라 대상이 아닌 행까지 잠근다. 그러면 양방향이 다 깨진다(실측): RR 에서는 메타 테이블 전체 + 갭 + supremum 에 X 락이 걸려 **다른 잡 기동과 도는 잡의 하트비트 커밋이 막히고**, `READ COMMITTED` 로 내려도 풀스캔은 **남이 잡은 행에서 대기**해 청크가 `ERROR 1205` 로 죽는다. id 하나씩이면 여섯 문장이 전부 `rows=1` 이라 RR·RC 양쪽에서 네 프로브가 다 통과한다 — **격리수준은 기본값 그대로**다. 대가는 5,000 실행 기준 680ms → 1,980ms(약 2.9배, 청크당 200ms 수준). 만료가 일 1회로 옮겨 인스턴스 순증은 하루 288 → **1** |
+| 정리 Step 1 이 `expireJob` 을 안 본다 | **미착수.** `purgeVerificationRunsStep` 의 프로브가 `verifyJob` 만 본다(`blockingExecutions(VerifyJobConfig.JOB_NAME)`). 만료 04:10 과 정리 04:30 이 겹치는 밤에 정리가 물러나지 않는다. CY-436 이 닫은 것은 **Step 2(배치 메타)가 남을 잠그거나 남에게 잠기는 경로**이고 그건 삭제 계획을 고쳐서지 격리수준이 아니다. Step 1 은 기본 격리수준 그대로이고, 이 항목이 말하는 것은 락이 아니라 프로브가 만료를 안 봐서 **정리가 물러나지 않는 것**이다 |
+| 버려진 실행 컷오프가 안 얼어 있다 | **미착수.** Step 1 의 `abandonedBefore` 는 청크마다 다시 잡는다(Step 2 의 메타 컷오프는 첫 청크에 얼린다). 드레인이 길어지면 시작 때 대상이 아니던 검증이 컷오프 안으로 들어와 그 입력(`asof_state`)이 걷힐 수 있다 — 지금은 `verifyJob` 프로브가 가려 줄 뿐이다 |
+| 기동 가드가 배치 메타 **인덱스**를 안 본다 | **미착수.** `SchemaPresenceGuard` 는 테이블과 핵심 컬럼만 본다. `V14`·`V15` 가 빠져도 기동과 동작이 통과하고, 되읽기 데드라인 초과(게이지 NaN)나 정리 잡의 매 청크 전체 스캔으로만 드러난다. `information_schema.statistics` 를 보는 셋째 축이 필요하다 — 지금은 가드 메시지가 그 사실을 말하는 데까지만 했다 |
 | 업무 포트 노출 | ~~compose 티켓~~ ~~CY-359~~ **CY-368 에서 다시 정했다.** 그 포트에 인증 없는 admin 트리거가 열려 `batch.yml` 은 업무 포트를 **아예 안 내보낸다** — 필요할 때만 `batch-expose.yml` 을 얹어 `127.0.0.1:${BATCH_HOST_PORT:-9090}:9090` 으로 연다. 관리 포트(9092)는 어느 경우에도 안 올린다 |
 
 ---
@@ -391,7 +394,7 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 ## 4a. 검증용 셋에 Spring Batch 메타 테이블이 없다 (CY-359 가 발견)
 
 `coupon_clean`·`coupon_corrupt` 는 cy-seed 의 `ddl/00_schema.sql` 로 만들어지는데
-`CREATE TABLE` 17개 중 **`BATCH_*` 는 0개**다. cy-be 의 `V2__batch_metadata.sql` 은
+`CREATE TABLE` 17개 중 **`BATCH_*` 는 0개**다. cy-be 의 `V2__batch_metadata.sql`(과 인덱스 둘 `V14`·`V15`)은
 Flyway 소유자인 `api` 만 돌리고, 검증용 셋은 그 Flyway 가 닿는 DB 가 아니다.
 
 그런데 그 DB 를 보게 배치를 띄우는 것이 `application.yml.example` 이 문서화한 정상 절차다.
@@ -405,7 +408,7 @@ CY-359 는 `SchemaPresenceGuard` 로 그것을 **기동 시점에 드러내고 �
 |---|---|
 | 시드 생성 절차에 `V2` 를 넣는다 (cy-seed 쪽) | 시드 저장소가 cy-be 의 마이그레이션 파일을 알아야 한다 — 지금은 스키마 주인이 cy-be 라는 규율과 맞물려 사본 관리가 하나 더 는다 |
 | compose 에 마이그레이션 원샷 서비스를 넣는다 | `api` 이미지를 `--spring.batch.job.enabled=false` 로 한 번 돌린다. `base.yml` 이 `api` 를 알아야 한다 |
-| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차의 V2 주입 단계에 명령을 박아 뒀다. 사람이 빠뜨리면 가드가 잡는다 |
+| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차에 `V2`·`V14`·`V15` 주입 명령을 박아 뒀다. **테이블 누락은 가드가 잡지만 인덱스 누락은 못 잡는다** — 빠뜨려도 기동과 동작이 통과한다 |
 
 지금은 셋째다 — 가드가 있어 **조용히 실패하지는 않는다**. 검증을 자동으로 돌리는 티켓이
 열리면 그때 앞의 둘 중 하나로 간다.
@@ -695,9 +698,13 @@ UPDATE BATCH_STEP_EXECUTION
  WHERE JOB_EXECUTION_ID = :id AND STATUS IN ('STARTING','STARTED','STOPPING');
 ```
 
-> **`cleanupJob` 도 이 축은 아직 안 진다** — `BATCH_*` 메타 정리는
-> 아래 §7 과 같은 축이라 뒤로 미뤘고, 만료가 일 1회로 바뀌어 인스턴스 증가가 하루 288 에서
-> 1 로 줄었다.
+> **`cleanupJob` 은 이 축을 안 진다 — CY-436 뒤에도 그렇다.** `purgeBatchMetadataStep` 은
+> `END_TIME IS NOT NULL` 인 행만 걷는다(`CleanupJdbcAdapter#deleteBatchMetadataChunk`,
+> `CleanupJobTest#keepsUnfinishedExecutionsHoweverOld` 가 고정). **시체를 지우면
+> `BatchStuckExecution` 이 조용해지는데 그건 고친 게 아니라 증거를 지운 것**이다.
+> 그 행은 CY-429 의 복구 API 가 사람의 판단으로 닫는다 — 위 절차가 그것이다.
+>
+> `BATCH_*` **메타 보존 삭제**는 별개 축이고 CY-436 이 졌다 — §4 운영 표를 보라.
 
 > ⚠️ **아래 `asof_state` DELETE 와 헷갈리지 마라.** 그쪽은 버려진 **검증 실행**이 남긴
 > 파생 행을 걷는 것이고 이 절과 다른 사고다.

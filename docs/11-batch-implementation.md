@@ -169,6 +169,10 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 `spring.batch.jdbc.*` 는 **Boot 4.1 에 존재하지 않는 키다.** 이 파일이 없어도 **기동은 성공하고**,
 첫 잡 실행에서 `Table 'BATCH_JOB_INSTANCE' doesn't exist` 로 죽는다.
 
+보조 인덱스 둘은 `V14`·`V15` 가 만든다 — 셋을 묶어 "배치 메타 마이그레이션 셋" 이라 부르고
+절차는 `docs/14` 에 있다. `V2` 누락은 기동 가드가 잡지만 **인덱스 둘이 없으면 기동도 동작도
+통과한다** — 가드가 테이블만 보기 때문이다.
+
 ---
 
 ## 4. 배치 3계층 — 쓰기 대상으로 가른다
@@ -188,7 +192,7 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
   reportDump          관리 API      최종 1회
 
 계층 3 · 지운다
-  cleanupJob          Spring Batch  04:30   검증 파생 행(asof_state · 통계 셋 · findings)
+  cleanupJob          Spring Batch  04:30   검증 파생 행(asof_state · 통계 셋 · findings) + BATCH_* 메타(metadata-keep-days 30)
   dltReprocessJob     수동          ③ Kafka 계약 대기
 
 일회성

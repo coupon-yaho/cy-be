@@ -155,6 +155,36 @@ batch:
     #    안 지운 채 잡이 COMPLETED 로 닫힌다 — CleanupNotSucceeding 도 안 울어서 가장 무거운
     #    테이블만 안 걷히는 상태가 감시망을 통째로 통과한다. 기동 때 거절한다.
     chunk-size: ${CLEANUP_CHUNK_SIZE:10000}
+
+    # ── 배치 메타(BATCH_*) 보존 ──────────────────────────────────────────────
+    # 끝난 지 이만큼 지난 JobExecution 과 딸린 행을 cleanupJob 의 둘째 Step 이 걷는다.
+    #
+    # ⚠️ **최소 8 이다(= 되읽기 창 7일 초과) — 그 아래는 기동 때 거절한다.** BatchRunMetricsRefresher 와
+    #    ExpirePendingRefresher 가 마지막 성공 실행을
+    #    END_TIME > NOW() - INTERVAL 7 DAY 창에서 찾는다. 보존이 그 창보다 길어야
+    #    삭제가 게이지에 영향을 줄 수 없다 — 창이 언제나 구속 조건이 된다.
+    #    안쪽으로 내려도 잡이 매일 성공하는 동안은 멀쩡해 보인다. 무너지는 것은 **연속
+    #    실패가 보존 기간을 넘긴 날**이다 — 마지막 성공이 지워져 '며칠 실패' 가
+    #    '한 번도 성공한 적 없음'(NaN)으로 보고되고 ExpireNeverSucceeded(critical)가 뜬다.
+    #    그 창은 두 되읽기의 SQL 에 리터럴로 있어 코드가 두 값을 못 잇는다.
+    #
+    # 실행 중이거나 종료 표시를 못 남기고 죽은 행(END_TIME IS NULL)은 안 걷는다.
+    # 그것을 지우면 BatchStuckExecution 이 조용해지는데, 고친 게 아니라 증거를 지운 거다.
+    metadata-keep-days: ${CLEANUP_METADATA_KEEP_DAYS:30}
+
+    # 한 트랜잭션이 지울 **잡 실행 개수**다. 바로 위 chunk-size(asof_state 행 수)와 뜻이
+    # 다르므로 이름을 갈라 뒀다 — 실행 하나에 딸린 행이 잡마다 크게 다르다(verifyJob 은
+    # Step 열하나 + 문맥 blob). 10000 을 그대로 쓰면 한 트랜잭션이 27만 행을 들고
+    # step-timeout-ms(120초)에 걸리고, 그러면 여태 지운 것이 전부 롤백돼 진도가 0 이라
+    # 다음 날도 처음부터 시도한다.
+    #
+    # ⚠️ 1..5000 이다. 삭제는 id 하나씩 나가므로(CleanupJdbcAdapter) 이 값은
+    #    **한 트랜잭션의 문장 수 ÷ 6** 이다. 잠그는 행은 이 값이 아니라 그 실행들에 딸린
+    #    행 전부다 — verifyJob 이면 실행 하나에 26행(Step 11 + Step 문맥 11 + 파라미터 1
+    #    + 문맥 1 + 실행 1 + 인스턴스 1)이라 5000 이면 13만 행이 한 트랜잭션에 들어간다.
+    #    step-timeout-ms 안에 못 들어오면 전량 롤백이라 진도가 0 이다.
+    metadata-chunk-size: ${CLEANUP_METADATA_CHUNK_SIZE:500}
+
     # 판정을 못 내고 열린 채 남은 실행을 언제부터 "버려진 것" 으로 볼 것인가.
     #
     # ⚠️ **이 창은 두 번째 방어선이다.** 첫 번째는 정리 Step 이 청크마다 배치 메타에 묻는
@@ -165,7 +195,8 @@ batch:
     abandoned-after-hours: ${CLEANUP_ABANDONED_AFTER_HOURS:24}
     # ⚠️ 이것은 **청크 하나의 데드라인**이지 잡 전체의 상한이 아니다 — 만료의
     #    expire.step-timeout-ms 와 같은 뜻이다. CONTINUABLE 로 돌아올 때마다 새 트랜잭션이
-    #    열려 매번 다시 센다. chunk-size 를 키우면 이 값도 같이 키운다.
+    #    열려 매번 다시 센다. **두 Step 이 이 값을 공유한다** —
+    #    chunk-size(asof_state 행)든 metadata-chunk-size(잡 실행)든 키우면 이 값도 같이 키운다.
     #
     # ⚠️ 이 값을 stuck-job-after-ms 위로 올리면 살아 있는 정리가 시체로 신고된다 —
     #    RunningJobProbe 생성자가 그 관계를 기동 때 검사한다.
@@ -332,10 +363,7 @@ batch:
     # ⚠️ **읽는 코드가 아직 없다.** 증분 검증에는 스케줄러가 없고 온디맨드 경로뿐이다 —
     #    이 값은 D 가 검증 크론을 세울 때 쓸 자리 표시다. 크론 문법만 테스트가 확인한다.
     verify-incremental-cron: "0 */10 * * * *"  # 증분 검증 10분 (미배선)
-    #
-    # ⚠️ BATCH_* 메타는 cleanupJob 도 아직 안 걷는다 — docs/13 §7 과 같은 축이라 뒤로 미뤘다.
-    #    만료가 일 1회로 바뀌어 인스턴스 증가가 하루 288 에서 1 로 줄었고, 3주 시연 규모에서
-    #    무시할 수 있다. 보존 기간 키를 여기 둘 자리다 — batch.metadata.keep-days
+
     coupon-open-cron: "0 * * * * *"       # 회차 상태 전이 1분
     coupon-create-cron: "0 0 4 * * *"     # 회차 생성 매일 04:00
 
@@ -445,7 +473,10 @@ spring:
   #
   # ⚠️ 메타 셋은 데이터 넷과 **따로 빈다.** 검증용 셋(coupon_clean·coupon_corrupt)은
   #    cy-seed 의 ddl/ 로 만들어지는데 거기에 BATCH_* 가 하나도 없다. 그 DB 를 보게
-  #    띄우려면 V2__batch_metadata.sql 을 따로 부어야 한다 — docs/13 §4a.
+  #    띄우려면 배치 메타 마이그레이션 셋(V2__batch_metadata.sql ·
+#    V14__ix_batch_job_execution_lookup.sql · V15__ix_batch_job_execution_history.sql)을
+#    따로 부어야 한다 — 절차는 docs/14.
+#    ⚠️ 인덱스 둘은 기동 가드가 못 보므로 빠뜨려도 기동과 동작이 통과한다.
   flyway:
     enabled: false
 

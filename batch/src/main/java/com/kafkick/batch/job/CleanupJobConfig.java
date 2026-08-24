@@ -11,9 +11,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.job.Job;
+import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
+import org.springframework.batch.core.step.StepExecution;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
@@ -28,6 +30,7 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.verification.CleanupRepository;
+import com.kafkick.core.verification.CleanupRepository.PurgedMetadata;
 import com.kafkick.core.verification.StatsRepository;
 
 /**
@@ -49,8 +52,8 @@ import com.kafkick.core.verification.StatsRepository;
  * <p><b>무엇을 지우나.</b> 검증이 남긴 파생 행 셋이다 — {@code asof_state} · 통계 셋 ·
  * {@code verification_findings}. {@code verification_runs} 행 자체는 남긴다 — 그것이 판정
  * 이력이고 관제와 지표가 그 위에 선다. {@code FAIL} 의 검출 행도 남긴다({@code deleteFindings}
- * 의 근거). <b>{@code BATCH_*} 메타는 아직 안 지운다</b> — {@code docs/13} §7 과 같은 축이라
- * 뒤로 미뤘다.
+ * 의 근거). <b>{@code BATCH_*} 메타는 {@code purgeBatchMetadataStep} 이 걷는다</b>
+ * ({@code batch.cleanup.metadata-keep-days}, 최소 8 = 되읽기 창 7일 초과).
  *
  * <p><b>멱등성 레코드와 토큰은 안 지운다.</b> {@code idempotency_records} 는 읽고 쓰는 코드가
  * 저장소에 <b>하나도 없고</b>, 토큰은 애초에 이 저장소의 테이블이 아니다(Redis, 영역 ③).
@@ -87,6 +90,46 @@ public class CleanupJobConfig {
 
     private static final String RUNS_PURGED_KEY = "cleanup.runsPurged";
 
+    /** 지운 배치 메타 실행 수. Step 이 갈려 있어 커서도 따로 둔다. */
+    private static final String META_EXECUTIONS_KEY = "cleanup.metaExecutions";
+
+    /** 지운 고아 인스턴스 수. */
+    private static final String META_INSTANCES_KEY = "cleanup.metaInstances";
+
+    /** 첫 청크가 잡은 컷오프. 청크마다 다시 잡으면 한 실행 안에서 기준이 앞으로 민다. */
+    private static final String META_CUTOFF_KEY = "cleanup.metaCutoff";
+
+    /**
+     * <b>보존 하한.</b> {@code BatchRunMetricsRefresher} 와 {@code ExpirePendingRefresher} 가
+     * 마지막 성공 실행을 <b>{@code END_TIME > NOW() - 7 DAY}</b> 창에서 찾는다. 보존이 그
+     * 창보다 길어야 <b>삭제가 게이지에 영향을 줄 수 없다</b> — 창이 언제나 구속 조건이 된다.
+     *
+     * <p>⚠️ <b>"안쪽으로 내리면 곧 {@code NaN}" 은 아니다.</b> 두 잡은 매일 도니까 오늘치
+     * 성공이 남아 평소에는 멀쩡하다. 무너지는 것은 <b>잡이 {@code metadata-keep-days} 일 넘게 연속
+     * 실패한 날</b>이다 — 마지막 성공이 컷오프 밖으로 밀려 지워지고, 게이지가 {@code NaN} 이
+     * 되어 {@code ExpireNeverSucceeded}(critical)가 뜬다. 실제 상태는 <i>"며칠 실패"</i> 인데
+     * 관제는 <i>"한 번도 성공한 적 없음"</i> 을 읽는다 — 사고 등급이 바뀐다.
+     *
+     * <p>⚠️ <b>컷오프의 시간대.</b> 이 값이 미는 컷오프는 {@code TimeProvider}(UTC)로 잡는데,
+     * 비교 대상인 {@code BATCH_JOB_EXECUTION.CREATE_TIME}·{@code END_TIME} 은 프레임워크가
+     * <b>인자 없는 {@code LocalDateTime.now()}</b> 로 쓴다(JVM 기본 존). 배포에서 두 축을
+     * 맞추는 것은 {@code batch.yml} 의 {@code TZ=UTC} 와 {@code bootRun} 의
+     * {@code user.timezone=UTC} 다 — 그것을 안 주고 최솟값으로 내리면 존 오프셋만큼
+     * 여유가 깎인다(KST 면 8일이 실질 7.6일).
+     *
+     * <p>같은 값을 두 곳에 적지 않으려면 그 창을 설정으로 빼야 하는데, 그 조회는 SQL 안에
+     * 리터럴로 있고 이 티켓 범위 밖이다. <b>그래서 여기서 하한으로 못 박고 그 사실을
+     * 기동 메시지에 적는다</b> — 창을 바꾸는 사람이 이 값을 함께 보게 된다.
+     */
+    static final int REFRESH_WINDOW_DAYS = 7;
+
+    /**
+     * <b>통과하는 최솟값이다 — 창 값(7)이 아니라 그것보다 하나 큰 8.</b> 검사가
+     * {@code <= REFRESH_WINDOW_DAYS} 라 7 은 거절된다. 두 값을 따로 적으면 "하한 7" 처럼
+     * 부등호가 등호로 새는데, 실제로 그렇게 새서 다섯 자리가 틀렸었다.
+     */
+    static final int MIN_METADATA_KEEP_DAYS = REFRESH_WINDOW_DAYS + 1;
+
     /**
      * <b>걷을 것이 남았는데 검증에 자리를 내주고 멈춘 상태.</b> 잡 상태는 {@code COMPLETED}
      * 로 둔다 — 실패가 아니고, 실패로 두면 {@code BatchJobFailed} 가 검증 때문에 운다.
@@ -114,6 +157,18 @@ public class CleanupJobConfig {
     private final TransactionAttribute timeout;
     private final int keepRuns;
     private final int chunkSize;
+
+    private final int metadataKeepDays;
+
+    /**
+     * <b>{@code batch.cleanup.chunk-size} 와 나눈다.</b> 그 값은 <i>"{@code asof_state} 행
+     * 몇 개"</i> 이고 기본이 10,000 인데, 여기서는 <b>잡 실행 몇 개</b>다 — 실행 하나에
+     * 딸린 행이 잡마다 크게 다르다({@code verifyJob} 은 Step 열하나 + 문맥 blob).
+     * 같은 값을 쓰면 한 트랜잭션이 27만 행을 들고 {@code step-timeout-ms}(120초)에 걸리고,
+     * 그러면 <b>여태 지운 것이 전부 롤백돼 진도가 0</b> 이라 다음 날도 같은 양을 처음부터
+     * 시도한다 — 이 클래스가 청킹을 세운 이유가 정확히 그 상태를 막는 것이다.
+     */
+    private final int metadataChunkSize;
     private final long abandonedAfterHours;
 
     /**
@@ -126,7 +181,9 @@ public class CleanupJobConfig {
             @Value("${batch.cleanup.step-timeout-ms:120000}") long stepTimeoutMillis,
             @Value("${batch.verify.asof-state-keep-runs:5}") int keepRuns,
             @Value("${batch.cleanup.chunk-size:10000}") int chunkSize,
-            @Value("${batch.cleanup.abandoned-after-hours:24}") long abandonedAfterHours) {
+            @Value("${batch.cleanup.abandoned-after-hours:24}") long abandonedAfterHours,
+            @Value("${batch.cleanup.metadata-keep-days:30}") int metadataKeepDays,
+            @Value("${batch.cleanup.metadata-chunk-size:500}") int metadataChunkSize) {
         // 스프링의 트랜잭션 타임아웃은 초 단위라 999 는 0 으로 내려앉는데, 0 은 "무제한" 이
         // 아니라 **데드라인이 이미 지났음**이다 — 첫 문장에서 TransactionTimedOutException 이
         // 난다. 기동은 성공하고 04:30 만 매일 조용히 실패하는 모양이 되므로 여기서 거절한다.
@@ -163,6 +220,53 @@ public class CleanupJobConfig {
         this.jobRepository = jobRepository;
         this.transactionManager = transactionManager;
         this.keepRuns = keepRuns;
+        if (metadataKeepDays < MIN_METADATA_KEEP_DAYS) {
+            throw new IllegalArgumentException(
+                    "batch.cleanup.metadata-keep-days 는 " + MIN_METADATA_KEEP_DAYS
+                            + " 이상이어야 합니다(되읽기 창 " + REFRESH_WINDOW_DAYS
+                            + "일 초과). BatchRunMetricsRefresher 와 "
+                            + "ExpirePendingRefresher 가 마지막 성공 실행을 "
+                            + "END_TIME > NOW() - INTERVAL " + REFRESH_WINDOW_DAYS + " DAY "
+                            + "창에서 찾습니다. 보존이 그 창보다 길어야 삭제가 게이지에 "
+                            + "영향을 줄 수 없습니다. 안쪽으로 내려도 잡이 매일 성공하는 동안은 "
+                            + "멀쩡해 보이지만, 연속 실패가 보존 기간을 넘긴 날 마지막 성공이 "
+                            + "지워져 '며칠 실패' 가 '한 번도 성공한 적 없음'(NaN)으로 보고되고 "
+                            + "ExpireNeverSucceeded·CleanupNeverSucceeded 가 영구 발화합니다. "
+                            + "그 창을 바꾸려면 두 되읽기의 조회도 함께 고치십시오. "
+                            + "받은 값=" + metadataKeepDays);
+        }
+        // **보존 기간 상한.** 오타 하나가 chunk-size=0 과 **관측상 같은 상태**를 만든다 —
+        // 배치 메타가 사실상 안 걷히는데 잡은 매일 COMPLETED 라 CleanupNotSucceeding 도
+        // 안 울고, 배치 메타 백로그에는 전용 알림이 없다. 이 클래스가 가드를 세운 근거가
+        // 정확히 그 "조용한 통과" 다.
+        if (metadataKeepDays > 365) {
+            throw new IllegalArgumentException(
+                    "batch.cleanup.metadata-keep-days 는 " + MIN_METADATA_KEEP_DAYS
+                            + " 이상 365 이하여야 합니다. 너무 크면 BATCH_* 가 사실상 안 걷히는데 "
+                            + "잡은 매일 COMPLETED 라 CleanupNotSucceeding 도 안 울고 배치 메타 "
+                            + "백로그에는 전용 알림이 없습니다 — chunk-size=0 과 관측상 같은 "
+                            + "상태입니다. 받은 값=" + metadataKeepDays);
+        }
+        // **청크 크기.** 0 이면 LIMIT 0 이라 MySQL 이 오류 없이 0건을 돌려주고, 첫 청크가
+        // 곧 종료 신호가 되어 잡이 COMPLETED 로 닫힌다 — 형제 키와 같은 실패 모양이다.
+        // 상한도 건다. 삭제는 id 하나씩 나가므로(CleanupJdbcAdapter 에 근거를 적었다)
+        // 이 값이 곧 **한 트랜잭션의 문장 수 ÷ 6** 이다. 잠그는 행은 이 값이 아니라 그
+        // 실행들에 딸린 행 전부다 — verifyJob 이면 실행 하나에 26행이라 5000 이면 13만 행.
+        // 키울수록 한 청크가 무거워지고 step-timeout-ms 안에 못 들어올 위험이 커지는데,
+        // 걸리면 여태 지운 것이 전부 롤백돼 진도가 0 이라 다음 날도 처음부터 시도한다.
+        if (metadataChunkSize < 1 || metadataChunkSize > 5_000) {
+            throw new IllegalArgumentException(
+                    "batch.cleanup.metadata-chunk-size 는 1 이상 5000 이하여야 합니다. "
+                            + "0 이면 LIMIT 0 이라 MySQL 이 오류 없이 0건을 돌려주고, 첫 청크가 "
+                            + "곧 종료 신호가 되어 잡이 COMPLETED 로 닫힙니다 — "
+                            + "CleanupNotSucceeding 도 안 울어서 배치 메타만 영원히 안 걷히는 "
+                            + "상태가 감시망을 통과합니다. 반대로 너무 크면 한 트랜잭션이 실행 "
+                            + "수천 개에 딸린 수십만 행을 들고 step-timeout-ms 에 걸려 전량 "
+                            + "롤백되고, 진도가 0 이라 다음 날도 처음부터 시도합니다. "
+                            + "받은 값=" + metadataChunkSize);
+        }
+        this.metadataKeepDays = metadataKeepDays;
+        this.metadataChunkSize = metadataChunkSize;
         this.chunkSize = chunkSize;
         this.abandonedAfterHours = abandonedAfterHours;
         DefaultTransactionAttribute attribute = new DefaultTransactionAttribute();
@@ -172,9 +276,14 @@ public class CleanupJobConfig {
     }
 
     @Bean
-    public Job cleanupJob(Step purgeVerificationRunsStep) {
+    public Job cleanupJob(Step purgeVerificationRunsStep, Step purgeBatchMetadataStep) {
+        // **물러났으면 통째로 물러난다.** 그 판정은 뒤 Step 안에서 한다 —
+        // 흐름(.on(YIELDED).end(...))으로 끊으면 잡 종료 코드는 남지만 **종료 메시지가
+        // 날아간다.** 그 메시지가 "몇 건 걷고 멈췄나" 를 지고 있어서, 없으면 코드 하나로는
+        // "한 행도 못 걷었다" 와 "200만 걷고 멈췄다" 가 같은 값이 된다.
         return new JobBuilder(JOB_NAME, jobRepository)
                 .start(purgeVerificationRunsStep)
+                .next(purgeBatchMetadataStep)
                 .build();
     }
 
@@ -311,5 +420,142 @@ public class CleanupJobConfig {
 
     private static void add(ExecutionContext context, String key, long delta) {
         context.putLong(key, context.getLong(key, 0) + delta);
+    }
+
+    /**
+     * <b>배치 메타를 걷는다.</b> {@code BATCH_JOB_EXECUTION} 은 정리 경로가 없어 상한 없이
+     * 자랐다 — {@code BatchRunMetricsRefresher}·{@code ExpirePendingRefresher} 가 조회에
+     * <b>7일 창을 건 이유가 그것</b>이다. (CY-338 의 관리 화면 이력 조회도 같은 압력을 받게
+     * 되는데 <b>그 코드는 아직 저장소에 없다</b> — {@code V15} 헤더가 그 사실을 적어 뒀다.)
+     *
+     * <p><b>검증 정리 뒤에 와야 한다. 근거는 하나다</b> — {@code SimpleJob} 이 잡 종료
+     * 상태를 <b>마지막 Step 의 것으로 덮는다.</b> 그래서 뒤 Step 이 앞 Step 의
+     * {@code YIELDED} 를 이어받지 않으면 <b>아무것도 안 한 주기가 {@code COMPLETED} 로
+     * 닫혀</b> {@code BatchRunMetricsRefresher} 의 마지막 성공 시각을 민다.
+     * {@code .split()} 으로 병렬화하면 그 이어받기가 깨진다.
+     *
+     * <p>⚠️ 한때 여기 <i>"뒤 Step 이 그 순간 도는 검증의 실행 이력을 지운다"</i> 라고
+     * 적었는데 <b>거짓이다</b> — 도는 실행은 {@code END_TIME} 이 {@code NULL} 이라 애초에
+     * 대상이 아니다. <b>도는 검증을 지키는 것은 이 순서가 아니라 그 술어다.</b>
+     *
+     * <p>실패하면 잡이 {@code FAILED} 라 {@code asof_state} 를 다 걷었어도 마지막 성공
+     * 시각이 안 갱신된다 — 두 축을 한 잡에 묶은 대가이고, 그래서
+     * {@code CleanupNotSucceeding} 의 runbook 이 Step 을 갈라 보라고 안내한다.
+     *
+     * <p><b>끝난 실행만 지운다.</b> {@code END_TIME} 이 {@code NULL} 인 행 — 실행 중이거나
+     * 종료 표시를 못 남기고 죽은 행 — 은 안 건드린다. 시체를 지우면
+     * {@code BatchStuckExecution} 이 조용해지는데 그건 고친 게 아니라 <b>증거를 지운
+     * 것</b>이고, 그 행은 CY-429 의 복구 API 가 사람의 판단으로 닫는다.
+     *
+     * <p><b>인스턴스는 실행을 다 지운 뒤에 고아만 지운다.</b> 인스턴스가 먼저 없어지면
+     * 남은 실행의 잡 이름을 잃어 되읽기 조회가 통째로 못 찾는다.
+     *
+     * <p>청크 모양은 앞 Step 과 같다 — {@code CONTINUABLE} 한 번이 한 트랜잭션이다.
+     * 근거는 {@code cleanupJob} 의 javadoc 에 적었다. 격리수준도 같다 — 기본값이다.
+     *
+     * <p><b>앞 Step 과 달리 청크마다 검증을 다시 보지 않는다.</b> 앞 Step 의 양보는 <i>도는
+     * 검증의 입력({@code asof_state})을 지키려는 것</i>이지 자원 양보가 아니고, 이 Step 은
+     * 검증 데이터를 아예 안 건드린다. 자원 쪽 걱정(04:10 만료와 04:30 정리가 겹치는 밤)은
+     * <b>삭제를 id 하나씩 보내 대상 밖 행을 아예 안 잠그는 것</b>으로 갚았다 — 그 근거와
+     * 실측은 {@code CleanupJdbcAdapter#deleteBatchMetadataChunk} 에 있다.
+     * <b>남은 구멍</b>: 앞 Step 의 프로브가 {@code verifyJob} 만 보고 {@code expireJob} 은
+     * 안 본다. 그건 앞 Step 의 정책이라 이 티켓에서 안 바꾸고 {@code docs/13} 에 남겼다.
+     */
+    @Bean
+    Step purgeBatchMetadataStep(CleanupRepository cleanup, TimeProvider timeProvider) {
+        return new StepBuilder("purgeBatchMetadataStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    StepExecution self = chunkContext.getStepContext().getStepExecution();
+
+                    ExecutionContext context = self.getExecutionContext();
+                    // **컷오프는 첫 청크가 잡은 것을 끝까지 쓴다.** 청크마다 다시 잡으면
+                    // 드레인이 길어질수록 기준이 앞으로 밀려, 한 실행 안에서 "보존 기간" 의
+                    // 뜻이 달라진다.
+                    // ⚠️ **이 축은 지금 하네스로 못 잰다.** 통합 테스트가 Clock 을 AS_OF 로
+                    // 고정해서 청크가 몇 번을 돌든 now() 가 같다 — 이 분기를 지워도 초록이다.
+                    // 30일 창에서는 드레인이 몇 분 늘어도 대상이 거의 안 바뀌지만,
+                    // metadata-keep-days 를 최소 가까이 내리고 metadata-chunk-size 를
+                    // 줄이는 날 뜻이 갈린다.
+                    // ⚠️ **형제 Step 은 아직 안 얼렸다.** 앞 Step 의 abandonedBefore 는
+                    // 태스클릿 안에서 청크마다 다시 잡는다 — 그쪽이 미는 것은 "지울 배치
+                    // 메타" 가 아니라 **도는 검증의 입력(asof_state)** 이라 축이 더 위험한데,
+                    // 지금은 verifyJob 프로브가 가려 주고 있을 뿐이다. 이 티켓에서 안 고치고
+                    // docs/13 에 남겼다 — 여기서 "형제도 그렇다" 를 안 적으면 다음 사람이
+                    // 이 주석을 근거로 그쪽도 이미 얼었다고 읽는다.
+                    if (!context.containsKey(META_CUTOFF_KEY)) {
+                        context.put(META_CUTOFF_KEY,
+                                timeProvider.now().minusDays(metadataKeepDays).toString());
+                    }
+                    LocalDateTime olderThan =
+                            LocalDateTime.parse(context.getString(META_CUTOFF_KEY));
+
+                    PurgedMetadata purged =
+                            cleanup.deleteBatchMetadataChunk(olderThan, metadataChunkSize);
+                    if (!purged.isEmpty()) {
+                        // CleanupRunningTooLong 의 runbook 이 WRITE_COUNT 로 진도를 본다.
+                        // 안 올리면 이 Step 이 수만 건을 갈고 있어도 0 으로 보여, 운영자를
+                        // "새 Step 이 아무것도 안 한다" 는 정반대 결론으로 보낸다.
+                        //
+                        // **단위는 잡 실행 수다 — 지운 행 수가 아니다.** 그래야
+                        // metadata-chunk-size 와 같은 단위라 나누면 청크 수가 나온다.
+                        // 고아 인스턴스를 여기 더하면 청크당 최대 2배가 되어 runbook 의
+                        // 나눗셈이 진도를 두 배로 읽는다 — 그 값은 종료 설명이 따로 진다.
+                        contribution.incrementWriteCount(purged.executions());
+                        context.putLong(META_EXECUTIONS_KEY,
+                                context.getLong(META_EXECUTIONS_KEY, 0) + purged.executions());
+                        context.putLong(META_INSTANCES_KEY,
+                                context.getLong(META_INSTANCES_KEY, 0) + purged.instances());
+                        return RepeatStatus.CONTINUABLE;
+                    }
+
+                    long purgedExecutions = context.getLong(META_EXECUTIONS_KEY, 0);
+                    long purgedInstances = context.getLong(META_INSTANCES_KEY, 0);
+                    if (purgedExecutions > 0 || purgedInstances > 0) {
+                        log.info("배치 메타를 걷었습니다. 실행={} 고아인스턴스={} 보존={}일",
+                                purgedExecutions, purgedInstances, metadataKeepDays);
+                    }
+                    // **로그는 감시 수단이 아니다.** 앞 Step 이 같은 판단을 했다 —
+                    // 되짚을 때 컨테이너 로그는 롤오버돼 있을 수 있고 배치 메타는 남는다.
+                    String meta = "metaExecutions=" + purgedExecutions
+                            + " metaInstances=" + purgedInstances;
+
+                    // **앞 Step 이 물러났어도 배치 메타는 걷고 나서 물러난다.**
+                    // 앞 Step 의 양보는 도는 검증의 입력(asof_state)을 지키려는 것이고,
+                    // 이 Step 은 그 데이터를 아예 안 건드린다 — 여기서 같이 멈추면
+                    // **손 트리거 검증이 13:30 KST 에 걸친 날마다 그날치 BATCH_* 가 통째로
+                    // 안 걷힌다.** 하필 그 조건(앞 Step 에 백로그가 남음)과 메타 백로그가
+                    // 큰 시기가 겹치고, 배치 메타 백로그에는 전용 알림이 없다.
+                    //
+                    // 이어받아야 하는 것은 **작업이 아니라 종료 상태**다 — SimpleJob 이 잡
+                    // 종료 상태를 마지막 Step 의 것으로 덮으므로(6.0.4), 여기서 COMPLETED 로
+                    // 끝내면 앞 Step 이 물러난 주기가 BatchRunMetricsRefresher 의 마지막
+                    // 성공 시각을 밀어 버린다. 그래서 코드는 YIELDED 를 잇고 설명만 합친다.
+                    ExitStatus yielded = yieldedFrom(self.getJobExecution());
+                    contribution.setExitStatus(yielded != null
+                            ? new ExitStatus(yielded.getExitCode(),
+                                    yielded.getExitDescription() + " " + meta)
+                            // 종료 **코드**는 COMPLETED 그대로 둔다. 바꾸면 SimpleJob 이
+                            // 그것을 잡 EXIT_CODE 로 덮어 BatchRunMetricsRefresher 의
+                            // YIELDED 필터가 흔들린다.
+                            : new ExitStatus(ExitStatus.COMPLETED.getExitCode(), meta));
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .transactionAttribute(timeout)
+                .build();
+    }
+
+    /**
+     * <b>앞 Step 이 {@code YIELDED} 로 끝났나.</b> 그렇다면 그 종료 상태를 <b>메시지까지</b>
+     * 그대로 돌려준다 — 코드만 옮기면 <i>"몇 건 걷고 멈췄나"</i> 를 잃는다.
+     */
+    private static ExitStatus yieldedFrom(JobExecution jobExecution) {
+        return jobExecution.getStepExecutions().stream()
+                .map(StepExecution::getExitStatus)
+                .filter(status -> YIELDED_EXIT_CODE.equals(status.getExitCode()))
+                // **가장 마지막 것을 집는다.** findFirst 면 Step 이 셋이 되는 날 3단계가
+                // 2단계가 아니라 1단계의 메시지를 보고한다 — 그 메시지가 "몇 행에서
+                // 멈췄나" 를 지고 있어서 값이 조용히 틀린다.
+                .reduce((earlier, later) -> later)
+                .orElse(null);
     }
 }

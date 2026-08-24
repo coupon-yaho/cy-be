@@ -4,10 +4,14 @@ package com.kafkick.storage.db.verification;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.verification.CleanupRepository;
+import com.kafkick.core.verification.CleanupRepository.PurgedMetadata;
 
 /**
  * <b>이미 걷은 실행은 대상이 아니다.</b> 두 선택 질의가 <i>"걷을 파생 행이 남았나"</i> 를
@@ -40,9 +44,44 @@ import com.kafkick.core.verification.CleanupRepository;
 @Repository
 public class CleanupJdbcAdapter implements CleanupRepository {
 
+    private static final String DELETE_STEP_CONTEXT = """
+            DELETE sec FROM BATCH_STEP_EXECUTION_CONTEXT sec
+              JOIN BATCH_STEP_EXECUTION se ON se.STEP_EXECUTION_ID = sec.STEP_EXECUTION_ID
+             WHERE se.JOB_EXECUTION_ID = ?
+            """;
+
+    private static final String DELETE_STEP_EXECUTION =
+            "DELETE FROM BATCH_STEP_EXECUTION WHERE JOB_EXECUTION_ID = ?";
+
+    private static final String DELETE_EXECUTION_CONTEXT =
+            "DELETE FROM BATCH_JOB_EXECUTION_CONTEXT WHERE JOB_EXECUTION_ID = ?";
+
+    private static final String DELETE_EXECUTION_PARAMS =
+            "DELETE FROM BATCH_JOB_EXECUTION_PARAMS WHERE JOB_EXECUTION_ID = ?";
+
+    private static final String DELETE_EXECUTION =
+            "DELETE FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID = ?";
+
+    private static final String COUNT_REMAINING_EXECUTIONS =
+            "SELECT COUNT(*) FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID IN (:ids)";
+
+    private static final String COUNT_REMAINING_INSTANCES =
+            "SELECT COUNT(*) FROM BATCH_JOB_INSTANCE WHERE JOB_INSTANCE_ID IN (:ids)";
+
+    /** 고아 판정을 {@code DELETE} 안에서 한다 — 조회로 고르면 그 사이에 실행이 붙는다. */
+    private static final String DELETE_ORPHAN_INSTANCE = """
+            DELETE i FROM BATCH_JOB_INSTANCE i
+              LEFT JOIN BATCH_JOB_EXECUTION e ON e.JOB_INSTANCE_ID = i.JOB_INSTANCE_ID
+             WHERE i.JOB_INSTANCE_ID = ?
+               AND e.JOB_EXECUTION_ID IS NULL
+            """;
+
     private final JdbcClient jdbcClient;
 
-    public CleanupJdbcAdapter(JdbcClient jdbcClient) {
+    private final JdbcTemplate jdbcTemplate;
+
+    public CleanupJdbcAdapter(JdbcClient jdbcClient, JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
         this.jdbcClient = jdbcClient;
     }
 
@@ -176,5 +215,145 @@ public class CleanupJdbcAdapter implements CleanupRepository {
                         """)
                 .param("runId", runId)
                 .update();
+    }
+
+    /**
+     * <b>대상 실행을 먼저 고르고 그 목록으로 지운다.</b> 딸린 테이블마다 조건을 다시 쓰면
+     * 그 사이 새 행이 끼어 <b>부모만 남고 자식이 지워지는</b> 상태가 생긴다 —
+     * 같은 트랜잭션이라 안 생길 것 같지만, 조건이 여섯 벌이 되면 고치는 날 하나만 고쳐진다.
+     *
+     * <p><b>{@code CREATE_TIME} 조건을 함께 건다.</b> 술어는 {@code END_TIME} 인데 그 컬럼엔
+     * 쓸 인덱스가 없다({@code V14} 는 선두가 {@code STATUS}). 실행은 <b>만들어진 뒤에
+     * 끝나므로</b> {@code END_TIME < :olderThan} <b>이면</b> {@code CREATE_TIME < :olderThan}
+     * 도 참이다 — 답을 안 바꾸면서 {@code V15} 의 {@code (CREATE_TIME)} range 스캔을 탄다.
+     * 그 조건이 없으면 <b>지울 것이 0 인 날에도 테이블 전체를 훑는다</b>(실측: PK 스캔
+     * 30,000행 4.5ms → range 스캔 0행 0.10ms).
+     *
+     * <p>⚠️ <b>함의는 한 방향뿐이다 — 역은 거짓이다.</b> {@code END_TIME} 술어 둘은
+     * 인덱스용이 아니라 <b>시체 보존</b>이다. 끝나지 않은 실행은 {@code CREATE_TIME} 이
+     * 아무리 오래돼도 대상이 아니어야 한다 — 지우면 {@code BatchStuckExecution} 이
+     * 조용해지는데 그건 고친 게 아니라 <b>증거를 지운 것</b>이다. 중복처럼 보인다고
+     * 줄이면 그 계약이 사라진다.
+     *
+     * <p><b>{@code ORDER BY} 도 {@code CREATE_TIME} 으로 간다 — 다만 그게 계획을 고정해
+     * 주지는 않는다.</b> 실행 3,000 · 90일 균등 · id 오름차순 = 시각 오름차순으로 훑은
+     * 결과({@code LIMIT 500}): 대상 0·6·1,995 에서는 {@code CREATE_TIME} 정렬이 인덱스
+     * range 를 타지만, <b>중간 선택도(대상 990 ≈ 33%)에서는 table scan 3,000행 +
+     * filesort 로 내려간다.</b> 그 구간에서는 PK 정렬이 오히려 500행만 읽는다.
+     * 여기서 {@code CREATE_TIME} 정렬을 고른 이유는 <b>정상 야간(대상 0~수십)에서 Sort
+     * 노드가 안 붙기 때문</b>이고, 중간 선택도는 보존 창을 처음 넘긴 밤에만 지나간다
+     * (비용도 테이블 크기에 묶여 있다 — 3,000행 0.6ms). 고정하려면 {@code FORCE INDEX}
+     * 가 필요한데 그러면 인덱스 이름에 코드가 묶인다.
+     *
+     * <p>⚠️ <b>한때 "PK 로 정렬하면 대상 1,201 에 1,201행을 읽는다" 고 적었는데 그건
+     * id 순서와 시각 순서가 뒤집힌 시드에서 나온 값이다.</b> 실제로는 실행 id 가 시각 순으로
+     * 발급되므로 PK 정렬도 오래된 것부터 집는다. 위 수치가 바로잡은 값이다.
+     *
+     * <p><b>⚠️ 삭제는 {@code IN} 목록이 아니라 id 하나씩이다. 이게 이 메서드에서 가장
+     * 중요한 결정이다.</b> {@code IN} 목록이 그 테이블 행 수의 큰 비율이 되면 옵티마이저가
+     * 인덱스를 버리고 <b>풀스캔</b>을 고르는데({@code EXPLAIN} 이 {@code type=ALL}),
+     * 풀스캔 {@code DELETE} 는 <b>대상이 아닌 행까지 전부 잠근다.</b> 그러면 양쪽이 다 깨진다:
+     *
+     * <ul>
+     *   <li><b>남을 막는다</b> — {@code REPEATABLE READ} 에서는 스캔한 레코드 + 갭 +
+     *       supremum 에 X 락이 걸린다. 실측(MySQL 8.0.46, 인스턴스 180 / 실행 180 /
+     *       Step 1,980, {@code IN} 90): {@code data_locks} 가
+     *       {@code BATCH_JOB_INSTANCE} 181, {@code BATCH_STEP_EXECUTION} 2,003.
+     *       그 청크가 열려 있는 동안 다른 세션의 <b>새 JobInstance INSERT · 새 JobExecution
+     *       INSERT · 도는 잡의 STEP UPDATE</b> 가 전부 {@code ERROR 1205} 였다. 셋째가
+     *       도는 잡의 청크 커밋이자 {@code RunningJobProbe} 가 읽는 하트비트다.</li>
+     *   <li><b>남에게 막힌다</b> — 격리수준을 {@code READ COMMITTED} 로 내려도 이쪽은
+     *       안 사라진다. 갭 락은 없어지지만 풀스캔은 여전히 <b>대상이 아닌 잠긴 행에서
+     *       대기</b>한다(semi-consistent read 는 {@code UPDATE} 전용이다). 실측: 도는 잡이
+     *       자기 STEP 행 하나를 잡고 있는 동안 RC 청크가 {@code ERROR 1205} 로 죽었다.</li>
+     * </ul>
+     *
+     * <p>id 하나씩이면 계획이 고정된다 — 여섯 문장 전부 {@code type=const/range/ref} 이고
+     * <b>읽는 행이 그 실행에 딸린 자식 수에만 비례한다</b>({@code verifyJob} 이면 Step 열하나라
+     * Step 삭제가 {@code rows=11}, 나머지는 {@code rows=1}). <b>테이블 크기와 무관하고
+     * 대상 밖 행을 아예 안 건드린다.</b> 같은 프로브를
+     * {@code REPEATABLE READ} 와 {@code READ COMMITTED} 양쪽에서 돌려 <b>둘 다 네 가지가
+     * 전부 통과</b>하는 것을 확인했다 — 그래서 격리수준은 기본값 그대로 둔다.
+     * <b>병목은 격리수준이 아니라 계획이었다.</b>
+     *
+     * <p>대가는 문장 수다. 청크 하나가 {@code 6 × chunkSize} 문장이 된다 — 실측으로
+     * 5,000 실행 삭제가 680ms(IN 목록) → 1,980ms(단건, 청크당 1 트랜잭션)로 약 2.9배다.
+     * 청크(500)당 200ms 수준이라 {@code step-timeout-ms}(120초)에 한참 못 미친다.
+     * <b>결정성을 그 값에 샀다.</b> {@code JdbcTemplate#batchUpdate} 로 보내 왕복은 묶는다.
+     *
+     * <p><b>{@code MANDATORY} 다.</b> 여섯 문장의 원자성이 이 메서드의 계약인데, 지금은
+     * 호출자가 태스클릿 트랜잭션 안이라는 <i>사실</i>에만 기대고 있다. 나중에 관리 API 나
+     * 다른 스케줄러가 트랜잭션 없이 부르면 문장마다 자동 커밋되고, 실행을 지운 뒤 죽으면
+     * <b>고아 인스턴스만 남은 중간 상태</b>가 그대로 남는다({@code CleanupRepository} 가
+     * 위험하다고 적어 둔 그 상태다). {@code MANDATORY} 면 그 호출이 배포 뒤가 아니라
+     * <b>첫 호출에서</b> 거절된다 — 태스클릿 경로는 그대로 조인한다.
+     *
+     * <p>고아 인스턴스는 <b>같은 트랜잭션에서 그 실행들의 인스턴스만</b> 본다. 전역으로 훑지
+     * 않으므로 남의 테스트가 남긴 행도 안 건드리고, 실행만 지워진 중간 상태도 안 남는다.
+     * 판정은 {@code DELETE} 안의 anti-join 이 한다 — 조회로 고르고 id 로 지우면 그 사이에
+     * 실행이 붙어 FK 위반으로 청크가 통째로 롤백된다(docs/04 가 금지한 "조회→판단→갱신").
+     */
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public PurgedMetadata deleteBatchMetadataChunk(LocalDateTime olderThan, int chunkSize) {
+        List<long[]> targets = jdbcClient.sql("""
+                        SELECT JOB_EXECUTION_ID, JOB_INSTANCE_ID
+                          FROM BATCH_JOB_EXECUTION
+                         WHERE CREATE_TIME < :olderThan
+                           AND END_TIME IS NOT NULL
+                           AND END_TIME < :olderThan
+                         ORDER BY CREATE_TIME, JOB_EXECUTION_ID
+                         LIMIT :chunkSize
+                        """)
+                .param("olderThan", olderThan)
+                .param("chunkSize", chunkSize)
+                .query((rs, rowNum) -> new long[] {rs.getLong(1), rs.getLong(2)})
+                .list();
+        if (targets.isEmpty()) {
+            return new PurgedMetadata(0, 0);
+        }
+        List<Long> executionIds = targets.stream().map(row -> row[0]).toList();
+        // 인스턴스는 실행마다 하나이고 중복될 수 있다. 순서를 지켜 중복만 걷는다.
+        List<Long> instanceIds = targets.stream().map(row -> row[1]).distinct().toList();
+
+        // FK 역순. 하나라도 순서를 바꾸면 제약 위반으로 한 행도 못 지운다.
+        deleteEach(DELETE_STEP_CONTEXT, executionIds);
+        deleteEach(DELETE_STEP_EXECUTION, executionIds);
+        deleteEach(DELETE_EXECUTION_CONTEXT, executionIds);
+        deleteEach(DELETE_EXECUTION_PARAMS, executionIds);
+        deleteEach(DELETE_EXECUTION, executionIds);
+        deleteEach(DELETE_ORPHAN_INSTANCE, instanceIds);
+
+        int executions = executionIds.size() - countRemaining(COUNT_REMAINING_EXECUTIONS, executionIds);
+        int purgedInstances = instanceIds.size() - countRemaining(COUNT_REMAINING_INSTANCES, instanceIds);
+
+        return new PurgedMetadata(executions, purgedInstances);
+    }
+
+    /**
+     * <b>id 하나씩 보내되 왕복은 묶는다.</b> {@code batchUpdate} 가 한 {@code PreparedStatement}
+     * 에 파라미터만 갈아 끼우므로 계획은 문장마다 고정되고 네트워크 왕복은 배치 하나다.
+     *
+     * <p><b>반환값을 안 쓴다.</b> JDBC 배치는 원소마다 {@code SUCCESS_NO_INFO(-2)} 를 돌려줄 수
+     * 있고 — 접속 URL 에 {@code rewriteBatchedStatements=true} 가 걸려 있어 더 그렇다 — 그것을
+     * 그대로 더하면 합계가 <b>음수 쪽으로 조용히 망가진다.</b> 지금 드라이버가 그러지 않는 것은
+     * 확인했지만(MySQL 8.0 + Connector/J 9.7.0, 배치 1·2·3·4·10·500 에서 전부 실제 카운트),
+     * <b>드라이버가 바뀌는 날 조용히 틀리는 쪽에 관측 지표를 걸어 둘 이유가 없다.</b>
+     * 그래서 지운 수는 {@link #countRemaining} 이 상태에서 뽑는다.
+     */
+    private void deleteEach(String sql, List<Long> ids) {
+        jdbcTemplate.batchUpdate(sql, ids, ids.size(), (ps, id) -> ps.setLong(1, id));
+    }
+
+    /**
+     * <b>지운 수를 상태에서 뽑는다.</b> "고른 수 − 남은 수" 라 드라이버가 무엇을 돌려주든 정확하고,
+     * 고아 인스턴스처럼 <b>조건부로만 지워지는</b> 축도 그대로 센다.
+     *
+     * <p>여기는 {@code IN} 목록을 써도 된다 — <b>읽기라 락을 안 잡는다.</b> 삭제 쪽이 id 단건인
+     * 이유(풀스캔이 대상 밖 행을 잠근다)는 이 조회에 해당하지 않는다.
+     */
+    private int countRemaining(String sql, List<Long> ids) {
+        Integer remaining = jdbcClient.sql(sql).param("ids", ids).query(Integer.class).single();
+        return remaining == null ? 0 : remaining;
     }
 }
