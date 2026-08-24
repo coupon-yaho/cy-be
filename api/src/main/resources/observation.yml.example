@@ -70,6 +70,14 @@ server:
       enabled: true
 
 observation:
+  issuance:
+    campaign:
+      # coupon_id 라벨 예외는 최대 100개까지만 허용한다. 초과 캠페인은 축출하지 않고 거부한다.
+      max-active-campaigns: ${OBSERVATION_CAMPAIGN_MAX_ACTIVE:100}
+      retire-grace-period: ${OBSERVATION_CAMPAIGN_RETIRE_GRACE:30m}
+      # 운영 보관 요구가 확정되기 전의 임시 기본값: 지연 재처리는 하루 동안 막고, 개수도 제한한다.
+      tombstone-retention: ${OBSERVATION_CAMPAIGN_TOMBSTONE_RETENTION:1d}
+      tombstone-max-entries: ${OBSERVATION_CAMPAIGN_TOMBSTONE_MAX_ENTRIES:1000}
   prometheus:
     archive:
       connect-timeout: 1s

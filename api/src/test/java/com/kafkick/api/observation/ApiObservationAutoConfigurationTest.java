@@ -1,6 +1,7 @@
 package com.kafkick.api.observation;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.issuance.MeterCampaignLifecycleRecorder;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
@@ -27,6 +28,7 @@ import javax.sql.DataSource;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.kafkick.core.member.Grade;
@@ -67,7 +69,7 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context.getBean(EventRecorder.class))
                     .isInstanceOf(CompositeEventRecorder.class);
             assertThat(context.getBean(CampaignLifecycleRecorder.class))
-                    .isInstanceOf(NoOpCampaignLifecycleRecorder.class);
+                    .isInstanceOf(MeterCampaignLifecycleRecorder.class);
             assertThat(context.getBean(ConsistencyCalculator.class))
                     .isInstanceOf(DefaultConsistencyCalculator.class);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).warnThreshold()).isEqualTo(10);
@@ -81,7 +83,16 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(EventRecorder.class);
             assertThat(context.getBean(EventRecorder.class)).isInstanceOf(NoOpEventRecorder.class);
+            assertThat(context.getBean(CampaignLifecycleRecorder.class))
+                    .isInstanceOf(NoOpCampaignLifecycleRecorder.class);
         });
+    }
+
+    @Test
+    void meterEventRecorderCannotConstructAnIndependentCampaignRegistry() {
+        assertThat(Arrays.stream(MeterEventRecorder.class.getConstructors())
+                .flatMap(constructor -> Arrays.stream(constructor.getParameterTypes())))
+                .doesNotContain(MeterRegistry.class);
     }
 
     @Test
@@ -245,10 +256,12 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
-    void warnsWhenCampaignLifecycleRecorderFallsBackToNoOp(CapturedOutput output) {
+    void replacesTheNoOpCampaignLifecycleRecorderWhenMetersAreAvailable(CapturedOutput output) {
         contextRunner.run(context -> {
             assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
-            assertThat(output).contains("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+            assertThat(context.getBean(CampaignLifecycleRecorder.class))
+                    .isInstanceOf(MeterCampaignLifecycleRecorder.class);
+            assertThat(output).doesNotContain("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
         });
     }
 

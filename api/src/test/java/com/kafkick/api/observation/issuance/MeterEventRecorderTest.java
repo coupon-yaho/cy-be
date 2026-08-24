@@ -41,7 +41,7 @@ class MeterEventRecorderTest {
     @Test
     void mapsEveryEventKindToItsCampaignMeterAndOutcome() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
         IssuanceFlowEvent.Ctx context = context(201L);
 
@@ -69,7 +69,7 @@ class MeterEventRecorderTest {
     @Test
     void preRegistersTheClosedOutcomeDictionaryWithoutCouponId() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        new MeterEventRecorder(registry);
+        recorder(registry);
 
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(13);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters())
@@ -90,7 +90,7 @@ class MeterEventRecorderTest {
     @Test
     void reusesOneRegistrationPathAndReportsNoEventEpochAsNaN() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
 
         recorder.record(factory.issueAttempt(context(201L)));
@@ -105,7 +105,7 @@ class MeterEventRecorderTest {
     @Test
     void neverMovesLastEventEpochBackwardWhenEventsArriveOutOfOrder() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
 
         recorder.record(factory.issued(context(201L, "2026-08-23T00:01:00Z"), 1L,
@@ -120,7 +120,7 @@ class MeterEventRecorderTest {
     @Test
     void doesNotCountAReplayedIssueResultAsANewIssuance() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
         recorder.record(factory.issueAttempt(context(201L)));
 
@@ -134,7 +134,7 @@ class MeterEventRecorderTest {
     @Test
     void countsReplayedIssueAttemptsAsRepeatedEngineEntries() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
 
         recorder.record(factory.issueAttempt(context(201L, true)));
@@ -146,7 +146,7 @@ class MeterEventRecorderTest {
     @Test
     void countsReplayedRejectionsButNotReplayedQueueAdmissions() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
         IssuanceFlowEvent.Ctx replayed = context(201L, true);
 
@@ -162,7 +162,7 @@ class MeterEventRecorderTest {
     @Test
     void keepsImmediateAdmissionOutOfTheOutcomeDictionary() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
 
         recorder.record(factory.entry(context(201L), 200, null, Dependency.NONE, null, null));
@@ -174,7 +174,9 @@ class MeterEventRecorderTest {
 
     @Test
     void rejectsNonPositiveFailureLogIntervals() {
-        assertThatThrownBy(() -> new MeterEventRecorder(new SimpleMeterRegistry(), Duration.ZERO))
+        assertThatThrownBy(() -> new MeterEventRecorder(
+                new CampaignMeterRegistry(new SimpleMeterRegistry(),
+                        new CampaignMeterProperties(null, null, null, null), Duration.ofSeconds(1)), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("failureLogInterval must be positive");
     }
@@ -182,7 +184,7 @@ class MeterEventRecorderTest {
     @Test
     void registersCampaignMetersOnlyOnceUnderConcurrentFirstEvents() throws Exception {
         CountingSimpleMeterRegistry registry = new CountingSimpleMeterRegistry();
-        MeterEventRecorder recorder = new MeterEventRecorder(registry);
+        MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
         int countersBeforeCampaignRegistration = registry.counterCreations.get();
         int gaugesBeforeCampaignRegistration = registry.gaugeCreations.get();
@@ -237,7 +239,7 @@ class MeterEventRecorderTest {
 
     @Test
     void observationFailureDoesNotEscapeTheIssuancePathAndIsRateLimited(CapturedOutput output) {
-        MeterEventRecorder recorder = new MeterEventRecorder(new SimpleMeterRegistry());
+        MeterEventRecorder recorder = recorder(new SimpleMeterRegistry());
 
         assertThatCode(() -> recorder.record(null)).doesNotThrowAnyException();
         assertThatCode(() -> recorder.record(null)).doesNotThrowAnyException();
@@ -259,6 +261,12 @@ class MeterEventRecorderTest {
 
     private static IssuanceFlowEvent.Ctx context(long couponId) {
         return context(couponId, false);
+    }
+
+    private static MeterEventRecorder recorder(io.micrometer.core.instrument.MeterRegistry registry) {
+        return new MeterEventRecorder(new CampaignMeterRegistry(registry,
+                new CampaignMeterProperties(null, null, null, null), Duration.ofSeconds(10)),
+                Duration.ofSeconds(10));
     }
 
     private static IssuanceFlowEvent.Ctx context(long couponId, boolean replayed) {
