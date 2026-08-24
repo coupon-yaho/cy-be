@@ -123,18 +123,26 @@ public class StatsJdbcAdapter implements StatsRepository {
      * <p>등급은 {@code issued_grade} <b>스냅샷</b>이다. {@code members} 를 조인하면 그 뒤 등급이
      * 바뀐 회원의 과거 발급이 현재 등급으로 분류된다 — V6 이 스냅샷을 쓰는 이유와 같다.
      *
-     * <p><b>⚠️ 회차 하나씩 나간다. 회차 전체를 한 문장으로 묶으면 서버가 죽는다</b>(CY-470 실측).
-     * {@code GROUP BY (coupon_id, issued_grade)} 를 덮는 인덱스가 없어 옵티마이저가
-     * {@code Aggregate using temporary table} 을 고르는데, MySQL 8 의 TempTable 엔진은
-     * {@code temptable_max_ram}(기본 1GiB)까지 <b>디스크로 안 넘기고 RAM 에 쥔다.</b>
-     * 300만 발급에서 mysqld 상주가 907MiB → 1,163MiB 로 12초 만에 부풀고 그 자리에서
-     * 강제 종료됐다(세 번 재현). <b>결과가 936행인데도 그렇다</b> — 부푸는 축은 결과 크기가
-     * 아니라 <b>한 문장이 훑는 입력 행 수</b>다.
+     * <p><b>⚠️ 회차 하나씩 나간다. 회차 전체를 한 문장으로 묶으면 검증용 DB 서버가 죽었다</b>
+     * (CY-470 실측). 300만 발급에서 mysqld 상주가 907MiB → 1,163MiB 로 12초 만에 부풀고
+     * 그 자리에서 강제 종료됐다 — 세 번 재현했고, 에러 로그에 정상 종료 메시지 없이
+     * {@code starting as process 1} 만 남았다. <b>결과가 936행인데도 그렇다.</b>
      *
      * <p>같은 집계를 회차 단위 147회로 쪼개면 상주가 900 → 903MiB 로 <b>평평했고</b> 26초에
      * 끝났다(한 문장 판은 12초에 죽었으므로 완주 시간은 오히려 이쪽이 짧다).
      * {@code SQL_BIG_RESULT} 힌트와 {@code tmp_table_size} 인하는 둘 다 같은 곡선으로 죽었고,
      * {@code internal_tmp_mem_storage_engine} 은 앱 계정에 권한이 없다 — <b>쪼개는 것만 들었다.</b>
+     *
+     * <p>⚠️ <b>왜 부푸는지는 못 밝혔다.</b> 처음에는 <i>"인덱스로 정렬 못 하는 GROUP BY 라
+     * TempTable 엔진이 {@code temptable_max_ram} 까지 RAM 에 쥔다"</i> 고 적었는데,
+     * <b>그 설명이 재현되지 않았다</b> — 같은 버전·같은 버퍼풀(8.4.11 · 512MiB)로 띄운 깨끗한
+     * 컨테이너에서 294만 행에 같은 질의를 돌리니 상주가 +3MiB 로 평평하고
+     * {@code Created_tmp_disk_tables} 가 올라 <b>디스크로 흘러넘쳤다.</b> 즉 그 서버에서만
+     * 안 넘친 것이고, 차이가 무엇인지(행 폭 · 조인 · 호스트 메모리 압박) 아직 모른다.
+     *
+     * <p><b>그래도 이 쪼개기는 유지한다.</b> 근거는 메커니즘이 아니라 <b>그 서버에서 잰
+     * 결과</b>다 — 한 문장은 세 번 다 죽었고 쪼갠 판은 완주했다. 메커니즘을 밝히는 날
+     * 더 나은 처방이 나오면 그때 바꾼다.
      *
      * <p>{@code coupons} 조인이 사라진 자리는 {@link #couponIdsAsOf} 가 같은 컷으로 대신한다.
      */
@@ -228,8 +236,9 @@ public class StatsJdbcAdapter implements StatsRepository {
      * 한 값으로 묶으면 힙을 넓히려고 올린 값이 서버를 죽인다.
      *
      * <p><b>값의 근거.</b> CY-470 에서 516만 이력 전수(그중 {@code event_type='ISSUE'} 258만)를
-     * 한 문장으로 묶었을 때 서버 상주가 +175MiB 였다. 50만 id 폭이면 그 1/10 남짓이라
-     * 강제 종료가 관측된 지점(+256MiB)까지 열 배 여유가 남는다.
+     * 한 문장으로 묶었을 때 검증용 DB 의 mysqld 상주가 +175MiB 였다. 50만 id 폭이면 그
+     * 1/10 남짓이라 강제 종료가 관측된 지점(+256MiB)까지 열 배 여유가 남는다.
+     * <b>부푸는 이유 자체는 못 밝혔다</b> — {@link #AGGREGATE_GRADE_STATS_FOR_COUPON} 에 적었다.
      */
     static final long MAX_HISTORY_SCAN_WINDOW = 500_000L;
 
@@ -263,8 +272,8 @@ public class StatsJdbcAdapter implements StatsRepository {
             throw new IllegalArgumentException(
                     "batch.verify.history-scan-window 는 " + MIN_HISTORY_SCAN_WINDOW + " 이상 "
                             + MAX_HISTORY_SCAN_WINDOW + " 이하여야 합니다. 이 값은 요일·시각 "
-                            + "집계 한 문장이 훑는 이력 id 폭입니다 — 넓히면 MySQL 의 TempTable 이 "
-                            + "RAM 을 놓지 않아 서버가 강제 종료되고(CY-470 실측), 좁히면 왕복이 "
+                            + "집계 한 문장이 훑는 이력 id 폭입니다 — 넓히면 검증용 DB 서버가 "
+                            + "강제 종료된 적이 있고(CY-470 실측), 좁히면 왕복이 "
                             + "이력 수 ÷ 이 값만큼 늘어 statsAggregateStep 이 "
                             + "batch.verify.step-timeout-ms 에 걸립니다. 값=" + historyScanWindow);
         }

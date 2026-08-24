@@ -192,8 +192,8 @@ class StatsHourlyScanWindowTest {
      * <b>위아래 양쪽을 막는다.</b>
      *
      * <p>0 이하는 {@code for (from …; from += 창)} 이 전진하지 않아 <b>끝나지 않는다</b> —
-     * 예외 없이 매달린다. 상한 위쪽은 이 손잡이가 막으려던 사고(MySQL TempTable 이 RAM 을
-     * 안 놓아 <b>DB 서버가 죽는 것</b>)를 그대로 되돌린다.
+     * 예외 없이 매달린다. 상한 위쪽은 이 손잡이가 막으려던 사고(<b>검증용 DB 서버가
+     * 강제 종료된 것</b>)를 그대로 되돌린다.
      *
      * <p><b>하한이 1이 아닌 것이 요지다.</b> 1 은 0 이 아니라 통과하는데, 그 값이면 516만
      * 셋에서 왕복이 500만 회를 넘어 Step 이 {@code batch.verify.step-timeout-ms} 에 걸린다 —
