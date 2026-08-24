@@ -45,8 +45,7 @@ import org.junit.jupiter.api.Test;
  * <p>compose 에는 이미 api·batch 서비스가 있으므로 구조상으로는 지금 할 수 있다 — 관리 포트를
  * compose 가 한 곳에서 정의해 앱 env 와 prometheus.yml 양쪽에 주입하는 형태다. 다만
  * prometheus.yml 쪽은 여전히 env 치환이 안 되므로 대상 주소를 compose 가 만들어 주입하는
- * 설계가 필요하고, 그건 이 티켓의 범위를 넘는다.
- * TODO(CY-213 후속, @SH-Seol): 관리 포트를 compose 한 곳에서 정의하는 구조로 옮길지 정한다.
+ * 설계가 필요하고, 그 설계 변경 전까지 이 테스트는 모듈 기본값과 설정 파일의 일치를 지킨다.
  */
 class PrometheusScrapeConfigContractTest {
 
