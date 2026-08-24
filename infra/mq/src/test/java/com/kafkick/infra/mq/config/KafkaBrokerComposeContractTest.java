@@ -166,10 +166,12 @@ class KafkaBrokerComposeContractTest {
 
             // 광고와 실제 바인딩은 다른 값이다. 광고만 맞고 리스너가 다른 포트에 붙으면
             // 부트스트랩도 메타데이터도 통과한 뒤 연결에서만 거부된다.
-            assertThat(String.valueOf(
-                    environmentOf(broker.getValue()).get("KAFKA_LISTENERS")))
+            //
+            // ⚠️ contains 로 보지 않는다. "PLAINTEXT://:9092" 를 부분 문자열로 찾으면
+            //    PLAINTEXT://:90920 도 통과한다 — 포트가 바뀌었는데 초록불이다.
+            assertThat(plaintextListenerPort(broker.getValue()))
                     .as("%s 가 광고하는 포트와 실제로 여는 포트가 같아야 한다", broker.getKey())
-                    .contains("PLAINTEXT://:" + BROKER_PORT);
+                    .isEqualTo(BROKER_PORT);
         }
     }
 
@@ -257,6 +259,21 @@ class KafkaBrokerComposeContractTest {
                             broker.getKey())
                     .isEqualTo(String.valueOf(brokers.size()));
         }
+    }
+
+    /**
+     * {@code KAFKA_LISTENERS} 에서 {@code PLAINTEXT} 리스너의 포트만 뽑는다.
+     * 값은 {@code PLAINTEXT://:9092,CONTROLLER://:9093} 처럼 쉼표로 이어진 목록이다.
+     */
+    private String plaintextListenerPort(Map<String, Object> broker) {
+        String listeners = String.valueOf(environmentOf(broker).get("KAFKA_LISTENERS"));
+        for (String listener : listeners.split(",")) {
+            String trimmed = listener.strip();
+            if (trimmed.startsWith("PLAINTEXT://")) {
+                return trimmed.substring(trimmed.lastIndexOf(':') + 1);
+            }
+        }
+        throw new AssertionError("KAFKA_LISTENERS 에 PLAINTEXT 리스너가 없다: " + listeners);
     }
 
     /**
