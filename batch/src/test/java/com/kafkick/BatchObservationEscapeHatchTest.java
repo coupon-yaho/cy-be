@@ -20,7 +20,8 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  */
 @SpringBootTest(properties = {
         "observation.datasource.enabled=false",
-        "observation.domain-gauge.enabled=false"
+        "observation.domain-gauge.enabled=false",
+        "storage.jpa.auditing.enabled=false"
 })
 @Import(MySqlContainerConfig.class)
 class BatchObservationEscapeHatchTest {

@@ -16,7 +16,7 @@ import com.kafkick.storage.db.benchmark.JdbcRunTimeseriesArchiveStore;
 import com.kafkick.api.admin.observability.PromQueryClient;
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+@SpringBootTest(properties = "observation.datasource.enabled=true")
 @Import(MySqlContainerConfig.class)
 class ApiApplicationTests {
 
