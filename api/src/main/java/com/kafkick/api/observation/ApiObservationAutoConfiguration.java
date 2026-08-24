@@ -5,7 +5,10 @@ import java.time.Clock;
 import javax.sql.DataSource;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.issuance.CampaignMeterProperties;
+import com.kafkick.api.observation.issuance.CampaignMeterRegistry;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
+import com.kafkick.api.observation.issuance.MeterCampaignLifecycleRecorder;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
@@ -33,7 +36,11 @@ import org.springframework.context.annotation.Primary;
 @AutoConfiguration(
         after = { MetricsAutoConfiguration.class, CompositeMeterRegistryAutoConfiguration.class },
         afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
-@EnableConfigurationProperties({ConsistencySeverityProperties.class, ObservationIssuanceProperties.class})
+@EnableConfigurationProperties({
+        ConsistencySeverityProperties.class,
+        ObservationIssuanceProperties.class,
+        CampaignMeterProperties.class
+})
 public class ApiObservationAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(ApiObservationAutoConfiguration.class);
@@ -58,7 +65,6 @@ public class ApiObservationAutoConfiguration {
      * 함께 호출합니다. 예전처럼 "다른 EventRecorder 가 있으면 등록하지 않는다" 로 두면 사용자가
      * 자기 기록기를 하나 얹는 순간 캠페인 미터가 통째로, <b>로그 한 줄 없이</b> 사라집니다.
      *
-     * @param meterRegistry 캠페인 미터를 등록할 레지스트리
      * @param issuanceProperties 기록 실패 로그의 유량 제한 간격
      * @return 캠페인별 발급 미터 기록기
      */
@@ -66,13 +72,25 @@ public class ApiObservationAutoConfiguration {
     @ConditionalOnBean(MeterRegistry.class)
     @ConditionalOnMissingBean(MeterEventRecorder.class)
     public MeterEventRecorder meterEventRecorder(
+            ObservationIssuanceProperties issuanceProperties,
+            CampaignMeterRegistry campaignMeterRegistry
+    ) {
+        return new MeterEventRecorder(campaignMeterRegistry,
+                issuanceProperties.resolvedAttemptFailureLogInterval());
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(CampaignMeterRegistry.class)
+    public CampaignMeterRegistry campaignMeterRegistry(
             MeterRegistry meterRegistry,
+            CampaignMeterProperties campaignMeterProperties,
             ObservationIssuanceProperties issuanceProperties
     ) {
-        return new MeterEventRecorder(
+        return new CampaignMeterRegistry(
                 meterRegistry,
-                issuanceProperties.resolvedAttemptFailureLogInterval()
-        );
+                campaignMeterProperties,
+                issuanceProperties.resolvedAttemptFailureLogInterval());
     }
 
     /**
@@ -125,7 +143,13 @@ public class ApiObservationAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(CampaignLifecycleRecorder.class)
-    public CampaignLifecycleRecorder campaignLifecycleRecorder() {
+    public CampaignLifecycleRecorder campaignLifecycleRecorder(
+            ObjectProvider<CampaignMeterRegistry> campaignMeterRegistry
+    ) {
+        CampaignMeterRegistry registry = campaignMeterRegistry.getIfAvailable();
+        if (registry != null) {
+            return new MeterCampaignLifecycleRecorder(registry);
+        }
         log.warn("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
         return new NoOpCampaignLifecycleRecorder();
     }
