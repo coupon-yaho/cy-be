@@ -13,6 +13,11 @@ import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.benchmark.dto.BenchmarkListResponse;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TopReason;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.verification.VerdictType;
@@ -21,6 +26,7 @@ import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -55,7 +61,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.LatencyMetrics(null, null, null),
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
-                List.of()
+                List.of(),
+                AdminMetricsResponse.ErrorMetrics.draft()
         );
 
         String json = objectMapper.writeValueAsString(response);
@@ -68,6 +75,45 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 .contains("\"issueAttemptRps\":{\"state\":\"PENDING\"")
                 .contains("\"circuitBreakers\":[]")
                 .contains("\"meta\":{\"schemaVersion\":1");
+    }
+
+    /**
+     * 실패 분류 키가 <b>화면 계약의 camelCase 그대로</b> 나가는지 봅니다.
+     *
+     * <p>이 단언이 없으면 {@code @JsonValue} 가 빠져도 아무것도 안 깨집니다 — 계약 테스트는
+     * {@code jsonValue()} 메서드만 부르고, 목 매퍼 대조 테스트는 두 매퍼의 출력이 같은지만
+     * 보므로 <b>둘 다 대문자로 나가도 통과합니다.</b> 실제 JSON 문자열을 보는 곳은 여기뿐입니다.</p>
+     */
+    @Test
+    void errorsSerializesScreenContractKeysAsCamelCase() throws Exception {
+        ObservedValue<Double> rate = new ObservedValue<>(1.5, SourceStatus.VALID, OBSERVED_AT);
+        ErrorMetrics errors = new ErrorMetrics(
+                TrafficKey.ISSUE_ATTEMPT_RPS,
+                List.of(
+                        new ErrorClass(ErrorClassKey.DEPENDENCY_FAILURE, "의존성 실패",
+                                "httpStatus >= 500 && dependency != NONE", false, rate),
+                        new ErrorClass(ErrorClassKey.CLIENT_INVALID, "클라이언트 요청 오류",
+                                "4xx 중 403·409 를 뺀 나머지", true,
+                                new ObservedValue<>(null, SourceStatus.N_A, null))),
+                new ObservedValue<>(List.of(new TopReason(ReasonCode.INTERNAL_ERROR, 0.25)),
+                        SourceStatus.VALID, OBSERVED_AT));
+
+        String json = objectMapper.writeValueAsString(errors);
+
+        assertThat(json)
+                .contains("\"denominator\":\"issueAttemptRps\"")
+                .contains("\"key\":\"dependencyFailure\"")
+                .contains("\"key\":\"clientInvalid\"")
+                .contains("\"excludedFromNumerator\":true")
+                // 사유 코드는 원천 라벨 값이라 대문자 그대로다. 키와 표기 규약이 다르다.
+                .contains("\"reasonCode\":\"INTERNAL_ERROR\"")
+                .contains("\"rps\":0.25")
+                // 상수 이름이 그대로 나가면 화면이 못 읽는다.
+                .doesNotContain("ISSUE_ATTEMPT_RPS")
+                .doesNotContain("DEPENDENCY_FAILURE")
+                .doesNotContain("CLIENT_INVALID")
+                // 원천이 없는 분류는 키 자체가 없어야 한다.
+                .doesNotContain("clientObservedFailure");
     }
 
     /**
@@ -121,7 +167,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.LatencyMetrics(null, null, null),
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
-                List.of());
+                List.of(),
+                AdminMetricsResponse.ErrorMetrics.draft());
 
         assertThat(objectMapper.writeValueAsString(response))
                 .contains("\"phase\":\"FINAL\"")

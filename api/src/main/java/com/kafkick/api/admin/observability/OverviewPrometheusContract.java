@@ -1,14 +1,20 @@
 package com.kafkick.api.admin.observability;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.core.observation.ReasonCode;
 
 /** Overview 관측이 사용하는 B 소유 scrape 이름·라벨·PromQL을 한곳에 모읍니다. */
 public final class OverviewPrometheusContract {
 
     public static final String FLOW_TOTAL = "app_issuance_flow_total";
-    public static final String OUTCOME_TOTAL = "app_issuance_outcome_total";
+    public static final String OUTCOME_TOTAL = MetricAggregation.ISSUANCE_OUTCOME_TOTAL;
     public static final String LAST_SUCCESS_EPOCH = "app_issuance_event_last_success_epoch";
     public static final String HTTP_LATENCY_SECONDS = MetricAggregation.HTTP_LATENCY_SECONDS;
     public static final String ATTEMPT_PUBLISH_FAILURES_TOTAL =
@@ -20,8 +26,59 @@ public final class OverviewPrometheusContract {
     public static final String QUANTILE = "quantile";
     public static final String ATTEMPT = "attempt";
     public static final String SUCCESS = "success";
+    /**
+     * 실패 원인 Top N 에 실을 사유 코드입니다.
+     *
+     * <p>{@code app_issuance_outcome_total} 의 {@code outcome} 에는 발급 결과가 전부 들어옵니다 —
+     * {@code ISSUED}·{@code QUEUED} 와 정책 거절 사유까지. 정책 거절을 원인 표에 넣으면 재고 소진
+     * 구간에서 {@code STOCK_EXHAUSTED} 가 표를 통째로 밀어내 <b>실제 장애 원인이 상위 5행 밖으로
+     * 밀립니다</b> — 실패율 분자에서 정책 거절을 빼는 것과 같은 이유입니다.</p>
+     *
+     * <p><b>{@code EnumSet} 을 감싼 것이지 {@code Set.copyOf} 가 아닙니다.</b> 순회 순서가
+     * 셀렉터 문자열이 되므로 순서가 없는 Set 으로 바꾸면 같은 질의가 매 기동마다 다른 문자열이
+     * 됩니다 — Prometheus 쪽 질의 캐시와 로그 대조가 그때부터 안 맞습니다.</p>
+     *
+     * <p>분류는 {@link #isFailure(ReasonCode)} 의 <b>default 없는 switch</b> 가 정합니다. 사유 코드가
+     * 늘면 여기서 컴파일이 깨집니다 — 조용히 "실패 아님" 으로 떨어지면 새 장애 사유가 표에서
+     * 영영 안 보입니다.</p>
+     */
+    public static final Set<ReasonCode> FAILURE_REASONS = Collections.unmodifiableSet(
+            EnumSet.copyOf(Arrays.stream(ReasonCode.values())
+                    .filter(OverviewPrometheusContract::isFailure)
+                    .toList()));
+
     /** 인스턴스화를 막습니다. */
     private OverviewPrometheusContract() { }
+
+    /**
+     * 이 사유가 서버 실패인지 판정합니다.
+     *
+     * @param reasonCode 발급 결과 사유
+     * @return 서버 실패이면 true, 정책 거절·클라이언트 요청 오류이면 false
+     */
+    private static boolean isFailure(ReasonCode reasonCode) {
+        return switch (reasonCode) {
+            case TEMPORARILY_UNAVAILABLE, INTERNAL_ERROR, UNMAPPED -> true;
+            // 403·409 로 나가는 설계된 거절과 대기열 계약 위반이다. 실패가 아니다.
+            case NOT_OPENED, CAMPAIGN_CLOSED, GRADE_NOT_ELIGIBLE, QUEUE_REQUIRED, NO_ENTRY_TOKEN,
+                    ENTRY_TOKEN_EXPIRED, ALREADY_ISSUED, STOCK_EXHAUSTED -> false;
+        };
+    }
+
+    /**
+     * 지정 집계 구간의 사유별 <b>초당</b> 실패 건수 질의를 만듭니다.
+     *
+     * <p>셀렉터와 응답을 접는 쪽이 같은 {@link #FAILURE_REASONS} 를 씁니다. 두 곳에 목록을 따로
+     * 적으면 한쪽만 늘었을 때 예외 없이 행 하나가 사라집니다.</p>
+     *
+     * @param window 비율을 계산할 집계 창
+     * @return 사유별 초당 건수 질의
+     */
+    public static String failureReasonRates(Duration window) {
+        String selector = FAILURE_REASONS.stream().map(Enum::name).collect(Collectors.joining("|"));
+        return "sum by (" + OUTCOME + ") (rate(" + OUTCOME_TOTAL
+                + "{" + OUTCOME + "=~\"" + selector + "\"}[" + promDuration(window) + "]))";
+    }
 
     /** @return 현재 1분 attempt·success 캠페인별 증가량 질의 */
     public static String currentFlow() {
