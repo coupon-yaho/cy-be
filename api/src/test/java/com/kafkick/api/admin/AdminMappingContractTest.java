@@ -47,6 +47,7 @@ class AdminMappingContractTest {
             "GET /api/v1/admin/notifications/summary",
             "GET /api/v1/admin/notifications/failures",
             "GET /api/v1/admin/metrics",
+            "GET /api/v1/admin/metrics/series",
             "GET /api/v1/admin/events",
             "GET /api/v1/admin/benchmarks",
             "GET /api/v1/admin/benchmarks/{benchmarkRunId}",
@@ -69,21 +70,21 @@ class AdminMappingContractTest {
 
     /** HTTP 메서드와 전체 경로 집합을 비교해 endpoint 누락·추가·병합을 동시에 감지합니다. */
     @Test
-    @DisplayName("9개 Controller와 28개 HTTP mapping을 정확히 유지한다")
-    void exposesExactlyTwentyEightPrebuiltAdminMappings() {
+    @DisplayName("9개 Controller와 29개 HTTP mapping을 정확히 유지한다")
+    void exposesExactlyTwentyNinePrebuiltAdminMappings() {
         Set<String> actual = CONTROLLERS.stream()
                 .flatMap(controller -> routes(controller).stream())
                 .collect(Collectors.toSet());
 
         assertThat(CONTROLLERS).hasSize(9);
         assertThat(actual).containsExactlyInAnyOrderElementsOf(EXPECTED_ROUTES);
-        assertThat(actual).hasSize(28);
+        assertThat(actual).hasSize(29);
         assertThat(CONTROLLERS.stream()
                 .flatMap(controller -> Arrays.stream(controller.getDeclaredMethods()))
                 .filter(this::isMappedHandler)
                 .filter(method -> Arrays.asList(method.getParameterTypes()).contains(Caller.class)))
-                .as("28개 관리자 handler는 모두 기존 Caller를 필수 인자로 받아야 합니다.")
-                .hasSize(28);
+                .as("29개 관리자 handler는 모두 기존 Caller를 필수 인자로 받아야 합니다.")
+                .hasSize(29);
     }
 
     private Set<String> routes(Class<?> controller) {

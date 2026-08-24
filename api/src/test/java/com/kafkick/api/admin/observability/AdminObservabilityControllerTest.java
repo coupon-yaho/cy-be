@@ -27,7 +27,9 @@ class AdminObservabilityControllerTest {
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
             new AdminObservabilityController(
-                    new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET)));
+                    new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
+                    new PromSeriesAssembler(FakePromRangeQuery.alwaysOnePoint(), FIXED_TIME,
+                            PrometheusSeriesProperties.defaults())));
 
     /** 유효한 집계 구간과 단일 관측 범위가 바인딩된 뒤 값마다 상태가 붙은 스냅샷이 나가는지 검증합니다. */
     @Test
@@ -59,12 +61,49 @@ class AdminObservabilityControllerTest {
     void metricsSurviveDownstreamFailure() throws Exception {
         MockMvc failing = AdminControllerContractTestSupport.mockMvc(
                 new AdminObservabilityController(
-                        new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER, BUDGET)));
+                        new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER, BUDGET),
+                        new PromSeriesAssembler(FakePromRangeQuery.down(), FIXED_TIME,
+                                PrometheusSeriesProperties.defaults())));
 
         failing.perform(get("/api/v1/admin/metrics").param("window", "1m"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.traffic.issueAttemptRps.state").value("UNAVAILABLE"))
                 .andExpect(jsonPath("$.data.consistency.luaGap.state").value("UNAVAILABLE"));
+    }
+
+    /**
+     * NaN 표본은 "0%" 가 아니라 "계산할 수 없다" 이다. 실제 운영 JSON 정책(non_null)이 키를
+     * 지우면 화면이 undefined 를 읽고 0 으로 그린다 — 값 없음이 정상 0 으로 둔갑한다.
+     */
+    @Test
+    @DisplayName("시계열의 NaN 표본은 non_null 정책에서도 value 키를 null 로 유지한다")
+    void seriesKeepsNullValueKeyUnderNonNullPolicy() throws Exception {
+        MockMvc nonNull = AdminControllerContractTestSupport.mockMvcWithNonNullJson(
+                new AdminObservabilityController(
+                        new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
+                        new PromSeriesAssembler(FakePromRangeQuery.withNaNFirstPoint(), FIXED_TIME,
+                                PrometheusSeriesProperties.defaults())));
+
+        nonNull.perform(get("/api/v1/admin/metrics/series").param("window", "1m"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.series[0].points[0].value").doesNotExist())
+                .andExpect(jsonPath("$.data.series[0].points[0]").value(
+                        org.hamcrest.Matchers.hasKey("value")))
+                .andExpect(jsonPath("$.data.series[0].points[1].value").value(42.0));
+    }
+
+    /** 지원하지 않는 범위를 조용히 무시하면 화면이 전역 값을 회차 값으로 읽는다. */
+    @Test
+    @DisplayName("시계열 조회는 아직 지원하지 않는 범위 파라미터를 400으로 거부한다")
+    void seriesRejectsUnsupportedScopeParameters() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/metrics/series")
+                        .param("window", "1m").param("couponId", "5"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-004"));
+        mockMvc.perform(get("/api/v1/admin/metrics/series")
+                        .param("window", "1m").param("benchmarkRunId", "7"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-004"));
     }
 
     /** 쿠폰 범위와 Benchmark 범위를 동시에 지정한 요청을 400으로 거부하는지 검증합니다. */
