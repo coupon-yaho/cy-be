@@ -1,6 +1,7 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.data.domain.Page;
@@ -17,6 +18,32 @@ public interface CouponRoundJpaRepository
         extends JpaRepository<CouponRoundEntity, Long> {
 
     boolean existsByTemplateIdAndOpenAt(Long templateId, Instant openAt);
+
+    @Query(value = """
+            SELECT coupon.id AS couponRoundId,
+                   coupon.template_id AS templateId,
+                   coupon.brand_id AS brandId,
+                   coupon.name AS name,
+                   coupon.policy_type AS policyType,
+                   coupon.discount_rate AS discountRate,
+                   coupon.max_discount_amount AS maxDiscountAmount,
+                   coupon.discount_amount AS discountAmount,
+                   coupon.valid_days AS validDays,
+                   coupon.eligible_grades_mask AS eligibleGradesMask,
+                   coupon.open_at AS openAt,
+                   coupon.close_at AS closeAt,
+                   coupon.status AS status,
+                   stock.total_quantity AS totalQuantity,
+                   stock.total_quantity - stock.active_count
+                       AS remainingQuantity
+              FROM coupons coupon
+              JOIN coupon_stocks stock
+                ON stock.coupon_id = coupon.id
+             WHERE coupon.id = :couponRoundId
+            """, nativeQuery = true)
+    Optional<CouponRoundDetailProjection> findCouponRoundDetailById(
+            @Param("couponRoundId") Long couponRoundId
+    );
 
     @Query(
             value = """
