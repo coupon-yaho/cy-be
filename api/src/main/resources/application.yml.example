@@ -19,14 +19,25 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics
+        include: health,metrics,prometheus
         exclude: env,configprops,beans,heapdump
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        coupon.issue.operation.duration: true
+      percentiles:
+        coupon.issue.operation.duration: 0.5,0.95,0.99
+      slo:
+        coupon.issue.operation.duration: 100ms,300ms,500ms,1s,3s
 
 logging:
   pattern:
     console: "%d{HH:mm:ss.SSS} %-5level [%X{requestId:-}] %logger{36} - %msg%n"
   level:
     com.kafkick: DEBUG
+    com.kafkick.api.coupon.monitoring: ${COUPON_ISSUE_LOG_LEVEL:INFO}
 
 coupon:
   idempotency:

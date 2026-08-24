@@ -11,11 +11,14 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.http.CouponRequestHeaders;
+import com.kafkick.api.coupon.monitoring.CouponIssueMetrics;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -38,6 +41,9 @@ class CouponIssueControllerTest {
 
     @MockitoBean
     private CouponOperationExecutionService operationExecutionService;
+
+    @MockitoBean
+    private CouponIssueMetrics couponIssueMetrics;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -78,6 +84,12 @@ class CouponIssueControllerTest {
                 MembershipGrade.GOLD,
                 IDEMPOTENCY_KEY
         );
+        verify(couponIssueMetrics).recordStarted(10L, 20L);
+        verify(couponIssueMetrics).recordSuccess(
+                org.mockito.ArgumentMatchers.eq(10L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.longThat(duration -> duration >= 0)
+        );
     }
 
     @Test
@@ -112,6 +124,45 @@ class CouponIssueControllerTest {
                 20L,
                 MembershipGrade.GOLD,
                 IDEMPOTENCY_KEY
+        );
+    }
+
+    @Test
+    @DisplayName("재고가 소진되면 품절 메트릭을 기록하고 409를 반환한다")
+    void recordSoldOutMetric() throws Exception {
+        BusinessException soldOut = new BusinessException(
+                CouponIssueErrorCode.SOLD_OUT
+        );
+        when(operationExecutionService.issue(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).thenThrow(soldOut);
+        when(timeProvider.instant()).thenReturn(
+                Instant.parse("2026-08-24T00:00:00Z")
+        );
+
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "GOLD"
+                        )
+                        .header(
+                                CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                IDEMPOTENCY_KEY
+                        ))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("COUPON-306"));
+
+        verify(couponIssueMetrics).recordBusinessFailure(
+                org.mockito.ArgumentMatchers.eq(10L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.eq(
+                        CouponIssueErrorCode.SOLD_OUT
+                ),
+                org.mockito.ArgumentMatchers.longThat(duration -> duration >= 0)
         );
     }
 
