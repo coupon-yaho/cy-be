@@ -449,12 +449,21 @@ public class PromMetricsAssembler {
                 rate(results, result(ResultClass.QUEUE_ACCEPTED), freshness, zeroState),
                 rate(results, issue.and(result(ResultClass.POLICY_REJECT)), freshness, zeroState),
                 rate(results, issue.and(
-                        result(ResultClass.DEPENDENCY_FAILURE).or(result(ResultClass.APPLICATION_FAILURE))),
+                        systemFailure()),
                         freshness, zeroState));
     }
 
     private static Predicate<PromSample> inGroup(UriGroup group) {
         return label(TAG_URI_GROUP, group.tagValue());
+    }
+
+    /**
+     * 실패 비율의 분자가 되는 결과 분류입니다. 정의는 {@link ResultClass#systemFailures()} 하나뿐이라
+     * 시계열 경로({@code PromSeriesAssembler})와 같은 값을 셉니다.
+     */
+    private static Predicate<PromSample> systemFailure() {
+        return sample -> ResultClass.systemFailures().stream()
+                .anyMatch(failure -> result(failure).test(sample));
     }
 
     private static Predicate<PromSample> result(ResultClass resultClass) {

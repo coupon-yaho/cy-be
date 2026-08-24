@@ -1,6 +1,11 @@
 package com.kafkick.api.observation.http;
 
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
 
@@ -26,6 +31,33 @@ public final class ResultClassifier {
 
         public boolean isSuccess() {
             return success;
+        }
+
+        /**
+         * 실패 <b>비율</b>의 분자가 되는 분류입니다.
+         *
+         * <p><b>실패 전체가 아닙니다.</b> {@link #POLICY_REJECT} 와 {@link #CLIENT_INVALID} 는
+         * 시스템이 정상 동작한 결과라 분자에 넣으면 정책상 거절이 장애로 보입니다.</p>
+         *
+         * <p>이 정의가 화면 여러 곳에 흩어지면 스냅샷({@code /metrics})과 추세선
+         * ({@code /metrics/series})의 숫자가 조용히 갈립니다. 분류가 늘어날 때 여기만 고치면
+         * 되도록 한 곳에 둡니다.</p>
+         *
+         * @return 시스템 책임 실패로 세는 분류들
+         */
+        public static Set<ResultClass> systemFailures() {
+            return SYSTEM_FAILURES;
+        }
+
+        private static final Set<ResultClass> SYSTEM_FAILURES =
+                Collections.unmodifiableSet(EnumSet.of(DEPENDENCY_FAILURE, APPLICATION_FAILURE));
+
+        /** @return 이 분류들의 Prometheus {@code result} 라벨 값 정규식 대안 */
+        public static String promLabelAlternation(Set<ResultClass> classes) {
+            return classes.stream()
+                    .map(value -> value.name().toLowerCase(Locale.ROOT))
+                    .sorted()
+                    .collect(Collectors.joining("|"));
         }
     }
 
