@@ -148,6 +148,25 @@ class KafkaBrokerComposeContractTest {
     }
 
     @Test
+    @DisplayName("각 브로커가 자기 서비스 이름을 광고한다 — localhost 를 광고하면 api 가 자신에게 붙는다")
+    void everyBrokerAdvertisesItsOwnServiceName() throws IOException {
+        for (Map.Entry<String, Map<String, Object>> broker : brokers().entrySet()) {
+            String advertised = String.valueOf(
+                    environmentOf(broker.getValue()).get("KAFKA_ADVERTISED_LISTENERS"));
+
+            // 부트스트랩 주소만 보는 것으로는 부족하다. 클라이언트는 부트스트랩으로 메타데이터를
+            // 받은 뒤 <b>거기 적힌 주소</b>로 다시 붙는다 — 광고 주소가 localhost 면 부트스트랩은
+            // 성공하고 그다음 연결이 api 컨테이너 자신을 향한다. 증상은 연결 거부가 아니라
+            // "브로커가 있는데 아무것도 안 되는" 상태다.
+            assertThat(advertised)
+                    .as("%s 는 compose 네트워크 안에서 자기 서비스 이름으로 닿아야 한다."
+                            + " 이름이 틀리면 DNS 가 안 풀리고, localhost 면 부르는 쪽 자신에게 간다",
+                            broker.getKey())
+                    .isEqualTo("PLAINTEXT://" + broker.getKey() + ":" + BROKER_PORT);
+        }
+    }
+
+    @Test
     @DisplayName("컨트롤러 쿼럼 명단이 실제 브로커 셋과 일치하고 노드 id 가 겹치지 않는다")
     void theControllerQuorumMatchesTheBrokersThatExist() throws IOException {
         Map<String, Map<String, Object>> brokers = brokers();

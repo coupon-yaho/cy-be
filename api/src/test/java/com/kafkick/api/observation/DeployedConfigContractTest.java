@@ -53,29 +53,6 @@ class DeployedConfigContractTest {
     /** compose 의 ports 오른쪽이자 {@code application.yml.example} 의 {@code server.port}. */
     private static final String CONTAINER_PORT_VARIABLE = "SERVER_PORT";
 
-    /** {@code .env.example} 이 정의하는 변수 이름들. 주석과 빈 줄은 뺀다. */
-    private List<String> environmentDeclarations() throws IOException {
-        List<String> names = new ArrayList<>();
-        for (String line : Files.readAllLines(repoRoot().resolve(".env.example"))) {
-            String stripped = line.strip();
-            int assign = stripped.indexOf('=');
-            if (stripped.startsWith("#") || assign <= 0) {
-                continue;
-            }
-            names.add(stripped.substring(0, assign));
-        }
-        return names;
-    }
-
-    /**
-     * OBS-35 에서 뜻을 갈랐다. 예전에는 호스트 공개 포트와 컨테이너 Spring 포트가 둘 다
-     * {@code SERVER_PORT} 였고, compose 가 컨테이너 값을 {@code "8080"} 으로 덮어써서
-     * 버텼다 — 그 시절 이 테스트는 그 덮어쓰기의 존재를 지켰다. 이제는 <b>두 자리가 서로 다른
-     * 변수를 쓰는지</b>를 지킨다. 덮어쓰기는 증상 대처였고 이건 원인 쪽이다.
-     *
-     * <p><b>잡지 못하는 것.</b> 커밋되지 않는 {@code .env} 에서 두 값을 어떻게 채웠는지.
-     * 거기서 {@code API_HOST_PORT} 를 빼면 compose 기본값 8080 이 쓰인다.
-     */
     @Test
     @DisplayName("호스트 공개 포트와 컨테이너 Spring 포트가 서로 다른 변수다")
     void theHostPortAndTheContainerPortAreDifferentVariables() throws IOException {
@@ -126,28 +103,6 @@ class DeployedConfigContractTest {
                 .as("이제 덮어쓸 이유가 없다. 남겨 두면 .env 의 SERVER_PORT 를 고쳐도 컨테이너"
                         + " 포트가 안 바뀌어, 뜻을 가른 것이 다시 무의미해진다")
                 .doesNotContainKey("SERVER_PORT");
-    }
-
-    /** {@code "${NAME:-기본값}"} · {@code "${NAME}"} 에서 이름만 뽑는다. */
-    private String variableOf(String fragment) {
-        int open = fragment.indexOf("${");
-        assertThat(open)
-                .as("포트 매핑 양쪽이 변수여야 한다. 숫자를 박으면 .env 로 못 바꾼다: %s",
-                        fragment)
-                .isNotNegative();
-        String inside = fragment.substring(open + 2, fragment.lastIndexOf('}'));
-        int separator = inside.indexOf(':');
-        return separator < 0 ? inside : inside.substring(0, separator);
-    }
-
-    private Map<String, Object> composeService(String name) throws IOException {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> services = (Map<String, Object>) loadYaml(
-                repoRoot().resolve("compose.yml")).get("services");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> service = (Map<String, Object>) services.get(name);
-        assertThat(service).as("compose 에 %s 서비스가 없다", name).isNotNull();
-        return service;
     }
 
     @Test
@@ -231,6 +186,52 @@ class DeployedConfigContractTest {
     }
 
     // ── 읽기 도우미 ───────────────────────────────────────────────────────────
+
+    /** {@code "${NAME:-기본값}"} · {@code "${NAME}"} 에서 이름만 뽑는다. */
+    private String variableOf(String fragment) {
+        int open = fragment.indexOf("${");
+        assertThat(open)
+                .as("포트 매핑 양쪽이 변수여야 한다. 숫자를 박으면 .env 로 못 바꾼다: %s",
+                        fragment)
+                .isNotNegative();
+        String inside = fragment.substring(open + 2, fragment.lastIndexOf('}'));
+        int separator = inside.indexOf(':');
+        return separator < 0 ? inside : inside.substring(0, separator);
+    }
+
+    private Map<String, Object> composeService(String name) throws IOException {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> services = (Map<String, Object>) loadYaml(
+                repoRoot().resolve("compose.yml")).get("services");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> service = (Map<String, Object>) services.get(name);
+        assertThat(service).as("compose 에 %s 서비스가 없다", name).isNotNull();
+        return service;
+    }
+
+    /** {@code .env.example} 이 정의하는 변수 이름들. 주석과 빈 줄은 뺀다. */
+    private List<String> environmentDeclarations() throws IOException {
+        List<String> names = new ArrayList<>();
+        for (String line : Files.readAllLines(repoRoot().resolve(".env.example"))) {
+            String stripped = line.strip();
+            int assign = stripped.indexOf('=');
+            if (stripped.startsWith("#") || assign <= 0) {
+                continue;
+            }
+            names.add(stripped.substring(0, assign));
+        }
+        return names;
+    }
+
+    /**
+     * OBS-35 에서 뜻을 갈랐다. 예전에는 호스트 공개 포트와 컨테이너 Spring 포트가 둘 다
+     * {@code SERVER_PORT} 였고, compose 가 컨테이너 값을 {@code "8080"} 으로 덮어써서
+     * 버텼다 — 그 시절 이 테스트는 그 덮어쓰기의 존재를 지켰다. 이제는 <b>두 자리가 서로 다른
+     * 변수를 쓰는지</b>를 지킨다. 덮어쓰기는 증상 대처였고 이건 원인 쪽이다.
+     *
+     * <p><b>잡지 못하는 것.</b> 커밋되지 않는 {@code .env} 에서 두 값을 어떻게 채웠는지.
+     * 거기서 {@code API_HOST_PORT} 를 빼면 compose 기본값 8080 이 쓰인다.
+     */
 
     /** 여러 문서(---) 중 {@code spring.config.activate.on-profile} 이 맞는 것. */
     private Map<String, Object> profile(String name) throws IOException {

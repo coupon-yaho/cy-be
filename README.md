@@ -109,6 +109,18 @@ find . -path '*/src/main/resources/*.yml.example' \
 `spring.config.import`가 통째로 안 돌아서, 나머지 파일이 없다는 사실조차 드러나지 않는다.
 그 상태의 증상은 조건부 빈이 사라지는 것뿐이라 원인을 찾기 어렵다 — 위 자동 복사를 둔 이유다.
 
+⚠️ **위 명령은 모듈 리소스만 채운다.** compose 로 띄울 때 필요한 저장소 루트의 두 파일은
+따로 복사해야 한다 — `compose.yml`이 `./application.yml`을 컨테이너에 bind mount 하고
+`.env`를 `env_file`로 읽는다. 둘 다 gitignore 대상이라 신규 클론에는 없다.
+
+```bash
+[ -e .env ] || cp .env.example .env
+[ -e application.yml ] || cp application.yml.example application.yml
+```
+
+빼먹고 `docker compose up` 하면 Docker가 `application.yml`이라는 **디렉터리**를 만들어
+마운트한다(실측). 설정이 통째로 비는데 에러에는 그 원인이 안 나온다.
+
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
 
