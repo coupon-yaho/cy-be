@@ -163,6 +163,13 @@ class KafkaBrokerComposeContractTest {
                             + " 이름이 틀리면 DNS 가 안 풀리고, localhost 면 부르는 쪽 자신에게 간다",
                             broker.getKey())
                     .isEqualTo("PLAINTEXT://" + broker.getKey() + ":" + BROKER_PORT);
+
+            // 광고와 실제 바인딩은 다른 값이다. 광고만 맞고 리스너가 다른 포트에 붙으면
+            // 부트스트랩도 메타데이터도 통과한 뒤 연결에서만 거부된다.
+            assertThat(String.valueOf(
+                    environmentOf(broker.getValue()).get("KAFKA_LISTENERS")))
+                    .as("%s 가 광고하는 포트와 실제로 여는 포트가 같아야 한다", broker.getKey())
+                    .contains("PLAINTEXT://:" + BROKER_PORT);
         }
     }
 

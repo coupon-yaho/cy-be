@@ -98,7 +98,7 @@ coupon-yaho
 
 ```bash
 find . -path '*/src/main/resources/*.yml.example' \
-  -exec sh -c '[ -e "${1%.example}" ] || cp "$1" "${1%.example}"' _ {} \;
+  -exec sh -c '[ -f "${1%.example}" ] || cp "$1" "${1%.example}"' _ {} \;
 ```
 
 ⚠️ **없을 때만 복사한다.** 예전에는 무조건 덮어써서, 브랜치를 받고 이 명령을 다시 돌리면
@@ -114,12 +114,20 @@ find . -path '*/src/main/resources/*.yml.example' \
 `.env`를 `env_file`로 읽는다. 둘 다 gitignore 대상이라 신규 클론에는 없다.
 
 ```bash
-[ -e .env ] || cp .env.example .env
-[ -e application.yml ] || cp application.yml.example application.yml
+[ -f .env ] || cp .env.example .env
+[ -f application.yml ] || cp application.yml.example application.yml
 ```
 
 빼먹고 `docker compose up` 하면 Docker가 `application.yml`이라는 **디렉터리**를 만들어
 마운트한다(실측). 설정이 통째로 비는데 에러에는 그 원인이 안 나온다.
+
+⚠️ 위 조건이 `-e`가 아니라 **`-f`**인 이유가 그것이다. `-e`는 그렇게 생긴 디렉터리도
+"있다"로 판정해 복사를 건너뛴다 — 한 번 이 상태에 빠지면 명령을 다시 돌려도 낫지 않는다.
+디렉터리가 생겼으면 먼저 지운다.
+
+```bash
+[ -d application.yml ] && rmdir application.yml
+```
 
 DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
 환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
