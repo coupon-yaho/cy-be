@@ -87,7 +87,9 @@ public class CleanupScheduler {
             TimeProvider timeProvider,
             @Value(CRON) String cleanupCron,
             @Value("${batch.metrics.cleanup-sla-seconds:90000}") long slaSeconds,
-            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis,
+            @Value("${batch.metrics.cleanup-running-too-long-seconds:900}") long runningTooLongSeconds) {
+        SlaBudget.requirePositive("batch.metrics.cleanup-running-too-long-seconds", runningTooLongSeconds);
         if (Scheduled.CRON_DISABLED.equals(cleanupCron)) {
             // 끄는 수단은 하나여야 한다. "-" 로 끄면 트리거만 죽고 알림은 그대로 살아
             // 25시간 뒤부터 영원히 운다 — 끈 것을 아무도 알림에 말해 주지 않는다.
@@ -100,7 +102,7 @@ public class CleanupScheduler {
         this.cleanupCron = cleanupCron;
         // 소요 항은 SlaBudget 이 진다 — 게이지가 END_TIME 이라 잡이 도는 동안 나이가 자란다.
         Duration worstGap = SlaBudget.worstAge(this.cronSlot, timeProvider.now(), 0,
-                        refreshMillis, SlaBudget.CLEANUP_RUNNING_TOO_LONG_SECONDS)
+                        refreshMillis, runningTooLongSeconds)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "정리 크론이 " + SLA_CHECK_HORIZON.toDays() + "일 안에 한 번도 안 돕니다. "
                                 + "그런 주기로는 CleanupNotSucceeding 의 SLA(" + slaSeconds
@@ -110,7 +112,7 @@ public class CleanupScheduler {
             throw new IllegalArgumentException(
                     "정리 지연 상한이 CleanupNotSucceeding 의 SLA 를 넘습니다. "
                             + "크론 최대간격 + run-refresh-ms + CleanupRunningTooLong("
-                            + SlaBudget.CLEANUP_RUNNING_TOO_LONG_SECONDS + "초) = "
+                            + runningTooLongSeconds + "초) = "
                             + worstGap.toSeconds()
                             + "초 >= SLA " + slaSeconds + "초. 정상 상태에서 오탐 warning 이 "
                             + "납니다 — 크론을 촘촘히 하거나 batch.metrics.cleanup-sla-seconds 를 "

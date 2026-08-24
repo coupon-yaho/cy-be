@@ -1,6 +1,7 @@
 // 검증 배치를 사람이 돌리고 결과를 조회합니다.
 package com.kafkick.batch.api;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -17,6 +18,8 @@ import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.batch.config.RunningJobProbe;
+import com.kafkick.batch.config.ExpireStepContext;
 import com.kafkick.batch.config.VerifyExecutorConfig;
 import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.job.VerifyJobConfig;
@@ -73,6 +77,19 @@ public class VerifyTriggerController {
     private final TimeProvider timeProvider;
     private final RunningJobProbe runningJobs;
 
+    /**
+     * <b>곧 뜰 만료를 보기 위한 것이다.</b> {@code rejectRunningExpire} 는 <i>이미 도는</i>
+     * 만료만 보고 <i>곧 뜰</i> 만료는 못 본다 — 그 창이 CY-470 에서 위험해졌다.
+     */
+    private final CronExpression expireCron;
+
+    /**
+     * <b>검증 한 번이 끝나기까지 걸릴 최악의 시간.</b> 그 안에 만료가 뜨면 겹친다.
+     * {@code VerifyRunningTooLong} 임계와 같은 값을 쓴다 — 그 값이 이미 <i>"정상 상태에서
+     * 이보다 오래 걸리면 사람이 본다"</i> 는 선언이라, 두 자리가 한 축 위에 선다.
+     */
+    private final Duration verifyWorstCase;
+
     public VerifyTriggerController(
             @Qualifier(VerifyExecutorConfig.OPERATOR) JobOperator verifyJobOperator,
             @Qualifier("verifyJob") Job verifyJob,
@@ -80,7 +97,17 @@ public class VerifyTriggerController {
             VerificationRunRepository runs,
             VerificationRuleRepository rules,
             TimeProvider timeProvider,
-            RunningJobProbe runningJobs) {
+            RunningJobProbe runningJobs,
+            @Value(ExpireStepContext.CRON) String expireCron,
+            @Value("${batch.metrics.verify-running-too-long-seconds:1200}")
+            long verifyWorstCaseSeconds) {
+        // 만료 크론이 꺼져 있으면("-") 그 축의 충돌 자체가 없다. CronSlot 은 그 값을 못 파싱하니
+        // 여기서 가른다 — ExpireScheduler 는 같은 값을 기동 거절로 다루지만, 이 컨트롤러는
+        // batch.scheduling.enabled=false 로 스케줄러를 끈 기동에서도 살아 있어야 한다.
+        this.expireCron = CronExpression.isValidExpression(expireCron)
+                ? CronExpression.parse(expireCron)
+                : null;
+        this.verifyWorstCase = Duration.ofSeconds(verifyWorstCaseSeconds);
         this.verifyJobOperator = verifyJobOperator;
         this.verifyJob = verifyJob;
         this.jobRepository = jobRepository;
@@ -125,6 +152,8 @@ public class VerifyTriggerController {
                     "만료 배치가 실행 중입니다. 그 동안 검증하면 판정 근거가 검증 중에 "
                             + "바뀝니다 — 끝난 뒤 다시 부르십시오. executionIds=" + runningExpire);
         }
+
+        rejectIfExpireIsAboutToFire();
 
         // 이미 도는 것이 있으면 여기서 끝낸다. 아래 start() 의 catch 로는 못 잡는다 —
         // TaskExecutorJobLauncher 가 TaskRejectedException 을 자기가 삼키고 잡을 FAILED 로
@@ -292,6 +321,54 @@ public class VerifyTriggerController {
      * 잡을 {@code FAILED} 로 표시하고 정상 반환한다. 그러면 429 가 죽은 코드가 되고,
      * 클라이언트는 202 를 받아 놓고 <i>왜 실패했는지 모르는 채</i> 폴링한다.
      */
+    /**
+     * <b>곧 뜰 만료와 겹칠 접수를 거절한다.</b>
+     *
+     * <p>{@code max-expire-skips} 가 <b>0</b> 이 된 뒤로(CY-470) 만료는 검증을 <b>건너뛰지
+     * 않고 지나간다.</b> 그때 찍히는 {@code issuances.updated_at} 을 {@code assertFrozenStep} 의
+     * {@code rejectIssuancesUpdatedAfterAsOf} 가 보고 실행을 죽이는데, <b>그 {@code asOf} 는
+     * 영구히 못 쓴다</b> — 만료가 찍은 시각은 지워지지 않는다.
+     *
+     * <p>그 손잡이를 0 으로 내린 근거는 <i>"일정 분리가 겹침을 막는다"</i> 였고, 그것은
+     * <b>크론끼리만</b> 참이다. 손 트리거 경로는 시각을 안 가리므로 방어가 통째로 사라졌다 —
+     * 하필 만료 04:10 UTC 가 <b>13:10 KST</b> 라 시연 준비 시간대와 겹친다.
+     * 규약을 문서에만 두면 그 시각에 누르는 사람을 아무것도 막지 못한다.
+     *
+     * <p><b>{@code rejectRunningExpire} 와 다른 축이다.</b> 그쪽은 <i>이미 도는</i> 만료를
+     * 배치 메타에서 보고, 이쪽은 <i>곧 뜰</i> 만료를 크론에서 본다. 둘 다 있어야 창이 닫힌다.
+     *
+     * <p>거절 대신 기다리지 않는다 — 최악 8분을 HTTP 요청이 붙잡고 있을 수 없고,
+     * <b>언제 다시 부르면 되는지</b>를 응답에 실어 주는 편이 낫다.
+     */
+    private void rejectIfExpireIsAboutToFire() {
+        if (expireCron == null) {
+            // 만료 크론이 꺼져 있다("-"). 그 축의 충돌 자체가 없다 — ExpireScheduler 는 같은
+            // 값을 기동 거절로 다루지만, 이 컨트롤러는 batch.scheduling.enabled=false 로
+            // 스케줄러를 끈 기동에서도 살아 있어야 한다.
+            return;
+        }
+        LocalDateTime now = timeProvider.now();
+        LocalDateTime nextExpire = expireCron.next(now);
+        if (nextExpire == null) {
+            // 만료 크론이 앞으로 안 돈다. 겹칠 것이 없다.
+            return;
+        }
+        Duration untilExpire = Duration.between(now, nextExpire);
+        if (untilExpire.compareTo(verifyWorstCase) >= 0) {
+            return;
+        }
+        // 전용 코드를 쓴다. VERIFY_EXPIRE_RUNNING 과 상태 코드는 같지만 **처방이 다르다** —
+        // 그쪽은 "만료가 끝나길 기다려라" 이고 이쪽은 "배치 창을 지난 뒤에 불러라" 다.
+        // 응답에 나가는 것은 고정 문구뿐이라(핸들러가 detail 을 로그에만 남긴다) 코드를
+        // 안 가르면 운영자가 같은 시각에 또 누른다.
+        throw new BusinessException(VerificationErrorCode.VERIFY_EXPIRE_ABOUT_TO_FIRE,
+                "만료 크론이 " + untilExpire.toSeconds() + "초 뒤(" + nextExpire
+                        + " UTC)에 뜹니다. max-expire-skips=0 이라 만료는 이 검증을 "
+                        + "건너뛰지 않고 지나가며, 그때 찍히는 updated_at 때문에 이 asOf 로는 "
+                        + "다시 못 잽니다(재시딩 말고 복구가 없습니다). "
+                        + nextExpire.plus(verifyWorstCase) + " UTC 이후로 다시 부르십시오.");
+    }
+
     private void rejectIfAlreadyRunning() {
         Set<Long> running = runningExecutions();
         if (!running.isEmpty()) {

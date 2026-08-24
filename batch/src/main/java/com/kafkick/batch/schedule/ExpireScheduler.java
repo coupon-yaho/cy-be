@@ -24,6 +24,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.batch.config.BatchJobRepositoryConfig;
+import com.kafkick.batch.config.ExpireStepContext;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
@@ -85,7 +86,7 @@ public class ExpireScheduler {
      * 한쪽만 고치는 실수를 아무것도 안 막으므로 상수로 묶는다({@code @Scheduled} 는 컴파일
      * 상수만 받는다).
      */
-    static final String CRON = "${batch.schedule.expire-cron:0 10 4 * * *}";
+    static final String CRON = ExpireStepContext.CRON;
 
     /**
      * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
@@ -138,10 +139,12 @@ public class ExpireScheduler {
             RunningJobProbe runningJobs,
             @Value("${batch.schedule.max-expire-skips:0}") int maxSkips,
             @Value("${batch.metrics.expire-sla-seconds:90000}") long slaSeconds,
-            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis,
+            @Value("${batch.metrics.expire-running-too-long-seconds:600}") long runningTooLongSeconds) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
+        SlaBudget.requirePositive("batch.metrics.expire-running-too-long-seconds", runningTooLongSeconds);
         if (Scheduled.CRON_DISABLED.equals(expireCron)) {
             // @Scheduled 는 "-" 를 "이 트리거를 끈다" 로 받지만 CronSlot 은 asOf 를 못 만든다.
             // 그대로 두면 CronExpression.parse 가 던져 batch 앱 전체가 기동에 실패하고,
@@ -172,7 +175,7 @@ public class ExpireScheduler {
         // .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다.
         // 소요 항은 SlaBudget 이 진다 — 게이지가 END_TIME 이라 잡이 도는 동안 나이가 자란다.
         Duration worstDelay = SlaBudget.worstAge(cronSlot, timeProvider.now(), maxSkips,
-                        refreshMillis, SlaBudget.EXPIRE_RUNNING_TOO_LONG_SECONDS)
+                        refreshMillis, runningTooLongSeconds)
                 // **창 안에 한 번도 안 도는 크론은 통과가 아니라 거절이다.** 그런 크론은
                 // 어떤 SLA 도 만족시킬 수 없다 — 만료가 8일에 한 번도 안 도는데 "성공이
                 // 오래됐다" 알림이 조용할 수는 없기 때문이다. 여기서 Duration.ZERO 로 접으면
@@ -191,7 +194,7 @@ public class ExpireScheduler {
                     "만료 지연 상한이 ExpireNotSucceeding 의 SLA 를 넘습니다. "
                             + "(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms "
                             + "+ BatchJobRunningTooLong("
-                            + SlaBudget.EXPIRE_RUNNING_TOO_LONG_SECONDS + "초) = "
+                            + runningTooLongSeconds + "초) = "
                             + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
                             + "정상 상태에서 오탐 critical 이 납니다 — "
                             + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "

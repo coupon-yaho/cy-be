@@ -82,7 +82,7 @@ class NoWallClockInBatchTest {
      * CleanupScheduler     2  같은 축
      * VerifyScheduler      2  같은 축 — 크론 슬롯이 asOf 가 되지만 그 값은 <b>잡 파라미터</b>고,
      *                            판정은 여전히 잡 안에서 그 asOf 로만 한다
-     * VerifyTriggerController 1  asOf 미래 검사 — 접수 단계다
+     * VerifyTriggerController 2  asOf 미래 검사 · 곧 뜰 만료와의 간격 — 둘 다 접수 단계다
      * BatchApiExceptionHandler 1  응답 timestamp
      *
      * ExpirePendingRefresher 는 <b>주입 시계</b>를 안 쓴다(예산 0) — 시각을 배치 메타에서
@@ -106,7 +106,10 @@ class NoWallClockInBatchTest {
             "com/kafkick/batch/schedule/CouponRoundScheduler.java", 1,
             // 하나다 — 대기 수 넷을 한 시각으로 센다. 갈리면 서로 다른 시각의 값이 나란히 나간다.
             "com/kafkick/batch/config/CouponRoundPendingRefresher.java", 1,
-            "com/kafkick/batch/api/VerifyTriggerController.java", 1,
+            // 둘이다 — asOf 미래 검사와, 곧 뜰 만료와 겹치는지 보는 검사(CY-470).
+            // 뒤엣것은 max-expire-skips=0 이 손 트리거의 방어를 없앤 자리를 접수 단계에서
+            // 닫는다. 둘 다 판정에 안 들어간다 — 잡에 실리는 asOf 는 요청값 그대로다.
+            "com/kafkick/batch/api/VerifyTriggerController.java", 2,
             "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1);
 
     /**

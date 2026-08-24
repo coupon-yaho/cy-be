@@ -77,10 +77,15 @@ public class BatchRunMetrics {
     /** 관제가 "모른다" 를 0 으로 오해하지 않게 한다. 0 은 1970년이라 즉시 알림이 된다. */
     private static final double UNKNOWN = Double.NaN;
 
-    private final AtomicReference<Map<String, Snapshot>> latest =
-            new AtomicReference<>(Map.of());
-    private final AtomicReference<Double> verifyLastSuccess =
-            new AtomicReference<>(UNKNOWN);
+    /**
+     * <b>두 그레인을 한 참조에 담는다.</b> 따로 두고 순서대로 {@code set} 하면 그 사이의
+     * 스크레이프가 <b>서로 다른 되읽기 결과</b>를 본다 — 잡 이름 그레인은 새 값, 검증
+     * 그레인은 직전 값이다. 관제가 그 둘을 나란히 놓고 보는 것이 진단의 첫 단계라,
+     * 존재하지 않는 조합을 한 순간이라도 내보내면 안 된다.
+     */
+    private final AtomicReference<Reading> latest =
+            new AtomicReference<>(new Reading(Map.of(), UNKNOWN));
+
     private final List<String> watchedJobNames;
 
     /**
@@ -107,8 +112,8 @@ public class BatchRunMetrics {
         // 만들면, verifyJob 빈이 없는 기동에서 이 계열이 통째로 사라져 VerifyMetricsMissing
         // 이 "타깃은 살아 있는데 계열만 없다" 를 못 가린다 — CY-446 이 회차 카운터를
         // 무조건부 빈으로 옮긴 것과 같은 이유다.
-        Gauge.builder("cy_verify_last_success_seconds", verifyLastSuccess,
-                        AtomicReference::get)
+        Gauge.builder("cy_verify_last_success_seconds", latest,
+                        holder -> holder.get().verifyLastSuccessEpochSeconds())
                 .tag(DATASET_TAG, VerifyRunContext.SLA_DATASET)
                 .tag(SCOPE_TAG, VerifyRunContext.SLA_SCOPE)
                 .description("이 (dataset, scope) 조합의 검증이 마지막으로 COMPLETED 로 끝난 "
@@ -122,26 +127,18 @@ public class BatchRunMetrics {
     }
 
     /**
-     * 되읽기가 성공했을 때 그 결과로 통째로 갈아 끼운다.
+     * 되읽기가 성공했을 때 그 결과로 <b>두 그레인을 한 번에</b> 갈아 끼운다.
      *
      * <p><b>부분 갱신을 안 한다.</b> 잡 하나만 갱신하면 다른 잡의 값이 언제 것인지 알 수
      * 없어지는데, 그 상태는 <i>"낡았다"</i> 와 <i>"방금 읽었다"</i> 가 같은 모양이다.
-     */
-    public void record(Map<String, Snapshot> fresh) {
-        latest.set(Map.copyOf(fresh));
-    }
-
-    /**
-     * {@code (SLA_DATASET, SLA_SCOPE)} 검증의 마지막 성공 시각.
+     * 그레인 둘을 나눠 넣지 않는 것도 같은 이유다 — 그 사이의 스크레이프가 존재하지 않는
+     * 조합을 본다.
      *
-     * <p><b>위 {@code record} 와 한 되읽기 안에서 함께 불려야 한다.</b> 따로 갱신하면
-     * {@code cy_batch_last_success_seconds{verifyJob}} 과 이 값이 서로 다른 시점을 말하는
-     * 구간이 생기는데, 관제에서 그 둘을 나란히 놓고 보는 것이 진단의 첫 단계다.
-     *
-     * @param epochSeconds 없으면 {@code NaN} — <i>"그 조합으로 성공한 실행이 아예 없다"</i>
+     * @param verifyLastSuccessEpochSeconds {@code (SLA_DATASET, SLA_SCOPE)} 조합의 마지막
+     *                                      성공. 없으면 {@code NaN}
      */
-    public void recordVerifyLastSuccess(double epochSeconds) {
-        verifyLastSuccess.set(epochSeconds);
+    public void record(Map<String, Snapshot> fresh, double verifyLastSuccessEpochSeconds) {
+        latest.set(new Reading(Map.copyOf(fresh), verifyLastSuccessEpochSeconds));
     }
 
     /**
@@ -150,11 +147,9 @@ public class BatchRunMetrics {
      * SLA 알림을 통째로 재운다.
      */
     public void markUnknown() {
-        latest.set(Map.of());
-        // 검증 게이지도 함께 떨어뜨린다. 안 떨어뜨리면 되읽기가 죽은 동안 이 계열만
-        // 마지막 값을 들고 있어, 관제가 두 축을 나란히 볼 때 **하나는 모름 하나는 정상**
-        // 이라는 존재하지 않는 상태를 만든다.
-        verifyLastSuccess.set(UNKNOWN);
+        // 두 그레인이 함께 떨어진다. 하나만 떨어뜨리면 관제가 두 축을 나란히 볼 때
+        // **하나는 모름 하나는 정상** 이라는 존재하지 않는 상태를 본다.
+        latest.set(new Reading(Map.of(), UNKNOWN));
     }
 
     /**
@@ -164,10 +159,21 @@ public class BatchRunMetrics {
     public record Snapshot(double lastSuccessEpochSeconds, int stuckExecutions) {
     }
 
+    /**
+     * 한 되읽기가 본 것 전부. <b>게이지 둘이 이 한 참조에서 값을 꺼내</b> 서로 다른 세대를
+     * 섞어 내보내지 않는다.
+     *
+     * @param snapshots                     잡 이름 그레인
+     * @param verifyLastSuccessEpochSeconds {@code (dataset, scope)} 그레인
+     */
+    private record Reading(Map<String, Snapshot> snapshots,
+            double verifyLastSuccessEpochSeconds) {
+    }
+
     private void gauge(MeterRegistry registry, String name, String jobName,
             java.util.function.ToDoubleFunction<Snapshot> field, String description) {
         Gauge.builder(name, latest, holder -> {
-                    Snapshot snapshot = holder.get().get(jobName);
+                    Snapshot snapshot = holder.get().snapshots().get(jobName);
                     return snapshot == null ? UNKNOWN : field.applyAsDouble(snapshot);
                 })
                 .tag(JOB_TAG, jobName)

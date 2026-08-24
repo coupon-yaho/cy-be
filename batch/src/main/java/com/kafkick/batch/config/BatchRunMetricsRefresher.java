@@ -176,8 +176,10 @@ public class BatchRunMetricsRefresher {
             // 트랜잭션 콜백이 null 을 돌려줄 수 있는 자리는 아니지만(위 람다가 언제나
             // 새 값을 만든다), 계약상 nullable 이라 방어한다 — 여기서 NPE 가 나면
             // 게이지가 낡은 값을 든 채 되읽기만 죽는다.
-            metrics.record(fresh == null ? Map.of() : fresh.snapshots());
-            metrics.recordVerifyLastSuccess(
+            //
+            // 두 그레인을 **한 번에** 넣는다. 나눠 넣으면 그 사이의 스크레이프가 서로 다른
+            // 되읽기 결과를 본다.
+            metrics.record(fresh == null ? Map.of() : fresh.snapshots(),
                     fresh == null ? Double.NaN : fresh.verifyLastSuccessEpochSeconds());
             failures.set(0);
         } catch (RuntimeException e) {

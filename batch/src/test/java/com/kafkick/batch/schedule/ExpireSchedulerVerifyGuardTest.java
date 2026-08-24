@@ -262,6 +262,6 @@ class ExpireSchedulerVerifyGuardTest {
                 "0 */5 * * * *", runningJobs, maxSkips,
                 // 상한 2 · 5분 크론이면 최악 지연 900초라 SLA 를 넉넉히 올려 준다 —
                 // 이 클래스가 재는 것은 SLA 가드가 아니라 슬롯 건너뛰기다.
-                2_000L, 60_000L);
+                2_000L, 60_000L, 600L);
     }
 }

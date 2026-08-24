@@ -45,11 +45,11 @@ class SlaBudgetTest {
 
         Duration without = SlaBudget.worstAge(slot, NOW, 0, REFRESH_MILLIS, 0).orElseThrow();
         Duration with = SlaBudget.worstAge(slot, NOW, 0, REFRESH_MILLIS,
-                SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS).orElseThrow();
+                SlaBudget.DEFAULT_VERIFY_RUNNING_TOO_LONG_SECONDS).orElseThrow();
 
         assertThat(with.minus(without))
                 .as("게이지가 END_TIME 이라, 잡이 도는 동안 자라는 나이만큼 예산이 더 필요하다")
-                .isEqualTo(Duration.ofSeconds(SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS));
+                .isEqualTo(Duration.ofSeconds(SlaBudget.DEFAULT_VERIFY_RUNNING_TOO_LONG_SECONDS));
         assertThat(with.toSeconds())
                 .as("일 1회(86,400) + 되읽기(60) + VerifyRunningTooLong(1,200)")
                 .isEqualTo(87_660L);
@@ -66,9 +66,9 @@ class SlaBudgetTest {
         CronSlot slot = new CronSlot(DAILY_CRON);
 
         Duration noSkip = SlaBudget.worstAge(slot, NOW, 0, REFRESH_MILLIS,
-                SlaBudget.EXPIRE_RUNNING_TOO_LONG_SECONDS).orElseThrow();
+                SlaBudget.DEFAULT_EXPIRE_RUNNING_TOO_LONG_SECONDS).orElseThrow();
         Duration oneSkip = SlaBudget.worstAge(slot, NOW, 1, REFRESH_MILLIS,
-                SlaBudget.EXPIRE_RUNNING_TOO_LONG_SECONDS).orElseThrow();
+                SlaBudget.DEFAULT_EXPIRE_RUNNING_TOO_LONG_SECONDS).orElseThrow();
 
         assertThat(oneSkip.minus(noSkip))
                 .as("늘어나는 것은 크론 간격 하나뿐이어야 한다")
@@ -90,7 +90,7 @@ class SlaBudgetTest {
                 .as("항이 없으면 86,460 이라 이 SLA 를 통과한다 — 그 상태가 결함이었다")
                 .isLessThan(sla);
         assertThat(SlaBudget.worstAge(slot, NOW, 0, REFRESH_MILLIS,
-                        SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS)
+                        SlaBudget.DEFAULT_VERIFY_RUNNING_TOO_LONG_SECONDS)
                 .orElseThrow().toSeconds())
                 .as("항이 있으면 87,660 이라 거절된다")
                 .isGreaterThanOrEqualTo(sla);
@@ -108,7 +108,7 @@ class SlaBudgetTest {
         CronSlot never = new CronSlot("0 0 5 30 2 *");
 
         assertThat(SlaBudget.worstAge(never, NOW, 0, REFRESH_MILLIS,
-                SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS)).isEmpty();
+                SlaBudget.DEFAULT_VERIFY_RUNNING_TOO_LONG_SECONDS)).isEmpty();
     }
 
     /**
@@ -122,9 +122,9 @@ class SlaBudgetTest {
     @Test
     @DisplayName("소요 상한이 잡의 무게 순서와 같다 — 만료 < 정리 < 검증")
     void thresholdsFollowJobWeight() {
-        assertThat(SlaBudget.EXPIRE_RUNNING_TOO_LONG_SECONDS)
-                .isLessThan(SlaBudget.CLEANUP_RUNNING_TOO_LONG_SECONDS);
-        assertThat(SlaBudget.CLEANUP_RUNNING_TOO_LONG_SECONDS)
-                .isLessThan(SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS);
+        assertThat(SlaBudget.DEFAULT_EXPIRE_RUNNING_TOO_LONG_SECONDS)
+                .isLessThan(SlaBudget.DEFAULT_CLEANUP_RUNNING_TOO_LONG_SECONDS);
+        assertThat(SlaBudget.DEFAULT_CLEANUP_RUNNING_TOO_LONG_SECONDS)
+                .isLessThan(SlaBudget.DEFAULT_VERIFY_RUNNING_TOO_LONG_SECONDS);
     }
 }

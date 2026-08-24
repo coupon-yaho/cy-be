@@ -232,7 +232,7 @@ class VerifySchedulerTest {
     private VerifyScheduler scheduler(BatchStatus status, RuntimeException failure,
             AtomicReference<JobParameters> captured) {
         return new VerifyScheduler(stubOperator(status, failure, captured), verifyJob,
-                utcClock(), DAILY_CRON, DAILY_SLA_SECONDS, 60_000L);
+                utcClock(), DAILY_CRON, DAILY_SLA_SECONDS, 60_000L, 1200L);
     }
 
     private static JobOperator stubOperator(BatchStatus status, RuntimeException failure,
@@ -261,7 +261,7 @@ class VerifySchedulerTest {
     /** 협력자에 {@code null} 을 안 넘긴다 — 쓰는 코드가 생기는 날 엉뚱한 자리에서 NPE 가 난다. */
     private VerifyScheduler build(String cron, long slaSeconds) {
         return new VerifyScheduler(stubOperator(BatchStatus.COMPLETED, null, null), verifyJob,
-                utcClock(), cron, slaSeconds, 60_000L);
+                utcClock(), cron, slaSeconds, 60_000L, 1200L);
     }
 
     /** ERROR 갈래가 하나여야 한다 — 뭉쳐 있으면 여기서 개수가 어긋난다. */

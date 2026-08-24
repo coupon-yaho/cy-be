@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
@@ -189,5 +190,62 @@ class VerifyTriggerExpireGuardTest {
         assertThat(response.statusCode())
                 .as("이 조합이 409 로 돌아오면 가드가 다시 플래그를 보고 있는 것이다")
                 .isEqualTo(202);
+    }
+
+    /**
+     * <b>이 티켓이 새로 닫는 창이다(CY-470).</b> 위 셋은 전부 <i>이미 도는</i> 만료를 본다.
+     * <b>곧 뜰</b> 만료는 아무도 안 봤다 — 그리고 {@code max-expire-skips} 가 0 이 되면서
+     * 그 창이 위험해졌다: 만료는 검증을 <b>건너뛰지 않고 지나가고</b>, 그때 찍히는
+     * {@code updated_at} 때문에 그 {@code asOf} 는 영구히 못 쓴다(재시딩 말고 복구가 없다).
+     *
+     * <p>하필 만료 04:10 UTC 가 <b>13:10 KST</b> 라 시연 준비 시간대와 겹친다 — 규약을
+     * 문서에만 두면 그 시각에 누르는 사람을 아무것도 막지 못한다.
+     *
+     * <p><b>이 컨텍스트의 만료 크론은 연 1회(1월 1일)</b>라 평소에는 이 갈래가 안 열린다.
+     * 그래서 크론을 <b>지금 곧 뜨는 값</b>으로 바꾼 별도 컨텍스트에서 잰다.
+     */
+    @Nested
+    @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+            "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
+            "spring.batch.job.enabled=false",
+            // 스케줄러는 끈다 — 재려는 것은 **크론 표현식**이지 실제 발화가 아니고,
+            // 켜 두면 아래 1분 크론이 CI 에서 진짜 만료를 돌린다.
+            "batch.scheduling.enabled=false",
+            // 1분마다 뜬다. 접수 시각에서 다음 발화까지가 언제나 60초 이내라,
+            // 검증 최악 소요(1,200초)보다 짧아 반드시 거절 갈래로 간다.
+            "batch.schedule.expire-cron=0 * * * * *",
+            "batch.metrics.expire-sla-seconds=999999999",
+            "server.port=0",
+            "management.server.port=0",
+            "batch.verify.metrics-refresh-ms=120000"
+    })
+    @Import(MySqlContainerConfig.class)
+    @DisplayName("만료가 곧 뜰 때")
+    class WhenExpireIsAboutToFire {
+
+        @LocalServerPort
+        private int port;
+
+        @Test
+        @DisplayName("접수 단계에서 409 로 거절하고 언제 다시 부를지 말해 준다")
+        void refusesAndSaysWhenToRetry() throws Exception {
+            var response = new VerifyApiProbe(port).post("/api/v1/admin/verify?asOf=" + AS_OF);
+
+            assertThat(response.statusCode())
+                    .as("이 검사가 없으면 접수는 통과하고, 곧 뜬 만료가 그 asOf 를 영구히 "
+                            + "못 쓰게 만든다 — 실패가 시연 직전에 드러난다")
+                    .isEqualTo(409);
+            assertThat(response.body())
+                    .as("**전용 코드여야 한다.** VERIFICATION-012(이미 도는 만료)와 상태 코드는 "
+                            + "같지만 처방이 다르다 — 그쪽은 '끝나길 기다려라', 이쪽은 "
+                            + "'배치 창을 지난 뒤에 불러라' 다")
+                    .contains("VERIFICATION-017");
+            assertThat(response.body())
+                    .as("응답에 나가는 것은 고정 문구뿐이다(핸들러가 detail 을 로그에만 남긴다). "
+                            + "그러니 그 문구 자체가 처방을 말해야 한다 — 안 그러면 "
+                            + "운영자가 같은 시각에 또 누른다")
+                    .contains("배치 창")
+                    .contains("영구히 못 쓰게");
+        }
     }
 }

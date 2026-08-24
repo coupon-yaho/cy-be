@@ -29,6 +29,19 @@ public final class ExpireStepContext {
     public static final String JOB_NAME = "expireJob";
 
     /**
+     * <b>만료 크론. 스케줄러와 검증 트리거 API 가 함께 읽는다.</b>
+     *
+     * <p>API 쪽이 이것을 보는 이유는 <b>곧 뜰 만료</b>와 겹칠 접수를 거절하기 위해서다 —
+     * {@code max-expire-skips} 가 0 이 된 뒤로(CY-470) 만료가 검증을 건너뛰지 않고 지나가고,
+     * 그때 찍히는 {@code updated_at} 때문에 그 {@code asOf} 를 영구히 못 쓴다.
+     *
+     * <p>리터럴을 두 곳에 적으면 한쪽만 고치는 실수를 아무것도 안 막는다 — 그러면 API 가
+     * <b>실제로 안 뜨는 시각</b>을 근거로 거절하거나, 진짜 충돌을 통과시킨다.
+     * {@code @Scheduled} 는 컴파일 상수만 받으므로 이 자리가 그것을 만족해야 한다.
+     */
+    public static final String CRON = "${batch.schedule.expire-cron:0 10 4 * * *}";
+
+    /**
      * <b>이 실행에서 손대지 않기로 한 회차 목록.</b> 첫 청크가 한 번 구해 여기 싣고, 이후
      * 청크와 되읽기가 그것을 읽는다.
      *

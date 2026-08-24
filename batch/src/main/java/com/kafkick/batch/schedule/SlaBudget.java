@@ -47,17 +47,36 @@ final class SlaBudget {
      */
     static final Duration CHECK_HORIZON = Duration.ofDays(400);
 
-    /** {@code batch-alerts.yml} 의 {@code BatchJobRunningTooLong} 임계와 같은 값이어야 한다. */
-    static final long EXPIRE_RUNNING_TOO_LONG_SECONDS = 600L;
+    /**
+     * <b>세 임계는 설정으로 연다 — 상수가 아니다.</b> 배포마다 다른 값이기 때문이다:
+     * 시연용 5분 크론에서는 이 항이 지배적이 되어(300 + 60 + <b>600</b>) SLA 를 961 이상으로
+     * 밀어 올린다. 손잡이가 없으면 <b>그 조합을 아예 못 쓴다.</b>
+     * {@code expire-sla-seconds} 가 같은 이유로 같은 모양이다.
+     *
+     * <p>여기 있는 값은 <b>{@code .example} 과 알림 규칙이 함께 쓰는 기본값</b>이고,
+     * {@code @Value} 의 폴백이자 이 클래스의 문서다 — 셋을 손으로 맞춘다는 사실은
+     * {@code batch-alerts.yml} 이 SLA 초 값에 대해 이미 여러 번 적어 뒀다.
+     */
+    static final long DEFAULT_EXPIRE_RUNNING_TOO_LONG_SECONDS = 600L;
 
-    /** {@code batch-alerts.yml} 의 {@code CleanupRunningTooLong} 임계와 같은 값이어야 한다. */
-    static final long CLEANUP_RUNNING_TOO_LONG_SECONDS = 900L;
+    static final long DEFAULT_CLEANUP_RUNNING_TOO_LONG_SECONDS = 900L;
+
+    /** 300만에서 실측 472초의 2.5배다(CY-470). 셋 중 가장 큰 것은 검증이 가장 무거워서다. */
+    static final long DEFAULT_VERIFY_RUNNING_TOO_LONG_SECONDS = 1200L;
 
     /**
-     * {@code batch-alerts.yml} 의 {@code VerifyRunningTooLong} 임계와 같은 값이어야 한다.
-     * 300만에서 실측 472초의 2.5배다(CY-470).
+     * <b>0 이하는 그 항을 없애는 것</b>이라 이 손잡이의 존재 이유가 사라진다. 상한은 SLA 가
+     * 대신 진다 — 너무 크면 부등식이 안 서서 기동이 거절되므로 따로 안 막는다.
      */
-    static final long VERIFY_RUNNING_TOO_LONG_SECONDS = 1200L;
+    static void requirePositive(String key, long runningTooLongSeconds) {
+        if (runningTooLongSeconds < 1) {
+            throw new IllegalArgumentException(
+                    key + " 는 1 이상이어야 합니다. 이 값은 정상 상태의 잡 소요 상한이고, "
+                            + "게이지가 END_TIME 이라 그만큼을 SLA 예산에서 빼 둬야 "
+                            + "도는 도중에 오탐 알림이 안 납니다. 받은 값="
+                            + runningTooLongSeconds);
+        }
+    }
 
     private SlaBudget() {
     }

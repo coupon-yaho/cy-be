@@ -114,6 +114,11 @@ class ResolvedBatchConfigTest {
             // 검증 SLA(CY-470). 만료·정리와 달리 건너뛰기 항이 없다 — 검증은 슬롯을
             // 건너뛰지 않고, 앞 실행이 돌면 크론 트리거가 다음 발화를 안 잡는다.
             "batch.metrics.verify-sla-seconds",
+            // 세 SLA 부등식의 마지막 항(CY-470 CodeRabbit). batch-alerts.yml 의
+            // RunningTooLong 임계와 손으로 맞춘다 — 상수로 두면 짧은 크론 배포가 막힌다.
+            "batch.metrics.expire-running-too-long-seconds",
+            "batch.metrics.cleanup-running-too-long-seconds",
+            "batch.metrics.verify-running-too-long-seconds",
             "batch.verify.asof-state-keep-runs",
             "batch.cleanup.chunk-size",
             "batch.cleanup.abandoned-after-hours",

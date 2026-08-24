@@ -346,13 +346,6 @@ public class StatsJdbcAdapter implements StatsRepository {
         return written;
     }
 
-    private List<Long> couponIdsAsOf(LocalDateTime asOf) {
-        return jdbcClient.sql(SELECT_COUPON_IDS_AS_OF)
-                .param("asOf", asOf)
-                .query(Long.class)
-                .list();
-    }
-
     @Override
     public int couponCount(LocalDateTime asOf) {
         return jdbcClient.sql(COUNT_COUPONS_AS_OF)
@@ -438,6 +431,33 @@ public class StatsJdbcAdapter implements StatsRepository {
     }
 
     /**
+     * 168행을 한 번에 보낸다. {@code rewriteBatchedStatements=true} 가 URL 에 있어 드라이버가
+     * 하나의 다중 VALUES 문으로 합친다 — 168회 왕복이 아니다.
+     */
+    @Override
+    public void appendHourlyStats(long runId, List<HourlyIssued> hourly) {
+        SqlParameterSource[] batch = hourly.stream()
+                .map(h -> new MapSqlParameterSource()
+                        .addValue("runId", runId)
+                        .addValue("dayOfWeek", h.dayOfWeek())
+                        .addValue("hour", h.hour())
+                        .addValue("issuedTotal", h.issuedTotal()))
+                .toArray(SqlParameterSource[]::new);
+
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO hourly_stats (run_id, day_of_week, hour, issued_total)
+                VALUES (:runId, :dayOfWeek, :hour, :issuedTotal)
+                """, batch);
+    }
+
+    private List<Long> couponIdsAsOf(LocalDateTime asOf) {
+        return jdbcClient.sql(SELECT_COUPON_IDS_AS_OF)
+                .param("asOf", asOf)
+                .query(Long.class)
+                .list();
+    }
+
+    /**
      * 루프를 끝낼 id. <b>PK 만 건다 — {@code event_type}·{@code created_at} 컷은 안 건다.</b>
      * 그 둘을 덮는 인덱스가 없어 걸면 534만 행 전수 스캔이 되는데, 이 Step 은 이미
      * {@code issuance_histories} 를 두 번 훑는다({@code SELECT_BROKEN_ISSUE_HISTORY} 의
@@ -458,25 +478,5 @@ public class StatsJdbcAdapter implements StatsRepository {
                 .query(Long.class)
                 .single();
         return ceiling == null ? 0L : ceiling;
-    }
-
-    /**
-     * 168행을 한 번에 보낸다. {@code rewriteBatchedStatements=true} 가 URL 에 있어 드라이버가
-     * 하나의 다중 VALUES 문으로 합친다 — 168회 왕복이 아니다.
-     */
-    @Override
-    public void appendHourlyStats(long runId, List<HourlyIssued> hourly) {
-        SqlParameterSource[] batch = hourly.stream()
-                .map(h -> new MapSqlParameterSource()
-                        .addValue("runId", runId)
-                        .addValue("dayOfWeek", h.dayOfWeek())
-                        .addValue("hour", h.hour())
-                        .addValue("issuedTotal", h.issuedTotal()))
-                .toArray(SqlParameterSource[]::new);
-
-        jdbcTemplate.batchUpdate("""
-                INSERT INTO hourly_stats (run_id, day_of_week, hour, issued_total)
-                VALUES (:runId, :dayOfWeek, :hour, :issuedTotal)
-                """, batch);
     }
 }

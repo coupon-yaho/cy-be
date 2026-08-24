@@ -12,6 +12,9 @@ import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException;
+import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -118,7 +121,9 @@ public class VerifyScheduler {
             TimeProvider timeProvider,
             @Value(CRON) String verifyCron,
             @Value("${batch.metrics.verify-sla-seconds:90000}") long slaSeconds,
-            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis,
+            @Value("${batch.metrics.verify-running-too-long-seconds:1200}") long runningTooLongSeconds) {
+        SlaBudget.requirePositive("batch.metrics.verify-running-too-long-seconds", runningTooLongSeconds);
         if (Scheduled.CRON_DISABLED.equals(verifyCron)) {
             // 끄는 수단은 하나여야 한다. "-" 로 끄면 트리거만 죽고 알림은 그대로 살아
             // SLA 를 넘긴 뒤부터 영원히 운다 — 끈 것을 아무도 알림에 말해 주지 않는다.
@@ -134,7 +139,7 @@ public class VerifyScheduler {
         // 스프링의 크론 트리거가 애초에 다음 발화를 안 잡기 때문이다.
         // 소요 항은 SlaBudget 이 진다(게이지가 END_TIME 이라 도는 동안 나이가 자란다).
         Duration worstAge = SlaBudget.worstAge(this.cronSlot, timeProvider.now(), 0,
-                        refreshMillis, SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS)
+                        refreshMillis, runningTooLongSeconds)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "검증 크론이 " + SlaBudget.CHECK_HORIZON.toDays()
                                 + "일 안에 한 번도 안 돕니다. "
@@ -145,7 +150,7 @@ public class VerifyScheduler {
             throw new IllegalArgumentException(
                     "검증 지연 상한이 VerifyNotSucceeding 의 SLA 를 넘습니다. "
                             + "크론 최대간격 + run-refresh-ms + VerifyRunningTooLong("
-                            + SlaBudget.VERIFY_RUNNING_TOO_LONG_SECONDS + "초) = "
+                            + runningTooLongSeconds + "초) = "
                             + worstAge.toSeconds()
                             + "초 >= SLA " + slaSeconds + "초. 정상 상태에서 오탐 critical 이 "
                             + "납니다 — 크론을 촘촘히 하거나 batch.metrics.verify-sla-seconds 를 "
@@ -199,7 +204,25 @@ public class VerifyScheduler {
                         + "batch.schedule.verify-cron 을 옮겨야 합니다. asOf={} 상태={} 원인={}",
                         firedAt, status, execution.getAllFailureExceptions());
             }
+        } catch (JobExecutionAlreadyRunningException e) {
+            // 같은 asOf 를 다른 노드가 아직 돌리고 있다. 중복 방지가 제 일을 한 것이라
+            // 사건이 아니다 — 한 JVM 안에서는 크론 트리거가 애초에 겹침을 막으므로
+            // 이 자리는 배치를 두 대로 늘리는 날 산다.
+            log.warn("앞 실행이 아직 돌고 있어 이번 주기를 건너뜁니다. asOf={}", firedAt);
+        } catch (JobInstanceAlreadyCompleteException e) {
+            log.info("이미 끝난 asOf 라 건너뜁니다. asOf={}", firedAt);
+        } catch (DuplicateKeyException e) {
+            // 다른 노드가 같은 asOf 로 먼저 JOB_INST_UN 을 잡았다. **asOf 를 크론 슬롯으로
+            // 맞춘 이유가 바로 이 거절**이라(위 verify() javadoc), 이것을 ERROR 로 내보내면
+            // 설계대로 동작한 것이 슬롯마다 알림이 된다.
+            log.info("다른 노드가 같은 asOf 를 이미 시작했습니다. asOf={}", firedAt);
         } catch (Exception e) {
+            // ⚠️ **IllegalStateException 은 여기 남는다.** ExpireScheduler 는 그것을
+            //    JdbcJobInstanceDao 의 중복 단언과 진짜 실패로 가르는데, 그 판별이
+            //    JobOperator.getJobInstance(제거 예정 API)에 기대고 있다. 그 API 를 새 클래스에
+            //    복제하는 것보다 **보수적으로 ERROR 를 남기는 편**이 낫다 — 지금은 배치가 한
+            //    대라 그 갈래가 안 열리고, 두 대로 늘리는 날 그 판별을 두 스케줄러가 함께 쓸
+            //    자리로 빼면 된다. 반대로 타입만 보고 INFO 로 내리면 진짜 실패를 삼킨다.
             log.error("검증 배치를 시작하지 못했습니다. asOf={}", firedAt, e);
         }
     }
