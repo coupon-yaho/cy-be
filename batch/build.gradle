@@ -73,6 +73,10 @@ tasks.named('test') {
     // 가드가 있는데 안 도는 상태가 가드가 없는 것보다 나쁘다 — 초록불이 검사했다는
     // 증거로 읽힌다(api/build.gradle 도 같은 이유).
     inputs.files(
+            // 관측 계정을 만드는 스크립트. ObservationAccountPrivilegeTest 가 그 계정으로
+            // GRANT 계약을 단언하므로, 선언하지 않으면 스크립트를 고쳐도 이 모듈이
+            // UP-TO-DATE 로 건너뛴다 — 정작 계약을 보는 테스트가 안 도는 상태가 된다.
+            rootProject.file('infra/mysql/initdb/20-obs-account.sh'),
             // 관측 창의 기준. api 가 소유한다.
             rootProject.file('api/src/main/resources/observation.yml.example'),
             // 컨테이너에 마운트되는 배포 설정. batch 프로파일 문서가 창을 덮는지 본다.

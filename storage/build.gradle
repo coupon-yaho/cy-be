@@ -25,3 +25,19 @@ dependencies {
 
     testFixturesRuntimeOnly 'com.mysql:mysql-connector-j'
 }
+
+tasks.named('test') {
+    // 컨테이너 픽스처가 클래스패스 밖 파일을 읽는다. 선언하지 않으면 Gradle 이 그 변경을
+    // 모르고 test 를 UP-TO-DATE 로 건너뛴다.
+    //
+    // ⚠️ **세 모듈 전부에 있어야 한다.** 이 픽스처는 testFixtures 라 storage·batch·api 가
+    //    함께 쓰는데, GRANT 계약을 실제로 단언하는 것은 batch 의
+    //    ObservationAccountPrivilegeTest 다. 여기만 선언했다가 그 모듈이 UP-TO-DATE 로
+    //    건너뛰는 상태를 만든 적이 있다 — 이 주석이 예전에 "api·batch 도 같은 줄을 갖고
+    //    있다" 고 적었는데 그때는 사실이 아니었다.
+    //
+    // 실측: 선언 전에는 초기화 스크립트를 고쳐도 :storage:test 가 UP-TO-DATE 로 통과했다.
+    inputs.files(rootProject.file('infra/mysql/initdb/20-obs-account.sh'))
+        .withPropertyName('obsAccountInitScript')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

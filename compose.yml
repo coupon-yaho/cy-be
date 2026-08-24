@@ -41,6 +41,13 @@ services:
       - "127.0.0.1:${MYSQL_PORT}:3306"
     volumes:
       - coupon-mysql-data:/var/lib/mysql
+      # 관측 전용 계정을 만든다. **테스트 컨테이너와 같은 파일**이라, 테스트에서 도는
+      # 권한이 곧 여기서 도는 권한이다(MySqlContainerConfig 가 같은 경로를 마운트한다).
+      #
+      # ⚠️ initdb.d 는 데이터 디렉터리가 **비어 있을 때만** 돈다. 이미 coupon-mysql-data
+      #    볼륨이 있는 환경에서는 이 줄을 추가해도 아무 일이 없다 — 그때는 스크립트 안의
+      #    GRANT 를 한 번 손으로 실행하거나 볼륨을 지우고 다시 띄운다.
+      - ./infra/mysql/initdb/20-obs-account.sh:/docker-entrypoint-initdb.d/20-obs-account.sh:ro
     healthcheck:
       test:
         - CMD-SHELL

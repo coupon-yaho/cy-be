@@ -138,6 +138,34 @@ docker compose up -d
 이 절차는 **새 환경의 최초 초기화 전용**이다. 운영 중 키 유실이나 데이터 복구 상황에서
 revision을 0으로 되돌리는 복구 수단으로 사용하지 않는다.
 
+### 기존 MySQL 볼륨에 관측 계정 추가
+
+관측 전용 계정(`DB_OBS_USERNAME`)은 compose 가 자동으로 만든다 —
+`infra/mysql/initdb/20-obs-account.sh` 가 그 자리다.
+
+**다만 `initdb.d` 는 데이터 디렉터리가 비어 있을 때만 돈다.** 이미
+`coupon-mysql-data` 볼륨이 있는 환경에서는 그 파일을 고쳐도 아무 일이 일어나지 않고,
+관측 조회가 첫 요청에서 `Access denied` 로 죽는다. 기존 볼륨을 쓰는 사람에게는
+재현이 안 되므로 *"내 로컬은 되는데"* 가 되기 쉬운 자리다.
+
+그때는 한 번만 손으로 준다.
+
+```bash
+docker compose exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql \
+  mysql -uroot -e "
+    CREATE USER IF NOT EXISTS '$DB_OBS_USERNAME'@'%' IDENTIFIED BY '$DB_OBS_PASSWORD';
+    GRANT SELECT ON \`$MYSQL_DATABASE\`.* TO '$DB_OBS_USERNAME'@'%';"
+```
+
+비밀번호를 `-p` 로 주지 않는다 — 컨테이너 안 `ps` 에 그대로 보인다.
+계정 이름·비밀번호에 `'` 가 들어가면 위 문장이 깨지므로 그때는 값을 먼저 확인한다
+(초기화 스크립트는 이스케이프한다).
+
+**GRANT 는 스키마 단위여야 한다.** 테이블 단위로 열거하면 새 테이블이 생길 때마다 조용히
+빠진다 — 배치 이력 조회가 읽는 `BATCH_JOB_EXECUTION` · `BATCH_JOB_INSTANCE` 는 Spring Batch 가
+만든 것이라 목록에서 누락되기 가장 쉽다. compose 초기화 경로에서는 애초에 테이블 단위가
+불가능하다(그 시점엔 Flyway 가 안 돌아 테이블이 없어서 `ERROR 1146` 으로 컨테이너가 안 뜬다).
+
 ### 새 코드를 어디에 둘 것인가
 
 쿠폰 발급 기능을 예로 들면:
