@@ -106,10 +106,14 @@ public class MainDataSourceConfig {
      * <h2>[CY-488] 운영 풀 query-timeout 은 값을 두지 않는다 — 그 판단의 근거</h2>
      *
      * <p><b>이 손잡이가 닿는 범위는 운영 <i>풀</i> 이 아니라 이 {@code JdbcTemplate} 하나다.</b>
-     * 실제 주입 지점은 {@code JdbcBenchmarkRunRepository} 의 쓰기 전이와
-     * {@code JdbcRunTimeseriesArchiveStore} 둘뿐이고, Flyway 와 Spring Batch 의
-     * {@code JobRepository} 는 {@code DataSource} 를 직접 물어 이 값과 무관하다.
-     * 발급 경로는 이 브랜치에 코드가 없다(엔티티·JPA 리포지토리 0개) — 다른 티켓 소유다.
+     * Flyway 와 Spring Batch 의 {@code JobRepository} 는 {@code DataSource} 를 직접 물어 이 값과
+     * 무관하고, 발급의 재고 차감은 JPA({@code CouponStockJpaRepository} 의
+     * {@code @Lock(PESSIMISTIC_WRITE)})라 역시 이 템플릿을 안 탄다.
+     *
+     * <p><b>다만 {@code IdempotencyRepositoryImpl} 이 이것을 문다 — 발급 경로다.</b> 요청마다
+     * 재고를 건드리기 전에 도는 멱등키 선점({@code INSERT idempotency_records})이 여기 실린다.
+     * 그래서 이 값은 <b>정상 발급을 죽일 수 있는 자리에 있다.</b> 나머지 주입 지점은
+     * {@code JdbcBenchmarkRunRepository} 의 쓰기 전이와 {@code JdbcRunTimeseriesArchiveStore} 다.
      *
      * <p>실측(2026-08-25, MySQL 8.4.11 · Connector/J 9.7.0, 유휴 DB). 이 템플릿이 실제로 실행하는
      * 가장 무거운 문장은 아카이브의 500행 청크 INSERT 이고, 10000행 3회 반복에서:
@@ -119,8 +123,9 @@ public class MainDataSourceConfig {
      * </pre>
      *
      * <p>여기서 값을 정하려면 <b>부하 중</b> 수치가 필요한데 그것이 없다. 유휴 49ms 에 임의의
-     * 배수를 곱해 적는 것은 근거가 아니라 추측이고, 그 추측한 값은 발급 경로가 합류하는 순간
-     * <b>사고가 된다</b> — 아래 실측대로 이 손잡이는 v1 비관적 락의 <b>정상 대기까지 끊는다.</b>
+     * 배수를 곱해 적는 것은 근거가 아니라 추측이고, 그 추측한 값은 위 멱등키 선점을 함께 끊는다 —
+     * 증상은 타임아웃이 아니라 <b>발급 실패</b>로 나타난다. 아래 실측대로 이 손잡이는 v1 비관적
+     * 락의 <b>정상 대기까지 끊으므로</b>, 락 경합이 몰리는 구간일수록 더 많이 끊는다.
      * 무한 대기는 URL 의 {@code socketTimeout=60000} 이 이미 막고 있으므로, 지금 비워 두는 대가는
      * "60초 상한이 그대로 남는다" 뿐이다. 그래서 <b>비워 두는 쪽을 골랐다.</b>
      *
