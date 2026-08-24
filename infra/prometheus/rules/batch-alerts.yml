@@ -575,10 +575,14 @@ groups:
       # 조인이 **빈 벡터**가 되어 셋이 통째로 침묵한다 — 게이지가 0 일 때와 없을 때가
       # 관측상 같아지고, 없을 때는 그것을 알려 주는 것도 없다.
       # CouponRoundMetricsMissing 은 pending_open 만 보므로 이 축을 못 덮는다.
+      # ⚠️ **absent() 가 아니라 unless 다.** absent() 는 **전역 부재**만 참이라, 배치를 두
+      # 대로 늘렸을 때 한 대에만 게이지가 없으면 조용하다 — 그런데 조인은
+      # on(instance, job) 이라 **그 인스턴스의 알림 셋만** 침묵한다. 실측으로 확인했다:
+      # up 둘 중 하나에만 게이지를 주면 absent 형은 안 뜨고 unless 형은 그 인스턴스를 지목한다.
       - alert: CouponRoundSwitchMetricMissing
         expr: >-
-          absent(cy_coupon_round_scheduling_enabled)
-          and on() (min_over_time(up{job="cy-batch"}[5m]) == 1)
+          (min_over_time(up{job="cy-batch"}[5m]) == 1)
+          unless on(instance, job) cy_coupon_round_scheduling_enabled
         for: 10m
         labels:
           severity: warning

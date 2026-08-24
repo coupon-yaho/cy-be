@@ -735,6 +735,8 @@ tests:
           - exp_labels:
               severity: warning
               channel: server
+              instance: batch:9092
+              job: cy-batch
             exp_annotations:
               summary: "회차 전이 스위치 게이지가 없습니다 — 알림 셋이 조용히 꺼져 있습니다"
               description: "배치는 떠 있는데 cy_coupon_round_scheduling_enabled 시리즈가 없습니다. CouponRoundsNotOpening·NotClosing·MissedWindow 가 이 게이지로 끈 구간을 빼는데, 없으면 그 조인이 빈 벡터가 되어 **셋 다 발화 조건을 못 만듭니다** — 회차가 안 열려도 알림이 한 건도 안 갑니다. /actuator/prometheus 본문에서 그 이름을 직접 봅니다. 미터 이름이 바뀌었거나 CouponRoundPendingRefresher 생성자가 그 게이지 등록에 도달하지 못한 것입니다."
@@ -750,3 +752,27 @@ tests:
       - eval_time: 20m
         alertname: CouponRoundSwitchMetricMissing
         exp_alerts: []
+
+  # **absent() 가 아니라 unless 인 이유.** absent() 는 전역 부재만 참이라 이 케이스에서
+  # 조용한데, 조인은 on(instance, job) 이라 그 인스턴스의 알림 셋만 침묵한다.
+  - interval: 1m
+    name: "두 대 중 한 대만 스위치 게이지가 없어도 그 인스턴스를 지목한다"
+    input_series:
+      - series: 'up{instance="batch-a:9092", job="cy-batch"}'
+        values: '1x30'
+      - series: 'up{instance="batch-b:9092", job="cy-batch"}'
+        values: '1x30'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch-a:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CouponRoundSwitchMetricMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch-b:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "회차 전이 스위치 게이지가 없습니다 — 알림 셋이 조용히 꺼져 있습니다"
+              description: "배치는 떠 있는데 cy_coupon_round_scheduling_enabled 시리즈가 없습니다. CouponRoundsNotOpening·NotClosing·MissedWindow 가 이 게이지로 끈 구간을 빼는데, 없으면 그 조인이 빈 벡터가 되어 **셋 다 발화 조건을 못 만듭니다** — 회차가 안 열려도 알림이 한 건도 안 갑니다. /actuator/prometheus 본문에서 그 이름을 직접 봅니다. 미터 이름이 바뀌었거나 CouponRoundPendingRefresher 생성자가 그 게이지 등록에 도달하지 못한 것입니다."
