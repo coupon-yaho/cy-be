@@ -96,7 +96,7 @@ class AdminCouponMetricsMockDataFactoryTest {
                 campaign.couponId(), campaign.campaignName(), campaign.brandName(), campaign.status(),
                 campaign.opensAt(), campaign.closesAt(), campaign.engineVersion(),
                 campaign.totalQuantity(), campaign.activeCount(), staleAt, SourceStatus.STALE,
-                campaign.preparationCompleted());
+                campaign.preparation());
         ArrayList<CampaignOverviewSource> campaigns = new ArrayList<>(original.campaigns());
         campaigns.set(0, staleCampaign);
         AdminOverviewMockDataset staleDataset = new AdminOverviewMockDataset(

@@ -160,7 +160,7 @@ public class AdminOverviewService {
                 snapshotAt,
                 actionObservation(actionCalculation.required(), queueCalculation.queueRisk(),
                         issuanceCalculation.issuanceFlows(), snapshotAt),
-                validObservation(campaignCalculation.openingSoon(), snapshotAt),
+                campaignCalculation.openingSoon(),
                 queueCalculation.queueRisk(),
                 stockCalculation.stockRisk(),
                 observationData.aggregateIssuanceRate(),

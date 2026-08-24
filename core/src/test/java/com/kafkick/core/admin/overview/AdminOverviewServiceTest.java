@@ -939,7 +939,7 @@ class AdminOverviewServiceTest {
         return new CampaignOverviewSource(
                 campaign.couponId(), campaign.campaignName(), campaign.brandName(), campaign.status(),
                 campaign.opensAt(), campaign.closesAt(), campaign.engineVersion(), totalQuantity, activeCount,
-                observedAt, SourceStatus.VALID, campaign.preparationCompleted());
+                observedAt, SourceStatus.VALID, campaign.preparation());
     }
 
     /** 지정한 관측 원천과 기본 Mock 경계의 Service를 구성합니다. */
@@ -1001,7 +1001,7 @@ class AdminOverviewServiceTest {
                                 source.engineVersion(), status.carriesValue() ? 10_000L : null,
                                 status.carriesValue() ? 3_700L : null,
                                 status.carriesValue() ? snapshotAt : null, status,
-                                source.preparationCompleted()) : source)
+                                source.preparation()) : source)
                         .toList();
                 return withCampaigns(base, campaigns);
             }

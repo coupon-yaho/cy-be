@@ -9,6 +9,7 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
+import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
@@ -68,7 +69,7 @@ public class AdminOverviewMockDataFactory {
                 10_350L,
                 snapshotAt,
                 VALID,
-                true
+                preparation(true, snapshotAt)
         );
         CampaignOverviewSource depletionCampaign = new CampaignOverviewSource(
                 102L,
@@ -82,7 +83,7 @@ public class AdminOverviewMockDataFactory {
                 6_650L,
                 snapshotAt,
                 VALID,
-                true
+                preparation(true, snapshotAt)
         );
         CampaignOverviewSource decreasingQueueCampaign = new CampaignOverviewSource(
                 103L,
@@ -96,7 +97,7 @@ public class AdminOverviewMockDataFactory {
                 620L,
                 snapshotAt,
                 VALID,
-                true
+                preparation(true, snapshotAt)
         );
         CampaignOverviewSource readyScheduledCampaign = new CampaignOverviewSource(
                 104L,
@@ -110,16 +111,16 @@ public class AdminOverviewMockDataFactory {
                 null,
                 null,
                 N_A,
-                true
+                preparation(true, snapshotAt)
         );
         CampaignOverviewSource incompleteCampaign = new CampaignOverviewSource(
                 105L, "준비 미완료 예약 쿠폰", "카프킥", CouponRoundStatus.SCHEDULED,
                 snapshotAt.plus(Duration.ofMinutes(10)), snapshotAt.plus(Duration.ofHours(3)),
-                EngineVersion.V1, null, null, null, N_A, false);
+                EngineVersion.V1, null, null, null, N_A, preparation(false, snapshotAt));
         CampaignOverviewSource closedCampaign = new CampaignOverviewSource(
                 106L, "종료된 시즌 쿠폰", "카프킥", CouponRoundStatus.CLOSED,
                 snapshotAt.minus(Duration.ofHours(5)), snapshotAt.minus(Duration.ofHours(1)),
-                EngineVersion.V1, null, null, null, N_A, true);
+                EngineVersion.V1, null, null, null, N_A, preparation(true, snapshotAt));
 
         // 준비 미완료 판정은 Mock 원천에서 확정하고 집계 계산기는 판정 결과만 소비합니다.
         AdminOverviewSnapshot.OperationActionItem incompleteAction =
@@ -175,6 +176,11 @@ public class AdminOverviewMockDataFactory {
                 consistencyActionContexts(snapshotAt, admissionStoppedCampaign, depletionCampaign,
                         decreasingQueueCampaign),
                 aggregateIssuanceRate(snapshotAt), latencySummary(snapshotAt));
+    }
+
+    /** Mock에서 확정한 준비 완료 여부를 정상 관측값으로 만듭니다. */
+    private static PreparationObservation preparation(boolean completed, Instant observedAt) {
+        return new PreparationObservation(completed, VALID, observedAt);
     }
 
     /** FINAL PASS와 엔진별 두 FINAL FAIL을 화면 조립에 필요한 불변 문맥으로 제공합니다. */

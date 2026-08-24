@@ -98,7 +98,7 @@ class AdminOverviewMockDataFactoryTest {
                 .isEqualTo(SNAPSHOT_AT.plus(Duration.ofMinutes(20)));
         assertThat(dataset.campaigns().get(4).opensAt())
                 .isEqualTo(SNAPSHOT_AT.plus(Duration.ofMinutes(10)));
-        assertThat(dataset.campaigns().get(4).preparationCompleted()).isFalse();
+        assertThat(dataset.campaigns().get(4).preparation().completed()).isFalse();
     }
 
     /** 준비 미완료 상황이 화면 조치 KPI와 목록에 사용할 판정 후보로 함께 제공되는지 검증합니다. */
