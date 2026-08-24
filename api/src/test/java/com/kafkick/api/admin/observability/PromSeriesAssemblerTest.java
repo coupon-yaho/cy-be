@@ -15,6 +15,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsSeriesResponse.Series
 import com.kafkick.api.admin.observability.dto.AdminMetricsSeriesResponse.SeriesKey;
 import com.kafkick.api.observation.http.ResultClassifier.ResultClass;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.observation.DomainMeterNames;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 
@@ -127,6 +128,40 @@ class PromSeriesAssemblerTest {
         assertThat(source.issued()).filteredOn(promQl -> promQl.startsWith("sum(rate("))
                 .isNotEmpty()
                 .allSatisfy(promQl -> assertThat(promQl).contains(range));
+    }
+
+    /**
+     * 예산에 얼마나 근접했는지는 이 값으로만 보인다. 상수로 채우면 잘리기 시작해도 원인을 못 읽는다.
+     * 시간에 의존하지 않도록 대역이 실제로 쓴 시간의 하한만 본다.
+     */
+    @Test
+    @DisplayName("collectionDurationMs 는 실제로 쓴 시간을 예산과 같은 시계로 잰다")
+    void collectionDurationReflectsRealElapsedTime() {
+        Duration perQuery = Duration.ofMillis(20);
+        AdminMetricsSeriesResponse response = assembler(
+                FakePromRangeQuery.slow(perQuery), PrometheusSeriesProperties.defaults())
+                .assemble(MetricsWindow.ONE_MINUTE);
+
+        // 첫 계열은 예산과 무관하게 나가므로 최소 한 질의는 반드시 돈다.
+        assertThat(response.meta().collectionDurationMs())
+                .isGreaterThanOrEqualTo(perQuery.toMillis());
+    }
+
+    /**
+     * LIVE 와 FINAL 은 같은 미터 이름으로 온다. 거르지 않으면 같은 gap 종류가 계열 둘로 그려지고
+     * 화면이 부하 중 추세와 합격 판정을 섞어 읽는다 — 스냅샷 경로가 live() 로 가르는 것과 같다.
+     */
+    @Test
+    @DisplayName("정합성 gap 질의는 LIVE 평가만 고른다")
+    void consistencyGapQuerySelectsLivePhaseOnly() {
+        FakePromRangeQuery source = FakePromRangeQuery.alwaysOnePoint();
+        assembler(source, PrometheusSeriesProperties.defaults()).assemble(MetricsWindow.ONE_MINUTE);
+
+        assertThat(source.issued())
+                .filteredOn(promQl -> promQl.startsWith(MetricAggregation.CONSISTENCY_GAP))
+                .singleElement()
+                .satisfies(promQl -> assertThat(promQl).contains(
+                        DomainMeterNames.TAG_PHASE + "=\"" + DomainMeterNames.PHASE_LIVE + "\""));
     }
 
     /** 이 티켓은 범위 셀렉터를 넣지 않는다. GLOBAL 을 명시해야 화면이 좁혀진 값으로 오해하지 않는다. */

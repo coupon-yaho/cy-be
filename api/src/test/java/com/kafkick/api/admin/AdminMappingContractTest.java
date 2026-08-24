@@ -71,7 +71,7 @@ class AdminMappingContractTest {
     /** HTTP 메서드와 전체 경로 집합을 비교해 endpoint 누락·추가·병합을 동시에 감지합니다. */
     @Test
     @DisplayName("9개 Controller와 29개 HTTP mapping을 정확히 유지한다")
-    void exposesExactlyTwentyEightPrebuiltAdminMappings() {
+    void exposesExactlyTwentyNinePrebuiltAdminMappings() {
         Set<String> actual = CONTROLLERS.stream()
                 .flatMap(controller -> routes(controller).stream())
                 .collect(Collectors.toSet());

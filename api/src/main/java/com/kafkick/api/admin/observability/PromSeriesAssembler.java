@@ -21,6 +21,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope
 import com.kafkick.api.observation.http.HttpMetricsFilter.UriGroup;
 import com.kafkick.api.observation.http.ResultClassifier.ResultClass;
 import com.kafkick.core.admin.MetricsWindow;
+import com.kafkick.core.observation.DomainMeterNames;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 
@@ -76,8 +77,7 @@ public class PromSeriesAssembler {
         Instant end = timeProvider.instant().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         Instant start = end.minus(window.duration());
 
-        long startedAtNanos = System.nanoTime();
-        Deadline deadline = new Deadline(startedAtNanos + properties.totalBudget().toNanos());
+        Deadline deadline = Deadline.startingNow(properties.totalBudget());
 
         List<SeriesEntry> series = new ArrayList<>();
         // 순서가 우선순위다. 예산이 모자라면 뒤가 잘리므로 합격 판정을 가르는 정합성을 먼저 받는다
@@ -93,9 +93,8 @@ public class PromSeriesAssembler {
         series.addAll(collect(SeriesKey.LATENCY_P99, latencyQuery(),
                 start, end, step, deadline));
 
-        long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedAtNanos).toMillis();
         return new AdminMetricsSeriesResponse(
-                new Meta(Meta.SCHEMA_VERSION, start, end, step.toSeconds(), elapsedMillis),
+                new Meta(Meta.SCHEMA_VERSION, start, end, step.toSeconds(), deadline.elapsedMillis()),
                 // 이 경로는 아직 범위 셀렉터를 넣지 않는다(OBS-34). GLOBAL 을 명시해 화면이
                 // 좁혀진 값으로 오해하지 않게 한다.
                 new MetricsScope(MetricsScopeType.GLOBAL, null, null),
@@ -152,9 +151,19 @@ public class PromSeriesAssembler {
      *
      * <p>집계하지 않습니다. gap 은 종류({@code type} 라벨)로만 나뉘고 원천이 batch 한 곳뿐이라
      * ({@link MetricAggregation#SINGLE}) 합치면 서로 다른 종류가 한 숫자로 뭉개집니다.</p>
+     *
+     * <p><b>LIVE 평가만 고릅니다.</b> 합격/불합격을 가르는 FINAL 판정이 같은 미터 이름으로 오면
+     * 같은 종류가 계열 둘로 그려지고 화면이 부하 중 추세와 최종 판정을 섞어 읽습니다. 스냅샷
+     * 경로가 {@code live()} 로 가르는 것과 같은 이유입니다.</p>
+     *
+     * <p><b>반대 방향 실패</b> — 이 라벨이 없는 gap 시계열이 생기면 셀렉터가 조용히 떨어뜨립니다.
+     * 스냅샷 경로가 셀렉터 대신 Java 쪽에서 거르는 이유가 그것인데, 저쪽은 라벨 없는 미터(회차
+     * ID·신선도)를 한 질의에 같이 담기 때문입니다. 이 질의는 gap 하나만 받으므로 셀렉터로
+     * 거르는 편이 평가점을 덜 만듭니다.</p>
      */
     private static String consistencyGapQuery() {
-        return MetricAggregation.CONSISTENCY_GAP;
+        return MetricAggregation.CONSISTENCY_GAP
+                + "{" + DomainMeterNames.TAG_PHASE + "=\"" + DomainMeterNames.PHASE_LIVE + "\"}";
     }
 
     // ── 실행 ────────────────────────────────────────────────────────────────────
@@ -202,11 +211,23 @@ public class PromSeriesAssembler {
      */
     private static final class Deadline {
 
+        private final long startedAtNanos;
         private final long expiresAtNanos;
         private boolean anyIssued;
 
-        private Deadline(long expiresAtNanos) {
+        private Deadline(long startedAtNanos, long expiresAtNanos) {
+            this.startedAtNanos = startedAtNanos;
             this.expiresAtNanos = expiresAtNanos;
+        }
+
+        static Deadline startingNow(Duration budget) {
+            long now = System.nanoTime();
+            return new Deadline(now, now + budget.toNanos());
+        }
+
+        /** 예산 판정과 같은 시계로 잰 경과 시간. 두 값이 갈리면 화면이 읽는 근접도가 거짓이 된다. */
+        long elapsedMillis() {
+            return Duration.ofNanos(System.nanoTime() - startedAtNanos).toMillis();
         }
 
         boolean allows() {

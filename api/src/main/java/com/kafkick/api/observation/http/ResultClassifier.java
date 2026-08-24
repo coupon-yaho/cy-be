@@ -23,6 +23,9 @@ public final class ResultClassifier {
         DEPENDENCY_FAILURE(false),
         APPLICATION_FAILURE(false);
 
+        private static final Set<ResultClass> SYSTEM_FAILURES =
+                Collections.unmodifiableSet(EnumSet.of(DEPENDENCY_FAILURE, APPLICATION_FAILURE));
+
         private final boolean success;
 
         ResultClass(boolean success) {
@@ -48,9 +51,6 @@ public final class ResultClassifier {
         public static Set<ResultClass> systemFailures() {
             return SYSTEM_FAILURES;
         }
-
-        private static final Set<ResultClass> SYSTEM_FAILURES =
-                Collections.unmodifiableSet(EnumSet.of(DEPENDENCY_FAILURE, APPLICATION_FAILURE));
 
         /** @return 이 분류들의 Prometheus {@code result} 라벨 값 정규식 대안 */
         public static String promLabelAlternation(Set<ResultClass> classes) {
