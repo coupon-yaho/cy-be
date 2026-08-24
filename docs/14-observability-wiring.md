@@ -283,14 +283,17 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 **두 축이 서로 독립인데 한 축으로 매핑하면 오진한다.** 그래서 잡 상태가 아니라
 **지표**로 본다.
 
-`NaN` 감시(`VerificationMetricsUnknown`)가 반드시 필요하다. `verifyJob` 은 크론이 없어
-"안 돌았다" 축이 없고, 지표가 `NaN` 이면 **어떤 알림도 안 뜬다** — CY-347 이
-`ExpireMetricsUnknown` 으로 값을 치른 그 자리다.
+`NaN` 감시(`VerificationMetricsUnknown`)가 반드시 필요하다. 그때 `verifyJob` 은 크론이 없어
+"안 돌았다" 축이 없었고, 지표가 `NaN` 이면 **어떤 알림도 안 떴다** — CY-347 이
+`ExpireMetricsUnknown` 으로 값을 치른 그 자리다. (그 축은 CY-470 이 세웠다 —
+`VerifyNotSucceeding` 계열이 `(dataset=CLEAN, scope=FULL)` 그레인으로 진다.)
 
-**`verifyJob` 의 `BatchJobRunningTooLong` 은 안 만든다.** 300만 전수라 만료(300초)와 소요가
-다른데, **그 값을 잴 근거가 아직 없다.** 지금 임계를 정하면 근거 없는 수치가 규칙 파일에
-박히고 그것이 다음 사람에게 기준으로 읽힌다. 300만 건을 적재한 뒤 실제 소요를 재서
-그때 정한다 — `docs/13` §3 의 다른 실측 항목과 같은 자리다.
+**~~`verifyJob` 의 `BatchJobRunningTooLong` 은 안 만든다~~ 만들었다 · CY-470.** 그때는
+300만 전수의 소요를 **잴 근거가 없었다** — 근거 없는 수치를 규칙 파일에 박으면 그것이 다음
+사람에게 기준으로 읽히므로, 적재 뒤로 미뤘다. 이제 쟀다: **472초**(300만 발급 · 516만 이력,
+그중 `replayStep` 이 312초). `VerifyRunningTooLong` 의 임계는 그 **2.5배인 1,200초**이고,
+`batch.metrics.verify-running-too-long-seconds` 로 열려 있다 — 그 값이 SLA 부등식의
+**잡 소요 항**이기도 해서 짧은 크론 배포가 함께 조정할 수 있어야 한다.
 
 ### 배포 순서는 compose 가 아니라 `SchemaPresenceGuard` 가 잡는다
 

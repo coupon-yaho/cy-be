@@ -153,7 +153,7 @@
 
 | 무엇 | 왜 미뤘나 |
 |---|---|
-| `docs/12` 절대 수치 재측정 | 재측정이 필요하다는 **주석은 들어갔다**(`docs/12` 상단). 락·스캔 축은 위 테스트가 잡는다. 남은 것은 300만 적재 후의 **실제 재측정**이다 |
+| ~~`docs/12` 절대 수치 재측정~~ **검증 쪽만 완료 · CY-470** | 300만·516만에서 `verifyJob` FULL 이 **472초**다(`docs/12` §8). **만료는 아직 안 쟀다** — 그 잡은 `issuances` 를 쓰므로 돌리면 시드의 `dataset_fingerprint` 가 바뀌어 교차 검증 기준선을 잃는다. 재려면 `EXPLAIN ANALYZE` 로 리더 질의만 보거나 별도 스키마를 떠야 한다 |
 | `blockedCoupons` 소요 실측 | 축소 픽스처에서 잰 값은 운영 규모를 대변하지 못한다. 코드 주석에서 근거 없는 수치를 뺐다. **실행계획 축은 `keepsBlockedCouponScanProportionalToPending` 이 잡는다** — `uk_coupon_member` 를 타면 깨진다 |
 | `unexplained` 이 캡처 창 지연분을 포함한다 | `COUNT_PENDING` 은 `updated_at` 창을 안 걸어, 설계상 다음 주기로 미룬 행도 "배치가 안 한 몫" 으로 센다. **지금은 도달 불가다** — `issuances` 의 상태를 쓰는 문장이 `EXPIRE_BATCH` 하나뿐이다. `CANCEL_USE`(`USED → ISSUED`)가 붙는 취소·사용 티켓에서 가른다 |
 | ↑ **CY-421 이 그 축을 알림 경로로 넓혔다** | 되읽기가 `COUNT_PENDING` 을 60초마다 다시 치므로, 실행이 끝난 **뒤에** `CANCEL_USE` 로 되돌아온 행이 새로 세어진다. 그 회차는 얼린 제외 목록에 없어 `unexplained` 로 들어가고 `ExpireLeavesWorkBehind`(critical · server)가 뜬다 — **배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.** `afterJob` 이 종료 시점에 한 번 세던 시절에는 구조적으로 불가능했다. 같은 티켓에서 `updated_at` 창과 함께 본다. **선행 조건이 있다** — `EXPIRE_BATCH` 의 창은 `updated_at <= :committedAt` 인데 그 `committedAt` 은 청크마다 새로 잡히고 영속되지 않아, 되읽기가 같은 창을 걸려면 마지막 청크의 값을 Step 문맥에 먼저 실어야 한다 |
@@ -491,7 +491,7 @@ api 의 쓰기는 애초에 안 잡힌다.
 |---|---|---|
 | 만료 | 5분 크론 | **배치 창 04:10 (일 1회)** — CY-397 |
 | 정리 | **잡이 없었다** | **배치 창 04:30 (일 1회)** — CY-397 이 만들었다 |
-| 검증 | 온디맨드만 | 온디맨드 — 크론은 D 몫 (05:00 예정) |
+| 검증 | 온디맨드만 | **배치 창 05:00 (일 1회)** — CY-470. 온디맨드 API 도 그대로 산다 |
 
 > ⚠️ **"정리 1시간" 은 사실이 아니었다.** `.example` 에 `cleanup-cron` 값과
 > `asof-state-keep-runs` 가 있었을 뿐 **읽는 코드가 하나도 없었다.** 옮길 대상이 아니라
@@ -577,7 +577,9 @@ api 의 쓰기는 애초에 안 잡힌다.
 `BatchJobRunningTooLong` 의 `expireJob` 임계는 **`> 300` → `> 600`** 으로, summary 는
 *"주기(5분)보다 오래"* → *"600초 넘게"* 로 축을 갈았다 — 일 1회에서 *"주기보다 오래"* 는
 24시간이라 아무것도 못 잡으므로, 대신 **일감의 크기**(하루 약 6,300건 = 일곱 청크)에서 잡는다.
-**`BatchRunMetricsRefresher` 의 조회 창(7일)과 `verifyJob` SLA 의 그레인은 D 몫으로 남았다.**
+**~~`BatchRunMetricsRefresher` 의 조회 창(7일)과 `verifyJob` SLA 의 그레인은 D 몫으로 남았다~~ 완료 · CY-470.**
+창은 `BatchMetadataWindow.LOOKBACK_DAYS` 한 상수가 되어 SQL 리터럴 둘이 사라졌고,
+SLA 그레인은 `cy_verify_last_success_seconds{dataset,scope}` 가 진다.
 
 **~~같이 풀 것 — SLA 예산을 기동 때 검사하는 곳이 없다.~~ 완료 · CY-392(만료)·CY-397(정리).**
 `ExpireScheduler`·`CleanupScheduler` 생성자가 `CronSlot.maxGap` 으로 각자 검사하고 안 맞으면
