@@ -59,8 +59,9 @@ class DeployedConfigContractTest {
         Map<String, Object> environment = (Map<String, Object>) api.get("environment");
 
         assertThat(String.valueOf(environment.get("SERVER_PORT")))
-                .as("SERVER_PORT 는 호스트 공개 포트와 같은 .env 값을 받는다. API 프로세스까지"
-                        + " 그 값을 쓰면 host:18080 이 container:8080 으로 보내는 연결이 reset 된다")
+                .as("컨테이너 안 API 포트는 8080 으로 고정하고, .env 의 SERVER_PORT 는 호스트"
+                        + " 매핑에만 쓴다. API 프로세스까지 그 값을 쓰면 host:18080 이"
+                        + " container:8080 으로 보내는 연결이 reset 된다")
                 .isEqualTo("8080");
     }
 

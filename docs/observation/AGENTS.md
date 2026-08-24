@@ -49,8 +49,8 @@ CY-5가 `main`에 병합되어 Docker 배포 워크플로가 성공하면, `api-
    전환하거나, 추적 가능한 새 `v*` 태그로 함께 전환한다.
 2. `docker compose pull` 뒤 API·batch·Prometheus를 재생성한다. batch도 반드시 교체해야
    `/actuator/prometheus`가 9092에서 살아 `up{job="batch"} == 1`이 된다.
-3. 18080에서 위 7개 계약을 `X-User-Id` 헤더와 함께 재실측한다. 목 서버는 인증을 생략하므로
-   그 명령을 실배포에 그대로 쓰면 안 된다.
+3. 18080에서 위 7개 계약을 `X-User-Id: 1`·`X-User-Role: ADMIN` 헤더와 함께 재실측한다.
+   목 서버는 인증을 생략하므로 그 명령을 실배포에 그대로 쓰면 안 된다.
 4. Prometheus에서 `up{job="api"} == 1`, `up{job="batch"} == 1`, `app_*` 시계열 수집을
    실측한다.
 5. 호스트 공개 포트와 컨테이너 API 포트가 다시 섞이지 않았는지 배포 계약 테스트와
