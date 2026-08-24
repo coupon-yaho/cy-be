@@ -7,7 +7,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.util.List;
-import java.util.Map;
 
 import javax.sql.DataSource;
 
@@ -16,7 +15,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
-import org.springframework.jdbc.core.JdbcTemplate;
+import com.kafkick.core.benchmark.BenchmarkTopologyObservation;
+import com.kafkick.core.benchmark.BenchmarkTopologyObservation.CouponStock;
+import java.util.Optional;
 import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.zaxxer.hikari.HikariDataSource;
@@ -28,7 +29,7 @@ class ApiTopologyValidatorTest {
 
     private final HikariDataSource operational = new HikariDataSource();
     private final DataSource observation = mock(DataSource.class);
-    private final JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+    private final BenchmarkTopologyObservation databaseObservation = mock(BenchmarkTopologyObservation.class);
     private final BatchTopologyPreflight batch = mock(BatchTopologyPreflight.class);
 
     @AfterEach
@@ -40,10 +41,9 @@ class ApiTopologyValidatorTest {
     @DisplayName("API 실제 Tomcat·Hikari·풀과 batch 로컬 결과로 토폴로지를 만든다")
     void measuresOwnedValues() {
         operational.setMaximumPoolSize(3);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 0)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 0)));
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
 
         MeasuredTopology measured = validator(tomcat(15, 4_000, 1_000), 4)
@@ -55,15 +55,14 @@ class ApiTopologyValidatorTest {
         assertThat(measured.topology().tomcatAcceptCount()).isEqualTo(4_000);
         assertThat(measured.topology().hikariPoolTotal()).isEqualTo(12);
         assertThat(measured.topology().mysqlMaxConnections()).isEqualTo(50);
-        verify(jdbcTemplate).queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L);
+        verify(databaseObservation).couponStock(10L);
     }
 
     @Test
     @DisplayName("실제 Tomcat 수용량과 Hikari 총량이 목표에서 벗어나면 호출자 입력 없이 실패한다")
     void rejectsActualSocketAndPoolMismatch() {
         operational.setMaximumPoolSize(10);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
+        given(databaseObservation.connectionLimit()).willReturn(50);
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
 
         MeasuredTopology measured = validator(tomcat(60, 1, 1), 1)
@@ -82,9 +81,9 @@ class ApiTopologyValidatorTest {
     @DisplayName("API 로컬 위반이 있으면 batch preflight를 호출하지 않는다")
     void localViolationShortCircuitsBatchPreflight() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
+        given(databaseObservation.connectionLimit()).willReturn(50);
         ApiTopologyValidator validator = new ApiTopologyValidator(
-            tomcat(60, 19_900, 100), operational, operational, jdbcTemplate, batch, 1, 60, 12, 50);
+            tomcat(60, 19_900, 100), operational, operational, databaseObservation, batch, 1, 60, 12, 50);
         MeasuredTopology measured = validator.validate(10L, 1, 20_000, null, null, null);
 
         assertThat(measured.violations()).extracting("key")
@@ -97,10 +96,9 @@ class ApiTopologyValidatorTest {
     @DisplayName("요청 재고가 실제 쿠폰 재고와 다르면 회차를 거부한다")
     void rejectsReportedStockMismatch() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 0)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 0)));
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -115,10 +113,9 @@ class ApiTopologyValidatorTest {
     @DisplayName("쿠폰이 없으면 같은 행 부재를 active-count 위반으로 중복하지 않는다")
     void missingCouponProducesOneRowMissingViolation() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 404L))
-            .willReturn(List.of());
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(404L))
+            .willReturn(Optional.empty());
         given(batch.validate(404L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -133,10 +130,9 @@ class ApiTopologyValidatorTest {
     @DisplayName("batch가 invalid라고 응답하면 위반 목록이 비어도 게이트를 닫는다")
     void rejectsInvalidBatchResultWithoutViolationDetails() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 0)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 0)));
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(false, List.of()));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -149,10 +145,9 @@ class ApiTopologyValidatorTest {
     @Test
     void nullBatchResultBecomesAnActionableViolation() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 0)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 0)));
         given(batch.validate(10L)).willReturn(null);
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -166,10 +161,9 @@ class ApiTopologyValidatorTest {
     @DisplayName("리허설 발급이 남은 쿠폰은 새 회차로 열지 않는다")
     void rejectsCouponWithActiveIssuances() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 3_000)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 3_000)));
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -183,11 +177,11 @@ class ApiTopologyValidatorTest {
     @Test
     void rejectsCallerReplicaCountDifferentFromDeployment() {
         operational.setMaximumPoolSize(3);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
+        given(databaseObservation.connectionLimit()).willReturn(50);
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
 
         MeasuredTopology measured = new ApiTopologyValidator(
-            tomcat(15, 4_000, 1_000), operational, observation, jdbcTemplate, batch,
+            tomcat(15, 4_000, 1_000), operational, observation, databaseObservation, batch,
             4, 60, 12, 50).validate(10L, 3, 20_000, null, null, null);
 
         assertThat(measured.violations()).extracting("key", "expected", "actual")
@@ -200,7 +194,7 @@ class ApiTopologyValidatorTest {
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
         ApiTopologyValidator validator = new ApiTopologyValidator(
             tomcat(15, 4_000, 1_000), (HikariDataSource) null, (DataSource) null,
-            (JdbcTemplate) null, batch, 4, 60, 12, 50);
+            (BenchmarkTopologyObservation) null, batch, 4, 60, 12, 50);
 
         MeasuredTopology measured = validator.validate(10L, 4, 20_000, 10_000, null, null);
 
@@ -212,7 +206,7 @@ class ApiTopologyValidatorTest {
     @Test
     void mysqlRuntimeQueryFailureClosesTheGateWithAViolation() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class))
+        given(databaseObservation.connectionLimit())
             .willThrow(new DataAccessResourceFailureException("db unavailable"));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -228,9 +222,8 @@ class ApiTopologyValidatorTest {
     @Test
     void stockQueryFailureClosesTheGateWithAViolation() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
             .willThrow(new DataAccessResourceFailureException("db unavailable"));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
@@ -245,13 +238,12 @@ class ApiTopologyValidatorTest {
     @Test
     void protocolWindowsComeFromDeploymentConfiguration() {
         operational.setMaximumPoolSize(3);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 0)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 0)));
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
         ApiTopologyValidator configured = new ApiTopologyValidator(
-            tomcat(15, 4_000, 1_000), operational, observation, jdbcTemplate, batch,
+            tomcat(15, 4_000, 1_000), operational, observation, databaseObservation, batch,
             4, 60, 12, 50, 10, 90);
 
         MeasuredTopology measured = configured.validate(
@@ -266,11 +258,11 @@ class ApiTopologyValidatorTest {
     @Test
     void overflowingDeploymentTotalsBecomeViolationsInsteadOfServerErrors() {
         operational.setMaximumPoolSize(Integer.MAX_VALUE);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
+        given(databaseObservation.connectionLimit()).willReturn(50);
         given(batch.validate(10L)).willReturn(new BatchTopologyPreflight.Result(true, List.of()));
         ApiTopologyValidator configured = new ApiTopologyValidator(
             tomcat(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE), operational,
-            observation, jdbcTemplate, batch, 2, 60, 12, 50, 5, 60);
+            observation, databaseObservation, batch, 2, 60, 12, 50, 5, 60);
 
         MeasuredTopology measured = configured.validate(10L, 2, 20_000, 5, 60, null, null, null);
 
@@ -284,10 +276,10 @@ class ApiTopologyValidatorTest {
     @Test
     void overflowingConnectionCapacityBecomesAViolation() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
+        given(databaseObservation.connectionLimit()).willReturn(50);
         ApiTopologyValidator configured = new ApiTopologyValidator(
             tomcat(60, 1_500_000_000, 1_500_000_000), operational,
-            observation, jdbcTemplate, batch, 1, 60, 12, 50);
+            observation, databaseObservation, batch, 1, 60, 12, 50);
 
         MeasuredTopology measured = configured.validate(10L, 1, 20_000, null, null, null);
 
@@ -301,10 +293,9 @@ class ApiTopologyValidatorTest {
     @Test
     void existingCouponStillRejectsMissingReportedStock() {
         operational.setMaximumPoolSize(12);
-        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
-        given(jdbcTemplate.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
-            .willReturn(List.of(Map.of("total_quantity", 10_000, "active_count", 0)));
+        given(databaseObservation.connectionLimit()).willReturn(50);
+        given(databaseObservation.couponStock(10L))
+            .willReturn(Optional.of(new CouponStock(10_000, 0)));
 
         MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
             .validate(10L, 1, 20_000, null, null, null);
@@ -316,7 +307,7 @@ class ApiTopologyValidatorTest {
 
     private ApiTopologyValidator validator(TomcatServerProperties tomcat, int expectedAppReplicas) {
         return new ApiTopologyValidator(
-            tomcat, operational, observation, jdbcTemplate, batch,
+            tomcat, operational, observation, databaseObservation, batch,
             expectedAppReplicas, 60, 12, 50);
     }
 

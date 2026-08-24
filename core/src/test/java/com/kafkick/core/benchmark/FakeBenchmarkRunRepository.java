@@ -154,6 +154,9 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
         if (lease == null || lease.compareTo(java.time.Duration.ofSeconds(1)) < 0) {
             throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
         }
+        if (lease.compareTo(java.time.Duration.ofDays(365)) > 0) {
+            throw new IllegalArgumentException("archive claim lease가 지원 상한을 넘었다");
+        }
         Row row = rows.get(id);
         Instant now = clock.instant();
         boolean expired = row != null && row.archiveStatus == BenchmarkArchiveStatus.IN_PROGRESS

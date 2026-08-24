@@ -300,6 +300,14 @@ class BenchmarkRunServiceTest {
         }
 
         @Test
+        void fakeRepositoryMatchesJdbcArchiveLeaseUpperBoundary() {
+            assertThat(repository.claimArchive(1L, Duration.ofDays(365))).isEmpty();
+            assertThatThrownBy(() -> repository.claimArchive(1L, Duration.ofDays(366)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("지원 상한");
+        }
+
+        @Test
         @DisplayName("DONE 은 표본 적재 트랜잭션 밖에서 기록할 수 없다")
         void doneCannotBypassTheArchiveStoreTransaction() {
             BenchmarkRun finalized = finalizedRun("V3-MAIN-01");

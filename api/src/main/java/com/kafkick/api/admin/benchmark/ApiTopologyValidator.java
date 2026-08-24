@@ -10,7 +10,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.stereotype.Component;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.dao.DataAccessException;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -18,6 +17,7 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import com.kafkick.api.admin.benchmark.BatchTopologyPreflight.Violation;
 import com.kafkick.core.benchmark.BenchmarkTopology;
+import com.kafkick.core.benchmark.BenchmarkTopologyObservation;
 
 /** API 인스턴스 값은 런타임 빈에서 읽고, 총량은 배포가 선언한 replica 수로 계산한다. */
 @Component
@@ -26,7 +26,7 @@ public class ApiTopologyValidator {
     private final TomcatServerProperties tomcat;
     private final HikariDataSource operationalDataSource;
     private final DataSource observationDataSource;
-    private final JdbcTemplate jdbcTemplate;
+    private final BenchmarkTopologyObservation databaseObservation;
     private final BatchTopologyPreflight batch;
     private final int expectedAppReplicas;
     private final int expectedTomcatWorkersTotal;
@@ -40,7 +40,7 @@ public class ApiTopologyValidator {
         TomcatServerProperties tomcat,
         ObjectProvider<HikariDataSource> operationalDataSource,
         @Qualifier("obs") ObjectProvider<DataSource> observationDataSource,
-        @Qualifier("obs") ObjectProvider<JdbcTemplate> jdbcTemplate,
+        ObjectProvider<BenchmarkTopologyObservation> databaseObservation,
         BatchTopologyPreflight batch,
         @Value("${benchmark.topology.app-replicas:4}") int expectedAppReplicas,
         @Value("${benchmark.topology.tomcat-workers-total:60}") int expectedTomcatWorkersTotal,
@@ -50,7 +50,7 @@ public class ApiTopologyValidator {
         @Value("${benchmark.protocol.observation-hold-seconds:60}") int expectedObservationHoldSeconds
     ) {
         this(tomcat, operationalDataSource.getIfAvailable(), observationDataSource.getIfAvailable(),
-            jdbcTemplate.getIfAvailable(), batch, expectedAppReplicas, expectedTomcatWorkersTotal,
+            databaseObservation.getIfAvailable(), batch, expectedAppReplicas, expectedTomcatWorkersTotal,
             expectedHikariPoolTotal, expectedMysqlMaxConnections, expectedLoadHoldSeconds,
             expectedObservationHoldSeconds);
     }
@@ -59,14 +59,14 @@ public class ApiTopologyValidator {
         TomcatServerProperties tomcat,
         HikariDataSource operationalDataSource,
         DataSource observationDataSource,
-        JdbcTemplate jdbcTemplate,
+        BenchmarkTopologyObservation databaseObservation,
         BatchTopologyPreflight batch,
         int expectedAppReplicas,
         int expectedTomcatWorkersTotal,
         int expectedHikariPoolTotal,
         int expectedMysqlMaxConnections
     ) {
-        this(tomcat, operationalDataSource, observationDataSource, jdbcTemplate, batch,
+        this(tomcat, operationalDataSource, observationDataSource, databaseObservation, batch,
             expectedAppReplicas, expectedTomcatWorkersTotal, expectedHikariPoolTotal,
             expectedMysqlMaxConnections, 5, 60);
     }
@@ -75,7 +75,7 @@ public class ApiTopologyValidator {
         TomcatServerProperties tomcat,
         HikariDataSource operationalDataSource,
         DataSource observationDataSource,
-        JdbcTemplate jdbcTemplate,
+        BenchmarkTopologyObservation databaseObservation,
         BatchTopologyPreflight batch,
         int expectedAppReplicas,
         int expectedTomcatWorkersTotal,
@@ -87,7 +87,7 @@ public class ApiTopologyValidator {
         this.tomcat = tomcat;
         this.operationalDataSource = operationalDataSource;
         this.observationDataSource = observationDataSource;
-        this.jdbcTemplate = jdbcTemplate;
+        this.databaseObservation = databaseObservation;
         this.batch = batch;
         this.expectedAppReplicas = expectedAppReplicas;
         this.expectedTomcatWorkersTotal = expectedTomcatWorkersTotal;
@@ -128,33 +128,29 @@ public class ApiTopologyValidator {
             tomcat.getAcceptCount(), expectedAppReplicas);
         HikariDataSource operational = operationalDataSource;
         DataSource observation = observationDataSource;
-        JdbcTemplate jdbc = jdbcTemplate;
+        BenchmarkTopologyObservation database = databaseObservation;
         int hikariPoolTotal = operational == null ? 0 : multiplyTotal(
             violations, "hikari.pool.total", operational.getMaximumPoolSize(), expectedAppReplicas);
         Integer mysqlMaxConnections = null;
         boolean mysqlQueryFailed = false;
-        List<java.util.Map<String, Object>> stockRows = List.of();
+        BenchmarkTopologyObservation.CouponStock stock = null;
         boolean stockQueryFailed = false;
-        if (jdbc != null) {
+        if (database != null) {
             try {
-                mysqlMaxConnections = jdbc.queryForObject("SELECT @@max_connections", Integer.class);
+                mysqlMaxConnections = database.connectionLimit();
             } catch (DataAccessException failure) {
                 mysqlQueryFailed = true;
                 violations.add(new Violation("mysql.max-connections", "readable runtime value",
                     "unavailable", failure.getClass().getSimpleName()));
             }
             try {
-                stockRows = jdbc.queryForList(
-                    "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", couponId);
+                stock = database.couponStock(couponId).orElse(null);
             } catch (DataAccessException failure) {
                 stockQueryFailed = true;
                 violations.add(new Violation("coupon-stock", "readable stock row",
                     "unavailable", failure.getClass().getSimpleName()));
             }
         }
-        Stock stock = stockRows.isEmpty() ? null : new Stock(
-            ((Number) stockRows.get(0).get("total_quantity")).intValue(),
-            ((Number) stockRows.get(0).get("active_count")).intValue());
         Integer actualStockTotal = stock == null ? null : stock.totalQuantity();
         Integer activeStockCount = stock == null ? null : stock.activeCount();
 
@@ -267,8 +263,6 @@ public class ApiTopologyValidator {
         }
     }
 
-    private record Stock(int totalQuantity, int activeCount) {
-    }
     private static void mismatch(
         List<Violation> violations, String key, int expected, Integer actual, String reason
     ) {

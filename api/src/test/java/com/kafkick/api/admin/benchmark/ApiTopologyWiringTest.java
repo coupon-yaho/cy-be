@@ -22,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.core.benchmark.BenchmarkRunService;
+import com.kafkick.core.benchmark.BenchmarkTopologyObservation;
 
 @SpringBootTest(
     classes = com.kafkick.ApiApplication.class,
@@ -51,6 +52,9 @@ class ApiTopologyWiringTest {
     @Qualifier("obs")
     JdbcTemplate observationJdbcTemplate;
 
+    @Autowired
+    BenchmarkTopologyObservation databaseObservation;
+
     @MockitoBean
     BatchTopologyPreflight batch;
 
@@ -62,8 +66,8 @@ class ApiTopologyWiringTest {
         assertThat(validator.validate(10L, 1, 20_000, null, null, null).violations())
             .extracting("key")
             .doesNotContain("datasource.separation");
-        assertThat(ReflectionTestUtils.getField(validator, "jdbcTemplate"))
-            .isSameAs(observationJdbcTemplate);
+        assertThat(ReflectionTestUtils.getField(validator, "databaseObservation"))
+            .isSameAs(databaseObservation);
         assertThat(runService).isNotNull();
         assertThat(startOrchestrator).isNotNull();
         assertThat(finalizeOrchestrator).isNotNull();
