@@ -40,6 +40,16 @@ class KafkaBrokerComposeContractTest {
     /** 브로커 안쪽 리스너 포트. compose 내부 전용이라 호스트 매핑이 없다. */
     private static final String BROKER_PORT = "9092";
 
+    /**
+     * 스토리지 포맷에 쓰이는 변수. <b>{@code KAFKA_} 접두사가 없다</b> — 이미지가
+     * {@code KAFKA_*} 를 {@code server.properties} 로 옮기는 것은 포맷이 끝난 뒤라,
+     * 포맷 단계는 이 이름 하나만 읽는다({@code /etc/kafka/docker/launch}).
+     */
+    private static final String CLUSTER_ID = "CLUSTER_ID";
+
+    /** 같은 뜻으로 착각하기 쉬운 이름. 적으면 조용히 무시된다. */
+    private static final String PREFIXED_CLUSTER_ID = "KAFKA_" + CLUSTER_ID;
+
     @Test
     @DisplayName("브로커 수가 선언된 최대 복제본 수 이상이다 — 모자라면 토픽 생성이 영영 실패한다")
     void theBrokerCountCoversTheHighestDeclaredReplicationFactor() throws IOException {
@@ -148,7 +158,7 @@ class KafkaBrokerComposeContractTest {
         for (Map<String, Object> broker : brokers.values()) {
             Map<String, Object> environment = environmentOf(broker);
             nodeIds.add(String.valueOf(environment.get("KAFKA_NODE_ID")));
-            clusterIds.add(String.valueOf(environment.get("KAFKA_CLUSTER_ID")));
+            clusterIds.add(String.valueOf(environment.get(CLUSTER_ID)));
             quorums.add(String.valueOf(environment.get("KAFKA_CONTROLLER_QUORUM_VOTERS")));
         }
 
@@ -162,6 +172,12 @@ class KafkaBrokerComposeContractTest {
                         + " 않는다. 한 번 포맷된 볼륨의 id 는 바뀌지 않으므로 이 값을 고칠 때는"
                         + " 볼륨도 함께 지워야 한다")
                 .hasSize(1);
+
+        assertThat(clusterIds.iterator().next())
+                .as("포맷에 쓰이는 이름은 %s 다. 안 적으면 이미지 기본값으로 포맷되는데,"
+                        + " 세 대가 그 기본값을 똑같이 쓰므로 클러스터는 정상으로 보인다 —"
+                        + " 즉 이 값을 빠뜨린 것이 증상으로 드러나지 않는다(실측)", CLUSTER_ID)
+                .isNotEqualTo("null");
 
         assertThat(quorums)
                 .as("쿼럼 명단이 브로커마다 다르면 서로 다른 쿼럼을 기다린다")
@@ -183,6 +199,25 @@ class KafkaBrokerComposeContractTest {
         assertThat(voterIds)
                 .as("쿼럼의 node id 명단이 실제 브로커의 id 와 같아야 한다")
                 .isEqualTo(nodeIds);
+    }
+
+    @Test
+    @DisplayName("KAFKA_CLUSTER_ID 로 적지 않는다 — 접두사가 붙으면 조용히 무시된다")
+    void noBrokerUsesThePrefixedClusterIdName() throws IOException {
+        List<String> offenders = brokers().entrySet().stream()
+                .filter(broker -> environmentOf(broker.getValue()).containsKey(PREFIXED_CLUSTER_ID))
+                .map(Map.Entry::getKey)
+                .toList();
+
+        // 실측 — KAFKA_CLUSTER_ID 로 적으면 브로커가 모르는 cluster.id 프로퍼티가
+        // server.properties 에 생기고, 포맷은 이미지 기본값으로 진행된다. 그러면
+        // 설정 파일의 cluster.id 와 meta.properties 의 cluster.id 가 서로 다른 채로 뜬다.
+        // 기동도 되고 세 대가 붙기까지 하므로 이 실수는 증상이 없다.
+        assertThat(offenders)
+                .as("%s 는 이미지가 %s 로 옮기는 이름이고, 스토리지 포맷은 그보다 앞이라 그"
+                        + " 프로퍼티를 안 본다. 포맷에 쓰이는 이름은 접두사 없는 %s 다",
+                        PREFIXED_CLUSTER_ID, "server.properties 의 cluster.id", CLUSTER_ID)
+                .isEmpty();
     }
 
     @Test
