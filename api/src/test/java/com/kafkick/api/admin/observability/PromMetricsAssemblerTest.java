@@ -429,7 +429,7 @@ class PromMetricsAssemblerTest {
      * <p>이 경로는 표본만으로 도달합니다. 분모가 음수면 분자가 분모를 넘어 0~100 계약이 깨집니다.</p>
      */
     @Test
-    @DisplayName("음수 표본이 오면 비율 대신 UNAVAILABLE 로 내려보낸다")
+    @DisplayName("음수 표본이 오면 처리량도 실패율도 UNAVAILABLE 로 내려보낸다")
     void negativeSamplesCannotProduceARate() {
         FakePromQuery client = respond(Map.of(
                 "rate(app_http", List.of(
@@ -438,13 +438,21 @@ class PromMetricsAssemblerTest {
                         rate("issue", "application_failure", 50d, "api-1")),
                 "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
 
-        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+        AdminMetricsResponse response = assemble(client, globalQuery());
 
-        ObservedValue<Double> rate = rateOf(errors, ErrorClassKey.APPLICATION_FAILURE);
+        ObservedValue<Double> rate =
+                rateOf(response.errors(), ErrorClassKey.APPLICATION_FAILURE);
         assertThat(rate.state())
                 .as("-100% 가 VALID 로 나가면 화면이 그것을 실패율로 그린다")
                 .isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(rate.value()).isNull();
+
+        // 처리량과 실패율은 같은 값을 나눠 쓴다. 한쪽만 막으면 같은 스냅샷에서 처리량은 음수 값을
+        // VALID 로 그리고 실패율만 비는 모순이 생긴다.
+        assertThat(response.traffic().issueAttemptRps().state())
+                .as("같은 표본을 두 패널이 다르게 판정하면 화면이 스스로 모순된다")
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(response.traffic().issueSuccessTps().state()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
     /**

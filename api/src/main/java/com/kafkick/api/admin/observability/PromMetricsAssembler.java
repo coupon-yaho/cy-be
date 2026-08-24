@@ -396,6 +396,17 @@ public class PromMetricsAssembler {
         if (!freshness.known()) {
             return absent(freshness);
         }
+        if (reduced.getAsDouble() < 0d) {
+            // counter 의 rate 는 음수가 될 수 없다. 음수가 왔다면 원천이 망가진 것이지 관측이 아니다.
+            //
+            // 여기서 막는다 — 처리량과 실패율이 같은 값을 나눠 쓰므로, 한쪽에만 걸면 같은 스냅샷에서
+            // 처리량은 음수 값을 VALID 로 그리고 실패율만 UNAVAILABLE 이 되는 모순이 생긴다.
+            //
+            // ⚠️ 로그를 남기지 않는다. 화면이 1 초마다 부르고 이 헬퍼는 응답 한 장에 아홉 번
+            //    불리므로, 원천이 망가진 동안 관리자 수 × 초당 아홉 줄이 쌓인다 — 정작 원인을 담은
+            //    다른 로그가 묻힌다. 값이 UNAVAILABLE 로 나가는 것 자체가 신호다.
+            return unavailable();
+        }
         SourceStatus state = freshness.stale()
                 ? SourceStatus.STALE
                 : (reduced.getAsDouble() == 0d ? zeroState : SourceStatus.VALID);
@@ -466,11 +477,9 @@ public class PromMetricsAssembler {
      * {@code NO_TRAFFIC} 으로 내려보내면 값이 0 인 것으로 읽힙니다 — 요청이 0 건일 때 비율은
      * 정의되지 않는 것이라 {@code N_A} 입니다.</p>
      *
-     * <p><b>음수 표본은 값이 아닙니다.</b> counter 의 rate 는 음수가 될 수 없으므로, 음수가 왔다면
-     * 원천이 망가진 것입니다. 그대로 나누면 음수 백분율이 {@code VALID} 로 나가 화면이 그것을
-     * 실패율로 그립니다 — 계약({@code 0~100})을 지킬 수 없는 입력이라 {@code UNAVAILABLE} 입니다.
-     * {@code PENDING}(아직 안 나옴)이 아닌 이유는 운영자가 취할 행동이 "기다려라" 가 아니라
-     * "원천을 보라" 이기 때문입니다.</p>
+     * <p><b>음수 표본은 여기까지 오지 않습니다.</b> {@link #rate} 가 이미 {@code UNAVAILABLE} 로
+     * 바꿔 놓으므로 분자·분모 어느 쪽이 음수든 첫 분기에서 걸립니다 — 계약({@code 0~100})을
+     * 지킬 수 없는 입력을 나누는 자리가 아예 없습니다.</p>
      *
      * <p><b>자르는 코드가 없는 것은 자를 일이 없기 때문입니다.</b> 분자와 분모는 같은
      * {@code QueryResult} 를 같은 {@code uri_group} 필터로 접은 것이라 분자가 분모의 부분집합이고,
@@ -494,13 +503,6 @@ public class PromMetricsAssembler {
         if (!numerator.state().carriesValue()) {
             // 그 결과의 시계열이 아직 없다. 0 이 아니라 모르는 것이다.
             return pending();
-        }
-        if (attempts.value() < 0d || numerator.value() < 0d) {
-            // counter 의 rate 는 음수일 수 없다. 음수가 왔다면 원천이 망가진 것이지 관측이 아니다.
-            // 그대로 나누면 음수 백분율이 VALID 로 나가 화면이 그것을 실패율로 그린다(실측).
-            log.warn("음수 표본으로는 실패율을 낼 수 없어 UNAVAILABLE 로 내려보냅니다: 분자={} 분모={}",
-                    numerator.value(), attempts.value());
-            return unavailable();
         }
         double percent = round(numerator.value() / attempts.value() * 100d);
         SourceStatus state = numerator.state() == SourceStatus.STALE
