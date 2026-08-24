@@ -7,7 +7,9 @@
 # ⚠️ 가르는 축이 severity 가 아니라 channel 이다.
 #    severity 로 가르면 warning 수신함에 서버 문제와 데이터 문제가 섞인다 —
 #    BatchJobRunningTooLong(성능)·ExpireMetricsUnknown(설정)이 warning 인데 서버 축이고,
-#    데이터 축은 ExpireSkippingBrokenCoupons 하나뿐이다.
+#    데이터 축도 전부 warning 이다 — ExpireSkippingBrokenCoupons · VerificationVerdictFailed ·
+#    CouponRound{BlockedByMissingStock,MissedWindow,DataMetricsUnknown}.
+#    ⚠️ 개수를 여기 적지 마라 — 대장은 docs/14 의 채널 표이고 AlertChannelRegistryTest 가 대조한다.
 #    severity 는 긴급도로 남기고, "어디를 봐야 하나" 는 channel 이 진다.
 
 route:

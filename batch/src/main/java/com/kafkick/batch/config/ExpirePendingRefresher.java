@@ -227,7 +227,7 @@ public class ExpirePendingRefresher {
      * 메타를 읽어, 무거워지는 이유가 다르다 — 한 손잡이로 묶으면 한쪽 때문에 다른 쪽을 조인다.
      */
     // **첫 발화를 미룰 수 있게 둔다.** @EnableScheduling 은 모든 테스트 컨텍스트에서
-    // 살아 있고 batch.scheduling.enabled 는 두 스케줄러만 끈다 — 그래서 이 되읽기는
+    // 살아 있고 batch.scheduling.enabled 는 스케줄러 셋(만료·정리·회차 전이)만 끈다 — 그래서 이 되읽기는
     // 테스트가 손으로 부르는 refresh() 와 **같은 빈에서 경합한다.** 실제로
     // ExpirationRepository 를 프록시로 감싸 호출을 기록하는 테스트들이 그 틱 하나에
     // 재현 불가로 빨개질 수 있었다. 주기를 늘리는 것은 확률만 줄이므로, 테스트는

@@ -59,7 +59,7 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.expire.chunk-size=100",
         // **되읽기 스케줄을 끈다.** @EnableScheduling 이 살아 있어
-        // (batch.scheduling.enabled 는 두 스케줄러만 끈다) 백그라운드 틱이 손으로 부른
+        // (batch.scheduling.enabled 는 스케줄러 셋만 끈다) 백그라운드 틱이 손으로 부른
         // observe() 와 섞인다 — dropsGaugesWhenTheReadFails 의 누적 카운터 단언과, off()
         // 뒤 스크레이프 왕복 사이의 NaN 단언이 그때 뒤집힌다.
         //

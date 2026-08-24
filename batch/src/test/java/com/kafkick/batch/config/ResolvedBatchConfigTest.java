@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import com.kafkick.batch.job.CleanupJobConfig;
 import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.schedule.CleanupScheduler;
+import com.kafkick.batch.schedule.CouponRoundScheduler;
 import com.kafkick.batch.schedule.ExpireScheduler;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.storage.db.config.HermeticBoot;
@@ -60,7 +61,7 @@ class ResolvedBatchConfigTest {
     private static final String LOCATION = "--spring.config.location=classpath:/resolved/application.yml";
 
     /**
-     * 플레이스홀더 기본값({@code 4})과도 storage.yml 값({@code 10})과도 다른 값.
+     * 플레이스홀더 기본값({@code 13})과도 storage.yml 값({@code 10})과도 다른 값.
      *
      * <p>기본값과 같은 값을 주면 인자가 무시돼도 결과가 같아 구분이 안 된다.
      * 이 값이 나오면 <b>뒤 문서가 이겼고 플레이스홀더도 살아 있다</b>가 한 번에 증명된다.
@@ -91,7 +92,10 @@ class ResolvedBatchConfigTest {
             VerifyJobConfig.class, ExpireJobConfig.class, ExpireScheduler.class,
             VerificationMetricsRefresher.class, RunningJobProbe.class,
             BatchRunMetricsRefresher.class, CleanupJobConfig.class, CleanupScheduler.class,
-            ExpirePendingRefresher.class);
+            ExpirePendingRefresher.class,
+            // CY-446. 여기 안 넣으면 새 키 넷이 스캐너에 안 보이고, .example 에 오타가 나도
+            // 기본값으로 조용히 폴백한다 — 이 목록에 빠진 것이 이 테스트의 유일한 사각이다.
+            CouponRoundScheduler.class, CouponRoundPendingRefresher.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
@@ -112,6 +116,17 @@ class ResolvedBatchConfigTest {
             "batch.cleanup.metadata-chunk-size",
             "batch.cleanup.step-timeout-ms",
             "batch.schedule.cleanup-cron",
+            // 회차 상태 전이(CY-446). Spring Batch 잡이 아니라 @Scheduled 다 —
+            // 1분 주기로 배치 메타를 쓰면 하루 1,440 인스턴스가 된다.
+            "batch.schedule.coupon-open-cron",
+            "batch.metrics.coupon-round-refresh-ms",
+            "batch.metrics.coupon-round-initial-delay-ms",
+            "batch.metrics.coupon-round-timeout-ms",
+            // ⚠️ batch.schedule.coupon-round-tx-timeout-ms 는 **여기 없다.** 그 @Value 는
+            //    storage 의 CouponRoundJdbcAdapter 에 있고 이 스캐너는 batch 클래스만 훑는다
+            //    (batch → storage 가 runtimeOnly 라 컴파일 타임에 그 클래스를 못 가리킨다).
+            //    대신 아래 assertBatchKeysAreAlive 가 환경변수 이름으로 값을 주입해
+            //    **이름이 실제로 살아 있는 것**을 잰다 — 키 경로는 그것으로 함께 지켜진다.
             "batch.verify.step-timeout-ms",
             "batch.verify.max-findings-per-rule",
             "batch.scheduling.enabled",
@@ -175,12 +190,20 @@ class ResolvedBatchConfigTest {
                 // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
                 // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
                 // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
-                // 기본값(5)과 달라야 키 경로가 죽은 것을 구분할 수 있다.
+                // 기본값(현재 7)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **7 을 주면 안 된다** —
+                // 폴백해도 같은 값이라 이 단언이 아무것도 안 지킨다.
                 "--BATCH_SCHEDULER_POOL_SIZE=6",
                 "--BATCH_RUN_METRICS_REFRESH_MS=62000",
                 "--EXPIRE_PENDING_REFRESH_MS=63000",
                 "--EXPIRE_PENDING_INITIAL_DELAY_MS=64000",
                 "--CLEANUP_METADATA_KEEP_DAYS=31",
+                // CY-446 이 넣은 다섯. **이름을 실제로 실행해야 한다** — .example 기본값과
+                // @Value 기본값이 글자까지 같아서, 환경변수 이름을 오타 내도 결과가 똑같다.
+                "--COUPON_OPEN_CRON=0 0 0 1 1 *",
+                "--COUPON_ROUND_REFRESH_MS=65000",
+                "--COUPON_ROUND_INITIAL_DELAY_MS=66000",
+                "--COUPON_ROUND_TIMEOUT_MS=9000",
+                "--COUPON_ROUND_TX_TIMEOUT_MS=7000",
                 "--CLEANUP_METADATA_CHUNK_SIZE=507",
                 "--EXPIRE_PENDING_TIMEOUT_MS=8000",
                 "--BATCH_RUN_METRICS_TIMEOUT_MS=7000",
@@ -317,6 +340,16 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.cleanup.metadata-chunk-size")).isEqualTo("507");
         assertThat(environment.getProperty("batch.cleanup.step-timeout-ms")).isEqualTo("121000");
         assertThat(environment.getProperty("batch.schedule.cleanup-cron")).isEqualTo("0 31 4 * * *");
+        assertThat(environment.getProperty("batch.schedule.coupon-open-cron"))
+                .isEqualTo("0 0 0 1 1 *");
+        assertThat(environment.getProperty("batch.metrics.coupon-round-refresh-ms"))
+                .isEqualTo("65000");
+        assertThat(environment.getProperty("batch.metrics.coupon-round-initial-delay-ms"))
+                .isEqualTo("66000");
+        assertThat(environment.getProperty("batch.metrics.coupon-round-timeout-ms"))
+                .isEqualTo("9000");
+        assertThat(environment.getProperty("batch.schedule.coupon-round-tx-timeout-ms"))
+                .isEqualTo("7000");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
@@ -324,7 +357,7 @@ class ResolvedBatchConfigTest {
     }
 
     @Test
-    @DisplayName("크론 다섯이 실제로 파싱된다 — 읽는 코드가 아직 없어서 문법 오류가 안 드러난다")
+    @DisplayName("크론 다섯이 실제로 파싱된다 — 셋은 배선됐고 둘(verify-incremental·coupon-create)은 자리 표시다")
     void scheduleCronsParse() {
         try (ConfigurableApplicationContext context = HermeticBoot.run(
                 LOCATION, "--spring.main.web-application-type=none")) {

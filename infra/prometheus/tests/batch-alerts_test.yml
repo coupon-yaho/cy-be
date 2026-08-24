@@ -425,3 +425,283 @@ tests:
             exp_annotations:
               summary: "만료 대기 게이지가 너무 오래된 asOf 기준입니다"
               description: "게이지 넷이 마지막으로 성공한 만료 실행의 asOf 로 계산됩니다. 그 시각이 SLA(50시간)보다 낡았다는 것은 **그 뒤로 만료가 성공하지 못했다**는 뜻이고, 그동안 쌓인 백로그는 ExpireLeavesWorkBehind 에 안 나옵니다. BatchJobFailed 와 ExpireNotSucceeding 을 함께 봅니다 — 뒤엣것은 잡의 종료 시각 축이라 과거 asOf 실행이 성공하면 조용해질 수 있습니다. 미래 시각이면 원인은 시간대 설정입니다."
+
+  # ── 회차 상태 전이 (CY-446) ─────────────────────────────────────────────
+  #
+  # **결과를 재는 알림이라 입력이 게이지다.** "스케줄러가 돌았나" 를 알림 축으로 안 쓴다.
+  # 다만 **끈 구간을 빼는 갈래**가 있어 scheduling_enabled 를 함께 심어야 한다.
+  - interval: 1m
+    name: "지금 열려야 할 회차가 SCHEDULED 로 남으면 CouponRoundsNotOpening 이 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+        # 0 으로 시작해 3분째부터 두 회차가 밀린다 — for 5m 이 3+5=8분에 찬다.
+        values: '0 0 0 2x30'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CouponRoundsNotOpening
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: CouponRoundsNotOpening
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "지금 열려 있어야 하는 회차가 아직 SCHEDULED 입니다 — 그 회차는 발급이 안 됩니다"
+              description: "회차 상태 전이가 5분 넘게 밀렸습니다. 발급 요청은 OPEN 일 때만 통과하므로 그 회차는 **지금 아무도 발급받을 수 없습니다.** 이 게이지는 재고 없는 회차와 창이 지난 회차를 이미 뺀 값이라 **스케줄러 쪽**입니다. **세 갈래로 가릅니다.** ① increase(cy_coupon_round_ticks_total[5m]) == 0 → 스케줄러 스레드가 막혔거나 빈이 안 뜬 것입니다. 스레드 덤프와 기동 로그를 봅니다. ② ticks 는 오르는데 increase(cy_coupon_round_select_failures_total[5m]) > 0 → **대상 조회가 죽고 있습니다.** 흔한 원인은 커넥션 풀 고갈입니다 (BATCH_DB_POOL_SIZE, 04:10~04:30 겹침). ③ ticks 는 오르고 조회도 되는데 increase(cy_coupon_round_transition_failures_total[5m]) > 0 → UPDATE 가 죽고 있습니다. 배치 로그의 \"열기 N건이 실패했습니다\" 가 대표 원인을 답니다. 셋 다 0 이면 게이지가 낡은 것입니다 — CouponRoundMetricsStale 을 봅니다."
+
+  # **끈 구간은 조용해야 한다.** 이 갈래를 지우면 결정론 증명 구간(BATCH_SCHEDULING_ENABLED
+  # 를 끄는 것이 정상 절차다) 내내 critical 이 하나 켜져 있고, 곧 무시되기 시작한다.
+  - interval: 1m
+    name: "스케줄러를 껐으면 대기가 있어도 CouponRoundsNotOpening 이 안 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+        values: '2x30'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CouponRoundsNotOpening
+        exp_alerts: []
+
+  - interval: 1m
+    name: "close_at 이 지난 회차가 OPEN 으로 남으면 CouponRoundsNotClosing 이 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_pending_close{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CouponRoundsNotClosing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CouponRoundsNotClosing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "close_at 이 지난 회차가 아직 OPEN 입니다"
+              description: "마감 예정 시각이 지난 회차가 안 닫혔습니다. 재고가 남은 회차라 발급이 계속 통과합니다 — 예정보다 많이 나갈 수 있습니다. 여는 쪽(CouponRoundsNotOpening)이 함께 떠 있으면 스케줄러 자체가 안 도는 것이니 그쪽 runbook 을 따릅니다. 이것만 떠 있으면 닫기 UPDATE 가 실패하고 있는 것이고, 배치 로그의 \"닫기 N건이 실패했습니다\" 가 원인을 답니다."
+
+  # **데이터 축은 다른 채널로 간다.** 서버를 고쳐도 안 사라지는 상태라, 같은 알림에 묶으면
+  # 사람이 데이터를 고칠 때까지 서버 채널에 critical 이 상주한다.
+  - interval: 1m
+    name: "재고 행이 없어 못 여는 회차는 data 채널 warning 으로 나간다"
+    input_series:
+      - series: 'cy_coupon_round_blocked_no_stock{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CouponRoundBlockedByMissingStock
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: CouponRoundBlockedByMissingStock
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "재고 행이 없어 못 여는 회차가 있습니다"
+              description: "열려야 할 시각인데 coupon_stocks 에 행이 없어 스케줄러가 일부러 안 연 회차입니다. 열면 발급 경로가 그 회차에서 죽으므로 **안 여는 것이 맞습니다** — 고칠 곳은 배치가 아니라 데이터입니다. SELECT c.id FROM coupons c LEFT JOIN coupon_stocks s ON s.coupon_id = c.id WHERE c.status='SCHEDULED' AND c.open_at <= NOW() AND c.close_at > NOW() AND s.coupon_id IS NULL; 회차 생성 경로가 재고 행을 함께 넣는지 확인합니다."
+
+  - interval: 1m
+    name: "창을 통째로 놓친 회차는 30분 뒤 CouponRoundMissedWindow 로 나간다"
+    input_series:
+      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="cy-batch"}'
+        values: '3x60'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CouponRoundMissedWindow
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: CouponRoundMissedWindow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "창을 통째로 놓친 회차가 있습니다 — SCHEDULED 인데 close_at 도 지났습니다"
+              description: "열릴 시각과 닫힐 시각이 둘 다 지난 채 SCHEDULED 로 남은 회차입니다. 스케줄러는 이 회차를 **열지 않습니다** — 열면 마감 시각이 지난 회차에서 발급이 나가고, 그 발급이 300만 건 정합성 검증의 입력을 오염시킵니다. SCHEDULED → CLOSED 는 전이표에 없는 길이라 자동으로 닫지도 않습니다. 부하 테스트처럼 배치를 안 띄운 구간이 있었으면 정상입니다 — 그 회차를 어떻게 할지(닫을지, 창을 옮길지) 사람이 정합니다. **스케줄러를 끈 구간은 갈래에서 뺍니다** — compose 기본이 BATCH_SCHEDULING_ENABLED=false 라, 빼지 않으면 시드가 심은 SCHEDULED 회차의 close_at 이 지나는 순간부터 이 알림이 영구 점등하고 데이터 담당은 고칠 것이 없습니다(원인이 스케줄러를 끈 것입니다)."
+
+  # **이 케이스가 이 절의 존재 이유다.** 되읽기가 성공/실패를 번갈아 하면 게이지가
+  # 정상 ↔ NaN 을 오가고, for 타이머가 서로 반대편 값에 리셋되어 대기 알림도 NaN 알림도
+  # 영영 안 찬다 — 회차가 안 열려 있는데 알림 0건이다. Stale 이 그 구간을 진다.
+  - interval: 1m
+    name: "되읽기가 간헐 실패하면 대기·NaN 알림은 침묵하고 Stale 이 문다"
+    input_series:
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+        values: '2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+      - series: 'cy_coupon_round_refresh_failures_total{instance="batch:9092", job="cy-batch"}'
+        # 2분에 한 번 실패 — 10분 창에서 증분이 3 을 넘는다.
+        values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: CouponRoundsNotOpening
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: CouponRoundMetricsUnknown
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: CouponRoundMetricsStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "회차 전이 대기 되읽기가 간헐 실패하고 있습니다"
+              description: "게이지가 정상과 NaN 을 오가는 동안은 대기 감시도 NaN 감시도 for 를 못 채웁니다. 배치 로그의 \"회차 전이 대기 지표를 되읽지 못했습니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈입니다 — BATCH_DB_POOL_SIZE 와 04:10~04:30 겹침을 봅니다."
+
+  - interval: 1m
+    name: "게이지가 계속 NaN 이면 CouponRoundMetricsUnknown 이 뜨고 대기 알림은 안 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+        values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CouponRoundsNotOpening
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CouponRoundMetricsUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "회차 전이 대기 지표를 못 읽고 있습니다 — CouponRoundsNotOpening 이 꺼져 있습니다"
+              description: "되읽기가 실패해 게이지가 NaN 입니다. 이 동안 회차가 안 열려도 알림이 안 뜹니다. 배치 로그의 \"회차 전이 대기 지표를 되읽지 못했습니다\" 와 cy_coupon_round_refresh_failures_total 증분을 함께 봅니다. 흔한 원인은 커넥션 풀 고갈입니다."
+
+  # **닫는 쪽만 NaN 인 갈래도 잡는다.** 지금은 한 스냅샷에서 나와 같이 NaN 이 되지만,
+  # 그 결합이 깨지는 리팩터가 오면 이 케이스가 유일한 방어다.
+  - interval: 1m
+    name: "닫는 쪽 게이지만 NaN 이어도 CouponRoundMetricsUnknown 이 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+        values: '0x30'
+      - series: 'cy_coupon_round_pending_close{instance="batch:9092", job="cy-batch"}'
+        values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CouponRoundMetricsUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "회차 전이 대기 지표를 못 읽고 있습니다 — CouponRoundsNotOpening 이 꺼져 있습니다"
+              description: "되읽기가 실패해 게이지가 NaN 입니다. 이 동안 회차가 안 열려도 알림이 안 뜹니다. 배치 로그의 \"회차 전이 대기 지표를 되읽지 못했습니다\" 와 cy_coupon_round_refresh_failures_total 증분을 함께 봅니다. 흔한 원인은 커넥션 풀 고갈입니다."
+
+  # **배치가 떠 있을 때만 뜬다.** up 가드를 지우면 부하 테스트(배치 컨테이너 없음)마다 뜬다.
+  - interval: 1m
+    name: "배치가 떠 있는데 게이지가 없으면 CouponRoundMetricsMissing 이 뜬다"
+    input_series:
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CouponRoundMetricsMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CouponRoundMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "회차 전이 대기 지표가 아예 없습니다"
+              description: "배치는 떠 있는데 cy_coupon_round_pending_open 시리즈가 없습니다. CouponRoundPendingRefresher 빈이 안 떴거나 이름이 바뀐 것입니다 — 그 빈은 batch.scheduling.enabled 와 무관하게 뜨므로 스위치로는 설명이 안 됩니다. /actuator/prometheus 본문에서 cy_coupon_round_ 접두사 시리즈를 직접 봅니다 — 미터 이름이 바뀌었거나 노출 목록이 좁아졌거나 스크레이프에 relabel 이 붙은 것입니다. **기동 가드 거절은 여기 안 나옵니다** — 그 경우 프로세스가 안 떠서 up 이 0 이고 이 알림의 갈래에서 빠집니다(그 축은 BatchTargetDown 이 집니다)."
+
+  - interval: 1m
+    name: "배치가 안 떠 있으면 게이지가 없어도 CouponRoundMetricsMissing 이 안 뜬다"
+    input_series:
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: CouponRoundMetricsMissing
+        exp_alerts: []
+
+  # **조회 실패는 전이 실패와 다른 축이다.** 이것이 없으면 ticks 는 오르고
+  # transition_failures 는 0 인 구간에서 runbook 의 감별이 막다른 길이 된다.
+  - interval: 1m
+    name: "대상 조회가 반복 실패하면 CouponRoundSelectFailing 이 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_select_failures_total{instance="batch:9092", job="cy-batch"}'
+        values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: CouponRoundSelectFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "회차 전이의 대상 조회가 실패하고 있습니다"
+              description: "대상을 고르지 못해 그 축(열기 또는 닫기)을 건너뛰고 있습니다. 스케줄러는 돌고 있으므로 ticks 는 오르는데 전이는 하나도 안 일어납니다 — transition_failures 만 보면 0 이라 원인을 못 찾습니다. 배치 로그의 \"대상을 고르지 못해 이번 주기의 ...를 건너뜁니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈입니다 — BATCH_DB_POOL_SIZE 와 04:10~04:30 겹침을 봅니다."
+
+  # **데이터 축이 눈먼 것도 데이터 채널로 나가야 한다.** 서버 채널만 알면 데이터 담당은
+  # 자기 알림 둘이 발화 조건을 못 만드는 것을 모른다.
+  - interval: 1m
+    name: "데이터 축 게이지가 NaN 이면 CouponRoundDataMetricsUnknown 이 data 채널로 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="cy-batch"}'
+        values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+      - series: 'cy_coupon_round_blocked_no_stock{instance="batch:9092", job="cy-batch"}'
+        values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CouponRoundBlockedByMissingStock
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CouponRoundDataMetricsUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "회차 데이터 축 지표를 못 읽고 있습니다"
+              description: "되읽기가 실패해 게이지가 NaN 입니다. 이 동안 CouponRoundBlockedByMissingStock 과 CouponRoundMissedWindow 가 발화 조건을 못 만듭니다 — 재고 행 없는 회차가 생겨도, 창을 놓친 회차가 쌓여도 조용합니다. 원인은 서버 축입니다(CouponRoundMetricsUnknown 과 같은 사건) — 배치 담당과 함께 봅니다."
+
+  # **끈 구간은 데이터 축에서도 조용해야 한다.** compose 기본이 BATCH_SCHEDULING_ENABLED=false
+  # 라, 갈래를 안 빼면 시드가 심은 SCHEDULED 회차의 close_at 이 지나는 순간부터 이 알림이
+  # 영구 점등하고 데이터 담당은 고칠 것이 없다(원인이 스케줄러를 끈 것이다).
+  - interval: 1m
+    name: "스케줄러를 껐으면 창을 놓친 회차가 있어도 CouponRoundMissedWindow 가 안 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="cy-batch"}'
+        values: '3x60'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: CouponRoundMissedWindow
+        exp_alerts: []

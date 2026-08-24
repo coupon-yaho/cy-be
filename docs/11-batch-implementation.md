@@ -75,8 +75,8 @@ storage JPA · 어댑터 · Flyway
 | 어디에 | 무엇이 | 부하 중 |
 |---|---|---|
 | `api` | 발급 · 사용 · 취소 · 대기열 · 드리프트 감시 | 유지 |
-| `api` | **재고 소진 시 회차를 `CLOSED` 로** — 발급 경로가 인라인으로 | 유지 |
-| `batch` | 회차 생성 · 회차 상태 전이 스케줄러 | **정지** |
+| `api` | **재고 소진 시 회차를 `CLOSED` 로** — 발급 경로가 인라인으로 **(미착수 — 지금 `api` 에는 발급 경로가 없다)** | 유지 |
+| `batch` | 회차 상태 전이 스케줄러 (`CouponRoundScheduler` · CY-446) · 회차 생성(미착수) | **정지** |
 | `batch` | `expireJob` · `verifyJob` | **정지** |
 
 **부하 중에 스케줄러가 하나도 안 돌아도 되는 이유** — 부하 테스트는 이미 `OPEN` 인 회차 하나에
@@ -85,6 +85,9 @@ storage JPA · 어댑터 · Flyway
 
 재고 소진으로 `CLOSED` 가 되는 것만 부하 중에 실제로 일어나는데, 이건 **발급 경로가 그 자리에서**
 바꾼다. 스케줄러를 기다리면 재고가 0인데 `OPEN` 인 구간이 생긴다.
+
+⚠️ **그 코드가 아직 없다.** 발급 경로 티켓 전까지는 재고가 0이어도 회차가 `close_at` 까지
+`OPEN` 으로 남는다 — 즉 위 문단이 약속한 구간이 지금은 실제로 열려 있다.
 
 그래서 **부하 중 정지 수단이 설정이 아니라 컨테이너다.**
 
@@ -237,7 +240,7 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 ```
 batch/src/main/java/com/kafkick/batch/
   job/        계층 2 — Spring Batch 인 것만
-  schedule/   계층 1·3 — @Scheduled (안에서 Job 을 실행한다)
+  schedule/   계층 1·3 — @Scheduled (Job 을 띄우는 것과 core 포트를 직접 쓰는 것 둘 다)
   rule/       VerificationRule 과 V1~V6
   replay/     이력 접기 · aggregating Reader
   seed/       생성기 · PII 암호화 · 분포
@@ -247,6 +250,7 @@ batch/src/main/java/com/kafkick/batch/
 
 core/src/main/java/com/kafkick/core/
   coupon/       IssuanceStatus · IssuanceEventType · CouponStatus · CouponStateMachine
+    port/       CouponRoundRepository — 회차 상태 전이(CY-446)
   verification/ FindingType · TargetKey · ScopeType · DatasetType · VerdictType · StatsStatus
 ```
 
@@ -331,12 +335,13 @@ Flyway 를 끄는 이유는 계층 2 의 불변식이다 — 검증 배치가 DD
 ### 풀 크기 손잡이가 바뀌었다
 
 이 변경 전에는 storage.yml 이 이겨서 **batch 풀도 `DB_POOL_SIZE` 가 움직였다.**
-이제 `BATCH_DB_POOL_SIZE` 다. `DB_POOL_SIZE` 만 주던 배포는 batch 쪽이 10 에서 8 로 바뀐다.
+이제 `BATCH_DB_POOL_SIZE` 다. `DB_POOL_SIZE` 만 주던 배포도 api 는 10 그대로다.
 
-> **4 였다가 8 이 됐다(CY-392).** 되읽기 스케줄러가 둘로 늘면서 최악 동시 소비자가
-> 여섯이 됐기 때문이다 — 검증 스텝 tx · 검증 JobRepository · 만료 스텝 tx ·
-> 만료 JobRepository · 되읽기 둘. 두 잡이 겹치는 것은 예외가 아니라 설계다
-> (`max-expire-skips` 상한을 넘으면 만료를 돌린다). 근거는 `.example` 에 적었다.
+> **4 → 8(CY-392) → 11(CY-421) → 13(CY-446).** 최악 동시 소비자를 세고 여유 둘을 붙인 값이다.
+> 두 잡이 겹치는 것은 예외가 아니라 설계다(`max-expire-skips` 상한을 넘으면 만료를 돌린다).
+>
+> ⚠️ **현재 값과 소비자 목록의 주인은 `application.yml.example` 의 그 키 주석이다.**
+> 여기 숫자를 다시 적으면 한쪽만 갱신된다 — 실제로 CY-421·CY-446 두 번 갈렸다.
 
 ### 테스트가 지킨다 — 실패 원인이 갈리도록 나눴다
 
@@ -364,7 +369,8 @@ Hikari·Flyway 프로퍼티 **이름 오타**.
 `.example` 의 값과 `@Value` 기본값이 **글자까지 같아서** `Environment` 를 찍어 봐도
 *"적힌 값이 떴다"* 로 보인다 — 이 절을 만든 사고보다 한 단계 더 조용하다.
 그래서 `ResolvedBatchConfigTest` 가 **기본값과 다른 값**을 주입해 키 경로가 살아 있는지 본다.
-크론 다섯은 읽는 코드가 아직 0건이라 `CronExpression.parse` 로 문법만 미리 잡아 둔다.
+크론 다섯 중 **배선된 셋**(`expire`·`cleanup`·`coupon-open`)은 기동 때 스케줄러가 파싱하고,
+**미배선 둘**(`verify-incremental`·`coupon-create`)은 `CronExpression.parse` 로 문법만 미리 잡아 둔다.
 
 **겹침은 문자열 일치가 아니다.** Boot 는 프로퍼티 트리로 바인딩하므로 판정도 트리로 해야 한다.
 

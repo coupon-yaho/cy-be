@@ -297,6 +297,24 @@ class VerificationMetricExposureTest {
     }
 
     /**
+     * <b>이 배선이 끊기면 CY-446 의 유일한 감시가 조용히 꺼진다.</b> 게이지는 영원히
+     * {@code NaN} 이고 {@code CouponRoundsNotOpening}({@code > 0})은 발화 조건 자체를 못
+     * 만든다 — 그러면 회차가 안 열려도 아무도 모른다. 이 되읽기는
+     * {@code batch.scheduling.enabled} 와 <b>무관하게</b> 등록돼야 한다(이 컨텍스트가 그것을
+     * {@code false} 로 띄운다) — 끈 채로 띄운 배치에서도 <i>"회차가 안 열리고 있다"</i> 는
+     * 사실은 참이기 때문이다.
+     */
+    @Test
+    @DisplayName("회차 전이 대기 되읽기가 @Scheduled 로 등록된다 — 스케줄러를 꺼도")
+    void couponRoundPendingRefreshIsScheduled() {
+        assertThat(taskHolder.getScheduledTasks())
+                .as("등록된 태스크=%s", taskHolder.getScheduledTasks().stream()
+                        .map(task -> task.getTask().getRunnable().toString()).toList())
+                .anyMatch(task -> task.getTask().getRunnable().toString()
+                        .startsWith(CouponRoundPendingRefresher.class.getName() + ".refresh"));
+    }
+
+    /**
      * <b>스케줄러 풀이 @Scheduled 수를 감당하는지 본다.</b>
      *
      * <p>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 어떤
@@ -310,14 +328,16 @@ class VerificationMetricExposureTest {
     @Test
     @DisplayName("스케줄러 풀이 @Scheduled 수를 감당한다 — 서로를 막지 않게")
     void schedulerPoolFitsScheduledTaskCount() {
-        // 정확히 5 를 단언하지 않는다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠
-        // 있으면 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵고, 세 번째
-        // @Scheduled 가 생겨 정당하게 올리는 날에도 깨진다. 정확한 값은
+        // 정확한 값을 안 단언한다. 셸이나 CI 러너에 BATCH_SCHEDULER_POOL_SIZE 가 떠 있으면
+        // 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵다. 정확한 값은
         // ResolvedBatchConfigTest 가 키 경로로 지키고, 여기가 막는 것은 "1 로 폴백" 이다.
+        //
+        // **다만 하한은 @Scheduled 수와 함께 움직여야 한다.** CY-446 이 둘을 더했을 때
+        // 이 값이 5 로 남아 초록으로 지나갔다 — 그 순간 이 단언은 아무것도 안 지켰다.
         assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
                 .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
-                        + "폴백한다. 그러면 다섯 @Scheduled 가 스레드 하나를 다툰다")
-                .isGreaterThanOrEqualTo(5);
+                        + "폴백한다. 그러면 일곱 @Scheduled 가 스레드 하나를 다툰다")
+                .isGreaterThanOrEqualTo(7);
     }
 
     /**
