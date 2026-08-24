@@ -46,8 +46,24 @@ x-kafka-broker-env: &kafka-broker-env
   #
   # 22자 base64 여야 한다(kafka-storage random-uuid 형식). 이 값은 그 제약을 만족하면서
   # 읽을 수 있게 고른 것이고, 포맷이 실제로 이 값으로 되는 것을 확인했다(실측).
-  # 볼륨을 지우지 않는 한 바꾸지 말 것 — 포맷된 id 는 안 바뀌고, 바꾸면 브로커가
-  # InconsistentClusterIdException 으로 죽는다.
+  #
+  # ⚠️ 이 값을 바꾸려면 브로커 볼륨 셋을 함께 지워야 한다. 포맷된 id 는 안 바뀐다 —
+  #    실측하면 이렇게 된다:
+  #      Invalid cluster.id in: /var/lib/kafka/data/meta.properties.
+  #      Expected coupon-yaho-kraft-0001, but read 5L6g3nShT-eMCtK--X86sw
+  #    restart: unless-stopped 이라 한 번 죽고 마는 게 아니라 세 대가 크래시루프에 빠지고,
+  #    docker compose ps 에는 "restarting" 만 보인다. 이유는 docker logs 에만 있다.
+  #
+  #    복구는 볼륨 삭제 하나다. 여기에는 보존할 데이터가 없다 — 토픽은 기동 뒤
+  #    KafkaTopicProvisioner 가 다시 만들고, 발급 데이터는 MySQL 에 있다:
+  #      docker compose down
+  #      docker volume rm coupon-yaho_coupon-kafka-1-data \
+  #                       coupon-yaho_coupon-kafka-2-data \
+  #                       coupon-yaho_coupon-kafka-3-data
+  #      docker compose up -d
+  #
+  #    ⚠️ 세 개를 다 지운다. 하나만 남기면 그 한 대만 예전 id 로 크래시루프에 남고,
+  #       나머지 둘로 쿼럼이 서서 클러스터는 정상으로 보인다.
   CLUSTER_ID: coupon-yaho-kraft-0001
   # 이 계층의 전제다. 위 주석 참조 — 켜져 있으면 RF1 토픽이 조용히 생기고 되돌릴 수 없다.
   KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
