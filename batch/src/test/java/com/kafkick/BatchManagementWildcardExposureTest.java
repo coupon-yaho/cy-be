@@ -14,8 +14,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration;
-import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.context.annotation.Configuration;
@@ -29,7 +27,10 @@ import org.springframework.context.annotation.Configuration;
                 "management.server.port=0",
                 "management.endpoints.web.exposure.include=*",
                 // 이 앱에는 관측 풀이 없다. obs 그룹 검증까지 켜면 노출 규칙과 무관한 이유로 깨진다.
-                "management.endpoint.health.validate-group-membership=false"
+                "management.endpoint.health.validate-group-membership=false",
+                "spring.autoconfigure.exclude="
+                        + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+                        + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration"
         })
 class BatchManagementWildcardExposureTest {
 
@@ -62,10 +63,20 @@ class BatchManagementWildcardExposureTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableAutoConfiguration(exclude = {
-            DataSourceAutoConfiguration.class,
-            HibernateJpaAutoConfiguration.class
-    })
+    /**
+     * ⚠️ 제외 목록을 {@code @EnableAutoConfiguration(exclude = ...)} 로 적지 않는다. 이 클래스는
+     * {@code com.kafkick} 안에 있고 {@code BatchApplication} 이 그 패키지를 통째로 스캔한다.
+     *
+     * <p><b>실측.</b> 세 테스트(여기 · Wildcard · RedisHealth)가 제외를 애노테이션으로 적으면
+     * {@code :batch:test} 에서 batch 앱 컨텍스트가 {@code EntityManagerFactory} 없이 떠서 13개가
+     * 깨진다 — batch 의 yml 에서 JPA 제외를 이미 걷었는데도 그렇다. 제외를 각 테스트의
+     * {@code properties} 로 옮기면 사라진다.
+     *
+     * <p><b>밝히지 못한 것.</b> 세 파일 중 하나만 애노테이션으로 되돌렸을 때는 재현되지 않았다.
+     * 전파 경로를 정확히 짚지 못했으므로 여기 적는 것은 관측된 사실까지다 — 되돌리려는 사람은
+     * 세 파일을 함께 바꿔 {@code :batch:test} 전체를 돌려 볼 것.
+     */
+    @EnableAutoConfiguration
     static class TestApp {
     }
 }

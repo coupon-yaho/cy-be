@@ -15,8 +15,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration;
-import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.context.annotation.Configuration;
@@ -50,6 +48,9 @@ class BatchRedisHealthTest {
                     "spring.config.location=file:build/batch-redis-health/management.yml",
                     "management.server.port=0",
                     "management.endpoint.health.validate-group-membership=false",
+                    "spring.autoconfigure.exclude="
+                            + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+                            + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",
                     // ⚠️ 이 줄이 없으면 개발 기계에 떠 있는 다른 Redis(6379)에 붙어 헬스가 UP 이 되고,
                     //    스위치를 지워도 이 테스트가 통과한다 — 실제로 그렇게 무효였다.
                     "spring.data.redis.port=1",
@@ -75,6 +76,9 @@ class BatchRedisHealthTest {
                     "spring.config.location=file:build/batch-redis-health/management.yml",
                     "management.server.port=0",
                     "management.endpoint.health.validate-group-membership=false",
+                    "spring.autoconfigure.exclude="
+                            + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
+                            + "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",
                     // 커밋된 설정의 스위치를 되돌리고, 아무도 듣지 않는 포트를 가리킨다.
                     "management.health.redis.enabled=true",
                     "spring.data.redis.port=1",
@@ -93,10 +97,20 @@ class BatchRedisHealthTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableAutoConfiguration(exclude = {
-            DataSourceAutoConfiguration.class,
-            HibernateJpaAutoConfiguration.class
-    })
+    /**
+     * ⚠️ 제외 목록을 {@code @EnableAutoConfiguration(exclude = ...)} 로 적지 않는다. 이 클래스는
+     * {@code com.kafkick} 안에 있고 {@code BatchApplication} 이 그 패키지를 통째로 스캔한다.
+     *
+     * <p><b>실측.</b> 세 테스트(여기 · Wildcard · RedisHealth)가 제외를 애노테이션으로 적으면
+     * {@code :batch:test} 에서 batch 앱 컨텍스트가 {@code EntityManagerFactory} 없이 떠서 13개가
+     * 깨진다 — batch 의 yml 에서 JPA 제외를 이미 걷었는데도 그렇다. 제외를 각 테스트의
+     * {@code properties} 로 옮기면 사라진다.
+     *
+     * <p><b>밝히지 못한 것.</b> 세 파일 중 하나만 애노테이션으로 되돌렸을 때는 재현되지 않았다.
+     * 전파 경로를 정확히 짚지 못했으므로 여기 적는 것은 관측된 사실까지다 — 되돌리려는 사람은
+     * 세 파일을 함께 바꿔 {@code :batch:test} 전체를 돌려 볼 것.
+     */
+    @EnableAutoConfiguration
     static class TestApp {
     }
 }
