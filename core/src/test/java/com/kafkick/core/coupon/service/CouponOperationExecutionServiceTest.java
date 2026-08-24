@@ -15,10 +15,12 @@ import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotentExecutionResult;
 import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.exception.BusinessException;
@@ -69,12 +71,15 @@ class CouponOperationExecutionServiceTest {
                 AT,
                 AT.plusSeconds(604_800)
         );
-        when(idempotencyExecutionService.execute(
+        when(idempotencyExecutionService.executeWithMetadata(
                 eq(KEY), any(), any(), any(), any()
         )).thenAnswer(invocation -> {
             java.util.function.Function<Instant, CouponIssueResult> claimed =
                     invocation.getArgument(3);
-            return claimed.apply(AT);
+            return new IdempotentExecutionResult<>(
+                    claimed.apply(AT),
+                    false
+            );
         });
         when(operationService.execute(
                 eq(KEY), eq(20L), eq(AT), any(), eq(issueCodec), any()
@@ -129,12 +134,15 @@ class CouponOperationExecutionServiceTest {
                 AT,
                 AT.plusSeconds(604_800)
         );
-        when(idempotencyExecutionService.execute(
+        when(idempotencyExecutionService.executeWithMetadata(
                 eq(KEY), any(), any(), any(), any()
         )).thenAnswer(invocation -> {
             java.util.function.Function<String, CouponIssueResult> replay =
                     invocation.getArgument(4);
-            return replay.apply("stored-result");
+            return new IdempotentExecutionResult<>(
+                    replay.apply("stored-result"),
+                    true
+            );
         });
         when(issueCodec.read("stored-result")).thenReturn(expected);
         CouponOperationExecutionService service = service();
@@ -147,6 +155,35 @@ class CouponOperationExecutionServiceTest {
         );
 
         assertThat(actual).isEqualTo(expected);
+        verifyNoInteractions(operationService, couponIssueService);
+    }
+
+    @Test
+    void returnsCouponIssueReplayMetadataWithoutChangingLegacyIssueApi() {
+        CouponIssueResult expected = new CouponIssueResult(
+                100L,
+                10L,
+                "ABCDEFGHJKLM2345",
+                IssuanceStatus.ISSUED,
+                AT,
+                AT.plusSeconds(604_800)
+        );
+        when(idempotencyExecutionService.executeWithMetadata(
+                eq(KEY), any(), any(), any(), any()
+        )).thenReturn(new IdempotentExecutionResult<>(expected, true));
+        CouponOperationExecutionService service = service();
+
+        CouponIssueExecutionResult actual = service.issueWithMetadata(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                KEY
+        );
+
+        assertThat(actual).isEqualTo(new CouponIssueExecutionResult(
+                expected,
+                true
+        ));
         verifyNoInteractions(operationService, couponIssueService);
     }
 

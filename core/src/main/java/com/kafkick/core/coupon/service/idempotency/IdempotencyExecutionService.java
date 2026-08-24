@@ -77,6 +77,34 @@ public class IdempotencyExecutionService {
             Function<Instant, R> claimedRequest,
             Function<String, R> completedResponseReader
     ) {
+        return executeWithMetadata(
+                idempotencyKey,
+                canonicalRequestSupplier,
+                invalidRequestErrorCode,
+                claimedRequest,
+                completedResponseReader
+        ).value();
+    }
+
+    /**
+     * 외부 트랜잭션 없이 멱등 실행 값과 DONE 응답 재사용 여부를 함께 반환합니다.
+     *
+     * @param idempotencyKey UUID v4 멱등 키
+     * @param canonicalRequestSupplier 요청 동등성을 판단할 정규화 문자열 공급자
+     * @param invalidRequestErrorCode 잘못된 멱등 키에 사용할 업무 오류 코드
+     * @param claimedRequest 최초 선점 또는 stale 회수 뒤 실행할 작업
+     * @param completedResponseReader 저장된 DONE 응답 복원기
+     * @param <R> 실행 결과 타입
+     * @return 실행 값과 DONE replay 여부
+     */
+    @Transactional(propagation = Propagation.NEVER)
+    public <R> IdempotentExecutionResult<R> executeWithMetadata(
+            String idempotencyKey,
+            Supplier<String> canonicalRequestSupplier,
+            ErrorCode invalidRequestErrorCode,
+            Function<Instant, R> claimedRequest,
+            Function<String, R> completedResponseReader
+    ) {
         validateIdempotencyKey(idempotencyKey, invalidRequestErrorCode);
         String requestHash = hashRequest(canonicalRequestSupplier.get());
         Instant requestAt = currentTime();
@@ -86,12 +114,13 @@ public class IdempotencyExecutionService {
                 requestAt
         );
         if (firstRequest) {
-            return processClaimedRequest(
+            R value = processClaimedRequest(
                     idempotencyKey,
                     requestHash,
                     requestAt,
                     claimedRequest
             );
+            return new IdempotentExecutionResult<>(value, false);
         }
         return replayOrReclaim(
                 idempotencyKey,
@@ -102,7 +131,7 @@ public class IdempotencyExecutionService {
         );
     }
 
-    private <R> R replayOrReclaim(
+    private <R> IdempotentExecutionResult<R> replayOrReclaim(
             String idempotencyKey,
             String requestHash,
             Instant requestAt,
@@ -116,7 +145,10 @@ public class IdempotencyExecutionService {
                     .orElseThrow(() -> conflictInProgress(idempotencyKey));
             validateRequestHash(record, requestHash, idempotencyKey);
             if (record.status() == IdempotencyStatus.DONE) {
-                return completedResponseReader.apply(record.responseBody());
+                return new IdempotentExecutionResult<>(
+                        completedResponseReader.apply(record.responseBody()),
+                        true
+                );
             }
             if (isStale(record, requestAt)
                     && claimService.tryReclaim(
@@ -125,12 +157,13 @@ public class IdempotencyExecutionService {
                             record.createdAt(),
                             requestAt
                     )) {
-                return processClaimedRequest(
+                R value = processClaimedRequest(
                         idempotencyKey,
                         requestHash,
                         requestAt,
                         claimedRequest
                 );
+                return new IdempotentExecutionResult<>(value, false);
             }
             if (System.nanoTime() >= deadline) {
                 throw conflictInProgress(idempotencyKey);

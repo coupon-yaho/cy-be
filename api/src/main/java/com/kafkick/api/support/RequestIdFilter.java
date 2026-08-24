@@ -21,10 +21,14 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestIdFilter extends OncePerRequestFilter {
 
+    /** 필터가 확정한 요청 ID를 하위 HTTP 어댑터가 읽는 공용 요청 속성 키입니다. */
+    public static final String REQUEST_ID_ATTRIBUTE =
+            RequestIdFilter.class.getName() + ".requestId";
+
     private static final String REQUEST_ID = "requestId";
     private static final String HEADER = "X-Request-Id";
     private static final Pattern SAFE_REQUEST_ID = Pattern.compile(
-            "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$"
     );
 
     @Override
@@ -36,6 +40,7 @@ public class RequestIdFilter extends OncePerRequestFilter {
             requestId = newRequestId();
         }
         MDC.put(REQUEST_ID, requestId);
+        request.setAttribute(REQUEST_ID_ATTRIBUTE, requestId);
         response.setHeader(HEADER, requestId);
         try {
             filterChain.doFilter(request, response);

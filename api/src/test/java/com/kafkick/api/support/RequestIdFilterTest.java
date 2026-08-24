@@ -18,6 +18,7 @@ class RequestIdFilterTest {
 
     /** 체인 실행 중의 MDC 값. 필터가 심은 값과 응답 헤더가 같은지 보려면 여기서 잡아야 한다. */
     private String mdcInsideChain;
+    private Object attributeInsideChain;
 
     private MockHttpServletResponse run(String headerValue) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -26,7 +27,13 @@ class RequestIdFilterTest {
         }
         MockHttpServletResponse response = new MockHttpServletResponse();
         mdcInsideChain = null;
-        filter.doFilter(request, response, (req, res) -> mdcInsideChain = MDC.get(MDC_KEY));
+        attributeInsideChain = null;
+        filter.doFilter(request, response, (req, res) -> {
+            mdcInsideChain = MDC.get(MDC_KEY);
+            attributeInsideChain = req.getAttribute(
+                    RequestIdFilter.REQUEST_ID_ATTRIBUTE
+            );
+        });
         return response;
     }
 
@@ -48,9 +55,17 @@ class RequestIdFilterTest {
     }
 
     @Test
-    @DisplayName("64자를 초과한 요청 ID는 서버 ID로 교체한다")
+    @DisplayName("36자 요청 ID를 그대로 사용한다")
+    void preservesRequestIdAtMaximumLength() throws Exception {
+        String requestId = "r".repeat(36);
+
+        assertThat(run(requestId).getHeader(HEADER)).isEqualTo(requestId);
+    }
+
+    @Test
+    @DisplayName("36자를 초과한 요청 ID는 서버 ID로 교체한다")
     void replacesRequestIdLongerThanMaximumLength() throws Exception {
-        assertThat(run("a".repeat(65)).getHeader(HEADER))
+        assertThat(run("a".repeat(37)).getHeader(HEADER))
                 .matches("[0-9a-f]{32}");
     }
 
@@ -74,6 +89,15 @@ class RequestIdFilterTest {
         String generated = run("a\tb").getHeader(HEADER);
 
         assertThat(mdcInsideChain).isEqualTo(generated).matches("[0-9a-f]{32}");
+    }
+
+    @Test
+    @DisplayName("체인 실행 중 MDC와 요청 속성, 응답 헤더가 같은 최종 ID를 사용한다")
+    void mdcAttributeAndResponseHeaderShareFinalRequestId() throws Exception {
+        String responseHeader = run("r".repeat(36)).getHeader(HEADER);
+
+        assertThat(mdcInsideChain).isEqualTo(responseHeader);
+        assertThat(attributeInsideChain).isEqualTo(responseHeader);
     }
 
     @Test

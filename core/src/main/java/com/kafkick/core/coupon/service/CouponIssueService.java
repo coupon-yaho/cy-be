@@ -1,13 +1,11 @@
 package com.kafkick.core.coupon.service;
 
-import java.time.Instant;
 import java.util.Objects;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.domain.CouponRound;
-import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
@@ -55,7 +53,7 @@ public class CouponIssueService {
 
     @Transactional
     public Issuance issue(CouponIssueCommand command) {
-        validateCommand(command);
+        CouponIssuePolicy.validateCommand(command);
         CouponRound couponRound = couponRoundRepository
                 .findById(command.couponRoundId())
                 .orElseThrow(() -> new BusinessException(
@@ -63,7 +61,7 @@ public class CouponIssueService {
                         "couponRoundId=" + command.couponRoundId()
                 ));
 
-        validateIssuable(couponRound, command);
+        CouponIssuePolicy.validateIssuable(couponRound, command);
         if (!couponStockRepository.lockForUpdate(couponRound.id())) {
             throw new BusinessException(
                     CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
@@ -116,47 +114,4 @@ public class CouponIssueService {
         }
     }
 
-    private static void validateCommand(CouponIssueCommand command) {
-        if (command == null
-                || command.couponRoundId() == null
-                || command.couponRoundId() <= 0
-                || command.memberId() == null
-                || command.memberId() <= 0
-                || command.membershipGrade() == null
-                || command.issuedAt() == null) {
-            throw new BusinessException(
-                    CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST
-            );
-        }
-    }
-
-    private static void validateIssuable(
-            CouponRound couponRound,
-            CouponIssueCommand command
-    ) {
-        Instant issuedAt = command.issuedAt();
-        if (!issuedAt.isBefore(couponRound.closeAt())
-                || couponRound.status() == CouponRoundStatus.CLOSED) {
-            throw new BusinessException(
-                    CouponIssueErrorCode.CAMPAIGN_CLOSED,
-                    "couponRoundId=" + couponRound.id()
-            );
-        }
-        if (issuedAt.isBefore(couponRound.openAt())
-                || couponRound.status() != CouponRoundStatus.OPEN) {
-            throw new BusinessException(
-                    CouponIssueErrorCode.NOT_OPENED,
-                    "couponRoundId=" + couponRound.id()
-            );
-        }
-        if (!couponRound.eligibleGrades().contains(
-                command.membershipGrade()
-        )) {
-            throw new BusinessException(
-                    CouponIssueErrorCode.GRADE_NOT_ELIGIBLE,
-                    "couponRoundId=" + couponRound.id()
-                            + ", memberId=" + command.memberId()
-            );
-        }
-    }
 }

@@ -10,10 +10,12 @@ import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotentExecutionResult;
 import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.membership.domain.MembershipGrade;
 
@@ -61,33 +63,64 @@ public class CouponOperationExecutionService {
             MembershipGrade membershipGrade,
             String idempotencyKey
     ) {
-        return idempotencyExecutionService.execute(
-                idempotencyKey,
-                () -> CouponIssueCommand.canonicalRequest(
-                        couponRoundId,
-                        memberId,
-                        membershipGrade
-                ),
-                CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST,
-                claimedAt -> operationService.execute(
+        return issueWithMetadata(
+                couponRoundId,
+                memberId,
+                membershipGrade,
+                idempotencyKey
+        ).result();
+    }
+
+    /**
+     * 기존 발급 응답과 DONE 멱등 응답 재사용 여부를 함께 반환합니다.
+     *
+     * <p>기존 {@link #issue(Long, Long, MembershipGrade, String)} 계약은 유지하며,
+     * 관측 호출부처럼 replay 구분이 필요한 소비자만 이 메서드를 사용합니다.
+     *
+     * @param couponRoundId 쿠폰 회차 식별자
+     * @param memberId 회원 식별자
+     * @param membershipGrade 요청 시점 회원 등급
+     * @param idempotencyKey UUID v4 멱등 키
+     * @return 발급 응답과 replay 여부
+     */
+    public CouponIssueExecutionResult issueWithMetadata(
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade,
+            String idempotencyKey
+    ) {
+        IdempotentExecutionResult<CouponIssueResult> execution =
+                idempotencyExecutionService.executeWithMetadata(
                         idempotencyKey,
-                        memberId,
-                        claimedAt,
-                        () -> CouponIssueResult.from(
-                                couponIssueService.issue(
-                                        new CouponIssueCommand(
-                                                couponRoundId,
-                                                memberId,
-                                                membershipGrade,
-                                                idempotencyKey,
-                                                claimedAt
-                                        )
-                                )
+                        () -> CouponIssueCommand.canonicalRequest(
+                                couponRoundId,
+                                memberId,
+                                membershipGrade
                         ),
-                        issueCodec,
-                        CouponIssueResult::issuanceId
-                ),
-                issueCodec::read
+                        CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST,
+                        claimedAt -> operationService.execute(
+                                idempotencyKey,
+                                memberId,
+                                claimedAt,
+                                () -> CouponIssueResult.from(
+                                        couponIssueService.issue(
+                                                new CouponIssueCommand(
+                                                        couponRoundId,
+                                                        memberId,
+                                                        membershipGrade,
+                                                        idempotencyKey,
+                                                        claimedAt
+                                                )
+                                        )
+                                ),
+                                issueCodec,
+                                CouponIssueResult::issuanceId
+                        ),
+                        issueCodec::read
+                );
+        return new CouponIssueExecutionResult(
+                execution.value(),
+                execution.replayed()
         );
     }
 

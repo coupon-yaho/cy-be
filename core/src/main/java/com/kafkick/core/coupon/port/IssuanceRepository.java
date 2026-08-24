@@ -8,6 +8,15 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 public interface IssuanceRepository {
 
+    /**
+     * 같은 쿠폰 회차를 회원이 이미 발급받았는지 조회합니다.
+     *
+     * @param couponId 쿠폰 회차 식별자
+     * @param memberId 회원 식별자
+     * @return 기존 발급건이 있으면 {@code true}
+     */
+    boolean existsByCouponIdAndMemberId(Long couponId, Long memberId);
+
     Issuance save(Issuance issuance);
 
     Optional<Issuance> findById(Long issuanceId);
