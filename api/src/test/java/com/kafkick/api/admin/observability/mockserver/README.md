@@ -30,6 +30,21 @@ MOCK_PORT=18081 ./gradlew :api:mockServer
 `GlobalExceptionHandler` 경로의 오류 본문과 게이트웨이 오류를 재현하지 않습니다. 따라서 프론트의
 HTML 오류 응답 파싱 방어는 계속 필요합니다.
 
-아직 실제 서버에 구현되지 않은 `meta`, `errors`, `series`, `markers`, `totalRps`, `clientInvalid`,
-`percentileMode`, `dependencies`, `persistence` 데이터는 이 목에도 구현하지 않습니다. 현재 DTO에 이미
-자리만 있는 `dependencies`와 `persistence`는 실제 조립기 그대로 `PENDING` 상태를 반환합니다.
+## 필드별 구현 상태
+
+이 목은 실제 조립기를 그대로 태우므로 아래 상태를 실제 서버와 함께 따라갑니다. 아직 안 만든 것과
+안 만들기로 한 것을 한 목록에 섞지 않습니다.
+
+| 필드 | 상태 | 근거 |
+| --- | --- | --- |
+| `meta` | 구현 완료 | CY-416 |
+| `errors` | 구현 완료 | CY-448 |
+| `totalRps` | 만들지 않기로 함 | 프론트가 폐기한 필드 (OBS-38) |
+| `clientInvalid` | 구현 완료 | CY-448 의 `errors.classes[].key` 로 흡수됨. 최상위 필드로는 만들지 않습니다 |
+| `percentileMode` | 만들지 않기로 함 | 프론트에 대응 필드 없음 (OBS-38) |
+| `series` | 진행 중 | OBS-33 |
+| `markers` | 진행 중 | OBS-34 |
+| `dependencies` | 원천 대기 | 미터 미배선 — Redis는 OBS-10, Kafka는 OBS-17. 조립기가 `PENDING`을 반환 |
+| `persistence` | 원천 대기 | Kafka persist lag 미터는 OBS-17. 조립기가 `PENDING`을 반환 |
+
+`만들지 않기로 함`은 결손이 아니라 폐기 결정입니다. 이 표를 보고 다시 만들지 마세요.

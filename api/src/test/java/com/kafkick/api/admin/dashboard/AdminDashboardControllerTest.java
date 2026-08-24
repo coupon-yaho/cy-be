@@ -14,6 +14,8 @@ import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -91,17 +93,48 @@ class AdminDashboardControllerTest {
     @Test
     @DisplayName("쿠폰 지표 조회는 window 없이 요청하면 400 실패 봉투를 반환한다")
     void couponMetricsRejectsMissingWindow() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 1L))
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics").param("couponId", "1"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(400));
+    }
+
+    /** couponId 가 path variable 에서 쿼리 파라미터로 옮겨진 뒤에도 필수인지 검증합니다. */
+    @Test
+    @DisplayName("쿠폰 지표 조회는 couponId 없이 요청하면 400 실패 봉투를 반환한다")
+    void couponMetricsRejectsMissingCouponId() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics").param("window", "5m"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400));
+    }
+
+    /**
+     * 쿼리 파라미터로 옮긴 couponId 에도 {@code @Positive} 가 계속 걸리는지 검증합니다.
+     *
+     * <p>path variable 일 때와 달리 쿼리 파라미터는 값이 없어도 경로가 일치하므로, 양수 검증이
+     * 빠지면 0·음수가 Service 까지 내려가 404 로 둔갑합니다. 400 과 404 를 함께 고정합니다.</p>
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1"})
+    @DisplayName("쿠폰 지표 조회는 양수가 아닌 couponId를 400 실패 봉투로 거부한다")
+    void couponMetricsRejectsNonPositiveCouponId(String couponId) throws Exception {
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", couponId)
+                        .param("window", "5m"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
     /** 허용된 집계 구간으로 상세 Mock 계산 결과를 성공 봉투에 반환하는지 검증합니다. */
     @Test
     @DisplayName("쿠폰 지표 조회는 요청 window로 계산한 상세 Mock 결과를 반환한다")
     void couponMetricsReturnsCalculatedMockResponse() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 101L).param("window", "5m"))
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", "101")
+                        .param("window", "5m"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.couponId").value(101))
@@ -118,7 +151,8 @@ class AdminDashboardControllerTest {
     @Test
     @DisplayName("쿠폰 지표 조회는 없는 캠페인에 COMMON-002를 반환한다")
     void couponMetricsReturns404ForUnknownCoupon() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 999_999L)
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", "999999")
                         .param("window", "1m"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))
