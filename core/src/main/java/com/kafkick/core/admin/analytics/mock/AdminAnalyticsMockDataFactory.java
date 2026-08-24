@@ -47,9 +47,11 @@ public class AdminAnalyticsMockDataFactory {
             new DatedIssuanceStatusAggregate(
                     LocalDate.parse("2026-01-05"), 1L, 101L, 6L, 3L, 2L, 1L),
             new DatedIssuanceStatusAggregate(
-                    LocalDate.parse("2026-02-10"), 1L, 101L, 4L, 1L, 1L, 2L),
+                    LocalDate.parse("2026-01-06"), 2L, 102L, 3L, 2L, 2L, 1L),
             new DatedIssuanceStatusAggregate(
-                    LocalDate.parse("2026-01-06"), 2L, 102L, 3L, 3L, 2L, 2L));
+                    LocalDate.parse("2026-02-10"), 1L, 101L, 7L, 3L, 2L, 3L),
+            new DatedIssuanceStatusAggregate(
+                    LocalDate.parse("2026-03-03"), 1L, 101L, 3L, 2L, 1L, 1L));
 
     /** 요청 조건에 맞는 검증 메타데이터와 원천 집계 행을 생성합니다. */
     public AdminAnalyticsDataset create(AdminAnalyticsQuery query, Instant observedAt) {

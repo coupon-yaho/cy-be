@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -79,5 +80,42 @@ class AdminAnalyticsMockSourceTest {
                     assertThat(row.cancelled()).isZero();
                     assertThat(row.expired()).isZero();
                 });
+    }
+
+    /** 같은 발급 모집단을 나타내는 월별 추이와 현재 상태 분포의 총계가 일치하는지 검증합니다. */
+    @Test
+    @DisplayName("Mock Source의 월별 발급 합계와 상태 분포 totalIssued는 기간별로 일치한다")
+    void keepsMonthlyAndStatusTotalsConsistentForEachPeriod() {
+        AdminAnalyticsMockSource source = new AdminAnalyticsMockSource(
+                new AdminAnalyticsMockDataFactory(), OBSERVED_AT);
+        List<AdminAnalyticsQuery> queries = List.of(
+                query("2026-01-01", "2026-01-31"),
+                query("2026-02-01", "2026-02-28"),
+                query("2026-03-01", "2026-03-31"),
+                query("2026-01-01", "2026-03-31"));
+
+        for (AdminAnalyticsQuery query : queries) {
+            AdminAnalyticsDataset dataset = source.load(query);
+            long monthlyTotal = dataset.monthlyTrend().value().stream()
+                    .mapToLong(row -> row.issueCount())
+                    .sum();
+            long statusTotal = dataset.issuanceStatuses().value().stream()
+                    .mapToLong(row -> row.totalIssued())
+                    .sum();
+
+            assertThat(statusTotal)
+                    .as("조회 기간 %s부터 %s까지", query.from(), query.to())
+                    .isEqualTo(monthlyTotal);
+        }
+    }
+
+    /** 기간별 모집단 일치 검증에 사용할 전체 브랜드 조회 조건을 만듭니다. */
+    private static AdminAnalyticsQuery query(String from, String to) {
+        return new AdminAnalyticsQuery(
+                LocalDate.parse(from),
+                LocalDate.parse(to),
+                null,
+                null,
+                ZoneId.of("Asia/Seoul"));
     }
 }
