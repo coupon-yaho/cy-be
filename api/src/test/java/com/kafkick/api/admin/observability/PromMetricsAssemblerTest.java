@@ -87,7 +87,7 @@ class PromMetricsAssemblerTest {
 
         AdminMetricsResponse response = assemble(slow, globalQuery());
 
-        // 질의 하나가 아니라 네 개를 합친 시간이어야 한다. 하한만 보므로 CI 가 느릴수록
+        // 질의 하나가 아니라 다섯 개를 합친 시간이어야 한다. 하한만 보므로 CI 가 느릴수록
         // 더 확실히 통과한다 — 느려서 깨질 수 있는 상한 단언이 아니다.
         assertThat(response.meta().collectionDurationMs())
                 .isGreaterThanOrEqualTo(QUERY_DELAY_MILLIS * QUERY_COUNT);

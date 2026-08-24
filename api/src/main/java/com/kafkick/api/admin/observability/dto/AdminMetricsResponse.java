@@ -448,7 +448,12 @@ public record AdminMetricsResponse(
      * 서버가 지어내야 하고, 지어낸 값은 {@code ErrorCode} 가 상태를 바꾸는 순간 조용히
      * 어긋납니다.</p>
      *
-     * @param reasonCode 저카디널리티 사유 코드
+     * <p><b>사유 코드만 대문자로 나갑니다.</b> {@code ErrorClassKey}·{@code TrafficKey} 는 화면이
+     * 정한 키라 camelCase 지만, 이것은 키가 아니라 원천의 {@code outcome} 라벨 값을 그대로 옮긴
+     * 것입니다. 표기를 맞추겠다고 여기서 바꾸면 화면에 찍힌 문자열로 Prometheus 를 되짚을 수
+     * 없게 됩니다.</p>
+     *
+     * @param reasonCode 저카디널리티 사유 코드. 원천 라벨과 같은 대문자 표기다
      * @param rps 초당 발생 건수
      */
     public record TopReason(ReasonCode reasonCode, double rps) {

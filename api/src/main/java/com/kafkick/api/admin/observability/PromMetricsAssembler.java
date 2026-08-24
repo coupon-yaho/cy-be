@@ -240,7 +240,7 @@ public class PromMetricsAssembler {
             // 500 으로 올리지 않는다. 이 질의가 채우려던 값만 UNAVAILABLE 로 나간다.
             //
             // ⚠️ 스택트레이스는 DEBUG 에만 싣는다. 화면이 1 초마다 부르고 한 응답에 질의가 다섯이라,
-            //    Prometheus 가 죽으면 관리자 수 × 초당 4 건이 쌓인다 — 정작 장애 원인을 담은
+            //    Prometheus 가 죽으면 관리자 수 × 초당 5 건이 쌓인다 — 정작 장애 원인을 담은
             //    다른 로그가 묻힌다. 조용히 삼키지는 않으므로 한 줄은 WARN 으로 남긴다.
             log.warn("Prometheus 질의 실패로 해당 지표를 UNAVAILABLE 로 내려보냅니다: {} ({})",
                     promQl, failure.getMessage());
