@@ -97,8 +97,13 @@ coupon-yaho
 아래로 복사한다. **설정 파일이 늘어나는 브랜치를 받은 뒤에도 다시 돌린다.**
 
 ```bash
-find . -path '*/src/main/resources/*.yml.example' -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
+find . -path '*/src/main/resources/*.yml.example' \
+  -exec sh -c '[ -e "${1%.example}" ] || cp "$1" "${1%.example}"' _ {} \;
 ```
+
+⚠️ **없을 때만 복사한다.** 예전에는 무조건 덮어써서, 브랜치를 받고 이 명령을 다시 돌리면
+로컬에서 고친 DB 접속 정보나 스위치가 조용히 사라졌다. 어떤 파일을 최신 `.example` 값으로
+되돌리고 싶으면 그 파일을 지우고 다시 돌린다.
 
 ⚠️ 이 복사를 빼먹어도 앱은 **죽지 않고 설정 없이 뜬다.** `application.yml`이 없으면 그 안의
 `spring.config.import`가 통째로 안 돌아서, 나머지 파일이 없다는 사실조차 드러나지 않는다.
