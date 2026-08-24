@@ -7,7 +7,6 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailabil
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CampaignRef;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
-import com.kafkick.core.support.exception.CommonErrorCode;
 
 /** 관리자 브랜드 분석의 원천 조회·필터 검증·계산 수명주기를 조립합니다. */
 public final class AdminAnalyticsService {
@@ -48,24 +47,33 @@ public final class AdminAnalyticsService {
         }
         if (query.brandId() != null && dataset.catalog().brands().stream()
                 .noneMatch(brand -> brand.brandId() == query.brandId())) {
-            throw notFound("브랜드를 찾을 수 없습니다: " + query.brandId());
+            throw notFound(
+                    AdminAnalyticsErrorCode.BRAND_NOT_FOUND,
+                    "브랜드를 찾을 수 없습니다: " + query.brandId());
         }
         CampaignRef requestedCampaign = null;
         if (query.couponId() != null) {
             requestedCampaign = dataset.catalog().campaigns().stream()
                     .filter(campaign -> campaign.couponId() == query.couponId())
                     .findFirst()
-                    .orElseThrow(() -> notFound("캠페인을 찾을 수 없습니다: " + query.couponId()));
+                    .orElseThrow(() -> notFound(
+                            AdminAnalyticsErrorCode.CAMPAIGN_NOT_FOUND,
+                            "캠페인을 찾을 수 없습니다: " + query.couponId()));
         }
         if (requestedCampaign != null
                 && query.brandId() != null
                 && requestedCampaign.brandId() != query.brandId()) {
-            throw notFound("캠페인이 요청 브랜드에 속하지 않습니다: " + query.couponId());
+            throw notFound(
+                    AdminAnalyticsErrorCode.CAMPAIGN_BRAND_MISMATCH,
+                    "캠페인이 요청 브랜드에 속하지 않습니다: " + query.couponId());
         }
     }
 
-    /** 외부에는 공통 404 계약만 노출하고 상세 식별자는 예외 로그 메시지에 남깁니다. */
-    private static BusinessException notFound(String detail) {
-        return new BusinessException(CommonErrorCode.NOT_FOUND, detail);
+    /** 분석 도메인의 404 원인을 구분하고 상세 식별자는 예외 로그 메시지에 남깁니다. */
+    private static BusinessException notFound(
+            AdminAnalyticsErrorCode errorCode,
+            String detail
+    ) {
+        return new BusinessException(errorCode, detail);
     }
 }

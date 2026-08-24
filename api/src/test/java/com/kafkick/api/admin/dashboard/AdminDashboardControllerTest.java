@@ -153,9 +153,9 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
 
-    /** 브랜드와 캠페인의 소속이 다르면 존재 여부를 노출하지 않고 공통 404로 반환하는지 검증합니다. */
+    /** 브랜드와 캠페인의 소속이 다르면 분석 도메인의 소속 불일치 오류로 반환하는지 검증합니다. */
     @Test
-    @DisplayName("분석 조회는 브랜드와 캠페인 소속이 다르면 COMMON-002를 반환한다")
+    @DisplayName("분석 조회는 브랜드와 캠페인 소속이 다르면 ANALYTICS-004를 반환한다")
     void analyticsRejectsCampaignOutsideRequestedBrand() throws Exception {
         mockMvc.perform(get("/api/v1/admin/analytics")
                         .param("from", "2026-01-01")
@@ -163,7 +163,7 @@ class AdminDashboardControllerTest {
                         .param("brandId", "2")
                         .param("couponId", "101"))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("COMMON-002"));
+                .andExpect(jsonPath("$.error.code").value("ANALYTICS-004"));
     }
 
     /** 브랜드와 캠페인 필터를 각각 단독 적용해도 해당 모집단만 반환하는지 검증합니다. */
@@ -190,16 +190,16 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(34));
     }
 
-    /** 존재하지 않는 선택 식별자를 빈 통계로 숨기지 않고 공통 404로 반환하는지 검증합니다. */
+    /** 존재하지 않는 선택 식별자를 빈 통계로 숨기지 않고 분석 도메인 404로 반환하는지 검증합니다. */
     @Test
-    @DisplayName("분석 조회는 존재하지 않는 브랜드를 COMMON-002로 반환한다")
+    @DisplayName("분석 조회는 존재하지 않는 브랜드를 ANALYTICS-002로 반환한다")
     void analyticsRejectsUnknownBrand() throws Exception {
         mockMvc.perform(get("/api/v1/admin/analytics")
                         .param("from", "2026-01-01")
                         .param("to", "2026-03-31")
                         .param("brandId", "999999"))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error.code").value("COMMON-002"));
+                .andExpect(jsonPath("$.error.code").value("ANALYTICS-002"));
     }
 
     /** 분석 시작일이 종료일보다 늦은 요청을 400으로 거부하는지 검증합니다. */

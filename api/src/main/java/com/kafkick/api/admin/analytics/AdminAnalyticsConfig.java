@@ -35,16 +35,12 @@ public class AdminAnalyticsConfig {
                 new AdminAnalyticsMockDataFactory(), timeProvider.instant());
     }
 
-    /** 실제 값이 있는 Source에만 설정된 Freshness 임계값을 적용합니다. */
+    /** Mock과 실제 Source에 동일한 Freshness 임계값을 적용합니다. */
     @Bean
     @ConditionalOnMissingBean(AdminAnalyticsFreshnessPolicy.class)
     public AdminAnalyticsFreshnessPolicy adminAnalyticsFreshnessPolicy(
             AdminAnalyticsProperties properties
     ) {
-        if (properties.staleAfter() == null) {
-            // 실제 집계 주기가 확정되기 전에는 임의의 기본 임계값을 계약으로 굳히지 않습니다.
-            return AdminAnalyticsFreshnessPolicy.pendingOnly();
-        }
         return new AdminAnalyticsFreshnessPolicy(properties.staleAfter());
     }
 

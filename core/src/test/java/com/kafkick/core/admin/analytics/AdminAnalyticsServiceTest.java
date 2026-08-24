@@ -53,7 +53,7 @@ class AdminAnalyticsServiceTest {
 
     /** 카탈로그가 확인된 경우 브랜드·캠페인 소속 불일치를 0건으로 숨기지 않는지 검증합니다. */
     @Test
-    @DisplayName("Service는 브랜드와 캠페인 소속이 다르면 COMMON-002를 반환한다")
+    @DisplayName("Service는 브랜드와 캠페인 소속이 다르면 ANALYTICS-004를 반환한다")
     void rejectsCampaignOwnedByAnotherBrand() {
         CatalogSnapshot catalog = new CatalogSnapshot(
                 AggregateAvailability.AVAILABLE,
@@ -65,7 +65,35 @@ class AdminAnalyticsServiceTest {
         assertThatThrownBy(() -> service(source, new RecordingTimeProvider()).getAnalytics(QUERY))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(exception -> assertThat(((BusinessException) exception)
-                        .getErrorCode().getCode()).isEqualTo("COMMON-002"));
+                        .getErrorCode().getCode()).isEqualTo("ANALYTICS-004"));
+    }
+
+    /** 확인된 카탈로그에 요청 브랜드가 없으면 브랜드 전용 오류로 구분하는지 검증합니다. */
+    @Test
+    @DisplayName("Service는 존재하지 않는 브랜드에 ANALYTICS-002를 반환한다")
+    void rejectsMissingBrand() {
+        AdminAnalyticsQuery query = new AdminAnalyticsQuery(
+                QUERY.from(), QUERY.to(), 999L, null, QUERY.zoneId());
+        RecordingSource source = new RecordingSource(availableDataset());
+
+        assertThatThrownBy(() -> service(source, new RecordingTimeProvider()).getAnalytics(query))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(exception -> assertThat(((BusinessException) exception)
+                        .getErrorCode().getCode()).isEqualTo("ANALYTICS-002"));
+    }
+
+    /** 확인된 카탈로그에 요청 캠페인이 없으면 캠페인 전용 오류로 구분하는지 검증합니다. */
+    @Test
+    @DisplayName("Service는 존재하지 않는 캠페인에 ANALYTICS-003을 반환한다")
+    void rejectsMissingCampaign() {
+        AdminAnalyticsQuery query = new AdminAnalyticsQuery(
+                QUERY.from(), QUERY.to(), null, 999L, QUERY.zoneId());
+        RecordingSource source = new RecordingSource(availableDataset());
+
+        assertThatThrownBy(() -> service(source, new RecordingTimeProvider()).getAnalytics(query))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(exception -> assertThat(((BusinessException) exception)
+                        .getErrorCode().getCode()).isEqualTo("ANALYTICS-003"));
     }
 
     /** 카탈로그 자체가 아직 없을 때 필터 ID를 미존재로 오판하지 않는지 검증합니다. */

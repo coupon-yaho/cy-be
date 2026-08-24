@@ -142,6 +142,26 @@ class AdminAnalyticsCalculatorTest {
         assertThat(result.issuanceStatusDistribution().value()).isNull();
     }
 
+    /** 오래된 월별 원천에는 관측하지 않은 월의 가짜 0 버킷을 추가하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("STALE 월별 추이는 실제 관측된 월만 반환한다")
+    void staleMonthlyTrendContainsOnlyObservedMonths() {
+        AggregateObservation<List<DailyIssueAggregate>> oldMonthly = new AggregateObservation<>(
+                List.of(new DailyIssueAggregate(
+                        LocalDate.parse("2026-01-15"), 1L, 101L, 12L)),
+                AggregateAvailability.AVAILABLE,
+                EVALUATED_AT.minus(Duration.ofHours(2)));
+
+        AdminAnalyticsResult result = calculator.calculate(QUERY, dataset(
+                oldMonthly, available(List.of()),
+                available(List.of(status(12L, 6L, 3L, 2L, 1L)))), EVALUATED_AT);
+
+        assertThat(result.brandTrends().status()).isEqualTo(SourceStatus.STALE);
+        assertThat(result.brandTrends().value())
+                .containsExactly(new AdminAnalyticsResult.BrandTrendPoint(
+                        LocalDate.parse("2026-01-01"), 1L, 12L));
+    }
+
     /** 원천 조회 장애를 PENDING이나 정상 0건으로 바꾸지 않는지 검증합니다. */
     @Test
     @DisplayName("UNAVAILABLE 분석은 값과 관측 시각 없이 그대로 보존한다")

@@ -12,9 +12,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.kafkick.api.admin.support.config.AdminAnalyticsProperties;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
+import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
 import com.kafkick.core.admin.analytics.AdminAnalyticsQuery;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 
 /** 관리자 분석 Source가 설정에 따라 Mock 또는 Pending으로 안전하게 조립되는지 검증합니다. */
@@ -43,6 +46,12 @@ class AdminAnalyticsConfigTest {
         runner.withPropertyValues("admin.analytics.mock-enabled=false")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(AdminAnalyticsProperties.class).staleAfter())
+                            .isEqualTo(java.time.Duration.ofHours(24));
+                    assertThat(context.getBean(AdminAnalyticsFreshnessPolicy.class).evaluate(
+                            AggregateAvailability.AVAILABLE,
+                            NOW.minusSeconds(60),
+                            NOW)).isEqualTo(SourceStatus.VALID);
                     assertThat(context.getBean(AdminAnalyticsService.class)
                             .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.NONE);
                 });

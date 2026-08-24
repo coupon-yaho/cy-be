@@ -14,9 +14,9 @@ public record AdminAnalyticsProperties(
         Duration staleAfter
 ) {
 
-    private static final Duration DEFAULT_MOCK_STALE_AFTER = Duration.ofHours(24);
+    private static final Duration DEFAULT_STALE_AFTER = Duration.ofHours(24);
 
-    /** 조회 범위와 Mock 활성화 시 필수 최신성 기준을 검증합니다. */
+    /** 조회 범위와 분석 원천에 공통으로 적용할 최신성 기준을 검증합니다. */
     @ConstructorBinding
     public AdminAnalyticsProperties {
         if (maxRangeYears < 1) {
@@ -25,9 +25,9 @@ public record AdminAnalyticsProperties(
         if (staleAfter != null && (staleAfter.isZero() || staleAfter.isNegative())) {
             throw new IllegalArgumentException("admin.analytics.stale-after는 양수여야 합니다.");
         }
-        if (mockEnabled && staleAfter == null) {
-            // 기본 Mock이 별도 환경 설정 없이 기동되도록 Mock에만 24시간 최신성 기준을 적용합니다.
-            staleAfter = DEFAULT_MOCK_STALE_AFTER;
+        if (staleAfter == null) {
+            // 실제 원천으로 교체돼도 최신성 판정이 비활성화되지 않도록 동일한 기본값을 적용합니다.
+            staleAfter = DEFAULT_STALE_AFTER;
         }
     }
 

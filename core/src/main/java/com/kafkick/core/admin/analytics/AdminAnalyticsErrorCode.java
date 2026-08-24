@@ -10,6 +10,27 @@ public enum AdminAnalyticsErrorCode implements ErrorCode {
             500,
             "ANALYTICS-001",
             "관리자 분석 원천 결과를 처리할 수 없습니다."
+    ),
+
+    /** 요청한 브랜드가 확인된 분석 카탈로그에 존재하지 않습니다. */
+    BRAND_NOT_FOUND(
+            404,
+            "ANALYTICS-002",
+            "요청한 브랜드를 찾을 수 없습니다."
+    ),
+
+    /** 요청한 캠페인이 확인된 분석 카탈로그에 존재하지 않습니다. */
+    CAMPAIGN_NOT_FOUND(
+            404,
+            "ANALYTICS-003",
+            "요청한 캠페인을 찾을 수 없습니다."
+    ),
+
+    /** 요청한 캠페인이 함께 지정한 브랜드에 속하지 않습니다. */
+    CAMPAIGN_BRAND_MISMATCH(
+            404,
+            "ANALYTICS-004",
+            "캠페인이 요청 브랜드에 속하지 않습니다."
     );
 
     private final int status;
