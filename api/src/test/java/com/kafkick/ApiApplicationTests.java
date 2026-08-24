@@ -25,7 +25,7 @@ import com.kafkick.api.admin.benchmark.BenchmarkFinalizeOrchestrator;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.BenchmarkRunService;
 
-@SpringBootTest
+@SpringBootTest(properties = "observation.datasource.enabled=true")
 @Import(MySqlContainerConfig.class)
 class ApiApplicationTests {
 
