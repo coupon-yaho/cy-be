@@ -6,7 +6,9 @@ import static com.kafkick.batch.api.VerifyApiProbe.error;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,7 +25,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.config.RunningJobFixture;
@@ -209,17 +214,15 @@ class VerifyTriggerExpireGuardTest {
             "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
             "spring.batch.job.enabled=false",
             // **스케줄러를 켜야 한다.** 꺼져 있으면 만료가 아예 안 떠서 이 가드가 통째로
-            // 비활성이다(CodeRabbit 지적) — 그 상태로 재면 항상 202 라 아무것도 안 지킨다.
+            // 비활성이다 — 그 상태로 재면 항상 202 라 아무것도 안 지킨다.
             "batch.scheduling.enabled=true",
-            // 1분마다 뜬다. 접수 시각에서 다음 발화까지가 언제나 60초 이내라,
-            // 검증 최악 소요(1,200초)보다 짧아 반드시 거절 갈래로 간다.
-            //
-            // ⚠️ **CI 에서 진짜 만료가 1분마다 돈다.** 이 잡은 기한 지난 발급건만 손대고
-            //    이 컨텍스트의 픽스처에는 그런 건이 없어 0건으로 끝난다 — 그래도 배치 메타에
-            //    실행이 쌓이므로, 크론을 늘리는 대신 이 클래스가 짧게 끝나는 데 기댄다.
-            "batch.schedule.expire-cron=0 * * * * *",
-            // 1분 크론에 소요 항 600 을 더하면 660 이라 SLA 가드가 기본값(90,000)에서
-            // 통과한다 — 그래도 명시해 둔다. 이 클래스가 재는 것은 SLA 가 아니다.
+            // ⚠️ **진짜로 뜨는 크론을 쓰면 안 된다.** 1분 크론을 줬다가 CodeRabbit 이 잡았다 —
+            //    분 경계에 만료가 실제로 발화하면 접수가 VERIFICATION-017 이 아니라
+            //    **먼저 오는 검사**인 VERIFICATION-012(이미 도는 만료)에 걸려 간헐 실패한다.
+            //    안 뜨는 크론(1월 1일)을 주고, "다음 발화까지 얼마" 는 아래 고정 시계로 만든다 —
+            //    .coderabbit.yaml 이 시각 의존 테스트에 Clock.fixed 를 규약으로 못 박는다.
+            "batch.schedule.expire-cron=0 0 0 1 1 *",
+            "batch.metrics.expire-sla-seconds=999999999",
             "batch.schedule.cleanup-cron=0 0 0 1 1 *",
             "batch.metrics.cleanup-sla-seconds=999999999",
             "batch.schedule.verify-cron=0 0 0 1 1 *",
@@ -229,9 +232,27 @@ class VerifyTriggerExpireGuardTest {
             "management.server.port=0",
             "batch.verify.metrics-refresh-ms=120000"
     })
-    @Import(MySqlContainerConfig.class)
+    @Import({MySqlContainerConfig.class, WhenExpireIsAboutToFire.FixedClockConfig.class})
     @DisplayName("만료가 곧 뜰 때")
     class WhenExpireIsAboutToFire {
+
+        /**
+         * <b>만료 크론(1월 1일 00:00) 직전으로 시계를 세운다.</b> 다음 발화까지 10분이라
+         * 검증 최악 소요(1,200초 = 20분)보다 짧아 반드시 거절 갈래로 간다.
+         *
+         * <p>실제 발화는 안 한다 — 스케줄러가 보는 것은 <b>진짜 시각</b>이고 그쪽 기준으로는
+         * 1월 1일이 멀기 때문이다. 고정 시계는 컨트롤러의 {@code TimeProvider} 만 움직인다.
+         */
+        @TestConfiguration
+        static class FixedClockConfig {
+            @Bean
+            @Primary
+            Clock fixedClock() {
+                return Clock.fixed(
+                        LocalDateTime.of(2026, 12, 31, 23, 50).toInstant(ZoneOffset.UTC),
+                        ZoneOffset.UTC);
+            }
+        }
 
         @LocalServerPort
         private int port;
