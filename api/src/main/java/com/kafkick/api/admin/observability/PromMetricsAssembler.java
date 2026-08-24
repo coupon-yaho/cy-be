@@ -981,8 +981,18 @@ public class PromMetricsAssembler {
         }
         Map<String, List<PromSample>> byInstance = new LinkedHashMap<>();
         for (PromSample sample : samples.filter(any())) {
-            byInstance.computeIfAbsent(sample.label(TAG_INSTANCE), ignored -> new ArrayList<>())
-                    .add(sample);
+            String instance = sample.label(TAG_INSTANCE);
+            if (instance.isEmpty()) {
+                // 어느 대의 값인지 모르면 인스턴스 안에서 나눌 수 없다. 그냥 두면 라벨 없는
+                // 표본끼리 짝이 맞는 순간 <b>어느 인스턴스의 것도 아닌 사용률</b>이 VALID 로
+                // 나간다(실측 80%). 값이 정상 범위라 화면에서는 드러나지 않는다.
+                //
+                // 반대 방향 대가 — 원천이 instance 라벨을 떨구면(federation·recording rule)
+                // 자원 행이 값을 못 내고 PENDING 으로 굳는다. 틀린 값을 권위 있게 내보내는
+                // 것보다 낫다고 보고 이쪽을 고른다.
+                continue;
+            }
+            byInstance.computeIfAbsent(instance, ignored -> new ArrayList<>()).add(sample);
         }
 
         List<PromSample> ratios = new ArrayList<>();
@@ -1092,15 +1102,15 @@ public class PromMetricsAssembler {
                 MetricAggregation.QUEUE_LENGTH, MetricAggregation.QUEUE_LENGTH_STATE,
                 any(), stock, query, MetricAggregation.OBSERVED_COUPON_ID));
         return List.of(
-                zone(QueueZone.Admission, List.of(
+                zone(QueueZone.ADMISSION, List.of(
                         waiting,
                         // 같은 값을 두 번 재지 않는다. 입장 처리율은 트래픽 패널이 이미 낸 값이다.
                         traffic.queueAcceptedRps(),
                         // 추세는 한 시점 질의로 만들 수 없다. range 질의는 OBS-34 가 연다.
                         pending(),
                         pending())),
-                zone(QueueZone.Persistence, List.of(pending(), pending(), pending(), pending())),
-                zone(QueueZone.Telemetry, List.of(pending())));
+                zone(QueueZone.PERSISTENCE, List.of(pending(), pending(), pending(), pending())),
+                zone(QueueZone.TELEMETRY, List.of(pending())));
     }
 
     private static QueueZoneSummary zone(QueueZone zone, List<ObservedValue<Double>> values) {

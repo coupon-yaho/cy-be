@@ -964,6 +964,26 @@ class PromMetricsAssemblerTest {
         assertThat(response.saturation().resources().get(3).utilization().value()).isEqualTo(25.0);
     }
 
+    /**
+     * 인스턴스 라벨이 없는 표본끼리 분자·분모가 맞아떨어지면 <b>어느 대의 것도 아닌 사용률</b>이
+     * 나옵니다. 값이 정상 범위라 화면에서는 드러나지 않습니다.
+     */
+    @Test
+    @DisplayName("인스턴스를 모르는 표본으로는 사용률을 내지 않는다")
+    void samplesWithoutInstanceLabelYieldNoUtilization() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        new PromSample(MetricAggregation.HIKARI_ACTIVE, Map.of("job", "api"), 8d, EVALUATED),
+                        new PromSample(MetricAggregation.HIKARI_MAX, Map.of("job", "api"), 10d, EVALUATED))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().resources().get(0).utilization().state())
+                .isEqualTo(SourceStatus.PENDING);
+        assertThat(response.saturation().resources().get(0).utilization().value()).isNull();
+    }
+
     /** 정원을 모르면 비율이 아닙니다. 0 으로 두면 그 자원이 가장 여유로워 보입니다. */
     @Test
     @DisplayName("정원 미터가 없으면 사용률은 0 이 아니라 PENDING 이다")
@@ -1054,8 +1074,10 @@ class PromMetricsAssemblerTest {
     void queuesCarryThreeContractZones() {
         AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
 
+        // 상수 이름이 아니라 <b>응답에 실리는 값</b>을 본다. 상수는 리네임할 수 있지만
+        // 이 문자열은 프론트 분기가 물고 있는 계약이다.
         assertThat(response.saturation().queues())
-                .extracting(zone -> zone.zone().name())
+                .extracting(zone -> zone.zone().jsonValue())
                 .containsExactly("Admission", "Persistence", "Telemetry");
         assertThat(response.saturation().queues().get(0).metrics())
                 .extracting(AdminMetricsResponse.QueueMetric::label)

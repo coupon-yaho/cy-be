@@ -446,9 +446,29 @@ public record AdminMetricsResponse(
      */
     public enum QueueZone {
 
-        Admission, Persistence, Telemetry;
+        ADMISSION("Admission"),
+        PERSISTENCE("Persistence"),
+        TELEMETRY("Telemetry");
 
         public static final List<QueueZone> ALL_ZONES = List.of(values());
+
+        private final String jsonValue;
+
+        QueueZone(String jsonValue) {
+            this.jsonValue = jsonValue;
+        }
+
+        /**
+         * 화면 계약이 쓰는 값입니다. 상수 이름과 <b>따로</b> 두는 이유는 상수를 리팩터링해도
+         * 응답이 안 바뀌게 하기 위해서입니다 — 이름이 곧 계약이면 리네임 한 번에 프론트 분기가
+         * 통째로 어긋나고 예외도 로그도 안 납니다.
+         *
+         * @return 화면이 분기에 쓰는 영역 이름
+         */
+        @JsonValue
+        public String jsonValue() {
+            return jsonValue;
+        }
     }
 
     /**
@@ -480,11 +500,11 @@ public record AdminMetricsResponse(
          */
         public static List<String> labelsOf(QueueZone zone) {
             return switch (zone) {
-                case Admission -> List.of(
+                case ADMISSION -> List.of(
                         ADMISSION_WAITING, ADMISSION_ADMITTED, ADMISSION_GROWTH, ADMISSION_ETA);
-                case Persistence -> List.of(
+                case PERSISTENCE -> List.of(
                         PERSISTENCE_LAG, PERSISTENCE_ARRIVAL, PERSISTENCE_CONSUME, PERSISTENCE_GROWTH);
-                case Telemetry -> List.of(TELEMETRY_DISPLAY_LAG);
+                case TELEMETRY -> List.of(TELEMETRY_DISPLAY_LAG);
             };
         }
 
