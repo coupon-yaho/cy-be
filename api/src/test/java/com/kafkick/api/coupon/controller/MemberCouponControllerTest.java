@@ -20,6 +20,7 @@ import com.kafkick.core.coupon.service.MemberCouponQueryService;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,7 +60,7 @@ class MemberCouponControllerTest {
                 .andExpect(jsonPath("$.data.content[0].code")
                         .value("ABCDEFGHJKLM2345"))
                 .andExpect(jsonPath("$.data.content[0].status")
-                        .value("ISSUED"))
+                        .value("USED"))
                 .andExpect(jsonPath("$.data.content[0].name")
                         .value("골드 VIP 20% 할인"))
                 .andExpect(jsonPath("$.data.content[0].policyType")
@@ -74,6 +75,12 @@ class MemberCouponControllerTest {
                         .value("2026-08-18T05:30:00Z"))
                 .andExpect(jsonPath("$.data.content[0].expiresAt")
                         .value("2026-08-25T05:30:00Z"))
+                .andExpect(jsonPath("$.data.content[0].usedAt")
+                        .value("2026-08-19T05:30:00Z"))
+                .andExpect(jsonPath("$.data.content[0].usedDiscountAmount")
+                        .value(8_000))
+                .andExpect(jsonPath("$.data.content[0].orderId")
+                        .value(30_001))
                 .andExpect(jsonPath("$.data.page").value(0))
                 .andExpect(jsonPath("$.data.size").value(20))
                 .andExpect(jsonPath("$.data.totalElements").value(1))
@@ -112,6 +119,31 @@ class MemberCouponControllerTest {
     }
 
     @Test
+    @DisplayName("미사용 쿠폰 목록은 사용 정보 필드를 null로 반환한다")
+    void includeNullUsageFieldsForUnusedCouponList() throws Exception {
+        when(memberCouponQueryService.findPage(20L, null, 0, 20))
+                .thenReturn(new MemberCouponPage(
+                        List.of(unusedCoupon()),
+                        0,
+                        20,
+                        1,
+                        1
+                ));
+
+        mockMvc.perform(get("/api/v1/coupons")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].status")
+                        .value("ISSUED"))
+                .andExpect(jsonPath("$.data.content[0].usedAt")
+                        .value(nullValue()))
+                .andExpect(jsonPath("$.data.content[0].usedDiscountAmount")
+                        .value(nullValue()))
+                .andExpect(jsonPath("$.data.content[0].orderId")
+                        .value(nullValue()));
+    }
+
+    @Test
     @DisplayName("회원이 소유한 쿠폰 한 건을 상세 조회한다")
     void findOwnedMemberCoupon() throws Exception {
         when(memberCouponQueryService.findOne(20L, 100L))
@@ -125,7 +157,7 @@ class MemberCouponControllerTest {
                 .andExpect(jsonPath("$.data.couponRoundId").value(10))
                 .andExpect(jsonPath("$.data.code")
                         .value("ABCDEFGHJKLM2345"))
-                .andExpect(jsonPath("$.data.status").value("ISSUED"))
+                .andExpect(jsonPath("$.data.status").value("USED"))
                 .andExpect(jsonPath("$.data.name")
                         .value("골드 VIP 20% 할인"))
                 .andExpect(jsonPath("$.data.policyType")
@@ -138,9 +170,30 @@ class MemberCouponControllerTest {
                 .andExpect(jsonPath("$.data.issuedAt")
                         .value("2026-08-18T05:30:00Z"))
                 .andExpect(jsonPath("$.data.expiresAt")
-                        .value("2026-08-25T05:30:00Z"));
+                        .value("2026-08-25T05:30:00Z"))
+                .andExpect(jsonPath("$.data.usedAt")
+                        .value("2026-08-19T05:30:00Z"))
+                .andExpect(jsonPath("$.data.usedDiscountAmount")
+                        .value(8_000))
+                .andExpect(jsonPath("$.data.orderId").value(30_001));
 
         verify(memberCouponQueryService).findOne(20L, 100L);
+    }
+
+    @Test
+    @DisplayName("사용 취소 쿠폰 상세는 과거 사용 정보 필드를 null로 반환한다")
+    void includeNullUsageFieldsForCanceledCouponDetail() throws Exception {
+        when(memberCouponQueryService.findOne(20L, 101L))
+                .thenReturn(canceledCoupon());
+
+        mockMvc.perform(get("/api/v1/coupons/101")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.data.usedAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.usedDiscountAmount")
+                        .value(nullValue()))
+                .andExpect(jsonPath("$.data.orderId").value(nullValue()));
     }
 
     @Test
@@ -230,14 +283,47 @@ class MemberCouponControllerTest {
                         100L,
                         10L,
                         "ABCDEFGHJKLM2345",
-                        IssuanceStatus.ISSUED,
+                        IssuanceStatus.USED,
                         "골드 VIP 20% 할인",
                         CouponPolicyType.PERCENT_CAPPED,
                         20,
                         10_000,
                         null,
                         Instant.parse("2026-08-18T05:30:00Z"),
-                        Instant.parse("2026-08-25T05:30:00Z")
+                        Instant.parse("2026-08-25T05:30:00Z"),
+                        Instant.parse("2026-08-19T05:30:00Z"),
+                        8_000,
+                        30_001L
+        );
+    }
+
+    private static MemberCouponSummary unusedCoupon() {
+        return couponWithoutUsage(100L, IssuanceStatus.ISSUED);
+    }
+
+    private static MemberCouponSummary canceledCoupon() {
+        return couponWithoutUsage(101L, IssuanceStatus.CANCELLED);
+    }
+
+    private static MemberCouponSummary couponWithoutUsage(
+            Long issuanceId,
+            IssuanceStatus status
+    ) {
+        return new MemberCouponSummary(
+                issuanceId,
+                10L,
+                "ABCDEFGHJKLM2345",
+                status,
+                "골드 VIP 20% 할인",
+                CouponPolicyType.PERCENT_CAPPED,
+                20,
+                10_000,
+                null,
+                Instant.parse("2026-08-18T05:30:00Z"),
+                Instant.parse("2026-08-25T05:30:00Z"),
+                null,
+                null,
+                null
         );
     }
 }

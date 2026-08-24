@@ -37,6 +37,7 @@ class MemberCouponQueryRepositoryTest {
         insertReferenceData();
         insertCouponRounds();
         insertIssuances();
+        insertIssuanceUsages();
     }
 
     @Test
@@ -81,6 +82,11 @@ class MemberCouponQueryRepositoryTest {
         assertThat(result.content().get(0).name())
                 .isEqualTo("정액 5천원 할인");
         assertThat(result.content().get(0).discountAmount()).isEqualTo(5_000);
+        assertThat(result.content().get(0).usedAt())
+                .isEqualTo(Instant.parse("2026-08-19T05:40:00Z"));
+        assertThat(result.content().get(0).usedDiscountAmount())
+                .isEqualTo(5_000);
+        assertThat(result.content().get(0).orderId()).isEqualTo(30_001L);
         assertThat(result.totalElements()).isEqualTo(1);
     }
 
@@ -118,6 +124,23 @@ class MemberCouponQueryRepositoryTest {
                 .isEqualTo(Instant.parse("2026-08-18T05:30:00Z"));
         assertThat(summary.expiresAt())
                 .isEqualTo(Instant.parse("2026-08-25T05:30:00Z"));
+        assertThat(summary.usedAt()).isNull();
+        assertThat(summary.usedDiscountAmount()).isNull();
+        assertThat(summary.orderId()).isNull();
+    }
+
+    @Test
+    @DisplayName("사용 중인 회원 쿠폰 한 건은 현재 주문과 실제 할인 정보를 조회한다")
+    void findActiveUsageWithOwnedMemberCoupon() {
+        MemberCouponSummary summary = memberCouponQueryRepository
+                .findByMemberIdAndIssuanceId(20L, 101L)
+                .orElseThrow();
+
+        assertThat(summary.status()).isEqualTo(IssuanceStatus.USED);
+        assertThat(summary.usedAt())
+                .isEqualTo(Instant.parse("2026-08-19T05:40:00Z"));
+        assertThat(summary.usedDiscountAmount()).isEqualTo(5_000);
+        assertThat(summary.orderId()).isEqualTo(30_001L);
     }
 
     @Test
@@ -250,6 +273,50 @@ class MemberCouponQueryRepositoryTest {
                 LocalDateTime.of(2026, 8, 18, 5, 50));
         insertIssuance(200L, 13L, 21L, "BBBBBBBBBBBBBBB1", "ISSUED",
                 LocalDateTime.of(2026, 8, 18, 6, 0));
+    }
+
+    private void insertIssuanceUsages() {
+        insertIssuanceUsage(
+                1L,
+                100L,
+                30_000L,
+                5_000,
+                LocalDateTime.of(2026, 8, 19, 5, 30),
+                LocalDateTime.of(2026, 8, 19, 6, 0)
+        );
+        insertIssuanceUsage(
+                2L,
+                101L,
+                30_001L,
+                5_000,
+                LocalDateTime.of(2026, 8, 19, 5, 40),
+                null
+        );
+    }
+
+    private void insertIssuanceUsage(
+            Long id,
+            Long issuanceId,
+            Long orderId,
+            int discountAmount,
+            LocalDateTime usedAt,
+            LocalDateTime canceledAt
+    ) {
+        jdbcTemplate.update(
+                """
+                INSERT INTO issuance_usages (
+                    id, issuance_id, order_id, discount_amount,
+                    used_at, canceled_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                id,
+                issuanceId,
+                orderId,
+                discountAmount,
+                usedAt,
+                canceledAt,
+                usedAt
+        );
     }
 
     private void insertIssuance(

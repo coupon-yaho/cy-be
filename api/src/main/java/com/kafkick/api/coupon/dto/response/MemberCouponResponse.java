@@ -2,6 +2,8 @@ package com.kafkick.api.coupon.dto.response;
 
 import java.time.Instant;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.query.MemberCouponSummary;
@@ -17,7 +19,13 @@ public record MemberCouponResponse(
         Integer maxDiscountAmount,
         Integer discountAmount,
         Instant issuedAt,
-        Instant expiresAt
+        Instant expiresAt,
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        Instant usedAt,
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        Integer usedDiscountAmount,
+        @JsonInclude(JsonInclude.Include.ALWAYS)
+        Long orderId
 ) {
 
     public static MemberCouponResponse from(MemberCouponSummary summary) {
@@ -32,7 +40,10 @@ public record MemberCouponResponse(
                 summary.maxDiscountAmount(),
                 summary.discountAmount(),
                 summary.issuedAt(),
-                summary.expiresAt()
+                summary.expiresAt(),
+                summary.usedAt(),
+                summary.usedDiscountAmount(),
+                summary.orderId()
         );
     }
 }
