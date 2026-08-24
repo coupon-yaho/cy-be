@@ -13,10 +13,13 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.coupon.dto.response.CouponRoundDetailResponse;
 import com.kafkick.api.coupon.dto.response.IssuableCouponRoundPageResponse;
+import com.kafkick.api.coupon.dto.response.PublicCouponRoundPageResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupon.service.CouponRoundDetailQueryService;
 import com.kafkick.core.coupon.service.IssuableCouponRoundQueryService;
+import com.kafkick.core.coupon.service.PublicCouponRoundQueryService;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.TimeProvider;
 
@@ -26,20 +29,42 @@ public class CouponRoundController {
 
     private final IssuableCouponRoundQueryService queryService;
     private final CouponRoundDetailQueryService detailQueryService;
+    private final PublicCouponRoundQueryService publicQueryService;
     private final TimeProvider timeProvider;
 
     public CouponRoundController(
             IssuableCouponRoundQueryService queryService,
             CouponRoundDetailQueryService detailQueryService,
+            PublicCouponRoundQueryService publicQueryService,
             TimeProvider timeProvider
     ) {
         this.queryService = queryService;
         this.detailQueryService = detailQueryService;
+        this.publicQueryService = publicQueryService;
         this.timeProvider = timeProvider;
     }
 
+    @GetMapping("/public")
+    public ResponseEnvelope<PublicCouponRoundPageResponse> findPublicPage(
+            @RequestParam(required = false)
+            CouponRoundStatus status,
+            @RequestParam(defaultValue = "0")
+            @Min(value = 0, message = "페이지 번호는 0 이상이어야 합니다.")
+            int page,
+            @RequestParam(defaultValue = "20")
+            @Min(value = 1, message = "페이지 크기는 1 이상이어야 합니다.")
+            @Max(value = 100, message = "페이지 크기는 100 이하여야 합니다.")
+            int size
+    ) {
+        return ResponseEnvelope.success(
+                PublicCouponRoundPageResponse.from(
+                        publicQueryService.findPage(status, page, size)
+                )
+        );
+    }
+
     @GetMapping
-    public ResponseEnvelope<IssuableCouponRoundPageResponse> findPage(
+    public ResponseEnvelope<IssuableCouponRoundPageResponse> findIssuablePage(
             @RequestHeader(MemberRequestHeaders.MEMBER_ID)
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
