@@ -60,6 +60,11 @@ class CouponRoundRefresherSettingsTest {
         assertThatThrownBy(() -> refresher(VALID_REFRESH, 999L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("batch.metrics.coupon-round-timeout-ms");
+        // **통과 경계가 없으면 가드가 한 칸 좁아져도 초록이다.** refresh-ms 쪽은
+        // acceptsBoundaryRefresh 가 그 짝을 진다.
+        assertThatCode(() -> refresher(VALID_REFRESH, 1_000L))
+                .as("1000 은 정확히 1초라 통과해야 한다 — 거절하면 하한이 실제로 2초인 셈이다")
+                .doesNotThrowAnyException();
     }
 
     /**

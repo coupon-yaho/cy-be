@@ -44,6 +44,14 @@ class AlertChannelRegistryTest {
         Set<String> declared = matches(ALERT, Files.readString(RULES, StandardCharsets.UTF_8));
         Set<String> listed = matches(BACKTICKED, channelTable());
 
+        // **비어 있으면 allSatisfy 가 무조건 통과한다.** 정규식이 어긋나 0개를 뽑으면
+        // 이 클래스가 막겠다고 적은 상태(표가 완전해 보이는 것)가 그대로 재현된다.
+        assertThat(declared)
+                .as("규칙 파일에서 알림을 하나도 못 뽑았다 — ALERT 정규식이 어긋났다")
+                .isNotEmpty();
+        assertThat(listed)
+                .as("채널 표에서 이름을 하나도 못 뽑았다 — 표 형식이 바뀌었다")
+                .isNotEmpty();
         assertThat(declared)
                 .as("표에 없는 알림은 채널 배정을 아무도 검토하지 않았다는 뜻이다. "
                         + "docs/14 의 채널 표에 추가해라")
@@ -56,6 +64,8 @@ class AlertChannelRegistryTest {
         Set<String> declared = matches(ALERT, Files.readString(RULES, StandardCharsets.UTF_8));
         Set<String> listed = matches(BACKTICKED, channelTable());
 
+        assertThat(listed).as("채널 표에서 이름을 하나도 못 뽑았다").isNotEmpty();
+        assertThat(declared).as("규칙 파일에서 알림을 하나도 못 뽑았다").isNotEmpty();
         assertThat(listed)
                 .as("규칙에서 사라진 알림이 표에 남아 있으면, 다음 사람이 그것을 근거로 "
                         + "존재하지 않는 알림을 기다린다")

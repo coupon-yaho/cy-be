@@ -580,6 +580,10 @@ tests:
       - eval_time: 8m
         alertname: CouponRoundsNotOpening
         exp_alerts: []
+      # for 5m 의 짝. 이것이 없으면 for 를 지우거나 1분으로 줄이는 돌연변이가 초록이다.
+      - eval_time: 4m
+        alertname: CouponRoundMetricsUnknown
+        exp_alerts: []
       - eval_time: 8m
         alertname: CouponRoundMetricsUnknown
         exp_alerts:
@@ -679,6 +683,9 @@ tests:
       - eval_time: 8m
         alertname: CouponRoundBlockedByMissingStock
         exp_alerts: []
+      - eval_time: 4m
+        alertname: CouponRoundDataMetricsUnknown
+        exp_alerts: []
       - eval_time: 8m
         alertname: CouponRoundDataMetricsUnknown
         exp_alerts:
@@ -704,4 +711,42 @@ tests:
     alert_rule_test:
       - eval_time: 40m
         alertname: CouponRoundMissedWindow
+        exp_alerts: []
+
+  # **갈래 축이 사라지면 세 알림이 통째로 침묵한다.** 게이지가 0 일 때와 없을 때가 관측상
+  # 같아지는데, 없을 때는 그것을 알려 주는 것이 이 알림뿐이다.
+  - interval: 1m
+    name: "스위치 게이지가 없으면 CouponRoundSwitchMetricMissing 이 뜨고 대기 알림은 침묵한다"
+    input_series:
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+        values: '2x30'
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CouponRoundsNotOpening
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: CouponRoundSwitchMetricMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CouponRoundSwitchMetricMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "회차 전이 스위치 게이지가 없습니다 — 알림 셋이 조용히 꺼져 있습니다"
+              description: "배치는 떠 있는데 cy_coupon_round_scheduling_enabled 시리즈가 없습니다. CouponRoundsNotOpening·NotClosing·MissedWindow 가 이 게이지로 끈 구간을 빼는데, 없으면 그 조인이 빈 벡터가 되어 **셋 다 발화 조건을 못 만듭니다** — 회차가 안 열려도 알림이 한 건도 안 갑니다. /actuator/prometheus 본문에서 그 이름을 직접 봅니다. 미터 이름이 바뀌었거나 CouponRoundPendingRefresher 생성자가 그 게이지 등록에 도달하지 못한 것입니다."
+
+  - interval: 1m
+    name: "스위치 게이지가 있으면 CouponRoundSwitchMetricMissing 이 안 뜬다"
+    input_series:
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+        values: '0x30'
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CouponRoundSwitchMetricMissing
         exp_alerts: []

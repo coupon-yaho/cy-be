@@ -101,8 +101,8 @@ class CouponRoundLockScopeTest {
     @Test
     @DisplayName("다른 세션이 남의 회차 행을 쥐고 있어도 전이가 통과한다 — 집합 UPDATE 면 1205 다")
     void transitionPassesWhileAnotherRoundIsLocked() throws Exception {
-        long target = seed.round(CouponStatus.SCHEDULED.name(), NOW.minusMinutes(1), NOW.plusDays(1));
-        long other = seed.round(CouponStatus.OPEN.name(), NOW.minusDays(1), NOW.plusDays(1));
+        long target = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        long other = seed.round(CouponStatus.OPEN, NOW.minusDays(1), NOW.plusDays(1));
 
         try (Connection held = dataSource.getConnection()) {
             held.setAutoCommit(false);
@@ -132,8 +132,8 @@ class CouponRoundLockScopeTest {
     @Test
     @DisplayName("전이 중에도 다른 회차의 재고 소진 CLOSED 가 통과한다")
     void soldOutClosePassesWhileTransitioning() throws Exception {
-        long target = seed.round(CouponStatus.SCHEDULED.name(), NOW.minusMinutes(1), NOW.plusDays(1));
-        long soldOut = seed.round(CouponStatus.OPEN.name(), NOW.minusDays(1), NOW.plusDays(1));
+        long target = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        long soldOut = seed.round(CouponStatus.OPEN, NOW.minusDays(1), NOW.plusDays(1));
 
         assertThat(rounds.open(target, NOW)).isTrue();
 
@@ -157,10 +157,10 @@ class CouponRoundLockScopeTest {
     @DisplayName("id 단건 UPDATE 는 그 회차 행만 잠근다 — 집합 UPDATE 면 회차 수 + supremum 이다")
     void singleRowUpdateLocksOnlyThatRow() throws Exception {
         for (int i = 0; i < 5; i++) {
-            seed.round(CouponStatus.SCHEDULED.name(),
+            seed.round(CouponStatus.SCHEDULED,
                     NOW.minusMinutes(1), NOW.plusDays(1));
         }
-        long target = seed.round(CouponStatus.SCHEDULED.name(), NOW.minusMinutes(1), NOW.plusDays(1));
+        long target = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         try (Connection held = dataSource.getConnection()) {
             held.setAutoCommit(false);
@@ -192,7 +192,9 @@ class CouponRoundLockScopeTest {
      * 되돌리는 돌연변이를 넣었을 때 그 셋이 전부 초록이었다 — RC 에서는 집합
      * {@code UPDATE} 도 발급을 안 막기 때문이다. 값을 지키는 것은 이 단언이다.
      *
-     * <p>{@code TransactionTemplate} 이 격리수준을 안 내주므로 필드로 읽는다.
+     * <p><b>리플렉션이 필요한 것은 어댑터의 private 필드 둘을 꺼내는 것</b>이지 격리수준
+     * 조회가 아니다 — {@code TransactionTemplate} 은 {@code DefaultTransactionDefinition} 을
+     * 상속해 그 getter 가 public 이다.
      */
     @Test
     @DisplayName("전이는 READ COMMITTED 로 돈다 — 기본 격리수준이면 발급이 전면 실패한다")

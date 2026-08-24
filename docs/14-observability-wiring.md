@@ -20,7 +20,7 @@
 | **안 한다** | Slack 연동 (`docs/13` §2e 에 근거) |
 | **한다** | `batch` 를 컨테이너로 띄운다 — **아래 "왜 앱까지 하나"** |
 | **한다** | 기동 가드와 업무 포트 결정 — 세 문서가 이 티켓에 예약해 뒀다 |
-| **안 한다** | 아직 없는 잡(회차 생성/전이)의 알림 — 그 잡을 만들 때 단다. `cleanupJob` 은 CY-397 이 만들면서 규칙 넷을 함께 달았다 |
+| **안 한다** | 아직 없는 잡(회차 **생성**)의 알림 — 그 잡을 만들 때 단다. `cleanupJob` 은 CY-397 이 만들면서 규칙 넷을, **회차 전이는 CY-446 이 만들면서 아홉을** 함께 달았다 |
 | **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. 배포 순서 위반은 `batch` 쪽 기동 가드로 잡는다 |
 
 > **범용인 것은 `BatchJobFailed` 와 `BatchStuckExecution` 둘이다.** 셀렉터에 잡 이름이 없어
@@ -141,6 +141,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `CouponRoundsNotOpening` · `CouponRoundsNotClosing` | `server` |
 | `CouponRoundMetricsUnknown` · `CouponRoundMetricsStale` · `CouponRoundMetricsMissing` | `server` |
 | `CouponRoundSelectFailing` | `server` |
+| `CouponRoundSwitchMetricMissing` | `server` |
 | `ExpireSkippingBrokenCoupons` | `data` |
 | `CouponRoundBlockedByMissingStock` · `CouponRoundMissedWindow` | `data` |
 | `CouponRoundDataMetricsUnknown` | `data` |

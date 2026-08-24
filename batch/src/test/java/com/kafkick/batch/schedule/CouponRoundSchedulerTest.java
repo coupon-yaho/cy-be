@@ -97,7 +97,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("open_at 이 지난 SCHEDULED 회차를 연다")
     void opensScheduledRoundsPastOpenAt() {
-        long due = seed.round("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
+        long due = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         scheduler.transitionRounds();
 
@@ -111,7 +111,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("open_at 이 정확히 지금이면 그 주기에 연다")
     void opensRoundsExactlyAtOpenAt() {
-        long boundary = seed.round("SCHEDULED", NOW, NOW.plusDays(1));
+        long boundary = seed.round(CouponStatus.SCHEDULED, NOW, NOW.plusDays(1));
 
         scheduler.transitionRounds();
 
@@ -121,7 +121,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("open_at 이 아직 미래면 안 연다")
     void leavesFutureRoundsScheduled() {
-        long future = seed.round("SCHEDULED", NOW.plusMinutes(1), NOW.plusDays(1));
+        long future = seed.round(CouponStatus.SCHEDULED, NOW.plusMinutes(1), NOW.plusDays(1));
 
         scheduler.transitionRounds();
 
@@ -133,7 +133,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("close_at 이 지난 OPEN 회차를 닫는다")
     void closesOpenRoundsPastCloseAt() {
-        long expired = seed.round("OPEN", NOW.minusDays(2), NOW.minusMinutes(1));
+        long expired = seed.round(CouponStatus.OPEN, NOW.minusDays(2), NOW.minusMinutes(1));
 
         scheduler.transitionRounds();
 
@@ -149,7 +149,7 @@ class CouponRoundSchedulerTest {
     @DisplayName("닫을 때 close_at 을 갱신하지 않는다 — 예정 시각이 소실되면 완판 판정이 깨진다")
     void keepsScheduledCloseTimeWhenClosing() {
         LocalDateTime plannedClose = NOW.minusMinutes(30);
-        long expired = seed.round("OPEN", NOW.minusDays(2), plannedClose);
+        long expired = seed.round(CouponStatus.OPEN, NOW.minusDays(2), plannedClose);
 
         scheduler.transitionRounds();
 
@@ -165,7 +165,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("전이는 coupon_stocks 를 건드리지 않는다")
     void leavesStockUntouched() {
-        long due = seed.round("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
+        long due = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
         LocalDateTime before = stockUpdatedAt(due);
 
         scheduler.transitionRounds();
@@ -183,7 +183,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("재고 행이 없는 회차는 열지 않고 대기로 남긴다")
     void refusesToOpenRoundWithoutStock() {
-        long stockless = seed.roundWithoutStock("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
+        long stockless = seed.roundWithoutStock(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         scheduler.transitionRounds();
 
@@ -208,7 +208,7 @@ class CouponRoundSchedulerTest {
     @DisplayName("재고 소진으로 이미 닫힌 회차를 되돌리지 않는다")
     void neverReopensClosedRound() {
         // 발급 경로가 close_at 전에 닫은 모양 — open_at 은 지났고 close_at 은 미래다.
-        long soldOut = seed.round("CLOSED", NOW.minusDays(1), NOW.plusDays(1));
+        long soldOut = seed.round(CouponStatus.CLOSED, NOW.minusDays(1), NOW.plusDays(1));
 
         scheduler.transitionRounds();
 
@@ -224,8 +224,8 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("한 주기에 열 회차와 닫을 회차를 함께 처리한다")
     void handlesOpenAndCloseInOneTick() {
-        long toOpen = seed.round("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
-        long toClose = seed.round("OPEN", NOW.minusDays(2), NOW.minusMinutes(1));
+        long toOpen = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        long toClose = seed.round(CouponStatus.OPEN, NOW.minusDays(2), NOW.minusMinutes(1));
 
         scheduler.transitionRounds();
 
@@ -241,7 +241,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("같은 주기에 열린 회차는 close_at 이 미래면 안 닫힌다")
     void doesNotCloseWhatItJustOpened() {
-        long due = seed.round("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
+        long due = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         scheduler.transitionRounds();
 
@@ -255,7 +255,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("두 번 돌려도 상태가 그대로다 — 조건부라 두 번째는 0행이다")
     void isIdempotentAcrossTicks() {
-        long due = seed.round("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
+        long due = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         scheduler.transitionRounds();
         scheduler.transitionRounds();
@@ -275,8 +275,8 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("재고 없는 회차는 스케줄러 축이 아니라 데이터 축으로 센다")
     void pendingCountIncludesRoundsExcludedFromOpening() {
-        seed.roundWithoutStock("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
-        seed.round("SCHEDULED", NOW.minusMinutes(1), NOW.plusDays(1));
+        seed.roundWithoutStock(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         assertThat(rounds.roundsToOpen(NOW))
                 .as("재고 없는 회차는 여는 목록에서 빠진다")
@@ -302,7 +302,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("이미 닫힌 회차에 open() 을 불러도 안 열린다 — 조회와 갱신 사이의 경합을 가드가 진다")
     void openRefusesRoundThatIsNoLongerScheduled() {
-        long soldOut = seed.round("CLOSED", NOW.minusDays(1), NOW.plusDays(1));
+        long soldOut = seed.round(CouponStatus.CLOSED, NOW.minusDays(1), NOW.plusDays(1));
 
         assertThat(rounds.open(soldOut, NOW))
                 .as("바뀐 것이 없으면 false 다 — 그것을 오류로 세면 정상 경합마다 오류가 보고된다")
@@ -319,7 +319,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("아직 안 열린 회차에 close() 를 불러도 안 닫힌다 — SCHEDULED→CLOSED 는 없는 전이다")
     void closeRefusesRoundThatIsNotOpenYet() {
-        long notYet = seed.round("SCHEDULED", NOW.plusDays(1), NOW.plusDays(2));
+        long notYet = seed.round(CouponStatus.SCHEDULED, NOW.plusDays(1), NOW.plusDays(2));
 
         assertThat(rounds.close(notYet, NOW)).isFalse();
         assertThat(statusOf(notYet))
@@ -365,7 +365,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("여는 조회가 죽어도 닫기는 그 tick 에 돈다 — 축이 독립이라는 계약")
     void closingSurvivesWhenOpenSelectFails() {
-        long toClose = seed.round(CouponStatus.OPEN.name(), NOW.minusDays(2), NOW.minusMinutes(1));
+        long toClose = seed.round(CouponStatus.OPEN, NOW.minusDays(2), NOW.minusMinutes(1));
         double ticksBefore = tickCount();
         double selectBefore = counter("cy_coupon_round_select_failures_total");
 
@@ -400,7 +400,7 @@ class CouponRoundSchedulerTest {
     @Test
     @DisplayName("창을 통째로 지난 회차는 open() 을 직접 불러도 안 열린다 — 조회가 아니라 가드가 진다")
     void openRefusesRoundWhoseWindowAlreadyClosed() {
-        long missed = seed.round(CouponStatus.SCHEDULED.name(), NOW.minusDays(2), NOW.minusDays(1));
+        long missed = seed.round(CouponStatus.SCHEDULED, NOW.minusDays(2), NOW.minusDays(1));
 
         assertThat(rounds.roundsToOpen(NOW))
                 .as("조회 겹")

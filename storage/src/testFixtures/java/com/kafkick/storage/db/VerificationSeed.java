@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 
+import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
 
@@ -259,7 +260,7 @@ public final class VerificationSeed {
      * <p>이 회차를 {@code couponId} 로 삼지 <b>않는다</b>. 전이 테스트는 회차를 여럿 심으므로
      * "현재 회차" 라는 개념이 없고, 그것을 밀면 다른 시드 메서드의 전제가 흔들린다.
      */
-    public long round(String status, LocalDateTime openAt, LocalDateTime closeAt) {
+    public long round(CouponStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
         long id = insertRound(status, openAt, closeAt);
         jdbcClient.sql("""
                         INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
@@ -276,11 +277,12 @@ public final class VerificationSeed {
      * <b>회차마다 재고 행이 있음을 강제하지 않는다</b> — 그래서 실재할 수 있는 상태다. 이 회차를 열면 발급 경로가 그 회차에서 죽으므로,
      * 전이가 일부러 안 여는 것을 재는 데 쓴다.
      */
-    public long roundWithoutStock(String status, LocalDateTime openAt, LocalDateTime closeAt) {
+    public long roundWithoutStock(CouponStatus status, LocalDateTime openAt,
+            LocalDateTime closeAt) {
         return insertRound(status, openAt, closeAt);
     }
 
-    private long insertRound(String status, LocalDateTime openAt, LocalDateTime closeAt) {
+    private long insertRound(CouponStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
         long brandId = insertBrand();
         long templateId = insertTemplate(brandId);
         return insertGenerated(jdbcClient.sql("""
@@ -294,7 +296,7 @@ public final class VerificationSeed {
                 .param("brandId", brandId)
                 .param("openAt", openAt)
                 .param("closeAt", closeAt)
-                .param("status", status)
+                .param("status", status.name())
                 .param("createdAt", openAt.minusDays(1)));
     }
 
