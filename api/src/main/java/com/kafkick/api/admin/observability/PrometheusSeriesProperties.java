@@ -54,6 +54,12 @@ public record PrometheusSeriesProperties(
      * 화면이 이 경로를 부르기로 한 주기의 짧은 쪽. 최악의 응답 시간이 이 값을 넘으면 다음 폴링이
      * 앞 요청을 따라잡아 관제가 스스로 부하가 된다. 이 상수가 바뀌면 화면 쪽 주기도 함께 바뀐
      * 것이어야 한다.
+     *
+     * <p><b>설정 키로 열지 않습니다.</b> 이 값은 서버가 정하는 설정이 아니라 <b>화면의 행동에 대한
+     * 사실</b>입니다. 바인딩 가능하게 만들면 운영자가 {@code poll-interval: 30s} 로 올려 기동 검증을
+     * 통과시킬 수 있는데, 그 사이 화면은 여전히 5초마다 부릅니다 — 불변식이 조용히 거짓이 됩니다.
+     * 상수로 두면 바꾸는 일이 코드 변경이 되어 리뷰에 걸리고, 화면 주기를 함께 고쳤는지 확인할 수
+     * 있습니다. {@link PrometheusQueryProperties} 도 같은 이유로 1초를 상수로 둡니다.</p>
      */
     private static final Duration POLL_INTERVAL = Duration.ofSeconds(5);
 
