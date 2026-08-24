@@ -23,6 +23,35 @@
 # 데이터를 계속 본다(실측).
 name: coupon-yaho
 
+# 브로커 셋이 공유하는 설정. 한 벌만 두는 이유는 취향이 아니라, 세 곳에 손으로 옮겨 적으면
+# 한 대만 다른 값을 갖는 상태가 조용히 만들어지기 때문이다 — 그 한 대가 컨트롤러 쿼럼에서
+# 빠져도 나머지 둘로 클러스터가 서서 로그에 아무 일도 안 남는다.
+# x- 접두사 키는 Compose 가 무시한다(확장 필드).
+x-kafka-broker-env: &kafka-broker-env
+  # 조합 모드. 세 대뿐이라 컨트롤러를 따로 세우면 브로커가 셋이 안 된다.
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  # 아무 값이나 되지만 세 대가 같아야 한다. 볼륨을 지우지 않는 한 바꾸지 말 것.
+  KAFKA_CLUSTER_ID: coupon-yaho-kraft-0001
+  # 이 계층의 전제다. 위 주석 참조 — 켜져 있으면 RF1 토픽이 조용히 생기고 되돌릴 수 없다.
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  # 내부 토픽도 3대에 복제한다. 기본값 3 이지만 명시한다 — 이 값이 1 로 떨어지면 그 브로커가
+  # 빠질 때 컨슈머 그룹 offset 이 통째로 사라지고, OBS-15 의 컨슈머가 처음부터 다시 읽는다.
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+  # 토픽별 min.insync.replicas 는 KafkaTopicConfig 가 2로 선언한다. 브로커 기본값을 2로
+  # 올리지 않는 이유 — 그러면 선언에 ISR 하한이 없는 coupon.issue.attempt(RF2, acks=0)까지
+  # 하한 2를 받아, 브로커 한 대가 빠지는 순간 관측 토픽이 쓰기를 거부한다.
+  KAFKA_MIN_INSYNC_REPLICAS: "1"
+  # 컨슈머 하나가 붙었을 때 리밸런스를 3초 기다리지 않는다. 로컬·CI 기동을 그만큼 줄인다.
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+
 services:
   mysql:
     # 태그를 고정한다. prometheus 를 v3.6.0 으로 고정한 것과 같은 이유다.
@@ -110,6 +139,12 @@ services:
       SPRING_FLYWAY_ENABLED: "true"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # .env 의 KAFKA_BOOTSTRAP_SERVERS 는 호스트에서 IDE/Gradle 로 띄울 때의 값이라
+      # 컨테이너 안에서는 틀리다(localhost 는 api 자신이다). REDIS_HOST 를 덮는 것과 같은
+      # 구조로 여기서 서비스 DNS 로 덮는다. 세 대를 다 적는 이유는 부트스트랩 한 대가
+      # 재기동 중이어도 나머지로 클러스터를 찾게 하기 위함이다 — 한 대만 적으면 그 한 대가
+      # 단일 실패점이 된다(연결 뒤에는 어차피 광고된 주소로 붙는다).
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     volumes:
       - ./application.yml:/app/config/application.yml:ro
     ports:
@@ -133,6 +168,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # ⚠️ kafka 를 여기 적지 않는다. 적으면 KAFKA_ENABLED=false 인 회차(v1·v2)에서도
+      #    api 기동이 브로커 세 대의 healthy 를 기다리게 되고, 브로커가 안 뜨는 환경에서는
+      #    쿠폰 발급 API 가 통째로 안 뜬다 — Kafka 를 쓰지도 않는데. 토픽 생성은 기동 경로
+      #    밖에서 물러서며 재시도하므로(KafkaTopicProvisioner) 순서를 강제할 이유가 없다.
+      #    대가: 브로커보다 api 가 먼저 뜨면 첫 몇 회 프로비저닝 시도가 실패하고 백오프를
+      #    태운다. 그 동안 지표는 app_kafka_topics_provisioned_cause{cause="unconfirmed"}=1 이다.
 
   batch:
     image: ${COUPON_IMAGE}:${BATCH_IMAGE_TAG}
@@ -160,6 +201,91 @@ services:
         condition: service_healthy
       api:
         condition: service_started
+
+  # ── OBS-35 Kafka 브로커 ─────────────────────────────────────────────────────
+  #
+  # 세 대인 것은 로컬 편의를 포기한 결과다. infra/mq 의 선언이 RF3 · min.insync.replicas=2 라
+  # 두 대로는 acks=all 쓰기가 ISR 하한을 못 채우고, 한 대로는 토픽 생성부터
+  # INVALID_REPLICATION_FACTOR 로 실패한다. 파티션·복제 수는 발표 회차의 값이라 낮추지 않는다.
+  #
+  # KRaft 조합 모드다(broker + controller). ZooKeeper 를 두지 않는 것은 취향이 아니라
+  # Kafka 4.x 가 ZooKeeper 모드를 아예 제거했기 때문이다.
+  #
+  # ⚠️ 세 서비스가 같은 KAFKA_CLUSTER_ID 를 공유해야 한다. 안 적으면 컨테이너마다 다른 id 로
+  #    포맷되고, 그러면 컨트롤러 쿼럼이 서로를 "다른 클러스터" 로 보고 붙지 않는다.
+  #    한 번 포맷된 볼륨의 id 는 바뀌지 않으므로, 이 값을 고치면 아래 볼륨 셋을 함께 지워야 한다.
+  #
+  # ⚠️ ports 를 두지 않는다. Kafka 에 인증이 없어서(SASL 미도입) 호스트로 여는 순간 아무나
+  #    토픽을 만들고 발급 이벤트를 위조해 넣을 수 있다 — 관리 포트·Prometheus 를 잠근 것과
+  #    같은 이유다. 대가: 호스트에서 IDE/Gradle 로 띄운 앱은 브로커에 닿지 못한다. 그 회차는
+  #    KAFKA_ENABLED=false 로 둔다(.env.example 참조). compose 안의 api 는 서비스 DNS 로 붙는다.
+  #    KafkaBrokerComposeContractTest 가 비노출을 고정한다.
+  #
+  # ⚠️ auto.create.topics.enable=false 는 옵션이 아니라 이 계층의 전제다. 켜져 있으면
+  #    프로비저닝보다 첫 발급이 빨랐을 때 브로커가 RF1 · 파티션1 짜리 토픽을 대신 만들고,
+  #    RF 는 나중에 못 고친다 — 노드 하나가 빠지면 그 파티션이 사라져 영구 미영속 발급이 된다.
+  #    대가: 선언에 없는 토픽으로 발행·구독하면 조용히 생기는 대신 UNKNOWN_TOPIC_OR_PARTITION
+  #    으로 실패한다. 그게 의도다(KafkaTopicConfig.TOPICS_WITHOUT_DLT 주석 참조).
+
+  kafka-1:
+    image: apache/kafka:4.1.0
+    restart: unless-stopped
+    environment:
+      <<: *kafka-broker-env
+      KAFKA_NODE_ID: "1"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
+    volumes:
+      - coupon-kafka-1-data:/var/lib/kafka/data
+    healthcheck:
+      # 포트가 열렸는지가 아니라 API 가 응답하는지를 본다. KRaft 는 컨트롤러 쿼럼이 서기
+      # 전에도 소켓은 열려 있어서, 포트만 보면 아직 못 쓰는 브로커가 healthy 로 뜬다.
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  kafka-2:
+    image: apache/kafka:4.1.0
+    restart: unless-stopped
+    environment:
+      <<: *kafka-broker-env
+      KAFKA_NODE_ID: "2"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+    volumes:
+      - coupon-kafka-2-data:/var/lib/kafka/data
+    healthcheck:
+      # 포트가 열렸는지가 아니라 API 가 응답하는지를 본다. KRaft 는 컨트롤러 쿼럼이 서기
+      # 전에도 소켓은 열려 있어서, 포트만 보면 아직 못 쓰는 브로커가 healthy 로 뜬다.
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  kafka-3:
+    image: apache/kafka:4.1.0
+    restart: unless-stopped
+    environment:
+      <<: *kafka-broker-env
+      KAFKA_NODE_ID: "3"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
+    volumes:
+      - coupon-kafka-3-data:/var/lib/kafka/data
+    healthcheck:
+      # 포트가 열렸는지가 아니라 API 가 응답하는지를 본다. KRaft 는 컨트롤러 쿼럼이 서기
+      # 전에도 소켓은 열려 있어서, 포트만 보면 아직 못 쓰는 브로커가 healthy 로 뜬다.
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
 
   # ── P-1(CY-213) 관측 인프라 ──────────────────────────────────────────────────
   #
@@ -204,6 +330,9 @@ services:
 volumes:
   coupon-mysql-data:
   coupon-redis-data:
-  # 세 볼륨 모두 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
+  coupon-kafka-1-data:
+  coupon-kafka-2-data:
+  coupon-kafka-3-data:
+  # 모든 볼륨이 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
   # 한쪽만 프로젝트 밖으로 공유되는 상태가 된다.
   prometheus-data:
