@@ -42,8 +42,12 @@ class ObservationDataSourceConfigTest {
         "observation.datasource.hikari.connection-init-sql=SET SESSION max_execution_time = 3000",
     };
 
+    /**
+     * <b>[CY-338] 두 설정을 함께 올린다.</b> 운영 풀이 {@link MainDataSourceConfig} 로
+     * 떨어져 나가서, 관측을 켠 모듈의 실제 모습은 이 조합이다.
+     */
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-        .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
         .withPropertyValues(STORAGE_YML);
 
     @Test
@@ -235,7 +239,7 @@ class ObservationDataSourceConfigTest {
     @Test
     void 관측_URL_만_빠져도_기동에_실패한다() {
         new ApplicationContextRunner()
-            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
             .withBean(JdbcConnectionDetails.class, ObservationDataSourceConfigTest::superuserDetails)
             .withPropertyValues(
                 "observation.datasource.enabled=true",
@@ -250,7 +254,7 @@ class ObservationDataSourceConfigTest {
     @Test
     void 관측_블록이_없으면_기동에_실패한다() {
         new ApplicationContextRunner()
-            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
             .withPropertyValues(
                 "observation.datasource.enabled=true",
                 "spring.datasource.url=jdbc:mysql://localhost:3306/app",
@@ -266,7 +270,7 @@ class ObservationDataSourceConfigTest {
     @Test
     void 운영_접속_정보가_비면_기동에_실패한다() {
         new ApplicationContextRunner()
-            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
             .withPropertyValues(
                 "observation.datasource.enabled=true",
                 "observation.datasource.url=jdbc:mysql://localhost:3306/app",
@@ -282,7 +286,7 @@ class ObservationDataSourceConfigTest {
     @Test
     void 운영_URL_만_비어도_기동에_실패한다() {
         new ApplicationContextRunner()
-            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
             .withPropertyValues(
                 "observation.datasource.enabled=true",
                 "spring.datasource.username=app",
@@ -297,7 +301,7 @@ class ObservationDataSourceConfigTest {
     @Test
     void 운영_접속_정보는_자동_주입으로_채워도_된다() {
         new ApplicationContextRunner()
-            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
             .withBean(JdbcConnectionDetails.class, ObservationDataSourceConfigTest::superuserDetails)
             .withPropertyValues(
                 "observation.datasource.enabled=true",
@@ -308,16 +312,21 @@ class ObservationDataSourceConfigTest {
     }
 
     /**
-     * 관측을 켜지 않은 모듈(지금의 batch)은 이 PR 이전 동작 그대로여야 한다.
+     * 관측을 켜지 않으면 <b>관측 빈만</b> 빠진다.
      *
-     * <p>빈이 하나도 없어야 한다는 게 핵심이다. 관측 빈만 빠지고 운영 빈을 우리가 계속 만들면,
-     * 관측을 안 쓰는 모듈의 DataSource·JdbcTemplate·트랜잭션 매니저가 이유 없이 우리 것으로
-     * 바뀐다 — 자동설정을 대체한 대가만 지고 얻는 것은 없다.
+     * <p><b>[CY-338] 이 테스트의 뜻이 바뀌었다.</b> 예전에는 "빈이 하나도 없어야 한다" 였다 —
+     * 관측을 안 쓰는 모듈이 자동설정 대체 비용만 지는 것을 막으려는 것이었다. 그 대가가
+     * 배치에서 드러났다: 운영 풀 정의가 관측 스위치에 묶여 있어, 정상 운영 스위치를 끄면
+     * Spring Batch 가 {@code ResourcelessJobRepository} 로 떨어져 <b>잡 중복 실행 방지가 통째로
+     * 꺼졌다.</b> 예외도 로그도 없었다.
+     *
+     * <p>그래서 운영 풀을 {@link MainDataSourceConfig} 로 떼어 조건 없이 항상 만든다.
+     * 이제 이 스위치가 끄는 것은 {@code observationDataSource} 계열뿐이다.
      */
     @Test
     void 관측을_켜지_않으면_이_설정은_통째로_건너뛴다() {
         new ApplicationContextRunner()
-            .withUserConfiguration(ObservationDataSourceConfig.class)
+            .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class)
             .withPropertyValues(
                 "spring.datasource.url=jdbc:mysql://localhost:3306/app",
                 "spring.datasource.username=app",
@@ -325,10 +334,14 @@ class ObservationDataSourceConfigTest {
             .run(context -> {
                 assertThat(context).hasNotFailed();
                 assertThat(context).doesNotHaveBean("observationDataSource");
-                assertThat(context).doesNotHaveBean("mainDataSource");
-                assertThat(context).doesNotHaveBean("jdbcTemplate");
-                assertThat(context).doesNotHaveBean("namedParameterJdbcTemplate");
-                assertThat(context).doesNotHaveBean("transactionManager");
+                assertThat(context).doesNotHaveBean("observationJdbcTemplate");
+                assertThat(context).doesNotHaveBean("observationTransactionManager");
+                // 운영 쪽은 남는다. 여기서 함께 사라지면 batch 의 JobRepository 가
+                // ResourcelessJobRepository 로 떨어져 잡 중복 방지가 꺼진다.
+                assertThat(context).hasBean("mainDataSource");
+                assertThat(context).hasBean("jdbcTemplate");
+                assertThat(context).hasBean("namedParameterJdbcTemplate");
+                assertThat(context).hasBean("transactionManager");
             });
     }
 

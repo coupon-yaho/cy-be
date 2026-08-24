@@ -9,7 +9,7 @@ import java.util.Arrays;
 import javax.sql.DataSource;
 
 import com.kafkick.api.observation.ApiObservationAutoConfiguration;
-import com.kafkick.storage.db.config.ObservationDataSourceConfig;
+import com.kafkick.storage.db.config.MainDataSourceConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -19,7 +19,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
  * "무엇을 재는가" 는 <b>두 파일에 걸친 계약</b>이라 여기서 잇는다.
  *
  * <ul>
- *   <li>{@code ObservationDataSourceConfig} — 운영 풀 빈의 <b>이름</b>을 정한다
+ *   <li>{@code MainDataSourceConfig} — 운영 풀 빈의 <b>이름</b>을 정한다
+ *       (CY-338 이전에는 {@code ObservationDataSourceConfig} 였다. 관측 스위치가 배치
+ *       메타까지 끄는 결함 때문에 운영 풀만 떼어 냈다 — 빈 이름은 그대로다)
  *   <li>{@code ApiObservationAutoConfiguration} — 그 이름으로 잴 풀을 <b>지목</b>한다
  * </ul>
  *
@@ -55,12 +57,12 @@ class MeasuredPoolContractTest {
 
     /** 운영 풀 빈 이름은 메서드 이름에서 나온다. 메서드를 바꾸면 여기서 걸린다. */
     private static String mainPoolBeanName() {
-        return Arrays.stream(ObservationDataSourceConfig.class.getDeclaredMethods())
+        return Arrays.stream(MainDataSourceConfig.class.getDeclaredMethods())
                 .map(Method::getName)
                 .filter(MAIN_POOL::equals)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(
-                        "ObservationDataSourceConfig 에 " + MAIN_POOL + " 빈 메서드가 없다"));
+                        "MainDataSourceConfig 에 " + MAIN_POOL + " 빈 메서드가 없다"));
     }
 
     private static String qualifierOfDataSourceParameter() {
