@@ -37,6 +37,11 @@ import com.kafkick.testsupport.CommittedConfigStager;
         "kafka.enabled=true",
         "kafka.provision-topics=false",
         "observation.datasource.enabled=false",
+        "coupon.idempotency.wait-timeout=1s",
+        "coupon.idempotency.poll-interval=50ms",
+        "coupon.idempotency.stale-after=30s",
+        "coupon.round-generation.schedule-zone=Asia/Seoul",
+        "coupon.round-generation.max-days=30",
         "benchmark.topology.tomcat-workers-total=60",
         "benchmark.topology.hikari-pool-total=12",
         "benchmark.topology.mysql-max-connections=50"
