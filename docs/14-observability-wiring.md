@@ -20,7 +20,7 @@
 | **안 한다** | Slack 연동 (`docs/13` §2e 에 근거) |
 | **한다** | `batch` 를 컨테이너로 띄운다 — **아래 "왜 앱까지 하나"** |
 | **한다** | 기동 가드와 업무 포트 결정 — 세 문서가 이 티켓에 예약해 뒀다 |
-| **안 한다** | 아직 없는 잡(회차 생성/전이)의 알림 — 그 잡을 만들 때 단다. `cleanupJob` 은 CY-397 이 만들면서 규칙 넷을 함께 달았다 |
+| **안 한다** | 아직 없는 잡(회차 **생성**)의 알림 — 그 잡을 만들 때 단다. `cleanupJob` 은 CY-397 이 만들면서 규칙 넷을, **회차 전이는 CY-446 이 만들면서 열을** 함께 달았다 |
 | **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. 배포 순서 위반은 `batch` 쪽 기동 가드로 잡는다 |
 
 > **범용인 것은 `BatchJobFailed` 와 `BatchStuckExecution` 둘이다.** 셀렉터에 잡 이름이 없어
@@ -126,6 +126,9 @@ docker compose -f base.yml -f batch.yml up batch  # 부하 종료 후 겹쳐 올
 그래서 **라우팅 축을 따로 만든다.** 각 규칙에 `channel: server | data` 를 달고
 alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
+이 표가 **대장**이다 — 규칙 파일의 `- alert:` 전부가 여기 있어야 하고,
+`AlertChannelRegistryTest` 가 두 집합을 대조한다.
+
 | 알림 | channel |
 |---|---|
 | `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
@@ -135,7 +138,16 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
+| `CouponRoundsNotOpening` · `CouponRoundsNotClosing` | `server` |
+| `CouponRoundMetricsUnknown` · `CouponRoundMetricsStale` · `CouponRoundMetricsMissing` | `server` |
+| `CouponRoundSelectFailing` | `server` |
+| `CouponRoundSwitchMetricMissing` | `server` |
 | `ExpireSkippingBrokenCoupons` | `data` |
+| `CouponRoundBlockedByMissingStock` · `CouponRoundMissedWindow` | `data` |
+| `CouponRoundDataMetricsUnknown` | `data` |
+| `VerificationVerdictFailed` | `data` |
+| `VerificationMetricsUnknown` · `VerificationMetricsStale` | `server` |
+| `AlertDeliveryFailing` | `server` |
 
 **검증** — 양쪽 경로를 태워 리시버가 받은 것을 확인한다. 발화 수단은 임시 스모크 규칙을
 **별 파일**(`infra/prometheus/rules/smoke.yml`)에 두고 확인 후 지운다.
@@ -149,7 +161,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
 | 확인 | 방법 | 결과 |
 |---|---|---|
-| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 (그날 기준. 지금은 22개) |
+| 규칙 로드 | `/api/v1/rules` | 6개 전부, `channel` 라벨 포함 (개수는 `AlertChannelRegistryTest` 가 표와 대조한다 — 여기 적으면 낡는다) |
 | 타깃 (batch 없이) | `/api/v1/targets` | `down` — `lookup batch` 실패 |
 | 타깃 (batch 띄운 뒤) | 같은 것 | `up` |
 | 지표 도달 | `cy_expire_unexplained_pending` 조회 | `NaN` — 잡이 한 번도 안 돌았다는 뜻이 관제에 그대로 보인다 |
@@ -316,10 +328,21 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 > `ExpireGaugeMissing`(absent + `up`, 5분)이다. **결론은 그대로다** — 규칙에 예외를 안 파고
 > 사람이 재운다.
 
-**그래도 규칙에 예외를 안 판다.** 지표에 "스케줄러가 꺼져 있다" 는 축이 없어서 `unless` 로
-가르려면 `cy_batch_scheduling_enabled` 게이지를 새로 내보내야 하는데, 그러면 *일부러 껐다* 와
-*꺼져 버렸다* 가 같은 값이 된다 — 후자가 정확히 이 알림이 잡아야 하는 것이다.
-아래 시연 절차의 *"먼저 두 알림을 재운다"* 처럼 **끄는 구간에만 사람이 silence 를 건다.**
+**만료·정리는 규칙에 예외를 안 판다.** `cy_batch_scheduling_enabled` 게이지를 만들면
+*일부러 껐다* 와 *꺼져 버렸다* 가 같은 값이 되고, 그 둘의 결말이 다르다 — 만료가 하루 안 돌면
+재고가 안 걷힌다. 그래서 아래 시연 절차의 *"먼저 두 알림을 재운다"* 처럼
+**끄는 구간에만 사람이 silence 를 건다.**
+
+**회차 상태 전이는 갈랐다 (CY-446).** `cy_coupon_round_scheduling_enabled == 1` 로 갈래를 뺀다.
+근거가 다른 것은 **크론이 1분**이기 때문이다 — 만료·정리(일 1회)는 silence 한 번이 슬롯 하나를
+덮지만, 1분 크론은 끈 구간이 곧 **상시 점등**이라 덮을 수가 없다. 게다가 compose 기본이
+`BATCH_SCHEDULING_ENABLED=false` 라 그 구간이 예외가 아니라 기본값이다.
+
+> ⚠️ **대가를 여기 적어 둔다.** 이 갈래는 *스위치가 사고로 꺼진 것*도 함께 가린다.
+> 배포에서 `BATCH_SCHEDULING_ENABLED` 를 넘기던 자리가 빠지면 조용히 `false` 가 되고,
+> 회차가 하나도 안 열리는데 `CouponRoundsNotOpening`(critical)이 발화 조건을 못 만든다.
+> **그 축은 아무 알림도 안 진다** — `CouponRoundMetricsMissing` 은 빈 자체가 없는 경우만 본다.
+> `cy_coupon_round_scheduling_enabled` 가 기대값인지 확인하는 것은 **배포 검증의 몫**이다.
 
 **부하 중 `BatchTargetDown` 도 같은 이유로 silence 로 다룬다.** `base.yml` 만 띄운 상태는 배치가
 <b>일부러</b> 없는 것이라 알림이 뜨는 게 맞다 — 규칙이 틀린 것이 아니다. `inhibit_rules` 로
@@ -387,6 +410,11 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    > 뜰 수 없다 — 앞엣것은 `cy_expire_measured_at_seconds` 가 `NaN` 이라 비교가 거짓이고,
    > 뒤엣것은 `cy_expire_refresh_failures_total` 이 0 에서 시작해 델타가 안 생긴다.
    > 위 셋과 달리 **"값이 아직 없다" 가 곧 침묵**인 식이라 재우지 않아도 조용하다.
+   >
+   > **`CouponRoundsNotOpening`·`NotClosing` 도 안 넣는다.** 크론이 1분이라 <i>"슬롯 한 번이
+   > 하루"</i> 라는 근거가 성립하지 않고, 빈 DB 에서는 `COUNT(*)` 가 0 이라 `> 0` 이 거짓이다.
+   > 재우면 2단계(`BATCH_SCHEDULING_ENABLED=true`) 이후 **26시간 동안 회차가 안 열리는
+   > critical 이 죽는다** — 그 알림의 뜻은 <i>"그 회차는 지금 아무도 발급받을 수 없습니다"</i> 다.
 
 2. `BATCH_SCHEDULING_ENABLED=true` 로 띄운다 — 만료 알림 축이 살아난다
 

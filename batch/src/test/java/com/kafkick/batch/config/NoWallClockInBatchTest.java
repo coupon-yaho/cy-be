@@ -96,6 +96,11 @@ class NoWallClockInBatchTest {
             "com/kafkick/batch/job/CleanupJobConfig.java", 2,
             "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
             "com/kafkick/batch/schedule/CleanupScheduler.java", 2,
+            // 하나다 — 한 tick 이 여는 대상과 닫는 대상을 **같은 시각**으로 판정한다.
+            // 두 번 읽으면 그 사이에 경계를 넘은 회차가 열리고 바로 닫힌다.
+            "com/kafkick/batch/schedule/CouponRoundScheduler.java", 1,
+            // 하나다 — 대기 수 넷을 한 시각으로 센다. 갈리면 서로 다른 시각의 값이 나란히 나간다.
+            "com/kafkick/batch/config/CouponRoundPendingRefresher.java", 1,
             "com/kafkick/batch/api/VerifyTriggerController.java", 1,
             "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1);
 

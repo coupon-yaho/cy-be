@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 
+import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
 
@@ -245,6 +246,58 @@ public final class VerificationSeed {
         long brandId = insertBrand();
         couponId = insertCoupon(insertTemplate(brandId), brandId);
         return couponId;
+    }
+
+    /**
+     * <b>상태와 시각을 직접 주는 회차.</b> 회차 상태 전이(CY-446)를 재려면
+     * {@code SCHEDULED} 와 임의의 {@code open_at}·{@code close_at} 이 필요한데,
+     * {@link #newCoupon()} 은 {@code OPEN} 과 고정 시각을 박는다 — 그쪽을 고치면 이 시드를
+     * 쓰는 다른 테스트 전부의 전제가 바뀐다.
+     *
+     * <p>재고 행을 함께 만든다. {@code coupon_stocks} 에 행이 없는 회차는 전이 대상에서
+     * 일부러 빠지므로, <b>재고 없는 경우를 재려면</b> {@link #roundWithoutStock} 을 쓴다.
+     *
+     * <p>이 회차를 {@code couponId} 로 삼지 <b>않는다</b>. 전이 테스트는 회차를 여럿 심으므로
+     * "현재 회차" 라는 개념이 없고, 그것을 밀면 다른 시드 메서드의 전제가 흔들린다.
+     */
+    public long round(CouponStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
+        long id = insertRound(status, openAt, closeAt);
+        jdbcClient.sql("""
+                        INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
+                        VALUES (:couponId, 100, 0, :updatedAt)
+                        """)
+                .param("couponId", id)
+                .param("updatedAt", openAt)
+                .update();
+        return id;
+    }
+
+    /**
+     * <b>재고 행이 없는 회차.</b> FK({@code V1:635})는 재고 행이 회차를 가리키는 방향이라
+     * <b>회차마다 재고 행이 있음을 강제하지 않는다</b> — 그래서 실재할 수 있는 상태다. 이 회차를 열면 발급 경로가 그 회차에서 죽으므로,
+     * 전이가 일부러 안 여는 것을 재는 데 쓴다.
+     */
+    public long roundWithoutStock(CouponStatus status, LocalDateTime openAt,
+            LocalDateTime closeAt) {
+        return insertRound(status, openAt, closeAt);
+    }
+
+    private long insertRound(CouponStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
+        long brandId = insertBrand();
+        long templateId = insertTemplate(brandId);
+        return insertGenerated(jdbcClient.sql("""
+                        INSERT INTO coupons
+                            (template_id, brand_id, name, policy_type, discount_amount,
+                             valid_days, eligible_grades_mask, open_at, close_at, status, created_at)
+                        VALUES (:templateId, :brandId, '전이테스트회차', 'FIXED_AMOUNT', 1000,
+                                7, 15, :openAt, :closeAt, :status, :createdAt)
+                        """)
+                .param("templateId", templateId)
+                .param("brandId", brandId)
+                .param("openAt", openAt)
+                .param("closeAt", closeAt)
+                .param("status", status.name())
+                .param("createdAt", openAt.minusDays(1)));
     }
 
     /**
