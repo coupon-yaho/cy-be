@@ -524,6 +524,10 @@ public class PromMetricsAssembler {
      * 시계열 자체가 없으면 그 사유는 행으로도 안 나옵니다 — 등록은 기동 시점에
      * {@code CampaignMeterRegistry} 가 사유 전종에 대해 하므로 정상 배선에서는 안 생깁니다.</p>
      *
+     * <p><b>음수 표본이 하나라도 있으면 표를 통째로 비웁니다({@code UNAVAILABLE}).</b> 그 행만
+     * 빼면 남은 행의 순위가 멀쩡한 것처럼 보이는데, 원천이 음수를 낼 정도면 나머지 값도 믿을
+     * 근거가 없습니다. {@link #rate} 가 처리량·실패율에 거는 것과 같은 판정입니다.</p>
+     *
      * <p>신선도는 HTTP 미터의 것을 씁니다. 같은 JVM 의 같은 scrape 로 나오는 미터라 나이가
      * 같습니다 — 따로 물으면 질의만 하나 더 늘고 답은 같습니다.</p>
      */
@@ -536,9 +540,15 @@ public class PromMetricsAssembler {
         for (ReasonCode reasonCode : OverviewPrometheusContract.FAILURE_REASONS) {
             OptionalDouble reduced = reduceOrUnknown(MetricAggregation.ISSUANCE_OUTCOME_TOTAL,
                     failureReasons.filter(label(TAG_OUTCOME, reasonCode.name())));
-            if (reduced.isPresent()) {
-                rows.add(new TopReason(reasonCode, round(reduced.getAsDouble())));
+            if (reduced.isEmpty()) {
+                continue;
             }
+            if (reduced.getAsDouble() < 0d) {
+                // 실패율과 같은 판정이다. counter 의 rate 는 음수일 수 없으므로 원천이 망가진 것이고,
+                // 한 행만 빼면 나머지 순위가 그대로인 것처럼 보인다 — 표를 통째로 비운다.
+                return unavailable();
+            }
+            rows.add(new TopReason(reasonCode, round(reduced.getAsDouble())));
         }
         if (rows.isEmpty()) {
             // 시계열이 아직 하나도 없다. "실패 없음" 과 다르다 — 빈 목록으로 내려보내면 둘이 같아진다.

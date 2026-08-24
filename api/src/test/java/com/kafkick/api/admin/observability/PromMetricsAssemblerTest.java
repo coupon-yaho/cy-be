@@ -495,6 +495,27 @@ class PromMetricsAssemblerTest {
     }
 
     /**
+     * 실패율과 같은 판정입니다. 사유 하나가 음수면 원천이 망가진 것이고, 그 행만 빼면 남은
+     * 행의 순위가 멀쩡한 것처럼 보입니다.
+     */
+    @Test
+    @DisplayName("음수 사유가 섞이면 원인 표를 통째로 비운다")
+    void negativeReasonRateEmptiesTheWholeTable() {
+        FakePromQuery client = respond(Map.of(
+                "app_issuance_outcome_total", List.of(
+                        outcome(ReasonCode.INTERNAL_ERROR, 5d),
+                        outcome(ReasonCode.TEMPORARILY_UNAVAILABLE, -1d)),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        var topReasons = assemble(client, globalQuery()).errors().topReasons();
+
+        assertThat(topReasons.state())
+                .as("음수 행만 빼면 남은 순위가 멀쩡한 것처럼 보인다")
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(topReasons.value()).isNull();
+    }
+
+    /**
      * "실패가 없어서 빈 표" 와 "아직 못 물어봐서 빈 표" 는 운영자가 취할 행동이 정반대입니다.
      * 시계열이 하나도 없으면 빈 목록이 아니라 PENDING 입니다.
      */
