@@ -378,7 +378,7 @@ public class ExpirePendingRefresher {
      * <p>창(7일)은 이 조회가 배치 메타 이력 전체에 비례해 자라는 것을 막는다.
      *
      * <p>⚠️ <b>이 창의 안쪽은 {@code cleanupJob} 이 지킨다</b> —
-     * {@code batch.cleanup.metadata-keep-days} 의 하한이 {@code CleanupJobConfig.REFRESH_WINDOW_DAYS}
+     * {@code batch.cleanup.metadata-keep-days} 의 하한이 {@link BatchMetadataWindow#LOOKBACK_DAYS}
      * (7)보다 커야 하고(최소 8) 기동 때 거절한다. <b>이 숫자를 바꾸면 그 상수도 함께 고쳐라</b> — 창이 커지면
      * 보존 기간이 그것을 못 덮어 게이지가 통째로 {@code NaN} 이 된다.
      */
@@ -392,11 +392,11 @@ public class ExpirePendingRefresher {
                            AND p.PARAMETER_NAME = 'asOf'
                            AND p.PARAMETER_TYPE = 'java.time.LocalDateTime'
                          WHERE e.STATUS = 'COMPLETED'
-                           AND e.END_TIME > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                           AND e.END_TIME > DATE_SUB(NOW(), INTERVAL %d DAY)
                            AND i.JOB_NAME = :jobName
                          ORDER BY e.END_TIME DESC, e.JOB_EXECUTION_ID DESC
                          LIMIT 1
-                        """)
+                        """.formatted(BatchMetadataWindow.LOOKBACK_DAYS))
                 .param("jobName", ExpireStepContext.JOB_NAME)
                 .query(Long.class)
                 .optional();

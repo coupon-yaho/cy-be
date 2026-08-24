@@ -64,6 +64,12 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.schedule.cleanup-cron=0 0 0 1 1 *",
         "batch.metrics.cleanup-sla-seconds=999999999",
         "batch.metrics.expire-sla-seconds=999999999",
+        // 검증 크론도 함께 민다(CY-470). 기본값 05:00 UTC 를 그대로 두면
+        // 그 시각을 지나며 도는 CI 에서 진짜 검증이 발화해, 공유 컨테이너의
+        // asof_state 를 300만 행까지 채우고 다른 테스트의 전제를 바꾼다 —
+        // 위 정리 크론을 민 것과 같은 이유다. 연 1회는 SLA 가드에 걸려 SLA 도 올린다.
+        "batch.schedule.verify-cron=0 0 0 1 1 *",
+        "batch.metrics.verify-sla-seconds=999999999",
         // 테스트가 이 값을 직접 계산에 쓴다. 기본값(10분)에 기대면 기본값이 바뀔 때
         // 이 클래스가 왜 깨지는지 알 수 없다.
         // step-timeout(600000)보다 커야 한다 — RunningJobProbe 생성자가 검사한다.

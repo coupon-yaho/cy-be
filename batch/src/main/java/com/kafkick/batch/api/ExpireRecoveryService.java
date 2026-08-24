@@ -132,7 +132,7 @@ public class ExpireRecoveryService {
      * Step·Job 쓰기까지 이어진다 — <b>이번 티켓이 만든 락 보유 구간</b>이다. 인증 없는
      * POST 라 같은 실행 번호로 요청이 몰리면 뒤엣것들이
      * {@code innodb_lock_wait_timeout}(기본 50초)까지 커넥션을 물고 기다리고, 그동안
-     * {@code @Scheduled} 일곱이 풀(13)에서 커넥션을 못 얻는다. <b>DB 가 아플 때 불리는
+     * {@code @Scheduled} 여덟이 풀(13)에서 커넥션을 못 얻는다. <b>DB 가 아플 때 불리는
      * 진단 도구가 정확히 그때 배치를 멈추는 모양</b>이라 여기만 먼저 막는다.
      */
     @Transactional(timeout = 10)

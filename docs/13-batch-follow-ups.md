@@ -512,7 +512,7 @@ api 의 쓰기는 애초에 안 잡힌다.
 | **A** | ~~검증 가드를 실행 중 검사로~~ **완료 · CY-384** | — |
 | **B** | ~~배치 감시를 마지막 성공 시각으로~~ **완료 · CY-392** — 지표 셋(`cy_batch_last_success_seconds{spring_batch_job_name}`·`cy_batch_stuck_executions{spring_batch_job_name}`·`cy_batch_refresh_failures_total`) + 규칙 일곱(`ExpireNotSucceeding`·`ExpireNeverSucceeded`·`ExpireGaugeMissing`·`BatchTargetDown`·`BatchStuckExecution`·`BatchRunMetricsUnknown`·`BatchRunMetricsStale`) | — |
 | **C** | ~~만료·정리를 배치 창으로~~ **완료 · CY-397** — 만료 04:10 · `cleanupJob` 신설 04:30 · 만료 SLA 180,000(50h) · `max-expire-skips` 1 · `BatchJobRunningTooLong` 600초 · 규칙 넷 신설(`CleanupNotSucceeding`·`CleanupNeverSucceeded`·`CleanupGaugeMissing`·`CleanupRunningTooLong`) · `NeverSucceeded` 의 `for` 는 10분·30분 유지(크론 슬롯을 예산으로 쓰면 재기동마다 리셋돼 영원히 안 뜬다 — 시도했다가 되돌린 근거는 `batch-alerts.yml` 의 그 규칙 주석) · `started_at`/`finished_at` 을 도메인 시계로 | A · B |
-| **D** | 300만에서 검증 소요 실측 → 05:00 슬롯 배정. `BatchJobRunningTooLong` 의 `verifyJob` 임계, **`verifyJob` SLA 알림**, 그리고 **C 가 미룬 셋** — `max-expire-skips` 를 0 으로 · 만료 SLA 를 25h 로(**`ExpireNotSucceeding` 과 `ExpireMetricsBackdated` 식 둘 다** 같이 고친다 — 기동 가드가 그 둘을 이름으로 부른다) · `cleanup.abandoned-after-hours`(24h) 재산정 | C · 300만 적재 |
+| **D** | ~~300만에서 검증 소요 실측 → 05:00 슬롯 배정~~ **완료 · CY-470** — 실측 **472초**(판정 경로) · `VerifyScheduler` 05:00 신설 · 게이지 `cy_verify_last_success_seconds{dataset,scope}`(`BATCH_JOB_EXECUTION_PARAMS` 조인) · 규칙 넷 신설(`VerifyNotSucceeding`·`VerifyNeverSucceeded`·`VerifyGaugeMissing`·`VerifyRunningTooLong` 1200초) · **C 가 미룬 셋** 전부 — `max-expire-skips` 1→**0** · 만료 SLA 180,000→**90,000**(식 둘 다) · `cleanup.abandoned-after-hours` 24→**6** · 되읽기 창(7일)을 `BatchMetadataWindow.LOOKBACK_DAYS` 로 묶어 SQL 리터럴 둘을 없앰 · `statsAggregateStep` 의 집계 둘을 쪼갬(아래) | C · 300만 적재 |
 
 > **~~만료 지표가 아직 프로세스 게이지다~~ 완료 · CY-421.** `cy_expire_*` 넷이 `afterJob`
 > 에서만 채워져, 일 1회로 옮긴 뒤 재기동부터 다음 04:10 까지 **최대 하루가 `NaN`** 이었고
@@ -529,18 +529,42 @@ api 의 쓰기는 애초에 안 잡힌다.
 > 비례해 1ms 다. `BLOCKED_COUPONS` 는 되읽기 경로에 없다 — 잡의 태스클릿이
 > 부르고 되읽기는 그 결과를 배치 메타에서 읽는다.
 
-> **만료 SLA 가 50시간인 것은 C 의 남은 빚이다.** 일 1회에서 `max-expire-skips=1` 이면
-> 최대 지연이 이틀이라 SLA 가 그만큼 무뎌진다. 한때 그 손잡이를 0 으로 내려 25시간을
-> 지키려 했는데, 그 근거가 *"겹침은 일정 분리가 막는다(만료 04:10 · 검증 05:00)"* 였다 —
-> **검증 05:00 크론이 아직 없다.** 검증을 띄우는 유일한 경로는 손 트리거이고 04:10 UTC 는
-> **13:10 KST**, 즉 시연 시간대다. 뚫린 검증의 `asOf` 는 `rejectIssuancesUpdatedAfterAsOf`
-> 때문에 **영구히 못 쓴다**(재시딩 말고 복구가 없다). 만료가 하루 밀리는 것은 다음 슬롯이
-> 밀린 대상을 함께 가져가므로, 값이 다른 두 사고 중 되돌릴 수 없는 쪽을 지켰다.
-> D 가 검증 크론을 세우면 그때 둘을 함께 되돌린다.
+> **~~만료 SLA 가 50시간인 것은 C 의 남은 빚이다~~ 완료 · CY-470.** 일 1회에서
+> `max-expire-skips=1` 이면 최대 지연이 이틀이라 SLA 가 그만큼 무뎌졌다. C 가 그 손잡이를
+> 0 으로 못 내린 이유는 근거가 *"겹침은 일정 분리가 막는다(만료 04:10 · 검증 05:00)"* 인데
+> **검증 05:00 크론이 없었기** 때문이다 — 검증을 띄우는 유일한 경로가 손 트리거였고
+> 04:10 UTC 는 **13:10 KST**, 즉 시연 시간대다. D 가 그 크론을 세워 둘을 함께 되돌렸다:
+> `max-expire-skips` 0 · SLA 90,000. 부등식은 `(0+1) × 86,400 + 60 +
+> BatchJobRunningTooLong(600) = 87,060 < 90,000` 이라 여유가 **2,940초**다 — 잡 소요 항은
+> CY-470 리뷰가 넣게 했다(게이지가 `END_TIME` 이라 잡이 도는 동안 나이가 자란다).
+>
+> ⚠️ **온디맨드 API 는 그대로 살아 있다.** 손으로 배치 창에 트리거하면 여전히 겹치고,
+> 이제 만료가 **뚫고 지나간다** — 그 검증의 `asOf` 는 `rejectIssuancesUpdatedAfterAsOf`
+> 때문에 **영구히 못 쓴다**(재시딩 말고 복구가 없다). 손 트리거는 배치 창을 피한다.
 
-> **`verifyJob` SLA 는 C 가 못 세웠다.** 크론이 없는 동안은 *"안 도는 게 정상"* 이라 걸면
-> 영구 발화다. 그리고 걸 때는 **`(dataset=CLEAN, scope=FULL)` 그레인**이어야 한다 — 지금
-> 게이지는 잡 이름 그레인이라 `CORRUPT` 손트리거 한 번이 SLA 를 리셋한다.
+> **~~`verifyJob` SLA 는 C 가 못 세웠다~~ 완료 · CY-470.** 크론이 없는 동안은
+> *"안 도는 게 정상"* 이라 걸면 영구 발화였다. 걸면서 **`(dataset=CLEAN, scope=FULL)`
+> 그레인**으로 세웠다 — 잡 이름 그레인이면 `CORRUPT` 손트리거 한 번이 SLA 를 리셋한다.
+> 게이지는 `BATCH_JOB_EXECUTION_PARAMS` 를 조인해 그 축을 만든다.
+
+> **D 가 함께 푼 것 — `statsAggregateStep` 이 DB 를 죽였다.** 300만 전수를 처음 돌려 보니
+> 판정 경로(472초)는 멀쩡히 끝나는데 마지막 통계 Step 에서 **MySQL 이 강제 종료**됐다
+> (세 번 재현). 원인은 <b>인덱스로 정렬할 수 없는 `GROUP BY` 둘</b>이다 — `grade_stats` 는
+> `issued_grade` 가 인덱스에 없고 `hourly_stats` 는 `ELT(WEEKDAY(…))` 표현식이라, MySQL 8 의
+> TempTable 엔진이 `temptable_max_ram`(1GiB)까지 **디스크로 안 넘기고 RAM 에 쥔다.**
+> mysqld 상주가 907MiB → **1,163MiB** 로 12초 만에 부풀었다. **결과가 936행인데도 그렇다** —
+> 부푸는 축은 결과 크기가 아니라 <b>한 문장이 훑는 입력 행 수</b>다.
+>
+> 처방도 실측으로 골랐다. `SQL_BIG_RESULT` 힌트와 `tmp_table_size` 인하는 둘 다 같은 곡선으로
+> 죽었고 `internal_tmp_mem_storage_engine` 은 앱 계정에 권한이 없다 — **쪼개는 것만 들었다.**
+> 회차 단위 147회로 나누니 상주가 900 → 903MiB 로 **평평했고** 26초에 끝났다(한 문장 판은
+> 12초에 죽었으므로 완주 시간은 오히려 이쪽이 짧다). `hourly_stats` 는 회차 축이 없어
+> 이력 id 를 50만 폭으로 훑고 부분합을 자바에서 접는다.
+>
+> 안 쪼갠 둘의 근거도 실측이다 — `coupon_stats` 는 인덱스 순서를 타는 스트리밍
+> `Group aggregate` 라 903MiB 평평(24초)이었고, `broken_issue_history` 는 290만 행 파생
+> 테이블을 만들지만 **디스크 임시 테이블로 흘러넘쳐**(`Created_tmp_disk_tables` +2) 902MiB 였다.
+> 즉 무거워 보이는 쪽이 안전하고 결과가 49행인 쪽이 위험했다.
 
 **B 없이 C 를 하면 감시 공백이 생긴다.** 예전 `BatchJobNotRunning` 은 15분 창의 증분으로 봤는데,
 일 1회로 옮기면 그 창이 **하루의 대부분 비어** 영구 critical 이 된다. 규칙이 틀린 게 아니라
@@ -566,17 +590,28 @@ api 의 쓰기는 애초에 안 잡힌다.
 
 > **그 절반은 이미 됐다** — `CY-392`(`ac23406`)가 설정 키와 `CronSlot.maxGap` 을 넣고
 > `(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms < SLA` 를 기동 때 검사한다.
-> (값을 배치 창에 맞춰 180000 으로 다시 잡은 것은 CY-397 이다.)
+> (값을 배치 창에 맞춰 180000 으로 다시 잡은 것은 CY-397 이고, 검증 크론이 서면서
+> 90000 으로 되돌린 것은 CY-470 이다.)
 > 남은 절반은 규칙 파일이다 — 프로메테우스는 앱 설정을 못 읽으므로
-> `batch-alerts.yml` 이 아직 `180000`·`90000` 을 세 자리에 박고 있다. 기동 가드의 거절
-> 메시지가 그 규칙들을 **이름으로 부르는 것**이 지금의 방어이고, 그것을 기계 검사로
-> 바꾸는 것이 남았다.
+> `batch-alerts.yml` 이 아직 `90000` 을 **네 자리**에 박고 있다(만료·정리·검증·
+> `ExpireMetricsBackdated`). 기동 가드의 거절 메시지가 그 규칙들을 **이름으로 부르는 것**이
+> 지금의 방어이고, 그것을 기계 검사로 바꾸는 것이 남았다.
 
-**C 는 A 의 남은 창을 못 닫았다 — D 몫이다.** `rejectRunningExpire` 는 통과 직후 만료가
-발화하는 창을 못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`). *"만료 04:10 · 검증
-05:00 이면 겹칠 구조가 사라진다"* 고 적었는데, **그 검증 크론이 아직 없다.** 검증은 손
-트리거뿐이라 시각을 안 가리고, 그래서 C 는 상호 배제를 **끄는 대신 남겼다**
-(`max-expire-skips=1`). 겹칠 구조가 실제로 사라지는 것은 D 가 05:00 슬롯을 배정한 뒤다.
+**~~C 는 A 의 남은 창을 못 닫았다 — D 몫이다~~ 완료 · CY-470.** `rejectRunningExpire` 는
+통과 직후 만료가 발화하는 창을 못 막고 `assertFrozenStep` 이 그것을 잡는다(`docs/15`).
+*"만료 04:10 · 검증 05:00 이면 겹칠 구조가 사라진다"* 고 적었는데 그때는 **그 검증 크론이
+없었다** — 검증은 손 트리거뿐이라 시각을 안 가렸고, 그래서 C 는 상호 배제를 **끄는 대신
+남겼다**(`max-expire-skips=1`). D 가 05:00 슬롯을 배정하며 그 구조를 없애고 `0` 으로 내렸다.
+
+> ⚠️ **크론끼리는 안 겹치지만 손 트리거는 여전히 겹칠 수 있다.** 그리고 상한이 `0` 이라
+> 이제는 **첫 충돌에서 만료가 지나간다** — 그 검증은 버려진다. `docs/15` 가 그 규약을 적는다.
+>
+> **남은 것 — 그 규약이 아직 코드가 아니다.** `VerifyTriggerController` 는 *이미 도는* 만료만
+> 보고(`rejectRunningExpire`) *곧 뜰* 만료는 안 본다. 즉 13:05 KST 에 손 트리거를 걸면
+> 접수는 통과하고 13:10 에 만료가 지나가 그 실행이 버려진다 — 시연 직전이 하필 그 시각대다.
+> 접수 단계에서 **만료의 다음 발화 시각**을 보고 거절하면 닫힌다(`CronSlot` 이 이미 슬롯을
+> 계산한다). 버려지는 대가가 "그 `asOf` 를 못 쓴다" 뿐이고 다른 `asOf` 로 다시 부르면 되므로
+> 이 티켓에서 하지 않고 여기 남긴다.
 
 ### C 가 함께 져야 하는 것 — 버려진 실행의 `asof_state`
 

@@ -27,6 +27,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
+import com.kafkick.batch.config.BatchMetadataWindow;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.verification.CleanupRepository;
@@ -100,15 +101,21 @@ public class CleanupJobConfig {
     private static final String META_CUTOFF_KEY = "cleanup.metaCutoff";
 
     /**
-     * <b>보존 하한.</b> {@code BatchRunMetricsRefresher} 와 {@code ExpirePendingRefresher} 가
-     * 마지막 성공 실행을 <b>{@code END_TIME > NOW() - 7 DAY}</b> 창에서 찾는다. 보존이 그
-     * 창보다 길어야 <b>삭제가 게이지에 영향을 줄 수 없다</b> — 창이 언제나 구속 조건이 된다.
+     * <b>배치 메타 보존 하한 — 되읽기 창보다 하루 크다.</b> 검사가
+     * {@code < MIN_METADATA_KEEP_DAYS} 라 창 값(7) 자체는 거절된다. 두 값을 따로 적으면
+     * "하한 7" 처럼 부등호가 등호로 새는데, 실제로 그렇게 새서 다섯 자리가 틀렸었다.
+     *
+     * <p><b>왜 창보다 커야 하나.</b> {@code BatchRunMetricsRefresher} 와
+     * {@code ExpirePendingRefresher} 가 마지막 성공 실행을
+     * {@link BatchMetadataWindow#LOOKBACK_DAYS} 창에서 찾는다. 보존이 그 창보다 길어야
+     * <b>삭제가 게이지에 영향을 줄 수 없다</b> — 창이 언제나 구속 조건이 된다.
+     * 두 값이 <b>한 상수에서 나오므로</b> 창을 넓히면 이 하한이 자동으로 따라 올라간다(CY-470).
      *
      * <p>⚠️ <b>"안쪽으로 내리면 곧 {@code NaN}" 은 아니다.</b> 두 잡은 매일 도니까 오늘치
-     * 성공이 남아 평소에는 멀쩡하다. 무너지는 것은 <b>잡이 {@code metadata-keep-days} 일 넘게 연속
-     * 실패한 날</b>이다 — 마지막 성공이 컷오프 밖으로 밀려 지워지고, 게이지가 {@code NaN} 이
-     * 되어 {@code ExpireNeverSucceeded}(critical)가 뜬다. 실제 상태는 <i>"며칠 실패"</i> 인데
-     * 관제는 <i>"한 번도 성공한 적 없음"</i> 을 읽는다 — 사고 등급이 바뀐다.
+     * 성공이 남아 평소에는 멀쩡하다. 무너지는 것은 <b>잡이 {@code metadata-keep-days} 일 넘게
+     * 연속 실패한 날</b>이다 — 마지막 성공이 컷오프 밖으로 밀려 지워지고, 게이지가
+     * {@code NaN} 이 되어 {@code ExpireNeverSucceeded}(critical)가 뜬다. 실제 상태는
+     * <i>"며칠 실패"</i> 인데 관제는 <i>"한 번도 성공한 적 없음"</i> 을 읽는다 — 사고 등급이 바뀐다.
      *
      * <p>⚠️ <b>컷오프의 시간대.</b> 이 값이 미는 컷오프는 {@code TimeProvider}(UTC)로 잡는데,
      * 비교 대상인 {@code BATCH_JOB_EXECUTION.CREATE_TIME}·{@code END_TIME} 은 프레임워크가
@@ -116,19 +123,8 @@ public class CleanupJobConfig {
      * 맞추는 것은 {@code batch.yml} 의 {@code TZ=UTC} 와 {@code bootRun} 의
      * {@code user.timezone=UTC} 다 — 그것을 안 주고 최솟값으로 내리면 존 오프셋만큼
      * 여유가 깎인다(KST 면 8일이 실질 7.6일).
-     *
-     * <p>같은 값을 두 곳에 적지 않으려면 그 창을 설정으로 빼야 하는데, 그 조회는 SQL 안에
-     * 리터럴로 있고 이 티켓 범위 밖이다. <b>그래서 여기서 하한으로 못 박고 그 사실을
-     * 기동 메시지에 적는다</b> — 창을 바꾸는 사람이 이 값을 함께 보게 된다.
      */
-    static final int REFRESH_WINDOW_DAYS = 7;
-
-    /**
-     * <b>통과하는 최솟값이다 — 창 값(7)이 아니라 그것보다 하나 큰 8.</b> 검사가
-     * {@code <= REFRESH_WINDOW_DAYS} 라 7 은 거절된다. 두 값을 따로 적으면 "하한 7" 처럼
-     * 부등호가 등호로 새는데, 실제로 그렇게 새서 다섯 자리가 틀렸었다.
-     */
-    static final int MIN_METADATA_KEEP_DAYS = REFRESH_WINDOW_DAYS + 1;
+    static final int MIN_METADATA_KEEP_DAYS = BatchMetadataWindow.LOOKBACK_DAYS + 1;
 
     /**
      * <b>걷을 것이 남았는데 검증에 자리를 내주고 멈춘 상태.</b> 잡 상태는 {@code COMPLETED}
@@ -181,7 +177,7 @@ public class CleanupJobConfig {
             @Value("${batch.cleanup.step-timeout-ms:120000}") long stepTimeoutMillis,
             @Value("${batch.verify.asof-state-keep-runs:5}") int keepRuns,
             @Value("${batch.cleanup.chunk-size:10000}") int chunkSize,
-            @Value("${batch.cleanup.abandoned-after-hours:24}") long abandonedAfterHours,
+            @Value("${batch.cleanup.abandoned-after-hours:6}") long abandonedAfterHours,
             @Value("${batch.cleanup.metadata-keep-days:30}") int metadataKeepDays,
             @Value("${batch.cleanup.metadata-chunk-size:500}") int metadataChunkSize) {
         // 스프링의 트랜잭션 타임아웃은 초 단위라 999 는 0 으로 내려앉는데, 0 은 "무제한" 이
@@ -223,10 +219,10 @@ public class CleanupJobConfig {
         if (metadataKeepDays < MIN_METADATA_KEEP_DAYS) {
             throw new IllegalArgumentException(
                     "batch.cleanup.metadata-keep-days 는 " + MIN_METADATA_KEEP_DAYS
-                            + " 이상이어야 합니다(되읽기 창 " + REFRESH_WINDOW_DAYS
+                            + " 이상이어야 합니다(되읽기 창 " + BatchMetadataWindow.LOOKBACK_DAYS
                             + "일 초과). BatchRunMetricsRefresher 와 "
                             + "ExpirePendingRefresher 가 마지막 성공 실행을 "
-                            + "END_TIME > NOW() - INTERVAL " + REFRESH_WINDOW_DAYS + " DAY "
+                            + "END_TIME > NOW() - INTERVAL " + BatchMetadataWindow.LOOKBACK_DAYS + " DAY "
                             + "창에서 찾습니다. 보존이 그 창보다 길어야 삭제가 게이지에 "
                             + "영향을 줄 수 없습니다. 안쪽으로 내려도 잡이 매일 성공하는 동안은 "
                             + "멀쩡해 보이지만, 연속 실패가 보존 기간을 넘긴 날 마지막 성공이 "

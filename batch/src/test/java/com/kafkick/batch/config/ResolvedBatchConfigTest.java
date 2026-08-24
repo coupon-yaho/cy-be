@@ -9,6 +9,7 @@ import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.schedule.CleanupScheduler;
 import com.kafkick.batch.schedule.CouponRoundScheduler;
 import com.kafkick.batch.schedule.ExpireScheduler;
+import com.kafkick.batch.schedule.VerifyScheduler;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.storage.db.config.HermeticBoot;
 import com.kafkick.storage.db.config.ResolvedConfigChecks;
@@ -95,7 +96,9 @@ class ResolvedBatchConfigTest {
             ExpirePendingRefresher.class,
             // CY-446. 여기 안 넣으면 새 키 넷이 스캐너에 안 보이고, .example 에 오타가 나도
             // 기본값으로 조용히 폴백한다 — 이 목록에 빠진 것이 이 테스트의 유일한 사각이다.
-            CouponRoundScheduler.class, CouponRoundPendingRefresher.class);
+            CouponRoundScheduler.class, CouponRoundPendingRefresher.class,
+            // CY-470. 검증 크론과 그 SLA 키가 여기서 처음 생긴다.
+            VerifyScheduler.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
@@ -108,6 +111,9 @@ class ResolvedBatchConfigTest {
             "batch.metrics.run-timeout-ms",
             "batch.metrics.expire-sla-seconds",
             "batch.metrics.cleanup-sla-seconds",
+            // 검증 SLA(CY-470). 만료·정리와 달리 건너뛰기 항이 없다 — 검증은 슬롯을
+            // 건너뛰지 않고, 앞 실행이 돌면 크론 트리거가 다음 발화를 안 잡는다.
+            "batch.metrics.verify-sla-seconds",
             "batch.verify.asof-state-keep-runs",
             "batch.cleanup.chunk-size",
             "batch.cleanup.abandoned-after-hours",
@@ -127,6 +133,8 @@ class ResolvedBatchConfigTest {
             //    (batch → storage 가 runtimeOnly 라 컴파일 타임에 그 클래스를 못 가리킨다).
             //    대신 아래 assertBatchKeysAreAlive 가 환경변수 이름으로 값을 주입해
             //    **이름이 실제로 살아 있는 것**을 잰다 — 키 경로는 그것으로 함께 지켜진다.
+            // ⚠️ batch.verify.history-scan-window 도 같은 이유로 여기 없다(CY-470).
+            //    그 @Value 는 storage 의 StatsJdbcAdapter 에 있다.
             "batch.verify.step-timeout-ms",
             "batch.verify.max-findings-per-rule",
             "batch.scheduling.enabled",
@@ -137,6 +145,7 @@ class ResolvedBatchConfigTest {
             "batch.verify.metrics-timeout-ms",
             // @Scheduled 애너테이션 안에 있어 @Value 파라미터 스캔으로는 안 잡히던 키.
             "batch.schedule.expire-cron",
+            "batch.schedule.verify-cron",
             "batch.verify.metrics-refresh-ms");
 
     /**
@@ -190,7 +199,7 @@ class ResolvedBatchConfigTest {
                 // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
                 // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
                 // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
-                // 기본값(현재 7)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **7 을 주면 안 된다** —
+                // 기본값(현재 8)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **8 을 주면 안 된다** —
                 // 폴백해도 같은 값이라 이 단언이 아무것도 안 지킨다.
                 "--BATCH_SCHEDULER_POOL_SIZE=6",
                 "--BATCH_RUN_METRICS_REFRESH_MS=62000",
@@ -204,6 +213,9 @@ class ResolvedBatchConfigTest {
                 "--COUPON_ROUND_INITIAL_DELAY_MS=66000",
                 "--COUPON_ROUND_TIMEOUT_MS=9000",
                 "--COUPON_ROUND_TX_TIMEOUT_MS=7000",
+                // CY-470. 앞의 것과 같은 이유로 storage 쪽 @Value 라 스캐너가 못 본다.
+                "--VERIFY_HISTORY_SCAN_WINDOW=250000",
+                "--VERIFY_SLA_SECONDS=90001",
                 "--CLEANUP_METADATA_CHUNK_SIZE=507",
                 "--EXPIRE_PENDING_TIMEOUT_MS=8000",
                 "--BATCH_RUN_METRICS_TIMEOUT_MS=7000",
@@ -350,6 +362,12 @@ class ResolvedBatchConfigTest {
                 .isEqualTo("9000");
         assertThat(environment.getProperty("batch.schedule.coupon-round-tx-timeout-ms"))
                 .isEqualTo("7000");
+        assertThat(environment.getProperty("batch.verify.history-scan-window"))
+                .as("요일·시각 집계가 한 문장에 훑는 이력 폭. 이름이 죽으면 기본값 500000 으로 "
+                        + "조용히 폴백하는데, 더 작은 서버에서 내려 둔 값이 그때 사라진다")
+                .isEqualTo("250000");
+        assertThat(environment.getProperty("batch.metrics.verify-sla-seconds"))
+                .isEqualTo("90001");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")
@@ -357,7 +375,7 @@ class ResolvedBatchConfigTest {
     }
 
     @Test
-    @DisplayName("크론 다섯이 실제로 파싱된다 — 셋은 배선됐고 둘(verify-incremental·coupon-create)은 자리 표시다")
+    @DisplayName("크론 여섯이 실제로 파싱된다 — 넷은 배선됐고 둘(verify-incremental·coupon-create)은 자리 표시다")
     void scheduleCronsParse() {
         try (ConfigurableApplicationContext context = HermeticBoot.run(
                 LOCATION, "--spring.main.web-application-type=none")) {
@@ -365,8 +383,8 @@ class ResolvedBatchConfigTest {
 
             // @Scheduled 가 배선되는 티켓까지 기다리면 그때 처음 터진다. 파싱만 시켜 두면
             // 문법 오류는 지금 잡히고, 배선 티켓은 크론이 맞다는 전제 위에서 시작한다.
-            for (String key : List.of("expire-cron", "verify-incremental-cron", "cleanup-cron",
-                    "coupon-open-cron", "coupon-create-cron")) {
+            for (String key : List.of("expire-cron", "verify-cron", "verify-incremental-cron",
+                    "cleanup-cron", "coupon-open-cron", "coupon-create-cron")) {
                 String cron = environment.getProperty("batch.schedule." + key);
 
                 assertThat(cron).as(key + " 가 해석되지 않았다 — 키 경로부터 확인해라").isNotBlank();
