@@ -61,9 +61,11 @@ class CampaignMeterRegistryTest {
     }
 
     @Test
-    void retiresAllCampaignScopedMetersAndTombstonesDelayedEvents() throws Exception {
+    void retiresAllCampaignScopedMetersAndTombstonesDelayedEvents() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z"));
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters, 1);
+        CampaignMeterRegistry campaigns = registry(meters,
+                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
         MeterEventRecorder recorder = recorder(campaigns, meters);
         IssuanceFlowEventFactory factory = factory();
 
@@ -71,9 +73,9 @@ class CampaignMeterRegistryTest {
             recorder.record(factory.issueAttempt(context(201L)));
             recorder.record(factory.admitted(context(201L), 1L));
             recorder.record(factory.issued(context(201L), 1L, "code"));
-            campaigns.retireCampaign(201L, Instant.now().minusSeconds(1));
+            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
 
-            awaitNoCampaignMeters(meters, "201");
+            assertNoCampaignMeters(meters, "201");
             recorder.record(factory.issueAttempt(context(201L)));
             assertNoCampaignMeters(meters, "201");
 
@@ -198,7 +200,7 @@ class CampaignMeterRegistryTest {
             recorder.record(factory().issueAttempt(context(201L)));
             campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
 
-            assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "201").counters()).hasSize(1);
+            assertNoCampaignMeters(meters, "201");
             assertThat(meters.find(MeterNames.QUEUE_ADMITTED).tag("coupon_id", "201").counters()).isEmpty();
             assertThat(meters.find(MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH).tag("coupon_id", "201")
                     .gauges()).isEmpty();
@@ -236,23 +238,6 @@ class CampaignMeterRegistryTest {
         return new IssuanceFlowEvent.Ctx("request", 101L, couponId, Grade.GOLD, false,
                 Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
                 QueueMode.ADAPTIVE, 901L, "api-1");
-    }
-
-    private static void awaitNoCampaignMeters(SimpleMeterRegistry meters, String couponId)
-            throws InterruptedException {
-        for (int attempt = 0; attempt < 100; attempt++) {
-            boolean gone = meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", couponId).counters().isEmpty()
-                    && meters.find(MeterNames.QUEUE_ADMITTED).tag("coupon_id", couponId).counters().isEmpty()
-                    && meters.find(MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH).tag("coupon_id", couponId)
-                    .gauges().isEmpty()
-                    && meters.find(MeterNames.QUEUE_EVENT_LAST_ADMITTED_EPOCH).tag("coupon_id", couponId)
-                    .gauges().isEmpty();
-            if (gone) {
-                return;
-            }
-            Thread.sleep(10);
-        }
-        assertNoCampaignMeters(meters, couponId);
     }
 
     private static void assertNoCampaignMeters(SimpleMeterRegistry meters, String couponId) {

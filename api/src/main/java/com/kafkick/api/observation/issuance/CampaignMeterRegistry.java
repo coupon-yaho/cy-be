@@ -39,6 +39,7 @@ public final class CampaignMeterRegistry implements AutoCloseable {
     private final ScheduledExecutorService retirementExecutor;
     private final int maxActiveCampaigns;
     private final Duration retireGracePeriod;
+    private final Duration retirementRetryDelay;
     private final Duration tombstoneRetention;
     private final int tombstoneMaxEntries;
     private final FailureLogThrottle failureLog;
@@ -50,6 +51,8 @@ public final class CampaignMeterRegistry implements AutoCloseable {
     // Registration, cap accounting, retirement, and tombstone insertion must be one atomic state transition.
     private final ReentrantLock registrationGate = new ReentrantLock();
     private final Map<Long, Boolean> retirementScheduled = new ConcurrentHashMap<>();
+    // Guarded by registrationGate: an unsuccessful remove must retain its meter references for retry.
+    private final Map<Long, PendingRetirement> pendingRetirements = new java.util.HashMap<>();
     private final LinkedHashMap<Long, Instant> tombstones = new LinkedHashMap<>();
 
     public CampaignMeterRegistry(
@@ -80,6 +83,7 @@ public final class CampaignMeterRegistry implements AutoCloseable {
         retireGracePeriod = properties.resolvedRetireGracePeriod();
         tombstoneRetention = properties.resolvedTombstoneRetention();
         tombstoneMaxEntries = properties.resolvedTombstoneMaxEntries();
+        retirementRetryDelay = Objects.requireNonNull(failureLogInterval, "failureLogInterval");
         failureLog = new FailureLogThrottle(failureLogInterval);
         campaignLimitExceeded = Counter.builder(MeterNames.CAMPAIGN_LIMIT_EXCEEDED)
                 .description("Campaign meter registrations rejected by the cardinality limit")
@@ -102,7 +106,7 @@ public final class CampaignMeterRegistry implements AutoCloseable {
             if (existing != null) {
                 return Optional.of(existing);
             }
-            if (isTombstoned(couponId)) {
+            if (pendingRetirements.containsKey(couponId) || isTombstoned(couponId)) {
                 return Optional.empty();
             }
             if (campaigns.size() >= maxActiveCampaigns) {
@@ -125,15 +129,20 @@ public final class CampaignMeterRegistry implements AutoCloseable {
                         couponId, closedAt, null);
                 return;
             }
-            if (isTombstoned(couponId)) {
-                return;
+            registrationGate.lock();
+            try {
+                if (isTombstoned(couponId)) {
+                    if (pendingRetirements.containsKey(couponId)) {
+                        scheduleRetirement(couponId, retryDelayMillis());
+                    }
+                    return;
+                }
+                Instant retireAt = closedAt.plus(retireGracePeriod);
+                long delayMillis = Math.max(0, Duration.between(clock.instant(), retireAt).toMillis());
+                scheduleRetirement(couponId, delayMillis);
+            } finally {
+                registrationGate.unlock();
             }
-            if (retirementScheduled.putIfAbsent(couponId, Boolean.TRUE) != null) {
-                return;
-            }
-            Instant retireAt = closedAt.plus(retireGracePeriod);
-            long delayMillis = Math.max(0, Duration.between(clock.instant(), retireAt).toMillis());
-            retirementExecutor.schedule(() -> retireNow(couponId), delayMillis, TimeUnit.MILLISECONDS);
         } catch (RuntimeException exception) {
             retirementScheduled.remove(couponId);
             logAtMostOnce("캠페인 미터 retire 처리에 실패했습니다. couponId={}", couponId, exception);
@@ -155,18 +164,45 @@ public final class CampaignMeterRegistry implements AutoCloseable {
     private void retireNow(long couponId) {
         registrationGate.lock();
         try {
-            // Tombstone first: an instrumentation failure must not make a closed campaign registrable again.
-            addTombstone(couponId);
-            CampaignMeters removed = campaigns.remove(couponId);
-            if (removed != null) {
-                removeCampaignMeters(couponId, removed);
+            retirementScheduled.remove(couponId);
+            PendingRetirement pending = pendingRetirements.get(couponId);
+            if (pending == null) {
+                // Tombstone first: an instrumentation failure must not make a closed campaign registrable again.
+                addTombstone(couponId);
+                CampaignMeters removed = campaigns.remove(couponId);
+                if (removed == null) {
+                    return;
+                }
+                pending = new PendingRetirement(removed, removed.meters());
+            }
+            List<Meter> remaining = removeCampaignMeters(couponId, pending.remainingMeters());
+            if (remaining.isEmpty()) {
+                pendingRetirements.remove(couponId);
+            } else {
+                pendingRetirements.put(couponId, new PendingRetirement(pending.campaignMeters(), remaining));
+                scheduleRetirement(couponId, retryDelayMillis());
             }
         } catch (RuntimeException exception) {
             logAtMostOnce("캠페인 미터 retire 처리에 실패했습니다. couponId={}", couponId, exception);
         } finally {
-            retirementScheduled.remove(couponId);
             registrationGate.unlock();
         }
+    }
+
+    private void scheduleRetirement(long couponId, long delayMillis) {
+        if (retirementScheduled.putIfAbsent(couponId, Boolean.TRUE) != null) {
+            return;
+        }
+        try {
+            retirementExecutor.schedule(() -> retireNow(couponId), delayMillis, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException exception) {
+            retirementScheduled.remove(couponId);
+            throw exception;
+        }
+    }
+
+    private long retryDelayMillis() {
+        return Math.max(1, retirementRetryDelay.toMillis());
     }
 
     private CampaignMeters registerCampaignMeters(long couponId) {
@@ -214,15 +250,17 @@ public final class CampaignMeterRegistry implements AutoCloseable {
         }
     }
 
-    private void removeCampaignMeters(long couponId, CampaignMeters removed) {
-        for (Meter meter : removed.meters()) {
+    private List<Meter> removeCampaignMeters(long couponId, List<Meter> meters) {
+        List<Meter> remaining = new java.util.ArrayList<>();
+        for (Meter meter : meters) {
             try {
                 meterRegistry.remove(meter);
             } catch (RuntimeException exception) {
-                // Keep attempting the remaining meters so one registry failure cannot retain the full label set.
+                remaining.add(meter);
                 logAtMostOnce("캠페인 미터 retire 제거에 실패했습니다. couponId={}", couponId, exception);
             }
         }
+        return remaining;
     }
 
     private void addTombstone(long couponId) {
@@ -274,5 +312,8 @@ public final class CampaignMeterRegistry implements AutoCloseable {
             AtomicLong lastAdmittedEpoch,
             List<Meter> meters
     ) {
+    }
+
+    private record PendingRetirement(CampaignMeters campaignMeters, List<Meter> remainingMeters) {
     }
 }
