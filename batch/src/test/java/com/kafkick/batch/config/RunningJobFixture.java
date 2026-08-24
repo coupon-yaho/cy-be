@@ -129,10 +129,18 @@ public final class RunningJobFixture implements AutoCloseable {
      */
     public static RunningJobFixture plantWithoutStep(JobRepository jobRepository, String jobName,
             LocalDateTime key, LocalDateTime startedAt, BatchStatus status) {
-        JobParameters parameters = new JobParametersBuilder()
-                .addLocalDateTime("asOf", key)
-                .toJobParameters();
+        return plantWithoutStep(jobRepository, jobName,
+                new JobParametersBuilder().addLocalDateTime("asOf", key).toJobParameters(),
+                startedAt, status);
+    }
 
+    /**
+     * <b>파라미터를 통째로 받는다.</b> {@code cy_verify_last_success_seconds} 는
+     * {@code BATCH_JOB_EXECUTION_PARAMS} 의 {@code dataset}·{@code scope} 를 조인해
+     * 그레인을 맞추므로, {@code asOf} 만 심는 위 오버로드로는 그 축을 한 줄도 못 잰다.
+     */
+    public static RunningJobFixture plantWithoutStep(JobRepository jobRepository, String jobName,
+            JobParameters parameters, LocalDateTime startedAt, BatchStatus status) {
         JobInstance instance = jobRepository.createJobInstance(jobName, parameters);
         JobExecution execution =
                 jobRepository.createJobExecution(instance, parameters, new ExecutionContext());
@@ -156,6 +164,14 @@ public final class RunningJobFixture implements AutoCloseable {
      */
     public static RunningJobFixture plantCompleted(JobRepository jobRepository, String jobName,
             LocalDateTime key, Duration endedAgo) {
+        return plantCompleted(jobRepository, jobName,
+                new JobParametersBuilder().addLocalDateTime("asOf", key).toJobParameters(),
+                endedAgo);
+    }
+
+    /** 파라미터를 통째로 주는 판. 위 오버로드와 같은 경로를 탄다. */
+    public static RunningJobFixture plantCompleted(JobRepository jobRepository, String jobName,
+            JobParameters parameters, Duration endedAgo) {
         // now() 를 한 번만 읽는다. 두 번 읽으면 시작 시각과 종료 시각이 서로 다른 기준을
         // 갖고, 창 경계(7일) 테스트가 그 사이 오차만큼 흔들린다.
         //
@@ -164,7 +180,8 @@ public final class RunningJobFixture implements AutoCloseable {
         // 테스트가 도는 시점에 따라 창 안팎이 뒤집힌다. 그래서 상대(Duration)로 받는다.
         LocalDateTime endedAt = LocalDateTime.now().minus(endedAgo);
         RunningJobFixture fixture = plantWithoutStep(
-                jobRepository, jobName, key, endedAt.minusMinutes(1));
+                jobRepository, jobName, parameters, endedAt.minusMinutes(1),
+                BatchStatus.STARTED);
 
         fixture.execution.setStatus(BatchStatus.COMPLETED);
         fixture.execution.setEndTime(endedAt);

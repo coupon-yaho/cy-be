@@ -33,6 +33,7 @@ import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
 import com.kafkick.batch.config.RunningJobProbe;
+import com.kafkick.batch.config.VerifyRunContext;
 import com.kafkick.batch.replay.AsOfStateItemWriter;
 import com.kafkick.batch.replay.IllegalTransitionItemWriter;
 import com.kafkick.batch.replay.IssuanceHistoryGroup;
@@ -76,7 +77,7 @@ import com.kafkick.core.verification.replay.ReplayScanRange;
 @Configuration(proxyBeanMethods = false)
 public class VerifyJobConfig {
 
-    public static final String JOB_NAME = "verifyJob";
+    public static final String JOB_NAME = VerifyRunContext.JOB_NAME;
 
     /**
      * 잡 {@code ExecutionContext} 에 {@code runId} 를 심는 키. 트리거 API 의 조회가 이것을

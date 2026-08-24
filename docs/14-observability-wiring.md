@@ -39,10 +39,21 @@
 > `CleanupNotSucceeding` 만 두면 *"한 번도 안 돈 정리"* 가 **영구 침묵**이고, 그 상태가
 > 정확히 이 잡의 가장 나쁜 결말이다. `promtool` 유닛 테스트가 그 짝을 못 박아 둔다.
 >
-> 그리고 **`verifyJob` 에는 아직 SLA 알림을 붙이면 안 된다.** 크론이 없어
-> <b>"안 도는 것이 정상"</b>이라 붙이면 영구 critical 이다. CY-392 가 게이지
-> (`cy_batch_last_success_seconds{spring_batch_job_name="verifyJob"}`)는 미리 냈다 — 검증을 야간 크론으로
-> 옮기는 티켓이 <b>감시를 나중에 붙이는 상태로 시작하지 않게</b> 하려는 것이다.
+> **`verifyJob` 도 자기 판을 갖는다(CY-470) — 다만 그레인이 다르다.**
+> `VerifyNotSucceeding`(SLA 25h) · `VerifyNeverSucceeded`(NaN) · `VerifyGaugeMissing`(absent)
+> · `VerifyRunningTooLong`(1200초). 앞 셋의 셀렉터가 잡 이름이 아니라
+> **`cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"}`** 인 것이 핵심이다 —
+> `verifyJob` 하나가 게이트 조합과 리허설(`CORRUPT`)을 함께 도는데, 잡 이름 그레인에
+> SLA 를 걸면 <b>리허설 한 번이 시계열을 앞으로 밀어 SLA 를 리셋한다.</b> 정작 게이트
+> 조합은 며칠째 안 돌았는데 조용하다. `promtool` 유닛 테스트가 그 상황을 그대로 심어 잰다.
+>
+> 그전에는 SLA 를 못 걸었다 — 크론이 없어 <b>"안 도는 것이 정상"</b>이었고, 걸면 영구
+> critical 이다. CY-392 가 게이지만 미리 내 둔 것은 CY-470 이 <b>감시를 나중에 붙이는
+> 상태로 시작하지 않게</b> 하려는 것이었다.
+>
+> **`VerifyRunningTooLong` 만 잡 이름 그레인이다.** 그 축은 스프링 배치가 내는
+> `spring_batch_job_active_seconds_max` 라 `(dataset, scope)` 를 애초에 안 갖는다 —
+> "지금 도는 잡이 느리다" 는 조합과 무관한 질문이기도 하다.
 >
 > **CY-384 전에는 이유가 하나 더 있었다** — `rejectRunningSchedulers` 가 스케줄러 켜진
 > 상태의 실행을 아예 거부해, 크론을 붙일 수 있는 조합 자체가 없었다. 그 제약은 풀렸고,
@@ -137,6 +148,8 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `ExpireMetricsStale` · `ExpireMetricsBackdated` | `server` |
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |
+| `VerifyNotSucceeding` · `VerifyNeverSucceeded` · `VerifyGaugeMissing` | `server` |
+| `VerifyRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
 | `CouponRoundsNotOpening` · `CouponRoundsNotClosing` | `server` |
 | `CouponRoundMetricsUnknown` · `CouponRoundMetricsStale` · `CouponRoundMetricsMissing` | `server` |
@@ -406,6 +419,17 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
      --alertmanager.url=http://localhost:9093
    ```
 
+   > **`VerifyNeverSucceeded` 는 왜 안 넣나.** 콜드 스타트에서 뜨는 것은 맞다 — 다음
+   > 05:00 슬롯까지 최대 하루 동안 `NaN` 이다. 그런데 그 하루는 <b>게이트 판정의 근거가
+   > 없는 하루</b>이기도 하다. `CouponRounds(NotOpening|NotClosing)` 를 silence 에서
+   > 뺀 것과 같은 판단이다 — 재우면 그 사실을 아무도 말해 주지 않는다.
+   >
+   > 끄고 싶으면 검증을 한 번 손으로 돌린다. **다만 배치 창을 피해서 부른다** —
+   > 만료 04:10 · 정리 04:30 · 검증 05:00 UTC 는 각각 **13:10 · 13:30 · 14:00 KST** 이고,
+   > `max-expire-skips=0` 이라 그 근처에서 부른 검증은 만료가 **뚫고 지나가** 버려진다
+   > (CY-470). **KST 15:00 이후**가 안전하다. 그 규약은 `docs/15` 와
+   > `application.yml.example` 의 `max-expire-skips` 주석이 함께 적는다.
+   >
    > **`ExpireMetricsBackdated`·`ExpireMetricsStale` 은 왜 안 넣나.** 둘 다 콜드 스타트에서
    > 뜰 수 없다 — 앞엣것은 `cy_expire_measured_at_seconds` 가 `NaN` 이라 비교가 거짓이고,
    > 뒤엣것은 `cy_expire_refresh_failures_total` 이 0 에서 시작해 델타가 안 생긴다.

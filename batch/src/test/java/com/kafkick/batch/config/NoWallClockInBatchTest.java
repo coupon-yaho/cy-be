@@ -80,6 +80,8 @@ class NoWallClockInBatchTest {
      * CleanupJobConfig     2  버려진 실행 컷오프 · 배치 메타 보존 컷오프
      * ExpireScheduler      2  크론 슬롯 계산과 기동 가드 — 잡 밖이다
      * CleanupScheduler     2  같은 축
+     * VerifyScheduler      2  같은 축 — 크론 슬롯이 asOf 가 되지만 그 값은 <b>잡 파라미터</b>고,
+     *                            판정은 여전히 잡 안에서 그 asOf 로만 한다
      * VerifyTriggerController 1  asOf 미래 검사 — 접수 단계다
      * BatchApiExceptionHandler 1  응답 timestamp
      *
@@ -96,6 +98,9 @@ class NoWallClockInBatchTest {
             "com/kafkick/batch/job/CleanupJobConfig.java", 2,
             "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
             "com/kafkick/batch/schedule/CleanupScheduler.java", 2,
+            // 둘이다 — 기동 가드의 크론 최대간격 계산과, 발화 때 슬롯을 구하는 자리.
+            // 뒤엣것이 asOf 가 되지만 판정은 잡 안에서 그 값으로만 하므로 축이 안 섞인다.
+            "com/kafkick/batch/schedule/VerifyScheduler.java", 2,
             // 하나다 — 한 tick 이 여는 대상과 닫는 대상을 **같은 시각**으로 판정한다.
             // 두 번 읽으면 그 사이에 경계를 넘은 회차가 열리고 바로 닫힌다.
             "com/kafkick/batch/schedule/CouponRoundScheduler.java", 1,

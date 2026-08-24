@@ -32,17 +32,19 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 이 저장소가 <i>"배치가 실패했다고 할 때는 판정을 내지 못한 경우뿐"</i> 이라고 정한 그대로다.
  * 데이터가 틀렸다는 사실은 {@code cy_verification_verdict} 가 따로 진다.
  *
- * <p><b>{@code verifyJob} 에는 아직 SLA 알림을 걸지 않는다.</b> 크론이 없어 <b>안 도는 것이
- * 정상</b>이라 지금 걸면 영구 발화다. 게이지만 내고, 알림은 검증을 야간 크론으로 옮기는
- * 티켓이 함께 세운다({@code docs/13} §6 의 C). 게이지를 미리 내 두는 것은 그 티켓이
- * <b>감시를 나중에 붙이는 상태로 시작하지 않게</b> 하기 위해서다.
+ * <p><b>{@code verifyJob} 의 SLA 는 이 계열이 아니라 {@code cy_verify_last_success_seconds}
+ * {@code {dataset,scope}} 가 진다</b>(CY-470, {@code docs/13} §6 의 D). 이 계열은 잡 이름
+ * 그레인이라 {@code verifyJob} 하나로 {@code CLEAN/FULL}(게이트가 보는 것)과
+ * {@code CORRUPT/FULL}(리허설)을 뭉치는데, 그러면 <b>리허설 한 번이 시계열을 앞으로 밀어</b>
+ * SLA 를 리셋한다 — 정작 게이트 조합은 며칠째 안 돌았는데 조용하다.
+ * {@code cy_verification_verdict} 가 이미 {@code (dataset, scope)} 그레인이라 두 축이 조인된다.
  *
- * <p>⚠️ <b>그 티켓은 이 게이지를 그대로 쓰면 안 된다.</b> 그레인이 잡 이름 하나라
- * {@code (dataset, scope)} 조합을 안 가른다. 게이트 판정의 근거는 {@code CLEAN/FULL} 인데,
- * 발표 리허설로 {@code CORRUPT} 를 한 번 돌리면 그 실행이 <b>같은 시계열을 앞으로 밀어</b>
- * SLA 를 리셋한다 — 정작 {@code CLEAN/FULL} 은 며칠째 안 돌았는데 조용하다.
- * {@code cy_verification_verdict} 는 {@code (dataset, scope)} 그레인이라 <b>두 축의 결이
- * 다르다</b>. C 는 {@code BATCH_JOB_EXECUTION_PARAMS} 를 조인해 그레인을 맞춰야 한다.
+ * <p>그레인을 가르는 조회는 {@code BatchRunMetricsRefresher#verifyLastSuccessEpochSeconds} 이고
+ * {@code BATCH_JOB_EXECUTION_PARAMS} 를 조인한다. CY-392 가 이 계열만 미리 내 뒀던 것은
+ * <b>D 가 감시를 나중에 붙이는 상태로 시작하지 않게</b> 하려던 것이다.
+ *
+ * <p>⚠️ <b>이 계열에 검증 SLA 를 다시 걸면 안 된다.</b> 두 번째 알림이 생겨 같은 사건이
+ * 두 채널로 나가고, 그중 하나는 리허설에 리셋되는 거짓 축이다.
  */
 @Component
 public class BatchRunMetrics {
@@ -59,11 +61,26 @@ public class BatchRunMetrics {
      */
     private static final String JOB_TAG = "spring_batch_job_name";
 
+    /**
+     * <b>검증 SLA 는 잡 이름 그레인으로 못 진다.</b> {@code verifyJob} 하나가
+     * {@code CLEAN/FULL}(게이트가 보는 것)과 {@code CORRUPT/FULL}(리허설)을 함께 도는데,
+     * 잡 이름만 태그로 쓰면 <b>{@code CORRUPT} 손 트리거 한 번이 같은 시계열을 앞으로 밀어
+     * SLA 를 리셋한다</b> — 정작 {@code CLEAN/FULL} 은 며칠째 안 돌았는데 조용하다.
+     * 그래서 이 게이지만 {@code (dataset, scope)} 축을 따로 가진다(CY-470).
+     *
+     * <p>{@code cy_verification_verdict} 가 이미 같은 그레인이라 두 축이 조인된다.
+     */
+    private static final String DATASET_TAG = "dataset";
+
+    private static final String SCOPE_TAG = "scope";
+
     /** 관제가 "모른다" 를 0 으로 오해하지 않게 한다. 0 은 1970년이라 즉시 알림이 된다. */
     private static final double UNKNOWN = Double.NaN;
 
     private final AtomicReference<Map<String, Snapshot>> latest =
             new AtomicReference<>(Map.of());
+    private final AtomicReference<Double> verifyLastSuccess =
+            new AtomicReference<>(UNKNOWN);
     private final List<String> watchedJobNames;
 
     /**
@@ -85,6 +102,18 @@ public class BatchRunMetrics {
                     snapshot -> snapshot.stuckExecutions(),
                     "종료 표시 없이 실행 중으로 남았는데 진도가 멈춘 실행 수");
         }
+
+        // 잡 유무와 무관하게 **언제나** 낸다. 위 루프처럼 Job 빈에서 이름을 받아 조건부로
+        // 만들면, verifyJob 빈이 없는 기동에서 이 계열이 통째로 사라져 VerifyMetricsMissing
+        // 이 "타깃은 살아 있는데 계열만 없다" 를 못 가린다 — CY-446 이 회차 카운터를
+        // 무조건부 빈으로 옮긴 것과 같은 이유다.
+        Gauge.builder("cy_verify_last_success_seconds", verifyLastSuccess,
+                        AtomicReference::get)
+                .tag(DATASET_TAG, VerifyRunContext.SLA_DATASET)
+                .tag(SCOPE_TAG, VerifyRunContext.SLA_SCOPE)
+                .description("이 (dataset, scope) 조합의 검증이 마지막으로 COMPLETED 로 끝난 "
+                        + "시각(유닉스 초). 판정 결과와 무관하다")
+                .register(registry);
     }
 
     /** 되읽기가 훑어야 하는 잡들. 이름 순이다. */
@@ -103,12 +132,29 @@ public class BatchRunMetrics {
     }
 
     /**
+     * {@code (SLA_DATASET, SLA_SCOPE)} 검증의 마지막 성공 시각.
+     *
+     * <p><b>위 {@code record} 와 한 되읽기 안에서 함께 불려야 한다.</b> 따로 갱신하면
+     * {@code cy_batch_last_success_seconds{verifyJob}} 과 이 값이 서로 다른 시점을 말하는
+     * 구간이 생기는데, 관제에서 그 둘을 나란히 놓고 보는 것이 진단의 첫 단계다.
+     *
+     * @param epochSeconds 없으면 {@code NaN} — <i>"그 조합으로 성공한 실행이 아예 없다"</i>
+     */
+    public void recordVerifyLastSuccess(double epochSeconds) {
+        verifyLastSuccess.set(epochSeconds);
+    }
+
+    /**
      * <b>못 읽었다는 것을 그대로 내보낸다.</b> 직전 값을 들고 있으면 관제는 그것을 지금
      * 상태로 읽는다 — 마지막 성공 시각에서 그 오해는 <b>"방금 돌았다"</b> 가 되어
      * SLA 알림을 통째로 재운다.
      */
     public void markUnknown() {
         latest.set(Map.of());
+        // 검증 게이지도 함께 떨어뜨린다. 안 떨어뜨리면 되읽기가 죽은 동안 이 계열만
+        // 마지막 값을 들고 있어, 관제가 두 축을 나란히 볼 때 **하나는 모름 하나는 정상**
+        // 이라는 존재하지 않는 상태를 만든다.
+        verifyLastSuccess.set(UNKNOWN);
     }
 
     /**
