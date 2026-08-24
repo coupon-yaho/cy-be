@@ -15,12 +15,36 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  tomcat:
+    threads:
+      max: ${TOMCAT_THREADS_MAX:15}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:4000}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:1000}
   error:
     include-stacktrace: never
 
 admin:
   analytics:
     max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
+
+benchmark:
+  protocol:
+    load-hold-seconds: ${BENCHMARK_LOAD_HOLD_SECONDS:5}
+    observation-hold-seconds: ${BENCHMARK_OBSERVATION_HOLD_SECONDS:60}
+  admin:
+    command-secret: ${BENCHMARK_ADMIN_COMMAND_SECRET:}
+  archive:
+    claim-lease: ${BENCHMARK_ARCHIVE_CLAIM_LEASE:5m}
+    max-samples: ${BENCHMARK_ARCHIVE_MAX_SAMPLES:10000}
+  topology:
+    app-replicas: ${BENCHMARK_APP_REPLICAS:4}
+    tomcat-workers-total: ${BENCHMARK_TOMCAT_WORKERS_TOTAL:60}
+    hikari-pool-total: ${BENCHMARK_HIKARI_POOL_TOTAL:12}
+    mysql-max-connections: ${BENCHMARK_MYSQL_MAX_CONNECTIONS:50}
+  batch:
+    base-url: ${BENCHMARK_BATCH_BASE_URL:http://batch:9091}
+    connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}
+    read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}
 
 logging:
   pattern:
@@ -42,7 +66,7 @@ spring:
     hikari:
       # 커넥션 예산의 근거는 storage.yml.example 의 hikari 주석에 있다. 이 값을 바꾸면
       # 거기 계산도 같이 바꾼다.
-      maximum-pool-size: ${DB_POOL_SIZE:10}
+      maximum-pool-size: ${DB_POOL_SIZE:3}
 
   # 마이그레이션 소유자는 api 하나다. batch 는 이미 만들어진 스키마 위에서 돈다.
   flyway:

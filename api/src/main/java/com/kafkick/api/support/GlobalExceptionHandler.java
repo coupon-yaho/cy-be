@@ -26,6 +26,7 @@ import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.RequestAttributeKeys;
+import com.kafkick.api.admin.benchmark.TopologyValidationException;
 
 /**
  * 모든 에러를 성공 응답과 같은 봉투로 감싼다. HTTP status 는 실제 4xx/5xx 를 유지한다.
@@ -149,6 +150,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         // status 는 매핑된 코드가 아니라 실제 statusCode 를 쓴다. 415·406 등이 400 으로 뭉개지지 않게.
         return new ErrorResponse(
                 statusCode.value(), mapped.getCode(), mapped.getMessage(), null,
+                null,
                 requestId(), timeProvider.instant());
     }
 
@@ -161,7 +163,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             ErrorCode errorCode = conflict.getErrorCode();
             return new ErrorResponse(
                     errorCode.getStatus(), errorCode.getCode(), errorCode.getMessage(),
-                    conflict.getCurrentRevision(), requestId(), timeProvider.instant());
+                    conflict.getCurrentRevision(), null, requestId(), timeProvider.instant());
+        }
+        if (exception instanceof TopologyValidationException topology) {
+            ErrorCode errorCode = topology.getErrorCode();
+            return new ErrorResponse(
+                errorCode.getStatus(), errorCode.getCode(), errorCode.getMessage(), null,
+                topology.violations(), requestId(), timeProvider.instant());
         }
         return body(exception.getErrorCode());
     }
@@ -170,6 +178,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ErrorCode errorCode = CommonErrorCode.INVALID_INPUT;
         return new ErrorResponse(
                 errorCode.getStatus(), errorCode.getCode(), message, null,
+                null,
                 requestId(), timeProvider.instant());
     }
 

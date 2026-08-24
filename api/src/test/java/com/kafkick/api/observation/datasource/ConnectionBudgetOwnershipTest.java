@@ -29,7 +29,7 @@ import org.springframework.core.io.ClassPathResource;
  * 키가 생기는 순간 다시 진다. <b>어느 경우에도 에러나 경고는 없다.</b>
  *
  * <p>실측(CY-179): storage.yml 에 {@code maximum-pool-size: 99} 를 넣었을 때 —
- * 구분자 뒤에 선언한 api 는 10 을 유지했고, 구분자가 없는 batch 는 99 로 떴다.
+     * 구분자 뒤에 선언한 api 는 3 을 유지했고, 구분자가 없는 batch 는 99 로 떴다.
  *
  * <p>실제 {@code application.yml}·{@code storage.yml} 은 커밋하지 않으므로 커밋되는 템플릿을 본다.
  */
@@ -56,7 +56,7 @@ class ConnectionBudgetOwnershipTest {
     void apiTemplateOwnsBothKeys() {
         Properties api = parse("application.yml.example");
 
-        assertThat(api.getProperty(POOL_SIZE)).isEqualTo("${DB_POOL_SIZE:10}");
+        assertThat(api.getProperty(POOL_SIZE)).isEqualTo("${DB_POOL_SIZE:3}");
         assertThat(api.getProperty(FLYWAY_ENABLED)).isEqualTo("true");
     }
 

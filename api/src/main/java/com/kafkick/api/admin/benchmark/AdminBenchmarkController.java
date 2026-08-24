@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.caller.Caller;
@@ -37,9 +38,25 @@ import com.kafkick.core.support.exception.BusinessException;
 public class AdminBenchmarkController {
 
     private final Optional<RunTimeseriesArchiver> timeseriesArchiver;
+    private final Optional<BenchmarkStartOrchestrator> startOrchestrator;
+    private final Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator;
 
-    public AdminBenchmarkController(Optional<RunTimeseriesArchiver> timeseriesArchiver) {
+    @Autowired
+    public AdminBenchmarkController(
+            Optional<RunTimeseriesArchiver> timeseriesArchiver,
+            Optional<BenchmarkStartOrchestrator> startOrchestrator,
+            Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator) {
         this.timeseriesArchiver = timeseriesArchiver;
+        this.startOrchestrator = startOrchestrator;
+        this.finalizeOrchestrator = finalizeOrchestrator;
+    }
+
+    AdminBenchmarkController(
+            Optional<RunTimeseriesArchiver> timeseriesArchiver,
+            BenchmarkStartOrchestrator startOrchestrator,
+            BenchmarkFinalizeOrchestrator finalizeOrchestrator) {
+        this(timeseriesArchiver, Optional.ofNullable(startOrchestrator),
+            Optional.ofNullable(finalizeOrchestrator));
     }
 
     /**
@@ -86,7 +103,8 @@ public class AdminBenchmarkController {
     public ResponseEnvelope<BenchmarkCommandAcceptedResponse> start(
             @Valid @RequestBody BenchmarkStartRequest request,
             Caller caller) {
-        throw notImplemented();
+        return ResponseEnvelope.success(startOrchestrator.orElseThrow(this::notImplemented)
+            .start(request, caller));
     }
 
     /**
@@ -116,7 +134,8 @@ public class AdminBenchmarkController {
     public ResponseEnvelope<BenchmarkCommandAcceptedResponse> finalizeRun(
             @PathVariable @Positive Long benchmarkRunId,
             Caller caller) {
-        throw notImplemented();
+        return ResponseEnvelope.success(finalizeOrchestrator.orElseThrow(this::notImplemented)
+            .finalizeRun(benchmarkRunId));
     }
 
     /**
@@ -136,7 +155,7 @@ public class AdminBenchmarkController {
         throw notImplemented();
     }
 
-    /** archive_status=FAILED인 완료 회차의 Prometheus 사본 생성을 다시 실행합니다. */
+    /** FAILED 또는 lease가 만료된 IN_PROGRESS 회차의 Prometheus 사본 생성을 다시 실행합니다. */
     @PostMapping("/benchmarks/{benchmarkRunId}/archive/retry")
     public ResponseEnvelope<Void> retryArchive(
             @PathVariable @Positive Long benchmarkRunId, Caller caller) {

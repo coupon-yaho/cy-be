@@ -41,6 +41,9 @@ dependencies {
     implementation 'tools.jackson.core:jackson-databind'
 
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // 회차 시작 전 실제 풀 크기를 읽는다. 설정 문자열이 아니라 최종 Hikari 빈이 검증 대상이다.
+    implementation 'com.zaxxer:HikariCP'
+    implementation 'org.springframework:spring-jdbc'
 
     // /actuator/prometheus 를 만드는 레지스트리. 없으면 엔드포인트 자체가 생기지 않는다.
     // 노출 allowlist 는 management.yml(OBS-20) 소유라 이 티켓에서 건드리지 않는다.

@@ -9,16 +9,25 @@ import org.springframework.format.FormatterRegistry;
 @Configuration
 public class AdminWebConfig implements WebMvcConfigurer {
 
-    private final AdminAuthorizationInterceptor adminAuthorizationInterceptor;
+    static final String BENCHMARK_COMMAND_PATH = "/api/v1/admin/benchmarks/**";
 
-    public AdminWebConfig(AdminAuthorizationInterceptor adminAuthorizationInterceptor) {
+    private final AdminAuthorizationInterceptor adminAuthorizationInterceptor;
+    private final BenchmarkCommandAuthorizationInterceptor benchmarkCommandAuthorizationInterceptor;
+
+    public AdminWebConfig(
+        AdminAuthorizationInterceptor adminAuthorizationInterceptor,
+        BenchmarkCommandAuthorizationInterceptor benchmarkCommandAuthorizationInterceptor
+    ) {
         this.adminAuthorizationInterceptor = adminAuthorizationInterceptor;
+        this.benchmarkCommandAuthorizationInterceptor = benchmarkCommandAuthorizationInterceptor;
     }
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(adminAuthorizationInterceptor)
                 .addPathPatterns("/api/v1/admin/**");
+        registry.addInterceptor(benchmarkCommandAuthorizationInterceptor)
+                .addPathPatterns(BENCHMARK_COMMAND_PATH);
     }
 
     @Override

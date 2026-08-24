@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
@@ -20,7 +21,6 @@ import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.support.TimeProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
@@ -138,11 +138,15 @@ public class AdminObservabilityConfig {
     }
 
     @Bean
-    @ConditionalOnBean({BenchmarkRunRepository.class, ArchiveStore.class})
+    @ConditionalOnProperty(prefix = "observation.datasource", name = "enabled", havingValue = "true")
     public RunTimeseriesArchiver runTimeseriesArchiver(
             BenchmarkRunRepository runs,
             @Qualifier("archivePromQueryClient") PromQueryClient source,
-            ArchiveStore store) {
-        return new RunTimeseriesArchiver(runs, source, store);
+            ArchiveStore store,
+            @org.springframework.beans.factory.annotation.Value(
+                "${benchmark.archive.claim-lease:5m}") java.time.Duration claimLease,
+            @org.springframework.beans.factory.annotation.Value(
+                "${benchmark.archive.max-samples:10000}") int maxSamples) {
+        return new RunTimeseriesArchiver(runs, source, store, claimLease, maxSamples);
     }
 }

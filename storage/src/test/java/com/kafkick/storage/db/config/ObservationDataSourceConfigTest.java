@@ -363,6 +363,18 @@ class ObservationDataSourceConfigTest {
             });
     }
 
+    @Test
+    void 숫자_1은_true가_아니므로_관측_설정과_헬스가_생기지_않는다() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(ObservationDataSourceConfig.class, ObservationHealthConfig.class)
+            .withPropertyValues("observation.datasource.enabled=1")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).doesNotHaveBean("observationDataSource");
+                assertThat(context).doesNotHaveBean("obsDbHealthContributor");
+            });
+    }
+
     private static JdbcConnectionDetails superuserDetails() {
         return new JdbcConnectionDetails() {
 

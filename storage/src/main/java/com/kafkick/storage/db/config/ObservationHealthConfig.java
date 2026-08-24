@@ -35,7 +35,7 @@ import org.springframework.core.env.Environment;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(HealthContributor.class)
-@ConditionalOnProperty("observation.datasource.enabled")
+@ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class ObservationHealthConfig {
 
     /**

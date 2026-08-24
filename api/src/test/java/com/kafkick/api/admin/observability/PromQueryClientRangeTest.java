@@ -157,6 +157,26 @@ class PromQueryClientRangeTest {
         }
     }
 
+    @Test
+    void preservesNotApplicableStockAsNullValue() throws Exception {
+        HttpServer server = rangeServer("""
+                {"status":"success","data":{"resultType":"matrix","result":[
+                  {"metric":{"__name__":"app_coupon_stock_remaining_state"},
+                   "values":[[1787414400,"7"],[1787414401,"7"]]}
+                ]}}
+                """);
+        try {
+            var samples = client(server).queryRange(Metric.STOCK_REMAINING,
+                Instant.ofEpochSecond(1787414400), Instant.ofEpochSecond(1787414401), 1);
+
+            assertThat(samples).extracting("state")
+                .containsOnly(com.kafkick.core.benchmark.RunTimeseriesArchiver.State.N_A);
+            assertThat(samples).extracting("value").containsOnlyNulls();
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private static HttpServer rangeServer(String body) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/v1/query_range", exchange -> {

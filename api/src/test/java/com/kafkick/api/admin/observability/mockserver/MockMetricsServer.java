@@ -141,7 +141,8 @@ public final class MockMetricsServer {
     private void sendFailure(HttpExchange exchange, CommonErrorCode errorCode, String message)
             throws IOException {
         ErrorResponse error = new ErrorResponse(
-                errorCode.getStatus(), errorCode.getCode(), message, null, requestId(exchange), Instant.now());
+                errorCode.getStatus(), errorCode.getCode(), message, null, null,
+                requestId(exchange), Instant.now());
         send(exchange, errorCode.getStatus(), ResponseEnvelope.fail(error));
     }
 
