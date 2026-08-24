@@ -167,11 +167,13 @@ class KafkaBrokerComposeContractTest {
             // 광고와 실제 바인딩은 다른 값이다. 광고만 맞고 리스너가 다른 포트에 붙으면
             // 부트스트랩도 메타데이터도 통과한 뒤 연결에서만 거부된다.
             //
-            // ⚠️ contains 로 보지 않는다. "PLAINTEXT://:9092" 를 부분 문자열로 찾으면
-            //    PLAINTEXT://:90920 도 통과한다 — 포트가 바뀌었는데 초록불이다.
-            assertThat(plaintextListenerPort(broker.getValue()))
-                    .as("%s 가 광고하는 포트와 실제로 여는 포트가 같아야 한다", broker.getKey())
-                    .isEqualTo(BROKER_PORT);
+            // ⚠️ 항목 전체를 값으로 비교한다. 부분 문자열로 찾으면 PLAINTEXT://:90920 이
+            //    통과하고, 포트만 떼어 보면 PLAINTEXT://localhost:9092 가 통과한다 —
+            //    후자는 컨테이너 안 루프백에만 붙어서 다른 컨테이너가 영영 못 닿는다.
+            //    호스트가 비어 있어야 모든 인터페이스에 붙는다.
+            assertThat(plaintextListener(broker.getValue()))
+                    .as("%s 는 모든 인터페이스의 %s 포트에 붙어야 한다", broker.getKey(), BROKER_PORT)
+                    .isEqualTo("PLAINTEXT://:" + BROKER_PORT);
         }
     }
 
@@ -262,15 +264,18 @@ class KafkaBrokerComposeContractTest {
     }
 
     /**
-     * {@code KAFKA_LISTENERS} 에서 {@code PLAINTEXT} 리스너의 포트만 뽑는다.
+     * {@code KAFKA_LISTENERS} 에서 {@code PLAINTEXT} 항목을 <b>통째로</b> 돌려준다.
      * 값은 {@code PLAINTEXT://:9092,CONTROLLER://:9093} 처럼 쉼표로 이어진 목록이다.
+     *
+     * <p>포트만 떼어 내지 않는 이유 — 바인드 호스트도 계약이다. 호스트가 비어 있어야 모든
+     * 인터페이스에 붙고, {@code localhost} 면 컨테이너 안에서만 닿는다.
      */
-    private String plaintextListenerPort(Map<String, Object> broker) {
+    private String plaintextListener(Map<String, Object> broker) {
         String listeners = String.valueOf(environmentOf(broker).get("KAFKA_LISTENERS"));
         for (String listener : listeners.split(",")) {
             String trimmed = listener.strip();
             if (trimmed.startsWith("PLAINTEXT://")) {
-                return trimmed.substring(trimmed.lastIndexOf(':') + 1);
+                return trimmed;
             }
         }
         throw new AssertionError("KAFKA_LISTENERS 에 PLAINTEXT 리스너가 없다: " + listeners);
