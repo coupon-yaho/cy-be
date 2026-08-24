@@ -153,12 +153,32 @@ revision을 0으로 되돌리는 복구 수단으로 사용하지 않는다.
 전부 갖고 있고, 손으로 적은 명령은 그것을 잃는다.
 
 ```bash
+# 1) 컨테이너를 다시 만든다. 데이터 볼륨은 유지된다
+docker compose up -d mysql
+
+# 2) STATUS 가 healthy 가 될 때까지 기다린다
+docker compose ps mysql
+
+# 3) 스크립트를 한 번 돌린다
 docker compose exec mysql sh /docker-entrypoint-initdb.d/20-obs-account.sh
 ```
 
-값을 셸에 올릴 필요가 없다. `compose.yml` 의 mysql 서비스가 `env_file: .env` 로
-`DB_OBS_USERNAME` · `DB_OBS_PASSWORD` · `MYSQL_*` 를 이미 갖고 있고, 스크립트도
-같은 파일이 `/docker-entrypoint-initdb.d/` 에 마운트돼 컨테이너 안에 그대로 있다.
+⚠️ **1번을 건너뛰면 3번이 실패한다.** `docker compose exec` 는 컨테이너를 다시 만들지
+않으므로, 이 변경 **이전에 만들어진 컨테이너에는 그 스크립트가 마운트돼 있지 않다.**
+실제로 확인하면 이렇다.
+
+```
+$ docker compose exec -T mysql ls -l /docker-entrypoint-initdb.d/
+total 0
+```
+
+`up -d` 는 데이터 볼륨(`coupon-mysql-data`)을 그대로 두고 컨테이너만 새 정의로 바꾼다.
+데이터 디렉터리가 비어 있지 않으므로 `initdb.d` 는 여전히 자동 실행되지 않는다 —
+그래서 3번을 손으로 돌리는 것이다.
+
+값을 셸에 올릴 필요는 없다. `compose.yml` 의 mysql 서비스가 `env_file: .env` 로
+`DB_OBS_USERNAME` · `DB_OBS_PASSWORD` · `MYSQL_*` 를 갖고 있고, 다시 만든 컨테이너가
+그 값과 마운트를 함께 받는다.
 
 > ⚠️ **`. ./.env` 로 소싱하지 말 것.** 그러면 값 안의 `$(...)` 가 호스트 셸에서 실행된다.
 > 비밀번호 관리 도구가 만든 값에 그런 문자가 들어갈 수 있다.
