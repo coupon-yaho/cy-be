@@ -21,7 +21,8 @@ import com.kafkick.storage.db.MySqlContainerConfig;
 @SpringBootTest(properties = {
         "observation.datasource.enabled=false",
         "observation.domain-gauge.enabled=false",
-        "storage.jpa.auditing.enabled=false"
+        // 위 BatchApplicationTests 와 같은 이유다 — 스키마가 있어야 JPA 가 validate 를 통과한다.
+        "spring.flyway.enabled=true"
 })
 @Import(MySqlContainerConfig.class)
 class BatchObservationEscapeHatchTest {

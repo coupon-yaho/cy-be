@@ -62,13 +62,29 @@ batch.scheduling.enabled: false   # 전 스케줄러를 @ConditionalOnProperty �
 
 ---
 
-## 2. JPA 를 쓰지 않는다
+## 2. 검증·리플레이는 JPA 를 쓰지 않는다
 
-배치는 JPA 엔티티를 만들지 않고 `JdbcTemplate` 과 Spring Batch JDBC 리더·라이터로 간다.
+대용량 검증·리플레이 경로는 JPA 영속성 컨텍스트를 사용하지 않고 JDBC reader/writer 로 처리한다.
+회차 생성·상태 전이·만료 도메인 경로는 공용 storage JPA 어댑터를 사용한다.
 
-**근거.** `batch → storage` 가 `runtimeOnly` 라 컴파일 타임에 Entity·JpaRepository 를 볼 수 없다.
-그런데 `DataSource` 는 Boot 자동설정 빈이고 `spring-jdbc` 타입이라 이 제약과 무관하게 주입된다.
-검증 규칙은 전부 집계 SQL 이고 리플레이는 이력 순회다 — **JPA 가 할 일이 없다.**
+**근거.** 검증 규칙은 전부 집계 SQL 이고 리플레이는 이력 순회다 — 거기엔 **JPA 가 할 일이 없다.**
+300만~534만 행에 영속성 컨텍스트를 얹지 않는다는 것이 이 장의 결정이고, 그건 그대로다.
+
+**바뀐 것.** 예전에는 "배치가 JPA 를 아예 안 쓴다" 였고 근거는 저장소에 엔티티가 0개라는
+사실이었다. CY-245 계보가 들어오면서 그 전제가 사라졌다 — 만료 스케줄러가 도메인 포트를 타고
+`IssuanceRepository` · `IssuanceHistoryRepository` · `CouponStockRepository` 를 부르는데 셋 다
+storage 의 JPA 구현이다. 그 세 곳의 잠금·조건부 갱신·예외 변환을 JDBC 로 다시 만드는 것보다,
+경계를 **경로별로** 긋는 것이 작고 일관된다.
+
+`batch → storage` 는 여전히 `runtimeOnly` 다. batch 본 코드는 Entity·JpaRepository 타입을
+컴파일 타임에 못 보고, 도메인 포트로만 부른다 — 그 경계는 그대로 살아 있다.
+
+**⚠️ 반쪽만 켜지 않는다.** `spring.autoconfigure.exclude` 의 JPA 두 줄과
+`storage.jpa.auditing.enabled` 는 한 쌍이다. storage 의 `@EnableJpaRepositories` 는 자동설정이
+아니라 `exclude` 로 막히지 않으므로, 자동설정만 빼면 리포지토리는 만들어지는데
+`EntityManagerFactory` 가 없어 기동이 죽는다. 반대로 auditing 만 끄면 기동은 되고 쓰기 시점에
+`created_at` 이 비어 실패한다 — 증상이 서로 다른 자리에서 나온다.
+`DomainGaugeConfigContractTest` 가 이 쌍을 지킨다.
 
 ```
 V1 V2 V6      tasklet + 단일 SQL
@@ -77,7 +93,7 @@ V4 · Step 0   JdbcPagingItemReader (keyset) → Processor → JdbcBatchItemWrit
 시드 적재      JdbcBatchItemWriter + rewriteBatchedStatements=true
 ```
 
-엔티티 17개와 어댑터를 만들지 않는다. 300만~534만 행에 영속성 컨텍스트를 얹지 않는 것도 부수 효과다.
+검증 전용 엔티티와 어댑터는 만들지 않는다. 위 표의 경로는 전부 JDBC 다.
 
 ---
 

@@ -4,7 +4,10 @@ plugins {
 
 dependencies {
     // 어댑터는 런타임에만. 배치가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
-    // 배치는 JPA 엔티티를 만들지 않고 DataSource + Spring Batch JDBC 리더/라이터로 간다.
+    // 대용량 검증·리플레이는 DataSource + Spring Batch JDBC 리더/라이터로 간다 — 300만 행을
+    // 영속성 컨텍스트에 올리지 않는다. 회차 생성·상태 전이·만료 같은 도메인 경로는 공용
+    // storage JPA 어댑터를 탄다(CY-245 계보). 아래 runtimeOnly 는 그대로라 batch 본 코드는
+    // 여전히 Entity·JpaRepository 타입을 컴파일 타임에 못 본다 — 도메인 포트로만 부른다.
     implementation project(':core')
     testImplementation testFixtures(project(':core'))
     runtimeOnly project(':storage')

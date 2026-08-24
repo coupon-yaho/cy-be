@@ -380,8 +380,14 @@ class PrometheusScrapeConfigContractTest {
         if (ports == null) {
             return List.of();
         }
+        // ⚠️ 마지막 ':' 로 자르지 않는다. OBS-35 에서 컨테이너 쪽이 ${SERVER_PORT:-8080} 가
+        //    되면서 매핑 안에 콜론이 더 생겼다 — 그렇게 자르면 "-8080}" 이 나오고, 이 단언은
+        //    "8080 을 연다" 를 확인하지 못한 채 빨간불이 된다(실측).
         return stringList(ports).stream()
-                .map(mapping -> mapping.substring(mapping.lastIndexOf(':') + 1))
+                .map(mapping -> {
+                    List<String> sides = ComposePortMapping.split(mapping);
+                    return ComposePortMapping.defaultOfFragment(sides.get(sides.size() - 1));
+                })
                 .toList();
     }
 

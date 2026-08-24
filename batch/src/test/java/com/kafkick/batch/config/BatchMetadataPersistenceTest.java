@@ -32,6 +32,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import com.kafkick.storage.db.MySqlContainerConfig;
@@ -73,6 +74,29 @@ class BatchMetadataPersistenceTest {
     Job metadataProbeJob;
     @Autowired
     JobRepository jobRepository;
+    @Autowired
+    @Qualifier("transactionManager")
+    PlatformTransactionManager transactionManager;
+
+    /**
+     * CY-5 병합으로 뒤집힌 계약을 못박는다. {@code MainDataSourceConfig} 는
+     * {@code EntityManagerFactory} 가 있으면 JPA 매니저를, 없으면 JDBC 매니저를 고른다.
+     * 엔티티가 없던 시절 batch 는 후자였고, 지금은 전자다.
+     *
+     * <p><b>그냥 넘길 변화가 아니라서 값으로 남긴다.</b> 배치 메타 쓰기가 이 매니저를 타고,
+     * {@code @EnableJdbcJobRepository} 는 {@code isolationLevelForCreate=READ_COMMITTED} 를
+     * 요구한다. JPA 매니저가 그 격리 수준을 실제로 적용하는지는 위
+     * "두 스레드가 같은 파라미터로 동시에 시작해도 인스턴스는 하나다" 가 검증한다 — 실측으로
+     * 그 테스트가 이 매니저 위에서 통과한다.
+     *
+     * <p>이 단언이 깨지는 날은 둘 중 하나다. 엔티티가 사라졌거나, 누가 Spring Batch 전용
+     * JDBC 매니저를 따로 만들어 물렸거나. 어느 쪽이든 위 동시성 테스트를 함께 확인할 것.
+     */
+    @Test
+    @DisplayName("배치 메타는 JPA 트랜잭션 매니저 위에서 돈다 — 엔티티가 생기며 뒤집혔다")
+    void batchMetadataRunsOnTheJpaTransactionManager() {
+        assertThat(transactionManager).isInstanceOf(JpaTransactionManager.class);
+    }
 
     private int instanceCount() {
         return jdbcTemplate.queryForObject(
