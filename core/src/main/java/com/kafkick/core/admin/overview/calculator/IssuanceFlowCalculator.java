@@ -30,7 +30,8 @@ public class IssuanceFlowCalculator {
      * 캠페인별 실제 경과시간 보정 발급률·버킷 점·상태를 한 번에 계산합니다.
      *
      * <p>{@code currentPerMinute = completedCount / window minutes}이며, 현재 상태의 지속 시간은
-     * 마지막 성공 시각이 아니라 입력의 연속 조건 시작 시각부터 관측 시각까지 계산합니다.</p>
+     * 마지막 성공·raw scrape 시각이 아니라 연속 조건 시작부터 현재 평가 구간의
+     * {@code windowEnd}까지 계산합니다.</p>
      *
      * @param policy 감소율과 중단 시간 정책
      * @param inputs 쿠폰별 완료·시도·구간·원천 상태 입력
@@ -71,14 +72,15 @@ public class IssuanceFlowCalculator {
                         bucket.windowEnd(), perMinute(
                                 bucket.completedCount(), bucket.windowStart(), bucket.windowEnd())))
                 .toList();
-        // 정상 수집됐지만 시도 자체가 없으면 장애가 아닌 무트래픽 상태로 구분합니다.
-        SourceStatus status = input.attemptedCount() == 0L && input.sourceStatus() == SourceStatus.VALID
+        // 시도와 성공의 모집단이 다르므로 두 값이 모두 0일 때만 무트래픽으로 판정합니다.
+        boolean noTraffic = input.attemptedCount() == 0d && input.completedCount() == 0d;
+        SourceStatus status = noTraffic && input.sourceStatus() == SourceStatus.VALID
                 ? SourceStatus.NO_TRAFFIC : input.sourceStatus();
         AdminOverviewSnapshot.IssuanceFlowState state = stateOf(policy, input);
         Duration duration = state == AdminOverviewSnapshot.IssuanceFlowState.NORMAL
-                ? null : Duration.between(input.conditionStartedAt(), input.observedAt());
+                ? null : Duration.between(input.conditionStartedAt(), input.windowEnd());
         return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.IssuanceFlow(
-                currentPerMinute, input.windowStart(), input.windowEnd(), points, state, duration),
+                currentPerMinute, input.trendWindowStart(), input.trendWindowEnd(), points, state, duration),
                 status, input.observedAt());
     }
 
@@ -87,12 +89,12 @@ public class IssuanceFlowCalculator {
             OverviewCalculationPolicy policy,
             IssuanceFlowInput input
     ) {
-        if (input.attemptedCount() == 0L || !input.stockAvailable()) {
+        if (input.attemptedCount() == 0d || !input.stockAvailable()) {
             return AdminOverviewSnapshot.IssuanceFlowState.NORMAL;
         }
-        Duration duration = Duration.between(input.conditionStartedAt(), input.observedAt());
+        Duration duration = Duration.between(input.conditionStartedAt(), input.windowEnd());
         // 수요와 재고가 있는데 성공 0건이 임계시간 이상 지속된 경우에만 중단으로 판정합니다.
-        if (input.campaignStatus() == CouponStatus.OPEN && input.completedCount() == 0L
+        if (input.campaignStatus() == CouponStatus.OPEN && input.completedCount() == 0d
                 && !duration.isNegative() && duration.compareTo(policy.issuanceStoppedAfter()) >= 0) {
             return AdminOverviewSnapshot.IssuanceFlowState.STOPPED;
         }
@@ -107,32 +109,34 @@ public class IssuanceFlowCalculator {
     }
 
     /** 완료 수와 실제 구간 초를 분당 단위로 환산합니다. */
-    private static double perMinute(long completedCount, Instant start, Instant end) {
+    private static double perMinute(double completedCount, Instant start, Instant end) {
         requirePositiveWindow(start, end, "관측 구간");
-        return completedCount * 60.0 / Duration.between(start, end).toNanos() * 1_000_000_000.0;
+        Duration duration = Duration.between(start, end);
+        double seconds = duration.getSeconds() + (duration.getNano() / 1_000_000_000d);
+        double minutes = seconds / 60d;
+        // 1분 이상은 먼저 나누어 큰 유한 count의 중간 곱셈 overflow를 피합니다.
+        double rate = minutes >= 1d
+                ? completedCount / minutes
+                : completedCount * (1d / minutes);
+        if (!Double.isFinite(rate)) {
+            throw new IllegalArgumentException("분당 발급률은 유한해야 합니다.");
+        }
+        return rate;
     }
 
-    /** 버킷은 주 구간 안에서 시간순으로 하나씩만 존재해야 그래프가 결정적입니다. */
+    /** 버킷은 추세 구간 안에서 시간순으로 하나씩만 존재해야 그래프가 결정적입니다. */
     private static List<IssuanceBucket> sortedBuckets(IssuanceFlowInput input) {
         List<IssuanceBucket> sorted = input.buckets().stream()
                 .sorted(java.util.Comparator.comparing(IssuanceBucket::windowStart))
                 .toList();
         Instant previousEnd = null;
-        long bucketCompletedTotal = 0L;
         for (IssuanceBucket bucket : sorted) {
-            if (bucket.windowStart().isBefore(input.windowStart())
-                    || bucket.windowEnd().isAfter(input.windowEnd())
+            if (bucket.windowStart().isBefore(input.trendWindowStart())
+                    || bucket.windowEnd().isAfter(input.trendWindowEnd())
                     || (previousEnd != null && bucket.windowStart().isBefore(previousEnd))) {
-                throw new IllegalArgumentException("버킷은 주 관측 구간 안에서 중첩될 수 없습니다.");
+                throw new IllegalArgumentException("버킷은 추세 관측 구간 안에서 중첩될 수 없습니다.");
             }
             previousEnd = bucket.windowEnd();
-            bucketCompletedTotal = Math.addExact(bucketCompletedTotal, bucket.completedCount());
-        }
-        if (bucketCompletedTotal > input.completedCount()) {
-            throw new IllegalArgumentException("버킷 완료 수 합계는 현재 완료 수를 초과할 수 없습니다.");
-        }
-        if (input.sourceStatus() == SourceStatus.NO_TRAFFIC && bucketCompletedTotal != 0L) {
-            throw new IllegalArgumentException("NO_TRAFFIC 버킷 완료 수는 0이어야 합니다.");
         }
         return sorted;
     }
@@ -152,12 +156,15 @@ public class IssuanceFlowCalculator {
      * @param stockAvailable 실제 재고가 남아 발급 중단 판정 대상인지 여부
      * @param windowStart 현재 발급 완료 수를 센 구간 시작 시각
      * @param windowEnd 현재 발급 완료 수를 센 구간 종료 시각
-     * @param attemptedCount 현재 구간 실제 발급 시도 수; 0은 NO_TRAFFIC 후보
-     * @param completedCount 현재 구간 실제 완료 수; 0은 관측값
-     * @param comparisonCompletedCount 비교 구간 실제 완료 수
+     * @param trendWindowStart 그래프 버킷을 포함하는 추세 구간 시작 시각
+     * @param trendWindowEnd 그래프 버킷을 포함하는 추세 구간 종료 시각
+     * @param attemptedCount 현재 구간 정책 검증을 통과한 실제 발급 시도 증가량;
+     *                       완료 수와 모집단이 달라 둘 다 0일 때만 NO_TRAFFIC 후보
+     * @param completedCount 현재 구간 실제 완료 증가량; Prometheus 경계 보간의 소수 값을 보존하며 0은 관측값
+     * @param comparisonCompletedCount 비교 구간 실제 완료 증가량; 현재 구간과 같은 소수 정밀도를 보존
      * @param comparisonWindowStart 비교 완료 수를 센 구간 시작 시각
      * @param comparisonWindowEnd 비교 완료 수를 센 구간 종료 시각
-     * @param buckets 그래프 버킷별 실제 완료 수
+     * @param buckets 그래프 버킷별 실제 완료 증가량
      * @param lastCompletedAt 마지막 완료 시각; 양수 completedCount면 {@code [windowStart, windowEnd]}
      *                        폐구간 안에 필수이고, 0이면 해당 구간 안에 있을 수 없음
      * @param conditionStartedAt 연속 무발급 또는 감소 조건 시작 시각
@@ -165,13 +172,15 @@ public class IssuanceFlowCalculator {
      * @param observedAt 원천 실제 관측 시각; 값 없는 상태에서는 null
      */
     public record IssuanceFlowInput(Long couponId, CouponStatus campaignStatus, Boolean stockAvailable,
-                                    Instant windowStart, Instant windowEnd, Long attemptedCount,
-                                    Long completedCount, Long comparisonCompletedCount,
+                                    Instant windowStart, Instant windowEnd,
+                                    Instant trendWindowStart, Instant trendWindowEnd,
+                                    Double attemptedCount,
+                                    Double completedCount, Double comparisonCompletedCount,
                                     Instant comparisonWindowStart, Instant comparisonWindowEnd,
                                     List<IssuanceBucket> buckets, Instant lastCompletedAt,
                                     Instant conditionStartedAt, SourceStatus sourceStatus,
                                     Instant observedAt) {
-        /** 입력의 식별자·수량·상태·시간 관계를 검증하고 버킷 목록을 불변 복사합니다. */
+        /** 입력의 식별자·수량·상태·시간 관계를 검증하고 존재하는 버킷 목록을 불변 복사합니다. */
         public IssuanceFlowInput {
             Objects.requireNonNull(couponId, "couponId");
             Objects.requireNonNull(campaignStatus, "campaignStatus");
@@ -183,6 +192,8 @@ public class IssuanceFlowCalculator {
                 Objects.requireNonNull(stockAvailable, "stockAvailable");
                 Objects.requireNonNull(windowStart, "windowStart");
                 Objects.requireNonNull(windowEnd, "windowEnd");
+                Objects.requireNonNull(trendWindowStart, "trendWindowStart");
+                Objects.requireNonNull(trendWindowEnd, "trendWindowEnd");
                 Objects.requireNonNull(attemptedCount, "attemptedCount");
                 Objects.requireNonNull(completedCount, "completedCount");
                 Objects.requireNonNull(comparisonCompletedCount, "comparisonCompletedCount");
@@ -190,41 +201,39 @@ public class IssuanceFlowCalculator {
                 Objects.requireNonNull(comparisonWindowEnd, "comparisonWindowEnd");
                 Objects.requireNonNull(buckets, "buckets");
                 Objects.requireNonNull(conditionStartedAt, "conditionStartedAt");
-                if (attemptedCount < 0L || completedCount < 0L || comparisonCompletedCount < 0L
-                        || completedCount > attemptedCount) {
-                    throw new IllegalArgumentException("발급 count 관계가 유효하지 않습니다.");
+                if (!Double.isFinite(attemptedCount) || !Double.isFinite(completedCount)
+                        || !Double.isFinite(comparisonCompletedCount)
+                        || attemptedCount < 0d || completedCount < 0d || comparisonCompletedCount < 0d) {
+                    throw new IllegalArgumentException("발급 count는 유한한 비음수여야 합니다.");
                 }
                 if (sourceStatus == SourceStatus.NO_TRAFFIC
-                        && (attemptedCount != 0L || completedCount != 0L)) {
+                        && (attemptedCount != 0d || completedCount != 0d)) {
                     throw new IllegalArgumentException("NO_TRAFFIC 발급 count는 0이어야 합니다.");
                 }
                 requirePositiveWindow(windowStart, windowEnd, "관측 구간");
+                requirePositiveWindow(trendWindowStart, trendWindowEnd, "추세 관측 구간");
                 requirePositiveWindow(comparisonWindowStart, comparisonWindowEnd, "비교 관측 구간");
-                if (windowEnd.isAfter(observedAt) || comparisonWindowEnd.isAfter(observedAt)) {
-                    throw new IllegalArgumentException("관측 구간 종료는 observedAt 이후일 수 없습니다.");
+                if (conditionStartedAt.isAfter(windowEnd)) {
+                    throw new IllegalArgumentException("conditionStartedAt은 관측 구간 종료 이후일 수 없습니다.");
                 }
-                if (conditionStartedAt.isAfter(observedAt)) {
-                    throw new IllegalArgumentException("conditionStartedAt은 observedAt 이후일 수 없습니다.");
-                }
-                if (lastCompletedAt != null && lastCompletedAt.isAfter(observedAt)) {
-                    throw new IllegalArgumentException("lastCompletedAt은 observedAt 이후일 수 없습니다.");
-                }
-                if (completedCount > 0L && lastCompletedAt == null) {
+                if (completedCount > 0d && lastCompletedAt == null) {
                     throw new IllegalArgumentException("완료가 있으면 lastCompletedAt이 필요합니다.");
                 }
-                if (completedCount > 0L && (lastCompletedAt.isBefore(windowStart)
+                if (completedCount > 0d && (lastCompletedAt.isBefore(windowStart)
                         || lastCompletedAt.isAfter(windowEnd))) {
                     throw new IllegalArgumentException("완료가 있으면 lastCompletedAt은 관측 구간 안이어야 합니다.");
                 }
-                if (completedCount == 0L && lastCompletedAt != null
+                if (completedCount == 0d && lastCompletedAt != null
                         && !lastCompletedAt.isBefore(windowStart) && !lastCompletedAt.isAfter(windowEnd)) {
                     throw new IllegalArgumentException("무완료 구간의 lastCompletedAt은 관측 구간 안에 있을 수 없습니다.");
                 }
-                if (campaignStatus == CouponStatus.OPEN && stockAvailable && attemptedCount > 0L
-                        && completedCount == 0L && lastCompletedAt != null
+                if (campaignStatus == CouponStatus.OPEN && stockAvailable && attemptedCount > 0d
+                        && completedCount == 0d && lastCompletedAt != null
                         && lastCompletedAt.isAfter(conditionStartedAt)) {
                     throw new IllegalArgumentException("lastCompletedAt은 무발급 conditionStartedAt 이후일 수 없습니다.");
                 }
+            }
+            if (buckets != null) {
                 buckets = List.copyOf(buckets);
             }
         }
@@ -238,14 +247,14 @@ public class IssuanceFlowCalculator {
      * @param windowEnd 버킷 종료 시각
      * @param completedCount 버킷의 실제 완료 수; 0은 관측된 무완료
      */
-    public record IssuanceBucket(Instant windowStart, Instant windowEnd, long completedCount) {
+    public record IssuanceBucket(Instant windowStart, Instant windowEnd, double completedCount) {
         /** 버킷의 양수 구간과 음수가 아닌 완료 수를 검증합니다. */
         public IssuanceBucket {
             Objects.requireNonNull(windowStart, "windowStart");
             Objects.requireNonNull(windowEnd, "windowEnd");
             requirePositiveWindow(windowStart, windowEnd, "버킷 구간");
-            if (completedCount < 0L) {
-                throw new IllegalArgumentException("completedCount는 음수일 수 없습니다.");
+            if (!Double.isFinite(completedCount) || completedCount < 0d) {
+                throw new IllegalArgumentException("completedCount는 유한한 비음수여야 합니다.");
             }
         }
     }

@@ -240,10 +240,11 @@ public class AdminOverviewMockDataFactory {
 
     /** 실제 1분 관측 구간에서 O1 상태와 그래프 점을 만드는 화면 시나리오 보조 메서드입니다. */
     private static IssuanceFlowInput issuanceInput(long couponId, CouponStatus status, boolean stockAvailable,
-            long attemptedCount, long completedCount, long comparisonCompletedCount, Instant conditionStartedAt,
+            double attemptedCount, double completedCount, double comparisonCompletedCount, Instant conditionStartedAt,
             Instant lastCompletedAt, Instant windowStart, Instant snapshotAt) {
         Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
         return new IssuanceFlowInput(couponId, status, stockAvailable, windowStart, snapshotAt,
+                windowStart, snapshotAt,
                 attemptedCount, completedCount, comparisonCompletedCount, comparisonWindowStart, windowStart,
                 List.of(new IssuanceBucket(windowStart, snapshotAt, completedCount)), lastCompletedAt,
                 conditionStartedAt, VALID, snapshotAt);
@@ -251,28 +252,30 @@ public class AdminOverviewMockDataFactory {
 
     /** O1 OPEN 감소 시나리오에 최근 10분의 1분 단위 완료 버킷을 제공합니다. */
     private static IssuanceFlowInput recentTenMinuteIssuanceInput(long couponId, Instant snapshotAt) {
-        Instant windowStart = snapshotAt.minus(Duration.ofMinutes(10));
-        Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(10));
+        Instant trendWindowStart = snapshotAt.minus(Duration.ofMinutes(10));
+        Instant windowStart = snapshotAt.minus(Duration.ofMinutes(1));
+        Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
         List<IssuanceBucket> buckets = List.of(
-                new IssuanceBucket(windowStart, windowStart.plus(Duration.ofMinutes(1)), 37L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(1)), windowStart.plus(Duration.ofMinutes(2)), 40L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(2)), windowStart.plus(Duration.ofMinutes(3)), 41L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(3)), windowStart.plus(Duration.ofMinutes(4)), 43L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(4)), windowStart.plus(Duration.ofMinutes(5)), 44L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(5)), windowStart.plus(Duration.ofMinutes(6)), 45L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(6)), windowStart.plus(Duration.ofMinutes(7)), 46L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(7)), windowStart.plus(Duration.ofMinutes(8)), 47L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(8)), windowStart.plus(Duration.ofMinutes(9)), 48L),
-                new IssuanceBucket(windowStart.plus(Duration.ofMinutes(9)), snapshotAt, 49L));
+                new IssuanceBucket(trendWindowStart, trendWindowStart.plus(Duration.ofMinutes(1)), 37L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(1)), trendWindowStart.plus(Duration.ofMinutes(2)), 40L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(2)), trendWindowStart.plus(Duration.ofMinutes(3)), 41L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(3)), trendWindowStart.plus(Duration.ofMinutes(4)), 43L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(4)), trendWindowStart.plus(Duration.ofMinutes(5)), 44L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(5)), trendWindowStart.plus(Duration.ofMinutes(6)), 45L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(6)), trendWindowStart.plus(Duration.ofMinutes(7)), 46L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(7)), trendWindowStart.plus(Duration.ofMinutes(8)), 47L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(8)), trendWindowStart.plus(Duration.ofMinutes(9)), 48L),
+                new IssuanceBucket(trendWindowStart.plus(Duration.ofMinutes(9)), snapshotAt, 49L));
         return new IssuanceFlowInput(couponId, CouponStatus.OPEN, true, windowStart, snapshotAt,
-                600L, 440L, 1_000L, comparisonWindowStart, windowStart, buckets, snapshotAt,
+                trendWindowStart, snapshotAt,
+                60d, 49d, 100d, comparisonWindowStart, windowStart, buckets, snapshotAt,
                 snapshotAt.minus(Duration.ofMinutes(3)), VALID, snapshotAt);
     }
 
     /** SCHEDULED·CLOSED 캠페인의 비적용 O1 원천을 N_A로 명시합니다. */
     private static IssuanceFlowInput notApplicableIssuance(long couponId, CouponStatus status) {
-        return new IssuanceFlowInput(couponId, status, null, null, null, null, null, null,
-                null, null, null, null, null, N_A, null);
+        return new IssuanceFlowInput(couponId, status, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, N_A, null);
     }
 
     /** 실제 1분 관측 구간의 O2 대기·입장 상태를 만드는 화면 시나리오 보조 메서드입니다. */

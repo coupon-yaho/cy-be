@@ -1,6 +1,9 @@
 package com.kafkick.api.admin.dashboard;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -23,22 +26,22 @@ class AdminDashboardControllerTest {
 
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
 
-    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
+    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvcWithNonNullJson(
             new AdminDashboardController(
                     AdminControllerContractTestSupport.overviewService(CLOCK),
                     AdminControllerContractTestSupport.couponMetricsService(CLOCK))
     );
 
-    /** 개요 조회가 조립된 O1~O4·O3와 대표 조치를 성공 봉투에 보존하는지 검증합니다. */
+    /** 개요 조회가 연결된 O1·O3·지연과 Mock O2·O4·FINAL을 성공 봉투에 보존하는지 검증합니다. */
     @Test
-    @DisplayName("관리자 개요 조회는 Mock 계산 결과와 전체 관측값을 COMPLETE 응답으로 반환한다")
-    void overviewReturnsCalculatedMockCampaignResponse() throws Exception {
+    @DisplayName("관리자 개요 조회는 관측값과 aggregate PENDING을 PARTIAL 응답으로 반환한다")
+    void overviewReturnsObservedAndMockBoundaryResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/overview"))
                 .andExpect(status().isOk())
                 .andExpect(header().exists("X-Request-Id"))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
-                .andExpect(jsonPath("$.data.overallStatus").value("COMPLETE"))
+                .andExpect(jsonPath("$.data.overallStatus").value("PARTIAL"))
                 .andExpect(jsonPath("$.data.actionRequired.state").value("VALID"))
                 .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(4))
                 .andExpect(jsonPath("$.data.openingSoon.value.totalCount").value(2))
@@ -61,17 +64,18 @@ class AdminDashboardControllerTest {
                         .value("ADMISSION_STOPPED"))
                 .andExpect(jsonPath("$.data.campaigns.value[1].couponId").value(102))
                 .andExpect(jsonPath("$.data.campaigns.value[1].issuanceFlow.value.currentPerMinute")
-                        .value(44.0))
+                        .value(49.0))
                 .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.value.estimatedDepletion")
-                        .value("PT7M58S"))
+                        .value("PT7M9S"))
                 .andExpect(jsonPath("$.data.queueRisk.state").value("VALID"))
                 .andExpect(jsonPath("$.data.stockRisk.state").value("VALID"))
-                .andExpect(jsonPath("$.data.aggregateIssuanceRate.state").value("VALID"))
-                .andExpect(jsonPath("$.data.aggregateIssuanceRate.value.currentPerSecond").isNumber())
-                .andExpect(jsonPath("$.data.aggregateIssuanceRate.observedAt").value(NOW.toString()))
+                .andExpect(jsonPath("$.data.aggregateIssuanceRate.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.aggregateIssuanceRate.value").doesNotExist())
+                .andExpect(jsonPath("$.data.aggregateIssuanceRate.observedAt").doesNotExist())
                 .andExpect(jsonPath("$.data.latencySummary.state").value("VALID"))
                 .andExpect(jsonPath("$.data.latencySummary.value.successfulP99").isString())
-                .andExpect(jsonPath("$.data.latencySummary.value.failedP99").isString())
+                .andExpect(jsonPath("$.data.latencySummary.value.failedP99").doesNotExist())
+                .andExpect(content().string(not(containsString("\"failedP99\""))))
                 .andExpect(jsonPath("$.data.latencySummary.value.windowEnd").value(NOW.toString()))
                 .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(103))
                 .andExpect(jsonPath("$.data.campaigns.value[2].stockForecast.state").value("VALID"))
@@ -79,7 +83,7 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.campaigns.value[2].campaignQueueStatus.state").value("VALID"))
                 .andExpect(jsonPath("$.data.customerOutcomes.state").value("VALID"))
                 .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(7))
-                .andExpect(jsonPath("$.error").isEmpty());
+                .andExpect(jsonPath("$.error").doesNotExist());
     }
 
     /** 쿠폰 지표의 필수 집계 구간을 생략하면 400으로 거부되는지 검증합니다. */
@@ -106,7 +110,7 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.stock.remainingCount.value").value(4_650))
                 .andExpect(jsonPath("$.data.issuanceRate.value.currentPerSecond").value(10.0))
                 .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").value(0.65))
-                .andExpect(jsonPath("$.error").isEmpty());
+                .andExpect(jsonPath("$.error").doesNotExist());
     }
 
     /** Overview 모집단에 없는 couponId를 공통 404 봉투로 반환하는지 검증합니다. */

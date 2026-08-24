@@ -149,7 +149,7 @@ class AdminOverviewDtoJsonSerializationTest {
                 new ObservedValue<>(List.of(), SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(
                         new AdminOverviewResponse.CustomerOutcomeSummary(
-                                SNAPSHOT_AT, SNAPSHOT_AT, 0, List.of()),
+                                SNAPSHOT_AT.minusSeconds(300), SNAPSHOT_AT, 0, List.of()),
                         SourceStatus.NO_TRAFFIC,
                         OBSERVED_AT));
 
@@ -247,10 +247,13 @@ class AdminOverviewDtoJsonSerializationTest {
                 new ObservedValue<>(List.of(campaign), SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(
                         new AdminOverviewResponse.CustomerOutcomeSummary(
-                                Instant.parse("2026-08-17T04:53:58Z"), SNAPSHOT_AT, 12558,
+                                Instant.parse("2026-08-17T04:53:58Z"), SNAPSHOT_AT, 0.3d,
                                 List.of(new AdminOverviewResponse.CustomerOutcome(
                                         AdminOverviewSnapshot.CustomerOutcomeType.ISSUED,
-                                        1847, 0.147, "쿠폰이 정상 발급됨"))),
+                                        0.1d, 1d / 3d, "쿠폰이 정상 발급됨"),
+                                        new AdminOverviewResponse.CustomerOutcome(
+                                                AdminOverviewSnapshot.CustomerOutcomeType.QUEUED,
+                                                0.2d, 2d / 3d, "발급 대기"))),
                         SourceStatus.VALID, OBSERVED_AT));
 
         String json = objectMapper.writeValueAsString(response);
@@ -265,8 +268,8 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"campaignQueueStatus\":{\"value\":{\"waitingCount\":3204")
                 .contains("\"remainingRatio\":0.31")
                 .contains("\"customerOutcomes\":{\"value\":{\"windowStart\":")
-                .contains("\"totalCount\":12558")
-                .contains("\"type\":\"ISSUED\",\"count\":1847,\"ratio\":0.147")
+                .contains("\"totalCount\":0.3")
+                .contains("\"type\":\"ISSUED\",\"count\":0.1,\"ratio\":0.3333333333333333")
                 .contains("\"campaigns\":{\"value\":[", "\"topItems\":[]")
                 .doesNotContain("\"admissionsPerMinute\":0.0,\"estimatedWait\":");
     }
@@ -296,6 +299,107 @@ class AdminOverviewDtoJsonSerializationTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
                 AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 1, Double.NEGATIVE_INFINITY, "잘못된 비율"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** Prometheus 추정 count는 fractional을 보존하되 비유한·음수는 HTTP 계약으로 나가지 않습니다. */
+    @Test
+    @DisplayName("Overview HTTP DTO의 O3 count와 total은 유한한 비음수 double이다")
+    void customerOutcomeResponseCountsAreFiniteNonNegativeDoubles() {
+        AdminOverviewResponse.CustomerOutcome fractional = new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0.1d, 1d, "추정 발급");
+        AdminOverviewResponse.CustomerOutcomeSummary summary =
+                new AdminOverviewResponse.CustomerOutcomeSummary(
+                        SNAPSHOT_AT.minusSeconds(300), SNAPSHOT_AT, 0.1d, List.of(fractional));
+
+        assertThat(fractional.count()).isEqualTo(0.1d);
+        assertThat(summary.totalCount()).isEqualTo(0.1d);
+        for (double invalid : List.of(-0.1d, Double.NaN, Double.POSITIVE_INFINITY)) {
+            assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcome(
+                    AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, invalid, 0d, "잘못된 count"))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                    SNAPSHOT_AT.minusSeconds(300), SNAPSHOT_AT, invalid, List.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    /** DTO가 호출자의 mutable list를 그대로 노출하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("Overview HTTP O3 outcomes 목록은 생성 후 불변이다")
+    void customerOutcomeResponseDefensivelyCopiesOutcomes() {
+        List<AdminOverviewResponse.CustomerOutcome> mutable = new java.util.ArrayList<>();
+        AdminOverviewResponse.CustomerOutcomeSummary summary =
+                new AdminOverviewResponse.CustomerOutcomeSummary(
+                        SNAPSHOT_AT.minusSeconds(300), SNAPSHOT_AT, 0d, mutable);
+
+        mutable.add(new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0d, 0d, "발급"));
+
+        assertThat(summary.outcomes()).isEmpty();
+        assertThatThrownBy(() -> summary.outcomes().add(new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0d, 0d, "발급")))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    /** 직접 생성 가능한 HTTP DTO도 불가능한 O3 요약을 JSON으로 내보내지 않습니다. */
+    @Test
+    @DisplayName("Overview HTTP O3 summary는 window count ratio 교차 불변식을 소유한다")
+    void customerOutcomeResponseRejectsCrossFieldContradictions() {
+        AdminOverviewResponse.CustomerOutcome issued = new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0.1d, 1d / 3d, "발급");
+        AdminOverviewResponse.CustomerOutcome queued = new AdminOverviewResponse.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 0.2d, 2d / 3d, "대기");
+        Instant from = SNAPSHOT_AT.minusSeconds(300);
+
+        assertThat(new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, 0.3d, List.of(issued, queued)).totalCount()).isEqualTo(0.3d);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                null, SNAPSHOT_AT, 0.3d, List.of(issued, queued)))
+                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                SNAPSHOT_AT, from, 0.3d, List.of(issued, queued)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, 0.2d, List.of(issued, issued)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, 0.4d, List.of(issued, queued)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, 0d, List.of(new AdminOverviewResponse.CustomerOutcome(
+                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0d, 0d, "발급 없음"))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, 0.1d, List.of(new AdminOverviewResponse.CustomerOutcome(
+                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0.1d, 0.5d, "잘못된 비율"))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 직접 생성 DTO도 가장 작은 양수 total에 빈 outcomes를 허용하지 않습니다. */
+    @Test
+    @DisplayName("Overview HTTP O3 summary는 양수 total에 outcome을 요구한다")
+    void customerOutcomeResponseRejectsEmptyPositiveTotal() {
+        Instant from = SNAPSHOT_AT.minusSeconds(300);
+
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, Double.MIN_VALUE, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 직접 생성 DTO도 큰 total에서 실제 count 합계 불일치를 거부합니다. */
+    @Test
+    @DisplayName("Overview HTTP O3 summary는 큰 total에서도 정밀한 count 합계를 강제한다")
+    void customerOutcomeResponseRejectsLargeTotalMismatch() {
+        Instant from = SNAPSHOT_AT.minusSeconds(300);
+        double total = 1_000_000_000_000_000d;
+        double count = total - 500d;
+        assertThatThrownBy(() -> new AdminOverviewResponse.CustomerOutcomeSummary(
+                from, SNAPSHOT_AT, total, List.of(new AdminOverviewResponse.CustomerOutcome(
+                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED,
+                        count,
+                        count / total,
+                        "발급"))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

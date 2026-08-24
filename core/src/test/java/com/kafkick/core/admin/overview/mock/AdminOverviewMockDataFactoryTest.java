@@ -48,7 +48,7 @@ class AdminOverviewMockDataFactoryTest {
         assertThat(dataset.issuanceFlowInputs())
                 .filteredOn(input -> input.couponId().equals(102L))
                 .singleElement()
-                .satisfies(input -> assertThat(input.completedCount()).isEqualTo(440L));
+                .satisfies(input -> assertThat(input.completedCount()).isEqualTo(49d));
         assertThat(dataset.issuanceFlowInputs())
                 .filteredOn(input -> input.couponId().equals(104L))
                 .singleElement()
@@ -232,7 +232,7 @@ class AdminOverviewMockDataFactoryTest {
         List<IssuanceFlowInput> issuanceInputs = new ArrayList<>(dataset.issuanceFlowInputs());
         List<QueueInput> queueInputs = new ArrayList<>(dataset.queueInputs());
         issuanceInputs.set(0, new IssuanceFlowInput(101L, CouponStatus.OPEN, null, null, null, null, null,
-                null, null, null, null, null, null, SourceStatus.UNAVAILABLE, null));
+                null, null, null, null, null, null, null, null, SourceStatus.UNAVAILABLE, null));
         queueInputs.set(0, new QueueInput(101L, null, null, null, null, null, null, null,
                 SourceStatus.UNAVAILABLE, null));
 
@@ -255,16 +255,18 @@ class AdminOverviewMockDataFactoryTest {
         IssuanceFlowInput stopped = dataset.issuanceFlowInputs().getFirst();
 
         assertThat(decreasing.comparisonWindowEnd()).isEqualTo(decreasing.windowStart());
-        assertThat(decreasing.windowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(10)));
-        assertThat(decreasing.comparisonWindowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(20)));
+        assertThat(decreasing.windowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(1)));
+        assertThat(decreasing.comparisonWindowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(2)));
+        assertThat(decreasing.trendWindowStart()).isEqualTo(SNAPSHOT_AT.minus(Duration.ofMinutes(10)));
+        assertThat(decreasing.trendWindowEnd()).isEqualTo(SNAPSHOT_AT);
         assertThat(decreasing.buckets()).hasSize(10);
         assertThat(decreasing.buckets())
                 .allSatisfy(bucket -> assertThat(bucket.windowEnd().minus(Duration.ofMinutes(1)))
                         .isEqualTo(bucket.windowStart()));
-        assertThat(decreasing.buckets().getFirst().windowStart()).isEqualTo(decreasing.windowStart());
-        assertThat(decreasing.buckets().getLast().windowEnd()).isEqualTo(decreasing.windowEnd());
-        assertThat(decreasing.buckets().stream().mapToLong(bucket -> bucket.completedCount()).sum())
-                .isLessThanOrEqualTo(decreasing.completedCount());
+        assertThat(decreasing.buckets().getFirst().windowStart()).isEqualTo(decreasing.trendWindowStart());
+        assertThat(decreasing.buckets().getLast().windowEnd()).isEqualTo(decreasing.trendWindowEnd());
+        assertThat(decreasing.buckets().stream().mapToDouble(bucket -> bucket.completedCount()).sum())
+                .isGreaterThan(decreasing.completedCount());
         assertThat(stopped.lastCompletedAt()).isNull();
     }
 

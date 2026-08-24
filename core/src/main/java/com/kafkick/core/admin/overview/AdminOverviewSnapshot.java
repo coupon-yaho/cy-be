@@ -192,8 +192,8 @@ public record AdminOverviewSnapshot(
      * @param opensAt 캠페인 오픈 시각
      * @param closesAt 예정 종료 시각; 종료 미지정이면 null
      * @param severity 운영 조치 우선순위를 색상으로 표현할 심각도
-     * @param issuanceFlow O1 캠페인별 발급 흐름과 해당 원천 상태; O4의 최근 분당 발급 속도도
-     *                     이 값의 {@link IssuanceFlow#currentPerMinute()}를 사용
+     * @param issuanceFlow O1 캠페인별 실관측 발급 흐름과 해당 원천 상태; CY-413의 O4 ETA는
+     *                     이 값이 아닌 별도 Mock O1 입력으로 계산
      * @param campaignQueueStatus O2 캠페인별 대기 상태와 해당 원천 상태
      * @param stockForecast O4 캠페인별 재고·소진 예상과 해당 원천 상태
      * @param customerImpact 고객 영향 범위
@@ -271,10 +271,10 @@ public record AdminOverviewSnapshot(
      * O4 캠페인별 재고와 예상 소진 상태입니다.
      *
      * <p>V1은 MySQL 재고, V2·V3는 Redis 재고를 사용하지만 이 계약에는 기술 원천을 노출하지
-     * 않습니다. 원천 선택과 실제 계산은 구현체가 담당합니다. O4 화면에서 함께 표시하는 최근
-     * 분당 발급 속도는 같은 {@link CampaignOverview}의 {@link CampaignOverview#issuanceFlow()}에 있는
-     * {@link IssuanceFlow#currentPerMinute()}를 사용합니다. 재고 원천과 발급 원천의 상태·관측 시각을
-     * 독립적으로 유지하기 위해 이 record에 발급 속도를 중복 저장하지 않습니다.</p>
+     * 않습니다. 원천 선택과 실제 계산은 구현체가 담당합니다. CY-413 동안 O4 예상 소진은 같은 행의
+     * 실관측 {@link CampaignOverview#issuanceFlow()}가 아니라 별도로 유지한 Mock O1 입력으로 계산합니다.
+     * 재고 원천과 화면 O1의 상태·관측 시각을 독립적으로 유지하기 위해 이 record에 발급 속도를
+     * 중복 저장하지 않습니다.</p>
      *
      * @param remainingQuantity 현재 잔여 수량; 실제 소진이면 0
      * @param totalQuantity 캠페인의 전체 발급 가능 수량
@@ -289,14 +289,17 @@ public record AdminOverviewSnapshot(
      *
      * @param windowStart 집계 구간 시작 시각
      * @param windowEnd 집계 구간 종료 시각
-     * @param totalCount 모든 결과 건수의 분모
-     * @param outcomes 결과 유형별 건수·비율·설명; 결과가 없으면 빈 목록
+     * @param totalCount Prometheus가 관측 구간에 추정한 모든 결과 event count의 분모
+     * @param outcomes 결과 유형별 추정 건수·비율·설명; 결과가 없으면 빈 목록
      */
     public record CustomerOutcomeSummary(Instant windowStart, Instant windowEnd,
-                                         long totalCount, List<CustomerOutcome> outcomes) {
+                                         double totalCount, List<CustomerOutcome> outcomes) {
 
         public CustomerOutcomeSummary {
-            outcomes = List.copyOf(outcomes);
+            outcomes = List.copyOf(Objects.requireNonNull(outcomes, "outcomes"));
+            CustomerOutcomeInvariants.validate(
+                    windowStart, windowEnd, totalCount, outcomes,
+                    CustomerOutcome::type, CustomerOutcome::count, CustomerOutcome::ratio);
         }
     }
 
@@ -304,11 +307,11 @@ public record AdminOverviewSnapshot(
      * O3 고객 결과 유형 하나의 집계값입니다.
      *
      * @param type HTML에서 구분한 고객 결과 코드
-     * @param count 해당 결과 건수; 실제 발생하지 않았으면 0
+     * @param count Prometheus가 관측 구간에 추정한 해당 결과 event count; 실제 발생하지 않았으면 0
      * @param ratio {@link CustomerOutcomeSummary#totalCount()} 대비 비율 0~1; NaN과 무한대는 허용하지 않음
      * @param displayText 운영자에게 표시할 결과 의미 설명
      */
-    public record CustomerOutcome(CustomerOutcomeType type, long count,
+    public record CustomerOutcome(CustomerOutcomeType type, double count,
                                   double ratio, String displayText) {
 
         /**
@@ -317,6 +320,10 @@ public record AdminOverviewSnapshot(
          * @throws IllegalArgumentException ratio가 유한하지 않거나 0 미만 또는 1 초과인 경우
          */
         public CustomerOutcome {
+            Objects.requireNonNull(type, "type");
+            if (!Double.isFinite(count) || count < 0d) {
+                throw new IllegalArgumentException("count는 유한한 비음수여야 합니다.");
+            }
             if (!Double.isFinite(ratio) || ratio < 0.0 || ratio > 1.0) {
                 throw new IllegalArgumentException("ratio는 유한한 0 이상 1 이하 값이어야 합니다.");
             }

@@ -61,8 +61,9 @@ public class AdminDashboardController {
      * <p>회원 발급 문의, 발급 상태 변경 이력, 고객 알림 발송 현황은 각각
      * 별도의 관리자 API에서 조회하므로 이 응답에 중복해서 포함하지 않습니다.</p>
      *
-     * <p>현재 Service는 운영 원천이 연결되지 않은 영역을 {@code UNAVAILABLE}로 명시합니다.
-     * 후속 캠페인 Repository와 관측 조회 구성요소가 연결되면 같은 응답 계약에서 실제 값을 제공합니다.</p>
+     * <p>O1 발급 흐름·O3 고객 결과·응답 지연은 실제 관측 원천에 연결됐습니다. 캠페인·O2·O4·FINAL은
+     * 현재 Mock 경계를 유지하고, 전체 발급률은 세션 최고값 경계가 없어 {@code PENDING}으로
+     * 제공합니다. 후속 원천 연결 뒤에도 같은 응답 계약을 유지합니다.</p>
      *
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
      * @return Service 계산 결과를 HTTP DTO로 변환한 성공 응답 봉투

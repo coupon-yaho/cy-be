@@ -6,8 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import org.springframework.stereotype.Service;
-
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
@@ -28,25 +26,30 @@ import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockInput
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockRiskCalculation;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataset;
+import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
+import com.kafkick.core.admin.overview.observation.OverviewObservationData;
+import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
+import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 /**
  * 관리자 첫 화면에 필요한 운영현황 조회와 결과 조립 흐름을 담당합니다.
  *
- * <p>현재 캠페인 Repository가 준비되기 전까지 Mock Factory에서 원천을 조회하고, 원천별 결과를
- * Calculator에 전달해 {@link AdminOverviewResult}를 생성합니다. 계산식과 정책 판정은 전용
- * Calculator가 담당하며 Service는 조회 순서와 결과 조립만 조정합니다.</p>
+ * <p>O1 발급 흐름·O3 고객 결과·지연·전체 발급률은 기술 중립 {@link OverviewObservationSource}에서
+ * 읽고, 캠페인·O2 대기열·O4 재고·FINAL 정합성은 Repository 연결 전까지 Mock Dataset을 사용합니다.
+ * 계산식과 정책 판정은 전용 Calculator가 담당하며 이 클래스는 조회 순서와 결과 조립만 조정합니다.</p>
  *
- * <p>캠페인 Repository가 병합되면 Mock Factory 호출을 실제 조회와 캠페인 계산 입력 변환으로
- * 교체합니다. Calculator와 Snapshot 조립은 유지하며, 아직 연결되지 않은 관측 영역은 수치를
- * 추정하지 않고 {@link SourceStatus#UNAVAILABLE}로 제공합니다.</p>
+ * <p>API 전용 관측 어댑터를 Core나 Batch에 강제하지 않도록 이 클래스는 Spring 컴포넌트가 아닌
+ * 기술 중립 서비스이며, API 설정이 실제 관측 원천과 함께 명시적으로 bean을 소유합니다.</p>
  */
-@Service
 public class AdminOverviewService {
 
     private final TimeProvider timeProvider;
     private final AdminOverviewMockDataFactory mockDataFactory;
+    private final OverviewObservationSource observationSource;
     private final IssuanceFlowCalculator issuanceFlowCalculator;
     private final IssuanceActionCalculator issuanceActionCalculator;
     private final CampaignQueueCalculator campaignQueueCalculator;
@@ -58,10 +61,11 @@ public class AdminOverviewService {
     private final OverviewStatusCalculator overviewStatusCalculator;
 
     /**
-     * Mock 원천 조회와 캠페인·조치·전체 상태 계산에 필요한 협력 객체를 주입받습니다.
+     * Mock Dataset, 실제 관측 원천과 캠페인·조치·전체 상태 계산 협력 객체를 주입받습니다.
      *
      * @param timeProvider 테스트와 운영 환경에서 동일한 시간 계약을 제공하는 공통 공급자
      * @param mockDataFactory Repository 연결 전 캠페인 원천과 조치 후보를 제공하는 Factory
+     * @param observationSource 같은 Snapshot 모집단의 O1·O3·전체 발급률·지연 관측 원천
      * @param issuanceFlowCalculator O1 발급 흐름 계산기
      * @param issuanceActionCalculator O1 발급 중단 조치 후보 계산기
      * @param campaignQueueCalculator O2 대기열·대기 위험·조치 후보 계산기
@@ -75,6 +79,7 @@ public class AdminOverviewService {
     public AdminOverviewService(
             TimeProvider timeProvider,
             AdminOverviewMockDataFactory mockDataFactory,
+            OverviewObservationSource observationSource,
             IssuanceFlowCalculator issuanceFlowCalculator,
             IssuanceActionCalculator issuanceActionCalculator,
             CampaignQueueCalculator campaignQueueCalculator,
@@ -87,6 +92,7 @@ public class AdminOverviewService {
     ) {
         this.timeProvider = timeProvider;
         this.mockDataFactory = mockDataFactory;
+        this.observationSource = observationSource;
         this.issuanceFlowCalculator = issuanceFlowCalculator;
         this.issuanceActionCalculator = issuanceActionCalculator;
         this.campaignQueueCalculator = campaignQueueCalculator;
@@ -101,11 +107,10 @@ public class AdminOverviewService {
     /**
      * 현재 시점의 관리자 운영현황을 반환합니다.
      *
-     * <p>기준 시각과 Dataset을 한 번씩만 만든 뒤 O1, O2, O3, O4를 순서대로 계산합니다. O4는 같은
-     * couponId의 O1 계산 결과를 그대로 사용하며, O1·O2·FINAL 정합성 후보와 준비 미완료 후보를 합쳐 Action 계산기를
-     * 한 번만 호출합니다. 이후 Action 전체 대표 Map을 캠페인 행 조립에 전달해 KPI·목록·행이 같은
-     * 판정을 재사용하도록 합니다. 독립 전체 발급률과 지연 원천은 Dataset Observation을 그대로
-     * Snapshot에 전달합니다.</p>
+     * <p>기준 시각과 Dataset을 한 번씩만 만든 뒤 같은 모집단의 관측 묶음을 한 번 조회합니다. 실 O1은
+     * 행·조치에 사용하고 O4는 기존 Mock O1 계산을 별도로 유지합니다. O1·O2·FINAL 정합성 후보와 준비
+     * 미완료 후보를 합친 Action 계산은 한 번만 수행하며, 같은 대표 Map을 KPI·목록·행이 재사용합니다.
+     * O3·전체 발급률·지연은 관측 묶음의 상태와 시각을 그대로 Snapshot에 전달합니다.</p>
      *
      * @return Snapshot과 전체 데이터 완전성을 포함한 운영현황 Service 결과
      */
@@ -113,17 +118,27 @@ public class AdminOverviewService {
         // 한 응답 안의 시간 경계가 달라지지 않도록 기준 시각은 최초 한 번만 조회합니다.
         Instant snapshotAt = timeProvider.instant();
         AdminOverviewMockDataset dataset = mockDataFactory.create(snapshotAt);
-        // O1~O3는 서로 독립된 원천을 한 번씩 계산하고 O1 결과는 뒤의 O4에서 재사용합니다.
+        OverviewObservationRequest observationRequest = observationRequest(snapshotAt, dataset);
+        // O1·O3·지연·전체 발급률이 같은 평가 경계를 갖도록 묶음 원천은 정확히 한 번 조회합니다.
+        OverviewObservationData observationData = observationSource.observe(observationRequest);
+        if (!observationRequest.equals(observationData.request())) {
+            throw new BusinessException(
+                    AdminOverviewErrorCode.OBSERVATION_REQUEST_MISMATCH,
+                    "관측 응답 request가 현재 Overview 요청과 일치해야 합니다.");
+        }
+        // 실 O1은 화면 행·발급 조치·Action 완전성에만 사용합니다.
         IssuanceFlowCalculation issuanceCalculation = issuanceFlowCalculator.calculate(
-                dataset.policy(), dataset.issuanceFlowInputs());
+                dataset.policy(), observationData.issuanceFlowInputs());
         List<AdminOverviewSnapshot.OperationActionItem> issuanceActionCandidates = issuanceActionCalculator
                 .calculate(issuanceCalculation.issuanceFlows());
         QueueCalculation queueCalculation = campaignQueueCalculator.calculate(
                 dataset.policy(), dataset.queueInputs());
-        OutcomeCalculation outcomeCalculation = customerOutcomeCalculator.calculate(dataset.outcomeInput());
-        // O4를 별도 발급 조회 없이 같은 couponId의 O1 계산 결과와 재고 원천으로 만듭니다.
+        OutcomeCalculation outcomeCalculation = customerOutcomeCalculator.calculate(observationData.outcomeInput());
+        // O4가 실관측 예측처럼 보이지 않도록 기존 Mock O1 Map을 별도로 계산해 재고 입력에만 사용합니다.
+        IssuanceFlowCalculation mockIssuanceCalculation = issuanceFlowCalculator.calculate(
+                dataset.policy(), dataset.issuanceFlowInputs());
         StockRiskCalculation stockCalculation = stockRiskCalculator.calculate(
-                dataset.policy(), stockInputs(dataset.campaigns(), issuanceCalculation.issuanceFlows()));
+                dataset.policy(), stockInputs(dataset.campaigns(), mockIssuanceCalculation.issuanceFlows()));
         List<AdminOverviewSnapshot.OperationActionItem> consistencyActionCandidates = new ArrayList<>();
         for (ConsistencyActionContext context : dataset.consistencyActionContexts()) {
             // FINAL 문맥은 요청마다 정확히 한 번만 기존 정책 계산기로 조치 후보에 변환합니다.
@@ -140,7 +155,7 @@ public class AdminOverviewService {
                 queueCalculation.queueStatuses(), stockCalculation.stockForecasts(),
                 actionCalculation.representativeByCoupon());
 
-        // Dataset 원천의 값·상태·관측 시각을 그대로 유지해 Snapshot 완전성 계산에 사용합니다.
+        // 관측 원천과 Mock 계산 영역 각각의 값·상태·시각을 보정 없이 Snapshot 완전성에 사용합니다.
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
                 snapshotAt,
                 actionObservation(actionCalculation.required(), queueCalculation.queueRisk(),
@@ -148,9 +163,9 @@ public class AdminOverviewService {
                 validObservation(campaignCalculation.openingSoon(), snapshotAt),
                 queueCalculation.queueRisk(),
                 stockCalculation.stockRisk(),
-                dataset.aggregateIssuanceRate(),
+                observationData.aggregateIssuanceRate(),
                 queueCalculation.aggregateQueue(),
-                dataset.latencySummary(),
+                observationData.latencySummary(),
                 validObservation(campaignCalculation.campaignStatusSummary(), snapshotAt),
                 actionObservation(actionCalculation.items(), queueCalculation.queueRisk(),
                         issuanceCalculation.issuanceFlows(), snapshotAt),
@@ -160,12 +175,40 @@ public class AdminOverviewService {
         return assemble(snapshot);
     }
 
+    /** Mock 캠페인 모집단과 정책을 같은 Snapshot의 기술 중립 관측 요청으로 변환합니다. */
+    private static OverviewObservationRequest observationRequest(
+            Instant snapshotAt,
+            AdminOverviewMockDataset dataset
+    ) {
+        List<CampaignObservationTarget> targets = dataset.campaigns().stream()
+                .map(AdminOverviewService::observationTarget)
+                .toList();
+        return new OverviewObservationRequest(snapshotAt, targets, dataset.policy());
+    }
+
+    /** 캠페인 상태와 Mock 재고의 값 또는 값 없는 상태를 O1 중단 판정 target으로 변환합니다. */
+    private static CampaignObservationTarget observationTarget(CampaignOverviewSource campaign) {
+        Boolean stockAvailable = null;
+        SourceStatus stockStatus = SourceStatus.N_A;
+        if (campaign.status() == CouponStatus.OPEN) {
+            stockStatus = campaign.stockStatus();
+        }
+        if (campaign.status() == CouponStatus.OPEN && stockStatus.carriesValue()) {
+            // 정확히 소진된 activeCount == totalQuantity 경계를 재고 없음으로 판정합니다.
+            stockAvailable = campaign.activeCount() < campaign.totalQuantity();
+        }
+        return new CampaignObservationTarget(
+                campaign.couponId(), campaign.status(), stockAvailable, stockStatus,
+                stockStatus.carriesValue() ? campaign.stockObservedAt() : null);
+    }
+
     /**
-     * 캠페인 V1 재고 원천과 같은 couponId의 O1 관측값을 O4 입력으로 변환합니다.
+     * 캠페인 V1 Mock 재고와 별도 계산한 Mock O1을 O4 입력으로 변환합니다.
      *
-     * <p>예약·종료 캠페인은 O1이 N_A이므로 O4도 N_A로 명시해 전역 위험 모집단에서 제외합니다.
-     * 그 밖의 캠페인은 CampaignOverviewSource가 검증한 명시 재고 상태와 수량·관측 시각을 손실 없이
-     * 전달하며, 값 없는 상태의 수량을 0으로 보정하지 않습니다.</p>
+     * <p>화면 행의 실 O1은 이 메서드에 전달하지 않습니다. 예약·종료 캠페인은 Mock O1이 N_A이므로
+     * O4도 N_A로 명시해 전역 위험 모집단에서 제외합니다. 그 밖의 캠페인은 CampaignOverviewSource가
+     * 검증한 명시 재고 상태와 수량·관측 시각을 손실 없이 전달하며, 값 없는 상태의 수량을 0으로
+     * 보정하지 않습니다.</p>
      */
     private static List<StockInput> stockInputs(
             List<CampaignOverviewSource> campaigns,
@@ -230,7 +273,7 @@ public class AdminOverviewService {
     /**
      * 각 원천에서 계산된 운영 값과 전체 완전성을 하나의 Service 결과로 조립합니다.
      *
-     * <p>후속 Repository·관측 조회가 준비되면 완성된 Snapshot을 이 경계로 전달합니다. 전체 완전성은
+     * <p>현재 실관측·Mock 경계에서 계산을 마친 Snapshot을 이 메서드로 전달합니다. 전체 완전성은
      * {@link OverviewStatusCalculator}에 위임하고, HTTP DTO 변환은 이 결과를 받는 Controller가
      * 담당합니다.</p>
      *

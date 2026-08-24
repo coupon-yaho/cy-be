@@ -1,6 +1,7 @@
 package com.kafkick.core.admin.overview;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -12,6 +13,8 @@ import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.annotation.AnnotatedElementUtils;
+import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
@@ -36,27 +39,39 @@ import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockInput;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator.StockRiskCalculation;
+import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
+import com.kafkick.core.admin.overview.observation.OverviewObservationData;
+import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
+import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.coupon.CouponStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
-/** Mock 캠페인 계산값과 미연결 관측값을 함께 조립하는 관리자 운영현황 Service를 검증합니다. */
+/** 실 O1·O3·지연과 Mock 캠페인·O2·O4·FINAL을 함께 조립하는 Overview Service를 검증합니다. */
 class AdminOverviewServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-20T03:15:00Z");
 
-    /** O1~O4와 Action의 같은 계산 결과가 KPI·목록·행에 재사용되는지 검증합니다. */
+    /** API 전용 원천을 Batch에 강제하지 않도록 Core Service는 전역 Spring 컴포넌트가 아닙니다. */
     @Test
-    @DisplayName("Mock O1 O2 O3 O4 결과와 전체 관측값을 COMPLETE 운영현황으로 조립한다")
-    void assemblesMockCalculationResultsAsCompleteOverview() {
+    @DisplayName("AdminOverviewService는 Core 전역 컴포넌트가 아니다")
+    void remainsTechnicalNeutralWithoutSpringComponentOwnership() {
+        assertThat(AnnotatedElementUtils.hasAnnotation(AdminOverviewService.class, Component.class)).isFalse();
+    }
+
+    /** 연결된 O1·O3·지연과 Mock O2·O4·FINAL이 같은 Snapshot으로 조립되는지 검증합니다. */
+    @Test
+    @DisplayName("관측 O1 O3 지연과 Mock O2 O4 FINAL을 PARTIAL 운영현황으로 조립한다")
+    void assemblesObservedAndMockBoundariesAsPartialOverview() {
         AdminOverviewService service = service();
 
         AdminOverviewResult result = service.getOverview();
         AdminOverviewSnapshot snapshot = result.snapshot();
 
         assertThat(snapshot.snapshotAt()).isEqualTo(NOW);
-        assertThat(result.overallStatus()).isEqualTo(OverallStatus.COMPLETE);
+        assertThat(result.overallStatus()).isEqualTo(OverallStatus.PARTIAL);
         assertThat(snapshot.campaignStatusSummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.campaignStatusSummary().value())
                 .isEqualTo(new AdminOverviewSnapshot.CampaignStatusSummary(3, 2, 1));
@@ -103,10 +118,10 @@ class AdminOverviewServiceTest {
                 .filteredOn(campaign -> campaign.couponId().equals(102L))
                 .singleElement()
                 .satisfies(campaign -> {
-                    assertThat(campaign.issuanceFlow().value().currentPerMinute()).isEqualTo(44.0);
+                    assertThat(campaign.issuanceFlow().value().currentPerMinute()).isEqualTo(49.0);
                     assertThat(campaign.stockForecast().value())
                         .isEqualTo(new AdminOverviewSnapshot.StockForecast(
-                                350L, 7_000L, 0.05, Duration.ofSeconds(478)));
+                                350L, 7_000L, 0.05, Duration.ofSeconds(429)));
                     assertThat(campaign.severity()).isEqualTo(Severity.CRITICAL);
                     assertThat(campaign.customerImpact()).isEqualTo(
                             AdminOverviewSnapshot.CustomerImpact.LIMITED);
@@ -143,9 +158,9 @@ class AdminOverviewServiceTest {
         assertThat(snapshot.customerOutcomes().value().outcomes()).hasSize(7);
         assertThat(snapshot.aggregateIssuanceRate())
                 .satisfies(observation -> {
-                    assertThat(observation.value().currentPerSecond()).isGreaterThan(0.0);
-                    assertThat(observation.status()).isEqualTo(SourceStatus.VALID);
-                    assertThat(observation.observedAt()).isEqualTo(NOW);
+                    assertThat(observation.value()).isNull();
+                    assertThat(observation.status()).isEqualTo(SourceStatus.PENDING);
+                    assertThat(observation.observedAt()).isNull();
                 });
         assertThat(snapshot.latencySummary())
                 .satisfies(observation -> {
@@ -157,16 +172,168 @@ class AdminOverviewServiceTest {
                 });
     }
 
+    /** 실관측 O1·O3·지연과 원천 aggregate 상태가 Mock 값 대신 Snapshot에 직접 반영되는지 검증합니다. */
+    @Test
+    @DisplayName("관측 O1 O3 지연과 aggregate PENDING을 fallback 없이 조립한다")
+    void assemblesObservedIssuanceOutcomeLatencyAndAggregateStatus() {
+        AdminOverviewResult result = serviceWithObservationSource(distinctObservationSource()).getOverview();
+        AdminOverviewSnapshot snapshot = result.snapshot();
+
+        assertThat(campaignForCoupon(result, 102L).issuanceFlow().value().currentPerMinute()).isEqualTo(5d);
+        assertThat(snapshot.customerOutcomes().value().totalCount()).isEqualTo(2d);
+        assertThat(snapshot.customerOutcomes().value().outcomes())
+                .filteredOn(outcome -> outcome.type() == AdminOverviewSnapshot.CustomerOutcomeType.ISSUED)
+                .singleElement()
+                .extracting(AdminOverviewSnapshot.CustomerOutcome::count)
+                .isEqualTo(2d);
+        assertThat(snapshot.latencySummary())
+                .isEqualTo(new AdminOverviewSnapshot.Observation<>(
+                        new AdminOverviewSnapshot.LatencySummary(
+                                Duration.ofMillis(11), Duration.ofMillis(22),
+                                NOW.minus(Duration.ofMinutes(5)), NOW),
+                        SourceStatus.VALID,
+                        NOW));
+        assertThat(snapshot.aggregateIssuanceRate()).isEqualTo(pendingObservation());
+    }
+
+    /** O2·O4·FINAL·캠페인 Mock 경계가 실 O1 sentinel 때문에 바뀌지 않는지 검증합니다. */
+    @Test
+    @DisplayName("실 O1과 별도인 Mock O1으로 O4를 계산하고 O2 FINAL 캠페인을 유지한다")
+    void keepsMockQueueStockFinalAndCampaignBoundaries() {
+        AdminOverviewResult result = serviceWithObservationSource(distinctObservationSource()).getOverview();
+
+        assertThat(result.snapshot().aggregateQueue().value())
+                .isEqualTo(new AdminOverviewSnapshot.AggregateQueue(3_388L, 4.6, null));
+        assertThat(campaignForCoupon(result, 102L).stockForecast().value())
+                .isEqualTo(new AdminOverviewSnapshot.StockForecast(
+                        350L, 7_000L, 0.05, Duration.ofSeconds(429)));
+        assertThat(campaignForCoupon(result, 102L).recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
+        assertThat(result.snapshot().campaigns().value())
+                .extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
+                .containsExactly(101L, 102L, 103L, 105L, 104L, 106L);
+    }
+
+    /** 실 O1에서 파생된 한 대표 조치를 KPI·목록·캠페인 행이 함께 사용하는지 검증합니다. */
+    @Test
+    @DisplayName("실 STOPPED O1 대표 조치를 Action KPI 목록과 캠페인 행이 공유한다")
+    void sharesObservedStoppedIssuanceRepresentativeAcrossActionSurfaces() {
+        AdminOverviewResult result = serviceWithObservationSource(distinctObservationSource()).getOverview();
+
+        AdminOverviewSnapshot.OperationActionItem item = result.snapshot().actionItems().value().topItems().stream()
+                .filter(action -> action.couponId().equals(103L))
+                .findFirst()
+                .orElseThrow();
+        assertThat(result.snapshot().actionRequired().value())
+                .isEqualTo(new AdminOverviewSnapshot.ActionRequiredSummary(4, 3, 1));
+        assertThat(item.recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.ISSUANCE_STOPPED);
+        assertThat(campaignForCoupon(result, 103L).issuanceFlow().value().state())
+                .isEqualTo(AdminOverviewSnapshot.IssuanceFlowState.STOPPED);
+        assertThat(campaignForCoupon(result, 103L).recommendedAction()).isSameAs(item.recommendedAction());
+    }
+
+    /** 값 없는 실관측 상태가 Mock O1·O3·지연 값으로 보정되지 않는지 검증합니다. */
+    @Test
+    @DisplayName("O1 O3 지연 미관측 상태를 유지하고 O2 O4 FINAL만 Mock으로 계산한다")
+    void preservesUnavailableObservationsWithoutMockFallback() {
+        AdminOverviewResult result = serviceWithObservationSource(unavailableObservationSource()).getOverview();
+        AdminOverviewSnapshot snapshot = result.snapshot();
+
+        assertThat(campaignForCoupon(result, 102L).issuanceFlow()).isEqualTo(pendingObservation());
+        assertThat(snapshot.customerOutcomes()).isEqualTo(pendingObservation());
+        assertThat(snapshot.latencySummary()).isEqualTo(unavailable());
+        assertThat(snapshot.aggregateIssuanceRate()).isEqualTo(pendingObservation());
+        assertThat(snapshot.actionRequired()).isEqualTo(pendingObservation());
+        assertThat(snapshot.actionItems()).isEqualTo(pendingObservation());
+        assertThat(snapshot.aggregateQueue().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(campaignForCoupon(result, 102L).stockForecast().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(campaignForCoupon(result, 102L).recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
+    }
+
+    /** 한 Snapshot 요청이 정책·모집단과 재고 값·상태·시각을 보존해 원천을 한 번 호출하는지 검증합니다. */
+    @Test
+    @DisplayName("관측 요청은 한 번이며 OPEN 재고 관측과 비OPEN N_A null을 전달한다")
+    void observesOnceWithDatasetPolicyAndCampaignTargets() {
+        AdminOverviewMockDataFactory factory = new AdminOverviewMockDataFactory() {
+            @Override
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<CampaignOverviewSource> campaigns = base.campaigns().stream()
+                        .map(campaign -> campaign.couponId().equals(102L)
+                                ? campaignWithStock(campaign, 7_000L, 7_000L, snapshotAt) : campaign)
+                        .toList();
+                return withCampaigns(base, campaigns);
+            }
+        };
+        List<OverviewObservationRequest> requests = new ArrayList<>();
+        OverviewObservationSource source = request -> {
+            requests.add(request);
+            return mockObservationData(request, factory.create(request.snapshotAt()));
+        };
+
+        serviceWithSources(factory, source).getOverview();
+
+        assertThat(requests).singleElement().satisfies(request -> {
+            assertThat(request.snapshotAt()).isEqualTo(NOW);
+            assertThat(request.policy()).isEqualTo(factory.create(NOW).policy());
+            assertThat(request.campaignTargets()).containsExactly(
+                    new CampaignObservationTarget(
+                            101L, CouponStatus.OPEN, true, SourceStatus.VALID, NOW),
+                    new CampaignObservationTarget(
+                            102L, CouponStatus.OPEN, false, SourceStatus.VALID, NOW),
+                    new CampaignObservationTarget(
+                            103L, CouponStatus.OPEN, true, SourceStatus.VALID, NOW),
+                    new CampaignObservationTarget(
+                            104L, CouponStatus.SCHEDULED, null, SourceStatus.N_A, null),
+                    new CampaignObservationTarget(
+                            105L, CouponStatus.SCHEDULED, null, SourceStatus.N_A, null),
+                    new CampaignObservationTarget(
+                            106L, CouponStatus.CLOSED, null, SourceStatus.N_A, null));
+        });
+    }
+
+    /** 관측 원천이 다른 Snapshot·정책·모집단의 응답을 현재 요청에 섞는 것을 Service에서 거부합니다. */
+    @Test
+    @DisplayName("관측 응답 request가 보낸 request와 다르면 Overview 조립을 거부한다")
+    void rejectsObservationDataForDifferentRequest() {
+        AdminOverviewMockDataFactory factory = new AdminOverviewMockDataFactory();
+        OverviewObservationSource mismatched = request -> {
+            Instant previousSnapshot = request.snapshotAt().minusSeconds(1);
+            AdminOverviewMockDataset previousDataset = factory.create(previousSnapshot);
+            List<CampaignObservationTarget> previousTargets = request.campaignTargets().stream()
+                    .map(target -> new CampaignObservationTarget(
+                            target.couponId(), target.campaignStatus(), target.stockAvailable(),
+                            target.stockStatus(), target.stockStatus().carriesValue()
+                                    ? previousSnapshot : null))
+                    .toList();
+            OverviewObservationRequest previousRequest = new OverviewObservationRequest(
+                    previousSnapshot, previousTargets, request.policy());
+            return mockObservationData(previousRequest, previousDataset);
+        };
+
+        assertThatThrownBy(() -> serviceWithSources(factory, mismatched).getOverview())
+                .isInstanceOfSatisfying(BusinessException.class, failure -> {
+                    assertThat(failure.getErrorCode().getStatus()).isEqualTo(500);
+                    assertThat(failure.getErrorCode().getCode()).isEqualTo("OVERVIEW-001");
+                    assertThat(failure.getErrorCode().getMessage())
+                            .isEqualTo("운영현황 관측 결과를 처리할 수 없습니다.");
+                    assertThat(failure).hasMessageContaining("관측 응답 request");
+                });
+    }
+
     /**
-     * 한 요청에서 각 협력자를 한 번씩만 호출하고 Calculator가 만든 Observation 객체를 새로 감싸지
-     * 않고 Snapshot과 Campaign 행에 그대로 재사용하는지 검증합니다.
+     * 한 요청에서 issuance 계산기만 실 O1·Mock O4용으로 두 번, 나머지 협력자는 한 번씩 호출하고
+     * Calculator가 만든 Observation 객체를 새로 감싸지 않고 재사용하는지 검증합니다.
      */
     @Test
-    @DisplayName("Service는 Calculator를 한 번씩 호출하고 O1 O2 O3 O4 Observation을 그대로 조립한다")
+    @DisplayName("Service는 issuance만 두 번 계산하고 나머지는 한 번 호출해 Observation을 조립한다")
     void invokesCollaboratorsOnceAndPreservesCalculatedObservationIdentity() {
         List<String> events = new ArrayList<>();
         RecordingTimeProvider timeProvider = new RecordingTimeProvider(events);
         RecordingMockDataFactory factory = new RecordingMockDataFactory(events);
+        RecordingOverviewObservationSource observation = new RecordingOverviewObservationSource(events);
         RecordingIssuanceFlowCalculator issuance = new RecordingIssuanceFlowCalculator(events);
         RecordingIssuanceActionCalculator issuanceAction = new RecordingIssuanceActionCalculator(events);
         RecordingQueueCalculator queue = new RecordingQueueCalculator(events);
@@ -176,16 +343,18 @@ class AdminOverviewServiceTest {
         RecordingConsistencyActionCalculator consistency = new RecordingConsistencyActionCalculator(events);
         RecordingActionCalculator action = new RecordingActionCalculator(events);
         RecordingOverviewStatusCalculator status = new RecordingOverviewStatusCalculator(events);
-        AdminOverviewService service = new AdminOverviewService(timeProvider, factory, issuance, issuanceAction, queue, outcome,
+        AdminOverviewService service = new AdminOverviewService(
+                timeProvider, factory, observation, issuance, issuanceAction, queue, outcome,
                 stock, campaign, consistency, action, status);
 
         AdminOverviewSnapshot snapshot = service.getOverview().snapshot();
 
         assertThat(events).containsExactly(
-                "time", "factory", "issuance", "issuanceAction", "queue", "outcome", "stock", "consistency",
-                "consistency", "consistency", "action", "campaign", "status");
+                "time", "factory", "observation", "issuance", "issuanceAction", "queue", "outcome", "issuance",
+                "stock", "consistency", "consistency", "consistency", "action", "campaign", "status");
         assertThat(factory.createCount).isEqualTo(1);
-        assertThat(issuance.calculateCount).isEqualTo(1);
+        assertThat(observation.observeCount).isEqualTo(1);
+        assertThat(issuance.calculateCount).isEqualTo(2);
         assertThat(issuanceAction.calculateCount).isEqualTo(1);
         assertThat(queue.calculateCount).isEqualTo(1);
         assertThat(outcome.calculateCount).isEqualTo(1);
@@ -201,11 +370,19 @@ class AdminOverviewServiceTest {
                 .findFirst()
                 .orElseThrow()
                 .issuanceFlow())
-                .isSameAs(issuance.result.issuanceFlows().get(101L));
+                .isSameAs(issuance.mockResult.issuanceFlows().get(101L));
+        assertThat(snapshot.campaigns().value().stream()
+                .filter(row -> row.couponId().equals(101L))
+                .findFirst()
+                .orElseThrow()
+                .issuanceFlow())
+                .isSameAs(issuance.observedResult.issuanceFlows().get(101L));
         assertThat(snapshot.queueRisk()).isSameAs(queue.result.queueRisk());
         assertThat(snapshot.aggregateQueue()).isSameAs(queue.result.aggregateQueue());
         assertThat(snapshot.stockRisk()).isSameAs(stock.result.stockRisk());
         assertThat(snapshot.customerOutcomes()).isSameAs(outcome.result.customerOutcomes());
+        assertThat(snapshot.aggregateIssuanceRate()).isSameAs(observation.result.aggregateIssuanceRate());
+        assertThat(snapshot.latencySummary()).isSameAs(observation.result.latencySummary());
         assertThat(snapshot.campaigns().value().stream()
                 .filter(row -> row.couponId().equals(101L))
                 .findFirst()
@@ -295,6 +472,48 @@ class AdminOverviewServiceTest {
         assertThat(campaignForCoupon(result, 103L).severity()).isEqualTo(Severity.CRITICAL);
     }
 
+    /** raw scrape 오차가 같은 심각도의 더 이른 FINAL 후보보다 O1을 앞세우는 회귀를 막습니다. */
+    @Test
+    @DisplayName("평가 timeline의 O1 detectedAt으로 동일 CRITICAL 대표 조치를 선택한다")
+    void selectsSameSeverityRepresentativeUsingEvaluationTimelineDetectedAt() {
+        AdminOverviewResult result = serviceWithDataset(new AdminOverviewMockDataFactory() {
+            @Override
+            public AdminOverviewMockDataset create(Instant snapshotAt) {
+                AdminOverviewMockDataset base = super.create(snapshotAt);
+                List<IssuanceFlowInput> issuanceInputs = base.issuanceFlowInputs().stream()
+                        .map(input -> input.couponId().equals(103L)
+                                ? stoppedIssuanceInput(
+                                input, snapshotAt, snapshotAt.minus(Duration.ofMinutes(1))) : input)
+                        .toList();
+                List<ConsistencyActionContext> contexts = base.consistencyActionContexts().stream()
+                        .map(context -> context.couponId().equals(103L)
+                                ? new ConsistencyActionContext(
+                                context.couponId(), context.campaignName(), context.opensAt(),
+                                snapshotAt.minus(Duration.ofMinutes(10)).minusSeconds(30),
+                                context.engineVersion(), context.evaluation()) : context)
+                        .toList();
+                return new AdminOverviewMockDataset(
+                        base.policy(), issuanceInputs, base.queueInputs(), base.outcomeInput(),
+                        base.campaigns(), base.preparationActionCandidates(), contexts,
+                        base.aggregateIssuanceRate(), base.latencySummary());
+            }
+        }).getOverview();
+
+        AdminOverviewSnapshot.OperationActionItem representative = result.snapshot().actionItems().value()
+                .topItems().stream()
+                .filter(action -> action.couponId().equals(103L))
+                .findFirst()
+                .orElseThrow();
+        assertThat(campaignForCoupon(result, 103L).issuanceFlow().value().stateDuration())
+                .isEqualTo(Duration.ofMinutes(10));
+        assertThat(representative.detectedAt())
+                .isEqualTo(NOW.minus(Duration.ofMinutes(10)).minusSeconds(30));
+        assertThat(representative.recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CONSISTENCY_FAILURE);
+        assertThat(campaignForCoupon(result, 103L).recommendedAction()).isSameAs(
+                representative.recommendedAction());
+    }
+
     /** O1 원천의 값 없음·최신성 상태가 O2만으로 만든 정상 조치 KPI를 덮는지 검증합니다. */
     @Test
     @DisplayName("O1 원천 상태는 Action KPI 목록의 완전성과 가장 오래된 관측 시각에 반영된다")
@@ -355,16 +574,35 @@ class AdminOverviewServiceTest {
                 NOW.minus(Duration.ofMinutes(5)));
     }
 
-    /** 명시적인 재고 최신성·미수집 상태가 O4 행과 전역 위험에 손실 없이 전달되는지 검증합니다. */
+    /** 값 있는 재고 최신성과 값 없는 재고 상태를 O1·O4에 각각 손실 없이 전달합니다. */
     @Test
-    @DisplayName("재고 STALE WARMING_UP PENDING 상태는 Service O4 행과 전역 위험에 전파된다")
+    @DisplayName("OPEN 재고 값 상태와 PENDING UNAVAILABLE을 O1 O4에 전파한다")
     void propagatesExplicitStockSourceStates() {
-        for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP, SourceStatus.PENDING)) {
+        for (SourceStatus status : List.of(SourceStatus.STALE, SourceStatus.WARMING_UP)) {
             AdminOverviewResult result = serviceWithStockStatus(status).getOverview();
             AdminOverviewSnapshot.CampaignOverview campaign = result.snapshot().campaigns().value().stream()
                     .filter(row -> row.couponId().equals(103L)).findFirst().orElseThrow();
+            assertThat(campaign.issuanceFlow().status()).as("O1 status=%s", status).isEqualTo(status);
             assertThat(campaign.stockForecast().status()).as("status=%s", status).isEqualTo(status);
             assertThat(result.snapshot().stockRisk().status()).as("status=%s", status).isEqualTo(status);
+            assertThat(result.snapshot().actionItems().value().topItems())
+                    .filteredOn(action -> action.couponId().equals(103L))
+                    .noneMatch(action -> action.recommendedAction().code()
+                            == AdminOverviewSnapshot.ActionCode.ISSUANCE_STOPPED);
+        }
+        for (SourceStatus status : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE)) {
+            AdminOverviewResult result = serviceWithStockStatus(status).getOverview();
+            AdminOverviewSnapshot.CampaignOverview campaign = result.snapshot().campaigns().value().stream()
+                    .filter(row -> row.couponId().equals(103L)).findFirst().orElseThrow();
+
+            assertThat(campaign.issuanceFlow()).as("O1 status=%s", status)
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
+            assertThat(campaign.stockForecast()).as("O4 status=%s", status)
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
+            assertThat(result.snapshot().stockRisk()).as("global O4 status=%s", status)
+                    .isEqualTo(new AdminOverviewSnapshot.Observation<>(null, status, null));
+            assertThat(result.snapshot().customerOutcomes().status()).isEqualTo(SourceStatus.VALID);
+            assertThat(result.snapshot().aggregateQueue().status()).isEqualTo(SourceStatus.VALID);
         }
     }
 
@@ -573,12 +811,153 @@ class AdminOverviewServiceTest {
         );
     }
 
-    private static AdminOverviewService service() {
+    /** 기본 Mock 모집단을 기술 중립 관측 응답으로 바꿔 기존 계산기 회귀 테스트에 제공합니다. */
+    private static OverviewObservationSource mockObservationSource(AdminOverviewMockDataFactory factory) {
+        return request -> mockObservationData(request, factory.create(request.snapshotAt()));
+    }
+
+    /** 요청 target의 재고 의미를 보존하면서 Mock Dataset을 테스트 전용 관측 묶음으로 변환합니다. */
+    private static OverviewObservationData mockObservationData(
+            OverviewObservationRequest request,
+            AdminOverviewMockDataset dataset
+    ) {
+        Map<Long, CampaignObservationTarget> targets = request.campaignTargets().stream()
+                .collect(java.util.stream.Collectors.toMap(CampaignObservationTarget::couponId, target -> target));
+        List<IssuanceFlowInput> issuanceInputs = dataset.issuanceFlowInputs().stream()
+                .map(input -> withTargetStock(input, targets.get(input.couponId())))
+                .toList();
+        return new OverviewObservationData(
+                request,
+                issuanceInputs,
+                dataset.outcomeInput(),
+                pendingObservation(),
+                dataset.latencySummary());
+    }
+
+    /** Mock과 구별되는 실 O1·O3·지연 sentinel과 STOPPED 판정을 반환합니다. */
+    private static OverviewObservationSource distinctObservationSource() {
+        AdminOverviewMockDataFactory fixtureFactory = new AdminOverviewMockDataFactory();
+        return request -> {
+            AdminOverviewMockDataset dataset = fixtureFactory.create(request.snapshotAt());
+            Map<Long, CampaignObservationTarget> targets = request.campaignTargets().stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            CampaignObservationTarget::couponId, target -> target));
+            List<IssuanceFlowInput> issuanceInputs = dataset.issuanceFlowInputs().stream()
+                    .map(input -> withTargetStock(input, targets.get(input.couponId())))
+                    .map(input -> input.couponId().equals(102L)
+                            ? withCurrentCompletedCount(input, 5d)
+                            : input.couponId().equals(103L)
+                            ? stoppedIssuanceInput(input, request.snapshotAt()) : input)
+                    .toList();
+            OutcomeInput outcomeInput = new OutcomeInput(
+                    request.snapshotAt().minus(Duration.ofMinutes(5)),
+                    request.snapshotAt(),
+                    List.of(new CustomerOutcomeCalculator.OutcomeCount(
+                            AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 2d)),
+                    SourceStatus.VALID,
+                    request.snapshotAt());
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> latency =
+                    new AdminOverviewSnapshot.Observation<>(
+                            new AdminOverviewSnapshot.LatencySummary(
+                                    Duration.ofMillis(11), Duration.ofMillis(22),
+                                    request.snapshotAt().minus(Duration.ofMinutes(5)), request.snapshotAt()),
+                            SourceStatus.VALID,
+                            request.snapshotAt());
+            return new OverviewObservationData(
+                    request, issuanceInputs, outcomeInput, pendingObservation(), latency);
+        };
+    }
+
+    /** O1·O3·aggregate는 PENDING, 지연은 UNAVAILABLE인 원천을 만들어 fallback 금지를 검증합니다. */
+    private static OverviewObservationSource unavailableObservationSource() {
+        return request -> {
+            List<IssuanceFlowInput> issuanceInputs = request.campaignTargets().stream()
+                    .map(target -> new IssuanceFlowInput(
+                            target.couponId(), target.campaignStatus(), null,
+                            null, null, null, null, null, null, null, null, null,
+                            null, null, null, SourceStatus.PENDING, null))
+                    .toList();
+            OutcomeInput outcomeInput = new OutcomeInput(
+                    null, null, null, SourceStatus.PENDING, null);
+            return new OverviewObservationData(
+                    request, issuanceInputs, outcomeInput, pendingObservation(), unavailable());
+        };
+    }
+
+    /** O1 입력에 요청 재고의 값 또는 값 없는 상태를 보존합니다. */
+    private static IssuanceFlowInput withTargetStock(
+            IssuanceFlowInput input,
+            CampaignObservationTarget target
+    ) {
+        if (!input.sourceStatus().carriesValue() || input.campaignStatus() != CouponStatus.OPEN) {
+            return input;
+        }
+        if (!target.stockStatus().carriesValue()) {
+            return new IssuanceFlowInput(
+                    input.couponId(), input.campaignStatus(), null,
+                    null, null, null, null, null, null, null,
+                    null, null, List.of(), null, null, target.stockStatus(), null);
+        }
+        SourceStatus sourceStatus = input.sourceStatus();
+        if (target.stockStatus() == SourceStatus.STALE) {
+            sourceStatus = SourceStatus.STALE;
+        } else if (target.stockStatus() == SourceStatus.WARMING_UP
+                && sourceStatus != SourceStatus.STALE) {
+            sourceStatus = SourceStatus.WARMING_UP;
+        } else if (target.stockStatus() == SourceStatus.NO_TRAFFIC
+                && sourceStatus == SourceStatus.VALID) {
+            sourceStatus = input.attemptedCount() > 0d || input.completedCount() > 0d
+                    ? SourceStatus.WARMING_UP : SourceStatus.NO_TRAFFIC;
+        }
+        Instant observedAt = input.observedAt().isBefore(target.stockObservedAt())
+                ? input.observedAt() : target.stockObservedAt();
+        return new IssuanceFlowInput(
+                input.couponId(), input.campaignStatus(), target.stockAvailable(),
+                input.windowStart(), input.windowEnd(), input.trendWindowStart(), input.trendWindowEnd(),
+                input.attemptedCount(), input.completedCount(), input.comparisonCompletedCount(),
+                input.comparisonWindowStart(), input.comparisonWindowEnd(), input.buckets(), input.lastCompletedAt(),
+                input.conditionStartedAt(), sourceStatus, observedAt);
+    }
+
+    /** 현재 완료 sentinel만 바꿔 실 O1과 O4용 Mock O1 Map의 분리를 검증합니다. */
+    private static IssuanceFlowInput withCurrentCompletedCount(IssuanceFlowInput input, double completedCount) {
+        return new IssuanceFlowInput(
+                input.couponId(), input.campaignStatus(), input.stockAvailable(),
+                input.windowStart(), input.windowEnd(), input.trendWindowStart(), input.trendWindowEnd(),
+                input.attemptedCount(), completedCount, input.comparisonCompletedCount(),
+                input.comparisonWindowStart(), input.comparisonWindowEnd(), input.buckets(), input.lastCompletedAt(),
+                input.conditionStartedAt(), input.sourceStatus(), input.observedAt());
+    }
+
+    /** 기존 캠페인의 값 있는 재고 수량만 바꿔 target 잔량 경계를 만듭니다. */
+    private static CampaignOverviewSource campaignWithStock(
+            CampaignOverviewSource campaign,
+            long totalQuantity,
+            long activeCount,
+            Instant observedAt
+    ) {
+        return new CampaignOverviewSource(
+                campaign.couponId(), campaign.campaignName(), campaign.brandName(), campaign.status(),
+                campaign.opensAt(), campaign.closesAt(), campaign.engineVersion(), totalQuantity, activeCount,
+                observedAt, SourceStatus.VALID, campaign.preparationCompleted());
+    }
+
+    /** 지정한 관측 원천과 기본 Mock 경계의 Service를 구성합니다. */
+    private static AdminOverviewService serviceWithObservationSource(OverviewObservationSource source) {
+        return serviceWithSources(new AdminOverviewMockDataFactory(), source);
+    }
+
+    /** 테스트가 선택한 Mock 모집단과 관측 원천을 모든 실제 Calculator에 연결합니다. */
+    private static AdminOverviewService serviceWithSources(
+            AdminOverviewMockDataFactory factory,
+            OverviewObservationSource source
+    ) {
         TimeProvider timeProvider = new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC));
         OverviewStatusCalculator statusCalculator = new OverviewStatusCalculator();
         return new AdminOverviewService(
                 timeProvider,
-                new AdminOverviewMockDataFactory(),
+                factory,
+                source,
                 new IssuanceFlowCalculator(),
                 new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(),
@@ -589,6 +968,11 @@ class AdminOverviewServiceTest {
                 new OperationActionCalculator(),
                 statusCalculator
         );
+    }
+
+    private static AdminOverviewService service() {
+        AdminOverviewMockDataFactory factory = new AdminOverviewMockDataFactory();
+        return serviceWithSources(factory, mockObservationSource(factory));
     }
 
     private static AdminOverviewService serviceWithQueueStatus(Long couponId, SourceStatus status) {
@@ -678,12 +1062,7 @@ class AdminOverviewServiceTest {
     }
 
     private static AdminOverviewService serviceWithDataset(AdminOverviewMockDataFactory factory) {
-        return new AdminOverviewService(new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), factory,
-                new IssuanceFlowCalculator(), new IssuanceActionCalculator(), new CampaignQueueCalculator(),
-                new CustomerOutcomeCalculator(),
-                new StockRiskCalculator(), new CampaignOverviewCalculator(), new ConsistencyActionCalculator(),
-                new OperationActionCalculator(),
-                new OverviewStatusCalculator());
+        return serviceWithSources(factory, mockObservationSource(factory));
     }
 
     /** O1 입력만 교체하고 나머지 Dataset 원천은 그대로 보존합니다. */
@@ -742,10 +1121,20 @@ class AdminOverviewServiceTest {
 
     /** 테스트에서 O1 중단만 바꾸고 같은 쿠폰의 실제 관측 구간·원천 상태는 유지합니다. */
     private static IssuanceFlowInput stoppedIssuanceInput(IssuanceFlowInput input, Instant snapshotAt) {
+        return stoppedIssuanceInput(input, snapshotAt, snapshotAt);
+    }
+
+    /** 평가 종료와 raw scrape 시각을 분리한 STOPPED O1 입력을 만듭니다. */
+    private static IssuanceFlowInput stoppedIssuanceInput(
+            IssuanceFlowInput input,
+            Instant snapshotAt,
+            Instant observedAt
+    ) {
         return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), input.stockAvailable(),
-                input.windowStart(), input.windowEnd(), input.attemptedCount(), 0L,
+                input.windowStart(), input.windowEnd(), input.trendWindowStart(), input.trendWindowEnd(),
+                input.attemptedCount(), 0d,
                 input.comparisonCompletedCount(), input.comparisonWindowStart(), input.comparisonWindowEnd(),
-                List.of(), null, snapshotAt.minus(Duration.ofMinutes(10)), SourceStatus.VALID, snapshotAt);
+                List.of(), null, snapshotAt.minus(Duration.ofMinutes(10)), SourceStatus.VALID, observedAt);
     }
 
     /** 값 있는 최신성 상태는 더 오래된 실제 O1 관측 시각을 포함하고 값 없는 상태는 null로 만듭니다. */
@@ -755,14 +1144,15 @@ class AdminOverviewServiceTest {
             Instant snapshotAt
     ) {
         if (!status.carriesValue()) {
-            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null,
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null, null, null,
                     null, null, null, null, null, null, null, null, status, null);
         }
         Instant observedAt = snapshotAt.minus(Duration.ofMinutes(5));
         Instant windowStart = observedAt.minus(Duration.ofMinutes(1));
         Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
         return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
-                10L, 10L, 10L, comparisonWindowStart, windowStart,
+                windowStart, observedAt,
+                10d, 10d, 10d, comparisonWindowStart, windowStart,
                 List.of(new IssuanceFlowCalculator.IssuanceBucket(windowStart, observedAt, 10L)), observedAt,
                 windowStart, status, observedAt);
     }
@@ -774,7 +1164,7 @@ class AdminOverviewServiceTest {
             Instant snapshotAt
     ) {
         if (!status.carriesValue()) {
-            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null,
+            return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), null, null, null, null, null,
                     null, null, null, null, null, null, null, null, status, null);
         }
         Instant observedAt = snapshotAt.minus(Duration.ofMinutes(5));
@@ -782,10 +1172,12 @@ class AdminOverviewServiceTest {
         Instant comparisonWindowStart = windowStart.minus(Duration.ofMinutes(1));
         if (status == SourceStatus.NO_TRAFFIC) {
             return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
-                    0L, 0L, 0L, comparisonWindowStart, windowStart, List.of(), null, windowStart, status, observedAt);
+                    windowStart, observedAt,
+                    0d, 0d, 0d, comparisonWindowStart, windowStart, List.of(), null, windowStart, status, observedAt);
         }
         return new IssuanceFlowInput(input.couponId(), input.campaignStatus(), true, windowStart, observedAt,
-                10L, 10L, 10L, comparisonWindowStart, windowStart,
+                windowStart, observedAt,
+                10d, 10d, 10d, comparisonWindowStart, windowStart,
                 List.of(new IssuanceFlowCalculator.IssuanceBucket(windowStart, observedAt, 10L)), observedAt,
                 windowStart, status, observedAt);
     }
@@ -958,6 +1350,10 @@ class AdminOverviewServiceTest {
         return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null);
     }
 
+    private static <T> AdminOverviewSnapshot.Observation<T> pendingObservation() {
+        return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.PENDING, null);
+    }
+
     private static <T> AdminOverviewSnapshot.Observation<T> notApplicable() {
         return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.N_A, null);
     }
@@ -997,12 +1393,34 @@ class AdminOverviewServiceTest {
         }
     }
 
+    /** 실제 기술 중립 묶음을 반환하면서 Service의 단일 observe 호출을 기록합니다. */
+    private static final class RecordingOverviewObservationSource implements OverviewObservationSource {
+
+        private final List<String> events;
+        private int observeCount;
+        private OverviewObservationData result;
+
+        private RecordingOverviewObservationSource(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public OverviewObservationData observe(OverviewObservationRequest request) {
+            observeCount++;
+            events.add("observation");
+            AdminOverviewMockDataset dataset = new AdminOverviewMockDataFactory().create(request.snapshotAt());
+            result = mockObservationData(request, dataset);
+            return result;
+        }
+    }
+
     /** 실제 O1 계산 결과를 유지하는 호출 계수기입니다. */
     private static final class RecordingIssuanceFlowCalculator extends IssuanceFlowCalculator {
 
         private final List<String> events;
         private int calculateCount;
-        private IssuanceFlowCalculation result;
+        private IssuanceFlowCalculation observedResult;
+        private IssuanceFlowCalculation mockResult;
 
         private RecordingIssuanceFlowCalculator(List<String> events) {
             this.events = events;
@@ -1012,7 +1430,12 @@ class AdminOverviewServiceTest {
         public IssuanceFlowCalculation calculate(OverviewCalculationPolicy policy, List<IssuanceFlowInput> inputs) {
             calculateCount++;
             events.add("issuance");
-            result = super.calculate(policy, inputs);
+            IssuanceFlowCalculation result = super.calculate(policy, inputs);
+            if (calculateCount == 1) {
+                observedResult = result;
+            } else {
+                mockResult = result;
+            }
             return result;
         }
     }

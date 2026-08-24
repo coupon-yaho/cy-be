@@ -50,7 +50,7 @@ public class IssuanceActionCalculator {
                 && observation.value().state() == AdminOverviewSnapshot.IssuanceFlowState.STOPPED;
     }
 
-    /** O1 중단의 연속 시간에서 최초 감지 시각을 역산해 기술 중립 후보를 만듭니다. */
+    /** O1 평가 구간 종료와 연속 시간에서 최초 감지 시각을 역산해 기술 중립 후보를 만듭니다. */
     private static AdminOverviewSnapshot.OperationActionItem stoppedAction(
             Long couponId,
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow> observation
@@ -59,7 +59,7 @@ public class IssuanceActionCalculator {
         AdminOverviewSnapshot.IssuanceFlow flow = observation.value();
         Instant detectedAt = flow.stateDuration() == null
                 ? null
-                : observation.observedAt().minus(flow.stateDuration());
+                : flow.windowEnd().minus(flow.stateDuration());
         return new AdminOverviewSnapshot.OperationActionItem(couponId, null, null, Severity.CRITICAL,
                 AdminOverviewSnapshot.CustomerImpact.LIMITED, "쿠폰 발급이 중단되었습니다.", detectedAt,
                 flow.stateDuration(), new AdminOverviewSnapshot.RecommendedAction(

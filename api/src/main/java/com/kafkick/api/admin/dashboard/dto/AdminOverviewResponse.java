@@ -9,6 +9,7 @@ import java.util.function.Function;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
+import com.kafkick.core.admin.overview.CustomerOutcomeInvariants;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.ActionCode;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CampaignQueueAssessment;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.CustomerImpact;
@@ -468,21 +469,30 @@ public record AdminOverviewResponse(
      *
      * @param windowStart 집계 구간 시작 시각
      * @param windowEnd 집계 구간 종료 시각
-     * @param totalCount 결과별 비율의 전체 분모
+     * @param totalCount Prometheus가 추정한 결과별 비율의 전체 분모
      * @param outcomes 결과 유형별 건수·비율·표시 설명; 결과가 없으면 빈 목록
      */
     public record CustomerOutcomeSummary(Instant windowStart, Instant windowEnd,
-                                         long totalCount, List<CustomerOutcome> outcomes) { }
+                                         double totalCount, List<CustomerOutcome> outcomes) {
+
+        /** 비유한·음수 추정치와 mutable 목록이 HTTP 응답으로 누출되는 것을 차단합니다. */
+        public CustomerOutcomeSummary {
+            outcomes = List.copyOf(Objects.requireNonNull(outcomes, "outcomes"));
+            CustomerOutcomeInvariants.validate(
+                    windowStart, windowEnd, totalCount, outcomes,
+                    CustomerOutcome::type, CustomerOutcome::count, CustomerOutcome::ratio);
+        }
+    }
 
     /**
      * O3 고객 결과 유형 하나의 집계값입니다.
      *
      * @param type 고객 결과 코드
-     * @param count 해당 결과 건수; 실제 발생하지 않았으면 0
+     * @param count Prometheus가 추정한 해당 결과 발생 건수; 관측된 활동이 없으면 0
      * @param ratio 전체 {@code totalCount} 대비 0~1 비율; NaN과 무한대는 허용하지 않음
      * @param displayText 운영자에게 표시할 결과 의미 설명
      */
-    public record CustomerOutcome(CustomerOutcomeType type, long count,
+    public record CustomerOutcome(CustomerOutcomeType type, double count,
                                   double ratio, String displayText) {
 
         /**
@@ -491,6 +501,10 @@ public record AdminOverviewResponse(
          * @throws IllegalArgumentException ratio가 유한하지 않거나 0 미만 또는 1 초과인 경우
          */
         public CustomerOutcome {
+            Objects.requireNonNull(type, "type");
+            if (!Double.isFinite(count) || count < 0d) {
+                throw new IllegalArgumentException("count는 유한한 0 이상이어야 합니다.");
+            }
             if (!Double.isFinite(ratio) || ratio < 0.0 || ratio > 1.0) {
                 throw new IllegalArgumentException("ratio는 유한한 0 이상 1 이하 값이어야 합니다.");
             }

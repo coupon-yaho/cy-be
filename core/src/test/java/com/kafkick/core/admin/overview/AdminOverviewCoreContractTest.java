@@ -157,6 +157,56 @@ class AdminOverviewCoreContractTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
+    /** O3 public value는 window·type·count·ratio가 하나의 일관된 요약을 이루어야 합니다. */
+    @Test
+    void customerOutcomeSummaryRejectsCrossFieldContradictions() {
+        AdminOverviewSnapshot.CustomerOutcome issued = new AdminOverviewSnapshot.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0.1d, 1d / 3d, "발급");
+        AdminOverviewSnapshot.CustomerOutcome queued = new AdminOverviewSnapshot.CustomerOutcome(
+                AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 0.2d, 2d / 3d, "대기");
+
+        assertThat(new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, 0.3d, List.of(issued, queued)).totalCount()).isEqualTo(0.3d);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                null, TO, 0.3d, List.of(issued, queued))).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                TO, FROM, 0.3d, List.of(issued, queued))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, 0.2d, List.of(issued, issued))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, 0.4d, List.of(issued, queued))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, 0d, List.of(new AdminOverviewSnapshot.CustomerOutcome(
+                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0d, 0d, "발급 없음"))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, 0.1d, List.of(new AdminOverviewSnapshot.CustomerOutcome(
+                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED, 0.1d, 0.5d, "잘못된 비율"))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 가장 작은 양수 total도 빈 outcomes와 함께일 수 없습니다. */
+    @Test
+    void customerOutcomeSummaryRejectsEmptyPositiveTotal() {
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, Double.MIN_VALUE, List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 큰 total에서도 반올림 잡음보다 큰 실제 count 합계 불일치를 허용하지 않습니다. */
+    @Test
+    void customerOutcomeSummaryRejectsLargeTotalMismatch() {
+        double total = 1_000_000_000_000_000d;
+        double count = total - 500d;
+        assertThatThrownBy(() -> new AdminOverviewSnapshot.CustomerOutcomeSummary(
+                FROM, TO, total, List.of(new AdminOverviewSnapshot.CustomerOutcome(
+                        AdminOverviewSnapshot.CustomerOutcomeType.ISSUED,
+                        count,
+                        count / total,
+                        "발급"))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     /** 전체 Snapshot이 생성 후 원본 campaigns 변경의 영향을 받지 않고 수정 불가능한 목록을 노출합니다. */
     @Test
     void snapshotDefensivelyCopiesCampaigns() {

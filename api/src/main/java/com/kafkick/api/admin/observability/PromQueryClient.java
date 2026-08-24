@@ -35,7 +35,7 @@ import com.kafkick.core.observation.SourceStatusCode;
  * <p>실패는 예외로 나갑니다. HTTP 500 으로 번역하지 말고 조립하는 쪽이 잡아 해당 값만
  * {@code UNAVAILABLE} 로 내려보냅니다.</p>
  */
-public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSource {
+public class PromQueryClient implements PromQuery, PromTimeQuery, RunTimeseriesArchiver.RangeSource {
 
     private static final Logger log = LoggerFactory.getLogger(PromQueryClient.class);
 
@@ -93,6 +93,35 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
             throw new PromQueryException("Prometheus 질의에 실패했습니다: " + promQl, failure);
         }
         return parse(body, promQl);
+    }
+
+    /**
+     * instant query를 명시한 평가 시각에 실행합니다.
+     *
+     * <p>기존 {@link #query(String)} 사용자의 서버 현재 시각 동작은 유지하고, 재현 가능한 snapshot이
+     * 필요한 Overview 호출만 Prometheus HTTP API의 {@code time} 파라미터를 사용합니다.</p>
+     *
+     * @param promQl 실행할 PromQL
+     * @param evaluationAt Prometheus가 expression을 평가할 시각
+     * @return 벡터 결과의 표본 목록; 일치하는 시계열이 없으면 빈 목록
+     * @throws PromQueryException 호출이 실패했거나 Prometheus가 success가 아닌 상태를 돌려준 경우
+     */
+    @Override
+    public List<PromSample> query(String promQl, Instant evaluationAt) {
+        Objects.requireNonNull(evaluationAt, "evaluationAt");
+        JsonNode body;
+        try {
+            body = restClient.get()
+                    .uri(uriBuilder -> uriBuilder.path(QUERY_PATH)
+                            .queryParam(QUERY_PARAM, "{" + QUERY_PARAM + "}")
+                            .queryParam("time", "{time}")
+                            .build(promQl, evaluationAt.toString()))
+                    .retrieve()
+                    .body(JsonNode.class);
+        } catch (RestClientException failure) {
+            throw new PromQueryException("Prometheus 시각 고정 질의에 실패했습니다: " + promQl, failure);
+        }
+        return parseStrict(body, promQl);
     }
 
     @Override
@@ -242,6 +271,7 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
         private Map<String, String> stateLabels;
     }
 
+    /** 기존 no-time 사용자를 위해 손상 멤버만 건너뛰는 tolerant vector parser입니다. */
     private static List<PromSample> parse(JsonNode body, String promQl) {
         if (body == null) {
             throw new PromQueryException("Prometheus 응답이 비어 있습니다: " + promQl);
@@ -272,6 +302,52 @@ public class PromQueryClient implements PromQuery, RunTimeseriesArchiver.RangeSo
         return List.copyOf(samples);
     }
 
+    /** Overview timed 질의의 손상 provenance를 잃지 않도록 전체 vector를 엄격히 파싱합니다. */
+    private static List<PromSample> parseStrict(JsonNode body, String promQl) {
+        if (body == null || !body.isObject()) {
+            throw new PromQueryException("Prometheus 응답이 비어 있거나 객체가 아닙니다: " + promQl);
+        }
+        String status = body.path("status").asString("");
+        if (!"success".equals(status)) {
+            throw new PromQueryException(
+                    "Prometheus 가 실패를 반환했습니다: " + body.path("error").asString(status));
+        }
+        JsonNode data = body.path("data");
+        if (!data.isObject()) {
+            throw new PromQueryException("Prometheus data가 객체가 아닙니다: " + promQl);
+        }
+        String resultType = data.path("resultType").asString("");
+        if (!"vector".equals(resultType)) {
+            throw new PromQueryException("vector 가 아닌 결과 타입입니다: " + resultType);
+        }
+        JsonNode result = data.path("result");
+        if (!result.isArray()) {
+            throw new PromQueryException("vector result가 배열이 아닙니다: " + promQl);
+        }
+        List<PromSample> samples = new ArrayList<>();
+        for (JsonNode entry : result) {
+            validateStrictSampleShape(entry, promQl);
+            samples.add(toSample(entry, promQl));
+        }
+        return List.copyOf(samples);
+    }
+
+    /** timed vector 멤버의 객체·라벨·값 프로토콜 형식을 하나라도 유실 없이 검증합니다. */
+    private static void validateStrictSampleShape(JsonNode entry, String promQl) {
+        JsonNode metric = entry.path("metric");
+        JsonNode value = entry.path("value");
+        if (!entry.isObject() || !metric.isObject() || !value.isArray() || value.size() != 2
+                || !value.get(1).isString()) {
+            throw new PromQueryException("vector 표본 형식이 아닙니다: " + promQl);
+        }
+        for (Map.Entry<String, JsonNode> field : metric.properties()) {
+            if (!field.getValue().isString()) {
+                throw new PromQueryException("vector 라벨 값이 문자열이 아닙니다: " + promQl);
+            }
+        }
+    }
+
+    /** vector 항목 하나를 불변 표본으로 변환합니다. */
     private static PromSample toSample(JsonNode entry, String promQl) {
         JsonNode value = entry.path("value");
         if (!value.isArray() || value.size() != 2) {

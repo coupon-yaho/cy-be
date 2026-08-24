@@ -79,5 +79,17 @@ observation:
     # 가 걸려 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로
     # 부하가 된다. 예산을 넘긴 뒤의 질의는 보내지 않고 UNAVAILABLE 로 내려보낸다.
     total-budget: ${PROMETHEUS_TOTAL_BUDGET:500ms}
+    # Overview 계산·PromQL·range client가 함께 사용하는 조회 구간과 안전 상한입니다.
+    # trend-window는 trend-step으로 나누어져야 하며, 시작·종료점을 포함한 평가점 수가
+    # max-points를 넘으면 기동에서 거부합니다.
+    overview:
+      current-window: ${OVERVIEW_PROM_CURRENT_WINDOW:1m}
+      comparison-offset: ${OVERVIEW_PROM_COMPARISON_OFFSET:1m}
+      trend-window: ${OVERVIEW_PROM_TREND_WINDOW:10m}
+      trend-step: ${OVERVIEW_PROM_TREND_STEP:1m}
+      outcome-window: ${OVERVIEW_PROM_OUTCOME_WINDOW:5m}
+      latency-window: ${OVERVIEW_PROM_LATENCY_WINDOW:10s}
+      max-range: ${OVERVIEW_PROM_MAX_RANGE:1h}
+      max-points: ${OVERVIEW_PROM_MAX_POINTS:1000}
   datasource:
     enabled: true
