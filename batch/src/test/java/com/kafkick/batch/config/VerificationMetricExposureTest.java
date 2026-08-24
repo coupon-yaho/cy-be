@@ -334,10 +334,11 @@ class VerificationMetricExposureTest {
         //
         // **다만 하한은 @Scheduled 수와 함께 움직여야 한다.** CY-446 이 둘을 더했을 때
         // 이 값이 5 로 남아 초록으로 지나갔다 — 그 순간 이 단언은 아무것도 안 지켰다.
+        // CY-470 이 VerifyScheduler 를 더해 여덟이 됐다.
         assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
                 .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
-                        + "폴백한다. 그러면 일곱 @Scheduled 가 스레드 하나를 다툰다")
-                .isGreaterThanOrEqualTo(7);
+                        + "폴백한다. 그러면 여덟 @Scheduled 가 스레드 하나를 다툰다")
+                .isGreaterThanOrEqualTo(8);
     }
 
     /**

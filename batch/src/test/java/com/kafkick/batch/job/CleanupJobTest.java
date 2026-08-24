@@ -749,7 +749,7 @@ class CleanupJobTest {
      * 전 테스트가 초록이다 — 형제 테스트들은 세 시각이 같거나 {@code END_TIME} 이
      * {@code NULL} 이라 {@code IS NOT NULL} 쪽이 먼저 막아 준다.
      *
-     * <p><b>지키는 것은 성능이 아니라 {@code REFRESH_WINDOW_DAYS} 하한 전체다.</b> 이 행이
+     * <p><b>지키는 것은 성능이 아니라 {@code BatchMetadataWindow.LOOKBACK_DAYS} 하한 전체다.</b> 이 행이
      * 바로 두 되읽기가 {@code END_TIME > NOW() - 7 DAY} 창에서 찾는 <b>마지막 성공</b>이다.
      * 걷어 버리면 기동 가드로 막아 둔 상태 — 게이지 {@code NaN} — 가 그대로 열린다.
      */

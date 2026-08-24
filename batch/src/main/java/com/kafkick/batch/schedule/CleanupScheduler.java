@@ -61,7 +61,7 @@ public class CleanupScheduler {
      * 크론 최대간격을 재는 창. {@code ExpireScheduler} 와 같은 값이고 이유도 같다 —
      * 연 1회 크론(다음 1월 1일은 언제나 365일 안이다)까지 재야 SLA 가 판단을 진다.
      */
-    private static final Duration SLA_CHECK_HORIZON = Duration.ofDays(400);
+    private static final Duration SLA_CHECK_HORIZON = SlaBudget.CHECK_HORIZON;
 
     private static final Logger log = LoggerFactory.getLogger(CleanupScheduler.class);
 
@@ -87,7 +87,9 @@ public class CleanupScheduler {
             TimeProvider timeProvider,
             @Value(CRON) String cleanupCron,
             @Value("${batch.metrics.cleanup-sla-seconds:90000}") long slaSeconds,
-            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis,
+            @Value("${batch.metrics.cleanup-running-too-long-seconds:900}") long runningTooLongSeconds) {
+        SlaBudget.requirePositive("batch.metrics.cleanup-running-too-long-seconds", runningTooLongSeconds);
         if (Scheduled.CRON_DISABLED.equals(cleanupCron)) {
             // 끄는 수단은 하나여야 한다. "-" 로 끄면 트리거만 죽고 알림은 그대로 살아
             // 25시간 뒤부터 영원히 운다 — 끈 것을 아무도 알림에 말해 주지 않는다.
@@ -98,9 +100,9 @@ public class CleanupScheduler {
         }
         this.cronSlot = new CronSlot(cleanupCron);
         this.cleanupCron = cleanupCron;
-        Duration worstGap = this.cronSlot
-                .maxGap(timeProvider.now(), SLA_CHECK_HORIZON)
-                .map(gap -> gap.plusMillis(refreshMillis))
+        // 소요 항은 SlaBudget 이 진다 — 게이지가 END_TIME 이라 잡이 도는 동안 나이가 자란다.
+        Duration worstGap = SlaBudget.worstAge(this.cronSlot, timeProvider.now(), 0,
+                        refreshMillis, runningTooLongSeconds)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "정리 크론이 " + SLA_CHECK_HORIZON.toDays() + "일 안에 한 번도 안 돕니다. "
                                 + "그런 주기로는 CleanupNotSucceeding 의 SLA(" + slaSeconds
@@ -109,7 +111,9 @@ public class CleanupScheduler {
         if (worstGap.toSeconds() >= slaSeconds) {
             throw new IllegalArgumentException(
                     "정리 지연 상한이 CleanupNotSucceeding 의 SLA 를 넘습니다. "
-                            + "크론 최대간격 + run-refresh-ms = " + worstGap.toSeconds()
+                            + "크론 최대간격 + run-refresh-ms + CleanupRunningTooLong("
+                            + runningTooLongSeconds + "초) = "
+                            + worstGap.toSeconds()
                             + "초 >= SLA " + slaSeconds + "초. 정상 상태에서 오탐 warning 이 "
                             + "납니다 — 크론을 촘촘히 하거나 batch.metrics.cleanup-sla-seconds 를 "
                             + "올리십시오(알림 식의 초 값도 함께 고쳐야 합니다). "

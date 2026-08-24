@@ -153,6 +153,29 @@ public enum VerificationErrorCode implements ErrorCode {
             409,
             "VERIFICATION-016",
             "먼저 중단 신호를 보내야 그 실행을 버릴 수 있습니다."
+    ),
+
+    /**
+     * <b>곧 뜰 만료와 겹칠 접수를 막는다.</b> 위 {@link #VERIFY_EXPIRE_RUNNING} 은 <i>이미
+     * 도는</i> 만료를 배치 메타에서 보고, 이쪽은 <i>곧 뜰</i> 만료를 크론에서 본다 —
+     * 둘 다 있어야 창이 닫힌다.
+     *
+     * <p>이 코드가 생긴 것은 {@code max-expire-skips} 가 <b>0</b> 이 되면서다(CY-470).
+     * 그전에는 만료가 검증을 한 번은 건너뛰어 줬지만, 이제는 <b>첫 충돌에서 그대로
+     * 지나간다</b> — 그때 찍히는 {@code issuances.updated_at} 때문에 그 {@code asOf} 는
+     * 영구히 못 쓴다(재시딩 말고 복구가 없다).
+     *
+     * <p><b>문구가 처방을 말한다.</b> 예외 핸들러는 {@code detail} 을 로그에만 남기고
+     * 응답에는 이 고정 문구만 싣는다(요청값이 새지 않게). 그래서 <i>"지금은 안 된다"</i> 만
+     * 적으면 운영자가 <b>같은 시각에 또 누른다</b> — 무엇을 피해야 하는지가 여기 있어야 한다.
+     * 정확한 시각은 배치 로그의 {@code detail} 에 있다.
+     */
+    VERIFY_EXPIRE_ABOUT_TO_FIRE(
+            409,
+            "VERIFICATION-017",
+            "만료 크론이 곧 뜹니다. 만료는 이 검증을 건너뛰지 않고 지나가며 그때 이 asOf 는 "
+                    + "영구히 못 쓰게 됩니다 — 배치 창(만료·정리·검증)을 지난 뒤 다시 "
+                    + "부르십시오. 정확한 시각은 배치 로그에 있습니다."
     );
 
     private final int status;

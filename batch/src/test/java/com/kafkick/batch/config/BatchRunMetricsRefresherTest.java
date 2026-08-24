@@ -10,6 +10,8 @@ import java.time.ZoneId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.batch.core.job.parameters.JobParameters;
+import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -248,6 +250,96 @@ class BatchRunMetricsRefresherTest {
         } finally {
             jdbcClient.sql("RENAME TABLE BATCH_JOB_INSTANCE_HIDDEN TO BATCH_JOB_INSTANCE").update();
         }
+    }
+
+    /**
+     * <b>이 게이지가 없으면 검증 SLA 를 못 건다.</b> 잡 이름 그레인({@code lastSuccess})은
+     * {@code verifyJob} 하나로 {@code CLEAN} 과 {@code CORRUPT} 를 뭉치는데, 게이트가 보는
+     * 것은 앞의 것뿐이다 — 그래서 {@code (dataset, scope)} 축을 따로 낸다(CY-470).
+     */
+    @Test
+    @DisplayName("게이트 조합의 검증 성공을 (dataset, scope) 그레인으로 낸다")
+    void reportsVerifySuccessAtTheGateGrain() {
+        try (RunningJobFixture done = RunningJobFixture.plantCompleted(
+                jobRepository, VerifyRunContext.JOB_NAME, gateParameters(), Duration.ofMinutes(2))) {
+
+            refresher.refresh();
+
+            assertThat(verifyLastSuccess())
+                    .as("실행 id=" + done.executionId())
+                    .isEqualTo(done.endTime().atZone(ZoneId.systemDefault()).toEpochSecond());
+        }
+    }
+
+    /**
+     * <b>이 티켓의 요지다.</b> 발표 리허설로 오염셋을 한 번 돌리면 잡 이름 그레인 게이지는
+     * 앞으로 밀린다 — 그 축에 SLA 를 걸면 <b>게이트 조합이 며칠째 안 돌았는데 조용하다.</b>
+     * 새 게이지는 그 실행을 안 봐야 한다.
+     */
+    @Test
+    @DisplayName("CORRUPT 실행은 게이트 그레인의 SLA 를 리셋하지 않는다")
+    void corruptRunDoesNotResetTheGateGrain() {
+        JobParameters corrupt = new JobParametersBuilder()
+                .addLocalDateTime("asOf", KEY)
+                .addString("dataset", "CORRUPT")
+                .addString("scope", VerifyRunContext.SLA_SCOPE)
+                .toJobParameters();
+
+        try (RunningJobFixture done = RunningJobFixture.plantCompleted(
+                jobRepository, VerifyRunContext.JOB_NAME, corrupt, Duration.ofMinutes(2))) {
+
+            refresher.refresh();
+
+            assertThat(lastSuccess(VerifyRunContext.JOB_NAME))
+                    .as("잡 이름 그레인은 이 실행을 본다 — 그래서 그 축에 SLA 를 걸 수 없다. "
+                            + "실행 id=" + done.executionId())
+                    .isNotNaN();
+            assertThat(verifyLastSuccess())
+                    .as("게이트 조합으로 성공한 적이 없으므로 NaN 이어야 한다")
+                    .isNaN();
+        }
+    }
+
+    /**
+     * 되읽기가 죽으면 <b>두 축이 함께</b> 떨어져야 한다. 한쪽만 낡은 값을 들면 관제가
+     * 둘을 나란히 볼 때 <i>"하나는 모름 하나는 정상"</i> 이라는 존재하지 않는 상태를 만든다.
+     */
+    @Test
+    @DisplayName("되읽기가 실패하면 검증 게이지도 함께 NaN 이 된다")
+    void failedRefreshAlsoDropsTheVerifyGauge() {
+        try (RunningJobFixture done = RunningJobFixture.plantCompleted(
+                jobRepository, VerifyRunContext.JOB_NAME, gateParameters(), Duration.ofMinutes(1))) {
+
+            refresher.refresh();
+            assertThat(verifyLastSuccess())
+                    .as("실행 id=" + done.executionId() + " 을 읽어 값이 있어야 한다")
+                    .isNotNaN();
+        }
+
+        jdbcClient.sql("RENAME TABLE BATCH_JOB_INSTANCE TO BATCH_JOB_INSTANCE_HIDDEN").update();
+        try {
+            refresher.refresh();
+            assertThat(verifyLastSuccess())
+                    .as("직전 값을 들고 있으면 관제가 그것을 지금 상태로 읽는다")
+                    .isNaN();
+        } finally {
+            jdbcClient.sql("RENAME TABLE BATCH_JOB_INSTANCE_HIDDEN TO BATCH_JOB_INSTANCE").update();
+        }
+    }
+
+    private static JobParameters gateParameters() {
+        return new JobParametersBuilder()
+                .addLocalDateTime("asOf", KEY)
+                .addString("dataset", VerifyRunContext.SLA_DATASET)
+                .addString("scope", VerifyRunContext.SLA_SCOPE)
+                .toJobParameters();
+    }
+
+    private double verifyLastSuccess() {
+        return registry.get("cy_verify_last_success_seconds")
+                .tag("dataset", VerifyRunContext.SLA_DATASET)
+                .tag("scope", VerifyRunContext.SLA_SCOPE)
+                .gauge().value();
     }
 
     private double lastSuccess(String jobName) {

@@ -24,6 +24,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.batch.config.BatchJobRepositoryConfig;
+import com.kafkick.batch.config.ExpireStepContext;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.support.TimeProvider;
@@ -85,7 +86,7 @@ public class ExpireScheduler {
      * 한쪽만 고치는 실수를 아무것도 안 막으므로 상수로 묶는다({@code @Scheduled} 는 컴파일
      * 상수만 받는다).
      */
-    static final String CRON = "${batch.schedule.expire-cron:0 10 4 * * *}";
+    static final String CRON = ExpireStepContext.CRON;
 
     /**
      * <b>발화와 슬롯이 같은 좌표계를 봐야 한다.</b> {@code @Scheduled} 는 {@code zone} 을 안 주면
@@ -111,7 +112,7 @@ public class ExpireScheduler {
      *
      * <p>걷는 비용은 {@code CronSlot} 이 발화 수로 따로 묶는다.
      */
-    private static final Duration SLA_CHECK_HORIZON = Duration.ofDays(400);
+    private static final Duration SLA_CHECK_HORIZON = SlaBudget.CHECK_HORIZON;
 
     private final JobOperator jobOperator;
     private final Job expireJob;
@@ -136,12 +137,14 @@ public class ExpireScheduler {
             TimeProvider timeProvider,
             @Value(CRON) String expireCron,
             RunningJobProbe runningJobs,
-            @Value("${batch.schedule.max-expire-skips:1}") int maxSkips,
-            @Value("${batch.metrics.expire-sla-seconds:180000}") long slaSeconds,
-            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis) {
+            @Value("${batch.schedule.max-expire-skips:0}") int maxSkips,
+            @Value("${batch.metrics.expire-sla-seconds:90000}") long slaSeconds,
+            @Value("${batch.metrics.run-refresh-ms:60000}") long refreshMillis,
+            @Value("${batch.metrics.expire-running-too-long-seconds:600}") long runningTooLongSeconds) {
         this.jobOperator = jobOperator;
         this.expireJob = expireJob;
         this.timeProvider = timeProvider;
+        SlaBudget.requirePositive("batch.metrics.expire-running-too-long-seconds", runningTooLongSeconds);
         if (Scheduled.CRON_DISABLED.equals(expireCron)) {
             // @Scheduled 는 "-" 를 "이 트리거를 끈다" 로 받지만 CronSlot 은 asOf 를 못 만든다.
             // 그대로 두면 CronExpression.parse 가 던져 batch 앱 전체가 기동에 실패하고,
@@ -170,9 +173,9 @@ public class ExpireScheduler {
         // 두 자릿수 배로 움직였고, 그때 숫자를 적어 둔 자리가 먼저 낡았다.
         //
         // .example 값만 보는 테스트로는 운영에서 환경변수로 올리는 것을 못 잡는다.
-        Duration worstDelay = cronSlot
-                .maxGap(timeProvider.now(), SLA_CHECK_HORIZON)
-                .map(gap -> gap.multipliedBy(maxSkips + 1L).plusMillis(refreshMillis))
+        // 소요 항은 SlaBudget 이 진다 — 게이지가 END_TIME 이라 잡이 도는 동안 나이가 자란다.
+        Duration worstDelay = SlaBudget.worstAge(cronSlot, timeProvider.now(), maxSkips,
+                        refreshMillis, runningTooLongSeconds)
                 // **창 안에 한 번도 안 도는 크론은 통과가 아니라 거절이다.** 그런 크론은
                 // 어떤 SLA 도 만족시킬 수 없다 — 만료가 8일에 한 번도 안 도는데 "성공이
                 // 오래됐다" 알림이 조용할 수는 없기 때문이다. 여기서 Duration.ZERO 로 접으면
@@ -189,7 +192,9 @@ public class ExpireScheduler {
         if (worstDelay.toSeconds() >= slaSeconds) {
             throw new IllegalArgumentException(
                     "만료 지연 상한이 ExpireNotSucceeding 의 SLA 를 넘습니다. "
-                            + "(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms = "
+                            + "(max-expire-skips + 1) × 크론 최대간격 + run-refresh-ms "
+                            + "+ BatchJobRunningTooLong("
+                            + runningTooLongSeconds + "초) = "
                             + worstDelay.toSeconds() + "초 >= SLA " + slaSeconds + "초. "
                             + "정상 상태에서 오탐 critical 이 납니다 — "
                             + "max-expire-skips 를 낮추거나 batch.metrics.expire-sla-seconds 를 "
@@ -236,9 +241,10 @@ public class ExpireScheduler {
      * 두 서버가 부딪힌다).
      *
      * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-359 가
-     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>7</b> 이고
-     * {@code @Scheduled} 도 일곱이다(만료 · 정리 · <b>회차 상태 전이</b> · 검증 판정 되읽기 ·
-     * 실행 지표 되읽기 · 만료 대기 되읽기 · <b>회차 전이 대기 되읽기</b>).
+     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>8</b> 이고
+     * {@code @Scheduled} 도 여덟이다(만료 · 정리 · <b>검증</b> · 회차 상태 전이 ·
+     * 검증 판정 되읽기 · 실행 지표 되읽기 · 만료 대기 되읽기 · 회차 전이 대기 되읽기).
+     * 여덟째는 CY-470 이 더한 {@code VerifyScheduler} 다.
      * 근거는 {@code application.yml.example} 의 그 키에
      * 적혀 있다. 그것이 이 잡을 자기 자신과
      * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,

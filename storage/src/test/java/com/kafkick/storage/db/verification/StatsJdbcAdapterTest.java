@@ -259,6 +259,73 @@ class StatsJdbcAdapterTest {
     }
 
     /**
+     * <b>회차가 하나뿐이면 루프를 못 잰다.</b> 등급 집계는 CY-470 에서 <b>회차 단위 147회</b>로
+     * 쪼개졌다(근거는 {@code AGGREGATE_GRADE_STATS_FOR_COUPON} javadoc — 한 문장으로 묶으면
+     * 검증용 DB 서버가 강제 종료됐다). 회차가 하나면 루프가 한 번만
+     * 돌아, <b>첫 회차만 돌고 나머지를 빠뜨리는 구현</b>도 그대로 통과한다.
+     *
+     * <p>돌려주는 값이 <b>회차별 합</b>이라는 것도 여기서 잰다 — 한 문장이던 시절과 같은
+     * 값이어야 호출부의 {@code contribution.incrementWriteCount} 와 종료 설명이 안 어긋난다.
+     */
+    @Test
+    @DisplayName("등급 집계는 회차마다 따로 귀속된다 — 회차 단위로 쪼개도 합이 같다")
+    void aggregateGradePairsPerCoupon() {
+        long firstCoupon = seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED, "VIP");
+        seed.issuance(IssuanceStatus.USED, "VIP");
+
+        long secondCoupon = seed.newCoupon();
+        seed.issuance(IssuanceStatus.ISSUED, "GOLD");
+
+        assertThat(adapter.aggregateGradeStats(runId, AS_OF))
+                .as("회차 둘이 각각 한 쌍씩 — 합이 2다")
+                .isEqualTo(2);
+        assertThat(gradeRowsOf(firstCoupon))
+                .as("첫 회차만 돌고 멈추면 둘째가 비고, 반대면 첫째가 빈다")
+                .containsExactly("VIP:2/1");
+        assertThat(gradeRowsOf(secondCoupon)).containsExactly("GOLD:1/0");
+    }
+
+    /**
+     * <b>회차 컷이 살아 있어야 한다.</b> 쪼개기 전에는 {@code JOIN coupons … WHERE
+     * c.created_at <= :asOf} 가 이 컷을 졌는데, 회차 단위로 나누면서 그 조인이 사라지고
+     * <b>회차 목록을 뜨는 질의</b>가 대신 진다. 목록 질의에서 컷이 빠지면
+     * {@code asOf} 시점에 없던 회차가 스냅샷에 들어와 <b>같은 {@code asOf} 재실행이 다른
+     * 행 수</b>를 낸다 — 결정론이 깨지는 자리다.
+     */
+    @Test
+    @DisplayName("asOf 뒤에 만들어진 회차는 등급 집계에서 빠진다")
+    void excludeCouponCreatedAfterAsOf() {
+        long visible = seed.currentCouponIdOrCreate();
+        seed.issuance(IssuanceStatus.ISSUED, "VIP");
+
+        long future = seed.newCoupon();
+        seed.issuance(IssuanceStatus.ISSUED, "GOLD");
+        jdbcClient.sql("UPDATE coupons SET created_at = :createdAt WHERE id = :couponId")
+                .param("createdAt", AS_OF.plusDays(1))
+                .param("couponId", future)
+                .update();
+
+        assertThat(adapter.aggregateGradeStats(runId, AS_OF)).isEqualTo(1);
+        assertThat(gradeRowsOf(visible)).containsExactly("VIP:1/0");
+        assertThat(gradeRowsOf(future))
+                .as("회차가 asOf 시점에 없었으므로 그 발급도 스냅샷에 없다")
+                .isEmpty();
+    }
+
+    private List<String> gradeRowsOf(long couponId) {
+        return jdbcClient.sql("""
+                        SELECT grade, issued_total, used_total FROM grade_stats
+                         WHERE run_id = :runId AND coupon_id = :couponId ORDER BY grade
+                        """)
+                .param("runId", runId)
+                .param("couponId", couponId)
+                .query((rs, n) -> rs.getString("grade") + ":" + rs.getInt("issued_total")
+                        + "/" + rs.getInt("used_total"))
+                .list();
+    }
+
+    /**
      * <b>168행을 전부 쓴다.</b> 빈 칸을 빼면 대시보드가 "그 시각에 데이터가 없다" 와
      * "0건이다" 를 구분할 수 없다.
      *

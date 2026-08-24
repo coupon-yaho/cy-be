@@ -6,10 +6,13 @@ import static com.kafkick.batch.api.VerifyApiProbe.error;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
@@ -22,7 +25,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.config.RunningJobFixture;
@@ -67,6 +73,12 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.schedule.cleanup-cron=0 0 0 1 1 *",
         "batch.metrics.cleanup-sla-seconds=999999999",
         "batch.metrics.expire-sla-seconds=999999999",
+        // 검증 크론도 함께 민다(CY-470). 기본값 05:00 UTC 를 그대로 두면
+        // 그 시각을 지나며 도는 CI 에서 진짜 검증이 발화해, 공유 컨테이너의
+        // asof_state 를 300만 행까지 채우고 다른 테스트의 전제를 바꾼다 —
+        // 위 정리 크론을 민 것과 같은 이유다. 연 1회는 SLA 가드에 걸려 SLA 도 올린다.
+        "batch.schedule.verify-cron=0 0 0 1 1 *",
+        "batch.metrics.verify-sla-seconds=999999999",
         "server.port=0",
         "management.server.port=0",
         "batch.verify.metrics-refresh-ms=120000"
@@ -183,5 +195,88 @@ class VerifyTriggerExpireGuardTest {
         assertThat(response.statusCode())
                 .as("이 조합이 409 로 돌아오면 가드가 다시 플래그를 보고 있는 것이다")
                 .isEqualTo(202);
+    }
+
+    /**
+     * <b>이 티켓이 새로 닫는 창이다(CY-470).</b> 위 셋은 전부 <i>이미 도는</i> 만료를 본다.
+     * <b>곧 뜰</b> 만료는 아무도 안 봤다 — 그리고 {@code max-expire-skips} 가 0 이 되면서
+     * 그 창이 위험해졌다: 만료는 검증을 <b>건너뛰지 않고 지나가고</b>, 그때 찍히는
+     * {@code updated_at} 때문에 그 {@code asOf} 는 영구히 못 쓴다(재시딩 말고 복구가 없다).
+     *
+     * <p>하필 만료 04:10 UTC 가 <b>13:10 KST</b> 라 시연 준비 시간대와 겹친다 — 규약을
+     * 문서에만 두면 그 시각에 누르는 사람을 아무것도 막지 못한다.
+     *
+     * <p><b>이 컨텍스트의 만료 크론은 연 1회(1월 1일)</b>라 평소에는 이 갈래가 안 열린다.
+     * 그래서 크론을 <b>지금 곧 뜨는 값</b>으로 바꾼 별도 컨텍스트에서 잰다.
+     */
+    @Nested
+    @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+            "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
+            "spring.batch.job.enabled=false",
+            // **스케줄러를 켜야 한다.** 꺼져 있으면 만료가 아예 안 떠서 이 가드가 통째로
+            // 비활성이다 — 그 상태로 재면 항상 202 라 아무것도 안 지킨다.
+            "batch.scheduling.enabled=true",
+            // ⚠️ **진짜로 뜨는 크론을 쓰면 안 된다.** 1분 크론을 줬다가 CodeRabbit 이 잡았다 —
+            //    분 경계에 만료가 실제로 발화하면 접수가 VERIFICATION-017 이 아니라
+            //    **먼저 오는 검사**인 VERIFICATION-012(이미 도는 만료)에 걸려 간헐 실패한다.
+            //    안 뜨는 크론(1월 1일)을 주고, "다음 발화까지 얼마" 는 아래 고정 시계로 만든다 —
+            //    .coderabbit.yaml 이 시각 의존 테스트에 Clock.fixed 를 규약으로 못 박는다.
+            "batch.schedule.expire-cron=0 0 0 1 1 *",
+            "batch.metrics.expire-sla-seconds=999999999",
+            "batch.schedule.cleanup-cron=0 0 0 1 1 *",
+            "batch.metrics.cleanup-sla-seconds=999999999",
+            "batch.schedule.verify-cron=0 0 0 1 1 *",
+            "batch.metrics.verify-sla-seconds=999999999",
+            "batch.metrics.expire-sla-seconds=999999999",
+            "server.port=0",
+            "management.server.port=0",
+            "batch.verify.metrics-refresh-ms=120000"
+    })
+    @Import({MySqlContainerConfig.class, WhenExpireIsAboutToFire.FixedClockConfig.class})
+    @DisplayName("만료가 곧 뜰 때")
+    class WhenExpireIsAboutToFire {
+
+        /**
+         * <b>만료 크론(1월 1일 00:00) 직전으로 시계를 세운다.</b> 다음 발화까지 10분이라
+         * 검증 최악 소요(1,200초 = 20분)보다 짧아 반드시 거절 갈래로 간다.
+         *
+         * <p>실제 발화는 안 한다 — 스케줄러가 보는 것은 <b>진짜 시각</b>이고 그쪽 기준으로는
+         * 1월 1일이 멀기 때문이다. 고정 시계는 컨트롤러의 {@code TimeProvider} 만 움직인다.
+         */
+        @TestConfiguration
+        static class FixedClockConfig {
+            @Bean
+            @Primary
+            Clock fixedClock() {
+                return Clock.fixed(
+                        LocalDateTime.of(2026, 12, 31, 23, 50).toInstant(ZoneOffset.UTC),
+                        ZoneOffset.UTC);
+            }
+        }
+
+        @LocalServerPort
+        private int port;
+
+        @Test
+        @DisplayName("접수 단계에서 409 로 거절하고 언제 다시 부를지 말해 준다")
+        void refusesAndSaysWhenToRetry() throws Exception {
+            var response = new VerifyApiProbe(port).post("/api/v1/admin/verify?asOf=" + AS_OF);
+
+            assertThat(response.statusCode())
+                    .as("이 검사가 없으면 접수는 통과하고, 곧 뜬 만료가 그 asOf 를 영구히 "
+                            + "못 쓰게 만든다 — 실패가 시연 직전에 드러난다")
+                    .isEqualTo(409);
+            assertThat(response.body())
+                    .as("**전용 코드여야 한다.** VERIFICATION-012(이미 도는 만료)와 상태 코드는 "
+                            + "같지만 처방이 다르다 — 그쪽은 '끝나길 기다려라', 이쪽은 "
+                            + "'배치 창을 지난 뒤에 불러라' 다")
+                    .contains("VERIFICATION-017");
+            assertThat(response.body())
+                    .as("응답에 나가는 것은 고정 문구뿐이다(핸들러가 detail 을 로그에만 남긴다). "
+                            + "그러니 그 문구 자체가 처방을 말해야 한다 — 안 그러면 "
+                            + "운영자가 같은 시각에 또 누른다")
+                    .contains("배치 창")
+                    .contains("영구히 못 쓰게");
+        }
     }
 }

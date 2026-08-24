@@ -50,8 +50,28 @@ class ExpireSchedulerReportingTest {
 
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 1, 15, 9, 3, 27);
 
-    /** 운영 기본값과 같은 5분 크론. 슬롯 판정이 이 표현식에 달려 있다. */
-    private static final String EXPIRE_CRON = "0 */5 * * * *";
+    /**
+     * <b>운영 기본값과 같은 일 1회 크론.</b> 슬롯 판정이 이 표현식에 달려 있다.
+     *
+     * <p><b>한때 5분 크론(<code>0 *&#47;5 * * * *</code>)이었다.</b> CY-397 이 만료를 배치 창으로
+     * 옮긴 뒤에도 여기만 남아 있었고, CY-470 이 SLA 부등식에 잡 소요 항을 넣으면서
+     * <b>그 조합이 실제로 성립하지 않는다는 것</b>이 드러났다 — 5분 크론에 건너뛰기 1,
+     * SLA 900 이면 만료가 {@code BatchJobRunningTooLong} 임계(600초)만큼만 돌아도 나이가
+     * 1,260초까지 가서 <b>정상 상태에서 critical</b> 이다. 기동 가드가 그것을 거절한다.
+     */
+    private static final String EXPIRE_CRON = "0 10 4 * * *";
+
+    /**
+     * 운영 기본값과 같다. 이 셋은 함께여야 부등식이 성립한다 —
+     * {@code (0+1) × 86,400 + 60 + 600 = 87,060 < 90,000}.
+     */
+    private static final int MAX_SKIPS = 0;
+
+    private static final long SLA_SECONDS = 90_000L;
+
+    /** {@code NOW} 가 속한 크론 슬롯. 일 1회라 그날 04:10 이다. */
+    private static final LocalDateTime EXPECTED_SLOT =
+            NOW.withHour(4).withMinute(10).withSecond(0);
 
     /**
      * <b>이름만 있는 잡.</b> 예전에는 여기에 {@code null} 을 넘겼는데, 스케줄러가 실패를
@@ -192,9 +212,9 @@ class ExpireSchedulerReportingTest {
         })).expire();
 
         assertThat(used[0].getLocalDateTime("asOf"))
-                .as("09:03:27 에 떠도 5분 크론의 슬롯은 09:00 이다. 분 단위 절단이면 09:03 이 "
-                        + "되어, 09:00 슬롯에 제때 뜬 노드와 값이 갈린다")
-                .isEqualTo(NOW.withMinute(0).withSecond(0));
+                .as("09:03:27 에 떠도 일 1회 크론의 슬롯은 그날 04:10 이다. 실행 시각을 쓰면 "
+                        + "09:03 이 되어, 04:10 에 제때 뜬 노드와 값이 갈린다")
+                .isEqualTo(EXPECTED_SLOT);
     }
 
     /**
@@ -205,14 +225,15 @@ class ExpireSchedulerReportingTest {
     @Test
     @DisplayName("같은 슬롯 안에서는 언제 떠도 asOf 가 같다")
     void keepsTheSameAsOfAcrossTheWholeSlot() {
-        LocalDateTime early = NOW.withMinute(0).withSecond(1);
-        // 09:04:59 는 안 쓴다 — 다음 슬롯과 1초 차이라 조기 발화 관용 폭에 걸려 09:05 가 된다.
-        LocalDateTime late = NOW.withMinute(4).withSecond(30);
+        LocalDateTime early = EXPECTED_SLOT.plusSeconds(1);
+        // 다음 슬롯 직전은 안 쓴다 — 1초 차이면 조기 발화 관용 폭에 걸려 다음 슬롯이 된다.
+        LocalDateTime late = EXPECTED_SLOT.plusHours(19);
 
         assertThat(asOfAt(early))
-                .as("슬롯 안에서 언제 뜨든 같아야 두 노드가 같은 JobInstance 를 노린다")
+                .as("일 1회 크론이라 슬롯 하나가 하루다. 그 안에서 언제 뜨든 같아야 "
+                        + "두 노드가 같은 JobInstance 를 노린다")
                 .isEqualTo(asOfAt(late))
-                .isEqualTo(NOW.withMinute(0).withSecond(0));
+                .isEqualTo(EXPECTED_SLOT);
     }
 
     /** 주어진 시각에 떴을 때 스케줄러가 만드는 {@code asOf}. */
@@ -223,7 +244,7 @@ class ExpireSchedulerReportingTest {
         new ExpireScheduler(operator((job, params) -> {
             used[0] = params;
             return execution(BatchStatus.COMPLETED, null);
-        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON, noVerifyRunning(), 1, 900L, 60_000L).expire();
+        }), EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON, noVerifyRunning(), MAX_SKIPS, SLA_SECONDS, 60_000L, 600L).expire();
         return used[0].getLocalDateTime("asOf");
     }
 
@@ -328,7 +349,7 @@ class ExpireSchedulerReportingTest {
         Clock fixed = Clock.fixed(NOW.atZone(ZoneId.systemDefault()).toInstant(),
                 ZoneId.systemDefault());
         return new ExpireScheduler(operator, EXPIRE_JOB, new TimeProvider(fixed), EXPIRE_CRON,
-                noVerifyRunning(), 1, 900L, 60_000L);
+                noVerifyRunning(), MAX_SKIPS, SLA_SECONDS, 60_000L, 600L);
     }
 
     private JobExecution execution(BatchStatus status, Throwable failure) {

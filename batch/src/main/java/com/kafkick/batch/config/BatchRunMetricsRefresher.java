@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -142,6 +143,17 @@ public class BatchRunMetricsRefresher {
     }
 
     /**
+     * 한 되읽기가 본 것 전부. 두 그레인을 한 트랜잭션에서 함께 읽어야 서로 다른 시점을
+     * 말하지 않는다.
+     *
+     * @param snapshots                     잡 이름 그레인
+     * @param verifyLastSuccessEpochSeconds {@code (dataset, scope)} 그레인. 없으면 {@code NaN}
+     */
+    private record Reading(Map<String, BatchRunMetrics.Snapshot> snapshots,
+            double verifyLastSuccessEpochSeconds) {
+    }
+
+    /**
      * <b>한 잡이라도 못 읽으면 전부 "모름" 으로 낸다.</b> 절반만 갱신하면 나머지 값이 언제
      * 것인지 알 수 없어지는데, 마지막 성공 시각에서 그 오해는 <i>"방금 돌았다"</i> 가 되어
      * SLA 알림을 통째로 재운다. 못 읽었다는 사실이 값보다 중요하다.
@@ -149,16 +161,26 @@ public class BatchRunMetricsRefresher {
     @Scheduled(fixedDelayString = "${batch.metrics.run-refresh-ms:60000}")
     public void refresh() {
         try {
-            Map<String, BatchRunMetrics.Snapshot> fresh = readLatest.execute(ignored -> {
+            Reading fresh = readLatest.execute(ignored -> {
                 Map<String, BatchRunMetrics.Snapshot> read = new HashMap<>();
                 for (String jobName : metrics.watchedJobNames()) {
                     read.put(jobName, new BatchRunMetrics.Snapshot(
                             lastSuccessEpochSeconds(jobName),
                             runningJobs.stuckExecutionCount(jobName)));
                 }
-                return read;
+                // 같은 트랜잭션에서 함께 읽는다. 따로 읽으면 잡 이름 그레인과
+                // (dataset, scope) 그레인이 서로 다른 시점을 말하는 구간이 생기는데,
+                // 관제가 그 둘을 나란히 놓고 보는 것이 진단의 첫 단계다.
+                return new Reading(read, verifyLastSuccessEpochSeconds());
             });
-            metrics.record(fresh == null ? Map.of() : fresh);
+            // 트랜잭션 콜백이 null 을 돌려줄 수 있는 자리는 아니지만(위 람다가 언제나
+            // 새 값을 만든다), 계약상 nullable 이라 방어한다 — 여기서 NPE 가 나면
+            // 게이지가 낡은 값을 든 채 되읽기만 죽는다.
+            //
+            // 두 그레인을 **한 번에** 넣는다. 나눠 넣으면 그 사이의 스크레이프가 서로 다른
+            // 되읽기 결과를 본다.
+            metrics.record(fresh == null ? Map.of() : fresh.snapshots(),
+                    fresh == null ? Double.NaN : fresh.verifyLastSuccessEpochSeconds());
             failures.set(0);
         } catch (RuntimeException e) {
             // 여기서 안 떨어뜨리면 게이지가 직전 값을 그대로 들고 있어, 관제가 그것을
@@ -229,9 +251,9 @@ public class BatchRunMetricsRefresher {
                           JOIN BATCH_JOB_INSTANCE i ON i.JOB_INSTANCE_ID = e.JOB_INSTANCE_ID
                          WHERE e.STATUS = 'COMPLETED'
                            AND (e.EXIT_CODE IS NULL OR e.EXIT_CODE <> 'YIELDED')
-                           AND e.END_TIME > DATE_SUB(NOW(), INTERVAL 7 DAY)
+                           AND e.END_TIME > DATE_SUB(NOW(), INTERVAL %d DAY)
                            AND i.JOB_NAME = :jobName
-                        """)
+                        """.formatted(BatchMetadataWindow.LOOKBACK_DAYS))
                 .param("jobName", jobName)
                 .query(Double.class)
                 .optional();
@@ -255,5 +277,54 @@ public class BatchRunMetricsRefresher {
         // 한 번도 성공한 적이 없으면 0 이 아니라 NaN 이다. 0 은 1970년이라
         // "아주 오래 안 돌았다" 가 되어, 갓 뜬 서버에서 곧바로 알림이 된다.
         return epochSeconds.orElse(Double.NaN);
+    }
+
+    /**
+     * <b>{@code (dataset, scope)} 그레인의 마지막 성공.</b> 위 질의에 잡 파라미터 조인 둘을
+     * 더한 것이고, 나머지 조건(종료 코드 · 창 · 상태)은 <b>같아야 한다</b> — 두 게이지를
+     * 나란히 놓고 보는 것이 진단의 첫 단계라, 조건이 갈리면 그 대조가 거짓말을 한다.
+     *
+     * <p><b>왜 잡 이름만으로 안 되나.</b> {@code verifyJob} 하나가 {@code CLEAN/FULL} 과
+     * {@code CORRUPT/FULL} 을 함께 도는데, 게이트가 보는 것은 앞의 것뿐이다.
+     * 잡 이름 그레인이면 리허설로 {@code CORRUPT} 를 한 번 돌린 것이 시계열을 앞으로 밀어
+     * <b>SLA 를 리셋한다</b>({@code BatchRunMetrics#DATASET_TAG} 에 같은 근거를 적었다).
+     *
+     * <p><b>값은 {@code PARAMETER_VALUE} 하나에 들어간다.</b> {@code V2} 의 스키마는
+     * {@code PARAMETER_NAME}·{@code PARAMETER_TYPE}·{@code PARAMETER_VALUE} 셋뿐이다 —
+     * 스프링 배치 4.x 의 타입별 컬럼({@code STRING_VAL}·{@code LONG_VAL}·{@code DATE_VAL})은
+     * 통합 스키마에서 사라졌다. <b>기억으로 그 컬럼을 적었다가 리뷰에서 잡혔다.</b>
+     *
+     * <p><b>{@code PARAMETER_TYPE} 은 안 건다.</b> {@code ExpirePendingRefresher} 는 거는데,
+     * 그쪽은 값을 {@code LocalDateTime} 으로 <b>파싱</b>해야 해서 타입이 다르면 깨지기 때문이다.
+     * 이쪽은 {@code 'CLEAN'} 문자열 <b>동등 비교</b>라 다른 타입의 파라미터가 우연히 매치될 수
+     * 없다 — 조건을 늘리면 지키는 것 없이 조인만 무거워진다.
+     *
+     * <p><b>조인이 행을 늘리지 않는다.</b> {@code BATCH_JOB_EXECUTION_PARAMS} 의 한 실행 안에서
+     * {@code PARAMETER_NAME} 은 유일하므로, 두 파라미터를 각각 조인해도 실행당 한 행이다.
+     */
+    private double verifyLastSuccessEpochSeconds() {
+        return jdbcClient.sql("""
+                        SELECT FLOOR(UNIX_TIMESTAMP(MAX(e.END_TIME)))
+                          FROM BATCH_JOB_EXECUTION e
+                          JOIN BATCH_JOB_INSTANCE i ON i.JOB_INSTANCE_ID = e.JOB_INSTANCE_ID
+                          JOIN BATCH_JOB_EXECUTION_PARAMS d
+                            ON d.JOB_EXECUTION_ID = e.JOB_EXECUTION_ID
+                           AND d.PARAMETER_NAME = 'dataset'
+                           AND d.PARAMETER_VALUE = :dataset
+                          JOIN BATCH_JOB_EXECUTION_PARAMS s
+                            ON s.JOB_EXECUTION_ID = e.JOB_EXECUTION_ID
+                           AND s.PARAMETER_NAME = 'scope'
+                           AND s.PARAMETER_VALUE = :scope
+                         WHERE e.STATUS = 'COMPLETED'
+                           AND (e.EXIT_CODE IS NULL OR e.EXIT_CODE <> 'YIELDED')
+                           AND e.END_TIME > DATE_SUB(NOW(), INTERVAL %d DAY)
+                           AND i.JOB_NAME = :jobName
+                        """.formatted(BatchMetadataWindow.LOOKBACK_DAYS))
+                .param("dataset", VerifyRunContext.SLA_DATASET)
+                .param("scope", VerifyRunContext.SLA_SCOPE)
+                .param("jobName", VerifyRunContext.JOB_NAME)
+                .query(Double.class)
+                .optional()
+                .orElse(Double.NaN);
     }
 }

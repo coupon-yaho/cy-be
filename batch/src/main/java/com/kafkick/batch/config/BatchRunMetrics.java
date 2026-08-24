@@ -32,17 +32,19 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 이 저장소가 <i>"배치가 실패했다고 할 때는 판정을 내지 못한 경우뿐"</i> 이라고 정한 그대로다.
  * 데이터가 틀렸다는 사실은 {@code cy_verification_verdict} 가 따로 진다.
  *
- * <p><b>{@code verifyJob} 에는 아직 SLA 알림을 걸지 않는다.</b> 크론이 없어 <b>안 도는 것이
- * 정상</b>이라 지금 걸면 영구 발화다. 게이지만 내고, 알림은 검증을 야간 크론으로 옮기는
- * 티켓이 함께 세운다({@code docs/13} §6 의 C). 게이지를 미리 내 두는 것은 그 티켓이
- * <b>감시를 나중에 붙이는 상태로 시작하지 않게</b> 하기 위해서다.
+ * <p><b>{@code verifyJob} 의 SLA 는 이 계열이 아니라 {@code cy_verify_last_success_seconds}
+ * {@code {dataset,scope}} 가 진다</b>(CY-470, {@code docs/13} §6 의 D). 이 계열은 잡 이름
+ * 그레인이라 {@code verifyJob} 하나로 {@code CLEAN/FULL}(게이트가 보는 것)과
+ * {@code CORRUPT/FULL}(리허설)을 뭉치는데, 그러면 <b>리허설 한 번이 시계열을 앞으로 밀어</b>
+ * SLA 를 리셋한다 — 정작 게이트 조합은 며칠째 안 돌았는데 조용하다.
+ * {@code cy_verification_verdict} 가 이미 {@code (dataset, scope)} 그레인이라 두 축이 조인된다.
  *
- * <p>⚠️ <b>그 티켓은 이 게이지를 그대로 쓰면 안 된다.</b> 그레인이 잡 이름 하나라
- * {@code (dataset, scope)} 조합을 안 가른다. 게이트 판정의 근거는 {@code CLEAN/FULL} 인데,
- * 발표 리허설로 {@code CORRUPT} 를 한 번 돌리면 그 실행이 <b>같은 시계열을 앞으로 밀어</b>
- * SLA 를 리셋한다 — 정작 {@code CLEAN/FULL} 은 며칠째 안 돌았는데 조용하다.
- * {@code cy_verification_verdict} 는 {@code (dataset, scope)} 그레인이라 <b>두 축의 결이
- * 다르다</b>. C 는 {@code BATCH_JOB_EXECUTION_PARAMS} 를 조인해 그레인을 맞춰야 한다.
+ * <p>그레인을 가르는 조회는 {@code BatchRunMetricsRefresher#verifyLastSuccessEpochSeconds} 이고
+ * {@code BATCH_JOB_EXECUTION_PARAMS} 를 조인한다. CY-392 가 이 계열만 미리 내 뒀던 것은
+ * <b>D 가 감시를 나중에 붙이는 상태로 시작하지 않게</b> 하려던 것이다.
+ *
+ * <p>⚠️ <b>이 계열에 검증 SLA 를 다시 걸면 안 된다.</b> 두 번째 알림이 생겨 같은 사건이
+ * 두 채널로 나가고, 그중 하나는 리허설에 리셋되는 거짓 축이다.
  */
 @Component
 public class BatchRunMetrics {
@@ -59,11 +61,31 @@ public class BatchRunMetrics {
      */
     private static final String JOB_TAG = "spring_batch_job_name";
 
+    /**
+     * <b>검증 SLA 는 잡 이름 그레인으로 못 진다.</b> {@code verifyJob} 하나가
+     * {@code CLEAN/FULL}(게이트가 보는 것)과 {@code CORRUPT/FULL}(리허설)을 함께 도는데,
+     * 잡 이름만 태그로 쓰면 <b>{@code CORRUPT} 손 트리거 한 번이 같은 시계열을 앞으로 밀어
+     * SLA 를 리셋한다</b> — 정작 {@code CLEAN/FULL} 은 며칠째 안 돌았는데 조용하다.
+     * 그래서 이 게이지만 {@code (dataset, scope)} 축을 따로 가진다(CY-470).
+     *
+     * <p>{@code cy_verification_verdict} 가 이미 같은 그레인이라 두 축이 조인된다.
+     */
+    private static final String DATASET_TAG = "dataset";
+
+    private static final String SCOPE_TAG = "scope";
+
     /** 관제가 "모른다" 를 0 으로 오해하지 않게 한다. 0 은 1970년이라 즉시 알림이 된다. */
     private static final double UNKNOWN = Double.NaN;
 
-    private final AtomicReference<Map<String, Snapshot>> latest =
-            new AtomicReference<>(Map.of());
+    /**
+     * <b>두 그레인을 한 참조에 담는다.</b> 따로 두고 순서대로 {@code set} 하면 그 사이의
+     * 스크레이프가 <b>서로 다른 되읽기 결과</b>를 본다 — 잡 이름 그레인은 새 값, 검증
+     * 그레인은 직전 값이다. 관제가 그 둘을 나란히 놓고 보는 것이 진단의 첫 단계라,
+     * 존재하지 않는 조합을 한 순간이라도 내보내면 안 된다.
+     */
+    private final AtomicReference<Reading> latest =
+            new AtomicReference<>(new Reading(Map.of(), UNKNOWN));
+
     private final List<String> watchedJobNames;
 
     /**
@@ -85,6 +107,18 @@ public class BatchRunMetrics {
                     snapshot -> snapshot.stuckExecutions(),
                     "종료 표시 없이 실행 중으로 남았는데 진도가 멈춘 실행 수");
         }
+
+        // 잡 유무와 무관하게 **언제나** 낸다. 위 루프처럼 Job 빈에서 이름을 받아 조건부로
+        // 만들면, verifyJob 빈이 없는 기동에서 이 계열이 통째로 사라져 VerifyMetricsMissing
+        // 이 "타깃은 살아 있는데 계열만 없다" 를 못 가린다 — CY-446 이 회차 카운터를
+        // 무조건부 빈으로 옮긴 것과 같은 이유다.
+        Gauge.builder("cy_verify_last_success_seconds", latest,
+                        holder -> holder.get().verifyLastSuccessEpochSeconds())
+                .tag(DATASET_TAG, VerifyRunContext.SLA_DATASET)
+                .tag(SCOPE_TAG, VerifyRunContext.SLA_SCOPE)
+                .description("이 (dataset, scope) 조합의 검증이 마지막으로 COMPLETED 로 끝난 "
+                        + "시각(유닉스 초). 판정 결과와 무관하다")
+                .register(registry);
     }
 
     /** 되읽기가 훑어야 하는 잡들. 이름 순이다. */
@@ -93,13 +127,18 @@ public class BatchRunMetrics {
     }
 
     /**
-     * 되읽기가 성공했을 때 그 결과로 통째로 갈아 끼운다.
+     * 되읽기가 성공했을 때 그 결과로 <b>두 그레인을 한 번에</b> 갈아 끼운다.
      *
      * <p><b>부분 갱신을 안 한다.</b> 잡 하나만 갱신하면 다른 잡의 값이 언제 것인지 알 수
      * 없어지는데, 그 상태는 <i>"낡았다"</i> 와 <i>"방금 읽었다"</i> 가 같은 모양이다.
+     * 그레인 둘을 나눠 넣지 않는 것도 같은 이유다 — 그 사이의 스크레이프가 존재하지 않는
+     * 조합을 본다.
+     *
+     * @param verifyLastSuccessEpochSeconds {@code (SLA_DATASET, SLA_SCOPE)} 조합의 마지막
+     *                                      성공. 없으면 {@code NaN}
      */
-    public void record(Map<String, Snapshot> fresh) {
-        latest.set(Map.copyOf(fresh));
+    public void record(Map<String, Snapshot> fresh, double verifyLastSuccessEpochSeconds) {
+        latest.set(new Reading(Map.copyOf(fresh), verifyLastSuccessEpochSeconds));
     }
 
     /**
@@ -108,7 +147,9 @@ public class BatchRunMetrics {
      * SLA 알림을 통째로 재운다.
      */
     public void markUnknown() {
-        latest.set(Map.of());
+        // 두 그레인이 함께 떨어진다. 하나만 떨어뜨리면 관제가 두 축을 나란히 볼 때
+        // **하나는 모름 하나는 정상** 이라는 존재하지 않는 상태를 본다.
+        latest.set(new Reading(Map.of(), UNKNOWN));
     }
 
     /**
@@ -118,10 +159,21 @@ public class BatchRunMetrics {
     public record Snapshot(double lastSuccessEpochSeconds, int stuckExecutions) {
     }
 
+    /**
+     * 한 되읽기가 본 것 전부. <b>게이지 둘이 이 한 참조에서 값을 꺼내</b> 서로 다른 세대를
+     * 섞어 내보내지 않는다.
+     *
+     * @param snapshots                     잡 이름 그레인
+     * @param verifyLastSuccessEpochSeconds {@code (dataset, scope)} 그레인
+     */
+    private record Reading(Map<String, Snapshot> snapshots,
+            double verifyLastSuccessEpochSeconds) {
+    }
+
     private void gauge(MeterRegistry registry, String name, String jobName,
             java.util.function.ToDoubleFunction<Snapshot> field, String description) {
         Gauge.builder(name, latest, holder -> {
-                    Snapshot snapshot = holder.get().get(jobName);
+                    Snapshot snapshot = holder.get().snapshots().get(jobName);
                     return snapshot == null ? UNKNOWN : field.applyAsDouble(snapshot);
                 })
                 .tag(JOB_TAG, jobName)

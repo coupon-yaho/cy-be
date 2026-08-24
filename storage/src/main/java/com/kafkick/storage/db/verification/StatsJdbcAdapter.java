@@ -2,8 +2,11 @@
 package com.kafkick.storage.db.verification;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -119,16 +122,65 @@ public class StatsJdbcAdapter implements StatsRepository {
      *
      * <p>등급은 {@code issued_grade} <b>스냅샷</b>이다. {@code members} 를 조인하면 그 뒤 등급이
      * 바뀐 회원의 과거 발급이 현재 등급으로 분류된다 — V6 이 스냅샷을 쓰는 이유와 같다.
+     *
+     * <p><b>⚠️ 회차 하나씩 나간다. 회차 전체를 한 문장으로 묶으면 검증용 DB 서버가 죽었다</b>
+     * (CY-470 실측). 300만 발급에서 mysqld 상주가 907MiB → 1,163MiB 로 12초 만에 부풀고
+     * 그 자리에서 강제 종료됐다 — 세 번 재현했고, 에러 로그에 정상 종료 메시지 없이
+     * {@code starting as process 1} 만 남았다. <b>결과가 936행인데도 그렇다.</b>
+     *
+     * <p>같은 집계를 회차 단위 147회로 쪼개면 상주가 900 → 903MiB 로 <b>평평했고</b> 26초에
+     * 끝났다(한 문장 판은 12초에 죽었으므로 완주 시간은 오히려 이쪽이 짧다).
+     * {@code SQL_BIG_RESULT} 힌트와 {@code tmp_table_size} 인하는 둘 다 같은 곡선으로 죽었고,
+     * {@code internal_tmp_mem_storage_engine} 은 앱 계정에 권한이 없다 — <b>쪼개는 것만 들었다.</b>
+     *
+     * <p>⚠️ <b>왜 부푸는지는 못 밝혔다.</b> 처음에는 <i>"인덱스로 정렬 못 하는 GROUP BY 라
+     * TempTable 엔진이 {@code temptable_max_ram} 까지 RAM 에 쥔다"</i> 고 적었는데,
+     * <b>그 설명이 재현되지 않았다</b> — 같은 버전·같은 버퍼풀(8.4.11 · 512MiB)로 띄운 깨끗한
+     * 컨테이너에서 294만 행에 같은 질의를 돌리니 상주가 +3MiB 로 평평하고
+     * {@code Created_tmp_disk_tables} 가 올라 <b>디스크로 흘러넘쳤다.</b> 즉 그 서버에서만
+     * 안 넘친 것이고, 차이가 무엇인지(행 폭 · 조인 · 호스트 메모리 압박) 아직 모른다.
+     *
+     * <p><b>그래도 이 쪼개기는 유지한다.</b> 근거는 메커니즘이 아니라 <b>그 서버에서 잰
+     * 결과</b>다 — 한 문장은 세 번 다 죽었고 쪼갠 판은 완주했다. 메커니즘을 밝히는 날
+     * 더 나은 처방이 나오면 그때 바꾼다.
+     *
+     * <p>{@code coupons} 조인이 사라진 자리는 {@link #couponIdsAsOf} 가 같은 컷으로 대신한다.
      */
-    private static final String AGGREGATE_GRADE_STATS = """
+    private static final String AGGREGATE_GRADE_STATS_FOR_COUPON = """
             INSERT INTO grade_stats (run_id, coupon_id, grade, issued_total, used_total)
             SELECT :runId, i.coupon_id, i.issued_grade, COUNT(*), SUM(i.status = 'USED')
               FROM issuances i
-              JOIN coupons c ON c.id = i.coupon_id
-             WHERE i.updated_at <= :asOf
-               AND c.created_at <= :asOf
+             WHERE i.coupon_id = :couponId
+               AND i.updated_at <= :asOf
              GROUP BY i.coupon_id, i.issued_grade
             """;
+
+    /**
+     * <b>회차 컷은 이 한 자리에서만 나온다.</b> {@link #couponCount} 와 {@code couponIdsAsOf}
+     * 가 이것을 공유하므로 <b>둘이 갈릴 자리가 없다</b> — 목록 길이는 언제나 개수와 같고,
+     * 그 개수는 호출부의 {@code couponRows != coupons} 검사를 통해 <b>회차 집계가 본 카탈로그</b>
+     * 와 이어진다. 세 질의가 한 술어로 묶인다.
+     *
+     * <p><b>이것이 없으면 부분 집계가 조용히 {@code COMPLETE} 로 닫힌다.</b> 등급 집계는
+     * CY-470 에서 회차 단위 루프가 됐는데, 목록을 뜨는 술어가 회차 집계 쪽과 어긋나면
+     * 빠진 회차의 발급이 {@code grade_stats} 에서 통째로 사라진다 — 그런데 회차 집계는
+     * 멀쩡하므로 등식 검사가 통과하고, 대시보드는 등급 퍼널만 과소 집계된 값을 읽는다.
+     * 한 문장이던 시절엔 그 상태가 <b>구조적으로 불가능했다</b>({@code INSERT … SELECT} 는
+     * 원자적이라 936행이 다 들어가거나 하나도 안 들어간다).
+     *
+     * <p>{@code AGGREGATE_COUPON_STATS} 의 {@code WHERE c.created_at <= :asOf} 는 이 상수를
+     * 못 쓴다 — 그쪽은 조인 안의 별칭({@code c})을 쓰는 큰 문장의 일부다. <b>그 자리는
+     * 술어를 공유하는 대신 실행 때 등식으로 검사된다.</b>
+     */
+    private static final String COUPON_CUT = "created_at <= :asOf";
+
+    /** 등급 집계 루프가 돌 회차 목록. */
+    private static final String SELECT_COUPON_IDS_AS_OF =
+            "SELECT id FROM coupons WHERE " + COUPON_CUT + " ORDER BY id";
+
+    /** 그 목록의 길이. 같은 술어라 위 질의와 언제나 같은 값이다. */
+    private static final String COUNT_COUPONS_AS_OF =
+            "SELECT COUNT(*) FROM coupons WHERE " + COUPON_CUT;
 
     /**
      * <b>창이 리플레이와 같아야 한다.</b> {@code created_at <= asOf} 만 걸면 다시 재는 것이라,
@@ -138,14 +190,22 @@ public class StatsJdbcAdapter implements StatsRepository {
      * {@code weekday()} 와 같아, {@code ELT(WEEKDAY(x) + 1, 'MON', …)} 이 시드의
      * {@code DOW[at.weekday()]} 와 글자 단위로 대응한다. {@code DAYNAME()} 은
      * {@code lc_time_names} 에 의존하므로 쓰지 않는다.
+     *
+     * <p><b>⚠️ 구간 하나씩 나간다.</b> {@code GROUP BY} 가 표현식이라 어떤 인덱스로도 정렬할 수
+     * 없고, 그래서 {@code AGGREGATE_GRADE_STATS_FOR_COUPON} 과 <b>같은 병</b>을 앓는다 —
+     * 516만 이력을 한 문장으로 묶으니 mysqld 상주가 902 → 1,077MiB 로 뛰었다(CY-470 실측).
+     * 그때 죽지는 않았지만 <b>강제 종료가 관측된 1,163MiB 까지 여유가 86MiB 뿐</b>이라
+     * 안전하다고 부를 수 없다. 부분 합은 {@link #issuedByHour} 가 접는다.
      */
-    private static final String SELECT_ISSUED_BY_HOUR = """
+    private static final String SELECT_ISSUED_BY_HOUR_IN_RANGE = """
             SELECT ELT(WEEKDAY(created_at) + 1,
                        'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN') AS day_of_week,
                    HOUR(created_at)                                      AS hour_of_day,
                    COUNT(*)                                             AS issued_total
               FROM issuance_histories
              WHERE event_type = 'ISSUE'
+               AND id > :fromIdExclusive
+               AND id <= :toIdInclusive
                AND id <= :maxHistoryId
                AND created_at <= :asOf
              GROUP BY day_of_week, hour_of_day
@@ -164,12 +224,62 @@ public class StatsJdbcAdapter implements StatsRepository {
                AND COALESCE(h.issue_events, 0) <> 1
             """;
 
+    /**
+     * {@link #issuedByHour} 가 이력 id 를 훑는 폭의 <b>상한이자 기본값</b>. 즉 이 손잡이는
+     * <b>내릴 수만 있다</b> — 올릴 수 있게 두면 막으려던 사고가 그대로 돌아온다.
+     * 더 작은 서버에서 더 좁혀야 할 수는 있으므로 내리는 쪽만 열어 둔다.
+     *
+     * <p><b>{@code batch.verify.replay-window-size} 와 축이 다르다 — 손잡이를 합치면 안 된다.</b>
+     * 그쪽은 <b>발급건</b> id 창이고 막는 것은 <b>JVM 힙</b>이다(창 하나가 통째로 힙에 올라온다,
+     * {@code IssuanceHistoryGroupReader}). 이쪽은 <b>이력</b> id 창이고 막는 것은
+     * <b>MySQL 서버의 RAM</b>이다 — 자바로는 {@code (요일, 시각)} 부분합 최대 168행만 돌아온다.
+     * 한 값으로 묶으면 힙을 넓히려고 올린 값이 서버를 죽인다.
+     *
+     * <p><b>값의 근거.</b> CY-470 에서 516만 이력 전수(그중 {@code event_type='ISSUE'} 258만)를
+     * 한 문장으로 묶었을 때 검증용 DB 의 mysqld 상주가 +175MiB 였다. 50만 id 폭이면 그
+     * 1/10 남짓이라 강제 종료가 관측된 지점(+256MiB)까지 열 배 여유가 남는다.
+     * <b>부푸는 이유 자체는 못 밝혔다</b> — {@link #AGGREGATE_GRADE_STATS_FOR_COUPON} 에 적었다.
+     */
+    static final long MAX_HISTORY_SCAN_WINDOW = 500_000L;
+
+    /**
+     * 같은 손잡이의 <b>바닥</b>. 내리는 쪽만 열어 뒀으니 내리다 생기는 사고도 여기서 막는다.
+     *
+     * <p><b>0 이하만 막으면 부족하다.</b> 1 은 통과하는데 그러면 이력 id 를 한 칸씩 훑어
+     * 516만 셋에서 왕복이 500만 회를 넘고, {@code statsAggregateStep} 이
+     * {@code batch.verify.step-timeout-ms} 에 걸려 죽는다. <b>그때 나는 알림은
+     * {@code VerifyNotSucceeding} 인데 그 runbook 은 "그 슬롯에 발급이 있었다" 로 사람을
+     * 보낸다</b> — 원인과 처방이 완전히 다른 곳을 가리킨다.
+     *
+     * <p>1만이면 같은 셋에서 왕복이 534회다. 왕복당 비용이 창 하나의 이득을 넘기 시작하는
+     * 지점을 여기로 잡았다.
+     */
+    static final long MIN_HISTORY_SCAN_WINDOW = 10_000L;
+
     private final JdbcClient jdbcClient;
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final long historyScanWindow;
 
-    public StatsJdbcAdapter(JdbcClient jdbcClient, NamedParameterJdbcTemplate jdbcTemplate) {
+    public StatsJdbcAdapter(
+            JdbcClient jdbcClient,
+            NamedParameterJdbcTemplate jdbcTemplate,
+            @Value("${batch.verify.history-scan-window:" + MAX_HISTORY_SCAN_WINDOW + "}")
+            long historyScanWindow) {
+        // 위로도 아래로도 막는다. 넓히면 서버가 죽고, 좁히면 왕복이 폭증해 Step 이
+        // 데드라인에 걸린다 — 뒤엣것은 엉뚱한 알림으로 나가 원인까지 가는 길이 멀다.
+        if (historyScanWindow < MIN_HISTORY_SCAN_WINDOW
+                || historyScanWindow > MAX_HISTORY_SCAN_WINDOW) {
+            throw new IllegalArgumentException(
+                    "batch.verify.history-scan-window 는 " + MIN_HISTORY_SCAN_WINDOW + " 이상 "
+                            + MAX_HISTORY_SCAN_WINDOW + " 이하여야 합니다. 이 값은 요일·시각 "
+                            + "집계 한 문장이 훑는 이력 id 폭입니다 — 넓히면 검증용 DB 서버가 "
+                            + "강제 종료된 적이 있고(CY-470 실측), 좁히면 왕복이 "
+                            + "이력 수 ÷ 이 값만큼 늘어 statsAggregateStep 이 "
+                            + "batch.verify.step-timeout-ms 에 걸립니다. 값=" + historyScanWindow);
+        }
         this.jdbcClient = jdbcClient;
         this.jdbcTemplate = jdbcTemplate;
+        this.historyScanWindow = historyScanWindow;
     }
 
     @Override
@@ -206,17 +316,48 @@ public class StatsJdbcAdapter implements StatsRepository {
                 .update();
     }
 
+    /**
+     * <b>회차 하나씩 나간다.</b> 한 문장으로 묶으면 서버가 죽는 근거는
+     * {@link #AGGREGATE_GRADE_STATS_FOR_COUPON} 에 적었다.
+     *
+     * <p><b>⚠️ 쪼갠 147회는 서로 원자적이지 않다.</b> 트랜잭션은 하나지만 그 문장들이
+     * {@code REPEATABLE READ} 의 읽기 뷰를 <b>공유하지 않는다</b> — {@code INSERT … SELECT} 는
+     * <b>락 리드</b>라 각 문장이 자기 실행 시점의 최신 커밋을 본다. 두 서버에서 재 봤다
+     * (CY-470): 스냅샷을 확보한 트랜잭션 안에서, 그 뒤 다른 세션이 커밋한 행을
+     * {@code INSERT … SELECT} 가 <b>그대로 옮겼다</b>. {@code binlog_format=ROW} 든
+     * {@code log_bin=0} 이든 같았다.
+     *
+     * <p>그래서 <b>커밋을 나누는 것과는 다르지만 스냅샷이 하나인 것도 아니다.</b> 루프 중간에
+     * {@code issuances} 가 {@code updated_at <= asOf} 로 백데이트 커밋되면 앞뒤 회차의 귀속이
+     * 갈리는데, 그 경우는 {@code assertStillFrozen} 의 발급건 축({@code updated_at > asOf})에
+     * 안 걸린다. <b>이 자리를 청크로 쪼개 커밋을 나누는 것이 안전해 보이지만 아니라는 것</b>이
+     * 이 문단의 요지다 — 이 Step 이 데드라인에 걸리는 날 가장 먼저 나올 처방이 그것이다.
+     *
+     * <p><b>회차 목록은 반대로 컨시스턴트 리드다.</b> {@link #SELECT_COUPON_IDS_AS_OF} 는
+     * 평범한 읽기라 트랜잭션 스냅샷을 본다. 그 비대칭이 만드는 창은 호출부가 바로 앞에서
+     * {@code couponRows != coupons} 로 잡고({@code DATASET_MUTATED_DURING_RUN}), 뒤에서
+     * {@code assertStillFrozen} 이 새 트랜잭션으로 한 번 더 본다. <b>개수가 상쇄되는
+     * 동시 +1/−1 은 그 등식이 못 잡는다</b> — 다만 운영 경로에 {@code coupons.created_at} 을
+     * 갱신하는 코드가 없어 그 창이 열리지 않는다(회차 전이는 {@code status} 만 쓴다).
+     *
+     * @return 쓴 행 수의 합. 한 문장이던 시절과 같은 값이다
+     */
     @Override
     public int aggregateGradeStats(long runId, LocalDateTime asOf) {
-        return jdbcClient.sql(AGGREGATE_GRADE_STATS)
-                .param("runId", runId)
-                .param("asOf", asOf)
-                .update();
+        int written = 0;
+        for (long couponId : couponIdsAsOf(asOf)) {
+            written += jdbcClient.sql(AGGREGATE_GRADE_STATS_FOR_COUPON)
+                    .param("runId", runId)
+                    .param("couponId", couponId)
+                    .param("asOf", asOf)
+                    .update();
+        }
+        return written;
     }
 
     @Override
     public int couponCount(LocalDateTime asOf) {
-        return jdbcClient.sql("SELECT COUNT(*) FROM coupons WHERE created_at <= :asOf")
+        return jdbcClient.sql(COUNT_COUPONS_AS_OF)
                 .param("asOf", asOf)
                 .query(Integer.class)
                 .single();
@@ -247,16 +388,55 @@ public class StatsJdbcAdapter implements StatsRepository {
                 .list();
     }
 
+    /**
+     * <b>이력 id 를 {@code batch.verify.history-scan-window} 폭으로 훑고 부분합을 접는다.</b> 한 문장으로
+     * 묶으면 안 되는 근거는 {@link #SELECT_ISSUED_BY_HOUR_IN_RANGE} 에 적었다.
+     *
+     * <p><b>여기서 접어야 한다 — 부분합을 그대로 돌려주면 안 된다.</b> 호출부의
+     * {@code HourlyIssued.fillAll} 이 {@code Collectors.toMap} 으로 칸을 찾는데, 같은
+     * {@code (요일, 시각)} 이 두 구간에 걸치면 키가 겹쳐 {@code IllegalStateException} 이 난다.
+     * 300만 시드는 두 달치라 <b>모든 칸이 여러 구간에 걸친다</b> — 즉 접지 않으면 언제나 죽는다.
+     *
+     * <p><b>구간은 정확히 나뉜다.</b> {@code (fromExclusive, toInclusive]} 라 경계 id 가 어느
+     * 한쪽에만 들어간다 — 겹쳐 세거나 빠뜨리는 칸이 없다. 창을 몇 개로 쪼개든 합이 같은 이유다.
+     *
+     * <p>돌려주는 순서는 {@code (요일, 시각)} 삽입 순이라 실행마다 다를 수 있지만,
+     * {@code fillAll} 이 168칸을 자기 순서로 채우므로 스냅샷은 결정적이다.
+     */
     @Override
     public List<HourlyIssued> issuedByHour(long frozenMaxHistoryId, LocalDateTime asOf) {
-        return jdbcClient.sql(SELECT_ISSUED_BY_HOUR)
-                .param("maxHistoryId", frozenMaxHistoryId)
-                .param("asOf", asOf)
-                .query((rs, rowNum) -> new HourlyIssued(
-                        rs.getString("day_of_week"),
-                        rs.getInt("hour_of_day"),
-                        rs.getInt("issued_total")))
-                .list();
+        // **먼저 실제 상한으로 좁힌다.** frozenMaxHistoryId 는 호출부가 정한 값이라
+        // Long.MAX_VALUE 일 수 있는데(얼릴 이력이 없을 때), 그 값으로 창을 걸으면 빈 구간을
+        // 1,800경 번 도는 루프가 된다. 이력이 하나도 없으면 0 이라 루프가 안 돈다.
+        long ceiling = scanCeiling(frozenMaxHistoryId);
+
+        // 칸이 168개뿐이라 자바가 들고 있어도 된다. 창을 넓혀도 이 맵은 안 자란다.
+        Map<String, HourlyIssued> merged = new LinkedHashMap<>();
+
+        // **0 부터 시작한다.** 첫 ISSUE 이력 앞의 빈 창 몇 개를 더 도는 대신, 하한을 구하려고
+        // event_type·created_at 컷이 붙은 집계를 한 번 더 돌리지 않는다 — 그 컷을 덮는
+        // 인덱스가 없어 534만 행 전수 스캔이 되고, 이 Step 은 이미 그 테이블을 두 번 훑는다.
+        for (long from = 0; from < ceiling; from += historyScanWindow) {
+            long to = Math.min(from + historyScanWindow, ceiling);
+
+            jdbcClient.sql(SELECT_ISSUED_BY_HOUR_IN_RANGE)
+                    .param("fromIdExclusive", from)
+                    .param("toIdInclusive", to)
+                    .param("maxHistoryId", frozenMaxHistoryId)
+                    .param("asOf", asOf)
+                    .query((rs, rowNum) -> new HourlyIssued(
+                            rs.getString("day_of_week"),
+                            rs.getInt("hour_of_day"),
+                            rs.getInt("issued_total")))
+                    .list()
+                    .forEach(partial -> merged.merge(
+                            partial.dayOfWeek() + partial.hour(),
+                            partial,
+                            (a, b) -> new HourlyIssued(a.dayOfWeek(), a.hour(),
+                                    a.issuedTotal() + b.issuedTotal())));
+        }
+
+        return List.copyOf(merged.values());
     }
 
     /**
@@ -277,5 +457,35 @@ public class StatsJdbcAdapter implements StatsRepository {
                 INSERT INTO hourly_stats (run_id, day_of_week, hour, issued_total)
                 VALUES (:runId, :dayOfWeek, :hour, :issuedTotal)
                 """, batch);
+    }
+
+    private List<Long> couponIdsAsOf(LocalDateTime asOf) {
+        return jdbcClient.sql(SELECT_COUPON_IDS_AS_OF)
+                .param("asOf", asOf)
+                .query(Long.class)
+                .list();
+    }
+
+    /**
+     * 루프를 끝낼 id. <b>PK 만 건다 — {@code event_type}·{@code created_at} 컷은 안 건다.</b>
+     * 그 둘을 덮는 인덱스가 없어 걸면 534만 행 전수 스캔이 되는데, 이 Step 은 이미
+     * {@code issuance_histories} 를 두 번 훑는다({@code SELECT_BROKEN_ISSUE_HISTORY} 의
+     * 파생 테이블과 창 질의들). PK 만 걸면 역순 한 행이라 사실상 공짜다.
+     *
+     * <p>컷을 여기서 안 걸어도 결과가 같은 이유 — 창 질의가 그 셋을 <b>자기가</b> 들고 있다.
+     * 여기서 정하는 것은 <b>어디까지 도느냐</b>뿐이고, 컷에 안 맞는 구간은 0행을 돌려준다.
+     *
+     * @return 이력이 하나도 없으면 0 — 그러면 루프가 한 번도 안 돈다
+     */
+    private long scanCeiling(long frozenMaxHistoryId) {
+        Long ceiling = jdbcClient.sql("""
+                        SELECT COALESCE(MAX(id), 0)
+                          FROM issuance_histories
+                         WHERE id <= :maxHistoryId
+                        """)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .query(Long.class)
+                .single();
+        return ceiling == null ? 0L : ceiling;
     }
 }

@@ -3,6 +3,19 @@
 # 있는 사람과 없는 사람의 결과가 갈린다. .example 을 복사한 순간 flyway.enabled:false 로
 # 스키마가 안 생기고, spring.config.import 가 없는 storage.yml 을 찾아 컨텍스트가 아예 안 뜬다.
 spring:
+  task:
+    scheduling:
+      pool:
+        # ⚠️ **이 줄이 없으면 테스트가 운영에 없는 형상으로 돈다.** Boot 기본이 1 이라
+        #    @Scheduled 전부가 스레드 하나를 다투는데, 운영은 그 수만큼 갖고 있다.
+        #    SchedulerPoolGuard 가 기동 때 "풀 >= @Scheduled 수" 를 검사하므로 그 상태로는
+        #    배치 테스트 컨텍스트가 통째로 안 뜬다.
+        #
+        # **운영값(main 의 8)을 흉내 내지 않는다.** 그 수를 여기 또 적으면 @Scheduled 를
+        # 더할 때 고쳐야 할 자리가 하나 더 는다 — 가드가 요구하는 것은 "그 수 이상" 뿐이라
+        # 넉넉히 준다. 운영값 자체는 ResolvedBatchConfigTest 와
+        # VerificationMetricExposureTest 가 실제 파일을 읽어서 지킨다.
+        size: 16
   flyway:
     enabled: true
     locations: classpath:db/migration
