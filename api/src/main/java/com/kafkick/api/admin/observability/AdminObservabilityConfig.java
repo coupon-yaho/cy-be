@@ -39,6 +39,14 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
 })
 public class AdminObservabilityConfig {
 
+    /**
+     * instant client 빈 이름입니다. 둘 다 {@link PromQueryClient} 라 타입만으로는 고를 수 없고,
+     * 잘못 고르면 1초 폴링 경로가 archive 의 read 10초를 물어 화면이 스스로 부하가 됩니다.
+     * 이름이 곧 계약이므로 문자열을 옮겨 적지 않습니다.
+     */
+    public static final String INSTANT_CLIENT = "promQueryClient";
+    public static final String ARCHIVE_INSTANT_CLIENT = "archivePromQueryClient";
+
     @Bean
     public PromQueryClient promQueryClient(PrometheusQueryProperties properties) {
         return new PromQueryClient(prometheusRestClient(properties));
@@ -73,7 +81,7 @@ public class AdminObservabilityConfig {
      */
     @Bean
     public OverviewObservationSource promOverviewObservationSource(
-            @Qualifier("promQueryClient") PromTimeQuery instantQuery,
+            @Qualifier(INSTANT_CLIENT) PromTimeQuery instantQuery,
             PromRangeQuery rangeQuery,
             PrometheusQueryProperties properties,
             OverviewPrometheusProperties overviewProperties
@@ -131,7 +139,7 @@ public class AdminObservabilityConfig {
 
     @Bean
     public PromMetricsAssembler promMetricsAssembler(
-            @Qualifier("promQueryClient") PromQuery client,
+            @Qualifier(INSTANT_CLIENT) PromQuery client,
             TimeProvider timeProvider, PrometheusQueryProperties properties) {
         return new PromMetricsAssembler(
                 client, timeProvider, properties.staleAfter(), properties.totalBudget());
@@ -141,7 +149,7 @@ public class AdminObservabilityConfig {
     @ConditionalOnProperty(prefix = "observation.datasource", name = "enabled", havingValue = "true")
     public RunTimeseriesArchiver runTimeseriesArchiver(
             BenchmarkRunRepository runs,
-            @Qualifier("archivePromQueryClient") PromQueryClient source,
+            @Qualifier(ARCHIVE_INSTANT_CLIENT) PromQueryClient source,
             ArchiveStore store,
             @org.springframework.beans.factory.annotation.Value(
                 "${benchmark.archive.claim-lease:5m}") java.time.Duration claimLease,
