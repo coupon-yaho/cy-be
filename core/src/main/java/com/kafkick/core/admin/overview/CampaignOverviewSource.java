@@ -3,7 +3,7 @@ package com.kafkick.core.admin.overview;
 import java.time.Instant;
 import java.util.Objects;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -31,7 +31,7 @@ public record CampaignOverviewSource(
         Long couponId,
         String campaignName,
         String brandName,
-        CouponStatus status,
+        CouponRoundStatus status,
         Instant opensAt,
         Instant closesAt,
         EngineVersion engineVersion,

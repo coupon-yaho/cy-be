@@ -34,6 +34,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.http.HttpHeaders;
@@ -73,6 +74,18 @@ import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.api.support.GlobalExceptionHandler;
 
 class HttpMetricsFilterTest {
+
+    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withUserConfiguration(HttpMetricsFilterConfiguration.class)
+            .withBean(ResultClassifier.class)
+            .withBean(SimpleMeterRegistry.class)
+            .withBean(HttpMetrics.class)
+            .withBean(InFlightRegistry.class);
+
+    @Test
+    void filterConfigurationRegistersHttpMetricsFilter() {
+        contextRunner.run(context -> assertThat(context).hasSingleBean(HttpMetricsFilter.class));
+    }
 
     @Test
     void mapsTemplatesWithoutUsingActualCampaignIds() {

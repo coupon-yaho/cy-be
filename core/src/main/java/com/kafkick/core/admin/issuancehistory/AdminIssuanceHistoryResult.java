@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.Objects;
 
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /** 관리자 발급 상태 변경 이력의 페이지와 필터 모집단 요약입니다. */
 public record AdminIssuanceHistoryResult(

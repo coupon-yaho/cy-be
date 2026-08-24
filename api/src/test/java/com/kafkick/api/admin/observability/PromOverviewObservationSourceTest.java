@@ -36,7 +36,7 @@ import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.Issuanc
 import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /** Overview용 Prometheus adapter의 grouped 조회와 기술 중립 변환을 검증합니다. */
@@ -70,7 +70,7 @@ class PromOverviewObservationSourceTest {
         assertThatThrownBy(() -> source.observe(new OverviewObservationRequest(
                 SNAPSHOT,
                 List.of(new CampaignObservationTarget(
-                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT.plusNanos(1L))),
+                        101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT.plusNanos(1L))),
                 POLICY)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("stockObservedAt");
@@ -97,7 +97,7 @@ class PromOverviewObservationSourceTest {
     void preservesMissingOpenStockStatusAsMissingFlow() {
         for (SourceStatus stockStatus : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE)) {
             OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                    new CampaignObservationTarget(101L, CouponStatus.OPEN, null, stockStatus)), POLICY);
+                    new CampaignObservationTarget(101L, CouponRoundStatus.OPEN, null, stockStatus)), POLICY);
 
             OverviewObservationData data = new PromOverviewObservationSource(
                     new RecordingPromQuery(this::happyInstant),
@@ -117,9 +117,9 @@ class PromOverviewObservationSourceTest {
     @DisplayName("OPEN 재고와 O1 metric 상태 중 더 나쁜 값 없는 상태를 보존한다")
     void preservesWorseStatusBetweenStockAndFlowMetric() {
         OverviewObservationRequest pendingStockRequest = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponStatus.OPEN, null, SourceStatus.PENDING)), POLICY);
+                new CampaignObservationTarget(101L, CouponRoundStatus.OPEN, null, SourceStatus.PENDING)), POLICY);
         OverviewObservationRequest unavailableStockRequest = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponStatus.OPEN, null, SourceStatus.UNAVAILABLE)), POLICY);
+                new CampaignObservationTarget(101L, CouponRoundStatus.OPEN, null, SourceStatus.UNAVAILABLE)), POLICY);
 
         OverviewObservationData metricUnavailable = new PromOverviewObservationSource(
                 new RecordingPromQuery(this::happyInstant),
@@ -151,7 +151,7 @@ class PromOverviewObservationSourceTest {
                     ? SNAPSHOT : SNAPSHOT.minus(Duration.ofMinutes(1));
             OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
                     new CampaignObservationTarget(
-                            101L, CouponStatus.OPEN, true, expectation.getKey(), stockObservedAt)), POLICY);
+                            101L, CouponRoundStatus.OPEN, true, expectation.getKey(), stockObservedAt)), POLICY);
             OverviewObservationData data = new PromOverviewObservationSource(
                     new RecordingPromQuery(this::happyInstant),
                     new RecordingRangeQuery(query -> List.of(
@@ -188,11 +188,11 @@ class PromOverviewObservationSourceTest {
                 instant, range, Duration.ofMinutes(2), Duration.ofSeconds(10));
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
                 new CampaignObservationTarget(
-                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT),
+                        101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT),
                 new CampaignObservationTarget(
-                        102L, CouponStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT),
+                        102L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT),
                 new CampaignObservationTarget(
-                        103L, CouponStatus.CLOSED, null, SourceStatus.N_A, null)), POLICY);
+                        103L, CouponRoundStatus.CLOSED, null, SourceStatus.N_A, null)), POLICY);
 
         OverviewObservationData data = source.observe(request);
 
@@ -280,7 +280,7 @@ class PromOverviewObservationSourceTest {
         OverviewObservationRequest request = new OverviewObservationRequest(
                 nanosecondSnapshot,
                 List.of(new CampaignObservationTarget(
-                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)),
+                        101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)),
                 POLICY);
 
         OverviewObservationData data = observe(this::happyInstant, this::happyRange, request);
@@ -508,7 +508,7 @@ class PromOverviewObservationSourceTest {
                         endpointPoints(0d, 0d))));
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
                 new CampaignObservationTarget(
-                        101L, CouponStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT)), POLICY);
+                        101L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT)), POLICY);
 
         IssuanceFlowInput flow = input(new PromOverviewObservationSource(
                 instant, range, Duration.ofMinutes(2), Duration.ofSeconds(10)).observe(request), 101L);
@@ -1143,7 +1143,7 @@ class PromOverviewObservationSourceTest {
     private static OverviewObservationRequest request() {
         return new OverviewObservationRequest(SNAPSHOT, List.of(
                 new CampaignObservationTarget(
-                        101L, CouponStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)), POLICY);
+                        101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)), POLICY);
     }
 
     /** instant query를 기록하고 지정 응답 함수를 호출하는 작은 대역입니다. */

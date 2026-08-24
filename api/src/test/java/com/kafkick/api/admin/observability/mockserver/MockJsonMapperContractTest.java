@@ -107,7 +107,8 @@ class MockJsonMapperContractTest {
                                 new ErrorClass(ErrorClassKey.CLIENT_INVALID, "클라이언트 요청 오류",
                                         "4xx 중 403·409 를 뺀 나머지", true, absent(SourceStatus.N_A))),
                         observed(List.of(new TopReason(ReasonCode.INTERNAL_ERROR, 1.5)),
-                                SourceStatus.VALID)));
+                                SourceStatus.VALID)),
+                AdminMetricsResponse.SaturationPanel.draft());
     }
 
     private static AdminMetricsResponse withScope(AdminMetricsResponse response, MetricsScope scope) {
@@ -130,7 +131,8 @@ class MockJsonMapperContractTest {
                 response.dependencies(),
                 response.persistence(),
                 List.of(),
-                response.errors());
+                response.errors(),
+                response.saturation());
     }
 
     private static <T> ObservedValue<T> observed(T value, SourceStatus status) {

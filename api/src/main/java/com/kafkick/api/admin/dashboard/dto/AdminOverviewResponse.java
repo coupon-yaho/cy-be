@@ -19,7 +19,7 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot.TargetScreen;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot.TrendDirection;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 관리자 첫 화면에 표시할 운영 위험과 조치 항목을 한 시점 기준으로 조립한 HTTP 응답 초안입니다.
@@ -377,7 +377,7 @@ public record AdminOverviewResponse(
      * @param couponId 캠페인 상세 이동에 사용할 쿠폰 회차 식별자
      * @param campaignName 화면에 표시할 캠페인 이름
      * @param brandName 화면 필터와 표에 표시할 브랜드 이름
-     * @param status 캠페인 회차의 {@link CouponStatus}
+     * @param status 캠페인 회차의 {@link CouponRoundStatus}
      * @param opensAt 오픈 시각
      * @param closesAt 예정 종료 시각; 미지정이면 null
      * @param severity 운영 조치 우선순위 심각도
@@ -394,7 +394,7 @@ public record AdminOverviewResponse(
             Long couponId,
             String campaignName,
             String brandName,
-            CouponStatus status,
+            CouponRoundStatus status,
             Instant opensAt,
             Instant closesAt,
             Severity severity,

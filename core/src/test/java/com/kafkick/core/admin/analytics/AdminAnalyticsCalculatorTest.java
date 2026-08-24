@@ -22,7 +22,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CatalogSnapshot;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.DailyIssueAggregate;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.HourlyIssueAggregate;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.IssuanceStatusAggregate;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.exception.BusinessException;
 

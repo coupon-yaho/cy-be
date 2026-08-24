@@ -9,7 +9,7 @@ import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot;
 import com.kafkick.core.observation.SourceStatus;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 특정 쿠폰 캠페인의 재고·발급·대기열·보유 상태를 동일 snapshot 기준으로 반환하는 응답 초안입니다.
@@ -174,7 +174,7 @@ public record CouponMetricsResponse(
      * @param status 권위 DB의 캠페인 상태
      * @param opensAt 설정된 캠페인 오픈 시각
      */
-    public record CampaignRuntimeSummary(CouponStatus status, Instant opensAt) {
+    public record CampaignRuntimeSummary(CouponRoundStatus status, Instant opensAt) {
 
         /** 캠페인 상태가 항상 존재하는지 검증합니다. */
         public CampaignRuntimeSummary {

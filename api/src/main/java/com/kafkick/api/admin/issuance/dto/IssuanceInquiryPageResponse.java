@@ -6,7 +6,7 @@ import java.util.Objects;
 
 import com.kafkick.api.admin.issuance.IssuanceInquiryCursorCodec;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryResult;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.ReasonCode;
 
 /**

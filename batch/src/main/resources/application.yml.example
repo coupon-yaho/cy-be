@@ -12,7 +12,7 @@ spring:
 
   batch:
     jdbc:
-      initialize-schema: never   # 메타 테이블은 V2__batch_metadata.sql 이 만든다
+      initialize-schema: never   # 메타 테이블은 V11__batch_metadata.sql 이 만든다
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
@@ -36,19 +36,20 @@ spring:
       pool:
         size: ${SCHEDULER_POOL_SIZE:4}
 
-  # 배치는 JPA 를 쓰지 않는다 — 엔티티 0개, JDBC 와 Spring Batch 로만 돈다(build.gradle).
-  # TODO(엔티티 도입 담당): 엔티티가 생기면 이 제외와 아래 storage.jpa.auditing 스위치를 다시
-  #   판단한다. 배치가 계속 JDBC 로만 돈다면 그대로 두는 게 맞다. 판단 시점은
-  #   BatchJpaFreeAssumptionTest 가 깨지는 때다 — 주석은 아무도 안 읽어서 테스트로 묶어 뒀다.
-  # storage 를 얹으면 JPA 자동설정이 딸려 오는데, 관측 풀을 켜서 storage 가 DataSource 를 직접
-  # 정의하는 순간 EntityManagerFactory 를 못 만들어 기동이 멈춘다. 쓰지 않는 층을 통째로 뺀다.
+  # ⚠️ JPA 자동설정을 빼지 않는다. 예전에는 뺐고 그 근거는 "엔티티가 0개" 였는데, CY-245 계보가
+  #    들어오면서 그 전제가 사라졌다. storage 의 @EnableJpaRepositories 는 자동설정이 아니라
+  #    exclude 로 막히지 않으므로, 제외를 남겨 두면 리포지토리는 만들어지는데
+  #    EntityManagerFactory 가 없어 기동이 죽는다(실측 — batch 컨텍스트 테스트 9개가 그렇게 깨졌다).
+  #
+  #    범위는 갈라져 있다. 대용량 검증·리플레이는 여전히 JDBC 로 간다(300만 행을 영속성 컨텍스트에
+  #    올리지 않는다는 결정은 그대로다). 회차 생성·상태 전이·만료 같은 도메인 경로만 공용 storage
+  #    JPA 어댑터를 탄다. docs/11-batch-implementation.md 의 2장이 그 경계를 적는다.
   autoconfigure:
     exclude:
-      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
-      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
       # infra:redis 를 문 것은 명령 레이턴시 계측 때문인데(build.gradle), 그 모듈의 imports 에는
       # 런타임 설정 CAS 어댑터도 함께 들어 있다. batch 는 RuntimeConfigStore 를 주입받는 곳이
-      # 없고 V1 에는 Redis 자체가 없다 — 쓰지 않는 층을 통째로 뺀다(위 JPA 와 같은 원칙).
+      # 없고 V1 에는 Redis 자체가 없다 — 쓰지 않는 층을 통째로 뺀다. JPA 는 이제 쓰는 층이라
+      # 이 목록에 없다(위 주석 참조). 여기 남은 것은 정말로 안 쓰는 하나뿐이다.
       #
       # ⚠️ 빼지 않으면 쓰이지도 않는 RedisRuntimeConfigStore 빈이 생긴다. 지금은 생성자가 연결을
       #    하지 않아 조용하지만, runtimeConfigStore 에 @ConditionalOnBean 가드가 없어서 나중에
@@ -157,14 +158,11 @@ observation:
     # 시간이 다르므로, 경보가 시끄러우면 여기서 조인다.
     consecutive-failure-alarm: ${DOMAIN_GAUGE_FAILURE_ALARM:3}
 
-storage:
-  # TODO(엔티티 도입 담당): 위 autoconfigure.exclude 와 한 쌍이다. 함께 판단한다.
-  # 배치는 JPA 엔티티를 만들지 않는다(build.gradle). storage 의 @EnableJpaAuditing 을 그대로
-  # 물려받으면 엔티티가 0개라 "JPA metamodel must not be empty" 로 기동이 멈춘다 — 관측 풀을 켜서
-  # storage 가 DataSource 를 직접 정의하는 순간 실제로 터진다.
-  jpa:
-    auditing:
-      enabled: false
+# ⚠️ storage.jpa.auditing.enabled 를 끄지 않는다. 위 자동설정 제외와 한 쌍이었다 — 엔티티가
+#    0개일 때 @EnableJpaAuditing 이 "JPA metamodel must not be empty" 로 기동을 세웠기 때문이다.
+#    이제 엔티티가 있고, 그 엔티티들이 @CreatedDate 와 AuditingEntityListener 를 쓴다. JPA 만 켜고
+#    auditing 을 끄면 기동은 되는데 쓰기 시점에 created_at 이 비어 실패한다 — 기동 로그에는
+#    아무것도 안 남는다.
 
 logging:
   level:
@@ -172,3 +170,19 @@ logging:
   pattern:
     # runId 를 MDC 에 심어 한 run 의 모든 Step 로그를 같은 키로 묶는다.
     console: "%d{HH:mm:ss.SSS} %-5level [%X{runId:-}] %logger{36} - %msg%n"
+
+coupon:
+  idempotency:
+    wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
+    poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}
+    stale-after: ${COUPON_IDEMPOTENCY_STALE_AFTER:30s}
+
+  expiration:
+    cron: "${COUPON_EXPIRATION_CRON:0 * * * * *}"
+    zone: ${COUPON_EXPIRATION_ZONE:UTC}
+    chunk-size: ${COUPON_EXPIRATION_CHUNK_SIZE:500}
+    transaction-size: ${COUPON_EXPIRATION_TRANSACTION_SIZE:100}
+
+  round-generation:
+    schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-days: ${COUPON_GENERATION_MAX_DAYS:30}

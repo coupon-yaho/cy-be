@@ -3,7 +3,7 @@ package com.kafkick.api.admin.campaign.dto;
 import java.time.Instant;
 import java.util.List;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /** 캠페인 목록의 과거 방향 cursor 응답입니다. */
 public record CampaignListResponse(List<CampaignSummary> items, String nextBeforeCursor, boolean hasOlder) {
@@ -19,6 +19,6 @@ public record CampaignListResponse(List<CampaignSummary> items, String nextBefor
      * @param openAt 예정 또는 실제 오픈 시각
      * @param closeAt 예정 또는 실제 마감 시각
      */
-    public record CampaignSummary(Long id, Long brandId, String name, CouponStatus status,
+    public record CampaignSummary(Long id, Long brandId, String name, CouponRoundStatus status,
                                   long totalQuantity, long activeCount, Instant openAt, Instant closeAt) { }
 }

@@ -8,7 +8,7 @@ import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.Observation;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 지정 기간의 브랜드 발급 추이·히트맵·현재 상태 분포를 독립 관측값으로 반환합니다. */

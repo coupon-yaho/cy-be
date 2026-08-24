@@ -15,7 +15,6 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerMapping;
 
@@ -28,7 +27,6 @@ import com.kafkick.core.observation.RequestAttributeKeys;
  * <p>다섯 업무 URI 그룹에 속하지 않는 404·스캔 요청은 결과·지연 모집단에서 의도적으로
  * 제외한다. UNKNOWN을 추가하면 업무 트래픽과 인터넷 잡음이 한 시계열에 섞이기 때문이다.
  */
-@Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)
 public final class HttpMetricsFilter extends OncePerRequestFilter {
 

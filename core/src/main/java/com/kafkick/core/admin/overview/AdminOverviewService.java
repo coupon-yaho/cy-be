@@ -30,7 +30,7 @@ import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
@@ -190,10 +190,10 @@ public class AdminOverviewService {
     private static CampaignObservationTarget observationTarget(CampaignOverviewSource campaign) {
         Boolean stockAvailable = null;
         SourceStatus stockStatus = SourceStatus.N_A;
-        if (campaign.status() == CouponStatus.OPEN) {
+        if (campaign.status() == CouponRoundStatus.OPEN) {
             stockStatus = campaign.stockStatus();
         }
-        if (campaign.status() == CouponStatus.OPEN && stockStatus.carriesValue()) {
+        if (campaign.status() == CouponRoundStatus.OPEN && stockStatus.carriesValue()) {
             // 정확히 소진된 activeCount == totalQuantity 경계를 재고 없음으로 판정합니다.
             stockAvailable = campaign.activeCount() < campaign.totalQuantity();
         }

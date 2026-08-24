@@ -13,17 +13,18 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * JPA 를 쓰는 모듈만 켠다.
  *
- * <p>{@code @EnableJpaAuditing} 은 엔티티가 0개면 <b>JPA metamodel must not be empty</b> 로
- * <b>기동 자체를 세운다</b>. batch 는 엔티티를 만들지 않고 JDBC 와 Spring Batch 로만 도는데,
- * storage 를 얹었다는 이유만으로 이 설정을 물려받는다. 그래서 기본값은 켜 두되(api 는 그대로)
- * JPA 를 안 쓰는 모듈이 끌 수 있게 스위치를 둔다.
+ * <p><b>{@code @EnableJpaAuditing}</b> 은 엔티티가 0개면 <b>JPA metamodel must not be empty</b> 로
+ * <b>기동 자체를 세운다</b>. 그래서 JPA 를 안 쓰는 모듈이 끌 수 있게 스위치를 뒀다.
  *
- * <p>TODO(엔티티 도입 담당): 지금 저장소에는 {@code @Entity} 가 하나도 없다
- * ({@code BaseEntity}·{@code UpdatableEntity} 는 {@code @MappedSuperclass} 라 관리 타입으로
- * 세어지지 않는다). 첫 엔티티가 생기면 <b>api 는 아무 변화 없이</b> 그대로 돌지만, batch 는
- * 그때 다시 판단해야 한다 — 배치가 여전히 JPA 를 안 쓴다면 이 스위치를 그대로 두고, 쓰기
- * 시작한다면 batch 의 {@code storage.jpa.auditing.enabled} 와 JPA 자동설정 제외를 함께 걷는다.
- * 그 시점은 {@code BatchJpaFreeAssumptionTest} 가 알려 준다.
+ * <p><b>지금은 아무도 끄지 않는다.</b> 이 스위치의 유일한 사용처가 batch 였는데, CY-245 계보가
+ * 들어오면서 엔티티가 생겼고 batch 의 만료 경로가 storage 의 JPA 어댑터를 탄다. 엔티티가
+ * 있으므로 metamodel 이 비지 않고, 그 엔티티들이 {@code @CreatedDate} 와
+ * {@code AuditingEntityListener} 를 쓰므로 auditing 을 끄면 <b>기동은 되고 쓰기만 실패한다</b>.
+ *
+ * <p>스위치를 지우지 않고 남겨 두는 이유는, 엔티티를 하나도 안 쓰는 모듈이 나중에 다시 생길 수
+ * 있어서다. 끄려는 사람은 그 모듈의 {@code spring.autoconfigure.exclude} 와 <b>함께</b> 판단할 것
+ * — 하나만 걷으면 증상이 서로 다른 자리에서 나온다.
+ * {@code DomainGaugeConfigContractTest} 가 batch 쪽에서 그 쌍을 지킨다.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(value = JpaAuditConfig.AUDITING_ENABLED_PROPERTY, matchIfMissing = true)
@@ -37,9 +38,9 @@ public class JpaAuditConfig {
      */
     public static final String AUDITING_ENABLED_PROPERTY = "storage.jpa.auditing.enabled";
 
-    /** 기본 CurrentDateTimeProvider 는 LocalDateTime.now() 를 직접 호출해 Clock 을 우회한다. */
+    /** 기본 CurrentDateTimeProvider 는 현재 시각을 직접 호출하므로 주입된 UTC Clock 을 사용한다. */
     @Bean
     public DateTimeProvider auditingDateTimeProvider(TimeProvider timeProvider) {
-        return () -> Optional.of(timeProvider.now());
+        return () -> Optional.of(timeProvider.instant());
     }
 }

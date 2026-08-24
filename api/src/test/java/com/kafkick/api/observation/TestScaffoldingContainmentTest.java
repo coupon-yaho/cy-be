@@ -32,10 +32,12 @@ class TestScaffoldingContainmentTest {
     private static final String OBSERVATION_PACKAGE = "src/main/java/com/kafkick/api/observation";
 
     /**
-     * main 에 있으면서 main 이 참조하지 않아도 되는 클래스. <b>이름 계약</b>이 존재 이유인
-     * 것들이다 — 다른 티켓·다른 사람이 문자열 대신 참조하라고 두는 상수 모음.
+     * main 에 있으면서 다른 main Java 파일이 직접 참조하지 않아도 되는 클래스. 이름 계약을
+     * 제공하거나 Spring이 컴포넌트 스캔으로 발견하는 진입점이다.
      */
-    private static final Set<String> NAME_CONTRACTS = Set.of("MeterNames");
+    private static final Set<String> MAIN_REFERENCE_EXEMPTIONS = Set.of(
+            "MeterNames",
+            "HttpMetricsFilterConfiguration");
 
     /**
      * 테스트 소스 검사는 OBS-3 소유 파일에만 건다. 저장소 전체로 넓히면 남의 티켓 테스트가
@@ -59,7 +61,7 @@ class TestScaffoldingContainmentTest {
 
         for (Path candidate : javaFilesUnder(module.resolve(OBSERVATION_PACKAGE))) {
             String name = fileName(candidate);
-            if (NAME_CONTRACTS.contains(name)) {
+            if (MAIN_REFERENCE_EXEMPTIONS.contains(name)) {
                 continue;
             }
             assertThat(isReferencedByOtherMainFile(name, candidate, mainFiles))

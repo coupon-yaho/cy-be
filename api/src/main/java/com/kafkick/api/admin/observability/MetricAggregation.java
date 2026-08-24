@@ -26,7 +26,12 @@ import com.kafkick.core.observation.DomainMeterNames;
  * in-flight               sum     전역 동시 처리 수
  * DB 풀 active/pending    sum     절대 개수
  * DB 풀 사용률(%)         max     sum 하면 200% 가 나온다
+ * tomcat busy/정원        sum     절대 스레드 수
+ * tomcat 사용률(%)        max     위 둘과 같은 이유
  * CPU · heap              max     가장 위험한 인스턴스
+ * heap 사용률(%)          max     영역 합산은 인스턴스 안에서 먼저 한다
+ * up                      sum     살아 있는 인스턴스 수
+ * 대기열 길이             단일     batch 한 곳에서만 나온다
  * Kafka lag               sum     파티션 합
  * 정합성 gap              단일     batch 한 곳에서만 나온다
  * </pre>
@@ -72,6 +77,31 @@ public enum MetricAggregation {
     public static final String HIKARI_PENDING = promName(MeterNames.HIKARI_PENDING);
     public static final String CPU_USAGE = promName(MeterNames.CPU_USAGE);
     public static final String JVM_MEMORY_USED = promName(MeterNames.JVM_MEMORY_USED) + "_bytes";
+    public static final String HIKARI_MAX = promName(MeterNames.HIKARI_MAX);
+    public static final String JVM_MEMORY_MAX = promName(MeterNames.JVM_MEMORY_MAX) + "_bytes";
+
+    /**
+     * Tomcat worker 스레드. <b>Micrometer 가 이름 뒤에 base unit(threads)을 붙인다</b> — 실측한
+     * 이름이 {@code tomcat_threads_busy_threads} 여서 {@link #promName(String)} 만으로는 나오지
+     * 않는다. 접미사를 빼면 예외 없이 표본이 0 개고 두 행이 영원히 빈다.
+     *
+     * <p>{@code server.tomcat.mbeanregistry.enabled=true} 일 때만 등록된다. 그 스위치는
+     * {@code observation.yml} 이 쥐고 있고, 둘을 잇는 것은 {@code TomcatMeterSwitchContractTest} 다.
+     */
+    public static final String TOMCAT_BUSY = promName(MeterNames.TOMCAT_BUSY) + "_threads";
+    public static final String TOMCAT_MAX = promName(MeterNames.TOMCAT_MAX) + "_threads";
+
+    /**
+     * 스크레이프 대상이 살아 있는지. 미터가 아니라 Prometheus 가 직접 만드는 시계열이라 미터
+     * 이름 상수가 없다. 값을 더하면 살아 있는 인스턴스 수가 된다 — 죽은 인스턴스의 마지막
+     * 값이 남아 SUM 을 부풀리는 것을 화면이 "활성 n대" 로 드러내는 근거다.
+     */
+    public static final String UP = "up";
+
+    public static final String QUEUE_LENGTH = promName(DomainMeterNames.QUEUE_LENGTH);
+    public static final String QUEUE_LENGTH_STATE = promName(DomainMeterNames.QUEUE_LENGTH_STATE);
+    public static final String OBSERVED_COUPON_ID = promName(DomainMeterNames.OBSERVED_COUPON_ID);
+
     public static final String CONSISTENCY_GAP = promName(DomainMeterNames.CONSISTENCY_GAP);
     public static final String CONSISTENCY_GAP_STATE = promName(DomainMeterNames.CONSISTENCY_GAP_STATE);
     public static final String OVER_ISSUED = promName(DomainMeterNames.OVER_ISSUED);
@@ -101,6 +131,28 @@ public enum MetricAggregation {
      * Prometheus 에 존재하지 않는다. 규칙표에서 빠지면 패널이 sum 을 골라 200% 를 그린다.
      */
     public static final String HIKARI_POOL_UTILIZATION = "hikaricp.connections.utilization";
+
+    /**
+     * Tomcat worker 사용률. {@link #TOMCAT_BUSY} 를 {@link #TOMCAT_MAX} 로 나눈 파생값이라 이름이
+     * Prometheus 에 존재하지 않는다. 나눗셈은 <b>인스턴스 안에서</b> 먼저 하고 그 결과들을 이
+     * 규칙으로 줄인다 — 인스턴스를 먼저 합치면 정원이 다른 대가 섞여 사용률이 희석된다.
+     */
+    public static final String TOMCAT_THREAD_UTILIZATION = "tomcat.threads.utilization";
+
+    /**
+     * 힙 사용률. {@link #JVM_MEMORY_USED} 의 {@code area="heap"} 영역들을 인스턴스 안에서 더해
+     * {@link #JVM_MEMORY_MAX} 로 나눈 파생값이다.
+     *
+     * <p><b>생표본에 MAX 를 그대로 걸면 안 된다.</b> 이 미터는 {@code area}·{@code id} 로 여덟
+     * 갈래라 최댓값이 heap 이 아니라 Metaspace(nonheap)로 잡힌다(실측 96MB).
+     */
+    public static final String JVM_HEAP_UTILIZATION = "jvm.memory.heap.utilization";
+
+    /**
+     * 인스턴스 하나가 쥐고 있는 in-flight 최댓값. {@link #HTTP_IN_FLIGHT} 와 <b>같은 미터의 다른
+     * 축약</b>이라 이름이 따로 필요하다 — 전역 합만 보면 한 대에 쏠린 것을 못 본다.
+     */
+    public static final String HTTP_IN_FLIGHT_INSTANCE_MAX = "app.http.inflight.instance.max";
 
     // TODO(OBS-17): Kafka persist lag 미터가 열리면 SUM(파티션 합)으로 이 표에 추가한다.
     //   지금 이름을 지어 넣으면 등록하는 쪽과 어긋나도 아무도 모른다 — 미터가 생긴 뒤에 넣는다.
@@ -171,10 +223,21 @@ public enum MetricAggregation {
         table.put(HTTP_LATENCY_SECONDS, MAX);
         table.put(HTTP_RESULT_TOTAL, SUM);
         table.put(HTTP_IN_FLIGHT, SUM);
+        table.put(HTTP_IN_FLIGHT_INSTANCE_MAX, MAX);
         table.put(ISSUANCE_OUTCOME_TOTAL, SUM);
         table.put(HIKARI_ACTIVE, SUM);
         table.put(HIKARI_PENDING, SUM);
+        table.put(HIKARI_MAX, SUM);
         table.put(HIKARI_POOL_UTILIZATION, MAX);
+        table.put(TOMCAT_BUSY, SUM);
+        table.put(TOMCAT_MAX, SUM);
+        table.put(TOMCAT_THREAD_UTILIZATION, MAX);
+        table.put(JVM_MEMORY_MAX, MAX);
+        table.put(JVM_HEAP_UTILIZATION, MAX);
+        table.put(UP, SUM);
+        table.put(QUEUE_LENGTH, SINGLE);
+        table.put(QUEUE_LENGTH_STATE, SINGLE);
+        table.put(OBSERVED_COUPON_ID, SINGLE);
         table.put(CPU_USAGE, MAX);
         table.put(JVM_MEMORY_USED, MAX);
         table.put(CONSISTENCY_GAP, SINGLE);

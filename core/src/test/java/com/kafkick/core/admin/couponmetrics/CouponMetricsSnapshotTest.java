@@ -8,7 +8,7 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 class CouponMetricsSnapshotTest {
@@ -40,7 +40,7 @@ class CouponMetricsSnapshotTest {
                 issuanceProgress,
                 observed(new CouponMetricsSnapshot.RateSummary(1.0, 1.0)),
                 new CouponMetricsSnapshot.QueueSummary(count, observed(Duration.ZERO)),
-                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponStatus.OPEN, OBSERVED_AT),
+                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponRoundStatus.OPEN, OBSERVED_AT),
                 usageRatio,
                 observed(new CouponMetricsSnapshot.IssuanceStatusCounts(1L, 0L, 0L, 0L)),
                 observed(new CouponMetricsSnapshot.TransitionRateSummary(1.0, 1.0, 1.0, 1.0)));

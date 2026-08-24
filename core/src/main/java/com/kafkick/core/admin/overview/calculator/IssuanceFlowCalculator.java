@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
@@ -94,7 +94,7 @@ public class IssuanceFlowCalculator {
         }
         Duration duration = Duration.between(input.conditionStartedAt(), input.windowEnd());
         // 수요와 재고가 있는데 성공 0건이 임계시간 이상 지속된 경우에만 중단으로 판정합니다.
-        if (input.campaignStatus() == CouponStatus.OPEN && input.completedCount() == 0d
+        if (input.campaignStatus() == CouponRoundStatus.OPEN && input.completedCount() == 0d
                 && !duration.isNegative() && duration.compareTo(policy.issuanceStoppedAfter()) >= 0) {
             return AdminOverviewSnapshot.IssuanceFlowState.STOPPED;
         }
@@ -171,7 +171,7 @@ public class IssuanceFlowCalculator {
      * @param sourceStatus 원천 관측 상태
      * @param observedAt 원천 실제 관측 시각; 값 없는 상태에서는 null
      */
-    public record IssuanceFlowInput(Long couponId, CouponStatus campaignStatus, Boolean stockAvailable,
+    public record IssuanceFlowInput(Long couponId, CouponRoundStatus campaignStatus, Boolean stockAvailable,
                                     Instant windowStart, Instant windowEnd,
                                     Instant trendWindowStart, Instant trendWindowEnd,
                                     Double attemptedCount,
@@ -227,7 +227,7 @@ public class IssuanceFlowCalculator {
                         && !lastCompletedAt.isBefore(windowStart) && !lastCompletedAt.isAfter(windowEnd)) {
                     throw new IllegalArgumentException("무완료 구간의 lastCompletedAt은 관측 구간 안에 있을 수 없습니다.");
                 }
-                if (campaignStatus == CouponStatus.OPEN && stockAvailable && attemptedCount > 0d
+                if (campaignStatus == CouponRoundStatus.OPEN && stockAvailable && attemptedCount > 0d
                         && completedCount == 0d && lastCompletedAt != null
                         && lastCompletedAt.isAfter(conditionStartedAt)) {
                     throw new IllegalArgumentException("lastCompletedAt은 무발급 conditionStartedAt 이후일 수 없습니다.");

@@ -2,7 +2,7 @@ package com.kafkick.api.admin.campaign.dto;
 
 import java.time.Instant;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
  * 감사 대상인 캠페인 상태 전환의 결과입니다.
@@ -13,5 +13,5 @@ import com.kafkick.core.coupon.CouponStatus;
  * @param updatedAt 상태 전환이 확정된 시각
  */
 public record CampaignStatusTransitionResponse(
-        Long campaignId, CouponStatus status, Long updatedBy, Instant updatedAt) {
+        Long campaignId, CouponRoundStatus status, Long updatedBy, Instant updatedAt) {
 }

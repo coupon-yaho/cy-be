@@ -10,7 +10,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -243,7 +243,7 @@ class AdminOverviewCoreContractTest {
 
     private AdminOverviewSnapshot.CampaignOverview campaign(Long couponId) {
         return new AdminOverviewSnapshot.CampaignOverview(
-                1, couponId, "캠페인", "브랜드", CouponStatus.OPEN, FROM, TO, Severity.NONE,
+                1, couponId, "캠페인", "브랜드", CouponRoundStatus.OPEN, FROM, TO, Severity.NONE,
                 null, null, null, AdminOverviewSnapshot.CustomerImpact.NONE, "영향 없음", null);
     }
 }
