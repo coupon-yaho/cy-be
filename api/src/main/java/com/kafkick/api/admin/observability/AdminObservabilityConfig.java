@@ -35,14 +35,22 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
 @EnableConfigurationProperties({
         PrometheusQueryProperties.class,
         PrometheusArchiveProperties.class,
+        PrometheusSeriesProperties.class,
         OverviewPrometheusProperties.class
 })
 public class AdminObservabilityConfig {
 
     /**
+     * range client 빈 이름입니다. {@link PromRangeQuery} 구현이 둘이라 타입만으로는 고를 수 없고,
+     * 잘못 고르면 {@code /metrics/series} 가 1초 폴링 타임아웃을 물거나 Overview 추세가 series
+     * 예산을 물게 됩니다. 이름이 곧 계약이므로 문자열을 옮겨 적지 않습니다.
+     */
+    public static final String OVERVIEW_RANGE_CLIENT = "promRangeQueryClient";
+    public static final String SERIES_RANGE_CLIENT = "seriesPromRangeQueryClient";
+
+    /**
      * instant client 빈 이름입니다. 둘 다 {@link PromQueryClient} 라 타입만으로는 고를 수 없고,
      * 잘못 고르면 1초 폴링 경로가 archive 의 read 10초를 물어 화면이 스스로 부하가 됩니다.
-     * 이름이 곧 계약이므로 문자열을 옮겨 적지 않습니다.
      */
     public static final String INSTANT_CLIENT = "promQueryClient";
     public static final String ARCHIVE_INSTANT_CLIENT = "archivePromQueryClient";
@@ -82,7 +90,7 @@ public class AdminObservabilityConfig {
     @Bean
     public OverviewObservationSource promOverviewObservationSource(
             @Qualifier(INSTANT_CLIENT) PromTimeQuery instantQuery,
-            PromRangeQuery rangeQuery,
+            @Qualifier(OVERVIEW_RANGE_CLIENT) PromRangeQuery rangeQuery,
             PrometheusQueryProperties properties,
             OverviewPrometheusProperties overviewProperties
     ) {
@@ -135,6 +143,39 @@ public class AdminObservabilityConfig {
                 .baseUrl(queryProperties.baseUrl())
                 .requestFactory(requestFactory)
                 .build());
+    }
+
+    /**
+     * {@code /metrics/series} 전용 range client 를 등록합니다.
+     *
+     * <p><b>{@code promRangeQueryClient} 와 RestClient 를 공유하지 않습니다.</b> 저쪽은 1초 폴링
+     * 예산의 connect 100ms · read 300ms 를 물고 있어 range 조회에는 짧습니다. 여기서 전용
+     * 타임아웃을 물려야 이 경로가 느려도 {@code /metrics} 가 영향을 받지 않습니다.</p>
+     *
+     * @param queryProperties Prometheus 주소
+     * @param seriesProperties series 전용 타임아웃과 평가점 상한
+     * @return series 전용 range client
+     */
+    @Bean
+    public PromRangeQueryClient seriesPromRangeQueryClient(
+            PrometheusQueryProperties queryProperties, PrometheusSeriesProperties seriesProperties) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(seriesProperties.connectTimeout());
+        requestFactory.setReadTimeout(seriesProperties.readTimeout());
+        return new PromRangeQueryClient(
+                RestClient.builder()
+                        .baseUrl(queryProperties.baseUrl())
+                        .requestFactory(requestFactory)
+                        .build(),
+                seriesProperties.maxRange(),
+                seriesProperties.maxPoints());
+    }
+
+    @Bean
+    public PromSeriesAssembler promSeriesAssembler(
+            @Qualifier(SERIES_RANGE_CLIENT) PromRangeQuery rangeQuery,
+            TimeProvider timeProvider, PrometheusSeriesProperties seriesProperties) {
+        return new PromSeriesAssembler(rangeQuery, timeProvider, seriesProperties);
     }
 
     @Bean
