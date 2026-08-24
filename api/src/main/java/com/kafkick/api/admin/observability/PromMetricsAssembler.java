@@ -4,8 +4,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalDouble;
@@ -26,7 +28,15 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPerce
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.InFlightSummary;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.PersistenceLagSummary;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.QueueGateMode;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.QueueMetric;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.QueueZone;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.QueueZoneSummary;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ResourceRow;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ResourceRowSpec;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.SaturationPanel;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TopReason;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficMetrics;
@@ -47,7 +57,7 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * Prometheus 표본을 {@link AdminMetricsResponse} 한 장으로 조립합니다.
  *
- * <p>질의는 셀렉터로 묶어 다섯 번만 보냅니다. 지표마다 한 번씩 부르면 화면의 1 초 폴링이
+ * <p>질의는 셀렉터로 묶어 여섯 번만 보냅니다. 지표마다 한 번씩 부르면 화면의 1 초 폴링이
  * Prometheus 를 초당 수십 번 두드립니다.</p>
  *
  * <p><b>원천은 서로 독립적으로 죽습니다.</b> 질의 실패든 표본 이상이든 예외를 밖으로 올리지 않고
@@ -70,6 +80,25 @@ public class PromMetricsAssembler {
     private static final String TAG_OUTCOME = OverviewPrometheusContract.OUTCOME;
     private static final String TAG_QUANTILE = "quantile";
     private static final String OUTCOME_SUCCESS = "success";
+
+    /**
+     * 자원 행이 볼 인스턴스. <b>batch 도 같은 미터를 냅니다</b> — CPU · heap · HikariCP 를 함께
+     * 스크레이프하고 있어(실측) 라벨로 자르지 않으면 화면의 '자원 포화' 에 관측기 자신의 수치가
+     * 섞입니다. 특히 DB 풀은 batch 의 관측 전용 2 커넥션 풀이 더해져 사용률이 조용히 틀립니다.
+     */
+    private static final String TAG_JOB = "job";
+    private static final String JOB_API = "api";
+    private static final String TAG_INSTANCE = "instance";
+
+    /** 관측 전용 풀. 발급 경로 자원이 아니라 관측기 자신의 커넥션이다. */
+    private static final String TAG_POOL = "pool";
+    private static final String POOL_OBSERVATION = "obs-pool";
+
+    private static final String TAG_AREA = "area";
+    private static final String AREA_HEAP = "heap";
+
+    /** 사용률 소수 자릿수. 화면이 그대로 {@code %} 로 그린다. */
+    private static final double PERCENT_SCALE = 10d;
 
     /**
      * LIVE 평가 라벨. batch 는 부하 중 추세를 보는 이 값들에만 이 라벨을 답니다
@@ -107,7 +136,7 @@ public class PromMetricsAssembler {
     public AdminMetricsResponse assemble(MetricsQuery query) {
         MetricsWindow window = query.window();
 
-        // 응답 한 장의 예산이다. 질의별 타임아웃만 두면 최악의 경우 5 × (connect + read) 가 걸려
+        // 응답 한 장의 예산이다. 질의별 타임아웃만 두면 최악의 경우 6 × (connect + read) 가 걸려
         // 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로 부하가 된다.
         Deadline deadline = Deadline.startingNow(totalBudget);
 
@@ -117,20 +146,29 @@ public class PromMetricsAssembler {
         QueryResult latency = run(latencyQuery(), deadline);
         QueryResult results = run(resultRateQuery(window), deadline);
         QueryResult httpAge = run(httpFreshnessQuery(), deadline);
-        // 마지막이다. 실패 원인 표는 다른 값들이 다 나온 뒤에 채워도 되는 유일한 값이라,
-        // 예산이 모자랄 때 이것부터 잘린다.
+        // 아래 둘은 다른 값들이 다 나온 뒤에 채워도 되므로 뒤에 둔다. 예산이 모자라면
+        // 이 둘부터 잘리고 정합성·지연·트래픽은 남는다.
+        //
+        // 자원·큐가 먼저다. 잘렸을 때 잃는 것이 더 크기 때문이다 — 이 질의가 빠지면 자원 6행 ·
+        // in-flight · 큐 3영역이 통째로 UNAVAILABLE 이 되지만, 실패 원인 질의가 빠져도 실패
+        // 분류 표는 살아 있다(그쪽 분자는 결과 rate 질의에서 나온다). 마지막 자리는 잃는 것이
+        // 가장 적은 질의의 것이다.
+        QueryResult saturation = run(saturationQuery(), deadline);
         QueryResult failureReasons =
                 run(OverviewPrometheusContract.failureReasonRates(window.duration()), deadline);
 
-        Instant evaluatedAt = evaluatedAt(latency, results, httpAge, consistency)
+        Instant evaluatedAt = evaluatedAt(latency, results, httpAge, consistency, saturation)
                 .orElseGet(timeProvider::instant);
         Freshness http = httpFreshness(httpAge, evaluatedAt);
         Freshness domain = domainFreshness(consistency, evaluatedAt);
+        Freshness stock = collectFreshness(consistency, DomainMeterNames.PATH_STOCK, evaluatedAt);
 
         // 분모는 한 번만 만들어 트래픽과 실패율이 나눠 쓴다. 각자 만들면 같은 스냅샷 안에서
         // 분자와 분모가 다른 시점을 가리킬 수 있다.
         ObservedValue<Double> attempts =
                 rate(results, inGroup(UriGroup.ISSUE), http, SourceStatus.NO_TRAFFIC);
+        // 처리량도 한 번만 만든다. 큐 패널의 '입장 처리' 가 이 안의 값을 그대로 다시 쓴다.
+        TrafficMetrics traffic = traffic(attempts, results, http);
 
         return new AdminMetricsResponse(
                 // 예산에 얼마나 근접했는지가 이 값으로만 보인다. 잘려서 UNAVAILABLE 이 나오기
@@ -140,12 +178,13 @@ public class PromMetricsAssembler {
                 evaluatedAt,
                 window,
                 consistency(consistency, domain, query),
-                traffic(attempts, results, http),
+                traffic,
                 latency(latency, http),
                 dependencies(),
                 notWiredYet(),
                 List.of(),
-                errors(attempts, results, http, failureReasons));
+                errors(attempts, results, http, failureReasons),
+                saturation(saturation, http, stock, traffic, query));
     }
 
     // ── 질의 ────────────────────────────────────────────────────────────────────
@@ -175,6 +214,35 @@ public class PromMetricsAssembler {
         return "max(time() - timestamp({__name__=~\""
                 + MetricAggregation.HTTP_RESULT_TOTAL + "|"
                 + MetricAggregation.HTTP_LATENCY_SECONDS + "\"}))";
+    }
+
+    /**
+     * 자원 6행 · in-flight · 큐가 쓰는 표본을 한 번에 받습니다.
+     *
+     * <p><b>앞쪽 셀렉터에만 {@code job="api"} 를 겁니다.</b> batch 도 CPU · heap · HikariCP 를
+     * 내므로(실측) 라벨이 없으면 관측기 자신의 수치가 발급 경로 자원 행에 섞입니다. 반대로 큐
+     * 길이는 batch 가 유일한 원천이라 그 라벨을 걸면 표본이 통째로 사라집니다 — 그래서 두
+     * 셀렉터를 {@code or} 로 합칩니다.</p>
+     *
+     * <p>{@code up} 은 미터가 아니라 Prometheus 가 만드는 시계열이지만 같은 셀렉터로 함께
+     * 옵니다. 값을 더하면 살아 있는 인스턴스 수가 됩니다.</p>
+     */
+    private static String saturationQuery() {
+        return "{__name__=~\"" + String.join("|",
+                MetricAggregation.CPU_USAGE,
+                MetricAggregation.JVM_MEMORY_USED,
+                MetricAggregation.JVM_MEMORY_MAX,
+                MetricAggregation.HIKARI_ACTIVE,
+                MetricAggregation.HIKARI_PENDING,
+                MetricAggregation.HIKARI_MAX,
+                MetricAggregation.TOMCAT_BUSY,
+                MetricAggregation.TOMCAT_MAX,
+                MetricAggregation.HTTP_IN_FLIGHT,
+                MetricAggregation.UP) + "\"," + TAG_JOB + "=\"" + JOB_API + "\"}"
+                + " or {__name__=~\"" + String.join("|",
+                MetricAggregation.QUEUE_LENGTH,
+                MetricAggregation.QUEUE_LENGTH_STATE,
+                MetricAggregation.OBSERVED_COUPON_ID) + "\"}";
     }
 
     private static String consistencyQuery() {
@@ -298,6 +366,21 @@ public class PromMetricsAssembler {
     }
 
     private Freshness domainFreshness(QueryResult samples, Instant evaluatedAt) {
+        return collectFreshness(samples, DomainMeterNames.PATH_CONSISTENCY, evaluatedAt);
+    }
+
+    /**
+     * 수집 경로 하나의 신선도입니다.
+     *
+     * <p>경로마다 주기가 다릅니다(재고 1초 · 정합성 30초). 한 경로의 시각으로 다른 경로를
+     * 판정하면 느린 쪽이 늘 STALE 이거나 빠른 쪽이 늘 신선해 보입니다.</p>
+     *
+     * @param samples 수집 성공 시각 미터를 담고 있는 질의 결과
+     * @param collectPath 수집 경로 라벨 값
+     * @param evaluatedAt 응답 기준 시각
+     * @return 그 경로의 관측 시각과 낡음 여부
+     */
+    private Freshness collectFreshness(QueryResult samples, String collectPath, Instant evaluatedAt) {
         if (samples.unavailable()) {
             return Freshness.querySourceDown();
         }
@@ -305,8 +388,7 @@ public class PromMetricsAssembler {
             OptionalDouble lastSuccessEpoch = reduceOrUnknown(
                     MetricAggregation.COLLECT_LAST_SUCCESS_EPOCH,
                     samples.filter(named(MetricAggregation.COLLECT_LAST_SUCCESS_EPOCH)
-                            .and(label(DomainMeterNames.TAG_COLLECT_PATH,
-                                    DomainMeterNames.PATH_CONSISTENCY))));
+                            .and(label(DomainMeterNames.TAG_COLLECT_PATH, collectPath))));
             if (lastSuccessEpoch.isEmpty()) {
                 // 한 번도 성공하지 못했거나 신선도 미터가 없다. 어느 쪽이든 관측 시각을 모른다.
                 return Freshness.observationTimeUnknown();
@@ -696,11 +778,25 @@ public class PromMetricsAssembler {
     private ObservedValue<Long> pairedLong(
             QueryResult samples, String valueMetric, String stateMetric,
             Predicate<PromSample> filter, Freshness freshness, MetricsQuery query) {
+        return pairedLong(samples, valueMetric, stateMetric, filter, freshness, query,
+                MetricAggregation.CONSISTENCY_COUPON_ID);
+    }
+
+    /**
+     * 값·상태 짝을 읽되 <b>회차 판별에 쓸 미터를 지정</b>합니다.
+     *
+     * <p>회차 식별자 미터는 수집 경로마다 따로 있습니다({@code consistency.coupon.id} ·
+     * {@code observation.coupon.id}) — 주기가 달라 회차가 바뀌는 순간 둘이 잠시 어긋나기
+     * 때문입니다. 한쪽 미터로 다른 경로의 값을 판별하면 그 창에서 범위 판정이 틀립니다.
+     */
+    private ObservedValue<Long> pairedLong(
+            QueryResult samples, String valueMetric, String stateMetric,
+            Predicate<PromSample> filter, Freshness freshness, MetricsQuery query, String scopeMetric) {
         if (samples.unavailable()) {
             return unavailable();
         }
         try {
-            if (outOfScope(samples, query)) {
+            if (outOfScope(samples, query, scopeMetric)) {
                 // 다른 회차를 보고 있는 값이다. 0 도 아니고 장애도 아니라 '해당 없음' 이다.
                 return new ObservedValue<>(null, SourceStatus.N_A, null);
             }
@@ -758,12 +854,12 @@ public class PromMetricsAssembler {
      * <p>BENCHMARK_RUN 은 라벨이 없어 한 시점 질의로 자를 수 없습니다 — 회차 경계는 시간 범위로
      * 자르는 것이고 그건 시계열 API 의 몫입니다. 여기서는 범위만 응답에 되비칩니다.</p>
      */
-    private static boolean outOfScope(QueryResult samples, MetricsQuery query) {
+    private static boolean outOfScope(QueryResult samples, MetricsQuery query, String scopeMetric) {
         if (query.couponId() == null) {
             return false;
         }
-        OptionalDouble observedCoupon = reduceOrUnknown(MetricAggregation.CONSISTENCY_COUPON_ID,
-                samples.filter(named(MetricAggregation.CONSISTENCY_COUPON_ID)));
+        OptionalDouble observedCoupon =
+                reduceOrUnknown(scopeMetric, samples.filter(named(scopeMetric)));
         // 어느 회차를 본 값인지 모르면 그 회차의 값이라고 말할 수 없다. 확인된 일치만 in-scope 다.
         return observedCoupon.isEmpty() || Math.round(observedCoupon.getAsDouble()) != query.couponId();
     }
@@ -785,6 +881,259 @@ public class PromMetricsAssembler {
     /** Kafka persist lag 미터는 OBS-17 이 연다. 그전까지 0 이 아니라 빈 값이다. */
     private static ObservedValue<PersistenceLagSummary> notWiredYet() {
         return pending();
+    }
+
+    // ── 자원 포화 ───────────────────────────────────────────────────────────────
+
+    /**
+     * 자원 6행 · in-flight · 큐 3영역입니다.
+     *
+     * <p><b>행은 원천이 없어도 사라지지 않습니다.</b> 행을 지우면 화면이 "그 자원은 재 봤는데
+     * 여유" 로 읽습니다 — 값이 없는 것과 여유로운 것은 다른 사건이라 자리는 두고 상태로 가릅니다.</p>
+     *
+     * <p>신선도는 HTTP 미터의 것을 씁니다. 자원 미터는 같은 api 인스턴스에서 같은 scrape 로
+     * 올라오므로 나이가 같습니다. 큐만 batch 의 재고 수집 경로 시각을 씁니다 — 주기가 달라
+     * HTTP 시각으로 판정하면 늘 낡아 보입니다.</p>
+     */
+    private SaturationPanel saturation(QueryResult samples, Freshness http, Freshness stock,
+                                       TrafficMetrics traffic, MetricsQuery query) {
+        return new SaturationPanel(
+                resources(samples, http),
+                inFlight(samples, http),
+                queues(samples, stock, traffic, query),
+                SaturationPanel.THRESHOLDS);
+    }
+
+    private static List<ResourceRow> resources(QueryResult samples, Freshness freshness) {
+        return List.of(
+                row(ResourceRowSpec.HIKARI, hikariDetail(samples),
+                        percent(samples, freshness, MetricAggregation.HIKARI_POOL_UTILIZATION,
+                                named(MetricAggregation.HIKARI_ACTIVE).and(issuancePool()),
+                                MetricAggregation.SUM,
+                                named(MetricAggregation.HIKARI_MAX).and(issuancePool()),
+                                MetricAggregation.SUM)),
+                row(ResourceRowSpec.TOMCAT, ResourceRowSpec.TOMCAT.detail(),
+                        percent(samples, freshness, MetricAggregation.TOMCAT_THREAD_UTILIZATION,
+                                named(MetricAggregation.TOMCAT_BUSY), MetricAggregation.SUM,
+                                named(MetricAggregation.TOMCAT_MAX), MetricAggregation.SUM)),
+                row(ResourceRowSpec.CPU, ResourceRowSpec.CPU.detail(), cpuPercent(samples, freshness)),
+                row(ResourceRowSpec.HEAP, ResourceRowSpec.HEAP.detail(),
+                        percent(samples, freshness, MetricAggregation.JVM_HEAP_UTILIZATION,
+                                named(MetricAggregation.JVM_MEMORY_USED).and(heapArea()),
+                                MetricAggregation.SUM,
+                                // 영역 상한은 더하지 않는다. G1 은 Eden · Survivor 에 -1 을 싣고
+                                // Old Gen 하나만 힙 전체 상한을 낸다(실측).
+                                named(MetricAggregation.JVM_MEMORY_MAX).and(heapArea()),
+                                MetricAggregation.MAX)),
+                // 아래 둘은 사용률의 분모가 없다. 0 으로 채우면 "여유" 를 그린다.
+                row(ResourceRowSpec.REDIS, ResourceRowSpec.REDIS.detail(), notApplicable()),
+                row(ResourceRowSpec.DISK_NETWORK, ResourceRowSpec.DISK_NETWORK.detail(),
+                        notApplicable()));
+    }
+
+    private static ResourceRow row(ResourceRowSpec spec, String detail, ObservedValue<Double> utilization) {
+        return new ResourceRow(spec.name(), detail, utilization, spec.warnAt());
+    }
+
+    /**
+     * DB 풀 행의 보조 문구입니다. <b>대기 개수가 진짜 신호</b>라 사용률과 함께 보여야 합니다 —
+     * 사용률이 79% 여도 pending 이 쌓이고 있으면 이미 무너지는 중입니다.
+     *
+     * <p>{@code detail} 에는 상태를 실을 자리가 없어 값이 없으면 기본 문구로 물러납니다.
+     * TODO(OBS-9 후속): {@code ResourceRow.pending} 자리를 프론트와 합의하면 문자열이 아니라
+     * 상태 있는 값으로 옮긴다.</p>
+     */
+    private static String hikariDetail(QueryResult samples) {
+        if (samples.unavailable()) {
+            return ResourceRowSpec.HIKARI.detail();
+        }
+        OptionalDouble pending = reduceOrUnknown(MetricAggregation.HIKARI_PENDING,
+                samples.filter(named(MetricAggregation.HIKARI_PENDING).and(issuancePool())));
+        return pending.isEmpty()
+                ? ResourceRowSpec.HIKARI.detail()
+                : "pending " + Math.round(pending.getAsDouble());
+    }
+
+    /** CPU 는 이미 0~1 비율이라 인스턴스 안에서 나눌 것이 없다. 곧바로 인스턴스 최댓값을 쓴다. */
+    private static ObservedValue<Double> cpuPercent(QueryResult samples, Freshness freshness) {
+        if (samples.unavailable()) {
+            return unavailable();
+        }
+        OptionalDouble ratio = reduceOrUnknown(MetricAggregation.CPU_USAGE,
+                samples.filter(named(MetricAggregation.CPU_USAGE)));
+        return observedPercent(ratio.isEmpty() ? ratio : OptionalDouble.of(ratio.getAsDouble() * 100d),
+                freshness);
+    }
+
+    /**
+     * 인스턴스 안에서 먼저 나누고, 그 비율들을 규칙표대로 줄입니다.
+     *
+     * <p><b>순서를 뒤집으면 안 됩니다.</b> 인스턴스를 먼저 합치면 정원이 다른 대가 섞여 한 대의
+     * 포화가 다른 대의 여유에 희석됩니다. 여기서 쓰는 SUM·MAX 는 규칙표의 <b>인스턴스 축약</b>이
+     * 아니라 인스턴스 <b>안에서</b> 라벨을 접는 단계입니다 — 축약은 마지막 한 번뿐입니다.</p>
+     */
+    private static ObservedValue<Double> percent(
+            QueryResult samples, Freshness freshness, String derivedKey,
+            Predicate<PromSample> numerator, MetricAggregation numeratorFold,
+            Predicate<PromSample> denominator, MetricAggregation denominatorFold) {
+        if (samples.unavailable()) {
+            return unavailable();
+        }
+        Map<String, List<PromSample>> byInstance = new LinkedHashMap<>();
+        for (PromSample sample : samples.filter(any())) {
+            String instance = sample.label(TAG_INSTANCE);
+            if (instance.isEmpty()) {
+                // 어느 대의 값인지 모르면 인스턴스 안에서 나눌 수 없다. 그냥 두면 라벨 없는
+                // 표본끼리 짝이 맞는 순간 <b>어느 인스턴스의 것도 아닌 사용률</b>이 VALID 로
+                // 나간다(실측 80%). 값이 정상 범위라 화면에서는 드러나지 않는다.
+                //
+                // 반대 방향 대가 — 원천이 instance 라벨을 떨구면(federation·recording rule)
+                // 자원 행이 값을 못 내고 PENDING 으로 굳는다. 틀린 값을 권위 있게 내보내는
+                // 것보다 낫다고 보고 이쪽을 고른다.
+                continue;
+            }
+            byInstance.computeIfAbsent(instance, ignored -> new ArrayList<>()).add(sample);
+        }
+
+        List<PromSample> ratios = new ArrayList<>();
+        for (Map.Entry<String, List<PromSample>> entry : byInstance.entrySet()) {
+            OptionalDouble used = numeratorFold.reduce(entry.getValue().stream().filter(numerator).toList());
+            OptionalDouble size =
+                    denominatorFold.reduce(entry.getValue().stream().filter(denominator).toList());
+            if (used.isEmpty() || size.isEmpty() || size.getAsDouble() <= 0d) {
+                // 정원을 모르면 비율이 아니다. 0 으로 두면 그 인스턴스가 가장 여유로운 대로 보인다.
+                continue;
+            }
+            ratios.add(new PromSample(derivedKey, Map.of(TAG_INSTANCE, entry.getKey()),
+                    used.getAsDouble() / size.getAsDouble() * 100d,
+                    entry.getValue().get(0).evaluatedAt()));
+        }
+        return observedPercent(reduceOrUnknown(derivedKey, ratios), freshness);
+    }
+
+    private static ObservedValue<Double> observedPercent(OptionalDouble percent, Freshness freshness) {
+        if (percent.isEmpty()) {
+            return pending();
+        }
+        if (!freshness.known()) {
+            return absent(freshness);
+        }
+        return new ObservedValue<>(
+                Math.round(percent.getAsDouble() * PERCENT_SCALE) / PERCENT_SCALE,
+                freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID,
+                freshness.observedAt());
+    }
+
+    /**
+     * 처리 중인 요청 수입니다. <b>스레드가 아니라 요청을 셉니다</b> — 라우트가 없는 요청도 세므로
+     * {@code tomcat.threads.busy} 와 같은 값이 아닙니다.
+     *
+     * <p>{@code mode} · {@code admitThreshold} · {@code releaseThreshold} 는 ADAPTIVE 대기열의
+     * 런타임 설정이고 이 API 에 배선돼 있지 않습니다. 화면 계약이 이 셋을 {@code SourceValue} 가
+     * 아닌 생값으로 받아 "모름" 을 실을 자리가 없어 자리만 채웁니다.
+     * TODO(OBS-19 후속): ConfigStore 가 열리면 실제 설정을 싣는다. 그전까지 이 셋은 판정 근거가
+     * 아니다.</p>
+     */
+    private static InFlightSummary inFlight(QueryResult samples, Freshness freshness) {
+        List<PromSample> inFlightSamples =
+                samples.unavailable() ? List.of() : samples.filter(named(MetricAggregation.HTTP_IN_FLIGHT));
+        ObservedValue<Double> globalSum = samples.unavailable()
+                ? unavailable()
+                : observed(reduceOrUnknown(MetricAggregation.HTTP_IN_FLIGHT, inFlightSamples), freshness);
+        ObservedValue<Double> instanceMax = samples.unavailable()
+                ? unavailable()
+                : observed(reduceOrUnknown(
+                        MetricAggregation.HTTP_IN_FLIGHT_INSTANCE_MAX, inFlightSamples), freshness);
+        return new InFlightSummary(
+                globalSum,
+                instanceMax,
+                busiestInstance(inFlightSamples),
+                activeInstances(samples),
+                QueueGateMode.OFF,
+                0,
+                0,
+                List.of());
+    }
+
+    /** 최댓값을 낸 인스턴스. 모르면 빈 문자열이다 — 아무 인스턴스나 고르면 화면이 그 대를 지목한다. */
+    private static String busiestInstance(List<PromSample> inFlightSamples) {
+        return inFlightSamples.stream()
+                .filter(PromSample::hasNumericValue)
+                .max(Comparator.comparingDouble(PromSample::value))
+                .map(sample -> sample.label(TAG_INSTANCE))
+                .orElse("");
+    }
+
+    /**
+     * {@code up==1} 인 인스턴스 수입니다. 죽은 인스턴스의 마지막 값이 합에 남아 있는 동안 화면이
+     * "활성 3/4" 로 그 사실을 드러내는 근거입니다.
+     */
+    private static int activeInstances(QueryResult samples) {
+        if (samples.unavailable()) {
+            return 0;
+        }
+        OptionalDouble up = reduceOrUnknown(MetricAggregation.UP,
+                samples.filter(named(MetricAggregation.UP)));
+        return up.isEmpty() ? 0 : (int) Math.round(up.getAsDouble());
+    }
+
+    private static ObservedValue<Double> observed(OptionalDouble value, Freshness freshness) {
+        if (value.isEmpty()) {
+            return pending();
+        }
+        if (!freshness.known()) {
+            return absent(freshness);
+        }
+        return new ObservedValue<>(value.getAsDouble(),
+                freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID, freshness.observedAt());
+    }
+
+    /**
+     * 큐 3영역입니다. <b>합치지 않습니다</b> — 대기 인원은 사람, 저장 대기는 메시지, 관측 지연은
+     * 시간이라 한 축에 겹쳐 그리면 어느 것도 해석할 수 없습니다.
+     *
+     * <p>Persistence 는 Kafka consumer lag 이 원천이라 OBS-15 · OBS-35 뒤입니다. Telemetry 는
+     * 정의가 "이벤트 시각 ↔ <b>화면 수신</b> 시각" 이라 서버가 잴 수 없습니다. 둘 다 0 이 아니라
+     * PENDING 입니다 — 원천이 없는 것과 큐가 빈 것은 다른 사건입니다.</p>
+     */
+    private List<QueueZoneSummary> queues(
+            QueryResult samples, Freshness stock, TrafficMetrics traffic, MetricsQuery query) {
+        ObservedValue<Double> waiting = toDouble(pairedLong(samples,
+                MetricAggregation.QUEUE_LENGTH, MetricAggregation.QUEUE_LENGTH_STATE,
+                any(), stock, query, MetricAggregation.OBSERVED_COUPON_ID));
+        return List.of(
+                zone(QueueZone.ADMISSION, List.of(
+                        waiting,
+                        // 같은 값을 두 번 재지 않는다. 입장 처리율은 트래픽 패널이 이미 낸 값이다.
+                        traffic.queueAcceptedRps(),
+                        // 추세는 한 시점 질의로 만들 수 없다. range 질의는 OBS-34 가 연다.
+                        pending(),
+                        pending())),
+                zone(QueueZone.PERSISTENCE, List.of(pending(), pending(), pending(), pending())),
+                zone(QueueZone.TELEMETRY, List.of(pending())));
+    }
+
+    private static QueueZoneSummary zone(QueueZone zone, List<ObservedValue<Double>> values) {
+        List<String> labels = QueueMetric.labelsOf(zone);
+        List<QueueMetric> metrics = new ArrayList<>();
+        for (int i = 0; i < labels.size(); i++) {
+            metrics.add(new QueueMetric(labels.get(i), values.get(i), QueueMetric.unitOf(labels.get(i))));
+        }
+        return new QueueZoneSummary(zone, List.copyOf(metrics), List.of());
+    }
+
+    private static ObservedValue<Double> toDouble(ObservedValue<Long> value) {
+        return new ObservedValue<>(
+                value.value() == null ? null : value.value().doubleValue(),
+                value.state(), value.observedAt());
+    }
+
+    private static Predicate<PromSample> issuancePool() {
+        return sample -> !POOL_OBSERVATION.equals(sample.label(TAG_POOL));
+    }
+
+    private static Predicate<PromSample> heapArea() {
+        return label(TAG_AREA, AREA_HEAP);
     }
 
     // ── 공통 ────────────────────────────────────────────────────────────────────

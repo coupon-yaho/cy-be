@@ -46,6 +46,50 @@ class MetricAggregationTest {
         // 인스턴스 하나가 스크레이프에서 빠졌을 때 드러나야 하므로 가장 오래된 나이를 쓴다.
         assertThat(MetricAggregation.of(MetricAggregation.HTTP_FRESHNESS_AGE_SECONDS))
                 .isEqualTo(MetricAggregation.MAX);
+        // 정원은 절대 개수라 더한다. 사용률은 더하면 200% 가 나오므로 최댓값이다.
+        assertThat(MetricAggregation.of(MetricAggregation.HIKARI_MAX))
+                .isEqualTo(MetricAggregation.SUM);
+        assertThat(MetricAggregation.of(MetricAggregation.TOMCAT_BUSY))
+                .isEqualTo(MetricAggregation.SUM);
+        assertThat(MetricAggregation.of(MetricAggregation.TOMCAT_MAX))
+                .isEqualTo(MetricAggregation.SUM);
+        assertThat(MetricAggregation.of(MetricAggregation.TOMCAT_THREAD_UTILIZATION))
+                .isEqualTo(MetricAggregation.MAX);
+        assertThat(MetricAggregation.of(MetricAggregation.JVM_MEMORY_MAX))
+                .isEqualTo(MetricAggregation.MAX);
+        assertThat(MetricAggregation.of(MetricAggregation.JVM_HEAP_UTILIZATION))
+                .isEqualTo(MetricAggregation.MAX);
+        // 전역 합과 인스턴스 최댓값은 같은 미터의 다른 축약이라 규칙이 갈린다.
+        assertThat(MetricAggregation.of(MetricAggregation.HTTP_IN_FLIGHT_INSTANCE_MAX))
+                .isEqualTo(MetricAggregation.MAX);
+        // up 을 더하면 살아 있는 인스턴스 수가 된다.
+        assertThat(MetricAggregation.of(MetricAggregation.UP)).isEqualTo(MetricAggregation.SUM);
+        // 대기열은 batch 한 곳에서만 나온다. 표본이 둘이면 배선이 잘못된 것이다.
+        assertThat(MetricAggregation.of(MetricAggregation.QUEUE_LENGTH))
+                .isEqualTo(MetricAggregation.SINGLE);
+        assertThat(MetricAggregation.of(MetricAggregation.QUEUE_LENGTH_STATE))
+                .isEqualTo(MetricAggregation.SINGLE);
+        assertThat(MetricAggregation.of(MetricAggregation.OBSERVED_COUPON_ID))
+                .isEqualTo(MetricAggregation.SINGLE);
+    }
+
+    /**
+     * 접미사를 빼면 표본이 0 개인데 예외도 로그도 나지 않습니다. 이름의 근거는
+     * {@code TomcatMeterSwitchContractTest} 가 실제 레지스트리로 잽니다.
+     */
+    @Test
+    @DisplayName("tomcat 이름은 미터 이름에 base unit 접미사를 붙인 것이다")
+    void tomcatNamesCarryBaseUnitSuffix() {
+        assertThat(MetricAggregation.TOMCAT_BUSY)
+                .isEqualTo(MeterNames.TOMCAT_BUSY.replace('.', '_') + "_threads");
+        assertThat(MetricAggregation.TOMCAT_MAX)
+                .isEqualTo(MeterNames.TOMCAT_MAX.replace('.', '_') + "_threads");
+        assertThat(MetricAggregation.HIKARI_MAX)
+                .isEqualTo(MeterNames.HIKARI_MAX.replace('.', '_'));
+        assertThat(MetricAggregation.JVM_MEMORY_MAX)
+                .isEqualTo(MeterNames.JVM_MEMORY_MAX.replace('.', '_') + "_bytes");
+        assertThat(MetricAggregation.QUEUE_LENGTH)
+                .isEqualTo(DomainMeterNames.QUEUE_LENGTH.replace('.', '_'));
     }
 
     /** 이름을 옮겨 적으면 한쪽만 바뀌어도 예외 없이 "값 없음" 만 옵니다. */
