@@ -193,6 +193,11 @@ groups:
             먼저 봅니다. BATCH_SCHEDULING_ENABLED 가 false 면 만료도 함께 안 돕니다.
             "검증이 도는 중이라 정리를 여기서 멈춥니다" WARN 이 반복되면 정리가 아니라
             열린 채 남은 검증이 원인입니다.
+            BATCH_STEP_EXECUTION 을 STEP_NAME 으로 갈라 STATUS 를 봅니다 —
+            purgeVerificationRunsStep 이 FAILED 면 asof_state 가 안 걷힌 것이고,
+            그것이 COMPLETED 인데 purgeBatchMetadataStep 만 FAILED 면 asof_state 는
+            다 걷은 뒤 배치 메타에서 죽은 것입니다. 로그로 가르지 마십시오 —
+            "배치 메타를 걷었습니다" 는 걷을 것이 0 인 밤에는 원래 안 찍힙니다.
             성공 이력이 아예 없는 상태는 이 알림이 아니라 CleanupNeverSucceeded 가 집니다.
 
       # 성공 이력을 아직 못 본 상태. 신규 스키마 · BATCH_SCHEDULING_ENABLED=false ·
@@ -443,11 +448,16 @@ groups:
           severity: warning
           channel: server
         annotations:
-          summary: "정리 배치가 900초 넘게 돌고 있다 — asof_state 를 물고 있다"
+          summary: "정리 배치가 900초 넘게 돌고 있다 — asof_state 또는 배치 메타를 갈고 있다"
           description: >-
             보존 창 밖 실행이 몰렸거나 청크 하나가 오래 걸린다.
-            BATCH_STEP_EXECUTION 의 WRITE_COUNT 로 실제 삭제량을 먼저 확인하고,
-            CLEANUP_CHUNK_SIZE 와 CLEANUP_STEP_TIMEOUT_MS 의 관계를 본다
+            **Step 이 둘이다.** BATCH_STEP_EXECUTION 을 STEP_NAME 으로 갈라 WRITE_COUNT 를 본다 —
+            purgeVerificationRunsStep 이면 CLEANUP_CHUNK_SIZE 와 CLEANUP_STEP_TIMEOUT_MS 의
+            관계를, purgeBatchMetadataStep 이면 CLEANUP_METADATA_CHUNK_SIZE 와
+            CLEANUP_METADATA_KEEP_DAYS 를 본다 — 그 Step 의 WRITE_COUNT 는 **지운 잡 실행 수**라
+            chunk-size 로 나누면 청크 수가 나온다(행 수가 아니다).
+            두 chunk-size 는 뜻이 다르다 — 앞은 asof_state 행 수,
+            뒤는 잡 실행 수다. 뒤 Step 은 보존 창을 처음 넘긴 밤에 한 번 몰린다
             (청크를 키우면 데드라인도 같이 키워야 한다).
 
       # ──────────────────────────────────────────────────────────────────────

@@ -89,8 +89,9 @@ import org.springframework.transaction.annotation.Isolation;
  *
  * <p><b>배선의 대가</b> — 이제 {@code BATCH_*} 가 실제로 쌓인다. 만료가 5분마다 새 {@code asOf}
  * 로 돌던 시절에는 하루 288 인스턴스 × 여섯 테이블이었다. CY-397 이 배치 창(일 1회)으로
- * 옮겨 <b>하루 1 인스턴스</b>가 됐다. {@code BATCH_*} 정리 경로는 그래서 뒤로 미뤘다
- * ({@code docs/13} §7).
+ * 옮겨 <b>하루 1 인스턴스</b>가 됐다. {@code BATCH_*} 정리는
+ * {@code CleanupJobConfig#purgeBatchMetadataStep} 이 {@code batch.cleanup.metadata-keep-days}
+ * (최소 8 — 되읽기 창 7일 초과)로 한다(CY-436).
  */
 @Configuration(proxyBeanMethods = false)
 @EnableBatchProcessing

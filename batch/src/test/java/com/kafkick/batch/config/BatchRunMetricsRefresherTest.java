@@ -146,9 +146,10 @@ class BatchRunMetricsRefresherTest {
     }
 
     /**
-     * <b>물러난 실행은 성공이 아니다.</b> 정리 잡은 검증이 도는 중이면 한 행도 안 걷고
-     * {@code COMPLETED} 로 닫힌다 — 실패가 아니므로 상태를 바꿀 수 없지만, 그것을 성공으로
-     * 세면 <i>"매일 돌았고 매일 아무것도 안 지웠다"</i> 가 모든 알림을 초록으로 통과한다.
+     * <b>물러난 실행은 성공이 아니다.</b> 정리 잡은 검증이 도는 중이면 <b>검증 파생 행을</b>
+     * 한 행도 안 걷고 {@code COMPLETED} 로 닫힌다(배치 메타는 그래도 걷는다 — CY-436).
+     * 실패가 아니므로 상태를 바꿀 수 없지만, 그것을 성공으로 세면 <i>"매일 돌았고 매일
+     * asof_state 를 하나도 안 지웠다"</i> 가 모든 알림을 초록으로 통과한다.
      */
     @Test
     @DisplayName("YIELDED 로 닫힌 실행은 마지막 성공으로 안 센다")
@@ -160,7 +161,7 @@ class BatchRunMetricsRefresherTest {
             refresher.refresh();
 
             assertThat(lastSuccess(CleanupJobConfig.JOB_NAME))
-                    .as("실행 id=" + yielded.executionId() + " 는 돌긴 했지만 한 행도 안 걷었다")
+                    .as("실행 id=" + yielded.executionId() + " 는 돌긴 했지만 검증 파생 행을 한 행도 안 걷었다")
                     .isNaN();
         }
     }

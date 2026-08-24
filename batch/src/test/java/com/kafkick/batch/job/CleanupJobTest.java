@@ -25,10 +25,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.ExpireStepContext;
 import com.kafkick.batch.config.RunningJobFixture;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
@@ -50,7 +51,12 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.scheduling.enabled=false",
         "batch.verify.asof-state-keep-runs=2",
         "batch.cleanup.chunk-size=3",
-        "batch.cleanup.abandoned-after-hours=24"
+        "batch.cleanup.abandoned-after-hours=24",
+        // 되읽기 창(7일)보다 커야 한다. 픽스처는 이 값을 넘겨 심는다.
+        "batch.cleanup.metadata-keep-days=10",
+        // 1 이면 대상 하나마다 트랜잭션이 갈린다 — 드레인이 한 청크에서 끊기는 것을
+        // 잡으려면 경계를 실제로 밟아야 한다. asof_state 축이 chunk-size=3 으로 같은 일을 한다.
+        "batch.cleanup.metadata-chunk-size=1"
 })
 @Import({MySqlContainerConfig.class, CleanupJobTest.FixedClockConfig.class})
 class CleanupJobTest {
@@ -442,6 +448,13 @@ class CleanupJobTest {
         run(AS_OF.plusDays(1), "PASS", AS_OF.plusDays(1));
         run(AS_OF.plusDays(2), "PASS", AS_OF.plusDays(2));
 
+        // 배치 메타 쪽에도 걷을 것을 하나 심는다 — 앞 Step 이 물러나도 이건 걷혀야 한다.
+        RunningJobFixture oldMeta = RunningJobFixture.plant(
+                jobRepository, jdbcClient, ExpireStepContext.JOB_NAME, AS_OF.minusDays(40),
+                Duration.ofHours(1), Duration.ofHours(1));
+        long oldMetaExecution = oldMeta.executionId();
+        finishedAt(oldMetaExecution, AS_OF.minusDays(40));
+
         try (RunningJobFixture verifying = RunningJobFixture.plant(
                 jobRepository, jdbcClient, VerifyJobConfig.JOB_NAME,
                 LocalDateTime.of(2026, 4, 11, 5, 0), Duration.ofMinutes(30), Duration.ZERO)) {
@@ -463,7 +476,16 @@ class CleanupJobTest {
             assertThat(execution.getExitStatus().getExitDescription())
                     .as("코드 하나로는 '한 행도 못 걷었다' 와 '200만 걷고 멈췄다' 가 같은 값이다 — "
                             + "그 구분을 배치 메타가 져야 되짚을 때 남는다")
-                    .isEqualTo("verifyExecutionIds=[" + verifying.executionId() + "] purgedRows=0");
+                    .isEqualTo("verifyExecutionIds=[" + verifying.executionId() + "] purgedRows=0"
+                            + " metaExecutions=1 metaInstances=1");
+
+            // **뒤 Step 은 같이 안 물러난다.** 앞 Step 의 양보는 도는 검증의 입력을 지키려는
+            // 것이고 이 Step 은 그 데이터를 안 건드린다. 같이 멈추면 손 트리거 검증이
+            // 13:30 KST 에 걸친 날마다 그날치 BATCH_* 가 통째로 안 걷힌다 — 그런데도 잡은
+            // 매일 돌고, 배치 메타 백로그에는 전용 알림이 없어 아무도 모른다.
+            assertThat(metaRows("BATCH_JOB_EXECUTION", oldMetaExecution))
+                    .as("물러난 것은 앞 Step 의 축이지 배치 메타 축이 아니다")
+                    .isZero();
         }
     }
 
@@ -486,10 +508,20 @@ class CleanupJobTest {
                 LocalDateTime.of(2026, 4, 13, 5, 0), Duration.ofMinutes(30), Duration.ZERO)) {
             assertThat(verifying.executionId()).isPositive();
 
-            assertThat(runCleanup().getExitStatus().getExitCode())
+            JobExecution execution = runCleanup();
+            assertThat(execution.getExitStatus().getExitCode())
                     .as("할 일이 없었던 것을 '물러났다' 로 기록하면 마지막 성공이 안 갱신되어 "
                             + "아무 잘못 없이 SLA 알림이 뜬다")
                     .isEqualTo("COMPLETED");
+
+            // 걷을 것이 0 인 밤에도 **수치는 계산돼서 남는다.** 여기서 설명이 비면
+            // "한 행도 못 걷었다" 와 "애초에 대상이 없었다" 가 되짚을 때 같은 값이 된다.
+            assertThat(execution.getStepExecutions().stream()
+                    .filter(step -> "purgeBatchMetadataStep".equals(step.getStepName()))
+                    .findFirst().orElseThrow()
+                    .getExitStatus().getExitDescription())
+                    .as("종료 설명은 대상이 0 일 때도 형식을 지켜야 한다")
+                    .startsWith("metaExecutions=");
         }
     }
 
@@ -580,6 +612,264 @@ class CleanupJobTest {
                         + "들고 있다는 뜻이고, 그때 LIMIT 은 아무것도 안 나눈 것이다")
                 .isGreaterThan(3);
         assertThat(asOfStateCount(target)).isZero();
+    }
+
+    /**
+     * <b>보존 기간이 지난 배치 메타를 딸린 행까지 걷는다.</b>
+     *
+     * <p><b>Step 이 있는 실행으로 심는다.</b> {@code plantCompleted} 는
+     * {@code BATCH_STEP_EXECUTION} 을 하나도 안 만들어서, 그것으로 재면 Step 축 삭제 두
+     * 문장을 통째로 지워도 <b>대상에 자식이 없어 FK 위반이 안 나고 초록</b>이다 —
+     * 실제로 그렇게 썼다가 리뷰가 잡았다. 운영에서 {@code verifyJob}(Step 열하나)이 처음
+     * 보존 창을 넘기는 날 {@code JOB_EXEC_STEP_FK} 로 청크가 통째로 롤백된다.
+     *
+     * <p>다섯 테이블에 <b>사전 단언</b>을 건다. 그게 없으면 {@code isZero()} 가 픽스처가
+     * 바뀌는 날 공허하게 통과한다.
+     */
+    @Test
+    @DisplayName("보존 기간이 지난 배치 메타를 딸린 행까지 걷는다")
+    void purgesExpiredBatchMetadata() throws Exception {
+        // **try-with-resources 를 안 쓴다.** 이 행은 잡이 걷어 가는 것이 계약인데,
+        // close() 가 이미 없는 행을 닫으려다 EmptyResultDataAccessException 으로 터진다.
+        // 정리는 @BeforeEach 의 removeJobExecutions() 가 한다.
+        RunningJobFixture old = RunningJobFixture.plant(
+                jobRepository, jdbcClient, ExpireStepContext.JOB_NAME, AS_OF.minusDays(40),
+                Duration.ofHours(1), Duration.ofHours(1));
+        long target = old.executionId();
+        long instance = instanceOf(target);
+        // 픽스처는 **실제 벽시계**로 심고 잡의 컷오프는 **고정 시계(AS_OF)** 다.
+        // 두 축이 다르므로 심은 뒤 잡의 좌표로 옮긴다.
+        finishedAt(target, AS_OF.minusDays(40));
+
+        assertThat(metaRows("BATCH_JOB_EXECUTION", target)).isEqualTo(1);
+        assertThat(metaRows("BATCH_JOB_EXECUTION_PARAMS", target)).isEqualTo(1);
+        assertThat(metaRows("BATCH_JOB_EXECUTION_CONTEXT", target)).isEqualTo(1);
+        assertThat(metaRows("BATCH_STEP_EXECUTION", target))
+                .as("Step 이 없으면 FK 역순의 Step 축을 아예 안 재게 된다")
+                .isEqualTo(1);
+        assertThat(stepContextRows(target)).isEqualTo(1);
+
+        JobExecution execution = runCleanup();
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        assertThat(metaRows("BATCH_JOB_EXECUTION", target))
+                .as("keep-days(10) 를 넘긴 실행은 걷혀야 한다")
+                .isZero();
+        assertThat(metaRows("BATCH_JOB_EXECUTION_PARAMS", target)).isZero();
+        assertThat(metaRows("BATCH_JOB_EXECUTION_CONTEXT", target)).isZero();
+        assertThat(metaRows("BATCH_STEP_EXECUTION", target))
+                .as("Step 행이 남으면 FK 역순이 깨진 것이다")
+                .isZero();
+        assertThat(stepContextRows(target)).isZero();
+        assertThat(instanceRows(instance))
+                .as("실행을 다 지웠으면 인스턴스도 고아가 되어 걷혀야 한다 — "
+                        + "안 걷으면 BATCH_JOB_INSTANCE 만 상한 없이 자란다")
+                .isZero();
+
+        // **종료 설명을 고정한다.** 이 Step 이 로그 대신 종료 설명을 택한 이유가
+        // "컨테이너 로그는 롤오버돼도 배치 메타는 남는다" 인데, 안 재면 다음 리팩터가
+        // setExitStatus 를 ExitStatus.COMPLETED 로 단순화해도 전 테스트가 초록이다.
+        StepExecution meta = execution.getStepExecutions().stream()
+                .filter(step -> "purgeBatchMetadataStep".equals(step.getStepName()))
+                .findFirst().orElseThrow();
+        assertThat(meta.getExitStatus().getExitDescription())
+                .as("되짚을 때 남는 유일한 수치다 — 실행 1 · 고아 인스턴스 1")
+                .isEqualTo("metaExecutions=1 metaInstances=1");
+        assertThat(meta.getWriteCount())
+                .as("WRITE_COUNT 단위는 **잡 실행 수**다. 고아 인스턴스를 더하면 runbook 이 "
+                        + "chunk-size 로 나눈 진도를 두 배로 읽는다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * <b>실행이 하나라도 남은 인스턴스는 안 지운다.</b> 지우면 남은 실행의 잡 이름을 잃어
+     * 되읽기 조회가 통째로 못 찾는다. {@code CleanupRepository} 가 계약으로 적어 둔 문장이다.
+     */
+    @Test
+    @DisplayName("실행이 남아 있는 인스턴스는 안 지운다")
+    void keepsInstancesThatStillHaveExecutions() throws Exception {
+        RunningJobFixture old = RunningJobFixture.plant(
+                jobRepository, jdbcClient, ExpireStepContext.JOB_NAME, AS_OF.minusDays(40),
+                Duration.ofHours(1), Duration.ofHours(1));
+        long instance = instanceOf(old.executionId());
+        finishedAt(old.executionId(), AS_OF.minusDays(40));
+
+        // 같은 인스턴스에 보존 창 안의 실행을 하나 더 붙인다.
+        // 시퀀스 테이블이 관리하는 자리라 프레임워크와 안 겹치게 높은 번호를 쓴다.
+        long recent = 900_001L;
+        jdbcClient.sql("INSERT INTO BATCH_JOB_EXECUTION(JOB_EXECUTION_ID, VERSION, "
+                        + "JOB_INSTANCE_ID, CREATE_TIME, START_TIME, END_TIME, STATUS, "
+                        + "EXIT_CODE, EXIT_MESSAGE, LAST_UPDATED) VALUES "
+                        + "(:id, 0, :inst, :at, :at, :at, 'COMPLETED', 'COMPLETED', '', :at)")
+                .param("id", recent).param("inst", instance)
+                .param("at", AS_OF.minusDays(1)).update();
+
+        assertThat(runCleanup().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        assertThat(metaRows("BATCH_JOB_EXECUTION", old.executionId()))
+                .as("보존 창 밖 실행은 걷힌다").isZero();
+        assertThat(metaRows("BATCH_JOB_EXECUTION", recent))
+                .as("창 안 실행은 그대로다").isEqualTo(1);
+        assertThat(instanceRows(instance))
+                .as("실행이 남았으면 인스턴스를 지우면 안 된다 — 지우면 남은 실행의 "
+                        + "잡 이름을 잃어 되읽기가 통째로 못 찾는다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * <b>끝나지 않은 실행은 아무리 오래돼도 안 걷는다.</b>
+     *
+     * <p>{@code END_TIME} 술어 둘은 인덱스용이 아니라 <b>시체 보존</b>이다. 지우면
+     * {@code BatchStuckExecution} 이 조용해지는데 그건 고친 게 아니라 <b>증거를 지운
+     * 것</b>이고, 그 행은 CY-429 의 복구 API 가 사람의 판단으로 닫는다.
+     *
+     * <p><b>{@code CREATE_TIME} 만 창 밖으로 민다.</b> 다른 테스트는 세 시각을 같은 값으로
+     * 맞춰서 두 술어가 구별되지 않는다 — {@code END_TIME} 조건을 통째로 지워도 초록이었다.
+     */
+    @Test
+    @DisplayName("보존 창 밖이어도 END_TIME 이 비어 있으면 안 걷는다 — 증거를 지우는 일이다")
+    void keepsUnfinishedExecutionsHoweverOld() throws Exception {
+        RunningJobFixture stuck = RunningJobFixture.plant(
+                jobRepository, jdbcClient, ExpireStepContext.JOB_NAME, AS_OF.minusDays(41),
+                Duration.ofHours(1), Duration.ofHours(1));
+        jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET CREATE_TIME = :at, START_TIME = :at, "
+                        + "END_TIME = NULL, STATUS = 'STARTED' WHERE JOB_EXECUTION_ID = :id")
+                .param("at", AS_OF.minusDays(40)).param("id", stuck.executionId()).update();
+
+        assertThat(runCleanup().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        assertThat(metaRows("BATCH_JOB_EXECUTION", stuck.executionId()))
+                .as("END_TIME 이 비어 있는 행은 BatchStuckExecution 의 유일한 증거다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * <b>{@code CREATE_TIME} 은 창 밖인데 {@code END_TIME} 은 창 안인 실행.</b> 두 술어를
+     * 갈라놓는 유일한 조합이라, 이것이 없으면 {@code END_TIME < :olderThan} 한 줄을 지워도
+     * 전 테스트가 초록이다 — 형제 테스트들은 세 시각이 같거나 {@code END_TIME} 이
+     * {@code NULL} 이라 {@code IS NOT NULL} 쪽이 먼저 막아 준다.
+     *
+     * <p><b>지키는 것은 성능이 아니라 {@code REFRESH_WINDOW_DAYS} 하한 전체다.</b> 이 행이
+     * 바로 두 되읽기가 {@code END_TIME > NOW() - 7 DAY} 창에서 찾는 <b>마지막 성공</b>이다.
+     * 걷어 버리면 기동 가드로 막아 둔 상태 — 게이지 {@code NaN} — 가 그대로 열린다.
+     */
+    @Test
+    @DisplayName("창 밖에 만들어졌어도 창 안에서 끝났으면 안 걷는다 — 되읽기 창의 근거다")
+    void keepsExecutionsThatFinishedInsideTheWindow() throws Exception {
+        RunningJobFixture longRun = RunningJobFixture.plant(
+                jobRepository, jdbcClient, ExpireStepContext.JOB_NAME, AS_OF.minusDays(41),
+                Duration.ofHours(1), Duration.ofHours(1));
+        jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET CREATE_TIME = :c, START_TIME = :c, "
+                        + "END_TIME = :e, STATUS = 'COMPLETED', EXIT_CODE = 'COMPLETED' "
+                        + "WHERE JOB_EXECUTION_ID = :id")
+                .param("c", AS_OF.minusDays(40))
+                .param("e", AS_OF.minusDays(1))
+                .param("id", longRun.executionId()).update();
+
+        assertThat(runCleanup().getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        assertThat(metaRows("BATCH_JOB_EXECUTION", longRun.executionId()))
+                .as("되읽기가 END_TIME > NOW()-7DAY 창에서 찾는 행이다 — 지우면 게이지가 NaN")
+                .isEqualTo(1);
+    }
+
+    /**
+     * <b>드레인이 한 청크에서 끊기면 백로그가 안 빠진다.</b> 그런데도 잡은 매일
+     * {@code COMPLETED} 이고 마지막 성공 시각도 갱신되니 <b>알림이 하나도 안 운다</b> —
+     * 완전히 조용한 고장이라 테스트 말고는 잡을 것이 없다.
+     */
+    @Test
+    @DisplayName("메타도 청크마다 트랜잭션이 갈린다 — 한 청크에서 끊기면 안 된다")
+    void drainsBatchMetadataAcrossChunks() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            RunningJobFixture old = RunningJobFixture.plant(
+                    jobRepository, jdbcClient, ExpireStepContext.JOB_NAME,
+                    AS_OF.minusDays(40 + i), Duration.ofHours(1), Duration.ofHours(1));
+            finishedAt(old.executionId(), AS_OF.minusDays(40 + i));
+        }
+
+        JobExecution execution = runCleanup();
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        StepExecution meta = execution.getStepExecutions().stream()
+                .filter(step -> "purgeBatchMetadataStep".equals(step.getStepName()))
+                .findFirst().orElseThrow();
+        assertThat(meta.getCommitCount())
+                .as("chunk-size=1 · 대상 3 이면 삭제 세 번 + 종료 한 번 = 4 다. 여유가 0 인 "
+                        + "판정이고 그게 의도다 — 하나라도 덜 돌면(드레인이 안 돌면) 죽는다")
+                .isGreaterThan(3);
+        assertThat(meta.getWriteCount())
+                .as("WRITE_COUNT 단위는 잡 실행 수다 — chunk-size 로 나누면 청크 수가 나온다. "
+                        + "0 이면 CleanupRunningTooLong 의 runbook 이 '새 Step 이 아무것도 "
+                        + "안 한다' 는 정반대 결론으로 보낸다")
+                .isEqualTo(3);
+        assertThat(oldMetaCount()).as("백로그가 다 빠져야 한다").isZero();
+    }
+
+    /**
+     * <b>{@code SimpleJob} 은 마지막 Step 의 종료 상태를 잡의 것으로 덮는다.</b> 순서가
+     * 바뀌거나 {@code .split()} 이 되면 {@code YIELDED} 가 {@code COMPLETED} 로 덮여
+     * 아무것도 안 한 주기가 마지막 성공 시각을 민다. 그 계약이 산문에만 있었다.
+     */
+    @Test
+    @DisplayName("Step 은 둘이고 순서가 고정이다 — 마지막 Step 의 종료 상태가 잡의 것이 된다")
+    void pinsStepOrder() {
+        assertThat(((org.springframework.batch.core.job.SimpleJob) cleanupJob).getStepNames())
+                .containsExactly("purgeVerificationRunsStep", "purgeBatchMetadataStep");
+    }
+
+    /** 보존 창 밖에 남은 배치 메타 실행 수. 드레인이 끝났는지 보는 값이다. */
+    private int oldMetaCount() {
+        return jdbcClient.sql("SELECT COUNT(*) FROM BATCH_JOB_EXECUTION "
+                        + "WHERE END_TIME IS NOT NULL AND END_TIME < :at")
+                .param("at", AS_OF.minusDays(10)).query(Integer.class).single();
+    }
+
+    /**
+     * <b>종료 시각을 잡의 좌표로, 세 시각을 함께 옮긴다.</b> {@code RunningJobFixture} 는
+     * 실제 벽시계로 심는데 이 잡의 컷오프는 {@code FixedClockConfig} 가 묶어 둔
+     * {@code AS_OF} 기준이다 — 두 축을 안 맞추면 보존 판정이 테스트가 도는 날짜에 따라
+     * 뒤집힌다. 삭제 술어가 {@code END_TIME} 인데 조회는
+     * {@code CREATE_TIME} 도 함께 본다(인덱스를 타려고) — 운영에서는 실행이 만들어진 뒤에
+     * 끝나므로 늘 참이지만, 테스트가 {@code END_TIME} 만 옮기면 그 불변식이 깨져
+     * <b>대상이 아닌 것으로 보인다.</b> 실제로 그렇게 썼다가 이 테스트가 잡았다.
+     */
+    private void finishedAt(long executionId, LocalDateTime endTime) {
+        jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET CREATE_TIME = :at, START_TIME = :at, "
+                        + "END_TIME = :at, STATUS = 'COMPLETED' "
+                        + "WHERE JOB_EXECUTION_ID = :id")
+                .param("at", endTime).param("id", executionId).update();
+        jdbcClient.sql("UPDATE BATCH_STEP_EXECUTION SET END_TIME = :at, STATUS = 'COMPLETED' "
+                        + "WHERE JOB_EXECUTION_ID = :id")
+                .param("at", endTime).param("id", executionId).update();
+    }
+
+    private long instanceOf(long executionId) {
+        return jdbcClient.sql("SELECT JOB_INSTANCE_ID FROM BATCH_JOB_EXECUTION "
+                        + "WHERE JOB_EXECUTION_ID = :id")
+                .param("id", executionId).query(Long.class).single();
+    }
+
+    private int instanceRows(long instanceId) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM BATCH_JOB_INSTANCE "
+                        + "WHERE JOB_INSTANCE_ID = :id")
+                .param("id", instanceId).query(Integer.class).single();
+    }
+
+    private int stepContextRows(long executionId) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM BATCH_STEP_EXECUTION_CONTEXT sec "
+                        + "JOIN BATCH_STEP_EXECUTION se "
+                        + "  ON se.STEP_EXECUTION_ID = sec.STEP_EXECUTION_ID "
+                        + "WHERE se.JOB_EXECUTION_ID = :id")
+                .param("id", executionId).query(Integer.class).single();
+    }
+
+    private int metaRows(String table, long executionId) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM " + table
+                        + " WHERE JOB_EXECUTION_ID = :id")
+                .param("id", executionId)
+                .query(Integer.class)
+                .single();
     }
 
     private JobExecution runCleanup() throws Exception {

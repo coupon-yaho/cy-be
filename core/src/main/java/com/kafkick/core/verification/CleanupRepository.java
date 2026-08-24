@@ -83,4 +83,35 @@ public interface CleanupRepository {
      * {@code max-findings-per-rule} 로 잘려 있고 무거운 것은 {@code asof_state} 다.
      */
     int deleteFindings(long runId);
+
+    /** 한 청크가 걷은 것. 실행과 그 실행이 고아로 만든 인스턴스를 함께 센다. */
+    record PurgedMetadata(int executions, int instances) {
+
+        public boolean isEmpty() {
+            return executions == 0 && instances == 0;
+        }
+    }
+
+    /**
+     * <b>보존 기간이 지난 배치 메타를 한 청크 지운다.</b>
+     *
+     * <p><b>끝난 실행만 지운다.</b> {@code END_TIME} 이 {@code NULL} 인 행 — 실행 중이거나
+     * 종료 표시를 못 남기고 죽은 행 — 은 절대 안 건드린다. 시체 행을 지우면
+     * {@code BatchStuckExecution} 이 조용해지는데, 그것은 고친 것이 아니라 <b>증거를 지운
+     * 것</b>이다. 그 행은 CY-429 의 복구 API 가 사람의 판단으로 닫는다.
+     *
+     * <p><b>딸린 행을 FK 역순으로 함께 지운다</b> — Step 문맥 · Step · 잡 문맥 · 잡 파라미터 ·
+     * 잡 실행 순. 하나라도 순서를 놓치면 제약 위반으로 한 행도 못 지운다.
+     *
+     * <p><b>고아가 된 인스턴스를 같은 호출에서 함께 지운다.</b> 나눠 두면 그 사이에
+     * <b>실행은 없는데 인스턴스는 있는</b> 상태가 남는데, {@code VerificationRunJdbcAdapter}
+     * 의 {@code nextAttempt} 가 배치 메타 파라미터를 <b>창 없이</b> 읽어 시도 번호를 정하므로
+     * 그 상태에서 번호가 1 로 돌아가고 살아 있는 인스턴스의 {@code JOB_INST_UN} 에 걸린다 —
+     * 그쪽이 <i>"몇 번을 눌러도 400 이고 자기 치유가 없다"</i> 고 적어 둔 자리다.
+     *
+     * @param olderThan 이 시각보다 <b>먼저 끝난</b> 실행이 대상이다
+     * @param chunkSize 한 번에 지울 {@code JobExecution} 수. <b>행 수가 아니다</b> —
+     *                  실행 하나에 딸린 행이 잡마다 크게 다르다(검증은 Step 열하나)
+     */
+    PurgedMetadata deleteBatchMetadataChunk(LocalDateTime olderThan, int chunkSize);
 }

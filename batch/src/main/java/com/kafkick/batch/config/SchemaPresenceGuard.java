@@ -77,6 +77,13 @@ public class SchemaPresenceGuard implements ApplicationRunner {
 
     private static final String META_PREFIX = "BATCH_";
 
+    /**
+     * <b>인덱스 둘까지 말한다.</b> 이 가드는 테이블 존재만 보므로 인덱스 누락은 못 잡는다 —
+     * 그래서 메시지가 그 사실과 목록을 함께 져야 사람이 절차에서 빠뜨리지 않는다.
+     */
+    private static final String META_MIGRATIONS =
+            "V2__batch_metadata.sql · V14__ix_batch_job_execution_lookup.sql · V15__ix_batch_job_execution_history.sql";
+
     private final VerificationRuleRepository rules;
 
     public SchemaPresenceGuard(VerificationRuleRepository rules) {
@@ -130,10 +137,14 @@ public class SchemaPresenceGuard implements ApplicationRunner {
         boolean onlyMeta = missing.stream().allMatch(t -> t.startsWith(META_PREFIX));
         if (onlyMeta) {
             return head + "데이터 테이블은 전부 있으므로 Spring Batch 메타 스키마만 빠진 것입니다 "
-                    + "— V2__batch_metadata.sql 을 이 스키마에 부으십시오. "
+                    + "— 배치 메타 마이그레이션 셋(" + META_MIGRATIONS + ")을 이 스키마에 "
+                    + "부으십시오. 인덱스 둘은 이 가드가 못 봅니다 — 빠뜨려도 기동과 동작이 "
+                    + "통과하고, 되읽기가 데드라인을 넘겨 게이지가 NaN 이 되거나 정리 잡이 "
+                    + "매 청크 전체 스캔을 하는 것으로만 드러납니다(절차는 docs/14). "
                     + "cy-seed 의 ddl/ 로 만든 검증용 셋에는 BATCH_* 가 들어 있지 않습니다.";
         }
         return head + "마이그레이션 소유자는 api 입니다 — api 를 먼저 띄워 Flyway 를 끝내십시오. "
-                + "검증용 셋이라면 cy-seed 의 ddl/ 을 부은 뒤 V2__batch_metadata.sql 도 함께 부으십시오.";
+                + "검증용 셋이라면 cy-seed 의 ddl/ 을 부은 뒤 배치 메타 마이그레이션 셋("
+                + META_MIGRATIONS + ")도 함께 부으십시오.";
     }
 }

@@ -107,6 +107,9 @@ class ResolvedBatchConfigTest {
             "batch.verify.asof-state-keep-runs",
             "batch.cleanup.chunk-size",
             "batch.cleanup.abandoned-after-hours",
+            // 되읽기 창(7일)보다 커야 한다 — 짧으면 정리 잡이 감시를 끈다.
+            "batch.cleanup.metadata-keep-days",
+            "batch.cleanup.metadata-chunk-size",
             "batch.cleanup.step-timeout-ms",
             "batch.schedule.cleanup-cron",
             "batch.verify.step-timeout-ms",
@@ -177,6 +180,8 @@ class ResolvedBatchConfigTest {
                 "--BATCH_RUN_METRICS_REFRESH_MS=62000",
                 "--EXPIRE_PENDING_REFRESH_MS=63000",
                 "--EXPIRE_PENDING_INITIAL_DELAY_MS=64000",
+                "--CLEANUP_METADATA_KEEP_DAYS=31",
+                "--CLEANUP_METADATA_CHUNK_SIZE=507",
                 "--EXPIRE_PENDING_TIMEOUT_MS=8000",
                 "--BATCH_RUN_METRICS_TIMEOUT_MS=7000",
                 "--EXPIRE_SLA_SECONDS=90001",
@@ -308,6 +313,8 @@ class ResolvedBatchConfigTest {
         assertThat(environment.getProperty("batch.metrics.cleanup-sla-seconds")).isEqualTo("90002");
         assertThat(environment.getProperty("batch.cleanup.chunk-size")).isEqualTo("17");
         assertThat(environment.getProperty("batch.cleanup.abandoned-after-hours")).isEqualTo("23");
+        assertThat(environment.getProperty("batch.cleanup.metadata-keep-days")).isEqualTo("31");
+        assertThat(environment.getProperty("batch.cleanup.metadata-chunk-size")).isEqualTo("507");
         assertThat(environment.getProperty("batch.cleanup.step-timeout-ms")).isEqualTo("121000");
         assertThat(environment.getProperty("batch.schedule.cleanup-cron")).isEqualTo("0 31 4 * * *");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))

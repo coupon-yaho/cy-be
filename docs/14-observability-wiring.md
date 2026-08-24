@@ -364,8 +364,10 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
 지금 검증을 막는 것은 그 플래그가 아니라 **실제로 도는 만료 실행**이다. 만료는 배치 창
 (04:10 UTC = **13:10 KST**)에 하루 한 번 도므로 그 시각만 피하면 언제든 트리거된다 —
-정리도 20분 뒤(13:30 KST)라 함께 피한다. 그 시각에 걸면 정리가 첫 청크에서 물러나
-**한 행도 안 걷는다**(종료 코드 `YIELDED`).
+정리도 20분 뒤(13:30 KST)라 함께 피한다. 그 시각에 걸면 정리의 **첫 Step**(검증 파생 행)이
+첫 청크에서 물러나 `asof_state` 를 **한 행도 안 걷는다**(종료 코드 `YIELDED`).
+**배치 메타는 그래도 걷힌다** — 둘째 Step 은 검증 데이터를 안 건드리므로 걷고 나서 `YIELDED`
+를 이어받는다. 그 수치가 종료 설명의 `metaExecutions`·`metaInstances` 다.
 
 1. **먼저 두 알림을 재운다.** `BATCH_SCHEDULING_ENABLED` 를 켜든 끄든 필요하다 —
    만료·정리가 배치 창(04:10 · 04:30 UTC)으로 옮겨(CY-397) **크론 슬롯 한 번이 하루**이므로,
@@ -456,7 +458,17 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
    **검증용 셋에는 Spring Batch 메타 테이블이 없다.** cy-seed 의 `ddl/` 이 안 만든다.
    `SchemaPresenceGuard` 가 기동 시점에 그것을 말해 주므로 배치가 아예 안 뜬다 —
-   그 스키마에 `V2__batch_metadata.sql` 을 한 번 부어야 한다.
+   그 스키마에 **배치 메타 마이그레이션 셋**을 한 번 부어야 한다 — `V2`(테이블)와
+   `V14`·`V15`(인덱스)다. **인덱스를 빼먹으면 기동도 동작도 통과한다** — `SchemaPresenceGuard`
+   는 테이블만 보기 때문이다. 증상은 인덱스마다 다르다:
+   - `V14`(`STATUS, END_TIME`) 누락 → 되읽기 둘이 7일 창을 인덱스 없이 훑는다. 각자의
+     데드라인을 넘기면 **게이지가 `NaN`** 이 된다 — 키가 다르다:
+     `BatchRunMetricsRefresher` 는 `batch.metrics.run-timeout-ms`,
+     `ExpirePendingRefresher` 는 `batch.metrics.expire-pending-timeout-ms`(둘 다 기본 5초).
+     넘기는지는 안 쟀다 — `V14` 헤더가 잰 것은 읽는 행 수(25,950 → 2,016)까지다.
+   - `V15`(`CREATE_TIME`) 누락 → 게이지는 멀쩡하다. 대신 `purgeBatchMetadataStep` 의
+     대상 선택이 매 청크 전체 스캔이 되어 총비용이 `N²/(2·chunk)` 가 되고,
+     **`CleanupRunningTooLong` 으로만** 드러난다.
 
    ```bash
    # 변수 이름에 주의. MYSQL_ROOT_PASSWORD 는 **컨테이너 안** 이름이고, 호스트 셸이
@@ -466,10 +478,17 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    #
    # ⚠️ **두 스키마에 다 부어야 한다.** 아래 CORRUPT 트리거는 coupon_corrupt 를 보는
    #    기동에서 돌리는데, 그 스키마에도 BATCH_* 가 없어 첫 실행이 메타 테이블 오류로 죽는다.
+   #
+   # ⚠️ **인덱스 둘도 함께 붓는다.** 없어도 기동·동작이 통과한다 — V14 를 빼면 게이지가
+   #    NaN 이 되고, V15 를 빼면 게이지는 멀쩡한 채 정리 잡만 매 청크 전체 스캔이 된다.
    for SCHEMA in coupon_clean coupon_corrupt; do
-     docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
-       mysql -uroot "$SCHEMA" \
-       < storage/src/main/resources/db/migration/V2__batch_metadata.sql
+     for F in V2__batch_metadata.sql \
+              V14__ix_batch_job_execution_lookup.sql \
+              V15__ix_batch_job_execution_history.sql; do
+       docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
+         mysql -uroot "$SCHEMA" \
+         < storage/src/main/resources/db/migration/$F
+     done
    done
    ```
 
