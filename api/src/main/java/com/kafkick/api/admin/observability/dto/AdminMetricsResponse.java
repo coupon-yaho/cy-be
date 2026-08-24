@@ -36,6 +36,7 @@ import com.kafkick.core.observation.SourceStatus;
  * @param persistence 비동기 영속화 지연 관측값
  * @param circuitBreakers 회로 차단기별 상태 목록
  * @param errors 실패 분류별 비율과 실패 원인 Top N
+ * @param saturation 자원 포화·in-flight·큐 3영역
  */
 public record AdminMetricsResponse(
         Meta meta,
@@ -48,7 +49,8 @@ public record AdminMetricsResponse(
         DependencyMetrics dependencies,
         ObservedValue<PersistenceLagSummary> persistence,
         List<CircuitBreakerSummary> circuitBreakers,
-        ErrorMetrics errors
+        ErrorMetrics errors,
+        SaturationPanel saturation
 ) {
 
     /**
@@ -71,7 +73,8 @@ public record AdminMetricsResponse(
                 new DependencyMetrics(null, null, null),
                 new ObservedValue<>(null, SourceStatus.PENDING, null),
                 List.of(),
-                ErrorMetrics.draft()
+                ErrorMetrics.draft(),
+                SaturationPanel.draft()
         );
     }
 
@@ -292,6 +295,221 @@ public record AdminMetricsResponse(
 
     /** 회로 차단기의 공개 상태입니다. */
     public enum CircuitBreakerState { CLOSED, OPEN, HALF_OPEN }
+
+    /**
+     * 자원 포화(패널 19) · in-flight(20) · 큐 3영역(21)입니다.
+     *
+     * <p><b>필드 이름과 값 단위는 화면 계약입니다</b>({@code cy-fe src/lib/admin/types.ts:571-601}).
+     * {@code resources[].name} 은 화면의 목록 키라서 행마다 유일해야 하고,
+     * {@code utilization} 은 <b>0~100 퍼센트</b>입니다 — 화면이 {@code `${v}%`} 로 그리고
+     * 탭 색을 {@code Math.max(resources.utilization)} 로 정하므로 퍼센트가 아닌 값을 한 행이라도
+     * 실으면 색이 조용히 틀립니다.</p>
+     *
+     * @param resources 자원별 사용률 6행
+     * @param inFlight 처리 중인 요청 수
+     * @param queues 의미가 다른 큐 3영역. 하나로 합치지 않습니다
+     * @param thresholds 세 단계 공통 임계(%)
+     */
+    public record SaturationPanel(
+            List<ResourceRow> resources,
+            InFlightSummary inFlight,
+            List<QueueZoneSummary> queues,
+            SaturationThresholds thresholds
+    ) {
+
+        /** 화면 mock 과 같은 값이어야 색과 숫자가 따로 놀지 않습니다. */
+        public static final SaturationThresholds THRESHOLDS = new SaturationThresholds(60, 75, 85);
+
+        /** DB 풀만 80 입니다 — PRD 의 대기열 진입 조건이 'DB풀 > 80%' 라 화면과 동작을 맞춥니다. */
+        public static final int WARN_AT_DB_POOL = 80;
+
+        /** 나머지 자원의 경고선. */
+        public static final int WARN_AT_DEFAULT = 75;
+
+        /**
+         * 아무 원천도 읽지 않은 골격입니다. 행 이름·경고선·임계는 계약이라 값이 없어도 그대로
+         * 실리고, 값 자리만 PENDING 입니다 — 0 으로 채우면 화면이 '여유 있음' 을 그립니다.
+         *
+         * @return 값이 전부 PENDING 인 패널
+         */
+        public static SaturationPanel draft() {
+            ObservedValue<Double> pending = new ObservedValue<>(null, SourceStatus.PENDING, null);
+            List<ResourceRow> rows = ResourceRowSpec.ALL.stream()
+                    .map(spec -> new ResourceRow(spec.name(), spec.detail(), pending, spec.warnAt()))
+                    .toList();
+            List<QueueZoneSummary> queues = QueueZone.ALL_ZONES.stream()
+                    .map(zone -> new QueueZoneSummary(zone,
+                            QueueMetric.labelsOf(zone).stream()
+                                    .map(label -> new QueueMetric(label, pending, QueueMetric.unitOf(label)))
+                                    .toList(),
+                            List.of()))
+                    .toList();
+            return new SaturationPanel(
+                    rows,
+                    new InFlightSummary(pending, pending, "", 0, QueueGateMode.OFF, 0, 0, List.of()),
+                    queues,
+                    THRESHOLDS);
+        }
+    }
+
+    /**
+     * 자원 6행의 이름·보조 문구·경고선입니다. <b>순서와 이름이 화면 계약</b>이라 조립기가 아니라
+     * 계약 파일이 쥡니다 — 원천이 죽어도 행은 그대로 있어야 화면이 자리를 잃지 않습니다.
+     *
+     * @param name 화면 목록 키
+     * @param detail 이름 옆 보조 문구
+     * @param warnAt 이 자원만의 경고선(%)
+     */
+    public record ResourceRowSpec(String name, String detail, int warnAt) {
+
+        public static final ResourceRowSpec HIKARI =
+                new ResourceRowSpec("Hikari", "pending 미상", SaturationPanel.WARN_AT_DB_POOL);
+        public static final ResourceRowSpec TOMCAT =
+                new ResourceRowSpec("Tomcat", "worker", SaturationPanel.WARN_AT_DEFAULT);
+        public static final ResourceRowSpec CPU =
+                new ResourceRowSpec("CPU", "process", SaturationPanel.WARN_AT_DEFAULT);
+        public static final ResourceRowSpec HEAP =
+                new ResourceRowSpec("Heap", "used ÷ max", SaturationPanel.WARN_AT_DEFAULT);
+
+        /** 지연 미터는 있지만 <b>사용률의 분모가 없습니다</b> — 비율을 만들 수 없어 값을 내지 않습니다. */
+        public static final ResourceRowSpec REDIS =
+                new ResourceRowSpec("Redis", "사용률 원천 없음", SaturationPanel.WARN_AT_DEFAULT);
+
+        /** 컨테이너 안에서 직접 재지 않습니다. 행을 지우면 화면이 '측정했는데 여유' 로 읽습니다. */
+        public static final ResourceRowSpec DISK_NETWORK =
+                new ResourceRowSpec("디스크 · 네트워크", "간접 지표로 대체", SaturationPanel.WARN_AT_DEFAULT);
+
+        public static final List<ResourceRowSpec> ALL =
+                List.of(HIKARI, TOMCAT, CPU, HEAP, REDIS, DISK_NETWORK);
+    }
+
+    /**
+     * 자원 한 줄입니다.
+     *
+     * @param name 화면 목록 키. 행마다 유일해야 합니다
+     * @param detail 이름 옆에 그대로 붙는 보조 문구. 상태를 실을 자리가 없으므로 값이 없을 때도
+     *        문장이 성립해야 합니다
+     * @param utilization 0~100 퍼센트 사용률
+     * @param warnAt 이 자원만의 경고선(%). DB 풀은 PRD 의 대기열 진입 조건과 같은 80,
+     *        나머지는 75 입니다 — 화면 mock 과 같은 값이어야 색과 숫자가 따로 놀지 않습니다
+     */
+    public record ResourceRow(
+            String name,
+            String detail,
+            ObservedValue<Double> utilization,
+            int warnAt
+    ) { }
+
+    /**
+     * 처리 중인 요청 수입니다. <b>스레드가 아니라 요청을 셉니다</b> — {@code tomcat.threads.busy}
+     * 와 다른 값입니다.
+     *
+     * @param globalSum 전체 인스턴스 합
+     * @param instanceMax 한 인스턴스의 최댓값. 합만 보면 한 대에 쏠린 것을 못 봅니다
+     * @param instanceId 위 최댓값을 낸 인스턴스. 모르면 빈 문자열입니다
+     * @param activeInstances {@code up==1} 인 인스턴스 수. 죽은 인스턴스의 마지막 값이 합을
+     *        부풀리는 것을 화면이 이 값으로 드러냅니다
+     * @param mode 대기열 동작 모드
+     * @param admitThreshold 대기열 진입 임계
+     * @param releaseThreshold 대기열 해제 임계
+     * @param series 시계열. 이 티켓은 자리만 만들고 채우지 않습니다(OBS-34)
+     */
+    public record InFlightSummary(
+            ObservedValue<Double> globalSum,
+            ObservedValue<Double> instanceMax,
+            String instanceId,
+            int activeInstances,
+            QueueGateMode mode,
+            int admitThreshold,
+            int releaseThreshold,
+            List<Object> series
+    ) { }
+
+    /**
+     * 화면이 받는 대기열 모드. 런타임 설정의 {@code QueueMode}(OFF·ALWAYS·ADAPTIVE)와 <b>다른
+     * 집합</b>이라 별도 enum 입니다 — 화면 계약이 두 값만 받습니다.
+     */
+    public enum QueueGateMode { ON, OFF }
+
+    /**
+     * 큐 한 영역입니다. {@code zone} 이름은 계약이고 화면이 이 값으로 분기합니다.
+     *
+     * @param zone 영역
+     * @param metrics 영역 안의 지표들. {@code label} 이 화면의 목록 키입니다
+     * @param series 시계열. 이 티켓은 자리만 만들고 채우지 않습니다(OBS-34)
+     */
+    public record QueueZoneSummary(QueueZone zone, List<QueueMetric> metrics, List<Object> series) { }
+
+    /**
+     * 큐 3영역. <b>단위도 의미도 다릅니다</b> — 대기 인원(사람) · 저장 대기(메시지) · 관측 지연(시간).
+     * 하나의 큐 길이로 합치면 어느 것도 해석할 수 없습니다.
+     */
+    public enum QueueZone {
+
+        Admission, Persistence, Telemetry;
+
+        public static final List<QueueZone> ALL_ZONES = List.of(values());
+    }
+
+    /**
+     * 큐 영역 안의 지표 하나입니다.
+     *
+     * @param label 화면 목록 키이자 표시 이름
+     * @param value 관측값
+     * @param unit 표시 단위; 없으면 null
+     */
+    public record QueueMetric(String label, ObservedValue<Double> value, String unit) {
+
+        public static final String ADMISSION_WAITING = "대기 인원";
+        public static final String ADMISSION_ADMITTED = "입장 처리";
+        public static final String ADMISSION_GROWTH = "증가율";
+        public static final String ADMISSION_ETA = "해소 예상";
+        public static final String PERSISTENCE_LAG = "저장 대기";
+        public static final String PERSISTENCE_ARRIVAL = "들어오는 양";
+        public static final String PERSISTENCE_CONSUME = "저장 처리";
+        public static final String PERSISTENCE_GROWTH = "증가율";
+        public static final String TELEMETRY_DISPLAY_LAG = "화면 표시 지연";
+
+        private static final String UNIT_SECONDS = "초";
+
+        /**
+         * 영역별 지표 라벨입니다. 라벨이 화면의 목록 키라 순서와 문구가 계약입니다.
+         *
+         * @param zone 큐 영역
+         * @return 그 영역이 내는 지표 라벨들
+         */
+        public static List<String> labelsOf(QueueZone zone) {
+            return switch (zone) {
+                case Admission -> List.of(
+                        ADMISSION_WAITING, ADMISSION_ADMITTED, ADMISSION_GROWTH, ADMISSION_ETA);
+                case Persistence -> List.of(
+                        PERSISTENCE_LAG, PERSISTENCE_ARRIVAL, PERSISTENCE_CONSUME, PERSISTENCE_GROWTH);
+                case Telemetry -> List.of(TELEMETRY_DISPLAY_LAG);
+            };
+        }
+
+        /**
+         * 라벨의 표시 단위입니다.
+         *
+         * @param label 지표 라벨
+         * @return 단위; 개수처럼 단위가 없으면 null
+         */
+        public static String unitOf(String label) {
+            return ADMISSION_ETA.equals(label) || TELEMETRY_DISPLAY_LAG.equals(label)
+                    ? UNIT_SECONDS
+                    : null;
+        }
+    }
+
+    /**
+     * 사용률 3단 임계(%)입니다. 대기시간 배수가 사용률 ρ 에서 {@code ρ/(1−ρ)} 라
+     * 60% 에서 1.5배, 75% 에서 3배, 85% 에서 5.7배입니다 — 포화는 100% 전에 무너집니다.
+     *
+     * @param warn 목표선
+     * @param high 경고선
+     * @param critical 위험선
+     */
+    public record SaturationThresholds(int warn, int high, int critical) { }
 
     /**
      * 하나의 회로 차단기 상태를 노출합니다.

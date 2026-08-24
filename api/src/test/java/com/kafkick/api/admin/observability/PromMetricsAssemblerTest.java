@@ -41,8 +41,8 @@ class PromMetricsAssemblerTest {
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
     private static final Duration BUDGET = Duration.ofMillis(900);
 
-    /** 조립기가 응답 한 장에 보내는 질의 수. 예산이 넉넉하면 다섯 개가 모두 나간다. */
-    private static final long QUERY_COUNT = 5;
+    /** 조립기가 응답 한 장에 보내는 질의 수. 예산이 넉넉하면 여섯 개가 모두 나간다. */
+    private static final long QUERY_COUNT = 6;
     private static final long QUERY_DELAY_MILLIS = 20;
 
     private static final long FRESH_AGE_SECONDS = 3;
@@ -87,7 +87,7 @@ class PromMetricsAssemblerTest {
 
         AdminMetricsResponse response = assemble(slow, globalQuery());
 
-        // 질의 하나가 아니라 다섯 개를 합친 시간이어야 한다. 하한만 보므로 CI 가 느릴수록
+        // 질의 하나가 아니라 여섯 개를 합친 시간이어야 한다. 하한만 보므로 CI 가 느릴수록
         // 더 확실히 통과한다 — 느려서 깨질 수 있는 상한 단언이 아니다.
         assertThat(response.meta().collectionDurationMs())
                 .isGreaterThanOrEqualTo(QUERY_DELAY_MILLIS * QUERY_COUNT);
@@ -143,12 +143,12 @@ class PromMetricsAssemblerTest {
 
     /** 지표마다 한 번씩 부르면 1 초 폴링이 Prometheus 를 초당 수십 번 두드립니다. */
     @Test
-    @DisplayName("셀렉터로 묶어 응답 한 장에 질의를 다섯 번만 보낸다")
+    @DisplayName("셀렉터로 묶어 응답 한 장에 질의를 여섯 번만 보낸다")
     void usesSelectorsToLimitQueries() {
         FakePromQuery client = FakePromQuery.empty();
         assemble(client, globalQuery());
 
-        assertThat(client.queries()).hasSize(5);
+        assertThat(client.queries()).hasSize(6);
         assertThat(client.queries()).noneMatch(q -> q.contains("query_range"));
         // window 는 되돌아볼 범위가 아니라 비율을 계산할 집계 창이라 질의 안에 들어간다.
         assertThat(client.queries()).anyMatch(q -> q.contains("[60s]"));
@@ -858,6 +858,305 @@ class PromMetricsAssemblerTest {
         assertThat(luaGap.state()).isEqualTo(SourceStatus.N_A);
     }
 
+    // ── 자원 포화 ───────────────────────────────────────────────────────────────
+
+    /**
+     * 행은 원천이 없어도 사라지지 않습니다. 지우면 화면이 "그 자원은 재 봤는데 여유" 로 읽습니다.
+     * 이름·경고선·임계는 프론트 mock 과 같은 값이어야 색과 숫자가 따로 놀지 않습니다.
+     */
+    @Test
+    @DisplayName("자원 6행과 임계가 화면 계약대로 나간다")
+    void saturationCarriesSixContractRows() {
+        AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
+
+        assertThat(response.saturation().resources())
+                .extracting(AdminMetricsResponse.ResourceRow::name)
+                .containsExactly("Hikari", "Tomcat", "CPU", "Heap", "Redis", "디스크 · 네트워크");
+        // DB 풀만 80 이다 — PRD 의 대기열 진입 조건과 같아야 한다.
+        assertThat(response.saturation().resources().get(0).warnAt()).isEqualTo(80);
+        assertThat(response.saturation().resources()).allSatisfy(row ->
+                assertThat(row.warnAt()).isIn(75, 80));
+        assertThat(response.saturation().thresholds().warn()).isEqualTo(60);
+        assertThat(response.saturation().thresholds().high()).isEqualTo(75);
+        assertThat(response.saturation().thresholds().critical()).isEqualTo(85);
+    }
+
+    /** 사용률의 분모가 없는 자원은 0 이 아니라 N_A 입니다. 0 은 "여유" 로 읽힙니다. */
+    @Test
+    @DisplayName("원천이 없는 자원 행은 N_A 로 나간다")
+    void rowsWithoutSourceAreNotApplicable() {
+        AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
+
+        assertThat(response.saturation().resources().get(4).utilization().state())
+                .isEqualTo(SourceStatus.N_A);
+        assertThat(response.saturation().resources().get(5).utilization().state())
+                .isEqualTo(SourceStatus.N_A);
+    }
+
+    /**
+     * 인스턴스를 먼저 합치면 정원이 다른 대가 섞여 한 대의 포화가 다른 대의 여유에 희석됩니다.
+     * 인스턴스 <b>안에서</b> 나눈 뒤 그 비율들을 최댓값으로 줄입니다.
+     */
+    @Test
+    @DisplayName("사용률은 인스턴스 안에서 먼저 나누고 그 뒤 최댓값으로 줄인다")
+    void utilizationFoldsInsideInstanceBeforeReducing() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        pool(MetricAggregation.HIKARI_ACTIVE, 8d, "api-1", "HikariPool-1"),
+                        pool(MetricAggregation.HIKARI_MAX, 10d, "api-1", "HikariPool-1"),
+                        pool(MetricAggregation.HIKARI_ACTIVE, 5d, "api-2", "HikariPool-1"),
+                        pool(MetricAggregation.HIKARI_MAX, 50d, "api-2", "HikariPool-1"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        // 13/60 = 21.7% 가 아니라 max(80%, 10%) = 80% 다.
+        assertThat(response.saturation().resources().get(0).utilization().value()).isEqualTo(80.0);
+        assertThat(response.saturation().resources().get(0).utilization().state())
+                .isEqualTo(SourceStatus.VALID);
+    }
+
+    /**
+     * 관측 전용 풀은 발급 경로 자원이 아닙니다. 같이 세면 정원이 부풀어 사용률이 낮게 나옵니다 —
+     * 값이 정상 범위라 아무도 못 알아챕니다.
+     */
+    @Test
+    @DisplayName("DB 풀 사용률은 관측 전용 풀을 세지 않는다")
+    void poolUtilizationExcludesObservationPool() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        pool(MetricAggregation.HIKARI_ACTIVE, 8d, "api-1", "HikariPool-1"),
+                        pool(MetricAggregation.HIKARI_MAX, 10d, "api-1", "HikariPool-1"),
+                        pool(MetricAggregation.HIKARI_ACTIVE, 0d, "api-1", "obs-pool"),
+                        pool(MetricAggregation.HIKARI_MAX, 2d, "api-1", "obs-pool"),
+                        pool(MetricAggregation.HIKARI_PENDING, 7d, "api-1", "HikariPool-1"),
+                        pool(MetricAggregation.HIKARI_PENDING, 3d, "api-1", "obs-pool"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        // 관측 풀까지 세면 8/12 = 66.7% 가 된다.
+        assertThat(response.saturation().resources().get(0).utilization().value()).isEqualTo(80.0);
+        assertThat(response.saturation().resources().get(0).detail()).isEqualTo("pending 7");
+    }
+
+    /**
+     * 이 미터는 {@code area}·{@code id} 로 여덟 갈래라 생표본에 최댓값을 걸면 heap 이 아니라
+     * Metaspace 가 잡힙니다(실측). 그리고 G1 은 Eden·Survivor 상한에 -1 을 실어 영역 상한을
+     * 더할 수 없습니다.
+     */
+    @Test
+    @DisplayName("힙 사용률은 nonheap 영역과 -1 상한에 오염되지 않는다")
+    void heapUtilizationIgnoresNonHeapAndUnknownLimits() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        memory(MetricAggregation.JVM_MEMORY_USED, "heap", "G1 Eden Space", 30d),
+                        memory(MetricAggregation.JVM_MEMORY_USED, "heap", "G1 Old Gen", 20d),
+                        memory(MetricAggregation.JVM_MEMORY_USED, "nonheap", "Metaspace", 900d),
+                        memory(MetricAggregation.JVM_MEMORY_MAX, "heap", "G1 Eden Space", -1d),
+                        memory(MetricAggregation.JVM_MEMORY_MAX, "heap", "G1 Old Gen", 200d),
+                        memory(MetricAggregation.JVM_MEMORY_MAX, "nonheap", "Metaspace", 1000d))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        // (30+20)/200 = 25%. nonheap 을 세면 475%, 상한을 더하면 25% 가 아니라 다른 값이 된다.
+        assertThat(response.saturation().resources().get(3).utilization().value()).isEqualTo(25.0);
+    }
+
+    /** 정원을 모르면 비율이 아닙니다. 0 으로 두면 그 자원이 가장 여유로워 보입니다. */
+    @Test
+    @DisplayName("정원 미터가 없으면 사용률은 0 이 아니라 PENDING 이다")
+    void utilizationWithoutCapacityIsPending() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        resource(MetricAggregation.TOMCAT_BUSY, 40d, "api-1"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().resources().get(1).utilization().state())
+                .isEqualTo(SourceStatus.PENDING);
+        assertThat(response.saturation().resources().get(1).utilization().value()).isNull();
+    }
+
+    /** tomcat 미터는 설정 스위치에 걸려 있어 두 미터가 함께 와야 한 행이 값을 냅니다. */
+    @Test
+    @DisplayName("tomcat busy 와 정원이 함께 오면 한 행의 사용률이 된다")
+    void tomcatRowsCollapseIntoOneUtilization() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        resource(MetricAggregation.TOMCAT_BUSY, 40d, "api-1"),
+                        resource(MetricAggregation.TOMCAT_MAX, 200d, "api-1"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().resources().get(1).utilization().value()).isEqualTo(20.0);
+    }
+
+    /** CPU 는 이미 비율이라 인스턴스 안에서 나눌 것이 없고, 가장 위험한 인스턴스를 씁니다. */
+    @Test
+    @DisplayName("CPU 는 비율을 퍼센트로 바꿔 인스턴스 최댓값을 쓴다")
+    void cpuUsesInstanceMaxAsPercent() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        resource(MetricAggregation.CPU_USAGE, 0.12d, "api-1"),
+                        resource(MetricAggregation.CPU_USAGE, 0.64d, "api-2"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().resources().get(2).utilization().value()).isEqualTo(64.0);
+    }
+
+    /**
+     * 합만 보면 한 대에 쏠린 것을 못 봅니다. 그리고 죽은 인스턴스의 마지막 값이 합에 남아 있는
+     * 동안 활성 개수가 그 사실을 드러냅니다.
+     */
+    @Test
+    @DisplayName("in-flight 는 합과 인스턴스 최댓값을 함께 내고 활성 개수를 센다")
+    void inFlightSplitsSumAndInstanceMax() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        resource(MetricAggregation.HTTP_IN_FLIGHT, 30d, "api-1"),
+                        resource(MetricAggregation.HTTP_IN_FLIGHT, 90d, "api-2"),
+                        resource(MetricAggregation.UP, 1d, "api-1"),
+                        resource(MetricAggregation.UP, 1d, "api-2"),
+                        resource(MetricAggregation.UP, 0d, "api-3"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().inFlight().globalSum().value()).isEqualTo(120.0);
+        assertThat(response.saturation().inFlight().instanceMax().value()).isEqualTo(90.0);
+        assertThat(response.saturation().inFlight().instanceId()).isEqualTo("api-2");
+        // up==0 인 인스턴스는 세지 않는다.
+        assertThat(response.saturation().inFlight().activeInstances()).isEqualTo(2);
+    }
+
+    /** 어느 대가 최대인지 모르면 아무 대나 지목하지 않습니다. */
+    @Test
+    @DisplayName("in-flight 표본이 없으면 인스턴스를 지목하지 않는다")
+    void inFlightWithoutSamplesNamesNoInstance() {
+        AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
+
+        assertThat(response.saturation().inFlight().instanceId()).isEmpty();
+        assertThat(response.saturation().inFlight().globalSum().state())
+                .isEqualTo(SourceStatus.PENDING);
+    }
+
+    // ── 큐 3영역 ───────────────────────────────────────────────────────────────
+
+    /** zone 이름이 계약입니다 — 프론트가 이 값으로 분기합니다. */
+    @Test
+    @DisplayName("큐는 세 영역으로 나뉘고 영역 이름이 계약대로 나간다")
+    void queuesCarryThreeContractZones() {
+        AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
+
+        assertThat(response.saturation().queues())
+                .extracting(zone -> zone.zone().name())
+                .containsExactly("Admission", "Persistence", "Telemetry");
+        assertThat(response.saturation().queues().get(0).metrics())
+                .extracting(AdminMetricsResponse.QueueMetric::label)
+                .containsExactly("대기 인원", "입장 처리", "증가율", "해소 예상");
+    }
+
+    /**
+     * 원천이 없는 것과 큐가 빈 것은 다른 사건입니다. 0 으로 내리면 화면이 "저장 대기 없음" 을
+     * 그리는데, 실제로는 Kafka lag 을 아직 읽지도 못하는 상태입니다.
+     */
+    @Test
+    @DisplayName("원천이 없는 영역은 0 이 아니라 PENDING 이다")
+    void zonesWithoutSourceStayPending() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(resource(MetricAggregation.HTTP_IN_FLIGHT, 3d, "api-1"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().queues().get(1).metrics()).allSatisfy(metric -> {
+            assertThat(metric.value().state()).isEqualTo(SourceStatus.PENDING);
+            assertThat(metric.value().value()).isNull();
+        });
+        assertThat(response.saturation().queues().get(2).metrics().get(0).value().state())
+                .isEqualTo(SourceStatus.PENDING);
+    }
+
+    /** 대기 인원은 값 미터와 상태 미터를 짝으로 읽습니다 — batch 는 값이 없을 때 NaN 을 싣습니다. */
+    @Test
+    @DisplayName("대기 인원은 값·상태 짝으로 읽고 재고 수집 경로 시각을 쓴다")
+    void admissionWaitingReadsPairedQueueMeter() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "app_observation_collect_last_success_epoch",
+                List.of(stockCollectSuccess(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        domain(MetricAggregation.QUEUE_LENGTH, Map.of(), 1200d),
+                        domain(MetricAggregation.QUEUE_LENGTH_STATE, Map.of(),
+                                SourceStatusCode.of(SourceStatus.VALID)))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        AdminMetricsResponse.QueueMetric waiting =
+                response.saturation().queues().get(0).metrics().get(0);
+        assertThat(waiting.value().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(waiting.value().value()).isEqualTo(1200.0);
+    }
+
+    /** 대기열을 쓰지 않는 회차는 장애가 아닙니다. batch 가 실어 보낸 이유가 그대로 나갑니다. */
+    @Test
+    @DisplayName("대기열이 없는 회차의 대기 인원은 batch 가 보낸 상태 그대로 나간다")
+    void admissionWaitingKeepsReportedState() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "app_observation_collect_last_success_epoch",
+                List.of(stockCollectSuccess(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        domain(MetricAggregation.QUEUE_LENGTH, Map.of(), Double.NaN),
+                        domain(MetricAggregation.QUEUE_LENGTH_STATE, Map.of(),
+                                SourceStatusCode.of(SourceStatus.N_A)))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.saturation().queues().get(0).metrics().get(0).value().state())
+                .isEqualTo(SourceStatus.N_A);
+    }
+
+    /** 질의 하나가 죽어도 행 자체는 남아야 화면이 자리를 잃지 않습니다. */
+    @Test
+    @DisplayName("질의가 실패해도 자원 행과 큐 영역은 그대로 있고 값만 UNAVAILABLE 이다")
+    void saturationSurvivesQueryFailure() {
+        AdminMetricsResponse response = assemble(FakePromQuery.down(), globalQuery());
+
+        assertThat(response.saturation().resources()).hasSize(6);
+        assertThat(response.saturation().resources().get(0).utilization().state())
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(response.saturation().inFlight().globalSum().state())
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(response.saturation().inFlight().activeInstances()).isZero();
+        assertThat(response.saturation().queues()).hasSize(3);
+    }
+
+    /**
+     * batch 도 CPU·heap·HikariCP 를 냅니다(실측). 라벨로 자르지 않으면 관측기 자신의 수치가
+     * 발급 경로 자원 행에 섞이는데, 값이 정상 범위라 아무도 못 알아챕니다.
+     */
+    @Test
+    @DisplayName("자원 셀렉터는 api 인스턴스로 좁히고 큐 셀렉터는 좁히지 않는다")
+    void resourceSelectorIsScopedToApiJob() {
+        FakePromQuery client = FakePromQuery.empty();
+        assemble(client, globalQuery());
+
+        String saturation = client.queries().stream()
+                .filter(q -> q.contains(MetricAggregation.CPU_USAGE))
+                .findFirst().orElseThrow();
+        assertThat(saturation).contains("job=\"api\"");
+        assertThat(saturation).contains(MetricAggregation.TOMCAT_BUSY);
+        // 큐 길이는 batch 가 유일한 원천이다. api 로 좁히면 표본이 통째로 사라진다.
+        assertThat(saturation).contains(" or {__name__=~\"" + MetricAggregation.QUEUE_LENGTH);
+    }
+
     // ── 도우미 ─────────────────────────────────────────────────────────────────
 
     private static AdminMetricsResponse assemble(PromQuery client, MetricsQuery query) {
@@ -955,6 +1254,34 @@ class PromMetricsAssemblerTest {
     private static PromSample gapState(String type, SourceStatus status) {
         return domain(MetricAggregation.CONSISTENCY_GAP_STATE, liveGap(type),
                 SourceStatusCode.of(status));
+    }
+
+    private static PromSample resource(String metricName, double value, String instance) {
+        return new PromSample(metricName, Map.of("job", "api", "instance", instance), value, EVALUATED);
+    }
+
+    private static PromSample pool(String metricName, double value, String instance, String pool) {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("job", "api");
+        labels.put("instance", instance);
+        labels.put("pool", pool);
+        return new PromSample(metricName, labels, value, EVALUATED);
+    }
+
+    private static PromSample memory(String metricName, String area, String id, double value) {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("job", "api");
+        labels.put("instance", "api-1");
+        labels.put("area", area);
+        labels.put("id", id);
+        return new PromSample(metricName, labels, value, EVALUATED);
+    }
+
+    /** 재고 수집 경로의 마지막 성공 시각. 대기열 길이의 관측 시각은 이쪽이다. */
+    private static PromSample stockCollectSuccess(long ageSeconds) {
+        return domain(MetricAggregation.COLLECT_LAST_SUCCESS_EPOCH,
+                Map.of(DomainMeterNames.TAG_COLLECT_PATH, DomainMeterNames.PATH_STOCK),
+                EVALUATED.minusSeconds(ageSeconds).getEpochSecond());
     }
 
     private static PromSample domain(String metricName, Map<String, String> labels, double value) {
