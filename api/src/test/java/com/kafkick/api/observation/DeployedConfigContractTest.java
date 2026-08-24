@@ -47,22 +47,73 @@ class DeployedConfigContractTest {
      */
     private static final String DEPLOYED = "application.yml.example";
 
+    /**
+     * OBS-35 에서 뜻을 갈랐다. 예전에는 호스트 공개 포트와 컨테이너 Spring 포트가 둘 다
+     * {@code SERVER_PORT} 였고, compose 가 컨테이너 값을 {@code "8080"} 으로 덮어써서
+     * 버텼다 — 그 시절 이 테스트는 그 덮어쓰기의 존재를 지켰다. 이제는 <b>두 자리가 서로 다른
+     * 변수를 쓰는지</b>를 지킨다. 덮어쓰기는 증상 대처였고 이건 원인 쪽이다.
+     *
+     * <p><b>잡지 못하는 것.</b> 커밋되지 않는 {@code .env} 에서 두 값을 어떻게 채웠는지.
+     * 거기서 {@code API_HOST_PORT} 를 빼면 compose 기본값 8080 이 쓰인다.
+     */
     @Test
-    @DisplayName("호스트 18080 공개와 컨테이너 API 8080 수신을 분리한다")
-    void hostPortDoesNotOverrideTheApiContainerPort() throws IOException {
+    @DisplayName("호스트 공개 포트와 컨테이너 Spring 포트가 서로 다른 변수다")
+    void theHostPortAndTheContainerPortAreDifferentVariables() throws IOException {
+        Map<String, Object> api = composeService("api");
+
+        @SuppressWarnings("unchecked")
+        List<String> ports = (List<String>) api.get("ports");
+        String mapping = ports.stream()
+                .filter(port -> port.endsWith("}") || port.endsWith(":8080"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("api 에 업무 포트 매핑이 없다"));
+
+        // ⚠️ 그냥 마지막 ':' 로 자르면 안 된다. ${VAR:-기본값} 안에도 콜론이 있어서
+        //    "${A:-8080}:${B:-8080}" 이 "-8080}" 으로 잘린다(실측 — 처음에 그렇게 짰다).
+        List<String> sides = ComposePortMapping.split(mapping);
+        String host = sides.get(0);
+        String container = sides.get(sides.size() - 1);
+
+        assertThat(variableOf(host))
+                .as("한 이름이 두 자리에서 두 뜻이면 어느 쪽을 고쳐도 반대쪽이 깨진다."
+                        + " 실측 — 예전 구조에서 .env 의 SERVER_PORT 를 18080 으로 올리면"
+                        + " 호스트 매핑만 바뀌고 컨테이너는 계속 8080 에서 들었다")
+                .isNotEqualTo(variableOf(container));
+
+        assertThat(variableOf(container))
+                .as("컨테이너 쪽은 api/src/main/resources/application.yml.example 의"
+                        + " ${SERVER_PORT:8080} 이 읽는 이름과 같아야 한다. 다르면 매핑은"
+                        + " 성립하는데 Spring 이 다른 포트에서 들어 연결이 reset 된다")
+                .isEqualTo("SERVER_PORT");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> environment = (Map<String, Object>) api.get("environment");
+        assertThat(environment)
+                .as("이제 덮어쓸 이유가 없다. 남겨 두면 .env 의 SERVER_PORT 를 고쳐도 컨테이너"
+                        + " 포트가 안 바뀌어, 뜻을 가른 것이 다시 무의미해진다")
+                .doesNotContainKey("SERVER_PORT");
+    }
+
+    /** {@code "${NAME:-기본값}"} · {@code "${NAME}"} 에서 이름만 뽑는다. */
+    private String variableOf(String fragment) {
+        int open = fragment.indexOf("${");
+        assertThat(open)
+                .as("포트 매핑 양쪽이 변수여야 한다. 숫자를 박으면 .env 로 못 바꾼다: %s",
+                        fragment)
+                .isNotNegative();
+        String inside = fragment.substring(open + 2, fragment.lastIndexOf('}'));
+        int separator = inside.indexOf(':');
+        return separator < 0 ? inside : inside.substring(0, separator);
+    }
+
+    private Map<String, Object> composeService(String name) throws IOException {
         @SuppressWarnings("unchecked")
         Map<String, Object> services = (Map<String, Object>) loadYaml(
                 repoRoot().resolve("compose.yml")).get("services");
         @SuppressWarnings("unchecked")
-        Map<String, Object> api = (Map<String, Object>) services.get("api");
-        @SuppressWarnings("unchecked")
-        Map<String, Object> environment = (Map<String, Object>) api.get("environment");
-
-        assertThat(String.valueOf(environment.get("SERVER_PORT")))
-                .as("컨테이너 안 API 포트는 8080 으로 고정하고, .env 의 SERVER_PORT 는 호스트"
-                        + " 매핑에만 쓴다. API 프로세스까지 그 값을 쓰면 host:18080 이"
-                        + " container:8080 으로 보내는 연결이 reset 된다")
-                .isEqualTo("8080");
+        Map<String, Object> service = (Map<String, Object>) services.get(name);
+        assertThat(service).as("compose 에 %s 서비스가 없다", name).isNotNull();
+        return service;
     }
 
     @Test

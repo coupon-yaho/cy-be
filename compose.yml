@@ -107,17 +107,19 @@ services:
       - .env
     environment:
       SPRING_PROFILES_ACTIVE: api
-      # SERVER_PORT 는 호스트 공개 포트를 정하지만, 컨테이너 안 API는 ports 대상(8080)에서
-      # 들어야 한다. 이 값을 안 덮으면 SERVER_PORT=18080일 때 호스트 18080이 컨테이너
-      # 8080으로 보내는 연결이 reset 된다.
-      SERVER_PORT: "8080"
       SPRING_FLYWAY_ENABLED: "true"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
     volumes:
       - ./application.yml:/app/config/application.yml:ro
     ports:
-      - "${SERVER_PORT}:8080"
+      # 왼쪽이 호스트, 오른쪽이 컨테이너 안 Spring 이다. 두 자리에 서로 다른 변수를 쓴다 —
+      # 예전에는 양쪽이 SERVER_PORT 한 이름이었고, compose 가 컨테이너 값을 "8080" 으로
+      # 덮어써서 버텼다. 그 구조에서는 .env 의 SERVER_PORT 를 고쳐도 컨테이너 포트는 안 바뀌고
+      # (덮어쓰기가 이긴다) 호스트 매핑만 바뀐다 — 한 이름이 두 뜻이라 어느 쪽을 고쳐도
+      # 반대쪽이 깨졌다. 지금은 SERVER_PORT 가 api/application.yml.example 의
+      # ${SERVER_PORT:8080} 과 같은 뜻(컨테이너 안 수신 포트) 하나만 갖는다.
+      - "${API_HOST_PORT:-8080}:${SERVER_PORT:-8080}"
       # ⚠️ 관리 포트(9090)를 여기에 매핑하지 않는다. actuator 에는 인증이 없고
       #    (Spring Security 미도입), 포트를 안 여는 것이 유일한 방어다. allowlist 의
       #    exclude 한 줄이 지워지면 /actuator/env 가 DB 비밀번호를 그대로 뱉는다.
