@@ -18,8 +18,10 @@ import com.kafkick.core.coupon.exception.CouponRoundErrorCode;
 import com.kafkick.core.coupon.query.CouponRoundDetail;
 import com.kafkick.core.coupon.query.IssuableCouponRoundPage;
 import com.kafkick.core.coupon.query.IssuableCouponRoundSummary;
+import com.kafkick.core.coupon.query.PublicCouponRoundPage;
 import com.kafkick.core.coupon.service.CouponRoundDetailQueryService;
 import com.kafkick.core.coupon.service.IssuableCouponRoundQueryService;
+import com.kafkick.core.coupon.service.PublicCouponRoundQueryService;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
@@ -45,6 +47,9 @@ class CouponRoundControllerTest {
 
     @MockitoBean
     private CouponRoundDetailQueryService detailQueryService;
+
+    @MockitoBean
+    private PublicCouponRoundQueryService publicQueryService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -125,6 +130,77 @@ class CouponRoundControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"))
                 .andExpect(jsonPath("$.error.message")
                         .value("페이지 크기는 100 이하여야 합니다."));
+    }
+
+    @Test
+    @DisplayName("회원 헤더 없이 상태별 공개 쿠폰 회차를 조회한다")
+    void findPublicCouponRounds() throws Exception {
+        when(publicQueryService.findPage(
+                CouponRoundStatus.SCHEDULED,
+                0,
+                20
+        )).thenReturn(publicPage());
+
+        mockMvc.perform(get("/api/v1/coupon-rounds/public")
+                        .param("status", "SCHEDULED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content.length()").value(1))
+                .andExpect(jsonPath("$.data.content[0].couponRoundId")
+                        .value(10))
+                .andExpect(jsonPath("$.data.content[0].templateId").value(1))
+                .andExpect(jsonPath("$.data.content[0].brandId").value(2))
+                .andExpect(jsonPath("$.data.content[0].eligibleGrades[0]")
+                        .value("GOLD"))
+                .andExpect(jsonPath("$.data.content[0].eligibleGrades[1]")
+                        .value("VIP"))
+                .andExpect(jsonPath("$.data.content[0].status")
+                        .value("SCHEDULED"))
+                .andExpect(jsonPath("$.data.content[0].totalQuantity")
+                        .value(100))
+                .andExpect(jsonPath("$.data.content[0].remainingQuantity")
+                        .value(80))
+                .andExpect(jsonPath("$.data.page").value(0))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.totalElements").value(1));
+
+        verify(publicQueryService).findPage(
+                CouponRoundStatus.SCHEDULED,
+                0,
+                20
+        );
+    }
+
+    @Test
+    @DisplayName("공개 회차 조회에서 지원하지 않는 상태는 400을 반환한다")
+    void rejectUnknownCouponRoundStatus() throws Exception {
+        mockMvc.perform(get("/api/v1/coupon-rounds/public")
+                        .param("status", "WAITING"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(publicQueryService, never()).findPage(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt()
+        );
+    }
+
+    @Test
+    @DisplayName("공개 회차 페이지 크기가 100을 초과하면 400을 반환한다")
+    void rejectOversizedPublicCouponRoundPage() throws Exception {
+        mockMvc.perform(get("/api/v1/coupon-rounds/public")
+                        .param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("페이지 크기는 100 이하여야 합니다."));
+
+        verify(publicQueryService, never()).findPage(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt()
+        );
     }
 
     @Test
@@ -223,6 +299,32 @@ class CouponRoundControllerTest {
                 CouponRoundStatus.OPEN,
                 100,
                 80
+        );
+    }
+
+    private static PublicCouponRoundPage publicPage() {
+        return new PublicCouponRoundPage(
+                List.of(new CouponRoundDetail(
+                        10L,
+                        1L,
+                        2L,
+                        "골드 VIP 20% 할인",
+                        CouponPolicyType.PERCENT_CAPPED,
+                        20,
+                        10_000,
+                        null,
+                        7,
+                        Set.of(MembershipGrade.VIP, MembershipGrade.GOLD),
+                        Instant.parse("2026-08-25T01:00:00Z"),
+                        Instant.parse("2026-08-25T03:00:00Z"),
+                        CouponRoundStatus.SCHEDULED,
+                        100,
+                        80
+                )),
+                0,
+                20,
+                1,
+                1
         );
     }
 }

@@ -48,6 +48,44 @@ public interface CouponRoundJpaRepository
     @Query(
             value = """
                     SELECT coupon.id AS couponRoundId,
+                           coupon.template_id AS templateId,
+                           coupon.brand_id AS brandId,
+                           coupon.name AS name,
+                           coupon.policy_type AS policyType,
+                           coupon.discount_rate AS discountRate,
+                           coupon.max_discount_amount AS maxDiscountAmount,
+                           coupon.discount_amount AS discountAmount,
+                           coupon.valid_days AS validDays,
+                           coupon.eligible_grades_mask AS eligibleGradesMask,
+                           coupon.open_at AS openAt,
+                           coupon.close_at AS closeAt,
+                           coupon.status AS status,
+                           stock.total_quantity AS totalQuantity,
+                           stock.total_quantity - stock.active_count
+                               AS remainingQuantity
+                      FROM coupons coupon
+                      JOIN coupon_stocks stock
+                        ON stock.coupon_id = coupon.id
+                     WHERE (:status IS NULL OR coupon.status = :status)
+                     ORDER BY coupon.open_at DESC, coupon.id DESC
+                    """,
+            countQuery = """
+                    SELECT COUNT(*)
+                      FROM coupons coupon
+                      JOIN coupon_stocks stock
+                        ON stock.coupon_id = coupon.id
+                     WHERE (:status IS NULL OR coupon.status = :status)
+                    """,
+            nativeQuery = true
+    )
+    Page<CouponRoundDetailProjection> findPublicCouponRounds(
+            @Param("status") String status,
+            Pageable pageable
+    );
+
+    @Query(
+            value = """
+                    SELECT coupon.id AS couponRoundId,
                            coupon.brand_id AS brandId,
                            coupon.name AS name,
                            coupon.policy_type AS policyType,
