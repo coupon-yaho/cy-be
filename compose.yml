@@ -44,8 +44,13 @@ x-kafka-broker-env: &kafka-broker-env
   #    세 대가 그 기본값을 똑같이 쓰므로 클러스터는 정상으로 보인다 — 그래서 안 잡힌다.
   #    KafkaBrokerComposeContractTest 가 그 이름을 금지한다.
   #
-  # 22자 base64 여야 한다(kafka-storage random-uuid 형식). 이 값은 그 제약을 만족하면서
-  # 읽을 수 있게 고른 것이고, 포맷이 실제로 이 값으로 되는 것을 확인했다(실측).
+  # 형식 제약이 없다. kafka-storage random-uuid 는 22자 base64 를 내지만 포맷은 그 형식을
+  # 요구하지 않는다 — 실측으로 CLUSTER_ID=not-a-valid-uuid 를 줘도 브로커가 뜨고,
+  # kafka-cluster.sh 가 그 값을 그대로 돌려주며 토픽 생성까지 된다(4.1.0 기준).
+  # 그래서 랜덤 uuid 대신 읽을 수 있는 값을 골랐다. 로그와 meta.properties 에 그대로
+  # 찍히므로, 어느 스택의 볼륨인지 눈으로 가릴 수 있다.
+  #
+  # 대가: 장래 버전이 형식을 강제하면 이 값이 거부된다. 그때는 아래 절차대로 볼륨과 함께 바꾼다.
   #
   # ⚠️ 이 값을 바꾸려면 브로커 볼륨 셋을 함께 지워야 한다. 포맷된 id 는 안 바뀐다 —
   #    실측하면 이렇게 된다:
