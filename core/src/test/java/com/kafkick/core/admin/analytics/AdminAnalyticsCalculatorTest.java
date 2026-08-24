@@ -284,6 +284,37 @@ class AdminAnalyticsCalculatorTest {
                 .isEqualTo("ANALYTICS-001");
     }
 
+    /** 월별 값이 없어도 시간 집계가 응답 모집단 밖 브랜드를 포함하지 못하게 하는지 검증합니다. */
+    @Test
+    @DisplayName("월별 원천이 PENDING이어도 시간 집계의 모집단 밖 브랜드를 거부한다")
+    void rejectsHourlyAggregateOutsideResponsePopulationWhenMonthlyPending() {
+        AdminAnalyticsDataset dataset = outsidePopulationDataset(
+                AggregateObservation.pending(),
+                available(List.of(new HourlyIssueAggregate(
+                        LocalDate.parse("2026-01-19"), 13, 2L, 102L, 8L))),
+                available(List.of()));
+
+        assertThatThrownBy(() -> calculator.calculate(QUERY, dataset, EVALUATED_AT))
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
+                .isEqualTo("ANALYTICS-001");
+    }
+
+    /** 월별 값이 없어도 상태 집계가 응답 모집단 밖 브랜드를 포함하지 못하게 하는지 검증합니다. */
+    @Test
+    @DisplayName("월별 원천이 UNAVAILABLE이어도 상태 집계의 모집단 밖 브랜드를 거부한다")
+    void rejectsStatusAggregateOutsideResponsePopulationWhenMonthlyUnavailable() {
+        AdminAnalyticsDataset dataset = outsidePopulationDataset(
+                AggregateObservation.unavailable(),
+                AggregateObservation.pending(),
+                available(List.of(status(2L, 102L, QUERY, 8L, 3L, 2L, 2L, 1L))));
+
+        assertThatThrownBy(() -> calculator.calculate(QUERY, dataset, EVALUATED_AT))
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
+                .isEqualTo("ANALYTICS-001");
+    }
+
     private static AdminAnalyticsDataset dataset(
             AggregateObservation<List<DailyIssueAggregate>> daily,
             AggregateObservation<List<HourlyIssueAggregate>> hourly,
@@ -320,6 +351,27 @@ class AdminAnalyticsCalculatorTest {
                                         LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
                                 new CampaignRef(102L, 2L,
                                         LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")))),
+                daily,
+                hourly,
+                statuses);
+    }
+
+    /** 응답 기간과 겹치지 않는 두 번째 브랜드를 포함한 원천 계약 검증용 Dataset을 만듭니다. */
+    private static AdminAnalyticsDataset outsidePopulationDataset(
+            AggregateObservation<List<DailyIssueAggregate>> daily,
+            AggregateObservation<List<HourlyIssueAggregate>> hourly,
+            AggregateObservation<List<IssuanceStatusAggregate>> statuses
+    ) {
+        return new AdminAnalyticsDataset(
+                AnalyticsSourceType.MOCK,
+                new CatalogSnapshot(
+                        AggregateAvailability.AVAILABLE,
+                        List.of(new BrandRef(1L, "브랜드"), new BrandRef(2L, "기간 밖 브랜드")),
+                        List.of(
+                                new CampaignRef(101L, 1L,
+                                        LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
+                                new CampaignRef(102L, 2L,
+                                        LocalDate.parse("2025-01-01"), LocalDate.parse("2025-12-31")))),
                 daily,
                 hourly,
                 statuses);

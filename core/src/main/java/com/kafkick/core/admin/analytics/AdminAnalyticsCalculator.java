@@ -50,13 +50,17 @@ public final class AdminAnalyticsCalculator {
         Objects.requireNonNull(evaluatedAt, "evaluatedAt");
 
         List<BrandRef> brands = responseBrands(query, dataset);
+        Set<Long> responseBrandIds = brands.stream()
+                .map(BrandRef::brandId)
+                .collect(Collectors.toUnmodifiableSet());
         return new AdminAnalyticsResult(
                 query,
                 dataset.sourceType(),
                 brands,
-                calculateMonthly(query, brands, dataset.monthlyTrend(), evaluatedAt),
-                calculateHeatmap(query, dataset.hourlyHeatmap(), evaluatedAt),
-                calculateStatuses(query, dataset.issuanceStatuses(), evaluatedAt));
+                calculateMonthly(
+                        query, brands, responseBrandIds, dataset.monthlyTrend(), evaluatedAt),
+                calculateHeatmap(query, responseBrandIds, dataset.hourlyHeatmap(), evaluatedAt),
+                calculateStatuses(query, responseBrandIds, dataset.issuanceStatuses(), evaluatedAt));
     }
 
     /** 요청 기간에 운영 캠페인이 있거나 명시적으로 선택된 브랜드를 응답 모집단으로 고릅니다. */
@@ -89,6 +93,7 @@ public final class AdminAnalyticsCalculator {
     private Observation<List<BrandTrendPoint>> calculateMonthly(
             AdminAnalyticsQuery query,
             List<BrandRef> brands,
+            Set<Long> responseBrandIds,
             AggregateObservation<List<DailyIssueAggregate>> source,
             Instant evaluatedAt
     ) {
@@ -99,9 +104,6 @@ public final class AdminAnalyticsCalculator {
         }
 
         Map<BrandMonth, Long> totals = new HashMap<>();
-        Set<Long> responseBrandIds = brands.stream()
-                .map(BrandRef::brandId)
-                .collect(Collectors.toUnmodifiableSet());
         for (DailyIssueAggregate row : source.value()) {
             if (!inRange(row.date(), query) || !matchesFilter(row.brandId(), row.couponId(), query)) {
                 continue;
@@ -160,6 +162,7 @@ public final class AdminAnalyticsCalculator {
     /** 시간 집계 행을 ISO 요일×시간 셀로 합산하고 최신 집계만 168셀을 완성합니다. */
     private Observation<List<HourlyHeatmapCell>> calculateHeatmap(
             AdminAnalyticsQuery query,
+            Set<Long> responseBrandIds,
             AggregateObservation<List<HourlyIssueAggregate>> source,
             Instant evaluatedAt
     ) {
@@ -172,6 +175,10 @@ public final class AdminAnalyticsCalculator {
         for (HourlyIssueAggregate row : source.value()) {
             if (!inRange(row.date(), query) || !matchesFilter(row.brandId(), row.couponId(), query)) {
                 continue;
+            }
+            if (!responseBrandIds.contains(row.brandId())) {
+                // 월별 추이와 다른 브랜드 모집단이 히트맵에 섞이지 않도록 원천 계약을 검증합니다.
+                throw sourceContractMismatch("시간 집계 행의 브랜드가 응답 모집단에 없습니다.");
             }
             DayHour key = new DayHour(row.date().getDayOfWeek().getValue(), row.hour());
             totals.merge(key, row.issueCount(), Math::addExact);
@@ -213,6 +220,7 @@ public final class AdminAnalyticsCalculator {
     /** 기간별 현재 상태 수량을 먼저 합산한 뒤 전체 발급 수 기준 비율을 계산합니다. */
     private Observation<IssuanceStatusDistribution> calculateStatuses(
             AdminAnalyticsQuery query,
+            Set<Long> responseBrandIds,
             AggregateObservation<List<IssuanceStatusAggregate>> source,
             Instant evaluatedAt
     ) {
@@ -226,6 +234,10 @@ public final class AdminAnalyticsCalculator {
         for (IssuanceStatusAggregate row : source.value()) {
             if (!matchesFilter(row.brandId(), row.couponId(), query)) {
                 continue;
+            }
+            if (!responseBrandIds.contains(row.brandId())) {
+                // 응답 브랜드 목록과 상태 분포의 발급 모집단이 갈라지는 원천 행을 거부합니다.
+                throw sourceContractMismatch("상태 분포 집계 행의 브랜드가 응답 모집단에 없습니다.");
             }
             if (!row.windowFrom().equals(query.from()) || !row.windowTo().equals(query.to())) {
                 // 필터를 통과한 현재 요청 대상에만 동일 기간으로 집계됐다는 계약을 적용합니다.
