@@ -41,7 +41,8 @@ public class AdminAnalyticsMockDataFactory {
             new HourlyIssueAggregate(LocalDate.parse("2026-01-05"), 9, 1L, 101L, 5L),
             new HourlyIssueAggregate(LocalDate.parse("2026-01-05"), 13, 1L, 101L, 7L),
             new HourlyIssueAggregate(LocalDate.parse("2026-01-06"), 18, 2L, 102L, 8L),
-            new HourlyIssueAggregate(LocalDate.parse("2026-02-10"), 20, 1L, 101L, 15L));
+            new HourlyIssueAggregate(LocalDate.parse("2026-02-10"), 20, 1L, 101L, 15L),
+            new HourlyIssueAggregate(LocalDate.parse("2026-03-03"), 14, 1L, 101L, 7L));
 
     private static final List<DatedIssuanceStatusAggregate> ISSUANCE_STATUSES = List.of(
             new DatedIssuanceStatusAggregate(

@@ -6,12 +6,17 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.DailyIssueAggregate;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.HourlyIssueAggregate;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.IssuanceStatusAggregate;
 import com.kafkick.core.admin.analytics.AdminAnalyticsQuery;
 
 /** Mock Source가 최종 차트가 아닌 조회 조건별 집계 행을 제공하는지 검증합니다. */
@@ -82,31 +87,68 @@ class AdminAnalyticsMockSourceTest {
                 });
     }
 
-    /** 같은 발급 모집단을 나타내는 월별 추이와 현재 상태 분포의 총계가 일치하는지 검증합니다. */
+    /** 같은 발급 모집단을 나타내는 세 원천이 기간별 정답과 캠페인별 합계를 보존하는지 검증합니다. */
     @Test
-    @DisplayName("Mock Source의 월별 발급 합계와 상태 분포 totalIssued는 기간별로 일치한다")
-    void keepsMonthlyAndStatusTotalsConsistentForEachPeriod() {
+    @DisplayName("Mock Source의 월별·시간대·상태 발급 모집단은 기간별 정답과 일치한다")
+    void keepsAllIssuanceCohortsConsistentForEachPeriod() {
         AdminAnalyticsMockSource source = new AdminAnalyticsMockSource(
                 new AdminAnalyticsMockDataFactory(), OBSERVED_AT);
-        List<AdminAnalyticsQuery> queries = List.of(
-                query("2026-01-01", "2026-01-31"),
-                query("2026-02-01", "2026-02-28"),
-                query("2026-03-01", "2026-03-31"),
-                query("2026-01-01", "2026-03-31"));
+        CampaignKey campaign101 = new CampaignKey(1L, 101L);
+        CampaignKey campaign102 = new CampaignKey(2L, 102L);
+        List<ExpectedPeriod> periods = List.of(
+                new ExpectedPeriod(
+                        "2026-01-01", "2026-01-31", Map.of(campaign101, 12L, campaign102, 8L)),
+                new ExpectedPeriod(
+                        "2026-02-01", "2026-02-28", Map.of(campaign101, 15L)),
+                new ExpectedPeriod(
+                        "2026-03-01", "2026-03-31", Map.of(campaign101, 7L)),
+                new ExpectedPeriod(
+                        "2026-01-01", "2026-03-31", Map.of(campaign101, 34L, campaign102, 8L)));
 
-        for (AdminAnalyticsQuery query : queries) {
+        for (ExpectedPeriod period : periods) {
+            AdminAnalyticsQuery query = query(period.from(), period.to());
             AdminAnalyticsDataset dataset = source.load(query);
-            long monthlyTotal = dataset.monthlyTrend().value().stream()
-                    .mapToLong(row -> row.issueCount())
-                    .sum();
-            long statusTotal = dataset.issuanceStatuses().value().stream()
-                    .mapToLong(row -> row.totalIssued())
-                    .sum();
 
-            assertThat(statusTotal)
-                    .as("조회 기간 %s부터 %s까지", query.from(), query.to())
-                    .isEqualTo(monthlyTotal);
+            assertThat(monthlyTotals(dataset))
+                    .as("월별 조회 기간 %s부터 %s까지", query.from(), query.to())
+                    .isEqualTo(period.campaignTotals());
+            assertThat(hourlyTotals(dataset))
+                    .as("시간대 조회 기간 %s부터 %s까지", query.from(), query.to())
+                    .isEqualTo(period.campaignTotals());
+            assertThat(statusTotals(dataset))
+                    .as("상태 조회 기간 %s부터 %s까지", query.from(), query.to())
+                    .isEqualTo(period.campaignTotals());
         }
+    }
+
+    /** 날짜별 발급 행을 브랜드·캠페인 단위로 합산합니다. */
+    private static Map<CampaignKey, Long> monthlyTotals(AdminAnalyticsDataset dataset) {
+        return dataset.monthlyTrend().value().stream()
+                .collect(Collectors.groupingBy(
+                        row -> campaignKey(row.brandId(), row.couponId()),
+                        Collectors.summingLong(DailyIssueAggregate::issueCount)));
+    }
+
+    /** 시간대별 발급 행을 브랜드·캠페인 단위로 합산합니다. */
+    private static Map<CampaignKey, Long> hourlyTotals(AdminAnalyticsDataset dataset) {
+        return dataset.hourlyHeatmap().value().stream()
+                .collect(Collectors.groupingBy(
+                        row -> campaignKey(row.brandId(), row.couponId()),
+                        Collectors.summingLong(HourlyIssueAggregate::issueCount)));
+    }
+
+    /** 상태 분포 행을 실제 발급이 존재하는 브랜드·캠페인 단위로 합산합니다. */
+    private static Map<CampaignKey, Long> statusTotals(AdminAnalyticsDataset dataset) {
+        return dataset.issuanceStatuses().value().stream()
+                .filter(row -> row.totalIssued() > 0L)
+                .collect(Collectors.groupingBy(
+                        row -> campaignKey(row.brandId(), row.couponId()),
+                        Collectors.summingLong(IssuanceStatusAggregate::totalIssued)));
+    }
+
+    /** 세 Mock 원천이 공유할 브랜드·캠페인 집계 키를 만듭니다. */
+    private static CampaignKey campaignKey(long brandId, long couponId) {
+        return new CampaignKey(brandId, couponId);
     }
 
     /** 기간별 모집단 일치 검증에 사용할 전체 브랜드 조회 조건을 만듭니다. */
@@ -118,4 +160,10 @@ class AdminAnalyticsMockSourceTest {
                 null,
                 ZoneId.of("Asia/Seoul"));
     }
+
+    /** 한 조회 기간에 기대하는 캠페인별 발급 총계입니다. */
+    private record ExpectedPeriod(String from, String to, Map<CampaignKey, Long> campaignTotals) { }
+
+    /** 브랜드와 캠페인을 함께 식별하는 테스트 집계 키입니다. */
+    private record CampaignKey(long brandId, long couponId) { }
 }
