@@ -466,6 +466,12 @@ public class PromMetricsAssembler {
      * {@code NO_TRAFFIC} 으로 내려보내면 값이 0 인 것으로 읽힙니다 — 요청이 0 건일 때 비율은
      * 정의되지 않는 것이라 {@code N_A} 입니다.</p>
      *
+     * <p><b>음수 표본은 값이 아닙니다.</b> counter 의 rate 는 음수가 될 수 없으므로, 음수가 왔다면
+     * 원천이 망가진 것입니다. 그대로 나누면 음수 백분율이 {@code VALID} 로 나가 화면이 그것을
+     * 실패율로 그립니다 — 계약({@code 0~100})을 지킬 수 없는 입력이라 {@code UNAVAILABLE} 입니다.
+     * {@code PENDING}(아직 안 나옴)이 아닌 이유는 운영자가 취할 행동이 "기다려라" 가 아니라
+     * "원천을 보라" 이기 때문입니다.</p>
+     *
      * <p><b>자르는 코드가 없는 것은 자를 일이 없기 때문입니다.</b> 분자와 분모는 같은
      * {@code QueryResult} 를 같은 {@code uri_group} 필터로 접은 것이라 분자가 분모의 부분집합이고,
      * 네 분류는 {@code ResultClass} 로 서로 겹치지 않습니다 — 넷을 다 더해도 100 을 넘지 않습니다.
@@ -488,6 +494,13 @@ public class PromMetricsAssembler {
         if (!numerator.state().carriesValue()) {
             // 그 결과의 시계열이 아직 없다. 0 이 아니라 모르는 것이다.
             return pending();
+        }
+        if (attempts.value() < 0d || numerator.value() < 0d) {
+            // counter 의 rate 는 음수일 수 없다. 음수가 왔다면 원천이 망가진 것이지 관측이 아니다.
+            // 그대로 나누면 음수 백분율이 VALID 로 나가 화면이 그것을 실패율로 그린다(실측).
+            log.warn("음수 표본으로는 실패율을 낼 수 없어 UNAVAILABLE 로 내려보냅니다: 분자={} 분모={}",
+                    numerator.value(), attempts.value());
+            return unavailable();
         }
         double percent = round(numerator.value() / attempts.value() * 100d);
         SourceStatus state = numerator.state() == SourceStatus.STALE

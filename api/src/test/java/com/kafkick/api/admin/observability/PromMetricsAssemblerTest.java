@@ -423,6 +423,31 @@ class PromMetricsAssemblerTest {
     }
 
     /**
+     * counter 의 rate 는 음수가 될 수 없습니다. 음수가 왔다면 원천이 망가진 것이라 비율을 낼 수
+     * 없습니다 — 그대로 나누면 <b>음수 백분율이 VALID 로 나가</b> 화면이 그것을 실패율로 그립니다.
+     *
+     * <p>이 경로는 표본만으로 도달합니다. 분모가 음수면 분자가 분모를 넘어 0~100 계약이 깨집니다.</p>
+     */
+    @Test
+    @DisplayName("음수 표본이 오면 비율 대신 UNAVAILABLE 로 내려보낸다")
+    void negativeSamplesCannotProduceARate() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(
+                        // counter 가 gauge 로 잘못 등록되는 등 원천이 망가진 상태다.
+                        rate("issue", "success", -100d, "api-1"),
+                        rate("issue", "application_failure", 50d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        ObservedValue<Double> rate = rateOf(errors, ErrorClassKey.APPLICATION_FAILURE);
+        assertThat(rate.state())
+                .as("-100% 가 VALID 로 나가면 화면이 그것을 실패율로 그린다")
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(rate.value()).isNull();
+    }
+
+    /**
      * 브라우저·부하 생성기 쪽 실패는 서버가 볼 수 있는 원천이 아예 없습니다. 0 으로 실으면
      * "클라이언트 실패 없음" 이라는 거짓 신호가 되므로 키 자체를 내보내지 않습니다.
      */
