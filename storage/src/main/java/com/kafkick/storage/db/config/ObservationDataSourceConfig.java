@@ -2,25 +2,19 @@ package com.kafkick.storage.db.config;
 
 import javax.sql.DataSource;
 
-import jakarta.persistence.EntityManagerFactory;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
-import org.springframework.boot.jdbc.autoconfigure.JdbcProperties;
 import org.springframework.boot.transaction.autoconfigure.TransactionManagerCustomizers;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.JdbcTransactionManager;
-import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.util.StringUtils;
 
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -41,57 +35,33 @@ import com.zaxxer.hikari.HikariDataSource;
  * 피하려던 것과 같은 사고다.
  *
  * <p>그래서 {@code observation.datasource.enabled} 로 <b>옵트인</b>한다. 대시보드를 그리는 api 만
- * 켠다. 끈 모듈에서는 이 설정이 통째로 건너뛰어지고 Boot 자동설정이 원래 하던 일을 그대로 한다.
+ * 켠다. 끈 모듈에서는 <b>관측 빈만</b> 건너뛰어진다.
  *
- * <p><b>관측 빈만이 아니라 이 클래스 전체가 조건부인 이유</b> — 아래 빈들은 관측용만이 아니다.
- * DataSource 를 직접 정의하는 순간 Boot 가 만들어 주던 JdbcTemplate · NamedParameterJdbcTemplate ·
- * TransactionManager 가 물러나므로 운영용까지 여기서 만들고 있다. 관측을 안 쓰는 모듈에서는
- * 그 대체 자체가 불필요하다 — 거기서는 DataSource 가 하나뿐이라 자동설정으로 충분하다.
+ * <p><b>[CY-338] 예전에는 이 자리에 "Boot 자동설정이 원래 하던 일을 그대로 한다" 고 적혀
+ * 있었는데 이제 사실이 아니다.</b> 운영 풀을 {@link MainDataSourceConfig} 로 떼면서 그쪽이
+ * 조건 없이 항상 붙고, 그래서 Boot 의 DataSource·JdbcTemplate·TransactionManager 자동설정은
+ * <b>스위치와 무관하게 늘 물러난다.</b> 그 대가를 알고 고른 것이다 — 이유는 그 파일에 적었다.
+ *
+ * <p><b>[CY-338] 운영 풀은 여기 없다.</b> 예전에는 운영 {@code DataSource} · {@code JdbcTemplate} ·
+ * {@code TransactionManager} 까지 이 파일이 갖고 있었고, 그래서 <b>관측을 끄면 운영 풀 정의가
+ * 함께 사라졌다.</b> batch 의 {@code BatchJobRepositoryConfig} 가 그 풀을 물고 있어서, 정상
+ * 운영 스위치를 끄는 것만으로 Spring Batch 가 {@code ResourcelessJobRepository} 로 떨어져
+ * <b>잡 중복 실행 방지가 통째로 꺼졌다.</b> 그 셋은 {@link MainDataSourceConfig} 로 옮겼고
+ * 조건 없이 항상 만들어진다. 여기 남은 것은 <b>관측 전용 빈뿐</b>이다.
  *
  * <p><b>반대 방향 실패</b> — 켜야 할 모듈이 스위치를 빠뜨리면 관측 빈이 통째로 없다. api 는
  * {@code management.yml} 의 {@code group.obs} 가 {@code obsDb} 기여자를 찾지 못해 기동에서
  * 걸리지만, 그 그룹을 쓰지 않는 모듈에는 그런 그물이 없다.
  */
 @Configuration(proxyBeanMethods = false)
+// 조건은 저장소가 통일한 havingValue 명시 형태를 따른다 — 관측 빈 여섯이 전부 그 형태이고
+// ApiApplicationTests 가 그 일치를 단언한다. 속성 목록은 MainDbProperties·JdbcProperties 가
+// MainDataSourceConfig 로 옮겨가 관측 것만 남는다.
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
-@EnableConfigurationProperties({ MainDbProperties.class, ObservationDbProperties.class, JdbcProperties.class })
+@EnableConfigurationProperties({ ObservationDbProperties.class })
 public class ObservationDataSourceConfig {
 
-    /**
-     * @Primary 가 없으면 JPA·Flyway 자동설정이 DataSource 후보 둘을 만나 기동에 실패한다.
-     *
-     * <p>관측 쪽과 달리 {@code @NotBlank} 를 쓰지 않는다 — 운영 풀은 접속 정보 자동 주입
-     * (Testcontainers·Compose)을 <b>따르는 게 정상</b>이라, 프로퍼티만 보고 검증하면 컨테이너로 뜨는
-     * 테스트가 전부 죽는다. 그래서 자동 주입까지 반영한 <b>최종 값</b>을 여기서 확인한다.
-     */
-    @Bean
-    @Primary
-    @ConfigurationProperties("spring.datasource.hikari")
-    public HikariDataSource mainDataSource(
-        MainDbProperties properties,
-        ObjectProvider<JdbcConnectionDetails> connectionDetails
-    ) {
-        JdbcConnectionDetails details = connectionDetails.getIfAvailable();
-        HikariDataSource dataSource = hikari(
-            details != null ? details.getDriverClassName() : properties.driverClassName(),
-            requireResolved(details != null ? details.getJdbcUrl() : properties.url(), "url"));
-        dataSource.setUsername(
-            requireResolved(details != null ? details.getUsername() : properties.username(), "username"));
-        dataSource.setPassword(details != null ? details.getPassword() : properties.password());
-        return dataSource;
-    }
 
-    /**
-     * storage.yml 은 커밋하지 않는다. 낡은 파일을 받아 키가 비어 있으면 Hikari 는 첫 조회까지 풀을 열지
-     * 않으므로, 기동은 성공하고 첫 요청에서야 죽는다. 관측 풀({@code @NotBlank})과 같은 시점에 죽인다.
-     */
-    private static String requireResolved(String value, String key) {
-        if (!StringUtils.hasText(value)) {
-            throw new IllegalStateException(
-                "spring.datasource." + key + " 가 비어 있다. storage.yml 의 datasource 블록을 확인한다.");
-        }
-        return value;
-    }
 
     /**
      * 풀 크기 · read-only · 짧은 타임아웃은 storage.yml 이 정한다. 여기서 기본값을 박으면 두 곳이 어긋난다.
@@ -107,32 +77,15 @@ public class ObservationDataSourceConfig {
     @Qualifier("obs")
     @ConfigurationProperties("observation.datasource.hikari")
     public HikariDataSource observationDataSource(ObservationDbProperties properties) {
-        HikariDataSource dataSource = hikari(properties.driverClassName(), properties.url());
+        // 풀 생성 헬퍼는 MainDataSourceConfig 가 갖는다. 두 곳에 같은 6줄을 두면
+        // 한쪽만 고치는 실수를 아무것도 막지 못한다.
+        HikariDataSource dataSource =
+            MainDataSourceConfig.hikari(properties.driverClassName(), properties.url());
         dataSource.setUsername(properties.username());
         dataSource.setPassword(properties.password());
         return dataSource;
     }
 
-    /**
-     * JdbcOperations 빈이 하나라도 있으면 자동설정의 JdbcTemplate 이 물러난다. 운영용까지 여기서
-     * 같이 정의해야 기존 주입 지점이 그대로 산다.
-     *
-     * <p>{@code spring.jdbc.template.*} 를 직접 적용하는 것도 자동설정이 하던 일이다. 안 하면
-     * 그 키들이 조용히 무시된다 — 나중에 운영 풀 타임아웃을 설정으로 조이려는 사람이 값을 적어도
-     * 아무 일도 일어나지 않는다. 자동설정이 하던 것과 같은 순서로 적용한다.
-     */
-    @Bean
-    @Primary
-    public JdbcTemplate jdbcTemplate(DataSource dataSource, JdbcProperties jdbcProperties) {
-        JdbcProperties.Template template = jdbcProperties.getTemplate();
-        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
-        jdbcTemplate.setFetchSize(template.getFetchSize());
-        jdbcTemplate.setMaxRows(template.getMaxRows());
-        if (template.getQueryTimeout() != null) {
-            jdbcTemplate.setQueryTimeout((int) template.getQueryTimeout().toSeconds());
-        }
-        return jdbcTemplate;
-    }
 
     /**
      * 관측 쿼리는 오래 걸리면 대기가 아니라 실패여야 한다. 서버 쪽 {@code max_execution_time} 은
@@ -154,18 +107,6 @@ public class ObservationDataSourceConfig {
         return jdbcTemplate;
     }
 
-    /**
-     * NamedParameterJdbcOperations 빈이 하나라도 있으면 자동설정이 물러난다. 관측용만 정의하면
-     * 운영용이 사라지므로 둘 다 여기서 만든다.
-     *
-     * <p>관측용이 없으면 이름 바인딩을 쓰는 관측 쿼리는 한정자를 붙일 대상 자체가 없어
-     * 조용히 운영 풀로 나간다.
-     */
-    @Bean
-    @Primary
-    public NamedParameterJdbcTemplate namedParameterJdbcTemplate(JdbcTemplate jdbcTemplate) {
-        return new NamedParameterJdbcTemplate(jdbcTemplate);
-    }
 
     @Bean
     @Qualifier("obs")
@@ -175,30 +116,6 @@ public class ObservationDataSourceConfig {
         return new NamedParameterJdbcTemplate(observationJdbcTemplate);
     }
 
-    /**
-     * TransactionManager 를 하나라도 직접 정의하면 JPA 자동설정의 매니저가 물러난다. JdbcTemplate 과
-     * 같은 구조라 운영용을 여기서 함께 정의한다.
-     *
-     * <p>엔티티가 생기기 전에는 EntityManagerFactory 가 없다. @ConditionalOnBean 은 사용자 설정에서
-     * 자동설정 빈을 대상으로 하면 평가 순서 때문에 신뢰할 수 없어 런타임에 직접 고른다.
-     *
-     * <p>커스터마이저를 직접 적용하는 것도 자동설정이 하던 일이다. 안 하면
-     * {@code spring.transaction.default-timeout} 이 조용히 무시된다 — 트랜잭션 전체를 시간으로
-     * 묶는 유일한 손잡이라, 무한 대기를 막으려는 사람이 값을 적어도 아무 일도 일어나지 않는다.
-     */
-    @Bean
-    @Primary
-    public PlatformTransactionManager transactionManager(
-        DataSource dataSource,
-        ObjectProvider<EntityManagerFactory> entityManagerFactory,
-        ObjectProvider<TransactionManagerCustomizers> customizers
-    ) {
-        EntityManagerFactory factory = entityManagerFactory.getIfAvailable();
-        PlatformTransactionManager transactionManager = factory != null
-            ? new JpaTransactionManager(factory) : new JdbcTransactionManager(dataSource);
-        customizers.ifAvailable(it -> it.customize(transactionManager));
-        return transactionManager;
-    }
 
     /**
      * 관측 조회를 한 트랜잭션으로 묶으려면 이 매니저를 이름으로 지목해야 한다 —
@@ -218,19 +135,4 @@ public class ObservationDataSourceConfig {
         return transactionManager;
     }
 
-    /**
-     * DataSource 빈을 직접 정의하면 접속 정보를 덮어써 주던 Boot 의 BeanPostProcessor 까지 물러난다.
-     * <b>운영 풀</b>은 그 자리를 대신하려고 {@code JdbcConnectionDetails} 를 직접 반영한다 —
-     * Testcontainers 의 {@code @ServiceConnection} 과 Compose 연동이 그대로 살아 있어야 하기 때문이다.
-     *
-     * <p>관측 풀은 반대다. 자동 주입을 <b>따르지 않고</b> 설정 값만 쓴다.
-     */
-    private static HikariDataSource hikari(String driverClassName, String url) {
-        HikariDataSource dataSource = new HikariDataSource();
-        if (driverClassName != null) {
-            dataSource.setDriverClassName(driverClassName);
-        }
-        dataSource.setJdbcUrl(url);
-        return dataSource;
-    }
 }

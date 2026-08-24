@@ -10,8 +10,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>Prometheus 에는 인증이 없고 호스트에 포트도 열려 있지 않습니다. compose 네트워크 안의
  * 서비스 이름으로만 닿을 수 있고, 이 API 가 화면으로 가는 유일한 통로입니다.</p>
  *
- * <p><b>타임아웃은 요청 1건이 아니라 응답 1장 기준으로 봐야 합니다.</b> 한 응답에 질의가 넷이라
- * 질의별 타임아웃만 두면 최악의 경우 {@code 4 × (connect + read)} 가 걸립니다 — 화면은 1초마다
+ * <p><b>타임아웃은 요청 1건이 아니라 응답 1장 기준으로 봐야 합니다.</b> 한 응답에 질의가 다섯이라
+ * 질의별 타임아웃만 두면 최악의 경우 {@code 5 × (connect + read)} 가 걸립니다 — 화면은 1초마다
  * 부르므로 그 사이 요청이 쌓여 API 자신이 부하가 됩니다. 그래서 {@code totalBudget} 이 응답 전체
  * 시간을 자르고, 예산을 넘긴 뒤의 질의는 보내지 않고 {@code UNAVAILABLE} 로 내려보냅니다.</p>
  *

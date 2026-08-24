@@ -16,18 +16,24 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.CircuitBreak
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ConsistencyResponse;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencySnapshot;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.PersistenceLagSummary;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TopReason;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficMetrics;
 import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.Verdict;
+import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -92,7 +98,16 @@ class MockJsonMapperContractTest {
                 observed(new PersistenceLagSummary(10, 4, 3, 5, 2, null), SourceStatus.VALID),
                 List.of(
                         new CircuitBreakerSummary("redis", CircuitBreakerState.CLOSED, null),
-                        new CircuitBreakerSummary("kafka", CircuitBreakerState.OPEN, OBSERVED_AT)));
+                        new CircuitBreakerSummary("kafka", CircuitBreakerState.OPEN, OBSERVED_AT)),
+                new ErrorMetrics(
+                        TrafficKey.ISSUE_ATTEMPT_RPS,
+                        List.of(
+                                new ErrorClass(ErrorClassKey.DEPENDENCY_FAILURE, "의존성 실패",
+                                        "httpStatus >= 500 && dependency != NONE", false, valid),
+                                new ErrorClass(ErrorClassKey.CLIENT_INVALID, "클라이언트 요청 오류",
+                                        "4xx 중 403·409 를 뺀 나머지", true, absent(SourceStatus.N_A))),
+                        observed(List.of(new TopReason(ReasonCode.INTERNAL_ERROR, 1.5)),
+                                SourceStatus.VALID)));
     }
 
     private static AdminMetricsResponse withScope(AdminMetricsResponse response, MetricsScope scope) {
@@ -114,7 +129,8 @@ class MockJsonMapperContractTest {
                 response.latency(),
                 response.dependencies(),
                 response.persistence(),
-                List.of());
+                List.of(),
+                response.errors());
     }
 
     private static <T> ObservedValue<T> observed(T value, SourceStatus status) {

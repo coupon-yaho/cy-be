@@ -5,7 +5,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import com.fasterxml.jackson.annotation.JsonValue;
+
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.admin.MetricsWindow;
@@ -14,6 +17,9 @@ import com.kafkick.core.observation.SourceStatus;
 
 /**
  * 특정 관측 범위와 집계 구간의 정합성·트래픽·지연·의존성 상태를 한 snapshot으로 반환하는 응답 초안입니다.
+ *
+ * <p><b>응답 전용입니다.</b> 이 타입으로 역직렬화하지 마십시오 — 키 enum 이 {@code @JsonValue} 로
+ * 상수 이름과 다른 camelCase 를 내보내고 짝이 되는 {@code @JsonCreator} 가 없습니다.</p>
  *
  * <p>각 원천은 독립적으로 실패할 수 있으므로 수집 실패를 0으로 바꾸지 않고 {@link ObservedValue}의
  * 상태와 관측 시각을 유지합니다. 정합성 {@code phase}가 LIVE이면 {@code verdict}는 null이고, FINAL이면
@@ -29,6 +35,7 @@ import com.kafkick.core.observation.SourceStatus;
  * @param dependencies Redis·HikariCP·Kafka 의존성 지표
  * @param persistence 비동기 영속화 지연 관측값
  * @param circuitBreakers 회로 차단기별 상태 목록
+ * @param errors 실패 분류별 비율과 실패 원인 Top N
  */
 public record AdminMetricsResponse(
         Meta meta,
@@ -40,7 +47,8 @@ public record AdminMetricsResponse(
         LatencyMetrics latency,
         DependencyMetrics dependencies,
         ObservedValue<PersistenceLagSummary> persistence,
-        List<CircuitBreakerSummary> circuitBreakers
+        List<CircuitBreakerSummary> circuitBreakers,
+        ErrorMetrics errors
 ) {
 
     /**
@@ -62,7 +70,8 @@ public record AdminMetricsResponse(
                 new LatencyMetrics(null, null, null),
                 new DependencyMetrics(null, null, null),
                 new ObservedValue<>(null, SourceStatus.PENDING, null),
-                List.of()
+                List.of(),
+                ErrorMetrics.draft()
         );
     }
 
@@ -292,4 +301,170 @@ public record AdminMetricsResponse(
      * @param openedAt 마지막 OPEN 전환 시각; 열린 적이 없으면 null
      */
     public record CircuitBreakerSummary(String name, CircuitBreakerState state, Instant openedAt) { }
+
+    /**
+     * 발급 시도 대비 실패 비율과 실패 사유별 발생률입니다.
+     *
+     * <p><b>분모는 {@code issueAttemptRps} 하나로 고정합니다.</b> 패널마다 분모를 고르면 같은
+     * 화면의 두 숫자가 다른 모집단을 가리킵니다. 어느 값을 분모로 썼는지는 화면이 문자열을
+     * 박지 않도록 {@code denominator} 로 함께 내려보냅니다.</p>
+     *
+     * <p><b>정책 거절과 클라이언트 요청 오류는 분자에서 뺍니다.</b> 403·409 는 설계된 동작이고
+     * 400·422·429 는 요청 계약 위반이라 서버 실패가 아닙니다. 분자에 넣으면 재고 소진 구간에서
+     * 실패율이 100% 에 붙어 경보가 아무 의미도 갖지 못합니다. 다만 표에서 지우지는 않습니다 —
+     * 안 보이면 그 트래픽이 어디로 갔는지 아무도 설명하지 못합니다. {@code excludedFromNumerator}
+     * 가 그 구분을 싣습니다.</p>
+     *
+     * <p><b>{@code clientObservedFailure} 키는 없습니다.</b> 브라우저·부하 생성기 쪽 사건이라
+     * 서버가 볼 수 있는 원천이 아예 없습니다. 0 으로 실으면 "클라이언트 실패 없음" 이라는 거짓
+     * 신호가 되므로 키 자체를 내보내지 않습니다.</p>
+     *
+     * @param denominator 비율의 분모로 쓴 처리량 값의 키
+     * @param classes 실패 분류별 비율. 분자 제외 여부를 값마다 함께 싣습니다
+     * @param topReasons 실패 사유별 발생률. <b>서버는 상위 N 개로 자르지 않습니다</b> — 몇 줄까지
+     *        보여줄지는 화면이 정합니다. "실패가 없어 빈 표"(VALID + 빈 목록)와 "아직 못 물어봐서"
+     *        빈 표"(PENDING·UNAVAILABLE)는 운영자가 취할 행동이 정반대라 목록을 상태로 감쌉니다
+     */
+    public record ErrorMetrics(
+            TrafficKey denominator,
+            List<ErrorClass> classes,
+            ObservedValue<List<TopReason>> topReasons
+    ) {
+
+        /**
+         * 분모 키와 분류 목록을 고정 검증합니다.
+         *
+         * @throws NullPointerException 인자가 null 인 경우
+         */
+        public ErrorMetrics {
+            Objects.requireNonNull(denominator, "denominator");
+            classes = List.copyOf(Objects.requireNonNull(classes, "classes"));
+            Objects.requireNonNull(topReasons, "topReasons");
+        }
+
+        /** @return 분류 자리는 있으나 아직 아무것도 수집되지 않은 초안 */
+        public static ErrorMetrics draft() {
+            return new ErrorMetrics(
+                    TrafficKey.ISSUE_ATTEMPT_RPS,
+                    List.of(),
+                    new ObservedValue<>(null, SourceStatus.PENDING, null));
+        }
+    }
+
+    /**
+     * 실패 비율 한 줄입니다.
+     *
+     * <p>{@code label} 과 {@code definition} 을 서버가 싣습니다 — 판정식이 바뀌었는데 화면 문구가
+     * 그대로면 숫자가 조용히 다른 것을 뜻하게 됩니다. 반대로 "지금 이 값을 믿지 마라" 같은 한시적
+     * 경고는 사실이 아니라 상황이므로 여기 섞지 않습니다.</p>
+     *
+     * @param key 결과 분류 키
+     * @param label 화면에 그대로 쓰는 짧은 이름
+     * @param definition 이 분류를 가르는 판정식
+     * @param excludedFromNumerator 실패율 분자에서 제외되는 분류이면 true
+     * @param rate 분모 대비 백분율(0~100). 분모가 0 이면 비율이 정의되지 않아 N_A 입니다
+     */
+    public record ErrorClass(
+            ErrorClassKey key,
+            String label,
+            String definition,
+            boolean excludedFromNumerator,
+            ObservedValue<Double> rate
+    ) {
+
+        /**
+         * 분류 한 줄의 필수 항목을 검증합니다.
+         *
+         * @throws NullPointerException 인자가 null 인 경우
+         */
+        public ErrorClass {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(label, "label");
+            Objects.requireNonNull(definition, "definition");
+            Objects.requireNonNull(rate, "rate");
+        }
+    }
+
+    /**
+     * 실패 분류 키입니다. {@code ResultClassifier.ResultClass} 의 <b>성공이 아닌 네 분류</b>와
+     * 일대일로 대응합니다 — 대응이 깨지면 화면의 분류 표가 원천에 없는 것을 그리거나 원천에 있는
+     * 것을 빠뜨립니다. 그 대응은 계약 테스트가 잡습니다.
+     */
+    public enum ErrorClassKey {
+
+        DEPENDENCY_FAILURE("dependencyFailure"),
+        APPLICATION_FAILURE("applicationFailure"),
+        CLIENT_INVALID("clientInvalid"),
+        POLICY_REJECT("policyReject");
+
+        private final String jsonValue;
+
+        ErrorClassKey(String jsonValue) {
+            this.jsonValue = jsonValue;
+        }
+
+        /** @return 화면 계약이 쓰는 camelCase 키 */
+        @JsonValue
+        public String jsonValue() {
+            return jsonValue;
+        }
+    }
+
+    /**
+     * 처리량 값의 키입니다. 비율의 분모가 무엇인지 화면에 알려주는 데 씁니다.
+     *
+     * <p>이름과 순서가 {@link TrafficMetrics} 의 항목과 정확히 같아야 합니다 — 어긋나면 화면이
+     * 존재하지 않는 값을 분모라고 표시합니다. 계약 테스트가 둘을 잇습니다.</p>
+     */
+    public enum TrafficKey {
+
+        ISSUE_ATTEMPT_RPS("issueAttemptRps"),
+        ISSUE_SUCCESS_TPS("issueSuccessTps"),
+        QUEUE_ACCEPTED_RPS("queueAcceptedRps"),
+        POLICY_REJECT_RPS("policyRejectRps"),
+        SYSTEM_FAILURE_RPS("systemFailureRps");
+
+        private final String jsonValue;
+
+        TrafficKey(String jsonValue) {
+            this.jsonValue = jsonValue;
+        }
+
+        /** @return 화면 계약이 쓰는 camelCase 키 */
+        @JsonValue
+        public String jsonValue() {
+            return jsonValue;
+        }
+    }
+
+    /**
+     * 실패 원인 한 줄입니다.
+     *
+     * <p><b>0 인 행을 서버가 거르지 않습니다.</b> 무엇이 0 인지 보이는 것과 사라지는 것 중
+     * 무엇이 나은지는 패널이 정할 문제입니다. 같은 이유로 상위 N 개로 자르지도 않습니다 —
+     * 사유는 {@code ReasonCode} 로 이미 저카디널리티라 자를 만큼 길어지지 않습니다.</p>
+     *
+     * <p>HTTP 상태는 싣지 않습니다. 원천({@code app_issuance_outcome_total})에 그 라벨이 없어
+     * 서버가 지어내야 하고, 지어낸 값은 {@code ErrorCode} 가 상태를 바꾸는 순간 조용히
+     * 어긋납니다.</p>
+     *
+     * <p><b>사유 코드만 대문자로 나갑니다.</b> {@code ErrorClassKey}·{@code TrafficKey} 는 화면이
+     * 정한 키라 camelCase 지만, 이것은 키가 아니라 원천의 {@code outcome} 라벨 값을 그대로 옮긴
+     * 것입니다. 표기를 맞추겠다고 여기서 바꾸면 화면에 찍힌 문자열로 Prometheus 를 되짚을 수
+     * 없게 됩니다.</p>
+     *
+     * @param reasonCode 저카디널리티 사유 코드. 원천 라벨과 같은 대문자 표기다
+     * @param rps 초당 발생 건수
+     */
+    public record TopReason(ReasonCode reasonCode, double rps) {
+
+        /**
+         * 사유 코드를 검증합니다.
+         *
+         * @throws NullPointerException reasonCode 가 null 인 경우
+         */
+        public TopReason {
+            Objects.requireNonNull(reasonCode, "reasonCode");
+        }
+    }
 }

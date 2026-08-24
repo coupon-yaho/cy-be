@@ -41,7 +41,7 @@ import com.kafkick.core.support.TimeProvider;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.benchmark.JdbcRunTimeseriesArchiveStore;
 
-@SpringBootTest
+@SpringBootTest(properties = "observation.datasource.enabled=true")
 @Import(MySqlContainerConfig.class)
 class ApiApplicationTests {
 

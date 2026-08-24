@@ -2,6 +2,7 @@ package com.kafkick.api.observation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static com.kafkick.api.observation.ConfigContractFixture.defaultOf;
+import static com.kafkick.api.observation.ConfigContractFixture.loadYaml;
 import static com.kafkick.api.observation.ConfigContractFixture.repoRoot;
 
 import java.io.IOException;
@@ -32,8 +33,8 @@ import org.yaml.snakeyaml.Yaml;
  * 아니라 <b>"여기서 계약을 깨는 값을 덮어쓰지 않는가"</b> 를 본다.
  *
  * <p><b>잡지 못하는 것.</b> Boot 의 겹침 규칙 자체가 바뀌면 이 테스트는 여전히 통과한다.
- * 그건 정적 대조로는 못 잡고, 실제 이미지를 띄워야 드러난다.
- * TODO(CY-213 후속, @SH-Seol): 이미지가 actuator 를 갖고 재빌드되면 up==1 과 함께 실측한다.
+ * 그건 정적 대조로는 못 잡고, 실제 이미지를 띄워야 드러난다. 배포 검증은
+ * {@code up{job="api"}}와 {@code up{job="batch"}} 실측으로 별도 확인한다.
  */
 class DeployedConfigContractTest {
 
@@ -45,6 +46,24 @@ class DeployedConfigContractTest {
      * 않는 파일이라 대조할 원본이 없다.
      */
     private static final String DEPLOYED = "application.yml.example";
+
+    @Test
+    @DisplayName("호스트 18080 공개와 컨테이너 API 8080 수신을 분리한다")
+    void hostPortDoesNotOverrideTheApiContainerPort() throws IOException {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> services = (Map<String, Object>) loadYaml(
+                repoRoot().resolve("compose.yml")).get("services");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> api = (Map<String, Object>) services.get("api");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> environment = (Map<String, Object>) api.get("environment");
+
+        assertThat(String.valueOf(environment.get("SERVER_PORT")))
+                .as("컨테이너 안 API 포트는 8080 으로 고정하고, .env 의 SERVER_PORT 는 호스트"
+                        + " 매핑에만 쓴다. API 프로세스까지 그 값을 쓰면 host:18080 이"
+                        + " container:8080 으로 보내는 연결이 reset 된다")
+                .isEqualTo("8080");
+    }
 
     @Test
     @DisplayName("배포 설정이 batch 관리 포트를 덮어쓰지 않는다 — 덮어쓰면 scrape 대상과 갈린다")

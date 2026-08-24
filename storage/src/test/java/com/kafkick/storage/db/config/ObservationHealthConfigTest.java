@@ -30,7 +30,9 @@ class ObservationHealthConfigTest {
     };
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-        .withUserConfiguration(ObservationDataSourceConfig.class, ObservationHealthConfig.class)
+        // CY-338: 운영 풀은 MainDataSourceConfig 로 옮겼다. dbHealthContributor 가 그것을 받는다.
+        .withUserConfiguration(MainDataSourceConfig.class, ObservationDataSourceConfig.class,
+            ObservationHealthConfig.class)
         .withConfiguration(AutoConfigurations.of(DataSourceHealthContributorAutoConfiguration.class))
         .withPropertyValues(
             "observation.datasource.enabled=true",

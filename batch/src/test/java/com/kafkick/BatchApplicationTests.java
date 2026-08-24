@@ -11,7 +11,7 @@ import org.springframework.context.annotation.Import;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
-@SpringBootTest
+@SpringBootTest(properties = "storage.jpa.auditing.enabled=false")
 @Import(MySqlContainerConfig.class)
 class BatchApplicationTests {
 

@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -17,12 +18,17 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ConsistencyResponse;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencySnapshot;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.PersistenceLagSummary;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TopReason;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficMetrics;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.admin.support.ObservedValue;
@@ -32,6 +38,7 @@ import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.observation.SourceStatusCode;
@@ -40,7 +47,7 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * Prometheus 표본을 {@link AdminMetricsResponse} 한 장으로 조립합니다.
  *
- * <p>질의는 셀렉터로 묶어 네 번만 보냅니다. 지표마다 한 번씩 부르면 화면의 1 초 폴링이
+ * <p>질의는 셀렉터로 묶어 다섯 번만 보냅니다. 지표마다 한 번씩 부르면 화면의 1 초 폴링이
  * Prometheus 를 초당 수십 번 두드립니다.</p>
  *
  * <p><b>원천은 서로 독립적으로 죽습니다.</b> 질의 실패든 표본 이상이든 예외를 밖으로 올리지 않고
@@ -60,7 +67,7 @@ public class PromMetricsAssembler {
 
     private static final String TAG_URI_GROUP = "uri_group";
     private static final String TAG_RESULT = "result";
-    private static final String TAG_OUTCOME = "outcome";
+    private static final String TAG_OUTCOME = OverviewPrometheusContract.OUTCOME;
     private static final String TAG_QUANTILE = "quantile";
     private static final String OUTCOME_SUCCESS = "success";
 
@@ -100,7 +107,7 @@ public class PromMetricsAssembler {
     public AdminMetricsResponse assemble(MetricsQuery query) {
         MetricsWindow window = query.window();
 
-        // 응답 한 장의 예산이다. 질의별 타임아웃만 두면 최악의 경우 4 × (connect + read) 가 걸려
+        // 응답 한 장의 예산이다. 질의별 타임아웃만 두면 최악의 경우 5 × (connect + read) 가 걸려
         // 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로 부하가 된다.
         Deadline deadline = Deadline.startingNow(totalBudget);
 
@@ -110,11 +117,20 @@ public class PromMetricsAssembler {
         QueryResult latency = run(latencyQuery(), deadline);
         QueryResult results = run(resultRateQuery(window), deadline);
         QueryResult httpAge = run(httpFreshnessQuery(), deadline);
+        // 마지막이다. 실패 원인 표는 다른 값들이 다 나온 뒤에 채워도 되는 유일한 값이라,
+        // 예산이 모자랄 때 이것부터 잘린다.
+        QueryResult failureReasons =
+                run(OverviewPrometheusContract.failureReasonRates(window.duration()), deadline);
 
         Instant evaluatedAt = evaluatedAt(latency, results, httpAge, consistency)
                 .orElseGet(timeProvider::instant);
         Freshness http = httpFreshness(httpAge, evaluatedAt);
         Freshness domain = domainFreshness(consistency, evaluatedAt);
+
+        // 분모는 한 번만 만들어 트래픽과 실패율이 나눠 쓴다. 각자 만들면 같은 스냅샷 안에서
+        // 분자와 분모가 다른 시점을 가리킬 수 있다.
+        ObservedValue<Double> attempts =
+                rate(results, inGroup(UriGroup.ISSUE), http, SourceStatus.NO_TRAFFIC);
 
         return new AdminMetricsResponse(
                 // 예산에 얼마나 근접했는지가 이 값으로만 보인다. 잘려서 UNAVAILABLE 이 나오기
@@ -124,11 +140,12 @@ public class PromMetricsAssembler {
                 evaluatedAt,
                 window,
                 consistency(consistency, domain, query),
-                traffic(results, http),
+                traffic(attempts, results, http),
                 latency(latency, http),
                 dependencies(),
                 notWiredYet(),
-                List.of());
+                List.of(),
+                errors(attempts, results, http, failureReasons));
     }
 
     // ── 질의 ────────────────────────────────────────────────────────────────────
@@ -222,8 +239,8 @@ public class PromMetricsAssembler {
         } catch (PromQueryException failure) {
             // 500 으로 올리지 않는다. 이 질의가 채우려던 값만 UNAVAILABLE 로 나간다.
             //
-            // ⚠️ 스택트레이스는 DEBUG 에만 싣는다. 화면이 1 초마다 부르고 한 응답에 질의가 넷이라,
-            //    Prometheus 가 죽으면 관리자 수 × 초당 4 건이 쌓인다 — 정작 장애 원인을 담은
+            // ⚠️ 스택트레이스는 DEBUG 에만 싣는다. 화면이 1 초마다 부르고 한 응답에 질의가 다섯이라,
+            //    Prometheus 가 죽으면 관리자 수 × 초당 5 건이 쌓인다 — 정작 장애 원인을 담은
             //    다른 로그가 묻힌다. 조용히 삼키지는 않으므로 한 줄은 WARN 으로 남긴다.
             log.warn("Prometheus 질의 실패로 해당 지표를 UNAVAILABLE 로 내려보냅니다: {} ({})",
                     promQl, failure.getMessage());
@@ -339,9 +356,9 @@ public class PromMetricsAssembler {
      * "요청이 없었다" 가 아니라 "그 결과가 한 건도 없었다" 입니다 — 초당 5,000 건이 전부 성공
      * 중일 때 시스템 실패 0 을 NO_TRAFFIC 으로 내보내면 화면이 그 패널만 회색으로 죽입니다.</p>
      */
-    private static TrafficMetrics traffic(QueryResult results, Freshness freshness) {
+    private static TrafficMetrics traffic(
+            ObservedValue<Double> attempts, QueryResult results, Freshness freshness) {
         Predicate<PromSample> issue = inGroup(UriGroup.ISSUE);
-        ObservedValue<Double> attempts = rate(results, issue, freshness, SourceStatus.NO_TRAFFIC);
         SourceStatus zeroState =
                 attempts.state() == SourceStatus.NO_TRAFFIC ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
         return new TrafficMetrics(
@@ -379,10 +396,176 @@ public class PromMetricsAssembler {
         if (!freshness.known()) {
             return absent(freshness);
         }
+        if (reduced.getAsDouble() < 0d) {
+            // counter 의 rate 는 음수가 될 수 없다. 음수가 왔다면 원천이 망가진 것이지 관측이 아니다.
+            //
+            // 여기서 막는다 — 처리량과 실패율이 같은 값을 나눠 쓰므로, 한쪽에만 걸면 같은 스냅샷에서
+            // 처리량은 음수 값을 VALID 로 그리고 실패율만 UNAVAILABLE 이 되는 모순이 생긴다.
+            //
+            // ⚠️ 로그를 남기지 않는다. 화면이 1 초마다 부르고 이 헬퍼는 응답 한 장에 아홉 번
+            //    불리므로, 원천이 망가진 동안 관리자 수 × 초당 아홉 줄이 쌓인다 — 정작 원인을 담은
+            //    다른 로그가 묻힌다. 값이 UNAVAILABLE 로 나가는 것 자체가 신호다.
+            return unavailable();
+        }
         SourceStatus state = freshness.stale()
                 ? SourceStatus.STALE
                 : (reduced.getAsDouble() == 0d ? zeroState : SourceStatus.VALID);
         return new ObservedValue<>(reduced.getAsDouble(), state, freshness.observedAt());
+    }
+
+    /**
+     * 발급 시도 대비 실패 비율과 실패 사유별 발생률입니다.
+     *
+     * <p><b>{@code traffic()} 과 같은 표본을 접습니다.</b> 질의를 따로 보내면 분자와 분모가 다른
+     * 시점을 보고, 그러면 실패율이 100% 를 넘거나 음수가 되는 순간이 생깁니다. 분모도 조립기가
+     * 한 번 만든 {@code issueAttemptRps} 를 그대로 받습니다.</p>
+     *
+     * <p><b>{@code QUEUE_ACCEPTED} 와 달리 모든 분류에 {@code uri_group=issue} 를 겁니다.</b>
+     * 대기열 경로는 발급 시도가 아니므로 분모에도 분자에도 들어가면 안 됩니다.</p>
+     *
+     * <p>상태는 블록이 아니라 값마다 붙습니다. 원인 질의가 죽어도 분류 표는 삽니다.</p>
+     */
+    private static ErrorMetrics errors(
+            ObservedValue<Double> attempts,
+            QueryResult results,
+            Freshness freshness,
+            QueryResult failureReasons) {
+        Predicate<PromSample> issue = inGroup(UriGroup.ISSUE);
+        return new ErrorMetrics(
+                TrafficKey.ISSUE_ATTEMPT_RPS,
+                List.of(
+                        errorClass(ErrorClassKey.DEPENDENCY_FAILURE, "의존성 실패",
+                                "httpStatus >= 500 && dependency != NONE", false,
+                                results, issue.and(result(ResultClass.DEPENDENCY_FAILURE)),
+                                freshness, attempts),
+                        errorClass(ErrorClassKey.APPLICATION_FAILURE, "애플리케이션 실패",
+                                "httpStatus >= 500 && dependency == NONE", false,
+                                results, issue.and(result(ResultClass.APPLICATION_FAILURE)),
+                                freshness, attempts),
+                        // 요청 계약 위반이다. 서버가 실패한 것이 아니므로 분자에서 뺀다.
+                        errorClass(ErrorClassKey.CLIENT_INVALID, "클라이언트 요청 오류",
+                                "4xx 중 403·409 를 뺀 나머지 (400·401·404·422·429)", true,
+                                results, issue.and(result(ResultClass.CLIENT_INVALID)),
+                                freshness, attempts),
+                        // 설계된 동작이다. 분자에 넣으면 재고 소진 구간에서 실패율이 100% 에 붙는다.
+                        errorClass(ErrorClassKey.POLICY_REJECT, "정책 거절",
+                                "의도된 403 · 409", true,
+                                results, issue.and(result(ResultClass.POLICY_REJECT)),
+                                freshness, attempts)),
+                topReasons(failureReasons, freshness));
+    }
+
+    private static ErrorClass errorClass(
+            ErrorClassKey key,
+            String label,
+            String definition,
+            boolean excludedFromNumerator,
+            QueryResult results,
+            Predicate<PromSample> filter,
+            Freshness freshness,
+            ObservedValue<Double> attempts) {
+        // 분자가 0 인 것은 "요청이 없었다" 가 아니라 "그 실패가 한 건도 없었다" 이므로 VALID 다.
+        ObservedValue<Double> numerator = rate(results, filter, freshness, SourceStatus.VALID);
+        return new ErrorClass(key, label, definition, excludedFromNumerator,
+                failureRate(numerator, attempts));
+    }
+
+    /**
+     * 분모 대비 백분율입니다.
+     *
+     * <p><b>분모가 0 이면 비율이 없습니다.</b> 0 으로 내려보내면 "실패가 없다" 로 읽히고
+     * {@code NO_TRAFFIC} 으로 내려보내면 값이 0 인 것으로 읽힙니다 — 요청이 0 건일 때 비율은
+     * 정의되지 않는 것이라 {@code N_A} 입니다.</p>
+     *
+     * <p><b>음수 표본은 여기까지 오지 않습니다.</b> {@link #rate} 가 이미 {@code UNAVAILABLE} 로
+     * 바꿔 놓으므로 분자·분모 어느 쪽이 음수든 첫 분기에서 걸립니다 — 계약({@code 0~100})을
+     * 지킬 수 없는 입력을 나누는 자리가 아예 없습니다.</p>
+     *
+     * <p><b>자르는 코드가 없는 것은 자를 일이 없기 때문입니다.</b> 분자와 분모는 같은
+     * {@code QueryResult} 를 같은 {@code uri_group} 필터로 접은 것이라 분자가 분모의 부분집합이고,
+     * 네 분류는 {@code ResultClass} 로 서로 겹치지 않습니다 — 넷을 다 더해도 100 을 넘지 않습니다.
+     * 그 성질이 깨지면(필터가 그룹 밖을 집거나 두 분류가 겹치면) 100 을 넘는 값이 그대로
+     * 드러나야 합니다. 잘라 두면 그 배선 오류가 화면에서 정상으로 보입니다.</p>
+     */
+    private static ObservedValue<Double> failureRate(
+            ObservedValue<Double> numerator, ObservedValue<Double> attempts) {
+        if (numerator.state() == SourceStatus.UNAVAILABLE
+                || attempts.state() == SourceStatus.UNAVAILABLE) {
+            return unavailable();
+        }
+        // 분모부터 본다. 분모가 0 이면 분자를 알든 모르든 비율은 정의되지 않는다.
+        if (!attempts.state().carriesValue()) {
+            return pending();
+        }
+        if (attempts.value() == 0d) {
+            return notApplicable();
+        }
+        if (!numerator.state().carriesValue()) {
+            // 그 결과의 시계열이 아직 없다. 0 이 아니라 모르는 것이다.
+            return pending();
+        }
+        double percent = round(numerator.value() / attempts.value() * 100d);
+        SourceStatus state = numerator.state() == SourceStatus.STALE
+                || attempts.state() == SourceStatus.STALE
+                ? SourceStatus.STALE
+                : SourceStatus.VALID;
+        return new ObservedValue<>(percent, state, numerator.observedAt());
+    }
+
+    /**
+     * 사유별 초당 실패 건수입니다. 원천이 {@code traffic()} 과 다릅니다 — 저쪽은 응답 상태로
+     * 나눈 HTTP 결과이고 이쪽은 업무 사유({@code ReasonCode})입니다.
+     *
+     * <p><b>0 인 행을 여기서 거르지 않고 상위 N 개로 자르지도 않습니다.</b> 무엇이 0 인지 보이는
+     * 편이 나은지, 몇 줄까지 보일지는 패널이 정할 문제이고, 서버가 걸러 버리면 화면에는 고를
+     * 자유가 남지 않습니다.</p>
+
+     * <p>⚠️ <b>0 인 행과 목록에 아예 없는 행은 다릅니다.</b> 카운터가 한 번도 등록되지 않아
+     * 시계열 자체가 없으면 그 사유는 행으로도 안 나옵니다 — 등록은 기동 시점에
+     * {@code CampaignMeterRegistry} 가 사유 전종에 대해 하므로 정상 배선에서는 안 생깁니다.</p>
+     *
+     * <p><b>음수 표본이 하나라도 있으면 표를 통째로 비웁니다({@code UNAVAILABLE}).</b> 그 행만
+     * 빼면 남은 행의 순위가 멀쩡한 것처럼 보이는데, 원천이 음수를 낼 정도면 나머지 값도 믿을
+     * 근거가 없습니다. {@link #rate} 가 처리량·실패율에 거는 것과 같은 판정입니다.</p>
+     *
+     * <p>신선도는 HTTP 미터의 것을 씁니다. 같은 JVM 의 같은 scrape 로 나오는 미터라 나이가
+     * 같습니다 — 따로 물으면 질의만 하나 더 늘고 답은 같습니다.</p>
+     */
+    private static ObservedValue<List<TopReason>> topReasons(
+            QueryResult failureReasons, Freshness freshness) {
+        if (failureReasons.unavailable()) {
+            return unavailable();
+        }
+        List<TopReason> rows = new ArrayList<>();
+        for (ReasonCode reasonCode : OverviewPrometheusContract.FAILURE_REASONS) {
+            OptionalDouble reduced = reduceOrUnknown(MetricAggregation.ISSUANCE_OUTCOME_TOTAL,
+                    failureReasons.filter(label(TAG_OUTCOME, reasonCode.name())));
+            if (reduced.isEmpty()) {
+                continue;
+            }
+            if (reduced.getAsDouble() < 0d) {
+                // 실패율과 같은 판정이다. counter 의 rate 는 음수일 수 없으므로 원천이 망가진 것이고,
+                // 한 행만 빼면 나머지 순위가 그대로인 것처럼 보인다 — 표를 통째로 비운다.
+                return unavailable();
+            }
+            rows.add(new TopReason(reasonCode, round(reduced.getAsDouble())));
+        }
+        if (rows.isEmpty()) {
+            // 시계열이 아직 하나도 없다. "실패 없음" 과 다르다 — 빈 목록으로 내려보내면 둘이 같아진다.
+            return pending();
+        }
+        if (!freshness.known()) {
+            return absent(freshness);
+        }
+        rows.sort(Comparator.comparingDouble(TopReason::rps).reversed()
+                .thenComparing(row -> row.reasonCode().name()));
+        return new ObservedValue<>(List.copyOf(rows),
+                freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID, freshness.observedAt());
+    }
+
+    /** 화면이 세 자리까지 읽습니다. 그 아래는 폴링마다 흔들리는 잡음이라 값이 아닙니다. */
+    private static double round(double value) {
+        return Math.round(value * 1000d) / 1000d;
     }
 
     /**
@@ -630,6 +813,11 @@ public class PromMetricsAssembler {
 
     private static <T> ObservedValue<T> unavailable() {
         return new ObservedValue<>(null, SourceStatus.UNAVAILABLE, null);
+    }
+
+    /** 값이 없는 것이 아니라 그 값이 정의되지 않는 상태입니다. */
+    private static <T> ObservedValue<T> notApplicable() {
+        return new ObservedValue<>(null, SourceStatus.N_A, null);
     }
 
     private static Optional<Instant> evaluatedAt(QueryResult... results) {
