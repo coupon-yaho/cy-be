@@ -141,7 +141,10 @@ class MemberCouponQueryServiceTest {
                 10_000,
                 null,
                 Instant.parse("2026-08-18T05:30:00Z"),
-                Instant.parse("2026-08-25T05:30:00Z")
+                Instant.parse("2026-08-25T05:30:00Z"),
+                null,
+                null,
+                null
         );
     }
 }

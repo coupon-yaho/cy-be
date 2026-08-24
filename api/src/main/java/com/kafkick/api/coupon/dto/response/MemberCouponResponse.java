@@ -17,7 +17,10 @@ public record MemberCouponResponse(
         Integer maxDiscountAmount,
         Integer discountAmount,
         Instant issuedAt,
-        Instant expiresAt
+        Instant expiresAt,
+        Instant usedAt,
+        Integer usedDiscountAmount,
+        Long orderId
 ) {
 
     public static MemberCouponResponse from(MemberCouponSummary summary) {
@@ -32,7 +35,10 @@ public record MemberCouponResponse(
                 summary.maxDiscountAmount(),
                 summary.discountAmount(),
                 summary.issuedAt(),
-                summary.expiresAt()
+                summary.expiresAt(),
+                summary.usedAt(),
+                summary.usedDiscountAmount(),
+                summary.orderId()
         );
     }
 }

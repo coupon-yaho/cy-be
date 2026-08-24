@@ -16,6 +16,9 @@ public record MemberCouponSummary(
         Integer maxDiscountAmount,
         Integer discountAmount,
         Instant issuedAt,
-        Instant expiresAt
+        Instant expiresAt,
+        Instant usedAt,
+        Integer usedDiscountAmount,
+        Long orderId
 ) {
 }

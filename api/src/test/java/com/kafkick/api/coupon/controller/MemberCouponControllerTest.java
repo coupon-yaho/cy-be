@@ -59,7 +59,7 @@ class MemberCouponControllerTest {
                 .andExpect(jsonPath("$.data.content[0].code")
                         .value("ABCDEFGHJKLM2345"))
                 .andExpect(jsonPath("$.data.content[0].status")
-                        .value("ISSUED"))
+                        .value("USED"))
                 .andExpect(jsonPath("$.data.content[0].name")
                         .value("골드 VIP 20% 할인"))
                 .andExpect(jsonPath("$.data.content[0].policyType")
@@ -74,6 +74,12 @@ class MemberCouponControllerTest {
                         .value("2026-08-18T05:30:00Z"))
                 .andExpect(jsonPath("$.data.content[0].expiresAt")
                         .value("2026-08-25T05:30:00Z"))
+                .andExpect(jsonPath("$.data.content[0].usedAt")
+                        .value("2026-08-19T05:30:00Z"))
+                .andExpect(jsonPath("$.data.content[0].usedDiscountAmount")
+                        .value(8_000))
+                .andExpect(jsonPath("$.data.content[0].orderId")
+                        .value(30_001))
                 .andExpect(jsonPath("$.data.page").value(0))
                 .andExpect(jsonPath("$.data.size").value(20))
                 .andExpect(jsonPath("$.data.totalElements").value(1))
@@ -125,7 +131,7 @@ class MemberCouponControllerTest {
                 .andExpect(jsonPath("$.data.couponRoundId").value(10))
                 .andExpect(jsonPath("$.data.code")
                         .value("ABCDEFGHJKLM2345"))
-                .andExpect(jsonPath("$.data.status").value("ISSUED"))
+                .andExpect(jsonPath("$.data.status").value("USED"))
                 .andExpect(jsonPath("$.data.name")
                         .value("골드 VIP 20% 할인"))
                 .andExpect(jsonPath("$.data.policyType")
@@ -138,7 +144,12 @@ class MemberCouponControllerTest {
                 .andExpect(jsonPath("$.data.issuedAt")
                         .value("2026-08-18T05:30:00Z"))
                 .andExpect(jsonPath("$.data.expiresAt")
-                        .value("2026-08-25T05:30:00Z"));
+                        .value("2026-08-25T05:30:00Z"))
+                .andExpect(jsonPath("$.data.usedAt")
+                        .value("2026-08-19T05:30:00Z"))
+                .andExpect(jsonPath("$.data.usedDiscountAmount")
+                        .value(8_000))
+                .andExpect(jsonPath("$.data.orderId").value(30_001));
 
         verify(memberCouponQueryService).findOne(20L, 100L);
     }
@@ -230,14 +241,17 @@ class MemberCouponControllerTest {
                         100L,
                         10L,
                         "ABCDEFGHJKLM2345",
-                        IssuanceStatus.ISSUED,
+                        IssuanceStatus.USED,
                         "골드 VIP 20% 할인",
                         CouponPolicyType.PERCENT_CAPPED,
                         20,
                         10_000,
                         null,
                         Instant.parse("2026-08-18T05:30:00Z"),
-                        Instant.parse("2026-08-25T05:30:00Z")
+                        Instant.parse("2026-08-25T05:30:00Z"),
+                        Instant.parse("2026-08-19T05:30:00Z"),
+                        8_000,
+                        30_001L
         );
     }
 }

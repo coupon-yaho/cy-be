@@ -89,7 +89,10 @@ public class MemberCouponQueryAdapter implements MemberCouponQueryPort {
                 projection.getMaxDiscountAmount(),
                 projection.getDiscountAmount(),
                 projection.getIssuedAt(),
-                projection.getExpiresAt()
+                projection.getExpiresAt(),
+                projection.getUsedAt(),
+                projection.getUsedDiscountAmount(),
+                projection.getOrderId()
         );
     }
 }

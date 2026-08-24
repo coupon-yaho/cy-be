@@ -29,10 +29,16 @@ public interface IssuanceJpaRepository
                            couponRound.maxDiscountAmount AS maxDiscountAmount,
                            couponRound.discountAmount AS discountAmount,
                            issuance.issuedAt AS issuedAt,
-                           issuance.expiresAt AS expiresAt
+                           issuance.expiresAt AS expiresAt,
+                           activeUsage.usedAt AS usedAt,
+                           activeUsage.discountAmount AS usedDiscountAmount,
+                           activeUsage.orderId AS orderId
                     FROM IssuanceEntity issuance
                     JOIN CouponRoundEntity couponRound
                       ON couponRound.id = issuance.couponId
+                    LEFT JOIN IssuanceUsageEntity activeUsage
+                      ON activeUsage.issuanceId = issuance.id
+                     AND activeUsage.canceledAt IS NULL
                     WHERE issuance.memberId = :memberId
                       AND (:status IS NULL OR issuance.status = :status)
                     ORDER BY issuance.issuedAt DESC, issuance.id DESC
@@ -61,10 +67,16 @@ public interface IssuanceJpaRepository
                    couponRound.maxDiscountAmount AS maxDiscountAmount,
                    couponRound.discountAmount AS discountAmount,
                    issuance.issuedAt AS issuedAt,
-                   issuance.expiresAt AS expiresAt
+                   issuance.expiresAt AS expiresAt,
+                   activeUsage.usedAt AS usedAt,
+                   activeUsage.discountAmount AS usedDiscountAmount,
+                   activeUsage.orderId AS orderId
             FROM IssuanceEntity issuance
             JOIN CouponRoundEntity couponRound
               ON couponRound.id = issuance.couponId
+            LEFT JOIN IssuanceUsageEntity activeUsage
+              ON activeUsage.issuanceId = issuance.id
+             AND activeUsage.canceledAt IS NULL
             WHERE issuance.memberId = :memberId
               AND issuance.id = :issuanceId
             """)

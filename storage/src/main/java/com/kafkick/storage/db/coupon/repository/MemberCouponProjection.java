@@ -28,4 +28,10 @@ public interface MemberCouponProjection {
     Instant getIssuedAt();
 
     Instant getExpiresAt();
+
+    Instant getUsedAt();
+
+    Integer getUsedDiscountAmount();
+
+    Long getOrderId();
 }
