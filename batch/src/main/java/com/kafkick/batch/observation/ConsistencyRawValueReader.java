@@ -46,7 +46,8 @@ public class ConsistencyRawValueReader {
     private static final Logger log = LoggerFactory.getLogger(ConsistencyRawValueReader.class);
 
     /** 재고 불변식의 분자. SQL 리터럴을 손으로 적으면 상태가 하나 늘어날 때 여기만 안 바뀐다. */
-    private static final String ACTIVE_STATUS_LIST = statusList(IssuanceStatus::countsTowardStock);
+    private static final String ACTIVE_STATUS_LIST = statusList(EnumSet.of(
+        IssuanceStatus.ISSUED, IssuanceStatus.USED)::contains);
 
     /**
      * 누적 발급의 분자. {@code ConsistencyRawValues} 계약이 네 상태를 <b>열거</b>하므로
