@@ -300,6 +300,9 @@ class RunTimeseriesArchiverTest {
             runs, source, store, java.time.Duration.ZERO, MAX_SAMPLES))
             .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1초");
         assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, java.time.Duration.ofSeconds(1).plusMillis(500), MAX_SAMPLES))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("정수 초");
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
             runs, source, store, CLAIM_LEASE, 0))
             .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("양수");
         assertThatThrownBy(() -> new RunTimeseriesArchiver(

@@ -42,6 +42,9 @@ public class RunTimeseriesArchiver {
         if (claimLease.compareTo(Duration.ofSeconds(1)) < 0) {
             throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
         }
+        if (claimLease.getNano() != 0) {
+            throw new IllegalArgumentException("archive claim lease는 정수 초여야 한다");
+        }
         if (claimLease.compareTo(MAX_CLAIM_LEASE) > 0) {
             throw new IllegalArgumentException("archive claim lease가 지원 상한을 넘었다");
         }

@@ -518,6 +518,14 @@ class JdbcBenchmarkRunRepositoryTest {
         }
 
         @Test
+        void rejectsFractionalSecondLeaseInsteadOfTruncatingIt() {
+            assertThatThrownBy(() -> repository.claimArchive(
+                7L, java.time.Duration.ofSeconds(1).plusMillis(500)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("정수 초");
+        }
+
+        @Test
         void concurrentFailedArchiveClaimHasExactlyOneOwner() throws Exception {
             long id = finalizedRun();
             repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "timeout");

@@ -317,13 +317,16 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
 
     @Override
     public java.util.Optional<String> claimArchive(long id, java.time.Duration lease) {
+        if (lease == null || lease.compareTo(java.time.Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
+        }
+        if (lease.getNano() != 0) {
+            throw new IllegalArgumentException("archive claim lease는 정수 초여야 한다");
+        }
         if (lease.compareTo(java.time.Duration.ofDays(365)) > 0) {
             throw new IllegalArgumentException("archive claim lease가 지원 상한을 넘었다");
         }
         long leaseSeconds = lease.getSeconds();
-        if (leaseSeconds <= 0) {
-            throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
-        }
         String token = java.util.UUID.randomUUID().toString();
         boolean claimed = update("""
                 UPDATE benchmark_runs

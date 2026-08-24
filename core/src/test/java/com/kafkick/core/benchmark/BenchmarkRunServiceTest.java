@@ -31,7 +31,7 @@ class BenchmarkRunServiceTest {
     @BeforeEach
     void setUp() {
         clock = new MutableClock(Instant.parse("2026-08-22T00:00:00Z"));
-        repository = new FakeBenchmarkRunRepository();
+        repository = new FakeBenchmarkRunRepository(clock);
         service = new BenchmarkRunService(repository, new TimeProvider(clock));
     }
 
@@ -293,18 +293,29 @@ class BenchmarkRunServiceTest {
         }
 
         @Test
-        void fakeRepositoryRejectsSubsecondArchiveLeaseLikeJdbcRepository() {
-            assertThatThrownBy(() -> repository.claimArchive(1L, Duration.ZERO))
+        void archiveLeaseBelowOneSecondIsRejected() {
+            for (Duration invalid : java.util.List.of(
+                    Duration.ofMillis(999), Duration.ZERO, Duration.ofSeconds(-1))) {
+                assertThatThrownBy(() -> repository.claimArchive(1L, invalid))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("1초 이상");
+            }
         }
 
         @Test
-        void fakeRepositoryMatchesJdbcArchiveLeaseUpperBoundary() {
+        void archiveLeaseAt365DaysIsAcceptedAnd366DaysIsRejected() {
             assertThat(repository.claimArchive(1L, Duration.ofDays(365))).isEmpty();
             assertThatThrownBy(() -> repository.claimArchive(1L, Duration.ofDays(366)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("지원 상한");
+        }
+
+        @Test
+        void fractionalSecondArchiveLeaseIsRejected() {
+            assertThatThrownBy(() -> repository.claimArchive(
+                    1L, Duration.ofSeconds(1).plusMillis(500)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("정수 초");
         }
 
         @Test

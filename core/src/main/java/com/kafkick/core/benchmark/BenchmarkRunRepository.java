@@ -116,7 +116,7 @@ public interface BenchmarkRunRepository {
      */
     boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason);
 
-    /** NONE·FAILED 또는 lease가 만료된 IN_PROGRESS를 원자 claim하고 UUID v4 fencing token을 돌려준다. */
+    /** 1초~365일의 정수 초 lease로 NONE·FAILED 또는 만료된 IN_PROGRESS를 원자 claim한다. */
     java.util.Optional<String> claimArchive(long id, java.time.Duration lease);
 
     /** 현재 fencing token의 archive만 FAILED로 끝낸다. */
