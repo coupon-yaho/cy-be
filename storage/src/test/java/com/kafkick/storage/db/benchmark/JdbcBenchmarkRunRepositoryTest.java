@@ -287,7 +287,8 @@ class JdbcBenchmarkRunRepositoryTest {
             assertThat(repository.markFinalized(404L, START)).isFalse();
             assertThat(repository.updateClientSummary(404L, clientSummary(0))).isFalse();
             assertThat(repository.updateServerSummary(404L, serverSummary())).isFalse();
-            assertThat(repository.updateArchiveStatus(404L, BenchmarkArchiveStatus.DONE, null)).isFalse();
+            assertThat(repository.updateArchiveStatus(
+                404L, BenchmarkArchiveStatus.FAILED, "missing")).isFalse();
         }
 
         @Test
@@ -383,7 +384,8 @@ class JdbcBenchmarkRunRepositoryTest {
             JdbcBenchmarkRunRepository broken =
                     new JdbcBenchmarkRunRepository(new JdbcTemplate(dead), observationJdbcTemplate);
 
-            assertThatThrownBy(() -> broken.updateArchiveStatus(1L, BenchmarkArchiveStatus.DONE, null))
+            assertThatThrownBy(() -> broken.updateArchiveStatus(
+                    1L, BenchmarkArchiveStatus.FAILED, "database down"))
                     .isInstanceOf(DataAccessException.class)
                     .isNotInstanceOf(BusinessException.class);
         }
@@ -463,8 +465,18 @@ class JdbcBenchmarkRunRepositoryTest {
     class Archive {
 
         @Test
-        @DisplayName("확정된 회차에도 archive 결과를 남기고 다시 덮을 수 있다")
-        void archiveIsIndependentAndRetryable() {
+        void doneCannotBeWrittenWithoutTheFencedArchiveStoreTransaction() {
+            long id = finalizedRun();
+
+            assertThatThrownBy(() -> repository.updateArchiveStatus(
+                id, BenchmarkArchiveStatus.DONE, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ArchiveStore");
+        }
+
+        @Test
+        @DisplayName("claim 전 archive 실패는 확정된 회차에 남길 수 있다")
+        void initialArchiveFailureIsIndependentFromRunState() {
             long id = finalizedRun();
 
             assertThat(repository.updateArchiveStatus(
@@ -474,10 +486,6 @@ class JdbcBenchmarkRunRepositoryTest {
             assertThat(failed.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.FAILED);
             assertThat(failed.archiveFailureReason()).isEqualTo("query_range timeout");
 
-            assertThat(repository.updateArchiveStatus(id, BenchmarkArchiveStatus.DONE, null)).isTrue();
-            BenchmarkRun done = repository.findById(id).orElseThrow();
-            assertThat(done.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.DONE);
-            assertThat(done.archiveFailureReason()).isNull();
         }
 
         @Test
@@ -486,11 +494,143 @@ class JdbcBenchmarkRunRepositoryTest {
             long id = finalizedRun();
             repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "timeout");
 
-            assertThat(repository.claimFailedArchive(id)).isTrue();
-            assertThat(repository.claimFailedArchive(id)).isFalse();
+            assertThat(repository.claimArchive(id, java.time.Duration.ofMinutes(5))).isPresent();
+            assertThat(repository.claimArchive(id, java.time.Duration.ofMinutes(5))).isEmpty();
             BenchmarkRun claimed = repository.findById(id).orElseThrow();
-            assertThat(claimed.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.NONE);
+            assertThat(claimed.archiveStatus()).isEqualTo(BenchmarkArchiveStatus.IN_PROGRESS);
             assertThat(claimed.archiveFailureReason()).isNull();
+        }
+
+        @Test
+        void configuredLeaseCanExceedTheIntegerMicrosecondRange() {
+            long id = finalizedRun();
+            repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "timeout");
+
+            assertThat(repository.claimArchive(id, java.time.Duration.ofHours(1))).isPresent();
+        }
+
+        @Test
+        void rejectsLeaseOutsideTheSupportedDatabaseRangeBeforeExecutingSql() {
+            assertThatThrownBy(() -> repository.claimArchive(
+                7L, java.time.Duration.ofDays(366)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("상한");
+        }
+
+        @Test
+        void rejectsFractionalSecondLeaseInsteadOfTruncatingIt() {
+            assertThatThrownBy(() -> repository.claimArchive(
+                7L, java.time.Duration.ofSeconds(1).plusMillis(500)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("정수 초");
+        }
+
+        @Test
+        void concurrentFailedArchiveClaimHasExactlyOneOwner() throws Exception {
+            long id = finalizedRun();
+            repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "timeout");
+            int contenders = 8;
+            java.util.concurrent.CountDownLatch ready =
+                new java.util.concurrent.CountDownLatch(contenders);
+            java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService executor =
+                java.util.concurrent.Executors.newFixedThreadPool(contenders);
+            try {
+                java.util.List<java.util.concurrent.Future<java.util.Optional<String>>> results =
+                    new java.util.ArrayList<>();
+                for (int i = 0; i < contenders; i++) {
+                    results.add(executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return repository.claimArchive(id, java.time.Duration.ofMinutes(5));
+                    }));
+                }
+                assertThat(ready.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                long owners = 0;
+                for (java.util.concurrent.Future<java.util.Optional<String>> result : results) {
+                    if (result.get(10, java.util.concurrent.TimeUnit.SECONDS).isPresent()) owners++;
+                }
+                assertThat(owners).isEqualTo(1);
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+
+        @Test
+        @DisplayName("DONE archive는 불변이라 재archive 소유권을 주지 않는다")
+        void doneArchiveCannotBeClaimed() {
+            long id = finalizedRun();
+            writeJdbcTemplate.update(
+                "UPDATE benchmark_runs SET archive_status = 'DONE' WHERE id = ?", id);
+
+            assertThat(repository.claimArchive(id, java.time.Duration.ofMinutes(5))).isEmpty();
+            assertThat(repository.findById(id).orElseThrow().archiveStatus())
+                .isEqualTo(BenchmarkArchiveStatus.DONE);
+        }
+
+        @Test
+        void staleInProgressArchiveCanBeClaimedButFreshOneCannot() {
+            long id = finalizedRun();
+            repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "process stopped");
+
+            assertThat(repository.claimArchive(id, java.time.Duration.ofMinutes(5))).isPresent();
+            assertThat(repository.claimArchive(id, java.time.Duration.ofMinutes(5))).isEmpty();
+            writeJdbcTemplate.update("""
+                UPDATE benchmark_runs
+                SET archive_claimed_at = TIMESTAMPADD(SECOND, -301, CURRENT_TIMESTAMP(6))
+                WHERE id = ?
+                """, id);
+            assertThat(repository.claimArchive(id, java.time.Duration.ofMinutes(5))).isPresent();
+            assertThat(repository.findById(id).orElseThrow().archiveStatus())
+                .isEqualTo(BenchmarkArchiveStatus.IN_PROGRESS);
+        }
+
+        @Test
+        void staleOwnerCannotFailTheNewOwnersClaim() {
+            long id = finalizedRun();
+            repository.updateArchiveStatus(id, BenchmarkArchiveStatus.FAILED, "process stopped");
+            String staleToken = repository.claimArchive(
+                id, java.time.Duration.ofMinutes(5)).orElseThrow();
+            writeJdbcTemplate.update("""
+                UPDATE benchmark_runs
+                SET archive_claimed_at = TIMESTAMPADD(SECOND, -301, CURRENT_TIMESTAMP(6))
+                WHERE id = ?
+                """, id);
+            String currentToken = repository.claimArchive(
+                id, java.time.Duration.ofMinutes(5)).orElseThrow();
+
+            assertThat(staleToken).isNotEqualTo(currentToken);
+            assertThat(staleToken).matches(
+                "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
+            assertThat(repository.failArchive(id, staleToken, "stale failure")).isFalse();
+            assertThat(repository.findById(id).orElseThrow().archiveStatus())
+                .isEqualTo(BenchmarkArchiveStatus.IN_PROGRESS);
+            assertThat(repository.failArchive(id, currentToken, "current failure")).isTrue();
+            assertThat(repository.findById(id).orElseThrow().archiveStatus())
+                .isEqualTo(BenchmarkArchiveStatus.FAILED);
+        }
+
+        @Test
+        void publicStatusUpdateCannotClearAnActiveClaim() {
+            long id = finalizedRun();
+            String token = repository.claimArchive(
+                id, java.time.Duration.ofMinutes(5)).orElseThrow();
+
+            assertThatThrownBy(() -> repository.updateArchiveStatus(
+                id, BenchmarkArchiveStatus.DONE, null))
+                .isInstanceOf(IllegalArgumentException.class);
+            assertThat(repository.failArchive(id, token, "owner failure")).isTrue();
+        }
+
+        @Test
+        void inProgressCannotBypassClaimContract() {
+            long id = finalizedRun();
+
+            assertThatThrownBy(() -> repository.updateArchiveStatus(
+                id, BenchmarkArchiveStatus.IN_PROGRESS, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ArchiveStore");
         }
     }
 

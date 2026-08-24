@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.mockito.ArgumentCaptor;
 
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.Metric;
@@ -22,10 +25,14 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.Sample;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.State;
 import com.kafkick.core.support.exception.BusinessException;
 
+@ExtendWith(OutputCaptureExtension.class)
 class RunTimeseriesArchiverTest {
 
     private static final Instant START = Instant.parse("2026-08-23T00:00:00Z");
     private static final Instant OBSERVATION_STOP = Instant.parse("2026-08-23T00:01:05Z");
+    private static final java.time.Duration CLAIM_LEASE = java.time.Duration.ofMinutes(5);
+    private static final String CLAIM_TOKEN = "00000000-0000-4000-8000-000000000001";
+    private static final int MAX_SAMPLES = 10_000;
 
     @Test
     void usesObservationStopAndDoesNotInventMissingZeroes() {
@@ -35,14 +42,46 @@ class RunTimeseriesArchiverTest {
         CapturingSource source = new CapturingSource();
         RecordingStore store = new RecordingStore();
 
-        new RunTimeseriesArchiver(runs, source, store).archive(7);
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        new RunTimeseriesArchiver(runs, source, store, CLAIM_LEASE, MAX_SAMPLES).archive(7);
 
+        assertThat(source.starts).containsOnly(START);
         assertThat(source.ends).containsOnly(OBSERVATION_STOP);
         assertThat(source.steps).containsOnly(1);
         // 빈 range는 0이나 UNAVAILABLE 행으로 메우지 않는다.
-        assertThat(store.inserted).hasSize(2);
+        assertThat(store.inserted).hasSize(4);
         assertThat(store.inserted.get(0).value()).isEqualTo(0d);
-        verify(runs).updateArchiveStatus(7, BenchmarkArchiveStatus.DONE, null);
+    }
+
+    @Test
+    void passesConfiguredWriteChunkSizeToTheStore() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        RecordingStore store = new RecordingStore();
+
+        new RunTimeseriesArchiver(
+            runs, new CapturingSource(), store, CLAIM_LEASE, MAX_SAMPLES, 37).archive(7);
+
+        assertThat(store.chunkSize).isEqualTo(37);
+    }
+
+    @Test
+    void completedArchiveCannotBeReplacedByASecondInvocation() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun run = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(run));
+        RecordingStore store = new RecordingStore();
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE)))
+            .thenReturn(Optional.of(CLAIM_TOKEN), Optional.empty());
+        RunTimeseriesArchiver archiver = new RunTimeseriesArchiver(
+            runs, new CapturingSource(), store, CLAIM_LEASE, MAX_SAMPLES);
+
+        archiver.archive(7);
+        assertThatThrownBy(() -> archiver.archive(7)).isInstanceOf(BusinessException.class);
+
+        assertThat(store.inserted).hasSize(4);
     }
 
     @Test
@@ -53,13 +92,38 @@ class RunTimeseriesArchiverTest {
         RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> List.of();
         RunTimeseriesArchiver.ArchiveStore store = mock(RunTimeseriesArchiver.ArchiveStore.class);
 
-        assertThatThrownBy(() -> new RunTimeseriesArchiver(runs, source, store).archive(7))
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, CLAIM_LEASE, MAX_SAMPLES).archive(7))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("STOCK_REMAINING");
 
-        verify(store, never()).deleteForRun(7);
-        verify(runs).updateArchiveStatus(eq(7L), eq(BenchmarkArchiveStatus.FAILED),
+        verify(store, never()).replaceForRun(
+            eq(7L), eq(CLAIM_TOKEN), org.mockito.ArgumentMatchers.anyList(),
+            eq(RunTimeseriesArchiver.DEFAULT_WRITE_CHUNK_SIZE));
+        verify(runs).failArchive(eq(7L), eq(CLAIM_TOKEN),
                 org.mockito.ArgumentMatchers.contains("STOCK_REMAINING"));
+    }
+
+    @Test
+    void excessiveArchiveSamplesFailBeforeOpeningTheWriteTransaction() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        List<Sample> excessive = java.util.stream.IntStream
+            .rangeClosed(0, MAX_SAMPLES)
+            .mapToObj(sequence -> new Sample(
+                Metric.STOCK_REMAINING, sequence, START, 1d, State.VALID, null))
+            .toList();
+        RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> excessive;
+        RunTimeseriesArchiver.ArchiveStore store = mock(RunTimeseriesArchiver.ArchiveStore.class);
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, CLAIM_LEASE, MAX_SAMPLES).archive(7))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("표본 상한");
+        verifyNoInteractions(store);
     }
 
     @Test
@@ -67,17 +131,76 @@ class RunTimeseriesArchiverTest {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
         when(runs.findById(7)).thenReturn(Optional.of(failedRun));
-        when(runs.claimFailedArchive(7)).thenReturn(true);
+        when(runs.claimArchive(eq(7L), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(Optional.of(CLAIM_TOKEN));
         RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> {
             if (metric == Metric.LATENCY_P99) throw new IllegalStateException("prometheus down");
-            return List.of(new Sample(metric, 0, start, 0d, State.VALID, null));
+            return List.of(
+                new Sample(metric, 0, start, 0d, State.VALID, null),
+                new Sample(metric, end.getEpochSecond() - start.getEpochSecond(), end, 0d, State.VALID, null));
         };
-        RunTimeseriesArchiver archiver = new RunTimeseriesArchiver(runs, source, new RecordingStore());
+        RunTimeseriesArchiver archiver = new RunTimeseriesArchiver(
+            runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES);
 
         assertThatThrownBy(() -> archiver.retry(7)).hasMessageContaining("prometheus down");
         ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
-        verify(runs).updateArchiveStatus(eq(7L), eq(BenchmarkArchiveStatus.FAILED), reason.capture());
+        verify(runs).failArchive(eq(7L), eq(CLAIM_TOKEN), reason.capture());
         assertThat(reason.getValue()).contains("prometheus down");
+    }
+
+    @Test
+    void failureReasonFitsTheDatabaseColumnAndPreservesTheOriginalFailure() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        IllegalStateException original = new IllegalStateException("x".repeat(500));
+        RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) -> { throw original; };
+        when(runs.failArchive(eq(7L), eq(CLAIM_TOKEN), org.mockito.ArgumentMatchers.anyString()))
+            .thenThrow(new IllegalStateException("status write failed"));
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).archive(7))
+            .isSameAs(original)
+            .satisfies(failure -> assertThat(failure.getSuppressed()).hasSize(1));
+        ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
+        verify(runs).failArchive(eq(7L), eq(CLAIM_TOKEN), reason.capture());
+        assertThat(reason.getValue()).hasSize(200);
+    }
+
+    @Test
+    void blankFailureMessageUsesTheExceptionType() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        RunTimeseriesArchiver.RangeSource source =
+            (metric, start, end, step) -> { throw new IllegalStateException("   "); };
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).archive(7))
+            .isInstanceOf(IllegalStateException.class);
+        verify(runs).failArchive(7L, CLAIM_TOKEN, "IllegalStateException");
+    }
+
+    @Test
+    void lostFailureClaimIsLoggedWithoutTheFullFencingToken(CapturedOutput output) {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        when(runs.failArchive(eq(7L), eq(CLAIM_TOKEN), org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(false);
+        RunTimeseriesArchiver.RangeSource source =
+            (metric, start, end, step) -> { throw new IllegalStateException("prometheus down"); };
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).archive(7))
+            .isInstanceOf(IllegalStateException.class);
+
+        assertThat(output).contains("archive failure status was not recorded")
+            .contains(CLAIM_TOKEN.substring(0, 8))
+            .doesNotContain(CLAIM_TOKEN);
     }
 
     @Test
@@ -85,11 +208,15 @@ class RunTimeseriesArchiverTest {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
         when(runs.findById(7)).thenReturn(Optional.of(failedRun));
-        when(runs.claimFailedArchive(7)).thenReturn(true);
+        when(runs.claimArchive(eq(7L), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(Optional.of(CLAIM_TOKEN));
 
-        new RunTimeseriesArchiver(runs, new CapturingSource(), new RecordingStore()).retry(7);
+        RecordingStore store = new RecordingStore();
+        new RunTimeseriesArchiver(
+            runs, new CapturingSource(), store, CLAIM_LEASE, MAX_SAMPLES).retry(7);
 
-        verify(runs).updateArchiveStatus(7, BenchmarkArchiveStatus.DONE, null);
+        assertThat(store.claimToken).isEqualTo(CLAIM_TOKEN);
+        assertThat(store.inserted).hasSize(4);
     }
 
     @Test
@@ -97,11 +224,11 @@ class RunTimeseriesArchiverTest {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun failedRun = run(BenchmarkArchiveStatus.FAILED);
         when(runs.findById(7)).thenReturn(Optional.of(failedRun));
-        when(runs.claimFailedArchive(7)).thenReturn(false);
+        when(runs.claimArchive(eq(7L), org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
         RunTimeseriesArchiver.RangeSource source = mock(RunTimeseriesArchiver.RangeSource.class);
 
         assertThatThrownBy(() -> new RunTimeseriesArchiver(
-                runs, source, new RecordingStore()).retry(7))
+                runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).retry(7))
                 .isInstanceOfSatisfying(BusinessException.class, exception ->
                         assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
 
@@ -116,7 +243,7 @@ class RunTimeseriesArchiverTest {
         when(runs.findById(7)).thenReturn(Optional.of(running));
 
         assertThatThrownBy(() -> new RunTimeseriesArchiver(
-                runs, new CapturingSource(), new RecordingStore()).archive(7))
+                runs, new CapturingSource(), new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).archive(7))
                 .isInstanceOfSatisfying(BusinessException.class, exception ->
                         assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
     }
@@ -127,21 +254,76 @@ class RunTimeseriesArchiverTest {
         when(runs.findById(404)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> new RunTimeseriesArchiver(
-                runs, new CapturingSource(), new RecordingStore()).archive(404))
+                runs, new CapturingSource(), new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).archive(404))
                 .isInstanceOfSatisfying(BusinessException.class, exception ->
                         assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.RUN_NOT_FOUND));
     }
 
     @Test
-    void reportsRetryOfNonFailedRunAsIllegalTransition() {
+    void doneRunCannotBeRearchived() {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun done = run(BenchmarkArchiveStatus.DONE);
         when(runs.findById(7)).thenReturn(Optional.of(done));
+        RunTimeseriesArchiver.RangeSource source = mock(RunTimeseriesArchiver.RangeSource.class);
 
         assertThatThrownBy(() -> new RunTimeseriesArchiver(
-                runs, new CapturingSource(), new RecordingStore()).retry(7))
+                runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).retry(7))
                 .isInstanceOfSatisfying(BusinessException.class, exception ->
                         assertThat(exception.getErrorCode()).isEqualTo(BenchmarkErrorCode.ILLEGAL_TRANSITION));
+
+        verifyNoInteractions(source);
+        verify(runs, never()).claimArchive(eq(7L), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void noneRunCanBeRetriedWhenTheInitialClaimFailed() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun none = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(none));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+
+        RecordingStore store = new RecordingStore();
+        new RunTimeseriesArchiver(
+                runs, new CapturingSource(), store, CLAIM_LEASE, MAX_SAMPLES).retry(7);
+
+        assertThat(store.claimToken).isEqualTo(CLAIM_TOKEN);
+        assertThat(store.inserted).hasSize(4);
+    }
+
+    @Test
+    void constructorRejectsInvalidLeaseAndSampleLimit() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        RunTimeseriesArchiver.RangeSource source = mock(RunTimeseriesArchiver.RangeSource.class);
+        RunTimeseriesArchiver.ArchiveStore store = mock(RunTimeseriesArchiver.ArchiveStore.class);
+
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, java.time.Duration.ZERO, MAX_SAMPLES))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1초");
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, java.time.Duration.ofSeconds(1).plusMillis(500), MAX_SAMPLES))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("정수 초");
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, CLAIM_LEASE, 0))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("양수");
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, store, java.time.Duration.ofDays(366), MAX_SAMPLES))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("상한");
+    }
+
+    @Test
+    void retryProceedsWhenArchiveIsStillInProgress() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun inProgress = run(BenchmarkArchiveStatus.IN_PROGRESS);
+        when(runs.findById(7)).thenReturn(Optional.of(inProgress));
+        when(runs.claimArchive(eq(7L), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(Optional.of(CLAIM_TOKEN));
+
+        RecordingStore store = new RecordingStore();
+        new RunTimeseriesArchiver(
+            runs, new CapturingSource(), store, CLAIM_LEASE, MAX_SAMPLES).retry(7);
+
+        assertThat(store.claimToken).isEqualTo(CLAIM_TOKEN);
+        assertThat(store.inserted).hasSize(4);
     }
 
     @Test
@@ -173,7 +355,9 @@ class RunTimeseriesArchiverTest {
         RunTimeseriesArchiver.RangeSource source = (metric, start, end, step) ->
                 metric == Metric.STOCK_REMAINING ? invalid : List.of();
 
-        assertThatThrownBy(() -> new RunTimeseriesArchiver(runs, source, new RecordingStore()).archive(7))
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        assertThatThrownBy(() -> new RunTimeseriesArchiver(
+            runs, source, new RecordingStore(), CLAIM_LEASE, MAX_SAMPLES).archive(7))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("회차 구간/순서");
     }
@@ -188,20 +372,31 @@ class RunTimeseriesArchiverTest {
     }
 
     private static final class CapturingSource implements RunTimeseriesArchiver.RangeSource {
+        private final List<Instant> starts = new ArrayList<>();
         private final List<Instant> ends = new ArrayList<>();
         private final List<Integer> steps = new ArrayList<>();
 
         @Override
         public List<Sample> queryRange(Metric metric, Instant start, Instant end, int stepSeconds) {
-            ends.add(end); steps.add(stepSeconds);
+            starts.add(start); ends.add(end); steps.add(stepSeconds);
             if (metric == Metric.LATENCY_P99) return List.of();
-            return List.of(new Sample(metric, 0, start, 0d, State.VALID, null));
+            return List.of(
+                new Sample(metric, 0, start, 0d, State.VALID, null),
+                new Sample(metric, end.getEpochSecond() - start.getEpochSecond(), end, 0d, State.VALID, null));
         }
     }
 
     private static final class RecordingStore implements RunTimeseriesArchiver.ArchiveStore {
         private final List<Sample> inserted = new ArrayList<>();
-        @Override public void deleteForRun(long benchmarkRunId) { }
-        @Override public void insert(long benchmarkRunId, List<Sample> samples) { inserted.addAll(samples); }
+        private String claimToken;
+        private int chunkSize;
+        @Override public void replaceForRun(
+            long benchmarkRunId, String claimToken, List<Sample> samples, int chunkSize
+        ) {
+            this.claimToken = claimToken;
+            this.chunkSize = chunkSize;
+            inserted.clear();
+            inserted.addAll(samples);
+        }
     }
 }

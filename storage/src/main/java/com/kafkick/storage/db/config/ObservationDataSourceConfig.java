@@ -53,7 +53,7 @@ import com.zaxxer.hikari.HikariDataSource;
  * 걸리지만, 그 그룹을 쓰지 않는 모듈에는 그런 그물이 없다.
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty("observation.datasource.enabled")
+@ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 @EnableConfigurationProperties({ MainDbProperties.class, ObservationDbProperties.class, JdbcProperties.class })
 public class ObservationDataSourceConfig {
 

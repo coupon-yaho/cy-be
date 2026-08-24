@@ -145,7 +145,10 @@ public final class AdminControllerContractTestSupport {
                 .setControllerAdvice(new GlobalExceptionHandler(new TimeProvider(fixedClock)))
                 .setValidator(validator)
                 .setConversionService(conversionService)
-                .addInterceptors(new AdminAuthorizationInterceptor())
+                .addInterceptors(
+                    new AdminAuthorizationInterceptor(),
+                    new BenchmarkCommandAuthorizationInterceptor(
+                        "test-benchmark-secret-at-least-32-bytes"))
                 .setCustomArgumentResolvers(new CallerArgumentResolver())
                 .addFilters(new CallerFilter(new HeaderCallerResolver()), new RequestIdFilter());
         if (nonNullJson) {
@@ -155,7 +158,9 @@ public final class AdminControllerContractTestSupport {
             // 정상 API 계약 테스트가 인증 실패에 가려지지 않도록 검증된 관리자 헤더를 공통 적용합니다.
             builder.defaultRequest(get("/")
                     .header(HeaderCallerResolver.USER_ID_HEADER, "812934")
-                    .header(AdminAuthorizationInterceptor.USER_ROLE_HEADER, "ADMIN"));
+                    .header(AdminAuthorizationInterceptor.USER_ROLE_HEADER, "ADMIN")
+                    .header(BenchmarkCommandAuthorizationInterceptor.SECRET_HEADER,
+                        "test-benchmark-secret-at-least-32-bytes"));
         }
         return builder.build();
     }

@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.kafkick.ApiApplication;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
@@ -34,7 +35,11 @@ import com.kafkick.testsupport.CommittedConfigStager;
 @SpringBootTest(classes = ApiApplication.class, properties = {
         "spring.config.location=file:build/cy266-kafka-wiring/kafka.yml",
         "kafka.enabled=true",
-        "kafka.provision-topics=false"
+        "kafka.provision-topics=false",
+        "observation.datasource.enabled=false",
+        "benchmark.topology.tomcat-workers-total=60",
+        "benchmark.topology.hikari-pool-total=12",
+        "benchmark.topology.mysql-max-connections=50"
 })
 @Import(MySqlContainerConfig.class)
 class KafkaLayerWiringTest {
@@ -74,5 +79,9 @@ class KafkaLayerWiringTest {
                 .as("토픽 3 + DLT 2")
                 .contains("issuePersistTopic", "issueAttemptTopic", "notifyTopic",
                         "issuePersistDltTopic", "notifyDltTopic");
+        assertThat(context.getBeanNamesForType(
+            com.kafkick.api.admin.benchmark.BenchmarkStartOrchestrator.class)).isEmpty();
+        assertThat(context.getBeanNamesForType(
+            com.kafkick.api.admin.benchmark.BenchmarkFinalizeOrchestrator.class)).isEmpty();
     }
 }

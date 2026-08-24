@@ -70,6 +70,10 @@ server:
   error:
     include-stacktrace: never
 
+benchmark:
+  topology:
+    gap-interval-ms: ${BENCHMARK_GAP_INTERVAL_MS:30000}
+
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 쓰기 스케줄러가 멈춘다.
   #

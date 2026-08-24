@@ -101,14 +101,14 @@ class BenchmarkRunsMigrationTest {
         }
 
         @Test
-        @DisplayName("컬럼 49개와 CHECK 14종이 만들어진다")
+        @DisplayName("archive fencing token을 포함한 컬럼 51개와 CHECK 15종이 만들어진다")
         void schemaShape() throws SQLException {
             assertThat(query("SELECT COUNT(*) FROM information_schema.columns"
                     + " WHERE table_schema = DATABASE() AND table_name = 'benchmark_runs'"))
-                    .isEqualTo("49");
+                    .isEqualTo("51");
             assertThat(query("SELECT COUNT(*) FROM information_schema.check_constraints"
                     + " WHERE constraint_schema = DATABASE() AND constraint_name LIKE 'ck_run%'"))
-                    .isEqualTo("14");
+                    .isEqualTo("15");
         }
 
         /**
@@ -356,6 +356,41 @@ class BenchmarkRunsMigrationTest {
     @Nested
     @DisplayName("CHECK — archive 는 회차와 독립이다")
     class Archive {
+
+        @Test
+        @DisplayName("IN_PROGRESS 는 claim 시각과 token을 모두 요구한다")
+        void inProgressRequiresCompleteClaimIdentity() throws SQLException {
+            insert(finalized());
+
+            assertThatThrownBy(() -> executeUpdate(
+                "UPDATE benchmark_runs SET archive_status='IN_PROGRESS',"
+                    + " archive_claimed_at=NOW(6), archive_claim_token=NULL"))
+                .hasMessageContaining("ck_run_archive_claim");
+        }
+
+        @Test
+        @DisplayName("claim 시각과 token을 모두 채운 IN_PROGRESS는 허용된다")
+        void inProgressWithCompleteClaimIdentityIsAccepted() throws SQLException {
+            insert(finalized());
+
+            assertThatCode(() -> executeUpdate(
+                "UPDATE benchmark_runs SET archive_status='IN_PROGRESS',"
+                    + " archive_failure_reason=NULL, archive_claimed_at=NOW(6),"
+                    + " archive_claim_token='00000000-0000-4000-8000-000000000001'"))
+                .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("IN_PROGRESS 밖의 상태에는 claim 식별자가 남을 수 없다")
+        void completedStatusCannotCarryClaimIdentity() throws SQLException {
+            insert(finalized());
+
+            assertThatThrownBy(() -> executeUpdate(
+                "UPDATE benchmark_runs SET archive_status='DONE',"
+                    + " archive_claimed_at=NOW(6),"
+                    + " archive_claim_token='00000000-0000-4000-8000-000000000001'"))
+                .hasMessageContaining("ck_run_archive_claim");
+        }
 
         @Test
         @DisplayName("실패 이유 없는 FAILED 를 만들 수 없다")
@@ -697,6 +732,14 @@ class BenchmarkRunsMigrationTest {
 
     private static Connection connection() throws SQLException {
         return DriverManager.getConnection(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword());
+    }
+
+    private static void executeUpdate(String sql) {
+        try (Connection connection = connection(); Statement statement = connection.createStatement()) {
+            statement.executeUpdate(sql);
+        } catch (SQLException exception) {
+            throw new IllegalStateException(exception.getMessage(), exception);
+        }
     }
 
     private static String query(String sql) throws SQLException {

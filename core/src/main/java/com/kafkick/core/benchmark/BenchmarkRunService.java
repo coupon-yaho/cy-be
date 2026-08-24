@@ -164,13 +164,17 @@ public class BenchmarkRunService {
      * 나중에 재실행할 수 있어야 한다.
      *
      * @param id 회차 식별자
-     * @param status archive 결과
+     * @param status claim 전에 발생한 {@code FAILED}만 허용
      * @param failureReason 실패 이유; {@code FAILED} 일 때만
      * @return 갱신된 회차
      * @throws BusinessException 회차가 없는 경우
      */
     public BenchmarkRun recordArchiveResult(long id, BenchmarkArchiveStatus status, String failureReason) {
         Objects.requireNonNull(status, "status");
+        if (status != BenchmarkArchiveStatus.FAILED) {
+            throw new BusinessException(BenchmarkErrorCode.INVALID_RUN_CONDITION,
+                "DONE/IN_PROGRESS는 fencing된 archive 경로로만 기록한다");
+        }
         // isBlank 로 본다. "" 는 != null 이라 XOR 을 통과하는데, 이유 없는 FAILED 를 막으려던
         // 제약이 정확히 그걸로 뚫린다 — 재실행 판단의 유일한 근거가 빈 문자열로 남는다.
         if ((status == BenchmarkArchiveStatus.FAILED) != (failureReason != null && !failureReason.isBlank())) {
@@ -178,7 +182,9 @@ public class BenchmarkRunService {
                     "archive 실패 이유는 FAILED 일 때만, 그리고 FAILED 이면 반드시 있어야 한다: " + status);
         }
         if (!repository.updateArchiveStatus(id, status, failureReason)) {
-            throw notFound(id);
+            BenchmarkRun current = reload(id);
+            throw new BusinessException(BenchmarkErrorCode.ILLEGAL_TRANSITION,
+                "benchmarkRunId=" + id + " archiveStatus=" + current.archiveStatus());
         }
         return reload(id);
     }

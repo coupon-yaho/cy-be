@@ -1,6 +1,7 @@
 package com.kafkick.core.benchmark;
 
 import java.time.Instant;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -23,7 +24,16 @@ import com.kafkick.core.support.exception.BusinessException;
 class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
 
     private final Map<Long, Row> rows = new LinkedHashMap<>();
+    private final Clock clock;
     private long sequence;
+
+    FakeBenchmarkRunRepository() {
+        this(Clock.systemUTC());
+    }
+
+    FakeBenchmarkRunRepository(Clock clock) {
+        this.clock = java.util.Objects.requireNonNull(clock);
+    }
 
     /**
      * {@code markFinalized} 가 0행을 낸 <b>직후</b>에 끼어드는 다른 인스턴스를 흉내 낸다.
@@ -130,7 +140,8 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     @Override
     public boolean updateArchiveStatus(long id, BenchmarkArchiveStatus status, String failureReason) {
         Row row = rows.get(id);
-        if (row == null) {
+        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.NONE
+                || status != BenchmarkArchiveStatus.FAILED) {
             return false;
         }
         row.archiveStatus = status;
@@ -139,13 +150,43 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     }
 
     @Override
-    public boolean claimFailedArchive(long id) {
+    public java.util.Optional<String> claimArchive(long id, java.time.Duration lease) {
+        if (lease == null || lease.compareTo(java.time.Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
+        }
+        if (lease.getNano() != 0) {
+            throw new IllegalArgumentException("archive claim lease는 정수 초여야 한다");
+        }
+        if (lease.compareTo(java.time.Duration.ofDays(365)) > 0) {
+            throw new IllegalArgumentException("archive claim lease가 지원 상한을 넘었다");
+        }
         Row row = rows.get(id);
-        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.FAILED) {
+        Instant now = clock.instant();
+        boolean expired = row != null && row.archiveStatus == BenchmarkArchiveStatus.IN_PROGRESS
+            && row.archiveClaimedAt != null && row.archiveClaimedAt.isBefore(now.minus(lease));
+        if (row == null || (row.archiveStatus != BenchmarkArchiveStatus.NONE
+                && row.archiveStatus != BenchmarkArchiveStatus.FAILED && !expired)) {
+            return java.util.Optional.empty();
+        }
+        String token = java.util.UUID.randomUUID().toString();
+        row.archiveStatus = BenchmarkArchiveStatus.IN_PROGRESS;
+        row.archiveFailureReason = null;
+        row.archiveClaimedAt = now;
+        row.archiveClaimToken = token;
+        return java.util.Optional.of(token);
+    }
+
+    @Override
+    public boolean failArchive(long id, String claimToken, String failureReason) {
+        Row row = rows.get(id);
+        if (row == null || row.archiveStatus != BenchmarkArchiveStatus.IN_PROGRESS
+                || !java.util.Objects.equals(row.archiveClaimToken, claimToken)) {
             return false;
         }
-        row.archiveStatus = BenchmarkArchiveStatus.NONE;
-        row.archiveFailureReason = null;
+        row.archiveStatus = BenchmarkArchiveStatus.FAILED;
+        row.archiveFailureReason = failureReason;
+        row.archiveClaimedAt = null;
+        row.archiveClaimToken = null;
         return true;
     }
 
@@ -159,6 +200,8 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
         private BenchmarkRunStatus status = BenchmarkRunStatus.RUNNING;
         private BenchmarkArchiveStatus archiveStatus = BenchmarkArchiveStatus.NONE;
         private String archiveFailureReason;
+        private Instant archiveClaimedAt;
+        private String archiveClaimToken;
         private Instant loadStoppedAt;
         private Instant observationStoppedAt;
         private Instant finalizedAt;
