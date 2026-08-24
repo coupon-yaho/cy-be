@@ -235,15 +235,7 @@ public class CleanupJobConfig {
                             + "그 창을 바꾸려면 두 되읽기의 조회도 함께 고치십시오. "
                             + "받은 값=" + metadataKeepDays);
         }
-        // 0 이면 LIMIT 0 이라 MySQL 이 오류 없이 0건을 돌려주고, 첫 청크가 곧 종료 신호가
-        // 되어 잡이 COMPLETED 로 닫힌다 — 형제 키와 같은 실패 모양이다.
-        //
-        // 상한도 건다. 삭제는 id 하나씩 나가므로(CleanupJdbcAdapter 에 근거를 적었다)
-        // 이 값이 곧 **한 트랜잭션의 문장 수 ÷ 6** 이다. 잠그는 행은 이 값이 아니라 그
-        // 실행들에 딸린 행 전부다 — verifyJob 이면 실행 하나에 26행이라 5000 이면 13만 행.
-        // 키울수록 한 청크가 무거워지고 step-timeout-ms 안에 못 들어올 위험이 커지는데,
-        // 걸리면 여태 지운 것이 전부 롤백돼 진도가 0 이라 다음 날도 처음부터 시도한다.
-        // 상한이 없으면 오타 하나가 chunk-size=0 과 **관측상 같은 상태**를 만든다 —
+        // **보존 기간 상한.** 오타 하나가 chunk-size=0 과 **관측상 같은 상태**를 만든다 —
         // 배치 메타가 사실상 안 걷히는데 잡은 매일 COMPLETED 라 CleanupNotSucceeding 도
         // 안 울고, 배치 메타 백로그에는 전용 알림이 없다. 이 클래스가 가드를 세운 근거가
         // 정확히 그 "조용한 통과" 다.
@@ -255,6 +247,13 @@ public class CleanupJobConfig {
                             + "백로그에는 전용 알림이 없습니다 — chunk-size=0 과 관측상 같은 "
                             + "상태입니다. 받은 값=" + metadataKeepDays);
         }
+        // **청크 크기.** 0 이면 LIMIT 0 이라 MySQL 이 오류 없이 0건을 돌려주고, 첫 청크가
+        // 곧 종료 신호가 되어 잡이 COMPLETED 로 닫힌다 — 형제 키와 같은 실패 모양이다.
+        // 상한도 건다. 삭제는 id 하나씩 나가므로(CleanupJdbcAdapter 에 근거를 적었다)
+        // 이 값이 곧 **한 트랜잭션의 문장 수 ÷ 6** 이다. 잠그는 행은 이 값이 아니라 그
+        // 실행들에 딸린 행 전부다 — verifyJob 이면 실행 하나에 26행이라 5000 이면 13만 행.
+        // 키울수록 한 청크가 무거워지고 step-timeout-ms 안에 못 들어올 위험이 커지는데,
+        // 걸리면 여태 지운 것이 전부 롤백돼 진도가 0 이라 다음 날도 처음부터 시도한다.
         if (metadataChunkSize < 1 || metadataChunkSize > 5_000) {
             throw new IllegalArgumentException(
                     "batch.cleanup.metadata-chunk-size 는 1 이상 5000 이하여야 합니다. "

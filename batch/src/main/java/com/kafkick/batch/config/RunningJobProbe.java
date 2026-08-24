@@ -79,7 +79,7 @@ public class RunningJobProbe {
         if (stuckAfterMs <= longestSilentStep) {
             throw new IllegalArgumentException(
                     "batch.stuck-job-after-ms 는 가장 긴 Step 데드라인보다 커야 합니다. "
-                            + "verifyJob 의 Step 열 개와 cleanupJob 의 Step 둘"
+                            + "verifyJob 의 Step 열하나와 cleanupJob 의 Step 둘"
                             + "(purgeVerificationRunsStep · purgeBatchMetadataStep)은 하트비트가 "
                             + "청크 커밋에만 뛰어서, 그 사이 침묵을 시체로 읽으면 만료가 "
                             + "검증 한복판을 지나가거나 살아 있는 정리가 시체로 신고됩니다. "

@@ -236,7 +236,8 @@ public class BatchRunMetricsRefresher {
                 .query(Double.class)
                 .optional();
         // 창 밖은 어차피 SLA 위반이라 NaN 과 같은 판정이다. 창을 두는 이유는 이 질의가
-        // BATCH_JOB_INSTANCE 이력 전체에 비례해 자라는 것을 막기 위해서다.
+        // **그 잡의 BATCH_JOB_EXECUTION 이력 전체**(인스턴스와 조인한 것)에 비례해 자라는
+        // 것을 막기 위해서다.
         // cleanupJob 이 batch.cleanup.metadata-keep-days(최소 8 > 이 창 7)로 배치 메타를
         // 걷으므로 이력에 상한은 생겼지만, 그 기본값이 30 이라 창을 없애면 이 질의가
         // 30일치 전체에 비례한다 — 그 최솟값이 지키는 것은 "창 안의 성공이 안 지워진다" 이지

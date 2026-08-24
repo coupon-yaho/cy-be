@@ -62,6 +62,12 @@ public class CleanupJdbcAdapter implements CleanupRepository {
     private static final String DELETE_EXECUTION =
             "DELETE FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID = ?";
 
+    private static final String COUNT_REMAINING_EXECUTIONS =
+            "SELECT COUNT(*) FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID IN (:ids)";
+
+    private static final String COUNT_REMAINING_INSTANCES =
+            "SELECT COUNT(*) FROM BATCH_JOB_INSTANCE WHERE JOB_INSTANCE_ID IN (:ids)";
+
     /** 고아 판정을 {@code DELETE} 안에서 한다 — 조회로 고르면 그 사이에 실행이 붙는다. */
     private static final String DELETE_ORPHAN_INSTANCE = """
             DELETE i FROM BATCH_JOB_INSTANCE i
@@ -315,8 +321,11 @@ public class CleanupJdbcAdapter implements CleanupRepository {
         deleteEach(DELETE_STEP_EXECUTION, executionIds);
         deleteEach(DELETE_EXECUTION_CONTEXT, executionIds);
         deleteEach(DELETE_EXECUTION_PARAMS, executionIds);
-        int executions = deleteEach(DELETE_EXECUTION, executionIds);
-        int purgedInstances = deleteEach(DELETE_ORPHAN_INSTANCE, instanceIds);
+        deleteEach(DELETE_EXECUTION, executionIds);
+        deleteEach(DELETE_ORPHAN_INSTANCE, instanceIds);
+
+        int executions = executionIds.size() - countRemaining(COUNT_REMAINING_EXECUTIONS, executionIds);
+        int purgedInstances = instanceIds.size() - countRemaining(COUNT_REMAINING_INSTANCES, instanceIds);
 
         return new PurgedMetadata(executions, purgedInstances);
     }
@@ -325,18 +334,26 @@ public class CleanupJdbcAdapter implements CleanupRepository {
      * <b>id 하나씩 보내되 왕복은 묶는다.</b> {@code batchUpdate} 가 한 {@code PreparedStatement}
      * 에 파라미터만 갈아 끼우므로 계획은 문장마다 고정되고 네트워크 왕복은 배치 하나다.
      *
-     * <p><b>합계를 그대로 쓴다.</b> 드라이버가 배치 원소마다 갱신 행 수를 돌려주는데,
-     * 대상이 이미 없으면 0 이 섞인다 — 그 경우까지 포함해 <b>실제로 지운 수</b>가 된다.
+     * <p><b>반환값을 안 쓴다.</b> JDBC 배치는 원소마다 {@code SUCCESS_NO_INFO(-2)} 를 돌려줄 수
+     * 있고 — 접속 URL 에 {@code rewriteBatchedStatements=true} 가 걸려 있어 더 그렇다 — 그것을
+     * 그대로 더하면 합계가 <b>음수 쪽으로 조용히 망가진다.</b> 지금 드라이버가 그러지 않는 것은
+     * 확인했지만(MySQL 8.0 + Connector/J 9.7.0, 배치 1·2·3·4·10·500 에서 전부 실제 카운트),
+     * <b>드라이버가 바뀌는 날 조용히 틀리는 쪽에 관측 지표를 걸어 둘 이유가 없다.</b>
+     * 그래서 지운 수는 {@link #countRemaining} 이 상태에서 뽑는다.
      */
-    private int deleteEach(String sql, List<Long> ids) {
-        int[][] perBatch = jdbcTemplate.batchUpdate(sql, ids, ids.size(),
-                (ps, id) -> ps.setLong(1, id));
-        int total = 0;
-        for (int[] batch : perBatch) {
-            for (int affected : batch) {
-                total += affected;
-            }
-        }
-        return total;
+    private void deleteEach(String sql, List<Long> ids) {
+        jdbcTemplate.batchUpdate(sql, ids, ids.size(), (ps, id) -> ps.setLong(1, id));
+    }
+
+    /**
+     * <b>지운 수를 상태에서 뽑는다.</b> "고른 수 − 남은 수" 라 드라이버가 무엇을 돌려주든 정확하고,
+     * 고아 인스턴스처럼 <b>조건부로만 지워지는</b> 축도 그대로 센다.
+     *
+     * <p>여기는 {@code IN} 목록을 써도 된다 — <b>읽기라 락을 안 잡는다.</b> 삭제 쪽이 id 단건인
+     * 이유(풀스캔이 대상 밖 행을 잠근다)는 이 조회에 해당하지 않는다.
+     */
+    private int countRemaining(String sql, List<Long> ids) {
+        Integer remaining = jdbcClient.sql(sql).param("ids", ids).query(Integer.class).single();
+        return remaining == null ? 0 : remaining;
     }
 }

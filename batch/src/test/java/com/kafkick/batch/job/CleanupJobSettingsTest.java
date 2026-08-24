@@ -179,6 +179,10 @@ class CleanupJobSettingsTest {
                 VALID_ABANDONED_HOURS, VALID_KEEP_DAYS, 5_001))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("batch.cleanup.metadata-chunk-size");
+        assertThatCode(() -> config(VALID_TIMEOUT, VALID_KEEP, VALID_CHUNK,
+                VALID_ABANDONED_HOURS, VALID_KEEP_DAYS, 5_000))
+                .as("경계값 자체는 통과해야 한다 — 안 그러면 상한이 4999 인 셈이다")
+                .doesNotThrowAnyException();
     }
 
     /**

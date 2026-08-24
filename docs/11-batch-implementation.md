@@ -165,11 +165,13 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 > **아직 있지만 `@Deprecated(forRemoval)`** 이다(바이트코드로 확인) — 이 저장소는
 > `JobOperator` 를 쓴다.
 
-메타 테이블은 `V2__batch_metadata.sql` 이 만들고 보조 인덱스 둘은 `V14`·`V15` 가 만든다
-(셋을 묶어 "배치 메타 마이그레이션 셋" 이라 부른다 — 절차는 `docs/14`).
-`V2` 가 없으면 기동 가드가 잡지만 **인덱스 둘이 없으면 기동도 동작도 통과한다.** `spring-batch-core` 6.0.4 원본 그대로이고,
+메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
 `spring.batch.jdbc.*` 는 **Boot 4.1 에 존재하지 않는 키다.** 이 파일이 없어도 **기동은 성공하고**,
 첫 잡 실행에서 `Table 'BATCH_JOB_INSTANCE' doesn't exist` 로 죽는다.
+
+보조 인덱스 둘은 `V14`·`V15` 가 만든다 — 셋을 묶어 "배치 메타 마이그레이션 셋" 이라 부르고
+절차는 `docs/14` 에 있다. `V2` 누락은 기동 가드가 잡지만 **인덱스 둘이 없으면 기동도 동작도
+통과한다** — 가드가 테이블만 보기 때문이다.
 
 ---
 
