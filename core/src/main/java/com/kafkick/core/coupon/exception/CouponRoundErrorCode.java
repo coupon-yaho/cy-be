@@ -20,6 +20,12 @@ public enum CouponRoundErrorCode implements ErrorCode {
             400,
             "COUPON_ROUND-203",
             "쿠폰 회차 예약 시간이 올바르지 않습니다."
+    ),
+
+    COUPON_ROUND_NOT_FOUND(
+            404,
+            "COUPON_ROUND-204",
+            "쿠폰 회차를 찾을 수 없습니다."
     );
 
     private final int status;
