@@ -47,6 +47,26 @@ class DeployedConfigContractTest {
      */
     private static final String DEPLOYED = "application.yml.example";
 
+    /** compose 의 ports 왼쪽. 호스트 어느 번호로 내보낼지만 정한다. */
+    private static final String HOST_PORT_VARIABLE = "API_HOST_PORT";
+
+    /** compose 의 ports 오른쪽이자 {@code application.yml.example} 의 {@code server.port}. */
+    private static final String CONTAINER_PORT_VARIABLE = "SERVER_PORT";
+
+    /** {@code .env.example} 이 정의하는 변수 이름들. 주석과 빈 줄은 뺀다. */
+    private List<String> environmentDeclarations() throws IOException {
+        List<String> names = new ArrayList<>();
+        for (String line : Files.readAllLines(repoRoot().resolve(".env.example"))) {
+            String stripped = line.strip();
+            int assign = stripped.indexOf('=');
+            if (stripped.startsWith("#") || assign <= 0) {
+                continue;
+            }
+            names.add(stripped.substring(0, assign));
+        }
+        return names;
+    }
+
     /**
      * OBS-35 에서 뜻을 갈랐다. 예전에는 호스트 공개 포트와 컨테이너 Spring 포트가 둘 다
      * {@code SERVER_PORT} 였고, compose 가 컨테이너 값을 {@code "8080"} 으로 덮어써서
@@ -84,7 +104,21 @@ class DeployedConfigContractTest {
                 .as("컨테이너 쪽은 api/src/main/resources/application.yml.example 의"
                         + " ${SERVER_PORT:8080} 이 읽는 이름과 같아야 한다. 다르면 매핑은"
                         + " 성립하는데 Spring 이 다른 포트에서 들어 연결이 reset 된다")
-                .isEqualTo("SERVER_PORT");
+                .isEqualTo(CONTAINER_PORT_VARIABLE);
+
+        // "서로 다르기만 하면 된다" 로는 부족하다 — ${MYSQL_PORT}:${SERVER_PORT} 도 통과한다.
+        // 호스트 쪽 이름은 .env.example 이 사람에게 알려 주는 이름과 같아야 한다.
+        assertThat(variableOf(host))
+                .as("이 이름이 계약이다. compose 만 다른 이름으로 바꾸면 .env.example 의 %s 는"
+                        + " 아무도 안 읽는 값이 되고, 그걸 고친 사람은 포트가 안 바뀌는 이유를"
+                        + " 알 수 없다", HOST_PORT_VARIABLE)
+                .isEqualTo(HOST_PORT_VARIABLE);
+
+        assertThat(environmentDeclarations())
+                .as("compose 가 쓰는 두 이름이 .env.example 에 없으면 신규 클론은 그 값을"
+                        + " 채울 자리를 못 찾는다. 호스트 쪽은 기본값이 있어 조용히 8080 이 되고,"
+                        + " 그건 이미 물려 있는 포트일 수 있다")
+                .contains(HOST_PORT_VARIABLE, CONTAINER_PORT_VARIABLE);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> environment = (Map<String, Object>) api.get("environment");

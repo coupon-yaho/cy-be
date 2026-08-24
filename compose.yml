@@ -243,9 +243,12 @@ services:
   # KRaft 조합 모드다(broker + controller). ZooKeeper 를 두지 않는 것은 취향이 아니라
   # Kafka 4.x 가 ZooKeeper 모드를 아예 제거했기 때문이다.
   #
-  # ⚠️ 세 서비스가 같은 KAFKA_CLUSTER_ID 를 공유해야 한다. 안 적으면 컨테이너마다 다른 id 로
-  #    포맷되고, 그러면 컨트롤러 쿼럼이 서로를 "다른 클러스터" 로 보고 붙지 않는다.
-  #    한 번 포맷된 볼륨의 id 는 바뀌지 않으므로, 이 값을 고치면 아래 볼륨 셋을 함께 지워야 한다.
+  # ⚠️ 세 서비스가 같은 CLUSTER_ID 를 공유해야 한다. 이름에 KAFKA_ 접두사가 없는 이유와
+  #    값을 바꿀 때의 복구 절차는 위 x-kafka-broker-env 의 CLUSTER_ID 옆에 적어 뒀다.
+  #
+  #    안 적어도 세 대가 붙는다 — 이미지에 기본값이 있어서 셋 다 그 값으로 포맷된다(실측).
+  #    즉 이 값을 빠뜨린 것은 증상으로 드러나지 않는다. 그래서 주석이 아니라
+  #    KafkaBrokerComposeContractTest 가 지킨다.
   #
   # ⚠️ ports 를 두지 않는다. Kafka 에 인증이 없어서(SASL 미도입) 호스트로 여는 순간 아무나
   #    토픽을 만들고 발급 이벤트를 위조해 넣을 수 있다 — 관리 포트·Prometheus 를 잠근 것과
