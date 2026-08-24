@@ -112,6 +112,14 @@ observation:
     #    유휴 시간에 관측을 끄는 것은 이 실패가 아니라 아래 스위치로 한다.
     #    (계정이 실제로 요구되는지는 storage 의 ObservationCredentialsContractTest 가 고정한다)
     #    끌 수 있게 env 로 열어 둔다 — 유휴 시간처럼 관측이 필요 없는 구간을 위한 스위치다.
+    #
+    # 이 스위치는 관측 빈만 끈다. 배치 메타(BATCH_* 테이블)는 영향을 받지 않는다 —
+    # 운영 풀은 storage 의 MainDataSourceConfig 가 조건 없이 만들고,
+    # BatchJobRepositoryConfig 는 그것을 문다.
+    #    한때 둘이 같은 키에 묶여 있었다. 그때는 이 스위치를 끄면 Spring Batch 가
+    #    ResourcelessJobRepository 로 떨어져 **잡 중복 실행 방지가 함께 꺼졌다** —
+    #    두 노드가 같은 파라미터로 각자 잡을 시작해도 예외도 로그도 없었다.
+    #    batch 의 BatchMetadataWithoutObservationTest 가 그 분리를 고정한다.
     enabled: ${OBSERVATION_DATASOURCE_ENABLED:true}
   # LIVE 정합성 심각도 임계값. api 와 같은 키를 읽는다 — 두 JVM 이 같은 회차를 다른 기준으로
   # 판정하면 화면과 경보가 서로를 반증한다. FINAL 판정의 0 기준에는 영향을 주지 않는다.
