@@ -55,7 +55,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.LatencyMetrics(null, null, null),
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
-                List.of()
+                List.of(),
+                AdminMetricsResponse.ErrorMetrics.draft()
         );
 
         String json = objectMapper.writeValueAsString(response);
@@ -121,7 +122,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.LatencyMetrics(null, null, null),
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
-                List.of());
+                List.of(),
+                AdminMetricsResponse.ErrorMetrics.draft());
 
         assertThat(objectMapper.writeValueAsString(response))
                 .contains("\"phase\":\"FINAL\"")

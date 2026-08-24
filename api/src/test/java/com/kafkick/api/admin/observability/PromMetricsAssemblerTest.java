@@ -15,10 +15,17 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TopReason;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
+import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.observation.SourceStatusCode;
@@ -34,8 +41,8 @@ class PromMetricsAssemblerTest {
     private static final Duration STALE_AFTER = Duration.ofSeconds(120);
     private static final Duration BUDGET = Duration.ofMillis(900);
 
-    /** 조립기가 응답 한 장에 보내는 질의 수. 예산이 넉넉하면 네 개가 모두 나간다. */
-    private static final long QUERY_COUNT = 4;
+    /** 조립기가 응답 한 장에 보내는 질의 수. 예산이 넉넉하면 다섯 개가 모두 나간다. */
+    private static final long QUERY_COUNT = 5;
     private static final long QUERY_DELAY_MILLIS = 20;
 
     private static final long FRESH_AGE_SECONDS = 3;
@@ -136,12 +143,12 @@ class PromMetricsAssemblerTest {
 
     /** 지표마다 한 번씩 부르면 1 초 폴링이 Prometheus 를 초당 수십 번 두드립니다. */
     @Test
-    @DisplayName("셀렉터로 묶어 응답 한 장에 질의를 네 번만 보낸다")
+    @DisplayName("셀렉터로 묶어 응답 한 장에 질의를 다섯 번만 보낸다")
     void usesSelectorsToLimitQueries() {
         FakePromQuery client = FakePromQuery.empty();
         assemble(client, globalQuery());
 
-        assertThat(client.queries()).hasSize(4);
+        assertThat(client.queries()).hasSize(5);
         assertThat(client.queries()).noneMatch(q -> q.contains("query_range"));
         // window 는 되돌아볼 범위가 아니라 비율을 계산할 집계 창이라 질의 안에 들어간다.
         assertThat(client.queries()).anyMatch(q -> q.contains("[60s]"));
@@ -256,7 +263,7 @@ class PromMetricsAssemblerTest {
     }
 
     /**
-     * 한 응답에 질의가 넷이라 질의별 타임아웃만으로는 응답이 폴링 간격을 넘길 수 있습니다.
+     * 한 응답에 질의가 다섯이라 질의별 타임아웃만으로는 응답이 폴링 간격을 넘길 수 있습니다.
      * 예산을 넘기면 남은 질의를 <b>보내지 않고</b> 그 값만 비웁니다.
      */
     @Test
@@ -279,6 +286,251 @@ class PromMetricsAssemblerTest {
         assertThat(response.consistency().luaGap().state()).isEqualTo(SourceStatus.VALID);
         assertThat(response.traffic().issueSuccessTps().state()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(response.latency().success().state()).isEqualTo(SourceStatus.UNAVAILABLE);
+    }
+
+    // ── 실패 ────────────────────────────────────────────────────────────────────
+
+    /**
+     * 실패율은 건수가 아니라 비율입니다. 분모는 {@code issueAttemptRps} 하나로 고정하고,
+     * 그 값은 트래픽이 쓰는 것과 <b>같은 표본</b>에서 나와야 합니다.
+     */
+    @Test
+    @DisplayName("실패율은 같은 스냅샷의 issueAttemptRps 를 분모로 백분율을 낸다")
+    void errorRatesDivideByTheSameAttemptSnapshot() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(
+                        rate("issue", "success", 800d, "api-1"),
+                        rate("issue", "dependency_failure", 10d, "api-1"),
+                        rate("issue", "application_failure", 30d, "api-1"),
+                        rate("issue", "client_invalid", 60d, "api-1"),
+                        rate("issue", "policy_reject", 100d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+        ErrorMetrics errors = response.errors();
+
+        assertThat(response.traffic().issueAttemptRps().value()).isEqualTo(1000d);
+        assertThat(errors.denominator()).isEqualTo(TrafficKey.ISSUE_ATTEMPT_RPS);
+        assertThat(rateOf(errors, ErrorClassKey.DEPENDENCY_FAILURE).value()).isEqualTo(1d);
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).value()).isEqualTo(3d);
+        assertThat(rateOf(errors, ErrorClassKey.CLIENT_INVALID).value()).isEqualTo(6d);
+        assertThat(rateOf(errors, ErrorClassKey.POLICY_REJECT).value()).isEqualTo(10d);
+        assertThat(rateOf(errors, ErrorClassKey.DEPENDENCY_FAILURE).state())
+                .isEqualTo(SourceStatus.VALID);
+        assertThat(errors.classes()).allSatisfy(errorClass ->
+                assertThat(errorClass.rate().value()).isBetween(0d, 100d));
+        // 관측 시각은 평가 시각이 아니라 마지막 스크레이프 시각이다.
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).observedAt())
+                .isEqualTo(EVALUATED.minusSeconds(FRESH_AGE_SECONDS));
+    }
+
+    /**
+     * 정책 거절은 설계된 동작입니다. 분자에 넣으면 재고가 소진된 뒤 실패율이 100% 에 붙어
+     * 경보가 아무 의미도 갖지 못합니다.
+     */
+    @Test
+    @DisplayName("재고가 소진돼 정책 거절이 트래픽의 99% 여도 시스템 실패율은 0 이다")
+    void policyRejectStaysOutOfTheNumerator() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(
+                        rate("issue", "success", 10d, "api-1"),
+                        rate("issue", "policy_reject", 990d, "api-1"),
+                        // 실패 시계열은 기동 시점에 등록돼 트래픽이 없어도 0 으로 나온다.
+                        rate("issue", "dependency_failure", 0d, "api-1"),
+                        rate("issue", "application_failure", 0d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        assertThat(rateOf(errors, ErrorClassKey.DEPENDENCY_FAILURE).value()).isEqualTo(0d);
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).value()).isEqualTo(0d);
+        // 표에서 지우지는 않는다 — 안 보이면 그 트래픽이 어디로 갔는지 아무도 설명하지 못한다.
+        assertThat(rateOf(errors, ErrorClassKey.POLICY_REJECT).value()).isEqualTo(99d);
+        assertThat(excluded(errors, ErrorClassKey.POLICY_REJECT)).isTrue();
+        assertThat(excluded(errors, ErrorClassKey.CLIENT_INVALID)).isTrue();
+        assertThat(excluded(errors, ErrorClassKey.DEPENDENCY_FAILURE)).isFalse();
+        assertThat(excluded(errors, ErrorClassKey.APPLICATION_FAILURE)).isFalse();
+    }
+
+    /**
+     * 대기열 수락은 {@code entry} 경로에서 나옵니다. uri 그룹을 안 걸면 순번 폴링이 분모를
+     * 부풀려 실패율이 실제보다 작게 나옵니다.
+     */
+    @Test
+    @DisplayName("대기열 경로는 분모에도 분자에도 섞이지 않는다")
+    void queuePathDoesNotReachTheFailureRate() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(
+                        rate("issue", "success", 90d, "api-1"),
+                        rate("issue", "application_failure", 10d, "api-1"),
+                        rate("entry", "queue_accepted", 900d, "api-1"),
+                        rate("queue", "application_failure", 500d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        // 분모가 1000 이었으면 1%, 분자에 queue 가 섞였으면 510% 가 나온다.
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).value()).isEqualTo(10d);
+    }
+
+    /** 요청이 0 건이면 나눌 것이 없습니다. 비율 0 이 아니라 정의되지 않는 값입니다. */
+    @Test
+    @DisplayName("발급 시도가 0 이면 비율은 0 이 아니라 N_A 다")
+    void zeroAttemptsMakeTheRateUndefined() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(rate("issue", "success", 0d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        assertThat(errors.classes()).allSatisfy(errorClass -> {
+            assertThat(errorClass.rate().state()).isEqualTo(SourceStatus.N_A);
+            assertThat(errorClass.rate().value()).isNull();
+        });
+    }
+
+    /**
+     * 네 분류는 서로 겹치지 않고 모두 분모 안에 들어 있습니다. 그래서 넷을 다 더해도 100 을
+     * 넘을 수 없습니다 — 넘으면 필터가 그룹 밖을 집었거나 두 분류가 같은 표본을 세고 있는 것입니다.
+     *
+     * <p>자르는 코드를 두지 않기로 한 결정이 여기 걸려 있습니다. 누가 "안전하게"
+     * {@code Math.min(percent, 100)} 을 넣으면 그 배선 오류가 화면에서 정상으로 보이게 됩니다 —
+     * 그때 이 테스트가 아니라 <b>합이 100 을 넘는 사실 자체</b>가 먼저 드러나야 합니다.</p>
+     */
+    @Test
+    @DisplayName("겹치지 않는 네 분류의 비율 합은 100 을 넘지 않는다")
+    void disjointClassRatesNeverExceedTheWhole() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(
+                        rate("issue", "success", 500d, "api-1"),
+                        rate("issue", "dependency_failure", 100d, "api-1"),
+                        rate("issue", "application_failure", 150d, "api-1"),
+                        rate("issue", "client_invalid", 50d, "api-1"),
+                        rate("issue", "policy_reject", 200d, "api-1"),
+                        // 발급 경로 밖이다. 분자가 이걸 집으면 합이 100 을 넘는다.
+                        rate("queue", "application_failure", 900d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        double sum = errors.classes().stream()
+                .mapToDouble(errorClass -> errorClass.rate().value())
+                .sum();
+        assertThat(sum)
+                .as("합이 100 을 넘으면 필터가 그룹 밖을 집었거나 두 분류가 같은 표본을 센 것이다")
+                .isLessThanOrEqualTo(100d)
+                .isEqualTo(50d);
+    }
+
+    /**
+     * 브라우저·부하 생성기 쪽 실패는 서버가 볼 수 있는 원천이 아예 없습니다. 0 으로 실으면
+     * "클라이언트 실패 없음" 이라는 거짓 신호가 되므로 키 자체를 내보내지 않습니다.
+     */
+    @Test
+    @DisplayName("원천이 없는 clientObservedFailure 는 키 자체가 응답에 없다")
+    void clientObservedFailureHasNoKey() {
+        ErrorMetrics errors = assemble(FakePromQuery.empty(), globalQuery()).errors();
+
+        assertThat(errors.classes()).extracting(errorClass -> errorClass.key().jsonValue())
+                .containsExactly("dependencyFailure", "applicationFailure", "clientInvalid",
+                        "policyReject")
+                .doesNotContain("clientObservedFailure");
+    }
+
+    /**
+     * 원인 표의 원천은 HTTP 결과가 아니라 발급 결과 사유입니다. 0 인 행도 그대로 내려보냅니다 —
+     * 무엇이 0 인지 보이는 편이 나은지는 패널이 정할 문제입니다.
+     */
+    @Test
+    @DisplayName("실패 원인은 사유별 초당 건수를 큰 순으로 담고 0 행도 남긴다")
+    void topReasonsCarryFailureReasonRates() {
+        FakePromQuery client = respond(Map.of(
+                "app_issuance_outcome_total", List.of(
+                        outcome(ReasonCode.INTERNAL_ERROR, 2.5d),
+                        outcome(ReasonCode.TEMPORARILY_UNAVAILABLE, 7.25d),
+                        outcome(ReasonCode.UNMAPPED, 0d)),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        var topReasons = assemble(client, globalQuery()).errors().topReasons();
+
+        assertThat(topReasons.state()).isEqualTo(SourceStatus.VALID);
+        assertThat(topReasons.value()).extracting(TopReason::reasonCode)
+                .containsExactly(ReasonCode.TEMPORARILY_UNAVAILABLE, ReasonCode.INTERNAL_ERROR,
+                        ReasonCode.UNMAPPED);
+        assertThat(topReasons.value().get(0).rps()).isEqualTo(7.25d);
+        assertThat(topReasons.value().get(2).rps()).isEqualTo(0d);
+    }
+
+    /**
+     * "실패가 없어서 빈 표" 와 "아직 못 물어봐서 빈 표" 는 운영자가 취할 행동이 정반대입니다.
+     * 시계열이 하나도 없으면 빈 목록이 아니라 PENDING 입니다.
+     */
+    @Test
+    @DisplayName("원인 시계열이 하나도 없으면 빈 목록이 아니라 PENDING 이다")
+    void missingReasonSeriesIsPendingNotEmpty() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(rate("issue", "success", 40d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        var topReasons = assemble(client, globalQuery()).errors().topReasons();
+
+        assertThat(topReasons.state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(topReasons.value()).isNull();
+    }
+
+    /** 상태는 블록이 아니라 값마다 붙습니다. 한 계열이 죽어도 나머지는 살아야 합니다. */
+    @Test
+    @DisplayName("원인 질의만 죽어도 분류 표는 산다")
+    void deadReasonQueryLeavesTheClassTableAlive() {
+        FakePromQuery client = new FakePromQuery(promQl -> {
+            if (promQl.contains("app_issuance_outcome_total")) {
+                throw new PromQueryException("시험용 장애: " + promQl);
+            }
+            if (promQl.startsWith("rate(app_http")) {
+                return List.of(rate("issue", "success", 90d, "api-1"),
+                        rate("issue", "application_failure", 10d, "api-1"));
+            }
+            if (promQl.contains("timestamp(")) {
+                return List.of(age(FRESH_AGE_SECONDS));
+            }
+            return List.of();
+        });
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        assertThat(errors.topReasons().state()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).value()).isEqualTo(10d);
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).state())
+                .isEqualTo(SourceStatus.VALID);
+    }
+
+    /** 스크레이프가 멈추면 분류 표도 원인 표도 값을 싣되 STALE 로 나갑니다. */
+    @Test
+    @DisplayName("마지막 스크레이프가 오래되면 실패율과 원인 표가 STALE 로 나간다")
+    void oldScrapeMakesErrorsStale() {
+        FakePromQuery client = respond(Map.of(
+                "rate(app_http", List.of(
+                        rate("issue", "success", 90d, "api-1"),
+                        rate("issue", "application_failure", 10d, "api-1")),
+                "app_issuance_outcome_total", List.of(outcome(ReasonCode.INTERNAL_ERROR, 1d)),
+                "timestamp(", List.of(age(STALE_AGE_SECONDS))));
+
+        ErrorMetrics errors = assemble(client, globalQuery()).errors();
+
+        assertThat(rateOf(errors, ErrorClassKey.APPLICATION_FAILURE).state())
+                .isEqualTo(SourceStatus.STALE);
+        assertThat(errors.topReasons().state()).isEqualTo(SourceStatus.STALE);
+    }
+
+    /** 예산이 모자라면 원인 질의부터 잘립니다 — 마지막에 보내는 질의라 그것만 비어야 합니다. */
+    @Test
+    @DisplayName("실패 원인 질의는 마지막에 나간다")
+    void reasonQueryGoesLast() {
+        FakePromQuery client = FakePromQuery.empty();
+        assemble(client, globalQuery());
+
+        assertThat(client.queries().get(client.queries().size() - 1))
+                .contains("app_issuance_outcome_total");
     }
 
     // ── 지연 ────────────────────────────────────────────────────────────────────
@@ -581,6 +833,26 @@ class PromMetricsAssemblerTest {
             });
             return List.copyOf(matched);
         });
+    }
+
+    private static ObservedValue<Double> rateOf(ErrorMetrics errors, ErrorClassKey key) {
+        return errorClass(errors, key).rate();
+    }
+
+    private static boolean excluded(ErrorMetrics errors, ErrorClassKey key) {
+        return errorClass(errors, key).excludedFromNumerator();
+    }
+
+    private static ErrorClass errorClass(ErrorMetrics errors, ErrorClassKey key) {
+        return errors.classes().stream()
+                .filter(candidate -> candidate.key() == key)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("분류가 응답에 없습니다: " + key));
+    }
+
+    /** {@code sum by (outcome) (rate(...))} 결과. 집계가 __name__ 을 지운다. */
+    private static PromSample outcome(ReasonCode reasonCode, double rps) {
+        return new PromSample("", Map.of("outcome", reasonCode.name()), rps, EVALUATED);
     }
 
     private static PromSample rate(String uriGroup, String result, double value, String instance) {

@@ -22,6 +22,7 @@ import com.kafkick.core.observation.DomainMeterNames;
  * 응답시간 p50/p95/p99    max     인스턴스별 값이라 병합 불가(DEC-02).
  *                                 화면 라벨에 '인스턴스 최댓값' 필수.
  * 응답 결과 rate          sum     전체 처리량
+ * 발급 결과 사유 rate     sum     전체 처리량
  * in-flight               sum     전역 동시 처리 수
  * DB 풀 active/pending    sum     절대 개수
  * DB 풀 사용률(%)         max     sum 하면 200% 가 나온다
@@ -60,6 +61,13 @@ public enum MetricAggregation {
     public static final String HTTP_LATENCY_SECONDS = promName(MeterNames.HTTP_LATENCY) + "_seconds";
     public static final String HTTP_RESULT_TOTAL = promName(MeterNames.HTTP_RESULT) + "_total";
     public static final String HTTP_IN_FLIGHT = promName(MeterNames.IN_FLIGHT);
+
+    /**
+     * 발급 결과 사유별 Counter. HTTP 결과 분류({@link #HTTP_RESULT_TOTAL})와 <b>원천이 다릅니다</b> —
+     * 저쪽은 응답 상태로 나눈 여섯 분류이고 이쪽은 업무 사유({@code ReasonCode})입니다. 실패
+     * <b>비율</b>은 저쪽에서, 실패 <b>원인</b>은 이쪽에서 나옵니다.
+     */
+    public static final String ISSUANCE_OUTCOME_TOTAL = promName(MeterNames.ISSUANCE_OUTCOME) + "_total";
     public static final String HIKARI_ACTIVE = promName(MeterNames.HIKARI_ACTIVE);
     public static final String HIKARI_PENDING = promName(MeterNames.HIKARI_PENDING);
     public static final String CPU_USAGE = promName(MeterNames.CPU_USAGE);
@@ -163,6 +171,7 @@ public enum MetricAggregation {
         table.put(HTTP_LATENCY_SECONDS, MAX);
         table.put(HTTP_RESULT_TOTAL, SUM);
         table.put(HTTP_IN_FLIGHT, SUM);
+        table.put(ISSUANCE_OUTCOME_TOTAL, SUM);
         table.put(HIKARI_ACTIVE, SUM);
         table.put(HIKARI_PENDING, SUM);
         table.put(HIKARI_POOL_UTILIZATION, MAX);
