@@ -3,6 +3,7 @@ package com.kafkick.core.coupon.service;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
+import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.exception.BusinessException;
@@ -10,6 +11,25 @@ import com.kafkick.core.support.exception.ErrorCode;
 
 @Service
 public class CouponIssueObservationDependencyMapper {
+
+    /**
+     * 발급 실패를 응답 상태·사유·의존성의 단일 관측 결과로 분류합니다.
+     *
+     * @param failure 발급 흐름에서 발생한 예외
+     * @return Session에 그대로 전달할 최종 관측 분류
+     */
+    public CouponIssueObservationFailure classify(
+            RuntimeException failure
+    ) {
+        int httpStatus = failure instanceof BusinessException businessException
+                ? businessException.getErrorCode().getStatus()
+                : 500;
+        return new CouponIssueObservationFailure(
+                httpStatus,
+                reasonCode(failure),
+                dependency(failure)
+        );
+    }
 
     /**
      * 발급 실패의 관측 사유를 업무 오류 매핑 또는 내부 오류로 분류합니다.
@@ -37,7 +57,12 @@ public class CouponIssueObservationDependencyMapper {
      */
     public Dependency dependency(RuntimeException failure) {
         if (failure instanceof BusinessException businessException) {
-            Dependency mapped = businessException.getErrorCode().dependency();
+            ErrorCode errorCode = businessException.getErrorCode();
+            Dependency mapped = errorCode.dependency();
+            // CouponIssueErrorCode의 NONE도 확정 매핑이며 DB cause가 덮어쓰지 않는다.
+            if (errorCode instanceof CouponIssueErrorCode) {
+                return mapped;
+            }
             if (mapped != Dependency.NONE) {
                 return mapped;
             }

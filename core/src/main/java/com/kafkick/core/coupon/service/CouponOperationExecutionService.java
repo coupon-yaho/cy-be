@@ -1,5 +1,7 @@
 package com.kafkick.core.coupon.service;
 
+import java.time.Instant;
+
 import org.springframework.stereotype.Service;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
@@ -25,6 +27,7 @@ public class CouponOperationExecutionService {
     private final IdempotencyExecutionService idempotencyExecutionService;
     private final IdempotentOperationService operationService;
     private final CouponIssueService couponIssueService;
+    private final CouponIssuePolicyValidator couponIssuePolicyValidator;
     private final CouponUseService couponUseService;
     private final CouponCancelUseService couponCancelUseService;
     private final CouponCancelService couponCancelService;
@@ -37,6 +40,7 @@ public class CouponOperationExecutionService {
             IdempotencyExecutionService idempotencyExecutionService,
             IdempotentOperationService operationService,
             CouponIssueService couponIssueService,
+            CouponIssuePolicyValidator couponIssuePolicyValidator,
             CouponUseService couponUseService,
             CouponCancelUseService couponCancelUseService,
             CouponCancelService couponCancelService,
@@ -48,6 +52,7 @@ public class CouponOperationExecutionService {
         this.idempotencyExecutionService = idempotencyExecutionService;
         this.operationService = operationService;
         this.couponIssueService = couponIssueService;
+        this.couponIssuePolicyValidator = couponIssuePolicyValidator;
         this.couponUseService = couponUseService;
         this.couponCancelUseService = couponCancelUseService;
         this.couponCancelService = couponCancelService;
@@ -89,6 +94,36 @@ public class CouponOperationExecutionService {
             MembershipGrade membershipGrade,
             String idempotencyKey
     ) {
+        return issueWithMetadata(
+                couponRoundId,
+                memberId,
+                membershipGrade,
+                idempotencyKey,
+                IssueAttemptCallback.NO_OP
+        );
+    }
+
+    /**
+     * 멱등 선점 뒤 정책 사전검증과 발급 시도 알림을 거쳐 권위 발급을 실행합니다.
+     *
+     * <p>사전검증의 읽기 전용 트랜잭션이 끝난 뒤 callback을 호출하고, 그 다음 기존 원자 발급
+     * 트랜잭션을 시작합니다. DONE replay는 선점된 실행 경로에 들어가지 않으므로 callback과
+     * 권위 발급을 모두 건너뜁니다. callback 실패는 관측 실패이므로 업무 결과에 전파하지 않습니다.
+     *
+     * @param couponRoundId 쿠폰 회차 식별자
+     * @param memberId 회원 식별자
+     * @param membershipGrade 요청 시점 회원 등급
+     * @param idempotencyKey UUID v4 멱등 키
+     * @param attemptCallback 정책 사전검증 통과 알림
+     * @return 발급 응답과 DONE replay 여부
+     */
+    public CouponIssueExecutionResult issueWithMetadata(
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade,
+            String idempotencyKey,
+            IssueAttemptCallback attemptCallback
+    ) {
         IdempotentExecutionResult<CouponIssueResult> execution =
                 idempotencyExecutionService.executeWithMetadata(
                         idempotencyKey,
@@ -98,23 +133,13 @@ public class CouponOperationExecutionService {
                                 membershipGrade
                         ),
                         CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST,
-                        claimedAt -> operationService.execute(
-                                idempotencyKey,
+                        claimedAt -> issueClaimedRequest(
+                                couponRoundId,
                                 memberId,
+                                membershipGrade,
+                                idempotencyKey,
                                 claimedAt,
-                                () -> CouponIssueResult.from(
-                                        couponIssueService.issue(
-                                                new CouponIssueCommand(
-                                                        couponRoundId,
-                                                        memberId,
-                                                        membershipGrade,
-                                                        idempotencyKey,
-                                                        claimedAt
-                                                )
-                                        )
-                                ),
-                                issueCodec,
-                                CouponIssueResult::issuanceId
+                                attemptCallback
                         ),
                         issueCodec::read
                 );
@@ -122,6 +147,55 @@ public class CouponOperationExecutionService {
                 execution.value(),
                 execution.replayed()
         );
+    }
+
+    /**
+     * 선점된 요청을 사전검증한 뒤 관측 callback과 권위 발급 트랜잭션을 순서대로 실행합니다.
+     *
+     * @param couponRoundId 쿠폰 회차 식별자
+     * @param memberId 회원 식별자
+     * @param membershipGrade 요청 시점 회원 등급
+     * @param idempotencyKey UUID v4 멱등 키
+     * @param claimedAt 멱등 선점 시각
+     * @param attemptCallback 정책 사전검증 통과 알림
+     * @return 권위 발급 결과
+     */
+    private CouponIssueResult issueClaimedRequest(
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade,
+            String idempotencyKey,
+            Instant claimedAt,
+            IssueAttemptCallback attemptCallback
+    ) {
+        CouponIssueCommand command = new CouponIssueCommand(
+                couponRoundId,
+                memberId,
+                membershipGrade,
+                idempotencyKey,
+                claimedAt
+        );
+        couponIssuePolicyValidator.validate(command);
+        notifyPolicyPassed(attemptCallback);
+        return operationService.execute(
+                idempotencyKey,
+                memberId,
+                claimedAt,
+                () -> CouponIssueResult.from(couponIssueService.issue(command)),
+                issueCodec,
+                CouponIssueResult::issuanceId
+        );
+    }
+
+    /** 관측 callback의 RuntimeException을 발급 흐름에서 격리합니다. */
+    private static void notifyPolicyPassed(
+            IssueAttemptCallback attemptCallback
+    ) {
+        try {
+            attemptCallback.onPolicyPassed();
+        } catch (RuntimeException ignored) {
+            // 관측 callback 실패는 뒤따르는 권위 발급 트랜잭션의 결과를 바꾸지 않는다.
+        }
     }
 
     public CouponUseResult use(

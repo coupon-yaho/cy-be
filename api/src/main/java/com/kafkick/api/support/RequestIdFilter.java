@@ -23,7 +23,7 @@ public class RequestIdFilter extends OncePerRequestFilter {
 
     /** 필터가 확정한 요청 ID를 하위 HTTP 어댑터가 읽는 공용 요청 속성 키입니다. */
     public static final String REQUEST_ID_ATTRIBUTE =
-            RequestIdFilter.class.getName() + ".requestId";
+            "com.kafkick.api.support.RequestIdFilter.requestId";
 
     private static final String REQUEST_ID = "requestId";
     private static final String HEADER = "X-Request-Id";

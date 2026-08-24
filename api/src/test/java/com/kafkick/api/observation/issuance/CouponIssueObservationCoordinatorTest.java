@@ -1,0 +1,641 @@
+package com.kafkick.api.observation.issuance;
+
+import java.time.Instant;
+import java.time.Clock;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+
+import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
+import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
+import com.kafkick.core.coupon.service.CouponIssueObservationDependencyMapper;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.core.coupon.service.IssueAttemptCallback;
+import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.member.Grade;
+import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.observation.Dependency;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.EventType;
+import com.kafkick.core.observation.IssuanceFlowEvent;
+import com.kafkick.core.observation.IssuanceFlowEventFactory;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReasonCode;
+import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.support.TimeProvider;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class CouponIssueObservationCoordinatorTest {
+
+    private static final String REQUEST_ID = "request-1";
+    private static final String IDEMPOTENCY_KEY =
+            "550e8400-e29b-41d4-a716-446655440000";
+    private static final Instant AT = Instant.parse("2026-08-24T05:00:00Z");
+
+    @Mock
+    private CouponOperationExecutionService operationExecutionService;
+    @Mock
+    private IssuanceObservationContextFactory contextFactory;
+    @Mock
+    private IssuanceObservationService observationService;
+    @Mock
+    private IssuanceObservationSession session;
+
+    private CouponIssueObservationCoordinator coordinator;
+    private IssuanceFlowEvent.Ctx context;
+
+    @BeforeEach
+    void setUp() {
+        coordinator = new CouponIssueObservationCoordinator(
+                operationExecutionService,
+                contextFactory,
+                observationService,
+                new CouponIssueObservationDependencyMapper()
+        );
+        context = new IssuanceFlowEvent.Ctx(
+                REQUEST_ID,
+                20L,
+                10L,
+                Grade.GOLD,
+                false,
+                AT,
+                EngineVersion.V3,
+                ReleaseStage.V3,
+                QueueMode.ADAPTIVE,
+                901L,
+                "api-1"
+        );
+    }
+
+    @Test
+    void recordsOneAttemptAndOneResultForANewIssue() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            return new CouponIssueExecutionResult(issueResult(), false);
+        });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(observationService).recordIssueAttempt(context);
+        verify(session).completeIssued(100L, "ABCDEFGHJKLM2345");
+        verify(session).finish();
+    }
+
+    @Test
+    void recordsOnlyAReplayedAttemptForADoneReplay() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenReturn(new CouponIssueExecutionResult(issueResult(), true));
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        ArgumentCaptor<IssuanceFlowEvent.Ctx> contextCaptor =
+                ArgumentCaptor.forClass(IssuanceFlowEvent.Ctx.class);
+        verify(observationService).recordIssueAttempt(
+                contextCaptor.capture()
+        );
+        assertThat(contextCaptor.getValue()).isEqualTo(
+                context.withReplayed(true)
+        );
+        verify(session, never()).completeIssued(any(Long.class), any());
+        verify(session, never()).completeIssueRejected(
+                anyInt(),
+                any(ReasonCode.class),
+                any(Dependency.class)
+        );
+        verify(session).finish();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CouponIssueErrorCode.class, names = {
+            "NOT_OPENED",
+            "CAMPAIGN_CLOSED",
+            "GRADE_NOT_ELIGIBLE"
+    })
+    void recordsPolicyRejectionWithoutAnAttempt(
+            CouponIssueErrorCode errorCode
+    ) {
+        prepareContext();
+        BusinessException rejected = new BusinessException(
+                errorCode
+        );
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(rejected);
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(rejected);
+
+        verify(observationService, never()).recordIssueAttempt(any());
+        verify(session).completeIssueRejected(
+                errorCode.getStatus(),
+                errorCode.reasonCode().orElseThrow(),
+                Dependency.NONE
+        );
+        verify(session).finish();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CouponIssueErrorCode.class, names = {
+            "ALREADY_ISSUED",
+            "SOLD_OUT",
+            "COUPON_ISSUE_SAVE_FAILED"
+    })
+    void keepsAttemptWhenAuthoritativeExecutionRejects(
+            CouponIssueErrorCode errorCode
+    ) {
+        prepareContext();
+        BusinessException rejected = new BusinessException(
+                errorCode
+        );
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            throw rejected;
+        });
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(rejected);
+
+        verify(observationService).recordIssueAttempt(context);
+        verify(session).completeIssueRejected(
+                errorCode.getStatus(),
+                errorCode.reasonCode().orElseThrow(),
+                errorCode.dependency()
+        );
+        verify(session).finish();
+    }
+
+    @Test
+    void classifiesUnexpectedDatabaseFailureWithoutChangingTheException() {
+        prepareContext();
+        DataIntegrityViolationException databaseFailure =
+                new DataIntegrityViolationException("db unavailable");
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            throw databaseFailure;
+        });
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(databaseFailure);
+
+        verify(observationService).recordIssueAttempt(context);
+        verify(session).completeIssueRejected(
+                500,
+                ReasonCode.INTERNAL_ERROR,
+                Dependency.MYSQL
+        );
+        verify(session).finish();
+    }
+
+    @Test
+    void contextFactoryFailureDoesNotChangeTheBusinessResult() {
+        when(contextFactory.create(
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+        )).thenThrow(new IllegalStateException("runtime config unavailable"));
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenReturn(new CouponIssueExecutionResult(issueResult(), false));
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        verifyNoInteractions(observationService, session);
+    }
+
+    @Test
+    void attemptRecorderFailureDoesNotChangeTheBusinessResult() {
+        prepareContext();
+        doThrow(new IllegalStateException("recorder unavailable"))
+                .when(observationService).recordIssueAttempt(context);
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            return new CouponIssueExecutionResult(issueResult(), false);
+        });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(session).completeIssued(100L, "ABCDEFGHJKLM2345");
+        verify(session).finish();
+    }
+
+    @Test
+    void sessionFailureDoesNotChangeTheBusinessResultAndFinishRunsOnce() {
+        prepareContext();
+        doThrow(new IllegalStateException("completion failed"))
+                .when(session).completeIssued(100L, "ABCDEFGHJKLM2345");
+        doThrow(new IllegalStateException("finish failed"))
+                .when(session).finish();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenReturn(new CouponIssueExecutionResult(issueResult(), false));
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(session).completeIssued(100L, "ABCDEFGHJKLM2345");
+        verify(session).finish();
+    }
+
+    @Test
+    void observationFailuresDoNotReplaceTheAuthoritativeException() {
+        prepareContext();
+        BusinessException rejected = new BusinessException(
+                CouponIssueErrorCode.ALREADY_ISSUED
+        );
+        doThrow(new IllegalStateException("attempt failed"))
+                .when(observationService).recordIssueAttempt(context);
+        doThrow(new IllegalStateException("completion failed"))
+                .when(session).completeIssueRejected(
+                        409,
+                        ReasonCode.ALREADY_ISSUED,
+                        Dependency.NONE
+                );
+        doThrow(new IllegalStateException("finish failed"))
+                .when(session).finish();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            throw rejected;
+        });
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(rejected);
+
+        verify(session).completeIssueRejected(
+                409,
+                ReasonCode.ALREADY_ISSUED,
+                Dependency.NONE
+        );
+        verify(session).finish();
+    }
+
+    @Test
+    void recordsExplicitAlreadyIssuedMappingDespiteDatabaseCause() {
+        CouponAlreadyIssuedException failure =
+                new CouponAlreadyIssuedException(
+                        "duplicate issuance",
+                        new DataIntegrityViolationException("duplicate key")
+                );
+
+        IssuanceFlowEvent resultEvent = recordActualFailureEvent(
+                failure,
+                true
+        );
+
+        assertThat(resultEvent.httpStatus()).isEqualTo(409);
+        assertThat(resultEvent.reasonCode()).isEqualTo(
+                ReasonCode.ALREADY_ISSUED
+        );
+        assertThat(resultEvent.dependency()).isEqualTo(Dependency.NONE);
+    }
+
+    @Test
+    void recordsExplicitMemberNotFoundMappingDespiteDatabaseCause() {
+        CouponIssueMemberNotFoundException failure =
+                new CouponIssueMemberNotFoundException(
+                        "missing member",
+                        new DataIntegrityViolationException("foreign key")
+                );
+
+        IssuanceFlowEvent resultEvent = recordActualFailureEvent(
+                failure,
+                true
+        );
+
+        assertThat(resultEvent.httpStatus()).isEqualTo(404);
+        assertThat(resultEvent.reasonCode()).isEqualTo(ReasonCode.UNMAPPED);
+        assertThat(resultEvent.dependency()).isEqualTo(Dependency.NONE);
+    }
+
+    @Test
+    void infersInternalMysqlForUnmappedPersistenceBusinessFailure() {
+        CouponPersistenceException failure = new CouponPersistenceException(
+                "persistence unavailable",
+                new DataIntegrityViolationException("database unavailable")
+        );
+
+        IssuanceFlowEvent resultEvent = recordActualFailureEvent(
+                failure,
+                false
+        );
+
+        assertThat(resultEvent.httpStatus()).isEqualTo(500);
+        assertThat(resultEvent.reasonCode()).isEqualTo(
+                ReasonCode.INTERNAL_ERROR
+        );
+        assertThat(resultEvent.dependency()).isEqualTo(Dependency.MYSQL);
+    }
+
+    @Test
+    void mapperReasonFailurePreservesBusinessExceptionAndFinishesOnce() {
+        prepareContext();
+        BusinessException failure = new BusinessException(
+                CouponIssueErrorCode.ALREADY_ISSUED
+        );
+        CouponIssueObservationDependencyMapper failingMapper = spy(
+                new CouponIssueObservationDependencyMapper()
+        );
+        doThrow(new IllegalStateException("reason mapping failed"))
+                .when(failingMapper).reasonCode(failure);
+        CouponIssueObservationCoordinator failingCoordinator =
+                coordinator(failingMapper);
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(failure);
+
+        assertThatThrownBy(() -> failingCoordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(failure);
+
+        verify(failingMapper).reasonCode(failure);
+        verify(session, never()).completeIssueRejected(
+                anyInt(),
+                any(ReasonCode.class),
+                any(Dependency.class)
+        );
+        verify(session).finish();
+    }
+
+    @Test
+    void mapperDependencyFailurePreservesRuntimeExceptionAndFinishesOnce() {
+        prepareContext();
+        IllegalStateException failure = new IllegalStateException(
+                "business failed"
+        );
+        CouponIssueObservationDependencyMapper failingMapper = spy(
+                new CouponIssueObservationDependencyMapper()
+        );
+        doThrow(new IllegalStateException("dependency mapping failed"))
+                .when(failingMapper).dependency(failure);
+        CouponIssueObservationCoordinator failingCoordinator =
+                coordinator(failingMapper);
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(failure);
+
+        assertThatThrownBy(() -> failingCoordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(failure);
+
+        verify(session, never()).completeIssueRejected(
+                anyInt(),
+                any(ReasonCode.class),
+                any(Dependency.class)
+        );
+        verify(session).finish();
+    }
+
+    @Test
+    void beginFailurePreservesOriginalBusinessResultWithoutFinishing() {
+        when(contextFactory.create(
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+        )).thenReturn(Optional.of(context));
+        when(observationService.begin(context)).thenThrow(
+                new IllegalStateException("session unavailable")
+        );
+        CouponIssueResult expected = issueResult();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenReturn(new CouponIssueExecutionResult(expected, false));
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isSameAs(expected);
+        verifyNoInteractions(session);
+    }
+
+    @Test
+    void beginFailurePreservesOriginalExceptionWithoutFinishing() {
+        when(contextFactory.create(
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+        )).thenReturn(Optional.of(context));
+        when(observationService.begin(context)).thenThrow(
+                new IllegalStateException("session unavailable")
+        );
+        BusinessException failure = new BusinessException(
+                CouponIssueErrorCode.NOT_OPENED
+        );
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(failure);
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(failure);
+
+        verifyNoInteractions(session);
+    }
+
+    private void prepareContext() {
+        when(contextFactory.create(
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+        )).thenReturn(Optional.of(context));
+        when(observationService.begin(context)).thenReturn(session);
+    }
+
+    private CouponIssueObservationCoordinator coordinator(
+            CouponIssueObservationDependencyMapper mapper
+    ) {
+        return new CouponIssueObservationCoordinator(
+                operationExecutionService,
+                contextFactory,
+                observationService,
+                mapper
+        );
+    }
+
+    private IssuanceFlowEvent recordActualFailureEvent(
+            RuntimeException failure,
+            boolean policyPassed
+    ) {
+        List<IssuanceFlowEvent> events = new CopyOnWriteArrayList<>();
+        TimeProvider timeProvider = new TimeProvider(Clock.fixed(
+                AT,
+                ZoneOffset.UTC
+        ));
+        IssuanceObservationService actualObservationService =
+                new IssuanceObservationService(
+                        new IssuanceFlowEventFactory(
+                                () -> UUID.fromString(
+                                        "11111111-1111-1111-1111-111111111111"
+                                )
+                        ),
+                        events::add,
+                        timeProvider
+                );
+        when(contextFactory.create(
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+        )).thenReturn(Optional.of(context));
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            if (policyPassed) {
+                IssueAttemptCallback callback = invocation.getArgument(4);
+                callback.onPolicyPassed();
+            }
+            throw failure;
+        });
+        CouponIssueObservationCoordinator actualCoordinator =
+                new CouponIssueObservationCoordinator(
+                        operationExecutionService,
+                        contextFactory,
+                        actualObservationService,
+                        new CouponIssueObservationDependencyMapper()
+                );
+
+        assertThatThrownBy(() -> actualCoordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        )).isSameAs(failure);
+
+        return events.stream()
+                .filter(event -> event.eventType() == EventType.ISSUE_RESULT)
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private CouponIssueResult issueResult() {
+        return new CouponIssueResult(
+                100L,
+                10L,
+                "ABCDEFGHJKLM2345",
+                IssuanceStatus.ISSUED,
+                AT,
+                AT.plusSeconds(604_800)
+        );
+    }
+}

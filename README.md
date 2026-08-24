@@ -140,7 +140,7 @@ API Actuator는 애플리케이션 포트와 분리된 관리 포트(기본 `909
 
 ```bash
 curl http://localhost:9090/actuator/health
-curl http://localhost:9090/actuator/metrics/coupon.issue.operation.requests
+curl http://localhost:9090/actuator/metrics/app.issuance.outcome
 curl http://localhost:9090/actuator/metrics/coupon.issue.operation.duration
 curl http://localhost:9090/actuator/metrics/hikaricp.connections.active
 curl http://localhost:9090/actuator/metrics/http.server.requests

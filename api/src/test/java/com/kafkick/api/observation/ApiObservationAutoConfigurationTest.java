@@ -18,6 +18,9 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
 import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
+import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
+import com.kafkick.core.coupon.service.CouponIssueObservationDependencyMapper;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -278,13 +281,45 @@ class ApiObservationAutoConfigurationTest {
     @Test
     void startsWithAUserSuppliedRecorderWhileKafkaIsDisabled() {
         contextRunner
+                .withUserConfiguration(
+                        CouponIssueObservationCoordinator.class
+                )
                 .withBean("auditEventRecorder", EventRecorder.class, () -> event -> { })
+                .withBean(
+                        CouponOperationExecutionService.class,
+                        () -> mock(CouponOperationExecutionService.class)
+                )
+                .withBean(
+                        CouponIssueObservationDependencyMapper.class,
+                        CouponIssueObservationDependencyMapper::new
+                )
+                .withBean(
+                        RuntimeConfigStore.class,
+                        () -> new ReadOnlyRuntimeConfigStore(
+                                validRuntimeConfigSnapshot()
+                        )
+                )
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(MeterEventRecorder.class);
+                    assertThat(context).hasSingleBean(
+                            CouponIssueObservationCoordinator.class
+                    );
                     assertThat(context.getBean(EventRecorder.class))
                             .isInstanceOf(CompositeEventRecorder.class);
                 });
+    }
+
+    private static RuntimeConfigSnapshot validRuntimeConfigSnapshot() {
+        return new RuntimeConfigSnapshot(
+                EngineVersion.V3,
+                ReleaseStage.V3,
+                QueueMode.ADAPTIVE,
+                1L,
+                Instant.parse("2026-08-24T05:00:00Z"),
+                "operator",
+                SourceStatus.VALID
+        );
     }
 
     @Test

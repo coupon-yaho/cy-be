@@ -109,6 +109,27 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
+    void recordsExplicitClassificationForUnexpectedIssueFailure() {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationSession session = session(recordedEvents);
+
+        session.completeIssueRejected(
+                500,
+                ReasonCode.INTERNAL_ERROR,
+                Dependency.MYSQL
+        );
+        session.finish();
+
+        assertThat(recordedEvents).singleElement().satisfies(event -> {
+            assertThat(event.httpStatus()).isEqualTo(500);
+            assertThat(event.reasonCode()).isEqualTo(
+                    ReasonCode.INTERNAL_ERROR
+            );
+            assertThat(event.dependency()).isEqualTo(Dependency.MYSQL);
+        });
+    }
+
+    @Test
     void recordsImmediatelyAdmittedEntryWithoutQueueInformation() {
         List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
         IssuanceObservationSession session = session(recordedEvents);

@@ -98,6 +98,22 @@ class CoreTransactionBoundaryTest {
         }
     }
 
+    @Test
+    @DisplayName("발급 orchestration 자체는 외부 트랜잭션을 열지 않는다")
+    void couponIssueOrchestrationHasNoTransactionBoundary() throws Exception {
+        assertThat(CouponOperationExecutionService.class.getAnnotation(
+                Transactional.class
+        )).isNull();
+        assertThat(CouponOperationExecutionService.class.getDeclaredMethod(
+                "issueWithMetadata",
+                Long.class,
+                Long.class,
+                com.kafkick.core.membership.domain.MembershipGrade.class,
+                String.class,
+                IssueAttemptCallback.class
+        ).getAnnotation(Transactional.class)).isNull();
+    }
+
     private static void assertTransactional(
             Class<?> serviceType,
             String methodName

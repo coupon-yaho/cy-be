@@ -12,10 +12,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.coupon.monitoring.CouponIssueMetrics;
+import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.membership.domain.MembershipGrade;
-import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
@@ -35,12 +35,13 @@ class CouponIssueControllerTest {
 
     private static final String IDEMPOTENCY_KEY =
             "550e8400-e29b-41d4-a716-446655440000";
+    private static final String REQUEST_ID = "client-request-1";
 
     @Autowired
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponOperationExecutionService operationExecutionService;
+    private CouponIssueObservationCoordinator observationCoordinator;
 
     @MockitoBean
     private CouponIssueMetrics couponIssueMetrics;
@@ -52,7 +53,8 @@ class CouponIssueControllerTest {
     @DisplayName("회원과 등급 헤더로 쿠폰을 발급하면 201을 반환한다")
     void issueCoupon() throws Exception {
         CouponIssueResult result = issueResult();
-        when(operationExecutionService.issue(
+        when(observationCoordinator.issue(
+                REQUEST_ID,
                 10L,
                 20L,
                 MembershipGrade.GOLD,
@@ -60,6 +62,7 @@ class CouponIssueControllerTest {
         )).thenReturn(result);
 
         mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header("X-Request-Id", REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
                                 MemberRequestHeaders.MEMBERSHIP_GRADE,
@@ -78,7 +81,8 @@ class CouponIssueControllerTest {
                 .andExpect(jsonPath("$.data.status").value("ISSUED"))
                 .andExpect(jsonPath("$.error").doesNotExist());
 
-        verify(operationExecutionService).issue(
+        verify(observationCoordinator).issue(
+                REQUEST_ID,
                 10L,
                 20L,
                 MembershipGrade.GOLD,
@@ -95,7 +99,8 @@ class CouponIssueControllerTest {
     @Test
     @DisplayName("동일한 멱등키로 재시도하면 같은 발급 응답을 반환한다")
     void replayIssueWithSameIdempotencyKey() throws Exception {
-        when(operationExecutionService.issue(
+        when(observationCoordinator.issue(
+                REQUEST_ID,
                 10L,
                 20L,
                 MembershipGrade.GOLD,
@@ -104,6 +109,7 @@ class CouponIssueControllerTest {
 
         for (int attempt = 0; attempt < 2; attempt++) {
             mockMvc.perform(post("/api/v1/coupons/10/issue")
+                            .header("X-Request-Id", REQUEST_ID)
                             .header(MemberRequestHeaders.MEMBER_ID, "20")
                             .header(
                                     MemberRequestHeaders.MEMBERSHIP_GRADE,
@@ -119,7 +125,8 @@ class CouponIssueControllerTest {
                             .value("ABCDEFGHJKLM2345"));
         }
 
-        verify(operationExecutionService, times(2)).issue(
+        verify(observationCoordinator, times(2)).issue(
+                REQUEST_ID,
                 10L,
                 20L,
                 MembershipGrade.GOLD,
@@ -133,7 +140,8 @@ class CouponIssueControllerTest {
         BusinessException soldOut = new BusinessException(
                 CouponIssueErrorCode.SOLD_OUT
         );
-        when(operationExecutionService.issue(
+        when(observationCoordinator.issue(
+                REQUEST_ID,
                 10L,
                 20L,
                 MembershipGrade.GOLD,
@@ -144,6 +152,7 @@ class CouponIssueControllerTest {
         );
 
         mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header("X-Request-Id", REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
                                 MemberRequestHeaders.MEMBERSHIP_GRADE,
@@ -182,8 +191,9 @@ class CouponIssueControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verify(operationExecutionService, never())
+        verify(observationCoordinator, never())
                 .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
@@ -220,8 +230,9 @@ class CouponIssueControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
-        verify(operationExecutionService, never())
+        verify(observationCoordinator, never())
                 .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
