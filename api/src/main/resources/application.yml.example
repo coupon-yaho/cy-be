@@ -10,9 +10,41 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  error:
+    include-stacktrace: never
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+        exclude: env,configprops,beans,heapdump
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        coupon.issue.operation.duration: true
+      percentiles:
+        coupon.issue.operation.duration: 0.5,0.95,0.99
+      slo:
+        coupon.issue.operation.duration: 100ms,300ms,500ms,1s,3s
 
 logging:
   pattern:
     console: "%d{HH:mm:ss.SSS} %-5level [%X{requestId:-}] %logger{36} - %msg%n"
   level:
     com.kafkick: DEBUG
+    com.kafkick.api.coupon.monitoring: ${COUPON_ISSUE_LOG_LEVEL:INFO}
+
+coupon:
+  idempotency:
+    wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
+    poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}
+    stale-after: ${COUPON_IDEMPOTENCY_STALE_AFTER:30s}
+
+  round-generation:
+    schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-days: ${COUPON_GENERATION_MAX_DAYS:30}
