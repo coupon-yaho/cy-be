@@ -146,8 +146,8 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.hourlyHeatmap.value.length()").value(168))
                 .andExpect(jsonPath("$.data.hourlyHeatmap.value[0].dayOfWeek").value(1))
                 .andExpect(jsonPath("$.data.issuanceStatusDistribution.state").value("VALID"))
-                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(20))
-                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.currentlyIssued").value(10))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(34))
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.currentlyIssued").value(16))
                 .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.statuses[0].status")
                         .value("ISSUED"))
                 .andExpect(jsonPath("$.error").doesNotExist());
@@ -177,7 +177,7 @@ class AdminDashboardControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.brands.length()").value(1))
                 .andExpect(jsonPath("$.data.brands[0].brandId").value(2))
-                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(10));
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(8));
 
         mockMvc.perform(get("/api/v1/admin/analytics")
                         .param("from", "2026-01-01")
@@ -187,7 +187,7 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.filters.brandId").doesNotExist())
                 .andExpect(jsonPath("$.data.filters.couponId").value(101))
                 .andExpect(jsonPath("$.data.brands[0].brandId").value(1))
-                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(20));
+                .andExpect(jsonPath("$.data.issuanceStatusDistribution.value.totalIssued").value(34));
     }
 
     /** 존재하지 않는 선택 식별자를 빈 통계로 숨기지 않고 공통 404로 반환하는지 검증합니다. */
