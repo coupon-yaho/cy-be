@@ -28,6 +28,11 @@ import com.kafkick.api.caller.HeaderCallerResolver;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.couponmetrics.mock.AdminCouponMetricsMockDataFactory;
+import com.kafkick.core.admin.analytics.AdminAnalyticsCalculator;
+import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
+import com.kafkick.core.admin.analytics.AdminAnalyticsService;
+import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockDataFactory;
+import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockSource;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
@@ -120,6 +125,15 @@ public final class AdminControllerContractTestSupport {
                 new TimeProvider(clock),
                 new AdminCouponMetricsMockDataFactory(new AdminOverviewMockDataFactory()),
                 new CouponMetricsCalculator());
+    }
+
+    /** 지정한 Clock으로 관리자 브랜드 분석 Mock Service를 구성합니다. */
+    public static AdminAnalyticsService analyticsService(Clock clock) {
+        TimeProvider timeProvider = new TimeProvider(clock);
+        return new AdminAnalyticsService(
+                new AdminAnalyticsMockSource(new AdminAnalyticsMockDataFactory(), clock.instant()),
+                timeProvider,
+                new AdminAnalyticsCalculator(new AdminAnalyticsFreshnessPolicy(java.time.Duration.ofHours(1))));
     }
 
     /** 인증 실패 HTTP 상태를 검증할 때 기본 관리자 헤더 없이 MockMvc를 구성합니다. */
