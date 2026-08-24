@@ -10,6 +10,7 @@ import java.util.Objects;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawIssuance;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
@@ -24,9 +25,9 @@ class AdminIssuanceInquiryMockDataFactoryTest {
 
     @Test
     void createsStableRawDbRowsAcrossFactoriesAndLaterRequestTimes() {
-        AdminIssuanceInquirySource first = factory.create(SNAPSHOT_AT);
+        AdminIssuanceInquirySource first = source(SNAPSHOT_AT);
         AdminIssuanceInquirySource second = new AdminIssuanceInquiryMockDataFactory()
-                .create(SNAPSHOT_AT.plus(Duration.ofHours(1)));
+                .read(query(), SNAPSHOT_AT.plus(Duration.ofHours(1))).source();
 
         assertThat(first).isEqualTo(second);
         assertThat(first.attempts()).hasSize(10);
@@ -42,16 +43,16 @@ class AdminIssuanceInquiryMockDataFactoryTest {
     void enforcesSnapshotBoundaryAtNewestFixedRow() {
         Instant newestRow = SNAPSHOT_AT.minus(Duration.ofMinutes(2));
 
-        assertThat(factory.create(newestRow).attempts()).hasSize(10);
-        assertThatThrownBy(() -> factory.create(newestRow.minusNanos(1)))
+        assertThat(source(newestRow).attempts()).hasSize(10);
+        assertThatThrownBy(() -> factory.read(query(), newestRow.minusNanos(1)))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> factory.create(null))
+        assertThatThrownBy(() -> factory.read(query(), null))
                 .isInstanceOf(NullPointerException.class);
     }
 
     @Test
     void providesDirectAndHistoryRequestLinkScenarios() {
-        AdminIssuanceInquirySource source = factory.create(SNAPSHOT_AT);
+        AdminIssuanceInquirySource source = source(SNAPSHOT_AT);
 
         RawAttempt direct = attempt(source, 102L);
         assertThat(direct.requestId()).isEqualTo("inquiry-direct");
@@ -74,7 +75,7 @@ class AdminIssuanceInquiryMockDataFactoryTest {
 
     @Test
     void providesPolicySystemDbOnlyAndUnconfirmedSuccessScenarios() {
-        AdminIssuanceInquirySource source = factory.create(SNAPSHOT_AT);
+        AdminIssuanceInquirySource source = source(SNAPSHOT_AT);
 
         assertThat(attempt(source, 104L)).satisfies(row -> {
             assertThat(row.httpStatus()).isEqualTo(409);
@@ -101,7 +102,7 @@ class AdminIssuanceInquiryMockDataFactoryTest {
 
     @Test
     void providesSeparateRetriesTiedRowsAndAttemptResultPairButNoQueueAdmission() {
-        AdminIssuanceInquirySource source = factory.create(SNAPSHOT_AT);
+        AdminIssuanceInquirySource source = source(SNAPSHOT_AT);
 
         assertThat(source.attempts()).filteredOn(row -> row.couponId() == 2_004L)
                 .extracting(RawAttempt::requestId)
@@ -121,6 +122,14 @@ class AdminIssuanceInquiryMockDataFactoryTest {
                 .filter(row -> row.attemptId() == attemptId)
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private AdminIssuanceInquirySource source(Instant snapshotAt) {
+        return factory.read(query(), snapshotAt).source();
+    }
+
+    private static AdminIssuanceInquiryQuery query() {
+        return new AdminIssuanceInquiryQuery(1_001L, null, null, null, null, 50);
     }
 
 }

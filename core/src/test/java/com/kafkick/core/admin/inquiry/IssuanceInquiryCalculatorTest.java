@@ -372,20 +372,17 @@ class IssuanceInquiryCalculatorTest {
     }
 
     @Test
-    void appliesMemberCouponHttpStatusAndReasonFiltersAfterJoining() {
+    void appliesHttpStatusAndReasonFiltersAfterJoiningReaderConstrainedCandidates() {
         RawAttempt memberOneFailure = issueFailure(
                 41L, "member-one", 101L, 205L, 409,
                 ReasonCode.ALREADY_ISSUED, BASE.plusSeconds(40));
-        RawAttempt memberTwoFailure = issueFailure(
-                42L, "member-two", 102L, 205L, 409,
-                ReasonCode.ALREADY_ISSUED, BASE.plusSeconds(39));
         RawAttempt otherReason = issueFailure(
                 43L, "other-reason", 101L, 206L, 500,
                 ReasonCode.INTERNAL_ERROR, BASE.plusSeconds(38));
         RawIssuance dbOnly = issuance(
                 402L, 101L, 205L, IssuanceStatus.ISSUED, BASE.plusSeconds(37));
         AdminIssuanceInquirySource source = source(
-                List.of(memberOneFailure, memberTwoFailure, otherReason),
+                List.of(memberOneFailure, otherReason),
                 List.of(dbOnly),
                 List.of());
 
@@ -438,6 +435,101 @@ class IssuanceInquiryCalculatorTest {
                 .containsExactly(new InquiryPosition(tied, SourceKind.ATTEMPT, 51L));
         assertThat(secondPage.hasOlder()).isFalse();
         assertThat(secondPage.nextBefore()).isNull();
+    }
+
+    @Test
+    void selectsResultRepresentativeBeforeStatusOrReasonFiltering() {
+        RawAttempt matchingAttempt = new RawAttempt(
+                63L, EventType.ISSUE_ATTEMPT, "result-first", 101L, 208L,
+                null, null, null, BASE.plusSeconds(64));
+        RawAttempt nonMatchingResult = issueFailure(
+                64L, "result-first", 101L, 208L, 500,
+                ReasonCode.INTERNAL_ERROR, BASE.plusSeconds(63));
+
+        assertThat(IssuanceInquiryCalculator.representativeAttempts(
+                List.of(matchingAttempt, nonMatchingResult)))
+                .containsExactly(nonMatchingResult);
+    }
+
+    @Test
+    void appliesHttpStatusFilterToTheAlreadySelectedRepresentative() {
+        RawAttempt matchingAttempt = new RawAttempt(
+                63L, EventType.ISSUE_ATTEMPT, "result-first", 101L, 208L,
+                null, null, null, BASE.plusSeconds(64));
+        RawAttempt nonMatchingResult = issueFailure(
+                64L, "result-first", 101L, 208L, 500,
+                ReasonCode.INTERNAL_ERROR, BASE.plusSeconds(63));
+
+        AdminIssuanceInquiryResult result = calculator.calculate(
+                source(List.of(matchingAttempt, nonMatchingResult), List.of(), List.of()),
+                query(101L, 208L, 200, null, null, 2));
+
+        assertThat(result.items()).isEmpty();
+    }
+
+    @Test
+    void keepsGlobalCursorSemanticsForAllSameTimeSourceKindBoundaries() {
+        Instant tied = BASE.plusSeconds(65);
+        AdminIssuanceInquirySource source = source(
+                List.of(
+                        issueFailure(65L, "attempt-low", 101L, 208L, 500,
+                                ReasonCode.INTERNAL_ERROR, tied),
+                        issueFailure(66L, "attempt-high", 101L, 208L, 500,
+                                ReasonCode.INTERNAL_ERROR, tied)),
+                List.of(
+                        issuance(65L, 101L, 208L, IssuanceStatus.ISSUED, tied),
+                        issuance(66L, 101L, 208L, IssuanceStatus.ISSUED, tied)),
+                List.of());
+
+        assertThat(calculator.calculate(source, query(
+                101L, 208L, null, null,
+                new InquiryPosition(tied, SourceKind.ISSUANCE, 66L), 10)).items())
+                .extracting(InquiryItem::position)
+                .containsExactly(
+                        new InquiryPosition(tied, SourceKind.ISSUANCE, 65L),
+                        new InquiryPosition(tied, SourceKind.ATTEMPT, 66L),
+                        new InquiryPosition(tied, SourceKind.ATTEMPT, 65L));
+        assertThat(calculator.calculate(source, query(
+                101L, 208L, null, null,
+                new InquiryPosition(tied, SourceKind.ISSUANCE, 65L), 10)).items())
+                .extracting(InquiryItem::position)
+                .containsExactly(
+                        new InquiryPosition(tied, SourceKind.ATTEMPT, 66L),
+                        new InquiryPosition(tied, SourceKind.ATTEMPT, 65L));
+        assertThat(calculator.calculate(source, query(
+                101L, 208L, null, null,
+                new InquiryPosition(tied, SourceKind.ATTEMPT, 66L), 10)).items())
+                .extracting(InquiryItem::position)
+                .containsExactly(new InquiryPosition(tied, SourceKind.ATTEMPT, 65L));
+        assertThat(calculator.calculate(source, query(
+                101L, 208L, null, null,
+                new InquiryPosition(tied, SourceKind.ATTEMPT, 65L), 10)).items())
+                .isEmpty();
+    }
+
+    @Test
+    void derivesPageMetadataAfterMergingSourcesThatEachHaveOnlyLimitPlusOneRows() {
+        AdminIssuanceInquirySource source = source(
+                List.of(
+                        issueFailure(67L, "attempt-new", 101L, 208L, 500,
+                                ReasonCode.INTERNAL_ERROR, BASE.plusSeconds(70)),
+                        issueFailure(68L, "attempt-old", 101L, 208L, 500,
+                                ReasonCode.INTERNAL_ERROR, BASE.plusSeconds(68))),
+                List.of(
+                        issuance(404L, 101L, 208L, IssuanceStatus.ISSUED,
+                                BASE.plusSeconds(69)),
+                        issuance(405L, 101L, 208L, IssuanceStatus.ISSUED,
+                                BASE.plusSeconds(67))),
+                List.of());
+
+        AdminIssuanceInquiryResult page = calculator.calculate(
+                source, query(101L, 208L, null, null, null, 1));
+
+        assertThat(page.items()).extracting(InquiryItem::position).containsExactly(
+                new InquiryPosition(BASE.plusSeconds(70), SourceKind.ATTEMPT, 67L));
+        assertThat(page.hasOlder()).isTrue();
+        assertThat(page.nextBefore()).isEqualTo(
+                new InquiryPosition(BASE.plusSeconds(70), SourceKind.ATTEMPT, 67L));
     }
 
     @Test

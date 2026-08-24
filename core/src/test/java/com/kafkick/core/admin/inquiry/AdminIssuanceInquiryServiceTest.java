@@ -1,6 +1,7 @@
 package com.kafkick.core.admin.inquiry;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -14,13 +15,14 @@ import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 class AdminIssuanceInquiryServiceTest {
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-23T00:00:00Z");
 
     @Test
-    void readsTimeCreatesSourceAndCalculatesExactlyOnce() {
+    void readsQueryAndSnapshotThenCalculatesExactlyOnce() {
         RecordingTimeProvider timeProvider = new RecordingTimeProvider();
         RecordingReader reader = new RecordingReader();
         AdminIssuanceInquiryResult expected = new AdminIssuanceInquiryResult(
@@ -35,11 +37,77 @@ class AdminIssuanceInquiryServiceTest {
 
         assertThat(result).isSameAs(expected);
         assertThat(timeProvider.instantCount).isEqualTo(1);
-        assertThat(reader.createCount).isEqualTo(1);
+        assertThat(reader.readCount).isEqualTo(1);
+        assertThat(reader.lastQuery).isSameAs(query);
         assertThat(reader.lastSnapshotAt).isEqualTo(SNAPSHOT_AT);
         assertThat(calculator.calculateCount).isEqualTo(1);
         assertThat(calculator.lastSource).isSameAs(reader.source);
         assertThat(calculator.lastQuery).isSameAs(query);
+    }
+
+    @Test
+    void turnsMissingMemberIntoMemberSpecificNotFound() {
+        RecordingReader reader = new RecordingReader(
+                AdminIssuanceInquiryReadResult.memberNotFound());
+        RecordingCalculator calculator = new RecordingCalculator(
+                new AdminIssuanceInquiryResult(List.of(), null, false));
+        AdminIssuanceInquiryService service = new AdminIssuanceInquiryService(
+                new TimeProvider(Clock.fixed(SNAPSHOT_AT, ZoneOffset.UTC)), reader, calculator);
+
+        assertThatThrownBy(() -> service.getInquiries(query(
+                1_001L, null, null, null, null, 50)))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode())
+                                .isEqualTo(AdminIssuanceInquiryErrorCode.MEMBER_NOT_FOUND));
+        assertThat(calculator.calculateCount).isZero();
+    }
+
+    @Test
+    void turnsMissingCouponIntoCouponSpecificNotFound() {
+        RecordingReader reader = new RecordingReader(
+                AdminIssuanceInquiryReadResult.couponNotFound());
+        RecordingCalculator calculator = new RecordingCalculator(
+                new AdminIssuanceInquiryResult(List.of(), null, false));
+        AdminIssuanceInquiryService service = new AdminIssuanceInquiryService(
+                new TimeProvider(Clock.fixed(SNAPSHOT_AT, ZoneOffset.UTC)), reader, calculator);
+
+        assertThatThrownBy(() -> service.getInquiries(query(
+                1_001L, 2_001L, null, null, null, 50)))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode())
+                                .isEqualTo(AdminIssuanceInquiryErrorCode.COUPON_NOT_FOUND));
+        assertThat(calculator.calculateCount).isZero();
+    }
+
+    @Test
+    void preservesMemberNotFoundPrecedenceWhenMemberAndCouponAreBothMissing() {
+        RecordingReader reader = new RecordingReader(
+                AdminIssuanceInquiryReadResult.memberNotFound());
+        AdminIssuanceInquiryService service = new AdminIssuanceInquiryService(
+                new TimeProvider(Clock.fixed(SNAPSHOT_AT, ZoneOffset.UTC)), reader,
+                new RecordingCalculator(new AdminIssuanceInquiryResult(List.of(), null, false)));
+
+        assertThatThrownBy(() -> service.getInquiries(query(
+                1_001L, 2_001L, null, null, null, 50)))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode())
+                                .isEqualTo(AdminIssuanceInquiryErrorCode.MEMBER_NOT_FOUND));
+    }
+
+    @Test
+    void returnsAnEmptyPageWhenAvailableSourceHasNoCandidates() {
+        AdminIssuanceInquiryService service = new AdminIssuanceInquiryService(
+                new TimeProvider(Clock.fixed(SNAPSHOT_AT, ZoneOffset.UTC)),
+                (query, snapshotAt) -> AdminIssuanceInquiryReadResult.available(
+                        new AdminIssuanceInquirySource(List.of(), List.of(), List.of())),
+                new IssuanceInquiryCalculator());
+
+        AdminIssuanceInquiryResult result = service.getInquiries(query(
+                1_001L, null, null, null, null, 50));
+
+        assertThat(result.items()).isEmpty();
+        assertThat(result.hasOlder()).isFalse();
+        assertThat(result.nextBefore()).isNull();
     }
 
     @Test
@@ -154,13 +222,27 @@ class AdminIssuanceInquiryServiceTest {
 
     private static final class RecordingReader implements AdminIssuanceInquirySourceReader {
 
-        private int createCount;
+        private final AdminIssuanceInquiryReadResult readResult;
+        private int readCount;
+        private AdminIssuanceInquiryQuery lastQuery;
         private Instant lastSnapshotAt;
         private AdminIssuanceInquirySource source;
 
+        private RecordingReader() {
+            this(null);
+        }
+
+        private RecordingReader(AdminIssuanceInquiryReadResult readResult) {
+            this.readResult = readResult;
+        }
+
         @Override
-        public AdminIssuanceInquirySource create(Instant snapshotAt) {
-            createCount++;
+        public AdminIssuanceInquiryReadResult read(
+                AdminIssuanceInquiryQuery query,
+                Instant snapshotAt
+        ) {
+            readCount++;
+            lastQuery = query;
             lastSnapshotAt = snapshotAt;
             source = new AdminIssuanceInquirySource(
                     List.of(new RawAttempt(
@@ -175,7 +257,9 @@ class AdminIssuanceInquiryServiceTest {
                             SNAPSHOT_AT)),
                     List.of(),
                     List.of());
-            return source;
+            return readResult == null
+                    ? AdminIssuanceInquiryReadResult.available(source)
+                    : readResult;
         }
     }
 

@@ -5,8 +5,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
-
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryReadResult;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySourceReader;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawHistoryLink;
@@ -16,16 +17,7 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.ReasonCode;
 
-/**
- * 실제 Repository를 대신해 세 DB 테이블 형태의 고정 문의 원천 행을 제공합니다.
- *
- * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
- * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
- *
- * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
- * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
- * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
- */
+/** 테스트가 실제 Repository 대신 명시적으로 선택하는 고정 문의 원천 fixture입니다. */
 public class AdminIssuanceInquiryMockDataFactory implements AdminIssuanceInquirySourceReader {
 
     private static final Instant FIXTURE_V1_ANCHOR = Instant.parse("2026-08-23T00:00:00Z");
@@ -33,18 +25,43 @@ public class AdminIssuanceInquiryMockDataFactory implements AdminIssuanceInquiry
     private static final Instant NEWEST_FIXED_ROW = FIXTURE_V1_ANCHOR.minus(Duration.ofMinutes(2));
 
     /**
-     * 모든 Factory와 요청에서 동일한 fixture-v1 원천 행을 반환합니다.
+     * 모든 Factory에서 동일한 fixture-v1 모집단을 만들고 요청 조건에 맞는 후보만 반환합니다.
      *
+     * @param query fixture가 지원하는 회원·쿠폰 후보 조건
      * @param snapshotAt 한 요청에서 확정한 관측 기준 시각
      * @return issue_attempts, issuances, issuance_histories 형태의 원천 행
      */
     @Override
-    public AdminIssuanceInquirySource create(Instant snapshotAt) {
+    public AdminIssuanceInquiryReadResult read(
+            AdminIssuanceInquiryQuery query,
+            Instant snapshotAt
+    ) {
+        Objects.requireNonNull(query, "query");
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         if (snapshotAt.isBefore(NEWEST_FIXED_ROW)) {
             throw new IllegalArgumentException("snapshotAt은 fixture-v1 최신 행보다 빠를 수 없습니다.");
         }
-        return new AdminIssuanceInquirySource(attempts(), issuances(), histories());
+        if (query.memberId() != 1_001L) {
+            return AdminIssuanceInquiryReadResult.memberNotFound();
+        }
+        if (query.couponId() != null
+                && (query.couponId() < 2_001L || query.couponId() > 2_006L)) {
+            return AdminIssuanceInquiryReadResult.couponNotFound();
+        }
+        return AdminIssuanceInquiryReadResult.available(new AdminIssuanceInquirySource(
+                attempts().stream()
+                        .filter(row -> matches(query, row.memberId(), row.couponId()))
+                        .toList(),
+                issuances().stream()
+                        .filter(row -> matches(query, row.memberId(), row.couponId()))
+                        .toList(),
+                histories()));
+    }
+
+    /** fixture 모집단에서 요청의 회원·선택 쿠폰 후보만 남깁니다. */
+    private static boolean matches(AdminIssuanceInquiryQuery query, long memberId, long couponId) {
+        return memberId == query.memberId()
+                && (query.couponId() == null || couponId == query.couponId());
     }
 
     /** 결과·실패·재시도·동률과 같은 issue_attempts 조회 시나리오를 만듭니다. */
