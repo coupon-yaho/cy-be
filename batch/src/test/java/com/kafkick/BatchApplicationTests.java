@@ -20,7 +20,7 @@ class BatchApplicationTests {
 
     /** API 전용 Overview 원천이 없는 Batch 전체 Context는 Overview Service 없이 기동합니다. */
     @Test
-    void contextLoads() {
+    void startsBatchContextWithoutAdminOverviewService() {
         assertThat(context.getBeansOfType(AdminOverviewService.class)).isEmpty();
     }
 

@@ -45,6 +45,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
     private final PromRangeQuery rangeQuery;
     private final Duration staleAfter;
     private final Duration totalBudget;
+    private final OverviewPrometheusProperties overviewProperties;
     private final LongSupplier nanoTime;
 
     /**
@@ -61,7 +62,27 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             Duration staleAfter,
             Duration totalBudget
     ) {
-        this(instantQuery, rangeQuery, staleAfter, totalBudget, System::nanoTime);
+        this(instantQuery, rangeQuery, staleAfter, totalBudget,
+                OverviewPrometheusProperties.defaults(), System::nanoTime);
+    }
+
+    /**
+     * 외부화한 집계 구간과 range 상한 계약을 사용하는 Overview 관측 원천을 생성합니다.
+     *
+     * @param instantQuery snapshot 평가 시각을 명시하는 instant-vector 경계
+     * @param rangeQuery 별도 matrix range 경계
+     * @param staleAfter 실제 관측 시각이 오래됐다고 판정할 기간
+     * @param totalBudget 새 질의를 시작할 수 있는 전체 기간
+     * @param overviewProperties 집계 구간과 추세 step을 제공하는 외부 설정
+     */
+    public PromOverviewObservationSource(
+            PromTimeQuery instantQuery,
+            PromRangeQuery rangeQuery,
+            Duration staleAfter,
+            Duration totalBudget,
+            OverviewPrometheusProperties overviewProperties
+    ) {
+        this(instantQuery, rangeQuery, staleAfter, totalBudget, overviewProperties, System::nanoTime);
     }
 
     /**
@@ -80,10 +101,24 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             Duration totalBudget,
             LongSupplier nanoTime
     ) {
+        this(instantQuery, rangeQuery, staleAfter, totalBudget,
+                OverviewPrometheusProperties.defaults(), nanoTime);
+    }
+
+    /** 시험 가능한 단조 시계와 외부화한 집계 계약을 함께 명시합니다. */
+    PromOverviewObservationSource(
+            PromTimeQuery instantQuery,
+            PromRangeQuery rangeQuery,
+            Duration staleAfter,
+            Duration totalBudget,
+            OverviewPrometheusProperties overviewProperties,
+            LongSupplier nanoTime
+    ) {
         this.instantQuery = Objects.requireNonNull(instantQuery, "instantQuery");
         this.rangeQuery = Objects.requireNonNull(rangeQuery, "rangeQuery");
         this.staleAfter = requirePositive(staleAfter, "staleAfter");
         this.totalBudget = requirePositive(totalBudget, "totalBudget");
+        this.overviewProperties = Objects.requireNonNull(overviewProperties, "overviewProperties");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
     }
 
@@ -118,15 +153,16 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         Map<Long, IssuanceFlowInput> openInputs;
         try {
             List<PromRangeSeries> trend = rangeQuery(
-                    budget, OverviewPrometheusContract.flowTrend(),
-                    evaluationAt.minus(OverviewPrometheusContract.TREND_WINDOW), evaluationAt,
-                    OverviewPrometheusContract.TREND_STEP);
+                    budget, OverviewPrometheusContract.flowTrend(overviewProperties.currentWindow()),
+                    evaluationAt.minus(overviewProperties.trendWindow()), evaluationAt,
+                    overviewProperties.trendStep());
             List<PromSample> lastSuccess = query(
                     budget, OverviewPrometheusContract.lastSuccessEpoch(), evaluationAt);
             List<PromSample> freshness = query(
                     budget, OverviewPrometheusContract.flowFreshnessEpoch(), evaluationAt);
             List<PromSample> publishFailures = query(
-                    budget, OverviewPrometheusContract.attemptPublishFailures(), evaluationAt);
+                    budget, OverviewPrometheusContract.attemptPublishFailures(
+                            overviewProperties.currentWindow()), evaluationAt);
             List<PromSample> publishFailureFreshness = query(
                     budget, OverviewPrometheusContract.attemptPublishFailureFreshnessEpoch(),
                     evaluationAt);
@@ -202,7 +238,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 trendByStage.get(new StageKey(couponId, OverviewPrometheusContract.ATTEMPT));
         List<PromRangePoint> successTrend =
                 trendByStage.get(new StageKey(couponId, OverviewPrometheusContract.SUCCESS));
-        Instant comparisonEnd = snapshotAt.minus(OverviewPrometheusContract.COMPARISON_OFFSET);
+        Instant comparisonEnd = snapshotAt.minus(overviewProperties.comparisonOffset());
         Double attempts = valueAt(attemptTrend, snapshotAt);
         Double successes = valueAt(successTrend, snapshotAt);
         Double comparisonSuccesses = valueAt(successTrend, comparisonEnd);
@@ -220,9 +256,9 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             observedAt = target.stockObservedAt();
         }
 
-        Instant currentStart = snapshotAt.minus(OverviewPrometheusContract.CURRENT_WINDOW);
-        Instant comparisonStart = comparisonEnd.minus(OverviewPrometheusContract.CURRENT_WINDOW);
-        Instant trendStart = snapshotAt.minus(OverviewPrometheusContract.TREND_WINDOW);
+        Instant currentStart = snapshotAt.minus(overviewProperties.currentWindow());
+        Instant comparisonStart = comparisonEnd.minus(overviewProperties.currentWindow());
+        Instant trendStart = snapshotAt.minus(overviewProperties.trendWindow());
         ConditionKind conditionKind = conditionKind(
                 target.stockAvailable(), attempts, successes, comparisonSuccesses,
                 policy.issuanceDecreaseRatio());
@@ -270,7 +306,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
     }
 
     /** attempt/success range 점을 시각으로 맞추고 성공 그래프와 보수적 조건 시작점을 만듭니다. */
-    private static TrendAlignment alignTrend(
+    private TrendAlignment alignTrend(
             List<PromRangePoint> attemptPoints,
             List<PromRangePoint> successPoints,
             Instant trendStart,
@@ -281,15 +317,15 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         Map<Instant, Double> attempts = pointCounts(attemptPoints, trendStart, trendEnd);
         Map<Instant, Double> successes = pointCounts(successPoints, trendStart, trendEnd);
         List<IssuanceBucket> buckets = new ArrayList<>();
-        for (int index = OverviewPrometheusContract.expectedTrendBuckets() - 1; index >= 0; index--) {
-            Instant bucketEnd = trendEnd.minus(OverviewPrometheusContract.TREND_STEP.multipliedBy(index));
+        for (int index = overviewProperties.expectedTrendBuckets() - 1; index >= 0; index--) {
+            Instant bucketEnd = trendEnd.minus(overviewProperties.trendStep().multipliedBy(index));
             if (attempts.containsKey(bucketEnd) && successes.containsKey(bucketEnd)) {
                 buckets.add(new IssuanceBucket(
-                        bucketEnd.minus(OverviewPrometheusContract.TREND_STEP),
+                        bucketEnd.minus(overviewProperties.trendStep()),
                         bucketEnd, successes.get(bucketEnd)));
             }
         }
-        Instant conditionStartedAt = trendEnd.minus(OverviewPrometheusContract.CURRENT_WINDOW);
+        Instant conditionStartedAt = trendEnd.minus(overviewProperties.currentWindow());
         boolean warmingUpRequired = false;
         if (conditionKind == ConditionKind.STOPPED) {
             boolean historyMissing = false;
@@ -304,8 +340,8 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 if (attempt == 0d || success != 0d) {
                     break;
                 }
-                conditionStartedAt = bucketEnd.minus(OverviewPrometheusContract.TREND_STEP);
-                bucketEnd = bucketEnd.minus(OverviewPrometheusContract.TREND_STEP);
+                conditionStartedAt = bucketEnd.minus(overviewProperties.trendStep());
+                bucketEnd = bucketEnd.minus(overviewProperties.trendStep());
             }
             Duration provenDuration = Duration.between(conditionStartedAt, trendEnd);
             boolean leftCensored = historyMissing || conditionStartedAt.equals(trendStart);
@@ -315,7 +351,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             conditionStartedAt = trendEnd;
             Instant currentEnd = trendEnd;
             while (currentEnd.isAfter(trendStart)) {
-                Instant previousEnd = currentEnd.minus(OverviewPrometheusContract.TREND_STEP);
+                Instant previousEnd = currentEnd.minus(overviewProperties.trendStep());
                 Double current = successes.get(currentEnd);
                 Double previous = successes.get(previousEnd);
                 if (current == null || previous == null) {
@@ -326,7 +362,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                         || current > previous * (1.0 - policy.issuanceDecreaseRatio())) {
                     break;
                 }
-                conditionStartedAt = currentEnd.minus(OverviewPrometheusContract.TREND_STEP);
+                conditionStartedAt = currentEnd.minus(overviewProperties.trendStep());
                 currentEnd = previousEnd;
             }
             if (conditionStartedAt.equals(trendStart)) {
@@ -369,7 +405,8 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 return missingOutcome(SourceStatus.PENDING);
             }
             List<PromSample> samples = query(
-                    budget, OverviewPrometheusContract.outcomes(), snapshotAt);
+                    budget, OverviewPrometheusContract.outcomes(
+                            overviewProperties.outcomeWindow()), snapshotAt);
             if (!onlyKnownOutcomeLabels(samples)) {
                 return missingOutcome(SourceStatus.UNAVAILABLE);
             }
@@ -397,7 +434,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             }
             Instant actualObservedAt = observedAt.get();
             return new OutcomeInput(
-                    snapshotAt.minus(OverviewPrometheusContract.OUTCOME_WINDOW), snapshotAt, counts,
+                    snapshotAt.minus(overviewProperties.outcomeWindow()), snapshotAt, counts,
                     statusAt(snapshotAt, actualObservedAt), actualObservedAt);
         } catch (PromQueryException failure) {
             logAreaFailure("O3", failure);
@@ -479,7 +516,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
             Duration successfulP99 = latencyDuration(maximum.getAsDouble());
             return new Observation<>(
                     new LatencySummary(successfulP99, null,
-                            snapshotAt.minus(OverviewPrometheusContract.LATENCY_WINDOW), snapshotAt),
+                            snapshotAt.minus(overviewProperties.latencyWindow()), snapshotAt),
                     statusAt(snapshotAt, actualObservedAt), actualObservedAt);
         } catch (PromQueryException failure) {
             logAreaFailure("latency", failure);

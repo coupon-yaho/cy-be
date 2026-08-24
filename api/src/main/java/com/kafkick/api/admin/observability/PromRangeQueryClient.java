@@ -18,8 +18,6 @@ import tools.jackson.databind.JsonNode;
 public class PromRangeQueryClient implements PromRangeQuery {
 
     private static final String QUERY_PATH = "/api/v1/query_range";
-    private static final Duration DEFAULT_MAX_RANGE = Duration.ofHours(1);
-    private static final int DEFAULT_MAX_POINTS = 1_000;
     private static final double MIN_EPOCH_SECONDS = 0d;
     private static final double MAX_EPOCH_SECONDS = 4102444800d;
     private static final String POSITIVE_INFINITY = "+Inf";
@@ -31,7 +29,8 @@ public class PromRangeQueryClient implements PromRangeQuery {
 
     /** Overview 기본 상한인 1시간·1,000 평가점을 사용하는 클라이언트를 생성합니다. */
     public PromRangeQueryClient(RestClient restClient) {
-        this(restClient, DEFAULT_MAX_RANGE, DEFAULT_MAX_POINTS);
+        this(restClient, OverviewPrometheusProperties.defaults().maxRange(),
+                OverviewPrometheusProperties.defaults().maxPoints());
     }
 
     /**

@@ -20,33 +20,42 @@ public final class OverviewPrometheusContract {
     public static final String QUANTILE = "quantile";
     public static final String ATTEMPT = "attempt";
     public static final String SUCCESS = "success";
-    static final Duration CURRENT_WINDOW = Duration.ofMinutes(1);
-    static final Duration COMPARISON_OFFSET = Duration.ofMinutes(1);
-    static final Duration TREND_WINDOW = Duration.ofMinutes(10);
-    static final Duration TREND_STEP = Duration.ofMinutes(1);
-    static final Duration OUTCOME_WINDOW = Duration.ofMinutes(5);
-    static final Duration LATENCY_WINDOW = Duration.ofSeconds(10);
-
     /** 인스턴스화를 막습니다. */
     private OverviewPrometheusContract() { }
 
     /** @return 현재 1분 attempt·success 캠페인별 증가량 질의 */
     public static String currentFlow() {
+        return currentFlow(OverviewPrometheusProperties.defaults().currentWindow());
+    }
+
+    /** 지정 집계 구간을 사용하는 attempt·success 캠페인별 증가량 질의를 만듭니다. */
+    public static String currentFlow(Duration currentWindow) {
         return "sum by (" + COUPON_ID + ", " + STAGE + ") (increase(" + FLOW_TOTAL
                 + "{" + STAGE + "=~\"" + ATTEMPT + "|" + SUCCESS + "\"}["
-                + promDuration(CURRENT_WINDOW) + "]))";
+                + promDuration(currentWindow) + "]))";
     }
 
     /** @return 직전 1분 success 캠페인별 증가량 질의 */
     public static String comparisonSuccess() {
+        OverviewPrometheusProperties defaults = OverviewPrometheusProperties.defaults();
+        return comparisonSuccess(defaults.currentWindow(), defaults.comparisonOffset());
+    }
+
+    /** 지정 집계 구간과 offset을 사용하는 직전 success 증가량 질의를 만듭니다. */
+    public static String comparisonSuccess(Duration currentWindow, Duration comparisonOffset) {
         return "sum by (" + COUPON_ID + ") (increase(" + FLOW_TOTAL
-                + "{" + STAGE + "=\"" + SUCCESS + "\"}[" + promDuration(CURRENT_WINDOW)
-                + "] offset " + promDuration(COMPARISON_OFFSET) + "))";
+                + "{" + STAGE + "=\"" + SUCCESS + "\"}[" + promDuration(currentWindow)
+                + "] offset " + promDuration(comparisonOffset) + "))";
     }
 
     /** @return 1분 단위 attempt·success 추세 질의 */
     public static String flowTrend() {
         return currentFlow();
+    }
+
+    /** 지정 버킷 구간을 사용하는 attempt·success 추세 질의를 만듭니다. */
+    public static String flowTrend(Duration currentWindow) {
+        return currentFlow(currentWindow);
     }
 
     /** @return 캠페인별 마지막 성공 이벤트 epoch 질의 */
@@ -62,8 +71,13 @@ public final class OverviewPrometheusContract {
 
     /** @return 현재 1분 attempt 이벤트 발행 실패 증가량 질의 */
     public static String attemptPublishFailures() {
+        return attemptPublishFailures(OverviewPrometheusProperties.defaults().currentWindow());
+    }
+
+    /** 지정 집계 구간을 사용하는 attempt 발행 실패 증가량 질의를 만듭니다. */
+    public static String attemptPublishFailures(Duration currentWindow) {
         return "sum(increase(" + ATTEMPT_PUBLISH_FAILURES_TOTAL + "["
-                + promDuration(CURRENT_WINDOW) + "]))";
+                + promDuration(currentWindow) + "]))";
     }
 
     /** @return attempt 발행 실패 시계열의 가장 오래된 실제 scrape 시각 질의 */
@@ -73,8 +87,13 @@ public final class OverviewPrometheusContract {
 
     /** @return 최근 5분 raw 고객 결과별 reset-aware 추정 발생 건수 질의 */
     public static String outcomes() {
+        return outcomes(OverviewPrometheusProperties.defaults().outcomeWindow());
+    }
+
+    /** 지정 집계 구간을 사용하는 raw 고객 결과별 추정 발생 건수 질의를 만듭니다. */
+    public static String outcomes(Duration outcomeWindow) {
         return "sum by (" + OUTCOME + ") (increase(" + OUTCOME_TOTAL + "["
-                + promDuration(OUTCOME_WINDOW) + "]))";
+                + promDuration(outcomeWindow) + "]))";
     }
 
     /** @return 평가 시각에 존재하는 raw outcome label을 보존하는 모집단 질의 */
@@ -97,11 +116,6 @@ public final class OverviewPrometheusContract {
     /** @return 성공 p99 시계열의 가장 오래된 실제 scrape 시각 질의 */
     public static String latencyFreshnessEpoch() {
         return "min(timestamp(" + successfulP99() + "))";
-    }
-
-    /** @return 추세 구간을 step으로 나눈 화면 버킷 수 */
-    static int expectedTrendBuckets() {
-        return Math.toIntExact(TREND_WINDOW.dividedBy(TREND_STEP));
     }
 
     /** PromQL range selector와 offset에서 사용하는 정수 분·초 표현으로 변환합니다. */

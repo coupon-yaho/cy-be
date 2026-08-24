@@ -32,7 +32,11 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
  * 관제 폴링에 그대로 걸립니다 — 화면은 1 초마다 부르므로 여기서 오래 기다리면 안 됩니다.</p>
  */
 @Configuration
-@EnableConfigurationProperties({PrometheusQueryProperties.class, PrometheusArchiveProperties.class})
+@EnableConfigurationProperties({
+        PrometheusQueryProperties.class,
+        PrometheusArchiveProperties.class,
+        OverviewPrometheusProperties.class
+})
 public class AdminObservabilityConfig {
 
     @Bean
@@ -44,11 +48,18 @@ public class AdminObservabilityConfig {
      * instant-vector 계약을 약화하지 않는 별도 matrix range client를 등록합니다.
      *
      * @param properties Prometheus 접속·타임아웃 설정
-     * @return 최대 1시간·1,000점 기본 상한을 가진 range client
+     * @param overviewProperties Overview 집계 구간과 range 조회 안전 상한
+     * @return 외부 설정의 조회 범위·평가점 상한을 사용하는 range client
      */
     @Bean
-    public PromRangeQueryClient promRangeQueryClient(PrometheusQueryProperties properties) {
-        return new PromRangeQueryClient(prometheusRestClient(properties));
+    public PromRangeQueryClient promRangeQueryClient(
+            PrometheusQueryProperties properties,
+            OverviewPrometheusProperties overviewProperties
+    ) {
+        return new PromRangeQueryClient(
+                prometheusRestClient(properties),
+                overviewProperties.maxRange(),
+                overviewProperties.maxPoints());
     }
 
     /**
@@ -57,16 +68,19 @@ public class AdminObservabilityConfig {
      * @param instantQuery Overview snapshot 평가 시각을 명시하는 instant-vector 경계
      * @param rangeQuery 별도 matrix range 경계
      * @param properties stale·전체 시작 예산 설정
+     * @param overviewProperties Overview 집계 구간과 range 조회 안전 상한
      * @return Core가 의존할 기술 중립 관측 원천
      */
     @Bean
     public OverviewObservationSource promOverviewObservationSource(
             @Qualifier("promQueryClient") PromTimeQuery instantQuery,
             PromRangeQuery rangeQuery,
-            PrometheusQueryProperties properties
+            PrometheusQueryProperties properties,
+            OverviewPrometheusProperties overviewProperties
     ) {
         return new PromOverviewObservationSource(
-                instantQuery, rangeQuery, properties.staleAfter(), properties.totalBudget());
+                instantQuery, rangeQuery, properties.staleAfter(), properties.totalBudget(),
+                overviewProperties);
     }
 
     /** API 전용 Prom 관측 원천과 Core 계산기를 기술 중립 Overview Service에 명시적으로 배선합니다. */

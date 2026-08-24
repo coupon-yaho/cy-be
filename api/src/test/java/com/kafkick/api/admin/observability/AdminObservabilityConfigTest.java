@@ -45,7 +45,15 @@ class AdminObservabilityConfigTest {
                     "observation.prometheus.connect-timeout=100ms",
                     "observation.prometheus.read-timeout=300ms",
                     "observation.prometheus.stale-after=2m",
-                    "observation.prometheus.total-budget=500ms")
+                    "observation.prometheus.total-budget=500ms",
+                    "observation.prometheus.overview.current-window=2m",
+                    "observation.prometheus.overview.comparison-offset=4m",
+                    "observation.prometheus.overview.trend-window=20m",
+                    "observation.prometheus.overview.trend-step=2m",
+                    "observation.prometheus.overview.outcome-window=15m",
+                    "observation.prometheus.overview.latency-window=30s",
+                    "observation.prometheus.overview.max-range=2h",
+                    "observation.prometheus.overview.max-points=2000")
             .withBean(TimeProvider.class, () -> new TimeProvider(Clock.systemUTC()));
 
     /** 실제 Spring context가 기존 instant client와 range client 및 기술 중립 원천을 함께 배선합니다. */
@@ -62,6 +70,19 @@ class AdminObservabilityConfigTest {
             assertThat(context.getBean(PromRangeQuery.class)).isSameAs(context.getBean(PromRangeQueryClient.class));
             assertThat(context.getBean(OverviewObservationSource.class))
                     .isInstanceOf(PromOverviewObservationSource.class);
+            OverviewPrometheusProperties overviewProperties =
+                    context.getBean(OverviewPrometheusProperties.class);
+            assertThat(overviewProperties.currentWindow()).isEqualTo(java.time.Duration.ofMinutes(2));
+            assertThat(overviewProperties.expectedTrendBuckets()).isEqualTo(10);
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(OverviewObservationSource.class), "overviewProperties"))
+                    .isSameAs(overviewProperties);
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(PromRangeQueryClient.class), "maxRange"))
+                    .isEqualTo(java.time.Duration.ofHours(2));
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(PromRangeQueryClient.class), "maxPoints"))
+                    .isEqualTo(2_000);
             assertThat(context).hasSingleBean(AdminOverviewService.class);
             assertThat(ReflectionTestUtils.getField(
                     context.getBean(AdminOverviewService.class), "observationSource"))
