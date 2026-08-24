@@ -2,9 +2,11 @@ package com.kafkick.batch.coupon.expiration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -52,6 +55,21 @@ class BatchJpaWritePathTest {
     private static final long COUPON_ROUND_ID = 10L;
     private static final long MEMBER_ID = 1L;
     private static final String CODE = "OBSJPA0000000001";
+
+    /**
+     * 시계를 고정한다. {@code Instant.now()} 로 두면 만료 대상 여부가 실행 시점에 묶이고,
+     * 그러면 이 테스트가 무엇을 증명하는지도 그때그때 달라진다. 러너는 이 시각을 {@code asOf}
+     * 로 쓰고 auditing 도 같은 시계를 본다 — 한 곳만 고정하면 둘이 어긋난다.
+     */
+    private static final Instant FIXED_NOW = Instant.parse("2026-09-01T00:00:00Z");
+
+    /** {@code TimeConfiguration} 의 {@code clock} 빈을 이 시계로 갈아 끼운다. */
+    @TestBean(name = "clock")
+    Clock clock;
+
+    static Clock clock() {
+        return Clock.fixed(FIXED_NOW, ZoneOffset.UTC);
+    }
 
     @Autowired
     private ApplicationContext context;
@@ -97,11 +115,15 @@ class BatchJpaWritePathTest {
         Map<String, Object> row = jdbcTemplate.queryForMap(
                 "SELECT created_at, updated_at FROM issuances WHERE id = ?", saved.id());
 
+        // 고정 시각과 정확히 같아야 한다. not-null 로만 두면 auditing 이 주입된 Clock 이 아니라
+        // 제 시각을 직접 부르는 경우(기본 CurrentDateTimeProvider)도 통과한다 —
+        // 그러면 회차 시각 기준이 갈라지고, 그 사실은 어디에도 안 드러난다.
+        LocalDateTime expected = LocalDateTime.ofInstant(FIXED_NOW, ZoneOffset.UTC);
         assertThat(row.get("created_at"))
                 .as("엔티티가 @CreatedDate 와 AuditingEntityListener 를 쓴다."
                         + " storage.jpa.auditing.enabled 를 끄면 기동은 되고 이 값만 빈다")
-                .isNotNull();
-        assertThat(row.get("updated_at")).isNotNull();
+                .isEqualTo(expected);
+        assertThat(row.get("updated_at")).isEqualTo(expected);
     }
 
     @Test
@@ -119,11 +141,18 @@ class BatchJpaWritePathTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT status FROM issuances WHERE id = ?", String.class, saved.id()))
                 .isEqualTo("EXPIRED");
-        assertThat(jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM issuance_histories WHERE issuance_id = ?",
-                Integer.class, saved.id()))
-                .as("이력이 없으면 만료가 언제 무슨 근거로 일어났는지 남지 않는다")
-                .isEqualTo(1);
+        Map<String, Object> history = jdbcTemplate.queryForMap(
+                """
+                SELECT event_type, from_status, to_status
+                  FROM issuance_histories
+                 WHERE issuance_id = ?
+                """, saved.id());
+        assertThat(history)
+                .as("건수만 세면 엉뚱한 이벤트가 남아도 통과한다. 만료는 ISSUED 에서 EXPIRED 로"
+                        + " 가는 EXPIRE 하나여야 한다 — 이력이 판정 근거이므로 내용이 계약이다")
+                .containsEntry("event_type", "EXPIRE")
+                .containsEntry("from_status", "ISSUED")
+                .containsEntry("to_status", "EXPIRED");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT active_count FROM coupon_stocks WHERE coupon_id = ?",
                 Integer.class, COUPON_ROUND_ID))
@@ -143,8 +172,8 @@ class BatchJpaWritePathTest {
 
     /** 만료 대상. 유효기간이 이미 지난 발급이다. */
     private Issuance expiredIssuance() {
-        Instant issuedAt = Instant.now().truncatedTo(ChronoUnit.MICROS)
-                .minus(30, ChronoUnit.DAYS);
+        // 고정 시각에서 30일 전에 발급하고 유효기간은 7일이다 — asOf 시점에는 이미 지났다.
+        Instant issuedAt = FIXED_NOW.minus(30, ChronoUnit.DAYS);
         return Issuance.issue(COUPON_ROUND_ID, MEMBER_ID, CODE,
                 MembershipGrade.GOLD, 7, issuedAt);
     }
