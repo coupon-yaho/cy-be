@@ -153,16 +153,18 @@ revision을 0으로 되돌리는 복구 수단으로 사용하지 않는다.
 전부 갖고 있고, 손으로 적은 명령은 그것을 잃는다.
 
 ```bash
-set -a; . ./.env; set +a          # DB_OBS_USERNAME · DB_OBS_PASSWORD · MYSQL_* 를 셸에 올린다
-
-docker compose exec \
-  -e MYSQL_ROOT_PASSWORD -e MYSQL_DATABASE -e DB_OBS_USERNAME -e DB_OBS_PASSWORD \
-  mysql sh /docker-entrypoint-initdb.d/20-obs-account.sh
+docker compose exec mysql sh /docker-entrypoint-initdb.d/20-obs-account.sh
 ```
 
-`compose.yml` 이 그 스크립트를 이미 `/docker-entrypoint-initdb.d/` 에 마운트하고 있어
-컨테이너 안에 그대로 있다. 몇 번을 돌려도 같은 결과다 —
-`CREATE USER IF NOT EXISTS` 뒤에 `ALTER USER` 가 붙어 있어 비밀번호도 매번 맞춰진다.
+값을 셸에 올릴 필요가 없다. `compose.yml` 의 mysql 서비스가 `env_file: .env` 로
+`DB_OBS_USERNAME` · `DB_OBS_PASSWORD` · `MYSQL_*` 를 이미 갖고 있고, 스크립트도
+같은 파일이 `/docker-entrypoint-initdb.d/` 에 마운트돼 컨테이너 안에 그대로 있다.
+
+> ⚠️ **`. ./.env` 로 소싱하지 말 것.** 그러면 값 안의 `$(...)` 가 호스트 셸에서 실행된다.
+> 비밀번호 관리 도구가 만든 값에 그런 문자가 들어갈 수 있다.
+
+몇 번을 돌려도 같은 결과다 — `CREATE USER IF NOT EXISTS` 뒤에 `ALTER USER` 가 붙어 있어
+비밀번호도 매번 맞춰진다.
 
 **GRANT 는 스키마 단위여야 한다.** 테이블 단위로 열거하면 새 테이블이 생길 때마다 조용히
 빠진다 — 배치 이력 조회가 읽는 `BATCH_JOB_EXECUTION` · `BATCH_JOB_INSTANCE` 는 Spring Batch 가
