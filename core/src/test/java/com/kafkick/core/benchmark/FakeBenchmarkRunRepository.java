@@ -1,6 +1,7 @@
 package com.kafkick.core.benchmark;
 
 import java.time.Instant;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -23,7 +24,16 @@ import com.kafkick.core.support.exception.BusinessException;
 class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
 
     private final Map<Long, Row> rows = new LinkedHashMap<>();
+    private final Clock clock;
     private long sequence;
+
+    FakeBenchmarkRunRepository() {
+        this(Clock.systemUTC());
+    }
+
+    FakeBenchmarkRunRepository(Clock clock) {
+        this.clock = java.util.Objects.requireNonNull(clock);
+    }
 
     /**
      * {@code markFinalized} 가 0행을 낸 <b>직후</b>에 끼어드는 다른 인스턴스를 흉내 낸다.
@@ -141,8 +151,11 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
 
     @Override
     public java.util.Optional<String> claimArchive(long id, java.time.Duration lease) {
+        if (lease == null || lease.compareTo(java.time.Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("archive claim lease는 1초 이상이어야 한다");
+        }
         Row row = rows.get(id);
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         boolean expired = row != null && row.archiveStatus == BenchmarkArchiveStatus.IN_PROGRESS
             && row.archiveClaimedAt != null && row.archiveClaimedAt.isBefore(now.minus(lease));
         if (row == null || (row.archiveStatus != BenchmarkArchiveStatus.NONE

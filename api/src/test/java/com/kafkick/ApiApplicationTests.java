@@ -48,7 +48,8 @@ class ApiApplicationTests {
     void archiveBeanDoesNotDependOnConditionalEvaluationOrder() throws Exception {
         assertThat(AdminObservabilityConfig.class.getDeclaredMethod(
             "runTimeseriesArchiver", BenchmarkRunRepository.class,
-            PromQueryClient.class, ArchiveStore.class, java.time.Duration.class, int.class)
+            PromQueryClient.class, ArchiveStore.class, java.time.Duration.class,
+            int.class, int.class)
             .getAnnotation(ConditionalOnBean.class)).isNull();
         assertThat(BenchmarkRunConfiguration.class.getDeclaredMethod(
             "benchmarkRunService", BenchmarkRunRepository.class,

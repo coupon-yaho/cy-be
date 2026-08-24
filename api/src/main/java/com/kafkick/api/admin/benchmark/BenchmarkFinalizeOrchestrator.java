@@ -40,7 +40,8 @@ public class BenchmarkFinalizeOrchestrator {
     public BenchmarkCommandAcceptedResponse finalizeRun(long benchmarkRunId) {
         if (runs == null || archiver == null) {
             throw new com.kafkick.core.support.exception.BusinessException(
-                com.kafkick.api.admin.support.AdminApiErrorCode.NOT_IMPLEMENTED);
+                com.kafkick.core.support.exception.CommonErrorCode.INTERNAL_ERROR,
+                "Benchmark 확정 의존성을 사용할 수 없다");
         }
         BenchmarkRun finalized = runs.finalizeRun(benchmarkRunId);
         BenchmarkArchiveStatus archiveStatus;

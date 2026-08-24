@@ -104,6 +104,23 @@ class TopologyPreflightControllerTest {
     }
 
     @Test
+    void malformedGaugeIntervalBecomesViolationInsteadOfServerError() {
+        MockEnvironment environment = new MockEnvironment()
+            .withProperty("batch.scheduling.enabled", "false")
+            .withProperty("observation.domain-gauge.enabled", "true")
+            .withProperty("observation.domain-gauge.aggregate-interval-ms", "not-a-number")
+            .withProperty("observation.domain-gauge.coupon-id", "10");
+
+        ResponseEntity<PreflightResponse> response =
+            new TopologyPreflightController(environment).preflight(10L);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().violations()).extracting("key", "actual")
+            .contains(org.assertj.core.groups.Tuple.tuple(
+                "observation.domain-gauge.aggregate-interval-ms", "-1"));
+    }
+
+    @Test
     void disabledDomainGaugeClosesThePreflightGate() {
         MockEnvironment environment = new MockEnvironment()
             .withProperty("batch.scheduling.enabled", "false")

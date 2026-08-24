@@ -14,7 +14,7 @@ public class RunTimeseriesArchiver {
     private static final org.slf4j.Logger log =
         org.slf4j.LoggerFactory.getLogger(RunTimeseriesArchiver.class);
 
-    static final int WRITE_CHUNK_SIZE = 500;
+    public static final int DEFAULT_WRITE_CHUNK_SIZE = 500;
     static final Duration MAX_CLAIM_LEASE = Duration.ofDays(365);
 
     private final BenchmarkRunRepository runs;
@@ -22,10 +22,18 @@ public class RunTimeseriesArchiver {
     private final ArchiveStore store;
     private final Duration claimLease;
     private final int maxArchiveSamples;
+    private final int writeChunkSize;
 
     public RunTimeseriesArchiver(
         BenchmarkRunRepository runs, RangeSource source, ArchiveStore store, Duration claimLease,
         int maxArchiveSamples
+    ) {
+        this(runs, source, store, claimLease, maxArchiveSamples, DEFAULT_WRITE_CHUNK_SIZE);
+    }
+
+    public RunTimeseriesArchiver(
+        BenchmarkRunRepository runs, RangeSource source, ArchiveStore store, Duration claimLease,
+        int maxArchiveSamples, int writeChunkSize
     ) {
         this.runs = Objects.requireNonNull(runs);
         this.source = Objects.requireNonNull(source);
@@ -41,6 +49,10 @@ public class RunTimeseriesArchiver {
             throw new IllegalArgumentException("archive 표본 상한은 양수여야 한다");
         }
         this.maxArchiveSamples = maxArchiveSamples;
+        if (writeChunkSize <= 0) {
+            throw new IllegalArgumentException("archive 쓰기 청크 크기는 양수여야 한다");
+        }
+        this.writeChunkSize = writeChunkSize;
     }
 
     /** FAILED 회차를 포함해 완료된 관측 구간을 다시 복제한다. */
@@ -72,7 +84,7 @@ public class RunTimeseriesArchiver {
                 }
             }
 
-            store.replaceForRun(benchmarkRunId, claimToken, samples, WRITE_CHUNK_SIZE);
+            store.replaceForRun(benchmarkRunId, claimToken, samples, writeChunkSize);
         } catch (RuntimeException failure) {
             String message = failure.getMessage();
             String reason = message == null || message.isBlank()

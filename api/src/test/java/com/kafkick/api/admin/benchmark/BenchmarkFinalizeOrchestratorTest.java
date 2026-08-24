@@ -83,13 +83,13 @@ class BenchmarkFinalizeOrchestratorTest {
     }
 
     @Test
-    void missingDependenciesAreReportedAsNotImplemented() {
+    void missingDependenciesAreReportedAsInternalError() {
         BenchmarkFinalizeOrchestrator unavailable = new BenchmarkFinalizeOrchestrator(null, archiver);
 
         assertThatThrownBy(() -> unavailable.finalizeRun(7L))
             .isInstanceOfSatisfying(BusinessException.class, exception ->
                 assertThat(exception.getErrorCode())
-                    .isEqualTo(com.kafkick.api.admin.support.AdminApiErrorCode.NOT_IMPLEMENTED));
+                    .isEqualTo(com.kafkick.core.support.exception.CommonErrorCode.INTERNAL_ERROR));
     }
 
     @Test

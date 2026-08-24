@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -206,6 +207,39 @@ class ApiTopologyValidatorTest {
         assertThat(measured.topology()).isNull();
         assertThat(measured.violations()).extracting("key")
             .contains("hikari.pool.total", "mysql.max-connections", "datasource.separation");
+    }
+
+    @Test
+    void mysqlRuntimeQueryFailureClosesTheGateWithAViolation() {
+        operational.setMaximumPoolSize(12);
+        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class))
+            .willThrow(new DataAccessResourceFailureException("db unavailable"));
+
+        MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
+            .validate(10L, 1, 20_000, 10_000, null, null);
+
+        assertThat(measured.topology()).isNull();
+        assertThat(measured.violations()).extracting("key", "actual")
+            .contains(org.assertj.core.groups.Tuple.tuple(
+                "mysql.max-connections", "unavailable"));
+        verifyNoInteractions(batch);
+    }
+
+    @Test
+    void stockQueryFailureClosesTheGateWithAViolation() {
+        operational.setMaximumPoolSize(12);
+        given(jdbcTemplate.queryForObject("SELECT @@max_connections", Integer.class)).willReturn(50);
+        given(jdbcTemplate.queryForList(
+            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", 10L))
+            .willThrow(new DataAccessResourceFailureException("db unavailable"));
+
+        MeasuredTopology measured = validator(tomcat(60, 19_900, 100), 1)
+            .validate(10L, 1, 20_000, 10_000, null, null);
+
+        assertThat(measured.topology()).isNull();
+        assertThat(measured.violations()).extracting("key", "actual")
+            .contains(org.assertj.core.groups.Tuple.tuple("coupon-stock", "unavailable"));
+        verifyNoInteractions(batch);
     }
 
     @Test

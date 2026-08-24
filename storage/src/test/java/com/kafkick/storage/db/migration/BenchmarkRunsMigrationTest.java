@@ -369,6 +369,18 @@ class BenchmarkRunsMigrationTest {
         }
 
         @Test
+        @DisplayName("claim 시각과 token을 모두 채운 IN_PROGRESS는 허용된다")
+        void inProgressWithCompleteClaimIdentityIsAccepted() throws SQLException {
+            insert(finalized());
+
+            assertThatCode(() -> executeUpdate(
+                "UPDATE benchmark_runs SET archive_status='IN_PROGRESS',"
+                    + " archive_failure_reason=NULL, archive_claimed_at=NOW(6),"
+                    + " archive_claim_token='00000000-0000-4000-8000-000000000001'"))
+                .doesNotThrowAnyException();
+        }
+
+        @Test
         @DisplayName("IN_PROGRESS 밖의 상태에는 claim 식별자가 남을 수 없다")
         void completedStatusCannotCarryClaimIdentity() throws SQLException {
             insert(finalized());

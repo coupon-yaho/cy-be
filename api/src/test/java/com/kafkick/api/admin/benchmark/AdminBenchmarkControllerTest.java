@@ -212,7 +212,7 @@ class AdminBenchmarkControllerTest {
     }
 
     @Test
-    void benchmarkStartLeavesProtocolWindowValidationToTheConfiguredGate() throws Exception {
+    void benchmarkStartDelegatesObservationWindowWithoutBeanValidationRejection() throws Exception {
         mockMvc.perform(post("/api/v1/admin/benchmarks/start")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(validStartJson().replace(

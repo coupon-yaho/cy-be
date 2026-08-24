@@ -293,6 +293,13 @@ class BenchmarkRunServiceTest {
         }
 
         @Test
+        void fakeRepositoryRejectsSubsecondArchiveLeaseLikeJdbcRepository() {
+            assertThatThrownBy(() -> repository.claimArchive(1L, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1초 이상");
+        }
+
+        @Test
         @DisplayName("DONE 은 표본 적재 트랜잭션 밖에서 기록할 수 없다")
         void doneCannotBypassTheArchiveStoreTransaction() {
             BenchmarkRun finalized = finalizedRun("V3-MAIN-01");

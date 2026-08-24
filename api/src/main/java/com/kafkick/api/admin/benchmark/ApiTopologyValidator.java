@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.tomcat.autoconfigure.TomcatServerProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataAccessException;
 import org.springframework.beans.factory.annotation.Value;
 
 import com.zaxxer.hikari.HikariDataSource;
@@ -130,10 +131,27 @@ public class ApiTopologyValidator {
         JdbcTemplate jdbc = jdbcTemplate;
         int hikariPoolTotal = operational == null ? 0 : multiplyTotal(
             violations, "hikari.pool.total", operational.getMaximumPoolSize(), expectedAppReplicas);
-        Integer mysqlMaxConnections = jdbc == null ? null
-            : jdbc.queryForObject("SELECT @@max_connections", Integer.class);
-        List<java.util.Map<String, Object>> stockRows = jdbc == null ? List.of() : jdbc.queryForList(
-            "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", couponId);
+        Integer mysqlMaxConnections = null;
+        boolean mysqlQueryFailed = false;
+        List<java.util.Map<String, Object>> stockRows = List.of();
+        boolean stockQueryFailed = false;
+        if (jdbc != null) {
+            try {
+                mysqlMaxConnections = jdbc.queryForObject("SELECT @@max_connections", Integer.class);
+            } catch (DataAccessException failure) {
+                mysqlQueryFailed = true;
+                violations.add(new Violation("mysql.max-connections", "readable runtime value",
+                    "unavailable", failure.getClass().getSimpleName()));
+            }
+            try {
+                stockRows = jdbc.queryForList(
+                    "SELECT total_quantity, active_count FROM coupon_stocks WHERE coupon_id = ?", couponId);
+            } catch (DataAccessException failure) {
+                stockQueryFailed = true;
+                violations.add(new Violation("coupon-stock", "readable stock row",
+                    "unavailable", failure.getClass().getSimpleName()));
+            }
+        }
         Stock stock = stockRows.isEmpty() ? null : new Stock(
             ((Number) stockRows.get(0).get("total_quantity")).intValue(),
             ((Number) stockRows.get(0).get("active_count")).intValue());
@@ -160,9 +178,11 @@ public class ApiTopologyValidator {
         }
         mismatch(violations, "hikari.pool.total", expectedHikariPoolTotal, hikariPoolTotal,
             "API Hikari 풀 총량이 OBS-14b 목표와 다르다");
-        mismatch(violations, "mysql.max-connections", expectedMysqlMaxConnections,
-            mysqlMaxConnections, "MySQL 연결 상한이 AB-G3와 다르다");
-        if (actualStockTotal == null) {
+        if (!mysqlQueryFailed) {
+            mismatch(violations, "mysql.max-connections", expectedMysqlMaxConnections,
+                mysqlMaxConnections, "MySQL 연결 상한이 AB-G3와 다르다");
+        }
+        if (!stockQueryFailed && actualStockTotal == null) {
             violations.add(new Violation(
                 "coupon-stock.total-quantity", "existing coupon", "missing",
                 "시작 요청의 쿠폰 재고를 확인할 수 없다"));

@@ -43,10 +43,11 @@ class HttpBatchTopologyPreflightTest {
     void readTimeoutBecomesViolationInsteadOfHoldingStartWorker() throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         ExecutorService executor = Executors.newSingleThreadExecutor();
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         server.setExecutor(executor);
         server.createContext("/internal/v1/benchmarks/preflight", exchange -> {
             try {
-                Thread.sleep(500);
+                release.await();
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
             }
@@ -65,6 +66,7 @@ class HttpBatchTopologyPreflightTest {
                 .containsExactly(org.assertj.core.groups.Tuple.tuple(
                     "batch.preflight", "unavailable"));
         } finally {
+            release.countDown();
             server.stop(0);
             executor.shutdownNow();
         }

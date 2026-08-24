@@ -54,6 +54,20 @@ class RunTimeseriesArchiverTest {
     }
 
     @Test
+    void passesConfiguredWriteChunkSizeToTheStore() {
+        BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
+        BenchmarkRun benchmarkRun = run(BenchmarkArchiveStatus.NONE);
+        when(runs.findById(7)).thenReturn(Optional.of(benchmarkRun));
+        when(runs.claimArchive(eq(7L), eq(CLAIM_LEASE))).thenReturn(Optional.of(CLAIM_TOKEN));
+        RecordingStore store = new RecordingStore();
+
+        new RunTimeseriesArchiver(
+            runs, new CapturingSource(), store, CLAIM_LEASE, MAX_SAMPLES, 37).archive(7);
+
+        assertThat(store.chunkSize).isEqualTo(37);
+    }
+
+    @Test
     void completedArchiveCannotBeReplacedByASecondInvocation() {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun run = run(BenchmarkArchiveStatus.NONE);
@@ -86,7 +100,7 @@ class RunTimeseriesArchiverTest {
 
         verify(store, never()).replaceForRun(
             eq(7L), eq(CLAIM_TOKEN), org.mockito.ArgumentMatchers.anyList(),
-            eq(RunTimeseriesArchiver.WRITE_CHUNK_SIZE));
+            eq(RunTimeseriesArchiver.DEFAULT_WRITE_CHUNK_SIZE));
         verify(runs).failArchive(eq(7L), eq(CLAIM_TOKEN),
                 org.mockito.ArgumentMatchers.contains("STOCK_REMAINING"));
     }
@@ -294,7 +308,7 @@ class RunTimeseriesArchiverTest {
     }
 
     @Test
-    void staleInProgressArchiveCanBeReclaimedAfterRestart() {
+    void retryProceedsWhenArchiveIsStillInProgress() {
         BenchmarkRunRepository runs = mock(BenchmarkRunRepository.class);
         BenchmarkRun inProgress = run(BenchmarkArchiveStatus.IN_PROGRESS);
         when(runs.findById(7)).thenReturn(Optional.of(inProgress));
@@ -372,10 +386,12 @@ class RunTimeseriesArchiverTest {
     private static final class RecordingStore implements RunTimeseriesArchiver.ArchiveStore {
         private final List<Sample> inserted = new ArrayList<>();
         private String claimToken;
+        private int chunkSize;
         @Override public void replaceForRun(
             long benchmarkRunId, String claimToken, List<Sample> samples, int chunkSize
         ) {
             this.claimToken = claimToken;
+            this.chunkSize = chunkSize;
             inserted.clear();
             inserted.addAll(samples);
         }

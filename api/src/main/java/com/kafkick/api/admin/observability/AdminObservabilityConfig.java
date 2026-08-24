@@ -146,7 +146,10 @@ public class AdminObservabilityConfig {
             @org.springframework.beans.factory.annotation.Value(
                 "${benchmark.archive.claim-lease:5m}") java.time.Duration claimLease,
             @org.springframework.beans.factory.annotation.Value(
-                "${benchmark.archive.max-samples:10000}") int maxSamples) {
-        return new RunTimeseriesArchiver(runs, source, store, claimLease, maxSamples);
+                "${benchmark.archive.max-samples:10000}") int maxSamples,
+            @org.springframework.beans.factory.annotation.Value(
+                "${benchmark.archive.write-chunk-size:500}") int writeChunkSize) {
+        return new RunTimeseriesArchiver(
+            runs, source, store, claimLease, maxSamples, writeChunkSize);
     }
 }

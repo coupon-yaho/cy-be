@@ -40,8 +40,8 @@ public class TopologyPreflightController {
         Topology topology = new Topology(
             environment.getProperty("batch.scheduling.enabled", Boolean.class, true),
             environment.getProperty("observation.domain-gauge.enabled", Boolean.class, false),
-            environment.getProperty(
-                "observation.domain-gauge.aggregate-interval-ms", Long.class, -1L),
+            parseLong(environment.getProperty(
+                "observation.domain-gauge.aggregate-interval-ms"), -1L),
             parseCouponId(gaugeCoupon),
             couponId);
         ValidationResult result = validator.validate(topology);
@@ -55,6 +55,15 @@ public class TopologyPreflightController {
             return Long.valueOf(value);
         } catch (NumberFormatException ignored) {
             return null;
+        }
+    }
+
+    private static long parseLong(String value, long fallback) {
+        if (value == null || value.isBlank()) return fallback;
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ignored) {
+            return fallback;
         }
     }
 

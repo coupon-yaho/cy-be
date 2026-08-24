@@ -82,6 +82,7 @@ benchmark:
   archive:
     claim-lease: ${BENCHMARK_ARCHIVE_CLAIM_LEASE:5m}
     max-samples: ${BENCHMARK_ARCHIVE_MAX_SAMPLES:10000}
+    write-chunk-size: ${BENCHMARK_ARCHIVE_WRITE_CHUNK_SIZE:500}
   topology:
     app-replicas: ${BENCHMARK_APP_REPLICAS:4}
     tomcat-workers-total: ${BENCHMARK_TOMCAT_WORKERS_TOTAL:60}
