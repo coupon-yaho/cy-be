@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.ToLongFunction;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
@@ -41,6 +42,14 @@ public class AdminAnalyticsMockDataFactory {
             new HourlyIssueAggregate(LocalDate.parse("2026-01-05"), 13, 1L, 101L, 7L),
             new HourlyIssueAggregate(LocalDate.parse("2026-01-06"), 18, 2L, 102L, 8L),
             new HourlyIssueAggregate(LocalDate.parse("2026-02-10"), 20, 1L, 101L, 15L));
+
+    private static final List<DatedIssuanceStatusAggregate> ISSUANCE_STATUSES = List.of(
+            new DatedIssuanceStatusAggregate(
+                    LocalDate.parse("2026-01-05"), 1L, 101L, 6L, 3L, 2L, 1L),
+            new DatedIssuanceStatusAggregate(
+                    LocalDate.parse("2026-02-10"), 1L, 101L, 4L, 1L, 1L, 2L),
+            new DatedIssuanceStatusAggregate(
+                    LocalDate.parse("2026-01-06"), 2L, 102L, 3L, 3L, 2L, 2L));
 
     /** 요청 조건에 맞는 검증 메타데이터와 원천 집계 행을 생성합니다. */
     public AdminAnalyticsDataset create(AdminAnalyticsQuery query, Instant observedAt) {
@@ -108,12 +117,49 @@ public class AdminAnalyticsMockDataFactory {
         return CAMPAIGNS.stream()
                 .filter(campaign -> campaign.overlaps(query.from(), query.to()))
                 .filter(campaign -> matches(campaign.brandId(), campaign.couponId(), query))
-                .map(campaign -> campaign.couponId() == 101L
-                        ? new IssuanceStatusAggregate(
-                                1L, 101L, query.from(), query.to(), 20L, 10L, 4L, 3L, 3L)
-                        : new IssuanceStatusAggregate(
-                                2L, 102L, query.from(), query.to(), 10L, 3L, 3L, 2L, 2L))
+                .map(campaign -> statusRow(campaign, query))
                 .toList();
+    }
+
+    /** 한 캠페인의 조회 기간 내 발급 건만 현재 상태별로 합산합니다. */
+    private static IssuanceStatusAggregate statusRow(
+            CampaignRef campaign,
+            AdminAnalyticsQuery query
+    ) {
+        List<DatedIssuanceStatusAggregate> matched = ISSUANCE_STATUSES.stream()
+                .filter(row -> row.brandId() == campaign.brandId()
+                        && row.couponId() == campaign.couponId())
+                .filter(row -> inRange(row.issuedOn(), query))
+                .toList();
+        long currentlyIssued = sum(matched, DatedIssuanceStatusAggregate::currentlyIssued);
+        long used = sum(matched, DatedIssuanceStatusAggregate::used);
+        long cancelled = sum(matched, DatedIssuanceStatusAggregate::cancelled);
+        long expired = sum(matched, DatedIssuanceStatusAggregate::expired);
+        long totalIssued = Math.addExact(
+                Math.addExact(currentlyIssued, used),
+                Math.addExact(cancelled, expired));
+        return new IssuanceStatusAggregate(
+                campaign.brandId(),
+                campaign.couponId(),
+                query.from(),
+                query.to(),
+                totalIssued,
+                currentlyIssued,
+                used,
+                cancelled,
+                expired);
+    }
+
+    /** 날짜가 걸러진 상태 원천 수량을 overflow를 숨기지 않고 합산합니다. */
+    private static long sum(
+            List<DatedIssuanceStatusAggregate> rows,
+            ToLongFunction<DatedIssuanceStatusAggregate> extractor
+    ) {
+        long total = 0L;
+        for (DatedIssuanceStatusAggregate row : rows) {
+            total = Math.addExact(total, extractor.applyAsLong(row));
+        }
+        return total;
     }
 
     /** 값과 실제 집계 시각을 가진 가용 Observation을 만듭니다. */
@@ -131,4 +177,15 @@ public class AdminAnalyticsMockDataFactory {
         return (query.brandId() == null || query.brandId() == brandId)
                 && (query.couponId() == null || query.couponId() == couponId);
     }
+
+    /** Mock 발급일과 집계 시점 현재 상태별 수량을 함께 보존하는 원천 행입니다. */
+    private record DatedIssuanceStatusAggregate(
+            LocalDate issuedOn,
+            long brandId,
+            long couponId,
+            long currentlyIssued,
+            long used,
+            long cancelled,
+            long expired
+    ) { }
 }

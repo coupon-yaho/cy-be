@@ -31,7 +31,7 @@ public record AdminAnalyticsProperties(
         }
     }
 
-    /** 기존 조회 기간 검증 테스트가 Mock 비활성 기본 설정을 간단히 구성하도록 제공합니다. */
+    /** 기존 조회 기간 검증 테스트가 Mock 활성 기본 설정을 간단히 구성하도록 제공합니다. */
     public AdminAnalyticsProperties(int maxRangeYears) {
         this(maxRangeYears, true, null);
     }

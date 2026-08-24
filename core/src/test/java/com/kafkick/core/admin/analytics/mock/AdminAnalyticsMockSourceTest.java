@@ -44,5 +44,40 @@ class AdminAnalyticsMockSourceTest {
         assertThat(dataset.issuanceStatuses().value())
                 .allMatch(row -> row.windowFrom().equals(query.from())
                         && row.windowTo().equals(query.to()));
+        assertThat(dataset.issuanceStatuses().value())
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.totalIssued()).isEqualTo(12L);
+                    assertThat(row.currentlyIssued()).isEqualTo(6L);
+                    assertThat(row.used()).isEqualTo(3L);
+                    assertThat(row.cancelled()).isEqualTo(2L);
+                    assertThat(row.expired()).isEqualTo(1L);
+                });
+    }
+
+    /** 발급 원천 행이 없는 기간에는 과거 고정 수량을 재사용하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("Mock Source는 조회 기간에 발급된 쿠폰이 없으면 상태 분포 수량을 0으로 반환한다")
+    void returnsZeroStatusCountsForEmptyPeriod() {
+        AdminAnalyticsMockSource source = new AdminAnalyticsMockSource(
+                new AdminAnalyticsMockDataFactory(), OBSERVED_AT);
+        AdminAnalyticsQuery query = new AdminAnalyticsQuery(
+                LocalDate.parse("2026-07-01"),
+                LocalDate.parse("2026-07-31"),
+                1L,
+                101L,
+                ZoneId.of("Asia/Seoul"));
+
+        AdminAnalyticsDataset dataset = source.load(query);
+
+        assertThat(dataset.issuanceStatuses().value())
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.totalIssued()).isZero();
+                    assertThat(row.currentlyIssued()).isZero();
+                    assertThat(row.used()).isZero();
+                    assertThat(row.cancelled()).isZero();
+                    assertThat(row.expired()).isZero();
+                });
     }
 }

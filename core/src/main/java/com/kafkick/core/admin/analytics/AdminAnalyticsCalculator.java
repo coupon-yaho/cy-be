@@ -12,6 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateObservation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.BrandRef;
@@ -25,6 +27,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsResult.Observation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsResult.StatusCount;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 
 /** 기간별 원천 집계 행을 월별 추이·히트맵·현재 상태 분포로 변환합니다. */
 public final class AdminAnalyticsCalculator {
@@ -66,9 +69,14 @@ public final class AdminAnalyticsCalculator {
         }
         Map<Long, BrandRef> brands = new LinkedHashMap<>();
         for (BrandRef brand : dataset.catalog().brands()) {
+            if (query.brandId() != null && !query.brandId().equals(brand.brandId())) {
+                continue;
+            }
             boolean selected = query.brandId() != null && query.brandId().equals(brand.brandId());
             boolean hasOverlappingCampaign = dataset.catalog().campaigns().stream()
                     .anyMatch(campaign -> campaign.brandId() == brand.brandId()
+                            && (query.couponId() == null
+                            || query.couponId().equals(campaign.couponId()))
                             && campaign.overlaps(query.from(), query.to()));
             if (selected || hasOverlappingCampaign) {
                 brands.put(brand.brandId(), brand);
@@ -91,9 +99,16 @@ public final class AdminAnalyticsCalculator {
         }
 
         Map<BrandMonth, Long> totals = new HashMap<>();
+        Set<Long> responseBrandIds = brands.stream()
+                .map(BrandRef::brandId)
+                .collect(Collectors.toUnmodifiableSet());
         for (DailyIssueAggregate row : source.value()) {
             if (!inRange(row.date(), query) || !matchesFilter(row.brandId(), row.couponId(), query)) {
                 continue;
+            }
+            if (!responseBrandIds.contains(row.brandId())) {
+                // 합계에만 남는 브랜드가 생기지 않도록 카탈로그 기간과 어긋난 원천을 명시적으로 거부합니다.
+                throw sourceContractMismatch("월별 집계 행의 브랜드가 응답 모집단에 없습니다.");
             }
             BrandMonth key = new BrandMonth(row.brandId(), YearMonth.from(row.date()));
             totals.merge(key, row.issueCount(), Math::addExact);
@@ -209,11 +224,12 @@ public final class AdminAnalyticsCalculator {
         long total = 0L;
         EnumMap<IssuanceStatus, Long> counts = zeroStatusCounts();
         for (IssuanceStatusAggregate row : source.value()) {
-            if (!row.windowFrom().equals(query.from()) || !row.windowTo().equals(query.to())) {
-                throw new IllegalArgumentException("상태 분포 집계 기간이 요청 기간과 일치하지 않습니다.");
-            }
             if (!matchesFilter(row.brandId(), row.couponId(), query)) {
                 continue;
+            }
+            if (!row.windowFrom().equals(query.from()) || !row.windowTo().equals(query.to())) {
+                // 필터를 통과한 현재 요청 대상에만 동일 기간으로 집계됐다는 계약을 적용합니다.
+                throw sourceContractMismatch("상태 분포 집계 기간이 요청 기간과 일치하지 않습니다.");
             }
             total = Math.addExact(total, row.totalIssued());
             merge(counts, IssuanceStatus.ISSUED, row.currentlyIssued());
@@ -269,6 +285,11 @@ public final class AdminAnalyticsCalculator {
     private static boolean matchesFilter(long brandId, long couponId, AdminAnalyticsQuery query) {
         return (query.brandId() == null || query.brandId() == brandId)
                 && (query.couponId() == null || query.couponId() == couponId);
+    }
+
+    /** 원천 계약 위반을 외부에 안정적인 분석 오류 코드로 노출합니다. */
+    private static BusinessException sourceContractMismatch(String detail) {
+        return new BusinessException(AdminAnalyticsErrorCode.SOURCE_CONTRACT_MISMATCH, detail);
     }
 
     /** 브랜드와 월을 함께 묶는 안정적인 월별 집계 키입니다. */

@@ -6,6 +6,7 @@ import java.util.Objects;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 
 /** 원천 가용성과 관측 경과 시간으로 관리자 분석의 최신성을 판정합니다. */
 public final class AdminAnalyticsFreshnessPolicy {
@@ -49,7 +50,9 @@ public final class AdminAnalyticsFreshnessPolicy {
     private SourceStatus evaluateAvailable(Instant observedAt, Instant evaluatedAt) {
         if (staleAfter == null) {
             // 실제 Source가 연결됐는데 최신성 설정이 없다면 정상값으로 오인하지 않고 즉시 드러냅니다.
-            throw new IllegalStateException("AVAILABLE 분석에는 staleAfter 설정이 필요합니다.");
+            throw new BusinessException(
+                    AdminAnalyticsErrorCode.SOURCE_CONTRACT_MISMATCH,
+                    "AVAILABLE 분석에는 staleAfter 설정이 필요합니다.");
         }
         Objects.requireNonNull(observedAt, "observedAt");
         Duration age = Duration.between(observedAt, evaluatedAt);

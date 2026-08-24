@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 
 /** 관리자 분석 최신성 정책의 임계 시각과 값 미보유 상태 변환을 검증합니다. */
 class AdminAnalyticsFreshnessPolicyTest {
@@ -52,7 +53,8 @@ class AdminAnalyticsFreshnessPolicyTest {
     void pendingOnlyPolicyRejectsAvailableValue() {
         assertThatThrownBy(() -> AdminAnalyticsFreshnessPolicy.pendingOnly().evaluate(
                 AggregateAvailability.AVAILABLE, EVALUATED_AT, EVALUATED_AT))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("staleAfter");
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
+                .isEqualTo("ANALYTICS-001");
     }
 }

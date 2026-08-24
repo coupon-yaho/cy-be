@@ -1,6 +1,7 @@
 package com.kafkick.core.admin.analytics;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.DayOfWeek;
 import java.time.Duration;
@@ -23,6 +24,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.HourlyIssueAggrega
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.IssuanceStatusAggregate;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.exception.BusinessException;
 
 /** 관리자 브랜드 분석 계산의 기간·빈 버킷·상태 분포 계약을 검증합니다. */
 class AdminAnalyticsCalculatorTest {
@@ -120,7 +122,10 @@ class AdminAnalyticsCalculatorTest {
     @DisplayName("분석별 AVAILABLE과 PENDING 및 STALE 상태를 독립적으로 보존한다")
     void preservesIndependentObservationStates() {
         AggregateObservation<List<HourlyIssueAggregate>> oldHeatmap = new AggregateObservation<>(
-                List.of(), AggregateAvailability.AVAILABLE, EVALUATED_AT.minus(Duration.ofHours(2)));
+                List.of(new HourlyIssueAggregate(
+                        LocalDate.parse("2026-01-19"), 13, 1L, 101L, 5L)),
+                AggregateAvailability.AVAILABLE,
+                EVALUATED_AT.minus(Duration.ofHours(2)));
         AggregateObservation<List<IssuanceStatusAggregate>> pending = AggregateObservation.pending();
 
         AdminAnalyticsResult result = calculator.calculate(QUERY, dataset(
@@ -128,6 +133,11 @@ class AdminAnalyticsCalculatorTest {
 
         assertThat(result.brandTrends().status()).isEqualTo(SourceStatus.NO_TRAFFIC);
         assertThat(result.hourlyHeatmap().status()).isEqualTo(SourceStatus.STALE);
+        assertThat(result.hourlyHeatmap().value())
+                .containsExactly(new AdminAnalyticsResult.HourlyHeatmapCell(
+                        DayOfWeek.MONDAY, 13, 5L));
+        assertThat(result.hourlyHeatmap().observedAt())
+                .isEqualTo(EVALUATED_AT.minus(Duration.ofHours(2)));
         assertThat(result.issuanceStatusDistribution().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(result.issuanceStatusDistribution().value()).isNull();
     }
@@ -144,6 +154,134 @@ class AdminAnalyticsCalculatorTest {
         assertThat(result.brandTrends().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(result.brandTrends().value()).isNull();
         assertThat(result.brandTrends().observedAt()).isNull();
+    }
+
+    /** 브랜드와 캠페인 필터가 세 분석 원천에 같은 기준으로 적용되는지 검증합니다. */
+    @Test
+    @DisplayName("브랜드와 캠페인 필터는 선택한 캠페인의 집계만 계산한다")
+    void appliesBrandAndCouponFilters() {
+        AdminAnalyticsQuery filteredQuery = new AdminAnalyticsQuery(
+                QUERY.from(), QUERY.to(), 1L, 101L, QUERY.zoneId());
+        AdminAnalyticsDataset dataset = twoCampaignDataset(
+                available(List.of(
+                        new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 1L, 101L, 12L),
+                        new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 2L, 102L, 8L))),
+                available(List.of(
+                        new HourlyIssueAggregate(LocalDate.parse("2026-01-19"), 13, 1L, 101L, 5L),
+                        new HourlyIssueAggregate(LocalDate.parse("2026-01-20"), 18, 2L, 102L, 8L))),
+                available(List.of(
+                        status(1L, 101L, filteredQuery, 12L, 6L, 3L, 2L, 1L),
+                        status(2L, 102L, filteredQuery, 8L, 3L, 2L, 2L, 1L))));
+
+        AdminAnalyticsResult result = calculator.calculate(filteredQuery, dataset, EVALUATED_AT);
+
+        assertThat(result.brands()).extracting(BrandRef::brandId).containsExactly(1L);
+        assertThat(result.brandTrends().value())
+                .extracting(AdminAnalyticsResult.BrandTrendPoint::brandId)
+                .containsOnly(1L);
+        assertThat(result.hourlyHeatmap().value())
+                .filteredOn(cell -> cell.issueCount() > 0L)
+                .containsExactly(new AdminAnalyticsResult.HourlyHeatmapCell(
+                        DayOfWeek.MONDAY, 13, 5L));
+        assertThat(result.issuanceStatusDistribution().value().totalIssued()).isEqualTo(12L);
+    }
+
+    /** 브랜드와 캠페인 필터가 각각 단독으로도 모집단을 제한하는지 검증합니다. */
+    @Test
+    @DisplayName("브랜드와 캠페인 단독 필터는 각각 해당 모집단만 반환한다")
+    void appliesBrandAndCouponFiltersIndependently() {
+        AdminAnalyticsDataset dataset = twoCampaignDataset(
+                available(List.of(
+                        new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 1L, 101L, 12L),
+                        new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 2L, 102L, 8L))),
+                available(List.of()),
+                available(List.of(
+                        status(1L, 101L, QUERY, 12L, 6L, 3L, 2L, 1L),
+                        status(2L, 102L, QUERY, 8L, 3L, 2L, 2L, 1L))));
+
+        AdminAnalyticsResult brandResult = calculator.calculate(
+                new AdminAnalyticsQuery(
+                        QUERY.from(), QUERY.to(), 1L, null, QUERY.zoneId()),
+                dataset,
+                EVALUATED_AT);
+        AdminAnalyticsResult couponResult = calculator.calculate(
+                new AdminAnalyticsQuery(
+                        QUERY.from(), QUERY.to(), null, 102L, QUERY.zoneId()),
+                dataset,
+                EVALUATED_AT);
+
+        assertThat(brandResult.brands()).extracting(BrandRef::brandId).containsExactly(1L);
+        assertThat(brandResult.issuanceStatusDistribution().value().totalIssued()).isEqualTo(12L);
+        assertThat(couponResult.brands()).extracting(BrandRef::brandId).containsExactly(2L);
+        assertThat(couponResult.issuanceStatusDistribution().value().totalIssued()).isEqualTo(8L);
+    }
+
+    /** 선택하지 않은 캠페인의 기간 계약은 현재 요청 계산에 영향을 주지 않는지 검증합니다. */
+    @Test
+    @DisplayName("상태 집계 기간은 요청 필터를 통과한 행에만 검증한다")
+    void validatesStatusWindowAfterQueryFilter() {
+        AdminAnalyticsQuery filteredQuery = new AdminAnalyticsQuery(
+                QUERY.from(), QUERY.to(), 1L, 101L, QUERY.zoneId());
+        AdminAnalyticsDataset dataset = twoCampaignDataset(
+                available(List.of()),
+                available(List.of()),
+                available(List.of(
+                        status(1L, 101L, filteredQuery, 12L, 6L, 3L, 2L, 1L),
+                        status(2L, 102L, new AdminAnalyticsQuery(
+                                LocalDate.parse("2025-01-01"),
+                                LocalDate.parse("2025-01-31"), null, null, QUERY.zoneId()),
+                                8L, 3L, 2L, 2L, 1L))));
+
+        AdminAnalyticsResult result = calculator.calculate(filteredQuery, dataset, EVALUATED_AT);
+
+        assertThat(result.issuanceStatusDistribution().value().totalIssued()).isEqualTo(12L);
+    }
+
+    /** 선택된 상태 집계 행의 기간이 요청과 다르면 안정적인 분석 오류를 반환하는지 검증합니다. */
+    @Test
+    @DisplayName("선택된 상태 집계 기간이 요청과 다르면 원천 계약 오류로 거부한다")
+    void rejectsSelectedStatusWindowMismatch() {
+        AdminAnalyticsQuery otherWindow = new AdminAnalyticsQuery(
+                LocalDate.parse("2025-01-01"),
+                LocalDate.parse("2025-01-31"),
+                null,
+                null,
+                QUERY.zoneId());
+        AdminAnalyticsDataset dataset = dataset(
+                available(List.of()),
+                available(List.of()),
+                available(List.of(status(
+                        1L, 101L, otherWindow, 8L, 3L, 2L, 2L, 1L))));
+
+        assertThatThrownBy(() -> calculator.calculate(QUERY, dataset, EVALUATED_AT))
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
+                .isEqualTo("ANALYTICS-001");
+    }
+
+    /** 응답 모집단 밖 집계 행이 정상 합계에만 반영되는 모순을 차단하는지 검증합니다. */
+    @Test
+    @DisplayName("월별 집계 행의 브랜드가 응답 모집단 밖이면 원천 계약 오류로 거부한다")
+    void rejectsMonthlyAggregateOutsideResponsePopulation() {
+        AdminAnalyticsDataset dataset = new AdminAnalyticsDataset(
+                AnalyticsSourceType.MOCK,
+                new CatalogSnapshot(
+                        AggregateAvailability.AVAILABLE,
+                        List.of(new BrandRef(1L, "브랜드"), new BrandRef(2L, "기간 밖 브랜드")),
+                        List.of(
+                                new CampaignRef(101L, 1L,
+                                        LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
+                                new CampaignRef(102L, 2L,
+                                        LocalDate.parse("2025-01-01"), LocalDate.parse("2025-12-31")))),
+                available(List.of(new DailyIssueAggregate(
+                        LocalDate.parse("2026-01-15"), 2L, 102L, 8L))),
+                available(List.of()),
+                available(List.of()));
+
+        assertThatThrownBy(() -> calculator.calculate(QUERY, dataset, EVALUATED_AT))
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
+                .isEqualTo("ANALYTICS-001");
     }
 
     private static AdminAnalyticsDataset dataset(
@@ -166,6 +304,27 @@ class AdminAnalyticsCalculatorTest {
                 statuses);
     }
 
+    /** 필터 경계 테스트에 사용할 두 브랜드·캠페인 Dataset을 만듭니다. */
+    private static AdminAnalyticsDataset twoCampaignDataset(
+            AggregateObservation<List<DailyIssueAggregate>> daily,
+            AggregateObservation<List<HourlyIssueAggregate>> hourly,
+            AggregateObservation<List<IssuanceStatusAggregate>> statuses
+    ) {
+        return new AdminAnalyticsDataset(
+                AnalyticsSourceType.MOCK,
+                new CatalogSnapshot(
+                        AggregateAvailability.AVAILABLE,
+                        List.of(new BrandRef(1L, "브랜드1"), new BrandRef(2L, "브랜드2")),
+                        List.of(
+                                new CampaignRef(101L, 1L,
+                                        LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
+                                new CampaignRef(102L, 2L,
+                                        LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")))),
+                daily,
+                hourly,
+                statuses);
+    }
+
     private static IssuanceStatusAggregate status(
             long total,
             long issued,
@@ -173,16 +332,22 @@ class AdminAnalyticsCalculatorTest {
             long cancelled,
             long expired
     ) {
+        return status(1L, 101L, QUERY, total, issued, used, cancelled, expired);
+    }
+
+    /** 임의의 브랜드·캠페인·기간에 대한 상태 집계 행을 만듭니다. */
+    private static IssuanceStatusAggregate status(
+            long brandId,
+            long couponId,
+            AdminAnalyticsQuery query,
+            long total,
+            long issued,
+            long used,
+            long cancelled,
+            long expired
+    ) {
         return new IssuanceStatusAggregate(
-                1L,
-                101L,
-                QUERY.from(),
-                QUERY.to(),
-                total,
-                issued,
-                used,
-                cancelled,
-                expired);
+                brandId, couponId, query.from(), query.to(), total, issued, used, cancelled, expired);
     }
 
     private static <T> AggregateObservation<T> available(T value) {
