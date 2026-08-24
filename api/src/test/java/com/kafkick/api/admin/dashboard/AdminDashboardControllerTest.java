@@ -91,7 +91,7 @@ class AdminDashboardControllerTest {
     @Test
     @DisplayName("쿠폰 지표 조회는 window 없이 요청하면 400 실패 봉투를 반환한다")
     void couponMetricsRejectsMissingWindow() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 1L))
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics").param("couponId", "1"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(400));
@@ -101,7 +101,9 @@ class AdminDashboardControllerTest {
     @Test
     @DisplayName("쿠폰 지표 조회는 요청 window로 계산한 상세 Mock 결과를 반환한다")
     void couponMetricsReturnsCalculatedMockResponse() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 101L).param("window", "5m"))
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", "101")
+                        .param("window", "5m"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.couponId").value(101))
@@ -118,7 +120,8 @@ class AdminDashboardControllerTest {
     @Test
     @DisplayName("쿠폰 지표 조회는 없는 캠페인에 COMMON-002를 반환한다")
     void couponMetricsReturns404ForUnknownCoupon() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/coupons/{couponId}/metrics", 999_999L)
+        mockMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", "999999")
                         .param("window", "1m"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))

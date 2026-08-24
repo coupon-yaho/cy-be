@@ -7,7 +7,6 @@ import java.time.ZoneId;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -91,7 +90,7 @@ public class AdminDashboardController {
     /**
      * 특정 쿠폰 회차의 재고·발급 진행률·대기열·보유 상태 지표를 지정된 관측 구간으로 조회합니다.
      *
-     * <p>{@code couponId}는 캠페인 회차 식별자이며 양수만 허용합니다. {@code window}는
+     * <p>{@code couponId}는 캠페인 회차 식별자이며 양수만 허용하는 필수 쿼리 파라미터입니다. {@code window}는
      * {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다. 현재는 Overview와 같은 Mock 모집단의
      * 원천 수량을 Core Service가 계산하며, 후속 실제 원천 연결 뒤에도 같은 응답 계약을 유지합니다.</p>
      *
@@ -101,9 +100,9 @@ public class AdminDashboardController {
      * @return 계산한 쿠폰 운영 지표 성공 응답 봉투
      * @throws BusinessException Overview 모집단에 쿠폰 ID가 없는 경우
      */
-    @GetMapping("/coupons/{couponId}/metrics")
+    @GetMapping("/coupon-metrics")
     public ResponseEnvelope<CouponMetricsResponse> couponMetrics(
-            @PathVariable @Positive(message = "couponId는 양수여야 합니다.") Long couponId,
+            @RequestParam @Positive(message = "couponId는 양수여야 합니다.") Long couponId,
             @RequestParam MetricsWindow window,
             Caller caller) {
         return ResponseEnvelope.success(CouponMetricsResponse.from(
