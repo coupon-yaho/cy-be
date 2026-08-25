@@ -27,7 +27,7 @@ import org.springframework.transaction.annotation.Isolation;
  *       {@code ExpireScheduler} 가 {@code asOf} 를 분 단위로 자르는 근거가 그것이었다</li>
  *   <li>{@code JobExecutionAlreadyRunningException} ·
  *       {@code JobInstanceAlreadyCompleteException} 을 잡는 갈래가 도달 불가능해진다</li>
- *   <li>{@code V2__batch_metadata.sql} 이 만든 아홉 테이블이 영원히 비어 있고,
+ *   <li>{@code V11__batch_metadata.sql} 이 만든 아홉 테이블이 영원히 비어 있고,
  *       "언제 몇 건을 넘겼나" 를 볼 곳이 없다. 알림 규칙이 안내하는
  *       {@code BATCH_STEP_EXECUTION.WRITE_COUNT} 조회도 항상 0행이다</li>
  * </ul>
@@ -60,16 +60,22 @@ import org.springframework.transaction.annotation.Isolation;
  * 지는 쪽은 {@code DeadlockLoserDataAccessException} 을 받아
  * {@code ExpireScheduler} 의 ERROR 갈래로 나간다.
  *
- * <p>그래서 <b>내려서 명시한다.</b> 중복 방지는 {@code V2__batch_metadata.sql} 의
+ * <p>그래서 <b>내려서 명시한다.</b> 중복 방지는 {@code V11__batch_metadata.sql} 의
  * {@code JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)} 가 하고, 두 번째 INSERT 가 1062 로 거부된다.
  * 그 인덱스를 지우면 두 노드가 같은 {@code asOf} 로 각자 인스턴스를 만든다.
  *
- * <p><b>{@code V2__batch_metadata.sql} 의 머리말은 낡았다.</b> 그 파일은
+ * <p><b>{@code V11__batch_metadata.sql} 의 머리말은 낡았다.</b> 그 파일은
  * {@code spring.batch.jdbc.initialize-schema: never} 를 근거로 대는데 <b>Boot 4.1 에 그
  * 프로퍼티 그룹이 없다</b>({@code BatchProperties} 의 중첩 클래스가 {@code Job(name)} 하나뿐이다).
  * 그리고 그 파일이 없어도 <b>기동은 성공한다</b> — 첫 잡 실행에서
  * {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 로 죽는다. 이미 적용된 마이그레이션이라
  * 체크섬 때문에 손대지 않고 정정을 여기 둔다.
+ *
+ * <p><b>그 파일의 첫 줄도 이 계보에서는 사실이 아니다.</b> {@code "기존 쿠폰 마이그레이션 뒤에
+ * 적용하는"} 이라고 적혀 있는데, 여기서는 {@code V1} 바로 뒤에 돈다 — 그 문장은 {@code main}
+ * 기준이다. <b>파일은 고치지 않는다</b>: {@code main} 과 바이트가 같아야 머지 후 체크섬이
+ * 안 깨진다. 그래서 정정을 파일 밖인 여기 둔다({@code MySqlContainerConfig} 가 같은 이유로
+ * 같은 일을 한다).
  *
  * <p><b>{@code JobOperator} 가 동기로 돌아야 한다 — 그런데 그것을 여기서 못 박지 않는다.</b>
  * {@code BatchRegistrar} 는 이름이 {@code taskExecutor} 인 빈 <b>정의가 있으면</b> 그것을 쓰고,

@@ -8,7 +8,7 @@
 --    -1 하므로 범위를 벗어나는 값이 의도적으로 들어갑니다. 시드 저장소의
 --    ddl/11_constraints_clean.sql 과 ddl/12_constraints_corrupt.sql 이 같은 방식으로 갈라 둡니다.
 --    cy-be 테스트에서 그 모양을 재현하는 것은
---    storage/src/testFixtures/resources/db/corrupt/V900__drop_clean_only_constraints.sql 입니다.
+--    storage/src/testFixtures/resources/db/corrupt/V9999999999__drop_clean_only_constraints.sql 입니다.
 --
 -- ⚠️ active_count 는 누적 발급 수가 아니라 현재 보유량(ISSUED + USED)입니다.
 --    누적으로 읽으면 취소가 쌓일 때 이 제약이 거짓으로 터집니다.

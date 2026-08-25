@@ -19,7 +19,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  *
  * <p><b>존재 확인만으로는 부족합니다.</b> 제약이 있되 강제되지 않는 상태가 MySQL 에 실재합니다 —
  * {@code CHECK} 는 {@code NOT ENFORCED} 로 만들 수 있고 UNIQUE 인덱스는 비유니크로 다시
- * 만들 수 있습니다. 그러면 마이그레이션도 {@code V900} 도 형태 검사도 전부 초록인데
+ * 만들 수 있습니다. 그러면 마이그레이션도 {@code V9999999999} 도 형태 검사도 전부 초록인데
  * <b>CLEAN 에 오염이 조용히 들어갑니다.</b>
  *
  * <p>"정상셋에서 V2 검출이 나올 수 없다" 는 이 프로젝트의 주장이 전적으로 이 셋의 강제력에
@@ -58,7 +58,7 @@ class CleanSchemaConstraintTest {
     }
 
     /**
-     * <b>{@code V5__stock_range_check.sql} 의 유일한 존재 증명이다.</b> 이 단언이 없으면
+     * <b>{@code V2026082504__stock_range_check.sql} 의 유일한 존재 증명이다.</b> 이 단언이 없으면
      * 그 마이그레이션이 무엇을 하는지 확인하는 코드가 저장소에 하나도 없다.
      *
      * <p><b>{@code DataIntegrityViolationException} 이 아니다.</b> MySQL 의 CHECK 위반(3819)은

@@ -83,14 +83,14 @@ class SchemaPresenceGuardTest {
      *
      * <p>메타만 빈 상태는 <b>정상 절차에서 실제로 생긴다</b> — 검증용 셋은 cy-seed 의
      * {@code ddl/} 로 만들어지는데 거기에 {@code BATCH_*} 가 하나도 없다. 그때 필요한 조치는
-     * "api 를 먼저 띄워라" 가 아니라 {@code V2__batch_metadata.sql} 을 붓는 것이다.
+     * "api 를 먼저 띄워라" 가 아니라 {@code V11__batch_metadata.sql} 을 붓는 것이다.
      */
     @Test
-    @DisplayName("메타만 없으면 V2 를 부으라고 한다 — api 재배포가 아니다")
+    @DisplayName("메타만 없으면 V11__batch_metadata.sql 을 부으라고 한다 — api 재배포가 아니다")
     void tellsToApplyBatchMetadataWhenOnlyMetaIsMissing() {
         assertThatThrownBy(() -> new SchemaPresenceGuard(
                 missing(List.of("BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION"))).run(null))
-                .hasMessageContaining("V2__batch_metadata.sql")
+                .hasMessageContaining("V11__batch_metadata.sql")
                 .as("데이터 테이블은 멀쩡한데 api 를 다시 띄우게 하면 안 된다")
                 .hasMessageNotContaining("api 를 먼저 띄워");
     }

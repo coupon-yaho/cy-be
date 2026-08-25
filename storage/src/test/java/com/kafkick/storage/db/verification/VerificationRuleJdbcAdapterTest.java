@@ -617,7 +617,7 @@ class VerificationRuleJdbcAdapterTest {
     }
 
     /**
-     * <b>{@code V4__coupon_stock_precision.sql} 을 되돌리면 이 테스트가 빨개진다.</b>
+     * <b>{@code V2026082503__coupon_stock_precision.sql} 을 되돌리면 이 테스트가 빨개진다.</b>
      * {@code datetime(0)} 에서는 {@code .6} 이 <b>올림</b>돼 +1초가 되므로 첫 단언이 뒤집힌다.
      *
      * <p>그 마이그레이션이 막는 것은 둘 다 침묵 실패다 — 올림이면 정상 데이터인데 실행이 거부되고,

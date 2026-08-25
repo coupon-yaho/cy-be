@@ -8,7 +8,7 @@
 --   cy-seed/ddl/11_constraints_clean.sql  uk_coupon_code · uk_email_hash (10_constraints_common)
 --
 -- 이름이 갈리면 **같은 스크립트를 두 스키마에 못 돌린다.** 실제로
--- V900__drop_clean_only_constraints.sql 이 `DROP INDEX code` 라고 적어야 했는데,
+-- V9999999999__drop_clean_only_constraints.sql 이 `DROP INDEX code` 라고 적어야 했는데,
 -- 시드가 만든 CORRUPT DB 에서는 그 이름이 없어 같은 문장이 실패한다.
 --
 -- V1 을 직접 고치지 않는다 — 이미 적용된 마이그레이션의 체크섬을 바꾸면 Flyway 가 거부한다.

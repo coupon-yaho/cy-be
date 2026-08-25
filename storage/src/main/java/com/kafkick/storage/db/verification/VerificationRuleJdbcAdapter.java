@@ -37,7 +37,7 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * 만들어지는데 거기에 {@code BATCH_*} 가 하나도 없습니다. 데이터 넷은 다 있고 메타만
      * 없는 상태가 정상 절차에서 실제로 생깁니다.
      *
-     * <p>아홉 개 전부가 아니라 <b>넷만</b> 봅니다. {@code V2__batch_metadata.sql} 은 원본
+     * <p>아홉 개 전부가 아니라 <b>넷만</b> 봅니다. {@code V11__batch_metadata.sql} 은 원본
      * 그대로라 부분 적용되는 경로가 없어, 이 넷이 있으면 나머지도 있습니다. 넷째
      * ({@code BATCH_JOB_EXECUTION_PARAMS})는 CY-368 이 더했습니다 — {@code nextAttempt} 가
      * 그 테이블을 읽으므로 접수 경로의 필수 의존이 됐습니다.
@@ -45,7 +45,7 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
     private static final List<String> DATA_TABLES =
             List.of("issuances", "issuance_histories", "verification_runs", "coupon_stocks");
 
-    /** {@code V2__batch_metadata.sql} 이 만듭니다. 없으면 잡 실행 시점에 SQL 에러로 죽습니다. */
+    /** {@code V11__batch_metadata.sql} 이 만듭니다. 없으면 잡 실행 시점에 SQL 에러로 죽습니다. */
     private static final List<String> BATCH_META_TABLES = List.of(
             "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION",
             // CY-368 이 이 테이블을 **접수 경로의 필수 의존**으로 승격시켰다 —

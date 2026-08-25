@@ -184,12 +184,12 @@ batch 범위 밖으로 나갔다. 판정 기준의 예시로는 그대로 유효
 > **아직 있지만 `@Deprecated(forRemoval)`** 이다(바이트코드로 확인) — 이 저장소는
 > `JobOperator` 를 쓴다.
 
-메타 테이블은 `V2__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
+메타 테이블은 `V11__batch_metadata.sql` 이 만든다. `spring-batch-core` 6.0.4 원본 그대로이고,
 `spring.batch.jdbc.*` 는 **Boot 4.1 에 존재하지 않는 키다.** 이 파일이 없어도 **기동은 성공하고**,
 첫 잡 실행에서 `Table 'BATCH_JOB_INSTANCE' doesn't exist` 로 죽는다.
 
-보조 인덱스 둘은 `V14`·`V15` 가 만든다 — 셋을 묶어 "배치 메타 마이그레이션 셋" 이라 부르고
-절차는 `docs/14` 에 있다. `V2` 누락은 기동 가드가 잡지만 **인덱스 둘이 없으면 기동도 동작도
+보조 인덱스 둘은 `V2026082513`·`V2026082514` 이 만든다 — 셋을 묶어 "배치 메타 마이그레이션 셋" 이라 부르고
+절차는 `docs/14` 에 있다. `V11__batch_metadata.sql` 누락은 기동 가드가 잡지만 **인덱스 둘이 없으면 기동도 동작도
 통과한다** — 가드가 테이블만 보기 때문이다.
 
 ---
@@ -947,7 +947,7 @@ ck_stock_range            유형 1(+1) · 3(-1) — 재고를 범위 밖으로
 정의가 cy-be 에 있다는 것과 인스턴스를 누가 만드느냐는 다른 얘기다.
 
 cy-be 는 그 모양을 테스트에서 재현할 뿐이라
-`storage/src/testFixtures/resources/db/corrupt/V900__drop_clean_only_constraints.sql` 에 둔다 —
+`storage/src/testFixtures/resources/db/corrupt/V9999999999__drop_clean_only_constraints.sql` 에 둔다 —
 `main` 에 두면 jar 에 실려 **cy-be 가 CORRUPT 스키마의 두 번째 주인처럼 보이고**, 둘이 어긋나도
 아무도 모르게 된다. 쓰는 쪽은 `@CorruptRepositoryTest` 이고 Flyway 로케이션 한 줄만 다르다.
 
@@ -956,7 +956,7 @@ cy-be 는 그 모양을 테스트에서 재현할 뿐이라
 > 애초에 없어 FK 를 걸 때 MySQL 이 자동 생성하는데, 여기서는 있는 것을 떼는 순서라 손으로 만들어 준다.
 
 `ck_stock_range` 는 `V1__init_schema.sql:289` 가 문서로 적어만 두고 실제 DDL 이 빠져 있었다.
-`V5__stock_range_check.sql` 로 CLEAN 경로에 세운다 — 불변식을 DB 제약으로 표현한다는
+`V2026082504__stock_range_check.sql` 로 CLEAN 경로에 세운다 — 불변식을 DB 제약으로 표현한다는
 PRD 설계 원칙 1번이고, 적어만 두고 안 건 것은 원칙을 어긴 것이다.
 
 ### V1 은 V3 와 정반대로 드라이빙을 잡는다
@@ -1071,7 +1071,7 @@ SILVER·GOLD 가 위반이다. 테스트가 그 마스크를 못 박고 있다.
 **`grades` 에 없는 등급 문자열도 위반이다.** 그래서 `LEFT JOIN` 이다 — `INNER JOIN` 이면 그 행이
 조용히 빠져 미검출이 된다. 다만 CLEAN 스키마에서는 FK(`V1__init_schema.sql:641`)가 그 상태를
 물리적으로 막아 **검출 테스트를 여기서 쓸 수 없다.** `uk_coupon_member` 가 V2 를 막는 것과 같은 부류다.
-**다만 그 FK 는 `V900` 이 떼지 않는다** — 시드 저장소의 CORRUPT 도 등급 FK 는 그대로 둔다.
+**다만 그 FK 는 `V9999999999` 이 떼지 않는다** — 시드 저장소의 CORRUPT 도 등급 FK 는 그대로 둔다.
 그래서 지금도 그 FK 가 있다는 것을 테스트가 고정한다. 누가 떼면 빨개지고,
 그것이 V6 검출 테스트를 붙이라는 신호다.
 

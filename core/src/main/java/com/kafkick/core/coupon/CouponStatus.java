@@ -18,7 +18,7 @@ package com.kafkick.core.coupon;
  * {@code WHERE}·{@code SET} 에 들어가는 값이라 바인딩할 자리는 아니지만, 손으로 적으면
  * 열거형과 <b>코드로 이어지지 않고</b> 그 상태에서 이 열거형은 죽은 코드입니다.
  *
- * <p><b>DB 도 값 집합을 강제합니다</b> — {@code V16} 의 {@code ck_coupon_status}.
+ * <p><b>DB 도 값 집합을 강제합니다</b> — {@code V2026082515} 의 {@code ck_coupon_status}.
  * 없으면 회차 생성이 {@code 'PENDING'} 을 넣어도 INSERT 가 통과하고, 전이는 그 회차를
  * 영원히 안 열고 대기 게이지도 안 셉니다 — <b>알림도 없이 회차가 안 열립니다.</b>
  *

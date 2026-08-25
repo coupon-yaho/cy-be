@@ -83,7 +83,7 @@ coupon-yaho
 │   │   └── config/                      JPA Auditing
 │   ├── src/main/resources
 │   │   ├── storage.yml.example          DataSource·JPA·Flyway 공통 설정
-│   │   └── db/migration/                Flyway DDL (V1__*.sql)
+│   │   └── db/migration/                Flyway DDL — V1 + V<YYYYMMDD><NN>__*.sql (연번은 금지)
 │   └── src/testFixtures/java/…/db       테스트 컨테이너 설정, @RepositoryTest
 │
 │   ※ entity/repository/mapper 3분할은 JPA 도메인만이다. 검증·만료는 300만~534만 행을
@@ -146,10 +146,27 @@ DB 이름을 빠뜨린 것인지 셋을 가른다.
 남지 않으므로 **로컬 실험용으로만** 쓴다.
 
 > 검증용 셋(`coupon_clean`·`coupon_corrupt`)은 cy-seed 로 만드는데 거기에는 Spring Batch
-> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V2__batch_metadata.sql` 과 인덱스
-> 둘(`V14__ix_batch_job_execution_lookup.sql` · `V15__ix_batch_job_execution_history.sql`)을
+> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V11__batch_metadata.sql` 과 인덱스
+> 둘(`V2026082513__ix_batch_job_execution_lookup.sql` · `V2026082514__ix_batch_job_execution_history.sql`)을
 > 따로 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
 > **인덱스는 기동 가드가 못 본다** — 빠뜨려도 통과하고 나중에 지표·정리 잡에서만 드러난다.
+
+> ### ⚠️ 이 브랜치를 처음 받았다면 DB 를 비우고 시작한다
+>
+> 마이그레이션 **버전 번호가 전부 바뀌었다**(연번 → 날짜형). 이유는 이 계보와 `main` 이
+> `V2`~`V15` 열넷을 서로 다른 뜻으로 쓰고 있었기 때문이다 — 그대로 머지되면 Flyway 가
+> 같은 버전 둘을 보고 기동을 거부한다.
+>
+> **그래서 옛 번호로 적용된 DB 는 그대로 못 쓴다.** `flyway_schema_history` 에 남은 버전이
+> 지금 파일들과 안 맞아 체크섬 검증(`validate-on-migrate: true`)에서 막히고, 통과시켜도
+> 이미 있는 인덱스를 다시 만들려다 `1061 Duplicate key name` 으로 죽는다.
+> `clean-disabled: true` 라 `flyway clean` 도 막혀 있다.
+>
+> ```bash
+> docker compose -f base.yml down -v     # 볼륨까지 지운다
+> docker compose -f base.yml up -d
+> ./gradlew :api:bootRun                 # 새 번호로 처음부터 적용된다
+> ```
 
 **둘로 가른 것은 k6 측정 때문이다.** 부하 중에는 배치가 재고를 건드리면 안 되는데, 그 정지
 수단이 설정이 아니라 컨테이너다 — `base.yml` 이 한 글자도 안 바뀌어야 부하 비교표의

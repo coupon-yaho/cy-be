@@ -178,7 +178,7 @@ SQL
 }
 
 echo; echo "── LAST_EXPIRED_ID · 이미 EXPIRED 150,000 누적 / 이번 대상 5,000 ──"
-boundary_probe no  "① 현재 (V11 인덱스만)"
+boundary_probe no  "① 현재 (IDX(status,expires_at) 만)"
 boundary_probe yes "② + (updated_at, id) 인덱스"
 
 # ── 후보 ≫ LIMIT 축 ─────────────────────────────────────────────────────────
@@ -227,7 +227,7 @@ for c in 1000 2000 5000 20000 50000; do limit_probe $c; done
 # 위 boundary_probe 는 EXPIRED 75% 라는 극단에서 쟀다. 실제 시드는 15% 다
 # (cy-seed/seedgen/config.py 의 STATUS_MIX). 비율이 다르면 옵티마이저 선택이 달라지므로
 # 시연 데이터 그대로의 분포에서 한 번 더 잰다. docs/12 §5 의 마지막 표가 여기서 나온다.
-seed_shape_probe() {  # $1 = V12 여부(yes/no)
+seed_shape_probe() {  # $1 = IDX(updated_at,id) 여부(yes/no)
   docker exec -i $C mysql -proot t >/dev/null 2>&1 <<'SQL'
 SET SESSION cte_max_recursion_depth = 1000000;
 DROP TABLE IF EXISTS issuances;
@@ -248,7 +248,7 @@ SQL
   [ "$1" = "yes" ] && docker exec -i $C mysql -proot -N t >/dev/null 2>&1 \
     <<<"CREATE INDEX idx_issuance_updated_at ON issuances (updated_at, id)"
   docker exec -i $C mysql -proot -N t >/dev/null 2>&1 <<<"ANALYZE TABLE issuances"
-  printf "  V12 %-4s → 읽은 행 %s\n" "$1" "$(docker exec -i $C mysql -proot -N t 2>/dev/null <<'SQL' | sed -n '2p'
+  printf "  IDX(updated_at,id) %-4s → 읽은 행 %s\n" "$1" "$(docker exec -i $C mysql -proot -N t 2>/dev/null <<'SQL' | sed -n '2p'
 SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
 UPDATE issuances SET status='EXPIRED', updated_at='2026-01-15 09:03:00'
  WHERE status='ISSUED' AND expires_at < '2026-08-19'

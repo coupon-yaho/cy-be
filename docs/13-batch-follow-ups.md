@@ -129,7 +129,7 @@
 ### 검증 (완료)
 
 - **락 범위·스캔 축** — `ExpirationLockScopeTest.keepsScanBoundedWhenExclusionFiltersCandidates`
-  가 제외 목록이 **채워진** 상태로 락과 읽은 행을 잰다. 제외 술어가 `V11 (status, expires_at)`
+  가 제외 목록이 **채워진** 상태로 락과 읽은 행을 잰다. 제외 술어가 `V2026082510 (status, expires_at)`
   선택을 흔들면 스캔 축이 깨진다
 - **읽기 문장이 락을 안 잡는다** — `readOnlyQueriesTakeNoLocks`. 주석으로만 적혀 있으면
   누가 `FOR SHARE` 를 붙여도 초록이라, `performance_schema.data_locks` 로 실제로 잰다
@@ -388,7 +388,7 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 | 버려진 실행 컷오프가 안 얼어 있다 | **미착수.** Step 1 의 `abandonedBefore` 는 청크마다 다시 잡는다(Step 2 의 메타 컷오프는 첫 청크에 얼린다). 드레인이 길어지면 시작 때 대상이 아니던 검증이 컷오프 안으로 들어와 그 입력(`asof_state`)이 걷힐 수 있다 — 지금은 `verifyJob` 프로브가 가려 줄 뿐이다 |
 | ~~회차 상태 전이 스케줄러~~ | **완료 · CY-446.** `CouponRoundScheduler` 가 1분마다 `open_at` 도달 회차를 열고 `close_at` 도달 회차를 닫는다. **Spring Batch 잡이 아니다** — 1분 주기로 배치 메타를 쓰면 하루 1,440 인스턴스가 되어 CY-436 이 정리한 축이 되살아난다. **대상을 고르고 id 하나씩 조건부 UPDATE** 로 바꾸고, **어댑터를 `READ COMMITTED` 로 연다**. ⚠️ **발급을 살리는 것은 격리수준이다** — 기본(`REPEATABLE READ`)에서는 이 테이블을 훑는 `UPDATE` 가 X 락 151(전부 + supremum)을 잡아 재고 소진 `CLOSED` 와 발급 전 `FOR SHARE` 가 둘 다 `ERROR 1205` 였고, RC 에서는 `X,REC_NOT_GAP` 10 만 잡고 둘 다 통과했다. **id 단건은 그것과 별개**이고 격리수준이 되돌아가는 날의 두 번째 겹이다(돌연변이 확인: RC 에서는 집합 `UPDATE` 로 되돌려도 락 테스트가 전부 초록이었다). `close_at` 은 갱신하지 않고(docs/02 F5) `coupon_stocks` 도 안 건드린다. 관측은 **결과 축**이다 — 게이지 **다섯**: 대기 넷(`cy_coupon_round_pending_open`·`_pending_close`·`_missed_window`·`_blocked_no_stock`)을 **한 문장으로** 되읽고(문장을 나누면 RC 에서 read view 가 갈려 회차가 어느 게이지에도 안 잡히거나 이중 계상된다), `_scheduling_enabled` 가 **끈 구간을 알림 갈래에서 빼는 축**이다(만료·정리는 그 축을 안 쓰고 사람이 silence 를 건다 — docs/14), 카운터 넷(`_ticks_total`·`_select_failures_total`·`_transition_failures_total`·`_refresh_failures_total`)이 진단을 진다. 알림은 **열**이고 데이터 축 셋(`BlockedByMissingStock`·`MissedWindow`·`DataMetricsUnknown`)은 `channel: data` 로 갈랐다 |
 | ~~회차 생성 스케줄러~~ | **범위 밖 · CY-503.** 그때는 회차를 만드는 경로가 시드뿐이라 batch 가 그 축을 맡는 것이 자연스러웠는데, 지금은 **관리자 API 가 그 일을 한다**(`POST /api/v1/admin/coupon-templates/{id}/rounds` · CY-5). 배치가 매일 새벽에 하나 더 만들면 같은 테이블에 회차를 만드는 경로가 둘이 된다. 자리표시였던 `batch.schedule.coupon-create-cron` 을 걷었다 — 남겨 두면 다음 사람이 그것을 "하기로 되어 있는 일" 로 읽는다. **전이가 지는 전제는 그대로다** — 재고 행 없는 회차를 일부러 안 연다(발급 경로가 죽는다). 자동 생성이 필요해지면 그때 어느 쪽에 둘지 다시 정한다 |
-| 기동 가드가 배치 메타 **인덱스**를 안 본다 | **미착수.** `SchemaPresenceGuard` 는 테이블과 핵심 컬럼만 본다. `V14`·`V15` 가 빠져도 기동과 동작이 통과하고, 되읽기 데드라인 초과(게이지 NaN)나 정리 잡의 매 청크 전체 스캔으로만 드러난다. `information_schema.statistics` 를 보는 셋째 축이 필요하다 — 지금은 가드 메시지가 그 사실을 말하는 데까지만 했다 |
+| 기동 가드가 배치 메타 **인덱스**를 안 본다 | **미착수.** `SchemaPresenceGuard` 는 테이블과 핵심 컬럼만 본다. `V2026082513`·`V2026082514` 이 빠져도 기동과 동작이 통과하고, 되읽기 데드라인 초과(게이지 NaN)나 정리 잡의 매 청크 전체 스캔으로만 드러난다. `information_schema.statistics` 를 보는 셋째 축이 필요하다 — 지금은 가드 메시지가 그 사실을 말하는 데까지만 했다 |
 | 업무 포트 노출 | ~~compose 티켓~~ ~~CY-359~~ **CY-368 에서 다시 정했다.** 그 포트에 인증 없는 admin 트리거가 열려 `batch.yml` 은 업무 포트를 **아예 안 내보낸다** — 필요할 때만 `batch-expose.yml` 을 얹어 `127.0.0.1:${BATCH_HOST_PORT:-9090}:9090` 으로 연다. 관리 포트(9092)는 어느 경우에도 안 올린다 |
 
 ---
@@ -396,7 +396,7 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 ## 4a. 검증용 셋에 Spring Batch 메타 테이블이 없다 (CY-359 가 발견)
 
 `coupon_clean`·`coupon_corrupt` 는 cy-seed 의 `ddl/00_schema.sql` 로 만들어지는데
-`CREATE TABLE` 17개 중 **`BATCH_*` 는 0개**다. cy-be 의 `V2__batch_metadata.sql`(과 인덱스 둘 `V14`·`V15`)은
+`CREATE TABLE` 17개 중 **`BATCH_*` 는 0개**다. cy-be 의 `V11__batch_metadata.sql`(과 인덱스 둘 `V2026082513`·`V2026082514`)은
 Flyway 소유자인 `api` 만 돌리고, 검증용 셋은 그 Flyway 가 닿는 DB 가 아니다.
 
 그런데 그 DB 를 보게 배치를 띄우는 것이 `application.yml.example` 이 문서화한 정상 절차다.
@@ -408,9 +408,9 @@ CY-359 는 `SchemaPresenceGuard` 로 그것을 **기동 시점에 드러내고 �
 
 | 후보 | 대가 |
 |---|---|
-| 시드 생성 절차에 `V2` 를 넣는다 (cy-seed 쪽) | 시드 저장소가 cy-be 의 마이그레이션 파일을 알아야 한다 — 지금은 스키마 주인이 cy-be 라는 규율과 맞물려 사본 관리가 하나 더 는다 |
+| 시드 생성 절차에 `V11__batch_metadata.sql` 을 넣는다 (cy-seed 쪽) | 시드 저장소가 cy-be 의 마이그레이션 파일을 알아야 한다 — 지금은 스키마 주인이 cy-be 라는 규율과 맞물려 사본 관리가 하나 더 는다 |
 | compose 에 마이그레이션 원샷 서비스를 넣는다 | `api` 이미지를 `--spring.batch.job.enabled=false` 로 한 번 돌린다. `base.yml` 이 `api` 를 알아야 한다 |
-| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차에 `V2`·`V14`·`V15` 주입 명령을 박아 뒀다. **테이블 누락은 가드가 잡지만 인덱스 누락은 못 잡는다** — 빠뜨려도 기동과 동작이 통과한다 |
+| 문서화된 수동 절차로 둔다 (현재) | `docs/14` 시연 절차에 `V11`·`V2026082513`·`V2026082514` 주입 명령을 박아 뒀다. **테이블 누락은 가드가 잡지만 인덱스 누락은 못 잡는다** — 빠뜨려도 기동과 동작이 통과한다 |
 
 지금은 셋째다 — 가드가 있어 **조용히 실패하지는 않는다**. 검증을 자동으로 돌리는 티켓이
 열리면 그때 앞의 둘 중 하나로 간다.
