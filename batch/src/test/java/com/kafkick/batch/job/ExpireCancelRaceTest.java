@@ -4,11 +4,14 @@ package com.kafkick.batch.job;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -26,11 +29,13 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.kafkick.batch.config.FixedClock;
 import com.kafkick.core.coupon.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
@@ -61,11 +66,15 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.metrics.expire-pending-initial-delay-ms=3600000",
         "batch.expire.chunk-size=1"
 })
-@Import({MySqlContainerConfig.class, ExpireCancelRaceTest.PauseAfterExpireConfig.class,
+@Import({MySqlContainerConfig.class, ExpireCancelRaceTest.FixedClockConfig.class,
+        ExpireCancelRaceTest.PauseAfterExpireConfig.class,
         ExpireCancelRaceTest.PauseBeforeReleaseConfig.class})
 class ExpireCancelRaceTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
+
+    /** 고정한 "지금". 태스클릿이 {@code asOf} 를 이 값과 견줘 미래면 거절한다. */
+    private static final LocalDateTime NOW = AS_OF.plusMinutes(3);
 
     /** 하한 가드가 클램프하지 못하는 값. 정상 = 2, 이중 복원 = 1 로 갈린다. */
     private static final int INITIAL_STOCK = 3;
@@ -236,6 +245,14 @@ class ExpireCancelRaceTest {
                 return 0;
             }
             jdbcClient.sql("""
+                            UPDATE coupon_stocks
+                               SET active_count = active_count - 1, updated_at = :at
+                             WHERE coupon_id = :coupon AND active_count >= 1
+                            """)
+                    .param("at", AS_OF.plusMinutes(1))
+                    .param("coupon", couponId)
+                    .update();
+            jdbcClient.sql("""
                             INSERT INTO issuance_histories
                                         (issuance_id, event_type, from_status, to_status,
                                          reason, created_at)
@@ -243,14 +260,6 @@ class ExpireCancelRaceTest {
                             """)
                     .param("id", target)
                     .param("at", AS_OF.plusMinutes(1))
-                    .update();
-            jdbcClient.sql("""
-                            UPDATE coupon_stocks
-                               SET active_count = active_count - 1, updated_at = :at
-                             WHERE coupon_id = :coupon AND active_count >= 1
-                            """)
-                    .param("at", AS_OF.plusMinutes(1))
-                    .param("coupon", couponId)
                     .update();
             return changed;
         });
@@ -461,25 +470,28 @@ class ExpireCancelRaceTest {
      * 되는 것은 취소가 그 행을 요구했고 못 받았다는 관측이다 — 스레드가 늦은 것과 갈린다.
      * 이 클래스가 {@code lockedTables()} 로 이미 쓰는 것과 같은 방식이다.
      */
-    private void awaitStockLockWait() throws InterruptedException {
-        for (int i = 0; i < 300; i++) {
-            Integer waits = jdbcClient.sql("""
-                            SELECT COUNT(*)
-                              FROM performance_schema.data_lock_waits w
-                              JOIN performance_schema.data_locks b
-                                ON b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID
-                             WHERE b.OBJECT_NAME = 'coupon_stocks'
-                            """)
-                    .query(Integer.class)
-                    .single();
-            if (waits != null && waits > 0) {
-                return;
-            }
-            Thread.sleep(100);
-        }
-        throw new AssertionError(
-                "취소가 30초 안에 coupon_stocks 락 대기에 안 들어갔다. 만료가 그 행을 "
-                        + "안 잡고 있다는 뜻이고, 그러면 이 테스트가 재려던 것이 사라진다");
+    private void awaitStockLockWait() {
+        Awaitility.await("취소가 coupon_stocks 락 대기에 들어가기")
+                .atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofMillis(50))
+                .untilAsserted(() -> assertThat(stockLockWaits())
+                        .as("취소가 coupon_stocks 에서 블록되지 않았다. 만료가 그 행을 안 잡고 "
+                                + "있다는 뜻이고, 그러면 이 테스트가 재려던 것이 사라진다")
+                        .isPositive());
+    }
+
+    /** {@code coupon_stocks} 행을 기다리다 <b>실제로 블록된</b> 요청 수. */
+    private int stockLockWaits() {
+        Integer waits = jdbcClient.sql("""
+                        SELECT COUNT(*)
+                          FROM performance_schema.data_lock_waits w
+                          JOIN performance_schema.data_locks b
+                            ON b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID
+                         WHERE b.OBJECT_NAME = 'coupon_stocks'
+                        """)
+                .query(Integer.class)
+                .single();
+        return waits == null ? 0 : waits;
     }
 
     /**
@@ -524,6 +536,23 @@ class ExpireCancelRaceTest {
                 }
                 return result;
             });
+        }
+    }
+
+    /**
+     * <b>시계를 고정한다.</b> 태스클릿은 {@code asOf} 가 현재보다 미래면
+     * {@code EXPIRE_ASOF_IN_FUTURE} 로 죽는다. 벽시계로 두면 이 클래스가 재는 축과 무관한
+     * 이유(<b>실행하는 날짜</b>)로 결과가 갈린다 — 형제 만료 테스트들이 이미 그렇게 한다.
+     *
+     * <p>운영 {@code TimeConfig} 가 {@code systemUTC} 라는 것은 {@link FixedClock} 이 진다.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class FixedClockConfig {
+
+        @Bean
+        @Primary
+        Clock fixedClock() {
+            return FixedClock.at(NOW);
         }
     }
 }
