@@ -4,7 +4,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import com.kafkick.core.admin.issuancehistory.mock.AdminIssuanceHistoryMockDataFactory;
 
 /**
  * <b>[OBS-36] 관리자 화면 fixture 를 등록할지 말지를 API 가 소유한다.</b>
@@ -48,9 +47,4 @@ public class AdminFixtureConfig {
      */
     public static final String FIXTURE_SWITCH = "admin.mock.enabled";
 
-    @Bean
-    @ConditionalOnProperty(name = FIXTURE_SWITCH, havingValue = "true")
-    public AdminIssuanceHistoryMockDataFactory adminIssuanceHistoryMockDataFactory() {
-        return new AdminIssuanceHistoryMockDataFactory();
-    }
 }
