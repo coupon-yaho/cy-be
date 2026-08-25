@@ -80,7 +80,20 @@ public class PromMetricsAssembler {
     private static final String TAG_RESULT = "result";
     private static final String TAG_OUTCOME = OverviewPrometheusContract.OUTCOME;
     private static final String TAG_QUANTILE = "quantile";
-    private static final String OUTCOME_SUCCESS = "success";
+    // ── 지연 Timer 의 outcome 라벨 값 ──────────────────────────────────────────
+    //
+    // 정의는 LatencyOutcome 이고 여기는 그 라벨을 읽는 쪽이다. 계측이 쓰는 enum 을 조립기가
+    // 직접 참조하면 서블릿 필터 내부 타입이 관리자 응답 조립기까지 끌려온다 — 대신 값을 여기
+    // 적고, 세 상수와 저쪽 enum 이 갈리지 않는 것은 HttpLatencyOutcomeContractTest 가 지킨다.
+    //
+    // ⚠️ 그 테스트가 없으면 라벨 오타가 빈 결과 = PENDING 으로만 보인다. 화면에서 그것은
+    //    "아직 안 만들었다" 와 똑같아 예외도 로그도 남지 않는다. 셋 다 같은 위험을 진다.
+    //
+    // success 는 이미 계약 상수가 있으므로 사본을 만들지 않는다 — 시계열 조립기도 같은 것을
+    // 읽어, 스냅샷과 추세선이 서로 다른 문자열을 보는 일이 구조적으로 생기지 않는다.
+    private static final String OUTCOME_SUCCESS = OverviewPrometheusContract.SUCCESS;
+    private static final String OUTCOME_POLICY_REJECT = "policy_reject";
+    private static final String OUTCOME_SYSTEM_FAILURE = "system_failure";
 
     /**
      * 자원 행이 볼 인스턴스. <b>batch 도 같은 미터를 냅니다</b> — CPU · heap · HikariCP 를 함께
@@ -676,9 +689,18 @@ public class PromMetricsAssembler {
      * 골라 오던 것을 그만둘 뿐입니다. <b>표본이 없는 그룹도 목록에서 빼지 않습니다</b>: 이유는
      * 값이 아니라 상태가 냅니다.</p>
      *
-     * <p>정책 거절과 시스템 실패 지연은 원천이 없어 PENDING 입니다. OBS-4 의 Timer 는
-     * {@code outcome} 을 success · failure 둘로만 등록해 실패 안에서 두 경로가 섞여 있고,
-     * 1ms 미만인 정책 거절을 시스템 실패로 실으면 화면이 정확히 반대로 읽습니다.</p>
+     * <p><b>[OBS-31] 정책 거절과 시스템 실패가 실값을 냅니다.</b> {@code HttpMetrics} 가
+     * {@code outcome} 을 넷으로 등록하게 되어(success · policy_reject · client_invalid ·
+     * system_failure) 실패 안에서 두 경로가 더는 섞이지 않습니다. 질의는 늘지 않았습니다 —
+     * 같은 질의가 받아 오던 표본을 라벨로 갈라 볼 뿐입니다.</p>
+     *
+     * <p><b>{@code client_invalid} 는 등록만 하고 여기서 내보내지 않습니다.</b> 응답 계약에
+     * 자리가 없고, 자리를 만드는 것은 프론트와 합의할 항목입니다. 계측을 먼저 해 두는 이유는
+     * 세지 않은 지연은 소급해서 만들 수 없기 때문입니다.</p>
+     *
+     * <p><b>세 필드 모두 ISSUE 그룹입니다.</b> {@code groups} 가 그룹 축을 이미 펴고 있어
+     * 여기서 그룹을 합치면 같은 값이 두 축으로 나가고, 합친 백분위는 애초에 만들 수 없습니다
+     * (인스턴스별로 계산된 값이라 평균·합산 불가).</p>
      */
     private static LatencyMetrics latency(QueryResult latency, Freshness freshness) {
         List<LatencyGroupStat> groups = new ArrayList<>();
@@ -687,8 +709,8 @@ public class PromMetricsAssembler {
         }
         return new LatencyMetrics(
                 successPercentiles(latency, UriGroup.ISSUE, freshness),
-                pending(),
-                pending(),
+                outcomePercentiles(latency, UriGroup.ISSUE, OUTCOME_POLICY_REJECT, freshness),
+                outcomePercentiles(latency, UriGroup.ISSUE, OUTCOME_SYSTEM_FAILURE, freshness),
                 List.copyOf(groups));
     }
 
@@ -701,8 +723,20 @@ public class PromMetricsAssembler {
      */
     private static ObservedValue<LatencyPercentiles> successPercentiles(
             QueryResult latency, UriGroup group, Freshness freshness) {
+        return outcomePercentiles(latency, group, OUTCOME_SUCCESS, freshness);
+    }
+
+    /**
+     * 한 URI 그룹의 한 지연 축 백분위입니다.
+     *
+     * <p><b>네 축이 전부 이 헬퍼 하나를 지납니다.</b> 실패 경로가 자기 필터를 따로 만들면 성공
+     * 경로와 어긋날 수 있고, 그러면 같은 화면의 네 자리가 서로 다른 규칙으로 표본을 고릅니다 —
+     * 그게 {@link #successPercentiles} 가 처음부터 경고하던 것과 같은 사고입니다.</p>
+     */
+    private static ObservedValue<LatencyPercentiles> outcomePercentiles(
+            QueryResult latency, UriGroup group, String outcome, Freshness freshness) {
         return percentiles(
-                latency, inGroup(group).and(label(TAG_OUTCOME, OUTCOME_SUCCESS)), freshness);
+                latency, inGroup(group).and(label(TAG_OUTCOME, outcome)), freshness);
     }
 
     private static ObservedValue<LatencyPercentiles> percentiles(
@@ -729,6 +763,10 @@ public class PromMetricsAssembler {
         if (p99.getAsDouble() <= 0d) {
             return pending();
         }
+        // TODO(OBS-44): 표본 없음과 트래픽 없음이 여기서 같은 PENDING 으로 합쳐진다. 가르려면
+        // 결과 Counter 의 rate 가 필요한데 이 메서드는 지연 원천만 본다. NO_TRAFFIC 은
+        // carriesValue()==true 라 값 없이 낼 수 없고, 실을 값이 (0,0,0) 뿐이라 바로 위 금지
+        // 규칙과 정면으로 부딪친다 — 상태·값 규약부터 정해야 하는 일이라 따로 뗐다.
         return new ObservedValue<>(
                 new LatencyPercentiles(millis(p50), millis(p95), millis(p99)),
                 freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID,

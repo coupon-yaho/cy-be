@@ -32,7 +32,9 @@ management:
         # 값이다. 병합하려면 percentiles-histogram 이 필요한데, 인스턴스 최댓값을 쓰기로
         # 확정했으므로 바꾸지 않는다(병합값은 한 인스턴스만 느려진 상황을 희석해 숨긴다).
         "[http.server.requests]": 0.5, 0.95, 0.99
-        # OBS-4 집계 Timer. 성공/실패와 URI 그룹 태그별로 같은 관측 창을 사용한다.
+        # OBS-4 집계 Timer. 키가 미터 '이름' 이므로 태그 조합마다 등록된 Timer 전부에 걸린다
+        # — URI 그룹 5종 × outcome 4종(OBS-31: success · policy_reject · client_invalid ·
+        # system_failure)이 모두 같은 관측 창을 쓴다. 축을 늘려도 여기는 안 고쳐도 된다.
         "[app.http.latency]": 0.5, 0.95, 0.99
         # Redis 명령 레이턴시(CY-310). 미터를 등록하는 것은 infra:redis 의 RedisLatencyAutoConfiguration 이고
         # (api 가 runtimeOnly 로 물고 있다), 어느 창으로 볼지는 위 둘과 같은 이유로 여기가 소유한다.

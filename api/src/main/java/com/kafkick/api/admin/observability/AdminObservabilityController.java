@@ -88,27 +88,31 @@ public class AdminObservabilityController {
      * <p>계열은 각각 독립적으로 실패합니다. 하나가 죽어도 500 이 아니라 그 계열만
      * {@code UNAVAILABLE} 로 나갑니다.</p>
      *
-     * <p><b>범위는 현재 GLOBAL 만입니다.</b> {@code couponId}·{@code benchmarkRunId} 승계는
-     * OBS-34 로 남겼습니다. 두 파라미터가 오면 <b>조용히 무시하지 않고 400 으로 거절합니다</b> —
-     * 무시하면 화면이 전역 값을 회차 값으로 읽고, 깨지지 않는 대신 틀린 숫자가 나갑니다.</p>
+     * <p><b>범위 규칙은 {@code /metrics} 와 같은 계약을 씁니다.</b> 같은 {@link MetricsQuery} 로
+     * 바인딩하므로 두 식별자를 동시에 주면 여기서도 400 입니다 — 규칙을 옮겨 적으면 한쪽만
+     * 바뀌었을 때 같은 파라미터가 경로마다 다르게 거절됩니다.</p>
      *
-     * @param window 조회 구간이자 rate 집계 창을 정하는 기준. {@code 1m}, {@code 5m}, {@code 15m}
-     * @param couponId 아직 지원하지 않는 쿠폰 범위. 지정하면 400
-     * @param benchmarkRunId 아직 지원하지 않는 Benchmark 범위. 지정하면 400
+     * <p><b>{@code benchmarkRunId} 는 아직 400 입니다.</b> 회차 경계는 라벨이 아니라 시간 범위라
+     * 원천이 {@code BenchmarkRun}(DB)인데, 이 경로는 Prometheus 하나만 읽습니다. <b>조용히
+     * 무시하지 않습니다</b> — 무시하면 화면이 전역 값을 회차 값으로 읽고, 깨지지 않는 대신 틀린
+     * 숫자가 나갑니다.</p>
+     *
+     * <p><b>{@code couponId} 는 도메인 계열에만 걸립니다.</b> 정합성 gap · 대기열 · 재고는 회차
+     * 식별자 미터로 좁혀지고, HTTP 미터에서 나오는 계열은 회차 라벨이 없어 전역 값이 그대로
+     * 나갑니다 — {@code /metrics} 와 같은 동작입니다.</p>
+     *
+     * @param query 조회 구간과 선택적 관측 범위. {@code window} 는 {@code 1m}, {@code 5m}, {@code 15m}
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
      * @return 계열마다 상태가 붙은 시계열
-     * @throws BusinessException 아직 지원하지 않는 범위 파라미터를 지정한 경우 400
+     * @throws BusinessException 아직 지원하지 않는 Benchmark 범위를 지정한 경우 400
      */
     @GetMapping("/metrics/series")
     public ResponseEnvelope<AdminMetricsSeriesResponse> metricsSeries(
-            @RequestParam MetricsWindow window,
-            @RequestParam(required = false) Long couponId,
-            @RequestParam(required = false) Long benchmarkRunId,
-            Caller caller) {
-        if (couponId != null || benchmarkRunId != null) {
+            @Valid @ModelAttribute MetricsQuery query, Caller caller) {
+        if (query.benchmarkRunId() != null) {
             throw new BusinessException(AdminApiErrorCode.SCOPE_NOT_SUPPORTED);
         }
-        return ResponseEnvelope.success(seriesAssembler.assemble(window));
+        return ResponseEnvelope.success(seriesAssembler.assemble(query));
     }
 
     /**
