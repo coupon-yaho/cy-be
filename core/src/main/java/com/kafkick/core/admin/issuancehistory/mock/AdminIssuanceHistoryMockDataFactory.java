@@ -6,8 +6,12 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Objects;
+import java.util.Comparator;
 
-
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReadResult;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReader;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
@@ -26,7 +30,7 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
  * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
  * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
  */
-public class AdminIssuanceHistoryMockDataFactory {
+public class AdminIssuanceHistoryMockDataFactory implements AdminIssuanceHistoryReader {
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final Instant FIXTURE_V1_ANCHOR = Instant.parse("2026-08-23T00:00:00Z");
@@ -73,6 +77,36 @@ public class AdminIssuanceHistoryMockDataFactory {
                 raw(1_008L, 5_004L, "A101000000000004", 101L, IssuanceStatus.ISSUED,
                         IssuanceStatus.CANCELLED, IssuanceEventType.CANCEL,
                         FIXTURE_V1_ANCHOR.minus(Duration.ofHours(1)))));
+    }
+
+    /** 테스트에서만 기존 fixture 행을 Reader 계약으로 제한해 반환합니다. */
+    @Override
+    public AdminIssuanceHistoryReadResult read(AdminIssuanceHistoryQuery query, Instant snapshotAt) {
+        List<RawHistory> population = create(snapshotAt).histories().stream()
+                .filter(row -> (query.couponId() == null || row.couponId() == query.couponId())
+                        && (query.fromInclusive() == null || !row.occurredAt().isBefore(query.fromInclusive()))
+                        && (query.toExclusive() == null || row.occurredAt().isBefore(query.toExclusive()))
+                        && (query.eventType() == null || row.eventType() == query.eventType()))
+                .sorted(Comparator.comparing(RawHistory::occurredAt).reversed()
+                        .thenComparing(Comparator.comparingLong(RawHistory::historyId).reversed()))
+                .toList();
+        long issue = count(population, IssuanceEventType.ISSUE);
+        long use = count(population, IssuanceEventType.USE);
+        long cancelUse = count(population, IssuanceEventType.CANCEL_USE);
+        long cancel = count(population, IssuanceEventType.CANCEL);
+        long expire = count(population, IssuanceEventType.EXPIRE);
+        List<RawHistory> candidates = population.stream().filter(row -> query.before() == null
+                || row.occurredAt().isBefore(query.before().occurredAt())
+                || (row.occurredAt().equals(query.before().occurredAt())
+                && row.historyId() < query.before().historyId())).limit(query.limit() + 1L).toList();
+        return new AdminIssuanceHistoryReadResult(candidates,
+                new HistorySummary(issue + use + cancelUse + cancel + expire,
+                        issue, use, cancelUse, cancel, expire));
+    }
+
+    /** 이벤트 유형의 fixture 행 수를 반환합니다. */
+    private static long count(List<RawHistory> rows, IssuanceEventType eventType) {
+        return rows.stream().filter(row -> row.eventType() == eventType).count();
     }
 
     /**
