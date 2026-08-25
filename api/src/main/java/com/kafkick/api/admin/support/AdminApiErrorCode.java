@@ -47,12 +47,16 @@ public enum AdminApiErrorCode implements ErrorCode {
      * <p><b>조용히 무시하면 안 되는 상태입니다.</b> 무시하고 200 을 주면 화면은 회차로 좁혀진
      * 값을 받았다고 믿고 전역 값을 그립니다 — 깨지지 않고 틀린 숫자가 나가므로 발견이 늦습니다.
      *
+     * <p>지금 이 코드를 내는 것은 {@code GET /metrics/series} 의 {@code benchmarkRunId} 하나뿐입니다.
+     * 회차 경계는 라벨이 아니라 시간 범위라 원천이 DB 이고, 그 경로는 Prometheus 만 읽습니다.
+     * {@code couponId} 는 OBS-34 에서 열렸습니다.
+     *
      * <p>범위가 열리면 이 코드가 나오던 요청이 200 이 됩니다. 완화 방향이라 화면을 깨지 않습니다.
      */
     SCOPE_NOT_SUPPORTED(
             400,
             "ADMIN-004",
-            "이 조회는 아직 관측 범위 지정을 지원하지 않습니다."
+            "이 조회는 아직 Benchmark 회차 범위 지정을 지원하지 않습니다."
     );
 
     private final int status;
