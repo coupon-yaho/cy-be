@@ -11,18 +11,21 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import jakarta.servlet.AsyncContext;
 import jakarta.servlet.AsyncEvent;
@@ -35,6 +38,7 @@ import jakarta.validation.constraints.NotBlank;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.http.HttpHeaders;
@@ -46,6 +50,8 @@ import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -65,6 +71,11 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import com.kafkick.api.observation.MeterNames;
+import com.kafkick.api.coupon.controller.CouponCancelController;
+import com.kafkick.api.coupon.controller.CouponCancelUseController;
+import com.kafkick.api.coupon.controller.CouponIssueController;
+import com.kafkick.api.coupon.controller.CouponUseController;
+import com.kafkick.api.coupon.controller.MemberCouponController;
 import com.kafkick.api.observation.http.HttpMetricsFilter.UriGroup;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.RequestAttributeKeys;
@@ -74,6 +85,21 @@ import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.api.support.GlobalExceptionHandler;
 
 class HttpMetricsFilterTest {
+
+    private static final Set<Class<?>> COUPON_CONTROLLERS = Set.of(
+            CouponIssueController.class,
+            CouponUseController.class,
+            CouponCancelUseController.class,
+            CouponCancelController.class,
+            MemberCouponController.class);
+
+    private static final Set<ControllerMapping> EXPECTED_COUPON_MAPPINGS = Set.of(
+            mapping(RequestMethod.GET, "/api/v1/coupons", UriGroup.READ),
+            mapping(RequestMethod.GET, "/api/v1/coupons/{issuanceId}", UriGroup.READ),
+            mapping(RequestMethod.POST, "/api/v1/coupons/{couponRoundId}/issue", UriGroup.ISSUE),
+            mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/use", UriGroup.USE),
+            mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/cancel-use", UriGroup.USE),
+            mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/cancel", UriGroup.USE));
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(HttpMetricsFilterConfiguration.class)
@@ -88,20 +114,73 @@ class HttpMetricsFilterTest {
     }
 
     @Test
-    void mapsTemplatesWithoutUsingActualCampaignIds() {
-        assertThat(UriGroup.of("POST", "/api/v1/campaigns/{campaignId}/issue"))
+    void mapsTemplatesWithoutUsingActualResourceIds() {
+        assertThat(UriGroup.of("POST", "/api/v1/coupons/{couponRoundId}/issue"))
                 .contains(UriGroup.ISSUE);
-        assertThat(UriGroup.of("POST", "/api/v1/campaigns/{id}/entry"))
-                .contains(UriGroup.ENTRY);
-        assertThat(UriGroup.of("GET", "/api/v1/campaigns/{id}/queue"))
-                .contains(UriGroup.QUEUE);
+        assertThat(UriGroup.of("POST", "/api/v1/coupons/{couponRoundId}/entry")).isEmpty();
+        assertThat(UriGroup.of("GET", "/api/v1/coupons/{couponRoundId}/queue")).isEmpty();
         assertThat(UriGroup.of("GET", "/api/v1/brands")).contains(UriGroup.READ);
         assertThat(UriGroup.of("POST", "/api/v1/coupons/{couponId}/cancel-use"))
                 .contains(UriGroup.USE);
-        assertThat(UriGroup.of("POST", "/api/v1/campaigns/42/issue")).isEmpty();
+        assertThat(UriGroup.of("POST", "/api/v1/coupons/42/issue")).isEmpty();
         assertThat(UriGroup.of("GET", "/api/v1/admin/campaigns")).isEmpty();
         assertThat(UriGroup.of("GET", "/admin/campaigns")).isEmpty();
         assertThat(UriGroup.of("GET", "/actuator/prometheus")).isEmpty();
+    }
+
+    @Test
+    void couponControllersExposeExactlyTheExpectedUriGroups() {
+        Set<ControllerMapping> actual = COUPON_CONTROLLERS.stream()
+                .flatMap(controller -> controllerMappings(controller).stream())
+                .collect(Collectors.toSet());
+
+        assertThat(COUPON_CONTROLLERS).hasSize(5);
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(EXPECTED_COUPON_MAPPINGS);
+        assertThat(actual).hasSize(6);
+    }
+
+    private static Set<ControllerMapping> controllerMappings(Class<?> controller) {
+        RequestMapping root = requiredMapping(controller);
+        return Arrays.stream(controller.getDeclaredMethods())
+                .map(method -> AnnotatedElementUtils.findMergedAnnotation(
+                        method, RequestMapping.class))
+                .filter(mapping -> mapping != null)
+                .flatMap(endpoint -> Arrays.stream(paths(root))
+                        .flatMap(rootPath -> Arrays.stream(paths(endpoint))
+                                .flatMap(endpointPath -> Arrays.stream(endpoint.method())
+                                        .map(method -> classifiedMapping(
+                                                method, rootPath + endpointPath)))))
+                .collect(Collectors.toSet());
+    }
+
+    private static RequestMapping requiredMapping(Class<?> controller) {
+        RequestMapping mapping = AnnotatedElementUtils.findMergedAnnotation(
+                controller, RequestMapping.class);
+        if (mapping == null) {
+            throw new IllegalStateException(
+                    "Controller has no @RequestMapping: " + controller.getName());
+        }
+        return mapping;
+    }
+
+    private static String[] paths(RequestMapping mapping) {
+        if (mapping.path().length == 0) {
+            return new String[] {""};
+        }
+        return mapping.path();
+    }
+
+    private static ControllerMapping classifiedMapping(RequestMethod method, String path) {
+        return new ControllerMapping(method, path, UriGroup.of(method.name(), path));
+    }
+
+    private static ControllerMapping mapping(
+            RequestMethod method, String path, UriGroup group) {
+        return new ControllerMapping(method, path, Optional.of(group));
+    }
+
+    private record ControllerMapping(
+            RequestMethod method, String path, Optional<UriGroup> uriGroup) {
     }
 
     /**
@@ -134,10 +213,10 @@ class HttpMetricsFilterTest {
         Fixture fixture = new Fixture();
 
         for (int i = 0; i < 100; i++) {
-            fixture.exchange("POST", "/api/v1/campaigns/{id}/issue", 400, Dependency.NONE);
+            fixture.exchange("POST", "/api/v1/coupons/{couponRoundId}/issue", 400, Dependency.NONE);
         }
         for (int i = 0; i < 100; i++) {
-            fixture.exchange("POST", "/api/v1/campaigns/{id}/issue", 409, Dependency.NONE);
+            fixture.exchange("POST", "/api/v1/coupons/{couponRoundId}/issue", 409, Dependency.NONE);
         }
 
         assertThat(fixture.counter("issue", "client_invalid").count()).isEqualTo(100);
@@ -150,19 +229,30 @@ class HttpMetricsFilterTest {
     void recordsDependencyAndApplicationFailuresExclusively() throws Exception {
         Fixture fixture = new Fixture();
 
-        fixture.exchange("POST", "/api/v1/campaigns/{id}/issue", 500, Dependency.REDIS);
-        fixture.exchange("POST", "/api/v1/campaigns/{id}/issue", 503, Dependency.REDIS);
-        fixture.exchange("POST", "/api/v1/campaigns/{id}/issue", 500, Dependency.NONE);
+        fixture.exchange("POST", "/api/v1/coupons/{couponRoundId}/issue", 500, Dependency.REDIS);
+        fixture.exchange("POST", "/api/v1/coupons/{couponRoundId}/issue", 503, Dependency.REDIS);
+        fixture.exchange("POST", "/api/v1/coupons/{couponRoundId}/issue", 500, Dependency.NONE);
 
         assertThat(fixture.counter("issue", "dependency_failure").count()).isEqualTo(2);
         assertThat(fixture.counter("issue", "application_failure").count()).isEqualTo(1);
     }
 
     @Test
+    void actualIssueMappingRecordsOneCounterAndOneTimerSample() throws Exception {
+        Fixture fixture = new Fixture();
+
+        fixture.exchange(
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", 201, Dependency.NONE);
+
+        assertThat(fixture.counter("issue", "success").count()).isEqualTo(1);
+        assertThat(fixture.timer("issue", "success").count()).isEqualTo(1);
+    }
+
+    @Test
     void restoresInFlightWhenTheChainThrows() {
         Fixture fixture = new Fixture();
         MockHttpServletRequest request = fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE);
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE);
 
         assertThatThrownBy(() -> fixture.filter.doFilter(
                 request, new MockHttpServletResponse(), (req, res) -> {
@@ -188,7 +278,7 @@ class HttpMetricsFilterTest {
     void defersInFlightAndLatencyUntilAsyncCompletion() throws Exception {
         Fixture fixture = new Fixture();
         MockHttpServletRequest request = fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE);
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE);
         MockHttpServletResponse response = new MockHttpServletResponse();
         request.setAsyncSupported(true);
 
@@ -208,7 +298,7 @@ class HttpMetricsFilterTest {
     void closesInFlightWhenAsyncContextDisappearsBeforeListenerRegistration() throws Exception {
         Fixture fixture = new Fixture();
         MockHttpServletRequest request = spy(fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE));
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE));
         when(request.isAsyncStarted()).thenReturn(true);
         when(request.getAsyncContext()).thenThrow(new IllegalStateException("already complete"));
 
@@ -225,7 +315,7 @@ class HttpMetricsFilterTest {
         doThrow(new IllegalStateException("already complete"))
                 .when(context).addListener(any(AsyncListener.class));
         MockHttpServletRequest request = spy(fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE));
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE));
         when(request.isAsyncStarted()).thenReturn(true);
         when(request.getAsyncContext()).thenReturn(context);
 
@@ -245,7 +335,7 @@ class HttpMetricsFilterTest {
             return null;
         }).when(context).addListener(any(AsyncListener.class));
         MockHttpServletRequest request = spy(fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE));
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE));
         when(request.isAsyncStarted()).thenReturn(true);
         when(request.getAsyncContext()).thenReturn(context);
 
@@ -271,7 +361,7 @@ class HttpMetricsFilterTest {
             return null;
         }).when(initialContext).addListener(any(AsyncListener.class));
         MockHttpServletRequest request = spy(fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE));
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE));
         when(request.isAsyncStarted()).thenReturn(true);
         when(request.getAsyncContext()).thenReturn(initialContext);
         fixture.filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> { });
@@ -295,7 +385,7 @@ class HttpMetricsFilterTest {
             return null;
         }).when(context).addListener(any(AsyncListener.class));
         MockHttpServletRequest request = spy(fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE));
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE));
         when(request.isAsyncStarted()).thenReturn(true);
         when(request.getAsyncContext()).thenReturn(context);
 
@@ -323,7 +413,7 @@ class HttpMetricsFilterTest {
                 .addFilters(fixture.filter)
                 .build();
 
-        var pending = mockMvc.perform(post("/api/v1/campaigns/42/issue"))
+        var pending = mockMvc.perform(post("/api/v1/coupons/42/issue"))
                 .andExpect(request().asyncStarted())
                 .andReturn();
 
@@ -439,7 +529,7 @@ class HttpMetricsFilterTest {
             public Dependency dependency() { return Dependency.REDIS; }
         };
         MockHttpServletRequest request = fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.NONE);
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.NONE);
 
         fixture.filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
             var handled = handler.handleBusinessException(new BusinessException(redisFailure), request);
@@ -456,7 +546,7 @@ class HttpMetricsFilterTest {
         GlobalExceptionHandler handler = new GlobalExceptionHandler(new TimeProvider(
                 Clock.fixed(Instant.parse("2026-08-19T00:00:00Z"), ZoneOffset.UTC)));
         MockHttpServletRequest request = fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.REDIS);
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.REDIS);
 
         fixture.filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
             var handled = handler.handleUnexpected(new IllegalStateException("forced"), request);
@@ -477,9 +567,10 @@ class HttpMetricsFilterTest {
         HttpMetricsFilter filter = new HttpMetricsFilter(
                 new ResultClassifier(), throwingMetrics, new InFlightRegistry(registry));
         MockHttpServletRequest request = new MockHttpServletRequest(
-                "POST", "/api/v1/campaigns/42/issue");
+                "POST", "/api/v1/coupons/42/issue");
         request.setAttribute(
-                HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/v1/campaigns/{id}/issue");
+                HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+                "/api/v1/coupons/{couponRoundId}/issue");
         ServletException original = new ServletException("chain failed");
 
         assertThatThrownBy(() -> filter.doFilter(
@@ -494,7 +585,7 @@ class HttpMetricsFilterTest {
         Fixture fixture = new Fixture();
         ExposedExceptionHandler handler = new ExposedExceptionHandler();
         MockHttpServletRequest request = fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.REDIS);
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.REDIS);
 
         fixture.filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
             ResponseEntity<Object> handled = handler.standardFiveHundred(request);
@@ -522,7 +613,7 @@ class HttpMetricsFilterTest {
         GlobalExceptionHandler handler = new GlobalExceptionHandler(new TimeProvider(
                 Clock.fixed(Instant.parse("2026-08-19T00:00:00Z"), ZoneOffset.UTC)));
         MockHttpServletRequest request = fixture.request(
-                "POST", "/api/v1/campaigns/{id}/issue", Dependency.REDIS);
+                "POST", "/api/v1/coupons/{couponRoundId}/issue", Dependency.REDIS);
 
         fixture.filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {
             var handled = handler.handleConstraintViolation(
@@ -541,7 +632,7 @@ class HttpMetricsFilterTest {
         Fixture fixture = new Fixture();
         MockMvc mockMvc = validationMockMvc(fixture);
 
-        var result = mockMvc.perform(post("/api/v1/campaigns/42/issue")
+        var result = mockMvc.perform(post("/api/v1/coupons/42/issue")
                         .requestAttr(RequestAttributeKeys.DEPENDENCY, Dependency.REDIS)
                         .contentType("application/json")
                         .content("{}"))
@@ -708,8 +799,8 @@ class HttpMetricsFilterTest {
     @RestController
     private static final class AsyncIssueController {
 
-        @PostMapping("/api/v1/campaigns/{id}/issue")
-        private Callable<ResponseEntity<Void>> issue(@PathVariable long id) {
+        @PostMapping("/api/v1/coupons/{couponRoundId}/issue")
+        private Callable<ResponseEntity<Void>> issue(@PathVariable long couponRoundId) {
             return () -> ResponseEntity.status(HttpStatus.CREATED).build();
         }
     }
@@ -717,9 +808,9 @@ class HttpMetricsFilterTest {
     @RestController
     private static final class ValidationController {
 
-        @PostMapping("/api/v1/campaigns/{id}/issue")
+        @PostMapping("/api/v1/coupons/{couponRoundId}/issue")
         private ResponseEntity<Void> body(
-                @PathVariable long id, @Valid @RequestBody ValidationBody body) {
+                @PathVariable long couponRoundId, @Valid @RequestBody ValidationBody body) {
             return ResponseEntity.noContent().build();
         }
 
