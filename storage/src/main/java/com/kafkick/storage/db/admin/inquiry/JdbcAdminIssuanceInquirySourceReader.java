@@ -51,7 +51,8 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
     }
 
     /**
-     * 존재 확인과 모든 후보 SELECT를 하나의 관측 read-only 트랜잭션에서 실행합니다.
+     * 회원 존재는 운영 풀에서 별도로 확인하고, 관측 후보 SELECT만 하나의 관측 read-only
+     * 트랜잭션에서 실행합니다.
      *
      * <p>각 원천에 필터, snapshot, cursor와 {@code limit + 1}을 적용하며 SQL·연결·DB enum
      * 매핑 실패는 세부 쿼리나 식별자를 노출하지 않는 MySQL 원천 오류로 변환합니다.
@@ -117,9 +118,11 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
 
             return AdminIssuanceInquiryReadResult.available(new AdminIssuanceInquirySource(
                     attempts, List.copyOf(issuances.values()), histories));
-        } catch (DataAccessException | IllegalArgumentException ignored) {
-            // 5xx handler가 cause까지 기록하므로 SQL·스키마·계정·식별자가 든 원본 예외는 넘기지 않는다.
-            throw new BusinessException(AdminIssuanceInquiryErrorCode.SOURCE_UNAVAILABLE);
+        } catch (DataAccessException | IllegalArgumentException exception) {
+            // 원본 예외는 SQL·식별자를 포함할 수 있어 버리고, 로그에서 분류할 타입 이름만 남긴다.
+            throw new BusinessException(
+                    AdminIssuanceInquiryErrorCode.SOURCE_UNAVAILABLE,
+                    exception.getClass().getSimpleName());
         }
     }
 

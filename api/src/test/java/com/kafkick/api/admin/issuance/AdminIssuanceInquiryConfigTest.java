@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -27,7 +29,8 @@ class AdminIssuanceInquiryConfigTest {
                     AdminIssuanceInquiryConfig.class,
                     AdminIssuanceInquiryService.class,
                     IssuanceInquiryCalculator.class)
-            .withBean(TimeProvider.class, () -> new TimeProvider(Clock.systemUTC()));
+            .withBean(TimeProvider.class, () -> new TimeProvider(
+                    Clock.fixed(Instant.parse("2026-08-25T00:00:00Z"), ZoneOffset.UTC)));
 
     /** 관측이 꺼졌거나 미설정이면 Mock 데이터가 아니라 ADMIN-003을 반환합니다. */
     @Test

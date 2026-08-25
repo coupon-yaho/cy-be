@@ -27,6 +27,7 @@ public final class AdminIssuanceInquirySql {
                        ) AS representative_rank
                   FROM issue_attempts ia
                  WHERE ia.member_id = :memberId
+                   AND (:couponId IS NULL OR ia.coupon_id = :couponId)
                    AND ia.event_type IN ('ENTRY_RESULT', 'ISSUE_ATTEMPT', 'ISSUE_RESULT')
                    AND ia.occurred_at <= :snapshotAt
             )
@@ -34,7 +35,6 @@ public final class AdminIssuanceInquirySql {
                    issuance_id, http_status, reason_code, occurred_at
               FROM ranked_attempts
              WHERE representative_rank = 1
-               AND (:couponId IS NULL OR coupon_id = :couponId)
                AND (:httpStatus IS NULL OR http_status = :httpStatus)
                AND (:reasonCode IS NULL OR reason_code = :reasonCode)
             %s
@@ -102,6 +102,7 @@ public final class AdminIssuanceInquirySql {
 
     /** 대표 행을 고른 뒤 원천 ATTEMPT의 동률 순서까지 적용한 고정 SQL을 반환합니다. */
     public static String attempts(InquiryPosition before) {
+        // Calculator의 SourceKind 순서도 동시각 ISSUANCE 우선이다. 순서를 바꾸면 두 SQL 경계도 함께 바꾼다.
         // ISSUANCE cursor와 같은 시각의 ATTEMPT는 전역 순서상 더 오래되어 포함한다.
         String cursor = before == null ? ""
                 : before.sourceKind() == SourceKind.ATTEMPT
@@ -113,6 +114,7 @@ public final class AdminIssuanceInquirySql {
 
     /** 유실된 attempt의 발급을 보존하며 원천 ISSUANCE의 동률 순서까지 적용한 SQL을 반환합니다. */
     public static String issuances(InquiryPosition before) {
+        // Calculator의 SourceKind 순서도 동시각 ISSUANCE 우선이다. 순서를 바꾸면 두 SQL 경계도 함께 바꾼다.
         // ATTEMPT cursor와 같은 시각의 ISSUANCE는 전역 순서상 더 최신이므로 제외한다.
         String cursor = before == null ? ""
                 : before.sourceKind() == SourceKind.ISSUANCE
