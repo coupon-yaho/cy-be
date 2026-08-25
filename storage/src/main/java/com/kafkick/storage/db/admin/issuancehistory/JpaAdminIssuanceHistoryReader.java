@@ -3,12 +3,14 @@ import java.time.Instant;
 import java.util.List;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Component;
 import com.kafkick.core.admin.issuancehistory.*;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
 import com.kafkick.core.support.exception.*;
 import com.kafkick.storage.db.coupon.repository.IssuanceHistoryJpaRepository;
 /** DB가 필터, Keyset, limit+1 및 요약을 수행하는 관리자 이력 Reader입니다. */
+@Component
 public class JpaAdminIssuanceHistoryReader implements AdminIssuanceHistoryReader {
  private final IssuanceHistoryJpaRepository repository;
  /** Repository를 주입받습니다. */ public JpaAdminIssuanceHistoryReader(IssuanceHistoryJpaRepository repository){this.repository=repository;}
