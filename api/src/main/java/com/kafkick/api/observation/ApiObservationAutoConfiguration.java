@@ -5,6 +5,7 @@ import java.time.Clock;
 import javax.sql.DataSource;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
+import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
 import com.kafkick.api.observation.issuance.CampaignMeterProperties;
 import com.kafkick.api.observation.issuance.CampaignMeterRegistry;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
@@ -19,6 +20,7 @@ import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,8 +36,14 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 
 @AutoConfiguration(
-        after = { MetricsAutoConfiguration.class, CompositeMeterRegistryAutoConfiguration.class },
-        afterName = "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration")
+        after = {
+                MetricsAutoConfiguration.class,
+                CompositeMeterRegistryAutoConfiguration.class
+        },
+        afterName = {
+                "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
+                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration"
+        })
 @EnableConfigurationProperties({
         ConsistencySeverityProperties.class,
         ObservationIssuanceProperties.class,
@@ -236,6 +244,29 @@ public class ApiObservationAutoConfiguration {
                 eventRecorder,
                 timeProvider,
                 issuanceProperties.resolvedAttemptFailureLogInterval()
+        );
+    }
+
+    /**
+     * Runtime 설정 원천이 있는 애플리케이션에 발급 관측 Context Factory를 등록합니다.
+     *
+     * @param runtimeConfigStore last-known-good 반영까지 소유하는 Runtime 설정 원천
+     * @param timeProvider Context 생성 시각 공급자
+     * @param issuanceProperties producer 인스턴스 식별자 설정
+     * @return 요청별 발급 관측 Context Factory
+     */
+    @Bean
+    @ConditionalOnBean(RuntimeConfigStore.class)
+    @ConditionalOnMissingBean(IssuanceObservationContextFactory.class)
+    public IssuanceObservationContextFactory issuanceObservationContextFactory(
+            RuntimeConfigStore runtimeConfigStore,
+            TimeProvider timeProvider,
+            ObservationIssuanceProperties issuanceProperties
+    ) {
+        return new IssuanceObservationContextFactory(
+                runtimeConfigStore,
+                timeProvider,
+                issuanceProperties
         );
     }
 

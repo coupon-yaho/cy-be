@@ -9,6 +9,7 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
+import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -62,6 +63,7 @@ public class CampaignOverviewCalculator {
         long closedCount = 0L;
         long openingSoonCount = 0L;
         long preparationIncompleteCount = 0L;
+        SourceStatus preparationStatus = SourceStatus.VALID;
 
         for (int index = 0; index < campaigns.size(); index++) {
             CampaignOverviewSource campaign = Objects.requireNonNull(
@@ -77,7 +79,9 @@ public class CampaignOverviewCalculator {
             boolean openingSoon = isOpeningSoon(campaign, snapshotAt);
             if (openingSoon) {
                 openingSoonCount++;
-                if (!campaign.preparationCompleted()) {
+                PreparationObservation preparation = campaign.preparation();
+                preparationStatus = combinePreparationStatus(preparationStatus, preparation.status());
+                if (Boolean.FALSE.equals(preparation.completed())) {
                     preparationIncompleteCount++;
                 }
             }
@@ -96,12 +100,56 @@ public class CampaignOverviewCalculator {
         }
 
         return new CampaignCalculation(
-                new AdminOverviewSnapshot.OpeningSoonSummary(
-                        openingSoonCount, preparationIncompleteCount),
+                openingSoonObservation(openingSoonCount, preparationIncompleteCount, preparationStatus, snapshotAt),
                 new AdminOverviewSnapshot.CampaignStatusSummary(
                         openCount, scheduledCount, closedCount),
                 calculatedCampaigns
         );
+    }
+
+    /**
+     * 오픈 임박 캠페인의 준비 관측 상태를 상단 KPI에 보존합니다.
+     *
+     * <p>PENDING 준비 상태는 미완료 0건으로 보정하지 않습니다. P-06 전에는 완료 여부가 없는
+     * PENDING만 내려오므로 이 경우 상단 KPI 전체를 값 없는 PENDING으로 둡니다.</p>
+     */
+    private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary>
+            openingSoonObservation(
+                    long openingSoonCount,
+                    long preparationIncompleteCount,
+                    SourceStatus preparationStatus,
+                    Instant snapshotAt
+            ) {
+        if (!preparationStatus.carriesValue()) {
+            return new AdminOverviewSnapshot.Observation<>(null, preparationStatus, null);
+        }
+        return new AdminOverviewSnapshot.Observation<>(
+                new AdminOverviewSnapshot.OpeningSoonSummary(openingSoonCount, preparationIncompleteCount),
+                preparationStatus,
+                snapshotAt);
+    }
+
+    /** 값 없는 준비 상태가 알려진 수치를 정상값처럼 덮어쓰지 않도록 우선순위를 합성합니다. */
+    private static SourceStatus combinePreparationStatus(SourceStatus current, SourceStatus next) {
+        if (current == SourceStatus.UNAVAILABLE || next == SourceStatus.UNAVAILABLE) {
+            return SourceStatus.UNAVAILABLE;
+        }
+        if (current == SourceStatus.PENDING || next == SourceStatus.PENDING) {
+            return SourceStatus.PENDING;
+        }
+        if (current == SourceStatus.N_A || next == SourceStatus.N_A) {
+            return SourceStatus.N_A;
+        }
+        if (current == SourceStatus.STALE || next == SourceStatus.STALE) {
+            return SourceStatus.STALE;
+        }
+        if (current == SourceStatus.WARMING_UP || next == SourceStatus.WARMING_UP) {
+            return SourceStatus.WARMING_UP;
+        }
+        if (current == SourceStatus.NO_TRAFFIC || next == SourceStatus.NO_TRAFFIC) {
+            return SourceStatus.NO_TRAFFIC;
+        }
+        return SourceStatus.VALID;
     }
 
     /** 정확히 30분 뒤에 오픈하는 예약 캠페인까지 운영자의 사전 확인 대상으로 포함합니다. */
@@ -222,12 +270,12 @@ public class CampaignOverviewCalculator {
     /**
      * 캠페인 원천 목록에서 함께 계산한 상단 KPI와 캠페인별 표시 결과입니다.
      *
-     * @param openingSoon 30분 안에 오픈하는 캠페인과 그중 준비 미완료 캠페인 수
+     * @param openingSoon 30분 안에 오픈하는 캠페인과 준비 관측 상태
      * @param campaignStatusSummary 캠페인의 진행·예정·종료 상태별 수
      * @param campaigns 캠페인 기본 정보와 독립적인 O1·O2·O4 원천 상태 목록
      */
     public record CampaignCalculation(
-            AdminOverviewSnapshot.OpeningSoonSummary openingSoon,
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary> openingSoon,
             AdminOverviewSnapshot.CampaignStatusSummary campaignStatusSummary,
             List<AdminOverviewSnapshot.CampaignOverview> campaigns
     ) {

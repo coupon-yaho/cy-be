@@ -105,16 +105,16 @@ class ApiApplicationTests {
                 .withUserConfiguration(BenchmarkRunConfiguration.class, AdminObservabilityConfig.class)
                 .withBean(TimeProvider.class,
                         () -> org.mockito.Mockito.mock(TimeProvider.class))
-                .withBean(com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory.class,
+                .withBean(com.kafkick.core.runtimeconfig.RuntimeConfigStore.class,
                         () -> org.mockito.Mockito.mock(
-                                com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory.class))
+                                com.kafkick.core.runtimeconfig.RuntimeConfigStore.class))
+                .withBean(com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.StockRiskCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.class)
-                .withBean(com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.OperationActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator.class)
                 .withPropertyValues("observation.datasource.enabled=1")

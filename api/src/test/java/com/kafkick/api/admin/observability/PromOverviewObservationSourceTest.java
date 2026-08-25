@@ -229,12 +229,9 @@ class PromOverviewObservationSourceTest {
                 AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 5d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ALREADY_ISSUED, 4d,
                 AdminOverviewSnapshot.CustomerOutcomeType.STOCK_EXHAUSTED, 5d,
-                // INELIGIBLE 은 NOT_OPENED(6)+CAMPAIGN_CLOSED(7)+GRADE_NOT_ELIGIBLE(8)
-                // +INVALID_TRANSITION(11), SYSTEM_FAILURE 는 12+13+14 다. 값은 outcomeSamples 의
-                // 인덱스에서 나오므로 라벨이 늘면 함께 움직인다 — 계약 수치가 아니다.
-                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 32d,
+                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 35d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 19d,
-                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 39d));
+                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 36d));
         assertThat(data.aggregateIssuanceRate().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(data.latencySummary().value().successfulP99()).isEqualTo(Duration.ofMillis(400));
@@ -552,7 +549,12 @@ class PromOverviewObservationSourceTest {
         assertThat(input(data, 101L).sourceStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
         assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
-        assertThat(output).contains("Overview O1 Prometheus 질의 실패", "flow failed")
+        String warning = output.getOut().lines()
+                .filter(line -> line.contains("Overview O1 Prometheus 질의 실패"))
+                .findFirst()
+                .orElseThrow();
+        // DEBUG 로그의 상세 stacktrace와 분리해 WARN 행 자체가 한 줄인지 검증합니다.
+        assertThat(warning).contains("flow failed")
                 .doesNotContain("at com.kafkick.api.admin.observability.PromOverviewObservationSource");
     }
 
@@ -579,6 +581,26 @@ class PromOverviewObservationSourceTest {
 
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(data.outcomeInput().counts()).isEmpty();
+    }
+
+    /** 상태 전이 거절은 서버 장애가 아니라 고객이 받을 수 없는 정책 결과로 집계합니다. */
+    @Test
+    @DisplayName("INVALID_TRANSITION outcome은 INELIGIBLE로 집계한다")
+    void mapsInvalidTransitionOutcomeToIneligible() {
+        OverviewObservationData data = observe(
+                query -> query.equals(OverviewPrometheusContract.outcomes())
+                        ? outcomeSamplesWithOnly("INVALID_TRANSITION", 1d)
+                        : happyInstant(query),
+                this::happyRange);
+
+        double ineligible = data.outcomeInput().counts().stream()
+                .filter(count -> count.type()
+                        == AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE)
+                .mapToDouble(OutcomeCount::count)
+                .sum();
+
+        assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
+        assertThat(ineligible).isEqualTo(1d);
     }
 
     /** increase에 아직 나오지 않는 새 label도 snapshot inventory에서 먼저 차단해야 합니다. */
@@ -738,8 +760,6 @@ class PromOverviewObservationSourceTest {
                         .calculate(data.outcomeInput()).customerOutcomes().value();
 
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
-        // 0.1(ISSUED) + 2..14 = 104.1. 값은 outcomeSamples 의 인덱스에서 나오므로 라벨이
-        // 늘면 함께 움직인다 — 계약 수치가 아니라 픽스처 산술이다.
         assertThat(calculated.totalCount()).isEqualTo(104.1d);
         assertThat(calculated.outcomes()).first().satisfies(outcome -> {
             assertThat(outcome.type()).isEqualTo(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
@@ -931,10 +951,10 @@ class PromOverviewObservationSourceTest {
                           {"metric":{"outcome":"GRADE_NOT_ELIGIBLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NO_ENTRY_TOKEN"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"ENTRY_TOKEN_EXPIRED"},"value":[1755000000,"1"]},
-                          {"metric":{"outcome":"INVALID_TRANSITION"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"TEMPORARILY_UNAVAILABLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"INTERNAL_ERROR"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"UNMAPPED"},"value":[1755000000,"1"]},
+                          {"metric":{"outcome":"INVALID_TRANSITION"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NEW_RESULT"},"value":[1755000000,"broken"]}]}}
                         """);
 
@@ -1000,8 +1020,8 @@ class PromOverviewObservationSourceTest {
         String[] labels = {
                 "ISSUED", "QUEUED", "QUEUE_REQUIRED", "ALREADY_ISSUED", "STOCK_EXHAUSTED",
                 "NOT_OPENED", "CAMPAIGN_CLOSED", "GRADE_NOT_ELIGIBLE", "NO_ENTRY_TOKEN",
-                "ENTRY_TOKEN_EXPIRED", "INVALID_TRANSITION", "TEMPORARILY_UNAVAILABLE",
-                "INTERNAL_ERROR", "UNMAPPED"
+                "ENTRY_TOKEN_EXPIRED", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED",
+                "INVALID_TRANSITION"
         };
         List<PromSample> samples = new ArrayList<>();
         for (int index = 0; index < labels.length; index++) {
@@ -1023,6 +1043,15 @@ class PromOverviewObservationSourceTest {
                 .map(item -> replacements.containsKey(item.label("outcome"))
                         ? sample(Map.of("outcome", item.label("outcome")),
                                 replacements.get(item.label("outcome")))
+                        : item)
+                .toList();
+    }
+
+    /** 지정 raw outcome 하나만 값으로 두고 나머지 사전 등록 label은 0으로 유지합니다. */
+    private static List<PromSample> outcomeSamplesWithOnly(String target, double value) {
+        return outcomeSamples(0d, 0d).stream()
+                .map(item -> target.equals(item.label("outcome"))
+                        ? sample(Map.of("outcome", target), value)
                         : item)
                 .toList();
     }

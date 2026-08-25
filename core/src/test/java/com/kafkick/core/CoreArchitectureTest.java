@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class CoreArchitectureTest {
 
-    private static final List<String> FORBIDDEN_IMPORTS = List.of(
+    private static final List<String> FORBIDDEN_REFERENCES = List.of(
             "import jakarta.persistence.",
             // ⚠️ 애노테이션은 뺀다. core/build.gradle 이 jackson-annotations 를 명시적으로
             //    의존하고(implementation), IssuanceFlowEvent 가 @JsonInclude 로 직렬화 계약을
@@ -25,6 +25,7 @@ class CoreArchitectureTest {
             "import com.fasterxml.jackson.core.",
             "import tools.jackson.",
             "import org.springframework.data.jpa.",
+            "org.springframework.dao.",
             "import org.springframework.kafka.",
             "import org.springframework.data.redis.",
             "import com.kafkick.api.",
@@ -50,17 +51,36 @@ class CoreArchitectureTest {
         assertThat(violations).isEmpty();
     }
 
+    @Test
+    void fullyQualifiedSpringDaoReferenceIsAlsoForbidden() {
+        String source = "class Probe { "
+                + "org.springframework.dao.DataAccessException failure; }";
+
+        assertThat(forbiddenReferences(Path.of("Probe.java"), source))
+                .containsExactly(
+                        "Probe.java: org.springframework.dao."
+                );
+    }
+
     private static Stream<String> forbiddenImports(Path path) {
         try {
             String source = Files.readString(path);
-            return FORBIDDEN_IMPORTS.stream()
-                    .filter(source::contains)
-                    .map(forbidden -> path + ": " + forbidden);
+            return forbiddenReferences(path, source).stream();
         } catch (IOException exception) {
             throw new IllegalStateException(
                     "core 소스 파일을 읽을 수 없습니다: " + path,
                     exception
             );
         }
+    }
+
+    private static List<String> forbiddenReferences(
+            Path path,
+            String source
+    ) {
+        return FORBIDDEN_REFERENCES.stream()
+                .filter(source::contains)
+                .map(forbidden -> path + ": " + forbidden)
+                .toList();
     }
 }

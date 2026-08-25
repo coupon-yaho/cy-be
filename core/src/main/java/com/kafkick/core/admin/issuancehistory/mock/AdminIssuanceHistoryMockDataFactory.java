@@ -7,7 +7,6 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Objects;
 
-import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
@@ -19,8 +18,14 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
  *
  * <p>모든 프로세스와 Factory 인스턴스가 같은 고정 기준을 사용하며, 요약, 마스킹, 페이지와 같은
  * 파생 결과 없이 저장소가 반환할 원시 행만 제공합니다.</p>
+ *
+ * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
+ * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
+ *
+ * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
+ * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
+ * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
  */
-@Component
 public class AdminIssuanceHistoryMockDataFactory {
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");

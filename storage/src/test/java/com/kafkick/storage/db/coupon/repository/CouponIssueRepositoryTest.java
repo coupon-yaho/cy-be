@@ -169,6 +169,17 @@ class CouponIssueRepositoryTest {
     }
 
     @Test
+    @DisplayName("회차와 회원으로 기존 발급 여부를 조회한다")
+    void findsExistingIssuanceByCouponAndMember() {
+        issue(1L);
+
+        assertThat(issuanceRepository.existsForCouponRoundAndMember(10L, 1L))
+                .isTrue();
+        assertThat(issuanceRepository.existsForCouponRoundAndMember(10L, 2L))
+                .isFalse();
+    }
+
+    @Test
     @DisplayName("존재하지 않는 회원은 404로 거부하고 재고를 점유하지 않는다")
     void rejectMissingMemberWithoutStockLeak() {
         assertThatThrownBy(() -> issue(999L))

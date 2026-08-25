@@ -3,6 +3,7 @@ package com.kafkick.core.admin.overview;
 import java.time.Instant;
 import java.util.Objects;
 
+import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
@@ -25,7 +26,7 @@ import com.kafkick.core.observation.SourceStatus;
  * @param activeCount 현재 활성 발급 수량; 아직 수집하지 못했으면 {@code null}
  * @param stockObservedAt 재고 수량을 관측한 시각; 재고를 수집하지 못했으면 {@code null}
  * @param stockStatus 기술 원천과 분리한 재고 관측 상태
- * @param preparationCompleted 필수 준비 항목을 모두 완료했는지 여부
+ * @param preparation 필수 준비 항목의 완료 여부와 관측 상태
  */
 public record CampaignOverviewSource(
         Long couponId,
@@ -39,7 +40,7 @@ public record CampaignOverviewSource(
         Long activeCount,
         Instant stockObservedAt,
         SourceStatus stockStatus,
-        boolean preparationCompleted
+        PreparationObservation preparation
 ) {
 
     /** 캠페인 기본 정보와 재고 상태·수량·관측 시각의 canonical 조합을 강제합니다. */
@@ -51,6 +52,7 @@ public record CampaignOverviewSource(
         Objects.requireNonNull(opensAt, "opensAt");
         Objects.requireNonNull(engineVersion, "engineVersion");
         Objects.requireNonNull(stockStatus, "stockStatus");
+        Objects.requireNonNull(preparation, "preparation");
         if (stockStatus.carriesValue()) {
             if (totalQuantity == null || activeCount == null || stockObservedAt == null) {
                 throw new IllegalArgumentException("값 있는 재고 상태는 수량과 observedAt이 모두 필요합니다.");

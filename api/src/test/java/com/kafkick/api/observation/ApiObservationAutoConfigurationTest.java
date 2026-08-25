@@ -13,6 +13,14 @@ import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
+import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
+import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
+import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
+import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
+import com.kafkick.api.observation.issuance.CouponIssueObservationDependencyMapper;
+import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -39,6 +47,7 @@ import com.kafkick.core.observation.ReleaseStage;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 @ExtendWith(OutputCaptureExtension.class)
 class ApiObservationAutoConfigurationTest {
@@ -75,6 +84,66 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context.getBean(ConsistencySeverityPolicy.class).warnThreshold()).isEqualTo(10);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).criticalThreshold()).isEqualTo(100);
         });
+    }
+
+    @Test
+    void usesLocalProducerInstanceIdByDefault() {
+        contextRunner.run(context -> assertThat(context.getBean(
+                ObservationIssuanceProperties.class
+        ).producerInstanceId()).isEqualTo("api-local"));
+    }
+
+    @Test
+    void bindsProducerInstanceIdFromEnvironmentPlaceholder() {
+        contextRunner
+                .withSystemProperties("HOSTNAME=api-production-17")
+                .withPropertyValues(
+                        "observation.issuance.producer-instance-id="
+                                + "${HOSTNAME:api-local}"
+                )
+                .run(context -> assertThat(context.getBean(
+                        ObservationIssuanceProperties.class
+                ).producerInstanceId()).isEqualTo("api-production-17"));
+    }
+
+    @Test
+    void rejectsBlankProducerInstanceIdAtStartup() {
+        contextRunner
+                .withPropertyValues(
+                        "observation.issuance.producer-instance-id= "
+                )
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void rejectsProducerInstanceIdLongerThanOneHundredCharactersAtStartup() {
+        contextRunner
+                .withPropertyValues(
+                        "observation.issuance.producer-instance-id="
+                                + "x".repeat(101)
+                )
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void registersContextFactoryWhenRuntimeConfigStoreExists() {
+        RuntimeConfigSnapshot snapshot = new RuntimeConfigSnapshot(
+                EngineVersion.V3,
+                ReleaseStage.V3,
+                QueueMode.ADAPTIVE,
+                1L,
+                Instant.parse("2026-08-24T05:00:00Z"),
+                "operator",
+                SourceStatus.VALID
+        );
+
+        contextRunner
+                .withBean(
+                        RuntimeConfigStore.class,
+                        () -> new ReadOnlyRuntimeConfigStore(snapshot)
+                )
+                .run(context -> assertThat(context)
+                        .hasSingleBean(IssuanceObservationContextFactory.class));
     }
 
     @Test
@@ -193,13 +262,45 @@ class ApiObservationAutoConfigurationTest {
     @Test
     void startsWithAUserSuppliedRecorderWhileKafkaIsDisabled() {
         contextRunner
+                .withUserConfiguration(
+                        CouponIssueObservationCoordinator.class
+                )
                 .withBean("auditEventRecorder", EventRecorder.class, () -> event -> { })
+                .withBean(
+                        CouponOperationExecutionService.class,
+                        () -> mock(CouponOperationExecutionService.class)
+                )
+                .withBean(
+                        CouponIssueObservationDependencyMapper.class,
+                        CouponIssueObservationDependencyMapper::new
+                )
+                .withBean(
+                        RuntimeConfigStore.class,
+                        () -> new ReadOnlyRuntimeConfigStore(
+                                validRuntimeConfigSnapshot()
+                        )
+                )
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(MeterEventRecorder.class);
+                    assertThat(context).hasSingleBean(
+                            CouponIssueObservationCoordinator.class
+                    );
                     assertThat(context.getBean(EventRecorder.class))
                             .isInstanceOf(CompositeEventRecorder.class);
                 });
+    }
+
+    private static RuntimeConfigSnapshot validRuntimeConfigSnapshot() {
+        return new RuntimeConfigSnapshot(
+                EngineVersion.V3,
+                ReleaseStage.V3,
+                QueueMode.ADAPTIVE,
+                1L,
+                Instant.parse("2026-08-24T05:00:00Z"),
+                "operator",
+                SourceStatus.VALID
+        );
     }
 
     @Test

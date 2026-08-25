@@ -18,28 +18,30 @@ import org.junit.jupiter.api.Test;
 /**
  * <b>관측 풀로 나가는 질의가 회원 테이블을 건드리지 않는지</b>를 소스에서 고정한다.
  *
- * <p>관측 계정은 스키마 단위로 {@code SELECT} 를 갖는다({@code infra/mysql/initdb/20-obs-account.sh}).
- * 그 형태를 고른 것은 취향이 아니다 — {@code initdb.d} 는 Flyway 보다 먼저 돌아 그 시점에는
- * 테이블이 하나도 없고, 테이블 단위로 적으면 {@code ERROR 1146} 으로 컨테이너가 안 뜬다.
- * 그리고 <b>스키마 GRANT 위에 테이블 REVOKE 를 얹을 수도 없다</b> —
- * {@code ERROR 1147: There is no such grant defined ... on table 'members'} (둘 다 실측).
+ * <p><b>[OBS-36] DB 계층 방어선이 생겼다.</b> 관측 계정은 더 이상 스키마 단위 {@code SELECT} 를
+ * 갖지 않는다 — {@code infra/mysql/obs-grants/allowlist.txt} 의 테이블만 읽는다. 그래서
+ * {@code members} 질의는 이제 DB 가 {@code MySQL 1142} 로 거부한다.
+ * (부여가 {@code initdb} 가 아닌 별도 자리로 나간 이유는 두 실측이다 — initdb 시점에는
+ * 테이블이 없어 {@code ERROR 1146} 이고, 스키마 GRANT 위에는 테이블 REVOKE 를 못 얹는다:
+ * {@code ERROR 1147: There is no such grant defined ... on table 'members'}.)
  *
- * <p>그래서 <b>DB 계층에서 {@code members} 를 빼는 방어선이 지금은 없다.</b> 이 테스트가
- * 그 자리를 대신한다 — 관측 한정자를 쓰는 코드가 회원 테이블을 <b>질의문에 적는 순간</b>
- * 빨간불이 뜬다.
+ * <p><b>그럼에도 이 테스트를 남기는 이유</b> — 계정 권한은 <b>배포된 DB 에서</b> 막고,
+ * 이 테스트는 <b>CI 에서, 배포 전에</b> 막는다. 관측 질의에 {@code members} 를 적은 커밋은
+ * 여기서 먼저 빨간불이 뜨므로, 1142 를 운영에서 만나기 전에 끝난다. 그리고 재부여 절차를
+ * 아직 안 돌린 환경(OBS-36 이전 볼륨)에서는 계정 권한 쪽 방어선이 아직 없다.
  *
  * <p><b>이것이 무엇을 못 막는지 분명히 적는다.</b> 그물코가 넷 있다.
  *
  * <ol>
- *   <li><b>계정 권한은 그대로다.</b> 누가 DB 에 직접 붙거나 이 저장소 밖의 도구가 그 계정으로
- *       조회하면 아무것도 못 막는다. DB 계층 방어선은 별도 티켓이다 — 스키마 GRANT 를 걷고
- *       필요한 테이블만 주는 형태여야 하고, 그것은 Flyway 이후에 도는 자리가 필요하다</li>
+ *   <li><b>DB 에 직접 붙는 경로를 못 본다.</b> 저장소 밖 도구가 그 계정으로 조회하면 이
+ *       테스트는 아무것도 모른다. 그쪽은 이제 계정 권한이 막는다(OBS-36) — 단
+ *       {@code obs-grants} 재부여를 돌린 환경에서만 그렇다</li>
  *   <li><b>{@code src/main/java} 만 걷는다.</b> 질의가 {@code .sql}·{@code .yml} 로 나가면
  *       안 본다. 지금 그런 파일은 없다(확인함) — 생기는 날 이 테스트는 조용히 통과한다</li>
  *   <li><b>뷰·별칭 경유를 못 본다.</b> {@code V8__latest_stats_run_view.sql} 처럼 뷰가 실재하므로,
  *       뷰가 {@code members} 를 감싸면 질의문에는 그 이름이 안 나온다</li>
  *   <li><b>표지가 {@code @Qualifier("obs")} 문자열이다.</b> 그 한정자 없이 빈 이름으로만
- *       주입받는 파일이 생기면 대상에서 빠진다. 지금은 전부 한정자를 달고 있다(대상 10파일)</li>
+ *       주입받는 파일이 생기면 대상에서 빠진다. 지금은 전부 한정자를 달고 있다</li>
  * </ol>
  *
  * <p>즉 이것은 <b>개발 시점 회귀를 잡는 그물</b>이고 보안 경계가 아니다. 그렇게 읽히지 않도록

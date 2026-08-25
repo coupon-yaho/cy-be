@@ -1,0 +1,40 @@
+package com.kafkick.core.admin.campaignsource;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Instant;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.kafkick.core.observation.SourceStatus;
+
+/** 준비 상태가 알 수 없음을 완료·미완료로 축약하지 않는지 검증합니다. */
+class PreparationObservationTest {
+
+    private static final Instant OBSERVED_AT = Instant.parse("2026-08-24T03:00:00Z");
+
+    /** P-06 전 DB 원천의 미구현 상태를 명시적인 PENDING으로 보존하는지 검증합니다. */
+    @Test
+    @DisplayName("준비 상태 미구현은 null PENDING null로 보존한다")
+    void preservesPendingPreparationWithoutInventingCompletion() {
+        PreparationObservation preparation = new PreparationObservation(null, SourceStatus.PENDING, null);
+
+        assertThat(preparation.completed()).isNull();
+        assertThat(preparation.status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(preparation.observedAt()).isNull();
+    }
+
+    /** 값 있는 상태가 완료 여부·관측 시각을 모두 요구해 unknown을 false로 바꾸지 않는지 검증합니다. */
+    @Test
+    @DisplayName("값 있는 준비 상태는 완료 여부와 관측 시각을 모두 요구한다")
+    void rejectsIncompleteCarryingPreparation() {
+        assertThatThrownBy(() -> new PreparationObservation(null, SourceStatus.VALID, OBSERVED_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PreparationObservation(Boolean.FALSE, SourceStatus.VALID, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PreparationObservation(Boolean.FALSE, SourceStatus.PENDING, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+}

@@ -80,6 +80,10 @@ tasks.named('test') {
             // GRANT 계약을 단언하므로, 선언하지 않으면 스크립트를 고쳐도 이 모듈이
             // UP-TO-DATE 로 건너뛴다 — 정작 계약을 보는 테스트가 안 도는 상태가 된다.
             rootProject.file('infra/mysql/initdb/20-obs-account.sh'),
+            // [OBS-36] 권한을 실제로 주는 쪽. 계정 생성 스크립트와 분리돼 있으므로 둘 다
+            // 선언해야 한다 — 목록에서 한 줄을 빼도 :batch:test 가 UP-TO-DATE 로 건너뛰면
+            // 양방향 계약 테스트가 안 돈다.
+            rootProject.file('infra/mysql/obs-grants'),
             // 관측 창의 기준. api 가 소유한다.
             rootProject.file('api/src/main/resources/observation.yml.example'),
             // 컨테이너에 마운트되는 배포 설정. batch 프로파일 문서가 창을 덮는지 본다.
@@ -88,5 +92,35 @@ tasks.named('test') {
             // 불변식을 스스로 완결하게 둔다 — 나중에 소스셋 밖으로 옮겨도 함정이 재발하지 않는다.
             file('src/main/resources/management.yml.example'))
         .withPropertyName('redisLatencyWiringContractInputs')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // [OBS-36] ObservationAccountPrivilegeTest 의 ③④ 는 **모든 모듈의 자바 원본**에서
+    // 관측 질의문을 걷는다. 선언하지 않으면 api 에 새 관측 질의를 넣어도 :batch:test 가
+    // UP-TO-DATE 로 건너뛴다 — 목록에 없는 테이블을 읽는 코드가 초록불로 들어온다.
+    // (storage/build.gradle 의 observationQueryScopeInputs 가 같은 이유로 같은 목록을 갖는다.
+    //  모듈 목록은 그 테스트의 MODULES 상수와 한 쌍이고, settings.gradle 과 어긋나면
+    //  moduleListMatchesSettingsGradle 이 잡는다.)
+    //
+    // ⑤ 는 여기에 더해 **배포 안내(.env.example)와 각 모듈의 테스트·픽스처 원본**까지 읽는다.
+    // 스키마 단위 GRANT 가 되살아나는 자리가 실제로 그 둘이었다 — 배포 안내가 그것을 권했고,
+    // storage 테스트가 자기 컨테이너에 그것을 주고 있었다.
+    inputs.files(
+            rootProject.file('settings.gradle'),
+            rootProject.file('.env.example'),
+            rootProject.file('api/src/main/java'),
+            rootProject.file('batch/src/main/java'),
+            rootProject.file('core/src/main/java'),
+            rootProject.file('storage/src/main/java'),
+            rootProject.file('infra/mq/src/main/java'),
+            rootProject.file('infra/redis/src/main/java'),
+            rootProject.file('api/src/test/java'),
+            rootProject.file('batch/src/test/java'),
+            rootProject.file('core/src/test/java'),
+            rootProject.file('storage/src/test/java'),
+            rootProject.file('storage/src/testFixtures/java'),
+            rootProject.file('core/src/testFixtures/java'),
+            rootProject.file('infra/mq/src/test/java'),
+            rootProject.file('infra/redis/src/test/java'))
+        .withPropertyName('observationAllowlistContractInputs')
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }

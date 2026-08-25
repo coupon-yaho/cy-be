@@ -11,29 +11,38 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 class RequestIdFilterTest {
 
-    private static final String HEADER = "X-Request-Id";
     private static final String MDC_KEY = "requestId";
 
     private final RequestIdFilter filter = new RequestIdFilter();
 
     /** 체인 실행 중의 MDC 값. 필터가 심은 값과 응답 헤더가 같은지 보려면 여기서 잡아야 한다. */
     private String mdcInsideChain;
+    private Object attributeInsideChain;
 
     private MockHttpServletResponse run(String headerValue) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
         if (headerValue != null) {
-            request.addHeader(HEADER, headerValue);
+            request.addHeader(
+                    RequestIdFilter.REQUEST_ID_HEADER,
+                    headerValue
+            );
         }
         MockHttpServletResponse response = new MockHttpServletResponse();
-        mdcInsideChain = null;
-        filter.doFilter(request, response, (req, res) -> mdcInsideChain = MDC.get(MDC_KEY));
+        filter.doFilter(request, response, (req, res) -> {
+            mdcInsideChain = MDC.get(MDC_KEY);
+            attributeInsideChain = req.getAttribute(
+                    RequestIdFilter.REQUEST_ID_ATTRIBUTE
+            );
+        });
         return response;
     }
 
     @Test
     @DisplayName("안전한 클라이언트 요청 ID를 그대로 사용한다")
     void preservesSafeClientRequestId() throws Exception {
-        assertThat(run("client-request_2026.08-22").getHeader(HEADER))
+        assertThat(run("client-request_2026.08-22").getHeader(
+                RequestIdFilter.REQUEST_ID_HEADER
+        ))
                 .isEqualTo("client-request_2026.08-22");
     }
 
@@ -42,28 +51,43 @@ class RequestIdFilterTest {
     void replacesRequestIdContainingLogInjectionCharacters() throws Exception {
         String unsafe = "trusted\r\nforged-log";
 
-        assertThat(run(unsafe).getHeader(HEADER))
+        assertThat(run(unsafe).getHeader(RequestIdFilter.REQUEST_ID_HEADER))
                 .isNotEqualTo(unsafe)
                 .matches("[0-9a-f]{32}");
     }
 
     @Test
-    @DisplayName("64자를 초과한 요청 ID는 서버 ID로 교체한다")
+    @DisplayName("36자 요청 ID를 그대로 사용한다")
+    void preservesRequestIdAtMaximumLength() throws Exception {
+        String requestId = "r".repeat(36);
+
+        assertThat(run(requestId).getHeader(
+                RequestIdFilter.REQUEST_ID_HEADER
+        )).isEqualTo(requestId);
+    }
+
+    @Test
+    @DisplayName("36자를 초과한 요청 ID는 서버 ID로 교체한다")
     void replacesRequestIdLongerThanMaximumLength() throws Exception {
-        assertThat(run("a".repeat(65)).getHeader(HEADER))
+        assertThat(run("a".repeat(37)).getHeader(
+                RequestIdFilter.REQUEST_ID_HEADER
+        ))
                 .matches("[0-9a-f]{32}");
     }
 
     @Test
     @DisplayName("헤더가 없으면 서버 ID를 생성한다")
     void generatesWhenAbsent() throws Exception {
-        assertThat(run(null).getHeader(HEADER)).matches("[0-9a-f]{32}");
+        assertThat(run(null).getHeader(RequestIdFilter.REQUEST_ID_HEADER))
+                .matches("[0-9a-f]{32}");
     }
 
     @Test
     @DisplayName("체인 실행 중 MDC 값이 응답 헤더와 같다")
     void mdcMatchesResponseHeaderDuringChain() throws Exception {
-        String requestId = run("client-request_2026.08-22").getHeader(HEADER);
+        String requestId = run("client-request_2026.08-22").getHeader(
+                RequestIdFilter.REQUEST_ID_HEADER
+        );
 
         assertThat(mdcInsideChain).isEqualTo(requestId).isEqualTo("client-request_2026.08-22");
     }
@@ -71,9 +95,22 @@ class RequestIdFilterTest {
     @Test
     @DisplayName("서버 ID를 만든 경우에도 MDC 값이 응답 헤더와 같다")
     void mdcMatchesGeneratedValue() throws Exception {
-        String generated = run("a\tb").getHeader(HEADER);
+        String generated = run("a\tb").getHeader(
+                RequestIdFilter.REQUEST_ID_HEADER
+        );
 
         assertThat(mdcInsideChain).isEqualTo(generated).matches("[0-9a-f]{32}");
+    }
+
+    @Test
+    @DisplayName("체인 실행 중 MDC와 요청 속성, 응답 헤더가 같은 최종 ID를 사용한다")
+    void mdcAttributeAndResponseHeaderShareFinalRequestId() throws Exception {
+        String responseHeader = run("r".repeat(36)).getHeader(
+                RequestIdFilter.REQUEST_ID_HEADER
+        );
+
+        assertThat(mdcInsideChain).isEqualTo(responseHeader);
+        assertThat(attributeInsideChain).isEqualTo(responseHeader);
     }
 
     @Test

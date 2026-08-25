@@ -17,6 +17,9 @@ import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
 public interface IssuanceJpaRepository
         extends JpaRepository<IssuanceEntity, Long> {
 
+    /** 회차와 회원이 같은 기존 발급건의 존재 여부를 조회합니다. */
+    boolean existsByCouponIdAndMemberId(Long couponId, Long memberId);
+
     @Query(
             value = """
                     SELECT issuance.id AS issuanceId,
