@@ -104,8 +104,13 @@ class HttpMetricsFilterTest {
         assertThat(UriGroup.of("GET", "/actuator/prometheus")).isEmpty();
     }
 
+    /**
+     * [OBS-31] Timer 가 둘에서 넷이 됐습니다. 표본이 하나도 없는 축도 <b>등록은 되어 있어야</b>
+     * 합니다 — 첫 요청이 와서야 시계열이 생기면 화면이 그 사이 '축이 없음' 과 '값이 없음' 을
+     * 구분할 수 없습니다.
+     */
     @Test
-    void registersSixCountersAndTwoTimersForEveryUriGroup() {
+    void registersSixCountersAndFourTimersForEveryUriGroup() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         new HttpMetrics(registry);
 
@@ -113,7 +118,14 @@ class HttpMetricsFilterTest {
             assertThat(registry.find(MeterNames.HTTP_RESULT)
                     .tag("uri_group", group.tagValue()).counters()).hasSize(6);
             assertThat(registry.find(MeterNames.HTTP_LATENCY)
-                    .tag("uri_group", group.tagValue()).timers()).hasSize(2);
+                    .tag("uri_group", group.tagValue()).timers()).hasSize(4);
+            for (HttpMetrics.LatencyOutcome outcome : HttpMetrics.LatencyOutcome.values()) {
+                assertThat(registry.find(MeterNames.HTTP_LATENCY)
+                        .tags("uri_group", group.tagValue(), "outcome", outcome.tagValue())
+                        .timer())
+                        .as("%s · %s 축이 등록되지 않았습니다", group, outcome)
+                        .isNotNull();
+            }
         }
     }
 
@@ -332,23 +344,87 @@ class HttpMetricsFilterTest {
         assertThat(fixture.filter.shouldNotFilterErrorDispatch()).isTrue();
     }
 
+    /**
+     * <b>URI 그룹</b> 축을 봅니다. 같은 성공 경로라도 그룹이 다르면 다른 Timer 여야 합니다 —
+     * 한 Timer 에 모으면 무거운 발급과 가벼운 조회가 한 분포에 섞입니다.
+     *
+     * <p>outcome 축을 가르는 것은 {@link #separatesPolicyRejectFromSystemFailureLatency} 와
+     * {@link #queueAcceptedRidesTheSuccessAxis} 의 몫이라 여기서는 보지 않습니다.</p>
+     */
     @Test
-    void separatesSuccessAndFailureLatencyByUriGroup() {
+    void separatesLatencyByUriGroup() {
         Fixture fixture = new Fixture();
         for (int i = 0; i < 100; i++) {
             fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.SUCCESS, 300_000_000);
-            fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.CLIENT_INVALID, 500_000);
             fixture.metrics.record(UriGroup.QUEUE, ResultClassifier.ResultClass.SUCCESS, 100_000);
         }
 
         Timer issueSuccess = fixture.timer("issue", "success");
-        Timer issueFailure = fixture.timer("issue", "failure");
         Timer queueSuccess = fixture.timer("queue", "success");
 
         assertThat(issueSuccess.max(TimeUnit.NANOSECONDS))
-                .isGreaterThan(issueFailure.max(TimeUnit.NANOSECONDS) * 100);
-        assertThat(issueSuccess.max(TimeUnit.NANOSECONDS))
                 .isGreaterThan(queueSuccess.max(TimeUnit.NANOSECONDS) * 1_000);
+        // 그룹이 서로의 표본을 삼키지 않는다.
+        assertThat(issueSuccess.count()).isEqualTo(100);
+        assertThat(queueSuccess.count()).isEqualTo(100);
+    }
+
+    /**
+     * [OBS-31] 이 티켓의 본론입니다. 정책 거절은 재고 소진 판정으로 끝나 1ms 미만이고 시스템
+     * 실패는 타임아웃까지 끌립니다. 한 Timer 에 넣으면 <b>거절이 쏟아질수록 실패 지연이 좋아
+     * 보입니다</b> — 화면이 정확히 반대로 읽습니다.
+     */
+    @Test
+    void separatesPolicyRejectFromSystemFailureLatency() {
+        Fixture fixture = new Fixture();
+        for (int i = 0; i < 1000; i++) {
+            fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.POLICY_REJECT, 500_000);
+        }
+        fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.DEPENDENCY_FAILURE, 3_000_000_000L);
+        fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.APPLICATION_FAILURE, 2_000_000_000L);
+
+        Timer policyReject = fixture.timer("issue", "policy_reject");
+        Timer systemFailure = fixture.timer("issue", "system_failure");
+
+        assertThat(policyReject.count()).isEqualTo(1000);
+        assertThat(systemFailure.count()).isEqualTo(2);
+        // 거절 1000 건이 실패 지연을 끌어내리지 않는다.
+        assertThat(systemFailure.max(TimeUnit.NANOSECONDS)).isEqualTo(3_000_000_000L);
+        assertThat(policyReject.max(TimeUnit.NANOSECONDS)).isEqualTo(500_000L);
+    }
+
+    /**
+     * 4xx 계약 위반은 <b>자기 축</b>을 가집니다. 정책 거절로 새면 인증 실패·라우팅 실패가
+     * '정책상 거절' 로 읽히고, 그 축이 다시 못 믿을 값이 됩니다.
+     *
+     * <p><b>계측 계층이 스스로 증명해야 하는 성질입니다.</b> 조립기 쪽 계약 테스트가 같은 것을
+     * 보지만 그쪽 목적은 "노출하지 않는다" 이고, 이 모듈만 따로 돌렸을 때도 축이 갈리는지가
+     * 확인돼야 합니다.</p>
+     */
+    @Test
+    void clientInvalidGetsItsOwnLatencyAxis() {
+        Fixture fixture = new Fixture();
+        fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.CLIENT_INVALID, 7_000_000);
+        fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.POLICY_REJECT, 500_000);
+        fixture.metrics.record(UriGroup.ISSUE, ResultClassifier.ResultClass.SUCCESS, 300_000_000);
+
+        assertThat(fixture.timer("issue", "client_invalid").count()).isEqualTo(1);
+        assertThat(fixture.timer("issue", "client_invalid").max(TimeUnit.NANOSECONDS))
+                .isEqualTo(7_000_000L);
+        // 서로의 표본을 삼키지 않는다.
+        assertThat(fixture.timer("issue", "policy_reject").count()).isEqualTo(1);
+        assertThat(fixture.timer("issue", "success").count()).isEqualTo(1);
+        assertThat(fixture.timer("issue", "system_failure").count()).isZero();
+    }
+
+    /** 202 는 성공 축입니다. 대기열 진입이 실패로 세지면 큐 경로의 지연이 통째로 뒤집힙니다. */
+    @Test
+    void queueAcceptedRidesTheSuccessAxis() {
+        Fixture fixture = new Fixture();
+        fixture.metrics.record(UriGroup.QUEUE, ResultClassifier.ResultClass.QUEUE_ACCEPTED, 7_000_000);
+
+        assertThat(fixture.timer("queue", "success").count()).isEqualTo(1);
+        assertThat(fixture.timer("queue", "system_failure").count()).isZero();
     }
 
     @Test

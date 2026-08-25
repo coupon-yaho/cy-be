@@ -14,30 +14,32 @@
 #    이 파일을 고쳐도 아무 일이 없다. 그때는 아래 GRANT 를 손으로 한 번 실행하거나
 #    볼륨을 지우고 다시 띄운다.
 #
-# ⚠️ GRANT 는 스키마 단위여야 한다. 취향이 아니라 **여기서는 그것밖에 안 된다** —
-#    initdb 는 Flyway 보다 먼저 돌아서 이 시점에는 테이블이 하나도 없다. 테이블 단위로
-#    적으면 그 자리에서 죽는다(실측):
-#      ERROR 1146 (42S02) at line 2: Table 'app.verification_runs' doesn't exist
+# ⚠️ 이 파일은 **계정만 만든다. 권한은 주지 않는다.**
+#    예전에는 여기서 `GRANT SELECT ON app.*` 를 줬다. 스키마 단위였던 것은 취향이 아니라
+#    여기서는 그것밖에 안 되기 때문이었다 — initdb 는 Flyway 보다 먼저 돌아서 이 시점에는
+#    테이블이 하나도 없고, 테이블 단위로 적으면 그 자리에서 죽는다(실측):
+#      ERROR 1146 (42S02) at line 2: Table 'app.issuances' doesn't exist
 #    → 컨테이너가 exit=1 로 아예 안 뜬다.
 #
-#    ⚠️ 스키마 단위의 대가 — 이 계정은 members 도 읽을 수 있다. 그 테이블만 빼는 것은
-#       MySQL 에서 불가능하다(실측):
-#         REVOKE SELECT ON app.members FROM 'obs'@'%';
-#         → ERROR 1147: There is no such grant defined ... on table 'members'
-#       스키마 GRANT 위에는 테이블 REVOKE 를 얹지 못한다. 빼려면 스키마 GRANT 를 걷고
-#       필요한 테이블만 다시 주는 형태여야 하고, 그것은 테이블이 이미 있어야 하므로
-#       Flyway 이후에 도는 자리가 따로 필요하다 — 여기서는 못 한다.
+#    그 대가가 members 였다. 관측 경로는 그 테이블을 한 곳도 읽지 않는데 계정은 읽을 수
+#    있었고, 그 테이블만 빼는 것은 MySQL 에서 불가능하다(실측):
+#      REVOKE SELECT ON app.members FROM 'obs'@'%';
+#      → ERROR 1147: There is no such grant defined ... on table 'members'
 #
-#       그래서 지금 방어선은 소스 계층 하나뿐이다:
-#       storage 의 ObservationQueryScopeTest 가 관측 한정자를 쓰는 질의문에 members 가
-#       없는지 고정한다. 계정 권한은 그대로이므로 DB 에 직접 붙는 경로는 못 막는다.
-#       TODO(후속 티켓): 관측 계정을 양성 목록으로 재부여한다.
-#       근거와 실측(왜 여기서는 못 하는지, 무엇을 부여해야 하는지)은 AGENTS.md 의
-#       "미결 — 관측 / A" 에 있다.
+#    그래서 권한 부여를 **Flyway 이후에 도는 자리로 옮겼다**:
+#      infra/mysql/obs-grants/apply.sh  (목록은 같은 디렉터리의 allowlist.txt)
+#    compose 에서는 `--profile obs-grants` 일회성 서비스가, 테스트에서는
+#    MySqlContainerConfig 가 같은 파일을 돌린다.
+#
+#    ⚠️ 그 결과 **이 파일만 돌면 obs 계정은 아무것도 못 읽는다**(USAGE 뿐이다). 그게 의도다 —
+#       권한이 없는 상태는 시끄럽게 드러난다 — 관측 풀이 커넥션조차 못 연다(실측:
+#       ERROR 1044 Access denied for user 'obs'@'%' to database 'app'. JDBC URL 이 스키마를
+#       지정하므로 질의가 아니라 접속 단계다). 반대로 스키마 GRANT 가 남아 있는 상태는
+#       아무 증상이 없다. 실행 시점과 미실행 시 증상은 README 에 있다.
 set -eu
 
 : "${MYSQL_ROOT_PASSWORD:?initdb 는 root 로 돈다. 이 값이 없으면 계정을 만들 수 없다}"
-: "${MYSQL_DATABASE:?어느 스키마에 SELECT 를 줄지 정해야 한다}"
+: "${MYSQL_DATABASE:?계정 이름과 함께 검증한다. 권한은 obs-grants/apply.sh 가 준다}"
 : "${DB_OBS_USERNAME:?관측 계정 이름. .env 또는 컨테이너 env 로 준다}"
 : "${DB_OBS_PASSWORD:?관측 계정 비밀번호. .env 또는 컨테이너 env 로 준다}"
 
@@ -80,6 +82,6 @@ CREATE USER IF NOT EXISTS '${obs_user}'@'%' IDENTIFIED BY '${obs_password}';
 -- README 가 안내하는 "기존 볼륨에 손으로 준다" 경로에서 비밀번호를 바꾸려 해도
 -- 아무 일이 안 일어난다. 그래서 한 줄 더 둔다 — 이미 있으면 값을 맞춘다.
 ALTER USER '${obs_user}'@'%' IDENTIFIED BY '${obs_password}';
-GRANT SELECT ON \`${MYSQL_DATABASE}\`.* TO '${obs_user}'@'%';
+-- 권한은 여기서 주지 않는다. 위 ⚠️ 참조 — infra/mysql/obs-grants/apply.sh 가 준다.
 FLUSH PRIVILEGES;
 SQL

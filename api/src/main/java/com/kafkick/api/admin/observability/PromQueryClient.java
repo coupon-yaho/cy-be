@@ -124,15 +124,32 @@ public class PromQueryClient implements PromQuery, PromTimeQuery, RunTimeseriesA
         return parseStrict(body, promQl);
     }
 
-    @Override
-    public List<Sample> queryRange(Metric metric, Instant start, Instant end, int stepSeconds) {
-        String promQl = switch (metric) {
+    /**
+     * 회차 archive 가 쓰는 range 질의입니다.
+     *
+     * <p><b>메서드로 꺼내 둔 이유는 계약 테스트가 문자열을 봐야 하기 때문입니다.</b> 이 질의의
+     * 결과는 {@code run_timeseries} 에 영구 적재되고 완료 회차의 archive 는 불변이라, 뜻이 바뀌면
+     * 소급 정정이 안 됩니다 — 값이 아니라 <b>질의문 자체</b>를 고정해야 합니다.</p>
+     */
+    static String rangeQueryFor(Metric metric) {
+        return switch (metric) {
             case STOCK_REMAINING -> "{__name__=~\"app_coupon_stock_remaining|app_coupon_stock_remaining_state\"}";
             // publishPercentiles만 있으므로 bucket 합산은 할 수 없다. topk가 최댓값의 instance 라벨을 보존한다.
-            case LATENCY_P99 -> "topk(1, app_http_latency_seconds{quantile=\"0.99\"}) * 1000";
+            //
+            // ⚠️ outcome="success" 를 뺄 수 없다. OBS-31 이 Timer 를 outcome 넷으로 가른 뒤로
+            //    이 셀렉터가 없으면 topk 가 '가장 느린 축' 을 집는다 — 성공 경로는 그대로인데
+            //    적재값만 튄다(프로브 실측 243.3ms → 2952.8ms). 축을 실제로 나누는 것은 OBS-46 이고,
+            //    그때도 이 계열의 뜻은 성공 경로로 유지한다(과거 행과 비교 축을 잇기 위해).
+            case LATENCY_P99 -> "topk(1, app_http_latency_seconds"
+                    + "{quantile=\"0.99\",outcome=\"success\"}) * 1000";
             case DB_POOL_USAGE -> "sum(hikaricp_connections_active{job=\"api\",pool!=\"obs-pool\"})"
                     + " / sum(hikaricp_connections_max{job=\"api\",pool!=\"obs-pool\"})";
         };
+    }
+
+    @Override
+    public List<Sample> queryRange(Metric metric, Instant start, Instant end, int stepSeconds) {
+        String promQl = rangeQueryFor(metric);
         JsonNode body;
         try {
             body = restClient.get()
