@@ -155,7 +155,7 @@ public class AdminOverviewService {
                         issuanceCalculation.issuanceFlows(), snapshotAt),
                 catalogAvailable ? campaignCalculation.openingSoon() : emptyObservation(catalog.status()),
                 queueCalculation.queueRisk(),
-                stockCalculation.stockRisk(),
+                catalogAvailable ? stockCalculation.stockRisk() : emptyObservation(catalog.status()),
                 observationData.aggregateIssuanceRate(),
                 queueCalculation.aggregateQueue(),
                 observationData.latencySummary(),

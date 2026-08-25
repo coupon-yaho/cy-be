@@ -3,6 +3,10 @@ package com.kafkick.storage.db.admin;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -13,6 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.sql.DataSource;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
@@ -22,6 +29,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -89,9 +97,10 @@ class JdbcAdminCampaignDataReaderTest {
         try (HikariDataSource rootDataSource = hikari("root", mysql.getPassword())) {
             JdbcTemplate root = new JdbcTemplate(rootDataSource);
             root.execute("CREATE USER 'campaign_obs'@'%' IDENTIFIED BY 'campaign_obs'");
-            for (String table : List.of(
-                    "brands", "coupons", "coupon_stocks", "issuances", "issuance_histories")) {
-                root.execute("GRANT SELECT ON app.`" + table + "` TO 'campaign_obs'@'%'");
+            for (String table : observationTableAllowlist()) {
+                if (tableExists(root, table)) {
+                    root.execute("GRANT SELECT ON app.`" + table + "` TO 'campaign_obs'@'%'");
+                }
             }
             root.execute("FLUSH PRIVILEGES");
         }
@@ -252,8 +261,12 @@ class JdbcAdminCampaignDataReaderTest {
         insertStock(10, 20, 2, SNAPSHOT.minusSeconds(5));
         insertIssuance(101, 10, 1, "ISSUED", 1);
 
-        assertThat(reader.findDetail(10, FROM, TO, SNAPSHOT).availability())
-                .isEqualTo(DetailAvailability.UNAVAILABLE);
+        try (LogCapture logs = LogCapture.start()) {
+            assertThat(reader.findDetail(10, FROM, TO, SNAPSHOT).availability())
+                    .isEqualTo(DetailAvailability.UNAVAILABLE);
+            assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
+                    .contains("admin campaign stock drift", "couponId=10", "activeCount=2", "issuedPlusUsed=1"));
+        }
     }
 
     @Test
@@ -359,9 +372,15 @@ class JdbcAdminCampaignDataReaderTest {
                 });
         JdbcAdminCampaignDataReader failingReader = new JdbcAdminCampaignDataReader(failingTemplate);
 
-        assertThat(failingReader.loadCatalog(SNAPSHOT).status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(failingReader.findDetail(10, FROM, TO, SNAPSHOT).availability())
-                .isEqualTo(DetailAvailability.UNAVAILABLE);
+        try (LogCapture logs = LogCapture.start()) {
+            assertThat(failingReader.loadCatalog(SNAPSHOT).status()).isEqualTo(SourceStatus.UNAVAILABLE);
+            assertThat(failingReader.findDetail(10, FROM, TO, SNAPSHOT).availability())
+                    .isEqualTo(DetailAvailability.UNAVAILABLE);
+            assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
+                    .contains("admin campaign catalog observation failed", "snapshotAt=" + SNAPSHOT));
+            assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
+                    .contains("admin campaign detail observation failed", "couponId=10"));
+        }
     }
 
     @Test
@@ -385,6 +404,44 @@ class JdbcAdminCampaignDataReaderTest {
         config.setMaximumPoolSize(4);
         config.addDataSourceProperty("rewriteBatchedStatements", "true");
         return new HikariDataSource(config);
+    }
+
+    private static List<String> observationTableAllowlist() {
+        Path allowlist = repositoryRoot().resolve("infra/mysql/obs-grants/allowlist.txt");
+        try {
+            return Files.readAllLines(allowlist).stream()
+                    .map(String::trim)
+                    .filter(line -> !line.isEmpty() && !line.startsWith("#"))
+                    .peek(table -> {
+                        if (!table.matches("[A-Za-z0-9_]+")) {
+                            throw new IllegalArgumentException("잘못된 관측 테이블 이름: " + table);
+                        }
+                    })
+                    .toList();
+        } catch (IOException exception) {
+            throw new UncheckedIOException("관측 테이블 allowlist를 읽을 수 없습니다: " + allowlist, exception);
+        }
+    }
+
+    private static Path repositoryRoot() {
+        Path current = Path.of("").toAbsolutePath();
+        while (current != null) {
+            if (Files.isRegularFile(current.resolve("infra/mysql/obs-grants/allowlist.txt"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException("저장소 루트에서 관측 테이블 allowlist를 찾을 수 없습니다.");
+    }
+
+    private static boolean tableExists(JdbcTemplate jdbc, String table) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                  FROM information_schema.tables
+                 WHERE table_schema = 'app'
+                   AND table_name = ?
+                """, Integer.class, table);
+        return count != null && count == 1;
     }
 
     private static void insertTemplate(long id, long brandId) {
@@ -494,6 +551,28 @@ class JdbcAdminCampaignDataReaderTest {
 
         private int connectionCount() {
             return connections.get();
+        }
+    }
+
+    private record LogCapture(Logger logger, ListAppender<ILoggingEvent> appender)
+            implements AutoCloseable {
+
+        private static LogCapture start() {
+            Logger logger = (Logger) LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            return new LogCapture(logger, appender);
+        }
+
+        private List<String> messages() {
+            return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+        }
+
+        @Override
+        public void close() {
+            logger.detachAppender(appender);
+            appender.stop();
         }
     }
 }

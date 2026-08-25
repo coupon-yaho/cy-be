@@ -2,7 +2,6 @@ package com.kafkick.api.admin.support.fixture;
 
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -10,7 +9,6 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
-import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
 
@@ -25,8 +23,6 @@ import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.Issuanc
  * @param queueInputs couponId별 O2 대기열 원천 목록
  * @param outcomeInput 전체 캠페인 O3 고객 결과 원천
  * @param campaigns 캠페인 상태·오픈 임박·재고 계산에 사용할 원천 목록
- * @param preparationActionCandidates 준비 미완료 판정에서 파생된 조치 후보 목록
- * @param consistencyActionContexts FINAL 정합성 조치 계산에 사용할 캠페인별 문맥 목록
  * @param aggregateIssuanceRate 전체 신규 발급 완료율 원천 관측값
  * @param latencySummary 성공·실패 응답 p99 원천 관측값
  */
@@ -36,8 +32,6 @@ public record AdminOverviewTestDataset(
         List<QueueInput> queueInputs,
         OutcomeInput outcomeInput,
         List<CampaignOverviewSource> campaigns,
-        List<AdminOverviewSnapshot.OperationActionItem> preparationActionCandidates,
-        List<ConsistencyActionContext> consistencyActionContexts,
         AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateIssuanceRate> aggregateIssuanceRate,
         AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> latencySummary
 ) {
@@ -49,34 +43,16 @@ public record AdminOverviewTestDataset(
         Objects.requireNonNull(queueInputs, "queueInputs");
         Objects.requireNonNull(outcomeInput, "outcomeInput");
         Objects.requireNonNull(campaigns, "campaigns");
-        Objects.requireNonNull(preparationActionCandidates, "preparationActionCandidates");
-        Objects.requireNonNull(consistencyActionContexts, "consistencyActionContexts");
         Objects.requireNonNull(aggregateIssuanceRate, "aggregateIssuanceRate");
         Objects.requireNonNull(latencySummary, "latencySummary");
         issuanceFlowInputs = List.copyOf(issuanceFlowInputs);
         queueInputs = List.copyOf(queueInputs);
         campaigns = List.copyOf(campaigns);
-        preparationActionCandidates = List.copyOf(preparationActionCandidates);
-        consistencyActionContexts = List.copyOf(consistencyActionContexts);
         Set<Long> campaignIds = uniqueCampaignIds(campaigns);
         requireExactlySameCouponIds("issuanceFlowInputs", issuanceFlowInputs.stream()
                 .map(IssuanceFlowInput::couponId).toList(), campaignIds);
         requireExactlySameCouponIds("queueInputs", queueInputs.stream()
                 .map(QueueInput::couponId).toList(), campaignIds);
-        Set<Long> preparationCandidateIds = uniqueCouponIds("preparationActionCandidates",
-                preparationActionCandidates.stream()
-                        .map(AdminOverviewSnapshot.OperationActionItem::couponId)
-                        .toList());
-        if (!campaignIds.containsAll(preparationCandidateIds)) {
-            throw new IllegalArgumentException("preparationActionCandidates의 couponId는 campaigns의 부분집합이어야 합니다.");
-        }
-        Set<Long> consistencyContextIds = uniqueCouponIds("consistencyActionContexts", consistencyActionContexts.stream()
-                .map(ConsistencyActionContext::couponId)
-                .toList());
-        if (!campaignIds.containsAll(consistencyContextIds)) {
-            throw new IllegalArgumentException("consistencyActionContexts의 couponId는 campaigns의 부분집합이어야 합니다.");
-        }
-        requireMatchingContextEngines(campaigns, consistencyActionContexts);
     }
 
     /** 캠페인 행이 정확히 한 번씩만 O1·O2·O4·Action 모집단에 참여하도록 고유 ID를 검증합니다. */
@@ -93,21 +69,6 @@ public record AdminOverviewTestDataset(
             }
         }
         return Set.copyOf(ids);
-    }
-
-    /** 같은 couponId의 FINAL 문맥과 화면 캠페인이 서로 다른 엔진 계약을 갖지 않도록 검증합니다. */
-    private static void requireMatchingContextEngines(
-            List<CampaignOverviewSource> campaigns,
-            List<ConsistencyActionContext> contexts
-    ) {
-        Map<Long, CampaignOverviewSource> campaignByCoupon = campaigns.stream()
-                .collect(java.util.stream.Collectors.toMap(CampaignOverviewSource::couponId, campaign -> campaign));
-        for (ConsistencyActionContext context : contexts) {
-            CampaignOverviewSource campaign = campaignByCoupon.get(context.couponId());
-            if (campaign.engineVersion() != context.engineVersion()) {
-                throw new IllegalArgumentException("consistencyActionContexts의 engineVersion은 campaigns와 일치해야 합니다.");
-            }
-        }
     }
 
     /** 삭제가 아닌 UNAVAILABLE/N_A 입력으로만 미수집을 표현하도록 O1·O2 모집단 일치를 강제합니다. */

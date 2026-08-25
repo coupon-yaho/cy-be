@@ -83,6 +83,7 @@ class AdminOverviewServiceTest {
         assertThat(snapshot.campaigns().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(snapshot.campaignStatusSummary().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.stockRisk().status()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
     @Test

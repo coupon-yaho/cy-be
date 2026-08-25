@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.RowMapper;
@@ -31,6 +33,8 @@ import com.kafkick.core.observation.SourceStatus;
 @Repository
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
+
+    private static final Logger log = LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
 
     private static final String CATALOG_SQL = """
             SELECT c.id, c.name, b.name AS brand_name, c.status,
@@ -114,6 +118,8 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             }
             return new AdminCampaignCatalog(SourceStatus.VALID, snapshotAt, campaigns);
         } catch (RuntimeException exception) {
+            log.warn("admin campaign catalog observation failed: snapshotAt={}, exceptionType={}",
+                    snapshotAt, exception.getClass().getSimpleName(), exception);
             return unavailableCatalog();
         }
     }
@@ -157,6 +163,10 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             if (stock.status().carriesValue()
                     && stock.value().activeCount()
                     != holding.counts().issued() + holding.counts().used()) {
+                log.warn("admin campaign stock drift: couponId={}, activeCount={}, issuedPlusUsed={}",
+                        couponId,
+                        stock.value().activeCount(),
+                        holding.counts().issued() + holding.counts().used());
                 return unavailableDetail();
             }
 
@@ -172,6 +182,8 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             );
             return new AdminCampaignDetailData(DetailAvailability.AVAILABLE, value);
         } catch (RuntimeException exception) {
+            log.warn("admin campaign detail observation failed: couponId={}, exceptionType={}",
+                    couponId, exception.getClass().getSimpleName(), exception);
             return unavailableDetail();
         }
     }

@@ -2,9 +2,7 @@ package com.kafkick.api.admin.support.fixture;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 import com.kafkick.core.admin.campaignsource.PreparationObservation;
@@ -12,19 +10,12 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
-import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCount;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceBucket;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
-import com.kafkick.core.consistency.ConsistencyEvaluation;
-import com.kafkick.core.consistency.ConsistencyGapType;
-import com.kafkick.core.consistency.ConsistencyPhase;
-import com.kafkick.core.consistency.GapValue;
-import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.observation.EngineVersion;
-import com.kafkick.core.observation.Severity;
 
 import static com.kafkick.core.observation.SourceStatus.*;
 
@@ -120,28 +111,12 @@ public class AdminOverviewTestFixture {
         CampaignOverviewSource incompleteCampaign = new CampaignOverviewSource(
                 105L, "준비 미완료 예약 쿠폰", "카프킥", CouponRoundStatus.SCHEDULED,
                 snapshotAt.plus(Duration.ofMinutes(10)), snapshotAt.plus(Duration.ofHours(3)),
-                EngineVersion.V1, null, null, null, N_A, preparation(false, snapshotAt));
+                EngineVersion.V1, null, null, null, N_A,
+                new PreparationObservation(null, PENDING, null));
         CampaignOverviewSource closedCampaign = new CampaignOverviewSource(
                 106L, "종료된 시즌 쿠폰", "카프킥", CouponRoundStatus.CLOSED,
                 snapshotAt.minus(Duration.ofHours(5)), snapshotAt.minus(Duration.ofHours(1)),
                 EngineVersion.V1, null, null, null, N_A, preparation(true, snapshotAt));
-
-        // 준비 미완료 판정은 fixture에서 확정하고 집계 계산기는 판정 결과만 소비합니다.
-        AdminOverviewSnapshot.OperationActionItem incompleteAction =
-                new AdminOverviewSnapshot.OperationActionItem(
-                        incompleteCampaign.couponId(),
-                        incompleteCampaign.campaignName(),
-                        incompleteCampaign.opensAt(),
-                        Severity.WARN,
-                        AdminOverviewSnapshot.CustomerImpact.NONE,
-                        "오픈 전 필수 준비 항목을 확인해야 합니다.",
-                        snapshotAt,
-                        null,
-                        new AdminOverviewSnapshot.RecommendedAction(
-                                AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY,
-                                "캠페인 준비 상태 확인",
-                                AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL)
-                );
 
         Instant windowStart = snapshotAt.minus(Duration.ofMinutes(1));
         List<IssuanceFlowInput> issuanceFlowInputs = List.of(
@@ -176,59 +151,12 @@ public class AdminOverviewTestFixture {
         return new AdminOverviewTestDataset(policy, issuanceFlowInputs, queueInputs, outcomeInput,
                 List.of(admissionStoppedCampaign, depletionCampaign, decreasingQueueCampaign,
                         readyScheduledCampaign, incompleteCampaign, closedCampaign),
-                List.of(incompleteAction),
-                consistencyActionContexts(snapshotAt, admissionStoppedCampaign, depletionCampaign,
-                        decreasingQueueCampaign),
                 aggregateIssuanceRate(snapshotAt), latencySummary(snapshotAt));
     }
 
     /** Fixture에서 확정한 준비 완료 여부를 정상 관측값으로 만듭니다. */
     private static PreparationObservation preparation(boolean completed, Instant observedAt) {
         return new PreparationObservation(completed, VALID, observedAt);
-    }
-
-    /** FINAL PASS와 엔진별 두 FINAL FAIL을 화면 조립에 필요한 불변 문맥으로 제공합니다. */
-    private static List<ConsistencyActionContext> consistencyActionContexts(
-            Instant snapshotAt,
-            CampaignOverviewSource finalPassCampaign,
-            CampaignOverviewSource gapFailureCampaign,
-            CampaignOverviewSource overIssuanceCampaign
-    ) {
-        return List.of(
-                consistencyContext(finalPassCampaign, snapshotAt, 0L, 0L),
-                consistencyContext(gapFailureCampaign, snapshotAt, 1L, 0L),
-                consistencyContext(overIssuanceCampaign, snapshotAt, 0L, 3L));
-    }
-
-    /** FINAL 평가와 화면 캠페인 표시 정보를 한 정합성 조치 입력으로 결합합니다. */
-    private static ConsistencyActionContext consistencyContext(
-            CampaignOverviewSource campaign,
-            Instant snapshotAt,
-            long applicableGapValue,
-            long overIssued
-    ) {
-        return new ConsistencyActionContext(campaign.couponId(), campaign.campaignName(), campaign.opensAt(),
-                snapshotAt, campaign.engineVersion(), finalEvaluation(snapshotAt, campaign.engineVersion(),
-                        applicableGapValue, overIssued));
-    }
-
-    /** 엔진별 적용 gap만 VALID로 두고 FINAL verdict·severity와 모순되지 않는 평가 fixture를 만듭니다. */
-    private static ConsistencyEvaluation finalEvaluation(
-            Instant snapshotAt,
-            EngineVersion engineVersion,
-            long applicableGapValue,
-            long overIssued
-    ) {
-        Map<ConsistencyGapType, GapValue> gaps = new EnumMap<>(ConsistencyGapType.class);
-        for (ConsistencyGapType gapType : ConsistencyGapType.values()) {
-            gaps.put(gapType, gapType.isApplicable(engineVersion)
-                    ? new GapValue(applicableGapValue, VALID, snapshotAt)
-                    : new GapValue(null, N_A, null));
-        }
-        boolean failed = applicableGapValue != 0L || overIssued > 0L;
-        return new ConsistencyEvaluation(gaps, new GapValue(overIssued, VALID, snapshotAt),
-                ConsistencyPhase.FINAL, failed ? Verdict.FAIL : Verdict.PASS,
-                failed ? Severity.CRITICAL : Severity.NONE);
     }
 
     /** 전체 발급률은 HTTP 성공률이 아니라 관측 구간의 실제 신규 발급 완료율로 제공합니다. */
