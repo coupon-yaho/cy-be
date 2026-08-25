@@ -1041,6 +1041,39 @@ class PromMetricsAssemblerTest {
     }
 
     /**
+     * <b>"그 실패가 한 건도 없었다" 도 단정입니다.</b> 분모를 믿을 수 없는 구간에서는 빠진
+     * 인스턴스가 그 실패를 냈는지 알 수 없으므로, 분자 0 을 VALID 0% 로 내보내면 화면이
+     * "이 분류는 실패 없음" 으로 읽습니다.
+     *
+     * <p>트래픽이 흐르는 중이라 {@code attempts} 는 값을 실은 상태 그대로인데 분류 표만
+     * PENDING 으로 물러나는 구간입니다 — 앞의 트래픽 0 케이스와 달리 분모가 0 이 아니라
+     * {@code failureRate} 의 N_A 분기도 타지 않습니다.</p>
+     */
+    @Test
+    @DisplayName("분모를 믿을 수 없으면 분자 0 인 실패 분류는 VALID 0% 가 아니라 PENDING 이다")
+    void untrustedZeroNumeratorDoesNotClaimNoFailures() {
+        long beyondWindowButFresh = MetricsWindow.ONE_MINUTE.seconds() + 30;
+        FakePromQuery client = respond(Map.of(
+                "rate(", List.of(
+                        rate("issue", "success", 5000d, "api-1"),
+                        rate("issue", "policy_reject", 0d, "api-1"),
+                        rate("issue", "client_invalid", 0d, "api-1"),
+                        rate("issue", "dependency_failure", 0d, "api-1"),
+                        rate("issue", "application_failure", 0d, "api-1")),
+                "timestamp(", List.of(age(beyondWindowButFresh))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        // 분모는 0 이 아니라 값을 그대로 싣는다 — 거두는 것은 0 이라는 단정뿐이다.
+        assertThat(response.traffic().issueAttemptRps().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(response.traffic().issueAttemptRps().value()).isEqualTo(5000d);
+        // 분자가 0 인 네 분류는 "실패 없음" 을 단정하지 않는다. N_A 가 아닌 이유는 분모가
+        // 0 이 아니어서다 — 비율이 정의되지 않는 것이 아니라 모르는 것이다.
+        assertThat(response.errors().classes()).allSatisfy(errorClass ->
+                assertThat(errorClass.rate().state()).isEqualTo(SourceStatus.PENDING));
+    }
+
+    /**
      * 실패 원인 표도 같은 scrape 에서 나옵니다 — 나이가 같으면 믿을 수 있는지도 같아야 합니다.
      * 실패율 칸이 PENDING 인 동안 바로 옆 원인 표가 전 사유 0 을 VALID 로 그리면, 운영자는
      * 그 표를 보고 "실패 없음" 으로 판단합니다.

@@ -589,7 +589,15 @@ public class PromMetricsAssembler {
             Freshness freshness,
             ObservedValue<Double> attempts,
             boolean denominatorTrusted) {
-        // 분자가 0 인 것은 "요청이 없었다" 가 아니라 "그 실패가 한 건도 없었다" 이므로 VALID 다.
+        // 분자가 0 인 것은 "요청이 없었다" 가 아니라 "그 실패가 한 건도 없었다" 이므로 zeroState
+        // 는 VALID 다. 다만 그 VALID 까지 가려면 분모를 믿을 수 있어야 한다 — 낡지도 않고
+        // 관측 시각도 아는데 그 시각이 집계 창 밖이면 {@link #rate} 가 이 0 도 PENDING 으로
+        // 거둔다. 부분 탈락 구간에서는 빠진 인스턴스가 그 실패를 냈는지 알 수 없어 "한 건도
+        // 없었다" 역시 단정이기 때문이다. 그래서 트래픽이 흐르는 중에도(attempts 는 값을 실은
+        // VALID) 분류 표만 PENDING 인 구간이 생긴다.
+        //
+        // 나머지 두 사유는 게이트까지 오지 않는다 — 시각 미상은 absent() 가 PENDING·UNAVAILABLE
+        // 로, STALE 은 값과 함께 STALE 로 그 앞에서 이미 갈라 낸다.
         ObservedValue<Double> numerator =
                 rate(results, filter, freshness, SourceStatus.VALID, denominatorTrusted);
         return new ErrorClass(key, label, definition, excludedFromNumerator,
