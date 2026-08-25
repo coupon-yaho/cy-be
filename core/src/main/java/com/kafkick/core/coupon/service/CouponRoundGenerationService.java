@@ -1,12 +1,10 @@
 package com.kafkick.core.coupon.service;
 
-import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
-import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
@@ -18,6 +16,7 @@ import org.springframework.stereotype.Service;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
 import com.kafkick.core.coupontemplate.domain.CouponTemplate;
+import com.kafkick.core.coupontemplate.domain.CouponTemplateSchedule;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.exception.CouponRoundScheduleConflictException;
 import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
@@ -85,17 +84,19 @@ public class CouponRoundGenerationService {
 
         for (CouponTemplate template : activeTemplates) {
             for (YearMonth month : monthsBetween(fromDate, toDate)) {
-                LocalDate occurrenceDate = occurrenceDate(template, month);
+                LocalDate occurrenceDate =
+                        CouponTemplateSchedule.occurrenceDate(template, month);
                 if (occurrenceDate.isBefore(fromDate)
                         || occurrenceDate.isAfter(toDate)) {
                     continue;
                 }
 
                 creationTargets++;
-                Instant openAt = occurrenceDate
-                        .atTime(template.startTime())
-                        .atZone(scheduleZone)
-                        .toInstant();
+                Instant openAt = CouponTemplateSchedule.openAt(
+                        template,
+                        month,
+                        scheduleZone
+                );
                 CouponRound couponRound = CouponRound.schedule(
                         template,
                         openAt,
@@ -141,28 +142,6 @@ public class CouponRoundGenerationService {
                         month -> month.plusMonths(1)
                 )
                 .toList();
-    }
-
-    private static LocalDate occurrenceDate(
-            CouponTemplate template,
-            YearMonth month
-    ) {
-        DayOfWeek dayOfWeek = switch (template.dayOfWeek()) {
-            case MON -> DayOfWeek.MONDAY;
-            case TUE -> DayOfWeek.TUESDAY;
-            case WED -> DayOfWeek.WEDNESDAY;
-            case THU -> DayOfWeek.THURSDAY;
-            case FRI -> DayOfWeek.FRIDAY;
-            case SAT -> DayOfWeek.SATURDAY;
-            case SUN -> DayOfWeek.SUNDAY;
-        };
-
-        return month.atDay(1).with(
-                TemporalAdjusters.dayOfWeekInMonth(
-                        template.nthWeek(),
-                        dayOfWeek
-                )
-        );
     }
 
     private void validateRange(
