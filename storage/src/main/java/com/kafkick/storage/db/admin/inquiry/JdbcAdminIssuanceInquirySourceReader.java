@@ -38,13 +38,16 @@ import com.kafkick.core.support.exception.BusinessException;
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquirySourceReader {
 
-    private final NamedParameterJdbcTemplate jdbc;
+    private final NamedParameterJdbcTemplate mainJdbc;
+    private final NamedParameterJdbcTemplate observationJdbc;
 
-    /** 운영 풀이 아닌 {@code obs} 이름 바인딩 템플릿만 주입받습니다. */
+    /** 회원 존재만 운영 풀에서 확인하고 나머지 관측 행은 {@code obs} 풀에서 읽습니다. */
     public JdbcAdminIssuanceInquirySourceReader(
-            @Qualifier("obs") NamedParameterJdbcTemplate jdbc
+            @Qualifier("namedParameterJdbcTemplate") NamedParameterJdbcTemplate mainJdbc,
+            @Qualifier("obs") NamedParameterJdbcTemplate observationJdbc
     ) {
-        this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.mainJdbc = Objects.requireNonNull(mainJdbc, "mainJdbc");
+        this.observationJdbc = Objects.requireNonNull(observationJdbc, "observationJdbc");
     }
 
     /**
@@ -63,24 +66,26 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         try {
             MapSqlParameterSource parameters = parameters(query, snapshotAt);
-            Existence existence = jdbc.queryForObject(
-                    AdminIssuanceInquirySql.EXISTENCE, parameters,
-                    (rs, rowNum) -> new Existence(
-                            rs.getBoolean("member_exists"), rs.getBoolean("coupon_exists")));
-            if (existence == null || !existence.memberExists()) {
+            Boolean memberExists = mainJdbc.queryForObject(
+                    AdminIssuanceInquirySql.MEMBER_EXISTS, parameters, Boolean.class);
+            if (!Boolean.TRUE.equals(memberExists)) {
                 return AdminIssuanceInquiryReadResult.memberNotFound();
             }
-            if (!existence.couponExists()) {
+            Boolean couponExists = query.couponId() == null
+                    ? Boolean.TRUE
+                    : observationJdbc.queryForObject(
+                            AdminIssuanceInquirySql.COUPON_EXISTS, parameters, Boolean.class);
+            if (!Boolean.TRUE.equals(couponExists)) {
                 return AdminIssuanceInquiryReadResult.couponNotFound();
             }
 
-            List<RawAttempt> attempts = jdbc.query(
+            List<RawAttempt> attempts = observationJdbc.query(
                     AdminIssuanceInquirySql.attempts(query.before()), parameters,
                     JdbcAdminIssuanceInquirySourceReader::mapAttempt);
             Map<Long, RawIssuance> issuances = new LinkedHashMap<>();
             if (query.httpStatus() == null && query.reasonCode() == null) {
                 // 연결 로그가 없어도 권위 DB에 존재하는 발급은 독립 후보로 보존한다.
-                putIssuances(issuances, jdbc.query(
+                putIssuances(issuances, observationJdbc.query(
                         AdminIssuanceInquirySql.issuances(query.before()), parameters,
                         JdbcAdminIssuanceInquirySourceReader::mapIssuance));
             }
@@ -93,7 +98,7 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
             }
             if (!issuanceIds.isEmpty()) {
                 parameters.addValue("issuanceIds", issuanceIds);
-                putIssuances(issuances, jdbc.query(
+                putIssuances(issuances, observationJdbc.query(
                         AdminIssuanceInquirySql.DIRECT_ISSUANCES, parameters,
                         JdbcAdminIssuanceInquirySourceReader::mapIssuance));
             }
@@ -101,7 +106,7 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
             if (!requestIds.isEmpty()) parameters.addValue("requestIds", requestIds);
             List<HistoryRow> historyRows = requestIds.isEmpty()
                     ? List.of()
-                    : jdbc.query(
+                    : observationJdbc.query(
                             AdminIssuanceInquirySql.ISSUE_HISTORIES,
                             parameters,
                             JdbcAdminIssuanceInquirySourceReader::mapHistory);
@@ -124,7 +129,6 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
     ) {
         MapSqlParameterSource parameters = new MapSqlParameterSource()
                 .addValue("memberId", query.memberId())
-                .addValue("couponFilterApplied", query.couponId() == null ? 0 : 1)
                 .addValue("couponId", query.couponId())
                 .addValue("httpStatus", query.httpStatus())
                 .addValue("reasonCode", query.reasonCode() == null ? null : query.reasonCode().name())
@@ -191,9 +195,6 @@ public class JdbcAdminIssuanceInquirySourceReader implements AdminIssuanceInquir
 
     private static void putIssuances(Map<Long, RawIssuance> target, List<RawIssuance> rows) {
         for (RawIssuance row : rows) target.putIfAbsent(row.issuanceId(), row);
-    }
-
-    private record Existence(boolean memberExists, boolean couponExists) {
     }
 
     private record HistoryRow(RawIssuance issuance, RawHistoryLink history) {

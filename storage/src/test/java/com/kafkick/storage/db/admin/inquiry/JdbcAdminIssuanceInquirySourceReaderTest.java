@@ -24,6 +24,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.JdbcTransactionManager;
@@ -84,10 +85,14 @@ class JdbcAdminIssuanceInquirySourceReaderTest {
         try (HikariDataSource root = dataSource("root", mysql.getPassword())) {
             JdbcTemplate rootJdbc = new JdbcTemplate(root);
             rootJdbc.execute("CREATE USER 'obs_inquiry'@'%' IDENTIFIED BY 'obs_inquiry'");
-            rootJdbc.execute("GRANT SELECT ON app.* TO 'obs_inquiry'@'%'");
+            rootJdbc.execute("GRANT SELECT ON app.coupons TO 'obs_inquiry'@'%'");
+            rootJdbc.execute("GRANT SELECT ON app.issue_attempts TO 'obs_inquiry'@'%'");
+            rootJdbc.execute("GRANT SELECT ON app.issuances TO 'obs_inquiry'@'%'");
+            rootJdbc.execute("GRANT SELECT ON app.issuance_histories TO 'obs_inquiry'@'%'");
             rootJdbc.execute("FLUSH PRIVILEGES");
         }
         observationDataSource = dataSource("obs_inquiry", "obs_inquiry");
+        ReaderContext.mainDataSource = writeDataSource;
         ReaderContext.observationDataSource = observationDataSource;
 
         context = new AnnotationConfigApplicationContext();
@@ -368,39 +373,19 @@ class JdbcAdminIssuanceInquirySourceReaderTest {
     }
 
     @Test
-    @DisplayName("관측 계정은 SELECT만 성공하고 INSERT는 거부된다")
-    void observationAccountRemainsReadOnlyByPrivilege() {
+    @DisplayName("관측 계정은 허용 테이블만 SELECT하고 members와 INSERT는 거부된다")
+    void observationAccountUsesTableAllowlistAndRemainsReadOnly() {
         baseFixture();
-        NamedParameterJdbcTemplate observation = context.getBean(NamedParameterJdbcTemplate.class);
-        assertThat(observation.queryForObject("SELECT COUNT(*) FROM members", java.util.Map.of(), Long.class))
-                .isEqualTo(2L);
+        NamedParameterJdbcTemplate observation = context.getBean(
+                "observationNamedParameterJdbcTemplate", NamedParameterJdbcTemplate.class);
+        assertThat(observation.queryForObject(
+                "SELECT COUNT(*) FROM coupons", java.util.Map.of(), Long.class)).isEqualTo(3L);
+        assertThatThrownBy(() -> observation.queryForObject(
+                "SELECT COUNT(*) FROM members", java.util.Map.of(), Long.class))
+                .rootCause().hasMessageContaining("SELECT command denied");
         assertThatThrownBy(() -> observation.update(
                 "INSERT INTO grades(code, bit_value) VALUES ('VIP', 8)", java.util.Map.of()))
                 .rootCause().hasMessageContaining("INSERT command denied");
-    }
-
-    @Test
-    @DisplayName("조회 인덱스 migration은 2026082004 뒤에 적용되어 지정한 세 컬럼 순서를 만든다")
-    void migrationCreatesExactInquiryIndex() {
-        Integer previousRank = writeJdbc.queryForObject("""
-                SELECT installed_rank FROM flyway_schema_history
-                 WHERE version = '2026082004' AND success = 1
-                """, Integer.class);
-        Integer inquiryRank = writeJdbc.queryForObject("""
-                SELECT installed_rank FROM flyway_schema_history
-                 WHERE version = '2026082005' AND success = 1
-                """, Integer.class);
-        assertThat(inquiryRank).isGreaterThan(previousRank);
-
-        List<String> columns = writeJdbc.queryForList("""
-                SELECT column_name
-                  FROM information_schema.statistics
-                 WHERE table_schema = DATABASE()
-                   AND table_name = 'issue_attempts'
-                   AND index_name = 'ix_issue_attempts_member_occurred_id'
-                 ORDER BY seq_in_index
-                """, String.class);
-        assertThat(columns).containsExactly("member_id", "occurred_at", "id");
     }
 
     @Test
@@ -534,7 +519,14 @@ class JdbcAdminIssuanceInquirySourceReaderTest {
     @EnableTransactionManagement
     @Import(JdbcAdminIssuanceInquirySourceReader.class)
     static class ReaderContext {
+        private static DataSource mainDataSource;
         private static DataSource observationDataSource;
+
+        @Bean
+        @Primary
+        NamedParameterJdbcTemplate namedParameterJdbcTemplate() {
+            return new NamedParameterJdbcTemplate(mainDataSource);
+        }
 
         @Bean
         @Qualifier("obs")

@@ -22,8 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.kafkick.api.admin.support.config.AdminFixtureConfig;
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryService;
-import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
 import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
 import com.kafkick.core.admin.issuancehistory.IssuanceHistoryCalculator;
@@ -39,10 +37,9 @@ import com.kafkick.core.support.TimeProvider;
  * 안 되는 것이 아무 증상 없이 남아 있었다. 지금은 {@code admin.mock.enabled} 가 기본 꺼짐이다.
  *
  * <p><b>끈 상태가 PENDING이 아니라 기동 실패인 이유.</b> 남은 화면의 응답 계약에는 "아직
- * 집계되지 않았음" 을 담을 자리가 없다 — 예컨대 {@code AdminIssuanceInquiryResult} 는
- * {@code items}·{@code nextBefore}·{@code hasOlder} 뿐이라, 빈 결과를 내면 <b>"조회했는데
- * 없음" 과 구분되지 않는다.</b> 그 구분을 만드는 것은 응답 계약 변경이고 A-07·A-08
- * 의 몫이라 여기서 발명하지 않았다. {@code analytics} 만 그 자리가 이미 있어서(PendingSource)
+ * 집계되지 않았음" 을 담을 자리가 없다. 빈 결과를 내면 <b>"조회했는데 없음" 과 구분되지
+ * 않는다.</b> 그 구분을 만드는 것은 응답 계약 변경이고 A-08의 몫이라 여기서 발명하지 않았다.
+ * {@code analytics} 만 그 자리가 이미 있어서(PendingSource)
  * 혼자 다르게 동작한다 — 아래 인벤토리가 그 비대칭을 명시한다.
  */
 class AdminFixtureExposureTest {
@@ -55,8 +52,6 @@ class AdminFixtureExposureTest {
      * 늘지도 않는다.
      */
     private static final List<FixtureBackedScreen> FIXTURE_BACKED_SCREENS = List.of(
-            new FixtureBackedScreen("회원 발급 문의", "A-07",
-                    AdminIssuanceInquiryService.class, AdminIssuanceInquiryMockDataFactory.class),
             new FixtureBackedScreen("발급 이력", "A-08",
                     AdminIssuanceHistoryService.class, AdminIssuanceHistoryMockDataFactory.class));
 
@@ -148,9 +143,7 @@ class AdminFixtureExposureTest {
         // 계약이 두 곳(이 목록 ↔ Service 생성자)에 걸친다. 목록만 보는 테스트는 A 티켓이
         // Repository 를 붙였을 때 그 사실을 모르고, 생성자만 보는 테스트는 다섯 번째 화면이
         // 생겨도 모른다.
-        // 두 배선 형태를 함께 받는다. 구상 클래스를 직접 무는 쪽(issuancehistory)과,
-        // 포트를 물지만 그 포트의 구현이 mock factory 하나뿐인 쪽(inquiry)이다.
-        // 후자는 analytics 와 겉모습이 같지만 대체 구현이 없어서 결과는 같다 — 끄면 못 뜬다.
+        // 남은 issuancehistory는 구상 fixture 클래스를 직접 생성자에서 받는다.
         for (FixtureBackedScreen screen : FIXTURE_BACKED_SCREENS) {
             assertThat(constructorParameterTypes(screen.service()))
                     .as("%s 는 더 이상 fixture 를 안 문다. %s 가 실제 Repository 를 붙였다면 "

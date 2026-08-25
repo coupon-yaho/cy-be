@@ -6,12 +6,12 @@ import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery.SourceKind;
 /** 회원 발급 문의가 관측 DB에서 실행하는 고정 SQL과 원천별 keyset 조건입니다. */
 public final class AdminIssuanceInquirySql {
 
-    public static final String EXISTENCE = """
-            SELECT
-                EXISTS(SELECT 1 FROM members m WHERE m.id = :memberId) AS member_exists,
-                CASE WHEN :couponFilterApplied = 0 THEN 1
-                     ELSE EXISTS(SELECT 1 FROM coupons c WHERE c.id = :couponId)
-                END AS coupon_exists
+    public static final String MEMBER_EXISTS = """
+            SELECT EXISTS(SELECT 1 FROM members m WHERE m.id = :memberId)
+            """;
+
+    public static final String COUPON_EXISTS = """
+            SELECT EXISTS(SELECT 1 FROM coupons c WHERE c.id = :couponId)
             """;
 
     private static final String ATTEMPT_BASE = """

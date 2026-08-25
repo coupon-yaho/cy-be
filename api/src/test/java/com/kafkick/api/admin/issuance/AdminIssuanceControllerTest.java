@@ -23,9 +23,12 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryReadResult;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryService;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySourceReader;
+import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryTestFixture;
 import com.kafkick.core.admin.inquiry.IssuanceInquiryCalculator;
-import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
 import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
@@ -419,8 +422,32 @@ class AdminIssuanceControllerTest {
     private static AdminIssuanceInquiryService inquiryService(Clock clock) {
         return new AdminIssuanceInquiryService(
                 new TimeProvider(clock),
-                new AdminIssuanceInquiryMockDataFactory(),
+                inquiryFixtureReader(),
                 new IssuanceInquiryCalculator());
+    }
+
+    /** Controller 계약 테스트용 원시 행을 요청 회원·쿠폰 범위로 제한합니다. */
+    private static AdminIssuanceInquirySourceReader inquiryFixtureReader() {
+        return (query, snapshotAt) -> {
+            if (query.memberId() != 1_001L) {
+                return AdminIssuanceInquiryReadResult.memberNotFound();
+            }
+            if (query.couponId() != null
+                    && (query.couponId() < 2_001L || query.couponId() > 2_006L)) {
+                return AdminIssuanceInquiryReadResult.couponNotFound();
+            }
+            AdminIssuanceInquirySource source = AdminIssuanceInquiryTestFixture.source();
+            return AdminIssuanceInquiryReadResult.available(new AdminIssuanceInquirySource(
+                    source.attempts().stream()
+                            .filter(row -> query.couponId() == null
+                                    || row.couponId() == query.couponId())
+                            .toList(),
+                    source.issuances().stream()
+                            .filter(row -> query.couponId() == null
+                                    || row.couponId() == query.couponId())
+                            .toList(),
+                    source.histories()));
+        };
     }
 
     private static AdminIssuanceController controller(

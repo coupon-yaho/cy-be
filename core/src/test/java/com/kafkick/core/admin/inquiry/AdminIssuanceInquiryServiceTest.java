@@ -11,7 +11,6 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
-import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.TimeProvider;
@@ -189,8 +188,32 @@ class AdminIssuanceInquiryServiceTest {
     private static AdminIssuanceInquiryService service(Instant snapshotAt) {
         return new AdminIssuanceInquiryService(
                 new TimeProvider(Clock.fixed(snapshotAt, ZoneOffset.UTC)),
-                new AdminIssuanceInquiryMockDataFactory(),
+                fixtureReader(),
                 new IssuanceInquiryCalculator());
+    }
+
+    /** 고정 원시 행을 요청 범위로 제한해 Service·Calculator 계약만 검증합니다. */
+    private static AdminIssuanceInquirySourceReader fixtureReader() {
+        return (query, snapshotAt) -> {
+            if (query.memberId() != 1_001L) {
+                return AdminIssuanceInquiryReadResult.memberNotFound();
+            }
+            if (query.couponId() != null
+                    && (query.couponId() < 2_001L || query.couponId() > 2_006L)) {
+                return AdminIssuanceInquiryReadResult.couponNotFound();
+            }
+            AdminIssuanceInquirySource source = AdminIssuanceInquiryTestFixture.source();
+            return AdminIssuanceInquiryReadResult.available(new AdminIssuanceInquirySource(
+                    source.attempts().stream()
+                            .filter(row -> query.couponId() == null
+                                    || row.couponId() == query.couponId())
+                            .toList(),
+                    source.issuances().stream()
+                            .filter(row -> query.couponId() == null
+                                    || row.couponId() == query.couponId())
+                            .toList(),
+                    source.histories()));
+        };
     }
 
     private static AdminIssuanceInquiryQuery query(

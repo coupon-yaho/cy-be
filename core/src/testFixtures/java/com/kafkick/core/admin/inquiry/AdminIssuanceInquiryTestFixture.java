@@ -1,14 +1,9 @@
-package com.kafkick.core.admin.inquiry.mock;
+package com.kafkick.core.admin.inquiry;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Objects;
 
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryQuery;
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryReadResult;
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySourceReader;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawHistoryLink;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawIssuance;
@@ -17,51 +12,16 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.ReasonCode;
 
-/** 테스트가 실제 Repository 대신 명시적으로 선택하는 고정 문의 원천 fixture입니다. */
-public class AdminIssuanceInquiryMockDataFactory implements AdminIssuanceInquirySourceReader {
+/** Core·API 계약 테스트가 공유하는 고정 원시 행입니다. 런타임 조회 Port를 구현하지 않습니다. */
+public final class AdminIssuanceInquiryTestFixture {
 
     private static final Instant FIXTURE_V1_ANCHOR = Instant.parse("2026-08-23T00:00:00Z");
-    // 요청 시각이 바뀌어도 같은 Cursor가 같은 행을 가리키도록 행 시각은 기준점에 고정한다.
-    private static final Instant NEWEST_FIXED_ROW = FIXTURE_V1_ANCHOR.minus(Duration.ofMinutes(2));
-
-    /**
-     * 모든 Factory에서 동일한 fixture-v1 모집단을 만들고 요청 조건에 맞는 후보만 반환합니다.
-     *
-     * @param query fixture가 지원하는 회원·쿠폰 후보 조건
-     * @param snapshotAt 한 요청에서 확정한 관측 기준 시각
-     * @return issue_attempts, issuances, issuance_histories 형태의 원천 행
-     */
-    @Override
-    public AdminIssuanceInquiryReadResult read(
-            AdminIssuanceInquiryQuery query,
-            Instant snapshotAt
-    ) {
-        Objects.requireNonNull(query, "query");
-        Objects.requireNonNull(snapshotAt, "snapshotAt");
-        if (snapshotAt.isBefore(NEWEST_FIXED_ROW)) {
-            throw new IllegalArgumentException("snapshotAt은 fixture-v1 최신 행보다 빠를 수 없습니다.");
-        }
-        if (query.memberId() != 1_001L) {
-            return AdminIssuanceInquiryReadResult.memberNotFound();
-        }
-        if (query.couponId() != null
-                && (query.couponId() < 2_001L || query.couponId() > 2_006L)) {
-            return AdminIssuanceInquiryReadResult.couponNotFound();
-        }
-        return AdminIssuanceInquiryReadResult.available(new AdminIssuanceInquirySource(
-                attempts().stream()
-                        .filter(row -> matches(query, row.memberId(), row.couponId()))
-                        .toList(),
-                issuances().stream()
-                        .filter(row -> matches(query, row.memberId(), row.couponId()))
-                        .toList(),
-                histories()));
+    private AdminIssuanceInquiryTestFixture() {
     }
 
-    /** fixture 모집단에서 요청의 회원·선택 쿠폰 후보만 남깁니다. */
-    private static boolean matches(AdminIssuanceInquiryQuery query, long memberId, long couponId) {
-        return memberId == query.memberId()
-                && (query.couponId() == null || couponId == query.couponId());
+    /** issue_attempts, issuances, issuance_histories 형태의 고정 원시 행을 반환합니다. */
+    public static AdminIssuanceInquirySource source() {
+        return new AdminIssuanceInquirySource(attempts(), issuances(), histories());
     }
 
     /** 결과·실패·재시도·동률과 같은 issue_attempts 조회 시나리오를 만듭니다. */
