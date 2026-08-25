@@ -207,8 +207,9 @@ class PromSeriesAssemblerTest {
                 assembler(source, PrometheusSeriesProperties.defaults())
                         .assemble(global(MetricsWindow.ONE_MINUTE));
 
-        // 질의가 나가는 계열 여덟 + 기준선 하나. 이 수가 곧 예산 실측의 모집단이다.
-        assertThat(source.issued()).hasSize(9);
+        // 질의가 나가는 계열 아홉 + 기준선 하나. 이 수가 곧 예산 실측의 모집단이다.
+        // OBS-46 이 지연 축을 둘로 갈라 하나 늘었다.
+        assertThat(source.issued()).hasSize(10);
         assertThat(stateOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEqualTo(SourceStatus.PENDING);
         assertThat(stateOf(response, SeriesKey.QUEUE_TELEMETRY)).isEqualTo(SourceStatus.PENDING);
         assertThat(pointsOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEmpty();
@@ -411,6 +412,8 @@ class PromSeriesAssemblerTest {
                 " / sum(rate(",
                 "sum by (result)",
                 OverviewPrometheusContract.OUTCOME_TOTAL,
+                // 지연 축 둘. 성공이 먼저다 — 시스템 실패 축만 남으면 비교 대상이 없다.
+                MetricAggregation.HTTP_LATENCY_SECONDS,
                 MetricAggregation.HTTP_LATENCY_SECONDS,
                 MetricAggregation.promName(DomainMeterNames.STOCK_REMAINING));
         assertThat(source.issued()).hasSameSizeAs(order);

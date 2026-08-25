@@ -23,6 +23,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsSeriesResponse.Series
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
+import com.kafkick.api.observation.http.HttpMetrics.LatencyOutcome;
 import com.kafkick.api.observation.http.HttpMetricsFilter.UriGroup;
 import com.kafkick.api.observation.http.ResultClassifier.ResultClass;
 import com.kafkick.core.admin.MetricsWindow;
@@ -53,6 +54,15 @@ public class PromSeriesAssembler {
     private static final String JOB_API = "api";
     private static final String TAG_OUTCOME = OverviewPrometheusContract.OUTCOME;
     private static final String OUTCOME_SUCCESS = OverviewPrometheusContract.SUCCESS;
+
+    /**
+     * 시스템 실패 지연 축의 {@code outcome} 라벨 값입니다.
+     *
+     * <p>계측이 붙이는 값을 그대로 읽습니다({@link LatencyOutcome#SYSTEM_FAILURE}) — 문자열로
+     * 옮겨 적으면 축 이름이 바뀔 때 질의만 조용히 빈 결과가 되고, 화면은 그것을 "시스템 실패가
+     * 없었다" 로 읽습니다.</p>
+     */
+    private static final String OUTCOME_SYSTEM_FAILURE = LatencyOutcome.SYSTEM_FAILURE.tagValue();
 
     /**
      * 실패 비율의 분자가 되는 결과 분류의 라벨 정규식입니다.
@@ -143,7 +153,11 @@ public class PromSeriesAssembler {
                 start, end, step, deadline));
         // 마지막이다. 지연 백분위는 창과 무관하게 각 점이 독립이라 잘려도 다른 값의 해석을
         // 바꾸지 않는 유일한 계열이다.
-        series.addAll(collect(SeriesKey.LATENCY_P99, latencyQuery(),
+        series.addAll(collect(SeriesKey.LATENCY_P99, latencyQuery(OUTCOME_SUCCESS),
+                start, end, step, deadline));
+        // 성공 축 바로 뒤다. 앞의 성공 축이 살아 있어야 이 축의 값을 "느린가" 로 읽을 수 있고,
+        // 반대로 이것만 남으면 비교 대상이 없다 — 그래서 성공보다 앞에 두지 않는다.
+        series.addAll(collect(SeriesKey.LATENCY_P99_SYSTEM_FAILURE, latencyQuery(OUTCOME_SYSTEM_FAILURE),
                 start, end, step, deadline));
         // 원천이 없는 계열이다. 질의를 보내지 않으므로 예산을 쓰지 않고 절단 순서와도 무관하다.
         series.add(sourceMissing(SeriesKey.QUEUE_PERSISTENCE));
@@ -210,7 +224,7 @@ public class PromSeriesAssembler {
     }
 
     /**
-     * 발급 경로 <b>성공</b> 응답시간 p99(ms)입니다.
+     * 발급 경로 응답시간 p99(ms)를 <b>축 하나</b>만큼 냅니다.
      *
      * <p>인스턴스별로 계산된 값이라 합칠 수 없어 최댓값을 씁니다({@link MetricAggregation#MAX}).
      * 화면은 '인스턴스 최댓값' 표식을 붙여야 합니다.</p>
@@ -218,19 +232,25 @@ public class PromSeriesAssembler {
      * <p>⚠️ 이 질의에는 창이 없습니다. 백분위의 관측 창은 Micrometer expiry 가 정하고 PromQL 로는
      * 바꿀 수 없습니다 — 창은 rate 계열에만 걸립니다.</p>
      *
-     * <p><b>성공 경로만 봅니다.</b> ⚠️ <b>{@code outcome} 셀렉터를 빼면 안 됩니다.</b> OBS-31 이 Timer 를 outcome 넷으로 가른
+     * <p><b>⚠️ {@code outcome} 셀렉터를 빼면 안 됩니다.</b> OBS-31 이 Timer 를 outcome 넷으로 가른
      * 뒤로, 셀렉터가 없으면 {@code max()} 가 <b>가장 느린 축</b>을 집습니다 — 성공 경로는 그대로인데
      * 이 계열만 튑니다(프로브 실측 {@code 243.3ms → 2952.8ms}). 정책 거절이 쏟아지는 구간에서는
      * 반대로 실패 축이 희석돼, 같은 계열이 상황에 따라 다른 것을 가리킵니다.</p>
      *
-     * <p>시스템 실패의 지연 추세는 <b>이 계열에 섞지 않고 축을 따로 냅니다</b>(OBS-46). 여기서
-     * 합치면 재고 소진 폭주 때 장애가 묻힙니다 — 실측으로 {@code failure.p99} 가 정책 거절
-     * 50건일 때 3087ms, 5000건일 때 1.0ms 였습니다.</p>
+     * <p><b>축을 섞지 않고 계열을 따로 냅니다</b>(OBS-46). 합치면 재고 소진 폭주 때 장애가
+     * 묻힙니다 — 실측으로 {@code failure.p99} 가 정책 거절 50건일 때 3087ms, 5000건일 때
+     * 1.0ms 였습니다. 같은 이유로 <b>정책 거절 축은 추세선에 내지 않습니다</b>.</p>
+     *
+     * <p><b>반대 방향 실패</b> — 축을 나눈 뒤에는 '전체 p99' 를 만들 수 없습니다. 백분위는 병합이
+     * 안 되고 {@code _bucket} 이 0 개라 재계산도 못 합니다. 전체가 필요해지면 Timer 이중 기록이
+     * 선행이고, 그때까지 화면은 축별 선 두 개로 읽어야 합니다.</p>
+     *
+     * @param outcome 볼 지연 축의 {@code outcome} 라벨 값
      */
-    private static ScopedQuery latencyQuery() {
+    private static ScopedQuery latencyQuery(String outcome) {
         return ScopedQuery.global("max(" + MetricAggregation.HTTP_LATENCY_SECONDS
                 + "{" + TAG_QUANTILE + "=\"0.99\"," + TAG_URI_GROUP + "=\"" + UriGroup.ISSUE.tagValue()
-                + "\"," + TAG_OUTCOME + "=\"" + OUTCOME_SUCCESS + "\"}) * 1000");
+                + "\"," + TAG_OUTCOME + "=\"" + outcome + "\"}) * 1000");
     }
 
     /**
