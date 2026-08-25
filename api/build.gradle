@@ -32,6 +32,14 @@ dependencies {
     testImplementation project(':infra:redis')
     testImplementation testFixtures(project(':infra:redis'))
 
+    // 테스트만 infra:mq 를 본다. attempt live 샘플링의 기본값은 그 모듈의
+    // AttemptSamplingProperties 상수가 소유하고 실제 설정 키는 이 모듈의 observation.yml 이
+    // 소유해서, 둘을 잇는 테스트가 그 상수를 직접 참조해야 한다(AttemptSamplingYamlContractTest).
+    // 문자열로 옮겨 적으면 한쪽만 바뀌어도 계속 통과하고, 예외 없이 통과량만 조용히 달라진다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 이 모듈의 타입을 컴파일 타임에 못 본다.
+    testImplementation project(':infra:mq')
+
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
