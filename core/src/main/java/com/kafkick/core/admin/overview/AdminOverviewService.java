@@ -11,6 +11,7 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
+import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.PreparationCalculation;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueCalculation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -112,8 +113,9 @@ public class AdminOverviewService {
      * 현재 시점의 관리자 운영현황을 반환합니다.
      *
      * <p>기준 시각, DB catalog, Runtime 현재값과 관측 묶음을 각각 한 번 읽습니다. DB couponId 모집단을
-     * O1 target과 캠페인 행에 함께 사용하며, 미연결 O2는 PENDING으로 보존합니다. O1 후보의 Action 계산은
-     * 한 번만 수행하고 O3·전체 발급률·지연은 관측 묶음의 상태와 시각을 그대로 전달합니다.</p>
+     * O1 target과 캠페인 행에 함께 사용하며, 진행 캠페인의 미연결 O2는 PENDING으로 보존합니다.
+     * O1·O2·준비 후보의 대표 Action 계산은 한 번만 수행하고 O3·전체 발급률·지연은 관측 묶음의 상태와
+     * 시각을 그대로 전달합니다.</p>
      *
      * @return Snapshot과 전체 데이터 완전성을 포함한 운영현황 Service 결과
      */
@@ -139,21 +141,28 @@ public class AdminOverviewService {
         OutcomeCalculation outcomeCalculation = customerOutcomeCalculator.calculate(observationData.outcomeInput());
         StockRiskCalculation stockCalculation = stockRiskCalculator.calculate(
                 policy, stockInputs(campaigns, issuanceCalculation.issuanceFlows()));
-        // 준비 상태는 PENDING이고 FINAL은 A-F6 전까지 미표현이므로 확정 후보를 만들지 않습니다.
+        PreparationCalculation preparationCalculation = campaignOverviewCalculator.calculatePreparation(
+                snapshotAt, campaigns);
+        boolean catalogAvailable = catalog.status() == SourceStatus.VALID;
+        AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary> preparationObservation =
+                catalogAvailable
+                        ? preparationCalculation.openingSoon()
+                        : emptyObservation(catalog.status());
+        // 준비 확정 후보도 O1·O2와 같은 대표 조치 모집단에서 한 번만 선택합니다.
         List<AdminOverviewSnapshot.OperationActionItem> actionCandidates = actionCandidates(
-                campaigns, issuanceActionCandidates, queueCalculation.actionCandidates());
+                campaigns, issuanceActionCandidates, queueCalculation.actionCandidates(),
+                preparationCalculation.actionCandidates());
         ActionCalculation actionCalculation = operationActionCalculator.calculate(actionCandidates);
         CampaignCalculation campaignCalculation = campaignOverviewCalculator.calculate(
                 snapshotAt, campaigns, issuanceCalculation.issuanceFlows(),
                 queueCalculation.queueStatuses(), stockCalculation.stockForecasts(),
                 actionCalculation.representativeByCoupon());
 
-        boolean catalogAvailable = catalog.status() == SourceStatus.VALID;
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
                 snapshotAt,
                 actionObservation(actionCalculation.required(), queueCalculation.queueRisk(),
-                        issuanceCalculation.issuanceFlows(), snapshotAt),
-                catalogAvailable ? campaignCalculation.openingSoon() : emptyObservation(catalog.status()),
+                        issuanceCalculation.issuanceFlows(), preparationObservation, snapshotAt),
+                preparationObservation,
                 queueCalculation.queueRisk(),
                 catalogAvailable ? stockCalculation.stockRisk() : emptyObservation(catalog.status()),
                 observationData.aggregateIssuanceRate(),
@@ -163,7 +172,7 @@ public class AdminOverviewService {
                         ? validObservation(campaignCalculation.campaignStatusSummary(), catalog.observedAt())
                         : emptyObservation(catalog.status()),
                 actionObservation(actionCalculation.items(), queueCalculation.queueRisk(),
-                        issuanceCalculation.issuanceFlows(), snapshotAt),
+                        issuanceCalculation.issuanceFlows(), preparationObservation, snapshotAt),
                 catalogAvailable
                         ? validObservation(campaignCalculation.campaigns(), catalog.observedAt())
                         : emptyObservation(catalog.status()),
@@ -232,14 +241,19 @@ public class AdminOverviewService {
                 stockStatus, campaign.preparation());
     }
 
-    /** Redis 대기열 연결 전에는 각 실제 캠페인을 값 없는 PENDING 입력으로 유지합니다. */
+    /** Redis 대기열 연결 전에는 진행 캠페인만 PENDING, 아직 열리지 않았거나 종료된 캠페인은 N_A로 둡니다. */
     private static List<CampaignQueueCalculator.QueueInput> pendingQueueInputs(
             List<CampaignOverviewSource> campaigns
     ) {
         return campaigns.stream()
-                .map(campaign -> new CampaignQueueCalculator.QueueInput(
-                        campaign.couponId(), null, null, null, null, null,
-                        null, null, SourceStatus.PENDING, null))
+                .map(campaign -> {
+                    // O2가 적용되는 진행 캠페인만 미연결 PENDING으로 두어 예약 캠페인 준비 조치를 가리지 않습니다.
+                    SourceStatus sourceStatus = campaign.status() == CouponRoundStatus.OPEN
+                            ? SourceStatus.PENDING : SourceStatus.N_A;
+                    return new CampaignQueueCalculator.QueueInput(
+                            campaign.couponId(), null, null, null, null, null,
+                            null, null, sourceStatus, null);
+                })
                 .toList();
     }
 
@@ -270,22 +284,25 @@ public class AdminOverviewService {
     }
 
     /**
-     * O1·O2 후보를 한 Action 계산 호출의 같은 모집단으로 결합합니다.
+     * O1·O2·준비 후보를 한 Action 계산 호출의 같은 모집단으로 결합합니다.
      *
      * <p>O1·O2 계산기는 기술 중립성을 위해 이름·오픈 시각 없이 후보를 만들 수 있으므로, 이 조립 경계에서
      * 같은 couponId의 기존 캠페인 기본 정보만 채웁니다. 정책에서 확정한 심각도·영향·권장 행동은 바꾸지
-     * 않으며, 목록의 상위 20개를 여기서 참조하지 않습니다.</p>
+     * 않으며, 준비 후보도 같은 전체 모집단에 넣고 목록의 상위 20개를 여기서 참조하지 않습니다.</p>
      */
     private static List<AdminOverviewSnapshot.OperationActionItem> actionCandidates(
             List<CampaignOverviewSource> campaigns,
             List<AdminOverviewSnapshot.OperationActionItem> issuanceCandidates,
-            List<AdminOverviewSnapshot.OperationActionItem> queueCandidates
+            List<AdminOverviewSnapshot.OperationActionItem> queueCandidates,
+            List<AdminOverviewSnapshot.OperationActionItem> preparationCandidates
     ) {
         Map<Long, CampaignOverviewSource> campaignByCoupon = campaigns.stream()
                 .collect(java.util.stream.Collectors.toMap(CampaignOverviewSource::couponId, campaign -> campaign));
         List<AdminOverviewSnapshot.OperationActionItem> candidates = new ArrayList<>();
         candidates.addAll(withCampaignDisplay(issuanceCandidates, campaignByCoupon));
         candidates.addAll(withCampaignDisplay(queueCandidates, campaignByCoupon));
+        // DB에서 확정한 준비 후보를 O1·O2 후보와 같은 대표 판정에 포함합니다.
+        candidates.addAll(preparationCandidates);
         return List.copyOf(candidates);
     }
 
@@ -336,23 +353,26 @@ public class AdminOverviewService {
         return new AdminOverviewSnapshot.Observation<>(null, status, null);
     }
 
-    /** O1·O2 모집단 완전성을 Action KPI·목록 상태에 반영하되 확정 대표 Map은 행 조립에 유지합니다. */
+    /** O1·O2·준비 모집단 완전성을 Action KPI·목록 상태에 반영하되 대표 Map은 행 조립에 유지합니다. */
     private static <T> AdminOverviewSnapshot.Observation<T> actionObservation(
             T value,
             AdminOverviewSnapshot.Observation<?> queueRisk,
             Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows,
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary> preparation,
             Instant snapshotAt
     ) {
         List<AdminOverviewSnapshot.Observation<?>> sources = new ArrayList<>();
         sources.add(queueRisk);
         sources.addAll(issuanceFlows.values());
+        // 준비 여부를 모르는 캠페인이 있으면 빈 정상 조치 목록으로 보정하지 않습니다.
+        sources.add(preparation);
         SourceStatus status = actionSourceStatus(sources);
         if (status == SourceStatus.N_A) {
-            // 적용 대상이 없는 O1·O2 원천은 준비 미완료 같은 별도 후보의 완전성을 낮추지 않습니다.
+            // 적용 대상이 없는 O1·O2·준비 원천은 확정된 별도 후보의 완전성을 낮추지 않습니다.
             return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, snapshotAt);
         }
         if (!status.carriesValue()) {
-            // O1·O2 적용 모집단이 불완전하면 계산 가능한 일부를 전체 KPI처럼 노출하지 않습니다.
+            // 적용 모집단이 불완전하면 계산 가능한 일부를 전체 KPI처럼 노출하지 않습니다.
             return new AdminOverviewSnapshot.Observation<>(null, status, null);
         }
         Instant observedAt = sources.stream()
@@ -368,7 +388,7 @@ public class AdminOverviewService {
         return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, observedAt);
     }
 
-    /** 적용 대상 N_A를 제외한 O1·O2 상태에서 Action 모집단의 완전성을 합성합니다. */
+    /** 적용 대상 N_A를 제외한 O1·O2·준비 상태에서 Action 모집단의 완전성을 합성합니다. */
     private static SourceStatus actionSourceStatus(List<AdminOverviewSnapshot.Observation<?>> sources) {
         List<SourceStatus> statuses = sources.stream()
                 .map(AdminOverviewSnapshot.Observation::status)

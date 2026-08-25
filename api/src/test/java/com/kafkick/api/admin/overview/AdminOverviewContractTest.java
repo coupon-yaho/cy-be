@@ -13,6 +13,8 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
+import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
@@ -233,6 +235,56 @@ class AdminOverviewContractTest {
         assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
     }
 
+    /** 준비 미완료 판정이 DTO 필드 추가 없이 기존 네 HTTP 영역에 함께 노출되는지 검증합니다. */
+    @Test
+    @DisplayName("준비 미완료는 기존 HTTP DTO의 KPI 조치 목록 캠페인 행에 함께 노출된다")
+    void exposesIncompletePreparationAcrossExistingHttpResponseShape() {
+        AdminOverviewSnapshot.RecommendedAction recommendedAction =
+                new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY,
+                        "캠페인 준비 상태 확인",
+                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL);
+        AdminOverviewSnapshot.OperationActionItem action =
+                new AdminOverviewSnapshot.OperationActionItem(
+                        17L, "딜리버리고 여름특가", TO, Severity.WARN,
+                        AdminOverviewSnapshot.CustomerImpact.NONE,
+                        "오픈 전 필수 준비 항목을 확인해야 합니다.",
+                        TO.minus(Duration.ofMinutes(30)), null, recommendedAction);
+        AdminOverviewSnapshot.CampaignOverview campaign = new AdminOverviewSnapshot.CampaignOverview(
+                1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.SCHEDULED,
+                TO, TO.plus(Duration.ofHours(1)), Severity.WARN,
+                unavailable(), unavailable(), unavailable(),
+                AdminOverviewSnapshot.CustomerImpact.NONE,
+                "오픈 전 필수 준비 항목을 확인해야 합니다.", recommendedAction);
+        AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
+                TO,
+                observed(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1)),
+                observed(new AdminOverviewSnapshot.OpeningSoonSummary(1, 1)),
+                unavailable(), unavailable(), unavailable(), unavailable(), unavailable(),
+                observed(new AdminOverviewSnapshot.CampaignStatusSummary(0, 1, 0)),
+                observed(new AdminOverviewSnapshot.ActionItemSnapshot(1, List.of(action))),
+                observed(List.of(campaign)), unavailable());
+
+        AdminOverviewResponse response = AdminOverviewResponse.from(snapshot, OverallStatus.PARTIAL);
+
+        assertThat(Arrays.stream(AdminOverviewResponse.class.getRecordComponents())
+                .map(RecordComponent::getName))
+                .containsExactly(
+                        "snapshotAt", "overallStatus", "actionRequired", "openingSoon", "queueRisk",
+                        "stockRisk", "aggregateIssuanceRate", "aggregateQueue", "latencySummary",
+                        "campaignStatusSummary", "actionItems", "campaigns", "customerOutcomes");
+        assertThat(response.openingSoon().value().preparationIncompleteCount()).isEqualTo(1L);
+        assertThat(response.actionRequired().value().warningCount()).isEqualTo(1L);
+        AdminOverviewResponse.OperationActionItem responseAction =
+                response.actionItems().value().topItems().getFirst();
+        assertThat(responseAction.recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
+        AdminOverviewResponse.CampaignOverview responseCampaign = response.campaigns().value().getFirst();
+        assertThat(responseCampaign.severity()).isEqualTo(Severity.WARN);
+        assertThat(responseCampaign.customerImpact()).isEqualTo(responseAction.customerImpact());
+        assertThat(responseCampaign.recommendedAction()).isEqualTo(responseAction.recommendedAction());
+    }
+
     private AdminOverviewSnapshot snapshotWithActions(List<AdminOverviewSnapshot.OperationActionItem> actions) {
         return new AdminOverviewSnapshot(
                 TO,
@@ -266,5 +318,9 @@ class AdminOverviewContractTest {
 
     private <T> AdminOverviewSnapshot.Observation<T> unavailable() {
         return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null);
+    }
+
+    private <T> AdminOverviewSnapshot.Observation<T> observed(T value) {
+        return new AdminOverviewSnapshot.Observation<>(value, SourceStatus.VALID, TO);
     }
 }

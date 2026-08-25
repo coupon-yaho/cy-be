@@ -85,9 +85,7 @@ public class CampaignOverviewCalculator {
                     stockForecasts, representativeActions));
         }
 
-        PreparationCalculation preparationCalculation = calculatePreparation(snapshotAt, campaigns);
         return new CampaignCalculation(
-                preparationCalculation.openingSoon(),
                 new AdminOverviewSnapshot.CampaignStatusSummary(
                         openCount, scheduledCount, closedCount),
                 calculatedCampaigns
@@ -116,6 +114,7 @@ public class CampaignOverviewCalculator {
         long openingSoonCount = 0L;
         long preparationIncompleteCount = 0L;
         SourceStatus preparationStatus = SourceStatus.VALID;
+        Instant preparationObservedAt = null;
         List<AdminOverviewSnapshot.OperationActionItem> actionCandidates = new ArrayList<>();
 
         for (int index = 0; index < campaigns.size(); index++) {
@@ -130,6 +129,10 @@ public class CampaignOverviewCalculator {
             PreparationObservation preparation = campaign.preparation();
             // 값 없는 준비 상태를 false로 보정하지 않고 오픈 임박 KPI의 상태로 합성합니다.
             preparationStatus = combinePreparationStatus(preparationStatus, preparation.status());
+            if (preparation.status().carriesValue()) {
+                // 값이 있는 준비 관측 중 가장 오래된 실제 시각을 집계 KPI의 기준 시각으로 보존합니다.
+                preparationObservedAt = earlier(preparationObservedAt, preparation.observedAt());
+            }
             if (!Boolean.FALSE.equals(preparation.completed())) {
                 continue;
             }
@@ -141,9 +144,9 @@ public class CampaignOverviewCalculator {
             }
         }
 
-        return new PreparationCalculation(
-                openingSoonObservation(openingSoonCount, preparationIncompleteCount, preparationStatus, snapshotAt),
-                actionCandidates);
+        Instant observedAt = openingSoonCount == 0L ? snapshotAt : preparationObservedAt;
+        return new PreparationCalculation(openingSoonObservation(
+                openingSoonCount, preparationIncompleteCount, preparationStatus, observedAt), actionCandidates);
     }
 
     /**
@@ -157,7 +160,7 @@ public class CampaignOverviewCalculator {
                     long openingSoonCount,
                     long preparationIncompleteCount,
                     SourceStatus preparationStatus,
-                    Instant snapshotAt
+                    Instant observedAt
             ) {
         if (!preparationStatus.carriesValue()) {
             return new AdminOverviewSnapshot.Observation<>(null, preparationStatus, null);
@@ -165,7 +168,12 @@ public class CampaignOverviewCalculator {
         return new AdminOverviewSnapshot.Observation<>(
                 new AdminOverviewSnapshot.OpeningSoonSummary(openingSoonCount, preparationIncompleteCount),
                 preparationStatus,
-                snapshotAt);
+                observedAt);
+    }
+
+    /** 여러 준비 값으로 만든 집계가 실제보다 새로 보이지 않도록 가장 오래된 관측 시각을 선택합니다. */
+    private static Instant earlier(Instant left, Instant right) {
+        return left == null || right.isBefore(left) ? right : left;
     }
 
     /** 값 없는 준비 상태가 알려진 수치를 정상값처럼 덮어쓰지 않도록 우선순위를 합성합니다. */
@@ -326,21 +334,18 @@ public class CampaignOverviewCalculator {
     }
 
     /**
-     * 캠페인 원천 목록에서 함께 계산한 상단 KPI와 캠페인별 표시 결과입니다.
+     * 캠페인 원천 목록에서 계산한 상태 집계와 캠페인별 표시 결과입니다.
      *
-     * @param openingSoon 30분 안에 오픈하는 캠페인과 준비 관측 상태
      * @param campaignStatusSummary 캠페인의 진행·예정·종료 상태별 수
      * @param campaigns 캠페인 기본 정보와 독립적인 O1·O2·O4 원천 상태 목록
      */
     public record CampaignCalculation(
-            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary> openingSoon,
             AdminOverviewSnapshot.CampaignStatusSummary campaignStatusSummary,
             List<AdminOverviewSnapshot.CampaignOverview> campaigns
     ) {
 
         /** 호출 이후 원천 목록 변경이 계산 결과에 영향을 주지 않도록 불변 복사합니다. */
         public CampaignCalculation {
-            Objects.requireNonNull(openingSoon, "openingSoon");
             Objects.requireNonNull(campaignStatusSummary, "campaignStatusSummary");
             Objects.requireNonNull(campaigns, "campaigns");
             campaigns = List.copyOf(campaigns);

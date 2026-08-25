@@ -175,6 +175,7 @@ class CampaignOverviewCalculatorTest {
         assertThat(result.openingSoon().status()).isEqualTo(SourceStatus.STALE);
         assertThat(result.openingSoon().value())
                 .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(1, 1));
+        assertThat(result.openingSoon().observedAt()).isEqualTo(SNAPSHOT_AT.minusSeconds(1));
         assertThat(result.actionCandidates()).extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
                 .containsExactly(12L);
     }
