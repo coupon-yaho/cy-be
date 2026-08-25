@@ -1382,13 +1382,13 @@ Q&A는 별도. 합계 20분을 절대 초과할 수 없습니다. 여유가 0이
 
 erDiagram
 BRANDS ||--o{ COUPON_TEMPLATES : "운영"
-COUPON_TEMPLATES ||--o{ CAMPAIGNS : "관리자 API 가 회차 생성"
-CAMPAIGNS ||--|| COUPON_STOCKS : "재고 1:1"
-CAMPAIGNS ||--o{ COUPONS : "발급"
-MEMBERS ||--o{ COUPONS : "보유"
+COUPON_TEMPLATES ||--o{ COUPONS : "관리자 API 가 회차 생성"
+COUPONS ||--|| COUPON_STOCKS : "재고 1:1"
+COUPONS ||--o{ ISSUANCES : "발급"
+MEMBERS ||--o{ ISSUANCES : "보유"
 GRADES ||--o{ MEMBERS : "등급 코드"
-COUPONS ||--o{ COUPON_HISTORIES : "상태 전이 이력"
-COUPONS ||--o{ COUPON_USAGES : "사용·취소 실적"
+ISSUANCES ||--o{ ISSUANCE_HISTORIES : "상태 전이 이력"
+ISSUANCES ||--o{ ISSUANCE_USAGES : "사용·취소 실적"
 VERIFICATION_RUNS ||--o{ VERIFICATION_FINDINGS : "검출 항목"
 
 GRADES {
@@ -1416,7 +1416,7 @@ int stock_per_occurrence
 tinyint eligible_grades_mask
 boolean active
 }
-CAMPAIGNS {
+COUPONS {
 bigint id PK
 bigint template_id FK
 bigint brand_id
@@ -1430,7 +1430,7 @@ datetime close_at
 varchar status
 }
 COUPON_STOCKS {
-bigint campaign_id PK
+bigint coupon_id PK
 int total_quantity
 int active_count
 }
@@ -1442,27 +1442,27 @@ char email_hash UK
 varbinary phone_enc
 char phone_hash
 }
-COUPONS {
+ISSUANCES {
 bigint id PK
-bigint campaign_id FK
+bigint coupon_id FK
 bigint member_id FK
 char code UK
 varchar status
 datetime issued_at
 datetime expires_at
 }
-COUPON_HISTORIES {
+ISSUANCE_HISTORIES {
 bigint id PK
-bigint coupon_id FK
+bigint issuance_id FK
 varchar event_type
 varchar from_status
 varchar to_status
 varchar reason
 datetime created_at
 }
-COUPON_USAGES {
+ISSUANCE_USAGES {
 bigint id PK
-bigint coupon_id FK
+bigint issuance_id FK
 bigint order_id
 int discount_amount
 datetime used_at
@@ -1483,7 +1483,20 @@ bigint coupon_id
 
 ```
 
-이 외에 `idempotency_records`(멱등키) · `campaign_stats` · `grade_stats` · `hourly_stats`(집계 3종)가 독립 테이블로 존재합니다.
+이 외에 `idempotency_records`(멱등키) · `coupon_stats` · `grade_stats` · `hourly_stats`(집계 3종)가 독립 테이블로 존재합니다.
+
+> **⚠️ 이 ERD 만 현재 DDL 명칭으로 맞췄다.** 회차·발급건이 한때 `campaigns`·`coupons`
+> 였고, 지금은 `coupons`(회차) · `issuances`(발급건) · `issuance_histories` ·
+> `issuance_usages` 다. 대응표는 `docs/02-erd-decisions.md` 머리에 있다.
+>
+> **문서의 나머지는 옛 어휘 그대로다.** 일괄 치환하면 안 되기 때문이다 — API 경로·Redis
+> 키에도 같은 낱말이 들어 있는데 거기는 뜻이 다르다. 실제 경로는
+> `POST /api/v1/coupons/{issuanceId}/use` 로 **회차가 아니라 발급건**을 `coupons` 아래
+> 두고 있다(`CouponUseController` · CY-5). 기계적으로 바꾸면 없는 계약이 생긴다.
+>
+> **`VERIFICATION_FINDINGS` 컬럼도 안 바꿨다** — `campaign_id`·`coupon_id` 는 스키마에
+> 그 이름으로 실재하는 레거시 컬럼이고, 각각 회차 `coupons.id` 와 발급건 `issuances.id`
+> 를 가리킨다.
 
 ## 테이블 정의
 
