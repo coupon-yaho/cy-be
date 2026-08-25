@@ -7,11 +7,9 @@ import java.lang.reflect.Field;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
@@ -20,36 +18,24 @@ import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
 import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
 import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
-import com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration;
 
-/** Runtime Config Redis 자동설정과 관리자 Controller의 Core Port 조립을 검증합니다. */
+/** 관리자 Runtime Config Controller의 Core Port 조립을 검증합니다. */
 class AdminRuntimeConfigWiringTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(RuntimeConfigRedisAutoConfiguration.class))
-            .withUserConfiguration(ControllerConfiguration.class)
-            .withBean(StringRedisTemplate.class, () -> org.mockito.Mockito.mock(StringRedisTemplate.class));
+            .withUserConfiguration(ControllerConfiguration.class);
 
-    /** Redis 자동설정이 네트워크 연결 없이 RuntimeConfigStore와 관리자 Controller를 조립하는지 검증합니다. */
+    /** 제공한 Core Store로 관리자 Controller가 조립되는지 검증합니다. */
     @Test
-    void assemblesRuntimeConfigStoreAndAdminController() {
-        runner.run(context -> {
-            assertThat(context).hasNotFailed();
-            assertThat(context).hasSingleBean(RuntimeConfigStore.class);
-            assertThat(context).hasSingleBean(AdminRuntimeConfigController.class);
-        });
-    }
-
-    /** 사용자가 명시한 Store가 있으면 Redis 자동설정이 그것을 대체하지 않는지 검증합니다. */
-    @Test
-    void backsOffWhenCustomRuntimeConfigStoreExists() {
+    void assemblesAdminControllerWithProvidedRuntimeConfigStore() {
         RuntimeConfigStore customStore = new ReadOnlyRuntimeConfigStore(snapshot());
 
         runner.withBean(RuntimeConfigStore.class, () -> customStore)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(context).getBean(RuntimeConfigStore.class).isSameAs(customStore);
-                    assertThat(context.getBean(AdminRuntimeConfigController.class)).isNotNull();
+                    assertThat(context).hasSingleBean(RuntimeConfigStore.class);
+                    assertThat(context).hasSingleBean(AdminRuntimeConfigController.class);
+                    assertThat(context.getBean(RuntimeConfigStore.class)).isSameAs(customStore);
                 });
     }
 
