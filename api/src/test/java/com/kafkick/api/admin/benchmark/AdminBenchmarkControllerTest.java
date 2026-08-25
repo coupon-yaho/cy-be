@@ -105,10 +105,11 @@ class AdminBenchmarkControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.state").value("FINALIZED"))
                 .andExpect(jsonPath("$.data.archiveStatus").value("FAILED"));
-        mockMvc.perform(post("/api/v1/admin/benchmarks/1/k6-result")
+        mockMvc.perform(post("/api/v1/admin/benchmarks/1/client-result")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tps\":1847.2,\"p99Millis\":412.3,\"failureCount\":0,"
-                                + "\"failureRate\":0.0,\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
+                        .content("{\"requestCount\":100,\"failureCount\":0,\"droppedIterations\":0,"
+                                + "\"tps\":1847.2,\"p95Millis\":206.1,\"p99Millis\":412.3,"
+                                + "\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
                 .andExpect(status().isNotImplemented())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
     }
@@ -125,14 +126,15 @@ class AdminBenchmarkControllerTest {
         verify(finalizeOrchestrator, never()).finalizeRun(7L);
     }
 
-    /** k6 실패율의 확정 범위인 0~1을 벗어난 요청을 400으로 거부하는지 검증합니다. */
+    /** 실패 건수가 전체 요청 수를 넘는 공식 결과를 400으로 거부하는지 검증합니다. */
     @Test
     @DisplayName("k6 실패 비율은 0 이상 1 이하만 허용한다")
-    void k6ResultRejectsFailureRateAboveOne() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/benchmarks/1/k6-result")
+    void clientResultRejectsFailureCountAboveRequestCount() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/1/client-result")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tps\":1.0,\"p99Millis\":1.0,\"failureCount\":2,"
-                                + "\"failureRate\":1.1,\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
+                        .content("{\"requestCount\":1,\"failureCount\":2,\"droppedIterations\":0,"
+                                + "\"tps\":1.0,\"p95Millis\":1.0,\"p99Millis\":1.0,"
+                                + "\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
                 .andExpect(status().isBadRequest());
     }
 
