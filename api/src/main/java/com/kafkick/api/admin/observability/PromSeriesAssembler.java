@@ -384,7 +384,8 @@ public class PromSeriesAssembler {
         List<PromRangeSeries> raw;
         try {
             raw = rangeQuery.query(query.promQl(), start, end, step);
-        } catch (PromQueryException | IllegalArgumentException failure) {
+        } catch (PromQueryException failure) {
+            // collect() 와 같은 이유로 IllegalArgumentException 은 잡지 않는다.
             log.warn("Prometheus 구간 질의 실패로 기준선을 UNAVAILABLE 로 내려보냅니다: {} (couponId={})",
                     failure.getMessage(), couponId);
             log.debug("Prometheus 구간 질의 실패 상세: {}", query.promQl(), failure);
@@ -465,9 +466,17 @@ public class PromSeriesAssembler {
         List<PromRangeSeries> raw;
         try {
             raw = rangeQuery.query(query.promQl(), start, end, step);
-        } catch (PromQueryException | IllegalArgumentException failure) {
+        } catch (PromQueryException failure) {
             // 500 으로 올리지 않는다. 이 계열만 UNAVAILABLE 로 나가고 나머지는 그려진다.
             // 스택트레이스는 DEBUG 에만 싣는다 — 원천이 죽은 동안 매 폴링마다 쌓인다.
+            //
+            // ⚠️ IllegalArgumentException 을 함께 잡지 않는다. PromRangeQueryClient 가 그것을
+            //    던지는 경우는 빈 PromQL · end<=start · step<=0 뿐이고 셋 다 우리 쪽 버그다.
+            //    원천이 낼 수 있는 거절(범위·평가점 상한)과 응답 파싱 실패는 전부
+            //    PromQueryException 이다. 버그를 여기서 삼키면 화면이 UNAVAILABLE 을 그려
+            //    "Prometheus 가 죽었다" 고 말하고, 운영자는 멀쩡한 Prometheus 를 들여다본다 —
+            //    이 파일이 다른 모든 자리에서 거부하는 바로 그 거짓이다. 500 으로 올려야
+            //    GlobalExceptionHandler 가 스택트레이스를 남기고 눈에 띈다.
             log.warn("Prometheus 구간 질의 실패로 계열을 UNAVAILABLE 로 내려보냅니다: {} ({})",
                     key, failure.getMessage());
             log.debug("Prometheus 구간 질의 실패 상세: {}", query.promQl(), failure);
