@@ -311,7 +311,7 @@ uk_campaign_member          (campaign_id, member_id)   -- 제약 겸 인덱스. 
 ```mermaid
 erDiagram
     BRANDS            ||--o{ COUPON_TEMPLATES   : "운영"
-    COUPON_TEMPLATES  ||--o{ CAMPAIGNS          : "스케줄러가 회차 생성"
+    COUPON_TEMPLATES  ||--o{ CAMPAIGNS          : "관리자 API 가 회차 생성"
     CAMPAIGNS         ||--|| COUPON_STOCKS      : "재고 1:1"
     CAMPAIGNS         ||--o{ COUPONS            : "발급"
     MEMBERS           ||--o{ COUPONS            : "보유"
