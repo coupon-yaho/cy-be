@@ -69,14 +69,28 @@ storage JPA · 어댑터 · Flyway
 
 ### 스케줄러는 전부 batch 에 있고, 부하 중에는 하나도 돌지 않는다
 
-회차 생성과 상태 전이까지 batch 가 가져간다. 상태를 바꾸는 배치가 한 프로세스에 모여야
-정지 스위치가 하나로 끝나기 때문이다.
+상태 전이까지 batch 가 가져간다. 상태를 바꾸는 **배치**가 한 프로세스에 모여야 정지
+스위치가 하나로 끝나기 때문이다.
+
+> **~~회차 생성도 batch 가 가져간다~~ 범위에서 뺐다 · CY-503.** 그때는 회차를 만드는 경로가
+> 시드뿐이라 batch 가 그 축을 맡는 것이 자연스러웠다. 지금은 **관리자 API 가 그 일을 한다** —
+> `POST /api/v1/admin/coupon-templates/{id}/rounds`(CY-5). 배치가 매일 새벽에 하나 더 만들면
+> **같은 테이블에 회차를 만드는 경로가 둘**이 되고, 그것은 이 절이 없애려던 상태 그대로다.
+>
+> **"정지 스위치 하나" 논거는 그대로 산다.** 그 논거가 묶는 것은 *부하 중에 멈춰야 하는 것*
+> 인데, 관리자 API 는 사람이 부르는 것이라 부하 테스트 중에 안 돈다 — `api` 의 발급 경로와
+> 같은 취급이다. 배치가 계속 지는 것은 **이미 있는 회차를 열고 닫는 일**(`CouponRoundScheduler`)
+> 이다.
+>
+> 자동 생성이 필요해지면 **그때 어느 쪽에 둘지 다시 정한다.** 지금 자리표시만 남겨 두면
+> 다음 사람이 그것을 "하기로 되어 있는 일" 로 읽는다.
 
 | 어디에 | 무엇이 | 부하 중 |
 |---|---|---|
 | `api` | 발급 · 사용 · 취소 · 대기열 · 드리프트 감시 | 유지 |
 | `api` | **재고 소진 시 회차를 `CLOSED` 로** — 발급 경로가 인라인으로 **(미착수 — 지금 `api` 에는 발급 경로가 없다)** | 유지 |
-| `batch` | 회차 상태 전이 스케줄러 (`CouponRoundScheduler` · CY-446) · 회차 생성(미착수) | **정지** |
+| `api` | **회차 생성** — 관리자 API(CY-5). batch 범위 밖이다(CY-503) | 유지 |
+| `batch` | 회차 상태 전이 스케줄러 (`CouponRoundScheduler` · CY-446) | **정지** |
 | `batch` | `expireJob` · `verifyJob` | **정지** |
 
 **부하 중에 스케줄러가 하나도 안 돌아도 되는 이유** — 부하 테스트는 이미 `OPEN` 인 회차 하나에
@@ -154,7 +168,9 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 ```
 
 하나라도 해당하면 Spring Batch, 아니면 `@Scheduled`.
-템플릿 12행을 스캔하는 회차 생성을 Batch 로 만들면 **배치 메타 쓰기가 검증 대상 DB 를 때린다.**
+회차 생성을 Batch 로 만들면 **배치 메타 쓰기가 검증 대상 DB 를 때린다** — 템플릿 12행을
+스캔하는 일에 그 값을 치를 이유가 없다는 것이 당시 판단이었다. (그 일 자체가 CY-503 에서
+batch 범위 밖으로 나갔다. 판정 기준의 예시로는 그대로 유효하다.)
 
 ~~`@EnableBatchProcessing` 은 붙이지 않는다~~ — **틀렸다. 붙인다**(`BatchJobRepositoryConfig`).
 안 붙이면 `JobRepository` 가 `ResourcelessJobRepository` 로 남아 `BATCH_*` 아홉 테이블이
@@ -185,12 +201,11 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
 
 ```
 계층 1 · 상태를 바꾼다
-  회차 생성            @Scheduled    매일 새벽   total_quantity 만 세팅
   회차 상태 전이        @Scheduled    분 단위     SCHEDULED→OPEN→CLOSED
-  expireJob           Spring Batch  5분        ★ 재고를 쓰는 유일한 잡
+  expireJob           Spring Batch  04:10     ★ 재고를 쓰는 유일한 잡
 
 계층 2 · 진실을 판정한다   원본은 읽기만 한다
-  verifyJob           Spring Batch  FULL 온디맨드 / INCREMENTAL 10분
+  verifyJob           Spring Batch  FULL 05:00 (CY-470) + 온디맨드
     └ statsAggregate                Step 7. CLEAN 만
   reportDump          관리 API      최종 1회
 
@@ -205,13 +220,15 @@ Spring Batch 는 공짜가 아니다. Job 하나마다 `BATCH_JOB_INSTANCE` · `
   드리프트 감시         @Scheduled    1초   아무것도 쓰지 않는다
 ```
 
-**계층 1만 불변식을 깰 수 있고 셋뿐이다.** 동시성 테스트도 부하 중 정지도 락 순서도 전부 여기서만 필요하다.
+**계층 1만 불변식을 깰 수 있고 둘뿐이다.** 동시성 테스트도 부하 중 정지도 락 순서도 전부
+여기서만 필요하다. (셋이었다 — 회차 생성이 CY-503 에서 범위 밖으로 나갔다.)
 **계층 2는 아무리 느려도 아무것도 안 깬다** — 그래서 시간 상한을 두지 않는 결정이 성립한다.
 **계층 3은 통째로 컷 가능하다.**
 
 ### 못 박는 규칙 셋
 
-1. **재고(`active_count`)를 쓰는 배치는 `expireJob` 하나.** 회차 생성은 `total_quantity` 만 채운다.
+1. **재고(`active_count`)를 쓰는 배치는 `expireJob` 하나.** 회차를 만드는 쪽은
+   `total_quantity` 만 채운다 — 그 일은 지금 관리자 API 가 한다(CY-503).
    이게 무너지면 경합 축이 하나에서 셋으로 늘고 동시성 조합이 폭발한다.
 2. **계층 2는 원본 테이블에 쓰지 않는다.** 검증기가 데이터를 고치면 다음 실행이 무엇을 검증하는지 알 수 없어진다.
 3. **`asof_state` 를 읽는 규칙은 전부 한 잡에.** 나누면 Step 0(실측 57초)를 잡마다 다시 돌린다.

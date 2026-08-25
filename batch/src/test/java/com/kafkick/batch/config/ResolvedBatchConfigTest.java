@@ -380,7 +380,7 @@ class ResolvedBatchConfigTest {
     }
 
     @Test
-    @DisplayName("크론 여섯이 실제로 파싱된다 — 넷은 배선됐고 둘(verify-incremental·coupon-create)은 자리 표시다")
+    @DisplayName("크론 다섯이 실제로 파싱된다 — 넷은 배선됐고 하나(verify-incremental)만 자리 표시다")
     void scheduleCronsParse() {
         try (ConfigurableApplicationContext context = HermeticBoot.run(
                 LOCATION, "--spring.main.web-application-type=none")) {
@@ -388,8 +388,12 @@ class ResolvedBatchConfigTest {
 
             // @Scheduled 가 배선되는 티켓까지 기다리면 그때 처음 터진다. 파싱만 시켜 두면
             // 문법 오류는 지금 잡히고, 배선 티켓은 크론이 맞다는 전제 위에서 시작한다.
+            //
+            // coupon-create-cron 은 CY-503 에서 걷었다 — 회차 생성이 관리자 API 로 가면서
+            // batch 범위 밖이 됐다. 자리표시 키를 남겨 두면 다음 사람이 그것을
+            // "하기로 되어 있는 일" 로 읽는다.
             for (String key : List.of("expire-cron", "verify-cron", "verify-incremental-cron",
-                    "cleanup-cron", "coupon-open-cron", "coupon-create-cron")) {
+                    "cleanup-cron", "coupon-open-cron")) {
                 String cron = environment.getProperty("batch.schedule." + key);
 
                 assertThat(cron).as(key + " 가 해석되지 않았다 — 키 경로부터 확인해라").isNotBlank();

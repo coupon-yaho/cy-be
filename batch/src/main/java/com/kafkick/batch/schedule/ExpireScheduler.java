@@ -93,9 +93,10 @@ public class ExpireScheduler {
      * <b>JVM 기본 타임존</b>으로 크론을 풀고, {@code CronSlot} 은 {@code TimeProvider}
      * ({@code Clock.systemUTC})가 준 값으로 푼다. 개발 기기가 KST 면 그 둘이 9시간 어긋난다.
      *
-     * <p>지금 기본값 {@code 0 *}{@code /5 * * * *} 에서만 우연히 안 드러난다 — 실존하는 오프셋이
-     * 전부 15분 배수라 UTC 로 옮겨도 5분 슬롯 위에 그대로 떨어지기 때문이다.
-     * <b>시(hour) 필드가 들어가는 순간 깨진다</b>({@code coupon-create-cron} 이 이미 그 모양이다).
+     * <p>5분 크론이던 시절에는 우연히 안 드러났다 — 실존하는 오프셋이 전부 15분 배수라
+     * UTC 로 옮겨도 5분 슬롯 위에 그대로 떨어지기 때문이다.
+     * <b>시(hour) 필드가 들어가는 순간 깨지고, 지금 크론 셋이 전부 그 모양이다</b>
+     * (만료 04:10 · 정리 04:30 · 검증 05:00).
      * 그때 {@code asOf} 가 발화 시각보다 몇 시간 과거가 되고, {@code asOf <= now} 는 계속
      * 성립하므로 {@code EXPIRE_ASOF_IN_FUTURE} 가드도 안 울린다 — <b>조용히 그만큼 밀린다.</b>
      */
