@@ -1,13 +1,9 @@
-package com.kafkick.core.admin.inquiry.mock;
+package com.kafkick.core.admin.inquiry;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Objects;
 
-
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
-import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySourceReader;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawAttempt;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawHistoryLink;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource.RawIssuance;
@@ -16,34 +12,15 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.observation.EventType;
 import com.kafkick.core.observation.ReasonCode;
 
-/**
- * 실제 Repository를 대신해 세 DB 테이블 형태의 고정 문의 원천 행을 제공합니다.
- *
- * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
- * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
- *
- * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
- * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
- * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
- */
-public class AdminIssuanceInquiryMockDataFactory implements AdminIssuanceInquirySourceReader {
+/** Core·API 계약 테스트가 공유하는 고정 원시 행입니다. 런타임 조회 Port를 구현하지 않습니다. */
+public final class AdminIssuanceInquiryTestFixture {
 
     private static final Instant FIXTURE_V1_ANCHOR = Instant.parse("2026-08-23T00:00:00Z");
-    // 요청 시각이 바뀌어도 같은 Cursor가 같은 행을 가리키도록 행 시각은 기준점에 고정한다.
-    private static final Instant NEWEST_FIXED_ROW = FIXTURE_V1_ANCHOR.minus(Duration.ofMinutes(2));
+    private AdminIssuanceInquiryTestFixture() {
+    }
 
-    /**
-     * 모든 Factory와 요청에서 동일한 fixture-v1 원천 행을 반환합니다.
-     *
-     * @param snapshotAt 한 요청에서 확정한 관측 기준 시각
-     * @return issue_attempts, issuances, issuance_histories 형태의 원천 행
-     */
-    @Override
-    public AdminIssuanceInquirySource create(Instant snapshotAt) {
-        Objects.requireNonNull(snapshotAt, "snapshotAt");
-        if (snapshotAt.isBefore(NEWEST_FIXED_ROW)) {
-            throw new IllegalArgumentException("snapshotAt은 fixture-v1 최신 행보다 빠를 수 없습니다.");
-        }
+    /** issue_attempts, issuances, issuance_histories 형태의 고정 원시 행을 반환합니다. */
+    public static AdminIssuanceInquirySource source() {
         return new AdminIssuanceInquirySource(attempts(), issuances(), histories());
     }
 

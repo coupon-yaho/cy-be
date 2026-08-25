@@ -32,7 +32,12 @@ public class IssuanceInquiryCalculator {
     private static final Comparator<InquiryItem> NEWEST_ITEM_FIRST = Comparator.comparing(
             InquiryItem::position, NEWEST_POSITION_FIRST);
 
-    /** 정확한 연결 키로 실제 발급 상태를 보강한 뒤 필터·정렬·페이지를 적용합니다. */
+    /**
+     * 정확한 연결 키로 실제 발급 상태를 보강한 뒤 결과 필터·전역 정렬·Cursor·페이지를 적용합니다.
+     *
+     * <p>원천은 query의 회원과 선택 쿠폰으로 이미 제한된 후보여야 합니다. 대표 attempt 선택이
+     * 먼저이므로 HTTP 결과와 사유 필터는 여기서 적용합니다.
+     */
     public AdminIssuanceInquiryResult calculate(
             AdminIssuanceInquirySource source,
             AdminIssuanceInquiryQuery query
@@ -84,9 +89,10 @@ public class IssuanceInquiryCalculator {
     }
 
     /** 결과 이벤트가 있으면 시도 이벤트보다 우선하고, 같은 종류에서는 최신 행을 고릅니다. */
-    private static List<RawAttempt> representativeAttempts(List<RawAttempt> attempts) {
+    static List<RawAttempt> representativeAttempts(List<RawAttempt> attempts) {
         Map<RequestScope, RawAttempt> representativeByRequest = new HashMap<>();
         for (RawAttempt attempt : attempts) {
+            // 같은 requestId의 시도·결과는 결과 우선 규칙으로 먼저 대표 한 행을 고른다.
             // 회원·캠페인·requestId 범위가 다른 재시도는 서로 다른 문의 행으로 유지된다.
             representativeByRequest.merge(
                     RequestScope.of(attempt),
