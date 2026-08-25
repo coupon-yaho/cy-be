@@ -954,6 +954,7 @@ class PromOverviewObservationSourceTest {
                           {"metric":{"outcome":"TEMPORARILY_UNAVAILABLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"INTERNAL_ERROR"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"UNMAPPED"},"value":[1755000000,"1"]},
+                          {"metric":{"outcome":"INVALID_TRANSITION"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NEW_RESULT"},"value":[1755000000,"broken"]}]}}
                         """);
 

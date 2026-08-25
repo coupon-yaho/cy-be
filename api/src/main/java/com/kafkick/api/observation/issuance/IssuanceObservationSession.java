@@ -102,9 +102,13 @@ public final class IssuanceObservationSession {
             ReasonCode reasonCode,
             Dependency dependency
     ) {
+        ReasonCode requiredReasonCode = Objects.requireNonNull(
+                reasonCode,
+                "reasonCode"
+        );
         complete(new IssueRejectedOutcome(
                 httpStatus,
-                reasonCode,
+                requiredReasonCode,
                 dependency,
                 timeProvider.instant()
         ));
