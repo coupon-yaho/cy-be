@@ -52,9 +52,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  *    "cannot find symbol: method excludeFilters()"). 그래서 @ComponentScan 을 따로 단다.
  *
  * ⚠️ excludeFilters 를 지정하면 @SpringBootApplication 의 **기본 필터 둘이 사라진다.**
- *    그래서 여기 다시 적는다 — 빠뜨리면 @TestComponent 가 운영 컨텍스트에 섞이고
- *    (TypeExcludeFilter), 자동설정 클래스가 일반 빈으로 두 번 등록된다
- *    (AutoConfigurationExcludeFilter).
+ *    그래서 여기 다시 적는다. 두 필터가 무엇을 거르는지는 Boot 가 정하는 것이라 이 코드가
+ *    보장하지 않는다 — 여기서 보장하는 것은 **기본값을 복원한다**는 것 하나다.
+ *    빼도 되는지 확인하지 않은 채 빼지 말 것.
  */
 @SpringBootApplication(scanBasePackages = "com.kafkick")
 @ComponentScan(

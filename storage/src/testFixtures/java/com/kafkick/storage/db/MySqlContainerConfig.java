@@ -161,9 +161,14 @@ public class MySqlContainerConfig {
                     "MYSQL_DATABASE=" + mySqlContainer.getDatabaseName(),
                     "DB_OBS_USERNAME=" + OBSERVATION_USERNAME,
                     "sh", OBS_GRANTS_DIR + "/apply.sh");
-        } catch (IOException | InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } catch (IOException e) {
             throw new IllegalStateException("관측 계정 재부여 스크립트를 실행하지 못했다", e);
+        } catch (InterruptedException e) {
+            // 인터럽트 플래그는 **정말 인터럽트됐을 때만** 되살린다. IOException 과 한 덩이로
+            // 잡으면 단순 입출력 실패에도 스레드를 인터럽트 상태로 만들어, 그 뒤의 대기가
+            // 엉뚱하게 즉시 깨진다.
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("관측 계정 재부여 스크립트 실행이 중단됐다", e);
         }
         if (result.getExitCode() != 0) {
             throw new IllegalStateException(
@@ -186,9 +191,11 @@ public class MySqlContainerConfig {
                         "root SQL 실패(exit=" + result.getExitCode() + "): " + result.getStderr());
             }
             return result.getStdout();
-        } catch (IOException | InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } catch (IOException e) {
             throw new IllegalStateException("root SQL 을 실행하지 못했다", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("root SQL 실행이 중단됐다", e);
         }
     }
 

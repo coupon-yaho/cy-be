@@ -101,8 +101,19 @@ class ObservationAccountPrivilegeTest {
             Pattern.compile("\\b(?:FROM|JOIN)\\s+([A-Za-z_][A-Za-z0-9_]*)", Pattern.CASE_INSENSITIVE);
 
     /**
-     * 스키마 단위 GRANT. {@code GRANT SELECT ON app.*} 처럼 테이블 자리에 {@code *} 가 오는 형태다.
+     * 스키마 단위 GRANT. 테이블 자리에 {@code *} 가 오는 형태 전부다.
+     *
+     * <p><b>권한 목록을 열거하지 않는다.</b> 예전에는 {@code GRANT SELECT ON} 만 찾아서
+     * 다음 두 형태가 그대로 빠져나갔다(실측 — 둘 다 넣었을 때 ⑤ 가 통과했다):
+     * <pre>
+     *   GRANT INSERT, SELECT ON app.* TO 'obs'@'%'
+     *   GRANT ALL ON app.* TO 'obs'@'%'
+     * </pre>
+     * 막으려는 것은 "무슨 권한이냐" 가 아니라 <b>"대상이 스키마 전체냐"</b> 이므로,
+     * {@code GRANT} 와 {@code ON &lt;무언가&gt;.*} 사이는 안 본다.
      * {@code ON *.*}(전역)도 같은 그물에 걸린다.
+     *
+     * <p>테이블 단위({@code ON `app`.`issuances`})는 안 걸린다 — 대상이 {@code .*} 가 아니다.
      */
     /**
      * 이 검사에서 <b>유일하게 면제되는 파일</b> — 자기 자신이다.
@@ -117,10 +128,13 @@ class ObservationAccountPrivilegeTest {
     private static final String THIS_TEST = "ObservationAccountPrivilegeTest.java";
 
     private static final Pattern SCHEMA_WIDE_GRANT =
-            Pattern.compile("GRANT\\s+SELECT\\s+ON\\s+\\S*[.]\\s*[*]", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("GRANT\\b[^;]{0,200}?\\bON\\s+[^\\s;]*\\.\\s*\\*", Pattern.CASE_INSENSITIVE);
 
     /** 관측 계정 이름. 픽스처가 이 이름으로 계정을 만들고 재부여한다. */
     private static final String OBSERVATION_USERNAME = "obs";
+
+    /** ⑥ 이 심는 레거시 역할. 재부여가 이것까지 걷는지 본다. */
+    private static final String LEGACY_ROLE = "obs_legacy_reader";
 
     @Autowired
     MySQLContainer mySqlContainer;
@@ -209,12 +223,21 @@ class ObservationAccountPrivilegeTest {
         //
         // ⚠️ 단언은 전부 **재부여 뒤에** 한다. 심어 놓은 상태에서 단언이 깨지면 이 컨테이너를
         //    공유하는 뒤 테스트들이 과다 권한을 물려받아, 원인이 여기라는 것을 알기 어렵다.
+        //
+        // ⚠️ **역할(ROLE)도 함께 심는다.** MySQL 에서 권한과 역할은 별개 구조라
+        //    REVOKE ALL PRIVILEGES 가 역할 할당을 안 걷는다 — 실측으로 확인했고, 그 상태에서
+        //    obs 가 members 를 그대로 읽었다. 권한만 심으면 그 구멍이 초록불로 남는다.
         String seeded;
         try {
             MySqlContainerConfig.executeAsRoot(mySqlContainer,
                     "GRANT SELECT ON *.* TO '" + OBSERVATION_USERNAME + "'@'%';"
                             + " GRANT INSERT, UPDATE ON `" + mySqlContainer.getDatabaseName()
-                            + "`.* TO '" + OBSERVATION_USERNAME + "'@'%';");
+                            + "`.* TO '" + OBSERVATION_USERNAME + "'@'%';"
+                            + " CREATE ROLE IF NOT EXISTS '" + LEGACY_ROLE + "';"
+                            + " GRANT SELECT ON `" + mySqlContainer.getDatabaseName()
+                            + "`.* TO '" + LEGACY_ROLE + "';"
+                            + " GRANT '" + LEGACY_ROLE + "' TO '" + OBSERVATION_USERNAME + "'@'%';"
+                            + " SET DEFAULT ROLE ALL TO '" + OBSERVATION_USERNAME + "'@'%';");
             seeded = showObservationGrants();
         } finally {
             MySqlContainerConfig.applyObservationGrants(mySqlContainer);
@@ -222,7 +245,7 @@ class ObservationAccountPrivilegeTest {
 
         assertThat(seeded)
                 .as("레거시 상태를 못 심었다면 이 테스트는 아무것도 검증하지 않는다")
-                .contains("ON *.*").contains("INSERT");
+                .contains("ON *.*").contains("INSERT").contains(LEGACY_ROLE);
 
         String reapplied = showObservationGrants();
 
@@ -235,7 +258,19 @@ class ObservationAccountPrivilegeTest {
                 .as("쓰기 권한이 살아남았다. 관측 계정은 SELECT 전용이어야 한다")
                 .doesNotContain("INSERT").doesNotContain("UPDATE");
 
-        assertThat(reapplied.lines().filter(line -> line.contains("SELECT")).count())
+        assertThat(reapplied)
+                .as("역할 할당이 살아남았다. 그 역할이 무엇을 주든 obs 가 그대로 물려받는다 — "
+                        + "REVOKE ALL PRIVILEGES 는 역할을 안 걷으므로 따로 걷어야 한다")
+                .doesNotContain(LEGACY_ROLE);
+
+        assertThat(MySqlContainerConfig.executeAsRoot(mySqlContainer,
+                "SELECT COUNT(*) FROM mysql.default_roles WHERE USER = '"
+                        + OBSERVATION_USERNAME + "'").trim())
+                .as("기본 역할 지정이 남아 있다")
+                .isEqualTo("0");
+
+        assertThat(reapplied.lines()
+                .filter(line -> line.contains("SELECT") && !line.contains(LEGACY_ROLE)).count())
                 .as("양성 목록 %s개가 그대로 다시 서 있어야 한다. 걷기만 하고 안 주면 "
                         + "관측이 통째로 멈춘다", allowlist().size())
                 .isEqualTo(allowlist().size());

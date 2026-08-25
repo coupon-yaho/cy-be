@@ -46,6 +46,15 @@
 #   - **계정이 없으면 ERROR 1269 로 죽는다**(exit 1). 그게 낫다 — 계정을 안 만든 채
 #     이 스크립트를 돌린 것이므로, 조용히 성공하면 안 된다
 #
+# ⚠️ **그 문장은 역할(ROLE) 할당을 걷지 못한다.** MySQL 에서 권한과 역할은 별개 구조라
+#    REVOKE ALL PRIVILEGES 는 역할 할당을 건드리지 않는다(문서에 명시돼 있고 실측으로도 확인).
+#    실측 — obs 에 `GRANT SELECT ON app.*` 를 가진 역할을 붙여 두면:
+#      REVOKE ALL PRIVILEGES 후에도  GRANT `legacy_reader`@`%` TO `obs`@`%`  가 남고
+#      obs 가 members 를 그대로 읽는다(1142 가 아니라 결과가 나온다)
+#    그래서 아래에서 mysql.role_edges 를 읽어 붙어 있는 역할을 함께 걷는다. 역할을 걷으면
+#    mysql.default_roles 의 짝도 같이 사라진다(실측). 역할이 하나도 없으면 DO 0 으로 넘어간다 —
+#    분기를 셸 조건문으로 나누면 두 경로 중 하나만 실제로 도는 상태가 만들어진다.
+#
 # ⚠️ **대가 — 이 스크립트는 자기가 안 준 권한도 지운다.** obs 계정에 다른 용도를 겸하게
 #    해 두었다면 그것을 조용히 끊는다. 그 계정은 관측 전용이라는 것이 이 계층의 전제이고,
 #    겸용이 필요하면 계정을 따로 만드는 것이 맞다. 되돌리는 길은 손으로 다시 주는 것뿐이다.
@@ -86,6 +95,17 @@ statements="
 -- IF EXISTS 라 권한이 USAGE 뿐인 신규 계정에서도 통과한다 — 그 분기를 셸 조건문으로
 -- 나누면 두 경로 중 하나만 실제로 도는 상태가 만들어진다.
 REVOKE IF EXISTS ALL PRIVILEGES, GRANT OPTION FROM '${DB_OBS_USERNAME}'@'%';
+
+-- 그 문장이 못 걷는 역할 할당을 이어서 걷는다. 위 ⚠️ 참조.
+SET @obs_roles := (
+  SELECT GROUP_CONCAT(CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST)) SEPARATOR ', ')
+    FROM mysql.role_edges
+   WHERE TO_USER = '${DB_OBS_USERNAME}' AND TO_HOST = '%');
+SET @obs_role_revoke := IF(@obs_roles IS NULL, 'DO 0',
+  CONCAT('REVOKE ', @obs_roles, ' FROM ', QUOTE('${DB_OBS_USERNAME}'), '@', QUOTE('%')));
+PREPARE obs_role_stmt FROM @obs_role_revoke;
+EXECUTE obs_role_stmt;
+DEALLOCATE PREPARE obs_role_stmt;
 "
 
 for table in ${tables}; do

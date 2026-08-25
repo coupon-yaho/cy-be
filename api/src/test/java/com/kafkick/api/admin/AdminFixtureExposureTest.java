@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.reflect.Constructor;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -24,10 +27,13 @@ import com.kafkick.core.admin.couponmetrics.mock.AdminCouponMetricsMockDataFacto
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryService;
 import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
+import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
+import com.kafkick.core.admin.issuancehistory.IssuanceHistoryCalculator;
 import com.kafkick.core.admin.issuancehistory.mock.AdminIssuanceHistoryMockDataFactory;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
+import com.kafkick.core.support.TimeProvider;
 
 /**
  * <b>운영 기본값에서 관리자 화면 fixture 가 응답에 실리지 않는지</b>를 고정한다.
@@ -67,6 +73,10 @@ class AdminFixtureExposureTest {
      * 옮겨 적으면 배선이 키를 바꿔도 이 테스트는 옛 이름으로 계속 초록불이다.
      */
     private static final String FIXTURE_SWITCH = AdminFixtureConfig.FIXTURE_SWITCH;
+
+    /** 시각에 따라 결과가 흔들리지 않도록 고정한다. */
+    private static final Clock FIXED_CLOCK =
+            Clock.fixed(Instant.parse("2026-08-25T00:00:00Z"), ZoneOffset.UTC);
 
     private record FixtureBackedScreen(
             String screen, String handoverTicket, Class<?> service, Class<?> mockFactory) {
@@ -114,12 +124,30 @@ class AdminFixtureExposureTest {
         // 이 단언이 위 클래스 javadoc 의 "PENDING 이 아니라 기동 실패" 를 코드로 못박는다.
         // 누가 빈 결과를 내는 Pending 구현을 슬쩍 끼워 넣으면 여기가 깨진다 — 그 구현은
         // "조회했는데 없음" 과 구분되지 않아서, 지금의 시끄러운 실패보다 나쁘다.
-        new ApplicationContextRunner()
+        //
+        // ⚠️ **협력 빈을 전부 채워야 한다.** 예전에는 Service 만 꽂고 hasFailed() 를 단언했는데,
+        //    그 Service 는 TimeProvider·IssuanceHistoryCalculator 도 요구하므로 **스위치를 켜도
+        //    컨텍스트가 실패했다.** 즉 "fixture 가 없어서 실패했다" 를 증명하지 못한 채 늘 통과하는
+        //    가드였다. 지금은 나머지를 채우고 스위치만 토글해 켜짐=성공 / 꺼짐=실패를 대조하고,
+        //    꺼졌을 때의 실패 원인이 그 Factory 인지까지 본다.
+        ApplicationContextRunner screen = new ApplicationContextRunner()
                 .withUserConfiguration(AdminFixtureConfig.class)
-                .withBean(AdminIssuanceHistoryService.class)
-                .run(context -> assertThat(context)
-                        .as("fixture 없이도 컨텍스트가 떴다면, 그 화면은 무언가를 200 으로 내고 있다")
-                        .hasFailed());
+                .withBean(TimeProvider.class, () -> new TimeProvider(FIXED_CLOCK))
+                .withBean(IssuanceCodeMasker.class)
+                .withBean(IssuanceHistoryCalculator.class)
+                .withBean(AdminIssuanceHistoryService.class);
+
+        screen.withPropertyValues(FIXTURE_SWITCH + "=true").run(context -> assertThat(context)
+                .as("스위치를 켰는데 화면 Service 가 못 뜬다면, 아래 꺼짐 단언은 fixture 부재가 "
+                        + "아니라 다른 이유를 보고 있는 것이다")
+                .hasNotFailed());
+
+        screen.run(context -> assertThat(context)
+                .as("fixture 없이도 컨텍스트가 떴다면, 그 화면은 무언가를 200 으로 내고 있다")
+                .getFailure()
+                .as("기동은 실패했는데 원인이 fixture Factory 가 아니다 — 이 가드가 보는 것이 "
+                        + "바뀌었다")
+                .hasMessageContaining(AdminIssuanceHistoryMockDataFactory.class.getName()));
     }
 
     @Test
@@ -182,13 +210,23 @@ class AdminFixtureExposureTest {
                             + "안 열면 가짜 데이터가 200 으로 나가는 것을 끝까지 모른다", variable)
                     .containsPattern("(?m)^" + variable + "=");
 
-            for (String template : List.of("application.yml.example",
-                    "api/src/main/resources/application.yml.example")) {
-                assertThat(read(repoRoot().resolve(template)))
-                        .as("%s 가 %s 를 안 읽는다. .env 의 그 줄이 아무 데도 안 닿는다",
-                                template, variable)
-                        .contains("${" + variable + ":");
-            }
+            // 두 템플릿의 **fallback 이 서로 달라야 한다.** 사는 곳이 다르기 때문이다:
+            //   루트   — compose 가 마운트한다. 같은 파일이 ${DB_OBS_USERNAME} 처럼 기본값 없는
+            //            변수를 요구해 .env 없이는 못 뜬다 → 값은 항상 .env 가 준다 →
+            //            fallback 은 "아무도 안 정했을 때" 이므로 **꺼짐**이어야 한다
+            //   api    — 호스트에서 Gradle·IDE 로 띄울 때 쓴다. .env 를 안 읽고, 기본값 없는
+            //            변수가 하나도 없다(복사하면 그대로 뜬다) → 꺼짐으로 두면 A 티켓 전까지
+            //            IDE 실행이 통째로 죽는다 → **켜짐**을 유지한다
+            // 한쪽만 보면 이 비대칭이 실수인지 의도인지 구분되지 않아서, 두 값을 함께 못박는다.
+            assertThat(read(repoRoot().resolve("application.yml.example")))
+                    .as("배포용 템플릿의 %s fallback 이 꺼짐이 아니다. 이 파일은 .env 와 항상 "
+                            + "짝이므로 fallback 은 안전한 쪽이어야 한다", variable)
+                    .contains("${" + variable + ":false}");
+
+            assertThat(read(repoRoot().resolve("api/src/main/resources/application.yml.example")))
+                    .as("IDE 템플릿의 %s fallback 이 켜짐이 아니다. 이 파일은 .env 를 안 읽으므로 "
+                            + "꺼면 복사만으로는 앱이 안 뜬다", variable)
+                    .contains("${" + variable + ":true}");
         }
     }
 
