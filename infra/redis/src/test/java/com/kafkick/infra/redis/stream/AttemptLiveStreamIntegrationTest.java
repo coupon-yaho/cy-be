@@ -312,6 +312,39 @@ class AttemptLiveStreamIntegrationTest {
         assertThat(second.entries()).extracting(AttemptLiveEntry::memberId).containsExactly(2L);
     }
 
+    /**
+     * 시퀀스 없는 커서({@code ms})는 우리가 절대 내보내지 않는 형식이다 — 만료로 접는다.
+     *
+     * <p>받아 주면 조용히 틀어진다. Redis 는 {@code XRANGE 2 +} 에 {@code 2-0} 부터 돌려주는데
+     * 커서 비교는 문자열이라 {@code "2" != "2-0"} 이다. 그러면 <b>살아 있는 커서를 만료로
+     * 판정하고 그 항목을 다시 준다</b> — 화면에 중복이 뜨고 유실 배지가 함께 붙는다.
+     *
+     * <p>ID 를 직접 지정해 넣는다. 자동 생성에 맡기면 세 건이 같은 밀리초에 들어가
+     * ({@code T-0}·{@code T-1}·{@code T-2}) 두 동작이 같은 결과를 내 구분되지 않는다.
+     */
+    @Test
+    void treatsACursorWithoutASequenceAsExpired() {
+        appendRawWithId("1-0", entry(1L));
+        appendRawWithId("2-0", entry(2L));
+        appendRawWithId("3-0", entry(3L));
+
+        AttemptLivePage page = stream.readAfter("2", 10);
+
+        assertThat(page.cursorExpired()).isTrue();
+        assertThat(page.entries()).extracting(AttemptLiveEntry::memberId)
+                .as("시퀀스 없는 커서를 받아 주면 머리부터가 아니라 2번부터 준다")
+                .containsExactly(1L, 2L, 3L);
+    }
+
+    private static void appendRawWithId(String id, AttemptLiveEntry entry) {
+        redis.opsForStream().add(org.springframework.data.redis.connection.stream.StreamRecords
+                .newRecord()
+                .in(AttemptLiveStream.STREAM_KEY)
+                .ofMap(java.util.Map.of(AttemptLiveStream.ENTRY_FIELD,
+                        JsonMapper.builder().findAndAddModules().build().writeValueAsString(entry)))
+                .withId(org.springframework.data.redis.connection.stream.RecordId.of(id)));
+    }
+
     private static void appendRaw(String json) {
         redis.opsForStream().add(AttemptLiveStream.STREAM_KEY,
                 java.util.Map.of(AttemptLiveStream.ENTRY_FIELD, json));

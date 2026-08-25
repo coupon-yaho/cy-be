@@ -92,8 +92,14 @@ public final class AttemptLiveStream implements AttemptLiveSink, AttemptLiveRead
      * 상한이 {@code 18446744073709551615} 라 같은 20자리인 {@code 99999999999999999999} 가
      * 그 위다. 정규식은 통과시키고 Redis 가 거부해서, 걸러 내려던 500 이 그 입력으로만 그대로
      * 남아 있었다. 그래서 모양은 정규식이 보고 <b>값의 범위는 파싱이</b> 본다.
+     *
+     * <p><b>시퀀스는 필수다.</b> Redis 는 {@code XRANGE 2 +} 처럼 시퀀스 없는 ID 도 받지만,
+     * 우리는 그 형식을 <b>절대 내보내지 않는다</b> — 돌려주는 커서는 언제나 {@code ms-seq} 다.
+     * 받아 주면 조용히 틀어진다: Redis 가 {@code 2-0} 부터 돌려주는데 커서 비교는 문자열이라
+     * {@code "2"} 와 안 맞고, 그러면 <b>살아 있는 커서를 만료로 판정하고 그 항목을 다시 준다.</b>
+     * 화면에 중복이 뜨면서 유실 배지가 함께 붙는다. 우리가 안 만드는 형식은 안 받는다.
      */
-    private static final Pattern STREAM_ID = Pattern.compile("\\d{1,20}(-\\d{1,20})?");
+    private static final Pattern STREAM_ID = Pattern.compile("\\d{1,20}-\\d{1,20}");
 
     /** 정규식을 태우기 전의 길이 상한. 위 패턴은 41자를 넘을 수 없다. */
     private static final int MAX_CURSOR_LENGTH = 41;
