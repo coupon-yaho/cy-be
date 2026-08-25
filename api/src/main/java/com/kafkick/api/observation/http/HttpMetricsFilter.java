@@ -225,17 +225,16 @@ public final class HttpMetricsFilter extends OncePerRequestFilter {
             }
 
             String[] segments = pattern.split("/");
+            // OBS-45 (2026-08-25): 이 시점부터 issue는 실제 쿠폰 발급 트래픽을 뜻한다.
+            // 이전의 uri_group="issue"는 존재하지 않는 campaigns 경로를 판정해 항상 0이었다.
             if ("POST".equals(normalizedMethod)
-                    && isItemAction(segments, "campaigns", "issue")) {
+                    && isItemAction(segments, "coupons", "issue")) {
                 return Optional.of(ISSUE);
             }
-            if ("POST".equals(normalizedMethod)
-                    && isItemAction(segments, "campaigns", "entry")) {
-                return Optional.of(ENTRY);
-            }
-            if ("GET".equals(normalizedMethod)
-                    && isItemAction(segments, "campaigns", "queue")) {
-                return Optional.of(QUEUE);
+            // entry와 queue는 아직 실제 컨트롤러가 없다. 경로를 추측해 분류하지 않으며,
+            // queue action은 명시 분류가 생기기 전까지 GET 포괄 규칙에도 섞지 않는다.
+            if ("GET".equals(normalizedMethod) && isAction(segments, "queue")) {
+                return Optional.empty();
             }
             if ("GET".equals(normalizedMethod)) {
                 return Optional.of(READ);
@@ -255,6 +254,10 @@ public final class HttpMetricsFilter extends OncePerRequestFilter {
                     && segments[length - 2].startsWith("{")
                     && segments[length - 2].endsWith("}")
                     && action.equals(segments[length - 1]);
+        }
+
+        private static boolean isAction(String[] segments, String action) {
+            return segments.length > 0 && action.equals(segments[segments.length - 1]);
         }
 
     }
