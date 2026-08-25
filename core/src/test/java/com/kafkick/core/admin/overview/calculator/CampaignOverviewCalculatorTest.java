@@ -46,11 +46,12 @@ class CampaignOverviewCalculatorTest {
                 .isEqualTo(new AdminOverviewSnapshot.CampaignStatusSummary(1, 2, 1));
     }
 
-    /** 현재 이후부터 정확히 30분까지라는 오픈 임박 시간 경계를 고정합니다. */
+    /** 스냅샷 시각부터 정확히 30분 뒤까지라는 오픈 임박 시간 경계를 고정합니다. */
     @Test
-    @DisplayName("오픈 임박은 현재보다 늦고 30분 이하인 예약 캠페인만 포함한다")
+    @DisplayName("오픈 임박은 스냅샷 시각과 30분 경계를 포함한 예약 캠페인만 포함한다")
     void calculatesOpeningSoonAtThirtyMinuteBoundary() {
-        CampaignOverviewCalculator.CampaignCalculation result = calculate(
+        CampaignOverviewCalculator.PreparationCalculation result = calculator.calculatePreparation(
+                SNAPSHOT_AT,
                 List.of(
                         source(1L, CouponRoundStatus.SCHEDULED, SNAPSHOT_AT,
                                 EngineVersion.V1, null, null, null, false),
@@ -67,13 +68,13 @@ class CampaignOverviewCalculatorTest {
         );
 
         assertThat(result.openingSoon().value())
-                .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(2, 1));
+                .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(3, 2));
     }
 
-    /** P-06 전 준비 상태를 미완료 0건으로 보정하지 않고 상단 관측 상태로 보존해야 합니다. */
+    /** 준비 상태를 false로 축약하면 미확정 상태를 실제 조치 후보로 잘못 만들게 됩니다. */
     @Test
-    @DisplayName("오픈 임박 캠페인의 준비 상태가 PENDING이면 상단 KPI도 PENDING이다")
-    void preservesPendingPreparationForOpeningSoonObservation() {
+    @DisplayName("오픈 임박 캠페인의 PENDING 준비 상태를 KPI에 보존하고 조치를 만들지 않는다")
+    void preservesPendingPreparationWithoutActions() {
         CampaignOverviewSource pendingPreparation = new CampaignOverviewSource(
                 7L,
                 "준비 상태 미관측 캠페인",
@@ -87,12 +88,113 @@ class CampaignOverviewCalculatorTest {
                 null,
                 SourceStatus.N_A,
                 new PreparationObservation(null, SourceStatus.PENDING, null));
-
-        CampaignOverviewCalculator.CampaignCalculation result = calculate(List.of(pendingPreparation));
+        CampaignOverviewCalculator.PreparationCalculation result = calculator.calculatePreparation(
+                SNAPSHOT_AT, List.of(pendingPreparation));
 
         assertThat(result.openingSoon().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(result.openingSoon().value()).isNull();
         assertThat(result.openingSoon().observedAt()).isNull();
+        assertThat(result.actionCandidates()).isEmpty();
+    }
+
+    /** 준비 원천 미연결을 false로 바꾸면 존재하지 않는 운영 조치가 노출됩니다. */
+    @Test
+    @DisplayName("오픈 임박 캠페인의 UNAVAILABLE 준비 상태를 KPI에 보존하고 조치를 만들지 않는다")
+    void preservesUnavailablePreparationWithoutActions() {
+        CampaignOverviewSource unavailablePreparation = new CampaignOverviewSource(
+                8L,
+                "준비 상태 미연결 캠페인",
+                "브랜드",
+                CouponRoundStatus.SCHEDULED,
+                SNAPSHOT_AT.plusSeconds(20),
+                SNAPSHOT_AT.plus(Duration.ofHours(1)),
+                EngineVersion.V1,
+                null,
+                null,
+                null,
+                SourceStatus.N_A,
+                new PreparationObservation(null, SourceStatus.UNAVAILABLE, null));
+
+        CampaignOverviewCalculator.PreparationCalculation result = calculator.calculatePreparation(
+                SNAPSHOT_AT, List.of(unavailablePreparation));
+
+        assertThat(result.openingSoon().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(result.openingSoon().value()).isNull();
+        assertThat(result.openingSoon().observedAt()).isNull();
+        assertThat(result.actionCandidates()).isEmpty();
+    }
+
+    /** 준비 미완료 조치의 감지 시각을 스냅샷 시각으로 바꾸면 사전 조치 기한을 잃습니다. */
+    @Test
+    @DisplayName("VALID false 오픈 임박 캠페인은 오픈 30분 전 감지 시각의 준비 확인 조치를 만든다")
+    void createsPreparationActionForValidFalse() {
+        Instant opensAt = SNAPSHOT_AT.plus(Duration.ofMinutes(10));
+
+        CampaignOverviewCalculator.PreparationCalculation result = calculator.calculatePreparation(
+                SNAPSHOT_AT,
+                List.of(source(9L, CouponRoundStatus.SCHEDULED, opensAt, EngineVersion.V1,
+                        null, null, null, false)));
+
+        assertThat(result.actionCandidates()).containsExactly(new AdminOverviewSnapshot.OperationActionItem(
+                9L,
+                "캠페인 9",
+                opensAt,
+                com.kafkick.core.observation.Severity.WARN,
+                AdminOverviewSnapshot.CustomerImpact.NONE,
+                "오픈 전 필수 준비 항목을 확인해야 합니다.",
+                SNAPSHOT_AT.minus(Duration.ofMinutes(20)),
+                null,
+                new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY,
+                        "캠페인 준비 상태 확인",
+                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL)));
+    }
+
+    /** 마지막 준비 완료값을 버리면 STALE 상태에서 필요한 참조 조치도 사라집니다. */
+    @Test
+    @DisplayName("STALE false 준비 상태는 마지막 값을 보존한 준비 확인 후보를 만든다")
+    void createsReferencePreparationActionForStaleFalse() {
+        Instant opensAt = SNAPSHOT_AT.plus(Duration.ofMinutes(10));
+        CampaignOverviewSource stalePreparation = new CampaignOverviewSource(
+                12L,
+                "준비 상태 지연 캠페인",
+                "브랜드",
+                CouponRoundStatus.SCHEDULED,
+                opensAt,
+                opensAt.plus(Duration.ofHours(1)),
+                EngineVersion.V1,
+                null,
+                null,
+                null,
+                SourceStatus.N_A,
+                new PreparationObservation(false, SourceStatus.STALE, SNAPSHOT_AT.minusSeconds(1)));
+
+        CampaignOverviewCalculator.PreparationCalculation result = calculator.calculatePreparation(
+                SNAPSHOT_AT, List.of(stalePreparation));
+
+        assertThat(result.openingSoon().status()).isEqualTo(SourceStatus.STALE);
+        assertThat(result.openingSoon().value())
+                .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(1, 1));
+        assertThat(result.openingSoon().observedAt()).isEqualTo(SNAPSHOT_AT.minusSeconds(1));
+        assertThat(result.actionCandidates()).extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                .containsExactly(12L);
+    }
+
+    /** 다른 상태를 시간만으로 오픈 임박 모집단에 포함하면 이미 진행 중인 캠페인도 조치 대상이 됩니다. */
+    @Test
+    @DisplayName("오픈 임박 준비 계산은 SCHEDULED가 아닌 캠페인을 제외한다")
+    void excludesNonScheduledCampaignsFromPreparationCalculation() {
+        CampaignOverviewCalculator.PreparationCalculation result = calculator.calculatePreparation(
+                SNAPSHOT_AT,
+                List.of(
+                        source(10L, CouponRoundStatus.OPEN, SNAPSHOT_AT.plusSeconds(1), EngineVersion.V1,
+                                null, null, null, false),
+                        source(11L, CouponRoundStatus.CLOSED, SNAPSHOT_AT.plusSeconds(1), EngineVersion.V1,
+                                null, null, null, false)));
+
+        assertThat(result.openingSoon().value())
+                .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(0, 0));
+        assertThat(result.actionCandidates()).isEmpty();
     }
 
     /** O4는 Campaign Calculator 내부 V1 수량 계산이 아니라 전달받은 O4 결과만 조립하는지 검증합니다. */

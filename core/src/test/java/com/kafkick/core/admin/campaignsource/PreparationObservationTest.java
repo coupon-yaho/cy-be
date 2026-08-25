@@ -15,15 +15,26 @@ class PreparationObservationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-24T03:00:00Z");
 
-    /** P-06 전 DB 원천의 미구현 상태를 명시적인 PENDING으로 보존하는지 검증합니다. */
+    /** DB 원천이 완료 여부를 알 수 없을 때 PENDING을 보존하는지 검증합니다. */
     @Test
-    @DisplayName("준비 상태 미구현은 null PENDING null로 보존한다")
+    @DisplayName("알 수 없는 준비 상태는 null PENDING null로 보존한다")
     void preservesPendingPreparationWithoutInventingCompletion() {
         PreparationObservation preparation = new PreparationObservation(null, SourceStatus.PENDING, null);
 
         assertThat(preparation.completed()).isNull();
         assertThat(preparation.status()).isEqualTo(SourceStatus.PENDING);
         assertThat(preparation.observedAt()).isNull();
+    }
+
+    /** 확인된 미완료가 알 수 없는 상태와 구분되는 값 있는 관측인지 검증합니다. */
+    @Test
+    @DisplayName("확인된 미완료 준비 상태는 false VALID 시각으로 보존한다")
+    void preservesConfirmedIncompletePreparation() {
+        PreparationObservation preparation = new PreparationObservation(false, SourceStatus.VALID, OBSERVED_AT);
+
+        assertThat(preparation.completed()).isFalse();
+        assertThat(preparation.status()).isEqualTo(SourceStatus.VALID);
+        assertThat(preparation.observedAt()).isEqualTo(OBSERVED_AT);
     }
 
     /** 값 있는 상태가 완료 여부·관측 시각을 모두 요구해 unknown을 false로 바꾸지 않는지 검증합니다. */

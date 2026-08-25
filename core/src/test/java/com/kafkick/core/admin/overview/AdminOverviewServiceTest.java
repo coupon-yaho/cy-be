@@ -90,10 +90,76 @@ class AdminOverviewServiceTest {
     void keepsOpeningSoonPendingWhenPreparationIsPending() {
         AdminOverviewSnapshot snapshot = service(
                 new RecordingReader(validCatalog(701L)), new RecordingRuntimeStore(),
-                new RecordingObservationSource()).getOverview().snapshot();
+                new RecordingObservationSource())
+                .getOverview().snapshot();
 
         assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(snapshot.openingSoon().value()).isNull();
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(snapshot.actionRequired().value()).isNull();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(snapshot.actionItems().value()).isNull();
+    }
+
+    /** 준비 원천 장애를 정상 빈 조치 목록으로 바꾸는 회귀를 방지합니다. */
+    @Test
+    void keepsActionSurfacesUnavailableWhenPreparationIsUnavailable() {
+        AdminCampaignCatalog catalog = scheduledCatalog(
+                new PreparationObservation(null, SourceStatus.UNAVAILABLE, null));
+
+        AdminOverviewSnapshot snapshot = service(
+                new RecordingReader(catalog), new RecordingRuntimeStore(),
+                new RecordingObservationSource())
+                .getOverview().snapshot();
+
+        assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.actionRequired().value()).isNull();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.actionItems().value()).isNull();
+    }
+
+    /** 마지막 준비 미완료 값의 참고 조치는 유지하되 전체 조치 상태를 최신값으로 올리지 않습니다. */
+    @Test
+    void keepsStalePreparationActionAndActionSurfaceStateStale() {
+        AdminCampaignCatalog catalog = scheduledCatalog(
+                new PreparationObservation(false, SourceStatus.STALE, NOW.minusSeconds(1)));
+
+        AdminOverviewSnapshot snapshot = service(
+                new RecordingReader(catalog), new RecordingRuntimeStore(),
+                new RecordingObservationSource())
+                .getOverview().snapshot();
+
+        assertThat(snapshot.openingSoon().observedAt()).isEqualTo(NOW.minusSeconds(1));
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.STALE);
+        assertThat(snapshot.actionRequired().observedAt()).isEqualTo(NOW.minusSeconds(1));
+        assertThat(snapshot.actionRequired().value().warningCount()).isEqualTo(1L);
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.STALE);
+        assertThat(snapshot.actionItems().value().topItems().getFirst().recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
+    }
+
+    /** 준비 미완료 판정 하나가 네 운영 화면에서 서로 다른 결과로 갈라지는 회귀를 방지합니다. */
+    @Test
+    void linksValidIncompletePreparationToKpiActionListAndCampaignRow() {
+        AdminCampaignCatalog catalog = scheduledCatalog(
+                new PreparationObservation(false, SourceStatus.VALID, NOW));
+        AdminOverviewService service = service(
+                new RecordingReader(catalog), new RecordingRuntimeStore(),
+                new RecordingObservationSource());
+
+        AdminOverviewSnapshot snapshot = service.getOverview().snapshot();
+
+        assertThat(snapshot.openingSoon().value().preparationIncompleteCount()).isEqualTo(1L);
+        assertThat(snapshot.actionRequired().value().warningCount()).isEqualTo(1L);
+        AdminOverviewSnapshot.OperationActionItem action =
+                snapshot.actionItems().value().topItems().getFirst();
+        assertThat(action.recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
+        AdminOverviewSnapshot.CampaignOverview campaign = snapshot.campaigns().value().getFirst();
+        assertThat(campaign.severity()).isEqualTo(com.kafkick.core.observation.Severity.WARN);
+        assertThat(campaign.customerImpact()).isEqualTo(action.customerImpact());
+        assertThat(campaign.recommendedAction()).isSameAs(action.recommendedAction());
     }
 
     @Test
@@ -199,7 +265,7 @@ class AdminOverviewServiceTest {
     }
 
     @Test
-    void invokesEveryCalculatorExactlyOncePerOverviewRequest() {
+    void invokesEveryCalculationBoundaryExactlyOncePerOverviewRequest() {
         IssuanceFlowCalculator issuance = org.mockito.Mockito.spy(new IssuanceFlowCalculator());
         IssuanceActionCalculator issuanceAction = org.mockito.Mockito.spy(new IssuanceActionCalculator());
         CampaignQueueCalculator queue = org.mockito.Mockito.spy(new CampaignQueueCalculator());
@@ -216,9 +282,12 @@ class AdminOverviewServiceTest {
 
         service.getOverview();
 
-        assertThat(List.of(issuance, issuanceAction, queue, outcome, stock, campaign, action, status))
+        assertThat(List.of(issuance, issuanceAction, queue, outcome, stock, action, status))
                 .allSatisfy(calculator -> assertThat(
                         org.mockito.Mockito.mockingDetails(calculator).getInvocations()).hasSize(1));
+        assertThat(org.mockito.Mockito.mockingDetails(campaign).getInvocations())
+                .extracting(invocation -> invocation.getMethod().getName())
+                .containsExactly("calculatePreparation", "calculate");
     }
 
     private static AdminOverviewService service(
@@ -243,6 +312,15 @@ class AdminOverviewServiceTest {
                                 new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                                 new PreparationObservation(null, SourceStatus.PENDING, null)))
                         .toList());
+    }
+
+    private static AdminCampaignCatalog scheduledCatalog(PreparationObservation preparation) {
+        return new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
+                new AdminCampaignCatalog.CampaignData(
+                        701L, "campaign-701", "brand", CouponRoundStatus.SCHEDULED,
+                        NOW.plusSeconds(600), NOW.plusSeconds(3600),
+                        new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
+                        preparation)));
     }
 
     private static AdminCampaignCatalog.CampaignData campaign(
@@ -367,4 +445,5 @@ class AdminOverviewServiceTest {
             return result;
         }
     }
+
 }
