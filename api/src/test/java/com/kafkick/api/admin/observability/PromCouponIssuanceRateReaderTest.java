@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 
 import org.junit.jupiter.api.Test;
 
@@ -80,6 +81,42 @@ class PromCouponIssuanceRateReaderTest {
     }
 
     @Test
+    void classifiesAnInterruptedStaleRateGridAsStaleBeforeWarmingUp() {
+        Instant staleAt = SNAPSHOT_AT.minusSeconds(125);
+
+        CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> result = reader(
+                new RecordingRangeQuery(query -> oneSeries(gridUntil(
+                        MetricsWindow.FIFTEEN_MINUTES, staleAt, 2.0))),
+                new RecordingTimeQuery((query, evaluationAt) -> freshnessAt(staleAt)))
+                .read(10L, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT);
+
+        assertThat(result.status()).isEqualTo(SourceStatus.STALE);
+        assertThat(result.value()).hasSize(156);
+        assertThat(result.value().getLast().observedAt()).isEqualTo(staleAt);
+        assertThat(result.observedAt()).isEqualTo(staleAt);
+    }
+
+    @Test
+    void skipsFreshnessWhenTheRangeQueryConsumesTheSeriesBudget() {
+        MutableNanoTime nanoTime = new MutableNanoTime();
+        PrometheusSeriesProperties properties = new PrometheusSeriesProperties(
+                Duration.ofMillis(1), Duration.ofMillis(1), Duration.ofSeconds(2), STEP, 300);
+        RecordingRangeQuery rangeQuery = new RecordingRangeQuery(query -> {
+            nanoTime.advance(Duration.ofMillis(2_001));
+            return oneSeries(grid(2.0));
+        });
+        RecordingTimeQuery timeQuery = new RecordingTimeQuery((query, evaluationAt) -> {
+            throw new AssertionError("소진된 예산에서는 freshness 질의를 보내면 안 됩니다.");
+        });
+
+        CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> result = reader(
+                rangeQuery, timeQuery, properties, nanoTime).read(10L, MetricsWindow.ONE_MINUTE, SNAPSHOT_AT);
+
+        assertThat(result.status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(timeQuery.calls).isEmpty();
+    }
+
+    @Test
     void isolatesQueryAndResponseShapeFailuresAsUnavailable() {
         CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> queryFailure = reader(
                 new RecordingRangeQuery(query -> {
@@ -107,8 +144,17 @@ class PromCouponIssuanceRateReaderTest {
             PromRangeQuery rangeQuery,
             PromTimeQuery timeQuery
     ) {
+        return reader(rangeQuery, timeQuery, PrometheusSeriesProperties.defaults(), System::nanoTime);
+    }
+
+    private static PromCouponIssuanceRateReader reader(
+            PromRangeQuery rangeQuery,
+            PromTimeQuery timeQuery,
+            PrometheusSeriesProperties properties,
+            LongSupplier nanoTime
+    ) {
         return new PromCouponIssuanceRateReader(
-                rangeQuery, timeQuery, PrometheusSeriesProperties.defaults(), Duration.ofSeconds(120));
+                rangeQuery, timeQuery, properties, Duration.ofSeconds(120), nanoTime);
     }
 
     private static List<PromRangeSeries> oneSeries(List<PromRangePoint> points) {
@@ -119,6 +165,16 @@ class PromCouponIssuanceRateReaderTest {
         List<PromRangePoint> points = new ArrayList<>();
         for (int offset = 60; offset >= 0; offset -= 5) {
             points.add(new PromRangePoint(SNAPSHOT_AT.minusSeconds(offset), value));
+        }
+        return List.copyOf(points);
+    }
+
+    private static List<PromRangePoint> gridUntil(MetricsWindow window, Instant lastObservedAt, double value) {
+        List<PromRangePoint> points = new ArrayList<>();
+        Instant sampleAt = SNAPSHOT_AT.minus(window.duration());
+        while (!sampleAt.isAfter(lastObservedAt)) {
+            points.add(new PromRangePoint(sampleAt, value));
+            sampleAt = sampleAt.plus(STEP);
         }
         return List.copyOf(points);
     }
@@ -160,4 +216,18 @@ class PromCouponIssuanceRateReaderTest {
     private record RangeCall(String promQl, Instant start, Instant end, Duration step) { }
 
     private record TimeCall(String promQl, Instant evaluationAt) { }
+
+    private static final class MutableNanoTime implements LongSupplier {
+
+        private long currentNanos;
+
+        @Override
+        public long getAsLong() {
+            return currentNanos;
+        }
+
+        private void advance(Duration duration) {
+            currentNanos += duration.toNanos();
+        }
+    }
 }

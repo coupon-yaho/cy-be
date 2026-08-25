@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
@@ -17,13 +18,14 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
     private final PromTimeQuery timeQuery;
     private final PrometheusSeriesProperties seriesProperties;
     private final Duration staleAfter;
+    private final LongSupplier nanoTime;
 
     /**
      * series 전용 range 경계와 instant freshness 경계로 발급률 Reader를 만듭니다.
      *
      * @param rangeQuery 5초 평가점 matrix를 읽는 range 경계
      * @param timeQuery 실제 scrape 시각을 읽는 instant 경계
-     * @param seriesProperties range 평가 간격과 상한 설정
+     * @param seriesProperties range 평가 간격·상한과 두 질의의 전체 예산 설정
      * @param staleAfter 마지막 실제 scrape 이후 stale로 볼 기간
      */
     public PromCouponIssuanceRateReader(
@@ -32,10 +34,30 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
             PrometheusSeriesProperties seriesProperties,
             Duration staleAfter
     ) {
+        this(rangeQuery, timeQuery, seriesProperties, staleAfter, System::nanoTime);
+    }
+
+    /**
+     * 단조 시계를 명시해 두 외부 질의의 공통 예산을 검증하는 Reader를 만듭니다.
+     *
+     * @param rangeQuery 5초 평가점 matrix를 읽는 range 경계
+     * @param timeQuery 실제 scrape 시각을 읽는 instant 경계
+     * @param seriesProperties range 평가 간격과 전체 질의 예산 설정
+     * @param staleAfter 마지막 실제 scrape 이후 stale로 볼 기간
+     * @param nanoTime 전체 질의 예산을 재는 단조 나노초 시계
+     */
+    PromCouponIssuanceRateReader(
+            PromRangeQuery rangeQuery,
+            PromTimeQuery timeQuery,
+            PrometheusSeriesProperties seriesProperties,
+            Duration staleAfter,
+            LongSupplier nanoTime
+    ) {
         this.rangeQuery = Objects.requireNonNull(rangeQuery, "rangeQuery");
         this.timeQuery = Objects.requireNonNull(timeQuery, "timeQuery");
         this.seriesProperties = Objects.requireNonNull(seriesProperties, "seriesProperties");
         this.staleAfter = requirePositive(staleAfter, "staleAfter");
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
     }
 
     /**
@@ -55,7 +77,9 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
         Objects.requireNonNull(window, "window");
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         try {
+            Deadline deadline = Deadline.startingNow(seriesProperties.totalBudget(), nanoTime);
             Duration rateWindow = seriesProperties.step();
+            requireBudget(deadline);
             List<PromRangeSeries> series = rangeQuery.query(
                     CouponMetricsPrometheusContract.successRate(couponId, rateWindow),
                     snapshotAt.minus(window.duration()), snapshotAt, rateWindow);
@@ -70,14 +94,16 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
             if (samples.isEmpty()) {
                 throw new PromQueryException("성공 발급률 range 결과에 평가점이 없습니다.");
             }
+            requireBudget(deadline);
             Instant observedAt = singleEpoch(timeQuery.query(
                     CouponMetricsPrometheusContract.successFreshnessEpoch(couponId), snapshotAt), snapshotAt);
+            if (Duration.between(observedAt, snapshotAt).compareTo(staleAfter) > 0) {
+                // 마지막 scrape가 오래되면 이후 평가점 완전성과 관계없이 원천 중단을 먼저 알립니다.
+                return observed(samples, SourceStatus.STALE, observedAt);
+            }
             if (!isComplete(samples, window, snapshotAt)) {
                 // 확보한 표본은 반환하되 전체 창을 덮지 못한 사실을 WARMING_UP으로 보존합니다.
                 return observed(samples, SourceStatus.WARMING_UP, observedAt);
-            }
-            if (Duration.between(observedAt, snapshotAt).compareTo(staleAfter) > 0) {
-                return observed(samples, SourceStatus.STALE, observedAt);
             }
             if (samples.stream().allMatch(sample -> sample.perSecond() == 0.0)) {
                 return observed(samples, SourceStatus.NO_TRAFFIC, observedAt);
@@ -85,6 +111,13 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
             return observed(samples, SourceStatus.VALID, observedAt);
         } catch (RuntimeException failure) {
             return empty(SourceStatus.UNAVAILABLE);
+        }
+    }
+
+    /** 전체 예산을 넘긴 뒤에는 다음 Prometheus 질의를 보내지 않고 원천 오류로 전환합니다. */
+    private static void requireBudget(Deadline deadline) {
+        if (!deadline.allows()) {
+            throw new PromQueryException("성공 발급률 Prometheus 조회 예산을 초과했습니다.");
         }
     }
 
@@ -178,5 +211,33 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
             throw new IllegalArgumentException(name + "은 양수여야 합니다.");
         }
         return value;
+    }
+
+    /** 두 Prometheus 질의가 공유하는 단조 시계 기반 예산입니다. */
+    private static final class Deadline {
+
+        private final long expiresAtNanos;
+        private final LongSupplier nanoTime;
+        private boolean anyIssued;
+
+        private Deadline(long expiresAtNanos, LongSupplier nanoTime) {
+            this.expiresAtNanos = expiresAtNanos;
+            this.nanoTime = nanoTime;
+        }
+
+        /** 현재 시각부터 주어진 예산으로 만료 시각을 계산합니다. */
+        private static Deadline startingNow(Duration budget, LongSupplier nanoTime) {
+            long now = nanoTime.getAsLong();
+            return new Deadline(now + budget.toNanos(), nanoTime);
+        }
+
+        /** 첫 질의는 보장하고, 그 뒤 질의는 예산이 남았을 때만 허용합니다. */
+        private boolean allows() {
+            if (!anyIssued) {
+                anyIssued = true;
+                return true;
+            }
+            return nanoTime.getAsLong() - expiresAtNanos < 0;
+        }
     }
 }
