@@ -250,6 +250,25 @@ public record AdminMetricsResponse(
      * 근거가 아직 없고, {@code LatencyGroupStat} 을 바꾸면 프론트 계약이 또 움직입니다.
      * 필요해지면 그때 이 record 를 넓히면 되고, 원천은 이미 있습니다.</p>
      *
+     * <p><b>[OBS-44] 값이 없을 때의 상태가 둘로 갈립니다.</b> 그 축에 요청이 0 건이면
+     * {@code N_A} 입니다 — 백분위가 정의되지 않는다는 뜻이고, 화면은 값을 기다리면 안 됩니다.
+     * 요청은 있었는데 표본이 없으면 {@code PENDING} 입니다 — Micrometer expiry(10s) 로 관측
+     * 창이 비었다는 뜻이라 다음 폴링에 값이 올 수 있습니다. 분모를 못 읽었으면(결과 질의가
+     * 잘렸거나 죽었으면) 단정하지 않고 {@code PENDING} 으로 물러납니다.</p>
+     *
+     * <p>이 규칙은 <b>{@code success} · {@code policyReject} · {@code systemFailure} 와
+     * {@code groups} 다섯 종에 모두 같게</b> 적용됩니다. 각 축의 분모는 그 축으로 접히는 결과
+     * 분류입니다 — 트래픽이 전부 성공인 동안 {@code systemFailure} 는 N_A 이지 PENDING 이
+     * 아닙니다.</p>
+     *
+     * <p>⚠️ <b>N_A 로 바뀌는 데 집계 창만큼 걸립니다.</b> 분모는 {@code window}(1m·5m·15m) 짜리
+     * rate 이고 백분위의 관측 창은 Micrometer expiry(10s)라, 트래픽이 멈추면 표본은 10 초 만에
+     * 사라지지만 분모는 창이 다 지나갈 때까지 0 이 되지 않습니다. 그 사이는 규칙대로
+     * {@code PENDING} 입니다 — <b>{@code window=15m} 이면 최대 15 분입니다</b>. 화면이 PENDING
+     * 을 무한정 기다리는 대신 이 한계를 알고 그려야 합니다(부하 종료 직후가 그 구간입니다).
+     * 창을 백분위 쪽에 맞추려면 짧은 창의 분모 질의가 하나 더 필요한데, 응답 한 장의 예산
+     * (기본 500ms)에 질의를 더하는 일이라 이 티켓에서 하지 않았습니다.</p>
+     *
      * @param success 성공 경로 지연 분포. {@code issue} 그룹 기준
      * @param policyReject 정책 거절 경로 지연 분포. {@code issue} 그룹 기준. <b>4xx 계약 위반은
      *                     여기 들어오지 않습니다</b> — 계측은 {@code client_invalid} 축으로 따로

@@ -36,14 +36,15 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * 지연 축의 {@code outcome} 라벨을 <b>계측이 붙이는 쪽과 조립기가 찾는 쪽 사이에서</b> 고정합니다.
  *
- * <p><b>각각을 따로 보는 테스트로는 이 계약을 지킬 수 없습니다.</b> {@code HttpMetrics} 는
- * {@link LatencyOutcome} 을, {@code PromMetricsAssembler} 는 자기 파일의 문자열 상수를 씁니다.
- * 한쪽 이름만 바뀌어도 컴파일은 통과하고, 조립기 필터가 아무 표본도 못 골라 값이
- * <b>{@code PENDING} 으로 조용히 굳습니다</b> — 화면에서 그것은 "아직 안 만들었다" 와 똑같이
+ * <p><b>[OBS-44] 조립기가 사본 상수를 버리고 {@link LatencyOutcome} 을 직접 읽습니다.</b> 그래서
+ * 라벨 오타로 두 파일이 갈리는 사고는 이제 컴파일이 막습니다. 그래도 이 테스트가 남는 이유는
+ * 라벨이 <b>Micrometer 가 실제로 붙이는 태그</b>와 같은지는 컴파일이 모르기 때문입니다 —
+ * {@code tagValue()} 나 태그 키가 바뀌면 조립기 필터가 아무 표본도 못 골라 값이
+ * <b>{@code PENDING} 으로 조용히 굳습니다</b>. 화면에서 그것은 "아직 안 만들었다" 와 똑같이
  * 보이므로 예외도 로그도 남지 않습니다.</p>
  *
  * <p>그래서 라벨을 손으로 적지 않고 <b>실제 레지스트리에 기록해 나온 태그</b>를 그대로 조립기에
- * 먹입니다. 두 파일 사이에 문자열이 하나라도 어긋나면 여기가 red 가 됩니다.</p>
+ * 먹입니다. 계측과 조립기 사이에 문자열이 하나라도 어긋나면 여기가 red 가 됩니다.</p>
  */
 class HttpLatencyOutcomeContractTest {
 
@@ -77,6 +78,18 @@ class HttpLatencyOutcomeContractTest {
         // 지연 축과 실패율이 서로 다른 집합을 가리키게 된다.
         assertThat(folded.get(LatencyOutcome.SYSTEM_FAILURE))
                 .containsExactlyInAnyOrderElementsOf(ResultClass.systemFailures());
+    }
+
+    /**
+     * 성공 축의 라벨은 <b>계약 상수와도 같아야 합니다</b>. 시계열 조립기
+     * ({@code PromSeriesAssembler})는 그쪽을 읽으므로, 갈리면 같은 화면의 스냅샷과 추세선이
+     * 서로 다른 문자열로 표본을 고릅니다 — 한쪽만 빈 결과가 되어 값이 조용히 갈립니다.
+     */
+    @Test
+    @DisplayName("success 지연 축 라벨과 계약 상수가 같은 문자열이다")
+    void successOutcomeLabelMatchesTheSeriesContract() {
+        assertThat(LatencyOutcome.SUCCESS.tagValue())
+                .isEqualTo(OverviewPrometheusContract.SUCCESS);
     }
 
     /**

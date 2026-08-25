@@ -28,6 +28,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.observation.http.HttpMetricsFilter.UriGroup;
+import com.kafkick.api.observation.http.ResultClassifier.ResultClass;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.observation.DomainMeterNames;
@@ -758,6 +759,331 @@ class PromMetricsAssemblerTest {
         assertThat(group(latency, UriGroup.ISSUE).state()).isEqualTo(SourceStatus.PENDING);
     }
 
+    // ── 지연: 트래픽 없음과 표본 없음 (OBS-44) ─────────────────────────────────
+
+    /**
+     * 요청이 0 건이면 백분위는 <b>정의되지 않습니다</b>. PENDING 은 "곧 값이 온다" 로 읽히므로
+     * 화면이 오지 않을 값을 기다립니다 — {@code N_A} 여야 합니다.
+     *
+     * <p>{@code NO_TRAFFIC} 이 아닌 이유는 그쪽이 값을 요구하는데({@code carriesValue()==true})
+     * 실을 값이 (0,0,0) 뿐이고, 그 0 은 "지연 0ms" 라는 더 나쁜 거짓말이기 때문입니다.</p>
+     */
+    @Test
+    @DisplayName("트래픽이 0 이면 지연 백분위는 PENDING 이 아니라 N_A 다")
+    void zeroTrafficMakesLatencyNotApplicable() {
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.N_A);
+        // N_A 는 값을 싣지 않는다. 실으려 하면 ObservedValue 생성자가 막는다.
+        assertThat(latency.success().value()).isNull();
+        assertThat(latency.success().observedAt()).isNull();
+    }
+
+    /**
+     * 한쪽만 고치면 같은 화면의 두 자리가 다른 규칙으로 상태를 냅니다. 전역 3필드와 groups
+     * 5종이 {@code percentiles()} 헬퍼 하나에서 갈리는지를 값으로 확인합니다.
+     */
+    @Test
+    @DisplayName("트래픽 0 에서 전역 3필드와 groups 5종이 모두 같은 상태로 온다")
+    void zeroTrafficAppliesToEveryLatencyField() {
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.N_A);
+        assertThat(latency.policyReject().state()).isEqualTo(SourceStatus.N_A);
+        assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.N_A);
+        assertThat(latency.groups()).hasSize(UriGroup.values().length);
+        assertThat(latency.groups()).allSatisfy(stat ->
+                assertThat(stat.percentiles().state()).isEqualTo(SourceStatus.N_A));
+    }
+
+    /**
+     * 트래픽이 있는데 백분위 표본이 없는 것은 <b>다른 사건</b>입니다 — Micrometer expiry(10s)
+     * 로 관측 창이 비었다는 뜻이라 다음 폴링에 값이 올 수 있습니다. 이것까지 N_A 로 접으면
+     * 이 티켓이 가르려던 두 사건이 다시 하나가 됩니다.
+     */
+    @Test
+    @DisplayName("트래픽은 있는데 백분위 표본이 없으면 PENDING 이다")
+    void trafficWithoutSamplesStaysPending() {
+        FakePromQuery client = respond(Map.of(
+                "rate(", List.of(rate("issue", "success", 40d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(group(latency, UriGroup.ISSUE).state()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    /**
+     * {@code percentiles()} 는 값 없이 두 곳으로 빠집니다 — 시계열이 아예 없거나, expiry 로
+     * 창이 비어 p99 가 0 으로 읽히거나. <b>둘은 같은 사건의 다른 얼굴</b>이라 같은 규칙을
+     * 써야 합니다. 출구 하나만 고치면 트래픽 0 이 표본 유무에 따라 두 상태로 갈립니다.
+     */
+    @Test
+    @DisplayName("p99 가 0 인 출구도 트래픽 0 이면 N_A, 트래픽이 있으면 PENDING 이다")
+    void zeroPercentileExitFollowsTheSameRule() {
+        List<PromSample> emptyWindow = List.of(
+                quantile("0.5", 0d, "api-1"),
+                quantile("0.95", 0d, "api-1"),
+                quantile("0.99", 0d, "api-1"));
+
+        FakePromQuery noTraffic = respond(Map.of(
+                "quantile!=", emptyWindow,
+                "rate(", zeroRates(),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+        assertThat(assemble(noTraffic, globalQuery()).latency().success().state())
+                .isEqualTo(SourceStatus.N_A);
+
+        FakePromQuery expired = respond(Map.of(
+                "quantile!=", emptyWindow,
+                "rate(", List.of(rate("issue", "success", 40d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+        assertThat(assemble(expired, globalQuery()).latency().success().state())
+                .isEqualTo(SourceStatus.PENDING);
+    }
+
+    /**
+     * 분모는 그룹 전체가 아니라 <b>그 축으로 접히는 결과 분류</b>입니다
+     * ({@code LatencyOutcome.of}). 그룹 전체를 쓰면 트래픽이 전부 성공인 동안 실패 두 축이
+     * "기다릴 표본이 없는데 기다리라" 는 PENDING 으로 굳습니다.
+     */
+    @Test
+    @DisplayName("성공만 흐르면 성공 축은 값을 내고 실패 두 축은 N_A 다")
+    void eachOutcomeAxisUsesItsOwnDenominator() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile("0.5", 0.010d, "api-1"),
+                        quantile("0.95", 0.100d, "api-1"),
+                        quantile("0.99", 0.250d, "api-1")),
+                "rate(", List.of(
+                        rate("issue", "success", 5000d, "api-1"),
+                        rate("issue", "policy_reject", 0d, "api-1"),
+                        rate("issue", "client_invalid", 0d, "api-1"),
+                        rate("issue", "dependency_failure", 0d, "api-1"),
+                        rate("issue", "application_failure", 0d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(latency.success().value().p99Millis()).isEqualTo(250d);
+        assertThat(latency.policyReject().state()).isEqualTo(SourceStatus.N_A);
+        assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.N_A);
+    }
+
+    /**
+     * 접는 규칙은 {@code LatencyOutcome.of} 하나입니다. {@code dependency_failure} 하나만
+     * 흘러도 시스템 실패 축의 분모는 0 이 아니어야 합니다 — 조립기가 규칙을 옮겨 적었으면
+     * 여기서 갈립니다.
+     */
+    @Test
+    @DisplayName("시스템 실패 축의 분모는 systemFailures() 전체를 접는다")
+    void systemFailureDenominatorFoldsEveryFailureClass() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile(UriGroup.ISSUE, "system_failure", "0.5", 0.100d, "api-1"),
+                        quantile(UriGroup.ISSUE, "system_failure", "0.95", 0.200d, "api-1"),
+                        quantile(UriGroup.ISSUE, "system_failure", "0.99", 3d, "api-1")),
+                "rate(", List.of(
+                        rate("issue", "success", 0d, "api-1"),
+                        rate("issue", "policy_reject", 0d, "api-1"),
+                        rate("issue", "client_invalid", 0d, "api-1"),
+                        rate("issue", "dependency_failure", 10d, "api-1"),
+                        rate("issue", "application_failure", 0d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(latency.systemFailure().value().p99Millis()).isEqualTo(3000d);
+        // 성공 축은 같은 스냅샷에서 트래픽이 0 이라 N_A 다. 두 축이 서로 섞이지 않는다.
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.N_A);
+    }
+
+    /**
+     * <b>분모를 못 읽었으면 단정하지 않습니다.</b> rate 를 못 읽었을 뿐 트래픽이 있었을 수
+     * 있고, "트래픽 없음" 을 단정하면 이 티켓이 없애려는 거짓말을 다른 자리에서 다시 만듭니다.
+     * PENDING 은 정보가 아니라 정직함입니다.
+     *
+     * <p>지연 <b>값</b> 자체는 살아 있어야 합니다 — 백분위는 지연 질의에서 나오므로 결과
+     * 질의가 죽어도 그리는 데 아무것도 모자라지 않습니다.</p>
+     */
+    @Test
+    @DisplayName("결과 질의가 죽으면 지연은 값을 그대로 내고, 값이 없을 때만 PENDING 으로 물러난다")
+    void unreadableDenominatorFallsBackToPending() {
+        List<PromSample> latencySamples = List.of(
+                quantile("0.5", 0.010d, "api-1"),
+                quantile("0.95", 0.100d, "api-1"),
+                quantile("0.99", 0.250d, "api-1"));
+        FakePromQuery client = new FakePromQuery(promQl -> {
+            if (promQl.startsWith("rate(" + MetricAggregation.HTTP_RESULT_TOTAL)) {
+                throw new PromQueryException("시험용 결과 질의 장애");
+            }
+            if (promQl.contains("quantile!=")) {
+                return latencySamples;
+            }
+            if (promQl.contains("timestamp(")) {
+                return List.of(age(FRESH_AGE_SECONDS));
+            }
+            return List.of();
+        });
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+        LatencyMetrics latency = response.latency();
+
+        // 분모가 죽은 것이 지연 값을 죽이지 않는다.
+        assertThat(response.traffic().issueAttemptRps().state()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(latency.success().value().p99Millis()).isEqualTo(250d);
+        // 표본이 없는 축은 N_A 로 단정하지 않고 PENDING 으로 물러난다.
+        assertThat(latency.policyReject().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(group(latency, UriGroup.READ).state()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    /**
+     * <b>인스턴스 하나가 스크레이프에서 빠지면 분모는 살아 있는 쪽만 합산해 0 이 됩니다.</b>
+     * 나이는 {@code max} 로 재므로(빠진 쪽이 드러나야 합니다) 신선도만 오래됩니다. 그 0 을
+     * 트래픽 없음으로 읽으면 빠진 인스턴스가 처리하던 요청이 "요청 0 건" 으로 그려집니다.
+     *
+     * <p>같은 스냅샷의 처리량 칸이 STALE 이라는 것이 근거입니다 — 두 칸이 같은 표본을 보는데
+     * 한쪽만 "없다" 를 단정하면 화면에 모순이 남습니다.</p>
+     */
+    @Test
+    @DisplayName("원천이 STALE 이면 rate 0 을 트래픽 없음으로 읽지 않고 PENDING 이다")
+    void staleSourceNeverClaimsZeroTraffic() {
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "timestamp(", List.of(age(STALE_AGE_SECONDS))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+        LatencyMetrics latency = response.latency();
+
+        // 처리량 칸은 STALE 로 남는다. 그쪽은 이미 "믿지 마라" 를 싣고 있어 값을 거둘 이유가
+        // 없다 — 지연 축만 값 없이 낼 수 있어서 PENDING 으로 물러난다.
+        assertThat(response.traffic().issueSuccessTps().state()).isEqualTo(SourceStatus.STALE);
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(latency.policyReject().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(latency.groups()).allSatisfy(stat ->
+                assertThat(stat.percentiles().state()).isEqualTo(SourceStatus.PENDING));
+    }
+
+    /**
+     * <b>STALE 검사만으로는 부족합니다.</b> {@code staleAfter}(120초)가 집계 창(1분)보다 길어,
+     * 빠진 인스턴스의 나이가 60~120초인 구간은 창을 이미 넘겼는데도 신선도가 정상으로 나옵니다.
+     *
+     * <p>이 테스트가 {@code staleAfter} 와 창 길이의 관계를 고정합니다 — 둘 중 하나를 만지면
+     * 여기서 갈립니다.</p>
+     */
+    @Test
+    @DisplayName("관측 시각이 집계 창 밖이면 아직 STALE 이 아니어도 트래픽 0 을 단정하지 않는다")
+    void observationOlderThanTheWindowNeverClaimsZeroTraffic() {
+        long beyondWindowButFresh = MetricsWindow.ONE_MINUTE.seconds() + 30;
+        assertThat(beyondWindowButFresh).isLessThan(STALE_AFTER.toSeconds());
+
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "timestamp(", List.of(age(beyondWindowButFresh))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        // 신선도가 정상이라 STALE 도 안 붙는 구간이다. 여기서 처리량 칸만 "요청 0 건" 을
+        // 단정하면 한 화면에서 지연은 "모름", 처리량은 "0 건 확정" 이 되어 운영자가 어느 쪽을
+        // 믿을지 판단할 근거가 없다 — 두 칸이 같은 표본을 보므로 같은 판정을 써야 한다.
+        assertThat(response.traffic().issueSuccessTps().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.traffic().issueAttemptRps().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.latency().success().state()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    /**
+     * 신선도 질의만 예산에 잘리는 것은 실제로 일어납니다 — 그 질의가 네 번째라 예산
+     * (기본 500ms)이 모자라면 결과 질의는 살고 이것부터 잘립니다. 관측 시각을 모르면 창이
+     * 관측 뒤인지 판단할 근거가 없으므로 트래픽 0 을 단정할 수 없습니다.
+     */
+    @Test
+    @DisplayName("관측 시각을 모르면 rate 0 이어도 N_A 로 단정하지 않는다")
+    void unknownObservationTimeNeverClaimsZeroTraffic() {
+        // 신선도 표본만 없다. 결과 rate 는 정상으로 0 이 온다.
+        FakePromQuery client = respond(Map.of("rate(", zeroRates()));
+
+        assertThat(assemble(client, globalQuery()).latency().success().state())
+                .isEqualTo(SourceStatus.PENDING);
+    }
+
+    /**
+     * <b>STALE 인 0 이 실패율에서 N_A 로 접히면 낡았다는 사실이 통째로 지워집니다.</b> N_A 는
+     * 값도 시각도 싣지 않아, 화면에는 "요청 0 건이라 비율이 정의되지 않음" 만 남고 원천이
+     * 낡았다는 신호가 사라집니다. 부하가 한 인스턴스에 몰려 있고 그 인스턴스가 스크레이프에서
+     * 빠지면 정확히 이 조합이 나옵니다.
+     */
+    @Test
+    @DisplayName("분모가 STALE 인 0 이면 실패율은 N_A 가 아니라 PENDING 이다")
+    void staleZeroDenominatorDoesNotMakeTheRateUndefined() {
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "timestamp(", List.of(age(STALE_AGE_SECONDS))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        // 분모는 낡았다는 사실을 값과 함께 그대로 싣는다.
+        assertThat(response.traffic().issueAttemptRps().state()).isEqualTo(SourceStatus.STALE);
+        assertThat(response.errors().classes()).allSatisfy(errorClass ->
+                assertThat(errorClass.rate().state()).isEqualTo(SourceStatus.PENDING));
+    }
+
+    /**
+     * 실패 원인 표도 같은 scrape 에서 나옵니다 — 나이가 같으면 믿을 수 있는지도 같아야 합니다.
+     * 실패율 칸이 PENDING 인 동안 바로 옆 원인 표가 전 사유 0 을 VALID 로 그리면, 운영자는
+     * 그 표를 보고 "실패 없음" 으로 판단합니다.
+     */
+    @Test
+    @DisplayName("분모를 믿을 수 없으면 전 행이 0 인 원인 표는 표째로 PENDING 이다")
+    void untrustedAllZeroReasonTableFallsBackToPending() {
+        long beyondWindowButFresh = MetricsWindow.ONE_MINUTE.seconds() + 30;
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "sum by (outcome)", List.of(
+                        outcome(ReasonCode.INTERNAL_ERROR, 0d),
+                        outcome(ReasonCode.TEMPORARILY_UNAVAILABLE, 0d)),
+                "timestamp(", List.of(age(beyondWindowButFresh))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.errors().topReasons().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.errors().topReasons().value()).isNull();
+    }
+
+    /**
+     * 거두는 것은 "전부 0" 이라는 단정 하나뿐입니다. 한 사유라도 값이 있으면 표는 그대로
+     * 나가야 합니다 — 그 표는 부분 탈락이라도 실제로 일어난 실패를 싣고 있습니다.
+     */
+    @Test
+    @DisplayName("한 사유라도 값이 있으면 믿을 수 없는 구간에서도 원인 표는 그대로 나간다")
+    void untrustedReasonTableWithAnyValueStillReports() {
+        long beyondWindowButFresh = MetricsWindow.ONE_MINUTE.seconds() + 30;
+        FakePromQuery client = respond(Map.of(
+                "rate(", zeroRates(),
+                "sum by (outcome)", List.of(
+                        outcome(ReasonCode.INTERNAL_ERROR, 2d),
+                        outcome(ReasonCode.TEMPORARILY_UNAVAILABLE, 0d)),
+                "timestamp(", List.of(age(beyondWindowButFresh))));
+
+        ObservedValue<List<TopReason>> topReasons =
+                assemble(client, globalQuery()).errors().topReasons();
+
+        assertThat(topReasons.state()).isEqualTo(SourceStatus.VALID);
+        assertThat(topReasons.value()).hasSize(2);
+    }
+
     // ── 정합성 ──────────────────────────────────────────────────────────────────
 
     /** 값 미터와 상태 미터는 짝입니다. 상태가 값을 요구할 때만 값을 싣습니다. */
@@ -1371,16 +1697,39 @@ class PromMetricsAssemblerTest {
         return new PromSample("", labels, value, EVALUATED);
     }
 
+    /**
+     * 모든 URI 그룹 × 모든 결과 분류가 0 인 결과 rate 입니다 — <b>요청이 한 건도 없는 상태</b>.
+     *
+     * <p>분류를 손으로 적지 않고 enum 전종을 돕니다. 하나라도 빠지면 그 축의 분모가 "0" 이
+     * 아니라 "모름" 이 되어 판정이 조용히 PENDING 으로 새고, 그러면 이 테스트가 지키려는 것이
+     * 사라집니다.</p>
+     */
+    private static List<PromSample> zeroRates() {
+        List<PromSample> samples = new ArrayList<>();
+        for (UriGroup uriGroup : UriGroup.values()) {
+            for (ResultClass resultClass : ResultClass.values()) {
+                samples.add(rate(uriGroup.tagValue(),
+                        resultClass.name().toLowerCase(Locale.ROOT), 0d, "api-1"));
+            }
+        }
+        return List.copyOf(samples);
+    }
+
     private static PromSample quantile(String quantile, double seconds, String instance) {
         return quantile(UriGroup.ISSUE, quantile, seconds, instance);
     }
 
-    /** {@code instance} 가 빈 문자열이면 원천이 라벨을 떨군 표본이다. */
     private static PromSample quantile(
             UriGroup uriGroup, String quantile, double seconds, String instance) {
+        return quantile(uriGroup, "success", quantile, seconds, instance);
+    }
+
+    /** {@code instance} 가 빈 문자열이면 원천이 라벨을 떨군 표본이다. */
+    private static PromSample quantile(
+            UriGroup uriGroup, String outcome, String quantile, double seconds, String instance) {
         Map<String, String> labels = new LinkedHashMap<>();
         labels.put("uri_group", uriGroup.tagValue());
-        labels.put("outcome", "success");
+        labels.put("outcome", outcome);
         labels.put("quantile", quantile);
         if (!instance.isEmpty()) {
             labels.put("instance", instance);
