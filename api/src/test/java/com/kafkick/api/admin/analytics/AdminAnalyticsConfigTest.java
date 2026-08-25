@@ -14,9 +14,12 @@ import org.springframework.context.annotation.Configuration;
 import com.kafkick.api.admin.support.config.AdminAnalyticsProperties;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
+import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsQuery;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
+import com.kafkick.core.admin.analytics.AdminAnalyticsSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
+import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockSource;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 
@@ -41,6 +44,9 @@ class AdminAnalyticsConfigTest {
     void defaultsToPendingSource() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
+            assertThat(context).hasSingleBean(AdminAnalyticsSource.class);
+            assertThat(context.getBean(AdminAnalyticsSource.class))
+                    .isInstanceOf(AdminAnalyticsPendingSource.class);
             assertThat(context.getBean(AdminAnalyticsService.class)
                     .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.NONE);
             assertThat(context.getBean(AdminAnalyticsProperties.class).staleAfter())
@@ -54,6 +60,9 @@ class AdminAnalyticsConfigTest {
         runner.withPropertyValues("admin.analytics.mock-enabled=true")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(AdminAnalyticsSource.class);
+                    assertThat(context.getBean(AdminAnalyticsSource.class))
+                            .isInstanceOf(AdminAnalyticsMockSource.class);
                     assertThat(context.getBean(AdminAnalyticsService.class)
                             .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.MOCK);
                 });
