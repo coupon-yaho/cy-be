@@ -5,22 +5,25 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
+import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
+import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
-import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
@@ -36,7 +39,8 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
         PrometheusQueryProperties.class,
         PrometheusArchiveProperties.class,
         PrometheusSeriesProperties.class,
-        OverviewPrometheusProperties.class
+        OverviewPrometheusProperties.class,
+        AdminOverviewPolicyProperties.class
 })
 public class AdminObservabilityConfig {
 
@@ -103,7 +107,9 @@ public class AdminObservabilityConfig {
     @Bean
     public AdminOverviewService adminOverviewService(
             TimeProvider timeProvider,
-            AdminOverviewMockDataFactory mockDataFactory,
+            AdminCampaignDataReader campaignDataReader,
+            RuntimeConfigStore runtimeConfigStore,
+            AdminOverviewPolicyProperties policyProperties,
             OverviewObservationSource observationSource,
             IssuanceFlowCalculator issuanceFlowCalculator,
             IssuanceActionCalculator issuanceActionCalculator,
@@ -111,15 +117,32 @@ public class AdminObservabilityConfig {
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
             CampaignOverviewCalculator campaignOverviewCalculator,
-            ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator
     ) {
         return new AdminOverviewService(
-                timeProvider, mockDataFactory, observationSource, issuanceFlowCalculator,
+                timeProvider, campaignDataReader, runtimeConfigStore, policyProperties.toCorePolicy(),
+                observationSource, issuanceFlowCalculator,
                 issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
-                stockRiskCalculator, campaignOverviewCalculator, consistencyActionCalculator,
+                stockRiskCalculator, campaignOverviewCalculator,
                 operationActionCalculator, overviewStatusCalculator);
+    }
+
+    /** 관측 JDBC Reader가 없을 때만 관측 비활성 오류를 내는 Core Port 구현을 제공합니다. */
+    @Bean
+    @ConditionalOnMissingBean(AdminCampaignDataReader.class)
+    public AdminCampaignDataReader pendingAdminCampaignDataReader() {
+        return new PendingAdminCampaignDataReader();
+    }
+
+    /** 상세 화면도 Storage 구현 타입이 아니라 동일한 Core Port만 주입받습니다. */
+    @Bean
+    public AdminCouponMetricsService adminCouponMetricsService(
+            TimeProvider timeProvider,
+            AdminCampaignDataReader campaignDataReader,
+            CouponMetricsCalculator calculator
+    ) {
+        return new AdminCouponMetricsService(timeProvider, campaignDataReader, calculator);
     }
 
     /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */

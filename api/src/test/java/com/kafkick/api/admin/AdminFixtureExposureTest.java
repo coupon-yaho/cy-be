@@ -22,30 +22,26 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.kafkick.api.admin.support.config.AdminFixtureConfig;
-import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
-import com.kafkick.core.admin.couponmetrics.mock.AdminCouponMetricsMockDataFactory;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryService;
 import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
 import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
 import com.kafkick.core.admin.issuancehistory.IssuanceHistoryCalculator;
 import com.kafkick.core.admin.issuancehistory.mock.AdminIssuanceHistoryMockDataFactory;
-import com.kafkick.core.admin.overview.AdminOverviewService;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
 import com.kafkick.core.support.TimeProvider;
 
 /**
  * <b>운영 기본값에서 관리자 화면 fixture 가 응답에 실리지 않는지</b>를 고정한다.
  *
- * <p>[OBS-36] 네 mock factory 는 조건 없는 {@code @Component} 였다. 그래서 <b>운영 200 이
+ * <p>[OBS-36] 관리자 mock factory는 조건 없는 {@code @Component}였다. 그래서 <b>운영 200이
  * fixture 를 반환했다</b> — 관측 계정이 members 를 읽던 것과 같은 축의 문제다: 운영에 남으면
  * 안 되는 것이 아무 증상 없이 남아 있었다. 지금은 {@code admin.mock.enabled} 가 기본 꺼짐이다.
  *
- * <p><b>끈 상태가 PENDING 이 아니라 기동 실패인 이유.</b> 네 화면의 응답 계약에는 "아직
+ * <p><b>끈 상태가 PENDING이 아니라 기동 실패인 이유.</b> 남은 화면의 응답 계약에는 "아직
  * 집계되지 않았음" 을 담을 자리가 없다 — 예컨대 {@code AdminIssuanceInquiryResult} 는
  * {@code items}·{@code nextBefore}·{@code hasOlder} 뿐이라, 빈 결과를 내면 <b>"조회했는데
- * 없음" 과 구분되지 않는다.</b> 그 구분을 만드는 것은 응답 계약 변경이고 A-06·A-07·A-08·A-10
+ * 없음" 과 구분되지 않는다.</b> 그 구분을 만드는 것은 응답 계약 변경이고 A-07·A-08
  * 의 몫이라 여기서 발명하지 않았다. {@code analytics} 만 그 자리가 이미 있어서(PendingSource)
  * 혼자 다르게 동작한다 — 아래 인벤토리가 그 비대칭을 명시한다.
  */
@@ -59,17 +55,13 @@ class AdminFixtureExposureTest {
      * 늘지도 않는다.
      */
     private static final List<FixtureBackedScreen> FIXTURE_BACKED_SCREENS = List.of(
-            new FixtureBackedScreen("운영현황", "A-06",
-                    AdminOverviewService.class, AdminOverviewMockDataFactory.class),
             new FixtureBackedScreen("회원 발급 문의", "A-07",
                     AdminIssuanceInquiryService.class, AdminIssuanceInquiryMockDataFactory.class),
             new FixtureBackedScreen("발급 이력", "A-08",
-                    AdminIssuanceHistoryService.class, AdminIssuanceHistoryMockDataFactory.class),
-            new FixtureBackedScreen("상세 지표", "A-10",
-                    AdminCouponMetricsService.class, AdminCouponMetricsMockDataFactory.class));
+                    AdminIssuanceHistoryService.class, AdminIssuanceHistoryMockDataFactory.class));
 
     /**
-     * 네 factory 에 걸린 스위치. <b>문자열을 옮겨 적지 않고 배선이 쓰는 상수를 그대로 참조한다</b> —
+     * 남은 factory에 걸린 스위치. <b>문자열을 옮겨 적지 않고 배선이 쓰는 상수를 그대로 참조한다</b> —
      * 옮겨 적으면 배선이 키를 바꿔도 이 테스트는 옛 이름으로 계속 초록불이다.
      */
     private static final String FIXTURE_SWITCH = AdminFixtureConfig.FIXTURE_SWITCH;
@@ -83,7 +75,7 @@ class AdminFixtureExposureTest {
     }
 
     /**
-     * 배선을 소유한 설정 클래스를 그대로 올린다. 예전에는 factory 네 개를 직접 등록했는데,
+     * 배선을 소유한 설정 클래스를 그대로 올린다. 예전에는 factory를 직접 등록했는데,
      * 그러면 <b>조건이 클래스에 붙어 있다는 사실 자체를 테스트가 전제</b>하게 되어 배선 형태를
      * 바꾸는 순간 검사 대상이 사라진다. 지금은 운영이 쓰는 그 설정을 검사한다.
      */
@@ -105,7 +97,7 @@ class AdminFixtureExposureTest {
     }
 
     @Test
-    @DisplayName("명시적으로 켜면 네 fixture factory 가 전부 등록된다")
+    @DisplayName("명시적으로 켜면 남은 fixture factory가 전부 등록된다")
     void fixtureFactoriesAppearWhenExplicitlyEnabled() {
         // 끄는 쪽만 보면 스위치 이름에 오타가 있어도 통과한다 — 어차피 아무것도 안 뜬다.
         runner.withPropertyValues("admin.mock.enabled=true").run(context -> {
@@ -156,8 +148,8 @@ class AdminFixtureExposureTest {
         // 계약이 두 곳(이 목록 ↔ Service 생성자)에 걸친다. 목록만 보는 테스트는 A 티켓이
         // Repository 를 붙였을 때 그 사실을 모르고, 생성자만 보는 테스트는 다섯 번째 화면이
         // 생겨도 모른다.
-        // 두 배선 형태를 함께 받는다. 구상 클래스를 직접 무는 쪽(overview·issuancehistory·
-        // couponmetrics)과, 포트를 물지만 그 포트의 구현이 mock factory 하나뿐인 쪽(inquiry)이다.
+        // 두 배선 형태를 함께 받는다. 구상 클래스를 직접 무는 쪽(issuancehistory)과,
+        // 포트를 물지만 그 포트의 구현이 mock factory 하나뿐인 쪽(inquiry)이다.
         // 후자는 analytics 와 겉모습이 같지만 대체 구현이 없어서 결과는 같다 — 끄면 못 뜬다.
         for (FixtureBackedScreen screen : FIXTURE_BACKED_SCREENS) {
             assertThat(constructorParameterTypes(screen.service()))
@@ -195,7 +187,7 @@ class AdminFixtureExposureTest {
     void deploymentTemplateMakesTheFixtureSwitchesVisible() {
         // 코드 기본값이 꺼짐이어도, README 가 안내하는 유일한 배포 절차는
         // `cp application.yml.example application.yml` 이고 그 파일은 스위치를 켜 둔다.
-        // 즉 **실제로 배포되는 값은 켜짐**이다 — A-06~A-11 이 실제 Repository 를 붙이기
+        // 즉 **실제로 배포되는 값은 켜짐**이다 — 남은 A 티켓이 실제 Repository 를 붙이기
         // 전까지는 그래야 화면이 뜨기 때문이고, 이 티켓이 바꾼 것은 그 켜짐이
         // "조건 없는 @Component" 가 아니라 **눈에 보이는 한 줄**이라는 점이다.
         //
@@ -236,7 +228,7 @@ class AdminFixtureExposureTest {
         // analytics 도 기본값으로는 가짜 통계를 냈다(OBS-36 이 그 기본값을 뒤집었다). 다만
         // 배선 형태가 다르다 — Service 가 인터페이스를 물어서, 끄면 기동이 죽는 대신
         // AdminAnalyticsPendingSource 가 "아직 집계되지 않았음" 을 낸다.
-        // 나머지 넷이 그 형태로 가려면 응답 계약을 새로 설계해야 하고, 그것이 A 티켓의 몫이다.
+        // 나머지 화면이 그 형태로 가려면 응답 계약을 새로 설계해야 하고, 그것이 남은 A 티켓의 몫이다.
         assertThat(constructorParameterTypes(AdminAnalyticsService.class))
                 .as("analytics 가 구상 Mock 을 직접 물기 시작했다면 위 인벤토리에 추가해야 한다")
                 .noneMatch(type -> type.getName().contains(".mock."));

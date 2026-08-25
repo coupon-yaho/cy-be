@@ -45,6 +45,24 @@ class CouponMetricsSourceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CouponMetricsSource.IssuanceStatusCounts(-1L, 0L, 0L, 0L))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.IssuanceStatusCounts(0L, -1L, 0L, 0L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.IssuanceStatusCounts(0L, 0L, -1L, 0L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.IssuanceStatusCounts(0L, 0L, 0L, -1L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.TransitionBucket(
+                OBSERVED_AT.minusSeconds(1), OBSERVED_AT, -1L, 0L, 0L, 0L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.TransitionBucket(
+                OBSERVED_AT.minusSeconds(1), OBSERVED_AT, 0L, -1L, 0L, 0L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.TransitionBucket(
+                OBSERVED_AT.minusSeconds(1), OBSERVED_AT, 0L, 0L, -1L, 0L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.TransitionBucket(
+                OBSERVED_AT.minusSeconds(1), OBSERVED_AT, 0L, 0L, 0L, -1L))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

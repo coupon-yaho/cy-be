@@ -4,15 +4,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import com.kafkick.core.admin.couponmetrics.mock.AdminCouponMetricsMockDataFactory;
 import com.kafkick.core.admin.inquiry.mock.AdminIssuanceInquiryMockDataFactory;
 import com.kafkick.core.admin.issuancehistory.mock.AdminIssuanceHistoryMockDataFactory;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
 
 /**
  * <b>[OBS-36] 관리자 화면 fixture 를 등록할지 말지를 API 가 소유한다.</b>
  *
- * <p>네 Factory 는 예전에 {@code core} 에서 조건 없는 {@code @Component} 였다. 그래서
+ * <p>남은 두 Factory는 예전에 {@code core}에서 조건 없는 {@code @Component}였다. 그래서
  * <b>운영에서도 fixture 가 200 으로 나갔고</b>, 관리자 화면과 아무 상관 없는 배치 프로세스까지
  * 매 기동마다 그 빈을 만들었다. 관측 계정에서 {@code members} 를 걷어내는 것과 같은 축이라
  * 함께 막는다 — 운영에 남으면 안 되는 것이 조용히 남지 않게 한다.
@@ -28,11 +26,10 @@ import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
  * 등록까지 걸러낸다(실측). 조건이 클래스가 아니라 {@code @Bean} 메서드에 있으면, 그 Factory 를
  * 직접 꽂는 테스트는 스위치를 몰라도 된다.
  *
- * <p><b>끄면 PENDING 이 아니라 기동이 실패한다.</b> 네 화면의 응답 계약
- * ({@code AdminOverviewResult}·{@code AdminIssuanceInquiryResult}·
- * {@code AdminIssuanceHistoryResult}·{@code CouponMetricsSnapshot})에는 "아직 집계되지 않았음"
+ * <p><b>끄면 PENDING이 아니라 기동이 실패한다.</b> 남은 두 화면의 응답 계약
+ * ({@code AdminIssuanceInquiryResult}·{@code AdminIssuanceHistoryResult})에는 "아직 집계되지 않았음"
  * 을 표현할 자리가 없어서, 빈 결과를 내면 "조회했는데 없다" 와 구분되지 않는다. 그 구분을
- * 만드는 것은 응답 계약 변경이고 A-06 · A-07 · A-08 · A-10 의 몫이다 — 여기서 발명하지 않는다.
+ * 만드는 것은 응답 계약 변경이고 A-07·A-08의 몫이다 — 여기서 발명하지 않는다.
  * {@code analytics} 만 그 자리가 이미 있어서({@code AdminAnalyticsPendingSource}) 혼자
  * 다르게 동작한다.
  *
@@ -54,12 +51,6 @@ public class AdminFixtureConfig {
 
     @Bean
     @ConditionalOnProperty(name = FIXTURE_SWITCH, havingValue = "true")
-    public AdminOverviewMockDataFactory adminOverviewMockDataFactory() {
-        return new AdminOverviewMockDataFactory();
-    }
-
-    @Bean
-    @ConditionalOnProperty(name = FIXTURE_SWITCH, havingValue = "true")
     public AdminIssuanceInquiryMockDataFactory adminIssuanceInquiryMockDataFactory() {
         return new AdminIssuanceInquiryMockDataFactory();
     }
@@ -68,13 +59,5 @@ public class AdminFixtureConfig {
     @ConditionalOnProperty(name = FIXTURE_SWITCH, havingValue = "true")
     public AdminIssuanceHistoryMockDataFactory adminIssuanceHistoryMockDataFactory() {
         return new AdminIssuanceHistoryMockDataFactory();
-    }
-
-    /** 상세 지표는 Overview 와 <b>같은 캠페인 모집단</b>을 써야 해서 그 Factory 를 받는다. */
-    @Bean
-    @ConditionalOnProperty(name = FIXTURE_SWITCH, havingValue = "true")
-    public AdminCouponMetricsMockDataFactory adminCouponMetricsMockDataFactory(
-            AdminOverviewMockDataFactory overviewFactory) {
-        return new AdminCouponMetricsMockDataFactory(overviewFactory);
     }
 }

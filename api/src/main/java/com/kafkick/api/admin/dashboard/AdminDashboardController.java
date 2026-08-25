@@ -70,9 +70,9 @@ public class AdminDashboardController {
      * <p>회원 발급 문의, 발급 상태 변경 이력, 고객 알림 발송 현황은 각각
      * 별도의 관리자 API에서 조회하므로 이 응답에 중복해서 포함하지 않습니다.</p>
      *
-     * <p>O1 발급 흐름·O3 고객 결과·응답 지연은 실제 관측 원천에 연결됐습니다. 캠페인·O2·O4·FINAL은
-     * 현재 Mock 경계를 유지하고, 전체 발급률은 세션 최고값 경계가 없어 {@code PENDING}으로
-     * 제공합니다. 후속 원천 연결 뒤에도 같은 응답 계약을 유지합니다.</p>
+     * <p>캠페인·재고는 관측 전용 DB, O1 발급 흐름·O3 고객 결과·응답 지연은 Prometheus 원천에
+     * 연결됐습니다. 아직 연결되지 않은 O2 대기열은 {@code PENDING}이고 FINAL은 A-F6 전까지
+     * 조치 모집단에서 제외합니다.</p>
      *
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
      * @return Service 계산 결과를 HTTP DTO로 변환한 성공 응답 봉투
@@ -91,8 +91,8 @@ public class AdminDashboardController {
      * 특정 쿠폰 회차의 재고·발급 진행률·대기열·보유 상태 지표를 지정된 관측 구간으로 조회합니다.
      *
      * <p>{@code couponId}는 캠페인 회차 식별자이며 양수만 허용하는 필수 쿼리 파라미터입니다. {@code window}는
-     * {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다. 현재는 Overview와 같은 Mock 모집단의
-     * 원천 수량을 Core Service가 계산하며, 후속 실제 원천 연결 뒤에도 같은 응답 계약을 유지합니다.</p>
+     * {@code 1m}, {@code 5m}, {@code 15m} 중 하나입니다. Overview와 같은 DB 모집단의 재고·보유량·전이를
+     * Core Service가 계산하며, 아직 연결되지 않은 발급 Counter와 대기열은 {@code PENDING}입니다.</p>
      *
      * @param couponId 조회할 쿠폰 캠페인 회차 식별자
      * @param window 지표 집계 구간
