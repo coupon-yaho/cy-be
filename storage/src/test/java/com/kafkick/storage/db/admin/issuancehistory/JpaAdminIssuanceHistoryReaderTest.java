@@ -2,6 +2,7 @@ package com.kafkick.storage.db.admin.issuancehistory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -42,10 +43,10 @@ class JpaAdminIssuanceHistoryReaderTest {
         assertThat(reader.read(query, snapshotAt).candidates()).hasSize(1);
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(repository).findAdminHistoryRows(30L, beforeAt.minusSeconds(10), snapshotAt,
-                IssuanceEventType.ISSUE, snapshotAt, beforeAt, 9L, pageable.capture());
-        verify(repository).summarizeAdminHistoryRows(30L, beforeAt.minusSeconds(10), snapshotAt,
-                IssuanceEventType.ISSUE, snapshotAt);
+        verify(repository).findAdminHistoryRows(eq(30L), eq(beforeAt.minusSeconds(10)), eq(snapshotAt),
+                eq(IssuanceEventType.ISSUE), eq(snapshotAt), eq(beforeAt), eq(9L), pageable.capture());
+        verify(repository).summarizeAdminHistoryRows(eq(30L), eq(beforeAt.minusSeconds(10)), eq(snapshotAt),
+                eq(IssuanceEventType.ISSUE), eq(snapshotAt));
         assertThat(pageable.getValue().getPageSize()).isEqualTo(8);
     }
 }
