@@ -51,9 +51,22 @@
 #    실측 — obs 에 `GRANT SELECT ON app.*` 를 가진 역할을 붙여 두면:
 #      REVOKE ALL PRIVILEGES 후에도  GRANT `legacy_reader`@`%` TO `obs`@`%`  가 남고
 #      obs 가 members 를 그대로 읽는다(1142 가 아니라 결과가 나온다)
-#    그래서 아래에서 mysql.role_edges 를 읽어 붙어 있는 역할을 함께 걷는다. 역할을 걷으면
-#    mysql.default_roles 의 짝도 같이 사라진다(실측). 역할이 하나도 없으면 DO 0 으로 넘어간다 —
-#    분기를 셸 조건문으로 나누면 두 경로 중 하나만 실제로 도는 상태가 만들어진다.
+#    그래서 아래에서 mysql.role_edges 를 읽어 붙어 있는 역할을 **하나씩** 걷는다. 역할을 걷으면
+#    mysql.default_roles 의 짝도 같이 사라진다(실측).
+#
+#    ⚠️ GROUP_CONCAT 으로 한 문장에 몰지 않는다. group_concat_max_len(기본 1024바이트)에서
+#       목록이 잘리면 잘린 자리에 따라 문법 오류로 죽거나 — 더 나쁘게 — 구분자에서 깔끔히
+#       잘려 **일부만 걷고 성공**한다. 뒤쪽은 조용해서 안 잡힌다.
+#
+# ⚠️ **mandatory_roles 는 이 스크립트가 걷을 수 없다.** 서버 전역 설정으로 모든 계정에
+#    암묵 부여되는 역할이라 mysql.role_edges 에 행이 없고, REVOKE 대상도 되지 못한다.
+#    실측(mandatory_roles='forced_reader' + activate_all_roles_on_login=ON):
+#      mysql.role_edges 의 obs 행 → 0 개  (여기서 안 보인다)
+#      root 의 SHOW GRANTS FOR obs → USAGE 뿐 (여기서도 안 보인다)
+#      그런데 obs 자신의 세션에서는 CURRENT_ROLE()=forced_reader 이고
+#      SELECT COUNT(*) FROM members 가 **성공한다**
+#    즉 양성 목록이 통째로 무의미해진다. 걷을 수 없으므로 **거부한다** — 조용히 성공해서
+#    "재부여했다" 는 기록을 남기는 것이 이 상황에서 가장 나쁘다.
 #
 # ⚠️ **대가 — 이 스크립트는 자기가 안 준 권한도 지운다.** obs 계정에 다른 용도를 겸하게
 #    해 두었다면 그것을 조용히 끊는다. 그 계정은 관측 전용이라는 것이 이 계층의 전제이고,
@@ -90,23 +103,42 @@ require_identifier "MYSQL_DATABASE" "${MYSQL_DATABASE}"
 tables="$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "${allowlist}" | grep -v '^$' || true)"
 [ -n "${tables}" ] || { echo "양성 목록이 비어 있다. 그러면 관측이 아무것도 못 읽는다" >&2; exit 1; }
 
+# root 로 한 줄짜리 값을 읽는다. 아래 사전 점검과 역할 열거가 쓴다.
+query_as_root() {
+    MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mysql -uroot -h "${MYSQL_HOST:-127.0.0.1}" -N -B -e "$1"
+}
+
+# ── 사전 점검: 걷을 수 없는 것이 있으면 시작도 하지 않는다 ──
+mandatory_roles="$(query_as_root "SELECT @@GLOBAL.mandatory_roles" | tr -d '[:space:]')"
+if [ -n "${mandatory_roles}" ]; then
+    echo "거부: 서버에 mandatory_roles 가 설정돼 있다(${mandatory_roles})." >&2
+    echo "  그 역할은 모든 계정에 암묵 부여되어 REVOKE 로 걷을 수 없다. 그대로 재부여하면" >&2
+    echo "  양성 목록 밖의 권한이 '${DB_OBS_USERNAME}' 에 남는데 SHOW GRANTS 에도 안 보인다." >&2
+    echo "  먼저 SET GLOBAL mandatory_roles='' 로 걷어낸 뒤 다시 실행하라." >&2
+    exit 1
+fi
+
+# 붙어 있는 역할을 **한 줄에 하나씩** 읽는다. 위 ⚠️ 참조 — GROUP_CONCAT 은 잘린다.
+obs_roles="$(query_as_root "SELECT CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST))
+                              FROM mysql.role_edges
+                             WHERE TO_USER = '${DB_OBS_USERNAME}' AND TO_HOST = '%'")"
+
 statements="
 -- 계정의 권한을 전부 걷는다(전역·스키마·테이블 모두). 위 ⚠️ 참조.
 -- IF EXISTS 라 권한이 USAGE 뿐인 신규 계정에서도 통과한다 — 그 분기를 셸 조건문으로
 -- 나누면 두 경로 중 하나만 실제로 도는 상태가 만들어진다.
 REVOKE IF EXISTS ALL PRIVILEGES, GRANT OPTION FROM '${DB_OBS_USERNAME}'@'%';
 
--- 그 문장이 못 걷는 역할 할당을 이어서 걷는다. 위 ⚠️ 참조.
-SET @obs_roles := (
-  SELECT GROUP_CONCAT(CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST)) SEPARATOR ', ')
-    FROM mysql.role_edges
-   WHERE TO_USER = '${DB_OBS_USERNAME}' AND TO_HOST = '%');
-SET @obs_role_revoke := IF(@obs_roles IS NULL, 'DO 0',
-  CONCAT('REVOKE ', @obs_roles, ' FROM ', QUOTE('${DB_OBS_USERNAME}'), '@', QUOTE('%')));
-PREPARE obs_role_stmt FROM @obs_role_revoke;
-EXECUTE obs_role_stmt;
-DEALLOCATE PREPARE obs_role_stmt;
 "
+
+# 역할이 없으면 이 루프는 한 번도 안 돈다 — 셸 조건문으로 분기를 나누지 않는다.
+while IFS= read -r obs_role; do
+    [ -n "${obs_role}" ] || continue
+    statements="${statements}
+REVOKE ${obs_role} FROM '${DB_OBS_USERNAME}'@'%';"
+done <<ROLES
+${obs_roles}
+ROLES
 
 for table in ${tables}; do
     require_identifier "allowlist 의 테이블 이름" "${table}"

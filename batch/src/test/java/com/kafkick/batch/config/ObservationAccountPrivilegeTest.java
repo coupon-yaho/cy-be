@@ -86,6 +86,13 @@ class ObservationAccountPrivilegeTest {
     /** 자바 텍스트 블록. 이 저장소의 긴 질의문은 전부 이 형태다. */
     private static final Pattern TEXT_BLOCK = Pattern.compile("\"\"\"(.*?)\"\"\"", Pattern.DOTALL);
 
+    /**
+     * 리터럴 사이의 이음매. {@code " + <식> + "} 와 {@code " + "} 를 지워 양쪽을 붙인다.
+     * 식 자리에 따옴표·세미콜론이 오면 리터럴 경계를 잘못 읽으므로 그때는 안 합친다.
+     */
+    private static final Pattern LITERAL_JOIN =
+            Pattern.compile("\"\\s*[+](?:[^;\"]*[+])?\\s*\"");
+
     /** 한 줄짜리 문자열 리터럴. 짧은 질의가 여기 들어 있다. */
     private static final Pattern STRING_LITERAL = Pattern.compile("\"([^\"\\\\\\n]|\\\\.)*\"");
 
@@ -135,6 +142,9 @@ class ObservationAccountPrivilegeTest {
 
     /** ⑥ 이 심는 레거시 역할. 재부여가 이것까지 걷는지 본다. */
     private static final String LEGACY_ROLE = "obs_legacy_reader";
+
+    /** ⑦ 이 서버 전역으로 강제하는 역할. 재부여가 걷지 못하므로 거부해야 한다. */
+    private static final String FORCED_ROLE = "obs_forced_reader";
 
     @Autowired
     MySQLContainer mySqlContainer;
@@ -306,6 +316,40 @@ class ObservationAccountPrivilegeTest {
     }
 
     @Test
+    @DisplayName("⑦ 걷을 수 없는 mandatory_roles 가 걸려 있으면 재부여가 거부한다")
+    void reapplyingRefusesWhenTheServerForcesARoleItCannotRevoke() {
+        // mandatory_roles 는 서버 전역 설정으로 **모든 계정에 암묵 부여**되는 역할이라
+        // mysql.role_edges 에 행이 없고 REVOKE 대상도 되지 못한다. 실측하면 이렇다 —
+        // root 의 SHOW GRANTS FOR obs 에는 USAGE 만 보이는데, obs 자신의 세션에서는
+        // 그 역할이 활성화돼 members 조회가 성공한다. 즉 ①~⑥ 이 전부 초록불인 채
+        // 양성 목록이 통째로 무의미해진다.
+        //
+        // 걷을 수 없으므로 재부여는 **거부**해야 한다. 조용히 성공해서 "재부여했다" 는
+        // 기록을 남기는 것이 이 상황에서 가장 나쁘다.
+        //
+        // ⚠️ 전역 설정을 건드리므로 finally 에서 반드시 되돌린다. 안 되돌리면 이 컨테이너를
+        //    공유하는 뒤 테스트들이 영문 모를 상태를 물려받는다.
+        MySqlContainerConfig.executeAsRoot(mySqlContainer,
+                "CREATE ROLE IF NOT EXISTS '" + FORCED_ROLE + "'");
+        try {
+            MySqlContainerConfig.executeAsRoot(mySqlContainer,
+                    "SET GLOBAL mandatory_roles = '" + FORCED_ROLE + "'");
+
+            assertThatThrownBy(() -> MySqlContainerConfig.applyObservationGrants(mySqlContainer))
+                    .as("걷을 수 없는 역할이 걸려 있는데 재부여가 성공했다. 그 성공은 거짓이다 — "
+                            + "양성 목록 밖의 권한이 SHOW GRANTS 에도 안 보이는 채로 남는다")
+                    .hasMessageContaining("mandatory_roles");
+        } finally {
+            MySqlContainerConfig.executeAsRoot(mySqlContainer, "SET GLOBAL mandatory_roles = ''");
+            MySqlContainerConfig.applyObservationGrants(mySqlContainer);
+        }
+
+        assertThat(showObservationGrants())
+                .as("되돌린 뒤 재부여가 정상 동작해야 뒤 테스트들이 성립한다")
+                .contains("issuances");
+    }
+
+    @Test
     @DisplayName("관측 계정은 read-only 플래그를 꺼도 쓰지 못한다 — GRANT 가 막는다")
     void cannotWriteEvenWithoutReadOnlyFlag() {
         // Hikari 의 read-only 를 켠 채로 시도하면 드라이버가 클라이언트 쪽에서 먼저 거부한다
@@ -408,6 +452,15 @@ class ObservationAccountPrivilegeTest {
     /**
      * 소스에서 질의문이 될 수 있는 조각만 뽑는다. 주석·식별자를 함께 보면 javadoc 에 적힌
      * 테이블 이름이 "읽고 있다" 로 둔갑해 ④ 가 거짓 통과한다.
+     *
+     * <p><b>이어 붙인 리터럴을 먼저 합친다.</b> 리터럴을 하나씩 떼어 보면 다음이 빠져나간다 —
+     * 실측으로 확인했다(이 처리를 넣기 전에는 ⑤ 가 통과했다):
+     * <pre>
+     *   root.execute("GRANT SELECT ON " + db + ".* TO 'obs'@'%'");
+     * </pre>
+     * {@code "GRANT SELECT ON "} 와 {@code ".* TO ..."} 어느 쪽도 혼자서는 스키마 단위 GRANT
+     * 로 보이지 않기 때문이다. 실행되는 것은 <b>합쳐진 문자열</b>이므로 합친 뒤에 본다.
+     * 사이에 낀 식으로 무엇이 오든 상관없다 — 대상이 {@code .*} 인지만 보면 된다.
      */
     private static List<String> queryTextOf(String source) {
         List<String> chunks = new ArrayList<>();
@@ -415,13 +468,25 @@ class ObservationAccountPrivilegeTest {
         while (blocks.find()) {
             chunks.add(blocks.group(1));
         }
-        // 텍스트 블록을 걷어내고 남은 곳에서 한 줄짜리 리터럴을 본다. 안 걷어내면 블록 안의
-        // 따옴표가 짝을 이뤄 엉뚱한 구간이 리터럴로 잡힌다.
-        Matcher literals = STRING_LITERAL.matcher(TEXT_BLOCK.matcher(source).replaceAll("\"\"\"\"\"\""));
+        // 텍스트 블록은 위에서 이미 담았으므로 통째로 지운다. 남기면 그 안의 따옴표가
+        // 아래 한 줄짜리 리터럴 스캔의 짝을 흐트러뜨린다.
+        String flat = joinConcatenatedLiterals(TEXT_BLOCK.matcher(source).replaceAll(""));
+        Matcher literals = STRING_LITERAL.matcher(flat);
         while (literals.find()) {
             chunks.add(literals.group());
         }
         return chunks;
+    }
+
+    /** {@code "a" + expr + "b"} 와 {@code "a" + "b"} 를 한 리터럴로 합친다. */
+    private static String joinConcatenatedLiterals(String source) {
+        String previous;
+        String current = source;
+        do {
+            previous = current;
+            current = LITERAL_JOIN.matcher(current).replaceAll("");
+        } while (!current.equals(previous));
+        return current;
     }
 
     private static List<Path> observationConsumers() {
