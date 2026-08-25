@@ -52,7 +52,7 @@ public class CouponMetricsCalculator {
                 window,
                 stock(source.stock()),
                 issuanceProgress(source.stock()),
-                issuanceRate(source.issuanceSamples(), windowStart, snapshotAt),
+                issuanceRate(source.issuanceRateSamples(), windowStart, snapshotAt),
                 queue(source.queue()),
                 new CampaignRuntimeSummary(source.campaign().status(), source.campaign().opensAt()),
                 usageRatio(source.holdingCounts()),
@@ -87,63 +87,33 @@ public class CouponMetricsCalculator {
         return observed((double) source.value().activeCount() / source.value().totalQuantity(), source);
     }
 
-    /** 누적 Counter 표본에서 현재 및 요청 구간 최고 발급률을 계산합니다. */
+    /** Prometheus가 계산한 rate 표본에서 현재 및 요청 구간 최고 발급률을 계산합니다. */
     private static Observation<RateSummary> issuanceRate(
-            CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceCounterSample>> source,
+            CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> source,
             Instant windowStart,
             Instant snapshotAt
     ) {
         if (!source.status().carriesValue()) {
             return empty(source.status());
         }
-        List<CouponMetricsSource.IssuanceCounterSample> samples = source.value();
-        validateNoFutureSamples(samples, snapshotAt);
+        List<CouponMetricsSource.IssuanceRateSample> samples = source.value();
+        validateRateSampleRange(samples, windowStart, snapshotAt);
         if (source.status() == SourceStatus.NO_TRAFFIC) {
-            validateNoTrafficSamples(samples);
+            validateNoTrafficRateSamples(samples);
             return observed(new RateSummary(0.0, 0.0), source);
         }
-
-        if (samples.size() < 2) {
-            throw new IllegalArgumentException("발급률 계산에는 두 개 이상의 Counter 표본이 필요합니다.");
-        }
-        CouponMetricsSource.IssuanceCounterSample first = samples.getFirst();
-        CouponMetricsSource.IssuanceCounterSample last = samples.getLast();
-        // 부분 시계열을 정상값처럼 반환하지 않도록 요청 구간 양 끝을 모두 덮는지 확인합니다.
-        boolean hasWindowStart = samples.stream()
-                .anyMatch(sample -> sample.observedAt().equals(windowStart));
-        if (first.observedAt().isAfter(windowStart)
-                || !hasWindowStart
-                || !last.observedAt().equals(snapshotAt)) {
-            throw new IllegalArgumentException("발급 Counter 표본이 요청 구간 시작과 종료를 모두 덮지 않습니다.");
-        }
-
-        double current = rate(samples.get(samples.size() - 2), last);
-        double peak = 0.0;
-        boolean intervalFound = false;
-        for (int index = 1; index < samples.size(); index++) {
-            CouponMetricsSource.IssuanceCounterSample previous = samples.get(index - 1);
-            CouponMetricsSource.IssuanceCounterSample currentSample = samples.get(index);
-            if (currentSample.observedAt().isAfter(windowStart)
-                    && !currentSample.observedAt().isAfter(snapshotAt)) {
-                peak = Math.max(peak, rate(previous, currentSample));
-                intervalFound = true;
-            }
-        }
-        if (!intervalFound) {
+        if (samples.isEmpty()) {
             throw new IllegalArgumentException("발급률을 계산할 요청 구간 표본이 없습니다.");
         }
+        // 완전성 상태는 Reader가 판단하고 계산기는 확보된 rate 표본만 요약합니다.
+        double current = samples.getLast().perSecond();
+        double peak = samples.stream()
+                .filter(sample -> !sample.observedAt().isBefore(windowStart))
+                .mapToDouble(CouponMetricsSource.IssuanceRateSample::perSecond)
+                .max()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "발급률을 계산할 요청 구간 표본이 없습니다."));
         return observed(new RateSummary(current, peak), source);
-    }
-
-    /** 인접한 두 누적 Counter 표본의 실제 경과시간 기준 초당 증가량을 계산합니다. */
-    private static double rate(
-            CouponMetricsSource.IssuanceCounterSample previous,
-            CouponMetricsSource.IssuanceCounterSample current
-    ) {
-        double elapsedSeconds = durationSeconds(previous.observedAt(), current.observedAt());
-        long completed = Math.subtractExact(
-                current.cumulativeCompletedCount(), previous.cumulativeCompletedCount());
-        return completed / elapsedSeconds;
     }
 
     /** 입장 처리량과 현재 대기 수로 예상 대기시간을 계산합니다. */
@@ -258,27 +228,26 @@ public class CouponMetricsCalculator {
         }
     }
 
-    /** NO_TRAFFIC 발급 표본에 실제 Counter 증가가 섞이지 않았는지 확인합니다. */
-    private static void validateNoTrafficSamples(
-            List<CouponMetricsSource.IssuanceCounterSample> samples
+    /** NO_TRAFFIC 발급률 표본에 양수 발급률이 섞이지 않았는지 확인합니다. */
+    private static void validateNoTrafficRateSamples(
+            List<CouponMetricsSource.IssuanceRateSample> samples
     ) {
-        for (int index = 1; index < samples.size(); index++) {
-            if (samples.get(index).cumulativeCompletedCount()
-                    != samples.get(index - 1).cumulativeCompletedCount()) {
-                throw new IllegalArgumentException("NO_TRAFFIC 발급 원천에는 Counter 증가가 없어야 합니다.");
-            }
+        boolean hasActivity = samples.stream().anyMatch(sample -> sample.perSecond() > 0.0);
+        if (hasActivity) {
+            throw new IllegalArgumentException("NO_TRAFFIC 발급 원천에는 양수 발급률이 없어야 합니다.");
         }
     }
 
-    /** 관측 상태와 무관하게 snapshotAt 이후의 Counter 표본을 거부합니다. */
-    private static void validateNoFutureSamples(
-            List<CouponMetricsSource.IssuanceCounterSample> samples,
+    /** 요청 구간 밖이나 기준 시각 이후의 발급률 표본을 거부합니다. */
+    private static void validateRateSampleRange(
+            List<CouponMetricsSource.IssuanceRateSample> samples,
+            Instant windowStart,
             Instant snapshotAt
     ) {
-        boolean hasFutureSample = samples.stream()
-                .anyMatch(sample -> sample.observedAt().isAfter(snapshotAt));
-        if (hasFutureSample) {
-            throw new IllegalArgumentException("snapshotAt보다 미래인 발급 Counter 표본은 사용할 수 없습니다.");
+        boolean hasOutsideSample = samples.stream().anyMatch(sample ->
+                sample.observedAt().isBefore(windowStart) || sample.observedAt().isAfter(snapshotAt));
+        if (hasOutsideSample) {
+            throw new IllegalArgumentException("발급률 표본은 요청 구간 안에 있어야 합니다.");
         }
     }
 
