@@ -38,8 +38,7 @@ class CouponIssueControllerTest {
             "550e8400-e29b-41d4-a716-446655440000";
     private static final String REQUEST_ID = "client-request-1";
 
-    @Autowired
-    private MockMvc mockMvc;
+    private final MockMvc mockMvc;
 
     @MockitoBean
     private CouponIssueObservationCoordinator observationCoordinator;
@@ -49,6 +48,11 @@ class CouponIssueControllerTest {
 
     @MockitoBean
     private TimeProvider timeProvider;
+
+    @Autowired
+    CouponIssueControllerTest(MockMvc mockMvc) {
+        this.mockMvc = mockMvc;
+    }
 
     @Test
     @DisplayName("회원과 등급 헤더로 쿠폰을 발급하면 201을 반환한다")

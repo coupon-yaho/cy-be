@@ -45,18 +45,18 @@ public class IssuanceRepositoryImpl
     /**
      * 사전검증용 존재 조회를 실행하고 저장소 장애는 쿠폰 영속성 오류로 변환합니다.
      *
-     * @param couponId 쿠폰 회차 식별자
+     * @param couponRoundId 쿠폰 회차 식별자
      * @param memberId 회원 식별자
      * @return 기존 발급건이 있으면 {@code true}
      */
     @Override
-    public boolean existsByCouponIdAndMemberId(
-            Long couponId,
+    public boolean existsForCouponRoundAndMember(
+            Long couponRoundId,
             Long memberId
     ) {
         try {
             return issuanceJpaRepository.existsByCouponIdAndMemberId(
-                    couponId,
+                    couponRoundId,
                     memberId
             );
         } catch (DataAccessException exception) {

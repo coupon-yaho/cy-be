@@ -173,9 +173,9 @@ class CouponIssueRepositoryTest {
     void findsExistingIssuanceByCouponAndMember() {
         issue(1L);
 
-        assertThat(issuanceRepository.existsByCouponIdAndMemberId(10L, 1L))
+        assertThat(issuanceRepository.existsForCouponRoundAndMember(10L, 1L))
                 .isTrue();
-        assertThat(issuanceRepository.existsByCouponIdAndMemberId(10L, 2L))
+        assertThat(issuanceRepository.existsForCouponRoundAndMember(10L, 2L))
                 .isFalse();
     }
 

@@ -166,7 +166,7 @@ class CouponIssueTransactionBoundaryIntegrationTest {
         @Bean
         IssuanceRepository issuanceRepository(BoundaryTrace trace) {
             IssuanceRepository repository = mock(IssuanceRepository.class);
-            when(repository.existsByCouponIdAndMemberId(10L, 20L))
+            when(repository.existsForCouponRoundAndMember(10L, 20L))
                     .thenAnswer(invocation -> {
                         trace.add("policy-existing");
                         assertReadOnlyTransaction();

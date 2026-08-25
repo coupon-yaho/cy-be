@@ -17,6 +17,23 @@ class CouponIssueObservationDependencyMapperTest {
     private final CouponIssueObservationDependencyMapper mapper =
             new CouponIssueObservationDependencyMapper();
 
+    @Test
+    void mappingCasesCoverEveryCouponIssueErrorCode() {
+        assertThat(CouponIssueErrorCode.values()).containsExactlyInAnyOrder(
+                CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST,
+                CouponIssueErrorCode.COUPON_ROUND_NOT_FOUND,
+                CouponIssueErrorCode.NOT_OPENED,
+                CouponIssueErrorCode.CAMPAIGN_CLOSED,
+                CouponIssueErrorCode.GRADE_NOT_ELIGIBLE,
+                CouponIssueErrorCode.ALREADY_ISSUED,
+                CouponIssueErrorCode.SOLD_OUT,
+                CouponIssueErrorCode.COUPON_ISSUE_SAVE_FAILED,
+                CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
+                CouponIssueErrorCode.MEMBER_NOT_FOUND,
+                CouponIssueErrorCode.INVALID_TRANSITION
+        );
+    }
+
     @ParameterizedTest
     @CsvSource({
             "INVALID_COUPON_ISSUE_REQUEST, 400, UNMAPPED, NONE",

@@ -49,7 +49,7 @@ public class CouponIssuePolicyValidator {
                         "couponRoundId=" + command.couponRoundId()
                 ));
         CouponIssuePolicy.validateIssuable(couponRound, command);
-        if (issuanceRepository.existsByCouponIdAndMemberId(
+        if (issuanceRepository.existsForCouponRoundAndMember(
                 command.couponRoundId(),
                 command.memberId()
         )) {

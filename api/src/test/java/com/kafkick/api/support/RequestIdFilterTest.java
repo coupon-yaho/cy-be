@@ -28,8 +28,6 @@ class RequestIdFilterTest {
             );
         }
         MockHttpServletResponse response = new MockHttpServletResponse();
-        mdcInsideChain = null;
-        attributeInsideChain = null;
         filter.doFilter(request, response, (req, res) -> {
             mdcInsideChain = MDC.get(MDC_KEY);
             attributeInsideChain = req.getAttribute(

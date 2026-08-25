@@ -69,12 +69,12 @@ class CouponIssuePolicyValidatorTest {
     void acceptsEligibleMemberWithoutExistingIssuance() {
         when(couponRoundRepository.findById(10L))
                 .thenReturn(Optional.of(couponRound(CouponRoundStatus.OPEN)));
-        when(issuanceRepository.existsByCouponIdAndMemberId(10L, 20L))
+        when(issuanceRepository.existsForCouponRoundAndMember(10L, 20L))
                 .thenReturn(false);
 
         validator().validate(command(MembershipGrade.GOLD, ISSUED_AT));
 
-        verify(issuanceRepository).existsByCouponIdAndMemberId(10L, 20L);
+        verify(issuanceRepository).existsForCouponRoundAndMember(10L, 20L);
     }
 
     @Test
@@ -94,7 +94,7 @@ class CouponIssuePolicyValidatorTest {
         );
 
         verify(issuanceRepository, never())
-                .existsByCouponIdAndMemberId(10L, 20L);
+                .existsForCouponRoundAndMember(10L, 20L);
     }
 
     @Test
@@ -109,7 +109,7 @@ class CouponIssuePolicyValidatorTest {
         );
 
         verify(issuanceRepository, never())
-                .existsByCouponIdAndMemberId(10L, 20L);
+                .existsForCouponRoundAndMember(10L, 20L);
     }
 
     @Test
@@ -124,7 +124,7 @@ class CouponIssuePolicyValidatorTest {
         );
 
         verify(issuanceRepository, never())
-                .existsByCouponIdAndMemberId(10L, 20L);
+                .existsForCouponRoundAndMember(10L, 20L);
     }
 
     @Test
@@ -132,13 +132,49 @@ class CouponIssuePolicyValidatorTest {
     void rejectsExistingIssuance() {
         when(couponRoundRepository.findById(10L))
                 .thenReturn(Optional.of(couponRound(CouponRoundStatus.OPEN)));
-        when(issuanceRepository.existsByCouponIdAndMemberId(10L, 20L))
+        when(issuanceRepository.existsForCouponRoundAndMember(10L, 20L))
                 .thenReturn(true);
 
         assertErrorCode(
                 command(MembershipGrade.GOLD, ISSUED_AT),
                 CouponIssueErrorCode.ALREADY_ISSUED
         );
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 회차는 중복 발급 조회 전에 거부한다")
+    void rejectsMissingCouponRoundBeforeDuplicateLookup() {
+        when(couponRoundRepository.findById(10L))
+                .thenReturn(Optional.empty());
+
+        assertErrorCode(
+                command(MembershipGrade.GOLD, ISSUED_AT),
+                CouponIssueErrorCode.COUPON_ROUND_NOT_FOUND
+        );
+
+        verify(issuanceRepository, never())
+                .existsForCouponRoundAndMember(10L, 20L);
+    }
+
+    @Test
+    @DisplayName("필수 요청 값이 없으면 Repository 조회 전에 거부한다")
+    void rejectsInvalidCommandBeforeRepositoryLookup() {
+        CouponIssueCommand invalidCommand = new CouponIssueCommand(
+                10L,
+                null,
+                MembershipGrade.GOLD,
+                "request-1",
+                ISSUED_AT
+        );
+
+        assertErrorCode(
+                invalidCommand,
+                CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST
+        );
+
+        verify(couponRoundRepository, never()).findById(10L);
+        verify(issuanceRepository, never())
+                .existsForCouponRoundAndMember(10L, 20L);
     }
 
     private CouponIssuePolicyValidator validator() {
@@ -219,7 +255,7 @@ class CouponIssuePolicyValidatorTest {
         @Bean
         IssuanceRepository issuanceRepository() {
             IssuanceRepository repository = mock(IssuanceRepository.class);
-            when(repository.existsByCouponIdAndMemberId(10L, 20L))
+            when(repository.existsForCouponRoundAndMember(10L, 20L))
                     .thenAnswer(invocation -> {
                         assertThat(TransactionSynchronizationManager
                                 .isActualTransactionActive()).isTrue();

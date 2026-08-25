@@ -92,8 +92,11 @@ class CoreTransactionBoundaryTest {
                     methodName
             ).getAnnotation(Transactional.class);
 
-            assertThat(transactional).isNotNull();
+            assertThat(transactional)
+                    .as("IdempotencyExecutionService.%s", methodName)
+                    .isNotNull();
             assertThat(transactional.propagation())
+                    .as("IdempotencyExecutionService.%s", methodName)
                     .isEqualTo(Propagation.NEVER);
         }
     }
