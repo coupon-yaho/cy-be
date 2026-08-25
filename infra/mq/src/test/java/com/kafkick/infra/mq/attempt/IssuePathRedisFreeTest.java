@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 
@@ -87,10 +86,16 @@ class IssuePathRedisFreeTest {
         }
     }
 
-    /** 목록이 비면 위 테스트가 아무것도 안 보고 통과한다. */
+    /**
+     * 목록이 비면 위 테스트가 아무것도 안 보고 통과한다.
+     *
+     * <p>⚠️ 앞서 이 단언은 {@code Stream.of(REDIS_MARKERS).count()} 였다. 그건 리스트 <b>하나</b>를
+     * 원소로 갖는 스트림이라 값이 언제나 1 이고, {@code REDIS_MARKERS} 를 통째로 비워도 통과했다 —
+     * 빈 목록을 막으려던 가드가 정확히 빈 목록을 통과시켰다.
+     */
     @Test
     void theIssuePathListIsNotEmpty() {
         assertThat(ISSUE_PATH).isNotEmpty();
-        assertThat(Stream.of(REDIS_MARKERS).count()).isPositive();
+        assertThat(REDIS_MARKERS).isNotEmpty();
     }
 }

@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.core.observation.IssuanceFlowEvent;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -84,9 +85,13 @@ public class AttemptContractViolationCounter {
      * 지원하지 않는 {@code schemaVersion} 과 모르는 enum 값이 둘 다 {@code other} 로 떨어져,
      * 나눠 둔 의미가 사라진다.
      *
-     * <p>메시지 문자열로 가르는 것은 <b>깨지기 쉬운 판정이다.</b> Jackson 의 문구가 바뀌면
-     * 조용히 {@code other} 로 떨어진다 — 잘못 분류될 뿐 이벤트를 잃지는 않으므로 그 대가를
-     * 받아들인다. 대신 셋의 합은 어떤 경우에도 맞는다.
+     * <p>미지원 스키마는 {@link IssuanceFlowEvent#UNSUPPORTED_SCHEMA_MESSAGE} 를 <b>공유 상수로</b>
+     * 본다. 리터럴을 양쪽에 적어 두면 core 의 문구를 고치는 순간 이 분류가 조용히
+     * {@code other} 로 떨어진다.
+     *
+     * <p>알 수 없는 enum 은 그렇게 못 한다 — 그 문구는 Jackson 것이라 우리 상수가 없다.
+     * 라이브러리가 문구를 바꾸면 조용히 {@code other} 로 떨어진다. <b>잘못 분류될 뿐 이벤트를
+     * 잃지는 않고</b> 셋의 합은 어떤 경우에도 맞으므로 그 대가를 받아들인다.
      */
     static String classify(Throwable failure) {
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
@@ -94,7 +99,7 @@ public class AttemptContractViolationCounter {
             if (message == null) {
                 continue;
             }
-            if (message.contains("지원하지 않는 이벤트 스키마 버전")) {
+            if (message.contains(IssuanceFlowEvent.UNSUPPORTED_SCHEMA_MESSAGE)) {
                 return DomainMeterNames.VIOLATION_UNSUPPORTED_SCHEMA;
             }
             if (message.contains("not one of the values accepted for Enum class")

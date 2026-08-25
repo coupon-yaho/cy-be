@@ -125,12 +125,15 @@ public final class AttemptLiveStream implements AttemptLiveSink, AttemptLiveRead
         String cursor = normalize(afterCursor);
         if (cursor == null) {
             // 최초 조회이거나 형식이 깨진 커서다. 둘 다 머리부터 읽는다.
-            return page(readFrom(STREAM_START, limit), null, expiredForBrokenCursor(afterCursor), limit);
+            // 화면에 실을 limit 건 + hasMore 탐침 한 건.
+            return page(readFrom(STREAM_START, limit + 1), null, expiredForBrokenCursor(afterCursor), limit);
         }
 
         // 커서를 포함해 읽는다. 커서 자신이 돌아오는지가 만료 판정이다 — 판정과 읽기가 한 왕복
         // 안에 있어야 그 사이에 트리밍이 끼어들 수 없다.
-        List<MapRecord<String, Object, Object>> fromCursor = readFrom(cursor, limit + 1);
+        // 커서 자신 + limit 건 + hasMore 탐침 한 건. 커서가 살아 있으면 아래에서 그 한 건을
+        // 잘라 내므로, 여기서 +2 를 하지 않으면 커서 경로의 hasMore 가 영구히 false 가 된다.
+        List<MapRecord<String, Object, Object>> fromCursor = readFrom(cursor, limit + 2);
         if (fromCursor.isEmpty()) {
             // 커서 이후가 비었다. 새 항목이 없는 것과 커서가 트림됐는데 그 뒤로도 아무것도 안
             // 들어온 것을 구분할 방법이 없다. 둘 중 "만료" 라고 말하는 쪽이 더 나쁘다 —
@@ -153,15 +156,20 @@ public final class AttemptLiveStream implements AttemptLiveSink, AttemptLiveRead
     }
 
     /**
-     * {@code from} 부터 <b>포함해서</b> 읽는다.
+     * {@code from} 부터 <b>포함해서</b> 정확히 {@code count} 건을 읽는다.
      *
-     * <p>{@code count} 는 화면에 실을 수보다 하나 많다. 마지막 한 건은 {@code hasMore} 를
-     * <b>세는 것이 아니라 보고</b> 판정하기 위한 것이다 — XLEN 으로 남은 수를 따로 물으면 그
-     * 사이에 들어온 것까지 세어, 아무것도 안 남았는데 {@code hasMore=true} 가 되는 창이 생긴다.
+     * <p><b>여기서는 아무것도 더하지 않는다.</b> 예전에는 이 메서드가 몰래 {@code +1} 을 했고
+     * 호출부도 각자 더해서, 커서 경로는 {@code limit + 2} 를 머리 경로는 {@code limit + 1} 을
+     * 읽었다. 결과는 우연히 맞았지만 "몇 건을 읽는가" 의 규약이 호출부마다 달랐다.
+     *
+     * <p>두 경로가 필요한 여유분이 실제로 다르다 — 머리 경로는 {@code hasMore} 탐침 한 건,
+     * 커서 경로는 거기에 커서 자신 한 건이 더 필요하다(살아 있으면 잘라 낸다). 그래서 계산을
+     * 호출부에 두고 이유를 그 자리에 적는다. 안쪽으로 몰면 커서 경로의 {@code hasMore} 가
+     * 영구히 {@code false} 가 된다.
      */
     private List<MapRecord<String, Object, Object>> readFrom(String from, int count) {
         List<MapRecord<String, Object, Object>> records = redis.opsForStream()
-                .range(STREAM_KEY, Range.closed(from, STREAM_END), Limit.limit().count(count + 1));
+                .range(STREAM_KEY, Range.closed(from, STREAM_END), Limit.limit().count(count));
         return records == null ? List.of() : records;
     }
 

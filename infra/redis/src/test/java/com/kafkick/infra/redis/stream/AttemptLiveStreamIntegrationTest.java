@@ -97,6 +97,35 @@ class AttemptLiveStreamIntegrationTest {
         assertThat(second.hasMore()).isFalse();
     }
 
+    /**
+     * <b>살아 있는 커서 뒤에도 {@code hasMore} 가 선다.</b>
+     *
+     * <p>커서 경로는 커서 자신이 한 자리를 먹는다. 읽는 건수를 {@code limit + 1} 로만 잡으면
+     * 잘라 낸 뒤 남는 것이 정확히 {@code limit} 이라 {@code hasMore} 가 <b>영구히 false</b> 가
+     * 된다 — 화면은 뒤에 이벤트가 밀려 있어도 "다 봤다" 로 읽는다.
+     *
+     * <p>기존 테스트로는 이 결손이 안 잡혔다. 커서 경로에서 {@code hasMore=true} 를 기대하는
+     * 단언이 하나도 없었기 때문이다(만료 경로에만 있었다).
+     */
+    @Test
+    void reportsHasMoreOnTheCursorPathToo() {
+        for (int i = 1; i <= 5; i++) {
+            stream.append(entry(i));
+        }
+
+        AttemptLivePage first = stream.readAfter(null, 2);
+        assertThat(first.entries()).extracting(AttemptLiveEntry::memberId).containsExactly(1L, 2L);
+
+        AttemptLivePage second = stream.readAfter(first.nextCursor(), 2);
+
+        assertThat(second.entries()).extracting(AttemptLiveEntry::memberId).containsExactly(3L, 4L);
+        assertThat(second.hasMore()).as("뒤에 5번이 남아 있다").isTrue();
+
+        AttemptLivePage third = stream.readAfter(second.nextCursor(), 2);
+        assertThat(third.entries()).extracting(AttemptLiveEntry::memberId).containsExactly(5L);
+        assertThat(third.hasMore()).isFalse();
+    }
+
     /** 새 항목이 없으면 빈 페이지이고 커서는 그대로다. */
     @Test
     void returnsAnEmptyPageAndKeepsTheCursorWhenNothingIsNew() {

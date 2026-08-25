@@ -174,13 +174,15 @@ class MeterEventRecorderTest {
     }
 
     /**
-     * 재생이 아닌 거절은 그대로 센다.
+     * 재생이 아닌 거절과 대기 등록은 그대로 센다.
      *
      * <p>위 테스트만 두면 "결과 미터를 통째로 끈" 구현도 초록이다 — 두 분기가 한 쌍이어야
-     * {@code replayed} 가 실제로 술어로 쓰이는지가 고정된다.
+     * {@code replayed} 가 실제로 술어로 쓰이는지가 고정된다. 거절({@code ALREADY_ISSUED})과
+     * 대기 등록({@code QUEUED})을 함께 보는 것은 {@code recordIssueResult} 와
+     * {@code recordEntryResult} 가 각각 다른 분기를 타기 때문이다.
      */
     @Test
-    void countsRejectionsThatAreNotReplays() {
+    void countsRejectionsAndQueueRegistrationsThatAreNotReplays() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);

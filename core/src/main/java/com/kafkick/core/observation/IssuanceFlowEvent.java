@@ -34,11 +34,21 @@ public record IssuanceFlowEvent(
 
     public static final int CURRENT_SCHEMA_VERSION = 1;
 
+    /**
+     * 미지원 스키마 거부 메시지. <b>상수인 이유는 컨슈머가 이 문구로 원인을 가르기 때문이다.</b>
+     *
+     * <p>{@code schemaVersion != 1} 이면 역직렬화가 이 예외로 터지고, 컨슈머는 그것을
+     * {@code unsupported_schema} 로 분류해 격리 카운터를 올린다. 문구를 리터럴로 양쪽에 적어
+     * 두면 여기를 고치는 순간 저쪽 분류가 <b>조용히</b> {@code other} 로 떨어진다 — 이벤트를
+     * 잃지는 않지만 배포 직후 무엇이 격리되고 있는지 지표가 말해 주지 못한다.
+     */
+    public static final String UNSUPPORTED_SCHEMA_MESSAGE = "지원하지 않는 이벤트 스키마 버전입니다.";
+
     // grade 조회 전 실패해도 이벤트 기록은 중단하지 않는다.
     public IssuanceFlowEvent {
         // 미지원 버전의 역직렬화 실패는 OBS-15가 DLT로 격리한다.
         if (schemaVersion != CURRENT_SCHEMA_VERSION) {
-            throw new IllegalArgumentException("지원하지 않는 이벤트 스키마 버전입니다.");
+            throw new IllegalArgumentException(UNSUPPORTED_SCHEMA_MESSAGE);
         }
         Objects.requireNonNull(eventId, "eventId");
         Objects.requireNonNull(eventType, "eventType");

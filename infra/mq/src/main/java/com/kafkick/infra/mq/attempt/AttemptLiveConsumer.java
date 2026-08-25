@@ -2,8 +2,12 @@ package com.kafkick.infra.mq.attempt;
 
 import java.time.Clock;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 
@@ -41,6 +45,10 @@ import io.micrometer.core.instrument.MeterRegistry;
  */
 public class AttemptLiveConsumer {
 
+    private static final Logger log = LoggerFactory.getLogger(AttemptLiveConsumer.class);
+    private static final long SUMMARY_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
+
+    private final AtomicLong nextSummaryAt = new AtomicLong(System.nanoTime());
     private final AttemptLiveSink sink;
     private final StratifiedSampler sampler;
     private final Clock clock;
@@ -108,7 +116,28 @@ public class AttemptLiveConsumer {
                     event, record.topic(), record.partition(), record.offset(), clock.instant())));
         } catch (RuntimeException failure) {
             appendFailures.increment();
+            logCauseAtMostOncePerInterval(failure);
         }
+    }
+
+    /**
+     * 삼킨 실패의 <b>원인</b>을 남긴다. 카운터만으로는 연결 거부·타임아웃·직렬화 오류가
+     * 구분되지 않아, 대응이 전혀 다른 셋이 같은 숫자로 보인다.
+     *
+     * <p>간격을 제한한다. Redis 가 끊긴 구간에서는 이 경로가 초당 수백 번 열리고, 이 저장소는
+     * 동기 ConsoleAppender 라 건당 로그가 그대로 컨슈머 처리량이 된다.
+     *
+     * <p><b>이벤트를 싣지 않는다.</b> 예외의 클래스 이름과 메시지만 남긴다 — 페이로드를 통째로
+     * 찍는 것은 이 저장소가 {@code LoggingProducerListener} 를 걷어내면서 이미 금지한 형태다.
+     */
+    private void logCauseAtMostOncePerInterval(RuntimeException failure) {
+        long now = System.nanoTime();
+        long due = nextSummaryAt.get();
+        if (now - due < 0 || !nextSummaryAt.compareAndSet(due, now + SUMMARY_INTERVAL_NANOS)) {
+            return;
+        }
+        log.warn("live 버퍼 쓰기를 삼켰다. offset 은 넘어간다. cause={}, message={}",
+                failure.getClass().getSimpleName(), failure.getMessage());
     }
 
     private static Counter samplingCounter(MeterRegistry meterRegistry, String decision) {

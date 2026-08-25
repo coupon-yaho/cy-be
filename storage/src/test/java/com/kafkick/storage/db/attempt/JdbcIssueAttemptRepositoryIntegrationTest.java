@@ -163,6 +163,35 @@ class JdbcIssueAttemptRepositoryIntegrationTest {
     }
 
     /**
+     * 큐 컬럼 둘이 <b>이벤트 종류마다 제자리에</b> 들어간다.
+     *
+     * <p>위 테스트는 건수만 세고, 컬럼 값을 보는 테스트는 {@code ISSUE_RESULT} 하나뿐인데 거기서는
+     * 두 값이 전부 null 이다. 그래서 {@code queue_position} 과 {@code queue_sequence} 를 서로
+     * 바꿔 넣어도 지금까지는 아무 테스트도 안 깨졌다 — 두 컬럼이 같은 타입이라 컴파일도 통과한다.
+     */
+    @Test
+    void storesQueueColumnsInTheRightPlaceForEachEventShape() {
+        IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(UUID::randomUUID);
+
+        repository.append(record(factory.entry(context(), 202, null, Dependency.NONE, 3L, 8L), 0, 1L));
+        repository.append(record(factory.admitted(context(), 12L), 0, 2L));
+
+        assertThat(jdbcTemplate.queryForMap(
+                "SELECT queue_position, queue_sequence, http_status FROM issue_attempts"
+                        + " WHERE event_type = 'ENTRY_RESULT'"))
+                .containsEntry("queue_position", 3L)
+                .containsEntry("queue_sequence", 8L)
+                .containsEntry("http_status", 202);
+        assertThat(jdbcTemplate.queryForMap(
+                "SELECT queue_position, queue_sequence, http_status FROM issue_attempts"
+                        + " WHERE event_type = 'QUEUE_ADMITTED'"))
+                .as("QUEUE_ADMITTED 에는 위치가 없고 순번만 있다")
+                .containsEntry("queue_position", null)
+                .containsEntry("queue_sequence", 12L)
+                .containsEntry("http_status", null);
+    }
+
+    /**
      * 이 티켓의 인수 조건 — <b>매핑 없는 ErrorCode 로 실패한 이벤트가 UNMAPPED 로 남는다.</b>
      *
      * <p>DEC-10. 매핑이 없다는 것은 대개 <b>새 오류가 방금 배포됐다</b>는 뜻이고, 그 순간이

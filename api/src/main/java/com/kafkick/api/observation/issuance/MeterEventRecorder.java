@@ -13,9 +13,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Records the local, lossless campaign meters from OBS-24 flow events.
  *
- * <p>Stage meters count replays; outcome meters do not. {@code ISSUE_ATTEMPT} is a stage and counts
- * every retry (see {@code EventType}), while {@code app.issuance.outcome} must stay one increment per
- * logical result — a replay re-emits a stored result rather than computing a new one, so counting it
+ * <p>{@code ISSUE_ATTEMPT} is the one meter that counts replays: it is a stage, not a result, so every
+ * retry increments it (see {@code EventType}). Every other meter here — the per-campaign success and
+ * admitted counters and {@code app.issuance.outcome} — skips replays. {@code app.issuance.outcome} in
+ * particular must stay one increment per logical result — a replay re-emits a stored result rather than computing a new one, so counting it
  * inflates the denominator of every issue-rate and failure-rate panel with no exception and no log.
  * That is why both result paths test {@code replayed()} before the {@code reasonCode} branch.
  */

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -238,15 +239,20 @@ class AttemptConsumerKafkaIntegrationTest {
     @Test
     void doesNotSkipArchiveRecordsWhenTheDatabaseIsDown() throws Exception {
         SimpleMeterRegistry violationMeters = new SimpleMeterRegistry();
+        AtomicInteger attempts = new AtomicInteger();
         AttemptArchive brokenArchive = record -> {
+            attempts.incrementAndGet();
             throw new IllegalStateException("simulated database outage");
         };
         startArchive(brokenArchive, "outage-archive", Clock.systemUTC(), violationMeters);
 
         publish(0, MAPPER.writeValueAsString(attempt(601L)));
 
-        // 재시도 간격 몇 번을 지나도 offset 이 안 넘어가야 한다.
-        Thread.sleep(AttemptConsumerConfig.ARCHIVE_RETRY_INTERVAL_MS * 3);
+        // 고정 대기가 아니라 재시도가 실제로 세 번 돈 것을 기다린다. 컨슈머 스케줄링이 늦으면
+        // sleep 은 "아직 한 번도 안 돌았는데 offset 이 안 넘어갔다" 를 성공으로 읽는다 —
+        // 검사하려던 것이 재시도인데 그 재시도가 없었던 회차에서도 초록이 된다.
+        await().atMost(SETTLE).untilAsserted(() ->
+                assertThat(attempts.get()).as("재시도가 실제로 돌아야 한다").isGreaterThanOrEqualTo(3));
 
         assertThat(committedOffset("outage-archive", 0))
                 .as("적재 실패를 건너뛰면 보존 원본이 조용히 빈다")
@@ -350,25 +356,12 @@ class AttemptConsumerKafkaIntegrationTest {
                 && !container.getAssignedPartitions().isEmpty());
     }
 
-    private static ConcurrentKafkaListenerContainerFactory<String, IssuanceFlowEvent> liveFactory() {
-        AttemptConsumerConfig config = new AttemptConsumerConfig();
-        return config.attemptLiveListenerContainerFactory(
-                config.attemptLiveConsumerFactory(connection(), MAPPER), violations());
-    }
 
-    private static ConcurrentKafkaListenerContainerFactory<String, IssuanceFlowEvent> archiveFactory() {
-        AttemptConsumerConfig config = new AttemptConsumerConfig();
-        return config.attemptArchiveListenerContainerFactory(
-                config.attemptArchiveConsumerFactory(connection(), MAPPER), violations());
-    }
 
     private static KafkaConnectionProperties connection() {
         return new KafkaConnectionProperties(KAFKA.getBootstrapServers());
     }
 
-    private static AttemptContractViolationCounter violations() {
-        return new AttemptContractViolationCounter(new SimpleMeterRegistry());
-    }
 
     private static void publish(int partition, String payload) throws Exception {
         producer.send(new ProducerRecord<>(

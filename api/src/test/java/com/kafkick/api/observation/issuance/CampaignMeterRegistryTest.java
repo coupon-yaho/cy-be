@@ -319,13 +319,21 @@ class CampaignMeterRegistryTest {
     }
 
     /**
-     * 재시도 대기 중에 다시 등록된 미터를 재시도가 걷어 가지 않는다.
+     * 실패했던 회수가 재시도로 끝나면 tombstone 이 박혀 재등록이 막힌다.
      *
-     * <p>이 창은 인라인 실행기에서는 폭이 0 이라 원리적으로 만들 수 없다. 큐잉 실행기로만
-     * 재현된다 — 살아 있는 회차의 시계열이 조용히 끊기는 경로다.
+     * <p>이름을 바꿨다 — 원래는 "재시도 대기 중에 등록된 미터를 안 걷어 간다" 였는데, 이 테스트는
+     * 그 창에서 등록을 시도하지 않으므로 그 계약을 검증하지 않는다. 실제로 고정하는 것은
+     * <b>재시도가 끝난 뒤</b>의 재등록 차단이다.
+     *
+     * <p>큐잉 실행기를 쓰는 이유는 남는다 — 인라인 실행기에서는 재시도가 첫 호출 안에서
+     * 재귀로 끝나 "여러 번에 걸쳐 끝난다" 는 상태 자체가 없다.
+     *
+     * <p>TODO(@SH-Seol · 후속 티켓): 재시도 대기 창에서 같은 회차가 재등록됐을 때 그 새 미터를
+     * 걷어 가지 않는지는 아직 안 본다. {@code campaigns.remove(couponId, pending.campaignMeters())}
+     * 2-인자 remove 로 막을 수 있는 자리다.
      */
     @Test
-    void doesNotRetireMetersThatWereRegisteredAfterTheFailedAttempt() {
+    void blocksReRegistrationOnceTheRetrySucceedsAndTombstonesTheCampaign() {
         FailingClock clock = new FailingClock(Instant.parse("2026-08-24T00:00:00Z"), 2, 1);
         QueueingScheduledExecutor executor = new QueueingScheduledExecutor();
         SimpleMeterRegistry meters = new SimpleMeterRegistry();

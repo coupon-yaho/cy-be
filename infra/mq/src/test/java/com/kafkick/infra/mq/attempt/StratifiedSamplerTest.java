@@ -8,7 +8,10 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -149,8 +152,9 @@ class StratifiedSamplerTest {
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {
             CountDownLatch start = new CountDownLatch(1);
+            List<Future<?>> running = new ArrayList<>();
             for (int i = 0; i < threads; i++) {
-                pool.submit(() -> {
+                running.add(pool.submit(() -> {
                     start.await();
                     for (int n = 0; n < perThread; n++) {
                         if (sampler.sample(attempt())) {
@@ -158,11 +162,14 @@ class StratifiedSamplerTest {
                         }
                     }
                     return null;
-                });
+                }));
             }
             start.countDown();
             pool.shutdown();
             assertThat(pool.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+            // Future 를 안 보면 스레드 하나가 예외로 조기 종료해도 남은 스레드가 상한을 채워
+            // 초록이 된다 — 동시성 결함을 재려던 테스트가 그 결함을 숨긴다.
+            drain(running);
         } finally {
             pool.shutdownNow();
         }
@@ -185,9 +192,10 @@ class StratifiedSamplerTest {
         ExecutorService pool = Executors.newFixedThreadPool(8);
         try {
             CountDownLatch start = new CountDownLatch(1);
+            List<Future<?>> running = new ArrayList<>();
             for (int i = 0; i < 8; i++) {
                 int lane = i % reasons.length;
-                pool.submit(() -> {
+                running.add(pool.submit(() -> {
                     start.await();
                     for (int n = 0; n < 300; n++) {
                         if (sampler.sample(rejected(statuses[lane], reasons[lane]))) {
@@ -195,11 +203,12 @@ class StratifiedSamplerTest {
                         }
                     }
                     return null;
-                });
+                }));
             }
             start.countDown();
             pool.shutdown();
             assertThat(pool.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+            drain(running);
         } finally {
             pool.shutdownNow();
         }
@@ -207,6 +216,13 @@ class StratifiedSamplerTest {
         // 층은 (eventType, httpStatus) 다 — 409 짜리 둘은 같은 층이라 층은 셋이다.
         // 층 셋 × 최소 10 = 30, 거기에 전체 상한 1 이 더해질 자리는 이미 최소 보장이 다 썼다.
         assertThat(admitted.get()).isEqualTo(30);
+    }
+
+    /** 작업 스레드에서 난 예외를 테스트 스레드로 끌어올린다. */
+    private static void drain(List<Future<?>> running) throws Exception {
+        for (Future<?> task : running) {
+            task.get();
+        }
     }
 
     private static StratifiedSampler sampler(AttemptSamplingProperties properties) {
