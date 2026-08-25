@@ -43,6 +43,11 @@ class ExpirationJdbcAdapterTest {
     /** 픽스처보다 크다 — 청크가 잘리지 않게 하려는 것이지 무제한이라는 뜻이 아니다. */
     private static final int LIMIT_ABOVE_FIXTURE = 1000;
 
+    /** 마지막 {@link #expireChunk} 가 잡은 상한. 이력·재고 문장이 이 값을 받는다. */
+    private long chunkBoundary;
+    /** 마지막 {@link #expireChunk} 가 고른 회차. 재고 차감이 이 값을 받는다. */
+    private long chunkCouponId;
+
     @Autowired
     private ExpirationJdbcAdapter adapter;
 
@@ -93,11 +98,7 @@ class ExpirationJdbcAdapterTest {
         return adapter.expireBatch(AS_OF, WROTE_AT, afterId, chunk.lastId(), chunk.couponId());
     }
 
-    /** 마지막 {@link #expireChunk} 가 잡은 상한. 이력·재고 문장이 이 값을 받는다. */
-    private long chunkBoundary;
 
-    /** 마지막 {@link #expireChunk} 가 고른 회차. 재고 차감이 이 값을 받는다. */
-    private long chunkCouponId;
 
     private String statusOf(long id) {
         return jdbcClient.sql("SELECT status FROM issuances WHERE id = :id")

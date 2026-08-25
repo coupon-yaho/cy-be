@@ -95,6 +95,10 @@ class ExpirationLockScopeTest {
     /** 회차 하나가 담을 수 있는 재고. 넘기면 {@code ck_stock_range} 가 거부한다. */
     private static final int STOCK_PER_COUPON = 100;
 
+    /** 마지막 {@link #expireChunk} 가 잡은 상한·회차. 뒤 문장들이 이 값을 받는다. */
+    private long chunkBoundary;
+    private long chunkCouponId;
+
     @Autowired
     private ExpirationJdbcAdapter adapter;
 
@@ -126,9 +130,6 @@ class ExpirationLockScopeTest {
         seed.clear();
     }
 
-    /** 마지막 {@link #expireChunk} 가 잡은 상한·회차. 뒤 문장들이 이 값을 받는다. */
-    private long chunkBoundary;
-    private long chunkCouponId;
 
     /**
      * <b>잡의 청크 한 번을 그대로 밟는다</b> — 후보 → 연속부 → 재고 잠금 → 만료.
