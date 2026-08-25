@@ -8,7 +8,7 @@ import java.util.List;
  * 안 본 채로 남는다.
  *
  * <p><b>만드는 방향이 반대다.</b> 시드는 CLEAN 전용 제약을 <b>안 걸고</b>, cy-be 는 전부 건 뒤
- * {@code V900__drop_clean_only_constraints.sql} 로 <b>떼어 낸다.</b> 같은 최종 상태에 도달하는지가
+ * {@code V9999999999__drop_clean_only_constraints.sql} 로 <b>떼어 낸다.</b> 같은 최종 상태에 도달하는지가
  * 이 대조의 질문이고, 걷어내는 쪽은 자동 생성된 제약 이름까지 알아야 해서 갈리기 쉽다.
  */
 @CorruptRepositoryTest

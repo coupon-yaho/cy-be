@@ -3,7 +3,7 @@
 `SchemaParityTest` 가 읽는다. **손으로 고치지 않는다.**
 
 ```
-원본   coupon-yaho/cy-seed-data-generator @ 2e0556e  (2026-08-25)  ddl/
+원본   coupon-yaho/cy-seed-data-generator @ 7e29141  (2026-08-25)  ddl/
 사본   이 디렉터리                                  바이트 동일
 ```
 
@@ -25,7 +25,7 @@ CI 는 옆 저장소를 못 읽는다. 그렇다고 대조를 포기하면 두 D
 | | 이유 |
 |---|---|
 | `90_perf_indexes_optional.sql` | `--with-perf-indexes` 전용 **처방전**이다. 보조 인덱스가 기본 스키마에 없는 것은 누락이 아니라 의도 — 300만 건에서 실행계획을 보고 인덱스를 처방해 개선폭을 재는 것이 과제의 일부다 |
-| `BATCH_*` · `flyway_schema_history` | 잡 실행 이력이지 도메인이 아니다. `V2__batch_metadata.sql` 이 만들고 시드는 알 필요가 없다 |
+| `BATCH_*` · `flyway_schema_history` | 잡 실행 이력이지 도메인이 아니다. `V11__batch_metadata.sql` 이 만들고 시드는 알 필요가 없다 |
 
 ## 갱신과 검증은 다른 일이다
 

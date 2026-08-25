@@ -24,7 +24,7 @@ public class MySqlContainerConfig {
      * 기본 collation 이 전부 버전에 묶여 있고, 아래 설정이 <i>"운영 기본값과 같다"</i> 는 주장도
      * 그렇다. 파리티 테스트가 컬럼 collation 까지 대조하므로 이 축이 흔들리면 거기서 먼저 운다.
      *
-     * <p><b>{@code V10__issuance_status_check.sql} 의 <i>"시드·테스트·CI 는 8.0.35 로
+     * <p><b>{@code V2026082509__issuance_status_check.sql} 의 <i>"시드·테스트·CI 는 8.0.35 로
      * 고정돼 있다"</i> 는 문장은 이 결정으로 낡았다.</b> 그 파일은 이미 적용된 마이그레이션이라
      * 주석만 고쳐도 Flyway 체크섬이 깨지므로 손대지 않는다 — 정정을 여기 둔다.
      *

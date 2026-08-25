@@ -82,7 +82,7 @@ public class SchemaPresenceGuard implements ApplicationRunner {
      * 그래서 메시지가 그 사실과 목록을 함께 져야 사람이 절차에서 빠뜨리지 않는다.
      */
     private static final String META_MIGRATIONS =
-            "V2__batch_metadata.sql · V14__ix_batch_job_execution_lookup.sql · V15__ix_batch_job_execution_history.sql";
+            "V11__batch_metadata.sql · V2026082513__ix_batch_job_execution_lookup.sql · V2026082514__ix_batch_job_execution_history.sql";
 
     private final VerificationRuleRepository rules;
 

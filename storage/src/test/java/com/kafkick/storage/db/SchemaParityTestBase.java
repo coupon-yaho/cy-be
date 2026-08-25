@@ -85,7 +85,7 @@ abstract class SchemaParityTestBase {
      * cy-be 에만 있는 테이블이 있는데도 초록이 된다. 이 저장소는 같은 함정을
      * {@code CorruptSchemaShapeTest} 에서 이미 경계했다 — <i>"이름으로 고정하면 검사가
      * 공허해진다"</i>. 제외의 근거는 "이름이 어떻게 시작하나" 가 아니라
-     * <b>"{@code V2__batch_metadata.sql} 이 만들었나"</b> 다.
+     * <b>"{@code V11__batch_metadata.sql} 이 만들었나"</b> 다.
      */
     static final Set<String> BATCH_METADATA = Set.of(
             "BATCH_JOB_INSTANCE", "BATCH_JOB_INSTANCE_SEQ",
@@ -258,23 +258,23 @@ abstract class SchemaParityTestBase {
 
     /**
      * <b>제외 목록을 손으로 관리하면 낡는다.</b> 실제로 낡아 있었다 — Spring Batch 5 의 시퀀스
-     * 테이블 이름을 {@code BATCH_JOB_SEQ} 로 적었는데 {@code V2} 가 만드는 것은
+     * 테이블 이름을 {@code BATCH_JOB_SEQ} 로 적었는데 {@code V11__batch_metadata.sql} 이 만드는 것은
      * {@code BATCH_JOB_INSTANCE_SEQ} 였다. 메타 테이블이 늘거나 이름이 바뀌면 여기서 잡힌다.
      */
     @Test
-    @DisplayName("제외 목록이 V2 가 만드는 배치 메타와 정확히 같다")
+    @DisplayName("제외 목록이 V11__batch_metadata.sql 이 만드는 배치 메타와 정확히 같다")
     void ignoreExactlyBatchMetadata() throws IOException {
-        String v2 = new String(new org.springframework.core.io.ClassPathResource(
-                "db/migration/V2__batch_metadata.sql").getContentAsByteArray(),
+        String batchMetadataSql = new String(new org.springframework.core.io.ClassPathResource(
+                "db/migration/V11__batch_metadata.sql").getContentAsByteArray(),
                 StandardCharsets.UTF_8);
         List<String> declared = java.util.regex.Pattern
                 .compile("CREATE TABLE\\s+`?(\\w+)`?", java.util.regex.Pattern.CASE_INSENSITIVE)
-                .matcher(v2).results()
+                .matcher(batchMetadataSql).results()
                 .map(m -> m.group(1))
                 .toList();
 
         assertThat(declared)
-                .as("V2 가 만드는 테이블이 늘었다면 BATCH_METADATA 도 같이 늘려야 한다")
+                .as("V11__batch_metadata.sql 이 만드는 테이블이 늘었다면 BATCH_METADATA 도 같이 늘려야 한다")
                 .isNotEmpty()
                 .allMatch(BATCH_METADATA::contains);
         assertThat(BATCH_METADATA)

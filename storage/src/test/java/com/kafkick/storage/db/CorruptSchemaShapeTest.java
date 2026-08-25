@@ -41,7 +41,7 @@ class CorruptSchemaShapeTest {
      *
      * <p>이름으로 고정하면 두 저장소가 같은 인덱스를 다르게 부르는 순간 검사가 공허해진다.
      * 실제로 그런 상태였다 — 시드는 {@code uk_coupon_code}, cy-be 는 인라인 UNIQUE 라 이름이
-     * {@code code} 였다({@code V6__name_unique_constraints.sql} 이 맞췄다).
+     * {@code code} 였다({@code V2026082505__name_unique_constraints.sql} 이 맞췄다).
      * 이름을 맞춘 뒤에도 이 검사는 이름을 보지 않는다 — 다시 갈릴 수 있고, 그때 공허해지면 안 된다.
      * 선두 컬럼만 봐도 부족하다 — {@code UNIQUE(member_id, coupon_id)} 는 선두가 {@code member_id}
      * 라 {@code coupon_id} 검사를 통과하는데 <b>유형 6 을 여전히 막는다.</b>
@@ -120,7 +120,7 @@ class CorruptSchemaShapeTest {
     }
 
     /**
-     * 떨어뜨리지 <b>않아야</b> 하는 것까지 같이 본다. {@code V900} 이 과하게 지우면
+     * 떨어뜨리지 <b>않아야</b> 하는 것까지 같이 본다. {@code V9999999999} 이 과하게 지우면
      * 오염과 무관한 사고(회차 중복 등)가 CORRUPT 에서만 조용히 통과하게 된다.
      */
     @Test

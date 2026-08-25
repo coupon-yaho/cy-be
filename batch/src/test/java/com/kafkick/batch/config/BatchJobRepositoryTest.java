@@ -49,7 +49,7 @@ import com.kafkick.storage.db.VerificationSeed;
  * </pre>
  *
  * <p><b>이것을 아무도 안 보고 있었다는 것이 진짜 문제였다.</b> 잡은 초록으로 끝나고,
- * {@code V2__batch_metadata.sql} 이 만든 아홉 테이블은 조용히 비어 있었다. 그 상태에서
+ * {@code V11__batch_metadata.sql} 이 만든 아홉 테이블은 조용히 비어 있었다. 그 상태에서
  * 코드 주석 셋이 거짓이 된다 — 중복 방지, 실행 이력, 진도 이어받기.
  *
  * <p><b>이 테스트가 확인하는 것은 앞 둘이다.</b> 진도 이어받기는 실제 잡을 중간에 죽여야 해서
@@ -169,7 +169,7 @@ class BatchJobRepositoryTest {
      * 다시 부른다 — {@code ResourcelessJobRepository} 도 같은 JVM 안에서는 그것을 막았다.
      *
      * <p>실제로 지켜야 하는 것은 <b>두 노드가 같은 순간에 같은 {@code asOf} 로 시작하는 것</b>
-     * 이다. 그때 막는 것은 격리 수준이 아니라 {@code V2__batch_metadata.sql} 의
+     * 이다. 그때 막는 것은 격리 수준이 아니라 {@code V11__batch_metadata.sql} 의
      * {@code JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)} 이고, 그 인덱스를 지우면 두 노드가 각자
      * 인스턴스를 만든다.
      *

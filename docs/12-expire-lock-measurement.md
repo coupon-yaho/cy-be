@@ -3,20 +3,36 @@
 보조 인덱스를 **일부러 빼 둔 채로** 만료 배치를 만들고, 무엇이 얼마나 나빠지는지 수치로 잰 뒤
 처방을 정한 기록이다. 전부 실행해서 얻은 값이고 재현 명령이 함께 있다.
 
-## 처방 셋 — 서로 다른 문제를 푼다
+> ### ⚠️ 약칭 — `IDX(status, expires_at)` · `IDX(updated_at, id)` 는 파일명이 아니다
+>
+> 본문이 인덱스를 짧게 부른다. **파일 이름은 날짜형이다.**
+>
+> | 이 문서의 약칭 | 실제 파일 |
+> |---|---|
+> | `IDX(status, expires_at)` | `V2026082510__issuance_status_expires_index.sql` |
+> | `IDX(updated_at, id)` | `V2026082511__issuance_updated_at_index.sql` |
+> | `V2026082515` | `V2026082501__issuance_status_id_index.sql` (§11) |
+>
+> 약칭을 그대로 두는 것은 본문 수십 곳에서 열자리 숫자를 읽는 비용이 더 크기 때문이다.
+> **연번을 날짜형으로 옮긴 이유**는 `feature/CY-15` 계보와 `main` 이 `V2`~`V15` 열넷을
+> 서로 다른 뜻으로 쓰고 있었기 때문이다 — 갈라진 지점 이후 양쪽이 독립적으로 번호를 쌓았고,
+> 그대로 머지되면 Flyway 가 같은 버전 둘을 본다.
+
+
+## 처방 넷 — 서로 다른 문제를 푼다
 
 | | 무엇을 푸나 | 근거 수치 |
 |---|---|---|
-| **`V11`** `(status, expires_at)` | 만료 대상을 **찾는** 비용 | 읽은 행 5,017 → **1** |
+| **`V2026082510`** `(status, expires_at)` | 만료 대상을 **찾는** 비용 | 읽은 행 5,017 → **1** |
 | **READ COMMITTED** (만료 Step) | 만료가 **발급을 막는** 것 | 발급 INSERT 1205 → **통과** |
-| **`V12`** `(updated_at, id)` | 청크 **경계를 구하는** 비용 | 첫 청크 200,017행 → **1,001** |
+| **`V2026082511`** `(updated_at, id)` | 청크 **경계를 구하는** 비용 | 첫 청크 200,017행 → **1,001** |
 | **`V2026082501`** `(status, id)` | 청크 **후보를 뽑는** 비용 | 16,999행 → **999** |
 
 하나로는 안 된다. 인덱스만 넣으면 발급이 계속 막히고, 격리만 내리면 테이블을 계속 훑는다.
 둘 다 넣어도 경계를 구하는 문장이 남는다.
 
-> **`V12` 가 풀던 문장은 지금 없다.** 락 순서를 뒤집으면서(§11) 경계를 후보에서 알게 되어
-> `lastExpiredId` 를 지웠다. `V12` 는 남긴다 — `appendExpireHistories` 가 아직
+> **`V2026082511` 이 풀던 문장은 지금 없다.** 락 순서를 뒤집으면서(§11) 경계를 후보에서 알게 되어
+> `lastExpiredId` 를 지웠다. `V2026082511` 은 남긴다 — `appendExpireHistories` 가 아직
 > `updated_at = :committedAt` 으로 방금 넘긴 집합을 찾고, 되읽기 둘도 그 축을 쓴다.
 > **그리고 그 문장이 지던 위험은 `V2026082501` 이 물려받았다** — 위쪽으로 열린 문장이 후보 조회로
 > 바뀌었을 뿐 성질은 같다.
@@ -40,8 +56,8 @@ bash docs/measurements/expire-lock-scope.sh
 | 축 | 무엇을 보나 | 어느 처방의 근거인가 |
 |---|---|---|
 | 락 (`probe`) | 발급·사용이 막히는가 | READ COMMITTED |
-| 스캔 (`scan_probe`) | 읽은 행 수(`Handler_read_*`) | `V11` |
-| 경계 (`boundary_probe`) | `LAST_EXPIRED_ID` 가 읽는 행 — **§11 에서 그 문장이 삭제됐다.** 스크립트를 다시 돌릴 때는 이 축을 후보 조회로 갈아끼워야 한다 | `V12` |
+| 스캔 (`scan_probe`) | 읽은 행 수(`Handler_read_*`) | `IDX(status, expires_at)` |
+| 경계 (`boundary_probe`) | `LAST_EXPIRED_ID` 가 읽는 행 — **§11 에서 그 문장이 삭제됐다.** 스크립트를 다시 돌릴 때는 이 축을 후보 조회로 갈아끼워야 한다 | `IDX(updated_at, id)` |
 | 후보 (`limit_probe`) | 후보 ≫ `LIMIT` 일 때 잠그는 행 | §7 의 대가 |
 
 **"읽은 행" 의 정의는 축마다 다르다.** 같은 이름으로 다른 것을 세고 있으니 표를 가로질러
@@ -50,15 +66,15 @@ bash docs/measurements/expire-lock-scope.sh
 | 축 | 합산하는 `Handler_read_*` | 왜 |
 |---|---|---|
 | 락 (`probe`) | — **읽은 행을 안 잰다.** 락 수와 1205 여부만 본다 | READ COMMITTED |
-| 스캔 (`scan_probe`) | `next` `rnd_next` `first` `key` | `V11` |
+| 스캔 (`scan_probe`) | `next` `rnd_next` `first` `key` | `IDX(status, expires_at)` |
 | **경계** (`boundary_probe`) | 위 넷 + **`last` `prev`** | `MAX(id)` 가 **역방향** 인덱스 스캔이라 그 둘이 이 문장의 실제 비용이다 |
-| 테스트 `rowsRead()` | `next` `rnd_next` `first` | 상한 단언용이라 진입 횟수(`key`)를 뺀다. 셋만으로도 `V12` 삭제는 잡힌다 — 돌연변이로 확인했다(310행 → 단언 실패) |
+| 테스트 `rowsRead()` | `next` `rnd_next` `first` | 상한 단언용이라 진입 횟수(`key`)를 뺀다. 셋만으로도 `IDX(updated_at, id)` 삭제는 잡힌다 — 돌연변이로 확인했다(310행 → 단언 실패) |
 
 스토리지 엔진이 실제로 넘긴 행이고 `EXPLAIN` 의 추정치가 아니다.
 
 **축을 나눈 이유가 있다.** 격리를 RC 로 내린 뒤로는 매치 안 된 행의 락을 즉시 놓으므로
 **인덱스가 없어도 락이 0** 이다. 락 축만 보면 인덱스가 사라진 것을 못 잡는다 —
-실제로 `V11` 을 지우는 돌연변이가 락 테스트를 전부 통과했다.
+실제로 `IDX(status, expires_at)` 을 지우는 돌연변이가 락 테스트를 전부 통과했다.
 
 운영은 300만 행이라 스캔·락 수는 그만큼 커진다. **발급 INSERT 통과 여부만 행 수와 무관하다** —
 막는 것이 행 개수가 아니라 잠긴 위치이기 때문이다(§3).
@@ -80,7 +96,7 @@ UPDATE issuances SET status = 'EXPIRED', updated_at = :committedAt
 
 > **지금 문장은 술어가 둘 더 있다.** `AND updated_at <= :committedAt`(캡처 창)과
 > `AND coupon_id NOT IN (:blockedCoupons)`(회차 격리, CY-347)이다. 아래 수치는 **그 둘이
-> 붙기 전에** 잰 값이고, 여기 적힌 결론(V11 을 고르느냐가 락과 스캔을 가른다)은 그대로다 —
+> 붙기 전에** 잰 값이고, 여기 적힌 결론(IDX(status, expires_at) 을 고르느냐가 락과 스캔을 가른다)은 그대로다 —
 > 술어가 붙어도 **훑는 양이 상한 안이라는 것**은 `ExpirationLockScopeTest` 의
 > `keepsScanBoundedWhenExclusionFiltersCandidates` 가 지킨다 — 재는 것은
 > `Handler_read_*` 로 센 **읽은 행 수**이지 실행계획 자체가 아니다. 계획을 바꾸는 변경이
@@ -108,7 +124,7 @@ auto-increment 로 뒤에 붙는 **신규 발급이 갈 곳을 잃는다.**
 
 ---
 
-## 2. `V11` — 만료 대상을 찾는 비용
+## 2. `IDX(status, expires_at)` — 만료 대상을 찾는 비용
 
 ```sql
 CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
@@ -221,10 +237,10 @@ READ COMMITTED 에서 InnoDB DML 을 오류 1665 로 거부한다. MySQL 8 기�
 
 ---
 
-## 5. `V12` — 경계를 구하는 비용
+## 5. `IDX(updated_at, id)` — 경계를 구하는 비용
 
 > **⚠️ 이 절이 잰 문장은 §11 에서 삭제됐다.** 락 순서를 뒤집으면서 경계를 후보에서 알게 되어
-> `LAST_EXPIRED_ID` 가 없어졌다. **`V12` 는 남긴다** — `APPEND_HISTORIES` 가 아직
+> `LAST_EXPIRED_ID` 가 없어졌다. **`IDX(updated_at, id)` 는 남긴다** — `APPEND_HISTORIES` 가 아직
 > `updated_at = :committedAt` 으로 방금 넘긴 집합을 찾고, 되읽기 둘도 그 축을 쓴다.
 > 아래 수치는 그 인덱스를 남기는 근거로만 유효하다. 지금 위쪽으로 열린 문장은 후보 조회이고,
 > 그쪽 수치는 §11 에 있다.
@@ -238,7 +254,7 @@ SELECT COALESCE(MAX(id), :afterId) FROM issuances
    AND expires_at < :asOf AND id > :afterId
 ```
 
-`updated_at` 이 어느 인덱스에도 없다. `V11` 은 `(status, expires_at)` 이라, 옵티마이저가 그것을
+`updated_at` 이 어느 인덱스에도 없다. `IDX(status, expires_at)` 은 `(status, expires_at)` 이라, 옵티마이저가 그것을
 고르면 **`EXPIRED` 이면서 기한이 지난 행 전부**를 범위로 잡고 각 행에서 `updated_at` 을 확인한다.
 
 ### 이미 만료된 행이 쌓여야 드러난다
@@ -248,8 +264,8 @@ SELECT COALESCE(MAX(id), :afterId) FROM issuances
 
 | 200,000행 · 이미 `EXPIRED` 150,000 누적 / 이번 대상 5,000 | 청크 1 | 3청크 합계 |
 |---|---:|---:|
-| `V11` 만 | **200,017** | **207,019** |
-| \+ `V12` | **1,001** | **3,003** |
+| `IDX(status, expires_at)` 만 | **200,017** | **207,019** |
+| \+ `IDX(updated_at, id)` | **1,001** | **3,003** |
 
 **첫 청크의 `afterId = 0` 이 결정적이다.** 진도는 **JobInstance 안에서만** 살고,
 스케줄러는 주기마다 `asOf` 를 새로 잡아 매번 다른 인스턴스를 만든다 — 그래서
@@ -278,8 +294,8 @@ c.expirable = c.close_at + timedelta(days=c.valid_days) < cat.as_of
 
 | 시드 분포(`EXPIRED` 15%) · 200,000행 · 첫 청크 | 읽은 행 |
 |---|---:|
-| `V12` 없음 | **200,017** (= 전 행) |
-| `V12` 있음 | **1,001** |
+| `IDX(updated_at, id)` 없음 | **200,017** (= 전 행) |
+| `IDX(updated_at, id)` 있음 | **1,001** |
 
 ### 판단 — 넣는다
 
@@ -361,7 +377,7 @@ PK 를 콕 집어 때려도 gap 락을 600개 잡는다. **`status` 를 바꾸�
 ## 7. 남은 대가 — 잠그는 것은 넘긴 건수가 아니라 후보 수다
 
 `EXPIRE_BATCH` 는 `ORDER BY id LIMIT` 으로 청크를 자른다. 그것이 묶는 것은 **정렬량**이고
-**잠그는 행 수는 안 묶는다** — 옵티마이저가 `V11` 을 고르면 후보를 전부 읽어 정렬한 뒤 앞
+**잠그는 행 수는 안 묶는다** — 옵티마이저가 `IDX(status, expires_at)` 을 고르면 후보를 전부 읽어 정렬한 뒤 앞
 `LIMIT` 건만 갱신하는데, **잘려 나간 후보도 `WHERE` 를 만족하므로** RC 의 "비매치 행 락 즉시
 해제" 대상이 아니다. 청크가 끝날 때까지 X 락으로 남는다.
 
@@ -510,7 +526,7 @@ supremum 에 닿지 않았다 — 그래서 문제가 안 보였다. 발급 봉�
 
 > *"`LAST_EXPIRED_ID` 는 락을 안 잡으니 남는 것은 스캔 비용뿐이고, 그것은 인덱스가 들어오는 날 함께 해결된다"*
 
-`V11` 은 그 문장을 **안 도왔다.** 조건이 `updated_at` 등호라 `(status, expires_at)` 으로는
+`IDX(status, expires_at)` 은 그 문장을 **안 도왔다.** 조건이 `updated_at` 등호라 `(status, expires_at)` 으로는
 못 좁힌다(§5). 그리고 이 비용은 이미 만료된 행이 쌓여야 드러나서, 처음 측정에서는
 아예 안 보였다.
 
@@ -647,7 +663,7 @@ SIGKILL 했다(MySQL 8.4).
 | `FORCE INDEX (status, expires_at)` + 정렬 | 4,000 |
 | **`V2026082501` `(status, id)`** | **999** |
 
-> **파일명이 연번이 아니라 날짜형인 이유** — 지금 원격에 `V12`~`V15` 가 각각 **두 가지**를
+> **파일명이 연번이 아니라 날짜형인 이유** — 지금 원격에 `IDX(updated_at, id)`~`V15` 가 각각 **두 가지**를
 > 가리킨다(`V12__issuance_updated_at_index` 와 `V12__drop_member_coupon_list_index` 처럼).
 > 그대로 머지되면 Flyway 가 같은 버전 둘을 본다. 날짜 + 그날의 순번이면 브랜치가 서로를
 > 몰라도 안 겹친다. `feature/CY-409` 가 먼저 쓰기 시작했다(`V2026082001__issue_attempts.sql`).
@@ -666,11 +682,11 @@ SIGKILL 했다(MySQL 8.4).
 
 | 형상 | 고른 인덱스 | `Handler_read_next` |
 |---|---|---:|
-| 만료 대상 0 · 살아있는 `ISSUED` 200,000 | `V11 (status, expires_at)` | **0** |
-| 만료 대상 5,000 · 살아있는 200,000 | `V11` | **5,000** |
+| 만료 대상 0 · 살아있는 `ISSUED` 200,000 | `IDX(status, expires_at)` | **0** |
+| 만료 대상 5,000 · 살아있는 200,000 | `IDX(status, expires_at)` | **5,000** |
 | 만료 대상 5,000 · 누적 `EXPIRED` 15,000 | `(status, id)` | **999** |
 
-`expires_at < asOf` 가 선택적일 때는 **V11 의 범위가 곧 대상 집합**이라 즉시 끝나고, 대상이
+`expires_at < asOf` 가 선택적일 때는 **IDX(status, expires_at) 의 범위가 곧 대상 집합**이라 즉시 끝나고, 대상이
 대부분일 때는 새 인덱스가 정렬을 없앤다. 어느 쪽이든 **비용이 대상 수에 묶이지 살아 있는 행
 수에 안 묶인다.** 두 인덱스를 다 두는 이유가 이것이다 — 하나만으로는 한쪽 형상에서 진다.
 

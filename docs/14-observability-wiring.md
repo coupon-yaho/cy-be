@@ -513,15 +513,15 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 
    **검증용 셋에는 Spring Batch 메타 테이블이 없다.** cy-seed 의 `ddl/` 이 안 만든다.
    `SchemaPresenceGuard` 가 기동 시점에 그것을 말해 주므로 배치가 아예 안 뜬다 —
-   그 스키마에 **배치 메타 마이그레이션 셋**을 한 번 부어야 한다 — `V2`(테이블)와
-   `V14`·`V15`(인덱스)다. **인덱스를 빼먹으면 기동도 동작도 통과한다** — `SchemaPresenceGuard`
+   그 스키마에 **배치 메타 마이그레이션 셋**을 한 번 부어야 한다 — `V11__batch_metadata.sql`(테이블)과
+   `V2026082513`·`V2026082514`(인덱스)다. **인덱스를 빼먹으면 기동도 동작도 통과한다** — `SchemaPresenceGuard`
    는 테이블만 보기 때문이다. 증상은 인덱스마다 다르다:
-   - `V14`(`STATUS, END_TIME`) 누락 → 되읽기 둘이 7일 창을 인덱스 없이 훑는다. 각자의
+   - `V2026082513`(`STATUS, END_TIME`) 누락 → 되읽기 둘이 7일 창을 인덱스 없이 훑는다. 각자의
      데드라인을 넘기면 **게이지가 `NaN`** 이 된다 — 키가 다르다:
      `BatchRunMetricsRefresher` 는 `batch.metrics.run-timeout-ms`,
      `ExpirePendingRefresher` 는 `batch.metrics.expire-pending-timeout-ms`(둘 다 기본 5초).
-     넘기는지는 안 쟀다 — `V14` 헤더가 잰 것은 읽는 행 수(25,950 → 2,016)까지다.
-   - `V15`(`CREATE_TIME`) 누락 → 게이지는 멀쩡하다. 대신 `purgeBatchMetadataStep` 의
+     넘기는지는 안 쟀다 — `V2026082513` 헤더가 잰 것은 읽는 행 수(25,950 → 2,016)까지다.
+   - `V2026082514`(`CREATE_TIME`) 누락 → 게이지는 멀쩡하다. 대신 `purgeBatchMetadataStep` 의
      대상 선택이 매 청크 전체 스캔이 되어 총비용이 `N²/(2·chunk)` 가 되고,
      **`CleanupRunningTooLong` 으로만** 드러난다.
 
@@ -534,12 +534,12 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    # ⚠️ **두 스키마에 다 부어야 한다.** 아래 CORRUPT 트리거는 coupon_corrupt 를 보는
    #    기동에서 돌리는데, 그 스키마에도 BATCH_* 가 없어 첫 실행이 메타 테이블 오류로 죽는다.
    #
-   # ⚠️ **인덱스 둘도 함께 붓는다.** 없어도 기동·동작이 통과한다 — V14 를 빼면 게이지가
-   #    NaN 이 되고, V15 를 빼면 게이지는 멀쩡한 채 정리 잡만 매 청크 전체 스캔이 된다.
+   # ⚠️ **인덱스 둘도 함께 붓는다.** 없어도 기동·동작이 통과한다 — V2026082513 을 빼면 게이지가
+   #    NaN 이 되고, V2026082514 를 빼면 게이지는 멀쩡한 채 정리 잡만 매 청크 전체 스캔이 된다.
    for SCHEMA in coupon_clean coupon_corrupt; do
-     for F in V2__batch_metadata.sql \
-              V14__ix_batch_job_execution_lookup.sql \
-              V15__ix_batch_job_execution_history.sql; do
+     for F in V11__batch_metadata.sql \
+              V2026082513__ix_batch_job_execution_lookup.sql \
+              V2026082514__ix_batch_job_execution_history.sql; do
        docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
          mysql -uroot "$SCHEMA" \
          < storage/src/main/resources/db/migration/$F
@@ -555,6 +555,6 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
    ```
 
    **이 조회가 `Unknown column 'origin'` 으로 죽으면 데이터셋이 cy-seed `1f217b5` 이전
-   것이다.** 그 DB 는 cy-seed 의 `ddl/00_schema.sql` 로 만들어져 cy-be 의 Flyway `V13` 이
+   것이다.** 그 DB 는 cy-seed 의 `ddl/00_schema.sql` 로 만들어져 cy-be 의 Flyway `V2026082512` 가
    닿지 않으므로, 마이그레이션으로는 못 고친다 — **데이터셋을 다시 만드는 것이 유일한
    답이다.** 그대로 두면 되읽기가 매번 실패하고 `VerificationMetricsStale` 이 뜬다.

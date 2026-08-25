@@ -43,7 +43,7 @@ public interface StatsRepository {
      * {@code SKIPPED} 는 그대로 둔다.</b> 세 테이블만 비우면
      * {@code verification_runs} 는 <i>"완결된 스냅샷"</i> 이라고 계속 말하는데 그 행이 하나도
      * 없다 — {@code v_latest_stats_run} 이 {@code stats_status = 'COMPLETE'} 만 보므로
-     * <b>물리적으로 조회되지 않는다</b>는 {@code V8} 의 계약이 그 자리에서 깨진다.
+     * <b>물리적으로 조회되지 않는다</b>는 {@code V2026082507} 의 계약이 그 자리에서 깨진다.
      * 스냅샷을 지우는 것과 그 사실을 표시하는 것은 <b>같은 사실</b>이라 한자리에서 한다.
      * <p><b>{@code SKIPPED} 를 덮으면 안 되는 이유</b> — 그 값에는 뜻이 실려 있다.
      * CORRUPT 는 <i>"오염셋이라 집계를 안 했다"</i>, CLEAN 인데 {@code verdict != PASS} 면
