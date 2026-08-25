@@ -667,7 +667,9 @@ class PromMetricsAssemblerTest {
 
         assertThat(latency.success().state()).isEqualTo(SourceStatus.VALID);
         assertThat(latency.success().value().p99Millis()).isEqualTo(250d);
-        // 원천이 없다. 그룹을 펴도 이 둘은 여전히 PENDING 이다.
+        // [OBS-31] 원천은 생겼지만 이 픽스처는 outcome=success 표본만 준다. 실패 축에 표본이
+        // 없을 때 PENDING 인 것은 지금도 맞다 — 라벨로 값을 만드는 경로는
+        // HttpLatencyOutcomeContractTest 가 계측과 함께 본다.
         assertThat(latency.policyReject().state()).isEqualTo(SourceStatus.PENDING);
         assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.PENDING);
     }
