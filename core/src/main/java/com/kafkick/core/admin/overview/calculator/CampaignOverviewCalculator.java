@@ -20,8 +20,8 @@ import com.kafkick.core.observation.SourceStatus;
  * 캠페인 원천 목록에서 관리자 운영현황의 캠페인 영역을 계산합니다.
  *
  * <p>Repository나 관측 저장소를 직접 조회하지 않고 전달받은 값만 사용하는 순수 계산 경계입니다.
- * 캠페인 상태 집계와 오픈 임박 판정을 담당하고, O1·O2·O4와 조치 대표 판정은 완료된 계산 결과를
- * couponId별로 조립합니다. 따라서 행·상단 KPI·조치 목록은 같은 계산 모집단을 재사용합니다.</p>
+ * 캠페인 상태 집계·우선순위와 O1·O2·O4 및 조치 대표 판정을 couponId별로 조립합니다. 준비 상태는
+ * 별도 계산 경계에서 오픈 임박 KPI와 조치 후보를 함께 만듭니다.</p>
  */
 @Component
 public class CampaignOverviewCalculator {
@@ -32,7 +32,7 @@ public class CampaignOverviewCalculator {
     public CampaignOverviewCalculator() { }
 
     /**
-     * 동일한 기준 시각으로 캠페인 상태·오픈 임박과 O1·O2·O4·대표 조치를 한 행으로 조립합니다.
+     * 동일한 기준 시각으로 캠페인 상태와 O1·O2·O4·대표 조치를 한 행으로 조립합니다.
      *
      * @param snapshotAt 모든 시간 경계 판정에 사용하는 스냅샷 기준 시각
      * @param campaigns 계산할 캠페인 기본 원천 목록
@@ -61,10 +61,6 @@ public class CampaignOverviewCalculator {
         long openCount = 0L;
         long scheduledCount = 0L;
         long closedCount = 0L;
-        long openingSoonCount = 0L;
-        long preparationIncompleteCount = 0L;
-        SourceStatus preparationStatus = SourceStatus.VALID;
-
         for (int index = 0; index < campaigns.size(); index++) {
             CampaignOverviewSource campaign = Objects.requireNonNull(
                     campaigns.get(index), "campaigns에는 null을 포함할 수 없습니다.");
@@ -74,16 +70,6 @@ public class CampaignOverviewCalculator {
                 case OPEN -> openCount++;
                 case SCHEDULED -> scheduledCount++;
                 case CLOSED -> closedCount++;
-            }
-
-            boolean openingSoon = isOpeningSoon(campaign, snapshotAt);
-            if (openingSoon) {
-                openingSoonCount++;
-                PreparationObservation preparation = campaign.preparation();
-                preparationStatus = combinePreparationStatus(preparationStatus, preparation.status());
-                if (Boolean.FALSE.equals(preparation.completed())) {
-                    preparationIncompleteCount++;
-                }
             }
         }
 
@@ -99,8 +85,9 @@ public class CampaignOverviewCalculator {
                     stockForecasts, representativeActions));
         }
 
+        PreparationCalculation preparationCalculation = calculatePreparation(snapshotAt, campaigns);
         return new CampaignCalculation(
-                openingSoonObservation(openingSoonCount, preparationIncompleteCount, preparationStatus, snapshotAt),
+                preparationCalculation.openingSoon(),
                 new AdminOverviewSnapshot.CampaignStatusSummary(
                         openCount, scheduledCount, closedCount),
                 calculatedCampaigns
@@ -108,10 +95,62 @@ public class CampaignOverviewCalculator {
     }
 
     /**
+     * 오픈 임박 예약 캠페인의 준비 KPI와 확인 조치 후보를 같은 모집단에서 한 번에 계산합니다.
+     *
+     * <p>준비 완료가 확정된 {@code VALID true}는 KPI에만 포함하고, {@code VALID false}는 오픈 30분 전을
+     * 감지 시각으로 한 확인 조치를 만듭니다. {@code PENDING}, {@code UNAVAILABLE}과 같은 값 없는 상태는
+     * false로 바꾸지 않고 KPI 상태에 보존합니다.</p>
+     *
+     * @param snapshotAt 모든 시간 경계 판정에 사용하는 스냅샷 기준 시각
+     * @param campaigns 계산할 캠페인 기본 원천 목록
+     * @return 오픈 임박 KPI와 준비 미완료 조치 후보
+     * @throws NullPointerException 기준 시각, 목록 또는 목록 원소가 {@code null}인 경우
+     */
+    public PreparationCalculation calculatePreparation(
+            Instant snapshotAt,
+            List<CampaignOverviewSource> campaigns
+    ) {
+        Objects.requireNonNull(snapshotAt, "snapshotAt");
+        Objects.requireNonNull(campaigns, "campaigns");
+
+        long openingSoonCount = 0L;
+        long preparationIncompleteCount = 0L;
+        SourceStatus preparationStatus = SourceStatus.VALID;
+        List<AdminOverviewSnapshot.OperationActionItem> actionCandidates = new ArrayList<>();
+
+        for (int index = 0; index < campaigns.size(); index++) {
+            CampaignOverviewSource campaign = Objects.requireNonNull(
+                    campaigns.get(index), "campaigns에는 null을 포함할 수 없습니다.");
+            // 예약 상태이며 스냅샷부터 30분 뒤까지 오픈하는 캠페인만 준비 판단 모집단으로 둡니다.
+            if (!isOpeningSoon(campaign, snapshotAt)) {
+                continue;
+            }
+
+            openingSoonCount++;
+            PreparationObservation preparation = campaign.preparation();
+            // 값 없는 준비 상태를 false로 보정하지 않고 오픈 임박 KPI의 상태로 합성합니다.
+            preparationStatus = combinePreparationStatus(preparationStatus, preparation.status());
+            if (!Boolean.FALSE.equals(preparation.completed())) {
+                continue;
+            }
+
+            preparationIncompleteCount++;
+            // 확정 또는 마지막 값이 false인 준비 관측만 오픈 30분 전 확인 조치 후보로 만듭니다.
+            if (preparation.status() == SourceStatus.VALID || preparation.status() == SourceStatus.STALE) {
+                actionCandidates.add(preparationActionCandidate(campaign));
+            }
+        }
+
+        return new PreparationCalculation(
+                openingSoonObservation(openingSoonCount, preparationIncompleteCount, preparationStatus, snapshotAt),
+                actionCandidates);
+    }
+
+    /**
      * 오픈 임박 캠페인의 준비 관측 상태를 상단 KPI에 보존합니다.
      *
-     * <p>PENDING 준비 상태는 미완료 0건으로 보정하지 않습니다. P-06 전에는 완료 여부가 없는
-     * PENDING만 내려오므로 이 경우 상단 KPI 전체를 값 없는 PENDING으로 둡니다.</p>
+     * <p>PENDING 준비 상태는 미완료 0건으로 보정하지 않습니다. 값 없는 준비 상태가 하나라도 있으면
+     * 상단 KPI 전체를 해당 값 없는 상태로 둡니다.</p>
      */
     private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary>
             openingSoonObservation(
@@ -152,7 +191,7 @@ public class CampaignOverviewCalculator {
         return SourceStatus.VALID;
     }
 
-    /** 정확히 30분 뒤에 오픈하는 예약 캠페인까지 운영자의 사전 확인 대상으로 포함합니다. */
+    /** 스냅샷 시각부터 정확히 30분 뒤까지 오픈하는 예약 캠페인을 운영자의 사전 확인 대상으로 포함합니다. */
     private static boolean isOpeningSoon(
             CampaignOverviewSource campaign,
             Instant snapshotAt
@@ -160,8 +199,27 @@ public class CampaignOverviewCalculator {
         Instant opensAt = campaign.opensAt();
         return campaign.status() == CouponRoundStatus.SCHEDULED
                 && opensAt != null
-                && opensAt.isAfter(snapshotAt)
+                && !opensAt.isBefore(snapshotAt)
                 && !opensAt.isAfter(snapshotAt.plus(OPENING_SOON_WINDOW));
+    }
+
+    /** 준비가 확인되지 않은 오픈 임박 캠페인을 위한 서버 제공 조치 후보를 만듭니다. */
+    private static AdminOverviewSnapshot.OperationActionItem preparationActionCandidate(
+            CampaignOverviewSource campaign
+    ) {
+        return new AdminOverviewSnapshot.OperationActionItem(
+                campaign.couponId(),
+                campaign.campaignName(),
+                campaign.opensAt(),
+                Severity.WARN,
+                AdminOverviewSnapshot.CustomerImpact.NONE,
+                "오픈 전 필수 준비 항목을 확인해야 합니다.",
+                campaign.opensAt().minus(OPENING_SOON_WINDOW),
+                null,
+                new AdminOverviewSnapshot.RecommendedAction(
+                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY,
+                        "캠페인 준비 상태 확인",
+                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL));
     }
 
     /** 위험 캠페인을 먼저 두고 동일 위험도에서는 운영상태·오픈 시각·ID로 순서를 고정합니다. */
@@ -286,6 +344,25 @@ public class CampaignOverviewCalculator {
             Objects.requireNonNull(campaignStatusSummary, "campaignStatusSummary");
             Objects.requireNonNull(campaigns, "campaigns");
             campaigns = List.copyOf(campaigns);
+        }
+    }
+
+    /**
+     * 오픈 임박 준비 상태의 상단 KPI와 조치 계산기가 확정할 후보 목록입니다.
+     *
+     * @param openingSoon 30분 안에 오픈하는 캠페인과 준비 관측 상태
+     * @param actionCandidates 준비 미완료가 확정된 캠페인의 조치 후보
+     */
+    public record PreparationCalculation(
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary> openingSoon,
+            List<AdminOverviewSnapshot.OperationActionItem> actionCandidates
+    ) {
+
+        /** KPI와 조치 후보를 값 없는 상태나 외부 목록 변경 없이 함께 보존합니다. */
+        public PreparationCalculation {
+            Objects.requireNonNull(openingSoon, "openingSoon");
+            Objects.requireNonNull(actionCandidates, "actionCandidates");
+            actionCandidates = List.copyOf(actionCandidates);
         }
     }
 }
