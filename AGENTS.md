@@ -10,71 +10,32 @@
 
 ## 미결 — 관측(observation)
 
-### A. 관측 계정을 양성 목록으로 재부여한다
+### A. 관측 계정을 양성 목록으로 재부여한다 — **[OBS-36] 해소**
 
-**지금 상태** — 관측 전용 계정이 스키마 단위 읽기 권한을 갖는다.
+**해소된 상태** — 관측 전용 계정은 이제 스키마 단위 권한을 갖지 않는다. 양성 목록의 테이블만
+읽는다. 목록의 정본은 `infra/mysql/obs-grants/allowlist.txt` 이고, `apply.sh` 가 그것을 GRANT 로
+옮긴다. compose 의 `--profile obs-grants` 일회성 서비스와 테스트 픽스처(`MySqlContainerConfig`)가
+**같은 파일**을 돌린다.
 
-```sql
-GRANT SELECT ON <스키마>.* TO '<obs>'@'%';
-```
+계정 생성은 여전히 `infra/mysql/initdb/20-obs-account.sh` 가 하지만 **권한은 주지 않는다.**
+두 자리로 나뉜 이유는 initdb 가 Flyway 보다 먼저 돌아 그 시점엔 테이블이 없기 때문이다
+(테이블 단위로 적으면 `ERROR 1146` 으로 컨테이너가 안 뜬다 — 실측). 그리고 스키마 GRANT 위에
+테이블 REVOKE 를 얹을 수도 없다(`ERROR 1147` — 실측). 그 두 실측이 지금 구조의 근거다.
 
-계정 생성은 `infra/mysql/initdb/20-obs-account.sh` 가 하고 **compose 와 테스트 컨테이너가 같은 파일**을 마운트한다.
+`batch` 의 `ObservationAccountPrivilegeTest` 가 실제 MySQL 컨테이너에서 다섯 가지를 단언한다 —
+`members` 는 1142 로 막히는 것, 목록의 테이블은 읽히는 것, 관측 질의의 테이블이 전부 목록에
+있는 것, 목록의 테이블을 전부 누군가 읽는 것, 그리고 `.env.example` 이 스키마 단위 GRANT 를
+권하지 않는 것.
 
-**문제** — 그 권한에 `members` 가 포함된다. 관측 경로는 그 테이블을 읽을 이유가 없고 실제로 한 곳도 읽지 않는다. PII 컬럼은 암호화돼 있어(`name_enc`·`email_enc`·`phone_enc` 가 `varbinary`, AES-256-GCM) 평문은 안 나오지만, **HMAC 블라인드 인덱스**(`email_hash`·`phone_hash`)로 *알려진 이메일의 존재 확인*은 된다. `membership_grade`·`created_at` 은 평문이다.
+**남은 약점** — 이 절차는 사람이 한 번 쳐야 한다. 신규 클론은 안 치면 **관측 풀이 커넥션
+자체를 못 연다**(실측: `ERROR 1044 Access denied for user 'obs'@'%' to database 'app'` — 질의가
+아니라 접속 단계다. JDBC 드라이버로도 같은 코드를 확인했다). 시끄러워서 금방 드러난다.
+반대로 **OBS-36 이전에 만든 볼륨**은 예전 스키마 GRANT 가 남아 아무 증상이 없다.
+기동 자기 진단은 두지 않기로 했다(일회성 이행 상태를 잡으려고 상시 프로브를 남기는 값이 안
+맞는다). 확인 명령은 README 의 "관측 계정 권한 재부여" 절에 있다.
 
-`docs/PRD-v4.15.md` 가 `개인정보 반드시 마스킹` 을 Must 로 적고 있어 코드 계층 방어만으로 충분한지는 판단이 필요하다.
-
-**왜 "그 테이블만 빼기" 가 안 되는가 — 실측**
-
-```
-GRANT SELECT ON app.* TO 'obs'@'%';
-REVOKE SELECT ON app.members FROM 'obs'@'%';
-→ ERROR 1147 (42000): There is no such grant defined for user 'obs' on host '%' on table 'members'
-→ REVOKE 실패 후에도 obs 는 members 를 읽는다
-```
-
-MySQL 은 스키마 단위 GRANT 위에 테이블 단위 REVOKE 를 얹지 못한다.
-**스키마 GRANT 를 걷고 필요한 테이블만 다시 주는 형태**가 유일한 길이다.
-
-**왜 계정 생성 자리에서 못 하는가 — 실측**
-
-`docker-entrypoint-initdb.d` 는 Flyway 보다 **먼저** 돈다. 그 시점에는 테이블이 하나도 없다.
-
-```
-GRANT SELECT ON app.verification_runs TO 'obs'@'%';
-→ ERROR 1146 (42S02): Table 'app.verification_runs' doesn't exist
-→ 컨테이너가 exit=1 로 아예 안 뜬다
-```
-
-즉 테이블 단위 권한은 **앱이 한 번 떠서 마이그레이션이 끝난 뒤**에만 줄 수 있다.
-
-**부여 대상 (CY-338 시점 조사 — 시작할 때 다시 셀 것)**
-
-관측 한정자(`@Qualifier("obs")`)를 쓰는 파일 10개가 질의하는 테이블은 6종이다.
-
-| 읽는 곳 | 테이블 |
-|---|---|
-| 배치 실행 이력 조회 | `BATCH_JOB_EXECUTION` · `BATCH_JOB_INSTANCE` |
-| 벤치마크 회차 조회 | `benchmark_runs` |
-| 도메인 Gauge 수집 | `coupons` · `coupon_stocks` · `issuances` |
-
-`members` 는 **한 곳도 읽지 않는다.**
-
-**제안하는 형태** — compose 에 일회성 서비스를 둔다. 선례가 있다(`compose.yml` 의 `runtime-config-seed` 가 `profiles` 로 평소엔 안 뜨고 명시 실행).
-
-```
-docker compose --profile obs-grants run --rm obs-grants
-```
-
-**함께 필요한 것**
-
-- **계약 테스트** — obs 가 `members` 를 못 읽는 것(MySQL 1142)과 위 6종은 읽는 것을 단언한다. `batch` 의 `ObservationAccountPrivilegeTest` 옆에 붙이면 된다
-- **README 절** — 실행 시점(앱 기동 후)과 미실행 시 증상
-- **미실행 감지** — 이 절차는 사람이 한 번 쳐야 하고 **안 쳐도 아무 일이 안 일어난다.** `runtime-config-seed` 가 지금 그 성질이라 같은 약점을 물려받는다
-
-**지금 대신 세워 둔 방어선** — `storage` 의 `ObservationQueryScopeTest` 가 관측 한정자를 쓰는 소스의 질의문에 `members` 가 없는지 고정한다.
-
-⚠️ **그것이 못 막는 것은 그 테스트 javadoc 에 네 가지로 적어 뒀다.** 계정 권한은 그대로이고, `.sql`/`.yml` 질의와 뷰 경유는 안 본다. **보안 경계가 아니라 개발 시점 회귀 그물이다.**
+**함께 남은 것** — `storage` 의 `ObservationQueryScopeTest` 는 그대로 둔다. 계정 권한이 이제
+DB 계층 방어선이 됐지만, 소스 스캔은 그보다 **먼저** (CI 에서, 배포 전에) 잡는다.
 
 ---
 
