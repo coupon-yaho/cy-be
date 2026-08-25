@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.core.expiration.PendingExpiration;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
@@ -126,7 +127,17 @@ class BlockedCouponTest {
         List<Long> blocked = adapter.blockedCoupons(AS_OF);
         assertThat(blocked).containsExactly(broken);
 
-        int expired = adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, blocked);
+        // 막힌 회차를 거르는 자리가 UPDATE 에서 **후보 질의**로 옮겨 왔다. 청크가 회차
+        // 하나만 담으므로, 막힌 회차가 후보에 남아 있으면 그 회차가 청크를 통째로 차지하고
+        // 재고를 못 빼서 죽는다 — 걸러진 결과로 성한 회차가 첫 청크에 와야 한다.
+        ExpireChunk chunk = ExpireChunk.from(
+                adapter.nextCandidates(AS_OF, 0L, LIMIT_ABOVE_FIXTURE, blocked));
+        assertThat(chunk.couponId())
+                .as("막힌 회차가 후보에 남으면 첫 청크가 그 회차를 집는다")
+                .isNotEqualTo(broken);
+        assertThat(adapter.lockStock(chunk.couponId())).isTrue();
+        int expired = adapter.expireBatch(
+                AS_OF, WROTE_AT, 0L, chunk.lastId(), chunk.couponId());
 
         assertThat(expired)
                 .as("막힌 회차의 건만 빠지고 나머지는 넘어간다")
@@ -149,7 +160,11 @@ class BlockedCouponTest {
         seed.overwriteStock(1);
 
         assertThat(adapter.blockedCoupons(AS_OF)).isEmpty();
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
+        ExpireChunk chunk = ExpireChunk.from(
+                adapter.nextCandidates(AS_OF, 0L, LIMIT_ABOVE_FIXTURE, List.of()));
+        assertThat(chunk.isEmpty()).as("NOT IN () 가 1064 로 죽으면 여기서 드러난다").isFalse();
+        assertThat(adapter.lockStock(chunk.couponId())).isTrue();
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, chunk.lastId(), chunk.couponId()))
                 .isEqualTo(1);
         assertThat(statusOf(target)).isEqualTo(IssuanceStatus.EXPIRED.name());
     }

@@ -144,7 +144,7 @@ class ExpireBlockedCouponChunkingTest {
         assertThat(launch().getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
         assertThat(CountingConfig.expireBatchCalls())
-                .as("한 건씩 넘기고 마지막에 0 을 받아 끝난다 — 청크가 여럿이어야 아래가 뜻을 갖는다")
+                .as("한 건씩 넘기고 마지막에 **후보** 0 을 받아 끝난다(그 청크는 expireBatch 를 부르지 않는다) — 청크가 여럿이어야 아래가 뜻을 갖는다")
                 .isGreaterThan(1);
         assertThat(CountingConfig.blockedCouponsCalls())
                 .as("청크마다 부르면 남은 대기 전체를 매번 훑는다")

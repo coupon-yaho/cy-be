@@ -327,11 +327,16 @@ class ExpireJobRestartTest {
         @Bean
         static BeanPostProcessor failingExpireBatch() {
             return ExpirationProxies.decorating((real, method, args) -> {
-                if ("expireBatch".equals(method.getName())) {
+                // 진도는 **후보 조회**에서 읽는다. 청크가 그것으로 시작하고, 인자 모양이
+                // 아직 변별력을 갖는 유일한 자리다(아래 afterIdOf 의 이유).
+                if ("nextCandidates".equals(method.getName())) {
                     AFTER_IDS.add(afterIdOf(method, args));
-                    if (CALLS.incrementAndGet() >= failFrom) {
-                        throw new IllegalStateException("죽은 척한다");
-                    }
+                }
+                // 죽이는 자리는 여전히 만료 UPDATE 다 — 재고를 잠그고 넘긴 **뒤에** 죽어야
+                // 롤백이 무엇을 되돌리는지가 이 테스트의 축이 된다.
+                if ("expireBatch".equals(method.getName())
+                        && CALLS.incrementAndGet() >= failFrom) {
+                    throw new IllegalStateException("죽은 척한다");
                 }
                 return ExpirationProxies.callThrough(real, method, args);
             });
@@ -339,26 +344,32 @@ class ExpireJobRestartTest {
 
         /**
          * <b>인자 위치를 인덱스로 집는 것이 이 테스트의 급소다.</b>
-         * {@code expireBatch(asOf, committedAt, afterId, limit, blockedCoupons)} 에서
-         * 파라미터가 하나 늘거나 순서가 바뀌면, {@code afterId} 와 {@code limit} 이 둘 다
-         * 정수라 <b>캐스팅이 조용히 성공한다</b> — {@code AFTER_IDS} 에 진도가 아닌 값이
-         * 쌓이고 진도 단언이 <b>거짓으로 통과</b>한다. 시그니처가 바뀐 그 자리에서 멈추게 한다.
+         * {@code nextCandidates(asOf, afterId, limit, blockedCoupons)} 에서 파라미터가 하나
+         * 늘거나 순서가 바뀌면, {@code afterId} 와 {@code limit} 이 둘 다 정수라
+         * <b>캐스팅이 조용히 성공한다</b> — {@code AFTER_IDS} 에 진도가 아닌 값이 쌓이고
+         * 진도 단언이 <b>거짓으로 통과</b>한다. 시그니처가 바뀐 그 자리에서 멈추게 한다.
          *
-         * <p>실제로 한 번 걸렸다 — 회차 격리가 다섯째 파라미터를 더했을 때 이 가드가 먼저 울렸다.
+         * <p><b>두 번 걸렸다.</b> 회차 격리가 {@code expireBatch} 에 다섯째 파라미터를 더했을
+         * 때, 그리고 락 순서를 뒤집으면서 그 시그니처가
+         * {@code (asOf, committedAt, afterId, lastId, couponId)} 로 바뀌었을 때다.
+         *
+         * <p><b>그래서 읽는 자리를 {@code nextCandidates} 로 옮겼다.</b> 뒤엣것에서
+         * {@code long} 셋이 연달아 서서 <b>이 가드가 변별력을 잃었다</b> — 셋 중 무엇이 와도
+         * 모양이 같다. 후보 조회는 {@code (LocalDateTime, long, int, List)} 라 아직 갈린다.
          */
         private static long afterIdOf(Method method, Object[] args) {
             // 파라미터 이름으로는 못 본다 — core 모듈은 -parameters 없이 컴파일돼
             // arg0..arg4 로만 남는다. 대신 타입 배치를 그대로 요구한다.
             Class<?>[] types = method.getParameterTypes();
-            boolean sameShape = types.length == 5 && args.length == 5
-                    && types[2] == long.class && types[3] == int.class
-                    && types[4] == List.class;
+            boolean sameShape = types.length == 4 && args.length == 4
+                    && types[1] == long.class && types[2] == int.class
+                    && types[3] == List.class;
             if (!sameShape) {
                 throw new IllegalStateException(
-                        "expireBatch 시그니처가 바뀌었다. 3번째 인자가 afterId 라는 전제로 진도를 "
-                                + "읽고 있으니 이 프록시부터 고쳐라. 지금 시그니처=" + method);
+                        "nextCandidates 시그니처가 바뀌었다. 2번째 인자가 afterId 라는 전제로 "
+                                + "진도를 읽고 있으니 이 프록시부터 고쳐라. 지금 시그니처=" + method);
             }
-            return (Long) args[2];
+            return (Long) args[1];
         }
     }
 

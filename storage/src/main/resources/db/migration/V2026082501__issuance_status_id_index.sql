@@ -1,0 +1,36 @@
+-- 만료 후보 조회가 누적된 EXPIRED 를 지나가지 않게 합니다.
+--
+-- 만료가 재고 행을 **먼저** 잠그려면 어느 회차를 건드릴지가 쓰기 전에 정해져 있어야 하고,
+-- 그래서 청크마다 후보를 먼저 읽는다.
+--
+--   SELECT id, coupon_id FROM issuances
+--    WHERE status = 'ISSUED' AND expires_at < :asOf
+--      AND id > :afterId AND coupon_id NOT IN (:blocked)
+--    ORDER BY id LIMIT :limit
+--
+-- **ORDER BY id 가 옵티마이저를 PK 로 몬다.** 정렬을 피하려고 PK 범위 스캔을 고르는데,
+-- 그러면 afterId 위쪽의 **누적된 EXPIRED 를 전부 지나가며** filter 한다.
+-- V11(status, expires_at) 을 강제해도 매칭 행을 전부 읽고 정렬해야 해서 반만 낫다.
+--
+-- 실측(MySQL 8.4 · 누적 EXPIRED 15,000 · 대상 ISSUED 5,000 · LIMIT 1,000, Handler_read_next):
+--
+--   지금 그대로(PK 스캔)              16,999
+--   FORCE INDEX (status, expires_at)   4,000
+--   이 인덱스                            999   ← 정확히 LIMIT 만큼
+--
+-- (status, id) 면 status='ISSUED' AND id > :afterId 가 그대로 범위가 되고 id 순서가 공짜라
+-- 정렬이 사라진다. expires_at 은 filter 로 남는데, ISSUED 중 기한이 지난 몫이 만료 시점에는
+-- 대부분이라 버리는 행이 적다.
+--
+-- **매 실행의 첫 청크가 이 비용을 낸다.** 진도(afterId)는 JobInstance 안에서만 살고 스케줄러가
+-- 주기마다 asOf 를 새로 잡으므로, 주기 실행은 언제나 afterId = 0 부터 시작한다.
+-- 같은 종류의 문제를 V12 가 한 번 풀었다 — docs/12-expire-lock-measurement.md 의 200,017 → 1,001.
+--
+-- V11(status, expires_at) 은 그대로 둔다. 만료 UPDATE 와 countPending 이 그쪽을 쓴다.
+--
+-- 파일명이 V17 이 아니라 날짜형인 이유 — **연번이 브랜치마다 갈렸다.** 지금 원격에
+-- V12~V15 가 각각 두 가지를 가리킨다(예: V12__issuance_updated_at_index 와
+-- V12__drop_member_coupon_list_index). 그대로 머지되면 Flyway 가 같은 버전 둘을 본다.
+-- 날짜 + 그날의 순번이면 브랜치가 서로를 몰라도 안 겹친다. feature/CY-409 가 먼저 이 형식을
+-- 쓰기 시작했다(V2026082001__issue_attempts.sql).
+CREATE INDEX `idx_issuance_status_id` ON `issuances` (`status`, `id`);

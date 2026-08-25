@@ -67,6 +67,8 @@ coupon-yaho
 │       │   ├── domain/                  도메인 모델
 │       │   ├── service/                 유즈케이스
 │       │   └── port/                    어댑터가 구현할 인터페이스
+│       ├── expiration/                  만료 포트 + 청크 값 객체 — 평면
+│       ├── verification/                검증 포트 + 도메인 enum — 평면
 │       └── support/                     TimeProvider(UTC), ErrorCode, BusinessException
 │
 ├── storage                              DB 어댑터

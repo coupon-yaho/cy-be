@@ -204,7 +204,12 @@ class ExpireCancelRaceTest {
     }
 
     /**
-     * 취소 경로가 할 일을 그대로 쓴다.
+     * 취소 경로가 할 일을 <b>그 순서 그대로</b> 쓴다.
+     *
+     * <p><b>재고를 먼저 잠근다.</b> {@code CouponCancelService} 가 실제로 그렇게 한다 —
+     * {@code lockStock} → 조건부 {@code UPDATE} → {@code release} → 이력. 예전에는 이 헬퍼가
+     * <b>만료 쪽 순서</b>(발급건 먼저)를 쓰고 있었고, 그래서 두 순서가 어긋나 있다는 사실을
+     * 이 테스트가 <b>구조적으로 볼 수 없었다.</b> 계약을 재는 것이 아니라 계약을 비켜 간 것이다.
      *
      * <p><b>조건부 {@code UPDATE} 의 반환값으로 판단하는 것이 핵심이다.</b> 먼저 조회해서
      * 상태를 확인하고 재고를 되돌리는 구조면, 그 사이에 만료가 끼어들어 둘 다 되돌린다.
@@ -213,6 +218,12 @@ class ExpireCancelRaceTest {
      */
     private int cancelIfStillIssued() {
         return new TransactionTemplate(transactionManager).execute(status -> {
+            // 재고 행을 먼저 잠근다 — 실제 취소 경로(CouponCancelService)의 첫 문장이다.
+            jdbcClient.sql("SELECT coupon_id FROM coupon_stocks WHERE coupon_id = :coupon "
+                            + "FOR UPDATE")
+                    .param("coupon", couponId)
+                    .query(Long.class)
+                    .list();
             int changed = jdbcClient.sql("""
                             UPDATE issuances
                                SET status = 'CANCELLED', updated_at = :at
@@ -318,14 +329,17 @@ class ExpireCancelRaceTest {
         static BeanPostProcessor pauseAfterExpire() {
             return ExpirationProxies.decorating((real, method, args) -> {
                 Object result = ExpirationProxies.callThrough(real, method, args);
-                if (!armed || !"expireBatch".equals(method.getName())) {
+                if (!armed) {
                     return result;
                 }
-                if ((int) result > 0) {
+                if ("expireBatch".equals(method.getName()) && (int) result > 0) {
                     // 넘겼다. 아직 이 청크의 트랜잭션 안이므로 여기서 풀면 취소가 락에 걸린다.
                     committed = true;
-                } else if (committed) {
-                    // 0 을 돌려줬다 = 앞 청크가 커밋된 뒤다. 이제 취소가 락 없이 지나간다.
+                } else if ("nextCandidates".equals(method.getName())
+                        && ((java.util.List<?>) result).isEmpty() && committed) {
+                    // **종료 신호가 옮겨 왔다.** 예전에는 expireBatch 가 0 을 돌려주는 것을
+                    // 신호로 썼는데, 이제 후보가 비면 그 호출 자체가 없다. 후보 0 이 곧
+                    // "앞 청크가 커밋된 뒤" 이고, 여기서 풀면 취소가 락 없이 지나간다.
                     EXPIRED.countDown();
                     if (!CANCEL_DONE.await(30, TimeUnit.SECONDS)) {
                         throw new IllegalStateException("취소가 30초 안에 안 끝났다");
@@ -343,36 +357,61 @@ class ExpireCancelRaceTest {
      *
      * <p><b>대상을 같은 발급건으로 두면 안 된다.</b> 그 행은 {@code expireBatch} 가 X 락으로
      * 쥐고 있어 취소가 락을 기다리다 교착한다 — 실제로 그렇게 만들었다가 잡이 죽었다.
-     * 위험한 조합은 <b>같은 회차의 다른 발급건</b>이다. 그 행은 만료가 안 잡으므로
-     * 취소가 락 없이 통과해 <b>같은 {@code coupon_stocks} 행을 먼저 건드린다.</b>
+     * 위험한 조합은 <b>같은 회차의 다른 발급건</b>이다. 발급건 쪽 락은 안 겹치지만
+     * <b>재고 행이 겹친다.</b>
      *
-     * <p>지금 코드가 안전한 이유는 두 경로가 모두 <b>상대 차감</b>({@code active_count - N})을
-     * 쓰기 때문이다. 어느 쪽이든 "조회한 값에서 뺀 절대값" 으로 바뀌면 두 트랜잭션이 같은
-     * 값을 읽고 각각 써서 <b>재고가 한 번만 빠진다.</b> 그것을 잡는 것이 이 테스트다.
+     * <p><b>락 순서를 뒤집으면서 이 자리의 답이 바뀌었다.</b> 예전에는 만료가 재고를 마지막에
+     * 잡아서, 취소가 <b>락 없이 통과해 같은 재고 행을 먼저 건드렸다</b> — 두 트랜잭션이 정말로
+     * 겹쳤고, 안전한 이유는 양쪽이 <i>상대 차감</i>({@code active_count - N})을 쓴다는 것뿐이었다.
+     *
+     * <p>이제 만료가 <b>청크 시작에</b> 그 행을 잡는다. 같은 회차의 취소는 끼어드는 대신
+     * <b>기다린다.</b> 그것이 이 변경의 값어치다 — 겹치지 않으면 순서가 어긋날 일도 없고,
+     * 취소가 1213 으로 죽을 일도 없다. 그래서 이 테스트가 재는 것도 바뀐다:
+     * <b>정말로 기다리는가</b>, 그리고 <b>기다린 뒤에 자기 몫이 빠지는가</b>.
+     *
+     * <p>상대 차감은 그대로 지킨다. 절대값으로 바뀌면 직렬화돼 있어도
+     * {@code updated_at} 축이 어긋나므로, 마지막 단언이 여전히 그것을 잡는다.
      */
     @Test
-    @DisplayName("청크가 열린 동안 같은 회차의 다른 건이 취소돼도 재고가 각각 빠진다")
-    void concurrentCancelOnSiblingKeepsBothDeductions() throws Exception {
+    @DisplayName("청크가 열린 동안 같은 회차의 취소는 기다렸다가 자기 몫을 뺀다")
+    void concurrentCancelOnSiblingWaitsThenDeducts() throws Exception {
+        // 스레드 둘이 필요하다 — 하나는 취소, 하나는 잡. 본문은 그 사이에서 판정만 한다.
         ExecutorService worker = Executors.newSingleThreadExecutor();
+        ExecutorService worker0 = Executors.newSingleThreadExecutor();
         try {
             PauseBeforeReleaseConfig.arm();
             var cancelled = worker.submit(() -> {
-                try {
-                    assertThat(PauseBeforeReleaseConfig.PAUSED.await(30, TimeUnit.SECONDS)).isTrue();
-                    return cancelSibling();
-                } finally {
-                    PauseBeforeReleaseConfig.CANCEL_DONE.countDown();
-                }
+                assertThat(PauseBeforeReleaseConfig.PAUSED.await(30, TimeUnit.SECONDS)).isTrue();
+                return cancelSibling();
             });
+            var job = worker0.submit(this::launch);
 
-            JobExecution execution = launch();
+            assertThat(PauseBeforeReleaseConfig.PAUSED.await(30, TimeUnit.SECONDS))
+                    .as("청크가 재고 차감 직전에서 멈춰야 이 겹침을 만들 수 있다")
+                    .isTrue();
 
+            // **대기의 원인을 직접 본다.** 벽시계 타임아웃만으로는 "락에서 기다린다" 와
+            // "스레드가 아직 시작도 안 했다" 를 구분하지 못한다 — 그러면 lockStock 이
+            // 지워져 취소가 통과해도 CI 가 느린 날 초록으로 지나간다. 한 방향으로만
+            // 조용히 통과하는 단언은 없는 단언과 같다.
+            awaitStockLockWait();
+
+            assertThat(cancelled.isDone())
+                    .as("**여기가 요지다.** 만료가 재고 행을 쥐고 있으므로 같은 회차의 취소는 "
+                            + "끼어들지 못하고 기다린다. 끝나 있으면 락 순서가 예전으로 "
+                            + "돌아간 것이고, 그때는 취소가 1213 으로 죽을 수 있다")
+                    .isFalse();
+
+            PauseBeforeReleaseConfig.RESUME.countDown();
+
+            JobExecution execution = job.get(60, TimeUnit.SECONDS);
             assertThat(cancelled.get(30, TimeUnit.SECONDS))
-                    .as("형제 건은 만료가 안 잡으므로 취소가 락 없이 통과한다")
+                    .as("기다린 뒤에는 통과한다. 0 이면 취소가 죽은 것이다")
                     .isEqualTo(1);
             assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         } finally {
             worker.shutdownNow();
+            worker0.shutdownNow();
         }
 
         assertThat(activeCount())
@@ -385,6 +424,12 @@ class ExpireCancelRaceTest {
     /** 만료 대상이 아닌 형제 건을 취소한다. 회차가 같으므로 재고는 같은 행을 건드린다. */
     private int cancelSibling() {
         return new TransactionTemplate(transactionManager).execute(status -> {
+            // 재고 행을 먼저 잠근다 — 실제 취소 경로(CouponCancelService)의 첫 문장이다.
+            jdbcClient.sql("SELECT coupon_id FROM coupon_stocks WHERE coupon_id = :coupon "
+                            + "FOR UPDATE")
+                    .param("coupon", couponId)
+                    .query(Long.class)
+                    .list();
             int changed = jdbcClient.sql("""
                             UPDATE issuances
                                SET status = 'CANCELLED', updated_at = :at
@@ -408,15 +453,53 @@ class ExpireCancelRaceTest {
         });
     }
 
+
+    /**
+     * 취소 세션이 <b>{@code coupon_stocks} 에서</b> 락을 기다리는 상태가 될 때까지 기다린다.
+     *
+     * <p>{@code data_lock_waits} 는 <b>실제로 블록된 요청만</b> 담는다. 그래서 이 값이 1 이
+     * 되는 것은 취소가 그 행을 요구했고 못 받았다는 관측이다 — 스레드가 늦은 것과 갈린다.
+     * 이 클래스가 {@code lockedTables()} 로 이미 쓰는 것과 같은 방식이다.
+     */
+    private void awaitStockLockWait() throws InterruptedException {
+        for (int i = 0; i < 300; i++) {
+            Integer waits = jdbcClient.sql("""
+                            SELECT COUNT(*)
+                              FROM performance_schema.data_lock_waits w
+                              JOIN performance_schema.data_locks b
+                                ON b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID
+                             WHERE b.OBJECT_NAME = 'coupon_stocks'
+                            """)
+                    .query(Integer.class)
+                    .single();
+            if (waits != null && waits > 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError(
+                "취소가 30초 안에 coupon_stocks 락 대기에 안 들어갔다. 만료가 그 행을 "
+                        + "안 잡고 있다는 뜻이고, 그러면 이 테스트가 재려던 것이 사라진다");
+    }
+
     /**
      * <b>{@code releaseStock} 직전에 멈춘다.</b> 그 자리는 청크 트랜잭션이 <b>열려 있고</b>
-     * 만료가 이미 대상 행을 넘긴 뒤라, 형제 건 취소와 재고 갱신이 실제로 겹친다.
+     * 만료가 이미 대상 행을 넘긴 뒤이며, <b>재고 행은 우리가 쥐고 있다.</b>
+     *
+     * <p><b>재개 신호의 주인이 바뀌었다.</b> 예전에는 <i>취소가 끝나면</i> 청크가 이어 갔다 —
+     * 그때는 취소가 재고 행을 락 없이 지나갈 수 있어서 그 순서가 성립했다. 이제는 취소가
+     * <b>우리 락을 기다리므로</b> 그 신호를 기다리면 서로 기다리다 시한에 걸린다.
+     * 그래서 <b>본문이</b> 재개를 신호한다.
+     *
+     * <p>{@code appendExpireHistories} 뒤에 건다 — 청크 순서가
+     * {@code lockStock → expireBatch → appendExpireHistories → releaseStock} 이라
+     * 그 자리가 곧 "재고 차감 직전" 이다.
      */
     @TestConfiguration
     static class PauseBeforeReleaseConfig {
 
         static volatile CountDownLatch PAUSED = new CountDownLatch(1);
-        static volatile CountDownLatch CANCEL_DONE = new CountDownLatch(1);
+        static volatile CountDownLatch RESUME = new CountDownLatch(1);
         private static volatile boolean armed;
 
         static void arm() {
@@ -426,17 +509,17 @@ class ExpireCancelRaceTest {
         static void reset() {
             armed = false;
             PAUSED = new CountDownLatch(1);
-            CANCEL_DONE = new CountDownLatch(1);
+            RESUME = new CountDownLatch(1);
         }
 
         @Bean
         static BeanPostProcessor pauseBeforeRelease() {
             return ExpirationProxies.decorating((real, method, args) -> {
                 Object result = ExpirationProxies.callThrough(real, method, args);
-                if (armed && "stockRowCount".equals(method.getName())) {
+                if (armed && "appendExpireHistories".equals(method.getName())) {
                     PAUSED.countDown();
-                    if (!CANCEL_DONE.await(30, TimeUnit.SECONDS)) {
-                        throw new IllegalStateException("형제 건 취소가 30초 안에 안 끝났다");
+                    if (!RESUME.await(30, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("본문이 30초 안에 재개를 안 줬다");
                     }
                 }
                 return result;

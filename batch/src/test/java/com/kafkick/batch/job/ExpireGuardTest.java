@@ -50,7 +50,7 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.metrics.expire-pending-initial-delay-ms=3600000",
         "batch.expire.chunk-size=100"
 })
-@Import({MySqlContainerConfig.class, ExpireGuardTest.ShrinkStockRowCountConfig.class,
+@Import({MySqlContainerConfig.class, ExpireGuardTest.FailStockLockConfig.class,
         ExpireGuardTest.LeakingExclusionConfig.class, ExpireGuardTest.FixedClockConfig.class})
 class ExpireGuardTest {
 
@@ -78,7 +78,7 @@ class ExpireGuardTest {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
         seed = new VerificationSeed(jdbcClient);
         seed.clear();
-        ShrinkStockRowCountConfig.off();
+        FailStockLockConfig.off();
         LeakingExclusionConfig.off();
     }
 
@@ -139,16 +139,16 @@ class ExpireGuardTest {
     }
 
     /**
-     * <b>청크 도중에 재고 행이 생기면 어느 가드로 나가는지 못 박는다.</b>
+     * <b>재고 행이 없는 회차를 만났을 때 어느 가드로 나가는지 못 박는다.</b>
      *
-     * <p>만료 Step 은 READ COMMITTED 라 문장마다 스냅샷이 갱신된다. 그래서 {@code stockRowCount}
-     * 와 {@code releaseStock} 이 <b>다른 행 집합</b>을 볼 수 있다는 지적이 있었고, 그 방향으로
-     * {@code released > stockRows} 전용 코드를 만들 뻔했다.
+     * <p><b>이 판정이 청크의 맨 앞으로 옮겨 왔다.</b> 예전에는 만료를 넘긴 <i>뒤에</i>
+     * {@code expiredCouponCount} 와 {@code stockRowCount} 를 견줘 알았다 — 그 시점이면 이미
+     * <i>"재고 없이 만료된 상태"</i> 가 트랜잭션 안에 만들어져 있었고, 되돌리는 것은 롤백이었다.
+     * 이제 {@code lockStock} 이 <b>아무것도 쓰기 전에</b> 잡는다.
      *
-     * <p><b>그 분기는 도달할 수 없다.</b> 그 앞에 {@code stockRows != coupons} 가드가 있어서,
-     * 재고 행이 하나 모자란 상태는 {@code STOCK_ROW_MISSING} 으로 <b>먼저</b> 나간다.
-     * 이 저장소는 같은 실수 — 스키마상 못 일어나는 상황에 가드를 세우는 것 — 를 이미 한 번
-     * 하고 지웠다. 여기서 그 사실을 테스트로 고정한다.
+     * <p>그러면서 조회 둘이 통째로 없어졌다. 그 둘이 있던 이유가 <i>"두 실패를 갈라 보려고"</i>
+     * 였는데, 지금은 갈라지는 자리가 서로 다르다 — 재고 행 <b>없음</b>은 여기,
+     * 재고 <b>모자람</b>은 {@code releaseStock} 의 갱신 행 수 0 이다.
      *
      * <p>진짜 결함은 그쪽 <b>메시지</b>였다. <i>"다시 돌려도 그 행은 여전히 없습니다"</i> 는
      * 누가 그 행을 만들고 있는 중이면 거짓이고, 운영자는 방금 자기가 넣은 행을 다시 의심한다.
@@ -163,7 +163,7 @@ class ExpireGuardTest {
                 .update();
         seed.overwriteStock(1);
 
-        ShrinkStockRowCountConfig.on();
+        FailStockLockConfig.on();
         JobExecution execution = launch(AS_OF);
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
@@ -292,28 +292,33 @@ class ExpireGuardTest {
         }
     }
 
-    /** {@code stockRowCount} 만 한 건 적게 돌려준다. 나머지는 실제 저장소 그대로다. */
+    /**
+     * {@code lockStock} 만 <b>못 잠갔다</b>고 돌려준다. 나머지는 실제 저장소 그대로다.
+     *
+     * <p>실제로 재고 행을 지우면 {@code blockedCoupons} 가 그 회차를 창 밖으로 빼서 <b>이 분기에
+     * 도달하지 못한다.</b> 여기서 재는 것은 <i>"재고 행이 없는 회차를 만들 수 있는가"</i> 가
+     * 아니라 <i>"그 상태를 만났을 때 어느 가드로, 어떤 말로 나가는가"</i> 다.
+     */
     @TestConfiguration
-    static class ShrinkStockRowCountConfig {
+    static class FailStockLockConfig {
 
-        private static volatile boolean shrink;
+        private static volatile boolean fail;
 
         static void on() {
-            shrink = true;
+            fail = true;
         }
 
         static void off() {
-            shrink = false;
+            fail = false;
         }
 
         @Bean
-        static BeanPostProcessor shrinkStockRowCount() {
+        static BeanPostProcessor failStockLock() {
             return ExpirationProxies.decorating((real, method, args) -> {
-                Object result = ExpirationProxies.callThrough(real, method, args);
-                if (shrink && "stockRowCount".equals(method.getName())) {
-                    return ((Integer) result) - 1;
+                if (fail && "lockStock".equals(method.getName())) {
+                    return false;
                 }
-                return result;
+                return ExpirationProxies.callThrough(real, method, args);
             });
         }
     }

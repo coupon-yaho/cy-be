@@ -8,8 +8,24 @@ import java.util.List;
  * <b>재고를 쓰는 유일한 잡이다.</b> 다른 배치는 원본을 읽기만 한다 — 그래서 동시성 테스트도,
  * 부하 중 정지도 이 잡에서만 필요하다.
  *
- * <p><b>락을 쓰지 않는다.</b> 조건부 {@code UPDATE} 의 매치 건수로 실제로 넘어간 수를 센다.
- * 락을 잡으면 서버가 죽었을 때 풀리지 않는 락이 남고, 그 하나가 발급 경로 전체를 멈춘다.
+ * <p><b>재고 행 하나를 먼저 잠근다({@link #lockStock}).</b> 나머지는 조건부 {@code UPDATE} 의
+ * 매치 건수로 실제로 넘어간 수를 센다 — 발급건 쪽에는 락을 안 잡는다.
+ *
+ * <p><b>한때는 아무것도 안 잠갔다.</b> 이유는 <i>"서버가 죽으면 풀리지 않는 락이 남고 그 하나가
+ * 발급 경로 전체를 멈춘다"</i> 였다. 그 걱정은 <b>절반만 맞다.</b>
+ *
+ * <ul>
+ *   <li><b>프로세스가 죽는 경우 — 서버가 풀어 준다. 다만 즉시가 아니다.</b> 락을 쥔 클라이언트를
+ *       컨테이너째 SIGKILL 하고 재 봤다(MySQL 8.4): <b>4초 시점에는 락이 남아 있었고 14초
+ *       시점에는 풀려 있었다.</b> 그 사이가 TCP 종료를 서버가 알아채는 시간이다.</li>
+ *   <li><b>호스트·네트워크가 멎는 경우 — 안 쟀다.</b> 그때는 서버 쪽 세션이 읽기에서 계속
+ *       블록되므로 {@code wait_timeout}(기본 8시간)이나 TCP keepalive 까지 남을 수 있다.
+ *       하필 그 행이 <b>선착순 판정의 직렬화 지점</b>이라 값이 크다.
+ *       {@code docs/12-expire-lock-measurement.md} §8 에 안 잰 것으로 올려 뒀다.</li>
+ * </ul>
+ *
+ * <p>그럼에도 잠그는 쪽으로 온 것은 <b>안 잠근 대가가 더 컸기 때문</b>이다: 아래 데드락이다.
+ * 걱정의 크기를 비교한 것이지 걱정이 사라진 것이 아니다.
  *
  * <p><b>넘어간 집합을 {@code updated_at = committedAt} 로 다시 찾는다.</b> MySQL 에는
  * {@code UPDATE … RETURNING} 이 없어서, 방금 쓴 시각을 표식으로 삼는다.
@@ -38,22 +54,43 @@ import java.util.List;
  * {@code EXPIRE: ISSUED → EXPIRED} 하나뿐</b>이라는 사실이다.
  * 그 전이표에 두 번째 길이 생기는 날 이 표식 방식을 다시 봐야 한다.
  *
- * <p><b>락 순서를 계약으로 못 박는다 — {@code issuances} → {@code issuance_histories}
- * → {@code coupon_stocks}.</b> 계약을 지는 것은 <b>쓰는 셋</b>이다 —
- * {@link #expireBatch} → {@link #appendExpireHistories} → {@link #releaseStock}.
- * 발급·사용·취소 경로도 <b>같은 순서로 잡아야 한다.</b>
+ * <h2>락 순서 — {@code coupon_stocks} → {@code issuances} → {@code issuance_histories}</h2>
+ *
+ * <p>계약을 지는 것은 <b>쓰는 넷</b>이다 — {@link #lockStock} → {@link #expireBatch}
+ * → {@link #appendExpireHistories} → {@link #releaseStock}.
+ *
+ * <p><b>이 순서는 우리가 고른 것이 아니라 시스템에 이미 있던 것이다.</b>
+ * <b>재고를 건드리는 경로는 전부 {@code coupon_stocks} 를 먼저 잠근다.</b>
+ *
+ * <table border="1">
+ *   <caption>사용자 경로가 재고 행을 언제 잠그나</caption>
+ *   <tr><td>{@code CouponIssueService}</td><td>항상 — 첫 문장</td></tr>
+ *   <tr><td>{@code CouponCancelService}</td><td>항상 — 첫 쓰기 전</td></tr>
+ *   <tr><td>{@code CouponCancelUseService}</td>
+ *       <td><b>{@code EXPIRED} 로 갈 때만.</b> 보통 경로({@code USED → ISSUED})는 재고를
+ *           아예 안 건드려 이 순서 밖이다 — 그리고 <b>안 기다리므로 순환도 안 만든다</b></td></tr>
+ * </table>
+ *
+ * <p>발급이 그렇게 하는 데는 이유가 있다 — <b>재고 판정이 곧 선착순 판정</b>이라 그 행이
+ * 직렬화 지점이다. 바꿀 수 있는 쪽은 만료다.
+ *
+ * <p><b>반대로 잡으면 데드락이 난다. 재현했다</b> — MySQL 8.4 · READ COMMITTED · 두 세션.
+ * 만료가 {@code issuances} 를 잡은 채 재고를 기다리고, 취소가 재고를 잡은 채 그 발급건을
+ * 기다리자 오류 <b>1213</b> 이 났다. <b>6/6, 뜨는 순서와 무관.</b>
+ *
+ * <p><b>희생되는 쪽은 언제나 취소였다.</b> 취소는 그 시점까지 {@code FOR UPDATE} 읽기만 해서
+ * undo 가 비어 있고, InnoDB 는 <b>한 일이 적은 쪽</b>을 죽인다. 그래서 운영에서 보이는 모습이
+ * 이렇게 된다 — <b>사용자 취소가 간헐적으로 실패하는데 배치 로그는 깨끗하다.</b>
+ * 이 잡의 메트릭 어디에도 안 잡힌다.
+ *
+ * <p><b>발급은 이 데드락에 안 걸린다(0/3).</b> 새 행을 {@code INSERT} 하므로 만료가 쥔 기존
+ * 행을 기다릴 일이 없고, 재고 행에서 <b>직렬화만</b> 된다. 걸리는 것은 기존 발급건을 고치면서
+ * 재고를 건드리는 둘 — <b>취소와 사용취소</b>다.
  *
  * <p><b>나머지는 락을 안 잡는 읽기라 이 순서 밖이다</b> — {@link #blockedCoupons} ·
- * {@link #countPending} · {@link #lastExpiredId} · {@link #expiredCouponCount} ·
- * {@link #stockRowCount}. 선언 순서를 계약으로 읽지 마라. 새 <b>쓰기</b> 메서드를 더할 때
- * 자리를 정하는 것은 선언 위치가 아니라 이 문단이고, 실제로 지키는 것은
- * {@code ExpireJobLockOrderTest} 다.
- *
- * <p>반대로 잡으면 데드락이 난다. {@code mysql:latest} 컨테이너에 두 세션으로 재현했다 —
- * 한쪽이 {@code issuances} 를 잡은 채 {@code coupon_stocks} 를 기다리고 다른 쪽이 그 반대로
- * 기다리자 오류 <b>1213</b> 이 나면서 한쪽이 통째로 되돌아갔다. 재현에서 희생된 쪽은
- * 만료였다 — 되돌아가는 것이 만료면 <b>그 주기의 만료가 통째로 밀린다.</b>
- * 순서를 지키는 것은 {@code ExpireJobLockOrderTest} 다.
+ * {@link #countPending} · {@link #nextCandidates}. 선언 순서를 계약으로 읽지 마라.
+ * 새 <b>쓰기</b> 메서드를 더할 때 자리를 정하는 것은 선언 위치가 아니라 이 문단이고,
+ * 실제로 지키는 것은 {@code ExpireJobLockOrderTest} 다.
  */
 public interface ExpirationRepository {
 
@@ -102,29 +139,63 @@ public interface ExpirationRepository {
     PendingExpiration countPending(LocalDateTime asOf, List<Long> blockedCouponIds);
 
     /**
-     * {@code id > afterId} 인 것 중 앞에서부터 {@code limit} 건을 만료로 넘긴다.
+     * 이 청크가 <b>건드릴 후보</b>를 id 오름차순으로 {@code limit} 건까지 읽는다. <b>락을 안 잡는다.</b>
      *
-     * <p><b>거르는 조건이 {@code UPDATE} 안에 있다.</b> 후보를 먼저 뽑았다가 그 사이 사용된 건을
-     * 빼는 방식이면, 후보가 전부 사용된 청크에서 진도가 안 나가 같은 자리를 맴돈다.
-     * 조건을 안에 두면 <b>0 은 곧 "남은 대상이 없다"</b> 가 되어 그것이 종료 신호다.
+     * <h2>왜 미리 읽나</h2>
+     *
+     * <p>재고 행을 <b>먼저</b> 잠가야 하는데({@link #lockStock}), 어느 회차의 행을 잠글지는
+     * {@code UPDATE} 를 돌려 봐야 알 수 있었다. 그 순서를 뒤집으려면 어느 회차인지가
+     * <b>쓰기 전에</b> 정해져 있어야 한다. 그래서 후보를 먼저 본다.
+     *
+     * <p><b>여기서 읽은 건수를 만료 건수로 쓰면 안 된다.</b> 락을 안 잡으므로 이 사이에
+     * 사용·취소가 들어올 수 있다. 실제로 넘어간 수는 {@link #expireBatch} 의 매치 건수뿐이다.
+     *
+     * <p><b>대신 진도는 여기서 나온다.</b> 예전에는 {@code UPDATE} 가 0 을 돌려주는 것이
+     * 종료 신호였는데, 그러면 <b>후보가 전부 사용된 청크에서 진도가 안 나가</b> 같은 자리를
+     * 맴돈다. 이제 종료 신호는 <b>후보 0건</b>이고, 넘어간 것이 없어도 {@code afterId} 는
+     * {@link ExpireChunk#lastId} 까지 밀린다.
+     *
+     * <p><b>{@code ORDER BY id} 가 계약이다.</b> {@link ExpireChunk#from} 이 그 위에서
+     * 연속부를 자른다 — 순서가 어긋나면 자른 구간 밖에 같은 회차의 대상이 남는데
+     * {@code afterId} 는 그 위로 밀려 <b>그 건들이 영영 안 넘어간다.</b>
      *
      * @param blockedCoupons 이 실행에서 손대지 않을 회차. {@link #blockedCoupons} 가 준 것을
-     *                       그대로 넘긴다. <b>빈 목록이 정상이다</b> — 오염이 없는 날이
-     *                       대부분이다. {@code NOT IN ()} 이 문법 오류라는 사정은 어댑터가
-     *                       센티널로 처리하므로 부르는 쪽은 신경 쓰지 않는다
-     * @return 실제로 넘어간 건수. 그 사이 사용·취소된 건은 세지 않는다
+     *                       그대로 넘긴다. <b>빈 목록이 정상이다</b>
      */
-    int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, int limit,
+    List<ExpireCandidate> nextCandidates(LocalDateTime asOf, long afterId, int limit,
             List<Long> blockedCoupons);
 
     /**
-     * 방금 넘어간 집합의 가장 큰 id. 다음 청크가 여기서 이어 간다.
+     * 회차의 재고 행을 {@code SELECT … FOR UPDATE} 로 잠근다. <b>청크의 첫 쓰기 락이다.</b>
      *
-     * <p>넘어간 것이 없으면 {@code afterId} 를 그대로 돌려준다 — 0 으로 되돌리면 다음 청크가
-     * 앞 구간을 다시 훑는다. 종료 판단은 {@link #expireBatch} 의 반환값으로 하므로 잡은 이
-     * 경로를 밟지 않지만, 계약은 계약이라 {@code ExpirationJdbcAdapterTest} 가 도달시킨다.
+     * <p>발급·취소·사용취소가 전부 이 행을 먼저 잠근다. 만료도 같은 자리에서 시작해야
+     * 순환이 안 생긴다 — 클래스 주석의 1213 재현이 그 이유다.
+     *
+     * <p><b>잠그기만 하고 아무것도 안 읽는다.</b> 뺄 수 있는지는 {@link #releaseStock} 의
+     * {@code active_count >= n} 조건이 판단한다. 여기서 값을 읽어 자바에서 비교하면
+     * <b>읽은 값과 쓰는 값 사이가 벌어진다</b> — 지금은 우리가 락을 쥐고 있어 안 벌어지지만,
+     * 그 안전이 <i>"락을 쥐고 있다"</i> 는 사실 하나에만 걸리게 된다.
+     *
+     * @return 재고 행이 있으면 {@code true}. <b>{@code false} 는 사고다</b> —
+     *         {@link #blockedCoupons} 가 재고 행 없는 회차를 이미 걸렀어야 한다
      */
-    long lastExpiredId(LocalDateTime asOf, LocalDateTime committedAt, long afterId);
+    boolean lockStock(long couponId);
+
+    /**
+     * {@code (afterId, lastId]} 구간에서 <b>그 회차의</b> 만료 대상을 넘긴다.
+     *
+     * <p><b>거르는 조건이 {@code UPDATE} 안에 있다.</b> 후보를 미리 읽긴 하지만 그것은
+     * <b>범위를 정하는 용도</b>일 뿐이고, 넘길지 말지는 여기서 다시 판단한다. 그 사이에
+     * 사용된 건은 여기서 매치가 안 되고, 반환값이 후보 수보다 작아진다.
+     *
+     * <p><b>0 이 종료 신호가 아니다.</b> 그 자리는 {@link #nextCandidates} 가 진다.
+     * 여기서 0 은 <i>"그 구간이 전부 사용·취소됐다"</i> 는 뜻이고, 그때도 진도는 나간다.
+     *
+     * @param couponId {@link ExpireChunk#couponId}. 이 회차의 재고 행을 이미 잠근 상태여야 한다
+     * @return 실제로 넘어간 건수
+     */
+    int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId,
+            long couponId);
 
     /**
      * 방금 넘어간 건마다 {@code EXPIRE} 이력을 한 줄 남긴다.
@@ -133,48 +204,33 @@ public interface ExpirationRepository {
      * <i>"이력 없는 발급건"</i> 으로 잡는다. 상태만 바꾸고 이력을 안 남기면 안 된다.
      *
      * <p>{@code (afterId, lastId]} 로 닫아 훑는 범위를 그 청크로 제한한다. 상한이 없으면
-     * 이 문장이 테이블 끝까지 공유 락을 잡아 발급이 막힌다(클래스 주석의 실측).
+     * 이 문장이 테이블 끝까지 공유 락을 잡아 발급이 막힌다.
+     *
+     * <p><b>회차도 함께 좁힌다.</b> 그 구간은 회차가 섞일 수 있고 — 연속부 자르기는 후보
+     * 목록 안에서만 연속이다 — 청크가 회차 하나로 정해진 뒤로는 그 조건을 거는 비용이 0 이다.
+     * 그러면 이 문장이 표식({@code updated_at = committedAt})의 유일성에 기대지 않는다.
      *
      * @return 쓴 이력 수. 넘어간 건수와 같아야 한다
      */
     int appendExpireHistories(LocalDateTime asOf, LocalDateTime committedAt,
-            long afterId, long lastId);
+            long afterId, long lastId, long couponId);
 
     /**
-     * 방금 넘어간 집합에 걸린 <b>회차 수</b>. {@link #stockRowCount} 가 센 행 수와 같아야 한다.
-     *
-     * <p>짝이 {@link #releaseStock} 이 아닌 것에 유의해라. 셋을 함께 봐야 두 실패가 갈린다 —
-     * 이 값과 {@link #stockRowCount} 가 다르면 <b>재고 행이 없는 회차</b>,
-     * {@link #stockRowCount} 와 {@link #releaseStock} 이 다르면 <b>뺄 재고가 모자란 회차</b>다.
-     *
-     * <p>같지 않으면 <b>재고 행이 없는 회차가 섞였다</b>는 뜻이다. 그 회차의 발급건은 만료로
-     * 넘어갔는데 되돌릴 재고가 없다. {@code JOIN} 이 조용히 건너뛰므로 세지 않으면 아무도 모른다.
-     */
-    int expiredCouponCount(LocalDateTime asOf, LocalDateTime committedAt,
-            long afterId, long lastId);
-
-    /**
-     * 방금 넘어간 집합 중 <b>재고 행이 실제로 있는</b> 회차 수.
-     *
-     * <p>{@link #releaseStock} 이 갱신한 행 수와 짝을 이룬다. 셋을 함께 봐야 두 실패가 갈린다 —
-     * {@link #expiredCouponCount} 와 다르면 <b>재고 행이 없는 회차</b>, 이 값과
-     * {@link #releaseStock} 이 다르면 <b>뺄 재고가 모자란 회차</b>다. 하나로 뭉치면 원인이 섞인
-     * 메시지가 나가고, 운영자가 엉뚱한 곳을 본다.
-     */
-    int stockRowCount(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId);
-
-    /**
-     * 넘어간 건수만큼 회차별 {@code active_count} 를 줄인다.
+     * 넘어간 건수만큼 그 회차의 {@code active_count} 를 줄인다.
      *
      * <p><b>빼는 것이 맞다.</b> {@code active_count} 는 <i>ISSUED + USED 합계</i> 라
      * 만료는 그 합계에서 빠진다. 가용 재고가 그만큼 느는 것이 "재고 복원" 의 실체다.
      * 방향을 반대로 잡으면 완판 판정이 조용히 뒤집힌다.
      *
-     * <p><b>뺄 수 있는 회차만 갱신한다({@code active_count >= 차감량}).</b> 음수를 막는 것이
+     * <p><b>뺄 수 있을 때만 갱신한다({@code active_count >= expired}).</b> 음수를 막는 것이
      * {@code ck_stock_range} 뿐이면 그 제약을 떼어 낸 CORRUPT 스키마에서 음수가 그대로 커밋된다.
      * 불변식을 조건으로도 표현해 두면 스키마와 무관하게 막힌다.
      *
-     * @return 갱신된 회차 수. {@link #stockRowCount} 와 다르면 뺄 재고가 모자란 회차가 있다
+     * <p><b>한때는 {@code JOIN … GROUP BY} 로 회차별 합계를 접었다.</b> 청크가 여러 회차에
+     * 걸쳤기 때문이다. 이제 청크가 회차 하나라 접을 것이 없고, 넘어간 수도 이미 알고 있다.
+     *
+     * @return 갱신된 행 수. <b>1 이어야 한다</b> — 0 이면 뺄 재고가 모자란 회차다.
+     *         재고 행이 없는 경우는 여기 오지 않는다({@link #lockStock} 이 먼저 잡는다)
      */
-    int releaseStock(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId);
+    int releaseStock(long couponId, int expired, LocalDateTime committedAt);
 }
