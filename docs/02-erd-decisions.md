@@ -95,14 +95,15 @@ v1이 "비관적 락으로 인한 병목"을 측정하는 버전인데, 잠금 �
 verification_findings(
   id           BIGINT PK,
   run_id       BIGINT FK,
-  finding_type VARCHAR(40),      -- STOCK_MISMATCH / DUP_PER_MEMBER / REPLAY_MISMATCH / ...
-  campaign_id  BIGINT NULL,      -- 재고 불일치. 레거시 이름 — 회차 coupons.id
-  member_id    BIGINT NULL,      -- 1인 다매
-  coupon_id    BIGINT NULL,      -- 레거시 이름 — 발급건 issuances.id
-  history_id   BIGINT NULL,      -- 불법 전이
-  expected     VARCHAR(200),     -- "active_count=9998"
-  actual       VARCHAR(200),     -- "issuances 집계=10001"
-  INDEX idx_run_type (run_id, finding_type)
+  finding_type VARCHAR(40)  NOT NULL,  -- STOCK_MISMATCH / DUP_PER_MEMBER / ...
+  target_key   VARCHAR(64)  NOT NULL,  -- 아래 "확정" 의 그 키. 비교는 전부 이것으로만
+  campaign_id  BIGINT NULL,            -- 재고 불일치. 레거시 이름 — 회차 coupons.id
+  member_id    BIGINT NULL,            -- 1인 다매
+  coupon_id    BIGINT NULL,            -- 레거시 이름 — 발급건 issuances.id
+  history_id   BIGINT NULL,            -- 불법 전이
+  expected     VARCHAR(200) NOT NULL,  -- "active_count=9998"
+  actual       VARCHAR(200) NOT NULL,  -- "issuances 집계=10001"
+  UNIQUE uk_run_finding (run_id, finding_type, target_key)
 )
 ```
 
@@ -181,7 +182,7 @@ V5  사용 실적 정합
     → 사용취소가 usages 를 안 건드리고 status 만 되돌린 버그의 형태
 ```
 
-오염셋이 600 → 700건이 되는데, **오염 유형이 늘어나는 건 검증이 강해진다는 뜻**이라 부담이 아니다. 인덱스 `idx_usage_coupon_active (coupon_id, canceled_at)`가 이미 있어서 검출 비용도 낮다.
+오염셋이 600 → 700건이 되는데, **오염 유형이 늘어나는 건 검증이 강해진다는 뜻**이라 부담이 아니다. 인덱스 `idx_usage_issuance_active (issuance_id, canceled_at)`가 이미 있어서 검출 비용도 낮다.
 
 ---
 
@@ -206,12 +207,16 @@ idempotency_records 에  issuance_id BIGINT NULL  추가   (양방향 추적)
 
 `idempotency_records`는 어차피 함정 5(멱등 동시 요청) 때문에 `status` 컬럼을 추가해야 한다. **같이 손대는 김에 넣는다.**
 
+> 실제로는 `issuance_id BIGINT NOT NULL` 로 들어갔다(`V1__init_schema.sql`). 여기 `NULL` 은
+> 이 문서가 제안하던 시점의 값이라 그대로 두고, 결과만 적어 둔다 — 멱등 레코드는 언제나
+> 어느 발급건에 대한 요청인지가 정해져 있어서 `NULL` 을 허용할 자리가 없었다.
+
 ```sql
 idempotency_records(
   idem_key      VARCHAR(36) PK,
   request_hash  CHAR(64),
   status        VARCHAR(12),   -- IN_PROGRESS / DONE     ← 함정 5
-  coupon_id     BIGINT NULL,   -- 추적                    ← F4
+  issuance_id   BIGINT NULL,   -- 추적                    ← F4
   response_body TEXT,
   created_at    DATETIME(6)
 )
@@ -395,7 +400,7 @@ erDiagram
 
 **⚠️ `verification_findings` 두 컬럼은 이름과 뜻이 어긋나 있다.** 회차·발급건이
 `campaigns`·`coupons` 이던 시절에 붙은 이름이 그대로 남았다 — 지금 `campaign_id` 는
-**회차**(`issuances.id`), `coupon_id` 는 **발급건**(`issuances.id`)이다. 스키마에 실재하는
+**회차**(`coupons.id`), `coupon_id` 는 **발급건**(`issuances.id`)이다. 스키마에 실재하는
 이름이라 ERD 에서 고치면 없는 컬럼을 그리게 되므로 그대로 두고 뜻만 밝힌다.
 집합 비교는 이 컬럼들이 아니라 `target_key` 로만 한다.
 
