@@ -20,7 +20,7 @@ import com.kafkick.core.observation.SourceStatus;
  * Overview Controller 테스트와 같은 캠페인 모집단을 사용하는 상세 지표 Fixture를 제공합니다.
  *
  * <p>캠페인 기본 정보·재고·대기열은 Overview Dataset에서 그대로 가져옵니다. 상세 화면에만 필요한
- * 누적 발급 Counter, 상태별 보유량과 전이 버킷은 원천 수량으로만 보강하며 파생 비율이나 속도는
+ * 초당 발급률, 상태별 보유량과 전이 버킷은 원천 수량으로만 보강하며 파생 비율이나 속도는
  * 계산하지 않습니다.</p>
  *
  * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
@@ -151,20 +151,18 @@ public class AdminCouponMetricsTestFixture {
                 counts, campaign.stockStatus(), campaign.stockObservedAt());
     }
 
-    /** 15분 전 기준점부터 현재까지의 불변 누적 완료 Counter 표본을 만듭니다. */
-    private static List<CouponMetricsSource.IssuanceCounterSample> issuanceSamples(
+    /** 15분 전 기준점부터 현재까지의 불변 초당 발급률 표본을 만듭니다. */
+    private static List<CouponMetricsSource.IssuanceRateSample> issuanceSamples(
             long couponId,
             Instant snapshotAt
     ) {
         long[] completedPerMinute = completedPerMinute(couponId);
-        List<CouponMetricsSource.IssuanceCounterSample> samples = new ArrayList<>();
-        long cumulative = couponId * 1_000L;
+        List<CouponMetricsSource.IssuanceRateSample> samples = new ArrayList<>();
         Instant firstObservedAt = snapshotAt.minus(Duration.ofMinutes(SAMPLE_INTERVAL_COUNT));
-        samples.add(new CouponMetricsSource.IssuanceCounterSample(firstObservedAt, cumulative));
         for (int index = 0; index < completedPerMinute.length; index++) {
-            cumulative = Math.addExact(cumulative, completedPerMinute[index]);
-            samples.add(new CouponMetricsSource.IssuanceCounterSample(
-                    firstObservedAt.plus(SAMPLE_INTERVAL.multipliedBy(index + 1L)), cumulative));
+            samples.add(new CouponMetricsSource.IssuanceRateSample(
+                    firstObservedAt.plus(SAMPLE_INTERVAL.multipliedBy(index + 1L)),
+                    completedPerMinute[index] / (double) SAMPLE_INTERVAL.toSeconds()));
         }
         return List.copyOf(samples);
     }

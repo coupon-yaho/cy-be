@@ -35,6 +35,17 @@ class CouponMetricsSourceTest {
     }
 
     @Test
+    void rejectsNegativeOrNonFiniteRateSamples() {
+        assertThatThrownBy(() -> new CouponMetricsSource.IssuanceRateSample(OBSERVED_AT, -0.1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.IssuanceRateSample(OBSERVED_AT, Double.NaN))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CouponMetricsSource.IssuanceRateSample(
+                OBSERVED_AT, Double.POSITIVE_INFINITY))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void rejectsInvalidCouponAndCountRelationships() {
         CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock = observed(
                 new CouponMetricsSource.StockCounts(100L, 40L));
@@ -66,16 +77,16 @@ class CouponMetricsSourceTest {
     }
 
     @Test
-    void rejectsDecreasingCountersAndOverlappingTransitionBuckets() {
-        List<CouponMetricsSource.IssuanceCounterSample> decreasing = List.of(
-                new CouponMetricsSource.IssuanceCounterSample(OBSERVED_AT.minusSeconds(10), 10L),
-                new CouponMetricsSource.IssuanceCounterSample(OBSERVED_AT, 9L));
+    void rejectsOutOfOrderRatesAndOverlappingTransitionBuckets() {
+        List<CouponMetricsSource.IssuanceRateSample> outOfOrder = List.of(
+                new CouponMetricsSource.IssuanceRateSample(OBSERVED_AT, 10.0),
+                new CouponMetricsSource.IssuanceRateSample(OBSERVED_AT.minusSeconds(10), 9.0));
         List<CouponMetricsSource.TransitionBucket> overlapping = List.of(
                 bucket(OBSERVED_AT.minusSeconds(20), OBSERVED_AT.minusSeconds(10)),
                 bucket(OBSERVED_AT.minusSeconds(15), OBSERVED_AT));
 
         assertThatThrownBy(() -> source(1L, observed(new CouponMetricsSource.StockCounts(100L, 40L)),
-                observed(decreasing), observed(List.of())))
+                observed(outOfOrder), observed(List.of())))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> source(1L, observed(new CouponMetricsSource.StockCounts(100L, 40L)),
                 observed(List.of()), observed(overlapping)))
@@ -84,8 +95,8 @@ class CouponMetricsSourceTest {
 
     @Test
     void copiesSourceListsDefensively() {
-        ArrayList<CouponMetricsSource.IssuanceCounterSample> samples = new ArrayList<>();
-        samples.add(new CouponMetricsSource.IssuanceCounterSample(OBSERVED_AT, 10L));
+        ArrayList<CouponMetricsSource.IssuanceRateSample> samples = new ArrayList<>();
+        samples.add(new CouponMetricsSource.IssuanceRateSample(OBSERVED_AT, 10.0));
 
         CouponMetricsSource source = source(1L,
                 observed(new CouponMetricsSource.StockCounts(100L, 40L)),
@@ -93,15 +104,15 @@ class CouponMetricsSourceTest {
                 observed(List.of()));
         samples.clear();
 
-        assertThat(source.issuanceSamples().value()).hasSize(1);
-        assertThatThrownBy(() -> source.issuanceSamples().value().clear())
+        assertThat(source.issuanceRateSamples().value()).hasSize(1);
+        assertThatThrownBy(() -> source.issuanceRateSamples().value().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
     private static CouponMetricsSource source(
             long couponId,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
-            CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceCounterSample>> samples,
+            CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> samples,
             CouponMetricsSource.Observation<List<CouponMetricsSource.TransitionBucket>> transitions
     ) {
         return new CouponMetricsSource(

@@ -11,12 +11,12 @@ import com.kafkick.core.observation.SourceStatus;
  * 관리자 캠페인 상세 지표 계산에 전달하는 기술 중립 원천값입니다.
  *
  * <p>DB나 Redis 자료구조를 노출하지 않고, 값과 관측 상태 및 관측 시각을 함께 보존합니다.
- * 누적 발급 표본과 상태 전이 버킷은 생성 시 불변 복사하여 요청 중 원천값이 바뀌지 않게 합니다.</p>
+ * 발급률 표본과 상태 전이 버킷은 생성 시 불변 복사하여 요청 중 원천값이 바뀌지 않게 합니다.</p>
  *
  * @param couponId 캠페인을 식별하는 양수 쿠폰 ID
  * @param campaign 캠페인 운영 상태와 오픈 시각
  * @param stock 전체 수량과 활성 발급 수량
- * @param issuanceSamples 누적 발급 완료 Counter 표본
+ * @param issuanceRateSamples Prometheus가 계산한 초당 발급률 표본
  * @param queue 현재 대기 수와 입장 관측 구간
  * @param holdingCounts 발급 상태별 현재 보유량
  * @param transitions 사용·취소·만료 상태 전이 버킷
@@ -25,7 +25,7 @@ public record CouponMetricsSource(
         Long couponId,
         CampaignRuntime campaign,
         Observation<StockCounts> stock,
-        Observation<List<IssuanceCounterSample>> issuanceSamples,
+        Observation<List<IssuanceRateSample>> issuanceRateSamples,
         Observation<QueueCounts> queue,
         Observation<IssuanceStatusCounts> holdingCounts,
         Observation<List<TransitionBucket>> transitions
@@ -36,7 +36,7 @@ public record CouponMetricsSource(
         Objects.requireNonNull(couponId, "couponId");
         Objects.requireNonNull(campaign, "campaign");
         Objects.requireNonNull(stock, "stock");
-        Objects.requireNonNull(issuanceSamples, "issuanceSamples");
+        Objects.requireNonNull(issuanceRateSamples, "issuanceRateSamples");
         Objects.requireNonNull(queue, "queue");
         Objects.requireNonNull(holdingCounts, "holdingCounts");
         Objects.requireNonNull(transitions, "transitions");
@@ -44,11 +44,11 @@ public record CouponMetricsSource(
             throw new IllegalArgumentException("couponId는 양수여야 합니다.");
         }
 
-        if (issuanceSamples.value() != null) {
-            List<IssuanceCounterSample> samples = List.copyOf(issuanceSamples.value());
-            validateSamples(samples);
-            issuanceSamples = new Observation<>(samples,
-                    issuanceSamples.status(), issuanceSamples.observedAt());
+        if (issuanceRateSamples.value() != null) {
+            List<IssuanceRateSample> samples = List.copyOf(issuanceRateSamples.value());
+            validateIssuanceRateSamples(samples);
+            issuanceRateSamples = new Observation<>(samples,
+                    issuanceRateSamples.status(), issuanceRateSamples.observedAt());
         }
         if (transitions.value() != null) {
             List<TransitionBucket> buckets = List.copyOf(transitions.value());
@@ -58,16 +58,13 @@ public record CouponMetricsSource(
         }
     }
 
-    /** 누적 Counter가 시간순으로 증가하거나 유지되는지 확인합니다. */
-    private static void validateSamples(List<IssuanceCounterSample> samples) {
+    /** 발급률 표본이 시간순으로 한 번씩만 기록됐는지 확인합니다. */
+    private static void validateIssuanceRateSamples(List<IssuanceRateSample> samples) {
         for (int index = 1; index < samples.size(); index++) {
-            IssuanceCounterSample previous = samples.get(index - 1);
-            IssuanceCounterSample current = samples.get(index);
+            IssuanceRateSample previous = samples.get(index - 1);
+            IssuanceRateSample current = samples.get(index);
             if (!current.observedAt().isAfter(previous.observedAt())) {
-                throw new IllegalArgumentException("발급 Counter 표본 시각은 오름차순이어야 합니다.");
-            }
-            if (current.cumulativeCompletedCount() < previous.cumulativeCompletedCount()) {
-                throw new IllegalArgumentException("누적 발급 완료 수는 감소할 수 없습니다.");
+                throw new IllegalArgumentException("발급률 표본 시각은 오름차순이어야 합니다.");
             }
         }
     }
@@ -104,13 +101,15 @@ public record CouponMetricsSource(
         }
     }
 
-    /** 특정 시각의 누적 발급 완료 Counter 표본입니다. */
-    public record IssuanceCounterSample(Instant observedAt, long cumulativeCompletedCount) {
+    /** 특정 시각의 Prometheus 초당 발급률 표본입니다. */
+    public record IssuanceRateSample(Instant observedAt, double perSecond) {
 
-        /** 표본 시각과 누적 수량을 검증합니다. */
-        public IssuanceCounterSample {
+        /** 표본 시각과 음수가 아닌 유한 발급률을 검증합니다. */
+        public IssuanceRateSample {
             Objects.requireNonNull(observedAt, "observedAt");
-            requireNonNegative(cumulativeCompletedCount, "cumulativeCompletedCount");
+            if (!Double.isFinite(perSecond) || perSecond < 0.0) {
+                throw new IllegalArgumentException("초당 발급률은 음수가 아닌 유한값이어야 합니다.");
+            }
         }
     }
 

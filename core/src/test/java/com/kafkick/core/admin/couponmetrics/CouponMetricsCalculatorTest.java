@@ -23,7 +23,7 @@ class CouponMetricsCalculatorTest {
     @Test
     void calculatesStockProgressUsageQueueAndWindowedRates() {
         CouponMetricsSnapshot result = calculator.calculate(
-                sourceWithFifteenMinutes(), MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT);
+                sourceWithWindow(MetricsWindow.FIVE_MINUTES), MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT);
 
         assertThat(result.stock().remainingCount().value()).isEqualTo(400L);
         assertThat(result.issuanceProgress().value()).isEqualTo(0.6);
@@ -37,18 +37,19 @@ class CouponMetricsCalculatorTest {
 
     @Test
     void appliesRequestedWindowToPeakAndTransitionRates() {
-        CouponMetricsSource source = sourceWithFifteenMinutes();
-
         CouponMetricsSnapshot oneMinute = calculator.calculate(
-                source, MetricsWindow.ONE_MINUTE, SNAPSHOT_AT);
+                sourceWithWindow(MetricsWindow.ONE_MINUTE), MetricsWindow.ONE_MINUTE, SNAPSHOT_AT);
         CouponMetricsSnapshot fiveMinutes = calculator.calculate(
-                source, MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT);
+                sourceWithWindow(MetricsWindow.FIVE_MINUTES), MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT);
         CouponMetricsSnapshot fifteenMinutes = calculator.calculate(
-                source, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT);
+                sourceWithWindow(MetricsWindow.FIFTEEN_MINUTES), MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT);
 
         assertThat(oneMinute.issuanceRate().value().peakPerSecond()).isEqualTo(12.0);
         assertThat(fiveMinutes.issuanceRate().value().peakPerSecond()).isEqualTo(20.0);
         assertThat(fifteenMinutes.issuanceRate().value().peakPerSecond()).isEqualTo(30.0);
+        assertThat(oneMinute.issuanceRate().value().currentPerSecond()).isEqualTo(12.0);
+        assertThat(fiveMinutes.issuanceRate().value().currentPerSecond()).isEqualTo(12.0);
+        assertThat(fifteenMinutes.issuanceRate().value().currentPerSecond()).isEqualTo(12.0);
         assertThat(oneMinute.transitionRate().value().usePerSecond()).isEqualTo(1.0);
         assertThat(fiveMinutes.transitionRate().value().usePerSecond()).isEqualTo(0.6);
         assertThat(fifteenMinutes.transitionRate().value().usePerSecond()).isEqualTo(0.4);
@@ -66,7 +67,7 @@ class CouponMetricsCalculatorTest {
                 observed(new CouponMetricsSource.QueueCounts(
                         0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
-                observed(issuanceSamples()),
+                observed(issuanceSamples(MetricsWindow.FIVE_MINUTES)),
                 observed(List.of(partialBucket)));
 
         assertThatThrownBy(() -> calculator.calculate(
@@ -82,7 +83,7 @@ class CouponMetricsCalculatorTest {
                 observed(new CouponMetricsSource.QueueCounts(
                         0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(0L, 0L, 0L, 0L)),
-                noTraffic(List.of()),
+                noTraffic(List.of(rateSample(-1, 0.0), rateSample(0, 0.0))),
                 observed(transitionBuckets()));
 
         CouponMetricsSnapshot result = calculator.calculate(
@@ -145,7 +146,7 @@ class CouponMetricsCalculatorTest {
                 observed(new CouponMetricsSource.QueueCounts(
                         0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
-                observed(issuanceSamples()),
+                observed(issuanceSamples(MetricsWindow.FIVE_MINUTES)),
                 noTraffic(transitionBuckets()));
 
         assertThatThrownBy(() -> calculator.calculate(
@@ -195,9 +196,11 @@ class CouponMetricsCalculatorTest {
     }
 
     @Test
-    void rejectsFutureIssuanceSamples() {
-        List<CouponMetricsSource.IssuanceCounterSample> samples = new ArrayList<>(issuanceSamples());
-        samples.add(new CouponMetricsSource.IssuanceCounterSample(SNAPSHOT_AT.plusSeconds(1), 20_000L));
+    void rejectsRateSamplesOutsideRequestedWindow() {
+        List<CouponMetricsSource.IssuanceRateSample> samples = new ArrayList<>(issuanceSamples().stream()
+                .filter(sample -> !sample.observedAt().isBefore(SNAPSHOT_AT.minus(Duration.ofMinutes(5))))
+                .toList());
+        samples.add(new CouponMetricsSource.IssuanceRateSample(SNAPSHOT_AT.plusSeconds(1), 20.0));
         CouponMetricsSource source = sourceWith(
                 observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
                 observed(new CouponMetricsSource.QueueCounts(
@@ -209,7 +212,7 @@ class CouponMetricsCalculatorTest {
         assertThatThrownBy(() -> calculator.calculate(
                 source, MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("미래");
+                .hasMessageContaining("요청 구간");
 
         CouponMetricsSource noTrafficWithFuture = sourceWith(
                 observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
@@ -217,21 +220,21 @@ class CouponMetricsCalculatorTest {
                         0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
                 noTraffic(List.of(
-                        new CouponMetricsSource.IssuanceCounterSample(SNAPSHOT_AT, 10L),
-                        new CouponMetricsSource.IssuanceCounterSample(SNAPSHOT_AT.plusSeconds(1), 10L))),
+                        new CouponMetricsSource.IssuanceRateSample(SNAPSHOT_AT, 0.0),
+                        new CouponMetricsSource.IssuanceRateSample(SNAPSHOT_AT.plusSeconds(1), 0.0))),
                 observed(transitionBuckets()));
 
         assertThatThrownBy(() -> calculator.calculate(
                 noTrafficWithFuture, MetricsWindow.FIVE_MINUTES, SNAPSHOT_AT))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("미래");
+                .hasMessageContaining("요청 구간");
     }
 
     @Test
-    void rejectsPartialSamplesThatDoNotCoverRequestedWindow() {
-        List<CouponMetricsSource.IssuanceCounterSample> samples = issuanceSamples().stream()
-                .filter(sample -> !sample.observedAt().isBefore(SNAPSHOT_AT.minus(Duration.ofMinutes(5))))
-                .toList();
+    void rejectsRateSamplesBeforeRequestedWindow() {
+        List<CouponMetricsSource.IssuanceRateSample> samples = new ArrayList<>(issuanceSamples());
+        samples.add(0, new CouponMetricsSource.IssuanceRateSample(
+                SNAPSHOT_AT.minus(Duration.ofMinutes(16)), 1.0));
         CouponMetricsSource source = sourceWith(
                 observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
                 observed(new CouponMetricsSource.QueueCounts(
@@ -247,31 +250,77 @@ class CouponMetricsCalculatorTest {
     }
 
     @Test
-    void rejectsSamplesWithoutAnExactCounterAtWindowStart() {
-        List<CouponMetricsSource.IssuanceCounterSample> samples = new ArrayList<>();
-        samples.add(sample(-16, 0L));
-        samples.addAll(issuanceSamples().subList(1, issuanceSamples().size()));
+    void preservesWarmingUpAndStaleRateSummaries() {
+        List<CouponMetricsSource.IssuanceRateSample> samples = List.of(
+                rateSample(-10, 3.0), rateSample(-5, 7.0), rateSample(-1, 5.0));
+        CouponMetricsSource warmingUp = sourceWith(
+                observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
+                observed(new CouponMetricsSource.QueueCounts(
+                        0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
+                observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
+                new CouponMetricsSource.Observation<>(samples, SourceStatus.WARMING_UP, SNAPSHOT_AT.minusSeconds(1)),
+                observed(transitionBuckets()));
+        CouponMetricsSource stale = sourceWith(
+                observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
+                observed(new CouponMetricsSource.QueueCounts(
+                        0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
+                observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
+                new CouponMetricsSource.Observation<>(samples, SourceStatus.STALE, SNAPSHOT_AT.minusSeconds(1)),
+                observed(transitionBuckets()));
+
+        CouponMetricsSnapshot warmingUpResult = calculator.calculate(
+                warmingUp, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT);
+        CouponMetricsSnapshot staleResult = calculator.calculate(
+                stale, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT);
+
+        assertThat(warmingUpResult.issuanceRate().status()).isEqualTo(SourceStatus.WARMING_UP);
+        assertThat(warmingUpResult.issuanceRate().value())
+                .isEqualTo(new CouponMetricsSnapshot.RateSummary(5.0, 7.0));
+        assertThat(staleResult.issuanceRate().status()).isEqualTo(SourceStatus.STALE);
+        assertThat(staleResult.issuanceRate().value())
+                .isEqualTo(new CouponMetricsSnapshot.RateSummary(5.0, 7.0));
+        assertThat(staleResult.issuanceRate().observedAt()).isEqualTo(SNAPSHOT_AT.minusSeconds(1));
+    }
+
+    @Test
+    void preservesValueLessRateStatuses() {
+        CouponMetricsSource pending = sourceWith(
+                observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
+                observed(new CouponMetricsSource.QueueCounts(
+                        0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
+                observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
+                new CouponMetricsSource.Observation<>(null, SourceStatus.PENDING, null),
+                observed(transitionBuckets()));
         CouponMetricsSource source = sourceWith(
                 observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
                 observed(new CouponMetricsSource.QueueCounts(
                         0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
-                observed(samples),
+                new CouponMetricsSource.Observation<>(null, SourceStatus.UNAVAILABLE, null),
+                observed(transitionBuckets()));
+        CouponMetricsSource notApplicable = sourceWith(
+                observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
+                observed(new CouponMetricsSource.QueueCounts(
+                        0L, 0L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
+                observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
+                new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                 observed(transitionBuckets()));
 
-        assertThatThrownBy(() -> calculator.calculate(
-                source, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("시작");
+        assertThat(calculator.calculate(pending, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT)
+                .issuanceRate().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(calculator.calculate(source, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT)
+                .issuanceRate().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(calculator.calculate(notApplicable, MetricsWindow.FIFTEEN_MINUTES, SNAPSHOT_AT)
+                .issuanceRate().status()).isEqualTo(SourceStatus.N_A);
     }
 
-    private static CouponMetricsSource sourceWithFifteenMinutes() {
+    private static CouponMetricsSource sourceWithWindow(MetricsWindow window) {
         return sourceWith(
                 observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
                 observed(new CouponMetricsSource.QueueCounts(
                         10L, 50L, SNAPSHOT_AT.minusSeconds(60), SNAPSHOT_AT)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
-                observed(issuanceSamples()),
+                observed(issuanceSamples(window)),
                 observed(transitionBuckets()));
     }
 
@@ -280,7 +329,7 @@ class CouponMetricsCalculatorTest {
                 observed(new CouponMetricsSource.StockCounts(1_000L, 600L)),
                 observed(queue),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(450L, 150L, 20L, 10L)),
-                observed(issuanceSamples()),
+                observed(issuanceSamples(MetricsWindow.FIVE_MINUTES)),
                 observed(transitionBuckets()));
     }
 
@@ -288,7 +337,7 @@ class CouponMetricsCalculatorTest {
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
             CouponMetricsSource.Observation<CouponMetricsSource.QueueCounts> queue,
             CouponMetricsSource.Observation<CouponMetricsSource.IssuanceStatusCounts> holdings,
-            CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceCounterSample>> samples,
+            CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> samples,
             CouponMetricsSource.Observation<List<CouponMetricsSource.TransitionBucket>> transitions
     ) {
         return new CouponMetricsSource(
@@ -302,26 +351,30 @@ class CouponMetricsCalculatorTest {
                 transitions);
     }
 
-    private static List<CouponMetricsSource.IssuanceCounterSample> issuanceSamples() {
-        List<CouponMetricsSource.IssuanceCounterSample> samples = new ArrayList<>();
-        long cumulative = 0L;
-        samples.add(sample(-15, cumulative));
-        for (int minute = -14; minute <= 0; minute++) {
+    private static List<CouponMetricsSource.IssuanceRateSample> issuanceSamples() {
+        List<CouponMetricsSource.IssuanceRateSample> samples = new ArrayList<>();
+        for (int minute = -15; minute <= 0; minute++) {
             double rate = switch (minute) {
                 case -13 -> 30.0;
                 case -4 -> 20.0;
                 case 0 -> 12.0;
                 default -> 5.0;
             };
-            cumulative += (long) (rate * 60L);
-            samples.add(sample(minute, cumulative));
+            samples.add(rateSample(minute, rate));
         }
         return samples;
     }
 
-    private static CouponMetricsSource.IssuanceCounterSample sample(int minute, long cumulative) {
-        return new CouponMetricsSource.IssuanceCounterSample(
-                SNAPSHOT_AT.plus(Duration.ofMinutes(minute)), cumulative);
+    private static List<CouponMetricsSource.IssuanceRateSample> issuanceSamples(MetricsWindow window) {
+        Instant windowStart = SNAPSHOT_AT.minus(window.duration());
+        return issuanceSamples().stream()
+                .filter(sample -> !sample.observedAt().isBefore(windowStart))
+                .toList();
+    }
+
+    private static CouponMetricsSource.IssuanceRateSample rateSample(int minute, double perSecond) {
+        return new CouponMetricsSource.IssuanceRateSample(
+                SNAPSHOT_AT.plus(Duration.ofMinutes(minute)), perSecond);
     }
 
     private static List<CouponMetricsSource.TransitionBucket> transitionBuckets() {

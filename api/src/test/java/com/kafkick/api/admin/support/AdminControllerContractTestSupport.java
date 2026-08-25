@@ -26,6 +26,7 @@ import com.kafkick.api.caller.CallerArgumentResolver;
 import com.kafkick.api.caller.CallerFilter;
 import com.kafkick.api.caller.HeaderCallerResolver;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
+import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.api.admin.support.fixture.AdminCouponMetricsTestFixture;
@@ -158,6 +159,7 @@ public final class AdminControllerContractTestSupport {
         return new AdminCouponMetricsService(
                 new TimeProvider(clock),
                 campaignReader(overviewFixture),
+                pendingCouponIssuanceRateReader(),
                 new CouponMetricsCalculator());
     }
 
@@ -167,7 +169,13 @@ public final class AdminControllerContractTestSupport {
             AdminCampaignDataReader reader
     ) {
         return new AdminCouponMetricsService(
-                new TimeProvider(clock), reader, new CouponMetricsCalculator());
+                new TimeProvider(clock), reader, pendingCouponIssuanceRateReader(), new CouponMetricsCalculator());
+    }
+
+    /** Controller JSON 계약은 외부 Prometheus 대신 값 없는 PENDING 발급률만 고정합니다. */
+    private static CouponIssuanceRateReader pendingCouponIssuanceRateReader() {
+        return (couponId, window, snapshotAt) -> new CouponMetricsSource.Observation<>(
+                null, SourceStatus.PENDING, null);
     }
 
     /** 기존 Controller JSON fixture를 Core Port 형태로만 제공해 API가 Storage 구현을 참조하지 않게 합니다. */

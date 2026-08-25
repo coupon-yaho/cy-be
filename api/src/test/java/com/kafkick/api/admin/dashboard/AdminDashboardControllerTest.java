@@ -15,6 +15,7 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import org.springframework.test.web.servlet.MockMvc;
@@ -129,24 +130,29 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
-    /** 허용된 집계 구간에서 DB 상세값과 미연결 PENDING을 함께 반환하는지 검증합니다. */
-    @Test
+    /** 허용된 모든 집계 구간에서 DB 상세값과 미연결 PENDING 응답 형식을 보존하는지 검증합니다. */
+    @ParameterizedTest
+    @CsvSource({"1m, ONE_MINUTE, 0.75", "5m, FIVE_MINUTES, 0.65", "15m, FIFTEEN_MINUTES, 0.4"})
     @DisplayName("쿠폰 지표 조회는 DB 상세값과 미연결 PENDING을 반환한다")
-    void couponMetricsReturnsDatabaseAndPendingResponse() throws Exception {
+    void couponMetricsReturnsDatabaseAndPendingResponse(
+            String window,
+            String expectedWindow,
+            double expectedUsePerSecond
+    ) throws Exception {
         mockMvc.perform(get("/api/v1/admin/coupon-metrics")
                         .param("couponId", "101")
-                        .param("window", "5m"))
+                        .param("window", window))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.couponId").value(101))
                 .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
-                .andExpect(jsonPath("$.data.window").value("FIVE_MINUTES"))
+                .andExpect(jsonPath("$.data.window").value(expectedWindow))
                 .andExpect(jsonPath("$.data.stock.remainingCount.state").value("VALID"))
                 .andExpect(jsonPath("$.data.stock.remainingCount.value").value(4_650))
                 .andExpect(jsonPath("$.data.issuanceRate.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.issuanceRate.value").doesNotExist())
                 .andExpect(jsonPath("$.data.queue.waitingCount.state").value("PENDING"))
-                .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").value(0.65))
+                .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").value(expectedUsePerSecond))
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
 
