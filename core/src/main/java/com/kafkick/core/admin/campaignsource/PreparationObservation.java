@@ -8,8 +8,8 @@ import com.kafkick.core.observation.SourceStatus;
 /**
  * 캠페인 필수 준비 항목의 완료 여부와 DB 관측 상태입니다.
  *
- * <p>P-06 전 DB 어댑터는 반드시 {@code (null, PENDING, null)}만 생성합니다. 알 수 없는 완료
- * 여부를 {@code false}로 바꾸지 않습니다.</p>
+ * <p>완료 여부는 DB에서 확정한 준비 완료 판정을 나타냅니다. 원천이 완료 여부를 제공하지 않으면
+ * {@code false}로 바꾸지 않고 값 없는 상태로 보존합니다.</p>
  */
 public record PreparationObservation(Boolean completed, SourceStatus status, Instant observedAt) {
 

@@ -76,8 +76,6 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
     private static final RowMapper<CampaignRow> CAMPAIGN_ROW_MAPPER =
             JdbcAdminCampaignDataReader::mapCampaign;
-    private static final PreparationObservation PENDING_PREPARATION =
-            new PreparationObservation(null, SourceStatus.PENDING, null);
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
@@ -113,7 +111,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                         row.opensAt(),
                         row.closesAt(),
                         stockObservation(row),
-                        PENDING_PREPARATION
+                        preparationObservation(row, snapshotAt)
                 ));
             }
             return new AdminCampaignCatalog(SourceStatus.VALID, snapshotAt, campaigns);
@@ -269,6 +267,23 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 SourceStatus.VALID,
                 row.stockUpdatedAt()
         );
+    }
+
+    /**
+     * 재고 행의 존재·수량·갱신 시각으로 카탈로그 시점의 캠페인 준비 완료 여부를 판정합니다.
+     *
+     * <p>LEFT JOIN으로 재고 행이 없거나 부분 null인 행은 준비 완료로 오인하지 않고, 카탈로그를
+     * 성공적으로 읽은 시각을 이 DB 판정의 관측 시각으로 보존합니다.</p>
+     */
+    private static PreparationObservation preparationObservation(CampaignRow row, Instant snapshotAt) {
+        boolean completed = row.totalQuantity() != null
+                && row.totalQuantity() > 0L
+                && row.activeCount() != null
+                && row.activeCount() >= 0L
+                && row.activeCount() <= row.totalQuantity()
+                && row.stockUpdatedAt() != null;
+        // 재고 행 부재와 부분 null·범위 위반은 모두 준비 미완료로 판정한다.
+        return new PreparationObservation(completed, SourceStatus.VALID, snapshotAt);
     }
 
     private static CampaignRow mapCampaign(ResultSet resultSet, int rowNumber) throws SQLException {

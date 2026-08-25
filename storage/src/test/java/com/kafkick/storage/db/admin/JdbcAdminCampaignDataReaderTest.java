@@ -53,6 +53,7 @@ import org.testcontainers.utility.DockerImageName;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
@@ -188,8 +189,8 @@ class JdbcAdminCampaignDataReaderTest {
     }
 
     @Test
-    @DisplayName("카탈로그는 오픈 시각과 ID 내림차순이며 재고 없는 캠페인도 유지한다")
-    void catalogIsSortedAndKeepsCampaignWithoutStock() {
+    @DisplayName("카탈로그는 오픈 시각과 ID 내림차순이며 재고로 준비 상태를 판정한다")
+    void catalogIsSortedAndDerivesPreparationFromStock() {
         insertTemplate(2L, 1L);
         insertCoupon(10, 1, 1, "오래된", "CLOSED", SNAPSHOT.minusSeconds(7200));
         insertCoupon(20, 1, 1, "최신 작은 ID", "OPEN", SNAPSHOT.minusSeconds(3600));
@@ -206,10 +207,12 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(catalog.campaigns().get(0).stock().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(catalog.campaigns().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(200, 0));
-        assertThat(catalog.campaigns()).allSatisfy(campaign -> {
-            assertThat(campaign.preparation().status()).isEqualTo(SourceStatus.PENDING);
-            assertThat(campaign.preparation().completed()).isNull();
-        });
+        assertThat(catalog.campaigns().get(0).preparation())
+                .isEqualTo(new PreparationObservation(false, SourceStatus.VALID, SNAPSHOT));
+        assertThat(catalog.campaigns().get(1).preparation())
+                .isEqualTo(new PreparationObservation(true, SourceStatus.VALID, SNAPSHOT));
+        assertThat(catalog.campaigns().get(2).preparation())
+                .isEqualTo(new PreparationObservation(true, SourceStatus.VALID, SNAPSHOT));
     }
 
     @Test
