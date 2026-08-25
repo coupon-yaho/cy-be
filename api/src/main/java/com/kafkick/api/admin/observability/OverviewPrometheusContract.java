@@ -61,7 +61,8 @@ public final class OverviewPrometheusContract {
             case TEMPORARILY_UNAVAILABLE, INTERNAL_ERROR, UNMAPPED -> true;
             // 403·409 로 나가는 설계된 거절과 대기열 계약 위반이다. 실패가 아니다.
             case NOT_OPENED, CAMPAIGN_CLOSED, GRADE_NOT_ELIGIBLE, QUEUE_REQUIRED, NO_ENTRY_TOKEN,
-                    ENTRY_TOKEN_EXPIRED, ALREADY_ISSUED, STOCK_EXHAUSTED -> false;
+                    ENTRY_TOKEN_EXPIRED, ALREADY_ISSUED, STOCK_EXHAUSTED,
+                    INVALID_TRANSITION -> false;
         };
     }
 

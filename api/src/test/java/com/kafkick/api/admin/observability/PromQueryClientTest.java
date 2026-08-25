@@ -99,10 +99,10 @@ class PromQueryClientTest {
                 .hasMessageContaining("표본 값을 해석할 수 없습니다");
     }
 
-    /** malformed unknown outcome을 건너뛰면 정확히 13개 known 표본만 남아 거짓 VALID가 됩니다. */
+    /** malformed unknown outcome을 건너뛰면 정확히 14개 known 표본만 남아 거짓 VALID가 됩니다. */
     @Test
-    @DisplayName("시각 고정 O3 질의는 13 known와 malformed unknown 표본이 섞이면 전체를 거부한다")
-    void timedQueryRejectsThirteenKnownAndMalformedUnknownOutcomeMember() {
+    @DisplayName("시각 고정 O3 질의는 14 known와 malformed unknown 표본이 섞이면 전체를 거부한다")
+    void timedQueryRejectsFourteenKnownAndMalformedUnknownOutcomeMember() {
         PromQueryClient timed = bind("""
                 {"status":"success","data":{"resultType":"vector","result":[
                   {"metric":{"outcome":"ISSUED"},"value":[1755000000,"1"]},
@@ -118,6 +118,7 @@ class PromQueryClientTest {
                   {"metric":{"outcome":"TEMPORARILY_UNAVAILABLE"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"INTERNAL_ERROR"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"UNMAPPED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"INVALID_TRANSITION"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"NEW_RESULT"},"value":[1755000000,"broken"]}]}}
                 """, false);
 

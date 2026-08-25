@@ -50,7 +50,7 @@ public enum CouponIssueErrorCode implements ErrorCode {
     ),
     INVALID_TRANSITION(
             409, "COUPON-310", "허용되지 않은 쿠폰 상태 전이입니다.",
-            ReasonCode.UNMAPPED, Dependency.NONE
+            ReasonCode.INVALID_TRANSITION, Dependency.NONE
     );
 
     private final int status;

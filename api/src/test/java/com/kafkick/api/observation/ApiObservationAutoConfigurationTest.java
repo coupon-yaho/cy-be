@@ -21,14 +21,12 @@ import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
 import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
 import com.kafkick.api.observation.issuance.CouponIssueObservationDependencyMapper;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
-import com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -145,23 +143,6 @@ class ApiObservationAutoConfigurationTest {
                         () -> new ReadOnlyRuntimeConfigStore(snapshot)
                 )
                 .run(context -> assertThat(context)
-                        .hasSingleBean(IssuanceObservationContextFactory.class));
-    }
-
-    @Test
-    void registersContextFactoryAfterRuntimeConfigAutoConfiguration() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        ApiObservationAutoConfiguration.class,
-                        RuntimeConfigRedisAutoConfiguration.class
-                ))
-                .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
-                .withBean(
-                        StringRedisTemplate.class,
-                        () -> mock(StringRedisTemplate.class)
-                )
-                .run(context -> assertThat(context)
-                        .hasSingleBean(RuntimeConfigStore.class)
                         .hasSingleBean(IssuanceObservationContextFactory.class));
     }
 

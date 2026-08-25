@@ -12,7 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -157,13 +157,16 @@ class CouponIssueObservationCoordinatorTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = CouponIssueErrorCode.class, names = {
-            "NOT_OPENED",
-            "CAMPAIGN_CLOSED",
-            "GRADE_NOT_ELIGIBLE"
+    @CsvSource({
+            "NOT_OPENED, 409, NOT_OPENED, NONE",
+            "CAMPAIGN_CLOSED, 409, CAMPAIGN_CLOSED, NONE",
+            "GRADE_NOT_ELIGIBLE, 403, GRADE_NOT_ELIGIBLE, NONE"
     })
     void recordsPolicyRejectionWithoutAnAttempt(
-            CouponIssueErrorCode errorCode
+            CouponIssueErrorCode errorCode,
+            int expectedHttpStatus,
+            ReasonCode expectedReasonCode,
+            Dependency expectedDependency
     ) {
         prepareContext();
         BusinessException rejected = new BusinessException(
@@ -184,21 +187,24 @@ class CouponIssueObservationCoordinatorTest {
 
         verify(observationService, never()).recordIssueAttempt(any());
         verify(session).completeIssueRejected(
-                errorCode.getStatus(),
-                errorCode.reasonCode().orElseThrow(),
-                Dependency.NONE
+                expectedHttpStatus,
+                expectedReasonCode,
+                expectedDependency
         );
         verify(session).finish();
     }
 
     @ParameterizedTest
-    @EnumSource(value = CouponIssueErrorCode.class, names = {
-            "ALREADY_ISSUED",
-            "SOLD_OUT",
-            "COUPON_ISSUE_SAVE_FAILED"
+    @CsvSource({
+            "ALREADY_ISSUED, 409, ALREADY_ISSUED, NONE",
+            "SOLD_OUT, 409, STOCK_EXHAUSTED, NONE",
+            "COUPON_ISSUE_SAVE_FAILED, 500, INTERNAL_ERROR, MYSQL"
     })
     void keepsAttemptWhenAuthoritativeExecutionRejects(
-            CouponIssueErrorCode errorCode
+            CouponIssueErrorCode errorCode,
+            int expectedHttpStatus,
+            ReasonCode expectedReasonCode,
+            Dependency expectedDependency
     ) {
         prepareContext();
         BusinessException rejected = new BusinessException(
@@ -223,9 +229,9 @@ class CouponIssueObservationCoordinatorTest {
 
         verify(observationService).recordIssueAttempt(context);
         verify(session).completeIssueRejected(
-                errorCode.getStatus(),
-                errorCode.reasonCode().orElseThrow(),
-                errorCode.dependency()
+                expectedHttpStatus,
+                expectedReasonCode,
+                expectedDependency
         );
         verify(session).finish();
     }
