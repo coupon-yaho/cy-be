@@ -3,7 +3,6 @@ package com.kafkick.api.coupon.monitoring;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
@@ -19,7 +18,6 @@ import com.kafkick.core.support.exception.ErrorCode;
 @Component
 public class CouponIssueMetrics {
 
-    static final String REQUEST_METRIC = "coupon.issue.operation.requests";
     static final String DURATION_METRIC = "coupon.issue.operation.duration";
 
     private static final String OUTCOME_SUCCESS = "success";
@@ -32,19 +30,10 @@ public class CouponIssueMetrics {
     );
 
     private final MeterRegistry meterRegistry;
-    private final Map<String, Counter> requestCounters;
     private final Map<String, Timer> durationTimers;
 
     public CouponIssueMetrics(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
-        this.requestCounters = Map.of(
-                OUTCOME_SUCCESS, registerCounter(OUTCOME_SUCCESS),
-                OUTCOME_SOLD_OUT, registerCounter(OUTCOME_SOLD_OUT),
-                OUTCOME_ALREADY_ISSUED,
-                registerCounter(OUTCOME_ALREADY_ISSUED),
-                OUTCOME_REJECTED, registerCounter(OUTCOME_REJECTED),
-                OUTCOME_ERROR, registerCounter(OUTCOME_ERROR)
-        );
         this.durationTimers = Map.of(
                 OUTCOME_SUCCESS, registerTimer(OUTCOME_SUCCESS),
                 OUTCOME_SOLD_OUT, registerTimer(OUTCOME_SOLD_OUT),
@@ -115,18 +104,10 @@ public class CouponIssueMetrics {
     }
 
     private void record(String outcome, long durationNanos) {
-        requestCounters.get(outcome).increment();
         durationTimers.get(outcome).record(
                 durationNanos,
                 TimeUnit.NANOSECONDS
         );
-    }
-
-    private Counter registerCounter(String outcome) {
-        return Counter.builder(REQUEST_METRIC)
-                .description("쿠폰 발급 유즈케이스 실행 결과 수")
-                .tag("outcome", outcome)
-                .register(meterRegistry);
     }
 
     private Timer registerTimer(String outcome) {

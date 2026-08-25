@@ -78,7 +78,40 @@ public final class IssuanceObservationSession {
      * @param dependency 실패와 직접 관련된 외부 의존성
      */
     public void completeIssueRejected(ErrorCode errorCode, Dependency dependency) {
-        complete(new IssueRejectedOutcome(errorCode, dependency, timeProvider.instant()));
+        ErrorCode requiredErrorCode = Objects.requireNonNull(
+                errorCode,
+                "errorCode"
+        );
+        complete(new IssueRejectedOutcome(
+                requiredErrorCode.getStatus(),
+                resolveReasonCode(requiredErrorCode),
+                dependency,
+                timeProvider.instant()
+        ));
+    }
+
+    /**
+     * 업무 ErrorCode가 없는 예상 밖 발급 실패를 명시적인 관측 분류로 등록합니다.
+     *
+     * @param httpStatus 실제 실패 응답 상태
+     * @param reasonCode 관측용 실패 사유
+     * @param dependency 실패와 직접 관련된 외부 의존성
+     */
+    public void completeIssueRejected(
+            int httpStatus,
+            ReasonCode reasonCode,
+            Dependency dependency
+    ) {
+        ReasonCode requiredReasonCode = Objects.requireNonNull(
+                reasonCode,
+                "reasonCode"
+        );
+        complete(new IssueRejectedOutcome(
+                httpStatus,
+                requiredReasonCode,
+                dependency,
+                timeProvider.instant()
+        ));
     }
 
     /**
@@ -262,12 +295,14 @@ public final class IssuanceObservationSession {
     /**
      * 발급이 거절되거나 실패했을 때 응답과 장애 정보를 보관하는 완료 결과입니다.
      *
-     * @param errorCode 실패를 설명하는 업무 오류 코드
+     * @param httpStatus 실제 실패 응답 상태
+     * @param reasonCode 관측용 실패 사유
      * @param dependency 실패와 직접 관련된 외부 의존성
      * @param completedAt 발급 실패 결과가 완료된 시각
      */
     private record IssueRejectedOutcome(
-            ErrorCode errorCode,
+            int httpStatus,
+            ReasonCode reasonCode,
             Dependency dependency,
             Instant completedAt
     ) implements Outcome {
@@ -290,8 +325,8 @@ public final class IssuanceObservationSession {
         ) {
             return eventFactory.issueRejected(
                     context,
-                    Objects.requireNonNull(errorCode, "errorCode").getStatus(),
-                    resolveReasonCode(errorCode),
+                    httpStatus,
+                    Objects.requireNonNull(reasonCode, "reasonCode"),
                     dependency
             );
         }

@@ -4,7 +4,10 @@ import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -15,10 +18,12 @@ import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotentExecutionResult;
 import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.result.CouponCancelUseResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.exception.BusinessException;
@@ -29,6 +34,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -44,6 +51,8 @@ class CouponOperationExecutionServiceTest {
     private IdempotentOperationService operationService;
     @Mock
     private CouponIssueService couponIssueService;
+    @Mock
+    private CouponIssuePolicyValidator couponIssuePolicyValidator;
     @Mock
     private CouponUseService couponUseService;
     @Mock
@@ -69,12 +78,15 @@ class CouponOperationExecutionServiceTest {
                 AT,
                 AT.plusSeconds(604_800)
         );
-        when(idempotencyExecutionService.execute(
+        when(idempotencyExecutionService.executeWithMetadata(
                 eq(KEY), any(), any(), any(), any()
         )).thenAnswer(invocation -> {
             java.util.function.Function<Instant, CouponIssueResult> claimed =
                     invocation.getArgument(3);
-            return claimed.apply(AT);
+            return new IdempotentExecutionResult<>(
+                    claimed.apply(AT),
+                    false
+            );
         });
         when(operationService.execute(
                 eq(KEY), eq(20L), eq(AT), any(), eq(issueCodec), any()
@@ -129,12 +141,15 @@ class CouponOperationExecutionServiceTest {
                 AT,
                 AT.plusSeconds(604_800)
         );
-        when(idempotencyExecutionService.execute(
+        when(idempotencyExecutionService.executeWithMetadata(
                 eq(KEY), any(), any(), any(), any()
         )).thenAnswer(invocation -> {
             java.util.function.Function<String, CouponIssueResult> replay =
                     invocation.getArgument(4);
-            return replay.apply("stored-result");
+            return new IdempotentExecutionResult<>(
+                    replay.apply("stored-result"),
+                    true
+            );
         });
         when(issueCodec.read("stored-result")).thenReturn(expected);
         CouponOperationExecutionService service = service();
@@ -148,6 +163,167 @@ class CouponOperationExecutionServiceTest {
 
         assertThat(actual).isEqualTo(expected);
         verifyNoInteractions(operationService, couponIssueService);
+    }
+
+    @Test
+    void returnsCouponIssueReplayMetadataWithoutChangingLegacyIssueApi() {
+        CouponIssueResult expected = new CouponIssueResult(
+                100L,
+                10L,
+                "ABCDEFGHJKLM2345",
+                IssuanceStatus.ISSUED,
+                AT,
+                AT.plusSeconds(604_800)
+        );
+        when(idempotencyExecutionService.executeWithMetadata(
+                eq(KEY), any(), any(), any(), any()
+        )).thenReturn(new IdempotentExecutionResult<>(expected, true));
+        CouponOperationExecutionService service = service();
+
+        IssueAttemptCallback callback = org.mockito.Mockito.mock(
+                IssueAttemptCallback.class
+        );
+
+        CouponIssueExecutionResult actual = service.issueWithMetadata(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                KEY,
+                callback
+        );
+
+        assertThat(actual).isEqualTo(new CouponIssueExecutionResult(
+                expected,
+                true
+        ));
+        verifyNoInteractions(
+                couponIssuePolicyValidator,
+                callback,
+                operationService,
+                couponIssueService
+        );
+    }
+
+    @Test
+    void prevalidatesFirstOrStaleClaimBeforeCallbackAndAuthoritativeTransaction() {
+        CouponIssueResult expected = issueResult();
+        when(idempotencyExecutionService.executeWithMetadata(
+                eq(KEY), any(), any(), any(), any()
+        )).thenAnswer(invocation -> {
+            java.util.function.Function<Instant, CouponIssueResult> claimed =
+                    invocation.getArgument(3);
+            return new IdempotentExecutionResult<>(claimed.apply(AT), false);
+        });
+        when(operationService.execute(
+                eq(KEY), eq(20L), eq(AT), any(), eq(issueCodec), any()
+        )).thenAnswer(invocation -> {
+            java.util.function.Supplier<CouponIssueResult> operation =
+                    invocation.getArgument(3);
+            return operation.get();
+        });
+        when(couponIssueService.issue(any())).thenReturn(issuance());
+        IssueAttemptCallback callback = org.mockito.Mockito.mock(
+                IssueAttemptCallback.class
+        );
+
+        CouponIssueExecutionResult actual = service().issueWithMetadata(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                KEY,
+                callback
+        );
+
+        assertThat(actual).isEqualTo(new CouponIssueExecutionResult(
+                expected,
+                false
+        ));
+        InOrder order = inOrder(
+                couponIssuePolicyValidator,
+                callback,
+                operationService,
+                couponIssueService
+        );
+        order.verify(couponIssuePolicyValidator).validate(any());
+        order.verify(callback).onPolicyPassed();
+        order.verify(operationService).execute(
+                eq(KEY), eq(20L), eq(AT), any(), eq(issueCodec), any()
+        );
+        order.verify(couponIssueService).issue(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CouponIssueErrorCode.class, names = {
+            "NOT_OPENED",
+            "CAMPAIGN_CLOSED",
+            "GRADE_NOT_ELIGIBLE"
+    })
+    void policyRejectionDoesNotInvokeAttemptOrAuthoritativeTransaction(
+            CouponIssueErrorCode errorCode
+    ) {
+        BusinessException rejected = new BusinessException(
+                errorCode
+        );
+        when(idempotencyExecutionService.executeWithMetadata(
+                eq(KEY), any(), any(), any(), any()
+        )).thenAnswer(invocation -> {
+            java.util.function.Function<Instant, CouponIssueResult> claimed =
+                    invocation.getArgument(3);
+            return new IdempotentExecutionResult<>(claimed.apply(AT), false);
+        });
+        org.mockito.Mockito.doThrow(rejected)
+                .when(couponIssuePolicyValidator).validate(any());
+        IssueAttemptCallback callback = org.mockito.Mockito.mock(
+                IssueAttemptCallback.class
+        );
+
+        assertThatThrownBy(() -> service().issueWithMetadata(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                KEY,
+                callback
+        )).isSameAs(rejected);
+
+        verify(callback, never()).onPolicyPassed();
+        verifyNoInteractions(operationService, couponIssueService);
+    }
+
+    @Test
+    void callbackFailureDoesNotChangeTheAuthoritativeIssueResult() {
+        CouponIssueResult expected = issueResult();
+        when(idempotencyExecutionService.executeWithMetadata(
+                eq(KEY), any(), any(), any(), any()
+        )).thenAnswer(invocation -> {
+            java.util.function.Function<Instant, CouponIssueResult> claimed =
+                    invocation.getArgument(3);
+            return new IdempotentExecutionResult<>(claimed.apply(AT), false);
+        });
+        when(operationService.execute(
+                eq(KEY), eq(20L), eq(AT), any(), eq(issueCodec), any()
+        )).thenAnswer(invocation -> {
+            java.util.function.Supplier<CouponIssueResult> operation =
+                    invocation.getArgument(3);
+            return operation.get();
+        });
+        when(couponIssueService.issue(any())).thenReturn(issuance());
+        IssueAttemptCallback callback = () -> {
+            throw new IllegalStateException("observation unavailable");
+        };
+
+        CouponIssueExecutionResult actual = service().issueWithMetadata(
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                KEY,
+                callback
+        );
+
+        assertThat(actual).isEqualTo(new CouponIssueExecutionResult(
+                expected,
+                false
+        ));
+        verify(couponIssueService).issue(any());
     }
 
     @Test
@@ -224,6 +400,7 @@ class CouponOperationExecutionServiceTest {
                 idempotencyExecutionService,
                 operationService,
                 couponIssueService,
+                couponIssuePolicyValidator,
                 couponUseService,
                 couponCancelUseService,
                 couponCancelService,
@@ -231,6 +408,31 @@ class CouponOperationExecutionServiceTest {
                 useCodec,
                 cancelUseCodec,
                 cancelCodec
+        );
+    }
+
+    private CouponIssueResult issueResult() {
+        return new CouponIssueResult(
+                100L,
+                10L,
+                "ABCDEFGHJKLM2345",
+                IssuanceStatus.ISSUED,
+                AT,
+                AT.plusSeconds(604_800)
+        );
+    }
+
+    private Issuance issuance() {
+        return Issuance.restore(
+                100L,
+                10L,
+                20L,
+                "ABCDEFGHJKLM2345",
+                MembershipGrade.GOLD,
+                IssuanceStatus.ISSUED,
+                AT,
+                AT.plusSeconds(604_800),
+                AT
         );
     }
 }

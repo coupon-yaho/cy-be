@@ -50,6 +50,7 @@ class MeterEventRecorderTest {
         recorder.record(factory.issued(context, 1L, "coupon-code-0001"));
         recorder.record(factory.entry(context, 202, null, Dependency.NONE, 3L, 8L));
         recorder.record(factory.issueRejected(context, 409, ReasonCode.ALREADY_ISSUED, Dependency.NONE));
+        recorder.record(factory.issueRejected(context, 409, ReasonCode.INVALID_TRANSITION, Dependency.NONE));
 
         assertThat(counter(registry, MeterNames.ISSUANCE_FLOW, "coupon_id", "201", "stage", "attempt"))
                 .isEqualTo(1.0);
@@ -59,6 +60,8 @@ class MeterEventRecorderTest {
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "ISSUED")).isEqualTo(1.0);
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "QUEUED")).isEqualTo(1.0);
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "ALREADY_ISSUED"))
+                .isEqualTo(1.0);
+        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "INVALID_TRANSITION"))
                 .isEqualTo(1.0);
         assertThat(gauge(registry, MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH, "coupon_id", "201"))
                 .isEqualTo(1_787_443_200d);
@@ -71,7 +74,7 @@ class MeterEventRecorderTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         recorder(registry);
 
-        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(13);
+        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(14);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters())
                 .allMatch(counter -> counter.getId().getTag("coupon_id") == null);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters().stream()

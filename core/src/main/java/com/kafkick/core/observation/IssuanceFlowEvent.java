@@ -291,5 +291,27 @@ public record IssuanceFlowEvent(
                     producerInstanceId
             );
         }
+
+        /**
+         * 요청 식별 정보와 실행 설정을 유지하면서 DONE 응답 재사용 여부만 교체합니다.
+         *
+         * @param replayed 완료된 멱등 응답을 재사용했으면 {@code true}
+         * @return replay 여부만 교체한 새로운 Context
+         */
+        public Ctx withReplayed(boolean replayed) {
+            return new Ctx(
+                    requestId,
+                    memberId,
+                    couponId,
+                    grade,
+                    replayed,
+                    occurredAt,
+                    engineVersion,
+                    releaseStage,
+                    queueMode,
+                    benchmarkRunId,
+                    producerInstanceId
+            );
+        }
     }
 }

@@ -102,6 +102,8 @@ observation:
         max-strata: ${ATTEMPT_LIVE_SAMPLING_MAX_STRATA:20}
 
   issuance:
+    # 운영에서는 컨테이너별 HOSTNAME을 주입한다. api-local은 로컬 단일 인스턴스 기본값이다.
+    producer-instance-id: ${HOSTNAME:api-local}
     campaign:
       # coupon_id 라벨 예외는 최대 100개까지만 허용한다. 초과 캠페인은 축출하지 않고 거부한다.
       max-active-campaigns: ${OBSERVATION_CAMPAIGN_MAX_ACTIVE:100}
