@@ -165,5 +165,19 @@ observation:
       latency-window: ${OVERVIEW_PROM_LATENCY_WINDOW:10s}
       max-range: ${OVERVIEW_PROM_MAX_RANGE:1h}
       max-points: ${OVERVIEW_PROM_MAX_POINTS:1000}
+    # GET /metrics/series 전용 예산입니다. 위 1초 폴링 예산과 완전히 분리되어 있어, 이 경로가
+    # 아무리 느려도 /metrics 응답 시간은 바뀌지 않습니다. archive 가 같은 이유로 별도 예산을
+    # 둔 선례를 따릅니다.
+    # ⚠️ 여기도 세 값이 한 묶음이다. total-budget + connect-timeout + read-timeout 이 이 경로의
+    #    폴링 간격(5초, 화면이 5~10초 주기로 부르기로 한 것의 짧은 쪽)을 넘으면 기동에서 죽는다.
+    # ⚠️ step 은 평가 간격이자 rate 집계 창이다. 모든 MetricsWindow(1m·5m·15m)를 나누어야 하고,
+    #    가장 긴 창의 평가점 수가 max-points 를 넘으면 기동에서 죽는다 — 계약이 코드 enum 과
+    #    이 파일에 걸쳐 있어 PrometheusSeriesPropertiesTest 가 둘을 함께 본다.
+    series:
+      connect-timeout: ${PROMETHEUS_SERIES_CONNECT_TIMEOUT:500ms}
+      read-timeout: ${PROMETHEUS_SERIES_READ_TIMEOUT:1500ms}
+      total-budget: ${PROMETHEUS_SERIES_TOTAL_BUDGET:2500ms}
+      step: ${PROMETHEUS_SERIES_STEP:5s}
+      max-points: ${PROMETHEUS_SERIES_MAX_POINTS:300}
   datasource:
     enabled: true

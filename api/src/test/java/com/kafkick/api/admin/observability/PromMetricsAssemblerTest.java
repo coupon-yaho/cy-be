@@ -7,7 +7,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 
@@ -18,10 +20,14 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyGroupStat;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TopReason;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.api.observation.http.HttpMetricsFilter.UriGroup;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.observation.DomainMeterNames;
@@ -624,6 +630,132 @@ class PromMetricsAssemblerTest {
 
         assertThat(success.state()).isEqualTo(SourceStatus.PENDING);
         assertThat(success.value()).isNull();
+    }
+
+    /**
+     * 라벨 표기는 계측과 응답 두 파일에 걸친 계약입니다. 한쪽만 검증하면 갈라진 것을 못 잡습니다 —
+     * 여기서 {@code UriGroup} enum 을 정본으로 두고 응답 라벨 전체와 맞춥니다.
+     */
+    @Test
+    @DisplayName("groups 는 UriGroup 다섯 종을 enum 순서 그대로, 미터 라벨 표기로 낸다")
+    void groupsCoverEveryUriGroupWithMeterLabels() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(quantile("0.99", 0.250d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        List<LatencyGroupStat> groups = assemble(client, globalQuery()).latency().groups();
+
+        assertThat(groups).extracting(LatencyGroupStat::group)
+                .containsExactly(Arrays.stream(UriGroup.values())
+                        .map(UriGroup::tagValue).toArray(String[]::new));
+        assertThat(groups).extracting(LatencyGroupStat::group)
+                .allMatch(label -> label.equals(label.toLowerCase(Locale.ROOT)));
+    }
+
+    /** 그룹을 편 것이지 대체한 것이 아닙니다. 기존 세 필드는 그대로 있어야 합니다. */
+    @Test
+    @DisplayName("groups 를 더해도 success·policyReject·systemFailure 는 그대로다")
+    void existingThreeLatencyFieldsSurvive() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile("0.5", 0.010d, "api-1"),
+                        quantile("0.95", 0.100d, "api-1"),
+                        quantile("0.99", 0.250d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(latency.success().value().p99Millis()).isEqualTo(250d);
+        // [OBS-31] 원천은 생겼지만 이 픽스처는 outcome=success 표본만 준다. 실패 축에 표본이
+        // 없을 때 PENDING 인 것은 지금도 맞다 — 라벨로 값을 만드는 경로는
+        // HttpLatencyOutcomeContractTest 가 계측과 함께 본다.
+        assertThat(latency.policyReject().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(latency.systemFailure().state()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    /**
+     * 같은 원천·같은 필터라 두 자리가 갈리면 화면이 같은 수치를 다르게 읽습니다. 조립기가
+     * 헬퍼 하나를 나눠 쓰는지를 값으로 확인합니다.
+     */
+    @Test
+    @DisplayName("groups 의 issue 항목과 latency.success 는 언제나 같다")
+    void issueGroupEqualsSuccessField() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile("0.5", 0.010d, "api-1"),
+                        quantile("0.95", 0.100d, "api-1"),
+                        quantile("0.99", 0.250d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(group(latency, UriGroup.ISSUE)).isEqualTo(latency.success());
+    }
+
+    /** 부하 회차에 따라 READ·USE 는 표본이 0 일 수 있습니다. 목록에서 빼면 이유가 사라집니다. */
+    @Test
+    @DisplayName("표본 없는 그룹도 목록에 남고 빈 값이 아니라 상태로 온다")
+    void groupWithoutSamplesStaysWithState() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile("0.5", 0.010d, "api-1"),
+                        quantile("0.95", 0.100d, "api-1"),
+                        quantile("0.99", 0.250d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(group(latency, UriGroup.READ).state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(group(latency, UriGroup.READ).value()).isNull();
+        assertThat(group(latency, UriGroup.READ).observedAt()).isNull();
+    }
+
+    /** 그룹마다 최댓값을 낸 인스턴스가 다를 수 있습니다. 그룹 안에서만 접혀야 합니다. */
+    @Test
+    @DisplayName("그룹별 백분위는 그 그룹 안의 인스턴스 최댓값이다")
+    void eachGroupFoldsWithinItself() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile(UriGroup.ISSUE, "0.5", 0.010d, "api-1"),
+                        quantile(UriGroup.ISSUE, "0.95", 0.100d, "api-1"),
+                        quantile(UriGroup.ISSUE, "0.99", 0.250d, "api-1"),
+                        quantile(UriGroup.READ, "0.5", 0.001d, "api-1"),
+                        quantile(UriGroup.READ, "0.5", 0.002d, "api-2"),
+                        quantile(UriGroup.READ, "0.95", 0.004d, "api-2"),
+                        quantile(UriGroup.READ, "0.99", 0.008d, "api-1")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        LatencyPercentiles read = group(latency, UriGroup.READ).value();
+        assertThat(read.p50Millis()).isEqualTo(2d);
+        assertThat(read.p95Millis()).isEqualTo(4d);
+        assertThat(read.p99Millis()).isEqualTo(8d);
+        // 다른 그룹의 값이 섞이지 않는다.
+        assertThat(group(latency, UriGroup.ISSUE).value().p99Millis()).isEqualTo(250d);
+    }
+
+    /**
+     * 원천이 instance 라벨을 떨구면(federation · recording rule) 라벨 없는 표본끼리 짝이 맞아
+     * 어느 대의 것도 아닌 지연이 VALID 로 나갑니다. 값이 정상 범위라 예외도 로그도 안 남습니다 —
+     * CY-449 가 사용률에서 내린 것과 같은 판단으로 값을 내지 않습니다.
+     */
+    @Test
+    @DisplayName("instance 라벨 없는 표본에서는 값을 내지 않는다")
+    void samplesWithoutInstanceLabelYieldNoValue() {
+        FakePromQuery client = respond(Map.of(
+                "quantile!=", List.of(
+                        quantile("0.5", 0.010d, ""),
+                        quantile("0.95", 0.100d, ""),
+                        quantile("0.99", 0.250d, "")),
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+
+        LatencyMetrics latency = assemble(client, globalQuery()).latency();
+
+        assertThat(latency.success().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(latency.success().value()).isNull();
+        assertThat(group(latency, UriGroup.ISSUE).state()).isEqualTo(SourceStatus.PENDING);
     }
 
     // ── 정합성 ──────────────────────────────────────────────────────────────────
@@ -1240,12 +1372,28 @@ class PromMetricsAssemblerTest {
     }
 
     private static PromSample quantile(String quantile, double seconds, String instance) {
+        return quantile(UriGroup.ISSUE, quantile, seconds, instance);
+    }
+
+    /** {@code instance} 가 빈 문자열이면 원천이 라벨을 떨군 표본이다. */
+    private static PromSample quantile(
+            UriGroup uriGroup, String quantile, double seconds, String instance) {
         Map<String, String> labels = new LinkedHashMap<>();
-        labels.put("uri_group", "issue");
+        labels.put("uri_group", uriGroup.tagValue());
         labels.put("outcome", "success");
         labels.put("quantile", quantile);
-        labels.put("instance", instance);
+        if (!instance.isEmpty()) {
+            labels.put("instance", instance);
+        }
         return new PromSample(MetricAggregation.HTTP_LATENCY_SECONDS, labels, seconds, EVALUATED);
+    }
+
+    private static ObservedValue<LatencyPercentiles> group(LatencyMetrics latency, UriGroup uriGroup) {
+        return latency.groups().stream()
+                .filter(candidate -> candidate.group().equals(uriGroup.tagValue()))
+                .findFirst()
+                .map(LatencyGroupStat::percentiles)
+                .orElseThrow(() -> new AssertionError("그룹이 응답에 없습니다: " + uriGroup));
     }
 
     /** {@code max(time() - timestamp(...))} 결과. 라벨도 __name__ 도 없다. */

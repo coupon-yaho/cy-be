@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse;
+import com.kafkick.api.admin.observability.dto.AdminMetricsSeriesResponse;
 import com.kafkick.api.admin.support.LiveEventPollResponse;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.support.ResponseEnvelope;
@@ -23,16 +24,21 @@ import com.kafkick.core.support.exception.BusinessException;
  * 개발자·운영 엔지니어가 현재 서비스 상태와 최근 발급 이벤트를 조회하는 관제 HTTP 계약을 선구축합니다.
  *
  * <p>{@code GET /metrics}는 OBS-6 에서 연결했습니다. 원천은 Prometheus 하나이며 Redis·Kafka·DB 를
- * 직접 읽지 않습니다. {@code GET /events}는 아직 원천이 없어 {@code 501 / ADMIN-001}로 응답합니다(OBS-15).</p>
+ * 직접 읽지 않습니다. {@code GET /metrics/series}는 같은 원천의 과거 구간을 시계열로 주며 예산과
+ * 폴링 주기가 {@code /metrics}와 분리되어 있습니다(OBS-33). {@code GET /events}는 아직 원천이 없어
+ * {@code 501 / ADMIN-001}로 응답합니다(OBS-15).</p>
  */
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AdminObservabilityController {
 
     private final PromMetricsAssembler assembler;
+    private final PromSeriesAssembler seriesAssembler;
 
-    public AdminObservabilityController(PromMetricsAssembler assembler) {
+    public AdminObservabilityController(
+            PromMetricsAssembler assembler, PromSeriesAssembler seriesAssembler) {
         this.assembler = assembler;
+        this.seriesAssembler = seriesAssembler;
     }
 
     /**
@@ -56,6 +62,49 @@ public class AdminObservabilityController {
     public ResponseEnvelope<AdminMetricsResponse> metrics(
             @Valid @ModelAttribute MetricsQuery query, Caller caller) {
         return ResponseEnvelope.success(assembler.assemble(query));
+    }
+
+    /**
+     * 같은 집계 창의 과거 구간을 시계열로 조회합니다.
+     *
+     * <p><b>{@code /metrics} 와 응답 모양이 다르고 주기도 다릅니다.</b> 저쪽은 한 시점 스냅샷을
+     * 1초마다 주고, 이쪽은 진입 시 과거 구간을 채웁니다 — 화면은 두 경로를 각각 다른 주기(이쪽은
+     * 5~10초)로 부르고, <b>이 응답이 온 뒤의 1초 갱신은 여전히 화면의 누적 버퍼가 잇습니다</b>.
+     * 이 경로가 프론트의 누적 버퍼를 대신하지 않습니다.</p>
+     *
+     * <p>예산이 {@code /metrics} 와 완전히 분리되어 있습니다({@link PrometheusSeriesProperties}).
+     * range 는 평가점 수만큼 expression 을 다시 계산해 instant 보다 자릿수로 느리므로, 같은 예산에
+     * 얹으면 {@code /metrics} 의 뒤쪽 질의가 잘립니다. 이 경로가 아무리 느려도 {@code /metrics}
+     * 응답 시간은 바뀌지 않습니다.</p>
+     *
+     * <p>계열은 각각 독립적으로 실패합니다. 하나가 죽어도 500 이 아니라 그 계열만
+     * {@code UNAVAILABLE} 로 나갑니다.</p>
+     *
+     * <p><b>범위 규칙은 {@code /metrics} 와 같은 계약을 씁니다.</b> 같은 {@link MetricsQuery} 로
+     * 바인딩하므로 두 식별자를 동시에 주면 여기서도 400 입니다 — 규칙을 옮겨 적으면 한쪽만
+     * 바뀌었을 때 같은 파라미터가 경로마다 다르게 거절됩니다.</p>
+     *
+     * <p><b>{@code benchmarkRunId} 는 아직 400 입니다.</b> 회차 경계는 라벨이 아니라 시간 범위라
+     * 원천이 {@code BenchmarkRun}(DB)인데, 이 경로는 Prometheus 하나만 읽습니다. <b>조용히
+     * 무시하지 않습니다</b> — 무시하면 화면이 전역 값을 회차 값으로 읽고, 깨지지 않는 대신 틀린
+     * 숫자가 나갑니다.</p>
+     *
+     * <p><b>{@code couponId} 는 도메인 계열에만 걸립니다.</b> 정합성 gap · 대기열 · 재고는 회차
+     * 식별자 미터로 좁혀지고, HTTP 미터에서 나오는 계열은 회차 라벨이 없어 전역 값이 그대로
+     * 나갑니다 — {@code /metrics} 와 같은 동작입니다.</p>
+     *
+     * @param query 조회 구간과 선택적 관측 범위. {@code window} 는 {@code 1m}, {@code 5m}, {@code 15m}
+     * @param caller 기존 호출자 체인에서 검증한 관리자 회원
+     * @return 계열마다 상태가 붙은 시계열
+     * @throws BusinessException 아직 지원하지 않는 Benchmark 범위를 지정한 경우 400
+     */
+    @GetMapping("/metrics/series")
+    public ResponseEnvelope<AdminMetricsSeriesResponse> metricsSeries(
+            @Valid @ModelAttribute MetricsQuery query, Caller caller) {
+        if (query.benchmarkRunId() != null) {
+            throw new BusinessException(AdminApiErrorCode.SCOPE_NOT_SUPPORTED);
+        }
+        return ResponseEnvelope.success(seriesAssembler.assemble(query));
     }
 
     /**

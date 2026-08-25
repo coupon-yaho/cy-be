@@ -102,6 +102,60 @@ public class MainDataSourceConfig {
      * <p>{@code spring.jdbc.template.*} 를 직접 적용하는 것도 자동설정이 하던 일이다. 안 하면
      * 그 키들이 조용히 무시된다 — 나중에 운영 풀 타임아웃을 설정으로 조이려는 사람이 값을 적어도
      * 아무 일도 일어나지 않는다. 자동설정이 하던 것과 같은 순서로 적용한다.
+     *
+     * <h2>[CY-488] 운영 풀 query-timeout 은 값을 두지 않는다 — 그 판단의 근거</h2>
+     *
+     * <p><b>이 손잡이가 닿는 범위는 운영 <i>풀</i> 이 아니라 이 {@code JdbcTemplate} 하나다.</b>
+     * Flyway 와 Spring Batch 의 {@code JobRepository} 는 {@code DataSource} 를 직접 물어 이 값과
+     * 무관하고, 발급의 재고 차감은 JPA({@code CouponStockJpaRepository} 의
+     * {@code @Lock(PESSIMISTIC_WRITE)})라 역시 이 템플릿을 안 탄다.
+     *
+     * <p><b>다만 {@code IdempotencyRepositoryImpl} 이 이것을 문다 — 발급 경로다.</b> 요청마다
+     * 재고를 건드리기 전에 도는 멱등키 선점({@code INSERT idempotency_records})이 여기 실린다.
+     * 그래서 이 값은 <b>정상 발급을 죽일 수 있는 자리에 있다.</b> 나머지 주입 지점은
+     * {@code JdbcBenchmarkRunRepository} 의 쓰기 전이와 {@code JdbcRunTimeseriesArchiveStore} 다.
+     *
+     * <p>실측(2026-08-25, MySQL 8.4.11 · Connector/J 9.7.0, 유휴 DB). 이 템플릿이 실제로 실행하는
+     * 가장 무거운 문장은 아카이브의 500행 청크 INSERT 이고, 10000행 3회 반복에서:
+     *
+     * <pre>
+     *   FOR UPDATE 0~11ms · DELETE 1~42ms · 가장 느린 500행 청크 12~49ms
+     * </pre>
+     *
+     * <p>여기서 값을 정하려면 <b>부하 중</b> 수치가 필요한데 그것이 없다. 유휴 49ms 에 임의의
+     * 배수를 곱해 적는 것은 근거가 아니라 추측이고, 그 추측한 값은 위 멱등키 선점을 함께 끊는다 —
+     * 증상은 타임아웃이 아니라 <b>발급 실패</b>로 나타난다. 아래 실측대로 이 손잡이는 v1 비관적
+     * 락의 <b>정상 대기까지 끊으므로</b>, 락 경합이 몰리는 구간일수록 더 많이 끊는다.
+     * 무한 대기는 URL 의 {@code socketTimeout=60000} 이 이미 막고 있으므로, 지금 비워 두는 대가는
+     * "60초 상한이 그대로 남는다" 뿐이다. 그래서 <b>비워 두는 쪽을 골랐다.</b>
+     *
+     * <p><b>서버 쪽 두 번째 겹({@code SET SESSION max_execution_time})도 걸지 않는다.</b>
+     * 관측 풀과 달리 운영 풀에서는 방어가 아니라 손해다. 같은 날 같은 서버 실측:
+     *
+     * <pre>
+     *                                   max_execution_time=1000   setQueryTimeout(1)
+     *   SELECT SLEEP(5)                 1.1s 에 잘림 (ER 3024)     1.03s 에 잘림
+     *   UPDATE / INSERT .. SLEEP(5)     안 잘림 (5.0s 완주)         1.18s 에 잘림
+     *   락 걸린 행 SELECT .. FOR UPDATE   1.0s 에 잘림 (ER 3024)     1.02s 에 잘림
+     *   락 걸린 행 UPDATE                안 잘림                    1.03s 에 잘림
+     * </pre>
+     *
+     * <p>즉 서버 상한은 운영 풀이 하는 일(쓰기)은 못 막고 <b>락 대기만 끊는다.</b>
+     * {@code storage.yml} 이 socketTimeout 에 대해 경고한 함정과 같은 자리다.
+     *
+     * <p>값을 정하려면 부하 중 이 두 문장의 소요를 재야 한다. TODO(후속 티켓): v1 부하 측정에서
+     * 아카이브·전이 문장의 p99 를 확보한 뒤 이 키를 다시 본다.
+     *
+     * <h2>1초 미만은 올림한다 — 자동설정과 다르다</h2>
+     *
+     * <p>Boot 4.1 의 {@code JdbcTemplateConfiguration} 은 {@code (int) getSeconds()} 로 <b>내린다.</b>
+     * 그러면 {@code 500ms} 가 {@code 0} 이 되고, JDBC 에서 {@code 0} 은 <b>제한 없음</b>이다
+     * (실측: {@code setQueryTimeout(0)} + {@code SELECT SLEEP(3)} → 3.0s 완주).
+     * 조이려던 설정이 푸는 설정으로 뒤집힌다. 관측 템플릿이 같은 이유로 올림하고 있어 맞춘다.
+     *
+     * <p><b>반대 방향 실패</b> — {@code 1200ms} 를 적으면 2초가 된다. 순정 Boot 보다 <b>느슨하다.</b>
+     * Boot 문서를 보고 값을 적은 사람은 이 차이를 모른다. 그래도 "모르는 사이에 더 조인다" 와
+     * "모르는 사이에 통째로 풀린다" 중 후자가 더 나쁘다고 보고 올림을 택했다.
      */
     @Bean
     @Primary
@@ -111,7 +165,8 @@ public class MainDataSourceConfig {
         jdbcTemplate.setFetchSize(template.getFetchSize());
         jdbcTemplate.setMaxRows(template.getMaxRows());
         if (template.getQueryTimeout() != null) {
-            jdbcTemplate.setQueryTimeout((int) template.getQueryTimeout().toSeconds());
+            jdbcTemplate.setQueryTimeout(
+                (int) Math.ceil(template.getQueryTimeout().toMillis() / 1000.0));
         }
         return jdbcTemplate;
     }
