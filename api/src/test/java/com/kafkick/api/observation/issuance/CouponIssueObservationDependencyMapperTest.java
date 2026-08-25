@@ -1,4 +1,4 @@
-package com.kafkick.core.coupon.service;
+package com.kafkick.api.observation.issuance;
 
 import java.util.stream.Stream;
 

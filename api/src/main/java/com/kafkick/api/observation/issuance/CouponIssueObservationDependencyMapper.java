@@ -1,7 +1,7 @@
-package com.kafkick.core.coupon.service;
+package com.kafkick.api.observation.issuance;
 
 import org.springframework.dao.DataAccessException;
-import org.springframework.stereotype.Service;
+import org.springframework.stereotype.Component;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.observation.Dependency;
@@ -9,7 +9,12 @@ import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.ErrorCode;
 
-@Service
+/**
+ * 발급 예외를 HTTP·관측 경계에서 사용할 실패 정보로 변환합니다.
+ *
+ * <p>Spring DAO 기술 예외는 어댑터 경계인 API 모듈에서만 해석하고 Core에는 노출하지 않습니다.
+ */
+@Component
 public class CouponIssueObservationDependencyMapper {
 
     /**
@@ -50,7 +55,7 @@ public class CouponIssueObservationDependencyMapper {
     }
 
     /**
-     * 발급 실패의 직접 의존성을 오류 코드와 원인 예외에서 분류합니다.
+     * 발급 실패의 직접 의존성을 오류 코드와 어댑터 기술 예외에서 분류합니다.
      *
      * @param failure 발급 흐름에서 발생한 예외
      * @return MySQL 계열이면 {@link Dependency#MYSQL}, 아니면 오류 코드 또는 NONE
@@ -59,7 +64,7 @@ public class CouponIssueObservationDependencyMapper {
         if (failure instanceof BusinessException businessException) {
             ErrorCode errorCode = businessException.getErrorCode();
             Dependency mapped = errorCode.dependency();
-            // CouponIssueErrorCode의 NONE도 확정 매핑이며 DB cause가 덮어쓰지 않는다.
+            // 쿠폰 발급 업무 코드는 NONE까지 확정한 값이므로 내부 cause가 덮어쓰지 않습니다.
             if (errorCode instanceof CouponIssueErrorCode) {
                 return mapped;
             }

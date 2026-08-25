@@ -25,6 +25,7 @@ class CoreArchitectureTest {
             "import com.fasterxml.jackson.core.",
             "import tools.jackson.",
             "import org.springframework.data.jpa.",
+            "import org.springframework.dao.",
             "import org.springframework.kafka.",
             "import org.springframework.data.redis.",
             "import com.kafkick.api.",

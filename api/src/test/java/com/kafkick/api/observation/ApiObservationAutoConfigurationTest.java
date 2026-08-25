@@ -19,7 +19,7 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
 import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
-import com.kafkick.core.coupon.service.CouponIssueObservationDependencyMapper;
+import com.kafkick.api.observation.issuance.CouponIssueObservationDependencyMapper;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration;
 import org.junit.jupiter.api.Test;

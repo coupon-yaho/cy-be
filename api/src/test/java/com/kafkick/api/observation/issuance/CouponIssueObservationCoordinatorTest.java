@@ -23,7 +23,6 @@ import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
-import com.kafkick.core.coupon.service.CouponIssueObservationDependencyMapper;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.IssueAttemptCallback;
 import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;

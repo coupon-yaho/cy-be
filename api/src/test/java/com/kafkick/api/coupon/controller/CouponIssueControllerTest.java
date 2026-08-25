@@ -13,6 +13,7 @@ import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.coupon.monitoring.CouponIssueMetrics;
 import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
+import com.kafkick.api.support.RequestIdFilter;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.membership.domain.MembershipGrade;
@@ -62,7 +63,7 @@ class CouponIssueControllerTest {
         )).thenReturn(result);
 
         mockMvc.perform(post("/api/v1/coupons/10/issue")
-                        .header("X-Request-Id", REQUEST_ID)
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
                                 MemberRequestHeaders.MEMBERSHIP_GRADE,
@@ -109,7 +110,7 @@ class CouponIssueControllerTest {
 
         for (int attempt = 0; attempt < 2; attempt++) {
             mockMvc.perform(post("/api/v1/coupons/10/issue")
-                            .header("X-Request-Id", REQUEST_ID)
+                            .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                             .header(MemberRequestHeaders.MEMBER_ID, "20")
                             .header(
                                     MemberRequestHeaders.MEMBERSHIP_GRADE,
@@ -152,7 +153,7 @@ class CouponIssueControllerTest {
         );
 
         mockMvc.perform(post("/api/v1/coupons/10/issue")
-                        .header("X-Request-Id", REQUEST_ID)
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
                                 MemberRequestHeaders.MEMBERSHIP_GRADE,
@@ -179,6 +180,7 @@ class CouponIssueControllerTest {
     @DisplayName("회원 헤더가 없으면 400을 반환한다")
     void rejectMissingMemberHeader() throws Exception {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(
                                 MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "GOLD"

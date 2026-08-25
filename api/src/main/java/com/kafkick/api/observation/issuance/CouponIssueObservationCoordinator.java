@@ -5,8 +5,6 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 
-import com.kafkick.core.coupon.service.CouponIssueObservationDependencyMapper;
-import com.kafkick.core.coupon.service.CouponIssueObservationFailure;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;

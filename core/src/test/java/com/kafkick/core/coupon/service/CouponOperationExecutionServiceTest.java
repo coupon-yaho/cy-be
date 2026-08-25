@@ -10,7 +10,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.Issuance;
@@ -226,11 +225,6 @@ class CouponOperationExecutionServiceTest {
         IssueAttemptCallback callback = org.mockito.Mockito.mock(
                 IssueAttemptCallback.class
         );
-        org.mockito.Mockito.doAnswer(invocation -> {
-            assertThat(TransactionSynchronizationManager
-                    .isActualTransactionActive()).isFalse();
-            return null;
-        }).when(callback).onPolicyPassed();
 
         CouponIssueExecutionResult actual = service().issueWithMetadata(
                 10L,

@@ -1,6 +1,7 @@
 package com.kafkick.api.observation.issuance;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -123,6 +124,26 @@ class IssuanceObservationContextFactoryTest {
         ).orElseThrow();
 
         assertThat(context.grade()).isEqualTo(expectedGrade);
+    }
+
+    @Test
+    void valueLessStatusesCoverEveryStatusThatCarriesNoValue() {
+        assertThat(valueLessStatuses().toList())
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.stream(SourceStatus.values())
+                                .filter(status -> !status.carriesValue())
+                                .toList()
+                );
+    }
+
+    @Test
+    void gradeMappingsCoverEveryMembershipGrade() {
+        assertThat(gradeMappings()
+                .map(arguments ->
+                        (MembershipGrade) arguments.get()[0]
+                )
+                .toList())
+                .containsExactlyInAnyOrder(MembershipGrade.values());
     }
 
     private static Stream<SourceStatus> valueLessStatuses() {
