@@ -71,7 +71,10 @@ class MeterEventRecorderTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         recorder(registry);
 
-        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(13);
+        // ISSUED · QUEUED 둘에 ReasonCode 12종을 더한 수다. 리터럴로 둔다 — 구현과 같은
+        // ReasonCode.values().length 를 쓰면 사유가 늘 때 이 테스트가 조용히 따라가고, 사유를
+        // 더한 사람이 미터 사전을 봤는지 아무도 묻지 않게 된다. 여기서 갈리는 것이 그 질문이다.
+        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(14);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters())
                 .allMatch(counter -> counter.getId().getTag("coupon_id") == null);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters().stream()

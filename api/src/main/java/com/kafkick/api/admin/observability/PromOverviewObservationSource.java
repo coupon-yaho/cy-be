@@ -442,13 +442,27 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         }
     }
 
-    /** O3 벡터가 정의된 raw label만 포함하는지 확인해 새 label을 기존 결과로 오인하지 않습니다. */
+    /**
+     * O3 벡터가 정의된 raw label만 포함하는지 확인해 새 label을 기존 결과로 오인하지 않습니다.
+     *
+     * <p><b>[OBS-44] 실패가 UNAVAILABLE 인 것은 api 가 한 대라서 안전합니다.</b> 모르는 라벨은
+     * 자기보다 새로운 바이너리가 낸 것인데, {@code compose.yml} 의 api 는 호스트 포트를 고정
+     * 바인딩해 두 대로 뜰 수 없고({@code --scale} 이 포트 충돌로 실패한다) Prometheus 타깃도
+     * {@code static_configs} 하나뿐입니다 — 구·신 바이너리가 병존하는 창이 없습니다. 라벨이
+     * 늘어난 배포에서는 인벤토리 개수가 모자라 {@link #completeOutcomeInventory} 가 PENDING 을
+     * 내고, 첫 스크레이프(1초)면 끝납니다.</p>
+     *
+     * <p>⚠️ <b>api 를 다중화하면 이 전제가 깨집니다.</b> 롤링 교체 중에는 구 인스턴스가 신
+     * 인스턴스의 라벨을 보게 되어, 라벨을 더하는 배포마다 롤아웃 내내 O3 가 UNAVAILABLE 로
+     * 죽습니다. 그때는 이 분기를 PENDING("아직 증명이 안 됐다")으로 내리고 라벨 추가를 두
+     * 단계로 나눠 배포해야 합니다 — 다중화하는 쪽이 함께 봐야 할 제약입니다.</p>
+     */
     private static boolean onlyKnownOutcomeLabels(List<PromSample> samples) {
         return samples.stream().allMatch(sample ->
                 OUTCOME_TYPES.containsKey(sample.label(OverviewPrometheusContract.OUTCOME)));
     }
 
-    /** snapshot inventory가 정확히 13개 known label의 존재를 증명하는지 확인합니다. */
+    /** snapshot inventory가 정확히 14개 known label의 존재를 증명하는지 확인합니다. */
     private static Optional<Map<String, Boolean>> completeOutcomeInventory(List<PromSample> samples) {
         if (samples.size() != OUTCOME_TYPES.size()) {
             return Optional.empty();
@@ -467,7 +481,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 ? Optional.of(Map.copyOf(labels)) : Optional.empty();
     }
 
-    /** 정확히 13개 raw label의 유한한 비음수 increase를 double Map으로 변환합니다. */
+    /** 정확히 14개 raw label의 유한한 비음수 increase를 double Map으로 변환합니다. */
     private static Optional<Map<String, Double>> completeOutcomeIncreases(List<PromSample> samples) {
         if (samples.size() != OUTCOME_TYPES.size()) {
             return Optional.empty();
@@ -733,7 +747,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         return value;
     }
 
-    /** 13개 raw outcome label을 7개 Core 결과 유형으로 완전 매핑합니다. */
+    /** 14개 raw outcome label을 7개 Core 결과 유형으로 완전 매핑합니다. */
     private static Map<String, AdminOverviewSnapshot.CustomerOutcomeType> outcomeTypes() {
         Map<String, AdminOverviewSnapshot.CustomerOutcomeType> types = new LinkedHashMap<>();
         types.put("ISSUED", AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
@@ -744,6 +758,8 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         types.put("NOT_OPENED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("CAMPAIGN_CLOSED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("GRADE_NOT_ELIGIBLE", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
+        // 상태 전이 거절도 같은 축이다 — "이 회차는 지금 그 요청을 받을 상태가 아니다".
+        types.put("INVALID_TRANSITION", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("NO_ENTRY_TOKEN", AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED);
         types.put("ENTRY_TOKEN_EXPIRED", AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED);
         types.put("TEMPORARILY_UNAVAILABLE", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);

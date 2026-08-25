@@ -229,9 +229,12 @@ class PromOverviewObservationSourceTest {
                 AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 5d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ALREADY_ISSUED, 4d,
                 AdminOverviewSnapshot.CustomerOutcomeType.STOCK_EXHAUSTED, 5d,
-                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 21d,
+                // INELIGIBLE 은 NOT_OPENED(6)+CAMPAIGN_CLOSED(7)+GRADE_NOT_ELIGIBLE(8)
+                // +INVALID_TRANSITION(11), SYSTEM_FAILURE 는 12+13+14 다. 값은 outcomeSamples 의
+                // 인덱스에서 나오므로 라벨이 늘면 함께 움직인다 — 계약 수치가 아니다.
+                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 32d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 19d,
-                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 36d));
+                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 39d));
         assertThat(data.aggregateIssuanceRate().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(data.latencySummary().value().successfulP99()).isEqualTo(Duration.ofMillis(400));
@@ -595,9 +598,9 @@ class PromOverviewObservationSourceTest {
         assertThat(data.outcomeInput().counts()).isEmpty();
     }
 
-    /** fixed 13 series를 사전 등록했다는 모집단 증명 없이 누락을 0으로 보면 안 됩니다. */
+    /** fixed 14 series를 사전 등록했다는 모집단 증명 없이 누락을 0으로 보면 안 됩니다. */
     @Test
-    @DisplayName("O3 snapshot inventory가 13 known label을 모두 증명하지 못하면 PENDING이다")
+    @DisplayName("O3 snapshot inventory가 14 known label을 모두 증명하지 못하면 PENDING이다")
     void keepsIncompleteOutcomeInventoryPending() {
         OverviewObservationData data = observe(query -> {
             if (query.equals(OverviewPrometheusContract.outcomeInventory())) {
@@ -735,11 +738,13 @@ class PromOverviewObservationSourceTest {
                         .calculate(data.outcomeInput()).customerOutcomes().value();
 
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
-        assertThat(calculated.totalCount()).isEqualTo(90.1d);
+        // 0.1(ISSUED) + 2..14 = 104.1. 값은 outcomeSamples 의 인덱스에서 나오므로 라벨이
+        // 늘면 함께 움직인다 — 계약 수치가 아니라 픽스처 산술이다.
+        assertThat(calculated.totalCount()).isEqualTo(104.1d);
         assertThat(calculated.outcomes()).first().satisfies(outcome -> {
             assertThat(outcome.type()).isEqualTo(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
             assertThat(outcome.count()).isEqualTo(0.1d);
-            assertThat(outcome.ratio()).isCloseTo(0.1d / 90.1d, within(1e-15));
+            assertThat(outcome.ratio()).isCloseTo(0.1d / 104.1d, within(1e-15));
         });
         assertThat(OverviewPrometheusContract.outcomes())
                 .contains("sum by (outcome)", "increase(", "[5m]");
@@ -909,7 +914,7 @@ class PromOverviewObservationSourceTest {
         assertThat(input(data, 101L).sourceStatus()).isEqualTo(SourceStatus.VALID);
     }
 
-    /** malformed unknown을 건너뛰 13 known만 남기는 실제 timed parser 경로를 O3 격리까지 검증합니다. */
+    /** malformed unknown을 건너뛰 14 known만 남기는 실제 timed parser 경로를 O3 격리까지 검증합니다. */
     @Test
     @DisplayName("실제 timed client의 malformed unknown O3 표본은 O3만 UNAVAILABLE이다")
     void isolatesStrictTimedUnknownOutcomeParseFailureToO3() {
@@ -926,6 +931,7 @@ class PromOverviewObservationSourceTest {
                           {"metric":{"outcome":"GRADE_NOT_ELIGIBLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NO_ENTRY_TOKEN"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"ENTRY_TOKEN_EXPIRED"},"value":[1755000000,"1"]},
+                          {"metric":{"outcome":"INVALID_TRANSITION"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"TEMPORARILY_UNAVAILABLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"INTERNAL_ERROR"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"UNMAPPED"},"value":[1755000000,"1"]},
@@ -989,12 +995,13 @@ class PromOverviewObservationSourceTest {
         throw new AssertionError("예상하지 않은 instant query: " + query);
     }
 
-    /** 13개 raw outcome의 increase 값을 base + (1-based index * increment)로 만듭니다. */
+    /** 14개 raw outcome의 increase 값을 base + (1-based index * increment)로 만듭니다. */
     private static List<PromSample> outcomeSamples(double base, double increment) {
         String[] labels = {
                 "ISSUED", "QUEUED", "QUEUE_REQUIRED", "ALREADY_ISSUED", "STOCK_EXHAUSTED",
                 "NOT_OPENED", "CAMPAIGN_CLOSED", "GRADE_NOT_ELIGIBLE", "NO_ENTRY_TOKEN",
-                "ENTRY_TOKEN_EXPIRED", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED"
+                "ENTRY_TOKEN_EXPIRED", "INVALID_TRANSITION", "TEMPORARILY_UNAVAILABLE",
+                "INTERNAL_ERROR", "UNMAPPED"
         };
         List<PromSample> samples = new ArrayList<>();
         for (int index = 0; index < labels.length; index++) {
