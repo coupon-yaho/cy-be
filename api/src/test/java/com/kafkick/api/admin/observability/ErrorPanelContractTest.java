@@ -87,7 +87,10 @@ class ErrorPanelContractTest {
                     .isEqualTo(OverviewPrometheusContract.FAILURE_REASONS.contains(reasonCode));
         }
         // 재고 소진 사유가 원인 표에 섞이면 실패 원인 Top N 이 정책 표가 된다.
-        assertThat(query).doesNotContain(ReasonCode.STOCK_EXHAUSTED.name());
+        assertThat(query).doesNotContain(
+                ReasonCode.STOCK_EXHAUSTED.name(),
+                ReasonCode.INVALID_TRANSITION.name()
+        );
     }
 
     /**

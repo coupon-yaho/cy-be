@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.couponmetrics.mock;
+package com.kafkick.api.admin.support.fixture;
 
 import static com.kafkick.core.observation.SourceStatus.N_A;
 import static com.kafkick.core.observation.SourceStatus.VALID;
@@ -10,50 +10,52 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-import org.springframework.stereotype.Component;
-
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataset;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
- * Overview Mock과 같은 캠페인 모집단을 사용하는 상세 지표 원천 Fixture를 제공합니다.
+ * Overview Controller 테스트와 같은 캠페인 모집단을 사용하는 상세 지표 Fixture를 제공합니다.
  *
  * <p>캠페인 기본 정보·재고·대기열은 Overview Dataset에서 그대로 가져옵니다. 상세 화면에만 필요한
  * 누적 발급 Counter, 상태별 보유량과 전이 버킷은 원천 수량으로만 보강하며 파생 비율이나 속도는
  * 계산하지 않습니다.</p>
+ *
+ * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
+ * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
+ *
+ * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
+ * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
+ * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
  */
-@Component
-public class AdminCouponMetricsMockDataFactory {
+public class AdminCouponMetricsTestFixture {
 
     private static final Duration SAMPLE_INTERVAL = Duration.ofMinutes(1);
     private static final int SAMPLE_INTERVAL_COUNT = 15;
 
-    private final AdminOverviewMockDataFactory overviewFactory;
+    private final AdminOverviewTestFixture overviewFixture;
 
     /**
-     * 상세 지표 모집단의 정본으로 사용할 Overview Mock Factory를 주입받습니다.
+     * 상세 지표 모집단의 정본으로 사용할 Overview fixture를 주입받습니다.
      *
-     * @param overviewFactory 캠페인·재고·대기 원천을 제공하는 기존 Factory
+     * @param overviewFixture 캠페인·재고·대기 원천을 제공하는 Overview fixture
      */
-    public AdminCouponMetricsMockDataFactory(AdminOverviewMockDataFactory overviewFactory) {
-        this.overviewFactory = Objects.requireNonNull(overviewFactory, "overviewFactory");
+    public AdminCouponMetricsTestFixture(AdminOverviewTestFixture overviewFixture) {
+        this.overviewFixture = Objects.requireNonNull(overviewFixture, "overviewFixture");
     }
 
     /**
      * 같은 기준 시각의 Overview Dataset에서 쿠폰을 찾아 상세 원천값으로 변환합니다.
      *
-     * @param snapshotAt 모든 Mock 원천이 공유하는 기준 시각
+     * @param snapshotAt 모든 테스트 원천이 공유하는 기준 시각
      * @param couponId 조회할 쿠폰 ID
      * @return 같은 ID의 상세 지표 원천 또는 빈 Optional
      */
     public Optional<CouponMetricsSource> find(Instant snapshotAt, long couponId) {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
-        AdminOverviewMockDataset overview = overviewFactory.create(snapshotAt);
+        AdminOverviewTestDataset overview = overviewFixture.create(snapshotAt);
         return overview.campaigns().stream()
                 .filter(campaign -> campaign.couponId().equals(couponId))
                 .findFirst()
@@ -173,7 +175,7 @@ public class AdminCouponMetricsMockDataFactory {
             case 101 -> new long[] { 240, 300, 360, 420, 480, 540, 600, 660, 720, 780, 840, 900, 960, 720, 600 };
             case 102 -> new long[] { 180, 210, 240, 270, 300, 330, 360, 390, 420, 450, 480, 510, 540, 570, 600 };
             case 103 -> new long[] { 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228 };
-            default -> throw new IllegalArgumentException("OPEN 상세 Mock 수량이 없는 couponId입니다: " + couponId);
+            default -> throw new IllegalArgumentException("OPEN 상세 fixture 수량이 없는 couponId입니다: " + couponId);
         };
     }
 
@@ -198,7 +200,7 @@ public class AdminCouponMetricsMockDataFactory {
         return List.copyOf(buckets);
     }
 
-    /** 값을 실제로 관측한 정상 Mock Observation을 생성합니다. */
+    /** 값을 관측한 정상 테스트 Observation을 생성합니다. */
     private static <T> CouponMetricsSource.Observation<T> observed(T value, Instant observedAt) {
         return new CouponMetricsSource.Observation<>(value, VALID, observedAt);
     }

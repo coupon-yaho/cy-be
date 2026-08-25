@@ -90,11 +90,17 @@ class JdbcBenchmarkRunRepositoryTest {
         writeDataSource = hikari(mysql.getUsername(), mysql.getPassword());
         writeJdbcTemplate = new JdbcTemplate(writeDataSource);
 
-        // 운영 예정 구성과 같게 SELECT 만 가진 계정을 만든다.
+        // 운영과 같게 **양성 목록 형태**로 준다. 이 클래스는 자기 컨테이너를 직접 띄우므로
+        // (공용 MySqlContainerConfig 를 안 쓴다) 권한도 여기서 직접 세운다.
+        //
+        // ⚠️ [OBS-36] 예전에는 GRANT SELECT ON app.* 였다. 이 저장소가 읽는 것은
+        //    benchmark_runs 하나뿐이라 그때도 테스트는 통과했지만, "운영 예정 구성과 같게"
+        //    라고 적어 놓고 **운영이 더 이상 쓰지 않는 형태**를 세우고 있었다. 그 어긋남은
+        //    이 테스트가 초록불인 채로 남으므로 스스로 드러나지 않는다.
         try (HikariDataSource admin = hikari("root", mysql.getPassword())) {
             JdbcTemplate root = new JdbcTemplate(admin);
             root.execute("CREATE USER 'obs'@'%' IDENTIFIED BY 'obs'");
-            root.execute("GRANT SELECT ON app.* TO 'obs'@'%'");
+            root.execute("GRANT SELECT ON app.benchmark_runs TO 'obs'@'%'");
             root.execute("FLUSH PRIVILEGES");
         }
         observationDataSource = hikari("obs", "obs");

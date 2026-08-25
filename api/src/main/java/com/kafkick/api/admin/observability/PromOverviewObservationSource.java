@@ -448,7 +448,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 OUTCOME_TYPES.containsKey(sample.label(OverviewPrometheusContract.OUTCOME)));
     }
 
-    /** snapshot inventory가 정확히 13개 known label의 존재를 증명하는지 확인합니다. */
+    /** snapshot inventory가 정확히 14개 known label의 존재를 증명하는지 확인합니다. */
     private static Optional<Map<String, Boolean>> completeOutcomeInventory(List<PromSample> samples) {
         if (samples.size() != OUTCOME_TYPES.size()) {
             return Optional.empty();
@@ -467,7 +467,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 ? Optional.of(Map.copyOf(labels)) : Optional.empty();
     }
 
-    /** 정확히 13개 raw label의 유한한 비음수 increase를 double Map으로 변환합니다. */
+    /** 정확히 14개 raw label의 유한한 비음수 increase를 double Map으로 변환합니다. */
     private static Optional<Map<String, Double>> completeOutcomeIncreases(List<PromSample> samples) {
         if (samples.size() != OUTCOME_TYPES.size()) {
             return Optional.empty();
@@ -733,7 +733,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         return value;
     }
 
-    /** 13개 raw outcome label을 7개 Core 결과 유형으로 완전 매핑합니다. */
+    /** 14개 raw outcome label을 7개 Core 결과 유형으로 완전 매핑합니다. */
     private static Map<String, AdminOverviewSnapshot.CustomerOutcomeType> outcomeTypes() {
         Map<String, AdminOverviewSnapshot.CustomerOutcomeType> types = new LinkedHashMap<>();
         types.put("ISSUED", AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
@@ -744,6 +744,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         types.put("NOT_OPENED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("CAMPAIGN_CLOSED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("GRADE_NOT_ELIGIBLE", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
+        types.put("INVALID_TRANSITION", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("NO_ENTRY_TOKEN", AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED);
         types.put("ENTRY_TOKEN_EXPIRED", AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED);
         types.put("TEMPORARILY_UNAVAILABLE", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);

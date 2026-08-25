@@ -37,6 +37,14 @@ dependencies {
     testImplementation project(':infra:redis')
     testImplementation testFixtures(project(':infra:redis'))
 
+    // 테스트만 infra:mq 를 본다. attempt live 샘플링의 기본값은 그 모듈의
+    // AttemptSamplingProperties 상수가 소유하고 실제 설정 키는 이 모듈의 observation.yml 이
+    // 소유해서, 둘을 잇는 테스트가 그 상수를 직접 참조해야 한다(AttemptSamplingYamlContractTest).
+    // 문자열로 옮겨 적으면 한쪽만 바뀌어도 계속 통과하고, 예외 없이 통과량만 조용히 달라진다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 이 모듈의 타입을 컴파일 타임에 못 본다.
+    testImplementation project(':infra:mq')
+
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
@@ -98,6 +106,10 @@ tasks.named('test') {
             rootProject.file('docker-compose.yml'),
             rootProject.file('docker-compose.yaml'),
             rootProject.file('.github/CODEOWNERS'),
+            // [OBS-36] AdminFixtureExposureTest 가 읽는 것 중 **클래스패스 밖**인 것은
+            // .env.example 과 루트 application.yml.example 이고 둘 다 아래에 이미 있다.
+            // 배선 소스(AdminFixtureConfig.java)는 이 모듈의 main 이라 컴파일 산출물로 추적된다 —
+            // @Bean 을 지우거나 스위치 이름을 바꾸면 클래스 파일이 바뀌어 test 가 다시 돈다.
             // DeployedConfigContractTest 가 compose 의 포트 변수 이름이 여기 정의돼 있는지
             // 본다. 선언하지 않으면 이 파일에서 변수를 지워도 test 가 UP-TO-DATE 로 건너뛴다.
             rootProject.file('.env.example'),

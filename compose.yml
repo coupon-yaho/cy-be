@@ -160,6 +160,68 @@ services:
         redis-cli -h redis SET config:runtime \
           "{\"engineVersion\":\"V1\",\"releaseStage\":\"V1\",\"queueMode\":\"OFF\",\"revision\":0,\"updatedAt\":\"$${seeded_at}\",\"updatedBy\":\"system:bootstrap\",\"status\":\"VALID\"}" NX
 
+  # ── OBS-36 관측 계정 재부여 ────────────────────────────────────────────────
+  #
+  # 관측 전용 계정에 **양성 목록의 테이블만** SELECT 를 준다. 목록의 정본은
+  # infra/mysql/obs-grants/allowlist.txt 이고, 같은 파일을 테스트 컨테이너도 읽는다.
+  #
+  #   docker compose --profile obs-grants run --rm obs-grants
+  #
+  # ⚠️ **api 가 한 번 떠서 Flyway 마이그레이션이 끝난 뒤에 친다.** 테이블 단위 GRANT 는
+  #    그 테이블이 이미 있어야 하고, 없으면 ERROR 1146 으로 이 컨테이너가 exit≠0 이 된다.
+  #    그래서 initdb 로 되돌리지 말 것 — 거기서는 테이블이 하나도 없어서 MySQL 컨테이너
+  #    자체가 안 뜬다(infra/mysql/initdb/20-obs-account.sh 의 ⚠️ 참조).
+  #
+  # ⚠️ **사람이 한 번 쳐야 한다.** runtime-config-seed 와 같은 약점이다. 다만 안 쳤을 때의
+  #    증상이 두 갈래이고, 한쪽은 이미 시끄럽다:
+  #
+  #      신규 클론(볼륨 없음) — obs 계정에 권한이 아예 없다(USAGE 뿐). 관측 풀이 **커넥션
+  #        자체를 못 연다** — JDBC URL 이 스키마를 지정하므로 질의가 아니라 접속에서 거부된다
+  #        (실측: ERROR 1044 Access denied for user 'obs'@'%' to database 'app').
+  #        관리자 배치 이력 화면 500, 도메인 게이지 수집 실패 로그, obs 헬스 DOWN.
+  #        → 감지 수단을 따로 둘 필요가 없다.
+  #
+  #      기존 볼륨(OBS-36 이전에 만든 것) — 예전 스키마 GRANT 가 그대로 남아 있어
+  #        **아무 증상이 없다.** 관측은 잘 돌고 obs 는 members 도 계속 읽는다.
+  #        → 이것만이 조용한 실패다. 그리고 **일회성 이행 상태**다.
+  #
+  #    두 번째를 위해 기동 자기 진단을 둘지 검토했고, 두지 않기로 했다 — 일시적인 이행
+  #    상태를 잡으려고 상시 프로브(기동 경로의 DB 왕복 + 아무도 안 읽는 WARN 로그)를
+  #    영구히 남기는 값이 안 맞는다. 대신 README 의 "관측 계정 권한 재부여" 절이 기존
+  #    볼륨 보유자에게 이 절차를 명시한다.
+  #
+  # depends_on 에 api 를 적지만 service_started 다. api 에는 healthcheck 가 없어서
+  # "떴다" 와 "마이그레이션이 끝났다" 를 구분하지 못한다 — 순서를 강제하지 않고, 이르면
+  # 위의 1146 으로 시끄럽게 실패하게 둔다.
+  obs-grants:
+    image: mysql:8.4
+    profiles: ["obs-grants"]
+    restart: "no"
+    # ⚠️ env_file: .env 를 쓰지 않는다. 이 컨테이너는 root 로 GRANT 를 주는 자리라, .env 를
+    #    통째로 넣으면 이 작업과 무관한 시크릿(DB_PASSWORD · DB_OBS_PASSWORD ·
+    #    BENCHMARK_ADMIN_COMMAND_SECRET · MYSQL_PASSWORD …)까지 프로세스 환경에 실린다.
+    #    apply.sh 가 실제로 읽는 것은 아래 넷뿐이다. 값 자체는 compose 가 .env 에서 보간한다
+    #    (interpolation 은 env_file 과 별개로 항상 프로젝트 .env 를 본다).
+    #
+    #    ⚠️ 관측 계정 **비밀번호**(DB_OBS_PASSWORD)는 일부러 뺐다. 권한을 주는 데는 계정
+    #       이름만 필요하다. 비밀번호가 필요한 것은 계정을 만드는 initdb 쪽이다.
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      DB_OBS_USERNAME: ${DB_OBS_USERNAME}
+      # 스크립트는 기본값이 127.0.0.1 이다. 여기서는 별도 컨테이너라 서비스 DNS 로 붙는다.
+      MYSQL_HOST: mysql
+    depends_on:
+      mysql:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      # 디렉터리째 마운트한다. apply.sh 가 같은 디렉터리의 allowlist.txt 를 읽으므로
+      # 파일 하나만 마운트하면 목록을 못 찾아 그 자리에서 죽는다.
+      - ./infra/mysql/obs-grants:/obs-grants:ro
+    entrypoint: ["sh", "/obs-grants/apply.sh"]
+
   api:
     image: ${COUPON_IMAGE}:${API_IMAGE_TAG}
     pull_policy: always

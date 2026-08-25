@@ -20,6 +20,11 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.api.admin.observability.PendingAdminCampaignDataReader;
+import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
+import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
+import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.campaignsource.DetailAvailability;
 
 /** 관리자 개요 Service 연결과 나머지 선구축 조회의 요청 경계를 검증합니다. */
 class AdminDashboardControllerTest {
@@ -35,42 +40,38 @@ class AdminDashboardControllerTest {
                     AdminControllerContractTestSupport.analyticsService(CLOCK))
     );
 
-    /** 개요 조회가 연결된 O1·O3·지연과 Mock O2·O4·FINAL을 성공 봉투에 보존하는지 검증합니다. */
+    /** 개요 조회가 DB 캠페인과 연결된 관측, 미연결 PENDING을 같은 성공 봉투에 보존하는지 검증합니다. */
     @Test
     @DisplayName("관리자 개요 조회는 관측값과 aggregate PENDING을 PARTIAL 응답으로 반환한다")
-    void overviewReturnsObservedAndMockBoundaryResponse() throws Exception {
+    void overviewReturnsObservedAndPendingBoundaryResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/overview"))
                 .andExpect(status().isOk())
                 .andExpect(header().exists("X-Request-Id"))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.snapshotAt").value(NOW.toString()))
                 .andExpect(jsonPath("$.data.overallStatus").value("PARTIAL"))
-                .andExpect(jsonPath("$.data.actionRequired.state").value("VALID"))
-                .andExpect(jsonPath("$.data.actionRequired.value.totalCount").value(4))
-                .andExpect(jsonPath("$.data.openingSoon.value.totalCount").value(2))
-                .andExpect(jsonPath("$.data.openingSoon.value.preparationIncompleteCount").value(1))
+                .andExpect(jsonPath("$.data.actionRequired.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.actionRequired.value").doesNotExist())
+                .andExpect(jsonPath("$.data.openingSoon.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.openingSoon.value").doesNotExist())
                 .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("VALID"))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.openCount").value(3))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.scheduledCount").value(2))
                 .andExpect(jsonPath("$.data.campaignStatusSummary.value.closedCount").value(1))
-                .andExpect(jsonPath("$.data.actionItems.value.topItems[0].couponId").value(101))
-                .andExpect(jsonPath("$.data.actionItems.value.topItems[0].recommendedAction.code")
-                        .value("ISSUANCE_STOPPED"))
+                .andExpect(jsonPath("$.data.actionItems.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.actionItems.value").doesNotExist())
                 .andExpect(jsonPath("$.data.campaigns.state").value("VALID"))
                 .andExpect(jsonPath("$.data.campaigns.value.length()").value(6))
                 .andExpect(jsonPath("$.data.campaigns.value[0].couponId").value(101))
                 .andExpect(jsonPath("$.data.campaigns.value[0].priority").value(1))
-                .andExpect(jsonPath("$.data.campaigns.value[0].severity").value("CRITICAL"))
-                .andExpect(jsonPath("$.data.campaigns.value[0].recommendedAction.code")
-                        .value("ISSUANCE_STOPPED"))
-                .andExpect(jsonPath("$.data.campaigns.value[0].campaignQueueStatus.value.assessment")
-                        .value("ADMISSION_STOPPED"))
+                .andExpect(jsonPath("$.data.campaigns.value[0].campaignQueueStatus.state")
+                        .value("PENDING"))
                 .andExpect(jsonPath("$.data.campaigns.value[1].couponId").value(102))
                 .andExpect(jsonPath("$.data.campaigns.value[1].issuanceFlow.value.currentPerMinute")
                         .value(49.0))
                 .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.value.estimatedDepletion")
                         .value("PT7M9S"))
-                .andExpect(jsonPath("$.data.queueRisk.state").value("VALID"))
+                .andExpect(jsonPath("$.data.queueRisk.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.stockRisk.state").value("VALID"))
                 .andExpect(jsonPath("$.data.aggregateIssuanceRate.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.aggregateIssuanceRate.value").doesNotExist())
@@ -83,7 +84,7 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(103))
                 .andExpect(jsonPath("$.data.campaigns.value[2].stockForecast.state").value("VALID"))
                 .andExpect(jsonPath("$.data.campaigns.value[2].issuanceFlow.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value[2].campaignQueueStatus.state").value("VALID"))
+                .andExpect(jsonPath("$.data.campaigns.value[2].campaignQueueStatus.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.customerOutcomes.state").value("VALID"))
                 .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(7))
                 .andExpect(jsonPath("$.error").doesNotExist());
@@ -128,10 +129,10 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
-    /** 허용된 집계 구간으로 상세 Mock 계산 결과를 성공 봉투에 반환하는지 검증합니다. */
+    /** 허용된 집계 구간에서 DB 상세값과 미연결 PENDING을 함께 반환하는지 검증합니다. */
     @Test
-    @DisplayName("쿠폰 지표 조회는 요청 window로 계산한 상세 Mock 결과를 반환한다")
-    void couponMetricsReturnsCalculatedMockResponse() throws Exception {
+    @DisplayName("쿠폰 지표 조회는 DB 상세값과 미연결 PENDING을 반환한다")
+    void couponMetricsReturnsDatabaseAndPendingResponse() throws Exception {
         mockMvc.perform(get("/api/v1/admin/coupon-metrics")
                         .param("couponId", "101")
                         .param("window", "5m"))
@@ -142,7 +143,9 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.window").value("FIVE_MINUTES"))
                 .andExpect(jsonPath("$.data.stock.remainingCount.state").value("VALID"))
                 .andExpect(jsonPath("$.data.stock.remainingCount.value").value(4_650))
-                .andExpect(jsonPath("$.data.issuanceRate.value.currentPerSecond").value(10.0))
+                .andExpect(jsonPath("$.data.issuanceRate.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.issuanceRate.value").doesNotExist())
+                .andExpect(jsonPath("$.data.queue.waitingCount.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.transitionRate.value.usePerSecond").value(0.65))
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
@@ -157,6 +160,74 @@ class AdminDashboardControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("COMMON-002"));
+    }
+
+    @Test
+    @DisplayName("쿠폰 지표 DB 장애는 ADMIN-CAMPAIGN-001 503을 반환한다")
+    void couponMetricsReturns503ForDatabaseFailure() throws Exception {
+        MockMvc unavailableMvc = mockMvcWithReader(new UnavailableDetailReader());
+
+        unavailableMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", "101")
+                        .param("window", "1m"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-CAMPAIGN-001"));
+    }
+
+    @Test
+    @DisplayName("관측 비활성 쿠폰 지표는 ADMIN-003 503을 반환한다")
+    void couponMetricsReturns503WhenObservationIsDisabled() throws Exception {
+        MockMvc disabledMvc = mockMvcWithReader(new PendingAdminCampaignDataReader());
+
+        disabledMvc.perform(get("/api/v1/admin/coupon-metrics")
+                        .param("couponId", "101")
+                        .param("window", "1m"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-003"));
+    }
+
+    @Test
+    @DisplayName("관측 비활성 운영현황은 빈 PENDING 모집단을 200으로 반환한다")
+    void overviewReturnsPendingWhenObservationIsDisabled() throws Exception {
+        AdminCampaignDataReader reader = new PendingAdminCampaignDataReader();
+        MockMvc disabledMvc = AdminControllerContractTestSupport.mockMvcWithNonNullJson(
+                new AdminDashboardController(
+                        AdminControllerContractTestSupport.overviewService(CLOCK, reader),
+                        AdminControllerContractTestSupport.couponMetricsService(CLOCK, reader),
+                        AdminControllerContractTestSupport.analyticsService(CLOCK)));
+
+        disabledMvc.perform(get("/api/v1/admin/overview"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.campaigns.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.campaigns.value").doesNotExist())
+                .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.openingSoon.state").value("PENDING"));
+    }
+
+    private static MockMvc mockMvcWithReader(AdminCampaignDataReader reader) {
+        return AdminControllerContractTestSupport.mockMvcWithNonNullJson(
+                new AdminDashboardController(
+                        AdminControllerContractTestSupport.overviewService(CLOCK),
+                        AdminControllerContractTestSupport.couponMetricsService(CLOCK, reader),
+                        AdminControllerContractTestSupport.analyticsService(CLOCK)));
+    }
+
+    private static final class UnavailableDetailReader implements AdminCampaignDataReader {
+        @Override
+        public AdminCampaignCatalog loadCatalog(Instant snapshotAt) {
+            throw new AssertionError("상세 HTTP 테스트에서 catalog를 읽으면 안 됩니다.");
+        }
+
+        @Override
+        public AdminCampaignDetailData findDetail(
+                long couponId,
+                Instant fromInclusive,
+                Instant toExclusive,
+                Instant snapshotAt
+        ) {
+            return new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null);
+        }
     }
 
     /** 유효한 기간·브랜드·쿠폰 필터가 실제 독립 분석 결과로 변환되는지 검증합니다. */

@@ -28,16 +28,35 @@ class AdminAnalyticsConfigTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(TestClockConfig.class, AdminAnalyticsConfig.class);
 
-    /** 별도 설정 없이 개발용 Mock 원천과 Mock 전용 최신성 기준을 사용하는지 검증합니다. */
+    /**
+     * <b>[OBS-36] 별도 설정 없이는 Mock 이 아니라 Pending 이다.</b>
+     *
+     * <p>예전에는 이 테스트가 {@code defaultsToMockSource} 라는 이름으로 정반대를 고정하고
+     * 있었다. {@code @DefaultValue("true")} 였고 이 키를 설정하는 yml 이 하나도 없어서,
+     * {@code AdminAnalyticsConfig} 의 "운영 기본값에서는 가짜 통계를 만들지 않는다" 는 주석과
+     * 반대로 <b>운영에서도 Mock 이 200 으로 나갔다.</b> 기본값을 뒤집고 이 테스트를 함께 뒤집는다 —
+     * 한쪽만 고치면 다른 쪽이 그것을 되돌리는 근거가 된다.
+     */
     @Test
-    void defaultsToMockSource() {
+    void defaultsToPendingSource() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(AdminAnalyticsService.class)
-                    .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.MOCK);
+                    .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.NONE);
             assertThat(context.getBean(AdminAnalyticsProperties.class).staleAfter())
                     .isEqualTo(java.time.Duration.ofHours(24));
         });
+    }
+
+    /** 로컬·시연용으로 명시적으로 켜면 개발용 Mock 원천을 쓰는지 검증합니다. */
+    @Test
+    void enablesMockSourceExplicitly() {
+        runner.withPropertyValues("admin.analytics.mock-enabled=true")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(AdminAnalyticsService.class)
+                            .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.MOCK);
+                });
     }
 
     /** Mock을 명시적으로 비활성화하면 실제 Source 연결 전 Pending 응답을 사용하는지 검증합니다. */

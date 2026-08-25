@@ -50,6 +50,7 @@ class MeterEventRecorderTest {
         recorder.record(factory.issued(context, 1L, "coupon-code-0001"));
         recorder.record(factory.entry(context, 202, null, Dependency.NONE, 3L, 8L));
         recorder.record(factory.issueRejected(context, 409, ReasonCode.ALREADY_ISSUED, Dependency.NONE));
+        recorder.record(factory.issueRejected(context, 409, ReasonCode.INVALID_TRANSITION, Dependency.NONE));
 
         assertThat(counter(registry, MeterNames.ISSUANCE_FLOW, "coupon_id", "201", "stage", "attempt"))
                 .isEqualTo(1.0);
@@ -59,6 +60,8 @@ class MeterEventRecorderTest {
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "ISSUED")).isEqualTo(1.0);
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "QUEUED")).isEqualTo(1.0);
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "ALREADY_ISSUED"))
+                .isEqualTo(1.0);
+        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "INVALID_TRANSITION"))
                 .isEqualTo(1.0);
         assertThat(gauge(registry, MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH, "coupon_id", "201"))
                 .isEqualTo(1_787_443_200d);
@@ -71,7 +74,7 @@ class MeterEventRecorderTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         recorder(registry);
 
-        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(13);
+        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(14);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters())
                 .allMatch(counter -> counter.getId().getTag("coupon_id") == null);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters().stream()
@@ -143,8 +146,20 @@ class MeterEventRecorderTest {
                 "coupon_id", "201", "stage", "attempt")).isEqualTo(1.0);
     }
 
+    /**
+     * 재생은 어느 결과 미터도 올리지 않는다.
+     *
+     * <p>CY-431 은 이 자리를 반대로 고정했었다 — 거절은 세고 대기 등록만 뺐다. 그때는
+     * {@code Ctx} 를 만드는 운영 코드가 아직 없어 {@code replayed} 의 생산자가 0건이었다.
+     * OBS-15 가 그 판정을 뒤집는다: 재생은 결과를 다시 계산한 것이 아니라 저장된 결과를 다시
+     * 내보낸 것이고, {@code app.issuance.outcome} 은 논리 결과당 1이어야 발급률·실패율의 분모가
+     * 맞는다. 부푼 분모는 예외도 로그도 남기지 않아 재시도가 몰린 회차에서만 조용히 나타난다.
+     *
+     * <p>단계 미터는 반대다 — {@link #countsReplayedIssueAttemptsAsRepeatedEngineEntries()} 가
+     * {@code ISSUE_ATTEMPT} 는 재생도 그대로 센다는 것을 함께 고정한다. 두 테스트가 한 쌍이다.
+     */
     @Test
-    void countsReplayedRejectionsButNotReplayedQueueAdmissions() {
+    void keepsReplaysOutOfEveryOutcomeMeter() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
@@ -153,10 +168,35 @@ class MeterEventRecorderTest {
         recorder.record(factory.issueRejected(replayed, 409, ReasonCode.ALREADY_ISSUED,
                 Dependency.NONE));
         recorder.record(factory.entry(replayed, 202, null, Dependency.NONE, 3L, 8L));
+        recorder.record(factory.entry(replayed, 403, ReasonCode.GRADE_NOT_ELIGIBLE, Dependency.NONE,
+                null, null));
+
+        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "ALREADY_ISSUED")).isZero();
+        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "GRADE_NOT_ELIGIBLE")).isZero();
+        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "QUEUED")).isZero();
+    }
+
+    /**
+     * 재생이 아닌 거절과 대기 등록은 그대로 센다.
+     *
+     * <p>위 테스트만 두면 "결과 미터를 통째로 끈" 구현도 초록이다 — 두 분기가 한 쌍이어야
+     * {@code replayed} 가 실제로 술어로 쓰이는지가 고정된다. 거절({@code ALREADY_ISSUED})과
+     * 대기 등록({@code QUEUED})을 함께 보는 것은 {@code recordIssueResult} 와
+     * {@code recordEntryResult} 가 각각 다른 분기를 타기 때문이다.
+     */
+    @Test
+    void countsRejectionsAndQueueRegistrationsThatAreNotReplays() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MeterEventRecorder recorder = recorder(registry);
+        IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
+        IssuanceFlowEvent.Ctx fresh = context(201L, false);
+
+        recorder.record(factory.issueRejected(fresh, 409, ReasonCode.ALREADY_ISSUED, Dependency.NONE));
+        recorder.record(factory.entry(fresh, 202, null, Dependency.NONE, 3L, 8L));
 
         assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME,
                 "outcome", "ALREADY_ISSUED")).isEqualTo(1.0);
-        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "QUEUED")).isZero();
+        assertThat(counter(registry, MeterNames.ISSUANCE_OUTCOME, "outcome", "QUEUED")).isEqualTo(1.0);
     }
 
     @Test

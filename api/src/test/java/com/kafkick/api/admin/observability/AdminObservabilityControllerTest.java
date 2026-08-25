@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Clock;
+import java.util.List;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -17,10 +18,15 @@ import java.util.List;
 
 import com.kafkick.core.observation.DomainMeterNames;
 
+import com.kafkick.api.admin.events.LiveEventAssembler;
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
+import com.kafkick.core.observation.attempt.AttemptLiveEntry;
+import com.kafkick.core.observation.attempt.AttemptLivePage;
+import com.kafkick.core.observation.attempt.AttemptLiveReader;
+import com.kafkick.core.observation.EventType;
 import com.kafkick.core.support.TimeProvider;
 
-/** 연결된 관리자 지표 조회와 아직 선구축 상태인 live event polling의 계약을 검증합니다. */
+/** 연결된 관리자 지표 조회와 live event polling 의 HTTP 계약을 검증합니다. */
 class AdminObservabilityControllerTest {
 
     private static final TimeProvider FIXED_TIME =
@@ -32,7 +38,8 @@ class AdminObservabilityControllerTest {
             new AdminObservabilityController(
                     new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
                     new PromSeriesAssembler(FakePromRangeQuery.alwaysOnePoint(), FIXED_TIME,
-                            PrometheusSeriesProperties.defaults())));
+                            PrometheusSeriesProperties.defaults()),
+                    emptyLiveEvents()));
 
     /** 유효한 집계 구간과 단일 관측 범위가 바인딩된 뒤 값마다 상태가 붙은 스냅샷이 나가는지 검증합니다. */
     @Test
@@ -66,7 +73,8 @@ class AdminObservabilityControllerTest {
                 new AdminObservabilityController(
                         new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER, BUDGET),
                         new PromSeriesAssembler(FakePromRangeQuery.down(), FIXED_TIME,
-                                PrometheusSeriesProperties.defaults())));
+                                PrometheusSeriesProperties.defaults()),
+                    emptyLiveEvents()));
 
         failing.perform(get("/api/v1/admin/metrics").param("window", "1m"))
                 .andExpect(status().isOk())
@@ -85,7 +93,8 @@ class AdminObservabilityControllerTest {
                 new AdminObservabilityController(
                         new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
                         new PromSeriesAssembler(FakePromRangeQuery.withNaNFirstPoint(), FIXED_TIME,
-                                PrometheusSeriesProperties.defaults())));
+                                PrometheusSeriesProperties.defaults()),
+                    emptyLiveEvents()));
 
         nonNull.perform(get("/api/v1/admin/metrics/series").param("window", "1m"))
                 .andExpect(status().isOk())
@@ -137,7 +146,8 @@ class AdminObservabilityControllerTest {
                                                         Instant.parse("2026-08-20T23:59:25Z"), 7d),
                                                 new PromRangePoint(
                                                         Instant.parse("2026-08-20T23:59:30Z"), 0d))),
-                                FIXED_TIME, PrometheusSeriesProperties.defaults())));
+                                FIXED_TIME, PrometheusSeriesProperties.defaults()),
+                        emptyLiveEvents()));
 
         exhausted.perform(get("/api/v1/admin/metrics/series").param("window", "1m"))
                 .andExpect(status().isOk())
@@ -170,7 +180,8 @@ class AdminObservabilityControllerTest {
                 new AdminObservabilityController(
                         new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER, BUDGET),
                         new PromSeriesAssembler(FakePromRangeQuery.down(), FIXED_TIME,
-                                PrometheusSeriesProperties.defaults())));
+                                PrometheusSeriesProperties.defaults()),
+                        emptyLiveEvents()));
 
         failing.perform(get("/api/v1/admin/metrics/series").param("window", "1m"))
                 .andExpect(status().isOk())
@@ -192,7 +203,8 @@ class AdminObservabilityControllerTest {
                 new AdminObservabilityController(
                         new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
                         new PromSeriesAssembler(FakePromRangeQuery.alwaysOnePoint(), FIXED_TIME,
-                                PrometheusSeriesProperties.defaults())));
+                                PrometheusSeriesProperties.defaults()),
+                        emptyLiveEvents()));
 
         // window 누락 · 허용값 밖 · 상호배타 위반 — 어느 쪽도 400 을 앞세우면 안 된다.
         withoutHeaders.perform(get("/api/v1/admin/metrics/series"))
@@ -251,10 +263,87 @@ class AdminObservabilityControllerTest {
 
     /** live event 조회가 과거용 beforeCursor가 아닌 afterCursor를 사용하는지 검증합니다. */
     @Test
-    @DisplayName("관측 이벤트 조회는 afterCursor와 limit을 바인딩하고 ADMIN-001 선구축 오류를 반환한다")
-    void eventsReturnNotImplementedEnvelope() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/events").param("afterCursor", "cursor").param("limit", "50"))
-                .andExpect(status().isNotImplemented())
-                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+    @DisplayName("관측 이벤트 조회는 afterCursor와 limit을 바인딩해 항목을 반환한다")
+    void eventsReturnBufferedItems() throws Exception {
+        MockMvc withEvents = AdminControllerContractTestSupport.mockMvc(controller(
+                page(List.of(entry()), "1723520000000-3", true, false)));
+
+        withEvents.perform(get("/api/v1/admin/events")
+                        .param("afterCursor", "1723519999999-0").param("limit", "50"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].eventId")
+                        .value("11111111-1111-1111-1111-111111111111"))
+                .andExpect(jsonPath("$.data.hasMore").value(true))
+                .andExpect(jsonPath("$.data.cursorReset").value(false));
+    }
+
+    /**
+     * <b>커서는 문자열로 나가야 한다.</b> Stream ID 의 밀리초 부분만으로도 JS 의 안전 정수
+     * 범위(2^53-1)를 넘는다. 숫자로 나가면 화면이 조용히 반올림하고, 그 커서로는 다시 조회할
+     * 수 없다 — 예외 없이 폴링만 어긋난다.
+     */
+    @Test
+    @DisplayName("nextAfterCursor 는 숫자가 아니라 불투명 문자열로 나간다")
+    void eventsExposeTheCursorAsAnOpaqueString() throws Exception {
+        MockMvc withEvents = AdminControllerContractTestSupport.mockMvc(controller(
+                page(List.of(entry()), "1723520000000-3", false, false)));
+
+        withEvents.perform(get("/api/v1/admin/events"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.nextAfterCursor").value("1723520000000-3"))
+                .andExpect(jsonPath("$.data.nextAfterCursor").value(
+                        org.hamcrest.Matchers.instanceOf(String.class)));
+    }
+
+    /** 만료된 커서에서 500 이나 빈 응답이 아니라 200 + 복구 플래그가 나간다. */
+    @Test
+    @DisplayName("만료 커서는 200 으로 복구 플래그와 함께 나간다")
+    void eventsReportCursorResetInsteadOfFailing() throws Exception {
+        MockMvc expired = AdminControllerContractTestSupport.mockMvc(controller(
+                page(List.of(entry()), "1723520000000-3", false, true)));
+
+        expired.perform(get("/api/v1/admin/events").param("afterCursor", "0-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.cursorReset").value(true))
+                .andExpect(jsonPath("$.data.eventsMayBeMissing").value(true))
+                .andExpect(jsonPath("$.data.items").isNotEmpty());
+    }
+
+    /** limit 경계는 그대로다 — 원천이 붙었다고 400 계약이 흔들리면 안 된다. */
+    @Test
+    @DisplayName("관측 이벤트 조회는 limit 경계를 400으로 거부한다")
+    void eventsRejectLimitsOutsideTheContract() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/events").param("limit", "0"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/admin/events").param("limit", "201"))
+                .andExpect(status().isBadRequest());
+    }
+
+    private static AdminObservabilityController controller(AttemptLivePage page) {
+        return new AdminObservabilityController(
+                new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
+                new PromSeriesAssembler(FakePromRangeQuery.alwaysOnePoint(), FIXED_TIME,
+                        PrometheusSeriesProperties.defaults()),
+                new LiveEventAssembler(reader(page)));
+    }
+
+    private static LiveEventAssembler emptyLiveEvents() {
+        return new LiveEventAssembler(reader(page(List.of(), null, false, false)));
+    }
+
+    private static AttemptLivePage page(
+            List<AttemptLiveEntry> entries, String nextCursor, boolean hasMore, boolean expired) {
+        return new AttemptLivePage(entries, nextCursor, hasMore, expired);
+    }
+
+    private static AttemptLiveReader reader(AttemptLivePage page) {
+        return (afterCursor, limit) -> page;
+    }
+
+    private static AttemptLiveEntry entry() {
+        return new AttemptLiveEntry(
+                java.util.UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                EventType.ISSUE_ATTEMPT, 101L, 201L, null, null, null, null, null, null, null,
+                false, Instant.parse("2026-08-25T00:00:00Z"), Instant.parse("2026-08-25T00:00:01Z"));
     }
 }

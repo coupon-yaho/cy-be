@@ -212,6 +212,27 @@ class IssuanceFlowEventTest {
     }
 
     @Test
+    void contextCopiesAllFieldsAndReplacesOnlyReplayed() {
+        IssuanceFlowEvent.Ctx original = context("request-1", false);
+
+        IssuanceFlowEvent.Ctx replayed = original.withReplayed(true);
+
+        assertThat(replayed).isEqualTo(new IssuanceFlowEvent.Ctx(
+                original.requestId(),
+                original.memberId(),
+                original.couponId(),
+                original.grade(),
+                true,
+                original.occurredAt(),
+                original.engineVersion(),
+                original.releaseStage(),
+                original.queueMode(),
+                original.benchmarkRunId(),
+                original.producerInstanceId()
+        ));
+    }
+
+    @Test
     void failedHttpResultRequiresReasonCode() {
         assertThatThrownBy(() -> FACTORY.issueRejected(
                 context("request-1", false), 409, null, Dependency.NONE

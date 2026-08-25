@@ -11,6 +11,7 @@ import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.overview.CampaignOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -65,8 +66,33 @@ class CampaignOverviewCalculatorTest {
                 )
         );
 
-        assertThat(result.openingSoon())
+        assertThat(result.openingSoon().value())
                 .isEqualTo(new AdminOverviewSnapshot.OpeningSoonSummary(2, 1));
+    }
+
+    /** P-06 전 준비 상태를 미완료 0건으로 보정하지 않고 상단 관측 상태로 보존해야 합니다. */
+    @Test
+    @DisplayName("오픈 임박 캠페인의 준비 상태가 PENDING이면 상단 KPI도 PENDING이다")
+    void preservesPendingPreparationForOpeningSoonObservation() {
+        CampaignOverviewSource pendingPreparation = new CampaignOverviewSource(
+                7L,
+                "준비 상태 미관측 캠페인",
+                "브랜드",
+                CouponRoundStatus.SCHEDULED,
+                SNAPSHOT_AT.plusSeconds(10),
+                SNAPSHOT_AT.plus(Duration.ofHours(1)),
+                EngineVersion.V1,
+                null,
+                null,
+                null,
+                SourceStatus.N_A,
+                new PreparationObservation(null, SourceStatus.PENDING, null));
+
+        CampaignOverviewCalculator.CampaignCalculation result = calculate(List.of(pendingPreparation));
+
+        assertThat(result.openingSoon().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(result.openingSoon().value()).isNull();
+        assertThat(result.openingSoon().observedAt()).isNull();
     }
 
     /** O4는 Campaign Calculator 내부 V1 수량 계산이 아니라 전달받은 O4 결과만 조립하는지 검증합니다. */
@@ -247,7 +273,7 @@ class CampaignOverviewCalculatorTest {
                 activeCount,
                 stockObservedAt,
                 stockObservedAt == null ? SourceStatus.UNAVAILABLE : SourceStatus.VALID,
-                preparationCompleted
+                new PreparationObservation(preparationCompleted, SourceStatus.VALID, SNAPSHOT_AT)
         );
     }
 
