@@ -36,7 +36,6 @@ public class IssuanceHistoryCalculator {
         List<RawHistory> candidates = readResult.candidates();
 
         // limit + 1번째 후보의 존재로 다음 페이지 여부를 판단합니다.
-        // limit + 1번째 후보의 존재로 다음 페이지 여부를 판단합니다.
         boolean hasOlder = candidates.size() > limit;
         List<RawHistory> pageRows = hasOlder
                 ? candidates.subList(0, limit)

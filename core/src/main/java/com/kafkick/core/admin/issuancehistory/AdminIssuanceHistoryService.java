@@ -3,12 +3,10 @@ package com.kafkick.core.admin.issuancehistory;
 import java.time.Instant;
 import java.util.Objects;
 
-import org.springframework.stereotype.Service;
 
 import com.kafkick.core.support.TimeProvider;
 
 /** 관리자 발급 상태 변경 이력의 요청 기준 시각, 원천 조회와 계산을 조립합니다. */
-@Service
 public class AdminIssuanceHistoryService {
 
     private final TimeProvider timeProvider;
