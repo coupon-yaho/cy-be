@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -172,9 +173,7 @@ class CouponIssuePolicyValidatorTest {
                 CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST
         );
 
-        verify(couponRoundRepository, never()).findById(10L);
-        verify(issuanceRepository, never())
-                .existsForCouponRoundAndMember(10L, 20L);
+        verifyNoInteractions(couponRoundRepository, issuanceRepository);
     }
 
     private CouponIssuePolicyValidator validator() {
