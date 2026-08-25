@@ -17,6 +17,11 @@ dependencies {
     // (ObservationHealthContractTest). 문자열로 옮겨 적으면 한쪽만 바뀌어도 아무도 모른다 —
     // 실제로 상수만 바꿔 보면 앱은 정상 기동하고 로그도 없이 경보만 죽는다.
     //
+    // 같은 선을 쓰는 테스트가 하나 더 있다(RunTimeseriesMetricContractTest). 저쪽은 storage 의
+    // db/migration/*.sql 을 테스트 classpath 리소스로 읽어 CHECK 제약의 허용 값 집합을 뽑고,
+    // 그것을 core 의 Metric enum·이 모듈의 SeriesKey 와 대조한다. 위 테스트를 지우면서 이 줄도
+    // 함께 지우면 저쪽이 컴파일에서 깨진다.
+    //
     // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 storage 타입을 컴파일 타임에 못 본다.
     //    이 줄은 테스트에 한해 그 경계를 넘는다는 것을 드러내 두는 선언이다 — 사실 testFixtures
     //    가 이미 storage 본 코드를 전이로 끌어와서 없어도 컴파일된다. 강제가 아니라 의도 표시다.

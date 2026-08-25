@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.kafkick.core.benchmark.RunTimeseriesArchiver.Metric;
+
 class RunTimeseriesMigrationTest {
 
     private static MySQLContainer mysql;
@@ -91,6 +93,59 @@ class RunTimeseriesMigrationTest {
         assertThatThrownBy(() -> execute("INSERT INTO run_timeseries"
                 + " (benchmark_run_id, metric, snapshot_sequence, observed_at, value, state)"
                 + " VALUES (1, 'DB_POOL_USAGE', 13, NOW(6), 0.3, 'VALID')"))
+                .hasMessageContaining("uk_run_metric_seq");
+    }
+
+    /**
+     * enum 의 <b>모든</b> 값이 실제 MySQL 제약을 통과하는지 봅니다.
+     *
+     * <p>값을 손으로 적지 않고 {@link Metric#values()} 를 돌립니다 — 적어 두면 enum 만 늘어난
+     * 상태에서도 계속 통과하고, 실패는 실제 회차 archive 에서 처음 나타납니다. 파일에 적힌
+     * 허용 값이 enum 과 같은지는 {@code RunTimeseriesMetricContractTest} 가 보고, 여기서는
+     * <b>그 파일이 진짜 DB 에서 그렇게 동작하는지</b>를 봅니다.</p>
+     *
+     * <p>대소문자도 함께 봅니다. 제약이 {@code COLLATE utf8mb4_0900_as_cs} 라 소문자로 적재하면
+     * 값이 맞아도 거절됩니다.</p>
+     */
+    @Test
+    void everyArchivedMetricPassesTheCheckConstraint() throws Exception {
+        long sequence = 100;
+        for (Metric metric : Metric.values()) {
+            execute("INSERT INTO run_timeseries"
+                    + " (benchmark_run_id, metric, snapshot_sequence, observed_at, value, state)"
+                    + " VALUES (1, '" + metric.name() + "', " + sequence++ + ", NOW(6), 1, 'VALID')");
+        }
+        assertThat(query("SELECT COUNT(DISTINCT metric) FROM run_timeseries"))
+                .isEqualTo(Metric.values().length);
+
+        assertThatThrownBy(() -> execute("INSERT INTO run_timeseries"
+                + " (benchmark_run_id, metric, snapshot_sequence, observed_at, value, state)"
+                + " VALUES (1, 'latency_p99', 200, NOW(6), 1, 'VALID')"))
+                .hasMessageContaining("ck_timeseries_metric");
+    }
+
+    /**
+     * 빈 축에 남기는 <b>이유 한 줄</b>이 실제 제약을 통과하는지 봅니다.
+     *
+     * <p>{@code value} 가 NULL 이고 상태가 {@code N_A}/{@code UNAVAILABLE} 인 행입니다 —
+     * {@code ck_timeseries_state_value} 가 그 짝을 강제하고, {@code snapshot_sequence} 0 은
+     * 표본이 생긴 회차의 첫 점과 같은 자리라 <b>한 회차에 둘 다 있을 수 없다</b>는 것도
+     * {@code uk_run_metric_seq} 가 지킵니다.</p>
+     */
+    @Test
+    void emptyAxisMarkerRowsSatisfyTheConstraints() throws Exception {
+        execute("INSERT INTO run_timeseries"
+                + " (benchmark_run_id, metric, snapshot_sequence, observed_at, value, state)"
+                + " VALUES (1, 'LATENCY_P99', 0, '2026-08-23 00:00:00', NULL, 'N_A')");
+        execute("INSERT INTO run_timeseries"
+                + " (benchmark_run_id, metric, snapshot_sequence, observed_at, value, state)"
+                + " VALUES (1, 'LATENCY_P99_SYSTEM_FAILURE', 0, '2026-08-23 00:00:00', NULL, 'UNAVAILABLE')");
+        assertThat(query("SELECT COUNT(*) FROM run_timeseries WHERE value IS NULL")).isEqualTo(2);
+
+        assertThatThrownBy(() -> execute("INSERT INTO run_timeseries"
+                + " (benchmark_run_id, metric, snapshot_sequence, observed_at, value, state)"
+                + " VALUES (1, 'LATENCY_P99', 0, '2026-08-23 00:00:01', NULL, 'N_A')"))
+                .as("빈 축 표시와 실제 표본이 같은 자리를 다툴 수 없다")
                 .hasMessageContaining("uk_run_metric_seq");
     }
 

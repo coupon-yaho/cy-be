@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -18,6 +19,7 @@ import org.slf4j.LoggerFactory;
 
 import tools.jackson.databind.JsonNode;
 
+import com.kafkick.api.observation.http.HttpMetrics.LatencyOutcome;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.Metric;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.Sample;
@@ -140,11 +142,103 @@ public class PromQueryClient implements PromQuery, PromTimeQuery, RunTimeseriesA
             //    이 셀렉터가 없으면 topk 가 '가장 느린 축' 을 집는다 — 성공 경로는 그대로인데
             //    적재값만 튄다(프로브 실측 243.3ms → 2952.8ms). 축을 실제로 나누는 것은 OBS-46 이고,
             //    그때도 이 계열의 뜻은 성공 경로로 유지한다(과거 행과 비교 축을 잇기 위해).
-            case LATENCY_P99 -> "topk(1, app_http_latency_seconds"
-                    + "{quantile=\"0.99\",outcome=\"success\"}) * 1000";
+            case LATENCY_P99 -> latencyRangeQuery(LatencyOutcome.SUCCESS);
+            // OBS-46. 성공 축과 원천은 같고 outcome 만 다르다. 이 축을 성공에 섞지 않는 이유는
+            // 재고 소진 폭주 때 정책 거절이 실패 축을 1ms 아래로 희석해 장애가 묻히기 때문이다.
+            // 시스템 실패가 0건인 회차는 이 계열이 통째로 비는데, 그것이 정상이다.
+            case LATENCY_P99_SYSTEM_FAILURE -> latencyRangeQuery(LatencyOutcome.SYSTEM_FAILURE);
             case DB_POOL_USAGE -> "sum(hikaricp_connections_active{job=\"api\",pool!=\"obs-pool\"})"
                     + " / sum(hikaricp_connections_max{job=\"api\",pool!=\"obs-pool\"})";
         };
+    }
+
+    /**
+     * 지연 축 하나의 archive 질의입니다.
+     *
+     * <p><b>미터 이름과 라벨 값을 옮겨 적지 않습니다.</b> 이름은
+     * {@link MetricAggregation#HTTP_LATENCY_SECONDS}, 축은 계측이 붙이는 {@link LatencyOutcome}
+     * 에서 만듭니다 — 문자열로 복사하면 이름이 바뀌었을 때 화면은 상수를 따라가 정상인데
+     * <b>archive 만 조용히 빈 결과</b>가 됩니다. 그리고 빈 지연 축은 정상으로 취급되므로
+     * 그 회차는 "지연 문제가 없었다" 는 모양으로 DONE 확정됩니다. archive 는 불변이라
+     * 소급 정정이 안 됩니다.</p>
+     *
+     * <p>⚠️ 화면 질의와 달리 {@code uri_group} 을 걸지 않습니다. 뜻이 다르므로 맞추지 마십시오 —
+     * 이 계열의 과거 행이 그 정의로 이미 적재돼 있습니다.</p>
+     */
+    private static String latencyRangeQuery(LatencyOutcome outcome) {
+        return "topk(1, " + MetricAggregation.HTTP_LATENCY_SECONDS
+                + "{quantile=\"0.99\",outcome=\"" + outcome.tagValue() + "\"}) * 1000";
+    }
+
+    /**
+     * 그 구간에 <b>이 축이 계측돼 있었는지</b>를 묻습니다. 축이 빈 이유를 가르는 질의입니다.
+     *
+     * <p>결과 벡터가 하나라도 나오면 계측돼 있었다는 뜻입니다 — 값이 몇인지는 안 봅니다.
+     * <b>질의를 그렇게 짜는 근거는 {@link #sourceProbeFor} 한 곳에만 둡니다</b>: 여기에도
+     * 적으면 한쪽만 고쳐집니다.</p>
+     *
+     * <p><b>지연 축에만 답합니다.</b> 나머지 축은 빈 표본을 허용하지 않으므로 이 질문이 올 수
+     * 없고, 오면 그쪽 판정이 깨진 것이라 예외로 드러냅니다.</p>
+     *
+     * @throws PromQueryException 물어보지 못한 경우. 삼키고 추측하면 그 거짓이 archive 에 영구히 남습니다
+     */
+    @Override
+    public boolean sourceExists(Metric metric, Instant start, Instant end) {
+        Objects.requireNonNull(start, "start");
+        Objects.requireNonNull(end, "end");
+        return !query(sourceProbeFor(metric, probeWindowSeconds(start, end)), end).isEmpty();
+    }
+
+    /**
+     * 원천 존재 질의가 덮을 구간의 길이(초)입니다.
+     *
+     * <p><b>올림입니다.</b> {@code count_over_time(m[Ns])} 를 {@code end} 에서 평가하면
+     * {@code (end-N, end]} 를 보므로, 회차 구간을 <b>남김없이 덮으려면</b> N 이 실제 길이
+     * 이상이어야 합니다. {@code getEpochSecond()} 끼리 빼면 소수초가 잘려 구간이 최대 1초
+     * 짧아집니다 — {@code 00:00:00.100Z ~ 00:00:10.900Z} 는 실제 10.8초인데 10초가 됩니다.
+     * 그러면 앞쪽 0.8초에만 표본이 있던 축을 못 보고 <b>"재지 못했다" 로 영구히 적습니다</b>.
+     * 회차 시각은 {@code datetime(6)} 이라 소수초가 실제로 생깁니다.</p>
+     *
+     * <p><b>반대 방향 실패</b> — 올림이라 구간을 최대 1초 <b>더</b> 덮습니다. 회차 시작 직전
+     * 1초에만 있던 축을 "있었다" 로 읽을 수 있지만, 이 미터는 Micrometer 가 기동 시점에
+     * 등록해 프로세스 수명 내내 유지하므로 그 1초에만 존재할 수는 없습니다. 덜 덮는 쪽은
+     * 그런 방어가 없어 이쪽을 택합니다.</p>
+     *
+     * <p>0 이하는 1초로 올립니다. PromQL 구간은 양수여야 하고, 길이가 0 인 회차는 애초에
+     * 표본이 없습니다.</p>
+     */
+    static long probeWindowSeconds(Instant start, Instant end) {
+        Duration window = Duration.between(start, end);
+        if (window.isNegative() || window.isZero()) {
+            return 1L;
+        }
+        return window.getNano() == 0 ? window.getSeconds() : window.getSeconds() + 1L;
+    }
+
+    /**
+     * 원천 존재 질의입니다. <b>계약 테스트가 문자열을 봐야 하므로</b> 메서드로 꺼내 둡니다 —
+     * {@link #rangeQueryFor} 와 같은 이유입니다. 이 질의의 답이 회차 행의 상태를 정하고
+     * 그 행은 불변입니다.
+     *
+     * <p><b>백분위가 아니라 {@code _count} 를 봅니다.</b> 백분위 계열은 표본이 있어야 나오므로
+     * 그것으로 물으면 "비었냐" 를 두 번 묻는 셈이라 아무것도 못 가릅니다. {@code _count} 는
+     * Micrometer 가 기동 시점에 uri 그룹 × 축을 <b>전부 등록</b>하므로 요청이 0건이어도 0 으로
+     * 나옵니다 — 그래서 "이 축이 계측돼 있었나" 를 물을 수 있습니다.</p>
+     *
+     * <p><b>이 축의 {@code outcome} 을 겁니다.</b> 축을 안 걸면 미터 계열의 존재만 보게 되고,
+     * 그러면 <b>축 하나만 계측되지 않은 배포</b>가 "그 일이 0건이었다" 로 기록됩니다 — 실측으로
+     * 확인한 상태입니다(OBS-31 이전 이미지: {@code _count} 는 success·failure 둘만 있고
+     * {@code system_failure} 는 0 계열).</p>
+     */
+    static String sourceProbeFor(Metric metric, long windowSeconds) {
+        LatencyOutcome axis = switch (metric) {
+            case LATENCY_P99 -> LatencyOutcome.SUCCESS;
+            case LATENCY_P99_SYSTEM_FAILURE -> LatencyOutcome.SYSTEM_FAILURE;
+            case STOCK_REMAINING, DB_POOL_USAGE -> throw new IllegalStateException(
+                    "빈 표본을 허용하지 않는 축에 원천 존재를 물었습니다: " + metric);
+        };
+        return "count_over_time(" + MetricAggregation.HTTP_LATENCY_SECONDS + "_count"
+                + "{outcome=\"" + axis.tagValue() + "\"}[" + windowSeconds + "s])";
     }
 
     @Override
