@@ -401,9 +401,10 @@ batch:
     #    asOf 를 만드는 CronSlot 은 TimeProvider(Clock.systemUTC) 의 값으로 푼다.
     #    둘이 갈리면 asOf 가 발화 시각보다 그 오프셋만큼 과거가 되고, asOf <= now 는 계속
     #    성립하므로 EXPIRE_ASOF_IN_FUTURE 가드도 안 울린다 — 조용히 그만큼 밀린다.
-    #    지금 5분 크론에서만 우연히 안 드러난다(오프셋이 15분 배수라 슬롯에 그대로 떨어진다).
-    #    시(hour) 필드가 들어가는 순간 깨진다 — 아래 expire-cron·cleanup-cron·verify-cron 이
-    #    전부 그 모양이다.
+    #    5분 크론이던 시절에는 우연히 안 드러났다(오프셋이 15분 배수라 슬롯에 그대로 떨어진다).
+    #    시(hour) 필드가 들어가는 순간 깨지는데, **지금 크론 셋이 전부 그 모양이다** —
+    #    expire-cron 04:10 · cleanup-cron 04:30 · verify-cron 05:00. 즉 이 zone 값은
+    #    "만약을 위한 것" 이 아니라 지금 실제로 판정을 지고 있다.
     zone: "UTC"
     # 만료는 **배치 창**이다. 5분 크론이었던 것을 04:10 일 1회로 옮겼다(CY-397).
     #
