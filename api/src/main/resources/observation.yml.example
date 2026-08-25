@@ -70,6 +70,35 @@ server:
       enabled: true
 
 observation:
+  # ── attempt live 층화 샘플링 (OBS-15 · DEC-04) ────────────────────────────────
+  #
+  # ⚠️ 세 값은 전부 잠정값이다. 이 티켓이 고정한 것은 손잡이의 이름과 의미이고, 수치는
+  #    부하 배포 전에 실측으로 정한다. 값이 정해질 때 코드를 고쳐야 하면 그 회차에 코드
+  #    변경과 튜닝이 섞여 어느 쪽이 결과를 바꿨는지 못 가른다.
+  #
+  # 왜 샘플링이 필요한가 — attempt:live 는 MAXLEN ~ 200 이다. 초당 attempt 가 3,000 건이면
+  # 200 개 버퍼는 67ms 분량이고, 화면은 1 초마다 폴링한다. 샘플링이 없으면 매 폴링이 직전
+  # 67ms 창만 보는데 그 창은 결과 코드에 대해 균등하지 않다 — 재고가 소진되면 거의 전부가
+  # 409 라 그때 봐야 하는 5xx 한 건이 그 사이에서 사라진다.
+  #
+  # ⚠️ max-per-second 는 하드 상한이 아니다. 층별 최소 보장이 그것을 넘을 수 있고, 그게
+  #    의도다 — 하드로 걸면 늦게 나타난 층(정확히 새로 생긴 장애)이 그 초에 한 건도 못
+  #    들어간다. 실제 상한은 max(max-per-second, 활성 층 수 × min-per-stratum-per-second) 다.
+  #    기동 로그가 최악값을 적고, 실제 통과량은 app_attempt_live_sampled_total 이 낸다.
+  #
+  # ⚠️ 인스턴스당이다. 샘플러는 인스턴스 하나에 하나이고 리스너 스레드 셋이 공유한다.
+  #    api 가 4 대면 실제 Redis 쓰기는 최대 4 배다. 분산 한도를 두려면 Redis 를 한 번 더
+  #    왕복해야 해서 두지 않았다 — 관측이 관측을 위해 사는 비용이 된다.
+  #
+  # 기본값은 AttemptSamplingProperties 의 DEFAULT_* 상수와 같아야 한다. 두 파일에 걸친
+  # 계약이라 AttemptSamplingYamlContractTest 가 둘을 함께 본다.
+  attempt:
+    live:
+      sampling:
+        min-per-stratum-per-second: ${ATTEMPT_LIVE_SAMPLING_MIN_PER_STRATUM:5}
+        max-per-second: ${ATTEMPT_LIVE_SAMPLING_MAX_PER_SECOND:100}
+        max-strata: ${ATTEMPT_LIVE_SAMPLING_MAX_STRATA:20}
+
   issuance:
     campaign:
       # coupon_id 라벨 예외는 최대 100개까지만 허용한다. 초과 캠페인은 축출하지 않고 거부한다.

@@ -18,6 +18,12 @@ dependencies {
     // 사정이다 — Boot 가 그 전이 의존을 빼는 순간 우리 테스트가 컴파일에서 죽고 원인은 우리
     // build.gradle 어디에도 안 적혀 있다. 버전은 BOM 이 정한다(api/build.gradle 과 같은 이유).
     testImplementation 'org.yaml:snakeyaml'
+
+    // 실제 브로커에 태우는 통합 테스트가 쓴다. "알 수 없는 enum 한 건이 컨슈머를 멈추지
+    // 않는다" 는 대역으로 증명되지 않는다 — 그 성질은 역직렬화 → 에러 핸들러 → 컨테이너의
+    // offset 커밋까지 세 계층이 맞물려야 성립하고, 그중 뒤의 둘은 우리 코드가 아니다.
+    testImplementation 'org.testcontainers:testcontainers-kafka'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
 }
 
 tasks.named('test') {
