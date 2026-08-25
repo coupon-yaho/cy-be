@@ -27,9 +27,10 @@ class AdminCouponMetricsServiceTest {
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-22T00:00:00Z");
 
     @Test
-    void passesTheExactHalfOpenWindowToTheReaderAndKeepsUnconnectedSourcesPending() {
+    void readsOpenCampaignRatesAtTheSameSnapshotAsTheDatabaseDetail() {
         RecordingReader reader = new RecordingReader(availableDetail());
-        AdminCouponMetricsService service = service(reader);
+        RecordingRateReader rateReader = new RecordingRateReader(observedRates());
+        AdminCouponMetricsService service = service(reader, rateReader);
 
         CouponMetricsSnapshot result = service.getCouponMetrics(101L, MetricsWindow.FIVE_MINUTES);
 
@@ -38,17 +39,50 @@ class AdminCouponMetricsServiceTest {
         assertThat(reader.fromInclusive).isEqualTo(Instant.parse("2026-08-21T23:55:00Z"));
         assertThat(reader.toExclusive).isEqualTo(SNAPSHOT_AT);
         assertThat(reader.snapshotAt).isEqualTo(SNAPSHOT_AT);
+        assertThat(rateReader.calls).isEqualTo(1);
+        assertThat(rateReader.couponId).isEqualTo(101L);
+        assertThat(rateReader.window).isEqualTo(MetricsWindow.FIVE_MINUTES);
+        assertThat(rateReader.snapshotAt).isEqualTo(SNAPSHOT_AT);
         assertThat(result.stock().initialCount().status()).isEqualTo(SourceStatus.VALID);
         assertThat(result.holdingCounts().status()).isEqualTo(SourceStatus.VALID);
         assertThat(result.transitionRate().status()).isEqualTo(SourceStatus.VALID);
-        assertThat(result.issuanceRate().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(result.issuanceRate().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.issuanceRate().value())
+                .isEqualTo(new CouponMetricsSnapshot.RateSummary(2.0, 2.0));
         assertThat(result.queue().waitingCount().status()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    @Test
+    void doesNotQueryRatesForNonOpenCampaigns() {
+        RecordingRateReader rateReader = new RecordingRateReader(observedRates());
+        AdminCouponMetricsService service = service(
+                new RecordingReader(availableDetail(CouponRoundStatus.SCHEDULED)), rateReader);
+
+        CouponMetricsSnapshot result = service.getCouponMetrics(101L, MetricsWindow.FIVE_MINUTES);
+
+        assertThat(rateReader.calls).isZero();
+        assertThat(result.issuanceRate().status()).isEqualTo(SourceStatus.N_A);
+        assertThat(result.issuanceRate().value()).isNull();
+    }
+
+    @Test
+    void preservesDatabaseMetricsWhenRateReaderIsUnavailable() {
+        AdminCouponMetricsService service = service(new RecordingReader(availableDetail()),
+                new RecordingRateReader(new CouponMetricsSource.Observation<>(
+                        null, SourceStatus.UNAVAILABLE, null)));
+
+        CouponMetricsSnapshot result = service.getCouponMetrics(101L, MetricsWindow.FIVE_MINUTES);
+
+        assertThat(result.stock().initialCount().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.holdingCounts().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.transitionRate().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.issuanceRate().status()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
     @Test
     void mapsOnlyMissingCampaignToCommonNotFound() {
         AdminCouponMetricsService service = service(new RecordingReader(
-                new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null)));
+                new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null)), new RecordingRateReader(observedRates()));
 
         assertThatThrownBy(() -> service.getCouponMetrics(404L, MetricsWindow.ONE_MINUTE))
                 .isInstanceOfSatisfying(BusinessException.class,
@@ -58,7 +92,7 @@ class AdminCouponMetricsServiceTest {
     @Test
     void mapsDatabaseFailureToCampaignObservationUnavailable() {
         AdminCouponMetricsService service = service(new RecordingReader(
-                new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null)));
+                new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null)), new RecordingRateReader(observedRates()));
 
         assertThatThrownBy(() -> service.getCouponMetrics(101L, MetricsWindow.ONE_MINUTE))
                 .isInstanceOfSatisfying(BusinessException.class,
@@ -66,13 +100,20 @@ class AdminCouponMetricsServiceTest {
                                 .isEqualTo(AdminCampaignDataErrorCode.OBSERVATION_UNAVAILABLE));
     }
 
-    private static AdminCouponMetricsService service(AdminCampaignDataReader reader) {
+    private static AdminCouponMetricsService service(
+            AdminCampaignDataReader reader,
+            CouponIssuanceRateReader rateReader
+    ) {
         return new AdminCouponMetricsService(
                 new TimeProvider(Clock.fixed(SNAPSHOT_AT, ZoneOffset.UTC)), reader,
-                new CouponMetricsCalculator());
+                rateReader, new CouponMetricsCalculator());
     }
 
     private static AdminCampaignDetailData availableDetail() {
+        return availableDetail(CouponRoundStatus.OPEN);
+    }
+
+    private static AdminCampaignDetailData availableDetail(CouponRoundStatus status) {
         CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock =
                 new CouponMetricsSource.Observation<>(
                         new CouponMetricsSource.StockCounts(10L, 4L), SourceStatus.VALID, SNAPSHOT_AT);
@@ -88,8 +129,15 @@ class AdminCouponMetricsServiceTest {
         return new AdminCampaignDetailData(DetailAvailability.AVAILABLE,
                 new AdminCampaignDetailData.DetailValue(
                         101L, "campaign", "brand",
-                        new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN,
+                        new CouponMetricsSource.CampaignRuntime(status,
                                 SNAPSHOT_AT.minusSeconds(60)), stock, holdings, transitions));
+    }
+
+    private static CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> observedRates() {
+        return new CouponMetricsSource.Observation<>(List.of(
+                new CouponMetricsSource.IssuanceRateSample(SNAPSHOT_AT.minusSeconds(5), 2.0),
+                new CouponMetricsSource.IssuanceRateSample(SNAPSHOT_AT, 2.0)),
+                SourceStatus.VALID, SNAPSHOT_AT);
     }
 
     private static final class RecordingReader implements AdminCampaignDataReader {
@@ -123,6 +171,34 @@ class AdminCouponMetricsServiceTest {
             toExclusive = requestedTo;
             snapshotAt = requestedSnapshotAt;
             return detail;
+        }
+    }
+
+    private static final class RecordingRateReader implements CouponIssuanceRateReader {
+
+        private final CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> result;
+        private int calls;
+        private long couponId;
+        private MetricsWindow window;
+        private Instant snapshotAt;
+
+        private RecordingRateReader(
+                CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> result
+        ) {
+            this.result = result;
+        }
+
+        @Override
+        public CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> read(
+                long requestedCouponId,
+                MetricsWindow requestedWindow,
+                Instant requestedSnapshotAt
+        ) {
+            calls++;
+            couponId = requestedCouponId;
+            window = requestedWindow;
+            snapshotAt = requestedSnapshotAt;
+            return result;
         }
     }
 }

@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClient;
 
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
+import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
@@ -135,14 +136,27 @@ public class AdminObservabilityConfig {
         return new PendingAdminCampaignDataReader();
     }
 
+    /** 캠페인 상세 발급률은 series 전용 range와 instant freshness 경계를 함께 사용합니다. */
+    @Bean
+    public CouponIssuanceRateReader promCouponIssuanceRateReader(
+            @Qualifier(SERIES_RANGE_CLIENT) PromRangeQuery rangeQuery,
+            @Qualifier(INSTANT_CLIENT) PromTimeQuery timeQuery,
+            PrometheusSeriesProperties seriesProperties,
+            PrometheusQueryProperties queryProperties
+    ) {
+        return new PromCouponIssuanceRateReader(
+                rangeQuery, timeQuery, seriesProperties, queryProperties.staleAfter());
+    }
+
     /** 상세 화면도 Storage 구현 타입이 아니라 동일한 Core Port만 주입받습니다. */
     @Bean
     public AdminCouponMetricsService adminCouponMetricsService(
             TimeProvider timeProvider,
             AdminCampaignDataReader campaignDataReader,
+            CouponIssuanceRateReader issuanceRateReader,
             CouponMetricsCalculator calculator
     ) {
-        return new AdminCouponMetricsService(timeProvider, campaignDataReader, calculator);
+        return new AdminCouponMetricsService(timeProvider, campaignDataReader, issuanceRateReader, calculator);
     }
 
     /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */

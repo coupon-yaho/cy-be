@@ -21,6 +21,8 @@ import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
+import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
@@ -207,11 +209,23 @@ class AdminObservabilityConfigTest {
             assertThat(ReflectionTestUtils.getField(
                     context.getBean(PromSeriesAssembler.class), "rangeQuery"))
                     .isSameAs(context.getBean(AdminObservabilityConfig.SERIES_RANGE_CLIENT, PromRangeQueryClient.class));
+            assertThat(context).hasSingleBean(CouponIssuanceRateReader.class);
+            assertThat(context.getBean(CouponIssuanceRateReader.class))
+                    .isInstanceOf(PromCouponIssuanceRateReader.class);
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(CouponIssuanceRateReader.class), "rangeQuery"))
+                    .isSameAs(context.getBean(AdminObservabilityConfig.SERIES_RANGE_CLIENT, PromRangeQueryClient.class));
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(CouponIssuanceRateReader.class), "timeQuery"))
+                    .isSameAs(context.getBean(AdminObservabilityConfig.INSTANT_CLIENT, PromTimeQuery.class));
 
             assertThat(context).hasSingleBean(AdminOverviewService.class);
             assertThat(ReflectionTestUtils.getField(
                     context.getBean(AdminOverviewService.class), "observationSource"))
                     .isSameAs(context.getBean(OverviewObservationSource.class));
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(AdminCouponMetricsService.class), "issuanceRateReader"))
+                    .isSameAs(context.getBean(CouponIssuanceRateReader.class));
         });
     }
 
