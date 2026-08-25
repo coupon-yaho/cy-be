@@ -1,23 +1,67 @@
 package com.kafkick.infra.redis.runtimeconfig;
 
-import com.kafkick.core.observation.Dependency;
-import com.kafkick.core.observation.ReasonCode;
-import com.kafkick.core.runtimeconfig.RuntimeConfigErrorCode;
-import com.kafkick.core.runtimeconfig.RuntimeConfigCommand;
-import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import tools.jackson.databind.ObjectMapper;
-
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import tools.jackson.databind.ObjectMapper;
+
+import com.kafkick.core.observation.Dependency;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReasonCode;
+import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
+import com.kafkick.core.runtimeconfig.RuntimeConfigCommand;
+import com.kafkick.core.runtimeconfig.RuntimeConfigErrorCode;
+import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
+import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RedisRuntimeConfigContractTest {
 
     private static final Path REPO_ROOT = Path.of("../..").toAbsolutePath().normalize();
+
+    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(RuntimeConfigRedisAutoConfiguration.class))
+            .withBean(StringRedisTemplate.class, () -> org.mockito.Mockito.mock(StringRedisTemplate.class));
+
+    /** Redis 자동설정이 Runtime Config Store를 제공하는지 검증합니다. */
+    @Test
+    void autoConfigurationProvidesRuntimeConfigStore() {
+        contextRunner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).hasSingleBean(RuntimeConfigStore.class);
+        });
+    }
+
+    /** 사용자가 제공한 Store가 있으면 Redis 자동설정이 물러나는지 검증합니다. */
+    @Test
+    void autoConfigurationBacksOffForCustomRuntimeConfigStore() {
+        RuntimeConfigStore customStore = new ReadOnlyRuntimeConfigStore(new RuntimeConfigSnapshot(
+                EngineVersion.V3,
+                ReleaseStage.V3,
+                QueueMode.ADAPTIVE,
+                3L,
+                Instant.parse("2026-08-26T00:00:00Z"),
+                "812934",
+                SourceStatus.VALID));
+
+        contextRunner.withBean(RuntimeConfigStore.class, () -> customStore)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(RuntimeConfigStore.class);
+                    assertThat(context.getBean(RuntimeConfigStore.class)).isSameAs(customStore);
+                });
+    }
 
     @Test
     void redisTimeoutsAreBoundedAndEnvironmentOverrideable() throws Exception {
