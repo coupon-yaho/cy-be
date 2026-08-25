@@ -33,30 +33,36 @@ import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
 /**
- * <b>락 순서는 혼자 지킬 수 없는 계약이다.</b> 만료가 어떤 순서로 잡든, 발급·사용·취소가
- * 반대로 잡으면 데드락이 난다. 그래서 <b>우리 순서를 먼저 고정해 두고</b> 상대가 맞추게 한다 —
- * 발급 경로는 아직 이 저장소에 없다.
+ * <b>락 순서는 혼자 지킬 수 없는 계약인데, 이 저장소에는 한쪽 발밖에 없다.</b>
+ * 발급·취소 경로는 {@code feature/CY-5} 에 있고 여기서 컴파일되지 않는다. 그래서 이 테스트가
+ * 지킬 수 있는 것은 <b>만료 쪽 순서뿐</b>이고, 상대가 바뀌면 이쪽 CI 는 아무 말도 안 한다.
+ * <b>여기 단언을 고치기 전에 {@code docs/12-expire-lock-measurement.md} §11 을 읽어라.</b>
  *
- * <p><b>순서는 {@code issuances} → {@code issuance_histories} → {@code coupon_stocks} 다.</b>
- * 저장소 메서드가 각각 어느 테이블을 잡는지는 이렇다.
+ * <p><b>순서는 우리가 정하는 것이 아니다 — {@code coupon_stocks} → {@code issuances}
+ * → {@code issuance_histories} 다.</b> 재고를 건드리는 사용자 경로가 이미 그 행을
+ * {@code FOR UPDATE} 로 먼저 잡는다: 발급·취소는 항상, 사용취소는 {@code EXPIRED} 로
+ * 갈 때만(보통 경로는 재고를 안 건드려 이 순서 밖이고, 안 기다리므로 순환도 안 만든다).
+ * 만료만 반대였을 때 취소와 사이에 1213 이 나는 것을 재현했다
+ * (MySQL 8.4 · READ COMMITTED · 두 세션 · 6/6).
+ *
+ * <p>저장소 메서드가 각각 어느 테이블을 잡는지는 이렇다.
  *
  * <table border="1">
  *   <caption>메서드와 잠그는 테이블 — 격리에 따라 다르다</caption>
  *   <tr><th></th><th>이 Step (READ COMMITTED)</th><th>REPEATABLE READ 였다면</th></tr>
+ *   <tr><td>{@code nextCandidates}</td><td>없음</td><td>없음</td></tr>
+ *   <tr><td>{@code lockStock}</td><td><b>coupon_stocks X</b></td><td>같음</td></tr>
  *   <tr><td>{@code expireBatch}</td><td>issuances X (매치 행)</td><td>같음</td></tr>
- *   <tr><td>{@code lastExpiredId}</td><td>없음</td><td>없음</td></tr>
  *   <tr><td>{@code appendExpireHistories}</td><td>issuance_histories INSERT</td>
  *       <td>+ <b>issuances S</b></td></tr>
- *   <tr><td>{@code expiredCouponCount}</td><td>없음</td><td>없음</td></tr>
- *   <tr><td>{@code stockRowCount}</td><td>없음</td><td>없음</td></tr>
- *   <tr><td>{@code releaseStock}</td><td>coupon_stocks X</td>
- *       <td>+ <b>issuances S</b></td></tr>
+ *   <tr><td>{@code releaseStock}</td><td>coupon_stocks X (이미 우리 것)</td>
+ *       <td>같음</td></tr>
  * </table>
  *
  * <p><b>RC 라 뒤 문장들이 {@code issuances} 에 락을 추가하지 않는다.</b>
  * {@code ExpirationLockScopeTest.eachStatementLocksTheTablesItsContractSays} 가 문장마다
  * 테이블별 락 수를 떠서 그것을 지킨다 — 첫 문장이 잡은 수에서 안 늘어나고,
- * {@code coupon_stocks} 는 <b>마지막 문장에서만</b> 나타난다.
+ * {@code coupon_stocks} 는 <b>첫 쓰기 문장에서</b> 나타나고 끝까지 우리 것으로 남는다.
  *
  * <p><b>{@code issuance_histories} 칸만 재지 못한다.</b> INSERT 로 들어가는 행의 락은 InnoDB 가
  * 암묵적으로 잡아, 다른 세션이 부딪혀 실체화되기 전에는 {@code data_locks} 에 안 뜬다.
@@ -121,7 +127,7 @@ class ExpireJobLockOrderTest {
     }
 
     @Test
-    @DisplayName("한 청크가 issuances → issuance_histories → coupon_stocks 순으로 잡는다")
+    @DisplayName("한 청크가 coupon_stocks → issuances → issuance_histories 순으로 잡는다")
     void keepsLockOrderWithinChunk() throws Exception {
         long id = seed.issuance(IssuanceStatus.ISSUED);
         jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
@@ -135,7 +141,7 @@ class ExpireJobLockOrderTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(RecordingConfig.CALLS)
-                .as("재고를 이력보다 먼저 잡으면 발급 경로와 순서가 역전돼 데드락이 난다")
+                .as("재고를 나중에 잡으면 발급 경로와 순서가 역전돼 취소가 1213 으로 죽는다")
                 .containsExactly(
                         // 순서 계약 밖이다 — 락을 안 잡기 때문이다. 다만 **그 성질을
                         // 지키는 것은 이 테스트가 아니다.** 여기는 이름의 순서만 보므로
@@ -143,14 +149,14 @@ class ExpireJobLockOrderTest {
                         // ExpirationLockScopeTest.readOnlyQueriesTakeNoLocks 다.
                         // 여기 적는 이유는 따로다 — 호출이 하나 는 것을 이 목록이 잡는다.
                         "blockedCoupons",
+                        "nextCandidates",
+                        // **여기가 이 테스트의 요지다.** 재고가 첫 쓰기 락이어야 한다.
+                        "lockStock",
                         "expireBatch",
-                        "lastExpiredId",
                         "appendExpireHistories",
-                        "expiredCouponCount",
-                        "stockRowCount",
                         "releaseStock",
-                        // 남은 대상이 없어 0 을 돌려주고 끝난다
-                        "expireBatch");
+                        // 후보가 없어 끝난다 — 종료 신호가 만료 0 이 아니라 후보 0 이다
+                        "nextCandidates");
         // countPending 은 여기 없다 — CY-421 이 관측을 잡 밖의 되읽기로 옮겼다.
         // **잡이 자기 결과를 세지 않는 것이 요지다**: 그 값이 프로세스와 함께 죽으면
         // 만료가 일 1회인 지금 재기동부터 다음 창까지 백로그 감시가 통째로 꺼진다.

@@ -95,7 +95,7 @@
 
 | 대상 | 왜 |
 |---|---|
-| `ExpirationRepository` · `ExpirationJdbcAdapter` | ✅ 포트가 둘 늘었다(`blockedCoupons`·`countPending`). **둘 다 락을 안 잡는 읽기라 락 순서 계약 밖**이고 — 계약을 지는 것은 쓰는 셋뿐이다 — 그 성질을 `ExpirationLockScopeTest.readOnlyQueriesTakeNoLocks` 가 계측으로 지킨다 |
+| `ExpirationRepository` · `ExpirationJdbcAdapter` | ✅ 포트가 둘 늘었다(`blockedCoupons`·`countPending`). **둘 다 락을 안 잡는 읽기라 락 순서 계약 밖**이고 그 성질을 `ExpirationLockScopeTest.readOnlyQueriesTakeNoLocks` 가 계측으로 지킨다. **그 뒤 락 순서 자체가 뒤집혔다** — 계약을 지는 것은 이제 **쓰는 넷**(`lockStock`→`expireBatch`→`appendExpireHistories`→`releaseStock`)이고, `nextCandidates` 가 읽기 쪽에 하나 더 늘었다. 근거는 `docs/12` §11 |
 | `ExpireJobConfig` 태스클릿 | ✅ 가드 둘이 예외에서 **제외 + 집계**로 바뀌었다 |
 | `ExpireUnderflowBlastRadiusTest` | ✅ `ExpireBlockedCouponIsolationTest` 로 개명 + 단언 반전 |
 | `ExpirationErrorCode` | ✅ 두 코드의 javadoc 에 "CY-347 이후 뜻이 바뀌었다 — 도달했다면 제외 논리가 샌 것" 을 적었다 |
@@ -373,7 +373,7 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 | 무엇 | 언제 | 왜 그때인가 |
 |---|---|---|
 | `EXPIRE_BATCH` 의 `ORDER BY`·`LIMIT` → 상한 방식 | **취소·사용 API 티켓** | 후보 ≫ `LIMIT` 이면 후보 전부를 X 락한다(5,000건 실측). 막히는 것은 취소·사용뿐인데 그 경로가 아직 없다 |
-| 표식 → `run_id` 컬럼 | **배치 다중화 직전(차단 조건)** | 인스턴스가 하나면 닿을 수 없다. 두 대가 되면 `LAST_EXPIRED_ID` 의 상한이 남의 행에 밀린다 |
+| 표식 → `run_id` 컬럼 | **배치 다중화 직전(차단 조건)** | 인스턴스가 하나면 닿을 수 없다. 두 대가 되면 `APPEND_HISTORIES` 의 표식(`updated_at = :committedAt`)에 남의 행이 섞인다 |
 | 청크 실행 시간 실측 | **300만 건 적재 직후** | 락 보유 시간이 `innodb_lock_wait_timeout`(50초)을 넘는지가 "막힌다" 와 "1205 로 실패한다" 를 가른다 |
 | 인덱스 둘의 쓰기 비용 | **세 번째 인덱스 얘기가 나올 때** | 지금 둘은 가용성과 5분 주기로 정당화됐고 쓰기 축은 본 적이 없다 |
 

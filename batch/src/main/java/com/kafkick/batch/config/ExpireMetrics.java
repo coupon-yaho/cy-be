@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import com.kafkick.core.expiration.PendingExpiration;
 
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -145,7 +146,30 @@ public class ExpireMetrics {
      */
     private final AtomicReference<Double> cleanSchema = new AtomicReference<>();
 
+    /**
+     * <b>청크가 얼마나 찼나</b>(0~1). 만료는 한 청크에 회차 하나만 담으므로,
+     * 후보가 회차 경계에 걸리면 {@code chunk-size} 보다 적게 처리하고 끝난다.
+     *
+     * <p>시드에서는 발급건 id 가 회차별로 뭉쳐 있어 짧아지는 청크가 회차 경계 147개뿐이다
+     * ({@code cy-seed} 의 {@code seedgen/issuances.py} 가 회차 단위로 돌며 id 를 증가시킨다).
+     * <b>운영은 다르다</b> — 회차가 동시에 열려 있으면 id 가 엇갈려 연속부가 짧아지고,
+     * 극단에서는 청크마다 한 건씩만 처리한다. 잡은 여전히 옳지만 <b>느려진다.</b>
+     *
+     * <p>그 조짐이 여기 보인다. 한 표본으로는 못 본다 — <b>마지막 청크는 언제나 짧아서</b>
+     * 게이지로 내면 항상 나쁘게 보인다. 실행 전체의 평균을 봐야 한다:
+     * {@code rate(cy_expire_chunk_fill_sum[1d]) / rate(cy_expire_chunk_fill_count[1d])}.
+     *
+     * <p><b>백분위를 안 낸다.</b> Micrometer 의 백분위는 롤링 윈도(기본 2분)라 표본이
+     * 만료되는데, 이 잡은 <b>하루 한 번</b> 04:10 에 돈다 — 하루 중 23시간 55분 동안
+     * {@code quantile} 시계열이 0 으로 찍힌다. 그 패널은 곧 무시되고, 충전율이 실제로
+     * 나빠진 날에도 아무 변화가 안 보인다. {@code _sum}/{@code _count} 는 누적이라 안 죽는다.
+     */
+    private final DistributionSummary chunkFill;
+
     public ExpireMetrics(MeterRegistry registry) {
+        this.chunkFill = DistributionSummary.builder("cy_expire_chunk_fill")
+                .description("만료 청크 충전율(0~1) — 평균이 낮게 이어지면 회차 경계에 계속 걸린다는 뜻")
+                .register(registry);
         gauge(registry, "cy_expire_pending", Snapshot::total,
                 "마지막으로 성공한 실행의 asOf 기준으로 지금 다시 센 값 — 기한이 지났는데 아직 ISSUED 인 발급건");
         gauge(registry, "cy_expire_blocked_pending", Snapshot::blocked,
@@ -227,5 +251,20 @@ public class ExpireMetrics {
                 })
                 .description(description)
                 .register(registry);
+    }
+
+    /**
+     * 청크 하나가 <b>끝까지 간 뒤에</b> 충전율을 기록한다.
+     *
+     * <p>메트릭은 롤백을 안 따라간다. 청크 중간에서 부르면 {@code STOCK_UNDERFLOW} 로 죽은
+     * 청크의 표본이 남고, 재시작이 같은 구간을 다시 세서 분포가 실제보다 낙관적으로 보인다.
+     *
+     * <p>{@code chunkSize} 가 1 이상인 것은 {@code ExpireJobConfig} 생성자가 진다.
+     *
+     * @param size      이 청크가 실제로 담은 후보 수
+     * @param chunkSize 담을 수 있었던 최대치
+     */
+    public void chunkFill(int size, int chunkSize) {
+        chunkFill.record((double) size / chunkSize);
     }
 }

@@ -252,8 +252,11 @@ public class ExpireScheduler {
      * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
      *
      * <p>그래서 재고를 쓰는 배치가 늘어나는 날 이 잡과 <b>동시에</b> 돈다. 설계상 재고를 쓰는 것은
-     * 지금 이 잡뿐이고, 그 전제가 깨지면 락 순서 계약(`issuances` → `issuance_histories` →
-     * {@code coupon_stocks})을 그쪽도 지켜야 한다 — {@code ExpirationRepository} 에 적어 뒀다.
+     * 지금 이 잡뿐이고, 그 전제가 깨지면 락 순서 계약({@code coupon_stocks} →
+     * {@code issuances} → {@code issuance_histories})을 그쪽도 지켜야 한다 —
+     * {@code ExpirationRepository} 에 적어 뒀다. <b>그 순서는 우리가 고른 것이 아니다</b> —
+     * 발급·취소가 이미 재고 행을 먼저 잡고 있고, 만료만 반대였을 때 취소가 1213 으로
+     * 죽는 것을 재현했다({@code docs/12-expire-lock-measurement.md} §11).
      *
      * <p><b>그 보호는 동기 실행을 전제한다.</b> {@code JobOperator} 에 비동기
      * {@code TaskExecutor} 가 물리면 {@code start} 가 즉시 {@code STARTED} 를 돌려주고

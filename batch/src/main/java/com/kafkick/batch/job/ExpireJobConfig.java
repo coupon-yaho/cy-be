@@ -26,9 +26,11 @@ import org.springframework.transaction.interceptor.TransactionAttribute;
 
 import com.kafkick.batch.config.BinlogFormatGuard;
 import com.kafkick.batch.config.CleanSchemaGuard;
+import com.kafkick.batch.config.ExpireMetrics;
 import com.kafkick.batch.config.ExpireStepContext;
 import com.kafkick.batch.schedule.CronSlot;
 import com.kafkick.core.expiration.ExpirationRepository;
+import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
@@ -55,8 +57,26 @@ import com.kafkick.core.support.exception.BusinessException;
  * Spring Batch 가 <b>새 트랜잭션</b>에서 다시 부른다. 그래서 앞 청크는 커밋된 채로 남고,
  * 죽어도 거기까지는 살아 있다.
  *
- * <p><b>진도를 넘어간 건수로 판단하지 않는다.</b> 청크가 0 을 돌려주면 남은 대상이 없다는
- * 뜻이고 그때 끝낸다 — 거르는 조건이 {@code UPDATE} 안에 있어서 성립하는 성질이다.
+ * <p><b>끝내는 신호는 후보 0건이다 — 넘어간 건수가 아니다.</b> 한때는 {@code UPDATE} 가
+ * 0 을 돌려주는 것을 끝으로 읽었는데, 그러면 <b>후보가 전부 사용된 청크에서 진도가 안 나가</b>
+ * 같은 자리를 맴돈다. 이제 후보를 먼저 읽으므로 넘어간 것이 없어도 진도는 그 구간만큼 나간다.
+ *
+ * <h2>청크 한 번이 하는 일</h2>
+ *
+ * <pre>
+ *   1  후보 선조회        락 없음. id 오름차순 LIMIT chunkSize
+ *   2  연속부 자르기       첫 회차와 같은 것까지만        ExpireChunk.from
+ *   3  재고 행 잠그기      SELECT … FOR UPDATE           ← 첫 쓰기 락
+ *   4  만료 UPDATE        그 회차 · (afterId, lastId]
+ *   5  이력 INSERT
+ *   6  재고 차감
+ *   7  afterId = lastId
+ * </pre>
+ *
+ * <p><b>3번이 1·2번 뒤에 오는 것이 이 잡의 전부다.</b> 잠글 재고 행을 알려면 어느 회차를
+ * 건드릴지가 쓰기 전에 정해져 있어야 하고, 그것을 아는 방법이 후보를 먼저 읽는 것뿐이다.
+ * 왜 그 순서여야 하는지는 {@link com.kafkick.core.expiration.ExpirationRepository} 에 있다 —
+ * 반대로 잡으면 취소가 1213 으로 죽는다.
  */
 @Configuration(proxyBeanMethods = false)
 public class ExpireJobConfig {
@@ -164,15 +184,16 @@ public class ExpireJobConfig {
     }
 
     /**
-     * 청크마다 여섯 문장이 한 트랜잭션에서 돈다 — 넘기고 · 경계를 찾고 · 이력을 남기고 ·
-     * 회차를 세고 · 재고 행을 세고 · 재고를 되돌린다. <b>첫 청크만 일곱이다</b> —
-     * 그 앞에 제외 목록을 한 번 구한다.
+     * 청크마다 다섯 문장이 한 트랜잭션에서 돈다 — 후보를 읽고 · 재고를 잠그고 · 넘기고 ·
+     * 이력을 남기고 · 재고를 되돌린다. <b>첫 청크만 여섯이다</b> — 그 앞에 제외 목록을
+     * 한 번 구한다. 순서와 근거는 이 클래스 주석의 표에 있다.
      *
      * <p><b>나눠 담으면 중간 상태가 남는다.</b> 상태만 바뀌고 재고가 안 돌아온 채 죽으면
      * 검증이 그것을 재고 불일치로 잡는다. 실제로는 이 잡이 덜 끝난 것인데 데이터가 틀렸다고 나온다.
      */
     @Bean
-    public Step expireStep(ExpirationRepository expirations, TimeProvider timeProvider) {
+    public Step expireStep(ExpirationRepository expirations, TimeProvider timeProvider,
+            ExpireMetrics metrics) {
         return new StepBuilder("expireStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
                     ExecutionContext context = chunkContext.getStepContext()
@@ -214,63 +235,60 @@ public class ExpireJobConfig {
                             .getJobExecutionId();
                     List<Long> blocked = blockedCoupons(context, expirations, asOf, generation);
 
-                    int expired = expirations.expireBatch(
-                            asOf, committedAt, afterId, chunkSize, blocked);
-                    if (expired == 0) {
+                    // ① 후보를 먼저 읽는다 — 락을 안 잡는 읽기다.
+                    // ② 첫 회차의 연속부까지만 남긴다. 잠글 재고 행이 하나로 정해진다.
+                    ExpireChunk chunk = ExpireChunk.from(
+                            expirations.nextCandidates(asOf, afterId, chunkSize, blocked));
+                    if (chunk.isEmpty()) {
                         return RepeatStatus.FINISHED;
                     }
-
-                    // 경계를 먼저 읽는다. 아래 네 문장이 같은 창(id > afterId)을 보므로
-                    // 진도를 먼저 옮기면 그 문장들이 방금 넘긴 것을 못 본다.
-                    long lastId = expirations.lastExpiredId(asOf, committedAt, afterId);
-
-                    int histories = expirations.appendExpireHistories(
-                            asOf, committedAt, afterId, lastId);
-                    if (histories != expired) {
-                        // 리플레이가 이력으로 상태를 재구성한다. 이력이 모자라면 검증이
-                        // "이력 없는 발급건" 으로 잡는데, 원인이 이 잡이라는 것은 안 나온다.
-                        throw new BusinessException(
-                                ExpirationErrorCode.EXPIRE_HISTORY_COUNT_MISMATCH,
-                                "만료 이력 수가 만료 건수와 다릅니다. 다시 돌려도 낫지 않습니다 — "
-                                        + "이력이 빠진 발급건을 찾아 손봐야 합니다. "
-                                        + "만료=" + expired + " 이력=" + histories);
-                    }
-
-                    // 아래 둘은 이제 "오염 데이터를 만났다" 가 아니다 — 그것은 blockedCoupons 가
-                    // 애초에 창 밖으로 뺀다. 여기까지 왔다는 것은 **제외 논리가 틀렸거나 재고가
-                    // 발밑에서 움직였다** 는 뜻이고, 그건 판정이 아니라 사고라 실패가 맞다.
-                    // (취소·사용 경로가 붙으면 실행 도중 active_count 가 줄 수 있다.
-                    //  그 티켓에서 이 자리를 다시 본다.)
-                    int coupons = expirations.expiredCouponCount(asOf, committedAt, afterId, lastId);
-                    int stockRows = expirations.stockRowCount(asOf, committedAt, afterId, lastId);
-                    if (stockRows != coupons) {
-                        // JOIN 이 재고 행 없는 회차를 조용히 건너뛴다. 그 회차의 발급건은
-                        // 만료로 넘어갔는데 되돌릴 재고가 없다 — 세지 않으면 아무도 모른다.
+                    // ③ 여기가 이 청크의 첫 쓰기 락이다. 발급·취소가 잠그는 그 행을
+                    //    같은 방식으로 먼저 잡아야 순환이 안 생긴다.
+                    if (!expirations.lockStock(chunk.couponId())) {
+                        // blockedCoupons 가 재고 행 없는 회차를 이미 걸렀어야 한다.
+                        // 여기 왔다는 것은 그 사이에 재고 행이 사라졌다는 뜻이고, 판정이
+                        // 아니라 사고다.
                         throw new BusinessException(
                                 ExpirationErrorCode.STOCK_ROW_MISSING,
-                                "재고를 되돌리지 못한 회차가 있습니다. 재고 행이 없는 회차가 섞였습니다. "
-                                        + "그 행을 만들어야 합니다 — 지금 누가 만들고 있는 중이라면 "
-                                        + "다음 주기가 알아서 지나갑니다. "
-                                        + "회차=" + coupons + " 재고행=" + stockRows);
+                                "재고 행이 없는 회차입니다. 그 행을 만들어야 합니다 — "
+                                        + "지금 누가 만들고 있는 중이라면 다음 주기가 알아서 "
+                                        + "지나갑니다. 회차=" + chunk.couponId());
                     }
 
-                    int released = expirations.releaseStock(asOf, committedAt, afterId, lastId);
-                    // released > stockRows 는 위 가드를 통과한 뒤에는 나올 수 없다.
-                    // coupon_stocks 의 PK 가 coupon_id 라 JOIN 이 1:1 이고, stockRows == coupons
-                    // 를 이미 확인했으므로 되돌린 수가 그보다 커질 길이 없다. 청크 도중에 재고
-                    // 행이 생기는 경우(RC 라 문장마다 스냅샷이 갱신된다)도 이 자리가 아니라
-                    // 위 STOCK_ROW_MISSING 으로 나간다 — 그쪽 메시지가 그 사실을 적고 있다.
-                    if (released != stockRows) {
-                        // active_count >= 차감량 조건에 걸린 회차가 있다. 재고가 이미 어긋나
-                        // 있어서, 그대로 뺐다면 음수가 됐을 자리다.
-                        throw new BusinessException(
-                                ExpirationErrorCode.STOCK_UNDERFLOW,
-                                "만료분을 빼면 재고가 음수가 되는 회차가 있습니다. "
-                                        + "재고가 이미 어긋나 있어 다시 돌려도 낫지 않습니다. "
-                                        + "재고행=" + stockRows + " 되돌림=" + released);
+                    // ④ 후보를 다시 판단한다. 후보 수가 아니라 이 매치 건수가 만료 건수다 —
+                    //    ①과 ③ 사이에 사용·취소된 건은 여기서 안 잡힌다.
+                    long lastId = chunk.lastId();
+                    int expired = expirations.expireBatch(
+                            asOf, committedAt, afterId, lastId, chunk.couponId());
+
+                    if (expired > 0) {
+                        int histories = expirations.appendExpireHistories(
+                                asOf, committedAt, afterId, lastId, chunk.couponId());
+                        if (histories != expired) {
+                            // 리플레이가 이력으로 상태를 재구성한다. 이력이 모자라면 검증이
+                            // "이력 없는 발급건" 으로 잡는데, 원인이 이 잡이라는 것은 안 나온다.
+                            throw new BusinessException(
+                                    ExpirationErrorCode.EXPIRE_HISTORY_COUNT_MISMATCH,
+                                    "만료 이력 수가 만료 건수와 다릅니다. 다시 돌려도 낫지 "
+                                            + "않습니다 — 이력이 빠진 발급건을 찾아 손봐야 "
+                                            + "합니다. 만료=" + expired + " 이력=" + histories);
+                        }
+
+                        // 재고 행은 ③에서 이미 우리 것이라, 여기서 실패하는 경우는 하나뿐이다:
+                        // 뺄 재고가 모자란다. 재고 행이 없는 경우는 ③이 먼저 잡는다.
+                        if (expirations.releaseStock(chunk.couponId(), expired, committedAt) != 1) {
+                            throw new BusinessException(
+                                    ExpirationErrorCode.STOCK_UNDERFLOW,
+                                    "만료분을 빼면 재고가 음수가 되는 회차입니다. 재고가 이미 "
+                                            + "어긋나 있어 다시 돌려도 낫지 않습니다. "
+                                            + "회차=" + chunk.couponId() + " 만료=" + expired);
+                        }
                     }
 
-                    context.putLong(AFTER_ID_KEY, lastId);
+                    // 가드를 전부 지난 뒤에 센다. 메트릭은 롤백을 안 따라가므로 중간에서
+                    // 부르면 죽은 청크의 표본이 남는다.
+                    metrics.chunkFill(chunk.size(), chunkSize);
+                    context.putLong(AFTER_ID_KEY, chunk.lastId());
                     contribution.incrementWriteCount(expired);
                     return RepeatStatus.CONTINUABLE;
                 }, transactionManager)
@@ -356,8 +374,25 @@ public class ExpireJobConfig {
      * 안 건다. 창을 걸면 뒤 청크의 창이 더 넓어져 왼쪽이 오른쪽의 부분집합이 아니게 되고,
      * 차감 합계가 {@code active_count} 를 넘어 {@code STOCK_UNDERFLOW} 로 죽는다.
      *
-     * <p><b>단서: {@code active_count} 가 실행 도중 줄면 이 부등식도 흔들린다.</b> 지금은
-     * 취소·사용 경로가 없어 줄이는 주체가 이 잡뿐이다. 그 경로가 붙는 티켓에서 다시 본다.
+     * <p><b>취소·사용 경로가 붙은 뒤에도 이 부등식은 선다.</b> 한때 이 자리에
+     * <i>"지금은 취소·사용 경로가 없어 줄이는 주체가 이 잡뿐"</i> 이라고 적혀 있었는데,
+     * 그 전제는 이제 거짓이다({@code CouponCancelService} · {@code CouponCancelUseService}).
+     * 네 갈래를 따져 보면 좌변과 우변이 같은 방향으로 움직인다 —
+     * {@code active_count} 는 <i>ISSUED + USED</i> 합계라는 것이 그 이유다.
+     *
+     * <table border="1">
+     *   <caption>사용자 경로가 부등식의 두 항에 하는 일</caption>
+     *   <tr><th></th><th>{@code active_count}</th><th>남은 대기</th><th></th></tr>
+     *   <tr><td>취소</td><td>−1</td><td>−1</td><td>둘이 같이 준다</td></tr>
+     *   <tr><td>사용</td><td>그대로</td><td>−1</td><td>여유가 는다</td></tr>
+     *   <tr><td>사용취소 → EXPIRED</td><td>−1</td><td>그대로</td>
+     *       <td>그 행이 USED 로 이미 세져 있었다</td></tr>
+     *   <tr><td>사용취소 → ISSUED</td><td>그대로</td><td>+1</td>
+     *       <td>같은 이유 — 합계 안에서 자리만 옮긴다</td></tr>
+     * </table>
+     *
+     * <p>깨지는 것은 {@code active_count} 가 <b>실제 집계와 이미 어긋난</b> 회차뿐이고,
+     * 그것은 {@link #blockedCoupons} 가 창 밖으로 뺀다.
      */
     private static List<Long> blockedCoupons(ExecutionContext context,
             ExpirationRepository expirations, LocalDateTime asOf, long generation) {

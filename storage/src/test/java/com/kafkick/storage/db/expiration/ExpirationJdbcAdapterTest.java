@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import com.kafkick.core.coupon.CouponStateMachine;
 import com.kafkick.core.coupon.IssuanceEventType;
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -67,15 +68,36 @@ class ExpirationJdbcAdapterTest {
     }
 
     /**
-     * 청크 하나를 끝까지 돌린다 — 넘기고, 경계를 찾고, 뒤 문장들을 그 경계로 부른다.
+     * <b>잡의 청크 한 번을 그대로 밟는다</b> — 후보 → 연속부 → 재고 잠금 → 만료.
      *
-     * <p>뒤 문장이 <b>전부 같은 {@code (afterId, lastId]} 를 봐야</b> 하는데, 테스트마다 손으로
-     * 넘기면 한 곳만 빠뜨려도 그 문장이 테이블 끝까지 훑는다 — 그때 깨지는 것은 이 테스트가
-     * 아니라 운영의 발급 경로다. 경계를 여기서 한 번만 구해 넘긴다.
+     * <p>여기서 {@code adapter.expireBatch} 를 곧장 부르면 <b>재고 행을 안 잠근 채</b> 발급건을
+     * 먼저 건드리게 되고, 그건 이 저장소가 없애려는 바로 그 순서다. 테스트가 운영과 다른
+     * 순서를 밟으면 계약을 재는 것이 아니라 계약을 비켜 가는 것이 된다.
+     *
+     * <p>{@link #chunkBoundary} 로 경계를 함께 남긴다 — 뒤 문장들(이력·재고)이 <b>같은
+     * {@code (afterId, lastId]}</b> 를 봐야 하는데, 테스트마다 손으로 넘기면 한 곳만 빠뜨려도
+     * 그 문장이 테이블 끝까지 훑는다.
      */
-    private long boundaryAfter(long afterId) {
-        return adapter.lastExpiredId(AS_OF, WROTE_AT, afterId);
+    private int expireChunk(long afterId, int limit) {
+        ExpireChunk chunk = ExpireChunk.from(
+                adapter.nextCandidates(AS_OF, afterId, limit, List.of()));
+        chunkBoundary = chunk.lastId();
+        chunkCouponId = chunk.couponId();
+        if (chunk.isEmpty()) {
+            return 0;
+        }
+        assertThat(adapter.lockStock(chunk.couponId()))
+                .as("재고 행이 없으면 잡이 STOCK_ROW_MISSING 으로 죽는다. "
+                        + "이 픽스처는 재고 행이 있어야 한다")
+                .isTrue();
+        return adapter.expireBatch(AS_OF, WROTE_AT, afterId, chunk.lastId(), chunk.couponId());
     }
+
+    /** 마지막 {@link #expireChunk} 가 잡은 상한. 이력·재고 문장이 이 값을 받는다. */
+    private long chunkBoundary;
+
+    /** 마지막 {@link #expireChunk} 가 고른 회차. 재고 차감이 이 값을 받는다. */
+    private long chunkCouponId;
 
     private String statusOf(long id) {
         return jdbcClient.sql("SELECT status FROM issuances WHERE id = :id")
@@ -111,7 +133,7 @@ class ExpirationJdbcAdapterTest {
         long used = issuance(IssuanceStatus.USED, EXPIRED_AT);
         long alive = issuance(IssuanceStatus.ISSUED, ALIVE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of())).isEqualTo(1);
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
 
         assertThat(statusOf(target)).isEqualTo("EXPIRED");
         assertThat(statusOf(used)).as("사용된 건을 넘기면 재고가 두 번 돌아온다").isEqualTo("USED");
@@ -127,7 +149,7 @@ class ExpirationJdbcAdapterTest {
     void returnZeroWhenNothingLeft() {
         issuance(IssuanceStatus.ISSUED, ALIVE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of())).isZero();
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE)).isZero();
     }
 
     /**
@@ -144,17 +166,17 @@ class ExpirationJdbcAdapterTest {
 
         // 청크 하나가 하는 일 전부를 순서대로 돌린다. 경계가 없으면 뒤 청크가 앞 청크 것까지
         // 다시 처리하는데, 그 피해는 경계값이 아니라 **이력과 재고**에서 드러난다.
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, 1, List.of())).isEqualTo(1);
-        long boundary = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+        assertThat(expireChunk(0L, 1)).isEqualTo(1);
+        long boundary = chunkBoundary;
         assertThat(boundary).isEqualTo(first);
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).isEqualTo(1);
-        adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L));
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, chunkBoundary, chunkCouponId)).isEqualTo(1);
+        adapter.releaseStock(chunkCouponId, 1, WROTE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, boundary, 1, List.of())).isEqualTo(1);
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, boundary, boundaryAfter(boundary)))
+        assertThat(expireChunk(boundary, 1)).isEqualTo(1);
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, boundary, chunkBoundary, chunkCouponId))
                 .as("앞 청크 것을 다시 세면 2 가 되고 이력이 중복된다")
                 .isEqualTo(1);
-        adapter.releaseStock(AS_OF, WROTE_AT, boundary, boundaryAfter(boundary));
+        adapter.releaseStock(chunkCouponId, 1, WROTE_AT);
 
         assertThat(historyCount(first)).as("한 건에 이력은 하나다").isEqualTo(1);
         assertThat(historyCount(second)).isEqualTo(1);
@@ -171,9 +193,9 @@ class ExpirationJdbcAdapterTest {
     @DisplayName("넘긴 건마다 EXPIRE 이력이 하나씩 남는다")
     void writeOneHistoryPerExpired() {
         long target = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
+        expireChunk(0L, LIMIT_ABOVE_FIXTURE);
 
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).isEqualTo(1);
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, chunkBoundary, chunkCouponId)).isEqualTo(1);
         assertThat(historyCount(target)).isEqualTo(1);
     }
 
@@ -188,8 +210,9 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(2);
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
-        assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).as("회차 하나를 갱신한다").isEqualTo(1);
+        expireChunk(0L, LIMIT_ABOVE_FIXTURE);
+        assertThat(adapter.releaseStock(chunkCouponId, 2, WROTE_AT))
+                .as("그 회차의 재고 행 하나를 갱신한다").isEqualTo(1);
 
         assertThat(activeCount()).as("2 에서 둘을 빼 0 이다").isZero();
     }
@@ -214,8 +237,8 @@ class ExpirationJdbcAdapterTest {
         seed.history(target, IssuanceEventType.CANCEL_USE, IssuanceStatus.USED,
                 IssuanceStatus.ISSUED, AS_OF.plusMinutes(1));
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
-        adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundaryAfter(0L));
+        expireChunk(0L, LIMIT_ABOVE_FIXTURE);
+        adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, chunkBoundary, chunkCouponId);
 
         LocalDateTime expireAt = jdbcClient.sql("SELECT created_at FROM issuance_histories "
                         + "WHERE issuance_id = :id AND event_type = 'EXPIRE'")
@@ -247,8 +270,8 @@ class ExpirationJdbcAdapterTest {
         long ours = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         long theirs = issuance(IssuanceStatus.ISSUED, ALIVE_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of())).isEqualTo(1);
-        long boundary = boundaryAfter(0L);
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
+        long boundary = chunkBoundary;
 
         // 런타임이 상태를 직접 넘긴 것을 흉내낸다. 우리 청크가 끝난 뒤 생긴 행이다.
         jdbcClient.sql("UPDATE issuances SET status = 'EXPIRED', updated_at = :at WHERE id = :id")
@@ -256,7 +279,7 @@ class ExpirationJdbcAdapterTest {
                 .param("id", theirs)
                 .update();
 
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary))
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary, chunkCouponId))
                 .as("id 상한이 남의 행을 잘라 낸다. 2 가 되면 상한이 빠진 것이다")
                 .isEqualTo(1);
         assertThat(historyCount(ours)).isEqualTo(1);
@@ -278,8 +301,8 @@ class ExpirationJdbcAdapterTest {
         long theirs = issuance(IssuanceStatus.ISSUED, ALIVE_AT);
         long ours = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of())).isEqualTo(1);
-        long boundary = boundaryAfter(0L);
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
+        long boundary = chunkBoundary;
         assertThat(theirs).as("남의 행이 우리 구간 안에 있어야 이 겹을 시험한다").isLessThan(boundary);
 
         jdbcClient.sql("UPDATE issuances SET status = 'EXPIRED', updated_at = :at WHERE id = :id")
@@ -287,7 +310,7 @@ class ExpirationJdbcAdapterTest {
                 .param("id", theirs)
                 .update();
 
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary))
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary, chunkCouponId))
                 .as("기한이 남은 건은 expires_at 조건이 잘라 낸다")
                 .isEqualTo(1);
         assertThat(historyCount(ours)).isEqualTo(1);
@@ -295,34 +318,50 @@ class ExpirationJdbcAdapterTest {
     }
 
     /**
-     * <b>재고 행이 없으면 JOIN 이 조용히 건너뛴다.</b> 발급건은 만료로 넘어갔는데 되돌릴 재고가
-     * 없는 상태다. 세지 않으면 아무도 모르므로 호출자가 두 값을 대조할 수 있어야 한다.
+     * <b>재고 행이 없으면 발급건을 건드리기 전에 멈춘다.</b>
+     *
+     * <p>한때는 이것을 <b>넘긴 뒤에</b> 알았다 — 만료 {@code UPDATE} 를 돌리고 나서
+     * {@code expiredCouponCount} 와 {@code stockRowCount} 를 견줘 갈렸다. 그 사이에 이미
+     * <i>"재고 없이 만료된 상태"</i> 가 트랜잭션 안에 만들어져 있었고, 되돌리는 것은 롤백이었다.
+     *
+     * <p>이제 재고 행을 <b>먼저</b> 잠그므로 그 자리에서 알 수 있다. 아무것도 안 쓴 채로
+     * 멈추는 편이 낫다 — 그리고 두 값을 대조하던 조회 둘이 통째로 없어졌다.
      */
     @Test
-    @DisplayName("재고 행이 없는 회차는 갱신되지 않는다 — 회차 수와 갱신 수가 갈린다")
-    void countAndUpdateDivergeWithoutStockRow() {
+    @DisplayName("재고 행이 없는 회차는 잠금 단계에서 걸린다 — 발급건을 건드리기 전이다")
+    void lockStockFailsWithoutStockRow() {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        long couponId = seed.currentCouponId();
         seed.removeStock();
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
+        ExpireChunk chunk = ExpireChunk.from(
+                adapter.nextCandidates(AS_OF, 0L, LIMIT_ABOVE_FIXTURE, List.of()));
+        assertThat(chunk.couponId())
+                .as("후보에는 들어온다 — 거르는 것은 blockedCoupons 의 몫이고, "
+                        + "그것이 놓친 경우가 이 테스트다")
+                .isEqualTo(couponId);
 
-        assertThat(adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).isEqualTo(1);
-        assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L)))
-                .as("갱신할 재고 행이 없다. 두 값이 갈리는 것이 유일한 신호다")
-                .isZero();
+        assertThat(adapter.lockStock(chunk.couponId()))
+                .as("false 가 유일한 신호다. 잡은 이것을 STOCK_ROW_MISSING 으로 올린다")
+                .isFalse();
+        assertThat(statusOf(chunk.lastId()))
+                .as("아직 아무것도 안 넘겼다 — 이 순서의 값이 여기 있다")
+                .isEqualTo("ISSUED");
     }
 
     /**
-     * <b>짝 검사가 못 보는 자리다.</b> 잡은 {@code releaseStock} 이 갱신한 <i>회차 수</i>와
-     * {@code expiredCouponCount} 를 맞춰 보는데, 그 둘이 같아도 <b>회차마다 얼마씩 뺐는지</b>는
-     * 아무도 안 본다. 파생테이블에서 {@code GROUP BY coupon_id} 로 접는 것이 그 몫을 가르는
-     * 유일한 장치이고, 그것이 무너지면 어느 회차는 남의 몫까지 빼고 어느 회차는 덜 뺀다.
+     * <b>회차마다 자기 몫만 빠져야 한다.</b> 한 회차가 남의 몫까지 빼면 그 회차는 완판으로,
+     * 다른 회차는 재고가 남은 것으로 보인다 — 그리고 <b>잡은 초록으로 끝난다.</b>
+     * 검증이 재고 불일치로 잡을 때까지 아무도 모른다.
      *
-     * <p>회차 수는 그대로라 잡은 초록으로 끝난다. 검증이 재고 불일치로 잡을 때까지 안 보인다.
+     * <p><b>그것을 가르던 장치가 바뀌었다.</b> 예전에는 파생테이블의 {@code GROUP BY coupon_id}
+     * 하나였다 — 청크가 여러 회차에 걸쳤기 때문이다. 이제는 {@link ExpireChunk} 가 청크를
+     * 회차 하나로 자르므로 섞일 자리가 애초에 없다. <b>같은 것을 재되 무엇이 지키는지가
+     * 달라졌으므로</b>, 이 테스트는 청크가 실제로 갈라지는지를 본다.
      */
     @Test
-    @DisplayName("회차가 섞이면 회차마다 자기 몫만 빠진다")
-    void releaseStockPerCoupon() {
+    @DisplayName("후보에 회차 둘이 섞이면 청크가 갈라 각자 자기 몫만 뺀다")
+    void chunkSplitsAtCouponBoundary() {
         long couponA = seed.newCoupon();
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
@@ -333,8 +372,18 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(4);
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
-        assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).as("회차 둘을 갱신한다").isEqualTo(2);
+        // 첫 청크 — LIMIT 이 넷을 다 담아도 회차 A 에서 끊긴다.
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE))
+                .as("후보 넷이 다 들어와도 회차 A 의 셋까지만 넘긴다")
+                .isEqualTo(3);
+        assertThat(chunkCouponId).isEqualTo(couponA);
+        assertThat(adapter.releaseStock(chunkCouponId, 3, WROTE_AT)).isEqualTo(1);
+        long afterA = chunkBoundary;
+
+        // 둘째 청크 — 남은 회차 B.
+        assertThat(expireChunk(afterA, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
+        assertThat(chunkCouponId).isEqualTo(couponB);
+        assertThat(adapter.releaseStock(chunkCouponId, 1, WROTE_AT)).isEqualTo(1);
 
         assertThat(activeCountOf(couponA)).as("5 에서 셋이 빠진다").isEqualTo(2);
         assertThat(activeCountOf(couponB)).as("4 에서 하나가 빠진다").isEqualTo(3);
@@ -342,8 +391,10 @@ class ExpirationJdbcAdapterTest {
 
     /**
      * <b>재고가 이미 어긋난 채로 만료가 오면 빼는 쪽이 음수가 된다.</b> 그 회차를 갱신에서
-     * 빼는 것은 {@code active_count >= 차감량} 조건이고, {@code stockRowCount} 와의 차이가
-     * 그 사실을 호출자에게 알린다.
+     * 빼는 것은 {@code active_count >= :expired} 조건이고, 갱신 행 수 0 이 그 사실을 알린다.
+     *
+     * <p><b>재고 행이 <i>없는</i> 경우와 갈린다.</b> 그쪽은 {@code lockStock} 이 먼저 false 로
+     * 잡는다. 두 원인이 다른 자리에서 나오므로 대조할 조회를 따로 둘 필요가 없어졌다.
      *
      * <p><b>{@code ck_stock_range} 에만 기대면 안 되는 이유가 여기 있다.</b> 그 CHECK 는 CLEAN
      * 스키마에만 걸린다 — 오염셋은 제약을 떼어 내고 만들기 때문에, 거기서는 DB 가 안 막아 준다.
@@ -356,13 +407,12 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(1);
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
-        long boundary = boundaryAfter(0L);
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE))
+                .as("재고 행 자체는 있다 — lockStock 이 통과했다는 뜻이고, "
+                        + "없는 경우와 원인이 갈린다")
+                .isEqualTo(2);
 
-        assertThat(adapter.stockRowCount(AS_OF, WROTE_AT, 0L, boundary))
-                .as("재고 행 자체는 있다 — 없는 것과 구분돼야 원인이 갈린다")
-                .isEqualTo(1);
-        assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundary))
+        assertThat(adapter.releaseStock(chunkCouponId, 2, WROTE_AT))
                 .as("둘을 빼면 -1 이 되므로 이 회차는 갱신되지 않는다")
                 .isZero();
         assertThat(activeCount())
@@ -410,7 +460,7 @@ class ExpirationJdbcAdapterTest {
                 .param("at", EXPIRED_AT)
                 .update();
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE))
                 .as("넘어가는 것은 ISSUED 하나뿐이다")
                 .isEqualTo(1);
 
@@ -419,7 +469,7 @@ class ExpirationJdbcAdapterTest {
                 .isEqualTo(status == IssuanceStatus.ISSUED
                         ? IssuanceStatus.EXPIRED.name() : status.name()));
 
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundaryAfter(0L))).isEqualTo(1);
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, chunkBoundary, chunkCouponId)).isEqualTo(1);
         assertThat(fromStatusOf(planted.get(IssuanceStatus.ISSUED)))
                 .as("전이표가 허용한 그 상태가 이력에 적혀야 한다")
                 .isEqualTo(IssuanceStatus.ISSUED.name());
@@ -434,20 +484,40 @@ class ExpirationJdbcAdapterTest {
     }
 
     /**
-     * <b>계약만 있고 그것을 지키는 것이 없던 자리다.</b> 포트는 "넘어간 것이 없으면
-     * {@code afterId} 를 그대로 돌려준다" 고 적었고 어댑터는 {@code COALESCE} 로 구현했는데,
-     * 유일한 호출자인 잡은 {@code expired == 0} 이면 먼저 빠져나가므로 <b>빈 집합으로 부를
-     * 경로가 없다.</b> 도달할 수 없는 가드는 없는 가드와 같다는 것이 이 저장소의 기준이라,
-     * 계약을 지우는 대신 여기서 도달시킨다.
+     * <b>이 순서 변경이 실제로 푼 정체다.</b>
      *
-     * <p>0 을 돌려주면 다음 청크가 {@code id > 0} 부터 다시 훑는다 — 진도가 뒤로 가는 셈이다.
+     * <p>예전 종료 신호는 만료 {@code UPDATE} 가 0 을 돌려주는 것이었다. 그러면 <b>후보가
+     * 전부 사용된 청크</b>에서 잡이 <i>"남은 대상이 없다"</i> 로 읽고 끝난다 — 그 뒤 id 에
+     * 진짜 만료 대상이 남아 있어도 그날은 못 넘긴다. 다음 주기도 같은 자리에서 같은 판단을
+     * 하므로 <b>영영 안 넘어간다.</b>
+     *
+     * <p>이제 후보를 먼저 읽으므로 넘어간 것이 0 이어도 진도는 그 구간만큼 나가고, 다음 청크가
+     * 그 뒤를 집는다.
      */
     @Test
-    @DisplayName("넘어간 것이 없으면 진도를 그대로 돌려준다 — 0 으로 되돌리지 않는다")
-    void keepProgressWhenNothingExpired() {
-        assertThat(adapter.lastExpiredId(AS_OF, WROTE_AT, 42L))
-                .as("빈 집합에서 0 을 주면 다음 청크가 앞 구간을 다시 훑는다")
-                .isEqualTo(42L);
+    @DisplayName("청크가 통째로 사용돼 하나도 못 넘겨도 진도는 나간다")
+    void progressAdvancesEvenWhenNothingExpires() {
+        long used = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        long target = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
+        seed.overwriteStock(2);
+
+        // 후보를 읽은 뒤 UPDATE 전에 사용된 상황. 후보 질의가 락을 안 잡으므로 실제로 생긴다.
+        ExpireChunk first = ExpireChunk.from(adapter.nextCandidates(AS_OF, 0L, 1, List.of()));
+        assertThat(first.lastId()).isEqualTo(used);
+        jdbcClient.sql("UPDATE issuances SET status = 'USED' WHERE id = :id")
+                .param("id", used)
+                .update();
+
+        assertThat(adapter.lockStock(first.couponId())).isTrue();
+        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, first.lastId(), first.couponId()))
+                .as("그 사이 USED 가 됐으니 조건부 UPDATE 가 안 잡는다")
+                .isZero();
+
+        // 잡은 여기서 끝내지 않고 afterId 를 first.lastId() 로 밀고 이어 간다.
+        assertThat(expireChunk(first.lastId(), LIMIT_ABOVE_FIXTURE))
+                .as("진도를 안 밀면 다음 청크가 같은 자리를 다시 집어 영원히 못 넘어간다")
+                .isEqualTo(1);
+        assertThat(statusOf(target)).isEqualTo("EXPIRED");
     }
 
     /**
@@ -467,8 +537,8 @@ class ExpirationJdbcAdapterTest {
         long ours = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         long above = issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, 1, List.of())).isEqualTo(1);
-        long boundary = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+        assertThat(expireChunk(0L, 1)).isEqualTo(1);
+        long boundary = chunkBoundary;
         assertThat(boundary).as("첫 건만 넘어갔어야 구간 위가 생긴다").isEqualTo(ours);
 
         // 남이 같은 표식으로 구간 위의 행을 넘긴 것을 흉내낸다.
@@ -477,11 +547,8 @@ class ExpirationJdbcAdapterTest {
                 .param("id", above)
                 .update();
 
-        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary))
+        assertThat(adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, boundary, chunkCouponId))
                 .as("상한이 빠지면 2 가 되고, 잡이 이력 짝 검사에서 멈춘다")
-                .isEqualTo(1);
-        assertThat(adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, boundary))
-                .as("회차 수도 우리 구간만 센다")
                 .isEqualTo(1);
         assertThat(historyCount(above))
                 .as("우리가 넘기지 않은 건에는 이력이 안 붙는다")
@@ -532,7 +599,7 @@ class ExpirationJdbcAdapterTest {
                 .param("id", target)
                 .update();
 
-        assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE))
                 .as("이번 청크는 건너뛴다. 다음 주기가 새 committedAt 으로 집는다")
                 .isZero();
         assertThat(statusOf(target)).isEqualTo(IssuanceStatus.ISSUED.name());
@@ -552,9 +619,8 @@ class ExpirationJdbcAdapterTest {
         issuance(IssuanceStatus.ISSUED, EXPIRED_AT);
         seed.overwriteStock(3, WROTE_AT.plusSeconds(5));
 
-        adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of());
-        long boundary = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
-        assertThat(adapter.releaseStock(AS_OF, WROTE_AT, 0L, boundary)).isEqualTo(1);
+        assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE)).isEqualTo(1);
+        assertThat(adapter.releaseStock(chunkCouponId, 1, WROTE_AT)).isEqualTo(1);
 
         assertThat(stockUpdatedAt())
                 .as("committedAt 으로 덮어쓰면 검증이 그 사이의 변경을 못 본다")

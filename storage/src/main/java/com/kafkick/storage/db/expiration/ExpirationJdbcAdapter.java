@@ -1,4 +1,4 @@
-// 만료 처리 SQL 여덟입니다 — 청크가 쓰는 여섯과, 실행당 한 번 도는 읽기 둘입니다. 전부 집합 단위로 돌고, 행을 미리 골라 두는 잠금 읽기를 쓰지 않습니다.
+// 만료 처리 SQL 일곱입니다 — 청크가 쓰는 다섯과, 실행당 한 번 도는 읽기 둘입니다. 청크의 첫 쓰기 락은 재고 행 하나를 FOR UPDATE 로 잡는 읽기입니다.
 package com.kafkick.storage.db.expiration;
 
 import java.time.LocalDateTime;
@@ -9,11 +9,12 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.expiration.ExpirationRepository;
+import com.kafkick.core.expiration.ExpireCandidate;
 import com.kafkick.core.expiration.PendingExpiration;
 
 /**
- * <b>여섯 문장이 하나의 청크를 이룬다.</b> 넘기고 · 경계를 찾고 · 이력을 남기고 · 회차를 세고 ·
- * 재고 행을 세고 · 재고를 되돌린다. 여섯이 한 트랜잭션 안에서 돌아야 한다 — 상태만 바뀌고
+ * <b>다섯 문장이 하나의 청크를 이룬다.</b> 후보를 읽고 · 재고를 잠그고 · 넘기고 · 이력을
+ * 남기고 · 재고를 되돌린다. 다섯이 한 트랜잭션 안에서 돌아야 한다 — 상태만 바뀌고
  * 재고가 안 돌아온 중간 상태가 남으면 검증이 그것을 재고 불일치로 잡는다.
  *
  * <p><b>시각이 둘이다.</b> {@code asOf} 는 만료 여부를 가르는 컷({@code expires_at < asOf})이고,
@@ -28,9 +29,10 @@ import com.kafkick.core.expiration.PendingExpiration;
  * <ol>
  *   <li><b>지금(READ COMMITTED)</b> — 뒤 문장들의 <b>스캔 범위</b>를 청크로 닫는다.
  *       상한이 없으면 그 문장들이 테이블 끝까지 훑는다.
- *   <li><b>격리가 RR 로 되돌아가는 날</b> — {@code INSERT … SELECT} 와 {@code UPDATE … JOIN} 의
- *       원본 읽기가 공유 next-key 잠금 읽기가 되어 supremum 까지 잠근다. 그때 이 상한이
- *       발급 봉쇄를 막는 마지막 겹이다.
+ *   <li><b>격리가 RR 로 되돌아가는 날</b> — {@code INSERT … SELECT} 의 원본 읽기가 공유
+ *       next-key 잠금 읽기가 되어 supremum 까지 잠근다. 그때 이 상한이 발급 봉쇄를 막는
+ *       마지막 겹이다. ({@code UPDATE … JOIN} 은 이제 없다 — 청크가 회차 하나라
+ *       {@code RELEASE_STOCK} 이 PK 단건 {@code UPDATE} 다.)
  * </ol>
  *
  * <p><b>상한이 발급 봉쇄를 푼 것이 아니다.</b> 그것을 푼 것은 READ COMMITTED 이고, 상한은
@@ -39,9 +41,13 @@ import com.kafkick.core.expiration.PendingExpiration;
  * {@code docs/12-expire-lock-measurement.md} 의 <i>"실측이 뒤집은 것"</i> 절이 그 문장을
  * 철회했다.
  *
- * <p><b>여섯 중 셋이 상태를 바꾼다.</b> {@code LAST_EXPIRED_ID} · {@code EXPIRED_COUPON_COUNT} ·
- * {@code STOCK_ROW_COUNT} 는 짝을 만드는 가드용이라 아무것도 안 바꾼다 — 지우면 재고 행 없는
- * 회차와 재고가 모자란 회차가 조용히 빠진다.
+ * <p><b>다섯 중 셋이 상태를 바꾼다.</b> {@code NEXT_CANDIDATES} 는 락 없는 읽기이고
+ * {@code LOCK_STOCK} 은 잠그기만 한다.
+ *
+ * <p><b>재고 행 없음과 재고 모자람은 서로 다른 자리에서 갈린다</b> — 없음은
+ * {@code LOCK_STOCK} 이 빈 결과로, 모자람은 {@code RELEASE_STOCK} 의 갱신 행 수 0 으로.
+ * 한때는 넘긴 <i>뒤에</i> {@code EXPIRED_COUPON_COUNT} 와 {@code STOCK_ROW_COUNT} 를 견줘
+ * 알았는데, 그 시점이면 이미 "재고 없이 만료된 상태" 가 트랜잭션 안에 만들어져 있었다.
  *
  * <p>설계 단계에서 MySQL <b>8.4</b> 컨테이너에 문장들을 손으로 돌려 기계를 확인했다 — {@code USED} 로 바뀐 건을 건너뛰고 다음 id 로 이어 가며, 남은 대상이
  * 없을 때 첫 문장이 0 을 돌려준다.
@@ -54,27 +60,32 @@ import com.kafkick.core.expiration.PendingExpiration;
 public class ExpirationJdbcAdapter implements ExpirationRepository {
 
     /**
-     * <b>거르는 조건이 안에 있다.</b> {@code status = 'ISSUED'} 를 여기 두어, 뽑아 둔 사이에
-     * 사용된 건은 매치되지 않고 조용히 빠진다. 밖에서 후보를 뽑는 방식이면 그 건들 때문에
-     * 진도가 안 나가는 청크가 생긴다.
+     * <b>거르는 조건이 안에 있다.</b> {@code status = 'ISSUED'} 를 여기 두어, 후보를 읽은
+     * 뒤에 사용된 건은 매치되지 않고 조용히 빠진다.
+     *
+     * <p><b>후보는 밖에서 읽는다</b>({@code NEXT_CANDIDATES}) — 잠글 재고 행을 쓰기 전에
+     * 알아야 하기 때문이다. 한때 그 방식을 <i>"그 건들 때문에 진도가 안 나가는 청크가
+     * 생긴다"</i> 로 반려했는데, 그때는 종료 신호가 이 문장의 반환값이었다. 지금은 후보
+     * 0건이 종료 신호라 넘긴 것이 0 이어도 진도가 나간다.
      *
      * <p>{@code useAffectedRows=false} 라 드라이버가 <b>매치된 행 수</b>를 돌려준다.
      * 여기서는 매치된 행이 전부 실제로 바뀌므로 두 값이 같다 — 같은 값을 다시 쓰는
      * {@code UPDATE} 를 여기 추가하면 그 등식이 깨진다.
      *
-     * <p><b>{@code (status, expires_at)} 인덱스({@code V11})가 이 문장을 받친다.</b> 그것이
-     * 없으면 옵티마이저가 PRIMARY 를 id 순으로 훑는데, 넘길 것이 {@code LIMIT} 보다 적은
-     * 실행은 끝까지 훑고 supremum 까지 잠가 <b>신규 발급 INSERT 를 죽였다.</b>
-     * 실측(200,000행 중 뒤 1,000건만 대상): 읽은 행 201,000 → <b>2,001</b>.
-     * (스캔 축 정의 — {@code Handler_read_next|rnd_next|first|key} 합)
+     * <p><b>이 문장은 이제 {@code (afterId, lastId]} 와 회차로 닫혀 있다.</b> 범위를 정하는
+     * 것은 {@code NEXT_CANDIDATES} 이고, 그쪽을 받치는 인덱스는 형상에 따라 갈린다 —
+     * 만료 대상이 살아 있는 {@code ISSUED} 중 일부면 {@code V11 (status, expires_at)},
+     * 대부분이면 {@code (status, id)}. 옵티마이저가 고른다. 수치는
+     * {@code docs/12-expire-lock-measurement.md} §11 에 있다.
+     *
+     * <p>한때는 이 문장이 {@code ORDER BY id LIMIT} 로 직접 후보를 골랐고, 그때
+     * {@code V11} 이 없으면 옵티마이저가 PRIMARY 를 끝까지 훑어 <b>신규 발급 INSERT 를
+     * 죽였다</b> — 실측(200,000행 중 뒤 1,000건만 대상): 읽은 행 201,000 → <b>2,001</b>.
      *
      * <p><b>인덱스만으로는 발급 봉쇄가 안 풀렸다.</b> 막던 것이 스캔 범위가 아니라 보조 인덱스의
      * gap 이라, 만료 Step 의 격리를 READ COMMITTED 로 내려서 풀었다({@code ExpireJobConfig}).
      * 둘은 서로 다른 문제를 푼다 — 인덱스는 스캔 비용, 격리는 가용성.
      * 수치와 재현 방법은 {@code docs/12-expire-lock-measurement.md} 에 있다.
-     *
-     * <p>{@code ORDER BY id} 가 인덱스 순서와 달라 filesort 가 붙지만, 정렬량이
-     * {@code LIMIT} 에 묶여 청크당 1,000행이다 — 후보가 아무리 많아도 그 이상 안 는다.
      *
      * <p><b>{@code updated_at <= :committedAt} 가 캡처 창을 닫는다.</b> 잡은 시각을 먼저 잡고
      * 그 뒤에 스캔이 도는데, 그 사이에 상태가 바뀐 행까지 매치하면 <b>그 행에 과거 시각이
@@ -92,10 +103,36 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
              WHERE status = 'ISSUED'
                AND expires_at < :asOf
                AND updated_at <= :committedAt
+               AND coupon_id = :couponId
+               AND id > :afterId AND id <= :lastId
+            """;
+
+    /**
+     * 후보를 <b>id 오름차순</b>으로 준다. 그 순서가 {@code ExpireChunk.from} 의 계약이다.
+     *
+     * <p><b>{@code NOT IN (:blockedCoupons)} 이 여기 있다.</b> 예전에는 {@code EXPIRE_BATCH} 에
+     * 있었는데, 이제 그 문장이 회차 하나로 좁혀져서 걸 자리가 없다 — 막힌 회차는 후보에
+     * 아예 안 들어와야 한다. 들어오면 그 회차가 청크를 잡고, 재고를 못 빼서 죽는다.
+     */
+    private static final String NEXT_CANDIDATES = """
+            SELECT id, coupon_id
+              FROM issuances
+             WHERE status = 'ISSUED'
+               AND expires_at < :asOf
                AND id > :afterId
                AND coupon_id NOT IN (:blockedCoupons)
              ORDER BY id
              LIMIT :limit
+            """;
+
+    /**
+     * <b>청크의 첫 쓰기 락이다.</b> 발급·취소·사용취소가 잠그는 그 행을 같은 방식으로 잡는다.
+     *
+     * <p>{@code coupon_id} 만 고른다 — 값을 안 읽는 것이 결정이다. 뺄 수 있는지는
+     * {@code RELEASE_STOCK} 의 조건이 판단한다.
+     */
+    private static final String LOCK_STOCK = """
+            SELECT coupon_id FROM coupon_stocks WHERE coupon_id = :couponId FOR UPDATE
             """;
 
     /**
@@ -155,24 +192,16 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
             """;
 
     /**
-     * <b>이 문장만 상한이 없다.</b> 상한을 구하는 것이 이 문장의 일이라서다.
+     * {@code from_status} 를 {@code 'ISSUED'} 로 못 박는다. 넘어온 경로가 그것뿐이기 때문이다 —
+     * {@code EXPIRE_BATCH} 가 {@code ISSUED} 만 매치한다.
      *
-     * <p><b>대신 {@code expires_at < :asOf} 는 나머지와 똑같이 건다.</b> 이 문장이 만드는
-     * {@code lastId} 가 뒤 문장 전부의 창이 되므로, 여기서 남의 행이 {@code MAX(id)} 를
-     * 밀어 올리면 <b>그 창이 통째로 넓어진다.</b> 다른 다섯에만 걸고 여기를 빼 두면
-     * 겹을 하나 세워 놓고 문을 열어 두는 셈이다. 대신 평범한
-     * {@code SELECT} 라 REPEATABLE READ 의 consistent read 로 돌고 <b>락을 잡지 않는다</b> —
-     * 뒤 문장들과 달리 발급을 막지 않는다.
+     * <p><b>방금 넘긴 집합을 {@code updated_at = :committedAt} 표식으로 되찾는다.</b>
+     * MySQL 에 {@code UPDATE … RETURNING} 이 없어서다.
      *
-     * <p><b>이 Step 은 READ COMMITTED 다.</b> 그래서 문장마다 스냅샷이 새로 잡힌다 —
-     * 청크 트랜잭션 전체가 하나의 스냅샷을 공유하지 않는다. 그래도 우리 집합은 안전하다:
-     * {@code (afterId, lastId]} 안쪽은 {@code EXPIRE_BATCH} 가 X 락으로 쥐고 있다.
-     *
-     * <p><b>표식은 고유하지 않다 — 무엇이 그것을 메우는지 적어 둔다.</b>
+     * <p><b>그 표식은 고유하지 않다 — 무엇이 그것을 메우는지 적어 둔다.</b>
      * {@code committedAt} 은 {@code datetime(6)} 시각일 뿐이라, <b>원리적으로는</b> 다른
-     * 프로세스가 같은 마이크로초에 {@code EXPIRED} 를 써서 이 {@code MAX(id)} 를 밀어 올릴 수
-     * 있다. 그러면 뒤 문장 다섯의 창이 넓어진다. 지금 그것을 막는 것은 <b>둘</b>이고,
-     * 그중 창 안쪽까지 막는 것은 <b>첫째뿐이다.</b>
+     * 프로세스가 같은 마이크로초에 {@code EXPIRED} 를 써서 이 집합에 섞일 수 있다.
+     * 지금 그것을 막는 것은 <b>셋</b>이다.
      *
      * <ol>
      *   <li><b>같은 {@code asOf} 로 두 번 못 돈다.</b> {@code asOf} 가 잡 파라미터라 스프링
@@ -180,31 +209,18 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      *       {@code BatchJobRepositoryConfig} 가 없으면 저장소가
      *       {@code ResourcelessJobRepository} 라 인스턴스가 한 줄도 안 남고, 프로세스가 둘이면
      *       서로를 못 본다.</li>
-     *   <li>창 밖으로 새는 방향은 나머지 다섯의 {@code id <= :lastId} 가 막는다
+     *   <li>{@code id > :afterId AND id <= :lastId} 가 구간 밖을 막는다
      *       (그 축은 {@code ExpirationJdbcAdapterTest} 가 실제로 남의 행을 심어 확인한다).</li>
+     *   <li><b>{@code coupon_id = :couponId} 가 구간 <i>안</i>의 남의 회차를 막는다.</b>
+     *       {@code (afterId, lastId]} 는 회차가 섞일 수 있다 — 연속부 자르기는 후보 목록
+     *       안에서만 연속이라, 그 사이에 다른 회차의 행이 id 로 끼어 있을 수 있다.
+     *       청크가 회차 하나로 정해진 뒤로는 이 조건을 거는 비용이 0 이라, 표식의
+     *       유일성에 기댈 이유가 없어졌다.</li>
      * </ol>
      *
-     * <p><b>여기 <i>"다른 {@code asOf} 면 {@code expires_at < :asOf} 가 갈라 준다"</i> 고 셋째
-     * 겹을 적었었다. 틀렸다.</b> 그 술어는 단조 <b>포함</b>이다 — {@code asOf} 가 이른 쪽의
-     * 집합이 늦은 쪽의 부분집합이라, 어느 방향으로도 두 실행을 가르지 못한다. 겹은 둘이다.
-     *
-     * <p><b>그래서 남는 구멍은 하나다</b> — 다른 프로세스가 <b>같은 마이크로초</b>에,
-     * <b>우리 창 안쪽</b> id 로 {@code EXPIRED} 를 쓰는 경우. 발급 경로가 만료를 안 쓰고
-     * 배치가 한 대인 지금은 닿을 수 없고, 그 전제가 바뀌면 표식을 시각이 아니라
-     * <b>실행 고유값</b>(run_id 컬럼)으로 올려야 한다. 스키마 변경이라 이 티켓 밖이다.
-     */
-    private static final String LAST_EXPIRED_ID = """
-            SELECT COALESCE(MAX(id), :afterId)
-              FROM issuances
-             WHERE status = 'EXPIRED'
-               AND updated_at = :committedAt
-               AND expires_at < :asOf
-               AND id > :afterId
-            """;
-
-    /**
-     * {@code from_status} 를 {@code 'ISSUED'} 로 못 박는다. 넘어온 경로가 그것뿐이기 때문이다 —
-     * {@code EXPIRE_BATCH} 가 {@code ISSUED} 만 매치한다.
+     * <p>그래도 남는 구멍은 <b>같은 마이크로초 · 같은 회차 · 구간 안쪽</b>뿐이다. 배치가 한 대인
+     * 지금은 닿을 수 없고, 그 전제가 바뀌면 표식을 시각이 아니라 <b>실행 고유값</b>(run_id
+     * 컬럼)으로 올려야 한다. 스키마 변경이라 이 티켓 밖이다.
      */
     private static final String APPEND_HISTORIES = """
             INSERT INTO issuance_histories
@@ -214,65 +230,35 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
              WHERE status = 'EXPIRED'
                AND updated_at = :committedAt
                AND expires_at < :asOf
+               AND coupon_id = :couponId
                AND id > :afterId AND id <= :lastId
             """;
 
     /**
-     * 회차별로 센 만큼 뺀다. 회차마다 한 번만 갱신되도록 파생테이블에서 먼저 접는다 —
-     * 건마다 갱신하면 같은 행을 여러 번 때리고, 그 사이 발급이 들어오면 순서에 따라 값이 갈린다.
+     * 넘어간 만큼 한 번에 뺀다. <b>회차가 하나라 접을 것이 없다</b> — 한때는
+     * {@code JOIN … GROUP BY} 로 회차별 합계를 접었는데, 그때는 청크가 여러 회차에 걸쳤다.
      *
-     * <p><b>{@code updated_at} 은 {@code GREATEST} 로 민다.</b> 이 문장은 청크의 마지막이라,
-     * 앞 다섯 문장이 도는 동안 다른 트랜잭션이 같은 재고 행에 더 늦은 시각을 써 둘 수 있다.
+     * <p><b>{@code updated_at} 은 {@code GREATEST} 로 민다.</b> 우리가 이 행을 잠그기 전에
+     * 다른 트랜잭션이 더 늦은 시각을 써 두고 커밋했을 수 있다.
      * 그것을 덮어써서 <b>시각이 뒤로 물러나면</b> 검증의 {@code hasStocksUpdatedAfter} 가
      * 그 변경을 못 본다 — 그 가드는 재고 시각이 단조 증가한다는 전제 위에 서 있고,
      * 이력 축과 달리 재고 축에는 백데이트 전용 가드가 따로 없다.
      * {@code VerificationSeed.syncStock} 이 같은 이유로 이미 {@code GREATEST} 를 쓴다 —
      * 시드가 지키는 규약을 운영 SQL 이 안 지키고 있었다.
      *
-     * <p><b>{@code active_count >= x.expired} 가 음수를 막는다.</b> {@code ck_stock_range} 에만
+     * <p><b>{@code active_count >= :expired} 가 음수를 막는다.</b> {@code ck_stock_range} 에만
      * 기대면 그 제약을 떼어 낸 CORRUPT 스키마에서 음수가 그대로 커밋된다 — 불변식을 DB 제약으로
      * 표현한다는 원칙이 스키마에 따라 무력해지는 자리다. 조건으로도 걸어 두면 어느 스키마에서든
-     * 그 회차만 갱신되지 않고, 호출자가 {@code STOCK_ROW_COUNT} 와 대조해 알아챈다.
+     * 갱신 행 수가 0 이 되고, 호출자가 그것으로 알아챈다.
      */
     private static final String RELEASE_STOCK = """
-            UPDATE coupon_stocks s
-              JOIN (SELECT coupon_id, COUNT(*) AS expired
-                      FROM issuances
-                     WHERE status = 'EXPIRED'
-                       AND updated_at = :committedAt
-                       AND expires_at < :asOf
-                       AND id > :afterId AND id <= :lastId
-                     GROUP BY coupon_id) x ON x.coupon_id = s.coupon_id
-               SET s.active_count = s.active_count - x.expired,
-                   s.updated_at   = GREATEST(s.updated_at, :committedAt)
-             WHERE s.active_count >= x.expired
+            UPDATE coupon_stocks
+               SET active_count = active_count - :expired,
+                   updated_at   = GREATEST(updated_at, :committedAt)
+             WHERE coupon_id = :couponId
+               AND active_count >= :expired
             """;
 
-    private static final String EXPIRED_COUPON_COUNT = """
-            SELECT COUNT(DISTINCT coupon_id)
-              FROM issuances
-             WHERE status = 'EXPIRED'
-               AND updated_at = :committedAt
-               AND expires_at < :asOf
-               AND id > :afterId AND id <= :lastId
-            """;
-
-    /**
-     * 재고 행이 <b>실제로 있는</b> 회차 수. {@code RELEASE_STOCK} 의 {@code JOIN} 이 닿는 범위와
-     * 같은 집합을 센다 — 다른 것은 {@code active_count >= x.expired} 조건뿐이다.
-     * 그 차이가 곧 "뺄 재고가 모자란 회차" 이고, 그것을 갈라 보려고 이 문장이 있다.
-     */
-    private static final String STOCK_ROW_COUNT = """
-            SELECT COUNT(*)
-              FROM coupon_stocks s
-              JOIN (SELECT coupon_id
-                      FROM issuances
-                     WHERE status = 'EXPIRED'
-                       AND updated_at = :committedAt
-                       AND expires_at < :asOf
-                       AND id > :afterId AND id <= :lastId
-                     GROUP BY coupon_id) x ON x.coupon_id = s.coupon_id
-            """;
 
     private final JdbcClient jdbcClient;
 
@@ -281,14 +267,35 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
     }
 
     @Override
-    public int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, int limit,
+    public List<ExpireCandidate> nextCandidates(LocalDateTime asOf, long afterId, int limit,
             List<Long> blockedCoupons) {
+        return jdbcClient.sql(NEXT_CANDIDATES)
+                .param("asOf", asOf)
+                .param("afterId", afterId)
+                .param("limit", limit)
+                .param("blockedCoupons", withSentinel(blockedCoupons))
+                .query((rs, rowNum) -> new ExpireCandidate(rs.getLong("id"), rs.getLong("coupon_id")))
+                .list();
+    }
+
+    @Override
+    public boolean lockStock(long couponId) {
+        return !jdbcClient.sql(LOCK_STOCK)
+                .param("couponId", couponId)
+                .query(Long.class)
+                .list()
+                .isEmpty();
+    }
+
+    @Override
+    public int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId,
+            long couponId) {
         return jdbcClient.sql(EXPIRE_BATCH)
                 .param("asOf", asOf)
                 .param("committedAt", committedAt)
                 .param("afterId", afterId)
-                .param("limit", limit)
-                .param("blockedCoupons", withSentinel(blockedCoupons))
+                .param("lastId", lastId)
+                .param("couponId", couponId)
                 .update();
     }
 
@@ -309,43 +316,29 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
                 .single();
     }
 
-    @Override
-    public long lastExpiredId(LocalDateTime asOf, LocalDateTime committedAt, long afterId) {
-        return jdbcClient.sql(LAST_EXPIRED_ID)
-                .param("asOf", asOf)
-                .param("committedAt", committedAt)
-                .param("afterId", afterId)
-                .query(Long.class)
-                .single();
-    }
 
     @Override
     public int appendExpireHistories(LocalDateTime asOf, LocalDateTime committedAt,
-            long afterId, long lastId) {
-        return chunk(APPEND_HISTORIES, asOf, committedAt, afterId, lastId).update();
+            long afterId, long lastId, long couponId) {
+        return jdbcClient.sql(APPEND_HISTORIES)
+                .param("asOf", asOf)
+                .param("committedAt", committedAt)
+                .param("afterId", afterId)
+                .param("lastId", lastId)
+                .param("couponId", couponId)
+                .update();
     }
 
-    @Override
-    public int expiredCouponCount(LocalDateTime asOf, LocalDateTime committedAt,
-            long afterId, long lastId) {
-        return chunk(EXPIRED_COUPON_COUNT, asOf, committedAt, afterId, lastId)
-                .query(Integer.class)
-                .single();
-    }
 
     @Override
-    public int releaseStock(LocalDateTime asOf, LocalDateTime committedAt,
-            long afterId, long lastId) {
-        return chunk(RELEASE_STOCK, asOf, committedAt, afterId, lastId).update();
+    public int releaseStock(long couponId, int expired, LocalDateTime committedAt) {
+        return jdbcClient.sql(RELEASE_STOCK)
+                .param("couponId", couponId)
+                .param("expired", expired)
+                .param("committedAt", committedAt)
+                .update();
     }
 
-    @Override
-    public int stockRowCount(LocalDateTime asOf, LocalDateTime committedAt,
-            long afterId, long lastId) {
-        return chunk(STOCK_ROW_COUNT, asOf, committedAt, afterId, lastId)
-                .query(Integer.class)
-                .single();
-    }
 
     /**
      * <b>{@code NOT IN ()} 은 문법 오류다</b>(1064). 목록이 비는 것이 정상이므로 —
@@ -361,19 +354,4 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
         return withSentinel;
     }
 
-    /**
-     * 청크를 가리키는 파라미터 넷은 뒤 문장 전부가 똑같이 쓴다.
-     *
-     * <p>한 곳에 모으는 이유는 손이 덜 가서가 아니라, <b>한 문장만 상한을 빠뜨리는 일을 막으려는
-     * 것</b>이다. 상한이 없는 문장 하나면 그 문장이 테이블 끝까지 공유 락을 잡아 발급이 멈춘다 —
-     * 클래스 주석의 실측이 그 값이다.
-     */
-    private JdbcClient.StatementSpec chunk(String sql, LocalDateTime asOf,
-            LocalDateTime committedAt, long afterId, long lastId) {
-        return jdbcClient.sql(sql)
-                .param("asOf", asOf)
-                .param("committedAt", committedAt)
-                .param("afterId", afterId)
-                .param("lastId", lastId);
-    }
 }

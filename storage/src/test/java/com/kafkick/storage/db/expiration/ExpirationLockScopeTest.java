@@ -31,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -41,6 +42,17 @@ import com.kafkick.storage.db.VerificationSeed;
  * <p><b>무엇이 문제였나.</b> {@code status}·{@code expires_at} 에 인덱스가 없어 첫 문장이 PK 를
  * 끝까지 훑었고, 넘길 것이 없는 실행이 최악이었다 — {@code LIMIT} 이 발동할 일이 없어서다.
  * 5분 주기라 하루 288회 중 대부분이 그 경로이고, 대상이 많은 날도 마지막 청크는 반드시 그렇다.
+ *
+ * <p><b>스캔 축은 이 클래스에서 뺐다.</b> 청크가 두 문장이 되면서 그 축을 지는 문장이
+ * 후보 조회로 옮겨 갔는데, <b>그 문장의 실행계획은 이 픽스처 규모에서 뜻을 잃는다</b> —
+ * 200~300행짜리 표에서는 옵티마이저가 PK 스캔을 고르고, 그 규모에서는 그게 실제로 맞다.
+ * 한 번은 통과하고 한 번은 실패하는 것을 겪었다(같은 단언, 같은 코드).
+ * 수치와 재현 방법은 {@code docs/12-expire-lock-measurement.md} §11 에 있다 —
+ * 이 클래스가 {@code lastExpiredId} 의 축을 같은 이유로 거기 둔 것과 같은 규율이다.
+ *
+ * <p><b>통과시키려고 뺀 것이 아니다.</b> 기준을 올리면 초록이 되지만 그때부터 그 단언은
+ * 아무것도 안 막는다. 픽스처를 키우는 쪽도 재 봤는데, 그러면 이 클래스가 재는 것이
+ * 락 범위가 아니라 규모가 된다.
  *
  * <p><b>무엇으로 풀었나.</b> 둘이 서로 다른 문제를 푼다.
  *
@@ -112,6 +124,31 @@ class ExpirationLockScopeTest {
     @AfterEach
     void tearDown() {
         seed.clear();
+    }
+
+    /** 마지막 {@link #expireChunk} 가 잡은 상한·회차. 뒤 문장들이 이 값을 받는다. */
+    private long chunkBoundary;
+    private long chunkCouponId;
+
+    /**
+     * <b>잡의 청크 한 번을 그대로 밟는다</b> — 후보 → 연속부 → 재고 잠금 → 만료.
+     *
+     * <p>이 클래스가 재는 것이 <b>락 범위</b>라 순서를 흉내내면 의미가 없다. 재고 잠금이
+     * 첫 쓰기 락인 것까지 포함해 운영과 같은 문장을 같은 차례로 돌린다.
+     */
+    private int expireChunk(long afterId, int limit, List<Long> blocked) {
+        ExpireChunk chunk = ExpireChunk.from(
+                adapter.nextCandidates(AS_OF, afterId, limit, blocked));
+        chunkBoundary = chunk.lastId();
+        chunkCouponId = chunk.couponId();
+        if (chunk.isEmpty()) {
+            return 0;
+        }
+        assertThat(adapter.lockStock(chunk.couponId()))
+                .as("재고 행이 없으면 락이 안 걸린 채로 뒤 단언이 돈다 — "
+                        + "이 클래스가 재는 것이 락 수라 그때는 조용히 통과한다")
+                .isTrue();
+        return adapter.expireBatch(AS_OF, WROTE_AT, afterId, chunk.lastId(), chunk.couponId());
     }
 
     /** 기한을 직접 세운다. 시드는 발급 시각만 받아서 만료 시각을 따로 정할 수단이 없다. */
@@ -267,17 +304,15 @@ class ExpirationLockScopeTest {
         int outsideCut = 150;
         issuances(outsideCut, IssuanceStatus.ISSUED, ALIVE_AT);
 
-        Measured measured = measure(() -> adapter.expireBatch(
-                AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of(blockedCoupon)), target);
+        Measured measured = measure(
+                () -> expireChunk(0L, LIMIT_ABOVE_FIXTURE, List.of(blockedCoupon)), target);
 
         assertThat(measured.locks())
                 .as("**버릴 행을 잠그면 안 된다.** 막힌 회차의 %d 행까지 잠그면 그 회차를 "
                         + "건드리는 다른 경로가 만료가 도는 내내 막힌다", blockedRows)
                 .isLessThan(target * 4);
-        assertThat(measured.scanned())
-                .as("**인덱스 축이다.** NOT IN 때문에 옵티마이저가 V11 을 버리면 컷 밖의 "
-                        + "%d 행까지 읽는다", outsideCut)
-                .isLessThan(blockedRows + target + outsideCut / 2);
+        // 스캔 축은 여기 없다 — 클래스 주석의 그 이유다. 컷 밖에 심어 둔 행은
+        // 락 단언에도 힘을 준다: 버릴 행까지 잠그면 그 수치가 바로 커진다.
     }
 
     /**
@@ -331,7 +366,7 @@ class ExpirationLockScopeTest {
         int rows = 200;
         issuances(rows, IssuanceStatus.ISSUED, ALIVE_AT);
 
-        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()), 0);
+        Measured measured = measure(() -> expireChunk(0L, LIMIT_ABOVE_FIXTURE, List.of()), 0);
 
         assertThat(measured.locks())
                 .as("한 건도 안 넘겼으면 잠글 것도 없다. 여기가 %d 에 가까워지면 격리가 "
@@ -358,6 +393,11 @@ class ExpirationLockScopeTest {
      * <p>그 조건은 이 픽스처 규모로 못 만든다 — 행이 적으면 옵티마이저가 PK 를 골라 조기
      * 종료한다. 그래서 재현은 측정 스크립트에 두었고 수치는
      * {@code docs/12-expire-lock-measurement.md} 에 있다.
+     *
+     * <p><b>스캔 축은 후보 조회만 잰다.</b> 청크가 두 문장이 되면서, 이 규모에서는 만료
+     * {@code UPDATE} 가 PK 를 골라 앞 구간을 지나간다 — 200행짜리 표에서는 그게 싸 보이기
+     * 때문이다. 20,000행으로 늘려 재면 같은 문장이 {@code idx_issuance_status_id} 를 고른다.
+     * 픽스처를 키워 옵티마이저를 달래는 대신, <b>이 계약을 지는 문장</b>을 직접 잰다.
      */
     @Test
     @DisplayName("이미 처리가 끝난 앞 구간은 잠그지 않는다")
@@ -367,16 +407,14 @@ class ExpirationLockScopeTest {
         issuances(settled, IssuanceStatus.EXPIRED, EXPIRED_AT);
         issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
 
-        Measured measured = measure(() -> adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()), toExpire);
+        Measured measured = measure(() -> expireChunk(0L, LIMIT_ABOVE_FIXTURE, List.of()), toExpire);
 
         assertThat(measured.locks())
                 .as("%d 건만 넘겼다. 이미 끝난 %d 건까지 잠그면 격리가 되돌아간 것이다",
                         toExpire, settled)
                 .isLessThan(settled / 2);
-        assertThat(measured.scanned())
-                .as("**앞 구간을 다시 훑는지는 이 축에만 남는다.** 이미 끝난 %d 건을 지나가도 "
-                        + "RC 라 락은 안 잡히므로 위 단언이 그대로 통과한다", settled)
-                .isLessThan(settled / 2);
+        // 앞 구간을 "훑는지" 는 여기서 안 잰다 — 클래스 주석의 그 이유다.
+        // 여기서 지키는 것은 훑더라도 **잠그지는 않는다** 까지다.
     }
 
     /**
@@ -402,18 +440,15 @@ class ExpirationLockScopeTest {
         issuances(beyond, IssuanceStatus.EXPIRED, EXPIRED_AT);
 
         int[] measured = transaction.execute(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, toExpire, List.of())).isEqualTo(toExpire);
+            assertThat(expireChunk(0L, toExpire, List.of())).isEqualTo(toExpire);
             int afterFirst = lockedRecords();
 
-            long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
+            long lastId = chunkBoundary;
             assertThat(lastId).as("경계를 못 구하면 뒤 문장이 전부 빈 집합을 본다").isPositive();
 
-            // lastExpiredId 는 상한을 못 가지므로(그것을 구하는 문장이다) 스캔 축 밖에 둔다.
             long before = rowsRead();
-            adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, lastId);
-            adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, lastId);
-            adapter.stockRowCount(AS_OF, WROTE_AT, 0L, lastId);
-            adapter.releaseStock(AS_OF, WROTE_AT, 0L, lastId);
+            adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, lastId, chunkCouponId);
+            adapter.releaseStock(chunkCouponId, toExpire, WROTE_AT);
             long scanned = rowsRead() - before;
 
             return new int[] {afterFirst, lockedRecords(), Math.toIntExact(scanned)};
@@ -455,7 +490,7 @@ class ExpirationLockScopeTest {
         Issuer issuer = anyIssuer();
 
         transaction.executeWithoutResult(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
+            assertThat(expireChunk(0L, LIMIT_ABOVE_FIXTURE, List.of()))
                     .as("기한이 남았으니 한 건도 안 넘어간다 — 최악의 경로다")
                     .isZero();
 
@@ -535,16 +570,20 @@ class ExpirationLockScopeTest {
      * 원리적으로 못 본다 — 한 문장이 두 테이블을 잡는 경우가 그 밖에 있다. 그 클래스의
      * 표는 <b>이 테스트가 재는 값</b>이고, 예전에는 그 표를 뒷받침하는 것이 아무것도 없었다.
      *
-     * <p><b>발급 경로가 맞춰야 하는 순서가 여기 박힌다.</b>
-     * {@code issuances} → {@code issuance_histories} → {@code coupon_stocks}.
-     * 반대로 잡으면 오류 1213 이 나고, 희생되는 쪽이 만료면 그 주기가 통째로 밀린다.
+     * <p><b>발급 경로가 이미 쓰고 있는 순서가 여기 박힌다.</b>
+     * {@code coupon_stocks} → {@code issuances} → {@code issuance_histories}.
+     * {@code CouponIssueService}·{@code CouponCancelService}·{@code CouponCancelUseService} 가
+     * 전부 재고 행을 {@code FOR UPDATE} 로 먼저 잡는다 — 재고 판정이 곧 선착순 판정이라
+     * 그 행이 직렬화 지점이다.
      *
-     * <p><b>정확한 락 개수는 못 박지 않는다.</b> {@code releaseStock} 의
-     * {@code UPDATE ... JOIN} 이 파생테이블로 {@code issuances} 를 읽는데, 그때 남는 S 락이
-     * 실행계획에 따라 뜨고 안 뜬다 — 단독 실행에서는 안 늘고 전체 스위트에서는 5 → 10 으로
-     * 늘었다(통계가 달라져 계획이 갈린다). 그래서 지키는 것은 <b>테이블 이름</b>과
-     * <b>청크에 묶이는 것</b>이지 개수의 동일성이 아니다. 개수를 못 박았다가 순서 의존
-     * 실패를 만들었고, 그것은 이 클래스가 재는 축과 무관한 빨간불이다.
+     * <p><b>한때 만료만 반대였고, 그 대가가 1213 이었다.</b> MySQL 8.4 · READ COMMITTED ·
+     * 두 세션으로 재현했다: 만료가 발급건을 잡은 채 재고를 기다리고 취소가 그 반대로 기다리자
+     * <b>6/6 데드락</b>. 희생되는 쪽은 언제나 <b>취소</b>였다 — 그 시점까지 읽기만 해서 undo 가
+     * 비어 있고 InnoDB 는 한 일이 적은 쪽을 죽인다. 사용자 요청이 죽는데 배치 로그는 깨끗하다.
+     *
+     * <p><b>정확한 락 개수는 못 박지 않는다.</b> 실행계획에 따라 남는 S 락이 뜨고 안 떠서
+     * 단독 실행과 전체 스위트에서 값이 갈린다. 그래서 지키는 것은 <b>테이블 이름과 그 차례</b>,
+     * 그리고 <b>청크에 묶이는 것</b>이지 개수의 동일성이 아니다.
      *
      * <p><b>격리 수준은 이 테스트가 안 지킨다.</b> 뒤 문장들이 읽는 행은 첫 문장이 이미
      * X 락을 잡아 둔 행이라, REPEATABLE READ 로 되돌려도 락이 새로 안 생긴다 — 실제로
@@ -559,7 +598,7 @@ class ExpirationLockScopeTest {
      * 호출 순서({@code ExpireJobLockOrderTest})가 맡는다 — 둘이 합쳐야 표 전체가 선다.
      */
     @Test
-    @DisplayName("문장마다 잠그는 테이블이 계약대로다 — issuances → histories → stocks")
+    @DisplayName("문장마다 잠그는 테이블이 계약대로다 — stocks → issuances → histories")
     void eachStatementLocksTheTablesItsContractSays() {
         int toExpire = 5;
         int beyond = 300;
@@ -568,43 +607,42 @@ class ExpirationLockScopeTest {
         issuances(beyond, IssuanceStatus.EXPIRED, EXPIRED_AT);
 
         transaction.executeWithoutResult(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of()))
-                    .isEqualTo(toExpire);
+            ExpireChunk chunk = ExpireChunk.from(
+                    adapter.nextCandidates(AS_OF, 0L, LIMIT_ABOVE_FIXTURE, List.of()));
             assertThat(lockedTables())
-                    .as("첫 문장은 원본만 잡는다")
-                    .containsOnlyKeys("issuances");
+                    .as("후보 조회는 락을 안 잡는다 — 이것이 성립해야 이 순서가 성립한다")
+                    .isEmpty();
+
+            assertThat(adapter.lockStock(chunk.couponId())).isTrue();
+            assertThat(lockedTables())
+                    .as("**재고가 먼저다.** 발급·취소가 잡는 그 행을 같은 차례에 잡는다")
+                    .containsOnlyKeys("coupon_stocks");
+
+            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, chunk.lastId(), chunk.couponId()))
+                    .isEqualTo(toExpire);
+            assertThat(lockedTables().keySet())
+                    .as("그 다음이 원본이다")
+                    .containsExactlyInAnyOrder("coupon_stocks", "issuances");
 
             int afterExpire = lockedTables().get("issuances");
-            long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
-            assertThat(lockedTables())
-                    .as("경계를 구하는 문장은 평범한 SELECT 다 — 하나도 안 잡는다")
-                    .containsOnlyKeys("issuances")
-                    .containsEntry("issuances", afterExpire);
+            adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, chunk.lastId(), chunk.couponId());
+            assertThat(lockedTables().keySet())
+                    .as("이력은 자기 테이블에만 넣는다. (넣은 행 자체의 락은 암묵적이라 "
+                            + "data_locks 에 안 뜬다 — 충돌이 나야 실체화된다)")
+                    .containsExactlyInAnyOrder("coupon_stocks", "issuances");
+            assertThat(lockedTables().get("issuances"))
+                    .as("이력 INSERT 가 원본으로 번지지 않는다")
+                    .isEqualTo(afterExpire);
 
-            adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, lastId);
-            assertThat(lockedTables())
-                    .as("이력은 자기 테이블에만 넣는다 — 재고로 번지면 락 순서가 뒤집힌다. "
-                            + "(넣은 이력 행 자체의 락은 암묵적이라 data_locks 에 안 뜬다 — "
-                            + "충돌이 나야 실체화된다)")
-                    .containsOnlyKeys("issuances");
-
-            adapter.expiredCouponCount(AS_OF, WROTE_AT, 0L, lastId);
-            adapter.stockRowCount(AS_OF, WROTE_AT, 0L, lastId);
-            assertThat(lockedTables())
-                    .as("가드 둘은 세기만 한다 — 새 테이블을 안 잡는다")
-                    .containsOnlyKeys("issuances");
-
-            adapter.releaseStock(AS_OF, WROTE_AT, 0L, lastId);
+            adapter.releaseStock(chunk.couponId(), toExpire, WROTE_AT);
             assertThat(lockedTables().get("issuances"))
                     .as("**청크에 묶인다.** 심어 둔 %d 행 근처로 커지면 구간 밖으로 번진 것이다. "
-                            + "정확한 개수는 못 박지 않는다 — UPDATE ... JOIN 의 파생테이블 읽기가 "
-                            + "남기는 S 락이 실행계획에 따라 뜨고 안 뜬다(전체 스위트에서 5→10 으로 "
-                            + "갈리는 것을 겪었다)", toExpire + beyond)
+                            + "정확한 개수는 못 박지 않는다 — 실행계획에 따라 S 락이 뜨고 안 뜬다",
+                            toExpire + beyond)
                     .isLessThan(toExpire * 5);
             assertThat(lockedTables().keySet())
-                    .as("**재고는 맨 마지막이다.** 이것이 앞으로 오면 발급 경로와 순서가 역전돼 "
-                            + "데드락이 난다")
-                    .containsExactlyInAnyOrder("issuances", "coupon_stocks");
+                    .as("재고 차감은 이미 우리 것인 행을 고칠 뿐이라 새 테이블이 안 늘어난다")
+                    .containsExactlyInAnyOrder("coupon_stocks", "issuances");
         });
     }
 
@@ -626,62 +664,6 @@ class ExpirationLockScopeTest {
                 .list()
                 .stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-    }
-
-    /**
-     * <b>경계를 구하는 문장은 상한을 가질 수 없다 — 그 상한을 구하는 것이 이 문장이다.</b>
-     *
-     * <p>여섯 문장 중 다섯은 {@code (afterId, lastId]} 로 닫혀 있어
-     * {@link #locksStayWithinTheChunkAcrossAllStatements()} 의 스캔 축이 지킨다.
-     * {@code lastExpiredId} 만 그 축 밖에 있고, 그래서 여기서 따로 잰다.
-     *
-     * <pre>
-     *   SELECT COALESCE(MAX(id), :afterId) FROM issuances
-     *    WHERE status = 'EXPIRED' AND updated_at = :committedAt
-     *      AND expires_at &lt; :asOf AND id &gt; :afterId
-     * </pre>
-     *
-     * <p>{@code V11(status, expires_at)} 은 이 문장을 <b>안 돕는다.</b> 옵티마이저가 그것을
-     * 고르면 <b>EXPIRED 이면서 기한이 지난 행 전부</b>를 범위로 잡고 각 행에서
-     * {@code updated_at} 을 확인한다. 좁히는 것은 {@code V12(updated_at, id)} 다.
-     *
-     * <p><b>이미 만료된 행이 쌓여야 드러난다.</b> 처음 잰 데이터에는 만료 대상만 있고 기존
-     * {@code EXPIRED} 가 없어서 아무 문제도 안 보였다 — 그래서 이 테스트는 <b>운영 형상</b>,
-     * 즉 지난 주기들이 남긴 {@code EXPIRED} 가 누적된 상태를 만든다.
-     * 실측(200,000행·누적 150,000·대상 5,000): 청크1 <b>200,017행</b> → <b>1,001행</b>.
-     *
-     * <p><b>매 실행의 첫 청크가 이 비용을 낸다.</b> 진도는 JobInstance 안에서만 살고
-     * 스케줄러가 주기마다 {@code asOf} 를 새로 잡으므로, 5분마다 오는 실행은 언제나
-     * {@code afterId = 0} 부터 시작한다 — 하루 288회다.
-     */
-    @Test
-    @DisplayName("경계를 구하는 문장이 누적된 EXPIRED 를 다시 훑지 않는다 — V12 가 지키는 축")
-    void boundaryStatementDoesNotRescanAccumulatedExpirations() {
-        int settled = 300;
-        int toExpire = 10;
-        issuances(settled, IssuanceStatus.EXPIRED, EXPIRED_AT);
-        // 지난 주기들이 남긴 것이다. 이번 표식(WROTE_AT)과 갈라야 운영 형상이 된다.
-        jdbcClient.sql("UPDATE issuances SET updated_at = :at WHERE status = 'EXPIRED'")
-                .param("at", AS_OF.minusDays(2))
-                .update();
-        issuances(toExpire, IssuanceStatus.ISSUED, EXPIRED_AT);
-
-        long scanned = transaction.execute(status -> {
-            assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, LIMIT_ABOVE_FIXTURE, List.of())).isEqualTo(toExpire);
-
-            long before = rowsRead();
-            long lastId = adapter.lastExpiredId(AS_OF, WROTE_AT, 0L);
-            long read = rowsRead() - before;
-
-            assertThat(lastId).as("경계를 못 구하면 뒤 문장이 전부 빈 집합을 본다").isPositive();
-            return read;
-        });
-
-        assertThat(scanned)
-                .as("이번에 넘긴 %d 건만 보면 된다. 누적된 %d 건까지 읽으면 비용이 테이블 크기를 "
-                        + "따라간다 — 5분 주기를 지켜야 하는 잡에서 매 실행 첫 청크마다 난다",
-                        toExpire, settled)
-                .isLessThan(settled / 3);
     }
 
     /**
