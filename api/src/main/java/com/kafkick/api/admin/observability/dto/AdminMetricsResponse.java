@@ -244,13 +244,18 @@ public record AdminMetricsResponse(
      * 그래서 {@code groups} 안의 issue 항목과 {@code success} 는 같은 원천·같은 필터·같은 집계
      * 규칙에서 나오고 언제나 같은 값이어야 합니다.</p>
      *
-     * <p>{@code groups} 의 outcome 축은 success 하나입니다. 실패 경로의 그룹별 지연은 이 계약이
-     * 아닙니다 — Timer 가 outcome 을 success·failure 둘로만 등록해 실패 안에서 정책 거절과
-     * 시스템 실패가 섞여 있기 때문입니다(OBS-31).</p>
+     * <p>{@code groups} 의 outcome 축은 success 하나입니다. <b>계측이 못 하는 것이 아닙니다</b> —
+     * Timer 는 그룹마다 outcome 넷을 등록하므로 실패 경로의 그룹별 지연도 만들 수 있습니다.
+     * 내지 않는 이유는 <b>계약을 덜 흔들기 위해서</b>입니다: 화면이 그룹별 실패 지연을 쓴다는
+     * 근거가 아직 없고, {@code LatencyGroupStat} 을 바꾸면 프론트 계약이 또 움직입니다.
+     * 필요해지면 그때 이 record 를 넓히면 되고, 원천은 이미 있습니다.</p>
      *
-     * @param success 성공 경로 지연 분포
-     * @param policyReject 정책 거절 경로 지연 분포
-     * @param systemFailure 시스템 실패 경로 지연 분포
+     * @param success 성공 경로 지연 분포. {@code issue} 그룹 기준
+     * @param policyReject 정책 거절 경로 지연 분포. {@code issue} 그룹 기준. <b>4xx 계약 위반은
+     *                     여기 들어오지 않습니다</b> — 계측은 {@code client_invalid} 축으로 따로
+     *                     세고 있고, 응답 자리는 아직 없습니다
+     * @param systemFailure 시스템 실패 경로 지연 분포. {@code issue} 그룹 기준. 경계는
+     *                      {@code ResultClass.systemFailures()} 하나가 정합니다
      * @param groups URI 그룹별 성공 경로 지연 분포. 조립기는 그룹 다섯 종을 언제나 모두 채웁니다
      *               (미수집 초안 {@link #draft} 만 빈 목록입니다)
      */
