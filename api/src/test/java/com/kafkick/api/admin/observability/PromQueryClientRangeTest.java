@@ -42,7 +42,16 @@ class PromQueryClientRangeTest {
                     Instant.ofEpochSecond(1787414400), Instant.ofEpochSecond(1787414401), 1);
 
             String decoded = URLDecoder.decode(rawQuery.get(), StandardCharsets.UTF_8);
-            assertThat(decoded).contains("query=topk(1, app_http_latency_seconds{quantile=\"0.99\"})");
+            // 이 테스트가 지키는 것은 질의의 '내용' 이 아니라 '전선 위에서 그대로인가' 다
+            // (CY-264: RestClient 가 중괄호를 URI 템플릿 변수로 읽어 첫 요청부터 죽었다).
+            // 그래서 문자열을 여기 옮겨 적지 않고 조립기에서 가져온다 — 내용은
+            // LatencySeriesOutcomeContractTest 가 따로 고정한다. 라벨이 늘수록 중괄호 안
+            // 항목이 늘어 이 경로의 위험도 같이 는다.
+            assertThat(decoded)
+                    .contains("query=" + PromQueryClient.rangeQueryFor(Metric.LATENCY_P99));
+            assertThat(decoded)
+                    .as("중괄호 안 라벨이 둘 이상일 때도 전선에서 살아남아야 합니다")
+                    .contains("{quantile=\"0.99\",outcome=\"success\"}");
             assertThat(samples).hasSize(2);
             assertThat(samples.get(0).observedAt()).isEqualTo(Instant.ofEpochSecond(1787414400));
             assertThat(samples.get(0).value()).isEqualTo(0.123);
