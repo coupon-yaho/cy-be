@@ -28,11 +28,14 @@ BATCH_JOB_INSTANCE
 benchmark_runs
 
 # ── 도메인 관측 ──
-#    정합성 원시값 수집(ConsistencyRawValueReader)과 회차 시작 게이트
-#    (JdbcBenchmarkTopologyObservation)가 읽는다.
+#    정합성 원시값 수집(ConsistencyRawValueReader), 회차 시작 게이트
+#    (JdbcBenchmarkTopologyObservation), 관리자 캠페인 조회
+#    (JdbcAdminCampaignDataReader)가 읽는다.
+brands
 coupons
 coupon_stocks
 issuances
+issuance_histories
 
 # ── 여기 **없는** 것 중 물어보게 되는 것 ──
 #

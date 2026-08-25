@@ -93,7 +93,10 @@ class JdbcAdminCampaignDataReaderTest {
         try (HikariDataSource rootDataSource = hikari("root", mysql.getPassword())) {
             JdbcTemplate root = new JdbcTemplate(rootDataSource);
             root.execute("CREATE USER 'campaign_obs'@'%' IDENTIFIED BY 'campaign_obs'");
-            root.execute("GRANT SELECT ON app.* TO 'campaign_obs'@'%'");
+            for (String table : List.of(
+                    "brands", "coupons", "coupon_stocks", "issuances", "issuance_histories")) {
+                root.execute("GRANT SELECT ON app.`" + table + "` TO 'campaign_obs'@'%'");
+            }
             root.execute("FLUSH PRIVILEGES");
         }
 
