@@ -264,6 +264,37 @@ class BenchmarkRunServiceTest {
     }
 
     @Nested
+    @DisplayName("목록은 복합 Keyset으로 과거 방향만 읽는다")
+    class Search {
+
+        @Test
+        @DisplayName("동일 startedAt이면 ID가 작은 회차만 다음 페이지에 남긴다")
+        void sameStartedAtUsesIdAsTheSecondKeysetColumn() {
+            BenchmarkRun first = service.start(command("V3-MAIN-01"));
+            service.stopLoad(first.id(), null);
+            BenchmarkRun second = service.start(command("V3-MAIN-02"));
+            service.stopLoad(second.id(), null);
+            BenchmarkRun third = service.start(command("V3-MAIN-03"));
+
+            BenchmarkRunPage firstPage = service.search(new BenchmarkRunQuery(
+                    null, null, null, null, null, 2));
+
+            assertThat(firstPage.items()).extracting(BenchmarkRun::id)
+                    .containsExactly(third.id(), second.id());
+            assertThat(firstPage.hasOlder()).isTrue();
+            assertThat(firstPage.nextBefore()).isEqualTo(
+                    new BenchmarkRunPosition(second.startedAt(), second.id()));
+
+            BenchmarkRunPage nextPage = service.search(new BenchmarkRunQuery(
+                    null, null, null, null, firstPage.nextBefore(), 2));
+
+            assertThat(nextPage.items()).extracting(BenchmarkRun::id).containsExactly(first.id());
+            assertThat(nextPage.hasOlder()).isFalse();
+            assertThat(nextPage.nextBefore()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("archive 는 회차와 독립이다")
     class Archive {
 

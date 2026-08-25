@@ -25,6 +25,8 @@ import com.kafkick.api.admin.verification.dto.VerificationRunDetailResponse;
 import com.kafkick.api.admin.verification.dto.VerificationRunPageResponse;
 import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.admin.BenchmarkRunState;
+import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
+import com.kafkick.core.benchmark.BenchmarkRunStatus;
 import com.kafkick.core.admin.BrandCategory;
 import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.MeasurementState;
@@ -107,13 +109,14 @@ class AdminExtendedDtoJsonSerializationTest {
     void detailedResponsesPreserveNullableVerdictsAndEmptyCollections() throws Exception {
         BenchmarkDetailResponse benchmark = new BenchmarkDetailResponse(
                 1L, EngineVersion.V1, ReleaseStage.V1, QueueMode.OFF, "BASELINE",
-                BenchmarkRunState.RUNNING, null, AT, null, null, List.of());
+                BenchmarkRunStatus.RUNNING, BenchmarkArchiveStatus.NONE, null, AT,
+                null, null, null, null, List.of());
         VerificationRunDetailResponse verification = new VerificationRunDetailResponse(
                 2L, null, 0, 0, List.of());
 
         assertThat(objectMapper.writeValueAsString(benchmark))
                 .contains("\"serverSamples\":[]")
-                .doesNotContain("\"verdict\":", "\"finishedAt\":");
+                .doesNotContain("\"clientSummary\":", "\"finalizedAt\":");
         assertThat(objectMapper.writeValueAsString(verification))
                 .contains("\"findings\":[]")
                 .doesNotContain("\"verdict\":");
