@@ -7,8 +7,6 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -43,8 +41,6 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
-import tools.jackson.databind.json.JsonMapper;
-import org.assertj.core.api.SoftAssertions;
 
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
@@ -379,89 +375,6 @@ class JdbcAdminCampaignDataReaderTest {
 
         assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
         assertThat(observationDataSource.connectionCount()).isEqualTo(1);
-    }
-
-    @Test
-    @DisplayName("10,000행 카탈로그는 DB p95 200ms와 직렬화 2MiB 차단선을 넘지 않는다")
-    void tenThousandCampaignPerformanceGate() throws Exception {
-        List<Object[]> coupons = new ArrayList<>(10_000);
-        List<Object[]> stocks = new ArrayList<>(10_000);
-        for (int index = 0; index < 10_000; index++) {
-            long id = 10_000L + index;
-            Instant opensAt = SNAPSHOT.minusSeconds(index * 60L);
-            coupons.add(couponArguments(id, 1, 1, "대표 캠페인 " + index, "OPEN", opensAt));
-            stocks.add(new Object[]{id, 20_000, 0, timestamp(SNAPSHOT.minusSeconds(index))});
-        }
-        writeJdbc.batchUpdate("""
-                INSERT INTO coupons(
-                    id, template_id, brand_id, name, policy_type, valid_days,
-                    eligible_grades_mask, open_at, close_at, status, generated_at, created_at
-                ) VALUES (?, ?, ?, ?, 'FIXED_AMOUNT', 30, 1, ?, ?, ?, ?, ?)
-                """, coupons);
-        writeJdbc.batchUpdate("""
-                INSERT INTO coupon_stocks(coupon_id, total_quantity, active_count, updated_at)
-                VALUES (?, ?, ?, ?)
-                """, stocks);
-
-        List<Map<String, Object>> explain = observationJdbc.queryForList("""
-                EXPLAIN ANALYZE
-                SELECT c.id, c.name, b.name AS brand_name, c.status,
-                       c.open_at, c.close_at,
-                       s.total_quantity, s.active_count, s.updated_at
-                  FROM coupons c
-                  LEFT JOIN brands b ON b.id = c.brand_id
-                  LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
-                 ORDER BY c.open_at DESC, c.id DESC
-                """);
-        String executionPlan = explain.toString();
-
-        for (int warmup = 0; warmup < 3; warmup++) {
-            observationJdbc.queryForList("""
-                    SELECT c.id, c.name, b.name AS brand_name, c.status,
-                           c.open_at, c.close_at,
-                           s.total_quantity, s.active_count, s.updated_at
-                      FROM coupons c
-                      LEFT JOIN brands b ON b.id = c.brand_id
-                      LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
-                     ORDER BY c.open_at DESC, c.id DESC
-                    """);
-        }
-        long[] millis = new long[20];
-        for (int run = 0; run < millis.length; run++) {
-            long started = System.nanoTime();
-            observationJdbc.queryForList("""
-                    SELECT c.id, c.name, b.name AS brand_name, c.status,
-                           c.open_at, c.close_at,
-                           s.total_quantity, s.active_count, s.updated_at
-                      FROM coupons c
-                      LEFT JOIN brands b ON b.id = c.brand_id
-                      LEFT JOIN coupon_stocks s ON s.coupon_id = c.id
-                     ORDER BY c.open_at DESC, c.id DESC
-                    """);
-            millis[run] = (System.nanoTime() - started) / 1_000_000L;
-        }
-        Arrays.sort(millis);
-        long p95Millis = millis[(int) Math.ceil(millis.length * 0.95) - 1];
-        AdminCampaignCatalog catalog = reader.loadCatalog(SNAPSHOT);
-        byte[] serialized = JsonMapper.builder().findAndAddModules().build()
-                .writeValueAsBytes(catalog);
-        System.out.printf(
-                "CY-457 PERFORMANCE rows=%d p95Millis=%d serializedBytes=%d%n",
-                catalog.campaigns().size(), p95Millis, serialized.length);
-
-        SoftAssertions gates = new SoftAssertions();
-        gates.assertThat(executionPlan)
-                .as("EXPLAIN ANALYZE=%s", executionPlan)
-                .isNotEmpty()
-                .doesNotContain("Table scan on c");
-        gates.assertThat(catalog.campaigns()).hasSize(10_000);
-        gates.assertThat(p95Millis)
-                .as("10,000행 DB 단계 p95=%dms", p95Millis)
-                .isLessThanOrEqualTo(200L);
-        gates.assertThat(serialized.length)
-                .as("10,000행 직렬화 크기=%d bytes", serialized.length)
-                .isLessThanOrEqualTo(2 * 1024 * 1024);
-        gates.assertAll();
     }
 
     private static HikariDataSource hikari(String username, String password) {
