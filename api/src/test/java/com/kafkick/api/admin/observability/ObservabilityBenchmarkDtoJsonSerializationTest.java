@@ -58,7 +58,7 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                 new AdminMetricsResponse.TrafficMetrics(
                         pendingRate, pendingRate, pendingRate, pendingRate, pendingRate
                 ),
-                new AdminMetricsResponse.LatencyMetrics(null, null, null),
+                new AdminMetricsResponse.LatencyMetrics(null, null, null, List.of()),
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
                 List.of(),
@@ -195,7 +195,7 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                         zeroGap,
                         zeroGap),
                 new AdminMetricsResponse.TrafficMetrics(null, null, null, null, null),
-                new AdminMetricsResponse.LatencyMetrics(null, null, null),
+                new AdminMetricsResponse.LatencyMetrics(null, null, null, List.of()),
                 new AdminMetricsResponse.DependencyMetrics(null, null, null),
                 null,
                 List.of(),

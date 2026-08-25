@@ -19,6 +19,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencySn
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyGroupStat;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
@@ -90,7 +91,11 @@ class MockJsonMapperContractTest {
                 new LatencyMetrics(
                         observed(new LatencyPercentiles(10, 20, 30), SourceStatus.VALID),
                         absent(SourceStatus.UNAVAILABLE),
-                        absent(SourceStatus.N_A)),
+                        absent(SourceStatus.N_A),
+                        List.of(
+                                new LatencyGroupStat("issue",
+                                        observed(new LatencyPercentiles(10, 20, 30), SourceStatus.VALID)),
+                                new LatencyGroupStat("read", absent(SourceStatus.PENDING)))),
                 new DependencyMetrics(
                         observed(new DependencySnapshot(4, 8, 0.01), SourceStatus.WARMING_UP),
                         absent(SourceStatus.PENDING),

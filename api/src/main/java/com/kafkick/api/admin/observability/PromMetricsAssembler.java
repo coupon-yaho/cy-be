@@ -23,6 +23,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.DependencySn
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClass;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorClassKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.ErrorMetrics;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyGroupStat;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.LatencyPercentiles;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
@@ -670,16 +671,38 @@ public class PromMetricsAssembler {
      * 읽힙니다. 이름에 집계 방식을 박을 자리가 계약에 없으므로 <b>화면이 '인스턴스 최댓값'
      * 라벨을 붙여야 합니다</b> — 그 자리를 계약에 만드는 것은 A 와 합의할 항목입니다.</p>
      *
+     * <p>{@code groups} 는 같은 성공 경로를 URI 그룹 다섯 종으로 편 것입니다. 미터는 이미 그룹마다
+     * Timer 를 등록하고 있어(HttpMetrics) 계측도 질의도 늘지 않습니다 — 조립기가 ISSUE 하나만
+     * 골라 오던 것을 그만둘 뿐입니다. <b>표본이 없는 그룹도 목록에서 빼지 않습니다</b>: 이유는
+     * 값이 아니라 상태가 냅니다.</p>
+     *
      * <p>정책 거절과 시스템 실패 지연은 원천이 없어 PENDING 입니다. OBS-4 의 Timer 는
      * {@code outcome} 을 success · failure 둘로만 등록해 실패 안에서 두 경로가 섞여 있고,
      * 1ms 미만인 정책 거절을 시스템 실패로 실으면 화면이 정확히 반대로 읽습니다.</p>
      */
     private static LatencyMetrics latency(QueryResult latency, Freshness freshness) {
+        List<LatencyGroupStat> groups = new ArrayList<>();
+        for (UriGroup group : UriGroup.values()) {
+            groups.add(new LatencyGroupStat(group.tagValue(), successPercentiles(latency, group, freshness)));
+        }
         return new LatencyMetrics(
-                percentiles(latency, inGroup(UriGroup.ISSUE).and(label(TAG_OUTCOME, OUTCOME_SUCCESS)),
-                        freshness),
+                successPercentiles(latency, UriGroup.ISSUE, freshness),
                 pending(),
-                pending());
+                pending(),
+                List.copyOf(groups));
+    }
+
+    /**
+     * 한 URI 그룹의 성공 경로 백분위입니다.
+     *
+     * <p><b>{@code latency.success} 와 {@code groups} 의 issue 항목이 같은 헬퍼를 부릅니다.</b>
+     * 필터를 두 번 쓰면 한쪽만 고쳐질 수 있고, 그러면 화면이 같은 수치를 두 자리에서 다르게
+     * 읽습니다.</p>
+     */
+    private static ObservedValue<LatencyPercentiles> successPercentiles(
+            QueryResult latency, UriGroup group, Freshness freshness) {
+        return percentiles(
+                latency, inGroup(group).and(label(TAG_OUTCOME, OUTCOME_SUCCESS)), freshness);
     }
 
     private static ObservedValue<LatencyPercentiles> percentiles(
@@ -712,9 +735,23 @@ public class PromMetricsAssembler {
                 freshness.observedAt());
     }
 
+    /**
+     * 인스턴스 최댓값을 냅니다(DEC-02).
+     *
+     * <p><b>{@code instance} 라벨이 없는 표본은 버립니다.</b> 어느 대의 백분위인지 모르는 값을
+     * 최댓값 후보로 넣으면 어느 인스턴스의 것도 아닌 지연이 VALID 로 나갑니다 — 값이 정상
+     * 범위라 예외도 로그도 남지 않습니다. CY-449 가 자원 사용률에서 내린 것과 같은 판단이고
+     * 같은 형태입니다({@link #percent} 의 byInstance 그룹핑).</p>
+     *
+     * <p>반대 방향 대가 — 원천이 instance 라벨을 떨구면(federation · recording rule) 지연이
+     * 값을 못 내고 PENDING 으로 굳습니다. 틀린 값을 권위 있게 내보내는 것보다 낫다고 봅니다.</p>
+     */
     private static OptionalDouble quantile(List<PromSample> samples, String quantile) {
         return reduceOrUnknown(MetricAggregation.HTTP_LATENCY_SECONDS,
-                samples.stream().filter(label(TAG_QUANTILE, quantile)).toList());
+                samples.stream()
+                        .filter(label(TAG_QUANTILE, quantile))
+                        .filter(sample -> !sample.label(TAG_INSTANCE).isEmpty())
+                        .toList());
     }
 
     private static double millis(OptionalDouble seconds) {
