@@ -55,13 +55,16 @@ public class AttemptLiveConsumer {
     private final Counter admitted;
     private final Counter dropped;
     private final Counter appendFailures;
+    private final AttemptContractViolationCounter violations;
 
     public AttemptLiveConsumer(
             AttemptLiveSink sink,
             StratifiedSampler sampler,
             Clock clock,
-            MeterRegistry meterRegistry
+            MeterRegistry meterRegistry,
+            AttemptContractViolationCounter violations
     ) {
+        this.violations = Objects.requireNonNull(violations, "violations");
         this.sink = Objects.requireNonNull(sink, "sink");
         this.sampler = Objects.requireNonNull(sampler, "sampler");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -102,8 +105,11 @@ public class AttemptLiveConsumer {
             // 리스너를 부르기 <b>전에</b> 던져서 에러 핸들러로 가므로 여기 오지 않는다(실측:
             // 이 분기에 프로브를 심고 알 수 없는 enum 을 태웠더니 도달 0회였다).
             //
-            // 그래도 남겨 둔다. 이 토픽에 null 값이 올 일은 없지만, 오면 아래에서 NPE 가 되고
-            // live 는 그것을 계약 위반으로 잘못 집계한다.
+            // null 은 유효한 IssuanceFlowEvent 가 아니므로 <b>세고</b> 넘어간다. 조용히
+            // acknowledge 하면 "이 토픽에 null 이 올 일은 없다" 는 주장이 영원히 검증되지
+            // 않는다 — 그 일이 실제로 벌어져도 아무 지표도 안 움직인다.
+            violations.record(new IllegalArgumentException("Kafka 레코드 값이 null 이다"),
+                    record.topic(), record.partition(), record.offset());
             return;
         }
         if (!sampler.sample(event)) {

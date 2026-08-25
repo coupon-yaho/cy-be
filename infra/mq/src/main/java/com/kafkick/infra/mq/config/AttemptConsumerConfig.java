@@ -179,18 +179,20 @@ public class AttemptConsumerConfig {
             AttemptLiveSink sink,
             StratifiedSampler sampler,
             ObjectProvider<Clock> clocks,
-            ObjectProvider<MeterRegistry> meterRegistries) {
+            ObjectProvider<MeterRegistry> meterRegistries,
+            AttemptContractViolationCounter violations) {
         return new AttemptLiveConsumer(sink, sampler, clocks.getIfAvailable(Clock::systemUTC),
-                requireMeterRegistry(meterRegistries));
+                requireMeterRegistry(meterRegistries), violations);
     }
 
     @Bean
     public AttemptArchiveConsumer attemptArchiveConsumer(
             AttemptArchive archive,
             ObjectProvider<Clock> clocks,
-            ObjectProvider<MeterRegistry> meterRegistries) {
+            ObjectProvider<MeterRegistry> meterRegistries,
+            AttemptContractViolationCounter violations) {
         return new AttemptArchiveConsumer(archive, clocks.getIfAvailable(Clock::systemUTC),
-                requireMeterRegistry(meterRegistries));
+                requireMeterRegistry(meterRegistries), violations);
     }
 
     private static ConsumerFactory<String, IssuanceFlowEvent> consumerFactory(

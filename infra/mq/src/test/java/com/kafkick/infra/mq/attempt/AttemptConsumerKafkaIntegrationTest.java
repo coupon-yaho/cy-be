@@ -261,6 +261,34 @@ class AttemptConsumerKafkaIntegrationTest {
                 .as("DB 장애는 계약 위반이 아니다").isZero();
     }
 
+    /**
+     * <b>값이 {@code null} 인 레코드도 세고 넘어간다.</b>
+     *
+     * <p>이 토픽에 null 이 올 일은 없다 — 프로듀서가 언제나 이벤트를 싣는다. 그런데 조용히
+     * acknowledge 하면 그 "올 일이 없다" 가 <b>영원히 검증되지 않는다.</b> 실제로 벌어져도
+     * 아무 지표가 안 움직이고, 화면과 DB 에서 그만큼이 그냥 없어진다.
+     *
+     * <p>역직렬화 실패와는 다른 경로다. 그쪽은 컨테이너가 리스너를 부르기 전에 던진다(실측으로
+     * 도달 0회를 확인했다). 이건 리스너까지 들어오는 진짜 null 이다.
+     */
+    @Test
+    void countsNullRecordValuesAsContractViolationsAndMovesOn() throws Exception {
+        SimpleMeterRegistry violationMeters = new SimpleMeterRegistry();
+        List<AttemptLiveEntry> seen = new CopyOnWriteArrayList<>();
+        startLive(seen::add, "null-live", new SimpleMeterRegistry(), violationMeters);
+
+        publish(1, null);
+        publish(1, MAPPER.writeValueAsString(attempt(701L)));
+
+        await().atMost(SETTLE).untilAsserted(() ->
+                assertThat(seen).extracting(AttemptLiveEntry::memberId)
+                        .as("null 하나가 뒤를 막으면 701 이 안 온다").containsExactly(701L));
+        await().atMost(SETTLE).untilAsserted(() ->
+                assertThat(counter(violationMeters, DomainMeterNames.ATTEMPT_CONTRACT_VIOLATIONS))
+                        .as("버린 것은 지표에 남아야 한다").isEqualTo(1.0));
+        assertThat(committedOffset("null-live", 1)).isEqualTo(endOffset(1));
+    }
+
     /** {@code ingestedAt} 은 컨슈머가 찍는다 — 프로듀서 시계가 아니다. */
     @Test
     void stampsIngestedAtOnArrival() throws Exception {
@@ -293,12 +321,12 @@ class AttemptConsumerKafkaIntegrationTest {
         // 층화 규칙은 StratifiedSamplerTest 가 따로 고정한다.
         StratifiedSampler sampler = new StratifiedSampler(
                 new AttemptSamplingProperties(0, Integer.MAX_VALUE, 64), Clock.systemUTC());
+        AttemptContractViolationCounter violations = new AttemptContractViolationCounter(violationMeters);
         AttemptLiveConsumer consumer = new AttemptLiveConsumer(
-                sink, sampler, Clock.systemUTC(), consumerMeters);
+                sink, sampler, Clock.systemUTC(), consumerMeters, violations);
         AttemptConsumerConfig config = new AttemptConsumerConfig();
         start(config.attemptLiveListenerContainerFactory(
-                        config.attemptLiveConsumerFactory(connection(), MAPPER),
-                        new AttemptContractViolationCounter(violationMeters)),
+                        config.attemptLiveConsumerFactory(connection(), MAPPER), violations),
                 groupId, consumer::consume);
     }
 
@@ -317,12 +345,12 @@ class AttemptConsumerKafkaIntegrationTest {
 
     private static void startArchive(
             AttemptArchive archive, String groupId, Clock clock, SimpleMeterRegistry violationMeters) {
+        AttemptContractViolationCounter violations = new AttemptContractViolationCounter(violationMeters);
         AttemptArchiveConsumer consumer =
-                new AttemptArchiveConsumer(archive, clock, new SimpleMeterRegistry());
+                new AttemptArchiveConsumer(archive, clock, new SimpleMeterRegistry(), violations);
         AttemptConsumerConfig config = new AttemptConsumerConfig();
         start(config.attemptArchiveListenerContainerFactory(
-                        config.attemptArchiveConsumerFactory(connection(), MAPPER),
-                        new AttemptContractViolationCounter(violationMeters)),
+                        config.attemptArchiveConsumerFactory(connection(), MAPPER), violations),
                 groupId, consumer::consume);
     }
 

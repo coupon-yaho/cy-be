@@ -45,8 +45,11 @@ public class AttemptArchiveConsumer {
     private final Clock clock;
     private final Counter inserted;
     private final Counter duplicate;
+    private final AttemptContractViolationCounter violations;
 
-    public AttemptArchiveConsumer(AttemptArchive archive, Clock clock, MeterRegistry meterRegistry) {
+    public AttemptArchiveConsumer(AttemptArchive archive, Clock clock, MeterRegistry meterRegistry,
+            AttemptContractViolationCounter violations) {
+        this.violations = Objects.requireNonNull(violations, "violations");
         this.archive = Objects.requireNonNull(archive, "archive");
         this.clock = Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(meterRegistry, "meterRegistry");
@@ -64,8 +67,11 @@ public class AttemptArchiveConsumer {
             // 값이 진짜로 null 인 레코드다 — 역직렬화 실패가 아니다. 실패한 레코드는 컨테이너가
             // 리스너를 부르기 <b>전에</b> 던져서 에러 핸들러로 간다(실측으로 도달 0회를 확인했다).
             //
-            // 이쪽에서는 남겨 두는 이유가 더 무겁다. archive 는 리스너 예외를 무한 재시도하므로,
-            // null 하나가 NPE 가 되면 그 파티션의 적재가 영원히 멈춘다.
+            // 이쪽에서는 넘어가는 것이 더 중요하다. archive 는 리스너 예외를 무한 재시도하므로,
+            // null 하나가 NPE 가 되면 그 파티션의 적재가 영원히 멈춘다. live 와 같은 이름으로
+            // 세고 넘어간다 — 버린 것은 어느 쪽이든 지표에 남아야 한다.
+            violations.record(new IllegalArgumentException("Kafka 레코드 값이 null 이다"),
+                    record.topic(), record.partition(), record.offset());
             acknowledgment.acknowledge();
             return;
         }

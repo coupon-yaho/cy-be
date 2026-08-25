@@ -261,7 +261,11 @@ class AttemptLiveStreamIntegrationTest {
         stream.append(entry(1L));
 
         for (String malformed : new String[] {
-                "abc", "1-2-3", "99999999999999999999999", "-", "+", "5-", "1 2", "1-0; FLUSHALL"}) {
+                "abc", "1-2-3", "99999999999999999999999", "-", "+", "5-", "1 2", "1-0; FLUSHALL",
+                // ⚠️ 아래 둘은 자릿수 검사만으로는 안 걸린다. 부호 없는 64비트 상한이
+                //    18446744073709551615 라 같은 20자리인데 그 위다 — 정규식은 통과시키고
+                //    Redis 가 ERR Invalid stream ID 로 거부해 화면이 500 이 됐다.
+                "99999999999999999999", "1-99999999999999999999"}) {
             AttemptLivePage page = stream.readAfter(malformed, 10);
 
             assertThat(page.cursorExpired()).as("커서 [%s]", malformed).isTrue();

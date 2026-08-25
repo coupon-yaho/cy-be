@@ -80,14 +80,18 @@ public final class AttemptLiveStream implements AttemptLiveSink, AttemptLiveRead
     private static final String STREAM_END = "+";
 
     /**
-     * Redis Stream ID 형식. {@code ms} 또는 {@code ms-seq} 이고 각 부분은 부호 없는 64비트라
-     * 최대 20자리다.
+     * Redis Stream ID 형식. {@code ms} 또는 {@code ms-seq} 이고 각 부분은 <b>부호 없는 64비트</b>다.
      *
      * <p>형식을 여기서 거르지 않으면 커서가 Redis 커맨드로 그대로 내려가 드라이버 예외가 되고,
      * 그것이 500 으로 나가면서 <b>공격자가 넣은 문자열이 스택트레이스와 함께 로그에 실린다</b>
      * (개행 포함 가능 — 로그 인젝션). 게다가 화면 입장에서는 커서를 지우는 방법이 없어 관제가
      * 통째로 멈춘다. 형식이 틀린 커서는 트림된 커서와 <b>같은 복구</b>(머리부터 다시 읽기)가
      * 맞으므로 같은 경로로 보낸다.
+     *
+     * <p><b>자릿수만 보면 안 된다.</b> 처음에는 {@code \d{1,20}} 으로 잡았는데, 부호 없는 64비트
+     * 상한이 {@code 18446744073709551615} 라 같은 20자리인 {@code 99999999999999999999} 가
+     * 그 위다. 정규식은 통과시키고 Redis 가 거부해서, 걸러 내려던 500 이 그 입력으로만 그대로
+     * 남아 있었다. 그래서 모양은 정규식이 보고 <b>값의 범위는 파싱이</b> 본다.
      */
     private static final Pattern STREAM_ID = Pattern.compile("\\d{1,20}(-\\d{1,20})?");
 
@@ -242,6 +246,26 @@ public final class AttemptLiveStream implements AttemptLiveSink, AttemptLiveRead
         if (trimmed.length() > MAX_CURSOR_LENGTH || !STREAM_ID.matcher(trimmed).matches()) {
             return null;
         }
-        return trimmed;
+        return withinUnsignedRange(trimmed) ? trimmed : null;
+    }
+
+    /**
+     * 두 부분이 모두 부호 없는 64비트 안인지 본다.
+     *
+     * <p>{@code Long.parseUnsignedLong} 이 상한을 정확히 안다 — 자릿수로 근사하면 20자리
+     * 경계에서 틀린다. 여기서 안 걸러 낸 값은 Redis 가 {@code ERR Invalid stream ID} 로
+     * 거부하고, 그 예외가 관제 화면의 500 이 된다.
+     */
+    private static boolean withinUnsignedRange(String streamId) {
+        int dash = streamId.indexOf('-');
+        String millis = dash < 0 ? streamId : streamId.substring(0, dash);
+        String sequence = dash < 0 ? "0" : streamId.substring(dash + 1);
+        try {
+            Long.parseUnsignedLong(millis);
+            Long.parseUnsignedLong(sequence);
+            return true;
+        } catch (NumberFormatException outOfRange) {
+            return false;
+        }
     }
 }
