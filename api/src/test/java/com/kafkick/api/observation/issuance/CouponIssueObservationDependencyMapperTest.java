@@ -28,9 +28,13 @@ class CouponIssueObservationDependencyMapperTest {
             Dependency dependency
     ) {
         BusinessException failure = new BusinessException(errorCode);
+        CouponIssueObservationFailure classified = mapper.classify(failure);
 
         assertThat(errorCode.reasonCode()).contains(reasonCode);
         assertThat(errorCode.dependency()).isEqualTo(dependency);
+        assertThat(classified.httpStatus()).isEqualTo(errorCode.getStatus());
+        assertThat(classified.reasonCode()).isEqualTo(reasonCode);
+        assertThat(classified.dependency()).isEqualTo(dependency);
         assertThat(mapper.reasonCode(failure)).isEqualTo(reasonCode);
         assertThat(mapper.dependency(failure)).isEqualTo(dependency);
     }
@@ -42,6 +46,7 @@ class CouponIssueObservationDependencyMapperTest {
         assertThat(mapper.reasonCode(failure))
                 .isEqualTo(ReasonCode.INTERNAL_ERROR);
         assertThat(mapper.dependency(failure)).isEqualTo(Dependency.NONE);
+        assertThat(mapper.classify(failure).httpStatus()).isEqualTo(500);
     }
 
     @Test
@@ -53,6 +58,7 @@ class CouponIssueObservationDependencyMapperTest {
         assertThat(mapper.reasonCode(failure))
                 .isEqualTo(ReasonCode.INTERNAL_ERROR);
         assertThat(mapper.dependency(failure)).isEqualTo(Dependency.MYSQL);
+        assertThat(mapper.classify(failure).httpStatus()).isEqualTo(500);
     }
 
     @Test

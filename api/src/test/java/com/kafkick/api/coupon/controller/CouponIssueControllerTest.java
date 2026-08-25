@@ -98,6 +98,40 @@ class CouponIssueControllerTest {
     }
 
     @Test
+    @DisplayName("요청 ID 헤더가 없으면 필터가 생성한 ID로 발급한다")
+    void issueCouponWithGeneratedRequestId() throws Exception {
+        when(observationCoordinator.issue(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(10L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.eq(MembershipGrade.GOLD),
+                org.mockito.ArgumentMatchers.eq(IDEMPOTENCY_KEY)
+        )).thenReturn(issueResult());
+
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "GOLD"
+                        )
+                        .header(
+                                CouponRequestHeaders.IDEMPOTENCY_KEY,
+                                IDEMPOTENCY_KEY
+                        ))
+                .andExpect(status().isCreated());
+
+        verify(observationCoordinator).issue(
+                org.mockito.ArgumentMatchers.argThat(requestId ->
+                        requestId.matches("[0-9a-f]{32}")
+                ),
+                org.mockito.ArgumentMatchers.eq(10L),
+                org.mockito.ArgumentMatchers.eq(20L),
+                org.mockito.ArgumentMatchers.eq(MembershipGrade.GOLD),
+                org.mockito.ArgumentMatchers.eq(IDEMPOTENCY_KEY)
+        );
+    }
+
+    @Test
     @DisplayName("동일한 멱등키로 재시도하면 같은 발급 응답을 반환한다")
     void replayIssueWithSameIdempotencyKey() throws Exception {
         when(observationCoordinator.issue(
