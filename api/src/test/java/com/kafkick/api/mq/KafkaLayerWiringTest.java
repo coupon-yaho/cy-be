@@ -37,9 +37,6 @@ import com.kafkick.testsupport.CommittedConfigStager;
         "kafka.enabled=true",
         "kafka.provision-topics=false",
         "observation.datasource.enabled=false",
-        // [OBS-36] 관리자 화면 fixture 는 이제 기본값이 꺼짐이다. 이 테스트는 Kafka 배선을
-        // 보는 것이지 fixture 를 보는 것이 아니라서, 컨텍스트가 뜨도록 켜 준다.
-        "admin.mock.enabled=true",
         "coupon.idempotency.wait-timeout=1s",
         "coupon.idempotency.poll-interval=50ms",
         "coupon.idempotency.stale-after=30s",

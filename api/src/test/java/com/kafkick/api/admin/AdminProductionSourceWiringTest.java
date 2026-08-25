@@ -19,11 +19,30 @@ class AdminProductionSourceWiringTest {
         Path productionRoot = Path.of("src/main/java");
         List<Path> productionSources = filesUnder(productionRoot);
 
-        assertThat(productionRoot.resolve("java/com/kafkick/api/admin/support/config/AdminFixtureConfig.java"))
+        assertThat(productionRoot.resolve("com/kafkick/api/admin/support/config/AdminFixtureConfig.java"))
                 .doesNotExist();
         assertThat(productionSources)
                 .allSatisfy(source -> assertThat(Files.readString(source))
                         .doesNotContain("admin.mock.enabled", "ADMIN_MOCK_ENABLED"));
+    }
+
+    /** 배포 예시는 공통 Mock을 제거하고 분석 Mock만 운영 기본 false로 둡니다. */
+    @Test
+    void keepsOnlyAnalyticsMockSettingInDeploymentExamples() throws IOException {
+        Path repositoryRoot = Path.of("..").toAbsolutePath().normalize();
+        String environmentExample = Files.readString(repositoryRoot.resolve(".env.example"));
+        String deploymentExample = Files.readString(repositoryRoot.resolve("application.yml.example"));
+        String ideExample = Files.readString(Path.of("src/main/resources/application.yml.example"));
+
+        assertThat(environmentExample)
+                .contains("ADMIN_ANALYTICS_MOCK_ENABLED=false")
+                .doesNotContain("ADMIN_MOCK_ENABLED");
+        assertThat(deploymentExample)
+                .contains("mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:false}")
+                .doesNotContain("admin.mock.enabled", "ADMIN_MOCK_ENABLED");
+        assertThat(ideExample)
+                .contains("개발·데모 전용", "mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:true}")
+                .doesNotContain("admin.mock.enabled", "ADMIN_MOCK_ENABLED");
     }
 
     /** 생산 소스 트리를 재귀적으로 읽되 test source Fixture는 검사 대상에서 제외합니다. */
