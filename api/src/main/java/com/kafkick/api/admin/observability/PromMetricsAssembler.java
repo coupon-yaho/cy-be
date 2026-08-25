@@ -3,6 +3,7 @@ package com.kafkick.api.admin.observability;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +44,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficKey;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.TrafficMetrics;
 import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.admin.support.ObservedValue;
+import com.kafkick.api.observation.http.HttpMetrics.LatencyOutcome;
 import com.kafkick.api.observation.http.HttpMetricsFilter.UriGroup;
 import com.kafkick.api.observation.http.ResultClassifier.ResultClass;
 import com.kafkick.core.admin.MetricsWindow;
@@ -82,18 +84,15 @@ public class PromMetricsAssembler {
     private static final String TAG_QUANTILE = "quantile";
     // ── 지연 Timer 의 outcome 라벨 값 ──────────────────────────────────────────
     //
-    // 정의는 LatencyOutcome 이고 여기는 그 라벨을 읽는 쪽이다. 계측이 쓰는 enum 을 조립기가
-    // 직접 참조하면 서블릿 필터 내부 타입이 관리자 응답 조립기까지 끌려온다 — 대신 값을 여기
-    // 적고, 세 상수와 저쪽 enum 이 갈리지 않는 것은 HttpLatencyOutcomeContractTest 가 지킨다.
+    // [OBS-44] 사본 세 개를 걷어내고 LatencyOutcome 을 직접 읽는다. 계측 enum 을 참조하지 않으려
+    // 값을 여기 적어 두었으나, 이제 조립기가 라벨만이 아니라 접는 규칙 자체를 써야 한다 —
+    // 지연 축의 분모가 그 축으로 접히는 결과 분류이기 때문이다(latencyTraffic). 규칙을 옮겨
+    // 적으면 분류가 늘어날 때 한쪽만 고쳐지고, 그때 지연 축과 그 분모가 다른 집합을 가리킨다.
+    // 라벨 오타 위험도 컴파일 단계로 올라간다 — HttpLatencyOutcomeContractTest 가 런타임에서만
+    // 잡던 것이다. 같은 패키지의 UriGroup · ResultClass 는 이미 같은 이유로 참조하고 있다.
     //
-    // ⚠️ 그 테스트가 없으면 라벨 오타가 빈 결과 = PENDING 으로만 보인다. 화면에서 그것은
-    //    "아직 안 만들었다" 와 똑같아 예외도 로그도 남지 않는다. 셋 다 같은 위험을 진다.
-    //
-    // success 는 이미 계약 상수가 있으므로 사본을 만들지 않는다 — 시계열 조립기도 같은 것을
-    // 읽어, 스냅샷과 추세선이 서로 다른 문자열을 보는 일이 구조적으로 생기지 않는다.
-    private static final String OUTCOME_SUCCESS = OverviewPrometheusContract.SUCCESS;
-    private static final String OUTCOME_POLICY_REJECT = "policy_reject";
-    private static final String OUTCOME_SYSTEM_FAILURE = "system_failure";
+    // ⚠️ success 만은 계약 상수와도 같아야 한다. 시계열 조립기가 그쪽을 읽으므로 갈리면
+    //    스냅샷과 추세선이 서로 다른 문자열을 본다 — 그 한 줄은 계약 테스트가 잇는다.
 
     /**
      * 자원 행이 볼 인스턴스. <b>batch 도 같은 미터를 냅니다</b> — CPU · heap · HikariCP 를 함께
@@ -179,10 +178,13 @@ public class PromMetricsAssembler {
 
         // 분모는 한 번만 만들어 트래픽과 실패율이 나눠 쓴다. 각자 만들면 같은 스냅샷 안에서
         // 분자와 분모가 다른 시점을 가리킬 수 있다.
-        ObservedValue<Double> attempts =
-                rate(results, inGroup(UriGroup.ISSUE), http, SourceStatus.NO_TRAFFIC);
+        // 분모를 믿을 수 있는지도 한 번만 판정한다. 트래픽·실패율·지연이 같은 표본을 보므로
+        // 각자 판정하면 한 화면에서 한 칸은 "요청 0 건", 다른 칸은 "모름" 이 된다.
+        boolean denominatorTrusted = denominatorTrusted(http, window, evaluatedAt);
+        ObservedValue<Double> attempts = rate(
+                results, inGroup(UriGroup.ISSUE), http, SourceStatus.NO_TRAFFIC, denominatorTrusted);
         // 처리량도 한 번만 만든다. 큐 패널의 '입장 처리' 가 이 안의 값을 그대로 다시 쓴다.
-        TrafficMetrics traffic = traffic(attempts, results, http);
+        TrafficMetrics traffic = traffic(attempts, results, http, denominatorTrusted);
 
         return new AdminMetricsResponse(
                 // 예산에 얼마나 근접했는지가 이 값으로만 보인다. 잘려서 UNAVAILABLE 이 나오기
@@ -193,11 +195,11 @@ public class PromMetricsAssembler {
                 window,
                 consistency(consistency, domain, query),
                 traffic,
-                latency(latency, http),
+                latency(latency, results, http, denominatorTrusted),
                 dependencies(),
                 notWiredYet(),
                 List.of(),
-                errors(attempts, results, http, failureReasons),
+                errors(attempts, results, http, failureReasons, denominatorTrusted),
                 saturation(saturation, http, stock, traffic, query));
     }
 
@@ -453,18 +455,20 @@ public class PromMetricsAssembler {
      * 중일 때 시스템 실패 0 을 NO_TRAFFIC 으로 내보내면 화면이 그 패널만 회색으로 죽입니다.</p>
      */
     private static TrafficMetrics traffic(
-            ObservedValue<Double> attempts, QueryResult results, Freshness freshness) {
+            ObservedValue<Double> attempts, QueryResult results, Freshness freshness,
+            boolean denominatorTrusted) {
         Predicate<PromSample> issue = inGroup(UriGroup.ISSUE);
         SourceStatus zeroState =
                 attempts.state() == SourceStatus.NO_TRAFFIC ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
         return new TrafficMetrics(
                 attempts,
-                rate(results, issue.and(result(ResultClass.SUCCESS)), freshness, zeroState),
-                rate(results, result(ResultClass.QUEUE_ACCEPTED), freshness, zeroState),
-                rate(results, issue.and(result(ResultClass.POLICY_REJECT)), freshness, zeroState),
-                rate(results, issue.and(
-                        systemFailure()),
-                        freshness, zeroState));
+                rate(results, issue.and(result(ResultClass.SUCCESS)), freshness, zeroState,
+                        denominatorTrusted),
+                rate(results, result(ResultClass.QUEUE_ACCEPTED), freshness, zeroState,
+                        denominatorTrusted),
+                rate(results, issue.and(result(ResultClass.POLICY_REJECT)), freshness, zeroState,
+                        denominatorTrusted),
+                rate(results, issue.and(systemFailure()), freshness, zeroState, denominatorTrusted));
     }
 
     private static Predicate<PromSample> inGroup(UriGroup group) {
@@ -489,7 +493,8 @@ public class PromMetricsAssembler {
     }
 
     private static ObservedValue<Double> rate(
-            QueryResult results, Predicate<PromSample> filter, Freshness freshness, SourceStatus zeroState) {
+            QueryResult results, Predicate<PromSample> filter, Freshness freshness,
+            SourceStatus zeroState, boolean denominatorTrusted) {
         if (results.unavailable()) {
             return unavailable();
         }
@@ -512,9 +517,22 @@ public class PromMetricsAssembler {
             //    다른 로그가 묻힌다. 값이 UNAVAILABLE 로 나가는 것 자체가 신호다.
             return unavailable();
         }
-        SourceStatus state = freshness.stale()
-                ? SourceStatus.STALE
-                : (reduced.getAsDouble() == 0d ? zeroState : SourceStatus.VALID);
+        if (freshness.stale()) {
+            // STALE 이 먼저다. 이 상태가 이미 "믿지 마라" 를 싣고 있으므로 아래 게이트로 값을
+            // 거두면 오히려 신호가 준다 — PENDING 은 "아직 안 나옴" 이라 낡음을 말하지 못한다.
+            return new ObservedValue<>(reduced.getAsDouble(), SourceStatus.STALE, freshness.observedAt());
+        }
+        if (reduced.getAsDouble() == 0d && !denominatorTrusted) {
+            // [OBS-44] 0 은 여기서만 "없었다" 라는 주장이 된다. 아무 경고도 붙지 않는 구간에서
+            // 그 단정만 거둔다 — 인스턴스 하나가 스크레이프에서 빠지면 살아 있는 쪽 합이 0 이어도
+            // 빠진 쪽이 처리하던 요청은 알 수 없다({@link #denominatorTrusted}).
+            //
+            // 0 이 아닌 값은 그대로 내보낸다. 그쪽도 부분 탈락이면 과소 집계지만, 값을 거두면
+            // 화면에 아무것도 안 남는다. 거두는 것은 "0 이므로 없었다" 라는 단정 하나뿐이고,
+            // 지연 축이 같은 구간에서 N_A 를 거두는 것과 같은 규칙이다.
+            return pending();
+        }
+        SourceStatus state = reduced.getAsDouble() == 0d ? zeroState : SourceStatus.VALID;
         return new ObservedValue<>(reduced.getAsDouble(), state, freshness.observedAt());
     }
 
@@ -534,7 +552,8 @@ public class PromMetricsAssembler {
             ObservedValue<Double> attempts,
             QueryResult results,
             Freshness freshness,
-            QueryResult failureReasons) {
+            QueryResult failureReasons,
+            boolean denominatorTrusted) {
         Predicate<PromSample> issue = inGroup(UriGroup.ISSUE);
         return new ErrorMetrics(
                 TrafficKey.ISSUE_ATTEMPT_RPS,
@@ -542,22 +561,22 @@ public class PromMetricsAssembler {
                         errorClass(ErrorClassKey.DEPENDENCY_FAILURE, "의존성 실패",
                                 "httpStatus >= 500 && dependency != NONE", false,
                                 results, issue.and(result(ResultClass.DEPENDENCY_FAILURE)),
-                                freshness, attempts),
+                                freshness, attempts, denominatorTrusted),
                         errorClass(ErrorClassKey.APPLICATION_FAILURE, "애플리케이션 실패",
                                 "httpStatus >= 500 && dependency == NONE", false,
                                 results, issue.and(result(ResultClass.APPLICATION_FAILURE)),
-                                freshness, attempts),
+                                freshness, attempts, denominatorTrusted),
                         // 요청 계약 위반이다. 서버가 실패한 것이 아니므로 분자에서 뺀다.
                         errorClass(ErrorClassKey.CLIENT_INVALID, "클라이언트 요청 오류",
                                 "4xx 중 403·409 를 뺀 나머지 (400·401·404·422·429)", true,
                                 results, issue.and(result(ResultClass.CLIENT_INVALID)),
-                                freshness, attempts),
+                                freshness, attempts, denominatorTrusted),
                         // 설계된 동작이다. 분자에 넣으면 재고 소진 구간에서 실패율이 100% 에 붙는다.
                         errorClass(ErrorClassKey.POLICY_REJECT, "정책 거절",
                                 "의도된 403 · 409", true,
                                 results, issue.and(result(ResultClass.POLICY_REJECT)),
-                                freshness, attempts)),
-                topReasons(failureReasons, freshness));
+                                freshness, attempts, denominatorTrusted)),
+                topReasons(failureReasons, freshness, denominatorTrusted));
     }
 
     private static ErrorClass errorClass(
@@ -568,11 +587,21 @@ public class PromMetricsAssembler {
             QueryResult results,
             Predicate<PromSample> filter,
             Freshness freshness,
-            ObservedValue<Double> attempts) {
-        // 분자가 0 인 것은 "요청이 없었다" 가 아니라 "그 실패가 한 건도 없었다" 이므로 VALID 다.
-        ObservedValue<Double> numerator = rate(results, filter, freshness, SourceStatus.VALID);
+            ObservedValue<Double> attempts,
+            boolean denominatorTrusted) {
+        // 분자가 0 인 것은 "요청이 없었다" 가 아니라 "그 실패가 한 건도 없었다" 이므로 zeroState
+        // 는 VALID 다. 다만 그 VALID 까지 가려면 분모를 믿을 수 있어야 한다 — 낡지도 않고
+        // 관측 시각도 아는데 그 시각이 집계 창 밖이면 {@link #rate} 가 이 0 도 PENDING 으로
+        // 거둔다. 부분 탈락 구간에서는 빠진 인스턴스가 그 실패를 냈는지 알 수 없어 "한 건도
+        // 없었다" 역시 단정이기 때문이다. 그래서 트래픽이 흐르는 중에도(attempts 는 값을 실은
+        // VALID) 분류 표만 PENDING 인 구간이 생긴다.
+        //
+        // 나머지 두 사유는 게이트까지 오지 않는다 — 시각 미상은 absent() 가 PENDING·UNAVAILABLE
+        // 로, STALE 은 값과 함께 STALE 로 그 앞에서 이미 갈라 낸다.
+        ObservedValue<Double> numerator =
+                rate(results, filter, freshness, SourceStatus.VALID, denominatorTrusted);
         return new ErrorClass(key, label, definition, excludedFromNumerator,
-                failureRate(numerator, attempts));
+                failureRate(numerator, attempts, denominatorTrusted));
     }
 
     /**
@@ -593,7 +622,8 @@ public class PromMetricsAssembler {
      * 드러나야 합니다. 잘라 두면 그 배선 오류가 화면에서 정상으로 보입니다.</p>
      */
     private static ObservedValue<Double> failureRate(
-            ObservedValue<Double> numerator, ObservedValue<Double> attempts) {
+            ObservedValue<Double> numerator, ObservedValue<Double> attempts,
+            boolean denominatorTrusted) {
         if (numerator.state() == SourceStatus.UNAVAILABLE
                 || attempts.state() == SourceStatus.UNAVAILABLE) {
             return unavailable();
@@ -603,7 +633,17 @@ public class PromMetricsAssembler {
             return pending();
         }
         if (attempts.value() == 0d) {
-            return notApplicable();
+            // [OBS-44] 0 인 분모가 값을 싣고 여기까지 오는 길이 하나 있다 — STALE 이다
+            // ({@link #rate} 가 STALE 을 게이트보다 먼저 내보낸다). 그 0 으로 "비율이 정의되지
+            // 않는다" 를 단정하면, 낡은 표본에서 나온 0 을 확정된 0 으로 읽는 것이 된다.
+            // 믿을 수 없는 0 은 "정의되지 않는다" 가 아니라 "모른다" 다.
+            //
+            // ⚠️ 이 갈래로도 낡았다는 사실 자체는 화면에 못 싣는다. PENDING 도 N_A 도
+            //    carriesValue()==false 라 시각을 못 달고, STALE 로 내보내려면 값이 있어야 하는데
+            //    (ObservedValue 생성자가 강제한다) 여기 실을 값은 정의되지 않는 비율뿐이다.
+            //    상태·값 규약을 건드려야 하는 일이라 이 티켓에서 하지 않았다. 낡음은 같은
+            //    스냅샷의 처리량 칸이 STALE 로 싣고 있다.
+            return denominatorTrusted ? notApplicable() : pending();
         }
         if (!numerator.state().carriesValue()) {
             // 그 결과의 시계열이 아직 없다. 0 이 아니라 모르는 것이다.
@@ -634,10 +674,13 @@ public class PromMetricsAssembler {
      * 근거가 없습니다. {@link #rate} 가 처리량·실패율에 거는 것과 같은 판정입니다.</p>
      *
      * <p>신선도는 HTTP 미터의 것을 씁니다. 같은 JVM 의 같은 scrape 로 나오는 미터라 나이가
-     * 같습니다 — 따로 물으면 질의만 하나 더 늘고 답은 같습니다.</p>
+     * 같습니다 — 따로 물으면 질의만 하나 더 늘고 답은 같습니다. <b>[OBS-44] 나이가 같으면
+     * 믿을 수 있는지도 같습니다</b> — 그래서 {@link #denominatorTrusted} 도 함께 받습니다.
+     * 인스턴스 하나가 스크레이프에서 빠지면 이 카운터도 똑같이 살아 있는 쪽만 합산되고, 그때의
+     * 전 행 0 은 "이 사유는 한 건도 없었다" 라는 같은 종류의 단정입니다.</p>
      */
     private static ObservedValue<List<TopReason>> topReasons(
-            QueryResult failureReasons, Freshness freshness) {
+            QueryResult failureReasons, Freshness freshness, boolean denominatorTrusted) {
         if (failureReasons.unavailable()) {
             return unavailable();
         }
@@ -657,10 +700,22 @@ public class PromMetricsAssembler {
         }
         if (rows.isEmpty()) {
             // 시계열이 아직 하나도 없다. "실패 없음" 과 다르다 — 빈 목록으로 내려보내면 둘이 같아진다.
+            //
+            // ⚠️ [OBS-44] 아래 게이트의 PENDING 과 여기가 같은 값으로 나간다. 앞은 배선을
+            //    고쳐야 하는 사건이고 뒤는 기다리면 되는 사건인데 화면이 둘을 못 가른다. 가르려면
+            //    표에 사유를 실을 자리가 없어 ErrorMetrics 계약을 넓혀야 한다 — 화면이 취할
+            //    행동은 둘 다 "기다려라" 라 실해가 없어 이 티켓에서 하지 않았다.
             return pending();
         }
         if (!freshness.known()) {
             return absent(freshness);
+        }
+        if (!denominatorTrusted && !freshness.stale()
+                && rows.stream().allMatch(row -> row.rps() == 0d)) {
+            // 행 단위로 0 만 지우면 남은 순위가 멀쩡한 것처럼 보인다 — 음수 표본을 표째로
+            // 비우는 위 규칙과 같은 입도로 표째 물러난다. STALE 은 제외한다: 그쪽은 값과 함께
+            // 낡았다는 사실을 싣고 나가므로 여기서 거두면 신호가 준다({@link #rate} 와 같다).
+            return pending();
         }
         rows.sort(Comparator.comparingDouble(TopReason::rps).reversed()
                 .thenComparing(row -> row.reasonCode().name()));
@@ -702,15 +757,19 @@ public class PromMetricsAssembler {
      * 여기서 그룹을 합치면 같은 값이 두 축으로 나가고, 합친 백분위는 애초에 만들 수 없습니다
      * (인스턴스별로 계산된 값이라 평균·합산 불가).</p>
      */
-    private static LatencyMetrics latency(QueryResult latency, Freshness freshness) {
+    private static LatencyMetrics latency(
+            QueryResult latency, QueryResult results, Freshness freshness, boolean denominatorTrusted) {
         List<LatencyGroupStat> groups = new ArrayList<>();
         for (UriGroup group : UriGroup.values()) {
-            groups.add(new LatencyGroupStat(group.tagValue(), successPercentiles(latency, group, freshness)));
+            groups.add(new LatencyGroupStat(group.tagValue(),
+                    successPercentiles(latency, results, group, freshness, denominatorTrusted)));
         }
         return new LatencyMetrics(
-                successPercentiles(latency, UriGroup.ISSUE, freshness),
-                outcomePercentiles(latency, UriGroup.ISSUE, OUTCOME_POLICY_REJECT, freshness),
-                outcomePercentiles(latency, UriGroup.ISSUE, OUTCOME_SYSTEM_FAILURE, freshness),
+                successPercentiles(latency, results, UriGroup.ISSUE, freshness, denominatorTrusted),
+                outcomePercentiles(latency, results, UriGroup.ISSUE, LatencyOutcome.POLICY_REJECT,
+                        freshness, denominatorTrusted),
+                outcomePercentiles(latency, results, UriGroup.ISSUE, LatencyOutcome.SYSTEM_FAILURE,
+                        freshness, denominatorTrusted),
                 List.copyOf(groups));
     }
 
@@ -722,8 +781,10 @@ public class PromMetricsAssembler {
      * 읽습니다.</p>
      */
     private static ObservedValue<LatencyPercentiles> successPercentiles(
-            QueryResult latency, UriGroup group, Freshness freshness) {
-        return outcomePercentiles(latency, group, OUTCOME_SUCCESS, freshness);
+            QueryResult latency, QueryResult results, UriGroup group, Freshness freshness,
+            boolean denominatorTrusted) {
+        return outcomePercentiles(
+                latency, results, group, LatencyOutcome.SUCCESS, freshness, denominatorTrusted);
     }
 
     /**
@@ -734,13 +795,112 @@ public class PromMetricsAssembler {
      * 그게 {@link #successPercentiles} 가 처음부터 경고하던 것과 같은 사고입니다.</p>
      */
     private static ObservedValue<LatencyPercentiles> outcomePercentiles(
-            QueryResult latency, UriGroup group, String outcome, Freshness freshness) {
+            QueryResult latency, QueryResult results, UriGroup group, LatencyOutcome outcome,
+            Freshness freshness, boolean denominatorTrusted) {
         return percentiles(
-                latency, inGroup(group).and(label(TAG_OUTCOME, outcome)), freshness);
+                latency,
+                inGroup(group).and(label(TAG_OUTCOME, outcome.tagValue())),
+                freshness,
+                latencyTraffic(results, group, outcome, denominatorTrusted));
     }
 
+    /**
+     * 결과 rate 의 0 을 <b>"트래픽이 없었다"</b> 로 읽어도 되는지입니다.
+     *
+     * <p><b>인스턴스 하나가 스크레이프에서 빠지는 것이 이 판정이 막는 사건입니다.</b>
+     * {@link #httpFreshnessQuery} 가 나이를 {@code max} 로 재는 이유가 그것이고(살아 있는
+     * 인스턴스가 죽은 인스턴스를 가리면 안 됩니다), 분모는 반대로 살아 있는 인스턴스만 합산해
+     * 0 이 됩니다. 그 0 을 트래픽 없음으로 읽으면 빠진 인스턴스가 처리하던 요청이 화면에서
+     * "요청 0 건" 이 됩니다.</p>
+     *
+     * <p><b>전체 스크레이프가 끊기는 쪽은 여기까지 오지 않습니다.</b> {@code rate} 는 창 안에
+     * 표본이 둘 미만이면 값을 내지 않으므로, 중단이 창을 넘기면 분모가 0 이 아니라 <b>비어서</b>
+     * 옵니다 — {@link #latencyTraffic} 의 {@code isEmpty()} 가 먼저 받습니다.</p>
+     *
+     * <p><b>세 가지를 모두 만족해야 믿습니다.</b></p>
+     * <ul>
+     *   <li>관측 시각을 안다 — 모르면 창 전체가 관측 뒤인지 판단할 근거가 없습니다.</li>
+     *   <li>STALE 이 아니다 — {@link #rate} 가 같은 표본에 이미 거는 조건입니다. 저쪽만 걸면
+     *       같은 스냅샷에서 처리량은 STALE 인데 지연은 N_A 가 됩니다.</li>
+     *   <li><b>가장 오래된 관측 시각이 집계 창 안에 있다.</b> STALE 검사만으로는 부족합니다 —
+     *       {@code staleAfter}(기본 120초)가 창(최소 60초)보다 길어, 빠진 인스턴스의 나이가
+     *       60~120초인 구간은 창을 이미 넘겼는데도 신선도가 정상으로 나옵니다.</li>
+     * </ul>
+     *
+     * <p>믿을 수 없으면 N_A 가 아니라 PENDING 으로 물러납니다({@link SourceStatus#N_A} 규약).
+     * 백분위 <b>값</b>은 이 판정과 무관하게 그대로 나갑니다 — 이것이 가르는 것은 값이 없을 때의
+     * 상태뿐입니다.</p>
+     */
+    private static boolean denominatorTrusted(
+            Freshness freshness, MetricsWindow window, Instant evaluatedAt) {
+        if (!freshness.known() || freshness.stale()) {
+            return false;
+        }
+        return Duration.between(freshness.observedAt(), evaluatedAt).toSeconds() < window.seconds();
+    }
+
+    /**
+     * 한 지연 축을 채운 요청이 실제로 있었는지입니다.
+     *
+     * <p><b>지연 원천만으로는 알 수 없어서 결과 rate 를 함께 봅니다.</b> 백분위 질의의 라벨은
+     * {@code uri_group · outcome · quantile · instance} 뿐이라, 빈 결과의 원인 셋 — 트래픽 0 ·
+     * Micrometer expiry 만료 · 원천 장애 — 이 전부 같은 빈 결과로 보입니다.</p>
+     *
+     * <p><b>질의는 늘지 않습니다.</b> {@link #assemble} 이 이미 받아 온 결과 rate 표본을 인자로
+     * 넘겨 접을 뿐입니다.</p>
+     *
+     * <p><b>분모는 그룹 전체가 아니라 그 축에 접히는 결과 분류입니다.</b>
+     * {@code HttpMetrics.record} 가 결과 Counter 와 지연 Timer 를 한 호출에서 함께 올리므로,
+     * {@link LatencyOutcome#of} 로 접은 이 집합이 그 Timer 를 채운 요청과 정확히 같습니다.
+     * 그룹 전체를 쓰면 트래픽이 전부 성공인 동안 실패 두 축이 "기다릴 표본이 없는데 기다리라"
+     * 는 PENDING 으로 굳습니다. 접는 규칙을 여기 옮겨 적지 않는 이유도 같습니다 — 분류가
+     * 늘어날 때 한쪽만 고쳐지면 지연 축과 그 분모가 다른 집합을 가리킵니다.</p>
+     *
+     * <p><b>분모를 믿을 수 있을 때만 0 을 트래픽 없음으로 읽습니다.</b> 판정은
+     * {@link #denominatorTrusted} 하나에 있습니다 — 신선도를 안 보면 스크레이프가 끊긴 동안
+     * 흐르는 트래픽이 "요청 0 건" 으로 그려집니다.</p>
+     *
+     * <p><b>반대 방향 대가 — 지연이 결과 질의에 기대게 됩니다.</b> 예산이 잘려 결과 질의가
+     * 죽으면 이 판정이 {@code UNKNOWN} 으로 떨어집니다. 지연 값 자체는 그대로 살아 있고
+     * (백분위는 지연 질의에서 나옵니다) 값이 없을 때의 상태만 N_A 대신 PENDING 으로 물러납니다.
+     * 질의 순서상 지연이 결과보다 먼저라, 예산이 모자라면 결과가 먼저 잘립니다.</p>
+     */
+    private static LatencyTraffic latencyTraffic(
+            QueryResult results, UriGroup group, LatencyOutcome outcome, boolean denominatorTrusted) {
+        if (results.unavailable() || !denominatorTrusted) {
+            return LatencyTraffic.UNKNOWN;
+        }
+        OptionalDouble reduced = reduceOrUnknown(MetricAggregation.HTTP_RESULT_TOTAL,
+                results.filter(inGroup(group).and(foldsInto(outcome))));
+        if (reduced.isEmpty()) {
+            // 결과 시계열이 아직 없다(등록 전). "트래픽이 없었다" 를 단정할 근거가 아니다.
+            return LatencyTraffic.UNKNOWN;
+        }
+        // 음수를 따로 막지 않는다. {@link #rate} 는 값을 내보내야 해서 막지만, 여기서 쓰는 것은
+        // "0 인가" 뿐이고 음수 합은 결코 0 이 아니라 트래픽 없음으로 읽힐 수 없다 — 막는 코드를
+        // 두면 테스트로 깨뜨릴 수 없는 방어가 된다.
+        return reduced.getAsDouble() == 0d ? LatencyTraffic.ZERO : LatencyTraffic.PRESENT;
+    }
+
+    /** {@link LatencyOutcome#of} 가 이 축으로 접는 결과 분류들입니다. 규칙은 저쪽 하나뿐입니다. */
+    private static Predicate<PromSample> foldsInto(LatencyOutcome outcome) {
+        return sample -> Arrays.stream(ResultClass.values())
+                .filter(resultClass -> LatencyOutcome.of(resultClass) == outcome)
+                .anyMatch(resultClass -> result(resultClass).test(sample));
+    }
+
+    /**
+     * 백분위가 비었을 때 그 원인을 가르는 신호입니다.
+     *
+     * <p>{@code ZERO} 만 N_A 로 갑니다. {@code UNKNOWN} 은 PENDING 으로 물러납니다 — rate 를
+     * 못 읽었을 뿐 트래픽이 있었을 수 있고, "트래픽 없음" 을 단정하면 이 티켓이 없애려는
+     * 거짓말을 다른 자리에서 다시 만듭니다. PENDING 은 정보가 아니라 정직함입니다.</p>
+     */
+    private enum LatencyTraffic { PRESENT, ZERO, UNKNOWN }
+
     private static ObservedValue<LatencyPercentiles> percentiles(
-            QueryResult latency, Predicate<PromSample> filter, Freshness freshness) {
+            QueryResult latency, Predicate<PromSample> filter, Freshness freshness,
+            LatencyTraffic traffic) {
         if (latency.unavailable()) {
             return unavailable();
         }
@@ -749,7 +909,9 @@ public class PromMetricsAssembler {
         OptionalDouble p95 = quantile(matched, Q_P95);
         OptionalDouble p99 = quantile(matched, Q_P99);
         if (p50.isEmpty() || p95.isEmpty() || p99.isEmpty()) {
-            return pending();
+            // 출구 하나가 아니다. 아래 p99<=0 도 같은 사건의 다른 얼굴이라 같은 규칙으로 가른다 —
+            // 한쪽만 고치면 트래픽 0 이 표본 유무에 따라 두 상태로 갈린다.
+            return emptyPercentiles(traffic);
         }
         if (!freshness.known()) {
             return absent(freshness);
@@ -761,16 +923,26 @@ public class PromMetricsAssembler {
         // 레지스트리를, 이쪽은 Prometheus 를 읽어 원천이 달라 코드를 공유할 수 없다. 한쪽만
         // 고치면 두 경로가 다른 값을 그리므로 함께 고친다.
         if (p99.getAsDouble() <= 0d) {
-            return pending();
+            return emptyPercentiles(traffic);
         }
-        // TODO(OBS-44): 표본 없음과 트래픽 없음이 여기서 같은 PENDING 으로 합쳐진다. 가르려면
-        // 결과 Counter 의 rate 가 필요한데 이 메서드는 지연 원천만 본다. NO_TRAFFIC 은
-        // carriesValue()==true 라 값 없이 낼 수 없고, 실을 값이 (0,0,0) 뿐이라 바로 위 금지
-        // 규칙과 정면으로 부딪친다 — 상태·값 규약부터 정해야 하는 일이라 따로 뗐다.
         return new ObservedValue<>(
                 new LatencyPercentiles(millis(p50), millis(p95), millis(p99)),
                 freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID,
                 freshness.observedAt());
+    }
+
+    /**
+     * 값을 낼 수 없는 백분위의 상태입니다.
+     *
+     * <p>요청이 0 건이면 백분위는 <b>정의되지 않습니다</b> — 늦게 오는 값이 아니라 없는 값이라
+     * N_A 입니다. 그 밖에는 PENDING 이고 뜻이 그대로입니다: 표본이 아직 없으니 expiry 창을 봐라.</p>
+     *
+     * <p>둘 다 {@code carriesValue()==false} 라 값을 지어낼 필요가 없습니다. {@code NO_TRAFFIC} 을
+     * 쓰지 못하는 이유가 이것입니다 — 그쪽은 값을 요구하는데 실을 값이 (0,0,0) 뿐이고, 그 0 은
+     * 바로 위 p99&lt;=0 금지가 실측 근거를 달고 막고 있습니다.</p>
+     */
+    private static ObservedValue<LatencyPercentiles> emptyPercentiles(LatencyTraffic traffic) {
+        return traffic == LatencyTraffic.ZERO ? notApplicable() : pending();
     }
 
     /**

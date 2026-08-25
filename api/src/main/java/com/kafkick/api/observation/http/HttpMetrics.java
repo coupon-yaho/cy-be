@@ -55,8 +55,9 @@ public final class HttpMetrics {
      * 지연 Timer 의 {@code outcome} 라벨 값이다.
      *
      * <p>결과 여섯 분류를 지연 관점에서 넷으로 접는다. <b>접는 규칙은 여기 한 곳에만 있다</b> —
-     * 조립기가 라벨 문자열을 따로 적어 두므로, 이름을 바꾸면 그쪽 상수도 함께 바뀌어야 한다.
-     * 그 두 곳을 잇는 것은 {@code HttpLatencyOutcomeContractTest} 다.
+     * [OBS-44] 조립기가 사본 상수를 두지 않고 이 enum 을 직접 읽으므로, 이름을 바꾸면 라벨도
+     * 함께 움직인다. 이 라벨과 Micrometer 가 실제로 다는 태그가 같은지는
+     * {@code HttpLatencyOutcomeContractTest} 가 지킨다.
      */
     public enum LatencyOutcome {
         SUCCESS,
