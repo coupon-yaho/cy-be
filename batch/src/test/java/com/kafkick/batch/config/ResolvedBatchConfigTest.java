@@ -380,7 +380,7 @@ class ResolvedBatchConfigTest {
     }
 
     @Test
-    @DisplayName("크론 다섯이 실제로 파싱된다 — 넷은 배선됐고 하나(verify-incremental)만 자리 표시다")
+    @DisplayName("설정에 있는 크론 다섯이 전부 파싱된다")
     void scheduleCronsParse() {
         try (ConfigurableApplicationContext context = HermeticBoot.run(
                 LOCATION, "--spring.main.web-application-type=none")) {
@@ -523,10 +523,11 @@ class ResolvedBatchConfigTest {
      * JVM 기본 타임존으로 크론을 풀고, {@code CronSlot} 은 {@code TimeProvider}
      * ({@code Clock.systemUTC})가 준 값으로 푼다. 개발 기기가 KST 면 그 둘이 9시간 어긋난다.
      *
-     * <p>지금 기본값 {@code 0 *}{@code /5 * * * *} 에서만 우연히 안 드러난다 — 실존하는 오프셋이
-     * 전부 15분 배수라 UTC 로 옮겨도 5분 슬롯 위에 떨어진다. <b>시(hour) 필드가 들어가는 순간
-     * 깨지고</b>, 그때 {@code asOf} 가 몇 시간 과거가 되는데 {@code asOf <= now} 는 계속
-     * 성립하므로 가드도 안 울린다.
+     * <p>5분 크론이던 시절에는 우연히 안 드러났다 — 실존하는 오프셋이 전부 15분 배수라
+     * UTC 로 옮겨도 5분 슬롯 위에 떨어진다. <b>시(hour) 필드가 들어가는 순간 깨지고</b>,
+     * 그때 {@code asOf} 가 몇 시간 과거가 되는데 {@code asOf <= now} 는 계속 성립하므로
+     * 가드도 안 울린다. <b>지금 크론 셋이 전부 그 모양이다</b> — 만료 04:10 · 정리 04:30 ·
+     * 검증 05:00. 이 단언이 지키는 것이 가정이 아니라 현재 배선이다.
      */
     @Test
     @DisplayName("스케줄러의 존이 앱 시계의 존과 같다")
