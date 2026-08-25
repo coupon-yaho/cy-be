@@ -125,6 +125,42 @@ class LatencySeriesOutcomeContractTest {
         }
     }
 
+    /**
+     * 원천 존재 질의가 회차 구간을 <b>남김없이</b> 덮는지 봅니다.
+     *
+     * <p>회차 시각은 {@code datetime(6)} 이라 소수초가 있습니다. {@code getEpochSecond()} 끼리
+     * 빼면 그게 잘려 구간이 최대 1초 짧아지고, 앞쪽에만 표본이 있던 축을 못 보고 "재지
+     * 못했다" 로 <b>영구히</b> 적습니다. archive 는 불변이라 소급 정정이 안 됩니다.</p>
+     */
+    @Test
+    @DisplayName("원천 존재 질의 구간은 회차 구간을 남김없이 덮는다")
+    void sourceProbeWindowCoversTheWholeRun() {
+        assertCovers("2026-08-25T00:00:00.100Z", "2026-08-25T00:00:10.900Z", 11L);
+        assertCovers("2026-08-25T00:00:00.900Z", "2026-08-25T00:00:10.100Z", 10L);
+        assertCovers("2026-08-25T00:00:00Z", "2026-08-25T00:01:05Z", 65L);
+
+        // 길이가 0 이거나 뒤집힌 구간. PromQL 구간은 양수여야 한다.
+        assertThat(PromQueryClient.probeWindowSeconds(
+                Instant.parse("2026-08-25T00:00:00Z"), Instant.parse("2026-08-25T00:00:00Z")))
+                .isEqualTo(1L);
+        assertThat(PromQueryClient.probeWindowSeconds(
+                Instant.parse("2026-08-25T00:00:10Z"), Instant.parse("2026-08-25T00:00:00Z")))
+                .isEqualTo(1L);
+    }
+
+    private static void assertCovers(String start, String end, long expectedSeconds) {
+        Instant from = Instant.parse(start);
+        Instant to = Instant.parse(end);
+        long window = PromQueryClient.probeWindowSeconds(from, to);
+
+        assertThat(window)
+                .as("%s ~ %s", start, end)
+                .isEqualTo(expectedSeconds);
+        assertThat(from.plusSeconds(window))
+                .as("질의 구간이 회차 끝에 못 미치면 앞쪽 표본을 못 본다")
+                .isAfterOrEqualTo(to);
+    }
+
     @Test
     @DisplayName("archive 지연 질의도 축마다 하나씩, 성공 축의 뜻은 그대로다")
     void archiveLatencyQueriesAreSplitByOutcome() {

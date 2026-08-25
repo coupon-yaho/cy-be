@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -185,8 +186,33 @@ public class PromQueryClient implements PromQuery, PromTimeQuery, RunTimeseriesA
     public boolean sourceExists(Metric metric, Instant start, Instant end) {
         Objects.requireNonNull(start, "start");
         Objects.requireNonNull(end, "end");
-        long windowSeconds = Math.max(1L, end.getEpochSecond() - start.getEpochSecond());
-        return !query(sourceProbeFor(metric, windowSeconds), end).isEmpty();
+        return !query(sourceProbeFor(metric, probeWindowSeconds(start, end)), end).isEmpty();
+    }
+
+    /**
+     * 원천 존재 질의가 덮을 구간의 길이(초)입니다.
+     *
+     * <p><b>올림입니다.</b> {@code count_over_time(m[Ns])} 를 {@code end} 에서 평가하면
+     * {@code (end-N, end]} 를 보므로, 회차 구간을 <b>남김없이 덮으려면</b> N 이 실제 길이
+     * 이상이어야 합니다. {@code getEpochSecond()} 끼리 빼면 소수초가 잘려 구간이 최대 1초
+     * 짧아집니다 — {@code 00:00:00.100Z ~ 00:00:10.900Z} 는 실제 10.8초인데 10초가 됩니다.
+     * 그러면 앞쪽 0.8초에만 표본이 있던 축을 못 보고 <b>"재지 못했다" 로 영구히 적습니다</b>.
+     * 회차 시각은 {@code datetime(6)} 이라 소수초가 실제로 생깁니다.</p>
+     *
+     * <p><b>반대 방향 실패</b> — 올림이라 구간을 최대 1초 <b>더</b> 덮습니다. 회차 시작 직전
+     * 1초에만 있던 축을 "있었다" 로 읽을 수 있지만, 이 미터는 Micrometer 가 기동 시점에
+     * 등록해 프로세스 수명 내내 유지하므로 그 1초에만 존재할 수는 없습니다. 덜 덮는 쪽은
+     * 그런 방어가 없어 이쪽을 택합니다.</p>
+     *
+     * <p>0 이하는 1초로 올립니다. PromQL 구간은 양수여야 하고, 길이가 0 인 회차는 애초에
+     * 표본이 없습니다.</p>
+     */
+    static long probeWindowSeconds(Instant start, Instant end) {
+        Duration window = Duration.between(start, end);
+        if (window.isNegative() || window.isZero()) {
+            return 1L;
+        }
+        return window.getNano() == 0 ? window.getSeconds() : window.getSeconds() + 1L;
     }
 
     /**
