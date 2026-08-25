@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.overview.mock;
+package com.kafkick.api.admin.support.fixture;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -6,8 +6,6 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-
-import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
@@ -31,14 +29,13 @@ import com.kafkick.core.observation.Severity;
 import static com.kafkick.core.observation.SourceStatus.*;
 
 /**
- * 캠페인 저장소가 준비되기 전 관리자 운영현황 화면 Fixture를 생성합니다.
+ * 관리자 운영현황 테스트에서 사용할 화면 Fixture를 생성합니다.
  *
  * <p>실행 날짜에 따라 오픈 임박 판정이 달라지지 않도록 절대 날짜를 저장하지 않고, 호출자가 전달한
  * 스냅샷 시각을 기준으로 모든 캠페인 시각을 상대적으로 생성합니다. 이 정책·수치는 운영 기본값이
  * 아니라 화면 조립·표시 시나리오 전용 Fixture입니다.</p>
  */
-@Component
-public class AdminOverviewMockDataFactory {
+public class AdminOverviewTestFixture {
 
     /**
      * O1~O4 조립을 검증할 운영·오픈 임박·준비 미완료·종료 화면 시나리오를 생성합니다.
@@ -47,10 +44,10 @@ public class AdminOverviewMockDataFactory {
      * @return 동일한 기준 시각으로 생성한 캠페인 원천과 조치 후보
      * @throws NullPointerException snapshotAt이 {@code null}인 경우
      */
-    public AdminOverviewMockDataset create(Instant snapshotAt) {
+    public AdminOverviewTestDataset create(Instant snapshotAt) {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
 
-        // TODO: 캠페인별 실제 발급 관측 조회가 제공되면 Mock 입력 생성을 해당 조회 결과로 교체합니다.
+        // Controller 계약을 고정하도록 발급 관측 입력은 테스트 내에서 명시적으로 생성합니다.
         OverviewCalculationPolicy policy = new OverviewCalculationPolicy(
                 0.50,
                 Duration.ofMinutes(2),
@@ -122,7 +119,7 @@ public class AdminOverviewMockDataFactory {
                 snapshotAt.minus(Duration.ofHours(5)), snapshotAt.minus(Duration.ofHours(1)),
                 EngineVersion.V1, null, null, null, N_A, preparation(true, snapshotAt));
 
-        // 준비 미완료 판정은 Mock 원천에서 확정하고 집계 계산기는 판정 결과만 소비합니다.
+        // 준비 미완료 판정은 fixture에서 확정하고 집계 계산기는 판정 결과만 소비합니다.
         AdminOverviewSnapshot.OperationActionItem incompleteAction =
                 new AdminOverviewSnapshot.OperationActionItem(
                         incompleteCampaign.couponId(),
@@ -169,7 +166,7 @@ public class AdminOverviewMockDataFactory {
                         new OutcomeCount(AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 9L)),
                 VALID, snapshotAt);
 
-        return new AdminOverviewMockDataset(policy, issuanceFlowInputs, queueInputs, outcomeInput,
+        return new AdminOverviewTestDataset(policy, issuanceFlowInputs, queueInputs, outcomeInput,
                 List.of(admissionStoppedCampaign, depletionCampaign, decreasingQueueCampaign,
                         readyScheduledCampaign, incompleteCampaign, closedCampaign),
                 List.of(incompleteAction),
@@ -178,7 +175,7 @@ public class AdminOverviewMockDataFactory {
                 aggregateIssuanceRate(snapshotAt), latencySummary(snapshotAt));
     }
 
-    /** Mock에서 확정한 준비 완료 여부를 정상 관측값으로 만듭니다. */
+    /** Fixture에서 확정한 준비 완료 여부를 정상 관측값으로 만듭니다. */
     private static PreparationObservation preparation(boolean completed, Instant observedAt) {
         return new PreparationObservation(completed, VALID, observedAt);
     }
@@ -208,7 +205,7 @@ public class AdminOverviewMockDataFactory {
                         applicableGapValue, overIssued));
     }
 
-    /** 엔진별 적용 gap만 VALID로 두고 FINAL verdict·severity와 모순되지 않는 Mock 평가를 만듭니다. */
+    /** 엔진별 적용 gap만 VALID로 두고 FINAL verdict·severity와 모순되지 않는 평가 fixture를 만듭니다. */
     private static ConsistencyEvaluation finalEvaluation(
             Instant snapshotAt,
             EngineVersion engineVersion,

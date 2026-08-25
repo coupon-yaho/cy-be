@@ -27,7 +27,15 @@ import com.kafkick.api.caller.CallerFilter;
 import com.kafkick.api.caller.HeaderCallerResolver;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
-import com.kafkick.core.admin.couponmetrics.mock.AdminCouponMetricsMockDataFactory;
+import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
+import com.kafkick.api.admin.support.fixture.AdminCouponMetricsTestFixture;
+import com.kafkick.api.admin.support.fixture.AdminOverviewTestDataset;
+import com.kafkick.api.admin.support.fixture.AdminOverviewTestFixture;
+import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
+import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
+import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsCalculator;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
@@ -37,18 +45,20 @@ import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
-import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataFactory;
-import com.kafkick.core.admin.overview.mock.AdminOverviewMockDataset;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.QueueMode;
+import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
+import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
 import com.kafkick.core.support.TimeProvider;
 
 /**
@@ -73,26 +83,46 @@ public final class AdminControllerContractTestSupport {
 
     /** 지정한 Clock으로 관리자 Overview의 실제 Service 조립을 재사용합니다. */
     public static AdminOverviewService overviewService(Clock clock) {
-        AdminOverviewMockDataFactory factory = new AdminOverviewMockDataFactory();
+        AdminOverviewTestFixture fixture = new AdminOverviewTestFixture();
+        return overviewService(clock, campaignReader(fixture), fixture);
+    }
+
+    /** 오류 분기 HTTP 계약 테스트가 지정한 Core Reader를 Overview에도 그대로 사용합니다. */
+    public static AdminOverviewService overviewService(
+            Clock clock,
+            AdminCampaignDataReader reader
+    ) {
+        return overviewService(clock, reader, new AdminOverviewTestFixture());
+    }
+
+    private static AdminOverviewService overviewService(
+            Clock clock,
+            AdminCampaignDataReader reader,
+            AdminOverviewTestFixture fixture
+    ) {
+        Instant snapshotAt = clock.instant();
         return new AdminOverviewService(
                 new TimeProvider(clock),
-                factory,
-                overviewObservationSource(factory),
+                reader,
+                new ReadOnlyRuntimeConfigStore(new RuntimeConfigSnapshot(
+                        EngineVersion.V1, ReleaseStage.V1, QueueMode.OFF,
+                        1L, snapshotAt, "test", SourceStatus.VALID)),
+                fixture.create(snapshotAt).policy(),
+                overviewObservationSource(fixture),
                 new IssuanceFlowCalculator(),
                 new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(),
                 new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(),
                 new CampaignOverviewCalculator(),
-                new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
                 new OverviewStatusCalculator());
     }
 
-    /** Controller 계약 테스트에서만 Mock Dataset을 기술 중립 관측 묶음으로 제공합니다. */
-    private static OverviewObservationSource overviewObservationSource(AdminOverviewMockDataFactory factory) {
+    /** Controller 계약 테스트의 고정 Dataset을 기술 중립 관측 묶음으로 제공합니다. */
+    private static OverviewObservationSource overviewObservationSource(AdminOverviewTestFixture fixture) {
         return request -> {
-            AdminOverviewMockDataset dataset = factory.create(request.snapshotAt());
+            AdminOverviewTestDataset dataset = fixture.create(request.snapshotAt());
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateIssuanceRate> aggregatePending =
                     new AdminOverviewSnapshot.Observation<>(null, SourceStatus.PENDING, null);
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> sourceObservation =
@@ -112,7 +142,10 @@ public final class AdminControllerContractTestSupport {
             }
             return new OverviewObservationData(
                     request,
-                    dataset.issuanceFlowInputs(),
+                    dataset.issuanceFlowInputs().stream()
+                            .filter(input -> request.campaignTargets().stream()
+                                    .anyMatch(target -> target.couponId().equals(input.couponId())))
+                            .toList(),
                     dataset.outcomeInput(),
                     aggregatePending,
                     observedLatency);
@@ -121,10 +154,60 @@ public final class AdminControllerContractTestSupport {
 
     /** 지정한 Clock과 Overview 모집단으로 캠페인 상세 지표 실제 Service를 구성합니다. */
     public static AdminCouponMetricsService couponMetricsService(Clock clock) {
+        AdminOverviewTestFixture overviewFixture = new AdminOverviewTestFixture();
         return new AdminCouponMetricsService(
                 new TimeProvider(clock),
-                new AdminCouponMetricsMockDataFactory(new AdminOverviewMockDataFactory()),
+                campaignReader(overviewFixture),
                 new CouponMetricsCalculator());
+    }
+
+    /** 오류 분기 HTTP 계약 테스트가 지정한 Core Reader를 그대로 사용합니다. */
+    public static AdminCouponMetricsService couponMetricsService(
+            Clock clock,
+            AdminCampaignDataReader reader
+    ) {
+        return new AdminCouponMetricsService(
+                new TimeProvider(clock), reader, new CouponMetricsCalculator());
+    }
+
+    /** 기존 Controller JSON fixture를 Core Port 형태로만 제공해 API가 Storage 구현을 참조하지 않게 합니다. */
+    private static AdminCampaignDataReader campaignReader(AdminOverviewTestFixture overviewFixture) {
+        AdminCouponMetricsTestFixture detailFixture = new AdminCouponMetricsTestFixture(overviewFixture);
+        return new AdminCampaignDataReader() {
+            @Override
+            public AdminCampaignCatalog loadCatalog(Instant snapshotAt) {
+                AdminOverviewTestDataset dataset = overviewFixture.create(snapshotAt);
+                return new AdminCampaignCatalog(SourceStatus.VALID, snapshotAt,
+                        dataset.campaigns().stream()
+                                .map(campaign -> new AdminCampaignCatalog.CampaignData(
+                                        campaign.couponId(), campaign.campaignName(), campaign.brandName(),
+                                        campaign.status(), campaign.opensAt(), campaign.closesAt(),
+                                        new CouponMetricsSource.Observation<>(
+                                                campaign.stockStatus().carriesValue()
+                                                        ? new CouponMetricsSource.StockCounts(
+                                                        campaign.totalQuantity(), campaign.activeCount()) : null,
+                                                campaign.stockStatus(), campaign.stockObservedAt()),
+                                        new PreparationObservation(null, SourceStatus.PENDING, null)))
+                                .toList());
+            }
+
+            @Override
+            public AdminCampaignDetailData findDetail(
+                    long couponId,
+                    Instant fromInclusive,
+                    Instant toExclusive,
+                    Instant snapshotAt
+            ) {
+                return detailFixture.find(snapshotAt, couponId)
+                        .map(source -> new AdminCampaignDetailData(
+                                DetailAvailability.AVAILABLE,
+                                new AdminCampaignDetailData.DetailValue(
+                                        source.couponId(), "campaign-" + source.couponId(), "brand",
+                                        source.campaign(), source.stock(), source.holdingCounts(),
+                                        source.transitions())))
+                        .orElseGet(() -> new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null));
+            }
+        };
     }
 
     /** 지정한 Clock으로 관리자 브랜드 분석 Mock Service를 구성합니다. */

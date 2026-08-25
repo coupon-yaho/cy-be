@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.overview.mock;
+package com.kafkick.api.admin.support.fixture;
 
 import java.util.HashSet;
 import java.util.List;
@@ -15,7 +15,7 @@ import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.Outc
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
 
 /**
- * 한 관리자 운영현황 스냅샷에 사용할 Mock 계산 정책·관측 입력·캠페인 원천을 함께 보존합니다.
+ * 관리자 Controller 계약 테스트의 계산 정책·관측 입력·캠페인 원천을 함께 보존합니다.
  *
  * <p>두 목록을 같은 Dataset으로 묶어 캠페인 기본 목록과 그 캠페인에서 파생된 조치 판정이 서로
  * 다른 기준 시각이나 모집단을 사용하지 않도록 합니다.</p>
@@ -30,7 +30,7 @@ import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.Issuanc
  * @param aggregateIssuanceRate 전체 신규 발급 완료율 원천 관측값
  * @param latencySummary 성공·실패 응답 p99 원천 관측값
  */
-public record AdminOverviewMockDataset(
+public record AdminOverviewTestDataset(
         OverviewCalculationPolicy policy,
         List<IssuanceFlowInput> issuanceFlowInputs,
         List<QueueInput> queueInputs,
@@ -42,8 +42,8 @@ public record AdminOverviewMockDataset(
         AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> latencySummary
 ) {
 
-    /** 외부 변경으로 한 응답의 Mock 모집단이 달라지지 않도록 모든 컬렉션을 불변 복사합니다. */
-    public AdminOverviewMockDataset {
+    /** 외부 변경으로 한 테스트 응답의 모집단이 달라지지 않도록 모든 컬렉션을 불변 복사합니다. */
+    public AdminOverviewTestDataset {
         Objects.requireNonNull(policy, "policy");
         Objects.requireNonNull(issuanceFlowInputs, "issuanceFlowInputs");
         Objects.requireNonNull(queueInputs, "queueInputs");
