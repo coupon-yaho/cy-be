@@ -6,6 +6,7 @@ import jakarta.validation.constraints.PositiveOrZero;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.runtimeconfig.RuntimeConfigCommand;
 
 /**
  * revision 기반 전체 RuntimeConfig 교체 요청입니다.
@@ -20,4 +21,9 @@ public record RuntimeConfigUpdateRequest(
         @NotNull EngineVersion engineVersion,
         @NotNull ReleaseStage releaseStage,
         @NotNull QueueMode queueMode) {
+
+    /** HTTP 전체 교체 요청을 Core Runtime Config 갱신 명령으로 변환합니다. */
+    public RuntimeConfigCommand toCommand(String updatedBy) {
+        return new RuntimeConfigCommand(engineVersion, releaseStage, queueMode, updatedBy);
+    }
 }
