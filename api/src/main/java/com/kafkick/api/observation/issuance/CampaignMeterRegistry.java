@@ -161,6 +161,28 @@ public final class CampaignMeterRegistry implements AutoCloseable {
         queuedOutcome.increment();
     }
 
+    /**
+     * 미터를 실제로 걷어낸다. 실패하면 <b>남은 것을 들고 다시 예약한다.</b>
+     *
+     * <p>{@code removeCampaignMeters} 는 미터 하나의 제거 실패만 삼킨다(CY-435). 그 바깥에서
+     * 나는 예외 — tombstone 삽입, 맵 조작, 예약 거부 — 는 이 catch 로 온다. 여기서 로그만 남기면
+     * 남은 미터 회수가 그 캠페인에 대해 영원히 멈추고, 죽은 캠페인의 시계열이 계속 scrape 된다.
+     *
+     * <p><b>참조를 먼저 맡기는 것은 불변식이지 현재 도달 가능한 방어가 아니다.</b>
+     * {@code campaigns.remove()} 로 꺼낸 목록을 {@code pendingRetirements} 에 넣기 전에 던지면 그
+     * 캠페인은 두 맵 어디에도 없는 상태가 되고, 재시도가 와도 {@code pending} 은 null ·
+     * {@code campaigns.remove()} 도 null 이라 그 자리에서 돌아간다 — 미터는 레지스트리에 남은 채
+     * 참조를 잃고 되찾을 방법이 없다. <b>다만 지금 그 구간에서 던지는 경로는 없다</b> —
+     * {@code removeCampaignMeters} 가 미터별 {@code RuntimeException} 을 전부 삼키기 때문이다.
+     * 그래서 이 순서를 깨뜨려 실패하는 테스트를 쓸 수 없다. 순서를 이렇게 둔 것은 그 구간에
+     * 나중에 던지는 코드가 들어와도 불변식이 유지되게 하기 위한 것이고, 지금 무언가를 막고
+     * 있다고 읽으면 안 된다.
+     *
+     * <p>이 방어가 만드는 반대 방향 실패 — 계속 실패하는 원인(예: 레지스트리가 영구 거부)이면
+     * {@code retirementRetryDelay} 간격으로 무한히 재예약한다. 멈추지 않는 쪽을 고른 이유는
+     * 실패의 대부분이 일시적이고, 끊으면 그 캠페인이 재기동 전까지 회수되지 않기 때문이다.
+     * 반복은 {@link FailureLogThrottle} 이 로그를 간격당 한 줄로 눌러 조용히 돈다.
+     */
     private void retireNow(long couponId) {
         registrationGate.lock();
         try {
@@ -174,6 +196,8 @@ public final class CampaignMeterRegistry implements AutoCloseable {
                     return;
                 }
                 pending = new PendingRetirement(removed, removed.meters());
+                // 제거를 시도하기 전에 맡긴다 — 아래에서 터져도 참조가 살아 있어야 재시도가 뭔가를 붙잡는다.
+                pendingRetirements.put(couponId, pending);
             }
             List<Meter> remaining = removeCampaignMeters(couponId, pending.remainingMeters());
             if (remaining.isEmpty()) {
@@ -184,8 +208,30 @@ public final class CampaignMeterRegistry implements AutoCloseable {
             }
         } catch (RuntimeException exception) {
             logAtMostOnce("캠페인 미터 retire 처리에 실패했습니다. couponId={}", couponId, exception);
+            rescheduleAfterFailure(couponId);
         } finally {
             registrationGate.unlock();
+        }
+    }
+
+    /**
+     * 실패한 회수를 다시 예약한다. <b>여기서 나가는 예외는 없다.</b>
+     *
+     * <p>바깥 예외의 원인이 예약 거부 그 자체일 수 있다 — 실행기가 종료 중이면
+     * {@code scheduleRetirement} 가 {@code RejectedExecutionException} 을 던지고, 그것을 그대로
+     * 흘리면 catch 블록이 던지는 꼴이 되어 원래 원인이 이 예외에 덮인다.
+     *
+     * <p>회수할 것이 남았을 때만 예약한다. 두 맵 어디에도 없으면 할 일이 없다 — 조건 없이
+     * 예약하면 이미 끝난 캠페인이 지연 간격마다 깨어나 아무것도 안 하고 다시 잠든다.
+     */
+    private void rescheduleAfterFailure(long couponId) {
+        if (!pendingRetirements.containsKey(couponId) && !campaigns.containsKey(couponId)) {
+            return;
+        }
+        try {
+            scheduleRetirement(couponId, retryDelayMillis());
+        } catch (RuntimeException rejected) {
+            logAtMostOnce("캠페인 미터 retire 재예약에 실패했습니다. couponId={}", couponId, rejected);
         }
     }
 
