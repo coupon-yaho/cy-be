@@ -149,7 +149,7 @@ public final class AdminControllerContractTestSupport {
     ) {
         Clock fixedClock = Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"), ZoneOffset.UTC);
         DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
-        beanFactory.registerSingleton("adminAnalyticsProperties", new AdminAnalyticsProperties(1));
+        beanFactory.registerSingleton("adminAnalyticsProperties", AdminAnalyticsProperties.withMockEnabled(1));
         LocalValidatorFactoryBean validator = new LocalValidatorFactoryBean();
         validator.setConstraintValidatorFactory(new SpringConstraintValidatorFactory(beanFactory));
         validator.afterPropertiesSet();
