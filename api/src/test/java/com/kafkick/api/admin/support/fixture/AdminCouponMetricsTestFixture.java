@@ -22,6 +22,13 @@ import com.kafkick.core.observation.SourceStatus;
  * <p>캠페인 기본 정보·재고·대기열은 Overview Dataset에서 그대로 가져옵니다. 상세 화면에만 필요한
  * 누적 발급 Counter, 상태별 보유량과 전이 버킷은 원천 수량으로만 보강하며 파생 비율이나 속도는
  * 계산하지 않습니다.</p>
+ *
+ * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
+ * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
+ *
+ * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
+ * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
+ * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
  */
 public class AdminCouponMetricsTestFixture {
 

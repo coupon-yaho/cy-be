@@ -10,7 +10,16 @@ import com.kafkick.core.observation.IssuanceFlowEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Records the local, lossless campaign meters from OBS-24 flow events. */
+/**
+ * Records the local, lossless campaign meters from OBS-24 flow events.
+ *
+ * <p>{@code ISSUE_ATTEMPT} is the one meter that counts replays: it is a stage, not a result, so every
+ * retry increments it (see {@code EventType}). Every other meter here — the per-campaign success and
+ * admitted counters and {@code app.issuance.outcome} — skips replays. {@code app.issuance.outcome} in
+ * particular must stay one increment per logical result — a replay re-emits a stored result rather than computing a new one, so counting it
+ * inflates the denominator of every issue-rate and failure-rate panel with no exception and no log.
+ * That is why both result paths test {@code replayed()} before the {@code reasonCode} branch.
+ */
 public final class MeterEventRecorder implements EventRecorder {
 
     private static final Logger log = LoggerFactory.getLogger(MeterEventRecorder.class);
@@ -49,11 +58,11 @@ public final class MeterEventRecorder implements EventRecorder {
     }
 
     private void recordIssueResult(IssuanceFlowEvent event) {
-        if (event.reasonCode() != null) {
-            campaignMeters.recordRejectedOutcome(event.reasonCode());
+        if (event.replayed()) {
             return;
         }
-        if (event.replayed()) {
+        if (event.reasonCode() != null) {
+            campaignMeters.recordRejectedOutcome(event.reasonCode());
             return;
         }
         campaignMeters.campaignMeters(event.couponId()).ifPresent(meters -> {
@@ -64,13 +73,14 @@ public final class MeterEventRecorder implements EventRecorder {
     }
 
     private void recordEntryResult(IssuanceFlowEvent event) {
+        if (event.replayed()) {
+            return;
+        }
         if (event.reasonCode() != null) {
             campaignMeters.recordRejectedOutcome(event.reasonCode());
             return;
         }
-        if (event.replayed()) {
-            return;
-        } else if (event.queueSequence() != null) {
+        if (event.queueSequence() != null) {
             campaignMeters.recordQueuedOutcome();
         }
         // Immediate admission is followed by ISSUE_ATTEMPT; it has no distinct outcome label.

@@ -31,17 +31,33 @@ class DomainGaugeConfigContractTest {
             .isEqualTo("${OBSERVATION_DATASOURCE_ENABLED:true}");
     }
 
+    /**
+     * 계약이 뒤집혔다. 예전에는 "batch 에서 JPA 층을 뺀다" 였고 근거는 엔티티가 0개라는 것이었다.
+     * CY-245 계보가 들어오면서 그 전제가 사라졌고, 만료·회차 경로가 storage 의 JPA 어댑터를 탄다.
+     *
+     * <p>이제 지키는 것은 <b>반쪽만 켜지지 않는 것</b>이다. 셋 중 하나만 어긋나면 증상이 서로 다른
+     * 자리에서 나온다 — 자동설정만 빼면 리포지토리는 생기는데 EntityManagerFactory 가 없어 기동이
+     * 죽고, auditing 만 끄면 기동은 되는데 쓰기 시점에 created_at 이 비어 실패한다.
+     */
     @Test
-    @DisplayName("관측 풀을 켜려면 batch 에서 JPA 층을 빼야 한다 — 엔티티가 0개라 기동이 멈춘다")
-    void batchStaysJpaFree() {
+    @DisplayName("JPA 를 반쪽만 켜지 않는다 — 자동설정과 auditing 은 한 쌍이다")
+    void batchDoesNotHalfEnableJpa() {
         Properties template = applicationTemplate();
 
-        assertThat(template.getProperty("spring.autoconfigure.exclude[0]"))
-            .isEqualTo("org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration");
-        assertThat(template.getProperty("spring.autoconfigure.exclude[1]"))
-            .isEqualTo("org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration");
+        for (int index = 0; template.getProperty("spring.autoconfigure.exclude[" + index + "]") != null;
+                index++) {
+            assertThat(template.getProperty("spring.autoconfigure.exclude[" + index + "]"))
+                .as("JPA 자동설정을 빼면 storage 의 @EnableJpaRepositories 가 만든 리포지토리가"
+                        + " EntityManagerFactory 를 못 찾는다. @Enable... 은 자동설정이 아니라"
+                        + " 이 목록으로 막히지 않는다")
+                .doesNotContain("Jpa");
+        }
+
         // 키 문자열을 옮겨 적지 않는다 — storage 에서 이름을 바꾸면 여기서 컴파일이 깨져야 한다.
-        assertThat(template.getProperty(JpaAuditConfig.AUDITING_ENABLED_PROPERTY)).isEqualTo("false");
+        assertThat(template.getProperty(JpaAuditConfig.AUDITING_ENABLED_PROPERTY))
+            .as("엔티티가 @CreatedDate 와 AuditingEntityListener 를 쓴다. 여기서 auditing 을 끄면"
+                    + " 기동은 되고 쓰기만 실패한다 — 기동 로그에는 아무것도 안 남는다")
+            .isNull();
     }
 
     @Test

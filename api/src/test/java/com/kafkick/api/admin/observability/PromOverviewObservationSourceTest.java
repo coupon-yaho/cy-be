@@ -229,7 +229,7 @@ class PromOverviewObservationSourceTest {
                 AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 5d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ALREADY_ISSUED, 4d,
                 AdminOverviewSnapshot.CustomerOutcomeType.STOCK_EXHAUSTED, 5d,
-                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 21d,
+                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 35d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 19d,
                 AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 36d));
         assertThat(data.aggregateIssuanceRate().status()).isEqualTo(SourceStatus.PENDING);
@@ -549,7 +549,12 @@ class PromOverviewObservationSourceTest {
         assertThat(input(data, 101L).sourceStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
         assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
-        assertThat(output).contains("Overview O1 Prometheus 질의 실패", "flow failed")
+        String warning = output.getOut().lines()
+                .filter(line -> line.contains("Overview O1 Prometheus 질의 실패"))
+                .findFirst()
+                .orElseThrow();
+        // DEBUG 로그의 상세 stacktrace와 분리해 WARN 행 자체가 한 줄인지 검증합니다.
+        assertThat(warning).contains("flow failed")
                 .doesNotContain("at com.kafkick.api.admin.observability.PromOverviewObservationSource");
     }
 
@@ -578,6 +583,26 @@ class PromOverviewObservationSourceTest {
         assertThat(data.outcomeInput().counts()).isEmpty();
     }
 
+    /** 상태 전이 거절은 서버 장애가 아니라 고객이 받을 수 없는 정책 결과로 집계합니다. */
+    @Test
+    @DisplayName("INVALID_TRANSITION outcome은 INELIGIBLE로 집계한다")
+    void mapsInvalidTransitionOutcomeToIneligible() {
+        OverviewObservationData data = observe(
+                query -> query.equals(OverviewPrometheusContract.outcomes())
+                        ? outcomeSamplesWithOnly("INVALID_TRANSITION", 1d)
+                        : happyInstant(query),
+                this::happyRange);
+
+        double ineligible = data.outcomeInput().counts().stream()
+                .filter(count -> count.type()
+                        == AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE)
+                .mapToDouble(OutcomeCount::count)
+                .sum();
+
+        assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
+        assertThat(ineligible).isEqualTo(1d);
+    }
+
     /** increase에 아직 나오지 않는 새 label도 snapshot inventory에서 먼저 차단해야 합니다. */
     @Test
     @DisplayName("increase에 없는 unknown outcome이 inventory에 있으면 O3는 UNAVAILABLE이다")
@@ -595,9 +620,9 @@ class PromOverviewObservationSourceTest {
         assertThat(data.outcomeInput().counts()).isEmpty();
     }
 
-    /** fixed 13 series를 사전 등록했다는 모집단 증명 없이 누락을 0으로 보면 안 됩니다. */
+    /** fixed 14 series를 사전 등록했다는 모집단 증명 없이 누락을 0으로 보면 안 됩니다. */
     @Test
-    @DisplayName("O3 snapshot inventory가 13 known label을 모두 증명하지 못하면 PENDING이다")
+    @DisplayName("O3 snapshot inventory가 14 known label을 모두 증명하지 못하면 PENDING이다")
     void keepsIncompleteOutcomeInventoryPending() {
         OverviewObservationData data = observe(query -> {
             if (query.equals(OverviewPrometheusContract.outcomeInventory())) {
@@ -735,11 +760,11 @@ class PromOverviewObservationSourceTest {
                         .calculate(data.outcomeInput()).customerOutcomes().value();
 
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
-        assertThat(calculated.totalCount()).isEqualTo(90.1d);
+        assertThat(calculated.totalCount()).isEqualTo(104.1d);
         assertThat(calculated.outcomes()).first().satisfies(outcome -> {
             assertThat(outcome.type()).isEqualTo(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
             assertThat(outcome.count()).isEqualTo(0.1d);
-            assertThat(outcome.ratio()).isCloseTo(0.1d / 90.1d, within(1e-15));
+            assertThat(outcome.ratio()).isCloseTo(0.1d / 104.1d, within(1e-15));
         });
         assertThat(OverviewPrometheusContract.outcomes())
                 .contains("sum by (outcome)", "increase(", "[5m]");
@@ -909,7 +934,7 @@ class PromOverviewObservationSourceTest {
         assertThat(input(data, 101L).sourceStatus()).isEqualTo(SourceStatus.VALID);
     }
 
-    /** malformed unknown을 건너뛰 13 known만 남기는 실제 timed parser 경로를 O3 격리까지 검증합니다. */
+    /** malformed unknown을 건너뛰 14 known만 남기는 실제 timed parser 경로를 O3 격리까지 검증합니다. */
     @Test
     @DisplayName("실제 timed client의 malformed unknown O3 표본은 O3만 UNAVAILABLE이다")
     void isolatesStrictTimedUnknownOutcomeParseFailureToO3() {
@@ -929,6 +954,7 @@ class PromOverviewObservationSourceTest {
                           {"metric":{"outcome":"TEMPORARILY_UNAVAILABLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"INTERNAL_ERROR"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"UNMAPPED"},"value":[1755000000,"1"]},
+                          {"metric":{"outcome":"INVALID_TRANSITION"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NEW_RESULT"},"value":[1755000000,"broken"]}]}}
                         """);
 
@@ -989,12 +1015,13 @@ class PromOverviewObservationSourceTest {
         throw new AssertionError("예상하지 않은 instant query: " + query);
     }
 
-    /** 13개 raw outcome의 increase 값을 base + (1-based index * increment)로 만듭니다. */
+    /** 14개 raw outcome의 increase 값을 base + (1-based index * increment)로 만듭니다. */
     private static List<PromSample> outcomeSamples(double base, double increment) {
         String[] labels = {
                 "ISSUED", "QUEUED", "QUEUE_REQUIRED", "ALREADY_ISSUED", "STOCK_EXHAUSTED",
                 "NOT_OPENED", "CAMPAIGN_CLOSED", "GRADE_NOT_ELIGIBLE", "NO_ENTRY_TOKEN",
-                "ENTRY_TOKEN_EXPIRED", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED"
+                "ENTRY_TOKEN_EXPIRED", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED",
+                "INVALID_TRANSITION"
         };
         List<PromSample> samples = new ArrayList<>();
         for (int index = 0; index < labels.length; index++) {
@@ -1016,6 +1043,15 @@ class PromOverviewObservationSourceTest {
                 .map(item -> replacements.containsKey(item.label("outcome"))
                         ? sample(Map.of("outcome", item.label("outcome")),
                                 replacements.get(item.label("outcome")))
+                        : item)
+                .toList();
+    }
+
+    /** 지정 raw outcome 하나만 값으로 두고 나머지 사전 등록 label은 0으로 유지합니다. */
+    private static List<PromSample> outcomeSamplesWithOnly(String target, double value) {
+        return outcomeSamples(0d, 0d).stream()
+                .map(item -> target.equals(item.label("outcome"))
+                        ? sample(Map.of("outcome", target), value)
                         : item)
                 .toList();
     }

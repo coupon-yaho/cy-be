@@ -24,8 +24,27 @@ server:
     include-stacktrace: never
 
 admin:
+  # ⚠️ [OBS-36] **이 두 스위치는 화면에 가짜 데이터를 내보낸다.** 둘 다 기본값이 꺼짐이고,
+  #    여기서 켜는 것은 로컬·시연에서 A-06~A-11 의 실제 Repository 가 아직 없기 때문이다.
+  #    실제 저장소가 붙는 티켓에서 해당 줄을 지운다.
+  #
+  #    끈 상태의 동작이 둘이 다르다:
+  #      admin.mock.enabled=false   → 운영현황·문의·발급이력·상세지표 빈이 없어 **기동 실패**.
+  #                                   그 화면들의 응답 계약에 "아직 없음" 을 담을 자리가 없어
+  #                                   빈 결과로 대신하면 "조회했는데 없음" 과 구분되지 않는다.
+  #      analytics.mock-enabled=false → 화면이 뜨고 PENDING 이 나간다. 이쪽만 그 자리가 있다.
+  #
+  # ⚠️ **여기만 fallback 이 켜짐이다. 루트 application.yml.example 은 꺼짐이다.**
+  #    두 파일이 사는 곳이 다르다 — 루트 것은 compose 가 마운트하고 .env 와 항상 짝이지만,
+  #    이 파일은 호스트에서 Gradle·IDE 로 띄울 때 쓰는 것이라 **.env 를 안 읽는다.**
+  #    실제로 이 파일에는 기본값 없는 변수가 하나도 없다(복사하면 그대로 뜬다는 뜻이다).
+  #    여기서 꺼짐으로 두면 A-06~A-11 이 실제 Repository 를 붙이기 전까지 IDE 실행이
+  #    통째로 기동 실패한다 — 운영 노출과 무관한 자리에서 잃는 것만 있다.
+  mock:
+    enabled: ${ADMIN_MOCK_ENABLED:true}
   analytics:
     max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
+    mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:true}
 
 benchmark:
   protocol:
@@ -146,5 +165,19 @@ observation:
       latency-window: ${OVERVIEW_PROM_LATENCY_WINDOW:10s}
       max-range: ${OVERVIEW_PROM_MAX_RANGE:1h}
       max-points: ${OVERVIEW_PROM_MAX_POINTS:1000}
+    # GET /metrics/series 전용 예산입니다. 위 1초 폴링 예산과 완전히 분리되어 있어, 이 경로가
+    # 아무리 느려도 /metrics 응답 시간은 바뀌지 않습니다. archive 가 같은 이유로 별도 예산을
+    # 둔 선례를 따릅니다.
+    # ⚠️ 여기도 세 값이 한 묶음이다. total-budget + connect-timeout + read-timeout 이 이 경로의
+    #    폴링 간격(5초, 화면이 5~10초 주기로 부르기로 한 것의 짧은 쪽)을 넘으면 기동에서 죽는다.
+    # ⚠️ step 은 평가 간격이자 rate 집계 창이다. 모든 MetricsWindow(1m·5m·15m)를 나누어야 하고,
+    #    가장 긴 창의 평가점 수가 max-points 를 넘으면 기동에서 죽는다 — 계약이 코드 enum 과
+    #    이 파일에 걸쳐 있어 PrometheusSeriesPropertiesTest 가 둘을 함께 본다.
+    series:
+      connect-timeout: ${PROMETHEUS_SERIES_CONNECT_TIMEOUT:500ms}
+      read-timeout: ${PROMETHEUS_SERIES_READ_TIMEOUT:1500ms}
+      total-budget: ${PROMETHEUS_SERIES_TOTAL_BUDGET:2500ms}
+      step: ${PROMETHEUS_SERIES_STEP:5s}
+      max-points: ${PROMETHEUS_SERIES_MAX_POINTS:300}
   datasource:
     enabled: true

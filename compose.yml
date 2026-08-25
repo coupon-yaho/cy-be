@@ -23,6 +23,67 @@
 # 데이터를 계속 본다(실측).
 name: coupon-yaho
 
+# 브로커 셋이 공유하는 설정. 한 벌만 두는 이유는 취향이 아니라, 세 곳에 손으로 옮겨 적으면
+# 한 대만 다른 값을 갖는 상태가 조용히 만들어지기 때문이다 — 그 한 대가 컨트롤러 쿼럼에서
+# 빠져도 나머지 둘로 클러스터가 서서 로그에 아무 일도 안 남는다.
+# x- 접두사 키는 Compose 가 무시한다(확장 필드).
+x-kafka-broker-env: &kafka-broker-env
+  # 조합 모드. 세 대뿐이라 컨트롤러를 따로 세우면 브로커가 셋이 안 된다.
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  # ⚠️ KAFKA_ 접두사가 없다. 이미지가 KAFKA_* 를 server.properties 의 프로퍼티로 옮기는데
+  #    (KAFKA_NODE_ID → node.id), 스토리지 포맷은 그 앞 단계라 프로퍼티를 안 본다 —
+  #    /etc/kafka/docker/launch 가 CLUSTER_ID 하나만 읽어 kafka-storage 에 넘긴다.
+  #    KAFKA_CLUSTER_ID 로 적으면 브로커가 모르는 cluster.id 프로퍼티가 생길 뿐이고,
+  #    포맷은 이미지 기본값(5L6g3nShT-eMCtK--X86sw)으로 조용히 진행된다(실측).
+  #    세 대가 그 기본값을 똑같이 쓰므로 클러스터는 정상으로 보인다 — 그래서 안 잡힌다.
+  #    KafkaBrokerComposeContractTest 가 그 이름을 금지한다.
+  #
+  # 형식 제약이 없다. kafka-storage random-uuid 는 22자 base64 를 내지만 포맷은 그 형식을
+  # 요구하지 않는다 — 실측으로 CLUSTER_ID=not-a-valid-uuid 를 줘도 브로커가 뜨고,
+  # kafka-cluster.sh 가 그 값을 그대로 돌려주며 토픽 생성까지 된다(4.1.0 기준).
+  # 그래서 랜덤 uuid 대신 읽을 수 있는 값을 골랐다. 로그와 meta.properties 에 그대로
+  # 찍히므로, 어느 스택의 볼륨인지 눈으로 가릴 수 있다.
+  #
+  # 대가: 장래 버전이 형식을 강제하면 이 값이 거부된다. 그때는 아래 절차대로 볼륨과 함께 바꾼다.
+  #
+  # ⚠️ 이 값을 바꾸려면 브로커 볼륨 셋을 함께 지워야 한다. 포맷된 id 는 안 바뀐다 —
+  #    실측하면 이렇게 된다:
+  #      Invalid cluster.id in: /var/lib/kafka/data/meta.properties.
+  #      Expected coupon-yaho-kraft-0001, but read 5L6g3nShT-eMCtK--X86sw
+  #    restart: unless-stopped 이라 한 번 죽고 마는 게 아니라 세 대가 크래시루프에 빠지고,
+  #    docker compose ps 에는 "restarting" 만 보인다. 이유는 docker logs 에만 있다.
+  #
+  #    복구는 볼륨 삭제 하나다. 여기에는 보존할 데이터가 없다 — 토픽은 기동 뒤
+  #    KafkaTopicProvisioner 가 다시 만들고, 발급 데이터는 MySQL 에 있다:
+  #      docker compose down
+  #      docker volume rm coupon-yaho_coupon-kafka-1-data \
+  #                       coupon-yaho_coupon-kafka-2-data \
+  #                       coupon-yaho_coupon-kafka-3-data
+  #      docker compose up -d
+  #
+  #    ⚠️ 세 개를 다 지운다. 하나만 남기면 그 한 대만 예전 id 로 크래시루프에 남고,
+  #       나머지 둘로 쿼럼이 서서 클러스터는 정상으로 보인다.
+  CLUSTER_ID: coupon-yaho-kraft-0001
+  # 이 계층의 전제다. 위 주석 참조 — 켜져 있으면 RF1 토픽이 조용히 생기고 되돌릴 수 없다.
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  # 내부 토픽도 3대에 복제한다. 기본값 3 이지만 명시한다 — 이 값이 1 로 떨어지면 그 브로커가
+  # 빠질 때 컨슈머 그룹 offset 이 통째로 사라지고, OBS-15 의 컨슈머가 처음부터 다시 읽는다.
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+  # 토픽별 min.insync.replicas 는 KafkaTopicConfig 가 2로 선언한다. 브로커 기본값을 2로
+  # 올리지 않는 이유 — 그러면 선언에 ISR 하한이 없는 coupon.issue.attempt(RF2, acks=0)까지
+  # 하한 2를 받아, 브로커 한 대가 빠지는 순간 관측 토픽이 쓰기를 거부한다.
+  KAFKA_MIN_INSYNC_REPLICAS: "1"
+  # 컨슈머 하나가 붙었을 때 리밸런스를 3초 기다리지 않는다. 로컬·CI 기동을 그만큼 줄인다.
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+
 services:
   mysql:
     # 태그를 고정한다. prometheus 를 v3.6.0 으로 고정한 것과 같은 이유다.
@@ -99,6 +160,68 @@ services:
         redis-cli -h redis SET config:runtime \
           "{\"engineVersion\":\"V1\",\"releaseStage\":\"V1\",\"queueMode\":\"OFF\",\"revision\":0,\"updatedAt\":\"$${seeded_at}\",\"updatedBy\":\"system:bootstrap\",\"status\":\"VALID\"}" NX
 
+  # ── OBS-36 관측 계정 재부여 ────────────────────────────────────────────────
+  #
+  # 관측 전용 계정에 **양성 목록의 테이블만** SELECT 를 준다. 목록의 정본은
+  # infra/mysql/obs-grants/allowlist.txt 이고, 같은 파일을 테스트 컨테이너도 읽는다.
+  #
+  #   docker compose --profile obs-grants run --rm obs-grants
+  #
+  # ⚠️ **api 가 한 번 떠서 Flyway 마이그레이션이 끝난 뒤에 친다.** 테이블 단위 GRANT 는
+  #    그 테이블이 이미 있어야 하고, 없으면 ERROR 1146 으로 이 컨테이너가 exit≠0 이 된다.
+  #    그래서 initdb 로 되돌리지 말 것 — 거기서는 테이블이 하나도 없어서 MySQL 컨테이너
+  #    자체가 안 뜬다(infra/mysql/initdb/20-obs-account.sh 의 ⚠️ 참조).
+  #
+  # ⚠️ **사람이 한 번 쳐야 한다.** runtime-config-seed 와 같은 약점이다. 다만 안 쳤을 때의
+  #    증상이 두 갈래이고, 한쪽은 이미 시끄럽다:
+  #
+  #      신규 클론(볼륨 없음) — obs 계정에 권한이 아예 없다(USAGE 뿐). 관측 풀이 **커넥션
+  #        자체를 못 연다** — JDBC URL 이 스키마를 지정하므로 질의가 아니라 접속에서 거부된다
+  #        (실측: ERROR 1044 Access denied for user 'obs'@'%' to database 'app').
+  #        관리자 배치 이력 화면 500, 도메인 게이지 수집 실패 로그, obs 헬스 DOWN.
+  #        → 감지 수단을 따로 둘 필요가 없다.
+  #
+  #      기존 볼륨(OBS-36 이전에 만든 것) — 예전 스키마 GRANT 가 그대로 남아 있어
+  #        **아무 증상이 없다.** 관측은 잘 돌고 obs 는 members 도 계속 읽는다.
+  #        → 이것만이 조용한 실패다. 그리고 **일회성 이행 상태**다.
+  #
+  #    두 번째를 위해 기동 자기 진단을 둘지 검토했고, 두지 않기로 했다 — 일시적인 이행
+  #    상태를 잡으려고 상시 프로브(기동 경로의 DB 왕복 + 아무도 안 읽는 WARN 로그)를
+  #    영구히 남기는 값이 안 맞는다. 대신 README 의 "관측 계정 권한 재부여" 절이 기존
+  #    볼륨 보유자에게 이 절차를 명시한다.
+  #
+  # depends_on 에 api 를 적지만 service_started 다. api 에는 healthcheck 가 없어서
+  # "떴다" 와 "마이그레이션이 끝났다" 를 구분하지 못한다 — 순서를 강제하지 않고, 이르면
+  # 위의 1146 으로 시끄럽게 실패하게 둔다.
+  obs-grants:
+    image: mysql:8.4
+    profiles: ["obs-grants"]
+    restart: "no"
+    # ⚠️ env_file: .env 를 쓰지 않는다. 이 컨테이너는 root 로 GRANT 를 주는 자리라, .env 를
+    #    통째로 넣으면 이 작업과 무관한 시크릿(DB_PASSWORD · DB_OBS_PASSWORD ·
+    #    BENCHMARK_ADMIN_COMMAND_SECRET · MYSQL_PASSWORD …)까지 프로세스 환경에 실린다.
+    #    apply.sh 가 실제로 읽는 것은 아래 넷뿐이다. 값 자체는 compose 가 .env 에서 보간한다
+    #    (interpolation 은 env_file 과 별개로 항상 프로젝트 .env 를 본다).
+    #
+    #    ⚠️ 관측 계정 **비밀번호**(DB_OBS_PASSWORD)는 일부러 뺐다. 권한을 주는 데는 계정
+    #       이름만 필요하다. 비밀번호가 필요한 것은 계정을 만드는 initdb 쪽이다.
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      DB_OBS_USERNAME: ${DB_OBS_USERNAME}
+      # 스크립트는 기본값이 127.0.0.1 이다. 여기서는 별도 컨테이너라 서비스 DNS 로 붙는다.
+      MYSQL_HOST: mysql
+    depends_on:
+      mysql:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      # 디렉터리째 마운트한다. apply.sh 가 같은 디렉터리의 allowlist.txt 를 읽으므로
+      # 파일 하나만 마운트하면 목록을 못 찾아 그 자리에서 죽는다.
+      - ./infra/mysql/obs-grants:/obs-grants:ro
+    entrypoint: ["sh", "/obs-grants/apply.sh"]
+
   api:
     image: ${COUPON_IMAGE}:${API_IMAGE_TAG}
     pull_policy: always
@@ -107,17 +230,25 @@ services:
       - .env
     environment:
       SPRING_PROFILES_ACTIVE: api
-      # SERVER_PORT 는 호스트 공개 포트를 정하지만, 컨테이너 안 API는 ports 대상(8080)에서
-      # 들어야 한다. 이 값을 안 덮으면 SERVER_PORT=18080일 때 호스트 18080이 컨테이너
-      # 8080으로 보내는 연결이 reset 된다.
-      SERVER_PORT: "8080"
       SPRING_FLYWAY_ENABLED: "true"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # .env 의 KAFKA_BOOTSTRAP_SERVERS 는 호스트에서 IDE/Gradle 로 띄울 때의 값이라
+      # 컨테이너 안에서는 틀리다(localhost 는 api 자신이다). REDIS_HOST 를 덮는 것과 같은
+      # 구조로 여기서 서비스 DNS 로 덮는다. 세 대를 다 적는 이유는 부트스트랩 한 대가
+      # 재기동 중이어도 나머지로 클러스터를 찾게 하기 위함이다 — 한 대만 적으면 그 한 대가
+      # 단일 실패점이 된다(연결 뒤에는 어차피 광고된 주소로 붙는다).
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
     volumes:
       - ./application.yml:/app/config/application.yml:ro
     ports:
-      - "${SERVER_PORT}:8080"
+      # 왼쪽이 호스트, 오른쪽이 컨테이너 안 Spring 이다. 두 자리에 서로 다른 변수를 쓴다 —
+      # 예전에는 양쪽이 SERVER_PORT 한 이름이었고, compose 가 컨테이너 값을 "8080" 으로
+      # 덮어써서 버텼다. 그 구조에서는 .env 의 SERVER_PORT 를 고쳐도 컨테이너 포트는 안 바뀌고
+      # (덮어쓰기가 이긴다) 호스트 매핑만 바뀐다 — 한 이름이 두 뜻이라 어느 쪽을 고쳐도
+      # 반대쪽이 깨졌다. 지금은 SERVER_PORT 가 api/application.yml.example 의
+      # ${SERVER_PORT:8080} 과 같은 뜻(컨테이너 안 수신 포트) 하나만 갖는다.
+      - "${API_HOST_PORT:-8080}:${SERVER_PORT:-8080}"
       # ⚠️ 관리 포트(9090)를 여기에 매핑하지 않는다. actuator 에는 인증이 없고
       #    (Spring Security 미도입), 포트를 안 여는 것이 유일한 방어다. allowlist 의
       #    exclude 한 줄이 지워지면 /actuator/env 가 DB 비밀번호를 그대로 뱉는다.
@@ -131,6 +262,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # ⚠️ kafka 를 여기 적지 않는다. 적으면 KAFKA_ENABLED=false 인 회차(v1·v2)에서도
+      #    api 기동이 브로커 세 대의 healthy 를 기다리게 되고, 브로커가 안 뜨는 환경에서는
+      #    쿠폰 발급 API 가 통째로 안 뜬다 — Kafka 를 쓰지도 않는데. 토픽 생성은 기동 경로
+      #    밖에서 물러서며 재시도하므로(KafkaTopicProvisioner) 순서를 강제할 이유가 없다.
+      #    대가: 브로커보다 api 가 먼저 뜨면 첫 몇 회 프로비저닝 시도가 실패하고 백오프를
+      #    태운다. 그 동안 지표는 app_kafka_topics_provisioned_cause{cause="unconfirmed"}=1 이다.
 
   batch:
     image: ${COUPON_IMAGE}:${BATCH_IMAGE_TAG}
@@ -158,6 +295,94 @@ services:
         condition: service_healthy
       api:
         condition: service_started
+
+  # ── OBS-35 Kafka 브로커 ─────────────────────────────────────────────────────
+  #
+  # 세 대인 것은 로컬 편의를 포기한 결과다. infra/mq 의 선언이 RF3 · min.insync.replicas=2 라
+  # 두 대로는 acks=all 쓰기가 ISR 하한을 못 채우고, 한 대로는 토픽 생성부터
+  # INVALID_REPLICATION_FACTOR 로 실패한다. 파티션·복제 수는 발표 회차의 값이라 낮추지 않는다.
+  #
+  # KRaft 조합 모드다(broker + controller). ZooKeeper 를 두지 않는 것은 취향이 아니라
+  # Kafka 4.x 가 ZooKeeper 모드를 아예 제거했기 때문이다.
+  #
+  # ⚠️ 세 서비스가 같은 CLUSTER_ID 를 공유해야 한다. 이름에 KAFKA_ 접두사가 없는 이유와
+  #    값을 바꿀 때의 복구 절차는 위 x-kafka-broker-env 의 CLUSTER_ID 옆에 적어 뒀다.
+  #
+  #    안 적어도 세 대가 붙는다 — 이미지에 기본값이 있어서 셋 다 그 값으로 포맷된다(실측).
+  #    즉 이 값을 빠뜨린 것은 증상으로 드러나지 않는다. 그래서 주석이 아니라
+  #    KafkaBrokerComposeContractTest 가 지킨다.
+  #
+  # ⚠️ ports 를 두지 않는다. Kafka 에 인증이 없어서(SASL 미도입) 호스트로 여는 순간 아무나
+  #    토픽을 만들고 발급 이벤트를 위조해 넣을 수 있다 — 관리 포트·Prometheus 를 잠근 것과
+  #    같은 이유다. 대가: 호스트에서 IDE/Gradle 로 띄운 앱은 브로커에 닿지 못한다. 그 회차는
+  #    KAFKA_ENABLED=false 로 둔다(.env.example 참조). compose 안의 api 는 서비스 DNS 로 붙는다.
+  #    KafkaBrokerComposeContractTest 가 비노출을 고정한다.
+  #
+  # ⚠️ auto.create.topics.enable=false 는 옵션이 아니라 이 계층의 전제다. 켜져 있으면
+  #    프로비저닝보다 첫 발급이 빨랐을 때 브로커가 RF1 · 파티션1 짜리 토픽을 대신 만들고,
+  #    RF 는 나중에 못 고친다 — 노드 하나가 빠지면 그 파티션이 사라져 영구 미영속 발급이 된다.
+  #    대가: 선언에 없는 토픽으로 발행·구독하면 조용히 생기는 대신 UNKNOWN_TOPIC_OR_PARTITION
+  #    으로 실패한다. 그게 의도다(KafkaTopicConfig.TOPICS_WITHOUT_DLT 주석 참조).
+
+  kafka-1:
+    image: apache/kafka:4.1.0
+    restart: unless-stopped
+    environment:
+      <<: *kafka-broker-env
+      KAFKA_NODE_ID: "1"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
+    volumes:
+      - coupon-kafka-1-data:/var/lib/kafka/data
+    healthcheck:
+      # 포트가 열렸는지가 아니라 API 가 응답하는지를 본다. KRaft 는 컨트롤러 쿼럼이 서기
+      # 전에도 소켓은 열려 있어서, 포트만 보면 아직 못 쓰는 브로커가 healthy 로 뜬다.
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  kafka-2:
+    image: apache/kafka:4.1.0
+    restart: unless-stopped
+    environment:
+      <<: *kafka-broker-env
+      KAFKA_NODE_ID: "2"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+    volumes:
+      - coupon-kafka-2-data:/var/lib/kafka/data
+    healthcheck:
+      # 포트가 열렸는지가 아니라 API 가 응답하는지를 본다. KRaft 는 컨트롤러 쿼럼이 서기
+      # 전에도 소켓은 열려 있어서, 포트만 보면 아직 못 쓰는 브로커가 healthy 로 뜬다.
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  kafka-3:
+    image: apache/kafka:4.1.0
+    restart: unless-stopped
+    environment:
+      <<: *kafka-broker-env
+      KAFKA_NODE_ID: "3"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
+    volumes:
+      - coupon-kafka-3-data:/var/lib/kafka/data
+    healthcheck:
+      # 포트가 열렸는지가 아니라 API 가 응답하는지를 본다. KRaft 는 컨트롤러 쿼럼이 서기
+      # 전에도 소켓은 열려 있어서, 포트만 보면 아직 못 쓰는 브로커가 healthy 로 뜬다.
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
 
   # ── P-1(CY-213) 관측 인프라 ──────────────────────────────────────────────────
   #
@@ -202,6 +427,9 @@ services:
 volumes:
   coupon-mysql-data:
   coupon-redis-data:
-  # 세 볼륨 모두 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
+  coupon-kafka-1-data:
+  coupon-kafka-2-data:
+  coupon-kafka-3-data:
+  # 모든 볼륨이 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
   # 한쪽만 프로젝트 밖으로 공유되는 상태가 된다.
   prometheus-data:

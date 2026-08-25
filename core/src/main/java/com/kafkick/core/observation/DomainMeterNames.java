@@ -114,6 +114,64 @@ public final class DomainMeterNames {
      */
     public static final String KAFKA_TOPICS_PROVISIONED_CAUSE = "app.kafka.topics.provisioned.cause";
 
+    // ── attempt 컨슈머 계층(OBS-15). 등록은 infra:mq 이고 읽는 쪽은 api 라 여기 둔다 ──────
+    //
+    // 위 Kafka 계층과 같은 이유다. 이름을 컨슈머 옆에 두면 조회하는 쪽이 문자열을 옮겨 적는다.
+
+    /**
+     * live 층화 샘플링의 <b>판정</b> 수. {@link #TAG_SAMPLING_DECISION} 이
+     * {@code admitted · dropped} 둘로 닫혀 있다.
+     *
+     * <p>이 값이 필요한 이유는 {@code max-per-second} 가 하드 상한이 아니기 때문이다 —
+     * 층별 최소 보장이 그것을 넘길 수 있어서, 설정만 읽으면 실제 Redis 쓰기량을 모른다.
+     * 값 검증을 사람이 아니라 지표가 한다.
+     *
+     * <p>합(admitted + dropped)은 컨슈머가 <b>받은</b> 건수이지 발급 경로가 <b>보낸</b> 건수가
+     * 아니다. attempt 토픽은 {@code acks=0} 이라 그 둘이 다르다.
+     */
+    public static final String ATTEMPT_LIVE_SAMPLED = "app.attempt.live.sampled";
+
+    /**
+     * live 버퍼 쓰기에서 <b>삼킨</b> 실패 수.
+     *
+     * <p>0 이 아니면 화면이 비어 있는데 Kafka 소비는 정상이라는 뜻이다. 이 실패는 offset 을
+     * 막지 않는다 — 화면 하나 때문에 컨슈머 그룹이 멈추면 같은 토픽을 읽는 archive 까지
+     * 리밸런싱에 휘말린다. 대신 여기서 소리를 낸다.
+     */
+    public static final String ATTEMPT_LIVE_APPEND_FAILURES = "app.attempt.live.append.failures";
+
+    /**
+     * live 버퍼에서 <b>읽다가</b> 풀지 못해 건너뛴 항목 수.
+     *
+     * <p>쓰기 실패({@link #ATTEMPT_LIVE_APPEND_FAILURES})와 짝이다. 그쪽이 0 인데 이쪽이 오르면
+     * 원인은 Redis 가 아니라 <b>형식</b>이다 — 배포 경계를 사이에 두고 두 형식이 버퍼에 함께
+     * 앉아 있다는 뜻이다.
+     *
+     * <p>이 값이 없으면 그 상황이 어떤 신호도 내지 않는다. 커서는 정상이고 트림도 없어서
+     * {@code cursorExpired} 도 거짓이라, 화면은 그냥 항목이 적을 뿐이고 운영자는 그것을
+     * 정상으로 읽는다.
+     */
+    public static final String ATTEMPT_LIVE_UNREADABLE = "app.attempt.live.unreadable";
+
+    /**
+     * archive 적재 결과. {@link #TAG_ARCHIVE_OUTCOME} 이 {@code inserted · duplicate} 둘로 닫혀 있다.
+     *
+     * <p>{@code duplicate} 는 <b>정상값이다</b> — 리밸런싱 후 재소비가 정상 경로이므로 그
+     * 직후에 튄다. 다만 리밸런싱과 무관한 구간에서 계속 오르면 키 설계를 의심한다.
+     */
+    public static final String ATTEMPT_ARCHIVE_OUTCOME = "app.attempt.archive.outcome";
+
+    /**
+     * 계약을 위반해 <b>격리하고 offset 을 넘긴</b> 레코드 수. {@link #TAG_REASON} 으로 나뉜다.
+     *
+     * <p>값은 {@code unknown_enum}(모르는 enum 값) · {@code unsupported_schema}(지원하지 않는
+     * {@code schemaVersion}) · {@code other} 셋으로 닫혀 있다.
+     *
+     * <p>격리만 하고 offset 을 안 넘기면 같은 레코드에서 컨슈머가 무한 재시도한다(poison
+     * message). 넘기는 대신 여기서 세므로, <b>이 값이 0 이 아니면 무언가를 버렸다</b>는 뜻이다.
+     */
+    public static final String ATTEMPT_CONTRACT_VIOLATIONS = "app.attempt.contract.violations";
+
     /**
      * batch 가 믿고 있는 발급 엔진 버전(V1=1 · V2=2 · V3=3).
      *
@@ -159,6 +217,23 @@ public final class DomainMeterNames {
 
     /** 미터가 가리키는 토픽 이름. */
     public static final String TAG_TOPIC = "topic";
+
+    /** 층화 샘플링 판정. 값은 {@code admitted · dropped} 둘로 닫혀 있다. */
+    public static final String TAG_SAMPLING_DECISION = "decision";
+
+    public static final String SAMPLING_ADMITTED = "admitted";
+    public static final String SAMPLING_DROPPED = "dropped";
+
+    /** archive 적재 결과. 값은 {@code inserted · duplicate} 둘로 닫혀 있다. */
+    public static final String TAG_ARCHIVE_OUTCOME = "outcome";
+
+    public static final String ARCHIVE_INSERTED = "inserted";
+    public static final String ARCHIVE_DUPLICATE = "duplicate";
+
+    /** 계약 위반의 종류. 값은 {@code unknown_enum · unsupported_schema · other} 셋으로 닫혀 있다. */
+    public static final String VIOLATION_UNKNOWN_ENUM = "unknown_enum";
+    public static final String VIOLATION_UNSUPPORTED_SCHEMA = "unsupported_schema";
+    public static final String VIOLATION_OTHER = "other";
 
     /** 수집 경로 라벨. 값은 {@link #PATH_CONSISTENCY} · {@link #PATH_STOCK} 둘로 고정이다. */
     public static final String TAG_COLLECT_PATH = "path";

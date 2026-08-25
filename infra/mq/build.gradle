@@ -12,4 +12,26 @@ dependencies {
     // 미터 이름이 실제 scrape 출력에서 어떻게 보이는지 대조하는 계약 테스트가 쓴다.
     // 점→밑줄 변환과 Counter 의 _total 접미사가 어긋나면 조회 쪽이 조용히 빈다.
     testImplementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // KafkaBrokerComposeContractTest 가 org.yaml.snakeyaml.Yaml 로 저장소 루트의 compose.yml 을
+    // 읽는다. 지금은 spring-boot-starter 가 전이로 끌어와 선언 없이도 컴파일되지만, 그건 저쪽
+    // 사정이다 — Boot 가 그 전이 의존을 빼는 순간 우리 테스트가 컴파일에서 죽고 원인은 우리
+    // build.gradle 어디에도 안 적혀 있다. 버전은 BOM 이 정한다(api/build.gradle 과 같은 이유).
+    testImplementation 'org.yaml:snakeyaml'
+
+    // 실제 브로커에 태우는 통합 테스트가 쓴다. "알 수 없는 enum 한 건이 컨슈머를 멈추지
+    // 않는다" 는 대역으로 증명되지 않는다 — 그 성질은 역직렬화 → 에러 핸들러 → 컨테이너의
+    // offset 커밋까지 세 계층이 맞물려야 성립하고, 그중 뒤의 둘은 우리 코드가 아니다.
+    testImplementation 'org.testcontainers:testcontainers-kafka'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+}
+
+tasks.named('test') {
+    // KafkaBrokerComposeContractTest 는 클래스패스 밖의 compose.yml 을 읽는다. 선언하지 않으면
+    // Gradle 이 그 파일의 변경을 모르고 test 를 UP-TO-DATE 로 건너뛴다 — 브로커를 한 대로
+    // 줄여도 초록불이 뜬다. 가드가 있는데 안 도는 상태가 가드가 없는 것보다 나쁘다
+    // (api/build.gradle 이 같은 이유로 같은 선언을 한다).
+    inputs.files(rootProject.file('compose.yml'))
+        .withPropertyName('kafkaBrokerComposeContractInputs')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

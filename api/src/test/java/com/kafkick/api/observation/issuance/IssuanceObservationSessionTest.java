@@ -109,6 +109,49 @@ class IssuanceObservationSessionTest {
     }
 
     @Test
+    void recordsExplicitClassificationForUnexpectedIssueFailure() {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationSession session = session(recordedEvents);
+
+        session.completeIssueRejected(
+                500,
+                ReasonCode.INTERNAL_ERROR,
+                Dependency.MYSQL
+        );
+        session.finish();
+
+        assertThat(recordedEvents).singleElement().satisfies(event -> {
+            assertThat(event.httpStatus()).isEqualTo(500);
+            assertThat(event.reasonCode()).isEqualTo(
+                    ReasonCode.INTERNAL_ERROR
+            );
+            assertThat(event.dependency()).isEqualTo(Dependency.MYSQL);
+        });
+    }
+
+    @Test
+    void rejectsNullReasonCodeBeforeItClaimsTheFirstOutcome() {
+        List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
+        IssuanceObservationSession session = session(recordedEvents);
+
+        assertThatThrownBy(() -> session.completeIssueRejected(
+                500,
+                null,
+                Dependency.MYSQL
+        ))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("reasonCode");
+
+        session.completeIssued(301L, "ISSUE-CODE-301");
+        session.finish();
+
+        assertThat(recordedEvents).singleElement().satisfies(event -> {
+            assertThat(event.httpStatus()).isEqualTo(201);
+            assertThat(event.issuanceId()).isEqualTo(301L);
+        });
+    }
+
+    @Test
     void recordsImmediatelyAdmittedEntryWithoutQueueInformation() {
         List<IssuanceFlowEvent> recordedEvents = new CopyOnWriteArrayList<>();
         IssuanceObservationSession session = session(recordedEvents);

@@ -69,7 +69,7 @@ public record AdminMetricsResponse(
                 window,
                 new ConsistencyResponse(ConsistencyPhase.LIVE, null, Severity.NONE, null, null, null, null, null),
                 new TrafficMetrics(pendingRate, pendingRate, pendingRate, pendingRate, pendingRate),
-                new LatencyMetrics(null, null, null),
+                new LatencyMetrics(null, null, null, List.of()),
                 new DependencyMetrics(null, null, null),
                 new ObservedValue<>(null, SourceStatus.PENDING, null),
                 List.of(),
@@ -239,14 +239,48 @@ public record AdminMetricsResponse(
     /**
      * 성공·정책 거절·시스템 실패 경로의 지연 분포를 분리합니다.
      *
-     * @param success 성공 경로 지연 분포
-     * @param policyReject 정책 거절 경로 지연 분포
-     * @param systemFailure 시스템 실패 경로 지연 분포
+     * <p>{@code groups} 는 같은 성공 경로를 <b>URI 그룹으로 편 것</b>입니다. {@code success} 를
+     * 대체하지 않습니다 — {@code success} 는 발급(issue) 그룹 하나이고 화면이 둘을 함께 씁니다.
+     * 그래서 {@code groups} 안의 issue 항목과 {@code success} 는 같은 원천·같은 필터·같은 집계
+     * 규칙에서 나오고 언제나 같은 값이어야 합니다.</p>
+     *
+     * <p>{@code groups} 의 outcome 축은 success 하나입니다. <b>계측이 못 하는 것이 아닙니다</b> —
+     * Timer 는 그룹마다 outcome 넷을 등록하므로 실패 경로의 그룹별 지연도 만들 수 있습니다.
+     * 내지 않는 이유는 <b>계약을 덜 흔들기 위해서</b>입니다: 화면이 그룹별 실패 지연을 쓴다는
+     * 근거가 아직 없고, {@code LatencyGroupStat} 을 바꾸면 프론트 계약이 또 움직입니다.
+     * 필요해지면 그때 이 record 를 넓히면 되고, 원천은 이미 있습니다.</p>
+     *
+     * @param success 성공 경로 지연 분포. {@code issue} 그룹 기준
+     * @param policyReject 정책 거절 경로 지연 분포. {@code issue} 그룹 기준. <b>4xx 계약 위반은
+     *                     여기 들어오지 않습니다</b> — 계측은 {@code client_invalid} 축으로 따로
+     *                     세고 있고, 응답 자리는 아직 없습니다
+     * @param systemFailure 시스템 실패 경로 지연 분포. {@code issue} 그룹 기준. 경계는
+     *                      {@code ResultClass.systemFailures()} 하나가 정합니다
+     * @param groups URI 그룹별 성공 경로 지연 분포. 조립기는 그룹 다섯 종을 언제나 모두 채웁니다
+     *               (미수집 초안 {@link #draft} 만 빈 목록입니다)
      */
     public record LatencyMetrics(
             ObservedValue<LatencyPercentiles> success,
             ObservedValue<LatencyPercentiles> policyReject,
-            ObservedValue<LatencyPercentiles> systemFailure
+            ObservedValue<LatencyPercentiles> systemFailure,
+            List<LatencyGroupStat> groups
+    ) { }
+
+    /**
+     * 한 URI 그룹의 성공 경로 지연입니다.
+     *
+     * <p><b>표본이 없는 그룹도 목록에서 빠지지 않습니다.</b> 빠지면 화면이 '그룹이 없음' 과
+     * '아직 못 읽음' 을 구분할 수 없습니다 — 없는 이유는 {@code percentiles} 의 상태가 냅니다.</p>
+     *
+     * <p>⚠️ {@code group} 은 미터 라벨 그대로의 소문자 표기입니다({@code UriGroup.tagValue()}).
+     * 화면의 그룹 이름과 표기가 갈리면 패널이 '알 수 없는 그룹' 으로 떨어집니다.</p>
+     *
+     * @param group URI 그룹 라벨. {@code issue · entry · queue · read · use}
+     * @param percentiles 그 그룹의 성공 경로 백분위. 못 읽었으면 상태만 있고 값은 null
+     */
+    public record LatencyGroupStat(
+            String group,
+            ObservedValue<LatencyPercentiles> percentiles
     ) { }
 
     /**
