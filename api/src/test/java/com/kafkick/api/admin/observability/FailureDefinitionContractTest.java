@@ -11,6 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.api.observation.http.ResultClassifier.ResultClass;
+import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.support.TimeProvider;
 
@@ -51,11 +52,17 @@ class FailureDefinitionContractTest {
     void seriesFailureQueryCountsExactlyThoseClasses() {
         FakePromRangeQuery source = FakePromRangeQuery.alwaysOnePoint();
         new PromSeriesAssembler(source, FIXED_TIME, PrometheusSeriesProperties.defaults())
-                .assemble(MetricsWindow.ONE_MINUTE);
+                .assemble(new MetricsQuery(MetricsWindow.ONE_MINUTE, null, null));
 
+        // 발행 순서로 고르지 않는다. " / " 는 실패 분류 비율 질의(" / on() group_left ")에도 있어
+        // 우선순위를 바꾸는 것만으로 이 테스트가 엉뚱한 질의를 검증하게 된다.
         String failureQuery = source.issued().stream()
-                .filter(promQl -> promQl.contains(" / "))
-                .findFirst()
+                .filter(promQl -> promQl.startsWith("sum(rate("))
+                .filter(promQl -> promQl.contains(" / sum(rate("))
+                .reduce((first, second) -> {
+                    throw new AssertionError(
+                            "실패율 질의로 볼 수 있는 질의가 둘 이상입니다: " + first + " / " + second);
+                })
                 .orElseThrow(() -> new AssertionError("실패율 질의가 나가지 않았습니다."));
 
         Set<ResultClass> failures = ResultClass.systemFailures();

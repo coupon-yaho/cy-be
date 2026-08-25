@@ -9,6 +9,7 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.api.admin.observability.dto.MetricsQuery;
 import com.kafkick.api.observation.http.HttpMetrics.LatencyOutcome;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.Metric;
@@ -43,7 +44,7 @@ class LatencySeriesOutcomeContractTest {
     void seriesLatencyQuerySelectsSuccessOnly() {
         FakePromRangeQuery source = FakePromRangeQuery.alwaysOnePoint();
         new PromSeriesAssembler(source, FIXED_TIME, PrometheusSeriesProperties.defaults())
-                .assemble(MetricsWindow.ONE_MINUTE);
+                .assemble(new MetricsQuery(MetricsWindow.ONE_MINUTE, null, null));
 
         String latencyQuery = source.issued().stream()
                 .filter(promQl -> promQl.contains(MetricAggregation.HTTP_LATENCY_SECONDS))
