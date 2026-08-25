@@ -45,7 +45,7 @@ import com.kafkick.storage.db.RepositoryTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-// 실제 MySQL 비관적 락으로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
+// 실제 MySQL 조건부 UPDATE로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
 
 @RepositoryTest
 @Import({
@@ -183,6 +183,28 @@ class CouponIssueRepositoryTest {
         assertThat(countRows("issuances")).isZero();
         assertThat(countRows("issuance_histories")).isZero();
         assertThat(activeCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("재고 행이 없으면 발급건과 이력을 함께 롤백한다")
+    void rollbackIssuanceWhenStockRowIsMissing() {
+        jdbcTemplate.update(
+                "DELETE FROM coupon_stocks WHERE coupon_id = ?",
+                10L
+        );
+
+        assertThatThrownBy(() -> issue(1L))
+                .isInstanceOfSatisfying(
+                        BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(
+                                        CouponIssueErrorCode
+                                                .COUPON_STOCK_NOT_FOUND
+                                )
+                );
+
+        assertThat(countRows("issuances")).isZero();
+        assertThat(countRows("issuance_histories")).isZero();
     }
 
     @Test

@@ -21,7 +21,7 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
     }
 
     @Override
-    public CouponStockOccupationResult occupyAfterLock(
+    public CouponStockOccupationResult occupyOne(
             Long couponRoundId,
             Instant updatedAt
     ) {
@@ -30,9 +30,12 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
                     couponRoundId,
                     updatedAt
             );
-            return affectedRows == 1
-                    ? CouponStockOccupationResult.OCCUPIED
-                    : CouponStockOccupationResult.SOLD_OUT;
+            if (affectedRows == 1) {
+                return CouponStockOccupationResult.OCCUPIED;
+            }
+            return couponStockJpaRepository.existsById(couponRoundId)
+                    ? CouponStockOccupationResult.SOLD_OUT
+                    : CouponStockOccupationResult.NOT_FOUND;
         } catch (DataAccessException exception) {
             throw new CouponPersistenceException(
                     "쿠폰 재고 점유에 실패했습니다. couponRoundId="
