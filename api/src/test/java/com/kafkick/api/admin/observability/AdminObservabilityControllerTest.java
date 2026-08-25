@@ -146,7 +146,8 @@ class AdminObservabilityControllerTest {
                                                         Instant.parse("2026-08-20T23:59:25Z"), 7d),
                                                 new PromRangePoint(
                                                         Instant.parse("2026-08-20T23:59:30Z"), 0d))),
-                                FIXED_TIME, PrometheusSeriesProperties.defaults())));
+                                FIXED_TIME, PrometheusSeriesProperties.defaults()),
+                        emptyLiveEvents()));
 
         exhausted.perform(get("/api/v1/admin/metrics/series").param("window", "1m"))
                 .andExpect(status().isOk())
@@ -179,7 +180,8 @@ class AdminObservabilityControllerTest {
                 new AdminObservabilityController(
                         new PromMetricsAssembler(FakePromQuery.down(), FIXED_TIME, STALE_AFTER, BUDGET),
                         new PromSeriesAssembler(FakePromRangeQuery.down(), FIXED_TIME,
-                                PrometheusSeriesProperties.defaults())));
+                                PrometheusSeriesProperties.defaults()),
+                        emptyLiveEvents()));
 
         failing.perform(get("/api/v1/admin/metrics/series").param("window", "1m"))
                 .andExpect(status().isOk())
@@ -201,7 +203,8 @@ class AdminObservabilityControllerTest {
                 new AdminObservabilityController(
                         new PromMetricsAssembler(FakePromQuery.empty(), FIXED_TIME, STALE_AFTER, BUDGET),
                         new PromSeriesAssembler(FakePromRangeQuery.alwaysOnePoint(), FIXED_TIME,
-                                PrometheusSeriesProperties.defaults())));
+                                PrometheusSeriesProperties.defaults()),
+                        emptyLiveEvents()));
 
         // window 누락 · 허용값 밖 · 상호배타 위반 — 어느 쪽도 400 을 앞세우면 안 된다.
         withoutHeaders.perform(get("/api/v1/admin/metrics/series"))
