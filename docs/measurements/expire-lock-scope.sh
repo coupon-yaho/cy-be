@@ -178,7 +178,7 @@ SQL
 }
 
 echo; echo "── LAST_EXPIRED_ID · 이미 EXPIRED 150,000 누적 / 이번 대상 5,000 ──"
-boundary_probe no  "① 현재 (IDX(status,expires_at) 만)"
+boundary_probe no  "① 당시 (IDX(status,expires_at) 만) — 이 질의는 지금 코드에 없다"
 boundary_probe yes "② + (updated_at, id) 인덱스"
 
 # ── 후보 ≫ LIMIT 축 ─────────────────────────────────────────────────────────
