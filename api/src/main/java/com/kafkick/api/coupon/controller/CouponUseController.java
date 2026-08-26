@@ -45,7 +45,6 @@ public class CouponUseController {
                 executionService.use(
                         issuanceId,
                         memberId,
-                        request.orderId(),
                         request.orderAmount(),
                         idempotencyKey
                 )

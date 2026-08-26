@@ -49,6 +49,7 @@ import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.port.OrderNumberGenerator;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.coupon.service.CouponUseService;
@@ -77,6 +78,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         CouponStockRepositoryImpl.class,
         IssuanceRepositoryImpl.class,
         IssuanceUsageRepositoryImpl.class,
+        OrderNumberGeneratorImpl.class,
         IssuanceHistoryRepositoryImpl.class,
         IdempotencyRepositoryImpl.class,
         CouponUseRepositoryTest.AuditTestConfig.class
@@ -107,6 +109,9 @@ class CouponUseRepositoryTest {
     private IssuanceHistoryRepository issuanceHistoryRepository;
 
     @Autowired
+    private OrderNumberGenerator orderNumberGenerator;
+
+    @Autowired
     private IdempotencyRepository idempotencyRepository;
 
     @Autowired
@@ -131,7 +136,8 @@ class CouponUseRepositoryTest {
                 issuanceRepository,
                 couponRoundRepository,
                 issuanceUsageRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                orderNumberGenerator
         );
         couponCancelUseService = new CouponCancelUseService(
                 issuanceRepository,
@@ -195,7 +201,7 @@ class CouponUseRepositoryTest {
         assertThat(((Number) usage.get("issuance_id")).longValue())
                 .isEqualTo(100L);
         assertThat(((Number) usage.get("order_id")).longValue())
-                .isEqualTo(30L);
+                .isEqualTo(result.orderId());
         assertThat(((Number) usage.get("discount_amount")).intValue())
                 .isEqualTo(5_000);
         assertThat(usage.get("canceled_at")).isNull();
@@ -209,6 +215,45 @@ class CouponUseRepositoryTest {
         assertThat(idempotency.get("response_body"))
                 .isEqualTo("stored-response");
         assertThat(activeCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("사용 취소 후 재사용하면 서버가 새로운 주문번호를 발급한다")
+    void generateNewOrderNumberWhenReusingCanceledCoupon() {
+        String firstUseKey =
+                "60400000-0000-4000-8000-000000000001";
+        String cancelUseKey =
+                "60400000-0000-4000-8000-000000000002";
+        String secondUseKey =
+                "60400000-0000-4000-8000-000000000003";
+        Instant canceledAt = USED_AT.plusSeconds(60);
+        Instant reusedAt = USED_AT.plusSeconds(120);
+
+        CouponUseResult first = executeUseAt(
+                firstUseKey,
+                REQUEST_HASH,
+                USED_AT
+        );
+        executeCancelUse(cancelUseKey, canceledAt);
+        CouponUseResult second = executeUseAt(
+                secondUseKey,
+                REQUEST_HASH,
+                reusedAt
+        );
+
+        assertThat(first.orderId()).isPositive();
+        assertThat(second.orderId()).isPositive().isNotEqualTo(first.orderId());
+        assertThat(jdbcTemplate.queryForList(
+                """
+                SELECT order_id
+                FROM issuance_usages
+                WHERE issuance_id = 100
+                ORDER BY id
+                """,
+                Long.class
+        )).containsExactly(first.orderId(), second.orderId());
+        assertThat(activeUsageCount()).isEqualTo(1);
+        assertThat(issuanceStatus()).isEqualTo("USED");
     }
 
     @Test
@@ -1050,7 +1095,6 @@ class CouponUseRepositoryTest {
                         couponUseService.use(new CouponUseCommand(
                                 100L,
                                 20L,
-                                223_001L,
                                 20_000,
                                 "22300000-0000-4000-8000-000000000003",
                                 usedAt
@@ -1095,19 +1139,29 @@ class CouponUseRepositoryTest {
     }
 
     private CouponUseResult executeUse(String key, String requestHash) {
+        return executeUseAt(key, requestHash, USED_AT);
+    }
+
+    private CouponUseResult executeUseAt(
+            String key,
+            String requestHash,
+            Instant usedAt
+    ) {
         return transactionTemplate.execute(status -> {
             assertThat(idempotencyRepository.tryStart(
                     key,
                     requestHash,
-                    USED_AT
+                    usedAt
             )).isTrue();
-            CouponUseResult result = couponUseService.use(command(key));
+            CouponUseResult result = couponUseService.use(
+                    command(key, usedAt)
+            );
             idempotencyRepository.complete(
                     key,
                     20L,
                     100L,
                     "stored-response",
-                    USED_AT
+                    usedAt
             );
             return result;
         });
@@ -1192,19 +1246,26 @@ class CouponUseRepositoryTest {
     }
 
     private CouponUseCommand command(String idempotencyKey) {
+        return command(idempotencyKey, USED_AT);
+    }
+
+    private CouponUseCommand command(
+            String idempotencyKey,
+            Instant usedAt
+    ) {
         return new CouponUseCommand(
                 100L,
                 20L,
-                30L,
                 20_000,
                 idempotencyKey,
-                USED_AT
+                usedAt
         );
     }
 
     private void resetData() {
         jdbcTemplate.update("DELETE FROM idempotency_records");
         jdbcTemplate.update("DELETE FROM issuance_usages");
+        jdbcTemplate.update("DELETE FROM coupon_order_numbers");
         jdbcTemplate.update("DELETE FROM issuance_histories");
         jdbcTemplate.update("DELETE FROM issuances");
         jdbcTemplate.update("DELETE FROM coupon_stocks");
