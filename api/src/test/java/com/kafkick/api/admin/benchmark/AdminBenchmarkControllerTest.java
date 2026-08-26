@@ -28,6 +28,7 @@ import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkCommandAcceptedResponse;
 import com.kafkick.core.admin.BenchmarkRunState;
 import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
+import com.kafkick.core.consistency.ConsistencyFinalStatus;
 
 /** Benchmark 조회와 네 가지 운영 명령의 독립 HTTP 계약 및 Validation을 검증합니다. */
 class AdminBenchmarkControllerTest {
@@ -35,8 +36,10 @@ class AdminBenchmarkControllerTest {
     private final RunTimeseriesArchiver archiver = mock(RunTimeseriesArchiver.class);
     private final BenchmarkStartOrchestrator startOrchestrator = mock(BenchmarkStartOrchestrator.class);
     private final BenchmarkFinalizeOrchestrator finalizeOrchestrator = mock(BenchmarkFinalizeOrchestrator.class);
+    private final ConsistencyFinalizer consistencyFinalizer = mock(ConsistencyFinalizer.class);
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminBenchmarkController(Optional.of(archiver), startOrchestrator, finalizeOrchestrator));
+            new AdminBenchmarkController(Optional.of(archiver), Optional.of(startOrchestrator),
+                    Optional.of(finalizeOrchestrator), Optional.of(consistencyFinalizer)));
 
     @Test
     @DisplayName("replica 수는 양수 범위만 HTTP에서 받고 배포값 일치는 gate가 검사한다")
@@ -88,7 +91,7 @@ class AdminBenchmarkControllerTest {
             91L, BenchmarkRunState.RUNNING, Instant.parse("2026-08-23T01:02:03Z")));
         given(finalizeOrchestrator.finalizeRun(1L)).willReturn(new BenchmarkCommandAcceptedResponse(
             1L, BenchmarkRunState.FINALIZED, Instant.parse("2026-08-23T01:03:09Z"),
-            BenchmarkArchiveStatus.FAILED));
+            BenchmarkArchiveStatus.FAILED, ConsistencyFinalStatus.FAILED));
         mockMvc.perform(get("/api/v1/admin/benchmarks/1"))
                 .andExpect(status().isNotImplemented())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
@@ -105,6 +108,9 @@ class AdminBenchmarkControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.state").value("FINALIZED"))
                 .andExpect(jsonPath("$.data.archiveStatus").value("FAILED"));
+        mockMvc.perform(post("/api/v1/admin/benchmarks/1/consistency/retry"))
+                .andExpect(status().isOk());
+        verify(consistencyFinalizer).retry(1L);
         mockMvc.perform(post("/api/v1/admin/benchmarks/1/k6-result")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"tps\":1847.2,\"p99Millis\":412.3,\"failureCount\":0,"
@@ -116,7 +122,8 @@ class AdminBenchmarkControllerTest {
     @Test
     void finalizeMatrixParameterStillRequiresCommandSecret() throws Exception {
         MockMvc withoutSecret = AdminControllerContractTestSupport.mockMvcWithoutAdminHeaders(
-            new AdminBenchmarkController(Optional.of(archiver), startOrchestrator, finalizeOrchestrator));
+            new AdminBenchmarkController(Optional.of(archiver), Optional.of(startOrchestrator),
+                Optional.of(finalizeOrchestrator), Optional.empty()));
 
         withoutSecret.perform(post("/api/v1/admin/benchmarks/7/finalize;a=b")
                 .header(com.kafkick.api.caller.HeaderCallerResolver.USER_ID_HEADER, "812934")
@@ -177,7 +184,8 @@ class AdminBenchmarkControllerTest {
     @Test
     void retryArchiveReturnsNotImplementedWhenFeatureIsUnavailable() throws Exception {
         MockMvc unavailable = AdminControllerContractTestSupport.mockMvc(
-                new AdminBenchmarkController(Optional.empty(), startOrchestrator, finalizeOrchestrator));
+                new AdminBenchmarkController(Optional.empty(), Optional.of(startOrchestrator),
+                    Optional.of(finalizeOrchestrator), Optional.empty()));
         unavailable.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
                 .andExpect(status().isNotImplemented())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-001"));

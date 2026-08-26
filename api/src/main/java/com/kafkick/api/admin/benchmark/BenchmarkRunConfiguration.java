@@ -7,6 +7,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.BenchmarkRunService;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.consistency.ConsistencyFinalStore;
+import org.springframework.beans.factory.annotation.Value;
+import java.time.Duration;
+import org.springframework.beans.factory.ObjectProvider;
 
 /** 회차 API를 노출하는 api 모듈에서만 core 서비스를 빈으로 올린다. */
 @Configuration(proxyBeanMethods = false)
@@ -19,5 +23,15 @@ public class BenchmarkRunConfiguration {
         TimeProvider timeProvider
     ) {
         return new BenchmarkRunService(repository, timeProvider);
+    }
+
+    @Bean
+    public ConsistencyFinalizer consistencyFinalizer(
+            BenchmarkRunService runs,
+            ObjectProvider<ConsistencyFinalStore> store,
+            ObjectProvider<BatchConsistencyFinalClient> batch,
+            @Value("${benchmark.consistency.claim-lease:5m}") Duration claimLease) {
+        return new ConsistencyFinalizer(runs, store.getIfAvailable(), batch.getIfAvailable(),
+                claimLease);
     }
 }

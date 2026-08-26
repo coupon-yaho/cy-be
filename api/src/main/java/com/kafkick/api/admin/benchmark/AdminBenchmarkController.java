@@ -40,23 +40,18 @@ public class AdminBenchmarkController {
     private final Optional<RunTimeseriesArchiver> timeseriesArchiver;
     private final Optional<BenchmarkStartOrchestrator> startOrchestrator;
     private final Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator;
+    private final Optional<ConsistencyFinalizer> consistencyFinalizer;
 
     @Autowired
     public AdminBenchmarkController(
             Optional<RunTimeseriesArchiver> timeseriesArchiver,
             Optional<BenchmarkStartOrchestrator> startOrchestrator,
-            Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator) {
+            Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator,
+            Optional<ConsistencyFinalizer> consistencyFinalizer) {
         this.timeseriesArchiver = timeseriesArchiver;
         this.startOrchestrator = startOrchestrator;
         this.finalizeOrchestrator = finalizeOrchestrator;
-    }
-
-    AdminBenchmarkController(
-            Optional<RunTimeseriesArchiver> timeseriesArchiver,
-            BenchmarkStartOrchestrator startOrchestrator,
-            BenchmarkFinalizeOrchestrator finalizeOrchestrator) {
-        this(timeseriesArchiver, Optional.ofNullable(startOrchestrator),
-            Optional.ofNullable(finalizeOrchestrator));
+        this.consistencyFinalizer = consistencyFinalizer;
     }
 
     /**
@@ -161,6 +156,14 @@ public class AdminBenchmarkController {
             @PathVariable @Positive Long benchmarkRunId, Caller caller) {
         timeseriesArchiver.orElseThrow(this::notImplemented)
                 .retry(benchmarkRunId);
+        return ResponseEnvelope.success();
+    }
+
+    /** FAILED 또는 lease가 만료된 IN_PROGRESS 회차의 FINAL 정합성 계산을 다시 실행합니다. */
+    @PostMapping("/benchmarks/{benchmarkRunId}/consistency/retry")
+    public ResponseEnvelope<Void> retryConsistency(
+            @PathVariable @Positive Long benchmarkRunId, Caller caller) {
+        consistencyFinalizer.orElseThrow(this::notImplemented).retry(benchmarkRunId);
         return ResponseEnvelope.success();
     }
 

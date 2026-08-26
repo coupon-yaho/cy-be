@@ -65,6 +65,9 @@ benchmark:
     base-url: ${BENCHMARK_BATCH_BASE_URL:http://batch:9091}
     connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}
     read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}
+    consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:3s}
+  consistency:
+    claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}
 
 management:
   server:
