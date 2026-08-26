@@ -4,7 +4,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -34,42 +33,31 @@ public class BrandDayCalendarQueryService {
     private final CouponTemplateRepository couponTemplateRepository;
     private final BrandDayCalendarQueryPort calendarQueryPort;
     private final ZoneId scheduleZone;
-    private final int maxDays;
 
     @Autowired
     public BrandDayCalendarQueryService(
             CouponTemplateRepository couponTemplateRepository,
             BrandDayCalendarQueryPort calendarQueryPort,
             @Value("${coupon.calendar.schedule-zone:${coupon.round-generation.schedule-zone}}")
-            String scheduleZone,
-            @Value("${coupon.calendar.max-days}")
-            int maxDays
+            String scheduleZone
     ) {
         this(
                 couponTemplateRepository,
                 calendarQueryPort,
-                ZoneId.of(scheduleZone),
-                maxDays
+                ZoneId.of(scheduleZone)
         );
     }
 
     public BrandDayCalendarQueryService(
             CouponTemplateRepository couponTemplateRepository,
             BrandDayCalendarQueryPort calendarQueryPort,
-            ZoneId scheduleZone,
-            int maxDays
+            ZoneId scheduleZone
     ) {
         this.couponTemplateRepository = Objects.requireNonNull(
                 couponTemplateRepository
         );
         this.calendarQueryPort = Objects.requireNonNull(calendarQueryPort);
         this.scheduleZone = Objects.requireNonNull(scheduleZone);
-        if (maxDays <= 0) {
-            throw new IllegalArgumentException(
-                    "달력 최대 조회 일수는 0보다 커야 합니다."
-            );
-        }
-        this.maxDays = maxDays;
     }
 
     @Transactional(readOnly = true)
@@ -205,8 +193,7 @@ public class BrandDayCalendarQueryService {
                     "달력 조회 종료일이 허용 범위를 벗어났습니다."
             );
         }
-        if (to.isBefore(from)
-                || ChronoUnit.DAYS.between(from, to) >= maxDays) {
+        if (to.isBefore(from)) {
             throw new BusinessException(
                     CommonErrorCode.INVALID_INPUT,
                     "달력 조회 기간이 올바르지 않습니다."

@@ -4,7 +4,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
@@ -28,30 +27,25 @@ public class CouponRoundGenerationService {
     private final CouponTemplateRepository couponTemplateRepository;
     private final CouponRoundCreationService couponRoundCreationService;
     private final ZoneId scheduleZone;
-    private final int maxGenerationDays;
 
     @Autowired
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
             CouponRoundCreationService couponRoundCreationService,
             @Value("${coupon.round-generation.schedule-zone}")
-            String scheduleZone,
-            @Value("${coupon.round-generation.max-days}")
-            int maxGenerationDays
+            String scheduleZone
     ) {
         this(
                 couponTemplateRepository,
                 couponRoundCreationService,
-                ZoneId.of(scheduleZone),
-                maxGenerationDays
+                ZoneId.of(scheduleZone)
         );
     }
 
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
             CouponRoundCreationService couponRoundCreationService,
-            ZoneId scheduleZone,
-            int maxGenerationDays
+            ZoneId scheduleZone
     ) {
         this.couponTemplateRepository = Objects.requireNonNull(
                 couponTemplateRepository
@@ -60,12 +54,6 @@ public class CouponRoundGenerationService {
                 couponRoundCreationService
         );
         this.scheduleZone = Objects.requireNonNull(scheduleZone);
-        if (maxGenerationDays <= 0) {
-            throw new IllegalArgumentException(
-                    "최대 회차 생성 기간은 0보다 커야 합니다."
-            );
-        }
-        this.maxGenerationDays = maxGenerationDays;
     }
 
     public CouponRoundGenerationResult generate(
@@ -157,12 +145,6 @@ public class CouponRoundGenerationService {
         if (toDate.isBefore(fromDate)) {
             throw new IllegalArgumentException(
                     "회차 생성 종료일은 시작일보다 빠를 수 없습니다."
-            );
-        }
-        if (ChronoUnit.DAYS.between(fromDate, toDate)
-                >= maxGenerationDays) {
-            throw new IllegalArgumentException(
-                    "회차 생성 기간이 허용 범위를 초과했습니다."
             );
         }
     }
