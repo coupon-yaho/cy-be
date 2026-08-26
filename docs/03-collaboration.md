@@ -155,9 +155,10 @@ config.ignore_pr_labels                  = []                 (기본값)
 | (없음) | `handle_push_trigger` — **새 커밋마다 재리뷰**. 이 저장소에 꼭 필요하다 |
 | `auto_review.labels: ["!skip-review"]` | `[config].ignore_pr_labels` |
 | `ignore_usernames` | `[config].ignore_pr_authors` |
-| `path_instructions` 16개 (25,251자) | **저장소 루트 `best_practices.md`** — 상한 2,000줄, 현재 195줄 |
+| `path_instructions` 16개 (25,251자) | **아직 대응 없음.** Qodo 는 저장소 루트의 규칙 파일을 읽는데(`/config` 의 `best_practices.allow_repo_best_practices = True`) **파일 이름을 확정 못 했다** — `/config` 는 `best_practices.md` 라 하고 Qodo 리뷰는 `REVIEW.md` 라 한다. 재 보고 정한다 |
 | `path_filters` | **대응 없음.** `allow_only_specific_folders` 는 방향이 반대라 안 썼다 |
-| `pre_merge_checks.title: off` | `[qodo_describe_agent].publish_mode = "comment"` — 봇이 PR 본문을 안 덮는다 |
+| `high_level_summary: true` (요약을 코멘트로) | `[qodo_describe_agent].publish_mode = "comment"` — 봇이 PR 본문을 안 덮는다 |
+| `pre_merge_checks.title.mode: "off"` | **대응 없음 — 필요도 없다.** 양쪽 다 제목을 검사하지 않는다. 제목 규약은 `conventions.yml` 이 정규식으로 강제하고 그것이 required check 다 |
 | `tools`(pmd·semgrep·gitleaks) · `knowledge_base` · `labeling_instructions` | **대응 확인 못 함** |
 
 **`.pr_agent.toml` 을 CodeRabbit 키 이름만 바꿔 옮겼다가 대부분 틀렸다** —
