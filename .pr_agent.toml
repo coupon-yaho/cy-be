@@ -9,7 +9,9 @@
 #      ⑴ 리뷰어가 설정을 **base 브랜치**에서 읽는다 — `.coderabbit.yaml` 이 main·CY-1·CY-5·
 #         CY-15 네 곳에 모두 있는 것이 그 증거다. 그렇다면 이 PR 이 머지돼
 #         `feature/CY-15` 에 올라간 뒤부터 먹는다.
-#      ⑵ 키 이름이 다르다. 그때는 응답 언어가 계속 영어다.
+#      ⑵ 키 이름이 다르다. 오픈소스 PR-Agent 는 `[pr_reviewer].extra_instructions`,
+#         호스팅 Qodo 는 `[review_agent].issues_user_guidelines` 를 쓴다는 안내가 있다 —
+#         **출처가 AI 답변이라 확정은 아니다.** 그래서 둘 다 넣어 두고 잰다.
 #    **가르는 법** — 머지 뒤 새 PR 에서 리뷰가 한국어로 오면 ⑴, 여전히 영어면 ⑵ 다.
 #    ⑵ 로 판명되면 Qodo 문서에서 언어 키를 찾아 고치고 이 주석을 지운다.
 
@@ -17,6 +19,35 @@
 # **한국어로 답하게 한다.** 기본이 영어다 — .coderabbit.yaml 의 `language: "ko-KR"` 에
 # 대응하는 자리다. 팀이 한국어로 일하는데 리뷰만 영어면 읽는 비용이 는다.
 response_language = "ko-KR"
+
+# ── 섹션을 둘 다 둔다 ──────────────────────────────────────────────────────
+# 오픈소스 PR-Agent 는 `[pr_reviewer].extra_instructions`, 호스팅 Qodo 는
+# `[review_agent].issues_user_guidelines` 를 쓰는 것으로 보인다. **어느 쪽이 먹는지
+# 확인 전이라 둘 다 둔다** — 안 읽히는 섹션은 무시될 뿐이라 대가가 없다.
+# 먹는 쪽이 확인되면 안 쓰는 쪽을 지운다.
+
+[review_agent]
+issues_user_guidelines = """
+모든 코드 리뷰·버그 탐지·개선 제안을 **반드시 한국어로** 작성하십시오.
+
+이 저장소의 규약입니다. 위반을 우선해서 지적하십시오.
+
+1. 어휘 — `coupons` 는 회차, `issuances` 는 발급건입니다. 옛 문서의 `campaign`/`coupon` 과
+   뒤집혀 있습니다. 컬럼 `verification_findings.campaign_id` 는 `coupons.id`,
+   `coupon_id` 는 `issuances.id` 를 가리킵니다.
+2. 헥사고날 경계 — `api`·`batch` 는 `storage` 어댑터를 runtimeOnly 로만 의존합니다.
+   어댑터 타입을 컴파일 시점에 참조하면 blocker 입니다. `core` 가 정의한 포트만 씁니다.
+3. 결정론 — 검증 배치는 `now()` 를 쓰지 않습니다. 시각은 `TimeProvider` 나 잡 파라미터
+   `asOf` 에서 옵니다. 같은 `asOf` 재실행이 같은 지문·checksum 을 내야 합니다.
+4. target_key — 규칙별 형식이 고정입니다. V1 `COUPON:{id}`, V2 `COUPON:{id}|MEMBER:{id}`,
+   V3·V5·V6 `ISSUANCE:{id}`, V4 `HISTORY:{id}`. 다형 FK 로 조인하면 안 됩니다.
+5. 클래스 멤버 순서 — 상수 → 필드 → 생성자 → public → private.
+6. 테스트 격리 — MySQL 컨테이너를 JVM 이 공유합니다. 데이터를 읽는 테스트는
+   `VerificationSeed.clear()` 로 스스로 비워야 합니다. 안 비우면 실패가 실행 순서를 탑니다.
+7. 주석·javadoc 이 코드와 어긋나면 지적하십시오. 이 저장소는 주석을 근거로 읽습니다 —
+   길이는 문제가 아니고 **거짓**이 문제입니다.
+8. 실측 없이 단정한 서술을 지적하십시오. "그럴 것이다" 를 사실처럼 적은 자리입니다.
+"""
 
 [pr_reviewer]
 # 이 저장소에만 있는 판단 기준. 도구가 경로별 규칙을 CodeRabbit 만큼 표현 못 할 수 있어
