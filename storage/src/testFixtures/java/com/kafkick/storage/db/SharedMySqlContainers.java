@@ -91,39 +91,6 @@ final class SharedMySqlContainers {
     }
 
     /**
-     * <b>Ryuk 이 꺼져 있으면 무엇이 달라지는지 알린다. 죽이지는 않는다.</b>
-     *
-     * <p>한때 여기서 예외를 던졌다. 근거는 <i>"{@code stop()}·{@code close()} 를 비운 순간부터
-     * 회수 경로가 Ryuk 하나뿐"</i> 이었는데 <b>그 전제가 틀렸다.</b> 실측(testcontainers 2.0.5
-     * 바이트코드):
-     *
-     * <ul>
-     *   <li>{@code ResourceReaper.instance()} 가 {@code TESTCONTAINERS_RYUK_DISABLED} 를 읽어
-     *       참이면 경고를 찍고 {@code JVMHookResourceReaper} 를 쓴다.</li>
-     *   <li>그 구현은 {@code performCleanup()} 에서 <b>Docker API 로 직접 지운다</b>
-     *       ({@code removeContainerCmd}) — {@code GenericContainer.stop()} 을 안 탄다.
-     *       즉 이 클래스의 오버라이드가 그것을 무력화하지 않는다.</li>
-     * </ul>
-     *
-     * <p>그래서 rootless Podman·Bitbucket 처럼 Ryuk 을 못 쓰는 환경에서도 <b>정상 종료면
-     * 걷힌다.</b> 거기서 빌드를 통째로 막는 것은 과하다.
-     *
-     * <p><b>다만 같지는 않다.</b> JVM 훅은 <b>비정상 종료에 안 돈다</b> — {@code kill -9},
-     * OOM 킬, 러너 강제 종료면 컨테이너가 남는다. Ryuk 은 사이드카라 그 경우에도 걷는다.
-     * 그 차이를 알고 쓰라고 한 줄 남긴다.
-     */
-    private static void warnIfRyukDisabled() {
-        if (!Boolean.parseBoolean(System.getenv("TESTCONTAINERS_RYUK_DISABLED"))) {
-            return;
-        }
-        System.err.println(
-                "[cy-be] TESTCONTAINERS_RYUK_DISABLED 가 켜져 있습니다. "
-                        + "JVMHookResourceReaper 가 정상 종료에서 컨테이너를 걷지만, "
-                        + "kill -9·OOM 킬 같은 비정상 종료에는 안 돕니다 — "
-                        + "이 컨테이너는 stop() 을 무시하므로 그때는 손으로 지워야 합니다.");
-    }
-
-    /**
      * 컨테이너를 만든다. <b>띄우지는 않는다</b> — 부르는 쪽이 {@code @Bean} 안에서 띄운다.
      */
     static MySQLContainer create() {
@@ -171,5 +138,38 @@ final class SharedMySqlContainers {
                         // 켜져 있으면 SUPER 없는 계정이 트리거를 못 만들어(오류 1419),
                         // "실행 중에 데이터가 바뀐다" 를 재현하는 테스트를 쓸 수 없다.
                         "--skip-log-bin");
+    }
+
+    /**
+     * <b>Ryuk 이 꺼져 있으면 무엇이 달라지는지 알린다. 죽이지는 않는다.</b>
+     *
+     * <p>한때 여기서 예외를 던졌다. 근거는 <i>"{@code stop()}·{@code close()} 를 비운 순간부터
+     * 회수 경로가 Ryuk 하나뿐"</i> 이었는데 <b>그 전제가 틀렸다.</b> 실측(testcontainers 2.0.5
+     * 바이트코드):
+     *
+     * <ul>
+     *   <li>{@code ResourceReaper.instance()} 가 {@code TESTCONTAINERS_RYUK_DISABLED} 를 읽어
+     *       참이면 경고를 찍고 {@code JVMHookResourceReaper} 를 쓴다.</li>
+     *   <li>그 구현은 {@code performCleanup()} 에서 <b>Docker API 로 직접 지운다</b>
+     *       ({@code removeContainerCmd}) — {@code GenericContainer.stop()} 을 안 탄다.
+     *       즉 이 클래스의 오버라이드가 그것을 무력화하지 않는다.</li>
+     * </ul>
+     *
+     * <p>그래서 rootless Podman·Bitbucket 처럼 Ryuk 을 못 쓰는 환경에서도 <b>정상 종료면
+     * 걷힌다.</b> 거기서 빌드를 통째로 막는 것은 과하다.
+     *
+     * <p><b>다만 같지는 않다.</b> JVM 훅은 <b>비정상 종료에 안 돈다</b> — {@code kill -9},
+     * OOM 킬, 러너 강제 종료면 컨테이너가 남는다. Ryuk 은 사이드카라 그 경우에도 걷는다.
+     * 그 차이를 알고 쓰라고 한 줄 남긴다.
+     */
+    private static void warnIfRyukDisabled() {
+        if (!Boolean.parseBoolean(System.getenv("TESTCONTAINERS_RYUK_DISABLED"))) {
+            return;
+        }
+        System.err.println(
+                "[cy-be] TESTCONTAINERS_RYUK_DISABLED 가 켜져 있습니다. "
+                        + "JVMHookResourceReaper 가 정상 종료에서 컨테이너를 걷지만, "
+                        + "kill -9·OOM 킬 같은 비정상 종료에는 안 돕니다 — "
+                        + "이 컨테이너는 stop() 을 무시하므로 그때는 손으로 지워야 합니다.");
     }
 }
