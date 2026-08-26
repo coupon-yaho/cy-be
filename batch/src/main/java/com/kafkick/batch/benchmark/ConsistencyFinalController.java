@@ -2,7 +2,9 @@ package com.kafkick.batch.benchmark;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
@@ -20,10 +22,15 @@ import com.kafkick.batch.observation.ConsistencyRawValueReader.DomainRawSnapshot
 import com.kafkick.batch.observation.DomainGaugeProperties;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.ConsistencyErrorCode;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.ConsistencyRawSnapshot;
+import com.kafkick.core.consistency.GapValue;
+import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.Severity;
+import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
@@ -126,18 +133,50 @@ public class ConsistencyFinalController {
      * 거절이면 {@code violations} 만 채운다 — api 가 재실행 판단 근거로 저장하는 값이다.
      */
     public record ConsistencyFinalResponse(
-            ConsistencyEvaluation evaluation, List<Violation> violations) {
+            EvaluationPayload evaluation, List<Violation> violations) {
 
         public ConsistencyFinalResponse {
             violations = violations == null ? List.of() : List.copyOf(violations);
         }
 
         static ConsistencyFinalResponse of(ConsistencyEvaluation evaluation) {
-            return new ConsistencyFinalResponse(evaluation, List.of());
+            return new ConsistencyFinalResponse(EvaluationPayload.from(evaluation), List.of());
         }
 
         static ConsistencyFinalResponse rejected(List<Violation> violations) {
             return new ConsistencyFinalResponse(null, violations);
+        }
+    }
+
+    /**
+     * 도메인 모델을 그대로 내보내지 않기 위한 전송 표현이다. {@link ConsistencyEvaluation} 은
+     * 생성자에서 단계별 불변식을 강제하므로, 어긋난 본문이 오면 역직렬화 도중이 아니라
+     * 변환 지점에서 드러나야 원인을 짚을 수 있다.
+     */
+    public record EvaluationPayload(
+            Map<ConsistencyGapType, GapPayload> gaps,
+            GapPayload overIssued,
+            ConsistencyPhase phase,
+            Verdict verdict,
+            Severity severity) {
+
+        public EvaluationPayload {
+            gaps = gaps == null ? Map.of() : Map.copyOf(gaps);
+        }
+
+        static EvaluationPayload from(ConsistencyEvaluation evaluation) {
+            Map<ConsistencyGapType, GapPayload> gaps = new EnumMap<>(ConsistencyGapType.class);
+            evaluation.gaps().forEach((type, gap) -> gaps.put(type, GapPayload.from(gap)));
+            return new EvaluationPayload(gaps, GapPayload.from(evaluation.overIssued()),
+                    evaluation.phase(), evaluation.verdict(), evaluation.severity());
+        }
+    }
+
+    /** {@link GapValue} 의 전송 표현이다. */
+    public record GapPayload(Long value, SourceStatus state, Instant observedAt) {
+
+        static GapPayload from(GapValue gap) {
+            return new GapPayload(gap.value(), gap.state(), gap.observedAt());
         }
     }
 }

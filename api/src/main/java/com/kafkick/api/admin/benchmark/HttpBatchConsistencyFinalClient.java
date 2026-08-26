@@ -63,6 +63,6 @@ public class HttpBatchConsistencyFinalClient implements BatchConsistencyFinalCli
             throw new BusinessException(BenchmarkErrorCode.CONSISTENCY_SOURCE_UNAVAILABLE,
                     "batch FINAL 계산 응답이 비었습니다");
         }
-        return result.evaluation();
+        return result.evaluation().toDomain();
     }
 }

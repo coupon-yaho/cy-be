@@ -57,7 +57,9 @@ class ConsistencyFinalControllerTest {
 
         var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody().evaluation()).isSameAs(expected);
+        assertThat(response.getBody().evaluation().verdict()).isEqualTo(expected.verdict());
+        assertThat(response.getBody().evaluation().gaps())
+                .containsOnlyKeys(ConsistencyGapType.values());
         verify(reader).read();
         verify(calculator).evaluate(raw, ConsistencyPhase.FINAL, EngineVersion.V3);
     }
