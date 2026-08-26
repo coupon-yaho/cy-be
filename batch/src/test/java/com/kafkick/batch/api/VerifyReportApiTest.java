@@ -20,10 +20,10 @@ import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.verification.VerificationFinding;
+import com.kafkick.core.verification.VerificationFindingRepository;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
-import com.kafkick.storage.db.verification.VerificationFindingJdbcAdapter;
 
 import tools.jackson.databind.JsonNode;
 
@@ -60,8 +60,11 @@ class VerifyReportApiTest {
     @Autowired
     private VerificationRunRepository runs;
 
+    // **포트로 받는다.** batch 는 storage 어댑터를 runtimeOnly 로만 의존한다 —
+    // 어댑터 타입을 컴파일 시점에 참조하면 그 경계가 무너진다. 쓰는 것은 appendAll 하나이고
+    // 그것은 포트에 있다. 바로 위 runs 도 이미 포트로 받고 있었다.
     @Autowired
-    private VerificationFindingJdbcAdapter findings;
+    private VerificationFindingRepository findings;
 
     @Autowired
     private JdbcClient jdbcClient;

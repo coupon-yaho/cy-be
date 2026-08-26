@@ -87,6 +87,11 @@ class BatchApiExceptionHandlerCoverageTest {
     void adviceListsNoStaleTypes() {
         RestControllerAdvice advice = AnnotationUtils.findAnnotation(
                 BatchApiExceptionHandler.class, RestControllerAdvice.class);
+        // findAnnotation 은 null 을 준다. 바로 쓰면 실패 메시지가 NPE 뿐이라,
+        // 애노테이션이 사라진 것인지 목록이 틀린 것인지 안 드러난다.
+        assertThat(advice)
+                .as("advice 애노테이션이 사라지면 모든 도메인 예외가 500 으로 나간다")
+                .isNotNull();
 
         assertThat(Arrays.stream(advice.assignableTypes())
                 .filter(type -> !type.isAnnotationPresent(

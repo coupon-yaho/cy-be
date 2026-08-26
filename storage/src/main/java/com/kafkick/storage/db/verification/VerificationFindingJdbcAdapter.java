@@ -13,7 +13,9 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Repository;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
 
@@ -167,10 +169,33 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
     public Map<FindingType, Integer> countByType(long runId) {
         Map<FindingType, Integer> byType = new LinkedHashMap<>();
         jdbcTemplate.query(SELECT_COUNT_BY_TYPE, new MapSqlParameterSource("runId", runId),
-                (RowCallbackHandler) rs ->
-                        byType.put(FindingType.valueOf(rs.getString("finding_type")),
-                                rs.getInt("c")));
+                (RowCallbackHandler) rs -> {
+                    String raw = rs.getString("finding_type");
+                    byType.put(toType(raw, runId), rs.getInt("c"));
+                });
         return byType;
+    }
+
+    /**
+     * <b>{@code valueOf} 를 그냥 부르면 안 된다.</b> 그 컬럼에 CHECK 제약이 없어서
+     * {@link FindingType} 에 없는 값이 들어갈 수 있고, 그때
+     * {@code IllegalArgumentException} 이 그대로 올라가 <b>제출물 조회가 500 + 스프링
+     * 기본 본문</b>으로 끝난다 — 원인이 어디에도 안 남는다.
+     *
+     * <p>형제 어댑터({@code VerificationRunJdbcAdapter})가 이미 같은 자리에서
+     * {@code BusinessException} 을 던진다. 그 방식을 따른다.
+     *
+     * <p><b>건너뛰지 않는다.</b> 모르는 행을 조용히 빼면 규칙별 검출 수가 실제보다 적어지고,
+     * 그 리포트가 <b>합격 증거로 쓰인다.</b> 못 읽으면 못 읽는다고 말해야 한다.
+     */
+    private static FindingType toType(String raw, long runId) {
+        try {
+            return FindingType.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(
+                    VerificationErrorCode.UNKNOWN_FINDING_TYPE,
+                    "run=" + runId + " finding_type=" + raw);
+        }
     }
 
     private static SqlParameterSource toParams(long runId, VerificationFinding finding) {

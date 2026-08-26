@@ -1,6 +1,7 @@
 package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;
@@ -224,6 +226,33 @@ class VerificationFindingJdbcAdapterTest {
         assertThat(adapter.countByType(runId))
                 .hasSize(1)
                 .containsOnlyKeys(FindingType.STOCK_MISMATCH);
+    }
+
+    /**
+     * <b>{@code finding_type} 에 CHECK 제약이 없다</b>({@code varchar(40)} + 주석뿐).
+     * 규칙을 하나 더해 행을 쓴 뒤 코드를 되돌리면 이 상태가 된다.
+     *
+     * <p>{@code valueOf} 를 그냥 부르면 {@code IllegalArgumentException} 이 올라가고,
+     * <b>제출물 조회가 500 + 스프링 기본 본문</b>으로 끝난다 — 원인이 어디에도 안 남아
+     * 판정을 아예 못 읽는다. 도메인 예외로 바꿔 봉투에 코드를 싣는다.
+     *
+     * <p><b>조용히 건너뛰면 안 된다.</b> 그러면 규칙별 검출 수가 실제보다 적어지고,
+     * 그 리포트가 합격 증거로 쓰인다.
+     */
+    @Test
+    @DisplayName("모르는 규칙 이름이 섞이면 도메인 예외다 — 500 으로 죽으면 원인이 안 남는다")
+    void rejectsUnknownFindingType() {
+        jdbcClient.sql("""
+                        INSERT INTO verification_findings
+                                    (run_id, finding_type, target_key, expected, actual)
+                        VALUES (:runId, 'V7_FROM_THE_FUTURE', 'COUPON:1', 'e', 'a')
+                        """)
+                .param("runId", runId)
+                .update();
+
+        assertThatThrownBy(() -> adapter.countByType(runId))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("V7_FROM_THE_FUTURE");
     }
 
     @Test

@@ -176,6 +176,26 @@ public enum VerificationErrorCode implements ErrorCode {
             "만료 크론이 곧 뜹니다. 만료는 이 검증을 건너뛰지 않고 지나가며 그때 이 asOf 는 "
                     + "영구히 못 쓰게 됩니다 — 배치 창(만료·정리·검증)을 지난 뒤 다시 "
                     + "부르십시오. 정확한 시각은 배치 로그에 있습니다."
+    ),
+
+    /**
+     * {@code verification_findings.finding_type} 에 {@link
+     * com.kafkick.core.verification.FindingType} 에 없는 값이 들어 있다.
+     *
+     * <p><b>그 컬럼에 CHECK 제약이 없다</b>({@code varchar(40)} + 주석뿐). 규칙을 하나 더해
+     * 행을 쓴 뒤 코드를 되돌리면 그 상태가 된다.
+     *
+     * <p><b>죽는 것은 맞지만 500 으로 죽으면 안 된다.</b> 이 조회는 D13 제출물을 뜨는
+     * 자리라, 한 행 때문에 죽으면 <i>"판정을 아예 못 읽는다"</i> 가 되고 스프링 기본 본문에는
+     * 원인이 없다. 봉투에 코드를 실어 <b>왜 못 읽는지</b>를 남긴다.
+     *
+     * <p>조용히 건너뛰지 않는 이유는 그것이 <b>집계를 거짓으로 만들기</b> 때문이다 —
+     * 리포트의 규칙별 검출 수가 실제보다 적어지고, 그 리포트가 합격 증거로 쓰인다.
+     */
+    UNKNOWN_FINDING_TYPE(
+            500,
+            "VERIFICATION-018",
+            "검출 행에 알 수 없는 규칙 이름이 있습니다."
     );
 
     private final int status;
