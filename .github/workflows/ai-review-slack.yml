@@ -1,6 +1,9 @@
 name: AI 리뷰 Slack 알림
 
-# CodeRabbit 이 PR 에 리뷰를 남기면 Slack 으로 보낸다.
+# AI 리뷰어가 PR 에 리뷰를 남기면 Slack 으로 보낸다.
+#
+# 받는 봇 둘 — Qodo(자동) · CodeRabbit(호출형). 근거는 docs/03 3.0a.
+# 표시 이름은 로그인에서 만든다. 하드코딩하면 남의 이름으로 나간다.
 #
 # ─────────────────────────────────────────────────────────
 # 왜 `on: status` 가 아니라 `on: pull_request_review` 인가
@@ -72,6 +75,13 @@ jobs:
               ?? { color: '#cccccc', text: review.state ?? 'unknown' };
 
             // 하위 → 에픽 인지 에픽 → main 인지가 한눈에 보이게 한다.
+            // 봇 로그인에서 표시 이름을 만든다. 둘 다 받으므로(위 if) 출처가 갈린다.
+            const REVIEWERS = {
+              'coderabbitai[bot]': 'CodeRabbit',
+              'qodo-code-review[bot]': 'Qodo',
+            };
+            const reviewer = REVIEWERS[review.user.login] ?? review.user.login;
+
             const flow = `\`${pr.head.ref}\` → \`${pr.base.ref}\``;
             const isEpicMerge = pr.base.ref === context.payload.repository.default_branch;
 
@@ -79,8 +89,10 @@ jobs:
               attachments: [
                 {
                   color: state.color,
-                  fallback: `CodeRabbit ${state.text}: #${pr.number} ${pr.title}`,
-                  title: `CodeRabbit 리뷰 — ${state.text}`,
+                  // **어느 봇이 냈는지 그대로 싣는다.** 하드코딩하면 Qodo 리뷰가
+                  // CodeRabbit 이름으로 가고, 슬랙만 보는 사람은 출처를 못 가른다.
+                  fallback: `${reviewer} ${state.text}: #${pr.number} ${pr.title}`,
+                  title: `${reviewer} 리뷰 — ${state.text}`,
                   title_link: review.html_url,
                   fields: [
                     { title: 'PR',     value: `<${pr.html_url}|#${pr.number} ${pr.title}>`, short: false },
