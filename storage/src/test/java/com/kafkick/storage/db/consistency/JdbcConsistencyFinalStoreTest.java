@@ -3,10 +3,12 @@ package com.kafkick.storage.db.consistency;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -32,6 +34,7 @@ import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyFinalStore;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.ConsistencyPhase;
@@ -155,23 +158,115 @@ class JdbcConsistencyFinalStoreTest {
     void sameEvaluatedAtBreaksTheTieWithTheHigherRunId() {
         save(1, evaluation(SourceStatus.VALID));
         save(2, evaluation(SourceStatus.STALE));
-        assertThat(jdbc.queryForObject("""
-            SELECT run_id FROM consistency_finals WHERE coupon_id=11
-             ORDER BY evaluated_at DESC, run_id DESC LIMIT 1
-            """, Long.class)).isEqualTo(2L);
+
+        ConsistencyFinalObservation latest = store.findLatestByCouponIds(List.of(11L)).get(11L);
+
+        assertThat(latest.value().evaluation().gaps().get(ConsistencyGapType.LUA_GAP).state())
+                .isEqualTo(SourceStatus.STALE);
+    }
+
+    @Test
+    void incompleteRunFinalDoesNotHideTheLatestFinalizedRunResult() {
+        save(1, evaluation(SourceStatus.VALID));
+        save(2, evaluation(SourceStatus.STALE));
+        jdbc.update("UPDATE benchmark_runs SET run_status='OBSERVED', finalized_at=NULL WHERE id=2");
+
+        ConsistencyFinalObservation latest = store.findLatestByCouponIds(List.of(11L)).get(11L);
+
+        assertThat(latest.value().evaluation().gaps().get(ConsistencyGapType.LUA_GAP).state())
+                .isEqualTo(SourceStatus.VALID);
     }
 
     @Test
     void missingFinalIsPendingAndMissingCampaignIsNotApplicable() {
-        jdbc.update("""
-            INSERT INTO coupons
-              (id, template_id, brand_id, name, policy_type, valid_days, eligible_grades_mask,
-               open_at, close_at, status, created_at, generated_at)
-            VALUES (12, 1, 1, 'pending', 'FIXED_AMOUNT', 1, 1,
-                    '2026-08-01', '2026-09-01', 'CLOSED', NOW(6), NOW(6))
-            """);
+        insertCoupon(12, "pending");
+        insertCoupon(17, "not-applied");
+        insertFinalizedRun(12, "run-12", 12);
         assertThat(store.findLatestByCouponId(12L).status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(store.findLatestByCouponId(17L).status()).isEqualTo(SourceStatus.N_A);
         assertThat(store.findLatestByCouponId(999L).status()).isEqualTo(SourceStatus.N_A);
+    }
+
+    @Test
+    void bulkReadReturnsEveryRequestedCampaignInFirstInputOrder() {
+        save(1, evaluation(SourceStatus.VALID));
+        insertCoupon(16, "bulk-pending");
+        insertFinalizedRun(13, "run-13", 16);
+
+        Map<Long, ConsistencyFinalObservation> result =
+                store.findLatestByCouponIds(List.of(16L, 11L, 16L, 999L));
+
+        assertThat(result.keySet()).containsExactly(16L, 11L, 999L);
+        assertThat(result.get(16L).status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(result.get(11L).status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.get(999L).status()).isEqualTo(SourceStatus.N_A);
+        assertThatThrownBy(() -> result.put(1000L,
+                new ConsistencyFinalObservation(SourceStatus.N_A, null)))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void completedFinalStaysValidWhileANewerBenchmarkIsInProgress() {
+        save(1, evaluation(SourceStatus.VALID));
+        insertFinalizedRun(14, "run-14");
+        jdbc.update("UPDATE benchmark_runs SET consistency_status='IN_PROGRESS', "
+                + "consistency_claimed_at=NOW(6), consistency_claim_token='owner' WHERE id=14");
+
+        assertThat(store.findLatestByCouponIds(List.of(11L)).get(11L).status())
+                .isEqualTo(SourceStatus.VALID);
+    }
+
+    @Test
+    void invalidIdsAreRejectedBeforeObservationJdbcIsCalled() {
+        JdbcTemplate observation = org.mockito.Mockito.mock(JdbcTemplate.class);
+        ConsistencyFinalStore isolated = new JdbcConsistencyFinalStore(jdbc, observation);
+
+        assertThatThrownBy(() -> isolated.findLatestByCouponIds(List.of(1L, 0L)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> isolated.findLatestByCouponIds(java.util.Arrays.asList(1L, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(isolated.findLatestByCouponIds(List.of())).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(observation);
+    }
+
+    @Test
+    void corruptFinalEnumMakesOnlyThatCampaignUnavailable() {
+        insertCoupon(15, "second");
+        insertFinalizedRun(15, "run-15", 15);
+        save(1, evaluation(SourceStatus.VALID));
+        String token = store.claim(15, Duration.ofMinutes(5)).orElseThrow().token();
+        assertThat(store.complete(15, token, 15L, EngineVersion.V3,
+                Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
+        jdbc.execute("ALTER TABLE consistency_finals "
+                + "ALTER CHECK ck_consistency_final_verdict NOT ENFORCED");
+        try {
+            jdbc.update("UPDATE consistency_finals SET verdict='BROKEN' WHERE run_id=15");
+
+            Map<Long, ConsistencyFinalObservation> result =
+                    store.findLatestByCouponIds(List.of(11L, 15L));
+
+            assertThat(result.get(11L).status()).isEqualTo(SourceStatus.VALID);
+            assertThat(result.get(15L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        } finally {
+            jdbc.update("UPDATE consistency_finals SET verdict='PASS' WHERE run_id=15");
+            jdbc.execute("ALTER TABLE consistency_finals "
+                    + "ALTER CHECK ck_consistency_final_verdict ENFORCED");
+        }
+    }
+
+    @Test
+    void sqlFailureMakesEveryRequestedCampaignUnavailable() throws Exception {
+        DataSource unavailable = org.mockito.Mockito.mock(DataSource.class);
+        org.mockito.Mockito.when(unavailable.getConnection())
+                .thenThrow(new SQLException("observation database down"));
+        ConsistencyFinalStore isolated = new JdbcConsistencyFinalStore(
+                jdbc, new JdbcTemplate(unavailable));
+
+        Map<Long, ConsistencyFinalObservation> result =
+                isolated.findLatestByCouponIds(List.of(11L, 12L));
+
+        assertThat(result).allSatisfy((couponId, observation) ->
+                assertThat(observation.status()).isEqualTo(SourceStatus.UNAVAILABLE));
     }
 
     @Test
@@ -292,13 +387,7 @@ class JdbcConsistencyFinalStoreTest {
 
     @Test
     void deletedCampaignKeepsStoredFinalVisibleInsteadOfFlippingToPending() {
-        jdbc.update("""
-            INSERT INTO coupons
-              (id, template_id, brand_id, name, policy_type, valid_days, eligible_grades_mask,
-               open_at, close_at, status, created_at, generated_at)
-            VALUES (13, 1, 1, 'orphan', 'FIXED_AMOUNT', 1, 1,
-                    '2026-08-03', '2026-09-03', 'CLOSED', NOW(6), NOW(6))
-            """);
+        insertCoupon(13, "orphan");
         insertFinalizedRun(6, "run-6", 13);
         String token = store.claim(6, Duration.ofMinutes(5)).orElseThrow().token();
         assertThat(store.complete(6, token, 13L, EngineVersion.V3,
@@ -342,6 +431,16 @@ class JdbcConsistencyFinalStoreTest {
 
     private static void insertFinalizedRun(long id, String key) {
         insertFinalizedRun(id, key, 11);
+    }
+
+    private static void insertCoupon(long id, String name) {
+        jdbc.update("""
+            INSERT INTO coupons
+              (id, template_id, brand_id, name, policy_type, valid_days, eligible_grades_mask,
+               open_at, close_at, status, created_at, generated_at)
+            VALUES (?, 1, 1, ?, 'FIXED_AMOUNT', 1, 1,
+                    ?, ?, 'CLOSED', NOW(6), NOW(6))
+            """, id, name, "2026-08-%02d".formatted(id), "2026-09-%02d".formatted(id));
     }
 
     private static void insertFinalizedRun(long id, String key, long couponId) {
