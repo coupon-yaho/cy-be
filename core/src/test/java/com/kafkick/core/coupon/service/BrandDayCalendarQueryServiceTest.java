@@ -23,6 +23,7 @@ import com.kafkick.core.coupontemplate.domain.CouponTemplate;
 import com.kafkick.core.coupontemplate.port.CouponTemplateRepository;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.support.exception.CommonErrorCode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -115,6 +116,20 @@ class BrandDayCalendarQueryServiceTest {
                 LocalDate.of(2026, 9, 12),
                 AS_OF
         )).isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    @DisplayName("종료일이 LocalDate 최댓값인 달력 조회를 입력 오류로 거부한다")
+    void rejectMaximumLocalDate() {
+        assertThatThrownBy(() -> service().findBetween(
+                LocalDate.MAX,
+                LocalDate.MAX,
+                AS_OF
+        )).isInstanceOfSatisfying(
+                BusinessException.class,
+                exception -> assertThat(exception.getErrorCode())
+                        .isEqualTo(CommonErrorCode.INVALID_INPUT)
+        );
     }
 
     private BrandDayCalendarQueryService service() {
