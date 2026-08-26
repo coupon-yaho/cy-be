@@ -38,6 +38,11 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 cd "$REPO" || exit 1
 
+# **맨 위에 둔다.** 아래 어느 검사에서든 부를 수 있어야 한다 — 한때 이것이
+# 락 블록 옆에 있어서 그보다 먼저 도는 검증이 `fail: command not found` 로 죽었다.
+# 종료코드는 1 로 나갔지만 **이유가 통째로 사라졌다.** 무인 실행에서 제일 나쁜 모양이다.
+fail() { echo "  ✗ $*"; }
+
 BRANCH="${REPORT_BRANCH:-reports}"
 WORKTREE="${REPORT_WORKTREE:-${REPO}/../cy-be-reports}"
 TICKET="${REPORT_TICKET:-CY-590}"
@@ -101,7 +106,35 @@ check_age() {
 }
 SERVICE="${REPORT_SERVICE:-batch}"
 
-fail() { echo "  ✗ $*"; }
+# ── 이 기동이 **서비스하는** 데이터셋을 선언한다 ─────────────────────────────
+#
+# 배치는 DB_NAME 으로 스키마를 하나만 잡으므로(coupon_clean · coupon_corrupt) 한 기동이
+# 둘 다 보는 일은 없다. 둘을 다 남기려면 스키마를 바꿔 기동하고 이 스크립트를 다시 돌린다.
+#
+# ⚠️ **기본값을 두지 않는다.** 한때 `CLEAN CORRUPT` 를 기본으로 두고 404 를
+#    *"이 기동이 안 보는 데이터셋"* 으로 읽어 건너뛰었는데, **그 해석이 틀렸다.**
+#    이 API 는 어느 데이터셋을 서비스하는지 모른다 — 404(`RUN_NOT_FOUND`)는 현재 스키마의
+#    `verification_runs` 에서 그 조합의 **닫힌 실행을 못 찾았다**는 뜻이고, 원인이 최소 셋이다:
+#      ⑴ 그 데이터셋이 다른 스키마에 있다   ⑵ 시드 재주입으로 판정이 사라졌다
+#      ⑶ 오늘 검증이 아직 안 끝났거나 실패했다
+#    ⑵·⑶ 을 건너뛰면 이 파일 첫머리가 세운 **"안 돈 날을 거른다"** 가 통째로 무너진다.
+#
+# 선언하게 하면 그 셋이 다시 갈린다 — 선언한 것은 **전부 200 이어야 하고**, 없는 것은
+# 애초에 목록에 안 들어온다.
+read -r -a DATASETS <<< "${REPORT_DATASETS:-}"
+if [ "${#DATASETS[@]}" -eq 0 ]; then
+  fail "REPORT_DATASETS 를 선언해라 — 이 기동이 보는 스키마의 데이터셋이다"
+  fail "  예: REPORT_DATASETS=CLEAN  (DB_NAME=coupon_clean 으로 띄웠을 때)"
+  exit 1
+fi
+for ds in "${DATASETS[@]}"; do
+  case "$ds" in
+    CLEAN|CORRUPT) ;;
+    # 콤마로 쓰는 실수를 여기서 잡는다. 안 잡으면 서버가 400 을 내고
+    # 로그에는 `HTTP 400` 만 남아 원인이 "구분자" 라는 것이 안 보인다.
+    *) fail "알 수 없는 dataset: [${ds}] — 공백으로 구분한 CLEAN·CORRUPT 만 받는다"; exit 1 ;;
+  esac
+done
 
 # 동시 실행 막기. macOS 에 flock(1) 이 없어 mkdir 로 한다(원자적이다).
 #
@@ -204,11 +237,44 @@ dump() {
   # ⚠️ 타임아웃이 넉넉해야 한다. 대조 SQL 이 조인 양쪽에 CAST(... AS BINARY) 를 씌워
   #    uk_expected·uk_run_finding 을 못 탄다(어댑터 javadoc 이 그 대가를 적었다).
   #    검출이 수만으로 튀는 **바로 그 날** 가장 느린데, 그날이 리포트가 제일 필요한 날이다.
-  if ! docker compose "${COMPOSE_ARGS[@]}" exec -T "$SERVICE" \
-      curl -sSf --max-time "$HTTP_TIMEOUT" \
+  # -w 로 상태코드를 따로 받는다. -f 만 쓰면 404 와 "배치가 안 떴다" 가 같은 종료코드라
+  # **구조적으로 없는 것**과 **고장난 것**을 못 가른다 — 아래 갈림의 근거가 그 코드다.
+  local code
+  code="$(docker compose "${COMPOSE_ARGS[@]}" exec -T "$SERVICE" \
+      curl -sS --max-time "$HTTP_TIMEOUT" -o /dev/stdout -w '\n%{http_code}' \
       "http://127.0.0.1:9090/api/v1/admin/verify/reports/latest?dataset=${dataset}&scope=${scope}" \
-      > "$raw" 2>/dev/null; then
-    fail "${dataset} ${scope} — 응답을 못 받았다. 배치가 떠 있는지, 그 조합의 판정이 있는지 봐라"
+      2>/dev/null | tee "$raw" | tail -1)"
+
+  # **형태를 먼저 본다.** curl 이 -w 를 내기 전에 죽으면(SIGKILL 등) tail 이 본문의
+  # 마지막 줄을 준다. 그 값이 우연히 숫자면 그것을 상태코드로 읽는다 — 조용히 성공으로
+  # 접히는 방향의 실패라 아무도 못 본다. (연결 거부는 curl 이 000 을 내므로 여기 안 걸린다.)
+  case "$code" in
+    ''|*[!0-9]*) fail "${dataset} ${scope} — 상태코드를 못 읽었다: [${code}]"
+                 rm -f "$raw"; return 1 ;;
+  esac
+  if [ "${#code}" -ne 3 ]; then
+    fail "${dataset} ${scope} — 상태코드가 3자리가 아니다: [${code}]"
+    rm -f "$raw"; return 1
+  fi
+
+  # 마지막 줄(상태코드)을 떼어 낸다. **`sed -i` 를 안 쓴다** — BSD/GNU 접미사 분기가
+  # 생기고, 폴백 갈래는 실패 조건을 만들 수 없어 검증도 못 한다. 한 갈래로 둔다.
+  if ! { sed '$d' "$raw" > "${raw}.t" && mv "${raw}.t" "$raw"; }; then
+    fail "${dataset} ${scope} — 상태코드 줄을 못 떼어냈다(TMPDIR 을 봐라)"
+    rm -f "$raw" "${raw}.t"; return 1
+  fi
+
+  if [ "$code" = "404" ]; then
+    # **선언한 것이 없으면 고장이다.** 위 REPORT_DATASETS 주석 참고 — 404 는
+    # "다른 스키마에 있다" 만 뜻하지 않는다. 판정이 사라졌거나 오늘 안 끝난 경우도 같은 코드다.
+    fail "${dataset} ${scope} — 닫힌 판정이 없다(404). 셋 중 하나다:"
+    fail "  ⑴ DB_NAME 이 이 데이터셋의 스키마가 아니다 (그렇다면 REPORT_DATASETS 를 맞춰라)"
+    fail "  ⑵ 시드 재주입으로 verification_runs 가 비었다"
+    fail "  ⑶ 오늘 verifyJob 이 아직 안 끝났거나 실패했다"
+    rm -f "$raw"; return 1
+  fi
+  if [ "$code" != "200" ]; then
+    fail "${dataset} ${scope} — HTTP ${code}. 배치가 떠 있는지, 그 조합의 판정이 있는지 봐라"
     rm -f "$raw"; return 1
   fi
 
@@ -258,11 +324,13 @@ dump() {
 
 echo "검증 판정을 뜬다 — ${SERVICE} 컨테이너 안에서"
 ok=1
-dump CLEAN FULL   || ok=0
-dump CORRUPT FULL || ok=0
+for ds in "${DATASETS[@]}"; do
+  dump "$ds" FULL || ok=0
+done
 
-# **둘 다 성공해야 옮긴다.** 하나만 옮기면 그 파일이 커밋 안 된 채 남고, 다음 성공일
-# 커밋에 남의 날짜 리포트가 섞인다 — 커밋 날짜와 담긴 판정의 날짜가 어긋난다.
+# **선언한 것 중 하나라도 실패하면 아무것도 안 옮긴다.** 하나만 옮기면 그 파일이
+# 커밋 안 된 채 남고, 다음 성공일 커밋에 남의 날짜 리포트가 섞인다 —
+# 커밋 날짜와 담긴 판정의 날짜가 어긋난다.
 if [ "$ok" -eq 0 ]; then
   for e in "${PENDING[@]:-}"; do [ -n "$e" ] && rm -f "${e%%:*}"; done
   exit 1
