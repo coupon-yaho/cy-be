@@ -25,8 +25,6 @@ import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.repository.support.ResourcelessJobRepository;
 import org.springframework.batch.test.JobRepositoryTestUtils;
-
-import com.kafkick.storage.db.BatchMetadata;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
@@ -89,10 +87,8 @@ class BatchJobRepositoryTest {
     void setUp() {
         new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
 
-        // removeJobExecutions() 는 실행 없는 인스턴스를 남긴다. 컨테이너를 공유하면서
-        // 배치 메타가 클래스 경계를 넘어 살므로, 전역 행수를 세는 이 클래스는 그것까지
-        // 비워야 전제가 성립한다. 근거와 삭제 순서는 BatchMetadata 에 있다.
-        BatchMetadata.clear(jdbcClient);
+        // VerificationSeed.clear() 가 BatchMetadata.clear() 도 함께 부른다 —
+        // 전역 행수를 세는 이 클래스의 전제(0/0/0)가 거기서 선다.
         new VerificationSeed(jdbcClient).clear();
     }
 

@@ -58,7 +58,7 @@ public class CorruptMySqlContainerConfig {
     }
 
     /** 기동을 여기서 하는 이유는 {@link MySqlContainerConfig#mySqlContainer()} 와 같다. */
-    @Bean(destroyMethod = "")
+    @Bean(destroyMethod = "")  // 효과 없음. 의도 표시용 — 실제로 막는 것은 SharedMySqlContainer 다
     @ServiceConnection
     MySQLContainer corruptMySqlContainer() {
         if (!CONTAINER.isRunning()) {
@@ -73,13 +73,13 @@ public class CorruptMySqlContainerConfig {
      */
     @Bean
     static BeanFactoryPostProcessor corruptLocationsGuard(Environment environment) {
-        String locations = environment.getProperty("spring.flyway.locations", "");
-        if (!locations.contains("db/corrupt")) {
+        if (!CorruptSchema.isCorrupt(environment)) {
             throw new IllegalStateException(
                     "CorruptMySqlContainerConfig 를 @Import 했는데 spring.flyway.locations 에 "
                             + "db/corrupt 가 없습니다. CLEAN 제약이 남아 있어 위반 INSERT 가 튕기고, "
                             + "그 테스트는 '검출 0건'으로 초록이 됩니다 — "
-                            + "CorruptSchema.FLYWAY_LOCATIONS 를 함께 주십시오. 현재값=" + locations);
+                            + "CorruptSchema.FLYWAY_LOCATIONS 를 함께 주십시오. 현재값="
+                            + CorruptSchema.locationsOf(environment));
         }
         return beanFactory -> { };
     }

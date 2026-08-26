@@ -58,7 +58,10 @@ final class SharedMySqlContainers {
     }
 
     /**
-     * <b>{@code stop()} 을 받지 않는 컨테이너.</b> 수명의 주인이 JVM 이라는 결정을 타입으로 박는다.
+     * <b>기동에 성공한 뒤부터 {@code stop()} 을 무시한다.</b> 수명의 주인이 JVM 이라는 결정을
+     * 타입으로 박되, <b>Testcontainers 자신의 정리 경로는 살린다.</b>
+     *
+     * <h3>왜 무시하나</h3>
      *
      * <p>스프링이 컨텍스트를 닫을 때마다 {@code stop()} 을 부르는데, 싱글턴에 그것이 먹히면
      * <b>먼저 닫힌 컨텍스트가 남의 컨테이너를 끈다.</b> 그 뒤 {@code start()} 는 같은 객체에
@@ -69,24 +72,72 @@ final class SharedMySqlContainers {
      * {@code DestructionAwareBeanPostProcessor} 라 그 속성과 무관하게 {@code Startable.stop()}
      * 을 부른다.
      *
+     * <h3>왜 조건부여야 하나 — 무조건 비우면 CI 가 통째로 무너진다</h3>
+     *
+     * <p>한때 {@code stop()} 을 <b>완전히</b> 비웠다. 그런데 {@code stop()} 은 스프링만
+     * 부르는 것이 아니다 — <b>Testcontainers 가 기동 실패를 치울 때도 부른다.</b>
+     * {@code testcontainers-2.0.5} 바이트코드로 확인했다:
+     *
+     * <ul>
+     *   <li>{@code GenericContainer.tryStart} 의 실패 갈래가 로그를 남긴 뒤
+     *       {@code stop()} 을 부르고 {@code ContainerLaunchException} 을 던진다.</li>
+     *   <li>{@code stop()} 은 {@code containerId}·{@code containerInfo} 를 {@code null} 로
+     *       되돌리는 <b>유일한 자리</b>다.</li>
+     *   <li>{@code start()} 는 첫 줄이 {@code if (containerId != null) return;} 이다.</li>
+     * </ul>
+     *
+     * <p>그래서 무조건 비우면 <b>첫 기동이 실패한 순간 {@code containerId} 가 죽은 컨테이너
+     * id 로 고정된다.</b> 이후 {@code start()} 는 즉시 return 하고, {@code isRunning()} 이
+     * false 여도 되살아나지 않는다 — <b>JVM 안의 모든 뒤 컨텍스트가 죽은 컨테이너를 받는다.</b>
+     * 실패 수백 건에 원인 스택은 첫 하나뿐이다.
+     *
+     * <p>그것은 이 클래스가 <i>"원인까지 가는 길을 늘리지 않는다"</i> 며 정적 초기화자를 피한
+     * <b>바로 그 실패 모양</b>이다. 컨텍스트마다 컨테이너를 새로 만들던 시절에는 다음
+     * 컨텍스트가 새 객체로 회복했는데, 공유로 바꾸면서 그 회복 경로가 없어졌다.
+     *
+     * <p><b>{@code doStart()} 가 반환한 뒤에만 막는다.</b> {@code tryStart} 의 정리
+     * {@code stop()} 은 그 반환 <b>전에</b> 불리므로 그 시점 {@code startedOnce} 는 false 다.
+     *
+     * <h3>{@code close()} 는 오버라이드하지 않는다</h3>
+     *
+     * <p>{@code Startable.close()} 의 기본 구현이 {@code this.stop()} 한 줄이라(바이트코드
+     * 확인) 가상 디스패치로 아래 {@code stop()} 을 탄다. 따로 비우면 <b>위 조건을 건너뛰어</b>
+     * 기동 실패 정리가 다시 죽는다.
+     *
      * <p>정리는 Testcontainers 가 한다 — Ryuk 사이드카가 기본이고, 그것을 끄면
      * {@code JVMHookResourceReaper} 가 Docker API 로 직접 지운다. 둘 다 {@code stop()} 을
      * 안 타므로 이 오버라이드가 회수를 막지 않는다 — {@link #warnIfRyukDisabled()} 참고.
      */
     private static final class SharedMySqlContainer extends MySQLContainer {
 
+        /**
+         * <b>{@code volatile} 이다.</b> 컨테이너를 만든 스레드와 컨텍스트를 닫는 스레드가
+         * 다를 수 있다 — 스프링 테스트는 셧다운 훅에서도 닫는다.
+         */
+        private volatile boolean startedOnce;
+
         private SharedMySqlContainer(DockerImageName image) {
             super(image);
         }
 
-        @Override
-        public void stop() {
-            // 일부러 비운다. 위 javadoc 참고.
+        /** 테스트가 이 전이를 잰다 — {@code SharedMySqlContainerTest}. */
+        boolean hasStartedOnce() {
+            return startedOnce;
         }
 
         @Override
-        public void close() {
-            // try-with-resources 로도 안 닫힌다. Startable.close() 가 stop() 을 부른다.
+        protected void doStart() {
+            super.doStart();
+            // 여기 오면 tryStart 가 성공한 것이다. 실패했으면 위에서 예외가 났다.
+            startedOnce = true;
+        }
+
+        @Override
+        public void stop() {
+            if (!startedOnce) {
+                // 기동 실패 정리 경로. 여기서 막으면 containerId 가 죽은 채 고정된다.
+                super.stop();
+            }
         }
     }
 
@@ -138,6 +189,14 @@ final class SharedMySqlContainers {
                         // 켜져 있으면 SUPER 없는 계정이 트리거를 못 만들어(오류 1419),
                         // "실행 중에 데이터가 바뀐다" 를 재현하는 테스트를 쓸 수 없다.
                         "--skip-log-bin");
+    }
+
+    /**
+     * <b>테스트가 기동 여부 전이를 잰다.</b> {@code SharedMySqlContainer} 가 private 이라
+     * 밖에서 타입으로 못 잡으므로 여기서 열어 준다.
+     */
+    static boolean hasStartedOnce(MySQLContainer container) {
+        return container instanceof SharedMySqlContainer shared && shared.hasStartedOnce();
     }
 
     /**

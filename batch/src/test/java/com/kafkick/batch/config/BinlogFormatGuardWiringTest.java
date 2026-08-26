@@ -65,11 +65,12 @@ class BinlogFormatGuardWiringTest {
      * {@code JobInstanceAlreadyCompleteException} 이 난다 — 실제로 그렇게 깨졌다.
      *
      * <p><b>{@code removeJobExecutions()} 만으로는 부족하다</b> — 그것은 실행이 없는
-     * 인스턴스를 남긴다. 여기가 겪은 실패가 정확히 그 모양이라 {@link BatchMetadata} 를 쓴다.
+     * 인스턴스를 남긴다. 여기가 겪은 실패가 정확히 그 모양이라
+     * {@code VerificationSeed.clear()} 를 쓴다 — 그 안에서 {@link BatchMetadata} 도 함께 돈다.
      */
     @org.junit.jupiter.api.BeforeEach
     void clearBatchMetadata() {
-        BatchMetadata.clear(jdbcClient);
+        new com.kafkick.storage.db.VerificationSeed(jdbcClient).clear();
     }
 
     @Test

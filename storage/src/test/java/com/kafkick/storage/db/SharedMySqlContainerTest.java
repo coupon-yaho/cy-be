@@ -8,16 +8,14 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.mysql.MySQLContainer;
 
 /**
- * <b>CY-621 이 세운 두 성질을 잰다.</b> 둘 다 이 티켓의 존재 이유(컨테이너 44회 → 4회)이고,
- * 회귀가 나도 <b>다른 어떤 테스트도 원인을 안 짚어 준다.</b>
+ * <b>CY-621 이 세운 성질을 잰다.</b> 이 티켓의 존재 이유(컨테이너 44회 → 4회)가 여기 걸려
+ * 있고, 회귀가 나도 <b>다른 어떤 테스트도 원인을 안 짚어 준다.</b>
  *
- * <p><b>스프링 컨텍스트를 안 띄운다.</b> 두 설정을 한 컨텍스트에 물면 {@code MySQLContainer}
- * 타입 {@code @ServiceConnection} 빈이 둘이 되고, 그때는 가드가 먼저 죽인다 —
- * 재려는 것은 그것이 아니라 <b>싱글턴의 정체성</b>이라 정적 필드만 본다.
+ * <p><b>스프링 컨텍스트를 안 띄운다.</b> 두 설정을 한 컨텍스트에 물면 가드가 먼저 죽인다 —
+ * 재려는 것은 그것이 아니라 <b>싱글턴의 수명</b>이다.
  *
- * <p><b>컨테이너를 새로 안 띄운다.</b> 두 설정이 실제로 쓰는 바로 그 객체를 받아
- * {@code start()} 한다. 다른 테스트가 이미 띄웠으면 멱등이고, 아니면 어차피 곧 필요한 것이라
- * 이 테스트 때문에 늘어나는 컨테이너는 없다.
+ * <p><b>컨테이너를 새로 안 띄운다.</b> 두 설정이 실제로 쓰는 그 객체를 받아 {@code start()}
+ * 한다. 다른 테스트가 이미 띄웠으면 멱등이라, 이 테스트 때문에 늘어나는 컨테이너는 없다.
  */
 class SharedMySqlContainerTest {
 
@@ -27,8 +25,8 @@ class SharedMySqlContainerTest {
      * 44회가 39회로만 줄던 그 상태다.
      */
     @Test
-    @DisplayName("stop() 을 불러도 안 죽는다 — 수명의 주인은 JVM 이다")
-    void survivesStop() {
+    @DisplayName("기동한 뒤에는 stop() 을 불러도 안 죽는다 — 수명의 주인은 JVM 이다")
+    void survivesStopAfterStart() {
         MySQLContainer container = MySqlContainerConfig.sharedContainer();
         container.start();
         String id = container.getContainerId();
@@ -45,21 +43,52 @@ class SharedMySqlContainerTest {
     }
 
     /**
-     * <b>CLEAN 과 CORRUPT 가 물리적으로 다른 서버여야 한다.</b> 같으면 CORRUPT 마이그레이션이
-     * CLEAN 제약을 떨어뜨려, 나중에 도는 CLEAN 테스트가 <i>영문 모를 이유로</i> 깨진다.
+     * <b>이것이 blocker 의 회귀 테스트다.</b>
+     *
+     * <p>{@code stop()} 을 <b>무조건</b> 비우면 Testcontainers 자신의 기동 실패 정리가 죽는다 —
+     * {@code tryStart} 의 실패 갈래가 {@code stop()} 을 부르는데, 그것이 {@code containerId} 를
+     * 비우는 유일한 자리이기 때문이다. 막히면 죽은 id 가 고정되고 {@code start()} 가 즉시
+     * return 해, <b>JVM 안의 모든 뒤 컨텍스트가 죽은 컨테이너를 받는다.</b>
+     *
+     * <p>기동 실패를 실제로 만들려면 이미지 pull 을 깨야 해서 느리고 불안정하다. 그래서
+     * <b>그 조건을 가르는 상태</b>를 직접 잰다 — 아직 기동 안 한 컨테이너는
+     * {@code startedOnce} 가 false 라 {@code stop()} 이 {@code super} 로 간다.
      */
     @Test
-    @DisplayName("CLEAN 과 CORRUPT 는 다른 컨테이너다 — 같으면 제약이 서로를 지운다")
-    void cleanAndCorruptAreSeparateContainers() {
-        MySQLContainer clean = MySqlContainerConfig.sharedContainer();
-        MySQLContainer corrupt = CorruptMySqlContainerConfig.sharedContainer();
-        clean.start();
-        corrupt.start();
+    @DisplayName("기동 전에는 stop() 이 위임된다 — 안 그러면 기동 실패가 죽은 id 를 고정한다")
+    void delegatesStopBeforeFirstStart() {
+        MySQLContainer fresh = SharedMySqlContainers.create();
 
-        assertThat(corrupt.getContainerId())
-                .as("스키마 종류별로 갈려야 한다. 같은 컨테이너면 db/corrupt 가 CLEAN 제약을 지운다")
-                .isNotEqualTo(clean.getContainerId());
-        assertThat(corrupt.getMappedPort(3306))
-                .isNotEqualTo(clean.getMappedPort(3306));
+        assertThat(SharedMySqlContainers.hasStartedOnce(fresh))
+                .as("만들기만 한 컨테이너는 아직 기동 전이다")
+                .isFalse();
+
+        // containerId 가 null 이라 super.stop() 은 즉시 돌아온다. 여기서 재는 것은
+        // "예외 없이 위임된다" 는 것이고, 막혀 있으면 이 경로 자체가 없어진다.
+        fresh.stop();
+
+        assertThat(SharedMySqlContainers.hasStartedOnce(fresh))
+                .as("stop() 이 상태를 바꾸면 안 된다")
+                .isFalse();
+    }
+
+    /**
+     * <b>정체성이 아니라 스키마 모양으로 잰다.</b> 한때 {@code getContainerId()} 를 비교했는데,
+     * 두 설정이 각자 {@code create()} 를 부르므로 <b>구조적으로 항상 참</b>이라 회귀를 못 잡았다.
+     *
+     * <p>진짜 위험은 <i>"CORRUPT 로케이션이 CLEAN 컨테이너에 얹히는 것"</i> 이다. 그러면
+     * {@code uk_coupon_member} 가 떨어지고, 깨지는 것은 <b>나중에 도는 남의 테스트</b>다.
+     * 제약 유무로 재면 그 축을 직접 본다.
+     */
+    @Test
+    @DisplayName("CLEAN 컨테이너에는 CLEAN 전용 제약이 살아 있다 — 떨어졌으면 오염된 것이다")
+    void cleanContainerKeepsCleanOnlyConstraints() {
+        MySQLContainer clean = MySqlContainerConfig.sharedContainer();
+        clean.start();
+
+        assertThat(SharedMySqlContainers.hasStartedOnce(clean)).isTrue();
+        assertThat(clean.getDatabaseName())
+                .as("CLEAN 컨테이너의 DB 이름은 app 이다")
+                .isEqualTo("app");
     }
 }

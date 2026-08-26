@@ -75,10 +75,12 @@ public class MySqlContainerConfig {
      * <b>기동을 여기서 한다.</b> 정적 초기화자에서 띄우면 실패했을 때 이후 접근이 전부
      * {@code NoClassDefFoundError} 가 되어 원인이 사라진다 — {@code SharedMySqlContainers} 참고.
      *
-     * <p>{@code start()} 는 이미 도는 컨테이너에 멱등이다. {@code isRunning()} 을 명시하는 것은
-     * 읽는 사람을 위해서다.
+     * <p><b>{@code start()} 의 판정 기준은 "도는가" 가 아니라 {@code containerId != null} 이다</b>
+     * (바이트코드 확인). 그래서 아래 {@code isRunning()} 검사는 <b>최초 1회</b> 말고는 분기를
+     * 못 만든다 — 죽은 컨테이너를 되살리지는 못한다. 되살아나려면 {@code stop()} 이 먼저
+     * {@code containerId} 를 비워야 하고, 그 경로는 {@code SharedMySqlContainers} 가 지킨다.
      */
-    @Bean(destroyMethod = "")
+    @Bean(destroyMethod = "")  // 효과 없음. 의도 표시용 — 실제로 막는 것은 SharedMySqlContainer 다
     @ServiceConnection
     MySQLContainer mySqlContainer() {
         if (!CONTAINER.isRunning()) {
@@ -103,13 +105,13 @@ public class MySqlContainerConfig {
      */
     @Bean
     static BeanFactoryPostProcessor cleanSchemaLocationsGuard(Environment environment) {
-        String locations = environment.getProperty("spring.flyway.locations", "");
-        if (locations.contains("db/corrupt")) {
+        if (CorruptSchema.isCorrupt(environment)) {
             throw new IllegalStateException(
                     "MySqlContainerConfig(CLEAN 컨테이너)를 쓰면서 spring.flyway.locations 에 "
                             + "db/corrupt 가 들어 있습니다. 이 컨테이너는 여러 컨텍스트가 "
                             + "공유하므로 제약을 떨어뜨리면 남의 테스트가 깨집니다 — "
-                            + "CorruptMySqlContainerConfig 를 쓰십시오. 현재값=" + locations);
+                            + "CorruptMySqlContainerConfig 를 쓰십시오. 현재값="
+                            + CorruptSchema.locationsOf(environment));
         }
         return beanFactory -> { };
     }
