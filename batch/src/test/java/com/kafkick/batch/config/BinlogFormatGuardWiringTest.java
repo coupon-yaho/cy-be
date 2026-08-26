@@ -22,6 +22,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.time.LocalDateTime;
 
+import com.kafkick.storage.db.BatchMetadata;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 /**
@@ -53,6 +54,23 @@ class BinlogFormatGuardWiringTest {
 
     @Autowired
     private Job expireJob;
+
+    @Autowired
+    private org.springframework.jdbc.core.simple.JdbcClient jdbcClient;
+
+    /**
+     * <b>배치 메타를 비우고 시작한다.</b> MySQL 컨테이너를 JVM 이 공유하게 되면서
+     * ({@code MySqlContainerConfig}) 배치 메타도 <b>클래스 사이를 넘어 산다.</b> 여기가 쓰는
+     * {@code asOf} 를 다른 테스트가 이미 썼으면 같은 {@code JobInstance} 라
+     * {@code JobInstanceAlreadyCompleteException} 이 난다 — 실제로 그렇게 깨졌다.
+     *
+     * <p><b>{@code removeJobExecutions()} 만으로는 부족하다</b> — 그것은 실행이 없는
+     * 인스턴스를 남긴다. 여기가 겪은 실패가 정확히 그 모양이라 {@link BatchMetadata} 를 쓴다.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void clearBatchMetadata() {
+        BatchMetadata.clear(jdbcClient);
+    }
 
     @Test
     @DisplayName("만료 잡이 시작하면 가드가 먼저 불린다 — 스케줄러가 꺼져 있어도")

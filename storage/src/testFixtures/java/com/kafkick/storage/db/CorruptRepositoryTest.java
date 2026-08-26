@@ -26,9 +26,12 @@ import org.springframework.test.context.TestPropertySource;
  * {@code @DataJpaTest} 의 롤백 격리가 그 자리에서 깨집니다. 앞 테스트가 남긴 행이
  * 뒤 테스트로 새고, 실패가 실행 순서에 따라 달라집니다.
  *
- * <p><b>컨텍스트가 하나 더 뜹니다.</b> 프로퍼티가 다르면 스프링이 컨텍스트를 따로 캐시하고,
- * {@link MySqlContainerConfig} 가 빈이라 MySQL 컨테이너도 한 벌 더 뜹니다. 느린 값이므로
- * <b>제약이 없어야만 되는 테스트에만</b> 씁니다 — 나머지는 {@link RepositoryTest} 입니다.
+ * <p><b>컨텍스트가 하나 더 뜹니다.</b> 프로퍼티가 다르면 스프링이 컨텍스트를 따로 캐시합니다.
+ * <b>MySQL 컨테이너는 컨텍스트마다 뜨지 않습니다</b> — 한때 그랬고(실측 44회), 지금은
+ * 스키마 종류마다 JVM 싱글턴 하나입니다({@link CorruptMySqlContainerConfig}).
+ *
+ * <p>그래도 컨텍스트 자체가 비싸므로 <b>제약이 없어야만 되는 테스트에만</b> 씁니다 —
+ * 나머지는 {@link RepositoryTest} 입니다.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -36,7 +39,7 @@ import org.springframework.test.context.TestPropertySource;
 @Inherited
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(MySqlContainerConfig.class)
+@Import(CorruptMySqlContainerConfig.class)
 @TestPropertySource(properties = CorruptSchema.FLYWAY_LOCATIONS)
 public @interface CorruptRepositoryTest {
 }
