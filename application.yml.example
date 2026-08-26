@@ -92,6 +92,12 @@ benchmark:
     base-url: ${BENCHMARK_BATCH_BASE_URL:http://batch:9091}
     connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}
     read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}
+    # 관측 풀 max_execution_time(3000ms)과 동률이면 클라이언트가 항상 먼저 끊는다.
+    consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:10s}
+  consistency:
+    claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}
+    # 회차 확정으로부터 이 시간을 넘긴 재실행은 그 회차의 값이 아니라 EXPIRED 로 종결한다.
+    max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}
 
 management:
   server:
@@ -162,6 +168,9 @@ server:
 benchmark:
   topology:
     gap-interval-ms: ${BENCHMARK_GAP_INTERVAL_MS:30000}
+  consistency:
+    # api 와 같은 env 를 읽는다. 두 모듈이 같은 창을 봐야 경계 판정이 갈리지 않는다.
+    max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}
 
 batch:
   scheduling:

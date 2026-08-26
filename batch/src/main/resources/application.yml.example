@@ -75,6 +75,9 @@ server:
 benchmark:
   topology:
     gap-interval-ms: ${BENCHMARK_GAP_INTERVAL_MS:30000}
+  consistency:
+    # api 와 같은 env 를 읽는다. 두 모듈이 같은 창을 봐야 경계 판정이 갈리지 않는다.
+    max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}
 
 batch:
   # 판정 시점 동결 스위치. 이 하나로 전 쓰기 스케줄러가 멈춘다.

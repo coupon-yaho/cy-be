@@ -51,6 +51,7 @@ public class AdminBenchmarkController {
     private final Optional<BenchmarkRunService> benchmarkRunService;
     private final Optional<BenchmarkTimeseriesReader> timeseriesReader;
     private final Optional<BenchmarkRunCursorCodec> cursorCodec;
+    private final Optional<ConsistencyFinalizer> consistencyFinalizer;
 
     @Autowired
     public AdminBenchmarkController(
@@ -59,13 +60,15 @@ public class AdminBenchmarkController {
             Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator,
             Optional<BenchmarkRunService> benchmarkRunService,
             Optional<BenchmarkTimeseriesReader> timeseriesReader,
-            Optional<BenchmarkRunCursorCodec> cursorCodec) {
+            Optional<BenchmarkRunCursorCodec> cursorCodec,
+            Optional<ConsistencyFinalizer> consistencyFinalizer) {
         this.timeseriesArchiver = timeseriesArchiver;
         this.startOrchestrator = startOrchestrator;
         this.finalizeOrchestrator = finalizeOrchestrator;
         this.benchmarkRunService = benchmarkRunService;
         this.timeseriesReader = timeseriesReader;
         this.cursorCodec = cursorCodec;
+        this.consistencyFinalizer = consistencyFinalizer;
     }
 
     AdminBenchmarkController(
@@ -73,7 +76,8 @@ public class AdminBenchmarkController {
             BenchmarkStartOrchestrator startOrchestrator,
             BenchmarkFinalizeOrchestrator finalizeOrchestrator) {
         this(timeseriesArchiver, Optional.ofNullable(startOrchestrator),
-            Optional.ofNullable(finalizeOrchestrator), Optional.empty(), Optional.empty(), Optional.empty());
+            Optional.ofNullable(finalizeOrchestrator), Optional.empty(), Optional.empty(),
+            Optional.empty(), Optional.empty());
     }
 
     /**
@@ -192,6 +196,14 @@ public class AdminBenchmarkController {
             @PathVariable @Positive Long benchmarkRunId, Caller caller) {
         timeseriesArchiver.orElseThrow(this::notImplemented)
                 .retry(benchmarkRunId);
+        return ResponseEnvelope.success();
+    }
+
+    /** FAILED 또는 lease가 만료된 IN_PROGRESS 회차의 FINAL 정합성 계산을 다시 실행합니다. */
+    @PostMapping("/benchmarks/{benchmarkRunId}/consistency/retry")
+    public ResponseEnvelope<Void> retryConsistency(
+            @PathVariable @Positive Long benchmarkRunId, Caller caller) {
+        consistencyFinalizer.orElseThrow(this::notImplemented).retry(benchmarkRunId);
         return ResponseEnvelope.success();
     }
 

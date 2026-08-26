@@ -28,6 +28,8 @@ BATCH_JOB_INSTANCE
 benchmark_runs
 #    관리자 Benchmark 상세가 완료 회차의 archive 표본을 읽는다(JdbcBenchmarkTimeseriesReader).
 run_timeseries
+#    캠페인별 최신 FINAL 정합성 판정을 읽는다(JdbcConsistencyFinalStore).
+consistency_finals
 
 # ── 도메인 관측 ──
 #    정합성 원시값 수집(ConsistencyRawValueReader), 회차 시작 게이트

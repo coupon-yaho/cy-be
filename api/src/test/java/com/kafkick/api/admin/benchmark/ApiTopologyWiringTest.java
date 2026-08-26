@@ -23,6 +23,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.core.benchmark.BenchmarkRunService;
 import com.kafkick.core.benchmark.BenchmarkTopologyObservation;
+import com.kafkick.core.consistency.ConsistencyFinalStore;
+import org.springframework.aop.support.AopUtils;
 
 @SpringBootTest(
     classes = com.kafkick.ApiApplication.class,
@@ -55,6 +57,12 @@ class ApiTopologyWiringTest {
     @Autowired
     BenchmarkTopologyObservation databaseObservation;
 
+    @Autowired
+    ConsistencyFinalStore consistencyFinalStore;
+
+    @Autowired
+    ConsistencyFinalizer consistencyFinalizer;
+
     @MockitoBean
     BatchTopologyPreflight batch;
 
@@ -71,6 +79,15 @@ class ApiTopologyWiringTest {
         assertThat(runService).isNotNull();
         assertThat(startOrchestrator).isNotNull();
         assertThat(finalizeOrchestrator).isNotNull();
+    }
+
+    @Test
+    @DisplayName("FINAL 정합성 저장소가 api 컨텍스트에 실리고 @Transactional 프록시로 감싸진다")
+    void consistencyFinalStoreIsWiredAndTransactionallyProxied() {
+        assertThat(consistencyFinalStore).isNotNull();
+        assertThat(consistencyFinalizer).isNotNull();
+        // 프록시가 아니면 complete()의 SELECT FOR UPDATE·INSERT·UPDATE가 서로 다른 트랜잭션이 된다.
+        assertThat(AopUtils.isAopProxy(consistencyFinalStore)).isTrue();
     }
 
     @Test

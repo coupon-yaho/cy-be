@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.consistency.ConsistencyFinalStatus;
 
 /**
  * {@link BenchmarkRunRepository} 의 인메모리 대역.
@@ -241,6 +242,7 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
             return new BenchmarkRun(id, runKey, command.runType(), command.scenarioCode(),
                     command.engineVersion(), command.releaseStage(), command.queueMode(),
                     command.couponId(), status, archiveStatus, archiveFailureReason,
+                    ConsistencyFinalStatus.NONE, null,
                     startedAt, loadStoppedAt, observationStoppedAt, finalizedAt,
                     command.requestedBy(), loadStopReason,
                     command.topology(), command.loadProfile(), command.toolMeta(),

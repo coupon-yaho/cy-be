@@ -4,6 +4,7 @@ import java.time.Instant;
 
 import com.kafkick.core.admin.BenchmarkRunState;
 import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
+import com.kafkick.core.consistency.ConsistencyFinalStatus;
 
 /**
  * Benchmark 운영 명령 처리 직후의 상태를 반환합니다.
@@ -14,11 +15,12 @@ import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
  */
 public record BenchmarkCommandAcceptedResponse(
         Long benchmarkRunId, BenchmarkRunState state, Instant requestedAt,
-        BenchmarkArchiveStatus archiveStatus) {
+        BenchmarkArchiveStatus archiveStatus,
+        ConsistencyFinalStatus consistencyStatus) {
 
     public BenchmarkCommandAcceptedResponse(
         Long benchmarkRunId, BenchmarkRunState state, Instant requestedAt
     ) {
-        this(benchmarkRunId, state, requestedAt, null);
+        this(benchmarkRunId, state, requestedAt, null, null);
     }
 }

@@ -54,7 +54,19 @@ public enum BenchmarkErrorCode implements ErrorCode {
      * {@code load_stopped_at < started_at} 이 만들어져 {@code ck_run_time_order} 에 걸린다.
      * 번역하지 않으면 회차 도중에 원인이 안 적힌 500 이 뜬다.
      */
-    RUN_VALUE_REJECTED(409, "BENCHMARK-009", "저장소가 측정 회차 값을 거부했습니다.");
+    RUN_VALUE_REJECTED(409, "BENCHMARK-009", "저장소가 측정 회차 값을 거부했습니다."),
+
+    /**
+     * batch 가 FINAL 정합성 계산을 거절했다. 회차 불일치나 계산 불가한 원천값이라
+     * 다시 눌러도 같은 답이 온다 — 원인은 detail 과 {@code consistency_failure_reason} 에 있다.
+     */
+    CONSISTENCY_BATCH_REJECTED(409, "BENCHMARK-010", "정합성 계산 요청이 거절되었습니다."),
+
+    /**
+     * batch 나 관측 원천에 지금 닿을 수 없다. 원천이 돌아오면 재실행으로 복구된다 —
+     * {@code IllegalStateException} 으로 두면 500 이 되어 재실행 가능 여부가 안 드러난다.
+     */
+    CONSISTENCY_SOURCE_UNAVAILABLE(503, "BENCHMARK-011", "정합성 원천에 지금 접근할 수 없습니다.");
 
     private final int status;
     private final String code;
