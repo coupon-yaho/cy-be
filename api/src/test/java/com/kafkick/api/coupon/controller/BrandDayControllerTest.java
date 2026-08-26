@@ -93,6 +93,33 @@ class BrandDayControllerTest {
     }
 
     @Test
+    @DisplayName("미생성 브랜드 데이 일정의 회차와 재고 필드를 null로 반환한다")
+    void serializeMissingRoundFieldsAsNull() throws Exception {
+        LocalDate from = LocalDate.of(2026, 8, 3);
+        LocalDate to = LocalDate.of(2026, 8, 30);
+        when(timeProvider.instant()).thenReturn(AS_OF);
+        when(calendarQueryService.findBetween(from, to, AS_OF))
+                .thenReturn(List.of(new BrandDayCalendarEntry(
+                        1L, 2L, "미생성 골드 할인",
+                        CouponPolicyType.FIXED_AMOUNT,
+                        null, null, 5_000,
+                        Set.of(MembershipGrade.GOLD),
+                        Instant.parse("2026-08-10T01:00:00Z"),
+                        Instant.parse("2026-08-10T03:00:00Z"),
+                        CouponRoundStatus.SCHEDULED,
+                        null, null, null
+                )));
+
+        mockMvc.perform(get("/api/v1/calendar")
+                        .param("from", "2026-08-03")
+                        .param("to", "2026-08-30"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].couponRoundId").isEmpty())
+                .andExpect(jsonPath("$.data[0].totalQuantity").isEmpty())
+                .andExpect(jsonPath("$.data[0].activeCount").isEmpty());
+    }
+
+    @Test
     @DisplayName("날짜 형식이 잘못된 달력 요청을 거부한다")
     void rejectInvalidDateFormat() throws Exception {
         mockMvc.perform(get("/api/v1/calendar")

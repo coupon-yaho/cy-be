@@ -199,6 +199,12 @@ public class BrandDayCalendarQueryService {
                     "달력 조회 기간과 기준 시각은 필수입니다."
             );
         }
+        if (LocalDate.MAX.equals(to)) {
+            throw new BusinessException(
+                    CommonErrorCode.INVALID_INPUT,
+                    "달력 조회 종료일이 허용 범위를 벗어났습니다."
+            );
+        }
         if (to.isBefore(from)
                 || ChronoUnit.DAYS.between(from, to) >= maxDays) {
             throw new BusinessException(
