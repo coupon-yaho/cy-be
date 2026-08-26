@@ -52,18 +52,19 @@ public class ConsistencyFinalizer {
         if (finalizedAt == null) {
             throw illegalTransition(benchmarkRunId, "finalizedAt is null");
         }
-        // claim 은 이전 실패 이유를 지운다. 지우기 전에 붙들어 EXPIRED 사유에 이어 붙인다.
-        String previousReason = run.consistencyFailureReason();
-        String token = store.claim(benchmarkRunId, claimLease)
+        // claim 은 이전 실패 이유를 지운다. 무엇을 지웠는지 claim 이 함께 돌려주므로
+        // EXPIRED 사유에 그대로 이어 붙일 수 있다.
+        ConsistencyFinalStore.Claim claim = store.claim(benchmarkRunId, claimLease)
                 .orElseThrow(() -> illegalTransition(benchmarkRunId,
                         "claim failed: runStatus=" + run.runStatus()
                                 + " consistencyStatus=" + run.consistencyStatus()));
+        String token = claim.token();
         // FINAL 은 asOf 스냅샷이 아니라 라이브 관측이다. 확정으로부터 한참 지난 재실행은
         // 그 회차의 값이 아니므로 계산하지 않고 EXPIRED 로 종결한다. FAILED 와 달리 다시
         // claim 되지 않으므로 의미 없는 재실행이 원인을 덮어쓰지 않는다. FAILED 로 잘못
         // 되돌리지 않도록 아래 try 밖에서 끝낸다.
         if (time.instant().isAfter(finalizedAt.plus(maxObservationLag))) {
-            expire(benchmarkRunId, token, finalizedAt, previousReason);
+            expire(benchmarkRunId, token, finalizedAt, claim.previousFailureReason());
         }
         try {
             ConsistencyEvaluation evaluation = batch.evaluate(

@@ -25,7 +25,8 @@ ALTER TABLE `benchmark_runs`
             = (`consistency_claim_token` IS NOT NULL)),
     ADD CONSTRAINT `ck_run_consistency_failure` CHECK (
         (`consistency_status` COLLATE utf8mb4_0900_as_cs IN ('FAILED', 'EXPIRED'))
-            = (`consistency_failure_reason` IS NOT NULL));
+            = (`consistency_failure_reason` IS NOT NULL
+               AND REGEXP_LIKE(`consistency_failure_reason`, '[^[:space:]]')));
 
 CREATE TABLE `consistency_finals` (
     `run_id` bigint NOT NULL,

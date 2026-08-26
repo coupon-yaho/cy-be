@@ -50,7 +50,7 @@ class ConsistencyFinalizerTest {
     void batchFailureIsFencedAndRecordedWithoutChangingRunLifecycle() {
         BenchmarkRun run = run();
         when(runs.get(7L)).thenReturn(run);
-        when(store.claim(7L, Duration.ofMinutes(5))).thenReturn(Optional.of("token"));
+        when(store.claim(7L, Duration.ofMinutes(5))).thenReturn(Optional.of(new ConsistencyFinalStore.Claim("token", "batch down")));
         when(batch.evaluate(11L, EngineVersion.V3, FINALIZED_AT))
                 .thenThrow(new IllegalStateException("batch down"));
         when(store.fail(7L, "token", "batch down")).thenReturn(true);
@@ -71,7 +71,8 @@ class ConsistencyFinalizerTest {
         when(runs.get(7L)).thenReturn(run);
         // 재실행은 claim 을 다시 받는다 — 실제 claim 은 매번 새 UUID 를 박는다.
         when(store.claim(7L, Duration.ofMinutes(5)))
-                .thenReturn(Optional.of("token-1"), Optional.of("token-2"));
+                .thenReturn(Optional.of(new ConsistencyFinalStore.Claim("token-1", null)),
+                        Optional.of(new ConsistencyFinalStore.Claim("token-2", null)));
         when(batch.evaluate(11L, EngineVersion.V3, FINALIZED_AT)).thenReturn(evaluation);
         when(store.complete(eq(7L), any(), eq(11L), eq(EngineVersion.V3), any(),
                 eq(evaluation))).thenReturn(true);
@@ -95,7 +96,7 @@ class ConsistencyFinalizerTest {
         BenchmarkRun run = run();
         String reason = "a".repeat(ConsistencyFinalStore.FAILURE_REASON_MAX - 1) + "\uD83D\uDCA5x";
         when(runs.get(7L)).thenReturn(run);
-        when(store.claim(7L, Duration.ofMinutes(5))).thenReturn(Optional.of("token"));
+        when(store.claim(7L, Duration.ofMinutes(5))).thenReturn(Optional.of(new ConsistencyFinalStore.Claim("token", "batch down")));
         when(batch.evaluate(11L, EngineVersion.V3, FINALIZED_AT)).thenThrow(new IllegalStateException(reason));
 
         assertThatThrownBy(() -> finalizer.calculate(7L)).isInstanceOf(IllegalStateException.class);
@@ -110,12 +111,11 @@ class ConsistencyFinalizerTest {
     @Test
     void staleRetryIsExpiredAndKeepsTheOriginalFailureReason() {
         BenchmarkRun run = run();
-        when(run.consistencyFailureReason()).thenReturn("batch down");
         ConsistencyFinalizer stale = new ConsistencyFinalizer(runs, store, batch,
                 new TimeProvider(Clock.fixed(FINALIZED_AT.plusSeconds(1800), ZoneOffset.UTC)),
                 Duration.ofMinutes(5), Duration.ofMinutes(15));
         when(runs.get(7L)).thenReturn(run);
-        when(store.claim(7L, Duration.ofMinutes(5))).thenReturn(Optional.of("token"));
+        when(store.claim(7L, Duration.ofMinutes(5))).thenReturn(Optional.of(new ConsistencyFinalStore.Claim("token", "batch down")));
 
         // 확정 00:00 + 15분 창을 00:30 이 넘겼다. 회차와 무관한 시점의 값이다.
         assertThatThrownBy(() -> stale.calculate(7L)).hasMessageContaining("finalize window");

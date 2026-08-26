@@ -190,7 +190,7 @@ class JdbcConsistencyFinalStoreTest {
         int threads = 16;
         CyclicBarrier gate = new CyclicBarrier(threads);
         try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
-            List<Callable<Optional<String>>> tasks = new java.util.ArrayList<>();
+            List<Callable<Optional<ConsistencyFinalStore.Claim>>> tasks = new java.util.ArrayList<>();
             for (int i = 0; i < threads; i++) {
                 tasks.add(() -> {
                     gate.await();
@@ -198,7 +198,7 @@ class JdbcConsistencyFinalStoreTest {
                 });
             }
             long owners = 0;
-            for (Future<Optional<String>> result : pool.invokeAll(tasks)) {
+            for (Future<Optional<ConsistencyFinalStore.Claim>> result : pool.invokeAll(tasks)) {
                 if (result.get().isPresent()) owners++;
             }
             assertThat(owners).isEqualTo(1);
@@ -208,11 +208,11 @@ class JdbcConsistencyFinalStoreTest {
     @Test
     void everyClaimBumpsTheAttemptNumberStoredWithTheVerdict() {
         insertFinalizedRun(7, "run-7");
-        store.claim(7, Duration.ofMinutes(5)).orElseThrow();
+        store.claim(7, Duration.ofMinutes(5)).orElseThrow().token();
         jdbc.update("UPDATE benchmark_runs SET consistency_status='FAILED', "
                 + "consistency_failure_reason='batch down', consistency_claimed_at=NULL, "
                 + "consistency_claim_token=NULL WHERE id=7");
-        String second = store.claim(7, Duration.ofMinutes(5)).orElseThrow();
+        String second = store.claim(7, Duration.ofMinutes(5)).orElseThrow().token();
         assertThat(store.complete(7, second, 11L, EngineVersion.V3,
                 Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
 
@@ -223,9 +223,24 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
+    void claimReturnsTheFailureReasonItErases() {
+        insertFinalizedRun(10, "run-10");
+        String first = store.claim(10, Duration.ofMinutes(5)).orElseThrow().token();
+        assertThat(store.fail(10, first, "batch down")).isTrue();
+
+        var second = store.claim(10, Duration.ofMinutes(5)).orElseThrow();
+
+        // 따로 읽으면 그 사이 다른 작업자가 남긴 사유를 놓친다.
+        assertThat(second.previousFailureReason()).isEqualTo("batch down");
+        assertThat(jdbc.queryForObject(
+                "SELECT consistency_failure_reason FROM benchmark_runs WHERE id=10", String.class))
+                .isNull();
+    }
+
+    @Test
     void expiredRunIsTerminalWhileFailedStaysRetryable() {
         insertFinalizedRun(8, "run-8");
-        String failed = store.claim(8, Duration.ofMinutes(5)).orElseThrow();
+        String failed = store.claim(8, Duration.ofMinutes(5)).orElseThrow().token();
         assertThat(store.fail(8, failed, "batch down")).isTrue();
         assertThat(store.claim(8, Duration.ofMinutes(5))).isPresent();
 
@@ -243,7 +258,7 @@ class JdbcConsistencyFinalStoreTest {
     @Test
     void liveObservationAfterFinalizedAtIsAcceptedBecauseEvaluatedAtIsTheRoundTime() {
         insertFinalizedRun(9, "run-9");
-        String token = store.claim(9, Duration.ofMinutes(5)).orElseThrow();
+        String token = store.claim(9, Duration.ofMinutes(5)).orElseThrow().token();
         assertThat(store.complete(9, token, 11L, EngineVersion.V3,
                 Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
 
@@ -266,7 +281,7 @@ class JdbcConsistencyFinalStoreTest {
     @Test
     void failureReasonLongerThanColumnLimitIsRejectedBeforeReachingMySql() {
         insertFinalizedRun(5, "run-5");
-        String token = store.claim(5, Duration.ofMinutes(5)).orElseThrow();
+        String token = store.claim(5, Duration.ofMinutes(5)).orElseThrow().token();
         assertThatThrownBy(() -> store.fail(5, token,
                 "x".repeat(ConsistencyFinalStore.FAILURE_REASON_MAX + 1)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -282,7 +297,7 @@ class JdbcConsistencyFinalStoreTest {
                     '2026-08-03', '2026-09-03', 'CLOSED', NOW(6), NOW(6))
             """);
         insertFinalizedRun(6, "run-6", 13);
-        String token = store.claim(6, Duration.ofMinutes(5)).orElseThrow();
+        String token = store.claim(6, Duration.ofMinutes(5)).orElseThrow().token();
         assertThat(store.complete(6, token, 13L, EngineVersion.V3,
                 Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
         jdbc.update("DELETE FROM coupons WHERE id=13");
@@ -295,17 +310,17 @@ class JdbcConsistencyFinalStoreTest {
     @Test
     void leaseRejectsConcurrentOwnerAndExpiredOwnerCanBeRecovered() {
         insertFinalizedRun(3, "run-3");
-        String first = store.claim(3, Duration.ofSeconds(1)).orElseThrow();
+        String first = store.claim(3, Duration.ofSeconds(1)).orElseThrow().token();
         assertThat(store.claim(3, Duration.ofSeconds(1))).isEmpty();
         jdbc.update("UPDATE benchmark_runs SET consistency_claimed_at=NOW(6)-INTERVAL 2 SECOND WHERE id=3");
-        String recovered = store.claim(3, Duration.ofSeconds(1)).orElseThrow();
+        String recovered = store.claim(3, Duration.ofSeconds(1)).orElseThrow().token();
         assertThat(recovered).isNotEqualTo(first);
         assertThat(store.fail(3, first, "late owner")).isFalse();
         assertThat(store.fail(3, recovered, "batch down")).isTrue();
     }
 
     private static void save(long runId, ConsistencyEvaluation evaluation) {
-        String token = store.claim(runId, Duration.ofMinutes(5)).orElseThrow();
+        String token = store.claim(runId, Duration.ofMinutes(5)).orElseThrow().token();
         assertThat(store.complete(runId, token, 11L, EngineVersion.V3,
                 Instant.parse("2026-08-26T00:00:00Z"), evaluation)).isTrue();
     }

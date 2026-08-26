@@ -107,7 +107,8 @@ public record BenchmarkRun(
         }
         boolean consistencyTerminated = consistencyStatus == ConsistencyFinalStatus.FAILED
                 || consistencyStatus == ConsistencyFinalStatus.EXPIRED;
-        if (consistencyTerminated != (consistencyFailureReason != null)) {
+        if (consistencyTerminated
+                != (consistencyFailureReason != null && !consistencyFailureReason.isBlank())) {
             throw new IllegalArgumentException(
                     "정합성 실패 이유는 FAILED·EXPIRED 일 때만, 그리고 그때는 반드시 있어야 한다: " + runKey);
         }

@@ -42,7 +42,8 @@ benchmark:
     base-url: ${BENCHMARK_BATCH_BASE_URL:http://batch:9091}
     connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}
     read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}
-    consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:3s}
+    # 관측 풀 max_execution_time(3000ms)과 동률이면 클라이언트가 항상 먼저 끊는다.
+    consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:10s}
   consistency:
     claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}
     # 회차 확정으로부터 이 시간을 넘긴 재실행은 그 회차의 값이 아니라 EXPIRED 로 종결한다.

@@ -49,8 +49,14 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
     }
 
     @Override
-    public Optional<String> claim(long benchmarkRunId, Duration lease) {
+    @Transactional
+    public Optional<Claim> claim(long benchmarkRunId, Duration lease) {
         requireLease(lease);
+        // 사유 읽기와 claim 을 같은 트랜잭션의 행 락 안에 묶는다. 따로 읽으면 그 사이
+        // 다른 작업자가 남긴 사유를 놓친다.
+        String previousReason = writeJdbcTemplate.query(
+                "SELECT consistency_failure_reason FROM benchmark_runs WHERE id = ? FOR UPDATE",
+                rs -> rs.next() ? rs.getString(1) : null, benchmarkRunId);
         String token = UUID.randomUUID().toString();
         int claimed = writeJdbcTemplate.update("""
             UPDATE benchmark_runs
@@ -62,7 +68,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
                    OR (consistency_status = 'IN_PROGRESS'
                        AND consistency_claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))))
             """, token, benchmarkRunId, -lease.getSeconds());
-        return claimed == 1 ? Optional.of(token) : Optional.empty();
+        return claimed == 1 ? Optional.of(new Claim(token, previousReason)) : Optional.empty();
     }
 
     @Override
