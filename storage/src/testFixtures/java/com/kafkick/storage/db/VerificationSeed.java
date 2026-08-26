@@ -335,6 +335,18 @@ public final class VerificationSeed {
         TABLES_IN_DELETE_ORDER.forEach(
                 table -> jdbcClient.sql("DELETE FROM " + table).update());
 
+        // **배치 메타도 함께 비운다.** 컨테이너를 JVM 이 공유하게 되면서(MySqlContainerConfig)
+        // BATCH_* 가 클래스 경계를 넘어 살고, 남은 JobInstance 가 다음 클래스의 같은 asOf 와
+        // 충돌해 JobInstanceAlreadyCompleteException 을 낸다 — 실측: 잡을 돌리는 배치 테스트
+        // 29개 중 25개가 같은 asOf(2026-01-15T09:00)를 쓴다.
+        //
+        // 한때 두 클래스만 BatchMetadata.clear() 를 부르고 나머지는 removeJobExecutions() 에
+        // 기댔는데, 그것은 **실행이 없는 인스턴스를 남긴다**(바이트코드 확인). 강도가 두 벌이면
+        // "왜 저기만 지우지" 를 다음 사람이 판단해야 하고, 판단이 틀리면 순서 의존 초록이 생긴다.
+        //
+        // 여기 두는 이유는 **이미 데이터를 비우는 자리**여서다. 부르는 쪽이 늘어날 필요가 없다.
+        BatchMetadata.clear(jdbcClient);
+
         // 캐시를 안 비우면 다음 issuance() 가 방금 지운 회차·등급을 FK 로 가리킨다.
         couponId = null;
         gradesInserted = false;
