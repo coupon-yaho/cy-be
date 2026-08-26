@@ -188,8 +188,7 @@ coupon:
 
   round-generation:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
-    max-days: ${COUPON_GENERATION_MAX_DAYS:30}
+    horizon-days: ${COUPON_GENERATION_HORIZON_DAYS:30}
 
   calendar:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
-    max-days: ${COUPON_CALENDAR_MAX_DAYS:42}

@@ -33,7 +33,7 @@ public class CouponRoundGenerationRunner {
                 asOf,
                 properties.scheduleZoneId()
         );
-        LocalDate toDate = fromDate.plusDays(properties.maxDays() - 1L);
+        LocalDate toDate = fromDate.plusDays(properties.horizonDays() - 1L);
         return generationService.generate(fromDate, toDate, asOf);
     }
 }
