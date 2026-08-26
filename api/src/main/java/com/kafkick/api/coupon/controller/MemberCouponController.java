@@ -5,14 +5,12 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.coupon.dto.response.MemberCouponPageResponse;
-import com.kafkick.api.coupon.dto.response.MemberCouponResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
@@ -55,17 +53,4 @@ public class MemberCouponController {
         ));
     }
 
-    @GetMapping("/{issuanceId}")
-    public ResponseEnvelope<MemberCouponResponse> findOne(
-            @RequestHeader(MemberRequestHeaders.MEMBER_ID)
-            @Positive(message = "회원 ID는 0보다 커야 합니다.")
-            Long memberId,
-            @PathVariable
-            @Positive(message = "쿠폰 발급 ID는 0보다 커야 합니다.")
-            Long issuanceId
-    ) {
-        return ResponseEnvelope.success(MemberCouponResponse.from(
-                memberCouponQueryService.findOne(memberId, issuanceId)
-        ));
-    }
 }

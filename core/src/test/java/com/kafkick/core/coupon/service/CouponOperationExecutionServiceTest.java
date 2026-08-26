@@ -177,7 +177,7 @@ class CouponOperationExecutionServiceTest {
         CouponOperationExecutionService service = service();
 
         CouponUseResult actual = service.use(
-                100L, 20L, 30L, 20_000, KEY
+                100L, 20L, 20_000, KEY
         );
 
         assertThat(actual).isEqualTo(expected);
@@ -187,7 +187,6 @@ class CouponOperationExecutionServiceTest {
         CouponUseCommand command = commandCaptor.getValue();
         assertThat(command.issuanceId()).isEqualTo(100L);
         assertThat(command.memberId()).isEqualTo(20L);
-        assertThat(command.orderId()).isEqualTo(30L);
         assertThat(command.orderAmount()).isEqualTo(20_000);
     }
 
@@ -215,7 +214,7 @@ class CouponOperationExecutionServiceTest {
         CouponOperationExecutionService service = service();
 
         assertThatThrownBy(() -> service.use(
-                100L, 20L, 30L, 20_000, KEY
+                100L, 20L, 20_000, KEY
         )).isSameAs(expected);
     }
 
