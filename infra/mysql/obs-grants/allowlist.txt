@@ -26,6 +26,7 @@ BATCH_JOB_INSTANCE
 # ── 벤치마크 회차 ──
 #    조회만 관측 풀이다. 생성·전이는 운영 풀이 한다(JdbcBenchmarkRunRepository 주석 참조).
 benchmark_runs
+consistency_finals
 
 # ── 도메인 관측 ──
 #    정합성 원시값 수집(ConsistencyRawValueReader), 회차 시작 게이트

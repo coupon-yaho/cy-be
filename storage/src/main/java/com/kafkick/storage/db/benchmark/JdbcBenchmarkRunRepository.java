@@ -34,6 +34,7 @@ import com.kafkick.core.benchmark.LoadProfile;
 import com.kafkick.core.benchmark.LoadToolMeta;
 import com.kafkick.core.benchmark.ServerLoadSummary;
 import com.kafkick.core.benchmark.StartBenchmarkRunCommand;
+import com.kafkick.core.consistency.ConsistencyFinalStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
@@ -102,6 +103,8 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
             BenchmarkRunStatus.valueOf(rs.getString("run_status")),
             BenchmarkArchiveStatus.valueOf(rs.getString("archive_status")),
             rs.getString("archive_failure_reason"),
+            ConsistencyFinalStatus.valueOf(rs.getString("consistency_status")),
+            rs.getString("consistency_failure_reason"),
             instant(rs, "started_at"),
             instant(rs, "load_stopped_at"),
             instant(rs, "observation_stopped_at"),

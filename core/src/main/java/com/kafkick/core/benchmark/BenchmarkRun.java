@@ -7,6 +7,7 @@ import java.util.Optional;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.consistency.ConsistencyFinalStatus;
 
 /**
  * 한 번의 부하 측정 회차. {@code benchmark_runs} 한 행에 대응한다.
@@ -62,6 +63,8 @@ public record BenchmarkRun(
         BenchmarkRunStatus runStatus,
         BenchmarkArchiveStatus archiveStatus,
         String archiveFailureReason,
+        ConsistencyFinalStatus consistencyStatus,
+        String consistencyFailureReason,
         Instant startedAt,
         Instant loadStoppedAt,
         Instant observationStoppedAt,
@@ -85,6 +88,7 @@ public record BenchmarkRun(
         Objects.requireNonNull(queueMode, "queueMode");
         Objects.requireNonNull(runStatus, "runStatus");
         Objects.requireNonNull(archiveStatus, "archiveStatus");
+        Objects.requireNonNull(consistencyStatus, "consistencyStatus");
         Objects.requireNonNull(startedAt, "startedAt");
         Objects.requireNonNull(requestedBy, "requestedBy");
         Objects.requireNonNull(topology, "topology");
@@ -100,6 +104,11 @@ public record BenchmarkRun(
         if ((archiveStatus == BenchmarkArchiveStatus.FAILED) != (archiveFailureReason != null)) {
             throw new IllegalArgumentException(
                     "archive 실패 이유는 FAILED 일 때만, 그리고 FAILED 이면 반드시 있어야 한다: " + runKey);
+        }
+        if ((consistencyStatus == ConsistencyFinalStatus.FAILED)
+                != (consistencyFailureReason != null)) {
+            throw new IllegalArgumentException(
+                    "정합성 실패 이유는 FAILED 일 때만, 그리고 FAILED이면 반드시 있어야 한다: " + runKey);
         }
     }
 
