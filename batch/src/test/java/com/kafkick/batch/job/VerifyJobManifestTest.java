@@ -25,8 +25,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.storage.db.CorruptMySqlContainerConfig;
 import com.kafkick.storage.db.CorruptSchema;
-import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
 /**
@@ -43,7 +43,9 @@ import com.kafkick.storage.db.VerificationSeed;
         "batch.verify.replay-window-size=2",
         CorruptSchema.FLYWAY_LOCATIONS
 })
-@Import(MySqlContainerConfig.class)
+// CORRUPT 전용 컨테이너다. 로케이션(CorruptSchema)과 **함께** 줘야 한다 —
+// 하나만 주면 조용히 틀린다. 이유는 CorruptMySqlContainerConfig 에 있다.
+@Import(CorruptMySqlContainerConfig.class)
 class VerifyJobManifestTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);

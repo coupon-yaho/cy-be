@@ -806,7 +806,7 @@ DELETE FROM asof_state WHERE run_id = :runId LIMIT 10000;
 
 ---
 
-## 7. 테스트 컨테이너를 스프링 컨텍스트마다 띄우고 있다
+## 7. ~~테스트 컨테이너를 스프링 컨텍스트마다 띄우고 있다~~ 해결됨 (CY-621)
 
 **실측(2026-08-23).** `:batch:test` 가 도는 동안 `docker ps` 로 세었다.
 
@@ -826,17 +826,61 @@ DELETE FROM asof_state WHERE run_id = :runId LIMIT 10000;
 실패 문자열의 `total=0, idle=0` 이 *"풀이 말랐다"* 가 아니라 *"서버가 없다"* 를 뜻한다는 것이
 유일한 단서였다. CI 에서 실제로 세 번 그렇게 깨졌다(CY-392).
 
-**지금은 `spring.test.context.cache.maxSize=4` 로 묶어 뒀다**(루트 `build.gradle`).
+**당시의 대응은 `spring.test.context.cache.maxSize=4` 였다**(루트 `build.gradle`).
 밀려난 컨텍스트가 닫히면 그 컨테이너도 내려간다 — 18개가 4개가 되는 것을 확인했다.
-대가는 재생성 비용이고, 빌드가 여전히 5분대다.
+대가는 재생성 비용이었고, 빌드가 5분대였다. **CY-621 이 그 상한을 기본값 32로 되돌렸다** —
+아래 블록 참고.
 
 **근본 해결은 컨테이너를 컨텍스트마다 안 띄우는 것이다.** 다만 단순 싱글턴이 안 된다 —
 이 저장소는 **정상 스키마와 오염 스키마를 나눠** 써야 하고(`CorruptRepositoryTest` 가 그것을
 명시한다), 락 측정 테스트는 `performance_schema` 를 요구한다. 그래서 **스키마 종류별로 갈린
 JVM 싱글턴**이 필요하다.
 
-**언제** — 빌드 시간이 발표 준비를 막을 때. 지금은 상한으로 버틴다.
-`docs/13` §4c(빌드 캐시·병렬)와 같은 축이므로 함께 보는 것이 낫다.
+> ### ✅ CY-621 이 했다
+>
+> **컨테이너를 컨텍스트가 아니라 JVM 이 소유한다.** `MySqlContainerConfig` 가 `static` 싱글턴을
+> 들고, `stop()` 을 받지 않는 서브클래스로 스프링이 수명에 손대지 못하게 한다. 컨텍스트가
+> 밀려나도 mysqld 는 그대로 산다.
+>
+> | | 전 | 후 |
+> |---|---|---|
+> | `:batch:test` 컨테이너 기동 | **44회** | **4회** |
+> | 동시에 살아 있는 컨테이너 | **18개** (≈8GB) | **3개** |
+> | `:batch:test` | 294초 | **59초** |
+> | `./gradlew build` (clean) | 약 300초 | **97초** |
+>
+> 4회의 내역: CLEAN 1 + CORRUPT 1 + `BinlogFormatGuardTest` 가 직접 띄우는 STATEMENT·ROW 둘.
+>
+> **위가 예고한 "스키마 종류별로 갈린 JVM 싱글턴" 이 맞았다.** 같은 컨테이너의 다른
+> 데이터베이스로 가르는 방법을 먼저 해 봤는데 안 된다 — `@ServiceConnection` 이 컨테이너에서
+> 읽은 접속 정보가 **인라인 프로퍼티를 이겨서**, CORRUPT 마이그레이션이 CLEAN DB 에 떨어졌다
+> (`CleanSchemaGuard` 가 13건 울었다).
+>
+> **`maxSize` 를 4에서 기본값 32로 되돌렸다.** 그 값의 근거였던 메모리 폭발이 사라졌다.
+>
+> **대가는 격리다.** 컨텍스트가 곧 빈 DB 이던 성질이 없어져, 데이터를 읽는 테스트는 스스로
+> 비워야 한다. **둘을 고쳤다** — `BinlogFormatGuardWiringTest`(같은 `asOf` 로
+> `JobInstanceAlreadyCompleteException`)와 `BatchJobRepositoryTest`(전역 행수를 세는데 남의
+> 메타까지 셌다). 나머지는 이미 `VerificationSeed.clear()` 로 비우고 있었거나, 배선·설정
+> 검사라 행을 안 읽는다.
+>
+> ```bash
+> grep -rl "@SpringBootTest" --include='*.java' */src/test | wc -l   # 43
+> ```
+>
+> **`removeJobExecutions()` 만으로는 안 비워진다** — 실행이 없는 인스턴스를 남긴다(바이트코드로
+> 확인). 그래서 삭제를 `BatchMetadata` 한 곳으로 모았다. 강도가 다른 두 벌이 병존하면
+> *"왜 저기만 지우지"* 를 다음 사람이 판단해야 하고, 판단이 틀리면 순서 의존 초록이 다시 생긴다.
+>
+> **제약이 메모리에서 연결 수로 옮겨 갔다.** 캐시된 컨텍스트가 각자 풀을 들고 한 서버에
+> 붙어 `Too many connections` 가 282번 났다. `--max-connections` 를 **`build.gradle` 이 캐시
+> 상한에서 계산해** 넘긴다 — 두 값이 서로를 모르면, 한쪽만 올렸을 때 나오는 실패가 Hikari
+> 문제로 오독된다.
+>
+> **규약을 기계가 막는다.** CORRUPT 는 `@Import` 와 `CorruptSchema.FLYWAY_LOCATIONS` 를 **둘 다**
+> 줘야 하는데, 하나만 주면 *"검출 0건"* 이라는 **초록**으로 실패했다. 지금은 두 설정이 각자
+> 기동 시점에 로케이션을 보고 죽인다 — 조건이 서로의 부정이라 둘을 함께 임포트하는 것도 막힌다.
+> `SharedMySqlContainerTest` 가 컨테이너 정체성 둘(수명·분리)을 따로 잰다.
 
 ---
 
