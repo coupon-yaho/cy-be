@@ -45,7 +45,7 @@ class AdminAnalyticsServiceTest {
 
         AdminAnalyticsResult result = service.getAnalytics(QUERY);
 
-        assertThat(result.sourceType()).isEqualTo(AnalyticsSourceType.MOCK);
+        assertThat(result.sourceType()).isEqualTo(AnalyticsSourceType.AGGREGATE_DB);
         assertThat(source.callCount).isEqualTo(1);
         assertThat(source.lastQuery).isSameAs(QUERY);
         assertThat(timeProvider.callCount).isEqualTo(1);
@@ -132,7 +132,7 @@ class AdminAnalyticsServiceTest {
     private static AdminAnalyticsDataset dataset(CatalogSnapshot catalog) {
         Instant observedAt = NOW.minusSeconds(60);
         return new AdminAnalyticsDataset(
-                AnalyticsSourceType.MOCK,
+                AnalyticsSourceType.AGGREGATE_DB,
                 catalog,
                 new AggregateObservation<>(List.of(), AggregateAvailability.AVAILABLE, observedAt),
                 new AggregateObservation<>(List.of(), AggregateAvailability.AVAILABLE, observedAt),

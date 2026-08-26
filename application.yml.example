@@ -112,13 +112,6 @@ management:
       expiry:
         "[http.server.requests]": 10s
 
-admin:
-  # 브랜드 분석 집계 Source가 없을 때 운영 응답은 PENDING이다. 배포 예시는 가짜 분석 값을
-  # 만들지 않도록 false를 기본값으로 둔다.
-  analytics:
-    max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
-    mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:false}
-
 observation:
   datasource:
     enabled: ${OBS_DATASOURCE_ENABLED:true}

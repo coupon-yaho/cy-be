@@ -284,7 +284,7 @@ class AdminAnalyticsCalculatorTest {
     @DisplayName("월별 집계 행의 브랜드가 응답 모집단 밖이면 원천 계약 오류로 거부한다")
     void rejectsMonthlyAggregateOutsideResponsePopulation() {
         AdminAnalyticsDataset dataset = new AdminAnalyticsDataset(
-                AnalyticsSourceType.MOCK,
+                AnalyticsSourceType.AGGREGATE_DB,
                 new CatalogSnapshot(
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드"), new BrandRef(2L, "기간 밖 브랜드")),
@@ -341,7 +341,7 @@ class AdminAnalyticsCalculatorTest {
             AggregateObservation<List<IssuanceStatusAggregate>> statuses
     ) {
         return new AdminAnalyticsDataset(
-                AnalyticsSourceType.MOCK,
+                AnalyticsSourceType.AGGREGATE_DB,
                 new CatalogSnapshot(
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드")),
@@ -362,7 +362,7 @@ class AdminAnalyticsCalculatorTest {
             AggregateObservation<List<IssuanceStatusAggregate>> statuses
     ) {
         return new AdminAnalyticsDataset(
-                AnalyticsSourceType.MOCK,
+                AnalyticsSourceType.AGGREGATE_DB,
                 new CatalogSnapshot(
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드1"), new BrandRef(2L, "브랜드2")),
@@ -383,7 +383,7 @@ class AdminAnalyticsCalculatorTest {
             AggregateObservation<List<IssuanceStatusAggregate>> statuses
     ) {
         return new AdminAnalyticsDataset(
-                AnalyticsSourceType.MOCK,
+                AnalyticsSourceType.AGGREGATE_DB,
                 new CatalogSnapshot(
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드"), new BrandRef(2L, "기간 밖 브랜드")),

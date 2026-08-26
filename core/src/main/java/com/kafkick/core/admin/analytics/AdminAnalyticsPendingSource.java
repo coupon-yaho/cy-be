@@ -4,7 +4,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateObservati
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CatalogSnapshot;
 
-/** Mock과 실제 집계 저장소가 모두 비활성화된 동안 분석별 PENDING을 제공합니다. */
+/** 실제 집계 저장소가 연결되기 전 분석별 PENDING을 제공합니다. */
 public final class AdminAnalyticsPendingSource implements AdminAnalyticsSource {
 
     /** ID 존재를 추측하지 않고 세 분석을 미집계 상태로 반환합니다. */

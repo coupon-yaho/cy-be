@@ -23,13 +23,6 @@ server:
   error:
     include-stacktrace: never
 
-admin:
-  # 개발·데모 전용 예시다. 운영 배포용 application.yml.example에 복사하지 않는다.
-  # false이면 집계 Source가 없는 브랜드 분석은 PENDING을 반환한다.
-  analytics:
-    max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
-    mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:true}
-
 benchmark:
   protocol:
     load-hold-seconds: ${BENCHMARK_LOAD_HOLD_SECONDS:5}

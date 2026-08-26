@@ -21,7 +21,7 @@ import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
 import com.kafkick.core.admin.issuancehistory.IssuanceHistoryCalculator;
 import com.kafkick.core.support.TimeProvider;
 
-/** 관리자 생산 배선에 공통 Fixture가 다시 들어오지 않는지 검증합니다. */
+/** 관리자 생산 배선에 Fixture와 분석 Mock이 다시 들어오지 않는지 검증합니다. */
 class AdminProductionSourceWiringTest {
 
     private final ApplicationContextRunner issuanceHistoryRunner = new ApplicationContextRunner()
@@ -29,36 +29,53 @@ class AdminProductionSourceWiringTest {
             .withBean(TimeProvider.class, () -> new TimeProvider(
                     Clock.fixed(Instant.parse("2026-08-26T00:00:00Z"), ZoneOffset.UTC)));
 
-    /** 공통 Fixture 설정과 공통 Mock 스위치는 생산 소스에 존재하면 안 됩니다. */
+    /** 공통 Fixture 설정과 Mock 타입·스위치는 생산 소스에 존재하면 안 됩니다. */
     @Test
-    void excludesCommonFixtureConfigurationAndSwitchFromProductionSources() throws IOException {
+    void excludesFixtureConfigurationAndMockWiringFromProductionSources() throws IOException {
         Path productionRoot = Path.of("src/main/java");
+        Path repositoryRoot = Path.of("..").toAbsolutePath().normalize();
         List<Path> productionSources = filesUnder(productionRoot);
 
         assertThat(productionRoot.resolve("com/kafkick/api/admin/support/config/AdminFixtureConfig.java"))
                 .doesNotExist();
+        assertThat(repositoryRoot.resolve(
+                "core/src/main/java/com/kafkick/core/admin/analytics/mock/AdminAnalyticsMockDataFactory.java"))
+                .doesNotExist();
+        assertThat(repositoryRoot.resolve(
+                "core/src/main/java/com/kafkick/core/admin/analytics/mock/AdminAnalyticsMockSource.java"))
+                .doesNotExist();
         assertThat(productionSources)
                 .allSatisfy(source -> assertThat(Files.readString(source))
-                        .doesNotContain("admin.mock.enabled", "ADMIN_MOCK_ENABLED"));
+                        .doesNotContain(
+                                "admin.mock.enabled",
+                                "ADMIN_MOCK_ENABLED",
+                                "admin.analytics.mock-enabled",
+                                "ADMIN_ANALYTICS_MOCK_ENABLED",
+                                "AdminAnalyticsMock"));
     }
 
-    /** 배포 예시는 공통 Mock을 제거하고 분석 Mock만 운영 기본 false로 둡니다. */
+    /** 배포 예시는 공통·분석 Mock 설정 없이 실제 Source와 Pending만 안내합니다. */
     @Test
-    void keepsOnlyAnalyticsMockSettingInDeploymentExamples() throws IOException {
+    void excludesMockSettingsFromDeploymentExamples() throws IOException {
         Path repositoryRoot = Path.of("..").toAbsolutePath().normalize();
         String environmentExample = Files.readString(repositoryRoot.resolve(".env.example"));
         String deploymentExample = Files.readString(repositoryRoot.resolve("application.yml.example"));
         String ideExample = Files.readString(Path.of("src/main/resources/application.yml.example"));
 
         assertThat(environmentExample)
-                .contains("ADMIN_ANALYTICS_MOCK_ENABLED=false")
-                .doesNotContain("ADMIN_MOCK_ENABLED");
+                .doesNotContain("ADMIN_MOCK_ENABLED", "ADMIN_ANALYTICS_MOCK_ENABLED");
         assertThat(deploymentExample)
-                .contains("mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:false}")
-                .doesNotContain("admin.mock.enabled", "ADMIN_MOCK_ENABLED");
+                .doesNotContain(
+                        "admin.mock.enabled",
+                        "ADMIN_MOCK_ENABLED",
+                        "mock-enabled",
+                        "ADMIN_ANALYTICS_MOCK_ENABLED");
         assertThat(ideExample)
-                .contains("개발·데모 전용", "mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:true}")
-                .doesNotContain("admin.mock.enabled", "ADMIN_MOCK_ENABLED");
+                .doesNotContain(
+                        "admin.mock.enabled",
+                        "ADMIN_MOCK_ENABLED",
+                        "mock-enabled",
+                        "ADMIN_ANALYTICS_MOCK_ENABLED");
     }
 
     /** 사용자 정의 이력 Service가 있으면 API 기본 조립이 중복 Bean으로 덮어쓰지 않습니다. */
