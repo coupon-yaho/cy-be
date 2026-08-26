@@ -128,7 +128,7 @@ class AdminBenchmarkControllerTest {
 
     /** 실패 건수가 전체 요청 수를 넘는 공식 결과를 400으로 거부하는지 검증합니다. */
     @Test
-    @DisplayName("k6 실패 비율은 0 이상 1 이하만 허용한다")
+    @DisplayName("client-result 실패 건수는 전체 요청 수를 넘을 수 없다")
     void clientResultRejectsFailureCountAboveRequestCount() throws Exception {
         mockMvc.perform(post("/api/v1/admin/benchmarks/1/client-result")
                         .contentType(MediaType.APPLICATION_JSON)

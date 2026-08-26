@@ -270,13 +270,17 @@ class BenchmarkRunServiceTest {
         @Test
         @DisplayName("동일 startedAt이면 ID가 작은 회차만 다음 페이지에 남긴다")
         void sameStartedAtUsesIdAsTheSecondKeysetColumn() {
-            BenchmarkRun first = service.start(command("V3-MAIN-01"));
-            service.stopLoad(first.id(), null);
-            BenchmarkRun second = service.start(command("V3-MAIN-02"));
-            service.stopLoad(second.id(), null);
-            BenchmarkRun third = service.start(command("V3-MAIN-03"));
+            Clock fixedClock = Clock.fixed(Instant.parse("2026-08-22T00:00:00Z"), ZoneOffset.UTC);
+            FakeBenchmarkRunRepository fixedRepository = new FakeBenchmarkRunRepository(fixedClock);
+            BenchmarkRunService fixedService = new BenchmarkRunService(
+                    fixedRepository, new TimeProvider(fixedClock));
+            BenchmarkRun first = fixedService.start(command("V3-MAIN-01"));
+            fixedService.stopLoad(first.id(), null);
+            BenchmarkRun second = fixedService.start(command("V3-MAIN-02"));
+            fixedService.stopLoad(second.id(), null);
+            BenchmarkRun third = fixedService.start(command("V3-MAIN-03"));
 
-            BenchmarkRunPage firstPage = service.search(new BenchmarkRunQuery(
+            BenchmarkRunPage firstPage = fixedService.search(new BenchmarkRunQuery(
                     null, null, null, null, null, 2));
 
             assertThat(firstPage.items()).extracting(BenchmarkRun::id)
@@ -285,7 +289,7 @@ class BenchmarkRunServiceTest {
             assertThat(firstPage.nextBefore()).isEqualTo(
                     new BenchmarkRunPosition(second.startedAt(), second.id()));
 
-            BenchmarkRunPage nextPage = service.search(new BenchmarkRunQuery(
+            BenchmarkRunPage nextPage = fixedService.search(new BenchmarkRunQuery(
                     null, null, null, null, firstPage.nextBefore(), 2));
 
             assertThat(nextPage.items()).extracting(BenchmarkRun::id).containsExactly(first.id());
