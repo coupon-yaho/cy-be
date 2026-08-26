@@ -115,13 +115,13 @@ class AnalyticsRangeValidatorTest {
 
     @Test
     void rejectsNonPositiveConfiguredMaximumYears() {
-        assertThatThrownBy(() -> AdminAnalyticsProperties.withMockEnabled(0))
+        assertThatThrownBy(() -> new AdminAnalyticsProperties(0, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     private Validator validator(int maxRangeYears) {
         AnalyticsRangeValidator configured = new AnalyticsRangeValidator(
-                AdminAnalyticsProperties.withMockEnabled(maxRangeYears));
+                new AdminAnalyticsProperties(maxRangeYears, null));
         return Validation.byDefaultProvider()
                 .configure()
                 .constraintValidatorFactory(new ConfiguredConstraintValidatorFactory(configured))

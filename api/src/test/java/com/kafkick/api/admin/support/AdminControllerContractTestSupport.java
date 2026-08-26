@@ -39,9 +39,8 @@ import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsCalculator;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
+import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
-import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockDataFactory;
-import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockSource;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
@@ -218,11 +217,11 @@ public final class AdminControllerContractTestSupport {
         };
     }
 
-    /** 지정한 Clock으로 관리자 브랜드 분석 Mock Service를 구성합니다. */
+    /** 지정한 Clock으로 원천 미연결 브랜드 분석 Service를 구성합니다. */
     public static AdminAnalyticsService analyticsService(Clock clock) {
         TimeProvider timeProvider = new TimeProvider(clock);
         return new AdminAnalyticsService(
-                new AdminAnalyticsMockSource(new AdminAnalyticsMockDataFactory(), clock.instant()),
+                new AdminAnalyticsPendingSource(),
                 timeProvider,
                 new AdminAnalyticsCalculator(new AdminAnalyticsFreshnessPolicy(java.time.Duration.ofHours(1))));
     }
@@ -240,7 +239,7 @@ public final class AdminControllerContractTestSupport {
     ) {
         Clock fixedClock = Clock.fixed(Instant.parse("2026-08-16T00:00:00Z"), ZoneOffset.UTC);
         DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
-        beanFactory.registerSingleton("adminAnalyticsProperties", AdminAnalyticsProperties.withMockEnabled(1));
+        beanFactory.registerSingleton("adminAnalyticsProperties", new AdminAnalyticsProperties(1, null));
         LocalValidatorFactoryBean validator = new LocalValidatorFactoryBean();
         validator.setConstraintValidatorFactory(new SpringConstraintValidatorFactory(beanFactory));
         validator.afterPropertiesSet();

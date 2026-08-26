@@ -106,10 +106,9 @@ tasks.named('test') {
             rootProject.file('docker-compose.yml'),
             rootProject.file('docker-compose.yaml'),
             rootProject.file('.github/CODEOWNERS'),
-            // [OBS-36] AdminFixtureExposureTest 가 읽는 것 중 **클래스패스 밖**인 것은
-            // .env.example 과 루트 application.yml.example 이고 둘 다 아래에 이미 있다.
-            // 배선 소스(AdminFixtureConfig.java)는 이 모듈의 main 이라 컴파일 산출물로 추적된다 —
-            // @Bean 을 지우거나 스위치 이름을 바꾸면 클래스 파일이 바뀌어 test 가 다시 돈다.
+            // CY-571의 AdminProductionSourceWiringTest는 배포 예시의 공통·분석 Mock 키 제거를
+            // 확인한다. 클래스패스 밖인 루트 .env.example·application.yml.example도
+            // 아래 입력에 포함해야 해당 파일만 바꿔도 테스트가 다시 돈다.
             // DeployedConfigContractTest 가 compose 의 포트 변수 이름이 여기 정의돼 있는지
             // 본다. 선언하지 않으면 이 파일에서 변수를 지워도 test 가 UP-TO-DATE 로 건너뛴다.
             rootProject.file('.env.example'),

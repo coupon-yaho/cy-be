@@ -11,8 +11,6 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
 import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
 import com.kafkick.core.admin.analytics.AdminAnalyticsSource;
-import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockDataFactory;
-import com.kafkick.core.admin.analytics.mock.AdminAnalyticsMockSource;
 import com.kafkick.core.support.TimeProvider;
 
 /** 관리자 브랜드 분석의 기술 중립 Core 구성요소를 API 실행 환경에 조립합니다. */
@@ -20,22 +18,15 @@ import com.kafkick.core.support.TimeProvider;
 @EnableConfigurationProperties(AdminAnalyticsProperties.class)
 public class AdminAnalyticsConfig {
 
-    /** 설정에 따라 개발용 Mock 또는 값 없는 Pending Source를 선택합니다. */
+    /** 실제 Source가 없으면 가짜 집계 없이 값 없는 Pending Source를 선택합니다. */
     @Bean
     @ConditionalOnMissingBean(AdminAnalyticsSource.class)
-    public AdminAnalyticsSource adminAnalyticsSource(
-            AdminAnalyticsProperties properties,
-            TimeProvider timeProvider
-    ) {
-        if (!properties.mockEnabled()) {
-            // 운영 기본값에서는 가짜 통계를 만들지 않고 아직 집계되지 않았음을 명시합니다.
-            return new AdminAnalyticsPendingSource();
-        }
-        return new AdminAnalyticsMockSource(
-                new AdminAnalyticsMockDataFactory(), timeProvider.instant());
+    public AdminAnalyticsSource adminAnalyticsSource() {
+        // 집계 Source가 도착하기 전에는 가짜 통계를 만들지 않고 아직 집계되지 않았음을 명시합니다.
+        return new AdminAnalyticsPendingSource();
     }
 
-    /** Mock과 실제 Source에 동일한 Freshness 임계값을 적용합니다. */
+    /** 실제 Source에 적용할 Freshness 임계값을 등록합니다. */
     @Bean
     @ConditionalOnMissingBean(AdminAnalyticsFreshnessPolicy.class)
     public AdminAnalyticsFreshnessPolicy adminAnalyticsFreshnessPolicy(

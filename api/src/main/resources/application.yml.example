@@ -23,29 +23,6 @@ server:
   error:
     include-stacktrace: never
 
-admin:
-  # ⚠️ [OBS-36] **이 두 스위치는 화면에 가짜 데이터를 내보낸다.** 둘 다 기본값이 꺼짐이고,
-  #    여기서 켜는 것은 로컬·시연에서 A-06~A-11 의 실제 Repository 가 아직 없기 때문이다.
-  #    실제 저장소가 붙는 티켓에서 해당 줄을 지운다.
-  #
-  #    끈 상태의 동작이 둘이 다르다:
-  #      admin.mock.enabled=false   → 운영현황·문의·발급이력·상세지표 빈이 없어 **기동 실패**.
-  #                                   그 화면들의 응답 계약에 "아직 없음" 을 담을 자리가 없어
-  #                                   빈 결과로 대신하면 "조회했는데 없음" 과 구분되지 않는다.
-  #      analytics.mock-enabled=false → 화면이 뜨고 PENDING 이 나간다. 이쪽만 그 자리가 있다.
-  #
-  # ⚠️ **여기만 fallback 이 켜짐이다. 루트 application.yml.example 은 꺼짐이다.**
-  #    두 파일이 사는 곳이 다르다 — 루트 것은 compose 가 마운트하고 .env 와 항상 짝이지만,
-  #    이 파일은 호스트에서 Gradle·IDE 로 띄울 때 쓰는 것이라 **.env 를 안 읽는다.**
-  #    실제로 이 파일에는 기본값 없는 변수가 하나도 없다(복사하면 그대로 뜬다는 뜻이다).
-  #    여기서 꺼짐으로 두면 A-06~A-11 이 실제 Repository 를 붙이기 전까지 IDE 실행이
-  #    통째로 기동 실패한다 — 운영 노출과 무관한 자리에서 잃는 것만 있다.
-  mock:
-    enabled: ${ADMIN_MOCK_ENABLED:true}
-  analytics:
-    max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
-    mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:true}
-
 benchmark:
   protocol:
     load-hold-seconds: ${BENCHMARK_LOAD_HOLD_SECONDS:5}

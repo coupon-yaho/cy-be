@@ -26,12 +26,8 @@ import static com.kafkick.core.observation.SourceStatus.*;
  * 스냅샷 시각을 기준으로 모든 캠페인 시각을 상대적으로 생성합니다. 이 정책·수치는 운영 기본값이
  * 아니라 화면 조립·표시 시나리오 전용 Fixture입니다.</p>
  *
- * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
- * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
- *
- * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
- * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
- * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
+ * <p>이 Fixture는 test source에만 있으며 테스트가 직접 생성합니다. 생산 Bean으로 등록하지 않아
+ * 실제 Source 또는 PENDING 계약을 가리지 않습니다.
  */
 public class AdminOverviewTestFixture {
 

@@ -1,6 +1,6 @@
 package com.kafkick.core.admin.analytics;
 
-/** 관리자 브랜드 분석의 Mock 또는 실제 집계 조회 경계입니다. */
+/** 관리자 브랜드 분석의 실제 집계 조회 경계입니다. */
 @FunctionalInterface
 public interface AdminAnalyticsSource {
 
