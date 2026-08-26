@@ -183,6 +183,19 @@ class ConsistencyFinalControllerTest {
         org.mockito.Mockito.verifyNoInteractions(reader, calculator);
     }
 
+    @Test
+    void readingBeforeTheRunWasFinalizedIsRejectedToo() {
+        // 확정보다 앞선 관측은 그 회차의 값이 아니다 — 미래 시각이 오면 창이 무의미해진다.
+        var response = controller.evaluate(7L, EngineVersion.V3, NOW.plusSeconds(60));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().violations())
+                .singleElement()
+                .satisfies(violation ->
+                        assertThat(violation.key()).contains("max-observation-lag"));
+        org.mockito.Mockito.verifyNoInteractions(reader, calculator);
+    }
+
     private static ConsistencyRawSnapshot rawSnapshot() {
         return new ConsistencyRawSnapshot(
                 mock(com.kafkick.core.consistency.ConsistencyRawValues.class),

@@ -31,7 +31,8 @@ public final class ConsistencyFinalGuard {
      */
     public static List<Violation> checkFinalizeWindow(
             Instant readAt, Instant runFinalizedAt, Duration maxLag) {
-        if (runFinalizedAt != null && !readAt.isAfter(runFinalizedAt.plus(maxLag))) {
+        if (runFinalizedAt != null && !readAt.isBefore(runFinalizedAt)
+                && !readAt.isAfter(runFinalizedAt.plus(maxLag))) {
             return List.of();
         }
         return List.of(new Violation("benchmark.consistency.max-observation-lag",
