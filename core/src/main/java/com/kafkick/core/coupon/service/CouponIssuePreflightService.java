@@ -76,10 +76,23 @@ public class CouponIssuePreflightService {
             String idempotencyKey,
             String requestHash
     ) {
-        return idempotencyRepository.findByKey(idempotencyKey)
-                .filter(record -> record.status() == IdempotencyStatus.DONE)
-                .filter(record -> record.requestHash().equals(requestHash))
-                .map(IdempotencyRecord::responseBody);
+        Optional<IdempotencyRecord> stored = idempotencyRepository.findByKey(
+                idempotencyKey
+        );
+        if (stored.isEmpty()) {
+            return Optional.empty();
+        }
+        IdempotencyRecord record = stored.get();
+        if (!record.requestHash().equals(requestHash)) {
+            throw new BusinessException(
+                    CouponUseErrorCode.IDEMPOTENCY_KEY_REUSED,
+                    "idempotencyKey=" + record.key()
+            );
+        }
+        if (record.status() != IdempotencyStatus.DONE) {
+            return Optional.empty();
+        }
+        return Optional.of(record.responseBody());
     }
 
     /**

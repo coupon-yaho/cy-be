@@ -156,6 +156,35 @@ class CouponIssueObservationCoordinatorTest {
         verify(session).finish();
     }
 
+    @Test
+    void doesNotRecordASecondAttemptWhenAuthoritativeContentionReplays() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            return new CouponIssueExecutionResult(issueResult(), true);
+        });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(observationService).recordIssueAttempt(context);
+        verify(observationService, never()).recordIssueAttempt(
+                context.withReplayed(true)
+        );
+        verify(session, never()).completeIssued(any(Long.class), any());
+        verify(session).finish();
+    }
+
     @ParameterizedTest
     @CsvSource({
             "NOT_OPENED, 409, NOT_OPENED, NONE",

@@ -29,9 +29,11 @@ public class IdempotentOperationService {
      *
      * <p>발급 경로 전용입니다. IN_PROGRESS 선점이 없으므로 실패는 롤백만으로 정리되고
      * {@code release}가 필요하지 않습니다. 같은 멱등키가 이미 있으면 결과를 버리고
-     * {@code false}를 담아 돌려주어, 호출부가 저장된 응답 재사용으로 넘어가게 합니다.
+     * {@link IdempotencyKeyTakenException}을 던져 트랜잭션을 롤백한 뒤, 호출부가 저장된 응답
+     * 재사용으로 넘어가게 합니다.
      *
-     * @return 작업 결과와 기록 성공 여부
+     * @return 한 트랜잭션에서 기록까지 마친 작업 결과
+     * @throws IdempotencyKeyTakenException 같은 멱등키의 레코드가 이미 존재하는 경우
      */
     @Transactional
     public <R> RecordedExecution<R> executeAndRecord(

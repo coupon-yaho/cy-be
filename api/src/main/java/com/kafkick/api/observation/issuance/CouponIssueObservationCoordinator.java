@@ -145,6 +145,7 @@ public final class CouponIssueObservationCoordinator {
         private final IssuanceFlowEvent.Ctx context;
         private final IssuanceObservationSession session;
         private final IssuanceObservationService service;
+        private boolean attemptRecorded;
 
         private ObservationScope(
                 IssuanceFlowEvent.Ctx context,
@@ -174,7 +175,7 @@ public final class CouponIssueObservationCoordinator {
 
         /** 신규·stale 선점 요청의 시도를 기록합니다. */
         private void recordClaimedAttempt() {
-            recordAttempt(context);
+            recordAttemptOnce(context);
         }
 
         /** DONE 응답 재사용 시 replay 표식이 있는 시도만 기록합니다. */
@@ -183,7 +184,7 @@ public final class CouponIssueObservationCoordinator {
                 return;
             }
             try {
-                recordAttempt(context.withReplayed(true));
+                recordAttemptOnce(context.withReplayed(true));
             } catch (RuntimeException ignored) {
                 // replay Context 변환 실패도 저장된 업무 응답을 바꾸지 않는다.
             }
@@ -225,11 +226,12 @@ public final class CouponIssueObservationCoordinator {
             }
         }
 
-        /** attempt 기록 실패를 호출자에게 전파하지 않습니다. */
-        private void recordAttempt(IssuanceFlowEvent.Ctx attemptContext) {
-            if (attemptContext == null) {
+        /** 한 HTTP 요청의 attempt를 한 번만 기록하고 기록 실패를 전파하지 않습니다. */
+        private void recordAttemptOnce(IssuanceFlowEvent.Ctx attemptContext) {
+            if (attemptContext == null || attemptRecorded) {
                 return;
             }
+            attemptRecorded = true;
             try {
                 service.recordIssueAttempt(attemptContext);
             } catch (RuntimeException ignored) {
