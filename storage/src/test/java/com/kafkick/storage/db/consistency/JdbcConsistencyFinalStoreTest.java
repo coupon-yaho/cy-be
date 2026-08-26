@@ -176,8 +176,11 @@ class JdbcConsistencyFinalStoreTest {
 
     @Test
     void completeRunsInsertAndOwnershipUpdateInsideOneTransaction() {
+        String token = store.claim(1, Duration.ofMinutes(5)).orElseThrow().token();
+        // claim 도 @Transactional 이라 여기서 리셋해야 complete 만 보는 단언이 된다.
         transactionSeenDuringComplete.set(false);
-        save(1, evaluation(SourceStatus.VALID));
+        assertThat(store.complete(1, token, 11L, EngineVersion.V3,
+                Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
         assertThat(transactionSeenDuringComplete).isTrue();
         assertThat(jdbc.queryForObject(
                 "SELECT consistency_status FROM benchmark_runs WHERE id=1", String.class))
