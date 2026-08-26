@@ -82,6 +82,26 @@ class FakeBenchmarkRunRepository implements BenchmarkRunRepository {
     }
 
     @Override
+    public List<BenchmarkRun> findPage(BenchmarkRunQuery query, int fetchLimit) {
+        return rows.values().stream().map(Row::toRun)
+                .filter(run -> query.fromInclusive() == null || !run.startedAt().isBefore(query.fromInclusive()))
+                .filter(run -> query.toExclusive() == null || run.startedAt().isBefore(query.toExclusive()))
+                .filter(run -> query.engineVersion() == null || run.engineVersion() == query.engineVersion())
+                .filter(run -> query.scenarioCode() == null || run.scenarioCode().equals(query.scenarioCode()))
+                .filter(run -> isBefore(run, query.before()))
+                .sorted(Comparator.comparing(BenchmarkRun::startedAt).reversed()
+                        .thenComparing(BenchmarkRun::id, Comparator.reverseOrder()))
+                .limit(fetchLimit)
+                .toList();
+    }
+
+    /** 내림차순 Keyset에서 같은 시각이면 더 작은 ID만 다음 페이지에 남긴다. */
+    private static boolean isBefore(BenchmarkRun run, BenchmarkRunPosition before) {
+        return before == null || run.startedAt().isBefore(before.startedAt())
+                || (run.startedAt().equals(before.startedAt()) && run.id() < before.benchmarkRunId());
+    }
+
+    @Override
     public boolean markLoadStopped(long id, Instant loadStoppedAt, String reason) {
         Row row = rows.get(id);
         if (row == null || row.status != BenchmarkRunStatus.RUNNING) {

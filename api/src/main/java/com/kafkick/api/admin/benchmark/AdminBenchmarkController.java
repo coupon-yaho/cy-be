@@ -1,6 +1,8 @@
 package com.kafkick.api.admin.benchmark;
 
 import java.util.Optional;
+import java.util.List;
+import java.time.ZoneId;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.caller.Caller;
@@ -21,8 +24,13 @@ import com.kafkick.api.admin.benchmark.dto.BenchmarkListResponse;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkStartRequest;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkCommandAcceptedResponse;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkDetailResponse;
-import com.kafkick.api.admin.benchmark.dto.K6ResultUploadRequest;
+import com.kafkick.api.admin.benchmark.dto.BenchmarkClientResultUploadRequest;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.core.benchmark.BenchmarkRunService;
+import com.kafkick.core.benchmark.BenchmarkRunQuery;
+import com.kafkick.core.benchmark.BenchmarkTimeseriesReader;
+import com.kafkick.core.benchmark.ClientLoadSummary;
+import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
 import com.kafkick.core.support.exception.BusinessException;
 
@@ -40,15 +48,24 @@ public class AdminBenchmarkController {
     private final Optional<RunTimeseriesArchiver> timeseriesArchiver;
     private final Optional<BenchmarkStartOrchestrator> startOrchestrator;
     private final Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator;
+    private final Optional<BenchmarkRunService> benchmarkRunService;
+    private final Optional<BenchmarkTimeseriesReader> timeseriesReader;
+    private final Optional<BenchmarkRunCursorCodec> cursorCodec;
 
     @Autowired
     public AdminBenchmarkController(
             Optional<RunTimeseriesArchiver> timeseriesArchiver,
             Optional<BenchmarkStartOrchestrator> startOrchestrator,
-            Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator) {
+            Optional<BenchmarkFinalizeOrchestrator> finalizeOrchestrator,
+            Optional<BenchmarkRunService> benchmarkRunService,
+            Optional<BenchmarkTimeseriesReader> timeseriesReader,
+            Optional<BenchmarkRunCursorCodec> cursorCodec) {
         this.timeseriesArchiver = timeseriesArchiver;
         this.startOrchestrator = startOrchestrator;
         this.finalizeOrchestrator = finalizeOrchestrator;
+        this.benchmarkRunService = benchmarkRunService;
+        this.timeseriesReader = timeseriesReader;
+        this.cursorCodec = cursorCodec;
     }
 
     AdminBenchmarkController(
@@ -56,7 +73,7 @@ public class AdminBenchmarkController {
             BenchmarkStartOrchestrator startOrchestrator,
             BenchmarkFinalizeOrchestrator finalizeOrchestrator) {
         this(timeseriesArchiver, Optional.ofNullable(startOrchestrator),
-            Optional.ofNullable(finalizeOrchestrator));
+            Optional.ofNullable(finalizeOrchestrator), Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     /**
@@ -74,7 +91,17 @@ public class AdminBenchmarkController {
     @GetMapping("/benchmarks")
     public ResponseEnvelope<BenchmarkListResponse> benchmarks(
             @Valid @ModelAttribute BenchmarkListQuery query, Caller caller) {
-        throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
+        BenchmarkRunCursorCodec codec = cursorCodec.orElseThrow(this::notImplemented);
+        ZoneId zone = ZoneId.of("Asia/Seoul");
+        BenchmarkRunQuery coreQuery = new BenchmarkRunQuery(
+                query.from() == null ? null : query.from().atStartOfDay(zone).toInstant(),
+                query.to() == null ? null : query.to().plusDays(1).atStartOfDay(zone).toInstant(),
+                query.engineVersion(), query.scenarioCode(),
+                query.beforeCursor() == null ? null : codec.decode(query.beforeCursor()),
+                query.limit() == null ? BenchmarkRunQuery.DEFAULT_LIMIT : query.limit());
+        com.kafkick.core.benchmark.BenchmarkRunPage page = benchmarkRunService.orElseThrow(this::notImplemented).search(coreQuery);
+        return ResponseEnvelope.success(new BenchmarkListResponse(page.items().stream().map(BenchmarkListResponse::from).toList(),
+                page.hasOlder() ? codec.encode(page.nextBefore()) : null, page.hasOlder()));
     }
 
     /**
@@ -88,7 +115,7 @@ public class AdminBenchmarkController {
     @GetMapping("/benchmarks/{benchmarkRunId}")
     public ResponseEnvelope<BenchmarkDetailResponse> benchmark(
             @PathVariable @Positive Long benchmarkRunId, Caller caller) {
-        throw notImplemented();
+        return ResponseEnvelope.success(detail(benchmarkRunId));
     }
 
     /**
@@ -116,10 +143,11 @@ public class AdminBenchmarkController {
      * @throws BusinessException Benchmark 실행기가 아직 연결되지 않은 경우
      */
     @PostMapping("/benchmarks/{benchmarkRunId}/stop")
-    public ResponseEnvelope<BenchmarkCommandAcceptedResponse> stop(
+    public ResponseEntity<ResponseEnvelope<Void>> stop(
             @PathVariable @Positive Long benchmarkRunId,
             Caller caller) {
-        throw notImplemented();
+        benchmarkRunService.orElseThrow(this::notImplemented).stopLoad(benchmarkRunId, null);
+        return ResponseEntity.accepted().body(ResponseEnvelope.success());
     }
 
     /**
@@ -139,7 +167,7 @@ public class AdminBenchmarkController {
     }
 
     /**
-     * k6가 관측한 공식 비교 결과와 측정 시각을 해당 실행에 연결합니다.
+     * 클라이언트가 관측한 공식 비교 결과와 측정 시각을 해당 실행에 연결합니다.
      *
      * @param benchmarkRunId 결과를 연결할 Benchmark 실행 식별자
      * @param request TPS, p99, 실패 건수·비율과 측정 시각
@@ -147,12 +175,15 @@ public class AdminBenchmarkController {
      * @return 후속 결과 저장소 연결에서 사용할 갱신된 실행 상세
      * @throws BusinessException k6 결과 저장소가 아직 연결되지 않은 경우
      */
-    @PostMapping("/benchmarks/{benchmarkRunId}/k6-result")
-    public ResponseEnvelope<BenchmarkDetailResponse> uploadK6Result(
+    @PostMapping("/benchmarks/{benchmarkRunId}/client-result")
+    public ResponseEnvelope<BenchmarkDetailResponse> uploadClientResult(
             @PathVariable @Positive Long benchmarkRunId,
-            @Valid @RequestBody K6ResultUploadRequest request,
+            @Valid @RequestBody BenchmarkClientResultUploadRequest request,
             Caller caller) {
-        throw notImplemented();
+        benchmarkRunService.orElseThrow(this::notImplemented).recordClientSummary(benchmarkRunId,
+                new ClientLoadSummary(request.requestCount(), request.failureCount(), request.droppedIterations(),
+                        request.tps(), request.p95Millis(), request.p99Millis(), request.measuredAt()));
+        return ResponseEnvelope.success(detail(benchmarkRunId));
     }
 
     /** FAILED 또는 lease가 만료된 IN_PROGRESS 회차의 Prometheus 사본 생성을 다시 실행합니다. */
@@ -166,5 +197,14 @@ public class AdminBenchmarkController {
 
     private BusinessException notImplemented() {
         return new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
+    }
+
+    /** 현재 회차와 완료된 archive 표본을 상세 HTTP 계약으로 조립합니다. */
+    private BenchmarkDetailResponse detail(long benchmarkRunId) {
+        com.kafkick.core.benchmark.BenchmarkRun run = benchmarkRunService.orElseThrow(this::notImplemented).get(benchmarkRunId);
+        List<RunTimeseriesArchiver.Sample> samples = run.archiveStatus() == BenchmarkArchiveStatus.DONE
+                ? timeseriesReader.orElseThrow(this::notImplemented).read(benchmarkRunId)
+                : List.of();
+        return BenchmarkDetailResponse.from(run, samples);
     }
 }

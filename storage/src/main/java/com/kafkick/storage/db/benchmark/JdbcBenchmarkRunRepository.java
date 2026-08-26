@@ -9,6 +9,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -26,6 +27,7 @@ import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
 import com.kafkick.core.benchmark.BenchmarkErrorCode;
 import com.kafkick.core.benchmark.BenchmarkRun;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
+import com.kafkick.core.benchmark.BenchmarkRunQuery;
 import com.kafkick.core.benchmark.BenchmarkRunStatus;
 import com.kafkick.core.benchmark.BenchmarkRunType;
 import com.kafkick.core.benchmark.BenchmarkTopology;
@@ -241,6 +243,25 @@ public class JdbcBenchmarkRunRepository implements BenchmarkRunRepository {
     public List<BenchmarkRun> findRecent(int limit) {
         return observationJdbcTemplate.query(
                 SELECT + " ORDER BY started_at DESC, id DESC LIMIT ?", MAPPER, limit);
+    }
+
+    @Override
+    public List<BenchmarkRun> findPage(BenchmarkRunQuery query, int fetchLimit) {
+        StringBuilder sql = new StringBuilder(SELECT).append(" WHERE 1 = 1");
+        List<Object> arguments = new ArrayList<>();
+        if (query.fromInclusive() != null) { sql.append(" AND started_at >= ?"); arguments.add(timestamp(query.fromInclusive())); }
+        if (query.toExclusive() != null) { sql.append(" AND started_at < ?"); arguments.add(timestamp(query.toExclusive())); }
+        if (query.engineVersion() != null) { sql.append(" AND engine_version = ?"); arguments.add(query.engineVersion().name()); }
+        if (query.scenarioCode() != null) { sql.append(" AND scenario_code = ?"); arguments.add(query.scenarioCode()); }
+        if (query.before() != null) {
+            // 같은 started_at에서는 더 작은 id만 다음 페이지로 내려가 중복과 누락을 함께 막는다.
+            sql.append(" AND (started_at < ? OR (started_at = ? AND id < ?))");
+            Timestamp startedAt = timestamp(query.before().startedAt());
+            arguments.add(startedAt); arguments.add(startedAt); arguments.add(query.before().benchmarkRunId());
+        }
+        sql.append(" ORDER BY started_at DESC, id DESC LIMIT ?");
+        arguments.add(fetchLimit);
+        return observationJdbcTemplate.query(sql.toString(), MAPPER, arguments.toArray());
     }
 
     @Override
