@@ -206,6 +206,64 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
+    void everyClaimBumpsTheAttemptNumberStoredWithTheVerdict() {
+        insertFinalizedRun(7, "run-7");
+        store.claim(7, Duration.ofMinutes(5)).orElseThrow();
+        jdbc.update("UPDATE benchmark_runs SET consistency_status='FAILED', "
+                + "consistency_failure_reason='batch down', consistency_claimed_at=NULL, "
+                + "consistency_claim_token=NULL WHERE id=7");
+        String second = store.claim(7, Duration.ofMinutes(5)).orElseThrow();
+        assertThat(store.complete(7, second, 11L, EngineVersion.V3,
+                Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
+
+        // 몇 번째 시도의 라이브 관측인지가 판정과 함께 남아야 재실행 결과를 대조할 수 있다.
+        assertThat(jdbc.queryForObject(
+                "SELECT attempt_no FROM consistency_finals WHERE run_id=7", Integer.class))
+                .isEqualTo(2);
+    }
+
+    @Test
+    void expiredRunIsTerminalWhileFailedStaysRetryable() {
+        insertFinalizedRun(8, "run-8");
+        String failed = store.claim(8, Duration.ofMinutes(5)).orElseThrow();
+        assertThat(store.fail(8, failed, "batch down")).isTrue();
+        assertThat(store.claim(8, Duration.ofMinutes(5))).isPresent();
+
+        String token = jdbc.queryForObject(
+                "SELECT consistency_claim_token FROM benchmark_runs WHERE id=8", String.class);
+        assertThat(store.expire(8, token, "finalize window expired: previousReason=batch down"))
+                .isTrue();
+        // EXPIRED 가 다시 claim 되면 의미 없는 재실행이 원래 원인을 덮어쓴다.
+        assertThat(store.claim(8, Duration.ofMinutes(5))).isEmpty();
+        assertThat(jdbc.queryForObject(
+                "SELECT consistency_failure_reason FROM benchmark_runs WHERE id=8", String.class))
+                .contains("previousReason=batch down");
+    }
+
+    @Test
+    void liveObservationAfterFinalizedAtIsAcceptedBecauseEvaluatedAtIsTheRoundTime() {
+        insertFinalizedRun(9, "run-9");
+        String token = store.claim(9, Duration.ofMinutes(5)).orElseThrow();
+        assertThat(store.complete(9, token, 11L, EngineVersion.V3,
+                Instant.parse("2026-08-26T00:00:00Z"), evaluation(SourceStatus.VALID))).isTrue();
+
+        // evaluated_at 은 확정 시각이라 관측보다 앞선다. 이걸 막는 제약이 있으면 안 된다.
+        assertThat(jdbc.queryForObject("""
+            SELECT lua_gap_observed_at > evaluated_at FROM consistency_finals WHERE run_id=9
+            """, Boolean.class)).isTrue();
+    }
+
+    @Test
+    void deletingTheRunCascadesTheStoredFinalInsteadOfLeavingAnOrphan() {
+        save(1, evaluation(SourceStatus.VALID));
+        jdbc.update("DELETE FROM benchmark_runs WHERE id=1");
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM consistency_finals WHERE run_id=1", Integer.class))
+                .isZero();
+        insertFinalizedRun(1, "run-1");
+    }
+
+    @Test
     void failureReasonLongerThanColumnLimitIsRejectedBeforeReachingMySql() {
         insertFinalizedRun(5, "run-5");
         String token = store.claim(5, Duration.ofMinutes(5)).orElseThrow();

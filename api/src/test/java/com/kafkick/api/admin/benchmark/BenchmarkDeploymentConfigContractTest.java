@@ -20,6 +20,7 @@ class BenchmarkDeploymentConfigContractTest {
             "BENCHMARK_APP_REPLICAS=1",
             "BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT=3s",
             "BENCHMARK_CONSISTENCY_CLAIM_LEASE=5m",
+            "BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG=15m",
             "DOMAIN_GAUGE_COUPON_ID=");
         assertThat(env).containsPattern("(?m)^BENCHMARK_ADMIN_COMMAND_SECRET=\\s*$");
 
@@ -31,6 +32,7 @@ class BenchmarkDeploymentConfigContractTest {
             "connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}",
             "read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}",
             "consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:3s}",
-            "claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}");
+            "claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}",
+            "max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}");
     }
 }

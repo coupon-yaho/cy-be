@@ -105,10 +105,11 @@ public record BenchmarkRun(
             throw new IllegalArgumentException(
                     "archive 실패 이유는 FAILED 일 때만, 그리고 FAILED 이면 반드시 있어야 한다: " + runKey);
         }
-        if ((consistencyStatus == ConsistencyFinalStatus.FAILED)
-                != (consistencyFailureReason != null)) {
+        boolean consistencyTerminated = consistencyStatus == ConsistencyFinalStatus.FAILED
+                || consistencyStatus == ConsistencyFinalStatus.EXPIRED;
+        if (consistencyTerminated != (consistencyFailureReason != null)) {
             throw new IllegalArgumentException(
-                    "정합성 실패 이유는 FAILED 일 때만, 그리고 FAILED이면 반드시 있어야 한다: " + runKey);
+                    "정합성 실패 이유는 FAILED·EXPIRED 일 때만, 그리고 그때는 반드시 있어야 한다: " + runKey);
         }
     }
 

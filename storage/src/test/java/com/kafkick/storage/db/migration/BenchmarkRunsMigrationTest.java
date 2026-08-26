@@ -101,11 +101,11 @@ class BenchmarkRunsMigrationTest {
         }
 
         @Test
-        @DisplayName("archive와 FINAL 정합성 fencing을 포함한 컬럼 55개와 CHECK 18종이 만들어진다")
+        @DisplayName("archive와 FINAL 정합성 fencing을 포함한 컬럼 56개와 CHECK 18종이 만들어진다")
         void schemaShape() throws SQLException {
             assertThat(query("SELECT COUNT(*) FROM information_schema.columns"
                     + " WHERE table_schema = DATABASE() AND table_name = 'benchmark_runs'"))
-                    .isEqualTo("55");
+                    .isEqualTo("56");
             assertThat(query("SELECT COUNT(*) FROM information_schema.check_constraints"
                     + " WHERE constraint_schema = DATABASE() AND constraint_name LIKE 'ck_run%'"))
                     .isEqualTo("18");

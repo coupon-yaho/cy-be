@@ -5,7 +5,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.EnumMap;
 
 import org.junit.jupiter.api.Test;
@@ -14,7 +17,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-import com.kafkick.batch.benchmark.ConsistencyFinalController.MismatchResponse;
+import com.kafkick.batch.benchmark.ConsistencyFinalController.ConsistencyFinalResponse;
 
 import com.kafkick.batch.observation.ConsistencyRawValueReader;
 import com.kafkick.batch.observation.ConsistencyRawValueReader.DomainRawSnapshot;
@@ -31,14 +34,18 @@ import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
 class ConsistencyFinalControllerTest {
+    private static final Instant NOW = Instant.parse("2026-08-26T00:10:00Z");
+    private static final Instant RUN_FINALIZED_AT = Instant.parse("2026-08-26T00:00:00Z");
     private final ConsistencyRawValueReader reader = mock(ConsistencyRawValueReader.class);
     private final ConsistencyCalculator calculator = mock(ConsistencyCalculator.class);
     private final ConsistencyFinalController controller = new ConsistencyFinalController(
             reader, calculator,
-            new DomainGaugeProperties(EngineVersion.V3, 7L, null, null, null, null, null));
+            new DomainGaugeProperties(EngineVersion.V3, 7L, null, null, null, null, null),
+            new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), Duration.ofMinutes(15));
 
     @Test
     void liveReaderSnapshotIsPassedToCalculatorWithFinalPhase() {
@@ -48,9 +55,9 @@ class ConsistencyFinalControllerTest {
         when(reader.read()).thenReturn(snapshot);
         when(calculator.evaluate(raw, ConsistencyPhase.FINAL, EngineVersion.V3)).thenReturn(expected);
 
-        var response = controller.evaluate(7L, EngineVersion.V3);
+        var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).isSameAs(expected);
+        assertThat(response.getBody().evaluation()).isSameAs(expected);
         verify(reader).read();
         verify(calculator).evaluate(raw, ConsistencyPhase.FINAL, EngineVersion.V3);
     }
@@ -59,10 +66,10 @@ class ConsistencyFinalControllerTest {
     void differentGaugeCouponIsRejectedInsteadOfSavingAnotherCampaign() {
         when(reader.read()).thenReturn(new DomainRawSnapshot(
                 8L, mock(ConsistencyRawSnapshot.class), null, SourceStatus.PENDING));
-        var response = controller.evaluate(7L, EngineVersion.V3);
+        var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);
         // 500이면 api가 원인을 저장할 수 없다. 409 본문에 기대·실제 회차가 남아야 한다.
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(((MismatchResponse) response.getBody()).violations())
+        assertThat(((ConsistencyFinalResponse) response.getBody()).violations())
                 .singleElement()
                 .satisfies(violation -> {
                     assertThat(violation.key()).contains("coupon-id");
@@ -73,9 +80,9 @@ class ConsistencyFinalControllerTest {
 
     @Test
     void differentGaugeEngineIsRejectedBeforeReadingMixedSemantics() {
-        var response = controller.evaluate(7L, EngineVersion.V2);
+        var response = controller.evaluate(7L, EngineVersion.V2, RUN_FINALIZED_AT);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(((MismatchResponse) response.getBody()).violations())
+        assertThat(((ConsistencyFinalResponse) response.getBody()).violations())
                 .singleElement()
                 .satisfies(violation -> {
                     assertThat(violation.key()).contains("engine-version");
@@ -93,11 +100,11 @@ class ConsistencyFinalControllerTest {
                 .thenThrow(new BusinessException(ConsistencyErrorCode.FINAL_VALUE_UNAVAILABLE,
                         "FINAL 평가에 필요한 gap이 유효하지 않습니다: LUA_GAP, state=STALE"));
 
-        var response = controller.evaluate(7L, EngineVersion.V3);
+        var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);
 
         // 500 + 빈 본문이면 consistency_failure_reason 이 재실행 판단 근거가 되지 못한다.
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(((MismatchResponse) response.getBody()).violations())
+        assertThat(((ConsistencyFinalResponse) response.getBody()).violations())
                 .singleElement()
                 .satisfies(violation -> {
                     assertThat(violation.actual()).isEqualTo("redis=UNAVAILABLE,db=VALID");
@@ -113,10 +120,10 @@ class ConsistencyFinalControllerTest {
                 .thenThrow(new BusinessException(ConsistencyErrorCode.INVALID_SOURCE_STATE,
                         "정합성 계산에 사용할 수 없는 원천 상태입니다: N_A"));
 
-        var response = controller.evaluate(7L, EngineVersion.V3);
+        var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
-        assertThat(((MismatchResponse) response.getBody()).violations())
+        assertThat(((ConsistencyFinalResponse) response.getBody()).violations())
                 .singleElement()
                 .satisfies(violation -> assertThat(violation.reason()).contains("N_A"));
     }
@@ -126,10 +133,10 @@ class ConsistencyFinalControllerTest {
         when(reader.read()).thenThrow(
                 new org.springframework.dao.QueryTimeoutException("max_execution_time"));
 
-        var response = controller.evaluate(7L, EngineVersion.V3);
+        var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(((MismatchResponse) response.getBody()).violations())
+        assertThat(((ConsistencyFinalResponse) response.getBody()).violations())
                 .singleElement()
                 .satisfies(violation ->
                         assertThat(violation.reason()).contains("QueryTimeoutException"));
@@ -146,14 +153,32 @@ class ConsistencyFinalControllerTest {
         MockMvcBuilders.standaloneSetup(controller).build()
                 .perform(MockMvcRequestBuilders.post("/internal/v1/benchmarks/consistency/final")
                         .param("couponId", "7")
-                        .param("engineVersion", "V3"))
+                        .param("engineVersion", "V3")
+                        .param("runFinalizedAt", RUN_FINALIZED_AT.toString()))
                 .andExpect(MockMvcResultMatchers.status().isOk())
                 // api 클라이언트가 파싱하는 키 모양을 여기서 고정한다. 양쪽이 각자 mock 이면
                 // 직렬화가 갈라져도 어느 테스트도 깨지지 않는다.
-                .andExpect(MockMvcResultMatchers.jsonPath("$.phase").value("FINAL"))
-                .andExpect(MockMvcResultMatchers.jsonPath("$.verdict").value("PASS"))
-                .andExpect(MockMvcResultMatchers.jsonPath("$.gaps.LUA_GAP.state").value("VALID"))
-                .andExpect(MockMvcResultMatchers.jsonPath("$.overIssued.observedAt").exists());
+                .andExpect(MockMvcResultMatchers.jsonPath("$.evaluation.phase").value("FINAL"))
+                .andExpect(MockMvcResultMatchers.jsonPath("$.evaluation.verdict").value("PASS"))
+                .andExpect(MockMvcResultMatchers.jsonPath("$.evaluation.gaps.LUA_GAP.state")
+                        .value("VALID"))
+                .andExpect(MockMvcResultMatchers.jsonPath("$.evaluation.overIssued.observedAt")
+                        .exists())
+                .andExpect(MockMvcResultMatchers.jsonPath("$.violations").isEmpty());
+    }
+
+    @Test
+    void readingOutsideTheFinalizeWindowIsRejectedBeforeTouchingTheObservationPool() {
+        // 확정이 창(15분)보다 앞선 회차다. 지금 읽은 값은 그 회차의 값이 아니다.
+        var response = controller.evaluate(7L, EngineVersion.V3, NOW.minus(Duration.ofHours(2)));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().violations())
+                .singleElement()
+                .satisfies(violation ->
+                        assertThat(violation.key()).contains("max-observation-lag"));
+        // 거절할 요청에 관측 풀 쿼리를 태우지 않는다.
+        org.mockito.Mockito.verifyNoInteractions(reader, calculator);
     }
 
     private static ConsistencyRawSnapshot rawSnapshot() {

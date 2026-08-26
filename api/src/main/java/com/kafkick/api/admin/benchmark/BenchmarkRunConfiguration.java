@@ -30,8 +30,10 @@ public class BenchmarkRunConfiguration {
             BenchmarkRunService runs,
             ObjectProvider<ConsistencyFinalStore> store,
             ObjectProvider<BatchConsistencyFinalClient> batch,
-            @Value("${benchmark.consistency.claim-lease:5m}") Duration claimLease) {
+            TimeProvider timeProvider,
+            @Value("${benchmark.consistency.claim-lease:5m}") Duration claimLease,
+            @Value("${benchmark.consistency.max-observation-lag:15m}") Duration maxObservationLag) {
         return new ConsistencyFinalizer(runs, store.getIfAvailable(), batch.getIfAvailable(),
-                claimLease);
+                timeProvider, claimLease, maxObservationLag);
     }
 }

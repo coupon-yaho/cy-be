@@ -1,6 +1,7 @@
 package com.kafkick.api.admin.benchmark;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,7 @@ import com.kafkick.core.benchmark.BenchmarkRunService;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
 import com.kafkick.core.consistency.ConsistencyFinalStatus;
 import com.kafkick.core.consistency.ConsistencyFinalStore;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
 /** batch 계산과 fencing 저장을 조정합니다. 외부 HTTP 중에는 DB 트랜잭션을 잡지 않습니다. */
@@ -20,14 +22,19 @@ public class ConsistencyFinalizer {
     private final BenchmarkRunService runs;
     private final ConsistencyFinalStore store;
     private final BatchConsistencyFinalClient batch;
+    private final TimeProvider time;
     private final Duration claimLease;
+    private final Duration maxObservationLag;
 
     public ConsistencyFinalizer(BenchmarkRunService runs, ConsistencyFinalStore store,
-                                BatchConsistencyFinalClient batch, Duration claimLease) {
+                                BatchConsistencyFinalClient batch, TimeProvider time,
+                                Duration claimLease, Duration maxObservationLag) {
         this.runs = runs;
         this.store = store;
         this.batch = batch;
+        this.time = time;
         this.claimLease = claimLease;
+        this.maxObservationLag = maxObservationLag;
     }
 
     public void calculate(long benchmarkRunId) {
@@ -41,20 +48,32 @@ public class ConsistencyFinalizer {
         if (run.couponId() == null) {
             throw illegalTransition(benchmarkRunId, "couponId is null");
         }
-        if (run.finalizedAt() == null) {
+        Instant finalizedAt = run.finalizedAt();
+        if (finalizedAt == null) {
             throw illegalTransition(benchmarkRunId, "finalizedAt is null");
         }
+        // claim 은 이전 실패 이유를 지운다. 지우기 전에 붙들어 EXPIRED 사유에 이어 붙인다.
+        String previousReason = run.consistencyFailureReason();
         String token = store.claim(benchmarkRunId, claimLease)
                 .orElseThrow(() -> illegalTransition(benchmarkRunId,
                         "claim failed: runStatus=" + run.runStatus()
                                 + " consistencyStatus=" + run.consistencyStatus()));
+        // FINAL 은 asOf 스냅샷이 아니라 라이브 관측이다. 확정으로부터 한참 지난 재실행은
+        // 그 회차의 값이 아니므로 계산하지 않고 EXPIRED 로 종결한다. FAILED 와 달리 다시
+        // claim 되지 않으므로 의미 없는 재실행이 원인을 덮어쓰지 않는다. FAILED 로 잘못
+        // 되돌리지 않도록 아래 try 밖에서 끝낸다.
+        if (time.instant().isAfter(finalizedAt.plus(maxObservationLag))) {
+            expire(benchmarkRunId, token, finalizedAt, previousReason);
+        }
         try {
-            ConsistencyEvaluation evaluation = batch.evaluate(run.couponId(), run.engineVersion());
+            ConsistencyEvaluation evaluation = batch.evaluate(
+                    run.couponId(), run.engineVersion(), finalizedAt);
             // evaluatedAt은 회차 확정 시각으로 고정한다. 재시도해도 바뀌지 않아야
             // 캠페인별 최신 선택(evaluated_at DESC, run_id DESC)이 흔들리지 않는다.
             if (!store.complete(benchmarkRunId, token, run.couponId(), run.engineVersion(),
-                    run.finalizedAt(), evaluation)) {
-                throw new IllegalStateException("FINAL 정합성 claim 소유권을 잃었습니다");
+                    finalizedAt, evaluation)) {
+                // 소유권 상실은 비즈니스 상태 전이다. IllegalStateException 으로 두면 500 이 된다.
+                throw illegalTransition(benchmarkRunId, "claim ownership lost");
             }
         } catch (RuntimeException failure) {
             String message = failure.getMessage();
@@ -78,6 +97,17 @@ public class ConsistencyFinalizer {
             throw illegalTransition(benchmarkRunId, "consistencyStatus=DONE");
         }
         calculate(benchmarkRunId);
+    }
+
+    private void expire(long benchmarkRunId, String token, Instant finalizedAt,
+                        String previousReason) {
+        String reason = "finalize window expired: finalizedAt=" + finalizedAt
+                + " maxObservationLag=" + maxObservationLag
+                + (previousReason == null ? "" : " previousReason=" + previousReason);
+        if (!store.expire(benchmarkRunId, token, truncate(reason))) {
+            log.warn("FINAL 정합성 종결 상태를 기록하지 못했습니다: benchmarkRunId={}", benchmarkRunId);
+        }
+        throw illegalTransition(benchmarkRunId, reason);
     }
 
     /** 컬럼 상한까지 자르되 서로게이트 페어를 반토막 내지 않습니다. */

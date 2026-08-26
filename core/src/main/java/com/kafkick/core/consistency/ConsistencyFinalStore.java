@@ -10,7 +10,7 @@ import com.kafkick.core.observation.EngineVersion;
 public interface ConsistencyFinalStore {
 
     /** benchmark_runs.consistency_failure_reason 컬럼 길이와 같아야 합니다. */
-    int FAILURE_REASON_MAX = 200;
+    int FAILURE_REASON_MAX = 500;
 
     Optional<String> claim(long benchmarkRunId, Duration lease);
 
@@ -25,6 +25,12 @@ public interface ConsistencyFinalStore {
 
     /** {@code failureReason}은 {@link #FAILURE_REASON_MAX}자를 넘을 수 없습니다. */
     boolean fail(long benchmarkRunId, String claimToken, String failureReason);
+
+    /**
+     * 더 이상 그 회차의 값을 얻을 수 없는 종결 상태로 끝냅니다. FAILED와 달리 다시 claim되지
+     * 않으므로 의미 없는 재실행이 원인을 덮어쓰는 일이 생기지 않습니다.
+     */
+    boolean expire(long benchmarkRunId, String claimToken, String failureReason);
 
     ConsistencyFinalObservation findLatestByCouponId(long couponId);
 }

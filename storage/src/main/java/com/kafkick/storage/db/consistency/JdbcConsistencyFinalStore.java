@@ -55,7 +55,8 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
         int claimed = writeJdbcTemplate.update("""
             UPDATE benchmark_runs
                SET consistency_status = 'IN_PROGRESS', consistency_failure_reason = NULL,
-                   consistency_claimed_at = CURRENT_TIMESTAMP(6), consistency_claim_token = ?
+                   consistency_claimed_at = CURRENT_TIMESTAMP(6), consistency_claim_token = ?,
+                   consistency_attempt_count = consistency_attempt_count + 1
              WHERE id = ? AND run_status = 'FINALIZED' AND coupon_id IS NOT NULL AND (
                    consistency_status IN ('NONE', 'FAILED')
                    OR (consistency_status = 'IN_PROGRESS'
@@ -72,13 +73,14 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
         if (evaluation.phase() != ConsistencyPhase.FINAL) {
             throw new IllegalArgumentException("FINAL 결과만 저장할 수 있습니다");
         }
-        Integer owned = writeJdbcTemplate.query("""
-            SELECT COUNT(*) FROM benchmark_runs
+        // 소유권 확인과 시도 번호 확보를 한 문장으로 묶는다. 행이 없으면 소유자가 아니다.
+        Integer attemptNo = writeJdbcTemplate.query("""
+            SELECT consistency_attempt_count FROM benchmark_runs
              WHERE id = ? AND coupon_id = ? AND run_status = 'FINALIZED'
                AND consistency_status = 'IN_PROGRESS' AND consistency_claim_token = ?
              FOR UPDATE
-            """, rs -> rs.next() ? rs.getInt(1) : 0, benchmarkRunId, couponId, claimToken);
-        if (owned == null || owned != 1) return false;
+            """, rs -> rs.next() ? rs.getInt(1) : null, benchmarkRunId, couponId, claimToken);
+        if (attemptNo == null) return false;
 
         GapValue active = evaluation.gaps().get(ConsistencyGapType.ACTIVE_DB_GAP);
         GapValue lua = evaluation.gaps().get(ConsistencyGapType.LUA_GAP);
@@ -87,14 +89,14 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
         GapValue over = evaluation.overIssued();
         writeJdbcTemplate.update("""
             INSERT INTO consistency_finals (
-                run_id, coupon_id, engine_version, evaluated_at, verdict, severity,
+                run_id, coupon_id, engine_version, evaluated_at, attempt_no, verdict, severity,
                 active_db_gap_value, active_db_gap_state, active_db_gap_observed_at,
                 lua_gap_value, lua_gap_state, lua_gap_observed_at,
                 persist_gap_value, persist_gap_state, persist_gap_observed_at,
                 db_counter_gap_value, db_counter_gap_state, db_counter_gap_observed_at,
                 over_issued_value, over_issued_state, over_issued_observed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, benchmarkRunId, couponId, engineVersion.name(), timestamp(evaluatedAt),
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, benchmarkRunId, couponId, engineVersion.name(), timestamp(evaluatedAt), attemptNo,
             evaluation.verdict().name(), evaluation.severity().name(),
             active.value(), active.state().name(), timestamp(active.observedAt()),
             lua.value(), lua.state().name(), timestamp(lua.observedAt()),
@@ -117,6 +119,11 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
     @Override
     public boolean fail(long benchmarkRunId, String claimToken, String failureReason) {
         return terminate("FAILED", benchmarkRunId, claimToken, failureReason);
+    }
+
+    @Override
+    public boolean expire(long benchmarkRunId, String claimToken, String failureReason) {
+        return terminate("EXPIRED", benchmarkRunId, claimToken, failureReason);
     }
 
     private boolean terminate(String status, long benchmarkRunId, String claimToken,
