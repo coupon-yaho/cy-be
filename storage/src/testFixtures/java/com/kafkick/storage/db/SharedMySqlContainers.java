@@ -116,6 +116,15 @@ final class SharedMySqlContainers {
          */
         private volatile boolean startedOnce;
 
+        /**
+         * <b>{@code super.stop()} 으로 내려보낸 횟수.</b> 이것이 없으면 회귀 테스트가 무력하다 —
+         * 기동 전 {@code stop()} 은 {@code containerId} 가 null 이라 {@code super.stop()} 도
+         * 즉시 돌아오므로, <b>위임했는지 삼켰는지가 밖에서 안 보인다.</b>
+         * 무조건 no-op 이던 옛 구현에서도 테스트가 통과해 버린다.
+         */
+        private final java.util.concurrent.atomic.AtomicInteger delegatedStops =
+                new java.util.concurrent.atomic.AtomicInteger();
+
         private SharedMySqlContainer(DockerImageName image) {
             super(image);
         }
@@ -123,6 +132,10 @@ final class SharedMySqlContainers {
         /** 테스트가 이 전이를 잰다 — {@code SharedMySqlContainerTest}. */
         boolean hasStartedOnce() {
             return startedOnce;
+        }
+
+        int delegatedStopCount() {
+            return delegatedStops.get();
         }
 
         @Override
@@ -136,6 +149,7 @@ final class SharedMySqlContainers {
         public void stop() {
             if (!startedOnce) {
                 // 기동 실패 정리 경로. 여기서 막으면 containerId 가 죽은 채 고정된다.
+                delegatedStops.incrementAndGet();
                 super.stop();
             }
         }
@@ -197,6 +211,14 @@ final class SharedMySqlContainers {
      */
     static boolean hasStartedOnce(MySQLContainer container) {
         return container instanceof SharedMySqlContainer shared && shared.hasStartedOnce();
+    }
+
+    /**
+     * <b>{@code super.stop()} 으로 내려간 횟수.</b> 회귀 테스트가 <i>"삼켰나 위임했나"</i> 를
+     * 가르는 유일한 관측점이다 — 그 둘은 바깥에서 결과가 같아 보인다.
+     */
+    static int delegatedStopCount(MySQLContainer container) {
+        return container instanceof SharedMySqlContainer shared ? shared.delegatedStopCount() : -1;
     }
 
     /**

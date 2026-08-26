@@ -64,7 +64,7 @@ env:
 | PR 생성/수정 | `conventions.yml` → `pr-title`, `branch-name` | **실패 시 머지 차단** |
 | PR 생성/수정 | `conventions.yml` → `commit-messages` | 경고만 |
 | PR 생성/push | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | AI 리뷰 (아래) |
-| CodeRabbit 리뷰 제출 | `coderabbit-slack.yml` | Slack 알림. webhook 없으면 스킵 |
+| AI 리뷰 제출 (Qodo·CodeRabbit) | `ai-review-slack.yml` | Slack 알림. webhook 없으면 스킵 |
 | `security-audit` 라벨 / 수동 | `security-audit.yml` | 보안 전수 점검. 키 없으면 스킵 |
 
 **리뷰는 `하위 → 에픽` PR 에만 붙는다.** 이게 이 설정의 핵심이다.
@@ -92,15 +92,54 @@ auto_review:
 
 > 수동 제어 — 본문에 `@coderabbitai ignore`(스킵), 코멘트로 `@coderabbitai review`(증분) / `@coderabbitai full review`(전체).
 
-**리뷰는 GitHub Review 형태로 달린다.** `request_changes_workflow: true` 라 사람 리뷰어처럼 **줄 단위 인라인 코멘트 + Request changes** 를 남기고, 지적이 다 해소되면 자동으로 승인한다. 단 CodeRabbit 을 Ruleset 의 required reviewer 로 등록하면 3.5a절(비차단)이 깨진다 — 등록하지 말 것.
+**리뷰는 GitHub Review 형태로 달린다.** `request_changes_workflow: true` 라 사람 리뷰어처럼 **줄 단위 인라인 코멘트 + Request changes** 를 남긴다. 단 리뷰어 봇을 Ruleset 의 required reviewer 로 등록하면 3.5a절(비차단)이 깨진다 — 등록하지 말 것.
+
+> ⚠️ **위 표는 CodeRabbit 이 자동 리뷰를 맡던 시절의 것이다.** 2026-08-26 부터 자동 리뷰는 Qodo 가 하고 CodeRabbit 은 부를 때만 온다 — 아래 **3.0a** 를 먼저 읽을 것.
 
 ---
 
 ## 3. AI 리뷰어 — 왜 이렇게 골랐나
 
+### 3.0a 자동 리뷰는 Qodo, CodeRabbit 은 호출형 (2026-08-26)
+
+**무료 OSS 티어의 한도가 팀 규모를 못 받쳤다.** 하루 두어 번이 한계인데 협업자가 다섯이다.
+실측한 하루 — `07:57` 한도 · `11:27` 통과 · `11:47` 한도 · `13:01` 통과. 한 티켓에서 수정
+커밋을 두어 번 밀면 그날 몫을 혼자 다 쓴다. 실제로 CY-621 에서 그렇게 막혔다.
+
+| | 지금 |
+|---|---|
+| **자동 리뷰** | **Qodo** (`qodo-code-review[bot]`). PR 을 열면 알아서 돈다 |
+| **CodeRabbit** | **부를 때만.** `@coderabbitai review` / `@coderabbitai full review` |
+| `.coderabbit.yaml` | **그대로 둔다.** `path_instructions` 16개가 이 프로젝트의 리뷰 기준 자체다 |
+
+**지우지 않고 호출형으로 둔 이유** — 그 16개는 어휘 규약·`target_key` 규약·결정론 규칙·
+헥사고날 경계처럼 **이 프로젝트에만 있는 판단 기준**이고, 다른 도구로 1:1 이전이 보장되지
+않는다. 코어 경로(발급·재고·검증)를 건드린 PR 처럼 **한 번은 그 기준으로 봐야 하는 것**에
+아껴 쓴다. 한도가 남아 있을 때만 응답한다는 것을 알고 부를 것.
+
+> **왜 둘 다 쓰나 — 실제로 서로 다른 것을 잡았다.**
+> CY-621 에서 CodeRabbit 은 세 라운드를 돌면서 `stop()` 을 무조건 비운 blocker 를 못 잡았고
+> (로컬 코어 리뷰가 바이트코드를 읽어 잡았다), Qodo 는 그 수정 PR 에서 **회귀 테스트가
+> 무력하다**는 것과 **테스트 이름이 실제 단언과 다르다**는 것을 잡았다. 겹치지 않는다.
+
+#### ⚠️ 머지 게이트가 바뀐다
+
+지금까지 **승인 1건을 CodeRabbit 의 자동 `APPROVED` 가 채워 왔다.** 자동 리뷰를 끄면 그것이
+안 오고, **Qodo 는 `COMMENTED` 만 낸다**(실측).
+
+**즉 사람이 승인해야 한다.** 그것이 원래 1.2절이 정한 것이고("리뷰어 최소 1명 승인, 셀프 머지
+금지"), 3.5a절이 *"봇을 required reviewer 로 등록하지 말 것"* 이라고 못 박은 이유다.
+`CODEOWNERS` 에 다섯 명이 전 경로로 등록돼 있다 — **되돌아간 것이지 새로 생긴 제약이 아니다.**
+
+---
+
 ### 3.0 실행기는 CodeRabbit 이다 — 기준은 그대로 간다
 
 **결정: PR 상시 리뷰는 CodeRabbit 이 맡는다.** 자체 `claude-review.yml`(라우팅 + Opus/Sonnet 2단) 은 제거했다.
+
+> **이 절은 2026-08-26 에 갱신됐다** — 상시 리뷰는 이제 Qodo 다(3.0a). 아래는 **판단 기준이
+> `.coderabbit.yaml` 로 옮겨 간 경위**로 읽을 것. 그 기준 자체는 여전히 유효하고, 호출형
+> CodeRabbit 이 그것을 쓴다.
 
 바뀐 것은 **실행기**뿐이고, 아래 3.1~3.5 가 정의한 **판단 기준은 그대로 이월**했다. 옮긴 자리는 `.coderabbit.yaml` 이다.
 
@@ -481,7 +520,7 @@ GitHub이 시크릿을 로그에서 `***`로 자동 마스킹한다.
 |---|---|---|
 | CodeRabbit (App) | 없음 | 레포에 설치만 하면 된다 |
 | `conventions.yml` | 없음 | `GITHUB_TOKEN` 자동 제공 |
-| `coderabbit-slack.yml` | `SLACK_WEBHOOK_URL` | **선택** — 없으면 실패 없이 스킵된다 |
+| `ai-review-slack.yml` | `SLACK_WEBHOOK_URL` | **선택** — 없으면 실패 없이 스킵된다 |
 | `security-audit.yml` | `CLAUDE_API_KEY` | **선택** — 키가 없으면 실패 없이 스킵된다 |
 
 ### 4.1a Slack 알림
@@ -653,7 +692,7 @@ Settings → Actions → General
   labels.yml                    GitHub 라벨 (영역/우선순위는 Jira가 관리)
   workflows/
     conventions.yml             PR 제목·브랜치명 강제 / 커밋 경고  ⚠️ JIRA_KEY 설정
-    coderabbit-slack.yml        CodeRabbit 리뷰 → Slack  (SLACK_WEBHOOK_URL 없으면 스킵)
+    ai-review-slack.yml         Qodo·CodeRabbit 리뷰 → Slack  (SLACK_WEBHOOK_URL 없으면 스킵)
     security-audit.yml          공식 보안 액션. D13 1회  (CLAUDE_API_KEY 없으면 스킵)
     build.yml                   PR 마다 ./gradlew build  ⚠️ Ruleset 필수 체크 등록 필요
 

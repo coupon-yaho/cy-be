@@ -16,6 +16,12 @@ import org.testcontainers.mysql.MySQLContainer;
  *
  * <p><b>컨테이너를 새로 안 띄운다.</b> 두 설정이 실제로 쓰는 그 객체를 받아 {@code start()}
  * 한다. 다른 테스트가 이미 띄웠으면 멱등이라, 이 테스트 때문에 늘어나는 컨테이너는 없다.
+ *
+ * <p><b>CLEAN 컨테이너에 제약이 살아 있는지는 여기서 안 잰다.</b>
+ * {@code CleanSchemaConstraintTest} 가 실제 위반 INSERT 로 {@code uk_coupon_member}·
+ * {@code uk_coupon_code}·{@code ck_stock_range} 를 이미 확인한다 — 같은 것을 두 군데서
+ * 관리하지 않는다. 한때 여기에 그 이름을 단 테스트를 뒀는데 <b>실제로는 DB 이름만 봤다.</b>
+ * 오염돼도 이름은 안 바뀌므로 잡을 수 없는 테스트였다.
  */
 class SharedMySqlContainerTest {
 
@@ -25,18 +31,20 @@ class SharedMySqlContainerTest {
      * 44회가 39회로만 줄던 그 상태다.
      */
     @Test
-    @DisplayName("기동한 뒤에는 stop() 을 불러도 안 죽는다 — 수명의 주인은 JVM 이다")
-    void survivesStopAfterStart() {
+    @DisplayName("기동한 뒤에는 stop() 을 삼킨다 — 수명의 주인은 JVM 이다")
+    void swallowsStopAfterStart() {
         MySQLContainer container = MySqlContainerConfig.sharedContainer();
         container.start();
         String id = container.getContainerId();
+        int delegatedBefore = SharedMySqlContainers.delegatedStopCount(container);
 
         container.stop();
         container.close();
 
-        assertThat(container.isRunning())
-                .as("스프링이 컨텍스트마다 stop() 을 부른다. 먹히면 남의 컨테이너가 꺼진다")
-                .isTrue();
+        assertThat(SharedMySqlContainers.delegatedStopCount(container))
+                .as("기동한 뒤의 stop() 은 super 로 내려가면 안 된다 — 내려가면 남의 컨테이너가 꺼진다")
+                .isEqualTo(delegatedBefore);
+        assertThat(container.isRunning()).isTrue();
         assertThat(container.getContainerId())
                 .as("같은 컨테이너여야 한다 — id 가 바뀌면 새로 띄운 것이다")
                 .isEqualTo(id);
@@ -50,45 +58,44 @@ class SharedMySqlContainerTest {
      * 비우는 유일한 자리이기 때문이다. 막히면 죽은 id 가 고정되고 {@code start()} 가 즉시
      * return 해, <b>JVM 안의 모든 뒤 컨텍스트가 죽은 컨테이너를 받는다.</b>
      *
-     * <p>기동 실패를 실제로 만들려면 이미지 pull 을 깨야 해서 느리고 불안정하다. 그래서
-     * <b>그 조건을 가르는 상태</b>를 직접 잰다 — 아직 기동 안 한 컨테이너는
-     * {@code startedOnce} 가 false 라 {@code stop()} 이 {@code super} 로 간다.
+     * <p><b>위임 횟수를 재는 것이 핵심이다.</b> 한때 여기서 {@code startedOnce} 만 다시 봤는데,
+     * 그 값은 삼키든 위임하든 안 바뀐다 — <b>옛 무조건 no-op 에서도 통과하는 무력한 테스트</b>
+     * 였다. 기동 전 {@code stop()} 은 {@code containerId} 가 null 이라 {@code super.stop()} 도
+     * 즉시 돌아오므로, 바깥에서 결과가 같아 보인다. 카운터만이 그 둘을 가른다.
      */
     @Test
-    @DisplayName("기동 전에는 stop() 이 위임된다 — 안 그러면 기동 실패가 죽은 id 를 고정한다")
+    @DisplayName("기동 전에는 stop() 이 super 로 내려간다 — 안 그러면 기동 실패가 죽은 id 를 고정한다")
     void delegatesStopBeforeFirstStart() {
         MySQLContainer fresh = SharedMySqlContainers.create();
 
         assertThat(SharedMySqlContainers.hasStartedOnce(fresh))
                 .as("만들기만 한 컨테이너는 아직 기동 전이다")
                 .isFalse();
+        assertThat(SharedMySqlContainers.delegatedStopCount(fresh)).isZero();
 
-        // containerId 가 null 이라 super.stop() 은 즉시 돌아온다. 여기서 재는 것은
-        // "예외 없이 위임된다" 는 것이고, 막혀 있으면 이 경로 자체가 없어진다.
         fresh.stop();
 
+        assertThat(SharedMySqlContainers.delegatedStopCount(fresh))
+                .as("무조건 no-op 이면 0 이다 — 그러면 tryStart 의 실패 정리가 죽는다")
+                .isEqualTo(1);
         assertThat(SharedMySqlContainers.hasStartedOnce(fresh))
                 .as("stop() 이 상태를 바꾸면 안 된다")
                 .isFalse();
     }
 
     /**
-     * <b>정체성이 아니라 스키마 모양으로 잰다.</b> 한때 {@code getContainerId()} 를 비교했는데,
-     * 두 설정이 각자 {@code create()} 를 부르므로 <b>구조적으로 항상 참</b>이라 회귀를 못 잡았다.
-     *
-     * <p>진짜 위험은 <i>"CORRUPT 로케이션이 CLEAN 컨테이너에 얹히는 것"</i> 이다. 그러면
-     * {@code uk_coupon_member} 가 떨어지고, 깨지는 것은 <b>나중에 도는 남의 테스트</b>다.
-     * 제약 유무로 재면 그 축을 직접 본다.
+     * {@code Startable.close()} 의 기본 구현이 {@code this.stop()} 한 줄이라 같은 조건을 탄다.
+     * <b>{@code close()} 를 따로 비우면 조건을 건너뛰어</b> 기동 실패 정리가 다시 죽는다.
      */
     @Test
-    @DisplayName("CLEAN 컨테이너에는 CLEAN 전용 제약이 살아 있다 — 떨어졌으면 오염된 것이다")
-    void cleanContainerKeepsCleanOnlyConstraints() {
-        MySQLContainer clean = MySqlContainerConfig.sharedContainer();
-        clean.start();
+    @DisplayName("close() 도 같은 조건을 탄다 — 따로 비우면 정리가 다시 죽는다")
+    void closeFollowsTheSameCondition() {
+        MySQLContainer fresh = SharedMySqlContainers.create();
 
-        assertThat(SharedMySqlContainers.hasStartedOnce(clean)).isTrue();
-        assertThat(clean.getDatabaseName())
-                .as("CLEAN 컨테이너의 DB 이름은 app 이다")
-                .isEqualTo("app");
+        fresh.close();
+
+        assertThat(SharedMySqlContainers.delegatedStopCount(fresh))
+                .as("close() 가 stop() 을 타야 한다. 오버라이드로 비우면 여기가 0 이 된다")
+                .isEqualTo(1);
     }
 }
