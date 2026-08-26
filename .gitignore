@@ -49,6 +49,10 @@ infra/mysql/my.cnf
 .env
 .env.*
 !.env.example
+# `.env.*` 는 **접미사만** 잡는다 — `db.env`·`redis.env` 처럼 접두사 형태는 안 걸린다.
+# 실제로 `db.env` 가 DB 접속 정보를 담은 채 추적 안 되는 상태로 떠 있었다.
+*.env
+!example.env
 *.jks
 *.p12
 *.pem
@@ -90,3 +94,10 @@ Thumbs.db
 # humanize 계열 도구가 저장소 루트에 날짜 폴더를 만든다. 주간보고 초안 같은
 # 코드와 무관한 산출물이고 팀원 실명이 들어가므로 커밋되면 안 된다.
 _workspace/
+
+### Python — 시드 생성기·알림 싱크
+# `infra/alertmanager/` 와 시드 도구가 파이썬이라 바이트코드가 남는다.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
