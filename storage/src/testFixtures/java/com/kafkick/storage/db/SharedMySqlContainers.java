@@ -69,7 +69,9 @@ final class SharedMySqlContainers {
      * {@code DestructionAwareBeanPostProcessor} 라 그 속성과 무관하게 {@code Startable.stop()}
      * 을 부른다.
      *
-     * <p>정리는 Testcontainers 의 Ryuk 사이드카가 JVM 종료 때 한다 — {@link #requireRyuk()} 참고.
+     * <p>정리는 Testcontainers 가 한다 — Ryuk 사이드카가 기본이고, 그것을 끄면
+     * {@code JVMHookResourceReaper} 가 Docker API 로 직접 지운다. 둘 다 {@code stop()} 을
+     * 안 타므로 이 오버라이드가 회수를 막지 않는다 — {@link #warnIfRyukDisabled()} 참고.
      */
     private static final class SharedMySqlContainer extends MySQLContainer {
 
@@ -89,32 +91,43 @@ final class SharedMySqlContainers {
     }
 
     /**
-     * <b>Ryuk 이 꺼져 있으면 여기서 죽는다.</b>
+     * <b>Ryuk 이 꺼져 있으면 무엇이 달라지는지 알린다. 죽이지는 않는다.</b>
      *
-     * <p>{@code stop()}·{@code close()} 를 비운 순간부터 <b>JVM 안에서 컨테이너를 내릴 수 있는
-     * 코드 경로가 없다.</b> 회수는 전적으로 Ryuk 사이드카에 달렸다. 예전에는 {@code stop()} 이
-     * 살아 있어 컨텍스트 종료로도 걷혔으니, 이 변경이 <b>이중 방어를 하나로 줄였다.</b>
+     * <p>한때 여기서 예외를 던졌다. 근거는 <i>"{@code stop()}·{@code close()} 를 비운 순간부터
+     * 회수 경로가 Ryuk 하나뿐"</i> 이었는데 <b>그 전제가 틀렸다.</b> 실측(testcontainers 2.0.5
+     * 바이트코드):
      *
-     * <p>{@code TESTCONTAINERS_RYUK_DISABLED=true} 는 권한이 제한된 러너나 DinD 환경에서 흔히
-     * 넣는 값이다. 그것이 들어오면 회수 경로가 0이 되어 <b>빌드마다 mysqld 가 영구히 남는다.</b>
-     * 조용히 새는 것보다 여기서 죽는 편이 낫다.
+     * <ul>
+     *   <li>{@code ResourceReaper.instance()} 가 {@code TESTCONTAINERS_RYUK_DISABLED} 를 읽어
+     *       참이면 경고를 찍고 {@code JVMHookResourceReaper} 를 쓴다.</li>
+     *   <li>그 구현은 {@code performCleanup()} 에서 <b>Docker API 로 직접 지운다</b>
+     *       ({@code removeContainerCmd}) — {@code GenericContainer.stop()} 을 안 탄다.
+     *       즉 이 클래스의 오버라이드가 그것을 무력화하지 않는다.</li>
+     * </ul>
+     *
+     * <p>그래서 rootless Podman·Bitbucket 처럼 Ryuk 을 못 쓰는 환경에서도 <b>정상 종료면
+     * 걷힌다.</b> 거기서 빌드를 통째로 막는 것은 과하다.
+     *
+     * <p><b>다만 같지는 않다.</b> JVM 훅은 <b>비정상 종료에 안 돈다</b> — {@code kill -9},
+     * OOM 킬, 러너 강제 종료면 컨테이너가 남는다. Ryuk 은 사이드카라 그 경우에도 걷는다.
+     * 그 차이를 알고 쓰라고 한 줄 남긴다.
      */
-    private static void requireRyuk() {
-        String disabled = System.getenv("TESTCONTAINERS_RYUK_DISABLED");
-        if (Boolean.parseBoolean(disabled)) {
-            throw new IllegalStateException(
-                    "TESTCONTAINERS_RYUK_DISABLED 가 켜져 있습니다. 이 컨테이너는 stop()·close() 를 "
-                            + "무시하므로 Ryuk 이 유일한 회수 경로입니다 — 끄면 mysqld 가 빌드마다 "
-                            + "영구히 남습니다. 정말 꺼야 한다면 SharedMySqlContainers 의 stop() "
-                            + "오버라이드부터 되돌리십시오.");
+    private static void warnIfRyukDisabled() {
+        if (!Boolean.parseBoolean(System.getenv("TESTCONTAINERS_RYUK_DISABLED"))) {
+            return;
         }
+        System.err.println(
+                "[cy-be] TESTCONTAINERS_RYUK_DISABLED 가 켜져 있습니다. "
+                        + "JVMHookResourceReaper 가 정상 종료에서 컨테이너를 걷지만, "
+                        + "kill -9·OOM 킬 같은 비정상 종료에는 안 돕니다 — "
+                        + "이 컨테이너는 stop() 을 무시하므로 그때는 손으로 지워야 합니다.");
     }
 
     /**
      * 컨테이너를 만든다. <b>띄우지는 않는다</b> — 부르는 쪽이 {@code @Bean} 안에서 띄운다.
      */
     static MySQLContainer create() {
-        requireRyuk();
+        warnIfRyukDisabled();
         return new SharedMySqlContainer(IMAGE)
                 .withDatabaseName("app")
                 .withUsername("test")
