@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "data": {
+    "run": {
+      "id": 5,
+      "asOf": "2026-08-26T05:00:00",
+      "fromTs": null,
+      "scope": "FULL",
+      "dataset": "CLEAN",
+      "attempt": 4,
+      "verdict": "PASS",
+      "statsStatus": "COMPLETE",
+      "findingCount": 0,
+      "findingsChecksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "datasetFingerprint": "b20acfb867fe5d635bf4e7b180c213909ba7d61413efea3cd0c2f621cd931c3c",
+      "startedAt": "2026-08-26T05:32:24.266422",
+      "finishedAt": "2026-08-26T05:34:14.314778",
+      "seedRunId": null
+    },
+    "byType": {
+      "STOCK_MISMATCH": 0,
+      "DUP_PER_MEMBER": 0,
+      "REPLAY_MISMATCH": 0,
+      "ILLEGAL_TRANSITION": 0,
+      "USAGE_MISMATCH": 0,
+      "GRADE_VIOLATION": 0
+    },
+    "manifest": null
+  },
+  "error": null
+}
