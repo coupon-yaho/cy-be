@@ -2,8 +2,6 @@ package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
 
-import jakarta.persistence.EntityManager;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,15 +33,11 @@ class CouponCancelPersistenceTranslationTest {
     @Mock
     private IssuanceHistoryJpaRepository historyJpaRepository;
 
-    @Mock
-    private EntityManager entityManager;
-
     @Test
     @DisplayName("CANCEL 상태 저장 실패를 공통 쿠폰 영속성 예외로 변환한다")
     void translateCancelStatusPersistenceFailure() {
         IssuanceRepositoryImpl repository = new IssuanceRepositoryImpl(
-                issuanceJpaRepository,
-                entityManager
+                issuanceJpaRepository
         );
         when(issuanceJpaRepository.updateStatusIfCurrent(
                 100L,

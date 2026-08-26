@@ -138,6 +138,9 @@ class CouponIssueRepositoryTest {
                 .isEqualTo(LocalDateTime.of(2026, 8, 25, 5, 30));
         assertThat(issuanceRow.get("created_at"))
                 .isEqualTo(LocalDateTime.of(2026, 8, 18, 5, 30, 5));
+        assertThat(issuance.id()).isNotNull();
+        assertThat(issuance.code()).isEqualTo("0000000000000001");
+        assertThat(issuance.issuedAt()).isEqualTo(ISSUED_AT);
         assertThat(issuance.expiresAt())
                 .isEqualTo(issuance.issuedAt().plusSeconds(7L * 24 * 60 * 60));
         assertThat(activeCount()).isEqualTo(1);
