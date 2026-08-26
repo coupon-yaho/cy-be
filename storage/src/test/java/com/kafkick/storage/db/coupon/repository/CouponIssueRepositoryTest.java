@@ -37,6 +37,9 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.domain.IdempotencyRecord;
+import com.kafkick.core.coupon.domain.IdempotencyStatus;
+import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
 import com.kafkick.core.support.exception.BusinessException;
@@ -53,6 +56,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         CouponStockRepositoryImpl.class,
         IssuanceRepositoryImpl.class,
         IssuanceHistoryRepositoryImpl.class,
+        IdempotencyRepositoryImpl.class,
         CouponIssueRepositoryTest.AuditTestConfig.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -63,6 +67,9 @@ class CouponIssueRepositoryTest {
             Instant.parse("2026-08-18T05:30:00Z");
     private static final Instant AUDIT_CREATED_AT =
             Instant.parse("2026-08-18T05:30:05Z");
+    private static final String IDEMPOTENCY_KEY =
+            "550e8400-e29b-41d4-a716-446655440000";
+    private static final String REQUEST_HASH = "a".repeat(64);
 
     @Autowired
     private CouponRoundRepository couponRoundRepository;
@@ -75,6 +82,9 @@ class CouponIssueRepositoryTest {
 
     @Autowired
     private IssuanceHistoryRepository issuanceHistoryRepository;
+
+    @Autowired
+    private IdempotencyRepository idempotencyRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -316,7 +326,67 @@ class CouponIssueRepositoryTest {
         }
     }
 
+    @Test
+    @DisplayName("완성된 DONE 멱등 레코드를 INSERT 한 번으로 기록한다")
+    void insertsCompletedIdempotencyRecordInOneStatement() {
+        Issuance issued = issue(1L);
+
+        boolean recorded = transactionTemplate.execute(status ->
+                idempotencyRepository.insertCompleted(
+                        IDEMPOTENCY_KEY,
+                        1L,
+                        issued.id(),
+                        REQUEST_HASH,
+                        "stored-response",
+                        ISSUED_AT
+                )
+        );
+
+        assertThat(recorded).isTrue();
+        IdempotencyRecord stored = idempotencyRepository
+                .findByKey(IDEMPOTENCY_KEY)
+                .orElseThrow();
+        assertThat(stored.status()).isEqualTo(IdempotencyStatus.DONE);
+        assertThat(stored.memberId()).isEqualTo(1L);
+        assertThat(stored.issuanceId()).isEqualTo(issued.id());
+        assertThat(stored.responseBody()).isEqualTo("stored-response");
+    }
+
+    @Test
+    @DisplayName("같은 멱등키가 이미 있으면 기록하지 않고 false 를 돌려준다")
+    void rejectsDuplicateIdempotencyKeyWithoutOverwriting() {
+        Issuance first = issue(1L);
+        Issuance second = issue(2L);
+        transactionTemplate.executeWithoutResult(status ->
+                idempotencyRepository.insertCompleted(
+                        IDEMPOTENCY_KEY,
+                        1L,
+                        first.id(),
+                        REQUEST_HASH,
+                        "first-response",
+                        ISSUED_AT
+                )
+        );
+
+        boolean recorded = transactionTemplate.execute(status ->
+                idempotencyRepository.insertCompleted(
+                        IDEMPOTENCY_KEY,
+                        2L,
+                        second.id(),
+                        REQUEST_HASH,
+                        "second-response",
+                        ISSUED_AT
+                )
+        );
+
+        assertThat(recorded).isFalse();
+        assertThat(idempotencyRepository.findByKey(IDEMPOTENCY_KEY)
+                .orElseThrow()
+                .responseBody()).isEqualTo("first-response");
+    }
+
     private void resetData() {
+        jdbcTemplate.update("DELETE FROM idempotency_records");
         jdbcTemplate.update("DELETE FROM issuance_histories");
         jdbcTemplate.update("DELETE FROM issuances");
         jdbcTemplate.update("DELETE FROM coupon_stocks");

@@ -1,9 +1,12 @@
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
+import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
@@ -12,6 +15,8 @@ import com.kafkick.core.coupon.service.command.CouponCancelUseCommand;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyKeyTakenException;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyKeys;
 import com.kafkick.core.coupon.service.idempotency.IdempotentExecutionResult;
 import com.kafkick.core.coupon.service.idempotency.IdempotentOperationService;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
@@ -20,6 +25,8 @@ import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 @Service
 public class CouponOperationExecutionService {
@@ -27,7 +34,8 @@ public class CouponOperationExecutionService {
     private final IdempotencyExecutionService idempotencyExecutionService;
     private final IdempotentOperationService operationService;
     private final CouponIssueService couponIssueService;
-    private final CouponIssuePolicyValidator couponIssuePolicyValidator;
+    private final CouponIssuePreflightService issuePreflightService;
+    private final TimeProvider timeProvider;
     private final CouponUseService couponUseService;
     private final CouponCancelUseService couponCancelUseService;
     private final CouponCancelService couponCancelService;
@@ -40,7 +48,8 @@ public class CouponOperationExecutionService {
             IdempotencyExecutionService idempotencyExecutionService,
             IdempotentOperationService operationService,
             CouponIssueService couponIssueService,
-            CouponIssuePolicyValidator couponIssuePolicyValidator,
+            CouponIssuePreflightService issuePreflightService,
+            TimeProvider timeProvider,
             CouponUseService couponUseService,
             CouponCancelUseService couponCancelUseService,
             CouponCancelService couponCancelService,
@@ -52,7 +61,8 @@ public class CouponOperationExecutionService {
         this.idempotencyExecutionService = idempotencyExecutionService;
         this.operationService = operationService;
         this.couponIssueService = couponIssueService;
-        this.couponIssuePolicyValidator = couponIssuePolicyValidator;
+        this.issuePreflightService = issuePreflightService;
+        this.timeProvider = timeProvider;
         this.couponUseService = couponUseService;
         this.couponCancelUseService = couponCancelUseService;
         this.couponCancelService = couponCancelService;
@@ -104,11 +114,17 @@ public class CouponOperationExecutionService {
     }
 
     /**
-     * 멱등 선점 뒤 정책 사전검증과 발급 시도 알림을 거쳐 권위 발급을 실행합니다.
+     * 사전조회로 완료 여부와 정책을 확인한 뒤 발급 시도를 알리고 권위 발급을 실행합니다.
      *
-     * <p>사전검증의 읽기 전용 트랜잭션이 끝난 뒤 callback을 호출하고, 그 다음 기존 원자 발급
-     * 트랜잭션을 시작합니다. DONE replay는 선점된 실행 경로에 들어가지 않으므로 callback과
-     * 권위 발급을 모두 건너뜁니다. callback 실패는 관측 실패이므로 업무 결과에 전파하지 않습니다.
+     * <p>트랜잭션은 두 개입니다 — 읽기 전용 사전조회 하나, 권위 발급 하나. 발급은
+     * {@code uk_coupon_member}가 멱등 선점과 같은 배제를 이미 제공하므로 IN_PROGRESS 선점을
+     * 먼저 커밋하지 않습니다. 그 결과 실패 정리({@code release})와 진행 중 폴링이 필요 없습니다.
+     *
+     * <p>동시에 같은 키 또는 같은 회원으로 들어온 두 요청 중 진 쪽은 권위 트랜잭션이 롤백된 뒤
+     * 커밋된 결과를 다시 읽어 재사용합니다. 그 결과가 없으면 원래의 업무 예외를 그대로 냅니다.
+     *
+     * <p>사용·취소는 자연 유일 제약이 없어 {@link IdempotencyExecutionService}의 2단계 쓰기를
+     * 그대로 씁니다.
      *
      * @param couponRoundId 쿠폰 회차 식별자
      * @param memberId 회원 식별자
@@ -124,66 +140,103 @@ public class CouponOperationExecutionService {
             String idempotencyKey,
             IssueAttemptCallback attemptCallback
     ) {
-        IdempotentExecutionResult<CouponIssueResult> execution =
-                idempotencyExecutionService.executeWithMetadata(
-                        idempotencyKey,
-                        () -> CouponIssueCommand.canonicalRequest(
-                                couponRoundId,
-                                memberId,
-                                membershipGrade
-                        ),
-                        CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST,
-                        claimedAt -> issueClaimedRequest(
-                                couponRoundId,
-                                memberId,
-                                membershipGrade,
-                                idempotencyKey,
-                                claimedAt,
-                                attemptCallback
-                        ),
-                        issueCodec::read
-                );
-        return new CouponIssueExecutionResult(
-                execution.value(),
-                execution.replayed()
+        IdempotencyKeys.validate(
+                idempotencyKey,
+                CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST
         );
-    }
-
-    /**
-     * 선점된 요청을 사전검증한 뒤 관측 callback과 권위 발급 트랜잭션을 순서대로 실행합니다.
-     *
-     * @param couponRoundId 쿠폰 회차 식별자
-     * @param memberId 회원 식별자
-     * @param membershipGrade 요청 시점 회원 등급
-     * @param idempotencyKey UUID v4 멱등 키
-     * @param claimedAt 멱등 선점 시각
-     * @param attemptCallback 정책 사전검증 통과 알림
-     * @return 권위 발급 결과
-     */
-    private CouponIssueResult issueClaimedRequest(
-            Long couponRoundId,
-            Long memberId,
-            MembershipGrade membershipGrade,
-            String idempotencyKey,
-            Instant claimedAt,
-            IssueAttemptCallback attemptCallback
-    ) {
+        String requestHash = IdempotencyKeys.hash(
+                CouponIssueCommand.canonicalRequest(
+                        couponRoundId,
+                        memberId,
+                        membershipGrade
+                )
+        );
+        Instant requestAt = timeProvider.instant()
+                .truncatedTo(ChronoUnit.MICROS);
         CouponIssueCommand command = new CouponIssueCommand(
                 couponRoundId,
                 memberId,
                 membershipGrade,
                 idempotencyKey,
-                claimedAt
+                requestAt
         );
-        couponIssuePolicyValidator.validate(command);
+
+        Optional<String> completed = issuePreflightService
+                .inspect(command, requestHash)
+                .completed();
+        if (completed.isPresent()) {
+            return new CouponIssueExecutionResult(
+                    issueCodec.read(completed.get()),
+                    true
+            );
+        }
+
         notifyPolicyPassed(attemptCallback);
-        return operationService.execute(
-                idempotencyKey,
-                memberId,
-                claimedAt,
-                () -> CouponIssueResult.from(couponIssueService.issue(command)),
-                issueCodec,
-                CouponIssueResult::issuanceId
+        return issueAuthoritatively(command, requestHash);
+    }
+
+    /**
+     * 권위 발급 트랜잭션을 실행하고, 경합에서 지면 저장된 결과 재사용으로 넘어갑니다.
+     *
+     * @param command 발급 요청
+     * @param requestHash 요청 정규화 해시
+     * @return 발급 응답과 재사용 여부
+     */
+    private CouponIssueExecutionResult issueAuthoritatively(
+            CouponIssueCommand command,
+            String requestHash
+    ) {
+        try {
+            return new CouponIssueExecutionResult(
+                    operationService.executeAndRecord(
+                            command.idempotencyKey(),
+                            command.memberId(),
+                            requestHash,
+                            command.issuedAt(),
+                            () -> CouponIssueResult.from(
+                                    couponIssueService.issue(command)
+                            ),
+                            issueCodec,
+                            CouponIssueResult::issuanceId
+                    ).result(),
+                    false
+            );
+        } catch (IdempotencyKeyTakenException keyTaken) {
+            // 같은 키가 먼저 확정됐다. 그 응답이 곧 이 요청의 응답이다.
+            return replayCommitted(command, requestHash, null);
+        } catch (CouponAlreadyIssuedException alreadyIssued) {
+            // 경합에서 졌을 수 있다. 저장된 결과가 있으면 재사용하고, 없으면 진짜 중복 발급이다.
+            return replayCommitted(command, requestHash, alreadyIssued);
+        }
+    }
+
+    /**
+     * 롤백 뒤 커밋된 멱등 결과를 다시 읽어 재사용합니다.
+     *
+     * @param command 발급 요청
+     * @param requestHash 요청 정규화 해시
+     * @param fallback 저장된 결과가 없을 때 다시 낼 중복 발급 예외. {@code null}이면 경합 충돌로 낸다
+     * @return 저장된 응답 기반 결과
+     */
+    private CouponIssueExecutionResult replayCommitted(
+            CouponIssueCommand command,
+            String requestHash,
+            CouponAlreadyIssuedException fallback
+    ) {
+        Optional<String> completed = issuePreflightService
+                .findCompletedResponse(command.idempotencyKey(), requestHash);
+        if (completed.isPresent()) {
+            return new CouponIssueExecutionResult(
+                    issueCodec.read(completed.get()),
+                    true
+            );
+        }
+        if (fallback != null) {
+            throw fallback;
+        }
+        throw new BusinessException(
+                CouponUseErrorCode.CONFLICT_IN_PROGRESS,
+                "idempotencyKey=" + command.idempotencyKey()
         );
     }
 

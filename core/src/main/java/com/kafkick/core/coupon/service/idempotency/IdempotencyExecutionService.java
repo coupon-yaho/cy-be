@@ -1,16 +1,11 @@
 package com.kafkick.core.coupon.service.idempotency;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,11 +22,6 @@ import com.kafkick.core.support.exception.ErrorCode;
 
 @Service
 public class IdempotencyExecutionService {
-
-    private static final Pattern UUID_V4_PATTERN = Pattern.compile(
-            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-"
-                    + "[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-    );
 
     private final IdempotencyClaimService claimService;
     private final TimeProvider timeProvider;
@@ -235,13 +225,7 @@ public class IdempotencyExecutionService {
             String idempotencyKey,
             ErrorCode invalidRequestErrorCode
     ) {
-        if (idempotencyKey == null
-                || !UUID_V4_PATTERN.matcher(idempotencyKey).matches()) {
-            throw new BusinessException(
-                    invalidRequestErrorCode,
-                    "Idempotency-Key must be UUID v4"
-            );
-        }
+        IdempotencyKeys.validate(idempotencyKey, invalidRequestErrorCode);
     }
 
     private Instant currentTime() {
@@ -262,16 +246,6 @@ public class IdempotencyExecutionService {
     }
 
     private static String hashRequest(String canonicalRequest) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(
-                    canonicalRequest.getBytes(StandardCharsets.UTF_8)
-            ));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException(
-                    "SHA-256 알고리즘을 사용할 수 없습니다.",
-                    exception
-            );
-        }
+        return IdempotencyKeys.hash(canonicalRequest);
     }
 }
