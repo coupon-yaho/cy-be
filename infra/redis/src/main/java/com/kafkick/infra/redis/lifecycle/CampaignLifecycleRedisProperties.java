@@ -9,6 +9,7 @@ public class CampaignLifecycleRedisProperties {
             "campaign:lifecycle:closed";
 
     private String channel = DEFAULT_CHANNEL;
+    private boolean subscriberEnabled;
 
     public String getChannel() {
         return channel;
@@ -16,5 +17,13 @@ public class CampaignLifecycleRedisProperties {
 
     public void setChannel(String channel) {
         this.channel = channel;
+    }
+
+    public boolean isSubscriberEnabled() {
+        return subscriberEnabled;
+    }
+
+    public void setSubscriberEnabled(boolean subscriberEnabled) {
+        this.subscriberEnabled = subscriberEnabled;
     }
 }

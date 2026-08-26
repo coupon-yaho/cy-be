@@ -25,5 +25,9 @@ class CampaignLifecycleRedisWiringTest {
         assertThat(context.getBeansOfType(
                 RedisCampaignClosedEventPublisher.class
         )).hasSize(1);
+        assertThat(context.containsBean(
+                "campaignLifecycleRedisMessageListenerContainer"
+        )).as("Batch는 종료 이벤트를 발행하지만 캠페인 종료 채널은 구독하지 않는다")
+                .isFalse();
     }
 }
