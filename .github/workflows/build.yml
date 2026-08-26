@@ -142,20 +142,29 @@ jobs:
       - name: 셸 스크립트 검사
         run: |
           set -euo pipefail
-          # mapfile 을 안 쓴다 — bash 4+ 전용이라 손으로 못 재는 자리가 생긴다.
-          ALL=$(git ls-files '*.sh' | grep -v '^gradlew' || true)
-          [ -n "$ALL" ] || { echo "::error::검사할 .sh 를 못 찾았다"; exit 1; }
-          echo "$ALL" | while read -r f; do bash -n "$f"; done
+          # 여기도 NUL 로 받는다. 위와 같은 이유다.
+          ALL=()
+          while IFS= read -r -d '' f; do
+            case "$f" in gradlew*) continue ;; esac
+            ALL+=("$f")
+          done < <(git ls-files -z '*.sh')
+          [ "${#ALL[@]}" -gt 0 ] || { echo "::error::검사할 .sh 를 못 찾았다"; exit 1; }
+          for f in "${ALL[@]}"; do bash -n "$f"; done
 
-          # **빈 목록이면 죽는다.** 없으면 shellcheck 가 인자 없이 돌아 stdin 을 읽고
+          # **빈 목록이면 죽는다.** 없으면 검사기가 인자 없이 돌아 stdin 을 읽고
           # 조용히 성공한다 — 그 초록은 "검사했다" 가 아니라 "아무것도 안 봤다" 다.
-          OPS=$(git ls-files 'scripts/*.sh')
-          [ -n "$OPS" ] || { echo "::error::scripts/ 에 .sh 가 없다"; exit 1; }
-          # shellcheck 는 여러 파일을 인자로 받는다. 경로에 공백이 없는 것은
-          # 위 git ls-files 목록으로 보증된다(있으면 따옴표로 감싸 나온다).
-          # shellcheck disable=SC2086
+          #
+          # ⚠️ 줄 첫머리에 `#` 다음 그 도구 이름을 쓰면 **지시문으로 해석된다**(SC1072/SC1073).
+          #    한글 설명이라도 마찬가지다. 그래서 여기서는 "검사기" 로 부른다.
+          #
+          # -z 로 NUL 을 구분자로 받는다. git ls-files 는 **공백이 든 경로를 따옴표로
+          # 안 감싼다**(실측: `scripts/a b.sh` 가 그대로 나온다). 줄 단위로 읽고 인용 없이
+          # 펴면 그 경로가 두 인자로 쪼개진다.
+          OPS=()
+          while IFS= read -r -d '' f; do OPS+=("$f"); done < <(git ls-files -z 'scripts/*.sh')
+          [ "${#OPS[@]}" -gt 0 ] || { echo "::error::scripts/ 에 .sh 가 없다"; exit 1; }
           docker run --rm -e LC_ALL=C.UTF-8 -v "$PWD:/mnt:ro" -w /mnt \
-            koalaman/shellcheck:v0.10.0 $OPS
+            koalaman/shellcheck:v0.10.0 "${OPS[@]}"
 
       # 라우팅도 파싱한다. 여기가 깨지면 규칙은 평가되는데 알림이 아무 데도 안 간다.
       - name: 알림 라우팅 검사

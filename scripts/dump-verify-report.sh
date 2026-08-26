@@ -56,6 +56,18 @@ NOW_EPOCH="$(date -u +%s)"
 MAX_AGE="${REPORT_MAX_AGE:-21600}"          # 6시간
 HTTP_TIMEOUT="${REPORT_HTTP_TIMEOUT:-120}"  # 아래 dump() 의 주석 참고
 
+# **숫자가 아니면 여기서 죽어야 한다.** 아래 check_age 의 `[ "$age" -gt "$MAX_AGE" ]` 는
+# 숫자가 아니면 "integer expression expected" 로 **종료코드 2** 를 내는데, `set -e` 가
+# 없으므로 if 가 그것을 그냥 거짓으로 읽는다 — **낡은 판정이 통과한다**(재현했다).
+# 신선도 검사를 통째로 무력화하는 자리라 조용히 넘어가면 안 된다.
+for pair in "REPORT_MAX_AGE:$MAX_AGE" "REPORT_HTTP_TIMEOUT:$HTTP_TIMEOUT"; do
+  case "${pair#*:}" in
+    ''|*[!0-9]*)
+      echo "  ✗ ${pair%%:*} 는 0 이상의 정수여야 한다: ${pair#*:}" >&2
+      exit 1 ;;
+  esac
+done
+
 # ISO 8601 문자열을 epoch 로. BSD(date -j) 와 GNU(date -d) 를 둘 다 받는다 —
 # 이 스크립트는 macOS 호스트에서 돌지만, CI 나 리눅스에서 손으로 돌릴 수도 있다.
 to_epoch() {
@@ -256,7 +268,7 @@ if [ "$ok" -eq 0 ]; then
   exit 1
 fi
 
-changed=0
+declare -a WROTE=()
 for e in "${PENDING[@]}"; do
   tmp="${e%%:*}"; path="${e#*:}"
   if [ -f "$path" ] && cmp -s "$tmp" "$path"; then
@@ -267,24 +279,41 @@ for e in "${PENDING[@]}"; do
     fail "$(basename "$path") 를 못 썼다"; rm -f "$tmp"; exit 1
   fi
   echo "  + $(basename "$path")"
-  changed=1
+  WROTE+=("verify/$(basename "$path")")
 done
 
-[ "$changed" -eq 0 ] && { echo "바뀐 것이 없다. 커밋하지 않는다."; exit 0; }
+[ "${#WROTE[@]}" -eq 0 ] && { echo "바뀐 것이 없다. 커밋하지 않는다."; exit 0; }
 
 # ── 커밋 ────────────────────────────────────────────────────────────────────
 # worktree 전용이라 인덱스에 남의 것이 섞일 일이 없다. 그래도 경로를 명시한다 —
 # 이 스크립트가 언젠가 공용 트리로 돌아갈 때 그 한 줄이 사고를 막는다.
+# **디렉터리가 아니라 이번 실행이 쓴 파일만 stage 한다.** `add verify` 로 넓히면 앞선
+# 실행이 비정상 종료로 남긴 파일과 사람이 손으로 둔 파일까지 이 증적 커밋에 섞인다 —
+# 커밋 메시지는 "오늘 끝난 검증 FULL 의 판정" 이라고 말하는데 내용은 그렇지 않게 된다.
+#
 # **|| 를 빼면 안 된다.** add 가 죽어도(인덱스 잠김·권한·디스크) 다음 줄은 "스테이징된
 # 변경이 없다" 로 읽고 **종료 0** 을 낸다 — 재현했다(add 종료 128, 그다음 exit 0).
 # 파일은 이미 mv 로 디스크에 있으므로, 다음날 같은 판정이면 cmp 가 건너뛰어 **영영** 안 올라간다.
-git -C "$WORKTREE" add verify || { fail "add 실패. 인덱스를 봐라: $WORKTREE"; exit 1; }
+git -C "$WORKTREE" add -- "${WROTE[@]}" \
+  || { fail "add 실패. 인덱스를 봐라: $WORKTREE"; exit 1; }
+
+# 좁게 stage 한 대가로 **남는 것이 생길 수 있다.** 조용히 두면 그것도 사고이므로 말한다 —
+# 앞선 실행이 남긴 판정이면 손으로 커밋하고, 아니면 지우면 된다.
+stray="$(git -C "$WORKTREE" status --porcelain -- verify | grep -v '^A ' || true)"
+if [ -n "$stray" ]; then
+  echo "  ! verify/ 에 이번 실행이 안 쓴 것이 있다. 손으로 봐라:"
+  while IFS= read -r line; do echo "      $line"; done <<< "$stray"
+fi
+
 if git -C "$WORKTREE" diff --cached --quiet -- verify; then
   echo "스테이징된 변경이 없다."; exit 0
 fi
 
 # ⚠️ `-m` 은 `--` 앞에 와야 한다. 뒤에 두면 git 이 그것을 pathspec 으로 읽어
 #    "pathspec '-m' did not match any file(s)" 로 죽는다 — 실제로 그렇게 짰다가 잡혔다.
+#
+# ⚠️ pathspec 도 `verify` 가 아니라 **이번에 쓴 파일 목록**이다. 디렉터리로 넓히면
+#    좁게 stage 한 뜻이 사라진다 — --only 는 준 경로의 작업 트리 상태를 커밋한다.
 git -C "$WORKTREE" commit -q --only -m "$(cat <<MSG
 docs/${TICKET} 검증 판정을 남긴다
 
@@ -297,7 +326,7 @@ docs/${TICKET} 검증 판정을 남긴다
 
 scripts/dump-verify-report.sh 가 만들었다.
 MSG
-)" -- verify || { fail "커밋 실패"; exit 1; }
+)" -- "${WROTE[@]}" || { fail "커밋 실패"; exit 1; }
 echo "커밋했다: $(git -C "$WORKTREE" log --oneline -1)"
 
 [ "$PUSH" != "1" ] && { echo "푸시는 안 한다(REPORT_PUSH=1 이어야 한다)."; exit 0; }
