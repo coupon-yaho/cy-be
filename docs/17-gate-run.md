@@ -389,8 +389,12 @@ done
 # ⚠️ **리포트를 다른 자리에 쌓는다.** runId 는 스키마마다 따로 매겨져서,
 #    coupon_v6 의 run2 와 coupon_corrupt 의 run2 가 **같은 파일명**을 만든다(실측).
 #    스크립트가 dataset_fingerprint 로 그것을 막고 종료 1 을 내므로 갈라 줘야 한다.
+# **$( ) 안에서 실패하면 그 종료코드가 사라진다.** 그러면 $4 가 빈 채로 gate 에
+# 들어가고, seedRunId 없는 CORRUPT 요청이 400 으로 거절돼 executionId 추출부터 깨진다 —
+# 원인이 두 단계 떨어져 보인다. 먼저 받아서 끊는다.
+SEED_RUN_V6=$(seed_run_of coupon_v6) || exit 1
 REPORT_BRANCH=reports-v6 REPORT_WORKTREE="$PWD/../cy-be-reports-v6" \
-  gate coupon_v6 CORRUPT 2 "$(seed_run_of coupon_v6)"   # 정답 801 · GRADE_VIOLATION 1
+  gate coupon_v6 CORRUPT 2 "$SEED_RUN_V6"   # 정답 801 · GRADE_VIOLATION 1
 ```
 
 **권한이 DML 뿐인 것은 실측했다.** `SELECT, INSERT, UPDATE, DELETE` 만 준 계정으로

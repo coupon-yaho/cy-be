@@ -353,7 +353,18 @@ for e in "${PENDING[@]}"; do
   if [ -f "$path" ]; then
     old_fp="$(jq -r '.data.run.datasetFingerprint // empty' "$path" 2>/dev/null)"
     new_fp="$(jq -r '.data.run.datasetFingerprint // empty' "$tmp"  2>/dev/null)"
-    if [ -n "$old_fp" ] && [ -n "$new_fp" ] && [ "$old_fp" != "$new_fp" ]; then
+
+    # **못 읽으면 덮지 않는다.** 한때 둘 다 비어 있지 않을 때만 비교했는데, 그러면
+    # 필드가 빠지거나 기존 파일이 깨진 순간 **검사 자체를 건너뛰고 덮어썼다** —
+    # 방어가 가장 필요한 상황에서 방어가 없어지는 모양이다.
+    if [ -z "$old_fp" ] || [ -z "$new_fp" ]; then
+      fail "$(basename "$path") 가 이미 있는데 신원을 못 읽는다 — 덮지 않는다"
+      fail "  있던 것: [${old_fp:-<없음>}]"
+      fail "  새 것:   [${new_fp:-<없음>}]"
+      fail "  둘이 같은 데이터셋인지 확인할 수 없다. 손으로 봐라: $path"
+      rm -f "$tmp"; exit 1
+    fi
+    if [ "$old_fp" != "$new_fp" ]; then
       fail "$(basename "$path") 가 이미 있는데 데이터셋이 다르다 — 덮지 않는다"
       fail "  있던 것: ${old_fp:0:16}…"
       fail "  새 것:   ${new_fp:0:16}…"
