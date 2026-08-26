@@ -1,6 +1,7 @@
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 
 import org.springframework.stereotype.Service;
@@ -32,12 +33,12 @@ public class CouponRoundLifecycleService {
             );
         }
         scheduleLockPort.lock();
-        int closedOpenCount = lifecyclePort.closeOpenRounds(asOf);
+        List<Long> closedOpenRoundIds = lifecyclePort.closeOpenRounds(asOf);
         int closedMissedScheduledCount =
                 lifecyclePort.closeMissedScheduledRounds(asOf);
         int openedCount = lifecyclePort.openScheduledRounds(asOf);
         return new CouponRoundLifecycleResult(
-                closedOpenCount,
+                closedOpenRoundIds.size(),
                 closedMissedScheduledCount,
                 openedCount
         );

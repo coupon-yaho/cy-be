@@ -1,6 +1,7 @@
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,14 +37,14 @@ class CouponRoundLifecycleServiceTest {
                         lifecyclePort,
                         scheduleLockPort
                 );
-        when(lifecyclePort.closeOpenRounds(asOf)).thenReturn(1);
+        when(lifecyclePort.closeOpenRounds(asOf)).thenReturn(List.of(11L, 12L));
         when(lifecyclePort.closeMissedScheduledRounds(asOf)).thenReturn(2);
         when(lifecyclePort.openScheduledRounds(asOf)).thenReturn(1);
 
         CouponRoundLifecycleResult result = service.synchronize(asOf);
 
         assertThat(result).isEqualTo(
-                new CouponRoundLifecycleResult(1, 2, 1)
+                new CouponRoundLifecycleResult(2, 2, 1)
         );
         InOrder order = inOrder(scheduleLockPort, lifecyclePort);
         order.verify(scheduleLockPort).lock();
