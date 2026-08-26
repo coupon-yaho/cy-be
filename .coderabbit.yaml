@@ -48,7 +48,17 @@ reviews:
   # suggested_labels 는 켜 둔다 — 아래 labeling_instructions 로 영역 라벨을 붙이게 했다
 
   auto_review:
-    enabled: true
+    # ── CodeRabbit 은 호출할 때만 돈다 ──────────────────────────────────────
+    # 자동 리뷰는 **Qodo 가 맡는다**(`.pr_agent.toml` 의 `[github_app].pr_commands`).
+    # 둘 다 자동으로 돌면 같은 지적이 두 번 달리고, CodeRabbit 유료 좌석이 인당
+    # 월 30달러라 팀 전원에게 붙일 수 없다는 것이 교체의 계기였다.
+    #
+    # 끈 뒤에도 **호출 리뷰는 그대로 동작한다.** Qodo 가 놓친 것 같을 때 부른다:
+    #   @coderabbitai review        변경분만
+    #   @coderabbitai full review   전체 다시
+    # 근거: https://docs.coderabbit.ai/guides/commands
+    #   "you can still manually request CodeRabbit to review changes using the commands"
+    enabled: false
     drafts: false
 
     # ── 3계층 브랜치 구조 대응 (docs/03-collaboration.md 1.1절) ──────────
