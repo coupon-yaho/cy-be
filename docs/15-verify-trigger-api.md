@@ -417,8 +417,9 @@ POST /api/v1/admin/expire/runs/{id}/recover     # 한 번. 재시도해도 안�
 이름과 내용이 같아 `cmp` 가 조용히 건너뛴다.
 
 ```bash
-bash scripts/dump-verify-report.sh              # 커밋까지만
-REPORT_PUSH=1 bash scripts/dump-verify-report.sh   # 밀기까지
+# REPORT_DATASETS 는 **필수**다. 기본값이 없어 안 주면 죽는다 — 위 문단 참고.
+REPORT_DATASETS=CLEAN bash scripts/dump-verify-report.sh                # 커밋까지만
+REPORT_DATASETS=CLEAN REPORT_PUSH=1 bash scripts/dump-verify-report.sh  # 밀기까지
 ```
 
 **작업 브랜치가 아니라 전용 worktree 에 쌓는다.** 예약 작업이 사람의 작업 트리를 쓰면
@@ -526,7 +527,14 @@ autocommit 으로 각자 스냅샷을 열고, 그 사이 `expected_findings` 가
 고정 응답으로 한 테스트가 그것을 못 봤다 — 가짜 응답이 `dataset` 과 무관하게 같은 본문을
 줬기 때문이다. **살아 있는 것에 대고 돌려야만 드러나는 종류였다.**
 
-지금은 404 를 *"이 기동이 안 보는 데이터셋"* 으로 읽어 건너뛰고, **하나도 못 뜨면 실패**한다.
+**첫 수정은 404 를 건너뛰게 만들었는데 그것도 틀렸다.** 이 API 는 자기가 어느 데이터셋을
+서비스하는지 **모른다** — `RUN_NOT_FOUND` 는 *"현재 스키마에서 그 조합의 닫힌 실행을 못
+찾았다"* 이고, 원인이 최소 셋이다: ⑴ 다른 스키마에 있다 ⑵ 시드 재주입으로 판정이 사라졌다
+⑶ 오늘 검증이 아직 안 끝났거나 실패했다. **⑵·⑶ 을 건너뛰면 위증 방지가 통째로 무너진다.**
+
+그래서 지금은 `REPORT_DATASETS` 로 **이 기동이 서비스하는 것을 선언**하게 하고 기본값을
+없앴다. **선언한 것은 전부 200 이어야 하고, 404 도 실패다.** 없는 것은 애초에 목록에 안 들어온다.
+
 둘을 다 남기려면 스키마를 바꿔 기동하고 다시 돌린다 — CY-601 이 그렇게 두 판정을 올렸다.
 
 ### 에러 형식이 두 벌이 되지 않게

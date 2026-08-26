@@ -343,6 +343,25 @@ for e in "${PENDING[@]}"; do
     echo "  = $(basename "$path") (같은 판정이다)"
     rm -f "$tmp"; continue
   fi
+  # **같은 이름인데 다른 데이터셋이면 덮으면 안 된다.** 파일명은
+  # {날짜}-{dataset}-{scope}-run{runId} 인데 runId 는 **스키마마다 따로 매겨진다** —
+  # coupon_corrupt 와 coupon_v6 가 둘 다 CORRUPT/FULL/run2 를 갖는 것을 실측했다.
+  # 그대로 두면 나중에 뜬 쪽이 앞엣것을 조용히 지운다.
+  #
+  # dataset_fingerprint 가 데이터셋의 신원이다. 그것이 같으면 같은 데이터의 같은 실행이라
+  # 덮어도 된다(응답 형식이 바뀐 경우). 다르면 **다른 데이터셋이 이름만 겹친 것**이다.
+  if [ -f "$path" ]; then
+    old_fp="$(jq -r '.data.run.datasetFingerprint // empty' "$path" 2>/dev/null)"
+    new_fp="$(jq -r '.data.run.datasetFingerprint // empty' "$tmp"  2>/dev/null)"
+    if [ -n "$old_fp" ] && [ -n "$new_fp" ] && [ "$old_fp" != "$new_fp" ]; then
+      fail "$(basename "$path") 가 이미 있는데 데이터셋이 다르다 — 덮지 않는다"
+      fail "  있던 것: ${old_fp:0:16}…"
+      fail "  새 것:   ${new_fp:0:16}…"
+      fail "  스키마가 다른 두 DB 가 같은 runId 를 쓴 것이다. REPORT_BRANCH·REPORT_WORKTREE 를 갈라라"
+      rm -f "$tmp"; exit 1
+    fi
+  fi
+
   if ! mv "$tmp" "$path"; then
     fail "$(basename "$path") 를 못 썼다"; rm -f "$tmp"; exit 1
   fi

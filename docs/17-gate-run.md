@@ -313,8 +313,16 @@ done
 gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=seedRunId(CORRUPT만)
   DB_NAME="$1" BATCH_SCHEDULING_ENABLED=false \
     docker compose -f base.yml -f batch.yml up -d --force-recreate --no-deps batch
+  # **제한 시간을 둔다.** 배치가 기동에 실패하면 로그 문자열이 영영 안 나와
+  # 이 루프가 무한히 돈다 — 무인으로 돌릴 때 그것이 제일 나쁘다.
+  local n=0
   until docker compose -f base.yml -f batch.yml logs batch 2>&1 \
-        | grep -q "스키마 확인 완료.*$1"; do sleep 2; done
+        | grep -q "스키마 확인 완료.*$1"; do
+    n=$((n+1)); [ "$n" -gt 60 ] && {
+      echo "배치가 120초 안에 안 떴다. 로그를 봐라:" >&2
+      docker compose -f base.yml -f batch.yml logs --tail=30 batch >&2; return 1; }
+    sleep 2
+  done
 
   # **쿼리 파라미터다** — 본문 JSON 은 400 이다. 시드가 attempt 를 점유한다:
   # CLEAN 1·2, CORRUPT 1. 그다음 번호부터 쓴다.
@@ -327,17 +335,38 @@ gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=se
        | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['executionId'])")
 
   # **202 비동기다.** 끝나기 전에 덤프를 돌리면 finishedAt 이 비어 있어 못 뜬다.
+  # CLEAN 이 116초다. 20분이면 넉넉하고, 그 이상이면 뭔가 잘못된 것이다.
+  n=0
   until docker compose -f base.yml -f batch.yml exec -T batch \
         curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" \
-        | grep -qE '"status":"(COMPLETED|FAILED|STOPPED|ABANDONED)"'; do sleep 10; done
+        | grep -qE '"status":"(COMPLETED|FAILED|STOPPED|ABANDONED)"'; do
+    n=$((n+1)); [ "$n" -gt 120 ] && {
+      echo "검증이 20분 안에 안 끝났다. 마지막 응답:" >&2
+      docker compose -f base.yml -f batch.yml exec -T batch \
+        curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" >&2; return 1; }
+    sleep 10
+  done
 
   REPORT_DATASETS="$2" bash scripts/dump-verify-report.sh
 }
 
-# seedRunId 는 시드가 남긴 기준 실행의 id 다
-SEED_RUN=$(docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql \
-  mysql -uroot -N -e "SELECT id FROM coupon_corrupt.verification_runs
-                       WHERE origin='SEED' ORDER BY id DESC LIMIT 1;" | tr -d '\r')
+# seedRunId 는 **expected_findings 가 실제로 키로 쓰는 값**이다.
+# verification_runs 에서 뽑으면 안 된다 — 그 둘이 같다는 보장이 없고, 시드가 여러
+# 실행(FULL·INCREMENTAL)을 심으면 어느 것을 골랐는지도 모른다.
+# 배치는 `expected.exists(seedRunId)` 만 본다(VerifyJobConfig.validateSeedRunId).
+# **존재만 확인하므로 틀린 번호를 주면 낡은 묶음과 조용히 대조한다** — 그 javadoc 이
+# "누락 800 · 오탐 800 으로 나타나 규칙을 의심하게 만든다" 고 적어 뒀다.
+seed_run_of() {   # $1 = 스키마
+  local v
+  v=$(docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql \
+      mysql -uroot -N -e "SELECT DISTINCT seed_run_id FROM $1.expected_findings;" | tr -d '\r')
+  # **하나가 아니면 멈춘다.** 둘 이상이면 사람이 골라야 하고, 없으면 주입을 안 돌린 것이다.
+  if [ "$(printf '%s\n' "$v" | grep -c .)" -ne 1 ]; then
+    echo "seed_run_id 가 정확히 하나가 아니다: [$v]" >&2; return 1
+  fi
+  printf '%s' "$v"
+}
+SEED_RUN=$(seed_run_of coupon_corrupt) || exit 1
 
 gate coupon_clean   CLEAN   3
 gate coupon_clean   CLEAN   4            # 결정론 — 같은 asOf, attempt 만 다르게
@@ -357,7 +386,11 @@ for F in V11__batch_metadata.sql \
   docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql mysql -uroot coupon_v6 \
     < storage/src/main/resources/db/migration/$F
 done
-gate coupon_v6 CORRUPT 2 1     # 정답 801 · GRADE_VIOLATION 1
+# ⚠️ **리포트를 다른 자리에 쌓는다.** runId 는 스키마마다 따로 매겨져서,
+#    coupon_v6 의 run2 와 coupon_corrupt 의 run2 가 **같은 파일명**을 만든다(실측).
+#    스크립트가 dataset_fingerprint 로 그것을 막고 종료 1 을 내므로 갈라 줘야 한다.
+REPORT_BRANCH=reports-v6 REPORT_WORKTREE="$PWD/../cy-be-reports-v6" \
+  gate coupon_v6 CORRUPT 2 "$(seed_run_of coupon_v6)"   # 정답 801 · GRADE_VIOLATION 1
 ```
 
 **권한이 DML 뿐인 것은 실측했다.** `SELECT, INSERT, UPDATE, DELETE` 만 준 계정으로
