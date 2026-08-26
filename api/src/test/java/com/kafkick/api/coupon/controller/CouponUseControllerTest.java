@@ -53,7 +53,6 @@ class CouponUseControllerTest {
         when(executionService.use(
                 eq(100L),
                 eq(20L),
-                eq(30L),
                 eq(20_000),
                 eq(IDEMPOTENCY_KEY)
         )).thenReturn(new CouponUseResult(
@@ -73,7 +72,6 @@ class CouponUseControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "orderId": 30,
                                   "orderAmount": 20000
                                 }
                                 """))
@@ -94,7 +92,6 @@ class CouponUseControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "orderId": 30,
                                   "orderAmount": 20000
                                 }
                                 """))
@@ -103,7 +100,7 @@ class CouponUseControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
         verify(executionService, never()).use(
-                anyLong(), anyLong(), anyLong(), anyInt(), anyString()
+                anyLong(), anyLong(), anyInt(), anyString()
         );
     }
 
@@ -119,7 +116,6 @@ class CouponUseControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "orderId": 30,
                                   "orderAmount": 0
                                 }
                                 """))
@@ -128,7 +124,7 @@ class CouponUseControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
         verify(executionService, never()).use(
-                anyLong(), anyLong(), anyLong(), anyInt(), anyString()
+                anyLong(), anyLong(), anyInt(), anyString()
         );
     }
 }
