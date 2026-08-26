@@ -87,6 +87,41 @@ class HttpBatchConsistencyFinalClientTest {
     }
 
     @Test
+    void bodyThatBreaksTheFinalContractIsReportedInsteadOfBubblingAsFiveHundred()
+            throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/internal/v1/benchmarks/consistency/final", exchange -> {
+            // FINAL 인데 verdict 가 없다 — ConsistencyEvaluation 이 거부하는 조합이다.
+            byte[] body = ("""
+                {"evaluation":{"gaps":{
+                  "ACTIVE_DB_GAP":{"value":0,"state":"VALID","observedAt":"2026-08-26T00:12:00Z"},
+                  "LUA_GAP":{"value":0,"state":"VALID","observedAt":"2026-08-26T00:12:00Z"},
+                  "PERSIST_GAP":{"value":0,"state":"VALID","observedAt":"2026-08-26T00:12:00Z"},
+                  "DB_COUNTER_GAP":{"value":0,"state":"VALID","observedAt":"2026-08-26T00:12:00Z"}},
+                 "overIssued":{"value":0,"state":"VALID","observedAt":"2026-08-26T00:12:00Z"},
+                 "phase":"FINAL","verdict":null,"severity":"NONE"},"violations":[]}
+                """).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var client = new HttpBatchConsistencyFinalClient(
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    Duration.ofMillis(100), Duration.ofSeconds(1));
+
+            assertThatThrownBy(() -> client.evaluate(11L, EngineVersion.V3,
+                    Instant.parse("2026-08-26T00:00:00Z")))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("FINAL 계약");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void unreachableBatchIsReportedWithItsCauseInsteadOfANakedStackTrace() {
         var client = new HttpBatchConsistencyFinalClient(
                 "http://127.0.0.1:1", Duration.ofMillis(100), Duration.ofMillis(200));
