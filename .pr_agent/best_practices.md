@@ -1,0 +1,195 @@
+# 쿠폰 야호(cy-be) 리뷰 기준
+
+**이 파일은 `.coderabbit.yaml` 의 `path_instructions` 16개를 그대로 옮긴 것입니다.**
+원본은 여전히 그 파일이고, 둘이 갈리면 **`.coderabbit.yaml` 이 이깁니다** —
+규칙을 두 곳에 적으면 갈라지고, 실제로 이 프로젝트에서 두 번 갈라져
+리뷰어가 틀린 기준으로 blocker 를 냈습니다(CY-14 · CY-16).
+
+**경로별로 나뉘어 있습니다.** 리뷰하는 파일의 경로에 맞는 절만 적용하십시오.
+`**/*.java` 는 모든 자바 파일에 걸립니다.
+
+---
+
+## **/*.java
+
+## 코딩 컨벤션 (이 레포의 기존 코드가 기준)
+
+- 의존성은 `final` 필드 + **생성자 주입**. `@Autowired` 필드 주입, `@RequiredArgsConstructor`
+  없는 setter 주입은 지적한다. (`GlobalExceptionHandler` 가 기존 예시)
+- 클래스 멤버 순서: 상수 → 필드 → 생성자 → public 메서드 → private 메서드.
+- DTO·값 객체는 `record` 를 기본으로 한다 (`ResponseEnvelope`, `ErrorResponse` 참고).
+- 조회 결과가 없을 때 `null` 비교 대신 `Optional.orElseThrow` 를 쓴다.
+- 비즈니스 규칙 위반은 `BusinessException(ErrorCode)` 로 던진다. `IllegalStateException`·
+  `RuntimeException` 을 그대로 던지면 `GlobalExceptionHandler` 에서 500 으로 뭉개진다.
+- `BusinessException` 의 `detail` 은 **로그용**이고 클라이언트에 나가는 문구는
+  `errorCode.getMessage()` 다. detail 에 PII 를 넣지 않는다.
+- 새 에러 코드는 `ErrorCode` 를 구현한 **도메인별 enum** 으로 만든다.
+  `CommonErrorCode` 에 도메인 에러를 추가하면 지적한다 (그 파일 주석이 명시).
+- 에러 코드 문자열은 `COUPON-001` 처럼 `<도메인>-<3자리>` 형식. enum 상수는 UPPER_SNAKE_CASE.
+  HTTP status 를 코드에 넣거나(`HTTP_404_NOT_FOUND`), 내부 구현을 노출하는 이름
+  (`MYSQL_DUPLICATE_KEY`, `JPA_ENTITY_NOT_FOUND`)은 지적한다.
+- 응답은 항상 `ResponseEnvelope` 로 감싼다 — 성공은 `success(data)` / `success()`,
+  실패는 `fail(error)`. 컨트롤러에서 raw DTO 를 그대로 반환하면 지적한다.
+
+---
+
+## 도메인 불변식
+
+이 프로젝트에서 이름은 스타일 문제가 아니다. 아래는 발견 즉시 blocker 다.
+
+금지된 이름:
+(1) `issuedCount` / `issued_count` — 누적으로 읽힌다. `activeCount` 여야 한다.
+activeCount 는 "현재 ISSUED + USED 개수"이고 취소·만료 시 감소한다. 더미데이터에
+CANCELLED 가 10%(30만 장) 있어서 누적으로 재면 정상 데이터가 대량 오탐된다.
+(2) `campaigns.total_quantity` — 재고는 `coupon_stocks` 에만 둔다. 양쪽 보유 금지.
+(3) `coupons.version` — 낙관적 락은 이 프로젝트 범위 밖이다.
+(4) `limit_per_member` — N매를 허용하면 UNIQUE 제약을 못 걸어 최종 방어선이 사라진다.
+
+확정 용어: 상태값은 ISSUED / USED / CANCELLED / EXPIRED, 이벤트 타입은
+ISSUE / USE / CANCEL_USE / CANCEL / EXPIRE 만 쓴다. "누적 발급률"(통계용)과
+"재고 점유율"(불변식·초과발급 판정용)을 변수명·주석에서 섞어 쓰면 지적한다.
+쿠폰 300만 / 이력 약 520만이다 — 둘 다 "300만"으로 부르지 않는다.
+
+레이어링: 컨트롤러에 비즈니스 로직, 서비스가 HttpServletRequest·ResponseEntity 를
+아는 것, 엔티티가 DTO 를 참조하는 것, 리포지토리 밖 raw SQL, 도메인 모듈이
+Redis/Kafka 구체 타입에 직접 의존하는 것(`IssuanceStrategy` 인터페이스가 있다)을 지적한다.
+
+예외: 예외를 삼키는 코드(`catch (Exception e) {}`, 로그만 찍고 정상 진행),
+제약 위반 예외를 500 으로 흘리는 것("이미 처리됨"으로 번역해야 한다),
+에러 코드 없는 커스텀 예외, `@ControllerAdvice` 없이 노출되는 예외.
+
+응답 코드 규약은 k6 집계와 Chaos 자동 판정의 근거라 임의로 바꾸면 측정이 깨진다.
+409 계열(SOLD_OUT / ALREADY_ISSUED / NOT_OPENED / CAMPAIGN_CLOSED /
+COUPON_EXPIRED / INVALID_TRANSITION)을 5xx 로 던지면 지적한다.
+`NO_ENTRY_TOKEN` 은 400 이다(403 이면 k6 가 정상실패와 에러를 구분하려고
+매 요청 JSON 을 파싱해야 한다).
+
+PII: 로그에 name/email/phone 이 직접 들어가는 것, 엔티티·DTO 를 `{}` 로 통째
+로깅하는 것(@ToString 이 PII 를 뱉는다), 예외 메시지에 사용자 데이터가 섞이는 것,
+응답 DTO 에 마스킹 없는 PII. memberId 는 허용된다.
+예: `log.info("issued: {}", member)` → `log.info("issued: memberId={}", member.getId())`.
+
+**부하 경로의** 임계치가 코드에 하드코딩되어 있으면 지적한다 — 부하 테스트 중
+재기동 없이 튜닝해야 하므로 application.yml 로 외부화한다.
+부하 경로가 아닌 상수는 지적하지 않는다. 안전 상한(넘으면 거부하는 값),
+구현 세부(JDBC 배치 크기 같은 관용값), 검증 배치처럼 부하가 끝난 뒤 도는 코드의
+상수가 여기 해당한다. 외부화하면 아무도 안 만지는 설정 키만 늘고, 모듈 밖 이름공간의
+키를 그 모듈이 읽게 되어 이름이 거짓이 된다.
+
+
+## core/**/*.java
+
+`core` 는 도메인 모델·유즈케이스·포트 인터페이스만 갖는다. 어댑터 기술을 모른다.
+blocker: `core` 안에서 `jakarta.persistence`, `org.springframework.data.jpa`, `org.springframework.kafka`, `org.springframework.data.redis`, `JpaRepository`, `KafkaTemplate`, `RedisTemplate`, `@Entity`, `@Table` 을 import 하거나 참조하는 코드. 포트 인터페이스를 정의하고 구현은 어댑터에 맡긴다. `api`/`batch` 가 어댑터를 `runtimeOnly` 로만 의존하는 구조가 이걸 강제하는데, `build.gradle` 에서 `implementation` 으로 바꾸면 방어선이 사라진다 — 같이 지적한다.
+시각: `core` 안에서 인자 없는 `LocalDateTime.now()` / `LocalDate.now()` / `Instant.now()` 를 호출하면 지적한다. 런타임은 `TimeProvider` 를 주입받는다.
+단, **상태 전이 판정처럼 검증 배치와 공유하는 로직은 `TimeProvider` 를 주입받지 말고 시각을 인자로 받아야 한다.** 런타임은 `timeProvider.now()` 를, 검증 배치는 `asOf` 를 넘긴다. 같은 코드가 두 기준으로 돌아야 하기 때문이다 (docs/03-collaboration.md, docs/10-batch-design.md). 예: `transition(from, event, expiresAt, at)` — `at` 이 인자다.
+
+## api/**/controller/**/*.java
+
+공통 컴포넌트가 이미 있다. 새로 만들지 말고 이걸 쓴다.
+
+- 성공 응답은 `ResponseEnvelope.success(data)`, body 가 없으면 `ResponseEnvelope.success()`.
+  raw DTO 나 `Map` 을 그대로 반환하면 지적한다.
+- 에러 응답을 컨트롤러에서 직접 만들지 않는다. `BusinessException` 을 던지면
+  `GlobalExceptionHandler` 가 `ResponseEnvelope.fail(...)` 로 변환한다.
+  컨트롤러 안의 `try/catch` 로 에러 응답을 조립하면 지적한다.
+- `requestId` 를 직접 생성하지 않는다. `RequestIdFilter` 가 요청마다 MDC 에 심고
+  `ErrorResponse` 가 거기서 읽는다.
+- 시각이 필요하면 `TimeProvider` 를 주입받는다. `LocalDateTime.now()` 직접 호출은 지적한다.
+- 서비스 API 는 `/api/v1` prefix, 관리자 API 는 `/api/v1/admin/**` 이다.
+- 컨트롤러에 비즈니스 로직을 두지 않는다 — 요청/응답 변환과 위임만.
+
+
+## api/**/dto/**/*.java
+
+- DTO 는 `record` 를 기본으로 한다 (`ResponseEnvelope`, `ErrorResponse` 가 기존 예시).
+- 요청 DTO 는 동작 기준 `{동작}{도메인}Request`, 응답 DTO 는 도메인 기준
+  `{도메인}{용도}Response`. 동작이 자명하면 도메인명을 생략할 수 있다.
+- JSON 필드는 camelCase, enum 응답 값은 UPPER_SNAKE_CASE.
+- 날짜는 `YYYY-MM-DD`, 날짜+시간은 timezone offset 을 포함한 ISO-8601.
+  내부 저장은 UTC 다 (`TimeConfig`) — 표현 계층에서만 KST 로 바꾼다.
+- 도메인 모델을 그대로 응답으로 내보내지 않는다. **PII 필드가 마스킹 없이 새는 최단 경로**다.
+
+
+## {api,batch}/**/*.java
+
+`api` 와 `batch` 는 어댑터(`storage`, `infra:*`)를 `runtimeOnly` 로만 의존한다. `CouponEntity`, `CouponJpaRepository` 같은 어댑터 타입을 컴파일 시점에 참조하면 blocker 다. `core` 가 정의한 포트 인터페이스만 쓴다. 컨트롤러는 도메인 모델을 그대로 응답하지 않고 DTO 로 변환한다.
+
+## **/{issuance,issue,coupon,stock,lock,concurrency}/**/*.java
+
+재고 10,000장에 20,000명이 몰려도 정확히 10,000장만 나가야 한다.
+재고 불변식: `잔여 재고 = total_quantity − active_count`, `active_count = 현재 ISSUED + USED 개수`(취소·만료 시 감소). active_count 를 누적 발급 수로 다루거나, 초과 발급 판정을 누적 이력 수로 하거나, 재고를 캠페인 행에서 읽고 쓰는 코드는 blocker 다.
+연산 순서 — 자격 선점이 재고 차감보다 반드시 먼저다: ① 멱등 체크 → ② 오픈 시각 → ③ 등급 → ④ 1인1매 선점 → ⑤ 재고 차감 → ⑥ 영속화. 재고를 먼저 깎고 1인1매에서 튕기면 재고가 샌다. ④와 ⑤가 하나의 원자 단위인지 본다.
+조건부 UPDATE: `UPDATE ... WHERE active_count < total_quantity` 의 affected rows 를 검사하지 않고 성공으로 간주하는 코드, 조회 → 판단 → 쓰기로 쪼개진 코드(그 사이에 틈이 생긴다 — 조건을 WHERE 절에 박아야 한다), 예외를 삼켜 실패를 성공으로 만드는 코드.
+락: `SELECT ... FOR UPDATE` 가 재고 행보다 넓은 범위를 잠그는지(캠페인 행까지 잠그면 v1 병목 측정이 오염된다), 락 안에서 외부 호출(HTTP/Redis/Kafka)을 하는지, `@Transactional` 없이 락을 기대하는지.
+멱등성: `Idempotency-Key` 처리가 조회-후-삽입이면 경합에 뚫린다. `INSERT(IN_PROGRESS)` → 중복키 예외 → 재조회 대기 패턴이어야 한다. `idempotency_records` 에 status 컬럼 없이 "완료 대기"를 구현했는지도 본다.
+상태 전이: `CouponStateMachine` 밖에서 상태를 직접 바꾸는 코드, 전이표에 없는 전이 (종단 상태 CANCELLED/EXPIRED 에서 나가는 전이는 전부 위반). **전이표는 시각을 인자로 받지 않는다** — 시간 기반 만료는 expireJob 이 EXPIRE 이력을 남겨서 표현하고, 이력에 없는 만료를 상태머신이 암묵적으로 적용하면 리플레이가 비결정적이 되고 "만료 누락은 정상"이라는 계약이 깨진다. USED 는 만료 대상이 아니다 (expireJob 은 status='ISSUED' 만 잡는다). 런타임과 검증 배치가 같은 상태머신을 쓰는지도 본다.
+DB 제약: `UNIQUE (campaign_id, member_id)` 를 제거하거나 우회하는 변경은 무조건 blocker 다. 애플리케이션 로직으로만 불변식을 지키고 DB 제약이 없으면 지적한다.
+동시성 코드가 바뀌었는데 `CountDownLatch` 기반 테스트(재고 N에 2N 스레드 → 정확히 N건, 같은 유저 동시 10회 → 1건, 같은 쿠폰 cancel-use 동시 5회 → 재고 1회만 복원)가 없으면 지적한다.
+
+## infra/redis/**
+
+Lua 원자성: `SISMEMBER` → `DECR` → `SADD` 가 하나의 스크립트 안에 있어야 한다. 분리되면 원자성이 깨진다.
+키 인젝션: 키 이름에 사용자 입력을 문자열 결합하면 다른 캠페인 재고를 건드릴 수 있다. 반드시 KEYS/ARGV 로만 전달한다. 나쁨: `redis.call('DECR', 'stock:' .. userInput)` / 좋음: `redis.call('DECR', KEYS[1])`.
+보상: Redis 차감 성공 후 DB 쓰기 실패 시 INCR 되돌림(보상 트랜잭션)이 있는지.
+Entry-Token 은 `GETDEL`(원자적)로 검증한다. `GET` + `DEL` 로 나누면 동시 요청에서 여러 개가 통과한다. 토큰 키에 userId 가 포함되어 타 유저 토큰 도용이 불가능한지도 본다.
+
+## **/*.lua
+
+모든 키와 인자는 KEYS/ARGV 로만 받는다. 스크립트 안에서 키 이름을 문자열 결합하면 blocker 다. 스크립트가 재고 검사와 차감과 중복 체크를 한 번에 끝내는지 확인한다.
+
+## batch/**/*.java
+
+요구사항은 "전수 검증 + 같은 데이터로 재실행하면 같은 결과"다. 규모는 회원 100만 · 발급건 300만 · 이력 534만이다.
+**어휘를 먼저 확인한다.** `coupons` 는 쿠폰이 아니라 **회차**(147행)이고, 발급건은 `issuances`(300만), 이력은 `issuance_histories`(534만), 사용 실적은 `issuance_usages`(132만)다. 구 어휘(`campaigns` / `coupon_histories` / `coupon_usages`)로 쓴 쿼리는 정반대 테이블을 읽는 것이므로 지적한다. `verification_findings.campaign_id` 는 `coupons.id`, `.coupon_id` 는 `issuances.id` 를 가리키는 **레거시 컬럼명**이다.
+결정론을 깨는 것들 — 검증 배치 코드 안의 `now()` / `LocalDateTime.now()` / `Instant.now()` 는 발견 즉시 blocker 다. 주입된 `asOf` 를 써야 한다. **`TimeProvider` 주입도 같은 위반이다** — `timeProvider.now()` 는 결국 현재 시각이라 재실행하면 값이 달라진다. 판정에 쓰는 시각은 오직 `asOf` 파라미터로만 들어온다. 예외는 `verification_runs.started_at`·`finished_at` 처럼 <b>실행을 관측해 남기는 컬럼</b>뿐이고, 이건 checksum·지문 재료가 아니다. 그 값도 `now()` 를 부르지 말고 Spring Batch 가 이미 기록한 시각을 쓴다 — `started_at` 은 `JobExecution.getStartTime()`, `finished_at` 은 판정 Step 의 `StepExecution.getStartTime()` 이다. (`JobExecution.getEndTime()` 은 잡이 아직 안 끝나 그 시점에 `null` 이다.) 증분 윈도우도 절대 구간 `(from_ts, as_of_ts)` 로 받아야 한다. `최근 N분` 같은 상대 윈도우는 현재 시각 기준이라 같은 파라미터 재실행이 재현되지 않는다. 그 외: 정렬 타이브레이커 없음(리플레이 정렬은 **`(created_at, id)`** 여야 한다. `occurred_at` 이라는 컬럼은 존재하지 않는다), 병렬 청크 결과를 정렬 없이 병합, HashMap/HashSet 순회 결과가 리포트 순서에 반영되는 코드. `attempt` 가 JobParameters 의 식별 파라미터에 없으면 같은 `asOf` 재실행이 차단되어 결정론 증명 자체가 불가능하다 — `uk_run_params(as_of, dataset, scope, attempt)` 도 같은 방향이다.
+`asOf` 는 "실행 순간을 고정해 재실행 결정성을 만드는 값"이지 과거 조회 기능이 아니다. 임의 과거 시각을 허용하는 API 는 이력만 잘리고 `issuances.status` 는 현재라 정상 데이터가 전부 불일치로 나온다. `asOf >= max(issuance_histories.created_at)` 검증이 있는지 본다.
+**집합 비교의 키는 `target_key` 문자열 하나뿐이다.** 형식은 `COUPON:{회차id}` / `COUPON:{회차id}|MEMBER:{회원id}` / `ISSUANCE:{발급건id}` / `HISTORY:{이력id}` 다. 다형 FK 컬럼(campaign_id·member_id·coupon_id·history_id)으로 조인하거나 비교하면 `NULL = NULL` 이 UNKNOWN 이라 **정확히 검출한 finding 이 전부 누락으로 뒤집힌다** — 발견 즉시 blocker. FK 컬럼은 조회 편의로만 남긴다. 결정론 판정은 정렬된 `(finding_type, target_key)` 만 해싱한 `findings_checksum` 으로 한다(`finding_type + U+001F + target_key + U+001E` 반복 후 SHA-256). `expected`/`actual` 같은 자유 문자열을 섞으면 포맷 한 글자에 거짓 실패가 난다.
+3축 대조: `asof_state.state ↔ issuances.status ↔ issuance_usages 활성 행 수`. 활성 판정은 `used_at <= asOf AND (canceled_at IS NULL OR canceled_at > asOf)` 다. `asof_state` 는 PK 가 `(run_id, coupon_id)` 라 **run 마다 새로 만든다**. 컬럼명은 `status` 가 아니라 **`state`** 이고, `active_usage_count` 를 Step 0 가 같이 채우므로 V5 가 실행 시점에 usages 를 조인하면 지적한다. `TEMPORARY TABLE` 은 재시작 시 사라지므로 금지.
+**검증 규칙은 6종(V1~V6)이다.** 발급코드 중복은 별도 규칙이 아니라 `V2` 의 두 번째 케이스이고(`GROUP BY coupon_id, code HAVING COUNT(*)>1`, MIN(id) 제외), 고아 이력은 `V4` 가 전이 연쇄로 잡는다. `V7` / `DUPLICATE_CODE` / `ORPHAN_COUPON` 같은 규칙을 새로 만들면 같은 행이 두 규칙에 잡혀 집합 비교가 깨진다 — 지적한다. `V6` 는 **`issuances.issued_grade` 스냅샷**을 `grades` 와 조인한다. `members.membership_grade` 를 조인하면 현재값이라 시드가 일부러 심어 둔 "현재는 부적격·스냅샷은 적격" 3% 가 통째로 오탐이 된다 — blocker.
+오염셋: **주입 700건이지만 정답은 800행**이다(유형 3이 `V1` 과 `V4` 를 동시에 울린다). 규칙별 기대 행수는 V1 200 · V2 200 · V3 100 · V4 200 · V5 100 · V6 0 이다. 700 을 기대 행수로 assert 하면 지적한다. 오염 유형 5·6·1·3 은 CLEAN 전용 제약(`uk_coupon_code` / `uk_coupon_member` / `ck_stock_range`)을 위반해야 하므로 제약이 없는 별도 스키마에만 들어간다. 검증 배치는 대상 스키마를 `dataset` 파라미터로 받아야 한다.
+검증 배치가 자체 전이 로직을 가지면 런타임과 두 벌로 갈라져 같은 버그를 양쪽이 재현한다 — 검증이 검증이 아니게 된다. `CouponStateMachine` 을 공유하는지 확인한다. 리플레이는 자기가 추적한 상태를 진실로 보고 `from_status` 를 믿지 않는다. **상태는 `created_at <= asOf` 이력을 `(created_at, id)` 오름차순 정렬한 마지막 `to_status` 다** (시드 저장소 contract.json `replay_rule.state`, docs/11-batch-implementation.md). 불법 전이를 만나도 finding 으로 기록하고 그 행의 `to_status` 를 따라 계속 접는다. 상태를 안 옮기면 뒤 행이 연쇄로 불법이 되어 오염 200건이 수천 건으로 번지고, 오염 유형 4 에서 리플레이가 `EXPIRED` 를 내놓아 `issuances.status=USED` 와 어긋나 V3·V5 가 각각 100건씩 오탐한다. 접기가 상태를 안 옮기게 하라는 지적은 하지 않는다.
+**검증하면 안 되는 것** — `stock_per_occurrence ↔ total_quantity` 불일치, 만료 누락(`expires_at < asOf` 인데 `ISSUED`), 스냅샷 컬럼 불일치는 전부 정상이다. 규칙으로 추가하면 정상셋 0건이 원천 불가능해진다.
+성능: 전수 스캔에 `findAll()` 같은 전체 로딩(OOM), 청크·커서 없는 배치, `JdbcPagingItemReader` 의 기본 `OFFSET` 페이징(MySQL 에서 앞 행을 다 읽고 버린다 — keyset paging 이어야 하고 sortKeys 마지막은 유니크 단조 증가 컬럼). 더미데이터는 별도 Python 시드 저장소가 만든다 — 배치가 시드를 다시 구현하면 지적한다. 보조 인덱스가 일부러 없는 상태이므로 임의로 인덱스를 추가하지 않는다.
+
+## **/{verification,seed,stats}/**/*.java
+
+batch 모듈과 같은 기준을 적용한다. 특히 검증·집계 코드 안의 `now()` 계열 호출은 blocker 이고, 주입된 `asOf` 를 써야 한다. 정렬에는 `(created_at, id)` 타이브레이커가 필요하고, 결정론 판정은 정렬된 `(finding_type, target_key)` 의 `findings_checksum` 으로 한다. "누적 발급률"(통계)과 "재고 점유율"(불변식)을 섞어 쓰면 지적한다. 통계 테이블은 누적과 현재값을 나눠 담는다 — `coupon_stats.issued_total`(누적, 퍼널의 분모)과 `issued`(현재)를 섞으면 지적한다. 불변식은 `issued + used = coupon_stocks.active_count` 와 `issued + used + cancelled + expired = issued_total` 이다. `grade_stats` 는 `issuances.issued_grade` 로 집계하고 `members` 를 조인하지 않는다.
+
+## storage/**/entity/**/*.java
+
+- `BaseEntity`(id + createdAt) 또는 `UpdatableEntity`(+ updatedAt)를 상속한다.
+  `@Id`·`@CreatedDate` 를 직접 다시 선언하면 지적한다.
+- enum 필드는 반드시 `@Enumerated(EnumType.STRING)`. ORDINAL 은 순서가 바뀌면
+  기존 300만 건이 통째로 다른 상태가 된다 — blocker.
+- 테이블명은 복수형 snake_case, 컬럼명은 snake_case.
+- 중복되면 안 되는 데이터는 애플리케이션 로직이 아니라 **DB unique 제약**으로도 막는다.
+- `ON DELETE CASCADE` 를 기본으로 쓰지 않는다. 이력·사용 기록이 조용히 사라진다.
+- 시각은 UTC 로 저장한다(`TimeConfig` 가 `Clock.systemUTC()`). 날짜 자체가 의미인 값만
+  `LocalDate`/`DATE`.
+- `@ToString` 이 PII 필드를 노출하는지 본다.
+
+
+## storage/**/*.java
+
+엔티티는 docs/02-erd-decisions.md 의 F1~F7 결정을 따른다. `UNIQUE (campaign_id, member_id)` 제거·우회는 blocker 다. 재고는 `coupon_stocks` 에만 있고 캠페인 행에 중복 보유하지 않는다. UNIQUE 제약이 암호문 컬럼(`*_enc`)에 걸려 있으면 blocker 다 — AES 는 매번 값이 달라져 성립하지 않는다. 해시 컬럼(`*_hash`)에 걸어야 한다. `@ToString` 이 PII 필드를 노출하는지, `exclude` 가 있는지 확인한다.
+
+## storage/src/main/resources/db/migration/**
+
+Flyway 마이그레이션이다. 되돌릴 수 없다는 전제로 본다. 이미 적용된 버전 파일(`V1__*.sql`)을 수정하면 체크섬이 깨진다 — 새 버전을 추가해야 한다. **새 파일명은 `V<YYYYMMDD><NN>__설명.sql` 로 10자리 고정이다.** 연번(`V17__*`)은 금지한다 — 브랜치마다 같은 번호가 다른 뜻이 되어 머지 때 Flyway 가 기동을 거부한다 (실제로 이 저장소의 두 계보가 V2~V15 열넷을 그렇게 쓰고 있었다). **이미 푸시된 버전 번호를 다른 파일에 재사용하지 마라** — 그 DB 에는 체크섬이 남아 있다. `testFixtures/resources/db/corrupt/V9999999999__*` 는 "항상 마지막" 을 뜻한다. 버전 자릿수가 10을 넘으면 그 센티널이 추월당하므로 하루 순번은 2자리를 넘기지 않는다. **연번으로 남는 예외 둘은 이미 적용된 기준 파일이라 손대면 체크섬이 깨진다** — `V1__init_schema.sql`(스키마 원점)과 `V11__batch_metadata.sql`(main 과 바이트 동일해야 머지 후 체크섬이 유지된다). 그 둘을 근거로 새 연번을 만들지 마라. 불변식은 애플리케이션 로직이 아니라 DB 제약으로 표현되어야 한다 (`UNIQUE (campaign_id, member_id)`, `CHECK (active_count <= total_quantity)` 등). 제약을 제거·완화하는 변경은 이유가 PR 본문에 없으면 blocker 로 지적한다. 대량 적재용 인덱스 생성 시점(적재 후)이 반영되어 있는지 본다.
+
+## **/src/main/resources/**/*.{yml,yaml,example}
+
+이 레포는 `.yml.example` 만 커밋하고 실제 `.yml` 은 `.gitignore` 로 막는다. 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD` 환경변수로 주입한다. `.example` 에 실제 비밀번호·키가 들어가면 blocker 다. 새 설정 키를 추가했는데 대응하는 `.example` 갱신이 없으면 지적한다 — 클론한 팀원의 앱이 뜨지 않는다.
+인증: **회원가입·로그인은 과제 범위 밖이다.** 가상 회원 100만 명 중 누구인지를 가리려고 회원·등급을 요청 헤더로 받는 것이 확정된 설계다. 따라서 **인증 필터 부재 · Spring Security 의존성 부재 · `/api/v1/admin/**` 의 `hasRole` 부재 · JWT 도입 · 헤더 서명은 지적하지 마라.** 관리 경로는 관리 포트를 외부에 노출하지 않는 것으로 막는다. 대신 서버가 헤더 등급을 회차의 `eligible_grades_mask` 와 대조하는지, 헤더 회원 ID 로 남의 쿠폰을 다룰 수 있는지는 본다 — 서명이 없으므로 그게 유일한 방어선이다.
+actuator: `management.endpoints.web.exposure.exclude` 가 명시되어 있는지 본다. include 만 쓰면 나중에 `*` 로 바뀔 때 env 가 함께 열린다. AES 키를 환경변수로 주입하므로 `/actuator/env` 는 실제 유출 경로다. 기대값: `exclude: env,configprops,beans,heapdump`, 관리 포트 분리(9090). 단 actuator 의존성이 없는 모듈에는 해당하지 않는다 — 없는 것을 막으라고 하지 마라.
+`server.error.include-stacktrace: never` 가 유지되는지. AES 키·JWT 시크릿·DB 비밀번호가 리터럴로 박혀 있는지(환경변수 주입이어야 한다). 부하 테스트용으로 IP rate limit 을 끈 설정이 프로파일로 분리되어 있는지 — 기본 프로파일에서는 켜져 있어야 한다. 임계치는 코드가 아니라 여기 있어야 한다(재기동 없이 튜닝).
+
+## **/src/{test,testFixtures}/**/*.java
+
+시각에 의존하는 테스트는 `Clock.fixed(...)` / `Clock.offset(...)` 으로 시계를 고정한다 (`TimeConfig` 의 `Clock` 빈을 테스트에서 교체). 만료·오픈시각 판정을 실제 시간이 흐르기를 기다려 검증하면 지적한다. `Thread.sleep()` 으로 타이밍에 의존하는 테스트는 CI 에서 간헐 실패한다 — `CountDownLatch` / `Awaitility` 로 교체를 제안한다. 동시성 테스트는 재고 N에 2N 스레드를 동시 발사해 정확히 N건이 나오는지 검증해야 한다. 정합성 테스트는 정상 셋에서 0건, 오염 셋에서 **정답 800행 집합 일치**를 확인해야 한다. 건수만 assert 하면 약하다 — 오탐 400 + 미검출 400 도 800 이다. 조인 키는 `(finding_type, target_key)` 이고 양방향 `MINUS` 로 누락 0 · 오탐 0 이어야 한다. 주입 시 산출한 `expected_findings` 와 양방향 대조해 누락 0 · 오탐 0 을 보는지 확인한다. 결정론 테스트가 `finding_count` 만 assert 하면 약하다 — `findings_checksum` 비교를 제안한다. 테스트 이름이 무엇을 검증하는지 말하는지 본다.
+
+## .github/workflows/*.{yml,yaml}
+
+`${{ }}` 를 셸 스크립트 본문에 직접 보간하면 명령 주입(CWE-78)이다 — 반드시 `env:` 경유로 받는다. 특히 workflow_dispatch inputs 와 PR 제목·브랜치명처럼 사용자가 통제하는 값이 그렇다. 서드파티 액션이 태그(@v1, @main)로 고정되어 있으면 커밋 SHA 고정을 제안한다. `permissions:` 가 잡별로 최소 권한인지, checkout 에 `persist-credentials: false` 가 있는지, 시크릿을 쓰는 잡에 포크 PR 가드가 있는지 본다.
+
