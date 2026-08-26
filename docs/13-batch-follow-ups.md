@@ -859,18 +859,57 @@ JVM 싱글턴**이 필요하다.
 > **`maxSize` 를 4에서 기본값 32로 되돌렸다.** 그 값의 근거였던 메모리 폭발이 사라졌다.
 >
 > **대가는 격리다.** 컨텍스트가 곧 빈 DB 이던 성질이 없어져, 데이터를 읽는 테스트는 스스로
-> 비워야 한다. **둘을 고쳤다** — `BinlogFormatGuardWiringTest`(같은 `asOf` 로
-> `JobInstanceAlreadyCompleteException`)와 `BatchJobRepositoryTest`(전역 행수를 세는데 남의
-> 메타까지 셌다). 나머지는 이미 `VerificationSeed.clear()` 로 비우고 있었거나, 배선·설정
-> 검사라 행을 안 읽는다.
->
-> ```bash
-> grep -rl "@SpringBootTest" --include='*.java' */src/test | wc -l   # 43
-> ```
+> 비워야 한다.
 >
 > **`removeJobExecutions()` 만으로는 안 비워진다** — 실행이 없는 인스턴스를 남긴다(바이트코드로
-> 확인). 그래서 삭제를 `BatchMetadata` 한 곳으로 모았다. 강도가 다른 두 벌이 병존하면
+> 확인). 그래서 `BatchMetadata` 를 만들어 `BATCH_*` 여섯을 FK 역순으로 지운다.
+>
+> ⚠️ **처음에는 그것을 두 클래스에만 붙이고, 나머지를 이렇게 면제했다 — 그 근거가 거짓이었다.**
+>
+> > *"나머지는 이미 `VerificationSeed.clear()` 로 비우고 있었거나, 배선·설정 검사라 행을 안 읽는다."*
+>
+> **그 픽스처의 `TABLES_IN_DELETE_ORDER` 에는 `BATCH_*` 가 하나도 없다.** 실제 방어선은
+> `removeJobExecutions()` 하나였고, 그것이 못 지우는 바로 그 행이 문제였다. 잡을 돌리는 배치
+> 테스트를 전수로 세어 보니 **29개 중 25개가 같은 `asOf`(2026-01-15T09:00)** 를 쓴다 —
+> `BinlogFormatGuardWiringTest` 가 그렇게 깨졌고 같은 조건이 24개 더 있었다.
+>
+> ```bash
+> grep -rl "jobOperator\|launch(" --include='*.java' batch/src/test | wc -l   # 29
+> ```
+>
+> **지금은 `VerificationSeed.clear()` 안에서 함께 부른다.** 이미 데이터를 비우는 자리라
+> 부르는 쪽이 늘 필요가 없고, 강도가 한 벌로 통일된다. 두 벌이 병존하면
 > *"왜 저기만 지우지"* 를 다음 사람이 판단해야 하고, 판단이 틀리면 순서 의존 초록이 다시 생긴다.
+>
+> ### ⚠️ 그리고 이 변경이 blocker 를 하나 만들었다 — 머지 뒤에 잡혔다
+>
+> `stop()` 을 **무조건** 비웠는데, 그것은 스프링만 부르는 게 아니다 —
+> **Testcontainers 가 기동 실패를 치울 때도 부른다.** 바이트코드로 확인했다:
+>
+> | | |
+> |---|---|
+> | `GenericContainer.start()` | 첫 줄이 `if (containerId != null) return` |
+> | `GenericContainer.stop()` | `containerId`·`containerInfo` 를 `null` 로 되돌리는 **유일한 자리** |
+> | `GenericContainer.tryStart()` | 기동 실패 시 `stop()` 을 부른 뒤 `ContainerLaunchException` |
+>
+> 그래서 CI 에서 첫 기동이 실패하면(이미지 pull 타임아웃 · 메모리 부족 · 포트 고갈)
+> **죽은 컨테이너 id 가 고정되고, 이후 모든 컨텍스트가 그것을 받는다.** 실패 수백 건에
+> 원인 스택은 첫 하나뿐이다 — 위에서 정적 초기화자를 피한 **바로 그 실패 모양**을
+> 뒷문으로 되살린 것이다. 컨텍스트마다 컨테이너를 새로 만들던 시절에는 다음 컨텍스트가
+> 새 객체로 회복했는데, 공유가 그 경로를 없앴다.
+>
+> **지금은 `doStart()` 가 반환한 뒤에만 막는다.** `tryStart` 의 정리 `stop()` 은 그 반환
+> **전에** 불리므로 그 시점 `startedOnce` 가 false 다. `close()` 오버라이드는 지웠다 —
+> `Startable.close()` 가 `stop()` 한 줄이라 조건을 그대로 타는데, 따로 비우면
+> **조건을 건너뛰어** 정리가 다시 죽는다.
+>
+> **가드도 표기법 하나에만 성립했다.** `spring.flyway.locations` 를 평문으로 읽었는데
+> 그 프로퍼티는 `List<String>` 이라 인덱스 표기(`[0]=…`)로도 바인딩되고, 그때
+> `getProperty` 가 `null` 을 줘 **CLEAN 가드가 뚫린다.** `Binder` 로 바꾸고 판정을
+> `CorruptSchema.isCorrupt()` 한 곳에 모았다 — 두 가드가 **같은 함수의 부정**을 쓴다.
+>
+> **이 blocker 를 CodeRabbit 은 세 라운드 동안 못 잡았고, 로컬 코어 리뷰가 바이트코드를
+> 읽어 잡았다.** 봇 하나로는 이 깊이가 안 나온다는 기록으로 남긴다.
 >
 > **제약이 메모리에서 연결 수로 옮겨 갔다.** 캐시된 컨텍스트가 각자 풀을 들고 한 서버에
 > 붙어 `Too many connections` 가 282번 났다. `--max-connections` 를 **`build.gradle` 이 캐시
