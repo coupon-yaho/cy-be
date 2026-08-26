@@ -188,6 +188,56 @@ class VerificationFindingJdbcAdapterTest {
                         .toList());
     }
 
+    /**
+     * <b>제출용 리포트가 읽는 축이다.</b> 판정의 검출 수와 이 합계가 갈리면
+     * {@code finding_type} 에 규칙 목록 밖의 값이 들어갔다는 뜻이고, 그때 봐야 할 것은
+     * 리포트가 아니라 규칙 쪽이다.
+     */
+    @Test
+    @DisplayName("규칙별로 세면 합계가 전체 검출 수와 같다")
+    void countByTypeSumsToTotal() {
+        adapter.appendAll(runId, List.of(
+                VerificationFinding.forHistory(FindingType.ILLEGAL_TRANSITION, 1, "a", "b"),
+                VerificationFinding.forHistory(FindingType.ILLEGAL_TRANSITION, 2, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b")));
+
+        Map<FindingType, Integer> byType = adapter.countByType(runId);
+
+        assertThat(byType)
+                .containsEntry(FindingType.ILLEGAL_TRANSITION, 2)
+                .containsEntry(FindingType.STOCK_MISMATCH, 1);
+        assertThat(byType.values().stream().mapToInt(Integer::intValue).sum())
+                .as("합계가 countOf 와 달라지면 전이표 밖의 finding_type 이 들어간 것이다")
+                .isEqualTo(adapter.countOf(runId));
+    }
+
+    /**
+     * <b>검출이 0인 규칙은 여기서 안 나온다.</b> {@code GROUP BY} 가 없는 것을 못 만들어서다 —
+     * 여섯 규칙을 다 보여 주는 것은 {@code VerifyReportView} 의 몫이고, 그 경계를 여기 못 박는다.
+     */
+    @Test
+    @DisplayName("검출이 없는 규칙은 결과에 없다 — 채우는 것은 저장소 일이 아니다")
+    void omitsRulesWithoutFindings() {
+        adapter.appendAll(runId, List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b")));
+
+        assertThat(adapter.countByType(runId))
+                .hasSize(1)
+                .containsOnlyKeys(FindingType.STOCK_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("남의 실행 검출은 안 센다")
+    void countsOnlyThisRun() {
+        long other = newRun(2);
+        adapter.appendAll(other, List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b")));
+
+        assertThat(adapter.countByType(runId))
+                .as("run_id 조건이 빠지면 제출물이 남의 판정을 싣는다")
+                .isEmpty();
+    }
+
     private Map<String, Object> findByTargetKey(String targetKey) {
         return jdbcClient.sql("""
                         SELECT finding_type, target_key, campaign_id, member_id,

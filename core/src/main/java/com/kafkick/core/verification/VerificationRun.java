@@ -24,7 +24,8 @@ public record VerificationRun(
         String findingsChecksum,
         String datasetFingerprint,
         LocalDateTime startedAt,
-        LocalDateTime finishedAt
+        LocalDateTime finishedAt,
+        Long seedRunId
 ) {
 
     public VerificationRun {
@@ -47,7 +48,7 @@ public record VerificationRun(
     ) {
         return new VerificationRun(
                 null, asOf, fromTs, scope, dataset, attempt,
-                null, null, 0, null, null, startedAt, null
+                null, null, 0, null, null, startedAt, null, null
         );
     }
 
@@ -64,7 +65,8 @@ public record VerificationRun(
             String findingsChecksum,
             String datasetFingerprint,
             LocalDateTime startedAt,
-            LocalDateTime finishedAt
+            LocalDateTime finishedAt,
+            Long seedRunId
     ) {
         if (id == null) {
             throw new IllegalArgumentException("복원하려면 검증 실행 ID가 필요합니다.");
@@ -73,7 +75,7 @@ public record VerificationRun(
         return new VerificationRun(
                 id, asOf, fromTs, scope, dataset, attempt,
                 verdict, statsStatus, findingCount,
-                findingsChecksum, datasetFingerprint, startedAt, finishedAt
+                findingsChecksum, datasetFingerprint, startedAt, finishedAt, seedRunId
         );
     }
 
@@ -100,7 +102,7 @@ public record VerificationRun(
         return new VerificationRun(
                 id, asOf, fromTs, scope, dataset, attempt,
                 decided, statsStatus, detectedCount,
-                checksum, fingerprint, startedAt, finishedTime
+                checksum, fingerprint, startedAt, finishedTime, seedRunId
         );
     }
 
@@ -112,7 +114,7 @@ public record VerificationRun(
         return new VerificationRun(
                 id, asOf, fromTs, scope, dataset, attempt,
                 verdict, status, findingCount,
-                findingsChecksum, datasetFingerprint, startedAt, finishedAt
+                findingsChecksum, datasetFingerprint, startedAt, finishedAt, seedRunId
         );
     }
 

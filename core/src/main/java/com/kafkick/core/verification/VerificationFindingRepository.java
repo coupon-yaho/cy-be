@@ -2,6 +2,7 @@
 package com.kafkick.core.verification;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 읽기는 여기에 없습니다. 판정(양방향 MINUS·checksum)은 300만 행을 자바로 끌어올리지 않고
@@ -46,4 +47,19 @@ public interface VerificationFindingRepository {
      * 정상셋의 0건은 <b>판정 대상</b>이지 미실행이 아닙니다.
      */
     String checksumOf(long runId);
+
+    /**
+     * 이 실행의 검출을 <b>규칙별로</b> 센다. 제출용 리포트가 읽는다.
+     *
+     * <p><b>검출이 0인 규칙은 안 나온다.</b> {@code GROUP BY} 가 없는 것을 못 만들기 때문이다 —
+     * 리포트가 여섯 규칙을 다 보여 주려면 {@link FindingType} 을 기준으로 채워야 한다.
+     * 그 자리를 여기서 메우지 않는 것은, <b>규칙 목록의 주인이 이 포트가 아니기</b> 때문이다.
+     *
+     * <p>합계는 {@link #countOf} 와 같아야 한다. 다르면 {@code finding_type} 에 전이표 밖의
+     * 값이 들어간 것이고, 그때는 리포트가 아니라 규칙 쪽을 봐야 한다.
+     *
+     * @return 검출이 있는 규칙만. 순서는 {@code finding_type} 오름차순으로 고정한다 —
+     *         다만 리포트는 이 순서를 안 쓴다({@code VerifyReportView.of} 가 다시 채운다)
+     */
+    Map<FindingType, Integer> countByType(long runId);
 }

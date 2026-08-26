@@ -42,12 +42,18 @@ import com.kafkick.core.support.exception.ErrorCode;
  * 어긋나는 것은 <i>"에러 형식이 두 벌"</i> 이라 클라이언트에서만 드러난다.
  * 이름을 하나씩 적으면 새 컨트롤러를 만든 사람이 <b>이 파일을 열어 보게 된다.</b>
  *
+ * <p><b>그런데 그 장치가 한 번 안 통했다.</b> CY-590 의 {@code VerifyReportController} 가
+ * 등록 없이 들어왔고, 그 컨트롤러가 404 로 설계한 {@code RUN_NOT_FOUND} 가 500 으로 나갔다 —
+ * <b>아무 테스트도 그것을 안 막았다.</b> 위 문단은 사람에게 거는 기대이고, 기대는 한 번
+ * 어긋나면 두 번 어긋난다. 그래서 {@code BatchApiExceptionHandlerCoverageTest} 가
+ * <b>이 배열과 실제 등록된 컨트롤러 집합이 같은지</b>를 기계로 확인한다.
+ *
  * <p><b>메시지는 카탈로그 것만 나간다.</b> 예외의 {@code detail} 은 로그에만 남긴다 —
  * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 인증이
  * 없으므로 내부 사정을 더 조심해서 다룬다.
  */
 @RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
-        ExpireAdminController.class})
+        ExpireAdminController.class, VerifyReportController.class})
 public class BatchApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(BatchApiExceptionHandler.class);

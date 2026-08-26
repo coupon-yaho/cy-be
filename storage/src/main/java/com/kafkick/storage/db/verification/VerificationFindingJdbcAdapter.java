@@ -3,7 +3,9 @@ package com.kafkick.storage.db.verification;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -11,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Repository;
 
+import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
 
@@ -60,6 +63,23 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
 
     private static final String SELECT_COUNT = """
             SELECT COUNT(*) FROM verification_findings WHERE run_id = :runId
+            """;
+
+    /**
+     * <b>{@code ORDER BY} 는 이 포트의 계약이지 리포트 순서의 근거가 아니다.</b>
+     * {@code GROUP BY} 의 출력 순서를 MySQL 이 보장하지 않으므로 여기서 고정한다.
+     *
+     * <p><b>다만 지금 소비자는 그 순서를 안 쓴다.</b> {@code VerifyReportView.of} 가 결과를
+     * 버리고 {@code FindingType.values()} 로 처음부터 다시 채운다 — 검출이 0인 규칙까지
+     * 보여야 하기 때문이다. 제출물의 결정론을 지는 것은 그 순회이지 이 {@code ORDER BY} 가
+     * 아니다. 한때 여기 그 반대로 적혀 있었다.
+     */
+    private static final String SELECT_COUNT_BY_TYPE = """
+            SELECT finding_type, COUNT(*) AS c
+              FROM verification_findings
+             WHERE run_id = :runId
+             GROUP BY finding_type
+             ORDER BY finding_type
             """;
 
     /**
@@ -143,6 +163,16 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
 
         return DigestValues.hex(digest.digest());
     }
+    @Override
+    public Map<FindingType, Integer> countByType(long runId) {
+        Map<FindingType, Integer> byType = new LinkedHashMap<>();
+        jdbcTemplate.query(SELECT_COUNT_BY_TYPE, new MapSqlParameterSource("runId", runId),
+                (RowCallbackHandler) rs ->
+                        byType.put(FindingType.valueOf(rs.getString("finding_type")),
+                                rs.getInt("c")));
+        return byType;
+    }
+
     private static SqlParameterSource toParams(long runId, VerificationFinding finding) {
         return new MapSqlParameterSource()
                 .addValue("runId", runId)
