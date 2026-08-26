@@ -122,28 +122,42 @@ auto_review:
 > (로컬 코어 리뷰가 바이트코드를 읽어 잡았다), Qodo 는 그 수정 PR 에서 **회귀 테스트가
 > 무력하다**는 것과 **테스트 이름이 실제 단언과 다르다**는 것을 잡았다. 겹치지 않는다.
 
-#### 실측으로 확인한 것 / 아직 모르는 것
+#### 설정은 공식 레퍼런스로 맞췄다
 
-| | |
+`.pr_agent.toml` 의 키는 [Qodo 설정 레퍼런스](https://docs.qodo.ai/install-and-configure/configuration-overview/configuration-and-command-reference)에서 확인했다.
+
+> **처음엔 CodeRabbit 설정을 키 이름만 바꿔 옮겼다가 대부분 틀렸다.**
+> `[config].response_language` · `[ignore].glob` · `[pr_description].generate_ai_title` 은
+> **존재하지 않는 키**였다. 두 도구가 같은 축을 다르게 자른다 — 1:1 대응이 아니다.
+
+| CodeRabbit | Qodo |
 |---|---|
-| ✅ 설정은 **PR head 브랜치**에서 읽힌다 | 이 파일이 `main`·`CY-15` 어디에도 없고 head 에만 있는 상태에서 `[review_agent]` 를 넣자 **리뷰가 한국어로 왔다** |
-| ✅ 언어 키는 `[review_agent].issues_user_guidelines` | `[config].response_language` 만으로는 영어였다 |
-| ❓ **자동으로 도는지 모른다** | 아래 |
+| `language: ko-KR` | **대응 키 없음** — `issues_user_guidelines` 안에서 지시한다 |
+| `tone_instructions` | `[review_agent].issues_user_guidelines` |
+| `profile: assertive` | `inline_comments_severity_threshold = 1` (기본 3 은 High 만) |
+| `auto_review.enabled` | `[github_app].pr_commands` |
+| (없음) | `handle_push_trigger` — **새 커밋마다 재리뷰** |
+| `auto_review.labels: ["!skip-review"]` | `[config].ignore_pr_labels` |
+| `ignore_usernames` | `[config].ignore_pr_authors` |
+| `path_instructions` 16개 | **대응 키 없음** — 교차 규칙만 지시문에 넣고, 원본은 `.coderabbit.yaml` 에 둔다 |
+| `path_filters` | **대응 키 없음** — `allow_only_specific_folders` 는 반대 방향이라 안 썼다 |
+| `pre_merge_checks.title: off` | `[qodo_describe_agent].publish_mode = "comment"` — 봇이 PR 본문을 안 덮는다 |
 
-> **두 번 틀렸다.** 처음엔 `.coderabbit.yaml` 이 네 브랜치에 있는 것을 보고 *"base 에서
-> 읽는다"* 로 단정했다(상관을 원인으로). 다음엔 Qodo 가 *"기본 브랜치 루트여야 한다"* 고
-> 리뷰한 것을 **검증 없이** 문서에 옮겼다 — **내 손의 반증(한국어 응답)을 무시하고.**
-> 리뷰 지적도 근거로 판단한다는 원칙을 안 지킨 것이다.
+**설정을 읽는 곳** — 문서가 *"기본 브랜치(default branch)"* 라고 명시한다. 다만 **PR head 에
+있어도 그 PR 리뷰에는 반영된다**(실측: `main`·`CY-15` 어디에도 없이 head 에만 둔 상태에서
+한국어 지시가 먹혔다). 그래서 **팀 전체에 적용하려면 `main` 에 올려야 한다.**
 
-##### 자동 리뷰 여부 — 교란된 실험이라 결론이 없다
+**확인 방법** — PR 에 `/config` 를 치면 Qodo 가 실제로 로드한 설정을 보여준다.
 
-PR #119 에서 Qodo 는 `/review` 를 쳐야 왔다. 하지만 **그 PR 은 Qodo 설치 *전에* 열렸다** —
-`pull_request.opened` 이벤트가 이미 지나가 자동 리뷰가 돌 기회 자체가 없었다.
+##### 자동 리뷰 여부 — 이제 설정으로 정한다
 
-**가르는 법** — 설치 뒤에 **새로 여는 PR** 에서 부르지 않고 기다린다. 알아서 붙으면 자동이다.
+`[github_app].pr_commands` 가 PR 이 열릴 때 무엇을 돌릴지 정한다. PR #119 에서 Qodo 가
+`/review` 를 쳐야 왔던 것은 ⑴ 그 PR 이 Qodo 설치 **전에** 열려 `pull_request.opened` 가
+이미 지나갔고 ⑵ 그 키를 안 줘서 기본 동작을 탔기 때문이다.
 
-**그때까지 `.coderabbit.yaml` 의 `auto_review` 는 켜 둔다.** 둘 다 꺼 두면 자동 리뷰가
-하나도 없는 구간이 생기는데, 그 구간은 **조용해서 아무도 모른다.**
+**`.coderabbit.yaml` 의 `auto_review` 는 아직 켜 둔다.** 새 PR 에서 Qodo 가 자동으로 도는
+것을 확인한 뒤에 끈다 — 둘 다 꺼 두면 자동 리뷰가 없는 구간이 생기고, 그 구간은
+**조용해서 아무도 모른다.**
 
 #### ⚠️ 머지 게이트가 바뀐다
 
