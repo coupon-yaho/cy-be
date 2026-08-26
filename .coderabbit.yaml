@@ -48,7 +48,29 @@ reviews:
   # suggested_labels 는 켜 둔다 — 아래 labeling_instructions 로 영역 라벨을 붙이게 했다
 
   auto_review:
-    enabled: true
+    # ── 자동 리뷰는 Qodo 가 한다. CodeRabbit 은 부를 때만 온다 (2026-08-26) ──────
+    #
+    # **무료 OSS 티어의 한도가 팀 규모를 못 받친다.** 하루에 두어 번이 한계인데
+    # 협업자가 다섯이다. 실측(2026-08-26): 07:57 한도 · 11:27 통과 · 11:47 한도 ·
+    # 13:01 통과. 한 티켓에서 수정 커밋을 두어 번 밀면 그날 몫을 혼자 다 쓴다.
+    #
+    # 그래서 **자동 리뷰를 Qodo(`qodo-code-review[bot]`)로 옮기고, 이 파일은 남긴다.**
+    # 아래 path_instructions 16개가 이 프로젝트의 리뷰 기준 자체라, 버리는 것이
+    # 아니라 **부를 때 쓰는 정밀 도구**로 둔다:
+    #
+    #     @coderabbitai review        증분
+    #     @coderabbitai full review   전체
+    #
+    # 코어 경로(발급·재고·검증)를 건드린 PR 처럼 **한 번은 이 기준으로 봐야 하는 것**에
+    # 아껴 쓴다. 한도가 남아 있을 때만 응답한다는 것을 알고 부를 것.
+    #
+    # ⚠️ **머지 게이트가 이 변경에 걸려 있다.** 지금까지 승인 1건을 CodeRabbit 의
+    #    자동 APPROVED 가 채워 왔는데, 자동 리뷰를 끄면 그것이 안 온다. Qodo 는
+    #    COMMENTED 만 낸다(실측). 즉 **사람이 승인해야 한다** — 그것이 원래
+    #    `docs/03` 1.2절이 정한 것이고("리뷰어 최소 1명 승인"), 3.5a절이
+    #    "CodeRabbit 을 required reviewer 로 등록하지 말 것" 이라고 못 박은 이유다.
+    #    되돌아간 것이지 새로 생긴 제약이 아니다.
+    enabled: false
     drafts: false
 
     # ── 3계층 브랜치 구조 대응 (docs/03-collaboration.md 1.1절) ──────────
