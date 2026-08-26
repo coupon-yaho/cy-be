@@ -31,10 +31,12 @@ public interface VerificationRunRepository {
     /**
      * <b>대조한 정답 묶음을 실행 행에 남긴다.</b> CORRUPT 전용이다.
      *
-     * <p>{@code VerificationRun} 레코드에 넣지 않았다. 이 값을 읽는 코드가 없고 — 게이트는
-     * {@code verdict} 를 읽는다 — 사람이 나중에 <i>"어느 묶음과 대조해 통과했나"</i> 를 조회하는
-     * 증적이다. 레코드에 넣으면 {@code start}·{@code restore}·{@code finish} 와 <b>그 호출자
-     * 전부</b>가 {@code null} 을 실어 나르게 된다 — 대부분 테스트다. 필요해지는 날 그때 올린다.
+     * <p><b>그 "필요해지는 날" 이 왔다</b>(CY-590 의 제출용 리포트). 한때 이 값을 읽는 코드가
+     * 없어 {@code VerificationRun} 레코드에 안 넣었는데, 리포트가 <i>"어느 묶음과 대조해
+     * 통과했나"</i> 를 응답에 실어야 해서 레코드로 올렸다.
+     *
+     * <p><b>쓰기는 여전히 이 메서드가 전담한다.</b> {@code INSERT}·{@code UPDATE} 어느 쪽도
+     * 이 컬럼을 안 건드리므로 덮어쓰기 사고가 없다. 읽기는 {@code restore} 의 마지막 인자다.
      *
      * <p>수치를 적지 않는다. 호출자 수는 테스트가 늘 때마다 바뀌어 <b>적는 순간 낡는다.</b>
      */

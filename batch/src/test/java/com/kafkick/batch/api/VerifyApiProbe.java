@@ -58,6 +58,15 @@ final class VerifyApiProbe {
         return MAPPER.treeToValue(json(response).path("data"), type);
     }
 
+    /**
+     * <b>봉투를 벗겨 {@code data} 를 노드로 준다.</b> 위 {@code body} 는 타입으로 받는데,
+     * 리포트처럼 <b>필드가 실렸는지 자체</b>를 재는 경우에는 타입 변환이 그 사실을 지운다 —
+     * 없는 필드가 기본값으로 채워지기 때문이다.
+     */
+    static JsonNode data(HttpResponse<String> response) {
+        return json(response).path("data");
+    }
+
     /** 에러 응답의 {@code error} 노드. 규약상 {@code status}·{@code code}·{@code message} 가 있다. */
     static JsonNode error(HttpResponse<String> response) {
         return json(response).path("error");

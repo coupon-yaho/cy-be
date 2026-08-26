@@ -292,7 +292,7 @@ verification_findings(
 
 > `04-review-checklist.md` 가 `occurred_at` 으로 적혀 있었는데 스키마 컬럼명은 `created_at` 이다. ✅ **정정 완료.**
 
-### 리포트의 PII 규칙 — `PRD:2062` 가 이미 정했다
+### 리포트의 PII 규칙 — `PRD:2143` 이 이미 정했다
 
 > 집계값만. **`member_id` 는 남기되 이름·연락처 금지.**
 
@@ -495,14 +495,24 @@ coupons.status             =  ISSUED
 **같은 데이터원에서 나온다** — `verification_runs` + `verification_findings`. 형태만 다르다.
 
 ```
-개발용   GET /api/v1/admin/verify/runs/{runId}    JSON
+개발용   GET /api/v1/admin/verify/runs/{executionId}          JSON
          → ⑤가 "검증 실행 이력" 패널에서 렌더링
-제출용   최종 run 을 Markdown 으로 덤프           D13에 1회
+제출용   GET /api/v1/admin/verify/reports/latest?dataset=&scope=   JSON   D13에 1회
 ```
 
-**PII 규칙은 `PRD:2062` 가 이미 정했다** — *"집계값만. `member_id` 는 남기되 이름·연락처 금지."* `members` 조인 금지를 코드 규칙으로 박는다.
+> **⚠️ 둘 다 이 절이 쓰인 뒤에 바뀌었다(CY-590).** 개발용은 `{runId}` 가 아니라
+> **`{executionId}`** 로 찾는다. 제출용은 **Markdown 이 아니라 JSON** 이다 — Markdown 을
+> 고른 원래 이유(커밋되고 GitHub 이 렌더링하고 diff 가 된다)는 JSON 도 전부 만족하고,
+> 개발용 JSON 과 형식이 갈리지 않는 편이 낫다고 판단했다.
 
-**저장 위치 충돌도 해소된다** — 개발용은 API 라 파일이 없고, 제출용 Markdown 은 `.gitignore` 의 `*.csv` 에 안 걸린다. `docs/` 아래 커밋한다.
+**PII 규칙은 `PRD:2143` 이 이미 정했다** — *"집계값만. `member_id` 는 남기되 이름·연락처 금지."*
+`members` 조인 금지를 코드 규칙으로 박는다. **`member_id` 자체는 실린다** —
+`DUP_PER_MEMBER` 의 `target_key` 가 `COUPON:{id}|MEMBER:{id}` 이고, `PRD:385` 가 그 이유를
+적었다: *"마스킹하면 검증 리포트에서 어느 회원이 중복 발급됐는지를 쓸 수 없습니다."*
+
+**저장 위치 충돌도 해소된다** — 개발용은 화면이 읽고, 제출용은 응답을 그대로 떠서
+`reports` 브랜치의 `verify/*.json` 으로 커밋한다(`scripts/dump-verify-report.sh`).
+`.gitignore` 의 `*.csv` 에 안 걸린다.
 
 > **④에게 남는 일은 API 하나뿐이다.** 렌더링은 ⑤ 소관이고, 제출 문서는 D13에 최종 run 을 한 번 덤프하면 된다.
 

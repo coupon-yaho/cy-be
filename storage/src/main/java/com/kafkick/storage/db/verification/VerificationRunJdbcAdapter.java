@@ -57,7 +57,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     private static final String SELECT_BY_ID = """
             SELECT id, as_of, from_ts, scope, dataset, attempt,
                    verdict, stats_status, finding_count,
-                   findings_checksum, dataset_fingerprint, started_at, finished_at
+                   findings_checksum, dataset_fingerprint, started_at, finished_at,
+                   seed_run_id
               FROM verification_runs
              WHERE id = :id
             """;
@@ -65,7 +66,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     private static final String SELECT_BY_PARAMS = """
             SELECT id, as_of, from_ts, scope, dataset, attempt,
                    verdict, stats_status, finding_count,
-                   findings_checksum, dataset_fingerprint, started_at, finished_at
+                   findings_checksum, dataset_fingerprint, started_at, finished_at,
+                   seed_run_id
               FROM verification_runs
              WHERE as_of = :asOf AND dataset = :dataset
                AND scope = :scope AND attempt = :attempt
@@ -93,7 +95,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     private static final String SELECT_LATEST_CLOSED = """
             SELECT id, as_of, from_ts, scope, dataset, attempt,
                    verdict, stats_status, finding_count,
-                   findings_checksum, dataset_fingerprint, started_at, finished_at
+                   findings_checksum, dataset_fingerprint, started_at, finished_at,
+                   seed_run_id
               FROM verification_runs
              WHERE dataset = :dataset AND scope = :scope
                AND origin = 'BATCH'
@@ -116,7 +119,8 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
             rs.getString("findings_checksum"),
             rs.getString("dataset_fingerprint"),
             rs.getObject("started_at", LocalDateTime.class),
-            rs.getObject("finished_at", LocalDateTime.class)
+            rs.getObject("finished_at", LocalDateTime.class),
+            rs.getObject("seed_run_id", Long.class)
     );
 
     private final JdbcClient jdbcClient;
@@ -151,7 +155,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 run.asOf(), run.fromTs(), run.scope(), run.dataset(), run.attempt(),
                 run.verdict(), run.statsStatus(), run.findingCount(),
                 run.findingsChecksum(), run.datasetFingerprint(),
-                run.startedAt(), run.finishedAt()
+                run.startedAt(), run.finishedAt(), run.seedRunId()
         );
     }
 

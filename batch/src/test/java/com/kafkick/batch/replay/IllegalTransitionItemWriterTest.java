@@ -50,6 +50,12 @@ class IllegalTransitionItemWriterTest {
         public String checksumOf(long runId) {
             return "";
         }
+
+        @Override
+        public java.util.Map<com.kafkick.core.verification.FindingType, Integer> countByType(
+                long runId) {
+            return java.util.Map.of();
+        }
     }
 
     @Test

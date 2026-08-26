@@ -140,9 +140,35 @@ class VerificationRunTest {
     void rejectRestoreWithoutId() {
         assertThatThrownBy(() -> VerificationRun.restore(
                 null, AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 1,
-                null, null, 0, null, null, STARTED_AT, null))
+                null, null, 0, null, null, STARTED_AT, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("복원하려면 검증 실행 ID가 필요합니다.");
+    }
+
+    /**
+     * <b>{@code seed_run_id} 는 오래 쓰기 전용이었다.</b> {@code recordComparedManifest} 가
+     * 쓰기만 하고 읽는 길이 없어서, 대조 결과를 낼 수 없었다. 리포트가 그 자리를 열었다.
+     *
+     * <p>레코드에 필드를 더해 놓고 아무도 안 재면 <b>어댑터가 매핑을 빠뜨려도 초록이다</b> —
+     * 그때 리포트는 오염셋 실행을 "대조 안 함" 으로 조용히 내보낸다.
+     */
+    @Test
+    @DisplayName("복원하면 대조한 시드 실행이 함께 온다 — 없으면 대조 결과를 못 낸다")
+    void restoreCarriesSeedRunId() {
+        VerificationRun run = VerificationRun.restore(
+                7L, AS_OF, null, ScopeType.FULL, DatasetType.CORRUPT, 1,
+                null, null, 0, null, null, STARTED_AT, null, 11L);
+
+        assertThat(run.seedRunId()).isEqualTo(11L);
+    }
+
+    @Test
+    @DisplayName("시작 시점에는 대조 상대가 없다")
+    void startHasNoSeedRun() {
+        assertThat(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CORRUPT, 1, STARTED_AT).seedRunId())
+                .as("대조는 실행 도중 Step 이 정한다. 시작할 때 알 수 없다")
+                .isNull();
     }
 
     private static VerificationRun fullRun() {

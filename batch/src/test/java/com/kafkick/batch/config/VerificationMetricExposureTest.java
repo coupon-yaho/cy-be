@@ -409,7 +409,7 @@ class VerificationMetricExposureTest {
         runs.update(VerificationRun.restore(
                 saved.id(), asOf, null, ScopeType.FULL, dataset, 1,
                 verdict, StatsStatus.COMPLETE, findings, "checksum", "fingerprint",
-                asOf.plusMinutes(1), asOf.plusMinutes(2)));
+                asOf.plusMinutes(1), asOf.plusMinutes(2), null));
     }
 
     /** 시드가 심는 것과 같은 모양의 행. {@code origin} 만 다르다. */

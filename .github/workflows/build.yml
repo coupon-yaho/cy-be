@@ -23,6 +23,15 @@ name: Build
 #      git ls-remote --tags https://github.com/<owner>/<repo> | grep 'refs/tags/<major>'
 #    나머지 워크플로 넷은 아직 태그(security-audit 은 @main)라 별도로 맞춰야 한다.
 #
+# ⚠️ 위 규율은 `uses:` 에만 걸려 있고 **`docker run` 이미지에는 안 걸려 있다.**
+#    이 파일이 쓰는 이미지 셋(prometheus·alertmanager·shellcheck)은 전부 **버전 태그**로 고정한다.
+#    태그도 재지정 가능한 참조라 논리적으로는 같은 위험인데, 지금 그렇게 두는 이유는
+#    ⑴ 이미 둘이 그 방식이라 새것만 digest 로 바꾸면 규율이 두 벌이 되고,
+#    ⑵ 이 스텝들은 secrets 를 안 읽고 `permissions: contents: read` 아래서 돈다.
+#    **다만 러너 환경 자체(체크아웃된 소스·GITHUB_TOKEN)에는 닿는다** —
+#    셋을 한꺼번에 digest 로 올리는 것은 별도 작업으로 남긴다. 여기 안 적어 두면 "규율이 있는데 코드가
+#    안 지킨다" 로 읽히고, 그 불일치가 규율 전체의 신뢰를 깎는다.
+#
 # ⚠️ 이 파일은 에픽 브랜치에도 있어야 한다.
 #    pull_request 이벤트는 워크플로를 PR 의 head 에서 가져온다. main 에만 넣으면
 #    main 보다 앞서 갈라진 에픽에서 자른 브랜치에는 파일이 없어 돌지 않는다.
@@ -117,6 +126,36 @@ jobs:
       # 들여쓰기 하나가 틀어져도 compose 를 직접 띄우기 전까지 아무도 모르는 상태를 막는다.
       - name: mock 리시버 구문 검사
         run: python3 -m py_compile infra/alertmanager/alert-sink.py
+
+      # 셸 스크립트도 검사한다. mock 리시버와 같은 이유이고, 여기가 더 세다 —
+      # scripts/ 는 **예약 작업이 무인으로 돌리는 코드**라 사람이 그 순간을 못 본다.
+      # dump-verify-report.sh 는 git commit·push 를 부르므로 오타 하나가 조용히 사고가 된다.
+      #
+      # bash -n 은 문법만 본다. shellcheck 가 그 위를 본다 — 따옴표 없는 확장,
+      # 안 잡히는 종료코드, trap 안에서 지금 펴지는 변수 같은 것들.
+      #
+      # ⚠️ docs/measurements/ 는 **일부러 뺀다.** 그것은 과거 실측을 재현하는 기록이라,
+      #    린터를 만족시키려고 고치면 그 파일이 더 이상 "그 숫자를 낸 스크립트" 가 아니다.
+      #    문법 검사(bash -n)까지만 받는다.
+      #
+      # LC_ALL 이 없으면 한글 주석에서 컨테이너가 "invalid character" 로 죽는다(실측).
+      - name: 셸 스크립트 검사
+        run: |
+          set -euo pipefail
+          # mapfile 을 안 쓴다 — bash 4+ 전용이라 손으로 못 재는 자리가 생긴다.
+          ALL=$(git ls-files '*.sh' | grep -v '^gradlew' || true)
+          [ -n "$ALL" ] || { echo "::error::검사할 .sh 를 못 찾았다"; exit 1; }
+          echo "$ALL" | while read -r f; do bash -n "$f"; done
+
+          # **빈 목록이면 죽는다.** 없으면 shellcheck 가 인자 없이 돌아 stdin 을 읽고
+          # 조용히 성공한다 — 그 초록은 "검사했다" 가 아니라 "아무것도 안 봤다" 다.
+          OPS=$(git ls-files 'scripts/*.sh')
+          [ -n "$OPS" ] || { echo "::error::scripts/ 에 .sh 가 없다"; exit 1; }
+          # shellcheck 는 여러 파일을 인자로 받는다. 경로에 공백이 없는 것은
+          # 위 git ls-files 목록으로 보증된다(있으면 따옴표로 감싸 나온다).
+          # shellcheck disable=SC2086
+          docker run --rm -e LC_ALL=C.UTF-8 -v "$PWD:/mnt:ro" -w /mnt \
+            koalaman/shellcheck:v0.10.0 $OPS
 
       # 라우팅도 파싱한다. 여기가 깨지면 규칙은 평가되는데 알림이 아무 데도 안 간다.
       - name: 알림 라우팅 검사
