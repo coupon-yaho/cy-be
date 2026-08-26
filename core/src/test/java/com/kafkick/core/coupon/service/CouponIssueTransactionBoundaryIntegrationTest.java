@@ -27,6 +27,7 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.query.CouponIssuePolicySnapshot;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyClaimService;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyPolicy;
@@ -83,8 +84,7 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             assertThat(result.result().issuanceId()).isEqualTo(100L);
             assertThat(trace.events()).containsExactly(
                     "preflight-idempotency",
-                    "policy-round",
-                    "policy-existing",
+                    "policy-snapshot",
                     "callback",
                     "authoritative-operation",
                     "idempotency-insert"
@@ -129,35 +129,28 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             CouponRoundRepository repository = mock(
                     CouponRoundRepository.class
             );
-            when(repository.findById(10L)).thenAnswer(invocation -> {
-                trace.add("policy-round");
-                assertReadOnlyTransaction();
-                return Optional.of(couponRound());
-            });
-            return repository;
-        }
-
-        @Bean
-        IssuanceRepository issuanceRepository(BoundaryTrace trace) {
-            IssuanceRepository repository = mock(IssuanceRepository.class);
-            when(repository.existsForCouponRoundAndMember(10L, 20L))
+            when(repository.findIssuePolicySnapshot(10L, 20L))
                     .thenAnswer(invocation -> {
-                        trace.add("policy-existing");
+                        trace.add("policy-snapshot");
                         assertReadOnlyTransaction();
-                        return false;
+                        return Optional.of(new CouponIssuePolicySnapshot(
+                                couponRound(),
+                                false
+                        ));
                     });
             return repository;
         }
 
         @Bean
+        IssuanceRepository issuanceRepository() {
+            return mock(IssuanceRepository.class);
+        }
+
+        @Bean
         CouponIssuePolicyValidator couponIssuePolicyValidator(
-                CouponRoundRepository couponRoundRepository,
-                IssuanceRepository issuanceRepository
+                CouponRoundRepository couponRoundRepository
         ) {
-            return new CouponIssuePolicyValidator(
-                    couponRoundRepository,
-                    issuanceRepository
-            );
+            return new CouponIssuePolicyValidator(couponRoundRepository);
         }
 
         @Bean

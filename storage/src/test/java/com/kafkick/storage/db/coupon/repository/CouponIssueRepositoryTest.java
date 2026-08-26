@@ -40,6 +40,7 @@ import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
+import com.kafkick.core.coupon.query.CouponIssuePolicySnapshot;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
 import com.kafkick.core.support.exception.BusinessException;
@@ -324,6 +325,36 @@ class CouponIssueRepositoryTest {
                     TimeUnit.SECONDS
             )).isTrue();
         }
+    }
+
+    @Test
+    @DisplayName("회차 정책과 1인 1매 여부를 한 번의 조회로 읽는다")
+    void readsPolicyAndDuplicateFlagInOneQuery() {
+        CouponIssuePolicySnapshot before = couponRoundRepository
+                .findIssuePolicySnapshot(10L, 1L)
+                .orElseThrow();
+
+        assertThat(before.couponRound().id()).isEqualTo(10L);
+        assertThat(before.couponRound().validDays()).isPositive();
+        assertThat(before.couponRound().eligibleGrades()).isNotEmpty();
+        assertThat(before.alreadyIssued()).isFalse();
+
+        issue(1L);
+
+        CouponIssuePolicySnapshot after = couponRoundRepository
+                .findIssuePolicySnapshot(10L, 1L)
+                .orElseThrow();
+        assertThat(after.alreadyIssued()).isTrue();
+        assertThat(couponRoundRepository.findIssuePolicySnapshot(10L, 2L)
+                .orElseThrow()
+                .alreadyIssued()).isFalse();
+    }
+
+    @Test
+    @DisplayName("없는 회차는 사전검증 조회에서 빈 값이다")
+    void returnsEmptySnapshotForMissingCouponRound() {
+        assertThat(couponRoundRepository.findIssuePolicySnapshot(999L, 1L))
+                .isEmpty();
     }
 
     @Test
