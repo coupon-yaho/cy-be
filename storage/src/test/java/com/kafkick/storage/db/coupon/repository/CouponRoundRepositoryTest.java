@@ -43,6 +43,7 @@ import com.kafkick.core.coupon.port.CouponRoundLifecyclePort;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.core.coupon.service.CouponRoundLifecycleService;
 import com.kafkick.core.coupon.service.result.CouponRoundLifecycleResult;
+import com.kafkick.core.observation.SpringAfterCommitCampaignClosedEventPublisher;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
 
@@ -57,6 +58,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         CouponRoundLifecycleAdapter.class,
         CouponRoundCreationService.class,
         CouponRoundLifecycleService.class,
+        SpringAfterCommitCampaignClosedEventPublisher.class,
         CouponTemplateRepositoryImpl.class,
         CouponRoundRepositoryTest.AuditTestConfig.class
 })
