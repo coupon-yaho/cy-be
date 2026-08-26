@@ -45,6 +45,41 @@ public interface CouponRoundJpaRepository
             @Param("couponRoundId") Long couponRoundId
     );
 
+    /**
+     * 회차 정책과 1인 1매 여부를 한 번의 왕복으로 읽습니다.
+     *
+     * <p>회차는 PK const 접근, 존재 확인은 {@code uk_coupon_member} 한 건 확인으로 처리됩니다.
+     * 인덱스 작업량은 두 쿼리로 나눴을 때와 같고 왕복만 하나 줄어듭니다.
+     */
+    @Query(value = """
+            SELECT coupon.id AS couponRoundId,
+                   coupon.template_id AS templateId,
+                   coupon.brand_id AS brandId,
+                   coupon.name AS name,
+                   coupon.policy_type AS policyType,
+                   coupon.discount_rate AS discountRate,
+                   coupon.max_discount_amount AS maxDiscountAmount,
+                   coupon.discount_amount AS discountAmount,
+                   coupon.valid_days AS validDays,
+                   coupon.eligible_grades_mask AS eligibleGradesMask,
+                   coupon.open_at AS openAt,
+                   coupon.close_at AS closeAt,
+                   coupon.status AS status,
+                   coupon.generated_at AS generatedAt,
+                   EXISTS (
+                         SELECT 1
+                         FROM issuances issuance
+                         WHERE issuance.coupon_id = coupon.id
+                           AND issuance.member_id = :memberId
+                   ) AS alreadyIssued
+              FROM coupons coupon
+             WHERE coupon.id = :couponRoundId
+            """, nativeQuery = true)
+    Optional<CouponIssuePolicyProjection> findIssuePolicySnapshot(
+            @Param("couponRoundId") Long couponRoundId,
+            @Param("memberId") Long memberId
+    );
+
     @Query(
             value = """
                     SELECT coupon.id AS couponRoundId,

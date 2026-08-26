@@ -18,6 +18,9 @@ import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.query.CouponIssuePolicySnapshot;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 import com.kafkick.storage.db.coupon.entity.CouponStockEntity;
 import com.kafkick.storage.db.coupon.mapper.CouponRoundEntityMapper;
@@ -40,6 +43,49 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
         this.couponRoundJpaRepository = couponRoundJpaRepository;
         this.couponStockJpaRepository = couponStockJpaRepository;
         this.entityManager = entityManager;
+    }
+
+    @Override
+    public Optional<CouponIssuePolicySnapshot> findIssuePolicySnapshot(
+            Long couponRoundId,
+            Long memberId
+    ) {
+        try {
+            return couponRoundJpaRepository
+                    .findIssuePolicySnapshot(couponRoundId, memberId)
+                    .map(CouponRoundRepositoryImpl::toSnapshot);
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "쿠폰 발급 사전검증 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    private static CouponIssuePolicySnapshot toSnapshot(
+            CouponIssuePolicyProjection projection
+    ) {
+        CouponRound couponRound = CouponRound.restore(
+                projection.getCouponRoundId(),
+                projection.getTemplateId(),
+                projection.getBrandId(),
+                projection.getName(),
+                CouponPolicyType.valueOf(projection.getPolicyType()),
+                projection.getDiscountRate(),
+                projection.getMaxDiscountAmount(),
+                projection.getDiscountAmount(),
+                projection.getValidDays(),
+                MembershipGrade.fromMask(projection.getEligibleGradesMask()),
+                projection.getOpenAt(),
+                projection.getCloseAt(),
+                CouponRoundStatus.valueOf(projection.getStatus()),
+                projection.getGeneratedAt()
+        );
+        return new CouponIssuePolicySnapshot(
+                couponRound,
+                projection.getAlreadyIssued() != null
+                        && projection.getAlreadyIssued() != 0L
+        );
     }
 
     @Override

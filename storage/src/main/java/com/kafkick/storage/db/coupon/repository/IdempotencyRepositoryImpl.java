@@ -57,6 +57,49 @@ public class IdempotencyRepositoryImpl implements IdempotencyRepository {
     }
 
     @Override
+    public boolean insertCompleted(
+            String key,
+            Long memberId,
+            Long issuanceId,
+            String requestHash,
+            String responseBody,
+            Instant createdAt
+    ) {
+        if (memberId == null || memberId <= 0
+                || issuanceId == null || issuanceId <= 0
+                || responseBody == null || responseBody.isBlank()
+                || createdAt == null) {
+            throw new IdempotencyPersistenceException(
+                    "완료할 멱등 레코드 대상 값이 올바르지 않습니다."
+            );
+        }
+        try {
+            jdbcTemplate.update(
+                    """
+                    INSERT INTO idempotency_records (
+                        idem_key, member_id, issuance_id, request_hash,
+                        status, response_body, created_at
+                    ) VALUES (?, ?, ?, ?, 'DONE', ?, ?)
+                    """,
+                    key,
+                    memberId,
+                    issuanceId,
+                    requestHash,
+                    responseBody,
+                    Timestamp.from(createdAt)
+            );
+            return true;
+        } catch (DuplicateKeyException exception) {
+            return false;
+        } catch (DataAccessException exception) {
+            throw new IdempotencyPersistenceException(
+                    "멱등 처리 결과 저장에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
     public Optional<IdempotencyRecord> findByKey(String key) {
         try {
             return jdbcTemplate.query(

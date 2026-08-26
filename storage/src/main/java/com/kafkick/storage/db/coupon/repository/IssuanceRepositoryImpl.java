@@ -4,8 +4,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-import jakarta.persistence.EntityManager;
-
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
@@ -32,14 +30,11 @@ public class IssuanceRepositoryImpl
     private static final String MEMBER_FOREIGN_KEY = "member_id";
 
     private final IssuanceJpaRepository issuanceJpaRepository;
-    private final EntityManager entityManager;
 
     public IssuanceRepositoryImpl(
-            IssuanceJpaRepository issuanceJpaRepository,
-            EntityManager entityManager
+            IssuanceJpaRepository issuanceJpaRepository
     ) {
         this.issuanceJpaRepository = issuanceJpaRepository;
-        this.entityManager = entityManager;
     }
 
     /**
@@ -73,7 +68,6 @@ public class IssuanceRepositoryImpl
             IssuanceEntity saved = issuanceJpaRepository.saveAndFlush(
                     IssuanceEntityMapper.toEntity(issuance)
             );
-            entityManager.refresh(saved);
             return IssuanceEntityMapper.toDomain(saved);
         } catch (DataIntegrityViolationException exception) {
             if (isMemberDuplicate(exception)) {
