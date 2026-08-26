@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -29,6 +31,7 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
@@ -36,6 +39,8 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.consistency.ConsistencyFinalObservation;
+import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
 import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
@@ -64,6 +69,7 @@ class AdminObservabilityConfigTest {
                     CustomerOutcomeCalculator.class,
                     StockRiskCalculator.class,
                     CampaignOverviewCalculator.class,
+                    ConsistencyActionCalculator.class,
                     OperationActionCalculator.class,
                     OverviewStatusCalculator.class)
             .withPropertyValues(
@@ -151,6 +157,51 @@ class AdminObservabilityConfigTest {
                             0.25, java.time.Duration.ofMinutes(3), java.time.Duration.ofMinutes(11),
                             java.time.Duration.ofMinutes(4), java.time.Duration.ofMinutes(12)));
                 });
+    }
+
+    @Test
+    void injectsTheAvailableFinalReaderAndConsistencyCalculatorIntoOverviewService() {
+        ConsistencyFinalReader finalReader = couponIds -> Map.of(
+                couponIds.getFirst(),
+                new ConsistencyFinalObservation(SourceStatus.N_A, null));
+
+        contextRunner.withBean(ConsistencyFinalReader.class, () -> finalReader)
+                .run(context -> {
+                    AdminOverviewService service = context.getBean(AdminOverviewService.class);
+                    assertThat(ReflectionTestUtils.getField(service, "consistencyFinalReader"))
+                            .isSameAs(finalReader);
+                    assertThat(ReflectionTestUtils.getField(service, "consistencyActionCalculator"))
+                            .isSameAs(context.getBean(ConsistencyActionCalculator.class));
+                });
+    }
+
+    @Test
+    void usesPendingFinalReaderWhenObservationStorageIsAbsent() {
+        contextRunner.run(context -> {
+            ConsistencyFinalReader reader = (ConsistencyFinalReader) ReflectionTestUtils.getField(
+                    context.getBean(AdminOverviewService.class), "consistencyFinalReader");
+
+            assertThat(reader).isInstanceOf(PendingConsistencyFinalReader.class);
+            assertThat(reader.findLatestByCouponIds(List.of(11L, 12L)))
+                    .containsOnly(
+                            org.assertj.core.api.Assertions.entry(11L,
+                                    new ConsistencyFinalObservation(SourceStatus.PENDING, null)),
+                            org.assertj.core.api.Assertions.entry(12L,
+                                    new ConsistencyFinalObservation(SourceStatus.PENDING, null)));
+            assertThat(reader.findLatestByCouponIds(List.of())).isEmpty();
+            Map<Long, ConsistencyFinalObservation> normalized =
+                    reader.findLatestByCouponIds(List.of(12L, 11L, 12L));
+            assertThat(normalized.keySet()).containsExactly(12L, 11L);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> normalized.put(
+                            13L, new ConsistencyFinalObservation(SourceStatus.PENDING, null)))
+                    .isInstanceOf(UnsupportedOperationException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                            reader.findLatestByCouponIds(List.of(0L)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                            reader.findLatestByCouponIds(java.util.Arrays.asList(11L, null)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        });
     }
 
     /** 최신 series 배선과 CY-455의 DB Reader fallback이 같은 context에서 공존함을 검증합니다. */

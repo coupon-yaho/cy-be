@@ -2,6 +2,7 @@ package com.kafkick.api.admin.observability;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -16,6 +17,7 @@ import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
@@ -23,6 +25,7 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
@@ -118,14 +121,19 @@ public class AdminObservabilityConfig {
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
             CampaignOverviewCalculator campaignOverviewCalculator,
+            ObjectProvider<ConsistencyFinalReader> consistencyFinalReaderProvider,
+            ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator
     ) {
+        ConsistencyFinalReader consistencyFinalReader = consistencyFinalReaderProvider
+                .getIfAvailable(PendingConsistencyFinalReader::new);
         return new AdminOverviewService(
                 timeProvider, campaignDataReader, runtimeConfigStore, policyProperties.toCorePolicy(),
                 observationSource, issuanceFlowCalculator,
                 issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
                 stockRiskCalculator, campaignOverviewCalculator,
+                consistencyFinalReader, consistencyActionCalculator,
                 operationActionCalculator, overviewStatusCalculator);
     }
 
