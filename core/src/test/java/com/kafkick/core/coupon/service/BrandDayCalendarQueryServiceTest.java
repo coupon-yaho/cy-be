@@ -109,13 +109,20 @@ class BrandDayCalendarQueryServiceTest {
     }
 
     @Test
-    @DisplayName("42일을 초과하는 달력 조회를 거부한다")
-    void rejectTooLongRange() {
-        assertThatThrownBy(() -> service().findBetween(
+    @DisplayName("프론트가 요청한 두 달 범위의 달력을 조회한다")
+    void queryTwoMonthRange() {
+        when(couponTemplateRepository.findAllActiveByIdAsc())
+                .thenReturn(List.of());
+        when(calendarQueryPort.findBetween(
+                Instant.parse("2026-07-31T15:00:00Z"),
+                Instant.parse("2026-09-30T15:00:00Z")
+        )).thenReturn(List.of());
+
+        assertThat(service().findBetween(
                 LocalDate.of(2026, 8, 1),
-                LocalDate.of(2026, 9, 12),
+                LocalDate.of(2026, 9, 30),
                 AS_OF
-        )).isInstanceOf(BusinessException.class);
+        )).isEmpty();
     }
 
     @Test
@@ -136,8 +143,7 @@ class BrandDayCalendarQueryServiceTest {
         return new BrandDayCalendarQueryService(
                 couponTemplateRepository,
                 calendarQueryPort,
-                SEOUL,
-                42
+                SEOUL
         );
     }
 
