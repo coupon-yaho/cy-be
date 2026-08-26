@@ -83,7 +83,7 @@ coupon-yaho
 │   │   └── config/                      JPA Auditing
 │   ├── src/main/resources
 │   │   ├── storage.yml.example          DataSource·JPA·Flyway 공통 설정
-│   │   └── db/migration/                Flyway DDL — V1 + V<YYYYMMDD><NN>__*.sql (연번은 금지)
+│   │   └── db/migration/                Flyway DDL — 기준 둘(V1 · V11) + V<YYYYMMDD><NN>__*.sql
 │   └── src/testFixtures/java/…/db       테스트 컨테이너 설정, @RepositoryTest
 │
 │   ※ entity/repository/mapper 3분할은 JPA 도메인만이다. 검증·만료는 300만~534만 행을

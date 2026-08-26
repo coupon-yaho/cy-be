@@ -67,9 +67,10 @@ import org.springframework.transaction.annotation.Isolation;
  * <p><b>{@code V11__batch_metadata.sql} 의 머리말은 낡았다.</b> 그 파일은
  * {@code spring.batch.jdbc.initialize-schema: never} 를 근거로 대는데 <b>Boot 4.1 에 그
  * 프로퍼티 그룹이 없다</b>({@code BatchProperties} 의 중첩 클래스가 {@code Job(name)} 하나뿐이다).
- * 그리고 그 파일이 없어도 <b>기동은 성공한다</b> — 첫 잡 실행에서
- * {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 로 죽는다. 이미 적용된 마이그레이션이라
- * 체크섬 때문에 손대지 않고 정정을 여기 둔다.
+ * 그리고 <b>지금은 기동에서 막힌다</b> — {@code SchemaPresenceGuard} 가 배치 메타 테이블을
+ * 보고 {@code SCHEMA_NOT_MIGRATED} 로 거절한다. 그 가드가 붙기 전에는 기동이 통과하고 첫 잡
+ * 실행에서 {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 로 죽었다. 이미 적용된
+ * 마이그레이션이라 체크섬 때문에 파일을 손대지 않고 정정을 여기 둔다.
  *
  * <p><b>그 파일의 첫 줄도 이 계보에서는 사실이 아니다.</b> {@code "기존 쿠폰 마이그레이션 뒤에
  * 적용하는"} 이라고 적혀 있는데, 여기서는 {@code V1} 바로 뒤에 돈다 — 그 문장은 {@code main}
