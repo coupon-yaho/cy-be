@@ -14,13 +14,15 @@ import org.springframework.context.annotation.Configuration;
 import com.kafkick.api.admin.support.config.AdminAnalyticsProperties;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
+import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsQuery;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
+import com.kafkick.core.admin.analytics.AdminAnalyticsSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
 
-/** 관리자 분석 Source가 설정에 따라 Mock 또는 Pending으로 안전하게 조립되는지 검증합니다. */
+/** 관리자 분석 Source가 실제 Source 또는 Pending으로 안전하게 조립되는지 검증합니다. */
 class AdminAnalyticsConfigTest {
 
     private static final Instant NOW = Instant.parse("2026-08-23T02:00:00Z");
@@ -41,6 +43,9 @@ class AdminAnalyticsConfigTest {
     void defaultsToPendingSource() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
+            assertThat(context).hasSingleBean(AdminAnalyticsSource.class);
+            assertThat(context.getBean(AdminAnalyticsSource.class))
+                    .isInstanceOf(AdminAnalyticsPendingSource.class);
             assertThat(context.getBean(AdminAnalyticsService.class)
                     .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.NONE);
             assertThat(context.getBean(AdminAnalyticsProperties.class).staleAfter())
@@ -48,40 +53,40 @@ class AdminAnalyticsConfigTest {
         });
     }
 
-    /** 로컬·시연용으로 명시적으로 켜면 개발용 Mock 원천을 쓰는지 검증합니다. */
+    /** 제거된 Mock 설정이 남아 있어도 가짜 집계 대신 Pending 응답을 사용합니다. */
     @Test
-    void enablesMockSourceExplicitly() {
+    void ignoresRemovedMockSettingAndUsesPendingSource() {
         runner.withPropertyValues("admin.analytics.mock-enabled=true")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(context.getBean(AdminAnalyticsService.class)
-                            .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.MOCK);
-                });
-    }
-
-    /** Mock을 명시적으로 비활성화하면 실제 Source 연결 전 Pending 응답을 사용하는지 검증합니다. */
-    @Test
-    void disablesMockSourceExplicitly() {
-        runner.withPropertyValues("admin.analytics.mock-enabled=false")
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(context.getBean(AdminAnalyticsProperties.class).staleAfter())
-                            .isEqualTo(java.time.Duration.ofHours(24));
-                    assertThat(context.getBean(AdminAnalyticsFreshnessPolicy.class).evaluate(
-                            AggregateAvailability.AVAILABLE,
-                            NOW.minusSeconds(60),
-                            NOW)).isEqualTo(SourceStatus.VALID);
+                    assertThat(context).hasSingleBean(AdminAnalyticsSource.class);
+                    assertThat(context.getBean(AdminAnalyticsSource.class))
+                            .isInstanceOf(AdminAnalyticsPendingSource.class);
                     assertThat(context.getBean(AdminAnalyticsService.class)
                             .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.NONE);
                 });
     }
 
+    /** 실제 Source 연결 전에는 별도 설정 없이 Pending 응답을 사용하는지 검증합니다. */
+    @Test
+    void usesDefaultFreshnessPolicyWithPendingSource() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(AdminAnalyticsProperties.class).staleAfter())
+                    .isEqualTo(java.time.Duration.ofHours(24));
+            assertThat(context.getBean(AdminAnalyticsFreshnessPolicy.class).evaluate(
+                    AggregateAvailability.AVAILABLE,
+                    NOW.minusSeconds(60),
+                    NOW)).isEqualTo(SourceStatus.VALID);
+            assertThat(context.getBean(AdminAnalyticsService.class)
+                    .getAnalytics(query()).sourceType()).isEqualTo(AnalyticsSourceType.NONE);
+        });
+    }
+
     /** 명시적으로 제공한 최신성 기준이 0 이하이면 기동 단계에서 거부하는지 검증합니다. */
     @Test
     void rejectsNonPositiveStaleAfter() {
-        runner.withPropertyValues(
-                        "admin.analytics.mock-enabled=true",
-                        "admin.analytics.stale-after=0s")
+        runner.withPropertyValues("admin.analytics.stale-after=0s")
                 .run(context -> assertThat(context).hasFailed());
     }
 

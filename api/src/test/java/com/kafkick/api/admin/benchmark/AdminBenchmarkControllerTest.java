@@ -39,7 +39,8 @@ class AdminBenchmarkControllerTest {
     private final ConsistencyFinalizer consistencyFinalizer = mock(ConsistencyFinalizer.class);
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
             new AdminBenchmarkController(Optional.of(archiver), Optional.of(startOrchestrator),
-                    Optional.of(finalizeOrchestrator), Optional.of(consistencyFinalizer)));
+                    Optional.of(finalizeOrchestrator), Optional.empty(), Optional.empty(),
+                    Optional.empty(), Optional.of(consistencyFinalizer)));
 
     @Test
     @DisplayName("replica 수는 양수 범위만 HTTP에서 받고 배포값 일치는 gate가 검사한다")
@@ -111,10 +112,11 @@ class AdminBenchmarkControllerTest {
         mockMvc.perform(post("/api/v1/admin/benchmarks/1/consistency/retry"))
                 .andExpect(status().isOk());
         verify(consistencyFinalizer).retry(1L);
-        mockMvc.perform(post("/api/v1/admin/benchmarks/1/k6-result")
+        mockMvc.perform(post("/api/v1/admin/benchmarks/1/client-result")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tps\":1847.2,\"p99Millis\":412.3,\"failureCount\":0,"
-                                + "\"failureRate\":0.0,\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
+                        .content("{\"requestCount\":100,\"failureCount\":0,\"droppedIterations\":0,"
+                                + "\"tps\":1847.2,\"p95Millis\":206.1,\"p99Millis\":412.3,"
+                                + "\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
                 .andExpect(status().isNotImplemented())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
     }
@@ -123,7 +125,8 @@ class AdminBenchmarkControllerTest {
     void finalizeMatrixParameterStillRequiresCommandSecret() throws Exception {
         MockMvc withoutSecret = AdminControllerContractTestSupport.mockMvcWithoutAdminHeaders(
             new AdminBenchmarkController(Optional.of(archiver), Optional.of(startOrchestrator),
-                Optional.of(finalizeOrchestrator), Optional.empty()));
+                Optional.of(finalizeOrchestrator), Optional.empty(), Optional.empty(),
+                Optional.empty(), Optional.empty()));
 
         withoutSecret.perform(post("/api/v1/admin/benchmarks/7/finalize;a=b")
                 .header(com.kafkick.api.caller.HeaderCallerResolver.USER_ID_HEADER, "812934")
@@ -132,14 +135,15 @@ class AdminBenchmarkControllerTest {
         verify(finalizeOrchestrator, never()).finalizeRun(7L);
     }
 
-    /** k6 실패율의 확정 범위인 0~1을 벗어난 요청을 400으로 거부하는지 검증합니다. */
+    /** 실패 건수가 전체 요청 수를 넘는 공식 결과를 400으로 거부하는지 검증합니다. */
     @Test
-    @DisplayName("k6 실패 비율은 0 이상 1 이하만 허용한다")
-    void k6ResultRejectsFailureRateAboveOne() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/benchmarks/1/k6-result")
+    @DisplayName("client-result 실패 건수는 전체 요청 수를 넘을 수 없다")
+    void clientResultRejectsFailureCountAboveRequestCount() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/benchmarks/1/client-result")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tps\":1.0,\"p99Millis\":1.0,\"failureCount\":2,"
-                                + "\"failureRate\":1.1,\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
+                        .content("{\"requestCount\":1,\"failureCount\":2,\"droppedIterations\":0,"
+                                + "\"tps\":1.0,\"p95Millis\":1.0,\"p99Millis\":1.0,"
+                                + "\"measuredAt\":\"2026-08-16T00:00:00Z\"}"))
                 .andExpect(status().isBadRequest());
     }
 
@@ -185,7 +189,8 @@ class AdminBenchmarkControllerTest {
     void retryArchiveReturnsNotImplementedWhenFeatureIsUnavailable() throws Exception {
         MockMvc unavailable = AdminControllerContractTestSupport.mockMvc(
                 new AdminBenchmarkController(Optional.empty(), Optional.of(startOrchestrator),
-                    Optional.of(finalizeOrchestrator), Optional.empty()));
+                    Optional.of(finalizeOrchestrator), Optional.empty(), Optional.empty(),
+                    Optional.empty(), Optional.empty()));
         unavailable.perform(post("/api/v1/admin/benchmarks/7/archive/retry"))
                 .andExpect(status().isNotImplemented())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-001"));

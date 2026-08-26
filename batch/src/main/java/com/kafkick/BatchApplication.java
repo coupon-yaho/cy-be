@@ -44,9 +44,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * AdminOverviewService 만 우연히 빠져 있었는데(그것은 @Service 가 아니라 api 의 @Bean 이다),
  * BatchApplicationTests 가 그 우연을 계약처럼 단언하고 있었다.
  *
- * 드러난 계기는 fixture 스위치다 — admin.mock.enabled 를 기본 꺼짐으로 바꾸자 **batch 가 기동에서
- * 죽었다**. 관리자 화면과 아무 상관 없는 프로세스가 그 화면의 fixture 에 매여 있었다는 뜻이다.
- * batch 쪽 설정에 스위치를 켜서 덮으면 그 결합이 그대로 남으므로, 결합을 끊는다.
+ * 드러난 계기는 관리자 공통 Fixture 배선이었다. 관리자 화면과 아무 상관 없는 프로세스가 그 화면의
+ * Fixture에 매여 있었고, 배치 쪽에서 설정으로 덮으면 결합이 그대로 남는다. 그래서 결합을 끊는다.
  *
  * ⚠️ Spring Boot 4.1 의 @SpringBootApplication 에는 excludeFilters 속성이 **없다**(실측:
  *    "cannot find symbol: method excludeFilters()"). 그래서 @ComponentScan 을 따로 단다.

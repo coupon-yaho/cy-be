@@ -115,28 +115,6 @@ management:
       expiry:
         "[http.server.requests]": 10s
 
-admin:
-  # ⚠️ [OBS-36] **이 두 스위치는 화면에 가짜 데이터를 내보낸다.** 둘 다 기본값이 꺼짐이고,
-  #    여기서 켜는 것은 로컬·시연에서 A-06~A-11 의 실제 Repository 가 아직 없기 때문이다.
-  #    실제 저장소가 붙는 티켓에서 해당 줄을 지운다.
-  #
-  #    끈 상태의 동작이 둘이 다르다:
-  #      admin.mock.enabled=false   → 운영현황·문의·발급이력·상세지표 빈이 없어 **기동 실패**.
-  #                                   그 화면들의 응답 계약에 "아직 없음" 을 담을 자리가 없어
-  #                                   빈 결과로 대신하면 "조회했는데 없음" 과 구분되지 않는다.
-  #      analytics.mock-enabled=false → 화면이 뜨고 PENDING 이 나간다. 이쪽만 그 자리가 있다.
-  #
-  # ⚠️ **이 파일의 fallback 은 꺼짐이다.** 여기는 컨테이너에 마운트되는 배포용 설정이고,
-  #    같은 파일이 ${DB_OBS_USERNAME} · ${DB_PASSWORD} 처럼 **기본값 없는 변수**를 이미
-  #    요구하므로 .env 없이는 애초에 뜨지 않는다. 즉 값은 항상 .env 가 준다 —
-  #    fallback 은 "아무도 안 정했을 때" 의 값이므로 안전한 쪽이어야 한다.
-  #    켜는 것은 .env 의 ADMIN_MOCK_ENABLED 한 줄이고 거기 이유가 적혀 있다.
-  mock:
-    enabled: ${ADMIN_MOCK_ENABLED:false}
-  analytics:
-    max-range-years: ${ADMIN_ANALYTICS_MAX_RANGE_YEARS:1}
-    mock-enabled: ${ADMIN_ANALYTICS_MOCK_ENABLED:false}
-
 observation:
   datasource:
     enabled: ${OBS_DATASOURCE_ENABLED:true}

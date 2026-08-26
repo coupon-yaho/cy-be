@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Mock 또는 실제 집계 저장소가 관리자 분석 계산에 제공하는 기술 중립 원천값입니다. */
+/** 실제 집계 저장소가 관리자 분석 계산에 제공하는 기술 중립 원천값입니다. */
 public record AdminAnalyticsDataset(
         AnalyticsSourceType sourceType,
         CatalogSnapshot catalog,
@@ -107,9 +107,8 @@ public record AdminAnalyticsDataset(
         }
     }
 
-    /** 분석 데이터가 Mock, 실제 집계 DB 또는 아직 연결되지 않은 원천인지 구분합니다. */
+    /** 분석 데이터가 실제 집계 DB 또는 아직 연결되지 않은 원천인지 구분합니다. */
     public enum AnalyticsSourceType {
-        MOCK,
         AGGREGATE_DB,
         NONE
     }

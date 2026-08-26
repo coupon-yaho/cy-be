@@ -54,7 +54,7 @@ class AdminMappingContractTest {
             "POST /api/v1/admin/benchmarks/start",
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/stop",
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/finalize",
-            "POST /api/v1/admin/benchmarks/{benchmarkRunId}/k6-result",
+            "POST /api/v1/admin/benchmarks/{benchmarkRunId}/client-result",
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/archive/retry",
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/consistency/retry",
             "GET /api/v1/admin/campaigns",

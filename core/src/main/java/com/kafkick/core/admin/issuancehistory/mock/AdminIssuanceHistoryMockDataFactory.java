@@ -6,8 +6,12 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Objects;
+import java.util.Comparator;
 
-
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReadResult;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReader;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
@@ -19,14 +23,10 @@ import com.kafkick.core.coupon.domain.IssuanceStatus;
  * <p>모든 프로세스와 Factory 인스턴스가 같은 고정 기준을 사용하며, 요약, 마스킹, 페이지와 같은
  * 파생 결과 없이 저장소가 반환할 원시 행만 제공합니다.</p>
  *
- * <p><b>[OBS-36] 이 클래스는 더 이상 스프링 컴포넌트가 아니다.</b> 등록 여부는 API 가 소유한다 —
- * {@code AdminFixtureConfig} 가 {@code admin.mock.enabled=true} 일 때만 빈으로 만든다(기본 꺼짐).
- *
- * <p>예전에는 조건 없는 {@code @Component} 였다. 그래서 <b>운영에서도 이 fixture 가 200 으로
- * 나갔다</b> — 화면은 정상으로 보이고 수치만 가짜였다. 왜 조건을 여기가 아니라 API 가 갖는지,
- * 끈 상태가 왜 PENDING 이 아니라 기동 실패인지는 {@code AdminFixtureConfig} 에 적었다.
+ * <p>이 Factory는 스프링 컴포넌트가 아닙니다. 순수 계산·직렬화 테스트가 직접 생성할 수 있지만
+ * 생산 Bean으로 등록하지 않아 실제 이력 Reader를 대체하지 않습니다.
  */
-public class AdminIssuanceHistoryMockDataFactory {
+public class AdminIssuanceHistoryMockDataFactory implements AdminIssuanceHistoryReader {
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final Instant FIXTURE_V1_ANCHOR = Instant.parse("2026-08-23T00:00:00Z");
@@ -73,6 +73,36 @@ public class AdminIssuanceHistoryMockDataFactory {
                 raw(1_008L, 5_004L, "A101000000000004", 101L, IssuanceStatus.ISSUED,
                         IssuanceStatus.CANCELLED, IssuanceEventType.CANCEL,
                         FIXTURE_V1_ANCHOR.minus(Duration.ofHours(1)))));
+    }
+
+    /** 테스트에서만 기존 fixture 행을 Reader 계약으로 제한해 반환합니다. */
+    @Override
+    public AdminIssuanceHistoryReadResult read(AdminIssuanceHistoryQuery query, Instant snapshotAt) {
+        List<RawHistory> population = create(snapshotAt).histories().stream()
+                .filter(row -> (query.couponId() == null || row.couponId() == query.couponId())
+                        && (query.fromInclusive() == null || !row.occurredAt().isBefore(query.fromInclusive()))
+                        && (query.toExclusive() == null || row.occurredAt().isBefore(query.toExclusive()))
+                        && (query.eventType() == null || row.eventType() == query.eventType()))
+                .sorted(Comparator.comparing(RawHistory::occurredAt).reversed()
+                        .thenComparing(Comparator.comparingLong(RawHistory::historyId).reversed()))
+                .toList();
+        long issue = count(population, IssuanceEventType.ISSUE);
+        long use = count(population, IssuanceEventType.USE);
+        long cancelUse = count(population, IssuanceEventType.CANCEL_USE);
+        long cancel = count(population, IssuanceEventType.CANCEL);
+        long expire = count(population, IssuanceEventType.EXPIRE);
+        List<RawHistory> candidates = population.stream().filter(row -> query.before() == null
+                || row.occurredAt().isBefore(query.before().occurredAt())
+                || (row.occurredAt().equals(query.before().occurredAt())
+                && row.historyId() < query.before().historyId())).limit(query.limit() + 1L).toList();
+        return new AdminIssuanceHistoryReadResult(candidates,
+                new HistorySummary(issue + use + cancelUse + cancel + expire,
+                        issue, use, cancelUse, cancel, expire));
+    }
+
+    /** 이벤트 유형의 fixture 행 수를 반환합니다. */
+    private static long count(List<RawHistory> rows, IssuanceEventType eventType) {
+        return rows.stream().filter(row -> row.eventType() == eventType).count();
     }
 
     /**

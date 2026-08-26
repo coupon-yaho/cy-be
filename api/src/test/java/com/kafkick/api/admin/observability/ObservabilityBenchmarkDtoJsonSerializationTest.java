@@ -22,6 +22,8 @@ import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.verification.VerdictType;
 import com.kafkick.core.admin.BenchmarkRunState;
+import com.kafkick.core.benchmark.BenchmarkArchiveStatus;
+import com.kafkick.core.benchmark.BenchmarkRunStatus;
 import com.kafkick.core.admin.MetricsWindow;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.Verdict;
@@ -222,13 +224,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
                         EngineVersion.V1,
                         "baseline",
                         OBSERVED_AT,
-                        null,
-                        BenchmarkRunState.RUNNING,
-                        (VerdictType) null,
-                        new ObservedValue<>(10.5, SourceStatus.VALID, OBSERVED_AT),
-                        new ObservedValue<>(null, SourceStatus.PENDING, null),
-                        new ObservedValue<>(0.0, SourceStatus.VALID, OBSERVED_AT),
-                        new ObservedValue<>(0L, SourceStatus.VALID, OBSERVED_AT)
+                        BenchmarkRunStatus.RUNNING,
+                        BenchmarkArchiveStatus.NONE
                 )),
                 null,
                 false
@@ -236,8 +233,8 @@ class ObservabilityBenchmarkDtoJsonSerializationTest {
 
         assertThat(objectMapper.writeValueAsString(response))
                 .contains("\"benchmarkRunId\":9")
-                .doesNotContain("\"verdict\":")
-                .contains("\"issueAttemptRps\":{\"value\":10.5,\"state\":\"VALID\"")
-                .contains("\"overIssuedCount\":{\"value\":0,\"state\":\"VALID\"");
+                .contains("\"runStatus\":\"RUNNING\"")
+                .contains("\"archiveStatus\":\"NONE\"")
+                .doesNotContain("\"verdict\":", "\"overIssuedCount\":");
     }
 }

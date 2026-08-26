@@ -59,6 +59,17 @@ public interface BenchmarkRunRepository {
     List<BenchmarkRun> findRecent(int limit);
 
     /**
+     * 업무 필터와 복합 Keyset을 DB에 적용한 후보 행을 최신순으로 읽습니다.
+     *
+     * @param query 선택 필터, 과거 방향 cursor와 요청 페이지 크기
+     * @param fetchLimit 다음 페이지 판정까지 포함한 제한 수; 호출자는 {@code query.limit() + 1}을 전달한다
+     * @return {@code started_at DESC, id DESC} 순서의 후보 회차
+     */
+    default List<BenchmarkRun> findPage(BenchmarkRunQuery query, int fetchLimit) {
+        throw new UnsupportedOperationException("Benchmark 목록 조회 어댑터가 연결되지 않았습니다.");
+    }
+
+    /**
      * {@code RUNNING} 인 회차만 {@code LOAD_STOPPED} 로 넘긴다.
      *
      * @param id 회차 식별자

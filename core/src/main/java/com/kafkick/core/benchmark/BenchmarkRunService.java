@@ -194,6 +194,26 @@ public class BenchmarkRunService {
     }
 
     /**
+     * 업무 필터가 적용된 Benchmark 회차를 최신 시작 시각부터 과거 방향으로 조회합니다.
+     *
+     * @param query 선택 필터, 복합 Keyset과 요청 페이지 크기
+     * @return 다음 과거 페이지의 위치를 포함한 회차 페이지
+     */
+    public BenchmarkRunPage search(BenchmarkRunQuery query) {
+        Objects.requireNonNull(query, "query");
+        List<BenchmarkRun> candidates = repository.findPage(query, query.limit() + 1);
+        boolean hasOlder = candidates.size() > query.limit();
+        // limit + 1번째 후보는 반환하지 않고 다음 과거 페이지의 존재만 알린다.
+        List<BenchmarkRun> items = hasOlder
+                ? List.copyOf(candidates.subList(0, query.limit()))
+                : List.copyOf(candidates);
+        BenchmarkRunPosition nextBefore = hasOlder
+                ? positionOf(items.getLast())
+                : null;
+        return new BenchmarkRunPage(items, nextBefore, hasOlder);
+    }
+
+    /**
      * 진행 중인 회차. batch 의 관측 대상 회차 선택이 이 값을 본다 — 없으면 관측만 도는 상태다.
      *
      * @return 진행 중인 회차; 없으면 빈 값
@@ -207,6 +227,11 @@ public class BenchmarkRunService {
             throw new IllegalArgumentException("limit 은 0 보다 커야 한다: " + limit);
         }
         return repository.findRecent(limit);
+    }
+
+    /** 다음 과거 방향 Keyset cursor를 현재 페이지의 마지막 회차에서 만듭니다. */
+    private static BenchmarkRunPosition positionOf(BenchmarkRun run) {
+        return new BenchmarkRunPosition(run.startedAt(), run.id());
     }
 
     private BenchmarkRun reload(long id) {

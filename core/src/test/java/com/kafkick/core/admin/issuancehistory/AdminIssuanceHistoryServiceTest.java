@@ -10,24 +10,23 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
-import com.kafkick.core.admin.issuancehistory.mock.AdminIssuanceHistoryMockDataFactory;
 import com.kafkick.core.support.TimeProvider;
 
-/** Verifies the Core service assembles one request from one time and one raw source. */
+/** Verifies the Core service assembles one request from one time and one reader result. */
 class AdminIssuanceHistoryServiceTest {
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-22T00:00:00Z");
 
     /** Detects duplicate dependency calls or a service that recreates the calculator result. */
     @Test
-    void readsTimeCreatesSourceAndCalculatesExactlyOnceThenReturnsTheCalculatorResult() {
+    void readsTimeReadsOnceAndCalculatesExactlyOnceThenReturnsTheCalculatorResult() {
         RecordingTimeProvider timeProvider = new RecordingTimeProvider();
-        RecordingMockDataFactory factory = new RecordingMockDataFactory();
+        RecordingReader reader = new RecordingReader();
         AdminIssuanceHistoryResult expected = new AdminIssuanceHistoryResult(
                 List.of(), null, false, new HistorySummary(0L, 0L, 0L, 0L, 0L, 0L));
         RecordingCalculator calculator = new RecordingCalculator(expected);
         AdminIssuanceHistoryService service = new AdminIssuanceHistoryService(
-                timeProvider, factory, calculator);
+                timeProvider, reader, calculator);
         AdminIssuanceHistoryQuery query = new AdminIssuanceHistoryQuery(
                 101L, null, null, null, null, AdminIssuanceHistoryQuery.DEFAULT_LIMIT);
 
@@ -35,11 +34,12 @@ class AdminIssuanceHistoryServiceTest {
 
         assertThat(result).isSameAs(expected);
         assertThat(timeProvider.instantCount).isEqualTo(1);
-        assertThat(factory.createCount).isEqualTo(1);
-        assertThat(factory.lastSnapshotAt).isEqualTo(SNAPSHOT_AT);
+        assertThat(reader.readCount).isEqualTo(1);
+        assertThat(reader.lastQuery).isSameAs(query);
+        assertThat(reader.lastSnapshotAt).isEqualTo(SNAPSHOT_AT);
         assertThat(calculator.calculateCount).isEqualTo(1);
-        assertThat(calculator.lastSource).isSameAs(factory.source);
-        assertThat(calculator.lastQuery).isSameAs(query);
+        assertThat(calculator.lastReadResult).isSameAs(reader.readResult);
+        assertThat(calculator.lastLimit).isEqualTo(query.limit());
     }
 
     /** Counts request-time reads while preserving a fixed, externally observable instant. */
@@ -60,20 +60,26 @@ class AdminIssuanceHistoryServiceTest {
         }
     }
 
-    /** Records Factory calls and supplies an otherwise valid empty raw source. */
-    private static final class RecordingMockDataFactory extends AdminIssuanceHistoryMockDataFactory {
+    /** Records Reader calls and supplies an otherwise valid empty read result. */
+    private static final class RecordingReader implements AdminIssuanceHistoryReader {
 
-        private int createCount;
+        private int readCount;
+        private AdminIssuanceHistoryQuery lastQuery;
         private Instant lastSnapshotAt;
-        private AdminIssuanceHistorySource source;
+        private AdminIssuanceHistoryReadResult readResult;
 
-        /** Records the Factory boundary without calculating or enriching the raw source. */
+        /** Records the Reader boundary without calculating or enriching the raw source. */
         @Override
-        public AdminIssuanceHistorySource create(Instant snapshotAt) {
-            createCount++;
+        public AdminIssuanceHistoryReadResult read(
+                AdminIssuanceHistoryQuery query,
+                Instant snapshotAt
+        ) {
+            readCount++;
+            lastQuery = query;
             lastSnapshotAt = snapshotAt;
-            source = new AdminIssuanceHistorySource(List.of());
-            return source;
+            readResult = new AdminIssuanceHistoryReadResult(
+                    List.of(), new HistorySummary(0L, 0L, 0L, 0L, 0L, 0L));
+            return readResult;
         }
     }
 
@@ -82,8 +88,8 @@ class AdminIssuanceHistoryServiceTest {
 
         private final AdminIssuanceHistoryResult expected;
         private int calculateCount;
-        private AdminIssuanceHistorySource lastSource;
-        private AdminIssuanceHistoryQuery lastQuery;
+        private AdminIssuanceHistoryReadResult lastReadResult;
+        private int lastLimit;
 
         /** Creates a calculator double that returns the specified prebuilt result instance. */
         private RecordingCalculator(AdminIssuanceHistoryResult expected) {
@@ -94,12 +100,12 @@ class AdminIssuanceHistoryServiceTest {
         /** Records calculator invocation arguments before returning the prepared result unchanged. */
         @Override
         public AdminIssuanceHistoryResult calculate(
-                AdminIssuanceHistorySource source,
-                AdminIssuanceHistoryQuery query
+                AdminIssuanceHistoryReadResult readResult,
+                int limit
         ) {
             calculateCount++;
-            lastSource = source;
-            lastQuery = query;
+            lastReadResult = readResult;
+            lastLimit = limit;
             return expected;
         }
     }
