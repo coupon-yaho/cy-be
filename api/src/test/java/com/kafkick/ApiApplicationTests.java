@@ -115,6 +115,7 @@ class ApiApplicationTests {
                 .withBean(com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.StockRiskCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.class)
+                .withBean(com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.OperationActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator.class)

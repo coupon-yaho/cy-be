@@ -16,6 +16,7 @@ import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -25,6 +26,9 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.queue.AdminQueueObservationSource;
+import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
+import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
@@ -44,7 +48,8 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
         PrometheusArchiveProperties.class,
         PrometheusSeriesProperties.class,
         OverviewPrometheusProperties.class,
-        AdminOverviewPolicyProperties.class
+        AdminOverviewPolicyProperties.class,
+        AdminQueueMockProperties.class
 })
 public class AdminObservabilityConfig {
 
@@ -107,6 +112,21 @@ public class AdminObservabilityConfig {
                 overviewProperties);
     }
 
+    /**
+     * 운영 기본 PENDING 원천과 프론트 시연용 Mock 원천을 하나의 Core Port로 선택합니다.
+     *
+     * @param properties 명시적 Mock 활성화 여부; 기본값은 false
+     * @return 두 관리자 Service가 공유할 대기열 관측 원천
+     */
+    @Bean
+    public AdminQueueObservationSource adminQueueObservationSource(AdminQueueMockProperties properties) {
+        if (properties.isMockEnabled()) {
+            // Mock은 명시적으로 켠 로컬·프론트 연동 환경에서만 가짜 관측값을 노출합니다.
+            return new MockAdminQueueObservationSource();
+        }
+        return new PendingAdminQueueObservationSource();
+    }
+
     /** API 전용 Prom 관측 원천과 Core 계산기를 기술 중립 Overview Service에 명시적으로 배선합니다. */
     @Bean
     public AdminOverviewService adminOverviewService(
@@ -115,12 +135,14 @@ public class AdminObservabilityConfig {
             RuntimeConfigStore runtimeConfigStore,
             AdminOverviewPolicyProperties policyProperties,
             OverviewObservationSource observationSource,
+            AdminQueueObservationSource queueObservationSource,
             IssuanceFlowCalculator issuanceFlowCalculator,
             IssuanceActionCalculator issuanceActionCalculator,
             CampaignQueueCalculator campaignQueueCalculator,
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
             CampaignOverviewCalculator campaignOverviewCalculator,
+            CampaignPreparationCalculator campaignPreparationCalculator,
             ObjectProvider<ConsistencyFinalReader> consistencyFinalReaderProvider,
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
@@ -130,9 +152,9 @@ public class AdminObservabilityConfig {
                 .getIfAvailable(PendingConsistencyFinalReader::new);
         return new AdminOverviewService(
                 timeProvider, campaignDataReader, runtimeConfigStore, policyProperties.toCorePolicy(),
-                observationSource, issuanceFlowCalculator,
+                observationSource, queueObservationSource, issuanceFlowCalculator,
                 issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
-                stockRiskCalculator, campaignOverviewCalculator,
+                stockRiskCalculator, campaignOverviewCalculator, campaignPreparationCalculator,
                 consistencyFinalReader, consistencyActionCalculator,
                 operationActionCalculator, overviewStatusCalculator);
     }
@@ -162,9 +184,11 @@ public class AdminObservabilityConfig {
             TimeProvider timeProvider,
             AdminCampaignDataReader campaignDataReader,
             CouponIssuanceRateReader issuanceRateReader,
+            AdminQueueObservationSource queueObservationSource,
             CouponMetricsCalculator calculator
     ) {
-        return new AdminCouponMetricsService(timeProvider, campaignDataReader, issuanceRateReader, calculator);
+        return new AdminCouponMetricsService(
+                timeProvider, campaignDataReader, issuanceRateReader, queueObservationSource, calculator);
     }
 
     /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,8 @@ class PreparationObservationTest {
     @Test
     @DisplayName("알 수 없는 준비 상태는 null PENDING null로 보존한다")
     void preservesPendingPreparationWithoutInventingCompletion() {
-        PreparationObservation preparation = new PreparationObservation(null, SourceStatus.PENDING, null);
+        PreparationObservation preparation = new PreparationObservation(
+                null, List.of(), SourceStatus.PENDING, null);
 
         assertThat(preparation.completed()).isNull();
         assertThat(preparation.status()).isEqualTo(SourceStatus.PENDING);
@@ -30,7 +32,8 @@ class PreparationObservationTest {
     @Test
     @DisplayName("확인된 미완료 준비 상태는 false VALID 시각으로 보존한다")
     void preservesConfirmedIncompletePreparation() {
-        PreparationObservation preparation = new PreparationObservation(false, SourceStatus.VALID, OBSERVED_AT);
+        PreparationObservation preparation = new PreparationObservation(
+                false, List.of(PreparationItem.DATABASE_STOCK), SourceStatus.VALID, OBSERVED_AT);
 
         assertThat(preparation.completed()).isFalse();
         assertThat(preparation.status()).isEqualTo(SourceStatus.VALID);
@@ -41,11 +44,13 @@ class PreparationObservationTest {
     @Test
     @DisplayName("값 있는 준비 상태는 완료 여부와 관측 시각을 모두 요구한다")
     void rejectsIncompleteCarryingPreparation() {
-        assertThatThrownBy(() -> new PreparationObservation(null, SourceStatus.VALID, OBSERVED_AT))
+        assertThatThrownBy(() -> new PreparationObservation(null, List.of(), SourceStatus.VALID, OBSERVED_AT))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreparationObservation(Boolean.FALSE, SourceStatus.VALID, null))
+        assertThatThrownBy(() -> new PreparationObservation(
+                Boolean.FALSE, List.of(PreparationItem.DATABASE_STOCK), SourceStatus.VALID, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new PreparationObservation(Boolean.FALSE, SourceStatus.PENDING, null))
+        assertThatThrownBy(() -> new PreparationObservation(
+                Boolean.FALSE, List.of(PreparationItem.DATABASE_STOCK), SourceStatus.PENDING, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

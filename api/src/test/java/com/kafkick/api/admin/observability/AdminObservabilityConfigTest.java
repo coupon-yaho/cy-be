@@ -30,6 +30,7 @@ import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -39,6 +40,9 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.queue.AdminQueueObservationSource;
+import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
+import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.observation.SourceStatus;
@@ -69,6 +73,7 @@ class AdminObservabilityConfigTest {
                     CustomerOutcomeCalculator.class,
                     StockRiskCalculator.class,
                     CampaignOverviewCalculator.class,
+                    CampaignPreparationCalculator.class,
                     ConsistencyActionCalculator.class,
                     OperationActionCalculator.class,
                     OverviewStatusCalculator.class)
@@ -140,6 +145,30 @@ class AdminObservabilityConfigTest {
                     assertThat(policy.toCorePolicy().stockDepletionThreshold())
                             .isEqualTo(java.time.Duration.ofMinutes(10));
                 });
+    }
+
+    /** 기본 운영 설정은 가짜값 대신 PENDING 대기열 원천을 두 Service에 같은 인스턴스로 주입합니다. */
+    @Test
+    void usesOnePendingQueueSourceByDefault() {
+        contextRunner.run(context -> {
+            AdminQueueObservationSource queueSource = context.getBean(AdminQueueObservationSource.class);
+
+            assertThat(queueSource).isInstanceOf(PendingAdminQueueObservationSource.class);
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(AdminOverviewService.class), "queueObservationSource"))
+                    .isSameAs(queueSource);
+            assertThat(ReflectionTestUtils.getField(
+                    context.getBean(AdminCouponMetricsService.class), "queueObservationSource"))
+                    .isSameAs(queueSource);
+        });
+    }
+
+    /** 프론트 연동 환경이 Mock을 명시적으로 켤 때만 결정적 대기열 원천을 선택합니다. */
+    @Test
+    void usesMockQueueSourceOnlyWhenExplicitlyEnabled() {
+        contextRunner.withPropertyValues("admin.queue.mock-enabled=true")
+                .run(context -> assertThat(context.getBean(AdminQueueObservationSource.class))
+                        .isInstanceOf(MockAdminQueueObservationSource.class));
     }
 
     @Test

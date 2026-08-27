@@ -36,6 +36,7 @@ import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
@@ -247,6 +248,7 @@ class AdminOverviewServiceTest {
         AdminOverviewService service = new AdminOverviewService(
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
                 new RecordingReader(catalog), new RecordingRuntimeStore(), POLICY, source,
+                new PendingAdminQueueObservationSource(),
                 new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(), new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(), new CampaignOverviewCalculator(),
@@ -292,7 +294,8 @@ class AdminOverviewServiceTest {
         AdminOverviewService service = new AdminOverviewService(
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
                 new RecordingReader(validCatalog(701L)), new RecordingRuntimeStore(), POLICY,
-                new RecordingObservationSource(), issuance, issuanceAction, queue, outcome, stock,
+                new RecordingObservationSource(), new PendingAdminQueueObservationSource(),
+                issuance, issuanceAction, queue, outcome, stock,
                 campaign, notApplicableFinalReader(), consistencyAction, action, status);
 
         service.getOverview();
@@ -422,7 +425,8 @@ class AdminOverviewServiceTest {
     ) {
         return new AdminOverviewService(
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), reader, runtimeStore, POLICY,
-                observationSource, new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
+                observationSource, new PendingAdminQueueObservationSource(),
+                new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
                 new CampaignOverviewCalculator(), finalReader, new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),

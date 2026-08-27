@@ -36,7 +36,7 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsCalculator;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
 import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
@@ -54,6 +54,7 @@ import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.observation.SourceStatus;
@@ -118,6 +119,7 @@ public final class AdminControllerContractTestSupport {
                         1L, snapshotAt, "test", SourceStatus.VALID)),
                 fixture.create(snapshotAt).policy(),
                 overviewObservationSource(fixture),
+                new PendingAdminQueueObservationSource(),
                 new IssuanceFlowCalculator(),
                 new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(),
@@ -170,6 +172,7 @@ public final class AdminControllerContractTestSupport {
                 new TimeProvider(clock),
                 campaignReader(overviewFixture),
                 pendingCouponIssuanceRateReader(),
+                new PendingAdminQueueObservationSource(),
                 new CouponMetricsCalculator());
     }
 
@@ -179,7 +182,8 @@ public final class AdminControllerContractTestSupport {
             AdminCampaignDataReader reader
     ) {
         return new AdminCouponMetricsService(
-                new TimeProvider(clock), reader, pendingCouponIssuanceRateReader(), new CouponMetricsCalculator());
+                new TimeProvider(clock), reader, pendingCouponIssuanceRateReader(),
+                new PendingAdminQueueObservationSource(), new CouponMetricsCalculator());
     }
 
     /** Controller JSON 계약은 외부 Prometheus 대신 값 없는 PENDING 발급률만 고정합니다. */
@@ -205,7 +209,7 @@ public final class AdminControllerContractTestSupport {
                                                         ? new CouponMetricsSource.StockCounts(
                                                         campaign.totalQuantity(), campaign.activeCount()) : null,
                                                 campaign.stockStatus(), campaign.stockObservedAt()),
-                                        new PreparationObservation(null, SourceStatus.PENDING, null)))
+                                        new PreparationSource(null, null, null, SourceStatus.PENDING, null)))
                                 .toList());
             }
 

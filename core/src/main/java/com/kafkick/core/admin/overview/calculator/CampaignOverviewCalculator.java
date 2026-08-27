@@ -313,6 +313,7 @@ public class CampaignOverviewCalculator {
                 observationOrUnavailable(issuanceFlows, campaign.couponId()),
                 observationOrUnavailable(queueStatuses, campaign.couponId()),
                 observationOrUnavailable(stockForecasts, campaign.couponId()),
+                campaign.preparation().failedItems(),
                 customerImpact,
                 customerImpactText,
                 recommendedAction
