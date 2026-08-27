@@ -37,6 +37,18 @@ class GateMetaTest {
     }
 
     @Test
+    @DisplayName("Lua 가 못 읽는 총재고는 만들 수 없다 — 쓸 수는 있는데 아무도 못 읽는 meta 가 된다")
+    void rejectsTotalQuantityBeyondLuaBound() {
+        assertThat(new GateMeta(GateStatus.OPEN, OPEN_AT, CLOSE_AT, 1, GateMeta.TOTAL_QUANTITY_MAX)
+                .totalQuantity())
+                .as("경계값 자체는 15자리라 정상이다")
+                .isEqualTo(GateMeta.TOTAL_QUANTITY_MAX);
+        assertThatThrownBy(() -> new GateMeta(
+                GateStatus.OPEN, OPEN_AT, CLOSE_AT, 1, GateMeta.TOTAL_QUANTITY_MAX + 1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     @DisplayName("OPEN 이 아닌 값은 전부 닫힌 것으로 읽는다 — 스크립트의 판정과 같은 이분법이다")
     void unknownStatusIsClosed() {
         assertThat(GateStatus.fromWireValue("OPEN")).isEqualTo(GateStatus.OPEN);

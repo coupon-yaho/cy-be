@@ -20,7 +20,18 @@ public final class ClaimResult {
         this.remainingStock = remainingStock;
     }
 
+    /**
+     * @param remainingStock 선점 직후의 잔여 재고. <b>0 은 정상</b>이다 — 마지막 한 장을
+     *     가져간 경우다
+     * @throws IllegalArgumentException 잔여 재고가 음수일 때. 스크립트의 성공 반환은
+     *     {@code left > 0} 일 때의 {@code left - 1} 이라 음수가 될 수 없다 — 음수가 왔다는
+     *     것은 재고 판정이 깨졌다는 뜻이고, 그걸 정상 발급 결과로 흘려보내면 초과 발급이
+     *     <b>성공 응답으로</b> 나간다
+     */
     public static ClaimResult claimed(long remainingStock) {
+        if (remainingStock < 0) {
+            throw new IllegalArgumentException("선점 성공의 잔여 재고는 음수일 수 없습니다.");
+        }
         return new ClaimResult(ClaimOutcome.CLAIMED, remainingStock);
     }
 

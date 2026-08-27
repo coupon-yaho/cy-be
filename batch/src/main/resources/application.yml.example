@@ -161,11 +161,16 @@ observation:
     #      DOMAIN_GAUGE_REMAINING_KEY=cy:v2:stock:{{couponId}}
     #      DOMAIN_GAUGE_ISSUED_EVER_KEY=cy:v2:issued_ever:{{couponId}}
     #      DOMAIN_GAUGE_MEMBER_EVER_KEY=cy:v2:issued:{{couponId}}
-    #      DOMAIN_GAUGE_QUEUE_KEY=                      # V2 에 대기열은 없다
+    #
+    #    대기열 키는 **그대로 둔다.** 빈 값을 넣어도 아래 기본값(V1 키)으로 되돌아갈 뿐이다
+    #    (DomainGaugeProperties 가 blank 를 기본값으로 친다). V2 에는 대기열 자체가 없어
+    #    어느 키를 줘도 그 게이지는 PENDING 으로 남는다 — "V2 = 대기열 없음" 을 N_A 로
+    #    표현하는 것은 S7 부채다(10-작업분할). 지금은 화면이 "준비 중" 으로 보일 뿐
+    #    경보는 아니다.
     #
     #    바깥 중괄호는 Redis 해시태그이고 안쪽이 치환 자리다. 해시태그가 빠지면 Cluster 에서
     #    네 키가 다른 슬롯으로 흩어져 Lua 가 통째로 CROSSSLOT 이다.
-    #    이 네 줄이 IssuanceKeys 와 어긋나면 DomainGaugeV2KeyTemplateContractTest 가 잡는다.
+    #    위 세 줄이 IssuanceKeys 와 어긋나면 DomainGaugeV2KeyTemplateContractTest 가 잡는다.
     remaining-key: ${DOMAIN_GAUGE_REMAINING_KEY:coupon:{couponId}:stock:remaining}
     issued-ever-key: ${DOMAIN_GAUGE_ISSUED_EVER_KEY:coupon:{couponId}:issued}
     member-ever-key: ${DOMAIN_GAUGE_MEMBER_EVER_KEY:coupon:{couponId}:members}
