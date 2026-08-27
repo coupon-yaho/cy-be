@@ -151,6 +151,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `VerifyNotSucceeding` · `VerifyNeverSucceeded` · `VerifyGaugeMissing` | `server` |
 | `VerifyRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
+| `ExpireMakingNoProgress` · `ExpireFailedWithCode` | `server` |
 | `CouponRoundsNotOpening` · `CouponRoundsNotClosing` | `server` |
 | `CouponRoundMetricsUnknown` · `CouponRoundMetricsStale` · `CouponRoundMetricsMissing` | `server` |
 | `CouponRoundSelectFailing` | `server` |

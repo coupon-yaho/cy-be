@@ -903,6 +903,66 @@ groups:
       #
       # ③과 ④를 가르는 것이 실패 카운터다. ③은 다음 만료 창까지 안 변하는 **지속 상태**라
       # 카운터를 안 올린다(안 올리면 하루 1,440 이 쌓여 ExpireMetricsStale 이 엉뚱하게 뜬다).
+
+      # ── docs/13 §2c — "돌기는 도는데 안 줄어든다" ─────────────────────────
+      # **두 조건을 AND 로 묶는 것이 핵심이다.** 처리량 0 자체는 정상이다 —
+      # 만료할 것이 없는 날이 대부분이다. **남은 대상이 있는데 0** 인 것이 사건이다.
+      #
+      # cy_expire_pending 이 아니라 cy_expire_unexplained_pending 이다. 막힌 회차의
+      # 대기는 배치가 일부러 건너뛴 몫이라, 그것으로 묶으면 오염 회차 하나가 남아 있는
+      # 동안 이 알림이 영구히 울린다.
+      #
+      # ⚠️ **창은 만료 주기(24h)보다 넓어야 한다.** 한때 30m 였는데, 만료가 하루 한 번
+      #    04:10 이라 **하루 1,440분 중 1,410분 동안 좌변이 항상 참**이었다 — 남는 것은
+      #    unexplained > 0 하나이고 그것이 곧 ExpireLeavesWorkBehind 의 식 전체다.
+      #    promtool 로 재현했다: 04:10 에 1000건을 넘긴 뒤 eval_time 6h40m 에서 둘이 같이
+      #    떴다. repeat_interval 이 1h 라 그 중복이 시간당 한 번씩 Slack 으로 나간다 —
+      #    §2 를 닫으려는 티켓이 아무도 안 보게 만드는 알림을 하나 더 붙이는 꼴이었다.
+      #    26h 면 "한 주기를 통째로 헛돌았다" 가 된다.
+      #
+      # ⚠️ **게이지가 좌변이어야 한다.** `and` 는 좌변의 값을 낸다. increase(...) == 0 을
+      #    좌변에 두면 $value 가 **항상 0** 이라, summary 가 "아무것도 안 넘기고 있는데
+      #    남은 대기가 0건" 이라는 자기모순이 된다. promtool 이 실제로 그렇게 렌더링했다.
+      - alert: ExpireMakingNoProgress
+        expr: >-
+          cy_expire_unexplained_pending > 0
+          and increase(cy_expire_processed_total[26h]) == 0
+        for: 30m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "만료가 돌기는 하는데 아무것도 안 넘기고 있습니다 (남은 대기 {{ $value }}건)"
+          description: >-
+            한 주기(26시간)를 통째로 도는 동안 넘긴 건수가 0 인데 설명 안 되는 대기가 남아 있습니다.
+            ExpireLeavesWorkBehind 와 축이 다릅니다 — 저쪽은 **남아 있다**,
+            이쪽은 **줄지 않는다** 입니다. 잡이 실패 없이 도는데 진도가 안 나가는
+            상태를 잡습니다(리더 질의가 계속 빈 결과를 내는 경우가 그렇습니다).
+            cy_expire_chunk_fill 이 함께 낮으면 회차 경계에 계속 걸리는 것이고,
+            그것이 0 이면 후보 자체를 못 읽고 있는 것입니다.
+            **잡이 아예 안 뜬 것은 이 알림이 아닙니다** — ExpireNotSucceeding 이 집니다.
+
+      # ── docs/13 §2d — 실패 자리를 에러코드로 가른다 ───────────────────────
+      # spring_batch_job_seconds_count 에는 에러코드 라벨이 없고 붙일 수도 없다.
+      # 그래서 만료의 실패 자리 다섯이 한 시계열로 뭉쳤다. 각각 봐야 할 곳이 다르다 —
+      # 셋은 코드, 하나는 넘긴 파라미터, 하나는 접속 URL 이다.
+      - alert: ExpireFailedWithCode
+        expr: increase(cy_expire_failures_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "만료가 {{ $labels.error_code }} 로 실패했습니다"
+          description: >-
+            BatchJobFailed 와 겹칩니다 — 그쪽은 **실패했다**, 이쪽은 **어디서** 입니다.
+            EXPIRATION-001(이력 수 불일치)·002(재고 행 없음)·003(재고 언더플로)은 코드,
+            EXPIRATION-004(asOf 가 미래)는 넘긴 파라미터, EXPIRATION-005(오염 스키마)는
+            접속 URL 을 봅니다.
+            **UNCLASSIFIED 는 BusinessException 이 아닌 실패입니다.** 갈래가 셋입니다 —
+            ① BinlogFormatGuard(binlog_format 이 STATEMENT) ② asOf 파라미터 누락
+            ③ DB 예외(1213 deadlock · 1205 lock wait · 트랜잭션 타임아웃).
+            배치 로그의 첫 스택트레이스가 셋 중 어느 것인지 답합니다.
       - alert: ExpireMetricsUnknown
         expr: >-
           (cy_expire_unexplained_pending != cy_expire_unexplained_pending)

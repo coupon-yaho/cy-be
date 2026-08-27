@@ -75,9 +75,9 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 적었는데 실제로는 두 쪽을 잇는 것이 아무것도 없던 경우다. 그래서 문장으로 잇지 않고
  * 파일을 읽어서 잇는다.
  *
- * <p><b>여기서 안 보이는 것도 적어 둔다.</b> 처리 건수({@code writeCount})는 메트릭에 없다.
- * 그래서 <i>"스케줄러는 도는데 아무것도 안 줄어든다"</i> 를 이 통로만으로는 못 잡는다.
- * 그 지표를 붙이는 것은 별도 티켓이다.
+ * <p><b>처리량 축은 {@code cy_expire_processed_total} 이 진다</b>(CY-651). 한때 여기
+ * <i>"처리 건수는 메트릭에 없다 … 그 지표를 붙이는 것은 별도 티켓이다"</i> 라고 적혀
+ * 있었는데 그 티켓이 끝났다. 이름은 아래 규칙 파일 대조가 자동으로 지킨다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         // 실제 설정 파일을 읽는다. 노출 목록을 여기 복붙하면 파일에서 prometheus 가 빠져도
