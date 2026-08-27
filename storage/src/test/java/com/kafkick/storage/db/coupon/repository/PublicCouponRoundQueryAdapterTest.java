@@ -42,11 +42,13 @@ class PublicCouponRoundQueryAdapterTest {
         PageRequest pageRequest = PageRequest.of(0, 20);
         when(couponRoundJpaRepository.findPublicCouponRounds(
                 "OPEN",
+                MembershipGrade.GOLD.getBitValue(),
                 pageRequest
         )).thenReturn(new PageImpl<>(List.of(projection), pageRequest, 1));
 
         PublicCouponRoundPage result = queryAdapter.findPage(
                 CouponRoundStatus.OPEN,
+                MembershipGrade.GOLD,
                 0,
                 20
         );
@@ -68,10 +70,16 @@ class PublicCouponRoundQueryAdapterTest {
         PageRequest pageRequest = PageRequest.of(0, 20);
         when(couponRoundJpaRepository.findPublicCouponRounds(
                 null,
+                null,
                 pageRequest
         )).thenThrow(new DataAccessResourceFailureException("DB unavailable"));
 
-        assertThatThrownBy(() -> queryAdapter.findPage(null, 0, 20))
+        assertThatThrownBy(() -> queryAdapter.findPage(
+                null,
+                null,
+                0,
+                20
+        ))
                 .isInstanceOf(CouponPersistenceException.class)
                 .hasMessageContaining("공개 쿠폰 회차 목록 조회");
     }
