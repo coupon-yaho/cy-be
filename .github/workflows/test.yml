@@ -40,6 +40,36 @@ jobs:
         run: >-
           ./gradlew :infra:redis:test
           --tests '*RedisRuntimeConfigIntegrationTest'
+          --tests '*IssuanceScriptContractTest'
+          --no-build-cache --rerun-tasks
+
+      # @Testcontainers(disabledWithoutDocker = true) 라 Docker 를 못 잡으면 클래스가 통째로
+      # skip 되고, skip 은 green 이다. 위 단계만으로는 "Lua 계약 0건 실행" 이 초록으로 샌다.
+      # 결과 XML 이 실제로 몇 건을 돌렸는지 본다.
+      #
+      # 위 단계에 --no-build-cache --rerun-tasks 가 붙은 이유도 같다 — gradle.properties 의
+      # org.gradle.caching=true 때문에 FROM-CACHE 로 복원되면 컨테이너를 한 번도 안 띄우고
+      # XML 만 재생되어, 이 증명 단계까지 통째로 초록이 된다.
+      - name: Assert the Lua contract actually ran
+        run: |
+          # 하한을 박는다 — "1건 이상" 이면 테스트가 조용히 사라져도 초록이다.
+          set -- RedisRuntimeConfigIntegrationTest:10 IssuanceScriptContractTest:100
+          for entry in "$@"; do
+            name=${entry%%:*}; min=${entry##*:}
+            file=$(find infra/redis/build/test-results/test -name "TEST-*.$name.xml" | head -1)
+            if [ -z "$file" ]; then echo "::error::$name 결과 파일이 없다"; exit 1; fi
+            tests=$(sed -n 's/.*[^a-z]tests="\([0-9]*\)".*/\1/p' "$file" | head -1)
+            skipped=$(sed -n 's/.*skipped="\([0-9]*\)".*/\1/p' "$file" | head -1)
+            failures=$(sed -n 's/.*failures="\([0-9]*\)".*/\1/p' "$file" | head -1)
+            errors=$(sed -n 's/.*errors="\([0-9]*\)".*/\1/p' "$file" | head -1)
+            echo "$name: tests=$tests skipped=$skipped failures=$failures errors=$errors (min=$min)"
+            if [ "$tests" -lt "$min" ]; then
+              echo "::error::$name tests=$tests < $min — 테스트가 사라졌거나 실행되지 않았다"; exit 1
+            fi
+            if [ "$skipped" != "0" ] || [ "$failures" != "0" ] || [ "$errors" != "0" ]; then
+              echo "::error::$name skipped=$skipped failures=$failures errors=$errors"; exit 1
+            fi
+          done
 
       - name: Run all tests
         run: ./gradlew test

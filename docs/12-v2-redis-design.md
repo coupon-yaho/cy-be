@@ -205,23 +205,26 @@ SQL 실행 (buffer pool hit)      ~0.2 ms
 
 ```lua
 -- KEYS[1]=stock KEYS[2]=issued KEYS[3]=meta KEYS[4]=issued_ever
--- ARGV[1]=memberId ARGV[2]=nowMillis ARGV[3]=gradeBit ARGV[4]=idempotencyKey ARGV[5]=requestToken
+-- ARGV[1]=memberId ARGV[2]=gradeBit ARGV[3]=idempotencyKey ARGV[4]=requestToken
+-- 시각은 인자가 아니다. api 가 여러 대라 호출자 시계를 믿으면 마감 경계의 답이 갈린다.
 
-local meta = redis.call('HMGET', KEYS[3], 'status','openAt','closeAt','gradeMask')
+local meta = redis.call('HMGET', KEYS[3], 'status','openAt','closeAt','gradeMask','totalQuantity')
 if not meta[1] then return {-9} end                        -- NOT_READY: 재구성 중
-local now = tonumber(ARGV[2])
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+local nowText = string.format('%d%03d', tonumber(clock[1]), math.floor(tonumber(clock[2]) / 1000))
 if meta[1] ~= 'OPEN' or now >= tonumber(meta[3]) then return {-1} end   -- CAMPAIGN_CLOSED
 if now < tonumber(meta[2]) then return {-2} end                          -- NOT_OPENED
-if bit.band(tonumber(meta[4]), tonumber(ARGV[3])) == 0 then return {-3} end -- GRADE
+if bit.band(tonumber(meta[4]), tonumber(ARGV[2])) == 0 then return {-3} end -- GRADE
 
 -- 선점과 중복 판정을 한 명령으로. 재고 확인보다 먼저 한다.
 local claimed = redis.call('HSETNX', KEYS[2], ARGV[1],
-        'P|' .. ARGV[2] .. '|' .. ARGV[5] .. '|' .. ARGV[4])
+        'P|' .. nowText .. '|' .. ARGV[4] .. '|' .. ARGV[3])
 if claimed == 0 then
     local stored = redis.call('HGET', KEYS[2], ARGV[1])
-    local st, ms, tk, key = string.match(stored, '^(%a)|(%d+)|([^|]+)|(.*)$')
+    local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
     if st == nil then return {-8} end                       -- 값 형식 파손. 경보
-    if key ~= ARGV[4] then                                 -- 길이까지 정확히 같을 때만 같은 키
+    if key ~= ARGV[3] then                                 -- 길이까지 정확히 같을 때만 같은 키
         return {-4}                                        -- DUP_PER_MEMBER
     end
     -- 같은 멱등키의 재시도. PENDING 과 DONE 을 반드시 가른다
@@ -292,14 +295,15 @@ POST /coupon-rounds/{r}/issue
 
 ```lua
 -- 완료 승격
--- KEYS[1]=issued  ARGV[1]=memberId ARGV[2]=requestToken ARGV[3]=nowMillis
+-- KEYS[1]=issued  ARGV[1]=memberId ARGV[2]=requestToken
+-- 완료시각은 인자가 아니다. 승격은 상태 한 글자만 바꾸고 선점시각을 보존한다(Phase 0 · 03).
 local stored = redis.call('HGET', KEYS[1], ARGV[1])
 if stored == false then return -1 end                      -- 사라졌다. 보상과 겹쳤다는 뜻
-local st, ms, tk, key = string.match(stored, '^(%a)|(%d+)|([^|]+)|(.*)$')
+local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
 if st == nil then return -3 end                            -- 값 형식 파손
 if tk ~= ARGV[2] then return -2 end                        -- 남의 선점. 건드리지 않는다
 if st == 'D' then return 0 end                             -- 이미 DONE. 재시도끼리 겹친 것
-redis.call('HSET', KEYS[1], ARGV[1], 'D|' .. ARGV[3] .. '|' .. tk .. '|' .. key)
+redis.call('HSET', KEYS[1], ARGV[1], 'D|' .. ms .. '|' .. tk .. '|' .. key)
 return 1
 ```
 
@@ -307,9 +311,10 @@ return 1
 -- 보상
 -- KEYS[1]=stock KEYS[2]=issued KEYS[3]=issued_ever
 -- ARGV[1]=memberId ARGV[2]=requestToken
+if #ARGV[2] == 0 or string.find(ARGV[2], '|', 1, true) then return -10 end
 local stored = redis.call('HGET', KEYS[2], ARGV[1])
 if stored == false then return 0 end                       -- 이미 없다
-local st, ms, tk = string.match(stored, '^(%a)|(%d+)|([^|]+)|')
+local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
 if st == nil then return -3 end                            -- 값 형식 파손
 if tk ~= ARGV[2] then return 0 end                         -- 내 선점이 아니면 아무것도 안 한다
 if st ~= 'P' then return -1 end                            -- 이미 DONE 이면 보상 금지. 경보
@@ -461,6 +466,9 @@ DB COMMIT 성공
 복원을 Redis 먼저 하면 DB 취소가 롤백됐을 때 재고만 늘어난 상태가 남는다. **불변식을 깨는 방향의 연산을 항상 나중에 한다** — 이 원칙 하나로 두 순서가 정해진다.
 
 ### 5.2 복원 스크립트
+
+> Phase 0 에서 배치 복원 · 파손 회수가 더해졌다. 현행 5종의 본문은
+> `docs/14-v2-phase0/02·03·06` 이 원본이다.
 
 ```lua
 -- KEYS[1]=stock KEYS[2]=meta
