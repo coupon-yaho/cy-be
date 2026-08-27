@@ -55,13 +55,35 @@ class IssuedValueCodecTest {
     }
 
     @Test
-    void rejectsBlankIdempotencyKeyWhenCreatingValue() {
+    void rejectsEmptyIdempotencyKeyWhenCreatingValue() {
         assertThatThrownBy(() -> new IssuedValue(
                 IssuedValue.Status.PENDING,
                 1L,
                 "api-1-42-7",
-                " "
+                ""
         )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsClaimedAtWiderThanThirteenDigitsWhenCreatingValue() {
+        assertThatThrownBy(() -> new IssuedValue(
+                IssuedValue.Status.PENDING,
+                12_345_678_901_234L,
+                "api-1-42-7",
+                "key"
+        )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void roundTripsThirteenDigitClaimedAt() {
+        IssuedValue value = new IssuedValue(
+                IssuedValue.Status.PENDING,
+                9_999_999_999_999L,
+                "api-1-42-7",
+                "key"
+        );
+
+        assertThat(codec.decode(codec.encode(value))).isEqualTo(value);
     }
 
     @Test
@@ -91,9 +113,10 @@ class IssuedValueCodecTest {
     }
 
     @Test
-    void classifiesBlankIdempotencyKeyAsCorrupt() {
-        assertThatThrownBy(() -> codec.decode("P|1|api-1-42-7|   "))
-                .isExactlyInstanceOf(IssuedValueCorruptException.class);
+    void decodesWhitespaceOnlyIdempotencyKey() {
+        IssuedValue decoded = codec.decode("P|1|api-1-42-7|   ");
+
+        assertThat(decoded.hasIdempotencyKey("   ")).isTrue();
     }
 
     @Test

@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 public final class IssuedValueCodec {
 
     private static final String DELIMITER = "|";
-    private static final int CLAIMED_AT_MAX_DIGITS = 13;
+    private static final int CLAIMED_AT_MAX_DIGITS = Long.toString(IssuedValue.CLAIMED_AT_MAX).length();
     private static final Pattern VALUE_PATTERN = Pattern.compile(
             "\\A([" + statusCodes() + "])"
                     + Pattern.quote(DELIMITER) + "([0-9]{1," + CLAIMED_AT_MAX_DIGITS + "})"

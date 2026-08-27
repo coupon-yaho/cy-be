@@ -12,8 +12,8 @@
 -- KEYS[1]=issued  ARGV[1]=memberId ARGV[2]=requestToken ARGV[3]=nowMillis
 local stored = redis.call('HGET', KEYS[1], ARGV[1])
 if stored == false then return -1 end                      -- 사라졌다. 보상과 겹쳤다
-local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.*)$')
-if st == nil then return -3 end                            -- 값 형식 파손
+local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
+if st == nil or #ms > 13 then return -3 end                -- 값 형식 파손
 if tk ~= ARGV[2] then return -2 end                        -- 남의 선점. 건드리지 않는다
 if st == 'D' then return 0 end                             -- 이미 DONE. 재시도끼리 겹친 것
 redis.call('HSET', KEYS[1], ARGV[1], 'D|' .. ARGV[3] .. '|' .. tk .. '|' .. key)
@@ -27,8 +27,8 @@ return 1
 -- ARGV[1]=memberId ARGV[2]=requestToken
 local stored = redis.call('HGET', KEYS[2], ARGV[1])
 if stored == false then return 0 end                       -- 이미 없다
-local st, ms, tk = string.match(stored, '^([PD])|(%d+)|([^|]+)|')
-if st == nil then return -3 end                            -- 값 형식 파손
+local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
+if st == nil or #ms > 13 then return -3 end                -- 값 형식 파손. 네 필드를 전부 본다
 if tk ~= ARGV[2] then return 0 end                         -- 내 선점이 아니면 아무것도 안 한다
 if st ~= 'P' then return -1 end                            -- 이미 DONE 이면 보상 금지. 경보
 redis.call('HDEL', KEYS[2], ARGV[1])

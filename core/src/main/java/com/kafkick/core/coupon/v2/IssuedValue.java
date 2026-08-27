@@ -9,6 +9,8 @@ public record IssuedValue(
         String idempotencyKey
 ) {
 
+    static final long CLAIMED_AT_MAX = 9_999_999_999_999L;
+
     public IssuedValue {
         Objects.requireNonNull(status, "status");
         Objects.requireNonNull(requestToken, "requestToken");
@@ -16,13 +18,16 @@ public record IssuedValue(
         if (claimedAtEpochMillis < 0) {
             throw new IllegalArgumentException("claimedAtEpochMillis는 음수일 수 없습니다.");
         }
+        if (claimedAtEpochMillis > CLAIMED_AT_MAX) {
+            throw new IllegalArgumentException("claimedAtEpochMillis는 13자리를 넘을 수 없습니다.");
+        }
         if (requestToken.isBlank()) {
             throw new IllegalArgumentException("requestToken은 비어 있을 수 없습니다.");
         }
         if (requestToken.indexOf('|') >= 0) {
             throw new IllegalArgumentException("requestToken에는 '|'를 포함할 수 없습니다.");
         }
-        if (idempotencyKey.isBlank()) {
+        if (idempotencyKey.isEmpty()) {
             throw new IllegalArgumentException("idempotencyKey는 비어 있을 수 없습니다.");
         }
     }

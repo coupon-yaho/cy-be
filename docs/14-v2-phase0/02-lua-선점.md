@@ -22,8 +22,8 @@ local claimed = redis.call('HSETNX', KEYS[2], ARGV[1],
         'P|' .. ARGV[2] .. '|' .. ARGV[5] .. '|' .. ARGV[4])
 if claimed == 0 then
     local stored = redis.call('HGET', KEYS[2], ARGV[1])
-    local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.*)$')
-    if st == nil then return {-8} end                      -- 값 형식 파손. 경보
+    local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
+    if st == nil or #ms > 13 then return {-8} end          -- 값 형식 파손. 경보
     if key ~= ARGV[4] then return {-4} end                 -- DUP_PER_MEMBER
     if st == 'D' then return {-6} end                      -- REPLAY_DONE
     return {-7}                                            -- REPLAY_PENDING
