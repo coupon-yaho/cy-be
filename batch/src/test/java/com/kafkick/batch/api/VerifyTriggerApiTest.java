@@ -31,6 +31,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.batch.config.RunningJobFixture;
 import com.kafkick.batch.config.VerifyExecutorConfig;
 import com.kafkick.batch.job.VerifyJobConfig;
 import com.kafkick.core.verification.DatasetType;
@@ -97,6 +98,9 @@ class VerifyTriggerApiTest {
     private JobOperator sharedJobOperator;
 
     @Autowired
+    private com.kafkick.batch.config.RunningJobProbe runningJobs;
+
+    @Autowired
     private JobRepository jobRepository;
 
     @Autowired
@@ -132,9 +136,17 @@ class VerifyTriggerApiTest {
      */
     @AfterEach
     void tearDown() throws Exception {
-        awaitNoRunningVerify();
-        new VerificationSeed(jdbcClient).clear();
-        new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+        // ⚠️ **치우기를 기다림에 걸지 않는다.** 한때 `awaitNoRunningVerify()` 가 맨 앞에
+        // 맨몸으로 있었는데, 그것이 90초 뒤 AssertionError 를 던지면 아래 두 줄에 도달하지
+        // 못했다. 그러면 못 끝낸 실행이 DB 에 남아 **다음 테스트도 같은 자리에서** 90초를
+        // 태우고 죽는다 — 21개짜리 클래스가 통째로 33분간 빨개졌다. 원인 하나가 전부를
+        // 무너뜨리지 않게 치우기를 finally 로 내린다.
+        try {
+            awaitNoRunningVerify();
+        } finally {
+            new VerificationSeed(jdbcClient).clear();
+            new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+        }
     }
 
     /** 실행기가 스레드 하나라, 도는 것이 없어지면 다음 테스트가 안전하다. */
@@ -147,6 +159,42 @@ class VerifyTriggerApiTest {
                 return true;
             }
         });
+    }
+
+    /**
+     * <b>진도가 안 멈춘 실행을 손으로 심는다.</b> {@code jobRepository} 에 직접 쓰는 것이라
+     * <b>이것을 돌리는 스레드가 없다</b> — 스스로 끝나지 않는다. 그래서 심은 쪽이
+     * {@link #finish(JobExecution)} 로 반드시 닫아야 한다.
+     *
+     * <p>안 닫으면 {@code tearDown} 의 {@code awaitNoRunningVerify} 가 90초를 태우고
+     * {@code AssertionError} 로 죽는데, 그 예외가 뒤의 {@code removeJobExecutions()} 를
+     * 건너뛰게 만들어 이 행이 DB 에 남는다. 그러면 <b>남은 테스트 전부가</b> 같은 자리에서
+     * 90초씩 태우며 빨개진다 — 원인 테스트가 아니라 남의 테스트가 죽는 모양이다.
+     * 실제로 그렇게 21개짜리 클래스가 33분을 돌았다.
+     */
+    private JobExecution liveExecution(LocalDateTime asOf) throws Exception {
+        JobParameters parameters = new JobParametersBuilder()
+                .addLocalDateTime("asOf", asOf)
+                .addString("dataset", "CLEAN")
+                .addString("scope", "FULL")
+                .addLong("attempt", 1L)
+                .toJobParameters();
+        JobExecution live = jobRepository.createJobExecution(
+                jobRepository.createJobInstance(VerifyJobConfig.JOB_NAME, parameters),
+                parameters,
+                new org.springframework.batch.infrastructure.item.ExecutionContext());
+        live.setStatus(BatchStatus.STARTED);
+        // 방금 시작했다 = 진도가 멈추지 않았다.
+        live.setStartTime(LocalDateTime.now());
+        jobRepository.update(live);
+        return live;
+    }
+
+    /** {@link #liveExecution} 이 심은 행을 도는 축에서 뺀다. {@code finally} 에서 부른다. */
+    private void finish(JobExecution live) {
+        live.setStatus(BatchStatus.ABANDONED);
+        live.setEndTime(LocalDateTime.now());
+        jobRepository.update(live);
     }
 
     /**
@@ -251,6 +299,37 @@ class VerifyTriggerApiTest {
 
         assertThat(response.statusCode()).isEqualTo(404);
         assertThat(error(response).path("code").asText()).isEqualTo("VERIFICATION-014");
+    }
+
+    /**
+     * <b>도는 검증은 못 멈춘다.</b> 이것이 CY-678 의 본체다.
+     *
+     * <p>{@code stop} 은 살아 있는 실행에도 먹는다 — {@code SimpleJobRepository} 가
+     * {@code STOPPING} 을 즉시 {@code STOPPED} 로 올린다. 그 순간 트리거의 429 와
+     * {@code ExpireScheduler}·{@code CleanupJobConfig} 의 물러나기가 <b>함께</b> 풀리는데,
+     * 스레드는 아직 돈다. 그래서 진도가 있는 실행은 여기서 거절한다.
+     */
+    @Test
+    @DisplayName("진도가 있는 실행은 못 멈춘다 — 만료·정리와의 상호 배제가 그 자리에서 꺼진다")
+    void rejectsStoppingALiveExecution() throws Exception {
+        JobExecution live = liveExecution(AS_OF.minusDays(2));
+        try {
+            HttpResponse<String> rejected =
+                    probe.post("/api/v1/admin/verify/runs/" + live.getId() + "/stop");
+
+            assertThat(rejected.statusCode())
+                    .as("도는 검증을 멈추면 472초가 버려지는 데서 끝나지 않는다. 본문=%s",
+                            rejected.body())
+                    .isEqualTo(409);
+            assertThat(error(rejected).path("code").asText()).isEqualTo("VERIFICATION-019");
+
+            assertThat(jobRepository.getJobExecution(live.getId()).getStatus())
+                    .as("거절했으면 상태를 건드리지 않았어야 한다 — STOPPING 을 만들면 "
+                            + "그것만으로 만료·정리가 물러나기를 그만둔다")
+                    .isEqualTo(BatchStatus.STARTED);
+        } finally {
+            finish(live);
+        }
     }
 
     /**
@@ -457,6 +536,13 @@ class VerifyTriggerApiTest {
                 parameters,
                 new org.springframework.batch.infrastructure.item.ExecutionContext());
         stranded.setStatus(BatchStatus.STARTED);
+        // **시작 시각을 과거로 둔다.** 하드킬은 두 시간 전에도 일어난다 — 그리고
+        // `stop` 이 **진도가 멈춘 실행만** 받으므로(CY-678), 방금 만든 행으로는
+        // 복구 경로를 못 밟는다. `RunningJobProbe.lastProgress` 는 StepExecution 이
+        // 없으면 START_TIME 으로 폴백하므로 이것이 곧 "두 시간째 진도 없음" 이다.
+        // 임계(batch.stuck-job-after-ms) 자체를 낮추는 길은 막혀 있다 — 기동 가드가
+        // "가장 긴 Step 데드라인보다 커야 한다" 로 거절한다.
+        stranded.setStartTime(LocalDateTime.now().minusHours(2));
         jobRepository.update(stranded);
 
         HttpResponse<String> blocked = probe.post("/api/v1/admin/verify?asOf=" + AS_OF);
@@ -483,7 +569,8 @@ class VerifyTriggerApiTest {
         HttpResponse<String> abandoned =
                 probe.post("/api/v1/admin/verify/runs/" + stranded.getId() + "/abandon");
         assertThat(abandoned.statusCode())
-                .as("stop 만으로는 STOPPING 이라 여전히 429 다 — abandon 이 유일한 해제 경로다. "
+                .as("stop 이 이미 STOPPED 로 올려 429 는 풀렸지만, 그 실행은 '멈췄다' 로 "
+                        + "남는다 — abandon 이 '없던 것으로 한다' 를 마저 한다. "
                         + "그리고 완료 동작이라 202 가 아니라 200 이다")
                 .isEqualTo(200);
         assertThat(json(abandoned).path("data").path("status").asText()).isEqualTo("ABANDONED");
@@ -560,6 +647,85 @@ class VerifyTriggerApiTest {
                 probe.get("/api/v1/admin/verify/runs/" + executionId);
         assertThat(response.statusCode()).isEqualTo(200);
         return body(response, VerifyRunView.class);
+    }
+
+
+
+    /**
+     * <b>탈출구가 있어야 한다.</b> 이 저장소에는 잡 전체 데드라인이 없고
+     * {@code replayStep} 은 느리게라도 커밋하는 한 영원히 시체가 안 된다. 시체 게이트만
+     * 두면 잘못 건 300만 행 {@code CORRUPT FULL} 을 <b>끝날 때까지 못 세운다</b> —
+     * 그 사이 만료 크론이 {@code updated_at} 을 찍고 그 {@code asOf} 는 재시딩 말고
+     * 복구가 없다. 그래서 명시적 의사표시({@code force=true})로만 연다.
+     */
+    @Test
+    @DisplayName("force=true 는 도는 검증도 멈춘다 — 기본값은 여전히 거절한다")
+    void forceStopsALiveExecution() throws Exception {
+        JobExecution live = liveExecution(AS_OF.minusDays(4));
+        try {
+            assertThat(probe.post("/api/v1/admin/verify/runs/" + live.getId() + "/stop")
+                    .statusCode())
+                    .as("기본값은 시체만 받는다")
+                    .isEqualTo(409);
+
+            assertThat(probe.post(
+                    "/api/v1/admin/verify/runs/" + live.getId() + "/stop?force=true")
+                    .statusCode())
+                    .as("명시적으로 부르면 받는다")
+                    .isEqualTo(202);
+
+            assertThat(jobRepository.getJobExecution(live.getId()).getStatus())
+                    .as("stop 은 STOPPING 을 세우고 update 가 즉시 STOPPED 로 올린다")
+                    .isEqualTo(BatchStatus.STOPPED);
+        } finally {
+            finish(live);
+        }
+    }
+
+    /**
+     * <b>선점문이 되살아난 실행을 거부한다.</b> {@code requireStuck} 의 판정과
+     * {@code stop} 의 쓰기 사이에 청크가 커밋되면 그 실행은 <b>살아 있다</b>. 그때 멈추면
+     * 스레드는 도는데 DB 는 {@code STOPPED} 가 되고, 그 순간부터 만료·정리가 이 실행의
+     * 입력을 건드린다 — V1·V3·V5 가 반쯤 쓰인 상태를 읽고 조용히 틀린 답을 낸다.
+     *
+     * <p><b>흐름으로는 못 잰다.</b> 판정과 쓰기 사이는 마이크로초라 밖에서 벌릴 수 없다.
+     * 그래서 {@code ExpireRecoveryTest.claimRefusesARevivedRun} 과 같이 <b>문장 자체</b>를
+     * 잰다.
+     *
+     * <p>⚠️ <b>좌표계를 추측하지 않는다.</b> {@code LAST_UPDATED} 는 프레임워크가 JVM 기본
+     * 존으로 찍고 MySQL 의 {@code NOW()} 는 컨테이너 존이라 둘이 아홉 시간 어긋난다.
+     * 그래서 선점문이 비교에 쓰는 값({@code stuckBefore}) 자체를 기준으로 민다.
+     */
+    @Test
+    @DisplayName("선점문이 되살아난 실행을 거부한다 — 판정과 쓰기 사이의 창을 닫는다")
+    void claimRefusesARevivedRun() throws Exception {
+        try (RunningJobFixture dead = RunningJobFixture.plant(
+                jobRepository, jdbcClient, VerifyJobConfig.JOB_NAME,
+                LocalDateTime.of(2026, 5, 1, 0, 0).plusHours(41),
+                Duration.ofHours(2), Duration.ofHours(2))) {
+
+            LocalDateTime stuckBefore = runningJobs
+                    .stuckExecutions(VerifyJobConfig.JOB_NAME).stream()
+                    .filter(run -> run.execution().getId() == dead.executionId())
+                    .findFirst().orElseThrow().stuckBefore();
+
+            int revived = jdbcClient.sql("UPDATE BATCH_STEP_EXECUTION SET LAST_UPDATED = :at "
+                            + "WHERE JOB_EXECUTION_ID = :id")
+                    .param("at", stuckBefore.plusMinutes(1))
+                    .param("id", dead.executionId()).update();
+            assertThat(revived).as("픽스처가 Step 을 심었어야 한다").isEqualTo(1);
+
+            int claimed = jdbcClient.sql(VerifyStopService.CLAIM)
+                    .param("id", dead.executionId())
+                    .param("stuckBefore", stuckBefore)
+                    .update();
+
+            assertThat(claimed)
+                    .as("진도 조건이 없으면 살아 있는 검증을 STOPPED 로 올린다")
+                    .isZero();
+            assertThat(jobRepository.getJobExecution(dead.executionId()).getStatus())
+                    .isEqualTo(BatchStatus.STARTED);
+        }
     }
 
     /**

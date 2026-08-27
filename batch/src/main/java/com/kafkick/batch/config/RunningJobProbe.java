@@ -148,7 +148,7 @@ public class RunningJobProbe {
                 .filter(execution -> isStuck(jobName, execution, now))
                 .sorted(Comparator.comparing(JobExecution::getId))
                 .map(execution -> {
-                    LocalDateTime progress = lastProgress(execution);
+                    LocalDateTime progress = lastProgressOf(execution);
                     return new StuckRun(execution, progress,
                             Duration.between(progress, now).toSeconds(),
                             now.minus(stuckAfter));
@@ -215,7 +215,7 @@ public class RunningJobProbe {
      * 한때 아래쪽에서, 그다음 위쪽에서 같은 사고를 냈다.
      */
     private boolean isAlive(String jobName, JobExecution execution, LocalDateTime now) {
-        if (lastProgress(execution) == null) {
+        if (lastProgressOf(execution) == null) {
             // 여기 오면 배치 메타가 계약을 깬 것이다 — CREATE_TIME 은 NOT NULL 이라
             // 실제로는 도달하지 않는다. 모를 때는 막는 쪽으로 기운다.
             log.warn("{} 실행의 시각이 전부 비어 있어 도는 중으로 봅니다. executionId={}",
@@ -232,7 +232,7 @@ public class RunningJobProbe {
         log.warn("{} 실행의 진도가 {}초째 멈춰 있어 무시합니다. 종료 표시를 못 남기고 죽은 "
                         + "실행일 수 있습니다 — BATCH_JOB_EXECUTION 과 BATCH_STEP_EXECUTION 을 "
                         + "확인하십시오. executionId={} 마지막진도={}",
-                jobName, stuckAfter.toSeconds(), execution.getId(), lastProgress(execution));
+                jobName, stuckAfter.toSeconds(), execution.getId(), lastProgressOf(execution));
         return false;
     }
 
@@ -246,11 +246,30 @@ public class RunningJobProbe {
      * 읽히게 하기 위해서다 — 로그가 이 메서드를 떠났으므로 값 자체는 필요 없다.
      */
     private boolean isStuck(String jobName, JobExecution execution, LocalDateTime now) {
-        LocalDateTime since = lastProgress(execution);
+        LocalDateTime since = lastProgressOf(execution);
         // 시각을 하나도 못 구한 행은 "멈췄다" 로 안 센다 — 모를 때는 막는 쪽이고,
         // 그 판단의 로그는 가드 경로(isAlive)가 남긴다. 여기서 찍으면 되읽기 주기마다
         // 같은 줄이 쌓여, 이 클래스가 막으려던 로그 홍수가 다른 갈래로 되살아난다.
         return since != null && Duration.between(since, now).compareTo(stuckAfter) > 0;
+    }
+
+    /**
+     * <b>시체로 판정되기까지 남은 시간.</b> 이미 지났으면 0 이하다.
+     *
+     * <p><b>뺄셈을 여기서 한다.</b> {@link StuckRun} 이 {@code stalledSeconds} 를 담아 주는
+     * 것과 같은 이유다 — 배치 메타의 시각은 프레임워크가 <b>JVM 기본 존</b>으로 찍으므로
+     * ({@link #blockingExecutions} 의 근거) 그 뺄셈은 이 파일의 좌표계에서 해야 한다.
+     * 한때 {@code stuckAfter()} 와 {@code lastProgress()} 를 따로 열어 부르는 쪽이
+     * {@code TimeProvider}(= {@code Clock.systemUTC})로 뺐는데, 그러면 KST JVM 에서
+     * <b>아홉 시간 반</b>이 남았다고 답한다. 그리고 {@code batch/build.gradle} 이 테스트 JVM 을
+     * {@code Asia/Seoul} 로 고정하므로 그것은 예외가 아니라 기본이다.
+     *
+     * <p><b>{@code null} 을 안 준다.</b> {@link #lastProgressOf} 가 {@code CREATE_TIME}
+     * 까지 물러나고 그 컬럼은 NOT NULL 이다 — 부르는 쪽에 "못 읽었다" 갈래를 두면 죽은 코드다.
+     */
+    public Duration untilStuck(JobExecution execution) {
+        return Duration.between(LocalDateTime.now(),
+                lastProgressOf(execution).plus(stuckAfter));
     }
 
     /**
@@ -260,7 +279,9 @@ public class RunningJobProbe {
      * <p>{@code STARTING} 에서 죽어 Step 도 {@code START_TIME} 도 없는 행이 있는데,
      * 그 갈래가 없으면 그런 행이 <b>영원히</b> 막는다. 그 행은 CY-429 의 복구 API 로 걷는다.
      */
-    private static LocalDateTime lastProgress(JobExecution execution) {
+    // 이것이 실제 계산이고, 위 lastProgress(JobExecution) 는 바깥에 내주려고 씌운
+    // 얇은 껍데기다. 클래스 안(isAlive·isStuck·stuckExecutions)은 전부 이쪽을 직접 부른다.
+    private static LocalDateTime lastProgressOf(JobExecution execution) {
         return execution.getStepExecutions().stream()
                 .map(StepExecution::getLastUpdated)
                 .filter(Objects::nonNull)
