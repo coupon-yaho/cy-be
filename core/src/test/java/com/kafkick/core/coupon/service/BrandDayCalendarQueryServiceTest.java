@@ -139,6 +139,37 @@ class BrandDayCalendarQueryServiceTest {
         );
     }
 
+    @Test
+    @DisplayName("달력 조회 기간은 양끝 포함 366일까지 허용한다")
+    void allowMaximumCalendarRange() {
+        when(couponTemplateRepository.findAllActiveByIdAsc())
+                .thenReturn(List.of());
+        when(calendarQueryPort.findBetween(
+                Instant.parse("2023-12-31T15:00:00Z"),
+                Instant.parse("2024-12-31T15:00:00Z")
+        )).thenReturn(List.of());
+
+        assertThat(service().findBetween(
+                LocalDate.of(2024, 1, 1),
+                LocalDate.of(2024, 12, 31),
+                AS_OF
+        )).isEmpty();
+    }
+
+    @Test
+    @DisplayName("달력 조회 기간이 양끝 포함 367일이면 입력 오류로 거부한다")
+    void rejectCalendarRangeOverMaximum() {
+        assertThatThrownBy(() -> service().findBetween(
+                LocalDate.of(2024, 1, 1),
+                LocalDate.of(2025, 1, 1),
+                AS_OF
+        )).isInstanceOfSatisfying(
+                BusinessException.class,
+                exception -> assertThat(exception.getErrorCode())
+                        .isEqualTo(CommonErrorCode.INVALID_INPUT)
+        );
+    }
+
     private BrandDayCalendarQueryService service() {
         return new BrandDayCalendarQueryService(
                 couponTemplateRepository,

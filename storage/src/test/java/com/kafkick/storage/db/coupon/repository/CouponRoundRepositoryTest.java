@@ -162,7 +162,7 @@ class CouponRoundRepositoryTest {
     }
 
     @Test
-    @DisplayName("회차 생성 대상은 활성 상태인 지원 할인 정책만 조회한다")
+    @DisplayName("회차 생성 대상은 활성 상태인 템플릿만 조회한다")
     void findOnlyActiveTemplatesByIdAsc() {
         saveTemplate();
         jdbcTemplate.update(
@@ -188,20 +188,39 @@ class CouponRoundRepositoryTest {
                 4,
                 false
         );
-        jdbcTemplate.update(
+        assertThat(couponTemplateRepository.findAllActiveByIdAsc())
+                .extracting(CouponTemplate::id)
+                .containsExactly(100L);
+    }
+
+    @Test
+    @DisplayName("DB는 DATA_GRANT 정책과 전용 컬럼을 허용하지 않는다")
+    void rejectDataGrantPolicyAndRemoveDedicatedColumns() {
+        Integer columns = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                  FROM information_schema.columns
+                 WHERE table_schema = DATABASE()
+                   AND table_name IN ('coupon_templates', 'coupons')
+                   AND column_name = 'data_grant_mb'
+                """,
+                Integer.class
+        );
+        assertThat(columns).isZero();
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
                 """
                 INSERT INTO coupon_templates (
                     id, brand_id, name, policy_type,
-                    data_grant_mb, valid_days, nth_week, day_of_week,
+                    valid_days, nth_week, day_of_week,
                     start_time, duration_hours, stock_per_occurrence,
                     eligible_grades_mask, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 102L,
                 1L,
-                "지원 범위 밖 레거시 데이터 쿠폰",
+                "지원하지 않는 데이터 쿠폰",
                 "DATA_GRANT",
-                1_024,
                 7,
                 1,
                 CouponDayOfWeek.MON.name(),
@@ -210,11 +229,7 @@ class CouponRoundRepositoryTest {
                 100,
                 4,
                 true
-        );
-
-        assertThat(couponTemplateRepository.findAllActiveByIdAsc())
-                .extracting(CouponTemplate::id)
-                .containsExactly(100L);
+        )).isInstanceOf(DataAccessException.class);
     }
 
     @Test
