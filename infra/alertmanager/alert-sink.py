@@ -242,10 +242,16 @@ class Sink(BaseHTTPRequestHandler):
                 return SLACK_RETRY_DELAY
             try:
                 wait = int(float(raw))
-            except (TypeError, ValueError):
+            except Exception:  # noqa: BLE001 — 아래 이유로 전부 잡는다
+                # **예외 종류를 좁히면 안 된다.** 한때 (TypeError, ValueError) 였는데
+                # `inf`·`1e400` 은 **OverflowError** 다(실측). 이 메서드는 `except` 블록
+                # 안에서 불려 **try 밖**이라, 새면 `do_POST` 까지 올라가 그 payload 의
+                # **뒤 알림들이 통째로 사라진다** — 앞서 같은 모양의 결함을 한 번 고쳤다.
+                #
                 # 날짜 형식(HTTP-date)도 규격상 가능하다. 파싱하지 않고 기본값을 쓴다 —
                 # 그 형식을 Slack 이 쓴 적이 없고, 틀린 파싱보다 낫다.
                 return SLACK_RETRY_DELAY
+            # 음수·상한 초과는 포기. NaN 은 위에서 ValueError 로 걸린다.
             return wait if 0 <= wait <= SLACK_MAX_RETRY_DELAY else None
         if status >= 500:
             return SLACK_RETRY_DELAY
