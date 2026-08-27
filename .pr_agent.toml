@@ -26,6 +26,12 @@
 pr_commands = [
     "/agentic_describe",
     "/agentic_review",
+    # **자동 승인이 이것에 매달려 있습니다.** `auto_approve_for_no_suggestions` 가 보는 것은
+    # `/review` 지적이 아니라 **`/improve` 의 코드 제안 수**입니다(공식 문서:
+    # *"When no code suggestion were found for the PR, the PR will be auto-approved"*).
+    # Qodo 기본 `pr_commands` 에는 `/improve` 가 없어서, 이 줄이 없으면 승인 조건이
+    # **평가 자체가 안 됩니다** — 켜 놓고 영원히 안 뜹니다.
+    "/improve",
 ]
 
 # 새 커밋마다 다시 리뷰합니다. 이 저장소는 리뷰 지적을 반영해 여러 번 미는 흐름이라
@@ -33,6 +39,9 @@ pr_commands = [
 handle_push_trigger = true
 push_commands = [
     "/agentic_review",
+    # 푸시마다 제안 수를 다시 세야 "고쳤더니 승인" 이 성립합니다.
+    # 이것이 빠지면 첫 평가만 남아 재승인이 안 옵니다.
+    "/improve",
 ]
 
 
@@ -46,6 +55,15 @@ response_language = "ko-KR"
 # ── 리뷰를 건너뛸 PR ────────────────────────────────────────────────────────
 # `.coderabbit.yaml` 의 `auto_review.labels: ["!skip-review"]` 에 해당합니다.
 # 붙이는 경우 둘 — ⑴ 에픽 → main PR(하위에서 이미 다 봤다) ⑵ 되돌리기·설정 범프.
+#
+# ⚠️ **이 라벨이 붙은 PR 은 자동 승인도 못 받습니다.** 리뷰가 안 도니 제안 수를 셀 일이
+#    없고, 그러면 `auto_approve_for_no_suggestions` 가 평가되지 않습니다. 즉 에픽 → main
+#    PR 은 **사람 승인이나 관리자 우회가 계속 필요합니다.**
+#
+#    그것을 고치지 않고 남깁니다. 에픽 → main 은 이 저장소에서 가장 큰 병합이고,
+#    거기서만은 사람이 한 번 보는 것이 맞습니다. 리뷰를 안 돌린 PR 을 봇이 승인하면
+#    지금(관리자 우회)보다 **나쁩니다** — 우회는 사람이 누른 흔적이라도 남지만
+#    그 승인은 아무도 안 본 채 초록불이 됩니다.
 ignore_pr_labels = ["skip-review"]
 
 # 봇 PR 은 리뷰하지 않습니다. `.coderabbit.yaml` 의 `ignore_usernames` 대응입니다.
@@ -70,6 +88,9 @@ ignore_pr_authors = ["dependabot\\[bot\\]", "renovate\\[bot\\]", "github-actions
 #
 # 봇 승인도 그 카운트를 만족합니다. 우회로 넘기는 것보다, **최소한 한 번은 검사를
 # 통과한 것만** 넘어가는 쪽이 낫습니다.
+#
+# **적용 범위는 하위 → 에픽 PR 입니다.** `skip-review` 가 붙는 에픽 → main PR 은
+# 위에 적은 이유로 계속 사람 몫입니다.
 enable_auto_approval = true
 auto_approve_for_no_suggestions = true
 
