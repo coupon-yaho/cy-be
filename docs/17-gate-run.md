@@ -361,7 +361,14 @@ set -a; . ./.env; set +a
 # ⚠️ **고정값을 쓰면 덤프가 신선도 검사에 막힌다.** 스크립트는 `asOf` 나이를
 #    REPORT_MAX_AGE(기본 21600초)로 재는데, 2026-08-26 05:00 UTC 는 이미 지났다.
 #    CY-649 에서 실제로 그렇게 죽었다(run6). 그래서 실행 시각을 쓴다.
-#    옛 값을 그대로 재현하려면 REPORT_MAX_AGE=999999 를 gate() 앞에 붙인다.
+#
+#    **옛 asOf 를 그대로 재현하려면 덤프를 돌리지 마라.** 신선도 검사는
+#    "이게 오늘 판정인가" 를 묻는 것이고, 과거 재현은 애초에 그 답이 아니다.
+#    결정론 확인은 리포트 파일이 아니라 verification_runs 조회로 한다(맨 위 표).
+#    굳이 덤프까지 돌리려면 **나이를 계산해서** 넘긴다 — 고정 숫자를 적어 두면
+#    그 숫자를 넘기는 날 또 막힌다(999999 는 11.6일이라 2026-09-07 이면 만료다).
+#      REPORT_MAX_AGE=$(( $(date -u +%s) \
+#        - $(date -u -jf '%Y-%m-%d %H:%M:%S' "$ASOF" +%s) + 600 )) gate ...
 ASOF="$(date -u +'%Y-%m-%d %H:%M:00')"
 ASOF_API="${ASOF/ /T}"
 ./.venv/bin/python bin/seed.py all --dataset clean   --schema coupon_clean   --as-of "$ASOF"
@@ -420,6 +427,17 @@ gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=se
         curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" >&2; return 1; }
     sleep 10
   done
+
+  # **종료 상태를 봐야 한다.** 위 루프는 FAILED·STOPPED·ABANDONED 에도 빠져나온다.
+  # 그대로 덤프를 돌리면 /reports/latest 가 **직전 성공 실행**을 돌려주고 — 그 조회에는
+  # 시각 하한이 없다 — 이번 실행이 죽었는데 게이트가 초록으로 끝난다.
+  # REPORT_PUSH=1 이면 그 낡은 판정이 **원격에 공개**된다. 게이트가 거짓말하는 자리다.
+  local st
+  st=$(docker compose -f base.yml -f batch.yml exec -T batch \
+        curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" \
+       | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['status'])")
+  [ "$st" = "COMPLETED" ] || {
+    echo "검증이 $st 로 끝났다($2 attempt $3). 덤프를 돌리지 않는다." >&2; return 1; }
 
   # 원격까지 밀려면 이 스크립트를 REPORT_PUSH=1 로 실행한다. 기본은 로컬 커밋까지다.
   REPORT_DATASETS="$2" REPORT_PUSH="${REPORT_PUSH:-0}" bash scripts/dump-verify-report.sh

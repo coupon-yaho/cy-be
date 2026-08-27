@@ -35,6 +35,15 @@ reviews:
   #    CodeRabbit 을 required reviewer 로 등록하지 말 것.
   request_changes_workflow: true
 
+  # ── 부르기 전에는 아무것도 안 단다 ────────────────────────────────────
+  # 기본값 true 면 **PR 이 열리자마자** "Review skipped — auto reviews are disabled"
+  # 안내를 자동으로 단다. 자동 리뷰를 껐는데도 코멘트가 붙는 자리가 여기다 —
+  # 실측: PR #126 생성 00:19:19 → CodeRabbit 코멘트 00:19:27 (8초).
+  #
+  # ⚠️ **이 키는 리뷰를 켜고 끄지 않는다.** 상태 메시지(스킵 안내 등)를 띄울지만
+  #    정한다. 호출 전용으로 만드는 것은 아래 `auto_review.enabled: false` 다.
+  review_status: false
+
   high_level_summary: true
   estimate_code_review_effort: true
 
@@ -48,25 +57,26 @@ reviews:
   # suggested_labels 는 켜 둔다 — 아래 labeling_instructions 로 영역 라벨을 붙이게 했다
 
   auto_review:
-    # ── 자동 리뷰는 아직 CodeRabbit 이다 (2026-08-26 확인) ─────────────────────
+    # ── CodeRabbit 은 호출할 때만 돈다 ──────────────────────────────────────
+    # 자동 리뷰는 **Qodo 가 맡는다**(`.pr_agent.toml` 의 `[github_app].pr_commands`).
+    # 둘 다 자동으로 돌면 같은 지적이 두 번 달리고, CodeRabbit 유료 좌석이 인당
+    # 월 30달러라 팀 전원에게 붙일 수 없다는 것이 교체의 계기였다.
     #
-    # Qodo 로 옮기려다 **되돌렸다.** 전제 둘이 실측에서 깨졌다:
+    # 끈 뒤에도 **호출 리뷰는 그대로 동작한다.** Qodo 가 놓친 것 같을 때 부른다:
+    #   @coderabbitai review        변경분만
+    #   @coderabbitai full review   전체 다시
+    # 근거: https://docs.coderabbit.ai/guides/commands
     #
-    #   ⑴ Qodo 가 자동으로 도는지 **아직 모른다.** PR #119 에서는 `/review` 를 쳐야
-    #      왔는데, **그 PR 은 Qodo 설치 전에 열렸다** — `pull_request.opened` 가 이미
-    #      지나가 자동 리뷰가 돌 기회가 없었다. 교란된 실험이라 결론이 안 선다.
-    #   ⑵ 확인 전에 여기를 끄면 **자동 리뷰가 하나도 없는 구간**이 생긴다.
-    #      그 구간은 조용해서 아무도 모른다 — 그게 제일 나쁘다.
+    # ⚠️ **이 파일은 main 에도 같은 값으로 있다**(#121). 여기 따로 두는 이유는
+    #    CodeRabbit 이 **PR 의 base 쪽 설정을 읽기 때문**이다. main 만 끄면
+    #    `→ feature/CY-15` 로 가는 배치 PR 에서는 여전히 자동으로 돈다 —
+    #    실측: PR #127(base=feature/CY-15)에서 껐는데도 돌았다.
     #
-    # 무료 티어 한도가 팀 규모(5인)를 못 받치는 것은 사실이다 — 실측한 하루:
-    # 07:57 한도 · 11:27 통과 · 11:47 한도 · 13:01 통과. 그 문제는 남아 있다.
-    #
-    # **가르는 법** — Qodo 설치 뒤 **새로 여는 PR** 에서 부르지 않고 기다린다.
-    # 알아서 붙으면 자동이고, 그때 여기를 끈다.
-    #
-    # 그때까지 Qodo 는 **보조**다 — 한도에 걸렸을 때 `/review` 로 부른다.
-    # 실제로 CY-621 에서 CodeRabbit 이 세 라운드 동안 못 잡은 것을 Qodo 가 잡았다.
-    enabled: true
+    # **한때 "Qodo 가 자동으로 도는지 모른다" 며 켜 뒀다.** 그 뒤 확인됐다 —
+    # PR #121·#123 이 열리자마자 Qodo 가 describe·review 를 자동으로 달았다.
+    # #119 에서 안 왔던 것은 그 PR 이 Qodo 설치 **전에** 열려
+    # `pull_request.opened` 가 이미 지나갔기 때문이다.
+    enabled: false
     drafts: false
 
     # ── 3계층 브랜치 구조 대응 (docs/03-collaboration.md 1.1절) ──────────
