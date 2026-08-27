@@ -480,6 +480,15 @@ compose 가 넘긴다(`.gitignore` 가 `*.env` 를 막는다, CY-621). 이 컨�
 > ```
 >
 > `.gitignore` 가 `*.env` 를 막는다. 그때까지는 URL 없이 stdout 만 하는 상태로 안전하게 돈다.
+>
+> **배선을 실측으로 닫았다**(2026-08-27). 기동 로그가 `slack=연결됨` 으로 바뀌고,
+> `VerificationVerdictFailed`(critical) 를 흘렸더니 Slack 에 도착했다.
+>
+> **보내는 이름·아이콘은 payload 로 못 바꾼다.** `username`·`icon_url` 을 실어 봤는데
+> **이 워크스페이스가 무시했다** — 앱 이름(`yaho-batch`)으로 도착했다. 최신 Slack 앱은
+> `chat:write.customize` 스코프 없이는 그 둘을 못 바꾼다. 안 먹는 필드를 남기면 다음
+> 사람이 "왜 안 바뀌나" 를 다시 조사하므로 **뺐다.** 아이콘은 앱 설정에서 바꾸는 것이
+> 맞는 자리다(Basic Information > Display Information).
 
 ## 3. 만료 배치 — 실측으로 대가를 남긴 것들
 

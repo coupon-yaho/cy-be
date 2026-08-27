@@ -53,6 +53,14 @@ SLACK_TIMEOUT = 5
 SLACK_RETRIES = 1
 SLACK_RETRY_DELAY = 1
 
+# **보내는 이름·아이콘을 payload 로 안 바꾼다.** 앱 이름(`yaho-batch`)이 그대로 맞고,
+# 아이콘은 **앱 설정**에서 바꾸는 것이 맞는 자리다
+# (api.slack.com/apps > Basic Information > Display Information > App icon).
+#
+# 한때 payload 에 `username`·`icon_url` 을 실었는데 **이 워크스페이스가 무시했다** —
+# 실측: `yaho-batch` 로 도착했다. 최신 Slack 앱은 `chat:write.customize` 스코프 없이는
+# 그 둘을 못 바꾼다. 안 먹는 필드를 남기면 다음 사람이 "왜 안 바뀌나" 를 다시 조사한다.
+
 # 발화만 보낸다. resolved 까지 보내면 한 사건이 두 줄이 되고, 이 저장소의 알림 수에서는
 # 그게 곧 아무도 안 읽는 채널이 된다.
 # (**개수를 여기 적지 않는다** — 대장은 docs/14 의 채널 표이고 AlertChannelRegistryTest 가
