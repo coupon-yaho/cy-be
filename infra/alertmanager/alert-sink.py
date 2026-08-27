@@ -53,6 +53,12 @@ SLACK_TIMEOUT = 5
 SLACK_RETRIES = 1
 SLACK_RETRY_DELAY = 1
 
+# **429 는 Slack 이 `Retry-After` 로 얼마를 기다리라고 말한다.** 그것을 무시하고 고정
+# 1초 뒤에 다시 치면 **재시도도 429 다** — 한 번뿐인 재시도를 헛되이 쓴다.
+# 다만 그 값이 크면 못 기다린다. 이 리시버가 붙잡히면 그동안 들어온 알림이 전부 밀린다.
+# 그래서 상한을 두고, 넘으면 **재시도를 포기하고 그 사실을 로그에 남긴다.**
+SLACK_MAX_RETRY_DELAY = 3
+
 # **보내는 이름·아이콘을 payload 로 안 바꾼다.** 앱 이름(`yaho-batch`)이 그대로 맞고,
 # 아이콘은 **앱 설정**에서 바꾸는 것이 맞는 자리다
 # (api.slack.com/apps > Basic Information > Display Information > App icon).
@@ -168,16 +174,16 @@ class Sink(BaseHTTPRequestHandler):
 
         for attempt in range(SLACK_RETRIES + 1):
             last = attempt == SLACK_RETRIES
-            sent, retryable = self._post_to_slack(text, last=last)
-            if sent or not retryable:
+            sent, delay = self._post_to_slack(text, last=last)
+            if sent or delay is None:
                 return
             # **마지막 실패 뒤에는 안 기다린다.** 기다려도 다시 시도할 것이 없고,
             # 그 1초가 같은 payload 의 **뒤 알림들을 건마다 밀어낸다.**
             if not last:
-                time.sleep(SLACK_RETRY_DELAY)
+                time.sleep(delay)
 
     def _post_to_slack(self, text, last):
-        """``(보냈는가, 다시 시도할 만한가)``.
+        """``(보냈는가, 몇 초 뒤에 다시 보낼까)``. 다시 안 보낼 것이면 둘째가 ``None``.
 
         **다시 시도할 값이 있는 것은 429(rate limit)와 5xx(Slack 장애)뿐이다.**
         400(형식이 틀렸다)·403(웹훅이 폐기됐다)·404(없는 웹훅)는 다시 보내도 **같은 답**이라
@@ -198,18 +204,19 @@ class Sink(BaseHTTPRequestHandler):
                 # **2xx·3xx 중 200 이 아닌 것**뿐이고, 그건 재시도 대상이 아니다 —
                 # 한때 무조건 재시도로 처리해 정책과 어긋났다.
                 return False, self._log(f"Slack 이 {r.status} 를 냈다",
-                                        self._retryable(r.status), last)
+                                        self._retry_delay(r.status, r.headers), last)
         except urllib.error.HTTPError as e:
             # **상태 코드를 남긴다.** urlopen 은 4xx·5xx 를 여기로 **던지므로** 위
             # r.status 분기에 도달하지 않는다. 타입 이름만 남기면 403(웹훅 폐기)과
             # 500(Slack 장애)이 같은 줄이 된다 — 전자는 웹훅을 다시 발급해야 하고
             # 후자는 기다리면 된다. `e.code` 에는 URL 이 안 들어간다(실측).
             return False, self._log(f"Slack 이 {e.code} 를 냈다",
-                                    self._retryable(e.code), last)
+                                    self._retry_delay(e.code, e.headers), last)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             # 연결 실패·타임아웃. 순간일 수 있으니 다시 보낸다.
             # (HTTPError 가 URLError 의 하위라 위에서 먼저 잡아야 한다 — 순서가 계약이다.)
-            return False, self._log(f"Slack 전송 실패: {type(e).__name__}", True, last)
+            return False, self._log(f"Slack 전송 실패: {type(e).__name__}",
+                                    SLACK_RETRY_DELAY, last)
         except Exception as e:  # noqa: BLE001 — 아래 이유로 전부 잡는다
             # **예외 종류를 좁히면 안 된다.** 한때 (URLError, OSError, TimeoutError) 였는데
             # `Request()` 생성이 try 밖이었고, 스킴 없는 URL 에 `ValueError` 를 던진다 —
@@ -218,29 +225,47 @@ class Sink(BaseHTTPRequestHandler):
             #
             # 다만 **다시 보내지는 않는다.** 여기 오는 것은 설정·직렬화 오류라 반복해도
             # 같은 답이고, 알림마다 1초씩 밀 이유가 없다.
-            return False, self._log(f"Slack 전송 실패: {type(e).__name__}", False, last)
+            return False, self._log(f"Slack 전송 실패: {type(e).__name__}", None, last)
 
     @staticmethod
-    def _retryable(status):
-        """429(rate limit)와 5xx(Slack 장애)만 다시 보낸다."""
-        return status == 429 or status >= 500
+    def _retry_delay(status, headers):
+        """몇 초 뒤에 다시 보낼까. 다시 안 보낼 것이면 ``None``.
+
+        **429 는 Slack 이 얼마를 기다리라고 말해 준다**(``Retry-After``, 초).
+        그것을 안 보고 고정 지연으로 다시 치면 **재시도도 429 다.**
+        값이 {@code SLACK_MAX_RETRY_DELAY} 를 넘으면 포기한다 — 그만큼 붙잡혀 있으면
+        그동안 들어온 알림이 전부 밀린다.
+        """
+        if status == 429:
+            raw = headers.get("Retry-After") if headers else None
+            if raw is None:
+                return SLACK_RETRY_DELAY
+            try:
+                wait = int(float(raw))
+            except (TypeError, ValueError):
+                # 날짜 형식(HTTP-date)도 규격상 가능하다. 파싱하지 않고 기본값을 쓴다 —
+                # 그 형식을 Slack 이 쓴 적이 없고, 틀린 파싱보다 낫다.
+                return SLACK_RETRY_DELAY
+            return wait if 0 <= wait <= SLACK_MAX_RETRY_DELAY else None
+        if status >= 500:
+            return SLACK_RETRY_DELAY
+        return None
 
     @staticmethod
-    def _log(message, retryable, last):
-        """실패를 한 줄로 남기고 ``retryable`` 을 그대로 돌려준다.
+    def _log(message, delay, last):
+        """실패를 한 줄로 남기고 ``delay`` 를 그대로 돌려준다.
 
         **로그가 거짓이면 안 된다.** 한때 마지막 시도의 429·5xx 에도
         *"다시 보낸다"* 라고 적었는데, 루프는 그 자리에서 끝난다 — 운영자가
         Slack 장애 중에 재전송을 기다리게 된다. 실제로 다시 보낼 때만 그렇게 적는다.
         """
-        will_retry = retryable and not last
-        if will_retry:
-            print(f"[!] {message} — 다시 보낸다", flush=True)
-        elif not retryable:
+        if delay is None:
             print(f"[!] {message} — 다시 시도할 값이 없다", flush=True)
-        else:
+        elif last:
             print(f"[!] {message} — 마지막 시도였다", flush=True)
-        return retryable
+        else:
+            print(f"[!] {message} — {delay}초 뒤 다시 보낸다", flush=True)
+        return delay
 
     def _read_body(self, length):
         """<b>느리게 흘려보내는 전송을 끊는다.</b>
