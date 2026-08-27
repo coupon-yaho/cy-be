@@ -139,13 +139,20 @@ class IssuedValueCodecTest {
     }
 
     @Test
-    void rejectsBlankRequestTokenWhenCreatingValue() {
+    void rejectsEmptyRequestTokenWhenCreatingValue() {
         assertThatThrownBy(() -> new IssuedValue(
                 IssuedValue.Status.PENDING,
                 1L,
-                " ",
+                "",
                 "key"
         )).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void decodesWhitespaceOnlyRequestToken() {
+        IssuedValue decoded = codec.decode("P|1|   |key");
+
+        assertThat(decoded.requestToken()).isEqualTo("   ");
     }
 
     @Test
