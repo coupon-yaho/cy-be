@@ -456,6 +456,7 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 | **보내다 실패해도 요청을 안 죽인다** | 200 을 이미 보낸 뒤라 Alertmanager 는 성공으로 알고, 같은 payload 의 **뒤 알림들이 통째로 유실된다** |
 | **Slack 타임아웃 5초** | 이 리시버가 밀리면 그동안 들어온 알림이 전부 밀린다 |
 | **실패하면 한 번만 다시 보낸다** | 우리가 이미 200 을 냈으므로 Alertmanager 가 재시도하지 않는다. 순간 실패를 여기서 안 흡수하면 **`repeat_interval`(1시간) 안에 해소되는 알림은 영영 한 번도 안 간다**(`resolved` 는 안 보내므로). 최악 지연은 5+1+5=11초 — **마지막 실패 뒤에는 안 기다린다**(기다리면 12초이고, 그 1초가 같은 payload 의 뒤 알림들을 건마다 민다) |
+| **영구 오류는 재시도하지 않는다** | 400·403·404 는 다시 보내도 **같은 답**이다 — 재시도가 지연만 늘리고 그 지연이 같은 payload 의 뒤 알림을 민다. 다시 시도할 값이 있는 것은 429(rate limit)와 5xx(Slack 장애)뿐이다. 실측: 403 → 1회, 500·429 → 2회 |
 | **HTTP 상태 코드를 남긴다** | `urlopen` 은 4xx·5xx 를 **`HTTPError` 로 던지므로** 상태 코드 분기에 도달하지 않는다. 타입 이름만 남기면 **403(웹훅 폐기)과 500(Slack 장애)이 같은 줄**이 된다 — 전자는 웹훅을 다시 발급해야 하고 후자는 기다리면 된다. `e.code` 에는 URL 이 안 들어간다(실측) |
 | **URL 을 로그에 안 싣는다** | 웹훅 URL 자체가 자격증명이다 |
 
@@ -463,10 +464,22 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 compose 가 넘긴다(`.gitignore` 가 `*.env` 를 막는다, CY-621). 이 컨테이너는 호스트 포트
 매핑이 없고 `read_only`·`cap_drop: [ALL]`·비루트(65534)로 돈다.
 
-> **남은 것 — 웹훅 URL 이 아직 없다.** `SLACK_WEBHOOK_URL` 저장소 시크릿은 GitHub Actions
-> 전용(`ai-review-slack.yml`)이라 로컬 컨테이너가 못 읽는다. **배치 알림용 채널을 따로 파는
-> 것을 권한다** — 알림이 서른여덟이라 리뷰 채널에 부으면 리뷰가 묻힌다.
-> 지금은 URL 없이 stdout 만 하는 상태로 안전하게 돈다.
+> **남은 것 — 웹훅 URL 을 컨테이너에 넣어야 한다.**
+> **PR 리뷰 알림과 같은 웹훅을 쓴다**(결정). 채널을 나누면 볼 곳이 둘이 되고, 이 팀 규모에서는
+> 그게 곧 한쪽을 안 보는 것이다.
+>
+> 다만 **값을 코드로 못 가져온다.** `SLACK_WEBHOOK_URL` 저장소 시크릿은 GitHub Actions
+> 전용이고(`ai-review-slack.yml`), GitHub 은 시크릿 값 **조회 API 자체를 안 준다.**
+> Slack 앱 설정(`api.slack.com/apps` → Incoming Webhooks)에서 다시 복사해야 한다.
+>
+> ```bash
+> echo 'SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...' >> db.env
+> set -a; . ./db.env; set +a
+> docker compose -f base.yml up -d --force-recreate alert-sink
+> docker logs cy-alert-sink-1 | head -1     # "slack=연결됨" 이 떠야 한다
+> ```
+>
+> `.gitignore` 가 `*.env` 를 막는다. 그때까지는 URL 없이 stdout 만 하는 상태로 안전하게 돈다.
 
 ## 3. 만료 배치 — 실측으로 대가를 남긴 것들
 
