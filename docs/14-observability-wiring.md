@@ -361,7 +361,7 @@ docker compose -f base.yml exec -T alertmanager amtool silence query  --alertman
 docker compose -f base.yml exec -T alertmanager amtool silence expire --alertmanager.url=http://localhost:9093 <ID>
 ```
 
-**덮는 것은 넷이고, 셋은 일부러 뺐다.**
+**덮는 것은 다섯이고, 셋은 일부러 뺐다.**
 
 | 덮는다 | 왜 |
 |---|---|
@@ -383,14 +383,21 @@ docker compose -f base.yml exec -T alertmanager amtool silence expire --alertman
 > 시연 절차에서 `BATCH_SCHEDULING_ENABLED=true` 로 띄우기 **직전**에 이것을 돌린다:
 >
 > ```bash
+> COMMENT='BATCH_SCHEDULING_ENABLED=false — 만료·정리·검증 크론이 일부러 꺼져 있다 (docs/14). 스케줄러를 켜기 전에 반드시 해제한다.'
 > docker compose -f base.yml exec -T alertmanager amtool silence query \
 >   --alertmanager.url=http://localhost:9093 -o json \
->   | jq -r '.[] | select(.comment | test("BATCH_SCHEDULING_ENABLED")) | .id' \
+>   | jq -r --arg c "$COMMENT" '.[] | select(.comment == $c) | .id' \
 >   | xargs -r -n1 docker compose -f base.yml exec -T alertmanager \
 >       amtool silence expire --alertmanager.url=http://localhost:9093
 > ```
 >
-> `--comment` 에 사유를 적어 둔 값이 여기서 나온다 — 그것을 키로 찾는다.
+> **부분 일치가 아니라 정확히 같은 `comment` 만 고른다.** 한때
+> `test("BATCH_SCHEDULING_ENABLED")` 로 찾았는데, 그 설정 이름을 설명에 쓴 **다른 silence 도
+> 함께 풀린다** — 억제 중이던 알림이 예고 없이 쏟아진다. 위 문장은 이 절이 거는 명령의
+> `--comment` 와 **글자 그대로 같아야 한다.** 한쪽을 고치면 다른 쪽도 고친다.
+>
+> 더 확실한 길은 **건 직후 ID 를 적어 두는 것**이다(`amtool silence add` 가 ID 를 낸다).
+> 위 방법은 그 ID 를 못 챙긴 경우의 대비책이다.
 
 > **콜드 스타트용 26시간 silence 와 대상이 겹친다. 둘 다 걸지 말 것** —
 > 볼륨을 지우고 띄운 직후만이면 그쪽(26h), 스케줄러를 계속 끄고 둘 것이면 이쪽 하나만 건다.
