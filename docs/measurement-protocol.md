@@ -122,15 +122,31 @@ percent-encoding 없이 넣으면 Prometheus가 `400 Bad Request`로 거부한�
 PROM=<prometheus 컨테이너 이름>
 
 # promq <endpoint> <expr> [extra=params ...]
+# 실패하면 값을 내지 않고 0이 아닌 코드로 끝난다. 위 절의 계약을 헬퍼가 직접 지킨다 —
+# 호출부가 실패를 "0개"로 삼키지 못하게 하는 것이 이 검사의 목적이다.
 promq() {
   local ep="$1" expr="$2"; shift 2
-  local e; e=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$expr")
+  local e; e=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$expr") \
+    || { echo "promq: 식 인코딩 실패 — $expr" >&2; return 1; }
   local qs="query=$e"; for p in "$@"; do qs="$qs&$p"; done
-  docker exec "$PROM" sh -c "wget -qO- 'http://localhost:9090/api/v1/$ep?$qs'"
+  local out rc
+  out=$(docker exec "$PROM" sh -c "wget -qO- 'http://localhost:9090/api/v1/$ep?$qs'" 2>/dev/null); rc=$?
+  if (( rc != 0 )) || [[ -z "$out" ]]; then
+    echo "promq: 가져오기 실패(rc=$rc). 0이 아니라 <측정 실패>로 기록할 것 — $expr" >&2
+    return 1
+  fi
+  case "$out" in
+    *'"status":"success"'*) printf '%s' "$out" ;;
+    *) echo "promq: Prometheus가 오류를 반환했다 — $out" >&2; return 1 ;;
+  esac
 }
 
 promq query 'avg_over_time(up{job="api"}[241s])' "time=<창 끝 epoch>"
 ```
+
+**결과가 비어 있는 것과 가져오기가 실패한 것은 다르다.** 시계열이 실제로 없어서
+`"result":[]`가 오는 것은 정상 응답이므로 헬퍼가 통과시킨다. 판단은 호출부가 한다 —
+값이 없는 것과 못 가져온 것을 거기서 다시 뭉개지 말 것.
 
 창 길이를 `<W>s`에 넣고 창 끝 시각에 instant query로 평가한다. job마다 한 벌씩 돌린다.
 
