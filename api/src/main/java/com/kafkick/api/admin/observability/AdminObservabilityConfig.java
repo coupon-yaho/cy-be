@@ -16,6 +16,7 @@ import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -121,6 +122,7 @@ public class AdminObservabilityConfig {
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
             CampaignOverviewCalculator campaignOverviewCalculator,
+            CampaignPreparationCalculator campaignPreparationCalculator,
             ObjectProvider<ConsistencyFinalReader> consistencyFinalReaderProvider,
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
@@ -132,7 +134,7 @@ public class AdminObservabilityConfig {
                 timeProvider, campaignDataReader, runtimeConfigStore, policyProperties.toCorePolicy(),
                 observationSource, issuanceFlowCalculator,
                 issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
-                stockRiskCalculator, campaignOverviewCalculator,
+                stockRiskCalculator, campaignOverviewCalculator, campaignPreparationCalculator,
                 consistencyFinalReader, consistencyActionCalculator,
                 operationActionCalculator, overviewStatusCalculator);
     }

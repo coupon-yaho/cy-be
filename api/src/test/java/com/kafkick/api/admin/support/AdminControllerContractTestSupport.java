@@ -36,7 +36,7 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsCalculator;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
 import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
@@ -205,7 +205,7 @@ public final class AdminControllerContractTestSupport {
                                                         ? new CouponMetricsSource.StockCounts(
                                                         campaign.totalQuantity(), campaign.activeCount()) : null,
                                                 campaign.stockStatus(), campaign.stockObservedAt()),
-                                        new PreparationObservation(null, SourceStatus.PENDING, null)))
+                                        new PreparationSource(null, null, SourceStatus.PENDING, null)))
                                 .toList());
             }
 

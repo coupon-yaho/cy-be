@@ -53,7 +53,7 @@ import org.testcontainers.utility.DockerImageName;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
@@ -208,11 +208,11 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(catalog.campaigns().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(200, 0));
         assertThat(catalog.campaigns().get(0).preparation())
-                .isEqualTo(new PreparationObservation(false, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(true, false, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(1).preparation())
-                .isEqualTo(new PreparationObservation(true, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(2).preparation())
-                .isEqualTo(new PreparationObservation(true, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
     }
 
     @Test

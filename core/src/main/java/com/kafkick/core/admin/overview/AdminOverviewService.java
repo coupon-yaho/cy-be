@@ -14,6 +14,7 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.CampaignCalculation;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.PreparationCalculation;
+import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueCalculation;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -65,6 +66,7 @@ public class AdminOverviewService {
     private final CustomerOutcomeCalculator customerOutcomeCalculator;
     private final StockRiskCalculator stockRiskCalculator;
     private final CampaignOverviewCalculator campaignOverviewCalculator;
+    private final CampaignPreparationCalculator campaignPreparationCalculator;
     private final ConsistencyFinalReader consistencyFinalReader;
     private final ConsistencyActionCalculator consistencyActionCalculator;
     private final OperationActionCalculator operationActionCalculator;
@@ -84,6 +86,7 @@ public class AdminOverviewService {
      * @param customerOutcomeCalculator O3 고객 결과 계산기
      * @param stockRiskCalculator O4 V1 재고·소진 위험 계산기
      * @param campaignOverviewCalculator 캠페인 상태·오픈 임박·계산 완료 관측 조립기
+     * @param campaignPreparationCalculator DB·Runtime 설정을 결합한 캠페인 준비 항목 계산기
      * @param consistencyFinalReader 회차 모집단의 최신 FINAL 일괄 조회 경계
      * @param consistencyActionCalculator FINAL 결과의 조치 후보 변환 계산기
      * @param operationActionCalculator 판정 완료 조치 후보의 KPI·목록 집계 계산기
@@ -101,6 +104,7 @@ public class AdminOverviewService {
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
             CampaignOverviewCalculator campaignOverviewCalculator,
+            CampaignPreparationCalculator campaignPreparationCalculator,
             ConsistencyFinalReader consistencyFinalReader,
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
@@ -117,12 +121,44 @@ public class AdminOverviewService {
         this.customerOutcomeCalculator = customerOutcomeCalculator;
         this.stockRiskCalculator = stockRiskCalculator;
         this.campaignOverviewCalculator = campaignOverviewCalculator;
+        this.campaignPreparationCalculator = Objects.requireNonNull(
+                campaignPreparationCalculator, "campaignPreparationCalculator");
         this.consistencyFinalReader = Objects.requireNonNull(
                 consistencyFinalReader, "consistencyFinalReader");
         this.consistencyActionCalculator = Objects.requireNonNull(
                 consistencyActionCalculator, "consistencyActionCalculator");
         this.operationActionCalculator = operationActionCalculator;
         this.overviewStatusCalculator = overviewStatusCalculator;
+    }
+
+    /**
+     * 이전 조립 코드가 새 준비 계산기를 넘기지 않을 때 기본 순수 계산기를 연결합니다.
+     *
+     * @deprecated 생산 설정은 {@link CampaignPreparationCalculator}를 명시적으로 주입해야 합니다.
+     */
+    @Deprecated
+    public AdminOverviewService(
+            TimeProvider timeProvider,
+            AdminCampaignDataReader campaignDataReader,
+            RuntimeConfigStore runtimeConfigStore,
+            OverviewCalculationPolicy policy,
+            OverviewObservationSource observationSource,
+            IssuanceFlowCalculator issuanceFlowCalculator,
+            IssuanceActionCalculator issuanceActionCalculator,
+            CampaignQueueCalculator campaignQueueCalculator,
+            CustomerOutcomeCalculator customerOutcomeCalculator,
+            StockRiskCalculator stockRiskCalculator,
+            CampaignOverviewCalculator campaignOverviewCalculator,
+            ConsistencyFinalReader consistencyFinalReader,
+            ConsistencyActionCalculator consistencyActionCalculator,
+            OperationActionCalculator operationActionCalculator,
+            OverviewStatusCalculator overviewStatusCalculator
+    ) {
+        this(timeProvider, campaignDataReader, runtimeConfigStore, policy, observationSource,
+                issuanceFlowCalculator, issuanceActionCalculator, campaignQueueCalculator,
+                customerOutcomeCalculator, stockRiskCalculator, campaignOverviewCalculator,
+                new CampaignPreparationCalculator(), consistencyFinalReader, consistencyActionCalculator,
+                operationActionCalculator, overviewStatusCalculator);
     }
 
     /**
@@ -141,7 +177,8 @@ public class AdminOverviewService {
         AdminCampaignCatalog catalog = campaignDataReader.loadCatalog(snapshotAt);
         // 현재값과 last-known-good를 섞지 않도록 요청마다 get() 결과 하나만 사용합니다.
         RuntimeConfigSnapshot runtimeConfig = runtimeConfigStore.get();
-        List<CampaignOverviewSource> campaigns = campaigns(catalog, runtimeConfig);
+        List<CampaignOverviewSource> campaigns = campaigns(
+                catalog, runtimeConfig, campaignPreparationCalculator);
         List<Long> couponIds = catalog.campaigns().stream()
                 .map(AdminCampaignCatalog.CampaignData::couponId)
                 .toList();
@@ -255,23 +292,25 @@ public class AdminOverviewService {
                 stockStatus.carriesValue() ? campaign.stock().observedAt() : null);
     }
 
-    /** DB catalog를 기존 계산기 입력으로 변환하고 Runtime 현재값의 원천 상태를 재고 판정에 반영합니다. */
+    /** DB catalog를 Core가 확정한 준비 결과와 함께 기존 계산기 입력으로 변환합니다. */
     private static List<CampaignOverviewSource> campaigns(
             AdminCampaignCatalog catalog,
-            RuntimeConfigSnapshot runtimeConfig
+            RuntimeConfigSnapshot runtimeConfig,
+            CampaignPreparationCalculator campaignPreparationCalculator
     ) {
         if (catalog.status() != SourceStatus.VALID) {
             return List.of();
         }
         return catalog.campaigns().stream()
-                .map(campaign -> campaignSource(campaign, runtimeConfig))
+                .map(campaign -> campaignSource(campaign, runtimeConfig, campaignPreparationCalculator))
                 .toList();
     }
 
     /** DB 메타·재고와 요청에서 한 번 읽은 엔진 설정을 한 캠페인 계산 원천으로 조립합니다. */
     private static CampaignOverviewSource campaignSource(
             AdminCampaignCatalog.CampaignData campaign,
-            RuntimeConfigSnapshot runtimeConfig
+            RuntimeConfigSnapshot runtimeConfig,
+            CampaignPreparationCalculator campaignPreparationCalculator
     ) {
         SourceStatus stockStatus = campaign.status() == CouponRoundStatus.OPEN
                 ? campaign.stock().status() : SourceStatus.N_A;
@@ -285,7 +324,7 @@ public class AdminOverviewService {
                 carriesStock ? campaign.stock().value().totalQuantity() : null,
                 carriesStock ? campaign.stock().value().activeCount() : null,
                 carriesStock ? campaign.stock().observedAt() : null,
-                stockStatus, campaign.preparation());
+                stockStatus, campaignPreparationCalculator.calculate(campaign.preparation(), runtimeConfig));
     }
 
     /** Redis 대기열 연결 전에는 진행 캠페인만 PENDING, 아직 열리지 않았거나 종료된 캠페인은 N_A로 둡니다. */

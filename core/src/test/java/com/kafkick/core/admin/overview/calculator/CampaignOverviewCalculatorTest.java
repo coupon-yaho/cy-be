@@ -361,7 +361,7 @@ class CampaignOverviewCalculatorTest {
             Long totalQuantity,
             Long activeCount,
             Instant stockObservedAt,
-            boolean preparationCompleted
+            boolean preparationReady
     ) {
         return new CampaignOverviewSource(
                 couponId,
@@ -375,7 +375,7 @@ class CampaignOverviewCalculatorTest {
                 activeCount,
                 stockObservedAt,
                 stockObservedAt == null ? SourceStatus.UNAVAILABLE : SourceStatus.VALID,
-                new PreparationObservation(preparationCompleted, SourceStatus.VALID, SNAPSHOT_AT)
+                new PreparationObservation(preparationReady, SourceStatus.VALID, SNAPSHOT_AT)
         );
     }
 

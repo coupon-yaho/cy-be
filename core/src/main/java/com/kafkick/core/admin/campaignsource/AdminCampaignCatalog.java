@@ -40,7 +40,7 @@ public record AdminCampaignCatalog(
             Instant opensAt,
             Instant closesAt,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
-            PreparationObservation preparation
+            PreparationSource preparation
     ) {
 
         /** 캠페인 메타데이터와 독립 관측값이 누락되지 않도록 검증합니다. */
@@ -52,6 +52,44 @@ public record AdminCampaignCatalog(
             Objects.requireNonNull(closesAt, "closesAt");
             Objects.requireNonNull(stock, "stock");
             Objects.requireNonNull(preparation, "preparation");
+        }
+
+        /**
+         * 이전 fixture의 최종 준비 관측을 DB 원천 계약으로 변환합니다.
+         *
+         * @param couponId 캠페인 식별자
+         * @param campaignName 캠페인명
+         * @param brandName 브랜드명
+         * @param status 캠페인 상태
+         * @param opensAt 오픈 시각
+         * @param closesAt 종료 시각
+         * @param stock 재고 관측값
+         * @param preparation 이전 fixture의 최종 준비 관측값
+         * @deprecated 새 생산 코드와 fixture는 {@link PreparationSource}를 전달해야 합니다.
+         */
+        @Deprecated
+        public CampaignData(
+                long couponId,
+                String campaignName,
+                String brandName,
+                CouponRoundStatus status,
+                Instant opensAt,
+                Instant closesAt,
+                CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
+                PreparationObservation preparation
+        ) {
+            this(couponId, campaignName, brandName, status, opensAt, closesAt, stock,
+                    preparationSource(preparation));
+        }
+
+        /** 이전 최종 fixture 값을 DB 원천 값으로만 보수적으로 옮깁니다. */
+        private static PreparationSource preparationSource(PreparationObservation preparation) {
+            Objects.requireNonNull(preparation, "preparation");
+            if (!preparation.status().carriesValue()) {
+                return new PreparationSource(null, null, preparation.status(), null);
+            }
+            boolean ready = Boolean.TRUE.equals(preparation.completed());
+            return new PreparationSource(ready, ready, preparation.status(), preparation.observedAt());
         }
     }
 }
