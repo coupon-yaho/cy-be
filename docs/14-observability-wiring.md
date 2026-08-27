@@ -341,9 +341,59 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 > ⚠️ **이 문단은 2026-08-22 의 규칙 기준이다.** 그때는 `absent_over_time` 이 영구히 참이
 > 되어 15분 뒤 critical 이었다. CY-392 가 축을 *"마지막 성공 시각"* 으로 갈면서 시계열은
 > **태어나되 값이 `NaN`** 이 됐고(게이지를 `Job` 빈에서 무조건 등록한다), 지금 그 상태를
-> 지는 것은 `ExpireNeverSucceeded`(NaN, `for` 10분) · `CleanupNeverSucceeded`(NaN, 30분)와
-> `ExpireGaugeMissing`(absent + `up`, 5분)이다. **결론은 그대로다** — 규칙에 예외를 안 파고
+> 지는 것은 `ExpireNeverSucceeded`(NaN, `for` 10분) · `CleanupNeverSucceeded`(NaN, 30분)이다.
+> **`ExpireGaugeMissing` 은 여기 안 들어간다** — 게이지가 `NaN` 으로라도 태어나므로
+> `absent()` 가 거짓이다(CY-661 실측). 한때 이 줄에 열거돼 있었다. **결론은 그대로다** — 규칙에 예외를 안 파고
 > 사람이 재운다.
+
+### 거는 명령 (CY-661 이 실제로 걸었다)
+
+```bash
+docker compose -f base.yml exec -T alertmanager amtool silence add \
+  --alertmanager.url=http://localhost:9093 \
+  'alertname=~"(Expire|Cleanup)NeverSucceeded|ExpireMetricsUnknown|Verify(NeverSucceeded|NotSucceeding)"' \
+  --duration=168h \
+  --author="$(git config user.name)" \
+  --comment='BATCH_SCHEDULING_ENABLED=false — 만료·정리·검증 크론이 일부러 꺼져 있다 (docs/14). 스케줄러를 켜기 전에 반드시 해제한다.'
+
+# 확인·해제
+docker compose -f base.yml exec -T alertmanager amtool silence query  --alertmanager.url=http://localhost:9093
+docker compose -f base.yml exec -T alertmanager amtool silence expire --alertmanager.url=http://localhost:9093 <ID>
+```
+
+**덮는 것은 넷이고, 셋은 일부러 뺐다.**
+
+| 덮는다 | 왜 |
+|---|---|
+| `ExpireNeverSucceeded` · `CleanupNeverSucceeded` | 값이 `NaN` 이라 뜬다 — 한 번도 안 돌았다 |
+| `ExpireMetricsUnknown` | 위와 **같은 사건**이다. 대기 건수를 셀 기준 실행이 없다 |
+| `VerifyNeverSucceeded` · `VerifyNotSucceeding` | **검증 크론도 같은 스위치에 묶여 있다**(`VerifyScheduler` 의 `@ConditionalOnProperty`). 안 덮으면 25시간 뒤부터 critical 이 시간당 한 번씩 나간다 |
+
+| 안 덮는다 | 왜 |
+|---|---|
+| `ExpireGaugeMissing` · `CleanupGaugeMissing` | **이 상태에서 안 뜬다.** `BatchRunMetrics` 가 `Job` 빈마다 게이지를 **무조건** 등록하므로 시계열은 태어나고 값만 `NaN` 이다 — `absent()` 가 거짓이다(실측: `cy_batch_last_success_seconds{spring_batch_job_name="expireJob"} NaN`). 덮으면 **뜨지 않는 것을 덮으면서 라벨 축이 무너진 것만 가린다** — 잡 이름이 바뀌거나 스크레이프가 `spring_batch_job_name` 을 개명시키면 만료 감시 축 전체가 조용해지는데, 그것을 잡는 마지막 장치가 이 둘이다 |
+| `BatchJobFailed` | 스위치와 무관하다. 실제로 돌다가 죽은 것이다 |
+
+> ⚠️ **`--duration` 이 프로젝트보다 짧아야 한다.** 한때 720시간(30일)으로 걸었는데
+> `docs/04` 가 *"3주 프로젝트"* 라 **끝날 때까지 만료되지 않는다** — "그 안에 한 번은 다시
+> 본다" 를 강제하는 것이 아무것도 없다. 168시간(1주)이면 게이트 사이에 최소 한 번 재검토가
+> 강제된다.
+
+> ⚠️ **스케줄러를 켜기 전에 반드시 푼다.** 살아 있으면 만료가 실제로 실패해도 함께 덮인다.
+> 시연 절차에서 `BATCH_SCHEDULING_ENABLED=true` 로 띄우기 **직전**에 이것을 돌린다:
+>
+> ```bash
+> docker compose -f base.yml exec -T alertmanager amtool silence query \
+>   --alertmanager.url=http://localhost:9093 -o json \
+>   | jq -r '.[] | select(.comment | test("BATCH_SCHEDULING_ENABLED")) | .id' \
+>   | xargs -r -n1 docker compose -f base.yml exec -T alertmanager \
+>       amtool silence expire --alertmanager.url=http://localhost:9093
+> ```
+>
+> `--comment` 에 사유를 적어 둔 값이 여기서 나온다 — 그것을 키로 찾는다.
+
+> **콜드 스타트용 26시간 silence 와 대상이 겹친다. 둘 다 걸지 말 것** —
+> 볼륨을 지우고 띄운 직후만이면 그쪽(26h), 스케줄러를 계속 끄고 둘 것이면 이쪽 하나만 건다.
 
 **만료·정리는 규칙에 예외를 안 판다.** `cy_batch_scheduling_enabled` 게이지를 만들면
 *일부러 껐다* 와 *꺼져 버렸다* 가 같은 값이 되고, 그 둘의 결말이 다르다 — 만료가 하루 안 돌면
