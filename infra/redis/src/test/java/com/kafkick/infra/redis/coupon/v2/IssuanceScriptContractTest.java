@@ -52,10 +52,18 @@ class IssuanceScriptContractTest {
     private static final GenericContainer<?> REDIS = new GenericContainer<>(
             DockerImageName.parse("redis:7.4-alpine")).withExposedPorts(6379);
 
-    private static final String STOCK = "cy:v2:stock:{r}";
-    private static final String ISSUED = "cy:v2:issued:{r}";
-    private static final String META = "cy:v2:meta:{r}";
-    private static final String ISSUED_EVER = "cy:v2:issued_ever:{r}";
+    /**
+     * 키 이름과 해시태그의 출처는 <b>어댑터({@link IssuanceKeys})</b> 한 곳이다. 여기 리터럴을
+     * 두면 어댑터가 키를 바꿔도 이 테스트는 계속 초록이고, 어긋난 사실은 정합성 리더가
+     * 아무것도 못 읽을 때에야 드러난다. KEYS 순서도 같은 이유로 {@link IssuanceScriptRunner}
+     * 가 만든다 — 5종의 순서가 제각각이라 손으로 적으면 언젠가 틀린다.
+     */
+    private static final long ROUND_ID = 7;
+    private static final IssuanceKeys KEYS = IssuanceKeys.of(ROUND_ID);
+    private static final String STOCK = KEYS.stock();
+    private static final String ISSUED = KEYS.issued();
+    private static final String META = KEYS.meta();
+    private static final String ISSUED_EVER = KEYS.issuedEver();
 
     private static final String MEMBER = "42";
     private static final long HOUR = 3_600_000L;
@@ -69,6 +77,7 @@ class IssuanceScriptContractTest {
 
     private static LettuceConnectionFactory factory;
     private static StringRedisTemplate redis;
+    private static IssuanceScriptRunner runner;
 
     private final IssuedValueCodec codec = new IssuedValueCodec();
 
@@ -79,6 +88,7 @@ class IssuanceScriptContractTest {
         factory.afterPropertiesSet();
         factory.start();
         redis = new StringRedisTemplate(factory);
+        runner = new IssuanceScriptRunner(redis);
     }
 
     @AfterAll
@@ -348,9 +358,7 @@ class IssuanceScriptContractTest {
         redis.opsForValue().set(ISSUED_EVER, "99999999999998");
 
         assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.OK);
-        List<?> second = redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                "other-member", GRADE_BIT, "key-2", TOKEN_B);
+        List<?> second = runner.claim(ROUND_ID, "other-member", GRADE_BIT, "key-2", TOKEN_B);
 
         assertThat(code(second)).isEqualTo(IssuanceScriptCodes.Claim.OK);
         assertThat(issuedEver()).isEqualTo(100_000_000_000_000L);
@@ -404,8 +412,7 @@ class IssuanceScriptContractTest {
     void reclaimRejectsNonCanonicalTotal() {
         redis.opsForHash().put(ISSUED, MEMBER, "X|1|t|k");
 
-        assertThat(redis.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, "1", "007"))
+        assertThat(runner.reclaimCorrupt(ROUND_ID, MEMBER, "1", "007"))
                 .isEqualTo(IssuanceScriptCodes.Reclaim.BAD_ARGUMENT);
         assertThat(stored()).isEqualTo("X|1|t|k");
     }
@@ -513,9 +520,7 @@ class IssuanceScriptContractTest {
     @DisplayName("등급 비트가 숫자가 아니거나 정수가 아니면 -10 이다 — bit.band 가 터지면 정체불명 5xx 다")
     @ValueSource(strings = {"nope", "1.5", "", "-1"})
     void rejectsNonIntegerGradeBit(String gradeBit) {
-        List<?> result = redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                MEMBER, gradeBit, "key-1", TOKEN_A);
+        List<?> result = runner.claim(ROUND_ID, MEMBER, gradeBit, "key-1", TOKEN_A);
 
         assertThat(code(result)).isEqualTo(IssuanceScriptCodes.Claim.BAD_ARGUMENT);
         assertThat(stock()).isEqualTo(TOTAL);
@@ -525,9 +530,7 @@ class IssuanceScriptContractTest {
     @DisplayName("자기 파서가 파손이라 부를 값을 쓰기 전에 -10 으로 막는다")
     @MethodSource("badArguments")
     void rejectsArgumentsThatWouldWriteACorruptValue(String key, String token) {
-        List<?> result = redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                MEMBER, GRADE_BIT, key, token);
+        List<?> result = runner.claim(ROUND_ID, MEMBER, GRADE_BIT, key, token);
 
         assertThat(code(result)).isEqualTo(IssuanceScriptCodes.Claim.BAD_ARGUMENT);
         assertThat(stored()).isNull();
@@ -558,8 +561,7 @@ class IssuanceScriptContractTest {
         claim("key-1", TOKEN_A);
         String before = stored();
 
-        long result = redis.execute(IssuanceScripts.COMPENSATE,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, token);
+        long result = runner.compensate(ROUND_ID, MEMBER, token);
 
         assertThat(result)
                 .as("저장 토큰은 ([^|]+) 라 절대 이 값들과 같을 수 없다 — 항상 0 이 나오는 인자다")
@@ -575,7 +577,7 @@ class IssuanceScriptContractTest {
         claim("key-1", TOKEN_A);
         String before = stored();
 
-        long result = redis.execute(IssuanceScripts.COMPLETE, List.of(ISSUED), MEMBER, token);
+        long result = runner.complete(ROUND_ID, MEMBER, token);
 
         assertThat(result).isEqualTo(IssuanceScriptCodes.Complete.BAD_ARGUMENT);
         assertThat(stored()).isEqualTo(before);
@@ -584,9 +586,7 @@ class IssuanceScriptContractTest {
     @Test
     @DisplayName("빈 memberId 는 -10 이다 — 빈 값끼리 같은 field 를 공유한다")
     void rejectsEmptyMemberId() {
-        List<?> result = redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                "", GRADE_BIT, "key-1", TOKEN_A);
+        List<?> result = runner.claim(ROUND_ID, "", GRADE_BIT, "key-1", TOKEN_A);
 
         assertThat(code(result)).isEqualTo(IssuanceScriptCodes.Claim.BAD_ARGUMENT);
         assertThat(stock()).isEqualTo(TOTAL);
@@ -597,14 +597,12 @@ class IssuanceScriptContractTest {
     void completeCompensateReclaimRejectEmptyMemberId() {
         claim("key-1", TOKEN_A);
 
-        assertThat(redis.execute(IssuanceScripts.COMPLETE, List.of(ISSUED), "", TOKEN_A))
+        assertThat(runner.complete(ROUND_ID, "", TOKEN_A))
                 .isEqualTo(IssuanceScriptCodes.Complete.BAD_ARGUMENT);
-        assertThat(redis.execute(IssuanceScripts.COMPENSATE,
-                List.of(STOCK, ISSUED, ISSUED_EVER), "", TOKEN_A))
+        assertThat(runner.compensate(ROUND_ID, "", TOKEN_A))
                 .as("HGET 이 false 라 '내 것이 아님(0)' 으로 나가면 재고가 조용히 잠긴다")
                 .isEqualTo(IssuanceScriptCodes.Compensate.BAD_ARGUMENT);
-        assertThat(redis.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(STOCK, ISSUED, ISSUED_EVER), "", "1", Integer.toString(TOTAL)))
+        assertThat(runner.reclaimCorrupt(ROUND_ID, "", "1", Integer.toString(TOTAL)))
                 .isEqualTo(IssuanceScriptCodes.Reclaim.BAD_ARGUMENT);
         assertThat(stock()).isEqualTo(TOTAL - 1);
     }
@@ -612,9 +610,7 @@ class IssuanceScriptContractTest {
     @Test
     @DisplayName("32비트를 넘는 등급 비트는 -10 이다 — bit.band 가 접어서 등급 게이트를 통과시킨다")
     void rejectsGradeBitBeyond32Bits() {
-        List<?> result = redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                MEMBER, Long.toString((1L << 32) + 1), "key-1", TOKEN_A);
+        List<?> result = runner.claim(ROUND_ID, MEMBER, Long.toString((1L << 32) + 1), "key-1", TOKEN_A);
 
         assertThat(code(result))
                 .as("2^32+1 은 최하위 비트로 접혀 gradeMask 와 겹친다")
@@ -682,9 +678,7 @@ class IssuanceScriptContractTest {
         redis.opsForValue().set(STOCK, "5");
 
         List<Long> codes = inParallel(20, i -> {
-            List<?> r = redis.execute(IssuanceScripts.CLAIM,
-                    List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                    "m" + i, GRADE_BIT, "key-" + i, "tok-" + i);
+            List<?> r = runner.claim(ROUND_ID, "m" + i, GRADE_BIT, "key-" + i, "tok-" + i);
             return code(r);
         });
 
@@ -725,10 +719,8 @@ class IssuanceScriptContractTest {
     @Test
     @DisplayName("복원 요청이 헤드룸보다 많으면 딱 헤드룸만큼만 성공한다")
     void restoreRaceRespectsCapUnderPressure() throws Exception {
-        redis.execute(IssuanceScripts.CLAIM, List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                "m1", GRADE_BIT, "key-1", "tok-1");
-        redis.execute(IssuanceScripts.CLAIM, List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                "m2", GRADE_BIT, "key-2", "tok-2");
+        runner.claim(ROUND_ID, "m1", GRADE_BIT, "key-1", "tok-1");
+        runner.claim(ROUND_ID, "m2", GRADE_BIT, "key-2", "tok-2");
         assertThat(stock()).isEqualTo(TOTAL - 2);
 
         List<Long> results = inParallel(6, i -> restore("1"));
@@ -748,8 +740,7 @@ class IssuanceScriptContractTest {
 
         List<Long> results = inParallel(12, i -> i % 2 == 0
                 ? complete(TOKEN_A)
-                : redis.execute(IssuanceScripts.COMPENSATE,
-                        List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, TOKEN_A));
+                : runner.compensate(ROUND_ID, MEMBER, TOKEN_A));
 
         // 두 성공 코드가 똑같이 1 이라, 평평한 목록에서 값으로 세면 같은 원소를 두 번 센다.
         // inParallel 은 작업 순서대로 결과를 돌려주므로 짝/홀 인덱스로 가른다.
@@ -778,17 +769,14 @@ class IssuanceScriptContractTest {
     @DisplayName("발급과 배치 복원이 동시에 돌아도 stock 이 총재고를 넘지 않는다")
     void claimAndRestoreNeverExceedTotal() throws Exception {
         for (int i = 0; i < 2; i++) {
-            redis.execute(IssuanceScripts.CLAIM, List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                    "seed" + i, GRADE_BIT, "seed-key-" + i, "seed-tok-" + i);
+            runner.claim(ROUND_ID, "seed" + i, GRADE_BIT, "seed-key-" + i, "seed-tok-" + i);
         }
         assertThat(stock()).isEqualTo(TOTAL - 2);
 
         // 헤드룸은 2인데 복원 요청이 4건 × 3장이다. 상한 검사를 지우면 선점이 아무리 많아도
         // 8 - 4 + 12 = 16 이라 TOTAL 을 반드시 넘는다 — 그때 빨강이어야 한다.
         List<Long> results = inParallel(8, i -> i % 2 == 0
-                ? code(redis.execute(IssuanceScripts.CLAIM,
-                        List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                        "m" + i, GRADE_BIT, "key-" + i, "tok-" + i))
+                ? code(runner.claim(ROUND_ID, "m" + i, GRADE_BIT, "key-" + i, "tok-" + i))
                 : restore("3"));
 
         long claimed = IntStream.range(0, results.size())
@@ -847,19 +835,16 @@ class IssuanceScriptContractTest {
     @Test
     @DisplayName("인자가 모자라면 Lua 런타임 에러가 아니라 -10 이다 — 장애로 오진되면 삼켜진다")
     void missingArgumentsAreRejectedNotThrown() {
-        List<?> claimResult = redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER), MEMBER, GRADE_BIT, "key-1");
+        List<?> claimResult = runner.claim(ROUND_ID, MEMBER, GRADE_BIT, "key-1");
         assertThat(code(claimResult)).isEqualTo(IssuanceScriptCodes.Claim.BAD_ARGUMENT);
 
-        assertThat(redis.execute(IssuanceScripts.COMPLETE, List.of(ISSUED), MEMBER))
+        assertThat(runner.complete(ROUND_ID, MEMBER))
                 .isEqualTo(IssuanceScriptCodes.Complete.BAD_ARGUMENT);
-        assertThat(redis.execute(IssuanceScripts.COMPENSATE,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER))
+        assertThat(runner.compensate(ROUND_ID, MEMBER))
                 .isEqualTo(IssuanceScriptCodes.Compensate.BAD_ARGUMENT);
-        assertThat(redis.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, "1"))
+        assertThat(runner.reclaimCorrupt(ROUND_ID, MEMBER, "1"))
                 .isEqualTo(IssuanceScriptCodes.Reclaim.BAD_ARGUMENT);
-        assertThat(redis.execute(IssuanceScripts.RESTORE, List.of(STOCK, META)))
+        assertThat(runner.restore(ROUND_ID))
                 .isEqualTo(IssuanceScriptCodes.Restore.BAD_ARGUMENT);
     }
 
@@ -957,8 +942,7 @@ class IssuanceScriptContractTest {
         claim("key-1", TOKEN_A);
         redis.opsForHash().put(ISSUED, MEMBER, "X|1|t|k");
 
-        long result = redis.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, flag, Integer.toString(TOTAL));
+        long result = runner.reclaimCorrupt(ROUND_ID, MEMBER, flag, Integer.toString(TOTAL));
 
         assertThat(result).isEqualTo(IssuanceScriptCodes.Reclaim.BAD_ARGUMENT);
         assertThat(stored()).isEqualTo("X|1|t|k");
@@ -1004,8 +988,7 @@ class IssuanceScriptContractTest {
     void reclaimRejectsUnusableTotal() {
         redis.opsForHash().put(ISSUED, MEMBER, "X|1|t|k");
 
-        long result = redis.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, "1", "nope");
+        long result = runner.reclaimCorrupt(ROUND_ID, MEMBER, "1", "nope");
 
         assertThat(result).isEqualTo(IssuanceScriptCodes.Reclaim.BAD_ARGUMENT);
         assertThat(stored()).isEqualTo("X|1|t|k");
@@ -1108,9 +1091,7 @@ class IssuanceScriptContractTest {
     }
 
     private List<?> claimResult(String idempotencyKey, String requestToken) {
-        return redis.execute(IssuanceScripts.CLAIM,
-                List.of(STOCK, ISSUED, META, ISSUED_EVER),
-                MEMBER, GRADE_BIT, idempotencyKey, requestToken);
+        return runner.claim(ROUND_ID, MEMBER, GRADE_BIT, idempotencyKey, requestToken);
     }
 
     private long claim(String idempotencyKey, String requestToken) {
@@ -1122,22 +1103,19 @@ class IssuanceScriptContractTest {
     }
 
     private long complete(String requestToken) {
-        return redis.execute(IssuanceScripts.COMPLETE, List.of(ISSUED), MEMBER, requestToken);
+        return runner.complete(ROUND_ID, MEMBER, requestToken);
     }
 
     private long compensate(String requestToken) {
-        return redis.execute(IssuanceScripts.COMPENSATE,
-                List.of(STOCK, ISSUED, ISSUED_EVER), MEMBER, requestToken);
+        return runner.compensate(ROUND_ID, MEMBER, requestToken);
     }
 
     private long reclaim(boolean restoreStock) {
-        return redis.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(STOCK, ISSUED, ISSUED_EVER),
-                MEMBER, restoreStock ? "1" : "0", Integer.toString(TOTAL));
+        return runner.reclaimCorrupt(ROUND_ID, MEMBER, restoreStock ? "1" : "0", Integer.toString(TOTAL));
     }
 
     private long restore(String count) {
-        return redis.execute(IssuanceScripts.RESTORE, List.of(STOCK, META), count);
+        return runner.restore(ROUND_ID, count);
     }
 
     private String stored() {
