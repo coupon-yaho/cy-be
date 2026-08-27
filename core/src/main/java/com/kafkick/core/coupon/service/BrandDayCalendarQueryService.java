@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -29,6 +30,8 @@ import com.kafkick.core.support.exception.CommonErrorCode;
 
 @Service
 public class BrandDayCalendarQueryService {
+
+    private static final long MAX_CALENDAR_RANGE_DAYS = 366;
 
     private final CouponTemplateRepository couponTemplateRepository;
     private final BrandDayCalendarQueryPort calendarQueryPort;
@@ -197,6 +200,13 @@ public class BrandDayCalendarQueryService {
             throw new BusinessException(
                     CommonErrorCode.INVALID_INPUT,
                     "달력 조회 기간이 올바르지 않습니다."
+            );
+        }
+        long requestedDays = ChronoUnit.DAYS.between(from, to) + 1;
+        if (requestedDays > MAX_CALENDAR_RANGE_DAYS) {
+            throw new BusinessException(
+                    CommonErrorCode.INVALID_INPUT,
+                    "달력 조회 기간은 최대 366일까지 가능합니다."
             );
         }
     }
