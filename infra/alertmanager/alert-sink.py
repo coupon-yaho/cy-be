@@ -57,9 +57,14 @@ SLACK_RETRY_DELAY = 1
 # 아이콘은 **앱 설정**에서 바꾸는 것이 맞는 자리다
 # (api.slack.com/apps > Basic Information > Display Information > App icon).
 #
-# 한때 payload 에 `username`·`icon_url` 을 실었는데 **이 워크스페이스가 무시했다** —
-# 실측: `yaho-batch` 로 도착했다. 최신 Slack 앱은 `chat:write.customize` 스코프 없이는
-# 그 둘을 못 바꾼다. 안 먹는 필드를 남기면 다음 사람이 "왜 안 바뀌나" 를 다시 조사한다.
+# 한때 payload 에 `username`·`icon_url` 을 실었는데 **무시됐다** — 실측: `yaho-batch`
+# (앱 이름)로 도착했다.
+#
+# ⚠️ 그때 주석에 *"`chat:write.customize` 스코프가 없어서"* 라고 적었는데 **틀렸다.**
+#    그 스코프는 **Web API**(`chat.postMessage`)용이다. 여기는 Incoming Webhook 을
+#    직접 POST 하는 경로이고, **앱 기반 Incoming Webhook 은 보내는 이름·아이콘을
+#    아예 못 바꾼다** — 항상 앱의 것으로 나간다. 스코프를 붙여도 안 바뀐다.
+#    그 안내를 따라가면 운영자가 필요 없는 권한을 더하고 엉뚱한 곳을 조사한다.
 
 # 발화만 보낸다. resolved 까지 보내면 한 사건이 두 줄이 되고, 이 저장소의 알림 수에서는
 # 그게 곧 아무도 안 읽는 채널이 된다.
@@ -172,12 +177,14 @@ class Sink(BaseHTTPRequestHandler):
                 time.sleep(SLACK_RETRY_DELAY)
 
     def _post_to_slack(self, text, last):
-        """``(보냈는가, 다시 시도할 만한가)``. 실패 로그는 마지막 시도에서만 남긴다.
+        """``(보냈는가, 다시 시도할 만한가)``.
 
-        **영구 오류는 재시도하지 않는다.** 400(형식이 틀렸다)·403(웹훅이 폐기됐다)·
-        404(없는 웹훅)는 다시 보내도 **같은 답**이다 — 재시도가 지연만 늘리고, 그
-        지연이 같은 payload 의 뒤 알림들을 민다. 다시 시도할 값이 있는 것은
-        429(rate limit)와 5xx(Slack 장애)뿐이다.
+        **다시 시도할 값이 있는 것은 429(rate limit)와 5xx(Slack 장애)뿐이다.**
+        400(형식이 틀렸다)·403(웹훅이 폐기됐다)·404(없는 웹훅)는 다시 보내도 **같은 답**이라
+        재시도가 지연만 늘리고, 그 지연이 같은 payload 의 **뒤 알림들을 민다.**
+
+        예외도 같은 기준으로 가른다. 연결 실패·타임아웃은 순간일 수 있으니 다시 보내고,
+        설정·직렬화 오류(잘못된 URL 형태 등)는 다시 보내도 같다.
         """
         try:
             body = json.dumps({"text": text}).encode()
@@ -187,34 +194,53 @@ class Sink(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=SLACK_TIMEOUT) as r:
                 if r.status == 200:
                     return True, False
-                # 여기 오는 것은 2xx·3xx 중 200 이 아닌 것뿐이다 — 4xx·5xx 는 아래
-                # HTTPError 로 빠진다.
-                if last:
-                    print(f"[!] Slack 이 {r.status} 를 냈다", flush=True)
-                return False, True
+                # 4xx·5xx 는 아래 HTTPError 로 빠진다. 여기 오는 것은 201·204 같은
+                # **2xx·3xx 중 200 이 아닌 것**뿐이고, 그건 재시도 대상이 아니다 —
+                # 한때 무조건 재시도로 처리해 정책과 어긋났다.
+                return False, self._log(f"Slack 이 {r.status} 를 냈다",
+                                        self._retryable(r.status), last)
         except urllib.error.HTTPError as e:
-            # **상태 코드를 남긴다.** urlopen 은 4xx·5xx 를 HTTPError 로 **던지므로**
-            # 위 r.status 분기에 도달하지 않는다. 타입 이름만 남기면
-            # **403(웹훅이 폐기됐다)과 500(Slack 장애)이 같은 줄이 된다** — 전자는
-            # 사람이 웹훅을 다시 발급해야 하고 후자는 기다리면 된다.
-            # `e.code` 에는 URL 이 안 들어간다(실측: str(e) 가 "HTTP Error 403: Forbidden").
-            retryable = e.code == 429 or e.code >= 500
-            if last or not retryable:
-                kind = "다시 시도할 값이 없다" if not retryable else "다시 보낸다"
-                print(f"[!] Slack 이 {e.code} 를 냈다 — {kind}", flush=True)
-            return False, retryable
+            # **상태 코드를 남긴다.** urlopen 은 4xx·5xx 를 여기로 **던지므로** 위
+            # r.status 분기에 도달하지 않는다. 타입 이름만 남기면 403(웹훅 폐기)과
+            # 500(Slack 장애)이 같은 줄이 된다 — 전자는 웹훅을 다시 발급해야 하고
+            # 후자는 기다리면 된다. `e.code` 에는 URL 이 안 들어간다(실측).
+            return False, self._log(f"Slack 이 {e.code} 를 냈다",
+                                    self._retryable(e.code), last)
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            # 연결 실패·타임아웃. 순간일 수 있으니 다시 보낸다.
+            # (HTTPError 가 URLError 의 하위라 위에서 먼저 잡아야 한다 — 순서가 계약이다.)
+            return False, self._log(f"Slack 전송 실패: {type(e).__name__}", True, last)
         except Exception as e:  # noqa: BLE001 — 아래 이유로 전부 잡는다
             # **예외 종류를 좁히면 안 된다.** 한때 (URLError, OSError, TimeoutError) 였는데
             # `Request()` 생성이 try 밖이었고, 스킴 없는 URL 에 `ValueError` 를 던진다 —
             # 그 메시지에 **URL 전문이 들어간다.** 재현: 알림 3건짜리 payload 에서 첫 건만
             # stdout 에 남고 뒤 둘은 사라졌으며, 웹훅 URL 이 트레이스백으로 찍혔다.
-            # `http.client.InvalidURL`(제어문자)·`AttributeError`(labels 가 null)도 같은 자리다.
             #
-            # **예외 객체를 포맷하지 않는다.** 타입 이름만 남긴다 — 메시지에 URL 이 들어온다.
-            if last:
-                print(f"[!] Slack 전송 실패: {type(e).__name__}", flush=True)
-            # 연결 실패·타임아웃은 순간일 수 있다. 다시 보낸다.
-            return False, True
+            # 다만 **다시 보내지는 않는다.** 여기 오는 것은 설정·직렬화 오류라 반복해도
+            # 같은 답이고, 알림마다 1초씩 밀 이유가 없다.
+            return False, self._log(f"Slack 전송 실패: {type(e).__name__}", False, last)
+
+    @staticmethod
+    def _retryable(status):
+        """429(rate limit)와 5xx(Slack 장애)만 다시 보낸다."""
+        return status == 429 or status >= 500
+
+    @staticmethod
+    def _log(message, retryable, last):
+        """실패를 한 줄로 남기고 ``retryable`` 을 그대로 돌려준다.
+
+        **로그가 거짓이면 안 된다.** 한때 마지막 시도의 429·5xx 에도
+        *"다시 보낸다"* 라고 적었는데, 루프는 그 자리에서 끝난다 — 운영자가
+        Slack 장애 중에 재전송을 기다리게 된다. 실제로 다시 보낼 때만 그렇게 적는다.
+        """
+        will_retry = retryable and not last
+        if will_retry:
+            print(f"[!] {message} — 다시 보낸다", flush=True)
+        elif not retryable:
+            print(f"[!] {message} — 다시 시도할 값이 없다", flush=True)
+        else:
+            print(f"[!] {message} — 마지막 시도였다", flush=True)
+        return retryable
 
     def _read_body(self, length):
         """<b>느리게 흘려보내는 전송을 끊는다.</b>
