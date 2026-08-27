@@ -26,12 +26,6 @@
 pr_commands = [
     "/agentic_describe",
     "/agentic_review",
-    # **자동 승인이 이것에 매달려 있습니다.** `auto_approve_for_no_suggestions` 가 보는 것은
-    # `/review` 지적이 아니라 **`/improve` 의 코드 제안 수**입니다(공식 문서:
-    # *"When no code suggestion were found for the PR, the PR will be auto-approved"*).
-    # Qodo 기본 `pr_commands` 에는 `/improve` 가 없어서, 이 줄이 없으면 승인 조건이
-    # **평가 자체가 안 됩니다** — 켜 놓고 영원히 안 뜹니다.
-    "/improve",
 ]
 
 # 새 커밋마다 다시 리뷰합니다. 이 저장소는 리뷰 지적을 반영해 여러 번 미는 흐름이라
@@ -39,9 +33,6 @@ pr_commands = [
 handle_push_trigger = true
 push_commands = [
     "/agentic_review",
-    # 푸시마다 제안 수를 다시 세야 "고쳤더니 승인" 이 성립합니다.
-    # 이것이 빠지면 첫 평가만 남아 재승인이 안 옵니다.
-    "/improve",
 ]
 
 
@@ -69,52 +60,63 @@ ignore_pr_labels = ["skip-review"]
 # 봇 PR 은 리뷰하지 않습니다. `.coderabbit.yaml` 의 `ignore_usernames` 대응입니다.
 ignore_pr_authors = ["dependabot\\[bot\\]", "renovate\\[bot\\]", "github-actions\\[bot\\]"]
 
-# ── 지적이 0건이면 승인한다 ─────────────────────────────────────────────────
-# **키 이름과 섹션을 `/config` 실덤프(108,615자)로 확인했습니다.**
-# 흔히 도는 예시가 `[pr_reviewer].enable_auto_approval` 이라고 하는데 **틀렸습니다** —
-# `[pr_reviewer]` 섹션은 있지만(`require_security_review` 등) 승인 키는 전부
-# `[config]` 밑입니다. 실제 덤프:
-#
-#     config.enable_auto_approval             = False
-#     config.auto_approve_for_no_suggestions  = False
-#     config.auto_approve_for_low_review_effort = -1
-#     config.prevent_any_approval             = False
-#     pr_code_suggestions.approve_pr_on_self_review = False
-#
+# ── 승인 ────────────────────────────────────────────────────────────────────
 # **왜 필요한가.** main·에픽 룰셋이 둘 다 `required_approving_review_count = 1` 인데
-# GitHub 은 작성자의 자기 승인을 막습니다. 5인 팀에서 승인이 안 붙어 지금까지
-# **머지가 전부 관리자 우회**였습니다 — 이 저장소에 APPROVE 를 낸 주체가 사람이든
-# 봇이든 **하나도 없습니다**(전 PR 조회로 확인). 게이트가 있으나 마나 한 상태입니다.
+# GitHub 은 작성자의 자기 승인을 막습니다. 그래서 지금까지 **머지가 전부 관리자
+# 우회**였습니다 — 이 저장소에 APPROVE 를 낸 주체가 사람이든 봇이든 **하나도
+# 없습니다**(전 PR 조회로 확인). 게이트가 있으나 마나 한 상태입니다.
 #
-# 봇 승인도 그 카운트를 만족합니다. 우회로 넘기는 것보다, **최소한 한 번은 검사를
-# 통과한 것만** 넘어가는 쪽이 낫습니다.
+# 승인은 `[review_agent]` 의 self-review 짝이 담당합니다(아래). 여기 있는 것은
+# **체크박스 없이 즉시 승인할 때 쓰는 코멘트 명령**입니다:
 #
-# **적용 범위는 하위 → 에픽 PR 입니다.** `skip-review` 가 붙는 에픽 → main PR 은
-# 위에 적은 이유로 계속 사람 몫입니다.
-enable_auto_approval = true
-auto_approve_for_no_suggestions = true
+#     /review auto_approve
+#
+# 관리자 우회와 결과는 같은데 **승인 코멘트로 기록에 남습니다.** 우회는 흔적이
+# 안 남아 나중에 "누가 뭘 보고 넘겼나" 를 못 답합니다.
+enable_comment_approval = true
 
 # ── 켜지 않은 것들과 그 이유 ────────────────────────────────────────────────
 #
-# `auto_approve_for_low_review_effort` (1~5, -1 이 비활성) — **안 켭니다.**
-#   "작으니까 통과" 인데 이 저장소는 그 가정이 안 섭니다. CY-621 의 blocker 는
-#   `stop()` 한 메서드였고, 그 직전 PR 의 diff 는 수십 줄이었습니다.
+# `enable_auto_approval` + `auto_approve_for_no_suggestions` — **한때 켰다가 뺐습니다.**
+#   그 조건이 보는 것은 `/review` 지적이 아니라 **`/improve` 의 코드 제안 수**입니다
+#   (v1 문서: *"When no code suggestion were found for the PR, the PR will be
+#   auto-approved"*). 그런데 이 설치본(v2 agentic)에는 **별도 코드 제안 산출물이
+#   없습니다** — `/improve` 를 쳐도 `Code Review by Qodo` 가 나옵니다. TOML 1파일짜리
+#   PR 과 자바 271파일짜리 PR 에서 각각 확인했고 산출물이 같았습니다.
+#   켜면 제안 수를 못 세서 영원히 안 뜨거나, 항상 0 으로 읽어 **뭐든 승인**합니다.
 #
-# `approve_pr_on_self_review` (`[pr_code_suggestions]`·`[review_agent]` 양쪽에 있음)
-#   — **안 켭니다.** 작성자가 체크박스를 누르면 승인입니다. GitHub 이 막아 둔
-#   자기 승인을 봇으로 우회하는 것이라 게이트가 통째로 사라집니다.
+# `auto_approve_for_low_review_effort` (1~5) — **안 켭니다.** "작으니까 통과" 인데
+#   이 저장소는 그 가정이 안 섭니다. CY-621 의 blocker 는 `stop()` **한 메서드**였고,
+#   오늘 Qodo 가 잡은 셋도 TOML 두 줄과 표 한 행이었습니다.
 #
-# `prevent_any_approval` — 비상 브레이크입니다. 자동 승인이 잘못 나가는 게 보이면
-#   이걸 `true` 로 올려 **즉시 전부 막습니다.** `/config` 덤프엔 있는데 공식 문서엔
-#   없는 키라, 실제로 듣는지는 쓸 일이 생겼을 때 `/config` 로 확인해야 합니다.
-#
-# ── 푸시하면 승인이 날아간다 ────────────────────────────────────────────────
-# 룰셋이 `dismiss_stale_reviews_on_push = true` 입니다. 그런데 Qodo 는
-# `handle_push_trigger = true` 라 푸시마다 다시 리뷰합니다 — **취소 → 재리뷰 →
-# 재승인**이 저절로 돌아 둘의 궁합이 맞습니다. 한쪽만 끄면 이 고리가 끊깁니다.
+# `prevent_any_approval` — 비상 브레이크입니다. 승인이 잘못 나가는 게 보이면 이걸
+#   `true` 로 올려 **즉시 전부 막습니다.**
 
 
 [review_agent]
+# ── 승인: findings 를 확인하면 Qodo 가 승인한다 ─────────────────────────────
+# **이것이 이 파일에서 승인을 여는 자리입니다.** v2 설정 레퍼런스의
+# "Review workflow options" 절에 있고, 둘 다 `[review_agent]` 소속입니다:
+#
+#   demand_self_review         "a checkbox appears in the PR for the author to
+#                               confirm they **reviewed the findings**"
+#   approve_pr_on_self_review  "adds Qodo as a reviewer after the author confirms
+#                               self-review, **allowing the PR to be merged**"
+#
+# **`[pr_code_suggestions]` 의 같은 이름과 다릅니다.** 그쪽(v1)은 **코드 제안**
+# 체크박스에 걸리고, 이쪽(v2)은 **리뷰 findings** 에 걸립니다. 이름이 같아 `/config`
+# 덤프에 둘 다 뜨는데 보는 대상이 다릅니다 — 한때 v1 쪽을 보고
+# *"작성자가 체크박스를 누르면 승인이라 게이트가 사라진다"* 고 반려했는데,
+# 그 판단은 이 키에는 해당하지 않습니다.
+#
+# **흐름** — Qodo 가 지적을 단다 → 고쳐서 민다 → `handle_push_trigger` 로 재리뷰 →
+# 남은 지적을 보고 체크박스를 누른다 → 승인. CodeRabbit 의
+# `request_changes_workflow` 와 같은 자리이고, 다른 점은 **마지막 한 번을 사람이
+# 누른다**는 것입니다. 완전 자동은 아니지만 관리자 우회보다 낫습니다 —
+# 지적 목록을 보고 눌렀다는 사실이 PR 에 남습니다.
+demand_self_review = true
+approve_pr_on_self_review = true
+
 # ── 지적을 전부 본다 ────────────────────────────────────────────────────────
 # 기본값 3 은 High 만 인라인으로 답니다. 이 프로젝트는 *"찾은 것은 전부 보고하고
 # 필터링은 사람이 한다"* 가 원칙이라(`.coderabbit.yaml` 의 `profile: assertive`) 1 로 내립니다.
