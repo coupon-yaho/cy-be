@@ -354,7 +354,7 @@ class AdminOverviewServiceTest {
     }
 
     @Test
-    void excludesEveryFinalCandidateWhenOneFinalIsPending() {
+    void excludesEveryFinalCandidateButKeepsOtherActionsWhenOneFinalIsPending() {
         RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
                 701L, validFailedFinal(701L, 3L, 0L, NOW.minusSeconds(30)),
                 909L, finalObservation(SourceStatus.PENDING, null)));
@@ -363,16 +363,16 @@ class AdminOverviewServiceTest {
                 new RecordingReader(readyCatalog(701L, 909L)), new RecordingRuntimeStore(),
                 new RecordingObservationSource(), finalReader).getOverview().snapshot();
 
-        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.PENDING);
-        assertThat(snapshot.actionRequired().value()).isNull();
-        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.PENDING);
-        assertThat(snapshot.actionItems().value()).isNull();
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionRequired().value().totalCount()).isZero();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
         assertThat(snapshot.campaigns().value())
                 .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
     }
 
     @Test
-    void excludesEveryFinalCandidateWhenOneFinalIsUnavailable() {
+    void excludesEveryFinalCandidateButKeepsOtherActionsWhenOneFinalIsUnavailable() {
         RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
                 701L, validFailedFinal(701L, 0L, 1L, NOW.minusSeconds(30)),
                 909L, finalObservation(SourceStatus.UNAVAILABLE, null)));
@@ -381,10 +381,10 @@ class AdminOverviewServiceTest {
                 new RecordingReader(readyCatalog(701L, 909L)), new RecordingRuntimeStore(),
                 new RecordingObservationSource(), finalReader).getOverview().snapshot();
 
-        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(snapshot.actionRequired().value()).isNull();
-        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(snapshot.actionItems().value()).isNull();
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionRequired().value().totalCount()).isZero();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
         assertThat(snapshot.campaigns().value())
                 .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
     }
