@@ -38,7 +38,7 @@ import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 운영 풀로 FINAL 결과를 쓰고 관측 풀로 캠페인별 최신 결과를 읽습니다. */
+/** 운영 풀로 FINAL 결과를 쓰고 관측 풀로 회차별 최신 결과를 읽습니다. */
 @Repository
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
@@ -178,12 +178,16 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
                       JOIN benchmark_runs r
                         ON r.id = f.run_id AND r.run_status = 'FINALIZED'
                      WHERE f.coupon_id IN (:couponIds)
-                ), benchmark_campaigns AS (
-                    SELECT DISTINCT coupon_id
+                ), benchmark_rounds AS (
+                    SELECT coupon_id,
+                           MAX(CASE WHEN consistency_status <> 'EXPIRED' THEN 1 ELSE 0 END)
+                               AS has_non_expired_run
                       FROM benchmark_runs
                      WHERE coupon_id IN (:couponIds)
+                     GROUP BY coupon_id
                 )
                 SELECT b.coupon_id AS requested_coupon_id,
+                       b.has_non_expired_run,
                        f.run_id, f.engine_version, f.evaluated_at, f.verdict, f.severity,
                        f.active_db_gap_value, f.active_db_gap_state, f.active_db_gap_observed_at,
                        f.lua_gap_value, f.lua_gap_state, f.lua_gap_observed_at,
@@ -191,17 +195,20 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
                        f.db_counter_gap_value, f.db_counter_gap_state, f.db_counter_gap_observed_at,
                        f.over_issued_value, f.over_issued_state, f.over_issued_observed_at,
                        c.name AS campaign_name, c.open_at
-                  FROM benchmark_campaigns b
+                  FROM benchmark_rounds b
                   LEFT JOIN ranked_finals f
                     ON f.coupon_id = b.coupon_id AND f.final_rank = 1
                   LEFT JOIN coupons c ON c.id = b.coupon_id
                 """, new MapSqlParameterSource("couponIds", requestedIds),
                     (rs, rowNumber) -> finalRow(rs));
             for (FinalRow row : rows) {
-                // Benchmark 미실행과 FINAL 계산 대기를 구분합니다.
+                // Benchmark 미실행, FINAL 계산 대기, 만료된 회차를 구분합니다.
                 if (!row.hasFinal()) {
                     observations.put(row.couponId(),
-                            new ConsistencyFinalObservation(SourceStatus.PENDING, null));
+                            new ConsistencyFinalObservation(
+                                    row.hasNonExpiredRun()
+                                            ? SourceStatus.PENDING : SourceStatus.UNAVAILABLE,
+                                    null));
                     continue;
                 }
                 try {
@@ -226,12 +233,12 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
 
     private static List<Long> requestedIds(List<Long> couponIds) {
         if (couponIds == null) {
-            throw new IllegalArgumentException("FINAL 조회 캠페인 ID 목록이 필요합니다.");
+            throw new IllegalArgumentException("FINAL 조회 회차 ID 목록이 필요합니다.");
         }
         Set<Long> distinctIds = new LinkedHashSet<>();
         for (Long couponId : couponIds) {
             if (couponId == null || couponId <= 0L) {
-                throw new IllegalArgumentException("FINAL 조회 캠페인 ID는 양수여야 합니다: " + couponId);
+                throw new IllegalArgumentException("FINAL 조회 회차 ID는 양수여야 합니다: " + couponId);
             }
             distinctIds.add(couponId);
         }
@@ -241,6 +248,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
     private static FinalRow finalRow(ResultSet rs) throws SQLException {
         return new FinalRow(
                 rs.getLong("requested_coupon_id"), rs.getObject("run_id") != null,
+                rs.getBoolean("has_non_expired_run"),
                 rs.getString("campaign_name"), instant(rs, "open_at"),
                 instant(rs, "evaluated_at"), rs.getString("engine_version"),
                 rs.getString("verdict"), rs.getString("severity"),
@@ -279,6 +287,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
     private record FinalRow(
             long couponId,
             boolean hasFinal,
+            boolean hasNonExpiredRun,
             String campaignName,
             Instant opensAt,
             Instant evaluatedAt,

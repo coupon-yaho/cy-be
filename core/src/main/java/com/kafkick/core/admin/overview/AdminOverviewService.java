@@ -84,7 +84,7 @@ public class AdminOverviewService {
      * @param customerOutcomeCalculator O3 고객 결과 계산기
      * @param stockRiskCalculator O4 V1 재고·소진 위험 계산기
      * @param campaignOverviewCalculator 캠페인 상태·오픈 임박·계산 완료 관측 조립기
-     * @param consistencyFinalReader 캠페인 모집단의 최신 FINAL 일괄 조회 경계
+     * @param consistencyFinalReader 회차 모집단의 최신 FINAL 일괄 조회 경계
      * @param consistencyActionCalculator FINAL 결과의 조치 후보 변환 계산기
      * @param operationActionCalculator 판정 완료 조치 후보의 KPI·목록 집계 계산기
      * @param overviewStatusCalculator 원천 상태를 전체 응답 완전성으로 계산하는 구성요소
@@ -213,7 +213,7 @@ public class AdminOverviewService {
         return assemble(snapshot);
     }
 
-    /** FINAL 조회 응답이 현재 DB 캠페인 모집단과 정확히 같은 키를 가졌는지 확인합니다. */
+    /** FINAL 조회 응답이 현재 DB 회차 모집단과 정확히 같은 키를 가졌는지 확인합니다. */
     private static void requireSameFinalPopulation(
             List<Long> requestedIds,
             Map<Long, ConsistencyFinalObservation> observations
@@ -223,7 +223,7 @@ public class AdminOverviewService {
                 || !requested.equals(observations.keySet())) {
             throw new BusinessException(
                     AdminOverviewErrorCode.OBSERVATION_REQUEST_MISMATCH,
-                    "FINAL 관측 응답이 현재 Overview 캠페인 모집단과 일치해야 합니다.");
+                    "FINAL 관측 응답이 현재 Overview 회차 모집단과 일치해야 합니다.");
         }
     }
 

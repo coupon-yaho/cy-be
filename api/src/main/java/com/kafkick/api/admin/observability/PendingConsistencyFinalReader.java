@@ -16,12 +16,12 @@ public final class PendingConsistencyFinalReader implements ConsistencyFinalRead
     @Override
     public Map<Long, ConsistencyFinalObservation> findLatestByCouponIds(List<Long> couponIds) {
         if (couponIds == null) {
-            throw new IllegalArgumentException("FINAL 조회 캠페인 ID 목록이 필요합니다.");
+            throw new IllegalArgumentException("FINAL 조회 회차 ID 목록이 필요합니다.");
         }
         LinkedHashMap<Long, ConsistencyFinalObservation> observations = new LinkedHashMap<>();
         for (Long couponId : couponIds) {
             if (couponId == null || couponId <= 0L) {
-                throw new IllegalArgumentException("FINAL 조회 캠페인 ID는 양수여야 합니다: " + couponId);
+                throw new IllegalArgumentException("FINAL 조회 회차 ID는 양수여야 합니다: " + couponId);
             }
             observations.putIfAbsent(
                     couponId, new ConsistencyFinalObservation(SourceStatus.PENDING, null));

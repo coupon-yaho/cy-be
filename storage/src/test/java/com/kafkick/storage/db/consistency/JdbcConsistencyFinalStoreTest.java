@@ -188,6 +188,24 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
+    void expiredRunWithoutFinalIsUnavailableWhileRetryableFailureStaysPending() {
+        insertCoupon(18, "expired-final");
+        insertCoupon(19, "retryable-final");
+        insertFinalizedRun(16, "run-16", 18);
+        insertFinalizedRun(17, "run-17", 19);
+        String expiredToken = store.claim(16, Duration.ofMinutes(5)).orElseThrow().token();
+        String retryableToken = store.claim(17, Duration.ofMinutes(5)).orElseThrow().token();
+        assertThat(store.expire(16, expiredToken, "final window expired")).isTrue();
+        assertThat(store.fail(17, retryableToken, "temporary source failure")).isTrue();
+
+        Map<Long, ConsistencyFinalObservation> result =
+                store.findLatestByCouponIds(List.of(18L, 19L));
+
+        assertThat(result.get(18L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(result.get(19L).status()).isEqualTo(SourceStatus.PENDING);
+    }
+
+    @Test
     void bulkReadReturnsEveryRequestedCampaignInFirstInputOrder() {
         save(1, evaluation(SourceStatus.VALID));
         insertCoupon(16, "bulk-pending");

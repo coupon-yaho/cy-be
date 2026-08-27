@@ -22,7 +22,7 @@ import com.kafkick.core.observation.SourceStatus;
 @Component
 public class ConsistencyActionCalculator {
 
-    /** 캠페인별 FINAL 상태와 계산 가능한 조치 후보를 함께 보존한 일괄 계산 결과입니다. */
+    /** 회차별 FINAL 상태와 계산 가능한 조치 후보를 함께 보존한 일괄 계산 결과입니다. */
     public record FinalActionCalculation(
             List<AdminOverviewSnapshot.OperationActionItem> actionCandidates,
             Map<Long, AdminOverviewSnapshot.Observation<
@@ -75,10 +75,10 @@ public class ConsistencyActionCalculator {
     }
 
     /**
-     * 캠페인별 최신 FINAL 중 VALID 값만 기존 단건 계산기로 변환합니다.
+     * 회차별 최신 FINAL 중 VALID 값만 기존 단건 계산기로 변환합니다.
      *
      * <p>PENDING·UNAVAILABLE·N_A는 값 없는 원래 상태를 보존하고, 복구할 수 없는 VALID 한 건은
-     * 해당 캠페인만 UNAVAILABLE로 격리합니다.</p>
+     * 해당 회차만 UNAVAILABLE로 격리합니다.</p>
      */
     public FinalActionCalculation calculateLatest(
             Map<Long, ConsistencyFinalObservation> observations
@@ -110,7 +110,7 @@ public class ConsistencyActionCalculator {
         try {
             ConsistencyActionContext context = observation.value();
             if (!context.couponId().equals(couponId)) {
-                throw new IllegalArgumentException("FINAL Map 키와 값의 캠페인 ID가 다릅니다.");
+                throw new IllegalArgumentException("FINAL Map 키와 값의 회차 ID가 다릅니다.");
             }
             List<AdminOverviewSnapshot.OperationActionItem> actions = calculate(context);
             candidates.addAll(actions);
