@@ -3,6 +3,8 @@ package com.kafkick.batch.config;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.ToDoubleFunction;
 
@@ -293,14 +295,31 @@ public class ExpireMetrics {
      * 죽은 청크의 건수가 누적에 남고, 그 값은 <b>줄어들 수 없다.</b> 그러면 처리량 알림이
      * <i>"돌고 있다"</i> 고 답하는데 실제로는 아무것도 안 넘어간 구간이 생긴다.
      *
-     * <p>⚠️ <b>그래도 커밋 전이다.</b> 태스클릿이 반환한 <b>뒤</b>에 커밋되므로, 커밋 자체가
-     * 실패하면(트랜잭션 타임아웃 · 커밋 시점 1213) 이 값이 과대계상된다. 가드 실패는 막지만
-     * 커밋 실패는 못 막는다 — 그 구간은 {@code BATCH_STEP_EXECUTION.WRITE_COUNT} 와
-     * 대조해야 드러난다. 형제인 {@code chunkFill} 도 같은 자리라 같은 성질이다.
+     * <p><b>커밋된 뒤에 센다.</b> 태스클릿이 반환한 <b>뒤</b>에 커밋되므로 여기서 바로 올리면
+     * 커밋 실패(트랜잭션 타임아웃 · 커밋 시점 1213) 때 과대계상된다 — 카운터는 트랜잭션에
+     * 참여하지 않아 <b>되돌아가지 않는다.</b> 그리고 {@code ExpireMakingNoProgress} 가
+     * 이 값의 증가를 <i>"진도가 나갔다"</i> 로 읽으므로, 롤백된 청크가 <b>알림을 침묵시킨다.</b>
+     * 그래서 {@code afterCommit} 에 건다.
+     *
+     * <p><b>동기화가 없으면 그 자리에서 센다.</b> 트랜잭션 밖에서 부르는 테스트가 있고,
+     * 그때 조용히 0 이 되면 <i>"세고 있다"</i> 는 계약이 소리 없이 깨진다.
+     *
+     * <p>형제인 {@code chunkFill} 은 <b>분포</b>라 성질이 다르다 — 롤백된 청크의 충전율이
+     * 표본에 섞여도 평균이 조금 흔들릴 뿐, 알림이 그것으로 판정하지 않는다. 그래서 안 옮겼다.
      *
      * @param expired 이 청크가 실제로 {@code EXPIRED} 로 바꾼 발급건 수
      */
     public void processed(int expired) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            processed.increment(expired);
+                        }
+                    });
+            return;
+        }
         processed.increment(expired);
     }
 }

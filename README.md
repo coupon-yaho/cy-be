@@ -186,7 +186,7 @@ Alertmanager 와 기본 비밀번호를 쓰는 MySQL 이 그대로 노출된다.
 | `mysql` | `3306` | |
 | `prometheus` | `9490` | 규칙·타깃 확인 (`/api/v1/rules`, `/api/v1/targets`) |
 | `alertmanager` | `9493` | |
-| `alert-sink` | 없음 | 받은 알림은 `docker compose logs alert-sink` 로 본다 |
+| `alert-sink` | 없음 | 받은 알림을 **Slack 으로 넘긴다**(CY-651). `SLACK_WEBHOOK_URL` 이 없으면 stdout 만 하고 안 죽는다 — 그때는 `docker compose logs alert-sink` 로 본다 |
 
 ### 새 코드를 어디에 둘 것인가
 

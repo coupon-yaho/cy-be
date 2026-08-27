@@ -923,10 +923,17 @@ groups:
       # ⚠️ **게이지가 좌변이어야 한다.** `and` 는 좌변의 값을 낸다. increase(...) == 0 을
       #    좌변에 두면 $value 가 **항상 0** 이라, summary 가 "아무것도 안 넘기고 있는데
       #    남은 대기가 0건" 이라는 자기모순이 된다. promtool 이 실제로 그렇게 렌더링했다.
+      #
+      # ⚠️ **`offset 26h` 가 배포 직후 오탐을 막는다.** 새로 뜬 프로세스의 시계열은
+      #    창을 다 못 채우는데 `increase()` 는 그것을 **0** 으로 낸다 — 재현: 90분치
+      #    시계열에 `unexplained=5` 만 있어도 85분에 떴다. `offset 26h` 항은 26시간 전에
+      #    표본이 있어야 매칭되므로, 그때까지는 통째로 빈 벡터가 되어 조용하다.
+      #    (값 비교가 아니라 **존재 검사**다. `>= 0` 은 있으면 항상 참이다.)
       - alert: ExpireMakingNoProgress
         expr: >-
           cy_expire_unexplained_pending > 0
           and increase(cy_expire_processed_total[26h]) == 0
+          and (cy_expire_processed_total offset 26h) >= 0
         for: 30m
         labels:
           severity: warning
