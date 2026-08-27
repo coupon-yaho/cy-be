@@ -1,6 +1,7 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Repository;
@@ -20,9 +21,25 @@ public class CouponRoundLifecycleAdapter implements CouponRoundLifecyclePort {
     }
 
     @Override
-    public int closeOpenRounds(Instant asOf) {
+    public List<Long> closeOpenRounds(Instant asOf) {
         try {
-            return couponRoundJpaRepository.closeOpenRounds(asOf);
+            List<Long> roundIds = couponRoundJpaRepository
+                    .findClosableOpenRoundIds(asOf);
+            if (roundIds.isEmpty()) {
+                return List.of();
+            }
+            int updatedCount = couponRoundJpaRepository
+                    .closeOpenRoundsByIds(roundIds, asOf);
+            if (updatedCount != roundIds.size()) {
+                throw new CouponPersistenceException(
+                        "OPEN 회차 종료 대상과 갱신 건수가 다릅니다.",
+                        new IllegalStateException(
+                                "selected=" + roundIds.size()
+                                        + ", updated=" + updatedCount
+                        )
+                );
+            }
+            return List.copyOf(roundIds);
         } catch (DataAccessException exception) {
             throw persistenceFailure("OPEN 회차 종료 처리", exception);
         }
