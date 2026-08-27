@@ -3,6 +3,7 @@ package com.kafkick.storage.db.admin;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -35,6 +36,8 @@ import com.kafkick.core.observation.SourceStatus;
 @Repository
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
+
+    private static final Duration MAX_CAMPAIGN_DURATION = Duration.ofHours(24);
 
     private static final Logger log = LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
 
@@ -306,9 +309,11 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             CampaignRow row,
             CouponPolicyType policyType
     ) {
+        // 실제 회차 도메인이 복원할 수 있는 24시간 이하의 기간만 준비된 설정입니다.
         if (row.campaignName() == null || row.campaignName().isBlank()
                 || row.opensAt() == null || row.closesAt() == null
                 || !row.opensAt().isBefore(row.closesAt())
+                || Duration.between(row.opensAt(), row.closesAt()).compareTo(MAX_CAMPAIGN_DURATION) > 0
                 || row.validDays() == null || row.validDays() <= 0
                 || !hasValidGradeMask(row.eligibleGradesMask())) {
             return false;
