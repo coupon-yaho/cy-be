@@ -330,9 +330,18 @@ POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPED → ABANDONED
 >
 > ```bash
 > docker compose stop batch     # 검증 스레드 종료 + 만료 크론도 정지
-> #  하드킬이라 그 행은 STARTED 로 남는다 → batch.stuck-job-after-ms 뒤 시체가 된다
-> #  그다음 위 stop → abandon 을 정상 경로로 밟는다
 > ```
+>
+> **그다음은 실제로 어떤 상태로 끝났는지 보고 갈린다.** `docker compose stop` 은 먼저
+> SIGTERM 을 보내고 유예 시간(기본 10초) 뒤에야 SIGKILL 이라, 잡이 <b>스스로 정리하고
+> 종단 상태로 끝날 수도 있다</b> — 그때는 아무것도 안 해도 된다. `GET /runs/{id}` 로 본다.
+>
+> | 끝난 상태 | 할 일 |
+> |---|---|
+> | `COMPLETED`·`FAILED`·`STOPPED` | **없다.** 이미 트리거를 안 막는다 |
+> | `STARTED`·`STARTING` (유예 안에 못 끝냄) | `batch.stuck-job-after-ms` 뒤 시체가 된다 → 위 `stop` → `abandon` |
+>
+> 상태를 안 보고 바로 `stop` 을 부르면 종단 상태에는 `409 VERIFICATION-015` 가 난다.
 >
 > (CY-678 에서 `?force=true` 를 한 번 넣었다가 걷었다. 넣은 근거가
 > *"못 세우면 만료가 `updated_at` 을 찍는다"* 였는데, 컨테이너를 내리면 만료도 같이
