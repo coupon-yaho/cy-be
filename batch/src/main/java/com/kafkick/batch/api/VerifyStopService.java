@@ -110,8 +110,9 @@ public class VerifyStopService {
                     "지금=" + status + " executionId=" + executionId);
         }
 
-        // **force 는 진도 조건만 뺀다.** 상태 조건은 남긴다 — 그 사이에 스스로 끝난 실행에
-        // 쓰면 종료 이력을 덮어쓴다.
+        // **예외 없이 시체 판정을 건다.** 강제 중단 파라미터는 두지 않는다 — 이 API 에는
+        // 인증이 없고, 도는 검증을 정말 세워야 하면 컨테이너를 내리는 수단이 이미 있다
+        // (docs/11 "부하 중 정지 수단이 설정이 아니라 컨테이너다").
         LocalDateTime stuckBefore = requireStuck(execution);
 
         if (jdbcClient.sql(CLAIM)
