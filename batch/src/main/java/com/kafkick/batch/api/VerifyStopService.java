@@ -140,10 +140,15 @@ public class VerifyStopService {
         // 쓰면 종료 이력을 덮어쓴다.
         int claimed;
         if (force) {
-            log.warn("도는 검증을 강제로 중단합니다. 이 시점부터 만료·정리가 이 실행의 입력을 "
-                    + "건드릴 수 있고, 여기까지 쓴 asof_state 는 판정에 못 씁니다. "
-                    + "executionId={} 지금={}", executionId, status);
             claimed = jdbcClient.sql(FORCE_CLAIM).param("id", executionId).update();
+            if (claimed > 0) {
+                // **선점에 성공한 뒤에 남긴다.** 앞에 두면 그 사이 스스로 끝나 거절된
+                // 요청까지 "강제 중단했다" 로 기록되고, 감사 때 일어나지 않은 정합성
+                // 위험을 일어난 것으로 읽는다.
+                log.warn("도는 검증을 강제로 중단합니다. 이 시점부터 만료·정리가 이 실행의 "
+                        + "입력을 건드릴 수 있고, 여기까지 쓴 asof_state 는 판정에 "
+                        + "못 씁니다. executionId={} 지금={}", executionId, status);
+            }
         } else {
             LocalDateTime stuckBefore = requireStuck(execution);
             claimed = jdbcClient.sql(CLAIM)
@@ -157,7 +162,11 @@ public class VerifyStopService {
             // 커밋을 못 본다 — 그러면 자기모순 응답이 나가고 운영자는 손 SQL 로 돌아간다.
             String current = jdbcClient.sql(CURRENT_STATUS)
                     .param("id", executionId).query(String.class).single();
-            if (BatchStatus.valueOf(current).isRunning()) {
+            BatchStatus reread = BatchStatus.valueOf(current);
+            // ⚠️ **앞 검사와 같은 집합으로 가른다.** isRunning() 으로 가르면 STOPPING 이
+            //    여기서는 019("기다리면 된다")를 받는데 앞 검사에서는 015("이미 끝났다")를
+            //    받는다 — 경쟁이 어디서 끝나느냐에 따라 같은 상태의 처방이 갈린다.
+            if (reread == BatchStatus.STARTED || reread == BatchStatus.STARTING) {
                 // 0행인데 아직 도는 중 = 그 사이 진도를 냈다. 살아난 실행을 멈추면 안 된다.
                 // force 로는 여기 못 온다 — 진도 조건이 없어 상태만 맞으면 늘 1행이다.
                 throw new BusinessException(
@@ -165,7 +174,8 @@ public class VerifyStopService {
                         "선점에 실패했고 실행이 아직 돌고 있습니다. 지금=" + current
                                 + " executionId=" + executionId);
             }
-            // 그 사이 스스로 끝났다. 선점 전 경로가 같은 상태에 내는 답과 같아야 한다.
+            // 그 사이 스스로 끝났거나 STOPPING 이다. 어느 쪽이든 stop 은 안 먹는다 —
+            // 앞 검사가 같은 상태에 내는 답과 같아야 한다.
             throw new BusinessException(VerificationErrorCode.VERIFY_NOT_RUNNING,
                     "그 사이 실행이 끝났습니다. 지금=" + current
                             + " executionId=" + executionId);

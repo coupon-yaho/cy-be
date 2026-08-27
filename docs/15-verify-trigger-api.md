@@ -306,8 +306,10 @@ if (!verifying.isEmpty()) { log.warn(...); return; }
 죽으면 `STARTED` 행이 `END_TIME` 이 `NULL` 인 채 영구히 남고, **그 뒤 모든 트리거가 429** 가
 된다. 재기동으로도 안 풀린다 — 판정 기준이 프로세스가 아니라 DB 이기 때문이다.
 
-`stop` 이 그 행을 곧바로 `STOPPED` 로 올린다(아래 실측 참고). 그다음 `abandon` 이
-"없던 것으로 한다" 를 마저 해야 트리거가 풀린다.
+`stop` 이 그 행을 곧바로 `STOPPED` 로 올린다(아래 실측 참고). **429 는 그 순간 풀린다** —
+차단 목록이 `STARTING`·`STARTED`·`STOPPING` 이라 `STOPPED` 는 이미 밖이다.
+`abandon` 은 트리거를 풀려고 부르는 것이 <b>아니라</b>, 그 실행을 "없던 것으로 한다" 는
+<b>이력의 의미</b>를 남기려고 부르는 선택 단계다 — 안 부르면 `STOPPED` 로 남는다.
 
 ```bash
 # 기본은 **진도가 멈춘 실행만** 받는다 (CY-678).
@@ -340,8 +342,11 @@ POST /api/v1/admin/verify/runs/{id}/abandon              # STOPPED → ABANDONED
 > Spring Batch 자체는 `status.isLessThan(STOPPING)` 일 때만 거부해서 `FAILED` 까지
 > 통과시킨다. 그 위에 우리 조건을 하나 더 얹은 것이다.
 
-**하드킬 뒤에는 `stop` 한 번에 곧바로 `STOPPED` 가 된다** — 신호를 받아 줄 잡이 이미
-없기 때문이다(실측). `STOPPING` 은 살아 있는 잡이 청크 경계를 기다리는 동안의 상태다. 이것은 정상 절차가 아니라 **복구**이고, 버린 실행이 남긴
+**`stop` 은 언제나 곧바로 `STOPPED` 를 남긴다** — 하드킬이든 아니든 같다(아래 실측 참고).
+`STOPPING` 은 `stop` 이 잠깐 세웠다가 같은 `update` 안에서 승격되는 **중간값**이라
+DB 조회로는 안 보인다. 살아 있는 잡은 그 뒤 자기 청크 경계에서 실제로 멈춘다 —
+**DB 상태가 "멈췄다" 로 바뀌는 시점과 스레드가 실제로 서는 시점이 다르다**는 뜻이고,
+`stop` 을 시체로 좁힌 이유가 그것이다(CY-678). 이것은 정상 절차가 아니라 **복구**이고, 버린 실행이 남긴
 `verification_runs` 행은 `verdict` 없이 열린 채 남는다(되읽기가 `verdict IS NOT NULL` 로
 안 집는 것이 맞다).
 
