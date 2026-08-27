@@ -294,14 +294,18 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 && row.activeCount() >= 0L
                 && row.activeCount() <= row.totalQuantity()
                 && row.stockUpdatedAt() != null;
-        boolean campaignConfigurationReady = hasValidCampaignConfiguration(row);
+        CouponPolicyType policyType = policyTypeOf(row.policyType());
+        boolean campaignConfigurationReady = hasValidCampaignConfiguration(row, policyType);
         // 재고 행 부재와 정책 스냅샷 위반은 각각 확정된 DB 준비 실패로 보존합니다.
         return new PreparationSource(
-                campaignConfigurationReady, databaseStockReady, SourceStatus.VALID, snapshotAt);
+                campaignConfigurationReady, databaseStockReady, policyType, SourceStatus.VALID, snapshotAt);
     }
 
     /** DB에 저장된 캠페인 스냅샷이 현재 발급 계약의 모든 필수 값을 갖췄는지 확인합니다. */
-    private static boolean hasValidCampaignConfiguration(CampaignRow row) {
+    private static boolean hasValidCampaignConfiguration(
+            CampaignRow row,
+            CouponPolicyType policyType
+    ) {
         if (row.campaignName() == null || row.campaignName().isBlank()
                 || row.opensAt() == null || row.closesAt() == null
                 || !row.opensAt().isBefore(row.closesAt())
@@ -309,7 +313,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 || !hasValidGradeMask(row.eligibleGradesMask())) {
             return false;
         }
-        return hasValidDiscountPolicy(row);
+        return hasValidDiscountPolicy(row, policyType);
     }
 
     /** 멤버십 enum이 지원하는 비어 있지 않은 등급 비트만 설정값으로 인정합니다. */
@@ -326,34 +330,41 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
     }
 
     /** 정책 종류별 할인 스냅샷 조합이 실제 발급 도메인 규칙과 맞는지 확인합니다. */
-    private static boolean hasValidDiscountPolicy(CampaignRow row) {
-        if (row.policyType() == null) {
+    private static boolean hasValidDiscountPolicy(CampaignRow row, CouponPolicyType policyType) {
+        if (policyType == null) {
             return false;
         }
+        // 각 정책은 자기 전용 혜택 필드만 값이 있어야 준비된 설정입니다.
+        return switch (policyType) {
+            case PERCENT_CAPPED -> row.discountRate() != null
+                    && row.discountRate() >= 1
+                    && row.discountRate() <= 100
+                    && row.maxDiscountAmount() != null
+                    && row.maxDiscountAmount() > 0
+                    && row.discountAmount() == null
+                    && row.dataGrantMb() == null;
+            case FIXED_AMOUNT -> row.discountAmount() != null
+                    && row.discountAmount() > 0
+                    && row.discountRate() == null
+                    && row.maxDiscountAmount() == null
+                    && row.dataGrantMb() == null;
+            case DATA_GRANT -> row.dataGrantMb() != null
+                    && row.dataGrantMb() > 0
+                    && row.discountRate() == null
+                    && row.maxDiscountAmount() == null
+                    && row.discountAmount() == null;
+        };
+    }
+
+    /** DB 정책 문자열을 관리자 준비 판정 enum으로 변환하며 미지원 값은 설정 실패로 보존합니다. */
+    private static CouponPolicyType policyTypeOf(String policyType) {
+        if (policyType == null) {
+            return null;
+        }
         try {
-            CouponPolicyType policyType = CouponPolicyType.valueOf(row.policyType());
-            // 각 정책은 자기 전용 혜택 필드만 값이 있어야 준비된 설정입니다.
-            return switch (policyType) {
-                case PERCENT_CAPPED -> row.discountRate() != null
-                        && row.discountRate() >= 1
-                        && row.discountRate() <= 100
-                        && row.maxDiscountAmount() != null
-                        && row.maxDiscountAmount() > 0
-                        && row.discountAmount() == null
-                        && row.dataGrantMb() == null;
-                case FIXED_AMOUNT -> row.discountAmount() != null
-                        && row.discountAmount() > 0
-                        && row.discountRate() == null
-                        && row.maxDiscountAmount() == null
-                        && row.dataGrantMb() == null;
-                case DATA_GRANT -> row.dataGrantMb() != null
-                        && row.dataGrantMb() > 0
-                        && row.discountRate() == null
-                        && row.maxDiscountAmount() == null
-                        && row.discountAmount() == null;
-            };
+            return CouponPolicyType.valueOf(policyType);
         } catch (IllegalArgumentException exception) {
-            return false;
+            return null;
         }
     }
 

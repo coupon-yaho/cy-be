@@ -2,10 +2,13 @@ package com.kafkick.core.admin.overview.calculator;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.springframework.stereotype.Component;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.PreparationItem;
 import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
@@ -15,6 +18,10 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
 /** DB 준비 원천과 요청당 한 번 읽은 Runtime 설정을 결합하는 순수 계산기입니다. */
 @Component
 public class CampaignPreparationCalculator {
+
+    private static final Map<EngineVersion, Set<CouponPolicyType>> SUPPORTED_ISSUANCE_POLICIES = Map.of(
+            EngineVersion.V1,
+            Set.of(CouponPolicyType.PERCENT_CAPPED, CouponPolicyType.FIXED_AMOUNT));
 
     /** 상태가 없는 순수 계산기로 생성합니다. */
     public CampaignPreparationCalculator() { }
@@ -48,8 +55,10 @@ public class CampaignPreparationCalculator {
         if (!source.databaseStockReady()) {
             failedItems.add(PreparationItem.DATABASE_STOCK);
         }
-        if (runtimeConfig.engineVersion() != EngineVersion.V1) {
-            // 현재 실제 발급 구현은 DB 기반 V1만 지원합니다.
+        Set<CouponPolicyType> supportedPolicies = SUPPORTED_ISSUANCE_POLICIES
+                .getOrDefault(runtimeConfig.engineVersion(), Set.of());
+        if (source.policyType() == null || !supportedPolicies.contains(source.policyType())) {
+            // 실제 엔진·정책 조합이 구현된 경우에만 발급 경로를 준비 완료로 봅니다.
             failedItems.add(PreparationItem.ISSUANCE_PATH);
         }
         return new PreparationObservation(

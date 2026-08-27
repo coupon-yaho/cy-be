@@ -3,12 +3,14 @@ package com.kafkick.core.admin.campaignsource;
 import java.time.Instant;
 import java.util.Objects;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.observation.SourceStatus;
 
-/** DB에서 독립적으로 판정한 캠페인 설정·재고 준비 원천입니다. */
+/** DB에서 독립적으로 판정한 캠페인 설정·재고와 정책 종류 준비 원천입니다. */
 public record PreparationSource(
         Boolean campaignConfigurationReady,
         Boolean databaseStockReady,
+        CouponPolicyType policyType,
         SourceStatus status,
         Instant observedAt
 ) {
@@ -17,11 +19,15 @@ public record PreparationSource(
     public PreparationSource {
         Objects.requireNonNull(status, "status");
         if (status.carriesValue()) {
-            if (campaignConfigurationReady == null || databaseStockReady == null || observedAt == null) {
-                throw new IllegalArgumentException(status + " 준비 원천에는 두 판정과 observedAt이 필요합니다.");
+            if (campaignConfigurationReady == null || databaseStockReady == null || observedAt == null
+                    || (campaignConfigurationReady && policyType == null)) {
+                throw new IllegalArgumentException(
+                        status + " 준비 원천에는 두 판정과 유효 설정의 policyType, observedAt이 필요합니다.");
             }
-        } else if (campaignConfigurationReady != null || databaseStockReady != null || observedAt != null) {
-            throw new IllegalArgumentException(status + " 준비 원천의 판정과 observedAt은 null이어야 합니다.");
+        } else if (campaignConfigurationReady != null || databaseStockReady != null
+                || policyType != null || observedAt != null) {
+            throw new IllegalArgumentException(
+                    status + " 준비 원천의 판정과 policyType, observedAt은 null이어야 합니다.");
         }
     }
 }

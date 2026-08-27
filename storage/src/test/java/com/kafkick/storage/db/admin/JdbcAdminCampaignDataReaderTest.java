@@ -50,6 +50,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
@@ -208,11 +209,14 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(catalog.campaigns().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(200, 0));
         assertThat(catalog.campaigns().get(0).preparation())
-                .isEqualTo(new PreparationSource(true, false, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(
+                        true, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(1).preparation())
-                .isEqualTo(new PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(2).preparation())
-                .isEqualTo(new PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
     }
 
     /** DATA_GRANT의 양수 전용 용량만 설정된 행을 정상 캠페인 설정으로 판정하는지 검증합니다. */
@@ -233,6 +237,7 @@ class JdbcAdminCampaignDataReaderTest {
                 .campaigns().getFirst().preparation();
 
         assertThat(preparation.campaignConfigurationReady()).isTrue();
+        assertThat(preparation.policyType()).isEqualTo(CouponPolicyType.DATA_GRANT);
     }
 
     /** DATA_GRANT 행에 다른 정책의 할인 필드가 섞이면 배타성 위반으로 판정하는지 검증합니다. */

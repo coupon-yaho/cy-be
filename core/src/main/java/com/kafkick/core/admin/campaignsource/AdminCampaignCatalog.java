@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
@@ -86,10 +87,15 @@ public record AdminCampaignCatalog(
         private static PreparationSource preparationSource(PreparationObservation preparation) {
             Objects.requireNonNull(preparation, "preparation");
             if (!preparation.status().carriesValue()) {
-                return new PreparationSource(null, null, preparation.status(), null);
+                return new PreparationSource(null, null, null, preparation.status(), null);
             }
             boolean ready = Boolean.TRUE.equals(preparation.completed());
-            return new PreparationSource(ready, ready, preparation.status(), preparation.observedAt());
+            return new PreparationSource(
+                    ready,
+                    ready,
+                    CouponPolicyType.FIXED_AMOUNT,
+                    preparation.status(),
+                    preparation.observedAt());
         }
     }
 }

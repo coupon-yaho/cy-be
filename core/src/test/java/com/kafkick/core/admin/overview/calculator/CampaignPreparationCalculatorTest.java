@@ -8,6 +8,7 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.PreparationItem;
 import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
@@ -29,7 +30,8 @@ class CampaignPreparationCalculatorTest {
     @DisplayName("DB 준비 원천이 PENDING이면 실패 목록 없이 PENDING을 보존한다")
     void preservesPendingSourceWithoutFailedItems() {
         PreparationObservation result = calculator.calculate(
-                new PreparationSource(null, null, SourceStatus.PENDING, null), validRuntime(EngineVersion.V1));
+                new PreparationSource(null, null, null, SourceStatus.PENDING, null),
+                validRuntime(EngineVersion.V1));
 
         assertThat(result).isEqualTo(new PreparationObservation(
                 null, List.of(), SourceStatus.PENDING, null));
@@ -40,7 +42,8 @@ class CampaignPreparationCalculatorTest {
     @DisplayName("Runtime 설정이 PENDING이면 DB 판정과 무관하게 실패 목록을 비운다")
     void preservesUnknownWhenRuntimeConfigIsPending() {
         PreparationObservation result = calculator.calculate(
-                new PreparationSource(false, false, SourceStatus.VALID, OBSERVED_AT),
+                new PreparationSource(
+                        false, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
                 runtime(EngineVersion.V1, SourceStatus.PENDING));
 
         assertThat(result).isEqualTo(new PreparationObservation(
@@ -52,7 +55,9 @@ class CampaignPreparationCalculatorTest {
     @DisplayName("DB 설정·재고와 V2 발급 경로의 확정 실패 항목을 분리한다")
     void listsConfirmedFailuresSeparately() {
         PreparationObservation result = calculator.calculate(
-                new PreparationSource(false, false, SourceStatus.VALID, OBSERVED_AT), validRuntime(EngineVersion.V2));
+                new PreparationSource(
+                        false, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
+                validRuntime(EngineVersion.V2));
 
         assertThat(result).isEqualTo(new PreparationObservation(
                 false,
@@ -69,10 +74,40 @@ class CampaignPreparationCalculatorTest {
     @DisplayName("정상 DB 원천과 V1 설정은 준비 완료이며 실패 목록이 비어 있다")
     void completesOnlyWithSupportedV1Path() {
         PreparationObservation result = calculator.calculate(
-                new PreparationSource(true, true, SourceStatus.VALID, OBSERVED_AT), validRuntime(EngineVersion.V1));
+                new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
+                validRuntime(EngineVersion.V1));
 
         assertThat(result).isEqualTo(new PreparationObservation(
                 true, List.of(), SourceStatus.VALID, OBSERVED_AT));
+    }
+
+    /** DB 설정은 유효하지만 실제 V1 발급 경로가 지원하지 않는 정책을 구분하는지 검증합니다. */
+    @Test
+    @DisplayName("V1에서 DATA_GRANT 정책은 발급 경로 실패다")
+    void dataGrantPolicyFailsV1IssuancePath() {
+        PreparationObservation result = calculator.calculate(
+                new PreparationSource(
+                        true, true, CouponPolicyType.DATA_GRANT, SourceStatus.VALID, OBSERVED_AT),
+                validRuntime(EngineVersion.V1));
+
+        assertThat(result).isEqualTo(new PreparationObservation(
+                false, List.of(PreparationItem.ISSUANCE_PATH), SourceStatus.VALID, OBSERVED_AT));
+    }
+
+    /** 알 수 없는 정책 문자열은 설정 실패와 발급 경로 실패를 함께 확정하는지 검증합니다. */
+    @Test
+    @DisplayName("알 수 없는 정책은 캠페인 설정과 발급 경로 실패다")
+    void unknownPolicyFailsConfigurationAndIssuancePath() {
+        PreparationObservation result = calculator.calculate(
+                new PreparationSource(false, true, null, SourceStatus.VALID, OBSERVED_AT),
+                validRuntime(EngineVersion.V1));
+
+        assertThat(result).isEqualTo(new PreparationObservation(
+                false,
+                List.of(PreparationItem.CAMPAIGN_CONFIGURATION, PreparationItem.ISSUANCE_PATH),
+                SourceStatus.VALID,
+                OBSERVED_AT));
     }
 
     /** 값 보유 여부만 다른 Runtime Snapshot을 같은 형식으로 생성합니다. */

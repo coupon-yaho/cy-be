@@ -209,7 +209,7 @@ public final class AdminControllerContractTestSupport {
                                                         ? new CouponMetricsSource.StockCounts(
                                                         campaign.totalQuantity(), campaign.activeCount()) : null,
                                                 campaign.stockStatus(), campaign.stockObservedAt()),
-                                        new PreparationSource(null, null, SourceStatus.PENDING, null)))
+                                        new PreparationSource(null, null, null, SourceStatus.PENDING, null)))
                                 .toList());
             }
 
