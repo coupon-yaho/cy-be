@@ -136,9 +136,22 @@ min_over_time(count_over_time(up{job="api"}[1m])[<W>s:1m])
 # 타임아웃 초과 건수와 전체 건수
 sum_over_time((scrape_duration_seconds{job="api"} > bool 0.9)[<W>s:1s])
 count_over_time(scrape_duration_seconds{job="api"}[<W>s])
+```
 
-# 페이로드의 시간 변화 — 활성 회차 수 변동이 여기 계단으로 보인다
-scrape_samples_scraped{job="api"}
+페이로드의 시간 변화만은 instant query로 볼 수 없다. 창 끝 한 시점의 값 하나만 돌아오므로
+구간 중에 생긴 계단이 안 보인다. 이것만 `query_range`로 시작·종료·step을 주고 훑는다.
+
+```
+docker exec <prometheus 컨테이너> sh -c \
+  "wget -qO- 'http://localhost:9090/api/v1/query_range?query=<expr>\
+&start=<창 시작 epoch>&end=<창 끝 epoch>&step=30'"
+
+# 활성 회차 수 변동이 여기 계단으로 보인다. step은 계단을 놓치지 않을 만큼 잘게.
+max_over_time(scrape_samples_scraped{job="api"}[30s])
+
+# 타임아웃 초과가 구간에 고르게 퍼졌는지, 한곳에 몰렸는지도 같은 방식으로 본다.
+# 몰려 있으면 그 시각에 무슨 일이 있었는지를 따로 봐야 한다(CPU·GC·회차 종료).
+sum_over_time((scrape_duration_seconds{job="api"} > bool 0.9)[1m:1s])
 ```
 
 ### 두 지표를 함께 본다

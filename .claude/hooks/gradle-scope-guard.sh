@@ -19,7 +19,25 @@ GLOBAL_TASKS='^(build|test|check|clean)$'
 # 값을 따로 받는 옵션 — 그 값은 태스크가 아니므로 건너뛴다.
 VALUE_OPTS='^(--tests|--project-dir|-p|--include-build|-I|--init-script|-c|--settings-file|-b|--build-file)$'
 
-read -ra args <<<"$cmd"
+# read -ra 는 셸 인용부호를 해석하지 않는다. 그대로 비교하면 "build" 가 build 와 달라
+# 전체 빌드가 통과한다(실측). 토큰마다 감싼 따옴표를 벗겨서 본다.
+unquote() {
+    local v="$1"
+    while [[ ${#v} -ge 2 ]]; do
+        case "$v" in
+            \"*\") v="${v#\"}"; v="${v%\"}" ;;
+            \'*\') v="${v#\'}"; v="${v%\'}" ;;
+            *) break ;;
+        esac
+    done
+    printf '%s' "$v"
+}
+
+read -ra raw_args <<<"$cmd"
+args=()
+for a in ${raw_args+"${raw_args[@]}"}; do
+    args+=("$(unquote "$a")")
+done
 scoped_dir=""
 skip_next=0
 global_task=""
