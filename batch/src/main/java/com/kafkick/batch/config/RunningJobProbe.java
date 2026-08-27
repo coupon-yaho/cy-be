@@ -279,8 +279,8 @@ public class RunningJobProbe {
      * <p>{@code STARTING} 에서 죽어 Step 도 {@code START_TIME} 도 없는 행이 있는데,
      * 그 갈래가 없으면 그런 행이 <b>영원히</b> 막는다. 그 행은 CY-429 의 복구 API 로 걷는다.
      */
-    // 이것이 실제 계산이고, 위 lastProgress(JobExecution) 는 바깥에 내주려고 씌운
-    // 얇은 껍데기다. 클래스 안(isAlive·isStuck·stuckExecutions)은 전부 이쪽을 직접 부른다.
+    // 밖으로 안 연다. 이 값을 그대로 내주면 부르는 쪽이 뺄셈을 자기 시계로 하게 되고,
+    // 그 시계는 UTC 인데 이 값은 JVM 기본 존이다 — untilStuck() 이 그래서 있다.
     private static LocalDateTime lastProgressOf(JobExecution execution) {
         return execution.getStepExecutions().stream()
                 .map(StepExecution::getLastUpdated)
