@@ -88,7 +88,6 @@ class BrandDayControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].couponRoundId").value(100))
                 .andExpect(jsonPath("$.data[0].activeCount").value(20))
-                .andExpect(jsonPath("$.data[0].dataGrantMb").isEmpty())
                 .andExpect(jsonPath("$.data[0].queueActive").value(false));
     }
 

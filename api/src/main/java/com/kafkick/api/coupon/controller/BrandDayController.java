@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -16,6 +17,7 @@ import com.kafkick.core.coupon.service.BrandDayQueryService;
 import com.kafkick.core.support.TimeProvider;
 
 @RestController
+@RequestMapping("/api/v1")
 public class BrandDayController {
 
     private final BrandDayQueryService brandDayQueryService;
@@ -32,7 +34,7 @@ public class BrandDayController {
         this.timeProvider = timeProvider;
     }
 
-    @GetMapping("/api/v1/brand-days")
+    @GetMapping("/brand-days")
     public ResponseEnvelope<List<BrandDayResponse>> findBrandDays() {
         return ResponseEnvelope.success(
                 brandDayQueryService.findAll().stream()
@@ -41,7 +43,7 @@ public class BrandDayController {
         );
     }
 
-    @GetMapping("/api/v1/calendar")
+    @GetMapping("/calendar")
     public ResponseEnvelope<List<BrandDayCalendarResponse>> findCalendar(
             @RequestParam
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)

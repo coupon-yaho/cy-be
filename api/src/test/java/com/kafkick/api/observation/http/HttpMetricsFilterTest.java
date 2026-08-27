@@ -71,6 +71,7 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import com.kafkick.api.observation.MeterNames;
+import com.kafkick.api.coupon.controller.BrandDayController;
 import com.kafkick.api.coupon.controller.CouponCancelController;
 import com.kafkick.api.coupon.controller.CouponCancelUseController;
 import com.kafkick.api.coupon.controller.CouponIssueController;
@@ -91,11 +92,13 @@ class HttpMetricsFilterTest {
             CouponUseController.class,
             CouponCancelUseController.class,
             CouponCancelController.class,
+            BrandDayController.class,
             MemberCouponController.class);
 
     private static final Set<ControllerMapping> EXPECTED_COUPON_MAPPINGS = Set.of(
             mapping(RequestMethod.GET, "/api/v1/coupons", UriGroup.READ),
-            mapping(RequestMethod.GET, "/api/v1/coupons/{issuanceId}", UriGroup.READ),
+            mapping(RequestMethod.GET, "/api/v1/brand-days", UriGroup.READ),
+            mapping(RequestMethod.GET, "/api/v1/calendar", UriGroup.READ),
             mapping(RequestMethod.POST, "/api/v1/coupons/{couponRoundId}/issue", UriGroup.ISSUE),
             mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/use", UriGroup.USE),
             mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/cancel-use", UriGroup.USE),
@@ -134,9 +137,9 @@ class HttpMetricsFilterTest {
                 .flatMap(controller -> controllerMappings(controller).stream())
                 .collect(Collectors.toSet());
 
-        assertThat(COUPON_CONTROLLERS).hasSize(5);
+        assertThat(COUPON_CONTROLLERS).hasSize(6);
         assertThat(actual).containsExactlyInAnyOrderElementsOf(EXPECTED_COUPON_MAPPINGS);
-        assertThat(actual).hasSize(6);
+        assertThat(actual).hasSize(7);
     }
 
     private static Set<ControllerMapping> controllerMappings(Class<?> controller) {
