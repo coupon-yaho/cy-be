@@ -151,6 +151,10 @@ public class ConsistencyRawValueReader {
           if t == 'set' then return redis.call('SCARD', key)
           elseif t == 'zset' then return redis.call('ZCARD', key)
           elseif t == 'list' then return redis.call('LLEN', key)
+          -- v2 의 cy:v2:issued 가 Hash 다(docs/14-v2-phase0/11 ③). HLEN 은 O(1) 이라
+          -- 발급 경로의 금지 목록(HGETALL·HKEYS)에 걸리지 않는다. 파손 field 도 여기 잡히고,
+          -- 그것을 가르는 것은 corruptFieldCount 다.
+          elseif t == 'hash' then return redis.call('HLEN', key)
           elseif t == 'string' then return redis.call('GET', key)
           -- 키가 없는 것은 예열이라 곧 값이 나오지만, 엉뚱한 자료형은 키를 잘못 가리킨 설정이라
           -- 영영 안 나온다. 둘을 같은 false 로 뭉개면 오설정이 예열로 위장한다.
