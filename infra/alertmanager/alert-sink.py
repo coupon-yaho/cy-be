@@ -155,7 +155,8 @@ class Sink(BaseHTTPRequestHandler):
 
         for attempt in range(SLACK_RETRIES + 1):
             last = attempt == SLACK_RETRIES
-            if self._post_to_slack(text, last=last):
+            sent, retryable = self._post_to_slack(text, last=last)
+            if sent or not retryable:
                 return
             # **마지막 실패 뒤에는 안 기다린다.** 기다려도 다시 시도할 것이 없고,
             # 그 1초가 같은 payload 의 **뒤 알림들을 건마다 밀어낸다.**
@@ -163,7 +164,13 @@ class Sink(BaseHTTPRequestHandler):
                 time.sleep(SLACK_RETRY_DELAY)
 
     def _post_to_slack(self, text, last):
-        """보냈으면 {@code True}. 실패는 마지막 시도에서만 로그를 남긴다."""
+        """``(보냈는가, 다시 시도할 만한가)``. 실패 로그는 마지막 시도에서만 남긴다.
+
+        **영구 오류는 재시도하지 않는다.** 400(형식이 틀렸다)·403(웹훅이 폐기됐다)·
+        404(없는 웹훅)는 다시 보내도 **같은 답**이다 — 재시도가 지연만 늘리고, 그
+        지연이 같은 payload 의 뒤 알림들을 민다. 다시 시도할 값이 있는 것은
+        429(rate limit)와 5xx(Slack 장애)뿐이다.
+        """
         try:
             body = json.dumps({"text": text}).encode()
             req = urllib.request.Request(
@@ -171,21 +178,23 @@ class Sink(BaseHTTPRequestHandler):
                 headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=SLACK_TIMEOUT) as r:
                 if r.status == 200:
-                    return True
+                    return True, False
                 # 여기 오는 것은 2xx·3xx 중 200 이 아닌 것뿐이다 — 4xx·5xx 는 아래
                 # HTTPError 로 빠진다.
                 if last:
                     print(f"[!] Slack 이 {r.status} 를 냈다", flush=True)
-                return False
+                return False, True
         except urllib.error.HTTPError as e:
             # **상태 코드를 남긴다.** urlopen 은 4xx·5xx 를 HTTPError 로 **던지므로**
             # 위 r.status 분기에 도달하지 않는다. 타입 이름만 남기면
             # **403(웹훅이 폐기됐다)과 500(Slack 장애)이 같은 줄이 된다** — 전자는
             # 사람이 웹훅을 다시 발급해야 하고 후자는 기다리면 된다.
             # `e.code` 에는 URL 이 안 들어간다(실측: str(e) 가 "HTTP Error 403: Forbidden").
-            if last:
-                print(f"[!] Slack 이 {e.code} 를 냈다", flush=True)
-            return False
+            retryable = e.code == 429 or e.code >= 500
+            if last or not retryable:
+                kind = "다시 시도할 값이 없다" if not retryable else "다시 보낸다"
+                print(f"[!] Slack 이 {e.code} 를 냈다 — {kind}", flush=True)
+            return False, retryable
         except Exception as e:  # noqa: BLE001 — 아래 이유로 전부 잡는다
             # **예외 종류를 좁히면 안 된다.** 한때 (URLError, OSError, TimeoutError) 였는데
             # `Request()` 생성이 try 밖이었고, 스킴 없는 URL 에 `ValueError` 를 던진다 —
@@ -196,7 +205,8 @@ class Sink(BaseHTTPRequestHandler):
             # **예외 객체를 포맷하지 않는다.** 타입 이름만 남긴다 — 메시지에 URL 이 들어온다.
             if last:
                 print(f"[!] Slack 전송 실패: {type(e).__name__}", flush=True)
-            return False
+            # 연결 실패·타임아웃은 순간일 수 있다. 다시 보낸다.
+            return False, True
 
     def _read_body(self, length):
         """<b>느리게 흘려보내는 전송을 끊는다.</b>
