@@ -48,7 +48,8 @@ SLACK_TIMEOUT = 5
 # **한 번만 다시 보낸다.** 우리는 이미 200 을 냈으므로 Alertmanager 가 재시도하지 않는다.
 # 그러니 순간 실패는 여기서 흡수해야 한다 — 그렇게 안 하면 **repeat_interval(1시간)
 # 안에 해소되는 알림은 영영 한 번도 안 간다**(resolved 는 안 보내므로).
-# 두 번을 넘기지 않는 이유는 위 문단과 같다. 최악 지연이 5+1+5=11초로 유한해야 한다.
+# 두 번을 넘기지 않는 이유는 위 문단과 같다. 최악 지연이 5+1+5=11초로 유한해야 한다
+# (마지막 실패 뒤에는 안 기다린다 — 안 그러면 12초다).
 SLACK_RETRIES = 1
 SLACK_RETRY_DELAY = 1
 
@@ -153,9 +154,13 @@ class Sink(BaseHTTPRequestHandler):
             text += f"\n{desc}"
 
         for attempt in range(SLACK_RETRIES + 1):
-            if self._post_to_slack(text, last=attempt == SLACK_RETRIES):
+            last = attempt == SLACK_RETRIES
+            if self._post_to_slack(text, last=last):
                 return
-            time.sleep(SLACK_RETRY_DELAY)
+            # **마지막 실패 뒤에는 안 기다린다.** 기다려도 다시 시도할 것이 없고,
+            # 그 1초가 같은 payload 의 **뒤 알림들을 건마다 밀어낸다.**
+            if not last:
+                time.sleep(SLACK_RETRY_DELAY)
 
     def _post_to_slack(self, text, last):
         """보냈으면 {@code True}. 실패는 마지막 시도에서만 로그를 남긴다."""
@@ -167,9 +172,20 @@ class Sink(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=SLACK_TIMEOUT) as r:
                 if r.status == 200:
                     return True
+                # 여기 오는 것은 2xx·3xx 중 200 이 아닌 것뿐이다 — 4xx·5xx 는 아래
+                # HTTPError 로 빠진다.
                 if last:
                     print(f"[!] Slack 이 {r.status} 를 냈다", flush=True)
                 return False
+        except urllib.error.HTTPError as e:
+            # **상태 코드를 남긴다.** urlopen 은 4xx·5xx 를 HTTPError 로 **던지므로**
+            # 위 r.status 분기에 도달하지 않는다. 타입 이름만 남기면
+            # **403(웹훅이 폐기됐다)과 500(Slack 장애)이 같은 줄이 된다** — 전자는
+            # 사람이 웹훅을 다시 발급해야 하고 후자는 기다리면 된다.
+            # `e.code` 에는 URL 이 안 들어간다(실측: str(e) 가 "HTTP Error 403: Forbidden").
+            if last:
+                print(f"[!] Slack 이 {e.code} 를 냈다", flush=True)
+            return False
         except Exception as e:  # noqa: BLE001 — 아래 이유로 전부 잡는다
             # **예외 종류를 좁히면 안 된다.** 한때 (URLError, OSError, TimeoutError) 였는데
             # `Request()` 생성이 try 밖이었고, 스킴 없는 URL 에 `ValueError` 를 던진다 —
