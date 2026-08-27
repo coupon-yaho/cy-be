@@ -108,8 +108,11 @@ public final class IssuanceScripts {
             -- DECR 이 터지고, 그때 HSETNX 는 이미 적용돼 있어 고아 P 가 남는다.
             local raw = redis.pcall('GET', KEYS[1])
             local rawEver = redis.pcall('GET', KEYS[4])                -- 키 부재는 예열이라 정상이다
+            -- 허용 집합은 INCR 에 대해 닫혀 있어야 한다. 15자리 9만 있는 값을 통과시키면
+            -- 우리가 쓴 16자리를 다음 호출의 같은 가드가 파손으로 막는다.
             if not isCanonicalInt(raw, true)
-                    or (rawEver ~= false and not isCanonicalInt(rawEver, true)) then
+                    or (rawEver ~= false and (not isCanonicalInt(rawEver, true)
+                        or string.match(rawEver, '^9+$') ~= nil and #rawEver == 15)) then
                 redis.call('HDEL', KEYS[2], ARGV[1])                   -- 방금 잡은 선점만 되돌린다
                 return {-11}                                           -- 카운터를 못 읽는다. 매진이 아니다
             end

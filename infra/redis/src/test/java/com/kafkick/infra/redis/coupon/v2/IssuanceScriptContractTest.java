@@ -323,9 +323,37 @@ class IssuanceScriptContractTest {
     @Test
     @DisplayName("15자리는 정상 범위다 — 상한을 너무 좁게 잡는 실수를 잡는다")
     void fifteenDigitCounterIsAccepted() {
-        redis.opsForValue().set(ISSUED_EVER, "999999999999999");
+        redis.opsForValue().set(ISSUED_EVER, "100000000000000");
 
         assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.OK);
+        assertThat(issuedEver()).isEqualTo(100_000_000_000_001L);
+    }
+
+    @Test
+    @DisplayName("허용 집합은 INCR 에 대해 닫혀 있어야 한다 — 자기가 읽을 수 없는 값을 쓰지 않는다")
+    void claimRefusesWhenIncrementWouldLeaveTheReadableSet() {
+        redis.opsForValue().set(ISSUED_EVER, "999999999999999");
+
+        assertThat(claim("key-1", TOKEN_A))
+                .as("INCR 하면 16자리가 되고 그다음 호출부터 우리 가드가 -11 로 막는다")
+                .isEqualTo(IssuanceScriptCodes.Claim.COUNTER_UNREADABLE);
+        assertThat(redis.opsForValue().get(ISSUED_EVER)).isEqualTo("999999999999999");
+        assertThat(stored()).isNull();
+        assertThat(stock()).isEqualTo(TOTAL);
+    }
+
+    @Test
+    @DisplayName("경계에서 두 번 연속 선점해도 카운터가 계속 읽힌다")
+    void consecutiveClaimsStayReadableAtTheBoundary() {
+        redis.opsForValue().set(ISSUED_EVER, "99999999999998");
+
+        assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.OK);
+        List<?> second = redis.execute(IssuanceScripts.CLAIM,
+                List.of(STOCK, ISSUED, META, ISSUED_EVER),
+                "other-member", GRADE_BIT, "key-2", TOKEN_B);
+
+        assertThat(code(second)).isEqualTo(IssuanceScriptCodes.Claim.OK);
+        assertThat(issuedEver()).isEqualTo(100_000_000_000_000L);
     }
 
     @Test
