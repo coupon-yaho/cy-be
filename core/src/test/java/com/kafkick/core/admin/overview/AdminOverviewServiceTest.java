@@ -363,8 +363,10 @@ class AdminOverviewServiceTest {
                 new RecordingReader(readyCatalog(701L, 909L)), new RecordingRuntimeStore(),
                 new RecordingObservationSource(), finalReader).getOverview().snapshot();
 
-        assertThat(snapshot.actionRequired().value().totalCount()).isZero();
-        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(snapshot.actionRequired().value()).isNull();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(snapshot.actionItems().value()).isNull();
         assertThat(snapshot.campaigns().value())
                 .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
     }
@@ -379,8 +381,10 @@ class AdminOverviewServiceTest {
                 new RecordingReader(readyCatalog(701L, 909L)), new RecordingRuntimeStore(),
                 new RecordingObservationSource(), finalReader).getOverview().snapshot();
 
-        assertThat(snapshot.actionRequired().value().totalCount()).isZero();
-        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.actionRequired().value()).isNull();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.actionItems().value()).isNull();
         assertThat(snapshot.campaigns().value())
                 .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
     }

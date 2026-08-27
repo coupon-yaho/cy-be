@@ -130,8 +130,8 @@ public class AdminOverviewService {
      *
      * <p>기준 시각, DB catalog, Runtime 현재값과 관측 묶음을 각각 한 번 읽습니다. DB couponId 모집단을
      * O1 target과 캠페인 행에 함께 사용하며, 진행 캠페인의 미연결 O2는 PENDING으로 보존합니다.
-     * O1·O2·준비·완전한 FINAL 후보의 대표 Action 계산은 한 번만 수행하고 O3·전체 발급률·지연은
-     * 관측 묶음의 상태와 시각을 그대로 전달합니다.</p>
+     * O1·O2·준비·완전한 FINAL 후보의 대표 Action 계산은 한 번만 수행하고, FINAL을 포함한 원천
+     * 상태와 O3·전체 발급률·지연의 시각은 손실 없이 전달합니다.</p>
      *
      * @return Snapshot과 전체 데이터 완전성을 포함한 운영현황 Service 결과
      */
@@ -150,10 +150,8 @@ public class AdminOverviewService {
         FinalActionCalculation finalCalculation =
                 consistencyActionCalculator.calculateLatest(finalObservations);
         List<AdminOverviewSnapshot.Observation<?>> finalActionObservations = new ArrayList<>();
-        if (finalCalculation.isComplete()) {
-            // 적용 가능한 FINAL만 Action 원천 시각 합성에 포함합니다.
-            finalActionObservations.addAll(finalCalculation.observations().values());
-        }
+        // 후보는 전체 FINAL이 완전할 때만 쓰되 PENDING·UNAVAILABLE 상태는 항상 완전성에 반영합니다.
+        finalActionObservations.addAll(finalCalculation.observations().values());
         OverviewObservationRequest observationRequest = observationRequest(snapshotAt, catalog);
         OverviewObservationData observationData = observationSource.observe(observationRequest);
         if (!observationRequest.equals(observationData.request())) {
@@ -402,7 +400,7 @@ public class AdminOverviewService {
         return new AdminOverviewSnapshot.Observation<>(null, status, null);
     }
 
-    /** O1·O2·준비 모집단 완전성을 Action KPI·목록 상태에 반영하되 대표 Map은 행 조립에 유지합니다. */
+    /** O1·O2·준비·FINAL 모집단 완전성을 Action KPI·목록 상태에 반영합니다. */
     private static <T> AdminOverviewSnapshot.Observation<T> actionObservation(
             T value,
             AdminOverviewSnapshot.Observation<?> queueRisk,
