@@ -7,7 +7,7 @@
 |---|---|
 | **한다** | `POST /api/v1/admin/verify` — 202 + `executionId` |
 | **한다** | `GET /api/v1/admin/verify/runs/{executionId}` — 판정·검출 건수·상태 |
-| **한다** | `POST /api/v1/admin/verify/runs/{executionId}/stop` — 실행 중단. 기본은 **진도가 멈춘 것만**, `?force=true` 로 도는 것도 |
+| **한다** | `POST /api/v1/admin/verify/runs/{executionId}/stop` — 실행 중단. **진도가 멈춘 것만** |
 | **한다** | 업무 포트 노출 결정 — `application.yml.example` 이 이 티켓에 예약해 뒀다 |
 | **했다 (CY-590)** | `GET /api/v1/admin/verify/reports/latest?dataset=&scope=` — 제출용 리포트. 한때 이 표가 *"안 한다 — 별도 티켓"* 이라고 적었고, 그 별도 티켓이 CY-590 이다 |
 | **안 한다** | 인증·인가 — batch 에 Spring Security 가 없다. 아래 "남긴 것" |
@@ -312,23 +312,31 @@ if (!verifying.isEmpty()) { log.warn(...); return; }
 <b>이력의 의미</b>를 남기려고 부르는 선택 단계다 — 안 부르면 `STOPPED` 로 남는다.
 
 ```bash
-# 기본은 **진도가 멈춘 실행만** 받는다 (CY-678).
+# **진도가 멈춘 실행만** 받는다 (CY-678).
 #   진도가 있으면 409 VERIFICATION-019, 이미 끝났으면 409 VERIFICATION-015.
-POST /api/v1/admin/verify/runs/{id}/stop                 # STARTED|STARTING → STOPPED
-# 도는 검증을 정말 세워야 할 때만. 파라미터 이름 자체가 방어다.
-POST /api/v1/admin/verify/runs/{id}/stop?force=true      # 진도가 있어도 받는다
-POST /api/v1/admin/verify/runs/{id}/abandon              # STOPPED → ABANDONED
+POST /api/v1/admin/verify/runs/{id}/stop      # STARTED|STARTING → STOPPED
+POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPED → ABANDONED
 ```
 
 > **왜 기본이 시체만인가.** 도는 검증을 멈추면 472초가 버려지는 데서 끝나지 않는다 —
 > 그 순간 만료·정리가 이 실행에 물러나기를 그만두는데 **스레드는 아직 돈다.**
 > V1·V3·V5 가 반쯤 쓰인 상태를 읽고 예외 없이 조용히 틀린 답을 낸다.
 >
-> **왜 `force` 를 여는가.** 이 저장소에는 잡 전체 데드라인이 없고 `replayStep` 은
-> 느리게라도 커밋하는 한 영원히 시체가 안 된다. 시체 게이트만 두면 잘못 건 300만 행
-> `CORRUPT FULL` 을 **끝날 때까지 못 세운다** — 그 사이 만료 크론이 `issuances.updated_at`
-> 을 찍고 그 `asOf` 는 재시딩 말고 복구가 없다. 막아서 생기는 손해가 더 크다.
-> `force` 는 WARN 로그를 남긴다.
+> **도는 검증을 정말 세워야 하면 컨테이너를 내린다.** 강제 중단 파라미터를 열지 않는다 —
+> 이 API 에는 인증이 없어서, 여는 순간 배치 포트에 닿는 누구나 정상 검증을 멈출 수 있다.
+> 그리고 열 필요가 없다: `docs/11` 이 *"부하 중 정지 수단이 설정이 아니라 컨테이너다"* 로
+> 이미 수단을 정해 뒀고, **만료와 검증이 같은 컨테이너**라 내리면 만료 크론도 안 떠서
+> `issuances.updated_at` 오염이 애초에 일어나지 않는다.
+>
+> ```bash
+> docker compose stop batch     # 검증 스레드 종료 + 만료 크론도 정지
+> #  하드킬이라 그 행은 STARTED 로 남는다 → batch.stuck-job-after-ms 뒤 시체가 된다
+> #  그다음 위 stop → abandon 을 정상 경로로 밟는다
+> ```
+>
+> (CY-678 에서 `?force=true` 를 한 번 넣었다가 걷었다. 넣은 근거가
+> *"못 세우면 만료가 `updated_at` 을 찍는다"* 였는데, 컨테이너를 내리면 만료도 같이
+> 서므로 **그 전제가 거짓**이었다.)
 >
 > **판정과 쓰기는 한 트랜잭션이다.** `VerifyStopService` 가 진도 조건을 `UPDATE` 문 안에
 > 다시 걸고 affected rows 를 본다 — 판정 직후 락이 풀려 실행이 되살아나는 창을 닫는다.

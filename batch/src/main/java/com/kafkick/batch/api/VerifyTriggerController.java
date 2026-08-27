@@ -294,8 +294,7 @@ public class VerifyTriggerController {
      * 잡이 그것을 보고 멈춘다 — 그래서 200 이 아니라 202 다. 실제로 멈췄는지는 조회로 본다.
      */
     @PostMapping("/runs/{executionId}/stop")
-    public ResponseEntity<ResponseEnvelope<StopRequested>> stop(@PathVariable long executionId,
-            @RequestParam(defaultValue = "false") boolean force) {
+    public ResponseEntity<ResponseEnvelope<StopRequested>> stop(@PathVariable long executionId) {
         // **진도가 멈춘 실행만 멈춘다.** 아래 requireStuck 참고 — 도는 검증을 여기서 끊으면
         // 472초가 버려지는 데서 끝나지 않고, 만료·정리와의 상호 배제가 그 자리에서 꺼진다.
         // 이 실행이 verifyJob 인지 먼저 본다. 중단 신호는 **공유 JobRepository** 에 쓰이므로
@@ -305,7 +304,7 @@ public class VerifyTriggerController {
         // 판정과 쓰기를 한 트랜잭션으로 묶어야 해서 서비스로 내렸다. 그 사이에 실행이
         // 되살아나면(락 대기가 풀리는 경우) 살아 있는 검증을 STOPPED 로 올리게 된다 —
         // ExpireRecoveryService 가 만료 쪽에서 같은 이유로 선점문을 쓴다.
-        VerifyStopService.Outcome outcome = stopService.stop(executionId, force);
+        VerifyStopService.Outcome outcome = stopService.stop(executionId);
         return ResponseEntity.accepted()
                 .body(ResponseEnvelope.success(
                         new StopRequested(outcome.executionId(), outcome.signalled())));
