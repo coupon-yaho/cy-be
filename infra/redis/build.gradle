@@ -1,5 +1,28 @@
+plugins {
+    id 'java-test-fixtures'
+}
+
 dependencies {
     implementation project(':core')
 
-    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    // 공개 빈 시그니처에 나타나는 타입은 api 다 — RedisLatencyAutoConfiguration 이
+    // ClientResourcesBuilderCustomizer 를 반환하고 MeterFilter · MeterRegistry 를 드러낸다.
+    // implementation 으로 두면 소비 모듈의 컴파일 클래스패스로 전이되지 않아, batch 가
+    // 컴파일되는 것이 batch 의 독립적 micrometer 의존에 기댄 우연이 된다.
+    api 'org.springframework.boot:spring-boot-starter-data-redis'
+    api 'io.micrometer:micrometer-core'
+
+    implementation 'org.springframework.boot:spring-boot-starter-jackson'
+
+    // 버킷 부재는 Prometheus 레지스트리의 scrape 출력으로만 증명된다. SimpleMeterRegistry 의
+    // histogramCounts() 는 histogram(true) 로 바꿔도 비어 있어 가드가 아무것도 증명하지 못했다(실측).
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
+
+    testImplementation 'org.testcontainers:testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+
+    // 미터를 소유하는 모듈이 그 미터를 검사하는 방법도 소유한다. api·batch 의 계약 테스트가
+    // 같은 헬퍼를 각자 복붙하면 한쪽만 고쳐진 채 남는다 — 두 모듈은 각자의 설정 파일을
+    // 검증할 뿐 계측기를 다루는 방법은 같다.
+    testFixturesApi 'org.springframework.boot:spring-boot-starter-test'
 }

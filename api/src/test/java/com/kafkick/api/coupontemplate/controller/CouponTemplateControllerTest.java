@@ -862,7 +862,7 @@ class CouponTemplateControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"active\":false}"))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error.code").value("COMMON-005"));
+                .andExpect(jsonPath("$.error.code").value("ADMIN-002"));
 
         verifyNoInteractions(couponTemplateActivationService);
     }
@@ -874,9 +874,9 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(403))
-                .andExpect(jsonPath("$.error.code").value("COMMON-005"))
+                .andExpect(jsonPath("$.error.code").value("ADMIN-002"))
                 .andExpect(jsonPath("$.error.message")
-                        .value("접근 권한이 없습니다."));
+                        .value("관리자 권한이 필요합니다."));
 
         verifyNoInteractions(couponTemplateQueryService);
     }
@@ -889,9 +889,9 @@ class CouponTemplateControllerTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.status").value(403))
-                .andExpect(jsonPath("$.error.code").value("COMMON-005"))
+                .andExpect(jsonPath("$.error.code").value("ADMIN-002"))
                 .andExpect(jsonPath("$.error.message")
-                        .value("접근 권한이 없습니다."));
+                        .value("관리자 권한이 필요합니다."));
 
         verifyNoInteractions(couponTemplateQueryService);
     }

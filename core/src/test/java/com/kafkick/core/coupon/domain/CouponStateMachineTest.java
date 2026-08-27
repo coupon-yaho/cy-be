@@ -69,6 +69,34 @@ class CouponStateMachineTest {
     }
 
     @Test
+    @DisplayName("저장된 이력의 합법 상태 전이를 만료 시각 없이 판정한다")
+    void recognizesLegalPersistedTransitions() {
+        assertThat(CouponStateMachine.isLegal(
+                null, IssuanceEventType.ISSUE, IssuanceStatus.ISSUED)).isTrue();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.ISSUED, IssuanceEventType.USE, IssuanceStatus.USED)).isTrue();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.USED, IssuanceEventType.CANCEL_USE, IssuanceStatus.ISSUED)).isTrue();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.USED, IssuanceEventType.CANCEL_USE, IssuanceStatus.EXPIRED)).isTrue();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.ISSUED, IssuanceEventType.CANCEL, IssuanceStatus.CANCELLED)).isTrue();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.ISSUED, IssuanceEventType.EXPIRE, IssuanceStatus.EXPIRED)).isTrue();
+    }
+
+    @Test
+    @DisplayName("저장된 이력의 불법 상태 전이를 거부한다")
+    void rejectsIllegalPersistedTransitions() {
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.USED, IssuanceEventType.USE, IssuanceStatus.ISSUED)).isFalse();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.CANCELLED, IssuanceEventType.USE, IssuanceStatus.USED)).isFalse();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.ISSUED, null, IssuanceStatus.USED)).isFalse();
+    }
+
+    @Test
     @DisplayName("종단 상태에서는 다른 상태로 전이할 수 없다")
     void rejectTransitionFromTerminalStatus() {
         assertThatThrownBy(() -> CouponStateMachine.transition(

@@ -1,10 +1,11 @@
 package com.kafkick.core.coupon.port;
 
 import java.time.Instant;
+import java.util.List;
 
 public interface CouponRoundLifecyclePort {
 
-    int closeOpenRounds(Instant asOf);
+    List<Long> closeOpenRounds(Instant asOf);
 
     int closeMissedScheduledRounds(Instant asOf);
 
