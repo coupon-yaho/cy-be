@@ -21,6 +21,7 @@ Alertmanager 가 실패하고, 그 실패를 알릴 경로도 같이 사라진�
 """
 
 import json
+import math
 import os
 import time
 import urllib.error
@@ -241,7 +242,9 @@ class Sink(BaseHTTPRequestHandler):
             if raw is None:
                 return SLACK_RETRY_DELAY
             try:
-                wait = int(float(raw))
+                # **`int()` 이 아니라 `ceil()` 이다.** `int(float("0.5"))` 는 **0** 이라
+                # 즉시 다시 치게 되고, 그러면 Slack 이 기다리라고 한 뜻이 사라진다.
+                wait = math.ceil(float(raw))
             except Exception:  # noqa: BLE001 — 아래 이유로 전부 잡는다
                 # **예외 종류를 좁히면 안 된다.** 한때 (TypeError, ValueError) 였는데
                 # `inf`·`1e400` 은 **OverflowError** 다(실측). 이 메서드는 `except` 블록
@@ -251,8 +254,13 @@ class Sink(BaseHTTPRequestHandler):
                 # 날짜 형식(HTTP-date)도 규격상 가능하다. 파싱하지 않고 기본값을 쓴다 —
                 # 그 형식을 Slack 이 쓴 적이 없고, 틀린 파싱보다 낫다.
                 return SLACK_RETRY_DELAY
-            # 음수·상한 초과는 포기. NaN 은 위에서 ValueError 로 걸린다.
-            return wait if 0 <= wait <= SLACK_MAX_RETRY_DELAY else None
+            # 상한을 넘으면 포기한다. 그 아래는 **우리 기본값보다 빨리 치지 않는다** —
+            # 음수나 0 이 와도 최소 SLACK_RETRY_DELAY 는 기다린다. 429 직후의 즉시
+            # 재시도는 다시 429 일 뿐이고, 한 번뿐인 재시도를 헛되이 쓴다.
+            # (NaN 은 위에서 ValueError 로 걸린다.)
+            if wait > SLACK_MAX_RETRY_DELAY:
+                return None
+            return max(SLACK_RETRY_DELAY, wait)
         if status >= 500:
             return SLACK_RETRY_DELAY
         return None
