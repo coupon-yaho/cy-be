@@ -9,6 +9,7 @@ import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
 import com.kafkick.core.observation.CampaignLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCampaignRecoverySource;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -84,6 +85,18 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context.getBean(ConsistencySeverityPolicy.class).warnThreshold()).isEqualTo(10);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).criticalThreshold()).isEqualTo(100);
         });
+    }
+
+    @Test
+    void registersStartupRecoveryOnlyWhenRecoverySourceExists() {
+        contextRunner.run(context -> assertThat(context)
+                .doesNotHaveBean(CampaignLifecycleStartupRecovery.class));
+
+        contextRunner.withBean(
+                ClosedCampaignRecoverySource.class,
+                () -> mock(ClosedCampaignRecoverySource.class)
+        ).run(context -> assertThat(context)
+                .hasSingleBean(CampaignLifecycleStartupRecovery.class));
     }
 
     @Test

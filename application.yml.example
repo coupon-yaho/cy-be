@@ -181,6 +181,20 @@ batch:
     cleanup-cron: "0 0 * * * *"
     coupon-open-cron: "0 * * * * *"
     coupon-create-cron: "0 0 4 * * *"
+    # [OBS-51] 브랜드 분석 집계. 정각을 피할 뿐이고, 위 세 키(expire·verify·cleanup)는
+    # 읽는 코드가 없다 — 겹침 회피가 근거가 아니다. batch 쪽 yml 에 이유를 적었다.
+    analytics-cron: "0 30 * * * *"
   verify:
     asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
     chunk-size: ${VERIFY_CHUNK_SIZE:200000}
+
+  # [OBS-51] 브랜드 분석 집계. 상세 주석은 batch/src/main/resources/application.yml.example 에 있다.
+  #
+  # ⚠️ zone 은 여기 두지 않는다. api 쪽(AdminDashboardController.ANALYTICS_ZONE)이 상수라
+  #    한쪽만 움직이면 버킷이 통째로 밀리는데, 파일을 비교하는 계약 테스트는 초록불로 남는다.
+  #    손잡이를 하나 더 만들면 그 테스트가 못 보는 두 번째 경로가 생긴다.
+  analytics:
+    watermark-lag: ${ANALYTICS_WATERMARK_LAG:10m}
+    query-timeout: ${ANALYTICS_QUERY_TIMEOUT:4s}
+    max-window-rows: ${ANALYTICS_MAX_WINDOW_ROWS:1000000}
+    max-steps-per-run: ${ANALYTICS_MAX_STEPS_PER_RUN:20}

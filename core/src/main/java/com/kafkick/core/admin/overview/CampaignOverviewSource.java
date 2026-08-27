@@ -11,8 +11,8 @@ import com.kafkick.core.observation.SourceStatus;
 /**
  * 관리자 운영현황 계산에 필요한 캠페인 단위 원천값입니다.
  *
- * <p>현재는 Mock Factory가 생성하지만, 캠페인 저장소가 연결된 이후에는 조회 결과를 이 계약으로
- * 변환해 동일한 계산기에 전달합니다. 재고를 아직 수집할 수 없는 캠페인은 수량과 관측 시각을
+ * <p>Core가 DB 캠페인 원천과 Runtime 설정을 결합한 결과를 이 계약으로 계산기에 전달합니다.
+ * 재고를 아직 수집할 수 없는 캠페인은 수량과 관측 시각을
  * {@code null}로 보존하며, 관측하지 않은 값을 0으로 대신하지 않습니다.</p>
  *
  * @param couponId 캠페인을 식별하는 쿠폰 ID
@@ -26,7 +26,7 @@ import com.kafkick.core.observation.SourceStatus;
  * @param activeCount 현재 활성 발급 수량; 아직 수집하지 못했으면 {@code null}
  * @param stockObservedAt 재고 수량을 관측한 시각; 재고를 수집하지 못했으면 {@code null}
  * @param stockStatus 기술 원천과 분리한 재고 관측 상태
- * @param preparation 필수 준비 항목의 완료 여부와 관측 상태
+ * @param preparation Core가 확정한 필수 준비 항목의 완료 여부·실패 목록과 관측 상태
  */
 public record CampaignOverviewSource(
         Long couponId,

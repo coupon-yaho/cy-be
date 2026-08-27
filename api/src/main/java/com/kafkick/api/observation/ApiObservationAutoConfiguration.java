@@ -16,6 +16,7 @@ import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
 import com.kafkick.core.observation.CampaignLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCampaignRecoverySource;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -160,6 +161,21 @@ public class ApiObservationAutoConfiguration {
         }
         log.warn("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
         return new NoOpCampaignLifecycleRecorder();
+    }
+
+    @Bean
+    @ConditionalOnBean(ClosedCampaignRecoverySource.class)
+    @ConditionalOnMissingBean(CampaignLifecycleStartupRecovery.class)
+    public CampaignLifecycleStartupRecovery campaignLifecycleStartupRecovery(
+            ClosedCampaignRecoverySource source,
+            CampaignLifecycleRecorder recorder,
+            TimeProvider timeProvider
+    ) {
+        return new CampaignLifecycleStartupRecovery(
+                source,
+                recorder,
+                timeProvider
+        );
     }
 
     /**

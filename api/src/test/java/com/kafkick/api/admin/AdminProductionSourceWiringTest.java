@@ -15,10 +15,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.kafkick.api.admin.issuance.AdminIssuanceHistoryConfig;
+import com.kafkick.api.admin.observability.AdminObservabilityConfig;
+import com.kafkick.api.admin.observability.AdminQueueMockProperties;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReader;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
 import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
 import com.kafkick.core.admin.issuancehistory.IssuanceHistoryCalculator;
+import com.kafkick.core.admin.queue.AdminQueueObservationSource;
+import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
+import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
 import com.kafkick.core.support.TimeProvider;
 
 /** 관리자 생산 배선에 Fixture와 분석 Mock이 다시 들어오지 않는지 검증합니다. */
@@ -76,6 +81,22 @@ class AdminProductionSourceWiringTest {
                         "ADMIN_MOCK_ENABLED",
                         "mock-enabled",
                         "ADMIN_ANALYTICS_MOCK_ENABLED");
+    }
+
+    /** 대기열 Mock만은 기본 false를 유지한 명시 활성 경로로 제한합니다. */
+    @Test
+    void allowsOnlyExplicitlyEnabledQueueMockSelection() {
+        AdminQueueMockProperties defaults = new AdminQueueMockProperties();
+        AdminQueueObservationSource pending = new AdminObservabilityConfig()
+                .adminQueueObservationSource(defaults);
+        AdminQueueMockProperties enabled = new AdminQueueMockProperties();
+        enabled.setMockEnabled(true);
+        AdminQueueObservationSource mock = new AdminObservabilityConfig()
+                .adminQueueObservationSource(enabled);
+
+        assertThat(defaults.isMockEnabled()).isFalse();
+        assertThat(pending).isInstanceOf(PendingAdminQueueObservationSource.class);
+        assertThat(mock).isInstanceOf(MockAdminQueueObservationSource.class);
     }
 
     /** 사용자 정의 이력 Service가 있으면 API 기본 조립이 중복 Bean으로 덮어쓰지 않습니다. */
