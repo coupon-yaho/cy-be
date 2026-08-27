@@ -81,12 +81,6 @@ public class ExpireFailureMetrics implements JobExecutionListener {
         counter(UNCLASSIFIED);
     }
 
-    private Counter counter(String errorCode) {
-        return Counter.builder(METRIC)
-                .description("만료 배치 실패 횟수 — 에러코드로 가른다")
-                .tag("error_code", errorCode)
-                .register(registry);
-    }
 
     /**
      * <b>실패한 실행에서만 센다.</b> 성공 실행에도 예외가 남아 있을 수 있다 — 재시도가
@@ -116,6 +110,13 @@ public class ExpireFailureMetrics implements JobExecutionListener {
                 log.warn("만료 실패 지표를 남기지 못했습니다. 원인 판정에는 영향이 없습니다.", e);
             }
         }
+    }
+
+    private Counter counter(String errorCode) {
+        return Counter.builder(METRIC)
+                .description("만료 배치 실패 횟수 — 에러코드로 가른다")
+                .tag("error_code", errorCode)
+                .register(registry);
     }
 
     /**

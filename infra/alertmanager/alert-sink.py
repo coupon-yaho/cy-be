@@ -45,6 +45,13 @@ if SLACK_WEBHOOK_URL and not SLACK_WEBHOOK_URL.startswith("https://"):
 # 알림이 통째로 밀린다 — 알림을 보여 주려고 만든 것이 알림을 못 받는 상태가 된다.
 SLACK_TIMEOUT = 5
 
+# **한 번만 다시 보낸다.** 우리는 이미 200 을 냈으므로 Alertmanager 가 재시도하지 않는다.
+# 그러니 순간 실패는 여기서 흡수해야 한다 — 그렇게 안 하면 **repeat_interval(1시간)
+# 안에 해소되는 알림은 영영 한 번도 안 간다**(resolved 는 안 보내므로).
+# 두 번을 넘기지 않는 이유는 위 문단과 같다. 최악 지연이 5+1+5=11초로 유한해야 한다.
+SLACK_RETRIES = 1
+SLACK_RETRY_DELAY = 1
+
 # 발화만 보낸다. resolved 까지 보내면 한 사건이 두 줄이 되고, 이 저장소의 알림 수에서는
 # 그게 곧 아무도 안 읽는 채널이 된다.
 # (**개수를 여기 적지 않는다** — 대장은 docs/14 의 채널 표이고 AlertChannelRegistryTest 가
@@ -145,14 +152,24 @@ class Sink(BaseHTTPRequestHandler):
         if desc:
             text += f"\n{desc}"
 
+        for attempt in range(SLACK_RETRIES + 1):
+            if self._post_to_slack(text, last=attempt == SLACK_RETRIES):
+                return
+            time.sleep(SLACK_RETRY_DELAY)
+
+    def _post_to_slack(self, text, last):
+        """보냈으면 {@code True}. 실패는 마지막 시도에서만 로그를 남긴다."""
         try:
             body = json.dumps({"text": text}).encode()
             req = urllib.request.Request(
                 SLACK_WEBHOOK_URL, data=body,
                 headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=SLACK_TIMEOUT) as r:
-                if r.status != 200:
+                if r.status == 200:
+                    return True
+                if last:
                     print(f"[!] Slack 이 {r.status} 를 냈다", flush=True)
+                return False
         except Exception as e:  # noqa: BLE001 — 아래 이유로 전부 잡는다
             # **예외 종류를 좁히면 안 된다.** 한때 (URLError, OSError, TimeoutError) 였는데
             # `Request()` 생성이 try 밖이었고, 스킴 없는 URL 에 `ValueError` 를 던진다 —
@@ -161,7 +178,9 @@ class Sink(BaseHTTPRequestHandler):
             # `http.client.InvalidURL`(제어문자)·`AttributeError`(labels 가 null)도 같은 자리다.
             #
             # **예외 객체를 포맷하지 않는다.** 타입 이름만 남긴다 — 메시지에 URL 이 들어온다.
-            print(f"[!] Slack 전송 실패: {type(e).__name__}", flush=True)
+            if last:
+                print(f"[!] Slack 전송 실패: {type(e).__name__}", flush=True)
+            return False
 
     def _read_body(self, length):
         """<b>느리게 흘려보내는 전송을 끊는다.</b>

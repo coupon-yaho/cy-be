@@ -975,3 +975,20 @@ tests:
       - eval_time: 60m
         alertname: ExpireFailedWithCode
         exp_alerts: []
+
+  # 배포 직후 오탐 — 창을 다 못 채운 시계열을 26시간 무처리로 읽으면 안 된다.
+  # 재현했다: offset 항이 없을 때 90분치 시계열에서 85분에 떴다.
+  - interval: 1m
+    name: "방금 배포해 시계열이 짧으면 조용하다"
+    input_series:
+      - series: 'cy_expire_processed_total{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x200'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+        values: '5+0x200'
+    alert_rule_test:
+      - eval_time: 85m
+        alertname: ExpireMakingNoProgress
+        exp_alerts: []
+      - eval_time: 195m
+        alertname: ExpireMakingNoProgress
+        exp_alerts: []
