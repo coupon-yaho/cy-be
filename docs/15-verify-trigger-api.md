@@ -7,7 +7,7 @@
 |---|---|
 | **한다** | `POST /api/v1/admin/verify` — 202 + `executionId` |
 | **한다** | `GET /api/v1/admin/verify/runs/{executionId}` — 판정·검출 건수·상태 |
-| **한다** | `POST /api/v1/admin/verify/runs/{executionId}/stop` — 실행 중단 |
+| **한다** | `POST /api/v1/admin/verify/runs/{executionId}/stop` — 실행 중단. 기본은 **진도가 멈춘 것만**, `?force=true` 로 도는 것도 |
 | **한다** | 업무 포트 노출 결정 — `application.yml.example` 이 이 티켓에 예약해 뒀다 |
 | **했다 (CY-590)** | `GET /api/v1/admin/verify/reports/latest?dataset=&scope=` — 제출용 리포트. 한때 이 표가 *"안 한다 — 별도 티켓"* 이라고 적었고, 그 별도 티켓이 CY-590 이다 |
 | **안 한다** | 인증·인가 — batch 에 Spring Security 가 없다. 아래 "남긴 것" |
@@ -306,13 +306,31 @@ if (!verifying.isEmpty()) { log.warn(...); return; }
 죽으면 `STARTED` 행이 `END_TIME` 이 `NULL` 인 채 영구히 남고, **그 뒤 모든 트리거가 429** 가
 된다. 재기동으로도 안 풀린다 — 판정 기준이 프로세스가 아니라 DB 이기 때문이다.
 
-`stop` 으로도 못 푼다. 상태가 `STOPPING` 이 되어 위 목록에 그대로 있다 — 살아 있는
-프로세스가 그 신호를 받아 종료시켜 줘야 하는데 그 프로세스가 이미 없다.
+`stop` 이 그 행을 곧바로 `STOPPED` 로 올린다(아래 실측 참고). 그다음 `abandon` 이
+"없던 것으로 한다" 를 마저 해야 트리거가 풀린다.
 
 ```bash
-POST /api/v1/admin/verify/runs/{id}/stop      # STARTED → STOPPING
-POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPING → ABANDONED
+# 기본은 **진도가 멈춘 실행만** 받는다 (CY-678).
+#   진도가 있으면 409 VERIFICATION-019, 이미 끝났으면 409 VERIFICATION-015.
+POST /api/v1/admin/verify/runs/{id}/stop                 # STARTED|STARTING → STOPPED
+# 도는 검증을 정말 세워야 할 때만. 파라미터 이름 자체가 방어다.
+POST /api/v1/admin/verify/runs/{id}/stop?force=true      # 진도가 있어도 받는다
+POST /api/v1/admin/verify/runs/{id}/abandon              # STOPPED → ABANDONED
 ```
+
+> **왜 기본이 시체만인가.** 도는 검증을 멈추면 472초가 버려지는 데서 끝나지 않는다 —
+> 그 순간 만료·정리가 이 실행에 물러나기를 그만두는데 **스레드는 아직 돈다.**
+> V1·V3·V5 가 반쯤 쓰인 상태를 읽고 예외 없이 조용히 틀린 답을 낸다.
+>
+> **왜 `force` 를 여는가.** 이 저장소에는 잡 전체 데드라인이 없고 `replayStep` 은
+> 느리게라도 커밋하는 한 영원히 시체가 안 된다. 시체 게이트만 두면 잘못 건 300만 행
+> `CORRUPT FULL` 을 **끝날 때까지 못 세운다** — 그 사이 만료 크론이 `issuances.updated_at`
+> 을 찍고 그 `asOf` 는 재시딩 말고 복구가 없다. 막아서 생기는 손해가 더 크다.
+> `force` 는 WARN 로그를 남긴다.
+>
+> **판정과 쓰기는 한 트랜잭션이다.** `VerifyStopService` 가 진도 조건을 `UPDATE` 문 안에
+> 다시 걸고 affected rows 를 본다 — 판정 직후 락이 풀려 실행이 되살아나는 창을 닫는다.
+> `ExpireRecoveryService.CLAIM` 과 같은 장치다.
 
 `abandon` 은 **중단된 것만**(`STOPPING`·`STOPPED`) 버린다. 살아 있을지도 모르는 것을
 함부로 버리지 않고, 이미 끝난 `FAILED`·`COMPLETED` 도 안 건드린다 — 그것을 `ABANDONED` 로
@@ -388,10 +406,13 @@ POST /api/v1/admin/expire/runs/{id}/recover     # 한 번. 재시도해도 안�
 `COMPLETED` **또는 `ABANDONED`** 면 `JobInstanceAlreadyCompleteException` 을 던진다.
 만료는 `asOf` 가 식별 파라미터라 그 크론 슬롯이 통째로 사라진다.
 
-> `stop` 은 **언제나 `STOPPING` 을 남긴다** — `SimpleJobOperator.stop` 이
-> `setStatus(STOPPING)`·`setExitStatus(STOPPED)`·`setEndTime(now)` 를 함께 쓴다(6.0.4
-> 바이트코드). 한때 이 문서와 두 컨트롤러 주석이 *"하드킬이면 곧바로 `STOPPED`"* 라고
-> 적었는데, `STATUS` 와 `EXIT_CODE` 를 혼동한 것이었다.
+> **`stop` 은 언제나 곧바로 `STOPPED` 를 남긴다.** `SimpleJobOperator.stop` 이
+> `setStatus(STOPPING)`·`setExitStatus(STOPPED)`·**`setEndTime(now)`** 를 함께 쓰고,
+> 이어지는 `SimpleJobRepository.update` 가 `status == STOPPING && endTime != null` 이면
+> *"Upgrading job execution status from STOPPING to STOPPED since it has already ended."*
+> 를 찍으며 `upgradeStatus(STOPPED)` 를 한다(6.0.4 바이트코드로 확인).
+> 즉 **DB 에 `STOPPING` 이 남는 일은 없다** — 하드킬이든 아니든 같다.
+> 한때 이 문서가 *"언제나 `STOPPING` 을 남긴다"* 라고 적었는데 틀렸다.
 
 ### ⚠️ 트리거는 열지 않는다
 

@@ -156,6 +156,26 @@ public enum VerificationErrorCode implements ErrorCode {
     ),
 
     /**
+     * <b>도는 검증은 못 멈춘다.</b> 진도가 멈춘 실행만 {@code stop} 을 받는다.
+     *
+     * <p><b>왜 막나.</b> {@code stop} 은 살아 있는 실행에도 먹는다 — Spring Batch 6.0.4 의
+     * {@code SimpleJobOperator.stop} 이 {@code endTime} 을 채워 넘기고
+     * {@code SimpleJobRepository.update} 가 그것을 보고 <b>즉시 {@code STOPPED} 로 올린다</b>
+     * (바이트코드로 확인). 그 순간 셋이 함께 풀린다 — 트리거의 429,
+     * {@code ExpireScheduler} 의 슬롯 건너뛰기, {@code CleanupJobConfig} 의 물러나기.
+     * <b>스레드는 아직 도는데 만료·정리가 그 입력을 건드리기 시작한다.</b>
+     *
+     * <p><b>대가는 30분이다.</b> 하드킬 직후 {@code batch.stuck-job-after-ms}(기본 30분)가
+     * 지나야 시체로 판정된다. 그 전에는 이 코드로 거절되고, 메시지가 남은 시간을 말해 준다 —
+     * 안 말해 주면 사람이 API 가 깨진 줄 안다.
+     */
+    VERIFY_EXECUTION_NOT_STUCK(
+            409,
+            "VERIFICATION-019",
+            "지금 멈출 수 있는 실행이 아닙니다. 진도가 멈춘 실행만 중단할 수 있습니다."
+    ),
+
+    /**
      * <b>곧 뜰 만료와 겹칠 접수를 막는다.</b> 위 {@link #VERIFY_EXPIRE_RUNNING} 은 <i>이미
      * 도는</i> 만료를 배치 메타에서 보고, 이쪽은 <i>곧 뜰</i> 만료를 크론에서 본다 —
      * 둘 다 있어야 창이 닫힌다.

@@ -76,6 +76,7 @@ public class VerifyTriggerController {
     private final VerificationRuleRepository rules;
     private final TimeProvider timeProvider;
     private final RunningJobProbe runningJobs;
+    private final VerifyStopService stopService;
 
     /**
      * <b>곧 뜰 만료를 보기 위한 것이다.</b> {@code rejectRunningExpire} 는 <i>이미 도는</i>
@@ -110,6 +111,7 @@ public class VerifyTriggerController {
             VerificationRuleRepository rules,
             TimeProvider timeProvider,
             RunningJobProbe runningJobs,
+            VerifyStopService stopService,
             @Value(ExpireStepContext.CRON) String expireCron,
             @Value("${batch.scheduling.enabled:false}") boolean schedulingEnabled,
             @Value("${batch.metrics.verify-running-too-long-seconds:1200}")
@@ -136,6 +138,7 @@ public class VerifyTriggerController {
         this.rules = rules;
         this.timeProvider = timeProvider;
         this.runningJobs = runningJobs;
+        this.stopService = stopService;
     }
 
     /**
@@ -291,23 +294,24 @@ public class VerifyTriggerController {
      * 잡이 그것을 보고 멈춘다 — 그래서 200 이 아니라 202 다. 실제로 멈췄는지는 조회로 본다.
      */
     @PostMapping("/runs/{executionId}/stop")
-    public ResponseEntity<ResponseEnvelope<StopRequested>> stop(@PathVariable long executionId) {
+    public ResponseEntity<ResponseEnvelope<StopRequested>> stop(@PathVariable long executionId,
+            @RequestParam(defaultValue = "false") boolean force) {
+        // **진도가 멈춘 실행만 멈춘다.** 아래 requireStuck 참고 — 도는 검증을 여기서 끊으면
+        // 472초가 버려지는 데서 끝나지 않고, 만료·정리와의 상호 배제가 그 자리에서 꺼진다.
         // 이 실행이 verifyJob 인지 먼저 본다. 중단 신호는 **공유 JobRepository** 에 쓰이므로
         // 어느 operator 로 시작했든 멈춘다 — 검사가 없으면 /verify/ 경로가 expireJob 을
         // 멈출 수 있다. 만료는 재고를 쓰는 유일한 잡이고, 중간에 멈추면 다음 검증의
         // 판정 근거가 흔들린다. 둘은 같은 BATCH_JOB_EXECUTION 시퀀스를 공유해 번호가 섞인다.
-        JobExecution execution = requireVerifyExecution(executionId);
-        try {
-            // id 오버로드는 Spring Batch 6 에서 deprecated 다. 그리고 그것을 쓰면
-            // operator 가 같은 조회를 한 번 더 한다 — 이미 읽어 온 것을 넘긴다.
-            boolean signalled = verifyJobOperator.stop(execution);
-            return ResponseEntity.accepted()
-                    .body(ResponseEnvelope.success(new StopRequested(executionId, signalled)));
-        } catch (org.springframework.batch.core.launch.JobExecutionNotRunningException e) {
-            throw new BusinessException(VerificationErrorCode.VERIFY_NOT_RUNNING,
-                    "executionId=" + executionId, e);
-        }
+        // 판정과 쓰기를 한 트랜잭션으로 묶어야 해서 서비스로 내렸다. 그 사이에 실행이
+        // 되살아나면(락 대기가 풀리는 경우) 살아 있는 검증을 STOPPED 로 올리게 된다 —
+        // ExpireRecoveryService 가 만료 쪽에서 같은 이유로 선점문을 쓴다.
+        VerifyStopService.Outcome outcome = stopService.stop(executionId, force);
+        return ResponseEntity.accepted()
+                .body(ResponseEnvelope.success(
+                        new StopRequested(outcome.executionId(), outcome.signalled())));
     }
+
+
 
     /**
      * <b>없는 실행과 남의 잡을 같은 404 로 접는다.</b>
@@ -441,12 +445,17 @@ public class VerifyTriggerController {
      * 프로세스가 죽으면 {@code STARTED} 행이 {@code END_TIME} 이 {@code NULL} 인 채 영구히
      * 남고, <b>그 뒤 모든 트리거가 429 가 된다.</b> 재기동으로도 안 풀린다.
      *
-     * <p>{@code stop} 으로는 못 푼다 — 상태가 {@code STOPPING} 이 되어 위 목록에 그대로 있다.
-     * 살아 있는 프로세스가 그 신호를 받아 종료시켜 줘야 하는데, 그 프로세스가 이미 없다.
+     * <p>⚠️ <b>여기 한때 <i>"{@code stop} 으로는 못 푼다 — {@code STOPPING} 이 되어 목록에
+     * 그대로 있다"</i> 고 적혀 있었다. 틀렸다.</b> Spring Batch 6.0.4 바이트코드로 확인했다 —
+     * {@code SimpleJobOperator.stop} 이 {@code setEndTime(now())} 까지 하고,
+     * {@code SimpleJobRepository.update} 가 <i>"Upgrading job execution status from STOPPING
+     * to STOPPED since it has already ended"</i> 로 <b>즉시 {@code STOPPED} 로 올린다.</b>
+     * 그래서 {@code stop} 한 번으로 위 목록에서 빠지고 429 도 풀린다.
      *
-     * <p>그래서 <b>{@code stop} → {@code abandon} 2단계</b>다. {@code abandon} 은
-     * {@code STARTED} 를 거부하므로(살아 있을지도 모르는 것을 함부로 버리지 않는다)
-     * 먼저 {@code stop} 으로 {@code STOPPING} 을 만든 뒤 부른다.
+     * <p>그럼에도 <b>{@code stop} → {@code abandon} 2단계</b>다. 둘의 뜻이 다르다 —
+     * {@code STOPPED} 는 <i>"멈췄다"</i> 이고 {@code ABANDONED} 는 <i>"이 실행은 없던 것으로
+     * 한다"</i> 이다. {@code abandon} 은 {@code STARTED} 를 거부하므로(살아 있을지도 모르는
+     * 것을 함부로 버리지 않는다) 먼저 {@code stop} 을 거친다.
      *
      * <p><b>이것은 정상 절차가 아니라 복구다.</b> 도는 잡을 버리면 그 실행이 남긴
      * {@code verification_runs} 행은 {@code verdict} 없이 열린 채 남는다 — 되읽기가 그것을
