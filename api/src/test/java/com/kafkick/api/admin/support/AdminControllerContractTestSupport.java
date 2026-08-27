@@ -45,6 +45,7 @@ import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
@@ -53,6 +54,8 @@ import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.consistency.ConsistencyFinalObservation;
+import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
@@ -101,6 +104,12 @@ public final class AdminControllerContractTestSupport {
             AdminOverviewTestFixture fixture
     ) {
         Instant snapshotAt = clock.instant();
+        ConsistencyFinalReader finalReader = couponIds -> couponIds.stream().collect(
+                java.util.stream.Collectors.toMap(
+                        couponId -> couponId,
+                        couponId -> new ConsistencyFinalObservation(SourceStatus.N_A, null),
+                        (left, right) -> left,
+                        java.util.LinkedHashMap::new));
         return new AdminOverviewService(
                 new TimeProvider(clock),
                 reader,
@@ -115,6 +124,8 @@ public final class AdminControllerContractTestSupport {
                 new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(),
                 new CampaignOverviewCalculator(),
+                finalReader,
+                new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
                 new OverviewStatusCalculator());
     }

@@ -7,7 +7,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,8 @@ import com.kafkick.core.admin.couponmetrics.CouponMetricsSource.StockCounts;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
+import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
@@ -33,9 +37,17 @@ import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyFinalObservation;
+import com.kafkick.core.consistency.ConsistencyFinalReader;
+import com.kafkick.core.consistency.ConsistencyGapType;
+import com.kafkick.core.consistency.ConsistencyPhase;
+import com.kafkick.core.consistency.GapValue;
+import com.kafkick.core.consistency.Verdict;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
+import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.runtimeconfig.RuntimeConfigCommand;
 import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
@@ -237,7 +249,8 @@ class AdminOverviewServiceTest {
                 new RecordingReader(catalog), new RecordingRuntimeStore(), POLICY, source,
                 new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(), new CustomerOutcomeCalculator(),
-                new StockRiskCalculator(), new CampaignOverviewCalculator(), actionCalculator,
+                new StockRiskCalculator(), new CampaignOverviewCalculator(),
+                notApplicableFinalReader(), new ConsistencyActionCalculator(), actionCalculator,
                 new OverviewStatusCalculator());
 
         AdminOverviewResult result = service.getOverview();
@@ -273,16 +286,18 @@ class AdminOverviewServiceTest {
         StockRiskCalculator stock = org.mockito.Mockito.spy(new StockRiskCalculator());
         CampaignOverviewCalculator campaign = org.mockito.Mockito.spy(new CampaignOverviewCalculator());
         OperationActionCalculator action = org.mockito.Mockito.spy(new OperationActionCalculator());
+        ConsistencyActionCalculator consistencyAction =
+                org.mockito.Mockito.spy(new ConsistencyActionCalculator());
         OverviewStatusCalculator status = org.mockito.Mockito.spy(new OverviewStatusCalculator());
         AdminOverviewService service = new AdminOverviewService(
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)),
                 new RecordingReader(validCatalog(701L)), new RecordingRuntimeStore(), POLICY,
                 new RecordingObservationSource(), issuance, issuanceAction, queue, outcome, stock,
-                campaign, action, status);
+                campaign, notApplicableFinalReader(), consistencyAction, action, status);
 
         service.getOverview();
 
-        assertThat(List.of(issuance, issuanceAction, queue, outcome, stock, action, status))
+        assertThat(List.of(issuance, issuanceAction, queue, outcome, stock, consistencyAction, action, status))
                 .allSatisfy(calculator -> assertThat(
                         org.mockito.Mockito.mockingDetails(calculator).getInvocations()).hasSize(1));
         assertThat(org.mockito.Mockito.mockingDetails(campaign).getInvocations())
@@ -290,17 +305,136 @@ class AdminOverviewServiceTest {
                 .containsExactly("calculatePreparation", "calculate");
     }
 
+    @Test
+    void readsLatestFinalsOnceForTheDatabaseCampaignPopulation() {
+        RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
+                701L, finalObservation(SourceStatus.N_A, null),
+                909L, finalObservation(SourceStatus.N_A, null)));
+
+        service(new RecordingReader(validCatalog(701L, 909L)), new RecordingRuntimeStore(),
+                new RecordingObservationSource(), finalReader).getOverview();
+
+        assertThat(finalReader.calls).isEqualTo(1);
+        assertThat(finalReader.requestedIds).containsExactly(701L, 909L);
+    }
+
+    @Test
+    void rejectsFinalResponseForAnotherCampaignPopulation() {
+        RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
+                701L, finalObservation(SourceStatus.N_A, null)));
+
+        assertThatThrownBy(() -> service(
+                new RecordingReader(validCatalog(701L, 909L)), new RecordingRuntimeStore(),
+                new RecordingObservationSource(), finalReader).getOverview())
+                .isInstanceOfSatisfying(BusinessException.class,
+                        failure -> assertThat(failure.getErrorCode())
+                                .isEqualTo(AdminOverviewErrorCode.OBSERVATION_REQUEST_MISMATCH));
+    }
+
+    @Test
+    void linksFinalFailureToKpiListAndCampaignRowWithEvaluatedAt() {
+        Instant evaluatedAt = NOW.minusSeconds(30);
+        RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
+                701L, validFailedFinal(701L, 0L, 1L, evaluatedAt)));
+
+        AdminOverviewSnapshot snapshot = service(
+                new RecordingReader(readyCatalog(701L)), new RecordingRuntimeStore(),
+                new RecordingObservationSource(), finalReader).getOverview().snapshot();
+
+        assertThat(snapshot.actionRequired().value().totalCount()).isEqualTo(1L);
+        assertThat(snapshot.actionRequired().value().urgentCount()).isEqualTo(1L);
+        AdminOverviewSnapshot.OperationActionItem action =
+                snapshot.actionItems().value().topItems().getFirst();
+        assertThat(action.detectedAt()).isEqualTo(evaluatedAt);
+        assertThat(snapshot.actionRequired().observedAt()).isEqualTo(evaluatedAt);
+        assertThat(snapshot.actionItems().observedAt()).isEqualTo(evaluatedAt);
+        assertThat(action.campaignName()).isEqualTo("campaign-701");
+        AdminOverviewSnapshot.CampaignOverview row = snapshot.campaigns().value().getFirst();
+        assertThat(row.recommendedAction()).isSameAs(action.recommendedAction());
+    }
+
+    @Test
+    void excludesEveryFinalCandidateButKeepsOtherActionsWhenOneFinalIsPending() {
+        RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
+                701L, validFailedFinal(701L, 3L, 0L, NOW.minusSeconds(30)),
+                909L, finalObservation(SourceStatus.PENDING, null)));
+
+        AdminOverviewSnapshot snapshot = service(
+                new RecordingReader(readyCatalog(701L, 909L)), new RecordingRuntimeStore(),
+                new RecordingObservationSource(), finalReader).getOverview().snapshot();
+
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionRequired().value().totalCount()).isZero();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
+        assertThat(snapshot.campaigns().value())
+                .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
+    }
+
+    @Test
+    void excludesEveryFinalCandidateButKeepsOtherActionsWhenOneFinalIsUnavailable() {
+        RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
+                701L, validFailedFinal(701L, 0L, 1L, NOW.minusSeconds(30)),
+                909L, finalObservation(SourceStatus.UNAVAILABLE, null)));
+
+        AdminOverviewSnapshot snapshot = service(
+                new RecordingReader(readyCatalog(701L, 909L)), new RecordingRuntimeStore(),
+                new RecordingObservationSource(), finalReader).getOverview().snapshot();
+
+        assertThat(snapshot.actionRequired().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionRequired().value().totalCount()).isZero();
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
+        assertThat(snapshot.actionItems().value().topItems()).isEmpty();
+        assertThat(snapshot.campaigns().value())
+                .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
+    }
+
+    @Test
+    void linksOverIssuedFinalAsWidespreadAction() {
+        RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
+                701L, validFailedFinal(701L, 3L, 0L, NOW.minusSeconds(30))));
+
+        AdminOverviewSnapshot snapshot = service(
+                new RecordingReader(readyCatalog(701L)), new RecordingRuntimeStore(),
+                new RecordingObservationSource(), finalReader).getOverview().snapshot();
+
+        AdminOverviewSnapshot.OperationActionItem action =
+                snapshot.actionItems().value().topItems().getFirst();
+        assertThat(action.customerImpact())
+                .isEqualTo(AdminOverviewSnapshot.CustomerImpact.WIDESPREAD);
+        assertThat(snapshot.campaigns().value().getFirst().recommendedAction())
+                .isSameAs(action.recommendedAction());
+    }
+
     private static AdminOverviewService service(
             AdminCampaignDataReader reader,
             RuntimeConfigStore runtimeStore,
             OverviewObservationSource observationSource
     ) {
+        return service(reader, runtimeStore, observationSource, notApplicableFinalReader());
+    }
+
+    private static AdminOverviewService service(
+            AdminCampaignDataReader reader,
+            RuntimeConfigStore runtimeStore,
+            OverviewObservationSource observationSource,
+            ConsistencyFinalReader finalReader
+    ) {
         return new AdminOverviewService(
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), reader, runtimeStore, POLICY,
                 observationSource, new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
                 new CampaignQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
-                new CampaignOverviewCalculator(), new OperationActionCalculator(),
+                new CampaignOverviewCalculator(), finalReader, new ConsistencyActionCalculator(),
+                new OperationActionCalculator(),
                 new OverviewStatusCalculator());
+    }
+
+    private static ConsistencyFinalReader notApplicableFinalReader() {
+        return couponIds -> couponIds.stream().collect(java.util.stream.Collectors.toMap(
+                couponId -> couponId,
+                couponId -> finalObservation(SourceStatus.N_A, null),
+                (left, right) -> left,
+                java.util.LinkedHashMap::new));
     }
 
     private static AdminCampaignCatalog validCatalog(Long... couponIds) {
@@ -321,6 +455,42 @@ class AdminOverviewServiceTest {
                         NOW.plusSeconds(600), NOW.plusSeconds(3600),
                         new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                         preparation)));
+    }
+
+    private static AdminCampaignCatalog readyCatalog(Long... couponIds) {
+        return new AdminCampaignCatalog(SourceStatus.VALID, NOW,
+                java.util.Arrays.stream(couponIds)
+                        .map(couponId -> new AdminCampaignCatalog.CampaignData(
+                                couponId, "campaign-" + couponId, "brand",
+                                CouponRoundStatus.SCHEDULED, NOW.plusSeconds(600), NOW.plusSeconds(3600),
+                                new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
+                                new PreparationObservation(true, SourceStatus.VALID, NOW)))
+                        .toList());
+    }
+
+    private static ConsistencyFinalObservation validFailedFinal(
+            long couponId,
+            long overIssued,
+            long gap,
+            Instant evaluatedAt
+    ) {
+        Map<ConsistencyGapType, GapValue> gaps = new EnumMap<>(ConsistencyGapType.class);
+        for (ConsistencyGapType gapType : ConsistencyGapType.values()) {
+            gaps.put(gapType, new GapValue(gap, SourceStatus.VALID, evaluatedAt));
+        }
+        ConsistencyEvaluation evaluation = new ConsistencyEvaluation(
+                gaps, new GapValue(overIssued, SourceStatus.VALID, evaluatedAt),
+                ConsistencyPhase.FINAL, Verdict.FAIL, Severity.CRITICAL);
+        return finalObservation(SourceStatus.VALID, new ConsistencyActionContext(
+                couponId, "stored-name", NOW.minusSeconds(600), evaluatedAt,
+                EngineVersion.V2, evaluation));
+    }
+
+    private static ConsistencyFinalObservation finalObservation(
+            SourceStatus status,
+            ConsistencyActionContext value
+    ) {
+        return new ConsistencyFinalObservation(status, value);
     }
 
     private static AdminCampaignCatalog.CampaignData campaign(
@@ -442,6 +612,24 @@ class AdminOverviewServiceTest {
         @Override
         public ActionCalculation calculate(List<AdminOverviewSnapshot.OperationActionItem> decisions) {
             result = super.calculate(decisions);
+            return result;
+        }
+    }
+
+    private static final class RecordingFinalReader implements ConsistencyFinalReader {
+
+        private final Map<Long, ConsistencyFinalObservation> result;
+        private int calls;
+        private List<Long> requestedIds;
+
+        private RecordingFinalReader(Map<Long, ConsistencyFinalObservation> result) {
+            this.result = result;
+        }
+
+        @Override
+        public Map<Long, ConsistencyFinalObservation> findLatestByCouponIds(List<Long> couponIds) {
+            calls++;
+            requestedIds = List.copyOf(couponIds);
             return result;
         }
     }

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.GapValue;
@@ -225,9 +226,73 @@ class ConsistencyActionCalculatorTest {
         assertThat(reversedResult).isEqualTo(forwardResult);
     }
 
+    @Test
+    void bulkCalculationUsesOnlyValidFinalsAndSortsCandidatesByCouponId() {
+        Map<Long, ConsistencyFinalObservation> observations = new LinkedHashMap<>();
+        observations.put(18L, observation(SourceStatus.VALID,
+                context(18L, finalEvaluation(Verdict.FAIL, valid(3L), gaps(valid(0L))))));
+        observations.put(17L, observation(SourceStatus.VALID,
+                context(17L, finalEvaluation(Verdict.FAIL, valid(0L), gaps(valid(1L))))));
+        observations.put(19L, observation(SourceStatus.PENDING, null));
+        observations.put(20L, observation(SourceStatus.N_A, null));
+
+        ConsistencyActionCalculator.FinalActionCalculation result =
+                new ConsistencyActionCalculator().calculateLatest(observations);
+
+        assertThat(result.actionCandidates())
+                .extracting(AdminOverviewSnapshot.OperationActionItem::couponId)
+                .containsExactly(17L, 18L);
+        assertThat(result.observations().get(17L).status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.observations().get(19L).status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(result.observations().get(20L).status()).isEqualTo(SourceStatus.N_A);
+        assertThat(result.isComplete()).isFalse();
+    }
+
+    @Test
+    void notApplicableFinalsDoNotLowerBulkCompleteness() {
+        Map<Long, ConsistencyFinalObservation> observations = Map.of(
+                17L, observation(SourceStatus.VALID,
+                        context(finalEvaluation(Verdict.PASS, valid(0L), gaps(valid(0L))))),
+                18L, observation(SourceStatus.N_A, null));
+
+        ConsistencyActionCalculator.FinalActionCalculation result =
+                new ConsistencyActionCalculator().calculateLatest(observations);
+
+        assertThat(result.actionCandidates()).isEmpty();
+        assertThat(result.isComplete()).isTrue();
+    }
+
+    @Test
+    void corruptValidFinalIsIsolatedAsUnavailable() {
+        ConsistencyActionContext contradictory = context(finalEvaluation(
+                Verdict.PASS, valid(0L), gaps(valid(1L))));
+
+        ConsistencyActionCalculator.FinalActionCalculation result =
+                new ConsistencyActionCalculator().calculateLatest(Map.of(
+                        17L, observation(SourceStatus.VALID, contradictory),
+                        18L, observation(SourceStatus.N_A, null)));
+
+        assertThat(result.actionCandidates()).isEmpty();
+        assertThat(result.observations().get(17L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(result.isComplete()).isFalse();
+    }
+
     /** 순수 조치 계산에 필요한 FINAL 판정과 캠페인 표시 문맥을 함께 만듭니다. */
     private static ConsistencyActionContext context(ConsistencyEvaluation evaluation) {
         return context(EngineVersion.V2, evaluation);
+    }
+
+    private static ConsistencyActionContext context(long couponId, ConsistencyEvaluation evaluation) {
+        return new ConsistencyActionContext(
+                couponId, "campaign-" + couponId, OPENS_AT, EVALUATED_AT,
+                EngineVersion.V2, evaluation);
+    }
+
+    private static ConsistencyFinalObservation observation(
+            SourceStatus status,
+            ConsistencyActionContext value
+    ) {
+        return new ConsistencyFinalObservation(status, value);
     }
 
     /** 엔진별 FINAL 적용성 검증에 필요한 캠페인 문맥을 만듭니다. */
