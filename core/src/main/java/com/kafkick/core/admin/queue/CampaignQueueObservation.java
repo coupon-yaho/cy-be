@@ -33,12 +33,16 @@ public record CampaignQueueObservation(
                     || admissionStoppedStartedAt != null || observedAt != null) {
                 throw new IllegalArgumentException("값 없는 원천 상태에는 대기열 값과 시각을 실을 수 없습니다.");
             }
-            return;
-        }
-        if (currentWaitingCount == null || previousWaitingCount == null || admittedCount == null
+        } else if (currentWaitingCount == null || previousWaitingCount == null || admittedCount == null
                 || windowStart == null || windowEnd == null || observedAt == null) {
             throw new IllegalArgumentException("값이 있는 원천 상태에는 대기열 값·구간·관측 시각이 필요합니다.");
+        } else {
+            validateValueState();
         }
+    }
+
+    /** 값이 있는 대기열 원천의 수량·시각 관계를 검증합니다. */
+    private void validateValueState() {
         if (currentWaitingCount < 0L || previousWaitingCount < 0L || admittedCount < 0L) {
             throw new IllegalArgumentException("대기·입장 수는 음수일 수 없습니다.");
         }

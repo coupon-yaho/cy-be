@@ -113,7 +113,7 @@ public class AdminCouponMetricsService {
         CampaignQueueObservation observation = observations == null ? null : observations.get(value.couponId());
         if (observations == null || observations.size() != 1 || observation == null
                 || !observations.keySet().equals(java.util.Set.of(value.couponId()))
-                || !value.couponId().equals(observation.couponId())) {
+                || value.couponId() != observation.couponId()) {
             throw new BusinessException(
                     AdminCampaignDataErrorCode.OBSERVATION_UNAVAILABLE,
                     "대기열 관측 응답이 현재 상세 캠페인과 일치해야 합니다.");
