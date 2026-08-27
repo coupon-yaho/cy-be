@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import com.kafkick.core.expiration.PendingExpiration;
 
 import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -166,9 +167,28 @@ public class ExpireMetrics {
      */
     private final DistributionSummary chunkFill;
 
+    /**
+     * <b>청크마다 실제로 넘긴 건수를 더한다.</b> {@code docs/13} §2c 가 요구한 것이다 —
+     * {@code writeCount} 는 {@code BATCH_STEP_EXECUTION} 에만 남고 <b>알림이 SQL 을 못 읽는다.</b>
+     * Micrometer 가 자동 등록하는 것은 실행 횟수와 진행 중 시간뿐이라 처리량 축이 통째로 없다.
+     *
+     * <p><b>후보 수가 아니라 실제 만료 건수다.</b> 후보를 읽은 뒤 재고를 잠그기 전까지
+     * 사이에 사용·취소된 건은 여기 안 들어온다 — 그것이 <i>"배치가 한 일"</i> 의 정의다.
+     * 충전율({@code cy_expire_chunk_fill})은 <b>후보</b> 기준이라 둘이 갈릴 수 있고,
+     * 갈리는 것이 정상이다.
+     *
+     * <p><b>알림은 이 값 하나로는 아무것도 못 한다.</b> 처리량 0 자체가 정상이기 때문이다 —
+     * 만료할 것이 없는 날이 대부분이다. {@code cy_expire_unexplained_pending} 과
+     * <b>AND 로 묶어야</b> <i>"남은 대상이 있는데 0"</i> 이라는 사건이 된다.
+     */
+    private final Counter processed;
+
     public ExpireMetrics(MeterRegistry registry) {
         this.chunkFill = DistributionSummary.builder("cy_expire_chunk_fill")
                 .description("만료 청크 충전율(0~1) — 평균이 낮게 이어지면 회차 경계에 계속 걸린다는 뜻")
+                .register(registry);
+        this.processed = Counter.builder("cy_expire_processed_total")
+                .description("만료 배치가 실제로 넘긴 발급건 누적 수 — 청크마다 더한다")
                 .register(registry);
         gauge(registry, "cy_expire_pending", Snapshot::total,
                 "마지막으로 성공한 실행의 asOf 기준으로 지금 다시 센 값 — 기한이 지났는데 아직 ISSUED 인 발급건");
@@ -266,5 +286,21 @@ public class ExpireMetrics {
      */
     public void chunkFill(int size, int chunkSize) {
         chunkFill.record((double) size / chunkSize);
+    }
+
+    /**
+     * <b>가드를 전부 지난 뒤에만 부른다.</b> 카운터는 롤백을 안 따라간다 — 중간에서 부르면
+     * 죽은 청크의 건수가 누적에 남고, 그 값은 <b>줄어들 수 없다.</b> 그러면 처리량 알림이
+     * <i>"돌고 있다"</i> 고 답하는데 실제로는 아무것도 안 넘어간 구간이 생긴다.
+     *
+     * <p>⚠️ <b>그래도 커밋 전이다.</b> 태스클릿이 반환한 <b>뒤</b>에 커밋되므로, 커밋 자체가
+     * 실패하면(트랜잭션 타임아웃 · 커밋 시점 1213) 이 값이 과대계상된다. 가드 실패는 막지만
+     * 커밋 실패는 못 막는다 — 그 구간은 {@code BATCH_STEP_EXECUTION.WRITE_COUNT} 와
+     * 대조해야 드러난다. 형제인 {@code chunkFill} 도 같은 자리라 같은 성질이다.
+     *
+     * @param expired 이 청크가 실제로 {@code EXPIRED} 로 바꾼 발급건 수
+     */
+    public void processed(int expired) {
+        processed.increment(expired);
     }
 }

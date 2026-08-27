@@ -1,17 +1,55 @@
-"""받은 알림을 그대로 stdout 에 남기는 mock 리시버입니다.
+"""받은 알림을 stdout 에 남기고, 웹훅이 있으면 Slack 으로도 보냅니다.
 
-PRD 의 제약이 "외부 연동 Mocking" 이라 Slack 을 안 붙인다. 그래도 증명할 것은 다 된다 —
-알림이 뜨는 것, 그리고 server/data 가 **서로 다른 경로로 오는 것**.
 경로는 URL 로 갈린다: /server · /data · /unrouted.
+`server` 는 **배치·서버가 일을 안 한다**, `data` 는 **데이터가 틀렸다**(서버를 고쳐도
+안 사라진다)이고, 이 저장소는 그 둘을 같은 알람으로 묶지 않는다.
+
+<b>왜 Slack 을 붙였나.</b> PRD 제약이 "외부 연동 Mocking" 이라 stdout 만으로 뒀는데,
+그러면 **아무도 안 본다.** 실측 — 이 파일을 고칠 때 이미 `critical` 하나를 포함해 셋이
+발화 중이었고(`ExpireNeverSucceeded`·`ExpireMetricsUnknown`·`CleanupNeverSucceeded`)
+`docker compose logs alert-sink` 를 쳐야만 보였다. `docs/13` §2 제목이 그것이다 —
+*"성공했는데 맞게 했나 를 아무도 안 본다."*
+
+<b>웹훅이 없으면 stdout 만 한다.</b> 없다고 죽지 않는다 — 그러면 리시버가 없어서
+Alertmanager 가 실패하고, 그 실패를 알릴 경로도 같이 사라진다.
+
+<b>URL 은 환경변수로만 받는다.</b> 저장소에 안 적는다. compose 가 `db.env` 처럼
+추적 안 되는 파일에서 넘긴다. 이 컨테이너는 호스트 포트 매핑이 없고 `read_only`,
+`cap_drop: [ALL]`, 비루트(65534)로 돈다.
 
 표준 라이브러리만 쓴다. 확인은 `docker compose logs alert-sink` 로 한다.
 """
 
 import json
+import os
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 5001
+
+# 없으면 stdout 만 한다. 있으면 Slack 으로도 보낸다.
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+
+# **기동 때 한 번 거른다.** 값이 틀렸으면 첫 알림까지 기다리지 않고 지금 보이게 한다 —
+# 그 알림이 critical 이면 그때가 제일 나쁜 순간이다. 흔한 실수 둘을 잡는다:
+# 스킴을 흘리고 복사한 경우, compose 가 따옴표째 값으로 읽은 경우.
+if SLACK_WEBHOOK_URL and not SLACK_WEBHOOK_URL.startswith("https://"):
+    # 값은 안 싣는다 — 웹훅 URL 자체가 자격증명이다.
+    print("[!] SLACK_WEBHOOK_URL 이 https:// 로 시작하지 않는다. stdout 만 한다",
+          flush=True)
+    SLACK_WEBHOOK_URL = ""
+
+# Slack 이 느려도 알림 수신을 붙잡으면 안 된다. 이 리시버가 밀리면 그동안 들어온
+# 알림이 통째로 밀린다 — 알림을 보여 주려고 만든 것이 알림을 못 받는 상태가 된다.
+SLACK_TIMEOUT = 5
+
+# 발화만 보낸다. resolved 까지 보내면 한 사건이 두 줄이 되고, 이 저장소의 알림 수에서는
+# 그게 곧 아무도 안 읽는 채널이 된다.
+# (**개수를 여기 적지 않는다** — 대장은 docs/14 의 채널 표이고 AlertChannelRegistryTest 가
+#  대조한다. alertmanager.yml 이 이미 못 박아 둔 규칙인데 한때 여기서 다시 깼다.)
+_SEVERITY_MARK = {"critical": "\U0001F534", "warning": "\U0001F7E0", "info": "\U0001F535"}
 
 
 class Sink(BaseHTTPRequestHandler):
@@ -84,6 +122,46 @@ class Sink(BaseHTTPRequestHandler):
                 f"channel={labels.get('channel', '(없음)')}",
                 flush=True,
             )
+            self._to_slack(channel, alert)
+
+    def _to_slack(self, channel, alert):
+        """<b>보내다 실패해도 이 요청을 죽이지 않는다.</b>
+
+        여기서 예외가 나가면 200 을 이미 보낸 뒤라 Alertmanager 는 성공으로 알고,
+        같은 payload 의 **뒤 알림들이 통째로 유실된다.** 그래서 전부 잡고 로그만 남긴다.
+        """
+        if not SLACK_WEBHOOK_URL or alert.get("status") != "firing":
+            return
+
+        labels = alert.get("labels", {})
+        ann = alert.get("annotations", {})
+        sev = labels.get("severity", "unknown")
+        mark = _SEVERITY_MARK.get(sev, "\u26AA")
+        text = (
+            f"{mark} *{sev}* · `{channel}` — *{labels.get('alertname', '(이름 없음)')}*\n"
+            f"{ann.get('summary', '')}"
+        )
+        desc = ann.get("description")
+        if desc:
+            text += f"\n{desc}"
+
+        try:
+            body = json.dumps({"text": text}).encode()
+            req = urllib.request.Request(
+                SLACK_WEBHOOK_URL, data=body,
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=SLACK_TIMEOUT) as r:
+                if r.status != 200:
+                    print(f"[!] Slack 이 {r.status} 를 냈다", flush=True)
+        except Exception as e:  # noqa: BLE001 — 아래 이유로 전부 잡는다
+            # **예외 종류를 좁히면 안 된다.** 한때 (URLError, OSError, TimeoutError) 였는데
+            # `Request()` 생성이 try 밖이었고, 스킴 없는 URL 에 `ValueError` 를 던진다 —
+            # 그 메시지에 **URL 전문이 들어간다.** 재현: 알림 3건짜리 payload 에서 첫 건만
+            # stdout 에 남고 뒤 둘은 사라졌으며, 웹훅 URL 이 트레이스백으로 찍혔다.
+            # `http.client.InvalidURL`(제어문자)·`AttributeError`(labels 가 null)도 같은 자리다.
+            #
+            # **예외 객체를 포맷하지 않는다.** 타입 이름만 남긴다 — 메시지에 URL 이 들어온다.
+            print(f"[!] Slack 전송 실패: {type(e).__name__}", flush=True)
 
     def _read_body(self, length):
         """<b>느리게 흘려보내는 전송을 끊는다.</b>
@@ -110,7 +188,8 @@ class Sink(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"alert-sink 시작 :{PORT}", flush=True)
+    print(f"alert-sink 시작 :{PORT} "
+          f"slack={'연결됨' if SLACK_WEBHOOK_URL else '없음(stdout 만)'}", flush=True)
     # ThreadingHTTPServer 다. HTTPServer 는 요청을 **순차 처리**해서, 한 연결이 붙잡히면
     # 그동안 들어온 알림이 전부 밀린다 — 알림이 뜨는 것을 보여 주려고 만든 리시버가
     # 알림을 못 받는 상태가 된다. 데드라인이 그 시간을 유한하게 만들지만, 그 동안에도

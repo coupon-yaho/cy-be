@@ -100,6 +100,16 @@ services:
     user: "65534:65534"
     read_only: true
     cap_drop: [ALL]
+    # 웹훅 URL 을 넘긴다. **없으면 stdout 만 하고 죽지 않는다** — 리시버가 사라지면
+    # Alertmanager 가 실패하고 그 실패를 알릴 경로도 같이 없어진다.
+    #
+    # ⚠️ **저장소에 적지 마라. 웹훅 URL 자체가 자격증명이다.**
+    #    `db.env` 처럼 추적 안 되는 파일에 두고 셸에서 넘긴다:
+    #      SLACK_WEBHOOK_URL=... docker compose -f base.yml up -d alert-sink
+    #    또는 `set -a; . ./db.env; set +a` 뒤에 compose 를 부른다.
+    #    `.gitignore` 가 `*.env` 를 막는다(CY-621).
+    environment:
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     volumes:
       - ./infra/alertmanager/alert-sink.py:/app/alert-sink.py:ro
     command: ["python", "-u", "/app/alert-sink.py"]

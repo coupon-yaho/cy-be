@@ -25,6 +25,7 @@ import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
 import com.kafkick.batch.config.BinlogFormatGuard;
+import com.kafkick.batch.config.ExpireFailureMetrics;
 import com.kafkick.batch.config.CleanSchemaGuard;
 import com.kafkick.batch.config.ExpireMetrics;
 import com.kafkick.batch.config.ExpireStepContext;
@@ -166,6 +167,7 @@ public class ExpireJobConfig {
      */
     @Bean
     public Job expireJob(Step expireStep, BinlogFormatGuard binlogFormatGuard,
+            ExpireFailureMetrics expireFailureMetrics,
             CleanSchemaGuard cleanSchemaGuard) {
         return new JobBuilder(JOB_NAME, jobRepository)
                 .validator(new DefaultJobParametersValidator(
@@ -173,6 +175,8 @@ public class ExpireJobConfig {
                 // 이 Step 의 READ COMMITTED DML 이 STATEMENT binlog 서버에서 오류 1665 로
                 // 거부된다. 스케줄 실행이든 수동 트리거든 여기를 지나야 만료가 시작한다.
                 .listener(binlogFormatGuard)
+                // 실패 원인을 error_code 라벨로 가른다 (docs/13 §2d).
+                .listener(expireFailureMetrics)
                 // 만료는 원본을 쓰는 유일한 배치다. 오염셋을 보게 띄우면 정답지가 무너진다 —
                 // 그것도 "검증기가 틀렸다" 로 보이는 모양으로. 시작 전에 자른다.
                 .listener(cleanSchemaGuard)
@@ -288,6 +292,9 @@ public class ExpireJobConfig {
                     // 가드를 전부 지난 뒤에 센다. 메트릭은 롤백을 안 따라가므로 중간에서
                     // 부르면 죽은 청크의 표본이 남는다.
                     metrics.chunkFill(chunk.size(), chunkSize);
+                    // 충전율은 **후보** 기준이고 이것은 **실제로 넘긴** 건수다. 둘이 갈리는
+                    // 것이 정상이다 — ①과 ③ 사이에 사용·취소된 건은 expired 에 안 들어온다.
+                    metrics.processed(expired);
                     context.putLong(AFTER_ID_KEY, chunk.lastId());
                     contribution.incrementWriteCount(expired);
                     return RepeatStatus.CONTINUABLE;

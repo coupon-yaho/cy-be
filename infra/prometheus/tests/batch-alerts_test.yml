@@ -884,3 +884,94 @@ tests:
             exp_annotations:
               summary: "회차 전이 스위치 게이지가 없습니다 — 알림 셋이 조용히 꺼져 있습니다"
               description: "배치는 떠 있는데 cy_coupon_round_scheduling_enabled 시리즈가 없습니다. CouponRoundsNotOpening·NotClosing·MissedWindow 가 이 게이지로 끈 구간을 빼는데, 없으면 그 조인이 빈 벡터가 되어 **셋 다 발화 조건을 못 만듭니다** — 회차가 안 열려도 알림이 한 건도 안 갑니다. /actuator/prometheus 본문에서 그 이름을 직접 봅니다. 미터 이름이 바뀌었거나 CouponRoundPendingRefresher 생성자가 그 게이지 등록에 도달하지 못한 것입니다."
+
+  # ── CY-651 §2c — 창 폭과 $value 를 못 박는다 ────────────────────────────────
+  # 이 둘이 여기 없었으면 리뷰가 잡을 때까지 그대로 갔을 자리다.
+  #   ⑴ 30m 창은 하루 1,410분 동안 참이라 ExpireLeavesWorkBehind 의 복제였다
+  #   ⑵ `and` 는 좌변 값을 낸다 — increase(...)==0 을 좌변에 두면 $value 가 항상 0 이라
+  #      "아무것도 안 넘기는데 남은 대기 0건" 이라는 자기모순이 Slack 으로 나갔다
+  # exp_annotations 에 $value 가 든 문장을 **반드시 포함**시킨다. 그것이 ⑵ 를 잡는
+  # 유일한 단언이다.
+  - interval: 1m
+    name: "만료가 넘긴 직후·같은 주기 안에는 조용하고, 한 주기를 헛돌면 뜬다"
+    input_series:
+      # 04:10 에 1000건을 넘기고 그 뒤로 평평하다 (일 1회 잡의 실제 모양)
+      - series: 'cy_expire_processed_total{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x59 1000+0x1700'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+        values: '5+0x1760'
+    alert_rule_test:
+      # 처리 직후 — 조용해야 한다
+      - eval_time: 80m
+        alertname: ExpireMakingNoProgress
+        exp_alerts: []
+      # 6시간 40분 뒤 — 30m 창이었다면 여기서 떴다. 아직 같은 주기 안이라 조용해야 한다.
+      - eval_time: 400m
+        alertname: ExpireMakingNoProgress
+        exp_alerts: []
+      # **실측(promtool 프로브)**: 조건이 참이 되는 시각은 **1619m** 이다.
+      # 산술로 1620m 이나 1621m 을 계산하면 틀린다 — increase() 는 창 끝에서 외삽하므로
+      # 창의 왼쪽 끝과 표본 경계가 정확히 일치하지 않는다. 한때 주석에 "정확히 1620m"
+      # 이라고 적었는데 실측이 1619m 이었다. 여기 숫자로 다른 창 폭을 계산하지 마라.
+      #
+      # for: 30m 이라 발화는 1649m 부터다(1648m 은 거짓, 1649m 은 참 — 같은 방법으로 확인).
+      # 아래 두 단언은 그 경계에서 **충분히 떨어진** 값을 고른 것이다.
+      - eval_time: 1640m
+        alertname: ExpireMakingNoProgress
+        exp_alerts: []
+      # 한 주기(26h)를 통째로 헛돌았다 — 뜬다. **$value 가 5 여야 한다.**
+      - eval_time: 1660m
+        alertname: ExpireMakingNoProgress
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+            exp_annotations:
+              summary: "만료가 돌기는 하는데 아무것도 안 넘기고 있습니다 (남은 대기 5건)"
+              description: "한 주기(26시간)를 통째로 도는 동안 넘긴 건수가 0 인데 설명 안 되는 대기가 남아 있습니다. ExpireLeavesWorkBehind 와 축이 다릅니다 — 저쪽은 **남아 있다**, 이쪽은 **줄지 않는다** 입니다. 잡이 실패 없이 도는데 진도가 안 나가는 상태를 잡습니다(리더 질의가 계속 빈 결과를 내는 경우가 그렇습니다). cy_expire_chunk_fill 이 함께 낮으면 회차 경계에 계속 걸리는 것이고, 그것이 0 이면 후보 자체를 못 읽고 있는 것입니다. **잡이 아예 안 뜬 것은 이 알림이 아닙니다** — ExpireNotSucceeding 이 집니다."
+
+  # 대기가 없으면 처리량이 0 이어도 조용하다 — "만료할 게 없는 날" 이 대부분이다.
+  - interval: 1m
+    name: "남은 대상이 없으면 처리량 0 은 사건이 아니다"
+    input_series:
+      - series: 'cy_expire_processed_total{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x1760'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x1760'
+    alert_rule_test:
+      - eval_time: 1660m
+        alertname: ExpireMakingNoProgress
+        exp_alerts: []
+
+  # ── CY-651 §2d — error_code 라벨이 실제로 렌더링되는지 ──────────────────────
+  - interval: 1m
+    name: "실패 코드가 summary 에 그대로 실린다"
+    input_series:
+      - series: 'cy_expire_failures_total{instance="batch:9092", job="cy-batch", error_code="EXPIRATION-003"}'
+        values: '0+0x30 1+0x30'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: ExpireFailedWithCode
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: cy-batch
+              error_code: EXPIRATION-003
+            exp_annotations:
+              summary: "만료가 EXPIRATION-003 로 실패했습니다"
+              description: "BatchJobFailed 와 겹칩니다 — 그쪽은 **실패했다**, 이쪽은 **어디서** 입니다. EXPIRATION-001(이력 수 불일치)·002(재고 행 없음)·003(재고 언더플로)은 코드, EXPIRATION-004(asOf 가 미래)는 넘긴 파라미터, EXPIRATION-005(오염 스키마)는 접속 URL 을 봅니다. **UNCLASSIFIED 는 BusinessException 이 아닌 실패입니다.** 갈래가 셋입니다 — ① BinlogFormatGuard(binlog_format 이 STATEMENT) ② asOf 파라미터 누락 ③ DB 예외(1213 deadlock · 1205 lock wait · 트랜잭션 타임아웃). 배치 로그의 첫 스택트레이스가 셋 중 어느 것인지 답합니다."
+
+  # 미리 0 으로 등록한 시계열이 알림을 울리면 안 된다 — 첫 실패를 잡으려고 둔 것이다.
+  - interval: 1m
+    name: "0 으로 등록만 된 코드는 안 울린다"
+    input_series:
+      - series: 'cy_expire_failures_total{instance="batch:9092", job="cy-batch", error_code="EXPIRATION-001"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ExpireFailedWithCode
+        exp_alerts: []

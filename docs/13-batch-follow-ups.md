@@ -262,7 +262,7 @@ cy_verification_findings{dataset,scope}   검출 건수
 > 리스너도 안 불려 <b>앞 실행 값이 그대로 남는다.</b> 이 축은 지표로 못 덮으므로
 > 트리거 경로가 책임진다.
 
-### 2b. 만료 누락
+### 2b. ~~만료 누락~~ **완료 · CY-347**
 
 성공한 실행 뒤에도 `status='ISSUED' AND expires_at < now` 인 행이 남는 상태.
 1번의 오염 회차 말고도 원인이 여럿이다(슬롯 계산 오류, 설정 실수).
@@ -302,35 +302,86 @@ cy_expire_refresh_failures_total  되읽기 실패 횟수(카운터)
 
 **2b 는 CY-347 에서 함께 구현했다.**
 
-### 2c. 처리량 — "돌기는 도는데 안 줄어든다"
+### 2c. ~~처리량 — "돌기는 도는데 안 줄어든다"~~ **완료 · CY-651**
 
-`writeCount` 가 메트릭에 없다. Micrometer 가 자동 등록하는 것은 횟수와 진행 중 시간뿐이고,
-`BATCH_STEP_EXECUTION.WRITE_COUNT` 에는 남지만 **알림이 SQL 을 못 읽는다.**
+`writeCount` 는 `BATCH_STEP_EXECUTION` 에만 남고 **알림이 SQL 을 못 읽었다.** Micrometer 가
+자동 등록하는 것은 실행 횟수와 진행 중 시간뿐이라 처리량 축이 통째로 없었다.
 
 ```
-cy_expire_processed_total   카운터. 청크마다 넘긴 건수를 더한다
+cy_expire_processed_total   카운터. 청크마다 실제로 넘긴 건수를 더한다
 ```
+
+**후보 수가 아니라 실제 만료 건수다.** 후보를 읽은 뒤 재고를 잠그기 전까지 사이에
+사용·취소된 건은 안 들어온다 — 그것이 *"배치가 한 일"* 의 정의다. 충전율
+(`cy_expire_chunk_fill`)은 **후보** 기준이라 둘이 갈릴 수 있고, 갈리는 것이 정상이다.
+
+**가드를 전부 지난 뒤에만 센다.** 카운터는 롤백을 안 따라가므로 중간에서 부르면 죽은 청크의
+건수가 누적에 남고, 그 값은 **줄어들 수 없다**.
 
 ```yaml
-expr: increase(cy_expire_processed_total[30m]) == 0 and cy_expire_unexplained_pending > 0
+- alert: ExpireMakingNoProgress
+  expr: >-
+    cy_expire_unexplained_pending > 0
+    and increase(cy_expire_processed_total[26h]) == 0
+  for: 30m
 ```
 
 두 조건을 **AND 로 묶는 것이 핵심**이다. 처리량 0 자체는 정상이다 — 만료할 게 없는 날이
-대부분이다. 남은 대상이 있는데 0 인 것이 사건이다.
+대부분이다. **남은 대상이 있는데 0** 인 것이 사건이다.
 
 > **`cy_expire_pending` 이 아니라 `cy_expire_unexplained_pending` 이다.** 막힌 회차의 대기는
-> 설계상 계속 남으므로, 전체를 보면 그 회차를 사람이 고칠 때까지 **처리량이 정상인 날에도
-> 정체 알림이 뜬다.** 회차 격리가 세운 구분(배치가 안 한 몫 vs 데이터가 어긋난 몫)이
-> 여기서도 그대로 적용된다.
+> 배치가 일부러 건너뛴 몫이라, 그것으로 묶으면 오염 회차 하나가 남아 있는 동안 영구히 울린다.
 
-### 2d. 실패 원인을 알림이 못 가른다
+> **창이 만료 주기(24h)보다 넓어야 한다.** 처음에 30분으로 뒀는데, 만료가 하루 한 번 04:10 이라
+> **하루 1,440분 중 1,410분 동안 좌변이 항상 참**이었다 — 남는 것은 `unexplained > 0` 하나이고
+> 그것이 곧 `ExpireLeavesWorkBehind` 의 식 전체다. `repeat_interval` 이 1시간이라 그 중복이
+> 시간당 한 번씩 Slack 으로 나간다. **§2 를 닫으려는 티켓이 아무도 안 보게 만드는 알림을 하나
+> 더 붙일 뻔했다.**
 
-`spring_batch_job_seconds_count` 에 **에러코드 라벨이 없다.** 그래서 만료의 실패 자리 **다섯**이
-한 시계열로 뭉쳐 나오고, 어느 자리였는지는 배치 로그의 `EXPIRATION-00N` 으로만 갈린다.
-각각 봐야 할 곳이 다르다 — 셋은 코드, 하나는 넘긴 파라미터, 하나는 접속 URL 이다.
+> **게이지가 좌변이어야 한다.** `and` 는 **좌변의 값**을 낸다. `increase(...) == 0` 을 좌변에
+> 두면 `$value` 가 **항상 0** 이라 summary 가 *"아무것도 안 넘기고 있는데 남은 대기가 0건"* 이라는
+> 자기모순이 된다. `promtool` 이 실제로 그렇게 렌더링했다.
 
-> 코드의 **뜻**이 어긋나던 문제는 CY-347 에서 정리했다(`ExpirationErrorCode` 와 알림 머리말).
-> 여기 남은 것은 라벨 하나뿐이다.
+> **둘 다 `promtool` 유닛 테스트로 못 박았다**(`infra/prometheus/tests/batch-alerts_test.yml`).
+> 그 파일이 스스로 적어 둔 이유가 *"문법은 맞는데 영원히 안 뜨는 상태로 바뀌어도 CI 가 초록"* 인데,
+> 이번에 그 파일을 안 건드릴 뻔했다. `exp_annotations` 에 `$value` 가 든 문장을 넣는 것이
+> 그 버그를 잡는 유일한 단언이다.
+
+### 2d. ~~실패 원인을 알림이 못 가른다~~ **완료 · CY-651**
+
+`spring_batch_job_seconds_count` 에는 **에러코드 라벨이 없고 붙일 수도 없다** — 그 미터는
+Spring Batch 가 만들고 태그 집합이 고정이다. 그래서 만료의 실패 자리 다섯이 **한 시계열로
+뭉쳐** 나왔고, 어느 자리였는지는 배치 로그의 `EXPIRATION-00N` 으로만 갈렸다.
+
+새 카운터를 `JobExecutionListener` 로 붙였다(`ExpireFailureMetrics`).
+
+```
+cy_expire_failures_total{error_code}   만료 실패 횟수. 에러코드로 가른다
+```
+
+| 코드 | 봐야 할 곳 |
+|---|---|
+| `EXPIRATION-001` 이력 수 불일치 · `002` 재고 행 없음 · `003` 재고 언더플로 | **코드** |
+| `EXPIRATION-004` `asOf` 가 미래 | **넘긴 파라미터** |
+| `EXPIRATION-005` 오염 스키마 | **접속 URL** |
+| `UNCLASSIFIED` | **`BusinessException` 이 아닌 실패.** 갈래 셋 — `BinlogFormatGuard`(`binlog_format` 이 `STATEMENT`) · `asOf` 파라미터 누락 · DB 예외(1213·1205·트랜잭션 타임아웃) |
+
+**실패 전에 여섯을 전부 0 으로 등록한다**(잡 실패 다섯 + `UNCLASSIFIED`). 이유가 둘이다.
+⑴ 시계열이 실패 순간에 처음 생기면 그 창 안에 표본이 하나뿐이라 `increase()` 가 증가분을
+못 낸다 — **첫 실패가 조용히 넘어가고** 두 번째부터 울린다.
+⑵ `BatchMetricExposureTest` 가 규칙 파일과 실제 노출을 잇는데, 지연 등록이면 그 테스트가
+잡을 수 없다. 규칙이 쓰는 이름이 안 나오면 **그 알림은 영원히 안 울리는데 아무도 모른다.**
+
+**원인 사슬을 따라간다.** Spring Batch 가 `BusinessException` 을 `UncategorizedSQLException`
+같은 것으로 감싸는 자리가 있어, 맨 위만 보면 우리가 낸 코드가 전부 `UNCLASSIFIED` 로 샌다.
+
+**006·007 은 뺀다.** `ExpireAdminController`(CY-429)의 거절 사유이지 잡 실패가 아니다 —
+열거형의 클래스 주석이 *"잡이 낼 수 있는 코드를 순회하는 쪽(예: 지표 라벨)은 그 둘을 빼야
+한다"* 고 명시했는데 처음에 `values()` 를 통째로 돌아 어겼다. 그 판정을 읽는 쪽이 손으로
+하게 두면 매번 틀리므로 `ExpirationErrorCode.isJobFailure()` 로 옮겼다.
+
+**라벨은 `getCode()` 하나뿐이다.** 메시지나 `detail` 은 안 넣는다 — 회차 id 가 섞여 시계열이
+폭발하고, `detail` 은 로그용이라 PII 가 들어갈 수 있다(`PRD:2143`).
 
 ### 2e. ~~Prometheus 가 규칙을 아직 안 읽는다~~ **완료 · CY-359**
 
@@ -365,6 +416,39 @@ mock 리시버로도 증명할 것은 다 증명된다 — 알림이 <b>뜨는 �
 알림은 `alertmanager:9093`, 스크레이프 대상은 `batch:9092`(= `BATCH_MANAGEMENT_PORT`).
 
 ---
+
+### 2f. ~~알림이 stdout 에만 남는다~~ **완료 · CY-651**
+
+**이 절의 제목이 마지막까지 참이었다.** 규칙 서른여덟이 다 붙고 Alertmanager 가 축까지
+갈라 라우팅하는데, 리시버가 `print()` 만 하는 스텁이라 **`docker compose logs alert-sink` 를
+쳐야만 보였다.** 실측 — CY-651 을 시작할 때 이미 셋이 발화 중이었다:
+
+```
+[server] firing ExpireNeverSucceeded    severity=critical
+[server] firing ExpireMetricsUnknown    severity=warning
+[server] firing CleanupNeverSucceeded   severity=warning
+```
+
+`critical` 이 하나 떠 있는데 아무도 몰랐다.
+
+`alert-sink.py` 가 받은 알림을 Slack 으로도 넘긴다.
+
+| | |
+|---|---|
+| **발화만 보낸다** | `resolved` 까지 보내면 한 사건이 두 줄이 되고, 알림 서른여덟에서는 곧 아무도 안 읽는 채널이 된다 |
+| **URL 이 없으면 stdout 만 한다** | 없다고 죽으면 리시버가 사라져 Alertmanager 가 실패하고, **그 실패를 알릴 경로도 같이 없어진다** |
+| **보내다 실패해도 요청을 안 죽인다** | 200 을 이미 보낸 뒤라 Alertmanager 는 성공으로 알고, 같은 payload 의 **뒤 알림들이 통째로 유실된다** |
+| **Slack 타임아웃 5초** | 이 리시버가 밀리면 그동안 들어온 알림이 전부 밀린다 |
+| **URL 을 로그에 안 싣는다** | 웹훅 URL 자체가 자격증명이다 |
+
+**URL 은 환경변수로만 받는다.** 저장소에 안 적는다 — `db.env` 처럼 추적 안 되는 파일에 두고
+compose 가 넘긴다(`.gitignore` 가 `*.env` 를 막는다, CY-621). 이 컨테이너는 호스트 포트
+매핑이 없고 `read_only`·`cap_drop: [ALL]`·비루트(65534)로 돈다.
+
+> **남은 것 — 웹훅 URL 이 아직 없다.** `SLACK_WEBHOOK_URL` 저장소 시크릿은 GitHub Actions
+> 전용(`ai-review-slack.yml`)이라 로컬 컨테이너가 못 읽는다. **배치 알림용 채널을 따로 파는
+> 것을 권한다** — 알림이 서른여덟이라 리뷰 채널에 부으면 리뷰가 묻힌다.
+> 지금은 URL 없이 stdout 만 하는 상태로 안전하게 돈다.
 
 ## 3. 만료 배치 — 실측으로 대가를 남긴 것들
 

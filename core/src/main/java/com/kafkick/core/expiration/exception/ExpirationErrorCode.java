@@ -186,6 +186,20 @@ public enum ExpirationErrorCode implements ErrorCode {
         this.message = message;
     }
 
+    /**
+     * <b>잡이 낼 수 있는 코드인가.</b> 이 열거형의 클래스 주석이
+     * <i>"잡이 낼 수 있는 코드를 순회하는 쪽(예: 지표 라벨)은 006·007 을 빼야 한다"</i>
+     * 고 적어 뒀는데, 그 판정을 <b>읽는 쪽이 손으로 하게</b> 두면 매번 틀린다 —
+     * 실제로 {@code ExpireFailureMetrics} 가 처음에 {@code values()} 를 통째로 돌았다.
+     *
+     * <p><b>500 이 기준이다.</b> 006·007 은 {@code ExpireAdminController} 의 거절 사유라
+     * 404·409 이고, 잡 실패 다섯은 전부 500 이다. 새 코드를 더할 때 이 대응이 깨지면
+     * {@code ExpireFailureMetricsTest} 가 개수로 잡는다.
+     */
+    public boolean isJobFailure() {
+        return status == 500;
+    }
+
     @Override
     public int getStatus() {
         return status;
