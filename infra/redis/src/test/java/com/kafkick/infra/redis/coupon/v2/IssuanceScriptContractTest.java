@@ -307,7 +307,7 @@ class IssuanceScriptContractTest {
 
     @ParameterizedTest(name = "[{index}] stock = {0}")
     @DisplayName("int64 를 넘는 카운터도 -11 이다 — DECR 이 out of range 로 거부한다")
-    @ValueSource(strings = {"9999999999999999999", "99999999999999999999999"})
+    @ValueSource(strings = {"9007199254740993", "9999999999999999999", "99999999999999999999999"})
     void outOfRangeCounterIsUnreadable(String huge) {
         redis.opsForValue().set(STOCK, huge);
 
@@ -321,11 +321,21 @@ class IssuanceScriptContractTest {
     }
 
     @Test
-    @DisplayName("18자리는 정상 범위다 — 상한을 너무 좁게 잡는 실수를 잡는다")
-    void eighteenDigitCounterIsAccepted() {
-        redis.opsForValue().set(ISSUED_EVER, "999999999999999999");
+    @DisplayName("15자리는 정상 범위다 — 상한을 너무 좁게 잡는 실수를 잡는다")
+    void fifteenDigitCounterIsAccepted() {
+        redis.opsForValue().set(ISSUED_EVER, "999999999999999");
 
         assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.OK);
+    }
+
+    @Test
+    @DisplayName("정밀도 밖 총재고는 상한 검사를 무력화하므로 복원이 -1 이다")
+    void totalBeyondDoublePrecisionIsNotReady() {
+        // Lua 5.1 의 수는 double 이라 2^53 위에서는 a + 1 > a 가 false 다.
+        // 그 값을 상한으로 쓰면 left + n > total 이 조용히 통과한다.
+        redis.opsForHash().put(META, "totalQuantity", "1000000000000000001");
+
+        assertThat(restore("1")).isEqualTo(IssuanceScriptCodes.Restore.NOT_READY);
     }
 
     @Test
@@ -1003,6 +1013,19 @@ class IssuanceScriptContractTest {
 
         assertThat(restore("1")).isEqualTo(IssuanceScriptCodes.Restore.NOT_READY);
         assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.NOT_READY);
+        assertThat(redis.opsForValue().get(STOCK)).isEqualTo("5");
+    }
+
+    @ParameterizedTest(name = "[{index}] 빠진 필드 = {0}")
+    @DisplayName("복원도 meta 다섯 필드를 요구한다 — 부분 상태는 재구성 창이라 건너뛴다")
+    @ValueSource(strings = {"status", "openAt", "closeAt", "gradeMask"})
+    void partialGateSkipsRestore(String missingField) {
+        redis.opsForValue().set(STOCK, "5");
+        redis.opsForHash().delete(META, missingField);
+
+        assertThat(restore("1"))
+                .as("복원분이 재구성의 stock 재계산에 덮여 유실되고 -1 카운터에도 안 잡힌다")
+                .isEqualTo(IssuanceScriptCodes.Restore.NOT_READY);
         assertThat(redis.opsForValue().get(STOCK)).isEqualTo("5");
     }
 

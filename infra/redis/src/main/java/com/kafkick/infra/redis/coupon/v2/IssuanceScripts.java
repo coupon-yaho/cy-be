@@ -19,11 +19,24 @@ import org.springframework.data.redis.core.script.RedisScript;
  * 두 정합성 축이 영구히 어긋난다.
  *
  * <p>O(1) 만 쓴다. 루프·{@code HGETALL}·{@code HKEYS}·{@code KEYS} 는 없다.
+ *
+ * <p><b>{@code isCanonicalInt} 는 Redis 의 {@code string2ll} 보다 일부러 좁다.</b> 형식은 같지만
+ * ({@code 0} 또는 {@code -?[1-9]%d*}) <b>자릿수를 15로 묶는다.</b> 양쪽으로 실패 모드가 있다.
+ *
+ * <ul>
+ *   <li><b>넓으면 쓰기가 중간에서 터진다</b> — {@code '007'}·{@code '-0'} 은 {@code tonumber}
+ *       도 {@code '^-?%d+$'} 도 통과시키지만 {@code DECR} 이 거부한다. Lua 는 원자적이어도
+ *       이미 적용된 쓰기를 되돌리지 않아 짝 없는 {@code P} 가 남는다.</li>
+ *   <li><b>너무 넓어도 상한 검사가 조용히 무력화된다</b> — Lua 5.1 의 수는 double 이라
+ *       2^53 위에서는 {@code a + 1 > a} 가 {@code false} 다
+ *       ({@code tonumber('9223372036854775807')} → {@code 9.2233720368548e+18}).
+ *       {@code left + n > total} 이 바로 그 비교다.</li>
+ * </ul>
+ *
+ * <p>15자리는 2^53(≈9.0e15) 아래라 정수 연산이 정확하다. 재고·누적 발급수가 10^15 를
+ * 넘을 일은 없으므로 <b>int64 전체로 넓히지 않는다.</b>
  */
 public final class IssuanceScripts {
-
-    private IssuanceScripts() {
-    }
 
     /**
      * 선점. KEYS = stock, issued, meta, issued_ever /
@@ -37,7 +50,7 @@ public final class IssuanceScripts {
     @SuppressWarnings("rawtypes")
     public static final RedisScript<List> CLAIM = new DefaultRedisScript<>("""
             local function isCanonicalInt(s, signed)
-                if s == false or type(s) == 'table' or #s > 18 then return false end
+                if s == false or type(s) == 'table' or #s > 15 then return false end
                 if s == '0' then return true end
                 if signed then return string.match(s, '^-?[1-9]%d*$') ~= nil end
                 return string.match(s, '^[1-9]%d*$') ~= nil
@@ -145,7 +158,7 @@ public final class IssuanceScripts {
      */
     public static final RedisScript<Long> COMPENSATE = new DefaultRedisScript<>("""
             local function isCanonicalInt(s, signed)
-                if s == false or type(s) == 'table' or #s > 18 then return false end
+                if s == false or type(s) == 'table' or #s > 15 then return false end
                 if s == '0' then return true end
                 if signed then return string.match(s, '^-?[1-9]%d*$') ~= nil end
                 return string.match(s, '^[1-9]%d*$') ~= nil
@@ -178,16 +191,19 @@ public final class IssuanceScripts {
      */
     public static final RedisScript<Long> RESTORE = new DefaultRedisScript<>("""
             local function isCanonicalInt(s, signed)
-                if s == false or type(s) == 'table' or #s > 18 then return false end
+                if s == false or type(s) == 'table' or #s > 15 then return false end
                 if s == '0' then return true end
                 if signed then return string.match(s, '^-?[1-9]%d*$') ~= nil end
                 return string.match(s, '^[1-9]%d*$') ~= nil
             end
             if #ARGV < 1 then return -3 end
-            if redis.call('EXISTS', KEYS[2]) == 0 then return -1 end
-            local rawTotal = redis.call('HGET', KEYS[2], 'totalQuantity')
-            if not isCanonicalInt(rawTotal, false) then return -1 end
-            local total = tonumber(rawTotal)
+            local meta = redis.call('HMGET', KEYS[2],
+                    'status','openAt','closeAt','gradeMask','totalQuantity')
+            if not meta[1] or #meta[1] == 0 or not meta[2] or not meta[3]
+                    or not meta[4] or not isCanonicalInt(meta[5], false) then
+                return -1                                              -- 부분 상태는 재구성 창이다
+            end
+            local total = tonumber(meta[5])
             local raw = redis.pcall('GET', KEYS[1])
             if not isCanonicalInt(raw, true) then return -11 end
             local left = tonumber(raw)
@@ -222,7 +238,7 @@ public final class IssuanceScripts {
      */
     public static final RedisScript<Long> RECLAIM_CORRUPT = new DefaultRedisScript<>("""
             local function isCanonicalInt(s, signed)
-                if s == false or type(s) == 'table' or #s > 18 then return false end
+                if s == false or type(s) == 'table' or #s > 15 then return false end
                 if s == '0' then return true end
                 if signed then return string.match(s, '^-?[1-9]%d*$') ~= nil end
                 return string.match(s, '^[1-9]%d*$') ~= nil
@@ -252,4 +268,7 @@ public final class IssuanceScripts {
             redis.call('DECR', KEYS[3])
             return 1
             """, Long.class);
+
+    private IssuanceScripts() {
+    }
 }
