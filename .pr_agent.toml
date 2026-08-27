@@ -51,6 +51,47 @@ ignore_pr_labels = ["skip-review"]
 # 봇 PR 은 리뷰하지 않습니다. `.coderabbit.yaml` 의 `ignore_usernames` 대응입니다.
 ignore_pr_authors = ["dependabot\\[bot\\]", "renovate\\[bot\\]", "github-actions\\[bot\\]"]
 
+# ── 지적이 0건이면 승인한다 ─────────────────────────────────────────────────
+# **키 이름과 섹션을 `/config` 실덤프(108,615자)로 확인했습니다.**
+# 흔히 도는 예시가 `[pr_reviewer].enable_auto_approval` 이라고 하는데 **틀렸습니다** —
+# `[pr_reviewer]` 섹션은 있지만(`require_security_review` 등) 승인 키는 전부
+# `[config]` 밑입니다. 실제 덤프:
+#
+#     config.enable_auto_approval             = False
+#     config.auto_approve_for_no_suggestions  = False
+#     config.auto_approve_for_low_review_effort = -1
+#     config.prevent_any_approval             = False
+#     pr_code_suggestions.approve_pr_on_self_review = False
+#
+# **왜 필요한가.** main·에픽 룰셋이 둘 다 `required_approving_review_count = 1` 인데
+# GitHub 은 작성자의 자기 승인을 막습니다. 5인 팀에서 승인이 안 붙어 지금까지
+# **머지가 전부 관리자 우회**였습니다 — 이 저장소에 APPROVE 를 낸 주체가 사람이든
+# 봇이든 **하나도 없습니다**(전 PR 조회로 확인). 게이트가 있으나 마나 한 상태입니다.
+#
+# 봇 승인도 그 카운트를 만족합니다. 우회로 넘기는 것보다, **최소한 한 번은 검사를
+# 통과한 것만** 넘어가는 쪽이 낫습니다.
+enable_auto_approval = true
+auto_approve_for_no_suggestions = true
+
+# ── 켜지 않은 것들과 그 이유 ────────────────────────────────────────────────
+#
+# `auto_approve_for_low_review_effort` (1~5, -1 이 비활성) — **안 켭니다.**
+#   "작으니까 통과" 인데 이 저장소는 그 가정이 안 섭니다. CY-621 의 blocker 는
+#   `stop()` 한 메서드였고, 그 직전 PR 의 diff 는 수십 줄이었습니다.
+#
+# `approve_pr_on_self_review` (`[pr_code_suggestions]`·`[review_agent]` 양쪽에 있음)
+#   — **안 켭니다.** 작성자가 체크박스를 누르면 승인입니다. GitHub 이 막아 둔
+#   자기 승인을 봇으로 우회하는 것이라 게이트가 통째로 사라집니다.
+#
+# `prevent_any_approval` — 비상 브레이크입니다. 자동 승인이 잘못 나가는 게 보이면
+#   이걸 `true` 로 올려 **즉시 전부 막습니다.** `/config` 덤프엔 있는데 공식 문서엔
+#   없는 키라, 실제로 듣는지는 쓸 일이 생겼을 때 `/config` 로 확인해야 합니다.
+#
+# ── 푸시하면 승인이 날아간다 ────────────────────────────────────────────────
+# 룰셋이 `dismiss_stale_reviews_on_push = true` 입니다. 그런데 Qodo 는
+# `handle_push_trigger = true` 라 푸시마다 다시 리뷰합니다 — **취소 → 재리뷰 →
+# 재승인**이 저절로 돌아 둘의 궁합이 맞습니다. 한쪽만 끄면 이 고리가 끊깁니다.
+
 
 [review_agent]
 # ── 지적을 전부 본다 ────────────────────────────────────────────────────────
