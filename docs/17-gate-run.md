@@ -367,8 +367,12 @@ set -a; . ./.env; set +a
 #    결정론 확인은 리포트 파일이 아니라 verification_runs 조회로 한다(맨 위 표).
 #    굳이 덤프까지 돌리려면 **나이를 계산해서** 넘긴다 — 고정 숫자를 적어 두면
 #    그 숫자를 넘기는 날 또 막힌다(999999 는 11.6일이라 2026-09-07 이면 만료다).
-#      REPORT_MAX_AGE=$(( $(date -u +%s) \
-#        - $(date -u -jf '%Y-%m-%d %H:%M:%S' "$ASOF" +%s) + 600 )) gate ...
+#      AGE=$(python3 -c "import datetime as d;print(int((d.datetime.now(d.UTC)
+#            - d.datetime.fromisoformat('$ASOF').replace(tzinfo=d.UTC)).total_seconds())+600)")
+#      REPORT_MAX_AGE="$AGE" gate ...
+#    (python3 로 재는 이유는 이식성이다. `date -u -jf` 는 BSD 전용이라 리눅스
+#     러너에서 `date: unrecognized option: j` 로 죽는다 — alpine 으로 확인했다.
+#     gate() 가 이미 python3 로 JSON 을 파싱하므로 새 의존성이 아니다.)
 ASOF="$(date -u +'%Y-%m-%d %H:%M:00')"
 ASOF_API="${ASOF/ /T}"
 ./.venv/bin/python bin/seed.py all --dataset clean   --schema coupon_clean   --as-of "$ASOF"
@@ -461,10 +465,13 @@ seed_run_of() {   # $1 = 스키마
 }
 SEED_RUN=$(seed_run_of coupon_corrupt) || exit 1
 
-gate coupon_clean   CLEAN   3
-gate coupon_clean   CLEAN   4            # 결정론 — 같은 asOf, attempt 만 다르게
-gate coupon_corrupt CORRUPT 2 "$SEED_RUN"
-gate coupon_corrupt CORRUPT 3 "$SEED_RUN"
+# **`|| exit 1` 이 붙어 있어야 한다.** gate() 는 기동 실패·시간 초과·검증 실패에
+# return 1 을 내는데, 이 블록에 `set -e` 가 없어 **그대로 다음 줄로 넘어간다.**
+# 그러면 앞 게이트가 죽어도 뒤 게이트가 돌아 절차 전체가 성공한 것처럼 끝난다.
+gate coupon_clean   CLEAN   3                || exit 1
+gate coupon_clean   CLEAN   4                || exit 1   # 결정론 — 같은 asOf, attempt 만 다르게
+gate coupon_corrupt CORRUPT 2 "$SEED_RUN"    || exit 1
+gate coupon_corrupt CORRUPT 3 "$SEED_RUN"    || exit 1
 
 # ── 5b. **CLEAN 으로 되돌려 둔다** ──────────────────────────────────────
 # 위 gate 가 CORRUPT 기동으로 끝난다. 그대로 두면 다음 사람이 CORRUPT 스키마를
