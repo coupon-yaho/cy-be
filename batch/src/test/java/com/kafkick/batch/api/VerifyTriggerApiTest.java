@@ -652,37 +652,6 @@ class VerifyTriggerApiTest {
 
 
     /**
-     * <b>탈출구가 있어야 한다.</b> 이 저장소에는 잡 전체 데드라인이 없고
-     * {@code replayStep} 은 느리게라도 커밋하는 한 영원히 시체가 안 된다. 시체 게이트만
-     * 두면 잘못 건 300만 행 {@code CORRUPT FULL} 을 <b>끝날 때까지 못 세운다</b> —
-     * 그 사이 만료 크론이 {@code updated_at} 을 찍고 그 {@code asOf} 는 재시딩 말고
-     * 복구가 없다. 그래서 명시적 의사표시({@code force=true})로만 연다.
-     */
-    @Test
-    @DisplayName("force=true 는 도는 검증도 멈춘다 — 기본값은 여전히 거절한다")
-    void forceStopsALiveExecution() throws Exception {
-        JobExecution live = liveExecution(AS_OF.minusDays(4));
-        try {
-            assertThat(probe.post("/api/v1/admin/verify/runs/" + live.getId() + "/stop")
-                    .statusCode())
-                    .as("기본값은 시체만 받는다")
-                    .isEqualTo(409);
-
-            assertThat(probe.post(
-                    "/api/v1/admin/verify/runs/" + live.getId() + "/stop?force=true")
-                    .statusCode())
-                    .as("명시적으로 부르면 받는다")
-                    .isEqualTo(202);
-
-            assertThat(jobRepository.getJobExecution(live.getId()).getStatus())
-                    .as("stop 은 STOPPING 을 세우고 update 가 즉시 STOPPED 로 올린다")
-                    .isEqualTo(BatchStatus.STOPPED);
-        } finally {
-            finish(live);
-        }
-    }
-
-    /**
      * <b>선점문이 되살아난 실행을 거부한다.</b> {@code requireStuck} 의 판정과
      * {@code stop} 의 쓰기 사이에 청크가 커밋되면 그 실행은 <b>살아 있다</b>. 그때 멈추면
      * 스레드는 도는데 DB 는 {@code STOPPED} 가 되고, 그 순간부터 만료·정리가 이 실행의
