@@ -59,6 +59,19 @@ public final class CampaignLifecycleStartupRecovery
                             campaign.campaignCouponId(),
                             campaign.closedAt()
                     ));
+            log.info(
+                    "최근 종료 캠페인의 미터 회수를 요청했습니다. count={}",
+                    campaigns.size()
+            );
+            if (campaigns.size() == LIMIT) {
+                log.warn(
+                        "최근 종료 캠페인 조회가 상한에 도달했습니다. "
+                                + "일부 캠페인이 미터 회수 대상에서 제외되었을 수 있습니다. "
+                                + "count={}, limit={}",
+                        campaigns.size(),
+                        LIMIT
+                );
+            }
         } catch (Exception exception) {
             log.warn(
                     "캠페인 종료 기동 보정에 실패했습니다. API 기동은 계속합니다. cause={}",

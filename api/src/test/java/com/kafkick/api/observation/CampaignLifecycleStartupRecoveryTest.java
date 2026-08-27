@@ -4,9 +4,13 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.stream.LongStream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.mockito.InOrder;
 
 import com.kafkick.core.observation.CampaignLifecycleRecorder;
@@ -14,6 +18,7 @@ import com.kafkick.core.observation.ClosedCampaign;
 import com.kafkick.core.observation.ClosedCampaignRecoverySource;
 import com.kafkick.core.support.TimeProvider;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -21,6 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+@ExtendWith(OutputCaptureExtension.class)
 class CampaignLifecycleStartupRecoveryTest {
 
     private static final Instant NOW =
@@ -87,6 +93,46 @@ class CampaignLifecycleStartupRecoveryTest {
         assertThatCode(() -> recovery.run(null))
                 .doesNotThrowAnyException();
         verifyNoInteractions(recorder);
+    }
+
+    @Test
+    @DisplayName("최근 종료 캠페인의 미터 회수 요청 건수를 기록한다")
+    void logRetirementRequestCount(CapturedOutput output) throws Exception {
+        ClosedCampaignRecoverySource source =
+                mock(ClosedCampaignRecoverySource.class);
+        CampaignLifecycleRecorder recorder =
+                mock(CampaignLifecycleRecorder.class);
+        when(source.findRecentlyClosed(DAY_AGO, NOW, 1_000))
+                .thenReturn(List.of(new ClosedCampaign(201L, DAY_AGO)));
+
+        recovery(source, recorder).run(null);
+
+        assertThat(output)
+                .contains("최근 종료 캠페인의 미터 회수를 요청했습니다.")
+                .contains("count=1");
+    }
+
+    @Test
+    @DisplayName("최근 종료 캠페인 조회가 상한에 도달하면 경고한다")
+    void warnWhenRecoveryLimitIsReached(CapturedOutput output)
+            throws Exception {
+        ClosedCampaignRecoverySource source =
+                mock(ClosedCampaignRecoverySource.class);
+        CampaignLifecycleRecorder recorder =
+                mock(CampaignLifecycleRecorder.class);
+        List<ClosedCampaign> campaigns = LongStream.rangeClosed(1, 1_000)
+                .mapToObj(id -> new ClosedCampaign(id, DAY_AGO))
+                .toList();
+        when(source.findRecentlyClosed(DAY_AGO, NOW, 1_000))
+                .thenReturn(campaigns);
+
+        recovery(source, recorder).run(null);
+
+        assertThat(output)
+                .contains("최근 종료 캠페인 조회가 상한에 도달했습니다.")
+                .contains("일부 캠페인이 미터 회수 대상에서 제외되었을 수 있습니다.")
+                .contains("count=1000")
+                .contains("limit=1000");
     }
 
     private static CampaignLifecycleStartupRecovery recovery(

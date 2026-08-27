@@ -74,7 +74,6 @@ final class RecoveringRedisMessageListenerContainer
 
     @Override
     public synchronized void stop() {
-        shutdownRequested = true;
         cancelRetry();
         super.stop();
     }
