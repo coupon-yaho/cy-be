@@ -1,0 +1,43 @@
+{
+  "success": true,
+  "data": {
+    "run": {
+      "id": 4,
+      "asOf": "2026-08-27T01:28:00",
+      "fromTs": null,
+      "scope": "FULL",
+      "dataset": "CORRUPT",
+      "attempt": 1,
+      "verdict": "PASS",
+      "statsStatus": "SKIPPED",
+      "findingCount": 800,
+      "findingsChecksum": "27871a38f0d0128355c9bbb15b51086383eaca11ba71613561d359fb6db133da",
+      "datasetFingerprint": "f42c39759378d50f6dfab0800ef65349ab323e865ae6ae272c93b93e29f95d90",
+      "startedAt": "2026-08-27T01:28:49.34094",
+      "finishedAt": "2026-08-27T01:29:03.656947",
+      "seedRunId": 1
+    },
+    "byType": {
+      "STOCK_MISMATCH": 200,
+      "DUP_PER_MEMBER": 200,
+      "REPLAY_MISMATCH": 100,
+      "ILLEGAL_TRANSITION": 200,
+      "USAGE_MISMATCH": 100,
+      "GRADE_VIOLATION": 0
+    },
+    "manifest": {
+      "present": true,
+      "seedRunId": 1,
+      "sampleLimit": 200,
+      "expectedCount": 800,
+      "expectedDigest": "800:7CF355692E81A9C9",
+      "missingCount": 0,
+      "unexpectedCount": 0,
+      "matches": true,
+      "truncated": false,
+      "missing": [],
+      "unexpected": []
+    }
+  },
+  "error": null
+}
