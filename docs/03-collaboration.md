@@ -63,13 +63,16 @@ env:
 |---|---|---|
 | PR 생성/수정 | `conventions.yml` → `pr-title`, `branch-name` | **실패 시 머지 차단** |
 | PR 생성/수정 | `conventions.yml` → `commit-messages` | 경고만 |
-| PR 생성/push | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | AI 리뷰 (아래) |
-| CodeRabbit 리뷰 제출 | `coderabbit-slack.yml` | Slack 알림. webhook 없으면 스킵 |
+| PR 생성/push | **Qodo** (GitHub App, `.pr_agent.toml`) | AI 리뷰 (아래) |
+| 호출할 때만 | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | `@coderabbitai review` / `full review` |
+| AI 리뷰 제출 | `ai-review-slack.yml` | Slack 알림. webhook 없으면 스킵 |
 | `security-audit` 라벨 / 수동 | `security-audit.yml` | 보안 전수 점검. 키 없으면 스킵 |
 
 **리뷰는 `하위 → 에픽` PR 에만 붙는다.** 이게 이 설정의 핵심이다.
 
-CodeRabbit 은 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동 리뷰한다. 그런데 우리 실제 작업 PR 은 전부 `하위 → 에픽` 이라 main 을 안 거친다. 그래서 `.coderabbit.yaml` 에 base 브랜치 패턴을 명시했다. **이 줄이 없으면 리뷰가 하나도 안 달린다.**
+Qodo 는 base 를 안 가리고 `pr_commands`·`push_commands` 로 돈다. `skip-review` 라벨이 붙는 에픽 → main PR 만 빠진다.
+
+CodeRabbit 쪽은 사정이 다르다 — 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동 리뷰한다. 우리 실제 작업 PR 은 전부 `하위 → 에픽` 이라 main 을 안 거치므로 `.coderabbit.yaml` 에 base 브랜치 패턴을 명시해 뒀다. **지금은 `auto_review.enabled: false` 라 그 줄이 안 쓰이지만, 다시 켜는 날 없으면 리뷰가 하나도 안 달린다.**
 
 ```yaml
 auto_review:
@@ -117,9 +120,13 @@ auto_review:
 
 ## 3. AI 리뷰어 — 왜 이렇게 골랐나
 
-### 3.0 실행기는 CodeRabbit 이다 — 기준은 그대로 간다
+### 3.0 실행기는 Qodo 다 — CodeRabbit 은 호출 전용, 기준은 그대로 간다
 
-**결정: PR 상시 리뷰는 CodeRabbit 이 맡는다.** 자체 `claude-review.yml`(라우팅 + Opus/Sonnet 2단) 은 제거했다.
+**결정: PR 상시 리뷰는 Qodo 가 맡는다** (CY-621, `.pr_agent.toml`). CodeRabbit 은 `auto_review.enabled: false` 로 내려 **`@coderabbitai review` / `full review` 로 부를 때만** 돈다. 계기는 비용이다 — CodeRabbit 유료 좌석이 인당 월 30달러라 5명 전원에게 붙일 수 없다.
+
+> 아래 3.0a 절이 두 도구의 설정 대응표다. 자동 리뷰가 안 붙으면 **Qodo 쪽을 먼저 본다** — `/config` 로 `pr_commands`·`handle_push_trigger` 가 로드됐는지 확인한다.
+
+그전 결정(자체 `claude-review.yml` → CodeRabbit)은 아래 그대로 남긴다. 자체 워크플로(라우팅 + Opus/Sonnet 2단)를 제거한 판단은 지금도 유효하다.
 
 바뀐 것은 **실행기**뿐이고, 아래 3.1~3.5 가 정의한 **판단 기준은 그대로 이월**했다. 옮긴 자리는 `.coderabbit.yaml` 이다.
 
