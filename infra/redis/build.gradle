@@ -3,7 +3,11 @@ plugins {
 }
 
 dependencies {
-    implementation project(':core')
+    // 공개 빈 시그니처에 나타나는 타입은 api 다 — IssuanceGateRedisAutoConfiguration 이
+    // core 의 IssuanceGatePort 를 빈 타입으로 드러낸다(아래 spring-boot-starter-data-redis 와
+    // 같은 이유). implementation 으로 두면 소비 모듈이 그 빈을 주입받는 것이 그 모듈의
+    // 독립적인 core 의존에 기댄 우연이 된다.
+    api project(':core')
 
     // 공개 빈 시그니처에 나타나는 타입은 api 다 — RedisLatencyAutoConfiguration 이
     // ClientResourcesBuilderCustomizer 를 반환하고 MeterFilter · MeterRegistry 를 드러낸다.

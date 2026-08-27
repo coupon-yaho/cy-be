@@ -56,6 +56,12 @@ dependencies {
     testImplementation project(':infra:redis')
     testImplementation testFixtures(project(':infra:redis'))
 
+    // 정합성 리더의 Redis 자료형 분기는 실제 Redis 에서만 증명된다. 목은 Lua 를 실행하지
+    // 않아서, hash 분기가 없어도 통과한다 — 그 결함은 부하 시험 끝에 gap 4축이 안 닫힐 때에야
+    // 드러난다(docs/14-v2-phase0/11 ③).
+    testImplementation 'org.testcontainers:testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+
     // JobLauncherTestUtils / JobRepositoryTestUtils
     testImplementation 'org.springframework.batch:spring-batch-test'
 
