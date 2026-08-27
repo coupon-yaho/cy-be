@@ -511,7 +511,7 @@ coupons.status             =  ISSUED
 적었다: *"마스킹하면 검증 리포트에서 어느 회원이 중복 발급됐는지를 쓸 수 없습니다."*
 
 **저장 위치 충돌도 해소된다** — 개발용은 화면이 읽고, 제출용은 응답을 그대로 떠서
-`reports` 브랜치의 `verify/*.json` 으로 커밋한다(`scripts/dump-verify-report.sh`).
+[`reports` 브랜치의 `verify/*.json`](https://github.com/coupon-yaho/cy-be/tree/reports/verify) 으로 커밋한다(`scripts/dump-verify-report.sh`).
 `.gitignore` 의 `*.csv` 에 안 걸린다.
 
 > **④에게 남는 일은 API 하나뿐이다.** 렌더링은 ⑤ 소관이고, 제출 문서는 D13에 최종 run 을 한 번 덤프하면 된다.

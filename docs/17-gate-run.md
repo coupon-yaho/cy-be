@@ -15,7 +15,7 @@
 |---|---|---|
 | **D5** | 정상셋 검출 0건 | **0건** · `verdict=PASS` · 여섯 규칙 전부 0 |
 | **D10** | 오염셋 양방향 집합 일치 | 검출 **800** · 누락 **0** · 오탐 **0** · `matches=true` |
-| **결정론** | 같은 `asOf` 재실행 시 지문·checksum 일치 | 배치 재실행 **2회씩** (CLEAN `attempt` 3·4 · CORRUPT 2·3). 시드가 심은 기준 행까지 합쳐 `verification_runs` 4행·3행이 **지문 1개·checksum 1개로 수렴** |
+| **결정론** | 같은 `asOf` 재실행 시 지문·checksum 일치 | 같은 `asOf`(`2026-08-26 05:00`)로 CLEAN `attempt` 1·2·3·4·**5**, CORRUPT 1·2·3 — `verification_runs` **7행·4행**이 **지문 1개·checksum 1개로 수렴**. CY-649 가 CLEAN `attempt 5`(run6)를 더했다 |
 
 > **CLEAN 의 checksum 일치는 결정론 근거로 약하다.** 그것은 빈 입력끼리의 해시라
 > (`e3b0c442…` = 빈 문자열의 SHA-256), **검증기가 아무 규칙도 안 돌려도 같은 값이 나온다.**
@@ -190,21 +190,91 @@ FLUSH PRIVILEGES;
 
 두 판정을 다 남기려면 **스키마를 바꿔 기동하고 다시 돌린다.**
 
+⚠️ **아래 네 줄은 실행 절차가 아니다.** 스키마 축이 갈린다는 것만 보이는 요약이고 둘이 빠져 있다 —
+**기동 대기**(`batch.yml` 에 healthcheck 가 없어 `up -d` 는 앱이 뜨기 전에 반환한다. 그 사이
+`curl` 은 `HTTP 000` 이다)와 **검증 트리거**(덤프는 `/reports/latest` 를 **읽기만** 한다.
+새 판정을 안 만드니 직전 판정의 `asOf` 나이에 그대로 걸린다). 실행 가능한 형태는
+아래 「다시 돌리는 법」 §5 의 `gate()` 다.
+
 ```bash
 # --no-deps 를 빼면 mysql 까지 재생성된다 — 아래 "--force-recreate" 절
 # REPORT_DATASETS 는 **이 기동이 보는 것**을 선언한다. 기본값이 없다 — 아래 참고.
+# REPORT_PUSH=1 이 없으면 커밋까지만 하고 로컬에 남는다.
 DB_NAME=coupon_clean   docker compose -f base.yml -f batch.yml up -d --force-recreate --no-deps batch
-REPORT_DATASETS=CLEAN   bash scripts/dump-verify-report.sh
+REPORT_DATASETS=CLEAN   REPORT_PUSH=1 bash scripts/dump-verify-report.sh
 DB_NAME=coupon_corrupt docker compose -f base.yml -f batch.yml up -d --force-recreate --no-deps batch
-REPORT_DATASETS=CORRUPT bash scripts/dump-verify-report.sh
+REPORT_DATASETS=CORRUPT REPORT_PUSH=1 bash scripts/dump-verify-report.sh
 ```
 
-결과는 `reports` 브랜치의 `verify/` 에 쌓인다.
+⚠️ **끝나면 `coupon_clean` 으로 되돌려 둔다.** 마지막 줄이 CORRUPT 라 그대로 두면 다음 사람이
+CORRUPT 스키마를 보는 기동에서 시작한다 — `?dataset=CLEAN` 이 404 다.
+**변수 없이 그냥 재기동하면 안 된다** — `batch.yml` 이 `DB_NAME: ${DB_NAME:-app}` 이라
+`app` 스키마를 본다.
+
+```bash
+DB_NAME=coupon_clean docker compose -f base.yml -f batch.yml up -d --force-recreate --no-deps batch
+```
+
+결과는 [`reports` 브랜치의 `verify/`](https://github.com/coupon-yaho/cy-be/tree/reports/verify) 에 쌓인다.
+
+| 파일 | 크기 | `asOf` | `attempt` |
+|---|---|---|---|
+| `verify/2026-08-26-clean-full-run5.json` | 826 B | `2026-08-26T05:00:00` | 4 |
+| `verify/2026-08-26-corrupt-full-run3.json` | 1132 B | `2026-08-26T05:00:00` | 3 |
+| `verify/2026-08-27-clean-full-run7.json` | 825 B | `2026-08-27T01:17:00` | 1 |
+| `verify/2026-08-27-corrupt-full-run4.json` | 1131 B | `2026-08-27T01:28:00` | 1 |
+
+**`asOf` 가 둘로 갈려 있다.** 위 두 개는 이 문서가 못 박은 `2026-08-26 05:00:00` 이고,
+아래 두 개는 CY-649 가 **실행 시각으로 다시 돌린 것**이다 — 고정 `asOf` 로는 신선도 검사에
+막힌다(아래 절).
+
+**`attempt` 가 1인 것이 정상이다.** `nextAttempt` 는 `as_of` 로 스코프되므로(`uk_run_params`
+가 `(as_of, dataset, scope, attempt)`) **`asOf` 가 바뀌면 번호가 1부터 다시 시작한다.**
+시드가 CLEAN 1·2 를 점유한다는 서술은 **그 `asOf` 안에서만** 참이다.
+
+**뒤 두 파일이 앞 두 개보다 1바이트 작다.** Jackson 이 나노초 뒤 0 을 떨어뜨려서다.
+**다만 줄어든 필드가 서로 다르다** — `run7` 은 `finishedAt` 이 `01:19:13.28407`(5자리)이고,
+`corrupt-run4` 는 반대로 `startedAt` 이 `01:28:49.34094`(5자리)다. 각 파일에서 나머지 한
+필드는 6자리 그대로다. 자리수가 줄어드는 자리는 **그때 찍힌 값 나름**이라 필드로 고정돼
+있지 않다 — 크기 차이를 확인할 때 한 필드만 세면 어긋난다.
+
+> ⚠️ 여기 한때 `verify/2026-08-26-clean-full-run4.json 825 B` 라고 적혀 있었다.
+> **그런 파일은 `reports` 브랜치 어느 커밋에도 존재한 적이 없다.** 뜬 것은 `run5` 다.
+>
+> `run5` 다음이 `run7` 인 것도 설명이 필요하다. **`run6` 은 파일이 없다** —
+> 같은 `asOf`(`2026-08-26 05:00`)에 `attempt 5` 로 돌린 실행인데, 덤프가
+> **신선도 검사에 막혀** 아무것도 안 남겼다. 아래 절이 그 자리다.
+
+### `REPORT_PUSH=1` 이 처음 끝까지 간 것은 CY-649 다
+
+그전까지 이 스크립트는 **커밋까지만 돌아 봤다.** 락·신선도 검사·지문 동일성 검사까지
+공들여 넣어 두고 **푸시 경로만 실측이 없었다** — 원격 `reports` 브랜치가 아예 없었고,
+문서 네 곳이 그 링크를 약속하는데 아무도 못 보는 상태였다.
+
+**가는 길에 신선도 검사가 실제로 한 번 막았다.**
 
 ```
-verify/2026-08-26-clean-full-run4.json     825 B
-verify/2026-08-26-corrupt-full-run3.json  1132 B
+✗ CLEAN FULL 의 asOf 이 73019초 됐다(허용 21600초): 2026-08-26T05:00:00
 ```
+
+막힌 것은 **`run6`** 이다 — 같은 `asOf`(`2026-08-26 05:00`)에 `attempt 5` 로 돌린 실행이다.
+**판정 자체는 43초 전에 났다**(`finishedAt 2026-08-27T01:16:16Z`, 거절 시각 `01:16:59Z`).
+그런데 그 판정이 보는 **데이터 스냅샷**은 73019초(20시간) 전이었다.
+
+**축을 둘로 나눠 둔 것(`finishedAt`·`asOf`)이 여기서 갈렸다.** `finishedAt` 만 봤으면
+43초짜리 신선한 리포트로 통과했을 것이고, *"오늘 뜬 리포트"* 라는 이름으로 **어제 데이터**가
+올라갔다. 그래서 `run6` 은 `reports` 브랜치에 파일이 없고, 18초 뒤 새 `asOf` 로 다시 돌린
+`run7` 이 올라갔다.
+
+**worktree 갈림은 이 티켓이 안 탔다.** 스크립트는 ① 로컬 브랜치(`:193`) ② `origin/reports`
+추적(`:196`) ③ orphan 생성(`:198`) 순으로 고르는데, `../cy-be-reports` 가 이미 있어서
+그 앞의 *"이미 있다"* 분기로 들어갔다.
+
+②는 갓 클론한 저장소에서 따로 확인했다 — `git worktree add --track -b reports … origin/reports`
+성공. 다만 **`origin/reports` 를 한 번도 fetch 한 적 없는 오래된 클론**에서는 `ls-remote` 만
+통과하고 그 명령이 `fatal: 잘못된 레퍼런스: origin/reports` 로 exit 128 이다. 스크립트가
+`|| exit 1` 이라 `fail()` 메시지 없이 raw git 에러만 남는다 — `:196` 앞에
+`git fetch -q origin "$BRANCH"` 를 넣어야 메워진다. **아직 안 넣었다.**
 
 ---
 
@@ -288,7 +358,11 @@ set -a; . ./.env; set +a
 
 # ── 3. 본 실행. **as-of 를 고정해야 결정론을 잴 수 있다** ────────────────
 # 두 형식이 필요하다. 시드는 공백, API 는 T 다(오프셋은 아예 안 받는다).
-ASOF='2026-08-26 05:00:00'
+# ⚠️ **고정값을 쓰면 덤프가 신선도 검사에 막힌다.** 스크립트는 `asOf` 나이를
+#    REPORT_MAX_AGE(기본 21600초)로 재는데, 2026-08-26 05:00 UTC 는 이미 지났다.
+#    CY-649 에서 실제로 그렇게 죽었다(run6). 그래서 실행 시각을 쓴다.
+#    옛 값을 그대로 재현하려면 REPORT_MAX_AGE=999999 를 gate() 앞에 붙인다.
+ASOF="$(date -u +'%Y-%m-%d %H:%M:00')"
 ASOF_API="${ASOF/ /T}"
 ./.venv/bin/python bin/seed.py all --dataset clean   --schema coupon_clean   --as-of "$ASOF"
 ./.venv/bin/python bin/seed.py all --dataset corrupt --schema coupon_corrupt --as-of "$ASOF"
@@ -347,7 +421,8 @@ gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=se
     sleep 10
   done
 
-  REPORT_DATASETS="$2" bash scripts/dump-verify-report.sh
+  # 원격까지 밀려면 이 스크립트를 REPORT_PUSH=1 로 실행한다. 기본은 로컬 커밋까지다.
+  REPORT_DATASETS="$2" REPORT_PUSH="${REPORT_PUSH:-0}" bash scripts/dump-verify-report.sh
 }
 
 # seedRunId 는 **expected_findings 가 실제로 키로 쓰는 값**이다.
@@ -372,6 +447,12 @@ gate coupon_clean   CLEAN   3
 gate coupon_clean   CLEAN   4            # 결정론 — 같은 asOf, attempt 만 다르게
 gate coupon_corrupt CORRUPT 2 "$SEED_RUN"
 gate coupon_corrupt CORRUPT 3 "$SEED_RUN"
+
+# ── 5b. **CLEAN 으로 되돌려 둔다** ──────────────────────────────────────
+# 위 gate 가 CORRUPT 기동으로 끝난다. 그대로 두면 다음 사람이 CORRUPT 스키마를
+# 보는 기동에서 시작해 ?dataset=CLEAN 이 404 다.
+# 변수 없이 재기동하면 batch.yml 의 ${DB_NAME:-app} 이 걸려 app 스키마를 본다.
+DB_NAME=coupon_clean docker compose -f base.yml -f batch.yml up -d --force-recreate --no-deps batch
 
 # ── 6. 여섯째 규칙까지 보려면 ───────────────────────────────────────────
 cd ../cy-seed && set -a; . ./.env; set +a

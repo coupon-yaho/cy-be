@@ -404,7 +404,7 @@ POST /api/v1/admin/expire/runs/{id}/recover     # 한 번. 재시도해도 안�
 
 ### 제출물을 뜨는 절차
 
-`scripts/dump-verify-report.sh` 가 판정을 떠서 **`reports` 브랜치**의
+`scripts/dump-verify-report.sh` 가 판정을 떠서 [**`reports` 브랜치**](https://github.com/coupon-yaho/cy-be/tree/reports/verify)의
 `verify/YYYY-MM-DD-{dataset}-{scope}-run{runId}.json` 으로 쌓고, **바뀐 날만** 커밋한다.
 
 **한 번 실행은 한 데이터셋만 올린다.** 배치는 `DB_NAME` 으로 스키마를 하나만 잡으므로
@@ -516,8 +516,16 @@ autocommit 으로 각자 스냅샷을 열고, 그 사이 `expected_findings` 가
 | 오늘 판정 → 커밋 → 재실행 시 건너뛰기 | 고정 응답(fixture) | 파일 2개 + 커밋, 두 번째는 `cmp` 로 건너뛴다 |
 | **성공 경로를 살아 있는 배치로** | CY-601 이 시드를 깔고 FULL 을 돌렸다 | **된다.** `reports` 브랜치에 두 판정이 실제로 커밋됐다 |
 | **launchd → 살아 있는 배치 → 커밋** | 같은 상태에서 `kickstart` | **된다.** 종료 0 · 같은 판정이라 커밋 안 함(`cmp` 가 걸렀다) |
+| **`REPORT_PUSH=1` → 원격** | CY-649 가 CLEAN·CORRUPT 를 각각 새 `asOf` 로 돌리고 떴다 | **된다.** 이 경로가 [원격 `reports`](https://github.com/coupon-yaho/cy-be/tree/reports/verify) 에 두 파일을 밀었다(`run7`·`run4`). 앞선 커밋 둘은 브랜치 첫 푸시에 실려 따라 올라가 원격이 네 파일이 됐다 |
+| **신선도 검사가 실제로 막는가** | **앞선 실행**(run6, 어제 `asOf`)의 판정에 대고 | **막았다.** `asOf 이 73019초 됐다(허용 21600초)` · 파일 0개 |
+| **예약 작업이 미는가** | plist 의 `EnvironmentVariables` 확인 | **아직 아니다.** `REPORT_PUSH` 가 없어 로컬 커밋까지만이다 — 원격은 손으로 민 것뿐 |
 
-**이제 표에 빈 줄이 없다.** 앞서 여기 *"돌 것이다"* 로 남겨 둔 마지막 구간까지 실측이다.
+**여기 한 번 거짓이 있었다.** 앞 티켓이 *"이제 표에 빈 줄이 없다"* 고 적었는데
+**푸시 경로는 그때 실측이 없었다** — 원격 `reports` 브랜치가 아예 없었고, 스크립트는
+커밋까지만 돌아 본 상태였다. 위 세 줄이 CY-649 에서 채운 자리다.
+
+신선도가 무엇을 막았는지는 `docs/17` 의 *"`REPORT_PUSH=1` 이 처음 끝까지 간 것은 CY-649 다"*
+절에 수치까지 적었다. 여기 두 번 적지 않는다 — 갈리면 한쪽이 반드시 낡는다.
 
 **그 구멍을 메우면서 결함이 하나 나왔다.** 이 스크립트는 `CLEAN` 과 `CORRUPT` 를
 **둘 다 성공해야** 옮기게 돼 있었는데, 배치는 `DB_NAME` 으로 스키마를 **하나만** 잡는다
