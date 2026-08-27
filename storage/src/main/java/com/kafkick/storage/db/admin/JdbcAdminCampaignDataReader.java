@@ -37,7 +37,7 @@ import com.kafkick.core.observation.SourceStatus;
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
-    private static final Duration MAX_CAMPAIGN_DURATION = Duration.ofHours(24);
+    private static final Duration MAX_COUPON_ROUND_DURATION = Duration.ofHours(24);
 
     private static final Logger log = LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
 
@@ -313,7 +313,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         if (row.campaignName() == null || row.campaignName().isBlank()
                 || row.opensAt() == null || row.closesAt() == null
                 || !row.opensAt().isBefore(row.closesAt())
-                || Duration.between(row.opensAt(), row.closesAt()).compareTo(MAX_CAMPAIGN_DURATION) > 0
+                || Duration.between(row.opensAt(), row.closesAt()).compareTo(MAX_COUPON_ROUND_DURATION) > 0
                 || row.validDays() == null || row.validDays() <= 0
                 || !hasValidGradeMask(row.eligibleGradesMask())) {
             return false;

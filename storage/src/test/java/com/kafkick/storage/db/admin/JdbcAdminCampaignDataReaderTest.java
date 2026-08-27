@@ -222,7 +222,7 @@ class JdbcAdminCampaignDataReaderTest {
     /** 실제 회차 도메인의 24시간 상한을 넘는 기간은 설정 실패로 판정하는지 검증합니다. */
     @Test
     @DisplayName("24시간을 초과한 회차는 캠페인 설정이 준비되지 않는다")
-    void campaignDurationCannotExceedTwentyFourHours() {
+    void couponRoundDurationCannotExceedTwentyFourHours() {
         Instant opensAt = SNAPSHOT.minusSeconds(60);
         insertCoupon(10, 1, 1, "기간 초과", "OPEN", opensAt);
         writeJdbc.update(
