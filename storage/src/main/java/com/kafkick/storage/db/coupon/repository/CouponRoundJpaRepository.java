@@ -65,9 +65,12 @@ public interface CouponRoundJpaRepository
                            stock.total_quantity - stock.active_count
                                AS remainingQuantity
                       FROM coupons coupon
-                      JOIN coupon_stocks stock
+                     JOIN coupon_stocks stock
                         ON stock.coupon_id = coupon.id
                      WHERE (:status IS NULL OR coupon.status = :status)
+                       AND (:eligibleGradeBit IS NULL
+                            OR (coupon.eligible_grades_mask
+                                & :eligibleGradeBit) <> 0)
                      ORDER BY coupon.open_at DESC, coupon.id DESC
                     """,
             countQuery = """
@@ -76,11 +79,15 @@ public interface CouponRoundJpaRepository
                       JOIN coupon_stocks stock
                         ON stock.coupon_id = coupon.id
                      WHERE (:status IS NULL OR coupon.status = :status)
+                       AND (:eligibleGradeBit IS NULL
+                            OR (coupon.eligible_grades_mask
+                                & :eligibleGradeBit) <> 0)
                     """,
             nativeQuery = true
     )
     Page<CouponRoundDetailProjection> findPublicCouponRounds(
             @Param("status") String status,
+            @Param("eligibleGradeBit") Integer eligibleGradeBit,
             Pageable pageable
     );
 
