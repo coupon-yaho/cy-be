@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     id 'org.springframework.boot'
 }
@@ -43,6 +45,26 @@ tasks.named('test') {
     // user.timezone 은 JVM 기동 시점에 잡혀야 Connector/J 가 캐시하는 기본 존과도 맞는다 —
     // 테스트 안에서 TimeZone.setDefault 로 바꾸면 이미 열린 커넥션이 옛 존을 들고 있다.
     systemProperty 'user.timezone', 'Asia/Seoul'
+
+    // **모듈 밖 파일을 읽는 테스트가 있다. 입력으로 선언해야 한다.**
+    //
+    // AlertChannelRegistryTest 는 `../infra/prometheus/rules/batch-alerts.yml` 과
+    // `../docs/14-observability-wiring.md` 를 Path.of("..") 로 직접 읽어 **규칙과 채널 표를
+    // 잇는다.** BatchMetricExposureTest 는 같은 규칙 파일에서 메트릭 이름을 뽑아 실제 노출과
+    // 대조한다. 둘 다 태스크 입력에 안 들어 있어서, **그 두 파일만 바뀐 라운드는
+    // `:batch:test` 가 UP-TO-DATE 로 건너뛰었다** — 실측으로 확인했다(CY-661).
+    //
+    // 그러면 규칙 파일에 `channel` 없는 알림을 더해도 CI 가 초록이고, 그 알림은
+    // sink-unrouted 로 떨어져 아무도 안 본다. **잇는 검사가 있는데 안 도는 상태**가
+    // 제일 나쁘다 — 있다고 믿기 때문이다.
+    //
+    // `org.gradle.caching` 을 켜기 전부터 있던 구멍이다(up-to-date 검사와 캐시는 별개다).
+    // 다만 캐시가 CI 러너 사이로도 그 판정을 옮기므로 이 티켓에서 함께 막는다.
+    inputs.files(
+            rootProject.file('infra/prometheus/rules/batch-alerts.yml'),
+            rootProject.file('docs/14-observability-wiring.md'))
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName('externalContractFiles')
 }
 
 tasks.matching { it.name == 'bootRun' }.configureEach {

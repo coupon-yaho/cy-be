@@ -162,9 +162,66 @@
 | JVM 기본 존을 UTC 로 강제하는 기동 가드 | `VerifyJobConfig` 가 *"이 문서로 미뤘다"* 고 가리키는데 **여기 항목이 없었다**(CY-429 가 세운다). **미룬 이유는 `batch/build.gradle` 의 `test` 태스크가 `user.timezone=Asia/Seoul` 을 일부러 준다는 것이다**(CY-392 — 존 버그를 재현하려고 DB(UTC)와 어긋나게 뒀다). 기동 가드를 넣으면 batch 의 모든 `@SpringBootTest` 가 거절당하므로, 그 테스트를 어떻게 면제할지 먼저 정해야 한다. 지금 UTC 를 지키는 것은 `batch.yml` 의 `TZ` 와 `build.gradle` 의 `bootRun user.timezone` 둘이고, 사각은 IDE 실행과 `java -jar` 다 |
 | admin API 에 읽기 타임아웃이 없다 | `VerifyTriggerController` 도 `ExpireAdminController` 도 톰캣 스레드에서 `jobRepository` 를 맨몸으로 부른다 — 형제인 `BatchRunMetricsRefresher` 는 readOnly + 초 단위 타임아웃으로 감싼다. **이 API 들은 정확히 DB 가 아플 때 불리는데** 그때 진단 도구가 매달린다. 만료 쪽에만 걸면 admin API 둘의 신뢰성 계약이 갈리므로 **함께** 정해야 하고, 뿌리는 JDBC URL 에 `socketTimeout` 이 **전 저장소에 0건**인 것이라 storage 레벨 결정이다 |
 | `cleanupJob` 시체를 걷을 API | `BatchStuckExecution` 은 `Job` 빈 셋 전부에 뜨는데(`BatchRunMetrics` 가 `List<Job>` 에서 이름을 모은다) 컨트롤러는 둘이다. `cleanupJob` 만 손 SQL 이 유일한 길이고 알림이 그 사실을 명시한다. 잡 이름을 경로 변수로 받는 형태로 일반화할 때 **"트리거는 열지 않는다"(`docs/15`) 규율도 함께 옮겨야 한다** |
-| `verifyJob` 의 `stop` 에 시체 판정이 없다 | 만료 쪽은 CY-429 가 `RunningJobProbe.stuckExecutions` 를 통과한 실행만 건드리는데, verify 의 `stop` 은 그 판정을 안 지난다 — **살아서 도는 300만 전수 검증을 아무나 멈출 수 있다.** 알림 description 이 그 차이를 명시하지만, 코드로 막는 것이 맞다 |
+| `verifyJob` 의 `stop` 에 시체 판정이 없다 | **유효하다. CY-661 이 한 번 철회했다가 되돌렸다** — 철회 근거가 실측에서 깨졌다. 아래 절 참고 |
 | 리뷰 반복 결함의 기계적 검사 | 이 티켓의 리뷰에서 **같은 종류가 반복해서 나왔다** — 떠 있는 javadoc(4회), 개명 뒤 끊긴 문서 참조, 개수 주장과 실제 불일치("넷"↔"다섯"), 지표 단언 누락. 넷 다 파일을 읽어 기계적으로 잡을 수 있다. `BatchMetricExposureTest` 가 규칙 파일↔노출을 잇는 것과 같은 방식으로 테스트화할 자리다 |
 | ~~`README` 의 batch 패키지 트리~~ | **해결됐다** — README 에 `api`/`config`/`job`/`replay`/`schedule` 트리가 들어갔다 |
+
+### `stop` 이 실제로 무엇을 하는가 — 철회했다가 되돌린 기록 (CY-661)
+
+**CY-661 이 이 항목을 "하면 안 된다" 로 철회했다가 실측에서 깨져 되돌렸다.**
+철회 근거는 `VerifyTriggerController` 의 javadoc 이었다:
+
+> `stop` 으로는 못 푼다 — 상태가 `STOPPING` 이 되어 위 목록에 그대로 있다.
+> 살아 있는 프로세스가 그 신호를 받아 종료시켜 줘야 하는데, 그 프로세스가 이미 없다.
+
+**그 문장이 틀렸다.** Spring Batch 6.0.4 바이트코드로 확인했다.
+
+```
+SimpleJobOperator.stop()    setStatus(STOPPING) · setExitStatus · setEndTime(now()) · update()
+SimpleJobRepository.update  if (status == STOPPING && getEndTime() != null)
+                                "Upgrading job execution status from STOPPING to STOPPED
+                                 since it has already ended."
+                                upgradeStatus(STOPPED)
+```
+
+**`stop()` 이 항상 `endTime` 을 채워 넘기므로 그 조건은 항상 참이다.** `STOPPING` 에 굳지
+않고 **즉시 `STOPPED`** 가 된다 — 시체든 살아 있든 똑같다. `findRunningJobExecutions` 는
+`STATUS IN ('STARTING','STARTED','STOPPING')` 을 보므로 `STOPPED` 는 그 목록에서 빠지고
+**429 도 그 자리에서 풀린다.**
+
+**그래서 시체 판정을 걸어도 복구 경로가 안 막힌다** — 다만 **`batch.stuck-job-after-ms`
+(기본 30분) 뒤부터** 통과한다(`RunningJobProbe.isStuck`). 복구가 막히는 것이 아니라
+**30분 늦어진다.** 만료 쪽(`ExpireRecoveryService`)이 이미 같은 대가를 치르고 있으므로 축은
+같다. **구현할 때 거절 메시지에 그 임계와 남은 시간을 실어야 한다** — 안 실으면 사람이
+API 가 깨진 줄 안다. 어쨌든 철회의 전제는 무너졌다.
+
+**오히려 원래 우려가 더 크다.** 결과를 둘로 갈라야 한다.
+
+**`stop` 단독으로 도는 검증이 죽는다.** `SimpleJobRepository.update(StepExecution)` 이
+`isStopped() || isStopping()` 일 때 `setTerminateOnly()` 를 세우고, 다음 Step 경계에서
+`JobInterruptedException` 이 난다 — `finalizeRunStep` 에 못 가므로 `verdict` 가 애초에
+안 남는다. **472초가 버려지는 것은 여기다. `abandon` 이 오든 안 오든 그렇다.**
+
+**`abandon` 이 겹치면 종단이 `ABANDONED` 가 된다.** `upgradeStatus` 가 max 를 취하므로
+나중에 돌아온 스레드가 못 되돌린다. 그 대가는 §7 이 적은 것 — **그 `JobInstance` 를 같은
+`asOf` 로 영원히 못 돌린다.**
+
+**그리고 `stop` 이 푸는 것은 429 하나가 아니다.** `STOPPED` 는 `findRunningJobExecutions` 의
+`STATUS IN ('STARTING','STARTED','STOPPING')` 에서 빠지고, **그 목록을 보는 자리가 셋**이다 —
+`VerifyTriggerController.runningExecutions()`(429 판정) ·
+`ExpireScheduler`(만료 슬롯 건너뛰기, `blockingExecutions(verifyJob)`) ·
+`CleanupJobConfig`(정리가 청크마다 물러나기, 같은 호출). `STOPPED` 가 박히는 순간 **셋이 함께
+빈 목록을 본다** — 스레드가 아직 도는 동안 **만료·정리와의 상호 배제가 꺼진다.** `CleanupJobConfig` 가
+그 보호의 값을 적어 뒀다: *"도는 검증의 입력이 걷힌다. 그때 V1·V3·V5 는 빈 상태를 읽고 예외
+없이 조용히 틀린 답을 낸다."*
+
+**그래서 이 항목은 `stop` 에 시체 판정을 거는 것이지 429 만 되돌리는 것이 아니다.**
+
+> ⚠️ **`VerifyTriggerController` 의 그 javadoc 도 같이 틀렸다.** CY-661 은 문서만 만졌으므로
+> 코드 주석은 안 고쳤다 — **이 항목을 구현하는 티켓이 함께 고친다.**
+
+> **내가 실측 없이 믿은 자리다.** 그 javadoc 이 *"그럴 것이다"* 였고, 그것을 근거로 백로그
+> 항목을 철회했다. 리뷰가 재현으로 잡았다. `docs/00` 의 원칙이 금지하는 그것을 했다.
 
 ### 알림
 
@@ -570,21 +627,55 @@ batch 에 컨트롤러를 열면서 `api` 의 `ResponseEnvelope`·`ErrorResponse
 
 ---
 
-## 4c. 전체 빌드가 5분이다 — 캐시·병렬이 꺼져 있다 (CY-368 이 실측)
+## 4c. ~~전체 빌드가 5분이다~~ **97초였고, 76초가 됐다** (CY-368 실측 → CY-661 정정)
 
-**테스트 메서드 합계는 100초 남짓인데 `./gradlew build` 는 5분이다.** 나머지는
-Testcontainers MySQL 기동과 Spring 컨텍스트 로딩이다.
+> ⚠️ **"5분" 은 낡은 수치다.** CY-368 이 쟀을 때는 맞았는데 **CY-621 이 그 대부분을
+> 없앴다**(컨테이너를 스프링 컨텍스트가 아니라 JVM 이 소유하게 함 — §7). CY-661 이
+> 다시 재니 **97초**였다. 이 절을 근거로 "5분을 줄인다" 는 티켓을 세우지 마라.
+
+**남은 것은 거의 전부 테스트 본체다.** 실측(M-series 11코어 · Docker VM 7.65GB, 2026-08-27):
+
+| | 전 | 후 |
+|---|---|---|
+| 전체 `clean build` | 97초 | **73~76초** |
+| 변경 없는 재빌드 | 6초 | **2~3초** |
+
+**테스트를 뺀 빌드는 8초다.** 즉 76초 중 68초가 테스트이고, 그 안은 Testcontainers MySQL
+기동과 스프링 컨텍스트 로딩이다. **여기서 더 줄이려면 그 둘을 건드려야 하고, 아래 두 줄이
+그 후보다.**
 
 | 무엇 | 지금 | 왜 |
 |---|---|---|
-| `gradle.properties` | **한 번도 만든 적이 없다** | Spring Initializr 가 안 만드는 파일이다. 지운 게 아니라 처음부터 없어서 병렬·캐시가 전부 기본값(꺼짐)이다. `.gitignore` 의 `.gradle` 은 캐시 **디렉터리**라 무관하다 |
+| ~~`gradle.properties`~~ | **완료 · CY-661.** `caching`·`configuration-cache` **둘**을 켰다. `parallel` 은 실측에서 효과가 없어 뺐다(아래) |
 | Testcontainers `withReuse` | 안 켬 | 클래스마다 컨테이너를 새로 띄운다 |
 | Spring 컨텍스트 | 배치만 6벌 | `@SpringBootTest` 의 `properties` 조합이 다르면 캐시가 안 걸린다 |
 
-**병렬은 효과가 제한적일 수 있다.** 느린 것은 `storage`(73초)와 `batch` 인데 둘 다 같은
-MySQL 컨테이너 자원을 두고 경쟁하고, `batch` 는 `storage` 의 `testFixtures` 에 의존해
-완전 병렬이 안 된다. **캐시 쪽이 실효가 커 보인다** — 문서만 고친 라운드에서 Java 테스트를
-통째로 건너뛸 수 있다. 다만 **둘 다 재 보고 정한다.** 근거 없는 수치를 넣지 않는다.
+**이 문단이 맞았다 — 병렬은 효과가 없다.** CY-661 이 한 번 *"94초 → 68초(−28%)"* 로 뒤집었다가
+다시 재서 되돌렸다. **한 번의 측정으로 축 셋을 동시에 켜 놓고 그 차이를 병렬에 귀속시킨 것이
+잘못이었다.** 축을 하나만 움직여 세 회차를 쟀다(`clean test --rerun-tasks`, 매 회차 빌드
+캐시를 지워 콜드로 맞춤):
+
+```
+parallel=false   72 · 69 · 71초   평균 70.7
+parallel=true    76 · 74 · 71초   평균 73.7
+```
+
+**빠르지 않고 오히려 느리다.** 이 문단이 적은 이유 그대로다 — `core → storage → batch` 가
+의존으로 줄 서 있고 `batch` 가 `storage` 의 `testFixtures` 를 쓴다.
+
+**대가는 실재했다.** 병렬을 켜면 모듈이 겹쳐 돌아 동시 mysql 컨테이너가 **3개 → 5개**가 된다.
+CY-392 를 깨뜨린 18개(약 8GB)와는 멀지만 **얻는 것이 없는데 치를 이유가 없다.** 그래서 뺐다.
+CI(ubuntu-latest)는 컨테이너 전용 VM 없이 7GB 를 JVM 과 나눠 쓰므로 그쪽 마진은 로컬보다
+좁고, **거기서는 아예 안 쟀다.**
+
+**테스트 병렬(`maxParallelForks`)은 애초에 후보가 아니다.** `build.gradle` 이 경고한 대로
+**JVM 수만큼 컨테이너가 곱해진다.**
+
+**캐시가 문서 검사를 건너뛰던 구멍도 함께 막았다.** `AlertChannelRegistryTest` 와
+`BatchMetricExposureTest` 가 `Path.of("..")` 로 모듈 밖 파일(규칙 파일·`docs/14`)을 읽는데
+태스크 입력에 없었다 — **그 둘만 바뀐 라운드는 `:batch:test` 가 UP-TO-DATE 로 건너뛰었다**
+(실측). 캐시를 켜기 전부터 있던 구멍이지만(up-to-date 검사와 캐시는 별개다) 캐시가 그 판정을
+CI 러너 사이로도 옮기므로 여기서 막았다 — `batch/build.gradle` 의 `inputs.files(...)`.
 
 **앞의 둘은 검토 대상이고 셋째는 대체로 불가피하다.** 예컨대 실행 중인 만료를 심는 클래스와
 안 심는 클래스는 그 축을 재려고 일부러 나눈 것이다 — 합치면 검증이 사라진다.
@@ -810,8 +901,10 @@ curl -s -XPOST localhost:9090/api/v1/admin/expire/runs/41/recover | jq '.data, .
 그 상태는 `COMPLETED` 와 같은 취급이라 그 `JobInstance` 를 같은 `asOf` 로 영원히 못 돌린다.
 
 업무 포트가 안 열려 있으면 `batch-expose.yml` 을 얹는다(§4). `verifyJob` 쪽은
-`/api/v1/admin/verify` 에 `stop → abandon` 이 있다 — **그쪽 `stop` 에는 시체 판정이 없으므로**
-프로세스 부재를 먼저 확인한다. `cleanupJob` 은 아직 API 가 없어 아래 손 SQL 이 유일한 길이다.
+`/api/v1/admin/verify` 에 `stop → abandon` 이 있다 — **그쪽 `stop` 은 시체 판정을 안 지난다**
+(그것이 남은 항목이다, 위 절). **부르기 전에 프로세스 부재를 사람이 확인해야 한다** —
+`stop` 은 살아 있는 실행에도 먹고, DB 를 즉시 `STOPPED` 로 올린다. 그 뒤 `abandon` 이
+스레드보다 먼저 도착하면 **도는 검증이 `ABANDONED` 로 굳는다.** `cleanupJob` 은 아직 API 가 없어 아래 손 SQL 이 유일한 길이다.
 
 **아래는 API 가 없던 시절의 절차다.** 배치가 안 떠 있어 API 를 못 부르는 경우에만 쓴다.
 
