@@ -34,7 +34,7 @@ Actions
 >
 > 이 문서가 풀려던 것은 *"증거를 우리 화면 밖에 두기"* 였고, 그 수단으로 Actions 를 골랐다.
 > **판정 기록에 한해서는 더 싼 길이 있었다** — 리포트 조회를 호스트에서 떠서
-> **`reports` 브랜치**의 `verify/` 에 커밋한다(`scripts/dump-verify-report.sh`).
+> [**`reports` 브랜치**의 `verify/`](https://github.com/coupon-yaho/cy-be/tree/reports/verify) 에 커밋한다(`scripts/dump-verify-report.sh`).
 >
 > 코드 브랜치가 아니라 **빈 뿌리에서 시작한 전용 브랜치**다 — 리포트 diff 가 코드 변경에
 > 묻히지 않고, 예약 작업이 사람의 인덱스·미푸시 커밋을 건드릴 수 없다.
