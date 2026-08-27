@@ -160,8 +160,13 @@ class AnalyticsAggregatesMigrationTest {
                     .hasMessageContaining("ck_analytics_run_monthly_trend");
         }
 
+        /**
+         * 완료 시각은 <b>운영 진단용</b>이다 — 화면 최신성(STALE) 판정이 읽는 것은
+         * {@code aggregated_through} 다([A 확정 2026-08-26]). 두 값이 AVAILABLE 과 짝이어야 한다는
+         * 것만 여기서 본다.
+         */
         @Test
-        @DisplayName("AVAILABLE 인데 완료 시각이 없으면 거절된다 — A 의 STALE 판정이 그 시각을 읽는다")
+        @DisplayName("AVAILABLE 인데 완료 시각이 없으면 거절된다")
         void availableAxisRequiresCompletedAt() {
             assertThatThrownBy(() -> insertRun(nextRunId(), "SUCCEEDED", "NULL",
                     "AVAILABLE", "NULL", "PENDING", "NULL", "PENDING", "NULL"))

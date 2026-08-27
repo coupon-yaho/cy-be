@@ -20,7 +20,10 @@ import com.kafkick.core.support.TimeProvider;
  * <h2>재실행 결정성</h2>
  *
  * <p>{@code as_of} 를 파라미터로 받아 박는다. 배치 시작 시각을 기준으로 삼으면 같은 기간을 다시
- * 돌릴 때 값이 달라진다 — 재계수에 걸리는 {@code issued_at < as_of} 가 그 결정성의 전부다.
+ * 돌릴 때 값이 달라진다 — 재계수에 걸리는 {@code issued_at <= 끝점} 이 그 결정성의 전부다.
+ * <b>포함 경계여야 한다</b> — 발견 창도 {@code created_at <= 끝점} 이고 ISSUE 이력은
+ * {@code created_at = issued_at} 이라, 여기만 배타적으로 두면 끝점에 걸친 발급이 발견되고도
+ * 안 세어지고 다음 걸음의 발견 창에도 안 들어와 영영 한 건 모자란다.
  *
  * <p>⚠️ 상태 축은 예외다. {@code issuances.status} 가 계속 바뀌므로 같은 발급일이라도 집계 시점마다
  * 값이 다르다. 그쪽의 답은 결정성이 아니라 {@code observed_at} 이다.
@@ -218,7 +221,7 @@ public class AnalyticsAggregationRunner {
     /**
      * 기준 시각이 뒤로 가면 그 축을 <b>건드리지 않는다.</b>
      *
-     * <p>재계수는 {@code issued_at < as_of} 로 자르므로, 이미 센 지점보다 이른 기준으로 다시 세면
+     * <p>재계수는 {@code issued_at <= as_of} 로 자르므로, 이미 센 지점보다 이른 기준으로 다시 세면
      * <b>더 작은 값</b>이 나온다. 그 값이 더 큰 run_id 를 달고 최신이 되어, 화면의 발급 수가
      * 조용히 줄고 되돌아오지 않는다. 시계가 뒤로 조정되면(NTP) 실제로 일어난다.
      *

@@ -250,8 +250,13 @@ public class AnalyticsAggregateReader {
      * <p>{@code OFFSET} 자리에 행이 있으면 창에 상한보다 많은 이력이 있다는 뜻이고, 그 행의 시각을
      * 새 하한으로 삼는다. 없으면 이미 상한 안이라 하한을 그대로 둔다.
      *
-     * <p>⚠️ 새 하한과 <b>같은 시각</b>의 행은 창에서 빠진다({@code >} 이므로). 그 구간은 이미
-     * 지나간 겹쳐 훑기 영역이고 최선 노력이라, 상한을 넘기는 것보다 낫다고 봤다.
+     * <p>⚠️ 자르는 자리는 <b>시각 경계</b>다. 조회 창이 {@code created_at > 하한} 이라 그 시각의
+     * 행은 통째로 창 밖에 남는다 — 그것이 의도다. 동률을 포함시키려고 하한을 앞으로 당기면 창이
+     * 상한을 넘고, 그러면 이 배치가 스스로 못 빠져나오는 자리(문장이 상한 초과 → 축이 AVAILABLE
+     * 을 못 받음 → 수위선 정지)로 돌아간다. 실측으로 정한 예산이 그 상한이다.
+     *
+     * <p>잘려 나가는 행은 <b>이미 수위선 뒤</b>, 즉 앞선 회차가 덮은 구간이다. 여기서 다시 훑는
+     * 것은 늦은 커밋을 줍기 위한 <b>최선 노력</b>이고, 그 최선 노력의 범위를 행 수로 묶는다.
      */
     public Instant boundedWindowStart(Instant floor, Instant asOf, int maxWindowRows) {
         LocalDateTime overflow = observationJdbcTemplate.query(hint() + """
