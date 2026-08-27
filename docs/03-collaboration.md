@@ -90,6 +90,17 @@ auto_review:
 
 **라벨이 "리뷰 없이 머지"를 여는 건 아니다.** AI 리뷰는 required check 가 아니라 애초에 머지를 막지 않는다 (3.5a절). 머지 게이트는 **`PR 제목 규약`·`브랜치명 규약` + 승인 1건**이고 그건 라벨로 못 건너뛴다.
 
+**오히려 라벨이 머지를 더 어렵게 만든다.** Qodo 가 지적 0건인 PR 을 자동 승인하는데(`[config].auto_approve_for_no_suggestions`), 그 승인은 **리뷰가 돌아야** 나온다. `skip-review` 가 붙으면 리뷰를 안 도니 승인도 안 나온다.
+
+| PR | 승인이 어디서 오나 |
+|---|---|
+| 하위 → 에픽 | **Qodo 자동 승인.** 지적 0건이면 붙는다 |
+| 에픽 → main (`skip-review`) | **사람 승인 또는 관리자 우회.** 자동으로 안 붙는다 |
+| 되돌리기·설정 범프 (`skip-review`) | 위와 같다 |
+| 봇 PR | 위와 같다 (`ignore_pr_authors`) |
+
+**이걸 고치지 않고 남긴다.** 에픽 → main 은 이 저장소에서 가장 큰 병합이고, 거기서만은 사람이 한 번 보는 것이 맞다. 리뷰를 안 돌린 PR 을 봇이 승인하면 지금(관리자 우회)보다 **나쁘다** — 우회는 사람이 누른 흔적이라도 남지만, 그 승인은 아무도 안 본 채 초록불이 된다.
+
 > 수동 제어 — 본문에 `@coderabbitai ignore`(스킵), 코멘트로 `@coderabbitai review`(증분) / `@coderabbitai full review`(전체).
 
 **리뷰는 GitHub Review 형태로 달린다.** `request_changes_workflow: true` 라 사람 리뷰어처럼 **줄 단위 인라인 코멘트 + Request changes** 를 남기고, 지적이 다 해소되면 자동으로 승인한다. 단 CodeRabbit 을 Ruleset 의 required reviewer 로 등록하면 3.5a절(비차단)이 깨진다 — 등록하지 말 것.
