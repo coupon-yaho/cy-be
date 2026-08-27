@@ -114,9 +114,22 @@ L2 회차는 `scrape_interval: 1s`로 도는 Prometheus를 전제한다. 수집�
 
 Prometheus는 호스트 포트를 열지 않으므로 compose 네트워크 안에서 친다.
 
-```
-docker exec <prometheus 컨테이너> sh -c \
-  "wget -qO- 'http://localhost:9090/api/v1/query?query=<expr>&time=<창 끝 epoch>'"
+**식을 URL에 그대로 넣으면 안 된다.** 아래 식들에는 공백·중괄호·`>`가 들어 있어
+percent-encoding 없이 넣으면 Prometheus가 `400 Bad Request`로 거부한다(실측). 아래
+헬퍼를 쓰면 instant·range 양쪽이 같은 방식으로 돈다.
+
+```sh
+PROM=<prometheus 컨테이너 이름>
+
+# promq <endpoint> <expr> [extra=params ...]
+promq() {
+  local ep="$1" expr="$2"; shift 2
+  local e; e=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$expr")
+  local qs="query=$e"; for p in "$@"; do qs="$qs&$p"; done
+  docker exec "$PROM" sh -c "wget -qO- 'http://localhost:9090/api/v1/$ep?$qs'"
+}
+
+promq query 'avg_over_time(up{job="api"}[241s])' "time=<창 끝 epoch>"
 ```
 
 창 길이를 `<W>s`에 넣고 창 끝 시각에 instant query로 평가한다. job마다 한 벌씩 돌린다.
@@ -141,17 +154,15 @@ count_over_time(scrape_duration_seconds{job="api"}[<W>s])
 페이로드의 시간 변화만은 instant query로 볼 수 없다. 창 끝 한 시점의 값 하나만 돌아오므로
 구간 중에 생긴 계단이 안 보인다. 이것만 `query_range`로 시작·종료·step을 주고 훑는다.
 
-```
-docker exec <prometheus 컨테이너> sh -c \
-  "wget -qO- 'http://localhost:9090/api/v1/query_range?query=<expr>\
-&start=<창 시작 epoch>&end=<창 끝 epoch>&step=30'"
-
+```sh
 # 활성 회차 수 변동이 여기 계단으로 보인다. step은 계단을 놓치지 않을 만큼 잘게.
-max_over_time(scrape_samples_scraped{job="api"}[30s])
+promq query_range 'max_over_time(scrape_samples_scraped{job="api"}[30s])' \
+  "start=<창 시작 epoch>" "end=<창 끝 epoch>" "step=30"
 
 # 타임아웃 초과가 구간에 고르게 퍼졌는지, 한곳에 몰렸는지도 같은 방식으로 본다.
 # 몰려 있으면 그 시각에 무슨 일이 있었는지를 따로 봐야 한다(CPU·GC·회차 종료).
-sum_over_time((scrape_duration_seconds{job="api"} > bool 0.9)[1m:1s])
+promq query_range 'sum_over_time((scrape_duration_seconds{job="api"} > bool 0.9)[1m:1s])' \
+  "start=<창 시작 epoch>" "end=<창 끝 epoch>" "step=60"
 ```
 
 ### 두 지표를 함께 본다
