@@ -30,6 +30,7 @@ import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -72,6 +73,7 @@ class AdminObservabilityConfigTest {
                     CustomerOutcomeCalculator.class,
                     StockRiskCalculator.class,
                     CampaignOverviewCalculator.class,
+                    CampaignPreparationCalculator.class,
                     ConsistencyActionCalculator.class,
                     OperationActionCalculator.class,
                     OverviewStatusCalculator.class)

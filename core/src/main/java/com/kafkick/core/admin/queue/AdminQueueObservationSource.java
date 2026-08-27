@@ -17,7 +17,7 @@ public interface AdminQueueObservationSource {
      * 정확히 하나의 관측값을 포함해야 합니다. 호출자는 이 계약이 깨진 응답을 전체값으로 사용하지
      * 않습니다.</p>
      *
-     * @param couponIds 중복 없는 양수 쿠폰 ID 모집단
+     * @param couponIds 중복 없는 양수 회차 ID 모집단
      * @param windowStart 입장 완료 수 집계 시작 시각
      * @param windowEnd 입장 완료 수 집계 종료 시각
      * @param snapshotAt 요청 전체가 공유하는 기준 시각
@@ -51,7 +51,7 @@ public interface AdminQueueObservationSource {
         Set<Long> distinctIds = new LinkedHashSet<>();
         for (Long couponId : requestedIds) {
             if (couponId == null || couponId <= 0L || !distinctIds.add(couponId)) {
-                throw new IllegalArgumentException("couponIds는 중복 없는 양수 ID여야 합니다.");
+                throw new IllegalArgumentException("couponIds는 중복 없는 양수 회차 ID여야 합니다.");
             }
         }
         return requestedIds;

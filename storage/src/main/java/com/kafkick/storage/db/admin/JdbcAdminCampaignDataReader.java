@@ -20,13 +20,13 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
-import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.observation.SourceStatus;
@@ -42,6 +42,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             SELECT c.id, c.name, b.name AS brand_name, c.status,
                    c.open_at, c.close_at,
                    c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
+                   c.data_grant_mb,
                    c.valid_days, c.eligible_grades_mask,
                    s.total_quantity, s.active_count, s.updated_at
               FROM coupons c
@@ -54,6 +55,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             SELECT c.id, c.name, b.name AS brand_name, c.status,
                    c.open_at, c.close_at,
                    c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
+                   c.data_grant_mb,
                    c.valid_days, c.eligible_grades_mask,
                    s.total_quantity, s.active_count, s.updated_at
               FROM coupons c
@@ -330,17 +332,25 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         }
         try {
             CouponPolicyType policyType = CouponPolicyType.valueOf(row.policyType());
+            // 각 정책은 자기 전용 혜택 필드만 값이 있어야 준비된 설정입니다.
             return switch (policyType) {
                 case PERCENT_CAPPED -> row.discountRate() != null
                         && row.discountRate() >= 1
                         && row.discountRate() <= 100
                         && row.maxDiscountAmount() != null
                         && row.maxDiscountAmount() > 0
-                        && row.discountAmount() == null;
+                        && row.discountAmount() == null
+                        && row.dataGrantMb() == null;
                 case FIXED_AMOUNT -> row.discountAmount() != null
                         && row.discountAmount() > 0
                         && row.discountRate() == null
-                        && row.maxDiscountAmount() == null;
+                        && row.maxDiscountAmount() == null
+                        && row.dataGrantMb() == null;
+                case DATA_GRANT -> row.dataGrantMb() != null
+                        && row.dataGrantMb() > 0
+                        && row.discountRate() == null
+                        && row.maxDiscountAmount() == null
+                        && row.discountAmount() == null;
             };
         } catch (IllegalArgumentException exception) {
             return false;
@@ -359,6 +369,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 resultSet.getObject("discount_rate", Integer.class),
                 resultSet.getObject("max_discount_amount", Integer.class),
                 resultSet.getObject("discount_amount", Integer.class),
+                resultSet.getObject("data_grant_mb", Integer.class),
                 resultSet.getObject("valid_days", Integer.class),
                 resultSet.getObject("eligible_grades_mask", Integer.class),
                 resultSet.getObject("total_quantity", Long.class),
@@ -420,6 +431,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             Integer discountRate,
             Integer maxDiscountAmount,
             Integer discountAmount,
+            Integer dataGrantMb,
             Integer validDays,
             Integer eligibleGradesMask,
             Long totalQuantity,
