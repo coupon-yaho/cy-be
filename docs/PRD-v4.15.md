@@ -1407,7 +1407,6 @@ varchar policy_type
 int discount_rate
 int max_discount_amount
 int discount_amount
-int data_grant_mb
 int valid_days
 tinyint nth_week
 varchar day_of_week
@@ -1505,15 +1504,13 @@ bigint coupon_id
 ``
 | name | VARCHAR(100) | "신학기 요금제 할인" |
 ````````
-| policy_type | VARCHAR(20) | PERCENT_CAPPED / FIXED_AMOUNT / DATA_GRANT |
+| policy_type | VARCHAR(20) | PERCENT_CAPPED / FIXED_AMOUNT |
 ``
 | discount_rate | INT | 정률 전용. 20 = 20% |
 ``
 | max_discount_amount | INT | 정률 상한. 20000 |
 ``
 | discount_amount | INT | 정액 전용. 5000 |
-``
-| data_grant_mb | INT | 데이터 전용. 1024 |
 ``
 | min_order_amount | INT | 최소 주문 금액 |
 ``
