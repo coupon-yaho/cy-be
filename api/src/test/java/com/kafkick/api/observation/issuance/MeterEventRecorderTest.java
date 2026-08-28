@@ -74,7 +74,7 @@ class MeterEventRecorderTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         recorder(registry);
 
-        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(14);
+        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(19);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters())
                 .allMatch(counter -> counter.getId().getTag("coupon_id") == null);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters().stream()

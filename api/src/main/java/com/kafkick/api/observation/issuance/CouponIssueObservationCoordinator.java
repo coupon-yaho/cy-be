@@ -6,7 +6,12 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.ObjectProvider;
 
+import com.kafkick.api.observation.ObservationIssuanceProperties;
+import com.kafkick.api.support.RetryAfterException;
+import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponIssueV2ErrorCode;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyKeys;
 import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
@@ -14,7 +19,9 @@ import com.kafkick.core.coupon.v2.CouponIssuanceRouter;
 import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
 import com.kafkick.core.coupon.v2.V2CouponIssueResult;
 import com.kafkick.core.coupon.v2.V2CouponIssueService;
+import com.kafkick.core.coupon.v2.port.ClaimOutcome;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.IssuanceFlowEvent;
@@ -31,6 +38,8 @@ public final class CouponIssueObservationCoordinator {
     private final CouponIssueObservationDependencyMapper dependencyMapper;
     private final CouponIssuanceRouter router;
     private final ObjectProvider<V2CouponIssueService> v2Services;
+    private final V2IssuanceOutcomeMeters v2Meters;
+    private final ObservationIssuanceProperties issuanceProperties;
     private final TimeProvider timeProvider;
 
     /**
@@ -42,6 +51,8 @@ public final class CouponIssueObservationCoordinator {
      * @param dependencyMapper 발급 실패 관측 분류기
      * @param router 회차별 발급 엔진 라우터
      * @param v2Services 게이트가 있을 때만 존재하는 v2 발급 서비스
+     * @param v2Meters v2 중복·재시도 카운터 세 종
+     * @param issuanceProperties {@code Retry-After} 초를 포함한 발급 관측 임계치
      * @param timeProvider 발급 시각 공급자
      */
     public CouponIssueObservationCoordinator(
@@ -51,6 +62,8 @@ public final class CouponIssueObservationCoordinator {
             CouponIssueObservationDependencyMapper dependencyMapper,
             CouponIssuanceRouter router,
             ObjectProvider<V2CouponIssueService> v2Services,
+            V2IssuanceOutcomeMeters v2Meters,
+            ObservationIssuanceProperties issuanceProperties,
             TimeProvider timeProvider
     ) {
         this.operationExecutionService = Objects.requireNonNull(operationExecutionService);
@@ -59,6 +72,8 @@ public final class CouponIssueObservationCoordinator {
         this.dependencyMapper = Objects.requireNonNull(dependencyMapper);
         this.router = Objects.requireNonNull(router);
         this.v2Services = Objects.requireNonNull(v2Services);
+        this.v2Meters = Objects.requireNonNull(v2Meters);
+        this.issuanceProperties = Objects.requireNonNull(issuanceProperties);
         this.timeProvider = Objects.requireNonNull(timeProvider);
     }
 
@@ -133,6 +148,13 @@ public final class CouponIssueObservationCoordinator {
     /**
      * V2 회차의 발급을 실행합니다.
      *
+     * <p><b>멱등키 형식을 게이트보다 먼저 봅니다.</b> 재구성은 원래 멱등키를 복원할 수 없어
+     * {@code issued} 값에 마커 문자열을 적어 두는데(설계 §4.3 반려표), 그 값은 문서에 공개돼
+     * 있습니다. 클라이언트가 그대로 보내면 Lua 의 멱등키 전체 비교가 <b>일치</b>로 판정해
+     * {@code -6}(완료된 재시도)이 되고, 그러면 DB 에 없는 멱등 레코드를 찾다가 500 이 됩니다.
+     * UUID v4 허용목록이라 <b>마커 값을 무엇으로 바꾸든 같은 자리에서 막힙니다</b> — 값을
+     * 감추는 것은 해법이 아닙니다. Lua 의 인자 가드는 그대로 최종 방어선으로 남습니다.
+     *
      * <p>V2 서비스 빈은 게이트({@code IssuanceGatePort})가 있을 때만 만들어집니다. 회차는
      * V2 인데 게이트가 없는 구성이면 <b>요청을 즉시 중단</b>합니다 — v1 으로 대신 흘리면
      * 그 회차의 재고 권한이 Redis 와 DB 로 갈려 초과 발급이 납니다.
@@ -147,6 +169,11 @@ public final class CouponIssueObservationCoordinator {
             String idempotencyKey,
             CouponRoundIssuanceDefinition definition
     ) {
+        // v1 은 CouponOperationExecutionService 첫 줄에서 이 검증을 지난다. v2 는 그 실행기를
+        // 안 거치므로 여기가 같은 자리다. 게이트보다 먼저 서야 한다 — 뒤에 두면 이미 선점이
+        // 성립한 뒤라 되돌릴 것이 생긴다.
+        IdempotencyKeys.validate(
+                idempotencyKey, CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST);
         ObservationScope observation = openObservation(
                 requestId, memberId, couponRoundId, membershipGrade,
                 definition.engineVersion());
@@ -160,14 +187,19 @@ public final class CouponIssueObservationCoordinator {
                             idempotencyKey, timeProvider.instant()),
                     definition
             );
-            if (execution.claimResult().outcome().isClaimed()) {
+            ClaimOutcome outcome = execution.claimResult().outcome();
+            if (outcome.isClaimed()) {
                 observation.recordClaimedAttempt();
             } else if (execution.replayed()) {
                 observation.recordReplayAttempt();
+                v2Meters.recordReplayDone();
+            } else {
+                countRejection(outcome);
+                throw rejection(outcome);
             }
             CouponIssueResult result = execution.issueResult()
                     .orElseThrow(() -> new IllegalStateException(
-                            "V2 거절 결과의 HTTP 매핑은 S5에서 처리해야 합니다."));
+                            "선점·replay 결과에 발급 결과가 없습니다: " + outcome));
             observation.completeIssued(result);
             return result;
         } catch (RuntimeException failure) {
@@ -176,6 +208,68 @@ public final class CouponIssueObservationCoordinator {
         } finally {
             observation.finish();
         }
+    }
+
+    /**
+     * 거절을 카운터에 셉니다. 세는 자리를 매핑에서 떼어 놓았습니다 — 예외를 만드는 메서드가
+     * 부수효과를 내면, 나중에 그 메서드를 로그·테스트에서 한 번 더 부르는 순간 요청 하나가
+     * 두 번 세어집니다. {@code dupPerMember} 는 1인1매 방어의 발동 빈도라 부풀면 오탐 경보가
+     * 되고, 컴파일도 테스트도 그때 깨지지 않습니다.
+     *
+     * @param outcome 선점 거절 결과
+     */
+    private void countRejection(ClaimOutcome outcome) {
+        if (outcome == ClaimOutcome.DUP_PER_MEMBER) {
+            v2Meters.recordDupPerMember();
+        } else if (outcome == ClaimOutcome.REPLAY_PENDING) {
+            v2Meters.recordReplayPending();
+        }
+    }
+
+    /**
+     * 게이트 거절을 그 거절만의 HTTP 응답으로 옮깁니다.
+     *
+     * <p><b>{@code DUP_PER_MEMBER}·{@code REPLAY_DONE}·{@code REPLAY_PENDING} 을 절대
+     * 뭉치지 않습니다.</b> 멱등이 있는 이유가 재시도를 안전하게 만드는 것인데, 응답을 못 받고
+     * 다시 누른 클라이언트에게 "이미 발급받으셨습니다" 를 주면 그건 멱등이 아니라 고장입니다.
+     * 이건 클라이언트가 이미 본 응답이라 나중에 리팩토링으로 못 고칩니다.
+     *
+     * <p><b>파손({@code CORRUPT_VALUE})에서 회수를 부르지 않습니다.</b> 발급이 도는 중의 회수는
+     * 살아 있는 선점을 지울 수 있어, 게이트가 닫힌 재구성 절차에서만 돕니다(문서 13).
+     *
+     * <p>{@code default} 절이 없습니다 — 게이트 결과가 늘면 여기서 컴파일이 깨집니다. 조용히
+     * 한 덩어리로 접히면 새 반환 코드가 {@code UNMAPPED} 로 관제에 도착합니다.
+     *
+     * <p><b>부수효과가 없습니다.</b> 계수는 {@link #countRejection(ClaimOutcome)} 이 합니다.
+     *
+     * @param outcome 선점 거절 결과
+     * @return 그 거절에 대응하는 업무 예외
+     */
+    private BusinessException rejection(ClaimOutcome outcome) {
+        return switch (outcome) {
+            case CLOSED -> new BusinessException(CouponIssueErrorCode.CAMPAIGN_CLOSED);
+            case NOT_OPEN -> new BusinessException(CouponIssueErrorCode.NOT_OPENED);
+            case GRADE_NOT_ALLOWED ->
+                    new BusinessException(CouponIssueErrorCode.GRADE_NOT_ELIGIBLE);
+            case DUP_PER_MEMBER -> new BusinessException(CouponIssueErrorCode.ALREADY_ISSUED);
+            case SOLD_OUT -> new BusinessException(CouponIssueErrorCode.SOLD_OUT);
+            // 폴링하지 않는다. 다시 오면 대개 완료라 replay 로 갈린다.
+            case REPLAY_PENDING -> new RetryAfterException(
+                    CouponIssueV2ErrorCode.REPLAY_PENDING,
+                    issuanceProperties.replayPendingRetryAfterSeconds());
+            case CORRUPT_VALUE -> new BusinessException(CouponIssueV2ErrorCode.VALUE_CORRUPT);
+            case GATE_NOT_READY -> new RetryAfterException(
+                    CouponIssueV2ErrorCode.GATE_NOT_READY,
+                    issuanceProperties.gateNotReadyRetryAfterSeconds());
+            case BAD_ARGUMENT -> new BusinessException(CouponIssueV2ErrorCode.BAD_ARGUMENT);
+            // 기다려서 풀리지 않는다. Retry-After 를 붙이면 같은 실패가 되돌아온다.
+            case COUNTER_UNREADABLE ->
+                    new BusinessException(CouponIssueV2ErrorCode.COUNTER_UNREADABLE);
+            case CLAIMED, REPLAY_DONE -> {
+                throw new IllegalStateException(
+                        "거절이 아닌 결과가 거절 매핑에 도달했습니다: " + outcome);
+            }
+        };
     }
 
     /** 관측 Context와 Session을 만들지 못하면 무동작 요청 범위로 대체합니다. */

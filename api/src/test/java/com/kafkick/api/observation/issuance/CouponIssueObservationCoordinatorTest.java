@@ -8,6 +8,10 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
+import com.kafkick.api.observation.ObservationIssuanceProperties;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -88,6 +92,8 @@ class CouponIssueObservationCoordinatorTest {
                 new CouponIssueObservationDependencyMapper(),
                 v1Router(),
                 noV2Service(),
+                new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new ObservationIssuanceProperties(null, "api-1", null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
         context = new IssuanceFlowEvent.Ctx(
@@ -644,6 +650,8 @@ class CouponIssueObservationCoordinatorTest {
                 mapper,
                 v1Router(),
                 noV2Service(),
+                new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new ObservationIssuanceProperties(null, "api-1", null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
     }
@@ -688,6 +696,8 @@ class CouponIssueObservationCoordinatorTest {
                         new CouponIssueObservationDependencyMapper(),
                         v1Router(),
                         noV2Service(),
+                        new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                        new ObservationIssuanceProperties(null, "api-1", null, null),
                         timeProvider
                 );
 

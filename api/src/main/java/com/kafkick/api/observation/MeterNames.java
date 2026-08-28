@@ -26,6 +26,11 @@ public final class MeterNames {
             "app.issuance.event.last.success.epoch";
     public static final String QUEUE_EVENT_LAST_ADMITTED_EPOCH =
             "app.queue.event.last.admitted.epoch";
+    // ── v2 발급의 중복·재시도 카운터. 셋을 합치지 않는다(문서 04) ──────────────
+    public static final String ISSUANCE_V2_DUP_PER_MEMBER = "app.issuance.v2.dup.per.member";
+    public static final String ISSUANCE_V2_REPLAY_DONE = "app.issuance.v2.replay.done";
+    public static final String ISSUANCE_V2_REPLAY_PENDING = "app.issuance.v2.replay.pending";
+
     public static final String CAMPAIGN_LIMIT_EXCEEDED =
             "app.observation.campaign.limit.exceeded";
 

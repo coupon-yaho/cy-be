@@ -187,10 +187,16 @@ class AdminOverviewContractTest {
                 .doesNotContain("issuanceInquiries", "issuanceHistories", "notificationSummary", "events");
     }
 
-    /** HTML의 O3 결과 구분이 축약되거나 임의 코드가 추가되는 회귀를 방지합니다. */
+    /**
+     * HTML의 O3 결과 구분이 축약되거나 임의 코드가 추가되는 회귀를 방지합니다.
+     *
+     * <p>{@code RETRY_IN_PROGRESS} 는 v2 가 만든 새 고객 결과다 — v1 은 이 자리에서 폴링하며
+     * 기다려 클라이언트에게 이 상태가 보이지 않았다. 기존 7종의 이름과 순서는 그대로 두고
+     * 끝에 붙였다: 선언 순서가 화면 행 순서라 중간에 넣으면 기존 행이 밀린다.
+     */
     @Test
-    @DisplayName("O3 고객 결과 코드는 확정된 7종만 제공한다")
-    void customerOutcomeTypeKeepsExactlySevenConfirmedValues() {
+    @DisplayName("O3 고객 결과 코드는 확정된 8종만 제공한다")
+    void customerOutcomeTypeKeepsExactlyEightConfirmedValues() {
         assertThat(Arrays.stream(AdminOverviewSnapshot.CustomerOutcomeType.values())
                 .map(Enum::name))
                 .containsExactly(
@@ -200,7 +206,8 @@ class AdminOverviewContractTest {
                         "STOCK_EXHAUSTED",
                         "INELIGIBLE",
                         "ENTRY_EXPIRED",
-                        "SYSTEM_FAILURE");
+                        "SYSTEM_FAILURE",
+                        "RETRY_IN_PROGRESS");
     }
 
     /** O3 비율의 0~1 계약이 잘못된 Adapter 값이나 NaN을 HTTP 계층까지 전달하지 않도록 검증합니다. */

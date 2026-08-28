@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -442,13 +443,25 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         }
     }
 
+    /**
+     * O3 가 해석할 줄 아는 raw outcome label 집합입니다.
+     *
+     * <p>계측이 내보내는 라벨과 같은 집합이어야 합니다 — 한쪽만 늘면 컴파일도 기존 테스트도
+     * 안 깨진 채로 이 영역이 통째로 죽습니다. {@code OutcomeLabelCoverageContractTest} 가 봅니다.
+     *
+     * @return 알려진 raw outcome label
+     */
+    static java.util.Set<String> knownOutcomeLabels() {
+        return OUTCOME_TYPES.keySet();
+    }
+
     /** O3 벡터가 정의된 raw label만 포함하는지 확인해 새 label을 기존 결과로 오인하지 않습니다. */
     private static boolean onlyKnownOutcomeLabels(List<PromSample> samples) {
         return samples.stream().allMatch(sample ->
                 OUTCOME_TYPES.containsKey(sample.label(OverviewPrometheusContract.OUTCOME)));
     }
 
-    /** snapshot inventory가 정확히 14개 known label의 존재를 증명하는지 확인합니다. */
+    /** snapshot inventory가 known label 전부의 존재를 증명하는지 확인합니다. */
     private static Optional<Map<String, Boolean>> completeOutcomeInventory(List<PromSample> samples) {
         if (samples.size() != OUTCOME_TYPES.size()) {
             return Optional.empty();
@@ -467,7 +480,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
                 ? Optional.of(Map.copyOf(labels)) : Optional.empty();
     }
 
-    /** 정확히 14개 raw label의 유한한 비음수 increase를 double Map으로 변환합니다. */
+    /** known label 전부의 유한한 비음수 increase를 double Map으로 변환합니다. */
     private static Optional<Map<String, Double>> completeOutcomeIncreases(List<PromSample> samples) {
         if (samples.size() != OUTCOME_TYPES.size()) {
             return Optional.empty();
@@ -750,7 +763,19 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         types.put("TEMPORARILY_UNAVAILABLE", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
         types.put("INTERNAL_ERROR", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
         types.put("UNMAPPED", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
-        return Map.copyOf(types);
+        // v2 게이트의 사고 넷. 넷의 공통점은 고객이 아무것도 못 받았다는 것 하나다 —
+        // 그래서 SYSTEM_FAILURE 로 집계한다. 재시도로 풀리는지는 별개의 축이고 넷이 갈린다.
+        types.put("VALUE_CORRUPT", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
+        // -9 만 기다리면 풀린다. 재구성 창이라 Retry-After 를 달아 내보낸다(CouponIssueV2ErrorCode).
+        // 창 안에서는 정상이고 창 밖에서 0이 아니면 이상이라, 이 값만 보고 즉시 개입을 판단하면 안 된다.
+        types.put("GATE_NOT_READY", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
+        types.put("BAD_ARGUMENT", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
+        types.put("COUNTER_UNREADABLE", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
+        // 멱등 재시도는 장애가 아니다. 실패율 셀렉터에서도 실패로 세지 않는다.
+        types.put("REPLAY_IN_PROGRESS", AdminOverviewSnapshot.CustomerOutcomeType.RETRY_IN_PROGRESS);
+        // Map.copyOf 가 아니다. 순회 순서가 불안정하면 이 집합을 쓰는 쪽이 회차마다 다른
+        // 순서를 보고, 그 차이는 예외 없이 값으로만 드러난다.
+        return Collections.unmodifiableMap(types);
     }
 
     /** 캠페인과 stage의 grouped 결과 키입니다. */

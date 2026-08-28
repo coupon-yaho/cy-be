@@ -481,7 +481,19 @@ public record AdminOverviewSnapshot(
         STOCK_EXHAUSTED,
         INELIGIBLE,
         ENTRY_EXPIRED,
-        SYSTEM_FAILURE
+        SYSTEM_FAILURE,
+        /**
+         * 같은 멱등키의 요청이 아직 처리 중이라 결과가 아직 없다. v2 가 만든 결과다 — v1 은
+         * 이 자리에서 폴링하며 기다려 클라이언트에게 이 상태가 보이지 않았다.
+         *
+         * <p><b>{@link #ALREADY_ISSUED} 로 접지 않는다.</b> 그건 "다른 시도가 이미 그 회원으로
+         * 받았다" 는 거절이고 이건 다시 보내면 대개 쿠폰을 받는다 — 뭉치면 중복 급증이 재시도
+         * 물결에 묻힌다. {@link #SYSTEM_FAILURE} 도 아니다: 멱등이 설계대로 동작한 결과다.
+         *
+         * <p><b>기존 7종의 이름과 선언 순서를 그대로 두고 끝에 붙였다.</b> 선언 순서가 화면의
+         * 행 순서라 중간에 넣으면 기존 행이 밀린다.
+         */
+        RETRY_IN_PROGRESS
     }
 
     /** 캠페인별 고객 영향의 범위를 제한된 서버 코드로 표현합니다. */
