@@ -763,8 +763,11 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         types.put("TEMPORARILY_UNAVAILABLE", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
         types.put("INTERNAL_ERROR", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
         types.put("UNMAPPED", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
-        // v2 게이트의 사고 넷. 고객은 아무것도 못 받았고 재시도로 풀리지 않는다.
+        // v2 게이트의 사고 넷. 넷의 공통점은 고객이 아무것도 못 받았다는 것 하나다 —
+        // 그래서 SYSTEM_FAILURE 로 집계한다. 재시도로 풀리는지는 별개의 축이고 넷이 갈린다.
         types.put("VALUE_CORRUPT", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
+        // -9 만 기다리면 풀린다. 재구성 창이라 Retry-After 를 달아 내보낸다(CouponIssueV2ErrorCode).
+        // 창 안에서는 정상이고 창 밖에서 0이 아니면 이상이라, 이 값만 보고 즉시 개입을 판단하면 안 된다.
         types.put("GATE_NOT_READY", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
         types.put("BAD_ARGUMENT", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
         types.put("COUNTER_UNREADABLE", AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE);
