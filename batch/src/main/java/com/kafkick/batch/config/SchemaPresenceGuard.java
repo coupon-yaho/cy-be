@@ -2,9 +2,12 @@
 package com.kafkick.batch.config;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.Ordered;
@@ -14,6 +17,8 @@ import org.springframework.stereotype.Component;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * <b>batch 는 스키마를 만들지 않는다. 그런데 없어도 기동이 성공한다 — 그게 문제다.</b>
@@ -41,6 +46,10 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
  * {@code FlywayMigrationInitializer} 보다 확실히 뒤에 온다. {@code InitializingBean} 은 그
  * 순서가 보장되지 않는다 — {@code docs/11} 이 이 가드를 예약하면서 근거까지 적어 둔 결정이고,
  * 여기서는 그것을 그대로 따른다.
+ *
+ * <p><b>축이 셋이다.</b> 테이블 · 핵심 컬럼 · 성능 인덱스. 앞 둘은 없으면 잡이 SQL
+ * 에러로 죽지만 <b>셋째는 없어도 기동과 동작이 통과한다</b> — 조용히 느려질 뿐이라
+ * 늦게, 그리고 원인을 안 가리키며 드러난다(CY-686 이 더했다).
  *
  * <p><b>이 가드가 보는 것은 "테이블이 있나" 지 "스키마가 최신인가" 가 아니다.</b> 목록을
  * 넓히면 스키마가 자랄 때마다 기동이 막혀 Flyway 의 몫을 뺏는다. 그래서 배치가 없으면
@@ -78,16 +87,83 @@ public class SchemaPresenceGuard implements ApplicationRunner {
     private static final String META_PREFIX = "BATCH_";
 
     /**
-     * <b>인덱스 둘까지 말한다.</b> 이 가드는 테이블 존재만 보므로 인덱스 누락은 못 잡는다 —
-     * 그래서 메시지가 그 사실과 목록을 함께 져야 사람이 절차에서 빠뜨리지 않는다.
+     * <b>메타 마이그레이션 셋 전체.</b> {@link #run} 이 테이블·컬럼·인덱스 세 축을 다 보므로
+     * (CY-686 이 셋째를 더했다), 안내가 인덱스 둘까지 함께 말해야 한 번에 절차가 끝난다 —
+     * 테이블만 부으면 그 자리에서 셋째 축이 다시 거절한다.
      */
     private static final String META_MIGRATIONS =
             "V11__batch_metadata.sql · V2026082513__ix_batch_job_execution_lookup.sql · V2026082514__ix_batch_job_execution_history.sql";
 
+    /**
+     * <b>인덱스마다 파일과 증상이 다르다.</b> 한 문장으로 접으면 사람이 엉뚱한 것을 본다 —
+     * 이 클래스가 {@link #message} 에서 이미 못 박은 규율이다. {@code docs/14} 가 두 증상을
+     * 갈라 놨다: 앞엣것은 게이지가 {@code NaN} 이 되고, 뒤엣것은 <b>게이지는 멀쩡한 채</b>
+     * {@code CleanupRunningTooLong} 으로만 뜬다.
+     */
+    private static final Map<String, String> INDEX_REMEDY = Map.of(
+            "IX_JOB_EXEC_STATUS_END",
+            "V2026082513__ix_batch_job_execution_lookup.sql — 없으면 되읽기가 "
+                    + "STATUS·END_TIME 을 전체 스캔해 데드라인을 넘기고 게이지가 NaN 이 됩니다",
+            "IX_JOB_EXEC_CREATE_TIME",
+            "V2026082514__ix_batch_job_execution_history.sql — 없으면 정리 잡이 "
+                    + "CREATE_TIME 을 매 청크 전체 스캔합니다. 게이지는 멀쩡하고 "
+                    + "CleanupRunningTooLong 으로만 뜹니다");
+
+    /**
+     * <b>인덱스 이름만 떼어 처방을 찾는다.</b> 포트가 주는 값은
+     * {@code TABLE.INDEX(COL1,COL2)} 인데, <b>컬럼 튜플까지 키로 쓰면 결합이 부러진다</b> —
+     * 상수는 {@code storage} 에 있고 이 맵은 {@code batch} 에 있어 컴파일러가 안 묶어 준다
+     * ({@code batch → storage} 가 {@code runtimeOnly} 다). 인덱스 정의를 고치는 날 한쪽만
+     * 바뀌면 운영자가 조치 대신 빈 문자열을 받는다. 이름은 그 변경에 안 흔들린다.
+     */
+    private static String remedyFor(String qualified) {
+        int dot = qualified.indexOf('.');
+        int paren = qualified.indexOf('(');
+        String name = qualified.substring(dot + 1, paren < 0 ? qualified.length() : paren);
+        // **폴백에 파일 이름을 안 싣는다.** 셋을 다 대면 없는 인덱스 하나를 두고 파일
+        // 전부를 읽으라는 말이 되어, 인덱스별로 갈라 놓은 이유가 사라진다.
+        return INDEX_REMEDY.getOrDefault(name,
+                "이 인덱스의 처방이 등록돼 있지 않습니다 — INDEX_REMEDY 를 확인하십시오");
+    }
+
+    /** 거절을 끄는 손잡이. 기본은 켬 — 끄는 법은 거절 메시지가 직접 말한다. */
+    static final String REQUIRE_INDEXES = "batch.schema-guard.require-batch-indexes";
+
     private final VerificationRuleRepository rules;
 
-    public SchemaPresenceGuard(VerificationRuleRepository rules) {
+    private final boolean requireIndexes;
+
+    private final MeterRegistry registry;
+
+    /** 없는 인덱스 수. 게이지가 이 값을 읽는다 — 러너가 한 번만 도므로 필드에 남긴다. */
+    private volatile int missingIndexCount;
+
+    public SchemaPresenceGuard(VerificationRuleRepository rules,
+            @Value("${" + REQUIRE_INDEXES + ":true}") boolean requireIndexes,
+            MeterRegistry registry) {
         this.rules = rules;
+        this.requireIndexes = requireIndexes;
+        this.registry = registry;
+    }
+
+    /**
+     * <b>끈 상태를 지표로 낸다.</b> 이 저장소의 알림은 전부 Prometheus 지표 위에 서 있고
+     * Loki·promtail 이 없다 — 즉 <b>로그는 감시 수단이 아니다</b>({@code CleanupJobConfig} 의
+     * yield 주석이 같은 판단을 적어 뒀다). 거절을 끄고 띄운 상태가 ERROR 로그 한 줄로만
+     * 남으면, 며칠 뒤 {@code CleanupRunningTooLong} 을 보는 사람이 그 줄에 못 닿는다.
+     * 형제 {@code cy_coupon_round_scheduling_enabled} 와 같은 모양이다.
+     */
+    private void publish(int missing) {
+        this.missingIndexCount = missing;
+        if (registry == null) {
+            return;
+        }
+        Gauge.builder("cy_batch_schema_index_missing", this, self -> self.missingIndexCount)
+                .description("배치 메타 성능 인덱스 중 없는 것의 수 — 0 이 정상")
+                .register(registry);
+        Gauge.builder("cy_batch_schema_index_enforcement", () -> requireIndexes ? 1 : 0)
+                .description("인덱스 축 거절이 켜져 있는가 — 1 켜짐 · 0 꺼짐")
+                .register(registry);
     }
 
     @Override
@@ -111,7 +187,43 @@ public class SchemaPresenceGuard implements ApplicationRunner {
                             + "cy-seed 1f217b5 이전에 만든 검증용 셋입니다. Flyway 가 그 DB 에 "
                             + "닿지 않아 마이그레이션으로는 못 고칩니다. 데이터셋을 다시 만드십시오.");
         }
-        log.info("스키마 확인 완료 — 배치 핵심 테이블과 컬럼이 전부 있습니다. schema={}", schema);
+        // **셋째 축이다(CY-686).** 위 둘은 없으면 잡이 SQL 에러로 죽지만, 인덱스는
+        // 없어도 기동과 동작이 통과한다 — 되읽기가 데드라인을 넘겨 게이지가 NaN 이 되거나
+        // 정리 잡이 매 청크 전체 스캔을 하는 것으로만 드러나고, 둘 다 원인을 안 가리킨다.
+        //
+        // ⚠️ **거절에 탈출구를 둔다.** 앞 두 축과 달리 이 축은 **정확성이 아니라 성능**이다.
+        //    그런데 여기서 못 뜨면 같은 프로세스의 CouponRoundScheduler 도 안 돌아
+        //    open_at 이 지난 회차가 SCHEDULED 로 남고 **발급 문이 안 열린다** — 만료·정리도
+        //    함께 선다. 방어의 대가가 방어 대상보다 크면 안 되므로, 기본은 거절하되
+        //    푸는 법을 메시지가 직접 말한다.
+        List<String> missingIndexes = rules.missingCriticalIndexes();
+        publish(missingIndexes.size());
+        if (!missingIndexes.isEmpty()) {
+            String remedies = missingIndexes.stream()
+                    .map(name -> name + " → " + remedyFor(name))
+                    .collect(Collectors.joining(" / "));
+            if (!requireIndexes) {
+                log.error("배치 메타 인덱스가 없습니다 — 거절은 꺼져 있습니다({}=false). {}",
+                        REQUIRE_INDEXES, remedies);
+                // **여기서 끝낸다.** 아래 "전부 있습니다" 를 찍으면 바로 윗줄을 부정한다 —
+                // 기동 로그를 grep 으로 훑는 사람이 인덱스 축을 후보에서 뺀다.
+                log.warn("스키마 확인 완료 — 테이블·컬럼은 전부 있고 인덱스 검사는 "
+                        + "꺼져 있습니다. schema={}", schema);
+                return;
+            } else {
+                throw new BusinessException(VerificationErrorCode.SCHEMA_NOT_MIGRATED,
+                        "배치가 보는 스키마(" + schema + ")에 인덱스가 없습니다: " + remedies
+                                + ". 테이블과 컬럼은 전부 있으므로 메타 마이그레이션 셋 중 "
+                                + "인덱스만 빠진 것입니다 — 그 파일을 이 스키마에 부으십시오. "
+                                + "이름은 맞는데 걸린다면 컬럼 구성이 다른 것입니다(가드가 "
+                                + "선두 컬럼까지 봅니다). 지금 당장 띄워야 하면 환경변수 "
+                                + "SCHEMA_GUARD_REQUIRE_BATCH_INDEXES=false (또는 실행 인자 "
+                                + "--" + REQUIRE_INDEXES + "=false) 로 끌 수 있습니다 — "
+                                + "그 경우 관제 지표가 흐려지고 정리가 느려집니다.");
+            }
+        }
+        log.info("스키마 확인 완료 — 배치 핵심 테이블·컬럼·인덱스가 전부 있습니다. schema={}",
+                schema);
     }
 
     /**
@@ -138,9 +250,8 @@ public class SchemaPresenceGuard implements ApplicationRunner {
         if (onlyMeta) {
             return head + "데이터 테이블은 전부 있으므로 Spring Batch 메타 스키마만 빠진 것입니다 "
                     + "— 배치 메타 마이그레이션 셋(" + META_MIGRATIONS + ")을 이 스키마에 "
-                    + "부으십시오. 인덱스 둘은 이 가드가 못 봅니다 — 빠뜨려도 기동과 동작이 "
-                    + "통과하고, 되읽기가 데드라인을 넘겨 게이지가 NaN 이 되거나 정리 잡이 "
-                    + "매 청크 전체 스캔을 하는 것으로만 드러납니다(절차는 docs/14). "
+                    + "부으십시오. 인덱스 둘도 함께 부으십시오 — 테이블만 부으면 이 가드의 "
+                    + "셋째 축이 그 자리에서 다시 거절합니다(CY-686). "
                     + "cy-seed 의 ddl/ 로 만든 검증용 셋에는 BATCH_* 가 들어 있지 않습니다.";
         }
         return head + "마이그레이션 소유자는 api 입니다 — api 를 먼저 띄워 Flyway 를 끝내십시오. "

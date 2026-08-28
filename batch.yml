@@ -42,6 +42,14 @@ services:
       # 검증은 만료가 도는 중이면 거절하고, 만료는 검증이 도는 중이면 그 슬롯을 건너뛴다 —
       # true 로 띄운 채 검증을 트리거해도 그 실행이 크론에 물려 버려지지 않는다.
       BATCH_SCHEDULING_ENABLED: ${BATCH_SCHEDULING_ENABLED:-false}
+      # 배치 메타 성능 인덱스가 없을 때 기동을 거절할지(CY-686). 기본은 거절이다.
+      #
+      # ⚠️ **여기 안 적으면 손잡이가 안 닿는다.** Dockerfile 이 application.yml.example 을
+      #    사본으로 굽기 때문에 플레이스홀더는 이미지 안에 있는데, compose 는 environment 에
+      #    적힌 것만 넘긴다 — 안 적으면 항상 true 로 굳는다. ENTRYPOINT 에 command 도 없어
+      #    실행 인자로도 못 넣는다. 그런데 이 손잡이가 필요한 순간이 바로 이 경로다:
+      #    시연 중 인덱스를 빠뜨려 기동이 거절되면 배치가 통째로 안 떠 회차 전이까지 선다.
+      SCHEMA_GUARD_REQUIRE_BATCH_INDEXES: ${SCHEMA_GUARD_REQUIRE_BATCH_INDEXES:-true}
     # ports 가 없다. **업무 포트를 기본으로 안 내보낸다.**
     #
     # CY-368 이 그 포트에 admin 트리거(POST /api/v1/admin/verify)를 열었는데 인증이 없다 —

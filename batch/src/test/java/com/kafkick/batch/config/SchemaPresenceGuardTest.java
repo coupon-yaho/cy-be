@@ -7,6 +7,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -45,7 +49,7 @@ class SchemaPresenceGuardTest {
     @Test
     @DisplayName("테이블이 하나라도 없으면 기동을 죽인다")
     void refusesToStartWhenACoreTableIsMissing() {
-        SchemaPresenceGuard guard = new SchemaPresenceGuard(missing(List.of("verification_runs")));
+        SchemaPresenceGuard guard = new SchemaPresenceGuard(missing(List.of("verification_runs")), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         assertThatThrownBy(() -> guard.run(null))
                 .isInstanceOf(BusinessException.class)
@@ -72,7 +76,7 @@ class SchemaPresenceGuardTest {
                 "BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION", "BATCH_STEP_EXECUTION",
                 "BATCH_JOB_EXECUTION_PARAMS");
 
-        assertThatThrownBy(() -> new SchemaPresenceGuard(missing(all)).run(null))
+        assertThatThrownBy(() -> new SchemaPresenceGuard(missing(all), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).run(null))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(e.getMessage()).contains(all));
     }
@@ -89,7 +93,7 @@ class SchemaPresenceGuardTest {
     @DisplayName("메타만 없으면 V11__batch_metadata.sql 을 부으라고 한다 — api 재배포가 아니다")
     void tellsToApplyBatchMetadataWhenOnlyMetaIsMissing() {
         assertThatThrownBy(() -> new SchemaPresenceGuard(
-                missing(List.of("BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION"))).run(null))
+                missing(List.of("BATCH_JOB_INSTANCE", "BATCH_JOB_EXECUTION")), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).run(null))
                 .hasMessageContaining("V11__batch_metadata.sql")
                 .as("데이터 테이블은 멀쩡한데 api 를 다시 띄우게 하면 안 된다")
                 .hasMessageNotContaining("api 를 먼저 띄워");
@@ -104,7 +108,7 @@ class SchemaPresenceGuardTest {
     @DisplayName("접속 스키마가 없으면 URL 문제라고 말한다")
     void tellsAboutTheUrlWhenThereIsNoSchema() {
         assertThatThrownBy(() -> new SchemaPresenceGuard(
-                stub(null, List.of("issuances", "verification_runs"))).run(null))
+                stub(null, List.of("issuances", "verification_runs")), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).run(null))
                 .hasMessageContaining("DATABASE() 가 NULL")
                 .as("마이그레이션을 다시 하라고 시키면 원인에서 멀어진다")
                 .hasMessageNotContaining("Flyway");
@@ -114,7 +118,7 @@ class SchemaPresenceGuardTest {
     @DisplayName("메시지에 접속 스키마 이름이 있다 — 어디를 보고 있는지가 첫 질문이다")
     void namesTheSchemaItIsLookingAt() {
         assertThatThrownBy(() -> new SchemaPresenceGuard(
-                stub("coupon_clean", List.of("issuances"))).run(null))
+                stub("coupon_clean", List.of("issuances")), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).run(null))
                 .hasMessageContaining("coupon_clean");
     }
 
@@ -127,7 +131,7 @@ class SchemaPresenceGuardTest {
     @DisplayName("테이블은 다 있고 컬럼만 없으면 재생성하라고 한다")
     void tellsToRebuildTheDatasetWhenOnlyAColumnIsMissing() {
         assertThatThrownBy(() -> new SchemaPresenceGuard(
-                stub("coupon_clean", List.of(), List.of("verification_runs.origin"))).run(null))
+                stub("coupon_clean", List.of(), List.of("verification_runs.origin")), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).run(null))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("verification_runs.origin")
                 .as("테이블이 멀쩡한데 배포 순서를 의심하게 하면 안 된다")
@@ -138,7 +142,7 @@ class SchemaPresenceGuardTest {
     @Test
     @DisplayName("전부 있으면 통과한다")
     void passesWhenNothingIsMissing() {
-        assertThatCode(() -> new SchemaPresenceGuard(missing(List.of())).run(null))
+        assertThatCode(() -> new SchemaPresenceGuard(missing(List.of()), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()).run(null))
                 .doesNotThrowAnyException();
     }
 
@@ -152,11 +156,74 @@ class SchemaPresenceGuardTest {
     }
 
     /**
-     * 가드가 보는 두 축만 답하는 최소 스텁이다. 나머지 메서드를 부르면
+     * 가드가 보는 세 축만 답하는 최소 스텁이다. 나머지 메서드를 부르면
      * {@code UnsupportedOperationException} 이라, 가드가 조용히 다른 축을 보게 되면 드러난다.
      */
     private static VerificationRuleRepository missing(List<String> tables) {
         return stub("app", tables, List.of());
+    }
+
+    /**
+     * <b>탈출구.</b> 이 축은 정확성이 아니라 성능이다. 그런데 여기서 못 뜨면 같은 프로세스의
+     * {@code CouponRoundScheduler} 도 안 돌아 <b>발급 문이 안 열린다</b> — 방어의 대가가
+     * 방어 대상보다 크면 안 되므로 끌 수 있어야 하고, 끈 상태는 조용하면 안 된다.
+     */
+    @Test
+    @DisplayName("거절을 끄면 뜬다 — 대신 ERROR 로 남는다")
+    void startsWhenIndexEnforcementIsOff() {
+        SchemaPresenceGuard guard = new SchemaPresenceGuard(
+                stub("coupon_clean", List.of(), List.of(),
+                        List.of("BATCH_JOB_EXECUTION.IX_JOB_EXEC_CREATE_TIME(CREATE_TIME)")),
+                false, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(SchemaPresenceGuard.class);
+        ListAppender<ILoggingEvent> events = new ListAppender<>();
+        events.start();
+        logger.addAppender(events);
+        try {
+            assertThatCode(() -> guard.run(null)).doesNotThrowAnyException();
+
+            assertThat(events.list)
+                    .as("끈 상태의 유일한 신호다 — 이게 없으면 인덱스 없이 뜬 것을 아무도 "
+                            + "모른다. log.debug 로 낮추는 리팩터가 여기서 죽어야 한다")
+                    .anySatisfy(event -> {
+                        assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                        assertThat(event.getFormattedMessage())
+                                .contains(SchemaPresenceGuard.REQUIRE_INDEXES)
+                                .contains("IX_JOB_EXEC_CREATE_TIME");
+                    });
+            assertThat(events.list)
+                    .as("'전부 있습니다' 를 찍으면 바로 윗줄을 부정한다")
+                    .noneSatisfy(event -> assertThat(event.getFormattedMessage())
+                            .contains("인덱스가 전부 있습니다"));
+        } finally {
+            logger.detachAppender(events);
+        }
+    }
+
+    /**
+     * <b>셋째 축.</b> 테이블·컬럼과 달리 인덱스는 없어도 기동과 동작이 통과한다 —
+     * 되읽기가 데드라인을 넘겨 게이지가 {@code NaN} 이 되거나 정리 잡이 매 청크 전체
+     * 스캔을 하는 것으로만, 그것도 원인을 안 가리키며 드러난다. 그래서 여기서 거절한다.
+     */
+    @Test
+    @DisplayName("인덱스만 없어도 거절한다 — 조용히 느린 것을 기동에서 잡는다")
+    void rejectsWhenOnlyIndexesAreMissing() {
+        SchemaPresenceGuard guard = new SchemaPresenceGuard(
+                stub("coupon_clean", List.of(), List.of(),
+                        List.of("BATCH_JOB_EXECUTION.IX_JOB_EXEC_STATUS_END(STATUS,END_TIME)")), true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+
+        assertThatThrownBy(() -> guard.run(null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("IX_JOB_EXEC_STATUS_END")
+                .hasMessageContaining("V2026082513__ix_batch_job_execution_lookup.sql")
+                .as("없는 것 하나만 말해야 한다 — 둘 다 말하면 인덱스별로 가른 이유가 사라진다")
+                .hasMessageNotContaining("V2026082514__ix_batch_job_execution_history.sql")
+                .as("환경변수 이름을 안 말하면 compose 에서 손잡이를 못 찾는다")
+                .hasMessageContaining("SCHEMA_GUARD_REQUIRE_BATCH_INDEXES=false")
+                .as("테이블·컬럼이 멀쩡하다는 것을 말해야 사람이 재배포로 시간을 안 쓴다")
+                .hasMessageContaining("테이블과 컬럼은 전부 있으므로");
     }
 
     private static VerificationRuleRepository stub(String schema, List<String> tables) {
@@ -165,12 +232,18 @@ class SchemaPresenceGuardTest {
 
     private static VerificationRuleRepository stub(String schema, List<String> tables,
             List<String> columns) {
+        return stub(schema, tables, columns, List.of());
+    }
+
+    private static VerificationRuleRepository stub(String schema, List<String> tables,
+            List<String> columns, List<String> indexes) {
         return (VerificationRuleRepository) java.lang.reflect.Proxy.newProxyInstance(
                 VerificationRuleRepository.class.getClassLoader(),
                 new Class<?>[] {VerificationRuleRepository.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "missingCoreTables" -> tables;
                     case "missingCriticalColumns" -> columns;
+                    case "missingCriticalIndexes" -> indexes;
                     case "currentSchema" -> schema;
                     default -> throw new UnsupportedOperationException(
                             "가드가 예상 밖의 축을 본다: " + method.getName());

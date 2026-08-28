@@ -149,7 +149,8 @@ DB 이름을 빠뜨린 것인지 셋을 가른다.
 > 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V11__batch_metadata.sql` 과 인덱스
 > 둘(`V2026082513__ix_batch_job_execution_lookup.sql` · `V2026082514__ix_batch_job_execution_history.sql`)을
 > 따로 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
-> **인덱스는 기동 가드가 못 본다** — 빠뜨려도 통과하고 나중에 지표·정리 잡에서만 드러난다.
+> **인덱스도 기동 가드가 본다**(CY-686) — 빠뜨리면 `SCHEMA_NOT_MIGRATED` 로 기동을 거절한다.
+> 이름뿐 아니라 선두 컬럼까지 대조한다. 급하면 `batch.schema-guard.require-batch-indexes=false` 로 끌 수 있다.
 
 > ### ⚠️ 이 브랜치를 처음 받았다면 DB 를 비우고 시작한다
 >
