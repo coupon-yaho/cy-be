@@ -524,6 +524,9 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
      * <b>같은 이름의 다른 모양</b>(손으로 친 DDL, 고치기 전 모양이 남은 스키마)이 가드를
      * 통과하고 되읽기는 여전히 전체를 훑는다 — "조용히 느린 것" 이 가드를 지나간다.
      *
+     * <p><b>완전 일치는 아니다.</b> 뒤에 컬럼이 더 붙은 인덱스는 그 질의를 그대로 태우므로
+     * 통과시킨다({@link #satisfies}). 반대로 하면 멀쩡한 인덱스를 없다고 판정해 기동을 막는다.
+     *
      * <p><b>{@code is_visible} 도 본다.</b> {@code ALTER INDEX … INVISIBLE} 을 하면
      * {@code statistics} 에 행은 그대로 남고 <b>옵티마이저만 무시한다</b> — 그것을 안 보면
      * 가드는 "있다" 고 답하는데 되읽기는 여전히 전체를 훑는다. 이 저장소는 인덱스 개선폭을
@@ -548,8 +551,49 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .query(String.class)
                 .list();
         return CRITICAL_INDEXES.stream()
-                .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
+                .filter(required -> present.stream().noneMatch(actual -> satisfies(actual, required)))
                 .toList();
+    }
+
+    /**
+     * <b>완전 일치가 아니라 앞이 같은지를 본다.</b> 지키려는 성질은 <b>선두 컬럼</b>이므로
+     * {@code (STATUS, END_TIME, JOB_INSTANCE_ID)} 처럼 뒤에 컬럼이 더 붙은 인덱스도 그 질의를
+     * 그대로 태운다 — 완전 일치로 재면 <b>멀쩡한 인덱스를 없다고 판정해 기동을 막는다.</b>
+     * 없는 인덱스를 막는 것보다 <i>있는 인덱스를 없다고 하는 것</i>이 더 비싸다.
+     *
+     * <p>이름은 완전 일치다. 컬럼만 접두사로 본다.
+     */
+    static boolean satisfies(String actual, String required) {
+        if (!indexName(actual).equalsIgnoreCase(indexName(required))) {
+            return false;
+        }
+        List<String> have = columnsOf(actual);
+        List<String> want = columnsOf(required);
+        if (have.size() < want.size()) {
+            return false;
+        }
+        for (int i = 0; i < want.size(); i++) {
+            if (!have.get(i).equalsIgnoreCase(want.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** {@code TABLE.INDEX(COLS)} 에서 {@code TABLE.INDEX}. */
+    private static String indexName(String qualified) {
+        int paren = qualified.indexOf('(');
+        return paren < 0 ? qualified : qualified.substring(0, paren);
+    }
+
+    /** {@code TABLE.INDEX(A,B)} 에서 {@code [A, B]}. 괄호가 없으면 빈 목록이다. */
+    private static List<String> columnsOf(String qualified) {
+        int open = qualified.indexOf('(');
+        int close = qualified.lastIndexOf(')');
+        if (open < 0 || close <= open + 1) {
+            return List.of();
+        }
+        return List.of(qualified.substring(open + 1, close).split(","));
     }
 
     @Override
