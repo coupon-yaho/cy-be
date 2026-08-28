@@ -222,7 +222,34 @@ batch:
     # ⚠️ 이 값을 stuck-job-after-ms 위로 올리면 살아 있는 정리가 시체로 신고된다 —
     #    RunningJobProbe 생성자가 그 관계를 기동 때 검사한다.
     #    스프링 트랜잭션 타임아웃이 초 단위라 1000 의 배수여야 한다(999 는 0 초, 즉 즉시 만료).
+    # ⚠️ **위로 둘이다.** batch.stuck-job-after-ms 뿐 아니라 **storage.yml URL 의
+    #    socketTimeout(DB_SOCKET_TIMEOUT_MS, 기본 660000)보다도 작아야 한다** —
+    #    DataSourceTimeoutGuard 가 세 Step 데드라인 중 가장 큰 값과 비교해 기동 때 거절한다.
+    #    이 값을 올리면 DB_SOCKET_TIMEOUT_MS 도 함께 올린다. 안 올리면 배치가 안 뜬다.
     step-timeout-ms: ${CLEANUP_STEP_TIMEOUT_MS:120000}
+
+  # admin API 의 트랜잭션 데드라인(초). 조회·중단 요청이 배치 메타를 만지는 시간 상한이다.
+  #
+  # ⚠️ **트랜잭션 밖이면 끊을 수단이 아예 없다.** DataSourceUtils 가 queryTimeout 을
+  #    트랜잭션이 있을 때만 붙인다 — 그래서 이 값이 아니라 **경계 자체**가 먼저 필요했다.
+  #    형제 BatchRunMetricsRefresher 의 batch.metrics.run-timeout-ms(5000)와 같은 값이다.
+  #
+  # ⚠️ POST /api/v1/admin/verify(트리거)에는 안 건다. 그 메서드는 잡을 띄우는데, 감싸면
+  #    새 실행의 메타 쓰기가 이 트랜잭션에 들어와 롤백 시 **행이 사라진다.**
+  #
+  # recover-timeout-seconds 는 조회(5초)보다 길다 — 선점 락이 recover 끝까지 이어지므로
+  # 같은 예산으로 두면 정상 복구가 데드라인에 걸린다. 둘을 합치지 마라.
+  admin:
+    timeout-seconds: ${BATCH_ADMIN_TIMEOUT_SECONDS:5}
+    recover-timeout-seconds: ${BATCH_ADMIN_RECOVER_TIMEOUT_SECONDS:10}
+
+  # JDBC 타임아웃 검사를 강제할지(CY-697). 기본 true.
+  #
+  # ⚠️ 이 가드가 막으려는 사고를 **가드 자신이 일으킬 수 있다** — 거절하면 배치가 통째로
+  #    안 뜨고 @Scheduled 여덟이 다 선다. SchemaPresenceGuard 의 require-batch-indexes 와
+  #    같은 이유로 손잡이를 둔다. 끄면 조용히 넘어가지 않고 ERROR 로그로 남는다.
+  datasource-timeout-guard:
+    required: ${DATASOURCE_TIMEOUT_GUARD_REQUIRED:true}
 
   # 배치 메타 인덱스가 없을 때 기동을 거절할지(CY-686). 기본 true.
   #
@@ -532,6 +559,10 @@ batch:
     # ⚠️ 이것은 **청크 하나의 데드라인**이지 잡 전체의 상한이 아니다. CONTINUABLE 로 돌아올 때마다
     #    새 트랜잭션이 열려 매번 다시 센다 — chunk-size 를 키우면 이 값도 같이 키워야 하고,
     #    잡 전체는 (청크 수 × 이 값) 만큼 돌 수 있다. 실행 전체를 끊는 수단은 아직 없다.
+    # ⚠️ **위로 둘이다.** batch.stuck-job-after-ms 뿐 아니라 **storage.yml URL 의
+    #    socketTimeout(DB_SOCKET_TIMEOUT_MS, 기본 660000)보다도 작아야 한다** —
+    #    DataSourceTimeoutGuard 가 세 Step 데드라인 중 가장 큰 값과 비교해 기동 때 거절한다.
+    #    이 값을 올리면 DB_SOCKET_TIMEOUT_MS 도 함께 올린다. 안 올리면 배치가 안 뜬다.
     step-timeout-ms: ${EXPIRE_STEP_TIMEOUT_MS:120000}
 
   verify:
@@ -563,6 +594,10 @@ batch:
     # 이 잡에서 가장 무거운 문장(asof_state 300만 행 UPDATE)을 못 덮기 때문이다.
     # ⚠️ batch.stuck-job-after-ms 보다 **반드시 작아야 한다.** 이 값을 키울 때는 그 값도
     #    함께 키운다 — 안 그러면 살아 있는 검증이 시체로 판정된다. 기동 때 검사한다.
+    # ⚠️ **위로 둘이다.** batch.stuck-job-after-ms 뿐 아니라 **storage.yml URL 의
+    #    socketTimeout(DB_SOCKET_TIMEOUT_MS, 기본 660000)보다도 작아야 한다** —
+    #    DataSourceTimeoutGuard 가 세 Step 데드라인 중 가장 큰 값과 비교해 기동 때 거절한다.
+    #    이 값을 올리면 DB_SOCKET_TIMEOUT_MS 도 함께 올린다. 안 올리면 배치가 안 뜬다.
     step-timeout-ms: ${VERIFY_STEP_TIMEOUT_MS:600000}
 
     # 이력을 한 번에 읽어 올 발급건 식별자 폭.

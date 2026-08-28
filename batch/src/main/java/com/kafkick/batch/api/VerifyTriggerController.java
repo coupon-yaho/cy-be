@@ -22,6 +22,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -60,15 +61,6 @@ public class VerifyTriggerController {
 
     private static final Logger log = LoggerFactory.getLogger(VerifyTriggerController.class);
 
-    /**
-     * <b>버릴 수 있는 상태.</b> {@code STOPPING} 은 신호를 받고 아직 안 멈춘 것,
-     * {@code STOPPED} 는 멈춘 것이다 — 하드킬로 잡이 이미 없으면 {@code stop} 한 번에
-     * 곧바로 뒤쪽이 된다. {@code FAILED}·{@code COMPLETED} 는 <b>버릴 것이 없고</b>,
-     * 덮어쓰면 실행 이력이라는 판정 근거를 바꾸는 일이 된다.
-     */
-    private static final java.util.Set<BatchStatus> ABANDONABLE =
-            java.util.EnumSet.of(BatchStatus.STOPPING, BatchStatus.STOPPED);
-
     private final JobOperator verifyJobOperator;
     private final Job verifyJob;
     private final JobRepository jobRepository;
@@ -77,6 +69,8 @@ public class VerifyTriggerController {
     private final TimeProvider timeProvider;
     private final RunningJobProbe runningJobs;
     private final VerifyStopService stopService;
+
+    private final VerifyAbandonService abandonService;
 
     /**
      * <b>곧 뜰 만료를 보기 위한 것이다.</b> {@code rejectRunningExpire} 는 <i>이미 도는</i>
@@ -111,6 +105,7 @@ public class VerifyTriggerController {
             VerificationRuleRepository rules,
             TimeProvider timeProvider,
             RunningJobProbe runningJobs,
+            VerifyAbandonService abandonService,
             VerifyStopService stopService,
             @Value(ExpireStepContext.CRON) String expireCron,
             @Value("${batch.scheduling.enabled:false}") boolean schedulingEnabled,
@@ -139,6 +134,7 @@ public class VerifyTriggerController {
         this.timeProvider = timeProvider;
         this.runningJobs = runningJobs;
         this.stopService = stopService;
+        this.abandonService = abandonService;
     }
 
     /**
@@ -148,6 +144,10 @@ public class VerifyTriggerController {
      * <p>{@code asOf} 만 필수다. 나머지는 틀려도 <b>잡이 거절</b>하지만, {@code asOf} 는
      * 아무 값이나 성립해서 <b>조용히 다른 것을 판정한다.</b>
      */
+    // **여기만 트랜잭션을 안 건다(CY-697).** 이 메서드는 가드를 지난 뒤 jobOperator.start 로
+    // **잡을 띄운다.** 감싸면 그 실행이 만드는 BATCH_JOB_EXECUTION 쓰기가 이 트랜잭션에
+    // 들어오고, 뒤에서 롤백이 나면 **방금 띄운 실행의 행이 사라진다** — 스레드는 도는데
+    // 메타에는 없는 상태가 된다. 읽기 가드들의 데드라인은 각 조회가 스스로 져야 한다.
     @PostMapping
     public ResponseEntity<ResponseEnvelope<TriggerAccepted>> trigger(
             // ISO.DATE_TIME 을 쓰면 안 된다. 그 포맷터는 오프셋이 붙은 문자열을 파싱에
@@ -268,6 +268,11 @@ public class VerifyTriggerController {
      *
      * <p>하드킬로 남은 실행도 여기 보인다 — 그것이 이 엔드포인트의 주 사용처다.
      */
+    // **읽기에도 데드라인을 준다(CY-697).** 트랜잭션 밖이면 DataSourceUtils 가
+    // queryTimeout 을 안 붙여 **끊을 수단이 없다** — 배치 메타가 잠긴 날 톰캣 스레드가
+    // 그대로 붙잡힌다. 인증이 없는 API 라 같은 번호로 요청이 몰리면 더 빨리 마른다.
+    // 형제 BatchRunMetricsRefresher 가 같은 이유로 같은 값(5초)을 쓴다.
+    @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     @GetMapping("/runs/running")
     public ResponseEnvelope<List<Long>> running() {
         return ResponseEnvelope.success(runningExecutions().stream().sorted().toList());
@@ -277,6 +282,11 @@ public class VerifyTriggerController {
      * <b>{@code runId} 가 {@code null} 인 것도 정보다.</b> 아직 판정 단계에 못 갔거나,
      * 가드에 걸려 <b>끝까지 못 가는</b> 실행이라는 뜻이다.
      */
+    // **읽기에도 데드라인을 준다(CY-697).** 트랜잭션 밖이면 DataSourceUtils 가
+    // queryTimeout 을 안 붙여 **끊을 수단이 없다** — 배치 메타가 잠긴 날 톰캣 스레드가
+    // 그대로 붙잡힌다. 인증이 없는 API 라 같은 번호로 요청이 몰리면 더 빨리 마른다.
+    // 형제 BatchRunMetricsRefresher 가 같은 이유로 같은 값(5초)을 쓴다.
+    @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     @GetMapping("/runs/{executionId}")
     public ResponseEnvelope<VerifyRunView> find(@PathVariable long executionId) {
         JobExecution execution = requireVerifyExecution(executionId);
@@ -462,41 +472,11 @@ public class VerifyTriggerController {
      */
     @PostMapping("/runs/{executionId}/abandon")
     public ResponseEntity<ResponseEnvelope<Abandoned>> abandon(@PathVariable long executionId) {
-        JobExecution execution = requireVerifyExecution(executionId);
-
-        // **중단된 것만 버린다.** Spring Batch 는 status.isLessThan(STOPPING) 일 때만
-        // 거부한다. BatchStatus 순서가 COMPLETED(0)·STARTING(1)·STARTED(2)·STOPPING(3)·
-        // STOPPED(4)·FAILED(5)·ABANDONED(6) 이라, 통과하는 것은 **STOPPING·STOPPED·FAILED·
-        // ABANDONED 넷**이고 우리는 뒤의 둘을 막는다 — COMPLETED 는 프레임워크가 이미 막는다(6.0.4 에서 직접 찍었다. 한때 여기
-        // 주석이 COMPLETED 도 통과한다고 적었는데 거짓이었고, CY-429 가 같은 문장을
-        // 복제한 뒤 돌연변이 테스트가 잡았다). 그대로 두면 실패 이력을 ABANDONED 로
-        // 덮어쓰고 END_TIME 을 현재로 다시 쓴다. 이 저장소는
-        // 실행 이력을 판정 근거로 삼으므로(docs/11) 그것은 증거를 조용히 바꾸는 일이다.
-        //
-        // STOPPING 과 STOPPED 를 둘 다 받는다. stop 은 도는 잡이 있으면 STOPPING 을
-        // 남기고 청크 경계에서 STOPPED 로 가지만, **하드킬로 잡이 이미 없으면 곧바로
-        // STOPPED** 가 된다(실측). 후자가 이 엔드포인트의 주 사용처다.
-        //
-        // 끝난 실행에는 버릴 것도 없다 — 그것은 트리거를 막지 않는다.
-        if (!ABANDONABLE.contains(execution.getStatus())) {
-            throw new BusinessException(VerificationErrorCode.VERIFY_NOT_ABANDONABLE,
-                    "중단된 실행만 버릴 수 있습니다. 지금=" + execution.getStatus()
-                            + ". 도는 실행이면 먼저 stop 을 부르고, 이미 끝난 실행이면 "
-                            + "버릴 것이 없습니다(트리거를 막지 않습니다). executionId=" + executionId);
-        }
-        try {
-            verifyJobOperator.abandon(execution);
-            log.warn("검증 실행을 버렸습니다. 하드킬로 남은 행을 걷어내는 복구 절차입니다. "
-                    + "executionId={}", executionId);
-            // stop 과 달리 **완료 동작**이라 200 이다. 202 + StopRequested 를 재사용하면
-            // "신호만 보냈다" 는 그쪽 뜻이 여기서는 거짓이 된다.
-            return ResponseEntity.ok(ResponseEnvelope.success(
-                    new Abandoned(executionId, BatchStatus.ABANDONED.name())));
-        } catch (org.springframework.batch.core.launch.JobExecutionAlreadyRunningException e) {
-            // 위 검사와 이 호출 사이에 상태가 바뀐 경우다. 같은 답을 준다.
-            throw new BusinessException(VerificationErrorCode.VERIFY_NOT_ABANDONABLE,
-                    "먼저 stop 으로 중단 신호를 보내십시오. executionId=" + executionId, e);
-        }
+        // 다단 쓰기라 서비스로 내렸다(CY-697). ExpireRecoveryService 의 첫 문단이 그 규칙을
+        // 적어 뒀다 — "복구는 배치 메타에 대한 다단 쓰기다. 컨트롤러에 두면 트랜잭션
+        // 경계를 걸 자리가 없다." stop 과 나란히 서면 2단계가 코드 구조로도 읽힌다.
+        return ResponseEntity.ok(ResponseEnvelope.success(
+                abandonService.abandon(executionId)));
     }
 
     /**

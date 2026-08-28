@@ -3,6 +3,7 @@ package com.kafkick.batch.api;
 
 import java.util.List;
 
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -98,11 +99,16 @@ public class ExpireAdminController {
      *
      * <p>도는 실행은 여기 안 나온다 — 나오면 운영자가 그것을 걷어낸다.
      */
+    // **읽기에도 데드라인을 준다(CY-697).** 트랜잭션 밖이면 DataSourceUtils 가
+    // queryTimeout 을 안 붙여 **끊을 수단이 없다** — 배치 메타가 잠긴 날 톰캣 스레드가
+    // 그대로 붙잡힌다. 인증이 없는 API 라 같은 번호로 요청이 몰리면 더 빨리 마른다.
+    // 형제 BatchRunMetricsRefresher 가 같은 이유로 같은 값(5초)을 쓴다.
+    @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     @GetMapping("/runs/stuck")
-    public ResponseEnvelope<List<ExpireRunView>> stuck() {
+    public ResponseEnvelope<List<StuckRunView>> stuck() {
         return ResponseEnvelope.success(
                 runningJobs.stuckExecutions(ExpireStepContext.JOB_NAME).stream()
-                        .map(ExpireRunView::of)
+                        .map(StuckRunView::of)
                         .toList());
     }
 
