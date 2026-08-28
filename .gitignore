@@ -111,3 +111,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Claude Code 개인 설정. 공유해야 하는 것(gradle 범위 가드 훅 등록 등)은
+# .claude/settings.json 에 둔다 — local 은 추적되지 않아 새 워크트리에 안 따라온다.
+.claude/settings.local.json
