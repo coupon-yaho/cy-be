@@ -236,7 +236,11 @@ public interface VerificationRuleRepository {
      * 되거나 정리 잡이 매 청크 전체 스캔을 하는 것으로만 늦게 드러난다.
      * 그래서 기동 때 묻는다.
      *
-     * @return {@code TABLE.INDEX} 형식. 다 있으면 빈 목록
+     * <p><b>반환 형식이 계약이다.</b> {@code SchemaPresenceGuard} 가 괄호 앞을 떼어
+     * 인덱스별 처방을 찾으므로, 형식을 바꾸면 그쪽이 조용히 폴백으로 떨어진다.
+     *
+     * @return {@code TABLE.INDEX(COL1,COL2)} 형식 — 컬럼은 인덱스 순서. 다 있으면 빈 목록.
+     *         컬럼은 <b>접두사</b>로 비교하므로 뒤에 더 붙은 인덱스는 "있다" 로 본다
      */
     List<String> missingCriticalIndexes();
 }

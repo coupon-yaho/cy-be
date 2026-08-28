@@ -71,7 +71,10 @@ tasks.named('test') {
     // 바꿨을 때 :batch:test 가 UP-TO-DATE 로 건너뛴다(실측). 그러면 새 고아 javadoc 이
     // 로컬에서 조용히 통과한다. NoWallClockInBatchTest 도 같은 방식으로 소스를 읽는다.
     inputs.files(rootProject.fileTree(rootProject.projectDir) {
-        include '*/src/**/*.java'
+        // **한 칸이 아니라 전부다.** settings.gradle 에 infra:mq · infra:redis 처럼 중첩된
+        // 모듈이 있어 `*/src/**` 로는 그 아래가 안 잡힌다 — 테스트는 뿌리부터 재귀로 훑으므로
+        // 스캔 범위와 캐시 키가 어긋난다. 지금은 그 둘에 자바 파일이 없어 잠복해 있다.
+        include '**/src/**/*.java'
         exclude '**/build/**'
     }).withPathSensitivity(PathSensitivity.RELATIVE)
             .withPropertyName('scannedJavaSources')
