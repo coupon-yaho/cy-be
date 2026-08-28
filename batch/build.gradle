@@ -62,7 +62,10 @@ tasks.named('test') {
     // 다만 캐시가 CI 러너 사이로도 그 판정을 옮기므로 이 티켓에서 함께 막는다.
     inputs.files(
             rootProject.file('infra/prometheus/rules/batch-alerts.yml'),
-            rootProject.file('docs/14-observability-wiring.md'))
+            rootProject.file('docs/14-observability-wiring.md'),
+            // DataSourceTimeoutGuardTest 가 이 파일의 URL 을 직접 읽어 가드와 대조한다.
+            // 안 걸면 이 파일만 바뀐 빌드에서 UP-TO-DATE 로 건너뛰어 불일치를 놓친다.
+            rootProject.file('storage/src/main/resources/storage.yml.example'))
             .withPathSensitivity(PathSensitivity.RELATIVE)
             .withPropertyName('externalContractFiles')
 

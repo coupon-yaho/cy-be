@@ -93,7 +93,10 @@ public class VerifyReportController {
      * </pre>
      */
     @GetMapping("/reports/latest")
-    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    // 데드라인도 함께 준다(CY-697). readOnly 만으로는 끊을 수단이 없다 — 다섯 SELECT 중
+    // DB 가 멈추면 이 요청만 톰캣 스레드를 무기한 물고, 새 503 갈래도 안 탄다.
+    @org.springframework.transaction.annotation.Transactional(readOnly = true,
+            timeoutString = "${batch.admin.timeout-seconds:5}")
     public ResponseEnvelope<VerifyReportView> latest(
             @RequestParam DatasetType dataset,
             @RequestParam ScopeType scope) {
