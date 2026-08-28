@@ -2,6 +2,8 @@ package com.kafkick.api.observation;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import java.util.List;
+
 import org.mockito.Mockito;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -67,26 +69,65 @@ class V2IssuanceGateWiringTest {
                 });
     }
 
+    @Test
+    @DisplayName("트랜잭션 매니저가 없으면 조립하지 않는다 — 조건을 통과한 뒤 죽지 않는다")
+    void skipsWithoutTransactionManager() {
+        runnerWithout(PlatformTransactionManager.class).run(context -> {
+            assertThat(context)
+                    .as("의존성이 빠졌으면 컨텍스트를 떨어뜨리지 말고 빠져야 한다")
+                    .hasNotFailed();
+            assertThat(context).hasSingleBean(IssuanceGatePort.class);
+            assertThat(context).doesNotHaveBean(V2CouponIssueService.class);
+        });
+    }
+
+    @Test
+    @DisplayName("리포지터리가 없으면 조립하지 않는다 — storage 없는 컨텍스트가 죽지 않는다")
+    void skipsWithoutIssuanceRepository() {
+        runnerWithout(IssuanceRepository.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).doesNotHaveBean(V2CouponIssueService.class);
+        });
+    }
+
     /** 게이트 자동설정을 <b>뒤에</b> 놓는다 — 순서 선언이 없으면 여기서 드러난다. */
     private ApplicationContextRunner runner() {
-        return new ApplicationContextRunner()
+        return runnerWithout(null);
+    }
+
+    /**
+     * {@code omitted} 타입 하나만 빼고 조립한다.
+     *
+     * <p>전부 등록해 두고 성공만 보면 <b>의존성이 빠졌을 때의 경로를 아무도 안 본다</b> —
+     * 조건이 그 타입을 검사하지 않으면 조건은 통과하고 빈 생성에서 컨텍스트가 죽는데,
+     * 그 사실이 이 테스트에 드러나지 않는다.
+     */
+    private ApplicationContextRunner runnerWithout(Class<?> omitted) {
+        ApplicationContextRunner runner = new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(
                         ApiObservationAutoConfiguration.class,
                         IssuanceGateRedisAutoConfiguration.class))
                 .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .withBean(StringRedisTemplate.class,
-                        () -> Mockito.mock(StringRedisTemplate.class))
-                .withBean(IssuanceRepository.class,
-                        () -> Mockito.mock(IssuanceRepository.class))
-                .withBean(IssuanceHistoryRepository.class,
-                        () -> Mockito.mock(IssuanceHistoryRepository.class))
-                .withBean(IdempotencyRepository.class,
-                        () -> Mockito.mock(IdempotencyRepository.class))
-                .withBean(CouponCodeGenerator.class,
-                        () -> Mockito.mock(CouponCodeGenerator.class))
-                .withBean("issueCodec", IdempotencyResultCodec.class,
-                        () -> Mockito.mock(IdempotencyResultCodec.class))
-                .withBean(PlatformTransactionManager.class,
-                        () -> Mockito.mock(PlatformTransactionManager.class));
+                        () -> Mockito.mock(StringRedisTemplate.class));
+
+        for (Class<?> required : List.of(
+                IssuanceRepository.class,
+                IssuanceHistoryRepository.class,
+                IdempotencyRepository.class,
+                CouponCodeGenerator.class,
+                PlatformTransactionManager.class,
+                IdempotencyResultCodec.class)) {
+            if (required.equals(omitted)) {
+                continue;
+            }
+            runner = register(runner, required);
+        }
+        return runner;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static ApplicationContextRunner register(ApplicationContextRunner runner, Class<?> type) {
+        return runner.withBean((Class) type, () -> Mockito.mock(type));
     }
 }

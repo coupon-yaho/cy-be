@@ -83,7 +83,26 @@ public class ApiObservationAutoConfiguration {
      *
      * <p>조건에 <b>게이트만</b> 걸면 안 된다. Redis 는 있는데 storage 가 없는 컨텍스트
      * (관리 포트·미터 계약 테스트가 그렇다)에서 이 빈이 생성을 시도하다 의존성을 못 찾고
-     * 컨텍스트를 통째로 떨어뜨린다. 실제로 필요한 것을 전부 적어 <b>없으면 조용히 빠지게</b> 한다.
+     * 컨텍스트를 통째로 떨어뜨린다.
+     *
+     * <p><b>조건이 검사하는 것과 검사하지 않는 것.</b> 아래 여섯은 전부 storage·core 의
+     * 컴포넌트 스캔 빈이라 자동설정 평가보다 <b>먼저</b> 등록된다 — 조건이 순서에 걸리지 않는다.
+     * 반면 아래 둘은 조건에 넣지 못한다.
+     *
+     * <ul>
+     *   <li>{@code IdempotencyResultCodec<CouponIssueResult>} — 어노테이션에 제네릭을 쓸 수
+     *       없다. 원시 타입으로 걸면 발급·사용·취소·사용취소 <b>네 codec 중 아무거나</b> 있어도
+     *       참이 되어 오탐이다. 구현 타입({@code CouponIssueResultCodec})으로 거는 것은 api 가
+     *       storage 를 컴파일 단계에서 보게 만들어 모듈 경계를 깬다.</li>
+     *   <li>{@code RequestTokenGenerator} — 이 설정이 스스로 만드는 빈이라 조건에 걸 대상이
+     *       아니다.</li>
+     * </ul>
+     *
+     * <p>그래서 이 조건은 <b>"필요한 것을 전부 검사한다"가 아니라 "검사할 수 있는 것을
+     * 검사한다"</b>이다. 검사 못 하는 codec 이 없으면 조건을 통과한 뒤 빈 생성에서 실패한다 —
+     * 다만 그 codec 은 리포지터리 셋과 같은 storage 컴포넌트 스캔에서 나오므로, 리포지터리가
+     * 있는데 codec 만 없는 컨텍스트는 storage 를 반쯤 얹은 것이고 그때는 <b>조용히 빠지는
+     * 것보다 기동 실패가 낫다.</b>
      */
     @Bean
     @ConditionalOnBean({
@@ -91,7 +110,8 @@ public class ApiObservationAutoConfiguration {
             IssuanceRepository.class,
             IssuanceHistoryRepository.class,
             IdempotencyRepository.class,
-            CouponCodeGenerator.class
+            CouponCodeGenerator.class,
+            PlatformTransactionManager.class
     })
     @ConditionalOnMissingBean(V2CouponIssueService.class)
     public V2CouponIssueService v2CouponIssueService(
