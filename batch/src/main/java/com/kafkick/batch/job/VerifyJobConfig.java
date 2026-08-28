@@ -721,8 +721,15 @@ public class VerifyJobConfig {
      * {@code abandoned-after-hours} 컷오프는 UTC 라, <b>JVM 기본 존이 UTC 여야</b> 세 축이
      * 한 좌표계에 선다({@code batch.yml} 의 {@code TZ=UTC}, {@code bootRun} 의
      * {@code user.timezone}). 테스트 JVM 만 일부러 KST 인데(CY-392), 그쪽에서는 어긋남이
-     * <b>보호 창이 넓어지는 방향</b>이라 안전하다. 존을 기동 때 강제하는 가드는
-     * 그 KST 테스트와 부딪혀 {@code docs/13} 으로 미뤘다.
+     * <b>보호 창이 넓어지는 방향</b>이라 안전하다 — 반대로 <b>UTC 서쪽 존</b>에서는 좁아지는
+     * 쪽으로 어긋난다. 존을 기동 때 강제하는 가드는 그 KST 테스트와 부딪혔는데,
+     * {@link com.kafkick.batch.config.DefaultZoneGuard} 가 기동 때 강제하고
+     * <b>테스트 설정이 한 곳에서 그 거절을 끈다</b>(CY-718).
+     *
+     * <p><b>가드는 가린 것이지 고친 것이 아니다.</b> 이 줄이 존에 매인 사실은 그대로고,
+     * {@code docs/13} 이 <b>남은 자리</b>로 들고 있다 — 고치려면 {@code TimeProvider} 로
+     * 바꿔야 하는데 그러면 값의 뜻이 <i>"배치 실행 시작"</i> 에서 <i>"행을 만든 시각"</i> 으로
+     * 바뀌므로, 뜻을 먼저 정해야 한다.
      *
      * <p>실행 행은 있으면 찾고 없으면 만든다. 다만 <b>닫힌 실행은 이어받지 않는다.</b>
      *

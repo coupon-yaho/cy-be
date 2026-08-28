@@ -98,7 +98,11 @@ class ResolvedBatchConfigTest {
             // 기본값으로 조용히 폴백한다 — 이 목록에 빠진 것이 이 테스트의 유일한 사각이다.
             CouponRoundScheduler.class, CouponRoundPendingRefresher.class,
             // CY-470. 검증 크론과 그 SLA 키가 여기서 처음 생긴다.
-            VerifyScheduler.class);
+            VerifyScheduler.class,
+            // CY-718. 이 목록에 빠지면 batch.timezone-guard.required 키 경로에 오타가 나도
+            // 기본값(true)으로 조용히 폴백한다 — 정작 그 손잡이가 필요한 순간은 배치가
+            // 통째로 못 뜨는 때라, 그때 "안 먹는다" 를 만난다.
+            DefaultZoneGuard.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
@@ -151,7 +155,8 @@ class ResolvedBatchConfigTest {
             // @Scheduled 애너테이션 안에 있어 @Value 파라미터 스캔으로는 안 잡히던 키.
             "batch.schedule.expire-cron",
             "batch.schedule.verify-cron",
-            "batch.verify.metrics-refresh-ms");
+            "batch.verify.metrics-refresh-ms",
+            "batch.timezone-guard.required");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.
@@ -195,6 +200,8 @@ class ResolvedBatchConfigTest {
                 // 없어서 스케줄러 빈이 애초에 안 만들어진다 — 지금 이 값이 막고 있는 것은
                 // 없다. 부팅기를 실제 컨텍스트로 바꾸는 날을 위한 예비 방어다.
                 "--BATCH_SCHEDULING_ENABLED=true",
+                // 기본값(true)과 **다른** 값이어야 키 경로가 죽었는지 구분된다.
+                "--TIMEZONE_GUARD_REQUIRED=false",
                 // CY-359 가 넣은 셋. 이름만 EXPECTED_VALUE_KEYS 에 있으면 **키 경로**는
                 // 지켜지지만 .example 이 참조하는 **환경변수 이름**은 한 번도 실행되지 않는다
                 // — .example 기본값과 @Value 기본값이 60000/5000 으로 글자까지 같아서,
@@ -326,6 +333,9 @@ class ResolvedBatchConfigTest {
      */
     private void assertBatchKeysAreAlive(ConfigurableEnvironment environment) {
         assertThat(environment.getProperty("batch.scheduling.enabled")).isEqualTo("true");
+        // CY-718. 기본값(true)과 **다른** 값을 줬으므로, 키 경로가 죽었으면 여기서 true 가
+        // 나온다. 이 손잡이는 배치가 통째로 못 뜨는 때만 쓰이는데, 그때 오타를 발견하면 늦다.
+        assertThat(environment.getProperty("batch.timezone-guard.required")).isEqualTo("false");
         assertThat(environment.getProperty("batch.expire.chunk-size")).isEqualTo("13");
         assertThat(environment.getProperty("batch.expire.step-timeout-ms")).isEqualTo("2000");
         assertThat(environment.getProperty("batch.verify.chunk-size")).isEqualTo("7");

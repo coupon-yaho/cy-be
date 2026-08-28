@@ -4,6 +4,9 @@ package com.kafkick.batch.config;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,15 +19,38 @@ import org.springframework.stereotype.Component;
  * {@code START_TIME} 은 {@code AbstractJob} 이, {@code StepExecution.LAST_UPDATED} 는
  * {@code SimpleJobRepository.update} 가 각각 그것으로 찍는다(6.0.4 바이트코드로 확인).
  *
- * <p><b>어긋나면 시체 판정이 통째로 뒤집힌다.</b> {@link RunningJobProbe} 는 그 메타 시각을
- * {@code LocalDateTime.now()} 와 빼서 진도를 재는데, MySQL 세션 존은 {@code base.yml} 이
- * UTC 로 못 박았다. KST JVM 이면 <b>모든 실행이 아홉 시간 늙은 것으로 보여</b> 죄다 시체가
- * 되고, {@code blockingExecutions} 가 빈 목록을 돌려주면서 <b>만료·검증의 상호 배제가
- * 조용히 꺼진다.</b>
+ * <p><b>{@link RunningJobProbe} 는 안 어긋난다.</b> 한때 이 자리에 그것을 근거로 적었는데
+ * 실측에서 거짓이었다 — 쓰기와 읽기가 <b>같은 {@code java.sql.Timestamp} 축을 대칭으로</b>
+ * 지나 같은 JVM 안의 왕복은 존과 무관하게 항등이다(CY-718 실측: KST 에서 {@code 16:42:55}
+ * 로 심고 {@code jobRepository} 로 읽으면 그대로 {@code 16:42:55}).
  *
- * <p><b>지금 UTC 를 세 군데서 따로 박고 있다</b> — {@code batch.yml} 의 {@code TZ},
- * {@code batch/build.gradle} 의 {@code bootRun} {@code user.timezone}, 그리고 컨테이너 이미지.
- * 어느 하나가 빠져도 기동은 성공하고 증상은 <b>가드가 안 우는 것</b>으로만 나타난다 —
+ * <p><b>깨지는 자리는 "원시 {@code LocalDateTime} 을 바인딩한다" 가 아니라 "자바 쪽 값이
+ * JVM 기본 존이다" 로 갈린다.</b> {@link TimestampBindingAxisTest} 가 서버가 실제로 본 값을
+ * 단언한다 — 원시 {@code LocalDateTime} 은 <b>그대로</b>({@code 16:42:55}) 가고,
+ * {@code Timestamp.valueOf} 는 세션 존으로 정규화돼({@code 07:42:55}) 간다. 컬럼은 후자로
+ * 쓰인 값이므로, <b>자바 쪽 값이 JVM 기본 존일 때만</b> 두 축이 어긋난다.
+ * <ul>
+ *   <li>{@code StuckRunClaim.CLAIM} · {@code VerifyStopService.CLAIM} 의
+ *       {@code :stuckBefore} — 값이 배치 메타에서 온 <b>JVM 기본 존</b>이라 어긋났다.
+ *       진도 조건이 <b>항상 참</b>이 되어 살아 있는 실행이 시체 판정을 통과하고,
+ *       복구·중단 API 가 <b>도는 잡을 닫았다.</b> CY-718 이 {@code StuckRunClaim#claim} 안에
+ *       바인딩을 가둬 축을 맞췄다
+ *   <li>{@code VerifyJobConfig} 의 {@code verification_runs.started_at} — 배치 메타의
+ *       {@code getStartTime()}(JVM 기본 존)을 원시로 쓰는데, <b>같은 행의</b>
+ *       {@code as_of} 는 {@code TimeProvider}(UTC)다. 아직 안 고쳤다({@code docs/13})
+ * </ul>
+ * 둘 다 <b>예외 없이 조용히</b> 틀린 답을 낸다.
+ *
+ * <p>⚠️ <b>{@code CleanupJobConfig} 의 메타 보존 컷오프는 여기 <u>해당하지 않는다</u>.</b>
+ * 그 값은 {@code TimeProvider}(UTC)에서 오고 원시로 바인딩되니 UTC 컬럼과 <b>같은 축</b>이다 —
+ * 한때 이 목록에 셋째로 적혀 있었는데 거짓이었다. 그 말을 믿고 {@code Timestamp.valueOf} 를
+ * 씌우면 <b>멀쩡하던 자리를 존 오프셋만큼 밀어</b> 망가뜨린다.
+ *
+ * <p><b>명시적으로 박아 둔 곳은 둘뿐이다</b> — {@code batch.yml} 의 {@code TZ} 와
+ * {@code batch/build.gradle} 의 {@code bootRun} {@code user.timezone}. 컨테이너가 UTC 인
+ * 셋째 경로는 <b>베이스 이미지({@code eclipse-temurin})의 기본값이 우연히 그런 것</b>이지
+ * {@code Dockerfile} 이 박은 것이 아니다 — 베이스를 바꾸는 날 조용히 흔들린다.
+ * 어느 경로가 빠져도 기동은 성공하고 증상은 <b>가드가 안 우는 것</b>으로만 나타난다 —
  * 조용한 실패라 여기서 잡는다.
  *
  * <p><b>테스트 JVM 은 일부러 {@code Asia/Seoul} 이다</b>({@code batch/build.gradle} 의
@@ -42,26 +68,50 @@ public class DefaultZoneGuard {
     /** 거절을 끄는 손잡이. 기본은 켬 — 끄는 법은 거절 메시지가 직접 말한다. */
     static final String REQUIRED = "batch.timezone-guard.required";
 
-    public DefaultZoneGuard(@Value("${" + REQUIRED + ":true}") boolean required) {
+    public DefaultZoneGuard(@Value("${" + REQUIRED + ":true}") boolean required,
+            MeterRegistry registry) {
         ZoneId zone = ZoneId.systemDefault();
+        publish(registry, required, zone);
         if (isUtc(zone)) {
             log.info("JVM 기본 존 확인 완료 — {} 로 배치 메타와 같은 좌표계입니다.", zone);
             return;
         }
+        // **끄는 법은 거절할 때만 말한다.** 이미 끈 상태의 로그에 그 안내를 또 실으면
+        // 운영자가 "이미 한 조치를 또 하라" 로 읽는다 — 형제 둘도 그렇게 갈라 뒀다.
         String message = "JVM 기본 존이 UTC 가 아닙니다: " + zone + ". "
-                + "스프링 배치가 BATCH_JOB_EXECUTION.START_TIME 과 "
-                + "BATCH_STEP_EXECUTION.LAST_UPDATED 를 이 존으로 찍는데 MySQL 세션 존은 "
-                + "UTC 라, RunningJobProbe 의 시체 판정이 그 차이만큼 어긋나고 "
-                + "만료·검증의 상호 배제가 조용히 꺼집니다. "
-                + "컨테이너는 batch.yml 의 TZ, 로컬은 -Duser.timezone=UTC 로 맞추십시오. "
-                + "테스트처럼 일부러 다른 존을 쓴다면 환경변수 "
-                + "TIMEZONE_GUARD_REQUIRED=false (또는 실행 인자 --" + REQUIRED + "=false) "
-                + "로 거절을 끌 수 있습니다.";
+                + "스프링 배치는 배치 메타 시각을 Timestamp.valueOf 로 써서 세션 존(UTC)"
+                + "으로 정규화하는데, SQL 에 원시 LocalDateTime 으로 바인딩하는 값은 그 "
+                + "정규화를 안 탑니다 — 두 축이 이 존의 오프셋만큼 어긋납니다. "
+                + "선점문의 진도 조건이 살아 있는 실행에도 참이 되어 복구·중단 API 가 "
+                + "도는 잡을 닫고, verification_runs.started_at 도 as_of 와 다른 "
+                + "좌표계에 섭니다. "
+                + "컨테이너는 batch.yml 의 TZ, 로컬은 -Duser.timezone=UTC 로 맞추십시오.";
         if (required) {
-            throw new IllegalStateException(message);
+            throw new IllegalStateException(message
+                    + " 테스트처럼 일부러 다른 존을 쓴다면 환경변수 "
+                    + "TIMEZONE_GUARD_REQUIRED=false (또는 실행 인자 --" + REQUIRED
+                    + "=false) 로 거절을 끌 수 있습니다.");
         }
         log.error("JVM 기본 존 검사에 걸렸습니다 — 거절은 꺼져 있습니다({}=false). {}",
                 REQUIRED, message);
+    }
+
+    /**
+     * <b>끈 상태를 지표로 낸다.</b> 이 스택에는 Loki·promtail 이 없어 <b>로그가 감시 수단이
+     * 아니다</b> — 형제 둘({@code cy_batch_schema_index_enforcement} ·
+     * {@code cy_batch_jdbc_timeout_verified})이 같은 이유로 같은 모양을 쓴다. 이 축은
+     * 증상이 아예 없어서(복구 API 가 도는 잡을 닫는 것도 조용하다) 더 필요하다.
+     */
+    private static void publish(MeterRegistry registry, boolean required, ZoneId zone) {
+        // 형제 둘은 여기서 registry null 을 보는데, 그 가지는 <b>도달할 수 없다</b> —
+        // 생성자 주입에 필수 파라미터라 스프링이 null 을 못 넣고 넘기는 테스트도 없다.
+        // 안 다루는 경우를 다루는 척하지 않는다. 형제 정리는 이 티켓 밖이다.
+        Gauge.builder("cy_batch_timezone_enforcement", () -> required ? 1 : 0)
+                .description("JVM 기본 존 거절이 켜져 있는가 — 1 켜짐 · 0 꺼짐")
+                .register(registry);
+        Gauge.builder("cy_batch_default_zone_verified", () -> isUtc(zone) ? 1 : 0)
+                .description("JVM 기본 존이 고정 오프셋 0 인가 — 1 정상")
+                .register(registry);
     }
 
     /**

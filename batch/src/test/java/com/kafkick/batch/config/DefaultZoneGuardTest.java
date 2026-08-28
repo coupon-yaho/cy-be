@@ -4,6 +4,7 @@ package com.kafkick.batch.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 import java.time.ZoneId;
 
@@ -62,12 +63,22 @@ class DefaultZoneGuardTest {
                 .isFalse();
     }
 
+    /**
+     * <b>전제가 안 서면 실패가 아니라 건너뛴다.</b> 전제를 <i>지키는</i> 것은
+     * {@link #thisJvmIsNotUtc} 하나가 지고, 그것 하나만 크게 운다 — UTC JVM 에서 돌리면
+     * <i>"내 JVM 이 CI 와 다르다"</i> 는 신호 하나만 뜨고, 그 전제에 얹힌 이 단언까지
+     * 같이 붉어지지는 않는다.
+     */
     @Test
     @DisplayName("켜져 있으면 거절하고, 어떻게 맞추는지와 끄는 법을 말한다")
     void rejectsAndTellsHowToFix() {
-        assertThatThrownBy(() -> new DefaultZoneGuard(true))
+        assumeThat(DefaultZoneGuard.isUtc(ZoneId.systemDefault()))
+                .as("UTC JVM 에서는 거절 자체가 안 일어난다")
+                .isFalse();
+
+        assertThatThrownBy(() -> new DefaultZoneGuard(true, new io.micrometer.core.instrument.simple.SimpleMeterRegistry()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("RunningJobProbe")
+                .hasMessageContaining("Timestamp.valueOf")
                 .as("맞추는 법을 안 말하면 사람이 어디를 고칠지 모른다")
                 .hasMessageContaining("user.timezone")
                 .as("끄는 법은 환경변수 이름으로 말해야 compose 에서 찾는다")
@@ -77,6 +88,35 @@ class DefaultZoneGuardTest {
     @Test
     @DisplayName("끄면 뜬다")
     void startsWhenEnforcementIsOff() {
-        assertThatCode(() -> new DefaultZoneGuard(false)).doesNotThrowAnyException();
+        assertThatCode(() -> new DefaultZoneGuard(false, new io.micrometer.core.instrument.simple.SimpleMeterRegistry())).doesNotThrowAnyException();
+    }
+
+    /**
+     * <b>스위치로 껐다는 것이 "배선도 안 잰다" 가 되면 안 된다.</b> 테스트 설정이
+     * {@code batch.timezone-guard.required=false} 로 두므로 컨텍스트를 띄우는 어떤 테스트도
+     * 이 가드의 거절을 안 지난다 — 그래서 {@code @Component} 를 떼거나 스캔 밖으로 옮겨도
+     * <b>전 저장소가 초록</b>이다. {@code SchedulerPoolGuardTest} 가 같은 실수를 금지해 뒀고,
+     * 그 선례대로 <b>가드 자신의 테스트</b>에 둔다.
+     */
+    @org.springframework.boot.test.context.SpringBootTest(properties = {
+            "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
+            "spring.batch.job.enabled=false",
+            "batch.scheduling.enabled=false",
+            "server.port=0",
+            "management.server.port=0"})
+    @org.springframework.context.annotation.Import(com.kafkick.storage.db.MySqlContainerConfig.class)
+    @org.junit.jupiter.api.Nested
+    class Wiring {
+
+        @org.springframework.beans.factory.annotation.Autowired
+        private org.springframework.context.ApplicationContext context;
+
+        @Test
+        @DisplayName("가드가 빈으로 등록된다 — 껐다고 배선까지 안 재면 안 된다")
+        void guardIsWired() {
+            assertThat(context.getBeanNamesForType(DefaultZoneGuard.class))
+                    .as("스캔 밖으로 옮기면 KST 배포가 그냥 뜨고 선점문이 다시 어긋난다")
+                    .hasSize(1);
+        }
     }
 }

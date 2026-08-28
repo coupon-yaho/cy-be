@@ -282,6 +282,7 @@ class CleanupRecoveryTest {
                         "POST /api/v1/admin/cleanup/runs/{executionId}/recover");
     }
 
+
     /** 없는 번호는 404 다 — 500 이 아니다. */
     @Test
     @DisplayName("없는 executionId 는 404 다")
