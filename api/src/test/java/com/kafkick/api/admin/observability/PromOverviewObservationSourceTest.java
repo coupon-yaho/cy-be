@@ -229,9 +229,10 @@ class PromOverviewObservationSourceTest {
                 AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 5d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ALREADY_ISSUED, 4d,
                 AdminOverviewSnapshot.CustomerOutcomeType.STOCK_EXHAUSTED, 5d,
-                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 35d,
-                AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 19d,
-                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 36d));
+                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 30d,
+                AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 21d,
+                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 105d,
+                AdminOverviewSnapshot.CustomerOutcomeType.RETRY_IN_PROGRESS, 19d));
         assertThat(data.aggregateIssuanceRate().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(data.latencySummary().value().successfulP99()).isEqualTo(Duration.ofMillis(400));
@@ -760,11 +761,11 @@ class PromOverviewObservationSourceTest {
                         .calculate(data.outcomeInput()).customerOutcomes().value();
 
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
-        assertThat(calculated.totalCount()).isEqualTo(104.1d);
+        assertThat(calculated.totalCount()).isEqualTo(189.1d);
         assertThat(calculated.outcomes()).first().satisfies(outcome -> {
             assertThat(outcome.type()).isEqualTo(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
             assertThat(outcome.count()).isEqualTo(0.1d);
-            assertThat(outcome.ratio()).isCloseTo(0.1d / 104.1d, within(1e-15));
+            assertThat(outcome.ratio()).isCloseTo(0.1d / 189.1d, within(1e-15));
         });
         assertThat(OverviewPrometheusContract.outcomes())
                 .contains("sum by (outcome)", "increase(", "[5m]");
@@ -1015,14 +1016,15 @@ class PromOverviewObservationSourceTest {
         throw new AssertionError("예상하지 않은 instant query: " + query);
     }
 
-    /** 14개 raw outcome의 increase 값을 base + (1-based index * increment)로 만듭니다. */
+    /**
+     * known raw outcome 전부의 increase 값을 base + (1-based index * increment)로 만듭니다.
+     *
+     * <p>목록을 리터럴로 적지 않고 {@code PromOverviewObservationSource} 가 아는 집합을 그대로
+     * 씁니다. 한쪽만 늘면 이 픽스처가 개수 불일치로 조용히 {@code PENDING} 을 만들어, 정작
+     * 검증하려던 것과 다른 이유로 초록이 됩니다.
+     */
     private static List<PromSample> outcomeSamples(double base, double increment) {
-        String[] labels = {
-                "ISSUED", "QUEUED", "QUEUE_REQUIRED", "ALREADY_ISSUED", "STOCK_EXHAUSTED",
-                "NOT_OPENED", "CAMPAIGN_CLOSED", "GRADE_NOT_ELIGIBLE", "NO_ENTRY_TOKEN",
-                "ENTRY_TOKEN_EXPIRED", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED",
-                "INVALID_TRANSITION"
-        };
+        String[] labels = PromOverviewObservationSource.knownOutcomeLabels().toArray(String[]::new);
         List<PromSample> samples = new ArrayList<>();
         for (int index = 0; index < labels.length; index++) {
             samples.add(sample(Map.of("outcome", labels[index]), base + ((index + 1) * increment)));

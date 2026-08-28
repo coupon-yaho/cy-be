@@ -406,10 +406,10 @@ class AdminOverviewDtoJsonSerializationTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** O3 결과 enum이 HTTP JSON에서 확정된 7개 이름으로 그대로 노출되는지 검증합니다. */
+    /** O3 결과 enum이 HTTP JSON에서 확정된 8개 이름으로 그대로 노출되는지 검증합니다. */
     @Test
-    @DisplayName("O3 고객 결과 7종은 확정된 enum 이름으로 직렬화된다")
-    void customerOutcomeTypeSerializesExactlySevenConfirmedNames() {
+    @DisplayName("O3 고객 결과 8종은 확정된 enum 이름으로 직렬화된다")
+    void customerOutcomeTypeSerializesExactlyEightConfirmedNames() {
         assertThat(Arrays.stream(AdminOverviewSnapshot.CustomerOutcomeType.values())
                 .map(objectMapper::writeValueAsString)
                 .toList())
@@ -420,7 +420,8 @@ class AdminOverviewDtoJsonSerializationTest {
                         "\"STOCK_EXHAUSTED\"",
                         "\"INELIGIBLE\"",
                         "\"ENTRY_EXPIRED\"",
-                        "\"SYSTEM_FAILURE\"");
+                        "\"SYSTEM_FAILURE\"",
+                        "\"RETRY_IN_PROGRESS\"");
     }
 
     /** 공동 기준선에서 확정한 SourceStatus 7종이 모두 enum 이름 그대로 직렬화되는지 검증합니다. */

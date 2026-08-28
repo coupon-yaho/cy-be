@@ -87,7 +87,7 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.campaigns.value[2].issuanceFlow.state").value("VALID"))
                 .andExpect(jsonPath("$.data.campaigns.value[2].campaignQueueStatus.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.customerOutcomes.state").value("VALID"))
-                .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(7))
+                .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(8))
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
 
