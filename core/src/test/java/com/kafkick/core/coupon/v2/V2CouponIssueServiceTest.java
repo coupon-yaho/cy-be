@@ -15,6 +15,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
@@ -331,6 +333,42 @@ class V2CouponIssueServiceTest {
                     assertThat(wrapped.compensateOutcome()).isEmpty();
                 });
         verify(gate, never()).compensate(anyLong(), anyLong(), any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CompleteOutcome.class,
+            names = {"CLAIM_GONE", "FOREIGN_CLAIM", "CORRUPT_VALUE", "BAD_ARGUMENT"})
+    void abnormalCompleteOutcomeIsNotReportedAsASuccessfulIssue(CompleteOutcome abnormal) {
+        // DB 에는 발급이 있는데 게이트는 완료되지 않은 불일치다. 성공으로 반환하면
+        // 그 불일치가 200 응답에 은폐된다.
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(8L));
+        when(issuances.save(any())).thenReturn(issued());
+        when(idempotencies.insertCompleted(any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(gate.complete(10L, 20L, TOKEN)).thenReturn(abnormal);
+
+        assertThatThrownBy(() -> service.issue(command,
+                new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2)))
+                .isInstanceOfSatisfying(V2CouponIssueException.class, wrapped ->
+                        assertThat(wrapped.dependency()).isEqualTo(Dependency.REDIS));
+
+        // 이미 커밋된 발급이다. 보상하면 DB 에 짝이 있는 재고를 되돌린다.
+        verify(gate, never()).compensate(anyLong(), anyLong(), any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CompleteOutcome.class, names = {"PROMOTED", "ALREADY_DONE"})
+    void normalCompleteOutcomesStaySuccessful(CompleteOutcome healthy) {
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(8L));
+        when(issuances.save(any())).thenReturn(issued());
+        when(idempotencies.insertCompleted(any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(gate.complete(10L, 20L, TOKEN)).thenReturn(healthy);
+
+        V2CouponIssueResult result = service.issue(command,
+                new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2));
+
+        assertThat(result.completeOutcome()).contains(healthy);
     }
 
     /** 재고 N 에 2N 스레드. 게이트가 낸 선점 수를 넘겨 발급되지 않는다. */

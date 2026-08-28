@@ -8,7 +8,20 @@ import com.kafkick.core.coupon.v2.port.ClaimOutcome;
 import com.kafkick.core.coupon.v2.port.ClaimResult;
 import com.kafkick.core.coupon.v2.port.CompleteOutcome;
 
-/** S5가 HTTP로 옮길 때까지 게이트와 완료 CAS 결과를 손실 없이 보존한다. */
+/**
+ * S5가 HTTP로 옮길 때까지 게이트와 완료 CAS 결과를 손실 없이 보존한다.
+ *
+ * <p>선점 결과에 따라 허용되는 조합이 다르다.
+ * <ul>
+ *   <li>선점 성공 — 발급 결과와 완료 CAS 가 <b>둘 다</b> 있어야 한다</li>
+ *   <li>완료 replay — 발급 결과만 있다. CAS 를 다시 실행하지 않으므로 완료 결과는 없다</li>
+ *   <li>그 밖의 거절 — 둘 다 없어야 한다</li>
+ * </ul>
+ *
+ * @throws NullPointerException 위 조합에서 필수인 값이 비었을 때
+ * @throws IllegalArgumentException 거절인데 발급·완료 결과가 있거나, replay 인데 완료 CAS 가
+ *     실려 있을 때
+ */
 public record V2CouponIssueResult(
         ClaimResult claimResult,
         CouponIssueResult nullableIssueResult,

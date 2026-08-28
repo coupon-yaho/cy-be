@@ -25,6 +25,14 @@ public final class CouponRoundIssuanceDefinitionCache {
         this.repository = Objects.requireNonNull(repository, "repository");
     }
 
+    /**
+     * 회차 정의를 인스턴스 안에서 한 번만 읽어 돌려준다.
+     *
+     * @throws IllegalArgumentException {@code couponRoundId} 가 0 이하일 때
+     * @throws com.kafkick.core.support.exception.BusinessException 회차가 없을 때
+     *     ({@link CouponIssueErrorCode#COUPON_ROUND_NOT_FOUND}). 실패는 캐시에 남기지
+     *     않으므로 다음 요청이 다시 읽는다
+     */
     public CouponRoundIssuanceDefinition get(long couponRoundId) {
         if (couponRoundId <= 0) {
             throw new IllegalArgumentException("couponRoundId는 0보다 커야 합니다.");

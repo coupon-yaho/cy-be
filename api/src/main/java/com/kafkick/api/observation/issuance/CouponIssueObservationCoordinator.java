@@ -130,6 +130,15 @@ public final class CouponIssueObservationCoordinator {
         }
     }
 
+    /**
+     * V2 회차의 발급을 실행합니다.
+     *
+     * <p>V2 서비스 빈은 게이트({@code IssuanceGatePort})가 있을 때만 만들어집니다. 회차는
+     * V2 인데 게이트가 없는 구성이면 <b>요청을 즉시 중단</b>합니다 — v1 으로 대신 흘리면
+     * 그 회차의 재고 권한이 Redis 와 DB 로 갈려 초과 발급이 납니다.
+     *
+     * @throws IllegalStateException 게이트가 활성화되지 않아 V2 서비스 빈이 없을 때
+     */
     private CouponIssueResult issueV2(
             String requestId,
             Long couponRoundId,

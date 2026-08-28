@@ -57,6 +57,17 @@ public final class V2CouponIssueService {
         this.transactions = Objects.requireNonNull(transactions, "transactions");
     }
 
+    /**
+     * 게이트 선점 → 단일 트랜잭션 → 완료 CAS 로 v2 발급을 실행한다.
+     *
+     * <p>게이트의 거절은 예외가 아니라 결과다 — {@link V2CouponIssueResult#issueResult()} 가
+     * 빈 값으로 돌아온다.
+     *
+     * @throws IllegalArgumentException 명령의 회차와 정의의 회차가 다르거나 정의의 엔진이
+     *     V2 가 아닐 때. 게이트를 호출하기 전에 중단한다
+     * @throws V2CouponIssueException 게이트 호출이나 발급 트랜잭션이 실패했을 때. 실패한
+     *     의존성과 보상 CAS 결과를 함께 싣는다
+     */
     public V2CouponIssueResult issue(
             CouponIssueCommand command,
             CouponRoundIssuanceDefinition definition
@@ -93,13 +104,15 @@ public final class V2CouponIssueService {
         } catch (RuntimeException failure) {
             return resolveAfterFailure(command, claim, token, failure, Dependency.MYSQL);
         }
+        CompleteOutcome completed;
         try {
-            CompleteOutcome completed = gate.complete(
+            completed = gate.complete(
                     command.couponRoundId(), command.memberId(), token);
-            return new V2CouponIssueResult(claim, persisted, completed, false);
         } catch (RuntimeException failure) {
             return resolveAfterFailure(command, claim, token, failure, Dependency.REDIS);
         }
+        // 검증은 catch 밖이다. 완료 CAS 이상은 재조회로 풀 수 있는 실패가 아니다.
+        return new V2CouponIssueResult(claim, persisted, healthy(completed), false);
     }
 
     private V2CouponIssueResult replayDone(
@@ -178,7 +191,7 @@ public final class V2CouponIssueService {
                 throw new V2CouponIssueException(failure, null, Dependency.REDIS);
             }
             return new V2CouponIssueResult(
-                    claim, CouponIssueResult.from(committed.get()), completed, true);
+                    claim, CouponIssueResult.from(committed.get()), healthy(completed), true);
         }
         throw new V2CouponIssueException(
                 failure,
@@ -198,6 +211,27 @@ public final class V2CouponIssueService {
                 .filter(record -> Objects.equals(record.issuanceId(), committed.id()))
                 .filter(record -> Objects.equals(record.requestHash(), expectedHash))
                 .isPresent();
+    }
+
+    /**
+     * 완료 CAS 의 정상 결과만 통과시킨다.
+     *
+     * <p>정상은 {@link CompleteOutcome#PROMOTED} 와 재시도끼리 겹친
+     * {@link CompleteOutcome#ALREADY_DONE} 뿐이다. 나머지는 <b>DB 에 발급이 있는데 게이트는
+     * 완료되지 않은</b> 불일치다 — 성공으로 반환하면 그 불일치가 200 응답에 은폐된다.
+     * 발급이 이미 커밋됐으므로 보상하지 않고 상신한다.
+     *
+     * @throws V2CouponIssueException 완료 CAS 가 정상 결과를 내지 않았을 때
+     */
+    private static CompleteOutcome healthy(CompleteOutcome outcome) {
+        if (outcome == CompleteOutcome.PROMOTED
+                || outcome == CompleteOutcome.ALREADY_DONE) {
+            return outcome;
+        }
+        throw new V2CouponIssueException(
+                new IllegalStateException("완료 CAS 가 비정상 결과를 냈습니다: " + outcome),
+                null,
+                Dependency.REDIS);
     }
 
     /**
