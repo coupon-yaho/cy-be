@@ -34,6 +34,17 @@ public final class DomainMeterNames {
     public static final String STOCK_REMAINING = "app.coupon.stock.remaining";
     public static final String STOCK_REMAINING_STATE = "app.coupon.stock.remaining.state";
 
+    /** v2 issued Hash의 회차별 노후 PENDING 수와 수집 상태. */
+    public static final String STALE_PENDING_COUNT = "app.coupon.v2.issued.stale.pending";
+    public static final String STALE_PENDING_COUNT_STATE = "app.coupon.v2.issued.stale.pending.state";
+
+    /** v2 issued Hash의 회차별 codec 파손 field 수와 수집 상태. */
+    public static final String CORRUPT_FIELD_COUNT = "app.coupon.v2.issued.corrupt.fields";
+    public static final String CORRUPT_FIELD_COUNT_STATE = "app.coupon.v2.issued.corrupt.fields.state";
+
+    /** PENDING 계측만 회차별 과거 조회가 필요해 쓰는 제한적 라벨. */
+    public static final String TAG_COUPON_ROUND_ID = "couponRoundId";
+
     /** FINAL 진입 게이트인 quiet period 를 재는 기준 시각(epoch 초). */
     public static final String LAST_SUCCESSFUL_ISSUE_EPOCH = "app.issuance.last.success.epoch";
     public static final String LAST_SUCCESSFUL_ISSUE_EPOCH_STATE = "app.issuance.last.success.epoch.state";
