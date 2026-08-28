@@ -206,5 +206,24 @@ class AdminTokenFilterTest {
                     .as("끈 상태에도 인스턴스는 있어야 컨텍스트가 뜬다")
                     .isNotNull();
         }
+
+        /**
+         * <b>스코프가 URL 패턴 하나에 걸려 있으니 디스패치 축도 못 박는다.</b> 지금은 안 적어도
+         * 같은 값이지만({@code OncePerRequestFilter} 면 기본이 {@code allOf} — 바이트코드로
+         * 확인) 그 기본값이 <b>상속 관계에 매여 있어서</b>, 필터가 그 상위 타입을 안 물려받게
+         * 바뀌는 날 {@code REQUEST} 로 조용히 좁아진다.
+         */
+        @Test
+        @DisplayName("모든 디스패치 타입을 덮는다 — 포워드·에러로도 안 새게")
+        void theScopeCoversEveryDispatch() {
+            var registration = new AdminTokenConfig().adminTokenFilter(
+                    true, SECRET, new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    new tools.jackson.databind.ObjectMapper(), utcClock());
+
+            assertThat(registration.determineDispatcherTypes())
+                    .as("REQUEST 만 덮으면 포워드·에러 디스패치로 관리자 경로에 닿는 길이 열린다")
+                    .containsExactlyInAnyOrderElementsOf(
+                            java.util.EnumSet.allOf(jakarta.servlet.DispatcherType.class));
+        }
     }
 }

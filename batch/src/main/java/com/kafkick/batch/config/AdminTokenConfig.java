@@ -1,6 +1,10 @@
 // 관리자 토큰 관문을 등록하고, 켠 채 토큰이 비면 기동을 거절합니다.
 package com.kafkick.batch.config;
 
+import java.util.EnumSet;
+
+import jakarta.servlet.DispatcherType;
+
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -87,6 +91,17 @@ public class AdminTokenConfig {
         log.info("관리자 API 토큰 관문을 켰습니다. 헤더={}", AdminTokenFilter.HEADER);
         registration.setFilter(new AdminTokenFilter(token, objectMapper, timeProvider));
         registration.addUrlPatterns("/api/v1/admin/*");
+        // **스코프가 이제 이 한 줄에 걸려 있다.** 필터 안에서 경로를 다시 보던 것을 걷어냈으니
+        // (원문 URI 라 인코딩 우회가 났다), "어떤 디스패치로 들어오든 이 매핑이 걸리는가" 가
+        // 곧 방어 범위다.
+        //
+        // ⚠️ **지금은 안 적어도 같은 값이다.** AbstractFilterRegistrationBean.determineDispatcherTypes
+        //    가 비어 있으면 필터가 OncePerRequestFilter 인지 보고 그때 allOf 를 준다
+        //    (spring-boot-4.1.0 바이트코드로 확인). 그래도 적는 이유는 그 기본값이
+        //    **상속 관계에 매여 있어서**다 — 나중에 이 필터가 OncePerRequestFilter 를 안
+        //    물려받게 바뀌면 기본이 REQUEST 로 좁아지고, 포워드·에러 디스패치로 들어오는
+        //    길이 조용히 열린다. theScopeCoversEveryDispatch 가 이 값을 단언한다.
+        registration.setDispatcherTypes(EnumSet.allOf(DispatcherType.class));
         registration.setOrder(ORDER);
         return registration;
     }
