@@ -11,6 +11,14 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      # ⚠️ **여기 적는 기준은 "기본값이 마음에 안 드는가" 가 아니다.**
+      #    application.yml.example 의 환경변수 마흔여섯 중 서른아홉은 여기 없고 그게 맞다 —
+      #    기본값으로 두면 되는 것들이다.
+      #
+      #    여기 적어야 하는 것은 **기동 가드가 거절 판정에 쓰는 값**이다. 거절당하면 배치가
+      #    통째로 안 뜨고 @Scheduled 여덟이 다 서는데, 그 값이 여기 없으면 **되돌릴 방법이
+      #    이 파일을 고쳐 재배포하는 것뿐**이다. 이 세션에서 그 실수를 세 번 했다
+      #    (CY-686 인덱스 가드 · CY-697 타임아웃 가드 · CY-697 복구 데드라인).
       DB_HOST: mysql
       DB_PORT: 3306
       DB_NAME: ${DB_NAME:-app}
@@ -60,6 +68,7 @@ services:
       DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-2000}
       DB_SOCKET_TIMEOUT_MS: ${DB_SOCKET_TIMEOUT_MS:-660000}
       BATCH_ADMIN_TIMEOUT_SECONDS: ${BATCH_ADMIN_TIMEOUT_SECONDS:-5}
+      BATCH_ADMIN_RECOVER_TIMEOUT_SECONDS: ${BATCH_ADMIN_RECOVER_TIMEOUT_SECONDS:-10}
       DATASOURCE_TIMEOUT_GUARD_REQUIRED: ${DATASOURCE_TIMEOUT_GUARD_REQUIRED:-true}
     # ports 가 없다. **업무 포트를 기본으로 안 내보낸다.**
     #

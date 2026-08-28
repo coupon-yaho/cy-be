@@ -85,6 +85,17 @@ class DataSourceTimeoutGuardTest {
                 .hasMessageNotContaining("커야 합니다");
     }
 
+    /** {@code connectTimeout=0} 도 무제한이다 — {@code socketTimeout} 과 같은 함정이다. */
+    @Test
+    @DisplayName("connectTimeout=0 은 무제한이라 거절한다")
+    void rejectsUnboundedConnectTimeout() {
+        assertThatThrownBy(() -> guard(
+                "jdbc:mysql://h/db?connectTimeout=0&socketTimeout=660000", true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("connectTimeout=0")
+                .hasMessageContaining("무제한");
+    }
+
     @Test
     @DisplayName("socketTimeout 이 없으면 거절한다")
     void rejectsWhenSocketTimeoutIsMissing() {

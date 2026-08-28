@@ -62,7 +62,18 @@ public class DataSourceTimeoutGuard {
             return;
         }
 
-        if (!CONNECT_TIMEOUT.matcher(url).find()) {
+        Matcher connect = CONNECT_TIMEOUT.matcher(url);
+        if (connect.find() && Long.parseLong(connect.group(1)) == 0) {
+            // socketTimeout 과 같다 — Connector/J 에서 0 은 "없음" 이 아니라 **무제한**이다.
+            // 존재만 보면 이 값이 통과해 가드의 핵심 보장이 그대로 깨진다.
+            reject(required,
+                    "connectTimeout=0 은 무제한입니다 — 연결 수립이 무기한 걸릴 수 있고, "
+                            + "그때 SchemaPresenceGuard(기동 러너)에서 멈춰 컨테이너는 떠 "
+                            + "있는데 @Scheduled 가 하나도 안 돕니다. 유한한 값을 환경변수 "
+                            + "DB_CONNECT_TIMEOUT_MS 로 주십시오.");
+            return;
+        }
+        if (!connect.reset().find()) {
             reject(required,
                     "spring.datasource.url 에 connectTimeout 이 없습니다. 없으면 연결 수립이 "
                             + "무기한 걸릴 수 있고, 그때 SchemaPresenceGuard(기동 러너)에서 "
