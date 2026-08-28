@@ -44,9 +44,6 @@ public class DataSourceTimeoutGuard {
     /** 게이지가 읽는 값. 러너가 한 번만 도므로 필드에 남긴다. */
     private volatile boolean verified;
 
-    /** {@link #reject} 가 끈 경로에서도 지표를 남기려고 든다. */
-    private MeterRegistry registry;
-
     private static final Pattern CONNECT_TIMEOUT = Pattern.compile("[?&]connectTimeout=(\\d+)");
 
     /** 거절을 끄는 손잡이. 기본은 켬 — 끄는 법은 거절 메시지가 직접 말한다. */
@@ -64,7 +61,6 @@ public class DataSourceTimeoutGuard {
         // 프로그램으로 만들어 spring.datasource.url 이 아예 없다 — 프로퍼티로 읽으면 그 자리에서
         // PlaceholderResolutionException 이 나고, 그러면 이 가드가 **테스트에서만** 무너진다.
         // 실물에서 읽으면 운영·테스트가 같은 문자열을 본다.
-        this.registry = registry;
         String url = jdbcUrlOf(dataSource);
         if (url == null) {
             publish(registry, false);
@@ -78,7 +74,7 @@ public class DataSourceTimeoutGuard {
         if (connect.find() && Long.parseLong(connect.group(1)) == 0) {
             // socketTimeout 과 같다 — Connector/J 에서 0 은 "없음" 이 아니라 **무제한**이다.
             // 존재만 보면 이 값이 통과해 가드의 핵심 보장이 그대로 깨진다.
-            reject(required,
+            reject(registry, required,
                     "connectTimeout=0 은 무제한입니다 — 연결 수립이 무기한 걸릴 수 있고, "
                             + "그때 SchemaPresenceGuard(기동 러너)에서 멈춰 컨테이너는 떠 "
                             + "있는데 @Scheduled 가 하나도 안 돕니다. 유한한 값을 환경변수 "
@@ -86,7 +82,7 @@ public class DataSourceTimeoutGuard {
             return;
         }
         if (!connect.reset().find()) {
-            reject(required,
+            reject(registry, required,
                     "spring.datasource.url 에 connectTimeout 이 없습니다. 없으면 연결 수립이 "
                             + "무기한 걸릴 수 있고, 그때 SchemaPresenceGuard(기동 러너)에서 "
                             + "멈춰 컨테이너는 떠 있는데 @Scheduled 가 하나도 안 돕니다. "
@@ -106,7 +102,7 @@ public class DataSourceTimeoutGuard {
         }
         Matcher socket = SOCKET_TIMEOUT.matcher(url);
         if (!socket.find()) {
-            reject(required,
+            reject(registry, required,
                     "spring.datasource.url 에 socketTimeout 이 없습니다. Hikari 의 "
                             + "connection-timeout 은 풀 대여 시간이라 응답 없는 소켓을 "
                             + "못 끊습니다 — " + longestKey + "(" + longest + "ms)보다 큰 값을 "
@@ -118,14 +114,14 @@ public class DataSourceTimeoutGuard {
         // **0 은 "작다" 가 아니라 "무제한" 이다**(Connector/J 규약). 이유가 정반대이므로
         // 문구를 갈라야 한다 — 같은 메시지를 내면 운영자가 값을 더 키우려 든다.
         if (socketTimeoutMs == 0) {
-            reject(required,
+            reject(registry, required,
                     "socketTimeout=0 은 무제한입니다 — 이 가드가 막으려는 상태 그 자체입니다. "
                             + longestKey + "(" + longest + "ms)보다 큰 유한한 값을 "
                             + "환경변수 DB_SOCKET_TIMEOUT_MS 로 주십시오.");
             return;
         }
         if (socketTimeoutMs <= longest) {
-            reject(required,
+            reject(registry, required,
                     "socketTimeout 은 가장 긴 Step 데드라인보다 커야 합니다. 작으면 "
                             + "정상 배치가 매번 같은 자리에서 끊기고, 원인이 배치가 아니라 "
                             + "URL 에 있어 찾기 어렵습니다(실측: replayStep 312초, docs/12). "
@@ -162,14 +158,14 @@ public class DataSourceTimeoutGuard {
      * <b>가드 자신이 일으킬 수 있는 자리</b>라, 끄는 손잡이가 없으면 되돌릴 방법이 없다.
      * 끈 상태는 조용하지 않게 ERROR 로 남긴다.
      */
-    private void reject(boolean required, String message) {
+    private void reject(MeterRegistry registry, boolean required, String message) {
         if (required) {
             throw new IllegalStateException(message
                     + " 지금 당장 띄워야 하면 환경변수 "
                     + "DATASOURCE_TIMEOUT_GUARD_REQUIRED=false (또는 실행 인자 --"
                     + REQUIRED + "=false) 로 거절을 끌 수 있습니다.");
         }
-        publish(this.registry, false);
+        publish(registry, false);
         log.error("JDBC 타임아웃 검사에 걸렸습니다 — 거절은 꺼져 있습니다({}=false). {}",
                 REQUIRED, message);
     }
