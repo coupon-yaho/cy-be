@@ -44,7 +44,8 @@ import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterR
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
-import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @AutoConfiguration(
         after = {
@@ -53,7 +54,12 @@ import org.springframework.transaction.support.TransactionOperations;
         },
         afterName = {
                 "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
-                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration"
+                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration",
+                // v2CouponIssueService 가 @ConditionalOnBean(IssuanceGatePort) 다. 그 조건은
+                // 평가 시점에 이미 등록된 빈만 보므로, 게이트 자동설정이 뒤에 돌면 조건이
+                // 조용히 거짓이 되어 서비스가 아예 안 만들어진다 — 기동은 성공하고 첫 발급
+                // 요청에서 500 이 난다. V2IssuanceGateWiringTest 가 이 줄을 지킨다.
+                "com.kafkick.infra.redis.coupon.v2.IssuanceGateRedisAutoConfiguration"
         })
 @EnableConfigurationProperties({
         ConsistencySeverityProperties.class,
@@ -72,8 +78,21 @@ public class ApiObservationAutoConfiguration {
         return new RequestTokenGenerator(issuanceProperties.producerInstanceId());
     }
 
+    /**
+     * v2 발급 서비스.
+     *
+     * <p>조건에 <b>게이트만</b> 걸면 안 된다. Redis 는 있는데 storage 가 없는 컨텍스트
+     * (관리 포트·미터 계약 테스트가 그렇다)에서 이 빈이 생성을 시도하다 의존성을 못 찾고
+     * 컨텍스트를 통째로 떨어뜨린다. 실제로 필요한 것을 전부 적어 <b>없으면 조용히 빠지게</b> 한다.
+     */
     @Bean
-    @ConditionalOnBean(IssuanceGatePort.class)
+    @ConditionalOnBean({
+            IssuanceGatePort.class,
+            IssuanceRepository.class,
+            IssuanceHistoryRepository.class,
+            IdempotencyRepository.class,
+            CouponCodeGenerator.class
+    })
     @ConditionalOnMissingBean(V2CouponIssueService.class)
     public V2CouponIssueService v2CouponIssueService(
             IssuanceGatePort gate,
@@ -83,11 +102,15 @@ public class ApiObservationAutoConfiguration {
             CouponCodeGenerator codeGenerator,
             IdempotencyResultCodec<CouponIssueResult> resultCodec,
             RequestTokenGenerator tokenGenerator,
-            TransactionOperations transactions
+            PlatformTransactionManager transactionManager
     ) {
+        // TransactionOperations 를 조건으로 걸지 않는다 — 그런 빈은 저장소 어디에도 없고
+        // Boot 도 자동 등록하지 않는다. 조건에 넣으면 영원히 거짓이라 v2 가 조립되지 않고,
+        // 그 사실은 첫 발급 요청의 500 으로만 드러난다(실측). 여기서 직접 만든다.
+        // 생성자 인자는 조건 평가가 아니라 빈 생성 시점에 풀리므로 자동설정 순서와 무관하다.
         return new V2CouponIssueService(
                 gate, issuances, histories, idempotencies, codeGenerator,
-                resultCodec, tokenGenerator, transactions
+                resultCodec, tokenGenerator, new TransactionTemplate(transactionManager)
         );
     }
 
