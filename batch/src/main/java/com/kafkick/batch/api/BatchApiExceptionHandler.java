@@ -78,15 +78,38 @@ public class BatchApiExceptionHandler {
      */
     // ⚠️ **socketTimeout 만료가 여기 안 걸리면 이 갈래가 반쪽이다.** 그 만료는
     //    CommunicationsException(08S01)이라 QueryTimeoutException 이 아니라
-    //    DataAccessResourceFailureException 으로 번역된다 — 이 PR 이 URL 에 건 660초가
-    //    바로 그 경로다. 빼면 이 핸들러가 피하려던 500 + 스택트레이스를 그대로 밟는다.
+    //    DataAccessResourceFailureException 으로 번역된다 — 이 티켓이 URL 에 건 660초가
+    //    바로 그 경로다.
+    //
+    // ⚠️ **그런데 그 타입을 통째로 잡으면 안 된다.** CannotGetJdbcConnectionException 이
+    //    같은 하위라, 연결 거부·DB 중단까지 "느린 조회" 로 숨기고 원인 스택도 안 남는다.
+    //    그래서 **원인 사슬에 SocketTimeoutException 이 있는 것만** 타임아웃으로 본다.
+    //    아니면 아래 handleUnexpected 가 원래대로 500 + 스택을 남긴다.
     @ExceptionHandler({org.springframework.transaction.TransactionTimedOutException.class,
             org.springframework.dao.QueryTimeoutException.class,
             org.springframework.dao.DataAccessResourceFailureException.class})
     public ResponseEntity<ResponseEnvelope<Void>> handleTimeout(Exception exception) {
+        if (exception instanceof org.springframework.dao.DataAccessResourceFailureException
+                && !causedBySocketTimeout(exception)) {
+            // 타임아웃이 아닌 자원 장애다. 원인과 스택을 지키려고 원래 갈래로 보낸다.
+            return handleUnexpected(exception);
+        }
         log.warn("batch admin API 가 데드라인을 넘겼습니다. type={}",
                 exception.getClass().getSimpleName());
         return respond(VerificationErrorCode.ADMIN_QUERY_TIMED_OUT);
+    }
+
+    /** 원인 사슬에 소켓 읽기 타임아웃이 있나. 열여섯 단계까지 본다 — 순환도 그 선에서 끊긴다. */
+    private static boolean causedBySocketTimeout(Throwable exception) {
+        Throwable cause = exception;
+        for (int depth = 0; cause != null && depth < 16; depth++) {
+            if (cause instanceof java.net.SocketTimeoutException
+                    || cause instanceof java.sql.SQLTimeoutException) {
+                return true;
+            }
+            cause = cause.getCause() == cause ? null : cause.getCause();
+        }
+        return false;
     }
 
     @ExceptionHandler(BusinessException.class)
