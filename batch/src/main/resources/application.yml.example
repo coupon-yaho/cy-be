@@ -271,10 +271,19 @@ batch:
 
   # JVM 기본 존이 UTC 가 아닐 때 기동을 거절할지(CY-718). 기본 true.
   #
-  # ⚠️ 배치 메타의 시각(START_TIME · LAST_UPDATED)을 스프링 배치가 **JVM 기본 존**으로
-  #    찍는데 MySQL 세션 존은 UTC 다. 어긋나면 RunningJobProbe 의 시체 판정이 그 차이만큼
-  #    틀리고 만료·검증의 상호 배제가 조용히 꺼진다 — 증상이 "가드가 안 운다" 뿐이라
-  #    기동 때 잡는다.
+  # ⚠️ 배치 메타의 시각(START_TIME · LAST_UPDATED)을 스프링 배치가 **JVM 기본 존**의
+  #    LocalDateTime 으로 찍고, Timestamp.valueOf 를 지나며 MySQL 세션 존(UTC)으로
+  #    렌더링돼 저장된다. 그래서 **자바 쪽 값이 JVM 기본 존인 채 원시로 바인딩되는 자리**가
+  #    컬럼과 다른 축에 선다 — 원시 LocalDateTime 은 그 정규화를 안 타기 때문이다
+  #    (TimestampBindingAxisTest 가 서버가 본 값을 단언한다).
+  #
+  #    ⚠️ RunningJobProbe 는 여기 해당하지 않는다. 쓰기와 읽기가 같은 Timestamp 축을
+  #    대칭으로 지나 같은 JVM 안의 왕복은 존과 무관하게 항등이다 — 한때 이 주석이
+  #    그것을 근거로 들었는데 실측에서 거짓이었다. 정본은 DefaultZoneGuard 의 javadoc 이다.
+  #
+  #    실제로 어긋나는 자리는 verification_runs.started_at 이다(같은 행의 as_of 는 UTC).
+  #    선점문의 :stuckBefore 도 그랬는데 StuckRunClaim.claim 이 바인딩을 감싸 닫았다.
+  #    증상이 "가드가 안 운다" 뿐이라 기동 때 잡는다.
   #
   #    테스트 JVM 은 일부러 Asia/Seoul 이라 테스트 설정이 이 값을 false 로 둔다.
   timezone-guard:

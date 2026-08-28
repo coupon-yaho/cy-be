@@ -151,6 +151,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `BatchSchemaIndexMissing` | `server` |
 | `BatchJdbcTimeoutUnverified` | `server` |
 | `BatchDefaultZoneNotUtc` | `server` |
+| `BatchTimezoneGaugeMissing` | `server` |
 | `VerifyNotSucceeding` · `VerifyNeverSucceeded` · `VerifyGaugeMissing` | `server` |
 | `VerifyRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |

@@ -1273,3 +1273,31 @@ groups:
             닫을 수 있습니다. verification_runs.started_at 도 as_of 와 다른 좌표계입니다.
             컨테이너는 batch.yml 의 TZ, 로컬은 -Duser.timezone=UTC 로 맞춘 뒤
             거절을 다시 켜십시오.
+
+      # **위 알림이 조인으로 서 있다.** BatchDefaultZoneNotUtc 는 두 게이지를 and 로 묶는데,
+      # 하나라도 없어지면 조인이 **빈 벡터**가 되어 위반이 있어도 조용하다 — 게이지가 0 일
+      # 때와 없을 때가 관측상 같아진다. 둘은 DefaultZoneGuard 의 같은 publish() 에서 나오므로
+      # 빈이 스캔 밖으로 나가면 함께 사라진다(테스트는 DefaultZoneGuardTest$Wiring 이 잡지만,
+      # 그것은 빌드 시점이고 이쪽은 배포 시점이다).
+      # ⚠️ **absent() 가 아니라 unless 다** — 형제 CouponRoundSwitchMetricMissing 과 같은 근거다.
+      # absent() 는 전역 부재만 참이라 배치를 두 대로 늘렸을 때 한 대에만 게이지가 없으면
+      # 조용한데, 조인이 on(instance, job) 이라 **그 인스턴스의 알림만** 침묵한다.
+      # 안쪽 and 는 "둘 다 있을 때만 시리즈" 라서, 어느 한쪽이 없어도 이 알림이 뜬다.
+      - alert: BatchTimezoneGaugeMissing
+        expr: >-
+          (min_over_time(up{job="cy-batch"}[5m]) == 1)
+          unless on(instance, job)
+          (cy_batch_default_zone_verified and on(instance, job) cy_batch_timezone_enforcement)
+        for: 10m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "JVM 기본 존 게이지가 없습니다 — BatchDefaultZoneNotUtc 가 조용히 꺼져 있습니다"
+          description: >-
+            배치는 떠 있는데 cy_batch_default_zone_verified 또는
+            cy_batch_timezone_enforcement 시리즈가 없습니다. BatchDefaultZoneNotUtc 가
+            둘을 and 로 묶으므로 **JVM 기본 존이 UTC 가 아니어도 알림이 한 건도 안 갑니다** —
+            그 상태는 예외도 로그도 안 내므로 관측 수단이 이것뿐입니다.
+            /actuator/prometheus 본문에서 두 이름을 직접 봅니다. 미터 이름이 바뀌었거나
+            DefaultZoneGuard 가 컴포넌트 스캔 밖으로 나간 것입니다.
