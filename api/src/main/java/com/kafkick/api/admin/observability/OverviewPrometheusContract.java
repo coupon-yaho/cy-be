@@ -58,11 +58,15 @@ public final class OverviewPrometheusContract {
      */
     private static boolean isFailure(ReasonCode reasonCode) {
         return switch (reasonCode) {
-            case TEMPORARILY_UNAVAILABLE, INTERNAL_ERROR, UNMAPPED -> true;
+            case TEMPORARILY_UNAVAILABLE, INTERNAL_ERROR, UNMAPPED,
+                    // v2 의 사고 넷. 정상 운영에서 전부 0 이라 표에 뜨면 그게 원인이다.
+                    VALUE_CORRUPT, GATE_NOT_READY, BAD_ARGUMENT, COUNTER_UNREADABLE -> true;
             // 403·409 로 나가는 설계된 거절과 대기열 계약 위반이다. 실패가 아니다.
             case NOT_OPENED, CAMPAIGN_CLOSED, GRADE_NOT_ELIGIBLE, QUEUE_REQUIRED, NO_ENTRY_TOKEN,
                     ENTRY_TOKEN_EXPIRED, ALREADY_ISSUED, STOCK_EXHAUSTED,
-                    INVALID_TRANSITION -> false;
+                    INVALID_TRANSITION,
+                    // 멱등 재시도다. 장애가 아니라 클라이언트가 다시 누른 것이다.
+                    REPLAY_IN_PROGRESS -> false;
         };
     }
 

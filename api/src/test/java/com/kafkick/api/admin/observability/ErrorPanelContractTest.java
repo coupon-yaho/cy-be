@@ -78,6 +78,8 @@ class ErrorPanelContractTest {
     void failureReasonsCarryServerFailuresOnly() {
         assertThat(OverviewPrometheusContract.FAILURE_REASONS)
                 .containsExactly(ReasonCode.TEMPORARILY_UNAVAILABLE, ReasonCode.INTERNAL_ERROR,
+                        ReasonCode.VALUE_CORRUPT, ReasonCode.GATE_NOT_READY,
+                        ReasonCode.BAD_ARGUMENT, ReasonCode.COUNTER_UNREADABLE,
                         ReasonCode.UNMAPPED);
 
         String query = OverviewPrometheusContract.failureReasonRates(Duration.ofMinutes(1));
@@ -116,6 +118,7 @@ class ErrorPanelContractTest {
     void selectorStringIsStableAcrossCalls() {
         assertThat(OverviewPrometheusContract.failureReasonRates(Duration.ofMinutes(1)))
                 .isEqualTo(OverviewPrometheusContract.failureReasonRates(Duration.ofMinutes(1)))
-                .contains("TEMPORARILY_UNAVAILABLE|INTERNAL_ERROR|UNMAPPED");
+                .contains("TEMPORARILY_UNAVAILABLE|INTERNAL_ERROR|VALUE_CORRUPT|GATE_NOT_READY"
+                        + "|BAD_ARGUMENT|COUNTER_UNREADABLE|UNMAPPED");
     }
 }

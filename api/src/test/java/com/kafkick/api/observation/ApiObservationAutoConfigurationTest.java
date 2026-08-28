@@ -22,6 +22,7 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
 import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
+import com.kafkick.api.observation.issuance.V2IssuanceOutcomeMeters;
 import com.kafkick.api.observation.issuance.CouponIssueObservationDependencyMapper;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import org.junit.jupiter.api.Test;
@@ -284,7 +285,8 @@ class ApiObservationAutoConfigurationTest {
     void startsWithAUserSuppliedRecorderWhileKafkaIsDisabled() {
         contextRunner
                 .withUserConfiguration(
-                        CouponIssueObservationCoordinator.class
+                        CouponIssueObservationCoordinator.class,
+                        V2IssuanceOutcomeMeters.class
                 )
                 .withBean("auditEventRecorder", EventRecorder.class, () -> event -> { })
                 .withBean(

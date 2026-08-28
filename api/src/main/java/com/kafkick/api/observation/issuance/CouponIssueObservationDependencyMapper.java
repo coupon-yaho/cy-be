@@ -4,6 +4,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponIssueV2ErrorCode;
 import com.kafkick.core.coupon.v2.V2CouponIssueException;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.ReasonCode;
@@ -66,7 +67,9 @@ public class CouponIssueObservationDependencyMapper {
             ErrorCode errorCode = businessException.getErrorCode();
             Dependency mapped = errorCode.dependency();
             // 쿠폰 발급 업무 코드는 NONE까지 확정한 값이므로 내부 cause가 덮어쓰지 않습니다.
-            if (errorCode instanceof CouponIssueErrorCode) {
+            // v2 의 BAD_ARGUMENT 가 특히 그렇다 — 호출부 버그를 Redis 장애로 집계하면 안 된다.
+            if (errorCode instanceof CouponIssueErrorCode
+                    || errorCode instanceof CouponIssueV2ErrorCode) {
                 return mapped;
             }
             if (mapped != Dependency.NONE) {
