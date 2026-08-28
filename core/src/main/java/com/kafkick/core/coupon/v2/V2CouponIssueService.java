@@ -63,10 +63,16 @@ public final class V2CouponIssueService {
      * <p>게이트의 거절은 예외가 아니라 결과다 — {@link V2CouponIssueResult#issueResult()} 가
      * 빈 값으로 돌아온다.
      *
+     * <p>발급 트랜잭션이나 완료 CAS 가 실패해도 곧바로 예외가 되지는 않는다. 커밋 응답만
+     * 잃은 경우가 있어 (회차, 회원, 멱등키) 로 재조회하고, 커밋된 발급과 완료된 멱등
+     * 레코드가 모두 확인되면 완료 CAS 를 다시 태워 <b>정상 결과로 돌려준다</b>
+     * ({@link V2CouponIssueResult#recoveredAfterFailure()} 가 참).
+     *
      * @throws IllegalArgumentException 명령의 회차와 정의의 회차가 다르거나 정의의 엔진이
      *     V2 가 아닐 때. 게이트를 호출하기 전에 중단한다
-     * @throws V2CouponIssueException 게이트 호출이나 발급 트랜잭션이 실패했을 때. 실패한
-     *     의존성과 보상 CAS 결과를 함께 싣는다
+     * @throws V2CouponIssueException 게이트 호출이나 발급 트랜잭션이 실패했고 위 재조회로도
+     *     복구하지 못했을 때, 또는 완료 CAS 가 비정상 결과를 냈을 때. 실패한 의존성과
+     *     보상 CAS 결과를 함께 싣는다
      */
     public V2CouponIssueResult issue(
             CouponIssueCommand command,
