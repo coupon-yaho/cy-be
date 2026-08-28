@@ -41,6 +41,11 @@ public class BrandDayController {
         );
     }
 
+    /**
+     * 양끝을 포함한 브랜드 데이 달력을 조회합니다.
+     * {@code from}과 {@code to}는 필수 ISO 날짜(yyyy-MM-dd)이며,
+     * 누락되거나 형식이 올바르지 않으면 400 잘못된 요청으로 처리됩니다.
+     */
     @GetMapping("/api/v1/calendar")
     public ResponseEnvelope<List<BrandDayCalendarResponse>> findCalendar(
             @RequestParam

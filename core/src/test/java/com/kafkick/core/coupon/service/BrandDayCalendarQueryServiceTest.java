@@ -35,6 +35,7 @@ class BrandDayCalendarQueryServiceTest {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private static final Instant AS_OF =
             Instant.parse("2026-08-10T00:00:00Z");
+    private static final long MAX_QUERY_RANGE_DAYS = 366;
 
     @Mock
     private CouponTemplateRepository couponTemplateRepository;
@@ -109,6 +110,23 @@ class BrandDayCalendarQueryServiceTest {
     }
 
     @Test
+    @DisplayName("실제 회차가 없는 과거 반복 일정은 달력에서 제외한다")
+    void excludeVirtualPastOccurrence() {
+        when(couponTemplateRepository.findAllActiveByIdAsc())
+                .thenReturn(List.of(template()));
+        when(calendarQueryPort.findBetween(
+                Instant.parse("2026-08-02T15:00:00Z"),
+                Instant.parse("2026-08-30T15:00:00Z")
+        )).thenReturn(List.of());
+
+        assertThat(service().findBetween(
+                LocalDate.of(2026, 8, 3),
+                LocalDate.of(2026, 8, 30),
+                Instant.parse("2026-08-20T00:00:00Z")
+        )).isEmpty();
+    }
+
+    @Test
     @DisplayName("프론트가 요청한 두 달 범위의 달력을 조회한다")
     void queryTwoMonthRange() {
         when(couponTemplateRepository.findAllActiveByIdAsc())
@@ -174,7 +192,8 @@ class BrandDayCalendarQueryServiceTest {
         return new BrandDayCalendarQueryService(
                 couponTemplateRepository,
                 calendarQueryPort,
-                SEOUL
+                SEOUL,
+                MAX_QUERY_RANGE_DAYS
         );
     }
 

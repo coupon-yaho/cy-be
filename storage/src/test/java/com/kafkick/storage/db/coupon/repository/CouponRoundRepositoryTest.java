@@ -284,6 +284,42 @@ class CouponRoundRepositoryTest {
     }
 
     @Test
+    @DisplayName("V18은 미지원 회차 정책이 있으면 회차 DDL 전에 중단한다")
+    void stopV18BeforeCouponRoundDdlWhenUnsupportedPolicyExists() {
+        jdbcTemplate.execute((ConnectionCallback<Void>) connection -> {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("""
+                        CREATE TEMPORARY TABLE coupons (
+                            policy_type VARCHAR(20) NOT NULL,
+                            data_grant_mb INT
+                        )
+                        """);
+                statement.execute("""
+                        INSERT INTO coupons (policy_type, data_grant_mb)
+                        VALUES ('DATA_GRANT', 1024)
+                        """);
+
+                assertThatThrownBy(() -> ScriptUtils.executeSqlScript(
+                        connection,
+                        new EncodedResource(new ClassPathResource(
+                                "db/migration/V18__remove_coupon_round_data_grant_policy.sql"
+                        ))
+                )).isInstanceOf(DataAccessException.class);
+
+                assertThat(statement.executeQuery(
+                        "SELECT data_grant_mb FROM coupons LIMIT 0"
+                )).isNotNull();
+            } finally {
+                try (Statement cleanup = connection.createStatement()) {
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS v18_coupon_policy_guard");
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS coupons");
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
     @DisplayName("존재하지 않는 템플릿이면 회차와 재고가 모두 롤백된다")
     void rollbackRoundAndStockTogether() {
         CouponTemplate unsavedTemplate = template(999L);

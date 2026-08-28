@@ -74,3 +74,4 @@ coupon:
 
   calendar:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-query-range-days: ${COUPON_CALENDAR_MAX_QUERY_RANGE_DAYS:366}

@@ -31,38 +31,52 @@ import com.kafkick.core.support.exception.CommonErrorCode;
 @Service
 public class BrandDayCalendarQueryService {
 
-    private static final long MAX_CALENDAR_RANGE_DAYS = 366;
-
     private final CouponTemplateRepository couponTemplateRepository;
     private final BrandDayCalendarQueryPort calendarQueryPort;
     private final ZoneId scheduleZone;
+    private final long maxQueryRangeDays;
 
     @Autowired
     public BrandDayCalendarQueryService(
             CouponTemplateRepository couponTemplateRepository,
             BrandDayCalendarQueryPort calendarQueryPort,
             @Value("${coupon.calendar.schedule-zone:${coupon.round-generation.schedule-zone}}")
-            String scheduleZone
+            String scheduleZone,
+            @Value("${coupon.calendar.max-query-range-days}")
+            long maxQueryRangeDays
     ) {
         this(
                 couponTemplateRepository,
                 calendarQueryPort,
-                ZoneId.of(scheduleZone)
+                ZoneId.of(scheduleZone),
+                maxQueryRangeDays
         );
     }
 
     public BrandDayCalendarQueryService(
             CouponTemplateRepository couponTemplateRepository,
             BrandDayCalendarQueryPort calendarQueryPort,
-            ZoneId scheduleZone
+            ZoneId scheduleZone,
+            long maxQueryRangeDays
     ) {
         this.couponTemplateRepository = Objects.requireNonNull(
                 couponTemplateRepository
         );
         this.calendarQueryPort = Objects.requireNonNull(calendarQueryPort);
         this.scheduleZone = Objects.requireNonNull(scheduleZone);
+        if (maxQueryRangeDays <= 0) {
+            throw new IllegalArgumentException(
+                    "달력 최대 조회 기간은 0보다 커야 합니다."
+            );
+        }
+        this.maxQueryRangeDays = maxQueryRangeDays;
     }
 
+    /**
+     * 양끝을 포함한 날짜 범위의 달력을 조회합니다.
+     * 필수값 누락, 종료일 역전, {@link LocalDate#MAX} 종료일과 설정된 최대 조회 기간 초과는
+     * 과도한 월 목록 생성과 종료 경계 계산 오류를 막기 위해 입력 오류로 거부합니다.
+     */
     @Transactional(readOnly = true)
     public List<BrandDayCalendarEntry> findBetween(
             LocalDate from,
@@ -103,9 +117,11 @@ public class BrandDayCalendarQueryService {
                 CouponRoundDetail actual = actualByOccurrence.remove(
                         new OccurrenceKey(template.id(), openAt)
                 );
-                result.add(actual == null
-                        ? virtualEntry(template, openAt, asOf)
-                        : actualEntry(actual));
+                if (actual != null) {
+                    result.add(actualEntry(actual));
+                } else if (openAt.isAfter(asOf)) {
+                    result.add(virtualEntry(template, openAt));
+                }
             }
         }
 
@@ -122,13 +138,9 @@ public class BrandDayCalendarQueryService {
 
     private BrandDayCalendarEntry virtualEntry(
             CouponTemplate template,
-            Instant openAt,
-            Instant asOf
+            Instant openAt
     ) {
         Instant closeAt = CouponTemplateSchedule.closeAt(template, openAt);
-        CouponRoundStatus status = openAt.isAfter(asOf)
-                ? CouponRoundStatus.SCHEDULED
-                : CouponRoundStatus.CLOSED;
 
         return new BrandDayCalendarEntry(
                 template.id(),
@@ -141,7 +153,7 @@ public class BrandDayCalendarQueryService {
                 template.eligibleGrades(),
                 openAt,
                 closeAt,
-                status,
+                CouponRoundStatus.SCHEDULED,
                 null,
                 null,
                 null
@@ -203,10 +215,12 @@ public class BrandDayCalendarQueryService {
             );
         }
         long requestedDays = ChronoUnit.DAYS.between(from, to) + 1;
-        if (requestedDays > MAX_CALENDAR_RANGE_DAYS) {
+        if (requestedDays > maxQueryRangeDays) {
             throw new BusinessException(
                     CommonErrorCode.INVALID_INPUT,
-                    "달력 조회 기간은 최대 366일까지 가능합니다."
+                    "달력 조회 기간은 최대 "
+                            + maxQueryRangeDays
+                            + "일까지 가능합니다."
             );
         }
     }
