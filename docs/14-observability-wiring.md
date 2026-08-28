@@ -148,6 +148,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `ExpireMetricsStale` · `ExpireMetricsBackdated` | `server` |
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |
+| `BatchSchemaIndexMissing` | `server` |
 | `VerifyNotSucceeding` · `VerifyNeverSucceeded` · `VerifyGaugeMissing` | `server` |
 | `VerifyRunningTooLong` | `server` |
 | `ExpireLeavesWorkBehind` · `ExpireMetricsUnknown` | `server` |
@@ -572,8 +573,9 @@ docker compose -f base.yml exec -T alertmanager amtool silence expire --alertman
    **검증용 셋에는 Spring Batch 메타 테이블이 없다.** cy-seed 의 `ddl/` 이 안 만든다.
    `SchemaPresenceGuard` 가 기동 시점에 그것을 말해 주므로 배치가 아예 안 뜬다 —
    그 스키마에 **배치 메타 마이그레이션 셋**을 한 번 부어야 한다 — `V11__batch_metadata.sql`(테이블)과
-   `V2026082513`·`V2026082514`(인덱스)다. **인덱스를 빼먹으면 기동도 동작도 통과한다** — `SchemaPresenceGuard`
-   는 테이블만 보기 때문이다. 증상은 인덱스마다 다르다:
+   `V2026082513`·`V2026082514`(인덱스)다. **인덱스를 빼먹으면 `SchemaPresenceGuard` 가 기동을 거절한다**(CY-686).
+   거절 메시지가 없는 인덱스마다 파일명과 아래 증상을 함께 말한다. 급하면
+   `batch.schema-guard.require-batch-indexes=false` 로 끌 수 있고, 그때는 아래가 실제로 일어난다:
    - `V2026082513`(`STATUS, END_TIME`) 누락 → 되읽기 둘이 7일 창을 인덱스 없이 훑는다. 각자의
      데드라인을 넘기면 **게이지가 `NaN`** 이 된다 — 키가 다르다:
      `BatchRunMetricsRefresher` 는 `batch.metrics.run-timeout-ms`,

@@ -65,6 +65,15 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
     private static final List<String> CRITICAL_COLUMNS =
             List.of("verification_runs.origin");
 
+    /**
+     * <b>없어도 기동과 동작이 통과하는 인덱스 둘.</b> {@code V2026082513}·{@code V2026082514}
+     * 가 판다. 빠지면 되읽기가 {@code STATUS}·{@code END_TIME} 을 전체 스캔하고 정리 잡이
+     * {@code CREATE_TIME} 을 매 청크 전체 스캔한다 — 조용히 느려질 뿐이라 늦게 드러난다.
+     */
+    private static final List<String> CRITICAL_INDEXES =
+            List.of("BATCH_JOB_EXECUTION.IX_JOB_EXEC_STATUS_END(STATUS,END_TIME)",
+                    "BATCH_JOB_EXECUTION.IX_JOB_EXEC_CREATE_TIME(CREATE_TIME)");
+
     private static final List<String> CORE_TABLES =
             Stream.concat(DATA_TABLES.stream(), BATCH_META_TABLES.stream()).toList();
 
@@ -490,6 +499,55 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .query(String.class)
                 .list();
         return CRITICAL_COLUMNS.stream()
+                .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
+                .toList();
+    }
+
+    /**
+     * <b>테이블 목록을 상수에서 뽑는다.</b> 질의에 이름을 또 적으면 사실이 두 곳에 산다 —
+     * 다른 테이블의 인덱스를 {@link #CRITICAL_INDEXES} 에 더하는 날 질의가 그 행을 절대
+     * 안 돌려줘 <b>영원히 "없음"</b> 이 되고, 기동이 계속 거절된다. 컴파일러도 테스트도
+     * 안 잡는 모양이다.
+     */
+    private static List<String> guardedTables() {
+        return CRITICAL_INDEXES.stream()
+                .map(name -> name.substring(0, name.indexOf('.')))
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * <b>이름이 아니라 컬럼 구성까지 본다.</b> 지키려는 성질은 <b>선두 컬럼</b>이다 —
+     * {@code V2026082513} 의 헤더가 EXPLAIN 으로 재서 박아 뒀다:
+     * {@code (JOB_INSTANCE_ID, STATUS, END_TIME)} 은 {@code type=index rows=25,950} 인데
+     * {@code (STATUS, END_TIME)} 은 {@code type=range rows=2,016} 이다. 이름만 대조하면
+     * <b>같은 이름의 다른 모양</b>(손으로 친 DDL, 고치기 전 모양이 남은 스키마)이 가드를
+     * 통과하고 되읽기는 여전히 전체를 훑는다 — "조용히 느린 것" 이 가드를 지나간다.
+     *
+     * <p><b>{@code is_visible} 도 본다.</b> {@code ALTER INDEX … INVISIBLE} 을 하면
+     * {@code statistics} 에 행은 그대로 남고 <b>옵티마이저만 무시한다</b> — 그것을 안 보면
+     * 가드는 "있다" 고 답하는데 되읽기는 여전히 전체를 훑는다. 이 저장소는 인덱스 개선폭을
+     * 실측하는 것이 과제의 일부라 그 토글이 실제로 쓰인다.
+     *
+     * <p>{@code information_schema.statistics} 는 인덱스가 아니라 <b>인덱스 컬럼</b>마다
+     * 한 행이라 {@code GROUP BY} 로 접는다 — 그래서 {@code DISTINCT} 가 필요 없다.
+     * {@code table_name} 술어로 좁히는 것은 형제 {@code hasCleanOnlyConstraints} 와 같다.
+     */
+    @Override
+    public List<String> missingCriticalIndexes() {
+        List<String> present = jdbcClient.sql("""
+                        SELECT CONCAT(table_name, '.', index_name, '(',
+                                      GROUP_CONCAT(column_name ORDER BY seq_in_index), ')')
+                          FROM information_schema.statistics
+                         WHERE table_schema = DATABASE()
+                           AND table_name IN (:tables)
+                           AND is_visible = 'YES'
+                         GROUP BY table_name, index_name
+                        """)
+                .param("tables", guardedTables())
+                .query(String.class)
+                .list();
+        return CRITICAL_INDEXES.stream()
                 .filter(name -> present.stream().noneMatch(name::equalsIgnoreCase))
                 .toList();
     }

@@ -229,4 +229,14 @@ public interface VerificationRuleRepository {
      * 그래서 이 공식에는 {@code eligible_grades_mask} 축이 없습니다 — 계약이 그렇게 정했습니다.
      */
     String datasetFingerprint(LocalDateTime asOf);
+
+    /**
+     * <b>배치 메타의 성능 인덱스 중 없는 것.</b> 테이블·컬럼 축과 달리 이쪽이 빠져도
+     * <b>기동과 동작이 통과한다</b> — 되읽기가 데드라인을 넘겨 게이지가 {@code NaN} 이
+     * 되거나 정리 잡이 매 청크 전체 스캔을 하는 것으로만 늦게 드러난다.
+     * 그래서 기동 때 묻는다.
+     *
+     * @return {@code TABLE.INDEX} 형식. 다 있으면 빈 목록
+     */
+    List<String> missingCriticalIndexes();
 }

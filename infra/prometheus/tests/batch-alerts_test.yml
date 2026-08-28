@@ -992,3 +992,51 @@ tests:
       - eval_time: 195m
         alertname: ExpireMakingNoProgress
         exp_alerts: []
+
+  # 거절이 켜져 있으면(기본) 이 알림은 구조적으로 못 뜬다 — 그 상태에서는 프로세스가
+  # 아예 안 뜨므로 BatchTargetDown 이 그 축을 진다. 켠 채로 우는 일이 없어야 한다.
+  - interval: 1m
+    name: "거절이 켜져 있으면 인덱스 알림이 안 운다"
+    input_series:
+      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="cy-batch"}'
+        values: '2+0x30'
+      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchSchemaIndexMissing
+        exp_alerts: []
+
+  - interval: 1m
+    name: "끄고 띄웠고 인덱스가 없으면 운다"
+    input_series:
+      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x30'
+      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchSchemaIndexMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: "batch:9092"
+              job: "cy-batch"
+            exp_annotations:
+              summary: "배치 메타 인덱스가 없는 채로 떠 있습니다 — 거절을 꺼 뒀습니다"
+              description: >-
+                SCHEMA_GUARD_REQUIRE_BATCH_INDEXES=false 로 기동 거절을 끈 상태이고, 실제로 인덱스가 1개 없습니다. **되읽기 게이지가 NaN 이 되거나 정리 잡이 매 청크 전체 스캔을 합니다** — 그때 원인을 여기서 찾으십시오. 기동 로그의 "배치 메타 인덱스가 없습니다" ERROR 가 어느 인덱스인지 답합니다. 절차는 docs/14 의 배치 메타 주입 절입니다. 부은 뒤에는 거절을 다시 켜십시오.
+
+  # 끈 채로 인덱스가 다 있으면 조용해야 한다 — 켜라고 재촉하는 알림이 아니다.
+  - interval: 1m
+    name: "꺼져 있어도 인덱스가 다 있으면 조용하다"
+    input_series:
+      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x30'
+      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchSchemaIndexMissing
+        exp_alerts: []

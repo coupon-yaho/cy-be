@@ -396,8 +396,9 @@ ASOF_API="${ASOF/ /T}"
 ./.venv/bin/python bin/seed.py all --dataset corrupt --schema coupon_corrupt --as-of "$ASOF"
 
 # ── 4. 배치 메타를 두 스키마에 붓는다 ────────────────────────────────────
-# 시드의 ddl/ 에는 BATCH_* 가 하나도 없다. 인덱스 둘을 빼먹으면 **기동도 동작도
-# 통과하는데** 게이지가 NaN 이 되거나 정리 잡이 매 청크 전체 스캔이 된다 — docs/14.
+# 시드의 ddl/ 에는 BATCH_* 가 하나도 없다. 인덱스 둘을 빼먹으면 **기동이 거절된다**
+# (CY-686). 끄고 띄우면(batch.schema-guard.require-batch-indexes=false) 게이지가 NaN 이
+# 되거나 정리 잡이 매 청크 전체 스캔이 된다 — docs/14.
 cd ../cy-be
 for S in coupon_clean coupon_corrupt; do
   for F in V11__batch_metadata.sql \
