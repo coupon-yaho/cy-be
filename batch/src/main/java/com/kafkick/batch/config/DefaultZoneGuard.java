@@ -32,9 +32,11 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>{@code StuckRunClaim.CLAIM} · {@code VerifyStopService.CLAIM} 의
  *       {@code :stuckBefore} — 값이 배치 메타에서 온 <b>JVM 기본 존</b>이라 어긋났다.
- *       진도 조건이 <b>항상 참</b>이 되어 살아 있는 실행이 시체 판정을 통과하고,
- *       복구·중단 API 가 <b>도는 잡을 닫았다.</b> CY-718 이 {@code StuckRunClaim#claim} 안에
- *       바인딩을 가둬 축을 맞췄다
+ *       <b>동쪽 존에서만 위험했다</b>: KST 면 컷오프가 아홉 시간 앞서 진도 조건이
+ *       <b>항상 참</b>이 되고, 살아 있는 실행이 시체 판정을 통과해 복구·중단 API 가
+ *       <b>도는 잡을 닫았다.</b> 서쪽 존은 반대로 창이 넓어져 <b>진짜 시체도 오프셋만큼
+ *       늦게</b> 걷힌다 — 덜 위험할 뿐 둘 다 틀린 답이다.
+ *       CY-718 이 {@code StuckRunClaim#claim} 안에 바인딩을 가둬 축을 맞췄다
  *   <li>{@code VerifyJobConfig} 의 {@code verification_runs.started_at} — 배치 메타의
  *       {@code getStartTime()}(JVM 기본 존)을 원시로 쓰는데, <b>같은 행의</b>
  *       {@code as_of} 는 {@code TimeProvider}(UTC)다. 아직 안 고쳤다({@code docs/13})
@@ -82,9 +84,10 @@ public class DefaultZoneGuard {
                 + "스프링 배치는 배치 메타 시각을 Timestamp.valueOf 로 써서 세션 존(UTC)"
                 + "으로 정규화하는데, SQL 에 원시 LocalDateTime 으로 바인딩하는 값은 그 "
                 + "정규화를 안 탑니다 — 두 축이 이 존의 오프셋만큼 어긋납니다. "
-                + "선점문의 진도 조건이 살아 있는 실행에도 참이 되어 복구·중단 API 가 "
-                + "도는 잡을 닫고, verification_runs.started_at 도 as_of 와 다른 "
-                + "좌표계에 섭니다. "
+                + "verification_runs 한 행 안에서 started_at(JVM 기본 존)과 "
+                + "as_of(UTC)가 이 존의 오프셋만큼 벌어집니다. "
+                + "선점문의 :stuckBefore 도 같은 문제였는데 CY-718 이 "
+                + "StuckRunClaim.claim 에 바인딩을 모아 닫았습니다. "
                 + "컨테이너는 batch.yml 의 TZ, 로컬은 -Duser.timezone=UTC 로 맞추십시오.";
         if (required) {
             throw new IllegalStateException(message
@@ -100,7 +103,7 @@ public class DefaultZoneGuard {
      * <b>끈 상태를 지표로 낸다.</b> 이 스택에는 Loki·promtail 이 없어 <b>로그가 감시 수단이
      * 아니다</b> — 형제 둘({@code cy_batch_schema_index_enforcement} ·
      * {@code cy_batch_jdbc_timeout_verified})이 같은 이유로 같은 모양을 쓴다. 이 축은
-     * 증상이 아예 없어서(복구 API 가 도는 잡을 닫는 것도 조용하다) 더 필요하다.
+     * 증상이 아예 없어서(어긋난 started_at 도 판정을 안 바꾼다) 더 필요하다.
      */
     private static void publish(MeterRegistry registry, boolean required, ZoneId zone) {
         // 형제 둘은 여기서 registry null 을 보는데, 그 가지는 <b>도달할 수 없다</b> —

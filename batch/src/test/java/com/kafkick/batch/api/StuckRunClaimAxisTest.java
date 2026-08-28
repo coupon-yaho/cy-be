@@ -35,10 +35,19 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 요지만 옮기면, KST JVM 에서 두 축이 아홉 시간 어긋나 진도 조건이 <b>항상 참</b>이 되고
  * 방금 뜬 실행이 시체 판정을 통과한다 — 복구·중단 API 가 도는 잡을 닫는다.
  *
+ * <p><b>이 테스트가 재는 것은 동쪽 방향뿐이다</b>({@code batch/build.gradle} 이 테스트 JVM 을
+ * {@code Asia/Seoul} 로 고정한다). 서쪽 존에서는 부호가 뒤집혀 <b>창이 넓어지는</b> 쪽으로
+ * 틀리는데, 그쪽은 살아 있는 잡을 닫지 않아 이 단언({@code isZero})으로는 안 갈린다 —
+ * 방향별 영향은 {@link StuckRunClaim#claim} 의 javadoc 이 든다.
+ *
  * <p><b>세 문장을 함께 잰다.</b> 그리고 <b>변환을 테스트가 직접 부르지 않는다</b> —
- * {@link StuckRunClaim#claim} 이 바인딩까지 감싸서, 콜사이트에서 축을 빠뜨리는 것이
- * 구조적으로 불가능하다. 한때 테스트가 변환을 직접 불렀는데 그러면 <b>SQL 과 헬퍼만</b>
- * 재고 서비스가 그것을 쓰는지는 안 재는 상태였다.
+ * {@link StuckRunClaim#claim} 이 바인딩까지 감싼다. 한때 테스트가 변환을 직접 불렀는데
+ * 그러면 <b>SQL 과 헬퍼만</b> 재고 서비스가 그것을 쓰는지는 안 재는 상태였다.
+ *
+ * <p><b>다만 이것만으로 "우회가 불가능" 하지는 않다.</b> 이 테스트도 서비스 메서드가 아니라
+ * {@code claim} 을 직접 부르고, SQL 상수가 패키지 공개라 서비스가 {@code jdbcClient} 로 바로
+ * 실행할 수 있다 — 그 구멍은 {@code StuckBeforeBindingIsCentralizedTest} 가 소스 스캔으로
+ * 막는다. 둘이 한 짝이다: 여기는 <b>축이 맞는지</b>, 그쪽은 <b>축을 지나는지</b>를 잰다.
  *
  * <p>자바 쪽 벽시계로 만든 <b>원시 값</b>을 심는 것이 요점이다. 기존 테스트들은
  * {@code stuckExecutions()} 가 <b>DB 에서 읽어 이미 정규화된</b> 값을 써서 그 축을 못 잰다.

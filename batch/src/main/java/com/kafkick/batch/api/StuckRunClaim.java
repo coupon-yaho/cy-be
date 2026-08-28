@@ -68,13 +68,21 @@ final class StuckRunClaim {
      * 으로 렌더링한 값이라 두 축이 JVM 기본 존의 오프셋만큼 어긋난다.
      *
      * <p><b>실측은 {@link com.kafkick.batch.config.DefaultZoneGuard} 가 정본으로 든다.</b>
-     * 요지만 옮기면, 그 어긋남은 진도 조건을 <b>항상 참</b>으로 만들어 방금 뜬 실행이 시체
-     * 판정을 통과하게 하고, 복구·중단 API 가 <b>도는 잡을 닫는다.</b>
+     * 요지만 옮기면 <b>부호를 따라 갈린다</b> — 조건이 {@code 메타시각 <= :stuckBefore} 라서다.
+     * <b>UTC 동쪽</b>(KST 등)이면 컷오프가 오프셋만큼 앞서 조건이 <b>항상 참</b>이 되고,
+     * 방금 뜬 실행이 시체 판정을 통과해 복구·중단 API 가 <b>도는 잡을 닫는다.</b>
+     * <b>UTC 서쪽</b>이면 반대로 창이 넓어져 <b>진짜 시체도 오프셋만큼 늦게</b> 걷힌다 —
+     * 덜 위험할 뿐 둘 다 틀린 답이다.
      *
      * <p><b>바인딩을 여기 한 곳에 가둔 이유가 그것이다.</b> 콜사이트마다 변환을 부르게 두면
      * 하나를 빠뜨려도 테스트가 안 잡는다 — 자바 쪽 {@code requireStuck} 이 먼저 막아
      * 살아 있는 실행은 이 문장까지 오지도 않고, 진짜 시체는 어느 축이든 1행이라
      * <b>성공 경로도 안 갈린다.</b>
+     *
+     * <p><b>가두는 것만으로는 부족해서 검사로 든다.</b> SQL 상수가 패키지 공개라 같은 패키지의
+     * 서비스가 {@code jdbcClient.sql(CLAIM)} 으로 이 메서드를 <b>우회</b>할 수 있다 —
+     * {@code StuckBeforeBindingIsCentralizedTest} 가 소스를 훑어 {@code stuckBefore} 바인딩이
+     * 이 파일 하나뿐인지, 그리고 그 한 번이 {@code Timestamp.valueOf} 를 지나는지 센다.
      *
      * @param sql {@link #CLAIM} 또는 {@code VerifyStopService.CLAIM}. 검증은
      *            {@code STOPPING} 을 뺀 자기 문장을 쓴다

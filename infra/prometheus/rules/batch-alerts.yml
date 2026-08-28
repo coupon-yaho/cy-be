@@ -1256,8 +1256,10 @@ groups:
       # JVM 기본 존이 UTC 를 벗어난 채 떠 있는 상태. 거절을 껐거나 베이스 이미지가 바뀌었다.
       # 가드 자신은 기동 때 ERROR 를 한 줄 남긴다. 그런데 이 스택엔 Loki·promtail 이 없어
       # 그것을 모으는 것이 없고, 재기동하면 스크롤 밖으로 밀린다. 그리고 **피해 쪽은 진짜로
-      # 조용하다** — 선점문의 진도 조건이 항상 참이 되어 복구·중단 API 가 도는 잡을 닫는데
-      # 그 경로는 예외도 로그도 안 낸다. 그래서 지표로 든다.
+      # 조용하다** — verification_runs 한 행 안에서 started_at 과 as_of 가 다른 좌표계에
+      # 서는데, 예외도 로그도 안 나고 판정 결과도 안 바뀐다. 그래서 지표로 든다.
+      # (선점문의 :stuckBefore 도 같은 축 문제였는데 CY-718 이 StuckRunClaim.claim 에
+      #  바인딩을 모아 닫았다 — 여기 그 피해를 적어 두면 운영자가 이미 없는 버그를 쫓는다.)
       - alert: BatchDefaultZoneNotUtc
         expr: >-
           cy_batch_default_zone_verified == 0
@@ -1270,9 +1272,11 @@ groups:
           summary: "JVM 기본 존이 UTC 가 아닌 채로 떠 있습니다"
           description: >-
             TIMEZONE_GUARD_REQUIRED=false 로 거절을 끈 상태이고, 실제로 JVM 기본 존이
-            고정 오프셋 0 이 아닙니다. **선점문의 :stuckBefore 가 배치 메타 컬럼과 다른
-            축에 서서 진도 조건이 항상 참이 됩니다** — 복구·중단 API 가 살아 있는 잡을
-            닫을 수 있습니다. verification_runs.started_at 도 as_of 와 다른 좌표계입니다.
+            고정 오프셋 0 이 아닙니다. **verification_runs 한 행 안에서 started_at(JVM 기본
+            존)과 as_of(UTC)가 이 존의 오프셋만큼 벌어집니다** — 예외도 로그도 안 나고
+            판정 결과도 안 바뀌어서, 나중에 그 시각으로 사건을 맞춰 볼 때 드러납니다.
+            선점문의 :stuckBefore 는 CY-718 이 StuckRunClaim.claim 으로 닫았으니
+            그쪽은 보지 마십시오.
             컨테이너는 batch.yml 의 TZ, 로컬은 -Duser.timezone=UTC 로 맞춘 뒤
             거절을 다시 켜십시오.
 
