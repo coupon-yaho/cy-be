@@ -44,12 +44,15 @@ public class VerifyAbandonService {
 
     private final JobOperator verifyJobOperator;
     private final JobRepository jobRepository;
+    private final org.springframework.jdbc.core.simple.JdbcClient jdbcClient;
 
     public VerifyAbandonService(
             @Qualifier(VerifyExecutorConfig.OPERATOR) JobOperator verifyJobOperator,
-            JobRepository jobRepository) {
+            JobRepository jobRepository,
+            org.springframework.jdbc.core.simple.JdbcClient jdbcClient) {
         this.verifyJobOperator = verifyJobOperator;
         this.jobRepository = jobRepository;
+        this.jdbcClient = jdbcClient;
     }
 
     /**
@@ -82,8 +85,19 @@ public class VerifyAbandonService {
                             + ". 도는 실행이면 먼저 stop 을 부르고, 이미 끝난 실행이면 "
                             + "버릴 것이 없습니다(트리거를 막지 않습니다). executionId=" + executionId);
         }
+        // **검사와 쓰기 사이를 닫는다.** update(JobExecution) 에는 낙관적 락이 사실상 없어,
+        // 없으면 동시 요청 둘이 모두 위 검사를 통과해 END_TIME 을 두 번 쓴다. 형제 셋
+        // (stop · expire recover · cleanup recover)이 전부 이 모양이다.
+        if (jdbcClient.sql(StuckRunClaim.ABANDON_CLAIM).param("id", executionId).update() == 0) {
+            String current = jdbcClient.sql(StuckRunClaim.CURRENT_STATUS)
+                    .param("id", executionId).query(String.class).single();
+            throw new BusinessException(VerificationErrorCode.VERIFY_NOT_ABANDONABLE,
+                    "선점에 실패했습니다. 그 사이 상태가 바뀌었습니다. 지금=" + current
+                            + " executionId=" + executionId);
+        }
         try {
-            verifyJobOperator.abandon(execution);
+            // 선점으로 오른 VERSION 을 반영한 객체로 써야 한다.
+            verifyJobOperator.abandon(requireVerifyExecution(executionId));
             log.warn("검증 실행을 버렸습니다. 하드킬로 남은 행을 걷어내는 복구 절차입니다. "
                     + "executionId={}", executionId);
             // stop 과 달리 **완료 동작**이라 200 이다. 202 + StopRequested 를 재사용하면

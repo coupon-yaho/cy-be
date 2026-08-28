@@ -39,6 +39,22 @@ final class StuckRunClaim {
                             je.START_TIME, je.CREATE_TIME) <= :stuckBefore
             """;
 
+
+    /**
+     * <b>{@code abandon} 의 선점문.</b> 시체 판정이 아니라 <b>버릴 수 있는 상태</b>를 조건으로
+     * 건다 — {@code abandon} 은 진도를 안 보고 {@code stop} 다음 단계를 지기 때문이다.
+     *
+     * <p>없으면 검사와 쓰기 사이가 열린다. {@code update(JobExecution)} 에는 낙관적 락이
+     * 사실상 없으므로({@link ExpireRecoveryService} 가 적어 둔 사실) <b>동시 요청 둘이 모두
+     * 통과해 {@code END_TIME} 을 두 번 쓴다</b> — 이 저장소는 실행 이력을 판정 근거로 삼는다.
+     */
+    static final String ABANDON_CLAIM = """
+            UPDATE BATCH_JOB_EXECUTION je
+               SET je.VERSION = je.VERSION + 1
+             WHERE je.JOB_EXECUTION_ID = :id
+               AND je.STATUS IN ('STOPPING','STOPPED')
+            """;
+
     /** 선점에 진 뒤 <b>현재 읽기</b>로 상태를 본다. 스냅샷 읽기는 옛 값을 준다(RR). */
     static final String CURRENT_STATUS = """
             SELECT STATUS FROM BATCH_JOB_EXECUTION

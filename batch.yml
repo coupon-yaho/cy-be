@@ -63,8 +63,13 @@ services:
       # 플레이스홀더가 기본값으로 굳고 손잡이가 안 닿는다.
       #
       # ⚠️ DB_SOCKET_TIMEOUT_MS 는 **가장 긴 Step 데드라인보다 커야** DataSourceTimeoutGuard
-      #    를 지난다. VERIFY_STEP_TIMEOUT_MS 를 올리는 날 이 값도 같이 올려야 한다 —
+      #    를 지난다. batch.verify.step-timeout-ms 를 올리는 날 이 값도 같이 올려야 한다 —
       #    안 올리면 기동이 거절되고, 그때 이 변수가 여기 없으면 되돌릴 방법이 없다.
+      #
+      #    ⚠️ **Step 데드라인 셋은 여기 없다.** 그것들은 환경변수로 조작할 일이 없다고 보고
+      #       기본값에 둔다 — 바꾸려면 application.yml 을 고쳐 이미지를 다시 굽는다.
+      #       즉 "둘을 같이 올린다" 는 배포 시점의 이야기이고, 런타임에 한쪽만 움직여
+      #       기동이 막히는 조합은 안 생긴다.
       DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-2000}
       DB_SOCKET_TIMEOUT_MS: ${DB_SOCKET_TIMEOUT_MS:-660000}
       BATCH_ADMIN_TIMEOUT_SECONDS: ${BATCH_ADMIN_TIMEOUT_SECONDS:-5}

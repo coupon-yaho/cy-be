@@ -43,7 +43,8 @@ class DataSourceTimeoutGuardTest {
     }
 
     private static DataSourceTimeoutGuard guard(String url, boolean required) {
-        return new DataSourceTimeoutGuard(urlOf(url), required, VERIFY, EXPIRE, CLEANUP);
+        return new DataSourceTimeoutGuard(urlOf(url), required, VERIFY, EXPIRE, CLEANUP,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Test
@@ -52,7 +53,8 @@ class DataSourceTimeoutGuardTest {
         String shipped = shippedUrl();
 
         assertThatCode(() -> new DataSourceTimeoutGuard(
-                urlOf(shipped), true, VERIFY, EXPIRE, CLEANUP))
+                urlOf(shipped), true, VERIFY, EXPIRE, CLEANUP,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry()))
                 .as("storage.yml.example 의 URL 과 이 가드가 갈리면 배포가 못 뜬다. "
                         + "그 둘을 여기서 묶는다 — 값을 고치는 사람이 한쪽만 고치면 빨개진다")
                 .doesNotThrowAnyException();
@@ -130,7 +132,8 @@ class DataSourceTimeoutGuardTest {
                 getClass().getClassLoader(), new Class<?>[] {DataSource.class},
                 (proxy, method, args) -> null);
 
-        assertThatCode(() -> new DataSourceTimeoutGuard(opaque, true, VERIFY, EXPIRE, CLEANUP))
+        assertThatCode(() -> new DataSourceTimeoutGuard(opaque, true, VERIFY, EXPIRE, CLEANUP,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry()))
                 .doesNotThrowAnyException();
     }
 

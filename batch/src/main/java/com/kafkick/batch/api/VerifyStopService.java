@@ -93,7 +93,7 @@ public class VerifyStopService {
      * {@code @Scheduled} 여덟이 풀에서 커넥션을 못 얻는다.
      * {@code ExpireRecoveryService.recover} 와 같은 근거다.
      */
-    @Transactional(timeout = 10)
+    @Transactional(timeoutString = "${batch.admin.recover-timeout-seconds:10}")
     public Outcome stop(long executionId) {
         JobExecution execution = requireVerifyExecution(executionId);
 
