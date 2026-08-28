@@ -65,6 +65,16 @@ tasks.named('test') {
             rootProject.file('docs/14-observability-wiring.md'))
             .withPathSensitivity(PathSensitivity.RELATIVE)
             .withPropertyName('externalContractFiles')
+
+    // NoOrphanJavadocTest 가 저장소의 자바 소스를 **텍스트로** 훑는다. 클래스패스가 아니라
+    // 파일을 읽으므로 gradle 이 스스로 알 수 없다 — 선언 안 하면 다른 모듈의 **주석만**
+    // 바꿨을 때 :batch:test 가 UP-TO-DATE 로 건너뛴다(실측). 그러면 새 고아 javadoc 이
+    // 로컬에서 조용히 통과한다. NoWallClockInBatchTest 도 같은 방식으로 소스를 읽는다.
+    inputs.files(rootProject.fileTree(rootProject.projectDir) {
+        include '*/src/**/*.java'
+        exclude '**/build/**'
+    }).withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName('scannedJavaSources')
 }
 
 tasks.matching { it.name == 'bootRun' }.configureEach {
