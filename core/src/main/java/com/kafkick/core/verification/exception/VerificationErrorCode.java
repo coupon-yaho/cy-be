@@ -216,6 +216,44 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-018",
             "검출 행에 알 수 없는 규칙 이름이 있습니다."
+    ),
+
+    /**
+     * <b>정리 실행 조회에서 못 찾았다.</b> 없는 번호와 <b>남의 잡</b>을 같은 404 로 접는다 —
+     * 남의 잡이라고 알려 주면 인증 없는 이 API 가 배치 메타의 실행 번호 공간을 훑는 수단이
+     * 된다. 만료 쪽 {@code EXPIRATION-006} 과 같은 판단이다.
+     */
+    CLEANUP_EXECUTION_NOT_FOUND(
+            404,
+            "VERIFICATION-020",
+            "그런 정리 실행이 없습니다."
+    ),
+
+    /**
+     * <b>시체가 아닌 정리 실행은 안 걷는다.</b> 판정은 나이가 아니라 <b>진도</b>이고
+     * {@code RunningJobProbe.stuckExecutions} 하나가 그 임계를 진다.
+     *
+     * <p>문구가 갈래를 단정하지 않는다. 클라이언트에 나가는 것은 이 문장뿐이라
+     * (detail 은 로그 전용) <i>"아직 도는 중이다"</i> 로 못 박으면 이미 끝난 실행에도
+     * 그렇게 나가 <b>운영자가 시체를 살아 있다고 믿는다.</b> 다음 동작은 {@code /runs/stuck}
+     * 을 다시 보는 것 하나이므로 그것을 담는다.
+     */
+    CLEANUP_EXECUTION_NOT_STUCK(
+            409,
+            "VERIFICATION-021",
+            "지금 걷어낼 수 있는 정리 실행이 아닙니다. /runs/stuck 을 다시 확인하십시오."
+    ),
+
+    /**
+     * <b>admin 조회가 데드라인을 넘겼다.</b> 500 으로 접으면 안 된다 — 이 API 들의 존재
+     * 이유가 <i>"DB 가 아플 때 부르는 진단 도구"</i> 인데, 그 상황에서 500 을 받은 운영자는
+     * <b>배치가 깨졌다</b> 로 읽고 컨테이너를 내린다. 실제로는 DB 가 느린 것이고 배치는
+     * 멀쩡하다. 그리고 인증 없는 API 라 500 갈래는 스택트레이스를 원하는 만큼 쌓는 수단이 된다.
+     */
+    ADMIN_QUERY_TIMED_OUT(
+            503,
+            "VERIFICATION-022",
+            "배치 메타 조회가 데드라인을 넘겼습니다. DB 부하를 먼저 확인하십시오."
     );
 
     private final int status;

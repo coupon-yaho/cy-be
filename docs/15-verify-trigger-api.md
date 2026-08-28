@@ -603,12 +603,30 @@ autocommit 으로 각자 스냅샷을 열고, 그 사이 `expected_findings` 가
 > `batch.api` 컨트롤러 집합이 **같은지**(부분집합이 아니라 등식) 기계로 확인한다.
 > 등록을 빼는 돌연변이로 빨개지는 것을 확인했다.
 
-### `cleanupJob` 은 아직 없다
+### `cleanupJob` 복구 (CY-697)
 
-`BatchStuckExecution` 은 `Job` 빈 **셋 전부**에 뜨는데(`BatchRunMetrics` 가 `List<Job>` 에서
-이름을 모은다) 컨트롤러는 둘이다. `cleanupJob` 시체는 여전히 `docs/13` §6 의 손 SQL 이
-유일한 길이고, 알림 description 이 그 사실을 명시한다. 잡 이름을 경로 변수로 받는 형태로
-일반화하는 것은 별도 티켓이다 — 그때 "트리거는 열지 않는다" 규율도 함께 옮겨야 한다.
+`BatchStuckExecution` 은 `Job` 빈 **셋 전부**에 뜨는데 컨트롤러가 둘뿐이라
+`cleanupJob` 시체는 손 SQL 이 유일한 길이었다. 이제 만료와 같은 모양이다.
+
+```bash
+GET  /api/v1/admin/cleanup/runs/stuck              # 어느 실행이고 정말 죽었나
+POST /api/v1/admin/cleanup/runs/{id}/recover       # 한 번에 FAILED 로 닫는다
+```
+
+| | |
+|---|---|
+| 404 | `VERIFICATION-020` — 없는 번호와 **남의 잡**을 같은 코드로 접는다 |
+| 409 | `VERIFICATION-021` — 시체가 아니다. `/runs/stuck` 을 다시 본다 |
+| 재시도 | **안전하다.** 이미 닫힌 실행이면 아무것도 안 쓰고 `alreadyRecovered=true` 로 200 |
+
+**검증식 `stop → abandon` 2단계가 아니라 만료식 한 방이다.** 근거 넷을 실측했다 —
+지킬 살아 있는 입력이 없고(정리는 `asof_state` 를 만들지 않는다), 업무 데이터를 안 쓰고,
+아무도 `cleanupJob` 이 도는지 안 보며(`blockingExecutions(cleanupJob)` 호출자 0), 그리고
+`step-timeout-ms`(120초)가 `stuck-job-after-ms`(30분)보다 훨씬 짧아 **락 대기로 30분을
+침묵할 수 없다** — 그 전에 Step 데드라인이 잡을 죽인다. 시체 오판 위험이 구조적으로 낮다.
+
+**트리거는 여기도 안 연다.** `CleanupRecoveryTest.exposesOnlyTwoEndpoints` 가 이 컨트롤러의
+매핑이 위 둘뿐임을 등식으로 잰다 — 정리 잡을 손으로 띄우는 경로가 생기면 슬롯 규율이 무너진다.
 
 ---
 

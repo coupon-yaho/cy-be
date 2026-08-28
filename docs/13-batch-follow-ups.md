@@ -160,8 +160,8 @@
 | `(coupon_id, status, expires_at)` 인덱스 | 막힌 회차의 대기 행이 매 주기 재스캔된다. **인덱스 도입은 실측 뒤 별도 판단이다** |
 | 나머지 배치 테스트의 시계 고정 | 이 티켓이 건드린 테스트 중 **잡을 실제로 돌리는 것은 전부** `FixedClock` 으로 고정했다. `ExpireCancelRaceTest`·`ExpireJobHistoryGuardTest`·`ExpireJobIsolationTest`·`VerifyJob*` 은 아직 벽시계인데, 이 티켓이 안 건드린 파일이라 여기서 안 넓혔다. (storage 의 만료 테스트는 `asOf` 가 SQL 바인드 파라미터일 뿐이라 시계와 무관하다) |
 | JVM 기본 존을 UTC 로 강제하는 기동 가드 | `VerifyJobConfig` 가 *"이 문서로 미뤘다"* 고 가리키는데 **여기 항목이 없었다**(CY-429 가 세운다). **미룬 이유는 `batch/build.gradle` 의 `test` 태스크가 `user.timezone=Asia/Seoul` 을 일부러 준다는 것이다**(CY-392 — 존 버그를 재현하려고 DB(UTC)와 어긋나게 뒀다). 기동 가드를 넣으면 batch 의 모든 `@SpringBootTest` 가 거절당하므로, 그 테스트를 어떻게 면제할지 먼저 정해야 한다. 지금 UTC 를 지키는 것은 `batch.yml` 의 `TZ` 와 `build.gradle` 의 `bootRun user.timezone` 둘이고, 사각은 IDE 실행과 `java -jar` 다 |
-| admin API 에 읽기 타임아웃이 없다 | `VerifyTriggerController` 도 `ExpireAdminController` 도 톰캣 스레드에서 `jobRepository` 를 맨몸으로 부른다 — 형제인 `BatchRunMetricsRefresher` 는 readOnly + 초 단위 타임아웃으로 감싼다. **이 API 들은 정확히 DB 가 아플 때 불리는데** 그때 진단 도구가 매달린다. 만료 쪽에만 걸면 admin API 둘의 신뢰성 계약이 갈리므로 **함께** 정해야 하고, 뿌리는 JDBC URL 에 `socketTimeout` 이 **전 저장소에 0건**인 것이라 storage 레벨 결정이다 |
-| `cleanupJob` 시체를 걷을 API | `BatchStuckExecution` 은 `Job` 빈 셋 전부에 뜨는데(`BatchRunMetrics` 가 `List<Job>` 에서 이름을 모은다) 컨트롤러는 둘이다. `cleanupJob` 만 손 SQL 이 유일한 길이고 알림이 그 사실을 명시한다. 잡 이름을 경로 변수로 받는 형태로 일반화할 때 **"트리거는 열지 않는다"(`docs/15`) 규율도 함께 옮겨야 한다** |
+| admin API 에 읽기 타임아웃이 없다 | **닫혔다(CY-697).** 조회·중단 경로에 `@Transactional(readOnly, timeoutString="${batch.admin.timeout-seconds:5}")` 를 건다 — **트랜잭션 밖이면 `DataSourceUtils` 가 `queryTimeout` 을 안 붙여 끊을 수단이 아예 없다**(형제 `BatchRunMetricsRefresher` 가 같은 근거로 같은 값을 쓴다). 트리거만 뺐다 — 감싸면 새 실행의 메타 쓰기가 이 트랜잭션에 들어와 롤백 시 행이 사라진다. JDBC URL 에도 `connectTimeout`·`socketTimeout` 을 걸고 `DataSourceTimeoutGuard` 가 **가장 긴 Step 데드라인보다 큰지** 기동 때 검사한다 |
+| `cleanupJob` 시체를 걷을 API | **닫혔다(CY-697).** `CleanupAdminController` + `CleanupRecoveryService` 로 `/api/v1/admin/cleanup/runs/stuck`·`/recover` 를 연다. **만료식 한 방**이다 — 검증식 2단계가 아닌 근거 셋을 실측했다: 지킬 살아 있는 입력이 없고, 업무 데이터를 안 쓰고, 아무도 `cleanupJob` 이 도는지 안 봐서 막고 있는 것도 없다. 선점 문장은 `StuckRunClaim` 에 모아 만료와 한 곳에서 쓴다 |
 | `verifyJob` 의 `stop` 에 시체 판정이 없다 | **닫혔다(CY-678).** 기본은 진도가 멈춘 실행만 받고(409 `VERIFICATION-019`), 판정과 쓰기를 `VerifyStopService` 의 선점 `UPDATE` 로 한 트랜잭션에 묶었다. 도는 검증을 정말 세워야 하면 **컨테이너를 내린다**(`docs/11` 의 결정). 만료와 검증이 같은 컨테이너라 내리면 만료 크론도 안 떠서 `updated_at` 오염이 안 일어난다 — 인증 없는 API 에 강제 중단 파라미터를 여는 것보다 낫다 |
 | 리뷰 반복 결함의 기계적 검사 | 이 티켓의 리뷰에서 **같은 종류가 반복해서 나왔다** — 떠 있는 javadoc(4회), 개명 뒤 끊긴 문서 참조, 개수 주장과 실제 불일치("넷"↔"다섯"), 지표 단언 누락. 넷 다 파일을 읽어 기계적으로 잡을 수 있다. `BatchMetricExposureTest` 가 규칙 파일↔노출을 잇는 것과 같은 방식으로 테스트화할 자리다 |
 | ~~`README` 의 batch 패키지 트리~~ | **해결됐다** — README 에 `api`/`config`/`job`/`replay`/`schedule` 트리가 들어갔다 |
@@ -904,7 +904,7 @@ curl -s -XPOST localhost:9090/api/v1/admin/expire/runs/41/recover | jq '.data, .
 `/api/v1/admin/verify` 에 `stop → abandon` 이 있다 — **그쪽 `stop` 은 시체 판정을 안 지난다**
 (그것이 남은 항목이다, 위 절). **부르기 전에 프로세스 부재를 사람이 확인해야 한다** —
 `stop` 은 살아 있는 실행에도 먹고, DB 를 즉시 `STOPPED` 로 올린다. 그 뒤 `abandon` 이
-스레드보다 먼저 도착하면 **도는 검증이 `ABANDONED` 로 굳는다.** `cleanupJob` 은 아직 API 가 없어 아래 손 SQL 이 유일한 길이다.
+스레드보다 먼저 도착하면 **도는 검증이 `ABANDONED` 로 굳는다.** `cleanupJob` 도 `POST /api/v1/admin/cleanup/runs/{id}/recover` 가 있다(CY-697). **손 SQL 은 배치가 안 떠 있을 때만이다.**
 
 **아래는 API 가 없던 시절의 절차다.** 배치가 안 떠 있어 API 를 못 부르는 경우에만 쓴다.
 
@@ -938,7 +938,7 @@ SELECT e.JOB_EXECUTION_ID, i.JOB_NAME, e.STATUS, e.CREATE_TIME, e.START_TIME,
 2. **API 를 먼저 쓴다.** `expireJob` 이면 `POST /api/v1/admin/expire/runs/{id}/recover`
    **한 번**이다(CY-429). `verifyJob` 이면 `/api/v1/admin/verify` 의 `stop → abandon`
    이다(CY-368). **모양이 다르다** — 만료 쪽은 `FAILED` 로 닫아 `asOf` 슬롯을 안 태운다(3번).
-   `cleanupJob` 은 API 가 없어 아래 SQL 이 유일한 길이다.
+   `cleanupJob` 도 API 가 있다(CY-697) — 아래 SQL 은 배치가 안 떠 있을 때만이다.
    손 SQL 은 배치가 안 떠 있을 때만이다.
 3. **`ABANDONED` 는 되돌릴 수 없다.** 그 상태는 `COMPLETED` 와 같은 취급이라
    (Spring Batch 6.0.4 의 실행 시작 경로가 그렇게 가른다) **그 JobInstance 를 같은
