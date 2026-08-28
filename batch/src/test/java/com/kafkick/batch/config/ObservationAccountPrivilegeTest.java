@@ -13,6 +13,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -106,6 +107,11 @@ class ObservationAccountPrivilegeTest {
      */
     private static final Pattern TABLE_REF =
             Pattern.compile("\\b(?:FROM|JOIN)\\s+([A-Za-z_][A-Za-z0-9_]*)", Pattern.CASE_INSENSITIVE);
+
+    /** WITH 절이 정의한 CTE 이름. FROM·JOIN 대상에서 실제 테이블과 구분합니다. */
+    private static final Pattern CTE_NAME = Pattern.compile(
+            "(?:\\bWITH\\s+|,\\s*)([A-Za-z_][A-Za-z0-9_]*)\\s+AS\\s*\\(",
+            Pattern.CASE_INSENSITIVE);
 
     /**
      * 스키마 단위 GRANT. 테이블 자리에 {@code *} 가 오는 형태 전부다.
@@ -207,6 +213,25 @@ class ObservationAccountPrivilegeTest {
                 .as("관측 풀이 읽는데 GRANT 가 없는 테이블이다. 운영에서 첫 질의부터 1142 로 죽는다 — "
                         + "infra/mysql/obs-grants/allowlist.txt 에 추가하고 apply.sh 를 다시 돌려라")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("CTE 별칭은 제외하되 CTE 내부 실제 테이블은 찾는다")
+    void cteAliasesAreNotTreatedAsObservedTables() {
+        String query = """
+                WITH ranked_finals AS (
+                    SELECT * FROM consistency_finals
+                ), benchmark_rounds AS (
+                    SELECT * FROM benchmark_runs
+                )
+                SELECT *
+                  FROM benchmark_rounds b
+                  JOIN ranked_finals f ON f.coupon_id = b.coupon_id
+                  JOIN coupons c ON c.id = b.coupon_id
+                """;
+
+        assertThat(tableReferences(query))
+                .containsExactlyInAnyOrder("consistency_finals", "benchmark_runs", "coupons");
     }
 
     @Test
@@ -440,10 +465,25 @@ class ObservationAccountPrivilegeTest {
         Set<String> tables = new LinkedHashSet<>();
         for (Path file : observationConsumers()) {
             for (String query : queryTextOf(read(file))) {
-                Matcher matcher = TABLE_REF.matcher(query);
-                while (matcher.find()) {
-                    tables.add(matcher.group(1));
-                }
+                tables.addAll(tableReferences(query));
+            }
+        }
+        return tables;
+    }
+
+    private static Set<String> tableReferences(String query) {
+        Set<String> cteNames = new LinkedHashSet<>();
+        Matcher cteMatcher = CTE_NAME.matcher(query);
+        while (cteMatcher.find()) {
+            cteNames.add(cteMatcher.group(1).toLowerCase(Locale.ROOT));
+        }
+
+        Set<String> tables = new LinkedHashSet<>();
+        Matcher tableMatcher = TABLE_REF.matcher(query);
+        while (tableMatcher.find()) {
+            String table = tableMatcher.group(1);
+            if (!cteNames.contains(table.toLowerCase(Locale.ROOT))) {
+                tables.add(table);
             }
         }
         return tables;

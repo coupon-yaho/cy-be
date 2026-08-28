@@ -20,6 +20,7 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot.TrendDirection;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.admin.campaignsource.PreparationItem;
 
 /**
  * 관리자 첫 화면에 표시할 운영 위험과 조치 항목을 한 시점 기준으로 조립한 HTTP 응답 초안입니다.
@@ -202,6 +203,7 @@ public record AdminOverviewResponse(
                         source.campaignQueueStatus(),
                         AdminOverviewResponse::toCampaignQueueStatus),
                 fromObservation(source.stockForecast(), AdminOverviewResponse::toStockForecast),
+                source.failedPreparationItems(),
                 source.customerImpact(),
                 source.customerImpactText(),
                 toRecommendedAction(source.recommendedAction())
@@ -385,6 +387,7 @@ public record AdminOverviewResponse(
      *                     이 값의 {@link IssuanceFlow#currentPerMinute()}를 사용
      * @param campaignQueueStatus O2 캠페인별 대기 상태와 원천 상태
      * @param stockForecast O4 캠페인별 재고·소진 예상과 원천 상태
+     * @param failedPreparationItems Core가 확정한 준비 실패 항목; 미판정이면 빈 목록
      * @param customerImpact 고객 영향 범위
      * @param customerImpactText 운영자에게 표시할 고객 영향 설명
      * @param recommendedAction 서버가 제공하는 다음 행동; 조치 불필요이면 null
@@ -401,9 +404,32 @@ public record AdminOverviewResponse(
             ObservedValue<IssuanceFlow> issuanceFlow,
             ObservedValue<CampaignQueueStatus> campaignQueueStatus,
             ObservedValue<StockForecast> stockForecast,
+            List<PreparationItem> failedPreparationItems,
             CustomerImpact customerImpact,
             String customerImpactText,
-            RecommendedAction recommendedAction) { }
+            RecommendedAction recommendedAction) {
+
+        /** HTTP 응답의 실패 목록이 생성 뒤 변경되지 않도록 불변 복사합니다. */
+        public CampaignOverview {
+            failedPreparationItems = List.copyOf(failedPreparationItems);
+        }
+
+        /** 이전 JSON fixture의 행 생성 시 준비 실패 목록을 빈 목록으로 둡니다. */
+        @Deprecated
+        public CampaignOverview(
+                int priority, Long couponId, String campaignName, String brandName,
+                CouponRoundStatus status, Instant opensAt, Instant closesAt, Severity severity,
+                ObservedValue<IssuanceFlow> issuanceFlow,
+                ObservedValue<CampaignQueueStatus> campaignQueueStatus,
+                ObservedValue<StockForecast> stockForecast,
+                CustomerImpact customerImpact, String customerImpactText,
+                RecommendedAction recommendedAction
+        ) {
+            this(priority, couponId, campaignName, brandName, status, opensAt, closesAt, severity,
+                    issuanceFlow, campaignQueueStatus, stockForecast, List.of(), customerImpact,
+                    customerImpactText, recommendedAction);
+        }
+    }
 
     /**
      * O1 캠페인별 현재 발급 속도와 그래프 시계열입니다.

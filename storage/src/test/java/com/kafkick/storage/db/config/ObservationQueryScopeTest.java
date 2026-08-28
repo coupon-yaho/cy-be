@@ -68,7 +68,7 @@ class ObservationQueryScopeTest {
     private static final Pattern MEMBERS = Pattern.compile("\\bmembers\\b", Pattern.CASE_INSENSITIVE);
 
     /** 자바 문자열 리터럴. 질의문만 보려는 것이라 주석·식별자는 대상이 아니다. */
-    private static final Pattern STRING_LITERAL = Pattern.compile("\"([^\"\\\\]|\\\\.)*\"");
+    private static final Pattern STRING_LITERAL = Pattern.compile("\"([^\"\\\\]|\\\\.)*+\"");
 
     @Test
     @DisplayName("관측 한정자를 쓰는 코드의 질의문에 members 가 없다")
@@ -112,6 +112,16 @@ class ObservationQueryScopeTest {
                 .containsExactlyInAnyOrderElementsOf(declared);
     }
 
+    @Test
+    @DisplayName("긴 텍스트 블록에서도 금지 테이블 이름을 추출한다")
+    void longTextBlockStillExposesForbiddenTableName() {
+        String source = "\"\"\"\nSELECT " + "column_name, ".repeat(1_000)
+                + "* FROM members\n\"\"\"";
+
+        assertThat(stringLiterals(source))
+                .anySatisfy(literal -> assertThat(MEMBERS.matcher(literal).find()).isTrue());
+    }
+
     private static List<Path> observationConsumers() {
         List<Path> found = new ArrayList<>();
         for (String module : MODULES) {
@@ -131,8 +141,12 @@ class ObservationQueryScopeTest {
     }
 
     private static List<String> stringLiteralsOf(Path file) {
+        return stringLiterals(read(file));
+    }
+
+    private static List<String> stringLiterals(String source) {
         List<String> literals = new ArrayList<>();
-        Matcher matcher = STRING_LITERAL.matcher(read(file));
+        Matcher matcher = STRING_LITERAL.matcher(source);
         while (matcher.find()) {
             literals.add(matcher.group());
         }

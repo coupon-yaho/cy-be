@@ -1,12 +1,17 @@
 package com.kafkick.core.admin.overview.calculator;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
+import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.consistency.ConsistencyPhase;
 import com.kafkick.core.consistency.Verdict;
@@ -16,6 +21,26 @@ import com.kafkick.core.observation.SourceStatus;
 /** FINAL 정합성 판정을 관리자 정합성 확인 조치 후보로 변환하는 순수 계산기입니다. */
 @Component
 public class ConsistencyActionCalculator {
+
+    /** 회차별 FINAL 상태와 계산 가능한 조치 후보를 함께 보존한 일괄 계산 결과입니다. */
+    public record FinalActionCalculation(
+            List<AdminOverviewSnapshot.OperationActionItem> actionCandidates,
+            Map<Long, AdminOverviewSnapshot.Observation<
+                    List<AdminOverviewSnapshot.OperationActionItem>>> observations
+    ) {
+        public FinalActionCalculation {
+            actionCandidates = List.copyOf(actionCandidates);
+            observations = Collections.unmodifiableMap(new LinkedHashMap<>(observations));
+        }
+
+        /** FINAL 적용 모집단에 계산 대기나 사용할 수 없는 결과가 없는지 반환합니다. */
+        public boolean isComplete() {
+            return observations.values().stream()
+                    .map(AdminOverviewSnapshot.Observation::status)
+                    .noneMatch(status -> status == SourceStatus.PENDING
+                            || status == SourceStatus.UNAVAILABLE);
+        }
+    }
 
     /** 상태 없는 FINAL 정합성 조치 후보 계산기를 생성합니다. */
     public ConsistencyActionCalculator() { }
@@ -47,6 +72,54 @@ public class ConsistencyActionCalculator {
             return List.of();
         }
         return List.of(consistencyFailureAction(context));
+    }
+
+    /**
+     * 회차별 최신 FINAL 중 VALID 값만 기존 단건 계산기로 변환합니다.
+     *
+     * <p>PENDING·UNAVAILABLE·N_A는 값 없는 원래 상태를 보존하고, 복구할 수 없는 VALID 한 건은
+     * 해당 회차만 UNAVAILABLE로 격리합니다.</p>
+     */
+    public FinalActionCalculation calculateLatest(
+            Map<Long, ConsistencyFinalObservation> observations
+    ) {
+        Objects.requireNonNull(observations, "observations");
+        List<AdminOverviewSnapshot.OperationActionItem> candidates = new ArrayList<>();
+        Map<Long, AdminOverviewSnapshot.Observation<
+                List<AdminOverviewSnapshot.OperationActionItem>>> calculated = new LinkedHashMap<>();
+        observations.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> calculateLatestEntry(entry.getKey(), entry.getValue(), candidates, calculated));
+        return new FinalActionCalculation(candidates, calculated);
+    }
+
+    private void calculateLatestEntry(
+            Long couponId,
+            ConsistencyFinalObservation observation,
+            List<AdminOverviewSnapshot.OperationActionItem> candidates,
+            Map<Long, AdminOverviewSnapshot.Observation<
+                    List<AdminOverviewSnapshot.OperationActionItem>>> calculated
+    ) {
+        Objects.requireNonNull(couponId, "couponId");
+        Objects.requireNonNull(observation, "observation");
+        if (observation.status() != SourceStatus.VALID) {
+            calculated.put(couponId,
+                    new AdminOverviewSnapshot.Observation<>(null, observation.status(), null));
+            return;
+        }
+        try {
+            ConsistencyActionContext context = observation.value();
+            if (!context.couponId().equals(couponId)) {
+                throw new IllegalArgumentException("FINAL Map 키와 값의 회차 ID가 다릅니다.");
+            }
+            List<AdminOverviewSnapshot.OperationActionItem> actions = calculate(context);
+            candidates.addAll(actions);
+            calculated.put(couponId, new AdminOverviewSnapshot.Observation<>(
+                    actions, SourceStatus.VALID, context.evaluatedAt()));
+        } catch (IllegalArgumentException failure) {
+            calculated.put(couponId,
+                    new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null));
+        }
     }
 
     /** FINAL 결과의 엔진별 적용성·수치·verdict·severity 불변식을 검증합니다. */

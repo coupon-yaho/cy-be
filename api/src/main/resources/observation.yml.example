@@ -115,3 +115,9 @@ observation:
     archive:
       connect-timeout: 1s
       read-timeout: 10s
+
+campaign:
+  lifecycle:
+    redis:
+      # API JVM만 구독한다. Batch는 종료 이벤트 발행자이므로 기본값(false)을 유지한다.
+      subscriber-enabled: ${CAMPAIGN_LIFECYCLE_REDIS_SUBSCRIBER_ENABLED:true}

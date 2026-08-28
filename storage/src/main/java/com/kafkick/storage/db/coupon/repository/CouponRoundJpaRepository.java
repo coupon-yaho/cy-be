@@ -1,6 +1,7 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -189,14 +190,27 @@ public interface CouponRoundJpaRepository
             @Param("statuses") Set<CouponRoundStatus> statuses
     );
 
+    @Query("""
+            select roundEntity.id
+              from CouponRoundEntity roundEntity
+             where roundEntity.status = com.kafkick.core.coupon.domain.CouponRoundStatus.OPEN
+               and roundEntity.closeAt <= :asOf
+             order by roundEntity.id asc
+            """)
+    List<Long> findClosableOpenRoundIds(@Param("asOf") Instant asOf);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update CouponRoundEntity roundEntity
                set roundEntity.status = com.kafkick.core.coupon.domain.CouponRoundStatus.CLOSED
-             where roundEntity.status = com.kafkick.core.coupon.domain.CouponRoundStatus.OPEN
+             where roundEntity.id in :roundIds
+               and roundEntity.status = com.kafkick.core.coupon.domain.CouponRoundStatus.OPEN
                and roundEntity.closeAt <= :asOf
             """)
-    int closeOpenRounds(@Param("asOf") Instant asOf);
+    int closeOpenRoundsByIds(
+            @Param("roundIds") List<Long> roundIds,
+            @Param("asOf") Instant asOf
+    );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
