@@ -55,7 +55,7 @@ coupon-yaho
 │   └── src/main/java/com/kafkick
 │       ├── BatchApplication.java
 │       └── batch/
-│           ├── api/                     admin API — verify 트리거·조회, expire 복구 (docs/15)
+│           ├── api/                     admin API — verify 트리거·조회, expire·cleanup 복구 (docs/15)
 │           ├── config/                  기동 가드, 지표, 전용 실행기
 │           ├── job/                     Spring Batch 잡 정의
 │           ├── replay/                  이력 리플레이

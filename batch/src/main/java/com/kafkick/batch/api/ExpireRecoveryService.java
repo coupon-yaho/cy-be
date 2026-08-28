@@ -29,7 +29,7 @@ import com.kafkick.core.support.exception.BusinessException;
  * <p><b>{@code api} 에 둔다.</b> 한때 {@code config} 에 뒀는데 README 의 패키지 표가
  * 그 자리를 <i>"기동 가드, 지표, 전용 실행기"</i> 로 적어 뒀다 — 이 저장소는 그 표를
  * 팀 규칙으로 쓰고 코드가 거기 맞춘다. 이것은 {@code ExpireAdminController} 전용
- * 오케스트레이션이고 {@code ExpireRunView}·{@code Recovered} 와 같은 계층이다.
+ * 오케스트레이션이고 {@code StuckRunView}·{@code Recovered} 와 같은 계층이다.
  *
  * <p>{@code JobRepository} 프록시의 트랜잭션 속성은 {@code create*} 와
  * {@code getLastJobExecution*} 이 {@code REQUIRES_NEW} 이고 나머지({@code *})는
@@ -74,40 +74,18 @@ public class ExpireRecoveryService {
     /**
      * <b>선점 문장. 이 API 의 유일한 상호배제다.</b>
      *
-     * <p>{@code STATUS} 집합은 {@code findRunningJobExecutions} 가 보는 것과 <b>같아야
-     * 한다</b>({@code JdbcJobExecutionDao.GET_RUNNING_EXECUTION_FOR_INSTANCE} 의 상수와
-     * 글자까지 같다). 하나라도 빠지면 그 상태의 시체가 <b>아무것도 안 한 채 200</b> 을
-     * 받는다 — {@code STARTING} 에서 죽은 행이 이 API 의 주 대상이라 특히 그렇다.
-     *
-     * <p><b>폴백까지 그대로 옮긴다.</b> {@code RunningJobProbe.lastProgress} 가
-     * {@code MAX(LAST_UPDATED)} → {@code START_TIME} → {@code CREATE_TIME} 순으로
-     * 떨어지는데, {@code NOT EXISTS} 로만 쓰면 <b>Step 행이 없는 실행에서 무조건 참</b>이
-     * 되어 방금 뜬 {@code STARTING} 실행도 닫는다. 그 모양이 이 API 의 주 대상이라 특히
-     * 위험하다.
-     *
-     * <p><b>진도 조건을 여기 함께 건다.</b> 판정({@code requireStuck})과 쓰기가 따로면
-     * 그 사이에 실행이 되살아날 수 있고 — 락 대기가 풀리는 경우가 그렇다 — 그때
-     * <b>살아 있는 만료를 {@code FAILED} 로 닫는다.</b> 만료는 재고를 쓰는 유일한 잡이라
-     * 중간에 끊기면 다음 검증의 판정 근거가 흔들린다. 임계는 여전히
-     * {@link RunningJobProbe} 가 소유하고 여기는 절대 시각만 받는다.
+     * <p><b>정의도 근거도 {@link StuckRunClaim#CLAIM} 에 있다.</b> {@code STATUS} 집합·
+     * 폴백·진도 조건을 여기 다시 적으면 SQL 은 한 벌인데 <b>설명이 두 벌</b>이 되어,
+     * 조건이 바뀌는 날 한쪽만 고친 문서가 남는다 — 코드에서 없앤 위험을 문서가 되살린다.
      */
     // 같은 패키지의 테스트가 이 문장의 조건을 직접 잰다. 흐름 테스트로는 판정과 쓰기
     // 사이의 창을 재현할 수 없어서(마이크로초), 문장 자체를 못 박는다.
-    static final String CLAIM = """
-            UPDATE BATCH_JOB_EXECUTION je
-               SET je.VERSION = je.VERSION + 1
-             WHERE je.JOB_EXECUTION_ID = :id
-               AND je.STATUS IN ('STARTING','STARTED','STOPPING')
-               AND COALESCE((SELECT MAX(se.LAST_UPDATED) FROM BATCH_STEP_EXECUTION se
-                              WHERE se.JOB_EXECUTION_ID = je.JOB_EXECUTION_ID),
-                            je.START_TIME, je.CREATE_TIME) <= :stuckBefore
-            """;
+    //
+    // **정의는 StuckRunClaim 에 있다.** 정리 쪽 복구가 같은 문장을 쓰는데 두 벌로 두면
+    // 한쪽만 고치는 날 판정과 쓰기가 다른 조건을 본다(CY-697).
+    static final String CLAIM = StuckRunClaim.CLAIM;
 
-    /** 선점에 진 뒤 <b>현재 읽기</b>로 상태를 본다. 스냅샷 읽기는 옛 값을 준다(RR). */
-    private static final String CURRENT_STATUS = """
-            SELECT STATUS FROM BATCH_JOB_EXECUTION
-             WHERE JOB_EXECUTION_ID = :id FOR SHARE
-            """;
+    private static final String CURRENT_STATUS = StuckRunClaim.CURRENT_STATUS;
 
     private final JobRepository jobRepository;
     private final JobOperator jobOperator;
@@ -135,7 +113,7 @@ public class ExpireRecoveryService {
      * {@code @Scheduled} 여덟이 풀(13)에서 커넥션을 못 얻는다. <b>DB 가 아플 때 불리는
      * 진단 도구가 정확히 그때 배치를 멈추는 모양</b>이라 여기만 먼저 막는다.
      */
-    @Transactional(timeout = 10)
+    @Transactional(timeoutString = "${batch.admin.recover-timeout-seconds:10}")
     public Outcome recover(long executionId) {
         JobExecution execution = requireExpireExecution(executionId);
 

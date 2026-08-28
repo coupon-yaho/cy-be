@@ -728,8 +728,8 @@ groups:
       # **누가 가드를 부를 때만** 나와서, 검증을 하루 한 번 돌리면 며칠씩 신호가 없다.
       #
       # 상호 배제가 꺼진 상태라 "만료가 검증 한복판을 지나가는" 사고가 열려 있다.
-      # expireJob 은 recover API 가, verifyJob 은 stop → abandon 이 있다(CY-429 · CY-368).
-      # cleanupJob 만 아직 손 SQL 이다.
+      # 셋 다 API 가 있다 — expireJob 은 recover(CY-429), verifyJob 은 stop → abandon
+      # (CY-368 · CY-678 이 stop 에 시체 판정을 더했다), cleanupJob 은 recover(CY-697).
       - alert: BatchStuckExecution
         expr: cy_batch_stuck_executions > 0
         for: 10m
@@ -749,10 +749,10 @@ groups:
             expireJob 이면 GET /api/v1/admin/expire/runs/stuck 으로 확인하고
             POST .../runs/{id}/recover 한 번이면 됩니다 — 재시도해도 안전합니다.
             verifyJob 이면 /api/v1/admin/verify 쪽 stop → abandon 을 씁니다.
-            **다만 그쪽 stop 에는 시체 판정이 없습니다** — docker compose ps batch 로
-            프로세스 부재를 먼저 확인하십시오.
-            cleanupJob 은 아직 API 가 없습니다 — docs/13 §6 의 손 SQL 절차를 쓰되
-            그 절의 임계 조건을 반드시 함께 겁니다.
+            그 stop 도 시체 판정을 지납니다(CY-678) — 진도가 있으면 409 로 거절합니다.
+            cleanupJob 이면 GET /api/v1/admin/cleanup/runs/stuck 으로 확인하고
+            POST .../runs/{id}/recover 한 번이면 됩니다(CY-697) — 만료와 같은 모양이고
+            재시도해도 안전합니다.
             업무 포트가 안 열려 있으면 batch-expose.yml 을 얹습니다(docs/13 §4).
             asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
 
