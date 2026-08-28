@@ -22,10 +22,10 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 대상 조회를 <b>실제 MySQL 에 태워</b> 고정한다. 문자열 단언으로는 못 잡는다 — 회차 하나에
  * 비 FINALIZED run 이 둘일 때 어느 행이 이기는지는 SQL 의 의미이지 SQL 의 모양이 아니다.
  *
- * <p>{@code coupon_id} 에는 유일 제약이 없다. {@code uk_run_running} 은 RUNNING 만 하나로
- * 묶으므로 LOAD_STOPPED·OBSERVED 는 몇 개든 남고, 같은 쿠폰으로 WARMUP 을 돌린 뒤 MAIN 을
- * 돌리면 두 행이 공존한다. 그때 뒤늦은 WARMUP(V1) 행이 이기면 진행 중인 MAIN(V2) 회차의
- * PENDING 이 N_A 로 덮여 사라진다.
+ * <p>{@code benchmark_runs.coupon_id} 에는 유일 제약이 없다. {@code uk_run_running} 은
+ * RUNNING 만 하나로 묶으므로 LOAD_STOPPED·OBSERVED 인 run 은 몇 개든 남고, <b>한 회차를 두고
+ * WARMUP run 을 돌린 뒤 MAIN run 을 돌리면</b> 그 회차에 run 두 행이 공존한다. 그때 뒤늦은
+ * WARMUP(V1) 행이 이기면 진행 중인 MAIN(V2) 의 PENDING 이 N_A 로 덮여 사라진다.
  */
 @SpringBootTest(properties = "spring.flyway.enabled=true")
 @Import(MySqlContainerConfig.class)
@@ -39,7 +39,7 @@ class PendingIssuedGaugeTargetSqlTest {
     private DataSource dataSource;
 
     @Test
-    @DisplayName("회차 하나에 비 FINALIZED run 이 둘이어도 최신 run 한 행만 나온다")
+    @DisplayName("한 회차에 비 FINALIZED run 이 둘이어도 최신 run 한 행만 나온다")
     void oneRowPerRoundEvenWhenSeveralRunsAreStillOpen() {
         JdbcTemplate app = new JdbcTemplate(dataSource);
         app.update("DELETE FROM benchmark_runs");
@@ -55,7 +55,7 @@ class PendingIssuedGaugeTargetSqlTest {
     }
 
     @Test
-    @DisplayName("최신 판정은 id 다 — 나중에 연 회차가 이긴다")
+    @DisplayName("최신 판정은 id 다 — 나중에 연 run 이 이긴다")
     void theLatestRunWinsRegardlessOfInsertOrder() {
         JdbcTemplate app = new JdbcTemplate(dataSource);
         app.update("DELETE FROM benchmark_runs");
@@ -96,8 +96,8 @@ class PendingIssuedGaugeTargetSqlTest {
     }
 
     @Test
-    @DisplayName("coupon_id 없는 회차는 대상이 아니다")
-    void couponlessRunsAreNotTargets() {
+    @DisplayName("회차가 붙지 않은 run 은 대상이 아니다")
+    void runsWithoutARoundAreNotTargets() {
         JdbcTemplate app = new JdbcTemplate(dataSource);
         app.update("DELETE FROM benchmark_runs");
         insert(app, 20L, "OPEN-1", "V2", "LOAD_STOPPED", 88L);
