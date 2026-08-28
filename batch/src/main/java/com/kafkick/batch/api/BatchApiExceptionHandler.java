@@ -89,22 +89,37 @@ public class BatchApiExceptionHandler {
             org.springframework.dao.QueryTimeoutException.class,
             org.springframework.dao.DataAccessResourceFailureException.class})
     public ResponseEntity<ResponseEnvelope<Void>> handleTimeout(Exception exception) {
-        if (exception instanceof org.springframework.dao.DataAccessResourceFailureException
-                && !causedBySocketTimeout(exception)) {
-            // 타임아웃이 아닌 자원 장애다. 원인과 스택을 지키려고 원래 갈래로 보낸다.
-            return handleUnexpected(exception);
+        if (exception instanceof org.springframework.dao.DataAccessResourceFailureException) {
+            // **연결을 못 얻은 것은 여기 것이 아니다.** CannotGetJdbcConnectionException 은
+            // 같은 하위인데, 그 실패의 원인 사슬에도 SocketTimeoutException 이 들어온다
+            // (connectTimeout 만료가 같은 타입이다). 원인 타입만 보면 연결 장애를 "느린
+            // 조회" 로 숨기게 되므로 타입으로 먼저 가른다.
+            if (exception instanceof org.springframework.jdbc.CannotGetJdbcConnectionException
+                    || !causedBySocketReadTimeout(exception)) {
+                // 타임아웃이 아닌 자원 장애다. 원인과 스택을 지키려고 원래 갈래로 보낸다.
+                return handleUnexpected(exception);
+            }
         }
         log.warn("batch admin API 가 데드라인을 넘겼습니다. type={}",
                 exception.getClass().getSimpleName());
         return respond(VerificationErrorCode.ADMIN_QUERY_TIMED_OUT);
     }
 
-    /** 원인 사슬에 소켓 읽기 타임아웃이 있나. 열여섯 단계까지 본다 — 순환도 그 선에서 끊긴다. */
-    private static boolean causedBySocketTimeout(Throwable exception) {
+    /**
+     * <b>원인 사슬에 소켓 만료가 있나.</b> 열여섯 단계까지 본다 — 순환도 그 선에서 끊긴다.
+     *
+     * <p><b>{@code SQLTimeoutException} 은 안 본다.</b> 그것은 스프링이
+     * {@code QueryTimeoutException} 으로 번역해 <b>위 목록의 다른 갈래</b>가 이미 잡는다 —
+     * 여기 넣으면 이름과 주석이 약속한 것("소켓 읽기 만료만")과 코드가 갈린다.
+     *
+     * <p>이 검사만으로는 <b>연결 수립 만료와 읽기 만료를 못 가른다</b>({@code connectTimeout}
+     * 만료도 같은 타입이다). 그래서 부르는 쪽이 {@code CannotGetJdbcConnectionException} 을
+     * 타입으로 먼저 걸러 낸다.
+     */
+    private static boolean causedBySocketReadTimeout(Throwable exception) {
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 16; depth++) {
-            if (cause instanceof java.net.SocketTimeoutException
-                    || cause instanceof java.sql.SQLTimeoutException) {
+            if (cause instanceof java.net.SocketTimeoutException) {
                 return true;
             }
             cause = cause.getCause() == cause ? null : cause.getCause();
