@@ -42,6 +42,22 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  *
  * <p>자바 쪽 벽시계로 만든 <b>원시 값</b>을 심는 것이 요점이다. 기존 테스트들은
  * {@code stuckExecutions()} 가 <b>DB 에서 읽어 이미 정규화된</b> 값을 써서 그 축을 못 잰다.
+ *
+ * <p>⚠️ <b>여기 {@code LocalDateTime.now()} 를 고정 시계로 바꾸지 마라 — 테스트가 죽는다.</b>
+ * 이 저장소는 시각 의존을 싫어해서 그 제안이 반복해서 나오는데(CY-718 리뷰에서 실제로
+ * 나왔다), 여기서는 <b>고정 시계가 쓸 수 없다</b>. 비교 대상인 배치 메타 시각은
+ * {@code AbstractJob}·{@code SimpleJobRepository} 가 <b>인자 없는 {@code LocalDateTime.now()}</b>
+ * 로 찍고 {@link RunningJobFixture} 도 같은 실제 시계로 심는다 — 주입할 {@code Clock} 이
+ * 없는 경로다. 그래서 이쪽만 고정하면 {@code stuckBefore} 가 <b>두 달 전</b>이 되어 조건이
+ * 어느 축에서든 거짓이고, <b>선점은 늘 0행</b>이라 단언이 공짜로 통과한다.
+ *
+ * <p><b>실험으로 확인했다:</b> 고정 시계를 적용한 채 {@code claim} 의 축 변환을 빼도
+ * (= 이 테스트가 잡으려는 바로 그 결함) <b>세 케이스가 전부 초록</b>이었다. 실제 시계를
+ * 쓸 때는 같은 돌연변이가 <b>3/3 실패</b>한다. 결정론이 필요한 자리와 <b>실제 시계와
+ * 같은 좌표계에 서야 하는 자리</b>는 다르고, 여기는 후자다.
+ *
+ * <p>흔들리지도 않는다 — {@code DEAD} 가 두 시간이고 심는 실행의 진도는 0초라, 단언은
+ * <i>"방금 뜬 실행은 두 시간 전보다 오래되지 않았다"</i> 뿐이다.
  */
 @SpringBootTest(properties = {
         "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",

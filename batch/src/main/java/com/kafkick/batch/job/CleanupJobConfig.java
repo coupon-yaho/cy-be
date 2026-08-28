@@ -132,10 +132,20 @@ public class CleanupJobConfig {
      * <b>세션 존(UTC)으로 렌더링된</b> 값이다 — 둘 다 UTC 라 JVM 기본 존과 무관하게 만난다.
      * ({@code TimestampBindingAxisTest} 가 서버가 본 값을 단언한다.)
      *
-     * <p>⚠️ <b>그러니 여기에 {@code Timestamp.valueOf} 를 씌우지 마라.</b> 씌우는 순간 UTC 값이
-     * <i>JVM 기본 존의 벽시계</i>로 재해석돼 오프셋만큼 밀린다 — KST 면 컷오프가 아홉 시간
-     * 뒤로 가서 <b>아직 보존 기간인 메타를 지운다.</b> 한때 {@code DefaultZoneGuard} 가 이
-     * 자리를 <i>"깨지는 자리"</i> 로 잘못 적었고, 그 단정이 여기서 시작했다.
+     * <p>⚠️ <b>그러니 여기에 {@code Timestamp.valueOf} 를 씌우지 마라.</b> 씌우는 순간 UTC
+     * 벽시계가 <i>JVM 기본 존의 벽시계</i>로 재해석돼, 컷오프가 <b>그 존의 오프셋만큼</b>
+     * 움직인다. 방향이 부호를 따라 갈린다:
+     * <ul>
+     *   <li><b>UTC 동쪽</b>(KST, +09) — 컷오프가 아홉 시간 <b>이르게</b> 간다
+     *       ({@code 16:42:55} 로 보낸 값을 서버가 {@code 07:42:55} 로 받는다). 조건이
+     *       {@code CREATE_TIME < :olderThan} 이라 <b>덜 지운다</b> — 보존이 실질
+     *       30일+9시간이 된다. 성가시지만 데이터를 잃지는 않는다
+     *   <li><b>UTC 서쪽</b>(음수 오프셋) — 반대로 <b>늦게</b> 가서 <b>더 지운다.</b> 이쪽이
+     *       위험하다 — 위에 적은 대로 마지막 성공이 컷오프 밖으로 밀리면 게이지가
+     *       {@code NaN} 이 되고 {@code ExpireNeverSucceeded}(critical)가 뜬다
+     * </ul>
+     * 한때 {@code DefaultZoneGuard} 가 이 자리를 <i>"깨지는 자리"</i> 로 잘못 적었고,
+     * 그 단정이 여기서 시작했다.
      */
     static final int MIN_METADATA_KEEP_DAYS = BatchMetadataWindow.LOOKBACK_DAYS + 1;
 
