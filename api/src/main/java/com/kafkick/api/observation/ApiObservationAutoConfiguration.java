@@ -85,9 +85,18 @@ public class ApiObservationAutoConfiguration {
      * (관리 포트·미터 계약 테스트가 그렇다)에서 이 빈이 생성을 시도하다 의존성을 못 찾고
      * 컨텍스트를 통째로 떨어뜨린다.
      *
-     * <p><b>조건이 검사하는 것과 검사하지 않는 것.</b> 아래 여섯은 전부 storage·core 의
-     * 컴포넌트 스캔 빈이라 자동설정 평가보다 <b>먼저</b> 등록된다 — 조건이 순서에 걸리지 않는다.
-     * 반면 아래 둘은 조건에 넣지 못한다.
+     * <p><b>조건이 검사하는 여섯의 순서 보장은 두 갈래다.</b>
+     *
+     * <ul>
+     *   <li>{@link IssuanceGatePort} 하나만 <b>자동설정 빈</b>이다
+     *       ({@code IssuanceGateRedisAutoConfiguration}). 자동설정끼리는 등록 순서가 정해져
+     *       있지 않으므로 이 클래스의 {@code afterName} 선언이 그 순서를 강제한다 — 그 선언이
+     *       빠졌던 것이 이 조건을 조용히 거짓으로 만들었다.</li>
+     *   <li>나머지 다섯은 storage·core 의 <b>컴포넌트 스캔 빈</b>이라 자동설정 평가보다 먼저
+     *       등록된다. 이쪽은 순서 선언이 필요 없다.</li>
+     * </ul>
+     *
+     * <p><b>조건에 넣지 못하는 것 둘.</b>
      *
      * <ul>
      *   <li>{@code IdempotencyResultCodec<CouponIssueResult>} — 어노테이션에 제네릭을 쓸 수
