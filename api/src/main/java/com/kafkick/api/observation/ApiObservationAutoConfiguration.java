@@ -44,7 +44,8 @@ import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterR
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
-import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @AutoConfiguration(
         after = {
@@ -53,7 +54,12 @@ import org.springframework.transaction.support.TransactionOperations;
         },
         afterName = {
                 "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
-                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration"
+                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration",
+                // v2CouponIssueService 가 @ConditionalOnBean(IssuanceGatePort) 다. 그 조건은
+                // 평가 시점에 이미 등록된 빈만 보므로, 게이트 자동설정이 뒤에 돌면 조건이
+                // 조용히 거짓이 되어 서비스가 아예 안 만들어진다 — 기동은 성공하고 첫 발급
+                // 요청에서 500 이 난다. V2IssuanceGateWiringTest 가 이 줄을 지킨다.
+                "com.kafkick.infra.redis.coupon.v2.IssuanceGateRedisAutoConfiguration"
         })
 @EnableConfigurationProperties({
         ConsistencySeverityProperties.class,
@@ -72,8 +78,50 @@ public class ApiObservationAutoConfiguration {
         return new RequestTokenGenerator(issuanceProperties.producerInstanceId());
     }
 
+    /**
+     * v2 발급 서비스.
+     *
+     * <p>조건에 <b>게이트만</b> 걸면 안 된다. Redis 는 있는데 storage 가 없는 컨텍스트
+     * (관리 포트·미터 계약 테스트가 그렇다)에서 이 빈이 생성을 시도하다 의존성을 못 찾고
+     * 컨텍스트를 통째로 떨어뜨린다.
+     *
+     * <p><b>조건이 검사하는 여섯의 순서 보장은 두 갈래다.</b>
+     *
+     * <ul>
+     *   <li>{@link IssuanceGatePort} 하나만 <b>자동설정 빈</b>이다
+     *       ({@code IssuanceGateRedisAutoConfiguration}). 자동설정끼리는 등록 순서가 정해져
+     *       있지 않으므로 이 클래스의 {@code afterName} 선언이 그 순서를 강제한다 — 그 선언이
+     *       빠졌던 것이 이 조건을 조용히 거짓으로 만들었다.</li>
+     *   <li>나머지 다섯은 storage·core 의 <b>컴포넌트 스캔 빈</b>이라 자동설정 평가보다 먼저
+     *       등록된다. 이쪽은 순서 선언이 필요 없다.</li>
+     * </ul>
+     *
+     * <p><b>조건에 넣지 못하는 것 둘.</b>
+     *
+     * <ul>
+     *   <li>{@code IdempotencyResultCodec<CouponIssueResult>} — 어노테이션에 제네릭을 쓸 수
+     *       없다. 원시 타입으로 걸면 발급·사용·취소·사용취소 <b>네 codec 중 아무거나</b> 있어도
+     *       참이 되어 오탐이다. 구현 타입({@code CouponIssueResultCodec})으로 거는 것은 api 가
+     *       storage 를 컴파일 단계에서 보게 만들어 모듈 경계를 깬다.</li>
+     *   <li>{@code RequestTokenGenerator} — 이 설정이 스스로 만드는 빈이라 조건에 걸 대상이
+     *       아니다.</li>
+     * </ul>
+     *
+     * <p>그래서 이 조건은 <b>"필요한 것을 전부 검사한다"가 아니라 "검사할 수 있는 것을
+     * 검사한다"</b>이다. 검사 못 하는 codec 이 없으면 조건을 통과한 뒤 빈 생성에서 실패한다 —
+     * 다만 그 codec 은 리포지터리 셋과 같은 storage 컴포넌트 스캔에서 나오므로, 리포지터리가
+     * 있는데 codec 만 없는 컨텍스트는 storage 를 반쯤 얹은 것이고 그때는 <b>조용히 빠지는
+     * 것보다 기동 실패가 낫다.</b>
+     */
     @Bean
-    @ConditionalOnBean(IssuanceGatePort.class)
+    @ConditionalOnBean({
+            IssuanceGatePort.class,
+            IssuanceRepository.class,
+            IssuanceHistoryRepository.class,
+            IdempotencyRepository.class,
+            CouponCodeGenerator.class,
+            PlatformTransactionManager.class
+    })
     @ConditionalOnMissingBean(V2CouponIssueService.class)
     public V2CouponIssueService v2CouponIssueService(
             IssuanceGatePort gate,
@@ -83,11 +131,15 @@ public class ApiObservationAutoConfiguration {
             CouponCodeGenerator codeGenerator,
             IdempotencyResultCodec<CouponIssueResult> resultCodec,
             RequestTokenGenerator tokenGenerator,
-            TransactionOperations transactions
+            PlatformTransactionManager transactionManager
     ) {
+        // TransactionOperations 를 조건으로 걸지 않는다 — 그런 빈은 저장소 어디에도 없고
+        // Boot 도 자동 등록하지 않는다. 조건에 넣으면 영원히 거짓이라 v2 가 조립되지 않고,
+        // 그 사실은 첫 발급 요청의 500 으로만 드러난다(실측). 여기서 직접 만든다.
+        // 생성자 인자는 조건 평가가 아니라 빈 생성 시점에 풀리므로 자동설정 순서와 무관하다.
         return new V2CouponIssueService(
                 gate, issuances, histories, idempotencies, codeGenerator,
-                resultCodec, tokenGenerator, transactions
+                resultCodec, tokenGenerator, new TransactionTemplate(transactionManager)
         );
     }
 
