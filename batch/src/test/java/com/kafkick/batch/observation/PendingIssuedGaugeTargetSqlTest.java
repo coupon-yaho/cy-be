@@ -43,8 +43,8 @@ class PendingIssuedGaugeTargetSqlTest {
     void oneRowPerRoundEvenWhenSeveralRunsAreStillOpen() {
         JdbcTemplate app = new JdbcTemplate(dataSource);
         app.update("DELETE FROM benchmark_runs");
-        insert(app, 1L, "WARM-1", "V1", "LOAD_STOPPED", 4242L);
-        insert(app, 2L, "MAIN-1", "V2", "RUNNING", 4242L);
+        insert(app, 1L, "WARM-1", "WARMUP", "V1", "LOAD_STOPPED", 4242L);
+        insert(app, 2L, "MAIN-1", "MAIN", "V2", "RUNNING", 4242L);
 
         List<Map<String, Object>> rows =
             observationJdbcTemplate.queryForList(PendingIssuedGaugeCollector.OBSERVABLE_RUNS_SQL);
@@ -59,8 +59,8 @@ class PendingIssuedGaugeTargetSqlTest {
     void theLatestRunWinsRegardlessOfInsertOrder() {
         JdbcTemplate app = new JdbcTemplate(dataSource);
         app.update("DELETE FROM benchmark_runs");
-        insert(app, 10L, "MAIN-2", "V2", "OBSERVED", 77L);
-        insert(app, 11L, "WARM-2", "V1", "LOAD_STOPPED", 77L);
+        insert(app, 10L, "MAIN-2", "MAIN", "V2", "OBSERVED", 77L);
+        insert(app, 11L, "WARM-2", "WARMUP", "V1", "LOAD_STOPPED", 77L);
 
         List<Map<String, Object>> rows =
             observationJdbcTemplate.queryForList(PendingIssuedGaugeCollector.OBSERVABLE_RUNS_SQL);
@@ -74,8 +74,8 @@ class PendingIssuedGaugeTargetSqlTest {
     void finalizedRunNeitherWinsNorResurrects() {
         JdbcTemplate app = new JdbcTemplate(dataSource);
         app.update("DELETE FROM benchmark_runs");
-        insert(app, 29L, "OPEN-3", "V2", "LOAD_STOPPED", 55L);
-        insert(app, 30L, "DONE-3", "V1", "FINALIZED", 55L);
+        insert(app, 29L, "OPEN-3", "MAIN", "V2", "LOAD_STOPPED", 55L);
+        insert(app, 30L, "DONE-3", "WARMUP", "V1", "FINALIZED", 55L);
 
         List<Map<String, Object>> rows =
             observationJdbcTemplate.queryForList(PendingIssuedGaugeCollector.OBSERVABLE_RUNS_SQL);
@@ -113,6 +113,13 @@ class PendingIssuedGaugeTargetSqlTest {
     private static void insert(
         JdbcTemplate app, long id, String runKey, String engine, String status, Long couponId
     ) {
+        insert(app, id, runKey, "MAIN", engine, status, couponId);
+    }
+
+    private static void insert(
+        JdbcTemplate app, long id, String runKey, String runType, String engine,
+        String status, Long couponId
+    ) {
         app.update("""
             INSERT INTO benchmark_runs
               (id, run_key, run_type, scenario_code, engine_version, release_stage, queue_mode,
@@ -122,11 +129,11 @@ class PendingIssuedGaugeTargetSqlTest {
                offered_rps, load_hold_seconds, observation_hold_seconds, observed_lag_total,
                client_measured_at, client_request_count, client_failure_count,
                client_dropped_iterations, client_tps, client_p95_millis, client_p99_millis)
-            VALUES (?, ?, 'MAIN', 'SPIKE', ?, 'V3', 'ADAPTIVE', ?, ?,
+            VALUES (?, ?, ?, 'SPIKE', ?, 'V3', 'ADAPTIVE', ?, ?,
                     '2026-08-25 23:00:00', ?, ?, ?, 'tester', 1, 6, 60, 12, 50,
                     20000, 5, 60, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            id, runKey, engine, couponId, status,
+            id, runKey, runType, engine, couponId, status,
             "RUNNING".equals(status) ? null : "2026-08-25 23:01:00",
             List.of("OBSERVED", "FINALIZED").contains(status) ? "2026-08-25 23:02:00" : null,
             "FINALIZED".equals(status) ? "2026-08-26 00:00:00" : null,
