@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.coupon.v2.port.IssuanceWarmupPort;
 
 /**
  * v2 게이트 조립. 스크립트 5종은 {@link IssuanceScripts} 의 상수라 빈이 아니고,
@@ -31,5 +32,16 @@ public class IssuanceGateRedisAutoConfiguration {
     IssuanceGatePort issuanceGatePort(
             IssuanceScriptRunner scriptRunner, StringRedisTemplate redisTemplate) {
         return new RedisIssuanceGate(scriptRunner, redisTemplate);
+    }
+
+    /**
+     * 워밍업 시딩. 게이트와 <b>다른 빈</b>인 이유는 수명이 달라서다 — 이쪽은 회차당 한 번,
+     * 게이트가 닫힌 창에서만 돈다(설계 §6.2). 한 빈으로 묶으면 발급 유스케이스가 재고를
+     * 통째로 쓰는 연산을 주입받게 된다.
+     */
+    @Bean
+    @ConditionalOnMissingBean(IssuanceWarmupPort.class)
+    IssuanceWarmupPort issuanceWarmupPort(StringRedisTemplate redisTemplate) {
+        return new RedisIssuanceWarmup(redisTemplate);
     }
 }
