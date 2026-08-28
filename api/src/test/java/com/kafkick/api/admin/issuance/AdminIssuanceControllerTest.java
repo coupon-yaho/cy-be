@@ -8,8 +8,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.List;
 
 import com.jayway.jsonpath.JsonPath;
@@ -29,11 +31,17 @@ import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySource;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquirySourceReader;
 import com.kafkick.core.admin.inquiry.AdminIssuanceInquiryTestFixture;
 import com.kafkick.core.admin.inquiry.IssuanceInquiryCalculator;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryQuery.HistoryPosition;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReadResult;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryReader;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryResult.HistorySummary;
 import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistoryService;
+import com.kafkick.core.admin.issuancehistory.AdminIssuanceHistorySource.RawHistory;
 import com.kafkick.core.admin.issuancehistory.IssuanceCodeMasker;
 import com.kafkick.core.admin.issuancehistory.IssuanceHistoryCalculator;
-import com.kafkick.core.admin.issuancehistory.mock.AdminIssuanceHistoryMockDataFactory;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.support.TimeProvider;
 
 /** 회원 발급 문의와 발급 이력 조회의 필터·기간·cursor Validation을 검증합니다. */
@@ -41,6 +49,8 @@ class AdminIssuanceControllerTest {
 
     private static final Clock CLOCK = Clock.fixed(
             Instant.parse("2026-08-23T00:00:00Z"), ZoneOffset.UTC);
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+    private static final Instant HISTORY_FIXTURE_ANCHOR = CLOCK.instant();
     private final IssuanceHistoryCursorCodec cursorCodec = new IssuanceHistoryCursorCodec();
     private final IssuanceInquiryCursorCodec inquiryCursorCodec = new IssuanceInquiryCursorCodec();
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
@@ -240,7 +250,7 @@ class AdminIssuanceControllerTest {
         assertThat(secondEventTypes).containsExactly("ISSUE");
     }
 
-    /** 서로 다른 Factory와 진행하는 요청 시각에서도 동률 이력이 한 번씩 반환되는지 검증합니다. */
+    /** 서로 다른 test-local Reader와 진행하는 요청 시각에서도 동률 이력이 한 번씩 반환되는지 검증합니다. */
     @Test
     @DisplayName("다른 Service와 later Clock에서도 limit 1 cursor가 1008·1007·1006을 빠짐없이 반환한다")
     void issuanceHistoriesKeepRowsStableAcrossFactoriesServicesAndLaterClock() throws Exception {
@@ -249,7 +259,7 @@ class AdminIssuanceControllerTest {
                 new AdminIssuanceController(
                         new AdminIssuanceHistoryService(
                                 firstTimeProvider,
-                                new AdminIssuanceHistoryMockDataFactory(),
+                                new StubAdminIssuanceHistoryReader(),
                                 new IssuanceHistoryCalculator(new IssuanceCodeMasker())),
                         cursorCodec,
                         inquiryService(),
@@ -261,7 +271,7 @@ class AdminIssuanceControllerTest {
                 new AdminIssuanceController(
                         new AdminIssuanceHistoryService(
                                 laterTimeProvider,
-                                new AdminIssuanceHistoryMockDataFactory(),
+                                new StubAdminIssuanceHistoryReader(),
                                 new IssuanceHistoryCalculator(new IssuanceCodeMasker())),
                         cursorCodec,
                         inquiryService(laterClock),
@@ -405,12 +415,12 @@ class AdminIssuanceControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
     }
 
-    /** 고정 시각의 Mock 원천을 사용하는 실제 Core 발급 이력 Service를 구성합니다. */
+    /** 고정 시각과 test-local Reader를 사용하는 실제 Core 발급 이력 Service를 구성합니다. */
     private static AdminIssuanceHistoryService historyService() {
         TimeProvider timeProvider = new TimeProvider(CLOCK);
         return new AdminIssuanceHistoryService(
                 timeProvider,
-                new AdminIssuanceHistoryMockDataFactory(),
+                new StubAdminIssuanceHistoryReader(),
                 new IssuanceHistoryCalculator(new IssuanceCodeMasker()));
     }
 
@@ -458,6 +468,115 @@ class AdminIssuanceControllerTest {
     ) {
         return new AdminIssuanceController(
                 historyService, historyCursorCodec, inquiryService, inquiryCursorCodec);
+    }
+
+    /** HTTP 계약에 필요한 행만 고정적으로 반환하는 test-local 발급 이력 Reader입니다. */
+    private static final class StubAdminIssuanceHistoryReader implements AdminIssuanceHistoryReader {
+
+        /** 요청 필터와 Keyset을 적용한 후보 및 Cursor 이전 전체 요약을 반환합니다. */
+        @Override
+        public AdminIssuanceHistoryReadResult read(
+                AdminIssuanceHistoryQuery query, Instant snapshotAt) {
+            List<RawHistory> population = rawRows().stream()
+                    .filter(row -> !row.occurredAt().isAfter(snapshotAt))
+                    .filter(row -> query.couponId() == null || row.couponId() == query.couponId())
+                    .filter(row -> query.fromInclusive() == null
+                            || !row.occurredAt().isBefore(query.fromInclusive()))
+                    .filter(row -> query.toExclusive() == null
+                            || row.occurredAt().isBefore(query.toExclusive()))
+                    .filter(row -> query.eventType() == null || row.eventType() == query.eventType())
+                    .sorted(Comparator.comparing(RawHistory::occurredAt).reversed()
+                            .thenComparing(Comparator.comparingLong(RawHistory::historyId).reversed()))
+                    .toList();
+            HistorySummary summary = summarize(population);
+            List<RawHistory> candidates = population.stream()
+                    // 같은 시각은 historyId가 더 작은 행부터 다음 페이지로 보냅니다.
+                    .filter(row -> isBeforeCursor(row, query.before()))
+                    // 다음 페이지 존재를 판단하도록 한 행을 더 읽습니다.
+                    .limit(query.limit() + 1L)
+                    .toList();
+            return new AdminIssuanceHistoryReadResult(candidates, summary);
+        }
+
+        /** Cursor가 없거나 행이 Cursor보다 오래되면 반환 대상인지 판별합니다. */
+        private static boolean isBeforeCursor(
+                RawHistory row, HistoryPosition before) {
+            return before == null
+                    || row.occurredAt().isBefore(before.occurredAt())
+                    || (row.occurredAt().equals(before.occurredAt())
+                    && row.historyId() < before.historyId());
+        }
+
+        /** Cursor와 limit을 적용하기 전 필터 모집단의 이벤트별 건수를 계산합니다. */
+        private static HistorySummary summarize(List<RawHistory> population) {
+            long issueCount = count(population, IssuanceEventType.ISSUE);
+            long useCount = count(population, IssuanceEventType.USE);
+            long cancelUseCount = count(population, IssuanceEventType.CANCEL_USE);
+            long cancelCount = count(population, IssuanceEventType.CANCEL);
+            long expireCount = count(population, IssuanceEventType.EXPIRE);
+            // totalCount는 필터 모집단의 이벤트별 건수 합계와 일치해야 합니다.
+            return new HistorySummary(
+                    issueCount + useCount + cancelUseCount + cancelCount + expireCount,
+                    issueCount, useCount, cancelUseCount, cancelCount, expireCount);
+        }
+
+        /** 지정한 이벤트 유형의 원시 이력 행 수를 반환합니다. */
+        private static long count(List<RawHistory> rows, IssuanceEventType eventType) {
+            return rows.stream().filter(row -> row.eventType() == eventType).count();
+        }
+
+        /** 발급 이력 HTTP 계약의 필터·마스킹·Keyset 검증에 필요한 최소 행을 만듭니다. */
+        private static List<RawHistory> rawRows() {
+            LocalDate anchorKstDate = HISTORY_FIXTURE_ANCHOR.atZone(KST).toLocalDate();
+            Instant previousKstDayStart = kstStartOfDay(anchorKstDate.minusDays(1));
+            Instant currentKstDayStart = kstStartOfDay(anchorKstDate);
+            return List.of(
+                    raw(1_001L, 5_001L, "A101000000000001", 101L, null,
+                            IssuanceStatus.ISSUED, IssuanceEventType.ISSUE,
+                            previousKstDayStart),
+                    raw(1_002L, 5_001L, "A101000000000001", 101L, IssuanceStatus.ISSUED,
+                            IssuanceStatus.USED, IssuanceEventType.USE,
+                            HISTORY_FIXTURE_ANCHOR.minus(Duration.ofHours(30))),
+                    raw(1_003L, 5_002L, "A101000000000002", 101L, IssuanceStatus.USED,
+                            IssuanceStatus.ISSUED, IssuanceEventType.CANCEL_USE,
+                            HISTORY_FIXTURE_ANCHOR.minus(Duration.ofHours(28))),
+                    raw(1_004L, 5_003L, "A101000000000003", 101L, IssuanceStatus.ISSUED,
+                            IssuanceStatus.CANCELLED, IssuanceEventType.CANCEL,
+                            HISTORY_FIXTURE_ANCHOR.minus(Duration.ofHours(24))),
+                    raw(1_005L, 6_001L, "B102000000000001", 102L, IssuanceStatus.ISSUED,
+                            IssuanceStatus.EXPIRED, IssuanceEventType.EXPIRE,
+                            currentKstDayStart),
+                    raw(1_006L, 6_002L, "B102000000000002", 102L, null,
+                            IssuanceStatus.ISSUED, IssuanceEventType.ISSUE,
+                            HISTORY_FIXTURE_ANCHOR.minus(Duration.ofHours(5))),
+                    raw(1_007L, 6_003L, "B102000000000003", 102L, null,
+                            IssuanceStatus.ISSUED, IssuanceEventType.ISSUE,
+                            HISTORY_FIXTURE_ANCHOR.minus(Duration.ofHours(1))),
+                    raw(1_008L, 5_004L, "A101000000000004", 101L, IssuanceStatus.ISSUED,
+                            IssuanceStatus.CANCELLED, IssuanceEventType.CANCEL,
+                            HISTORY_FIXTURE_ANCHOR.minus(Duration.ofHours(1))));
+        }
+
+        /** KST 날짜의 시작을 타임존 독립적인 절대 시각으로 변환합니다. */
+        private static Instant kstStartOfDay(LocalDate date) {
+            return date.atStartOfDay(KST).toInstant();
+        }
+
+        /** 상태 전이 규칙을 만족하는 하나의 기술 중립 원시 이력 행을 만듭니다. */
+        private static RawHistory raw(
+                long historyId,
+                long issuanceId,
+                String issuanceCode,
+                long couponId,
+                IssuanceStatus fromStatus,
+                IssuanceStatus toStatus,
+                IssuanceEventType eventType,
+                Instant occurredAt
+        ) {
+            return new RawHistory(
+                    historyId, issuanceId, issuanceCode, couponId, fromStatus, toStatus, eventType,
+                    null, null, occurredAt);
+        }
     }
 
     /** 테스트 요청 사이에서만 명시적으로 진행시킬 수 있는 Clock입니다. */

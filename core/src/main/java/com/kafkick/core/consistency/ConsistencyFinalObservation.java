@@ -5,7 +5,7 @@ import java.util.Objects;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 캠페인별 최신 FINAL 정합성 결과의 조회 계약입니다. */
+/** 회차별 최신 FINAL 정합성 결과의 조회 계약입니다. */
 public record ConsistencyFinalObservation(
         SourceStatus status,
         ConsistencyActionContext value

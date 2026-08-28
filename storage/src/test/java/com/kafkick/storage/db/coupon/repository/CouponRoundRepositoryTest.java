@@ -24,8 +24,10 @@ import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.coupontemplate.domain.CouponDayOfWeek;
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
@@ -37,10 +39,13 @@ import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.exception.CouponRoundScheduleConflictException;
+import com.kafkick.core.coupon.port.CouponRoundLifecyclePort;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.core.coupon.service.CouponRoundLifecycleService;
+import com.kafkick.core.coupon.service.result.CouponRoundLifecycleResult;
 import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
 import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.observation.SpringAfterCommitCampaignClosedEventPublisher;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
 
@@ -55,6 +60,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         CouponRoundLifecycleAdapter.class,
         CouponRoundCreationService.class,
         CouponRoundLifecycleService.class,
+        SpringAfterCommitCampaignClosedEventPublisher.class,
         CouponTemplateRepositoryImpl.class,
         CouponRoundRepositoryTest.AuditTestConfig.class
 })
@@ -69,6 +75,8 @@ class CouponRoundRepositoryTest {
     private CouponRoundCreationService couponRoundCreationService;
     @Autowired
     private CouponRoundLifecycleService couponRoundLifecycleService;
+    @Autowired
+    private CouponRoundLifecyclePort couponRoundLifecyclePort;
 
     @Autowired
     private CouponTemplateRepositoryImpl couponTemplateRepository;
@@ -78,6 +86,8 @@ class CouponRoundRepositoryTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @BeforeEach
     void resetData() {
@@ -493,6 +503,125 @@ class CouponRoundRepositoryTest {
                 .isEqualTo(CouponRoundStatus.CLOSED.name());
         assertThat(statusOf(savedSecond.id()))
                 .isEqualTo(CouponRoundStatus.OPEN.name());
+    }
+
+    @Test
+    @DisplayName("만료된 OPEN 회차의 실제 ID만 닫고 반환한다")
+    void closeAndReturnOnlyExpiredOpenRoundIds() {
+        CouponTemplate template = saveTemplate();
+        Instant generatedAt = Instant.parse("2026-08-20T00:00:00Z");
+        CouponStock stock = CouponStock.initialize(100, generatedAt);
+        CouponRound first = couponRoundCreationService.create(
+                CouponRound.schedule(
+                        template,
+                        Instant.parse("2026-09-08T05:00:00Z"),
+                        Instant.parse("2026-09-08T06:00:00Z"),
+                        generatedAt
+                ),
+                stock
+        );
+        CouponRound second = couponRoundCreationService.create(
+                CouponRound.schedule(
+                        template,
+                        Instant.parse("2026-09-08T06:00:00Z"),
+                        Instant.parse("2026-09-08T07:00:00Z"),
+                        generatedAt
+                ),
+                stock
+        );
+        CouponRound future = couponRoundCreationService.create(
+                CouponRound.schedule(
+                        template,
+                        Instant.parse("2026-09-08T07:00:00Z"),
+                        Instant.parse("2026-09-08T08:00:00Z"),
+                        generatedAt
+                ),
+                stock
+        );
+        jdbcTemplate.update(
+                "UPDATE coupons SET status = 'OPEN' WHERE id IN (?, ?, ?)",
+                first.id(),
+                second.id(),
+                future.id()
+        );
+
+        List<Long> closedIds = new TransactionTemplate(transactionManager)
+                .execute(status -> couponRoundLifecyclePort.closeOpenRounds(
+                        Instant.parse("2026-09-08T07:00:00Z")
+                ));
+
+        assertThat(closedIds).containsExactly(first.id(), second.id());
+        assertThat(statusOf(first.id())).isEqualTo(CouponRoundStatus.CLOSED.name());
+        assertThat(statusOf(second.id())).isEqualTo(CouponRoundStatus.CLOSED.name());
+        assertThat(statusOf(future.id())).isEqualTo(CouponRoundStatus.OPEN.name());
+    }
+
+    @Test
+    @DisplayName("동시 Lifecycle 실행을 전역 잠금으로 직렬화해 한 번만 종료한다")
+    void serializeConcurrentLifecycleSynchronization() throws Exception {
+        CouponTemplate template = saveTemplate();
+        Instant generatedAt = Instant.parse("2026-08-20T00:00:00Z");
+        CouponRound round = couponRoundCreationService.create(
+                CouponRound.schedule(
+                        template,
+                        Instant.parse("2026-09-08T05:00:00Z"),
+                        Instant.parse("2026-09-08T06:00:00Z"),
+                        generatedAt
+                ),
+                CouponStock.initialize(100, generatedAt)
+        );
+        couponRoundLifecycleService.synchronize(
+                Instant.parse("2026-09-08T05:30:00Z")
+        );
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        Instant asOf = Instant.parse("2026-09-08T06:00:00Z");
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            Future<CouponRoundLifecycleResult> first = executorService.submit(
+                    () -> synchronizeConcurrently(asOf, ready, start)
+            );
+            Future<CouponRoundLifecycleResult> second = executorService.submit(
+                    () -> synchronizeConcurrently(asOf, ready, start)
+            );
+
+            assertThat(ready.await(
+                    CONCURRENCY_TIMEOUT_SECONDS,
+                    TimeUnit.SECONDS
+            )).isTrue();
+            start.countDown();
+
+            assertThat(List.of(
+                    first.get(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                            .closedOpenCount(),
+                    second.get(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                            .closedOpenCount()
+            )).containsExactlyInAnyOrder(1, 0);
+        } finally {
+            start.countDown();
+            executorService.shutdownNow();
+            assertThat(executorService.awaitTermination(
+                    CONCURRENCY_TIMEOUT_SECONDS,
+                    TimeUnit.SECONDS
+            )).isTrue();
+        }
+
+        assertThat(statusOf(round.id())).isEqualTo(CouponRoundStatus.CLOSED.name());
+    }
+
+    private CouponRoundLifecycleResult synchronizeConcurrently(
+            Instant asOf,
+            CountDownLatch ready,
+            CountDownLatch start
+    ) throws InterruptedException {
+        ready.countDown();
+        if (!start.await(CONCURRENCY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            throw new IllegalStateException(
+                    "동시 Lifecycle 시작 신호를 받지 못했습니다."
+            );
+        }
+        return couponRoundLifecycleService.synchronize(asOf);
     }
 
     private CouponTemplate saveTemplate(
