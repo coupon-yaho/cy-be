@@ -95,7 +95,6 @@ class HttpMetricsFilterTest {
 
     private static final Set<ControllerMapping> EXPECTED_COUPON_MAPPINGS = Set.of(
             mapping(RequestMethod.GET, "/api/v1/coupons", UriGroup.READ),
-            mapping(RequestMethod.GET, "/api/v1/coupons/{issuanceId}", UriGroup.READ),
             mapping(RequestMethod.POST, "/api/v1/coupons/{couponRoundId}/issue", UriGroup.ISSUE),
             mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/use", UriGroup.USE),
             mapping(RequestMethod.POST, "/api/v1/coupons/{issuanceId}/cancel-use", UriGroup.USE),
@@ -136,7 +135,7 @@ class HttpMetricsFilterTest {
 
         assertThat(COUPON_CONTROLLERS).hasSize(5);
         assertThat(actual).containsExactlyInAnyOrderElementsOf(EXPECTED_COUPON_MAPPINGS);
-        assertThat(actual).hasSize(6);
+        assertThat(actual).hasSize(5);
     }
 
     private static Set<ControllerMapping> controllerMappings(Class<?> controller) {

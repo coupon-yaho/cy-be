@@ -381,7 +381,7 @@ class AttemptConsumerKafkaIntegrationTest {
         // 이 대기가 없으면 테스트가 "소비가 안 됐다" 로 간헐 실패하고, 원인이 코드로 보인다.
         await().atMost(SETTLE).until(() -> container.isRunning()
                 && container.getAssignedPartitions() != null
-                && !container.getAssignedPartitions().isEmpty());
+                && container.getAssignedPartitions().size() == PARTITIONS);
     }
 
 

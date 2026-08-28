@@ -36,7 +36,7 @@ import static org.mockito.Mockito.verify;
         "coupon.idempotency.poll-interval=50ms",
         "coupon.idempotency.stale-after=30s",
         "coupon.round-generation.schedule-zone=Asia/Seoul",
-        "coupon.round-generation.max-days=30"
+        "coupon.calendar.max-query-range-days=366"
 })
 @Import(MySqlContainerConfig.class)
 class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
