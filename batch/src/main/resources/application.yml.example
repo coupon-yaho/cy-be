@@ -178,6 +178,14 @@ observation:
     # 이 횟수부터 수집 실패를 ERROR 로 올린다. 재고(1초)와 정합성(30초)은 같은 횟수라도 뜻하는
     # 시간이 다르므로, 경보가 시끄러우면 여기서 조인다.
     consecutive-failure-alarm: ${DOMAIN_GAUGE_FAILURE_ALARM:3}
+  pending-issued-gauge:
+    enabled: ${PENDING_ISSUED_GAUGE_ENABLED:true}
+    # FINAL 전 benchmark 회차의 v2 issued Hash를 HSCAN으로 나눠 읽는다. 부하 중에는 이 주기를 늘린다.
+    interval: ${PENDING_ISSUED_GAUGE_INTERVAL:30s}
+    scan-count: ${PENDING_ISSUED_GAUGE_SCAN_COUNT:200}
+    stale-after: ${PENDING_ISSUED_GAUGE_STALE_AFTER:5m}
+    # Hash field를 지우거나 재고를 복원하는 작업은 S8 재동기화만 담당한다.
+    issued-key: ${PENDING_ISSUED_GAUGE_KEY:cy:v2:issued:{couponRoundId}}
 
 # ⚠️ storage.jpa.auditing.enabled 를 끄지 않는다. 위 자동설정 제외와 한 쌍이었다 — 엔티티가
 #    0개일 때 @EnableJpaAuditing 이 "JPA metamodel must not be empty" 로 기동을 세웠기 때문이다.
