@@ -190,23 +190,66 @@ class PendingIssuedGaugeCollectorTest {
         Fixture fixture = fixture();
         when(fixture.jdbc.queryForList(any(String.class))).thenReturn(List.of(
             Map.of("coupon_id", 7L, "engine_version", "V2")));
-        Cursor<Map.Entry<Object, Object>> first =
-            cursor(Map.entry("1", "P|" + NOW.minusSeconds(9).toEpochMilli() + "|token-1|key-1"));
-        Cursor<Map.Entry<Object, Object>> second =
-            cursor(Map.entry("1", "P|" + NOW.minusSeconds(9).toEpochMilli() + "|token-1|key-1"));
+        // 한 바퀴가 40초 걸린다 — interval(30s)보다 길다. 스캔이 실제로 시간을 먹게 한다.
+        Cursor<Map.Entry<Object, Object>> first = slowCursor(fixture, 40);
+        Cursor<Map.Entry<Object, Object>> second = slowCursor(fixture, 40);
         when(fixture.hash.scan(eq(IssuanceKeys.of(7L).issued()), any(ScanOptions.class)))
             .thenReturn(first)
             .thenReturn(second);
 
         fixture.collector.collect();
-        // 회차가 많아 한 바퀴가 interval(30s)을 넘겼다. 갱신은 정상적으로 이어진다.
-        fixture.now.set(NOW.plusSeconds(70));
+        fixture.now.set(fixture.now.get().plusSeconds(30)); // fixed-delay 대기
         fixture.collector.collect();
-        fixture.now.set(NOW.plusSeconds(140));
+        fixture.now.set(fixture.now.get().plusSeconds(30)); // 다음 사이클을 기다리는 중
 
         assertGauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT, 7L, 1);
         assertGauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT_STATE, 7L,
             SourceStatusCode.of(SourceStatus.VALID));
+    }
+
+    @Test
+    void aCycleThatSuddenlyTakesMuchLongerDoesNotFlipRoundsMidFlight() {
+        Fixture fixture = fixture();
+        when(fixture.jdbc.queryForList(any(String.class))).thenReturn(List.of(
+            Map.of("coupon_id", 7L, "engine_version", "V2"),
+            Map.of("coupon_id", 9L, "engine_version", "V2")));
+        // 첫 바퀴는 Hash 가 비어 거의 즉시 끝난다. 두 번째 바퀴는 부하가 실려 오래 걸린다.
+        java.util.concurrent.atomic.AtomicReference<Double> sampledDuringLongScan =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        when(fixture.hash.scan(eq(IssuanceKeys.of(7L).issued()), any(ScanOptions.class)))
+            .thenAnswer(invocation -> slowCursor(fixture, 1));
+        when(fixture.hash.scan(eq(IssuanceKeys.of(9L).issued()), any(ScanOptions.class)))
+            .thenAnswer(invocation -> slowCursor(fixture, 1))
+            .thenAnswer(invocation -> slowCursor(fixture, 120, () ->
+                sampledDuringLongScan.set(gauge(
+                    fixture.registry, DomainMeterNames.STALE_PENDING_COUNT_STATE, 7L).value())));
+
+        fixture.collector.collect();
+        fixture.now.set(fixture.now.get().plusSeconds(30));
+        fixture.collector.collect();
+
+        // 긴 바퀴가 도는 동안 방금 읽은 회차 7 이 노후로 뒤집히면 안 된다.
+        assertThat(sampledDuringLongScan.get())
+            .isEqualTo(SourceStatusCode.of(SourceStatus.VALID));
+    }
+
+    @Test
+    void stalledCollectorDoesNotKeepPublishingItsLastValidValueForATargetedRound() {
+        Fixture fixture = fixture();
+        when(fixture.jdbc.queryForList(any(String.class))).thenReturn(List.of(
+            Map.of("coupon_id", 7L, "engine_version", "V2")));
+        Cursor<Map.Entry<Object, Object>> values =
+            cursor(Map.entry("1", "P|" + NOW.minusSeconds(9).toEpochMilli() + "|token-1|key-1"));
+        when(fixture.hash.scan(eq(IssuanceKeys.of(7L).issued()), any(ScanOptions.class)))
+            .thenReturn(values);
+
+        fixture.collector.collect();
+        // 수집기가 멈췄다. 회차는 여전히 대상이지만 사이클이 다시 돌지 않는다.
+        fixture.now.set(NOW.plusSeconds(300));
+
+        assertThat(gauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT, 7L).value()).isNaN();
+        assertGauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT_STATE, 7L,
+            SourceStatusCode.of(SourceStatus.UNAVAILABLE));
     }
 
     // --- B: 이탈한 회차는 유예 뒤 미터가 해제된다 ---
@@ -242,14 +285,16 @@ class PendingIssuedGaugeCollectorTest {
         Fixture fixture = fixture();
         when(fixture.jdbc.queryForList(any(String.class))).thenReturn(List.of(
             Map.of("coupon_id", 7L, "engine_version", "V2")));
-        Cursor<Map.Entry<Object, Object>> values =
-            cursor(Map.entry("1", "P|" + NOW.minusSeconds(9).toEpochMilli() + "|token-1|key-1"));
         when(fixture.hash.scan(eq(IssuanceKeys.of(7L).issued()), any(ScanOptions.class)))
-            .thenReturn(values);
+            .thenAnswer(invocation ->
+                cursor(Map.entry("1", "P|" + NOW.minusSeconds(9).toEpochMilli() + "|token-1|key-1")));
 
         fixture.collector.collect();
-        // 갱신 없이 나이만 먹는다. 회차는 여전히 대상이므로 강등도 해제도 없어야 한다.
-        fixture.now.set(NOW.plusSeconds(600));
+        // 사이클은 계속 돈다. 회차가 대상에 남아 있는 한 나이만으로 강등되지 않는다.
+        for (int i = 1; i <= 20; i++) {
+            fixture.now.set(NOW.plusSeconds(30L * i));
+            fixture.collector.collect();
+        }
 
         assertGauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT, 7L, 1);
         assertGauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT_STATE, 7L,
@@ -352,6 +397,30 @@ class PendingIssuedGaugeCollectorTest {
         assertGauge(fixture.registry, DomainMeterNames.STALE_PENDING_COUNT_STATE, 12L,
             SourceStatusCode.of(SourceStatus.PENDING));
         verifyNoInteractions(fixture.redis, fixture.hash);
+    }
+
+    private static Cursor<Map.Entry<Object, Object>> slowCursor(Fixture fixture, int seconds) {
+        return slowCursor(fixture, seconds, () -> { });
+    }
+
+    /** 스캔이 도는 동안 시계를 진행시킨다 — 한 사이클이 걸리는 시간을 재현한다. */
+    private static Cursor<Map.Entry<Object, Object>> slowCursor(
+        Fixture fixture, int seconds, Runnable whileScanning
+    ) {
+        @SuppressWarnings("unchecked")
+        Cursor<Map.Entry<Object, Object>> cursor = mock(Cursor.class);
+        java.util.Iterator<Map.Entry<Object, Object>> iterator = List.<Map.Entry<Object, Object>>of(
+            Map.entry("1", "P|" + NOW.minusSeconds(9).toEpochMilli() + "|token-1|key-1")).iterator();
+        when(cursor.hasNext()).thenAnswer(invocation -> {
+            if (!iterator.hasNext()) {
+                fixture.now.set(fixture.now.get().plusSeconds(seconds));
+                whileScanning.run();
+                return false;
+            }
+            return true;
+        });
+        when(cursor.next()).thenAnswer(invocation -> iterator.next());
+        return cursor;
     }
 
     private static SimpleMeterRegistry registryRejecting(String roundTag) {

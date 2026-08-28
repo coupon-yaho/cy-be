@@ -33,12 +33,18 @@ import com.kafkick.core.support.TimeProvider;
 public class PendingIssuedGaugeCollector {
 
     private static final Logger log = LoggerFactory.getLogger(PendingIssuedGaugeCollector.class);
-    private static final String OBSERVABLE_RUNS_SQL = """
-        SELECT coupon_id, engine_version
-          FROM benchmark_runs
-         WHERE run_status <> 'FINALIZED'
-           AND coupon_id IS NOT NULL
-         ORDER BY id
+    // coupon_id 에는 유일 제약이 없다. uk_run_running 이 묶는 것은 RUNNING 하나뿐이라
+    // LOAD_STOPPED·OBSERVED 는 몇 개든 남는다. 회차당 한 행으로 접지 않으면 뒤늦은
+    // WARMUP(V1) 행이 진행 중인 MAIN(V2) 의 결과를 N_A 로 덮는다. 최신 판정은 id 다.
+    static final String OBSERVABLE_RUNS_SQL = """
+        SELECT r.coupon_id, r.engine_version
+          FROM benchmark_runs r
+          JOIN (SELECT coupon_id, MAX(id) AS id
+                  FROM benchmark_runs
+                 WHERE run_status <> 'FINALIZED'
+                   AND coupon_id IS NOT NULL
+                 GROUP BY coupon_id) latest ON latest.id = r.id
+         ORDER BY r.coupon_id
         """;
 
     private final JdbcTemplate observationJdbcTemplate;
@@ -49,6 +55,9 @@ public class PendingIssuedGaugeCollector {
     private final IssuedValueCodec codec = new IssuedValueCodec();
     private final Map<Long, RoundMeters> meters = new ConcurrentHashMap<>();
     private volatile Set<Long> activeRoundIds = Set.of();
+    private volatile Instant lastCycleStartedAt;
+    private volatile Instant lastCycleEndedAt;
+    private volatile Duration lastCycleDuration = Duration.ZERO;
 
     public PendingIssuedGaugeCollector(
         @Qualifier("obs") JdbcTemplate observationJdbcTemplate,
@@ -65,6 +74,18 @@ public class PendingIssuedGaugeCollector {
     }
 
     public void collect() {
+        Instant startedAt = timeProvider.instant();
+        lastCycleStartedAt = startedAt;
+        try {
+            collectOnce();
+        } finally {
+            Instant endedAt = timeProvider.instant();
+            lastCycleDuration = Duration.between(startedAt, endedAt);
+            lastCycleEndedAt = endedAt;
+        }
+    }
+
+    private void collectOnce() {
         List<Target> targets;
         try {
             targets = targets();
@@ -83,8 +104,8 @@ public class PendingIssuedGaugeCollector {
         targets.forEach(target -> nextActiveRoundIds.add(target.roundId()));
         activeRoundIds = Set.copyOf(nextActiveRoundIds);
         for (Target target : targets) {
-            // 한 회차의 실패가 뒤 회차를 가리지 않게 회차 단위로 가둔다. 대상은 id 순이라
-            // 여기서 예외가 새면 id 가 큰 회차는 매 사이클 통째로 미수집이 된다.
+            // 한 회차의 실패가 뒤 회차를 가리지 않게 회차 단위로 가둔다. 여기서 예외가 새면
+            // 뒤에 오는 회차는 매 사이클 통째로 미수집이 된다.
             try {
                 collect(target);
             } catch (RuntimeException exception) {
@@ -245,8 +266,27 @@ public class PendingIssuedGaugeCollector {
      */
     private Observation current(long roundId, RoundMeters round) {
         Observation observation = round.observation.get();
-        if (observation.status() != SourceStatus.VALID || activeRoundIds.contains(roundId)) {
+        if (observation.status() != SourceStatus.VALID) {
             return observation;
+        }
+        if (activeRoundIds.contains(roundId)) {
+            // 대상에 남아 있다는 사실은 "수집이 살아 있다" 를 뜻하지 않는다. 회차 나이 대신
+            // 사이클이 다시 돌았는지로 판정한다 — 한 바퀴가 길어져도 오탐하지 않으면서
+            // 수집이 멈춘 것은 잡는다.
+            Instant startedAt = lastCycleStartedAt;
+            Instant endedAt = lastCycleEndedAt;
+            if (endedAt == null || (startedAt != null && startedAt.isAfter(endedAt))) {
+                // 사이클이 지금 돌고 있다. 허용치는 직전 바퀴 길이로 잰 것이라, 부하가 실려
+                // 이번 바퀴가 갑자기 길어지면 방금 읽은 회차까지 노후로 뒤집는다.
+                return observation;
+            }
+            Instant freshest = observation.observedAt().isAfter(endedAt)
+                ? observation.observedAt()
+                : endedAt;
+            Duration allowed = properties.interval().plus(lastCycleDuration).multipliedBy(2);
+            return Duration.between(freshest, timeProvider.instant()).compareTo(allowed) > 0
+                ? Observation.unavailable(observation.observedAt())
+                : observation;
         }
         Duration age = Duration.between(observation.observedAt(), timeProvider.instant());
         return age.compareTo(properties.interval().multipliedBy(2)) > 0
