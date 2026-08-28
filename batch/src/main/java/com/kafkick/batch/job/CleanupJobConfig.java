@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,6 +100,13 @@ public class CleanupJobConfig {
 
     /** 첫 청크가 잡은 컷오프. 청크마다 다시 잡으면 한 실행 안에서 기준이 앞으로 민다. */
     private static final String META_CUTOFF_KEY = "cleanup.metaCutoff";
+
+    /**
+     * <b>Step 1 의 버려진-실행 컷오프.</b> {@link #META_CUTOFF_KEY} 와 같은 이유로 첫 호출이
+     * 잡은 값을 끝까지 쓴다 — 다만 이쪽이 더 위험하다. Step 2 가 미는 것은 "지울 배치 메타"
+     * 인데 이쪽이 미는 것은 <b>도는 검증의 입력({@code asof_state})</b> 이다.
+     */
+    private static final String ABANDONED_CUTOFF_KEY = "cleanup.abandonedCutoff";
 
     /**
      * <b>배치 메타 보존 하한 — 되읽기 창보다 하루 크다.</b> 검사가
@@ -322,8 +330,15 @@ public class CleanupJobConfig {
                     // 검증이 떠 있다는 이유만으로 YIELDED 가 되고, 그 실행이 마지막 성공에서
                     // 빠져 **정상 상태에서 CleanupNotSucceeding 이 운다.** 이 두 질의는
                     // SELECT 뿐이라 검증과 부딪히지 않는다.
-                    LocalDateTime abandonedBefore =
-                            timeProvider.now().minusHours(abandonedAfterHours);
+                    // **컷오프는 첫 호출이 잡은 것을 끝까지 쓴다(CY-686).** 태스클릿이
+                    // RepeatStatus.CONTINUABLE 로 실행 하나마다 다시 도는데, 청크마다 시각을
+                    // 다시 잡으면 드레인이 길어질수록 기준이 앞으로 밀린다. 그러면
+                    // **시작 때 대상이 아니던 검증이 컷오프 안으로 들어와** 그 입력
+                    // (asof_state)이 걷힌다 — 그 실행은 V1·V3·V5 에서 빈 상태를 읽고
+                    // 예외 없이 조용히 틀린 답을 낸다. 지금까지는 verifyJob 프로브가
+                    // 가려 줬을 뿐이고, 그것은 손 트리거 검증에는 안 걸린다.
+                    LocalDateTime abandonedBefore = frozenCutoff(context, ABANDONED_CUTOFF_KEY,
+                            () -> timeProvider.now().minusHours(abandonedAfterHours));
                     long doneUpTo = context.getLong(DONE_UP_TO_KEY, 0);
                     Optional<Long> next =
                             nextTarget(cleanup, keepRuns, abandonedBefore, doneUpTo);
@@ -402,6 +417,33 @@ public class CleanupJobConfig {
     }
 
     /**
+     * <b>컷오프를 첫 호출 값에 얼린다.</b> 두 Step 이 같은 구현을 쓴다 — 한때 각자 인라인으로
+     * 갖고 있었고, 그러다 Step 1 만 얼리는 것을 빠뜨렸다(CY-686 이 그 자리를 닫았다).
+     *
+     * <p><b>왜 뽑았나.</b> 인라인이면 <b>{@code if} 만 지우는 회귀가 통합 테스트를 통과한다</b> —
+     * 매 호출 {@code put} 해도 키는 있고, 고정 시계 하네스에서는 값도 같기 때문이다. 실제로
+     * 그 돌연변이가 살아남는 것을 확인했다. 여기로 뽑으면 {@code compute} 호출 횟수를 셀 수
+     * 있어 그 회귀가 유닛 테스트에서 죽는다.
+     *
+     * <p><b>범위는 한 {@code StepExecution} 이다.</b> 두 호출부 모두 Step 문맥을 넘기므로
+     * 두 Step 은 칸이 갈려 있다 — <b>키가 같아도 안 섞인다.</b> 키를 다르게 둔 것은 읽는
+     * 사람을 위해서지 충돌 방지가 아니다. {@code ExecutionContextPromotionListener} 로 Job
+     * 문맥에 올리지 마라 — 그 순간 둘이 한 칸을 다툰다.
+     *
+     * <p><b>재시작은 없다.</b> {@link #DONE_UP_TO_KEY} 가 적은 대로 {@code CleanupScheduler}
+     * 가 매 발화에 {@code firedAt} 을 실어 새 인스턴스를 만든다. 설령 재시작이 일어나도
+     * 얼린 컷오프는 나중 값보다 항상 일러서 두 질의 모두 <b>덜 지우는</b> 쪽이다
+     * (대상 축소 · 보호 확대).
+     */
+    static LocalDateTime frozenCutoff(ExecutionContext context, String key,
+            Supplier<LocalDateTime> compute) {
+        if (!context.containsKey(key)) {
+            context.put(key, compute.get().toString());
+        }
+        return LocalDateTime.parse(context.getString(key));
+    }
+
+    /**
      * 아직 안 끝낸 것 중 가장 오래된 실행. <b>id 오름차순</b>이라 진도 하나로 표현된다.
      *
      * <p>두 집합을 합친다. 겹칠 수 있고(오래된 버려진 실행), 합집합이라 두 번 지우지 않는다.
@@ -472,18 +514,12 @@ public class CleanupJobConfig {
                     // 30일 창에서는 드레인이 몇 분 늘어도 대상이 거의 안 바뀌지만,
                     // metadata-keep-days 를 최소 가까이 내리고 metadata-chunk-size 를
                     // 줄이는 날 뜻이 갈린다.
-                    // ⚠️ **형제 Step 은 아직 안 얼렸다.** 앞 Step 의 abandonedBefore 는
-                    // 태스클릿 안에서 청크마다 다시 잡는다 — 그쪽이 미는 것은 "지울 배치
-                    // 메타" 가 아니라 **도는 검증의 입력(asof_state)** 이라 축이 더 위험한데,
-                    // 지금은 verifyJob 프로브가 가려 주고 있을 뿐이다. 이 티켓에서 안 고치고
-                    // docs/13 에 남겼다 — 여기서 "형제도 그렇다" 를 안 적으면 다음 사람이
-                    // 이 주석을 근거로 그쪽도 이미 얼었다고 읽는다.
-                    if (!context.containsKey(META_CUTOFF_KEY)) {
-                        context.put(META_CUTOFF_KEY,
-                                timeProvider.now().minusDays(metadataKeepDays).toString());
-                    }
-                    LocalDateTime olderThan =
-                            LocalDateTime.parse(context.getString(META_CUTOFF_KEY));
+                    // **형제 Step 도 얼렸다(CY-686).** 앞 Step 의 abandonedBefore 는
+                    // ABANDONED_CUTOFF_KEY 로 첫 호출 값을 끝까지 쓴다 — 그쪽이 미는 것은
+                    // "지울 배치 메타" 가 아니라 **도는 검증의 입력(asof_state)** 이라
+                    // 축이 더 위험했다.
+                    LocalDateTime olderThan = frozenCutoff(context, META_CUTOFF_KEY,
+                            () -> timeProvider.now().minusDays(metadataKeepDays));
 
                     PurgedMetadata purged =
                             cleanup.deleteBatchMetadataChunk(olderThan, metadataChunkSize);

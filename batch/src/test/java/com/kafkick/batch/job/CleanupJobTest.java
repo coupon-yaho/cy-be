@@ -872,6 +872,51 @@ class CleanupJobTest {
                 .single();
     }
 
+    /**
+     * <b>두 Step 의 컷오프가 실행 문맥에 얼어 있다.</b> 청크마다 다시 잡으면 드레인이
+     * 길어질수록 기준이 앞으로 밀려, 한 실행 안에서 <i>"보존 기간"</i> 의 뜻이 달라진다.
+     * Step 1 쪽이 더 위험하다 — 미는 것이 "지울 배치 메타" 가 아니라 <b>도는 검증의
+     * 입력({@code asof_state})</b> 이라, 시작 때 대상이 아니던 검증의 입력이 걷힌다.
+     *
+     * <p><b>왜 값을 문맥에서 재는가.</b> 이 클래스는 {@code Clock} 을 {@code AS_OF} 에
+     * 고정하므로 <b>청크가 몇 번을 돌든 {@code now()} 가 같다</b> — 동작으로는 언 것과
+     * 안 언 것이 구분되지 않아, 한때 Step 2 의 그 분기를 지워도 전부 초록이었다(코드 주석이
+     * 그 사실을 자백해 뒀다). 똑딱이는 시계를 넣는 길도 있지만 되읽기 빈들이 같은 시계를
+     * 읽어 값이 실행 순서에 흔들린다. 그래서 <b>"컷오프가 문맥에서 온다"</b> 는 불변식
+     * 자체를 잰다 — 키가 없으면 매번 새로 잡는다는 뜻이고, 이 단언이 그것을 잡는다.
+     */
+    @Test
+    @DisplayName("두 Step 의 컷오프가 첫 청크 값으로 얼어 있다")
+    void freezesBothCutoffsOnTheFirstChunk() throws Exception {
+        long stale = run(AS_OF.minusDays(9), "PASS", AS_OF.minusDays(9));
+        asOfStateRows(stale, 4);
+
+        JobExecution execution = runCleanup();
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        assertThat(cutoffOf(execution, "purgeVerificationRunsStep", "cleanup.abandonedCutoff"))
+                .as("Step 1 의 버려진-실행 컷오프가 안 얼면, 드레인 중에 대상이 아니던 "
+                        + "검증의 asof_state 가 걷힌다")
+                .isEqualTo(AS_OF.minusHours(24));
+
+        assertThat(cutoffOf(execution, "purgeBatchMetadataStep", "cleanup.metaCutoff"))
+                .as("Step 2 는 이미 얼려 뒀는데 그 분기를 지워도 초록이었다 — 여기서 못 박는다")
+                .isEqualTo(AS_OF.minusDays(10));
+    }
+
+    /** 지정한 Step 의 실행 문맥에서 컷오프를 읽는다. 없으면 실패시킨다. */
+    private static LocalDateTime cutoffOf(JobExecution execution, String stepName, String key) {
+        StepExecution step = execution.getStepExecutions().stream()
+                .filter(candidate -> stepName.equals(candidate.getStepName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(stepName + " 이 안 돌았습니다"));
+        assertThat(step.getExecutionContext().containsKey(key))
+                .as("%s 의 문맥에 %s 가 없습니다 — 컷오프를 청크마다 다시 잡고 있다는 뜻입니다",
+                        stepName, key)
+                .isTrue();
+        return LocalDateTime.parse(step.getExecutionContext().getString(key));
+    }
+
     private JobExecution runCleanup() throws Exception {
         return jobOperator.start(cleanupJob, new JobParametersBuilder()
                 .addLocalDateTime("firedAt", nowUtc())
