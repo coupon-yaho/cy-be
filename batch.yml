@@ -70,6 +70,20 @@ services:
       #    실행 인자로도 못 넣는다. 그런데 이 손잡이가 필요한 순간이 바로 이 경로다:
       #    시연 중 인덱스를 빠뜨려 기동이 거절되면 배치가 통째로 안 떠 회차 전이까지 선다.
       SCHEMA_GUARD_REQUIRE_BATCH_INDEXES: ${SCHEMA_GUARD_REQUIRE_BATCH_INDEXES:-true}
+      # 관리자 API 토큰 관문(CY-742). 위 가드들과 같은 이유로 여기 적는다.
+      #
+      # /api/v1/admin/** 에는 stop·recover·abandon 이 있어 포트에 닿는 누구나 도는 잡을
+      # 죽일 수 있다. 관제 화면을 붙이면서 "포트를 안 내보낸다"(docs/11 §11)는 전제가
+      # 흔들리므로 2차 방어선을 둔다 — 주장이 아니라 소지를 묻는다.
+      #
+      # ⚠️ 켠 채 BATCH_ADMIN_TOKEN 이 비면 **기동을 거절한다.** "관문 있는 척" 이 제일 나쁘다.
+      #    일부러 열어 둘 거라면 BATCH_ADMIN_AUTH_REQUIRED=false 로 명시하고,
+      #    그때는 batch-expose.yml 을 얹지 않는다.
+      # ⚠️ 이 값은 시크릿이다. 저장소가 공개라 여기 값을 적지 말고 .env 나 셸에서 준다.
+      BATCH_ADMIN_AUTH_REQUIRED: ${BATCH_ADMIN_AUTH_REQUIRED:-true}
+      BATCH_ADMIN_TOKEN: ${BATCH_ADMIN_TOKEN:-}
+      # 관제 화면이 브라우저에서 이 API 를 부를 오리진. * 는 쓰지 않는다.
+      BATCH_ADMIN_CORS_ORIGINS: ${BATCH_ADMIN_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
 
       # JVM 기본 존이 UTC 가 아닐 때 기동을 거절할지(CY-718). **위 가드들과 같은 이유로**
       # 여기 적는다 — compose 는 environment 에 적힌 것만 넘기므로, 안 적으면

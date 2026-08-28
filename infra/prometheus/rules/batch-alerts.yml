@@ -1309,3 +1309,23 @@ groups:
             그 빈이 아예 안 떴다는 뜻일 수 있어 그 한 줄마저 없습니다.
             /actuator/prometheus 본문에서 두 이름을 직접 봅니다. 미터 이름이 바뀌었거나
             DefaultZoneGuard 가 컴포넌트 스캔 밖으로 나간 것입니다.
+
+      # 관리자 API 토큰 관문이 꺼진 채 떠 있는 상태(CY-742). 증상이 아예 없다 — 요청이
+      # 그냥 통과하므로 예외도 로그도 안 난다. 꺼도 되는 구성이 있어서(포트를 안 내보내는
+      # 로컬·시연) 기동을 막지는 않지만, 그 선택이 **잊힌 채 남는 것**을 막는다.
+      # 포트를 내보내는 오버레이(batch-expose.yml)를 얹은 상태에서 이게 꺼져 있으면
+      # 포트에 닿는 누구나 도는 잡을 중단·복구할 수 있다.
+      - alert: BatchAdminAuthDisabled
+        expr: cy_batch_admin_auth_enforcement == 0
+        for: 15m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "관리자 API 토큰 관문이 꺼져 있습니다"
+          description: >-
+            BATCH_ADMIN_AUTH_REQUIRED=false 로 관문을 끈 상태입니다.
+            /api/v1/admin/** 에는 stop·recover·abandon 이 있어 **포트에 닿는 누구나 도는
+            잡을 죽일 수 있습니다**. 이 상태가 안전한 것은 포트를 밖으로 안 내보낼
+            때뿐입니다(docs/11 §11) — batch-expose.yml 을 얹었다면 지금 끄십시오.
+            다시 켜려면 BATCH_ADMIN_TOKEN 을 주고 BATCH_ADMIN_AUTH_REQUIRED=true 로 둡니다.
