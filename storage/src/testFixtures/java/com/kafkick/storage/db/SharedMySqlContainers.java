@@ -177,6 +177,14 @@ final class SharedMySqlContainers {
                 // 누가 UPSERT 반환값(삽입 1/갱신 2)을 쓰려고 useAffectedRows=true 를 붙이면
                 // 값이 같은 UPDATE 가 0행이 되어 멀쩡한 행에 RUN_ROW_VANISHED 가 난다.
                 .withUrlParam("useAffectedRows", "false")
+                // 운영 URL 과 같은 모양으로 맞춘다(CY-697). DataSourceTimeoutGuard 가
+                // 기동 때 이 둘의 존재와 대소 관계를 검사하므로, 없으면 컨텍스트를 띄우는
+                // 테스트가 전부 그 자리에서 깨진다 — 실제로 그렇게 확인하고 넣었다.
+                //
+                // 값도 운영과 같게 둔다. 테스트만 다른 값을 쓰면 "테스트는 통과하는데
+                // 운영에서만 끊긴다" 는 축이 새로 생긴다.
+                .withUrlParam("connectTimeout", "3000")
+                .withUrlParam("socketTimeout", "660000")
                 // 운영 MySQL 서버 설정(my.cnf) 중 쿼리 결과에 영향을 주는 항목만 옮겼다.
                 // 메모리·로깅·binlog 는 테스트에 불필요하므로 제외. 서버 설정이 바뀌면 여기도 같이 본다.
                 .withCommand(

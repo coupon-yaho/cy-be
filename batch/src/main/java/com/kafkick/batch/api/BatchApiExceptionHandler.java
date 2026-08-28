@@ -14,6 +14,7 @@ import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 
 /**
  * <b>이게 없으면 모든 도메인 예외가 500 으로 나간다.</b> {@code BusinessException} 이
@@ -52,8 +53,13 @@ import com.kafkick.core.support.exception.ErrorCode;
  * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 인증이
  * 없으므로 내부 사정을 더 조심해서 다룬다.
  */
+// ⚠️ **컨트롤러를 여기 안 적으면 그 경로의 도메인 예외가 전부 500 으로 나간다.** 컴파일이
+// 안 잡는 결합이고, CY-697 이 CleanupAdminController 를 더하면서 실제로 밟았다 —
+// 409·404 가 전부 500 이었다. **BatchApiExceptionHandlerCoverageTest 가 그 자리를 지킨다**
+// (CY-590). 그때 그 테스트를 안 돌리고 흐름 테스트만 봐서 늦게 알았을 뿐이다.
 @RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
-        ExpireAdminController.class, VerifyReportController.class})
+        ExpireAdminController.class, CleanupAdminController.class,
+        VerifyReportController.class})
 public class BatchApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(BatchApiExceptionHandler.class);
@@ -62,6 +68,20 @@ public class BatchApiExceptionHandler {
 
     public BatchApiExceptionHandler(TimeProvider timeProvider) {
         this.timeProvider = timeProvider;
+    }
+
+    /**
+     * <b>데드라인 초과는 500 이 아니다.</b> 이 API 들은 DB 가 아플 때 부르는 진단 도구라,
+     * 그 상황에서 500 을 내면 운영자가 <i>"배치가 깨졌다"</i> 로 읽고 컨테이너를 내린다.
+     * 스택도 안 남긴다 — 앱이 깨진 것이 아니고, 인증 없는 API 라 ERROR 로그를 쌓는
+     * 수단이 되면 안 된다.
+     */
+    @ExceptionHandler({org.springframework.transaction.TransactionTimedOutException.class,
+            org.springframework.dao.QueryTimeoutException.class})
+    public ResponseEntity<ResponseEnvelope<Void>> handleTimeout(Exception exception) {
+        log.warn("batch admin API 가 데드라인을 넘겼습니다. type={}",
+                exception.getClass().getSimpleName());
+        return respond(VerificationErrorCode.ADMIN_QUERY_TIMED_OUT);
     }
 
     @ExceptionHandler(BusinessException.class)

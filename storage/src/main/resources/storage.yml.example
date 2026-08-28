@@ -2,7 +2,22 @@
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&useAffectedRows=false
+    # ⚠️ **connectTimeout·socketTimeout 은 Hikari 의 connection-timeout 과 다른 축이다.**
+    #    저것은 **풀에서 커넥션을 빌리는** 시간이고, 이 둘은 **소켓** 시간이다. TCP 는
+    #    살아 있는데 응답이 안 오는 상태(방화벽 drop, 서버 멎음)는 Hikari 가 못 잡는다 —
+    #    빌려주기는 이미 끝났기 때문이다. 그때 호출자가 무기한 멈춘다.
+    #
+    #    batch 에서 그 자리가 특히 나쁘다. SchemaPresenceGuard 는
+    #    @Order(HIGHEST_PRECEDENCE) ApplicationRunner 라, 거기서 멈추면 **컨테이너는
+    #    "떠 있음" 인데 @Scheduled 여덟이 하나도 안 돈다** — 회차 전이까지 선다.
+    #
+    #    socketTimeout 660000 = 660초. **가장 긴 Step 데드라인(verify.step-timeout-ms 600초)
+    #    보다 커야 한다** — 작게 잡으면 정상 배치를 죽인다. 실측 근거는 docs/12 의
+    #    replayStep 312초다. 그 관계는 DataSourceTimeoutGuard 가 기동 때 검사한다.
+    #
+    #    api 는 발급 경로라 이보다 훨씬 짧은 상한이 맞지만, 그 축은 질의별 타임아웃으로
+    #    거는 것이 맞다 — 이 값은 "무기한 멈추지 않는다" 만 보장한다.
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&useAffectedRows=false&connectTimeout=${DB_CONNECT_TIMEOUT_MS:2000}&socketTimeout=${DB_SOCKET_TIMEOUT_MS:660000}
     # 로컬 개발용 기본값. 운영은 환경변수로 최소 권한 계정을 주입한다.
     username: ${DB_USERNAME:app}
     password: ${DB_PASSWORD:app}
