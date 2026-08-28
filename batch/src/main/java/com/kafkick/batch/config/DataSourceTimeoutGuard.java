@@ -6,6 +6,9 @@ import java.util.regex.Pattern;
 
 import javax.sql.DataSource;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,6 +41,12 @@ public class DataSourceTimeoutGuard {
 
     private static final Pattern SOCKET_TIMEOUT = Pattern.compile("[?&]socketTimeout=(\\d+)");
 
+    /** 게이지가 읽는 값. 러너가 한 번만 도므로 필드에 남긴다. */
+    private volatile boolean verified;
+
+    /** {@link #reject} 가 끈 경로에서도 지표를 남기려고 든다. */
+    private MeterRegistry registry;
+
     private static final Pattern CONNECT_TIMEOUT = Pattern.compile("[?&]connectTimeout=(\\d+)");
 
     /** 거절을 끄는 손잡이. 기본은 켬 — 끄는 법은 거절 메시지가 직접 말한다. */
@@ -48,14 +57,17 @@ public class DataSourceTimeoutGuard {
             @Value("${" + REQUIRED + ":true}") boolean required,
             @Value("${batch.verify.step-timeout-ms:600000}") long verifyStepTimeoutMs,
             @Value("${batch.expire.step-timeout-ms:120000}") long expireStepTimeoutMs,
-            @Value("${batch.cleanup.step-timeout-ms:120000}") long cleanupStepTimeoutMs) {
+            @Value("${batch.cleanup.step-timeout-ms:120000}") long cleanupStepTimeoutMs,
+            MeterRegistry registry) {
 
         // **프로퍼티가 아니라 실물에서 읽는다.** 테스트는 @ServiceConnection 이 DataSource 를
         // 프로그램으로 만들어 spring.datasource.url 이 아예 없다 — 프로퍼티로 읽으면 그 자리에서
         // PlaceholderResolutionException 이 나고, 그러면 이 가드가 **테스트에서만** 무너진다.
         // 실물에서 읽으면 운영·테스트가 같은 문자열을 본다.
+        this.registry = registry;
         String url = jdbcUrlOf(dataSource);
         if (url == null) {
+            publish(registry, false);
             log.warn("DataSource 에서 JDBC URL 을 못 읽어 타임아웃 검사를 건너뜁니다. "
                     + "getJdbcUrl() 이 없는 구현입니다. type={}",
                     dataSource.getClass().getName());
@@ -123,8 +135,25 @@ public class DataSourceTimeoutGuard {
             return;
         }
 
+        publish(registry, true);
         log.info("JDBC 타임아웃 확인 완료 — socketTimeout={}ms 가 가장 긴 Step 데드라인({}ms)을 "
                 + "덮습니다.", socketTimeoutMs, longest);
+    }
+
+    /**
+     * <b>끈 상태를 지표로 낸다.</b> 이 스택에는 Loki·promtail 이 없어 <b>로그가 감시 수단이
+     * 아니다</b> — {@code batch-alerts.yml} 이 인덱스 축에 대해 같은 문장을 이미 적어 뒀다.
+     * ERROR 한 줄로만 남기면 며칠 뒤 그 줄에 닿는 사람이 없다.
+     * {@code cy_batch_schema_index_enforcement} 와 같은 모양이다.
+     */
+    private void publish(MeterRegistry registry, boolean verified) {
+        this.verified = verified;
+        if (registry == null) {
+            return;
+        }
+        Gauge.builder("cy_batch_jdbc_timeout_verified", this, self -> self.verified ? 1 : 0)
+                .description("JDBC 타임아웃 검사를 통과했는가 — 1 통과 · 0 못 했거나 껐다")
+                .register(registry);
     }
 
     /**
@@ -133,13 +162,14 @@ public class DataSourceTimeoutGuard {
      * <b>가드 자신이 일으킬 수 있는 자리</b>라, 끄는 손잡이가 없으면 되돌릴 방법이 없다.
      * 끈 상태는 조용하지 않게 ERROR 로 남긴다.
      */
-    private static void reject(boolean required, String message) {
+    private void reject(boolean required, String message) {
         if (required) {
             throw new IllegalStateException(message
                     + " 지금 당장 띄워야 하면 환경변수 "
                     + "DATASOURCE_TIMEOUT_GUARD_REQUIRED=false (또는 실행 인자 --"
                     + REQUIRED + "=false) 로 거절을 끌 수 있습니다.");
         }
+        publish(this.registry, false);
         log.error("JDBC 타임아웃 검사에 걸렸습니다 — 거절은 꺼져 있습니다({}=false). {}",
                 REQUIRED, message);
     }

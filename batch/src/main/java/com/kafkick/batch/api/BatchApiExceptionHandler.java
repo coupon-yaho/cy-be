@@ -76,8 +76,13 @@ public class BatchApiExceptionHandler {
      * 스택도 안 남긴다 — 앱이 깨진 것이 아니고, 인증 없는 API 라 ERROR 로그를 쌓는
      * 수단이 되면 안 된다.
      */
+    // ⚠️ **socketTimeout 만료가 여기 안 걸리면 이 갈래가 반쪽이다.** 그 만료는
+    //    CommunicationsException(08S01)이라 QueryTimeoutException 이 아니라
+    //    DataAccessResourceFailureException 으로 번역된다 — 이 PR 이 URL 에 건 660초가
+    //    바로 그 경로다. 빼면 이 핸들러가 피하려던 500 + 스택트레이스를 그대로 밟는다.
     @ExceptionHandler({org.springframework.transaction.TransactionTimedOutException.class,
-            org.springframework.dao.QueryTimeoutException.class})
+            org.springframework.dao.QueryTimeoutException.class,
+            org.springframework.dao.DataAccessResourceFailureException.class})
     public ResponseEntity<ResponseEnvelope<Void>> handleTimeout(Exception exception) {
         log.warn("batch admin API 가 데드라인을 넘겼습니다. type={}",
                 exception.getClass().getSimpleName());
