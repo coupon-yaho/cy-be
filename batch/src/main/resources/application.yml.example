@@ -266,6 +266,17 @@ batch:
   #    (JOB_INSTANCE_ID, STATUS, END_TIME) 은 type=index rows=25,950 인데
   #    (STATUS, END_TIME) 은 type=range rows=2,016 이다. 이름만 보면 같은 이름의 다른
   #    모양이 통과한다.
+  # JVM 기본 존이 UTC 가 아닐 때 기동을 거절할지(CY-718). 기본 true.
+  #
+  # ⚠️ 배치 메타의 시각(START_TIME · LAST_UPDATED)을 스프링 배치가 **JVM 기본 존**으로
+  #    찍는데 MySQL 세션 존은 UTC 다. 어긋나면 RunningJobProbe 의 시체 판정이 그 차이만큼
+  #    틀리고 만료·검증의 상호 배제가 조용히 꺼진다 — 증상이 "가드가 안 운다" 뿐이라
+  #    기동 때 잡는다.
+  #
+  #    테스트 JVM 은 일부러 Asia/Seoul 이라 테스트 설정이 이 값을 false 로 둔다.
+  timezone-guard:
+    required: ${TIMEZONE_GUARD_REQUIRED:true}
+
   schema-guard:
     require-batch-indexes: ${SCHEMA_GUARD_REQUIRE_BATCH_INDEXES:true}
 

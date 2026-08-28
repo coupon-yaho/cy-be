@@ -59,6 +59,7 @@ services:
       #    실행 인자로도 못 넣는다. 그런데 이 손잡이가 필요한 순간이 바로 이 경로다:
       #    시연 중 인덱스를 빠뜨려 기동이 거절되면 배치가 통째로 안 떠 회차 전이까지 선다.
       SCHEMA_GUARD_REQUIRE_BATCH_INDEXES: ${SCHEMA_GUARD_REQUIRE_BATCH_INDEXES:-true}
+      TIMEZONE_GUARD_REQUIRED: ${TIMEZONE_GUARD_REQUIRED:-true}
       # JDBC 소켓 타임아웃과 admin API 데드라인(CY-697). 위 SCHEMA_GUARD 와 **같은 이유로**
       # 여기 적는다 — compose 는 environment 에 적힌 것만 넘기므로, 안 적으면 이미지 안의
       # 플레이스홀더가 기본값으로 굳고 손잡이가 안 닿는다.
