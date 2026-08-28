@@ -1254,8 +1254,10 @@ groups:
             고친 뒤에는 거절을 다시 켜십시오.
 
       # JVM 기본 존이 UTC 를 벗어난 채 떠 있는 상태. 거절을 껐거나 베이스 이미지가 바뀌었다.
-      # 증상이 아예 없다 — 선점문의 진도 조건이 항상 참이 되어 복구·중단 API 가 도는 잡을
-      # 닫는데, 예외도 로그도 안 난다. 그래서 지표로만 보인다.
+      # 가드 자신은 기동 때 ERROR 를 한 줄 남긴다. 그런데 이 스택엔 Loki·promtail 이 없어
+      # 그것을 모으는 것이 없고, 재기동하면 스크롤 밖으로 밀린다. 그리고 **피해 쪽은 진짜로
+      # 조용하다** — 선점문의 진도 조건이 항상 참이 되어 복구·중단 API 가 도는 잡을 닫는데
+      # 그 경로는 예외도 로그도 안 낸다. 그래서 지표로 든다.
       - alert: BatchDefaultZoneNotUtc
         expr: >-
           cy_batch_default_zone_verified == 0
@@ -1297,7 +1299,9 @@ groups:
           description: >-
             배치는 떠 있는데 cy_batch_default_zone_verified 또는
             cy_batch_timezone_enforcement 시리즈가 없습니다. BatchDefaultZoneNotUtc 가
-            둘을 and 로 묶으므로 **JVM 기본 존이 UTC 가 아니어도 알림이 한 건도 안 갑니다** —
-            그 상태는 예외도 로그도 안 내므로 관측 수단이 이것뿐입니다.
+            둘을 and 로 묶으므로 **JVM 기본 존이 UTC 가 아니어도 알림이 한 건도 안 갑니다**.
+            거절을 끈 채 존이 어긋나면 DefaultZoneGuard 가 기동 때 ERROR 를 한 줄 남기지만
+            이 스택엔 Loki·promtail 이 없어 그것을 모으는 것이 없고, 게이지가 없다는 것은
+            그 빈이 아예 안 떴다는 뜻일 수 있어 그 한 줄마저 없습니다.
             /actuator/prometheus 본문에서 두 이름을 직접 봅니다. 미터 이름이 바뀌었거나
             DefaultZoneGuard 가 컴포넌트 스캔 밖으로 나간 것입니다.
