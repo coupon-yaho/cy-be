@@ -12,6 +12,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 
+import tools.jackson.databind.ObjectMapper;
+
+import com.kafkick.core.support.TimeProvider;
+
 /**
  * <b>손잡이를 둘로 가른다.</b> {@code required} 는 <i>관문을 세울 것인가</i>, {@code token} 은
  * <i>무엇으로 통과시킬 것인가</i>다. 하나로 합쳐 <i>"토큰이 있으면 켠다"</i> 로 두면
@@ -39,18 +43,18 @@ public class AdminTokenConfig {
     static final String TOKEN = "batch.admin.auth.token";
 
     /**
-     * <b>CORS 보다 뒤, 그 밖의 모든 것보다 앞에 선다.</b> 스프링의 CORS 필터가
-     * {@code HIGHEST_PRECEDENCE} 근처에 서는데 그보다 앞서면 프리플라이트가 이 필터를 먼저
-     * 만난다 — {@code shouldNotFilter} 가 {@code OPTIONS} 를 빼 두었지만, 순서에까지 기대지
-     * 않도록 뒤에 세운다.
+     * <b>{@link AdminCorsConfig} 의 {@code CorsFilter} 보다 뒤에 선다.</b> 그래야 이 관문이
+     * 401 로 체인을 끊어도 <b>CORS 헤더가 이미 붙어 있어</b> 관제 화면이 그 401 을 읽는다 —
+     * 순서가 반대면 거절이 브라우저에 <b>"CORS 오류"</b> 로만 보이고 원인이 토큰이라는 것을
+     * 아무도 못 찾는다. 실측으로 그 상태를 확인했다(CY-742 리뷰).
      */
-    private static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 100;
+    private static final int ORDER = AdminCorsConfig.ORDER + 100;
 
     @Bean
     public FilterRegistrationBean<jakarta.servlet.Filter> adminTokenFilter(
             @Value("${" + REQUIRED + ":true}") boolean required,
             @Value("${" + TOKEN + ":}") String token,
-            MeterRegistry registry) {
+            MeterRegistry registry, ObjectMapper objectMapper, TimeProvider timeProvider) {
 
         Gauge.builder("cy_batch_admin_auth_enforcement", () -> required ? 1 : 0)
                 .description("관리자 API 토큰 관문이 켜져 있는가 — 1 켜짐 · 0 꺼짐")
@@ -59,7 +63,7 @@ public class AdminTokenConfig {
         FilterRegistrationBean<jakarta.servlet.Filter> registration =
                 new FilterRegistrationBean<>();
         if (!required) {
-            log.warn("관리자 API 토큰 관문이 꺼져 있습니다({}=false). "
+            log.error("관리자 API 토큰 관문이 꺼져 있습니다({}=false). "
                     + "포트에 닿는 누구나 도는 잡을 중단·복구할 수 있습니다 — "
                     + "이 상태는 포트를 밖으로 안 내보낸다는 전제(docs/11 §11)에만 기댑니다.",
                     REQUIRED);
@@ -81,7 +85,7 @@ public class AdminTokenConfig {
         }
 
         log.info("관리자 API 토큰 관문을 켰습니다. 헤더={}", AdminTokenFilter.HEADER);
-        registration.setFilter(new AdminTokenFilter(token));
+        registration.setFilter(new AdminTokenFilter(token, objectMapper, timeProvider));
         registration.addUrlPatterns("/api/v1/admin/*");
         registration.setOrder(ORDER);
         return registration;

@@ -17,6 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 /**
@@ -65,7 +66,12 @@ class AdminTokenFilterTest {
         assertThat(response.body())
                 .as("있는데 틀린 것과 아예 없는 것을 응답에서 가르면 그 자체가 힌트가 된다")
                 .doesNotContain("없", "틀");
-        assertThat(response.body()).contains("BATCH-ADMIN-401");
+        // 코드는 카탈로그에서 온다 — <도메인>-<번호> 규약 밖에서 만들면 그 정규식을 쓰는
+        // 집계가 조용히 누락한다(응답 코드는 k6 집계와 Chaos 판정의 근거다).
+        assertThat(response.body())
+                .contains(VerificationErrorCode.ADMIN_TOKEN_REQUIRED.getCode());
+        // 같은 표면에서 봉투 모양이 갈리면 관제 파서가 이 401 에서만 깨진다.
+        assertThat(response.body()).contains("requestId").contains("timestamp");
     }
 
     @Test
@@ -119,6 +125,30 @@ class AdminTokenFilterTest {
                 .contains("http://localhost:3000");
     }
 
+    /**
+     * <b>거절도 브라우저가 읽을 수 있어야 한다.</b> CORS 를 {@code WebMvcConfigurer} 로 두면
+     * {@code DispatcherServlet} 안쪽 인터셉터라, 이 관문이 체인을 끊는 401 에는 헤더가
+     * <b>안 붙는다</b> — 실측에서 그랬다. 그러면 관제 화면은 401 을 못 읽고 <b>"CORS 오류"</b>
+     * 로만 보게 되어, 원인이 토큰이라는 것을 아무도 못 찾는다.
+     */
+    @Test
+    @DisplayName("거절 응답에도 CORS 헤더가 붙어 관제가 401 을 읽는다")
+    void deniedResponseIsReadableByTheBrowser() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(base() + PATH))
+                .GET()
+                .header("Origin", "http://localhost:3000")
+                .timeout(Duration.ofSeconds(10))
+                .build();
+
+        HttpResponse<String> response = CLIENT.send(request,
+                HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.headers().firstValue("access-control-allow-origin"))
+                .as("이 헤더가 없으면 브라우저가 401 을 JS 에 안 넘기고 CORS 오류로만 보인다")
+                .contains("http://localhost:3000");
+    }
+
     private HttpResponse<String> call(String token) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(base() + PATH))
                 .GET().timeout(Duration.ofSeconds(10));
@@ -130,6 +160,14 @@ class AdminTokenFilterTest {
 
     private String base() {
         return "http://127.0.0.1:" + port;
+    }
+
+    /** 아래 갈래는 시각을 안 읽지만 생성자가 요구한다. 고정 시계로 둔다. */
+    private static com.kafkick.core.support.TimeProvider utcClock() {
+        return new com.kafkick.core.support.TimeProvider(java.time.Clock.fixed(
+                java.time.LocalDateTime.of(2026, 4, 1, 3, 0)
+                        .atZone(java.time.ZoneId.of("UTC")).toInstant(),
+                java.time.ZoneId.of("UTC")));
     }
 
     /**
@@ -144,7 +182,8 @@ class AdminTokenFilterTest {
         @DisplayName("기동을 거절하고, 고치는 법과 일부러 여는 법을 둘 다 말한다")
         void refusesToStart() {
             assertThatThrownBy(() -> new AdminTokenConfig().adminTokenFilter(
-                    true, "  ", new io.micrometer.core.instrument.simple.SimpleMeterRegistry()))
+                    true, "  ", new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    new tools.jackson.databind.ObjectMapper(), utcClock()))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("BATCH_ADMIN_TOKEN")
                     .hasMessageContaining("BATCH_ADMIN_AUTH_REQUIRED=false");
@@ -154,7 +193,8 @@ class AdminTokenFilterTest {
         @DisplayName("끈 상태라면 토큰이 비어도 뜬다 — 대신 필터를 안 단다")
         void staysOpenWhenExplicitlyDisabled() {
             var registration = new AdminTokenConfig().adminTokenFilter(
-                    false, "", new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+                    false, "", new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    new tools.jackson.databind.ObjectMapper(), utcClock());
 
             assertThat(registration.isEnabled())
                     .as("끈 상태에서 관문이 달리면 토큰 없이 전부 401 이 되어 배치가 먹통이 된다")
