@@ -22,9 +22,20 @@ import com.kafkick.core.coupon.v2.port.RebuiltIssued;
 public class RedisIssuanceWarmup implements IssuanceWarmupPort {
 
     /**
-     * 재구성으로 들어온 값의 요청토큰과 멱등키 자리. <b>실제 요청의 것과 겹치면 안 된다.</b>
-     * 완료·보상 CAS 가 토큰을 비교하므로, 겹치는 순간 남의 선점을 건드릴 수 있는 토큰이 된다.
-     * {@code '|'} 를 포함하지 않아 4필드 codec 을 깨지 않는다.
+     * 재구성으로 들어온 값의 요청토큰과 멱등키 자리. {@code '|'} 를 포함하지 않아 4필드 codec 을
+     * 깨지 않는다.
+     *
+     * <p><b>두 자리의 안전성이 다르다.</b> 요청토큰은 {@code RequestTokenGenerator} 가 만들어
+     * 클라이언트가 고를 수 없으므로 이 값과 겹치지 않는다 — 완료·보상 CAS 가 토큰을 비교하는데,
+     * 겹칠 수 있었다면 남의 선점을 건드리는 토큰이 됐을 것이다.
+     *
+     * <p><b>멱등키는 다르다. 클라이언트가 이 값을 그대로 보낼 수 있고, 그것을 막는 코드가 없다.</b>
+     * 보내면 선점 Lua 의 멱등키 비교가 통과해 {@code -6}(REPLAY_DONE)이 나가고,
+     * {@code idempotency_records} 에 대응 행이 없어 500 이 된다. v1 발급은
+     * {@code IdempotencyKeys.validate} 로 UUID v4 를 강제하는데 <b>v2 경로에는 그 호출이 없다</b>.
+     * 재고나 1인 1매에는 영향이 없는 가용성 결함이고, 막는 자리가 이 모듈이 아니라 API 입력
+     * 검증과 선점 Lua 의 인자 가드 둘이라 여기서 고치지 않았다 — {@code 10-작업분할.md} 의
+     * "다음 단위로 넘긴 부채" 를 보라. <b>마커를 다른 문자열로 바꾸는 것은 해법이 아니다.</b>
      */
     static final String REBUILT_MARKER = "__rebuilt__";
 
