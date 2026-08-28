@@ -243,6 +243,19 @@ batch:
     timeout-seconds: ${BATCH_ADMIN_TIMEOUT_SECONDS:5}
     recover-timeout-seconds: ${BATCH_ADMIN_RECOVER_TIMEOUT_SECONDS:10}
 
+    # 관제 화면이 브라우저에서 이 API 를 부를 수 있게 허용할 오리진(CY-718 이후).
+    # 쉼표로 나열한다. 기본은 로컬 개발 서버 넷이다.
+    #
+    # ⚠️ CORS 는 방어가 아니다 — 브라우저만 지키는 규칙이라 curl 에는 효력이 없다.
+    #    관리자 API 의 방어선은 docs/11 §11 이 정한 **포트 미노출** 하나이고,
+    #    이 값을 늘려도 닿을 수 있는 사람은 안 늘어난다. 반대로 바인딩을 넓히는 날은
+    #    이 값과 무관하게 열리므로, 그때는 docs/11 §11 의 결정 자체를 다시 봐야 한다.
+    #
+    #    배치를 다른 호스트에 띄우면 관제 오리진을 여기 적는다. * 는 쓰지 않는다 —
+    #    방어가 아니라도 전면 허용을 기본값으로 두면 넓어진 것을 아무도 못 본다.
+    cors:
+      allowed-origins: ${BATCH_ADMIN_CORS_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
+
   # JDBC 타임아웃 검사를 강제할지(CY-697). 기본 true.
   #
   # ⚠️ 이 가드가 막으려는 사고를 **가드 자신이 일으킬 수 있다** — 거절하면 배치가 통째로
