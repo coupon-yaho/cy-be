@@ -17,6 +17,39 @@ import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 public interface CouponRoundJpaRepository
         extends JpaRepository<CouponRoundEntity, Long> {
 
+    @Query(value = """
+            SELECT coupon.id AS couponRoundId,
+                   coupon.valid_days AS validDays,
+                   coupon.issuance_engine_version AS engineVersion
+            FROM coupons coupon
+            WHERE coupon.id = :couponRoundId
+            """, nativeQuery = true)
+    Optional<CouponRoundIssuanceDefinitionProjection> findIssuanceDefinitionById(
+            @Param("couponRoundId") Long couponRoundId
+    );
+
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE coupons
+            SET issuance_engine_locked = TRUE
+            WHERE id = :couponRoundId
+            """, nativeQuery = true)
+    int lockIssuanceEngine(@Param("couponRoundId") Long couponRoundId);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            UPDATE coupons
+            SET issuance_engine_version = :engineVersion
+            WHERE id = :couponRoundId
+              AND issuance_engine_locked = FALSE
+              AND status <> 'OPEN'
+              AND (NOW(6) < open_at OR NOW(6) >= close_at)
+            """, nativeQuery = true)
+    int updateIssuanceEngineWhenNotOpen(
+            @Param("couponRoundId") Long couponRoundId,
+            @Param("engineVersion") String engineVersion
+    );
+
     boolean existsByTemplateIdAndOpenAt(Long templateId, Instant openAt);
 
     @Query(value = """

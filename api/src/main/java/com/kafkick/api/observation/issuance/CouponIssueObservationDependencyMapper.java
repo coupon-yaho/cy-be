@@ -4,6 +4,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.v2.V2CouponIssueException;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.exception.BusinessException;
@@ -71,6 +72,11 @@ public class CouponIssueObservationDependencyMapper {
             if (mapped != Dependency.NONE) {
                 return mapped;
             }
+        }
+        // v2 게이트 실패는 어댑터가 확정해 실어 보낸다. Redis 기술 예외도
+        // DataAccessException 이라 아래 판정에 맡기면 전부 MySQL 로 집계된다.
+        if (failure instanceof V2CouponIssueException gateFailure) {
+            return gateFailure.dependency();
         }
         return hasDataAccessCause(failure)
                 ? Dependency.MYSQL

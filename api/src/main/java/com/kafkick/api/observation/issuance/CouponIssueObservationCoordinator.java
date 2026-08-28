@@ -4,14 +4,22 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.ObjectProvider;
 
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.coupon.service.command.CouponIssueCommand;
+import com.kafkick.core.coupon.v2.CouponIssuanceRouter;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
+import com.kafkick.core.coupon.v2.V2CouponIssueResult;
+import com.kafkick.core.coupon.v2.V2CouponIssueService;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.IssuanceFlowEvent;
 import com.kafkick.core.observation.ReasonCode;
+import com.kafkick.core.observation.EngineVersion;
 
 /** 쿠폰 발급 업무 결과를 바꾸지 않고 요청 단위 관측 수명주기를 연결합니다. */
 @Component
@@ -21,6 +29,9 @@ public final class CouponIssueObservationCoordinator {
     private final IssuanceObservationContextFactory contextFactory;
     private final IssuanceObservationService observationService;
     private final CouponIssueObservationDependencyMapper dependencyMapper;
+    private final CouponIssuanceRouter router;
+    private final ObjectProvider<V2CouponIssueService> v2Services;
+    private final TimeProvider timeProvider;
 
     /**
      * 발급 실행기와 관측 Context·Session 경계를 조립합니다.
@@ -29,19 +40,26 @@ public final class CouponIssueObservationCoordinator {
      * @param contextFactory 요청별 관측 Context 생성기
      * @param observationService attempt와 Session 기록 서비스
      * @param dependencyMapper 발급 실패 관측 분류기
+     * @param router 회차별 발급 엔진 라우터
+     * @param v2Services 게이트가 있을 때만 존재하는 v2 발급 서비스
+     * @param timeProvider 발급 시각 공급자
      */
     public CouponIssueObservationCoordinator(
             CouponOperationExecutionService operationExecutionService,
             IssuanceObservationContextFactory contextFactory,
             IssuanceObservationService observationService,
-            CouponIssueObservationDependencyMapper dependencyMapper
+            CouponIssueObservationDependencyMapper dependencyMapper,
+            CouponIssuanceRouter router,
+            ObjectProvider<V2CouponIssueService> v2Services,
+            TimeProvider timeProvider
     ) {
-        this.operationExecutionService = Objects.requireNonNull(
-                operationExecutionService
-        );
+        this.operationExecutionService = Objects.requireNonNull(operationExecutionService);
         this.contextFactory = Objects.requireNonNull(contextFactory);
         this.observationService = Objects.requireNonNull(observationService);
         this.dependencyMapper = Objects.requireNonNull(dependencyMapper);
+        this.router = Objects.requireNonNull(router);
+        this.v2Services = Objects.requireNonNull(v2Services);
+        this.timeProvider = Objects.requireNonNull(timeProvider);
     }
 
     /**
@@ -65,11 +83,29 @@ public final class CouponIssueObservationCoordinator {
             MembershipGrade membershipGrade,
             String idempotencyKey
     ) {
+        return router.route(
+                couponRoundId,
+                definition -> issueV1(requestId, couponRoundId, memberId,
+                        membershipGrade, idempotencyKey, definition.engineVersion()),
+                definition -> issueV2(requestId, couponRoundId, memberId,
+                        membershipGrade, idempotencyKey, definition)
+        );
+    }
+
+    private CouponIssueResult issueV1(
+            String requestId,
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade,
+            String idempotencyKey,
+            EngineVersion engineVersion
+    ) {
         ObservationScope observation = openObservation(
                 requestId,
                 memberId,
                 couponRoundId,
-                membershipGrade
+                membershipGrade,
+                engineVersion
         );
         try {
             CouponIssueExecutionResult execution =
@@ -94,19 +130,60 @@ public final class CouponIssueObservationCoordinator {
         }
     }
 
+    private CouponIssueResult issueV2(
+            String requestId,
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade,
+            String idempotencyKey,
+            CouponRoundIssuanceDefinition definition
+    ) {
+        ObservationScope observation = openObservation(
+                requestId, memberId, couponRoundId, membershipGrade,
+                definition.engineVersion());
+        try {
+            V2CouponIssueService service = v2Services.getIfAvailable();
+            if (service == null) {
+                throw new IllegalStateException("V2 발급 게이트가 활성화되지 않았습니다.");
+            }
+            V2CouponIssueResult execution = service.issue(
+                    new CouponIssueCommand(couponRoundId, memberId, membershipGrade,
+                            idempotencyKey, timeProvider.instant()),
+                    definition
+            );
+            if (execution.claimResult().outcome().isClaimed()) {
+                observation.recordClaimedAttempt();
+            } else if (execution.replayed()) {
+                observation.recordReplayAttempt();
+            }
+            CouponIssueResult result = execution.issueResult()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "V2 거절 결과의 HTTP 매핑은 S5에서 처리해야 합니다."));
+            observation.completeIssued(result);
+            return result;
+        } catch (RuntimeException failure) {
+            completeFailure(observation, failure);
+            throw failure;
+        } finally {
+            observation.finish();
+        }
+    }
+
     /** 관측 Context와 Session을 만들지 못하면 무동작 요청 범위로 대체합니다. */
     private ObservationScope openObservation(
             String requestId,
             Long memberId,
             Long couponRoundId,
-            MembershipGrade membershipGrade
+            MembershipGrade membershipGrade,
+            EngineVersion engineVersion
     ) {
         try {
             Optional<IssuanceFlowEvent.Ctx> context = contextFactory.create(
                     requestId,
                     memberId,
                     couponRoundId,
-                    membershipGrade
+                    membershipGrade,
+                    engineVersion
             );
             if (context.isEmpty()) {
                 return ObservationScope.disabled(observationService);
