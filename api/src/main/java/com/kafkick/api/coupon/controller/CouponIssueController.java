@@ -8,35 +8,39 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.coupon.dto.response.CouponIssueResponse;
 import com.kafkick.api.coupon.monitoring.CouponIssueMetrics;
+import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.api.support.RequestIdFilter;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.exception.BusinessException;
-import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponIssueController {
 
-    private final CouponOperationExecutionService operationExecutionService;
+    private final CouponIssueObservationCoordinator observationCoordinator;
     private final CouponIssueMetrics couponIssueMetrics;
 
     public CouponIssueController(
-            CouponOperationExecutionService operationExecutionService,
+            CouponIssueObservationCoordinator observationCoordinator,
             CouponIssueMetrics couponIssueMetrics
     ) {
-        this.operationExecutionService = operationExecutionService;
+        this.observationCoordinator = observationCoordinator;
         this.couponIssueMetrics = couponIssueMetrics;
     }
 
     @PostMapping("/{couponRoundId}/issue")
     public ResponseEntity<ResponseEnvelope<CouponIssueResponse>> issue(
+            @RequestAttribute(RequestIdFilter.REQUEST_ID_ATTRIBUTE)
+            String requestId,
             @PathVariable
             @Positive(message = "쿠폰 회차 ID는 0보다 커야 합니다.")
             Long couponRoundId,
@@ -52,7 +56,8 @@ public class CouponIssueController {
         couponIssueMetrics.recordStarted(couponRoundId, memberId);
         CouponIssueResult result;
         try {
-            result = operationExecutionService.issue(
+            result = observationCoordinator.issue(
+                    requestId,
                     couponRoundId,
                     memberId,
                     membershipGrade,

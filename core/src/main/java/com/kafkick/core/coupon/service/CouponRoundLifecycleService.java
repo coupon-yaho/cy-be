@@ -1,6 +1,7 @@
 package com.kafkick.core.coupon.service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 
 import org.springframework.stereotype.Service;
@@ -9,19 +10,26 @@ import org.springframework.transaction.annotation.Transactional;
 import com.kafkick.core.coupon.port.CouponRoundLifecyclePort;
 import com.kafkick.core.coupon.port.CouponRoundScheduleLockPort;
 import com.kafkick.core.coupon.service.result.CouponRoundLifecycleResult;
+import com.kafkick.core.observation.CampaignClosedEvent;
+import com.kafkick.core.observation.CampaignClosedEventPublisher;
 
 @Service
 public class CouponRoundLifecycleService {
 
     private final CouponRoundLifecyclePort lifecyclePort;
     private final CouponRoundScheduleLockPort scheduleLockPort;
+    private final CampaignClosedEventPublisher campaignClosedEventPublisher;
 
     public CouponRoundLifecycleService(
             CouponRoundLifecyclePort lifecyclePort,
-            CouponRoundScheduleLockPort scheduleLockPort
+            CouponRoundScheduleLockPort scheduleLockPort,
+            CampaignClosedEventPublisher campaignClosedEventPublisher
     ) {
         this.lifecyclePort = Objects.requireNonNull(lifecyclePort);
         this.scheduleLockPort = Objects.requireNonNull(scheduleLockPort);
+        this.campaignClosedEventPublisher = Objects.requireNonNull(
+                campaignClosedEventPublisher
+        );
     }
 
     @Transactional
@@ -32,12 +40,17 @@ public class CouponRoundLifecycleService {
             );
         }
         scheduleLockPort.lock();
-        int closedOpenCount = lifecyclePort.closeOpenRounds(asOf);
+        List<Long> closedOpenRoundIds = lifecyclePort.closeOpenRounds(asOf);
         int closedMissedScheduledCount =
                 lifecyclePort.closeMissedScheduledRounds(asOf);
         int openedCount = lifecyclePort.openScheduledRounds(asOf);
+        for (Long closedOpenRoundId : closedOpenRoundIds) {
+            campaignClosedEventPublisher.publishAfterCommit(
+                    new CampaignClosedEvent(closedOpenRoundId, asOf)
+            );
+        }
         return new CouponRoundLifecycleResult(
-                closedOpenCount,
+                closedOpenRoundIds.size(),
                 closedMissedScheduledCount,
                 openedCount
         );

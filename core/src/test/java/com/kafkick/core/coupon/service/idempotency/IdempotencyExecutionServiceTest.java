@@ -88,6 +88,101 @@ class IdempotencyExecutionServiceTest {
     }
 
     @Test
+    @DisplayName("최초 선점 실행은 replay가 아닌 결과로 반환한다")
+    void marksFirstClaimAsNotReplayed() {
+        when(timeProvider.instant()).thenReturn(REQUEST_AT);
+        when(claimAdapter.tryStart(
+                IDEMPOTENCY_KEY,
+                REQUEST_HASH,
+                REQUEST_AT
+        )).thenReturn(true);
+
+        IdempotentExecutionResult<String> result =
+                template.executeWithMetadata(
+                        IDEMPOTENCY_KEY,
+                        () -> CANONICAL_REQUEST,
+                        CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
+                        claimedAt -> "processed",
+                        storedResponse -> "replayed"
+                );
+
+        assertThat(result).isEqualTo(new IdempotentExecutionResult<>(
+                "processed",
+                false
+        ));
+    }
+
+    @Test
+    @DisplayName("만료된 선점을 회수해 실행하면 replay가 아닌 결과로 반환한다")
+    void marksStaleReclaimAsNotReplayed() {
+        Instant staleClaimedAt = REQUEST_AT.minusSeconds(31);
+        when(timeProvider.instant()).thenReturn(REQUEST_AT);
+        when(claimAdapter.tryStart(
+                IDEMPOTENCY_KEY,
+                REQUEST_HASH,
+                REQUEST_AT
+        )).thenReturn(false);
+        when(claimAdapter.findByKey(IDEMPOTENCY_KEY))
+                .thenReturn(Optional.of(inProgressRecord(staleClaimedAt)));
+        when(claimAdapter.tryReclaim(
+                IDEMPOTENCY_KEY,
+                REQUEST_HASH,
+                staleClaimedAt,
+                REQUEST_AT
+        )).thenReturn(true);
+
+        IdempotentExecutionResult<String> result =
+                template.executeWithMetadata(
+                        IDEMPOTENCY_KEY,
+                        () -> CANONICAL_REQUEST,
+                        CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
+                        claimedAt -> "reclaimed",
+                        storedResponse -> "replayed"
+                );
+
+        assertThat(result).isEqualTo(new IdempotentExecutionResult<>(
+                "reclaimed",
+                false
+        ));
+    }
+
+    @Test
+    @DisplayName("완료된 멱등 결과는 replay 결과로 반환한다")
+    void marksCompletedResponseAsReplayed() {
+        IdempotencyRecord completed = new IdempotencyRecord(
+                IDEMPOTENCY_KEY,
+                20L,
+                100L,
+                REQUEST_HASH,
+                IdempotencyStatus.DONE,
+                "stored-response",
+                REQUEST_AT
+        );
+        when(timeProvider.instant()).thenReturn(REQUEST_AT);
+        when(claimAdapter.tryStart(
+                IDEMPOTENCY_KEY,
+                REQUEST_HASH,
+                REQUEST_AT
+        )).thenReturn(false);
+        when(claimAdapter.findByKey(IDEMPOTENCY_KEY))
+                .thenReturn(Optional.of(completed));
+
+        IdempotentExecutionResult<String> result =
+                template.executeWithMetadata(
+                        IDEMPOTENCY_KEY,
+                        () -> CANONICAL_REQUEST,
+                        CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
+                        claimedAt -> "processed",
+                        storedResponse -> "decoded-" + storedResponse
+                );
+
+        assertThat(result).isEqualTo(new IdempotentExecutionResult<>(
+                "decoded-stored-response",
+                true
+        ));
+    }
+
+    @Test
     @DisplayName("처리 중인 멱등 요청이 대기 제한을 넘으면 충돌로 응답한다")
     void rejectWhenInProgressRequestExceedsWaitTimeout() {
         template = templateWithWaitTimeout(Duration.ZERO);

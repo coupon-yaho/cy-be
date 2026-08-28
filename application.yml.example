@@ -1,0 +1,200 @@
+# 컨테이너에 마운트되는 배포 설정이다(compose.yml → /app/config/application.yml).
+#
+# ⚠️ 이미지 안에는 모듈의 *.yml.example 이 실제 이름으로 복사돼 들어 있다(Dockerfile 참고).
+#    이 파일은 그것을 <b>덮어쓰는 게 아니라 그 위에 겹친다</b> — 여기서 언급하지 않은 키는
+#    이미지 안 값이 그대로 살아남는다.
+#
+#    실측(2026-08) — batch 프로파일에 management 블록이 없어도 최종 해석값은 이렇다:
+#      management.server.port                    = 9092
+#      management.endpoints.web.exposure.include = health,metrics,prometheus
+#    batch/src/main/resources/application.yml.example 의 spring.config.import 가
+#    classpath:management.yml 을 끌어오기 때문이다. 그래서 여기에 management 블록을 다시
+#    적지 않는다 — 적으면 같은 값이 두 곳에 생기고, 한쪽만 고쳐도 아무도 모른다.
+#    이 계약은 DeployedConfigContractTest 가 지킨다.
+#
+# ⚠️ 이 파일이 모듈 *.yml.example 의 값을 상당 부분 복제하고 있다. 지금은 우연히 같지만,
+#    한쪽만 고치면 로컬 gradle 과 컨테이너가 조용히 갈라진다.
+#    TODO(CY-213 후속, @SH-Seol): 이 파일을 프로파일·${VAR} 매핑만 남기고 값은 모듈이
+#    소유하도록 정리할지 별도 티켓으로 정한다.
+
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:mysql}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&connectTimeout=${DB_CONNECT_TIMEOUT_MS:3000}&socketTimeout=${DB_SOCKET_TIMEOUT_MS:60000}
+    username: ${DB_USERNAME:app}
+    password: ${DB_PASSWORD}
+    hikari:
+      connection-timeout: 3000
+      validation-timeout: 3000
+      keepalive-time: 30000
+      max-lifetime: 580000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
+        default_batch_fetch_size: 100
+
+  flyway:
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    placeholder-replacement: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: api
+  application:
+    name: coupon-api
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:3}
+  flyway:
+    enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: ${TOMCAT_THREADS_MAX:15}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:4000}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:1000}
+  error:
+    include-stacktrace: never
+
+benchmark:
+  protocol:
+    load-hold-seconds: ${BENCHMARK_LOAD_HOLD_SECONDS:5}
+    observation-hold-seconds: ${BENCHMARK_OBSERVATION_HOLD_SECONDS:60}
+  admin:
+    command-secret: ${BENCHMARK_ADMIN_COMMAND_SECRET:}
+  archive:
+    claim-lease: ${BENCHMARK_ARCHIVE_CLAIM_LEASE:5m}
+    max-samples: ${BENCHMARK_ARCHIVE_MAX_SAMPLES:10000}
+    write-chunk-size: ${BENCHMARK_ARCHIVE_WRITE_CHUNK_SIZE:500}
+  topology:
+    app-replicas: ${BENCHMARK_APP_REPLICAS:4}
+    tomcat-workers-total: ${BENCHMARK_TOMCAT_WORKERS_TOTAL:60}
+    hikari-pool-total: ${BENCHMARK_HIKARI_POOL_TOTAL:12}
+    mysql-max-connections: ${BENCHMARK_MYSQL_MAX_CONNECTIONS:50}
+  batch:
+    base-url: ${BENCHMARK_BATCH_BASE_URL:http://batch:9091}
+    connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}
+    read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}
+    # 관측 풀 max_execution_time(3000ms)과 동률이면 클라이언트가 항상 먼저 끊는다.
+    consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:10s}
+  consistency:
+    claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}
+    # 회차 확정으로부터 이 시간을 넘긴 재실행은 그 회차의 값이 아니라 EXPIRED 로 종결한다.
+    max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9090}
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,admission-capacity
+        exclude: env,configprops,beans,heapdump
+  endpoint:
+    health:
+      show-details: never
+
+  metrics:
+    distribution:
+      percentiles:
+        "[http.server.requests]": 0.5,0.95,0.99
+      expiry:
+        "[http.server.requests]": 10s
+
+observation:
+  datasource:
+    enabled: ${OBS_DATASOURCE_ENABLED:true}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:mysql}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=${OBS_CONNECT_TIMEOUT_MS:2000}&socketTimeout=${OBS_SOCKET_TIMEOUT_MS:5000}
+    username: ${DB_OBS_USERNAME}
+    password: ${DB_OBS_PASSWORD}
+    query-timeout: 3s
+    hikari:
+      pool-name: ${OBS_POOL_NAME:obs-pool}
+      maximum-pool-size: 2
+      connection-timeout: 2000
+      validation-timeout: 2000
+      keepalive-time: 30000
+      max-lifetime: 580000
+      read-only: true
+      connection-init-sql: SET SESSION max_execution_time = 3000
+
+---
+spring:
+  config:
+    activate:
+      on-profile: batch
+  application:
+    name: coupon-batch
+  main:
+    web-application-type: servlet
+  datasource:
+    hikari:
+      maximum-pool-size: ${BATCH_DB_POOL_SIZE:4}
+      pool-name: batch-pool
+  flyway:
+    enabled: false
+  batch:
+    jdbc:
+      initialize-schema: never
+    job:
+      enabled: false
+
+server:
+  # 9091 = verify 업무 포트. batch 모듈 설정과 계약 테스트가 정한 값이고
+  # batch/src/main/resources/application.yml.example 의 기본값과 같아야 한다.
+  # 9090 은 이 저장소에서 api 관리 포트 관용값이라 여기 쓰면 읽는 사람이 헷갈린다.
+  port: ${BATCH_PORT:9091}
+  error:
+    include-stacktrace: never
+
+benchmark:
+  topology:
+    gap-interval-ms: ${BENCHMARK_GAP_INTERVAL_MS:30000}
+  consistency:
+    # api 와 같은 env 를 읽는다. 두 모듈이 같은 창을 봐야 경계 판정이 갈리지 않는다.
+    max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}
+
+batch:
+  scheduling:
+    enabled: ${BATCH_SCHEDULING_ENABLED:true}
+  schedule:
+    expire-cron: "0 */5 * * * *"
+    verify-incremental-cron: "0 */10 * * * *"
+    cleanup-cron: "0 0 * * * *"
+    coupon-open-cron: "0 * * * * *"
+    coupon-create-cron: "0 0 4 * * *"
+    # [OBS-51] 브랜드 분석 집계. 정각을 피할 뿐이고, 위 세 키(expire·verify·cleanup)는
+    # 읽는 코드가 없다 — 겹침 회피가 근거가 아니다. batch 쪽 yml 에 이유를 적었다.
+    analytics-cron: "0 30 * * * *"
+  verify:
+    asof-state-keep-runs: ${ASOF_STATE_KEEP_RUNS:5}
+    chunk-size: ${VERIFY_CHUNK_SIZE:200000}
+
+  # [OBS-51] 브랜드 분석 집계. 상세 주석은 batch/src/main/resources/application.yml.example 에 있다.
+  #
+  # ⚠️ zone 은 여기 두지 않는다. api 쪽(AdminDashboardController.ANALYTICS_ZONE)이 상수라
+  #    한쪽만 움직이면 버킷이 통째로 밀리는데, 파일을 비교하는 계약 테스트는 초록불로 남는다.
+  #    손잡이를 하나 더 만들면 그 테스트가 못 보는 두 번째 경로가 생긴다.
+  analytics:
+    watermark-lag: ${ANALYTICS_WATERMARK_LAG:10m}
+    query-timeout: ${ANALYTICS_QUERY_TIMEOUT:4s}
+    max-window-rows: ${ANALYTICS_MAX_WINDOW_ROWS:1000000}
+    max-steps-per-run: ${ANALYTICS_MAX_STEPS_PER_RUN:20}

@@ -47,6 +47,30 @@ public final class CouponStateMachine {
         };
     }
 
+    /** 저장된 이력의 상태 삼중항이 런타임 전이 규칙에 포함되는지 판정합니다. */
+    public static boolean isLegal(
+            IssuanceStatus currentStatus,
+            IssuanceEventType eventType,
+            IssuanceStatus nextStatus
+    ) {
+        if (eventType == null) {
+            return false;
+        }
+        return switch (eventType) {
+            case ISSUE -> currentStatus == null
+                    && nextStatus == IssuanceStatus.ISSUED;
+            case USE -> currentStatus == IssuanceStatus.ISSUED
+                    && nextStatus == IssuanceStatus.USED;
+            case CANCEL_USE -> currentStatus == IssuanceStatus.USED
+                    && (nextStatus == IssuanceStatus.ISSUED
+                    || nextStatus == IssuanceStatus.EXPIRED);
+            case CANCEL -> currentStatus == IssuanceStatus.ISSUED
+                    && nextStatus == IssuanceStatus.CANCELLED;
+            case EXPIRE -> currentStatus == IssuanceStatus.ISSUED
+                    && nextStatus == IssuanceStatus.EXPIRED;
+        };
+    }
+
     private static IssuanceStatus expire(
             IssuanceStatus currentStatus,
             Instant expiresAt,

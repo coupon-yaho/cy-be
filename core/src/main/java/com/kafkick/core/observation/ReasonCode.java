@@ -1,0 +1,17 @@
+package com.kafkick.core.observation;
+
+public enum ReasonCode {
+
+    NOT_OPENED,
+    CAMPAIGN_CLOSED,
+    GRADE_NOT_ELIGIBLE,
+    QUEUE_REQUIRED,
+    NO_ENTRY_TOKEN,
+    ENTRY_TOKEN_EXPIRED,
+    ALREADY_ISSUED,
+    STOCK_EXHAUSTED,
+    INVALID_TRANSITION,
+    TEMPORARILY_UNAVAILABLE,
+    INTERNAL_ERROR,
+    UNMAPPED
+}

@@ -44,6 +44,7 @@ class CoreTransactionBoundaryTest {
         assertReadOnly(MemberCouponQueryService.class, "findPage");
         assertReadOnly(CouponRoundDetailQueryService.class, "findById");
         assertReadOnly(PublicCouponRoundQueryService.class, "findPage");
+        assertReadOnly(CouponIssuePolicyValidator.class, "validate");
     }
 
     @Test
@@ -81,14 +82,38 @@ class CoreTransactionBoundaryTest {
     @Test
     @DisplayName("멱등 완료 대기는 외부 트랜잭션 없이 실행한다")
     void idempotencyExecutionRejectsOuterTransaction() throws Exception {
-        Transactional transactional = findMethod(
-                IdempotencyExecutionService.class,
-                "execute"
-        ).getAnnotation(Transactional.class);
+        for (String methodName : java.util.List.of(
+                "execute",
+                "executeWithMetadata"
+        )) {
+            Transactional transactional = findMethod(
+                    IdempotencyExecutionService.class,
+                    methodName
+            ).getAnnotation(Transactional.class);
 
-        assertThat(transactional).isNotNull();
-        assertThat(transactional.propagation())
-                .isEqualTo(Propagation.NEVER);
+            assertThat(transactional)
+                    .as("IdempotencyExecutionService.%s", methodName)
+                    .isNotNull();
+            assertThat(transactional.propagation())
+                    .as("IdempotencyExecutionService.%s", methodName)
+                    .isEqualTo(Propagation.NEVER);
+        }
+    }
+
+    @Test
+    @DisplayName("발급 orchestration 자체는 외부 트랜잭션을 열지 않는다")
+    void couponIssueOrchestrationHasNoTransactionBoundary() throws Exception {
+        assertThat(CouponOperationExecutionService.class.getAnnotation(
+                Transactional.class
+        )).isNull();
+        assertThat(CouponOperationExecutionService.class.getDeclaredMethod(
+                "issueWithMetadata",
+                Long.class,
+                Long.class,
+                com.kafkick.core.membership.domain.MembershipGrade.class,
+                String.class,
+                IssueAttemptCallback.class
+        ).getAnnotation(Transactional.class)).isNull();
     }
 
     private static void assertTransactional(

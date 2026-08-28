@@ -2,7 +2,12 @@ spring:
   application:
     name: coupon-api
   config:
-    import: classpath:storage.yml
+    import:
+      - classpath:storage.yml
+      - classpath:management.yml   # CY-09
+      - classpath:observation.yml  # OBS-3 · OBS-4 · OBS-8
+      - classpath:redis.yml
+      - classpath:kafka.yml        # OBS-17
 
   jackson:
     default-property-inclusion: non_null
@@ -10,8 +15,39 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  tomcat:
+    threads:
+      max: ${TOMCAT_THREADS_MAX:15}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:4000}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:1000}
   error:
     include-stacktrace: never
+
+benchmark:
+  protocol:
+    load-hold-seconds: ${BENCHMARK_LOAD_HOLD_SECONDS:5}
+    observation-hold-seconds: ${BENCHMARK_OBSERVATION_HOLD_SECONDS:60}
+  admin:
+    command-secret: ${BENCHMARK_ADMIN_COMMAND_SECRET:}
+  archive:
+    claim-lease: ${BENCHMARK_ARCHIVE_CLAIM_LEASE:5m}
+    max-samples: ${BENCHMARK_ARCHIVE_MAX_SAMPLES:10000}
+    write-chunk-size: ${BENCHMARK_ARCHIVE_WRITE_CHUNK_SIZE:500}
+  topology:
+    app-replicas: ${BENCHMARK_APP_REPLICAS:4}
+    tomcat-workers-total: ${BENCHMARK_TOMCAT_WORKERS_TOTAL:60}
+    hikari-pool-total: ${BENCHMARK_HIKARI_POOL_TOTAL:12}
+    mysql-max-connections: ${BENCHMARK_MYSQL_MAX_CONNECTIONS:50}
+  batch:
+    base-url: ${BENCHMARK_BATCH_BASE_URL:http://batch:9091}
+    connect-timeout: ${BENCHMARK_BATCH_CONNECT_TIMEOUT:100ms}
+    read-timeout: ${BENCHMARK_BATCH_READ_TIMEOUT:300ms}
+    # 관측 풀 max_execution_time(3000ms)과 동률이면 클라이언트가 항상 먼저 끊는다.
+    consistency-read-timeout: ${BENCHMARK_BATCH_CONSISTENCY_READ_TIMEOUT:10s}
+  consistency:
+    claim-lease: ${BENCHMARK_CONSISTENCY_CLAIM_LEASE:5m}
+    # 회차 확정으로부터 이 시간을 넘긴 재실행은 그 회차의 값이 아니라 EXPIRED 로 종결한다.
+    max-observation-lag: ${BENCHMARK_CONSISTENCY_MAX_OBSERVATION_LAG:15m}
 
 management:
   server:
@@ -51,3 +87,83 @@ coupon:
   calendar:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
     max-query-range-days: ${COUPON_CALENDAR_MAX_QUERY_RANGE_DAYS:366}
+
+---
+# ⚠️ 이 아래는 storage.yml 을 이길 수 있는 자리다.
+#
+# spring.config.import 로 들어온 문서는 그것을 선언한 문서보다 우선한다. 그래서 위쪽 문서에
+# 적은 값은 storage.yml 에 같은 키가 생기는 순간 조용히 진다. 모듈이 소유해야 하는 값 —
+# 다른 모듈과 값이 달라야 하는 값 — 은 전부 이 아래에 둔다.
+#
+# batch 도 같은 구조가 필요하다. 지금 batch 는 구분자 없이 위쪽에만 적어 두어, 공유 파일에
+# 같은 키가 다시 생기면 또 진다 — 별도 티켓이다(batch 담당자 소유).
+spring:
+  datasource:
+    hikari:
+      # 커넥션 예산의 근거는 storage.yml.example 의 hikari 주석에 있다. 이 값을 바꾸면
+      # 거기 계산도 같이 바꾼다.
+      maximum-pool-size: ${DB_POOL_SIZE:3}
+
+  # 마이그레이션 소유자는 api 하나다. batch 는 이미 만들어진 스키마 위에서 돈다.
+  flyway:
+    enabled: true
+    out-of-order: true
+
+# 대시보드 집계를 운영 풀에서 떼어 내는 관측 전용 풀을 켠다. 켠 모듈만 관측 계정
+# (DB_OBS_USERNAME · DB_OBS_PASSWORD)이 필요하고, 없으면 기동에서 죽는다.
+#
+# ⚠️ 이 스위치는 management.yml 의 health group.obs 와 한 쌍이다. 여기를 끄면 그 그룹이
+#    찾을 기여자(obsDb)가 사라져 기동이 실패한다. 끄려면 두 파일을 같이 고쳐야 한다.
+#    설정 값(풀 크기·타임아웃·계정)은 공유 파일인 storage.yml 이 정한다.
+observation:
+  # LIVE 정합성 심각도 임계값입니다. FINAL 판정의 0 기준에는 영향을 주지 않습니다.
+  consistency:
+    severity:
+      warn-threshold: ${CONSISTENCY_WARN_THRESHOLD:10}
+      critical-threshold: ${CONSISTENCY_CRITICAL_THRESHOLD:100}
+  prometheus:
+    # 관제 API 가 시계열을 읽는 유일한 통로다. compose 네트워크 안의 서비스 이름으로만 닿는다 —
+    # Prometheus 에는 인증이 없어 호스트로 포트를 내보내지 않는다(infra/prometheus/prometheus.yml).
+    base-url: ${PROMETHEUS_BASE_URL:http://prometheus:9090}
+    # ⚠️ 세 값은 한 묶음이다. total-budget + connect-timeout + read-timeout 이 화면의 폴링
+    #    간격(1초)을 넘으면 안 된다 — 예산은 "새 질의를 시작하지 않는 시점" 이라, 예산 종료
+    #    직전에 시작한 질의가 자기 타임아웃만큼 더 돈다. 관계가 깨지면 기동에서 죽는다.
+    connect-timeout: ${PROMETHEUS_CONNECT_TIMEOUT:100ms}
+    read-timeout: ${PROMETHEUS_READ_TIMEOUT:300ms}
+    # 마지막 관측 이후 이 시간이 지나면 값을 STALE 로 내려보낸다. instant query 는 스크레이프가
+    # 멈춰도 staleness lookback(기본 5분) 동안 값을 계속 돌려주므로, 이게 없으면 죽은 원천의
+    # 값이 실시간 값으로 그려진다. 수집 주기가 경로마다 달라(재고 1초·정합성 30초) 횟수가 아니라
+    # 시각 기준이다 — DomainMeterNames.COLLECT_LAST_SUCCESS_EPOCH 가 제시한 120초를 따른다.
+    stale-after: ${PROMETHEUS_STALE_AFTER:120s}
+    # 응답 한 장에 쓸 수 있는 전체 시간. 질의별 타임아웃만 두면 최악의 경우 5 × (connect + read)
+    # 가 걸려 화면의 1초 폴링을 넘긴다 — 그러면 다음 폴링이 앞 요청을 따라잡아 관제가 스스로
+    # 부하가 된다. 예산을 넘긴 뒤의 질의는 보내지 않고 UNAVAILABLE 로 내려보낸다.
+    total-budget: ${PROMETHEUS_TOTAL_BUDGET:500ms}
+    # Overview 계산·PromQL·range client가 함께 사용하는 조회 구간과 안전 상한입니다.
+    # trend-window는 trend-step으로 나누어져야 하며, 시작·종료점을 포함한 평가점 수가
+    # max-points를 넘으면 기동에서 거부합니다.
+    overview:
+      current-window: ${OVERVIEW_PROM_CURRENT_WINDOW:1m}
+      comparison-offset: ${OVERVIEW_PROM_COMPARISON_OFFSET:1m}
+      trend-window: ${OVERVIEW_PROM_TREND_WINDOW:10m}
+      trend-step: ${OVERVIEW_PROM_TREND_STEP:1m}
+      outcome-window: ${OVERVIEW_PROM_OUTCOME_WINDOW:5m}
+      latency-window: ${OVERVIEW_PROM_LATENCY_WINDOW:10s}
+      max-range: ${OVERVIEW_PROM_MAX_RANGE:1h}
+      max-points: ${OVERVIEW_PROM_MAX_POINTS:1000}
+    # GET /metrics/series 전용 예산입니다. 위 1초 폴링 예산과 완전히 분리되어 있어, 이 경로가
+    # 아무리 느려도 /metrics 응답 시간은 바뀌지 않습니다. archive 가 같은 이유로 별도 예산을
+    # 둔 선례를 따릅니다.
+    # ⚠️ 여기도 세 값이 한 묶음이다. total-budget + connect-timeout + read-timeout 이 이 경로의
+    #    폴링 간격(5초, 화면이 5~10초 주기로 부르기로 한 것의 짧은 쪽)을 넘으면 기동에서 죽는다.
+    # ⚠️ step 은 평가 간격이자 rate 집계 창이다. 모든 MetricsWindow(1m·5m·15m)를 나누어야 하고,
+    #    가장 긴 창의 평가점 수가 max-points 를 넘으면 기동에서 죽는다 — 계약이 코드 enum 과
+    #    이 파일에 걸쳐 있어 PrometheusSeriesPropertiesTest 가 둘을 함께 본다.
+    series:
+      connect-timeout: ${PROMETHEUS_SERIES_CONNECT_TIMEOUT:500ms}
+      read-timeout: ${PROMETHEUS_SERIES_READ_TIMEOUT:1500ms}
+      total-budget: ${PROMETHEUS_SERIES_TOTAL_BUDGET:2500ms}
+      step: ${PROMETHEUS_SERIES_STEP:5s}
+      max-points: ${PROMETHEUS_SERIES_MAX_POINTS:300}
+  datasource:
+    enabled: true

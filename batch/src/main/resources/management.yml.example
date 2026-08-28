@@ -1,0 +1,65 @@
+management:
+  # Redis 명령 레이턴시(CY-310)의 백분위·관측 창. 미터를 등록하는 것은 infra:redis 의
+  # RedisLatencyAutoConfiguration 이고, 얼마나 촘촘히 어느 창으로 볼지는 여기가 소유한다 — 부하 중
+  # 재기동 없이 조여야 한다.
+  #
+  # ⚠️ 키는 대괄호 + 따옴표로 쓴다. 점 표기는 절반만 실패한다 — percentiles 는 바인딩되고
+  #    expiry 만 조용히 무시되어, 0.99 가 나오니 설정이 먹은 줄 알게 된다.
+  #
+  # ⚠️ expiry 는 반드시 api 의 observation.yml 과 같은 값이어야 한다. 기본값 2분을 그대로 두면
+  #    HTTP p99 는 10초 창, Redis p99 는 120초 창이 되어 같은 시점의 값이 아니게 된다. 부하를
+  #    끊은 직후 HTTP 는 0 으로 떨어지는데 Redis 는 2분간 최고치를 물고 있어, "HTTP 는 정상인데
+  #    Redis 가 느리다" 는 존재하지 않는 결론이 나온다.
+  #
+  # 접두사 키 하나로 firstresponse · completion 두 미터를 함께 덮는다.
+  metrics:
+    distribution:
+      percentiles:
+        "[lettuce.command]": 0.5, 0.95, 0.99
+      expiry:
+        "[lettuce.command]": 10s
+  server:
+    port: ${BATCH_MANAGEMENT_PORT:9092}
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+        exclude: env,configprops,beans,heapdump
+  health:
+    # ⚠️ 이걸 빼면 batch 의 /actuator/health 가 DOWN 으로 굳는다. spring-boot-starter-data-redis 를
+    #    올린 것만으로 RedisHealthContributorAutoConfiguration 이 붙어 localhost:6379 로 PING 을
+    #    보내는데, V1 에는 Redis 자체가 없다. 도메인 Gauge 쪽 ObjectProvider 가드는 수집만 막지
+    #    헬스 기여자는 못 막는다 — 등록 주체가 다르다.
+    #    V2·V3 에서 Redis 를 실제로 띄우면 이 줄을 지워 헬스 감시를 되살린다.
+    redis:
+      enabled: false
+  endpoint:
+    health:
+      show-details: never
+      status:
+        # OBSERVATION_DOWN 을 UP 보다 덜 심각하게 둔다. 합산 상태는 가장 심각한 것으로 정해지므로,
+        # 이 순서 덕분에 관측 풀이 죽어도 /actuator/health 는 UP 을 유지한다 — 검증 배치와 verify
+        # 트리거가 멀쩡한데 관측 풀 하나 때문에 프로세스가 죽은 것처럼 보이는 일을 막는다.
+        order: DOWN,OUT_OF_SERVICE,UP,OBSERVATION_DOWN,UNKNOWN
+        # ⚠️ 여기에 http-mapping 을 쓰지 말 것. 하나라도 지정하면 기본 매핑이 병합이 아니라
+        #    교체된다(SimpleHttpCodeStatusMapper). 전역에 한 줄 넣는 순간 DOWN·OUT_OF_SERVICE 의
+        #    503 이 사라진다.
+      group:
+        # 관측 풀만 따로 본다. 이 그룹은 관측을 켠 JVM 에서만 의미가 있다 —
+        # storage 의 ObservationHealthStatusOrderCheck 가 관측을 켰으면 이 줄을 요구한다.
+        obs:
+          include: obsDb
+          status:
+            http-mapping:
+              OBSERVATION_DOWN: 503
+              # 교체 규칙 때문에 기본값을 여기서 다시 적어 준다. 빠뜨리면 이 그룹에서만 200 이 된다.
+              DOWN: 503
+              OUT_OF_SERVICE: 503
+      # ⚠️ 멤버십 검증을 끈다. 켜 두면 관측을 껐을 때(OBSERVATION_DATASOURCE_ENABLED=false)
+      #    사라진 obsDb 를 이 그룹이 계속 찾아 기동이 실패한다 — 스위치가 탈출구 노릇을 못 한다.
+      #    정적 파일이라 "관측을 켰을 때만 이 그룹" 을 조건으로 쓸 수 없어 검증을 끈다.
+      #    대신 관측 풀 장애는 app.observation.collect.last.success.epoch 가 멈추는 것으로 본다.
+      validate-group-membership: false
+
+# Compose 에 이 포트의 ports 매핑을 추가하지 않는다.
+# Prometheus 가 내부 네트워크에서 batch:9092 로 긁는다.

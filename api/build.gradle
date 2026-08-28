@@ -4,15 +4,76 @@ plugins {
 
 dependencies {
     implementation project(':core')
+    testImplementation testFixtures(project(':core'))
     // 어댑터는 런타임에만. api 가 JpaRepository 를 직접 참조하는 걸 컴파일 단계에서 막는다.
     runtimeOnly project(':storage')
+    // 이 줄이 지워지면 루트 build.gradle 의 cy.runtimeProjects 가드가 잡는다.
+    runtimeOnly project(':infra:redis')
+    runtimeOnly project(':infra:mq')
     testImplementation testFixtures(project(':storage'))
+
+    // 테스트만 storage 를 본다. 관측 헬스 status 코드가 storage 코드와 api 의 management.yml
+    // 양쪽에 걸쳐 있어서, 둘을 잇는 테스트가 그 상수를 직접 참조해야 하기 때문이다
+    // (ObservationHealthContractTest). 문자열로 옮겨 적으면 한쪽만 바뀌어도 아무도 모른다 —
+    // 실제로 상수만 바꿔 보면 앱은 정상 기동하고 로그도 없이 경보만 죽는다.
+    //
+    // 같은 선을 쓰는 테스트가 하나 더 있다(RunTimeseriesMetricContractTest). 저쪽은 storage 의
+    // db/migration/*.sql 을 테스트 classpath 리소스로 읽어 CHECK 제약의 허용 값 집합을 뽑고,
+    // 그것을 core 의 Metric enum·이 모듈의 SeriesKey 와 대조한다. 위 테스트를 지우면서 이 줄도
+    // 함께 지우면 저쪽이 컴파일에서 깨진다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 storage 타입을 컴파일 타임에 못 본다.
+    //    이 줄은 테스트에 한해 그 경계를 넘는다는 것을 드러내 두는 선언이다 — 사실 testFixtures
+    //    가 이미 storage 본 코드를 전이로 끌어와서 없어도 컴파일된다. 강제가 아니라 의도 표시다.
+
+    testImplementation project(':storage')
+
+    // 테스트만 infra:redis 를 본다. Redis 레이턴시 미터의 네임스페이스는 infra:redis 가 소유하고
+    // 관측 창 설정은 이 모듈의 observation.yml 이 소유해서, 둘을 잇는 테스트가 그 상수를 직접
+    // 참조해야 한다(RedisLatencyObservationYamlContractTest). 문자열로 옮겨 적으면 한쪽만 바뀌어도
+    // 계속 통과하고, 예외 없이 백분위만 조용히 사라진다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 이 모듈의 타입을 컴파일 타임에 못 본다.
+    testImplementation project(':infra:redis')
+    testImplementation testFixtures(project(':infra:redis'))
+
+    // 테스트만 infra:mq 를 본다. attempt live 샘플링의 기본값은 그 모듈의
+    // AttemptSamplingProperties 상수가 소유하고 실제 설정 키는 이 모듈의 observation.yml 이
+    // 소유해서, 둘을 잇는 테스트가 그 상수를 직접 참조해야 한다(AttemptSamplingYamlContractTest).
+    // 문자열로 옮겨 적으면 한쪽만 바뀌어도 계속 통과하고, 예외 없이 통과량만 조용히 달라진다.
+    //
+    // ⚠️ 위 runtimeOnly 는 그대로다. 본 코드는 여전히 이 모듈의 타입을 컴파일 타임에 못 본다.
+    testImplementation project(':infra:mq')
 
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    // PromQueryClient 가 Prometheus 응답을 JsonNode 로 직접 훑는다. 응답 스키마가 우리 계약이
+    // 아니라 Prometheus 것이라 record 로 고정하면 필드가 하나 늘 때마다 파싱이 깨진다.
+    // starter-web 이 전이로 끌어오지만 그건 저쪽 사정이다 — 컴파일 타임에 쓰므로 선언한다.
+    implementation 'tools.jackson.core:jackson-databind'
+
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    implementation 'org.springframework:spring-tx'
+    // 회차 시작 전 실제 풀 크기를 읽는다. 설정 문자열이 아니라 최종 Hikari 빈이 검증 대상이다.
+    implementation 'com.zaxxer:HikariCP'
+    implementation 'org.springframework:spring-jdbc'
+
+    // /actuator/prometheus 를 만드는 레지스트리. 없으면 엔드포인트 자체가 생기지 않는다.
+    // 노출 allowlist 는 management.yml(OBS-20) 소유라 이 티켓에서 건드리지 않는다.
+    //
+    // 자동설정으로만 붙는다 — 본 코드는 이 타입을 컴파일 타임에 참조하지 않는다(참조 0건).
+    // implementation 으로 올리면 그 사실이 무너져도 아무도 모른다.
     runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+    // 테스트는 scrape 출력과 레지스트리 빈을 직접 봐야 해서 컴파일 타임에 필요하다.
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // PrometheusScrapeConfigContractTest 가 org.yaml.snakeyaml.Yaml 을 직접 쓴다. 지금은
+    // spring-boot-starter 가 전이로 끌어와서 선언 없이도 컴파일되지만, 그건 저쪽 사정이다 —
+    // Boot 가 이 전이 의존을 빼거나 좌표를 바꾸는 순간 우리 테스트가 컴파일에서 죽고,
+    // 원인은 우리 build.gradle 어디에도 안 적혀 있다. 버전은 BOM 이 정한다.
+    testImplementation 'org.yaml:snakeyaml'
+    implementation 'org.springframework:spring-tx'
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 }
@@ -23,4 +84,47 @@ bootJar {
 
 jar {
     enabled = false
+}
+
+tasks.named('test') {
+    // PrometheusScrapeConfigContractTest 는 저장소 루트의 설정 파일을 읽는다. 클래스패스 밖이라
+    // 선언하지 않으면 Gradle 이 그 파일들의 변경을 모르고 test 를 UP-TO-DATE 로 건너뛴다.
+    //
+    // 실측 — 선언 전에는 prometheus.yml 의 batch 대상 포트를 바꿔도 테스트가 아예 돌지 않아
+    // 초록불이었다(--rerun-tasks 를 주면 정상적으로 깨졌다). 가드가 있는데 안 도는 상태가
+    // 가드가 없는 것보다 나쁘다 — 초록불이 검사했다는 증거로 읽히기 때문이다.
+    inputs.files(
+            rootProject.file('infra/prometheus/prometheus.yml'),
+            // 컨테이너 픽스처가 이 스크립트를 마운트해 관측 계정을 만든다. 클래스패스 밖이라
+            // 선언하지 않으면 스크립트를 고쳐도 :api:test 가 UP-TO-DATE 로 건너뛴다.
+            rootProject.file('infra/mysql/initdb/20-obs-account.sh'),
+            rootProject.file('compose.yml'),
+            rootProject.file('compose.yaml'),
+            // ⚠️ 아래 줄은 잔재가 아니다. 없어야 하는 파일도 입력으로 선언해야, 이게 새로
+            //    생겼을 때 Gradle 이 test 를 UP-TO-DATE 로 건너뛰지 않는다 — 지우면
+            //    onlyOneComposeFileExists 가 조용히 안 돈다(실측).
+            rootProject.file('docker-compose.yml'),
+            rootProject.file('docker-compose.yaml'),
+            rootProject.file('.github/CODEOWNERS'),
+            // CY-571의 AdminProductionSourceWiringTest는 배포 예시의 공통·분석 Mock 키 제거를
+            // 확인한다. 클래스패스 밖인 루트 .env.example·application.yml.example도
+            // 아래 입력에 포함해야 해당 파일만 바꿔도 테스트가 다시 돈다.
+            // DeployedConfigContractTest 가 compose 의 포트 변수 이름이 여기 정의돼 있는지
+            // 본다. 선언하지 않으면 이 파일에서 변수를 지워도 test 가 UP-TO-DATE 로 건너뛴다.
+            rootProject.file('.env.example'),
+            // 컨테이너에 마운트되는 배포 설정. DeployedConfigContractTest 가 읽는다.
+            rootProject.file('application.yml.example'),
+            rootProject.file('batch/src/main/resources/management.yml.example'),
+            // batch 의 관측 풀 스위치와 위 management.yml.example 이 한 쌍이다.
+            rootProject.file('batch/src/main/resources/application.yml.example'),
+            // api 자신의 example 은 이 모듈 리소스라 이미 입력이지만, 이 테스트가 읽는다는
+            // 사실을 목록에서 읽을 수 있게 명시한다. 리소스 취급이 바뀌어도 여기가 남는다.
+            file('src/main/resources/management.yml.example'))
+        .withPropertyName('prometheusScrapeContractInputs')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+tasks.register('mockServer', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.kafkick.api.admin.observability.mockserver.MockMetricsServer'
 }

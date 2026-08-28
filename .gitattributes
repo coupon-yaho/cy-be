@@ -1,3 +1,11 @@
 /gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
+
+# [OBS-36] 자바 원본은 LF 로 고정한다.
+#
+# 저장소의 .java 수백 개 중 **두 개만** CRLF 로 커밋돼 있었다
+# (MySqlContainerConfig · ResourceProviderMySqlIntegrationTest). 그 파일을 건드리는 PR 마다
+# `git diff --check` 가 추가된 모든 줄을 trailing whitespace 로 지적했다 — 내용과 무관한
+# 경고라 읽는 사람이 진짜 지적과 구분하지 못한다. 두 파일을 정규화하고, 이 줄로 재발을 막는다.
+*.java text eol=lf
