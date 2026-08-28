@@ -23,7 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.kafkick.core.support.response.ErrorResponse;
 import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.support.TimeProvider;
-import com.kafkick.core.verification.exception.VerificationErrorCode;
+import com.kafkick.core.support.exception.CommonErrorCode;
 
 /**
  * <b>관리자 API 에 최소한의 관문을 단다.</b> {@code /api/v1/admin/**} 에는 트리거만 있는 것이
@@ -105,7 +105,7 @@ public class AdminTokenFilter extends OncePerRequestFilter {
                 presented == null ? "없습니다" : "맞지 않습니다",
                 request.getMethod(), request.getRequestURI());
 
-        response.setStatus(VerificationErrorCode.ADMIN_TOKEN_REQUIRED.getStatus());
+        response.setStatus(CommonErrorCode.UNAUTHORIZED.getStatus());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         // **어느 쪽인지 응답으로 알려 주지 않는다.** 틀린 값과 없는 값을 가르면 그 자체가
@@ -118,7 +118,7 @@ public class AdminTokenFilter extends OncePerRequestFilter {
         // 이 401 에서만 깨진다. requestId 가 null 인 것도 형제와 같다(batch 에는 그것을
         // MDC 에 심는 필터가 없다).
         objectMapper.writeValue(response.getWriter(), ResponseEnvelope.fail(
-                ErrorResponse.of(VerificationErrorCode.ADMIN_TOKEN_REQUIRED, null,
+                ErrorResponse.of(CommonErrorCode.UNAUTHORIZED, null,
                         timeProvider.now().toInstant(ZoneOffset.UTC))));
     }
 }

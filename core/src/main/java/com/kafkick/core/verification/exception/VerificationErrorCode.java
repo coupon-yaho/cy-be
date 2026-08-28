@@ -254,22 +254,6 @@ public enum VerificationErrorCode implements ErrorCode {
             503,
             "VERIFICATION-022",
             "배치 메타 조회가 데드라인을 넘겼습니다. DB 부하를 먼저 확인하십시오."
-    ),
-
-    /**
-     * <b>관리자 토큰 관문이 막았다</b>(CY-742). {@code AdminTokenFilter} 가
-     * {@code DispatcherServlet} <b>앞</b>에서 응답하므로 {@code BatchApiExceptionHandler} 를
-     * 안 지난다 — 그래도 코드 문자열은 여기 등록해 <b>카탈로그 밖에서 만들지 않는다.</b>
-     * 응답 코드는 k6 집계와 Chaos 판정의 근거라, {@code <도메인>-<번호>} 규약을 벗어난 값이
-     * 하나라도 섞이면 그 정규식을 쓰는 집계가 조용히 누락한다.
-     *
-     * <p><b>메시지는 어느 쪽으로 틀렸는지 안 가른다</b> — 없는 것과 틀린 것을 가르면 그 자체가
-     * 힌트가 된다. 그 구분은 로그에만 남는다.
-     */
-    ADMIN_TOKEN_REQUIRED(
-            401,
-            "VERIFICATION-023",
-            "관리자 토큰이 필요합니다."
     );
 
     private final int status;

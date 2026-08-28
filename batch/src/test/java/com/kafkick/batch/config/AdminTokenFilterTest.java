@@ -17,7 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 
-import com.kafkick.core.verification.exception.VerificationErrorCode;
+import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 /**
@@ -69,7 +69,7 @@ class AdminTokenFilterTest {
         // 코드는 카탈로그에서 온다 — <도메인>-<번호> 규약 밖에서 만들면 그 정규식을 쓰는
         // 집계가 조용히 누락한다(응답 코드는 k6 집계와 Chaos 판정의 근거다).
         assertThat(response.body())
-                .contains(VerificationErrorCode.ADMIN_TOKEN_REQUIRED.getCode());
+                .contains(CommonErrorCode.UNAUTHORIZED.getCode());
         // 같은 표면에서 봉투 모양이 갈리면 관제 파서가 이 401 에서만 깨진다.
         assertThat(response.body()).contains("requestId").contains("timestamp");
     }
@@ -182,7 +182,7 @@ class AdminTokenFilterTest {
         @DisplayName("기동을 거절하고, 고치는 법과 일부러 여는 법을 둘 다 말한다")
         void refusesToStart() {
             assertThatThrownBy(() -> new AdminTokenConfig().adminTokenFilter(
-                    true, "  ", new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    true, "  ", false, new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
                     new tools.jackson.databind.ObjectMapper(), utcClock()))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("BATCH_ADMIN_TOKEN")
@@ -193,7 +193,7 @@ class AdminTokenFilterTest {
         @DisplayName("끈 상태라면 토큰이 비어도 뜬다 — 대신 필터를 안 단다")
         void staysOpenWhenExplicitlyDisabled() {
             var registration = new AdminTokenConfig().adminTokenFilter(
-                    false, "", new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    false, "", false, new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
                     new tools.jackson.databind.ObjectMapper(), utcClock());
 
             assertThat(registration.isEnabled())
@@ -217,7 +217,7 @@ class AdminTokenFilterTest {
         @DisplayName("모든 디스패치 타입을 덮는다 — 포워드·에러로도 안 새게")
         void theScopeCoversEveryDispatch() {
             var registration = new AdminTokenConfig().adminTokenFilter(
-                    true, SECRET, new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                    true, SECRET, false, new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
                     new tools.jackson.databind.ObjectMapper(), utcClock());
 
             assertThat(registration.determineDispatcherTypes())

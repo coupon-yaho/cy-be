@@ -47,6 +47,14 @@ public class AdminTokenConfig {
     static final String TOKEN = "batch.admin.auth.token";
 
     /**
+     * <b>포트를 밖으로 내보냈는가.</b> 앱은 이것을 스스로 알 수 없어서 배포가 알려 준다
+     * ({@code batch-expose.yml} 이 참으로 준다). 알림이 <b>"무방비"</b> 를 판정하는 데 쓴다 —
+     * 관문이 꺼진 것만으로는 위험한지 알 수 없고, <b>포트가 열린 채 꺼진 것</b>이 위험이다.
+     * 이 신호가 없으면 포트를 안 내보내는 평범한 로컬 스택마다 알림이 울려 곧 무시된다.
+     */
+    static final String PORT_EXPOSED = "batch.admin.port-exposed";
+
+    /**
      * <b>{@link AdminCorsConfig} 의 {@code CorsFilter} 보다 뒤에 선다.</b> 그래야 이 관문이
      * 401 로 체인을 끊어도 <b>CORS 헤더가 이미 붙어 있어</b> 관제 화면이 그 401 을 읽는다 —
      * 순서가 반대면 거절이 브라우저에 <b>"CORS 오류"</b> 로만 보이고 원인이 토큰이라는 것을
@@ -58,19 +66,28 @@ public class AdminTokenConfig {
     public FilterRegistrationBean<jakarta.servlet.Filter> adminTokenFilter(
             @Value("${" + REQUIRED + ":true}") boolean required,
             @Value("${" + TOKEN + ":}") String token,
+            @Value("${" + PORT_EXPOSED + ":false}") boolean portExposed,
             MeterRegistry registry, ObjectMapper objectMapper, TimeProvider timeProvider) {
 
         Gauge.builder("cy_batch_admin_auth_enforcement", () -> required ? 1 : 0)
                 .description("관리자 API 토큰 관문이 켜져 있는가 — 1 켜짐 · 0 꺼짐")
                 .register(registry);
+        Gauge.builder("cy_batch_admin_port_exposed", () -> portExposed ? 1 : 0)
+                .description("업무 포트를 호스트로 내보냈는가 — 1 내보냄 · 0 아님")
+                .register(registry);
 
         FilterRegistrationBean<jakarta.servlet.Filter> registration =
                 new FilterRegistrationBean<>();
         if (!required) {
-            log.error("관리자 API 토큰 관문이 꺼져 있습니다({}=false). "
-                    + "포트에 닿는 누구나 도는 잡을 중단·복구할 수 있습니다 — "
-                    + "이 상태는 포트를 밖으로 안 내보낸다는 전제(docs/11 §11)에만 기댑니다.",
-                    REQUIRED);
+            if (portExposed) {
+                log.error("업무 포트를 내보낸 채 관리자 API 토큰 관문이 꺼져 있습니다({}=false). "
+                        + "포트에 닿는 누구나 도는 잡을 중단·복구할 수 있습니다 — "
+                        + "1차 방어선(포트 미노출)도 없는 상태입니다.", REQUIRED);
+            } else {
+                log.info("관리자 API 토큰 관문이 꺼져 있습니다({}=false). "
+                        + "업무 포트를 안 내보내는 구성이라 1차 방어선(docs/11 §11)이 섭니다.",
+                        REQUIRED);
+            }
             // **끈 상태에도 필터 인스턴스는 있어야 한다.** FilterRegistrationBean 은
             // setEnabled(false) 여도 등록 시점에 filter 가 null 인지 검사하고, null 이면
             // 톰캣이 "'filter' must not be null" 로 죽어 **컨텍스트가 아예 안 뜬다** —
