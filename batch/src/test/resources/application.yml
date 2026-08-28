@@ -1,3 +1,14 @@
+# ⚠️ **테스트 JVM 은 일부러 Asia/Seoul 이다**(batch/build.gradle 의 test 태스크, CY-392).
+#    TimestampMappingTest 가 그 존에서 드라이버가 LocalDateTime 을 안 미는 것을 단언하기
+#    때문이다. DefaultZoneGuard 는 UTC 가 아니면 기동을 거절하므로, 안 끄면 **컨텍스트를
+#    띄우는 배치 테스트가 통째로** 그 자리에서 죽는다.
+#
+#    가드 자체는 DefaultZoneGuardTest 가 생성자를 직접 불러 잰다 — 스위치로 끈 것이
+#    "검사를 안 한다" 가 되지 않게 한다.
+batch:
+  timezone-guard:
+    required: false
+
 # 테스트 설정을 저장소에 고정한다.
 # 이게 없으면 테스트가 main/resources/application.yml 을 읽는데, 그 파일은 .gitignore 대상이라
 # 있는 사람과 없는 사람의 결과가 갈린다. .example 을 복사한 순간 flyway.enabled:false 로

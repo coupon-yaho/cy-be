@@ -98,10 +98,7 @@ public class CleanupRecoveryService {
 
         LocalDateTime stuckBefore = requireStuck(execution);
 
-        if (jdbcClient.sql(StuckRunClaim.CLAIM)
-                .param("id", executionId)
-                .param("stuckBefore", stuckBefore)
-                .update() == 0) {
+        if (StuckRunClaim.claim(jdbcClient, StuckRunClaim.CLAIM, executionId, stuckBefore) == 0) {
             // **현재 읽기로 본다.** 같은 트랜잭션의 평범한 SELECT 는 RR 스냅샷이라 앞 요청이
             // 커밋한 FAILED 를 못 본다 — 그러면 자기모순 응답이 나간다.
             String status = jdbcClient.sql(StuckRunClaim.CURRENT_STATUS)

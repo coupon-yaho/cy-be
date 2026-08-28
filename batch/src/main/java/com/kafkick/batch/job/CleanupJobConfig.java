@@ -125,12 +125,27 @@ public class CleanupJobConfig {
      * {@code NaN} 이 되어 {@code ExpireNeverSucceeded}(critical)가 뜬다. 실제 상태는
      * <i>"며칠 실패"</i> 인데 관제는 <i>"한 번도 성공한 적 없음"</i> 을 읽는다 — 사고 등급이 바뀐다.
      *
-     * <p>⚠️ <b>컷오프의 시간대.</b> 이 값이 미는 컷오프는 {@code TimeProvider}(UTC)로 잡는데,
-     * 비교 대상인 {@code BATCH_JOB_EXECUTION.CREATE_TIME}·{@code END_TIME} 은 프레임워크가
-     * <b>인자 없는 {@code LocalDateTime.now()}</b> 로 쓴다(JVM 기본 존). 배포에서 두 축을
-     * 맞추는 것은 {@code batch.yml} 의 {@code TZ=UTC} 와 {@code bootRun} 의
-     * {@code user.timezone=UTC} 다 — 그것을 안 주고 최솟값으로 내리면 존 오프셋만큼
-     * 여유가 깎인다(KST 면 8일이 실질 7.6일).
+     * <p><b>컷오프의 시간대 — 여기는 안 어긋난다.</b> 컷오프는 {@code TimeProvider}(UTC)로
+     * 잡아 <b>원시 {@code LocalDateTime} 으로</b> 바인딩되는데, 원시 바인딩은 드라이버의 존
+     * 변환을 <b>안 타서</b> 그 UTC 벽시계가 그대로 서버에 간다. 비교 대상인
+     * {@code CREATE_TIME}·{@code END_TIME} 은 프레임워크가 {@code Timestamp.valueOf} 로 써서
+     * <b>세션 존(UTC)으로 렌더링된</b> 값이다 — 둘 다 UTC 라 JVM 기본 존과 무관하게 만난다.
+     * ({@code TimestampBindingAxisTest} 가 서버가 본 값을 단언한다.)
+     *
+     * <p>⚠️ <b>그러니 여기에 {@code Timestamp.valueOf} 를 씌우지 마라.</b> 씌우는 순간 UTC
+     * 벽시계가 <i>JVM 기본 존의 벽시계</i>로 재해석돼, 컷오프가 <b>그 존의 오프셋만큼</b>
+     * 움직인다. 방향이 부호를 따라 갈린다:
+     * <ul>
+     *   <li><b>UTC 동쪽</b>(KST, +09) — 컷오프가 아홉 시간 <b>이르게</b> 간다
+     *       ({@code 16:42:55} 로 보낸 값을 서버가 {@code 07:42:55} 로 받는다). 조건이
+     *       {@code CREATE_TIME < :olderThan} 이라 <b>덜 지운다</b> — 보존이 실질
+     *       30일+9시간이 된다. 성가시지만 데이터를 잃지는 않는다
+     *   <li><b>UTC 서쪽</b>(음수 오프셋) — 반대로 <b>늦게</b> 가서 <b>더 지운다.</b> 이쪽이
+     *       위험하다 — 위에 적은 대로 마지막 성공이 컷오프 밖으로 밀리면 게이지가
+     *       {@code NaN} 이 되고 {@code ExpireNeverSucceeded}(critical)가 뜬다
+     * </ul>
+     * 한때 {@code DefaultZoneGuard} 가 이 자리를 <i>"깨지는 자리"</i> 로 잘못 적었고,
+     * 그 단정이 여기서 시작했다.
      */
     static final int MIN_METADATA_KEEP_DAYS = BatchMetadataWindow.LOOKBACK_DAYS + 1;
 

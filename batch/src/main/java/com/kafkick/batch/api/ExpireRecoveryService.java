@@ -134,10 +134,7 @@ public class ExpireRecoveryService {
 
         LocalDateTime stuckBefore = requireStuck(execution);
 
-        if (jdbcClient.sql(CLAIM)
-                .param("id", executionId)
-                .param("stuckBefore", stuckBefore)
-                .update() == 0) {
+        if (StuckRunClaim.claim(jdbcClient, StuckRunClaim.CLAIM, executionId, stuckBefore) == 0) {
             // **현재 읽기로 본다.** 같은 트랜잭션의 평범한 SELECT 는 RR 스냅샷이라 앞 요청이
             // 커밋한 FAILED 를 못 본다 — 그러면 {status:STARTED, alreadyRecovered:true} 라는
             // 자기모순 응답이 나가고, 운영자는 손 SQL 로 되돌아간다.

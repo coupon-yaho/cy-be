@@ -115,10 +115,7 @@ public class VerifyStopService {
         // (docs/11 "부하 중 정지 수단이 설정이 아니라 컨테이너다").
         LocalDateTime stuckBefore = requireStuck(execution);
 
-        if (jdbcClient.sql(CLAIM)
-                .param("id", executionId)
-                .param("stuckBefore", stuckBefore)
-                .update() == 0) {
+        if (StuckRunClaim.claim(jdbcClient, CLAIM, executionId, stuckBefore) == 0) {
             // **현재 읽기로 본다.** 같은 트랜잭션의 평범한 SELECT 는 RR 스냅샷이라 그 사이의
             // 커밋을 못 본다 — 그러면 자기모순 응답이 나가고 운영자는 손 SQL 로 돌아간다.
             String current = jdbcClient.sql(CURRENT_STATUS)
