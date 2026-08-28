@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.storage.db.support.BaseEntity;
 
 @Entity
@@ -56,6 +57,13 @@ public class CouponRoundEntity extends BaseEntity {
 
     @Column(name = "generated_at", nullable = false, updatable = false)
     private Instant generatedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "issuance_engine_version", length = 10)
+    private EngineVersion issuanceEngineVersion = EngineVersion.V1;
+
+    @Column(name = "issuance_engine_locked", nullable = false)
+    private boolean issuanceEngineLocked;
 
     protected CouponRoundEntity() {
     }
@@ -142,6 +150,10 @@ public class CouponRoundEntity extends BaseEntity {
 
     public Instant getGeneratedAt() {
         return generatedAt;
+    }
+
+    public EngineVersion getIssuanceEngineVersion() {
+        return issuanceEngineVersion;
     }
 
 }

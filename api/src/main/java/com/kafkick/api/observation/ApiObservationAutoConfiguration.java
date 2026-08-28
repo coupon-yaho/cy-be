@@ -13,6 +13,15 @@ import com.kafkick.api.observation.issuance.MeterCampaignLifecycleRecorder;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
+import com.kafkick.core.coupon.v2.RequestTokenGenerator;
+import com.kafkick.core.coupon.v2.V2CouponIssueService;
+import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.coupon.port.IdempotencyRepository;
+import com.kafkick.core.coupon.port.IdempotencyResultCodec;
+import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
+import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
 import com.kafkick.core.observation.CampaignLifecycleRecorder;
@@ -35,6 +44,7 @@ import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterR
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.transaction.support.TransactionOperations;
 
 @AutoConfiguration(
         after = {
@@ -53,6 +63,33 @@ import org.springframework.context.annotation.Primary;
 public class ApiObservationAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(ApiObservationAutoConfiguration.class);
+
+    @Bean
+    @ConditionalOnMissingBean(RequestTokenGenerator.class)
+    public RequestTokenGenerator requestTokenGenerator(
+            ObservationIssuanceProperties issuanceProperties
+    ) {
+        return new RequestTokenGenerator(issuanceProperties.producerInstanceId());
+    }
+
+    @Bean
+    @ConditionalOnBean(IssuanceGatePort.class)
+    @ConditionalOnMissingBean(V2CouponIssueService.class)
+    public V2CouponIssueService v2CouponIssueService(
+            IssuanceGatePort gate,
+            IssuanceRepository issuances,
+            IssuanceHistoryRepository histories,
+            IdempotencyRepository idempotencies,
+            CouponCodeGenerator codeGenerator,
+            IdempotencyResultCodec<CouponIssueResult> resultCodec,
+            RequestTokenGenerator tokenGenerator,
+            TransactionOperations transactions
+    ) {
+        return new V2CouponIssueService(
+                gate, issuances, histories, idempotencies, codeGenerator,
+                resultCodec, tokenGenerator, transactions
+        );
+    }
 
     @Bean
     @ConditionalOnMissingBean(EventIdGenerator.class)

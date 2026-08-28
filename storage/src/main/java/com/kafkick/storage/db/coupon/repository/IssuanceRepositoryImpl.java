@@ -91,6 +91,27 @@ public class IssuanceRepositoryImpl
     }
 
     @Override
+    public Optional<Issuance> findForCouponRoundMemberAndIdempotencyKey(
+            Long couponRoundId,
+            Long memberId,
+            String idempotencyKey
+    ) {
+        try {
+            return issuanceJpaRepository.findForCouponRoundMemberAndIdempotencyKey(
+                            couponRoundId,
+                            memberId,
+                            idempotencyKey
+                    )
+                    .map(IssuanceEntityMapper::toDomain);
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "회차와 회원의 쿠폰 발급 결과 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
     public Optional<Issuance> findById(Long issuanceId) {
         return issuanceJpaRepository.findById(issuanceId)
                 .map(IssuanceEntityMapper::toDomain);

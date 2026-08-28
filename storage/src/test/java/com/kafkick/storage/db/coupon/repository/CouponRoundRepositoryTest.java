@@ -43,6 +43,8 @@ import com.kafkick.core.coupon.port.CouponRoundLifecyclePort;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.core.coupon.service.CouponRoundLifecycleService;
 import com.kafkick.core.coupon.service.result.CouponRoundLifecycleResult;
+import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SpringAfterCommitCampaignClosedEventPublisher;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
@@ -78,6 +80,9 @@ class CouponRoundRepositoryTest {
 
     @Autowired
     private CouponTemplateRepositoryImpl couponTemplateRepository;
+
+    @Autowired
+    private CouponRoundIssuanceDefinitionRepository issuanceDefinitions;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -169,6 +174,48 @@ class CouponRoundRepositoryTest {
                 .isZero();
         assertThat(stockRow.get("updated_at"))
                 .isEqualTo(LocalDateTime.of(2020, 1, 1, 0, 0));
+    }
+
+    @Test
+    @DisplayName("기존과 신규 회차의 발급 엔진 기본값은 V1이다")
+    void defaultsIssuanceEngineToV1() {
+        CouponTemplate template = saveTemplate();
+        CouponRound saved = couponRoundCreationService.create(
+                scheduledRound(template, Instant.parse("2026-08-18T00:00:00Z")),
+                CouponStock.initialize(100, Instant.parse("2026-08-18T00:00:00Z")));
+
+        assertThat(issuanceDefinitions.lockAndFindById(saved.id()).orElseThrow().engineVersion())
+                .isEqualTo(EngineVersion.V1);
+        jdbcTemplate.update("UPDATE coupons SET issuance_engine_version = NULL WHERE id = ?", saved.id());
+        assertThat(issuanceDefinitions.lockAndFindById(saved.id()).orElseThrow().engineVersion())
+                .isEqualTo(EngineVersion.V1);
+    }
+
+    @Test
+    @DisplayName("오픈 전과 마감 후에만 회차 발급 엔진을 바꾼다")
+    void changesEngineOnlyOutsideOpenWindow() {
+        CouponTemplate template = saveTemplate();
+        CouponRound saved = couponRoundCreationService.create(
+                scheduledRound(template, Instant.parse("2026-08-18T00:00:00Z")),
+                CouponStock.initialize(100, Instant.parse("2026-08-18T00:00:00Z")));
+
+        assertThat(issuanceDefinitions.updateEngineVersionWhenNotOpen(
+                saved.id(), EngineVersion.V2)).isTrue();
+        assertThat(issuanceDefinitions.lockAndFindById(saved.id()).orElseThrow().engineVersion())
+                .isEqualTo(EngineVersion.V2);
+        assertThat(issuanceDefinitions.updateEngineVersionWhenNotOpen(
+                saved.id(), EngineVersion.V1)).isFalse();
+
+        jdbcTemplate.update("""
+                UPDATE coupons
+                SET issuance_engine_locked = FALSE,
+                    status = 'OPEN',
+                    open_at = NOW(6) - INTERVAL 1 MINUTE,
+                    close_at = NOW(6) + INTERVAL 1 MINUTE
+                WHERE id = ?
+                """, saved.id());
+        assertThat(issuanceDefinitions.updateEngineVersionWhenNotOpen(
+                saved.id(), EngineVersion.V1)).isFalse();
     }
 
     @Test

@@ -13,6 +13,8 @@ import com.kafkick.core.observation.ClosedCampaignRecoverySource;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
+import com.kafkick.core.coupon.v2.CouponIssuanceRouter;
+import com.kafkick.core.coupon.v2.RequestTokenGenerator;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
 import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
@@ -171,6 +173,12 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
+    void assemblesOneRequestTokenGeneratorPerApiContext() {
+        contextRunner.run(context -> assertThat(context)
+                .hasSingleBean(RequestTokenGenerator.class));
+    }
+
+    @Test
     void meterEventRecorderCannotConstructAnIndependentCampaignRegistry() {
         assertThat(Arrays.stream(MeterEventRecorder.class.getConstructors())
                 .flatMap(constructor -> Arrays.stream(constructor.getParameterTypes())))
@@ -282,6 +290,10 @@ class ApiObservationAutoConfigurationTest {
                 .withBean(
                         CouponOperationExecutionService.class,
                         () -> mock(CouponOperationExecutionService.class)
+                )
+                .withBean(
+                        CouponIssuanceRouter.class,
+                        () -> mock(CouponIssuanceRouter.class)
                 )
                 .withBean(
                         CouponIssueObservationDependencyMapper.class,

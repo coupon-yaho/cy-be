@@ -43,11 +43,27 @@ import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.query.CouponIssuePolicySnapshot;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
+import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
+import com.kafkick.core.coupon.v2.RequestTokenGenerator;
+import com.kafkick.core.coupon.v2.V2CouponIssueResult;
+import com.kafkick.core.coupon.v2.V2CouponIssueService;
+import com.kafkick.core.coupon.v2.V2CouponIssueException;
+import com.kafkick.core.coupon.v2.port.ClaimResult;
+import com.kafkick.core.coupon.v2.port.CompensateOutcome;
+import com.kafkick.core.coupon.v2.port.CompleteOutcome;
+import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 // 실제 MySQL 조건부 UPDATE로 발급·재고·이력 원자성과 1인 1매를 검증합니다.
 
@@ -164,6 +180,75 @@ class CouponIssueRepositoryTest {
     }
 
     @Test
+    @DisplayName("v2 선점 뒤 발급·이력·DONE을 한 트랜잭션으로 저장하고 완료 승격한다")
+    void issueV2AtomicallyAndCompleteClaim() {
+        IssuanceGatePort gate = mock(IssuanceGatePort.class);
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(9L));
+        when(gate.complete(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompleteOutcome.PROMOTED);
+        V2CouponIssueService v2 = v2Service(gate);
+
+        V2CouponIssueResult result = v2.issue(
+                new CouponIssueCommand(10L, 1L, MembershipGrade.GOLD, IDEMPOTENCY_KEY, ISSUED_AT),
+                new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2));
+
+        assertThat(result.issueResult()).isPresent();
+        assertThat(countRows("issuances")).isEqualTo(1);
+        assertThat(countRows("issuance_histories")).isEqualTo(1);
+        assertThat(countRows("idempotency_records")).isEqualTo(1);
+        verify(gate).complete(any(Long.class), any(Long.class), any());
+    }
+
+    @Test
+    @DisplayName("v2 트랜잭션 실패 후 발급 행이 없으면 롤백하고 같은 토큰으로 보상한다")
+    void compensateV2AfterRolledBackPersistence() {
+        Issuance existing = issue(1L);
+        transactionTemplate.executeWithoutResult(status -> idempotencyRepository.insertCompleted(
+                IDEMPOTENCY_KEY, 1L, existing.id(), REQUEST_HASH, "existing", ISSUED_AT));
+        IssuanceGatePort gate = mock(IssuanceGatePort.class);
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(9L));
+        when(gate.compensate(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompensateOutcome.REVERTED);
+        V2CouponIssueService v2 = v2Service(gate);
+
+        assertThatThrownBy(() -> v2.issue(
+                new CouponIssueCommand(10L, 2L, MembershipGrade.GOLD, IDEMPOTENCY_KEY, ISSUED_AT),
+                new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2)))
+                .isInstanceOf(V2CouponIssueException.class);
+
+        assertThat(issuanceRepository.findForCouponRoundMemberAndIdempotencyKey(
+                10L, 2L, IDEMPOTENCY_KEY)).isEmpty();
+        assertThat(countRows("issuances")).isEqualTo(1);
+        assertThat(countRows("issuance_histories")).isEqualTo(1);
+        verify(gate).compensate(any(Long.class), any(Long.class), any());
+    }
+
+    private V2CouponIssueService v2Service(IssuanceGatePort gate) {
+        CouponCodeGenerator codes = () -> String.format(
+                "%016d", codeSequence.incrementAndGet());
+        return new V2CouponIssueService(
+                gate,
+                issuanceRepository,
+                issuanceHistoryRepository,
+                idempotencyRepository,
+                codes,
+                new com.kafkick.core.coupon.port.IdempotencyResultCodec<>() {
+                    @Override
+                    public String write(CouponIssueResult result) {
+                        return "result-" + result.issuanceId();
+                    }
+
+                    @Override
+                    public CouponIssueResult read(String responseBody) {
+                        throw new UnsupportedOperationException();
+                    }
+                },
+                new RequestTokenGenerator("storage-test-api"),
+                transactionTemplate
+        );
+    }
+
+    @Test
     @DisplayName("같은 회원이 다시 요청하면 재고와 이력을 추가하지 않는다")
     void rejectAlreadyIssuedMemberWithoutStockLeak() {
         issue(1L);
@@ -191,6 +276,19 @@ class CouponIssueRepositoryTest {
                 .isTrue();
         assertThat(issuanceRepository.existsForCouponRoundAndMember(10L, 2L))
                 .isFalse();
+    }
+
+    @Test
+    @DisplayName("§4.9 확인을 위해 회차와 회원으로 발급 결과 전체를 다시 읽는다")
+    void findsIssuanceForCouponRoundAndMember() {
+        Issuance issued = issue(1L);
+
+        assertThat(issuanceRepository.findForCouponRoundMemberAndIdempotencyKey(
+                10L, 1L, "request-1"))
+                .contains(issued);
+        assertThat(issuanceRepository.findForCouponRoundMemberAndIdempotencyKey(
+                10L, 1L, "different-request"))
+                .isEmpty();
     }
 
     @Test
@@ -532,6 +630,8 @@ class CouponIssueRepositoryTest {
             case "issuances" -> "SELECT COUNT(*) FROM issuances";
             case "issuance_histories" ->
                     "SELECT COUNT(*) FROM issuance_histories";
+            case "idempotency_records" ->
+                    "SELECT COUNT(*) FROM idempotency_records";
             default -> throw new IllegalArgumentException(
                     "허용되지 않은 테스트 테이블입니다."
             );
