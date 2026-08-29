@@ -57,6 +57,7 @@ import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
 /** Flyway 전체 스키마와 SELECT 전용 관측 계정에서 JDBC 캠페인 조회 계약을 검증합니다. */
@@ -219,6 +220,34 @@ class JdbcAdminCampaignDataReaderTest {
                         true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
     }
 
+    /** DB 회차 버전이 전역 설정으로 덮이지 않고 목록과 상세 계약에 그대로 전달되는지 검증합니다. */
+    @Test
+    @DisplayName("카탈로그와 상세는 V2를 보존하고 NULL 엔진은 V1로 해석한다")
+    void mapsPerCampaignEngineVersionWithNullAsV1() {
+        insertCoupon(10, 1, 1, "V2 캠페인", "OPEN", SNAPSHOT.minusSeconds(60));
+        insertCoupon(11, 1, 1, "호환 캠페인", "SCHEDULED", SNAPSHOT.plusSeconds(60));
+        writeJdbc.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id = 10");
+        writeJdbc.update("UPDATE coupons SET issuance_engine_version = NULL WHERE id = 11");
+        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
+        insertStock(11, 100, 0, SNAPSHOT.minusSeconds(5));
+
+        AdminCampaignCatalog catalog = reader.loadCatalog(SNAPSHOT);
+        AdminCampaignDetailData detail = reader.findDetail(10, FROM, TO, SNAPSHOT);
+
+        assertThat(catalog.campaigns())
+                .filteredOn(campaign -> campaign.couponId() == 10L)
+                .singleElement()
+                .extracting(AdminCampaignCatalog.CampaignData::engineVersion)
+                .isEqualTo(EngineVersion.V2);
+        assertThat(catalog.campaigns())
+                .filteredOn(campaign -> campaign.couponId() == 11L)
+                .singleElement()
+                .extracting(AdminCampaignCatalog.CampaignData::engineVersion)
+                .isEqualTo(EngineVersion.V1);
+        assertThat(detail.availability()).isEqualTo(DetailAvailability.AVAILABLE);
+        assertThat(detail.value().engineVersion()).isEqualTo(EngineVersion.V2);
+    }
+
     /** 실제 회차 도메인의 24시간 상한을 넘는 기간은 설정 실패로 판정하는지 검증합니다. */
     @Test
     @DisplayName("24시간을 초과한 회차는 캠페인 설정이 준비되지 않는다")
@@ -352,6 +381,21 @@ class JdbcAdminCampaignDataReaderTest {
             assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
                     .contains("admin campaign stock drift", "couponId=10", "activeCount=2", "issuedPlusUsed=1"));
         }
+    }
+
+    /** V2 DB active는 Redis 정본의 미러라 불일치 자체로 Redis 재고와 다른 DB 지표까지 숨기지 않습니다. */
+    @Test
+    @DisplayName("V2 DB active와 보유 수가 달라도 상세 원천은 유지한다")
+    void v2MirrorDriftKeepsDetailAvailable() {
+        insertCoupon(10, 1, 1, "V2 불일치", "OPEN", SNAPSHOT.minusSeconds(60));
+        writeJdbc.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id = 10");
+        insertStock(10, 20, 2, SNAPSHOT.minusSeconds(5));
+        insertIssuance(101, 10, 1, "ISSUED", 1);
+
+        AdminCampaignDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
+
+        assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
+        assertThat(result.value().engineVersion()).isEqualTo(EngineVersion.V2);
     }
 
     @Test

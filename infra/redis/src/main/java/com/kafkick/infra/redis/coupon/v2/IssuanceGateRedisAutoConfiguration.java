@@ -19,6 +19,7 @@ import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.v2.port.IssuanceWarmupPort;
 import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 
 /**
  * v2 게이트 조립. 스크립트 5종은 {@link IssuanceScripts} 의 상수라 빈이 아니고,
@@ -50,6 +51,13 @@ public class IssuanceGateRedisAutoConfiguration {
     IssuanceGatePort issuanceGatePort(
             IssuanceScriptRunner scriptRunner, StringRedisTemplate redisTemplate) {
         return new RedisIssuanceGate(scriptRunner, redisTemplate);
+    }
+
+    /** 발급 게이트와 같은 Redis 연결에서 관리자용 V2 재고 정본 조회 포트를 제공합니다. */
+    @Bean
+    @ConditionalOnMissingBean(V2AdminStockReader.class)
+    V2AdminStockReader v2AdminStockReader(StringRedisTemplate redisTemplate) {
+        return new RedisV2AdminStockReader(redisTemplate);
     }
 
     /**

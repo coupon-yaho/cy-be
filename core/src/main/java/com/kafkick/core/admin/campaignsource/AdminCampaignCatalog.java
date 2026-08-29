@@ -7,6 +7,7 @@ import java.util.Objects;
 import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관리자 운영현황의 DB 캠페인 모집단과 해당 조회 상태입니다. */
@@ -37,6 +38,7 @@ public record AdminCampaignCatalog(
             long couponId,
             String campaignName,
             String brandName,
+            EngineVersion engineVersion,
             CouponRoundStatus status,
             Instant opensAt,
             Instant closesAt,
@@ -48,11 +50,32 @@ public record AdminCampaignCatalog(
         public CampaignData {
             Objects.requireNonNull(campaignName, "campaignName");
             Objects.requireNonNull(brandName, "brandName");
+            Objects.requireNonNull(engineVersion, "engineVersion");
             Objects.requireNonNull(status, "status");
             Objects.requireNonNull(opensAt, "opensAt");
             Objects.requireNonNull(closesAt, "closesAt");
             Objects.requireNonNull(stock, "stock");
             Objects.requireNonNull(preparation, "preparation");
+        }
+
+        /**
+         * 버전 필드 도입 전 호출부를 V1 계약으로 보존합니다.
+         *
+         * @deprecated 새 호출부는 회차 DB에서 읽은 {@link EngineVersion}을 명시해야 합니다.
+         */
+        @Deprecated
+        public CampaignData(
+                long couponId,
+                String campaignName,
+                String brandName,
+                CouponRoundStatus status,
+                Instant opensAt,
+                Instant closesAt,
+                CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
+                PreparationSource preparation
+        ) {
+            this(couponId, campaignName, brandName, EngineVersion.V1, status,
+                    opensAt, closesAt, stock, preparation);
         }
 
         /**
@@ -79,7 +102,7 @@ public record AdminCampaignCatalog(
                 CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
                 PreparationObservation preparation
         ) {
-            this(couponId, campaignName, brandName, status, opensAt, closesAt, stock,
+            this(couponId, campaignName, brandName, EngineVersion.V1, status, opensAt, closesAt, stock,
                     preparationSource(preparation));
         }
 

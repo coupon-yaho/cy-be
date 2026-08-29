@@ -15,6 +15,7 @@ import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 import com.kafkick.core.coupon.v2.port.RestoreOutcome;
 import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -48,8 +49,11 @@ class IssuanceGateRedisAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(IssuanceScriptRunner.class);
                     assertThat(context).hasSingleBean(IssuanceGatePort.class);
+                    assertThat(context).hasSingleBean(V2AdminStockReader.class);
                     assertThat(context.getBean(IssuanceGatePort.class))
                             .isInstanceOf(RedisIssuanceGate.class);
+                    assertThat(context.getBean(V2AdminStockReader.class))
+                            .isInstanceOf(RedisV2AdminStockReader.class);
                 });
     }
 
@@ -60,6 +64,7 @@ class IssuanceGateRedisAutoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(IssuanceGatePort.class);
             assertThat(context).doesNotHaveBean(IssuanceScriptRunner.class);
+            assertThat(context).doesNotHaveBean(V2AdminStockReader.class);
         });
     }
 

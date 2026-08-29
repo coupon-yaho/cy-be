@@ -1,0 +1,30 @@
+# 회차용 스크레이프 설정. 저장소 기본(infra/prometheus/prometheus.yml)과의 유일한 차이는
+# api job 이 dns_sd 라는 것이다.
+#
+# ⚠️ 기본 설정은 static_configs: ['api:9090'] 하나다. compose 가 api 를 4대로 띄우면
+#    Docker DNS 가 요청마다 다른 컨테이너 IP 를 돌려주므로, 스크레이프마다 다른 인스턴스를
+#    긁고 인스턴스 라벨은 전부 'api:9090' 으로 같다 — 4대 중 한 대만 재는 것과 같고
+#    인스턴스별로 나눌 수도 없다. docs/12 §11 이 "인스턴스별로 나누지 않으면 §10 수치를
+#    못 쓴다" 로 적어 둔 자리다.
+#
+# dns_sd 는 A 레코드를 전부 받아 인스턴스마다 타깃을 만든다. 회차 전에
+#   count(up{job="api"}) == PERF_API_REPLICAS
+# 를 preflight 가 확인한다.
+global:
+  scrape_interval: 1s
+  scrape_timeout: 900ms
+  evaluation_interval: 1s
+
+scrape_configs:
+  - job_name: api
+    metrics_path: /actuator/prometheus
+    dns_sd_configs:
+      - names: ['api']
+        type: A
+        port: 9090
+        refresh_interval: 5s
+
+  - job_name: batch
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['batch:9092']

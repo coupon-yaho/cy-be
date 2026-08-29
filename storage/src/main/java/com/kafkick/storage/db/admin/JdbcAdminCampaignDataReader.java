@@ -30,6 +30,7 @@ import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관측 전용 JDBC 풀에서 관리자 캠페인 카탈로그와 상세 원천값을 조회합니다. */
@@ -43,7 +44,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
     private static final String CATALOG_SQL = """
             SELECT c.id, c.name, b.name AS brand_name, c.status,
-                   c.open_at, c.close_at,
+                   c.open_at, c.close_at, c.issuance_engine_version,
                    c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
                    c.data_grant_mb,
                    c.valid_days, c.eligible_grades_mask,
@@ -56,7 +57,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
     private static final String DETAIL_SQL = """
             SELECT c.id, c.name, b.name AS brand_name, c.status,
-                   c.open_at, c.close_at,
+                   c.open_at, c.close_at, c.issuance_engine_version,
                    c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
                    c.data_grant_mb,
                    c.valid_days, c.eligible_grades_mask,
@@ -118,6 +119,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                         row.couponId(),
                         row.campaignName(),
                         row.brandName(),
+                        parseEngineVersion(row.engineVersion()),
                         parseCampaignStatus(row.status()),
                         row.opensAt(),
                         row.closesAt(),
@@ -163,15 +165,18 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 return unavailableDetail();
             }
             CouponRoundStatus campaignStatus = parseCampaignStatus(campaign.status());
+            EngineVersion engineVersion = parseEngineVersion(campaign.engineVersion());
             HoldingResult holding = loadHolding(parameters);
             CouponMetricsSource.Observation<List<CouponMetricsSource.TransitionBucket>> transitions =
                     loadTransitions(parameters, fromInclusive, toExclusive, snapshotAt);
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock =
                     stockObservation(campaign);
 
-            if (stock.status().carriesValue()
+            if (engineVersion == EngineVersion.V1
+                    && stock.status().carriesValue()
                     && stock.value().activeCount()
                     != holding.counts().issued() + holding.counts().used()) {
+                // V1은 DB가 정본이라 불일치 상세을 거부합니다. V2 DB active는 Redis 정본의 미러입니다.
                 log.warn("admin campaign stock drift: couponId={}, activeCount={}, issuedPlusUsed={}",
                         couponId,
                         stock.value().activeCount(),
@@ -183,6 +188,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                     campaign.couponId(),
                     campaign.campaignName(),
                     campaign.brandName(),
+                    engineVersion,
                     new CouponMetricsSource.CampaignRuntime(campaignStatus, campaign.opensAt()),
                     stock,
                     new CouponMetricsSource.Observation<>(
@@ -381,6 +387,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 resultSet.getString("status"),
                 instant(resultSet, "open_at"),
                 instant(resultSet, "close_at"),
+                resultSet.getString("issuance_engine_version"),
                 resultSet.getString("policy_type"),
                 resultSet.getObject("discount_rate", Integer.class),
                 resultSet.getObject("max_discount_amount", Integer.class),
@@ -409,6 +416,21 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
     private static CouponRoundStatus parseCampaignStatus(String status) {
         return CouponRoundStatus.valueOf(status);
+    }
+
+    /**
+     * 회차 엔진의 NULL 하위 호환만 V1로 접고, 현재 관리자 재고가 지원하는 V1·V2만 반환합니다.
+     * V3나 손상 문자열을 허용하면 지원하지 않는 재고 원천이 DB 재고로 가장될 수 있으므로 거부합니다.
+     */
+    static EngineVersion parseEngineVersion(String engineVersion) {
+        if (engineVersion == null) {
+            return EngineVersion.V1;
+        }
+        EngineVersion parsed = EngineVersion.valueOf(engineVersion);
+        if (parsed != EngineVersion.V1 && parsed != EngineVersion.V2) {
+            throw new IllegalArgumentException("관리자 재고가 지원하지 않는 발급 엔진입니다: " + parsed);
+        }
+        return parsed;
     }
 
     private static void requireDetailArguments(
@@ -443,6 +465,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             String status,
             Instant opensAt,
             Instant closesAt,
+            String engineVersion,
             String policyType,
             Integer discountRate,
             Integer maxDiscountAmount,

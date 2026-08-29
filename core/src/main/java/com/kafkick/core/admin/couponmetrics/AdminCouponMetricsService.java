@@ -11,6 +11,7 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.CampaignQueueObservation;
+import com.kafkick.core.admin.stock.AdminStockResolver;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -31,6 +32,7 @@ public class AdminCouponMetricsService {
     private final CouponIssuanceRateReader issuanceRateReader;
     private final AdminQueueObservationSource queueObservationSource;
     private final CouponMetricsCalculator calculator;
+    private final AdminStockResolver stockResolver;
 
     /**
      * 한 요청의 시간과 상세 원천 및 계산을 담당할 협력 객체를 주입받습니다.
@@ -48,11 +50,25 @@ public class AdminCouponMetricsService {
             AdminQueueObservationSource queueObservationSource,
             CouponMetricsCalculator calculator
     ) {
+        this(timeProvider, campaignDataReader, issuanceRateReader, queueObservationSource, calculator,
+                new AdminStockResolver(AdminStockResolver.unavailableV2Reader()));
+    }
+
+    /** 운영 배선에서 Overview와 같은 회차별 재고 원천 선택기를 함께 주입받습니다. */
+    public AdminCouponMetricsService(
+            TimeProvider timeProvider,
+            AdminCampaignDataReader campaignDataReader,
+            CouponIssuanceRateReader issuanceRateReader,
+            AdminQueueObservationSource queueObservationSource,
+            CouponMetricsCalculator calculator,
+            AdminStockResolver stockResolver
+    ) {
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.campaignDataReader = Objects.requireNonNull(campaignDataReader, "campaignDataReader");
         this.issuanceRateReader = Objects.requireNonNull(issuanceRateReader, "issuanceRateReader");
         this.queueObservationSource = Objects.requireNonNull(queueObservationSource, "queueObservationSource");
         this.calculator = Objects.requireNonNull(calculator, "calculator");
+        this.stockResolver = Objects.requireNonNull(stockResolver, "stockResolver");
     }
 
     /**
@@ -68,8 +84,8 @@ public class AdminCouponMetricsService {
         // 한 응답의 모든 원천과 계산 경계가 같도록 현재 시각을 최초 한 번만 읽습니다.
         Instant snapshotAt = timeProvider.instant();
         Instant fromInclusive = snapshotAt.minus(window.duration());
-        AdminCampaignDetailData detail = campaignDataReader.findDetail(
-                couponId, fromInclusive, snapshotAt, snapshotAt);
+        AdminCampaignDetailData detail = stockResolver.resolve(campaignDataReader.findDetail(
+                couponId, fromInclusive, snapshotAt, snapshotAt), snapshotAt);
         if (detail.availability() == DetailAvailability.NOT_FOUND) {
             throw new BusinessException(
                     CommonErrorCode.NOT_FOUND, "상세 지표 캠페인을 찾을 수 없습니다: " + couponId);

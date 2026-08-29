@@ -15,7 +15,7 @@ import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** V1 재고와 O1 발급률을 결합해 O4 소진 예상과 전체 위험을 계산하는 순수 계산기입니다. */
+/** 권위 재고와 O1 발급률을 결합해 O4 소진 예상과 전체 위험을 계산하는 순수 계산기입니다. */
 @Component
 public class StockRiskCalculator {
 
@@ -54,11 +54,6 @@ public class StockRiskCalculator {
             if (input.stockStatus() == SourceStatus.N_A || issuanceStatus == SourceStatus.N_A) {
                 continue;
             }
-            if (input.engineVersion() != EngineVersion.V1) {
-                // 아직 계산 계약이 없는 엔진을 V1 수량식으로 추정하지 않습니다.
-                applicableStatuses.add(SourceStatus.UNAVAILABLE);
-                continue;
-            }
             applicableStatuses.add(aggregateStatus(List.of(input.stockStatus(), issuanceStatus)));
             // 재고와 O1 중 하나라도 값이 없으면 해당 행을 전역 위험 숫자에 부분 반영하지 않습니다.
             if (!input.stockStatus().carriesValue() || !issuanceStatus.carriesValue()) {
@@ -87,16 +82,13 @@ public class StockRiskCalculator {
         return new StockRiskCalculation(forecasts, risk);
     }
 
-    /** V1 재고 수량이 유효할 때만 실제 잔량을 만들고, 적격 O1만 ETA 계산에 사용합니다. */
+    /** 권위 재고 수량이 유효할 때 실제 잔량을 만들고, 적격 O1만 ETA 계산에 사용합니다. */
     private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast> calculateOne(StockInput input) {
         if (!input.stockStatus().carriesValue()) {
             return new AdminOverviewSnapshot.Observation<>(null, input.stockStatus(), null);
         }
-        if (input.engineVersion() != EngineVersion.V1) {
-            return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null);
-        }
         validateQuantity(input.totalQuantity(), input.activeCount());
-        // V1의 활성 수량은 이미 발급된 수량이므로 전체 수량에서 차감해 잔량을 구합니다.
+        // Resolver가 V1 DB active와 V2 Redis 잔량을 모두 같은 '발급 수량' 의미로 정규화했습니다.
         long remaining = input.totalQuantity() - input.activeCount();
         Duration eta = depletionEta(remaining, input.issuanceFlow());
         return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.StockForecast(remaining,
