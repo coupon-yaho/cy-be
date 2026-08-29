@@ -12,7 +12,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
+import com.kafkick.core.admin.stock.AdminStockSnapshot;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관리자 캠페인 DB 조회 경계의 상태·값·시각 계약을 검증합니다. */
@@ -43,6 +45,7 @@ class AdminCampaignDataContractTest {
 
         assertThat(catalog.campaigns()).singleElement().satisfies(data -> {
             assertThat(data.couponId()).isEqualTo(11L);
+            assertThat(data.engineVersion()).isEqualTo(EngineVersion.V2);
             assertThat(data.stock().status()).isEqualTo(SourceStatus.UNAVAILABLE);
             assertThat(data.stock().value()).isNull();
         });
@@ -77,6 +80,7 @@ class AdminCampaignDataContractTest {
         AdminCampaignDetailData unavailable = new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null);
 
         assertThat(available.value().couponId()).isEqualTo(21L);
+        assertThat(available.value().engineVersion()).isEqualTo(EngineVersion.V2);
         assertThat(notFound.value()).isNull();
         assertThat(unavailable.value()).isNull();
         assertThatThrownBy(() -> new AdminCampaignDetailData(DetailAvailability.AVAILABLE, null))
@@ -111,12 +115,26 @@ class AdminCampaignDataContractTest {
                 .doesNotContain("final", "finalStatus", "actionCandidate");
     }
 
+    /** 권위 재고가 계산기에 전달할 수 없는 범위의 수량을 생성 단계에서 거부하는지 검증합니다. */
+    @Test
+    @DisplayName("권위 재고는 양수 전체 수량과 0 이상 전체 이하 잔여 수량만 허용한다")
+    void authoritativeStockRejectsInvalidQuantityRange() {
+        assertThat(new AdminStockSnapshot(100L, 25L).issuedQuantity()).isEqualTo(75L);
+        assertThatThrownBy(() -> new AdminStockSnapshot(0L, 0L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminStockSnapshot(100L, -1L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AdminStockSnapshot(100L, 101L))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static AdminCampaignCatalog.CampaignData campaign(
             long couponId,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock
     ) {
         return new AdminCampaignCatalog.CampaignData(
-                couponId, "캠페인 " + couponId, "브랜드", CouponRoundStatus.SCHEDULED,
+                couponId, "캠페인 " + couponId, "브랜드", EngineVersion.V2,
+                CouponRoundStatus.SCHEDULED,
                 SNAPSHOT_AT.plusSeconds(60), SNAPSHOT_AT.plusSeconds(120), stock,
                 new PreparationSource(null, null, null, SourceStatus.PENDING, null));
     }
@@ -126,6 +144,7 @@ class AdminCampaignDataContractTest {
                 couponId,
                 "캠페인 " + couponId,
                 "브랜드",
+                EngineVersion.V2,
                 new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN, SNAPSHOT_AT.minusSeconds(60)),
                 observed(new CouponMetricsSource.StockCounts(100L, 40L)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(40L, 10L, 3L, 2L)),

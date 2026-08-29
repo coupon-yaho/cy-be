@@ -36,6 +36,7 @@ import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.CampaignQueueObservation;
+import com.kafkick.core.admin.stock.AdminStockResolver;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
@@ -74,6 +75,7 @@ public class AdminOverviewService {
     private final ConsistencyActionCalculator consistencyActionCalculator;
     private final OperationActionCalculator operationActionCalculator;
     private final OverviewStatusCalculator overviewStatusCalculator;
+    private final AdminStockResolver stockResolver;
 
     /**
      * DB 캠페인 원천, 현재 Runtime 설정과 계산 협력 객체를 주입받습니다.
@@ -115,6 +117,35 @@ public class AdminOverviewService {
             OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator
     ) {
+        this(timeProvider, campaignDataReader, runtimeConfigStore, policy, observationSource,
+                queueObservationSource, issuanceFlowCalculator, issuanceActionCalculator,
+                campaignQueueCalculator, customerOutcomeCalculator, stockRiskCalculator,
+                campaignOverviewCalculator, campaignPreparationCalculator, consistencyFinalReader,
+                consistencyActionCalculator, operationActionCalculator, overviewStatusCalculator,
+                new AdminStockResolver(AdminStockResolver.unavailableV2Reader()));
+    }
+
+    /** 운영 배선에서 회차별 DB·Redis 재고 원천 선택기를 함께 주입받습니다. */
+    public AdminOverviewService(
+            TimeProvider timeProvider,
+            AdminCampaignDataReader campaignDataReader,
+            RuntimeConfigStore runtimeConfigStore,
+            OverviewCalculationPolicy policy,
+            OverviewObservationSource observationSource,
+            AdminQueueObservationSource queueObservationSource,
+            IssuanceFlowCalculator issuanceFlowCalculator,
+            IssuanceActionCalculator issuanceActionCalculator,
+            CampaignQueueCalculator campaignQueueCalculator,
+            CustomerOutcomeCalculator customerOutcomeCalculator,
+            StockRiskCalculator stockRiskCalculator,
+            CampaignOverviewCalculator campaignOverviewCalculator,
+            CampaignPreparationCalculator campaignPreparationCalculator,
+            ConsistencyFinalReader consistencyFinalReader,
+            ConsistencyActionCalculator consistencyActionCalculator,
+            OperationActionCalculator operationActionCalculator,
+            OverviewStatusCalculator overviewStatusCalculator,
+            AdminStockResolver stockResolver
+    ) {
         this.timeProvider = timeProvider;
         this.campaignDataReader = Objects.requireNonNull(campaignDataReader, "campaignDataReader");
         this.runtimeConfigStore = Objects.requireNonNull(runtimeConfigStore, "runtimeConfigStore");
@@ -136,6 +167,7 @@ public class AdminOverviewService {
                 consistencyActionCalculator, "consistencyActionCalculator");
         this.operationActionCalculator = Objects.requireNonNull(operationActionCalculator, "operationActionCalculator");
         this.overviewStatusCalculator = Objects.requireNonNull(overviewStatusCalculator, "overviewStatusCalculator");
+        this.stockResolver = Objects.requireNonNull(stockResolver, "stockResolver");
     }
 
     /**
@@ -182,7 +214,8 @@ public class AdminOverviewService {
      */
     public AdminOverviewResult getOverview() {
         Instant snapshotAt = timeProvider.instant();
-        AdminCampaignCatalog catalog = campaignDataReader.loadCatalog(snapshotAt);
+        AdminCampaignCatalog catalog = stockResolver.resolve(
+                campaignDataReader.loadCatalog(snapshotAt), snapshotAt);
         // 현재값과 last-known-good를 섞지 않도록 요청마다 get() 결과 하나만 사용합니다.
         RuntimeConfigSnapshot runtimeConfig = runtimeConfigStore.get();
         List<CampaignOverviewSource> campaigns = campaigns(
@@ -328,7 +361,7 @@ public class AdminOverviewService {
         boolean carriesStock = stockStatus.carriesValue();
         return new CampaignOverviewSource(
                 campaign.couponId(), campaign.campaignName(), campaign.brandName(), campaign.status(),
-                campaign.opensAt(), campaign.closesAt(), runtimeConfig.engineVersion(),
+                campaign.opensAt(), campaign.closesAt(), campaign.engineVersion(),
                 carriesStock ? campaign.stock().value().totalQuantity() : null,
                 carriesStock ? campaign.stock().value().activeCount() : null,
                 carriesStock ? campaign.stock().observedAt() : null,
