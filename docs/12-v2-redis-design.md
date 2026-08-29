@@ -193,6 +193,7 @@ SQL 실행 (buffer pool hit)      ~0.2 ms
 | `cy:v2:issued_ever:{r}` | String | 누적 발급 수. 취소로 줄지 않음 | 수십 B |
 | `cy:v2:issued:{r}` | Hash | field=memberId, value=`"<상태>\|<선점시각>\|<요청토큰>\|<멱등키>"` | ~1MB |
 | `cy:v2:meta:{r}` | Hash | status·openAt·closeAt·gradeMask·totalQuantity | 수백 B |
+| `cy:v2:restore_halt:{r}` | String | 배치 복원이 상한 초과(`-2`)로 거절돼 **그 회차 만료를 멈춘** 표식. `SET NX` · TTL 1h | 수십 B |
 
 동시 OPEN 12회차면 약 12MB. 해시태그 `{r}` 로 묶어 Cluster 로 가도 같은 슬롯에 떨어진다.
 
@@ -543,8 +544,13 @@ D2(동기 INSERT)를 택한 시점에 성공한 발급은 예외 없이 `issuanc
    cy:v2:issued_ever:{r} = 누적 건수         ← 3번과 반드시 함께
 4. cy:v2:stock:{r}      = total_quantity − 활성 건수
    coupon_stocks.active_count = 활성 건수    ← DB_COUNTER_GAP 까지 정리
+4″. cy:v2:restore_halt:{r} UNLINK           ← 재고를 다시 세웠으니 중단을 푼다
 5. cy:v2:meta:{r}       작성                ← 게이트를 마지막에 연다
 ```
+
+4″ 를 빠뜨리면 **재고는 맞는데 그 회차 만료만 TTL(1시간) 동안 계속 멈춘다.** 표식을 지우는
+코드 경로는 워밍업 시딩 하나뿐이라(`RedisIssuanceWarmup`), 이 절차를 손으로 밟는 경우에는
+여기서 지워야 한다.
 
 1·5 가 안전장치다. `meta` 가 없으면 Lua 가 `-9` 를 반환해 그 회차 발급이 전부 503 으로 떨어진다. **재구성 중에는 아무도 낡은 카운터를 볼 수 없고**, 도중에 죽어도 게이트가 닫힌 채 남아 안전하다.
 
