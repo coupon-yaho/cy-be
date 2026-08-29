@@ -377,11 +377,15 @@ class AttemptConsumerKafkaIntegrationTest {
         container.setConcurrency(1);
         CONTAINERS.add(container);
         container.start();
-        // 파티션 배정 전에 발행하면 auto.offset.reset=latest 라 그 건들을 통째로 건너뛴다.
-        // 이 대기가 없으면 테스트가 "소비가 안 됐다" 로 간헐 실패하고, 원인이 코드로 보인다.
-        await().atMost(SETTLE).until(() -> container.isRunning()
-                && container.getAssignedPartitions() != null
-                && !container.getAssignedPartitions().isEmpty());
+        // 모든 파티션이 배정되기 전에 발행하면 auto.offset.reset=latest 라 아직 안 붙은 파티션의
+        // 레코드를 통째로 건너뛴다. 하나라도 배정됐는지만 보면 파티션 0만 붙은 순간 파티션 1에
+        // 발행하는 테스트가 간헐 실패한다.
+        await().atMost(SETTLE).untilAsserted(() -> {
+            assertThat(container.isRunning()).isTrue();
+            assertThat(container.getAssignedPartitions()).containsExactlyInAnyOrder(
+                    new TopicPartition(KafkaTopicConfig.ISSUE_ATTEMPT, 0),
+                    new TopicPartition(KafkaTopicConfig.ISSUE_ATTEMPT, 1));
+        });
     }
 
 
