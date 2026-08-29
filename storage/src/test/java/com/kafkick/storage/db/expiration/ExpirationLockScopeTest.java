@@ -256,7 +256,7 @@ class ExpirationLockScopeTest {
         int[] locks = transaction.execute(status -> {
             adapter.blockedCoupons(AS_OF);
             int afterBlocked = lockedRecordsAnywhere();
-            adapter.countPending(AS_OF, List.of());
+            adapter.countPending(AS_OF, null, List.of());
             return new int[] {afterBlocked, lockedRecordsAnywhere()};
         });
 

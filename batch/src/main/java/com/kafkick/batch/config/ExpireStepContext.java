@@ -2,6 +2,8 @@
 package com.kafkick.batch.config;
 
 import java.util.Arrays;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Optional;
 
@@ -50,6 +52,50 @@ public final class ExpireStepContext {
      * 쓰게 되어, 그 사이 새로 어긋난 회차를 못 보고 <b>같은 자리에서 영원히 죽는다.</b>
      */
     public static final String BLOCKED_COUPONS_KEY = "expire.blockedCoupons";
+
+    /**
+     * <b>이 실행이 끝난 시점의 이력 id 상한.</b> 되읽기가 <i>"이 실행 이후의 변경"</i> 을 빼는
+     * 창으로 쓴다.
+     *
+     * <p><b>시각이 아니라 id 다.</b> {@code created_at} 은 <b>멱등 선점 시각</b>이라
+     * 백데이트되고, {@code committedAt} 은 <b>청크 시작</b> 시각이라 그 청크가 도는 동안
+     * 붙은 이력을 <i>"실행 이후"</i> 로 잘못 뺀다. id 는 {@code INSERT} 시점에 매겨져
+     * <b>백데이트가 없다.</b> 검증도 같은 축을 쓴다
+     * ({@code hasHistoriesAddedAbove(frozenMaxHistoryId, …)}).
+     *
+     * <p>⚠️ <b>그래도 이 경계가 "실행 이후" 를 정확히 가르지는 못한다.</b>
+     * AUTO_INCREMENT 할당 순서와 <b>커밋 순서가 다르기 때문이다.</b> 실측(MySQL 8.4):
+     *
+     * <pre>
+     *   A: INSERT (id=1 할당) … 2초 뒤 COMMIT
+     *   B: INSERT (id=2 할당) 즉시 COMMIT
+     *   그 사이 SELECT MAX(id) → <b>2</b>          ← id=1 은 그 뒤에 커밋된다
+     * </pre>
+     *
+     * 즉 <b>id 를 먼저 받고 경계 읽기 뒤에 커밋하는 취소</b>는 {@code id > 경계} 에 안 걸린다.
+     * 창이 시간 축보다 훨씬 짧을 뿐(선점→커밋이 아니라 INSERT→커밋의 꼬리) <b>0 은 아니고</b>,
+     * 되읽기가 60초마다 다시 세므로 <b>한 건만 새도 다음 만료까지 오탐이 산다.</b>
+     *
+     * <p><b>경계로는 여기까지가 끝이다.</b> 일찍 읽으면 실행 중 변경을 숨기고 늦게 읽으면
+     * 이 경합이 생긴다 — 실행이 순간이 아니라서다. 정말 닫으려면 <b>커밋 순서를 보는 축</b>
+     * (binlog·GTID)이거나, 잡이 자기 결과를 남기는 방식으로 되돌려야 한다(CY-421 이 관측을
+     * 잡 밖으로 옮긴 결정을 되짚는 일이라 별개 티켓이다). 이 티켓이 줄이는 것은
+     * <b>"실행 뒤 되돌아온 취소 전부"에서 "경계를 스치는 취소"로</b>다.
+     *
+     * <p><b>잡이 끝나는 자리에서 한 번 찍는다</b> — 청크마다 찍으면 마지막 청크가 도는
+     * 동안의 이력이 빠진다.
+     *
+     * <p><b>없으면 되읽기가 창을 못 건다.</b> {@code COUNT_PENDING} 이 창 없이 세면,
+     * 실행이 끝난 <b>뒤</b> {@code CANCEL_USE}({@code USED → ISSUED})로 돌아온 행이 새로
+     * 세어진다. 그 회차는 얼린 제외 목록에 없으니 {@code unexplained} 로 들어가고
+     * {@code ExpireLeavesWorkBehind}(critical · channel server)가 뜬다 —
+     * <b>배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.</b>
+     *
+     * <p>형제 {@link #BLOCKED_COUPONS_KEY} 와 같은 이유로 <b>세대를 함께 싣는다.</b>
+     * Step 문맥은 재시작이 그대로 복원하므로, 세대를 안 보면 되읽기가 <b>이전 실행의 창</b>
+     * 으로 지금 실행을 판정한다.
+     */
+    public static final String MAX_HISTORY_ID_KEY = "expire.maxHistoryId";
 
     /** 세대와 목록을 가르는 문자. 회차 id 에도 쉼표에도 안 나온다. */
     public static final String GENERATION_SEPARATOR = "|";
@@ -100,5 +146,37 @@ public final class ExpireStepContext {
         String ids = raw.substring(prefix.length());
         return Optional.of(ids.isEmpty() ? List.of()
                 : Arrays.stream(ids.split(",")).map(Long::valueOf).toList());
+    }
+
+    /**
+     * <b>이 실행이 끝난 시점의 이력 id 상한을 배치 메타에서 꺼낸다.</b> 형제
+     * {@link #blockedFrom} 과 같은 규약이다 — 세대가 안 맞으면 빈 {@code Optional} 이다.
+     *
+     * <p>⚠️ <b>비어 있다고 게이지를 NaN 으로 두지 않는다.</b> 형제 쪽은 그렇게 하는데
+     * 여기는 다르다 — 이 키는 <b>이 티켓이 새로 만든 것</b>이라, 배포 직후 마지막 성공
+     * 실행에는 <b>반드시 없다.</b> NaN 으로 두면 다음 만료(하루 뒤)까지
+     * {@code ExpireMetricsUnknown} 이 계속 울고, 그것은 <b>고치려던 오탐을 다른 오탐으로
+     * 바꾸는 것</b>이다. 그래서 없으면 <b>창 없이</b> 센다 — 지금까지의 동작 그대로이고,
+     * 새 실행이 한 번 돌면 바로 창이 걸린다.
+     */
+    public static Optional<Long> maxHistoryIdFrom(JobExecution jobExecution) {
+        String prefix = jobExecution.getId() + GENERATION_SEPARATOR;
+        return jobExecution.getStepExecutions().stream()
+                .map(step -> maxHistoryIdFor(
+                        step.getExecutionContext().getString(MAX_HISTORY_ID_KEY, ""), prefix))
+                .flatMap(Optional::stream)
+                .findFirst();
+    }
+
+    /** 세대 접두사를 떼고 id 를 읽는다. 형식이 깨졌으면 <b>모른다</b> 로 둔다. */
+    static Optional<Long> maxHistoryIdFor(String raw, String prefix) {
+        if (!raw.startsWith(prefix)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Long.parseLong(raw.substring(prefix.length())));
+        } catch (NumberFormatException exception) {
+            return Optional.empty();
+        }
     }
 }

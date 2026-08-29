@@ -107,6 +107,9 @@ public class ExpireJobConfig {
     /** 근거는 {@link ExpireStepContext#BLOCKED_COUPONS_KEY} 가 진다. 여기는 별칭이다. */
     static final String BLOCKED_COUPONS_KEY = ExpireStepContext.BLOCKED_COUPONS_KEY;
 
+    /** 근거는 {@link ExpireStepContext#MAX_HISTORY_ID_KEY} 가 진다. 여기는 별칭이다. */
+    static final String MAX_HISTORY_ID_KEY = ExpireStepContext.MAX_HISTORY_ID_KEY;
+
     /** 근거는 {@link ExpireStepContext#GENERATION_SEPARATOR} 가 진다. 여기는 별칭이다. */
     private static final String GENERATION_SEPARATOR = ExpireStepContext.GENERATION_SEPARATOR;
 
@@ -244,6 +247,12 @@ public class ExpireJobConfig {
                     ExpireChunk chunk = ExpireChunk.from(
                             expirations.nextCandidates(asOf, afterId, chunkSize, blocked));
                     if (chunk.isEmpty()) {
+                        // **끝나는 자리에서 한 번 찍는다.** 되읽기가 "이 실행 이후의 변경" 을
+                        // 빼는 창이다. 청크마다 찍으면 마지막 청크가 도는 동안 붙은 이력이
+                        // 창 밖으로 밀려 **진짜 남은 일이 숨는다**(봇 리뷰가 짚었다).
+                        // 시각이 아니라 id 인 이유는 ExpireStepContext 가 적는다.
+                        context.putString(MAX_HISTORY_ID_KEY, generation + GENERATION_SEPARATOR
+                                + expirations.latestHistoryId());
                         return RepeatStatus.FINISHED;
                     }
                     // ③ 여기가 이 청크의 첫 쓰기 락이다. 발급·취소가 잠그는 그 행을

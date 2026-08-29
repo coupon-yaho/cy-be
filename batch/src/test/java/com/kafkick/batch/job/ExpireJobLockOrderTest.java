@@ -156,7 +156,12 @@ class ExpireJobLockOrderTest {
                         "appendExpireHistories",
                         "releaseStock",
                         // 후보가 없어 끝난다 — 종료 신호가 만료 0 이 아니라 후보 0 이다
-                        "nextCandidates");
+                        "nextCandidates",
+                        // **락 순서 밖이다.** SELECT MAX(id) 라 아무것도 안 잠그고,
+                        // 마지막 청크가 끝난 뒤에 한 번 돈다. 되읽기가 "이 실행 이후의
+                        // 변경" 을 빼는 창이다(CY-768) — 끝나는 자리에서 찍어야 마지막
+                        // 청크가 도는 동안 붙은 이력이 창 안에 들어온다.
+                        "latestHistoryId");
         // countPending 은 여기 없다 — CY-421 이 관측을 잡 밖의 되읽기로 옮겼다.
         // **잡이 자기 결과를 세지 않는 것이 요지다**: 그 값이 프로세스와 함께 죽으면
         // 만료가 일 1회인 지금 재기동부터 다음 창까지 백로그 감시가 통째로 꺼진다.
