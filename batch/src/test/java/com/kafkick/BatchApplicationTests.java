@@ -57,4 +57,32 @@ class BatchApplicationTests {
                 .isEmpty();
     }
 
+    /**
+     * <b>형제 제외에도 같은 그물을 단다(CY-744).</b> 위 단언은 {@code core.admin} 만 보므로,
+     * 새로 붙인 {@code core.coupon.service} 제외가 풀려도 아무것도 안 깨졌다 —
+     * 이 클래스 자신이 <i>"위 단언만 있을 때는 우연히 통과하고 있었다"</i> 고 적어 둔
+     * 그 실수를 그대로 반복한 것이다.
+     *
+     * <p><b>풀렸을 때의 실패가 조용할 수 있다.</b> 제외가 없으면
+     * {@code IdempotencyExecutionService} 가 {@code coupon.idempotency.*} 를 요구해
+     * 기동이 죽지만, 그건 <b>그 설정이 없을 때</b>뿐이다. 누가 batch 설정에 그 키를 넣는 날
+     * 필터가 풀려도 배치는 뜨고 <b>쓰지도 않을 @Service 열일곱이 매 기동마다 만들어진다.</b>
+     */
+    @Test
+    void startsBatchContextWithoutAnyCouponServiceBean() {
+        List<String> couponServiceBeans = Arrays.stream(context.getBeanDefinitionNames())
+                .filter(name -> {
+                    Class<?> type = context.getType(name);
+                    return type != null
+                            && type.getName().startsWith("com.kafkick.core.coupon.service.");
+                })
+                .toList();
+
+        assertThat(couponServiceBeans)
+                .as("batch 는 core.coupon.service 를 본 코드에서 한 줄도 참조하지 않는다. "
+                        + "만료·회차는 이 저장소에서 Spring Batch 잡이 진다 — "
+                        + "그 패키지의 빈이 여기 있다면 BatchApplication 의 스캔 제외가 풀린 것이다")
+                .isEmpty();
+    }
+
 }

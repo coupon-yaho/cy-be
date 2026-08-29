@@ -1,6 +1,7 @@
 // CORRUPT 스키마 전용 MySQL 컨테이너입니다. JVM 이 하나만 띄웁니다.
 package com.kafkick.storage.db;
 
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -82,5 +83,16 @@ public class CorruptMySqlContainerConfig {
                             + CorruptSchema.locationsOf(environment));
         }
         return beanFactory -> { };
+    }
+
+    /**
+     * 컨텍스트가 뜰 때 앱 표를 비운다. 근거는 {@link AppTableCleaner}.
+     *
+     * <p><b>여기가 특히 중요하다</b> — 이 컨테이너를 쓰는 테스트가 세는 것은 <b>검출 건수</b>라,
+     * 남의 컨텍스트가 남긴 행이 섞이면 누락·오탐이 실행 순서에 따라 달라진다.
+     */
+    @Bean
+    static SmartInitializingSingleton corruptAppTableCleaner(MySQLContainer corruptMySqlContainer) {
+        return AppTableCleaner.of(corruptMySqlContainer);
     }
 }

@@ -32,8 +32,8 @@ dependencies {
     // 고정돼 있어 옮기면 계약이 깨진다. 대신 batch.yml 이 그 포트를 기본으로 안 내보낸다
     // (docs/15 결정 1). 노출 축소가 막는 것은 인터넷뿐이고 compose 네트워크 안은 그대로다.
     implementation 'org.springframework.boot:spring-boot-starter-web'
-    implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    implementation 'io.micrometer:micrometer-registry-prometheus'
+    // actuator·micrometer 는 아래 관측 절에서 선언한다 — micrometer 를 여기서
+    // implementation 으로 두면 컴파일 클래스패스에 올라가 그쪽 runtimeOnly 방어선이 뚫린다.
 
     // 도메인 Gauge(OBS-5)가 Redis 재고 카운터를 읽는다. V1 회차는 Redis 자체가 없어 조회하지
     // 않지만, V2·V3 에서 같은 코드가 그대로 돌아야 하므로 통로는 컴파일 타임에 열어 둔다.

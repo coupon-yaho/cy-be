@@ -132,73 +132,22 @@ public class MySqlContainerConfig {
         return beanFactory -> { };
     }
 
-    /** {@code infra/mysql/initdb/20-obs-account.sh} 에 env 로 건네는 값이다. */
-    private static final String OBSERVATION_USERNAME = "obs";
-
     /**
-     * <b>일부러 까다로운 값이다.</b> 초기화 스크립트가 이 비밀번호를 root 로 도는 SQL 문에
-     * 리터럴로 박으므로, 이스케이프가 한 문자라도 빠지면 <b>컨테이너가 아예 안 뜬다</b> —
-     * 그러면 컨테이너를 쓰는 모든 테스트가 그 자리에서 빨간불이 된다.
-     *
-     * <p>두 문자가 각각 다른 실패를 만든다.
-     * <ul>
-     *   <li>{@code '} — 문자열을 조기에 닫는다. 배가({@code ''})로 막는다</li>
-     *   <li>{@code \} — MySQL 은 {@code NO_BACKSLASH_ESCAPES} 가 꺼진 기본값에서 이 문자를
-     *       이스케이프 문자로 읽는다. 값이 이것으로 <b>끝나면</b> 닫는 따옴표가 escape 되어
-     *       문자열이 다음 줄까지 삼킨다. 실측하면 {@code ERROR 1064} 로 죽는다</li>
-     * </ul>
-     *
-     * <p>그래서 <b>백슬래시가 마지막 문자다.</b> 가운데 두면 그 실패가 재현되지 않아
-     * 이스케이프를 지워도 테스트가 통과한다 — 실제로 그 상태였고, 변이로 확인했다.
-     *
-     * <p>평범한 값(예: {@code "obs"})으로 두면 이스케이프 경로를 아예 타지 않아
-     * <b>이 저장소에 그 회귀를 잡는 그물이 하나도 없게 된다.</b>
+     * <b>단일 출처는 {@link SharedMySqlContainers} 다.</b> 그쪽이 컨테이너 계정을 만들고
+     * 이쪽이 접속 정보를 꽂으므로, 값을 두 곳에 적으면 한쪽만 고치는 날 컨테이너를 쓰는
+     * 모든 테스트가 {@code Access denied} 로 죽는다. 여기서는 참조만 한다.
      */
-    private static final String OBSERVATION_PASSWORD = "o'bs\\";
+    private static final String OBSERVATION_USERNAME = SharedMySqlContainers.OBSERVATION_USERNAME;
+
+    private static final String OBSERVATION_PASSWORD = SharedMySqlContainers.OBSERVATION_PASSWORD;
 
     /** 컨테이너 안에서 양성 목록과 적용 스크립트가 놓이는 자리. */
     private static final String OBS_GRANTS_DIR = "/obs-grants";
 
-    /**
-     * <b>컨텍스트가 뜰 때 앱 테이블을 비운다.</b>
-     *
-     * <p><b>왜 필요해졌나.</b> 이 클래스가 컨테이너를 JVM 소유로 바꾸면서
-     * <i>"컨텍스트 하나 = 빈 DB 하나"</i> 라는 성질이 사라졌다. 배치 쪽 테스트는 그 규율을
-     * 알고 {@code VerificationSeed#clear} 로 스스로 비우지만, <b>합류로 들어온 다른 영역의
-     * 테스트들은 그 규약을 채택한 적이 없다</b> — {@code @DataJpaTest} 는 롤백하므로 자기
-     * 데이터는 안 남기는데, 커밋하는 테스트가 남긴 행({@code brands} id=1,
-     * {@code grades} 'GOLD')과 부딪혀 <b>다음 클래스가 중복키로 죽었다</b>(실측: storage 48건).
-     *
-     * <p>그래서 <b>비우는 책임을 인프라로 올린다.</b> 테스트마다 규율을 요구하는 대신
-     * 컨텍스트가 만들어질 때 한 번 비우면, 그 성질이 원래대로 돌아온다.
-     *
-     * <p>⚠️ <b>테스트가 직렬로 도는 것을 전제한다.</b> 루트 {@code build.gradle} 이
-     * {@code maxParallelForks}·{@code forkEvery} 를 안 켜는 이유를 그 파일이 적고 있다
-     * (JVM 수만큼 컨테이너가 곱해진다). 병렬로 바꾸는 날 이 비우기가 남의 컨텍스트를
-     * 지우므로, 그때는 스키마를 컨텍스트별로 갈라야 한다.
-     *
-     * <p>⚠️ 배치 메타({@code BATCH_*})는 안 건드린다. 그쪽은 {@code BatchMetadata#clear} 가
-     * 지고, 여기서 함께 지우면 잡을 돌리는 테스트가 서로의 실행 이력을 지운다.
-     */
+    /** 컨텍스트가 뜰 때 앱 표를 비운다. 근거·목록·전제는 {@link AppTableCleaner} 에 있다. */
     @Bean
     static SmartInitializingSingleton appTableCleaner(MySQLContainer mySqlContainer) {
-        return () -> {
-            // FK 역순. VerificationSeed.TABLES_IN_DELETE_ORDER 와 같은 순서다 —
-            // 그쪽은 배치 테스트가 쓰고 이쪽은 컨텍스트 기동이 쓴다.
-            executeAsRoot(mySqlContainer, """
-                    SET FOREIGN_KEY_CHECKS = 0;
-                    """ + String.join("", java.util.List.of(
-                            "hourly_stats", "grade_stats", "coupon_stats",
-                            "asof_state", "verification_findings", "expected_findings",
-                            "verification_runs", "idempotency_records", "issuance_usages",
-                            "issuance_histories", "issuances", "coupon_stocks", "coupons",
-                            "coupon_templates", "brands", "members", "grades")
-                    .stream()
-                    .map(table -> "TRUNCATE TABLE " + mySqlContainer.getDatabaseName()
-                            + "." + table + ";")
-                    .toList())
-                    + "SET FOREIGN_KEY_CHECKS = 1;");
-        };
+        return AppTableCleaner.of(mySqlContainer);
     }
 
     /**
@@ -306,20 +255,4 @@ public class MySqlContainerConfig {
         };
     }
 
-    /**
-     * 저장소 루트. 실행 디렉터리가 모듈마다 달라 위로 올라가며 {@code settings.gradle} 로 찾는다 —
-     * api 의 {@code ConfigContractFixture} 가 같은 방식을 쓴다. 상대 경로를 박으면 다른 모듈에서
-     * 돌릴 때 파일을 못 찾아 컨테이너가 안 뜬다.
-     */
-    private static java.nio.file.Path repoRoot() {
-        java.nio.file.Path candidate = java.nio.file.Path.of("").toAbsolutePath();
-        while (candidate != null) {
-            if (java.nio.file.Files.isRegularFile(candidate.resolve("settings.gradle"))) {
-                return candidate;
-            }
-            candidate = candidate.getParent();
-        }
-        throw new IllegalStateException(
-                "저장소 루트를 찾지 못했다. 실행 디렉터리: " + java.nio.file.Path.of("").toAbsolutePath());
-    }
 }

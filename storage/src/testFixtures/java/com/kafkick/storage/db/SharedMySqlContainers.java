@@ -54,6 +54,28 @@ final class SharedMySqlContainers {
     /** 연결 상한의 기본값. {@code build.gradle} 이 컨텍스트 캐시 상한에서 계산해 넘긴다. */
     private static final String MAX_CONNECTIONS_PROPERTY = "test.mysql.maxConnections";
 
+    /**
+     * {@code infra/mysql/initdb/20-obs-account.sh} 에 env 로 건네는 값.
+     *
+     * <p><b>여기 하나뿐이다.</b> 한때 이 파일과 {@code MySqlContainerConfig} 가 같은
+     * 문자열을 각자 적고 있었다 — 한쪽은 컨테이너 계정을 만들고 한쪽은 접속 정보를
+     * 꽂는데, 값이 갈리면 컨테이너를 쓰는 <b>모든</b> 테스트가
+     * {@code Access denied for user 'obs'} 로 죽는다. 실패 메시지가 원인을 안 가리켜서
+     * 이스케이프 문제로 오진하기 딱 좋다.
+     */
+    static final String OBSERVATION_USERNAME = "obs";
+
+    /**
+     * <b>일부러 까다로운 값이다.</b> 두 문자가 각각 다른 실패를 만든다 —
+     * {@code '} 는 문자열을 조기에 닫고(배가로 막는다), {@code \} 는 MySQL 이 기본값에서
+     * 이스케이프 문자로 읽어 <b>값의 마지막 문자면</b> 닫는 따옴표를 먹는다({@code ERROR 1064}).
+     *
+     * <p>그래서 <b>백슬래시가 마지막 문자다.</b> 가운데 두면 그 실패가 재현되지 않아
+     * 이스케이프를 지워도 테스트가 통과한다. 평범한 값으로 두면 이 저장소에 그 회귀를
+     * 잡는 그물이 하나도 없게 된다.
+     */
+    static final String OBSERVATION_PASSWORD = "o'bs\\";
+
     private SharedMySqlContainers() {
     }
 
@@ -202,8 +224,8 @@ final class SharedMySqlContainers {
                         MountableFile.forHostPath(
                                 repoRoot().resolve("infra/mysql/obs-grants"), 0755),
                         "/obs-grants")
-                .withEnv("DB_OBS_USERNAME", "obs")
-                .withEnv("DB_OBS_PASSWORD", "o'bs\\")
+                .withEnv("DB_OBS_USERNAME", OBSERVATION_USERNAME)
+                .withEnv("DB_OBS_PASSWORD", OBSERVATION_PASSWORD)
                 .withUrlParam("serverTimezone", "UTC")
                 .withUrlParam("characterEncoding", "UTF-8")
                 .withUrlParam("useUnicode", "true")

@@ -298,11 +298,12 @@ class DeployedConfigContractTest {
     }
 
     /**
-     * ⚠️ <b>{@code load} 가 아니라 {@code loadAll} 이다.</b> 읽는 대상 중
-     * {@code batch/src/main/resources/application.yml.example} 이 <b>문서 둘</b>이다 —
-     * 뒤 문서는 {@code storage.yml} 을 덮어쓰는 값만 두는 자리이고, batch 쪽
-     * {@code BatchConfigPrecedenceTest} 가 그 배치를 계약으로 지킨다. {@code load} 로 읽으면
-     * <i>"expected a single document in the stream"</i> 로 죽는다(실측, CY-744 합류에서 났다).
+     * ⚠️ <b>{@code load} 가 아니라 {@code loadAll} 이다.</b> batch 의
+     * {@code application.yml.example} 이 한때 <b>문서 둘</b>이었고, {@code load} 로 읽으면
+     * <i>"expected a single document in the stream"</i> 로 죽었다(실측, CY-744 합류).
+     * <b>지금은 단일 문서라 {@code load} 로도 돌지만 되돌리지 않는다</b> — 덮어쓰기 전용
+     * 문서는 이 저장소가 쓰는 관용이라 다시 생길 수 있고, {@code loadAll} 은 단일 문서에서도
+     * 같은 답을 낸다.
      *
      * <p>찾는 키는 <b>앞 문서</b>에 있다. 그래도 문서를 훑는 이유는, 뒤 문서로 옮겨 가도
      * 이 검사가 조용히 못 찾는 대신 계속 답을 내게 하기 위해서다. 같은 파일의

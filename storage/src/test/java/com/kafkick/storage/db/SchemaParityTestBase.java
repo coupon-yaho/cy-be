@@ -259,6 +259,95 @@ abstract class SchemaParityTestBase {
     }
 
     /**
+     * <b>사본이 원본과 바이트 동일한지 본다.</b>
+     *
+     * <p>{@code seed-ddl/README.md} 가 <i>"손으로 고치지 않는다"</i> 로 못 박은 규율인데,
+     * <b>지키는 그물이 없었다.</b> 형제 {@link #accountForEverySeedDdl} 은 <b>파일 이름만</b>
+     * 대조해서, 내용을 고쳐 파리티를 초록으로 만들어도 아무것도 안 걸렸다 —
+     * CY-744 합류에서 실제로 그렇게 했고 리뷰가 잡았다.
+     *
+     * <p><b>왜 이것이 치명적인가.</b> 이 클래스가 증명하기로 한 명제는
+     * <i>"cy-be Flyway 가 만든 최종 상태 == 시드가 만든 최종 상태"</i> 다. 사본을 cy-be 에
+     * 맞춰 고치면 이 검사는 <b>cy-be 를 cy-be 와 비교하는 항등식</b>이 된다. 게이트의
+     * "흔들리지 않는 축" 이 그 등식 위에 서 있다.
+     *
+     * <p><b>고치는 순서는 하나뿐이다</b> — 원본({@code cy-seed/ddl})을 고치고, 그쪽에서
+     * 시드를 다시 돌려 게이트가 성립하는 것을 확인하고, 그 다음에 사본을 덮고 아래 표와
+     * README 의 SHA 를 함께 갱신한다. 표만 고치면 이 검사는 다시 항등식이 된다.
+     */
+    @Test
+    @DisplayName("시드 DDL 사본이 README 가 못박은 리비전과 바이트 동일하다")
+    void seedDdlCopyIsPristine() throws IOException {
+        Map<String, String> actual = new java.util.TreeMap<>();
+        for (Resource resource : new PathMatchingResourcePatternResolver()
+                .getResources("classpath:seed-ddl/*.sql")) {
+            actual.put(resource.getFilename(), sha256(resource));
+        }
+
+        assertThat(actual)
+                .as("사본을 손으로 고치면 이 검사가 cy-be 를 cy-be 와 비교하는 항등식이 된다. "
+                        + "원본(cy-seed/ddl)을 먼저 고치고 거기서 게이트가 성립하는 것을 "
+                        + "확인한 뒤 사본을 덮어라 — README 의 SHA 도 함께 고친다")
+                .containsExactlyInAnyOrderEntriesOf(SEED_DDL_DIGESTS);
+    }
+
+    private static String sha256(Resource resource) throws IOException {
+        try (var in = resource.getInputStream()) {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(in.readAllBytes());
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16))
+                        .append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 이 없는 JVM 은 없다", e);
+        }
+    }
+
+    /** README 5행이 못박은 리비전의 사본 해시. 사본을 갱신하면 함께 고친다. */
+    private static final Map<String, String> SEED_DDL_DIGESTS = Map.ofEntries(
+            Map.entry("00_schema.sql",
+                    "97041c599fdae419c72446aa0b5f205ae93ee3993f655441cc033caaa5f85c34"),
+            Map.entry("10_constraints_common.sql",
+                    "66f3439b9c2ab83b1516649c8f5c61698bc6b889060b6531976e00aef52fca73"),
+            Map.entry("11_constraints_clean.sql",
+                    "3af03f888d7b7684e613501f191ee95fa718d9767f1b922d7942c8b2d983d7fe"),
+            Map.entry("12_constraints_corrupt.sql",
+                    "5d62c1052d4e7f48e4786515e5a7f0efd5ab1efbc615516c802793ede20e1b69"),
+            Map.entry("90_perf_indexes_optional.sql",
+                    "9f3e632a437430877bf4ba18f74b225a9fbc650074a0bbdaa3bb847d15a05bc9"));
+
+    /**
+     * <b>대조에서 뺀 표가 정말 시드 밖인지 기계로 본다.</b>
+     *
+     * <p>형제 {@link #BATCH_METADATA} 는 <i>"사람의 규율에 맡기지 않는다"</i> 며
+     * {@code V11__batch_metadata.sql} 을 파싱해 대조하는데, {@link #OUTSIDE_SEED_DATASET}
+     * 만 사람에게 맡기고 있었다.
+     *
+     * <p><b>위험한 방향만 조용하다.</b> 오타를 내면 그 이름이 아무것도 안 걸러 파리티가
+     * 빨개진다 — 바로 드러난다. 반대로 <b>검증이 읽는 표를 실수로 넣으면</b> 여섯 축
+     * 전부에서 그 표가 사라져 cy-be 에만 있는 컬럼·인덱스가 있어도 초록이 된다.
+     */
+    @Test
+    @DisplayName("대조에서 뺀 표는 시드 DDL 이 만들지 않는 표다")
+    void excludedTablesAreAbsentFromSeedDdl() throws IOException {
+        StringBuilder seedSql = new StringBuilder();
+        for (Resource resource : new PathMatchingResourcePatternResolver()
+                .getResources("classpath:seed-ddl/*.sql")) {
+            seedSql.append(new String(resource.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8)).append('\n');
+        }
+        String sql = seedSql.toString();
+
+        assertThat(OUTSIDE_SEED_DATASET)
+                .as("시드 DDL 이 만드는 표를 여기 넣으면 여섯 축에서 통째로 사라져 "
+                        + "그 표의 스키마 드리프트를 아무도 못 본다")
+                .noneMatch(table -> sql.matches("(?is).*\\b" + table + "\\b.*"));
+    }
+
+    /**
      * <b>목록에 없는 파일은 조용히 무시된다.</b> 시드가 DDL 파일을 하나 더 붓기 시작하면
      * 이 대조가 증명하는 것이 <i>"cy-be = 시드의 전부"</i> 에서 <i>"cy-be = 시드의 일부"</i> 로
      * 바뀌는데, 그것은 부등식이라 어긋남을 못 잡는다. 사람의 규율에 맡기지 않는다.

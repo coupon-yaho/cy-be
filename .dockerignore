@@ -20,9 +20,18 @@ docs/
 **/src/main/resources/storage.yml
 
 # ── 시크릿: .gitignore 와 같은 목록 ──
+#
+# ⚠️ `*.env` 가 없으면 `db.env`·`slack.env` 가 **빌드 컨텍스트에 그대로 들어간다.**
+#    .gitignore 가 커밋은 막아도 docker build 는 로컬 디스크를 컨텍스트로 쓴다 —
+#    위 머리말이 경고한 그 사고다. CY-744 합류에서 .gitignore 만 늘고 여기가 안 늘어
+#    실제로 그 상태였다.
+*.env
+!example.env
 .env
 .env.*
 !.env.example
+application-prod.yml
+application-prod.yaml
 *.jks
 *.p12
 *.pem

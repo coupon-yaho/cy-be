@@ -48,7 +48,7 @@ public record IllegalTransition(long historyId, Reason reason, String expected, 
         return new IllegalTransition(
                 historyId,
                 Reason.NOT_IN_TABLE,
-                name(tracked) + "-" + event.name() + "->?",
+                expectedOf(tracked, event),
                 render(tracked, event, claimed)
         );
     }
@@ -69,6 +69,20 @@ public record IllegalTransition(long historyId, Reason reason, String expected, 
                 "from=" + name(tracked),
                 "from=" + name(claimed)
         );
+    }
+
+    /**
+     * <b>결과가 둘인 사건만 갈래를 적는다.</b> {@code CANCEL_USE} 는 만료 여부에 따라
+     * {@code ISSUED}·{@code EXPIRED} 로 갈리지만 나머지 넷은 여전히 결과가 하나다 —
+     * 전부 {@code ?} 로 뭉개면 오염 유형 4 가 내는 200행의 진단이 통째로 흐려진다.
+     *
+     * <p>판정에는 안 들어간다({@code checksum} 은 {@code (finding_type, target_key)} 만
+     * 쓴다). 사람이 {@code verification_findings} 를 열어 원인을 가릴 때만 쓰인다.
+     */
+    private static String expectedOf(IssuanceStatus from, IssuanceEventType event) {
+        return event == IssuanceEventType.CANCEL_USE
+                ? name(from) + "-CANCEL_USE->ISSUED|EXPIRED"
+                : name(from) + "-" + event.name() + "->?";
     }
 
     private static String render(IssuanceStatus from, IssuanceEventType event, IssuanceStatus to) {

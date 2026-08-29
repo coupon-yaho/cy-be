@@ -3,7 +3,7 @@
 `SchemaParityTest` 가 읽는다. **손으로 고치지 않는다.**
 
 ```
-원본   coupon-yaho/cy-seed-data-generator @ 6ab9fc0  (2026-08-25)  ddl/
+원본   coupon-yaho/cy-seed-data-generator @ a314292  (2026-08-29)  ddl/
 사본   이 디렉터리                                  바이트 동일
 ```
 

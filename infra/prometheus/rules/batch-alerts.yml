@@ -136,8 +136,16 @@ groups:
       # ⚠️ **스케줄러가 꺼진 상황은 뺀다(CY-744).** 그때는 원인이 하나로 확정돼 있는데
       #    이 알림은 갈래 셋을 다 뒤지라고 말한다 — 실제로 그 상태에서 이 알림이
       #    critical 로 울고, 안내문 첫 갈래가 정답이었다(2026-08-29). 그 상황은 아래
-      #    BatchSchedulingDisabled 가 따로 진다. **꺼진 것을 못 보는 것이 아니라
-      #    한 번만 보게 하는 것**이다.
+      #    BatchSchedulingDisabled 가 따로 진다.
+      #
+      # ⚠️⚠️ **`and … == 1` 이 아니라 `unless … == 0` 이다.** 전자로 썼다가 되돌렸다 —
+      #      게이지 **시리즈가 없어지면** `== 1` 이 빈 벡터라 `and` 결과도 비어서
+      #      이 critical 이 통째로 침묵한다(promtool 로 실측했다). 게이지가 0 일 때와
+      #      **없을 때가 관측상 같아진다.** 부재를 메우는 것은
+      #      CouponRoundSwitchMetricMissing(warning) 하나뿐이라, 검증이 며칠 안 돌아도
+      #      페이저가 안 울린다.
+      #      `unless` 는 우변이 비면 좌변을 그대로 통과시킨다 — 게이지가 사라지면
+      #      **원래대로 critical 이 운다.** 꺼져 있을 때만 뺀다는 의도는 그대로다.
       # ⚠️ **스케줄러가 꺼진 채 하루가 지나면 그것 하나만 운다.**
       #
       # 2026-08-29 에 실제로 일어난 일 — 배치가 BATCH_SCHEDULING_ENABLED=false 로 떠서
@@ -180,7 +188,7 @@ groups:
             (time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 90000
             or (cy_batch_last_success_seconds{spring_batch_job_name="expireJob"} - time()) > 60
           )
-          and on(instance, job) (cy_coupon_round_scheduling_enabled == 1)
+          unless on(instance, job) (cy_coupon_round_scheduling_enabled == 0)
         # 나이 갈래는 이미 SLA 만큼 기다린 뒤라 여기서 더 길게 볼 이유가 없다.
         #
         # ⚠️ 스크레이프가 끊긴 갈래는 여기 안 넣는다. 그때 프로메테우스가 이 게이지에
@@ -304,6 +312,7 @@ groups:
       #    근거가 통째로 없어지는 것이라 "며칠 뒤에 알아도 되는" 종류가 아니다 —
       #    그리고 안 돌아도 데이터는 어제 그대로라 **아무도 이상을 못 느낀다.**
       # ⚠️ 만료 쪽과 같은 근거로 스케줄러가 꺼진 상황을 뺀다(CY-744).
+      #    `unless … == 0` 인 이유도 그쪽에 적었다 — 게이지 부재에 안전해야 한다.
       #    ⚠️ 손 트리거로만 도는 운영으로 바꾸는 날 이 조건을 **먼저** 지워야 한다 —
       #       그때는 스케줄러가 꺼진 것이 정상이고 판정 갱신은 여전히 계약이다.
       - alert: VerifyNotSucceeding
@@ -312,7 +321,7 @@ groups:
             (time() - cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"}) > 90000
             or (cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"} - time()) > 60
           )
-          and on(instance, job) (cy_coupon_round_scheduling_enabled == 1)
+          unless on(instance, job) (cy_coupon_round_scheduling_enabled == 0)
         for: 5m
         labels:
           severity: critical
@@ -1062,9 +1071,14 @@ groups:
       #    **이 축에는 여유가 더 붙는다** — SLA 가 재는 END_TIME 과 달리 이쪽은 asOf 라
       #    잡 소요와 expire-pending-refresh-ms(최대 120초)만큼 늘 뒤에 있다.
       - alert: ExpireMetricsBackdated
+        # ⚠️ 형제 둘과 같은 게이트를 받는다(CY-744). 이것이 2026-08-29 에 함께 운
+        #    셋째다 — 스케줄러가 꺼지면 이 게이지도 낡아서 같은 원인으로 또 운다.
         expr: >-
-          (time() - cy_expire_measured_at_seconds) > 90000
-          or (cy_expire_measured_at_seconds - time()) > 60
+          (
+            (time() - cy_expire_measured_at_seconds) > 90000
+            or (cy_expire_measured_at_seconds - time()) > 60
+          )
+          unless on(instance, job) (cy_coupon_round_scheduling_enabled == 0)
         for: 5m
         labels:
           severity: warning

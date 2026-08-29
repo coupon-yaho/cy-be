@@ -1388,6 +1388,10 @@ tests:
         values: '-95000x1600'
       - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="batch"}'
         values: '-95000x1600'
+      # ⚠️ **이것이 2026-08-29 에 함께 운 셋째다.** 입력에 없으면 promtool 은 아무것도
+      #    판정하지 않아서, 이 케이스 이름("하나만 운다")이 증명하는 것이 없어진다.
+      - series: 'cy_expire_measured_at_seconds{instance="batch:9092", job="batch"}'
+        values: '-95000x1600'
     alert_rule_test:
       # for(25h) 를 아직 못 채웠다 — 부하 측정으로 잠깐 끄는 구간은 안 운다.
       - eval_time: 23h
@@ -1418,4 +1422,50 @@ tests:
         exp_alerts: []
       - eval_time: 25h5m
         alertname: VerifyNotSucceeding
+        exp_alerts: []
+      - eval_time: 25h5m
+        alertname: ExpireMetricsBackdated
+        exp_alerts: []
+
+  # ── CY-744 ─────────────────────────────────────────────────────────────────
+  # **게이지가 없어지는 경우를 잠근다.** `and … == 1` 로 썼다가 되돌린 이유다 —
+  # 그 형태는 시리즈가 사라지면 좌변까지 빈 벡터로 만들어 critical 을 침묵시킨다.
+  # `unless … == 0` 은 우변이 비면 좌변을 그대로 통과시킨다.
+  - interval: 1m
+    name: "스케줄러 게이지가 사라져도 SLA critical 은 그대로 운다"
+    input_series:
+      # cy_coupon_round_scheduling_enabled 를 **일부러 안 넣는다.**
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="batch"}'
+        values: '-95000x200'
+      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="batch"}'
+        values: '-95000x200'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: ExpireNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              spring_batch_job_name: expireJob
+              instance: batch:9092
+              job: batch
+            exp_annotations:
+              summary: "만료 배치가 SLA(25시간) 안에 성공하지 못했습니다"
+              description: "갈래가 셋이라 먼저 어느 쪽인지 가른다. **값이 오래됐으면** 배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지, batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다. 검증이 도는 동안 슬롯을 건너뛰는 것도 지연을 만드는데, 그쪽은 로그의 \"만료 슬롯을 건너뜁니다\" WARN 이 답한다. **NaN 이면** 갈래가 셋이다. 먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패다. 안 증가했으면 7일 창(되읽기 질의의 조회 범위) 안에 성공한 실행이 없는 것이고, 8일 넘게 안 돈 경우가 여기다 — BATCH_JOB_EXECUTION 을 직접 조회해 가른다. **미래 시각이면** 원인은 언제나 시간대 설정이다. 드라이버가 쓸 때 쓰는 존과 UNIX_TIMESTAMP 가 읽을 때 쓰는 세션 존이 갈린 것이다 — storage.yml URL 의 serverTimezone(Connector/J 8.0.23+ 에서 connectionTimeZone 의 별칭이다)과 `SELECT @@session.time_zone, @@global.time_zone` 을 함께 본다. 둘이 다르면 그 차이가 그대로 오차다. 과거 방향으로 어긋나면 위 \"값이 오래됐으면\" 갈래로 나오므로, 그쪽을 다 뒤져도 원인이 안 나오면 이 축을 본다."
+      - eval_time: 100m
+        alertname: VerifyNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              dataset: CLEAN
+              scope: FULL
+              instance: batch:9092
+              job: batch
+            exp_annotations:
+              summary: "검증 배치가 SLA(25시간) 안에 CLEAN/FULL 판정을 내지 못했습니다"
+              description: "게이트 판정의 근거가 갱신되지 않고 있습니다. **가장 흔한 원인은 그 슬롯에 발급이 있었던 것입니다** — startRunStep 의 rejectIssuancesUpdatedAfterAsOf 가 asOf 이후 갱신된 발급건을 보면 실행을 죽이고, 만료가 찍은 updated_at 은 지워지지 않으므로 그 asOf 는 영구히 못 씁니다. 배치 로그의 \"검증 배치가 판정을 내지 못했습니다\" 를 먼저 봅니다 — 그 문구가 반복되면 batch.schedule.verify-cron 을 발급이 멈춘 창으로 옮겨야 합니다. 그 문구가 없으면 BATCH_SCHEDULING_ENABLED 가 false 로 떴는지, batch.schedule.verify-cron 이 의도한 값인지 순서대로 봅니다. 판정을 내고도 statsAggregateStep 에서 죽으면 잡은 UNKNOWN 이라 여기 걸립니다 — 그때는 verification_runs 에 verdict 가 있는데 이 게이지만 안 움직입니다. 성공 이력이 아예 없는 상태는 아래 VerifyNeverSucceeded 가 집니다."
+      # 꺼진 것이 아니라 없는 것이므로 이쪽은 안 운다.
+      - eval_time: 100m
+        alertname: BatchSchedulingDisabled
         exp_alerts: []

@@ -52,31 +52,25 @@ ALTER TABLE `coupon_stocks` DROP CHECK `ck_stock_range`;
 -- 정상으로 읽습니다 — 규칙이 틀려도 초록입니다. 위 목록과 같은 이유로 전부 뗍니다.
 --
 --   ck_coupon_stock_active_range   재고 범위(V3) — ck_stock_range 와 같은 축, 이름만 다름
---   ck_coupon_stock_total_positive 총량 양수(V3)
---   ck_coupon_round_time_range     close_at > open_at (V3) — 유형 주입이 창을 뒤집습니다
-ALTER TABLE `coupon_stocks`
-    DROP CHECK `ck_coupon_stock_active_range`,
-    DROP CHECK `ck_coupon_stock_total_positive`;
-
-ALTER TABLE `coupons` DROP CHECK `ck_coupon_round_time_range`;
+--
+-- ⚠️ **다섯을 뺐다가 되돌렸다.** 아래는 CLEAN·CORRUPT 공통이다 — 오염 700건 중
+--    이 제약을 넘어야 하는 주입이 **하나도 없다**(cy-seed/seedgen/corrupt.py 전수 확인):
+--
+--      ck_coupon_stock_total_positive   total_quantity 를 만지는 주입 없음
+--      ck_coupon_round_time_range       open_at·close_at 을 만지는 주입 없음
+--      uk_issuance_usages_active        활성 사용 2건을 심는 유형 없음
+--                                       (유형 3 은 [(t1,t2),(t3,None)], 유형 7 은 [(t1,None)])
+--      uk_issuance_usages_issuance_order order_id 는 사용마다 난수
+--      ck_issuance_usages_cancel_time   canceled_at < used_at 을 심는 유형 없음
+--
+--    필요 없는데 떼면 **오염과 무관한 사고가 CORRUPT 에서만 조용히 통과한다** —
+--    이 파일 머리말이 적은 원칙("여기서 떨어뜨리는 셋이 곧 오염이 물리적으로 가능한
+--    이유")의 반대 방향 실패다.
+ALTER TABLE `coupon_stocks` DROP CHECK `ck_coupon_stock_active_range`;
 
 -- 사용 이력(V8·V9). **uk_issuance_usages_active 가 특히 중요합니다** — 그것이
 -- "발급건 하나에 활성 사용은 하나" 를 DB 로 막는데, 그게 정확히 V5(DOUBLE_USE)가
 -- 검출해야 하는 오염입니다. 남겨 두면 이중 사용을 심을 수가 없습니다.
---
--- ⚠️ active_issuance_id 는 생성 컬럼이라 인덱스를 떼도 컬럼은 남습니다. 남겨 둡니다 —
---    시드 CORRUPT 스키마에도 컬럼은 있고, 지우면 두 스키마의 컬럼 집합이 갈립니다.
--- ⚠️ **대체 인덱스를 먼저 만든다.** uk_issuance_usages_issuance_order 는
---    (issuance_id, order_id) 라 issuance_id FK 가 쓰는 유일한 인덱스이기도 하다 —
---    그냥 떼면 MySQL 이 "Cannot drop index ...: needed in a foreign key constraint" 로
---    막는다(실측). 위 uk_coupon_member 가 같은 이유로 같은 순서를 쓴다.
-CREATE INDEX `issuance_id` ON `issuance_usages` (`issuance_id`);
-
-ALTER TABLE `issuance_usages`
-    DROP INDEX `uk_issuance_usages_active`,
-    DROP INDEX `uk_issuance_usages_issuance_order`,
-    DROP CHECK `ck_issuance_usages_cancel_time`;
-
 -- ⚠️ **상태 어휘 CHECK 두 개는 떼지 않는다.** 한 번 떼려다 되돌렸다 —
 --    "시드 CORRUPT 가 안 건다" 고 적었는데 **확인 안 하고 쓴 것이었다.**
 --    실제로 시드는 그 둘을 10_constraints_common.sql(공통)에 두므로 CORRUPT 에도 있다.
