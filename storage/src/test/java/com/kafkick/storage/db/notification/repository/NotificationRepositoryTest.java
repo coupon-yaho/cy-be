@@ -33,16 +33,22 @@ class NotificationRepositoryTest {
     void staleAttemptSnapshotCannotClaimAfterStatusCyclesBack() {
         Notification pending = repository.save(pending(1L));
         Notification initialSending = pending.startSending(AttemptTrigger.INITIAL, AT);
-        assertThat(repository.saveIfStatus(initialSending, pending.status(), 0)).isTrue();
+        assertThat(repository.saveIfStatus(initialSending, pending.status(), 0, 0)).isTrue();
         Notification storedFailed = initialSending.markFailed(NotifyFailureReason.SEND_TIMEOUT, AT);
-        assertThat(repository.saveIfStatus(storedFailed, initialSending.status(), 1)).isTrue();
+        assertThat(repository.saveIfStatus(storedFailed, initialSending.status(), 1, 0)).isTrue();
 
         Notification firstClaim = storedFailed.startSending(AttemptTrigger.MANUAL, AT);
         Notification staleClaim = storedFailed.startSending(AttemptTrigger.MANUAL, AT);
-        assertThat(repository.saveIfStatus(firstClaim, storedFailed.status(), 1)).isTrue();
-        assertThat(repository.saveIfStatus(firstClaim.markFailed(
-                NotifyFailureReason.SEND_TIMEOUT, AT), firstClaim.status(), 2)).isTrue();
-        assertThat(repository.saveIfStatus(staleClaim, storedFailed.status(), 1)).isFalse();
+        assertThat(repository.saveIfStatus(firstClaim, storedFailed.status(), 1, 0)).isTrue();
+        Notification failedAfterManual = firstClaim.markFailed(
+                NotifyFailureReason.SEND_TIMEOUT, AT);
+        assertThat(repository.saveIfStatus(
+                failedAfterManual, firstClaim.status(), 2, 1)).isTrue();
+        assertThat(repository.saveIfStatus(staleClaim, storedFailed.status(), 1, 0)).isFalse();
+
+        Notification secondManual = failedAfterManual.startSending(AttemptTrigger.MANUAL, AT);
+        assertThat(repository.saveIfStatus(secondManual, failedAfterManual.status(),
+                failedAfterManual.attemptCount(), 0)).isFalse();
     }
 
     @Test
@@ -55,7 +61,7 @@ class NotificationRepositoryTest {
                 .isInstanceOf(IllegalArgumentException.class);
 
         Notification sending = first.startSending(AttemptTrigger.INITIAL, AT);
-        assertThat(repository.saveIfStatus(sending, first.status(), first.attemptCount())).isTrue();
+        assertThat(repository.saveIfStatus(sending, first.status(), first.attemptCount(), first.resendCount())).isTrue();
         assertThat(entityManager.contains(unrelated)).isTrue();
     }
 
@@ -63,9 +69,9 @@ class NotificationRepositoryTest {
     void failureFirstPageSupportsNullCursorAndReturnsNoPiiProjection() {
         Notification pending = repository.save(pending(20L));
         Notification sending = pending.startSending(AttemptTrigger.INITIAL, AT);
-        assertThat(repository.saveIfStatus(sending, pending.status(), 0)).isTrue();
+        assertThat(repository.saveIfStatus(sending, pending.status(), 0, 0)).isTrue();
         Notification failed = sending.markFailed(NotifyFailureReason.SEND_TIMEOUT, AT.plusSeconds(1));
-        assertThat(repository.saveIfStatus(failed, sending.status(), 1)).isTrue();
+        assertThat(repository.saveIfStatus(failed, sending.status(), 1, 0)).isTrue();
         jdbcTemplate.update("UPDATE notifications SET recipient_contact='contact',"
                 + " message_body='message' WHERE id=?", pending.id());
         entityManager.clear();

@@ -48,14 +48,15 @@ public class NotificationRepositoryImpl implements NotificationRepository {
     @Override
     @Transactional
     public boolean saveIfStatus(Notification notification, NotificationStatus expectedStatus,
-            int expectedAttemptCount) {
+            int expectedAttemptCount, int expectedResendCount) {
         int attemptIncrement = notification.attemptCount() - expectedAttemptCount;
         if (attemptIncrement < 0 || attemptIncrement > 1) {
             throw new IllegalArgumentException("시도 횟수는 CAS에서 1만 증가할 수 있습니다.");
         }
         Notification current = findById(notification.id()).orElse(null);
         if (current == null || current.status() != expectedStatus
-                || current.attemptCount() != expectedAttemptCount) {
+                || current.attemptCount() != expectedAttemptCount
+                || current.resendCount() != expectedResendCount) {
             return false;
         }
         int resendIncrement = notification.resendCount() - current.resendCount();
@@ -64,6 +65,7 @@ public class NotificationRepositoryImpl implements NotificationRepository {
         }
         boolean updated = repository.updateIfStatus(
                 toEntity(notification), expectedStatus, expectedAttemptCount,
+                expectedResendCount,
                 attemptIncrement, resendIncrement) == 1;
         entityManager.detach(entityManager.getReference(NotificationEntity.class, notification.id()));
         return updated;

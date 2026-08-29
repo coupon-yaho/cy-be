@@ -16,5 +16,5 @@ public interface NotificationRepository {
     long countByStatusIn(List<NotificationStatus> statuses);
     List<NotificationFailure> findFailuresBeforeId(Long beforeId, int limit);
     boolean saveIfStatus(Notification notification, NotificationStatus expectedStatus,
-            int expectedAttemptCount);
+            int expectedAttemptCount, int expectedResendCount);
 }

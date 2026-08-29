@@ -110,7 +110,9 @@ lease도 두지 않는다(D21).
 - 그룹 `notify-dispatch`, `auto.offset.reset` 은 `KafkaConsumerGroups` 가 정한 값을 그대로 따른다.
 - 수신 시 `notifications` 를 `SENDING` 으로 전이. 이미 `SENT` 면 **아무것도 하지 않고 offset 만 넘긴다**
   (중복 수신 방어).
-- `attempt_seq` 는 이벤트 값과 DB 의 `attempt_count` 를 대조해 결정한다. 어긋나면 오래된 재발행이므로 버린다.
+- 이벤트의 `attempt_seq` 는 해당 발행 명령의 시작 회차다. 최초·수동 발송은 이벤트 값과 DB를
+  대조하고, 자동 재시도는 같은 발행 명령 안에서 DB `attempt_count + 1`을 새 회차로 사용한다.
+  시작 회차 뒤에 다른 `MANUAL` 회차가 있으면 오래된 재발행이므로 버린다.
 - 프로세스 종료 뒤 같은 이벤트가 다시 오면 `SENDING`이고 `attempt_count == attempt_seq`인 경우에만
   재개한다. 이미 완료 attempt가 있으면 다시 발송하지 않고 그 결과로 알림 상태만 수렴한다. 완료
   attempt의 UK가 결과 확정 승자를 정하며, 그 승자만 미터를 올린다.
@@ -124,7 +126,8 @@ lease도 두지 않는다(D21).
 
 ### 5.3 재시도와 DLT (D5·D6)
 
-- `DefaultErrorHandler` + `FixedBackOff` 대신 **`ExponentialBackOffWithMaxRetries(3)`** 로 1s·5s·20s.
+- `DefaultErrorHandler`에 순서가 고정된 `SequenceBackOff(1s, 5s, 20s)`를 연결해
+  최초 발송 뒤 재시도 3회를 수행한다. 최대 호출 수는 총 4회다.
 - 재시도 불가 실패(D4b)는 `addNotRetryableExceptions` 로 즉시 DLT.
 - DLT 파티션은 원본과 같은 6이다(기존 `KafkaTopicConfig` 주석 참조). 건드리지 않는다.
 - **백오프가 컨슈머 스레드를 점유한다.** 최대 26초. 파티션 6 · concurrency 는 6 이하로 유지.

@@ -78,7 +78,7 @@ POST /notifications/{id}/resend
   → 알림 조회             없음        → ADMIN-005 (404)
   → 상태 확인             SENT 등     → ADMIN-006 (409)
   → resend_count 확인     >= 3        → ADMIN-007 (409)
-  → 상태·attempt_seq CAS  선점 실패  → ADMIN-006 (409, 멱등 윈도우 내 중복)
+  → 상태·attempt_seq·resend_count CAS  선점 실패  → ADMIN-006 (409, 멱등 윈도우 내 중복)
   → audit 기록 (accepted/rejected 모두; 선점 전 거부는 attempt_seq null)
   → accepted 이면 outbox(PENDING) 기록
   → notifications: FAILED/DEAD → SENDING, resend_count += 1
@@ -92,7 +92,7 @@ POST /notifications/{id}/resend
 
 발송 전에 `notifications`를
 `FAILED/DEAD → SENDING`으로 조건부 갱신하며 `attempt_count`를 증가시켜 한 요청만 선점한다.
-CAS 술어는 상태와 읽은 `attempt_count`를 둘 다 비교한다.
+CAS 술어는 상태와 읽은 `attempt_count`, `resend_count`를 모두 비교한다.
 `notification_attempts.uk_attempts_notification_seq`는 발송이 끝난 뒤 같은 시도 결과가 두 번
 적재되는 것을 막는 2차 방어선이다. 결과·종료 시각이 `NOT NULL`인 append-only 행이므로
 발송 전 선점용으로 쓰지 않는다.

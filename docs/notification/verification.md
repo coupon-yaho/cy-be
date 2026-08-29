@@ -26,7 +26,7 @@
 |---|---|---|---|
 | 1 | 발급 → 발송 성공 | `SENT`, attempts 1행 SUCCESS, meter success 1 | T2 |
 | 2 | 타임아웃 2회 후 성공 | `SENT`, attempts 3행, meter success **1** | T2 |
-| 3 | 타임아웃 3회 소진 | `DEAD`, DLT 1건, meter failure 1 | T2 |
+| 3 | 최초 발송과 재시도 3회가 모두 타임아웃 | `DEAD`, attempts 4행, DLT 1건, meter failure 1 | T2 |
 | 4 | INVALID_RECIPIENT | 즉시 `DEAD`, 백오프 없음, DLT 1건 | T2 |
 | 5 | 발송 실패 시 발급 트랜잭션 | 롤백 안 됨 | T2 |
 | 6 | 같은 이벤트 2회 수신 | 알림 1건, 시도 1행 | T2 |
