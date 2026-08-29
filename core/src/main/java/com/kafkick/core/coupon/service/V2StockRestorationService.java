@@ -198,6 +198,9 @@ public class V2StockRestorationService {
             // 취소 경로(api)에는 폴백을 읽는 쪽이 없어 그 회차가 멈춘 사실이 통째로 사라진다.
             try {
                 haltStore.halt(couponRoundId);
+                // 최초 성공 경로와 같은 보장을 준다. 여기만 빠뜨리면 직후 읽기가 실패했을 때
+                // 남은 청크가 전부 돈다 — 세 경로 중 하나만 구멍이 난다.
+                locallyHalted.add(couponRoundId);
                 log.warn("복원 중단 표식을 재시도로 남겼습니다. couponRoundId={}", couponRoundId);
                 return;
             } catch (RuntimeException second) {

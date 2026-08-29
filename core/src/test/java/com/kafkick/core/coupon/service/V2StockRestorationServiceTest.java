@@ -517,6 +517,28 @@ class V2StockRestorationServiceTest {
                 .isTrue();
     }
 
+    /**
+     * 재시도로 표식을 남긴 경로도 <b>최초 성공 경로와 같은 보장</b>을 줘야 한다. 여기서만
+     * 로컬 기억을 빠뜨리면, 직후 읽기가 실패했을 때 {@code -2} 를 이미 본 회차인데 남은
+     * 청크가 전부 돈다 — 세 경로 중 하나만 구멍이 나 있는 형태다.
+     */
+    @Test
+    void remembersTheRoundWhenTheMarkNeededARetry() {
+        RestorationHaltStore flaky = mock(RestorationHaltStore.class);
+        org.mockito.Mockito.doThrow(new IllegalStateException("redis down"))
+                .doNothing()
+                .when(flaky).halt(10L);
+        when(haltStoreProvider.getIfAvailable()).thenReturn(flaky);
+        haltOnce();
+        verify(flaky, org.mockito.Mockito.times(2)).halt(10L);
+
+        when(flaky.isHalted(10L)).thenThrow(new IllegalStateException("redis down"));
+
+        assertThat(service.isRestorationHalted(10L))
+                .as("재시도로 남긴 표식도 이 실행 동안은 로컬로 안다")
+                .isTrue();
+    }
+
     private void haltOnce() {
         when(definitions.findById(10L)).thenReturn(Optional.of(
                 new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2)));

@@ -159,11 +159,21 @@ class CouponUseRepositoryTest {
     }
 
     private V2StockRestorationService restorationService() {
-        @SuppressWarnings("unchecked")
-        org.springframework.beans.factory.ObjectProvider<
-                com.kafkick.core.coupon.v2.port.IssuanceGatePort> gateProvider =
-                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
-        return new V2StockRestorationService(issuanceDefinitions, gateProvider);
+        return new V2StockRestorationService(
+                issuanceDefinitions,
+                emptyProvider(),
+                emptyProvider(),
+                emptyProvider());
+    }
+
+    /**
+     * 이 테스트의 회차는 V1 이라 게이트·표식·계측 중 어느 것도 해석되지 않는다. 빈 provider 로
+     * 두면 조립이 그 사실을 드러낸다 — 실물을 물리면 V1 경로가 Redis 를 건드리게 된 변경이
+     * 여기서 안 잡힌다.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> org.springframework.beans.factory.ObjectProvider<T> emptyProvider() {
+        return org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
     }
 
     @AfterEach
