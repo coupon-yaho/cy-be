@@ -44,7 +44,8 @@ class NotificationCasConcurrencyTest {
             var tasks = List.of(1, 2).stream().map(ignored -> executor.submit(() -> {
                 ready.countDown();
                 start.await();
-                return repository.saveIfStatus(sending, pending.status(), pending.attemptCount());
+                return repository.saveIfStatus(sending, pending.status(), pending.attemptCount(),
+                        pending.resendCount());
             })).toList();
             ready.await();
             start.countDown();

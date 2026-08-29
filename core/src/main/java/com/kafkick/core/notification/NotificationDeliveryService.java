@@ -21,11 +21,14 @@ public class NotificationDeliveryService {
 
     private final NotificationRepository notifications;
     private final NotificationAttemptRepository attempts;
+    private final NotificationOutboxRepository outboxes;
 
     public NotificationDeliveryService(NotificationRepository notifications,
-            NotificationAttemptRepository attempts) {
+            NotificationAttemptRepository attempts,
+            NotificationOutboxRepository outboxes) {
         this.notifications = Objects.requireNonNull(notifications, "notifications");
         this.attempts = Objects.requireNonNull(attempts, "attempts");
+        this.outboxes = Objects.requireNonNull(outboxes, "outboxes");
     }
 
     @Transactional
@@ -61,9 +64,15 @@ public class NotificationDeliveryService {
             if (currentAttemptCompleted) {
                 return NotificationDeliveryDecision.acknowledge();
             }
+            AttemptTrigger currentTrigger = currentAttemptTrigger(current);
+            if (currentTrigger == AttemptTrigger.MANUAL
+                    && (event.attemptSeq() != current.attemptCount()
+                        || event.trigger() != AttemptTrigger.MANUAL)) {
+                // 이전 계보의 지연 이벤트가 현재 MANUAL 시도를 대신 발송하지 못하게 ACK 후 폐기한다.
+                return NotificationDeliveryDecision.acknowledge();
+            }
             return NotificationDeliveryDecision.send(current.resumeSending(current.attemptCount(), at),
-                    event.attemptSeq(), current.attemptCount(),
-                    current.attemptCount() == event.attemptSeq() ? event.trigger() : AttemptTrigger.AUTO);
+                    event.attemptSeq(), current.attemptCount(), currentTrigger);
         }
         if (current.status() == NotificationStatus.FAILED
                 && current.lastFailureReason() != null
@@ -78,7 +87,7 @@ public class NotificationDeliveryService {
     private NotificationDeliveryDecision claim(Notification current, Notification sending,
             int baseAttemptSeq, AttemptTrigger trigger) {
         boolean won = notifications.saveIfStatus(
-                sending, current.status(), current.attemptCount());
+                sending, current.status(), current.attemptCount(), current.resendCount());
         if (!won) {
             return NotificationDeliveryDecision.acknowledge();
         }
@@ -111,6 +120,13 @@ public class NotificationDeliveryService {
         return true;
     }
 
+    private AttemptTrigger currentAttemptTrigger(Notification current) {
+        return outboxes.findTriggerByNotificationIdAndAttemptSeq(
+                current.id(), current.attemptCount())
+                .orElse(current.attemptCount() == 1
+                        ? AttemptTrigger.INITIAL : AttemptTrigger.AUTO);
+    }
+
     @Transactional
     public boolean completeSuccess(NotificationDeliveryDecision decision,
             Instant startedAt, Instant finishedAt) {
@@ -123,7 +139,7 @@ public class NotificationDeliveryService {
         }
         Notification sent = decision.notification().markSent(finishedAt);
         if (!notifications.saveIfStatus(sent, NotificationStatus.SENDING,
-                decision.attemptSeq())) {
+                decision.attemptSeq(), decision.notification().resendCount())) {
             throw new IllegalStateException("완료 attempt 승자가 알림 성공 상태를 확정하지 못했습니다.");
         }
         return true;
@@ -146,7 +162,7 @@ public class NotificationDeliveryService {
                 ? decision.notification().markDead(reason, finishedAt)
                 : decision.notification().markFailed(reason, finishedAt);
         if (!notifications.saveIfStatus(next, NotificationStatus.SENDING,
-                decision.attemptSeq())) {
+                decision.attemptSeq(), decision.notification().resendCount())) {
             throw new IllegalStateException("완료 attempt 승자가 알림 실패 상태를 확정하지 못했습니다.");
         }
         return terminal ? FailureOutcome.TERMINAL : FailureOutcome.RETRY;

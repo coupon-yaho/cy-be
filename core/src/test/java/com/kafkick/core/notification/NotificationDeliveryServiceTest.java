@@ -31,11 +31,12 @@ class NotificationDeliveryServiceTest {
 
     @Mock NotificationRepository notifications;
     @Mock NotificationAttemptRepository attempts;
+    @Mock NotificationOutboxRepository outboxes;
     private NotificationDeliveryService service;
 
     @BeforeEach
     void setUp() {
-        service = new NotificationDeliveryService(notifications, attempts);
+        service = new NotificationDeliveryService(notifications, attempts, outboxes);
     }
 
     @Test
@@ -43,7 +44,7 @@ class NotificationDeliveryServiceTest {
         Notification pending = pending();
         when(notifications.findById(41L)).thenReturn(Optional.of(pending));
         when(attempts.findByNotificationId(41L)).thenReturn(List.of());
-        when(notifications.saveIfStatus(any(), any(), any(Integer.class))).thenReturn(true);
+        when(notifications.saveIfStatus(any(), any(), any(Integer.class), any(Integer.class))).thenReturn(true);
 
         NotificationDeliveryDecision decision = service.prepare(event(1, AttemptTrigger.INITIAL), AT);
 
@@ -60,7 +61,7 @@ class NotificationDeliveryServiceTest {
         NotificationAttempt first = failedAttempt(1, AttemptTrigger.INITIAL);
         when(notifications.findById(41L)).thenReturn(Optional.of(failed));
         when(attempts.findByNotificationId(41L)).thenReturn(List.of(first));
-        when(notifications.saveIfStatus(any(), any(), any(Integer.class))).thenReturn(true);
+        when(notifications.saveIfStatus(any(), any(), any(Integer.class), any(Integer.class))).thenReturn(true);
 
         NotificationDeliveryDecision decision = service.prepare(event(1, AttemptTrigger.INITIAL), AT.plusSeconds(2));
 
@@ -84,6 +85,47 @@ class NotificationDeliveryServiceTest {
     }
 
     @Test
+    void delayedInitialEventCannotResumeInFlightManualAttempt() {
+        Notification manualSending = new Notification(41L, 10L, 20L, 100L,
+                Notification.DEFAULT_CHANNEL, NotificationStatus.SENDING, 5, 1, null,
+                "member:20", "coupon-issued:100", AT, AT, null, AT);
+        when(notifications.findById(41L)).thenReturn(Optional.of(manualSending));
+        when(attempts.findByNotificationId(41L)).thenReturn(List.of(
+                failedAttempt(1, AttemptTrigger.INITIAL),
+                failedAttempt(2, AttemptTrigger.AUTO),
+                failedAttempt(3, AttemptTrigger.AUTO),
+                failedAttempt(4, AttemptTrigger.AUTO)));
+        when(outboxes.findTriggerByNotificationIdAndAttemptSeq(41L, 5))
+                .thenReturn(Optional.of(AttemptTrigger.MANUAL));
+
+        NotificationDeliveryDecision decision = service.prepare(
+                event(1, AttemptTrigger.INITIAL), AT.plusSeconds(2));
+
+        assertThat(decision.action()).isEqualTo(Action.ACKNOWLEDGE);
+    }
+
+    @Test
+    void delayedRefundedManualEventCannotResumeNextManualAttempt() {
+        Notification manualSending = new Notification(41L, 10L, 20L, 100L,
+                Notification.DEFAULT_CHANNEL, NotificationStatus.SENDING, 6, 1, null,
+                "member:20", "coupon-issued:100", AT, AT, null, AT);
+        when(notifications.findById(41L)).thenReturn(Optional.of(manualSending));
+        when(attempts.findByNotificationId(41L)).thenReturn(List.of(
+                failedAttempt(1, AttemptTrigger.INITIAL),
+                failedAttempt(2, AttemptTrigger.AUTO),
+                failedAttempt(3, AttemptTrigger.AUTO),
+                failedAttempt(4, AttemptTrigger.AUTO),
+                failedAttempt(5, AttemptTrigger.MANUAL)));
+        when(outboxes.findTriggerByNotificationIdAndAttemptSeq(41L, 6))
+                .thenReturn(Optional.of(AttemptTrigger.MANUAL));
+
+        NotificationDeliveryDecision decision = service.prepare(
+                event(5, AttemptTrigger.MANUAL), AT.plusSeconds(2));
+
+        assertThat(decision.action()).isEqualTo(Action.ACKNOWLEDGE);
+    }
+
+    @Test
     void completedCurrentAttemptIsAcknowledgedWithoutAnotherSenderCall() {
         Notification sending = pending().startSending(AttemptTrigger.INITIAL, AT);
         when(notifications.findById(41L)).thenReturn(Optional.of(sending));
@@ -102,7 +144,7 @@ class NotificationDeliveryServiceTest {
         NotificationDeliveryDecision decision = NotificationDeliveryDecision.send(sending, 1,
                 1, AttemptTrigger.INITIAL);
         when(attempts.saveIfAbsent(any())).thenReturn(true);
-        when(notifications.saveIfStatus(any(), any(), any(Integer.class))).thenReturn(true);
+        when(notifications.saveIfStatus(any(), any(), any(Integer.class), any(Integer.class))).thenReturn(true);
 
         boolean won = service.completeSuccess(decision, AT, AT.plusSeconds(1));
 
@@ -110,7 +152,7 @@ class NotificationDeliveryServiceTest {
         ArgumentCaptor<Notification> next = ArgumentCaptor.forClass(Notification.class);
         verify(notifications).saveIfStatus(next.capture(),
                 org.mockito.ArgumentMatchers.eq(NotificationStatus.SENDING),
-                org.mockito.ArgumentMatchers.eq(1));
+                org.mockito.ArgumentMatchers.eq(1), org.mockito.ArgumentMatchers.eq(0));
         assertThat(next.getValue().status()).isEqualTo(NotificationStatus.SENT);
     }
 
@@ -118,7 +160,7 @@ class NotificationDeliveryServiceTest {
     void fourthFailureIsTerminalAndEarlierFailureRetries() {
         Notification firstSending = pending().startSending(AttemptTrigger.INITIAL, AT);
         when(attempts.saveIfAbsent(any())).thenReturn(true);
-        when(notifications.saveIfStatus(any(), any(), any(Integer.class))).thenReturn(true);
+        when(notifications.saveIfStatus(any(), any(), any(Integer.class), any(Integer.class))).thenReturn(true);
 
         FailureOutcome first = service.completeFailure(
                 NotificationDeliveryDecision.send(firstSending, 1, 1, AttemptTrigger.INITIAL),

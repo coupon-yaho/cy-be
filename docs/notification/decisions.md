@@ -14,10 +14,10 @@
 | D3 | 재발송 표현 | 상태 되돌림이 아니라 `notification_attempts` **새 행**. `notifications` 는 최종 상태만 보유 |
 | D4 | 재시도 가능 실패 | 타임아웃 · 5xx · 커넥션 오류 |
 | D4b | 재시도 불가 실패 | 잘못된 수신자 · 4xx · 직렬화 실패 → 즉시 `DEAD` |
-| D5 | 자동 재시도 | 3회 / 백오프 1s · 5s · 20s (`DefaultErrorHandler`) |
+| D5 | 자동 재시도 | 최초 발송 1회 + 재시도 최대 3회(총 4회 호출) / 백오프 1s · 5s · 20s (`DefaultErrorHandler`) |
 | D6 | DLT 이동 | 재시도 소진 또는 재시도 불가 실패 → `coupon.notify.DLT` |
 | D7 | DLT 재처리 | **자동 소비자 없음.** `KafkaConsumerGroups.DLT_REPROCESS` 는 이번 범위 미사용. 복구는 수동 재발송 경로로만 |
-| D8 | 수동 재발송 | 알림당 최대 3회, 멱등 윈도우 10분. `status + attempt_count` CAS로 선점하고 `notification_attempts` UK로 완료 중복을 막는다 |
+| D8 | 수동 재발송 | 알림당 최대 3회, 멱등 윈도우 10분. `status + attempt_count + resend_count` CAS로 선점하고 `notification_attempts` UK로 완료 중복을 막는다 |
 | D9 | 재발송 가능 상태 | `FAILED` · `DEAD` 만. `SENT` · `SENDING` · `PENDING` 은 409 |
 | D10 | PII | 프로토타입은 연락처·본문을 평문으로 저장한다. 관리자 응답 DTO와 로그에는 원문 필드가 없다 |
 | D11 | 보관기간 | 알림·시도 90일, 감사 1년. **정리 배치는 범위 밖** (문서로만 남긴다) |

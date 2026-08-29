@@ -46,6 +46,8 @@ class NotificationOutboxRepositoryTest {
         NotificationOutbox saved = repository.save(NotificationOutbox.pending(
                 1L, 1, AttemptTrigger.INITIAL, AT));
         assertThat(saved.createdAt()).isEqualTo(AT);
+        assertThat(repository.findTriggerByNotificationIdAndAttemptSeq(1L, 1))
+                .contains(AttemptTrigger.INITIAL);
         var claim = repository.claimNext(Duration.ofMinutes(1)).orElseThrow();
         assertThat(claim.outboxId()).isEqualTo(saved.id());
         assertThat(claim.requestedAt()).isEqualTo(AT);

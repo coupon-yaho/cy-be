@@ -18,6 +18,10 @@ import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.notification.NotificationFailurePage;
 import com.kafkick.core.notification.NotificationQueryService;
 import com.kafkick.core.notification.NotificationSummary;
+import com.kafkick.core.notification.NotificationResendResult;
+import com.kafkick.core.notification.NotificationResendService;
+import com.kafkick.core.notification.NotificationResendRejectedException;
+import com.kafkick.core.notification.NotificationResendRejection;
 import com.kafkick.core.notification.NotificationSummary.Metric;
 import com.kafkick.core.notification.domain.NotificationFailure;
 import com.kafkick.core.notification.domain.NotifyFailureReason;
@@ -28,18 +32,24 @@ class AdminNotificationControllerTest {
 
     private static final Instant AT = Instant.parse("2026-08-29T00:00:00Z");
     private final NotificationQueryService queryService = org.mockito.Mockito.mock(NotificationQueryService.class);
+    private final NotificationResendService resendService = org.mockito.Mockito.mock(NotificationResendService.class);
     private final NotificationFailureCursorCodec cursorCodec = new NotificationFailureCursorCodec();
 
     private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(
-            new AdminNotificationController(queryService, cursorCodec));
+            new AdminNotificationController(queryService, cursorCodec, resendService));
 
-    /** 유효한 재발송 요청이 가짜 성공하지 않고 ADMIN-001을 반환하는지 검증합니다. */
+    /** 접수된 재발송 요청이 완료가 아닌 202 접수 응답을 반환하는지 검증합니다. */
     @Test
-    @DisplayName("알림 재발송은 POST 유효 요청에 ADMIN-001 선구축 오류를 반환한다")
-    void resendReturnsNotImplementedEnvelope() throws Exception {
+    @DisplayName("알림 재발송은 POST 유효 요청에 202 접수 응답을 반환한다")
+    void resendReturnsAcceptedEnvelope() throws Exception {
+        when(resendService.resend(1L, 812934L))
+                .thenReturn(new NotificationResendResult(1L, 2, AT));
+
         mockMvc.perform(post("/api/v1/admin/notifications/{notificationId}/resend", 1L))
-                .andExpect(status().isNotImplemented())
-                .andExpect(jsonPath("$.error.code").value("ADMIN-001"));
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.notificationId").value(1))
+                .andExpect(jsonPath("$.data.requestStatus").value("ACCEPTED"))
+                .andExpect(jsonPath("$.data.requestedAt").value("2026-08-29T00:00:00Z"));
     }
 
     /** 재발송 대상 알림 식별자가 0 이하이면 400으로 거부되는지 검증합니다. */
@@ -79,6 +89,29 @@ class AdminNotificationControllerTest {
                         .param("beforeCursor", "not-base64*"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+    }
+
+    @Test
+    void mapsCoreResendRejectionsToAdminCodes() throws Exception {
+        when(resendService.resend(5L, 812934L))
+                .thenThrow(new NotificationResendRejectedException(
+                        NotificationResendRejection.NOT_FOUND));
+        when(resendService.resend(6L, 812934L))
+                .thenThrow(new NotificationResendRejectedException(
+                        NotificationResendRejection.CONFLICT));
+        when(resendService.resend(7L, 812934L))
+                .thenThrow(new NotificationResendRejectedException(
+                        NotificationResendRejection.LIMIT_EXCEEDED));
+
+        mockMvc.perform(post("/api/v1/admin/notifications/{id}/resend", 5L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-005"));
+        mockMvc.perform(post("/api/v1/admin/notifications/{id}/resend", 6L))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-006"));
+        mockMvc.perform(post("/api/v1/admin/notifications/{id}/resend", 7L))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("ADMIN-007"));
     }
 
     private static NotificationSummary validSummary() {

@@ -51,10 +51,12 @@ interface NotificationJpaRepository extends JpaRepository<NotificationEntity, Lo
              WHERE notification.id = :#{#next.id}
                AND notification.status = :expected
                AND notification.attemptCount = :expectedAttemptCount
+               AND notification.resendCount = :expectedResendCount
             """)
     int updateIfStatus(@Param("next") NotificationEntity next,
             @Param("expected") NotificationStatus expected,
             @Param("expectedAttemptCount") int expectedAttemptCount,
+            @Param("expectedResendCount") int expectedResendCount,
             @Param("attemptIncrement") int attemptIncrement,
             @Param("resendIncrement") int resendIncrement);
 }

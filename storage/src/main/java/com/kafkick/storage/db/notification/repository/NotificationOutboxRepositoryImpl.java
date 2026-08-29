@@ -49,6 +49,13 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     }
 
     @Override
+    public Optional<AttemptTrigger> findTriggerByNotificationIdAndAttemptSeq(
+            Long notificationId, int attemptSeq) {
+        return repository.findByNotificationIdAndAttemptSeq(notificationId, attemptSeq)
+                .map(NotificationOutboxEntity::getTrigger);
+    }
+
+    @Override
     public Optional<NotificationOutboxClaim> claimNext(Duration lease) {
         long leaseSeconds = durationSeconds(lease, true, "outbox lease");
         try {

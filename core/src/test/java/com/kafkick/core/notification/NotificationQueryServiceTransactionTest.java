@@ -118,7 +118,7 @@ class NotificationQueryServiceTransactionTest {
 
         @Override
         public boolean saveIfStatus(Notification notification, NotificationStatus expectedStatus,
-                int expectedAttemptCount) {
+                int expectedAttemptCount, int expectedResendCount) {
             throw new UnsupportedOperationException();
         }
     }
