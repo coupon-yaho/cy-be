@@ -42,14 +42,26 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
      * {@code ORDER BY} 에 {@code id} 를 넣는 것이 타이브레이커다.
      * 같은 {@code created_at} 이 여럿이면 이것 없이는 실행마다 순서가 달라져
      * 접은 결과가 흔들린다.
+     *
+     * <p><b>{@code INNER JOIN} 이라 고아 이력이 빠지는데, 그런 행은 물리적으로 없다.</b>
+     * {@code issuance_histories.issuance_id → issuances.id} FK 가
+     * <b>세 스키마 전부</b>에 살아 있다 — cy-be {@code V1__init_schema.sql:643} ·
+     * 시드 {@code 10_constraints_common.sql:50} · CORRUPT
+     * ({@code V9999999999__drop_clean_only_constraints.sql} 이 이 FK 를 안 뗀다).
+     * 고아 이력은 애초에 <b>검증 대상이 아니다</b>(설계 §검증 금지) — 오염셋도 안 심는다.
+     * FK 를 떼는 날 이 조인은 {@code LEFT JOIN} 이어야 하고, 그러면
+     * {@code expires_at} 이 {@code null} 로 와 {@code HistoryReplay.settledOutcome} 이
+     * 판정을 포기한다(그쪽이 {@code null} 을 이미 그렇게 다룬다).
      */
     private static final String SELECT_RANGE = """
-            SELECT id, issuance_id, event_type, from_status, to_status, created_at
-              FROM issuance_histories
-             WHERE issuance_id BETWEEN :fromIssuanceId AND :toIssuanceId
-               AND id <= :maxHistoryId
-               AND created_at <= :asOf
-             ORDER BY issuance_id, created_at, id
+            SELECT h.id, h.issuance_id, h.event_type, h.from_status, h.to_status,
+                   h.created_at, i.expires_at
+              FROM issuance_histories h
+              JOIN issuances i ON i.id = h.issuance_id
+             WHERE h.issuance_id BETWEEN :fromIssuanceId AND :toIssuanceId
+               AND h.id <= :maxHistoryId
+               AND h.created_at <= :asOf
+             ORDER BY h.issuance_id, h.created_at, h.id
             """;
 
     private static final RowMapper<IssuanceHistoryRecord> ROW_MAPPER =
@@ -59,7 +71,8 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
                     IssuanceEventType.valueOf(rs.getString("event_type")),
                     toEnum(rs.getString("from_status"), IssuanceStatus::valueOf),
                     IssuanceStatus.valueOf(rs.getString("to_status")),
-                    rs.getObject("created_at", LocalDateTime.class)
+                    rs.getObject("created_at", LocalDateTime.class),
+                    rs.getObject("expires_at", LocalDateTime.class)
             );
 
     private final JdbcClient jdbcClient;

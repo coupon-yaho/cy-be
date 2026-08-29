@@ -16,6 +16,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -291,6 +293,37 @@ abstract class SchemaParityTestBase {
                 .containsExactlyInAnyOrderEntriesOf(SEED_DDL_DIGESTS);
     }
 
+    /**
+     * <b>사본이 온 곳을 한 번만 적게 만든다.</b> 리비전은 README 표와
+     * {@link #SEED_DDL_REVISION} 두 군데에 적히는데, 둘의 쓰임이 달라 한쪽으로 합칠 수가
+     * 없다 — README 쪽은 <b>사람이 갱신 스크립트에 붙여 넣는 값</b>이고 상수 쪽은
+     * 아래 해시가 <b>어느 시점 것인지</b>를 말한다. 그러면 남는 수는 <b>어긋남을 잡는 것</b>이다.
+     *
+     * <p><b>왜 그물이 필요한가.</b> 사본 갱신은 세 손질이 한 묶음이다 — 파일을 덮고,
+     * 해시를 고치고, README 의 SHA 를 고친다. 앞의 둘만 하면 {@link #seedDdlCopyIsPristine}
+     * 은 <b>초록으로 통과</b>한다(사본과 해시가 서로 맞으니까). 그런데 README 는 옛
+     * 리비전을 가리키고 있어서, 다음 사람이 거기 적힌 검증 스크립트를 돌리면 <b>옛
+     * 원본을 받아 와</b> diff 가 갈린다. README 가 그 상황을 "사본을 손댄 것이다" 로
+     * 읽으라고 시키므로 <b>멀쩡한 사본을 되돌리는</b> 데까지 간다.
+     */
+    @Test
+    @DisplayName("사본 해시가 못박은 리비전과 README 가 적은 리비전이 같다")
+    void seedDdlCopyPinsOneRevision() throws IOException {
+        String readme = new String(new PathMatchingResourcePatternResolver()
+                .getResource("classpath:seed-ddl/README.md")
+                .getContentAsByteArray(), StandardCharsets.UTF_8);
+
+        Matcher matcher = Pattern.compile("@ ([0-9a-f]{7,40})").matcher(readme);
+        assertThat(matcher.find())
+                .as("README 가 '@ <sha>' 꼴로 리비전을 적어야 갱신 스크립트가 그것을 읽는다")
+                .isTrue();
+
+        assertThat(matcher.group(1))
+                .as("사본을 갱신할 때 세 곳을 함께 고친다 — 파일 · SEED_DDL_DIGESTS · "
+                        + "README 의 SHA. 지금은 README 와 SEED_DDL_REVISION 이 갈렸다")
+                .isEqualTo(SEED_DDL_REVISION);
+    }
+
     private static String sha256(Resource resource) throws IOException {
         try (var in = resource.getInputStream()) {
             byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -306,18 +339,29 @@ abstract class SchemaParityTestBase {
         }
     }
 
-    /** README 5행이 못박은 리비전의 사본 해시. 사본을 갱신하면 함께 고친다. */
+    /**
+     * <b>사본이 온 리비전.</b> README 표가 같은 값을 적고 {@link #seedDdlCopyPinsOneRevision}
+     * 이 둘을 맞춰 본다 — 한쪽만 고치면 빨개진다.
+     *
+     * <p>드리프트가 실재한다. README 의 SHA 는 <b>갱신 스크립트가 읽는 값</b>이고 아래
+     * 해시는 <b>사본이 실제로 무엇인지</b>다. 사본과 해시만 갱신하고 README 를 두면
+     * 다음 사람이 검증 스크립트를 돌렸을 때 옛 리비전을 받아 와 diff 가 갈리고,
+     * <b>"사본을 손댔다" 로 오진</b>한다. 반대로 README 만 고치면 그 오진이 반대로 난다.
+     */
+    private static final String SEED_DDL_REVISION = "4307261";
+
+    /** {@link #SEED_DDL_REVISION} 시점 사본의 해시. 사본을 갱신하면 함께 고친다. */
     private static final Map<String, String> SEED_DDL_DIGESTS = Map.ofEntries(
             Map.entry("00_schema.sql",
                     "97041c599fdae419c72446aa0b5f205ae93ee3993f655441cc033caaa5f85c34"),
             Map.entry("10_constraints_common.sql",
-                    "66f3439b9c2ab83b1516649c8f5c61698bc6b889060b6531976e00aef52fca73"),
+                    "60e183564907e54307faa51185ea4f71e74c30d6a937dcdbadf80d440cc06ed0"),
             Map.entry("11_constraints_clean.sql",
-                    "3af03f888d7b7684e613501f191ee95fa718d9767f1b922d7942c8b2d983d7fe"),
+                    "c675179a82473621049480068e09d4b22d90be24d51c512e6a502d48142608f2"),
             Map.entry("12_constraints_corrupt.sql",
                     "5d62c1052d4e7f48e4786515e5a7f0efd5ab1efbc615516c802793ede20e1b69"),
             Map.entry("90_perf_indexes_optional.sql",
-                    "9f3e632a437430877bf4ba18f74b225a9fbc650074a0bbdaa3bb847d15a05bc9"));
+                    "d3d12c54889cd2fed33973ae61a7d12f7640aeb1f1698fe72429ebea31d6dc35"));
 
     /**
      * <b>대조에서 뺀 표가 정말 시드 밖인지 기계로 본다.</b>

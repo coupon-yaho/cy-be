@@ -54,6 +54,27 @@ public record IllegalTransition(long historyId, Reason reason, String expected, 
     }
 
     /**
+     * <b>전이는 표에 있는데 결과가 틀렸다.</b> 결과가 둘인 전이에서만 난다.
+     *
+     * <p>{@code expected} 에 <b>정답 하나</b>를 적는다 — {@link #notInTable} 과 달리 여기서는
+     * 어느 쪽이었어야 하는지가 정해져 있다. 그것이 이 사유를 따로 둔 이유다.
+     */
+    public static IllegalTransition wrongOutcome(
+            long historyId,
+            IssuanceStatus tracked,
+            IssuanceEventType event,
+            IssuanceStatus settled,
+            IssuanceStatus claimed
+    ) {
+        return new IllegalTransition(
+                historyId,
+                Reason.WRONG_OUTCOME,
+                render(tracked, event, settled),
+                render(tracked, event, claimed)
+        );
+    }
+
+    /**
      * 전이 자체는 합법인데 행이 주장하는 출발 상태가 추적 상태와 다르다.
      *
      * <p>이력만 읽으면 합법으로 보이는 위조를 여기서 잡습니다.
@@ -80,7 +101,10 @@ public record IllegalTransition(long historyId, Reason reason, String expected, 
      * 쓴다). 사람이 {@code verification_findings} 를 열어 원인을 가릴 때만 쓰인다.
      */
     private static String expectedOf(IssuanceStatus from, IssuanceEventType event) {
-        return event == IssuanceEventType.CANCEL_USE
+        // ⚠️ tracked 가 USED 일 때만 결과가 둘이다. ISSUED 에서 온 CANCEL_USE 는
+        //    애초에 표에 없으므로 "둘 중 하나였어야 한다" 는 암시가 틀린 말이 된다 —
+        //    오염 유형 3 의 둘째 CANCEL_USE 가 정확히 그 경우다.
+        return event == IssuanceEventType.CANCEL_USE && from == IssuanceStatus.USED
                 ? name(from) + "-CANCEL_USE->ISSUED|EXPIRED"
                 : name(from) + "-" + event.name() + "->?";
     }
@@ -99,6 +123,15 @@ public record IllegalTransition(long historyId, Reason reason, String expected, 
         NOT_IN_TABLE,
 
         /** from_status 가 앞 행의 to_status 와 어긋남 */
-        CHAIN_BROKEN
+        CHAIN_BROKEN,
+
+        /**
+         * 전이 자체는 표에 있는데 <b>둘 중 틀린 결과</b>를 썼다.
+         *
+         * <p>{@code CANCEL_USE} 하나뿐이다 — 만료 시각을 넘긴 뒤의 사용 취소는
+         * {@code EXPIRED} 여야 하는데 {@code ISSUED} 를 썼거나 그 반대다.
+         * 그 둘을 구분 없이 받으면 세 축 어디에도 안 걸린다.
+         */
+        WRONG_OUTCOME
     }
 }

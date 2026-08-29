@@ -123,17 +123,33 @@ asOf >= max(coupon_histories.created_at)
 
 더미데이터에 EXPIRED 15%(45만 장)와 "USED 중 20% 복원"이 동시에 있어서 **반드시 발생한다.**
 
-**우리 결정**: 전이표는 **5행으로 고정**하고, 만료된 `USED`도 예외 없이 `ISSUED`로 되돌린다.
+**우리 결정** ~~전이표 5행 고정, 만료된 `USED`도 예외 없이 `ISSUED`~~ → **6행. 만료 여부로
+갈린다** (CY-744 에서 뒤집었다 — 근거는 아래).
+
+배포된 런타임이 이미 그렇게 돈다 — `CouponStateMachine.cancelUse` 가
+`at.isAfter(expiresAt)` 로 가르고, `CouponCancelUseService` 가 `EXPIRED` 갈래에서 재고까지
+되돌린다. 계약이 5행인 동안에는 **그 정상 이력이 V4 오탐**이 되어 정상셋 0건이 깨졌다.
 
 ```
 (없음) ──ISSUE──→ ISSUED
 ISSUED ──USE──→ USED
-USED   ──CANCEL_USE──→ ISSUED     만료 여부와 무관
+USED   ──CANCEL_USE──→ ISSUED     history.created_at <= expires_at
+USED   ──CANCEL_USE──→ EXPIRED    history.created_at >  expires_at
 ISSUED ──CANCEL──→ CANCELLED      종단
 ISSUED ──EXPIRE──→ EXPIRED        종단
 ```
 
-**전이표는 시각을 인자로 받지 않는다.** `expires_at`을 보고 결과가 갈리면 같은 이력을 다시 접을 때마다 판정이 달라져 재실행 결정론이 무너진다. 리플레이는 `asOf` 이하 이력만 보고 상태를 재구성하는데, 전이 자체가 시각에 의존하면 그 재구성이 불가능하다.
+**금지된 것은 `현재 시각`이지 `저장된 시각`이 아니다.** 둘을 갈라 적는다.
+
+- 런타임 전이(`CouponStateMachine.transition`)는 **시각을 받는다** — 지금 만료됐는지를 봐야
+  결과를 정할 수 있다.
+- 리플레이가 쓰는 `isLegal(from, event, to)` 는 **시각을 안 받는다** — 삼중항이 표에 있는지만 본다.
+- 결과가 둘인 전이는 리플레이가 한 걸음 더 간다(`HistoryReplay.settledOutcome`) —
+  `history.created_at` 과 `issuances.expires_at` 을 비교해 **어느 쪽이었어야 하는지**까지 본다.
+  **둘 다 저장된 값이라 같은 이력을 몇 번 접어도 같은 답이 나온다.** 결정론은 그 분리가 진다.
+
+그 한 걸음이 없으면 표에 둘 다 있다는 이유로 **런타임이 틀린 쪽을 써도 통과한다** —
+그때 상태와 재고가 함께 바뀌므로 V1 도 침묵해 세 축 어디에도 안 걸린다.
 
 `ISSUED`로 돌아온 만료 쿠폰은 **다음 `expireJob`이 `EXPIRED`로 옮긴다.** 그 사이의 간극은 결함이 아니라 배치 주기의 함수라, `finding`이 아니라 별도 관측 지표로 둔다(`11-batch-implementation.md` 9절 "검증하지 않는 것").
 
@@ -277,7 +293,7 @@ D1에 앉아서 30분이면 끝나는 것들. 안 정하고 시작하면 나중�
 | 1 | 오염셋 스키마 분리 + `verify(asOf, dataset)` 시그니처 | 검증 배치를 다시 짬 |
 | 2 | `asOf` 의미 = 실행 순간 고정 (과거 조회 아님) | 정상 데이터가 전부 불일치로 나옴 |
 | 3 | `CouponStateMachine`을 런타임·배치 공용 모듈로 | 검증이 검증이 아니게 됨 |
-| 4 | ~~만료된 `USED`의 `CANCEL_USE` 전이 2행~~ → **전이표 5행 고정. 시각을 인자로 받지 않는다** | 재실행마다 판정이 달라짐 |
+| 4 | ~~전이표 5행 고정~~ → **6행. `transition` 은 시각을 받고 `isLegal` 은 안 받는다** (CY-744) | 결정론은 그 분리가 진다 — 판정에 쓰는 것은 저장된 `expires_at`·`created_at` 뿐이다 |
 | 5 | `idempotency_records.status` 컬럼 + 409 `CONFLICT_IN_PROGRESS` | 테스트 시나리오 4를 못 통과 |
 | 6 | `NO_ENTRY_TOKEN` → 400 | k6가 매 요청 JSON 파싱 |
 | 7 | JWT 시드 → CSV → k6 파이프라인 | `/entry`→`/issue` 테스트 자체가 막힘 |

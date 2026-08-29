@@ -828,10 +828,13 @@ tests:
         alertname: CouponRoundMissedWindow
         exp_alerts: []
 
-  # **갈래 축이 사라지면 세 알림이 통째로 침묵한다.** 게이지가 0 일 때와 없을 때가 관측상
-  # 같아지는데, 없을 때는 그것을 알려 주는 것이 이 알림뿐이다.
+  # ⚠️ **뒤집힌 단언이다(CY-744).** 예전에는 게이지가 없으면 세 알림이 통째로 침묵했고
+  # 이 파일이 그것을 "정답" 으로 박아 뒀다 — `and … == 1` 이 우변 부재를 빈 벡터로 만들어
+  # 좌변까지 지웠기 때문이다. 회차가 하나도 안 열리는데 critical 이 안 우는 상태였다.
+  # `unless … == 0` 으로 바꿔 **부재에는 원래대로 운다.** 게이지가 없는 것은 "껐다" 가
+  # 아니므로 재울 이유가 없다. 없다는 사실은 CouponRoundSwitchMetricMissing 이 따로 진다.
   - interval: 1m
-    name: "스위치 게이지가 없으면 CouponRoundSwitchMetricMissing 이 뜨고 대기 알림은 침묵한다"
+    name: "스위치 게이지가 없어도 CouponRoundsNotOpening 은 운다 — 부재는 '껐다' 가 아니다"
     input_series:
       - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         values: '2x30'
@@ -840,7 +843,15 @@ tests:
     alert_rule_test:
       - eval_time: 20m
         alertname: CouponRoundsNotOpening
-        exp_alerts: []
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+            exp_annotations:
+              summary: "지금 열려 있어야 하는 회차가 아직 SCHEDULED 입니다 — 그 회차는 발급이 안 됩니다"
+              description: "회차 상태 전이가 5분 넘게 밀렸습니다. 발급 요청은 OPEN 일 때만 통과하므로 그 회차는 **지금 아무도 발급받을 수 없습니다.** 이 게이지는 재고 없는 회차와 창이 지난 회차를 이미 뺀 값이라 **스케줄러 쪽**입니다. **세 갈래로 가릅니다.** ① increase(cy_coupon_round_ticks_total[5m]) == 0 → 스케줄러 스레드가 막혔거나 빈이 안 뜬 것입니다. 스레드 덤프와 기동 로그를 봅니다. ② ticks 는 오르는데 increase(cy_coupon_round_select_failures_total[5m]) > 0 → **대상 조회가 죽고 있습니다.** 흔한 원인은 커넥션 풀 고갈입니다 (BATCH_DB_POOL_SIZE, 04:10~04:30 겹침). ③ ticks 는 오르고 조회도 되는데 increase(cy_coupon_round_transition_failures_total[5m]) > 0 → UPDATE 가 죽고 있습니다. 배치 로그의 \"열기 N건이 실패했습니다\" 가 대표 원인을 답니다. 셋 다 0 이면 게이지가 낡은 것입니다 — CouponRoundMetricsStale 을 봅니다."
       - eval_time: 8m
         alertname: CouponRoundSwitchMetricMissing
         exp_alerts: []

@@ -285,10 +285,13 @@ reviews:
 
         상태 전이: `CouponStateMachine` 밖에서 상태를 직접 바꾸는 코드, 전이표에 없는 전이
         (종단 상태 CANCELLED/EXPIRED 에서 나가는 전이는 전부 위반).
-        **전이표는 시각을 인자로 받지 않는다** — 시간 기반 만료는 expireJob 이 EXPIRE 이력을
+        **리플레이가 쓰는 isLegal 은 시각을 안 받는다** — 런타임 transition 은 받는다
+        (CY-744 에서 그 분리를 명시했다). 시간 기반 만료는 expireJob 이 EXPIRE 이력을
         남겨서 표현하고, 이력에 없는 만료를 상태머신이 암묵적으로 적용하면 리플레이가
         비결정적이 되고 "만료 누락은 정상"이라는 계약이 깨진다. USED 는 만료 대상이 아니다
         (expireJob 은 status='ISSUED' 만 잡는다).
+        ⚠️ CANCEL_USE 는 **결과가 둘**이다(USED→ISSUED · USED→EXPIRED). 검증은 저장된
+        expires_at·created_at 으로 어느 쪽이었어야 하는지까지 본다 — 현재 시각은 안 쓴다.
         런타임과 검증 배치가 같은 상태머신을 쓰는지도 본다.
 
         DB 제약: `UNIQUE (campaign_id, member_id)` 를 제거하거나 우회하는 변경은 무조건

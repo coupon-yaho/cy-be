@@ -604,7 +604,13 @@ class VerifyJobConfigTest {
     @DisplayName("CANCEL_USE 가 두 번이면 V4 와 V1 만 운다 — 주입 100 이 정답 200 이 되는 자리다")
     void recordStockAndTransitionForDoubleCancelUse() throws Exception {
         long couponId = seed.currentCouponIdOrCreate();
-        long issuanceId = seed.issuance(IssuanceStatus.ISSUED);
+        // ⚠️ **발급 시각을 기본값에 맡기면 안 되는 시나리오다.** 기본은 2025-01-01 발급 ·
+        //    7일 만료라 이 이력들(asOf 2026-01-15 기준 -4~-1시간)이 **만료 1년 뒤**에 놓인다.
+        //    런타임이 만들 수 없는 데이터다 — Issuance.use 가 usedAt > expiresAt 을 던진다.
+        //    그리고 V4 는 USED-CANCEL_USE-> 의 결과를 created_at > expires_at 으로 가르므로
+        //    (CouponStateMachine.cancelUse 와 같은 식), 그대로 두면 **정상인 첫 취소가
+        //    WRONG_OUTCOME 으로 잡힌다.** 창 안으로 들여놓는다.
+        long issuanceId = seed.issuance(IssuanceStatus.ISSUED, AS_OF.minusHours(4));
         issued(issuanceId, AS_OF.minusHours(4));
         seed.history(issuanceId, IssuanceEventType.USE,
                 IssuanceStatus.ISSUED, IssuanceStatus.USED, AS_OF.minusHours(3));

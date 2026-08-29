@@ -8,9 +8,14 @@
 `contract.json` 이다. 이 저장소에는 읽기 전용 사본을 `docs/contract.json` 으로 둔다.
 
 ```
-원본   cy-seed-data-generator @ 96b12f2  (2026-08-13)
+원본   cy-seed-data-generator @ 4307261  (2026-08-29)
 사본   docs/contract.json                 바이트 동일
 ```
+
+이 표와 사본은 **한 묶음이다.** 사본만 덮고 표를 두면 아래 검증 스크립트가 옛 리비전을
+받아 와 diff 가 갈리고, 그 스크립트는 그것을 *"사본을 손댄 것"* 으로 읽으라고 시킨다 —
+멀쩡한 사본을 옛 계약으로 되돌리는 데까지 간다. **실제로 그렇게 갈려 있었다.**
+`ContractCopyTest` 가 사본의 해시와 이 표의 SHA 를 함께 못박아 한쪽만 고치면 빨개진다.
 
 **사본을 손으로 고치지 않는다.**
 
@@ -23,16 +28,21 @@
 
 ```bash
 # 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
+#
+# SHA 를 여기 또 적지 않는다. 위 표에서 읽는다 — 두 군데에 적으면 한쪽만 갱신돼
+# 검증이 "사본을 손댔다" 로 오진한다.
 set -o pipefail
+SHA=$(grep -oE '@ [0-9a-f]{7,40}' docs/11-batch-implementation.md | head -1 | cut -d' ' -f2)
 tmp=$(mktemp)
-gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=96b12f2" \
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=$SHA" \
   --jq '.content' | base64 -d > "$tmp" \
   && diff "$tmp" docs/contract.json && echo "사본이 원본과 같다"
 rm -f "$tmp"
 ```
 
 ```bash
-# 갱신 — 원본이 새 리비전으로 올라갔을 때만. 위 표의 SHA·날짜도 같이 고친다
+# 갱신 — 원본이 새 리비전으로 올라갔을 때만.
+# 위 표의 SHA·날짜와 ContractCopyTest 의 CONTRACT_REVISION·CONTRACT_DIGEST 를 같이 고친다
 set -o pipefail
 tmp=$(mktemp)
 gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=<새 SHA>" \

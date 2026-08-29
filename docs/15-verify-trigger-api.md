@@ -715,7 +715,7 @@ POST /api/v1/admin/cleanup/runs/{id}/recover       # 한 번에 FAILED 로 닫�
 
 | 무엇 | 왜 |
 |---|---|
-| **인증·인가** | PRD 보안 ①이 `/api/v1/admin/**` 에 `ADMIN` 역할을 요구한다. batch 에 Spring Security 가 없고, 토큰 발급·검증은 영역 ③(인증)의 몫이라 여기서 규약을 혼자 정하면 두 벌이 된다. **이 티켓은 노출을 줄이는 데까지만 갔다.** ⚠️ **그 축소가 막는 것은 인터넷뿐이다** — compose 서비스가 같은 기본 네트워크를 쓰므로 `docker compose exec prometheus curl http://batch:9090/...` 는 그대로 통한다. **뒤에 CY-742 가 공유 비밀 헤더(`X-Batch-Admin-Token`)를 얹었지만 그것은 포트를 내보내는 `batch-expose.yml` 에서만 켜진다** — 표준 스택(`batch.yml`)은 여전히 관문이 없고, 켜지는 구성에서도 역할 구분은 없다(소지만 묻는다) |
+| **인증·인가** | PRD 보안 ①이 `/api/v1/admin/**` 에 `ADMIN` 역할을 요구한다. batch 에 Spring Security 가 없고, 토큰 발급·검증은 영역 ③(인증)의 몫이라 여기서 규약을 혼자 정하면 두 벌이 된다. **이 티켓은 노출을 줄이는 데까지만 갔다.** ⚠️ **그 축소가 막는 것은 인터넷뿐이다** — compose 서비스가 같은 기본 네트워크를 쓰므로 `docker compose exec prometheus curl http://batch:9091/...` 는 그대로 통한다. **뒤에 CY-742 가 공유 비밀 헤더(`X-Batch-Admin-Token`)를 얹었지만 그것은 포트를 내보내는 `batch-expose.yml` 에서만 켜진다** — 표준 스택(`batch.yml`)은 여전히 관문이 없고, 켜지는 구성에서도 역할 구분은 없다(소지만 묻는다) |
 | **`INCREMENTAL` scope** | `rejectUnsupportedScope` 가 막는 상태 그대로 둔다. 여는 것은 증분 검증 티켓 |
 | ~~**리포트 덤프**~~ | **CY-590 이 했다** — `GET /reports/latest`. 이 티켓의 `/runs/{executionId}` 는 **배치 실행**이 어떻게 됐나이고, 그쪽은 **그 실행이 낸 판정**이다. `docs/10` 이 "두 얼굴" 로 가른 그 둘이다 |
 | **진행률** | `GET` 이 Step 단위 진행을 안 준다. 300만 전수라 사람이 궁금해할 값인데, 지금 지표로 그 축이 없다 |

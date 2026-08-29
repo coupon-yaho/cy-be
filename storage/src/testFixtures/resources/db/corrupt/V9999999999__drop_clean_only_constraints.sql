@@ -68,10 +68,13 @@ ALTER TABLE `coupon_stocks` DROP CHECK `ck_stock_range`;
 --    이유")의 반대 방향 실패다.
 ALTER TABLE `coupon_stocks` DROP CHECK `ck_coupon_stock_active_range`;
 
--- 사용 이력(V8·V9). **uk_issuance_usages_active 가 특히 중요합니다** — 그것이
--- "발급건 하나에 활성 사용은 하나" 를 DB 로 막는데, 그게 정확히 V5(DOUBLE_USE)가
--- 검출해야 하는 오염입니다. 남겨 두면 이중 사용을 심을 수가 없습니다.
--- ⚠️ **상태 어휘 CHECK 두 개는 떼지 않는다.** 한 번 떼려다 되돌렸다 —
+-- ⚠️ **uk_issuance_usages_active 도 떼지 않는다.** 한때 여기 "V5 가 이중 사용을
+--    심어야 하니 떼야 한다" 고 적혀 있었는데 **위 표가 그 반대를 실측해 뒀다** —
+--    활성 사용 2건을 심는 유형이 없다(유형 3 은 [(t1,t2),(t3,None)], 유형 7 은
+--    [(t1,None)]). V5(USAGE_MISMATCH)가 잡는 것은 "활성 사용이 둘" 이 아니라
+--    **issuances.status 와 활성 사용 유무가 어긋난 것**이다. 그 오염은 이 UNIQUE 를
+--    건드리지 않는다.
+-- ⚠️ **상태 어휘 CHECK 두 개도 떼지 않는다.** 한 번 떼려다 되돌렸다 —
 --    "시드 CORRUPT 가 안 건다" 고 적었는데 **확인 안 하고 쓴 것이었다.**
 --    실제로 시드는 그 둘을 10_constraints_common.sql(공통)에 두므로 CORRUPT 에도 있다.
 --    오염 유형이 규약 밖 상태를 심지도 않아서 뗄 이유가 없다.

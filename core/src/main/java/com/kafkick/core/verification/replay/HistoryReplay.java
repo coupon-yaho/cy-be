@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 
 import com.kafkick.core.coupon.domain.CouponStateMachine;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
@@ -94,11 +95,51 @@ public final class HistoryReplay {
                     history.toStatus()));
         }
 
+        // **결과가 둘인 전이는 어느 쪽이었어야 하는지까지 본다.**
+        //
+        // isLegal 은 삼중항이 표에 있는지만 묻는다. CANCEL_USE 는 ISSUED·EXPIRED 를 둘 다
+        // 허용하므로, 그것만으로는 런타임이 **틀린 쪽을 써도** 통과한다. 그때 서비스가
+        // 상태와 재고를 함께 바꾸므로 V1 도 침묵한다 — 세 축 어디에도 안 걸린다.
+        //
+        // ⚠️ **결정론은 안 깨진다.** expires_at 도 created_at 도 저장된 값이라, 같은 이력을
+        //    몇 번 접어도 같은 답이 나온다. docs/01 함정 3 이 금지한 것은 **현재 시각**으로
+        //    갈래를 나누는 것이고 여기는 그것을 안 쓴다.
+        Optional<IssuanceStatus> settled = settledOutcome(tracked, history);
+        if (settled.isPresent() && settled.get() != history.toStatus()) {
+            return Optional.of(IllegalTransition.wrongOutcome(
+                    history.id(), tracked, history.eventType(),
+                    settled.get(), history.toStatus()));
+        }
+
         if (history.fromStatus() != tracked) {
             return Optional.of(IllegalTransition.chainBroken(
                     history.id(), tracked, history.fromStatus()));
         }
 
         return Optional.empty();
+    }
+
+    /**
+     * <b>결과가 둘인 전이에서 어느 쪽이 정답인지.</b> 지금은 {@code CANCEL_USE} 하나다 —
+     * 만료 시각을 넘긴 뒤의 사용 취소는 {@code EXPIRED} 로 간다
+     * ({@code CouponStateMachine.cancelUse} 가 {@code at.isAfter(expiresAt)} 로 가른다).
+     *
+     * <p>정답을 못 정하는 경우는 비워 돌려준다 — 결과가 하나인 전이와,
+     * {@code expires_at} 이 없는 행이다. 후자는 스키마가 {@code NOT NULL} 이라 안 오지만,
+     * 없는데 던지면 <b>한 행 때문에 청크 전체가 죽는다.</b>
+     */
+    private static Optional<IssuanceStatus> settledOutcome(
+            IssuanceStatus tracked,
+            IssuanceHistoryRecord history
+    ) {
+        if (history.eventType() != IssuanceEventType.CANCEL_USE
+                || tracked != IssuanceStatus.USED
+                || history.expiresAt() == null
+                || history.createdAt() == null) {
+            return Optional.empty();
+        }
+        return Optional.of(history.createdAt().isAfter(history.expiresAt())
+                ? IssuanceStatus.EXPIRED
+                : IssuanceStatus.ISSUED);
     }
 }

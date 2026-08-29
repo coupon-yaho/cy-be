@@ -26,22 +26,30 @@ public final class VerificationSeed {
      * <p>{@code issued_at}·{@code updated_at}·{@code expires_at} 을 <b>한 기준점에서 파생</b>시킨다.
      * 상수를 따로 두고 하나만 과거로 밀면 "마지막 상태 변경이 발급보다 먼저" 같은,
      * 런타임이 만들 수 없는 데이터가 된다. 시각을 보는 규칙이 하나 늘 때마다 다시 깨진다.
+     *
+     * <p>⚠️ <b>파생된 {@code expires_at} 은 여기서 7일 뒤라, 이 기본값으로 만든 발급건은
+     * 테스트의 {@code asOf} 시점에 이미 <b>한참 만료</b>다.</b> 만료 이후에 놓인 이력을
+     * <i>정상</i>으로 세우는 시나리오라면 기본값을 쓰면 안 된다 —
+     * {@link #issuance(IssuanceStatus, java.time.LocalDateTime)} 로 <b>발급 시각을 창 안으로</b>
+     * 옮겨야 한다. 런타임이 그런 데이터를 못 만들고({@code Issuance.use} 가
+     * {@code usedAt > expiresAt} 을 던진다) V4 도 그렇게 판정한다 —
+     * {@code USED-CANCEL_USE->} 의 결과를 {@code created_at > expires_at} 으로 가르므로
+     * 정상인 취소가 {@code WRONG_OUTCOME} 으로 잡힌다.
      */
     private static final LocalDateTime DEFAULT_ISSUED_AT = LocalDateTime.of(2025, 1, 1, 0, 0);
 
-    /** 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다. */
-    private static final List<String> TABLES_IN_DELETE_ORDER = List.of(
-            // expected_findings 는 FK 가 없어 DELETE 가 막히지는 않지만 uk_expected 가 있어,
-            // 행이 새면 다음 테스트가 같은 seed_run_id 로 심다가 중복키로 죽는다.
-            // 통계 셋은 아직 아무도 안 채우지만 verification_runs 를 FK 로 문다.
-            // 통계 Step 이 붙는 순간 이 목록이 없으면 DELETE 가 막혀,
-            // 원인 테스트가 아니라 그다음 테스트가 빨개진다.
-            "hourly_stats", "grade_stats", "coupon_stats",
-            "asof_state", "verification_findings", "expected_findings", "verification_runs",
-            "idempotency_records",
-            "issuance_usages", "issuance_histories", "issuances",
-            "coupon_stocks", "coupons", "coupon_templates", "brands",
-            "members", "grades");
+    /**
+     * 자식이 먼저다. 순서가 틀리면 FK 가 삭제를 거부한다.
+     *
+     * <p><b>{@link AppTableCleaner#TABLES_IN_DELETE_ORDER} 를 그대로 쓴다.</b> 같은 목록을 두 벌
+     * 두면 표가 하나 늘었을 때 한쪽만 고치게 되고, 그 어긋남은 <b>빠뜨린 표를 읽는 테스트가
+     * 실행 순서에 따라 갈리는</b> 모양으로만 드러난다. 목록과 순서를 정하는 근거는 그쪽에 있다.
+     *
+     * <p>문장은 다르다 — 그쪽은 컨텍스트 기동에서 root 로 {@code TRUNCATE} 하고 이쪽은
+     * 테스트가 앱 계정으로 {@code DELETE} 한다.
+     */
+    private static final List<String> TABLES_IN_DELETE_ORDER =
+            AppTableCleaner.TABLES_IN_DELETE_ORDER;
 
     private final JdbcClient jdbcClient;
 

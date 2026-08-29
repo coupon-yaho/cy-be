@@ -33,14 +33,25 @@ import org.testcontainers.mysql.MySQLContainer;
 public final class AppTableCleaner {
 
     /**
-     * FK 역순. {@code VerificationSeed.TABLES_IN_DELETE_ORDER} 와 같은 순서다 —
-     * 그쪽은 배치 테스트가 쓰고 이쪽은 컨텍스트 기동이 쓴다.
+     * <b>FK 역순. 앱 표 목록의 정본이다</b> — {@code VerificationSeed#clear} 도 이것을 쓴다.
+     * 두 벌로 두면 표가 하나 늘었을 때 한쪽만 고치게 되고, 그 어긋남은 <b>빠뜨린 표를
+     * 읽는 테스트가 실행 순서에 따라 갈리는</b> 모양으로만 드러나 원인까지 가는 길이 멀다.
+     *
+     * <p><b>쓰는 방법은 서로 다르다.</b> 이쪽은 컨텍스트 기동에서 root 로 {@code TRUNCATE}
+     * 하고 그쪽은 테스트가 앱 계정으로 {@code DELETE} 한다 — 공유하는 것은 <b>순서와
+     * 목록</b>이지 문장이 아니다.
      *
      * <p>관측·부하측정 표({@code analytics_*}·{@code benchmark_runs}·{@code run_timeseries}·
      * {@code consistency_finals}·{@code issue_attempts})는 아직 없다. 그 표를 읽는 테스트가
      * 이 컨테이너로 옮겨 오면 그때 더한다 — 지금 넣으면 지울 것이 없는 DELETE 가 돈다.
+     *
+     * <p>{@code expected_findings} 는 FK 가 없어 DELETE 가 막히지는 않지만 {@code uk_expected}
+     * 가 있어, 행이 새면 다음 테스트가 같은 {@code seed_run_id} 로 심다가 중복키로 죽는다.
+     * 통계 셋은 아직 아무도 안 채우지만 {@code verification_runs} 를 FK 로 문다 — 통계
+     * Step 이 붙는 순간 이 목록이 없으면 DELETE 가 막혀, 원인 테스트가 아니라 <b>그다음</b>
+     * 테스트가 빨개진다.
      */
-    private static final List<String> TABLES_IN_DELETE_ORDER = List.of(
+    static final List<String> TABLES_IN_DELETE_ORDER = List.of(
             "hourly_stats", "grade_stats", "coupon_stats",
             "asof_state", "verification_findings", "expected_findings", "verification_runs",
             "idempotency_records",
@@ -51,6 +62,14 @@ public final class AppTableCleaner {
     private AppTableCleaner() {
     }
 
+    /**
+     * <b>{@link MySqlContainerConfig} 를 부르는 것이 CLEAN 컨테이너를 띄우지는 않는다.</b>
+     * 그 클래스의 정적 필드가 {@code SharedMySqlContainers.create()} 를 부르지만 그것은
+     * <b>만들기만</b> 하고 기동은 {@code @Bean} 에서 한다 — 실측:
+     * {@code :storage:test --tests '*CorruptSchemaShapeTest*'} 가 MySQL 컨테이너를
+     * <b>1개</b> 띄운다. {@code SharedMySqlContainers} 가 적어 둔 옛 사고
+     * ({@code static { CONTAINER.start(); }})는 이미 걷혔고, 이 호출은 그것을 되살리지 않는다.
+     */
     public static SmartInitializingSingleton of(MySQLContainer container) {
         return () -> MySqlContainerConfig.executeAsRoot(container, "SET FOREIGN_KEY_CHECKS = 0;"
                 + TABLES_IN_DELETE_ORDER.stream()

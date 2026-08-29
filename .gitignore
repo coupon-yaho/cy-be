@@ -101,8 +101,11 @@ replay_pid*
 ### 파이썬
 # CY-359 가 mock 알림 리시버(infra/alertmanager/alert-sink.py)로 저장소 최초의 파이썬
 # 파일을 들여왔다. CI 의 py_compile 스텝과 로컬 실행이 여기에 바이트코드를 남긴다.
+# 뒤이어 시드 도구(cy-seed)를 로컬에 나란히 두는 사람이 생겨 가상환경도 함께 잡는다.
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 
 ### OS
 .DS_Store
@@ -117,10 +120,3 @@ _workspace/
 # `.env`·`*.pem` 은 위 블록에 있다. 여기 다시 적지 않는다.
 db.env
 .db.env
-
-### Python — 시드 생성기·알림 싱크
-# `infra/alertmanager/` 와 시드 도구가 파이썬이라 바이트코드가 남는다.
-__pycache__/
-*.py[cod]
-.venv/
-venv/

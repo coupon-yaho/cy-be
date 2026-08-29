@@ -301,19 +301,27 @@ class IssuanceHistoryGroupReaderTest {
         return groups;
     }
 
+    /**
+     * <b>{@code expiresAt} 은 여기서 아무 값이나 아니다.</b> {@code HistoryReplay} 가
+     * {@code USED-CANCEL_USE->} 의 결과를 {@code created_at > expires_at} 으로 가르므로,
+     * 만료 전으로 두어야 {@link #cancelUse} 가 {@code ISSUED} 로 돌아오는 것이 합법이 된다.
+     * 이 검사가 보는 것은 <b>그룹 경계</b>지만, 재료가 불법이면 무엇을 재는지 흐려진다.
+     */
+    private static final LocalDateTime EXPIRES_AT = AS_OF.plusYears(1);
+
     private static IssuanceHistoryRecord issue(long id, long issuanceId) {
         return new IssuanceHistoryRecord(id, issuanceId, IssuanceEventType.ISSUE,
-                null, IssuanceStatus.ISSUED, AS_OF.minusHours(3));
+                null, IssuanceStatus.ISSUED, AS_OF.minusHours(3), EXPIRES_AT);
     }
 
     private static IssuanceHistoryRecord use(long id, long issuanceId) {
         return new IssuanceHistoryRecord(id, issuanceId, IssuanceEventType.USE,
-                IssuanceStatus.ISSUED, IssuanceStatus.USED, AS_OF.minusHours(2));
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, AS_OF.minusHours(2), EXPIRES_AT);
     }
 
     private static IssuanceHistoryRecord cancelUse(long id, long issuanceId) {
         return new IssuanceHistoryRecord(id, issuanceId, IssuanceEventType.CANCEL_USE,
-                IssuanceStatus.USED, IssuanceStatus.ISSUED, AS_OF.minusHours(1));
+                IssuanceStatus.USED, IssuanceStatus.ISSUED, AS_OF.minusHours(1), EXPIRES_AT);
     }
 
     /** 어댑터가 지키는 정렬 계약 — (issuance_id, created_at, id) 오름차순 — 을 그대로 흉내 낸다. */

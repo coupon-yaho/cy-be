@@ -7,8 +7,9 @@
 #   **그 원인이 상류에서 사라졌다** — storage.yml 이 그 두 키를 각 모듈에 넘겼다.
 #   그래서 뒤 문서를 없애고 두 키를 이 문서로 올렸다. 자세한 근거는 파일 맨 아래.
 #
-#   storage.yml 을 덮어쓸 값만 `---` 아래 두 번째 문서에 둔다. 뒤 문서가 이긴다.
-#   나머지는 전부 이 첫 문서에 둔다 — 그래야 BatchConfigPrecedenceTest 의 충돌 검사를 받는다.
+#   **새 키도 여기에 둔다.** `---` 로 문서를 다시 가르지 않는다 — 나눠 봐야 import 가
+#   양쪽을 다 이기므로 덮어쓰기 수단이 못 되고, 문서가 둘이면
+#   BatchConfigPrecedenceTest 의 충돌 검사가 뒤 문서를 안 본다.
 #
 spring:
   application:
@@ -61,9 +62,8 @@ spring:
   # 그 오버레이가 CY-742 의 공유 비밀 관문도 함께 켠다 — 여기(앱 기본값)는 켜짐이지만
   # batch.yml 이 그것을 끄므로, 표준 compose 스택에서 서는 것은 미노출 하나다.
   #
-  # servlet 으로 두는 것은 뒤에 올 verify 온디맨드 트리거(POST /api/v1/admin/verify)를
-  # 미리 받기 위한 것이다. 관리 포트는 아래 management 블록이 따로 연다 —
-  # 그 키는 storage.yml 에 없으므로 예고대로 뒤 문서가 아니라 이 첫 문서에 둔다.
+  # servlet 으로 두는 것은 verify 온디맨드 트리거(POST /api/v1/admin/verify)를 받기
+  # 위한 것이다. 관리 포트는 아래 management 블록이 따로 연다.
   #
   # ⚠️ **CY-368 이 둘 중 후자로 정했다** — compose 의 업무 포트 매핑을 없앴다.
   #   앞의 것(커스텀 actuator 로 관리 포트에 올리기)은 경로가 /actuator/verify 가 되어

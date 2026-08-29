@@ -53,6 +53,62 @@ class HistoryReplayTest {
         assertThat(result.illegalTransitions()).isEmpty();
     }
 
+    /**
+     * <b>결과가 둘인 전이에서 틀린 쪽을 쓰면 잡는다.</b> 이 검사가 없으면
+     * {@code isLegal} 이 {@code ISSUED}·{@code EXPIRED} 를 둘 다 받아 그냥 통과한다 —
+     * 그때 서비스가 상태와 재고를 함께 바꾸므로 V1 도 침묵해 세 축 어디에도 안 걸린다.
+     */
+    @Test
+    @DisplayName("만료 전 사용취소가 EXPIRED 로 적히면 잡는다 — 정답은 ISSUED 다")
+    void catchesWrongCancelUseOutcomeBeforeExpiry() {
+        ReplayResult result = HistoryReplay.fold(ISSUANCE_ID, List.of(
+                issue(1L, T0),
+                history(2L, T0.plusMinutes(1), IssuanceEventType.USE,
+                        IssuanceStatus.ISSUED, IssuanceStatus.USED),
+                // 만료(T0+1년) 전인데 EXPIRED 로 적었다.
+                history(3L, T0.plusMinutes(2), IssuanceEventType.CANCEL_USE,
+                        IssuanceStatus.USED, IssuanceStatus.EXPIRED)));
+
+        assertThat(result.illegalTransitions()).singleElement()
+                .satisfies(illegal -> {
+                    assertThat(illegal.reason()).isEqualTo(IllegalTransition.Reason.WRONG_OUTCOME);
+                    assertThat(illegal.expected()).isEqualTo("USED-CANCEL_USE->ISSUED");
+                    assertThat(illegal.actual()).isEqualTo("USED-CANCEL_USE->EXPIRED");
+                });
+    }
+
+    /** 반대 방향도 잡는다 — 만료 뒤 사용취소의 정답은 EXPIRED 다. */
+    @Test
+    @DisplayName("만료 뒤 사용취소가 ISSUED 로 적히면 잡는다")
+    void catchesWrongCancelUseOutcomeAfterExpiry() {
+        LocalDateTime afterExpiry = EXPIRES_AT.plusDays(1);
+        ReplayResult result = HistoryReplay.fold(ISSUANCE_ID, List.of(
+                issue(1L, T0),
+                history(2L, T0.plusMinutes(1), IssuanceEventType.USE,
+                        IssuanceStatus.ISSUED, IssuanceStatus.USED),
+                history(3L, afterExpiry, IssuanceEventType.CANCEL_USE,
+                        IssuanceStatus.USED, IssuanceStatus.ISSUED)));
+
+        assertThat(result.illegalTransitions()).singleElement()
+                .satisfies(illegal -> assertThat(illegal.expected())
+                        .isEqualTo("USED-CANCEL_USE->EXPIRED"));
+    }
+
+    /** 만료 뒤 EXPIRED 는 정상이다 — 이것을 위반으로 세면 CLEAN 0건 게이트가 깨진다. */
+    @Test
+    @DisplayName("만료 뒤 사용취소가 EXPIRED 면 통과한다 — 런타임이 실제로 그 갈래를 탄다")
+    void acceptsExpiredOutcomeAfterExpiry() {
+        ReplayResult result = HistoryReplay.fold(ISSUANCE_ID, List.of(
+                issue(1L, T0),
+                history(2L, T0.plusMinutes(1), IssuanceEventType.USE,
+                        IssuanceStatus.ISSUED, IssuanceStatus.USED),
+                history(3L, EXPIRES_AT.plusDays(1), IssuanceEventType.CANCEL_USE,
+                        IssuanceStatus.USED, IssuanceStatus.EXPIRED)));
+
+        assertThat(result.illegalTransitions()).isEmpty();
+        assertThat(result.state()).isEqualTo(IssuanceStatus.EXPIRED);
+    }
+
     @Test
     @DisplayName("이미 쓴 쿠폰은 만료되지 않는다 — USED 에서 EXPIRE 는 전이표에 없다")
     void rejectExpireOnUsed() {
@@ -195,7 +251,8 @@ class HistoryReplayTest {
         assertThatThrownBy(() -> HistoryReplay.fold(ISSUANCE_ID, List.of(
                 issue(1L, T0),
                 new IssuanceHistoryRecord(2L, 99L, IssuanceEventType.USE,
-                        IssuanceStatus.ISSUED, IssuanceStatus.USED, T0.plusMinutes(1)))))
+                        IssuanceStatus.ISSUED, IssuanceStatus.USED,
+                        T0.plusMinutes(1), EXPIRES_AT))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("다른 발급건의 이력이 섞였습니다");
     }
@@ -210,6 +267,12 @@ class HistoryReplayTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
+    /**
+     * <b>기본 만료 시각은 아주 뒤다.</b> 기존 케이스들이 {@code CANCEL_USE} 를 쓸 때
+     * "아직 안 만료" 갈래를 타게 해서, 이 컬럼이 붙기 전과 같은 답을 내게 한다.
+     */
+    private static final LocalDateTime EXPIRES_AT = T0.plusYears(1);
+
     private static IssuanceHistoryRecord issue(long id, LocalDateTime createdAt) {
         return history(id, createdAt, IssuanceEventType.ISSUE, null, IssuanceStatus.ISSUED);
     }
@@ -222,6 +285,6 @@ class HistoryReplayTest {
             IssuanceStatus toStatus
     ) {
         return new IssuanceHistoryRecord(
-                id, ISSUANCE_ID, eventType, fromStatus, toStatus, createdAt);
+                id, ISSUANCE_ID, eventType, fromStatus, toStatus, createdAt, EXPIRES_AT);
     }
 }

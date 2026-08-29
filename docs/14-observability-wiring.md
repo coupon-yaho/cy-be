@@ -358,7 +358,7 @@ verdict 는 이미 커밋돼 있다.** 그때 <i>"판정을 못 냈다"</i> 는 
 ```bash
 docker compose -f base.yml exec -T alertmanager amtool silence add \
   --alertmanager.url=http://localhost:9093 \
-  'alertname=~"(Expire|Cleanup)NeverSucceeded|ExpireMetricsUnknown|Verify(NeverSucceeded|NotSucceeding)"' \
+  'alertname=~"(Expire|Cleanup|Verify)NeverSucceeded|ExpireMetricsUnknown"' \
   --duration=168h \
   --author="$(git config user.name)" \
   --comment='BATCH_SCHEDULING_ENABLED=false — 만료·정리·검증 크론이 일부러 꺼져 있다 (docs/14). 스케줄러를 켜기 전에 반드시 해제한다.'
@@ -368,13 +368,15 @@ docker compose -f base.yml exec -T alertmanager amtool silence query  --alertman
 docker compose -f base.yml exec -T alertmanager amtool silence expire --alertmanager.url=http://localhost:9093 <ID>
 ```
 
-**덮는 것은 다섯이고, 셋은 일부러 뺐다.**
+**덮는 것은 넷이다.** 한때 다섯이었는데 `VerifyNotSucceeding` 을 뺐다 — 그것은 이제
+규칙이 스스로 갈래를 뺀다(위 표). silence 에 남겨 두면 **규칙이 다시 울려야 하는 날**,
+즉 스위치를 켠 뒤에도 사람이 이 silence 를 안 풀면 조용해진다.
 
 | 덮는다 | 왜 |
 |---|---|
 | `ExpireNeverSucceeded` · `CleanupNeverSucceeded` | 값이 `NaN` 이라 뜬다 — 한 번도 안 돌았다 |
 | `ExpireMetricsUnknown` | 위와 **같은 사건**이다. 대기 건수를 셀 기준 실행이 없다 |
-| `VerifyNeverSucceeded` · `VerifyNotSucceeding` | **검증 크론도 같은 스위치에 묶여 있다**(`VerifyScheduler` 의 `@ConditionalOnProperty`). 안 덮으면 25시간 뒤부터 critical 이 시간당 한 번씩 나간다 |
+| `VerifyNeverSucceeded` | **검증 크론도 같은 스위치에 묶여 있다**(`VerifyScheduler` 의 `@ConditionalOnProperty`). 안 덮으면 25시간 뒤부터 critical 이 시간당 한 번씩 나간다. 형제 `VerifyNotSucceeding` 은 규칙이 갈래를 빼므로 여기 없다 |
 
 | 안 덮는다 | 왜 |
 |---|---|
@@ -409,15 +411,34 @@ docker compose -f base.yml exec -T alertmanager amtool silence expire --alertman
 > **콜드 스타트용 26시간 silence 와 대상이 겹친다. 둘 다 걸지 말 것** —
 > 볼륨을 지우고 띄운 직후만이면 그쪽(26h), 스케줄러를 계속 끄고 둘 것이면 이쪽 하나만 건다.
 
-**만료·정리는 규칙에 예외를 안 판다.** `cy_batch_scheduling_enabled` 게이지를 만들면
-*일부러 껐다* 와 *꺼져 버렸다* 가 같은 값이 되고, 그 둘의 결말이 다르다 — 만료가 하루 안 돌면
-재고가 안 걷힌다. 그래서 아래 시연 절차의 *"먼저 두 알림을 재운다"* 처럼
-**끄는 구간에만 사람이 silence 를 건다.**
+**스위치는 하나다.** `batch.scheduling.enabled` 가 `ExpireScheduler`·`CleanupScheduler`·
+`VerifyScheduler`·`CouponRoundScheduler` 를 **모두** 문고(`@ConditionalOnProperty`),
+게이지 `cy_coupon_round_scheduling_enabled` 는 그 속성을 그대로 읽는다
+(`CouponRoundPendingRefresher:101,148`). ⚠️ **이름이 회차 전용처럼 보이지만 아니다** —
+CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케줄링 전체를 대표한다.
 
-**회차 상태 전이는 갈랐다 (CY-446).** `cy_coupon_round_scheduling_enabled == 1` 로 갈래를 뺀다.
-근거가 다른 것은 **크론이 1분**이기 때문이다 — 만료·정리(일 1회)는 silence 한 번이 슬롯 하나를
-덮지만, 1분 크론은 끈 구간이 곧 **상시 점등**이라 덮을 수가 없다. 게다가 compose 기본이
-`BATCH_SCHEDULING_ENABLED=false` 라 그 구간이 예외가 아니라 기본값이다.
+**그 축을 쓰는 알림과 사람이 재우는 알림이 갈린다.** 규칙 파일에서 센 것이 정본이다.
+
+| | 어떻게 | 무엇 |
+|---|---|---|
+| 규칙이 갈래를 뺀다 | `unless on(instance, job) (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)` | `ExpireNotSucceeding` · `VerifyNotSucceeding` · `ExpireMetricsBackdated` · `CouponRoundsNotOpening` · `CouponRoundsNotClosing` · `CouponRoundMissedWindow` |
+| 사람이 silence 를 건다 | 아래 `amtool` 절차 | `ExpireNeverSucceeded` · `CleanupNeverSucceeded` · `VerifyNeverSucceeded` · `ExpireMetricsUnknown` |
+
+**왜 `unless … == 0` 이고 `and … == 1` 이 아닌가.** 예전 규칙은 `and on(...) (게이지 == 1)`
+이었는데, 그 꼴은 **게이지 시계열이 없을 때 좌변까지 지운다** — 우변이 빈 벡터면 교집합이
+비기 때문이다. 배치가 죽거나 스크레이프가 끊기면 게이지도 같이 사라지므로, **정말 사고인
+구간에서 critical 이 조용해진다.** `unless` 는 우변이 없으면 아무것도 안 빼므로 부재에는
+원래대로 운다. `promtool` 로 재서 확인했고 테스트 파일이 그 단언을 든다.
+
+**왜 `min_over_time([25h])` 인가.** 순간값 `== 0` 이면 **지금 껐다**만으로 지난 25시간의
+실패가 덮인다 — 만료가 실제로 실패해 알림이 뜬 뒤 스위치를 끄면 그대로 조용해진다.
+`min_over_time` 은 창 전체가 0 이어야 참이라 그 구멍을 닫는다.
+`for: 25h` 짜리 `BatchSchedulingDisabled`(critical)가 **끈 상태 자체**를 따로 진다 —
+갈래를 뺐다고 아무도 모르는 상태로 두지 않는다.
+
+**`*NeverSucceeded` 넷을 규칙으로 안 가른 이유.** 그쪽 축은 *"한 번도 안 돌았다"*(`NaN`)이고
+콜드 스타트와 구분이 안 된다. 게이트를 붙이면 **처음 띄우는 날의 진짜 미기동**까지 덮는다 —
+그 판단은 사람이 하는 것이 맞다. 대신 그 판단을 168시간짜리 silence 로 **기한을 박아** 둔다.
 
 > ⚠️ **대가를 여기 적어 둔다.** 이 갈래는 *스위치가 사고로 꺼진 것*도 함께 가린다.
 > 배포에서 `BATCH_SCHEDULING_ENABLED` 를 넘기던 자리가 빠지면 조용히 `false` 가 되고,
