@@ -125,11 +125,13 @@ class RedisRuntimeConfigContractTest {
     }
 
     @Test
-    void newEnvironmentSetupRequiresExplicitIdempotentRuntimeConfigSeed() throws Exception {
+    void newEnvironmentSetupDocumentsApiBootstrapAndKeepsTheOptionalIdempotentSeed() throws Exception {
         String readme = Files.readString(REPO_ROOT.resolve("README.md"));
         String compose = Files.readString(REPO_ROOT.resolve("compose.yml"));
 
         assertThat(readme).contains(
+                "`config:runtime`은 API 기동 시에만 부트스트랩한다.",
+                "별도 시드 없이 시작할 수 있다.",
                 "docker compose up -d redis",
                 "docker compose --profile runtime-config-seed run --rm runtime-config-seed");
         assertThat(compose).contains(

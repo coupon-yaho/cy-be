@@ -181,9 +181,13 @@ docker build --build-arg APP_MODULE=batch -t coupon-yaho-batch .
 
 ### 신규 환경의 런타임 설정 초기화
 
-`config:runtime`은 애플리케이션이 자동으로 만들지 않는다. 신규 Redis 볼륨을 준비한
-환경에서는 API를 올리기 전에 Redis를 기동하고 다음 시드 작업을 명시적으로 한 번
-실행한다.
+`config:runtime`은 API 기동 시에만 부트스트랩한다. 새 Redis 볼륨에서 키가 없으면 API가
+기본값(revision 0)을 `SET NX`로 한 번 저장하므로, compose를 쓰지 않는 Docker 배포도
+별도 시드 없이 시작할 수 있다. 기본값은 `runtime-config.bootstrap` 블록 또는
+`RUNTIME_CONFIG_BOOTSTRAP_*` 환경변수로 정한다.
+
+compose의 시드 프로파일은 그대로 남긴다. API보다 먼저 값을 넣어야 하는 운영 절차에서는
+다음 명령을 실행할 수 있으며, API 부트스트랩과 겹쳐도 `SET NX`라 서로 덮어쓰지 않는다.
 
 ```bash
 docker compose up -d redis
@@ -191,9 +195,9 @@ docker compose --profile runtime-config-seed run --rm runtime-config-seed
 docker compose up -d
 ```
 
-시드 작업은 `SET NX`를 사용하므로 이미 존재하는 설정과 revision을 덮어쓰지 않는다.
-이 절차는 **새 환경의 최초 초기화 전용**이다. 운영 중 키 유실이나 데이터 복구 상황에서
-revision을 0으로 되돌리는 복구 수단으로 사용하지 않는다.
+기동 뒤에 키가 사라진 경우에는 읽기 경로가 값을 다시 심지 않는다. last-known-good가 있으면
+`STALE`을, 없으면 `STORE_MISSING`을 반환해 사고를 드러낸다. 기동 단계의 부트스트랩과 읽기
+경로의 미스 처리는 의도적으로 다르다.
 
 ### 관측 계정 권한 재부여 (`--profile obs-grants`)
 
