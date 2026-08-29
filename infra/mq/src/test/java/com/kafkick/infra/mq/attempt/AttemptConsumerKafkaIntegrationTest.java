@@ -10,7 +10,9 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -25,6 +27,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
@@ -83,6 +86,7 @@ class AttemptConsumerKafkaIntegrationTest {
 
     private static final int PARTITIONS = 2;
     private static final Duration SETTLE = Duration.ofSeconds(20);
+    private static final String READINESS_REQUEST_PREFIX = "consumer-ready-";
 
     private static final IssuanceFlowEventFactory FACTORY =
             new IssuanceFlowEventFactory(UUID::randomUUID);
@@ -114,6 +118,12 @@ class AttemptConsumerKafkaIntegrationTest {
         if (producer != null) {
             producer.close();
         }
+    }
+
+    @AfterEach
+    void stopTestContainers() {
+        CONTAINERS.forEach(MessageListenerContainer::stop);
+        CONTAINERS.clear();
     }
 
     /**
@@ -372,8 +382,21 @@ class AttemptConsumerKafkaIntegrationTest {
     ) {
         ConcurrentMessageListenerContainer<String, IssuanceFlowEvent> container =
                 factory.createContainer(KafkaTopicConfig.ISSUE_ATTEMPT);
+        String readinessRequestId = READINESS_REQUEST_PREFIX + UUID.randomUUID();
         container.getContainerProperties().setGroupId(groupId);
-        container.getContainerProperties().setMessageListener(listener);
+        Set<Integer> readinessPartitions = ConcurrentHashMap.newKeySet();
+        container.getContainerProperties().setMessageListener(
+                (AcknowledgingMessageListener<String, IssuanceFlowEvent>) (record, acknowledgment) -> {
+                    IssuanceFlowEvent event = record.value();
+                    if (event != null && event.requestId().startsWith(READINESS_REQUEST_PREFIX)) {
+                        if (event.requestId().equals(readinessRequestId)) {
+                            readinessPartitions.add(record.partition());
+                        }
+                        acknowledgment.acknowledge();
+                        return;
+                    }
+                    listener.onMessage(record, acknowledgment);
+                });
         container.setConcurrency(1);
         CONTAINERS.add(container);
         container.start();
@@ -385,6 +408,18 @@ class AttemptConsumerKafkaIntegrationTest {
             assertThat(container.getAssignedPartitions()).containsExactlyInAnyOrder(
                     new TopicPartition(KafkaTopicConfig.ISSUE_ATTEMPT, 0),
                     new TopicPartition(KafkaTopicConfig.ISSUE_ATTEMPT, 1));
+        });
+        // 파티션 배정 콜백은 latest 시작 위치가 실제 poll 에 적용되기 전에 보일 수 있다. 각
+        // 파티션에 준비 레코드를 넣고 이 그룹이 둘 다 소비한 것을 확인해야 뒤의 첫 업무 레코드가
+        // 시작 위치 초기화와 경주하지 않는다. 준비 레코드는 모든 테스트 컨테이너가 공통 prefix로
+        // 걸러 실제 sink와 단언 값에는 들어가지 않는다.
+        await().pollInterval(Duration.ofMillis(200)).atMost(SETTLE).untilAsserted(() -> {
+            for (int partition = 0; partition < PARTITIONS; partition++) {
+                if (!readinessPartitions.contains(partition)) {
+                    publishReadiness(partition, readinessRequestId);
+                }
+            }
+            assertThat(readinessPartitions).containsExactlyInAnyOrder(0, 1);
         });
     }
 
@@ -398,6 +433,18 @@ class AttemptConsumerKafkaIntegrationTest {
     private static void publish(int partition, String payload) throws Exception {
         producer.send(new ProducerRecord<>(
                 KafkaTopicConfig.ISSUE_ATTEMPT, partition, "key", payload)).get();
+    }
+
+    private static void publishReadiness(int partition, String requestId) {
+        try {
+            IssuanceFlowEvent event = FACTORY.issueAttempt(new IssuanceFlowEvent.Ctx(
+                    requestId, 999_999L, 201L, Grade.GOLD, false,
+                    Instant.parse("2026-08-25T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
+                    QueueMode.ADAPTIVE, null, "test-probe"));
+            publish(partition, MAPPER.writeValueAsString(event));
+        } catch (Exception failure) {
+            throw new IllegalStateException("컨슈머 준비 레코드를 발행할 수 없습니다.", failure);
+        }
     }
 
     /**
