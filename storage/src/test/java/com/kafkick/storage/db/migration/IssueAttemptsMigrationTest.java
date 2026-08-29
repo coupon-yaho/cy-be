@@ -110,8 +110,9 @@ class IssueAttemptsMigrationTest {
             assertThat(query("SELECT COUNT(*) FROM information_schema.columns"
                     + " WHERE table_schema = DATABASE() AND table_name = 'issue_attempts'"))
                     .isEqualTo("26");
-            assertThat(query("SELECT COUNT(*) FROM information_schema.check_constraints"
-                    + " WHERE constraint_schema = DATABASE() AND constraint_name LIKE 'ck_attempt%'"))
+            assertThat(query("SELECT COUNT(*) FROM information_schema.table_constraints"
+                    + " WHERE constraint_schema = DATABASE() AND table_name = 'issue_attempts'"
+                    + " AND constraint_type = 'CHECK'"))
                     .isEqualTo("5");
         }
     }

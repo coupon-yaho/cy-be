@@ -49,16 +49,16 @@ public class AdminNotificationController {
     }
 
     /**
-     * 캠페인별 발송 신청·성공·실패·잔여 건수를 독립 관측 상태와 함께 조회합니다.
+     * 회차별 발송 신청·성공·실패·잔여 건수를 독립 관측 상태와 함께 조회합니다.
      *
-     * @param campaignId 특정 캠페인만 조회할 선택 식별자
+     * @param couponId 특정 회차만 조회할 선택 식별자
      * @param caller 기존 호출자 체인에서 검증한 관리자 회원
      * @return 후속 알림 집계 연결에서 사용할 발송 요약
      * @throws BusinessException 알림 집계가 아직 연결되지 않은 경우
      */
     @GetMapping("/notifications/summary")
     public ResponseEnvelope<NotificationSummaryResponse> summary(
-            @RequestParam(required = false) @Positive Long campaignId,
+            @RequestParam(required = false) @Positive Long couponId,
             Caller caller) {
         throw new BusinessException(AdminApiErrorCode.NOT_IMPLEMENTED);
     }

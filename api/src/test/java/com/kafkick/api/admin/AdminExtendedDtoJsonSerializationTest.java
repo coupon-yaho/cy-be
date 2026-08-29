@@ -35,6 +35,7 @@ import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
 import com.kafkick.core.observation.SourceStatus;
+import com.kafkick.core.notification.domain.NotifyFailureReason;
 
 /** 목록·운영 명령·상세 응답 DTO의 확정 enum과 nullable JSON 계약을 고정합니다. */
 @AdminJsonTest
@@ -59,6 +60,11 @@ class AdminExtendedDtoJsonSerializationTest {
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
         assertThat(objectMapper.writeValueAsString(new NotificationFailurePageResponse(List.of(), null, false)))
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
+        assertThat(objectMapper.writeValueAsString(new NotificationFailurePageResponse(
+                List.of(new NotificationFailurePageResponse.NotificationFailureItem(
+                        1L, 2L, 3L, NotifyFailureReason.SEND_TIMEOUT, 2, AT)), null, false)))
+                .contains("\"couponId\":2", "\"reasonCode\":\"SEND_TIMEOUT\"")
+                .doesNotContain("campaignId");
         assertThat(objectMapper.writeValueAsString(new VerificationRunPageResponse(List.of(), null, false)))
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
     }
