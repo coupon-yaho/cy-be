@@ -20,6 +20,8 @@ public interface CouponStockRepository {
      * 결과가 없다 — 성공이 아니면 전부 사고이고, 호출한 발급 트랜잭션을 통째로 롤백시킨다.
      * 반환값이 없는 이유가 그것이다.
      *
+     * @throws IllegalArgumentException {@code updatedAt} 이 {@code null} 일 때. 그대로 내려보내면
+     *     저장 계층이 낼 수 있는 무결성 위반이 아래 CHECK 하나가 아니게 되어 분류가 깨진다
      * @throws CouponStockOverflowException 활성 수가 총재고를 넘어
      *     {@code ck_coupon_stock_active_range} 가 걸렸을 때. <b>Redis 와 DB 가 갈린 사고</b>이지
      *     매진이 아니다

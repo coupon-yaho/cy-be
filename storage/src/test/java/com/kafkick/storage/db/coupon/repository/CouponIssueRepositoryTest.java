@@ -206,6 +206,16 @@ class CouponIssueRepositoryTest {
     }
 
     @Test
+    @DisplayName("갱신 시각이 없으면 DB 에 가기 전에 거절한다 — NOT NULL 위반을 재고 사고로 오분류하지 않는다")
+    void rejectsNullUpdatedAtBeforeReachingTheDatabase() {
+        assertThatThrownBy(() -> couponStockRepository.incrementActiveCount(10L, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .isNotInstanceOf(CouponStockOverflowException.class);
+
+        assertThat(activeCount()).isZero();
+    }
+
+    @Test
     @DisplayName("V2에서 DB CHECK가 총재고 초과 발급을 롤백하고 Redis 선점을 보상한다")
     void compensateV2WhenActiveCountCheckRejectsIssue() {
         jdbcTemplate.update("UPDATE coupon_stocks SET total_quantity = 1 WHERE coupon_id = 10");
