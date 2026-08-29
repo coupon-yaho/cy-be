@@ -59,7 +59,8 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
 // (CY-590). 그때 그 테스트를 안 돌리고 흐름 테스트만 봐서 늦게 알았을 뿐이다.
 @RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
         ExpireAdminController.class, CleanupAdminController.class,
-        VerifyReportController.class})
+        VerifyReportController.class, BatchHistoryController.class,
+        VerifyHistoryController.class})
 public class BatchApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(BatchApiExceptionHandler.class);

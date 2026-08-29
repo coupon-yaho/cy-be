@@ -182,11 +182,14 @@ class NoWallClockInBatchTest {
      *                     재료가 아니고, .coderabbit.yaml 이 그 둘만 예외로 뒀다.
      * DefaultZoneGuard 1  **검사 대상 자체가 그 값이다.** 기동 때 JVM 기본 존이 고정
      *                     오프셋 0 인지 보는 가드라, 이것을 안 읽으면 할 일이 없다.
+     * BatchRunView     1  배치 메타 시각을 응답에 실을 때 옮기는 자리. 존 인자 갈래에
+     *                     기본값을 주는 한 줄이고, 판정에 안 들어간다 — 이력 조회다.
      * </pre>
      */
     private static final Map<String, Integer> DEFAULT_ZONE_BUDGET = Map.of(
             "com/kafkick/batch/config/BatchTimeAxis.java", 1,
-            "com/kafkick/batch/config/DefaultZoneGuard.java", 1);
+            "com/kafkick/batch/config/DefaultZoneGuard.java", 1,
+            "com/kafkick/batch/api/BatchRunView.java", 1);
 
     @Test
     @DisplayName("JVM 기본 존을 읽는 파일과 횟수가 예산과 정확히 같다")

@@ -57,7 +57,8 @@ public final class BatchTimeAxis {
      * 세우고, {@code null} 이면 도메인의 검증이 즉시 던진다 — 여기서 조용히 흘려 보내면
      * 실패 지점이 저장 계층으로 밀린다.
      */
-    static LocalDateTime onDomainAxis(LocalDateTime batchMetaTime, ZoneId batchMetaZone) {
+    public static LocalDateTime onDomainAxis(LocalDateTime batchMetaTime,
+            ZoneId batchMetaZone) {
         return batchMetaTime.atZone(batchMetaZone)
                 .withZoneSameInstant(ZoneOffset.UTC)
                 .toLocalDateTime();

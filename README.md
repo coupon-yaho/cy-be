@@ -55,7 +55,8 @@ coupon-yaho
 │   └── src/main/java/com/kafkick
 │       ├── BatchApplication.java
 │       └── batch/
-│           ├── api/                     admin API — verify 트리거·조회, expire·cleanup 복구 (docs/15)
+│           ├── api/                     admin API — verify 트리거·조회, expire·cleanup 복구,
+│           │                             실행 이력 조회 (docs/15)
 │           ├── config/                  기동 가드, 지표, 전용 실행기, 시각 축 변환
 │           ├── job/                     Spring Batch 잡 정의
 │           ├── replay/                  이력 리플레이
@@ -67,6 +68,7 @@ coupon-yaho
 │       │   ├── domain/                  도메인 모델
 │       │   ├── service/                 유즈케이스
 │       │   └── port/                    어댑터가 구현할 인터페이스
+│       ├── batch/                       배치 실행 이력 포트 — 세 잡이 공유하므로 평면
 │       ├── expiration/                  만료 포트 + 청크 값 객체 — 평면
 │       ├── verification/                검증 포트 + 도메인 enum — 평면
 │       └── support/                     TimeProvider(UTC), ErrorCode, BusinessException
@@ -77,6 +79,7 @@ coupon-yaho
 │   │   │   ├── entity/                  JPA 엔티티
 │   │   │   ├── repository/              JpaRepository + core port 구현체
 │   │   │   └── mapper/                  엔티티 ↔ 도메인 모델 변환
+│   │   ├── batch/                       배치 메타(BATCH_JOB_EXECUTION) 조회 어댑터 — 평면
 │   │   ├── verification/                검증 JDBC 어댑터 — 평면
 │   │   ├── expiration/                  만료 JDBC 어댑터 — 평면
 │   │   ├── support/                     BaseEntity, UpdatableEntity
