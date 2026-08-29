@@ -163,6 +163,20 @@ class RedisRuntimeConfigStoreTest {
     }
 
     @Test
+    void keyDeletedAfterAHealthyReadRemainsStaleInsteadOfBeingBootstrappedAgain() {
+        FakeRedis fake = new FakeRedis(objectMapper, json(snapshot(4)));
+        RedisRuntimeConfigStore store = store(fake.template);
+        assertThat(store.get().status()).isEqualTo(SourceStatus.VALID);
+        fake.config.set(null);
+
+        RuntimeConfigSnapshot result = store.get();
+
+        assertThat(result.status()).isEqualTo(SourceStatus.STALE);
+        assertThat(result.revision()).isEqualTo(4);
+        assertThat(fake.config).hasValue(null);
+    }
+
+    @Test
     void lastKnownGoodRevisionNeverMovesBackward() {
         FakeRedis fake = new FakeRedis(objectMapper, json(snapshot(5)));
         RedisRuntimeConfigStore store = store(fake.template);
