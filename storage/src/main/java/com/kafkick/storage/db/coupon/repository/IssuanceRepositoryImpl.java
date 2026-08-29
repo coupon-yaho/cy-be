@@ -17,14 +17,13 @@ import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
 import com.kafkick.core.coupon.exception.CouponIssueMemberNotFoundException;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.port.IssuanceRepository;
-import com.kafkick.core.coupon.port.CouponExpirationCandidateQueryPort;
 import com.kafkick.storage.db.coupon.entity.IssuanceEntity;
 import com.kafkick.storage.db.coupon.mapper.IssuanceEntityMapper;
 import com.kafkick.storage.db.support.SqlErrorInspector;
 
 @Repository
 public class IssuanceRepositoryImpl
-        implements IssuanceRepository, CouponExpirationCandidateQueryPort {
+        implements IssuanceRepository {
 
     private static final int MYSQL_DUPLICATE_KEY_ERROR = 1062;
     private static final int MYSQL_FOREIGN_KEY_ERROR = 1452;
@@ -103,29 +102,6 @@ public class IssuanceRepositoryImpl
     }
 
     @Override
-    public List<Issuance> findExpiredIssuedAfterId(
-            Instant asOf,
-            Long afterId,
-            int limit
-    ) {
-        try {
-            return issuanceJpaRepository.findExpiredIssuedAfterId(
-                            IssuanceStatus.ISSUED,
-                            asOf,
-                            afterId,
-                            PageRequest.of(0, limit)
-                    ).stream()
-                    .map(IssuanceEntityMapper::toDomain)
-                    .toList();
-        } catch (DataAccessException exception) {
-            throw new CouponPersistenceException(
-                    "쿠폰 만료 대상 조회에 실패했습니다.",
-                    exception
-            );
-        }
-    }
-
-    @Override
     public boolean updateStatusIfCurrent(
             Long issuanceId,
             Long memberId,
@@ -137,8 +113,8 @@ public class IssuanceRepositoryImpl
             return issuanceJpaRepository.updateStatusIfCurrent(
                     issuanceId,
                     memberId,
-                    currentStatus,
-                    nextStatus,
+                    currentStatus.name(),
+                    nextStatus.name(),
                     updatedAt
             ) == 1;
         } catch (DataAccessException exception) {
