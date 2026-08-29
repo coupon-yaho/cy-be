@@ -33,6 +33,7 @@ import com.kafkick.core.observation.DomainMeterNames;
  * up                      sum     살아 있는 인스턴스 수
  * 대기열 길이             단일     batch 한 곳에서만 나온다
  * Kafka lag               sum     파티션 합
+ * Kafka lag max           max     파티션별 지연 최댓값
  * 정합성 gap              단일     batch 한 곳에서만 나온다
  * </pre>
  *
@@ -96,7 +97,7 @@ public enum MetricAggregation {
     public static final String NETWORK_SENT_RATE = "tomcat_global_sent_bytes_total";
     public static final String KAFKA_CONSUMER_LAG = "kafka_consumer_fetch_manager_records_lag";
     public static final String KAFKA_CONSUMER_LAG_MAX =
-            "kafka.consumer.fetch.manager.records.lag.partition.max";
+            "kafka_consumer_fetch_manager_records_lag_max";
     public static final String KAFKA_ATTEMPT_ARRIVAL_RATE =
             "kafka_producer_topic_record_send_total";
     public static final String ATTEMPT_ARCHIVE_RATE =

@@ -1626,18 +1626,26 @@ class PromMetricsAssemblerTest {
                 "process_cpu_usage", List.of(
                         new PromSample("kafka_consumer_fetch_manager_records_lag",
                                 Map.of("job", "api", "instance", "api-1",
-                                        "consumer_group", "coupon-attempt-archive"),
-                                7d, EVALUATED),
+                                        "consumer_group", "coupon-attempt-archive", "partition", "0"),
+                                4d, EVALUATED),
+                        new PromSample("kafka_consumer_fetch_manager_records_lag",
+                                Map.of("job", "api", "instance", "api-1",
+                                        "consumer_group", "coupon-attempt-archive", "partition", "1"),
+                                3d, EVALUATED),
                         new PromSample("kafka_consumer_fetch_manager_records_lag",
                                 Map.of("job", "api", "instance", "api-2",
+                                        "consumer_group", "coupon-attempt-archive", "partition", "2"),
+                                5d, EVALUATED),
+                        new PromSample("kafka_consumer_fetch_manager_records_lag_max",
+                                Map.of("job", "api", "instance", "api-1",
                                         "consumer_group", "coupon-attempt-archive"),
-                                5d, EVALUATED))));
+                                9d, EVALUATED))));
 
         AdminMetricsResponse response = assemble(client, globalQuery());
 
         assertThat(response.persistence().state()).isEqualTo(SourceStatus.VALID);
         assertThat(response.persistence().value().lagTotal()).isEqualTo(12L);
-        assertThat(response.persistence().value().partitionMax()).isEqualTo(7L);
+        assertThat(response.persistence().value().partitionMax()).isEqualTo(9L);
         assertThat(response.persistence().value().arrivalRate()).isEqualTo(20d);
         assertThat(response.persistence().value().consumeRate()).isEqualTo(24d);
         assertThat(response.persistence().value().netDrainRate()).isEqualTo(4d);
@@ -1718,8 +1726,35 @@ class PromMetricsAssemblerTest {
                 .findFirst().orElseThrow();
         assertThat(saturation).contains("job=\"api\"");
         assertThat(saturation).contains(MetricAggregation.TOMCAT_BUSY);
+        assertThat(saturation).contains(MetricAggregation.KAFKA_CONSUMER_LAG_MAX);
+        assertThat(saturation).contains(
+                "rate(" + MetricAggregation.NETWORK_RECEIVED_RATE + "{job=\"api\"}[60s])");
+        assertThat(saturation).contains(
+                "rate(" + MetricAggregation.NETWORK_SENT_RATE + "{job=\"api\"}[60s])");
         // 큐 길이는 batch 가 유일한 원천이다. api 로 좁히면 표본이 통째로 사라진다.
         assertThat(saturation).contains(" or {__name__=~\"" + MetricAggregation.QUEUE_LENGTH);
+    }
+
+    @Test
+    @DisplayName("Kafka 준비 상태가 없으면 지연과 실패 표본이 있어도 PENDING 이다")
+    void kafkaDependencyRequiresProvisionedState() {
+        FakePromQuery client = kafkaDependencyQuery(false);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.dependencies().kafka().value()).isNull();
+    }
+
+    @Test
+    @DisplayName("Kafka 실패율은 발급 요청을 실패 건수로 다시 부풀리지 않는다")
+    void kafkaFailureRateUsesIssueAttemptsAsDenominator() {
+        FakePromQuery client = kafkaDependencyQuery(true);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(response.dependencies().kafka().value().errorRate()).isEqualTo(0.1d);
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────────
@@ -1751,6 +1786,29 @@ class PromMetricsAssemblerTest {
             });
             return List.copyOf(matched);
         });
+    }
+
+    private static FakePromQuery kafkaDependencyQuery(boolean includeProvisionedState) {
+        List<PromSample> operational = new ArrayList<>();
+        if (includeProvisionedState) {
+            operational.add(domain(MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE, Map.of(),
+                    SourceStatusCode.of(SourceStatus.VALID)));
+        }
+        return respond(Map.of(
+                "quantile!=", List.of(
+                        kafkaQuantile("0.95", 0.004d, "api-1"),
+                        kafkaQuantile("0.99", 0.008d, "api-1")),
+                "rate(", List.of(
+                        rate("issue", "success", 100d, "api-1"),
+                        new PromSample(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
+                                Map.of("instance", "api-1"), 10d, EVALUATED)),
+                "process_cpu_usage", operational,
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+    }
+
+    private static PromSample kafkaQuantile(String quantile, double seconds, String instance) {
+        return new PromSample(MetricAggregation.KAFKA_TEMPLATE_SECONDS,
+                Map.of("quantile", quantile, "instance", instance), seconds, EVALUATED);
     }
 
     private static ObservedValue<Double> rateOf(ErrorMetrics errors, ErrorClassKey key) {

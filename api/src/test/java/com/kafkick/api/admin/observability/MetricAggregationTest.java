@@ -102,6 +102,8 @@ class MetricAggregationTest {
                 .isEqualTo(MeterNames.HTTP_RESULT.replace('.', '_') + "_total");
         assertThat(MetricAggregation.CONSISTENCY_GAP_STATE)
                 .isEqualTo(DomainMeterNames.CONSISTENCY_GAP_STATE.replace('.', '_'));
+        assertThat(MetricAggregation.KAFKA_CONSUMER_LAG_MAX)
+                .isEqualTo("kafka_consumer_fetch_manager_records_lag_max");
     }
 
     /** 표에 없는 지표를 패널이 임의로 집계하지 못하게 막습니다. */

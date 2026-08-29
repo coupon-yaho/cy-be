@@ -247,10 +247,10 @@ public class PromMetricsAssembler {
     /**
      * 자원 6행 · in-flight · 큐가 쓰는 표본을 한 번에 받습니다.
      *
-     * <p><b>앞쪽 셀렉터에만 {@code job="api"} 를 겁니다.</b> batch 도 CPU · heap · HikariCP 를
-     * 내므로(실측) 라벨이 없으면 관측기 자신의 수치가 발급 경로 자원 행에 섞입니다. 반대로 큐
-     * 길이는 batch 가 유일한 원천이라 그 라벨을 걸면 표본이 통째로 사라집니다 — 그래서 두
-     * 셀렉터를 {@code or} 로 합칩니다.</p>
+     * <p>API 자원과 네트워크 rate에는 {@code job="api"} 를 겁니다. batch 도 CPU · heap ·
+     * HikariCP와 Tomcat 네트워크 미터를 내므로(실측) 라벨이 없으면 관측기 자신의 수치가 발급
+     * 경로 자원 행에 섞입니다. 반대로 큐 길이는 batch 가 유일한 원천이라 그 라벨을 걸면 표본이
+     * 통째로 사라집니다 — 그래서 큐 셀렉터만 job 범위를 두지 않습니다.</p>
      *
      * <p>{@code up} 은 미터가 아니라 Prometheus 가 만드는 시계열이지만 같은 셀렉터로 함께
      * 옵니다. 값을 더하면 살아 있는 인스턴스 수가 됩니다.</p>
@@ -269,6 +269,7 @@ public class PromMetricsAssembler {
                 MetricAggregation.DISK_FREE,
                 MetricAggregation.DISK_TOTAL,
                 MetricAggregation.KAFKA_CONSUMER_LAG,
+                MetricAggregation.KAFKA_CONSUMER_LAG_MAX,
                 MetricAggregation.KAFKA_TOPICS_PROVISIONED,
                 MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE,
                 MetricAggregation.UP) + "\"," + TAG_JOB + "=\"" + JOB_API + "\"}"
@@ -276,9 +277,11 @@ public class PromMetricsAssembler {
                 MetricAggregation.QUEUE_LENGTH,
                 MetricAggregation.QUEUE_LENGTH_STATE,
                 MetricAggregation.OBSERVED_COUPON_ID) + "\"}"
-                + " or rate(" + MetricAggregation.NETWORK_RECEIVED_RATE + "["
+                + " or rate(" + MetricAggregation.NETWORK_RECEIVED_RATE
+                + "{" + TAG_JOB + "=\"" + JOB_API + "\"}["
                 + window.seconds() + "s])"
-                + " or rate(" + MetricAggregation.NETWORK_SENT_RATE + "["
+                + " or rate(" + MetricAggregation.NETWORK_SENT_RATE
+                + "{" + TAG_JOB + "=\"" + JOB_API + "\"}["
                 + window.seconds() + "s])";
     }
 
@@ -1153,13 +1156,20 @@ public class PromMetricsAssembler {
     private static ObservedValue<DependencySnapshot> kafkaDependency(
             QueryResult latency, QueryResult results, QueryResult operational,
             Freshness freshness, boolean denominatorTrusted) {
+        // 세 질의 중 하나라도 실패하면 일부 표본으로 정상처럼 조립하지 않고 UNAVAILABLE 로
+        // 중단한다. 질의는 성공했지만 준비 상태·분모·지연·신선도 중 하나가 없으면 PENDING,
+        // 준비 상태가 값을 싣지 않는 상태면 그 상태를 그대로 보존한다. 신뢰 가능한 요청이
+        // 0건일 때만 Kafka 의존성이 적용되지 않았다는 N_A 로 내린다.
         if (latency.unavailable() || results.unavailable() || operational.unavailable()) {
             return unavailable();
         }
         Optional<SourceStatus> provisioned = readState(
                 MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE,
                 operational.filter(named(MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE)));
-        if (provisioned.isPresent() && !provisioned.get().carriesValue()) {
+        if (provisioned.isEmpty()) {
+            return pending();
+        }
+        if (!provisioned.get().carriesValue()) {
             return new ObservedValue<>(null, provisioned.get(), null);
         }
         if (!denominatorTrusted) {
@@ -1180,7 +1190,7 @@ public class PromMetricsAssembler {
         OptionalDouble failures = reduceOrUnknown(
                 MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
                 results.filter(named(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE)));
-        double denominator = attempts.orElse(0d) + failures.orElse(0d);
+        double denominator = attempts.orElse(0d);
         double errorRate = denominator <= 0d ? 0d : failures.orElse(0d) / denominator;
         return new ObservedValue<>(
                 new DependencySnapshot(millis(p95), millis(p99), errorRate),
@@ -1198,13 +1208,18 @@ public class PromMetricsAssembler {
 
     private static ObservedValue<PersistenceLagSummary> persistence(
             QueryResult results, QueryResult operational, Freshness freshness, TrafficMetrics traffic) {
+        // 결과·운영 질의가 실패하면 계산을 중단하고 UNAVAILABLE 로 내린다. 질의는 성공했지만
+        // 파티션 lag·최대 lag·처리율·유입률·신선도 중 하나가 없으면 0을 만들지 않고 PENDING,
+        // 필요한 값이 모두 있으면 HTTP 신선도에 따라 VALID 또는 STALE 로 보존한다.
         if (results.unavailable() || operational.unavailable()) {
             return unavailable();
         }
         List<PromSample> lag = operational.filter(named(MetricAggregation.KAFKA_CONSUMER_LAG)
                 .and(label(TAG_CONSUMER_GROUP, ATTEMPT_ARCHIVE_GROUP)));
+        List<PromSample> lagMax = operational.filter(named(MetricAggregation.KAFKA_CONSUMER_LAG_MAX)
+                .and(label(TAG_CONSUMER_GROUP, ATTEMPT_ARCHIVE_GROUP)));
         OptionalDouble lagTotal = reduceOrUnknown(MetricAggregation.KAFKA_CONSUMER_LAG, lag);
-        OptionalDouble partitionMax = reduceOrUnknown(MetricAggregation.KAFKA_CONSUMER_LAG_MAX, lag);
+        OptionalDouble partitionMax = reduceOrUnknown(MetricAggregation.KAFKA_CONSUMER_LAG_MAX, lagMax);
         OptionalDouble consumeRate = reduceOrUnknown(MetricAggregation.ATTEMPT_ARCHIVE_RATE,
                 results.filter(named(MetricAggregation.ATTEMPT_ARCHIVE_RATE)));
         Double arrivalRate = traffic.issueAttemptRps().value();
@@ -1308,6 +1323,9 @@ public class PromMetricsAssembler {
     }
 
     private static ResourceRow diskNetworkRow(QueryResult samples, Freshness freshness) {
+        // 묶음 질의 자체가 실패하면 행을 유지한 채 UNAVAILABLE 로 내린다. 질의는 성공했지만 디스크
+        // 표본이 없으면 사용률은 PENDING이고, RX/TX 중 하나가 없으면 사용률 상태는 보존하면서
+        // 상세 문구만 "네트워크 처리량 원천 없음"으로 내린다.
         if (samples.unavailable()) {
             return row(ResourceRowSpec.DISK_NETWORK, ResourceRowSpec.DISK_NETWORK.detail(), unavailable());
         }
