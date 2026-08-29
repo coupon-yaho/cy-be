@@ -12,6 +12,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,6 +54,7 @@ class RedisCouponDefinitionL2CacheIntegrationTest {
 
     private static final Instant NOW = Instant.parse("2026-08-28T00:00:00Z");
 
+    private static LettuceConnectionFactory factory;
     private static StringRedisTemplate redisTemplate;
 
     private final ObjectMapper objectMapper = JsonMapper.builder().build();
@@ -61,11 +63,22 @@ class RedisCouponDefinitionL2CacheIntegrationTest {
 
     @BeforeAll
     static void connect() {
-        LettuceConnectionFactory factory = new LettuceConnectionFactory(
+        factory = new LettuceConnectionFactory(
                 new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getFirstMappedPort()));
         factory.afterPropertiesSet();
         factory.start();
         redisTemplate = new StringRedisTemplate(factory);
+    }
+
+    /**
+     * 컨테이너보다 먼저 연결을 닫는다. 안 닫으면 Lettuce 가 <b>이미 죽은 컨테이너로 재접속</b>을
+     * 시도하고, 그 실패 알림을 종료 중인 Netty 이벤트 루프에 넣다가
+     * {@code RejectedExecutionException: event executor terminated} 를 ERROR 로 뱉는다.
+     * 단언은 이미 끝난 뒤라 빌드는 초록인데 로그만 시뻘게진다 — 진짜 실패와 구별이 안 된다.
+     */
+    @AfterAll
+    static void disconnect() {
+        factory.destroy();
     }
 
     @BeforeEach

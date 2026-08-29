@@ -20,12 +20,32 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 로드 권한의 lease 는 <b>최악의 로드 시간보다 길어야 한다.</b> 짧으면 lease 가 먼저 끝나고,
  * 뒤늦게 끝난 로더가 그 사이 다른 인스턴스가 올린 새 값을 덮어쓴다.
  *
- * <p>그 상한의 출처는 두 곳이다 — storage.yml 의 Hikari {@code connection-timeout}(커넥션 대기)
- * 과 정의 질의의 {@code jakarta.persistence.query.timeout}(질의 자체). 셋이 각자의 파일에 흩어져
- * 있어 한쪽만 바뀌면 관계가 조용히 깨진다. <b>예외도 로그도 없고</b>, 덮어쓴 값이 다음 TTL 까지
- * 남는 것으로만 드러난다. 그래서 세 값을 여기서 함께 읽어 대조한다.
+ * <p>여기서 말하는 "로드" 는 <b>권한을 쥐고 있는 구간 전체</b>다 — 권한은 DB 질의 전에 얻고,
+ * L2 게시가 끝난 뒤에야 {@code finally} 에서 반납된다. 그래서 Redis 왕복도 든다.
+ *
+ * <p>그 상한의 출처가 네 값, 세 파일이다 — storage.yml 의 Hikari {@code connection-timeout},
+ * 정의 질의의 {@code jakarta.persistence.query.timeout}, redis.yml 의 {@code connect-timeout}
+ * 과 명령 {@code timeout}. 한쪽만 바뀌면 관계가 조용히 깨진다. <b>예외도 로그도 없고</b>,
+ * 덮어쓴 값이 다음 TTL 까지 남는 것으로만 드러난다. 그래서 네 값을 여기서 함께 읽어 대조한다.
  */
 class CouponDefinitionL2LeaseBudgetTest {
+
+    /**
+     * <b>{@code .example} 이 아니라 실제로 로드되는 이름을 읽는다.</b> 이 두 파일은
+     * {@code .gitignore} 대상이라(45·48행) 저장소에는 {@code .example} 만 있지만, 클래스패스에는
+     * 항상 있다 — 루트 {@code build.gradle} 의 {@code processResources} 가 소스에 실제 이름이
+     * 없으면 {@code .example} 을 그 이름으로 산출물에 채운다. 신규 클론에서도 마찬가지다.
+     *
+     * <p>예제를 읽으면 안 되는 이유는 <b>각자 만든 실제 파일이 이기기 때문</b>이다(같은 곳의
+     * 주석: "실제 이름의 파일이 소스에 있으면 그쪽이 이긴다"). 누군가 자기
+     * {@code storage.yml} 의 {@code connection-timeout} 을 10초로 올려 두면 그 머신에서
+     * lease 예산은 실제로 깨져 있는데, 예제를 읽는 테스트는 그것을 못 본다.
+     *
+     * <p><b>리뷰 봇이 여기를 "존재하지 않는 리소스" 로 두 번 짚었다.</b> {@code git ls-files}
+     * 에는 {@code .example} 만 보이기 때문이다. 생성 규칙은 빌드 스크립트에 있다.
+     */
+    private static final String STORAGE_CONFIG = "/storage.yml";
+    private static final String REDIS_CONFIG = "/redis.yml";
 
     @Test
     void leaseOutlastsTheWorstCaseLoad() throws Exception {
@@ -66,22 +86,22 @@ class CouponDefinitionL2LeaseBudgetTest {
     }
 
     /**
-     * redis.yml 의 값은 {@code ${REDIS_COMMAND_TIMEOUT:500ms}} 꼴이다. 배포가 환경변수를 안 주면
+     * 값은 {@code ${REDIS_COMMAND_TIMEOUT:500ms}} 꼴이다. 배포가 환경변수를 안 주면
      * 실제로 쓰이는 것은 그 <b>기본값</b>이므로 거기서 뽑는다.
      */
     @SuppressWarnings("unchecked")
     private static Duration redisDuration(String key) throws Exception {
         try (InputStream stream = CouponDefinitionL2LeaseBudgetTest.class
-                .getResourceAsStream("/redis.yml")) {
-            assertThat(stream).as("redis.yml 이 테스트 클래스패스에 없다").isNotNull();
+                .getResourceAsStream(REDIS_CONFIG)) {
+            assertThat(stream).as("%s 가 테스트 클래스패스에 없다", REDIS_CONFIG).isNotNull();
             Map<String, Object> root = new Yaml().load(stream);
             Object raw = ((Map<String, Object>) nested(root, "spring", "data", "redis")).get(key);
-            assertThat(raw).as("redis.yml 에서 %s 를 찾지 못했다", key).isNotNull();
+            assertThat(raw).as("%s 에서 %s 를 찾지 못했다", REDIS_CONFIG, key).isNotNull();
             Matcher placeholder = Pattern.compile("\\$\\{[^:}]+:([^}]*)}").matcher(raw.toString());
             String value = placeholder.matches() ? placeholder.group(1) : raw.toString();
             Matcher amount = Pattern.compile("^(\\d+)(ms|s)$").matcher(value.trim());
             assertThat(amount.matches())
-                    .as("redis.yml 의 %s 값 '%s' 을 기간으로 못 읽었다", key, value).isTrue();
+                    .as("%s 의 %s 값 '%s' 을 기간으로 못 읽었다", REDIS_CONFIG, key, value).isTrue();
             long number = Long.parseLong(amount.group(1));
             return "s".equals(amount.group(2)) ? Duration.ofSeconds(number) : Duration.ofMillis(number);
         }
@@ -90,8 +110,8 @@ class CouponDefinitionL2LeaseBudgetTest {
     @SuppressWarnings("unchecked")
     private static long hikariConnectionTimeoutMillis() throws Exception {
         try (InputStream stream = CouponDefinitionL2LeaseBudgetTest.class
-                .getResourceAsStream("/storage.yml")) {
-            assertThat(stream).as("storage.yml 이 테스트 클래스패스에 없다").isNotNull();
+                .getResourceAsStream(STORAGE_CONFIG)) {
+            assertThat(stream).as("%s 가 테스트 클래스패스에 없다", STORAGE_CONFIG).isNotNull();
             Map<String, Object> root = new Yaml().load(stream);
             Map<String, Object> hikari = (Map<String, Object>) nested(
                     root, "spring", "datasource", "hikari");
@@ -104,7 +124,7 @@ class CouponDefinitionL2LeaseBudgetTest {
         Object current = root;
         for (String key : path) {
             current = ((Map<String, Object>) current).get(key);
-            assertThat(current).as("storage.yml 에서 %s 를 찾지 못했다", key).isNotNull();
+            assertThat(current).as("%s 에서 %s 를 찾지 못했다", STORAGE_CONFIG, key).isNotNull();
         }
         return current;
     }
