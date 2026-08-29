@@ -35,7 +35,9 @@ tasks.named('test') {
     // RedisRuntimeConfigContractTest 가 클래스패스가 아닌 원본 예제 설정을 직접 읽는다.
     // 이 선언이 없으면 설정만 바꾼 뒤 test 가 UP-TO-DATE 로 건너뛰어, 부트스트랩 계약이
     // 검사됐다는 거짓 초록불이 남는다.
-    inputs.files(file('src/main/resources/redis.yml.example'))
-            .withPropertyName('runtimeConfigBootstrapExample')
+    inputs.files(
+            file('src/main/resources/redis.yml.example'),
+            rootProject.file('README.md'))
+            .withPropertyName('runtimeConfigBootstrapContractInputs')
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }
