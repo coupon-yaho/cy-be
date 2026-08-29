@@ -28,4 +28,16 @@ public interface ErrorCode {
     default Dependency dependency() {
         return Dependency.NONE;
     }
+
+    /**
+     * 이 코드의 5xx 를 스택트레이스와 함께 남길지.
+     *
+     * <p>기본이 {@code true} 인 이유는 5xx 가 보통 예상 밖 실패라서다. 다만 <b>정상 흐름에서
+     * 대량 발생하는 5xx</b> — 의존성 장애 동안의 조회 완화 응답 같은 것 — 은 예외다. 고QPS
+     * 경로에서 요청마다 스택을 찍으면 로그 I/O 자체가 응답 지연을 밀어 올려, 장애 대응이 아니라
+     * 장애 증폭이 된다. 그런 코드만 여기서 {@code false} 로 내린다.
+     */
+    default boolean logStackTrace() {
+        return true;
+    }
 }

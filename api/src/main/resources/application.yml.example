@@ -76,6 +76,24 @@ logging:
     com.kafkick.api.coupon.monitoring: ${COUPON_ISSUE_LOG_LEVEL:INFO}
 
 coupon:
+  definition-cache:
+    l1:
+      ttl: ${COUPON_DEFINITION_L1_TTL:10s}
+      load-timeout: ${COUPON_DEFINITION_L1_LOAD_TIMEOUT:100ms}
+      stale-max-age: ${COUPON_DEFINITION_L1_STALE_MAX_AGE:60s}
+      maximum-size: ${COUPON_DEFINITION_L1_MAXIMUM_SIZE:1}
+    # 인스턴스 사이에서 공유하는 정의 캐시. Redis 통로가 없는 배포에서는 항상 miss 인 no-op 이
+    # 대신 서고, 아래 값들은 쓰이지 않는다.
+    #
+    # ⚠️ wait-timeout 은 위 l1.load-timeout 보다 짧아야 한다. 로드 권한을 못 얻은 인스턴스가
+    #    그 시간만큼 L2 를 폴링하는데, 대기가 호출자 예산보다 길면 대기가 끝나기 전에 호출자가
+    #    전부 물러난다 — 락을 두고도 herd 가 그대로 DB 로 간다. 어긋나면 기동에서 죽는다.
+    l2:
+      ttl: ${COUPON_DEFINITION_L2_TTL:10s}
+      lock-lease: ${COUPON_DEFINITION_L2_LOCK_LEASE:3s}
+      wait-timeout: ${COUPON_DEFINITION_L2_WAIT_TIMEOUT:60ms}
+      poll-interval: ${COUPON_DEFINITION_L2_POLL_INTERVAL:10ms}
+
   idempotency:
     wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
     poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}

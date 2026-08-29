@@ -74,6 +74,7 @@ dependencies {
     // 원인은 우리 build.gradle 어디에도 안 적혀 있다. 버전은 BOM 이 정한다.
     testImplementation 'org.yaml:snakeyaml'
     implementation 'org.springframework:spring-tx'
+    implementation 'com.github.ben-manes.caffeine:caffeine'
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 }

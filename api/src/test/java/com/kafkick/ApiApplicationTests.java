@@ -31,6 +31,8 @@ import com.kafkick.api.admin.benchmark.BenchmarkRunConfiguration;
 import com.kafkick.api.admin.benchmark.BenchmarkStartOrchestrator;
 import com.kafkick.api.admin.observability.AdminObservabilityConfig;
 import com.kafkick.api.admin.observability.PromQueryClient;
+import com.kafkick.api.coupon.query.CouponDefinitionL1Cache;
+import com.kafkick.api.coupon.query.V2IssuableCouponRoundQuery;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.BenchmarkRunService;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
@@ -146,6 +148,12 @@ class ApiApplicationTests {
                     .as("%s must be a transactional proxy", serviceType)
                     .isTrue();
         }
+    }
+
+    @Test
+    void couponDefinitionL1AndV2QueryAreWiredInTheProductionContext() {
+        assertThat(applicationContext.getBean(CouponDefinitionL1Cache.class)).isNotNull();
+        assertThat(applicationContext.getBean(V2IssuableCouponRoundQuery.class)).isNotNull();
     }
 
     @Test

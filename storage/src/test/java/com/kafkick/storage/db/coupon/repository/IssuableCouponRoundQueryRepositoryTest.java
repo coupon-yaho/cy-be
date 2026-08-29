@@ -3,6 +3,7 @@ package com.kafkick.storage.db.coupon.repository;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,12 +14,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.query.IssuableCouponRoundPage;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.v2.query.CouponDefinition;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @RepositoryTest
-@Import(IssuableCouponRoundQueryAdapter.class)
+@Import({IssuableCouponRoundQueryAdapter.class, CouponDefinitionQueryAdapter.class})
 class IssuableCouponRoundQueryRepositoryTest {
 
     private static final Instant AS_OF =
@@ -26,6 +29,9 @@ class IssuableCouponRoundQueryRepositoryTest {
 
     @Autowired
     private IssuableCouponRoundQueryAdapter queryAdapter;
+
+    @Autowired
+    private CouponDefinitionQueryAdapter definitionQueryAdapter;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -82,6 +88,36 @@ class IssuableCouponRoundQueryRepositoryTest {
         assertThat(result.content().get(1).remainingQuantity()).isEqualTo(4);
         assertThat(result.totalElements()).isEqualTo(2);
         assertThat(result.totalPages()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("V2 정의 native query는 OPEN과 SCHEDULED를 UTC Instant와 상태로 정확히 매핑한다")
+    void findV2CouponDefinitions() {
+        jdbcTemplate.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id IN (10, 14)");
+
+        List<CouponDefinition> definitions = definitionQueryAdapter.findCandidates(AS_OF);
+
+        assertThat(definitions).extracting(CouponDefinition::couponRoundId)
+                .containsExactly(10L, 14L);
+        assertThat(definitions.get(0).openAt()).isEqualTo(Instant.parse("2026-08-22T08:00:00Z"));
+        assertThat(definitions.get(0).closeAt()).isEqualTo(Instant.parse("2026-08-22T10:00:00Z"));
+        assertThat(definitions.get(0).status()).isEqualTo(CouponRoundStatus.OPEN);
+        assertThat(definitions.get(1).status()).isEqualTo(CouponRoundStatus.SCHEDULED);
+    }
+
+    @Test
+    @DisplayName("V2 정의 질의의 세 컬럼에 인덱스가 있다 — 없으면 100ms 예산 안에서 풀스캔이다")
+    void v2DefinitionIndexExists() {
+        List<String> columns = jdbcTemplate.queryForList(
+                """
+                SELECT COLUMN_NAME FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'coupons'
+                   AND INDEX_NAME = 'ix_coupons_v2_definition'
+                 ORDER BY SEQ_IN_INDEX
+                """, String.class);
+
+        // 등가 조건 둘이 앞, 범위 조건이 뒤다. 순서가 뒤집히면 뒤 컬럼을 인덱스로 못 좁힌다.
+        assertThat(columns).containsExactly("issuance_engine_version", "status", "close_at");
     }
 
     @Test

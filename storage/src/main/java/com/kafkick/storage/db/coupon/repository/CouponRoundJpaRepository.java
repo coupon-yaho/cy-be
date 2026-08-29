@@ -5,11 +5,14 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import jakarta.persistence.QueryHint;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -209,6 +212,30 @@ public interface CouponRoundJpaRepository
             @Param("asOf") Instant asOf,
             Pageable pageable
     );
+
+    @Query(value = """
+            SELECT coupon.id AS couponRoundId,
+                   coupon.brand_id AS brandId,
+                   coupon.name AS name,
+                   coupon.policy_type AS policyType,
+                   coupon.discount_rate AS discountRate,
+                   coupon.max_discount_amount AS maxDiscountAmount,
+                   coupon.discount_amount AS discountAmount,
+                   coupon.valid_days AS validDays,
+                   coupon.open_at AS openAt,
+                   coupon.close_at AS closeAt,
+                   coupon.status AS status
+              FROM coupons coupon
+             WHERE coupon.issuance_engine_version = 'V2'
+               AND coupon.status IN ('SCHEDULED', 'OPEN')
+               AND coupon.close_at > :asOf
+             ORDER BY coupon.open_at ASC, coupon.id ASC
+            """, nativeQuery = true)
+    // 단위는 밀리초다. org.hibernate.timeout 은 초 단위라 최소값이 1초였고, 호출자가 100ms 에
+    // 물러난 뒤에도 로더 스레드와 Hikari 커넥션이 최대 1초 더 붙잡혀 발급 경로의 커넥션을
+    // 잠식했다(인스턴스 풀은 3이다). 호출자 예산보다 크되 같은 자릿수로 둔다.
+    @QueryHints(@QueryHint(name = "jakarta.persistence.query.timeout", value = "300"))
+    List<CouponDefinitionProjection> findV2CouponDefinitions(@Param("asOf") Instant asOf);
 
     @Query("""
             select count(roundEntity)
