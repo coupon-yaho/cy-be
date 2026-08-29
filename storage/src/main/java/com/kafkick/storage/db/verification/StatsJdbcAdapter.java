@@ -225,6 +225,44 @@ public class StatsJdbcAdapter implements StatsRepository {
             """;
 
     /**
+     * <b>한 발급건 안에서 {@code id} 순서와 {@code created_at} 순서가 뒤집힌 쌍.</b>
+     *
+     * <p>창을 <b>{@code a} 쪽에만</b> 건다. {@code b} 는 {@code b.created_at < a.created_at
+     * <= asOf} 라 시각으로 이미 갇혀 있고, {@code b} 가 추가로 데려올 수 있는 것은
+     * {@code b.id > maxHistoryId} 인 행뿐이다 — <b>그 행은 같은 Step 의 앞선
+     * {@code hasHistoriesAddedAbove} 가 이미 치명으로 만든다.</b> 즉 이 비대칭은
+     * 검출력을 늘리지 않는 <b>여분</b>이다. 그래도 안 자르는 쪽을 택한 것은 가드 순서가
+     * 바뀌어도 이 검사가 홀로 성립하게 하기 위해서다.
+     *
+     * <p>실측(300만 발급 · 534만 이력): 버퍼 풀 128 MiB 에서 <b>7.1초</b>,
+     * 2 GiB 에서도 <b>5.8초</b> — <b>CPU 바운드라 버퍼 풀을 키워도 거의 안 줄어든다.</b>
+     * {@code a} 는 PRIMARY 레인지, {@code b} 는
+     * {@code idx_issuance_histories_issuance_created_id} 를 <b>커버링</b>으로 탄다
+     * ({@code loops=5.34e+6}). 180초짜리 잡의 약 4% 이고, 배포 버퍼 풀이 크면 전체가
+     * 줄어드는 만큼 <b>이 비중은 오히려 올라간다.</b>
+     *
+     * <p><b>인덱스가 없는 스키마는 만들 수 없다 — FK 가 강제한다.</b>
+     * {@code issuance_histories_ibfk_1}({@code issuance_id → issuances.id}) 때문에
+     * MySQL 이 선두 컬럼 {@code issuance_id} 인덱스를 항상 요구한다. 실제로
+     * {@code DROP INDEX} 를 시도하면 <i>"Cannot drop index … needed in a foreign key
+     * constraint"</i>(1553) 로 거절된다(실측). 그래서 복합 인덱스가 없는 스키마
+     * ({@code coupon_corrupt}·{@code coupon_v6})에는 FK 가 만든 단일
+     * {@code issuance_id} 인덱스가 대신 있고, 그것으로 조인이 선다 —
+     * 106만 이력에서 <b>1.1초</b>(실측). {@code SchemaPresenceGuard} 가 이 인덱스를
+     * 안 보는 것은 맞지만, <b>봐야 할 이유가 없다.</b>
+     */
+    private static final String COUNT_OUT_OF_ORDER = """
+            SELECT COUNT(*)
+              FROM issuance_histories a
+              JOIN issuance_histories b
+                ON b.issuance_id = a.issuance_id
+               AND b.id > a.id
+               AND b.created_at < a.created_at
+             WHERE a.id <= :maxHistoryId
+               AND a.created_at <= :asOf
+            """;
+
+    /**
      * {@link #issuedByHour} 가 이력 id 를 훑는 폭의 <b>상한이자 기본값</b>. 즉 이 손잡이는
      * <b>내릴 수만 있다</b> — 올릴 수 있게 두면 막으려던 사고가 그대로 돌아온다.
      * 더 작은 서버에서 더 좁혀야 할 수는 있으므로 내리는 쪽만 열어 둔다.
@@ -360,6 +398,19 @@ public class StatsJdbcAdapter implements StatsRepository {
         return jdbcClient.sql(COUNT_COUPONS_AS_OF)
                 .param("asOf", asOf)
                 .query(Integer.class)
+                .single();
+    }
+
+    /**
+     * 세는 것이 <b>행이 아니라 쌍</b>이라 {@code long} 이다. 한 발급건에 역전 이력이 n개면
+     * 쌍은 n(n-1)/2 로 는다 — 형제와 달리 발급건 수가 상한이 아니다.
+     */
+    @Override
+    public long countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId) {
+        return jdbcClient.sql(COUNT_OUT_OF_ORDER)
+                .param("asOf", asOf)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .query(Long.class)
                 .single();
     }
 

@@ -818,6 +818,98 @@ class VerificationRuleJdbcAdapterTest {
     }
 
     @Test
+    @DisplayName("얼린 사용 상한 위로 asOf 이하 사용이 끼어들면 잡는다")
+    void detectsUsagesAddedAboveFrozenBoundary() {
+        long used = data.issuance(IssuanceStatus.USED);
+        data.usage(used, AS_OF.minusHours(3), null);
+        long frozen = adapter.latestUsageId();
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("아직 아무것도 안 끼어들었다")
+                .isFalse();
+
+        // 얼린 뒤에 들어온 행. 시각은 asOf 이하라 V5 의 답을 바꾼다.
+        // **다른 발급건에 심는다** — uk_issuance_usages_active 가 발급건 하나에 활성
+        // 사용 둘을 막는다(main 의 V8). 그 제약이 이 검사의 대상은 아니다.
+        long other = data.issuance(IssuanceStatus.USED);
+        data.usage(other, AS_OF.minusHours(1), null);
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("V5 는 얼린 상한까지만 세는데 이 행이 답을 바꾼다 — "
+                        + "지문은 이 축을 안 봐서 같은 지문에 다른 검출이 나온다")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("asOf 뒤에 취소되는 행은 잡는다 — V5 가 활성으로 세는 행이다")
+    void detectsUsageCanceledAfterAsOfAddedAboveFrozenBoundary() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        long frozen = adapter.latestUsageId();
+
+        // 지금은 취소돼 있지만 취소 시각이 asOf 뒤라, asOf 시점에는 활성이다.
+        // V5 의 (canceled_at IS NULL OR canceled_at > asOf) 가 이 행을 센다.
+        data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.plusHours(1));
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("canceled_at IS NULL 만 보면 이 행을 놓친다 — V5 는 세는데 가드가 못 본다")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("asOf 전에 이미 취소된 행은 안 잡는다 — V5 가 안 세므로 답이 안 바뀐다")
+    void ignoresUsageAlreadyCanceledBeforeAsOf() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        long frozen = adapter.latestUsageId();
+
+        data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.minusHours(1));
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("V5 는 이 행을 애초에 안 센다. 답이 그대로인데 죽이면 정상 데이터가 "
+                        + "실행을 죽이는 오탐이다")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("asOf 뒤에 쓰인 사용은 안 잡는다 — 그 축은 리플레이 밖이다")
+    void ignoresUsagesAfterAsOf() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        long frozen = adapter.latestUsageId();
+
+        data.usage(issuanceId, AS_OF.plusHours(1), null);
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("asOf 이후 행은 어차피 이 실행의 판정 대상이 아니다")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("상한은 asOf 로 안 자른다 — asOf 뒤 행도 상한에 든다")
+    void freezesAbsoluteMaxRegardlessOfAsOf() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        data.usage(issuanceId, AS_OF.plusHours(1), null);
+
+        // 술어를 걸면 이 행이 상한에서 빠져 0 이 나온다. 빼면 그 행의 id 가 상한이다.
+        // 둘 다 가드의 뜻은 같지만(오토인크리먼트), 술어 있는 쪽만 전수 스캔이다.
+        assertThat(adapter.latestUsageId())
+                .as("used_at 술어를 다시 넣으면 이 검사가 깨진다 — 그 회귀를 막는 자리다")
+                .isPositive();
+    }
+
+    @Test
+    @DisplayName("사용이 하나도 없으면 상한이 0 이고, 그 위로 들어오는 것을 잡는다")
+    void treatsMissingUsagesAsZeroBoundary() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+
+        assertThat(adapter.latestUsageId())
+                .as("행이 하나도 없으면 0 — 건너뛰면 가드가 막으려던 상황에서 정확히 꺼진다")
+                .isZero();
+
+        data.usage(issuanceId, AS_OF.minusHours(1), null);
+
+        assertThat(adapter.hasUsagesAddedAbove(0L, AS_OF)).isTrue();
+    }
+
+    @Test
     @DisplayName("접속 스키마 이름을 답한다 — 메시지가 원인을 가르는 근거다")
     void reportsTheSchemaItIsLookingAt() {
         assertThat(adapter.currentSchema()).isEqualTo("app");

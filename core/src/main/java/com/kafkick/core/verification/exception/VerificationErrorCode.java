@@ -254,6 +254,22 @@ public enum VerificationErrorCode implements ErrorCode {
             503,
             "VERIFICATION-022",
             "배치 메타 조회가 데드라인을 넘겼습니다. DB 부하를 먼저 확인하십시오."
+    ),
+
+    /**
+     * 이력의 {@code created_at} 순서가 {@code id} 순서와 뒤집혔다. 리플레이가
+     * {@code (created_at, id)} 로 접으므로 그 발급건의 전이 판정이 인과와 달라진다.
+     *
+     * <p><b>{@link #DATASET_MUTATED_DURING_RUN} 과 가른 이유는 재시도 가능성이다</b> —
+     * 그쪽은 쓰기를 멈추고 다시 돌리면 통과한다. 이쪽은 이미 저장된 행의 속성이라
+     * 멈춰도 같은 자리에서 죽는다. 처방이 "재실행" 이 아니라 "그 발급건의 이력 시각을
+     * 고친다" 라서, 같은 코드로 묶으면 운영자를 무한 재시도로 보낸다.
+     * {@code docs/11-batch-implementation.md} 가 세운 그 갈림 규칙을 따른다.
+     */
+    HISTORY_ORDER_INVERTED(
+            500,
+            "VERIFICATION-023",
+            "이력의 created_at 순서가 id 순서와 뒤집혀 리플레이 정렬을 신뢰할 수 없습니다."
     );
 
     private final int status;

@@ -44,5 +44,5 @@ public interface AsOfStateRepository {
      * 바뀐 행을 세지 않는다. 재실행하면 값이 이미 채워져 있어 의미가 또 달라진다.
      * 판정 근거로 쓸 수 없는 숫자를 돌려주면 누군가 근거로 쓴다.
      */
-    void applyActiveUsageCounts(long runId, LocalDateTime asOf);
+    void applyActiveUsageCounts(long runId, LocalDateTime asOf, long maxUsageId);
 }

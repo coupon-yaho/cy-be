@@ -49,7 +49,8 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
             UPDATE asof_state a
               JOIN (SELECT issuance_id, COUNT(*) AS active_count
                       FROM issuance_usages
-                     WHERE used_at <= :asOf
+                     WHERE id <= :maxUsageId
+                       AND used_at <= :asOf
                        AND (canceled_at IS NULL OR canceled_at > :asOf)
                      GROUP BY issuance_id) u
                 ON u.issuance_id = a.coupon_id
@@ -76,11 +77,31 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
         jdbcTemplate.batchUpdate(UPSERT, batch);
     }
 
+    /**
+     * <b>{@code maxUsageId} 는 이력 축의 {@code maxHistoryId} 와 같은 뜻이다</b> —
+     * 리플레이가 {@code h.id <= :maxHistoryId} 로 읽듯, V5 도 얼린 상한까지만 센다.
+     * 상한이 없으면 이 UPDATE 가 도는 순간 커밋돼 있는 모든 행을 세어, 같은 {@code asOf}
+     * 재실행이 다른 답을 낼 수 있다.
+     *
+     * <p><b>다만 이 한 줄이 결정론을 보장하지는 않는다.</b> {@code MAX(id)} 는 커밋
+     * 경계가 아니다 — AUTO_INCREMENT 는 <b>할당 순서</b>이고 커밋 순서와 다르다(이
+     * 저장소에서 직접 쟀다: {@code MAX(id)=2} 를 읽는 동안 {@code id=1} 이 뒤에 커밋됐다).
+     * 그래서 상한 <b>이하</b>의 id 를 이미 받아 둔 트랜잭션이 얼린 뒤 커밋하면
+     * V5 는 그 행을 세는데, 종료 가드는 {@code id > maxUsageId} 만 보므로 못 잡는다.
+     *
+     * <p><b>이력 축도 똑같다</b> — 리플레이가 {@code h.id <= maxHistoryId} 로 읽고
+     * {@code hasHistoriesAddedAbove} 가 {@code id > maxHistoryId} 로 본다. 두 축이
+     * 공유하는 기존 한계이지 이 상한이 만든 것이 아니다. 운영 규율(검증 중 쓰기 정지)이
+     * 실제 방어이고, 코드로 닫으려면 <b>상한과 함께 그 범위의 건수도 얼려</b> 종료 때
+     * 대조해야 한다({@code COUNT(*) WHERE id <= 상한 AND used_at <= asOf}, PK 레인지 약 0.3초).
+     * 지금은 안 닫았다 — 닫으려면 이력 축도 같이 닫아야 대칭이 된다.
+     */
     @Override
-    public void applyActiveUsageCounts(long runId, LocalDateTime asOf) {
+    public void applyActiveUsageCounts(long runId, LocalDateTime asOf, long maxUsageId) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("runId", runId)
-                .addValue("asOf", asOf);
+                .addValue("asOf", asOf)
+                .addValue("maxUsageId", maxUsageId);
 
         jdbcTemplate.update(APPLY_USAGE_COUNTS, params);
     }

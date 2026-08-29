@@ -91,6 +91,13 @@ public class VerifyJobConfig {
     static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
     static final String SCAN_LATEST_KEY = "replay.scan.latestCreatedAt";
 
+    /**
+     * <b>얼린 사용 상한.</b> V5 가 읽는 다섯째 축인데 얼림 가드에도 지문에도 없었다 —
+     * usages 행만 넣고 {@code issuances} 를 안 건드리면 <b>V5 의 답은 달라지는데 지문은
+     * 그대로</b>라, 판정표가 그것을 <i>"검증기 버그"</i> 로 읽는다.
+     */
+    static final String SCAN_MAX_USAGE_KEY = "replay.scan.maxUsageId";
+
     /** 시작에 얼린 회차 정책 지문. coupons 에 updated_at 이 없어 값을 접어 비교한다. */
     static final String POLICY_DIGEST_KEY = "policy.digest";
 
@@ -213,22 +220,31 @@ public class VerifyJobConfig {
     }
 
     /**
-     * 실행이 도는 동안 <b>세 축이 모두 얼어 있었는지</b> 규칙 뒤에 다시 본다 —
-     * 발급건 · 재고 · 회차 정책.
+     * 실행이 도는 동안 <b>다섯 축이 모두 얼어 있었는지</b> 규칙 뒤에 다시 본다 —
+     * 발급건 · 재고 · 회차 정책 · 이력 · 사용.
      *
      * <p>시작에만 보면 그 뒤 몇 분(리플레이 실측 57초 + 집계 + 규칙)이 무방비다.
      * 현재 행을 읽는 규칙(V3·V1·V6)이 그 구간에 갱신된 행을 조용히 빼고 0건으로 통과하는데,
      * 같은 asOf 를 스케줄러가 멈춘 상태로 다시 돌리면 검출이 나온다 — 같은 파라미터가 다른 답을 낸다.
      *
-     * <p><b>축은 넷이다</b> — 발급건 · 재고 · 회차 정책 · 이력. 이력 축은 리플레이가 얼린
-     * 상한과 지문이 다시 재는 값이 갈리는 것을 막는다.
+     * <p><b>축은 다섯이다</b> — 발급건 · 재고 · 회차 정책 · 이력 · 사용. 이력 축은 리플레이가
+     * 얼린 상한과 지문이 다시 재는 값이 갈리는 것을 막는다.
+     *
+     * <p><b>다섯째(사용)는 성격이 다르다.</b> 앞 넷은 "규칙이 본 데이터 = 지문" 등식을 지키는
+     * 가드인데, 사용 축은 <b>지문 재료에 아예 없는 축</b>을 대신 막는다(계약이 정한 다섯 항이라
+     * 못 늘린다). 그래서 지문에 usages 를 넣으면 이 가드를 지워도 된다는 결론은 틀렸다.
+     *
+     * <p>그리고 이 Step 은 얼림만 보지 않는다 — <b>리플레이 정렬의 전제</b>(이력의
+     * {@code created_at} 이 {@code id} 와 같은 방향인지)도 여기서 잰다. 그 검사를
+     * 통계 Step 에 두면 판정이 이미 커밋된 뒤라 늦고, 조기 반환에 걸려 정작 필요한
+     * 경우에 안 돈다. 근거는 본문 주석에 적었다.
      *
      * <p><b>지문도 여기서 캡처한다.</b> 같은 트랜잭션이라 검사와 지문이 같은 스냅샷을 보고,
      * {@code finalizeRunStep} 이 {@code FINGERPRINT_KEY} 로 꺼내 쓴다 —
      * 이 줄을 지우면 판정 Step 이 "데이터셋 지문이 없습니다" 로 죽는다.
      */
     @Bean
-    public Step assertFrozenStep(VerificationRuleRepository rules) {
+    public Step assertFrozenStep(VerificationRuleRepository rules, StatsRepository stats) {
         return new StepBuilder("assertFrozenStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
                     LocalDateTime asOf = chunkContext.getStepContext().getStepExecution()
@@ -279,12 +295,56 @@ public class VerifyJobConfig {
                                         + "나옵니다. asOf=" + asOf);
                     }
 
+                    // 사용 축. **V5 가 읽는 다섯째 축인데 지문 재료에는 없다** — usages 행만
+                    // 넣고 issuances 를 안 건드리면 V5 의 답은 달라지는데 지문은 그대로다.
+                    // 판정표는 그 조합을 "지문 같음 + checksum 다름 = 검증기 버그" 로 읽는다.
+                    // 지문은 계약(contract.json)이 정한 다섯 항이라 못 늘리므로 가드로 막는다.
+                    long frozenMaxUsage = chunkContext.getStepContext().getStepExecution()
+                            .getJobExecution().getExecutionContext()
+                            .getLong(SCAN_MAX_USAGE_KEY, 0L);
+
+                    if (rules.hasUsagesAddedAbove(frozenMaxUsage, asOf)) {
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "실행 중에 얼린 상한 위로 asOf 이하 사용 이력이 추가됐습니다. "
+                                        + "V5 가 그 행을 세지 않았는데 답이 달라집니다 — 지문은 "
+                                        + "이 축을 안 봐서 같은 지문에 다른 검출이 나옵니다. "
+                                        + "asOf=" + asOf);
+                    }
+
+                    // **리플레이 정렬의 전제를 여기서 잰다.** (created_at, id) 로 접는데 그 시각이
+                    // 커밋 시각이 아니라 멱등 선점 시각이라(REQUIRES_NEW) 역전이 가능하다.
+                    // 역전이 있으면 리플레이가 인과와 다른 순서로 접어 **정상 데이터에
+                    // ILLEGAL_TRANSITION 오탐**을 내고 CLEAN 0건 게이트가 깨진다.
+                    //
+                    // <b>statsAggregateStep 이 아니라 여기인 이유가 이 검사의 전부다.</b>
+                    // 그 Step 은 dataset != CLEAN 과 verdict != PASS 에서 먼저 반환한다.
+                    // 오탐이 나면 검출이 1건 이상이라 verdict 가 FAIL 이 되고, 그 조기 반환에
+                    // 걸려 **막으려던 바로 그 경우에만 검사가 안 돈다.** 게다가 판정은 앞
+                    // Step(finalizeRunStep)이 이미 커밋해서, 거기서 죽어 봐야 증적에는
+                    // verdict=PASS 가 남는다. 여기서 죽으면 verdict 가 NULL 로 남아
+                    // "판정이 안 났다" 가 그대로 신호가 된다.
+                    //
+                    // 새 finding 사유는 안 만든다 — 그러면 매니페스트가 갈려 cy-seed 를
+                    // 함께 고쳐야 한다. 에러 코드만 전용으로 판다(재시도 가능성이 다르다).
+                    long outOfOrder = stats.countOutOfOrderHistoryPairs(asOf, frozenMaxHistory);
+                    if (outOfOrder > 0) {
+                        throw new BusinessException(
+                                VerificationErrorCode.HISTORY_ORDER_INVERTED,
+                                "이력의 created_at 순서가 id 순서와 뒤집힌 쌍 " + outOfOrder + "건. "
+                                        + "리플레이가 (created_at, id) 로 접으므로 그 발급건의 "
+                                        + "전이 판정이 인과와 달라집니다. 쓰기를 멈추고 다시 돌려도 "
+                                        + "같은 자리에서 죽습니다 — 그 발급건의 이력 시각을 "
+                                        + "고쳐야 합니다. asOf=" + asOf);
+                    }
+
                     // 지문도 여기서 읽는다. finalize 에서 읽으면 그 사이 발급 한 건에 지문이
                     // 움직여, 같은 asOf 재실행이 "데이터가 바뀜" 으로 잘못 읽힌다.
                     //
                     // 규칙이 본 데이터와 지문이 같다는 것은 트랜잭션 스냅샷이 보장하지 않는다 —
                     // 규칙 Step 은 각자 자기 트랜잭션에서 이미 돌았다. 등식을 지키는 것은
-                    // 바로 위 네 가드다. 가드를 빼면 이 등식이 깨진다.
+                    // 앞 네 가드다 — 사용 축은 성격이 다르다(지문 재료에 없는 축을 대신
+                    // 막는다). 가드를 빼면 이 등식이 깨진다.
                     chunkContext.getStepContext().getStepExecution().getJobExecution()
                             .getExecutionContext()
                             .putString(FINGERPRINT_KEY, rules.datasetFingerprint(asOf));
@@ -801,6 +861,9 @@ public class VerifyJobConfig {
                     jobContext.putLong(RUN_ID_KEY, runId);
                     freezeSeedRunId(jobContext, seedRunId, expectedFindings);
                     jobContext.putString(POLICY_DIGEST_KEY, rules.policyDigest());
+                    // 사용 축의 상한. 리플레이 창과 달리 "행이 없으면 0" 을 그대로 쓴다 —
+                    // 근거는 VerificationRuleRepository#latestUsageId 가 적는다.
+                    jobContext.putLong(SCAN_MAX_USAGE_KEY, rules.latestUsageId());
                     scanRange.filter(ReplayScanRange::hasWindow)
                             .ifPresent(range -> freeze(jobContext, range));
 
@@ -836,9 +899,14 @@ public class VerifyJobConfig {
                 .tasklet((contribution, chunkContext) -> {
                     StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
 
+                    // 상한을 넘긴다. 안 넘기면 이 UPDATE 가 도는 순간의 모든 행을 세어
+                    // 같은 asOf 재실행이 다른 답을 낼 수 있다. 다만 이것으로 결정론이
+                    // 보장되지는 않는다 — MAX(id) 는 커밋 경계가 아니다. 한계와 닫는 법은
+                    // AsOfStateJdbcAdapter#applyActiveUsageCounts 에 적었다.
                     asOfStates.applyActiveUsageCounts(
                             requireRunId(stepExecution.getJobExecution()),
-                            stepExecution.getJobParameters().getLocalDateTime("asOf"));
+                            stepExecution.getJobParameters().getLocalDateTime("asOf"),
+                            requireFrozenMaxUsage(stepExecution.getJobExecution()));
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
@@ -1231,8 +1299,13 @@ public class VerifyJobConfig {
     }
 
     /**
-     * <b>{@code assertFrozenStep} 과 같은 네 축을 다시 본다.</b> 그 Step 은 규칙 뒤에 한 번
+     * <b>{@code assertFrozenStep} 의 다섯 축 중 넷을 다시 본다.</b> 그 Step 은 규칙 뒤에 한 번
      * 보는데, 통계 Step 이 그보다 뒤에 붙어서 <b>그 사이가 무방비</b>가 됐다.
+     *
+     * <p><b>사용 축은 여기서 안 본다 — 빠뜨린 것이 아니다.</b> 통계 질의 중
+     * {@code issuance_usages} 를 읽는 것이 하나도 없고, 그 축을 읽는 유일한 규칙(V5)은
+     * {@code assertFrozenStep} 보다 앞이라 이 시점에 다시 봐야 늦다. 통계에 사용 실적
+     * 축(예: 회차별 실사용률)이 들어오는 날 다섯째를 여기에도 더해야 한다.
      * {@code rejectRunningExpire} 는 배치 메타의 만료 실행만 보므로 api 프로세스의 발급
      * 트래픽은 애초에 그 조회에 안 잡힌다.
      *
@@ -1320,6 +1393,25 @@ public class VerifyJobConfig {
         if (value == null) {
             throw new IllegalStateException(
                     "검증 실행 식별자가 없습니다. startRunStep 이 먼저 돌아야 합니다.");
+        }
+
+        return ((Number) value).longValue();
+    }
+
+    /**
+     * 사용 축 상한을 <b>기본값 없이</b> 꺼낸다.
+     *
+     * <p>{@code getLong(key, 0L)} 로 두면 안 된다 — V5 는 이 값을 {@code id <= :maxUsageId}
+     * 로 쓰므로 0 이 들어가면 <b>사용 실적을 한 건도 안 세어</b> 전 발급건이
+     * {@code USAGE_MISMATCH} 오탐이 된다. 조용히 틀리는 방향이라 없으면 죽인다.
+     * (같은 값을 가드가 읽을 때는 기본값 0 이 맞다 — 그쪽은 "전부 의심" 이라 과하게
+     * 켜지는 안전한 방향이다.)
+     */
+    private static long requireFrozenMaxUsage(JobExecution jobExecution) {
+        Object value = jobExecution.getExecutionContext().get(SCAN_MAX_USAGE_KEY);
+        if (value == null) {
+            throw new IllegalStateException(
+                    "사용 축 상한이 없습니다. startRunStep 이 먼저 돌아야 합니다.");
         }
 
         return ((Number) value).longValue();

@@ -160,6 +160,76 @@ public interface VerificationRuleRepository {
     boolean hasHistoriesAddedAbove(long frozenMaxHistoryId, LocalDateTime asOf);
 
     /**
+     * 얼린 사용 상한 <b>위로</b> {@code asOf} 이하 사용 이력이 끼어들었는가.
+     * 이름과 SQL 방향은 형제 {@link #hasHistoriesAddedAbove} 와 맞춘다.
+     *
+     * <p><b>창은 형제와 다르고, V5 와 같다.</b> 형제는 {@code created_at}(리플레이가 정렬·필터에
+     * 쓰는 컬럼)으로 자르지만 이쪽은 V5 의 술어를 통째로 쓴다 —
+     * {@code used_at <= asOf AND (canceled_at IS NULL OR canceled_at > asOf)}.
+     * 이 가드가 답할 질문이 <i>"V5 의 답이 달라지는가"</i> 이기 때문이다.
+     *
+     * <p>술어가 갈리면 <b>양쪽으로 틀린다</b> — {@code canceled_at} 을 안 보면 {@code asOf}
+     * 이전에 이미 취소된 행(V5 가 안 세는 행)에 실행이 죽고, {@code canceled_at IS NULL} 만
+     * 보면 {@code asOf} 이후에 취소되는 행(V5 가 활성으로 세는 행)을 놓친다.
+     * 어댑터에 두 방향을 각각 재는 검사가 있다.
+     *
+     * <p><b>V5 가 읽는 다섯째 축인데 얼림 가드에도 지문에도 없었다.</b>
+     * {@code assertFrozenStep} 은 네 축(발급건·재고·회차 정책·이력)만 보고,
+     * {@code dataset_fingerprint} 재료 다섯에도 {@code issuance_usages} 가 없다.
+     *
+     * <p>그 조합이 만드는 칸이 나쁘다 — <b>usages 행만 넣고 {@code issuances} 를 안 건드리면
+     * V5 의 답은 달라지는데 지문은 그대로다.</b> 판정표는 그것을
+     * <i>"지문 같음 + checksum 다름 = 검증기 버그"</i> 로 읽는다. 형제 javadoc 이 이력 축에
+     * 대해 적은 <i>"이력만 넣고 issuances 를 안 건드리는 것이 오염 주입의 기본 모양"</i> 이
+     * 여기에도 그대로 적용된다.
+     *
+     * <p><b>지문은 안 고친다.</b> 그것은 계약({@code contract.json})이 정한 다섯 항이라
+     * 여기서 늘리면 시드와 갈린다. 그래서 <b>가드로 막는다.</b>
+     *
+     * <p><b>이 가드가 홀로 덮는 범위는 좁다.</b> 애플리케이션 경로는
+     * {@code CouponUseService}·{@code CouponCancelUseService} 가 사용 행과 이력 행을
+     * <b>한 트랜잭션·같은 시각</b>으로 함께 쓰므로, 그 경로에서 이 가드가 발화하는 상황은
+     * 형제 이력 축 가드가 이미 발화하는 상황이다. 홀로 덮는 것은
+     * <b>DB 에 직접 친 INSERT</b>(수동 오염 주입·시드 스크립트)다. 그래도 지킬 값이 있는
+     * 것은 오염 주입이 정확히 그 모양이기 때문이다.
+     *
+     * <p><b>기존 행의 {@code canceled_at} 이 바뀌는 것은 안 본다.</b> 그것도 V5 의 답을
+     * 바꾸지만, {@code CouponCancelUseService} 가 같은 트랜잭션에서
+     * {@code issuances.updated_at} 을 올려 <b>발급건 축 가드가 대신 잡는다.</b>
+     * {@code issuances} 를 안 건드리는 usage 정정 경로가 생기면 이 축을 넓혀야 한다.
+     *
+     * <p>상한은 {@code startRunStep} 이 {@link #latestUsageId()} 로 얼려 Step 문맥에 싣는다.
+     * 이 EXISTS 자체는 {@code id > :maxUsageId} PK 레인지라 값싸다
+     * (실측: 상한이 최신이면 0.03ms).
+     */
+    boolean hasUsagesAddedAbove(long frozenMaxUsageId, LocalDateTime asOf);
+
+    /**
+     * 사용 이력의 <b>절대 최대 식별자</b>. 실행 시작에 한 번 재 문맥에 얼린다.
+     *
+     * <p><b>{@code asOf} 로 자르지 않는다.</b> id 는 오토인크리먼트라 얼린 뒤에 들어오는
+     * 행은 반드시 이 값보다 크다 — 자르지 않아도 {@link #hasUsagesAddedAbove} 의 뜻이
+     * 그대로다. 자르면 {@code used_at} 인덱스가 없어 <b>132만 행 전수 스캔</b>이 되는데
+     * (실측 {@code type=ALL · rows=1,313,897 · 0.32초}), 얻는 것이 없다.
+     * 근거와 실행계획은 어댑터 구현에 적었다.
+     *
+     * <p>행이 없으면 <b>0</b> 이다. 그 값을 그대로 상한으로 쓰면
+     * {@link #hasUsagesAddedAbove} 가 <i>"id &gt; 0 이면서 asOf 이하인 행이 생겼는가"</i> 가 되어
+     * 뜻이 정확히 맞는다 — 형제 이력 축이 같은 이유로 같은 기본값을 쓴다.
+     *
+     * <p><b>V5 도 이 상한을 쓴다</b> — {@code AsOfStateRepository#applyActiveUsageCounts} 가
+     * {@code id <= maxUsageId} 로 센다. 두 축이 같은 경계를 보게 하려는 것이다.
+     *
+     * <p>⚠️ <b>그래도 결정론이 보장되지는 않는다.</b> {@code MAX(id)} 는 커밋 경계가
+     * 아니라 <b>할당 순서</b>다. 상한 이하의 id 를 이미 받은 트랜잭션이 얼린 뒤 커밋하면
+     * V5 는 세는데 {@link #hasUsagesAddedAbove}({@code id > 상한})는 못 본다.
+     * <b>이력 축도 같은 모양이다</b>({@link #hasHistoriesAddedAbove} vs 리플레이의
+     * {@code h.id <= maxHistoryId}) — 두 축이 공유하는 한계이지 이 상한이 만든 것이 아니다.
+     * 닫는 법과 비용은 {@code AsOfStateJdbcAdapter#applyActiveUsageCounts} 에 적었다.
+     */
+    long latestUsageId();
+
+    /**
      * 지금 보고 있는 스키마에 <b>CLEAN 전용 제약</b>이 살아 있는가.
      *
      * <p>{@code dataset} 파라미터는 {@code verification_runs} 에 적히는 <b>라벨일 뿐</b>이고,

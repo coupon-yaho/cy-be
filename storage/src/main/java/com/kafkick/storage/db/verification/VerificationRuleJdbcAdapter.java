@@ -453,6 +453,54 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .single());
     }
 
+    /**
+     * <b>V5 와 똑같은 술어를 쓴다</b> — {@code AsOfStateJdbcAdapter#APPLY_USAGE_COUNTS} 의
+     * {@code used_at <= asOf AND (canceled_at IS NULL OR canceled_at > asOf)} 그대로다.
+     * 이 가드가 답할 질문이 <i>"V5 의 답이 달라지는가"</i> 라서, 술어가 갈리면 둘 중 하나가 된다.
+     *
+     * <p><b>{@code canceled_at} 을 아예 안 보면 오탐이다.</b> {@code asOf} <b>이전에 이미
+     * 취소된</b> 행이 끼어들면 V5 는 그 행을 애초에 안 세므로 답이 그대로인데, 가드만
+     * 실행을 죽인다 — 정상 데이터에서 죽는 형상이다.
+     *
+     * <p><b>반대로 {@code canceled_at IS NULL} 만 보면 놓친다.</b> {@code asOf} <b>이후에</b>
+     * 취소되는 행은 V5 가 <i>활성</i>으로 세는데({@code canceled_at > asOf}) 그 술어로는 안 잡힌다.
+     * 두 방향을 다 맞추는 것이 V5 와 같은 술어다.
+     */
+    @Override
+    public boolean hasUsagesAddedAbove(long frozenMaxUsageId, LocalDateTime asOf) {
+        return Boolean.TRUE.equals(jdbcClient.sql("""
+                        SELECT EXISTS(
+                                 SELECT 1 FROM issuance_usages
+                                  WHERE id > :maxUsageId
+                                    AND used_at <= :asOf
+                                    AND (canceled_at IS NULL OR canceled_at > :asOf))
+                        """)
+                .param("maxUsageId", frozenMaxUsageId)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single());
+    }
+
+    /**
+     * <b>{@code used_at} 술어를 일부러 안 건다.</b> id 는 오토인크리먼트라 <i>얼린 뒤에</i>
+     * 들어오는 행은 반드시 절대 최대 id 보다 크다 — 술어를 빼도 가드의 뜻이 그대로다.
+     * 빠지는 것은 얼림 시점에 <b>이미 있던</b> {@code used_at > asOf} 행뿐이고,
+     * 그 행은 V5 의 입력이 아니라 애초에 안 세어진다.
+     *
+     * <p>술어를 걸면 값이 비싸진다 — {@code issuance_usages} 에 {@code used_at} 인덱스가
+     * 없어 <b>132만 행 전수 스캔</b>이 된다(실측 {@code type=ALL · rows=1,313,897 · 0.32초},
+     * 97.6 MiB 를 128 MiB 버퍼 풀에 밀어 넣는다). 술어를 빼면
+     * {@code Select tables optimized away} 로 <b>0.0025ms · 스캔 0 페이지</b>다.
+     */
+    @Override
+    public long latestUsageId() {
+        Long max = jdbcClient.sql("SELECT MAX(id) FROM issuance_usages")
+                .query(Long.class)
+                .optional()
+                .orElse(null);
+        return max == null ? 0L : max;
+    }
+
     @Override
     public boolean hasCleanOnlyConstraints() {
         return Boolean.TRUE.equals(jdbcClient.sql("""
