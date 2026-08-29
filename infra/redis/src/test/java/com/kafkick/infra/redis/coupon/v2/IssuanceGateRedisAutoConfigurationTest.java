@@ -12,6 +12,11 @@ import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfigurat
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
+import com.kafkick.core.coupon.v2.port.RestoreOutcome;
+import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * 조립은 <b>기동에서만</b> 증명된다. 통합 테스트는 어댑터를 손으로 {@code new} 하므로
@@ -67,5 +72,55 @@ class IssuanceGateRedisAutoConfigurationTest {
                         DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
                 .withBean(IssuanceGatePort.class, () -> userGate)
                 .run(context -> assertThat(context.getBean(IssuanceGatePort.class)).isSameAs(userGate));
+    }
+
+    @Test
+    @DisplayName("MeterRegistry 가 있으면 복원 카운터가 실물로 올라온다")
+    void registersRestorationMetersWhenRegistryPresent() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
+                .withBean(SimpleMeterRegistry.class)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(RestorationHaltStore.class);
+                    assertThat(context.getBean(V2RestorationMeters.class))
+                            .isInstanceOf(MicrometerV2RestorationMeters.class);
+                    // 결과별 시계열이 기동 시점에 전부 서 있어야 "한 번도 안 났다" 와
+                    // "계측이 안 붙었다" 가 구별된다.
+                    SimpleMeterRegistry registry = context.getBean(SimpleMeterRegistry.class);
+                    assertThat(registry.find(MicrometerV2RestorationMeters.NAME).counters())
+                            .extracting(counter -> counter.getId().getTag("outcome"))
+                            // 결과 5종 + 호출 실패 + 표식 쓰기 실패.
+                            .contains(MicrometerV2RestorationMeters.FAILURE_OUTCOME,
+                                    MicrometerV2RestorationMeters.HALT_WRITE_FAILURE_OUTCOME)
+                            .hasSize(RestoreOutcome.values().length + 2);
+                });
+    }
+
+    /**
+     * 레지스트리가 없는 조립에서도 <b>기동은 살아야 한다.</b> 계측이 없다고 취소·만료의 재고
+     * 복원이 멎으면 그것이 더 큰 사고다.
+     */
+    @Test
+    @DisplayName("MeterRegistry 가 없으면 계측만 꺼지고 기동은 산다")
+    void fallsBackToNoOpMetersWithoutRegistry() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(V2RestorationMeters.class))
+                            .isSameAs(V2RestorationMeters.NONE);
+                });
+    }
+
+    /**
+     * 표식 저장소가 게이트와 <b>같은 조립</b>에 있어야 취소(api)와 만료(batch)가 같은 표식을
+     * 본다. 여기서 빠지면 복원 등록이 커밋 전에 예외로 죽는다.
+     */
+    @Test
+    @DisplayName("Redis 통로가 없으면 표식 저장소도 물러난다")
+    void haltStoreStepsAsideWithoutRedis() {
+        runner.run(context -> assertThat(context).doesNotHaveBean(RestorationHaltStore.class));
     }
 }

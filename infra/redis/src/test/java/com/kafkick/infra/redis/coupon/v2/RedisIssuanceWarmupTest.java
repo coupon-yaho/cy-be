@@ -21,6 +21,7 @@ import org.testcontainers.utility.DockerImageName;
 import com.kafkick.core.coupon.v2.IssuedValue;
 import com.kafkick.core.coupon.v2.IssuedValueCodec;
 import com.kafkick.core.coupon.v2.port.RebuiltIssued;
+import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 
 /**
  * 시딩 어댑터 통합 테스트. <b>키 리터럴을 베끼지 않는다</b> — 출처는 {@link IssuanceKeys} 하나다.
@@ -56,8 +57,10 @@ class RedisIssuanceWarmupTest {
 
     @BeforeEach
     void reset() {
-        redisTemplate.delete(List.of(keys.issued(), keys.issuedEver(), keys.stock(), keys.meta()));
-        warmup = new RedisIssuanceWarmup(redisTemplate);
+        redisTemplate.delete(List.of(keys.issued(), keys.issuedEver(), keys.stock(), keys.meta(),
+                keys.restorationHalt()));
+        warmup = new RedisIssuanceWarmup(
+                redisTemplate, new RedisRestorationHaltStore(redisTemplate));
     }
 
     @Test
@@ -124,5 +127,84 @@ class RedisIssuanceWarmupTest {
         assertThat(redisTemplate.hasKey(keys.issued())).isFalse();
         assertThat(redisTemplate.hasKey(keys.issuedEver())).isFalse();
         assertThat(redisTemplate.hasKey(keys.stock())).isFalse();
+    }
+
+    /**
+     * 재구성이 재고를 다시 세운 것이 곧 "어긋남을 되돌렸다" 다. 표식이 남아 있으면 그 회차
+     * 만료는 <b>고친 뒤에도</b> 계속 멈춰 있고, 푸는 방법이 배치 재기동뿐이 된다.
+     */
+    @Test
+    @DisplayName("시딩이 복원 중단 표식을 함께 푼다")
+    void clearsTheRestorationHaltMark() {
+        RestorationHaltStore haltStore = new RedisRestorationHaltStore(redisTemplate);
+        haltStore.halt(ROUND_ID);
+        assertThat(haltStore.isHalted(ROUND_ID)).isTrue();
+
+        warmup.seedCounters(ROUND_ID, List.of(new RebuiltIssued(1, 1L)), 5);
+
+        assertThat(haltStore.isHalted(ROUND_ID)).isFalse();
+    }
+
+    /** 표식은 회차별이다. 한 회차를 재구성해도 다른 회차의 중단은 그대로 남아야 한다. */
+    @Test
+    @DisplayName("표식은 회차별이고 다른 회차를 건드리지 않는다")
+    void haltMarkIsPerRound() {
+        RestorationHaltStore haltStore = new RedisRestorationHaltStore(redisTemplate);
+        long otherRound = ROUND_ID + 1;
+        try {
+            haltStore.halt(ROUND_ID);
+            haltStore.halt(otherRound);
+
+            warmup.seedCounters(ROUND_ID, List.of(new RebuiltIssued(1, 1L)), 5);
+
+            assertThat(haltStore.isHalted(ROUND_ID)).isFalse();
+            assertThat(haltStore.isHalted(otherRound)).isTrue();
+        } finally {
+            haltStore.clear(otherRound);
+        }
+    }
+
+    /**
+     * 표식은 <b>스스로 만료돼야 한다.</b> 해제 경로가 재시딩 하나뿐인데, 재시딩은 이미 열린
+     * 회차를 거절하고({@code GATE_ALREADY_OPEN}·{@code ROUND_ALREADY_OPENED}) {@code -2} 는
+     * 열린 회차에서만 난다 — TTL 이 없으면 <b>단방향 래치</b>다. 그 회차 만료가 영구 정지하고
+     * {@code active_count} 가 영영 안 줄어든다.
+     *
+     * <p>{@code -2} 는 이벤트가 아니라 상태라, 만료 뒤 배치가 한 청크를 다시 태워 재판정한다.
+     * 어긋남이 그대로면 곧바로 다시 멈춘다.
+     */
+    @Test
+    @DisplayName("복원 중단 표식에는 TTL 이 있다 — 해제 경로가 재시딩뿐이라 래치가 되면 안 된다")
+    void theHaltMarkExpiresOnItsOwn() {
+        RestorationHaltStore haltStore = new RedisRestorationHaltStore(redisTemplate);
+
+        haltStore.halt(ROUND_ID);
+
+        Long ttl = redisTemplate.getExpire(keys.restorationHalt());
+        assertThat(ttl)
+                .as("TTL 이 없으면(-1) 아무도 못 푸는 영구 정지가 된다")
+                .isGreaterThan(0L)
+                .isLessThanOrEqualTo(RedisRestorationHaltStore.TTL.getSeconds());
+    }
+
+    /**
+     * <b>다시 멈춰도 TTL 을 밀지 않는다.</b> 표식을 세우는 경로는 만료 배치만이 아니다 —
+     * 취소·사용취소도 같은 회차에서 계속 {@code -2} 를 받는다(06 이 취소는 안 멈추기로 했다).
+     * 갱신하면 시간당 취소 한 건만 들어와도 만료 시각이 영원히 밀려, TTL 로 끊으려던
+     * <b>단방향 래치가 그대로 성립한다.</b> 만료 시각은 최초 중단 시점 기준이다.
+     */
+    @Test
+    @DisplayName("다시 멈춰도 TTL 을 밀지 않는다 — 취소 트래픽이 재판정을 무한정 미루면 안 된다")
+    void reHaltingDoesNotPushTheDeadline() {
+        RestorationHaltStore haltStore = new RedisRestorationHaltStore(redisTemplate);
+        haltStore.halt(ROUND_ID);
+        redisTemplate.expire(keys.restorationHalt(), java.time.Duration.ofSeconds(5));
+
+        haltStore.halt(ROUND_ID);
+
+        assertThat(redisTemplate.getExpire(keys.restorationHalt()))
+                .as("이미 서 있으면 그대로 둔다")
+                .isLessThanOrEqualTo(5L);
+        assertThat(haltStore.isHalted(ROUND_ID)).isTrue();
     }
 }
