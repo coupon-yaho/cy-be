@@ -32,5 +32,6 @@
 | D21 | 전달 보장 수준 | 실 벤더가 아닌 mock 발송의 성공률과 retry/DLT 관측이 목적이다. 같은 `attemptSeq`의 `SENDING` 재수신은 재개하고, 완료 attempt INSERT 승자만 결과 미터를 올린다. 실 발송 exactly-once와 `SENDING` lease는 범위 밖 |
 | D22 | outbox DEAD 종결 | 수동 재발송 outbox가 10회 실패하면 같은 트랜잭션에서 완료 실패 attempt를 먼저 기록한다. 같은 attempt의 완료 결과는 먼저 기록한 쪽만 상태를 확정한다. outbox가 승자면 `SENDING`을 `FAILED(OUTBOX_PUBLISH_FAILED)`로 되돌리고 재발송 예산을 환급한다. 초기 발행의 `PENDING` 잔류는 관제로 드러내며 자동 회수하지 않는다 |
 | D24 | outbox lock 충돌 | lease 회수와 신규 claim은 독립 새 트랜잭션으로 실행한다. lock timeout·deadlock은 이번 poll의 빈 claim으로 처리하고 다음 poll이 재시도한다 |
+| D25 | 프로토타입 참조 무결성 | 알림 4개 테이블에는 FK를 두지 않는다. 존재하지 않는 알림의 재발송 거부(`ADMIN-005`)도 감사해야 하며, T1은 mock 발송·관제 프로토타입이다. 운영 전에는 참조 무결성과 보존·삭제 정책을 함께 결정한다 |
 
 ---
