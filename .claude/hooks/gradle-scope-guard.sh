@@ -15,7 +15,26 @@ cmd=$(cat | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get
 [[ "$cmd" == *gradlew* ]] || exit 0
 
 # 전 모듈로 퍼지는 태스크. 모듈 경로가 안 붙으면 root 에서 모든 subproject 로 내려간다.
-GLOBAL_TASKS='^(build|test|check|clean)$'
+GLOBAL_TASKS=(build test check clean)
+
+# ⚠️ **완전 일치로는 못 막는다(실측).** Gradle 은 태스크명 축약을 지원해서
+#    `./gradlew che` 가 `check` 로 풀린다 — `--dry-run` 으로 확인하면 :api :core :storage
+#    :infra:mq :infra:redis 가 전부 딸려 나온다. 완전 일치만 보던 시절 그 명령이
+#    **가드를 그대로 통과했다.** 그래서 접두사로 본다.
+#
+#    접두사로 넓혀도 잃는 것이 없다 — build·test·check·clean 의 접두사 중 이 저장소에서
+#    쓰는 다른 루트 태스크와 겹치는 것이 없고, 겹치는 접두사(예: `c`)는 Gradle 자신이
+#    모호하다며 거절한다. `tasks`·`wrapper`·`help` 처럼 값싼 루트 태스크는 접두사가 아니라
+#    그대로 통과한다.
+is_global_task() {
+    local token="$1" task
+    [[ -n "$token" ]] || return 1
+    for task in "${GLOBAL_TASKS[@]}"; do
+        # 글롭 해석을 피하려고 자른 문자열끼리 비교한다 — 토큰에 * 가 들어와도 안전하다.
+        [[ "${task:0:${#token}}" == "$token" ]] && return 0
+    done
+    return 1
+}
 # 값을 따로 받는 옵션 — 그 값은 태스크가 아니므로 건너뛴다.
 VALUE_OPTS='^(--tests|--project-dir|-p|--include-build|-I|--init-script|-c|--settings-file|-b|--build-file)$'
 
@@ -59,7 +78,7 @@ for arg in "${args[@]}"; do
     [[ "$arg" == *gradlew* ]] && continue
     # 모듈 경로가 붙은 태스크(:api:test)는 범위가 있다.
     [[ "$arg" == *:* ]] && continue
-    if [[ "$arg" =~ $GLOBAL_TASKS ]]; then
+    if is_global_task "$arg"; then
         global_task="$arg"
     fi
 done

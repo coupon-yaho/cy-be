@@ -16,6 +16,26 @@ import com.kafkick.core.batch.BatchRun;
  * 검증이 STATUS=COMPLETED, EXIT_CODE=SKIPPED 로 남는다(실측). 이 표는 verifyJob 행을
  * 그대로 포함하므로, 그 값을 노출하면 화면이 상태 배지를 그것으로 칠하고 성공한 검증이
  * 스킵으로 읽힌다. 성공은 status 와 failure 로 본다. VerifyRunView 가 같은 근거로 뺐다.
+ *
+ * <p>⚠️ <b>{@code stepReadTotal}·{@code stepWriteTotal} 을 "처리 건수" 로 칠하지 마라.</b>
+ * 그 실행의 <b>모든 Step 의 {@code READ_COUNT}·{@code WRITE_COUNT} 를 그냥 더한 값</b>이고,
+ * 잡마다 — 심지어 한 잡 안에서도 — <b>세는 단위가 다르다.</b> 실측(300만 발급 · 534만 이력):
+ *
+ * <pre>
+ *   verifyJob   replayStep        read 3,000,000 / write 3,000,000  (리플레이 상태 행)
+ *               statsAggregateStep             write       783      (통계 스냅샷 행)
+ *               나머지 아홉                     0 / 0               (태스클릿이라 안 센다)
+ *               → 합계 write 3,000,783 은 <b>리플레이 행 + 통계 행</b>이다
+ *   expireJob   청크가 후보를 읽고 만료 행을 쓴다 — 여기서는 뜻이 맞는다
+ *   cleanupJob  Step 둘이 <b>서로 다른 표의 삭제 행</b>을 센다
+ * </pre>
+ *
+ * <p>그래서 이름을 {@code readCount}/{@code writeCount} 가 아니라 <b>{@code step*Total}</b> 로
+ * 둔다 — 한때 앞엣것이었고 <b>도메인 처리 건수로 읽히는 것이 정확히 그 사고</b>다.
+ * 화면에는 <i>"Step 처리 합계"</i> 처럼 출처가 드러나게 적고, 검출 건수나 만료 건수가
+ * 필요하면 그 잡의 전용 응답을 봐라 — 검증은 {@code VerifyRunView.findingCount} 다.
+ * <b>안 지우는 이유</b>는 만료·정리에서는 이 값이 "그 실행이 몇 행을 만졌나" 로 여전히
+ * 쓸모가 있고, 지우면 관제에서 그 축이 통째로 사라지기 때문이다.
  */
 public record BatchRunView(
         long executionId,
@@ -25,33 +45,8 @@ public record BatchRunView(
         LocalDateTime startedAt,
         LocalDateTime finishedAt,
         Long durationSeconds,
-        Long readCount,
-        Long writeCount) {
-
-    public static BatchRunView of(BatchRun run) {
-        return of(run, ZoneId.systemDefault());
-    }
-
-    /**
-     * 존을 인자로 받는 갈래. 기본 존은 테스트가 못 바꾸므로 변환 자체를 재려면 이쪽이
-     * 필요하다 — 통합 테스트는 build.gradle 의 user.timezone 한 줄에 매여 그 값이 UTC 가
-     * 되는 날 통째로 건너뛰어진다. BatchTimeAxis 가 같은 이유로 같은 갈래를 연다.
-     */
-    static BatchRunView of(BatchRun run, ZoneId batchMetaZone) {
-        LocalDateTime startedAt = onDomainAxis(run.startedAtInBatchMetaZone(), batchMetaZone);
-        LocalDateTime finishedAt = onDomainAxis(run.finishedAtInBatchMetaZone(), batchMetaZone);
-        return new BatchRunView(
-                run.executionId(),
-                run.jobName(),
-                run.status(),
-                failureOf(run),
-                startedAt,
-                finishedAt,
-                durationSeconds(startedAt, finishedAt),
-                run.readCount(),
-                run.writeCount());
-    }
-
+        Long stepReadTotal,
+        Long stepWriteTotal) {
     /**
      * <b>사유를 안 붙이는 상태.</b> 끝나서 성공한 것 하나와, <b>아직 안 끝난</b> 셋이다 —
      * 도는 중에 사유를 찍으면 화면이 "실패했는데 안 끝났다" 로 읽는다.
@@ -80,6 +75,31 @@ public record BatchRunView(
      */
     private static final Set<String> SUCCEEDED =
             Set.of("COMPLETED", "STARTING", "STARTED", "STOPPING");
+
+
+    public static BatchRunView of(BatchRun run) {
+        return of(run, ZoneId.systemDefault());
+    }
+
+    /**
+     * 존을 인자로 받는 갈래. 기본 존은 테스트가 못 바꾸므로 변환 자체를 재려면 이쪽이
+     * 필요하다 — 통합 테스트는 build.gradle 의 user.timezone 한 줄에 매여 그 값이 UTC 가
+     * 되는 날 통째로 건너뛰어진다. BatchTimeAxis 가 같은 이유로 같은 갈래를 연다.
+     */
+    static BatchRunView of(BatchRun run, ZoneId batchMetaZone) {
+        LocalDateTime startedAt = onDomainAxis(run.startedAtInBatchMetaZone(), batchMetaZone);
+        LocalDateTime finishedAt = onDomainAxis(run.finishedAtInBatchMetaZone(), batchMetaZone);
+        return new BatchRunView(
+                run.executionId(),
+                run.jobName(),
+                run.status(),
+                failureOf(run),
+                startedAt,
+                finishedAt,
+                durationSeconds(startedAt, finishedAt),
+                run.stepReadTotal(),
+                run.stepWriteTotal());
+    }
 
     /**
      * 실패한 실행만 요약한다.

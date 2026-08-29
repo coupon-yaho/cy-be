@@ -86,10 +86,10 @@ class BatchRunHistoryTest {
 
         BatchRun run = adapter.findRecent(null, 10, 0).getFirst();
 
-        assertThat(run.readCount())
+        assertThat(run.stepReadTotal())
                 .as("SUM() 은 대상이 없으면 NULL 이다. 널가드를 빼면 여기서 NPE 로 목록이 죽는다")
                 .isNull();
-        assertThat(run.writeCount()).isNull();
+        assertThat(run.stepWriteTotal()).isNull();
     }
 
     @Test
@@ -99,8 +99,8 @@ class BatchRunHistoryTest {
         step(1, 10, 100);
         step(1, 20, 200);
 
-        assertThat(adapter.findRecent(null, 10, 0).getFirst().writeCount()).isEqualTo(300L);
-        assertThat(adapter.findRecent(null, 10, 0).getFirst().readCount()).isEqualTo(30L);
+        assertThat(adapter.findRecent(null, 10, 0).getFirst().stepWriteTotal()).isEqualTo(300L);
+        assertThat(adapter.findRecent(null, 10, 0).getFirst().stepReadTotal()).isEqualTo(30L);
     }
 
     private void plant(long id, String jobName, String status, boolean started) {

@@ -30,6 +30,12 @@ import com.kafkick.core.verification.VerificationRun;
  * <p>findingCount 는 판정 전에는 비운다. VerificationRun.start 가 0 으로 시작하는데,
  * 이 프로젝트에서 0 은 "정합성 합격" 의 신호값이다 — 도는 중인 실행이 무결로 읽힌다.
  * findingsChecksum 도 같은 축이라 함께 비어 있다.
+ *
+ * <p><b>그 불변식은 쓰기 쪽이 이미 지킨다</b> — INSERT 가 findings_checksum 을 안 넣고
+ * (그래서 NULL), 그것을 채우는 유일한 UPDATE 가 verdict 를 <b>같은 문장에서</b> 함께 쓴다
+ * (VerificationRunJdbcAdapter). 그래도 여기서 한 번 더 가리는 것은, 이 주석이 약속한 것을
+ * <b>이 파일의 코드가 스스로 지켜야</b> 읽는 사람이 쓰기 쪽까지 안 가도 되기 때문이다 —
+ * findingCount 가 이미 같은 모양이라 둘이 어긋나 보이는 것도 이유다(봇 리뷰가 그것을 짚었다).
  */
 public record VerifyHistoryView(
         Long runId,
@@ -57,7 +63,7 @@ public record VerifyHistoryView(
                 run.verdict(),
                 run.statsStatus(),
                 run.verdict() == null ? null : run.findingCount(),
-                run.findingsChecksum(),
+                run.verdict() == null ? null : run.findingsChecksum(),
                 run.datasetFingerprint(),
                 run.startedAt(),
                 run.finishedAt());

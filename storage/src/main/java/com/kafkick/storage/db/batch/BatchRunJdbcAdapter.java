@@ -75,15 +75,6 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
             toLong(rs.getBigDecimal("READ_TOTAL")),
             toLong(rs.getBigDecimal("WRITE_TOTAL")));
 
-    /**
-     * SUM() 은 BigDecimal 로 온다. Long 으로 캐스팅하면 ClassCastException 이다.
-     *
-     * <p>Step 이 하나도 없으면 NULL 이다 — 시작조차 못 한 실행이 그 모양이라 그대로 넘긴다.
-     */
-    private static Long toLong(BigDecimal value) {
-        return value == null ? null : value.longValue();
-    }
-
     private final JdbcClient jdbcClient;
 
     public BatchRunJdbcAdapter(JdbcClient jdbcClient) {
@@ -107,5 +98,14 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
                 .query(Integer.class)
                 .single();
         return count == null ? 0 : count;
+    }
+
+    /**
+     * SUM() 은 BigDecimal 로 온다. Long 으로 캐스팅하면 ClassCastException 이다.
+     *
+     * <p>Step 이 하나도 없으면 NULL 이다 — 시작조차 못 한 실행이 그 모양이라 그대로 넘긴다.
+     */
+    private static Long toLong(BigDecimal value) {
+        return value == null ? null : value.longValue();
     }
 }

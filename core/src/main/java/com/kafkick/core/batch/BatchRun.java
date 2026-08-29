@@ -22,8 +22,8 @@ public record BatchRun(
         String exitMessage,
         LocalDateTime startedAtInBatchMetaZone,
         LocalDateTime finishedAtInBatchMetaZone,
-        Long readCount,
-        Long writeCount
+        Long stepReadTotal,
+        Long stepWriteTotal
 ) {
 
     /**
@@ -39,6 +39,6 @@ public record BatchRun(
                 + ", exitMessage=<가림:" + (exitMessage == null ? 0 : exitMessage.length())
                 + "자>, startedAtInBatchMetaZone=" + startedAtInBatchMetaZone
                 + ", finishedAtInBatchMetaZone=" + finishedAtInBatchMetaZone
-                + ", readCount=" + readCount + ", writeCount=" + writeCount + "]";
+                + ", stepReadTotal=" + stepReadTotal + ", stepWriteTotal=" + stepWriteTotal + "]";
     }
 }
