@@ -227,13 +227,23 @@ public class StatsJdbcAdapter implements StatsRepository {
     /**
      * <b>한 발급건 안에서 {@code id} 순서와 {@code created_at} 순서가 뒤집힌 쌍.</b>
      *
-     * <p>창을 리플레이와 같게 <b>{@code a} 쪽에만</b> 건다. {@code b} 에도 걸면 상한 밖에서
-     * 들어온 역전을 못 보는데, 그것이야말로 리플레이가 읽는 범위를 흔드는 행이다.
+     * <p>창을 <b>{@code a} 쪽에만</b> 건다. {@code b} 는 {@code b.created_at < a.created_at
+     * <= asOf} 라 시각으로 이미 갇혀 있고, {@code b} 가 추가로 데려올 수 있는 것은
+     * {@code b.id > maxHistoryId} 인 행뿐이다 — <b>그 행은 같은 Step 의 앞선
+     * {@code hasHistoriesAddedAbove} 가 이미 치명으로 만든다.</b> 즉 이 비대칭은
+     * 검출력을 늘리지 않는 <b>여분</b>이다. 그래도 안 자르는 쪽을 택한 것은 가드 순서가
+     * 바뀌어도 이 검사가 홀로 성립하게 하기 위해서다.
      *
-     * <p>실측(300만 발급 · 534만 이력 · 버퍼 풀 128 MiB): <b>6.5초</b>.
+     * <p>실측(300만 발급 · 534만 이력): 버퍼 풀 128 MiB 에서 <b>7.1초</b>,
+     * 2 GiB 에서도 <b>5.8초</b> — <b>CPU 바운드라 버퍼 풀을 키워도 거의 안 줄어든다.</b>
      * {@code a} 는 PRIMARY 레인지, {@code b} 는
-     * {@code idx_issuance_histories_issuance_created_id} 를 <b>커버링</b>으로 탄다.
-     * 일 1회 도는 180초짜리 잡의 3.6% 다.
+     * {@code idx_issuance_histories_issuance_created_id} 를 <b>커버링</b>으로 탄다
+     * ({@code loops=5.34e+6}). 180초짜리 잡의 약 4% 이고, 배포 버퍼 풀이 크면 전체가
+     * 줄어드는 만큼 <b>이 비중은 오히려 올라간다.</b>
+     *
+     * <p><b>이 인덱스는 기동 가드가 안 본다</b> — {@code SchemaPresenceGuard} 의
+     * {@code CRITICAL_INDEXES} 는 {@code BATCH_*} 둘뿐이다. 인덱스가 없는 스키마에서는
+     * 이 조인이 Step 데드라인({@code batch.verify.step-timeout-ms}, 기본 600초)을 먹는다.
      */
     private static final String COUNT_OUT_OF_ORDER = """
             SELECT COUNT(*)
@@ -386,19 +396,22 @@ public class StatsJdbcAdapter implements StatsRepository {
     }
 
     /**
+     * 세는 것이 <b>행이 아니라 쌍</b>이라 {@code long} 이다. 한 발급건에 역전 이력이 n개면
+     * 쌍은 n(n-1)/2 로 는다 — 형제와 달리 발급건 수가 상한이 아니다.
+     */
+    @Override
+    public long countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId) {
+        return jdbcClient.sql(COUNT_OUT_OF_ORDER)
+                .param("asOf", asOf)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .query(Long.class)
+                .single();
+    }
+
+    /**
      * <b>짝으로 본다.</b> 총합 비교는 대칭 오차를 못 잡는다 —
      * {@code StatsRepository#countIssuancesWithBrokenIssueHistory} javadoc 에 근거를 적었다.
      */
-    @Override
-    public int countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId) {
-        Integer count = jdbcClient.sql(COUNT_OUT_OF_ORDER)
-                .param("asOf", asOf)
-                .param("maxHistoryId", frozenMaxHistoryId)
-                .query(Integer.class)
-                .single();
-        return count == null ? 0 : count;
-    }
-
     @Override
     public int countIssuancesWithBrokenIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {
         return jdbcClient.sql(SELECT_BROKEN_ISSUE_HISTORY.formatted("COUNT(*)"))

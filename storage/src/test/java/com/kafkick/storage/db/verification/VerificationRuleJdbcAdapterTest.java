@@ -822,7 +822,7 @@ class VerificationRuleJdbcAdapterTest {
     void detectsUsagesAddedAboveFrozenBoundary() {
         long used = data.issuance(IssuanceStatus.USED);
         data.usage(used, AS_OF.minusHours(3), null);
-        long frozen = adapter.latestUsageId(AS_OF);
+        long frozen = adapter.latestUsageId();
 
         assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
                 .as("아직 아무것도 안 끼어들었다")
@@ -844,7 +844,7 @@ class VerificationRuleJdbcAdapterTest {
     @DisplayName("취소로 들어온 행도 잡는다 — 활성 판정 술어를 쓰면 안 되는 이유다")
     void detectsCanceledUsageAddedAboveFrozenBoundary() {
         long issuanceId = data.issuance(IssuanceStatus.ISSUED);
-        long frozen = adapter.latestUsageId(AS_OF);
+        long frozen = adapter.latestUsageId();
 
         // canceled_at 이 있어 "지금 활성" 은 아니지만, V5 가 세는 값은 바뀐다.
         data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.minusHours(1));
@@ -858,7 +858,7 @@ class VerificationRuleJdbcAdapterTest {
     @DisplayName("asOf 뒤에 쓰인 사용은 안 잡는다 — 그 축은 리플레이 밖이다")
     void ignoresUsagesAfterAsOf() {
         long issuanceId = data.issuance(IssuanceStatus.ISSUED);
-        long frozen = adapter.latestUsageId(AS_OF);
+        long frozen = adapter.latestUsageId();
 
         data.usage(issuanceId, AS_OF.plusHours(1), null);
 
@@ -868,12 +868,25 @@ class VerificationRuleJdbcAdapterTest {
     }
 
     @Test
+    @DisplayName("상한은 asOf 로 안 자른다 — asOf 뒤 행도 상한에 든다")
+    void freezesAbsoluteMaxRegardlessOfAsOf() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        data.usage(issuanceId, AS_OF.plusHours(1), null);
+
+        // 술어를 걸면 이 행이 상한에서 빠져 0 이 나온다. 빼면 그 행의 id 가 상한이다.
+        // 둘 다 가드의 뜻은 같지만(오토인크리먼트), 술어 있는 쪽만 전수 스캔이다.
+        assertThat(adapter.latestUsageId())
+                .as("used_at 술어를 다시 넣으면 이 검사가 깨진다 — 그 회귀를 막는 자리다")
+                .isPositive();
+    }
+
+    @Test
     @DisplayName("사용이 하나도 없으면 상한이 0 이고, 그 위로 들어오는 것을 잡는다")
     void treatsMissingUsagesAsZeroBoundary() {
         long issuanceId = data.issuance(IssuanceStatus.ISSUED);
 
-        assertThat(adapter.latestUsageId(AS_OF))
-                .as("행이 없으면 0 — 건너뛰면 가드가 막으려던 상황에서 정확히 꺼진다")
+        assertThat(adapter.latestUsageId())
+                .as("행이 하나도 없으면 0 — 건너뛰면 가드가 막으려던 상황에서 정확히 꺼진다")
                 .isZero();
 
         data.usage(issuanceId, AS_OF.minusHours(1), null);

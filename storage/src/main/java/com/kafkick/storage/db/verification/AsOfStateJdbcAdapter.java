@@ -49,7 +49,8 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
             UPDATE asof_state a
               JOIN (SELECT issuance_id, COUNT(*) AS active_count
                       FROM issuance_usages
-                     WHERE used_at <= :asOf
+                     WHERE id <= :maxUsageId
+                       AND used_at <= :asOf
                        AND (canceled_at IS NULL OR canceled_at > :asOf)
                      GROUP BY issuance_id) u
                 ON u.issuance_id = a.coupon_id
@@ -76,11 +77,20 @@ public class AsOfStateJdbcAdapter implements AsOfStateRepository {
         jdbcTemplate.batchUpdate(UPSERT, batch);
     }
 
+    /**
+     * <b>{@code maxUsageId} 는 이력 축의 {@code maxHistoryId} 와 같은 뜻이다</b> —
+     * 리플레이가 {@code h.id <= :maxHistoryId} 로 읽듯, V5 도 얼린 상한까지만 센다.
+     * 상한이 없으면 이 UPDATE 가 도는 순간 커밋돼 있는 모든 행을 세어, 같은 {@code asOf}
+     * 재실행이 다른 답을 낼 수 있다 — 결정론이 깨지는 자리다.
+     * {@code assertFrozenStep} 의 사용 축 가드가 "V5 는 얼린 상한까지 읽었다" 라고
+     * 말할 수 있는 근거가 바로 이 한 줄이다.
+     */
     @Override
-    public void applyActiveUsageCounts(long runId, LocalDateTime asOf) {
+    public void applyActiveUsageCounts(long runId, LocalDateTime asOf, long maxUsageId) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("runId", runId)
-                .addValue("asOf", asOf);
+                .addValue("asOf", asOf)
+                .addValue("maxUsageId", maxUsageId);
 
         jdbcTemplate.update(APPLY_USAGE_COUNTS, params);
     }

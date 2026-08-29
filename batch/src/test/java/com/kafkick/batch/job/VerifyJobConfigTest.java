@@ -252,6 +252,58 @@ class VerifyJobConfigTest {
         assertThat(asOfStateCount()).isZero();
     }
 
+    /**
+     * <b>이 검사가 없어서 CY-767 1차 구현의 결함이 통과했다.</b> 역전 검사를
+     * {@code statsAggregateStep} 에 두면 <i>"검출이 나면 verdict 가 FAIL 이라 조기 반환에
+     * 걸린다"</i> — 막으려던 바로 그 경우에만 안 돈다. 어댑터 단위 테스트는 SQL 이
+     * 1을 세는지만 보므로 그 배선 결함을 못 잡는다.
+     */
+    @Test
+    @DisplayName("이력 created_at 이 역전되면 판정 전에 죽는다 — 검출이 나든 안 나든")
+    void rejectInvertedHistoryOrderBeforeVerdict() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        issued(issuanceId, AS_OF.minusHours(1));
+        // 뒤에 들어왔는데(=id 가 크다) 시각은 앞선다. 리플레이가 USE 를 먼저 접어
+        // ILLEGAL_TRANSITION 오탐을 내는 형상이라, 검출이 1건 이상 나온다.
+        used(issuanceId, AS_OF.minusHours(2));
+
+        JobExecution execution = launch(1);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        assertThat(errorCodesOf(execution))
+                .as("DATASET_MUTATED_DURING_RUN 으로 두면 운영자가 쓰기를 멈추고 재실행하는데 "
+                        + "이력 속성이라 같은 자리에서 또 죽는다 — 무한 재시도로 보낸다")
+                .contains(VerificationErrorCode.HISTORY_ORDER_INVERTED);
+        assertThat(verdictOf(execution))
+                .as("statsAggregateStep 에 두면 판정이 이미 커밋돼 증적에 PASS 가 남는다. "
+                        + "판정 앞에서 죽어야 verdict 가 비고, 그것이 '판정이 안 났다' 신호다")
+                .isNull();
+    }
+
+    /**
+     * 사용 축 상한의 <b>배선</b>을 잡 수준에서 잰다. 실행 중 삽입은 이 테스트 배선으로
+     * 흉내낼 수 없으므로(가드가 도는 Step 사이에 끼어들 훅이 없다) 여기서 재는 것은
+     * <i>"{@code startRunStep} 이 실제 최대 id 를 문맥에 싣는가"</i> 하나다 — 그 값이 0 이면
+     * V5 가 사용을 한 건도 안 세어 전 발급건이 오탐이 된다. SQL 자체는 어댑터 테스트가 잰다.
+     */
+    @Test
+    @DisplayName("startRunStep 이 사용 축 상한을 실제 최대 id 로 얼린다")
+    void freezesUsageCeilingIntoJobContext() throws Exception {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        issued(issuanceId, AS_OF.minusHours(2));
+        used(issuanceId, AS_OF.minusHours(1));
+        seed.usage(issuanceId, AS_OF.minusHours(1), null);
+
+        JobExecution execution = launch(1);
+
+        Long actualMax = jdbcClient.sql("SELECT MAX(id) FROM issuance_usages")
+                .query(Long.class).optional().orElse(0L);
+        assertThat(execution.getExecutionContext().getLong("replay.scan.maxUsageId"))
+                .as("0 이 실리면 V5 가 사용을 한 건도 안 세어 전 발급건이 오탐이 된다")
+                .isEqualTo(actualMax)
+                .isPositive();
+    }
+
     @Test
     @DisplayName("이력이 전부 asOf 뒤면 거부한다 — 접을 것이 없다고 초록불이 뜨면 안 된다")
     void rejectWhenEveryHistoryIsAfterAsOf() throws Exception {
@@ -869,6 +921,19 @@ class VerifyJobConfigTest {
             }
         }
         return messages;
+    }
+
+    /** 판정이 커밋됐는지 본다 — 가드가 판정 앞에서 죽었으면 비어 있어야 한다. */
+    private String verdictOf(JobExecution execution) {
+        Object runId = execution.getExecutionContext().get("runId");
+        if (runId == null) {
+            return null;
+        }
+        return jdbcClient.sql("SELECT verdict FROM verification_runs WHERE id = :id")
+                .param("id", ((Number) runId).longValue())
+                .query(String.class)
+                .optional()
+                .orElse(null);
     }
 
     private int asOfStateCount() {

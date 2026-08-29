@@ -471,10 +471,20 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .single());
     }
 
+    /**
+     * <b>{@code used_at} 술어를 일부러 안 건다.</b> id 는 오토인크리먼트라 <i>얼린 뒤에</i>
+     * 들어오는 행은 반드시 절대 최대 id 보다 크다 — 술어를 빼도 가드의 뜻이 그대로다.
+     * 빠지는 것은 얼림 시점에 <b>이미 있던</b> {@code used_at > asOf} 행뿐이고,
+     * 그 행은 V5 의 입력이 아니라 애초에 안 세어진다.
+     *
+     * <p>술어를 걸면 값이 비싸진다 — {@code issuance_usages} 에 {@code used_at} 인덱스가
+     * 없어 <b>132만 행 전수 스캔</b>이 된다(실측 {@code type=ALL · rows=1,313,897 · 0.32초},
+     * 97.6 MiB 를 128 MiB 버퍼 풀에 밀어 넣는다). 술어를 빼면
+     * {@code Select tables optimized away} 로 <b>0.0025ms · 스캔 0 페이지</b>다.
+     */
     @Override
-    public long latestUsageId(LocalDateTime asOf) {
-        Long max = jdbcClient.sql("SELECT MAX(id) FROM issuance_usages WHERE used_at <= :asOf")
-                .param("asOf", asOf)
+    public long latestUsageId() {
+        Long max = jdbcClient.sql("SELECT MAX(id) FROM issuance_usages")
                 .query(Long.class)
                 .optional()
                 .orElse(null);

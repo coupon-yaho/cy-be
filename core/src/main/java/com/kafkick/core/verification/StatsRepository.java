@@ -111,9 +111,14 @@ public interface StatsRepository {
      * 원인을 그 자리에 세운다 — 그래야 오탐이 <i>"검증기 버그"</i> 가 아니라
      * <i>"이력 시각이 역전됐다"</i> 로 보고된다.
      *
-     * <p>창은 리플레이와 같다 — {@code id <= maxHistoryId AND created_at <= asOf}.
+     * <p><b>창은 {@code a} 쪽에만 리플레이와 같다</b> — {@code a.id <= maxHistoryId AND
+     * a.created_at <= asOf}. {@code b} 는 시각으로 이미 갇힌다({@code b.created_at <
+     * a.created_at}) 므로 따로 안 자른다. 비용 근거는 {@code StatsJdbcAdapter} 의
+     * {@code COUNT_OUT_OF_ORDER} 에 적었다.
+     *
+     * <p>세는 것이 행이 아니라 <b>쌍</b>이라 {@code long} 이다 — 한 발급건 안에서 제곱으로 는다.
      */
-    int countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId);
+    long countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId);
 
     /** 위 질의가 0 이 아닐 때 메시지에 실을 발급건 id 표본. */
     List<Long> sampleIssuancesWithBrokenIssueHistory(

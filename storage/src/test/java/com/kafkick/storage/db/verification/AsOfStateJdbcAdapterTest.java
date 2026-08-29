@@ -26,6 +26,9 @@ import com.kafkick.storage.db.VerificationSeed;
 class AsOfStateJdbcAdapterTest {
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
+
+    /** 상한 축을 안 재는 기존 검사들이 쓰는 값 — "천장 없음". 그 축은 아래 전용 검사가 잰다. */
+    private static final long NO_CEILING = Long.MAX_VALUE;
     private static final LocalDateTime EVENT_AT = LocalDateTime.of(2026, 8, 15, 13, 0);
 
     @Autowired
@@ -82,7 +85,7 @@ class AsOfStateJdbcAdapterTest {
 
         adapter.appendAll(runId, List.of(
                 new ReplayResult(issuanceId, IssuanceStatus.USED, 10L, EVENT_AT, List.of())));
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
         adapter.appendAll(runId, List.of(
                 new ReplayResult(issuanceId, IssuanceStatus.USED, 11L, EVENT_AT, List.of())));
 
@@ -103,7 +106,7 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.USED);
         data.usage(issuanceId, AS_OF.minusHours(1), null);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }
@@ -114,7 +117,7 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.ISSUED);
         data.usage(issuanceId, AS_OF.plusMinutes(1), null);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isZero();
     }
@@ -125,7 +128,7 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.ISSUED);
         data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.minusHours(1));
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isZero();
     }
@@ -136,7 +139,7 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.USED);
         data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.plusHours(1));
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }
@@ -147,7 +150,7 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.USED);
         data.usage(issuanceId, AS_OF, null);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }
@@ -158,7 +161,7 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.ISSUED);
         data.usage(issuanceId, AS_OF.minusHours(1), AS_OF);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isZero();
     }
@@ -183,7 +186,7 @@ class AsOfStateJdbcAdapterTest {
         data.usage(issuanceId, AS_OF.minusHours(3), AS_OF.minusHours(2));
         data.usage(issuanceId, AS_OF.minusHours(2), null);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }
@@ -200,7 +203,7 @@ class AsOfStateJdbcAdapterTest {
         adapter.appendAll(otherRunId, List.of(
                 new ReplayResult(issuanceId, IssuanceStatus.USED, 10L, EVENT_AT, List.of())));
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
         assertThat(activeUsageCountOf(otherRunId, issuanceId)).isZero();
@@ -213,7 +216,7 @@ class AsOfStateJdbcAdapterTest {
         long untouched = seededState(IssuanceStatus.ISSUED);
         data.usage(used, AS_OF.minusHours(1), null);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(used)).isEqualTo(1);
         assertThat(activeUsageCount(untouched)).isZero();
@@ -225,8 +228,8 @@ class AsOfStateJdbcAdapterTest {
         long issuanceId = seededState(IssuanceStatus.USED);
         data.usage(issuanceId, AS_OF.minusHours(1), null);
 
-        adapter.applyActiveUsageCounts(runId, AS_OF);
-        adapter.applyActiveUsageCounts(runId, AS_OF);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
+        adapter.applyActiveUsageCounts(runId, AS_OF, NO_CEILING);
 
         assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }

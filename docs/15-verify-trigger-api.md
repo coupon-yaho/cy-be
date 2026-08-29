@@ -196,7 +196,7 @@ rejectRunningExpire(runningJobs);   // RunningJobProbe.blockingExecutions("expir
 ### 이 가드는 정확성의 근거가 아니다
 
 통과한 **직후**에 만료 크론이 발화하면 이 검사는 못 막는다. 그 자리를 지키는 것은
-`assertFrozenStep` 이다 — 규칙이 다 돈 뒤에 발급건·재고·회차 정책·이력 네 축을 다시 보고,
+`assertFrozenStep` 이다 — 규칙이 다 돈 뒤에 발급건·재고·회차 정책·이력·사용 다섯 축을 다시 보고,
 하나라도 움직였으면 `DATASET_MUTATED_DURING_RUN` 으로 **판정을 버린다.**
 
 그러면 이 가드는 무엇을 하나 — **헛돌지 않게 한다.** 3분 뒤에 버릴 실행을 시작 전에 끝내고,

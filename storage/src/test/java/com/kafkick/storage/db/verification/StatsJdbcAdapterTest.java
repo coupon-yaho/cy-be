@@ -422,6 +422,54 @@ class StatsJdbcAdapterTest {
     }
 
     /**
+     * <b>이 검사가 존재하는 이유가 이 축이다.</b> 창은 {@code a} 쪽에만 걸고 {@code b} 는
+     * 안 자른다 — 위 셋은 전부 {@code b} 자신의 id 를 상한으로 넘겨서
+     * {@code b.id <= maxHistoryId} 를 더해도 그대로 통과한다. 그 돌연변이를 여기서 잡는다.
+     */
+    @Test
+    @DisplayName("b 가 얼린 상한 위여도 센다 — 창은 a 쪽에만 건다")
+    void countsPairsWhoseLaterRowIsAboveTheCeiling() {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        long earlier = seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+        // b 는 상한 **위**에 둔다. a 만 창 안이다.
+        seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, OPEN_AT);
+
+        assertThat(adapter.countOutOfOrderHistoryPairs(AS_OF, earlier))
+                .as("b 에도 창을 걸면 이 쌍이 사라진다 — 그 리팩터를 막는 자리다")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("a 가 얼린 상한 위면 안 센다 — 창이 실제로 돈다")
+    void ignoresPairsAboveTheFrozenCeiling() {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+        seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, OPEN_AT);
+
+        assertThat(adapter.countOutOfOrderHistoryPairs(AS_OF, 0L))
+                .as("상한을 안 넘기거나 0 을 넘기면 조용히 0 이 된다 — 그 회귀를 잡는다")
+                .isZero();
+    }
+
+    @Test
+    @DisplayName("a 가 asOf 뒤면 안 센다 — 리플레이가 안 읽는 구간이다")
+    void ignoresPairsAfterAsOf() {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, AS_OF.plusHours(2));
+        long later = seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, AS_OF.plusHours(1));
+
+        assertThat(adapter.countOutOfOrderHistoryPairs(AS_OF, later))
+                .as("asOf 뒤 역전은 이 실행의 판정과 무관하다")
+                .isZero();
+    }
+
+    /**
      * <b>창이 리플레이와 같아야 한다.</b> {@code created_at <= asOf} 만 걸면 다시 재는 것이라,
      * 얼린 상한보다 큰 id 인데 시각이 과거인 <b>백데이트 이력</b>을 리플레이는 못 읽고 통계는 읽는다.
      * CY-193 에서 {@code dataset_fingerprint} 가 앓았던 병이 그것이고

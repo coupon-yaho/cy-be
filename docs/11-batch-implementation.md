@@ -600,7 +600,8 @@ duplicateIssuanceStep V2    결정론
 replayMismatchStep   V3     현재 행을 읽는다
 stockMismatchStep    V1     현재 행을 읽는다
 gradeViolationStep   V6     현재 행을 읽는다
-assertFrozenStep     실행 중 발급건·재고·정책(회차+등급)이 얼어 있었는지 다시 확인
+assertFrozenStep     실행 중 발급건·재고·정책(회차+등급)·이력·사용 다섯 축이 얼어 있었는지
+                     다시 확인 + 이력 created_at 역전 검사
 finalizeRunStep      판정·검출 수·checksum·지문·종료 시각을 실행 행에 남긴다
                      CORRUPT 는 정답 매니페스트와 집합을 대조해 판정한다
 ```
@@ -687,6 +688,13 @@ V1 도 `coupons` 를 드라이빙으로 잡으므로 회차 INSERT·DELETE 가 �
 `DATASET_MUTATED_DURING_RUN` 과 가른 이유는 재시도 가능성이 다르기 때문이다 — 그쪽은 쓰기를
 멈추고 다시 돌리면 통과하고, 이쪽은 구조 파손이라 멈춰도 같은 자리에서 죽는다.
 
+**같은 규칙으로 `HISTORY_ORDER_INVERTED`(`VERIFICATION-023`)도 갈랐다** — 이력의
+`created_at` 순서가 `id` 순서와 뒤집힌 것은 이미 저장된 행의 속성이라 쓰기를 멈춰도 안
+사라진다. 처방이 "재실행" 이 아니라 "그 발급건의 이력 시각을 고친다" 라서, 재시도 계열
+코드로 묶으면 운영자를 무한 재시도로 보낸다. 이 검사는 `assertFrozenStep` 에 있다 —
+통계 Step 에 두면 (1) `verdict != PASS` 조기 반환에 걸려 **오탐이 난 실행에서만 안 돌고**,
+(2) 판정이 앞 Step 에서 이미 커밋돼 죽어도 증적에 `verdict=PASS` 가 남는다.
+
 이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력이 없는 발급건은 `asof_state` 에 안 실려
 V3·V5 의 시야 밖이고 V4 는 반대 방향(고아 이력)만 본다.
 
@@ -694,6 +702,11 @@ V3·V5 의 시야 밖이고 V4 는 반대 방향(고아 이력)만 본다.
 `dataset_fingerprint` 와 통계 스냅샷이 **다른 데이터의 함수**가 될 수 있다. 네 축(발급건·재고·
 회차 정책·이력)을 통계 앞에서 한 번 더 확인하고, 어긋나면 `DATASET_MUTATED_DURING_RUN` 이다.
 짝 비교보다 앞에 두어 창 엇갈림을 구조 파손으로 오진하지 않게 한다.
+
+**여기는 넷이고 `assertFrozenStep` 은 다섯이다 — 빠뜨린 것이 아니다.** 사용 축을 여기서
+안 보는 이유는 통계 질의 중 `issuance_usages` 를 읽는 것이 하나도 없고, 그 축을 읽는
+유일한 규칙(V5)이 `assertFrozenStep` 보다 앞이라 이 시점에 다시 봐야 늦기 때문이다.
+통계에 사용 실적 축(예: 회차별 실사용률)이 들어오는 날 다섯째를 여기에도 더해야 한다.
 
 **이 재확인이 덮는 창은 "집계 도중" 이 아니다.** 네 축을 비잠금 읽기로 보는데 REPEATABLE READ 의
 읽기 뷰는 그 트랜잭션의 **첫** 비잠금 읽기(`verdict` 조회)에서 고정된다 — MySQL 8.0.35 에 재 보니

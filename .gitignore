@@ -120,3 +120,4 @@ _workspace/
 # `.env`·`*.pem` 은 위 블록에 있다. 여기 다시 적지 않는다.
 db.env
 .db.env
+/.alerts.json

@@ -161,7 +161,12 @@ public interface VerificationRuleRepository {
 
     /**
      * 얼린 사용 상한 <b>위로</b> {@code asOf} 이하 사용 이력이 끼어들었는가.
-     * 형제 {@link #hasHistoriesAddedAbove} 와 같은 규약이다 — 이름을 SQL 방향과 맞춘다.
+     * 이름과 SQL 방향은 형제 {@link #hasHistoriesAddedAbove} 와 맞춘다.
+     *
+     * <p><b>창의 컬럼은 형제와 다르다</b> — 형제는 {@code created_at}(리플레이가 정렬·필터에
+     * 쓰는 그 컬럼), 이쪽은 {@code used_at} 이다. V5 가 {@code used_at <= asOf} 로 세기
+     * 때문이다. 이 가드가 답해야 할 질문이 <i>"V5 가 그 행을 셀 것인가"</i> 라서,
+     * V5 와 같은 술어를 써야 뜻이 맞는다.
      *
      * <p><b>V5 가 읽는 다섯째 축인데 얼림 가드에도 지문에도 없었다.</b>
      * {@code assertFrozenStep} 은 네 축(발급건·재고·회차 정책·이력)만 보고,
@@ -176,19 +181,42 @@ public interface VerificationRuleRepository {
      * <p><b>지문은 안 고친다.</b> 그것은 계약({@code contract.json})이 정한 다섯 항이라
      * 여기서 늘리면 시드와 갈린다. 그래서 <b>가드로 막는다.</b>
      *
-     * <p>상한은 {@code startRunStep} 이 {@code MAX(id) WHERE used_at <= asOf} 로 얼려
-     * Step 문맥에 싣는다. PK 범위 조회라 비용이 없다.
+     * <p><b>이 가드가 홀로 덮는 범위는 좁다.</b> 애플리케이션 경로는
+     * {@code CouponUseService}·{@code CouponCancelUseService} 가 사용 행과 이력 행을
+     * <b>한 트랜잭션·같은 시각</b>으로 함께 쓰므로, 그 경로에서 이 가드가 발화하는 상황은
+     * 형제 이력 축 가드가 이미 발화하는 상황이다. 홀로 덮는 것은
+     * <b>DB 에 직접 친 INSERT</b>(수동 오염 주입·시드 스크립트)다. 그래도 지킬 값이 있는
+     * 것은 오염 주입이 정확히 그 모양이기 때문이다.
+     *
+     * <p><b>기존 행의 {@code canceled_at} 이 바뀌는 것은 안 본다.</b> 그것도 V5 의 답을
+     * 바꾸지만, {@code CouponCancelUseService} 가 같은 트랜잭션에서
+     * {@code issuances.updated_at} 을 올려 <b>발급건 축 가드가 대신 잡는다.</b>
+     * {@code issuances} 를 안 건드리는 usage 정정 경로가 생기면 이 축을 넓혀야 한다.
+     *
+     * <p>상한은 {@code startRunStep} 이 {@link #latestUsageId()} 로 얼려 Step 문맥에 싣는다.
+     * 이 EXISTS 자체는 {@code id > :maxUsageId} PK 레인지라 값싸다
+     * (실측: 상한이 최신이면 0.03ms).
      */
     boolean hasUsagesAddedAbove(long frozenMaxUsageId, LocalDateTime asOf);
 
     /**
-     * {@code asOf} 이하 사용 이력 중 가장 큰 식별자. 실행 시작에 한 번 재 문맥에 얼린다.
+     * 사용 이력의 <b>절대 최대 식별자</b>. 실행 시작에 한 번 재 문맥에 얼린다.
+     *
+     * <p><b>{@code asOf} 로 자르지 않는다.</b> id 는 오토인크리먼트라 얼린 뒤에 들어오는
+     * 행은 반드시 이 값보다 크다 — 자르지 않아도 {@link #hasUsagesAddedAbove} 의 뜻이
+     * 그대로다. 자르면 {@code used_at} 인덱스가 없어 <b>132만 행 전수 스캔</b>이 되는데
+     * (실측 {@code type=ALL · rows=1,313,897 · 0.32초}), 얻는 것이 없다.
+     * 근거와 실행계획은 어댑터 구현에 적었다.
      *
      * <p>행이 없으면 <b>0</b> 이다. 그 값을 그대로 상한으로 쓰면
      * {@link #hasUsagesAddedAbove} 가 <i>"id &gt; 0 이면서 asOf 이하인 행이 생겼는가"</i> 가 되어
      * 뜻이 정확히 맞는다 — 형제 이력 축이 같은 이유로 같은 기본값을 쓴다.
+     *
+     * <p><b>V5 도 이 상한을 쓴다</b> — {@code AsOfStateRepository#applyActiveUsageCounts} 가
+     * {@code id <= maxUsageId} 로 센다. 그래서 얼림 가드가 말하는
+     * <i>"V5 는 얼린 상한까지 접은 값을 읽었다"</i> 가 참이 된다.
      */
-    long latestUsageId(LocalDateTime asOf);
+    long latestUsageId();
 
     /**
      * 지금 보고 있는 스키마에 <b>CLEAN 전용 제약</b>이 살아 있는가.
