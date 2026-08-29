@@ -1,6 +1,7 @@
 package com.kafkick.core.verification;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -68,6 +69,17 @@ public interface VerificationRunRepository {
      * 한 값으로 뭉친다.
      */
     Optional<VerificationRun> findLatestClosed(DatasetType dataset, ScopeType scope);
+
+    /**
+     * 최근 실행부터 페이지 하나. 관제 화면의 실행 이력이 쓴다.
+     *
+     * <p>{@code dataset} 이 null 이면 전체를 준다. 정렬은 {@code id} 내림차순이다 —
+     * {@code as_of} 는 같은 값으로 여러 번 돌 수 있어(재시도) 순서가 안 정해진다.
+     */
+    List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset);
+
+    /** 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다. */
+    int countRecent(DatasetType dataset);
 
     /**
      * 같은 {@code (asOf, dataset, scope)} 에서 <b>마지막으로 쓰인 attempt + 1</b>.

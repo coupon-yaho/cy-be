@@ -4,6 +4,7 @@ import static com.kafkick.storage.db.verification.ColumnValues.toEnum;
 import static com.kafkick.storage.db.verification.ColumnValues.toName;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.jdbc.core.RowMapper;
@@ -104,6 +105,27 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                AND finished_at IS NOT NULL
              ORDER BY finished_at DESC, id DESC
              LIMIT 1
+            """;
+
+    /**
+     * 최근 실행부터 한 페이지. {@code dataset} 이 null 이면 전체를 본다.
+     *
+     * <p>정렬은 id 내림차순이다 — as_of 는 재시도로 같은 값이 여럿이라 순서가 안 정해진다.
+     */
+    private static final String SELECT_RECENT = """
+            SELECT id, as_of, from_ts, scope, dataset, attempt,
+                   verdict, stats_status, finding_count,
+                   findings_checksum, dataset_fingerprint, started_at, finished_at,
+                   seed_run_id
+              FROM verification_runs
+             WHERE (:dataset IS NULL OR dataset = :dataset)
+             ORDER BY id DESC
+             LIMIT :limit OFFSET :offset
+            """;
+
+    private static final String COUNT_RECENT = """
+            SELECT COUNT(*) FROM verification_runs
+             WHERE (:dataset IS NULL OR dataset = :dataset)
             """;
 
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(
@@ -215,6 +237,25 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .param("scope", scope.name())
                 .query(ROW_MAPPER)
                 .optional();
+    }
+
+    @Override
+    public List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset) {
+        return jdbcClient.sql(SELECT_RECENT)
+                .param("dataset", toName(dataset))
+                .param("limit", limit)
+                .param("offset", offset)
+                .query(ROW_MAPPER)
+                .list();
+    }
+
+    @Override
+    public int countRecent(DatasetType dataset) {
+        Integer count = jdbcClient.sql(COUNT_RECENT)
+                .param("dataset", toName(dataset))
+                .query(Integer.class)
+                .single();
+        return count == null ? 0 : count;
     }
 
     @Override
