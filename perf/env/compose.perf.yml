@@ -1,0 +1,90 @@
+# 측정 회차용 override. compose.yml 을 고치지 않는다 — 개발 스택은 그대로 두고
+# 이 파일을 겹쳐서만 회차 환경이 된다.
+#
+#   docker compose -p <프로젝트> -f compose.yml -f perf/env/compose.perf.yml up -d
+#
+# 경로는 프로젝트 디렉터리(= compose.yml 이 있는 저장소 루트) 기준이다.
+services:
+
+  mysql:
+    # 회차 토폴로지의 연결 상한을 배포가 소유한다. 기본값이면 preflight 가 막는다.
+    command:
+      - --max-connections=${PERF_MYSQL_MAX_CONNECTIONS:-50}
+    ports: !reset null          # A 안에서만 쓴다. 호스트에 안 연다.
+
+  redis:
+    ports: !reset null
+
+  api:
+    # ⚠️ compose.yml 은 pull_policy: always 다. 회차 이미지는 커밋 SHA 태그로 로컬에서
+    #    빌드하므로 레지스트리에 없고, always 인 채로는 up·run·--wait 이 전부 pull
+    #    실패로 죽는다(실측 — up 은 통과해도 뒤따르는 run --rm 이 죽는다).
+    pull_policy: missing
+    # ⚠️ --scale api=N 을 하려면 호스트 포트 매핑이 없어야 한다. 그냥 두면 두 번째
+    #    컨테이너가 같은 포트를 잡으려다 죽는다. 앞에 nginx 를 세운다.
+    ports: !reset null
+    environment:
+      # ⚠️ 회차 환경의 수신 포트를 배포가 못박는다. compose.yml 은 .env 의 SERVER_PORT 를
+      #    컨테이너 수신 포트로 쓰는데, nginx upstream 은 api:8080 고정이다 — .env 가
+      #    8080 이 아니면 발급 요청이 전부 502 가 되고, 기동 점검은 actuator 9090 만 보므로
+      #    그 상태로도 회차가 진행된다.
+      SERVER_PORT: "8080"
+      # ⚠️ 컨테이너 메모리의 25% 가 기본 힙이다. 3g 제한이면 768MB 이고, 실측에서
+      #    api 가 OOMKilled 로 세 번 죽었다. 명시한다.
+      JAVA_TOOL_OPTIONS: >-
+        -Xms${PERF_API_HEAP:-1g} -Xmx${PERF_API_HEAP:-1g}
+        -XX:+AlwaysPreTouch
+      # ⚠️ 기본 max-connections 4000 + accept-count 1000 = 5,000 이 상한이다.
+      #    VU 2만을 쏘면 그 위는 연결이 아예 안 된다 — 응답이 아니라 duration 0s 로 찍힌다.
+      TOMCAT_MAX_CONNECTIONS: "${PERF_TOMCAT_MAX_CONNECTIONS:-20000}"
+      TOMCAT_ACCEPT_COUNT: "${PERF_TOMCAT_ACCEPT_COUNT:-20000}"
+      TOMCAT_THREADS_MAX: "${PERF_TOMCAT_THREADS_MAX:-15}"
+      DB_POOL_SIZE: "${PERF_DB_POOL_SIZE:-3}"
+      # 회차 기록에 남는 배포 선언값. 실제 replica 수와 어긋나면 preflight 가 막는다.
+      BENCHMARK_APP_REPLICAS: "${PERF_API_REPLICAS:-4}"
+    deploy:
+      replicas: ${PERF_API_REPLICAS:-4}
+      resources:
+        limits:
+          memory: ${PERF_API_MEM:-3g}
+
+  batch:
+    pull_policy: missing
+    environment:
+      # ⚠️ compose.yml 은 api 에만 REDIS_HOST: redis 를 준다. batch 는 안 준다 —
+      #    .env 에도 REDIS_HOST 가 없어서 batch 안에서는 localhost 가 되고,
+      #    워밍업 호출이 500(RedisConnectionFailureException)으로 죽는다(실측).
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      # ⚠️ 워밍업 URL 이 이 포트로 붙는다. compose.yml 은 .env 의 BATCH_PORT 로 정하는데
+      #    하네스는 .env 를 안 읽으므로, 여기서 못박지 않으면 둘이 갈라져 V2 회차 생성이
+      #    Connection refused 로 즉시 죽는다.
+      BATCH_PORT: "9091"
+      JAVA_TOOL_OPTIONS: -Xms${PERF_BATCH_HEAP:-512m} -Xmx${PERF_BATCH_HEAP:-512m}
+      # 회차 중 검증 배치가 MySQL 을 바꾸지 않게 한다(measurement-protocol.md).
+      BATCH_SCHEDULING_ENABLED: "${PERF_BATCH_SCHEDULING_ENABLED:-false}"
+      # 관측 Gauge 가 읽는 키를 v2 키로 준다. batch/application.yml 기본값은 아직 v1
+      # 시절 템플릿이라 그대로 두면 gap 세 축이 PENDING 으로 남는다(실측, 발견 G).
+      # ⚠️ 중괄호가 두 겹인 이유 — 치환 대상이 {couponId} 라 두 겹이어야 해시태그가 남는다.
+      DOMAIN_GAUGE_REMAINING_KEY: 'cy:v2:stock:{{couponId}}'
+      DOMAIN_GAUGE_ISSUED_EVER_KEY: 'cy:v2:issued_ever:{{couponId}}'
+      DOMAIN_GAUGE_MEMBER_EVER_KEY: 'cy:v2:issued:{{couponId}}'
+      DOMAIN_GAUGE_COUPON_ID: "${PERF_TARGET_ROUND_ID:-}"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./perf/env/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      # 부하기(B)가 무선으로 들어오는 유일한 입구다. 0.0.0.0 이어야 한다.
+      - "${PERF_LB_PORT:-8080}:8080"
+    depends_on:
+      - api
+
+  prometheus:
+    volumes:
+      # ⚠️ 저장소 기본 prometheus.yml 은 static_configs: ['api:9090'] 하나라
+      #    api 4대 중 스크레이프마다 한 대만 긁는다. dns_sd 로 갈아끼운다.
+      - ./perf/env/prometheus.perf.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
