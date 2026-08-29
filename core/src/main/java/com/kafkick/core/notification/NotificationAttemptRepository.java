@@ -6,5 +6,6 @@ import com.kafkick.core.notification.domain.NotificationAttempt;
 
 public interface NotificationAttemptRepository {
     NotificationAttempt save(NotificationAttempt attempt);
+    boolean saveIfAbsent(NotificationAttempt attempt);
     List<NotificationAttempt> findByNotificationId(Long notificationId);
 }

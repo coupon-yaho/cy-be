@@ -48,6 +48,7 @@ class NotificationOutboxRepositoryTest {
         assertThat(saved.createdAt()).isEqualTo(AT);
         var claim = repository.claimNext(Duration.ofMinutes(1)).orElseThrow();
         assertThat(claim.outboxId()).isEqualTo(saved.id());
+        assertThat(claim.requestedAt()).isEqualTo(AT);
         assertThat(repository.claimNext(Duration.ofMinutes(1))).isEmpty();
         assertThat(repository.markPublished(saved.id(), "wrong", AT.plusSeconds(1))).isFalse();
         assertThat(repository.markPublished(saved.id(), claim.claimToken(), AT.plusSeconds(1))).isTrue();

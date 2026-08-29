@@ -70,11 +70,12 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                     """, token);
         if (updated != 1) return Optional.empty();
         return jdbcTemplate.query("""
-                SELECT id, notification_id, attempt_seq, `trigger`, claim_token
+                SELECT id, notification_id, attempt_seq, `trigger`, claim_token, created_at
                   FROM notification_outbox WHERE claim_token=?
                 """, (rs, row) -> new NotificationOutboxClaim(rs.getLong("id"),
                         rs.getLong("notification_id"), rs.getInt("attempt_seq"),
-                        AttemptTrigger.valueOf(rs.getString("trigger")), rs.getString("claim_token")), token)
+                        AttemptTrigger.valueOf(rs.getString("trigger")), rs.getString("claim_token"),
+                        rs.getTimestamp("created_at").toInstant()), token)
                 .stream().findFirst();
     }
 

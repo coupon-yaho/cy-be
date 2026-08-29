@@ -61,6 +61,12 @@ kafka:
   # 어드민 생성 · 토픽 조회 · 토픽 생성이 각각 그 값을 쓴다.
   provision-topics: ${KAFKA_PROVISION_TOPICS:true}
 
+  notification:
+    relay:
+      # DB claim은 30초 뒤 다른 인스턴스가 회수하고, 한 번에 한 행씩 100ms 간격으로 발행한다.
+      lease: ${KAFKA_NOTIFICATION_RELAY_LEASE:30s}
+      fixed-delay-ms: ${KAFKA_NOTIFICATION_RELAY_FIXED_DELAY_MS:100}
+
 # ── 지표 개수 (실측 · 2026-08-22) ───────────────────────────────────────────────
 # 프로듀서 클라이언트 메트릭은 client.id 당 74개 이름이고, 이 계층은 프로듀서를 둘
 # (coupon-attempt · coupon-persist) 띄우므로 74 × 2 = 148 시계열이다. 이걸 포함한

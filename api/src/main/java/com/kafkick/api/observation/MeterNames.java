@@ -51,7 +51,8 @@ public final class MeterNames {
 
     // ── 상태 전이·알림 카운터. 등록은 A 가 하고 Prometheus 가 함께 긁는다 ──────────
     // public static final String ISSUANCE_EXPIRED = "app.issuance.expired";
-    public static final String NOTIFY_SENT = "app.notify.sent";
+    public static final String NOTIFY_SENT =
+            com.kafkick.core.observation.DomainMeterNames.NOTIFY_SENT;
 
     private MeterNames() {
     }

@@ -27,4 +27,15 @@ class NotificationAttemptRepositoryTest {
         assertThat(saved.createdAt()).isEqualTo(at);
         assertThatThrownBy(() -> repository.save(saved)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void completedAttemptInsertHasSingleWinnerWithoutUniqueKeyException() {
+        Instant at = Instant.parse("2026-08-27T00:00:00Z");
+        NotificationAttempt attempt = new NotificationAttempt(null, 2L, 1,
+                AttemptTrigger.INITIAL, AttemptResult.SUCCESS, null, at, at, at);
+
+        assertThat(repository.saveIfAbsent(attempt)).isTrue();
+        assertThat(repository.saveIfAbsent(attempt)).isFalse();
+        assertThat(repository.findByNotificationId(2L)).hasSize(1);
+    }
 }
