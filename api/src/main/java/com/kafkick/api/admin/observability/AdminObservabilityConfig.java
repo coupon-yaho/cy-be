@@ -29,6 +29,8 @@ import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
+import com.kafkick.core.admin.stock.AdminStockResolver;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
@@ -146,7 +148,8 @@ public class AdminObservabilityConfig {
             ObjectProvider<ConsistencyFinalReader> consistencyFinalReaderProvider,
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
-            OverviewStatusCalculator overviewStatusCalculator
+            OverviewStatusCalculator overviewStatusCalculator,
+            ObjectProvider<V2AdminStockReader> v2AdminStockReaderProvider
     ) {
         ConsistencyFinalReader consistencyFinalReader = consistencyFinalReaderProvider
                 .getIfAvailable(PendingConsistencyFinalReader::new);
@@ -156,7 +159,9 @@ public class AdminObservabilityConfig {
                 issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
                 stockRiskCalculator, campaignOverviewCalculator, campaignPreparationCalculator,
                 consistencyFinalReader, consistencyActionCalculator,
-                operationActionCalculator, overviewStatusCalculator);
+                operationActionCalculator, overviewStatusCalculator,
+                new AdminStockResolver(v2AdminStockReaderProvider
+                        .getIfAvailable(AdminStockResolver::unavailableV2Reader)));
     }
 
     /** 관측 JDBC Reader가 없을 때만 관측 비활성 오류를 내는 Core Port 구현을 제공합니다. */
