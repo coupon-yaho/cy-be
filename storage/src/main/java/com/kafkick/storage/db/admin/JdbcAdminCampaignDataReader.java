@@ -307,7 +307,8 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         boolean campaignConfigurationReady = hasValidCampaignConfiguration(row, policyType);
         // 재고 행 부재와 정책 스냅샷 위반은 각각 확정된 DB 준비 실패로 보존합니다.
         return new PreparationSource(
-                campaignConfigurationReady, databaseStockReady, policyType, SourceStatus.VALID, snapshotAt);
+                campaignConfigurationReady, databaseStockReady, policyType, row.eligibleGradesMask(),
+                SourceStatus.VALID, snapshotAt);
     }
 
     /** DB에 저장된 캠페인 스냅샷이 현재 발급 계약의 모든 필수 값을 갖췄는지 확인합니다. */

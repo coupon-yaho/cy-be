@@ -211,13 +211,13 @@ class JdbcAdminCampaignDataReaderTest {
                 .isEqualTo(new CouponMetricsSource.StockCounts(200, 0));
         assertThat(catalog.campaigns().get(0).preparation())
                 .isEqualTo(new PreparationSource(
-                        true, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
+                        true, false, CouponPolicyType.FIXED_AMOUNT, 3, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(1).preparation())
                 .isEqualTo(new PreparationSource(
-                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
+                        true, true, CouponPolicyType.FIXED_AMOUNT, 3, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(2).preparation())
                 .isEqualTo(new PreparationSource(
-                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
+                        true, true, CouponPolicyType.FIXED_AMOUNT, 3, SourceStatus.VALID, SNAPSHOT));
     }
 
     /** DB 회차 버전이 전역 설정으로 덮이지 않고 목록과 상세 계약에 그대로 전달되는지 검증합니다. */

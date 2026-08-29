@@ -32,7 +32,7 @@ class CampaignPreparationCalculatorTest {
     @DisplayName("DB 준비 원천이 PENDING이면 실패 목록 없이 PENDING을 보존한다")
     void preservesPendingSourceWithoutFailedItems() {
         PreparationObservation result = calculator.calculate(
-                new PreparationSource(null, null, null, SourceStatus.PENDING, null),
+                new PreparationSource(null, null, null, null, SourceStatus.PENDING, null),
                 validRuntime(EngineVersion.V1));
 
         assertThat(result).isEqualTo(new PreparationObservation(
@@ -45,7 +45,8 @@ class CampaignPreparationCalculatorTest {
     void preservesUnknownWhenRuntimeConfigIsPending() {
         PreparationObservation result = calculator.calculate(
                 new PreparationSource(
-                        false, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
+                        false, false, CouponPolicyType.FIXED_AMOUNT, 3,
+                        SourceStatus.VALID, OBSERVED_AT),
                 runtime(EngineVersion.V1, SourceStatus.PENDING));
 
         assertThat(result).isEqualTo(new PreparationObservation(
@@ -58,7 +59,8 @@ class CampaignPreparationCalculatorTest {
     void listsV2DatabaseFailuresWithoutIssuancePathFailure() {
         PreparationObservation result = calculator.calculate(
                 new PreparationSource(
-                        false, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
+                        false, false, CouponPolicyType.FIXED_AMOUNT, 3,
+                        SourceStatus.VALID, OBSERVED_AT),
                 validRuntime(EngineVersion.V2));
 
         assertThat(result).isEqualTo(new PreparationObservation(
@@ -77,7 +79,8 @@ class CampaignPreparationCalculatorTest {
     void completesWithSupportedIssuancePath(EngineVersion engineVersion) {
         PreparationObservation result = calculator.calculate(
                 new PreparationSource(
-                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
+                        true, true, CouponPolicyType.FIXED_AMOUNT, 3,
+                        SourceStatus.VALID, OBSERVED_AT),
                 validRuntime(engineVersion));
 
         assertThat(result).isEqualTo(new PreparationObservation(
@@ -91,7 +94,8 @@ class CampaignPreparationCalculatorTest {
     void dataGrantPolicyFailsV1IssuancePath() {
         PreparationObservation result = calculator.calculate(
                 new PreparationSource(
-                        true, true, CouponPolicyType.DATA_GRANT, SourceStatus.VALID, OBSERVED_AT),
+                        true, true, CouponPolicyType.DATA_GRANT, 3,
+                        SourceStatus.VALID, OBSERVED_AT),
                 validRuntime(EngineVersion.V1));
 
         assertThat(result).isEqualTo(new PreparationObservation(
@@ -103,7 +107,7 @@ class CampaignPreparationCalculatorTest {
     @DisplayName("알 수 없는 정책은 캠페인 설정과 발급 경로 실패다")
     void unknownPolicyFailsConfigurationAndIssuancePath() {
         PreparationObservation result = calculator.calculate(
-                new PreparationSource(false, true, null, SourceStatus.VALID, OBSERVED_AT),
+                new PreparationSource(false, true, null, 3, SourceStatus.VALID, OBSERVED_AT),
                 validRuntime(EngineVersion.V1));
 
         assertThat(result).isEqualTo(new PreparationObservation(
