@@ -205,7 +205,7 @@ public class VerifyTriggerController {
         // 그대로이고, 잡 안에서는 여전히 실행 시작 시각으로 판정한다.
         //
         // **잡 안의 가드와 같은 좌표계다.** 잡 쪽 기준인 verification_runs.started_at 을
-        // CY-397 이 TimeProvider(Clock.systemUTC)로 옮겨서, 이 검사와
+        // CY-743 이 배치 메타 시각을 도메인 축(UTC)으로 옮겨서(BatchTimeAxis#onDomainAxis), 이 검사와
         // validateAsOfNotInFuture 의 엄격도가 같아졌다. 그전에는 잡 쪽이 JVM 기본 존이라
         // KST 기기에서 아홉 시간 느슨했고, 그때는 여기가 유일한 실질 방어였다.
         //

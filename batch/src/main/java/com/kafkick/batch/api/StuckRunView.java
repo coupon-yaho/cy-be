@@ -3,6 +3,7 @@ package com.kafkick.batch.api;
 
 import java.time.LocalDateTime;
 
+import com.kafkick.batch.config.BatchTimeAxis;
 import com.kafkick.batch.config.RunningJobProbe.StuckRun;
 
 /**
@@ -28,13 +29,32 @@ public record StuckRunView(
         LocalDateTime lastProgress,
         long stalledSeconds) {
 
+    /**
+     * <b>시각 셋을 도메인 축(UTC)으로 옮겨 내보낸다</b>(CY-743). 셋 다 배치 메타에서 와서
+     * <b>JVM 기본 존</b> 벽시계인데({@code lastProgress} 도 {@code RunningJobProbe} 가
+     * {@code LAST_UPDATED}·{@code START_TIME} 에서 만든다), 옮기지 않으면 같은 배치 API 안에서
+     * {@code /verify/runs/{id}} 와 <b>좌표계가 갈린다</b> — 운영자가 두 조회를 나란히 열면
+     * 시각이 존 오프셋만큼 어긋난 채 보인다.
+     *
+     * <p><b>{@code stalledSeconds} 는 안 건드린다.</b> 그것은 두 시각의 <b>차이</b>라 축과
+     * 무관하다 — 옮기면 오히려 같은 값을 두 번 계산하는 셈이 된다.
+     *
+     * <p><b>{@code null} 을 각각 본다.</b> {@code START_TIME} 은 잡이 실제로 시작하기 전까지
+     * 비어 있고({@code AbstractJob} 이 실행기 스레드에서 찍는다), {@code STOPPING} 이면 아예
+     * 안 찍힌다. 시체 목록은 <b>바로 그런 행</b>을 보여 주는 API 라 여기서 던지면 목록 전체가
+     * 500 이 된다.
+     */
     public static StuckRunView of(StuckRun run) {
         return new StuckRunView(
                 run.execution().getId(),
                 run.execution().getStatus().name(),
-                run.execution().getCreateTime(),
-                run.execution().getStartTime(),
-                run.lastProgress(),
+                onDomainAxis(run.execution().getCreateTime()),
+                onDomainAxis(run.execution().getStartTime()),
+                onDomainAxis(run.lastProgress()),
                 run.stalledSeconds());
+    }
+
+    private static LocalDateTime onDomainAxis(LocalDateTime batchMetaTime) {
+        return batchMetaTime == null ? null : BatchTimeAxis.onDomainAxis(batchMetaTime);
     }
 }

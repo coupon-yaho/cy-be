@@ -8,6 +8,7 @@ import java.util.regex.Pattern;
 
 import org.springframework.batch.core.job.JobExecution;
 
+import com.kafkick.batch.config.BatchTimeAxis;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
@@ -67,8 +68,14 @@ public record VerifyRunView(
                 executionId,
                 runId,
                 execution.getStatus().name(),
-                execution.getStartTime(),
-                execution.getEndTime(),
+                // **배치 메타 축을 그대로 내보내면 응답 안에 축이 둘이 된다.** 바로 아래
+                // asOf 는 도메인 값(UTC)인데 이 둘만 JVM 기본 존이면, 사고를 시간축으로
+                // 맞춰 볼 때 어느 API 를 열었느냐로 답이 오프셋만큼 갈린다 —
+                // /verify/report 는 DB 행(UTC)을 싣는다. 같은 실행이 두 답을 내면 안 된다.
+                // 실행 행이 있으면 그 값을 쓰고(이미 도메인 축이다), 없으면 여기서 옮긴다.
+                run.map(VerificationRun::startedAt)
+                        .orElseGet(() -> startTimeOnDomainAxis(execution)),
+                endTimeOnDomainAxis(execution),
                 run.map(VerificationRun::verdict).orElse(null),
                 run.map(VerificationRun::statsStatus).orElse(null),
                 run.map(VerificationRun::findingCount).orElse(null),
@@ -117,4 +124,33 @@ public record VerifyRunView(
         Matcher type = EXCEPTION_TYPE.matcher(description);
         return type.find() ? type.group(1) : "알 수 없는 오류";
     }
+
+    /**
+     * <b>{@code START_TIME} 은 잡이 실제로 시작하기 전까지 {@code null} 이다.</b>
+     * {@code AbstractJob.execute} 가 <b>태스크 실행기 스레드 안에서</b> 찍고(6.0.4 바이트코드),
+     * 상태가 {@code STOPPING} 이면 <b>아예 안 찍는다</b>. 트리거는 비동기라
+     * ({@code VerifyExecutorConfig}) {@code 202} 를 받은 클라이언트가 곧바로 폴링하면 그 창에
+     * 들어간다. 실행기가 거절해 {@code FAILED} 로 남은 행은 <b>영원히</b> {@code null} 이다.
+     *
+     * <p><b>여기서 던지면 인증 없는 조회 API 가 규약에 없는 500 을 낸다.</b> 이 API 를 연 이유가
+     * <i>"폴링해야 원인을 안다"</i> 를 없애는 것인데, 그 폴링의 <b>첫 호출</b>이 깨진다.
+     * {@code BatchTimeAxis} 는 널가드를 일부러 뺐다 — 잡 안의 호출부는 도달 불가라서다.
+     * <b>여기는 그 전제가 안 맞으므로 부르는 쪽이 본다.</b>
+     */
+    private static LocalDateTime startTimeOnDomainAxis(JobExecution execution) {
+        LocalDateTime startTime = execution.getStartTime();
+        return startTime == null ? null : BatchTimeAxis.onDomainAxis(startTime);
+    }
+
+    /**
+     * <b>종료 시각은 두 출처가 갈린다.</b> 도는 중이면 배치 메타의 {@code getEndTime()} 이
+     * {@code null} 이고, 끝났으면 값이 있다. 실행 행의 {@code finishedAt} 은 <b>판정을 낸
+     * 뒤에만</b> 채워지므로(통계 Step 이 남아 있어도 잡은 안 끝난 상태다) 둘을 그냥 바꿔치기하면
+     * <i>"끝났는데 종료가 비어 있다"</i> 가 나온다. 배치 메타를 먼저 보고 옮긴다.
+     */
+    private static LocalDateTime endTimeOnDomainAxis(JobExecution execution) {
+        LocalDateTime endTime = execution.getEndTime();
+        return endTime == null ? null : BatchTimeAxis.onDomainAxis(endTime);
+    }
+
 }

@@ -56,7 +56,7 @@ coupon-yaho
 │       ├── BatchApplication.java
 │       └── batch/
 │           ├── api/                     admin API — verify 트리거·조회, expire·cleanup 복구 (docs/15)
-│           ├── config/                  기동 가드, 지표, 전용 실행기
+│           ├── config/                  기동 가드, 지표, 전용 실행기, 시각 축 변환
 │           ├── job/                     Spring Batch 잡 정의
 │           ├── replay/                  이력 리플레이
 │           └── schedule/                @Scheduled 진입점

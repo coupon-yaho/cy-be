@@ -155,6 +155,56 @@ class NoWallClockInBatchTest {
         }
     }
 
+    /**
+     * <b>{@code ZoneId.systemDefault()} 도 환경 상태다.</b> 위 정규식은 <b>시각</b>을 읽는
+     * 호출만 보는데, 존을 읽는 것도 같은 부류다 — {@code LocalDate.ofInstant(x,
+     * ZoneId.systemDefault())} 로 날짜를 자르면 같은 {@code asOf} 재실행이 <b>서버 존에 따라
+     * 다른 버킷</b>을 내고 {@code findings_checksum} 이 갈리는데, diff 에는 {@code now()} 가
+     * 안 보인다.
+     *
+     * <p><b>허용 목록이 아니라 예산으로 든다.</b> 자리를 옮기는 변경도 걸려야 한다.
+     */
+    private static final Pattern DEFAULT_ZONE = Pattern.compile(
+            "\\bZoneId\\s*\\.\\s*systemDefault\\s*\\("
+                    + "|\\bTimeZone\\s*\\.\\s*getDefault\\s*\\(");
+
+    /**
+     * <pre>
+     * BatchTimeAxis    1  배치 메타 시각(JVM 기본 존)을 도메인 축(UTC)으로 옮기는 자리.
+     *                     판정에 안 들어간다 — started_at·finished_at 은 checksum·지문
+     *                     재료가 아니고, .coderabbit.yaml 이 그 둘만 예외로 뒀다.
+     * DefaultZoneGuard 1  **검사 대상 자체가 그 값이다.** 기동 때 JVM 기본 존이 고정
+     *                     오프셋 0 인지 보는 가드라, 이것을 안 읽으면 할 일이 없다.
+     * </pre>
+     */
+    private static final Map<String, Integer> DEFAULT_ZONE_BUDGET = Map.of(
+            "com/kafkick/batch/config/BatchTimeAxis.java", 1,
+            "com/kafkick/batch/config/DefaultZoneGuard.java", 1);
+
+    @Test
+    @DisplayName("JVM 기본 존을 읽는 파일과 횟수가 예산과 정확히 같다")
+    void defaultZoneReadsStayInsideTheirBudget() throws IOException {
+        try (Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
+            List<String> offenders = new ArrayList<>();
+            for (Path path : sources.filter(f -> f.toString().endsWith(".java")).toList()) {
+                String relative = SOURCE_ROOT.relativize(path).toString();
+                long reads = DEFAULT_ZONE
+                        .matcher(Files.readString(path, StandardCharsets.UTF_8))
+                        .results().count();
+                int budget = DEFAULT_ZONE_BUDGET.getOrDefault(relative, 0);
+                if (reads != budget) {
+                    offenders.add(relative + " 읽기=" + reads + " 예산=" + budget);
+                }
+            }
+
+            assertThat(offenders)
+                    .as("JVM 기본 존으로 날짜·시(hour)를 자르면 같은 asOf 재실행이 서버 존에 "
+                            + "따라 다른 답을 낸다 — 정규식이 now() 를 안 보므로 diff 에서도 "
+                            + "안 보인다. 늘려야 하면 예산을 고치고 왜인지 함께 적어라")
+                    .isEmpty();
+        }
+    }
+
     @Test
     @DisplayName("배치 본문의 벽시계 호출은 허용 목록 안에만 있다")
     void wallClockCallsStayInTheAllowList() throws IOException {
