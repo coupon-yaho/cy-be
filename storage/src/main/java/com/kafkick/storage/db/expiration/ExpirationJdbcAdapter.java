@@ -140,6 +140,30 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
      *
      * <p>두 번 세면 그 사이에 값이 움직여 {@code total < blocked} 같은 조합이 나올 수 있다 —
      * 게이지 둘이 서로 어긋나면 알림 식({@code total - blocked})이 음수가 된다.
+     *
+     * <b>{@code committedAt} 이후에 이력이 붙은 행은 이 실행의 몫이 아니다.</b> 실행이 끝난
+     * 뒤 {@code CANCEL_USE}({@code USED → ISSUED})로 돌아온 행이 그렇다 — 그때 그 행은
+     * {@code ISSUED} 도 아니었으므로 만료가 건드릴 대상이 아니었다.
+     *
+     * <p>⚠️ <b>{@code updated_at <= :committedAt} 으로 안 쓴다.</b> 그것도 같은 행을 걸러
+     * 내지만 <b>영영 안 걷히는 행까지 함께 숨긴다</b> — {@code updated_at} 이 미래인 행은
+     * 만료 잡의 창({@code EXPIRE_BATCH} 의 {@code updated_at <= :committedAt})에도 안 걸려
+     * <b>다음 실행에서도, 그다음에도 계속 건너뛴다.</b> 사람이 봐야 하는 상태인데 지표에서
+     * 사라지면 아무도 모른다. 이력 축은 그 둘을 가른다 — 되돌아온 행은 이력이 있고,
+     * 미래 시각으로 멈춘 행은 없다.
+     *
+     * <p><b>비용을 쟀다</b>(300만 발급 · 520만 이력 · 대기 115만이라는 최악 형상):
+     *
+     * <pre>
+     *   updated_at 판        0.94초   ← 싸지만 위 사각지대가 생긴다
+     *   NOT EXISTS 판        1.74초   ← 이것
+     *   LEFT JOIN … IS NULL  2.20초   계획은 인덱스를 타는데 1.45M 조회라 더 느리다
+     * </pre>
+     *
+     * {@code batch.metrics.expire-pending-timeout-ms}(기본 5,000)에 <b>3배 여유</b>다.
+     * ⚠️ <b>다시 볼 기준</b> — 평상시 대기는 8,183건이라 이 값은 상한이지만, 이력이 더
+     * 자라 이 질의가 3초에 닿으면 그때는 {@code idx_history_issuance}
+     * ({@code 90_perf_indexes_optional.sql})를 처방하거나 축을 다시 고른다.
      */
     private static final String COUNT_PENDING = """
             SELECT COUNT(*) AS total,
@@ -147,6 +171,10 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
               FROM issuances
              WHERE status = 'ISSUED'
                AND expires_at < :asOf
+               AND (:committedAt IS NULL OR NOT EXISTS (
+                       SELECT 1 FROM issuance_histories h
+                        WHERE h.issuance_id = issuances.id
+                          AND h.created_at > :committedAt))
             """;
 
     /** 회차 id 가 될 수 없는 값. auto-increment 라 음수가 나오지 않는다. */
@@ -308,9 +336,11 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
     }
 
     @Override
-    public PendingExpiration countPending(LocalDateTime asOf, List<Long> blockedCouponIds) {
+    public PendingExpiration countPending(LocalDateTime asOf, LocalDateTime committedAt,
+            List<Long> blockedCouponIds) {
         return jdbcClient.sql(COUNT_PENDING)
                 .param("asOf", asOf)
+                .param("committedAt", committedAt)
                 .param("blockedCoupons", withSentinel(blockedCouponIds))
                 .query((rs, rowNum) -> new PendingExpiration(rs.getLong(1), rs.getLong(2)))
                 .single();

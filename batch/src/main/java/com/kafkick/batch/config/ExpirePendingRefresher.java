@@ -305,7 +305,15 @@ public class ExpirePendingRefresher {
                     return null;
                 }
 
-                return new Snapshot(asOf, expirations.countPending(asOf, blocked.get()),
+                // 창은 못 읽어도 판정을 포기하지 않는다 — 근거는 ExpireStepContext
+                // #committedAtFrom 에 있다(이 키는 CY-768 이 새로 만든 것이라 배포 직후
+                // 마지막 실행에는 반드시 없다).
+                LocalDateTime committedAt =
+                        ExpireStepContext.committedAtFrom(execution).orElse(null);
+
+                return new Snapshot(
+                        asOf,
+                        expirations.countPending(asOf, committedAt, blocked.get()),
                         blocked.get().size());
             });
 

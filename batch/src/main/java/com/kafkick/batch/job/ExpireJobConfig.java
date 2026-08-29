@@ -107,6 +107,9 @@ public class ExpireJobConfig {
     /** 근거는 {@link ExpireStepContext#BLOCKED_COUPONS_KEY} 가 진다. 여기는 별칭이다. */
     static final String BLOCKED_COUPONS_KEY = ExpireStepContext.BLOCKED_COUPONS_KEY;
 
+    /** 근거는 {@link ExpireStepContext#COMMITTED_AT_KEY} 가 진다. 여기는 별칭이다. */
+    static final String COMMITTED_AT_KEY = ExpireStepContext.COMMITTED_AT_KEY;
+
     /** 근거는 {@link ExpireStepContext#GENERATION_SEPARATOR} 가 진다. 여기는 별칭이다. */
     private static final String GENERATION_SEPARATOR = ExpireStepContext.GENERATION_SEPARATOR;
 
@@ -296,6 +299,12 @@ public class ExpireJobConfig {
                     // 것이 정상이다 — ①과 ③ 사이에 사용·취소된 건은 expired 에 안 들어온다.
                     metrics.processed(expired);
                     context.putLong(AFTER_ID_KEY, chunk.lastId());
+                    // **되읽기가 같은 창을 걸 수 있게 남긴다.** 청크마다 덮어써서 이 실행이
+                    // 쓴 시각 중 **가장 늦은 것**이 남는다 — 창의 목적이 "이 실행 이후의
+                    // 변경을 뺀다" 라 그 값이면 충분하다. 형제 제외 목록과 같은 이유로
+                    // 세대를 함께 싣는다(재시작이 Step 문맥을 그대로 복원한다).
+                    context.putString(COMMITTED_AT_KEY,
+                            generation + GENERATION_SEPARATOR + committedAt);
                     contribution.incrementWriteCount(expired);
                     return RepeatStatus.CONTINUABLE;
                 }, transactionManager)

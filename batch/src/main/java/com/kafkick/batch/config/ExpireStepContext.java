@@ -2,6 +2,8 @@
 package com.kafkick.batch.config;
 
 import java.util.Arrays;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Optional;
 
@@ -50,6 +52,22 @@ public final class ExpireStepContext {
      * 쓰게 되어, 그 사이 새로 어긋난 회차를 못 보고 <b>같은 자리에서 영원히 죽는다.</b>
      */
     public static final String BLOCKED_COUPONS_KEY = "expire.blockedCoupons";
+
+    /**
+     * <b>이 실행의 마지막 청크가 쓴 시각.</b> 되읽기가 <i>"이 실행 이후의 변경"</i> 을 빼는
+     * 창으로 쓴다.
+     *
+     * <p><b>없으면 되읽기가 창을 못 건다.</b> {@code COUNT_PENDING} 이 창 없이 세면,
+     * 실행이 끝난 <b>뒤</b> {@code CANCEL_USE}({@code USED → ISSUED})로 돌아온 행이 새로
+     * 세어진다. 그 회차는 얼린 제외 목록에 없으니 {@code unexplained} 로 들어가고
+     * {@code ExpireLeavesWorkBehind}(critical · channel server)가 뜬다 —
+     * <b>배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.</b>
+     *
+     * <p>형제 {@link #BLOCKED_COUPONS_KEY} 와 같은 이유로 <b>세대를 함께 싣는다.</b>
+     * Step 문맥은 재시작이 그대로 복원하므로, 세대를 안 보면 되읽기가 <b>이전 실행의 창</b>
+     * 으로 지금 실행을 판정한다.
+     */
+    public static final String COMMITTED_AT_KEY = "expire.committedAt";
 
     /** 세대와 목록을 가르는 문자. 회차 id 에도 쉼표에도 안 나온다. */
     public static final String GENERATION_SEPARATOR = "|";
@@ -100,5 +118,37 @@ public final class ExpireStepContext {
         String ids = raw.substring(prefix.length());
         return Optional.of(ids.isEmpty() ? List.of()
                 : Arrays.stream(ids.split(",")).map(Long::valueOf).toList());
+    }
+
+    /**
+     * <b>이 실행이 마지막으로 쓴 시각을 배치 메타에서 꺼낸다.</b> 형제
+     * {@link #blockedFrom} 과 같은 규약이다 — 세대가 안 맞으면 빈 {@code Optional} 이다.
+     *
+     * <p>⚠️ <b>비어 있다고 게이지를 NaN 으로 두지 않는다.</b> 형제 쪽은 그렇게 하는데
+     * 여기는 다르다 — 이 키는 <b>이 티켓이 새로 만든 것</b>이라, 배포 직후 마지막 성공
+     * 실행에는 <b>반드시 없다.</b> NaN 으로 두면 다음 만료(하루 뒤)까지
+     * {@code ExpireMetricsUnknown} 이 계속 울고, 그것은 <b>고치려던 오탐을 다른 오탐으로
+     * 바꾸는 것</b>이다. 그래서 없으면 <b>창 없이</b> 센다 — 지금까지의 동작 그대로이고,
+     * 새 실행이 한 번 돌면 바로 창이 걸린다.
+     */
+    public static Optional<LocalDateTime> committedAtFrom(JobExecution jobExecution) {
+        String prefix = jobExecution.getId() + GENERATION_SEPARATOR;
+        return jobExecution.getStepExecutions().stream()
+                .map(step -> committedAtFor(
+                        step.getExecutionContext().getString(COMMITTED_AT_KEY, ""), prefix))
+                .flatMap(Optional::stream)
+                .findFirst();
+    }
+
+    /** 세대 접두사를 떼고 시각을 읽는다. 형식이 깨졌으면 <b>모른다</b> 로 둔다. */
+    static Optional<LocalDateTime> committedAtFor(String raw, String prefix) {
+        if (!raw.startsWith(prefix)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(LocalDateTime.parse(raw.substring(prefix.length())));
+        } catch (DateTimeParseException exception) {
+            return Optional.empty();
+        }
     }
 }

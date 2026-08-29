@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.core.expiration.PendingExpiration;
@@ -187,12 +188,65 @@ class BlockedCouponTest {
         expiring();
         seed.overwriteStock(1);
 
-        PendingExpiration pending = adapter.countPending(AS_OF, List.of(broken));
+        PendingExpiration pending = adapter.countPending(AS_OF, null, List.of(broken));
 
         assertThat(pending.total()).isEqualTo(3);
         assertThat(pending.blocked()).isEqualTo(2);
         assertThat(pending.unexplained())
                 .as("이 값이 0 이 아니면 **서버를 봐야 한다** — 배치가 처리했어야 하는 몫이다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * <b>이 티켓의 본체다.</b> 만료가 끝난 <b>뒤</b> {@code CANCEL_USE}({@code USED → ISSUED})
+     * 로 돌아온 행은 <b>그 실행이 처리했어야 하는 몫이 아니다.</b>
+     *
+     * <p>창이 없으면 그것이 {@code unexplained} 로 들어가고
+     * {@code ExpireLeavesWorkBehind}(critical · channel server)가 뜬다 —
+     * <b>배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.</b>
+     * 되읽기가 60초마다 다시 치므로 실행이 끝난 뒤에도 계속 세어진다.
+     *
+     * <p><b>창이 뜻을 가지려면 쓰기 시각이 정직해야 한다</b> — 취소가 요청 시각으로
+     * 백데이트되면 창 안에 그대로 들어와 안 걸러진다. CY-769 가 그것을 닫았고,
+     * 이 브랜치는 그 위에 선다.
+     */
+    @Test
+    @DisplayName("실행이 끝난 뒤 되돌아온 행은 설명 안 되는 몫이 아니다")
+    void excludesRowsChangedAfterTheRun() {
+        seed.newCoupon();
+        long returned = expiring();
+        seed.overwriteStock(1);
+
+        LocalDateTime committedAt = AS_OF.plusMinutes(1);
+        // 실행이 끝난 뒤 취소가 그 행을 ISSUED 로 되돌린다. 만료 대상 조건은 그대로 맞는다.
+        // **이력으로 심는다** — 술어가 보는 축이 그것이다. updated_at 만 밀면
+        // "미래 시각으로 영영 멈춘 행" 과 구분이 안 되고, 그쪽은 계속 세어야 한다.
+        seed.history(returned, IssuanceEventType.CANCEL_USE,
+                IssuanceStatus.USED, IssuanceStatus.ISSUED, committedAt.plusMinutes(5));
+
+        assertThat(adapter.countPending(AS_OF, null, List.of()).unexplained())
+                .as("창이 없으면 그 행이 '배치가 안 한 몫' 으로 세어진다 — 그것이 오탐이었다")
+                .isEqualTo(1);
+
+        assertThat(adapter.countPending(AS_OF, committedAt, List.of()).unexplained())
+                .as("창을 걸면 이 실행 이후의 변경이라 안 센다")
+                .isZero();
+    }
+
+    @Test
+    @DisplayName("실행이 도는 동안 바뀐 행은 그대로 센다 — 창은 그 뒤만 자른다")
+    void keepsRowsChangedBeforeCommittedAt() {
+        seed.newCoupon();
+        long pending = expiring();
+        seed.overwriteStock(1);
+
+        LocalDateTime committedAt = AS_OF.plusMinutes(10);
+        // 실행이 도는 동안 붙은 이력이다 — 창 안이라 그대로 세야 한다.
+        seed.history(pending, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, committedAt.minusMinutes(1));
+
+        assertThat(adapter.countPending(AS_OF, committedAt, List.of()).unexplained())
+                .as("창 안이면 그 실행이 처리했어야 하는 몫이 맞다 — 여기까지 자르면 진짜 사고를 놓친다")
                 .isEqualTo(1);
     }
 
@@ -203,7 +257,7 @@ class BlockedCouponTest {
         expiring();
         seed.overwriteStock(1);
 
-        PendingExpiration pending = adapter.countPending(AS_OF, List.of());
+        PendingExpiration pending = adapter.countPending(AS_OF, null, List.of());
 
         assertThat(pending.blocked())
                 .as("센티널이 실수로 회차 id 와 겹치면 여기가 1 이 된다")
