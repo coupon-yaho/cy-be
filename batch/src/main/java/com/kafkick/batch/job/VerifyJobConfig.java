@@ -32,6 +32,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.interceptor.DefaultTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionAttribute;
 
+import com.kafkick.batch.config.BatchTimeAxis;
 import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.batch.config.VerifyRunContext;
 import com.kafkick.batch.replay.AsOfStateItemWriter;
@@ -361,7 +362,8 @@ public class VerifyJobConfig {
                             // getEndTime() 은 null 이고, 검증 배치는 now() 를 금지한다 —
                             // .coderabbit.yaml 이 이 두 컬럼의 출처를 명시한다.
                             // 이 뒤에 남은 것은 UPDATE 한 건뿐이라 차이가 작다.
-                            stepExecution.getStartTime());
+                            // started_at 과 같은 이유로 도메인 축으로 옮긴다(CY-743).
+                            BatchTimeAxis.onDomainAxis(stepExecution.getStartTime()));
 
                     runs.update(closed);
 
@@ -717,19 +719,18 @@ public class VerifyJobConfig {
      * 검증 배치에 시각 의존이 생기고, 다음 사람이 규칙에서도 부르게 된다 —
      * {@code .coderabbit.yaml} 이 주입된 시계까지 같은 위반으로 못 박았다.
      *
-     * <p>⚠️ <b>그 값은 JVM 기본 존이다.</b> 같은 행의 {@code as_of} 와 정리 배치의
-     * {@code abandoned-after-hours} 컷오프는 UTC 라, <b>JVM 기본 존이 UTC 여야</b> 세 축이
-     * 한 좌표계에 선다({@code batch.yml} 의 {@code TZ=UTC}, {@code bootRun} 의
-     * {@code user.timezone}). 테스트 JVM 만 일부러 KST 인데(CY-392), 그쪽에서는 어긋남이
-     * <b>보호 창이 넓어지는 방향</b>이라 안전하다 — 반대로 <b>UTC 서쪽 존</b>에서는 좁아지는
-     * 쪽으로 어긋난다. 존을 기동 때 강제하는 가드는 그 KST 테스트와 부딪혔는데,
-     * {@link com.kafkick.batch.config.DefaultZoneGuard} 가 기동 때 강제하고
-     * <b>테스트 설정이 한 곳에서 그 거절을 끈다</b>(CY-718).
+     * <p>⚠️ <b>그 값은 JVM 기본 존이다</b> — 같은 행의 {@code as_of} 와 정리 배치의
+     * {@code abandoned-after-hours} 컷오프는 UTC 다. 그래서
+     * {@link com.kafkick.batch.config.BatchTimeAxis#onDomainAxis} 로 옮겨 넣는다(CY-743).
      *
-     * <p><b>가드는 가린 것이지 고친 것이 아니다.</b> 이 줄이 존에 매인 사실은 그대로고,
-     * {@code docs/13} 이 <b>남은 자리</b>로 들고 있다 — 고치려면 {@code TimeProvider} 로
-     * 바꿔야 하는데 그러면 값의 뜻이 <i>"배치 실행 시작"</i> 에서 <i>"행을 만든 시각"</i> 으로
-     * 바뀌므로, 뜻을 먼저 정해야 한다.
+     * <p><b>한때는 원시로 바인딩돼 JVM 기본 존 벽시계가 그대로 저장됐고</b>,
+     * {@link com.kafkick.batch.config.DefaultZoneGuard} 가 배포 존을 UTC 로 못 박아
+     * <b>가린</b> 상태였다. 이제 호출부에서 옮기므로 어댑터에는 이미 UTC 축인 값만 들어간다.
+     * <b>값의 뜻은 안 바꿨다</b>({@code .coderabbit.yaml} 이 출처를 계약으로 못 박았다).
+     *
+     * <p>⚠️ <b>고정 오프셋 존에서만 정확하다.</b> DST 전이가 있는 존은 겹침 시각에 한 시간
+     * 어긋나는데, 그런 존은 {@code DefaultZoneGuard} 가 기동을 거절한다 — 가드가 꺼진
+     * 환경에서만 남는 한계다({@code BatchTimeAxisTest} 가 그 사실을 박아 뒀다).
      *
      * <p>실행 행은 있으면 찾고 없으면 만든다. 다만 <b>닫힌 실행은 이어받지 않는다.</b>
      *
@@ -787,14 +788,13 @@ public class VerifyJobConfig {
                                     // Spring Batch 가 이미 기록한 시각을 쓴다 —
                                     // .coderabbit.yaml 이 이 컬럼의 출처를 명시한다.
                                     //
-                                    // ⚠️ 그 값은 AbstractJob 이 인자 없는 LocalDateTime.now() 로
-                                    //    찍는 **JVM 기본 존** 이고, 드라이버는 LocalDateTime 을
-                                    //    시프트하지 않는다(TimestampMappingTest 가 잰다).
-                                    //    같은 행의 as_of 와 정리 배치의 컷오프는 UTC 라,
-                                    //    **JVM 기본 존이 UTC 여야 세 축이 한 좌표계에 선다** —
-                                    //    batch.yml 의 TZ=UTC 와 bootRun 의 user.timezone 이
-                                    //    그것을 고정한다. 그 줄을 지우면 여기가 어긋난다.
-                                    stepExecution.getJobExecution().getStartTime())).id());
+                                    // ⚠️ 그 값은 AbstractJob 이 인자 없는 LocalDateTime.now()
+                                    //    로 찍는 **JVM 기본 존** 벽시계다. 같은 행의 as_of 는
+                                    //    TimeProvider(UTC)라 축이 다르므로 **여기서** 옮긴다
+                                    //    (CY-743). 값의 뜻은 안 바뀐다 — 같은 순간을 도메인의
+                                    //    축(UTC)으로 표현할 뿐이다.
+                                    BatchTimeAxis.onDomainAxis(stepExecution.getJobExecution()
+                                            .getStartTime()))).id());
 
                     ExecutionContext jobContext =
                             stepExecution.getJobExecution().getExecutionContext();
@@ -1324,4 +1324,5 @@ public class VerifyJobConfig {
 
         return ((Number) value).longValue();
     }
+
 }
