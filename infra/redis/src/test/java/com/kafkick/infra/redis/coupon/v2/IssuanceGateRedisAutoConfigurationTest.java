@@ -12,6 +12,7 @@ import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfigurat
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 
 /**
  * 조립은 <b>기동에서만</b> 증명된다. 통합 테스트는 어댑터를 손으로 {@code new} 하므로
@@ -43,8 +44,11 @@ class IssuanceGateRedisAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(IssuanceScriptRunner.class);
                     assertThat(context).hasSingleBean(IssuanceGatePort.class);
+                    assertThat(context).hasSingleBean(V2AdminStockReader.class);
                     assertThat(context.getBean(IssuanceGatePort.class))
                             .isInstanceOf(RedisIssuanceGate.class);
+                    assertThat(context.getBean(V2AdminStockReader.class))
+                            .isInstanceOf(RedisV2AdminStockReader.class);
                 });
     }
 
@@ -55,6 +59,7 @@ class IssuanceGateRedisAutoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(IssuanceGatePort.class);
             assertThat(context).doesNotHaveBean(IssuanceScriptRunner.class);
+            assertThat(context).doesNotHaveBean(V2AdminStockReader.class);
         });
     }
 
