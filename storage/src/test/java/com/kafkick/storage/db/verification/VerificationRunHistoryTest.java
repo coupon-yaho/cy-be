@@ -30,12 +30,44 @@ class VerificationRunHistoryTest {
     private JdbcClient jdbcClient;
 
     @Test
+    @DisplayName("anchor 가 페이지 경계를 얼린다 — 이 목록은 영영 안 걷히는 이력이다")
+    void anchorFreezesPageBoundary() {
+        long first = adapter.save(run(DatasetType.CLEAN, 1)).id();
+        long second = adapter.save(run(DatasetType.CLEAN, 2)).id();
+
+        List<VerificationRun> firstPage = adapter.findRecent(null, 1, 0, null);
+        assertThat(firstPage).extracting(VerificationRun::id).containsExactly(second);
+        long boundary = firstPage.getFirst().id();
+
+        // 두 번째 페이지를 받기 전에 손 트리거 검증이 하나 더 돈다.
+        adapter.save(run(DatasetType.CLEAN, 3));
+
+        assertThat(adapter.findRecent(null, 1, 1, boundary))
+                .as("경계를 얼렸으므로 2페이지는 여전히 첫 실행이다")
+                .extracting(VerificationRun::id).containsExactly(first);
+        assertThat(adapter.countRecent(null, boundary))
+                .as("total 도 같은 경계로 센다")
+                .isEqualTo(2);
+
+        assertThat(adapter.findRecent(null, 1, 1, null))
+                .as("얼리지 않으면 1페이지에서 본 행이 2페이지에 다시 나온다")
+                .extracting(VerificationRun::id).containsExactly(second);
+    }
+
+    /**
+     * <b>이 축은 배치 이력보다 나쁘다.</b> {@code cleanupJob} 이
+     * {@code verification_runs} 를 <b>의도적으로 안 지운다</b>({@code CleanupJdbcAdapter}) —
+     * 그것이 "언제 무엇을 판정했나" 의 이력이고 관제와 {@code cy_batch_last_success_seconds}
+     * 가 그 위에 서기 때문이다. 걷는 것은 실행당 최대 300만 행인 {@code asof_state} 쪽이다.
+     * 즉 이 목록은 <b>단조 증가</b>하고, 온디맨드 트리거가 하루에도 여러 건을 더한다.
+     */
+    @Test
     @DisplayName("최근 실행부터 준다 — as_of 가 아니라 id 순이다")
     void ordersByIdDescending() {
         long first = adapter.save(run(DatasetType.CLEAN, 1)).id();
         long second = adapter.save(run(DatasetType.CLEAN, 2)).id();
 
-        List<VerificationRun> recent = adapter.findRecent(null, 10, 0);
+        List<VerificationRun> recent = adapter.findRecent(null, 10, 0, null);
 
         assertThat(recent).extracting(VerificationRun::id)
                 .as("같은 as_of 로 여러 번 도는 재시도가 있어 as_of 로는 순서가 안 정해진다")
@@ -48,10 +80,10 @@ class VerificationRunHistoryTest {
         adapter.save(run(DatasetType.CLEAN, 1));
         adapter.save(run(DatasetType.CORRUPT, 1));
 
-        assertThat(adapter.findRecent(DatasetType.CORRUPT, 10, 0))
+        assertThat(adapter.findRecent(DatasetType.CORRUPT, 10, 0, null))
                 .extracting(VerificationRun::dataset)
                 .containsExactly(DatasetType.CORRUPT);
-        assertThat(adapter.findRecent(null, 10, 0)).hasSize(2);
+        assertThat(adapter.findRecent(null, 10, 0, null)).hasSize(2);
     }
 
     @Test
@@ -61,9 +93,9 @@ class VerificationRunHistoryTest {
         long second = adapter.save(run(DatasetType.CLEAN, 2)).id();
         long third = adapter.save(run(DatasetType.CLEAN, 3)).id();
 
-        assertThat(adapter.findRecent(null, 2, 0)).extracting(VerificationRun::id)
+        assertThat(adapter.findRecent(null, 2, 0, null)).extracting(VerificationRun::id)
                 .containsExactly(third, second);
-        assertThat(adapter.findRecent(null, 2, 2)).extracting(VerificationRun::id)
+        assertThat(adapter.findRecent(null, 2, 2, null)).extracting(VerificationRun::id)
                 .as("두 번째 페이지가 첫 페이지와 겹치면 화면이 같은 행을 두 번 그린다")
                 .containsExactly(first);
     }
@@ -75,8 +107,8 @@ class VerificationRunHistoryTest {
         adapter.save(run(DatasetType.CLEAN, 2));
         adapter.save(run(DatasetType.CORRUPT, 1));
 
-        assertThat(adapter.countRecent(null)).isEqualTo(3);
-        assertThat(adapter.countRecent(DatasetType.CLEAN))
+        assertThat(adapter.countRecent(null, null)).isEqualTo(3);
+        assertThat(adapter.countRecent(DatasetType.CLEAN, null))
                 .as("필터를 무시하면 화면이 없는 페이지를 그린다")
                 .isEqualTo(2);
     }
@@ -87,17 +119,17 @@ class VerificationRunHistoryTest {
         adapter.save(run(DatasetType.CLEAN, 1));
         plantSeedRun(DatasetType.CLEAN);
 
-        assertThat(adapter.findRecent(null, 10, 0))
+        assertThat(adapter.findRecent(null, 10, 0, null))
                 .as("""
                         실측(2026-08-29): coupon_clean 에 origin='SEED' PASS 3행, \
                         coupon_corrupt 에 origin='SEED' FAIL 800건 1행이 실제로 있다. \
                         섞이면 CLEAN 은 배치를 한 번도 안 돌리고도 관제에 PASS 가 뜨고, \
                         CORRUPT 는 시드의 FAIL 이 배치의 PASS 옆에 떠서 집계가 틀어진다""")
                 .hasSize(1);
-        assertThat(adapter.countRecent(null))
+        assertThat(adapter.countRecent(null, null))
                 .as("items 만 거르고 total 을 안 거르면 화면이 빈 페이지를 그린다")
                 .isEqualTo(1);
-        assertThat(adapter.countRecent(DatasetType.CLEAN)).isEqualTo(1);
+        assertThat(adapter.countRecent(DatasetType.CLEAN, null)).isEqualTo(1);
     }
 
     /**

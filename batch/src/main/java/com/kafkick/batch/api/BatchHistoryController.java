@@ -34,34 +34,31 @@ public class BatchHistoryController {
     /**
      * 최근 실행부터 한 페이지. {@code jobName} 을 안 주면 세 잡을 다 준다.
      *
-     * <p><b>이 목록은 스냅샷이고 OFFSET 페이지네이션이다.</b> id 내림차순이라, 페이지 요청 사이에
-     * 새 실행이 생기면 경계가 밀려 <b>같은 행이 다시 나오고 뒤쪽 행이 빠진다</b> — 여러 페이지를
-     * 이어 붙여 집계하는 소비자는 틀린 수를 얻는다. 봇 리뷰가 짚은 그대로다.
+     * <p><b>{@code anchor} 로 페이지 경계를 얼린다.</b> 첫 요청은 안 보내고, 응답이 준 값을
+     * 다음 요청부터 되돌려주면 그 사이에 새 실행이 생겨도 목록이 안 밀린다. 근거는
+     * {@link HistoryPage} 에 있다.
      *
-     * <p><b>그런데 이 화면에서는 도달하지 않는다(실측).</b> 세 잡이 전부 <b>일 1회</b>이고
-     * (expire 04:10 · cleanup 04:30 · verify 05:00 UTC) 배치 메타를
-     * {@code batch.cleanup.metadata-keep-days}(30일)가 걷으므로 <b>전체가 약 90행</b>이다.
-     * {@code HistoryPage.MAX_LIMIT} 이 200 이라 <b>한 요청에 다 들어오고</b>, 응답의
-     * {@code total} 로 다 받았는지 확인할 수 있다. 그래서 커서로 바꾸지 않는다 — 안 쓰는
-     * 경로를 위해 API 표면을 늘리지 않는다.
-     *
-     * <p>⚠️ <b>다시 볼 기준</b> — 보존 창을 늘리거나 어느 잡의 주기를 하루보다 잦게 바꾸면
-     * 전체가 200행을 넘고 그때부터 위 사고가 실재한다. 그날 첫 응답의 마지막
-     * {@code executionId} 를 커서로 받아 {@code id <= :anchor} 로 범위를 얼리고,
-     * {@code total} 도 같은 조건으로 센다.
+     * <p>⚠️ <b>한때 여기 "전체가 약 90행이라 한 요청에 다 들어온다" 고 적고 커서를 안 만들었다 —
+     * 틀린 단정이었다(봇 리뷰가 두 번 짚었다).</b> 세 잡이 일 1회인 것은 <b>기본 크론</b>일 뿐이고
+     * {@code EXPIRE_CRON}·{@code VERIFY_CRON}·{@code CLEANUP_METADATA_KEEP_DAYS} 가 전부
+     * 환경변수다. 게다가 검증은 {@code POST /api/v1/admin/verify} 로 <b>손 트리거가 열려 있어</b>
+     * 하루에도 여러 건이 쌓인다. 상한이 보장되지 않는데 보장된다고 적었다.
      */
     @GetMapping("/runs")
     @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     public ResponseEnvelope<HistoryPage<BatchRunView>> history(
             @RequestParam(required = false) String jobName,
             @RequestParam(required = false) Integer limit,
-            @RequestParam(required = false) Integer offset) {
+            @RequestParam(required = false) Integer offset,
+            @RequestParam(required = false) Long anchor) {
         int size = HistoryPage.pageSize(limit);
         int from = HistoryPage.pageOffset(offset);
-        List<BatchRunView> items = runs.findRecent(jobName, size, from).stream()
+        List<BatchRunView> items = runs.findRecent(jobName, size, from, anchor).stream()
                 .map(BatchRunView::of)
                 .toList();
+        Long boundary = HistoryPage.anchorOf(anchor, items, BatchRunView::executionId);
         return ResponseEnvelope.success(
-                new HistoryPage<>(items, runs.countRecent(jobName), size, from));
+                new HistoryPage<>(items, runs.countRecent(jobName, boundary), size, from,
+                        boundary));
     }
 }

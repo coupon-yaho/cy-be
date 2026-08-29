@@ -139,6 +139,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
               FROM verification_runs
              WHERE origin = 'BATCH'
                AND (:dataset IS NULL OR dataset = :dataset)
+               AND (:anchor IS NULL OR id <= :anchor)
              ORDER BY id DESC
              LIMIT :limit OFFSET :offset
             """;
@@ -147,6 +148,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
             SELECT COUNT(*) FROM verification_runs
              WHERE origin = 'BATCH'
                AND (:dataset IS NULL OR dataset = :dataset)
+               AND (:anchor IS NULL OR id <= :anchor)
             """;
 
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(
@@ -261,9 +263,11 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     }
 
     @Override
-    public List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset) {
+    public List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset,
+            Long anchor) {
         return jdbcClient.sql(SELECT_RECENT)
                 .param("dataset", toName(dataset))
+                .param("anchor", anchor)
                 .param("limit", limit)
                 .param("offset", offset)
                 .query(ROW_MAPPER)
@@ -271,9 +275,10 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
     }
 
     @Override
-    public int countRecent(DatasetType dataset) {
+    public int countRecent(DatasetType dataset, Long anchor) {
         Integer count = jdbcClient.sql(COUNT_RECENT)
                 .param("dataset", toName(dataset))
+                .param("anchor", anchor)
                 .query(Integer.class)
                 .single();
         return count == null ? 0 : count;

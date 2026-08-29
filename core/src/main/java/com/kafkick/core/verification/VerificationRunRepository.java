@@ -87,8 +87,14 @@ public interface VerificationRunRepository {
      * <p>이것은 구현 편의가 아니라 <b>이 포트의 계약</b>이라 여기 적는다. 어댑터 쪽에만
      * 두면 다음 구현체가 빠뜨려도 아무 데서도 안 걸린다 —
      * {@code VerificationRunHistoryTest} 가 그 행을 직접 심어 잰다.
+     *
+     * <p><b>{@code anchor} 가 페이지 경계를 얼린다.</b> {@code null} 이면 지금 시점 전체를 본다.
+     * 값이 오면 {@code id <= anchor} 로 좁힌다 — {@code verification_runs} 는
+     * {@code cleanupJob} 이 <b>의도적으로 안 지우는</b> 이력이라 계속 늘어나고
+     * (온디맨드 트리거가 하루에도 여러 건을 만든다), {@code OFFSET} 만으로는 요청 사이의
+     * INSERT 에 페이지가 밀린다.
      */
-    List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset);
+    List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset, Long anchor);
 
     /**
      * 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다.
@@ -96,7 +102,7 @@ public interface VerificationRunRepository {
      * <p>{@link #findRecent} 와 <b>같은 조건</b>이어야 한다 — 출처 필터까지 같다.
      * 한쪽만 거르면 화면이 없는 페이지를 그린다.
      */
-    int countRecent(DatasetType dataset);
+    int countRecent(DatasetType dataset, Long anchor);
 
     /**
      * 같은 {@code (asOf, dataset, scope)} 에서 <b>마지막으로 쓰인 attempt + 1</b>.

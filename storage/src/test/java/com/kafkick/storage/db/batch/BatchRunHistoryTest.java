@@ -36,8 +36,45 @@ class BatchRunHistoryTest {
         plant(1, "expireJob", "COMPLETED", true);
         plant(2, "verifyJob", "COMPLETED", true);
 
-        assertThat(adapter.findRecent(null, 10, 0)).extracting(BatchRun::executionId)
+        assertThat(adapter.findRecent(null, 10, 0, null)).extracting(BatchRun::executionId)
                 .containsExactly(2L, 1L);
+    }
+
+    /**
+     * <b>OFFSET 페이지네이션의 경계 이동을 실제로 만들어 본다.</b> 1·2번을 심고 첫 페이지를
+     * 받은 뒤, 두 번째 페이지를 요청하기 <b>전에</b> 3번이 생기는 상황이다.
+     *
+     * <p>{@code anchor} 없이는 목록이 통째로 한 칸 밀려 <b>1페이지에서 본 행을 2페이지에서
+     * 다시 보고</b>, 맨 뒤 행은 영영 안 나온다. {@code anchor} 를 되돌려주면 그 사이의
+     * INSERT 가 범위 밖이라 경계가 안 흔들린다.
+     *
+     * <p>한때 이 축을 <i>"전체가 수십 건이라 도달 불가"</i> 로 판단해 안 만들었는데
+     * <b>틀린 단정이었다</b> — 배치 메타는 보존 창·크론이 설정값이고 검증은 손 트리거가
+     * 열려 있다(CY-744 봇 리뷰).
+     */
+    @Test
+    @DisplayName("anchor 가 페이지 경계를 얼린다 — 중간에 실행이 생겨도 안 밀린다")
+    void anchorFreezesPageBoundary() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+
+        List<BatchRun> firstPage = adapter.findRecent(null, 1, 0, null);
+        assertThat(firstPage).extracting(BatchRun::executionId).containsExactly(2L);
+        long anchor = firstPage.getFirst().executionId();
+
+        // 두 번째 페이지를 받기 전에 새 실행이 들어온다.
+        plant(3, "cleanupJob", "COMPLETED", true);
+
+        assertThat(adapter.findRecent(null, 1, 1, anchor))
+                .as("경계를 얼렸으므로 2페이지는 여전히 1번이다")
+                .extracting(BatchRun::executionId).containsExactly(1L);
+        assertThat(adapter.countRecent(null, anchor))
+                .as("total 도 같은 경계로 세야 화면이 마지막 페이지를 맞게 계산한다")
+                .isEqualTo(2);
+
+        assertThat(adapter.findRecent(null, 1, 1, null))
+                .as("얼리지 않으면 1페이지에서 본 2번이 2페이지에 다시 나온다 — 그게 이 검사의 이유다")
+                .extracting(BatchRun::executionId).containsExactly(2L);
     }
 
     @Test
@@ -45,7 +82,7 @@ class BatchRunHistoryTest {
     void includesExecutionsWithoutStartTime() {
         plant(1, "verifyJob", "FAILED", false);
 
-        List<BatchRun> recent = adapter.findRecent(null, 10, 0);
+        List<BatchRun> recent = adapter.findRecent(null, 10, 0, null);
 
         assertThat(recent).hasSize(1);
         assertThat(recent.getFirst().startedAtInBatchMetaZone())
@@ -59,10 +96,10 @@ class BatchRunHistoryTest {
         plant(1, "expireJob", "COMPLETED", true);
         plant(2, "verifyJob", "COMPLETED", true);
 
-        assertThat(adapter.findRecent("expireJob", 10, 0)).extracting(BatchRun::jobName)
+        assertThat(adapter.findRecent("expireJob", 10, 0, null)).extracting(BatchRun::jobName)
                 .containsExactly("expireJob");
-        assertThat(adapter.countRecent("expireJob")).isEqualTo(1);
-        assertThat(adapter.countRecent(null)).isEqualTo(2);
+        assertThat(adapter.countRecent("expireJob", null)).isEqualTo(1);
+        assertThat(adapter.countRecent(null, null)).isEqualTo(2);
     }
 
     @Test
@@ -72,9 +109,9 @@ class BatchRunHistoryTest {
         plant(2, "verifyJob", "COMPLETED", true);
         plant(3, "cleanupJob", "COMPLETED", true);
 
-        assertThat(adapter.findRecent(null, 2, 0)).extracting(BatchRun::executionId)
+        assertThat(adapter.findRecent(null, 2, 0, null)).extracting(BatchRun::executionId)
                 .containsExactly(3L, 2L);
-        assertThat(adapter.findRecent(null, 2, 2)).extracting(BatchRun::executionId)
+        assertThat(adapter.findRecent(null, 2, 2, null)).extracting(BatchRun::executionId)
                 .as("두 번째 페이지가 첫 페이지와 겹치면 화면이 같은 행을 두 번 그린다")
                 .containsExactly(1L);
     }
@@ -84,7 +121,7 @@ class BatchRunHistoryTest {
     void hasNoCountsWhenNoStepRan() {
         plant(1, "verifyJob", "FAILED", false);
 
-        BatchRun run = adapter.findRecent(null, 10, 0).getFirst();
+        BatchRun run = adapter.findRecent(null, 10, 0, null).getFirst();
 
         assertThat(run.stepReadTotal())
                 .as("SUM() 은 대상이 없으면 NULL 이다. 널가드를 빼면 여기서 NPE 로 목록이 죽는다")
@@ -99,8 +136,8 @@ class BatchRunHistoryTest {
         step(1, 10, 100);
         step(1, 20, 200);
 
-        assertThat(adapter.findRecent(null, 10, 0).getFirst().stepWriteTotal()).isEqualTo(300L);
-        assertThat(adapter.findRecent(null, 10, 0).getFirst().stepReadTotal()).isEqualTo(30L);
+        assertThat(adapter.findRecent(null, 10, 0, null).getFirst().stepWriteTotal()).isEqualTo(300L);
+        assertThat(adapter.findRecent(null, 10, 0, null).getFirst().stepReadTotal()).isEqualTo(30L);
     }
 
     private void plant(long id, String jobName, String status, boolean started) {

@@ -21,15 +21,15 @@ import com.kafkick.core.verification.VerificationRunRepository;
  * <p>집계 엔드포인트는 두지 않는다. 검증은 하루 몇 건이라 전체가 수십 건이고, 화면이 한 번
  * 받아 직접 집계하면 된다. total 을 함께 주는 이유가 그것이다.
  *
- * <p><b>OFFSET 페이지네이션이라 페이지를 이어 붙이면 경계가 밀린다.</b> id 내림차순인데
- * 요청 사이에 새 run 이 저장되면 <b>이전 페이지의 행이 다시 나오고 일부는 건너뛴다</b> —
- * 봇 리뷰가 짚은 그대로다. <b>다만 이 화면에서는 도달하지 않는다</b>: 검증 크론이 일 1회
- * (05:00 UTC)이고 {@code cleanupJob} 이 파생 행을 걷어 전체가 수십 건이라,
- * {@code HistoryPage.MAX_LIMIT}(200) 한 요청에 다 들어온다. 위 문단이 말하는
- * <i>"한 번에 받아 직접 집계"</i> 가 그래서 성립한다.
+ * <p><b>{@code anchor} 로 페이지 경계를 얼린다.</b> 첫 요청은 안 보내고 응답이 준 값을
+ * 다음 요청부터 되돌려준다. 근거는 {@link HistoryPage} 에 있다.
  *
- * <p>⚠️ <b>다시 볼 기준은 형제 {@code BatchHistoryController} 와 같다</b> — 전체가 200행을
- * 넘기 시작하면 첫 응답의 마지막 id 를 커서로 받아 범위를 얼리고 total 도 같은 조건으로 센다.
+ * <p>⚠️ <b>한때 여기 "cleanupJob 이 파생 행을 걷어 전체가 수십 건" 이라 적고 커서를 안 만들었다 —
+ * 사실이 아니었다(봇 리뷰가 짚었다).</b> {@code CleanupJdbcAdapter} 가 스스로 못박는다:
+ * <i>"{@code verification_runs} 행은 안 지운다"</i> — 그것이 "언제 무엇을 판정했나" 의 이력이고
+ * 관제와 {@code cy_batch_last_success_seconds} 가 그 위에 선다. 걷는 것은 실행당 최대 300만 행인
+ * {@code asof_state} 쪽이다. 즉 이 목록은 <b>단조 증가</b>하고, 온디맨드 트리거
+ * ({@code POST /api/v1/admin/verify})가 하루에도 여러 건을 더한다.
  */
 @RestController
 @RequestMapping("/api/v1/admin/verify")
@@ -52,13 +52,16 @@ public class VerifyHistoryController {
     public ResponseEnvelope<HistoryPage<VerifyHistoryView>> history(
             @RequestParam(required = false) DatasetType dataset,
             @RequestParam(required = false) Integer limit,
-            @RequestParam(required = false) Integer offset) {
+            @RequestParam(required = false) Integer offset,
+            @RequestParam(required = false) Long anchor) {
         int size = HistoryPage.pageSize(limit);
         int from = HistoryPage.pageOffset(offset);
-        List<VerifyHistoryView> items = runs.findRecent(dataset, size, from).stream()
+        List<VerifyHistoryView> items = runs.findRecent(dataset, size, from, anchor).stream()
                 .map(VerifyHistoryView::of)
                 .toList();
+        Long boundary = HistoryPage.anchorOf(anchor, items, VerifyHistoryView::runId);
         return ResponseEnvelope.success(
-                new HistoryPage<>(items, runs.countRecent(dataset), size, from));
+                new HistoryPage<>(items, runs.countRecent(dataset, boundary), size, from,
+                        boundary));
     }
 }

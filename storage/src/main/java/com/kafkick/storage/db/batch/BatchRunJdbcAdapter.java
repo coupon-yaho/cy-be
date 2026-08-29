@@ -53,6 +53,7 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
               FROM BATCH_JOB_EXECUTION je
               JOIN BATCH_JOB_INSTANCE ji ON ji.JOB_INSTANCE_ID = je.JOB_INSTANCE_ID
              WHERE (:jobName IS NULL OR ji.JOB_NAME = :jobName)
+               AND (:anchor IS NULL OR je.JOB_EXECUTION_ID <= :anchor)
              ORDER BY je.JOB_EXECUTION_ID DESC
              LIMIT :limit OFFSET :offset
             """;
@@ -62,6 +63,7 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
               FROM BATCH_JOB_EXECUTION je
               JOIN BATCH_JOB_INSTANCE ji ON ji.JOB_INSTANCE_ID = je.JOB_INSTANCE_ID
              WHERE (:jobName IS NULL OR ji.JOB_NAME = :jobName)
+               AND (:anchor IS NULL OR je.JOB_EXECUTION_ID <= :anchor)
             """;
 
     private static final RowMapper<BatchRun> ROW_MAPPER = (rs, rowNum) -> new BatchRun(
@@ -82,9 +84,10 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
     }
 
     @Override
-    public List<BatchRun> findRecent(String jobName, int limit, int offset) {
+    public List<BatchRun> findRecent(String jobName, int limit, int offset, Long anchor) {
         return jdbcClient.sql(SELECT_RECENT)
                 .param("jobName", jobName)
+                .param("anchor", anchor)
                 .param("limit", limit)
                 .param("offset", offset)
                 .query(ROW_MAPPER)
@@ -92,9 +95,10 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
     }
 
     @Override
-    public int countRecent(String jobName) {
+    public int countRecent(String jobName, Long anchor) {
         Integer count = jdbcClient.sql(COUNT_RECENT)
                 .param("jobName", jobName)
+                .param("anchor", anchor)
                 .query(Integer.class)
                 .single();
         return count == null ? 0 : count;

@@ -15,9 +15,18 @@ public interface BatchRunRepository {
      *
      * <p>정렬은 실행 id 내림차순이다. 시작 시각은 실행기가 거절하면 비어 있어(NULL)
      * 정렬 키로 못 쓴다.
+     *
+     * <p><b>{@code anchor} 가 페이지 경계를 얼린다.</b> {@code null} 이면 지금 시점 전체를 본다.
+     * 값이 오면 {@code JOB_EXECUTION_ID <= anchor} 로 좁혀, 요청 사이에 새 실행이 생겨도
+     * 뒤 페이지가 밀리지 않는다 — {@code OFFSET} 만으로는 <b>같은 행이 다시 나오고 뒤쪽
+     * 행이 빠진다.</b>
      */
-    List<BatchRun> findRecent(String jobName, int limit, int offset);
+    List<BatchRun> findRecent(String jobName, int limit, int offset, Long anchor);
 
-    /** 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다. */
-    int countRecent(String jobName);
+    /**
+     * 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다.
+     *
+     * <p>{@link #findRecent} 와 <b>같은 anchor</b> 로 세야 total 이 그 페이지들의 것이 된다.
+     */
+    int countRecent(String jobName, Long anchor);
 }
