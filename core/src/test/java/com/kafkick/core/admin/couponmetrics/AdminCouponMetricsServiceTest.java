@@ -16,6 +16,7 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignDataErrorCode;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -106,7 +107,7 @@ class AdminCouponMetricsServiceTest {
     ) {
         return new AdminCouponMetricsService(
                 new TimeProvider(Clock.fixed(SNAPSHOT_AT, ZoneOffset.UTC)), reader,
-                rateReader, new CouponMetricsCalculator());
+                rateReader, new PendingAdminQueueObservationSource(), new CouponMetricsCalculator());
     }
 
     private static AdminCampaignDetailData availableDetail() {

@@ -1,6 +1,7 @@
 package com.kafkick.infra.mq.config;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -8,6 +9,7 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -17,6 +19,7 @@ import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.MicrometerConsumerListener;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -35,6 +38,7 @@ import com.kafkick.infra.mq.attempt.AttemptSamplingProperties;
 import com.kafkick.infra.mq.attempt.StratifiedSampler;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -107,6 +111,22 @@ public class AttemptConsumerConfig {
     public ConsumerFactory<String, IssuanceFlowEvent> attemptArchiveConsumerFactory(
             KafkaConnectionProperties properties, JsonMapper jsonMapper) {
         return consumerFactory(KafkaConsumerGroups.ATTEMPT_ARCHIVE, properties, jsonMapper);
+    }
+
+    @Bean
+    public SmartInitializingSingleton attemptConsumerMetricsBinder(
+            @Qualifier("attemptLiveConsumerFactory")
+            ConsumerFactory<String, IssuanceFlowEvent> live,
+            @Qualifier("attemptArchiveConsumerFactory")
+            ConsumerFactory<String, IssuanceFlowEvent> archive,
+            ObjectProvider<MeterRegistry> meterRegistries) {
+        return () -> {
+            MeterRegistry registry = requireMeterRegistry(meterRegistries);
+            live.addListener(new MicrometerConsumerListener<>(registry,
+                    List.of(Tag.of("consumer_group", KafkaConsumerGroups.ATTEMPT_LIVE))));
+            archive.addListener(new MicrometerConsumerListener<>(registry,
+                    List.of(Tag.of("consumer_group", KafkaConsumerGroups.ATTEMPT_ARCHIVE))));
+        };
     }
 
     @Bean(LIVE_CONTAINER_FACTORY)

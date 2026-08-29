@@ -7,7 +7,7 @@ import java.util.Optional;
 import com.kafkick.core.observation.EngineVersion;
 
 /** FINAL 정합성 결과와 회차별 claim 상태를 보관하는 포트입니다. */
-public interface ConsistencyFinalStore {
+public interface ConsistencyFinalStore extends ConsistencyFinalReader {
 
     /** benchmark_runs.consistency_failure_reason 컬럼 길이와 같아야 합니다. */
     int FAILURE_REASON_MAX = 500;
@@ -43,5 +43,4 @@ public interface ConsistencyFinalStore {
      */
     boolean expire(long benchmarkRunId, String claimToken, String failureReason);
 
-    ConsistencyFinalObservation findLatestByCouponId(long couponId);
 }

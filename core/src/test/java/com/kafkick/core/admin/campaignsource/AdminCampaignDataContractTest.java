@@ -118,7 +118,7 @@ class AdminCampaignDataContractTest {
         return new AdminCampaignCatalog.CampaignData(
                 couponId, "캠페인 " + couponId, "브랜드", CouponRoundStatus.SCHEDULED,
                 SNAPSHOT_AT.plusSeconds(60), SNAPSHOT_AT.plusSeconds(120), stock,
-                new PreparationObservation(null, SourceStatus.PENDING, null));
+                new PreparationSource(null, null, null, SourceStatus.PENDING, null));
     }
 
     private static AdminCampaignDetailData.DetailValue detailValue(long couponId) {

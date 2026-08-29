@@ -9,6 +9,7 @@ import java.util.Objects;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.admin.campaignsource.PreparationItem;
 
 /**
  * 관리자 운영현황 Service와 순수 Calculator가 조립하는 기술 중립 결과입니다.
@@ -196,6 +197,7 @@ public record AdminOverviewSnapshot(
      *                     이 값이 아닌 별도 Mock O1 입력으로 계산
      * @param campaignQueueStatus O2 캠페인별 대기 상태와 해당 원천 상태
      * @param stockForecast O4 캠페인별 재고·소진 예상과 해당 원천 상태
+     * @param failedPreparationItems Core가 확정한 준비 실패 항목; 미판정이면 빈 목록
      * @param customerImpact 고객 영향 범위
      * @param customerImpactText 운영 담당자에게 표시할 고객 영향 설명
      * @param recommendedAction 서버가 제공하는 다음 행동; 조치가 필요 없으면 null
@@ -212,9 +214,32 @@ public record AdminOverviewSnapshot(
             Observation<IssuanceFlow> issuanceFlow,
             Observation<CampaignQueueStatus> campaignQueueStatus,
             Observation<StockForecast> stockForecast,
+            List<PreparationItem> failedPreparationItems,
             CustomerImpact customerImpact,
             String customerImpactText,
-            RecommendedAction recommendedAction) { }
+            RecommendedAction recommendedAction) {
+
+        /** 확정 실패 목록이 외부 변경으로 바뀌지 않도록 불변 복사합니다. */
+        public CampaignOverview {
+            failedPreparationItems = List.copyOf(failedPreparationItems);
+        }
+
+        /** 이전 fixture의 행 생성 시 준비 실패 목록을 빈 목록으로 둡니다. */
+        @Deprecated
+        public CampaignOverview(
+                int priority, Long couponId, String campaignName, String brandName,
+                CouponRoundStatus status, Instant opensAt, Instant closesAt, Severity severity,
+                Observation<IssuanceFlow> issuanceFlow,
+                Observation<CampaignQueueStatus> campaignQueueStatus,
+                Observation<StockForecast> stockForecast,
+                CustomerImpact customerImpact, String customerImpactText,
+                RecommendedAction recommendedAction
+        ) {
+            this(priority, couponId, campaignName, brandName, status, opensAt, closesAt, severity,
+                    issuanceFlow, campaignQueueStatus, stockForecast, List.of(), customerImpact,
+                    customerImpactText, recommendedAction);
+        }
+    }
 
     /**
      * O1 캠페인별 발급 속도와 최근 추세입니다.

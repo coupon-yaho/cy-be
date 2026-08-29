@@ -14,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
+import com.kafkick.core.admin.campaignsource.PreparationItem;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
@@ -254,6 +255,7 @@ class AdminOverviewContractTest {
                 1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.SCHEDULED,
                 TO, TO.plus(Duration.ofHours(1)), Severity.WARN,
                 unavailable(), unavailable(), unavailable(),
+                List.of(PreparationItem.DATABASE_STOCK),
                 AdminOverviewSnapshot.CustomerImpact.NONE,
                 "오픈 전 필수 준비 항목을 확인해야 합니다.", recommendedAction);
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
@@ -281,6 +283,8 @@ class AdminOverviewContractTest {
                 .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
         AdminOverviewResponse.CampaignOverview responseCampaign = response.campaigns().value().getFirst();
         assertThat(responseCampaign.severity()).isEqualTo(Severity.WARN);
+        assertThat(responseCampaign.failedPreparationItems())
+                .containsExactly(PreparationItem.DATABASE_STOCK);
         assertThat(responseCampaign.customerImpact()).isEqualTo(responseAction.customerImpact());
         assertThat(responseCampaign.recommendedAction()).isEqualTo(responseAction.recommendedAction());
     }

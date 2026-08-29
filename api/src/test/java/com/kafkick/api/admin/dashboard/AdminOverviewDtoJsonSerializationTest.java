@@ -19,6 +19,7 @@ import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
+import com.kafkick.core.admin.campaignsource.PreparationItem;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -218,6 +219,7 @@ class AdminOverviewDtoJsonSerializationTest {
                 new ObservedValue<>(
                         new AdminOverviewResponse.StockForecast(4650, 15000, 0.31, null),
                         SourceStatus.VALID, OBSERVED_AT),
+                List.of(PreparationItem.ISSUANCE_PATH),
                 AdminOverviewSnapshot.CustomerImpact.WIDESPREAD,
                 "신규 고객 대기 지속",
                 new AdminOverviewResponse.RecommendedAction(
@@ -267,6 +269,7 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"windowStart\":\"2026-08-17T04:53:58Z\"")
                 .contains("\"campaignQueueStatus\":{\"value\":{\"waitingCount\":3204")
                 .contains("\"remainingRatio\":0.31")
+                .contains("\"failedPreparationItems\":[\"ISSUANCE_PATH\"]")
                 .contains("\"customerOutcomes\":{\"value\":{\"windowStart\":")
                 .contains("\"totalCount\":0.3")
                 .contains("\"type\":\"ISSUED\",\"count\":0.1,\"ratio\":0.3333333333333333")

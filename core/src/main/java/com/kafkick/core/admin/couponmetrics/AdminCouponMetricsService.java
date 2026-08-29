@@ -9,6 +9,8 @@ import com.kafkick.core.admin.campaignsource.AdminCampaignDataErrorCode;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.core.admin.queue.AdminQueueObservationSource;
+import com.kafkick.core.admin.queue.CampaignQueueObservation;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -19,14 +21,15 @@ import com.kafkick.core.support.exception.CommonErrorCode;
  * 관리자 캠페인 상세 지표의 기준 시각·원천 조회·순수 계산 흐름을 조립합니다.
  *
  * <p>DB 권위값은 기술 중립 {@link AdminCampaignDataReader}에서 읽고, OPEN 캠페인의 발급률은
- * {@link CouponIssuanceRateReader}에서 읽습니다. 대기열은 이번 상세 범위에 포함하지 않아
- * {@link SourceStatus#PENDING}으로 계산기에 전달합니다.</p>
+ * {@link CouponIssuanceRateReader}에서 읽고, OPEN 캠페인의 대기열은
+ * {@link AdminQueueObservationSource}에서 읽습니다.</p>
  */
 public class AdminCouponMetricsService {
 
     private final TimeProvider timeProvider;
     private final AdminCampaignDataReader campaignDataReader;
     private final CouponIssuanceRateReader issuanceRateReader;
+    private final AdminQueueObservationSource queueObservationSource;
     private final CouponMetricsCalculator calculator;
 
     /**
@@ -35,17 +38,20 @@ public class AdminCouponMetricsService {
      * @param timeProvider 요청 전체에서 한 번 사용할 기준 시각 공급자
      * @param campaignDataReader Overview와 같은 DB 모집단의 상세 조회 경계
      * @param issuanceRateReader OPEN 캠페인의 Prometheus 초당 발급률 조회 경계
+     * @param queueObservationSource OPEN 캠페인의 대기열 관측 조회 경계
      * @param calculator 원천값을 요청 구간의 상세 지표로 변환하는 순수 계산기
      */
     public AdminCouponMetricsService(
             TimeProvider timeProvider,
             AdminCampaignDataReader campaignDataReader,
             CouponIssuanceRateReader issuanceRateReader,
+            AdminQueueObservationSource queueObservationSource,
             CouponMetricsCalculator calculator
     ) {
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.campaignDataReader = Objects.requireNonNull(campaignDataReader, "campaignDataReader");
         this.issuanceRateReader = Objects.requireNonNull(issuanceRateReader, "issuanceRateReader");
+        this.queueObservationSource = Objects.requireNonNull(queueObservationSource, "queueObservationSource");
         this.calculator = Objects.requireNonNull(calculator, "calculator");
     }
 
@@ -73,7 +79,8 @@ public class AdminCouponMetricsService {
         }
         AdminCampaignDetailData.DetailValue value = detail.value();
         CouponMetricsSource source = new CouponMetricsSource(
-                value.couponId(), value.campaign(), value.stock(), issuanceRate(value, window, snapshotAt), pending(),
+                value.couponId(), value.campaign(), value.stock(), issuanceRate(value, window, snapshotAt),
+                queue(value, fromInclusive, snapshotAt),
                 value.holdingCounts(), value.transitions());
         return calculator.calculate(source, window, snapshotAt);
     }
@@ -91,9 +98,34 @@ public class AdminCouponMetricsService {
         return issuanceRateReader.read(value.couponId(), window, snapshotAt);
     }
 
-    /** 아직 연결되지 않은 상세 원천을 0이 아닌 값 없는 PENDING으로 보존합니다. */
-    private static <T> CouponMetricsSource.Observation<T> pending() {
-        return new CouponMetricsSource.Observation<>(null, SourceStatus.PENDING, null);
+    /** OPEN 캠페인의 요청 구간 대기열을 읽고 공통 관측을 상세 계산기 입력으로 변환합니다. */
+    private CouponMetricsSource.Observation<CouponMetricsSource.QueueCounts> queue(
+            AdminCampaignDetailData.DetailValue value,
+            Instant windowStart,
+            Instant snapshotAt
+    ) {
+        if (value.campaign().status() != CouponRoundStatus.OPEN) {
+            // 비 OPEN 캠페인은 대기열 기능의 적용 대상이 아니므로 원천에 질의하지 않습니다.
+            return notApplicable();
+        }
+        java.util.Map<Long, CampaignQueueObservation> observations = queueObservationSource.observe(
+                List.of(value.couponId()), windowStart, snapshotAt, snapshotAt);
+        CampaignQueueObservation observation = observations == null ? null : observations.get(value.couponId());
+        if (observations == null || observations.size() != 1 || observation == null
+                || !observations.keySet().equals(java.util.Set.of(value.couponId()))
+                || value.couponId() != observation.couponId()) {
+            throw new BusinessException(
+                    AdminCampaignDataErrorCode.OBSERVATION_UNAVAILABLE,
+                    "대기열 관측 응답이 현재 상세 캠페인과 일치해야 합니다.");
+        }
+        if (!observation.sourceStatus().carriesValue()) {
+            return new CouponMetricsSource.Observation<>(null, observation.sourceStatus(), null);
+        }
+        return new CouponMetricsSource.Observation<>(
+                new CouponMetricsSource.QueueCounts(
+                        observation.currentWaitingCount(), observation.admittedCount(),
+                        observation.windowStart(), observation.windowEnd()),
+                observation.sourceStatus(), observation.observedAt());
     }
 
     /** 비 OPEN 캠페인에 값을 싣지 않는 N_A 발급률 원천을 만듭니다. */

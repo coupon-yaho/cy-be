@@ -3,6 +3,7 @@ package com.kafkick.storage.db.admin;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -20,13 +21,15 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 관측 전용 JDBC 풀에서 관리자 캠페인 카탈로그와 상세 원천값을 조회합니다. */
@@ -34,11 +37,16 @@ import com.kafkick.core.observation.SourceStatus;
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
 public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
+    private static final Duration MAX_COUPON_ROUND_DURATION = Duration.ofHours(24);
+
     private static final Logger log = LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
 
     private static final String CATALOG_SQL = """
             SELECT c.id, c.name, b.name AS brand_name, c.status,
                    c.open_at, c.close_at,
+                   c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
+                   c.data_grant_mb,
+                   c.valid_days, c.eligible_grades_mask,
                    s.total_quantity, s.active_count, s.updated_at
               FROM coupons c
               LEFT JOIN brands b ON b.id = c.brand_id
@@ -49,6 +57,9 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
     private static final String DETAIL_SQL = """
             SELECT c.id, c.name, b.name AS brand_name, c.status,
                    c.open_at, c.close_at,
+                   c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
+                   c.data_grant_mb,
+                   c.valid_days, c.eligible_grades_mask,
                    s.total_quantity, s.active_count, s.updated_at
               FROM coupons c
               LEFT JOIN brands b ON b.id = c.brand_id
@@ -111,7 +122,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                         row.opensAt(),
                         row.closesAt(),
                         stockObservation(row),
-                        preparationObservation(row, snapshotAt)
+                        preparationSource(row, snapshotAt)
                 ));
             }
             return new AdminCampaignCatalog(SourceStatus.VALID, snapshotAt, campaigns);
@@ -247,7 +258,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         return new CouponMetricsSource.Observation<>(List.of(bucket), status, snapshotAt);
     }
 
-    /** 재고 LEFT JOIN 부재는 실제 0이 아니므로 값 없는 UNAVAILABLE 관측으로 보존합니다. */
+    /** 재고 LEFT JOIN 부재와 부분 행은 실제 0이 아니므로 값 없는 UNAVAILABLE 관측으로 보존합니다. */
     private static CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stockObservation(
             CampaignRow row
     ) {
@@ -259,8 +270,12 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         }
         if (row.totalQuantity() == null
                 || row.activeCount() == null
-                || row.stockUpdatedAt() == null) {
-            throw new IllegalArgumentException("재고 LEFT JOIN 결과가 부분적으로만 존재합니다.");
+                || row.stockUpdatedAt() == null
+                || row.totalQuantity() <= 0L
+                || row.activeCount() < 0L
+                || row.activeCount() > row.totalQuantity()) {
+            // 부분 null과 범위 위반은 0 재고가 아닌 별도 준비 실패로만 사용합니다.
+            return new CouponMetricsSource.Observation<>(null, SourceStatus.UNAVAILABLE, null);
         }
         return new CouponMetricsSource.Observation<>(
                 new CouponMetricsSource.StockCounts(row.totalQuantity(), row.activeCount()),
@@ -270,20 +285,92 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
     }
 
     /**
-     * 재고 행의 존재·수량·갱신 시각으로 카탈로그 시점의 캠페인 준비 완료 여부를 판정합니다.
+     * 캠페인 설정과 재고 행의 실제 DB 값을 카탈로그 시점의 준비 원천으로 변환합니다.
      *
-     * <p>LEFT JOIN으로 재고 행이 없거나 부분 null인 행은 준비 완료로 오인하지 않고, 카탈로그를
-     * 성공적으로 읽은 시각을 이 DB 판정의 관측 시각으로 보존합니다.</p>
+     * <p>LEFT JOIN으로 재고 행이 없거나 부분 null인 행은 DB 재고 준비 미완료로 보존합니다.
+     * 엔진 설정과 실제 발급 경로는 이 Reader가 아닌 Core 계산기가 결합합니다.</p>
      */
-    private static PreparationObservation preparationObservation(CampaignRow row, Instant snapshotAt) {
-        boolean completed = row.totalQuantity() != null
+    private static PreparationSource preparationSource(CampaignRow row, Instant snapshotAt) {
+        boolean databaseStockReady = row.totalQuantity() != null
                 && row.totalQuantity() > 0L
                 && row.activeCount() != null
                 && row.activeCount() >= 0L
                 && row.activeCount() <= row.totalQuantity()
                 && row.stockUpdatedAt() != null;
-        // 재고 행 부재와 부분 null·범위 위반은 모두 준비 미완료로 판정한다.
-        return new PreparationObservation(completed, SourceStatus.VALID, snapshotAt);
+        CouponPolicyType policyType = policyTypeOf(row.policyType());
+        boolean campaignConfigurationReady = hasValidCampaignConfiguration(row, policyType);
+        // 재고 행 부재와 정책 스냅샷 위반은 각각 확정된 DB 준비 실패로 보존합니다.
+        return new PreparationSource(
+                campaignConfigurationReady, databaseStockReady, policyType, SourceStatus.VALID, snapshotAt);
+    }
+
+    /** DB에 저장된 캠페인 스냅샷이 현재 발급 계약의 모든 필수 값을 갖췄는지 확인합니다. */
+    private static boolean hasValidCampaignConfiguration(
+            CampaignRow row,
+            CouponPolicyType policyType
+    ) {
+        // 실제 회차 도메인이 복원할 수 있는 24시간 이하의 기간만 준비된 설정입니다.
+        if (row.campaignName() == null || row.campaignName().isBlank()
+                || row.opensAt() == null || row.closesAt() == null
+                || !row.opensAt().isBefore(row.closesAt())
+                || Duration.between(row.opensAt(), row.closesAt()).compareTo(MAX_COUPON_ROUND_DURATION) > 0
+                || row.validDays() == null || row.validDays() <= 0
+                || !hasValidGradeMask(row.eligibleGradesMask())) {
+            return false;
+        }
+        return hasValidDiscountPolicy(row, policyType);
+    }
+
+    /** 멤버십 enum이 지원하는 비어 있지 않은 등급 비트만 설정값으로 인정합니다. */
+    private static boolean hasValidGradeMask(Integer eligibleGradesMask) {
+        if (eligibleGradesMask == null) {
+            return false;
+        }
+        try {
+            MembershipGrade.fromMask(eligibleGradesMask);
+            return true;
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
+    }
+
+    /** 정책 종류별 할인 스냅샷 조합이 실제 발급 도메인 규칙과 맞는지 확인합니다. */
+    private static boolean hasValidDiscountPolicy(CampaignRow row, CouponPolicyType policyType) {
+        if (policyType == null) {
+            return false;
+        }
+        // 각 정책은 자기 전용 혜택 필드만 값이 있어야 준비된 설정입니다.
+        return switch (policyType) {
+            case PERCENT_CAPPED -> row.discountRate() != null
+                    && row.discountRate() >= 1
+                    && row.discountRate() <= 100
+                    && row.maxDiscountAmount() != null
+                    && row.maxDiscountAmount() > 0
+                    && row.discountAmount() == null
+                    && row.dataGrantMb() == null;
+            case FIXED_AMOUNT -> row.discountAmount() != null
+                    && row.discountAmount() > 0
+                    && row.discountRate() == null
+                    && row.maxDiscountAmount() == null
+                    && row.dataGrantMb() == null;
+            case DATA_GRANT -> row.dataGrantMb() != null
+                    && row.dataGrantMb() > 0
+                    && row.discountRate() == null
+                    && row.maxDiscountAmount() == null
+                    && row.discountAmount() == null;
+        };
+    }
+
+    /** DB 정책 문자열을 관리자 준비 판정 enum으로 변환하며 미지원 값은 설정 실패로 보존합니다. */
+    private static CouponPolicyType policyTypeOf(String policyType) {
+        if (policyType == null) {
+            return null;
+        }
+        try {
+            return CouponPolicyType.valueOf(policyType);
+        } catch (IllegalArgumentException exception) {
+            return null;
+        }
     }
 
     private static CampaignRow mapCampaign(ResultSet resultSet, int rowNumber) throws SQLException {
@@ -294,6 +381,13 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 resultSet.getString("status"),
                 instant(resultSet, "open_at"),
                 instant(resultSet, "close_at"),
+                resultSet.getString("policy_type"),
+                resultSet.getObject("discount_rate", Integer.class),
+                resultSet.getObject("max_discount_amount", Integer.class),
+                resultSet.getObject("discount_amount", Integer.class),
+                resultSet.getObject("data_grant_mb", Integer.class),
+                resultSet.getObject("valid_days", Integer.class),
+                resultSet.getObject("eligible_grades_mask", Integer.class),
                 resultSet.getObject("total_quantity", Long.class),
                 resultSet.getObject("active_count", Long.class),
                 nullableInstant(resultSet, "updated_at")
@@ -349,6 +443,13 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             String status,
             Instant opensAt,
             Instant closesAt,
+            String policyType,
+            Integer discountRate,
+            Integer maxDiscountAmount,
+            Integer discountAmount,
+            Integer dataGrantMb,
+            Integer validDays,
+            Integer eligibleGradesMask,
             Long totalQuantity,
             Long activeCount,
             Instant stockUpdatedAt

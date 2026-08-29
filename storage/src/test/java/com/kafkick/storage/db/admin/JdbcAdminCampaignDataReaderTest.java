@@ -50,10 +50,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
 import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
@@ -208,11 +209,92 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(catalog.campaigns().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(200, 0));
         assertThat(catalog.campaigns().get(0).preparation())
-                .isEqualTo(new PreparationObservation(false, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(
+                        true, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(1).preparation())
-                .isEqualTo(new PreparationObservation(true, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
         assertThat(catalog.campaigns().get(2).preparation())
-                .isEqualTo(new PreparationObservation(true, SourceStatus.VALID, SNAPSHOT));
+                .isEqualTo(new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** 실제 회차 도메인의 24시간 상한을 넘는 기간은 설정 실패로 판정하는지 검증합니다. */
+    @Test
+    @DisplayName("24시간을 초과한 회차는 캠페인 설정이 준비되지 않는다")
+    void couponRoundDurationCannotExceedTwentyFourHours() {
+        Instant opensAt = SNAPSHOT.minusSeconds(60);
+        insertCoupon(10, 1, 1, "기간 초과", "OPEN", opensAt);
+        writeJdbc.update(
+                "UPDATE coupons SET close_at = ? WHERE id = 10",
+                timestamp(opensAt.plusSeconds(86_401)));
+        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
+
+        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
+                .campaigns().getFirst().preparation();
+
+        assertThat(preparation.campaignConfigurationReady()).isFalse();
+    }
+
+    /** DATA_GRANT의 양수 전용 용량만 설정된 행을 정상 캠페인 설정으로 판정하는지 검증합니다. */
+    @Test
+    @DisplayName("데이터 지급 정책은 전용 용량만 설정됐을 때 캠페인 설정이 준비된다")
+    void dataGrantPolicyRequiresOnlyDataGrantAmount() {
+        insertCoupon(10, 1, 1, "데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
+        writeJdbc.update("""
+                UPDATE coupons
+                   SET policy_type = 'DATA_GRANT',
+                       discount_amount = NULL,
+                       data_grant_mb = 1024
+                 WHERE id = 10
+                """);
+        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
+
+        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
+                .campaigns().getFirst().preparation();
+
+        assertThat(preparation.campaignConfigurationReady()).isTrue();
+        assertThat(preparation.policyType()).isEqualTo(CouponPolicyType.DATA_GRANT);
+    }
+
+    /** DATA_GRANT 행에 다른 정책의 할인 필드가 섞이면 배타성 위반으로 판정하는지 검증합니다. */
+    @Test
+    @DisplayName("데이터 지급 정책에 할인 금액이 섞이면 캠페인 설정이 준비되지 않는다")
+    void dataGrantPolicyRejectsDiscountFields() {
+        insertCoupon(10, 1, 1, "잘못된 데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
+        writeJdbc.update("""
+                UPDATE coupons
+                   SET policy_type = 'DATA_GRANT',
+                       discount_amount = 5000,
+                       data_grant_mb = 1024
+                 WHERE id = 10
+                """);
+        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
+
+        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
+                .campaigns().getFirst().preparation();
+
+        assertThat(preparation.campaignConfigurationReady()).isFalse();
+    }
+
+    /** DATA_GRANT의 전용 용량이 양수가 아니면 필수값 위반으로 판정하는지 검증합니다. */
+    @Test
+    @DisplayName("데이터 지급 정책의 전용 용량은 양수여야 한다")
+    void dataGrantPolicyRejectsNonPositiveAmount() {
+        insertCoupon(10, 1, 1, "용량 없는 데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
+        writeJdbc.update("""
+                UPDATE coupons
+                   SET policy_type = 'DATA_GRANT',
+                       discount_amount = NULL,
+                       data_grant_mb = 0
+                 WHERE id = 10
+                """);
+        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
+
+        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
+                .campaigns().getFirst().preparation();
+
+        assertThat(preparation.campaignConfigurationReady()).isFalse();
     }
 
     @Test
@@ -467,9 +549,9 @@ class JdbcAdminCampaignDataReaderTest {
                                      String status, Instant opensAt) {
         writeJdbc.update("""
                 INSERT INTO coupons(
-                    id, template_id, brand_id, name, policy_type, valid_days,
+                    id, template_id, brand_id, name, policy_type, discount_amount, valid_days,
                     eligible_grades_mask, open_at, close_at, status, generated_at, created_at
-                ) VALUES (?, ?, ?, ?, 'FIXED_AMOUNT', 30, 1, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'FIXED_AMOUNT', 5000, 30, 1, ?, ?, ?, ?, ?)
                 """, couponArguments(id, templateId, brandId, name, status, opensAt));
     }
 
