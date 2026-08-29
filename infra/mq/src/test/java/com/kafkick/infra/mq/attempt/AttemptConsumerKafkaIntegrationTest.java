@@ -86,7 +86,7 @@ class AttemptConsumerKafkaIntegrationTest {
 
     private static final int PARTITIONS = 2;
     private static final Duration SETTLE = Duration.ofSeconds(20);
-    private static final String READINESS_REQUEST_PREFIX = "consumer-ready-";
+    private static final String READINESS_REQUEST_PREFIX = "rdy-";
 
     private static final IssuanceFlowEventFactory FACTORY =
             new IssuanceFlowEventFactory(UUID::randomUUID);
@@ -382,7 +382,8 @@ class AttemptConsumerKafkaIntegrationTest {
     ) {
         ConcurrentMessageListenerContainer<String, IssuanceFlowEvent> container =
                 factory.createContainer(KafkaTopicConfig.ISSUE_ATTEMPT);
-        String readinessRequestId = READINESS_REQUEST_PREFIX + UUID.randomUUID();
+        String readinessRequestId = READINESS_REQUEST_PREFIX
+                + UUID.randomUUID().toString().substring(0, 36 - READINESS_REQUEST_PREFIX.length());
         container.getContainerProperties().setGroupId(groupId);
         Set<Integer> readinessPartitions = ConcurrentHashMap.newKeySet();
         container.getContainerProperties().setMessageListener(
