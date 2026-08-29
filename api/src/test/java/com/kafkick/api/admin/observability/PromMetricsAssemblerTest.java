@@ -1757,6 +1757,28 @@ class PromMetricsAssemblerTest {
         assertThat(response.dependencies().kafka().value().errorRate()).isEqualTo(0.1d);
     }
 
+    @Test
+    @DisplayName("발급 요청 분모 원천이 없으면 Kafka 실패율은 PENDING 이다")
+    void kafkaDependencyRequiresIssueAttempts() {
+        FakePromQuery client = kafkaDependencyQuery(true, false, true);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.dependencies().kafka().value()).isNull();
+    }
+
+    @Test
+    @DisplayName("Kafka 발행 실패 원천이 없으면 측정된 0으로 간주하지 않는다")
+    void kafkaDependencyRequiresPublishFailures() {
+        FakePromQuery client = kafkaDependencyQuery(true, true, false);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.dependencies().kafka().value()).isNull();
+    }
+
     // ── 도우미 ─────────────────────────────────────────────────────────────────
 
     private static AdminMetricsResponse assemble(PromQuery client, MetricsQuery query) {
@@ -1789,19 +1811,31 @@ class PromMetricsAssemblerTest {
     }
 
     private static FakePromQuery kafkaDependencyQuery(boolean includeProvisionedState) {
+        return kafkaDependencyQuery(includeProvisionedState, true, true);
+    }
+
+    private static FakePromQuery kafkaDependencyQuery(
+            boolean includeProvisionedState,
+            boolean includeAttempts,
+            boolean includeFailures) {
         List<PromSample> operational = new ArrayList<>();
         if (includeProvisionedState) {
             operational.add(domain(MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE, Map.of(),
                     SourceStatusCode.of(SourceStatus.VALID)));
         }
+        List<PromSample> results = new ArrayList<>();
+        if (includeAttempts) {
+            results.add(rate("issue", "success", 100d, "api-1"));
+        }
+        if (includeFailures) {
+            results.add(new PromSample(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
+                    Map.of("instance", "api-1"), 10d, EVALUATED));
+        }
         return respond(Map.of(
                 "quantile!=", List.of(
                         kafkaQuantile("0.95", 0.004d, "api-1"),
                         kafkaQuantile("0.99", 0.008d, "api-1")),
-                "rate(", List.of(
-                        rate("issue", "success", 100d, "api-1"),
-                        new PromSample(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
-                                Map.of("instance", "api-1"), 10d, EVALUATED)),
+                "rate(", results,
                 "process_cpu_usage", operational,
                 "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
     }

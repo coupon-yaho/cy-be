@@ -1177,7 +1177,10 @@ public class PromMetricsAssembler {
         }
         OptionalDouble attempts = reduceOrUnknown(MetricAggregation.HTTP_RESULT_TOTAL,
                 results.filter(inGroup(UriGroup.ISSUE)));
-        if (attempts.isPresent() && attempts.getAsDouble() == 0d) {
+        if (attempts.isEmpty()) {
+            return pending();
+        }
+        if (attempts.getAsDouble() == 0d) {
             return notApplicable();
         }
         List<PromSample> kafkaLatency = latency.filter(
@@ -1190,8 +1193,10 @@ public class PromMetricsAssembler {
         OptionalDouble failures = reduceOrUnknown(
                 MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
                 results.filter(named(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE)));
-        double denominator = attempts.orElse(0d);
-        double errorRate = denominator <= 0d ? 0d : failures.orElse(0d) / denominator;
+        if (failures.isEmpty()) {
+            return pending();
+        }
+        double errorRate = failures.getAsDouble() / attempts.getAsDouble();
         return new ObservedValue<>(
                 new DependencySnapshot(millis(p95), millis(p99), errorRate),
                 freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID,
