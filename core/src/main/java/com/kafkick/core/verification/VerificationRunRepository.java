@@ -75,10 +75,25 @@ public interface VerificationRunRepository {
      *
      * <p>{@code dataset} 이 null 이면 전체를 준다. 정렬은 {@code id} 내림차순이다 —
      * {@code as_of} 는 같은 값으로 여러 번 돌 수 있어(재시도) 순서가 안 정해진다.
+     *
+     * <p><b>배치가 만든 실행만 준다.</b> 시드가 심는 기준 행은 이 목록에 안 들어간다 —
+     * 그것은 배치 실행이 아니라 <b>게이트가 대조하는 기준값</b>이고,
+     * {@code verdict} 의 뜻부터 다르다(CORRUPT 에서 시드는 {@code FAIL}, 배치는
+     * {@code PASS} — {@code docs/17}). 섞이면 <b>배치를 한 번도 안 돌린 정상셋에서
+     * 관제에 {@code PASS} 가 이미 그려진다.</b>
+     *
+     * <p>이것은 구현 편의가 아니라 <b>이 포트의 계약</b>이라 여기 적는다. 어댑터 쪽에만
+     * 두면 다음 구현체가 빠뜨려도 아무 데서도 안 걸린다 —
+     * {@code VerificationRunHistoryTest} 가 그 행을 직접 심어 잰다.
      */
     List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset);
 
-    /** 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다. */
+    /**
+     * 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다.
+     *
+     * <p>{@link #findRecent} 와 <b>같은 조건</b>이어야 한다 — 출처 필터까지 같다.
+     * 한쪽만 거르면 화면이 없는 페이지를 그린다.
+     */
     int countRecent(DatasetType dataset);
 
     /**
