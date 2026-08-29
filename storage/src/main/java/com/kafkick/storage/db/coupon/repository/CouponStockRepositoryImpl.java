@@ -50,6 +50,8 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
     @Override
     public void incrementActiveCount(Long couponRoundId, Instant updatedAt) {
         try {
+            // 조건절 없는 UPDATE 라 0행은 "매진" 이 아니라 회차의 재고 행이 없다는 뜻이다.
+            // 여기서 던져 발급 트랜잭션을 중단시킨다(포트 계약).
             if (couponStockJpaRepository.incrementActiveCount(couponRoundId, updatedAt) != 1) {
                 throw new CouponPersistenceException(
                         "쿠폰 재고 행이 없습니다. couponRoundId=" + couponRoundId,
