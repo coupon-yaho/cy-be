@@ -131,12 +131,39 @@ public interface ExpirationRepository {
      * <p>스크레이프 때 세면 300만 행에 {@code COUNT(*)} 를 15초마다 때리는 꼴이다.
      * 잡이 끝나는 시점이면 이미 같은 창을 훑고 있었다.
      *
+     * <p><b>{@code committedAt} 이 창을 닫는다.</b> 그 실행이 마지막으로 쓴 시각 이후에
+     * 바뀐 행은 <b>그 실행이 처리했어야 하는 몫이 아니다</b> — 실행이 끝난 뒤
+     * {@code CANCEL_USE}({@code USED → ISSUED})로 돌아온 행이 그렇다. 창이 없으면 그것이
+     * {@code unexplained} 로 들어가 {@code ExpireLeavesWorkBehind}(critical · channel server)
+     * 가 뜬다: <b>배치는 안 틀렸는데 서버를 보라고 나가고, 만료가 일 1회라 최대 하루 간다.</b>
+     *
+     * <p>⚠️ <b>{@code null} 이면 창을 안 건다.</b> 이 축은 CY-768 이 새로 만든 것이라
+     * <b>배포 직후 마지막 성공 실행에는 반드시 없다.</b> 그때 판정을 포기하면
+     * {@code ExpireMetricsUnknown} 이 하루를 우는데, 그것은 고치려던 오탐을 다른 오탐으로
+     * 바꾸는 것이다. 없으면 지금까지의 동작 그대로 세고, 새 실행이 한 번 돌면 창이 걸린다.
+     *
+     * <p>⚠️ <b>이 창은 쓰기 시각이 정직해야 뜻이 있다.</b> 취소가 <b>요청 시각</b>으로
+     * 백데이트되면 창 안에 그대로 들어와 안 걸러진다 — CY-769 가
+     * {@code GREATEST(..., CURRENT_TIMESTAMP(6))} 로 그것을 닫았다.
+     *
      * <p>{@code blockedCouponIds} 를 받아 <b>둘로 갈라 센다</b> — 막힌 회차의 몫은 설계상
      * 계속 남으므로, 합쳐서 알림을 걸면 사람이 재고를 고칠 때까지 24시간 울리고 그 알림은
      * 곧 무시된다. 갈라야 <i>"배치가 일을 안 한다"</i> 와 <i>"데이터가 어긋나 있다"</i> 가
      * 서로 다른 알림이 된다.
      */
-    PendingExpiration countPending(LocalDateTime asOf, List<Long> blockedCouponIds);
+    PendingExpiration countPending(LocalDateTime asOf, Long maxHistoryId,
+            List<Long> blockedCouponIds);
+
+    /**
+     * <b>지금까지 매겨진 이력 id 의 최댓값.</b> 만료 실행이 끝나며 한 번 찍어 Step 문맥에
+     * 싣고, 되읽기가 그것을 창으로 쓴다.
+     *
+     * <p><b>시각이 아니라 id 인 이유.</b> {@code issuance_histories.created_at} 은
+     * <b>멱등 선점 시각</b>이라 백데이트된다 — 창 이전에 선점되고 창 이후에 커밋된 취소가
+     * 창을 그대로 통과한다. id 는 {@code INSERT} 시점에 매겨지고 뒤로 안 간다.
+     * 검증이 {@code hasHistoriesAddedAbove(frozenMaxHistoryId, …)} 로 같은 축을 이미 쓴다.
+     */
+    long latestHistoryId();
 
     /**
      * 이 청크가 <b>건드릴 후보</b>를 id 오름차순으로 {@code limit} 건까지 읽는다. <b>락을 안 잡는다.</b>
