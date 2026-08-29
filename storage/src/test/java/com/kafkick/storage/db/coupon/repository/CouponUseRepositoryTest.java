@@ -163,7 +163,14 @@ class CouponUseRepositoryTest {
      * {@code CouponIssueService}·{@code CouponUseService} 를 0회 참조한다). 그냥 지우면
      * 커버리지가 셋 빈다. 그래서 <b>주체만 살아 있는 경로로 갈아끼웠다.</b>
      *
-     * @return 만료된 건수. 조건부 UPDATE 의 매치 수라 "실제로 우리가 바꾼 행" 이다
+     * <p>⚠️ <b>{@code lockStock} 이 실패하면 0 을 돌려준다 — 정상적인 "만료할 것이 없다"
+     * 와 같은 값이다.</b> 배치도 그 자리에서 청크를 넘기므로 모양은 같지만, 검사에서는
+     * 그 둘이 구분이 안 된다는 것을 알고 봐야 한다. 재고 행이 없는 회차(그럴 일이 없게
+     * 시드가 함께 만든다)나 락 대기 초과가 그 갈래다 — 경합 검사가 예상과 다른 수를 내면
+     * <b>여기부터 의심한다.</b>
+     *
+     * @return 만료된 건수. 조건부 UPDATE 의 매치 수라 "실제로 우리가 바꾼 행" 이다.
+     *         {@code lockStock} 실패도 0 이다
      */
     private int expireViaBatchPath(long couponId, List<ExpireCandidate> candidates, Instant asOf) {
         LocalDateTime at = LocalDateTime.ofInstant(asOf, ZoneOffset.UTC);
