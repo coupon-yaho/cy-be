@@ -6,15 +6,19 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import com.kafkick.core.notification.domain.NotificationStatus;
 import com.kafkick.core.notification.domain.NotifyFailureReason;
-import com.kafkick.storage.db.support.UpdatableEntity;
-
 @Entity
 @Table(name = "notifications")
-public class NotificationEntity extends UpdatableEntity {
+public class NotificationEntity {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY) private Long id;
+    @Column(name = "created_at", nullable = false, updatable = false) private Instant createdAt;
+    @Column(name = "updated_at", nullable = false) private Instant updatedAt;
     @Column(name = "coupon_id", nullable = false) private Long couponId;
     @Column(name = "member_id", nullable = false) private Long memberId;
     @Column(name = "issuance_id", nullable = false) private Long issuanceId;
@@ -37,7 +41,7 @@ public class NotificationEntity extends UpdatableEntity {
             String channel, NotificationStatus status, int attemptCount, int resendCount,
             NotifyFailureReason lastFailureReason, String recipientContact, String messageBody,
             Instant createdAt, Instant updatedAt, Instant sentAt, Instant failedAt) {
-        super(id, createdAt, updatedAt);
+        this.id = id; this.createdAt = createdAt; this.updatedAt = updatedAt;
         this.couponId = couponId; this.memberId = memberId; this.issuanceId = issuanceId;
         this.channel = channel; this.status = status; this.attemptCount = attemptCount;
         this.resendCount = resendCount; this.lastFailureReason = lastFailureReason;
@@ -56,5 +60,8 @@ public class NotificationEntity extends UpdatableEntity {
     public String getRecipientContact() { return recipientContact; }
     public String getMessageBody() { return messageBody; }
     public Instant getSentAt() { return sentAt; }
+    public Long getId() { return id; }
+    public Instant getCreatedAt() { return createdAt; }
+    public Instant getUpdatedAt() { return updatedAt; }
     public Instant getFailedAt() { return failedAt; }
 }

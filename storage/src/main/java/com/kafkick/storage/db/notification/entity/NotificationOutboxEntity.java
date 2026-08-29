@@ -6,15 +6,18 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.NotificationOutboxStatus;
-import com.kafkick.storage.db.support.BaseEntity;
-
 @Entity
 @Table(name = "notification_outbox")
-public class NotificationOutboxEntity extends BaseEntity {
+public class NotificationOutboxEntity {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY) private Long id;
+    @Column(name = "created_at", nullable = false, updatable = false) private Instant createdAt;
     @Column(name = "notification_id", nullable = false) private Long notificationId;
     @Column(name = "attempt_seq", nullable = false) private int attemptSeq;
     @Enumerated(EnumType.STRING) @Column(name = "`trigger`", nullable = false, length = 8)
@@ -34,7 +37,8 @@ public class NotificationOutboxEntity extends BaseEntity {
             AttemptTrigger trigger, NotificationOutboxStatus status, int failureCount,
             Instant nextAttemptAt, Instant claimedAt, String claimToken,
             Instant createdAt, Instant publishedAt) {
-        super(id, createdAt);
+        this.id = id;
+        this.createdAt = createdAt;
         this.notificationId = notificationId;
         this.attemptSeq = attemptSeq;
         this.trigger = trigger;
@@ -54,5 +58,7 @@ public class NotificationOutboxEntity extends BaseEntity {
     public Instant getNextAttemptAt() { return nextAttemptAt; }
     public Instant getClaimedAt() { return claimedAt; }
     public String getClaimToken() { return claimToken; }
+    public Long getId() { return id; }
+    public Instant getCreatedAt() { return createdAt; }
     public Instant getPublishedAt() { return publishedAt; }
 }
