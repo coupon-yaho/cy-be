@@ -54,8 +54,17 @@ public final class ExpireStepContext {
     public static final String BLOCKED_COUPONS_KEY = "expire.blockedCoupons";
 
     /**
-     * <b>이 실행의 마지막 청크가 쓴 시각.</b> 되읽기가 <i>"이 실행 이후의 변경"</i> 을 빼는
+     * <b>이 실행이 끝난 시점의 이력 id 상한.</b> 되읽기가 <i>"이 실행 이후의 변경"</i> 을 빼는
      * 창으로 쓴다.
+     *
+     * <p><b>시각이 아니라 id 다.</b> {@code created_at} 은 <b>멱등 선점 시각</b>이라
+     * 백데이트되고, {@code committedAt} 은 <b>청크 시작</b> 시각이라 그 청크가 도는 동안
+     * 붙은 이력을 <i>"실행 이후"</i> 로 잘못 뺀다 — 둘 다 봇 리뷰가 짚었다. id 는
+     * {@code INSERT} 시점에 매겨지고 뒤로 안 간다. 검증도 같은 축을 쓴다
+     * ({@code hasHistoriesAddedAbove(frozenMaxHistoryId, …)}).
+     *
+     * <p><b>잡이 끝나는 자리에서 한 번 찍는다</b> — 청크마다 찍으면 마지막 청크가 도는
+     * 동안의 이력이 빠진다.
      *
      * <p><b>없으면 되읽기가 창을 못 건다.</b> {@code COUNT_PENDING} 이 창 없이 세면,
      * 실행이 끝난 <b>뒤</b> {@code CANCEL_USE}({@code USED → ISSUED})로 돌아온 행이 새로
@@ -67,7 +76,7 @@ public final class ExpireStepContext {
      * Step 문맥은 재시작이 그대로 복원하므로, 세대를 안 보면 되읽기가 <b>이전 실행의 창</b>
      * 으로 지금 실행을 판정한다.
      */
-    public static final String COMMITTED_AT_KEY = "expire.committedAt";
+    public static final String MAX_HISTORY_ID_KEY = "expire.maxHistoryId";
 
     /** 세대와 목록을 가르는 문자. 회차 id 에도 쉼표에도 안 나온다. */
     public static final String GENERATION_SEPARATOR = "|";
@@ -121,7 +130,7 @@ public final class ExpireStepContext {
     }
 
     /**
-     * <b>이 실행이 마지막으로 쓴 시각을 배치 메타에서 꺼낸다.</b> 형제
+     * <b>이 실행이 끝난 시점의 이력 id 상한을 배치 메타에서 꺼낸다.</b> 형제
      * {@link #blockedFrom} 과 같은 규약이다 — 세대가 안 맞으면 빈 {@code Optional} 이다.
      *
      * <p>⚠️ <b>비어 있다고 게이지를 NaN 으로 두지 않는다.</b> 형제 쪽은 그렇게 하는데
@@ -131,23 +140,23 @@ public final class ExpireStepContext {
      * 바꾸는 것</b>이다. 그래서 없으면 <b>창 없이</b> 센다 — 지금까지의 동작 그대로이고,
      * 새 실행이 한 번 돌면 바로 창이 걸린다.
      */
-    public static Optional<LocalDateTime> committedAtFrom(JobExecution jobExecution) {
+    public static Optional<Long> maxHistoryIdFrom(JobExecution jobExecution) {
         String prefix = jobExecution.getId() + GENERATION_SEPARATOR;
         return jobExecution.getStepExecutions().stream()
-                .map(step -> committedAtFor(
-                        step.getExecutionContext().getString(COMMITTED_AT_KEY, ""), prefix))
+                .map(step -> maxHistoryIdFor(
+                        step.getExecutionContext().getString(MAX_HISTORY_ID_KEY, ""), prefix))
                 .flatMap(Optional::stream)
                 .findFirst();
     }
 
-    /** 세대 접두사를 떼고 시각을 읽는다. 형식이 깨졌으면 <b>모른다</b> 로 둔다. */
-    static Optional<LocalDateTime> committedAtFor(String raw, String prefix) {
+    /** 세대 접두사를 떼고 id 를 읽는다. 형식이 깨졌으면 <b>모른다</b> 로 둔다. */
+    static Optional<Long> maxHistoryIdFor(String raw, String prefix) {
         if (!raw.startsWith(prefix)) {
             return Optional.empty();
         }
         try {
-            return Optional.of(LocalDateTime.parse(raw.substring(prefix.length())));
-        } catch (DateTimeParseException exception) {
+            return Optional.of(Long.parseLong(raw.substring(prefix.length())));
+        } catch (NumberFormatException exception) {
             return Optional.empty();
         }
     }

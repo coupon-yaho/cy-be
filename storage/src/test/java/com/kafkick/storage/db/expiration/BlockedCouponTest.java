@@ -217,19 +217,20 @@ class BlockedCouponTest {
         long returned = expiring();
         seed.overwriteStock(1);
 
-        LocalDateTime committedAt = AS_OF.plusMinutes(1);
-        // 실행이 끝난 뒤 취소가 그 행을 ISSUED 로 되돌린다. 만료 대상 조건은 그대로 맞는다.
-        // **이력으로 심는다** — 술어가 보는 축이 그것이다. updated_at 만 밀면
-        // "미래 시각으로 영영 멈춘 행" 과 구분이 안 되고, 그쪽은 계속 세어야 한다.
+        // 만료 실행이 끝난 시점의 이력 상한.
+        long maxHistoryId = adapter.latestHistoryId();
+        // 그 뒤 취소가 그 행을 ISSUED 로 되돌린다. 만료 대상 조건은 그대로 맞는다.
+        // **created_at 은 일부러 창보다 앞선 값으로 준다** — 그것이 멱등 선점 시각이라
+        // 백데이트되는 실제 형상이고, id 축은 그래도 잡아야 한다.
         seed.history(returned, IssuanceEventType.CANCEL_USE,
-                IssuanceStatus.USED, IssuanceStatus.ISSUED, committedAt.plusMinutes(5));
+                IssuanceStatus.USED, IssuanceStatus.ISSUED, AS_OF.minusHours(1));
 
         assertThat(adapter.countPending(AS_OF, null, List.of()).unexplained())
                 .as("창이 없으면 그 행이 '배치가 안 한 몫' 으로 세어진다 — 그것이 오탐이었다")
                 .isEqualTo(1);
 
-        assertThat(adapter.countPending(AS_OF, committedAt, List.of()).unexplained())
-                .as("창을 걸면 이 실행 이후의 변경이라 안 센다")
+        assertThat(adapter.countPending(AS_OF, maxHistoryId, List.of()).unexplained())
+                .as("id 축은 created_at 이 백데이트돼도 잡는다 — 그것이 시간 축을 버린 이유다")
                 .isZero();
     }
 
@@ -240,12 +241,12 @@ class BlockedCouponTest {
         long pending = expiring();
         seed.overwriteStock(1);
 
-        LocalDateTime committedAt = AS_OF.plusMinutes(10);
-        // 실행이 도는 동안 붙은 이력이다 — 창 안이라 그대로 세야 한다.
+        // 실행이 도는 동안 붙은 이력이다 — 상한을 그 뒤에 찍으므로 창 안이다.
         seed.history(pending, IssuanceEventType.ISSUE,
-                null, IssuanceStatus.ISSUED, committedAt.minusMinutes(1));
+                null, IssuanceStatus.ISSUED, AS_OF.plusMinutes(9));
+        long maxHistoryId = adapter.latestHistoryId();
 
-        assertThat(adapter.countPending(AS_OF, committedAt, List.of()).unexplained())
+        assertThat(adapter.countPending(AS_OF, maxHistoryId, List.of()).unexplained())
                 .as("창 안이면 그 실행이 처리했어야 하는 몫이 맞다 — 여기까지 자르면 진짜 사고를 놓친다")
                 .isEqualTo(1);
     }

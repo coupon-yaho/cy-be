@@ -151,8 +151,19 @@ public interface ExpirationRepository {
      * 곧 무시된다. 갈라야 <i>"배치가 일을 안 한다"</i> 와 <i>"데이터가 어긋나 있다"</i> 가
      * 서로 다른 알림이 된다.
      */
-    PendingExpiration countPending(LocalDateTime asOf, LocalDateTime committedAt,
+    PendingExpiration countPending(LocalDateTime asOf, Long maxHistoryId,
             List<Long> blockedCouponIds);
+
+    /**
+     * <b>지금까지 매겨진 이력 id 의 최댓값.</b> 만료 실행이 끝나며 한 번 찍어 Step 문맥에
+     * 싣고, 되읽기가 그것을 창으로 쓴다.
+     *
+     * <p><b>시각이 아니라 id 인 이유.</b> {@code issuance_histories.created_at} 은
+     * <b>멱등 선점 시각</b>이라 백데이트된다 — 창 이전에 선점되고 창 이후에 커밋된 취소가
+     * 창을 그대로 통과한다. id 는 {@code INSERT} 시점에 매겨지고 뒤로 안 간다.
+     * 검증이 {@code hasHistoriesAddedAbove(frozenMaxHistoryId, …)} 로 같은 축을 이미 쓴다.
+     */
+    long latestHistoryId();
 
     /**
      * 이 청크가 <b>건드릴 후보</b>를 id 오름차순으로 {@code limit} 건까지 읽는다. <b>락을 안 잡는다.</b>

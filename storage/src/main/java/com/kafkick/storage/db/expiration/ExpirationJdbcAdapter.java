@@ -171,10 +171,10 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
               FROM issuances
              WHERE status = 'ISSUED'
                AND expires_at < :asOf
-               AND (:committedAt IS NULL OR NOT EXISTS (
+               AND (:maxHistoryId IS NULL OR NOT EXISTS (
                        SELECT 1 FROM issuance_histories h
                         WHERE h.issuance_id = issuances.id
-                          AND h.created_at > :committedAt))
+                          AND h.id > :maxHistoryId))
             """;
 
     /** 회차 id 가 될 수 없는 값. auto-increment 라 음수가 나오지 않는다. */
@@ -307,6 +307,15 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
     }
 
     @Override
+    public long latestHistoryId() {
+        Long max = jdbcClient.sql("SELECT MAX(id) FROM issuance_histories")
+                .query(Long.class)
+                .optional()
+                .orElse(null);
+        return max == null ? 0L : max;
+    }
+
+    @Override
     public boolean lockStock(long couponId) {
         return !jdbcClient.sql(LOCK_STOCK)
                 .param("couponId", couponId)
@@ -336,11 +345,11 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
     }
 
     @Override
-    public PendingExpiration countPending(LocalDateTime asOf, LocalDateTime committedAt,
+    public PendingExpiration countPending(LocalDateTime asOf, Long maxHistoryId,
             List<Long> blockedCouponIds) {
         return jdbcClient.sql(COUNT_PENDING)
                 .param("asOf", asOf)
-                .param("committedAt", committedAt)
+                .param("maxHistoryId", maxHistoryId)
                 .param("blockedCoupons", withSentinel(blockedCouponIds))
                 .query((rs, rowNum) -> new PendingExpiration(rs.getLong(1), rs.getLong(2)))
                 .single();

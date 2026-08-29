@@ -107,8 +107,8 @@ public class ExpireJobConfig {
     /** 근거는 {@link ExpireStepContext#BLOCKED_COUPONS_KEY} 가 진다. 여기는 별칭이다. */
     static final String BLOCKED_COUPONS_KEY = ExpireStepContext.BLOCKED_COUPONS_KEY;
 
-    /** 근거는 {@link ExpireStepContext#COMMITTED_AT_KEY} 가 진다. 여기는 별칭이다. */
-    static final String COMMITTED_AT_KEY = ExpireStepContext.COMMITTED_AT_KEY;
+    /** 근거는 {@link ExpireStepContext#MAX_HISTORY_ID_KEY} 가 진다. 여기는 별칭이다. */
+    static final String MAX_HISTORY_ID_KEY = ExpireStepContext.MAX_HISTORY_ID_KEY;
 
     /** 근거는 {@link ExpireStepContext#GENERATION_SEPARATOR} 가 진다. 여기는 별칭이다. */
     private static final String GENERATION_SEPARATOR = ExpireStepContext.GENERATION_SEPARATOR;
@@ -247,6 +247,12 @@ public class ExpireJobConfig {
                     ExpireChunk chunk = ExpireChunk.from(
                             expirations.nextCandidates(asOf, afterId, chunkSize, blocked));
                     if (chunk.isEmpty()) {
+                        // **끝나는 자리에서 한 번 찍는다.** 되읽기가 "이 실행 이후의 변경" 을
+                        // 빼는 창이다. 청크마다 찍으면 마지막 청크가 도는 동안 붙은 이력이
+                        // 창 밖으로 밀려 **진짜 남은 일이 숨는다**(봇 리뷰가 짚었다).
+                        // 시각이 아니라 id 인 이유는 ExpireStepContext 가 적는다.
+                        context.putString(MAX_HISTORY_ID_KEY, generation + GENERATION_SEPARATOR
+                                + expirations.latestHistoryId());
                         return RepeatStatus.FINISHED;
                     }
                     // ③ 여기가 이 청크의 첫 쓰기 락이다. 발급·취소가 잠그는 그 행을
@@ -299,12 +305,6 @@ public class ExpireJobConfig {
                     // 것이 정상이다 — ①과 ③ 사이에 사용·취소된 건은 expired 에 안 들어온다.
                     metrics.processed(expired);
                     context.putLong(AFTER_ID_KEY, chunk.lastId());
-                    // **되읽기가 같은 창을 걸 수 있게 남긴다.** 청크마다 덮어써서 이 실행이
-                    // 쓴 시각 중 **가장 늦은 것**이 남는다 — 창의 목적이 "이 실행 이후의
-                    // 변경을 뺀다" 라 그 값이면 충분하다. 형제 제외 목록과 같은 이유로
-                    // 세대를 함께 싣는다(재시작이 Step 문맥을 그대로 복원한다).
-                    context.putString(COMMITTED_AT_KEY,
-                            generation + GENERATION_SEPARATOR + committedAt);
                     contribution.incrementWriteCount(expired);
                     return RepeatStatus.CONTINUABLE;
                 }, transactionManager)

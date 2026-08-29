@@ -306,14 +306,14 @@ public class ExpirePendingRefresher {
                 }
 
                 // 창은 못 읽어도 판정을 포기하지 않는다 — 근거는 ExpireStepContext
-                // #committedAtFrom 에 있다(이 키는 CY-768 이 새로 만든 것이라 배포 직후
+                // #maxHistoryIdFrom 에 있다(이 키는 CY-768 이 새로 만든 것이라 배포 직후
                 // 마지막 실행에는 반드시 없다).
-                LocalDateTime committedAt =
-                        ExpireStepContext.committedAtFrom(execution).orElse(null);
+                Long maxHistoryId =
+                        ExpireStepContext.maxHistoryIdFrom(execution).orElse(null);
 
                 return new Snapshot(
                         asOf,
-                        expirations.countPending(asOf, committedAt, blocked.get()),
+                        expirations.countPending(asOf, maxHistoryId, blocked.get()),
                         blocked.get().size());
             });
 
