@@ -306,9 +306,10 @@ public class VerifyJobConfig {
                     if (rules.hasUsagesAddedAbove(frozenMaxUsage, asOf)) {
                         throw new BusinessException(
                                 VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
-                                "실행 중에 asOf 이하 사용 이력이 추가됐습니다. V5 는 얼린 상한까지 "
-                                        + "접은 값을 읽었는데 그 행이 답을 바꿉니다 — 지문은 이 축을 "
-                                        + "안 봐서 같은 지문에 다른 검출이 나옵니다. asOf=" + asOf);
+                                "실행 중에 얼린 상한 위로 asOf 이하 사용 이력이 추가됐습니다. "
+                                        + "V5 가 그 행을 세지 않았는데 답이 달라집니다 — 지문은 "
+                                        + "이 축을 안 봐서 같은 지문에 다른 검출이 나옵니다. "
+                                        + "asOf=" + asOf);
                     }
 
                     // **리플레이 정렬의 전제를 여기서 잰다.** (created_at, id) 로 접는데 그 시각이
@@ -899,8 +900,9 @@ public class VerifyJobConfig {
                     StepExecution stepExecution = chunkContext.getStepContext().getStepExecution();
 
                     // 상한을 넘긴다. 안 넘기면 이 UPDATE 가 도는 순간의 모든 행을 세어
-                    // 같은 asOf 재실행이 다른 답을 낼 수 있고, assertFrozenStep 의 사용 축
-                    // 가드가 말하는 "V5 는 얼린 상한까지 읽었다" 가 거짓이 된다.
+                    // 같은 asOf 재실행이 다른 답을 낼 수 있다. 다만 이것으로 결정론이
+                    // 보장되지는 않는다 — MAX(id) 는 커밋 경계가 아니다. 한계와 닫는 법은
+                    // AsOfStateJdbcAdapter#applyActiveUsageCounts 에 적었다.
                     asOfStates.applyActiveUsageCounts(
                             requireRunId(stepExecution.getJobExecution()),
                             stepExecution.getJobParameters().getLocalDateTime("asOf"),

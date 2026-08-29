@@ -213,8 +213,14 @@ public interface VerificationRuleRepository {
      * 뜻이 정확히 맞는다 — 형제 이력 축이 같은 이유로 같은 기본값을 쓴다.
      *
      * <p><b>V5 도 이 상한을 쓴다</b> — {@code AsOfStateRepository#applyActiveUsageCounts} 가
-     * {@code id <= maxUsageId} 로 센다. 그래서 얼림 가드가 말하는
-     * <i>"V5 는 얼린 상한까지 접은 값을 읽었다"</i> 가 참이 된다.
+     * {@code id <= maxUsageId} 로 센다. 두 축이 같은 경계를 보게 하려는 것이다.
+     *
+     * <p>⚠️ <b>그래도 결정론이 보장되지는 않는다.</b> {@code MAX(id)} 는 커밋 경계가
+     * 아니라 <b>할당 순서</b>다. 상한 이하의 id 를 이미 받은 트랜잭션이 얼린 뒤 커밋하면
+     * V5 는 세는데 {@link #hasUsagesAddedAbove}({@code id > 상한})는 못 본다.
+     * <b>이력 축도 같은 모양이다</b>({@link #hasHistoriesAddedAbove} vs 리플레이의
+     * {@code h.id <= maxHistoryId}) — 두 축이 공유하는 한계이지 이 상한이 만든 것이 아니다.
+     * 닫는 법과 비용은 {@code AsOfStateJdbcAdapter#applyActiveUsageCounts} 에 적었다.
      */
     long latestUsageId();
 

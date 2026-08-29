@@ -835,7 +835,7 @@ class VerificationRuleJdbcAdapterTest {
         data.usage(other, AS_OF.minusHours(1), null);
 
         assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
-                .as("V5 는 얼린 상한까지 접은 값을 읽는데 이 행이 답을 바꾼다 — "
+                .as("V5 는 얼린 상한까지만 세는데 이 행이 답을 바꾼다 — "
                         + "지문은 이 축을 안 봐서 같은 지문에 다른 검출이 나온다")
                 .isTrue();
     }

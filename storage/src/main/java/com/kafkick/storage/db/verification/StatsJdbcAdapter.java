@@ -241,9 +241,15 @@ public class StatsJdbcAdapter implements StatsRepository {
      * ({@code loops=5.34e+6}). 180초짜리 잡의 약 4% 이고, 배포 버퍼 풀이 크면 전체가
      * 줄어드는 만큼 <b>이 비중은 오히려 올라간다.</b>
      *
-     * <p><b>이 인덱스는 기동 가드가 안 본다</b> — {@code SchemaPresenceGuard} 의
-     * {@code CRITICAL_INDEXES} 는 {@code BATCH_*} 둘뿐이다. 인덱스가 없는 스키마에서는
-     * 이 조인이 Step 데드라인({@code batch.verify.step-timeout-ms}, 기본 600초)을 먹는다.
+     * <p><b>인덱스가 없는 스키마는 만들 수 없다 — FK 가 강제한다.</b>
+     * {@code issuance_histories_ibfk_1}({@code issuance_id → issuances.id}) 때문에
+     * MySQL 이 선두 컬럼 {@code issuance_id} 인덱스를 항상 요구한다. 실제로
+     * {@code DROP INDEX} 를 시도하면 <i>"Cannot drop index … needed in a foreign key
+     * constraint"</i>(1553) 로 거절된다(실측). 그래서 복합 인덱스가 없는 스키마
+     * ({@code coupon_corrupt}·{@code coupon_v6})에는 FK 가 만든 단일
+     * {@code issuance_id} 인덱스가 대신 있고, 그것으로 조인이 선다 —
+     * 106만 이력에서 <b>1.1초</b>(실측). {@code SchemaPresenceGuard} 가 이 인덱스를
+     * 안 보는 것은 맞지만, <b>봐야 할 이유가 없다.</b>
      */
     private static final String COUNT_OUT_OF_ORDER = """
             SELECT COUNT(*)
