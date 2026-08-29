@@ -5,12 +5,19 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 # ⚠️ 빌드는 compose 가 도는 호스트(A)에서 해야 한다. B 에서 빌드하면 그 이미지는 B 의
 #    도커에만 있고 A 는 같은 태그를 레지스트리에서 찾다가 죽는다.
 SHA=$(cd "$REPO_ROOT" && git rev-parse --short HEAD)
+DIRTY=$(cd "$REPO_ROOT" && git status --porcelain | head -1)
+
 if [[ -n "${PERF_A_SSH:-}" ]]; then
+  # ⚠️ 실제로 빌드되는 소스는 A 의 워크트리다. B 의 SHA·dirty 로 태그를 붙이면 A 가
+  #    미커밋 상태여도 깨끗한 커밋 태그가 찍힌다 — 서로 다른 바이너리를 같은 조건으로
+  #    비교하게 되고, 그건 이 하네스가 막으려는 바로 그 사고다.
+  #    커밋은 양쪽이 같아야 하고, dirty 판정은 빌드 호스트인 A 것을 쓴다.
   A_SHA=$(a_exec "git rev-parse --short HEAD" | tr -d '\r\n')
   [[ "$A_SHA" == "$SHA" ]] \
     || die "A 의 저장소가 다른 커밋이다 — A=$A_SHA · B=$SHA. 같은 커밋에서 재야 비교가 성립한다."
+  DIRTY=$(a_exec "git status --porcelain | head -1" | tr -d '\r\n')
+  [[ -n "$DIRTY" ]] && log "⚠️ dirty 판정은 빌드 호스트(A) 기준이다."
 fi
-DIRTY=$(cd "$REPO_ROOT" && git status --porcelain | head -1)
 if [[ -n "$DIRTY" ]]; then
   # 더러운 워크트리로 빌드하면 태그의 SHA 가 이미지 내용을 안 가리킨다. 회차 간
   # 비교가 그 순간 불가능해진다.

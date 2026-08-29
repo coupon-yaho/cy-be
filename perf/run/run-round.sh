@@ -85,7 +85,12 @@ log "회차 사후 상태"
 MW_START=$(jq -r '.perf.measure_window_start_epoch // empty' "$OUT/k6-summary.json")
 MW_END=$(jq -r '.perf.measure_window_end_epoch // empty' "$OUT/k6-summary.json")
 WINDOW_SOURCE=measure
-if [[ -z "$MW_START" || -z "$MW_END" || "$MW_END" -le "$MW_START" ]]; then
+# 표본이 있는데 창이 0초로 접히는 경우(모든 이터레이션이 같은 밀리초 + 그 값이 정확히
+# 초 경계)에는 창을 버리지 않고 1초로 넓힌다. 표본이 있는데 안 재는 것이 더 나쁘다.
+if [[ -n "$MW_START" && -n "$MW_END" && "$MW_END" -le "$MW_START" ]]; then
+  MW_END=$(( MW_START + 1 ))
+fi
+if [[ -z "$MW_START" || -z "$MW_END" ]]; then
   # 측정 구간에 이터레이션이 하나도 안 돌면 창이 안 나온다. 추정으로 채우지 않는다.
   log "⚠️ 측정 구간 창을 못 얻었다. scrape 지표를 <측정 실패>로 남긴다"
   WINDOW_SOURCE=unavailable

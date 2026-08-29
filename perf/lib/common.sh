@@ -49,7 +49,10 @@ remote_env_prefix() {
 # A(발급 경로 호스트)에서 명령을 돌린다. PERF_A_SSH 가 비어 있으면 로컬이다.
 a_exec() {
   if [[ -n "${PERF_A_SSH:-}" ]]; then
-    ssh "$PERF_A_SSH" "cd ${PERF_A_REPO:-$REPO_ROOT} && $(remote_env_prefix)$*"
+    # 경로를 따로 quote 한다. 공백이나 셸 특수문자가 든 경로면 cd 가 엉뚱한 데로 가거나
+    # 통째로 실패한다 — 그러면 원격 빌드와 모든 compose 조작이 안 돈다.
+    local repo; repo=$(printf '%q' "${PERF_A_REPO:-$REPO_ROOT}")
+    ssh "$PERF_A_SSH" "cd $repo && $(remote_env_prefix)$*"
   else
     ( cd "$REPO_ROOT" && eval "$*" )
   fi
@@ -84,7 +87,13 @@ promq() {
 # ⚠️ 결과가 벡터면 첫 항목만 집는다. api 가 여러 대인 질의에는 쓰면 안 된다 —
 #    호출부에서 avg()/max()/min() 으로 감싸 스칼라로 만들어 넘겨라. 안 감싸면
 #    "4대의 건강도" 가 아니라 "아무 한 대" 가 기록된다.
-promq_scalar() { promq query "$1" | jq -r '.data.result[0].value[1] // empty'; }
+# ⚠️ 추가 query 인자(time=·start=·end=)를 반드시 그대로 넘긴다. 예전에는 "$1" 만 넘겨
+#    호출부의 time=<창 끝> 이 조용히 버려졌고, 그러면 range 질의가 "지금" 시각에 평가된다 —
+#    창을 애써 계산해 놓고 창 밖의 값을 기록하게 된다(실측으로 밟았다).
+promq_scalar() {
+  local expr="$1"; shift
+  promq query "$expr" "$@" | jq -r '.data.result[0].value[1] // empty'
+}
 
 mysql_exec() {
   # -N -B: 헤더 없이 탭 구분. 스크립트가 파싱한다.

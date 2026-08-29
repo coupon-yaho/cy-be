@@ -24,6 +24,12 @@ from pathlib import Path
 
 TREND = ["med", "p(95)", "p(99)"]
 
+# summarize_group 이 중앙값을 내는 키. 전부 실패한 구간의 자리표시자도 같은 키를 갖는다.
+TREND_KEYS = ["achieved_rps", "successes", "rejections", "errors", "connect_failures",
+              "timeouts", "transport_errors",
+              "dropped", "success_med", "success_p95", "success_p99",
+              "soldout_med", "soldout_p99", "issuances"]
+
 
 def metric(summary, name, field):
     m = summary.get("metrics", {}).get(name)
@@ -60,6 +66,8 @@ def load_rep(d: Path):
         "rejections": metric(k6, "issue_rejections", "count") or 0,
         "errors": metric(k6, "issue_errors", "count") or 0,
         "connect_failures": metric(k6, "issue_connect_failures", "count") or 0,
+        "timeouts": metric(k6, "issue_timeouts", "count") or 0,
+        "transport_errors": metric(k6, "issue_transport_errors", "count") or 0,
         "dropped": metric(k6, "dropped_iterations", "count") or 0,
         "success_med": metric(k6, "issue_success_duration", "med"),
         "success_p95": metric(k6, "issue_success_duration", "p(95)"),
@@ -83,9 +91,7 @@ def med(values):
 
 
 def summarize_group(reps):
-    keys = ["achieved_rps", "successes", "rejections", "errors", "connect_failures",
-            "dropped", "success_med", "success_p95", "success_p99",
-            "soldout_med", "soldout_p99", "issuances"]
+    keys = TREND_KEYS
     out = {"n": len(reps),
            "configured_rps": reps[0]["configured_rps"],
            "configured_requests": reps[0]["configured_requests"],
@@ -109,7 +115,19 @@ def load_run(run_dir: Path):
         if reps:
             g = summarize_group(reps)
             g["excluded"] = len(found) - len(reps)
-            groups[rate_dir.name] = g
+        elif found:
+            # ⚠️ 유효 반복이 0개여도 그룹을 지우지 않는다. 지우면 그 구간이 요약과
+            #    비교표에서 통째로 사라져, "안 돌렸다" 와 "전부 깨졌다" 가 같아진다.
+            g = {"n": 0, "excluded": len(found), "engine": None,
+                 "configured_rps": None, "configured_requests": None,
+                 "over_issued_any": False, "dup_members_max": 0,
+                 "ping_avg_ms": None, "ping_stddev_max": None}
+            for k in TREND_KEYS:
+                g[k] = None
+                g[k + "_all"] = []
+        else:
+            continue
+        groups[rate_dir.name] = g
     return groups
 
 
@@ -140,17 +158,22 @@ def print_run(run_dir: Path, groups):
         print(f"   heap {a['java_tool_options']} · mysql max_connections {m['max_connections']}")
 
     hdr = (f"{'구간':>10} {'n':>2} {'설정rps':>9} {'달성rps':>9} {'성공':>7} {'거절':>7} "
-           f"{'5xx':>5} {'연결실패':>7} {'못쏨':>7} {'성공med':>9} {'성공p95':>9} {'성공p99':>9} {'매진p99':>9}")
+           f"{'5xx':>5} {'연결실패':>7} {'타임아웃':>7} {'전송오류':>7} {'못쏨':>7} "
+           f"{'성공med':>9} {'성공p95':>9} {'성공p99':>9} {'매진p99':>9}")
     print("\n" + hdr)
     print("-" * len(hdr))
     for name, g in groups.items():
         n = g["n"]
-        mark = "" if n >= 5 else f"  ← 반복 {n}회. 5회 미만은 중앙값으로 비교하지 않는다"
-        if g.get("excluded"):
+        if n == 0:
+            mark = f"  ← 유효 반복 0회. {g['excluded']}개 시도가 전부 실패했다 — 비교 불가"
+        else:
+            mark = "" if n >= 5 else f"  ← 반복 {n}회. 5회 미만은 중앙값으로 비교하지 않는다"
+        if n > 0 and g.get("excluded"):
             mark += f"  [{g['excluded']}개 반복이 k6 비정상 종료로 제외됨]"
         print(f"{name:>10} {n:>2} {fmt(g['configured_rps'],0):>9} {fmt(g['achieved_rps']):>9} "
               f"{fmt(g['successes'],0):>7} {fmt(g['rejections'],0):>7} {fmt(g['errors'],0):>5} "
-              f"{fmt(g['connect_failures'],0):>7} {fmt(g['dropped'],0):>7} "
+              f"{fmt(g['connect_failures'],0):>7} {fmt(g['timeouts'],0):>7} "
+              f"{fmt(g['transport_errors'],0):>7} {fmt(g['dropped'],0):>7} "
               f"{fmt(g['success_med'],2):>9} {fmt(g['success_p95'],2):>9} {fmt(g['success_p99'],2):>9} "
               f"{fmt(g['soldout_p99'],2):>9}{mark}")
 
@@ -164,6 +187,13 @@ def print_run(run_dir: Path, groups):
         if (g["connect_failures"] or 0) > 0:
             flags.append(f"연결실패 {int(g['connect_failures'])}건 — 응답이 아니다. "
                          "톰캣 수용 상한과 클라이언트 임시 포트를 먼저 본다")
+        if (g["timeouts"] or 0) > 0:
+            flags.append(f"타임아웃 {int(g['timeouts'])}건 — 연결은 됐는데 못 끝냈다. "
+                         "연결실패와 진단이 반대다")
+        if (g["transport_errors"] or 0) > 0:
+            flags.append(f"기타 전송 오류 {int(g['transport_errors'])}건")
+        if g["n"] == 0:
+            flags.append(f"유효 반복 없음 — {g['excluded']}개 시도가 전부 실패했다")
         print(f"     {name}: {'· '.join(flags) if flags else 'OK'}")
         print(f"        반복별 성공med = {[fmt(v,2) for v in g['success_med_all']]}")
         print(f"        ping avg {fmt(g['ping_avg_ms'],2)}ms · stddev 최대 {fmt(g['ping_stddev_max'],2)}ms")
@@ -178,18 +208,28 @@ def print_compare(runs):
     #    정상 비교처럼 읽힌다 — 하네스의 5회 규약을 표가 우회하게 된다.
     print("\n  [반복 수 n]")
     print("  " + hdr)
-    thin = []
+    thin, missing = [], []
     for rate in rates:
         cells = []
         for d, g in runs:
             if rate in g:
                 n = g[rate]["n"]
-                cells.append(str(n) if n >= 5 else f"{n} (부족)")
-                if n < 5:
-                    thin.append(f"{d.name}/{rate}={n}회")
+                if n == 0:
+                    cells.append("0 (전부 실패)")
+                    thin.append(f"{d.name}/{rate}=유효 0회")
+                else:
+                    cells.append(str(n) if n >= 5 else f"{n} (부족)")
+                    if n < 5:
+                        thin.append(f"{d.name}/{rate}={n}회")
             else:
-                cells.append("—")
+                # ⚠️ 한쪽에만 있는 구간을 —  하나로 넘기면, 다른 쪽 수치가 그대로 찍혀
+                #    같은 구간을 나란히 잰 것처럼 읽힌다. 명시적으로 비교 불가로 적는다.
+                cells.append("없음")
+                missing.append(f"{d.name}/{rate}")
         print(f"  {rate:>10} " + " ".join(f"{c:>18}" for c in cells))
+    if missing:
+        print("\n  ⚠️ 한쪽 묶음에만 있는 구간이 있다 — " + ", ".join(missing) + " 없음.")
+        print("     그 행은 같은 조건을 나란히 잰 것이 아니다. 비교에서 뺀다.")
     if thin:
         print("\n  ⚠️ 5회 미만인 묶음이 있다 — " + ", ".join(thin) + ".")
         print("     같은 조건을 세 번 쟀을 때 med 가 3ms · 82ms · 224ms 로 흔들린 적이 있다.")
@@ -198,7 +238,9 @@ def print_compare(runs):
                                  ("success_med", "성공med(ms)", 2),
                                  ("success_p99", "성공p99(ms)", 2),
                                  ("soldout_p99", "매진p99(ms)", 2),
-                                 ("connect_failures", "연결실패", 0)]:
+                                 ("connect_failures", "연결실패", 0),
+                                 ("timeouts", "타임아웃", 0),
+                                 ("transport_errors", "전송오류", 0)]:
         print(f"\n  [{label}]")
         print("  " + hdr)
         for rate in rates:

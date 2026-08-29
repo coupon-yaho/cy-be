@@ -222,6 +222,13 @@ perf/results/<run-id>/
   summary.txt
 ```
 
+`round.json` 의 `scrape_health` 는 **측정 구간 창에서** 평가한다. 창을 못 얻으면 추정으로
+채우지 않고 `source: "unavailable"` 로 두고 값을 전부 `null` 로 남긴다.
+
+> ⚠️ Prometheus range 질의는 `time=<창 끝>` 을 반드시 함께 넘겨야 한다. 안 넘기면
+> "지금" 시각에 평가되어, 창을 계산해 놓고 창 밖의 값을 기록한다. `promq_scalar` 가
+> 추가 인자를 그대로 전달하는지가 그 계약이다(한 번 밟았다).
+
 `meta.json` 이 없으면 회차 간 비교가 불가능하다. 들어 있는 것:
 
 - 커밋 SHA · 브랜치 · **미커밋 파일 수**(더러운 워크트리로 빌드하면 태그의 SHA 가 이미지
