@@ -46,8 +46,19 @@ const errors = new Counter('issue_errors');
 //    설정 800/s x 5s 회차에서 http_reqs.rate 가 185/s 로 나왔다 —
 //    (워밍업 1000건 + 측정 4001건) / 27초였다. 측정 구간만 따로 센다.
 const measureAttempts = new Counter('issue_attempts');
-// duration 0s 인 실패는 응답이 아니라 연결 실패다. 서버 지연으로 세면 안 된다.
+// ⚠️ 측정 구간의 실제 시각. Prometheus range query 를 이 창으로 잘라야 한다 —
+//    k6 프로세스 전체를 창으로 쓰면 워밍업 25초 + 대기 12초 + gracefulStop 이 전부
+//    들어가 CPU·scrape 수치가 측정 구간 것이 아니게 된다. Trend 의 min·max 가
+//    첫 이터레이션과 마지막 이터레이션의 시작 시각이라 그대로 창이 된다.
+const measureClock = new Trend('measure_clock_ms');
+// 응답이 아예 없는 실패(status 0). 서버 지연으로 세면 안 된다.
+// ⚠️ status 0 을 전부 "연결 실패" 로 뭉치면 안 된다 — 60초 요청 타임아웃도 여기 들어온다.
+//    톰캣 수용 상한·임시 포트 고갈의 근거로 쓰려면 연결 실패만 따로 세야 하고,
+//    타임아웃은 오히려 "서버가 받긴 했는데 못 끝냈다" 라 정반대 진단이다.
+//    k6 error_code 대역으로 가른다 — 1100번대 DNS · 1200번대 연결 · 1050 요청 타임아웃.
 const connectFailures = new Counter('issue_connect_failures');
+const timeouts = new Counter('issue_timeouts');
+const otherTransportErrors = new Counter('issue_transport_errors');
 
 const successDuration = new Trend('issue_success_duration', true);
 const soldOutDuration = new Trend('issue_rejected_sold_out_duration', true);
@@ -139,6 +150,7 @@ export function warmup() {
 
 export function measure() {
   measureAttempts.add(1);
+  measureClock.add(Date.now());
   // 회차 단위 1인 1매다. 매 요청 서로 다른 회원이어야 하고, 그래서 요청 수만큼
   // 회원이 필요하다. 겹치면 ALREADY_ISSUED 가 나고 발급 경로가 아니라 멱등 경로를 잰다.
   const memberId = MEMBER_BASE + exec.scenario.iterationInTest;
@@ -148,7 +160,15 @@ export function measure() {
   //    세면 분포가 통째로 거짓이 된다. 톰캣 수용 상한(max-connections + accept-count)을
   //    넘기면 실제로 이쪽으로 찍힌다.
   if (res.status === 0) {
-    connectFailures.add(1, { error: res.error_code ? String(res.error_code) : 'unknown' });
+    const ec = Number(res.error_code || 0);
+    const tag = { error_code: String(ec) };
+    if (ec === 1050) {
+      timeouts.add(1, tag);                    // 요청 타임아웃
+    } else if ((ec >= 1200 && ec < 1300) || (ec >= 1100 && ec < 1200)) {
+      connectFailures.add(1, tag);             // 연결 거부·리셋·DNS
+    } else {
+      otherTransportErrors.add(1, tag);        // TLS·HTTP2·그 밖
+    }
     return;
   }
 
@@ -185,8 +205,12 @@ export function handleSummary(data) {
   // 못 쏜 것은 시간에 늘어지지 않고 dropped_iterations 로 빠지므로 이 나눗셈이 정확하다.
   const attempts = (data.metrics.issue_attempts
     && data.metrics.issue_attempts.values.count) || 0;
+  const clock = data.metrics.measure_clock_ms && data.metrics.measure_clock_ms.values;
   data.perf = {
     measure_attempts: attempts,
+    // Prometheus 질의를 자를 창. 없으면 호출부가 <측정 실패> 로 다뤄야 한다.
+    measure_window_start_epoch: clock ? Math.floor(clock.min / 1000) : null,
+    measure_window_end_epoch: clock ? Math.ceil(clock.max / 1000) : null,
     target_seconds: TARGET_SECONDS,
     configured_rate_per_sec: TARGET_RATE,
     achieved_arrival_rps: TARGET_SECONDS > 0 ? attempts / TARGET_SECONDS : null,
@@ -218,7 +242,9 @@ function textLine(data) {
     `  성공             ${fmt(c('issue_successes'))}`,
     `  거절             ${fmt(c('issue_rejections'))}`,
     `  5xx              ${fmt(c('issue_errors'))}`,
-    `  연결 실패        ${fmt(c('issue_connect_failures'))}   <- 응답이 아니다`,
+    `  연결 실패        ${fmt(c('issue_connect_failures'))}   <- 응답이 아니다. 수용 상한·임시 포트를 본다`,
+    `  타임아웃         ${fmt(c('issue_timeouts'))}   <- 받긴 했는데 못 끝냈다. 연결 실패와 진단이 반대다`,
+    `  기타 전송 오류   ${fmt(c('issue_transport_errors'))}`,
     `  못 쏜 것         ${fmt(c('dropped_iterations'))}`,
     `  성공 med/p95/p99 ${fmt(g('issue_success_duration', 'med'))} / ${fmt(g('issue_success_duration', 'p(95)'))} / ${fmt(g('issue_success_duration', 'p(99)'))} ms`,
     `  매진 med/p99     ${fmt(g('issue_rejected_sold_out_duration', 'med'))} / ${fmt(g('issue_rejected_sold_out_duration', 'p(99)'))} ms`,

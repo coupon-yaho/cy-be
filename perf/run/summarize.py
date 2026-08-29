@@ -41,6 +41,12 @@ def load_rep(d: Path):
         # 못 읽은 것과 0 은 다르다. 0 으로 채우지 않는다.
         print(f"  ! {d} 를 못 읽었다 — {e}", file=sys.stderr)
         return None
+    # ⚠️ k6 가 0 이 아닌 코드로 끝난 반복은 온전한 측정이 아니다(중단·스크립트 오류).
+    #    요약 파일이 남아 있다고 정상 반복으로 세면 그 값이 중앙값을 오염시킨다.
+    if rnd.get("k6_exit_code", 0) != 0:
+        print(f"  ! {d} 는 k6 rc={rnd['k6_exit_code']} 로 끝났다 — 중앙값에서 제외한다",
+              file=sys.stderr)
+        return None
     return {
         "dir": d.name,
         "configured_rps": rnd["configured_rate_per_sec"],
@@ -96,10 +102,14 @@ def summarize_group(reps):
 
 def load_run(run_dir: Path):
     groups = {}
+    # 제외된 반복 수도 세어 둔다 — "원래 2회였다" 와 "5회 중 3회가 깨졌다" 는 다르다.
     for rate_dir in sorted(run_dir.glob("rate-*"), key=lambda p: int(p.name.split("-")[1])):
-        reps = [r for r in (load_rep(d) for d in sorted(rate_dir.glob("rep-*"))) if r]
+        found = sorted(rate_dir.glob("rep-*"))
+        reps = [r for r in (load_rep(d) for d in found) if r]
         if reps:
-            groups[rate_dir.name] = summarize_group(reps)
+            g = summarize_group(reps)
+            g["excluded"] = len(found) - len(reps)
+            groups[rate_dir.name] = g
     return groups
 
 
@@ -136,6 +146,8 @@ def print_run(run_dir: Path, groups):
     for name, g in groups.items():
         n = g["n"]
         mark = "" if n >= 5 else f"  ← 반복 {n}회. 5회 미만은 중앙값으로 비교하지 않는다"
+        if g.get("excluded"):
+            mark += f"  [{g['excluded']}개 반복이 k6 비정상 종료로 제외됨]"
         print(f"{name:>10} {n:>2} {fmt(g['configured_rps'],0):>9} {fmt(g['achieved_rps']):>9} "
               f"{fmt(g['successes'],0):>7} {fmt(g['rejections'],0):>7} {fmt(g['errors'],0):>5} "
               f"{fmt(g['connect_failures'],0):>7} {fmt(g['dropped'],0):>7} "
@@ -161,6 +173,27 @@ def print_compare(runs):
     print("\n== 묶음 간 비교 (각 칸은 반복의 중앙값)")
     rates = sorted({r for _, g in runs for r in g}, key=lambda s: int(s.split("-")[1]))
     hdr = f"{'구간':>10} " + " ".join(f"{d.name[-16:]:>18}" for d, _ in runs)
+
+    # ⚠️ 표본 수를 먼저 낸다. 이걸 안 보이면 1회짜리 묶음 둘을 나란히 놓은 표가
+    #    정상 비교처럼 읽힌다 — 하네스의 5회 규약을 표가 우회하게 된다.
+    print("\n  [반복 수 n]")
+    print("  " + hdr)
+    thin = []
+    for rate in rates:
+        cells = []
+        for d, g in runs:
+            if rate in g:
+                n = g[rate]["n"]
+                cells.append(str(n) if n >= 5 else f"{n} (부족)")
+                if n < 5:
+                    thin.append(f"{d.name}/{rate}={n}회")
+            else:
+                cells.append("—")
+        print(f"  {rate:>10} " + " ".join(f"{c:>18}" for c in cells))
+    if thin:
+        print("\n  ⚠️ 5회 미만인 묶음이 있다 — " + ", ".join(thin) + ".")
+        print("     같은 조건을 세 번 쟀을 때 med 가 3ms · 82ms · 224ms 로 흔들린 적이 있다.")
+        print("     아래 표는 스모크 확인용이고, v1/v2 판정 근거로 인용하지 않는다.")
     for field, label, digits in [("achieved_rps", "달성rps", 1),
                                  ("success_med", "성공med(ms)", 2),
                                  ("success_p99", "성공p99(ms)", 2),

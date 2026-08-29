@@ -26,10 +26,30 @@ done < <(grep -vE '^\s*#|^\s*$' "$PERF_ENV_FILE")
 : "${A_HOST:?perf.env 에 A_HOST 가 필요하다}"
 : "${COMPOSE_PROJECT:?}"
 
+# ⚠️ A 에서 도는 compose 가 보간하는 값들. 원격 모드에서 이걸 안 넘기면 A 의 compose 가
+#    전부 기본값으로 뜬다 — replica 수·메모리·톰캣 상한이 선언과 달라지고, 그런데도
+#    preflight 는 "선언값" 을 로컬 셸에서 읽으므로 어긋난 줄 모른다.
+#    이미지 태그도 여기 있어야 한다. 없으면 A 가 .env 의 기본 태그를 pull 하려다 죽는다.
+PERF_REMOTE_VARS=(
+  COUPON_IMAGE API_IMAGE_TAG BATCH_IMAGE_TAG PERF_IMAGE_REPO
+  PERF_API_REPLICAS PERF_API_MEM PERF_API_HEAP PERF_BATCH_HEAP
+  PERF_TOMCAT_MAX_CONNECTIONS PERF_TOMCAT_ACCEPT_COUNT PERF_TOMCAT_THREADS_MAX
+  PERF_DB_POOL_SIZE PERF_MYSQL_MAX_CONNECTIONS PERF_BATCH_SCHEDULING_ENABLED
+  PERF_TARGET_ROUND_ID PERF_LB_PORT
+)
+
+remote_env_prefix() {
+  local v out=""
+  for v in "${PERF_REMOTE_VARS[@]}"; do
+    [[ -n "${!v:-}" ]] && out+="$(printf '%s=%q ' "$v" "${!v}")"
+  done
+  printf '%s' "$out"
+}
+
 # A(발급 경로 호스트)에서 명령을 돌린다. PERF_A_SSH 가 비어 있으면 로컬이다.
 a_exec() {
   if [[ -n "${PERF_A_SSH:-}" ]]; then
-    ssh "$PERF_A_SSH" "cd ${PERF_A_REPO:-$REPO_ROOT} && $*"
+    ssh "$PERF_A_SSH" "cd ${PERF_A_REPO:-$REPO_ROOT} && $(remote_env_prefix)$*"
   else
     ( cd "$REPO_ROOT" && eval "$*" )
   fi
@@ -61,6 +81,9 @@ promq() {
   esac
 }
 
+# ⚠️ 결과가 벡터면 첫 항목만 집는다. api 가 여러 대인 질의에는 쓰면 안 된다 —
+#    호출부에서 avg()/max()/min() 으로 감싸 스칼라로 만들어 넘겨라. 안 감싸면
+#    "4대의 건강도" 가 아니라 "아무 한 대" 가 기록된다.
 promq_scalar() { promq query "$1" | jq -r '.data.result[0].value[1] // empty'; }
 
 mysql_exec() {

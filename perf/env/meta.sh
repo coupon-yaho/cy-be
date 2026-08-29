@@ -14,8 +14,17 @@ SHA=$(cd "$REPO_ROOT" && git rev-parse HEAD)
 BRANCH=$(cd "$REPO_ROOT" && git rev-parse --abbrev-ref HEAD)
 DIRTY=$(cd "$REPO_ROOT" && git status --porcelain | wc -l | tr -d ' ')
 
-API_TAG="${API_IMAGE_TAG:-}"; BATCH_TAG="${BATCH_IMAGE_TAG:-}"
-API_IMAGE_ID=$(a_exec "docker inspect --format '{{.Image}}' \$(docker compose -p $COMPOSE_PROJECT ps -q api | head -1)" 2>/dev/null || true)
+# ⚠️ 환경변수에서 읽지 않는다. 태그는 up.sh 프로세스에서만 export 되므로, 나중에 따로
+#    도는 preflight.sh · run-round.sh 에서는 항상 null 이 된다 — 결과에 이미지 태그를
+#    남긴다는 이 하네스의 핵심 계약이 조용히 깨진다. 실제로 도는 컨테이너에서 읽는다.
+inspect_of() {
+  a_exec "docker inspect --format '$2' \$(docker compose -p $COMPOSE_PROJECT ps -q $1 | head -1)" 2>/dev/null \
+    | tr -d '\r' || true
+}
+API_TAG=$(inspect_of api '{{.Config.Image}}')
+BATCH_TAG=$(inspect_of batch '{{.Config.Image}}')
+API_IMAGE_ID=$(inspect_of api '{{.Image}}')
+[[ -z "$API_TAG" ]] && notes+=("api 컨테이너에서 이미지 태그를 못 읽었다 — 스택이 안 떠 있다")
 
 # 컨테이너 수 — 선언값(PERF_API_REPLICAS)과 실제가 다르면 그 자체가 회차 무효 사유다.
 API_RUNNING=$(a_exec "docker compose -p $COMPOSE_PROJECT ps -q api" 2>/dev/null | grep -c . || true)
@@ -50,6 +59,9 @@ K6_VERSION=$(k6 version 2>/dev/null | head -1 || true)
 PORT_FIRST=$(sysctl -n net.inet.ip.portrange.first 2>/dev/null || true)
 PORT_LAST=$(sysctl -n net.inet.ip.portrange.last 2>/dev/null || true)
 TCP_MSL=$(sysctl -n net.inet.tcp.msl 2>/dev/null || true)
+# ⚠️ 이름이 at_capture 인 이유 — 이 스크립트는 회차 뒤에도 불린다(run-round.sh). 그때 값은
+#    이번 회차가 만든 TIME_WAIT 을 포함한다. "회차 시작 전에 충분했는가" 는
+#    round.json 의 time_wait_before_k6 를 본다.
 TIME_WAIT=$(netstat -an -p tcp 2>/dev/null | grep -c TIME_WAIT || true)
 
 # B->A 왕복. 무선 구간이라 회차마다 잰다. 지터가 크면 그 회차는 버린다.

@@ -24,6 +24,11 @@ services:
     #    컨테이너가 같은 포트를 잡으려다 죽는다. 앞에 nginx 를 세운다.
     ports: !reset null
     environment:
+      # ⚠️ 회차 환경의 수신 포트를 배포가 못박는다. compose.yml 은 .env 의 SERVER_PORT 를
+      #    컨테이너 수신 포트로 쓰는데, nginx upstream 은 api:8080 고정이다 — .env 가
+      #    8080 이 아니면 발급 요청이 전부 502 가 되고, 기동 점검은 actuator 9090 만 보므로
+      #    그 상태로도 회차가 진행된다.
+      SERVER_PORT: "8080"
       # ⚠️ 컨테이너 메모리의 25% 가 기본 힙이다. 3g 제한이면 768MB 이고, 실측에서
       #    api 가 OOMKilled 로 세 번 죽었다. 명시한다.
       JAVA_TOOL_OPTIONS: >-
@@ -51,6 +56,10 @@ services:
       #    워밍업 호출이 500(RedisConnectionFailureException)으로 죽는다(실측).
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      # ⚠️ 워밍업 URL 이 이 포트로 붙는다. compose.yml 은 .env 의 BATCH_PORT 로 정하는데
+      #    하네스는 .env 를 안 읽으므로, 여기서 못박지 않으면 둘이 갈라져 V2 회차 생성이
+      #    Connection refused 로 즉시 죽는다.
+      BATCH_PORT: "9091"
       JAVA_TOOL_OPTIONS: -Xms${PERF_BATCH_HEAP:-512m} -Xmx${PERF_BATCH_HEAP:-512m}
       # 회차 중 검증 배치가 MySQL 을 바꾸지 않게 한다(measurement-protocol.md).
       BATCH_SCHEDULING_ENABLED: "${PERF_BATCH_SCHEDULING_ENABLED:-false}"

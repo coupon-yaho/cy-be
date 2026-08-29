@@ -76,7 +76,12 @@ cy-631 회차(`~/Downloads/cy-631-results/*.json`)의 통과 요청 **16,777** �
 ### 스크립트는 어디서 도나
 
 `perf/run/*` 은 **B(부하기)** 에서 돈다. A 의 도커를 만져야 하는 부분은 `PERF_A_SSH` 로
-넘긴다(비어 있으면 로컬 도커를 본다).
+넘긴다(비어 있으면 로컬 도커를 본다). 원격 모드에서는
+
+- **이미지도 A 에서 빌드한다.** B 에서 빌드하면 그 이미지는 B 의 도커에만 있다.
+  빌드 전에 A 와 B 의 커밋이 같은지 확인하고, 다르면 멈춘다.
+- `PERF_*` 와 이미지 태그를 ssh 명령에 실어 보낸다. 안 보내면 A 의 compose 가 전부
+  기본값으로 뜨는데, preflight 는 로컬 셸의 선언값을 읽으므로 어긋난 줄 모른다.
 
 ```
 PERF_A_SSH=user@192.168.0.20
@@ -185,10 +190,13 @@ k6:  워밍업 구간(300/s x 25s)  →  측정 구간
 >
 > 워밍업 회차를 **따로** 두는 이유 — 워밍업 트래픽도 발급이라 같은 회차를 쓰면 재고를 먹는다.
 
-> **같은 조건을 최소 5회 반복한다.** 같은 이미지·같은 300/s 를 세 번 쟀는데 med 가
-> **3ms · 82ms · 224ms** 로 흔들렸다. 표본 하나로 두 변형을 비교하면 잡음과 차이를
-> 구분할 수 없다. 비교는 **중앙값**으로 한다. `PERF_REPEATS` 기본값이 5 이고, 5회 미만이면
-> 요약표가 그 사실을 그 줄에 적는다.
+> **같은 조건을 5회 반복하고 중앙값으로 비교한다.** 같은 이미지·같은 300/s 를 세 번 쟀는데
+> med 가 **3ms · 82ms · 224ms** 로 흔들렸다. 표본 하나로 두 변형을 비교하면 잡음과 차이를
+> 구분할 수 없다.
+>
+> `PERF_REPEATS` 기본값이 5 다. **하한을 강제하지는 않는다** — 스모크로 1~2회를 돌려야 할
+> 때가 있다. 대신 5회 미만이면 실행 로그·단일 요약표·`--compare` 표 **세 곳 모두**에
+> 그 사실이 찍힌다. 그 표는 스모크 확인용이고 v1/v2 판정 근거로 인용하지 않는다.
 
 ### ⑤ 결과 정리
 
@@ -209,7 +217,7 @@ perf/results/<run-id>/
   rate-<도착률>/rep-<n>/
     k6-summary.json   k6 원본 요약
     k6.log
-    round.json        회차 id · 창 시각 · DB 사후 상태 · scrape 건강도
+    round.json        회차 id · 측정 구간 창 · DB 사후 상태 · scrape 건강도 · k6 종료 코드
     meta.json         환경 메타
   summary.txt
 ```
@@ -226,7 +234,8 @@ perf/results/<run-id>/
   (합계에는 운영 풀과 관측 풀이 함께 들어 있다. 관측 쿼리가 운영 풀을 점유하지 않게
   분리해 뒀기 때문에 `인스턴스당 × 대수` 와 다른 것이 정상이다)
 - MySQL `max_connections` · 버전
-- k6 버전 · **임시 포트 범위와 개수** · `tcp.msl` · 회차 직전 TIME_WAIT 수
+- k6 버전 · **임시 포트 범위와 개수** · `tcp.msl` · TIME_WAIT 수(`time_wait_at_capture` —
+  회차 뒤에 재면 이번 회차 몫이 섞인다. 회차 **직전** 값은 `round.json` 의 `time_wait_before_k6`)
 - **B→A ping 200회** — 손실·min/avg/max/stddev
 
 ## 4. 지표 — 성공과 거절을 반드시 나눈다
@@ -248,7 +257,9 @@ perf/results/<run-id>/
 | `issue_attempts` → `perf.achieved_arrival_rps` | **달성** 도착률(측정 구간만) |
 | `http_reqs.rate` | 워밍업 포함 **전체 실행 평균.** 달성치가 아니다 |
 | `dropped_iterations` | 못 쏜 것 |
-| `issue_connect_failures` | **`duration 0s` 인 실패 — 응답이 아니라 연결 실패다.** 따로 센다 |
+| `issue_connect_failures` | 연결 거부·리셋·DNS(k6 error_code 1100·1200번대). **응답이 아니다** — 톰캣 수용 상한과 임시 포트를 본다 |
+| `issue_timeouts` | 요청 타임아웃(1050). **연결 실패와 진단이 반대다** — 서버가 받긴 했는데 못 끝냈다 |
+| `issue_transport_errors` | 그 밖의 전송 오류(TLS·HTTP2) |
 
 회차 사후 상태(`round.json`)로 불변식도 함께 본다 — 초과 발급 0 · 1인 2매 0.
 
@@ -259,6 +270,7 @@ perf/results/<run-id>/
 | `.env` 를 `source` 하면 깨진다 | `COUPON_IMAGE=<dockerhub-user>/...` 의 `<` 를 셸이 리다이렉션으로 읽는다. 이 하네스는 `while read` 로 읽는다 |
 | `application.yml` 없이 `up` | Docker 가 그 이름의 **디렉터리**를 만들어 마운트한다. 설정이 통째로 비는데 에러에 원인이 안 나온다 |
 | `pull_policy: always` | 회차 이미지는 로컬 빌드 태그라 레지스트리에 없다. override 가 `missing` 으로 덮는다 |
+| api·batch 수신 포트 | override 가 `SERVER_PORT: 8080` · `BATCH_PORT: 9091` 을 못박는다. `compose.yml` 은 `.env` 로 정하는데 nginx upstream 과 워밍업 URL 은 고정이라, 갈라지면 발급이 전부 502 이거나 워밍업이 Connection refused 로 죽는다 |
 | batch 의 Redis | `compose.yml` 은 `REDIS_HOST` 를 **api 에만** 준다. batch 는 localhost 를 보고 워밍업이 500 으로 죽는다. override 가 채운다 |
 | 등급 헤더 | 회차의 `eligible_grades_mask` 와 맞아야 한다. 한 회차는 **한 등급만** 쏜다(마스크가 허용하는 가장 높은 등급). 발급 경로에서 등급은 `CouponIssuePolicy` 의 비트마스크 `contains` 검사 하나에만 쓰이고 등급별 분기가 없어서 지연 편향이 없다 — **분기가 생기면 이 선택을 다시 봐야 한다.** 실제로 쏜 등급은 `round.json` 의 `member_grade` 에 남는다. k6 에 하드코딩하면 마스크를 바꾼 회차에서 전량 등급 거절이 나고 결과에는 "거절 N건" 으로만 보인다. `run-round.sh` 가 회차에서 뽑아 넘기고, 없으면 k6 가 시작 전에 죽는다 |
 | `Idempotency-Key` | **UUID v4 형식을 강제한다.** 아니면 발급 경로를 타기도 전에 COUPON-300 으로 전량 거절되고, 결과에는 "거절 N건" 으로만 보인다 |

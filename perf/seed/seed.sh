@@ -13,8 +13,11 @@ DUMMY_ROUND_ID="${PERF_DUMMY_ROUND_ID:-9000}"
 log "기반 데이터 (grades · brands · templates)"
 mysql_exec "SET @BRAND_ID=$BID; SET @TEMPLATE_ID=$TID; $(cat "$PERF_DIR/seed/00-base.sql")"
 
-have=$(mysql_exec "SELECT COUNT(*) FROM members;")
-log "members 현재 $have / 목표 $MEMBERS"
+# ⚠️ COUNT 가 아니라 MAX(id) 로 이어 붙인다. COUNT 로 정하면 기존 데이터에 구멍이 있을 때
+#    이미 있는 id 와 부딪히거나, 채운 뒤에도 1..N 이 연속이 아니게 된다 — k6 는 1 부터
+#    연속된 id 를 쓰므로 그 구멍이 전량 500(members FK 위반) 으로 나온다.
+have=$(mysql_exec "SELECT COALESCE(MAX(id), 0) FROM members;")
+log "members MAX(id) $have / 목표 $MEMBERS"
 if (( have < MEMBERS )); then
   # 재귀 CTE 로 번호를 만든다. 기본 재귀 상한이 1000 이라 반드시 올려야 한다 —
   # 안 올리면 'Recursive query aborted' 로 죽고, 그 메시지가 원인을 안 알려 준다.
@@ -25,8 +28,16 @@ if (( have < MEMBERS )); then
       SELECT $((have + 1)) UNION ALL SELECT x + 1 FROM n WHERE x < $MEMBERS
     )
     SELECT x, ELT(1 + (x % 4), 'WELCOME','SILVER','GOLD','VIP'), NOW(6) FROM n;"
-  log "members 채움 → $(mysql_exec 'SELECT COUNT(*) FROM members;')"
+  log "members 채움 → COUNT $(mysql_exec 'SELECT COUNT(*) FROM members;')"
 fi
+
+# 1..MEMBERS 가 실제로 빈틈없이 있는지 확인한다. 개수만 세면 구멍을 못 잡는다.
+read -r cnt mn mx < <(mysql_exec "SELECT COUNT(*), MIN(id), MAX(id) FROM members WHERE id BETWEEN 1 AND $MEMBERS;")
+if [[ "$cnt" != "$MEMBERS" || "$mn" != "1" ]]; then
+  die "members 의 1..$MEMBERS 구간에 구멍이 있다 (있는 행 $cnt · 최소 id $mn · 최대 id $mx).
+  k6 는 1 부터 연속된 id 를 쓴다. 구멍이 있으면 그 요청은 members FK 위반으로 500 이 난다."
+fi
+log "members 1..$MEMBERS 연속 확인"
 
 log "더미 발급용 회차 $DUMMY_ROUND_ID"
 mysql_exec "

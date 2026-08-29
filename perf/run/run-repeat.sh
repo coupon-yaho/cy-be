@@ -26,11 +26,26 @@ log "회차 묶음 $RUN_ID — engine=$ENGINE profile=$PROFILE repeats=$REPEATS"
 
 "$PERF_DIR/env/preflight.sh" | tee "$RUN_DIR/preflight.log"
 
+# 반복 하한을 강제하지는 않는다 — 스모크로 1~2회를 돌려야 할 때가 있다. 대신 5회 미만이면
+# 그 사실이 로그와 요약표 양쪽에 남는다. 비교 근거로 쓰면 안 된다는 표시다.
+if (( REPEATS < 5 )); then
+  log "⚠️ 반복 ${REPEATS}회다. 같은 조건을 세 번 쟀을 때 med 가 3ms · 82ms · 224ms 로 흔들린 적이 있다 —
+   5회 미만은 스모크용이고 v1/v2 비교 근거로 쓰지 않는다."
+fi
+
 case "$PROFILE" in
   spike)
     # 재고 1만 · 요청 2만 · 도착 1~3초 (docs/12 §10.2 의 스파이크 축)
     REQ="${PERF_SPIKE_REQUESTS:-20000}"; SEC="${PERF_SPIKE_SECONDS:-3}"
     RATES=$(( (REQ + SEC - 1) / SEC )); SECS="$SEC"
+    # ⚠️ 도착률은 정수라 나누어떨어지지 않으면 실제 예약 건수가 선언과 다르다.
+    #    (20000/3 을 올림한 6667 x 3 = 20001). 결과에는 예약 건수가 기록되므로 수치가
+    #    어긋나지는 않지만, "요청 2만 회차" 라고 인용하면 그 순간 틀린 말이 된다.
+    SCHEDULED=$(( RATES * SEC ))
+    if (( SCHEDULED != REQ )); then
+      log "⚠️ spike: 선언 ${REQ}건 / 실제 예약 ${SCHEDULED}건 (${RATES}/s x ${SEC}s).
+   나누어떨어지는 값을 쓰거나, 인용할 때 ${SCHEDULED} 를 적을 것."
+    fi
     STEPS=("$RATES:$SECS")
     ;;
   steps)

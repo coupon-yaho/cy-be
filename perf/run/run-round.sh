@@ -46,6 +46,8 @@ WARMUP_GRADE=$(grade_of "$WARMUP_ROUND")
   || die "회차의 eligible_grades_mask 에 맞는 등급이 grades 에 없다. 시드를 다시 본다."
 log "등급 헤더 — 측정 $TARGET_GRADE · 워밍업 $WARMUP_GRADE (회차 마스크에서 뽑음)"
 
+# 회차 시작 전 TIME_WAIT. meta.sh 는 k6 뒤에 도니까 그 값에는 이번 회차 몫이 섞인다.
+TIME_WAIT_BEFORE=$(netstat -an -p tcp 2>/dev/null | grep -c TIME_WAIT || echo "")
 START_EPOCH=$(date +%s)
 log "k6 — 설정 도착률 ${RATE}/s x ${SECONDS_}s (설정값이다. 달성치는 결과의 perf.achieved_arrival_rps 를 본다 — http_reqs.rate 가 아니다)"
 set +e
@@ -68,14 +70,31 @@ K6_RC=${PIPESTATUS[0]}
 set -e
 END_EPOCH=$(date +%s)
 [[ -s "$OUT/k6-summary.json" ]] || die "k6 요약이 비어 있다. $OUT/k6.log 를 본다 (rc=$K6_RC)"
+# ⚠️ 요약 파일이 있어도 k6 가 0 이 아닌 코드로 끝났으면 그 회차는 온전하지 않다.
+#    여기서 죽이지는 않는다 — 남은 반복은 계속 돌아야 하고, 로그도 남겨야 한다.
+#    대신 round.json 에 코드를 남기고 summarize.py 가 그 반복을 중앙값에서 뺀다.
+(( K6_RC == 0 )) || log "⚠️ k6 가 rc=$K6_RC 로 끝났다. 이 반복은 요약에서 제외된다 — $OUT/k6.log"
 
 log "환경 메타"
 PERF_ENGINE="$ENGINE" "$PERF_DIR/env/meta.sh" > "$OUT/meta.json"
 
 log "회차 사후 상태"
 # 측정 구간만 잘라서 본다. 유휴가 섞이면 평균이 낙관적으로 나온다.
-W=$(( END_EPOCH - START_EPOCH ))
-scrape() { promq_scalar "$1" "time=$END_EPOCH" 2>/dev/null || echo ""; }
+# ⚠️ k6 프로세스 전체(START_EPOCH~END_EPOCH)를 쓰면 안 된다 — 워밍업 25초와 대기 12초,
+#    gracefulStop 이 다 들어간다. k6 가 낸 측정 구간 실제 창을 쓴다.
+MW_START=$(jq -r '.perf.measure_window_start_epoch // empty' "$OUT/k6-summary.json")
+MW_END=$(jq -r '.perf.measure_window_end_epoch // empty' "$OUT/k6-summary.json")
+WINDOW_SOURCE=measure
+if [[ -z "$MW_START" || -z "$MW_END" || "$MW_END" -le "$MW_START" ]]; then
+  # 측정 구간에 이터레이션이 하나도 안 돌면 창이 안 나온다. 추정으로 채우지 않는다.
+  log "⚠️ 측정 구간 창을 못 얻었다. scrape 지표를 <측정 실패>로 남긴다"
+  WINDOW_SOURCE=unavailable
+fi
+W=$(( MW_END > MW_START ? MW_END - MW_START : 0 ))
+scrape() {
+  [[ "$WINDOW_SOURCE" == measure ]] || { echo ""; return; }
+  promq_scalar "$1" "time=$MW_END" 2>/dev/null || echo ""
+}
 jn() { [[ -n "${1:-}" ]] && printf '%s' "$1" || printf 'null'; }
 
 read -r ISSUED STOCK_TOTAL ACTIVE < <(mysql_exec "
@@ -94,8 +113,16 @@ cat > "$OUT/round.json" <<JSON
   "configured_rate_per_sec": $RATE,
   "configured_seconds": $SECONDS_,
   "configured_requests": $REQUESTS,
-  "window": { "start_epoch": $START_EPOCH, "end_epoch": $END_EPOCH, "seconds": $W },
+  "window": {
+    "k6_process_start_epoch": $START_EPOCH,
+    "k6_process_end_epoch": $END_EPOCH,
+    "measure_start_epoch": $(jn "${MW_START:-}"),
+    "measure_end_epoch": $(jn "${MW_END:-}"),
+    "measure_seconds": $W,
+    "source": "$WINDOW_SOURCE"
+  },
   "k6_exit_code": $K6_RC,
+  "time_wait_before_k6": $(jn "${TIME_WAIT_BEFORE:-}"),
   "db_after": {
     "issuances": $(jn "$ISSUED"),
     "stock_total": $(jn "$STOCK_TOTAL"),
@@ -104,10 +131,13 @@ cat > "$OUT/round.json" <<JSON
     "members_with_two_or_more": $(jn "$DUP")
   },
   "scrape_health": {
-    "api_up_avg": $(jn "$(scrape "avg_over_time(up{job=\"api\"}[${W}s])")"),
-    "api_scrape_duration_p99": $(jn "$(scrape "quantile_over_time(0.99, scrape_duration_seconds{job=\"api\"}[${W}s])")"),
-    "api_scrape_samples_max": $(jn "$(scrape "max_over_time(scrape_samples_scraped{job=\"api\"}[${W}s])")"),
-    "api_cpu_max": $(jn "$(scrape "max_over_time(process_cpu_usage{job=\"api\"}[${W}s])")")
+    "_note": "avg_over_time 류는 인스턴스마다 한 줄씩 나온다. 감싸지 않으면 아무 한 대만 기록된다 — 전 인스턴스를 포괄하도록 min/avg/max 로 감쌌다",
+    "api_up_avg_worst": $(jn "$(scrape "min(avg_over_time(up{job=\"api\"}[${W}s]))")"),
+    "api_up_avg_mean": $(jn "$(scrape "avg(avg_over_time(up{job=\"api\"}[${W}s]))")"),
+    "api_scrape_duration_p99_worst": $(jn "$(scrape "max(quantile_over_time(0.99, scrape_duration_seconds{job=\"api\"}[${W}s]))")"),
+    "api_scrape_samples_max": $(jn "$(scrape "max(max_over_time(scrape_samples_scraped{job=\"api\"}[${W}s]))")"),
+    "api_cpu_max": $(jn "$(scrape "max(max_over_time(process_cpu_usage{job=\"api\"}[${W}s]))")"),
+    "api_cpu_max_mean": $(jn "$(scrape "avg(max_over_time(process_cpu_usage{job=\"api\"}[${W}s]))")")
   }
 }
 JSON

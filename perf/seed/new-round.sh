@@ -51,7 +51,9 @@ log "회차 $ROUND_ID 생성 — engine=$ENGINE stock=$STOCK open_at=$(date -r "
 if [[ "$ENGINE" == V2 ]]; then
   # ⚠️ 워밍업은 열리기 전에만 된다. 열린 뒤에는 ROUND_ALREADY_OPENED 로 거절되고,
   #    그 회차의 Redis 키를 다시 만들 통로가 지금은 없다(v2 프로토타입 확인 §3).
-  out=$(net_post "http://batch:${BATCH_PORT:-9091}/internal/v1/coupon-rounds/$ROUND_ID/warmup") \
+  # 포트는 perf/env/compose.perf.yml 이 batch 에 못박은 값과 같아야 한다.
+  # 프로젝트 .env 의 BATCH_PORT 를 읽지 않는다 — 하네스가 자기 토폴로지를 선언한다.
+  out=$(net_post "http://batch:${PERF_BATCH_PORT:-9091}/internal/v1/coupon-rounds/$ROUND_ID/warmup") \
     || die "워밍업 호출 실패 — batch 가 떠 있는지 본다"
   case "$out" in
     *'"status":"WARMED"'*) log "워밍업 OK — $out";;

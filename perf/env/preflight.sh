@@ -71,7 +71,12 @@ fi
 ports=$(q '.load_generator.ephemeral_port_count'); tw=$(q '.load_generator.time_wait_before_run')
 # macOS 기본 49152~65535 = 16,384개. 앞 회차의 TIME_WAIT 가 남아 다음 회차의 가용 포트를 깎는다.
 # cy-631 회차의 통과 요청 16,777 이 이 숫자와 거의 같았다 — 서버 처리량이 아니라 클라이언트 한계였다.
-if [[ "$ports" != null && "$ports" -lt "$need" ]]; then
+if [[ "$ports" == null ]]; then
+  # null 은 "충분하다" 가 아니라 "못 쟀다" 다. 통과시키면 핵심 사전 조건을 안 본 회차가
+  # 만족한 것으로 표시된다.
+  bad "임시 포트 범위를 못 쟀다(sysctl 실패). macOS 가 아니거나 net.inet.ip.portrange 가 없다.
+      부하기의 포트 상한을 모르는 채로는 회차를 열지 않는다 — 손으로 확인하고 적을 것"
+elif [[ "$ports" -lt "$need" ]]; then
   bad "임시 포트가 $ports 개인데 요청은 $need 이다. 클라이언트가 먼저 병목이 된다.
       sudo sysctl -w net.inet.ip.portrange.first=16384
       sudo sysctl -w net.inet.tcp.msl=1000"
