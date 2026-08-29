@@ -41,6 +41,7 @@ jobs:
           ./gradlew :infra:redis:test
           --tests '*RedisRuntimeConfigIntegrationTest'
           --tests '*IssuanceScriptContractTest'
+          --tests '*V2IssuanceInterleaveConcurrencyTest'
           --no-build-cache --rerun-tasks
 
       # @Testcontainers(disabledWithoutDocker = true) 라 Docker 를 못 잡으면 클래스가 통째로
@@ -53,7 +54,7 @@ jobs:
       - name: Assert the Lua contract actually ran
         run: |
           # 하한을 박는다 — "1건 이상" 이면 테스트가 조용히 사라져도 초록이다.
-          set -- RedisRuntimeConfigIntegrationTest:10 IssuanceScriptContractTest:100
+          set -- RedisRuntimeConfigIntegrationTest:10 IssuanceScriptContractTest:100 V2IssuanceInterleaveConcurrencyTest:7
           for entry in "$@"; do
             name=${entry%%:*}; min=${entry##*:}
             file=$(find infra/redis/build/test-results/test -name "TEST-*.$name.xml" | head -1)
