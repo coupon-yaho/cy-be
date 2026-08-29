@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 
 import org.junit.jupiter.api.DisplayName;
+import org.springframework.batch.core.BatchStatus;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.batch.BatchRun;
@@ -71,8 +72,8 @@ class BatchRunViewTest {
     }
 
     /**
-     * EXIT_MESSAGE 에는 스택트레이스가 통째로 들어간다(실측: 2,178자). 이 API 에는 인증이
-     * 없어 그대로 실으면 내부 구조가 밖으로 나간다.
+     * EXIT_MESSAGE 에는 스택트레이스가 통째로 들어간다(실측: 2,178자). 관문(CY-742)은 있지만 TLS 가 없고 토큰 회수 수단도 없어,
+     * 그대로 실으면 내부 구조가 밖으로 나간다.
      */
     @Test
     @DisplayName("실패 원인은 요약만 나간다 — 스택트레이스가 안 샌다")
@@ -108,18 +109,33 @@ class BatchRunViewTest {
     }
 
     /**
-     * 못 알아본 것과 원인이 없는 것을 문구로 가른다. 둘 다 null 로 접으면 화면이
-     * "성공이라 원인이 없다" 로 읽어, 서버 로그를 열어야 한다는 사실이 안 보인다.
+     * 성공한 실행에도 EXIT_MESSAGE 가 채워진다 — SimpleJob 이 마지막 Step 의 ExitStatus 를
+     * 통째로 대입하고 statsAggregateStep 이 성공 설명을 세운다. 아래 문자열은 실제 DB 에서
+     * 그대로 가져온 것이다.
      */
     @Test
-    @DisplayName("원인이 안 남은 실행은 그렇게 말한다 — null 로 접지 않는다")
-    void saysWhenTheCauseWasNotRecorded() {
-        assertThat(BatchRunView.of(run(LocalDateTime.of(2026, 1, 15, 18, 30), null)).failure())
-                .isEqualTo(FailureSummary.NOT_RECORDED);
+    @DisplayName("성공한 실행은 실패 요약이 비어 있다 — 안 거르면 초록 행마다 사유가 찍힌다")
+    void hasNoFailureWhenSucceeded() {
+        BatchRunView view = BatchRunView.of(new BatchRun(1L, "verifyJob", "COMPLETED",
+                "COMPLETED", "회차 147 · 등급쌍 468 · 요일시각 168 · ISSUE 이력 3000000건",
+                null, null, null, null));
+
+        assertThat(view.failure())
+                .as("이 문자열에는 도메인 코드도 예외 이름도 없어 요약기가 '알 수 없는 오류' 로 접는다")
+                .isNull();
     }
 
     @Test
-    @DisplayName("도메인 코드도 예외 이름도 없으면 알 수 없다고 말한다")
+    @DisplayName("원인이 안 남은 실패는 그렇게 말한다 — null 로 접지 않는다")
+    void saysWhenTheCauseWasNotRecorded() {
+        BatchRunView view = BatchRunView.of(new BatchRun(1L, "expireJob", "FAILED", "FAILED",
+                "", null, null, null, null));
+
+        assertThat(view.failure()).isEqualTo(FailureSummary.NOT_RECORDED);
+    }
+
+    @Test
+    @DisplayName("도메인 코드도 예외 이름도 없는 실패는 알 수 없다고 말한다")
     void saysWhenTheCauseIsUnrecognized() {
         BatchRunView view = BatchRunView.of(new BatchRun(1L, "expireJob", "FAILED", "FAILED",
                 "무언가 잘못됐습니다", null, null, null, null));
@@ -127,8 +143,54 @@ class BatchRunViewTest {
         assertThat(view.failure()).isEqualTo(FailureSummary.UNKNOWN);
     }
 
+    @Test
+    @DisplayName("모르는 상태는 실패로 본다 — 규약 밖 문자열이 조용히 성공으로 접히면 안 된다")
+    void treatsUnknownStatusAsFailure() {
+        BatchRunView view = BatchRunView.of(new BatchRun(1L, "expireJob", "무엇인가", "?",
+                "SQLSyntaxErrorException: ...", null, null, null, null));
+
+        assertThat(view.failure()).isEqualTo("SQLSyntaxErrorException");
+    }
+
+    @Test
+    @DisplayName("STOPPED 도 사유를 붙인다 — isUnsuccessful() 은 이걸 false 로 준다")
+    void treatsStoppedRunAsFailure() {
+        // 실측(6.0.4): STOPPED.isUnsuccessful() == false. 그것으로 갈랐다면 운영자가
+        // 세운 실행이 완주한 실행과 응답에서 구분되지 않는다.
+        assertThat(BatchStatus.STOPPED.isUnsuccessful())
+                .as("이 전제가 뒤집히면 SUCCEEDED 열거를 다시 판단해야 한다")
+                .isFalse();
+        // 진짜 STOPPED 행이 무엇을 싣는지 실측했다(javap, 6.0.4):
+        // getDefaultExitStatusForFailure 가 JobInterruptedException 이면
+        // ExitStatus.STOPPED.addExitDescription(JobInterruptedException.class.getName()).
+        assertThat(BatchRunView.of(runWith("STOPPED",
+                "org.springframework.batch.core.job.JobInterruptedException")).failure())
+                .isEqualTo("JobInterruptedException");
+    }
+
+    @Test
+    @DisplayName("STATUS 가 NULL 이어도 목록이 산다 — Set.of.contains(null) 은 NPE 다")
+    void survivesNullStatus() {
+        assertThat(BatchRunView.of(runWith(null, "VERIFICATION-003 결정론 위반")).failure())
+                .as("한 행 때문에 던지면 관제 히스토리가 통째로 500 이 된다")
+                .isEqualTo("VERIFICATION-003");
+    }
+
+    @Test
+    @DisplayName("도는 중에는 사유가 없다 — 있으면 화면이 '실패했는데 안 끝났다' 로 읽는다")
+    void hasNoFailureWhileStillRunning() {
+        assertThat(BatchRunView.of(runWith("STARTED", null)).failure()).isNull();
+        assertThat(BatchRunView.of(runWith("STARTING", null)).failure()).isNull();
+        assertThat(BatchRunView.of(runWith("STOPPING", null)).failure()).isNull();
+    }
+
     private static BatchRun run(LocalDateTime startedAt, LocalDateTime finishedAt) {
         return new BatchRun(1L, "expireJob", "COMPLETED", "COMPLETED", "",
                 startedAt, finishedAt, 0L, 340_529L);
+    }
+
+    private static BatchRun runWith(String status, String exitMessage) {
+        return new BatchRun(1L, "verifyJob", status, status, exitMessage,
+                LocalDateTime.of(2026, 1, 15, 9, 30, 7), null, 0L, 0L);
     }
 }

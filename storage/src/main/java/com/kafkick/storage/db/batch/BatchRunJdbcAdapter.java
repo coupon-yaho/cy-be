@@ -29,9 +29,19 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
      * <p>V2026082514 의 낡은 예측 정정. 그 파일이 "관리 화면의 이력 목록은
      * {@code ORDER BY CREATE_TIME DESC, JOB_EXECUTION_ID DESC} 가 될 것" 으로 적고
      * IX_JOB_EXEC_CREATE_TIME 을 그 근거로 들었는데, 실제로 짠 것은 이 문장이고
-     * PK 하나로 정렬한다 — PK 역방향 스캔이라 그 인덱스가 필요 없다. 이미 적용된
-     * 마이그레이션이라 체크섬 때문에 그 파일을 못 고쳐 정정을 여기 둔다.
-     * 그 인덱스는 여전히 정리 배치의 대상 선택이 쓰므로 지우면 안 된다.
+     * PK 하나로 정렬한다. 이미 적용된 마이그레이션이라 체크섬 때문에 그 파일을 못 고쳐
+     * 정정을 여기 둔다. 그 인덱스는 여전히 정리 배치의 대상 선택이 쓰므로 지우면 안 된다.
+     *
+     * <p><b>실행계획은 필터 유무로 갈린다</b>(EXPLAIN ANALYZE, coupon_clean, 메타 10행):
+     * <pre>
+     * jobName = null   je 를 PRIMARY 역방향 스캔 → ji 는 PK 단건 조회. 정렬 자체가 없다
+     * jobName 지정     ji 가 구동 테이블(JOB_INST_UN 커버링) → je 는 FK 인덱스
+     *                  → **Sort(filesort)**. 정렬 키가 구동 테이블에 없어서다
+     * </pre>
+     * 즉 <b>"인덱스가 필요 없다" 는 필터가 없을 때만 참이다.</b> 그래도 인덱스를 안 더한다 —
+     * {@code CleanupJobConfig} 가 {@code batch.cleanup.metadata-keep-days}(30일)로 배치 메타를
+     * 걷어내 이 테이블이 <b>수십 행 규모로 묶여 있다</b>. 실측에서도 filesort 입력이 2행이었다.
+     * 보존 창을 크게 늘리거나 잡 수가 늘면 그때 다시 재고 판단한다.
      */
     private static final String SELECT_RECENT = """
             SELECT je.JOB_EXECUTION_ID, ji.JOB_NAME, je.STATUS, je.EXIT_CODE,

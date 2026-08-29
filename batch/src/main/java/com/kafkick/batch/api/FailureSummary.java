@@ -8,7 +8,11 @@ import java.util.regex.Pattern;
  *
  * <p>배치 메타의 EXIT_MESSAGE 와 Step 의 exitDescription 에는 스택트레이스가 통째로
  * 들어간다(실측 2,178자). 첫 줄에도 SQL 조각·드라이버 오류·제약 이름이 섞인다.
- * 이 API 에는 인증이 없으므로 허용 목록만 통과시킨다.
+ * <p>앞에 무엇이 서 있는지는 구성으로 갈린다. 표준 스택은 <b>포트 미노출</b>이 전부라
+ * 토큰 관문이 꺼져 있고(batch.yml 의 BATCH_ADMIN_AUTH_REQUIRED 기본값 false), 포트를
+ * 내보내는 batch-expose.yml 만 그것을 켠다(CY-742). 즉 <b>둘 중 하나는 항상 없다.</b>
+ * 켜진 쪽도 공유 비밀 하나라 TLS 없이 평문으로 오가고 회수 수단이 재기동뿐이다.
+ * 그래서 이 자리는 앞단을 안 믿고 <b>언제나</b> 줄인다.
  *
  * <p>한 곳에 둔 이유는 호출부마다 복사하면 반드시 갈리기 때문이다 — 실제로 갈렸다.
  * VerifyRunView 와 BatchRunView 가 같은 EXIT_MESSAGE 에 다른 답을 냈다.

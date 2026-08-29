@@ -111,6 +111,25 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
      * 최근 실행부터 한 페이지. {@code dataset} 이 null 이면 전체를 본다.
      *
      * <p>정렬은 id 내림차순이다 — as_of 는 재시도로 같은 값이 여럿이라 순서가 안 정해진다.
+     *
+     * <p><b>{@code origin = 'BATCH'} 를 건다.</b> {@link CleanupJdbcAdapter} 가
+     * <i>"모든 선택 질의에 건다"</i> 로 못 박은 규칙이고 {@code SELECT_LATEST_CLOSED} 도
+     * 같은 조건을 이미 쓴다. 이 자리에만 빠뜨리면 <b>사람이 보는 화면</b>에서 그 방어가
+     * 뚫린다 — 되읽기 하나만 막아 놓고 관제를 열어 두면 방어가 아니다.
+     *
+     * <p><b>실측(2026-08-29)</b>으로 확인한 시드 행:
+     * <pre>
+     * coupon_clean    SEED  FULL/INCREMENTAL  PASS  0건    3행
+     * coupon_corrupt  SEED  FULL              FAIL  800건  1행
+     * </pre>
+     * 안 거르면 <b>배치를 한 번도 안 돌린 CLEAN DB 에서 관제 히스토리에 PASS 3건이 이미
+     * 그려져 있고</b>("안 돌린 채 통과했다" 가 성립한다 — V2026082512 가 지표 경로에서
+     * 정확히 이것을 막았다), CORRUPT 에서는 시드의 {@code FAIL·800} 이 배치의
+     * {@code PASS·800} 옆에 떠서 화면이 집계하는 실패 건수가 1 늘어난다.
+     * {@code docs/17} §{@code verdict 는 origin 에 따라 뜻이 다르다} 가 그 모순을 적고 있다.
+     *
+     * <p>시드 행을 <b>보여 주기로</b> 바꾼다면 뷰에 {@code origin} 을 싣고 FE 집계에서 빼는
+     * 계약을 문서에 적어야 한다. 지금은 그 결정을 한 적이 없으므로 안 보여 주는 쪽이 맞다.
      */
     private static final String SELECT_RECENT = """
             SELECT id, as_of, from_ts, scope, dataset, attempt,
@@ -118,14 +137,16 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                    findings_checksum, dataset_fingerprint, started_at, finished_at,
                    seed_run_id
               FROM verification_runs
-             WHERE (:dataset IS NULL OR dataset = :dataset)
+             WHERE origin = 'BATCH'
+               AND (:dataset IS NULL OR dataset = :dataset)
              ORDER BY id DESC
              LIMIT :limit OFFSET :offset
             """;
 
     private static final String COUNT_RECENT = """
             SELECT COUNT(*) FROM verification_runs
-             WHERE (:dataset IS NULL OR dataset = :dataset)
+             WHERE origin = 'BATCH'
+               AND (:dataset IS NULL OR dataset = :dataset)
             """;
 
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(

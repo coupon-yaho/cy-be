@@ -53,6 +53,8 @@ spring:
   # CY-368 이 업무 포트에 검증 트리거 컨트롤러를 열었다(POST /api/v1/admin/verify).
   # 인증이 없어서 compose 가 그 포트를 **기본으로 호스트에 안 내보낸다** —
   # batch-expose.yml 을 얹을 때만 열린다. 근거는 docs/15 결정 1.
+  # 그 오버레이가 CY-742 의 공유 비밀 관문도 함께 켠다 — 여기(앱 기본값)는 켜짐이지만
+  # batch.yml 이 그것을 끄므로, 표준 compose 스택에서 서는 것은 미노출 하나다.
   #
   # servlet 으로 두는 것은 뒤에 올 verify 온디맨드 트리거(POST /api/v1/admin/verify)를
   # 미리 받기 위한 것이다. 관리 포트는 아래 management 블록이 따로 연다 —

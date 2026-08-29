@@ -270,14 +270,15 @@ public class VerifyTriggerController {
      * {@code stop}·{@code abandon} 을 부를 수 있다.
      *
      * <p>그 id 를 429 응답 본문에 실을 수는 없다 — 저장소 규약이 <i>"클라이언트에 나가는
-     * 문구는 {@code errorCode.getMessage()}"</i> 로 못 박았고, 이 API 에는 인증이 없어
+     * 문구는 {@code errorCode.getMessage()}"</i> 로 못 박았고, 앞단이 구성에 따라 없거나 소지만 묻는 관문 하나라
      * 자유 문장에 내부 값을 담지 않는 편이 맞다. 그래서 <b>조회 경로를 따로 연다.</b>
      *
      * <p>하드킬로 남은 실행도 여기 보인다 — 그것이 이 엔드포인트의 주 사용처다.
      */
     // **읽기에도 데드라인을 준다(CY-697).** 트랜잭션 밖이면 DataSourceUtils 가
     // queryTimeout 을 안 붙여 **끊을 수단이 없다** — 배치 메타가 잠긴 날 톰캣 스레드가
-    // 그대로 붙잡힌다. 인증이 없는 API 라 같은 번호로 요청이 몰리면 더 빨리 마른다.
+    // 그대로 붙잡힌다. 표준 스택은 관문이 꺼져 있고(batch.yml) 오버레이를 얹어도 공유 비밀
+    // 하나라, 같은 번호로 요청이 몰리면 더 빨리 마른다 — 누구를 막을지 고를 수단이 없다.
     // 형제 BatchRunMetricsRefresher 가 같은 이유로 같은 값(5초)을 쓴다.
     @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     @GetMapping("/runs/running")
@@ -291,7 +292,8 @@ public class VerifyTriggerController {
      */
     // **읽기에도 데드라인을 준다(CY-697).** 트랜잭션 밖이면 DataSourceUtils 가
     // queryTimeout 을 안 붙여 **끊을 수단이 없다** — 배치 메타가 잠긴 날 톰캣 스레드가
-    // 그대로 붙잡힌다. 인증이 없는 API 라 같은 번호로 요청이 몰리면 더 빨리 마른다.
+    // 그대로 붙잡힌다. 관문이 공유 비밀 하나뿐이라 그것을 아는 쪽이 같은 번호로 몰면
+    // 커넥션이 더 빨리 마른다 — 사람마다 다른 자격이 아니어서 누구를 막을지도 못 고른다.
     // 형제 BatchRunMetricsRefresher 가 같은 이유로 같은 값(5초)을 쓴다.
     @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     @GetMapping("/runs/{executionId}")

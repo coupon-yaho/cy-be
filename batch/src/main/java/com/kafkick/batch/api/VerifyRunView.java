@@ -104,7 +104,6 @@ public record VerifyRunView(
                 .orElse(null);
     }
 
-
     /**
      * <b>{@code START_TIME} 은 잡이 실제로 시작하기 전까지 {@code null} 이다.</b>
      * {@code AbstractJob.execute} 가 <b>태스크 실행기 스레드 안에서</b> 찍고(6.0.4 바이트코드),

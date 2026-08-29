@@ -48,7 +48,7 @@ class BatchRunHistoryTest {
         List<BatchRun> recent = adapter.findRecent(null, 10, 0);
 
         assertThat(recent).hasSize(1);
-        assertThat(recent.getFirst().startedAt())
+        assertThat(recent.getFirst().startedAtInBatchMetaZone())
                 .as("START_TIME 이 NULL 인 행을 정렬 키로 쓰거나 조인으로 걸러내면 사라진다")
                 .isNull();
     }

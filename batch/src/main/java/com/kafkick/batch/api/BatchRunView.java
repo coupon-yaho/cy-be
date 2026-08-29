@@ -3,6 +3,7 @@ package com.kafkick.batch.api;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Set;
 
 import com.kafkick.batch.config.BatchTimeAxis;
 import com.kafkick.core.batch.BatchRun;
@@ -37,18 +38,67 @@ public record BatchRunView(
      * 되는 날 통째로 건너뛰어진다. BatchTimeAxis 가 같은 이유로 같은 갈래를 연다.
      */
     static BatchRunView of(BatchRun run, ZoneId batchMetaZone) {
-        LocalDateTime startedAt = onDomainAxis(run.startedAt(), batchMetaZone);
-        LocalDateTime finishedAt = onDomainAxis(run.finishedAt(), batchMetaZone);
+        LocalDateTime startedAt = onDomainAxis(run.startedAtInBatchMetaZone(), batchMetaZone);
+        LocalDateTime finishedAt = onDomainAxis(run.finishedAtInBatchMetaZone(), batchMetaZone);
         return new BatchRunView(
                 run.executionId(),
                 run.jobName(),
                 run.status(),
-                FailureSummary.of(run.exitMessage()),
+                failureOf(run),
                 startedAt,
                 finishedAt,
                 durationSeconds(startedAt, finishedAt),
                 run.readCount(),
                 run.writeCount());
+    }
+
+    /**
+     * <b>사유를 안 붙이는 상태.</b> 끝나서 성공한 것 하나와, <b>아직 안 끝난</b> 셋이다 —
+     * 도는 중에 사유를 찍으면 화면이 "실패했는데 안 끝났다" 로 읽는다.
+     *
+     * <p><b>BatchStatus 전수 실측</b>(6.0.4):
+     * <pre>
+     * COMPLETED  isRunning=false  isUnsuccessful=false   성공
+     * STARTING   isRunning=true   isUnsuccessful=false   아직
+     * STARTED    isRunning=true   isUnsuccessful=false   아직
+     * STOPPING   isRunning=true   isUnsuccessful=false   아직
+     * STOPPED    isRunning=false  isUnsuccessful=false   ★ 끝났는데 성공이 아니다
+     * FAILED     isRunning=false  isUnsuccessful=true
+     * ABANDONED  isRunning=false  isUnsuccessful=true
+     * UNKNOWN    isRunning=false  isUnsuccessful=true
+     * </pre>
+     *
+     * <p><b>널 검사를 먼저 한다.</b> {@code Set.of(...).contains(null)} 은 false 가 아니라
+     * <b>NPE 를 던진다</b>(실측). {@code STATUS} 는 스프링 배치 원본 스키마 그대로라
+     * {@code NOT NULL} 이 아니고({@code V11__batch_metadata.sql}), 이 목록은 이상한 행도
+     * 보여 주는 자리다 — 한 행 때문에 던지면 <b>목록 전체가 500</b> 이 된다. 아래 시각
+     * 널가드와 같은 근거다. NULL 은 <b>모르는 상태</b>라 실패 쪽으로 접는다.
+     *
+     * <p>★ 표가 {@code isUnsuccessful()} 을 못 쓰는 두 번째 이유다. 그것으로 가르면
+     * <b>운영자가 세운 실행이 완주한 실행과 응답에서 똑같이</b> 보인다 — 이 저장소는
+     * {@code VerifyStopService} 로 도는 검증을 세우는 경로를 실제로 열어 뒀다.
+     */
+    private static final Set<String> SUCCEEDED =
+            Set.of("COMPLETED", "STARTING", "STARTED", "STOPPING");
+
+    /**
+     * 실패한 실행만 요약한다.
+     *
+     * <p>EXIT_MESSAGE 는 성공 실행에도 채워진다 — SimpleJob 이 마지막 Step 의 ExitStatus 를
+     * 통째로 잡에 대입하고(6.0.4 바이트코드), statsAggregateStep 은 성공 시
+     * "회차 147 · 등급쌍 468 · …" 를 설명으로 세운다(실측). 그것을 요약기에 넣으면 도메인
+     * 코드도 예외 이름도 없어 "알 수 없는 오류" 로 접힌다 — 정상 종료한 모든 행에 실패
+     * 사유가 찍힌다. exitCode 를 뺀 이유와 같은 뿌리다: 그 둘은 같은 ExitStatus 의 양쪽이다.
+     *
+     * <p>⚠️ BatchStatus.match 를 쓰지 않는다. 그것은 모르는 문자열을 UNKNOWN 이 아니라
+     * <b>COMPLETED</b> 로 접는다(실측: "무엇인가"·""·"X" 가 전부 COMPLETED). 그러면 규약 밖
+     * 값이 조용히 성공이 되어 실패 사유가 사라진다. 아는 성공 상태만 열거하고 나머지는
+     * 실패로 본다 — 모르는 것을 성공이라고 말하는 쪽이 더 나쁘다.
+     */
+    private static String failureOf(BatchRun run) {
+        return run.status() != null && SUCCEEDED.contains(run.status())
+                ? null
+                : FailureSummary.of(run.exitMessage());
     }
 
     /**
