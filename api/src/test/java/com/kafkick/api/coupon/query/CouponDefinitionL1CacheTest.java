@@ -12,6 +12,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -31,9 +33,10 @@ class CouponDefinitionL1CacheTest {
      * 스레드가 실제로 깨어났는지만 보는 <b>생존성</b> 상한이다. <b>검증 대상이 아니다</b> —
      * 이 테스트가 고정하는 계약은 {@code load-timeout} 쪽 값(밀리초)이다.
      *
-     * <p>넉넉한 이유는 모듈 넷을 동시에 돌릴 때 단일 로더 스레드가 스케줄되기까지 초 단위로
-     * 밀린 적이 있어서다(실측). 짧게 두면 그 부하에서만 빨갛게 되고, 그 빨강은 코드가 아니라
-     * 그날의 CPU 를 가리킨다. 길게 둬도 진짜 멈춘 로드는 여전히 잡는다 — 늦게 잡을 뿐이다.
+     * <p>이 값을 5초에서 올린 적이 있는데, <b>그때의 진단은 틀렸다.</b> 부하로 스레드가 밀린
+     * 것이 아니라 리로드가 아예 제출되지 않고 있었다(30초로 올려도 같은 자리에서 죽었다).
+     * 원인과 처방은 {@code returnsStaleValueWhenReloadExceedsBudget} 안에 적었다.
+     * 여기 숫자는 그 뒤로도 넉넉히 두지만, 넉넉함이 무엇을 가려 주지는 않는다.
      */
     private static final long LIVENESS_SECONDS = 30L;
 
@@ -129,16 +132,29 @@ class CouponDefinitionL1CacheTest {
         ExecutorService loaderExecutor = Executors.newSingleThreadExecutor();
         CountDownLatch reloadStarted = new CountDownLatch(1);
         CountDownLatch releaseReload = new CountDownLatch(1);
+        // 첫 로드만 호출 스레드에서 돌린다. Caffeine 은 로드가 '완료될 때' 의 ticker 로 만료
+        // 시각을 등록하는데, 그 등록이 다른 스레드에서 일어나면 아래 nanos.set(2) 와 순서가
+        // 뒤집힐 수 있다. 뒤집히면 만료 시각도 2 이후로 밀려 두 번째 get 이 만료를 못 보고,
+        // 리로드가 아예 제출되지 않는다 — 이 테스트가 보려는 것과 무관한 경합이다.
+        AtomicBoolean reloadOnItsOwnThread = new AtomicBoolean();
+        Executor stagedExecutor = task -> {
+            if (reloadOnItsOwnThread.get()) {
+                loaderExecutor.execute(task);
+            } else {
+                task.run();
+            }
+        };
         try {
             CouponDefinitionL1Cache<String> cache = new CouponDefinitionL1Cache<>(
                     Clock.fixed(now, ZoneOffset.UTC), nanos::get,
                     new CouponDefinitionL1CacheProperties(
                             java.time.Duration.ofNanos(1), java.time.Duration.ofMillis(10),
                             java.time.Duration.ofSeconds(60), 10L),
-                    loaderExecutor, new SimpleMeterRegistry());
+                    stagedExecutor, new SimpleMeterRegistry());
             CouponDefinitionCacheKey key = CouponDefinitionCacheKey.ALL;
             assertThat(cache.get(key, () -> new CouponDefinitionL1Cache.LoadedValue<>(
                     "old", now.plusSeconds(30)))).isEqualTo("old");
+            reloadOnItsOwnThread.set(true);
             nanos.set(2);
 
             assertThat(cache.get(key, () -> {

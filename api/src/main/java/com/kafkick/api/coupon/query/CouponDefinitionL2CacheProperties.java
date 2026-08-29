@@ -16,10 +16,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 짧으면 lease 가 먼저 끝나고, 뒤늦게 끝난 로더가 그 사이 다른 인스턴스가 올린 새 값을 덮어쓴다.
  * 문서로만 두면 환경변수로 낮춘 배포에서 그 약속이 조용히 깨진다.
  *
- * <p>{@code maxLoadTime} 은 로드 한 번의 상한을 <b>이름 붙여 드러낸 가정</b>이다. 기본값
- * 3300ms 의 근거는 다른 모듈에 있다 — storage.yml 의 Hikari {@code connection-timeout}
- * 3000ms(커넥션 대기)에 정의 질의의 {@code jakarta.persistence.query.timeout} 300ms 를 더한
- * 값이다. 세 값이 각자의 파일에 흩어져 있어 한쪽만 바뀌면 관계가 조용히 깨지므로,
+ * <p>{@code maxLoadTime} 은 <b>권한을 쥐고 있는 구간 전체</b>의 상한을 이름 붙여 드러낸
+ * 가정이다. 그 구간은 DB 질의에서 끝나지 않는다 — 권한은 질의 전에 얻고, <b>L2 게시가 끝난
+ * 뒤에야</b> {@code finally} 에서 반납된다. 그래서 Redis 왕복도 이 값에 든다.
+ *
+ * <pre>
+ *   tryAcquireLoad ─┬─ Hikari connection-timeout   3000ms  (storage.yml)
+ *                   ├─ 정의 질의 query.timeout       300ms  (CouponRoundJpaRepository)
+ *                   ├─ Redis connect-timeout       1000ms  (redis.yml)
+ *                   └─ Redis command timeout        500ms  (redis.yml)
+ *   releaseLoad                                  = 4800ms
+ * </pre>
+ *
+ * <p>네 값이 세 파일에 흩어져 있어 한쪽만 바뀌면 관계가 조용히 깨지므로,
  * {@code CouponDefinitionL2LeaseBudgetTest} 가 그 파일들을 직접 읽어 기본값을 고정한다.
  *
  * <p><b>아래 값을 어기면 설정 바인딩 시점에 {@link IllegalArgumentException} 으로 기동이
@@ -47,10 +56,10 @@ public record CouponDefinitionL2CacheProperties(
 ) {
     public CouponDefinitionL2CacheProperties {
         ttl = ttl == null ? Duration.ofSeconds(10) : ttl;
-        lockLease = lockLease == null ? Duration.ofSeconds(5) : lockLease;
+        lockLease = lockLease == null ? Duration.ofSeconds(6) : lockLease;
         waitTimeout = waitTimeout == null ? Duration.ofMillis(60) : waitTimeout;
         pollInterval = pollInterval == null ? Duration.ofMillis(10) : pollInterval;
-        maxLoadTime = maxLoadTime == null ? Duration.ofMillis(3_300) : maxLoadTime;
+        maxLoadTime = maxLoadTime == null ? Duration.ofMillis(4_800) : maxLoadTime;
         if (ttl.isNegative() || ttl.isZero()
                 || lockLease.isNegative() || lockLease.isZero()
                 || waitTimeout.isNegative()

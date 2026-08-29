@@ -90,15 +90,17 @@ coupon:
     #    전부 물러난다 — 락을 두고도 herd 가 그대로 DB 로 간다. 어긋나면 기동에서 죽는다.
     # ⚠️ lock-lease 는 max-load-time 보다 길어야 한다(어긋나면 기동에서 죽는다). 짧으면 lease 가
     #    먼저 끝나고, 뒤늦게 끝난 로더가 그 사이 다른 인스턴스가 올린 새 값을 덮어쓴다.
-    #    max-load-time 기본값의 근거는 다른 모듈에 있다 — storage.yml 의 hikari
-    #    connection-timeout(3000ms) + 정의 질의 timeout(300ms) = 3.3초.
-    #    storage.yml 의 그 두 값을 바꾸면 여기도 같이 본다(CouponDefinitionL2LeaseBudgetTest).
+    #    max-load-time 은 권한을 쥐고 있는 구간 전체다 — 권한은 질의 전에 얻고 L2 게시가 끝난
+    #    뒤에야 반납되므로 Redis 왕복도 든다. 기본값 근거는 다른 모듈에 있다:
+    #      storage.yml hikari connection-timeout 3000ms + 정의 질의 timeout 300ms
+    #      + redis.yml connect-timeout 1000ms + command timeout 500ms = 4800ms
+    #    그 네 값을 바꾸면 여기도 같이 본다(CouponDefinitionL2LeaseBudgetTest).
     l2:
       ttl: ${COUPON_DEFINITION_L2_TTL:10s}
-      lock-lease: ${COUPON_DEFINITION_L2_LOCK_LEASE:5s}
+      lock-lease: ${COUPON_DEFINITION_L2_LOCK_LEASE:6s}
       wait-timeout: ${COUPON_DEFINITION_L2_WAIT_TIMEOUT:60ms}
       poll-interval: ${COUPON_DEFINITION_L2_POLL_INTERVAL:10ms}
-      max-load-time: ${COUPON_DEFINITION_L2_MAX_LOAD_TIME:3300ms}
+      max-load-time: ${COUPON_DEFINITION_L2_MAX_LOAD_TIME:4800ms}
 
   idempotency:
     wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
