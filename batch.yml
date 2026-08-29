@@ -70,6 +70,27 @@ services:
       #    실행 인자로도 못 넣는다. 그런데 이 손잡이가 필요한 순간이 바로 이 경로다:
       #    시연 중 인덱스를 빠뜨려 기동이 거절되면 배치가 통째로 안 떠 회차 전이까지 선다.
       SCHEMA_GUARD_REQUIRE_BATCH_INDEXES: ${SCHEMA_GUARD_REQUIRE_BATCH_INDEXES:-true}
+      # 관리자 API 토큰 관문(CY-742). /api/v1/admin/** 에는 stop·recover·abandon 이 있어
+      # **포트에 닿는 누구나 도는 잡을 죽일 수 있다.** 주장이 아니라 소지를 묻는 2차 방어선이다.
+      #
+      # ⚠️ **여기서는 기본이 꺼짐이다 — 이 파일은 포트를 안 내보내기 때문이다.**
+      #    1차 방어선(포트 미노출)이 서 있는 동안에는 위협 자체가 없다. 여기서 켜 버리면
+      #    문서 여섯 곳의 표준 명령(`-f base.yml -f batch.yml up batch`)이 토큰 없이는
+      #    전부 기동 실패한다 — 보안 이득 없이 마찰만 는다.
+      #
+      #    **포트를 내보내는 batch-expose.yml 이 켠다.** 위협이 생기는 자리에서만 강제하고,
+      #    그때 BATCH_ADMIN_TOKEN 이 비어 있으면 기동을 거절한다("관문 있는 척" 이 제일 나쁘다).
+      #    앱 자체의 기본값은 켜짐이다(application.yml) — compose 밖에서 맨몸으로 띄우는
+      #    사람에게는 안전한 쪽이 기본이어야 한다.
+      #
+      # ⚠️ 토큰은 시크릿이다. 저장소가 공개라 여기 값을 적지 말고 .env 나 셸에서 준다.
+      BATCH_ADMIN_AUTH_REQUIRED: ${BATCH_ADMIN_AUTH_REQUIRED:-false}
+      BATCH_ADMIN_TOKEN: ${BATCH_ADMIN_TOKEN:-}
+      # 포트를 내보냈는지. 알림이 "무방비" 를 판정하는 데 쓴다 — 관문이 꺼진 것만으로는
+      # 위험한지 알 수 없고, **포트가 열린 채 꺼진 것**이 위험이다. batch-expose.yml 이 뒤집는다.
+      BATCH_ADMIN_PORT_EXPOSED: ${BATCH_ADMIN_PORT_EXPOSED:-false}
+      # 관제 화면이 브라우저에서 이 API 를 부를 오리진. * 는 쓰지 않는다.
+      BATCH_ADMIN_CORS_ORIGINS: ${BATCH_ADMIN_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
 
       # JVM 기본 존이 UTC 가 아닐 때 기동을 거절할지(CY-718). **위 가드들과 같은 이유로**
       # 여기 적는다 — compose 는 environment 에 적힌 것만 넘기므로, 안 적으면

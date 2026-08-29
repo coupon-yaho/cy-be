@@ -32,7 +32,7 @@ graph TD
 | 모듈 | 역할 |
 |---|---|
 | `api` | HTTP 진입점. 요청/응답 변환, 전역 예외 처리 |
-| `batch` | 스케줄 작업 (쿠폰 만료 등) + 검증 배치. 관리용 HTTP 트리거를 연다 — **인증 없음, 기본 비노출** |
+| `batch` | 스케줄 작업 (쿠폰 만료 등) + 검증 배치. 관리용 HTTP 트리거를 연다 — **공유 비밀 토큰 관문(기본 켬), 기본 비노출** |
 | `core` | 도메인 모델, 유즈케이스, 포트 인터페이스 |
 | `storage` | JPA 어댑터, Flyway 마이그레이션 |
 | `infra:mq` | Kafka 프로듀서·컨슈머 어댑터 |
@@ -125,10 +125,17 @@ docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올�
 ```
 
 **배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
-(`POST /api/v1/admin/verify` 트리거와 `/api/v1/admin/expire/runs/**` 복구)가 있는데 **인증이 없다** — batch 에 Spring Security 가 없고
-토큰 규약은 다른 영역의 몫이라 혼자 정하면 두 벌이 된다. 그래서 열 때만 오버레이를 얹는다.
+(`POST /api/v1/admin/verify`)와 복구(`/api/v1/admin/expire/runs/**`)가 있는데, **사용자
+인증이 없다** — batch 에 Spring Security 가 없고 토큰 규약은 다른 영역의 몫이라 혼자 정하면
+두 벌이 된다. 그래서 **방어선이 둘**이다:
+
+1. **포트 미노출** — 기본. 열 때만 오버레이를 얹는다.
+2. **공유 비밀 헤더**(`X-Batch-Admin-Token`, CY-742) — 오버레이를 얹으면 **자동으로 켜지고**,
+   `BATCH_ADMIN_TOKEN` 이 없으면 기동을 거절한다. 주장이 아니라 **소지**를 묻는 것이라
+   "서명 없는 역할 클레임은 안 넣는다"(`docs/11` §11)는 결정과 다르다.
 
 ```bash
+export BATCH_ADMIN_TOKEN=$(openssl rand -hex 24)
 docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
 ```
 

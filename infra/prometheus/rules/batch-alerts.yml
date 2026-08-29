@@ -1309,3 +1309,51 @@ groups:
             그 빈이 아예 안 떴다는 뜻일 수 있어 그 한 줄마저 없습니다.
             /actuator/prometheus 본문에서 두 이름을 직접 봅니다. 미터 이름이 바뀌었거나
             DefaultZoneGuard 가 컴포넌트 스캔 밖으로 나간 것입니다.
+
+      # **포트가 열린 채 관문이 꺼진 상태**(CY-742). 관문이 꺼진 것만으로는 위험하지 않다 —
+      # 포트를 안 내보내는 구성(batch.yml 단독)이 기본이고 그때는 1차 방어선이 선다.
+      # 위험은 batch-expose.yml 로 포트를 연 채 관문까지 꺼진 조합이고, 그것만 운다.
+      # 노출 여부는 앱이 스스로 못 알아서 배포가 게이지로 알려 준다.
+      #
+      # 증상이 아예 없다 — 요청이 그냥 통과하므로 예외도 로그도 안 난다(기동 로그에 ERROR 가
+      # 한 줄 남지만 이 스택엔 Loki·promtail 이 없어 모으는 것이 없다). 그래서 지표로 든다.
+      # ⚠️ **for 가 형제 셋(5m)보다 길다.** 시연에서 잠깐 이 조합으로 띄우는 일이 있어
+      # 5분이면 그때마다 운다. 15분은 그런 세션을 넘기되 잊고 둔 것은 잡는 길이다.
+      - alert: BatchAdminAuthDisabled
+        expr: >-
+          cy_batch_admin_port_exposed == 1
+          and on(instance, job) (cy_batch_admin_auth_enforcement == 0)
+        for: 15m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "포트가 열린 채 관리자 API 토큰 관문이 꺼져 있습니다"
+          description: >-
+            업무 포트를 호스트로 내보낸 상태에서 BATCH_ADMIN_AUTH_REQUIRED=false 입니다.
+            /api/v1/admin/** 에는 stop·recover·abandon 이 있어 **포트에 닿는 누구나 도는
+            잡을 죽일 수 있습니다** — 1차 방어선(포트 미노출)도 없는 상태입니다.
+            BATCH_ADMIN_TOKEN 을 주고 관문을 다시 켜거나, 포트 노출을 거두십시오.
+
+      # **위 알림도 조인으로 서 있다.** 두 게이지를 and 로 묶으므로 하나라도 없어지면 빈
+      # 벡터가 되어 조용하다 — 둘은 AdminTokenConfig 의 같은 @Bean 에서 나오므로 그 설정이
+      # 스캔 밖으로 나가면 **관문과 탐지 수단이 함께 사라진다.** 그 조합이 제일 나쁘다.
+      # ⚠️ absent() 가 아니라 unless 다 — 형제 BatchTimezoneGaugeMissing 과 같은 근거다.
+      - alert: BatchAdminAuthGaugeMissing
+        expr: >-
+          (min_over_time(up{job="cy-batch"}[5m]) == 1)
+          unless on(instance, job)
+          (cy_batch_admin_auth_enforcement and on(instance, job) cy_batch_admin_port_exposed)
+        for: 10m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
+          description: >-
+            배치는 떠 있는데 cy_batch_admin_auth_enforcement 또는
+            cy_batch_admin_port_exposed 시리즈가 없습니다. BatchAdminAuthDisabled 가 둘을
+            and 로 묶으므로 **포트가 열린 채 관문이 꺼져 있어도 알림이 한 건도 안 갑니다**.
+            둘은 같은 @Bean 에서 나오므로, 없다는 것은 AdminTokenConfig 가 컴포넌트 스캔
+            밖으로 나갔다는 뜻일 수 있습니다 — 그러면 관문 자체도 없습니다.
+            /actuator/prometheus 본문에서 두 이름을 직접 봅니다.

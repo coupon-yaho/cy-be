@@ -51,9 +51,16 @@ import com.kafkick.core.verification.VerificationRuleRepository;
  * 관리 포트로 옮기면 {@code /actuator/verify} 가 되어 그 계약이 깨진다 — 노출은 compose 의
  * 포트 매핑으로 줄인다. 근거는 {@code docs/15}.
  *
- * <p><b>인증이 없다.</b> PRD 보안 ①이 {@code /api/v1/admin/**} 에 {@code ADMIN} 역할을
+ * <p><b>사용자 인증이 없다.</b> PRD 보안 ①이 {@code /api/v1/admin/**} 에 {@code ADMIN} 역할을
  * 요구하지만 batch 에 Spring Security 가 없고, 토큰 규약은 영역 ③의 몫이라 여기서 혼자
- * 정하면 두 벌이 된다. <b>지금 이 API 를 지키는 것은 "밖에서 못 닿는다" 하나뿐이다.</b>
+ * 정하면 두 벌이 된다. 그래서 <b>누가 불렀는지는 여전히 못 가른다</b> — 응답이 카탈로그
+ * 문구만 내고 {@code detail} 을 로그에만 남기는 근거가 그것이다.
+ *
+ * <p><b>다만 "밖에서 못 닿는다" 하나뿐은 아니다(CY-742).</b> 방어선이 둘이다 —
+ * 1차는 업무 포트 미노출({@code batch.yml}), 2차는 공유 비밀 헤더
+ * ({@code AdminTokenFilter} 의 {@code X-Batch-Admin-Token}). 2차는 <b>주장이 아니라
+ * 소지</b>를 묻는 것이라, 위에 적은 "서명 없는 역할 클레임을 안 넣는다" 는 결정과 다르다.
+ * 자세한 것은 {@code docs/11} §11.
  */
 @RestController
 @RequestMapping("/api/v1/admin/verify")

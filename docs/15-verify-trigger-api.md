@@ -42,15 +42,18 @@
 
 ```bash
 docker compose -f base.yml -f batch.yml up batch                        # 안 내보낸다
-docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch    # 열 때만
+
+export BATCH_ADMIN_TOKEN=$(openssl rand -hex 24)                       # 열 때는 토큰이 필요하다
+docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
 ```
 
 **CI 가 그 규율을 검사한다.** 기본 조합에 `batch` 포트가 있으면 실패하고, 오버레이를 얹은
 조합에서 `127.0.0.1` 이 빠져도 실패한다. 둘 다 돌연변이로 검출력을 확인했다.
 
-**이것은 방어가 아니라 노출 축소다.** 같은 호스트에서 `docker compose exec` 로 들어가면
-여전히 인증 없이 닿는다. PRD 보안 ①이 요구한 `ADMIN 역할`은 여기서 안 한다 — 그 이유와
-남긴 것은 맨 아래에.
+**포트 매핑 자체는 방어가 아니라 노출 축소다.** 그래서 그 오버레이가 **토큰 관문을 함께
+켠다**(CY-742) — `BATCH_ADMIN_TOKEN` 이 없으면 기동을 거절한다. 관문은 `curl` 에도 걸리지만
+**누가 불렀는지는 안 가른다**(소지만 묻는다). PRD 보안 ①이 요구한 `ADMIN 역할`은 여기서
+안 한다 — 그 이유와 남긴 것은 맨 아래에.
 
 ---
 

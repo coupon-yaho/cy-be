@@ -9,6 +9,13 @@ batch:
   timezone-guard:
     required: false
 
+  # 관리자 API 토큰 관문(CY-742)을 테스트에서는 끈다. 관리자 API 테스트가 여럿인데 각자
+  # 토큰을 실으면, 관문을 실수로 지워도 그 테스트들이 전부 초록으로 남는다.
+  # 관문 자체는 AdminTokenFilterTest 가 켠 채로 잰다.
+  admin:
+    auth:
+      required: false
+
 # 테스트 설정을 저장소에 고정한다.
 # 이게 없으면 테스트가 main/resources/application.yml 을 읽는데, 그 파일은 .gitignore 대상이라
 # 있는 사람과 없는 사람의 결과가 갈린다. .example 을 복사한 순간 flyway.enabled:false 로

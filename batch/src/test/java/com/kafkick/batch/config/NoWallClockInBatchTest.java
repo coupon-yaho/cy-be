@@ -84,6 +84,8 @@ class NoWallClockInBatchTest {
      *                            판정은 여전히 잡 안에서 그 asOf 로만 한다
      * VerifyTriggerController 2  asOf 미래 검사 · 곧 뜰 만료와의 간격 — 둘 다 접수 단계다
      * BatchApiExceptionHandler 1  응답 timestamp
+     * AdminTokenFilter       1  같은 축 — 401 봉투의 timestamp. 이 필터는 DispatcherServlet
+     *                            앞에서 응답해 위 핸들러를 못 지나므로 봉투를 직접 만든다
      *
      * ExpirePendingRefresher 는 <b>주입 시계</b>를 안 쓴다(예산 0) — 시각을 배치 메타에서
      * 읽어 오기 때문이고, 그것이 그 클래스의 요지다. 다만 7일 창은 SQL 의 {@code NOW()} 라
@@ -110,7 +112,12 @@ class NoWallClockInBatchTest {
             // 뒤엣것은 max-expire-skips=0 이 손 트리거의 방어를 없앤 자리를 접수 단계에서
             // 닫는다. 둘 다 판정에 안 들어간다 — 잡에 실리는 asOf 는 요청값 그대로다.
             "com/kafkick/batch/api/VerifyTriggerController.java", 2,
-            "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1);
+            "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1,
+            // 하나다 — 거절 응답 봉투의 timestamp. BatchApiExceptionHandler 와 같은 축이고
+            // 같은 이유로 예산에 든다: 판정이 아니라 **응답 메타**다. 이 필터는
+            // DispatcherServlet 앞에서 응답해 그 핸들러를 못 지나므로 봉투를 직접 만든다 —
+            // 안 만들면 같은 API 표면에서 error 필드 집합이 갈린다(CY-742 리뷰).
+            "com/kafkick/batch/config/AdminTokenFilter.java", 1);
 
     /**
      * <b>주입된 시계도 예산을 갖는다.</b> {@code timeProvider.now()} 는 위 정규식에 안 걸리고,

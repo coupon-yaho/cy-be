@@ -1225,3 +1225,145 @@ tests:
               summary: "JVM 기본 존 게이지가 없습니다 — BatchDefaultZoneNotUtc 가 조용히 꺼져 있습니다"
               description: >-
                 배치는 떠 있는데 cy_batch_default_zone_verified 또는 cy_batch_timezone_enforcement 시리즈가 없습니다. BatchDefaultZoneNotUtc 가 둘을 and 로 묶으므로 **JVM 기본 존이 UTC 가 아니어도 알림이 한 건도 안 갑니다**. 거절을 끈 채 존이 어긋나면 DefaultZoneGuard 가 기동 때 ERROR 를 한 줄 남기지만 이 스택엔 Loki·promtail 이 없어 그것을 모으는 것이 없고, 게이지가 없다는 것은 그 빈이 아예 안 떴다는 뜻일 수 있어 그 한 줄마저 없습니다. /actuator/prometheus 본문에서 두 이름을 직접 봅니다. 미터 이름이 바뀌었거나 DefaultZoneGuard 가 컴포넌트 스캔 밖으로 나간 것입니다.
+
+  # 포트를 안 내보내면 관문이 꺼져 있어도 안 운다 — 1차 방어선이 서 있다.
+  # ⚠️ 이 케이스가 **판별한다**: 조건에서 port_exposed 를 빼면 여기가 울어 실패한다.
+  - interval: 1m
+    name: "포트를 안 내보냈으면 관문이 꺼져 있어도 안 운다"
+    input_series:
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x40'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BatchAdminAuthDisabled
+        exp_alerts: []
+
+  # 포트를 열었어도 관문이 켜져 있으면 안 운다.
+  - interval: 1m
+    name: "포트를 열었어도 관문이 켜져 있으면 안 운다"
+    input_series:
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: BatchAdminAuthDisabled
+        exp_alerts: []
+
+  # 15분을 못 채우면 아직 안 운다 — 시연 중 잠깐 뜨는 것으로 깨우지 않는다.
+  - interval: 1m
+    name: "열린 채 꺼진 지 15분 전에는 안 운다"
+    input_series:
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: BatchAdminAuthDisabled
+        exp_alerts: []
+
+  # 열린 채 꺼진 상태로 15분이 지나면 운다 — 1차도 2차도 없는 조합이다.
+  - interval: 1m
+    name: "열린 채 꺼진 채로 15분이 지나면 운다"
+    input_series:
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchAdminAuthDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: "batch:9092"
+              job: "cy-batch"
+            exp_annotations:
+              summary: "포트가 열린 채 관리자 API 토큰 관문이 꺼져 있습니다"
+              description: >-
+                업무 포트를 호스트로 내보낸 상태에서 BATCH_ADMIN_AUTH_REQUIRED=false 입니다. /api/v1/admin/** 에는 stop·recover·abandon 이 있어 **포트에 닿는 누구나 도는 잡을 죽일 수 있습니다** — 1차 방어선(포트 미노출)도 없는 상태입니다. BATCH_ADMIN_TOKEN 을 주고 관문을 다시 켜거나, 포트 노출을 거두십시오.
+
+  # 둘 다 있으면 부재 알림은 안 뜬다.
+  - interval: 1m
+    name: "관문 게이지가 둘 다 있으면 부재 알림은 안 운다"
+    input_series:
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x40'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchAdminAuthGaugeMissing
+        exp_alerts: []
+
+  # 관문 게이지만 없어도 조인이 빈 벡터가 된다.
+  - interval: 1m
+    name: "관문 게이지만 없어도 운다"
+    input_series:
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchAdminAuthGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: "batch:9092"
+              job: "cy-batch"
+            exp_annotations:
+              summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
+              description: >-
+                배치는 떠 있는데 cy_batch_admin_auth_enforcement 또는 cy_batch_admin_port_exposed 시리즈가 없습니다. BatchAdminAuthDisabled 가 둘을 and 로 묶으므로 **포트가 열린 채 관문이 꺼져 있어도 알림이 한 건도 안 갑니다**. 둘은 같은 @Bean 에서 나오므로, 없다는 것은 AdminTokenConfig 가 컴포넌트 스캔 밖으로 나갔다는 뜻일 수 있습니다 — 그러면 관문 자체도 없습니다. /actuator/prometheus 본문에서 두 이름을 직접 봅니다.
+
+  # 노출 게이지만 없어도 마찬가지다 — 이쪽이 안쪽 and 를 판별한다.
+  - interval: 1m
+    name: "노출 게이지만 없어도 운다"
+    input_series:
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchAdminAuthGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: "batch:9092"
+              job: "cy-batch"
+            exp_annotations:
+              summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
+              description: >-
+                배치는 떠 있는데 cy_batch_admin_auth_enforcement 또는 cy_batch_admin_port_exposed 시리즈가 없습니다. BatchAdminAuthDisabled 가 둘을 and 로 묶으므로 **포트가 열린 채 관문이 꺼져 있어도 알림이 한 건도 안 갑니다**. 둘은 같은 @Bean 에서 나오므로, 없다는 것은 AdminTokenConfig 가 컴포넌트 스캔 밖으로 나갔다는 뜻일 수 있습니다 — 그러면 관문 자체도 없습니다. /actuator/prometheus 본문에서 두 이름을 직접 봅니다.
+
+  # 설정 빈이 스캔 밖으로 나가면 둘이 함께 사라진다 — 관문도 탐지도 없는 상태다.
+  - interval: 1m
+    name: "관문 게이지가 둘 다 없으면 운다"
+    input_series:
+      - series: 'up{instance="batch:9092", job="cy-batch"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchAdminAuthGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: "batch:9092"
+              job: "cy-batch"
+            exp_annotations:
+              summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
+              description: >-
+                배치는 떠 있는데 cy_batch_admin_auth_enforcement 또는 cy_batch_admin_port_exposed 시리즈가 없습니다. BatchAdminAuthDisabled 가 둘을 and 로 묶으므로 **포트가 열린 채 관문이 꺼져 있어도 알림이 한 건도 안 갑니다**. 둘은 같은 @Bean 에서 나오므로, 없다는 것은 AdminTokenConfig 가 컴포넌트 스캔 밖으로 나갔다는 뜻일 수 있습니다 — 그러면 관문 자체도 없습니다. /actuator/prometheus 본문에서 두 이름을 직접 봅니다.
+

@@ -77,9 +77,13 @@ import com.kafkick.core.support.response.ResponseEnvelope;
  *
  * <h2>노출</h2>
  *
- * <p>업무 포트(9090)에 <b>인증 없이</b> 열린다 — {@code batch.yml} 이 그 포트를 아예 안
- * 내보내는 이유가 그것이고, 필요할 때만 {@code batch-expose.yml} 을 얹어 {@code 127.0.0.1}
- * 에 묶는다({@code docs/13} §4). {@code VerifyTriggerController} 와 같은 축이다.
+ * <p>업무 포트(9090)에 열리고 <b>사용자 인증이 없다</b> — 누가 불렀는지는 못 가른다.
+ * {@code batch.yml} 이 그 포트를 아예 안 내보내는 이유가 그것이고, 필요할 때만
+ * {@code batch-expose.yml} 을 얹어 {@code 127.0.0.1} 에 묶는다({@code docs/13} §4).
+ *
+ * <p><b>그 오버레이가 토큰 관문을 함께 켠다</b>(CY-742) — 1차 방어선이 사라지는 자리가
+ * 정확히 거기다. {@code AdminTokenFilter} 가 {@code /api/v1/admin/**} 전체를 덮으므로
+ * 이 컨트롤러도 그 뒤에 선다. {@code VerifyTriggerController} 와 같은 축이다.
  */
 @RestController
 @RequestMapping("/api/v1/admin/expire")

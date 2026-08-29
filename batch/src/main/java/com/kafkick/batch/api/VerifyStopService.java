@@ -153,7 +153,8 @@ public class VerifyStopService {
 
     /**
      * <b>시체가 아니면 거절하고, 언제부터 가능한지 로그에 남긴다.</b> 응답 문구는 카탈로그
-     * 것만 나간다 — 이 API 에는 인증이 없다({@code BatchApiExceptionHandler}).
+     * 것만 나간다 — 이 API 에는 사용자 인증이 없어 요청자를 못 가른다
+     * ({@code BatchApiExceptionHandler}).
      *
      * @return 판정에 쓴 절대 시각. 선점문이 같은 값을 다시 건다.
      */

@@ -24,9 +24,10 @@ import com.kafkick.core.support.response.ResponseEnvelope;
  * 죽었나"</i> 에 답하고, 복구로 그것을 닫는다. 판단이 갈린 것은 <b>2단계가 아니라 한 방</b>
  * 이라는 것뿐이고 근거는 {@link CleanupRecoveryService} 에 적었다.
  *
- * <p><b>이 API 에는 인증이 없다.</b> 업무 포트를 기본으로 안 내보내는 것이 그 방어선이다
- * ({@code batch.yml}). 그래서 응답 문구는 카탈로그 것만 나가고 {@code detail} 은 로그에만
- * 남는다({@code BatchApiExceptionHandler}).
+ * <p><b>이 API 에는 사용자 인증이 없다.</b> 방어선은 둘인데(CY-742) 둘 다 <b>누가 불렀는지는
+ * 안 가른다</b> — 1차는 업무 포트 미노출({@code batch.yml}), 2차는 공유 비밀 헤더
+ * ({@code AdminTokenFilter}). 그래서 응답 문구는 카탈로그 것만 나가고 {@code detail} 은
+ * 로그에만 남는다({@code BatchApiExceptionHandler}).
  */
 @RestController
 @RequestMapping("/api/v1/admin/cleanup")
