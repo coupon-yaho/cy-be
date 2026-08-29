@@ -427,7 +427,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             return EngineVersion.V1;
         }
         EngineVersion parsed = EngineVersion.valueOf(engineVersion);
-        if (parsed == EngineVersion.V3) {
+        if (parsed != EngineVersion.V1 && parsed != EngineVersion.V2) {
             throw new IllegalArgumentException("관리자 재고가 지원하지 않는 발급 엔진입니다: " + parsed);
         }
         return parsed;

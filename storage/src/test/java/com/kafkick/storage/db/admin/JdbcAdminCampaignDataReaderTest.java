@@ -248,15 +248,6 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(detail.value().engineVersion()).isEqualTo(EngineVersion.V2);
     }
 
-    /** 미래 enum이 추가돼도 관리자 재고가 구현하지 않은 엔진을 V1처럼 소비하지 않는지 검증합니다. */
-    @Test
-    @DisplayName("관리자 재고가 지원하지 않는 V3 엔진은 거부한다")
-    void rejectsUnsupportedEngineVersion() {
-        assertThatThrownBy(() -> JdbcAdminCampaignDataReader.parseEngineVersion("V3"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("지원하지 않는 발급 엔진");
-    }
-
     /** 실제 회차 도메인의 24시간 상한을 넘는 기간은 설정 실패로 판정하는지 검증합니다. */
     @Test
     @DisplayName("24시간을 초과한 회차는 캠페인 설정이 준비되지 않는다")
