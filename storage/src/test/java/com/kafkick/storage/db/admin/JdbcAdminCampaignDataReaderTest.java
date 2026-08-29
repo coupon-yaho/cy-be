@@ -57,6 +57,7 @@ import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
 /** Flyway 전체 스키마와 SELECT 전용 관측 계정에서 JDBC 캠페인 조회 계약을 검증합니다. */
@@ -217,6 +218,43 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(catalog.campaigns().get(2).preparation())
                 .isEqualTo(new PreparationSource(
                         true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** DB 회차 버전이 전역 설정으로 덮이지 않고 목록과 상세 계약에 그대로 전달되는지 검증합니다. */
+    @Test
+    @DisplayName("카탈로그와 상세는 V2를 보존하고 NULL 엔진은 V1로 해석한다")
+    void mapsPerCampaignEngineVersionWithNullAsV1() {
+        insertCoupon(10, 1, 1, "V2 캠페인", "OPEN", SNAPSHOT.minusSeconds(60));
+        insertCoupon(11, 1, 1, "호환 캠페인", "SCHEDULED", SNAPSHOT.plusSeconds(60));
+        writeJdbc.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id = 10");
+        writeJdbc.update("UPDATE coupons SET issuance_engine_version = NULL WHERE id = 11");
+        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
+        insertStock(11, 100, 0, SNAPSHOT.minusSeconds(5));
+
+        AdminCampaignCatalog catalog = reader.loadCatalog(SNAPSHOT);
+        AdminCampaignDetailData detail = reader.findDetail(10, FROM, TO, SNAPSHOT);
+
+        assertThat(catalog.campaigns())
+                .filteredOn(campaign -> campaign.couponId() == 10L)
+                .singleElement()
+                .extracting(AdminCampaignCatalog.CampaignData::engineVersion)
+                .isEqualTo(EngineVersion.V2);
+        assertThat(catalog.campaigns())
+                .filteredOn(campaign -> campaign.couponId() == 11L)
+                .singleElement()
+                .extracting(AdminCampaignCatalog.CampaignData::engineVersion)
+                .isEqualTo(EngineVersion.V1);
+        assertThat(detail.availability()).isEqualTo(DetailAvailability.AVAILABLE);
+        assertThat(detail.value().engineVersion()).isEqualTo(EngineVersion.V2);
+    }
+
+    /** 미래 enum이 추가돼도 관리자 재고가 구현하지 않은 엔진을 V1처럼 소비하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("관리자 재고가 지원하지 않는 V3 엔진은 거부한다")
+    void rejectsUnsupportedEngineVersion() {
+        assertThatThrownBy(() -> JdbcAdminCampaignDataReader.parseEngineVersion("V3"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("지원하지 않는 발급 엔진");
     }
 
     /** 실제 회차 도메인의 24시간 상한을 넘는 기간은 설정 실패로 판정하는지 검증합니다. */

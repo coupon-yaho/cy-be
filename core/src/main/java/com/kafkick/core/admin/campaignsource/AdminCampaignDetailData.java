@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Objects;
 
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
+import com.kafkick.core.observation.EngineVersion;
 
 /** 관리자 캠페인 상세 조회의 존재 여부와 DB 원천값입니다. */
 public record AdminCampaignDetailData(DetailAvailability availability, DetailValue value) {
@@ -24,6 +25,7 @@ public record AdminCampaignDetailData(DetailAvailability availability, DetailVal
             long couponId,
             String campaignName,
             String brandName,
+            EngineVersion engineVersion,
             CouponMetricsSource.CampaignRuntime campaign,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
             CouponMetricsSource.Observation<CouponMetricsSource.IssuanceStatusCounts> holdingCounts,
@@ -34,10 +36,30 @@ public record AdminCampaignDetailData(DetailAvailability availability, DetailVal
         public DetailValue {
             Objects.requireNonNull(campaignName, "campaignName");
             Objects.requireNonNull(brandName, "brandName");
+            Objects.requireNonNull(engineVersion, "engineVersion");
             Objects.requireNonNull(campaign, "campaign");
             Objects.requireNonNull(stock, "stock");
             Objects.requireNonNull(holdingCounts, "holdingCounts");
             Objects.requireNonNull(transitions, "transitions");
+        }
+
+        /**
+         * 버전 필드 도입 전 호출부를 V1 계약으로 보존합니다.
+         *
+         * @deprecated 새 호출부는 회차 DB에서 읽은 {@link EngineVersion}을 명시해야 합니다.
+         */
+        @Deprecated
+        public DetailValue(
+                long couponId,
+                String campaignName,
+                String brandName,
+                CouponMetricsSource.CampaignRuntime campaign,
+                CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
+                CouponMetricsSource.Observation<CouponMetricsSource.IssuanceStatusCounts> holdingCounts,
+                CouponMetricsSource.Observation<List<CouponMetricsSource.TransitionBucket>> transitions
+        ) {
+            this(couponId, campaignName, brandName, EngineVersion.V1,
+                    campaign, stock, holdingCounts, transitions);
         }
     }
 }
