@@ -6,3 +6,11 @@ spring:
       password: ${REDIS_PASSWORD:}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+
+# Redis가 새로 비었을 때 api 기동이 한 번만 저장한다(SET NX). 현재 batch는 이 자동설정을
+# 제외하므로 부트스트랩하지 않는다.
+runtime-config:
+  bootstrap:
+    engine-version: ${RUNTIME_CONFIG_BOOTSTRAP_ENGINE_VERSION:V1}
+    release-stage: ${RUNTIME_CONFIG_BOOTSTRAP_RELEASE_STAGE:V1}
+    queue-mode: ${RUNTIME_CONFIG_BOOTSTRAP_QUEUE_MODE:OFF}

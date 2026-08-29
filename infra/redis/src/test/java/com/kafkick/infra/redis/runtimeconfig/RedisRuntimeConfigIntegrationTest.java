@@ -167,6 +167,58 @@ class RedisRuntimeConfigIntegrationTest {
     }
 
     @Test
+    void bootstrapSeedsAnEmptyRedisWithRevisionZero() throws Exception {
+        RuntimeConfigBootstrapProperties properties = bootstrapProperties(
+                EngineVersion.V2, ReleaseStage.V2_1, QueueMode.ALWAYS);
+
+        bootstrap(properties).run(new org.springframework.boot.DefaultApplicationArguments());
+
+        assertThat(new RedisRuntimeConfigStore(redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC)).get())
+                .isEqualTo(new RuntimeConfigSnapshot(
+                        EngineVersion.V2, ReleaseStage.V2_1, QueueMode.ALWAYS,
+                        0, NOW, "system:bootstrap", com.kafkick.core.observation.SourceStatus.VALID));
+    }
+
+    @Test
+    void bootstrapDoesNotOverwriteAnExistingRevision() throws Exception {
+        RuntimeConfigSnapshot existing = snapshot(9);
+        seed(existing);
+
+        bootstrap(bootstrapProperties(EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE))
+                .run(new org.springframework.boot.DefaultApplicationArguments());
+
+        assertThat(new RedisRuntimeConfigStore(redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC)).get())
+                .isEqualTo(existing);
+    }
+
+    @Test
+    void concurrentBootstrapsHaveOneSetNxWinner() throws Exception {
+        RuntimeConfigBootstrap first = bootstrap(bootstrapProperties(
+                EngineVersion.V2, ReleaseStage.V2_1, QueueMode.ALWAYS));
+        RuntimeConfigBootstrap second = bootstrap(bootstrapProperties(
+                EngineVersion.V3, ReleaseStage.V3, QueueMode.ADAPTIVE));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            List<Future<?>> results = List.of(
+                    executor.submit(() -> runBootstrap(first, ready, start)),
+                    executor.submit(() -> runBootstrap(second, ready, start)));
+            ready.await();
+            start.countDown();
+            for (Future<?> result : results) {
+                result.get();
+            }
+        }
+
+        RuntimeConfigSnapshot stored = new RedisRuntimeConfigStore(
+                redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC)).get();
+        assertThat(stored.revision()).isZero();
+        assertThat(stored.updatedBy()).isEqualTo("system:bootstrap");
+        assertThat(stored.engineVersion()).isIn(EngineVersion.V2, EngineVersion.V3);
+    }
+
+    @Test
     void missingKeyWithZeroRevisionCannotImplicitlySeedTheStore() {
         RedisRuntimeConfigStore store = new RedisRuntimeConfigStore(
                 redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
@@ -265,6 +317,35 @@ class RedisRuntimeConfigIntegrationTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode().getCode())
                 .isEqualTo("RUNTIME_CONFIG-006");
+    }
+
+    private RuntimeConfigBootstrap bootstrap(RuntimeConfigBootstrapProperties properties) {
+        return new RuntimeConfigBootstrap(redis, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC), properties);
+    }
+
+    private static RuntimeConfigBootstrapProperties bootstrapProperties(
+            EngineVersion engineVersion, ReleaseStage releaseStage, QueueMode queueMode
+    ) {
+        RuntimeConfigBootstrapProperties properties = new RuntimeConfigBootstrapProperties();
+        properties.setEngineVersion(engineVersion);
+        properties.setReleaseStage(releaseStage);
+        properties.setQueueMode(queueMode);
+        return properties;
+    }
+
+    private static void runBootstrap(
+            RuntimeConfigBootstrap bootstrap, CountDownLatch ready, CountDownLatch start
+    ) {
+        try {
+            ready.countDown();
+            start.await();
+            bootstrap.run(new org.springframework.boot.DefaultApplicationArguments());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(exception);
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
     }
 
     // 시드 JSON 이 스냅샷 포맷과 어긋나면 update 가 아니라 첫 조회에서 드러나야 한다.

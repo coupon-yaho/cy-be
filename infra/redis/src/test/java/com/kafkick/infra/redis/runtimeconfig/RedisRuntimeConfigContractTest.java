@@ -40,6 +40,7 @@ class RedisRuntimeConfigContractTest {
         contextRunner.run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(RuntimeConfigStore.class);
+            assertThat(context).hasSingleBean(RuntimeConfigBootstrap.class);
         });
     }
 
@@ -60,6 +61,7 @@ class RedisRuntimeConfigContractTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(RuntimeConfigStore.class);
                     assertThat(context.getBean(RuntimeConfigStore.class)).isSameAs(customStore);
+                    assertThat(context).doesNotHaveBean(RuntimeConfigBootstrap.class);
                 });
     }
 
@@ -76,6 +78,18 @@ class RedisRuntimeConfigContractTest {
     }
 
     @Test
+    void redisConfigurationDeclaresTheSharedRuntimeConfigBootstrapDefaults() throws Exception {
+        String config = Files.readString(Path.of("src/main/resources/redis.yml.example"));
+
+        assertThat(config).contains(
+                "runtime-config:",
+                "bootstrap:",
+                "engine-version: ${RUNTIME_CONFIG_BOOTSTRAP_ENGINE_VERSION:V1}",
+                "release-stage: ${RUNTIME_CONFIG_BOOTSTRAP_RELEASE_STAGE:V1}",
+                "queue-mode: ${RUNTIME_CONFIG_BOOTSTRAP_QUEUE_MODE:OFF}");
+    }
+
+    @Test
     void runtimeStoreDoesNotDependOnAutoConfigurationEvaluationOrder() throws Exception {
         Method factory = RuntimeConfigRedisAutoConfiguration.class.getDeclaredMethod(
                 "runtimeConfigStore",
@@ -84,7 +98,7 @@ class RedisRuntimeConfigContractTest {
                 org.springframework.beans.factory.ObjectProvider.class);
 
         assertThat(factory.getAnnotation(ConditionalOnBean.class)).isNull();
-        assertThat(factory.getReturnType()).isEqualTo(RuntimeConfigStore.class);
+        assertThat(factory.getReturnType()).isEqualTo(RedisRuntimeConfigStore.class);
     }
 
     @Test
