@@ -428,9 +428,10 @@ public record AdminMetricsResponse(
         public static final ResourceRowSpec REDIS =
                 new ResourceRowSpec("Redis", "사용률 원천 없음", SaturationPanel.WARN_AT_DEFAULT);
 
-        /** 컨테이너 안에서 직접 재지 않습니다. 행을 지우면 화면이 '측정했는데 여유' 로 읽습니다. */
+        /** 사용률은 actuator 디스크, 보조 문구는 Tomcat 수신·송신 처리량을 씁니다. */
         public static final ResourceRowSpec DISK_NETWORK =
-                new ResourceRowSpec("디스크 · 네트워크", "간접 지표로 대체", SaturationPanel.WARN_AT_DEFAULT);
+                new ResourceRowSpec("디스크 · 네트워크", "디스크 사용률 · HTTP RX/TX",
+                        SaturationPanel.WARN_AT_DEFAULT);
 
         public static final List<ResourceRowSpec> ALL =
                 List.of(HIKARI, TOMCAT, CPU, HEAP, REDIS, DISK_NETWORK);

@@ -41,6 +41,27 @@ class PromCouponIssuanceRateReaderTest {
     }
 
     @Test
+    void restoresTheRequestedGridWhenPrometheusRoundsEvaluationTimesToMillis() {
+        Instant snapshotAt = Instant.parse("2026-08-25T00:00:00.000157018Z");
+        Instant roundedStart = snapshotAt.minus(MetricsWindow.ONE_MINUTE.duration())
+                .truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        List<PromRangePoint> roundedGrid = new ArrayList<>();
+        for (int offset = 0; offset <= 60; offset += 5) {
+            roundedGrid.add(new PromRangePoint(roundedStart.plusSeconds(offset), 2.0));
+        }
+        RecordingRangeQuery rangeQuery = new RecordingRangeQuery(query -> oneSeries(roundedGrid));
+        RecordingTimeQuery timeQuery = new RecordingTimeQuery(
+                (query, evaluationAt) -> freshnessAt(snapshotAt));
+
+        CouponMetricsSource.Observation<List<CouponMetricsSource.IssuanceRateSample>> result = reader(
+                rangeQuery, timeQuery).read(10L, MetricsWindow.ONE_MINUTE, snapshotAt);
+
+        assertThat(result.status()).isEqualTo(SourceStatus.VALID);
+        assertThat(result.value()).extracting(CouponMetricsSource.IssuanceRateSample::observedAt)
+                .containsExactlyElementsOf(gridAt(snapshotAt));
+    }
+
+    @Test
     void distinguishesAbsentSeriesFromMeasuredZeroRates() {
         RecordingRangeQuery absentRange = new RecordingRangeQuery(query -> List.of());
         RecordingTimeQuery unusedTime = new RecordingTimeQuery((query, evaluationAt) -> {
@@ -165,6 +186,14 @@ class PromCouponIssuanceRateReaderTest {
         List<PromRangePoint> points = new ArrayList<>();
         for (int offset = 60; offset >= 0; offset -= 5) {
             points.add(new PromRangePoint(SNAPSHOT_AT.minusSeconds(offset), value));
+        }
+        return List.copyOf(points);
+    }
+
+    private static List<Instant> gridAt(Instant snapshotAt) {
+        List<Instant> points = new ArrayList<>();
+        for (int offset = 60; offset >= 0; offset -= 5) {
+            points.add(snapshotAt.minusSeconds(offset));
         }
         return List.copyOf(points);
     }

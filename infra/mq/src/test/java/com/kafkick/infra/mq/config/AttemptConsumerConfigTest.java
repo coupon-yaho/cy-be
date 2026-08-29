@@ -9,14 +9,18 @@ import java.util.Map;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.MicrometerConsumerListener;
 
 import com.kafkick.core.observation.IssuanceFlowEvent;
 import com.kafkick.infra.mq.attempt.AttemptArchiveConsumer;
 import com.kafkick.infra.mq.attempt.AttemptLiveConsumer;
 
 import tools.jackson.databind.json.JsonMapper;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * 이 티켓의 1번 인수 조건 — <b>두 컨슈머의 {@code group.id} 가 달라야 한다.</b>
@@ -86,6 +90,24 @@ class AttemptConsumerConfigTest {
                 .containsEntry(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
         assertThat(configOf(config.attemptArchiveConsumerFactory(PROPERTIES, jsonMapper())))
                 .containsEntry(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+    }
+
+    @Test
+    void bindsNativeKafkaConsumerLagMetricsToBothFactories() {
+        AttemptConsumerConfig config = new AttemptConsumerConfig();
+        ConsumerFactory<String, IssuanceFlowEvent> live =
+                config.attemptLiveConsumerFactory(PROPERTIES, jsonMapper());
+        ConsumerFactory<String, IssuanceFlowEvent> archive =
+                config.attemptArchiveConsumerFactory(PROPERTIES, jsonMapper());
+        StaticListableBeanFactory beans = new StaticListableBeanFactory();
+        beans.addBean("meterRegistry", new SimpleMeterRegistry());
+
+        config.attemptConsumerMetricsBinder(
+                live, archive, beans.getBeanProvider(MeterRegistry.class))
+                .afterSingletonsInstantiated();
+
+        assertThat(live.getListeners()).singleElement().isInstanceOf(MicrometerConsumerListener.class);
+        assertThat(archive.getListeners()).singleElement().isInstanceOf(MicrometerConsumerListener.class);
     }
 
     private static String groupIdOf(ConsumerFactory<String, IssuanceFlowEvent> factory) {

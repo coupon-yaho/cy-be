@@ -1372,16 +1372,16 @@ class PromMetricsAssemblerTest {
         assertThat(response.saturation().thresholds().critical()).isEqualTo(85);
     }
 
-    /** 사용률의 분모가 없는 자원은 0 이 아니라 N_A 입니다. 0 은 "여유" 로 읽힙니다. */
+    /** Redis 는 분모가 없어 N_A, 측정 가능한 디스크는 표본 전까지 PENDING 입니다. */
     @Test
-    @DisplayName("원천이 없는 자원 행은 N_A 로 나간다")
+    @DisplayName("분모가 없는 자원과 아직 안 들어온 자원을 구분한다")
     void rowsWithoutSourceAreNotApplicable() {
         AdminMetricsResponse response = assemble(FakePromQuery.empty(), globalQuery());
 
         assertThat(response.saturation().resources().get(4).utilization().state())
                 .isEqualTo(SourceStatus.N_A);
         assertThat(response.saturation().resources().get(5).utilization().state())
-                .isEqualTo(SourceStatus.N_A);
+                .isEqualTo(SourceStatus.PENDING);
     }
 
     /**
@@ -1521,6 +1521,25 @@ class PromMetricsAssemblerTest {
         assertThat(response.saturation().resources().get(2).utilization().value()).isEqualTo(64.0);
     }
 
+    @Test
+    @DisplayName("디스크 사용률과 네트워크 처리량은 실제 actuator 미터에서 만든다")
+    void diskAndNetworkUseActuatorMeters() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "process_cpu_usage", List.of(
+                        resource("disk_total_bytes", 1_000d, "api-1"),
+                        resource("disk_free_bytes", 250d, "api-1"),
+                        resource("tomcat_global_received_bytes_total", 1_024d, "api-1"),
+                        resource("tomcat_global_sent_bytes_total", 2_048d, "api-1"))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+        var row = response.saturation().resources().get(5);
+
+        assertThat(row.utilization().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(row.utilization().value()).isEqualTo(75.0);
+        assertThat(row.detail()).contains("RX 1.0 KiB/s", "TX 2.0 KiB/s");
+    }
+
     /**
      * 합만 보면 한 대에 쏠린 것을 못 봅니다. 그리고 죽은 인스턴스의 마지막 값이 합에 남아 있는
      * 동안 활성 개수가 그 사실을 드러냅니다.
@@ -1596,6 +1615,47 @@ class PromMetricsAssemblerTest {
                 .isEqualTo(SourceStatus.PENDING);
     }
 
+    @Test
+    @DisplayName("archive 컨슈머 lag과 유입·저장 rate를 persistence와 큐에 함께 싣는다")
+    void persistenceUsesArchiveConsumerLagAndRates() {
+        FakePromQuery client = respond(Map.of(
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS)),
+                "rate(", List.of(
+                        rate("issue", "success", 20d, "api-1"),
+                        resource("app_attempt_archive_outcome_total", 24d, "api-1")),
+                "process_cpu_usage", List.of(
+                        new PromSample("kafka_consumer_fetch_manager_records_lag",
+                                Map.of("job", "api", "instance", "api-1",
+                                        "consumer_group", "coupon-attempt-archive", "partition", "0"),
+                                4d, EVALUATED),
+                        new PromSample("kafka_consumer_fetch_manager_records_lag",
+                                Map.of("job", "api", "instance", "api-1",
+                                        "consumer_group", "coupon-attempt-archive", "partition", "1"),
+                                3d, EVALUATED),
+                        new PromSample("kafka_consumer_fetch_manager_records_lag",
+                                Map.of("job", "api", "instance", "api-2",
+                                        "consumer_group", "coupon-attempt-archive", "partition", "2"),
+                                5d, EVALUATED),
+                        new PromSample("kafka_consumer_fetch_manager_records_lag_max",
+                                Map.of("job", "api", "instance", "api-1",
+                                        "consumer_group", "coupon-attempt-archive"),
+                                9d, EVALUATED))));
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.persistence().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(response.persistence().value().lagTotal()).isEqualTo(12L);
+        assertThat(response.persistence().value().partitionMax()).isEqualTo(9L);
+        assertThat(response.persistence().value().arrivalRate()).isEqualTo(20d);
+        assertThat(response.persistence().value().consumeRate()).isEqualTo(24d);
+        assertThat(response.persistence().value().netDrainRate()).isEqualTo(4d);
+        assertThat(response.persistence().value().drainEtaMillis()).isEqualTo(3_000L);
+
+        assertThat(response.saturation().queues().get(1).metrics())
+                .extracting(metric -> metric.value().value())
+                .containsExactly(12d, 20d, 24d, -4d);
+    }
+
     /** 대기 인원은 값 미터와 상태 미터를 짝으로 읽습니다 — batch 는 값이 없을 때 NaN 을 싣습니다. */
     @Test
     @DisplayName("대기 인원은 값·상태 짝으로 읽고 재고 수집 경로 시각을 쓴다")
@@ -1666,8 +1726,57 @@ class PromMetricsAssemblerTest {
                 .findFirst().orElseThrow();
         assertThat(saturation).contains("job=\"api\"");
         assertThat(saturation).contains(MetricAggregation.TOMCAT_BUSY);
+        assertThat(saturation).contains(MetricAggregation.KAFKA_CONSUMER_LAG_MAX);
+        assertThat(saturation).contains(
+                "rate(" + MetricAggregation.NETWORK_RECEIVED_RATE + "{job=\"api\"}[60s])");
+        assertThat(saturation).contains(
+                "rate(" + MetricAggregation.NETWORK_SENT_RATE + "{job=\"api\"}[60s])");
         // 큐 길이는 batch 가 유일한 원천이다. api 로 좁히면 표본이 통째로 사라진다.
         assertThat(saturation).contains(" or {__name__=~\"" + MetricAggregation.QUEUE_LENGTH);
+    }
+
+    @Test
+    @DisplayName("Kafka 준비 상태가 없으면 지연과 실패 표본이 있어도 PENDING 이다")
+    void kafkaDependencyRequiresProvisionedState() {
+        FakePromQuery client = kafkaDependencyQuery(false);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.dependencies().kafka().value()).isNull();
+    }
+
+    @Test
+    @DisplayName("Kafka 실패율은 발급 요청을 실패 건수로 다시 부풀리지 않는다")
+    void kafkaFailureRateUsesIssueAttemptsAsDenominator() {
+        FakePromQuery client = kafkaDependencyQuery(true);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.VALID);
+        assertThat(response.dependencies().kafka().value().errorRate()).isEqualTo(0.1d);
+    }
+
+    @Test
+    @DisplayName("발급 요청 분모 원천이 없으면 Kafka 실패율은 PENDING 이다")
+    void kafkaDependencyRequiresIssueAttempts() {
+        FakePromQuery client = kafkaDependencyQuery(true, false, true);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.dependencies().kafka().value()).isNull();
+    }
+
+    @Test
+    @DisplayName("Kafka 발행 실패 원천이 없으면 측정된 0으로 간주하지 않는다")
+    void kafkaDependencyRequiresPublishFailures() {
+        FakePromQuery client = kafkaDependencyQuery(true, true, false);
+
+        AdminMetricsResponse response = assemble(client, globalQuery());
+
+        assertThat(response.dependencies().kafka().state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.dependencies().kafka().value()).isNull();
     }
 
     // ── 도우미 ─────────────────────────────────────────────────────────────────
@@ -1699,6 +1808,41 @@ class PromMetricsAssemblerTest {
             });
             return List.copyOf(matched);
         });
+    }
+
+    private static FakePromQuery kafkaDependencyQuery(boolean includeProvisionedState) {
+        return kafkaDependencyQuery(includeProvisionedState, true, true);
+    }
+
+    private static FakePromQuery kafkaDependencyQuery(
+            boolean includeProvisionedState,
+            boolean includeAttempts,
+            boolean includeFailures) {
+        List<PromSample> operational = new ArrayList<>();
+        if (includeProvisionedState) {
+            operational.add(domain(MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE, Map.of(),
+                    SourceStatusCode.of(SourceStatus.VALID)));
+        }
+        List<PromSample> results = new ArrayList<>();
+        if (includeAttempts) {
+            results.add(rate("issue", "success", 100d, "api-1"));
+        }
+        if (includeFailures) {
+            results.add(new PromSample(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
+                    Map.of("instance", "api-1"), 10d, EVALUATED));
+        }
+        return respond(Map.of(
+                "quantile!=", List.of(
+                        kafkaQuantile("0.95", 0.004d, "api-1"),
+                        kafkaQuantile("0.99", 0.008d, "api-1")),
+                "rate(", results,
+                "process_cpu_usage", operational,
+                "timestamp(", List.of(age(FRESH_AGE_SECONDS))));
+    }
+
+    private static PromSample kafkaQuantile(String quantile, double seconds, String instance) {
+        return new PromSample(MetricAggregation.KAFKA_TEMPLATE_SECONDS,
+                Map.of("quantile", quantile, "instance", instance), seconds, EVALUATED);
     }
 
     private static ObservedValue<Double> rateOf(ErrorMetrics errors, ErrorClassKey key) {
