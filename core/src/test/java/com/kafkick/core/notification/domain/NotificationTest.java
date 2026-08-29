@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
+import com.kafkick.core.notification.NotificationErrorCode;
 import com.kafkick.core.support.exception.BusinessException;
 
 class NotificationTest {
@@ -127,9 +128,17 @@ class NotificationTest {
     @Test
     void rejectsBlankRecipientAndMessage() {
         assertThatThrownBy(() -> Notification.pending(1L, 2L, 3L, " ", "message", AT))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(NotificationErrorCode.PAYLOAD_REQUIRED));
         assertThatThrownBy(() -> Notification.pending(1L, 2L, 3L, "recipient", " ", AT))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(NotificationErrorCode.PAYLOAD_REQUIRED));
+        assertThatThrownBy(() -> Notification.pending(1L, 2L, 3L, null, "message", AT))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(NotificationErrorCode.PAYLOAD_REQUIRED));
     }
 
     private static Notification pending() {

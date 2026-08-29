@@ -123,10 +123,11 @@ public record Notification(
     }
 
     private static void requireText(String value, int maxCharacters, String name) {
-        if (value == null || value.isBlank() || value.length() > maxCharacters) {
-            if (value != null && value.isBlank()) {
-                throw new IllegalArgumentException(name + "는 비어 있을 수 없습니다.");
-            }
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(NotificationErrorCode.PAYLOAD_REQUIRED,
+                    name + "는 비어 있을 수 없습니다.");
+        }
+        if (value.length() > maxCharacters) {
             throw new BusinessException(NotificationErrorCode.PAYLOAD_TOO_LARGE,
                     name + "가 저장 가능한 길이를 초과했습니다.");
         }
