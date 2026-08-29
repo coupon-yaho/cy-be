@@ -462,11 +462,23 @@ UPDATE issuances SET … WHERE … AND id > :afterId AND id <= :ceiling;   -- �
   `POST /api/v1/admin/verify?scope=FULL&dataset=CLEAN` 을 친다. `SchemaPresenceGuard` 가
   빠진 인덱스를 이름까지 짚어 주므로 그 메시지를 따르면 된다.
 
-  ⚠️ **`usageCountStep` 이 30% 를 먹는 것은 아직 원인을 안 쟀다.** 옛 판에서는 17초(3.6%)라
-  2위가 아니었다. 후보는 둘이다 — 시드 DDL 이 `issuance_usages` 의 단일 `issuance_id`
-  인덱스를 `(issuance_id, order_id)` 복합으로 바꾼 것, 그리고 `canceled_at IS NULL` 필터가
-  무인덱스인 것(`idx_usage_issuance_active` 는 `--with-perf-indexes` 전용이다).
-  **인덱스를 넣을지는 인덱스 실측 티켓의 몫**이고 여기서 단정하지 않는다.
+  ⚠️ **`usageCountStep` 이 30% 를 먹은 것은 코드가 아니라 버퍼 풀이다(CY-767 에서 쟀다).**
+  후보로 적어 뒀던 인덱스 둘은 **원인이 아니었다** — 실행계획은 이미 최적이다:
+  집계가 `uk_issuance_usages_issuance_order` 를 훑어 약 17.5만 그룹을 만들고,
+  `asof_state` 갱신은 `eq_ref` · `rows=1` 로 PK 를 정확히 짚는다.
+
+  | 조건 | 소요 |
+  |---|---|
+  | `innodb_buffer_pool_size` 128 MiB (컨테이너 기본) | **53~55초** |
+  | 같은 질의, 2 GiB | **4.5초** |
+
+  **12배 차이다.** `asof_state` 가 실행당 300만 행 · **770 MiB** 라 버퍼 풀의 6배이고,
+  17.5만 건 PK 갱신이 매번 페이지 미스를 낸다(행당 3.2ms = 디스크 왕복).
+  **인덱스로는 줄일 수 없는 축**이라 처방 후보에서 뺀다.
+
+  ⚠️ 그래서 <b>위 180.8초는 버퍼 풀 128 MiB 에서 잰 값</b>이다. 배포가 그보다 크면
+  `usageCountStep` 이 그만큼 줄고 전체도 함께 줄어든다 — 재현할 때 이 값을 함께 적어야
+  숫자가 비교 가능하다.
 
   <details><summary>이전 기준선 (CY-470 + CY-742 · 재현 불가)</summary>
 

@@ -93,6 +93,28 @@ public interface StatsRepository {
      */
     int countIssuancesWithBrokenIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId);
 
+    /**
+     * 한 발급건 안에서 <b>{@code id} 순서와 {@code created_at} 순서가 뒤집힌 쌍</b>의 수.
+     *
+     * <p><b>리플레이가 {@code (created_at, id)} 로 접는데 그 시각이 커밋 시각이 아니다.</b>
+     * {@code CANCEL_USE} 의 {@code created_at} 은 {@code IdempotencyExecutionService} 가
+     * <b>멱등 선점에서</b> 잡은 값이고, 선점은 {@code REQUIRES_NEW} 라 업무 트랜잭션보다
+     * 먼저 커밋된다 — 그 사이 지연에 상한이 없다.
+     *
+     * <p>그래서 <b>정상 데이터에서도 순서가 뒤집힐 수 있다.</b> 한 발급건에
+     * {@code USE(created_at=T2)} 와 {@code CANCEL_USE(created_at=T1&lt;T2)} 가 저장되면
+     * 리플레이는 취소를 먼저 보고 {@code tracked=null} 에서 전이표 위반을 낸다 —
+     * <b>오탐 1건, 곧 CLEAN 0건 게이트가 깨진다.</b>
+     *
+     * <p><b>새 finding 사유를 만들지 않는다.</b> 그러면 매니페스트가 갈려 cy-seed 를 함께
+     * 고쳐야 한다. 형제 {@link #countIssuancesWithBrokenIssueHistory} 처럼 <b>실행을 죽여</b>
+     * 원인을 그 자리에 세운다 — 그래야 오탐이 <i>"검증기 버그"</i> 가 아니라
+     * <i>"이력 시각이 역전됐다"</i> 로 보고된다.
+     *
+     * <p>창은 리플레이와 같다 — {@code id <= maxHistoryId AND created_at <= asOf}.
+     */
+    int countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId);
+
     /** 위 질의가 0 이 아닐 때 메시지에 실을 발급건 id 표본. */
     List<Long> sampleIssuancesWithBrokenIssueHistory(
             LocalDateTime asOf, long frozenMaxHistoryId, int limit);

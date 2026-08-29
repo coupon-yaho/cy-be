@@ -818,6 +818,70 @@ class VerificationRuleJdbcAdapterTest {
     }
 
     @Test
+    @DisplayName("얼린 사용 상한 위로 asOf 이하 사용이 끼어들면 잡는다")
+    void detectsUsagesAddedAboveFrozenBoundary() {
+        long used = data.issuance(IssuanceStatus.USED);
+        data.usage(used, AS_OF.minusHours(3), null);
+        long frozen = adapter.latestUsageId(AS_OF);
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("아직 아무것도 안 끼어들었다")
+                .isFalse();
+
+        // 얼린 뒤에 들어온 행. 시각은 asOf 이하라 V5 의 답을 바꾼다.
+        // **다른 발급건에 심는다** — uk_issuance_usages_active 가 발급건 하나에 활성
+        // 사용 둘을 막는다(main 의 V8). 그 제약이 이 검사의 대상은 아니다.
+        long other = data.issuance(IssuanceStatus.USED);
+        data.usage(other, AS_OF.minusHours(1), null);
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("V5 는 얼린 상한까지 접은 값을 읽는데 이 행이 답을 바꾼다 — "
+                        + "지문은 이 축을 안 봐서 같은 지문에 다른 검출이 나온다")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("취소로 들어온 행도 잡는다 — 활성 판정 술어를 쓰면 안 되는 이유다")
+    void detectsCanceledUsageAddedAboveFrozenBoundary() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        long frozen = adapter.latestUsageId(AS_OF);
+
+        // canceled_at 이 있어 "지금 활성" 은 아니지만, V5 가 세는 값은 바뀐다.
+        data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.minusHours(1));
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("canceled_at 을 함께 보면 이 행을 놓친다 — 그래서 활성 술어를 안 쓴다")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("asOf 뒤에 쓰인 사용은 안 잡는다 — 그 축은 리플레이 밖이다")
+    void ignoresUsagesAfterAsOf() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        long frozen = adapter.latestUsageId(AS_OF);
+
+        data.usage(issuanceId, AS_OF.plusHours(1), null);
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("asOf 이후 행은 어차피 이 실행의 판정 대상이 아니다")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("사용이 하나도 없으면 상한이 0 이고, 그 위로 들어오는 것을 잡는다")
+    void treatsMissingUsagesAsZeroBoundary() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+
+        assertThat(adapter.latestUsageId(AS_OF))
+                .as("행이 없으면 0 — 건너뛰면 가드가 막으려던 상황에서 정확히 꺼진다")
+                .isZero();
+
+        data.usage(issuanceId, AS_OF.minusHours(1), null);
+
+        assertThat(adapter.hasUsagesAddedAbove(0L, AS_OF)).isTrue();
+    }
+
+    @Test
     @DisplayName("접속 스키마 이름을 답한다 — 메시지가 원인을 가르는 근거다")
     void reportsTheSchemaItIsLookingAt() {
         assertThat(adapter.currentSchema()).isEqualTo("app");

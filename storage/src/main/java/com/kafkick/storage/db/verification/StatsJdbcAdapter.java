@@ -225,6 +225,28 @@ public class StatsJdbcAdapter implements StatsRepository {
             """;
 
     /**
+     * <b>한 발급건 안에서 {@code id} 순서와 {@code created_at} 순서가 뒤집힌 쌍.</b>
+     *
+     * <p>창을 리플레이와 같게 <b>{@code a} 쪽에만</b> 건다. {@code b} 에도 걸면 상한 밖에서
+     * 들어온 역전을 못 보는데, 그것이야말로 리플레이가 읽는 범위를 흔드는 행이다.
+     *
+     * <p>실측(300만 발급 · 534만 이력 · 버퍼 풀 128 MiB): <b>6.5초</b>.
+     * {@code a} 는 PRIMARY 레인지, {@code b} 는
+     * {@code idx_issuance_histories_issuance_created_id} 를 <b>커버링</b>으로 탄다.
+     * 일 1회 도는 180초짜리 잡의 3.6% 다.
+     */
+    private static final String COUNT_OUT_OF_ORDER = """
+            SELECT COUNT(*)
+              FROM issuance_histories a
+              JOIN issuance_histories b
+                ON b.issuance_id = a.issuance_id
+               AND b.id > a.id
+               AND b.created_at < a.created_at
+             WHERE a.id <= :maxHistoryId
+               AND a.created_at <= :asOf
+            """;
+
+    /**
      * {@link #issuedByHour} 가 이력 id 를 훑는 폭의 <b>상한이자 기본값</b>. 즉 이 손잡이는
      * <b>내릴 수만 있다</b> — 올릴 수 있게 두면 막으려던 사고가 그대로 돌아온다.
      * 더 작은 서버에서 더 좁혀야 할 수는 있으므로 내리는 쪽만 열어 둔다.
@@ -367,6 +389,16 @@ public class StatsJdbcAdapter implements StatsRepository {
      * <b>짝으로 본다.</b> 총합 비교는 대칭 오차를 못 잡는다 —
      * {@code StatsRepository#countIssuancesWithBrokenIssueHistory} javadoc 에 근거를 적었다.
      */
+    @Override
+    public int countOutOfOrderHistoryPairs(LocalDateTime asOf, long frozenMaxHistoryId) {
+        Integer count = jdbcClient.sql(COUNT_OUT_OF_ORDER)
+                .param("asOf", asOf)
+                .param("maxHistoryId", frozenMaxHistoryId)
+                .query(Integer.class)
+                .single();
+        return count == null ? 0 : count;
+    }
+
     @Override
     public int countIssuancesWithBrokenIssueHistory(LocalDateTime asOf, long frozenMaxHistoryId) {
         return jdbcClient.sql(SELECT_BROKEN_ISSUE_HISTORY.formatted("COUNT(*)"))

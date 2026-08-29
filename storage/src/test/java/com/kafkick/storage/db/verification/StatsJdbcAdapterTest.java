@@ -375,6 +375,53 @@ class StatsJdbcAdapterTest {
     }
 
     /**
+     * <b>리플레이 정렬의 전제를 잰다.</b> {@code (created_at, id)} 로 접는데 그 시각이
+     * 커밋 시각이 아니라 <b>멱등 선점 시각</b>이라({@code REQUIRES_NEW}) 역전이 가능하다.
+     * 역전이 있으면 리플레이가 인과와 다른 순서로 접어 <b>정상 데이터에 오탐</b>을 낸다.
+     */
+    @Test
+    @DisplayName("id 는 뒤인데 created_at 이 앞서면 역전으로 센다")
+    void countsOutOfOrderHistoryPairs() {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(1));
+        // 뒤에 들어왔는데(=id 가 크다) 시각은 앞선다 — 선점 시각이 백데이트된 모양이다.
+        long later = seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, OPEN_AT);
+
+        assertThat(adapter.countOutOfOrderHistoryPairs(AS_OF, later))
+                .as("이 쌍을 못 보면 리플레이가 USE 를 먼저 접어 전이표 위반을 오탐한다")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("순서가 맞으면 0 이다 — 정상 데이터가 실행을 죽이면 안 된다")
+    void countsNothingWhenOrderIsConsistent() {
+        long issuanceId = seed.issuance(IssuanceStatus.USED);
+        seed.history(issuanceId, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT);
+        long later = seed.history(issuanceId, IssuanceEventType.USE,
+                IssuanceStatus.ISSUED, IssuanceStatus.USED, OPEN_AT.plusHours(1));
+
+        assertThat(adapter.countOutOfOrderHistoryPairs(AS_OF, later)).isZero();
+    }
+
+    @Test
+    @DisplayName("다른 발급건끼리는 안 센다 — 순서 계약은 발급건 안에서만 있다")
+    void ignoresPairsAcrossIssuances() {
+        long first = seed.issuance(IssuanceStatus.ISSUED);
+        seed.history(first, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT.plusHours(5));
+        long second = seed.issuance(IssuanceStatus.ISSUED);
+        long later = seed.history(second, IssuanceEventType.ISSUE,
+                null, IssuanceStatus.ISSUED, OPEN_AT);
+
+        assertThat(adapter.countOutOfOrderHistoryPairs(AS_OF, later))
+                .as("리플레이는 발급건마다 따로 접으므로 건너 비교하면 오탐이다")
+                .isZero();
+    }
+
+    /**
      * <b>창이 리플레이와 같아야 한다.</b> {@code created_at <= asOf} 만 걸면 다시 재는 것이라,
      * 얼린 상한보다 큰 id 인데 시각이 과거인 <b>백데이트 이력</b>을 리플레이는 못 읽고 통계는 읽는다.
      * CY-193 에서 {@code dataset_fingerprint} 가 앓았던 병이 그것이고

@@ -453,6 +453,34 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .single());
     }
 
+    /**
+     * <b>활성 판정과 같은 술어를 안 쓴다.</b> 여기서 보는 것은 <i>"얼린 뒤에 행이
+     * 끼어들었나"</i> 이지 <i>"지금 활성인가"</i> 가 아니다. {@code canceled_at} 을 함께 보면
+     * <b>취소로 들어온 행을 못 본다</b> — 그것도 V5 의 답을 바꾼다.
+     */
+    @Override
+    public boolean hasUsagesAddedAbove(long frozenMaxUsageId, LocalDateTime asOf) {
+        return Boolean.TRUE.equals(jdbcClient.sql("""
+                        SELECT EXISTS(
+                                 SELECT 1 FROM issuance_usages
+                                  WHERE id > :maxUsageId AND used_at <= :asOf)
+                        """)
+                .param("maxUsageId", frozenMaxUsageId)
+                .param("asOf", asOf)
+                .query(Boolean.class)
+                .single());
+    }
+
+    @Override
+    public long latestUsageId(LocalDateTime asOf) {
+        Long max = jdbcClient.sql("SELECT MAX(id) FROM issuance_usages WHERE used_at <= :asOf")
+                .param("asOf", asOf)
+                .query(Long.class)
+                .optional()
+                .orElse(null);
+        return max == null ? 0L : max;
+    }
+
     @Override
     public boolean hasCleanOnlyConstraints() {
         return Boolean.TRUE.equals(jdbcClient.sql("""

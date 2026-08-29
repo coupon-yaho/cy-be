@@ -91,6 +91,13 @@ public class VerifyJobConfig {
     static final String SCAN_MAX_HISTORY_KEY = "replay.scan.maxHistoryId";
     static final String SCAN_LATEST_KEY = "replay.scan.latestCreatedAt";
 
+    /**
+     * <b>얼린 사용 상한.</b> V5 가 읽는 다섯째 축인데 얼림 가드에도 지문에도 없었다 —
+     * usages 행만 넣고 {@code issuances} 를 안 건드리면 <b>V5 의 답은 달라지는데 지문은
+     * 그대로</b>라, 판정표가 그것을 <i>"검증기 버그"</i> 로 읽는다.
+     */
+    static final String SCAN_MAX_USAGE_KEY = "replay.scan.maxUsageId";
+
     /** 시작에 얼린 회차 정책 지문. coupons 에 updated_at 이 없어 값을 접어 비교한다. */
     static final String POLICY_DIGEST_KEY = "policy.digest";
 
@@ -277,6 +284,22 @@ public class VerifyJobConfig {
                                 "실행 중에 asOf 이하 이력이 추가됐습니다. 리플레이는 얼린 상한까지만 "
                                         + "읽었는데 지문은 그 행을 봅니다 — 같은 지문에 다른 검출이 "
                                         + "나옵니다. asOf=" + asOf);
+                    }
+
+                    // 사용 축. **V5 가 읽는 다섯째 축인데 지문 재료에는 없다** — usages 행만
+                    // 넣고 issuances 를 안 건드리면 V5 의 답은 달라지는데 지문은 그대로다.
+                    // 판정표는 그 조합을 "지문 같음 + checksum 다름 = 검증기 버그" 로 읽는다.
+                    // 지문은 계약(contract.json)이 정한 다섯 항이라 못 늘리므로 가드로 막는다.
+                    long frozenMaxUsage = chunkContext.getStepContext().getStepExecution()
+                            .getJobExecution().getExecutionContext()
+                            .getLong(SCAN_MAX_USAGE_KEY, 0L);
+
+                    if (rules.hasUsagesAddedAbove(frozenMaxUsage, asOf)) {
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "실행 중에 asOf 이하 사용 이력이 추가됐습니다. V5 는 얼린 상한까지 "
+                                        + "접은 값을 읽었는데 그 행이 답을 바꿉니다 — 지문은 이 축을 "
+                                        + "안 봐서 같은 지문에 다른 검출이 나옵니다. asOf=" + asOf);
                     }
 
                     // 지문도 여기서 읽는다. finalize 에서 읽으면 그 사이 발급 한 건에 지문이
@@ -522,6 +545,22 @@ public class VerifyJobConfig {
                     //
                     // 이 질의가 덮는 사각은 CY-196 이 기록해 둔 것이다 — 이력 없는 발급건은
                     // asof_state 에 안 실려 V3·V5 의 시야 밖이고 V4 는 반대 방향만 본다.
+                    // **리플레이 정렬의 전제를 먼저 잰다.** (created_at, id) 로 접는데 그 시각이
+                    // 커밋 시각이 아니라 멱등 선점 시각이라(REQUIRES_NEW) 역전이 가능하다.
+                    // 역전이 있으면 리플레이가 인과와 다른 순서로 접어 **정상 데이터에
+                    // ILLEGAL_TRANSITION 오탐**을 내고 CLEAN 0건 게이트가 깨진다.
+                    // 새 finding 사유를 안 만든다 — 그러면 매니페스트가 갈려 cy-seed 를
+                    // 함께 고쳐야 한다. 형제처럼 실행을 죽여 원인을 그 자리에 세운다.
+                    int outOfOrder = stats.countOutOfOrderHistoryPairs(asOf, frozenMaxHistory);
+                    if (outOfOrder > 0) {
+                        throw new BusinessException(
+                                VerificationErrorCode.DATASET_MUTATED_DURING_RUN,
+                                "이력의 created_at 순서가 id 순서와 뒤집힌 쌍 " + outOfOrder + "건. "
+                                        + "리플레이가 (created_at, id) 로 접으므로 그 발급건의 "
+                                        + "전이 판정이 인과와 달라집니다 — 검출을 신뢰할 수 "
+                                        + "없습니다. asOf=" + asOf);
+                    }
+
                     int brokenPairs = stats.countIssuancesWithBrokenIssueHistory(asOf, frozenMaxHistory);
                     if (brokenPairs > 0) {
                         throw new BusinessException(
@@ -801,6 +840,9 @@ public class VerifyJobConfig {
                     jobContext.putLong(RUN_ID_KEY, runId);
                     freezeSeedRunId(jobContext, seedRunId, expectedFindings);
                     jobContext.putString(POLICY_DIGEST_KEY, rules.policyDigest());
+                    // 사용 축의 상한. 리플레이 창과 달리 "행이 없으면 0" 을 그대로 쓴다 —
+                    // 근거는 VerificationRuleRepository#latestUsageId 가 적는다.
+                    jobContext.putLong(SCAN_MAX_USAGE_KEY, rules.latestUsageId(asOf));
                     scanRange.filter(ReplayScanRange::hasWindow)
                             .ifPresent(range -> freeze(jobContext, range));
 

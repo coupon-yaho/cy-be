@@ -160,6 +160,37 @@ public interface VerificationRuleRepository {
     boolean hasHistoriesAddedAbove(long frozenMaxHistoryId, LocalDateTime asOf);
 
     /**
+     * 얼린 사용 상한 <b>위로</b> {@code asOf} 이하 사용 이력이 끼어들었는가.
+     * 형제 {@link #hasHistoriesAddedAbove} 와 같은 규약이다 — 이름을 SQL 방향과 맞춘다.
+     *
+     * <p><b>V5 가 읽는 다섯째 축인데 얼림 가드에도 지문에도 없었다.</b>
+     * {@code assertFrozenStep} 은 네 축(발급건·재고·회차 정책·이력)만 보고,
+     * {@code dataset_fingerprint} 재료 다섯에도 {@code issuance_usages} 가 없다.
+     *
+     * <p>그 조합이 만드는 칸이 나쁘다 — <b>usages 행만 넣고 {@code issuances} 를 안 건드리면
+     * V5 의 답은 달라지는데 지문은 그대로다.</b> 판정표는 그것을
+     * <i>"지문 같음 + checksum 다름 = 검증기 버그"</i> 로 읽는다. 형제 javadoc 이 이력 축에
+     * 대해 적은 <i>"이력만 넣고 issuances 를 안 건드리는 것이 오염 주입의 기본 모양"</i> 이
+     * 여기에도 그대로 적용된다.
+     *
+     * <p><b>지문은 안 고친다.</b> 그것은 계약({@code contract.json})이 정한 다섯 항이라
+     * 여기서 늘리면 시드와 갈린다. 그래서 <b>가드로 막는다.</b>
+     *
+     * <p>상한은 {@code startRunStep} 이 {@code MAX(id) WHERE used_at <= asOf} 로 얼려
+     * Step 문맥에 싣는다. PK 범위 조회라 비용이 없다.
+     */
+    boolean hasUsagesAddedAbove(long frozenMaxUsageId, LocalDateTime asOf);
+
+    /**
+     * {@code asOf} 이하 사용 이력 중 가장 큰 식별자. 실행 시작에 한 번 재 문맥에 얼린다.
+     *
+     * <p>행이 없으면 <b>0</b> 이다. 그 값을 그대로 상한으로 쓰면
+     * {@link #hasUsagesAddedAbove} 가 <i>"id &gt; 0 이면서 asOf 이하인 행이 생겼는가"</i> 가 되어
+     * 뜻이 정확히 맞는다 — 형제 이력 축이 같은 이유로 같은 기본값을 쓴다.
+     */
+    long latestUsageId(LocalDateTime asOf);
+
+    /**
      * 지금 보고 있는 스키마에 <b>CLEAN 전용 제약</b>이 살아 있는가.
      *
      * <p>{@code dataset} 파라미터는 {@code verification_runs} 에 적히는 <b>라벨일 뿐</b>이고,
