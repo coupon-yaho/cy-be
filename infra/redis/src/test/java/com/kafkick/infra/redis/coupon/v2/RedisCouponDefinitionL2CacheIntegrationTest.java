@@ -76,10 +76,11 @@ class RedisCouponDefinitionL2CacheIntegrationTest {
      * {@code RejectedExecutionException: event executor terminated} 를 ERROR 로 뱉는다.
      * 단언은 이미 끝난 뒤라 빌드는 초록인데 로그만 시뻘게진다 — 진짜 실패와 구별이 안 된다.
      *
-     * <p>null 을 보는 이유는 <b>컨테이너가 안 뜬 경우</b> 때문이다. 그때는 {@code connect()} 가
-     * {@code factory} 에 대입하기 전에 죽고, JUnit 은 그래도 이 메서드를 부른다. 무조건
-     * {@code destroy()} 하면 NPE 가 원래 실패에 suppressed 로 얹혀 리포트에서 원인을 찾기
-     * 어려워진다 — 컨테이너 기동 실패는 이 저장소 CI 에서 실제로 나는 일이다.
+     * <p>null 을 보는 이유는 <b>컨테이너가 안 뜬 경우</b> 때문이다. 정적 {@code @Container} 를
+     * 띄우는 것은 Testcontainers 확장이고, 그 일은 <b>{@code connect()} 보다 먼저</b> 일어난다. 기동이 실패하면 {@code connect()} 는 한 번도 실행되지 않아 {@code factory} 가
+     * null 인 채로 남는데, JUnit 은 그래도 이 메서드를 부른다. 무조건 {@code destroy()} 하면
+     * NPE 가 원래 실패에 suppressed 로 얹혀 리포트에서 원인을 찾기 어려워진다 — 컨테이너
+     * 기동 실패는 이 저장소 CI 에서 실제로 나는 일이다.
      */
     @AfterAll
     static void disconnect() {
