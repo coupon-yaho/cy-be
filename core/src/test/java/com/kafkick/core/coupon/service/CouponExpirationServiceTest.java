@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 // 회차별 만료 성공 건수만큼 재고와 EXPIRE 이력이 반영되는지 검증합니다.
@@ -45,6 +46,8 @@ class CouponExpirationServiceTest {
 
     @Mock
     private CouponStockRepository couponStockRepository;
+    @Mock
+    private V2StockRestorationService v2StockRestorationService;
 
     private CouponExpirationService expirationService;
 
@@ -53,7 +56,8 @@ class CouponExpirationServiceTest {
         expirationService = new CouponExpirationService(
                 issuanceRepository,
                 issuanceHistoryRepository,
-                couponStockRepository
+                couponStockRepository,
+                v2StockRestorationService
         );
     }
 
@@ -76,7 +80,6 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         )).thenReturn(false);
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(couponStockRepository.release(10L, 1, AS_OF))
                 .thenReturn(true);
 
@@ -93,9 +96,9 @@ class CouponExpirationServiceTest {
         InOrder ordered = inOrder(
                 couponStockRepository,
                 issuanceRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                v2StockRestorationService
         );
-        ordered.verify(couponStockRepository).lockForUpdate(10L);
         ordered.verify(issuanceRepository).updateStatusIfCurrent(
                 100L,
                 20L,
@@ -110,16 +113,23 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         );
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<IssuanceHistory>> historyCaptor =
+                ArgumentCaptor.forClass(List.class);
+        // 이력 INSERT 가 재고 행 X 락 밖이어야 한다(설계 §9.6 D9). release 를 먼저 하면
+        // 그 락이 커밋까지 유지되면서 이력 수백 건을 쓰는 동안 V2 발급이 같은 행에서 대기한다.
+        ordered.verify(issuanceHistoryRepository)
+                .saveAllExpirations(historyCaptor.capture());
+        // 엔진 판별은 coupons 를 한 번 읽는다. release() 뒤에 두면 그 왕복이 재고 행 X 락
+        // 보유 구간 안으로 들어간다 — 락을 늦게 잡으려고 이력을 앞으로 뺀 의미가 사라진다.
+        ordered.verify(v2StockRestorationService).restoreAfterCommit(10L, 1L);
         ordered.verify(couponStockRepository).release(
                 10L,
                 1,
                 AS_OF
         );
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<IssuanceHistory>> historyCaptor =
-                ArgumentCaptor.forClass(List.class);
-        ordered.verify(issuanceHistoryRepository)
-                .saveAllExpirations(historyCaptor.capture());
+        // 요청 2건 중 전이에 성공한 1건만 복원한다. requestedCount 를 넘기면 Redis 잔여가
+        // 실재고보다 커진다 — 초과 발급 방향이다.
         assertThat(historyCaptor.getValue())
                 .singleElement()
                 .satisfies(history -> {
@@ -145,8 +155,6 @@ class CouponExpirationServiceTest {
                 IssuanceStatus.EXPIRED,
                 AS_OF
         )).thenReturn(false);
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
-
         CouponExpirationResult result = expirationService.expire(
                 new CouponExpirationCommand(10L, List.of(issuance), AS_OF)
         );
@@ -161,6 +169,7 @@ class CouponExpirationServiceTest {
         verify(issuanceHistoryRepository, never()).saveAllExpirations(
                 org.mockito.ArgumentMatchers.anyList()
         );
+        verifyNoInteractions(v2StockRestorationService);
     }
 
     private static Issuance issuance(Long issuanceId) {

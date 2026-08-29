@@ -141,6 +141,19 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository,
     }
 
     @Override
+    public Optional<CouponRoundIssuanceDefinition> findById(long couponRoundId) {
+        try {
+            return couponRoundJpaRepository.findIssuanceDefinitionById(couponRoundId)
+                    .map(projection -> new CouponRoundIssuanceDefinition(
+                            projection.getCouponRoundId(), projection.getValidDays(),
+                            projection.getEngineVersion() == null ? EngineVersion.V1
+                                    : EngineVersion.valueOf(projection.getEngineVersion())));
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException("회차 발급 엔진 정의 조회에 실패했습니다.", exception);
+        }
+    }
+
+    @Override
     @Transactional
     public Optional<CouponRoundIssuanceDefinition> lockAndFindById(long couponRoundId) {
         try {

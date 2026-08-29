@@ -20,7 +20,7 @@ v1(`SELECT … FOR UPDATE`)에서 v2(Redis Lua 원자 카운터)로. 발급 경�
 | D6 | 멱등 | Redis `HSETNX` 가 게이트만 대체. 레코드는 발급 TX 안에서 DONE. 값 전이는 **요청토큰 CAS**(§4.4), stale **자동 회수 없음**(§4.10) |
 | D7 | 대기열 | v2 측정에서 OFF |
 | D8 | hot key | 분할 안 함. 대신 O(N) 명령 차단 |
-| D9 | `active_count` | 프로젝터 주기 갱신 + `severityForGap` 버전별 분기 |
+| D9 | `active_count` | V2 발급 TX `+1`·취소/만료 DB `release()`; Redis 복원은 커밋 뒤 수행 + `severityForGap` 버전별 분기 |
 | **D10** | **아키텍처 확정** | **구조 변경 없음.** 이 문서의 §4~§9 로 확정하고, 남은 조정은 설정값뿐이다(§0.1) |
 | **D11** | 거절 정책 | **재고 잔여 429 없음.** Lua 를 통과한 요청은 전원 성공시킨다(§10.4) |
 | **D12** | 응답 계약 | **201 Created 유지.** 202 접수 방식으로 가지 않는다 |
@@ -33,7 +33,7 @@ v1(`SELECT … FOR UPDATE`)에서 v2(Redis Lua 원자 카운터)로. 발급 경�
 | 반려 항목 | 반려 시 남는 것 | 재검토 조건 |
 |---|---|---|
 | 인프로세스 마이크로배칭 | **동기 단건 커밋 유지.** 성공 경로 상한이 커넥션 풀 × 트랜잭션 시간으로 고정된다 | §10 측정이 목표 시간을 못 맞출 때. 그때도 먼저 조정할 것은 **인스턴스 수·도착 시간·회차 재고**다 |
-| 배치 단위 `active_count` UPDATE | **프로젝터 유지**(D9). 절대값 쓰기라 중복 실행이 안전하다 | 마이크로배칭을 채택할 때만 의미가 있다 |
+| 주기 `active_count` 프로젝터 | **프로토타입에서는 미채택**(D9). 취소의 상대 `release()` 소유권과 신선도 표기까지 함께 바꿔야 한다 | V2 `+1`의 성공 경로 직렬화 비용이 측정 목표를 못 맞출 때 |
 | 회원별 표시 인덱스 | **회차별 `HEXISTS` 유지.** 목록 1건이 Redis 명령 20여 개를 쓴다 | §7.6 예산을 **명령 수 기준**으로 다시 재고, 게이트가 밀릴 때 |
 | 조회 캐시 Redis 물리 분리 | **단일 Redis 유지.** 조회와 발급이 같은 실행 스레드를 공유한다 | 혼합 부하에서 조회가 게이트 지연을 만들 때 |
 | generation 기반 재구성 | **§6.2 절차 유지.** 재구성 중 그 회차는 전면 503 이다 | 워밍업 무중단이 필요해질 때 |
@@ -285,7 +285,7 @@ POST /coupon-rounds/{r}/issue
 
 `-6` 경로가 **DB 를 한 번 읽는 것은 정상**이다. 최초 응답 JSON 은 `idempotency_records` 에 있고 Redis 에 없다. "멱등을 Redis 로 옮겨 DB 조회가 사라졌다"는 **최초 요청에만** 해당한다(§4.6).
 
-`SELECT … FOR UPDATE` 는 완전히 제거된다. `active_count` 갱신은 프로젝터로 빠진다(§9.6). 발급 트랜잭션에 남는 것은 세 테이블 INSERT 뿐이라 **v2 와 v3 의 영속화 단위가 같아진다**(§4.7).
+사전 `SELECT … FOR UPDATE` 는 제거된다. 다만 Redis 선점 뒤 발급 트랜잭션 안에서 `active_count`를 1 증가시킨다(§9.6). 따라서 영속화 단위는 세 테이블 INSERT와 카운터 UPDATE다.
 
 **v1 과 배타 실행이어야 한다.** 같은 회차를 동시 처리하면 v1 의 행 잠금이 Redis 카운터를 모른 채 재고를 깎는다. 버전 전환은 회차 단위 토글로 하고, 전환 시점에 §6.2 재구성을 한 번 태운다.
 
@@ -873,7 +873,7 @@ I1·I2 는 사고이고 I3~I6 은 사고의 전조다. **I3~I6 을 실시간 감
 | I3 | 동기 INSERT ＋ 보상 | `PERSIST_GAP` | replay 자가 치유 | 규칙 V3 `ORPHAN_COUPON` |
 | I4 | 세 쓰기를 한 스크립트에 | `LUA_GAP` → 즉시 CRITICAL | 재구성 | — |
 | I5 | 연산 방향 규칙(§5.1) | `ACTIVE_DB_GAP` → 임계 10/100 | 재동기화 | 규칙 V1 |
-| I6 | 프로젝터(§9.6) | `DB_COUNTER_GAP` | 프로젝터 | 규칙 V1 |
+| I6 | 발급·복원 TX의 `active_count` 갱신(§9.6) | `DB_COUNTER_GAP` | 재동기화 | 규칙 V1 |
 
 **L1 에 무게를 싣는다.** 감지는 이미 벌어진 일을 알려줄 뿐이라, 초과 발급처럼 되돌릴 수 없는 사고는 구조로 막아야 한다.
 
@@ -927,9 +927,9 @@ DB 먼저   → Redis 나중                  ⇒ gap ≈ +2k  (양수 = 초과�
 
 정확한 명제 — 부하 중에는 gap 이 `±2λΔ` 에서 흔들리되 **양수로는 치우치지 않고**(규칙 2), λ가 0이 되면 **정확히 0으로 수렴**한다.
 
-**FINAL 진입 게이트** (호출자가 확인): ① 정적 구간 5초 이상(진행 중 보상까지 종료) ② 인플라이트 0 ③ `dbActiveCount` 를 집계 컬럼이 아니라 `issuances` 실 COUNT 로 ④ **`stalePendingCount` 가 0**(§4.10). 0이 아니면 §9.7 재동기화를 한 번 태운다 ⑤ **프로젝터가 마지막 발급 이후 1회 완주**(§9.6).
+**FINAL 진입 게이트** (호출자가 확인): ① 정적 구간 5초 이상(진행 중 보상까지 종료) ② 인플라이트 0 ③ `dbActiveCount` 를 집계 컬럼이 아니라 `issuances` 실 COUNT 로 ④ **`stalePendingCount` 가 0**(§4.10). 0이 아니면 §9.7 재동기화를 한 번 태운다 ⑤ 마지막 발급·취소·만료 트랜잭션이 모두 끝남(§9.6).
 
-④⑤ 가 없으면 FINAL 이 구조적으로 실패한다. `hasFinalMismatch` 에는 **버전별 완화가 없기 때문**이다.
+④⑤가 없으면 FINAL 이 구조적으로 실패한다. `hasFinalMismatch` 에는 **버전별 완화가 없기 때문**이다.
 
 ```java
 // hasFinalMismatch — applicable 이면 무조건 0 이어야 한다
@@ -942,37 +942,47 @@ case V2, V3 -> true;
 
 LIVE severity 를 아무리 완화해도 FINAL 은 영향을 안 받는다. **`DB_COUNTER_GAP` 이 asOf 시점에 수렴해 있지 않으면 FINAL 은 무조건 FAIL 이다.** 이 축을 끄지 않고 FINAL 을 구하는 유일한 방법이 ⑤ 다.
 
-**D9 — `active_count` 갱신 주체.** v2 는 `FOR UPDATE` 를 없애므로 갱신자가 사라진다.
+**D9 — `active_count` 갱신 주체.** v2 는 사전 `FOR UPDATE` 재고 점유를 없애지만, Redis 선점이 성공한 뒤 같은 발급 트랜잭션에서 카운터를 갱신한다.
 
 발급 트랜잭션에 `UPDATE coupon_stocks SET active_count = active_count + 1` 을 넣으면 회차 행에 X 락이 걸리고 커밋까지 유지된다.
+
+취소·사용취소·만료는 상태 CAS를 먼저 끝낸 뒤 조건부 `release()` UPDATE 하나로 카운터를 내린다.
+후보 묶음의 처음부터 `SELECT … FOR UPDATE`로 재고 행을 잡아 두지 않는다. 그렇게 하면 만료 이력 수백
+건을 쓰는 동안 Redis 선점을 끝낸 V2 발급이 같은 행에서 대기하고, 취소와 만료의 잠금 순서도 갈린다.
+
+프로토타입 실측은 새 V2 API만으로 시작한다. 이미 발급 중인 구버전과 섞인 상태에서 `active_count`를
+실집계 절대값으로 덮어쓰는 Flyway 백필은 하지 않는다. 시작 전과 종료 뒤 관제에서 `overIssued = 0`과
+적용 가능한 카운터 gap 전부 0을 확인하며, 하나라도 아니면 그 회차 측정은 실패다.
 
 **"락이 부활한다"는 부정확한 표현이다.** V1-2 의 `occupyOne` 이 이미 같은 행에 같은 UPDATE 를 하고 있다 — 부활하는 것은 비관적 락이 아니라 행 X 락이고, 그건 어떤 UPDATE 든 잡는다. 정확한 대가는 이것이다.
 
 > v2 에 `active_count` UPDATE 를 넣으면 **회차 행 직렬화가 V1-2 와 정확히 같아진다.**
 > v2 의 개선은 거절 경로·정책 검증·멱등 커밋에서만 나오고, "재고 점유의 직렬화를 없앴다"는 주장은 사라진다.
 
-처리량 손실 폭은 **추정이다.** 커밋 fsync 0.3~0.6ms 를 락 보유 구간으로 보면 회차당 1,667~3,333 TPS 이지만 실측이 아니다. 다만 위 서사 손실만으로도 프로젝터를 택할 근거는 충분하다.
+처리량 손실 폭은 **추정이다.** 커밋 fsync 0.3~0.6ms 를 락 보유 구간으로 보면 회차당 1,667~3,333 TPS 이지만 실측이 아니다. 프로토타입에서는 이 비용을 부하 측정으로 확인할 때까지 `+1` 방식을 유지한다.
 
 대신 이 축의 의미가 v2 에서 달라졌음을 반영한다.
 
 | | `active_count` 의 역할 | 틀렸을 때 |
 |---|---|---|
 | v1 | 재고 판정의 **주체** | 곧바로 초과 발급 — 치명 |
-| v2 | 재고 판정은 Redis 가 한다. **파생 집계** | 발급에 영향 없음 — 지연 |
+| v2 | 재고 판정은 Redis 가 한다. DB의 같은 TX 카운터이자 CHECK 방어선 | CHECK 위반은 Redis·DB 불일치 사고 |
 
-**결정:**
+**결정(프로토타입):**
 
-① 프로젝터가 주기적으로 `issuances` 실 COUNT 로 덮어쓴다.
+① V2 발급 트랜잭션도 `active_count`를 1 증가시킨다.
 
 ```sql
-UPDATE coupon_stocks s
-   SET s.active_count = (SELECT COUNT(*) FROM issuances i
-                          WHERE i.coupon_id = s.coupon_id
-                            AND i.status IN ('ISSUED','USED'))
- WHERE s.coupon_id = ?
+UPDATE coupon_stocks
+   SET active_count = active_count + 1,
+       updated_at = ?
+ WHERE coupon_id = ?
 ```
 
-Redis 를 경유하지 않는 것이 중요하다. `total − redisRemaining` 으로 덮으면 이 축이 `ACTIVE_DB_GAP` 과 중복된다. 락 경합은 회차당 초당 1회라 무시할 수준이다.
+조건절로 매진을 판정하지 않는다. Redis Lua가 재고 판정 주체이고, 이 문장의 CHECK 위반은
+Redis와 DB가 갈린 사고를 트랜잭션 롤백으로 드러내는 두 번째 방어선이다. 성공 경로의 회차 행
+직렬화는 V1-2 수준으로 돌아오지만, 거절 경로 DB 0회와 발급 커밋 1회는 유지된다. 그 비용은
+부하 측정으로 확인한 뒤에만 프로젝터 방식으로 다시 검토한다.
 
 ② `severityForGap` 의 **구조를 바꾼다.** 지금은 `DB_COUNTER_GAP` 이 버전 분기 **이전에** 조기 반환되어 V2·V3 임계 분기에 도달조차 못 한다.
 
@@ -988,15 +998,13 @@ if (gapType == DB_COUNTER_GAP && engineVersion == V1) return CRITICAL; // v1 은
 // 이하 V2·V3 임계 분기로 흐른다
 ```
 
-③ **FINAL 은 그대로 0을 강제한다.** `hasFinalMismatch` 는 손대지 않고, 대신 FINAL 진입 게이트 ⑤(프로젝터 수렴)로 0을 만든다. `isApplicable` 에서 V2 의 `DB_COUNTER_GAP` 을 빼는 선택은 **감지 축 하나를 끄는 것**이라 택하지 않는다.
+③ **FINAL 은 그대로 0을 강제한다.** `hasFinalMismatch` 와 `isApplicable`는 손대지 않는다. V2의
+카운터는 발급·복원 트랜잭션에서 함께 갱신되므로, 정적 구간에는 0이어야 한다.
 
-④ **`CouponStockRepository.release()` 의 DB UPDATE 도 v2 에서 걷어낸다.**
-
-프로젝터만 쓰기로 하면 발급은 `active_count` 를 안 올리는데 취소는 `active_count = active_count - n WHERE active_count >= n` 으로 내린다. 프로젝터가 아직 발급분을 반영하지 않은 구간에 취소가 오면 **`WHERE` 가 거짓이 되어 0행 → `COUPON_STOCK_RELEASE_FAILED` → 정상 취소가 실패한다.**
-
-절대값 쓰기(프로젝터)와 상대값 쓰기(`release`)를 섞으면 안 된다. v2 에서는 `release` 의 DB 갱신을 빼고 Redis `INCR`(§5.2)만 남기며, `active_count` 는 프로젝터가 단독으로 소유한다. `CHECK (0 ≤ active_count ≤ total_quantity)` 도 절대값 쓰기에서는 위반되지 않는다.
-
-대가 — `WHERE active_count < total_quantity` 가 주던 DB 레벨 방어 한 겹이 사라진다. I1 의 실질 방어는 Lua 원자성과 `overIssued` 감시다.
+④ 취소·사용취소·만료는 기존 DB `release()`를 유지하고, DB 커밋 뒤 V2 Redis `restore()`도
+호출한다. Redis 복원 실패는 이미 커밋된 취소를 되돌리지 않고, 과소 재고로 남겨 재동기화로
+회수한다. 프로토타입에서는 자동 재시도를 두지 않는다. 오류 로그를 보고 운영자가 §9.7의 수동
+재동기화를 실행한다.
 
 ### 9.7 재동기화
 

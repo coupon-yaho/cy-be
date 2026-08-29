@@ -19,9 +19,12 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
 @Component
 public class CampaignPreparationCalculator {
 
+    private static final Set<CouponPolicyType> ISSUANCE_POLICIES =
+            Set.of(CouponPolicyType.PERCENT_CAPPED, CouponPolicyType.FIXED_AMOUNT);
+
     private static final Map<EngineVersion, Set<CouponPolicyType>> SUPPORTED_ISSUANCE_POLICIES = Map.of(
-            EngineVersion.V1,
-            Set.of(CouponPolicyType.PERCENT_CAPPED, CouponPolicyType.FIXED_AMOUNT));
+            EngineVersion.V1, ISSUANCE_POLICIES,
+            EngineVersion.V2, ISSUANCE_POLICIES);
 
     /** 상태가 없는 순수 계산기로 생성합니다. */
     public CampaignPreparationCalculator() { }

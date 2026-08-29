@@ -26,12 +26,14 @@ public class CouponCancelUseService {
     private final IssuanceUsageRepository issuanceUsageRepository;
     private final IssuanceHistoryRepository issuanceHistoryRepository;
     private final CouponStockRepository couponStockRepository;
+    private final V2StockRestorationService v2StockRestorationService;
 
     public CouponCancelUseService(
             IssuanceRepository issuanceRepository,
             IssuanceUsageRepository issuanceUsageRepository,
             IssuanceHistoryRepository issuanceHistoryRepository,
-            CouponStockRepository couponStockRepository
+            CouponStockRepository couponStockRepository,
+            V2StockRestorationService v2StockRestorationService
     ) {
         this.issuanceRepository = Objects.requireNonNull(issuanceRepository);
         this.issuanceUsageRepository = Objects.requireNonNull(
@@ -43,6 +45,7 @@ public class CouponCancelUseService {
         this.couponStockRepository = Objects.requireNonNull(
                 couponStockRepository
         );
+        this.v2StockRestorationService = Objects.requireNonNull(v2StockRestorationService);
     }
 
     @Transactional
@@ -67,10 +70,6 @@ public class CouponCancelUseService {
                 command.canceledAt()
         );
 
-        if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
-            lockStock(issuance.couponRoundId());
-        }
-
         boolean statusChanged = issuanceRepository.updateStatusIfCurrent(
                 issuance.id(),
                 issuance.memberId(),
@@ -83,20 +82,6 @@ public class CouponCancelUseService {
                     CouponIssueErrorCode.INVALID_TRANSITION,
                     "issuanceId=" + issuance.id()
             );
-        }
-
-        if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
-            boolean stockReleased = couponStockRepository.release(
-                    issuance.couponRoundId(),
-                    1,
-                    command.canceledAt()
-            );
-            if (!stockReleased) {
-                throw new BusinessException(
-                        CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                        "couponRoundId=" + issuance.couponRoundId()
-                );
-            }
         }
 
         boolean usageCanceled = issuanceUsageRepository.cancelIfActive(
@@ -118,6 +103,23 @@ public class CouponCancelUseService {
                 command.canceledAt()
         ));
 
+        // 재고 행 X 락은 커밋까지 유지된다. 취소·만료와 같은 순서로 마지막에 잡는다(§9.6 D9).
+        if (canceledIssuance.status() == IssuanceStatus.EXPIRED) {
+            // 엔진 판별의 coupons 왕복을 재고 행 X 락 밖에 둔다(§9.6 D9).
+            v2StockRestorationService.restoreAfterCommit(issuance.couponRoundId(), 1);
+            boolean stockReleased = couponStockRepository.release(
+                    issuance.couponRoundId(),
+                    1,
+                    command.canceledAt()
+            );
+            if (!stockReleased) {
+                throw new BusinessException(
+                        CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
+                        "couponRoundId=" + issuance.couponRoundId()
+                );
+            }
+        }
+
         return new CouponCancelUseResult(
                 issuance.id(),
                 canceledIssuance.status(),
@@ -125,15 +127,6 @@ public class CouponCancelUseService {
                 canceledUsage.discountAmount(),
                 canceledUsage.canceledAt()
         );
-    }
-
-    private void lockStock(Long couponRoundId) {
-        if (!couponStockRepository.lockForUpdate(couponRoundId)) {
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId
-            );
-        }
     }
 
     private static void validateCommand(CouponCancelUseCommand command) {

@@ -28,6 +28,7 @@ import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
@@ -58,6 +59,7 @@ class V2CouponIssueServiceTest {
     private IssuanceHistoryRepository histories;
     private IdempotencyRepository idempotencies;
     private IdempotencyResultCodec<CouponIssueResult> codec;
+    private CouponStockRepository stocks;
     private V2CouponIssueService service;
     private CouponIssueCommand command;
 
@@ -67,11 +69,12 @@ class V2CouponIssueServiceTest {
         issuances = mock(IssuanceRepository.class);
         histories = mock(IssuanceHistoryRepository.class);
         idempotencies = mock(IdempotencyRepository.class);
+        stocks = mock(CouponStockRepository.class);
         TransactionOperations transactions = immediateTransactions();
         CouponCodeGenerator codes = () -> "1234567890ABCDEF";
         codec = mock(IdempotencyResultCodec.class);
         when(codec.write(any())).thenReturn("{result}");
-        service = new V2CouponIssueService(gate, issuances, histories, idempotencies,
+        service = new V2CouponIssueService(gate, issuances, histories, idempotencies, stocks,
                 codes, codec, new RequestTokenGenerator("api", "boot", 0L), transactions);
         command = new CouponIssueCommand(10L, 20L, MembershipGrade.GOLD, IDEM, ISSUED_AT);
     }
@@ -93,6 +96,7 @@ class V2CouponIssueServiceTest {
         verify(issuances).save(any());
         verify(histories).save(any());
         verify(idempotencies).insertCompleted(any(), any(), any(), any(), any(), any());
+        verify(stocks).incrementActiveCount(10L, ISSUED_AT);
     }
 
     @Test

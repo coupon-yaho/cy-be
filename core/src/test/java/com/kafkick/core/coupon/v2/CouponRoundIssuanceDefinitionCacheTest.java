@@ -170,6 +170,11 @@ class CouponRoundIssuanceDefinitionCacheTest {
         }
 
         @Override
+        public Optional<CouponRoundIssuanceDefinition> findById(long couponRoundId) {
+            return Optional.empty();
+        }
+
+        @Override
         public Optional<CouponRoundIssuanceDefinition> lockAndFindById(long couponRoundId) {
             if (couponRoundId == slowRoundId) {
                 enteredSlowLoad.countDown();
@@ -210,6 +215,11 @@ class CouponRoundIssuanceDefinitionCacheTest {
         }
 
         @Override
+        public Optional<CouponRoundIssuanceDefinition> findById(long couponRoundId) {
+            return Optional.empty();
+        }
+
+        @Override
         public Optional<CouponRoundIssuanceDefinition> lockAndFindById(long couponRoundId) {
             calls.incrementAndGet();
             enteredLoad.countDown();
@@ -244,6 +254,11 @@ class CouponRoundIssuanceDefinitionCacheTest {
         private CountingRepository(EngineVersion nullableEngineVersion, long loadDelayMillis) {
             this.nullableEngineVersion = nullableEngineVersion;
             this.loadDelayMillis = loadDelayMillis;
+        }
+
+        @Override
+        public Optional<CouponRoundIssuanceDefinition> findById(long couponRoundId) {
+            return Optional.empty();
         }
 
         @Override

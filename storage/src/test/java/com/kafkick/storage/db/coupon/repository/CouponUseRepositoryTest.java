@@ -44,6 +44,7 @@ import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
@@ -61,6 +62,7 @@ import com.kafkick.core.coupon.service.CouponCancelService;
 import com.kafkick.core.coupon.service.command.CouponExpirationCommand;
 import com.kafkick.core.coupon.service.result.CouponExpirationResult;
 import com.kafkick.core.coupon.service.CouponExpirationService;
+import com.kafkick.core.coupon.service.V2StockRestorationService;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
 import com.kafkick.core.support.exception.BusinessException;
@@ -116,6 +118,8 @@ class CouponUseRepositoryTest {
     private PlatformTransactionManager transactionManager;
 
     private TransactionTemplate transactionTemplate;
+    @Autowired
+    private CouponRoundIssuanceDefinitionRepository issuanceDefinitions;
     private CouponUseService couponUseService;
     private CouponCancelUseService couponCancelUseService;
     private CouponCancelService couponCancelService;
@@ -137,18 +141,29 @@ class CouponUseRepositoryTest {
                 issuanceRepository,
                 issuanceUsageRepository,
                 issuanceHistoryRepository,
-                couponStockRepository
+                couponStockRepository,
+                restorationService()
         );
         couponCancelService = new CouponCancelService(
                 issuanceRepository,
                 issuanceHistoryRepository,
-                couponStockRepository
+                couponStockRepository,
+                restorationService()
         );
         couponExpirationService = new CouponExpirationService(
                 issuanceRepository,
                 issuanceHistoryRepository,
-                couponStockRepository
+                couponStockRepository,
+                restorationService()
         );
+    }
+
+    private V2StockRestorationService restorationService() {
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<
+                com.kafkick.core.coupon.v2.port.IssuanceGatePort> gateProvider =
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+        return new V2StockRestorationService(issuanceDefinitions, gateProvider);
     }
 
     @AfterEach
