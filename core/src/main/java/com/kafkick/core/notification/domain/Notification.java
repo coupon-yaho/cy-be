@@ -31,14 +31,16 @@ public record Notification(
         requirePositive(couponId, "couponId");
         requirePositive(memberId, "memberId");
         requirePositive(issuanceId, "issuanceId");
-        Objects.requireNonNull(channel, "channel");
+        if (!DEFAULT_CHANNEL.equals(channel)) {
+            throw new IllegalArgumentException("현재 알림 채널은 DEFAULT만 지원합니다.");
+        }
         Objects.requireNonNull(status, "status");
         requireText(recipientContact, MAX_RECIPIENT_CHARACTERS, "recipientContact");
         requireText(messageBody, MAX_MESSAGE_CHARACTERS, "messageBody");
         Objects.requireNonNull(createdAt, "createdAt");
         Objects.requireNonNull(updatedAt, "updatedAt");
-        if (attemptCount < 0 || resendCount < 0) {
-            throw new IllegalArgumentException("시도 횟수는 0 이상이어야 합니다.");
+        if (attemptCount < 0 || resendCount < 0 || resendCount > MAX_RESEND_COUNT) {
+            throw new IllegalArgumentException("시도 횟수는 허용 범위여야 합니다.");
         }
         if ((status == NotificationStatus.SENT) != (sentAt != null)) {
             throw new IllegalArgumentException("SENT 상태와 발송 시각은 같이 존재해야 합니다.");
@@ -46,6 +48,9 @@ public record Notification(
         boolean failed = status == NotificationStatus.FAILED || status == NotificationStatus.DEAD;
         if (failed != (lastFailureReason != null)) {
             throw new IllegalArgumentException("실패 상태와 실패 사유는 같이 존재해야 합니다.");
+        }
+        if (failed && failedAt == null) {
+            throw new IllegalArgumentException("실패 상태에는 실패 시각이 필요합니다.");
         }
     }
 
@@ -118,7 +123,10 @@ public record Notification(
     }
 
     private static void requireText(String value, int maxCharacters, String name) {
-        if (value == null || value.length() > maxCharacters) {
+        if (value == null || value.isBlank() || value.length() > maxCharacters) {
+            if (value != null && value.isBlank()) {
+                throw new IllegalArgumentException(name + "는 비어 있을 수 없습니다.");
+            }
             throw new BusinessException(NotificationErrorCode.PAYLOAD_TOO_LARGE,
                     name + "가 저장 가능한 길이를 초과했습니다.");
         }

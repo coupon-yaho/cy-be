@@ -37,6 +37,8 @@ CREATE TABLE `notifications` (
     CONSTRAINT `ck_notifications_failure_reason` CHECK (
         (`status` COLLATE utf8mb4_0900_as_cs IN ('FAILED','DEAD'))
             = (`last_failure_reason` IS NOT NULL)),
+    CONSTRAINT `ck_notifications_failed_at` CHECK (
+        `status` COLLATE utf8mb4_0900_as_cs NOT IN ('FAILED','DEAD') OR `failed_at` IS NOT NULL),
     CONSTRAINT `ck_notifications_attempt_count` CHECK (`attempt_count` >= 0),
     CONSTRAINT `ck_notifications_resend_count` CHECK (`resend_count` BETWEEN 0 AND 3),
     CONSTRAINT `ck_notifications_channel` CHECK (

@@ -110,6 +110,28 @@ class NotificationTest {
                 .isInstanceOf(BusinessException.class);
     }
 
+    @Test
+    void rejectsStorageIncompatibleChannelResendCountAndFailureTime() {
+        assertThatThrownBy(() -> new Notification(null, 1L, 2L, 3L, "SMS",
+                NotificationStatus.PENDING, 0, 0, null, "recipient", "message",
+                AT, AT, null, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Notification(null, 1L, 2L, 3L, Notification.DEFAULT_CHANNEL,
+                NotificationStatus.PENDING, 0, 4, null, "recipient", "message",
+                AT, AT, null, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Notification(null, 1L, 2L, 3L, Notification.DEFAULT_CHANNEL,
+                NotificationStatus.FAILED, 1, 0, NotifyFailureReason.SEND_TIMEOUT,
+                "recipient", "message", AT, AT, null, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsBlankRecipientAndMessage() {
+        assertThatThrownBy(() -> Notification.pending(1L, 2L, 3L, " ", "message", AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> Notification.pending(1L, 2L, 3L, "recipient", " ", AT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static Notification pending() {
         return Notification.pending(1L, 2L, 3L, "recipient", "message", AT);
     }

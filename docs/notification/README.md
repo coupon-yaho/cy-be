@@ -34,7 +34,7 @@
 ## 30초 요약
 
 ```text
-발급 커밋 → notifications(PENDING) → coupon.notify 발행(key=memberId)
+발급 커밋 → notifications(PENDING) + outbox(PENDING) → outbox relay가 coupon.notify 발행(key=memberId)
   → notify-dispatch 수신 → SENDING → NotificationSender.send()
       성공         → SENT  + meter success
       재시도가능   → 1s·5s·20s 3회 → 소진 시 DEAD + DLT + meter failure

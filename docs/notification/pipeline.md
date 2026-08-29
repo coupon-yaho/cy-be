@@ -6,8 +6,8 @@
 
 ```text
 발급 트랜잭션 커밋
-  → notifications 행 생성 (PENDING)
-  → coupon.notify 발행 (key = memberId)
+  → notifications(PENDING) + notification_outbox(PENDING) 저장
+  → outbox relay가 coupon.notify 발행 (key = memberId)
   → notify-dispatch Consumer 수신
   → notifications SENDING
   → NotificationSender.send()
@@ -62,7 +62,7 @@ public record NotificationRequestedEvent(
         Long memberId,      // partition key
         Long couponId,
         int attemptSeq,     // 이 발행이 몇 번째 시도인지. 재발송 재발행이 이 값으로 구분된다
-        Trigger trigger,    // INITIAL · MANUAL
+        AttemptTrigger trigger,    // INITIAL · MANUAL
         Instant requestedAt) { }
 ```
 
@@ -82,13 +82,14 @@ lease도 두지 않는다(D21).
 ### 5.1 트랜잭션 경계 (D1)
 
 ```text
-[발급 트랜잭션]  재고 차감 · issuance 저장 · notifications(PENDING) 저장   ← 같은 트랜잭션
+[발급 트랜잭션]  재고 차감 · issuance 저장 · notifications(PENDING) · outbox(PENDING) 저장
       ↓ 커밋
-[afterCommit]   coupon.notify 발행                                      ← 트랜잭션 밖
+[outbox relay]   claim → coupon.notify 발행 → PUBLISHED 확정            ← DB 락 밖 발행
 ```
 
-알림 행 생성은 발급과 **같은 트랜잭션**이다. 그래야 발급됐는데 알림 행이 없는 상태가 안 생긴다.
-발행만 커밋 이후로 뺀다. 발행 실패는 발급을 롤백하지 않고, 그 알림은 `PENDING` 으로 남는다.
+알림 행과 outbox 명령은 발급과 **같은 트랜잭션**이다. 그래야 발급됐는데 알림 또는 발행 명령이
+없는 상태가 안 생긴다. 발행은 커밋 뒤 outbox relay가 수행한다. 발행 실패는 발급을 롤백하지 않고,
+그 알림과 명령은 `PENDING`으로 남는다.
 
 상태 저장 트랜잭션은 `notification_outbox(PENDING)`도 같이 남긴다. 발행기는 짧은 DB
 트랜잭션에서 발행 가능한 행을 `IN_PROGRESS`로 바꾸고 DB 시각의 lease와 무작위 fencing token을

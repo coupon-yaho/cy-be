@@ -16,6 +16,7 @@
 10. 동시에 여러 발행기가 떠도 하나의 lease 소유자만 정상 발행하며 만료된 claim은 회수된다.
 11. 같은 `attemptSeq`의 `SENDING` 재수신만 mock 발송을 재개하며 완료 attempt 승자만 미터를 올린다.
 12. 수동 재발송 outbox가 DEAD가 되면 알림은 원자적으로 `FAILED`로 돌아간다.
+13. `FAILED`·`DEAD` 알림은 실패 사유와 `failed_at`을 함께 가진다.
 
 ---
 
@@ -47,6 +48,6 @@
 | 23 | 워커 JVM 시계가 서로 다름 | claim 판정은 DB 시계만 사용하므로 결과 불변 | T1 |
 | 24 | lease 만료 10회 | DEAD 격리, 뒤 PENDING 명령 claim 가능 | T1 |
 | 26 | 같은 attempt가 SENDING에서 재수신 | attempt 증가 없이 재개, 다른 seq는 거부 | T1 |
-| 27 | 수동 outbox 10회 실패 | outbox DEAD + notification FAILED 원자적 종결 | T1 |
+| 27 | 수동 outbox 10회 실패 | outbox가 완료 attempt 승자면 notification FAILED 원자적 종결 | T1 |
 
 ---

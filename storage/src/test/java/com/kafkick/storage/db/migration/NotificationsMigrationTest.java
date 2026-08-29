@@ -81,8 +81,16 @@ class NotificationsMigrationTest {
     void checksRejectInconsistentStates() throws SQLException {
         assertThatThrownBy(() -> insertNotification(1, "SENT", "NULL", "NULL"))
                 .hasMessageContaining("ck_notifications_sent_at");
-        assertThatThrownBy(() -> insertNotification(2, "FAILED", "NULL", "NULL"))
+        assertThatThrownBy(() -> execute("INSERT INTO notifications"
+                + " (id, coupon_id, member_id, issuance_id, status, failed_at, recipient_contact,"
+                + " message_body, created_at, updated_at)"
+                + " VALUES (2, 2, 2, 2, 'FAILED', NOW(6), 'contact', 'message', NOW(6), NOW(6))"))
                 .hasMessageContaining("ck_notifications_failure_reason");
+        assertThatThrownBy(() -> execute("INSERT INTO notifications"
+                + " (id, coupon_id, member_id, issuance_id, status, last_failure_reason,"
+                + " recipient_contact, message_body, created_at, updated_at)"
+                + " VALUES (3, 3, 3, 3, 'FAILED', 'SEND_TIMEOUT', 'contact', 'message', NOW(6), NOW(6))"))
+                .hasMessageContaining("ck_notifications_failed_at");
         insertNotification(1, "PENDING", "NULL", "NULL");
         assertThatThrownBy(() -> insertAttempt(1, 1, "FAILED", "NULL"))
                 .hasMessageContaining("ck_attempts_failure_reason");
