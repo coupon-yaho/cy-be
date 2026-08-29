@@ -1,4 +1,3 @@
-# api/batch 가 spring.config.import 로 가져다 쓰는 공통 DB 설정.
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -14,31 +13,24 @@ spring:
     username: ${DB_USERNAME:app}
     password: ${DB_PASSWORD:app}
     hikari:
-      # 서버 max_connections=50 이다. 전 인스턴스 풀 합계가 이를 넘지 않게 배분한다.
+      # 서버 max_connections=151 이다. 전 인스턴스 풀 합계가 이를 넘지 않게 배분한다.
       #
-      # ⚠️ 이 50 은 infra/mysql/my.cnf 에 적혀 있고, 그 파일은 gitignore 대상이라 저장소가
-      #    보증하지 않는다. 아래 계산의 분모는 각자 환경의 실제 값을 확인해야 한다.
+      # compose.yml 의 MySQL command가 151을 강제하고 계약 테스트가 풀 합계와 같이 검증한다.
       #
       # ⚠️ maximum-pool-size 는 여기 두지 않는다. 이 파일은 spring.config.import 로 들어가는데,
       #    import 로 들어온 문서가 그것을 선언한 문서보다 우선한다. 여기 적으면 각 모듈이 자기
       #    파일에 적은 값이 에러도 경고도 없이 무시된다 — batch 의 4가 실제로 그렇게 무시되고
       #    10으로 떴다. 풀 크기는 모듈마다 다른 값이므로 각 모듈이 선언한다.
-      #      api   : api/application.yml   의 ${DB_POOL_SIZE:3}
+      #      api   : api/application.yml   의 ${DB_POOL_SIZE:13}
       #      batch : batch/application.yml 의 ${BATCH_DB_POOL_SIZE:4}
       #    선언을 빠뜨리면 Hikari 기본값 10 으로 뜬다(조용히 늘어난다). 아래 계산을 다시 한다.
       #
       # 관측을 켠 JVM 만 obs 2 를 더 쓴다. 실측 기준 배분:
-      #   api 4대  20  (main  3 + obs 2) × 4   ← 관측 켬
+      #   api 4대  60  (main 13 + obs 2) × 4   ← 관측 켬
       #   batch     6  (main  4 + obs 2)       ← 관측 켬 (OBS-5 도메인 Gauge)
-      #   합계     26 / 50
+      #   합계     66 / 151
       #
-      # ⚠️ 이 계산은 아직 성립하지 않는다. 롤링 배포 중에는 구/신 인스턴스가 겹쳐 뜨는데, 그때
-      #    동시에 살아 있는 인스턴스 수가 미확정이라 최대 동시 커넥션의 상한을 계산할 수 없다.
-      #    구/신 인스턴스가 겹치면 위 합계에 인스턴스당 5가 추가된다.
-      #    풀을 줄이는 것 말고 서버 쪽 max_connections 를 올리는 선택지도 같이 검토한다 —
-      #    50 은 MySQL 기본값(151)보다 낮게 잡아 둔 값이다.
-      #    TODO: 배포 전략을 확정한 뒤 풀 크기를 다시 정한다. 확정 전까지 여기 숫자는
-      #    근거가 없으므로 바꾸지 않는다 — 추측한 값으로 조이면 v1 측정이 오염된다.
+      # API 한 대가 더 겹치는 롤링 구간은 81개다. 151에서 관리·수동 접속 여유를 남긴다.
       #
       # 인스턴스를 늘리거나 obs 풀을 키우기 전에 이 계산을 다시 한다.
       connection-timeout: 3000

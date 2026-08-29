@@ -95,7 +95,7 @@ class ApiTopologyWiringTest {
         assertThat(tomcat.getThreads().getMax()).isEqualTo(15);
         assertThat(tomcat.getMaxConnections()).isEqualTo(4_000);
         assertThat(tomcat.getAcceptCount()).isEqualTo(1_000);
-        assertThat(operationalDataSource.getMaximumPoolSize()).isEqualTo(3);
+        assertThat(operationalDataSource.getMaximumPoolSize()).isEqualTo(13);
     }
 
     @Test

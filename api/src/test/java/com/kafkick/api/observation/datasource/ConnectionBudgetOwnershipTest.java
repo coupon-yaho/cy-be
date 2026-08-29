@@ -56,7 +56,7 @@ class ConnectionBudgetOwnershipTest {
     void apiTemplateOwnsBothKeys() {
         Properties api = parse("application.yml.example");
 
-        assertThat(api.getProperty(POOL_SIZE)).isEqualTo("${DB_POOL_SIZE:3}");
+        assertThat(api.getProperty(POOL_SIZE)).isEqualTo("${DB_POOL_SIZE:13}");
         assertThat(api.getProperty(FLYWAY_ENABLED)).isEqualTo("true");
     }
 
