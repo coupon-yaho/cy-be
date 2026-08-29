@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.Objects;
 
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
+import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
@@ -48,6 +50,29 @@ public final class AdminStockResolver {
                     campaign.status(), campaign.opensAt(), campaign.closesAt(), stock, campaign.preparation()));
         }
         return new AdminCampaignCatalog(catalog.status(), catalog.observedAt(), resolved);
+    }
+
+    /** 상세의 V1 DB 재고는 보존하고 V2 DB 미러만 Redis 정본으로 교체합니다. */
+    public AdminCampaignDetailData resolve(AdminCampaignDetailData detail, Instant observedAt) {
+        Objects.requireNonNull(detail, "detail");
+        Objects.requireNonNull(observedAt, "observedAt");
+        if (detail.availability() != DetailAvailability.AVAILABLE
+                || detail.value().engineVersion() != EngineVersion.V2) {
+            return detail;
+        }
+        AdminCampaignDetailData.DetailValue value = detail.value();
+        CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock;
+        if (!value.stock().status().carriesValue()) {
+            stock = new CouponMetricsSource.Observation<>(null, SourceStatus.UNAVAILABLE, null);
+        } else {
+            V2AdminStockReader.Request request = new V2AdminStockReader.Request(
+                    value.couponId(), value.campaign().status(), value.stock().value().totalQuantity());
+            stock = toLegacyCounts(v2Reader.read(List.of(request), observedAt).get(value.couponId()));
+        }
+        return new AdminCampaignDetailData(DetailAvailability.AVAILABLE,
+                new AdminCampaignDetailData.DetailValue(
+                        value.couponId(), value.campaignName(), value.brandName(), value.engineVersion(),
+                        value.campaign(), stock, value.holdingCounts(), value.transitions()));
     }
 
     /** 기존 계산기 입력의 activeCount 자리에 권위 재고로부터 도출한 발급 수량을 싣습니다. */

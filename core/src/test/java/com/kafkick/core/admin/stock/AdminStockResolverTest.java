@@ -10,6 +10,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
+import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.campaignsource.DetailAvailability;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
@@ -39,6 +41,26 @@ class AdminStockResolverTest {
                 .isEqualTo(new CouponMetricsSource.StockCounts(100L, 20L));
         assertThat(resolved.campaigns().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(100L, 70L));
+    }
+
+    @Test
+    void replacesV2DetailStockWithoutChangingDatabaseHoldingMetrics() {
+        V2AdminStockReader reader = (requests, observedAt) -> Map.of(
+                2L, observed(new AdminStockSnapshot(100L, 30L)));
+        CouponMetricsSource.Observation<CouponMetricsSource.IssuanceStatusCounts> holdings =
+                observed(new CouponMetricsSource.IssuanceStatusCounts(1L, 2L, 3L, 4L));
+        AdminCampaignDetailData detail = new AdminCampaignDetailData(DetailAvailability.AVAILABLE,
+                new AdminCampaignDetailData.DetailValue(
+                        2L, "campaign", "brand", EngineVersion.V2,
+                        new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN, NOW.minusSeconds(60)),
+                        observed(new CouponMetricsSource.StockCounts(100L, 20L)), holdings,
+                        observed(List.of())));
+
+        AdminCampaignDetailData resolved = new AdminStockResolver(reader).resolve(detail, NOW);
+
+        assertThat(resolved.value().stock().value())
+                .isEqualTo(new CouponMetricsSource.StockCounts(100L, 70L));
+        assertThat(resolved.value().holdingCounts()).isSameAs(holdings);
     }
 
     private static AdminCampaignCatalog.CampaignData campaign(

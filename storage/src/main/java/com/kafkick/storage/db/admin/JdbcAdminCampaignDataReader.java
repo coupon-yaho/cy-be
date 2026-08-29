@@ -172,9 +172,11 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock =
                     stockObservation(campaign);
 
-            if (stock.status().carriesValue()
+            if (engineVersion == EngineVersion.V1
+                    && stock.status().carriesValue()
                     && stock.value().activeCount()
                     != holding.counts().issued() + holding.counts().used()) {
+                // V1은 DB가 정본이라 불일치 상세을 거부합니다. V2 DB active는 Redis 정본의 미러입니다.
                 log.warn("admin campaign stock drift: couponId={}, activeCount={}, issuedPlusUsed={}",
                         couponId,
                         stock.value().activeCount(),

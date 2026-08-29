@@ -392,6 +392,21 @@ class JdbcAdminCampaignDataReaderTest {
         }
     }
 
+    /** V2 DB active는 Redis 정본의 미러라 불일치 자체로 Redis 재고와 다른 DB 지표까지 숨기지 않습니다. */
+    @Test
+    @DisplayName("V2 DB active와 보유 수가 달라도 상세 원천은 유지한다")
+    void v2MirrorDriftKeepsDetailAvailable() {
+        insertCoupon(10, 1, 1, "V2 불일치", "OPEN", SNAPSHOT.minusSeconds(60));
+        writeJdbc.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id = 10");
+        insertStock(10, 20, 2, SNAPSHOT.minusSeconds(5));
+        insertIssuance(101, 10, 1, "ISSUED", 1);
+
+        AdminCampaignDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
+
+        assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
+        assertThat(result.value().engineVersion()).isEqualTo(EngineVersion.V2);
+    }
+
     @Test
     @DisplayName("상태 전이 구간은 시작을 포함하고 종료를 제외하며 microsecond를 보존한다")
     void transitionWindowIsHalfOpenAtMicrosecondPrecision() {

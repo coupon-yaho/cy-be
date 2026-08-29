@@ -190,10 +190,13 @@ public class AdminObservabilityConfig {
             AdminCampaignDataReader campaignDataReader,
             CouponIssuanceRateReader issuanceRateReader,
             AdminQueueObservationSource queueObservationSource,
-            CouponMetricsCalculator calculator
+            CouponMetricsCalculator calculator,
+            ObjectProvider<V2AdminStockReader> v2AdminStockReaderProvider
     ) {
         return new AdminCouponMetricsService(
-                timeProvider, campaignDataReader, issuanceRateReader, queueObservationSource, calculator);
+                timeProvider, campaignDataReader, issuanceRateReader, queueObservationSource, calculator,
+                new AdminStockResolver(v2AdminStockReaderProvider
+                        .getIfAvailable(AdminStockResolver::unavailableV2Reader)));
     }
 
     /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */
