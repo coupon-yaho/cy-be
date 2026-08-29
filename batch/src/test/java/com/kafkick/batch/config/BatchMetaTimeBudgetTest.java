@@ -70,7 +70,9 @@ class BatchMetaTimeBudgetTest {
         try (Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
             List<String> offenders = new ArrayList<>();
             for (Path path : sources.filter(f -> f.toString().endsWith(".java")).toList()) {
-                String relative = SOURCE_ROOT.relativize(path).toString();
+                // 예산 키는 / 로 적는다. Path.toString() 은 윈도우에서 \\ 를 주므로
+                // 정규화 안 하면 **모든 파일이 예산 0 으로 판정**돼 통째로 빨개진다.
+                String relative = SOURCE_ROOT.relativize(path).toString().replace('\\', '/');
                 long reads = BATCH_META_TIME
                         .matcher(Files.readString(path, StandardCharsets.UTF_8))
                         .results().count();

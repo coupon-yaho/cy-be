@@ -494,9 +494,13 @@ UPDATE issuances SET … WHERE … AND id > :afterId AND id <= :ceiling;   -- �
   역효과다. 다만 이 비용은 **테이블 전체 크기에 비례**하므로(발급 3천만이면 첫 청크 약 3.5초)
   규모가 커지면 반드시 다시 잰다. **기준: 첫 청크가 1초를 넘으면 넣는다.**
 
-  ⚠️ 함께 확인한 것 — 제안돼 있던 `(coupon_id, status, expires_at)` 인덱스는 **어느 질의도
-  못 쓴다.** 리더는 `coupon_id NOT IN (...)` 이라 등치가 아니고, 라이터 `EXPIRE_BATCH` 는
-  `coupon_id = ?` 이지만 이미 `rows=1` 이다.
+  ⚠️ 함께 확인한 것 — 제안돼 있던 `(coupon_id, status, expires_at)` 인덱스는 **넣어도
+  이득이 없다.** 둘을 갈라 적는다:
+  - **리더 `NEXT_CANDIDATES` 는 못 쓴다.** 선두 컬럼이 `coupon_id` 인데 조건이
+    `coupon_id NOT IN (...)` 이라 **등치가 아니다** — 선두를 못 좁히면 그 뒤 컬럼도 못 탄다.
+  - **라이터 `EXPIRE_BATCH` 는 쓸 수 있다.** `coupon_id = ?`(등치) · `status = ?`(등치) ·
+    `expires_at < ?`(범위)라 그 인덱스가 타는 모양이 맞다. **다만 이득이 없다** — 이미
+    `idx_issuance_status_id` 로 `rows=1` 이다(EXPLAIN 실측). 1행을 1행으로 줄일 수는 없다.
 
 - ~~**`blockedCoupons` 소요.**~~ **쟀다 · CY-742.** 읽기 전용이라 원본에서 바로 쟀다 —
   평상시 대기 8,183건에 **28.9ms**, 28일치가 한꺼번에 대기하는 340,529건에 **333ms** 다.

@@ -136,7 +136,7 @@ class NoWallClockInBatchTest {
         try (Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
             List<String> offenders = new ArrayList<>();
             for (Path path : sources.filter(f -> f.toString().endsWith(".java")).toList()) {
-                String relative = SOURCE_ROOT.relativize(path).toString();
+                String relative = SOURCE_ROOT.relativize(path).toString().replace('\\', '/');
                 long calls = INJECTED_CLOCK
                         .matcher(Files.readString(path, StandardCharsets.UTF_8))
                         .results().count();
@@ -187,7 +187,7 @@ class NoWallClockInBatchTest {
         try (Stream<Path> sources = Files.walk(SOURCE_ROOT)) {
             List<String> offenders = new ArrayList<>();
             for (Path path : sources.filter(f -> f.toString().endsWith(".java")).toList()) {
-                String relative = SOURCE_ROOT.relativize(path).toString();
+                String relative = SOURCE_ROOT.relativize(path).toString().replace('\\', '/');
                 long reads = DEFAULT_ZONE
                         .matcher(Files.readString(path, StandardCharsets.UTF_8))
                         .results().count();
