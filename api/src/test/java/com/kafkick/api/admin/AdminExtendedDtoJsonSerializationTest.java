@@ -63,7 +63,8 @@ class AdminExtendedDtoJsonSerializationTest {
         assertThat(objectMapper.writeValueAsString(new NotificationFailurePageResponse(
                 List.of(new NotificationFailurePageResponse.NotificationFailureItem(
                         1L, 2L, 3L, NotifyFailureReason.SEND_TIMEOUT, 2, AT)), null, false)))
-                .contains("\"couponId\":2", "\"reasonCode\":\"SEND_TIMEOUT\"")
+                .contains("\"couponId\":2", "\"reason\":\"SEND_TIMEOUT\"")
+                .doesNotContain("reasonCode")
                 .doesNotContain("campaignId");
         assertThat(objectMapper.writeValueAsString(new VerificationRunPageResponse(List.of(), null, false)))
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
