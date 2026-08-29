@@ -25,7 +25,13 @@ import com.kafkick.core.verification.replay.ReplayHistoryRepository;
 public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
 
     /**
-     * {@code created_at} 에는 인덱스가 없어 이 문장은 전체를 훑는다. 실행마다 한 번뿐이라 감수한다.
+     * <b>이 문장은 전체를 훑는다.</b> 실행마다 한 번뿐이라 감수한다.
+     *
+     * <p>⚠️ <b>인덱스가 없어서가 아니다.</b> {@code created_at} 인덱스는 있다 —
+     * {@code idx_issuance_histories_created_id}({@code V2026082502}, 관리자 이력 조회용).
+     * 못 타는 이유는 <b>세 집계가 전부 {@code CASE} 로 감싸져 있어서</b>다. 한때 여기
+     * "인덱스가 없어" 라고 적혀 있었는데(CY-744 3차 리뷰가 잡았다), 그 말을 믿고
+     * {@code (created_at)} 인덱스를 새로 파면 <b>이미 있는 것을 또 파면서 이 문장은 그대로</b>다.
      *
      * <p>전체 최대 시각까지 <b>같은 스캔에서</b> 잰다. 따로 질의하면 풀스캔이 두 번이고,
      * 두 스캔 사이에 행이 들어오면 검증하려던 값끼리 어긋난다.
@@ -42,6 +48,21 @@ public class ReplayHistoryJdbcAdapter implements ReplayHistoryRepository {
      * {@code ORDER BY} 에 {@code id} 를 넣는 것이 타이브레이커다.
      * 같은 {@code created_at} 이 여럿이면 이것 없이는 실행마다 순서가 달라져
      * 접은 결과가 흔들린다.
+     *
+     * <p>⚠️ <b>이 정렬은 현재 스키마에서 filesort 를 강제한다 — 창 하나가 통째로 정렬
+     * 대상이다.</b> 세 컬럼이 전부 ASC 인데 그 조합의 인덱스는
+     * {@code idx_issuance_histories_issuance_created_id (issuance_id, created_at DESC, id DESC)}
+     * 하나뿐이라 방향이 안 맞는다(관리자 조회용으로 들어온 것이다). 기본
+     * {@code batch.verify.replay-window-size} 가 50,000 이고 발급건당 이력이 약 1.8행이라
+     * <b>창 하나가 약 9만 행</b>이고, 그것이 청크 트랜잭션 안에서 정렬된다.
+     * 실측(MySQL 8.4): 같은 질의를 {@code created_at DESC, id DESC} 로 바꾸면 정렬이 사라진다.
+     *
+     * <p><b>처방은 이미 있다</b> — {@code 90_perf_indexes_optional.sql} 의
+     * {@code idx_history_issuance (issuance_id, created_at)}. InnoDB 가 PK 를 뒤에 붙여
+     * 실질 {@code (issuance_id, created_at, id)} ASC 라 이 정렬을 그대로 덮는다.
+     * <b>넣는 시점은 인덱스 실측 티켓의 몫</b>이고, 그때 개선폭의 상당 부분이 "커버링" 이
+     * 아니라 <b>"filesort 제거"</b> 라는 것을 {@code EXPLAIN ANALYZE} 앞뒤로 남겨야
+     * 원인을 잘못 귀속하지 않는다.
      *
      * <p><b>{@code INNER JOIN} 이라 고아 이력이 빠지는데, 그런 행은 물리적으로 없다.</b>
      * {@code issuance_histories.issuance_id → issuances.id} FK 가

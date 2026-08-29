@@ -7,7 +7,11 @@ package com.kafkick.core.verification;
  * <ul>
  *   <li>발급코드 중복은 {@link #DUP_PER_MEMBER} 의 두 번째 케이스입니다
  *       ({@code GROUP BY coupon_id, code}, {@code MIN(id)} 제외)</li>
- *   <li>고아 이력은 {@link #ILLEGAL_TRANSITION} 이 전이 연쇄로 잡습니다</li>
+ *   <li>고아 이력은 <b>검증하지 않습니다.</b> FK 가 발생을 막고, 리플레이 질의가
+ *       {@code INNER JOIN issuances} 라 입력에서 빠집니다 — 참조 구현
+ *       ({@code seedgen/verify.py})도 같습니다. 한때 여기 "{@link #ILLEGAL_TRANSITION} 이
+ *       전이 연쇄로 잡습니다" 라고 적혀 있었는데 <b>두 구현 다 안 잡습니다</b>
+ *       (CY-744 3차 리뷰). 계약({@code contract.json.not_verified})도 함께 고쳤습니다</li>
  * </ul>
  *
  * 별도 규칙을 만들면 같은 행이 두 규칙에 잡혀 target_key 집합 비교가 어긋납니다.
@@ -36,7 +40,7 @@ public enum FindingType {
     /** 리플레이 결과 ↔ issuances.status */
     REPLAY_MISMATCH(Grain.ISSUANCE, false),
 
-    /** 연쇄 불일치 + 전이표 위반 + 고아 이력. 가장 비쌉니다 */
+    /** 연쇄 불일치 + 전이표 위반 + 결과가 둘인 전이의 오답. 가장 비쌉니다 */
     ILLEGAL_TRANSITION(Grain.HISTORY, true),
 
     /** asof_state.active_usage_count ↔ state = USED 여부 */

@@ -147,12 +147,20 @@ groups:
       #      `unless` 는 우변이 비면 좌변을 그대로 통과시킨다 — 게이지가 사라지면
       #      **원래대로 critical 이 운다.** 꺼져 있을 때만 뺀다는 의도는 그대로다.
       #
-      # ⚠️⚠️ **`== 0` 이 아니라 `min_over_time(...[25h]) == 0` 이다.** 전자로 썼다가 되돌렸다 —
+      # ⚠️⚠️ **`== 0` 이 아니라 `max_over_time(...[25h]) == 0` 이다.** 전자로 썼다가 되돌렸다 —
       #      게이지가 0이 되는 **즉시** 좌변이 지워지는데 반대편 BatchSchedulingDisabled 는
       #      `for: 25h` 라, 만료가 26시간째 실패해 페이저가 울리는 중에 누가 스케줄러를 끄면
       #      **critical 셋이 동시에 해소되고 25시간 동안 아무 알림도 없다.** 진짜 사고가
-      #      스위치 하나에 덮인다. min_over_time 은 **그 창 내내 꺼져 있었을 때만** 재우므로
-      #      그 구멍이 닫힌다 — 켜져 있던 순간이 한 번이라도 있으면 좌변이 산다.
+      #      스위치 하나에 덮인다. max_over_time 은 창 안 **모든** 샘플이 0 이어야 0 이므로
+      #      "그 창 내내 꺼져 있었을 때만" 재운다 — 켜져 있던 순간이 한 번이라도 있으면 좌변이 산다.
+      #
+      # ⚠️⚠️ **한때 여기가 `min_over_time` 이었다(CY-744 3차 리뷰가 잡았다). 정반대였다.**
+      #      min 은 창의 **최솟값**이라 0 샘플이 **하나라도** 있으면 0 이다 — 스크레이프 한
+      #      주기(15초)만 꺼도 그 뒤 25시간 동안 여섯 알림이 통째로 침묵했다. 결정론 증명
+      #      구간에 스위치를 껐다 켜는 것이 정상 절차라 **매번 그 문이 열렸다.**
+      #      BatchSchedulingDisabled 도 `for: 25h` 라 그동안 안 울어 완전 무음이었다.
+      #      실측(promtool): 게이지 `1x9 0 1x1590` 에 t=600분 판정 →
+      #      min 판이면 침묵, max 판이면 발화. 아래 테스트 파일이 그 전이를 든다.
       # ⚠️ **스케줄러가 꺼진 채 하루가 지나면 그것 하나만 운다.**
       #
       # 2026-08-29 에 실제로 일어난 일 — 배치가 BATCH_SCHEDULING_ENABLED=false 로 떠서
@@ -189,13 +197,18 @@ groups:
             켠 뒤에는 다음 슬롯부터 돕니다. 밀린 만료는 한 번에 따라잡히지만
             검증은 asOf 슬롯마다 한 건이라 건너뛴 회차는 안 되돌아옵니다.
 
+      # ⚠️ **미래 갈래는 게이트 밖이다.** 형제 ExpireMetricsBackdated 와 같은 논거다 —
+      #    측정 시각이 미래면 원인은 언제나 시간대 오설정(serverTimezone/connectionTimeZone)이고
+      #    그것은 스케줄러 on/off 와 아무 상관이 없다. compose 기본이
+      #    BATCH_SCHEDULING_ENABLED=false 라, 한 괄호로 묶으면 **로컬·시연에서 이 축이 상시
+      #    꺼진다.** 게이지는 UNIX_TIMESTAMP 로 계산되므로 존이 틀리면 정확히 미래로 어긋난다.
       - alert: ExpireNotSucceeding
         expr: >-
           (
-            (time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 90000
-            or (cy_batch_last_success_seconds{spring_batch_job_name="expireJob"} - time()) > 60
+            ((time() - cy_batch_last_success_seconds{spring_batch_job_name="expireJob"}) > 90000)
+            unless on(instance, job) (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
           )
-          unless on(instance, job) (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+          or (cy_batch_last_success_seconds{spring_batch_job_name="expireJob"} - time()) > 60
         # 나이 갈래는 이미 SLA 만큼 기다린 뒤라 여기서 더 길게 볼 이유가 없다.
         #
         # ⚠️ 스크레이프가 끊긴 갈래는 여기 안 넣는다. 그때 프로메테우스가 이 게이지에
@@ -253,9 +266,21 @@ groups:
       #
       # ⚠️ 정리가 안 도는 것은 만료가 안 도는 것과 무게가 다르다. 재고가 안 돌아오는 것이
       #    아니라 디스크가 차는 것이라, severity 를 warning 으로 둔다.
+      # ⚠️ **형제 둘과 같은 게이트를 진다(CY-744 3차 리뷰가 잡았다).** 한때 이 알림만
+      #    게이트가 없었는데 근거가 아니라 누락이었다 — batch.scheduling.enabled 하나가
+      #    만료·검증·정리·회차를 함께 끄므로(아래 설명도 그렇게 적는다) 원인이 같다.
+      #    빠뜨리면 스위치 하나를 끈 날 원인 하나에 안내문이 두 벌 뜬다.
+      # ⚠️ **미래 갈래는 게이트 밖이다.** 형제 ExpireMetricsBackdated 와 같은 논거다 —
+      #    측정 시각이 미래면 원인은 언제나 시간대 오설정(serverTimezone/connectionTimeZone)이고
+      #    그것은 스케줄러 on/off 와 아무 상관이 없다. compose 기본이
+      #    BATCH_SCHEDULING_ENABLED=false 라, 한 괄호로 묶으면 **로컬·시연에서 이 축이 상시
+      #    꺼진다.** 게이지는 UNIX_TIMESTAMP 로 계산되므로 존이 틀리면 정확히 미래로 어긋난다.
       - alert: CleanupNotSucceeding
         expr: >-
-          (time() - cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"}) > 90000
+          (
+            ((time() - cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"}) > 90000)
+            unless on(instance, job) (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+          )
           or (cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob"} - time()) > 60
         for: 5m
         labels:
@@ -322,13 +347,18 @@ groups:
       #    `unless … == 0` 인 이유도 그쪽에 적었다 — 게이지 부재에 안전해야 한다.
       #    ⚠️ 손 트리거로만 도는 운영으로 바꾸는 날 이 조건을 **먼저** 지워야 한다 —
       #       그때는 스케줄러가 꺼진 것이 정상이고 판정 갱신은 여전히 계약이다.
+      # ⚠️ **미래 갈래는 게이트 밖이다.** 형제 ExpireMetricsBackdated 와 같은 논거다 —
+      #    측정 시각이 미래면 원인은 언제나 시간대 오설정(serverTimezone/connectionTimeZone)이고
+      #    그것은 스케줄러 on/off 와 아무 상관이 없다. compose 기본이
+      #    BATCH_SCHEDULING_ENABLED=false 라, 한 괄호로 묶으면 **로컬·시연에서 이 축이 상시
+      #    꺼진다.** 게이지는 UNIX_TIMESTAMP 로 계산되므로 존이 틀리면 정확히 미래로 어긋난다.
       - alert: VerifyNotSucceeding
         expr: >-
           (
-            (time() - cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"}) > 90000
-            or (cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"} - time()) > 60
+            ((time() - cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"}) > 90000)
+            unless on(instance, job) (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
           )
-          unless on(instance, job) (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+          or (cy_verify_last_success_seconds{dataset="CLEAN",scope="FULL"} - time()) > 60
         for: 5m
         labels:
           severity: critical
@@ -566,7 +596,7 @@ groups:
       - alert: CouponRoundsNotOpening
         expr: >-
           (cy_coupon_round_pending_open > 0)
-          unless on(instance, job) (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+          unless on(instance, job) (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
         for: 5m
         labels:
           severity: critical
@@ -591,7 +621,7 @@ groups:
       - alert: CouponRoundsNotClosing
         expr: >-
           (cy_coupon_round_pending_close > 0)
-          unless on(instance, job) (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+          unless on(instance, job) (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
         for: 5m
         labels:
           severity: warning
@@ -630,7 +660,7 @@ groups:
       - alert: CouponRoundMissedWindow
         expr: >-
           (cy_coupon_round_missed_window > 0)
-          unless on(instance, job) (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+          unless on(instance, job) (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
         for: 30m
         labels:
           severity: warning
@@ -1089,7 +1119,7 @@ groups:
           (
             ((time() - cy_expire_measured_at_seconds) > 90000)
             unless on(instance, job)
-              (min_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
+              (max_over_time(cy_coupon_round_scheduling_enabled[25h]) == 0)
           )
           or (cy_expire_measured_at_seconds - time()) > 60
         for: 5m

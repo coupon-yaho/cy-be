@@ -8,7 +8,7 @@
 `contract.json` 이다. 이 저장소에는 읽기 전용 사본을 `docs/contract.json` 으로 둔다.
 
 ```
-원본   cy-seed-data-generator @ 4307261  (2026-08-29)
+원본   cy-seed-data-generator @ 18e7aaa  (2026-08-29)
 사본   docs/contract.json                 바이트 동일
 ```
 

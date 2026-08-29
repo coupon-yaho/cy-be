@@ -1480,3 +1480,115 @@ tests:
       - eval_time: 100m
         alertname: BatchSchedulingDisabled
         exp_alerts: []
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 게이트가 **전이**를 어떻게 다루는가 (CY-744 3차 리뷰가 BLOCKER 로 잡은 자리)
+  #
+  # 한때 규칙이 min_over_time 이었다. 그것은 창의 **최솟값**이라 0 샘플이 하나라도
+  # 있으면 0 이고, 스크레이프 한 주기만 꺼도 그 뒤 25시간 동안 여섯 알림이 통째로
+  # 침묵했다. 그런데 기존 케이스는 전부 '0x1600'(내내 꺼짐)이라 전이 경로를 안 타서
+  # min 이든 max 든 똑같이 통과했다 — **아무것도 증명하지 않는 테스트였다.**
+  # 아래 둘이 그 경로를 든다. 되돌리면 첫 케이스가 빨개진다.
+  # ══════════════════════════════════════════════════════════════════════════
+  - interval: 1m
+    name: "잠깐 껐다 켠 것으로는 안 재운다 — 창 내내 꺼져 있어야 재운다"
+    input_series:
+      # t=9분에 딱 한 샘플만 0. 그 뒤로는 계속 켜져 있다.
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
+        values: '1x9 0 1x1590'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
+        values: '3x1600'
+      - series: 'cy_batch_last_success_seconds{instance="batch:9092", job="batch", spring_batch_job_name="expireJob"}'
+        values: '-95000x1600'
+      - series: 'cy_verify_last_success_seconds{instance="batch:9092", job="batch", dataset="CLEAN", scope="FULL"}'
+        values: '-95000x1600'
+    alert_rule_test:
+      # 스케줄러가 9시간 50분째 켜져 있고 세 축이 다 SLA 초과다 — 전부 울어야 한다.
+      - eval_time: 600m
+        alertname: CouponRoundsNotOpening
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+            exp_annotations:
+              summary: "지금 열려 있어야 하는 회차가 아직 SCHEDULED 입니다 — 그 회차는 발급이 안 됩니다"
+              description: "회차 상태 전이가 5분 넘게 밀렸습니다. 발급 요청은 OPEN 일 때만 통과하므로 그 회차는 **지금 아무도 발급받을 수 없습니다.** 이 게이지는 재고 없는 회차와 창이 지난 회차를 이미 뺀 값이라 **스케줄러 쪽**입니다. **세 갈래로 가릅니다.** ① increase(cy_coupon_round_ticks_total[5m]) == 0 → 스케줄러 스레드가 막혔거나 빈이 안 뜬 것입니다. 스레드 덤프와 기동 로그를 봅니다. ② ticks 는 오르는데 increase(cy_coupon_round_select_failures_total[5m]) > 0 → **대상 조회가 죽고 있습니다.** 흔한 원인은 커넥션 풀 고갈입니다 (BATCH_DB_POOL_SIZE, 04:10~04:30 겹침). ③ ticks 는 오르고 조회도 되는데 increase(cy_coupon_round_transition_failures_total[5m]) > 0 → UPDATE 가 죽고 있습니다. 배치 로그의 \"열기 N건이 실패했습니다\" 가 대표 원인을 답니다. 셋 다 0 이면 게이지가 낡은 것입니다 — CouponRoundMetricsStale 을 봅니다."
+      - eval_time: 600m
+        alertname: ExpireNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+              spring_batch_job_name: expireJob
+            exp_annotations:
+              summary: "만료 배치가 SLA(25시간) 안에 성공하지 못했습니다"
+              description: "갈래가 셋이라 먼저 어느 쪽인지 가른다. **값이 오래됐으면** 배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지, batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다. 검증이 도는 동안 슬롯을 건너뛰는 것도 지연을 만드는데, 그쪽은 로그의 \"만료 슬롯을 건너뜁니다\" WARN 이 답한다. **NaN 이면** 갈래가 셋이다. 먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패다. 안 증가했으면 7일 창(되읽기 질의의 조회 범위) 안에 성공한 실행이 없는 것이고, 8일 넘게 안 돈 경우가 여기다 — BATCH_JOB_EXECUTION 을 직접 조회해 가른다. **미래 시각이면** 원인은 언제나 시간대 설정이다. 드라이버가 쓸 때 쓰는 존과 UNIX_TIMESTAMP 가 읽을 때 쓰는 세션 존이 갈린 것이다 — storage.yml URL 의 serverTimezone(Connector/J 8.0.23+ 에서 connectionTimeZone 의 별칭이다)과 `SELECT @@session.time_zone, @@global.time_zone` 을 함께 본다. 둘이 다르면 그 차이가 그대로 오차다. 과거 방향으로 어긋나면 위 \"값이 오래됐으면\" 갈래로 나오므로, 그쪽을 다 뒤져도 원인이 안 나오면 이 축을 본다."
+      - eval_time: 600m
+        alertname: VerifyNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+              dataset: CLEAN
+              scope: FULL
+
+            exp_annotations:
+              summary: "검증 배치가 SLA(25시간) 안에 CLEAN/FULL 판정을 내지 못했습니다"
+              description: "게이트 판정의 근거가 갱신되지 않고 있습니다. **가장 흔한 원인은 그 슬롯에 발급이 있었던 것입니다** — startRunStep 의 rejectIssuancesUpdatedAfterAsOf 가 asOf 이후 갱신된 발급건을 보면 실행을 죽이고, 만료가 찍은 updated_at 은 지워지지 않으므로 그 asOf 는 영구히 못 씁니다. 배치 로그의 \"검증 배치가 판정을 내지 못했습니다\" 를 먼저 봅니다 — 그 문구가 반복되면 batch.schedule.verify-cron 을 발급이 멈춘 창으로 옮겨야 합니다. 그 문구가 없으면 BATCH_SCHEDULING_ENABLED 가 false 로 떴는지, batch.schedule.verify-cron 이 의도한 값인지 순서대로 봅니다. 판정을 내고도 statsAggregateStep 에서 죽으면 잡은 UNKNOWN 이라 여기 걸립니다 — 그때는 verification_runs 에 verdict 가 있는데 이 게이지만 안 움직입니다. 성공 이력이 아예 없는 상태는 아래 VerifyNeverSucceeded 가 집니다."
+  - interval: 1m
+    name: "스케줄러를 껐어도 미래 시각은 운다 — 그 축은 시간대 오설정이다"
+    input_series:
+      # compose 기본(false)이 곧 이 형상이다. 게이트가 켜져 있어도 미래 갈래는 살아야 한다.
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
+        values: '0x30'
+      - series: 'cy_batch_last_success_seconds{instance="batch:9092", job="batch", spring_batch_job_name="expireJob"}'
+        values: '100000x30'
+      - series: 'cy_batch_last_success_seconds{instance="batch:9092", job="batch", spring_batch_job_name="cleanupJob"}'
+        values: '100000x30'
+      - series: 'cy_verify_last_success_seconds{instance="batch:9092", job="batch", dataset="CLEAN", scope="FULL"}'
+        values: '100000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ExpireNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+              spring_batch_job_name: expireJob
+            exp_annotations:
+              summary: "만료 배치가 SLA(25시간) 안에 성공하지 못했습니다"
+              description: "갈래가 셋이라 먼저 어느 쪽인지 가른다. **값이 오래됐으면** 배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지, batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다. 검증이 도는 동안 슬롯을 건너뛰는 것도 지연을 만드는데, 그쪽은 로그의 \"만료 슬롯을 건너뜁니다\" WARN 이 답한다. **NaN 이면** 갈래가 셋이다. 먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패다. 안 증가했으면 7일 창(되읽기 질의의 조회 범위) 안에 성공한 실행이 없는 것이고, 8일 넘게 안 돈 경우가 여기다 — BATCH_JOB_EXECUTION 을 직접 조회해 가른다. **미래 시각이면** 원인은 언제나 시간대 설정이다. 드라이버가 쓸 때 쓰는 존과 UNIX_TIMESTAMP 가 읽을 때 쓰는 세션 존이 갈린 것이다 — storage.yml URL 의 serverTimezone(Connector/J 8.0.23+ 에서 connectionTimeZone 의 별칭이다)과 `SELECT @@session.time_zone, @@global.time_zone` 을 함께 본다. 둘이 다르면 그 차이가 그대로 오차다. 과거 방향으로 어긋나면 위 \"값이 오래됐으면\" 갈래로 나오므로, 그쪽을 다 뒤져도 원인이 안 나오면 이 축을 본다."
+      - eval_time: 20m
+        alertname: VerifyNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+              dataset: CLEAN
+              scope: FULL
+            exp_annotations:
+              summary: "검증 배치가 SLA(25시간) 안에 CLEAN/FULL 판정을 내지 못했습니다"
+              description: "게이트 판정의 근거가 갱신되지 않고 있습니다. **가장 흔한 원인은 그 슬롯에 발급이 있었던 것입니다** — startRunStep 의 rejectIssuancesUpdatedAfterAsOf 가 asOf 이후 갱신된 발급건을 보면 실행을 죽이고, 만료가 찍은 updated_at 은 지워지지 않으므로 그 asOf 는 영구히 못 씁니다. 배치 로그의 \"검증 배치가 판정을 내지 못했습니다\" 를 먼저 봅니다 — 그 문구가 반복되면 batch.schedule.verify-cron 을 발급이 멈춘 창으로 옮겨야 합니다. 그 문구가 없으면 BATCH_SCHEDULING_ENABLED 가 false 로 떴는지, batch.schedule.verify-cron 이 의도한 값인지 순서대로 봅니다. 판정을 내고도 statsAggregateStep 에서 죽으면 잡은 UNKNOWN 이라 여기 걸립니다 — 그때는 verification_runs 에 verdict 가 있는데 이 게이지만 안 움직입니다. 성공 이력이 아예 없는 상태는 아래 VerifyNeverSucceeded 가 집니다."
+      - eval_time: 20m
+        alertname: CleanupNotSucceeding
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: batch:9092
+              job: batch
+              spring_batch_job_name: cleanupJob
+
+            exp_annotations:
+              summary: "정리 배치가 SLA(25시간) 안에 성공하지 못했습니다"
+              description: "검증이 남긴 파생 행이 안 걷히고 있습니다. 실행당 최대 300만 행인 asof_state 가 쌓이므로 며칠이면 디스크가 눈에 띄게 준다. 배치 로그의 \"정리 배치를 시작하지 못했습니다\" 와 \"정리 배치가 끝내지 못했습니다\" 를 먼저 봅니다. BATCH_SCHEDULING_ENABLED 가 false 면 만료도 함께 안 돕니다. \"검증이 도는 중이라 정리를 여기서 멈춥니다\" WARN 이 반복되면 정리가 아니라 열린 채 남은 검증이 원인입니다. BATCH_STEP_EXECUTION 을 STEP_NAME 으로 갈라 STATUS 를 봅니다 — purgeVerificationRunsStep 이 FAILED 면 asof_state 가 안 걷힌 것이고, 그것이 COMPLETED 인데 purgeBatchMetadataStep 만 FAILED 면 asof_state 는 다 걷은 뒤 배치 메타에서 죽은 것입니다. 로그로 가르지 마십시오 — \"배치 메타를 걷었습니다\" 는 걷을 것이 0 인 밤에는 원래 안 찍힙니다. 성공 이력이 아예 없는 상태는 이 알림이 아니라 CleanupNeverSucceeded 가 집니다."

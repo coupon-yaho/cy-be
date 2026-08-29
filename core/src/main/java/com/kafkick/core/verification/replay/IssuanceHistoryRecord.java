@@ -1,4 +1,5 @@
-// 리플레이 입력 한 행입니다. issuance_histories 한 행을 그대로 옮깁니다.
+// 리플레이 입력 한 행입니다. issuance_histories 한 행에 그 발급건의 issuances.expires_at
+// 을 얹어 옮깁니다 — 마지막 성분만 다른 테이블에서 옵니다.
 package com.kafkick.core.verification.replay;
 
 import java.time.LocalDateTime;

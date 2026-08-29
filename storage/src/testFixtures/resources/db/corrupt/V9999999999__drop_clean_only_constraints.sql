@@ -69,10 +69,10 @@ ALTER TABLE `coupon_stocks` DROP CHECK `ck_stock_range`;
 ALTER TABLE `coupon_stocks` DROP CHECK `ck_coupon_stock_active_range`;
 
 -- ⚠️ **uk_issuance_usages_active 도 떼지 않는다.** 한때 여기 "V5 가 이중 사용을
---    심어야 하니 떼야 한다" 고 적혀 있었는데 **위 표가 그 반대를 실측해 뒀다** —
---    활성 사용 2건을 심는 유형이 없다(유형 3 은 [(t1,t2),(t3,None)], 유형 7 은
---    [(t1,None)]). V5(USAGE_MISMATCH)가 잡는 것은 "활성 사용이 둘" 이 아니라
---    **issuances.status 와 활성 사용 유무가 어긋난 것**이다. 그 오염은 이 UNIQUE 를
+--    심어야 하니 떼야 한다" 고 적혀 있었는데 **위 표가 그 반대를 실측해 뒀다.**
+--    근거는 그 표 하나만 든다 — 여기 다시 옮겨 적으면 오염 유형이 바뀌는 날 한쪽만
+--    고치게 된다. V5(USAGE_MISMATCH)가 잡는 것은 "활성 사용이 둘" 이 아니라
+--    **issuances.status 와 활성 사용 유무가 어긋난 것**이라, 그 오염은 이 UNIQUE 를
 --    건드리지 않는다.
 -- ⚠️ **상태 어휘 CHECK 두 개도 떼지 않는다.** 한 번 떼려다 되돌렸다 —
 --    "시드 CORRUPT 가 안 건다" 고 적었는데 **확인 안 하고 쓴 것이었다.**

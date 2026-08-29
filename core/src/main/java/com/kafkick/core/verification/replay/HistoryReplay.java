@@ -127,6 +127,15 @@ public final class HistoryReplay {
      * <p>정답을 못 정하는 경우는 비워 돌려준다 — 결과가 하나인 전이와,
      * {@code expires_at} 이 없는 행이다. 후자는 스키마가 {@code NOT NULL} 이라 안 오지만,
      * 없는데 던지면 <b>한 행 때문에 청크 전체가 죽는다.</b>
+     *
+     * <p><b>참조 구현도 같은 답을 낸다.</b> {@code seedgen/verify.py} 의 V4 절이
+     * {@code AND t.expires_at IS NOT NULL} 을 명시적으로 건다 — 안 걸면 SQL 에서
+     * {@code created_at > NULL} 이 {@code NULL} 이라 {@code CASE} 가 {@code ELSE} 를 타
+     * <b>조용히 {@code ISSUED} 를 기대값으로 확정</b>하고, 그러면 두 구현이 같은 입력에
+     * 다른 답을 낸다(CY-744 3차 리뷰). 둘 다 <b>못 읽은 값으로는 위반을 선언하지 않는다.</b>
+     *
+     * <p>⚠️ <b>{@code createdAt} 은 여기서 안 본다.</b> {@link IssuanceHistoryRecord} 의
+     * compact 생성자가 이미 {@code null} 을 거절하므로 검사를 더하면 <b>죽은 코드</b>가 된다.
      */
     private static Optional<IssuanceStatus> settledOutcome(
             IssuanceStatus tracked,
@@ -134,8 +143,7 @@ public final class HistoryReplay {
     ) {
         if (history.eventType() != IssuanceEventType.CANCEL_USE
                 || tracked != IssuanceStatus.USED
-                || history.expiresAt() == null
-                || history.createdAt() == null) {
+                || history.expiresAt() == null) {
             return Optional.empty();
         }
         return Optional.of(history.createdAt().isAfter(history.expiresAt())

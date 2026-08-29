@@ -39,3 +39,21 @@
 -- 날짜 + 그날의 순번이면 브랜치가 서로를 몰라도 안 겹친다. feature/CY-409 가 먼저 이 형식을
 -- 쓰기 시작했다(V2026082001__issue_attempts.sql).
 CREATE INDEX `idx_issuance_status_id` ON `issuances` (`status`, `id`);
+
+-- ⚠️ **이 인덱스가 EXPIRE_BATCH 의 계획을 바꿀 수 있다 — 실측으로 갈렸다(CY-744 3차 리뷰).**
+--    옵티마이저가 (status, id) 를 고르면 스캔 인덱스에 갱신 대상 컬럼(status)이 들어 있어
+--    MySQL 이 Halloween 회피용 임시 테이블을 만든다("Using temporary" = 2-pass).
+--
+--    작은 셋(4만 행 · ISSUED 50% · 회차당 2,000행)에서는 실제로 그렇게 골랐다.
+--    **운영 형상(300만 행 · ISSUED 40%)에서는 재현되지 않았다** — 청크 폭
+--    1,000 · 5,000 · 22,963 · 100,000 전부 key=PRIMARY · Extra="Using where" 이고
+--    임시 테이블이 없다.
+--
+--    **락은 어느 쪽이든 안 넓어진다.** expireStep 이 READ COMMITTED 라 전부
+--    REC_NOT_GAP 이고 갭 락이 0 이다. 추가되는 것은 같은 행의 보조 인덱스 엔트리라
+--    신규 발급 INSERT 의 삽입 지점과 안 겹친다(RC/RR × 인덱스 유무 네 조합 통과).
+--
+--    **FORCE INDEX 는 안 건다.** docs/13 이 이미 같은 결론을 냈다 — 힌트는 옵티마이저를
+--    못 박아 분포가 바뀌면 역효과다. 대신 **다시 볼 기준**을 남긴다: 청크를 크게 올린 날
+--    EXPLAIN 의 Extra 에 "Using temporary" 가 보이면 그때 정한다. 임시 테이블이
+--    tmp_table_size 를 넘겨 디스크로 내려가는 동안 재고 행 락(LOCK_STOCK)을 계속 쥔다.

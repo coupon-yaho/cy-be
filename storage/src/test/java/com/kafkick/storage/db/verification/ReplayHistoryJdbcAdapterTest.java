@@ -258,6 +258,42 @@ class ReplayHistoryJdbcAdapterTest {
                 .isEqualTo(precise);
     }
 
+    /**
+     * <b>이 계층에서만 잡히는 결함이 있다.</b> {@code expires_at} 은 이력 테이블에 없고
+     * {@code JOIN issuances} 로 얹히는 유일한 성분인데, 그 값이
+     * {@code HistoryReplay.settledOutcome} 이 {@code WRONG_OUTCOME}(V4)을 가르는 <b>유일한
+     * 근거</b>다. core 쪽 {@code HistoryReplayTest} 는 레코드를 손으로 만들어 넣으므로
+     * 조인 키 오타·컬럼 오선택을 <b>원리적으로 못 잡는다</b> — 그런데 이 스위트에는
+     * {@code expiresAt} 을 단언하는 검사가 하나도 없었다(CY-744 3차 리뷰).
+     *
+     * <p><b>발급건을 둘 심는 것이 핵심이다.</b> 하나만 쓰면 조인을 {@code i.id = h.id} 로
+     * 잘못 걸어도 값이 우연히 맞을 수 있다. 서로 다른 만료 시각 둘을 두고 <b>각자 자기
+     * 것</b>을 받는지 봐야 "발급건을 안 섞는다" 가 증명된다. 형제 {@code preserveMicroseconds}
+     * 가 {@code createdAt} 축에 대해 하는 일을 {@code expiresAt} 축에 대해 한다.
+     */
+    @Test
+    @DisplayName("expires_at 은 자기 발급건 값이다 — issuances 조인이 발급건을 안 섞는다")
+    void readsOwnIssuanceExpiresAt() {
+        // 시드는 expires_at 을 issued_at + 7일로 파생시킨다. 발급 시각을 갈라 두면
+        // 만료 시각도 갈린다.
+        LocalDateTime issuedA = AS_OF.minusDays(3);
+        LocalDateTime issuedB = AS_OF.minusDays(1);
+        long a = data.issuance(IssuanceStatus.ISSUED, issuedA);
+        long b = data.issuance(IssuanceStatus.ISSUED, issuedB);
+        data.history(a, IssuanceEventType.ISSUE, null, IssuanceStatus.ISSUED, issuedA);
+        data.history(b, IssuanceEventType.ISSUE, null, IssuanceStatus.ISSUED, issuedB);
+
+        assertThat(adapter.findRange(a, a, AS_OF, NO_UPPER_BOUND))
+                .singleElement()
+                .extracting(IssuanceHistoryRecord::expiresAt)
+                .isEqualTo(issuedA.plusDays(7));
+
+        assertThat(adapter.findRange(b, b, AS_OF, NO_UPPER_BOUND))
+                .singleElement()
+                .extracting(IssuanceHistoryRecord::expiresAt)
+                .isEqualTo(issuedB.plusDays(7));
+    }
+
     @Test
     @DisplayName("asOf 경계는 마이크로초까지 따진다 — 1마이크로초 뒤 이력은 빠진다")
     void cutAtAsOfWithMicrosecondPrecision() {

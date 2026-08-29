@@ -324,6 +324,41 @@ abstract class SchemaParityTestBase {
                 .isEqualTo(SEED_DDL_REVISION);
     }
 
+    /**
+     * <b>비우는 목록에 빠진 표를 사람이 아니라 기계가 찾는다.</b>
+     * {@link AppTableCleaner#TABLES_IN_DELETE_ORDER} 안의 표를 FK 로 무는 표는 그 자신도
+     * 목록에 있어야 한다 — 없으면 {@code FOREIGN_KEY_CHECKS = 0} 상태의 TRUNCATE 가
+     * <b>고아를 남기고 AUTO_INCREMENT 를 되돌린다.</b>
+     *
+     * <p><b>형제 {@code VerificationSeed#clear} 는 이 실수를 스스로 알려 준다</b> —
+     * {@code DELETE} 는 FK 위반을 {@code ERROR 1451} 로 거부하기 때문이다. 그런데 컨텍스트
+     * 기동마다 도는 것은 TRUNCATE 쪽이라 <b>조용히 지나가고</b>, 다음 컨텍스트의
+     * {@code coupons} id=1 이 앞 테스트가 남긴 자식 행을 입양한 채 나온다. 그 실패는
+     * 클래스 실행 순서를 타므로 원인까지 가는 길이 멀다(CY-744 3차 리뷰가 잡았다 —
+     * {@code analytics_*} 셋이 실제로 빠져 있었다).
+     */
+    @Test
+    @DisplayName("비우는 표를 FK 로 무는 표가 전부 비우는 목록 안에 있다")
+    void appTableCleanerCoversEveryDependent() {
+        List<String> cleaned = AppTableCleaner.TABLES_IN_DELETE_ORDER;
+
+        List<String> dependents = jdbcClient.sql("""
+                        SELECT DISTINCT table_name
+                          FROM information_schema.key_column_usage
+                         WHERE table_schema = DATABASE()
+                           AND referenced_table_name IN (:tables)
+                        """)
+                .param("tables", cleaned)
+                .query(String.class)
+                .list();
+
+        assertThat(dependents)
+                .as("이 표들이 비우는 대상을 FK 로 문다. 목록에 없으면 TRUNCATE 가 고아를 "
+                        + "남기고 AUTO_INCREMENT 를 되돌린다 — AppTableCleaner 의 목록에 "
+                        + "자식이 먼저 오도록 넣어라")
+                .allSatisfy(table -> assertThat(cleaned).contains(table));
+    }
+
     private static String sha256(Resource resource) throws IOException {
         try (var in = resource.getInputStream()) {
             byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -348,7 +383,7 @@ abstract class SchemaParityTestBase {
      * 다음 사람이 검증 스크립트를 돌렸을 때 옛 리비전을 받아 와 diff 가 갈리고,
      * <b>"사본을 손댔다" 로 오진</b>한다. 반대로 README 만 고치면 그 오진이 반대로 난다.
      */
-    private static final String SEED_DDL_REVISION = "4307261";
+    private static final String SEED_DDL_REVISION = "18e7aaa";
 
     /** {@link #SEED_DDL_REVISION} 시점 사본의 해시. 사본을 갱신하면 함께 고친다. */
     private static final Map<String, String> SEED_DDL_DIGESTS = Map.ofEntries(

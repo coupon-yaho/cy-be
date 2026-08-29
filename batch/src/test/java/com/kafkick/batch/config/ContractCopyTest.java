@@ -41,11 +41,11 @@ class ContractCopyTest {
     private static final Path DOC = Path.of("../docs/11-batch-implementation.md");
 
     /** {@link #CONTRACT_DIGEST} 를 뽑은 시드 저장소 리비전. {@link #DOC} 표와 같아야 한다. */
-    private static final String CONTRACT_REVISION = "4307261";
+    private static final String CONTRACT_REVISION = "18e7aaa";
 
     /** {@link #CONTRACT_REVISION} 시점 {@code contract.json} 의 SHA-256. */
     private static final String CONTRACT_DIGEST =
-            "e4cdc1e4444d2ecf1938df41fca9fde6cd3efbd3b8657d4c40ec302909b168b1";
+            "60e7fdf636cae9a94bdf4fb3bcfeaee8cd5bb5515d76e0fe618d34eea17dd6ca";
 
     private static final Pattern ORIGIN = Pattern.compile("@ ([0-9a-f]{7,40})");
 
