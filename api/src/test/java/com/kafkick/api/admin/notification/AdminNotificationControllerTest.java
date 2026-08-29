@@ -67,6 +67,8 @@ class AdminNotificationControllerTest {
                         .param("limit", "50"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].notificationId").value(41))
+                .andExpect(jsonPath("$.data.items[0].reason").value("SEND_TIMEOUT"))
+                .andExpect(jsonPath("$.data.items[0].reasonCode").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].recipientContact").doesNotExist())
                 .andExpect(jsonPath("$.data.nextBeforeCursor").value(cursorCodec.encode(41L)));
     }

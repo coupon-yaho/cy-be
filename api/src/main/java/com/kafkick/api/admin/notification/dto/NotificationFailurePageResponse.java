@@ -23,5 +23,5 @@ public record NotificationFailurePageResponse(List<NotificationFailureItem> item
 
     /** 개인정보 원문과 메시지 본문을 제외한 재발송 대상 식별 정보입니다. */
     public record NotificationFailureItem(Long notificationId, Long couponId, Long memberId,
-                                          NotifyFailureReason reasonCode, int attemptCount, Instant failedAt) { }
+                                          NotifyFailureReason reason, int attemptCount, Instant failedAt) { }
 }

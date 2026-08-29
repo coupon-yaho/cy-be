@@ -14,6 +14,9 @@ public class NotificationFailureCursorCodec {
     private static final String VERSION = "v1";
     private static final String INVALID_CURSOR_MESSAGE = "유효하지 않은 알림 cursor입니다.";
 
+    /**
+     * @throws IllegalArgumentException {@code notificationId}가 0 이하인 경우
+     */
     public String encode(long notificationId) {
         if (notificationId <= 0) {
             throw new IllegalArgumentException("notificationId는 양수여야 합니다.");

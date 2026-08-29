@@ -18,6 +18,10 @@ public record NotificationSummary(Long couponId, Instant snapshotAt,
     }
 
     public record Metric<T>(T value, SourceStatus state, Instant observedAt) {
+        /**
+         * @throws IllegalArgumentException 값이 있는 상태에 값·관측 시각이 없거나,
+         *         값이 없는 상태에 값·관측 시각이 있는 경우
+         */
         public Metric {
             Objects.requireNonNull(state, "state");
             if ((state.carriesValue() && (value == null || observedAt == null))

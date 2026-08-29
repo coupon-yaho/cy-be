@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.coupon.port.CouponRoundRepository;
@@ -31,7 +32,12 @@ public class NotificationQueryService {
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * 집계 전체를 하나의 트랜잭션으로 묶지 않고 조회 실패를 UNAVAILABLE 요약으로 변환합니다.
+     * 호출자 트랜잭션도 중단해 참여 조회가 rollback-only로 표시한 실패가 응답 경계 밖에서
+     * {@code UnexpectedRollbackException}으로 바뀌지 않게 합니다.
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public NotificationSummary getSummary(Long couponId) {
         try {
             if (couponId != null && couponRounds.findById(couponId).isEmpty()) {
@@ -58,6 +64,12 @@ public class NotificationQueryService {
         }
     }
 
+    /**
+     * 실패 알림을 과거 방향 keyset 페이지로 조회합니다.
+     *
+     * @throws IllegalArgumentException {@code beforeId}가 0 이하이거나 {@code limit}이
+     *         1 이상 200 이하가 아닌 경우
+     */
     @Transactional(readOnly = true)
     public NotificationFailurePage getFailures(Long beforeId, int limit) {
         if (beforeId != null && beforeId <= 0) {
