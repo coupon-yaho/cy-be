@@ -32,5 +32,5 @@ services:
       BATCH_ADMIN_AUTH_REQUIRED: ${BATCH_ADMIN_AUTH_REQUIRED:-true}
       BATCH_ADMIN_PORT_EXPOSED: "true"
     ports:
-      # 우변은 언제나 9090 이다(업무 포트). 관리 포트 9092 는 여기서도 안 연다.
-      - "127.0.0.1:${BATCH_HOST_PORT:-9090}:9090"
+      # 우변은 언제나 9091 이다(업무 포트, CY-213 공지). 관리 포트 9092 는 여기서도 안 연다.
+      - "127.0.0.1:${BATCH_HOST_PORT:-9091}:9091"

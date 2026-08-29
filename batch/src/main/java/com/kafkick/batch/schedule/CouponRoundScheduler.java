@@ -12,7 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.port.CouponRoundTransitionRepository;
 import com.kafkick.batch.config.CouponRoundMetrics;
 import com.kafkick.core.support.TimeProvider;
 
@@ -51,7 +51,7 @@ public class CouponRoundScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(CouponRoundScheduler.class);
 
-    private final CouponRoundRepository rounds;
+    private final CouponRoundTransitionRepository rounds;
     private final TimeProvider timeProvider;
 
     /**
@@ -65,7 +65,7 @@ public class CouponRoundScheduler {
     private final java.util.Map<String, java.util.concurrent.atomic.AtomicLong>
             selectFailureStreaks = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public CouponRoundScheduler(CouponRoundRepository rounds, TimeProvider timeProvider,
+    public CouponRoundScheduler(CouponRoundTransitionRepository rounds, TimeProvider timeProvider,
             CouponRoundMetrics metrics, @Value(CRON) String couponOpenCron) {
         if (Scheduled.CRON_DISABLED.equals(couponOpenCron)) {
             // **끄는 수단은 하나여야 한다.** 형제 둘은 "-" 를 주면 asOf 를 만들 근거가

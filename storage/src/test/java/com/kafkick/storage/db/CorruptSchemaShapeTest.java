@@ -99,24 +99,43 @@ class CorruptSchemaShapeTest {
     }
 
     /**
-     * <b>더한 것도 고정한다.</b> 보조 인덱스가 일부러 없는 것이 이 과제의 측정 전제인데,
-     * 여기에 컬럼이 하나 더 붙으면 <b>테스트만 인덱스를 갖고 실제 오염셋은 안 갖는 상태</b>가 되어
-     * 성능 실험의 결론이 옮겨지지 않는다. 시드 CORRUPT 는 FK 자동 인덱스라 단일 컬럼이다.
+     * <b>대체 인덱스를 더 안 만든다(CY-744).</b>
+     *
+     * <p>예전에는 {@code uk_coupon_member} 를 떼면 {@code coupon_id} FK 가 쓸 인덱스가
+     * 없어져서, {@code V9999999999} 가 {@code coupon_id} 단일 인덱스를 하나 만들었다.
+     *
+     * <p><b>이제 만들 필요가 없다.</b> main 의
+     * {@code V2026082502__add_admin_issuance_history_indexes.sql} 이
+     * {@code idx_issuances_coupon_id (coupon_id, id)} 를 CLEAN·CORRUPT 양쪽에 만들고,
+     * FK 는 그것을 쓴다. 그래서 손으로 하나 더 만들면 <b>시드에 없는 인덱스가 생겨</b>
+     * 스키마 파리티가 그 자리를 잡는다.
+     *
+     * <p>검사는 지우지 않고 <b>뒤집는다</b> — 누가 그 CREATE INDEX 를 되살리면 여기서
+     * 빨개진다. 보조 인덱스가 일부러 없는 것이 이 과제의 측정 전제이기 때문이다.
      */
     @Test
-    @DisplayName("대체 인덱스는 coupon_id 단일이다 — 시드 CORRUPT 의 FK 자동 인덱스와 같은 모양이어야 한다")
-    void keepSubstituteIndexSingleColumn() {
-        List<String> columns = jdbcClient.sql("""
+    @DisplayName("손으로 만든 coupon_id 대체 인덱스가 없다 — FK 는 idx_issuances_coupon_id 를 쓴다")
+    void doesNotCreateSubstituteIndex() {
+        assertThat(indexColumns("coupon_id"))
+                .as("main 이 idx_issuances_coupon_id 를 만든 뒤로 이것은 중복이고, "
+                        + "만들면 시드 CORRUPT 에 없는 인덱스가 되어 파리티가 깨진다")
+                .isEmpty();
+        assertThat(indexColumns("idx_issuances_coupon_id"))
+                .as("FK 를 받치는 인덱스가 사라지면 uk_coupon_member 를 뗄 수 없다")
+                .containsExactly("coupon_id", "id");
+    }
+
+    private List<String> indexColumns(String indexName) {
+        return jdbcClient.sql("""
                         SELECT column_name
                           FROM information_schema.statistics
                          WHERE table_schema = DATABASE() AND table_name = 'issuances'
-                           AND index_name = 'coupon_id'
+                           AND index_name = :indexName
                          ORDER BY seq_in_index
                         """)
+                .param("indexName", indexName)
                 .query(String.class)
                 .list();
-
-        assertThat(columns).containsExactly("coupon_id");
     }
 
     /**

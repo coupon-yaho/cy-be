@@ -7,7 +7,9 @@ import java.util.Optional;
 /**
  * 검증 실행 기록의 저장 계약.
  *
- * <p>batch 모듈은 storage 를 runtimeOnly 로만 보므로 JpaRepository 를 직접 참조할 수 없다.
+ * <p>batch 모듈은 storage 를 runtimeOnly 로만 보므로 스프링 데이터 리포지토리 타입을
+ * 직접 참조할 수 없다. (그 타입 이름을 여기 적지 않는다 — CoreArchitectureTest 가
+ * 소스 텍스트에서 찾아 막으므로 주석만으로도 위반이 된다.)
  * 계약은 여기 두고 어댑터는 storage 에 둔다.
  */
 public interface VerificationRunRepository {

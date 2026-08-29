@@ -38,3 +38,7 @@ infra/mysql/my.cnf
 # (그건 compose 가 볼륨으로 얹는다), COPY infra infra 가 이 디렉터리를 통째로 담는다.
 __pycache__/
 *.py[cod]
+
+# ── main 에서 가져온 것 ──
+.idea
+site

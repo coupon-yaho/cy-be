@@ -7,9 +7,9 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 
-import com.kafkick.core.coupon.CouponStatus;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * issuances 는 coupons·members 를, coupons 는 coupon_templates·brands 를, members 는 grades 를
@@ -48,6 +48,7 @@ public final class VerificationSeed {
     private Long couponId;
     private boolean gradesInserted;
     private int codeSequence;
+    private int usageSequence;
     private String lastCode;
 
     public VerificationSeed(JdbcClient jdbcClient) {
@@ -70,9 +71,9 @@ public final class VerificationSeed {
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO issuances
                             (coupon_id, member_id, code, issued_grade, status,
-                             issued_at, expires_at, updated_at)
+                             issued_at, expires_at, updated_at, created_at)
                         VALUES (:couponId, :memberId, :code, :issuedGrade, :status,
-                                :issuedAt, :expiresAt, :updatedAt)
+                                :issuedAt, :expiresAt, :updatedAt, :issuedAt)
                         """)
                 .param("issuedGrade", issuedGrade)
                 .param("couponId", couponId())
@@ -153,10 +154,15 @@ public final class VerificationSeed {
     public void usage(long issuanceId, LocalDateTime usedAt, LocalDateTime canceledAt) {
         jdbcClient.sql("""
                         INSERT INTO issuance_usages
-                            (issuance_id, order_id, discount_amount, used_at, canceled_at)
-                        VALUES (:issuanceId, NULL, 1000, :usedAt, :canceledAt)
+                            (issuance_id, order_id, discount_amount, used_at, canceled_at,
+                             created_at)
+                        VALUES (:issuanceId, :orderId, 1000, :usedAt, :canceledAt, :usedAt)
                         """)
                 .param("issuanceId", issuanceId)
+                // ⚠️ **발급건마다가 아니라 사용 이력마다 달라야 한다.** main 의 V8 이
+                //    uk_issuance_usages_issuance_order (issuance_id, order_id) 를 걸어서,
+                //    같은 발급건에 사용 이력 둘을 심는 V5 테스트가 중복키로 죽는다.
+                .param("orderId", ++usageSequence)
                 .param("usedAt", usedAt)
                 .param("canceledAt", canceledAt)
                 .update();
@@ -260,7 +266,7 @@ public final class VerificationSeed {
      * <p>이 회차를 {@code couponId} 로 삼지 <b>않는다</b>. 전이 테스트는 회차를 여럿 심으므로
      * "현재 회차" 라는 개념이 없고, 그것을 밀면 다른 시드 메서드의 전제가 흔들린다.
      */
-    public long round(CouponStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
+    public long round(CouponRoundStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
         long id = insertRound(status, openAt, closeAt);
         jdbcClient.sql("""
                         INSERT INTO coupon_stocks (coupon_id, total_quantity, active_count, updated_at)
@@ -277,20 +283,21 @@ public final class VerificationSeed {
      * <b>회차마다 재고 행이 있음을 강제하지 않는다</b> — 그래서 실재할 수 있는 상태다. 이 회차를 열면 발급 경로가 그 회차에서 죽으므로,
      * 전이가 일부러 안 여는 것을 재는 데 쓴다.
      */
-    public long roundWithoutStock(CouponStatus status, LocalDateTime openAt,
+    public long roundWithoutStock(CouponRoundStatus status, LocalDateTime openAt,
             LocalDateTime closeAt) {
         return insertRound(status, openAt, closeAt);
     }
 
-    private long insertRound(CouponStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
+    private long insertRound(CouponRoundStatus status, LocalDateTime openAt, LocalDateTime closeAt) {
         long brandId = insertBrand();
         long templateId = insertTemplate(brandId);
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO coupons
                             (template_id, brand_id, name, policy_type, discount_amount,
-                             valid_days, eligible_grades_mask, open_at, close_at, status, created_at)
+                             valid_days, eligible_grades_mask, open_at, close_at, status, created_at,
+                             generated_at)
                         VALUES (:templateId, :brandId, '전이테스트회차', 'FIXED_AMOUNT', 1000,
-                                7, 15, :openAt, :closeAt, :status, :createdAt)
+                                7, 15, :openAt, :closeAt, :status, :createdAt, :createdAt)
                         """)
                 .param("templateId", templateId)
                 .param("brandId", brandId)
@@ -421,9 +428,9 @@ public final class VerificationSeed {
         long issuanceId = insertGenerated(jdbcClient.sql("""
                         INSERT INTO issuances
                             (coupon_id, member_id, code, issued_grade, status,
-                             issued_at, expires_at, updated_at)
+                             issued_at, expires_at, updated_at, created_at)
                         VALUES (:couponId, :memberId, :code, 'VIP', 'ISSUED',
-                                :issuedAt, :expiresAt, :updatedAt)
+                                :issuedAt, :expiresAt, :updatedAt, :issuedAt)
                         """)
                 .param("couponId", couponId())
                 .param("memberId", memberId)
@@ -467,8 +474,10 @@ public final class VerificationSeed {
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO coupon_templates
                             (brand_id, name, policy_type, discount_amount, valid_days,
-                             stock_per_occurrence, eligible_grades_mask, active)
-                        VALUES (:brandId, '테스트템플릿', 'FIXED_AMOUNT', 1000, 7, 100, 15, true)
+                             stock_per_occurrence, eligible_grades_mask, active,
+                             nth_week, day_of_week, start_time, duration_hours)
+                        VALUES (:brandId, '테스트템플릿', 'FIXED_AMOUNT', 1000, 7, 100, 15, true,
+                                1, 'MON', '10:00:00', 2)
                         """)
                 .param("brandId", brandId));
     }
@@ -477,9 +486,10 @@ public final class VerificationSeed {
         return insertGenerated(jdbcClient.sql("""
                         INSERT INTO coupons
                             (template_id, brand_id, name, policy_type, discount_amount,
-                             valid_days, eligible_grades_mask, open_at, close_at, status, created_at)
+                             valid_days, eligible_grades_mask, open_at, close_at, status, created_at,
+                             generated_at)
                         VALUES (:templateId, :brandId, '테스트회차', 'FIXED_AMOUNT', 1000,
-                                7, 15, :openAt, :closeAt, 'OPEN', :createdAt)
+                                7, 15, :openAt, :closeAt, 'OPEN', :createdAt, :createdAt)
                         """)
                 .param("templateId", templateId)
                 .param("brandId", brandId)

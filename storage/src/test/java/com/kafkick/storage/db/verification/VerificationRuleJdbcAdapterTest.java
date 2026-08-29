@@ -24,7 +24,7 @@ import javax.sql.DataSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;

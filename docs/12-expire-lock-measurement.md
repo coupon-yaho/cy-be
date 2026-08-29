@@ -11,7 +11,7 @@
 > |---|---|
 > | `IDX(status, expires_at)` | `V2026082510__issuance_status_expires_index.sql` |
 > | `IDX(updated_at, id)` | `V2026082511__issuance_updated_at_index.sql` |
-> | `IDX(status, id)` | `V2026082501__issuance_status_id_index.sql` (§11) |
+> | `IDX(status, id)` | `V2026082901__issuance_status_id_index.sql` (§11) |
 >
 > **한때 이 문서가 `V11`·`V12` 를 약칭으로 썼다.** 그때는 그것이 실제 파일명이었다.
 > 번호가 날짜형으로 옮겨 간 뒤로는 그 약칭이 **다른 파일**을 가리킨다 —
@@ -30,7 +30,7 @@
 | **`V2026082510`** `(status, expires_at)` | 만료 대상을 **찾는** 비용 | 읽은 행 5,017 → **1** |
 | **READ COMMITTED** (만료 Step) | 만료가 **발급을 막는** 것 | 발급 INSERT 1205 → **통과** |
 | **`V2026082511`** `(updated_at, id)` | 청크 **경계를 구하는** 비용 | 첫 청크 200,017행 → **1,001** |
-| **`V2026082501`** `(status, id)` | 청크 **후보를 뽑는** 비용 | 16,999행 → **999** |
+| **`V2026082901`** `(status, id)` | 청크 **후보를 뽑는** 비용 | 16,999행 → **999** |
 
 하나로는 안 된다. 인덱스만 넣으면 발급이 계속 막히고, 격리만 내리면 테이블을 계속 훑는다.
 둘 다 넣어도 경계를 구하는 문장이 남는다.
@@ -38,7 +38,7 @@
 > **`V2026082511` 이 풀던 문장은 지금 없다.** 락 순서를 뒤집으면서(§11) 경계를 후보에서 알게 되어
 > `lastExpiredId` 를 지웠다. `V2026082511` 은 남긴다 — `appendExpireHistories` 가 아직
 > `updated_at = :committedAt` 으로 방금 넘긴 집합을 찾고, 되읽기 둘도 그 축을 쓴다.
-> **그리고 그 문장이 지던 위험은 `V2026082501` 이 물려받았다** — 위쪽으로 열린 문장이 후보 조회로
+> **그리고 그 문장이 지던 위험은 `V2026082901` 이 물려받았다** — 위쪽으로 열린 문장이 후보 조회로
 > 바뀌었을 뿐 성질은 같다.
 
 ---
@@ -717,7 +717,7 @@ SIGKILL 했다(MySQL 8.4).
 | `releaseStock` | `JOIN … GROUP BY` 제거 → `WHERE coupon_id = :c AND active_count >= :n` |
 | 재고 행 없음 vs 모자람 | 갈라지는 자리가 달라졌다 — 없음은 `lockStock` false, 모자람은 `releaseStock` 갱신 0 |
 
-### `V2026082501` — 후보를 뽑는 비용
+### `V2026082901` — 후보를 뽑는 비용
 
 후보 조회는 `ORDER BY id` 가 있어 옵티마이저가 **정렬을 피하려고 PK 를 고른다.** 그러면
 `afterId` 위쪽의 누적된 `EXPIRED` 를 전부 지나가며 filter 한다. §5 가 `lastExpiredId` 에서
@@ -730,7 +730,7 @@ SIGKILL 했다(MySQL 8.4).
 |---|---:|
 | 그대로 — PK 스캔 | **16,999** |
 | `FORCE INDEX (status, expires_at)` + 정렬 | 4,000 |
-| **`V2026082501` `(status, id)`** | **999** |
+| **`V2026082901` `(status, id)`** | **999** |
 
 > **파일명이 연번이 아니라 날짜형인 이유** — 지금 원격에 `V12`~`V15` 가 각각 **두 가지**를
 > 가리킨다(`V12__issuance_updated_at_index` 와 `V12__drop_member_coupon_list_index` 처럼).

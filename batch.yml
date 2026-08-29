@@ -10,6 +10,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Dockerfile 의 기본값은 api 다. 안 주면 batch 서비스가 api jar 로 뜬다.
+        APP_MODULE: batch
     environment:
       # ⚠️ **여기 적는 기준은 "기본값이 마음에 안 드는가" 가 아니다.**
       #    application.yml.example 의 환경변수는 **대부분 여기 없고 그게 맞다** —

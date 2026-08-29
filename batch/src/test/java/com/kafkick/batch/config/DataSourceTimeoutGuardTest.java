@@ -148,7 +148,28 @@ class DataSourceTimeoutGuardTest {
                 .orElseThrow(() -> new AssertionError("storage.yml.example 에 url 이 없습니다"));
         String raw = line.substring(line.indexOf("jdbc:mysql")).trim();
         // ${DB_CONNECT_TIMEOUT_MS:2000} 같은 플레이스홀더를 기본값으로 푼다.
-        return raw.replaceAll("\\$\\{[A-Z_]+:([^}]*)\\}", "$1");
+        // ⚠️ **socketTimeout 만 예외다.** storage.yml 은 api·batch 가 함께 쓰는 파일이라
+        //    기본값이 발급 경로 기준(60초)이다 — batch 는 그 값으로 못 산다(가장 긴 Step
+        //    데드라인이 600초). 그래서 batch.yml 이 DB_SOCKET_TIMEOUT_MS 를 명시적으로 준다.
+        //    **배포되는 값**을 재는 검사이므로 그 compose 값을 읽어 푼다. 여기서 상수를
+        //    박으면 batch.yml 만 고치는 사람을 이 검사가 못 잡는다.
+        return raw.replace("${DB_SOCKET_TIMEOUT_MS:"
+                        + raw.split("socketTimeout=\\$\\{DB_SOCKET_TIMEOUT_MS:")[1]
+                                .split("}")[0] + "}",
+                        deployedSocketTimeout())
+                .replaceAll("\\$\\{[A-Z_]+:([^}]*)\\}", "$1");
+    }
+
+    /** batch.yml 이 batch 컨테이너에 실제로 주는 socketTimeout. */
+    private static String deployedSocketTimeout() throws IOException {
+        String text = Files.readString(Path.of("..", "batch.yml"), StandardCharsets.UTF_8);
+        return text.lines()
+                .filter(line -> line.trim().startsWith("DB_SOCKET_TIMEOUT_MS:"))
+                .findFirst()
+                .map(line -> line.replaceAll(".*:-(\\d+)\\}.*", "$1"))
+                .orElseThrow(() -> new AssertionError(
+                        "batch.yml 이 DB_SOCKET_TIMEOUT_MS 를 안 준다. storage.yml 기본값은 "
+                                + "발급 경로 기준(60초)이라 batch 는 그 값으로 기동하지 못한다"));
     }
 
     @Test

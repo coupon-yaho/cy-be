@@ -3,8 +3,8 @@ package com.kafkick.core.verification.replay;
 
 import java.time.LocalDateTime;
 
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * {@code fromStatus} 만 null 을 허용합니다. 발급 이전에는 상태가 없기 때문입니다.

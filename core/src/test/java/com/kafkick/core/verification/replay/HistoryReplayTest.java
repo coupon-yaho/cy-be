@@ -9,8 +9,8 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 class HistoryReplayTest {
 
@@ -66,7 +66,7 @@ class HistoryReplayTest {
         assertThat(result.illegalTransitions()).singleElement().satisfies(illegal -> {
             assertThat(illegal.historyId()).isEqualTo(3L);
             assertThat(illegal.reason()).isEqualTo(IllegalTransition.Reason.NOT_IN_TABLE);
-            assertThat(illegal.expected()).isEqualTo("USED-EXPIRE->(없음)");
+            assertThat(illegal.expected()).isEqualTo("USED-EXPIRE->?");
             assertThat(illegal.actual()).isEqualTo("USED-EXPIRE->EXPIRED");
         });
     }
@@ -124,7 +124,7 @@ class HistoryReplayTest {
         assertThat(result.state()).isEqualTo(IssuanceStatus.USED);
         assertThat(result.illegalTransitions()).singleElement().satisfies(illegal -> {
             assertThat(illegal.reason()).isEqualTo(IllegalTransition.Reason.NOT_IN_TABLE);
-            assertThat(illegal.expected()).isEqualTo("(없음)-USE->(없음)");
+            assertThat(illegal.expected()).isEqualTo("(없음)-USE->?");
         });
     }
 

@@ -71,10 +71,15 @@ class CleanSchemaConstraintTest {
     void rejectStockAboveTotal() {
         data.currentCouponIdOrCreate();
 
+        // ⚠️ **제약이 둘이다(CY-744).** main 의 V3 가 같은 불변식을
+        //    ck_coupon_stock_active_range 로 한 겹 더 걸어 뒀고, 그쪽이 먼저 걸린다.
+        //    이름을 하나로 못 박으면 **막혔는데도 빨개진다** — 여기서 재려는 것은
+        //    "CLEAN 이 오염 유형 1 을 막는가" 이지 어느 제약이 막는가가 아니다.
+        //    둘 다 CORRUPT 에서는 떨어진다(V9999999999).
         assertThatThrownBy(() -> data.overwriteStock(101))
                 .as("total_quantity 가 100 이다")
                 .isInstanceOf(DataAccessException.class)
-                .hasMessageContaining("ck_stock_range");
+                .hasMessageMatching("(?s).*(ck_stock_range|ck_coupon_stock_active_range).*");
     }
 
     @Test
@@ -84,7 +89,7 @@ class CleanSchemaConstraintTest {
 
         assertThatThrownBy(() -> data.overwriteStock(-1))
                 .isInstanceOf(DataAccessException.class)
-                .hasMessageContaining("ck_stock_range");
+                .hasMessageMatching("(?s).*(ck_stock_range|ck_coupon_stock_active_range).*");
     }
 
     @Test

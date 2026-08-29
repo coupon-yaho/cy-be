@@ -30,6 +30,22 @@ CREATE INDEX idx_issuance_status_expires ON issuances (status, expires_at);
 -- cy-be 의 V2026082511 과 짝이고, 이름·컬럼이 같아야 SchemaParityTest 가 통과한다.
 CREATE INDEX idx_issuance_updated_at ON issuances (updated_at, id);
 
+-- ── main 이 이름을 붙여 만든 인덱스들 (CY-744 합류) ──────────────────────────
+-- **FK 선언보다 먼저 만든다.** MySQL 은 FK 를 걸 때 쓸 수 있는 인덱스가 이미 있으면
+-- 그것을 쓰고, 없으면 컬럼명으로 하나 만든다. 순서를 바꾸면 시드 쪽에만
+-- `issuance_id`·`member_id` 같은 자동 인덱스가 생겨 파리티가 그 자리를 잡는다.
+--
+--   fk_issuances_member                        V12__drop_member_coupon_list_index.sql
+--   idx_issuances_coupon_id                    V2026082502__add_admin_issuance_history_indexes.sql
+--   idx_issuance_histories_created_id          같은 파일 — 관리자 이력 조회
+--   idx_issuance_histories_issuance_created_id 같은 파일
+CREATE INDEX fk_issuances_member ON issuances (member_id);
+CREATE INDEX idx_issuances_coupon_id ON issuances (coupon_id, id);
+CREATE INDEX idx_issuance_histories_created_id
+    ON issuance_histories (created_at DESC, id DESC);
+CREATE INDEX idx_issuance_histories_issuance_created_id
+    ON issuance_histories (issuance_id, created_at DESC, id DESC);
+
 ALTER TABLE members             ADD FOREIGN KEY (membership_grade) REFERENCES grades (code);
 ALTER TABLE coupon_templates    ADD FOREIGN KEY (brand_id)   REFERENCES brands (id);
 ALTER TABLE coupons             ADD FOREIGN KEY (template_id) REFERENCES coupon_templates (id);
@@ -116,3 +132,22 @@ ALTER TABLE coupons
 -- 빼 두고 재서 승격한 것이 아니라 만료 배치를 만들다 새로 필요해졌고, 없으면 느린 것을
 -- 넘어 스텝 시한을 넘긴다.
 CREATE INDEX idx_issuance_status_id ON issuances (status, id);
+
+-- 멱등 레코드의 상태·대상 정합 — V7__strengthen_coupon_use_idempotency.sql (CY-744 합류).
+-- 오염 유형이 이 표를 안 건드리므로 CLEAN·CORRUPT 공통이다.
+ALTER TABLE idempotency_records
+    ADD CONSTRAINT ck_idempotency_status_targets CHECK (
+        (
+            status = 'IN_PROGRESS'
+            AND member_id IS NULL
+            AND issuance_id IS NULL
+            AND response_body IS NULL
+        )
+        OR
+        (
+            status = 'DONE'
+            AND member_id IS NOT NULL
+            AND issuance_id IS NOT NULL
+            AND response_body IS NOT NULL
+        )
+    );

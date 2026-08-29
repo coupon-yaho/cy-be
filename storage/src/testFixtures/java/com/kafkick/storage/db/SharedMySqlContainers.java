@@ -49,12 +49,28 @@ final class SharedMySqlContainers {
      * 시드({@code cy-seed})·compose 가 쓰는 버전과 갈렸는지 확인해라.
      * 검증 대상 데이터를 만드는 쪽과 검증하는 쪽이 다른 서버면 판정의 뜻이 약해진다.
      */
-    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:latest");
+    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4.6");
 
     /** 연결 상한의 기본값. {@code build.gradle} 이 컨텍스트 캐시 상한에서 계산해 넘긴다. */
     private static final String MAX_CONNECTIONS_PROPERTY = "test.mysql.maxConnections";
 
     private SharedMySqlContainers() {
+    }
+
+    /**
+     * 저장소 루트. 실행 디렉터리가 모듈마다 달라 위로 올라가며 {@code settings.gradle} 로
+     * 찾는다 — 상대 경로를 박으면 다른 모듈에서 돌릴 때 파일을 못 찾아 컨테이너가 안 뜬다.
+     */
+    private static java.nio.file.Path repoRoot() {
+        java.nio.file.Path candidate = java.nio.file.Path.of("").toAbsolutePath();
+        while (candidate != null) {
+            if (java.nio.file.Files.isRegularFile(candidate.resolve("settings.gradle"))) {
+                return candidate;
+            }
+            candidate = candidate.getParent();
+        }
+        throw new IllegalStateException("저장소 루트를 찾지 못했다. 실행 디렉터리: "
+                + java.nio.file.Path.of("").toAbsolutePath());
     }
 
     /**
@@ -168,6 +184,26 @@ final class SharedMySqlContainers {
                 .withCopyFileToContainer(
                         MountableFile.forClasspathResource("db/testcontainers/grant-process.sql"),
                         "/docker-entrypoint-initdb.d/10-grant-process.sql")
+                // 20 · 관측 전용 계정. **compose 가 마운트하는 것과 같은 파일**이라
+                //      테스트에서 도는 권한이 곧 로컬에서 도는 권한이다.
+                // ⚠️ 클래스패스가 아니라 **저장소 경로**에서 읽는다 — 이 파일은 compose 가
+                //    호스트 경로로 마운트하는 것이라 배포 jar 에 실릴 이유가 없다.
+                //    모드 0755 를 명시한다. entrypoint 가 .sh 를 실행하므로 실행 비트가
+                //    없으면 "bad interpreter: Permission denied" 로 컨테이너가 안 뜬다.
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(
+                                repoRoot().resolve("infra/mysql/initdb/20-obs-account.sh"), 0755),
+                        "/docker-entrypoint-initdb.d/20-obs-account.sh")
+                // 권한을 주는 쪽. **initdb.d 가 아니다** — 테이블 단위 GRANT 는 그 테이블이
+                // 이미 있어야 하는데 initdb 시점에는 하나도 없다(ERROR 1146). 여기서는 복사만
+                // 하고, 스키마 초기화가 끝난 뒤 MySqlContainerConfig 의 grant applier 가 돌린다.
+                // ⚠️ 디렉터리째 복사한다 — apply.sh 가 같은 디렉터리의 allowlist.txt 를 읽는다.
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(
+                                repoRoot().resolve("infra/mysql/obs-grants"), 0755),
+                        "/obs-grants")
+                .withEnv("DB_OBS_USERNAME", "obs")
+                .withEnv("DB_OBS_PASSWORD", "o'bs\\")
                 .withUrlParam("serverTimezone", "UTC")
                 .withUrlParam("characterEncoding", "UTF-8")
                 .withUrlParam("useUnicode", "true")

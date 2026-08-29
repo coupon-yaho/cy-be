@@ -1,50 +1,51 @@
-# 배치 서버 이미지입니다. 관제가 컨테이너 이름으로 스크레이프하므로 앱도 컨테이너여야 합니다.
+# 두 앱(api·batch)을 같은 파일로 짓습니다. ARG APP_MODULE 이 무엇을 지을지 정합니다.
 #
-# infra/prometheus/prometheus.yml 의 스크레이프 대상이 batch:9092 다. batch 는 DNS 이름이고
-# 그 이름을 만드는 것은 compose 서비스뿐이라, 앱이 호스트 JVM 이면 컨테이너에서 해석이 안 된다.
-# application.yml.example 도 "관제의 스크레이프 대상은 컨테이너 기준" 이라고 적어 뒀다.
+# ⚠️ **기본값이 api 다.** batch 를 지으려면 compose 가 build.args 로 APP_MODULE=batch 를
+#    줘야 한다 — 안 주면 batch 서비스가 api jar 를 담은 이미지로 뜬다(batch.yml 이 준다).
+#
+# 배치가 컨테이너여야 하는 이유: infra/prometheus/prometheus.yml 의 스크레이프 대상이
+# batch:9092 이고, 그 DNS 이름을 만드는 것은 compose 서비스뿐이다. 앱이 호스트 JVM 이면
+# 관제 컨테이너에서 이름 해석이 안 된다.
 
-FROM eclipse-temurin:21-jdk AS build
-WORKDIR /src
+# syntax=docker/dockerfile:1.7
 
-# 래퍼와 빌드 스크립트를 먼저 넣어 의존성 계층을 캐시한다. 소스만 바뀌면 이 계층은 그대로다.
+FROM eclipse-temurin:21-jdk-jammy AS builder
+
+WORKDIR /workspace
+
 COPY gradlew settings.gradle build.gradle ./
-COPY gradle gradle
-COPY core/build.gradle core/
-COPY storage/build.gradle storage/
-COPY batch/build.gradle batch/
-COPY api/build.gradle api/
-# infra 는 mq·redis 만 Gradle 프로젝트다. 디렉터리 전체를 넣으면 관제 설정
-# (prometheus/rules, alertmanager)이 바뀔 때마다 아래 의존성 레이어가 통째로 무효화된다 —
-# 바로 위 주석이 "소스만 바뀌면 이 계층은 그대로다" 라고 약속한 것과 어긋난다.
-COPY infra/mq/build.gradle infra/mq/
-COPY infra/redis/build.gradle infra/redis/
-RUN ./gradlew --no-daemon :batch:dependencies --quiet || true
+COPY gradle ./gradle
+COPY api/build.gradle api/build.gradle
+COPY batch/build.gradle batch/build.gradle
+COPY core/build.gradle core/build.gradle
+COPY storage/build.gradle storage/build.gradle
+COPY infra/mq/build.gradle infra/mq/build.gradle
+COPY infra/redis/build.gradle infra/redis/build.gradle
 
-COPY core core
-COPY storage storage
-COPY batch batch
-COPY api api
-COPY infra infra
+RUN --mount=type=cache,target=/root/.gradle \
+    ./gradlew dependencies --no-daemon >/dev/null
 
-# README 가 정한 절차 그대로다 — .example 을 실제 이름으로 복사한다.
-# resolved/ 는 processTestResources 가 만드는 테스트 전용이라 런타임에는 없다.
-RUN find . -path '*/src/main/resources/*.yml.example' \
-      -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
+COPY api/src api/src
+COPY batch/src batch/src
+COPY core/src core/src
+COPY storage/src storage/src
+COPY infra/mq/src infra/mq/src
+COPY infra/redis/src infra/redis/src
 
-RUN ./gradlew --no-daemon :batch:bootJar -x test
+ARG APP_MODULE=api
+RUN --mount=type=cache,target=/root/.gradle \
+    find . -path '*/src/main/resources/*.yml.example' \
+      -exec sh -c 'cp "$1" "${1%.example}"' _ {} \; \
+    && ./gradlew ":${APP_MODULE}:bootJar" --no-daemon \
+    && cp "${APP_MODULE}"/build/libs/*.jar /workspace/application.jar
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21-jre-jammy
+
+RUN useradd --system --uid 10001 --create-home app
 WORKDIR /app
 
-# 루트로 돌리지 않는다. 이미지가 하는 일은 잡을 돌리는 것뿐이라 쓸 권한이 필요 없다.
-RUN useradd --system --create-home --shell /usr/sbin/nologin batch
-USER batch
+COPY --from=builder --chown=app:app /workspace/application.jar application.jar
 
-COPY --from=build --chown=batch:batch /src/batch/build/libs/*.jar app.jar
-
-# 업무 포트만 노출한다. 관리 포트(9092)는 compose 내부 네트워크에서만 닿는다 —
-# 호스트로 매핑하면 인증 없이 전 지표가 열린다.
-EXPOSE 9090
-
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+USER app
+EXPOSE 8080 9090
+ENTRYPOINT ["java", "-jar", "/app/application.jar"]

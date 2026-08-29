@@ -35,13 +35,52 @@
 -- 이름이 `coupon_id` 인 것은 우연이 아니다. 시드 CORRUPT 에는 uk_coupon_member 가 애초에
 -- 없어, FK 를 걸 때 MySQL 이 자식 컬럼에 인덱스를 자동 생성하고 그 이름이 `coupon_id` 다.
 -- 여기서 다른 이름을 주면 두 스키마의 최종 모양이 갈린다 — CorruptSchemaParityTest 가 잡는다.
-CREATE INDEX `coupon_id` ON `issuances` (`coupon_id`);
+-- ⚠️ **더 안 만든다(CY-744).** main 의 V2026082502 가 idx_issuances_coupon_id
+--    (coupon_id, id) 를 만들어서 uk_coupon_member 를 떼도 FK 가 쓸 인덱스가 남는다.
+--    여기서 또 만들면 시드에 없는 인덱스가 생겨 파리티가 그 자리를 잡는다.
 
 DROP INDEX `uk_coupon_member` ON `issuances`;
 
 DROP INDEX `uk_coupon_code` ON `issuances`;
 
 ALTER TABLE `coupon_stocks` DROP CHECK `ck_stock_range`;
+
+-- ── CY-744 합류로 늘어난 것들 ────────────────────────────────────────────────
+--
+-- main 이 같은 불변식을 자기 이름으로 한 겹 더 걸어 뒀습니다. 하나라도 남으면 주입이
+-- INSERT 단계에서 튕겨 **규칙이 검출할 대상 자체가 안 생기고**, 테스트는 "검출 0건" 을
+-- 정상으로 읽습니다 — 규칙이 틀려도 초록입니다. 위 목록과 같은 이유로 전부 뗍니다.
+--
+--   ck_coupon_stock_active_range   재고 범위(V3) — ck_stock_range 와 같은 축, 이름만 다름
+--   ck_coupon_stock_total_positive 총량 양수(V3)
+--   ck_coupon_round_time_range     close_at > open_at (V3) — 유형 주입이 창을 뒤집습니다
+ALTER TABLE `coupon_stocks`
+    DROP CHECK `ck_coupon_stock_active_range`,
+    DROP CHECK `ck_coupon_stock_total_positive`;
+
+ALTER TABLE `coupons` DROP CHECK `ck_coupon_round_time_range`;
+
+-- 사용 이력(V8·V9). **uk_issuance_usages_active 가 특히 중요합니다** — 그것이
+-- "발급건 하나에 활성 사용은 하나" 를 DB 로 막는데, 그게 정확히 V5(DOUBLE_USE)가
+-- 검출해야 하는 오염입니다. 남겨 두면 이중 사용을 심을 수가 없습니다.
+--
+-- ⚠️ active_issuance_id 는 생성 컬럼이라 인덱스를 떼도 컬럼은 남습니다. 남겨 둡니다 —
+--    시드 CORRUPT 스키마에도 컬럼은 있고, 지우면 두 스키마의 컬럼 집합이 갈립니다.
+-- ⚠️ **대체 인덱스를 먼저 만든다.** uk_issuance_usages_issuance_order 는
+--    (issuance_id, order_id) 라 issuance_id FK 가 쓰는 유일한 인덱스이기도 하다 —
+--    그냥 떼면 MySQL 이 "Cannot drop index ...: needed in a foreign key constraint" 로
+--    막는다(실측). 위 uk_coupon_member 가 같은 이유로 같은 순서를 쓴다.
+CREATE INDEX `issuance_id` ON `issuance_usages` (`issuance_id`);
+
+ALTER TABLE `issuance_usages`
+    DROP INDEX `uk_issuance_usages_active`,
+    DROP INDEX `uk_issuance_usages_issuance_order`,
+    DROP CHECK `ck_issuance_usages_cancel_time`;
+
+-- ⚠️ **상태 어휘 CHECK 두 개는 떼지 않는다.** 한 번 떼려다 되돌렸다 —
+--    "시드 CORRUPT 가 안 건다" 고 적었는데 **확인 안 하고 쓴 것이었다.**
+--    실제로 시드는 그 둘을 10_constraints_common.sql(공통)에 두므로 CORRUPT 에도 있다.
+--    오염 유형이 규약 밖 상태를 심지도 않아서 뗄 이유가 없다.
 
 -- 시드 CORRUPT 가 expected_findings 에 거는 보조 인덱스(ddl/12_constraints_corrupt.sql).
 -- 떼는 것만 재현하고 더하는 것을 빼면 두 스키마의 실행계획이 달라져,

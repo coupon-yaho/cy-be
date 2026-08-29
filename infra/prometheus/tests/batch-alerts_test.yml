@@ -20,7 +20,7 @@ tests:
   - interval: 1m
     name: "크래시루프에서 BatchTargetDown 이 뜬다"
     input_series:
-      - series: 'up{job="cy-batch", instance="batch:9092"}'
+      - series: 'up{job="batch", instance="batch:9092"}'
         # 12분마다 1분씩만 뜬다.
         values: '0x11 1 0x11 1 0x11 1 0x11 1 0x11 1'
     alert_rule_test:
@@ -30,7 +30,7 @@ tests:
           - exp_labels:
               severity: critical
               channel: server
-              job: cy-batch
+              job: batch
               instance: batch:9092
             exp_annotations:
               summary: "배치의 실행 지표가 아예 안 보입니다 — 서버가 떠 있는지 봅니다"
@@ -44,7 +44,7 @@ tests:
   - interval: 1m
     name: "타깃이 복구되면 창이 다 차기 전에 풀린다"
     input_series:
-      - series: 'up{job="cy-batch", instance="batch:9092"}'
+      - series: 'up{job="batch", instance="batch:9092"}'
         values: '0x19 1x20'
     alert_rule_test:
       # 20분간 죽어 있었으니 뜬다.
@@ -54,7 +54,7 @@ tests:
           - exp_labels:
               severity: critical
               channel: server
-              job: cy-batch
+              job: batch
               instance: batch:9092
             exp_annotations:
               summary: "배치의 실행 지표가 아예 안 보입니다 — 서버가 떠 있는지 봅니다"
@@ -71,7 +71,7 @@ tests:
   - interval: 1m
     name: "되읽기가 간헐 실패하면 BatchRunMetricsStale 이 문다"
     input_series:
-      - series: 'cy_batch_refresh_failures_total{spring_batch_job_name="expireJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_refresh_failures_total{spring_batch_job_name="expireJob", instance="batch:9092", job="batch"}'
         # 2분에 한 번씩 실패 — 10분 창에서 증분이 3 을 넘는다.
         values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
     alert_rule_test:
@@ -83,7 +83,7 @@ tests:
               channel: server
               spring_batch_job_name: expireJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "배치 실행 지표 되읽기가 반복 실패하고 있습니다"
               description: "게이지가 정상과 NaN 을 오가는 동안은 NaN 감시도 시체 감시도 for 를 못 채웁니다. 배치 로그의 \"배치 실행 지표를 되읽지 못했습니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈과 배치 메타 잠금입니다."
@@ -100,10 +100,14 @@ tests:
     name: "정리가 25시간 넘게 성공하지 못하면 CleanupNotSucceeding 이 뜬다"
     input_series:
       # 24시간이 지난 상태에서 시작한다 — SLA 경계를 60분 안에 통과한다.
-      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob", instance="batch:9092", job="batch"}'
         values: '-85000x130'
-      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="batch"}'
         values: '-85000x130'
+      # ⚠️ 스케줄러가 켜져 있어야 SLA 알림이 운다(CY-744). 꺼진 상황은 원인이 하나로
+      #    확정돼 BatchSchedulingDisabled 가 따로 지므로 여기서는 뺀다.
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
+        values: '1x130'
     alert_rule_test:
       # 나이 88,600초(24시간 37분) — 아직 SLA(90,000) 안이다.
       - eval_time: 60m
@@ -127,7 +131,7 @@ tests:
               channel: server
               spring_batch_job_name: expireJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 배치가 SLA(25시간) 안에 성공하지 못했습니다"
               description: "갈래가 셋이라 먼저 어느 쪽인지 가른다. **값이 오래됐으면** 배치 서버가 떠 있는지, BATCH_SCHEDULING_ENABLED 가 false 로 뜨지 않았는지, batch.schedule.expire-cron 이 의도한 값인지 순서대로 본다. 검증이 도는 동안 슬롯을 건너뛰는 것도 지연을 만드는데, 그쪽은 로그의 \"만료 슬롯을 건너뜁니다\" WARN 이 답한다. **NaN 이면** 갈래가 셋이다. 먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패다. 안 증가했으면 7일 창(되읽기 질의의 조회 범위) 안에 성공한 실행이 없는 것이고, 8일 넘게 안 돈 경우가 여기다 — BATCH_JOB_EXECUTION 을 직접 조회해 가른다. **미래 시각이면** 원인은 언제나 시간대 설정이다. 드라이버가 쓸 때 쓰는 존과 UNIX_TIMESTAMP 가 읽을 때 쓰는 세션 존이 갈린 것이다 — storage.yml URL 의 serverTimezone(Connector/J 8.0.23+ 에서 connectionTimeZone 의 별칭이다)과 `SELECT @@session.time_zone, @@global.time_zone` 을 함께 본다. 둘이 다르면 그 차이가 그대로 오차다. 과거 방향으로 어긋나면 위 \"값이 오래됐으면\" 갈래로 나오므로, 그쪽을 다 뒤져도 원인이 안 나오면 이 축을 본다."
@@ -139,7 +143,7 @@ tests:
               channel: server
               spring_batch_job_name: cleanupJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "정리 배치가 SLA(25시간) 안에 성공하지 못했습니다"
               description: "검증이 남긴 파생 행이 안 걷히고 있습니다. 실행당 최대 300만 행인 asof_state 가 쌓이므로 며칠이면 디스크가 눈에 띄게 준다. 배치 로그의 \"정리 배치를 시작하지 못했습니다\" 와 \"정리 배치가 끝내지 못했습니다\" 를 먼저 봅니다. BATCH_SCHEDULING_ENABLED 가 false 면 만료도 함께 안 돕니다. \"검증이 도는 중이라 정리를 여기서 멈춥니다\" WARN 이 반복되면 정리가 아니라 열린 채 남은 검증이 원인입니다. BATCH_STEP_EXECUTION 을 STEP_NAME 으로 갈라 STATUS 를 봅니다 — purgeVerificationRunsStep 이 FAILED 면 asof_state 가 안 걷힌 것이고, 그것이 COMPLETED 인데 purgeBatchMetadataStep 만 FAILED 면 asof_state 는 다 걷은 뒤 배치 메타에서 죽은 것입니다. 로그로 가르지 마십시오 — \"배치 메타를 걷었습니다\" 는 걷을 것이 0 인 밤에는 원래 안 찍힙니다. 성공 이력이 아예 없는 상태는 이 알림이 아니라 CleanupNeverSucceeded 가 집니다."
@@ -157,13 +161,13 @@ tests:
   - interval: 1m
     name: "성공 이력이 없으면 NotSucceeding 은 침묵하고 NeverSucceeded 가 뜬다"
     input_series:
-      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="cleanupJob", instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
       # 만료도 같은 상태로 심는다 — 쌍둥이 규칙의 for 예산을 함께 못 박기 위해서다.
-      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
       # 타깃은 살아 있다 — CleanupGaugeMissing 과 갈리는 축이 이것이다.
-      - series: 'up{job="cy-batch", instance="batch:9092"}'
+      - series: 'up{job="batch", instance="batch:9092"}'
         values: '1x1620'
     alert_rule_test:
       # NaN 은 비교 필터에서 떨어진다 — 나이가 아무리 들어도 이 규칙은 침묵한다.
@@ -180,7 +184,7 @@ tests:
               channel: server
               spring_batch_job_name: expireJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 배치의 성공 이력이 아직 없습니다"
               description: "먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패이지 만료 문제가 아니다. 안 증가했으면 진짜로 성공 이력이 없는 것이다: BATCH_SCHEDULING_ENABLED 가 false 로 떴거나(batch.yml 의 기본값이다), 스키마가 새로 만들어졌거나, 7일 넘게 성공이 없는 것이다."
@@ -200,7 +204,7 @@ tests:
               channel: server
               spring_batch_job_name: cleanupJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "정리 배치의 성공 이력이 아직 없습니다"
               description: "먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패이지 정리 문제가 아니다. 안 증가했으면 진짜로 성공 이력이 없는 것이다: BATCH_SCHEDULING_ENABLED 가 false 로 떴거나(batch.yml 의 기본값이다), 스키마가 새로 만들어졌거나, 8일 넘게 성공이 없는 것이다. 매일 실패하는 경우 8일째에 BatchJobFailed 가 아니라 이 알림으로 넘어온다."
@@ -217,10 +221,10 @@ tests:
   - interval: 1m
     name: "게이지 시계열이 없고 타깃이 살아 있으면 CleanupGaugeMissing 이 뜬다"
     input_series:
-      - series: 'up{job="cy-batch", instance="batch:9092"}'
+      - series: 'up{job="batch", instance="batch:9092"}'
         values: '1x30'
       # 만료 게이지는 있고 정리 것만 없다 — 잡 이름 축이 어긋난 모양이다.
-      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="batch"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -245,11 +249,14 @@ tests:
   - interval: 1m
     name: "CORRUPT 를 돌려도 CLEAN/FULL 이 25시간을 넘기면 VerifyNotSucceeding 이 뜬다"
     input_series:
-      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="batch"}'
         values: '-85000x130'
       # 잡 이름 그레인은 방금 성공했다 — CORRUPT 리허설이 밀어 놓은 모양이다.
-      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="verifyJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="verifyJob", instance="batch:9092", job="batch"}'
         values: '0x130'
+      # 스케줄러 켜짐 — 꺼진 갈래는 BatchSchedulingDisabled 가 진다(CY-744).
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
+        values: '1x130'
     alert_rule_test:
       # 나이 88,600초(24시간 37분) — 아직 SLA(90,000) 안이다.
       - eval_time: 60m
@@ -265,7 +272,7 @@ tests:
               dataset: CLEAN
               scope: FULL
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "검증 배치가 SLA(25시간) 안에 CLEAN/FULL 판정을 내지 못했습니다"
               description: "게이트 판정의 근거가 갱신되지 않고 있습니다. **가장 흔한 원인은 그 슬롯에 발급이 있었던 것입니다** — startRunStep 의 rejectIssuancesUpdatedAfterAsOf 가 asOf 이후 갱신된 발급건을 보면 실행을 죽이고, 만료가 찍은 updated_at 은 지워지지 않으므로 그 asOf 는 영구히 못 씁니다. 배치 로그의 \"검증 배치가 판정을 내지 못했습니다\" 를 먼저 봅니다 — 그 문구가 반복되면 batch.schedule.verify-cron 을 발급이 멈춘 창으로 옮겨야 합니다. 그 문구가 없으면 BATCH_SCHEDULING_ENABLED 가 false 로 떴는지, batch.schedule.verify-cron 이 의도한 값인지 순서대로 봅니다. 판정을 내고도 statsAggregateStep 에서 죽으면 잡은 UNKNOWN 이라 여기 걸립니다 — 그때는 verification_runs 에 verdict 가 있는데 이 게이지만 안 움직입니다. 성공 이력이 아예 없는 상태는 아래 VerifyNeverSucceeded 가 집니다."
@@ -277,9 +284,9 @@ tests:
   - interval: 1m
     name: "검증 성공 이력이 없으면 NotSucceeding 은 침묵하고 VerifyNeverSucceeded 가 뜬다"
     input_series:
-      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
-      - series: 'up{job="cy-batch", instance="batch:9092"}'
+      - series: 'up{job="batch", instance="batch:9092"}'
         values: '1x80'
     alert_rule_test:
       - eval_time: 70m
@@ -298,7 +305,7 @@ tests:
               dataset: CLEAN
               scope: FULL
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "검증 배치의 CLEAN/FULL 성공 이력이 아직 없습니다"
               description: "먼저 `increase(cy_batch_refresh_failures_total[10m]) > 0` 을 본다 — 증가했으면 되읽기 실패이지 검증 문제가 아니다. 안 증가했으면 진짜로 성공 이력이 없는 것이다: BATCH_SCHEDULING_ENABLED 가 false 로 떴거나(batch.yml 의 기본값이다), 스키마가 새로 만들어졌거나, 8일 넘게 CLEAN/FULL 성공이 없는 것이다. **CORRUPT 를 손으로 돌린 것은 이 알림을 끄지 않는다** — 그것이 이 그레인의 요지다."
@@ -314,10 +321,10 @@ tests:
   - interval: 1m
     name: "검증 게이지 라벨이 어긋나고 타깃이 살아 있으면 VerifyGaugeMissing 이 뜬다"
     input_series:
-      - series: 'up{job="cy-batch", instance="batch:9092"}'
+      - series: 'up{job="batch", instance="batch:9092"}'
         values: '1x30'
       # 라벨이 하나 어긋난 모양 — scope 가 INCREMENTAL 이면 게이트 셀렉터와 안 맞는다.
-      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="INCREMENTAL", instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="INCREMENTAL", instance="batch:9092", job="batch"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -340,7 +347,7 @@ tests:
   - interval: 1m
     name: "정리는 600초에는 안 울고 900초에 운다"
     input_series:
-      - series: 'spring_batch_job_active_seconds_max{spring_batch_job_name="cleanupJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'spring_batch_job_active_seconds_max{spring_batch_job_name="cleanupJob", instance="batch:9092", job="batch"}'
         values: '0+60x30'
     alert_rule_test:
       # 720초 — 만료 임계(600)는 넘었지만 정리 임계(900)는 아니다.
@@ -356,7 +363,7 @@ tests:
               channel: server
               spring_batch_job_name: cleanupJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "정리 배치가 900초 넘게 돌고 있다 — asof_state 또는 배치 메타를 갈고 있다"
               description: "보존 창 밖 실행이 몰렸거나 청크 하나가 오래 걸린다. **Step 이 둘이다.** BATCH_STEP_EXECUTION 을 STEP_NAME 으로 갈라 WRITE_COUNT 를 본다 — purgeVerificationRunsStep 이면 CLEANUP_CHUNK_SIZE 와 CLEANUP_STEP_TIMEOUT_MS 의 관계를, purgeBatchMetadataStep 이면 CLEANUP_METADATA_CHUNK_SIZE 와 CLEANUP_METADATA_KEEP_DAYS 를 본다 — 그 Step 의 WRITE_COUNT 는 **지운 잡 실행 수**라 chunk-size 로 나누면 청크 수가 나온다(행 수가 아니다). 두 chunk-size 는 뜻이 다르다 — 앞은 asof_state 행 수, 뒤는 잡 실행 수다. 뒤 Step 은 보존 창을 처음 넘긴 밤에 한 번 몰린다 (청크를 키우면 데드라인도 같이 키워야 한다)."
@@ -368,7 +375,7 @@ tests:
   - interval: 1m
     name: "검증은 900초에는 안 울고 1200초에 운다"
     input_series:
-      - series: 'spring_batch_job_active_seconds_max{spring_batch_job_name="verifyJob", instance="batch:9092", job="cy-batch"}'
+      - series: 'spring_batch_job_active_seconds_max{spring_batch_job_name="verifyJob", instance="batch:9092", job="batch"}'
         values: '0+60x30'
     alert_rule_test:
       # 960초 — 정리 임계(900)는 넘었지만 검증 임계(1200)는 아니다.
@@ -384,7 +391,7 @@ tests:
               channel: server
               spring_batch_job_name: verifyJob
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "검증 배치가 1200초 넘게 돌고 있다 — 실측은 472초다"
               description: "BATCH_STEP_EXECUTION 을 STEP_NAME 으로 갈라 어느 Step 인지 먼저 본다. replayStep 이면 정상 구간에서 가장 무거운 Step 이므로 READ_COUNT 로 진도를 보고 VERIFY_CHUNK_SIZE·VERIFY_REPLAY_WINDOW_SIZE 를 확인한다. statsAggregateStep 이면 집계가 걸린 것이다 — 그 Step 은 회차 단위로 쪼개져 있으므로(CY-470) 회차 수가 늘었거나 DB 가 느린 것이다. **1200초를 넘긴 채 30분을 채우면 BatchStuckExecution 으로 넘어간다** — 그때는 진도(LAST_UPDATED)가 멈춘 것이라 원인이 다르다."
@@ -398,7 +405,7 @@ tests:
   - interval: 1m
     name: "만료 되읽기가 간헐 실패하면 ExpireMetricsStale 이 문다"
     input_series:
-      - series: 'cy_expire_refresh_failures_total{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_refresh_failures_total{instance="batch:9092", job="batch"}'
         # 2분에 한 번씩 실패 — 10분 창에서 델타가 3 을 넘는다.
         values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
     alert_rule_test:
@@ -409,7 +416,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 대기 지표 되읽기가 반복 실패하고 있습니다"
               description: "게이지가 정상과 NaN 을 오가는 동안은 ExpireLeavesWorkBehind 도 ExpireMetricsUnknown 도 for 를 못 채웁니다. 배치 로그의 \"만료 대기 지표를 되읽지 못했습니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈과 배치 메타 잠금입니다."
@@ -422,9 +429,9 @@ tests:
   - interval: 1m
     name: "정상셋에서 게이지가 NaN 이면 ExpireMetricsUnknown 이 뜬다"
     input_series:
-      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
-      - series: 'cy_expire_clean_schema{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_clean_schema{instance="batch:9092", job="batch"}'
         values: '1x40'
     alert_rule_test:
       # 10분 — 아직 for(15분) 안이다.
@@ -438,7 +445,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 대기를 세지 못하고 있습니다 — 밀림 감시가 꺼져 있습니다"
               description: "만료 대기 건수를 되읽지 못하고 있습니다. **이 동안 ExpireLeavesWorkBehind 는 울릴 수 없습니다.** 갈래가 넷이라 먼저 어느 쪽인지 가릅니다. 먼저 `increase(cy_expire_refresh_failures_total[10m]) > 0` 을 봅니다 — 증가했으면 되읽기 실패이고, 배치 로그의 \"만료 대기 지표를 되읽지 못했습니다\" 가 원인을 답합니다(흔한 원인은 커넥션 풀 고갈). **ExpireNeverSucceeded 가 함께 떠 있으면 같은 사건입니다** — 만료가 아직 한 번도 성공하지 않은 것이고, 볼륨을 새로 띄운 직후가 여기입니다. 안 증가했으면 갈래가 둘입니다 — 7일 창 안에 COMPLETED 로 끝난 expireJob 이 없거나, 그 실행의 제외 목록을 Step 문맥에서 못 읽은 것입니다. BATCH_JOB_EXECUTION 조회와 배치 로그의 \"제외 목록을 Step 문맥에서 못 읽었습니다\" WARN 으로 가릅니다. 오염셋을 보고 있는 경우는 이 알림에서 구조적으로 빠집니다(cy_expire_clean_schema). **볼륨을 지우고 띄운 직후는 정상입니다** — 그 구간은 시연 절차 첫 단계의 silence 가 덮습니다."
@@ -446,9 +453,9 @@ tests:
   - interval: 1m
     name: "오염셋을 보고 있으면 같은 NaN 이어도 안 뜬다"
     input_series:
-      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
-      - series: 'cy_expire_clean_schema{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_clean_schema{instance="batch:9092", job="batch"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 35m
@@ -466,7 +473,7 @@ tests:
   - interval: 1m
     name: "스키마 축이 없어도 NaN 이면 ExpireMetricsUnknown 이 뜬다"
     input_series:
-      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
       # cy_expire_clean_schema 를 아예 안 준다.
     alert_rule_test:
@@ -477,7 +484,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 대기를 세지 못하고 있습니다 — 밀림 감시가 꺼져 있습니다"
               description: "만료 대기 건수를 되읽지 못하고 있습니다. **이 동안 ExpireLeavesWorkBehind 는 울릴 수 없습니다.** 갈래가 넷이라 먼저 어느 쪽인지 가릅니다. 먼저 `increase(cy_expire_refresh_failures_total[10m]) > 0` 을 봅니다 — 증가했으면 되읽기 실패이고, 배치 로그의 \"만료 대기 지표를 되읽지 못했습니다\" 가 원인을 답합니다(흔한 원인은 커넥션 풀 고갈). **ExpireNeverSucceeded 가 함께 떠 있으면 같은 사건입니다** — 만료가 아직 한 번도 성공하지 않은 것이고, 볼륨을 새로 띄운 직후가 여기입니다. 안 증가했으면 갈래가 둘입니다 — 7일 창 안에 COMPLETED 로 끝난 expireJob 이 없거나, 그 실행의 제외 목록을 Step 문맥에서 못 읽은 것입니다. BATCH_JOB_EXECUTION 조회와 배치 로그의 \"제외 목록을 Step 문맥에서 못 읽었습니다\" WARN 으로 가릅니다. 오염셋을 보고 있는 경우는 이 알림에서 구조적으로 빠집니다(cy_expire_clean_schema). **볼륨을 지우고 띄운 직후는 정상입니다** — 그 구간은 시연 절차 첫 단계의 silence 가 덮습니다."
@@ -489,7 +496,7 @@ tests:
   - interval: 1m
     name: "게이지의 기준 asOf 가 SLA 보다 낡으면 ExpireMetricsBackdated 가 뜬다"
     input_series:
-      - series: 'cy_expire_measured_at_seconds{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_measured_at_seconds{instance="batch:9092", job="batch"}'
         # -89000 이면 나이가 24시간 43분에서 시작한다. SLA(90,000) 경계를 60분 안에 넘는다.
         values: '-89000x70'
     alert_rule_test:
@@ -503,7 +510,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 대기 게이지가 너무 오래된 asOf 기준입니다"
               description: "게이지 넷이 마지막으로 성공한 만료 실행의 asOf 로 계산됩니다. 그 시각이 SLA(25시간)보다 낡았다는 것은 **그 뒤로 만료가 성공하지 못했다**는 뜻이고, 그동안 쌓인 백로그는 ExpireLeavesWorkBehind 에 안 나옵니다. BatchJobFailed 와 ExpireNotSucceeding 을 함께 봅니다 — 뒤엣것은 잡의 종료 시각 축이라 과거 asOf 실행이 성공하면 조용해질 수 있습니다. 미래 시각이면 원인은 시간대 설정입니다."
@@ -515,7 +522,7 @@ tests:
   - interval: 1m
     name: "기준 asOf 가 미래면 ExpireMetricsBackdated 가 뜬다"
     input_series:
-      - series: 'cy_expire_measured_at_seconds{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_measured_at_seconds{instance="batch:9092", job="batch"}'
         # 32,400초 = 9시간. 존이 KST 로 어긋난 전형적인 모양이다.
         values: '32400x30'
     alert_rule_test:
@@ -529,7 +536,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료 대기 게이지가 너무 오래된 asOf 기준입니다"
               description: "게이지 넷이 마지막으로 성공한 만료 실행의 asOf 로 계산됩니다. 그 시각이 SLA(25시간)보다 낡았다는 것은 **그 뒤로 만료가 성공하지 못했다**는 뜻이고, 그동안 쌓인 백로그는 ExpireLeavesWorkBehind 에 안 나옵니다. BatchJobFailed 와 ExpireNotSucceeding 을 함께 봅니다 — 뒤엣것은 잡의 종료 시각 축이라 과거 asOf 실행이 성공하면 조용해질 수 있습니다. 미래 시각이면 원인은 시간대 설정입니다."
@@ -541,10 +548,10 @@ tests:
   - interval: 1m
     name: "지금 열려야 할 회차가 SCHEDULED 로 남으면 CouponRoundsNotOpening 이 뜬다"
     input_series:
-      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         # 0 으로 시작해 3분째부터 두 회차가 밀린다 — for 5m 이 3+5=8분에 찬다.
         values: '0 0 0 2x30'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 5m
@@ -557,7 +564,7 @@ tests:
               severity: critical
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "지금 열려 있어야 하는 회차가 아직 SCHEDULED 입니다 — 그 회차는 발급이 안 됩니다"
               description: "회차 상태 전이가 5분 넘게 밀렸습니다. 발급 요청은 OPEN 일 때만 통과하므로 그 회차는 **지금 아무도 발급받을 수 없습니다.** 이 게이지는 재고 없는 회차와 창이 지난 회차를 이미 뺀 값이라 **스케줄러 쪽**입니다. **세 갈래로 가릅니다.** ① increase(cy_coupon_round_ticks_total[5m]) == 0 → 스케줄러 스레드가 막혔거나 빈이 안 뜬 것입니다. 스레드 덤프와 기동 로그를 봅니다. ② ticks 는 오르는데 increase(cy_coupon_round_select_failures_total[5m]) > 0 → **대상 조회가 죽고 있습니다.** 흔한 원인은 커넥션 풀 고갈입니다 (BATCH_DB_POOL_SIZE, 04:10~04:30 겹침). ③ ticks 는 오르고 조회도 되는데 increase(cy_coupon_round_transition_failures_total[5m]) > 0 → UPDATE 가 죽고 있습니다. 배치 로그의 \"열기 N건이 실패했습니다\" 가 대표 원인을 답니다. 셋 다 0 이면 게이지가 낡은 것입니다 — CouponRoundMetricsStale 을 봅니다."
@@ -567,9 +574,9 @@ tests:
   - interval: 1m
     name: "스케줄러를 껐으면 대기가 있어도 CouponRoundsNotOpening 이 안 뜬다"
     input_series:
-      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         values: '2x30'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -579,9 +586,9 @@ tests:
   - interval: 1m
     name: "close_at 이 지난 회차가 OPEN 으로 남으면 CouponRoundsNotClosing 이 뜬다"
     input_series:
-      - series: 'cy_coupon_round_pending_close{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_close{instance="batch:9092", job="batch"}'
         values: '1x30'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 3m
@@ -594,7 +601,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "close_at 이 지난 회차가 아직 OPEN 입니다"
               description: "마감 예정 시각이 지난 회차가 안 닫혔습니다. 재고가 남은 회차라 발급이 계속 통과합니다 — 예정보다 많이 나갈 수 있습니다. 여는 쪽(CouponRoundsNotOpening)이 함께 떠 있으면 스케줄러 자체가 안 도는 것이니 그쪽 runbook 을 따릅니다. 이것만 떠 있으면 닫기 UPDATE 가 실패하고 있는 것이고, 배치 로그의 \"닫기 N건이 실패했습니다\" 가 원인을 답니다."
@@ -604,7 +611,7 @@ tests:
   - interval: 1m
     name: "재고 행이 없어 못 여는 회차는 data 채널 warning 으로 나간다"
     input_series:
-      - series: 'cy_coupon_round_blocked_no_stock{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_blocked_no_stock{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 5m
@@ -617,7 +624,7 @@ tests:
               severity: warning
               channel: data
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "재고 행이 없어 못 여는 회차가 있습니다"
               description: "열려야 할 시각인데 coupon_stocks 에 행이 없어 스케줄러가 일부러 안 연 회차입니다. 열면 발급 경로가 그 회차에서 죽으므로 **안 여는 것이 맞습니다** — 고칠 곳은 배치가 아니라 데이터입니다. SELECT c.id FROM coupons c LEFT JOIN coupon_stocks s ON s.coupon_id = c.id WHERE c.status='SCHEDULED' AND c.open_at <= NOW() AND c.close_at > NOW() AND s.coupon_id IS NULL; 회차 생성 경로가 재고 행을 함께 넣는지 확인합니다."
@@ -625,9 +632,9 @@ tests:
   - interval: 1m
     name: "창을 통째로 놓친 회차는 30분 뒤 CouponRoundMissedWindow 로 나간다"
     input_series:
-      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="batch"}'
         values: '3x60'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '1x60'
     alert_rule_test:
       - eval_time: 20m
@@ -640,7 +647,7 @@ tests:
               severity: warning
               channel: data
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "창을 통째로 놓친 회차가 있습니다 — SCHEDULED 인데 close_at 도 지났습니다"
               description: "열릴 시각과 닫힐 시각이 둘 다 지난 채 SCHEDULED 로 남은 회차입니다. 스케줄러는 이 회차를 **열지 않습니다** — 열면 마감 시각이 지난 회차에서 발급이 나가고, 그 발급이 300만 건 정합성 검증의 입력을 오염시킵니다. SCHEDULED → CLOSED 는 전이표에 없는 길이라 자동으로 닫지도 않습니다. 부하 테스트처럼 배치를 안 띄운 구간이 있었으면 정상입니다 — 그 회차를 어떻게 할지(닫을지, 창을 옮길지) 사람이 정합니다. **스케줄러를 끈 구간은 갈래에서 뺍니다** — compose 기본이 BATCH_SCHEDULING_ENABLED=false 라, 빼지 않으면 시드가 심은 SCHEDULED 회차의 close_at 이 지나는 순간부터 이 알림이 영구 점등하고 데이터 담당은 고칠 것이 없습니다(원인이 스케줄러를 끈 것입니다)."
@@ -651,11 +658,11 @@ tests:
   - interval: 1m
     name: "되읽기가 간헐 실패하면 대기·NaN 알림은 침묵하고 Stale 이 문다"
     input_series:
-      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         values: '2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN 2 NaN'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '1x30'
-      - series: 'cy_coupon_round_refresh_failures_total{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_refresh_failures_total{instance="batch:9092", job="batch"}'
         # 2분에 한 번 실패 — 10분 창에서 증분이 3 을 넘는다.
         values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
     alert_rule_test:
@@ -672,7 +679,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 전이 대기 되읽기가 간헐 실패하고 있습니다"
               description: "게이지가 정상과 NaN 을 오가는 동안은 대기 감시도 NaN 감시도 for 를 못 채웁니다. 배치 로그의 \"회차 전이 대기 지표를 되읽지 못했습니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈입니다 — BATCH_DB_POOL_SIZE 와 04:10~04:30 겹침을 봅니다."
@@ -680,9 +687,9 @@ tests:
   - interval: 1m
     name: "게이지가 계속 NaN 이면 CouponRoundMetricsUnknown 이 뜨고 대기 알림은 안 뜬다"
     input_series:
-      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 8m
@@ -699,7 +706,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 전이 대기 지표를 못 읽고 있습니다 — CouponRoundsNotOpening 이 꺼져 있습니다"
               description: "되읽기가 실패해 게이지가 NaN 입니다. 이 동안 회차가 안 열려도 알림이 안 뜹니다. 배치 로그의 \"회차 전이 대기 지표를 되읽지 못했습니다\" 와 cy_coupon_round_refresh_failures_total 증분을 함께 봅니다. 흔한 원인은 커넥션 풀 고갈입니다."
@@ -709,11 +716,11 @@ tests:
   - interval: 1m
     name: "닫는 쪽 게이지만 NaN 이어도 CouponRoundMetricsUnknown 이 뜬다"
     input_series:
-      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         values: '0x30'
-      - series: 'cy_coupon_round_pending_close{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_close{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 8m
@@ -723,7 +730,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 전이 대기 지표를 못 읽고 있습니다 — CouponRoundsNotOpening 이 꺼져 있습니다"
               description: "되읽기가 실패해 게이지가 NaN 입니다. 이 동안 회차가 안 열려도 알림이 안 뜹니다. 배치 로그의 \"회차 전이 대기 지표를 되읽지 못했습니다\" 와 cy_coupon_round_refresh_failures_total 증분을 함께 봅니다. 흔한 원인은 커넥션 풀 고갈입니다."
@@ -732,7 +739,7 @@ tests:
   - interval: 1m
     name: "배치가 떠 있는데 게이지가 없으면 CouponRoundMetricsMissing 이 뜬다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 8m
@@ -751,7 +758,7 @@ tests:
   - interval: 1m
     name: "배치가 안 떠 있으면 게이지가 없어도 CouponRoundMetricsMissing 이 안 뜬다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 15m
@@ -763,7 +770,7 @@ tests:
   - interval: 1m
     name: "대상 조회가 반복 실패하면 CouponRoundSelectFailing 이 뜬다"
     input_series:
-      - series: 'cy_coupon_round_select_failures_total{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_select_failures_total{instance="batch:9092", job="batch"}'
         values: '0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12'
     alert_rule_test:
       - eval_time: 24m
@@ -773,7 +780,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 전이의 대상 조회가 실패하고 있습니다"
               description: "대상을 고르지 못해 그 축(열기 또는 닫기)을 건너뛰고 있습니다. 스케줄러는 돌고 있으므로 ticks 는 오르는데 전이는 하나도 안 일어납니다 — transition_failures 만 보면 0 이라 원인을 못 찾습니다. 배치 로그의 \"대상을 고르지 못해 이번 주기의 ...를 건너뜁니다\" 가 원인을 답합니다. 흔한 원인은 커넥션 풀 고갈입니다 — BATCH_DB_POOL_SIZE 와 04:10~04:30 겹침을 봅니다."
@@ -783,9 +790,9 @@ tests:
   - interval: 1m
     name: "데이터 축 게이지가 NaN 이면 CouponRoundDataMetricsUnknown 이 data 채널로 뜬다"
     input_series:
-      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
-      - series: 'cy_coupon_round_blocked_no_stock{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_blocked_no_stock{instance="batch:9092", job="batch"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
     alert_rule_test:
       - eval_time: 8m
@@ -801,7 +808,7 @@ tests:
               severity: warning
               channel: data
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 데이터 축 지표를 못 읽고 있습니다"
               description: "되읽기가 실패해 게이지가 NaN 입니다. 이 동안 CouponRoundBlockedByMissingStock 과 CouponRoundMissedWindow 가 발화 조건을 못 만듭니다 — 재고 행 없는 회차가 생겨도, 창을 놓친 회차가 쌓여도 조용합니다. 원인은 서버 축입니다(CouponRoundMetricsUnknown 과 같은 사건) — 배치 담당과 함께 봅니다."
@@ -812,9 +819,9 @@ tests:
   - interval: 1m
     name: "스케줄러를 껐으면 창을 놓친 회차가 있어도 CouponRoundMissedWindow 가 안 뜬다"
     input_series:
-      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_missed_window{instance="batch:9092", job="batch"}'
         values: '3x60'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '0x60'
     alert_rule_test:
       - eval_time: 40m
@@ -826,9 +833,9 @@ tests:
   - interval: 1m
     name: "스위치 게이지가 없으면 CouponRoundSwitchMetricMissing 이 뜨고 대기 알림은 침묵한다"
     input_series:
-      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_pending_open{instance="batch:9092", job="batch"}'
         values: '2x30'
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 20m
@@ -844,7 +851,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 전이 스위치 게이지가 없습니다 — 알림 셋이 조용히 꺼져 있습니다"
               description: "배치는 떠 있는데 cy_coupon_round_scheduling_enabled 시리즈가 없습니다. CouponRoundsNotOpening·NotClosing·MissedWindow 가 이 게이지로 끈 구간을 빼는데, 없으면 그 조인이 빈 벡터가 되어 **셋 다 발화 조건을 못 만듭니다** — 회차가 안 열려도 알림이 한 건도 안 갑니다. /actuator/prometheus 본문에서 그 이름을 직접 봅니다. 미터 이름이 바뀌었거나 CouponRoundPendingRefresher 생성자가 그 게이지 등록에 도달하지 못한 것입니다."
@@ -852,9 +859,9 @@ tests:
   - interval: 1m
     name: "스위치 게이지가 있으면 CouponRoundSwitchMetricMissing 이 안 뜬다"
     input_series:
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
         values: '0x30'
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 20m
@@ -866,11 +873,11 @@ tests:
   - interval: 1m
     name: "두 대 중 한 대만 스위치 게이지가 없어도 그 인스턴스를 지목한다"
     input_series:
-      - series: 'up{instance="batch-a:9092", job="cy-batch"}'
+      - series: 'up{instance="batch-a:9092", job="batch"}'
         values: '1x30'
-      - series: 'up{instance="batch-b:9092", job="cy-batch"}'
+      - series: 'up{instance="batch-b:9092", job="batch"}'
         values: '1x30'
-      - series: 'cy_coupon_round_scheduling_enabled{instance="batch-a:9092", job="cy-batch"}'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch-a:9092", job="batch"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 15m
@@ -880,7 +887,7 @@ tests:
               severity: warning
               channel: server
               instance: batch-b:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "회차 전이 스위치 게이지가 없습니다 — 알림 셋이 조용히 꺼져 있습니다"
               description: "배치는 떠 있는데 cy_coupon_round_scheduling_enabled 시리즈가 없습니다. CouponRoundsNotOpening·NotClosing·MissedWindow 가 이 게이지로 끈 구간을 빼는데, 없으면 그 조인이 빈 벡터가 되어 **셋 다 발화 조건을 못 만듭니다** — 회차가 안 열려도 알림이 한 건도 안 갑니다. /actuator/prometheus 본문에서 그 이름을 직접 봅니다. 미터 이름이 바뀌었거나 CouponRoundPendingRefresher 생성자가 그 게이지 등록에 도달하지 못한 것입니다."
@@ -896,9 +903,9 @@ tests:
     name: "만료가 넘긴 직후·같은 주기 안에는 조용하고, 한 주기를 헛돌면 뜬다"
     input_series:
       # 04:10 에 1000건을 넘기고 그 뒤로 평평하다 (일 1회 잡의 실제 모양)
-      - series: 'cy_expire_processed_total{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_processed_total{instance="batch:9092", job="batch"}'
         values: '0+0x59 1000+0x1700'
-      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="batch"}'
         values: '5+0x1760'
     alert_rule_test:
       # 처리 직후 — 조용해야 한다
@@ -927,7 +934,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
             exp_annotations:
               summary: "만료가 돌기는 하는데 아무것도 안 넘기고 있습니다 (남은 대기 5건)"
               description: "한 주기(26시간)를 통째로 도는 동안 넘긴 건수가 0 인데 설명 안 되는 대기가 남아 있습니다. ExpireLeavesWorkBehind 와 축이 다릅니다 — 저쪽은 **남아 있다**, 이쪽은 **줄지 않는다** 입니다. 잡이 실패 없이 도는데 진도가 안 나가는 상태를 잡습니다(리더 질의가 계속 빈 결과를 내는 경우가 그렇습니다). cy_expire_chunk_fill 이 함께 낮으면 회차 경계에 계속 걸리는 것이고, 그것이 0 이면 후보 자체를 못 읽고 있는 것입니다. **잡이 아예 안 뜬 것은 이 알림이 아닙니다** — ExpireNotSucceeding 이 집니다."
@@ -936,9 +943,9 @@ tests:
   - interval: 1m
     name: "남은 대상이 없으면 처리량 0 은 사건이 아니다"
     input_series:
-      - series: 'cy_expire_processed_total{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_processed_total{instance="batch:9092", job="batch"}'
         values: '0+0x1760'
-      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="batch"}'
         values: '0+0x1760'
     alert_rule_test:
       - eval_time: 1660m
@@ -949,7 +956,7 @@ tests:
   - interval: 1m
     name: "실패 코드가 summary 에 그대로 실린다"
     input_series:
-      - series: 'cy_expire_failures_total{instance="batch:9092", job="cy-batch", error_code="EXPIRATION-003"}'
+      - series: 'cy_expire_failures_total{instance="batch:9092", job="batch", error_code="EXPIRATION-003"}'
         values: '0+0x30 1+0x30'
     alert_rule_test:
       - eval_time: 45m
@@ -959,7 +966,7 @@ tests:
               severity: warning
               channel: server
               instance: batch:9092
-              job: cy-batch
+              job: batch
               error_code: EXPIRATION-003
             exp_annotations:
               summary: "만료가 EXPIRATION-003 로 실패했습니다"
@@ -969,7 +976,7 @@ tests:
   - interval: 1m
     name: "0 으로 등록만 된 코드는 안 울린다"
     input_series:
-      - series: 'cy_expire_failures_total{instance="batch:9092", job="cy-batch", error_code="EXPIRATION-001"}'
+      - series: 'cy_expire_failures_total{instance="batch:9092", job="batch", error_code="EXPIRATION-001"}'
         values: '0+0x90'
     alert_rule_test:
       - eval_time: 60m
@@ -981,9 +988,9 @@ tests:
   - interval: 1m
     name: "방금 배포해 시계열이 짧으면 조용하다"
     input_series:
-      - series: 'cy_expire_processed_total{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_processed_total{instance="batch:9092", job="batch"}'
         values: '0+0x200'
-      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_expire_unexplained_pending{instance="batch:9092", job="batch"}'
         values: '5+0x200'
     alert_rule_test:
       - eval_time: 85m
@@ -998,9 +1005,9 @@ tests:
   - interval: 1m
     name: "거절이 켜져 있으면 인덱스 알림이 안 운다"
     input_series:
-      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="batch"}'
         values: '2+0x30'
-      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1010,9 +1017,9 @@ tests:
   - interval: 1m
     name: "끄고 띄웠고 인덱스가 없으면 운다"
     input_series:
-      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1022,7 +1029,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "배치 메타 인덱스가 없는 채로 떠 있습니다 — 거절을 꺼 뒀습니다"
               description: >-
@@ -1032,9 +1039,9 @@ tests:
   - interval: 1m
     name: "꺼져 있어도 인덱스가 다 있으면 조용하다"
     input_series:
-      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_schema_index_missing{instance="batch:9092", job="batch"}'
         values: '0+0x30'
-      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_schema_index_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1044,7 +1051,7 @@ tests:
   - interval: 1m
     name: "검사를 통과했으면 JDBC 알림이 안 운다"
     input_series:
-      - series: 'cy_batch_jdbc_timeout_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_jdbc_timeout_verified{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1054,7 +1061,7 @@ tests:
   - interval: 1m
     name: "검사를 못 지났으면 운다"
     input_series:
-      - series: 'cy_batch_jdbc_timeout_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_jdbc_timeout_verified{instance="batch:9092", job="batch"}'
         values: '0+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1064,7 +1071,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "JDBC 타임아웃 검사를 못 지난 채 떠 있습니다"
               description: >-
@@ -1073,9 +1080,9 @@ tests:
   - interval: 1m
     name: "존이 UTC 면 안 운다"
     input_series:
-      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1086,9 +1093,9 @@ tests:
   - interval: 1m
     name: "거절이 켜져 있으면 안 운다"
     input_series:
-      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="batch"}'
         values: '0+0x30'
-      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1098,9 +1105,9 @@ tests:
   - interval: 1m
     name: "끄고 띄웠고 존이 UTC 가 아니면 운다"
     input_series:
-      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="batch"}'
         values: '0+0x30'
-      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1110,7 +1117,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "JVM 기본 존이 UTC 가 아닌 채로 떠 있습니다"
               description: >-
@@ -1120,11 +1127,11 @@ tests:
   - interval: 1m
     name: "게이지가 둘 다 있으면 부재 알림은 안 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1139,9 +1146,9 @@ tests:
   - interval: 1m
     name: "검증 게이지만 없어도 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1151,7 +1158,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "JVM 기본 존 게이지가 없습니다 — BatchDefaultZoneNotUtc 가 조용히 꺼져 있습니다"
               description: >-
@@ -1162,9 +1169,9 @@ tests:
   - interval: 1m
     name: "강제 게이지만 없어도 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1174,7 +1181,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "JVM 기본 존 게이지가 없습니다 — BatchDefaultZoneNotUtc 가 조용히 꺼져 있습니다"
               description: >-
@@ -1184,7 +1191,7 @@ tests:
   - interval: 1m
     name: "둘 다 없으면 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1194,7 +1201,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "JVM 기본 존 게이지가 없습니다 — BatchDefaultZoneNotUtc 가 조용히 꺼져 있습니다"
               description: >-
@@ -1204,13 +1211,13 @@ tests:
   - interval: 1m
     name: "두 대 중 한 대만 게이지가 없으면 그 인스턴스를 지목한다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'up{instance="batch2:9092", job="cy-batch"}'
+      - series: 'up{instance="batch2:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_default_zone_verified{instance="batch:9092", job="batch"}'
         values: '1+0x30'
-      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_timezone_enforcement{instance="batch:9092", job="batch"}'
         values: '1+0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -1220,7 +1227,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch2:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "JVM 기본 존 게이지가 없습니다 — BatchDefaultZoneNotUtc 가 조용히 꺼져 있습니다"
               description: >-
@@ -1231,9 +1238,9 @@ tests:
   - interval: 1m
     name: "포트를 안 내보냈으면 관문이 꺼져 있어도 안 운다"
     input_series:
-      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="batch"}'
         values: '0+0x40'
-      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x40'
     alert_rule_test:
       - eval_time: 30m
@@ -1244,9 +1251,9 @@ tests:
   - interval: 1m
     name: "포트를 열었어도 관문이 켜져 있으면 안 운다"
     input_series:
-      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="batch"}'
         values: '1+0x40'
-      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="batch"}'
         values: '1+0x40'
     alert_rule_test:
       - eval_time: 30m
@@ -1257,9 +1264,9 @@ tests:
   - interval: 1m
     name: "열린 채 꺼진 지 15분 전에는 안 운다"
     input_series:
-      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="batch"}'
         values: '1+0x40'
-      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x40'
     alert_rule_test:
       - eval_time: 14m
@@ -1270,9 +1277,9 @@ tests:
   - interval: 1m
     name: "열린 채 꺼진 채로 15분이 지나면 운다"
     input_series:
-      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="batch"}'
         values: '1+0x40'
-      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -1282,7 +1289,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "포트가 열린 채 관리자 API 토큰 관문이 꺼져 있습니다"
               description: >-
@@ -1292,11 +1299,11 @@ tests:
   - interval: 1m
     name: "관문 게이지가 둘 다 있으면 부재 알림은 안 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x40'
-      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="batch"}'
         values: '0+0x40'
-      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="batch"}'
         values: '1+0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -1307,9 +1314,9 @@ tests:
   - interval: 1m
     name: "관문 게이지만 없어도 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x40'
-      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_port_exposed{instance="batch:9092", job="batch"}'
         values: '1+0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -1319,7 +1326,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
               description: >-
@@ -1329,9 +1336,9 @@ tests:
   - interval: 1m
     name: "노출 게이지만 없어도 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x40'
-      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="cy-batch"}'
+      - series: 'cy_batch_admin_auth_enforcement{instance="batch:9092", job="batch"}'
         values: '0+0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -1341,7 +1348,7 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
               description: >-
@@ -1351,7 +1358,7 @@ tests:
   - interval: 1m
     name: "관문 게이지가 둘 다 없으면 운다"
     input_series:
-      - series: 'up{instance="batch:9092", job="cy-batch"}'
+      - series: 'up{instance="batch:9092", job="batch"}'
         values: '1+0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -1361,9 +1368,54 @@ tests:
               severity: warning
               channel: server
               instance: "batch:9092"
-              job: "cy-batch"
+              job: "batch"
             exp_annotations:
               summary: "관리자 API 관문 게이지가 없습니다 — BatchAdminAuthDisabled 가 조용히 꺼져 있습니다"
               description: >-
                 배치는 떠 있는데 cy_batch_admin_auth_enforcement 또는 cy_batch_admin_port_exposed 시리즈가 없습니다. BatchAdminAuthDisabled 가 둘을 and 로 묶으므로 **포트가 열린 채 관문이 꺼져 있어도 알림이 한 건도 안 갑니다**. 둘은 같은 @Bean 에서 나오므로, 없다는 것은 AdminTokenConfig 가 컴포넌트 스캔 밖으로 나갔다는 뜻일 수 있습니다 — 그러면 관문 자체도 없습니다. /actuator/prometheus 본문에서 두 이름을 직접 봅니다.
 
+  # ── CY-744 ─────────────────────────────────────────────────────────────────
+  # 2026-08-29 에 실제로 일어난 일을 잠근다: 스케줄러가 꺼진 채 25시간이 지나
+  # critical 둘 + warning 하나가 함께 울었고 안내문 세 벌의 정답이 전부 같은 한 줄이었다.
+  # 이제 **하나만** 울어야 한다.
+  - interval: 1m
+    name: "스케줄러가 꺼진 채 하루가 지나면 BatchSchedulingDisabled 하나만 운다"
+    input_series:
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9092", job="batch"}'
+        values: '0x1600'
+      # 마지막 성공이 25시간을 넘겼다 — 스케줄러가 켜져 있었다면 SLA 알림이 울 조건이다.
+      - series: 'cy_batch_last_success_seconds{spring_batch_job_name="expireJob", instance="batch:9092", job="batch"}'
+        values: '-95000x1600'
+      - series: 'cy_verify_last_success_seconds{dataset="CLEAN", scope="FULL", instance="batch:9092", job="batch"}'
+        values: '-95000x1600'
+    alert_rule_test:
+      # for(25h) 를 아직 못 채웠다 — 부하 측정으로 잠깐 끄는 구간은 안 운다.
+      - eval_time: 23h
+        alertname: BatchSchedulingDisabled
+        exp_alerts: []
+      # SLA 를 넘긴 상태인데도 두 알림이 조용하다. 원인이 하나로 확정된 상황이라
+      # 사람에게 갈래 셋을 뒤지라고 시키지 않는다.
+      - eval_time: 23h
+        alertname: ExpireNotSucceeding
+        exp_alerts: []
+      - eval_time: 23h
+        alertname: VerifyNotSucceeding
+        exp_alerts: []
+      # 25시간을 넘기면 이것 하나가 운다.
+      - eval_time: 25h5m
+        alertname: BatchSchedulingDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              instance: batch:9092
+              job: batch
+            exp_annotations:
+              summary: "배치 스케줄러가 하루 넘게 꺼져 있습니다 — 만료·검증·정리가 한 번도 안 돕니다"
+              description: "batch.scheduling.enabled 가 false 로 떠 있습니다. 크론 슬롯(만료·검증·정리·회차 전이)이 **하나도 발화하지 않으므로** 재고가 안 돌아오고 게이트 판정도 갱신되지 않습니다. 부하 측정 회차 때문에 일부러 껐다면 회차가 끝난 뒤 되돌리십시오 — 그 구간이 25시간을 넘긴 것 자체가 이상입니다. 컨테이너 환경변수 BATCH_SCHEDULING_ENABLED 를 봅니다. batch.yml 의 기본값이 **false** 이므로 .env 에 true 를 안 적으면 꺼진 채로 뜹니다 — .env.example 은 true 이고, 그 둘이 갈리면 이 상태가 됩니다. 켠 뒤에는 다음 슬롯부터 돕니다. 밀린 만료는 한 번에 따라잡히지만 검증은 asOf 슬롯마다 한 건이라 건너뛴 회차는 안 되돌아옵니다."
+      - eval_time: 25h5m
+        alertname: ExpireNotSucceeding
+        exp_alerts: []
+      - eval_time: 25h5m
+        alertname: VerifyNotSucceeding
+        exp_alerts: []

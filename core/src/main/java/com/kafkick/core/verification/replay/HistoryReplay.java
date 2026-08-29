@@ -6,8 +6,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
-import com.kafkick.core.coupon.CouponStateMachine;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.CouponStateMachine;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * <b>상태는 {@code created_at <= asOf} 인 이력을 {@code (created_at, id)} 오름차순으로 정렬한
@@ -70,19 +70,27 @@ public final class HistoryReplay {
      *
      * <p>전이표를 먼저 봅니다. 추적 상태가 진실이므로 그것으로 판정한 결과가 더 확실합니다.
      * 전이가 합법일 때만 from_status 위조를 따로 확인합니다.
+     *
+     * <p><b>{@code isLegal} 로 묻는다 — 한 사건의 결과가 하나라고 보면 안 된다.</b>
+     * {@code CANCEL_USE} 는 <b>결과가 둘</b>이다: 아직 안 만료면 {@code ISSUED} 로, 이미
+     * 만료됐으면 {@code EXPIRED} 로 간다({@code CouponStateMachine.cancelUse}). 예전에는
+     * 이 자리가 {@code (from, event) → to} 1:1 맵을 보고 <b>기대값 하나</b>와 비교했는데,
+     * 그 표에는 {@code ISSUED} 만 있었다 — 만료된 쿠폰의 사용 취소가 실제로 일어나면
+     * <b>정상 이력이 통째로 ILLEGAL_TRANSITION 오탐</b>이 되어 정상셋 0건 게이트가 깨진다.
+     * 사용·취소 경로({@code CouponCancelUseService})가 그 갈래를 타므로 도달 가능하다.
+     *
+     * <p>대신 <b>기대값을 한 값으로 못 적는다.</b> 그래서 expected 자리에 <b>사건 이름</b>을
+     * 넣어 <i>"이 사건으로는 그 상태에 갈 수 없다"</i> 를 말한다.
      */
     private static Optional<IllegalTransition> inspect(
             IssuanceStatus tracked,
             IssuanceHistoryRecord history
     ) {
-        Optional<IssuanceStatus> allowed = CouponStateMachine.next(tracked, history.eventType());
-
-        if (allowed.isEmpty() || allowed.get() != history.toStatus()) {
+        if (!CouponStateMachine.isLegal(tracked, history.eventType(), history.toStatus())) {
             return Optional.of(IllegalTransition.notInTable(
                     history.id(),
                     tracked,
                     history.eventType(),
-                    allowed.orElse(null),
                     history.toStatus()));
         }
 

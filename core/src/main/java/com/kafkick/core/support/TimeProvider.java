@@ -5,9 +5,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-import org.springframework.stereotype.Component;
-
-@Component
 public class TimeProvider {
 
     private final Clock clock;

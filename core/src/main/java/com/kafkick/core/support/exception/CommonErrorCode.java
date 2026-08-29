@@ -7,6 +7,7 @@ public enum CommonErrorCode implements ErrorCode {
     NOT_FOUND(404, "COMMON-002", "요청한 리소스를 찾을 수 없습니다."),
     METHOD_NOT_ALLOWED(405, "COMMON-003", "지원하지 않는 요청 방식입니다."),
     INTERNAL_ERROR(500, "COMMON-004", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."),
+    FORBIDDEN(403, "COMMON-005", "접근 권한이 없습니다."),
 
     /**
      * 관리자 API 토큰 관문이 막았다(CY-742). <b>도메인이 아니라 여기 있는 이유</b>는 그 관문이
@@ -16,8 +17,12 @@ public enum CommonErrorCode implements ErrorCode {
      *
      * <p><b>메시지는 어느 쪽으로 틀렸는지 안 가른다</b> — 없는 것과 틀린 것을 가르면 그 자체가
      * 힌트가 된다. 그 구분은 로그에만 남는다.
+     *
+     * <p>⚠️ <b>번호가 005 에서 006 으로 밀렸다.</b> main 이 같은 날 {@code COMMON-005} 를
+     * {@code FORBIDDEN} 으로 쓰고 있었다 — 에러코드는 클라이언트와의 계약이라 배포된 쪽이
+     * 번호를 지킨다. 이 코드를 문서·알림 규칙에 박아 둔 자리가 있으면 함께 고쳐야 한다.
      */
-    UNAUTHORIZED(401, "COMMON-005", "관리자 토큰이 필요합니다.");
+    UNAUTHORIZED(401, "COMMON-006", "관리자 토큰이 필요합니다.");
 
     private final int status;
     private final String code;

@@ -11,8 +11,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.kafkick.core.coupon.CouponStatus;
-import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.port.CouponRoundTransitionRepository;
 
 /**
  * <b>JPA 를 안 쓴다.</b> 하는 일이 조건부 {@code UPDATE} 의 매치 건수를 보는 것뿐이라
@@ -20,7 +20,7 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
  * 조건부 갱신의 원자성이 사라진다. {@code repository/} 에 두는 것은 README 가 그 패키지를
  * <i>"JpaRepository + core port 구현체"</i> 로 정의하기 때문이다.
  *
- * <p><b>SQL 리터럴을 {@link CouponStatus} 에서 뽑는다.</b> {@code WHERE}·{@code SET} 에 들어가는
+ * <p><b>SQL 리터럴을 {@link CouponRoundStatus} 에서 뽑는다.</b> {@code WHERE}·{@code SET} 에 들어가는
  * 값이라 바인딩할 자리가 아니지만, 문자열을 손으로 적으면 열거형과 <b>코드로 이어지지 않는다</b> —
  * 그 상태에서 열거형은 죽은 코드이고, 이름을 바꾸면 여기가 조용히 안 맞는다.
  *
@@ -39,7 +39,7 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
  * </ul>
  */
 @Repository
-public class CouponRoundJdbcAdapter implements CouponRoundRepository {
+public class CouponRoundJdbcAdapter implements CouponRoundTransitionRepository {
 
     /**
      * <b>재고 행을 {@code EXISTS} 로 확인한다.</b> ⚠️ FK 는 <b>있다</b>
@@ -65,7 +65,7 @@ public class CouponRoundJdbcAdapter implements CouponRoundRepository {
                AND c.close_at > :now
                AND EXISTS (SELECT 1 FROM coupon_stocks s WHERE s.coupon_id = c.id)
              ORDER BY c.id
-            """.formatted(CouponStatus.SCHEDULED);
+            """.formatted(CouponRoundStatus.SCHEDULED);
 
     private static final String ROUNDS_TO_CLOSE = """
             SELECT id
@@ -73,7 +73,7 @@ public class CouponRoundJdbcAdapter implements CouponRoundRepository {
              WHERE status = '%s'
                AND close_at <= :now
              ORDER BY id
-            """.formatted(CouponStatus.OPEN);
+            """.formatted(CouponRoundStatus.OPEN);
 
     /**
      * <b>{@code close_at} 을 손대지 않는다.</b> {@code SET} 절에 {@code status} 하나만 있는
@@ -86,7 +86,7 @@ public class CouponRoundJdbcAdapter implements CouponRoundRepository {
     private static final String OPEN_ROUND = """
             UPDATE coupons SET status = '%s'
              WHERE id = :couponId AND status = '%s' AND close_at > :now
-            """.formatted(CouponStatus.OPEN, CouponStatus.SCHEDULED);
+            """.formatted(CouponRoundStatus.OPEN, CouponRoundStatus.SCHEDULED);
 
     /**
      * <b>여는 문장과 같은 계약이다 — 가드 하나만 봐도 안전해야 한다.</b> 조회가 이미
@@ -99,7 +99,7 @@ public class CouponRoundJdbcAdapter implements CouponRoundRepository {
     private static final String CLOSE_ROUND = """
             UPDATE coupons SET status = '%s'
              WHERE id = :couponId AND status = '%s' AND close_at <= :now
-            """.formatted(CouponStatus.CLOSED, CouponStatus.OPEN);
+            """.formatted(CouponRoundStatus.CLOSED, CouponRoundStatus.OPEN);
 
     /**
      * <b>넷을 한 문장으로 센다.</b> 문장을 나누면 {@code READ COMMITTED} 에서 문장마다
@@ -122,7 +122,7 @@ public class CouponRoundJdbcAdapter implements CouponRoundRepository {
                            AND NOT EXISTS (SELECT 1 FROM coupon_stocks s
                                             WHERE s.coupon_id = c.id)), 0) AS blocked_no_stock
             FROM coupons c
-            """.formatted(CouponStatus.SCHEDULED, CouponStatus.OPEN);
+            """.formatted(CouponRoundStatus.SCHEDULED, CouponRoundStatus.OPEN);
 
     private final JdbcClient jdbcClient;
 

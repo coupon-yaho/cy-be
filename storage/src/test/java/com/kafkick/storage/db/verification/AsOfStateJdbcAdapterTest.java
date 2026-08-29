@@ -13,7 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationRun;
@@ -163,16 +163,29 @@ class AsOfStateJdbcAdapterTest {
         assertThat(activeUsageCount(issuanceId)).isZero();
     }
 
+    /**
+     * <b>CLEAN 스키마에서는 심을 수가 없다(CY-744).</b> main 의 {@code V8} 이
+     * {@code uk_issuance_usages_active} 로 <i>"발급건 하나에 활성 사용은 하나"</i> 를
+     * DB 에서 막는다 — 그게 정확히 V5(DOUBLE_USE)가 검출하는 오염이라, 이제
+     * <b>정상셋에서는 구조적으로 못 생긴다.</b>
+     *
+     * <p>그래서 세는 로직은 <b>취소된 사용을 섞어</b> 잰다 — 활성 하나 + 취소 하나를 심고
+     * 활성만 세는지 본다. 여럿을 세는 갈래는 CORRUPT 스키마의 몫이고,
+     * {@code V9999999999__drop_clean_only_constraints.sql} 이 그 제약을 뗀다.
+     *
+     * <p>⚠️ 이 변화는 <b>V5 규칙을 지우는 근거가 아니다.</b> 오염셋은 제약 없이 만들어지고,
+     * 운영 DB 도 그 제약이 생기기 전 행을 갖고 있을 수 있다. 규칙은 그대로 둔다.
+     */
     @Test
-    @DisplayName("활성 사용이 여럿이면 그만큼 센다 — V5 가 이 숫자로 이중 사용을 잡는다")
-    void countMultipleActiveUsages() {
+    @DisplayName("취소된 사용은 안 세고 활성만 센다 — CLEAN 은 활성 둘을 아예 못 만든다")
+    void countOnlyActiveUsages() {
         long issuanceId = seededState(IssuanceStatus.USED);
-        data.usage(issuanceId, AS_OF.minusHours(3), null);
+        data.usage(issuanceId, AS_OF.minusHours(3), AS_OF.minusHours(2));
         data.usage(issuanceId, AS_OF.minusHours(2), null);
 
         adapter.applyActiveUsageCounts(runId, AS_OF);
 
-        assertThat(activeUsageCount(issuanceId)).isEqualTo(2);
+        assertThat(activeUsageCount(issuanceId)).isEqualTo(1);
     }
 
     @Test

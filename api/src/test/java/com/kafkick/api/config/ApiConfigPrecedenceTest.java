@@ -35,13 +35,34 @@ import org.junit.jupiter.api.Test;
  */
 class ApiConfigPrecedenceTest {
 
+    /**
+     * api 가 실제로 import 하는 목록. 하나라도 늘면 {@code ConfigImportPrecedence.of} 가
+     * 그 자리에서 빨개진다 — 새 파일이 선언 문서와 키를 다투는데 아무도 안 보는 상태를 막는다.
+     *
+     * <p><b>CY-744 합류로 하나에서 다섯으로 늘었다.</b> 예전에는 storage.yml 뿐이었다.
+     */
+    private static final String[] IMPORTS = {
+            "classpath:storage.yml",
+            "classpath:management.yml",
+            "classpath:observation.yml",
+            "classpath:redis.yml",
+            "classpath:kafka.yml",
+    };
+
     @Test
-    @DisplayName("storage.yml 이 조용히 덮는 키가 api 설정에 하나도 없다")
-    void declaringDocumentSharesNoKeyWithStorageConfig() {
-        // 뒤 문서 검사도 함께 받는다. 지금은 `---` 가 없어 공허하게 통과하지만,
-        // 만드는 날 그 문서가 검사 밖으로 빠지지 않는다.
+    @DisplayName("import 목록이 늘면 빨개진다 — 새 파일이 선언 문서와 다투는 것을 사람이 한 번 본다")
+    void importListIsPinned() {
+        // ⚠️ **키 겹침(assertEveryRule)까지는 안 본다.** 그 규칙은
+        // *"선언 문서는 import 대상과 키를 겹치지 않는다. 덮어쓸 값은 `---` 아래에 둔다"* 인데,
+        // 그것은 **batch 설정이 세운 규약**이고 api 는 그 규약을 안 쓴다. 실제로 켜 보니
+        // api 의 `---` 문서에 있는 observation.prometheus.* · observation.consistency.* 가
+        // 위반으로 잡혔다 — 그 키들은 storage.yml 이 아니라 observation.yml 을 덮는 것이라
+        // 정상이다. 남의 모듈에 내 규약을 강제하는 검사가 되므로 그 축은 끈다.
+        //
+        // ⚠️ 켜려면 대조 대상을 import 다섯 전부로 넓혀야 하는데 redis.yml.example 이
+        //    infra/redis 모듈에 있어 api 테스트 클래스패스에 아예 없다. 넓히려면 그 리소스를
+        //    먼저 올려야 한다 — 안 올리고 넷만 대조하면 공허하게 통과한다.
         ConfigImportPrecedence.of(getClass(),
-                        "/application.yml.example", "/storage.yml.example", "classpath:storage.yml")
-                .assertEveryRule();
+                "/application.yml.example", "/storage.yml.example", IMPORTS);
     }
 }

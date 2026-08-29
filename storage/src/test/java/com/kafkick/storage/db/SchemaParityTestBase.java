@@ -95,6 +95,32 @@ abstract class SchemaParityTestBase {
             "BATCH_STEP_EXECUTION_SEQ",
             "flyway_schema_history");
 
+    /**
+     * <b>시드가 만들 이유가 없는 표들</b>(CY-744 합류로 들어왔다).
+     *
+     * <p>이 검사가 지키는 것은 <i>"검증이 읽는 데이터셋의 모양이 두 저장소에서 같은가"</i> 다.
+     * 아래 아홉은 <b>관측·부하측정·관리 화면</b>의 표라 시드 데이터셋에 속하지 않는다 —
+     * 시드는 발급·이력·재고·판정만 만든다({@code cy-seed/ddl}). 그래서 대조에서 뺀다.
+     *
+     * <p><b>접두사가 아니라 이름 집합인 이유는 위 {@link #BATCH_METADATA} 와 같다.</b>
+     * {@code analytics_*} 로 거르면 나중에 {@code analytics} 로 시작하는 검증 표가 생겼을 때
+     * 네 축에서 통째로 사라져, cy-be 에만 있는 표가 있는데도 초록이 된다.
+     *
+     * <p>⚠️ <b>여기 이름을 더하는 것은 "시드가 안 만든다" 를 선언하는 것이다.</b> 검증이
+     * 읽는 표를 실수로 넣으면 그 표의 스키마 드리프트를 아무도 못 본다 — 더하기 전에
+     * 그 표를 {@code cy-seed/ddl} 이 만들어야 하는지부터 판단해라.
+     */
+    static final Set<String> OUTSIDE_SEED_DATASET = Set.of(
+            // 브랜드 분석 집계(CY-674) — 관리 화면이 읽는다
+            "analytics_runs", "analytics_daily_issues", "analytics_hourly_issues",
+            "analytics_issuance_statuses",
+            // 부하 측정 회차와 그 시계열·정합성 판정(CY-560)
+            "benchmark_runs", "run_timeseries", "consistency_finals",
+            // 발급 시도 이력 — Kafka consumer 가 적재한다(OBS-15)
+            "issue_attempts",
+            // 회차 생성 스케줄러의 싱글턴 가드
+            "coupon_round_schedule_guard");
+
     @Autowired
     private JdbcClient jdbcClient;
 
@@ -336,7 +362,10 @@ abstract class SchemaParityTestBase {
                          ORDER BY kcu.table_name, kcu.column_name, kcu.ordinal_position
                         """)
                 .param(schema)
+                // rowsToMap 을 안 지나는 유일한 축이라 제외 둘을 여기서도 적용한다.
+                // 하나만 빼면 관측·부하측정 표의 FK 가 이 축에서만 살아남는다(실측: 8건).
                 .query((rs, rowNum) -> BATCH_METADATA.contains(rs.getString("t"))
+                        || OUTSIDE_SEED_DATASET.contains(rs.getString("t"))
                         ? null : rs.getString("v"))
                 .list().stream().filter(java.util.Objects::nonNull).toList();
     }
@@ -391,7 +420,8 @@ abstract class SchemaParityTestBase {
     private Map<String, String> rowsToMap(String schema, String sql) {
         Map<String, String> out = new LinkedHashMap<>();
         jdbcClient.sql(sql).param(schema).query((rs, rowNum) -> {
-            if (!BATCH_METADATA.contains(rs.getString("t"))) {
+            String table = rs.getString("t");
+            if (!BATCH_METADATA.contains(table) && !OUTSIDE_SEED_DATASET.contains(table)) {
                 out.put(rs.getString("k"), rs.getString("v"));
             }
             return null;

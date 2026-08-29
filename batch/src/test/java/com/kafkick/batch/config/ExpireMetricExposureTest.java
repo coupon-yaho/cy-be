@@ -30,7 +30,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.job.ExpirationProxies;
 import com.kafkick.batch.schedule.CronSlot;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 

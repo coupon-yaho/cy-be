@@ -37,15 +37,22 @@ CREATE TABLE coupon_templates (
   max_discount_amount   int,
   discount_amount       int,
   data_grant_mb         int,
-  min_order_amount      int,
+  -- min_order_amount 는 없다 — V2__drop_coupon_template_min_order_amount.sql 이 뺐다(주문 도메인 없음).
   valid_days            int          NOT NULL,
-  nth_week              tinyint,
-  day_of_week           varchar(3),
-  start_time            time,
-  duration_hours        int,
+  -- 일정 넷은 NOT NULL 이다 — V13__require_coupon_template_schedule.sql.
+  nth_week              tinyint      NOT NULL,
+  day_of_week           varchar(3)   NOT NULL,
+  start_time            time         NOT NULL,
+  duration_hours        int          NOT NULL,
   stock_per_occurrence  int          NOT NULL,
   eligible_grades_mask  tinyint      NOT NULL,
   active                boolean      NOT NULL DEFAULT true,
+  -- 감사 컬럼 — V14__add_coupon_template_audit_columns.sql.
+  -- 기본값 표현까지 같아야 한다. 그 마이그레이션이 DEFAULT CURRENT_TIMESTAMP(6) 와
+  -- ON UPDATE 를 함께 걸므로 여기서도 같이 적는다 — 안 적으면 파리티가 그 자리를 잡는다.
+  created_at            datetime(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at            datetime(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                                     ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
 
@@ -65,6 +72,8 @@ CREATE TABLE coupons (
   open_at               datetime     NOT NULL,
   close_at              datetime     NOT NULL,
   status                varchar(20)  NOT NULL COMMENT 'SCHEDULED / OPEN / CLOSED',
+  -- 회차 생성 작업의 기준 시각 — V4__add_coupon_round_generated_at.sql.
+  generated_at          datetime(6)  NOT NULL,
   created_at            datetime(6)  NOT NULL,
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
@@ -86,6 +95,8 @@ CREATE TABLE issuances (
   status        varchar(12) NOT NULL COMMENT 'ISSUED / USED / CANCELLED / EXPIRED',
   issued_at     datetime(6) NOT NULL,
   expires_at    datetime(6) NOT NULL COMMENT '만료 판정의 유일한 기준',
+  -- 도메인 발급시각과 감사시각을 가른다 — V5__separate_issuance_audit_created_at.sql.
+  created_at    datetime(6) NOT NULL,
   updated_at    datetime(6) NOT NULL,
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
@@ -105,17 +116,23 @@ CREATE TABLE issuance_histories (
 CREATE TABLE issuance_usages (
   id               bigint   NOT NULL AUTO_INCREMENT,
   issuance_id      bigint   NOT NULL,
-  order_id         bigint,
+  order_id         bigint      NOT NULL,
   discount_amount  int      NOT NULL,
   used_at          datetime(6) NOT NULL,
   canceled_at      datetime(6),
+  -- 사용 실적 감사 시각 — V7__strengthen_coupon_use_idempotency.sql.
+  created_at       datetime(6) NOT NULL,
+  -- 활성 사용 하나만 허용하기 위한 생성 컬럼 — V8__add_issuance_usage_uniqueness.sql.
+  active_issuance_id bigint GENERATED ALWAYS AS (
+      CASE WHEN canceled_at IS NULL THEN issuance_id ELSE NULL END) STORED,
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
 
 CREATE TABLE idempotency_records (
   idem_key      varchar(36) NOT NULL,
-  member_id     bigint      NOT NULL,
-  issuance_id   bigint      NOT NULL,
+  -- 처리 중인 멱등 레코드는 대상 검증 전에 만들어진다 — V6__allow_in_progress_idempotency_target.sql.
+  member_id     bigint,
+  issuance_id   bigint,
   request_hash  char(64)    NOT NULL,
   status        varchar(12) NOT NULL COMMENT 'IN_PROGRESS / DONE',
   response_body text,

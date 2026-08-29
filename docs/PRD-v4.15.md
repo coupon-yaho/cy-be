@@ -56,7 +56,7 @@ Java 21 · Spring Boot 3.x
 
 동시성·정합성에 독립 배점이 없습니다. 우리가 가장 공들이는 영역은 기술성 30점에 흡수됩니다. 그래서 브랜드 데이·등급·통계로 창의성 20점과 프론트 10점을 따로 채웁니다.
 
-등급 제한은 동시성 난이도를 올리지 않습니다. 같은 등급이 수십만 명이면 원래 문제와 같은 문제입니다. 넣는 이유는 기술이 아니라 도메인 현실성입니다. 그래서 JWT 클레임으로 처리해 발급 경로에 부하를 주지 않습니다.
+등급 제한은 동시성 난이도를 올리지 않습니다. 같은 등급이 수십만 명이면 원래 문제와 같은 문제입니다. 넣는 이유는 기술이 아니라 도메인 현실성입니다. 그래서 요청 헤더의 등급으로 처리해 발급 경로에 부하를 주지 않습니다.
 
 ## 과제 필수 요건
 
@@ -110,9 +110,9 @@ Must 10 / Should 9 / Could 2. 잘라야 할 때는 Could부터, 그다음 Should
 
 | Must | k6 부하 테스트 · PII 마스킹 · 외부 Mocking | 과제 필수 |
 
-| Must | 등급 자격 검증 (JWT 클레임) | 창의성 20점. 동시성 영향 없음 |
+| Must | 등급 자격 검증 (요청 헤더) | 창의성 20점. 동시성 영향 없음 |
 ``````````
-| Must | 보안 필수 6건 — 관리 포트 분리 + role: ADMIN · Entry-Token 1회성 · alg 고정 · .gitignore · actuator 최소화 · 에러·로그 마스킹 | 합쳐 약 0.5일. /actuator/env가 AES 키를 노출하는 등 실제 구멍 |
+| Must | 보안 필수 — 관리 포트 분리 · Entry-Token 1회성 · .gitignore · actuator 최소화 · 에러·로그 마스킹 | /actuator/env가 AES 키를 노출하는 등 실제 구멍. 관리자 인증은 별도 후속 작업 |
 
 | Should | v3 Kafka · 대시보드 14차트 · 오염셋 700건 · 스케줄러 · 통계 · 워밍업 · 대기열 3모드 · 측정 3조합 · Chaos 1종 | 차별화와 배점 |
 
@@ -208,10 +208,11 @@ UNIQUE(template_id, open_at) -- 스케줄러 중복 실행 방어
 
 동시성에 부하를 주지 않는 이유
 
-사전 발급 JWT 클레임에 등급을 담아두므로 DB 조회가 없습니다. 검증은 락 밖에서 문자열 비교 한 번으로 끝납니다.
+요청의 `X-User-Grade` 헤더로 등급을 받으므로 DB 조회가 없습니다. 검증은 락 밖에서 문자열 비교 한 번으로 끝납니다.
 
 ```
-{ "sub": "u_812934", "grade": "GOLD", "exp": 1799999999 }
+X-User-Id: 812934
+X-User-Grade: GOLD
 ```
 
 ## 쿠폰 상태 모델
@@ -617,7 +618,10 @@ Redis를 죽이면 v1만 살아남는다
 
 ## API
 
-공통 헤더 `Authorization: Bearer <사전 발급 HS256 JWT>` · 상태 변경은 `Idempotency-Key`
+공통 헤더 `X-User-Id` · `X-User-Grade` · 상태 변경은 `Idempotency-Key`
+`X-User-Role`을 포함한 요청 헤더는 데모의 사용자·등급·역할 구분 값이며 인증 수단이 아니다.
+현재 `X-User-Role: ADMIN` 검사는 테스트·화면 계약일 뿐이고 관리자 접근을 보호하지 않는다.
+실제 인증 또는 외부 헤더를 제거·주입하는 신뢰된 게이트웨이 경계는 후속 작업이다.
 
 | Method | Path | 설명 |
 
@@ -642,7 +646,7 @@ Redis를 죽이면 v1만 살아남는다
 ``````
 | CRUD | /api/v1/admin/brands · /schedules · /campaigns | 관리자 화면 |
 ``
-| POST | /api/v1/admin/verify | 검증 배치 실행. body `{asOf?, dataset, scope, fromTs?}` → **202 + runId** |
+| POST | /api/v1/admin/verify | 검증 배치 실행. 브라우저는 JSON body `{asOf, dataset, scope}`를 API에 보내고 API가 같은 명령을 내부 Batch 9091 트리거에 전달. `asOf` query parameter는 사용하지 않음 → **202 + runId** |
 ``
 | GET | /api/v1/admin/verify/runs/{runId} | 검증 결과 조회. 개발 중 리포트의 실체 |
 ``
@@ -1276,7 +1280,7 @@ Q&A는 별도. 합계 20분을 절대 초과할 수 없습니다. 여유가 0이
 
 | v3에서 성공을 알렸는데 DB 저장이 실패하면? | Redis 선점이 발급 확정이며 Kafka가 재처리·DLQ로 최종 영속 보장. 불변식은 백로그 소진 후 DB 기준 |
 
-| 등급 제한이 동시성에 무슨 의미가 있나요? | 의미 없습니다. 같은 등급이 수십만 명이면 원래 문제와 같은 문제입니다. 등급은 도메인 현실성을 위한 것이고, 그래서 JWT 클레임으로 처리해 발급 경로에 부하를 주지 않았습니다 |
+| 등급 제한이 동시성에 무슨 의미가 있나요? | 의미 없습니다. 같은 등급이 수십만 명이면 원래 문제와 같은 문제입니다. 등급은 도메인 현실성을 위한 것이고, 요청 헤더로 받아 발급 경로에 DB 조회를 추가하지 않았습니다 |
 
 | 등급별로 재고를 나누지 않은 이유는? | 동시성 난이도를 올리지 않으면서 검증 배치·더미데이터·오염셋에 파급됩니다. 이득 대비 비용이 맞지 않아 범위에서 제외했습니다 |
 
@@ -1336,7 +1340,7 @@ Q&A는 별도. 합계 20분을 절대 초과할 수 없습니다. 여유가 0이
 ````
 | R11 | 스케줄러 캠페인 중복 생성 | 동일 open_at 캠페인 2건 | UNIQUE(template_id, open_at) | 제약 위반 로그로 즉시 발견. 중복 삭제 후 재실행 | ① |
 ````
-| R12 | 관리 API·Actuator 무인증 노출 | 코드 리뷰에서 /admin/* 인증 필터 부재 | 관리 포트 분리 + role: ADMIN | Compose에서 관리 포트 노출 제거만으로 즉시 차단 | ③ |
+| R12 | 관리 API·Actuator 무인증 노출 | `/admin/*`가 클라이언트 역할 헤더만 검사 | Actuator는 관리 포트 분리·allowlist로 차단. 관리자 API 인증은 후속 작업 | 긴급 시 게이트웨이에서 `/api/v1/admin/**` 라우팅 차단. 관리 포트 차단만으로 관리자 API는 보호되지 않음 | ③ |
 ``
 | R13 | ④ D6~D10 과부하 | D8에 착수 못 한 잡 2개 이상 | 배치 잡 10개에 컷 순서를 미리 못박음 (10→6) | 컷 순서 발동. 결정자 ④, 당일 팀 공유 | ④ |
 
@@ -1700,7 +1704,7 @@ coupon_stocks(campaign_id PK, total_quantity, active_count)
 
 | 방식 | 판정 |
 
-| 별도 매핑 테이블 | 탈락 발급 경로에 조인 추가. 등급 검증을 JWT로 처리한 이유가 무너짐 |
+| 별도 매핑 테이블 | 탈락 발급 경로에 조인 추가. 등급을 요청 헤더로 받아 DB 조회를 피하는 원칙이 무너짐 |
 ``
 | MySQL SET 타입 | 탈락 벤더 종속. repository 격리 원칙 위반 |
 ``
@@ -1714,8 +1718,8 @@ public enum Grade { WELCOME(1), SILVER(2), GOLD(4), VIP(8) }
 @Convert(converter = GradeSetConverter.class) // EnumSet ↔ TINYINT
 private EnumSet<Grade> eligibleGrades;
 
-// 발급 경로 — DB 접근 0
-campaign.getEligibleGrades().contains(jwtGrade)
+// 발급 경로 — X-User-Grade 파싱 결과를 사용하므로 DB 접근 0
+campaign.getEligibleGrades().contains(requestGrade)
 ```
 
 검증 배치만 4행짜리 `grades` 참조 테이블을 조인해 `(mask & bit_value) = 0` 으로 위반을 검출합니다. 조인 비용이 사실상 0입니다.
@@ -2031,7 +2035,7 @@ L3 결과는 별도 표로 분리합니다. 환경이 다르면 같은 표에 �
 
 | 대기열 서버 분리 · Bloom filter · 파티셔닝 · 재고 샤딩 · VT 6조합 | 범위 밖 | 데이터 규모·노드 수가 조건을 못 만족하거나 예산 초과 |
 
-선착순은 구조적으로 어뷰징 표적입니다. 실제로 비어 있던 구멍 4건과 3주 안에 막을 것.
+선착순은 구조적으로 어뷰징 표적입니다. 실제로 비어 있던 구멍 3건과 3주 안에 막을 것.
 
 ## 위협 모델
 
@@ -2047,11 +2051,13 @@ L3 결과는 별도 표로 분리합니다. 환경이 다르면 같은 표에 �
 
 | 가용성 | 대기열 우회·폭주 | 시연 중 서버 다운 |
 
-공격자 가정 — 부하 테스트 클라이언트를 조작할 수 있는 사람. 즉 토큰을 가진 내부 사용자가 기본 위협 모델입니다. 사전 발급 토큰만 유효하므로 임의 계정 생성은 불가능합니다.
+공격자 가정 — 부하 테스트 클라이언트를 조작할 수 있는 사람. 따라서 `X-User-Role: ADMIN`도
+위조할 수 있고 현재 관리자 API는 인증되지 않았습니다. 실사용자 확인과 다계정 방어는 과제
+범위 밖이지만, 이 사실을 보안 대응책으로 포장하지 않고 관리자 인증 후속 작업으로 추적합니다.
 
-## 🔴 설계에 비어 있던 구멍 4건
+## 🔴 설계에 비어 있던 구멍 3건
 
-아래 4건은 새로 발견한 구멍이고, 기존 PII 요구(마스킹·암호화)와 actuator 노출 최소화를 합치면 필수 작업은 6건입니다.
+아래 3건은 새로 발견한 구멍이고, 기존 PII 요구(마스킹·암호화)와 actuator 노출 최소화를 합치면 필수 작업은 5건입니다.
 
 ① 관리 API · Actuator 무인증 노출
 
@@ -2065,16 +2071,20 @@ GET /actuator/env → 환경변수(= AES 키!) 노출
 `/actuator/env`가 특히 위험합니다. AES·HMAC 키를 Compose 환경변수로 주입하기로 했으므로 이 엔드포인트가 열려 있으면 키가 그대로 나갑니다.
 
 ```
-# ① 관리 포트 분리 — Compose 에서 외부 노출 안 함
+# API Actuator — 관리 포트 9090, Compose 에서 외부 노출 안 함
 management.server.port: 9090
-management.endpoints.web.exposure.include: health,metrics,admission-capacity
+management.endpoints.web.exposure.include: health,metrics,prometheus,admission-capacity
 management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 
-// ② /admin/* 는 ADMIN 역할 클레임 요구
-.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+# Batch Actuator — 관리 포트 9092, Compose 에서 외부 노출 안 함
+management.server.port: 9092
+management.endpoints.web.exposure.include: health,metrics,prometheus
+management.endpoints.web.exposure.exclude: env,configprops,beans,heapdump
 ```
 
 `exclude`를 명시하세요. `include`만 쓰면 나중에 누가 `*`로 바꿀 때 `env`가 함께 열립니다.
+관리 포트 분리는 Actuator만 보호합니다. 업무 포트 8080의 `/api/v1/admin/**`는 보호하지
+않으며, `X-User-Role: ADMIN` 단독 검사는 인증이 아니므로 보안 대응책에서 제외합니다.
 
 ② Entry-Token 재사용
 
@@ -2090,17 +2100,7 @@ UNIQUE(campaign_id, member_id) 가 중복 발급은 막지만
 
 원자성을 검증하는 테스트가 필요합니다. "동시 요청에서도 하나만 통과"가 `GETDEL`을 택한 근거이므로, 확인하지 않으면 근거가 비어 있는 셈입니다 — 실행 계획 탭 동시성 시나리오 13.
 
-③ alg: none 우회
-
-JWT 검증 시 토큰이 주장하는 알고리즘을 그대로 믿으면 서명 검증이 무력화됩니다.
-
-```
-공격: { "alg": "none" } + 서명 없음 → 라이브러리가 검증을 건너뜀
-
-대응: .sig().add(Jwts.SIG.HS256) // 서버가 알고리즘 강제
-```
-
-④ 시크릿 커밋 위험
+③ 시크릿 커밋 위험
 
 D1 최우선으로 `.gitignore`(`.env`, `*.jks`, `*.p12`). 커밋 이력에 한 번이라도 들어가면 히스토리 삭제만으로 부족하고 키를 교체해야 합니다.
 
@@ -2111,7 +2111,7 @@ D1 최우선으로 `.gitignore`(`.env`, `*.jks`, `*.p12`). 커밋 이력에 한 
 ``
 | 한 유저의 폭주 요청 | UNIQUE(campaign_id, member_id) + 1회성 토큰 | 설계됨 |
 
-| 다계정 발급 | 사전 발급 토큰만 유효 → 임의 계정 생성 불가 | 구조적 차단 |
+| 다계정 발급 | 회원가입·실사용자 인증은 과제 범위 밖이며 요청 헤더는 사용자 구분만 담당 | 범위 밖 |
 ````
 | 대기열 우회 | Entry-Token 없는 /issue 차단 | 설계됨 |
 ``
@@ -2188,7 +2188,9 @@ redis.call('DECR', KEYS[1])
 | 항목 | 판정 |
 
 ``````
-| 관리 포트 분리 + role: ADMIN · 1회성 토큰 · alg 고정 · .gitignore · actuator 최소화 · PII 3계층 · 에러·로그 마스킹 | 필수 6건 합쳐서 약 0.5일. 대부분 설정과 어노테이션 |
+| 관리 포트 분리 · 1회성 토큰 · .gitignore · actuator 최소화 · PII 3계층 · 에러·로그 마스킹 | 채택. 대부분 설정과 어노테이션 |
+
+| 관리자 API 인증·인가 | 미적용. `X-User-Role` 단독 검사는 보안 작업으로 세지 않으며 후속 작업 |
 
 | IP rate limit(프로파일 분리) · 의존성 스캔 1회 | 채택 |
 
@@ -2196,7 +2198,9 @@ redis.call('DECR', KEYS[1])
 
 ## 발표에서 말할 것
 
-선착순 이벤트는 구조적으로 어뷰징 표적이라 세 겹으로 막았습니다. DB 유니크 제약이 1인 1매를 물리적으로 보장하고, 1회성 입장 토큰이 재고 카운터 반복 호출을 막고, 관리 포트 분리로 운영 API를 외부에서 못 건드리게 했습니다.
+선착순 이벤트는 구조적으로 어뷰징 표적입니다. DB 유니크 제약이 1인 1매를 물리적으로
+보장하고 1회성 입장 토큰이 재고 카운터 반복 호출을 막습니다. 관리 포트 분리는 Actuator를
+외부에서 차단하지만 업무 포트의 관리자 API를 보호하지 않으며, 관리자 인증은 후속 작업입니다.
 
 다만 AES 키를 환경변수로 주입하는 것이 저희 범위의 상한입니다. 컨테이너에 들어올 수 있으면 읽을 수 있어서, 실서비스라면 KMS로 런타임 주입하고 로테이션해야 합니다.
 

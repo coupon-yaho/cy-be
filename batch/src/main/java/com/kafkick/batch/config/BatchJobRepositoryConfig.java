@@ -57,8 +57,14 @@ import org.springframework.transaction.annotation.Isolation;
  * <p><b>오른쪽 열이 문제다.</b> {@code expireJob} 과 {@code verifyJob} 은 이름도 키도 다른데
  * 같은 gap 에 들어가면 서로 죽인다 — 중복 방지와 아무 상관 없는 조합이고,
  * {@code BATCH_JOB_INSTANCE} 가 비어 있을수록(첫 배포·정리 직후) 전부 같은 gap 이다.
- * 지는 쪽은 {@code DeadlockLoserDataAccessException} 을 받아
- * {@code ExpireScheduler} 의 ERROR 갈래로 나간다.
+ * 그때(= {@code SERIALIZABLE} 로 두면) 지는 쪽은 {@code DeadlockLoserDataAccessException} 을
+ * 받아 {@code ExpireScheduler} 의 ERROR 갈래로 나간다.
+ *
+ * <p><b>지금은 그 타입이 오지 않는다.</b> 아래처럼 내려 뒀으므로 지는 쪽이 받는 것은
+ * {@code DuplicateKeyException} · {@code IllegalStateException} ·
+ * {@code JobInstanceAlreadyCompleteException} 셋 중 하나이고, 셋 다 그쪽에서 INFO 로 받는다.
+ * 그 계약을 {@code BatchMetadataPersistenceTest} 가 고정한다 —
+ * {@code DeadlockLoser} 가 오면 격리가 기본값으로 되돌아간 것이라 빨간불이 뜬다.
  *
  * <p>그래서 <b>내려서 명시한다.</b> 중복 방지는 {@code V11__batch_metadata.sql} 의
  * {@code JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)} 가 하고, 두 번째 INSERT 가 1062 로 거부된다.
@@ -71,12 +77,6 @@ import org.springframework.transaction.annotation.Isolation;
  * 보고 {@code SCHEMA_NOT_MIGRATED} 로 거절한다. 그 가드가 붙기 전에는 기동이 통과하고 첫 잡
  * 실행에서 {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 로 죽었다. 이미 적용된
  * 마이그레이션이라 체크섬 때문에 파일을 손대지 않고 정정을 여기 둔다.
- *
- * <p><b>그 파일의 첫 줄도 이 계보에서는 사실이 아니다.</b> {@code "기존 쿠폰 마이그레이션 뒤에
- * 적용하는"} 이라고 적혀 있는데, 여기서는 {@code V1} 바로 뒤에 돈다 — 그 문장은 {@code main}
- * 기준이다. <b>파일은 고치지 않는다</b>: {@code main} 과 바이트가 같아야 머지 후 체크섬이
- * 안 깨진다. 그래서 정정을 파일 밖인 여기 둔다({@code MySqlContainerConfig} 가 같은 이유로
- * 같은 일을 한다).
  *
  * <p><b>{@code JobOperator} 가 동기로 돌아야 한다 — 그런데 그것을 여기서 못 박지 않는다.</b>
  * {@code BatchRegistrar} 는 이름이 {@code taskExecutor} 인 빈 <b>정의가 있으면</b> 그것을 쓰고,
@@ -94,17 +94,53 @@ import org.springframework.transaction.annotation.Isolation;
  * 것을 단언한다.</b> 누가 {@code @Bean("taskExecutor")} 를 넣으면 — 스프링 예제가 관례로 쓰는
  * 이름이다 — 거기서 빨간불이 뜬다.
  *
+ * <p><b>[CY-338] 합류(CY-744)로 그 테스트가 이 자리에 들어왔다.</b> main 쪽은
+ * 이름 충돌을 피하려고 비워 뒀던 자리다.
+ *
  * <p><b>배선의 대가</b> — 이제 {@code BATCH_*} 가 실제로 쌓인다. 만료가 5분마다 새 {@code asOf}
  * 로 돌던 시절에는 하루 288 인스턴스 × 여섯 테이블이었다. CY-397 이 배치 창(일 1회)으로
- * 옮겨 <b>하루 1 인스턴스</b>가 됐다. {@code BATCH_*} 정리는
- * {@code CleanupJobConfig#purgeBatchMetadataStep} 이 {@code batch.cleanup.metadata-keep-days}
- * (최소 8 — 되읽기 창 7일 초과)로 한다(CY-436).
+ * 옮겨 <b>하루 1 인스턴스</b>가 됐고, 정리는 {@code CleanupJobConfig#purgeBatchMetadataStep}
+ * 이 {@code batch.cleanup.metadata-keep-days}(최소 8 — 되읽기 창 7일 초과)로 한다(CY-436).
+ */
+/*
+ * ── 아래 둘은 CY-15 원본에 없다. 이 브랜치의 풀 배선이 달라서 붙였다 ──
+ *
+ * dataSourceRef = "mainDataSource"
+ *   기본값은 "dataSource" 인데 이 브랜치에는 그 이름의 빈이 없다. 실측한 빈 이름:
+ *     관측 ON  → mainDataSource(@Primary) · observationDataSource(@Qualifier("obs"))
+ *     관측 OFF → 없음
+ *   기본값 그대로 두면 "No bean named 'dataSource' available" 로 batch 기동이 깨진다
+ *   (BatchApplicationTests 가 실제로 그렇게 죽었다).
+ *
+ *   ⚠️ 관측 풀(obs)이 아니라 운영 풀이어야 한다. 배치 메타는 쓰기이고 obs 계정은 SELECT 전용이다.
+ *
+ * ── 조건이 없다. 예전에는 있었고, 그것이 결함이었다 ──
+ *
+ *   {@code @ConditionalOnProperty("observation.datasource.enabled")} 를 달았었다.
+ *   그때는 storage 의 ObservationDataSourceConfig 가 운영 풀 정의까지 들고 물러나서,
+ *   조건 없이 두면 이 설정이 DataSource 를 못 찾아 기동이 깨졌기 때문이다.
+ *
+ *   ⚠️ 그 조건의 대가가 훨씬 컸다 — 정상 운영 스위치 하나로 <b>잡 중복 실행 방지가 통째로
+ *      꺼졌다.</b> Spring Batch 가 ResourcelessJobRepository 로 떨어져 JOB_INST_UN 에
+ *      INSERT 가 가지 않고, 두 노드가 같은 파라미터로 각자 잡을 시작할 수 있게 된다.
+ *      예외도 로그도 없다.
+ *
+ *   그래서 원인을 없앴다 — 운영 풀을 {@code MainDataSourceConfig} 로 떼어 내 관측 스위치와
+ *   무관하게 항상 만들어지게 했다. 이 설정은 이제 조건이 필요 없다.
+ *   {@code BatchMetadataWithoutObservationTest} 가 그 분리를 고정한다.
+ *
+ *   ⚠️ 처음에 {@code @ConditionalOnBean(name = "mainDataSource")} 로 썼다가 되돌린 기록은
+ *      남겨 둔다 — <b>조건이 항상 false 로 평가돼 이 설정이 통째로 안 붙었는데
+ *      :batch:test 87개가 전부 초록불이었다.</b> @ConditionalOnBean 은 자동설정 클래스에서만
+ *      순서가 보장되고, 컴포넌트 스캔되는 @Configuration 에서는 대상 빈 정의가 등록되기 전에
+ *      평가된다. 조건을 다시 붙이려는 사람이 같은 자리를 밟지 않게 적어 둔다.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableBatchProcessing
-@EnableJdbcJobRepository(isolationLevelForCreate = Isolation.READ_COMMITTED)
+@EnableJdbcJobRepository(
+        dataSourceRef = "mainDataSource",
+        isolationLevelForCreate = Isolation.READ_COMMITTED)
 public class BatchJobRepositoryConfig {
-
     /**
      * <b>@EnableBatchProcessing 이 등록하는 공용 {@link org.springframework.batch.core.launch.JobOperator}
      * 의 빈 이름.</b> 그 타입 빈이 둘이라({@code VerifyExecutorConfig.OPERATOR} 가 둘째)

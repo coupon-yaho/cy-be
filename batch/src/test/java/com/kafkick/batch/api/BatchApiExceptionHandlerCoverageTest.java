@@ -58,10 +58,20 @@ class BatchApiExceptionHandlerCoverageTest {
         // **equals 로 거르면 안 된다.** 하위 패키지(com.kafkick.batch.api.report 등)에
         // 컨트롤러가 생기면 양쪽으로 다 깨진다 — 등록을 안 하면 이 테스트가 못 보고,
         // 등록을 하면 mapped 에 없어서 "advice 에만 있다" 로 헛되이 실패한다.
-        // 우리 코드 전부를 본다. 이 저장소의 컨트롤러는 예외 없이 이 봉투를 따른다.
+        // 우리 코드 전부를 본다 — 단, **admin 표면만**이다.
+        //
+        // ⚠️ **com.kafkick.batch.benchmark 는 뺀다(CY-744).** 그 둘
+        // (TopologyPreflightController · ConsistencyFinalController)은 관리자 API 가 아니라
+        // api 가 부르는 **내부 계약**(/internal/v1/benchmarks)이고, 자기 응답 규약을 따로 갖는다 —
+        // preflight 는 위반 목록과 함께 409, consistency/final 은 원천이 안 여물면 503 을 내고
+        // api 가 그 본문을 consistency_failure_reason 에 그대로 싣는다. 이 advice 를 씌우면
+        // 그 본문이 ResponseEnvelope 로 감싸져 **그쪽 계약이 깨진다.**
+        //
+        // 즉 예외를 봉투로 감싸는 규약은 admin 표면의 것이고, 그 경계를 여기 명시한다.
         Set<Class<?>> mapped = mappings.getHandlerMethods().values().stream()
                 .map(method -> method.getBeanType())
                 .filter(type -> type.getPackageName().startsWith("com.kafkick."))
+                .filter(type -> !type.getPackageName().startsWith("com.kafkick.batch.benchmark"))
                 .collect(Collectors.toSet());
 
         RestControllerAdvice advice = AnnotationUtils.findAnnotation(

@@ -1,8 +1,8 @@
 // 이력 한 행이 낸 V4 위반입니다. verification_findings 의 expected/actual 로 그대로 들어갑니다.
 package com.kafkick.core.verification.replay;
 
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * <b>이력 한 행은 위반을 하나만 냅니다.</b> target_key 가 {@code HISTORY:{이력id}} 인데
@@ -29,19 +29,26 @@ public record IllegalTransition(long historyId, Reason reason, String expected, 
     /**
      * 추적 상태에서 그 사건이 일어날 수 없거나, 일어나도 결과 상태가 다르다.
      *
-     * @param allowed 전이표가 허용하는 결과 상태. 전이 자체가 없으면 null
+     * <p><b>기대값을 한 상태로 못 적는다.</b> {@code CANCEL_USE} 는 만료 여부에 따라
+     * {@code ISSUED} 와 {@code EXPIRED} 둘 다로 갈 수 있어서다
+     * ({@code CouponStateMachine.isLegal}). 그래서 expected 에는 <b>허용 여부를 묻는 삼중항의
+     * 앞 두 자리</b>만 적고 결과 자리를 {@code ?} 로 남긴다 — <i>"이 상태에서 이 사건으로는
+     * 그 결과에 갈 수 없다"</i> 가 이 발견의 내용이다.
+     *
+     * <p>예전에는 전이표가 {@code (from, event) → to} 1:1 이라 기대값을 한 값으로 적었다.
+     * 그 표는 {@code CANCEL_USE → ISSUED} 만 알아서, 만료된 쿠폰의 사용 취소를
+     * <b>정상인데 위반으로</b> 셌다.
      */
     public static IllegalTransition notInTable(
             long historyId,
             IssuanceStatus tracked,
             IssuanceEventType event,
-            IssuanceStatus allowed,
             IssuanceStatus claimed
     ) {
         return new IllegalTransition(
                 historyId,
                 Reason.NOT_IN_TABLE,
-                render(tracked, event, allowed),
+                name(tracked) + "-" + event.name() + "->?",
                 render(tracked, event, claimed)
         );
     }

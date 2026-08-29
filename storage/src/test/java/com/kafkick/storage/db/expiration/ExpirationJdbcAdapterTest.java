@@ -16,9 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-import com.kafkick.core.coupon.CouponStateMachine;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.CouponStateMachine;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
@@ -444,9 +444,11 @@ class ExpirationJdbcAdapterTest {
     @Test
     @DisplayName("from_status 상수의 근거는 전이표다 — EXPIRE 를 받는 상태가 ISSUED 뿐이다")
     void fromStatusConstantFollowsStateMachine() {
+        // isLegal 은 (from, event, to) 삼중항을 묻는다 — 결과가 둘인 전이(CANCEL_USE)가
+        // 있어서 next(from, event) 형태로는 표현이 안 된다. EXPIRE 는 결과가 EXPIRED 하나다.
         assertThat(Arrays.stream(IssuanceStatus.values())
-                .filter(status -> CouponStateMachine.next(status, IssuanceEventType.EXPIRE)
-                        .isPresent())
+                .filter(status -> CouponStateMachine.isLegal(
+                        status, IssuanceEventType.EXPIRE, IssuanceStatus.EXPIRED))
                 .toList())
                 .as("여기가 늘어나면 APPEND_HISTORIES 의 'ISSUED' 상수가 거짓말이 된다")
                 .containsExactly(IssuanceStatus.ISSUED);
@@ -568,12 +570,14 @@ class ExpirationJdbcAdapterTest {
     @Test
     @DisplayName("만료 SQL 이 인코딩한 전이가 전이표와 같다")
     void sqlMatchesStateMachine() {
-        assertThat(CouponStateMachine.next(IssuanceStatus.ISSUED, IssuanceEventType.EXPIRE))
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.ISSUED, IssuanceEventType.EXPIRE, IssuanceStatus.EXPIRED))
                 .as("EXPIRE_BATCH 의 SET status='EXPIRED' 와 APPEND_HISTORIES 의 to_status 근거")
-                .contains(IssuanceStatus.EXPIRED);
-        assertThat(CouponStateMachine.next(IssuanceStatus.USED, IssuanceEventType.EXPIRE))
+                .isTrue();
+        assertThat(CouponStateMachine.isLegal(
+                IssuanceStatus.USED, IssuanceEventType.EXPIRE, IssuanceStatus.EXPIRED))
                 .as("USED 에도 EXPIRE 가 열리면 EXPIRE_BATCH 의 status='ISSUED' 필터를 함께 고쳐야 한다")
-                .isEmpty();
+                .isFalse();
         assertThat(IssuanceEventType.EXPIRE.name())
                 .as("**APPEND_HISTORIES 가 박는 event_type 리터럴이다.** 컬럼이 자유 varchar 라 "
                         + "이름을 바꿔도 INSERT 는 성공한다 — 그러면 리플레이가 만료 이력 전체를 "

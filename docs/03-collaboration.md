@@ -63,13 +63,16 @@ env:
 |---|---|---|
 | PR 생성/수정 | `conventions.yml` → `pr-title`, `branch-name` | **실패 시 머지 차단** |
 | PR 생성/수정 | `conventions.yml` → `commit-messages` | 경고만 |
-| PR 생성/push | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | AI 리뷰 (아래) |
-| AI 리뷰 제출 (Qodo·CodeRabbit) | `ai-review-slack.yml` | Slack 알림. webhook 없으면 스킵 |
+| PR 생성/push | **Qodo** (GitHub App, `.pr_agent.toml`) | AI 리뷰 (아래) |
+| 호출할 때만 | **CodeRabbit** (GitHub App, `.coderabbit.yaml`) | `@coderabbitai review` / `full review` |
+| AI 리뷰 제출 | `ai-review-slack.yml` | Slack 알림. webhook 없으면 스킵 |
 | `security-audit` 라벨 / 수동 | `security-audit.yml` | 보안 전수 점검. 키 없으면 스킵 |
 
 **리뷰는 `하위 → 에픽` PR 에만 붙는다.** 이게 이 설정의 핵심이다.
 
-CodeRabbit 은 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동 리뷰한다. 그런데 우리 실제 작업 PR 은 전부 `하위 → 에픽` 이라 main 을 안 거친다. 그래서 `.coderabbit.yaml` 에 base 브랜치 패턴을 명시했다. **이 줄이 없으면 리뷰가 하나도 안 달린다.**
+Qodo 는 base 를 안 가리고 `pr_commands`·`push_commands` 로 돈다. `skip-review` 라벨이 붙는 에픽 → main PR 만 빠진다.
+
+CodeRabbit 쪽은 사정이 다르다 — 기본적으로 **기본 브랜치(main)로 가는 PR만** 자동 리뷰한다. 우리 실제 작업 PR 은 전부 `하위 → 에픽` 이라 main 을 안 거치므로 `.coderabbit.yaml` 에 base 브랜치 패턴을 명시해 뒀다. **지금은 `auto_review.enabled: false` 라 그 줄이 안 쓰이지만, 다시 켜는 날 없으면 리뷰가 하나도 안 달린다.**
 
 ```yaml
 auto_review:
@@ -90,11 +93,28 @@ auto_review:
 
 **라벨이 "리뷰 없이 머지"를 여는 건 아니다.** AI 리뷰는 required check 가 아니라 애초에 머지를 막지 않는다 (3.5a절). 머지 게이트는 **`PR 제목 규약`·`브랜치명 규약` + 승인 1건**이고 그건 라벨로 못 건너뛴다.
 
+**오히려 라벨이 머지를 더 어렵게 만든다.** 승인은 Qodo 가 리뷰를 돌린 뒤에야 나온다 — `skip-review` 가 붙으면 리뷰를 안 도니 승인 경로가 통째로 없다.
+
+| PR | 승인이 어디서 오나 |
+|---|---|
+| 하위 → 에픽 | **findings 체크박스.** 지적을 보고 누르면 Qodo 가 승인한다 |
+| 에픽 → main (`skip-review`) | **사람 승인 또는 관리자 우회.** 체크박스가 안 뜬다 |
+| 되돌리기·설정 범프 (`skip-review`) | 위와 같다 |
+| 봇 PR | 위와 같다 (`ignore_pr_authors`) |
+
+**체크박스는 지적이 0건인지 검사하지 않는다.** blocker 가 남아 있어도 누르면 승인이 붙는다. 공식 문서가 말하는 것은 *"작성자가 findings 를 **검토했다고 확인**한다"* 이지 *"findings 가 **해소됐다**"* 가 아니다. 그래서 이것은 자동 판정이 아니라 **사람의 선언**이고, 누른 사람이 그 판단을 진다.
+
+`/review auto_approve`(`[config].enable_comment_approval`)는 **켜지 않았다.** 그 명령은 리뷰가 한 번도 안 돈 PR 도 승인한다 — 그리고 그것이 필요한 자리가 하필 `skip-review` 가 붙는 **에픽 → main**, 이 저장소에서 가장 큰 병합이다. 승인 흔적을 남기려고 켰다가 뺐다.
+
+**이걸 고치지 않고 남긴다.** 에픽 → main 은 이 저장소에서 가장 큰 병합이고, 거기서만은 사람이 한 번 보는 것이 맞다. 리뷰를 안 돌린 PR 을 봇이 승인하면 지금(관리자 우회)보다 **나쁘다** — 우회는 사람이 누른 흔적이라도 남지만, 그 승인은 아무도 안 본 채 초록불이 된다.
+
 > 수동 제어 — 본문에 `@coderabbitai ignore`(스킵), 코멘트로 `@coderabbitai review`(증분) / `@coderabbitai full review`(전체).
 
-**리뷰는 GitHub Review 형태로 달린다.** `request_changes_workflow: true` 라 사람 리뷰어처럼 **줄 단위 인라인 코멘트 + Request changes** 를 남긴다. 단 리뷰어 봇을 Ruleset 의 required reviewer 로 등록하면 3.5a절(비차단)이 깨진다 — 등록하지 말 것.
+**Qodo 에서 같은 자리는 `[review_agent]` 의 self-review 짝이다.** `demand_self_review` 가 findings 확인 체크박스를 띄우고, `approve_pr_on_self_review` 가 그것을 누른 뒤 Qodo 를 리뷰어로 추가해 머지를 연다. **다른 점은 마지막 한 번을 사람이 누른다는 것**이다 — CodeRabbit 은 스스로 승인한다.
 
-> ⚠️ **위 표는 CodeRabbit 이 자동 리뷰를 맡던 시절의 것이다.** 2026-08-26 부터 자동 리뷰는 Qodo 가 하고 CodeRabbit 은 부를 때만 온다 — 아래 **3.0a** 를 먼저 읽을 것.
+> ⚠️ `[pr_code_suggestions].approve_pr_on_self_review` 는 **다른 키다.** 그쪽(v1)은 코드 제안 체크박스에 걸리고, 이쪽(v2)은 리뷰 findings 에 걸린다. 이름이 같아 `/config` 덤프에 둘 다 뜬다.
+
+**리뷰는 GitHub Review 형태로 달린다.** `request_changes_workflow: true` 라 사람 리뷰어처럼 **줄 단위 인라인 코멘트 + Request changes** 를 남기고, 지적이 다 해소되면 자동으로 승인한다. 단 CodeRabbit 을 Ruleset 의 required reviewer 로 등록하면 3.5a절(비차단)이 깨진다 — 등록하지 말 것.
 
 ---
 
@@ -178,7 +198,11 @@ config.ignore_pr_labels                  = []                 (기본값)
 
 ### 3.0 실행기는 CodeRabbit 이다 — 기준은 그대로 간다
 
-**결정: PR 상시 리뷰는 CodeRabbit 이 맡는다.** 자체 `claude-review.yml`(라우팅 + Opus/Sonnet 2단) 은 제거했다.
+**결정: PR 상시 리뷰는 Qodo 가 맡는다** (CY-621, `.pr_agent.toml`). CodeRabbit 은 `auto_review.enabled: false` 로 내려 **`@coderabbitai review` / `full review` 로 부를 때만** 돈다. 계기는 비용이다 — CodeRabbit 유료 좌석이 인당 월 30달러라 5명 전원에게 붙일 수 없다.
+
+> 아래 3.0a 절이 두 도구의 설정 대응표다. 자동 리뷰가 안 붙으면 **Qodo 쪽을 먼저 본다** — `/config` 로 `pr_commands`·`handle_push_trigger` 가 로드됐는지 확인한다.
+
+그전 결정(자체 `claude-review.yml` → CodeRabbit)은 아래 그대로 남긴다. 자체 워크플로(라우팅 + Opus/Sonnet 2단)를 제거한 판단은 지금도 유효하다.
 
 > **이 절은 2026-08-26 에 갱신됐다** — 상시 리뷰는 이제 Qodo 다(3.0a). 아래는 **판단 기준이
 > `.coderabbit.yaml` 로 옮겨 간 경위**로 읽을 것. 그 기준 자체는 여전히 유효하고, 호출형
