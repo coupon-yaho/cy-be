@@ -77,6 +77,43 @@ class BatchRunHistoryTest {
                 .extracting(BatchRun::executionId).containsExactly(2L);
     }
 
+    /**
+     * <b>첫 요청이 {@code offset > 0} 인 경우다.</b> 경계를 "그 페이지의 첫 행" 으로 잡으면
+     * 그것은 전체의 최댓값이 아니라 <b>이미 건너뛴 행들 아래</b>라, {@code total} 이 그만큼
+     * 줄고 다음 요청이 좁아진 창에 같은 {@code offset} 을 다시 적용해 행을 건너뛴다.
+     * 경계는 <b>그 조건의 MAX(id)</b> 여야 한다(봇 리뷰가 짚었다).
+     */
+    @Test
+    @DisplayName("offset 을 준 첫 요청도 경계는 전체 최댓값이다 — total 이 안 줄어든다")
+    void latestIdIgnoresOffset() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+        plant(3, "cleanupJob", "COMPLETED", true);
+
+        // 화면이 2페이지부터 요청했다. 경계를 페이지 첫 행(2번)으로 잡으면 total 이 2가 된다.
+        assertThat(adapter.findRecent(null, 1, 1, null))
+                .extracting(BatchRun::executionId).containsExactly(2L);
+
+        assertThat(adapter.latestExecutionId(null))
+                .as("경계는 건너뛴 3번을 포함한 전체 최댓값이어야 한다")
+                .isEqualTo(3L);
+        assertThat(adapter.countRecent(null, adapter.latestExecutionId(null)))
+                .as("그 경계로 세면 total 이 안 줄어든다")
+                .isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("잡 이름을 걸면 경계도 그 잡의 최댓값이다")
+    void latestIdHonoursJobFilter() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+
+        assertThat(adapter.latestExecutionId("expireJob"))
+                .as("목록·건수와 같은 필터가 아니면 total 과 경계가 서로 다른 집합을 가리킨다")
+                .isEqualTo(1L);
+        assertThat(adapter.latestExecutionId("nosuchJob")).isNull();
+    }
+
     @Test
     @DisplayName("시작조차 못 한 실행도 목록에 나온다 — 실행기가 거절한 행이 그 모양이다")
     void includesExecutionsWithoutStartTime() {

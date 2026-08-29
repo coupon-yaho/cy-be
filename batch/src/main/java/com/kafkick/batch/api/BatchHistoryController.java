@@ -56,7 +56,7 @@ public class BatchHistoryController {
         List<BatchRunView> items = runs.findRecent(jobName, size, from, anchor).stream()
                 .map(BatchRunView::of)
                 .toList();
-        Long boundary = HistoryPage.anchorOf(anchor, items, BatchRunView::executionId);
+        Long boundary = anchor != null ? anchor : runs.latestExecutionId(jobName);
         return ResponseEnvelope.success(
                 new HistoryPage<>(items, runs.countRecent(jobName, boundary), size, from,
                         boundary));

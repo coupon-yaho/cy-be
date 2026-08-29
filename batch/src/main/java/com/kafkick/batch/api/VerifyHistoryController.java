@@ -59,7 +59,7 @@ public class VerifyHistoryController {
         List<VerifyHistoryView> items = runs.findRecent(dataset, size, from, anchor).stream()
                 .map(VerifyHistoryView::of)
                 .toList();
-        Long boundary = HistoryPage.anchorOf(anchor, items, VerifyHistoryView::runId);
+        Long boundary = anchor != null ? anchor : runs.latestRunId(dataset);
         return ResponseEnvelope.success(
                 new HistoryPage<>(items, runs.countRecent(dataset, boundary), size, from,
                         boundary));

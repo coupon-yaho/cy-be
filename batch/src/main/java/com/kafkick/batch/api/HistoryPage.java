@@ -1,7 +1,6 @@
 package com.kafkick.batch.api;
 
 import java.util.List;
-import java.util.function.ToLongFunction;
 
 /**
  * 이력 한 페이지.
@@ -20,9 +19,19 @@ import java.util.function.ToLongFunction;
  * 온디맨드 트리거가 하루에도 여러 건을 만든다. 배치 메타 쪽도 보존 창과 크론이 설정값이라
  * 상한이 보장되지 않는다.
  *
- * <p>{@code anchor} 는 <b>그 페이지의 첫 행 id</b> 다 — 목록이 id 내림차순이라 그것이 곧
- * 스냅샷의 최댓값이다. 질의를 하나 더 치지 않는 이유가 그것이다. 목록이 비면 {@code null} 이고,
- * 그때는 되돌려줄 경계도 없다.
+ * <p>{@code anchor} 는 <b>그 조건에서 가장 큰 id</b> 다({@code latestExecutionId} ·
+ * {@code latestRunId}). ⚠️ <b>페이지의 첫 행으로 대신하면 안 된다</b> — 한때 그렇게 썼는데,
+ * 첫 요청이 {@code offset > 0} 이면 그 행은 전체의 최댓값이 아니라 <b>그 페이지의 첫 행</b>이라
+ * 경계가 낮게 잡힌다. 그러면 {@code total} 이 그만큼 줄고, 그 경계로 다음 요청을 하면
+ * 같은 {@code offset} 이 좁아진 창에 다시 적용돼 행을 건너뛴다(봇 리뷰가 짚었다).
+ * 질의 한 번을 아끼려다 답을 틀리게 하는 거래였다. 대상이 없으면 {@code null} 이다.
+ *
+ * <p><b>경계는 위쪽만 막는다.</b> 아래쪽(오래된 행)이 정리로 사라지는 것은 안 막지만,
+ * 배치 메타 정리는 {@code CREATE_TIME} 오름차순으로 <b>가장 오래된 것부터</b> 지우므로
+ * {@code id DESC} 목록의 <b>꼬리</b>가 줄 뿐이고 이미 읽은 앞쪽은 안 밀린다(실측).
+ * {@code verification_runs} 는 아예 안 지운다. 그래도 순회 중에 {@code total} 이 줄 수는
+ * 있다 — 그것까지 막으려면 {@code offset} 을 버리고 {@code id < :lastSeen} 키셋으로 가야 하고,
+ * <b>다시 볼 기준</b>은 그때다.
  */
 public record HistoryPage<T>(List<T> items, int total, int limit, int offset, Long anchor) {
 
@@ -42,16 +51,4 @@ public record HistoryPage<T>(List<T> items, int total, int limit, int offset, Lo
         return offset == null || offset < 0 ? 0 : offset;
     }
 
-    /**
-     * 첫 요청이면 이 페이지의 첫 행 id 를 경계로 삼고, 이미 받은 경계가 있으면 그대로 쓴다.
-     *
-     * <p><b>요청이 준 값을 이기지 않는다.</b> 뒤 페이지에서 첫 행으로 다시 잡으면 경계가
-     * 페이지마다 앞으로 밀려 <b>anchor 를 안 쓴 것과 같아진다.</b>
-     */
-    static <T> Long anchorOf(Long requested, List<T> items, ToLongFunction<T> id) {
-        if (requested != null) {
-            return requested;
-        }
-        return items.isEmpty() ? null : id.applyAsLong(items.getFirst());
-    }
 }

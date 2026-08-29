@@ -66,6 +66,14 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
                AND (:anchor IS NULL OR je.JOB_EXECUTION_ID <= :anchor)
             """;
 
+    /** 경계용 최댓값. 목록·건수와 <b>같은 필터</b>여야 total 이 그 경계의 것이 된다. */
+    private static final String SELECT_LATEST = """
+            SELECT MAX(je.JOB_EXECUTION_ID)
+              FROM BATCH_JOB_EXECUTION je
+              JOIN BATCH_JOB_INSTANCE ji ON ji.JOB_INSTANCE_ID = je.JOB_INSTANCE_ID
+             WHERE (:jobName IS NULL OR ji.JOB_NAME = :jobName)
+            """;
+
     private static final RowMapper<BatchRun> ROW_MAPPER = (rs, rowNum) -> new BatchRun(
             rs.getLong("JOB_EXECUTION_ID"),
             rs.getString("JOB_NAME"),
@@ -102,6 +110,15 @@ public class BatchRunJdbcAdapter implements BatchRunRepository {
                 .query(Integer.class)
                 .single();
         return count == null ? 0 : count;
+    }
+
+    @Override
+    public Long latestExecutionId(String jobName) {
+        return jdbcClient.sql(SELECT_LATEST)
+                .param("jobName", jobName)
+                .query(Long.class)
+                .optional()
+                .orElse(null);
     }
 
     /**

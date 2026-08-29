@@ -105,6 +105,12 @@ public interface VerificationRunRepository {
     int countRecent(DatasetType dataset, Long anchor);
 
     /**
+     * 같은 조건(출처 필터 포함)에서 <b>가장 큰 실행 id</b>. 첫 요청이 경계를 잡는 데 쓴다.
+     * 페이지의 첫 행으로 대신하면 {@code offset > 0} 인 첫 요청에서 경계가 낮게 잡힌다.
+     */
+    Long latestRunId(DatasetType dataset);
+
+    /**
      * 같은 {@code (asOf, dataset, scope)} 에서 <b>마지막으로 쓰인 attempt + 1</b>.
      * 하나도 없으면 1 입니다. <b>중간의 빈 번호는 재사용하지 않습니다</b> — 번호를
      * 시간순으로 읽을 수 있게 두는 편이 낫습니다.

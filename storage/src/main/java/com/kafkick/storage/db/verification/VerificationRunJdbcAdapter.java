@@ -151,6 +151,13 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                AND (:anchor IS NULL OR id <= :anchor)
             """;
 
+    /** 경계용 최댓값. 목록·건수와 <b>같은 필터</b>여야 한다 — 출처 필터까지 같다. */
+    private static final String SELECT_LATEST = """
+            SELECT MAX(id) FROM verification_runs
+             WHERE origin = 'BATCH'
+               AND (:dataset IS NULL OR dataset = :dataset)
+            """;
+
     private static final RowMapper<VerificationRun> ROW_MAPPER = (rs, rowNum) -> VerificationRun.restore(
             rs.getLong("id"),
             rs.getObject("as_of", LocalDateTime.class),
@@ -282,6 +289,15 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                 .query(Integer.class)
                 .single();
         return count == null ? 0 : count;
+    }
+
+    @Override
+    public Long latestRunId(DatasetType dataset) {
+        return jdbcClient.sql(SELECT_LATEST)
+                .param("dataset", toName(dataset))
+                .query(Long.class)
+                .optional()
+                .orElse(null);
     }
 
     @Override

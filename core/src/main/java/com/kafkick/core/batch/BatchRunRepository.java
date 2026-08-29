@@ -29,4 +29,13 @@ public interface BatchRunRepository {
      * <p>{@link #findRecent} 와 <b>같은 anchor</b> 로 세야 total 이 그 페이지들의 것이 된다.
      */
     int countRecent(String jobName, Long anchor);
+
+    /**
+     * 같은 조건에서 <b>가장 큰 실행 id</b>. {@code anchor} 를 안 받은 첫 요청이 경계를 잡는 데 쓴다.
+     *
+     * <p><b>페이지의 첫 행으로 대신하면 안 된다.</b> 첫 요청이 {@code offset > 0} 이면 그 행은
+     * 전체의 최댓값이 아니라 <b>그 페이지의 첫 행</b>이라, 경계가 낮게 잡혀 {@code total} 이
+     * 줄고 다음 요청이 행을 건너뛴다(봇 리뷰가 짚었다). 대상이 없으면 {@code null} 이다.
+     */
+    Long latestExecutionId(String jobName);
 }
