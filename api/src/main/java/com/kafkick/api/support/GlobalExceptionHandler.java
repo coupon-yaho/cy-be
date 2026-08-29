@@ -51,8 +51,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             BusinessException exception, HttpServletRequest request) {
         ErrorCode errorCode = exception.getErrorCode();
         setDependency(request, errorCode.dependency());
-        if (errorCode.getStatus() >= 500) {
+        if (errorCode.getStatus() >= 500 && errorCode.logStackTrace()) {
             log.error("[{}] {}", errorCode.getCode(), exception.getMessage(), exception);
+        } else if (errorCode.getStatus() >= 500) {
+            // 의존성 장애 동안 초당 수천 건이 되는 완화 응답이다. 스택을 찍으면 로그 I/O 가
+            // 응답 지연을 밀어 올려 측정 자체가 오염된다.
+            log.error("[{}] {}: {}", errorCode.getCode(), exception.getMessage(),
+                    exception.getCause() == null ? "-" : exception.getCause().toString());
         } else {
             // 재고 소진처럼 정상 흐름에서 대량 발생하므로 스택은 남기지 않는다.
             log.warn("[{}] {}", errorCode.getCode(), exception.getMessage());

@@ -5,11 +5,14 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import jakarta.persistence.QueryHint;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -209,6 +212,40 @@ public interface CouponRoundJpaRepository
             @Param("asOf") Instant asOf,
             Pageable pageable
     );
+
+    /**
+     * V2 정의 목록. <b>결과가 요청 시각에 종속되지 않는 것이 계약이다.</b>
+     *
+     * <p>예전에는 {@code close_at > :asOf} 로 한 번 더 좁혔는데, 그 결과가 회원 축 없는 단일
+     * 캐시 키({@code ALL}) 하나에 담긴다. 시점으로 좁힌 값을 시점 없는 키에 넣으면 <b>누가 먼저
+     * 캐시를 채웠는지가 답을 바꾼다</b> — 늦은 요청이 먼저 채우면, 그 사이 닫힌 회차가 더 이른
+     * 요청의 목록에서 통째로 사라진다. 인스턴스 시계가 어긋나면 L2 를 건너 같은 일이 벌어진다.
+     *
+     * <p>지금은 닫히지 않은 회차 전부를 그대로 담고, 시각 판정은 응답 직전 한 곳에서만 한다.
+     * 대신 이 집합의 크기는 batch 가 {@code CLOSED} 로 넘기는 속도에 매인다.
+     */
+    @Query(value = """
+            SELECT coupon.id AS couponRoundId,
+                   coupon.brand_id AS brandId,
+                   coupon.name AS name,
+                   coupon.policy_type AS policyType,
+                   coupon.discount_rate AS discountRate,
+                   coupon.max_discount_amount AS maxDiscountAmount,
+                   coupon.discount_amount AS discountAmount,
+                   coupon.valid_days AS validDays,
+                   coupon.open_at AS openAt,
+                   coupon.close_at AS closeAt,
+                   coupon.status AS status
+              FROM coupons coupon
+             WHERE coupon.issuance_engine_version = 'V2'
+               AND coupon.status IN ('SCHEDULED', 'OPEN')
+             ORDER BY coupon.open_at ASC, coupon.id ASC
+            """, nativeQuery = true)
+    // 단위는 밀리초다. org.hibernate.timeout 은 초 단위라 최소값이 1초였고, 호출자가 100ms 에
+    // 물러난 뒤에도 로더 스레드와 Hikari 커넥션이 최대 1초 더 붙잡혀 발급 경로의 커넥션을
+    // 잠식했다(인스턴스 풀은 3이다). 호출자 예산보다 크되 같은 자릿수로 둔다.
+    @QueryHints(@QueryHint(name = "jakarta.persistence.query.timeout", value = "300"))
+    List<CouponDefinitionProjection> findV2CouponDefinitions();
 
     @Query("""
             select count(roundEntity)
