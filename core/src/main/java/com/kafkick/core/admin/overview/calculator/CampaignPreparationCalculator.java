@@ -15,8 +15,6 @@ import com.kafkick.core.admin.campaignsource.PreparationObservation;
 import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.preparation.V2PreparationSource;
 import com.kafkick.core.observation.EngineVersion;
-import com.kafkick.core.observation.SourceStatus;
-import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
 
 /** DB 회차 엔진과 V2 Redis 준비 원천을 결합하는 순수 계산기입니다. */
 @Component
@@ -83,30 +81,6 @@ public class CampaignPreparationCalculator {
         Instant observedAt = source.observedAt().isBefore(v2Source.observedAt())
                 ? source.observedAt() : v2Source.observedAt();
         return observed(source, failedItems, observedAt);
-    }
-
-    /**
-     * Redis 준비 Resolver 연결 전 호출부의 기존 판정 의미를 보존합니다.
-     *
-     * @deprecated CY-780 호출부는 DB 회차 엔진과 실제 V2 준비 원천을 전달해야 합니다.
-     */
-    @Deprecated
-    public PreparationObservation calculate(
-            PreparationSource source,
-            RuntimeConfigSnapshot runtimeConfig
-    ) {
-        Objects.requireNonNull(source, "source");
-        Objects.requireNonNull(runtimeConfig, "runtimeConfig");
-        if (!source.status().carriesValue()) {
-            return new PreparationObservation(null, List.of(), source.status(), null);
-        }
-        if (!runtimeConfig.status().carriesValue()) {
-            return new PreparationObservation(null, List.of(), runtimeConfig.status(), null);
-        }
-        // 이 호환 경로는 Redis 준비를 관측하지 않던 기존 호출 의미만 유지하며 CY-780에서 제거됩니다.
-        V2PreparationSource compatibilitySource = new V2PreparationSource(
-                true, true, SourceStatus.VALID, source.observedAt());
-        return calculate(source, runtimeConfig.engineVersion(), compatibilitySource);
     }
 
     /** 확정 실패 목록과 DB 원천 상태를 값 보유 준비 관측으로 변환합니다. */

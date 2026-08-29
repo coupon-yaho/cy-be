@@ -36,6 +36,8 @@ import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.CampaignQueueObservation;
+import com.kafkick.core.admin.preparation.AdminPreparationResolver;
+import com.kafkick.core.admin.preparation.V2PreparationSource;
 import com.kafkick.core.admin.stock.AdminStockResolver;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
@@ -76,6 +78,7 @@ public class AdminOverviewService {
     private final OperationActionCalculator operationActionCalculator;
     private final OverviewStatusCalculator overviewStatusCalculator;
     private final AdminStockResolver stockResolver;
+    private final AdminPreparationResolver preparationResolver;
 
     /**
      * DB 캠페인 원천, 현재 Runtime 설정과 계산 협력 객체를 주입받습니다.
@@ -92,7 +95,7 @@ public class AdminOverviewService {
      * @param customerOutcomeCalculator O3 고객 결과 계산기
      * @param stockRiskCalculator O4 V1 재고·소진 위험 계산기
      * @param campaignOverviewCalculator 캠페인 상태·오픈 임박·계산 완료 관측 조립기
-     * @param campaignPreparationCalculator DB·Runtime 설정을 결합한 캠페인 준비 항목 계산기
+     * @param campaignPreparationCalculator DB 회차 엔진과 V2 Redis 판정을 결합한 준비 항목 계산기
      * @param consistencyFinalReader 회차 모집단의 최신 FINAL 일괄 조회 경계
      * @param consistencyActionCalculator FINAL 결과의 조치 후보 변환 계산기
      * @param operationActionCalculator 판정 완료 조치 후보의 KPI·목록 집계 계산기
@@ -122,10 +125,11 @@ public class AdminOverviewService {
                 campaignQueueCalculator, customerOutcomeCalculator, stockRiskCalculator,
                 campaignOverviewCalculator, campaignPreparationCalculator, consistencyFinalReader,
                 consistencyActionCalculator, operationActionCalculator, overviewStatusCalculator,
-                new AdminStockResolver(AdminStockResolver.unavailableV2Reader()));
+                new AdminStockResolver(AdminStockResolver.unavailableV2Reader()),
+                new AdminPreparationResolver(AdminPreparationResolver.unavailableV2Reader()));
     }
 
-    /** 운영 배선에서 회차별 DB·Redis 재고 원천 선택기를 함께 주입받습니다. */
+    /** 운영 배선에서 회차별 DB·Redis 재고 선택기와 V2 준비 상태 선택기를 함께 주입받습니다. */
     public AdminOverviewService(
             TimeProvider timeProvider,
             AdminCampaignDataReader campaignDataReader,
@@ -144,7 +148,8 @@ public class AdminOverviewService {
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator,
-            AdminStockResolver stockResolver
+            AdminStockResolver stockResolver,
+            AdminPreparationResolver preparationResolver
     ) {
         this.timeProvider = timeProvider;
         this.campaignDataReader = Objects.requireNonNull(campaignDataReader, "campaignDataReader");
@@ -168,6 +173,7 @@ public class AdminOverviewService {
         this.operationActionCalculator = Objects.requireNonNull(operationActionCalculator, "operationActionCalculator");
         this.overviewStatusCalculator = Objects.requireNonNull(overviewStatusCalculator, "overviewStatusCalculator");
         this.stockResolver = Objects.requireNonNull(stockResolver, "stockResolver");
+        this.preparationResolver = Objects.requireNonNull(preparationResolver, "preparationResolver");
     }
 
     /**
@@ -214,12 +220,15 @@ public class AdminOverviewService {
      */
     public AdminOverviewResult getOverview() {
         Instant snapshotAt = timeProvider.instant();
-        AdminCampaignCatalog catalog = stockResolver.resolve(
-                campaignDataReader.loadCatalog(snapshotAt), snapshotAt);
+        AdminCampaignCatalog dbCatalog = campaignDataReader.loadCatalog(snapshotAt);
+        // 준비 비교값은 Redis 정본 재고로 치환하기 전 DB total·설정 snapshot에서 만들어야 합니다.
+        Map<Long, V2PreparationSource> v2Preparation =
+                preparationResolver.resolve(dbCatalog, snapshotAt);
+        AdminCampaignCatalog catalog = stockResolver.resolve(dbCatalog, snapshotAt);
         // 현재값과 last-known-good를 섞지 않도록 요청마다 get() 결과 하나만 사용합니다.
         RuntimeConfigSnapshot runtimeConfig = runtimeConfigStore.get();
         List<CampaignOverviewSource> campaigns = campaigns(
-                catalog, runtimeConfig, campaignPreparationCalculator);
+                catalog, runtimeConfig, campaignPreparationCalculator, v2Preparation);
         List<Long> couponIds = catalog.campaigns().stream()
                 .map(AdminCampaignCatalog.CampaignData::couponId)
                 .toList();
@@ -337,21 +346,24 @@ public class AdminOverviewService {
     private static List<CampaignOverviewSource> campaigns(
             AdminCampaignCatalog catalog,
             RuntimeConfigSnapshot runtimeConfig,
-            CampaignPreparationCalculator campaignPreparationCalculator
+            CampaignPreparationCalculator campaignPreparationCalculator,
+            Map<Long, V2PreparationSource> v2Preparation
     ) {
         if (catalog.status() != SourceStatus.VALID) {
             return List.of();
         }
         return catalog.campaigns().stream()
-                .map(campaign -> campaignSource(campaign, runtimeConfig, campaignPreparationCalculator))
+                .map(campaign -> campaignSource(
+                        campaign, runtimeConfig, campaignPreparationCalculator, v2Preparation))
                 .toList();
     }
 
-    /** DB 메타·재고와 요청에서 한 번 읽은 엔진 설정을 한 캠페인 계산 원천으로 조립합니다. */
+    /** DB 메타·회차 엔진·권위 재고와 V2 준비 판정을 한 캠페인 계산 원천으로 조립합니다. */
     private static CampaignOverviewSource campaignSource(
             AdminCampaignCatalog.CampaignData campaign,
             RuntimeConfigSnapshot runtimeConfig,
-            CampaignPreparationCalculator campaignPreparationCalculator
+            CampaignPreparationCalculator campaignPreparationCalculator,
+            Map<Long, V2PreparationSource> v2Preparation
     ) {
         SourceStatus stockStatus = campaign.status() == CouponRoundStatus.OPEN
                 ? campaign.stock().status() : SourceStatus.N_A;
@@ -365,7 +377,11 @@ public class AdminOverviewService {
                 carriesStock ? campaign.stock().value().totalQuantity() : null,
                 carriesStock ? campaign.stock().value().activeCount() : null,
                 carriesStock ? campaign.stock().observedAt() : null,
-                stockStatus, campaignPreparationCalculator.calculate(campaign.preparation(), runtimeConfig));
+                stockStatus,
+                campaignPreparationCalculator.calculate(
+                        campaign.preparation(), campaign.engineVersion(),
+                        v2Preparation.getOrDefault(
+                                campaign.couponId(), V2PreparationSource.notApplicable())));
     }
 
     /** OPEN 모집단만 1분 대기열 원천으로 읽고, 비 OPEN 캠페인은 질의 없이 N_A 입력으로 만듭니다. */

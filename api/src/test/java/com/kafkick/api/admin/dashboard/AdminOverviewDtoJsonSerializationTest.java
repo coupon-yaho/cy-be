@@ -219,7 +219,7 @@ class AdminOverviewDtoJsonSerializationTest {
                 new ObservedValue<>(
                         new AdminOverviewResponse.StockForecast(4650, 15000, 0.31, null),
                         SourceStatus.VALID, OBSERVED_AT),
-                List.of(PreparationItem.ISSUANCE_PATH),
+                List.of(PreparationItem.REDIS_WARMUP, PreparationItem.REDIS_GATE),
                 AdminOverviewSnapshot.CustomerImpact.WIDESPREAD,
                 "신규 고객 대기 지속",
                 new AdminOverviewResponse.RecommendedAction(
@@ -269,11 +269,12 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"windowStart\":\"2026-08-17T04:53:58Z\"")
                 .contains("\"campaignQueueStatus\":{\"value\":{\"waitingCount\":3204")
                 .contains("\"remainingRatio\":0.31")
-                .contains("\"failedPreparationItems\":[\"ISSUANCE_PATH\"]")
+                .contains("\"failedPreparationItems\":[\"REDIS_WARMUP\",\"REDIS_GATE\"]")
                 .contains("\"customerOutcomes\":{\"value\":{\"windowStart\":")
                 .contains("\"totalCount\":0.3")
                 .contains("\"type\":\"ISSUED\",\"count\":0.1,\"ratio\":0.3333333333333333")
                 .contains("\"campaigns\":{\"value\":[", "\"topItems\":[]")
+                .doesNotContain("\"redisPreparation\"", "\"warmupReady\"", "\"gateReady\"")
                 .doesNotContain("\"admissionsPerMinute\":0.0,\"estimatedWait\":");
     }
 

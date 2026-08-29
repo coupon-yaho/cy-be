@@ -26,6 +26,8 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.preparation.AdminPreparationResolver;
+import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
@@ -129,7 +131,7 @@ public class AdminObservabilityConfig {
         return new PendingAdminQueueObservationSource();
     }
 
-    /** API 전용 Prom 관측 원천과 Core 계산기를 기술 중립 Overview Service에 명시적으로 배선합니다. */
+    /** API 관측 원천과 V2 재고·준비 Reader를 기술 중립 Overview Service에 명시적으로 배선합니다. */
     @Bean
     public AdminOverviewService adminOverviewService(
             TimeProvider timeProvider,
@@ -149,7 +151,8 @@ public class AdminObservabilityConfig {
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
             OverviewStatusCalculator overviewStatusCalculator,
-            ObjectProvider<V2AdminStockReader> v2AdminStockReaderProvider
+            ObjectProvider<V2AdminStockReader> v2AdminStockReaderProvider,
+            ObjectProvider<V2AdminPreparationReader> v2AdminPreparationReaderProvider
     ) {
         ConsistencyFinalReader consistencyFinalReader = consistencyFinalReaderProvider
                 .getIfAvailable(PendingConsistencyFinalReader::new);
@@ -161,7 +164,9 @@ public class AdminObservabilityConfig {
                 consistencyFinalReader, consistencyActionCalculator,
                 operationActionCalculator, overviewStatusCalculator,
                 new AdminStockResolver(v2AdminStockReaderProvider
-                        .getIfAvailable(AdminStockResolver::unavailableV2Reader)));
+                        .getIfAvailable(AdminStockResolver::unavailableV2Reader)),
+                new AdminPreparationResolver(v2AdminPreparationReaderProvider
+                        .getIfAvailable(AdminPreparationResolver::unavailableV2Reader)));
     }
 
     /** 관측 JDBC Reader가 없을 때만 관측 비활성 오류를 내는 Core Port 구현을 제공합니다. */
