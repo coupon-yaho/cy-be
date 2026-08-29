@@ -1,9 +1,10 @@
 package com.kafkick.core.notification.domain;
 
+import java.time.Instant;
 import java.util.Objects;
 
 public record NotificationOutboxClaim(Long outboxId, Long notificationId, int attemptSeq,
-        AttemptTrigger trigger, String claimToken) {
+        AttemptTrigger trigger, String claimToken, Instant requestedAt) {
     public NotificationOutboxClaim {
         if (outboxId == null || outboxId <= 0 || notificationId == null || notificationId <= 0
                 || attemptSeq < 1) {
@@ -16,5 +17,6 @@ public record NotificationOutboxClaim(Long outboxId, Long notificationId, int at
         if (claimToken == null || claimToken.isBlank()) {
             throw new IllegalArgumentException("claimToken은 비어 있을 수 없습니다.");
         }
+        Objects.requireNonNull(requestedAt, "requestedAt");
     }
 }

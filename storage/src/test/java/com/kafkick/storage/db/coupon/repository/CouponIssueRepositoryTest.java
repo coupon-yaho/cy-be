@@ -39,6 +39,7 @@ import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
+import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
@@ -98,7 +99,8 @@ class CouponIssueRepositoryTest {
                 issuanceRepository,
                 couponStockRepository,
                 issuanceHistoryRepository,
-                () -> String.format("%016d", codeSequence.incrementAndGet())
+                () -> String.format("%016d", codeSequence.incrementAndGet()),
+                org.mockito.Mockito.mock(NotificationRequestService.class)
         );
     }
 

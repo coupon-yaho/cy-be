@@ -20,7 +20,7 @@ class NotificationOutboxTest {
     @Test
     void claimRejectsAutoTrigger() {
         assertThatThrownBy(() -> new NotificationOutboxClaim(1L, 2L, 1,
-                AttemptTrigger.AUTO, "claim-token"))
+                AttemptTrigger.AUTO, "claim-token", AT))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }
