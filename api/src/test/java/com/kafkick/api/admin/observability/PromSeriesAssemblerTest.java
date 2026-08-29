@@ -110,8 +110,7 @@ class PromSeriesAssemblerTest {
         assertThat(stateOf(response, SeriesKey.ERROR_CLASS_RATE)).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(stateOf(response, SeriesKey.FAILURE_REASON_RATE)).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(stateOf(response, SeriesKey.LATENCY_P99)).isEqualTo(SourceStatus.UNAVAILABLE);
-        // 원천이 없는 계열은 애초에 질의를 보내지 않으므로 예산과 무관하게 PENDING 이다.
-        assertThat(stateOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEqualTo(SourceStatus.PENDING);
+        assertThat(stateOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEqualTo(SourceStatus.UNAVAILABLE);
         // 기준선도 계열 뒤라 함께 잘린다.
         assertThat(response.markers()).isEmpty();
     }
@@ -207,12 +206,11 @@ class PromSeriesAssemblerTest {
                 assembler(source, PrometheusSeriesProperties.defaults())
                         .assemble(global(MetricsWindow.ONE_MINUTE));
 
-        // 질의가 나가는 계열 아홉 + 기준선 하나. 이 수가 곧 예산 실측의 모집단이다.
-        // OBS-46 이 지연 축을 둘로 갈라 하나 늘었다.
-        assertThat(source.issued()).hasSize(10);
-        assertThat(stateOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEqualTo(SourceStatus.PENDING);
+        // 질의가 나가는 계열 열 + 기준선 하나. 이 수가 곧 예산 실측의 모집단이다.
+        assertThat(source.issued()).hasSize(11);
+        assertThat(stateOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEqualTo(SourceStatus.VALID);
         assertThat(stateOf(response, SeriesKey.QUEUE_TELEMETRY)).isEqualTo(SourceStatus.PENDING);
-        assertThat(pointsOf(response, SeriesKey.QUEUE_PERSISTENCE)).isEmpty();
+        assertThat(pointsOf(response, SeriesKey.QUEUE_PERSISTENCE)).isNotEmpty();
     }
 
     /**
@@ -407,6 +405,7 @@ class PromSeriesAssemblerTest {
         List<String> order = List.of(
                 MetricAggregation.CONSISTENCY_GAP,
                 MetricAggregation.QUEUE_LENGTH,
+                MetricAggregation.KAFKA_CONSUMER_LAG,
                 MetricAggregation.HTTP_IN_FLIGHT,
                 "sum(rate(",
                 " / sum(rate(",
@@ -609,9 +608,8 @@ class PromSeriesAssemblerTest {
         assertThat(response.series())
                 .filteredOn(entry -> entry.state() == SourceStatus.PENDING)
                 .extracting(SeriesEntry::key)
-                // QUEUE_PERSISTENCE 는 OBS-15(Kafka consumer lag), QUEUE_TELEMETRY 는 서버가 잴 수
-                // 없는 정의라 원천이 없다. 여기 목록이 곧 "아직 배선하지 않았다" 는 선언이다.
-                .containsExactlyInAnyOrder(SeriesKey.QUEUE_PERSISTENCE, SeriesKey.QUEUE_TELEMETRY);
+                // 화면 수신 시각이 필요한 Telemetry 만 서버에서 잴 수 없다.
+                .containsExactly(SeriesKey.QUEUE_TELEMETRY);
     }
 
     private static List<AdminMetricsSeriesResponse.SeriesPoint> pointsOf(
