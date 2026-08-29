@@ -841,17 +841,32 @@ class VerificationRuleJdbcAdapterTest {
     }
 
     @Test
-    @DisplayName("취소로 들어온 행도 잡는다 — 활성 판정 술어를 쓰면 안 되는 이유다")
-    void detectsCanceledUsageAddedAboveFrozenBoundary() {
+    @DisplayName("asOf 뒤에 취소되는 행은 잡는다 — V5 가 활성으로 세는 행이다")
+    void detectsUsageCanceledAfterAsOfAddedAboveFrozenBoundary() {
         long issuanceId = data.issuance(IssuanceStatus.ISSUED);
         long frozen = adapter.latestUsageId();
 
-        // canceled_at 이 있어 "지금 활성" 은 아니지만, V5 가 세는 값은 바뀐다.
+        // 지금은 취소돼 있지만 취소 시각이 asOf 뒤라, asOf 시점에는 활성이다.
+        // V5 의 (canceled_at IS NULL OR canceled_at > asOf) 가 이 행을 센다.
+        data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.plusHours(1));
+
+        assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
+                .as("canceled_at IS NULL 만 보면 이 행을 놓친다 — V5 는 세는데 가드가 못 본다")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("asOf 전에 이미 취소된 행은 안 잡는다 — V5 가 안 세므로 답이 안 바뀐다")
+    void ignoresUsageAlreadyCanceledBeforeAsOf() {
+        long issuanceId = data.issuance(IssuanceStatus.ISSUED);
+        long frozen = adapter.latestUsageId();
+
         data.usage(issuanceId, AS_OF.minusHours(2), AS_OF.minusHours(1));
 
         assertThat(adapter.hasUsagesAddedAbove(frozen, AS_OF))
-                .as("canceled_at 을 함께 보면 이 행을 놓친다 — 그래서 활성 술어를 안 쓴다")
-                .isTrue();
+                .as("V5 는 이 행을 애초에 안 센다. 답이 그대로인데 죽이면 정상 데이터가 "
+                        + "실행을 죽이는 오탐이다")
+                .isFalse();
     }
 
     @Test

@@ -163,10 +163,15 @@ public interface VerificationRuleRepository {
      * 얼린 사용 상한 <b>위로</b> {@code asOf} 이하 사용 이력이 끼어들었는가.
      * 이름과 SQL 방향은 형제 {@link #hasHistoriesAddedAbove} 와 맞춘다.
      *
-     * <p><b>창의 컬럼은 형제와 다르다</b> — 형제는 {@code created_at}(리플레이가 정렬·필터에
-     * 쓰는 그 컬럼), 이쪽은 {@code used_at} 이다. V5 가 {@code used_at <= asOf} 로 세기
-     * 때문이다. 이 가드가 답해야 할 질문이 <i>"V5 가 그 행을 셀 것인가"</i> 라서,
-     * V5 와 같은 술어를 써야 뜻이 맞는다.
+     * <p><b>창은 형제와 다르고, V5 와 같다.</b> 형제는 {@code created_at}(리플레이가 정렬·필터에
+     * 쓰는 컬럼)으로 자르지만 이쪽은 V5 의 술어를 통째로 쓴다 —
+     * {@code used_at <= asOf AND (canceled_at IS NULL OR canceled_at > asOf)}.
+     * 이 가드가 답할 질문이 <i>"V5 의 답이 달라지는가"</i> 이기 때문이다.
+     *
+     * <p>술어가 갈리면 <b>양쪽으로 틀린다</b> — {@code canceled_at} 을 안 보면 {@code asOf}
+     * 이전에 이미 취소된 행(V5 가 안 세는 행)에 실행이 죽고, {@code canceled_at IS NULL} 만
+     * 보면 {@code asOf} 이후에 취소되는 행(V5 가 활성으로 세는 행)을 놓친다.
+     * 어댑터에 두 방향을 각각 재는 검사가 있다.
      *
      * <p><b>V5 가 읽는 다섯째 축인데 얼림 가드에도 지문에도 없었다.</b>
      * {@code assertFrozenStep} 은 네 축(발급건·재고·회차 정책·이력)만 보고,
