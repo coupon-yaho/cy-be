@@ -21,6 +21,17 @@ import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 public interface CouponRoundJpaRepository
         extends JpaRepository<CouponRoundEntity, Long> {
 
+    /**
+     * V2 정의 목록. <b>결과가 요청 시각에 종속되지 않는 것이 계약이다.</b>
+     *
+     * <p>예전에는 {@code close_at > :asOf} 로 한 번 더 좁혔는데, 그 결과가 회원 축 없는 단일
+     * 캐시 키({@code ALL}) 하나에 담긴다. 시점으로 좁힌 값을 시점 없는 키에 넣으면 <b>누가 먼저
+     * 캐시를 채웠는지가 답을 바꾼다</b> — 늦은 요청이 먼저 채우면, 그 사이 닫힌 회차가 더 이른
+     * 요청의 목록에서 통째로 사라진다. 인스턴스 시계가 어긋나면 L2 를 건너 같은 일이 벌어진다.
+     *
+     * <p>지금은 닫히지 않은 회차 전부를 그대로 담고, 시각 판정은 응답 직전 한 곳에서만 한다.
+     * 대신 이 집합의 크기는 batch 가 {@code CLOSED} 로 넘기는 속도에 매인다.
+     */
     @Query(value = """
             SELECT coupon.id AS couponRoundId,
                    coupon.valid_days AS validDays,
@@ -56,6 +67,17 @@ public interface CouponRoundJpaRepository
 
     boolean existsByTemplateIdAndOpenAt(Long templateId, Instant openAt);
 
+    /**
+     * V2 정의 목록. <b>결과가 요청 시각에 종속되지 않는 것이 계약이다.</b>
+     *
+     * <p>예전에는 {@code close_at > :asOf} 로 한 번 더 좁혔는데, 그 결과가 회원 축 없는 단일
+     * 캐시 키({@code ALL}) 하나에 담긴다. 시점으로 좁힌 값을 시점 없는 키에 넣으면 <b>누가 먼저
+     * 캐시를 채웠는지가 답을 바꾼다</b> — 늦은 요청이 먼저 채우면, 그 사이 닫힌 회차가 더 이른
+     * 요청의 목록에서 통째로 사라진다. 인스턴스 시계가 어긋나면 L2 를 건너 같은 일이 벌어진다.
+     *
+     * <p>지금은 닫히지 않은 회차 전부를 그대로 담고, 시각 판정은 응답 직전 한 곳에서만 한다.
+     * 대신 이 집합의 크기는 batch 가 {@code CLOSED} 로 넘기는 속도에 매인다.
+     */
     @Query(value = """
             SELECT coupon.id AS couponRoundId,
                    coupon.template_id AS templateId,
@@ -87,6 +109,17 @@ public interface CouponRoundJpaRepository
      *
      * <p>회차는 PK const 접근, 존재 확인은 {@code uk_coupon_member} 한 건 확인으로 처리됩니다.
      * 인덱스 작업량은 두 쿼리로 나눴을 때와 같고 왕복만 하나 줄어듭니다.
+     */
+    /**
+     * V2 정의 목록. <b>결과가 요청 시각에 종속되지 않는 것이 계약이다.</b>
+     *
+     * <p>예전에는 {@code close_at > :asOf} 로 한 번 더 좁혔는데, 그 결과가 회원 축 없는 단일
+     * 캐시 키({@code ALL}) 하나에 담긴다. 시점으로 좁힌 값을 시점 없는 키에 넣으면 <b>누가 먼저
+     * 캐시를 채웠는지가 답을 바꾼다</b> — 늦은 요청이 먼저 채우면, 그 사이 닫힌 회차가 더 이른
+     * 요청의 목록에서 통째로 사라진다. 인스턴스 시계가 어긋나면 L2 를 건너 같은 일이 벌어진다.
+     *
+     * <p>지금은 닫히지 않은 회차 전부를 그대로 담고, 시각 판정은 응답 직전 한 곳에서만 한다.
+     * 대신 이 집합의 크기는 batch 가 {@code CLOSED} 로 넘기는 속도에 매인다.
      */
     @Query(value = """
             SELECT coupon.id AS couponRoundId,
@@ -213,6 +246,17 @@ public interface CouponRoundJpaRepository
             Pageable pageable
     );
 
+    /**
+     * V2 정의 목록. <b>결과가 요청 시각에 종속되지 않는 것이 계약이다.</b>
+     *
+     * <p>예전에는 {@code close_at > :asOf} 로 한 번 더 좁혔는데, 그 결과가 회원 축 없는 단일
+     * 캐시 키({@code ALL}) 하나에 담긴다. 시점으로 좁힌 값을 시점 없는 키에 넣으면 <b>누가 먼저
+     * 캐시를 채웠는지가 답을 바꾼다</b> — 늦은 요청이 먼저 채우면, 그 사이 닫힌 회차가 더 이른
+     * 요청의 목록에서 통째로 사라진다. 인스턴스 시계가 어긋나면 L2 를 건너 같은 일이 벌어진다.
+     *
+     * <p>지금은 닫히지 않은 회차 전부를 그대로 담고, 시각 판정은 응답 직전 한 곳에서만 한다.
+     * 대신 이 집합의 크기는 batch 가 {@code CLOSED} 로 넘기는 속도에 매인다.
+     */
     @Query(value = """
             SELECT coupon.id AS couponRoundId,
                    coupon.brand_id AS brandId,
@@ -228,14 +272,13 @@ public interface CouponRoundJpaRepository
               FROM coupons coupon
              WHERE coupon.issuance_engine_version = 'V2'
                AND coupon.status IN ('SCHEDULED', 'OPEN')
-               AND coupon.close_at > :asOf
              ORDER BY coupon.open_at ASC, coupon.id ASC
             """, nativeQuery = true)
     // 단위는 밀리초다. org.hibernate.timeout 은 초 단위라 최소값이 1초였고, 호출자가 100ms 에
     // 물러난 뒤에도 로더 스레드와 Hikari 커넥션이 최대 1초 더 붙잡혀 발급 경로의 커넥션을
     // 잠식했다(인스턴스 풀은 3이다). 호출자 예산보다 크되 같은 자릿수로 둔다.
     @QueryHints(@QueryHint(name = "jakarta.persistence.query.timeout", value = "300"))
-    List<CouponDefinitionProjection> findV2CouponDefinitions(@Param("asOf") Instant asOf);
+    List<CouponDefinitionProjection> findV2CouponDefinitions();
 
     @Query("""
             select count(roundEntity)

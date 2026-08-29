@@ -95,7 +95,7 @@ class IssuableCouponRoundQueryRepositoryTest {
     void findV2CouponDefinitions() {
         jdbcTemplate.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id IN (10, 14)");
 
-        List<CouponDefinition> definitions = definitionQueryAdapter.findCandidates(AS_OF);
+        List<CouponDefinition> definitions = definitionQueryAdapter.findCandidates();
 
         assertThat(definitions).extracting(CouponDefinition::couponRoundId)
                 .containsExactly(10L, 14L);

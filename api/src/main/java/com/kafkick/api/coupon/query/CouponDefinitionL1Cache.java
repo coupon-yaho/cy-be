@@ -109,6 +109,13 @@ public final class CouponDefinitionL1Cache<T> {
         }
     }
 
+    public record LoadedValue<T>(T value, Instant nextBoundary) {
+        public LoadedValue {
+            Objects.requireNonNull(value);
+            Objects.requireNonNull(nextBoundary);
+        }
+    }
+
     private T staleOrThrow(
             CouponDefinitionCacheKey key, Throwable cause, CouponDefinitionCacheErrorCode errorCode) {
         CompletableFuture<FreshValue<T>> staleFuture = stale.getIfPresent(key);
@@ -159,13 +166,6 @@ public final class CouponDefinitionL1Cache<T> {
             return java.time.Duration.between(start, end).toNanos();
         } catch (ArithmeticException overflow) {
             return Long.MAX_VALUE;
-        }
-    }
-
-    public record LoadedValue<T>(T value, Instant nextBoundary) {
-        public LoadedValue {
-            Objects.requireNonNull(value);
-            Objects.requireNonNull(nextBoundary);
         }
     }
 

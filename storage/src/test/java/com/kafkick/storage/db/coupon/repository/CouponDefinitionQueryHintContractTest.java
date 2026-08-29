@@ -1,7 +1,5 @@
 package com.kafkick.storage.db.coupon.repository;
 
-import java.time.Instant;
-
 import jakarta.persistence.QueryHint;
 
 import org.junit.jupiter.api.Test;
@@ -21,7 +19,7 @@ class CouponDefinitionQueryHintContractTest {
     @Test
     void boundsTheDefinitionQueryInMillisecondsNotSeconds() throws Exception {
         QueryHints hints = CouponRoundJpaRepository.class
-                .getMethod("findV2CouponDefinitions", Instant.class)
+                .getMethod("findV2CouponDefinitions")
                 .getAnnotation(QueryHints.class);
 
         assertThat(hints).as("정의 질의에 시간 상한이 없으면 느린 DB 가 커넥션을 무한정 붙잡는다")

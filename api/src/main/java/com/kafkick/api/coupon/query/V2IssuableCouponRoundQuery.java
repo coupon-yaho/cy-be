@@ -52,14 +52,14 @@ public final class V2IssuableCouponRoundQuery {
 
     public List<CouponDefinition> findOpenDefinitions(Instant asOf) {
         List<CouponDefinition> allDefinitions =
-                definitions.get(CouponDefinitionCacheKey.ALL, () -> loadThroughL2(asOf));
+                definitions.get(CouponDefinitionCacheKey.ALL, this::loadThroughL2);
         return allDefinitions.stream()
                 .filter(definition -> !definition.openAt().isAfter(asOf))
                 .filter(definition -> definition.closeAt().isAfter(asOf))
                 .toList();
     }
 
-    private CouponDefinitionL1Cache.LoadedValue<List<CouponDefinition>> loadThroughL2(Instant asOf) {
+    private CouponDefinitionL1Cache.LoadedValue<List<CouponDefinition>> loadThroughL2() {
         Optional<CouponDefinitionSnapshot> shared = l2Cache.find();
         if (shared.isPresent()) {
             return toLoaded(shared.get());
@@ -69,19 +69,24 @@ public final class V2IssuableCouponRoundQuery {
             // 다른 인스턴스가 이미 DB 로 갔다. 그 답을 기다리는 편이 같은 질의를 한 번 더
             // 던지는 것보다 싸다. 그래도 안 오면 DB 로 간다 — 여기서 멈추면 503 이다.
             Optional<CouponDefinitionSnapshot> awaited = awaitSharedLoad();
-            return awaited.map(this::toLoaded).orElseGet(() -> loadFromDatabase(asOf, null));
+            return awaited.map(this::toLoaded).orElseGet(() -> loadFromDatabase(null));
         }
-        return loadFromDatabase(asOf, token.get());
+        return loadFromDatabase(token.get());
     }
 
+    /**
+     * 대기 상한은 {@code TimeProvider} 가 아니라 {@link System#nanoTime()} 으로 잰다. 이 값은
+     * 도메인 시각이 아니라 <b>경과 시간</b>이고, 벽시계로 재면 NTP 보정 한 번에 대기가 0 이
+     * 되거나 두 배가 된다. 시계를 고정한 회차에서는 아예 끝나지 않는다.
+     */
     private Optional<CouponDefinitionSnapshot> awaitSharedLoad() {
-        Instant deadline = timeProvider.instant().plus(l2Properties.waitTimeout());
+        long deadline = System.nanoTime() + l2Properties.waitTimeout().toNanos();
         while (true) {
             Optional<CouponDefinitionSnapshot> shared = l2Cache.find();
             if (shared.isPresent()) {
                 return shared;
             }
-            if (!timeProvider.instant().isBefore(deadline)) {
+            if (System.nanoTime() - deadline >= 0) {
                 return Optional.empty();
             }
             try {
@@ -93,15 +98,17 @@ public final class V2IssuableCouponRoundQuery {
         }
     }
 
-    private CouponDefinitionL1Cache.LoadedValue<List<CouponDefinition>> loadFromDatabase(
-            Instant asOf, String token) {
+    private CouponDefinitionL1Cache.LoadedValue<List<CouponDefinition>> loadFromDatabase(String token) {
         try {
-            List<CouponDefinition> loaded = definitionQueryService.findCandidates(asOf);
+            List<CouponDefinition> loaded = definitionQueryService.findCandidates();
+            // 기준 시각은 요청의 asOf 가 아니라 '질의가 끝난 지금' 이다. Redis TTL 은 put 시점부터
+            // 흐르는데 asOf 를 쓰면 DB 왕복과 커넥션 대기만큼 캐시가 회차 경계를 넘어 산다.
+            // 그렇게 넘긴 값을 받은 L1 은 이미 지난 경계 때문에 즉시 만료돼, 요청마다 단일 로더
+            // 스레드를 거쳐 L2 를 다시 읽는 상태가 된다.
+            Instant loadedAt = timeProvider.instant();
             CouponDefinitionSnapshot snapshot =
-                    new CouponDefinitionSnapshot(loaded, nextBoundary(loaded, asOf));
-            // L2 수명도 회차 경계에서 끊는다. TTL 만 보고 두면 L1(최대 ttl) 위에 L2(최대 ttl)가
-            // 얹혀 최악 지연이 두 배가 되고, 오픈 정각에 리로드해도 L2 의 옛 목록을 되받는다.
-            l2Cache.put(snapshot, cappedTtl(snapshot.nextBoundary(), asOf));
+                    new CouponDefinitionSnapshot(loaded, nextBoundary(loaded, loadedAt));
+            l2Cache.put(snapshot, cappedTtl(snapshot.nextBoundary(), loadedAt));
             return toLoaded(snapshot);
         } finally {
             if (token != null) {
@@ -110,6 +117,7 @@ public final class V2IssuableCouponRoundQuery {
         }
     }
 
+    /** L2 수명도 회차 경계에서 끊는다 — 안 그러면 L1(최대 ttl) 위에 L2(최대 ttl)가 얹힌다. */
     private java.time.Duration cappedTtl(Instant nextBoundary, Instant loadedAt) {
         java.time.Duration untilBoundary = java.time.Duration.between(loadedAt, nextBoundary);
         if (untilBoundary.compareTo(l2Properties.ttl()) >= 0) {

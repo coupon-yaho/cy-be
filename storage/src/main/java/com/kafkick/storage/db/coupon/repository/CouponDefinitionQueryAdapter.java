@@ -1,6 +1,5 @@
 package com.kafkick.storage.db.coupon.repository;
 
-import java.time.Instant;
 import java.util.List;
 
 import org.springframework.dao.DataAccessException;
@@ -23,9 +22,9 @@ public class CouponDefinitionQueryAdapter implements CouponDefinitionQueryPort {
     }
 
     @Override
-    public List<CouponDefinition> findCandidates(Instant asOf) {
+    public List<CouponDefinition> findCandidates() {
         try {
-            return repository.findV2CouponDefinitions(asOf).stream()
+            return repository.findV2CouponDefinitions().stream()
                     .map(CouponDefinitionQueryAdapter::toDefinition)
                     .toList();
         } catch (DataAccessException exception) {

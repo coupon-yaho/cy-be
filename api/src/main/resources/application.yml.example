@@ -88,9 +88,13 @@ coupon:
     # ⚠️ wait-timeout 은 위 l1.load-timeout 보다 짧아야 한다. 로드 권한을 못 얻은 인스턴스가
     #    그 시간만큼 L2 를 폴링하는데, 대기가 호출자 예산보다 길면 대기가 끝나기 전에 호출자가
     #    전부 물러난다 — 락을 두고도 herd 가 그대로 DB 로 간다. 어긋나면 기동에서 죽는다.
+    # ⚠️ lock-lease 는 최악의 로드 시간보다 길어야 한다. 짧으면 lease 가 먼저 끝나고, 뒤늦게
+    #    끝난 로더가 그 사이 다른 인스턴스가 올린 새 값을 덮어쓴다. 근거는 storage.yml 의
+    #    hikari connection-timeout(3000ms) + 정의 질의 timeout(300ms) = 3.3초다.
+    #    storage.yml 의 그 두 값을 바꾸면 여기도 같이 본다.
     l2:
       ttl: ${COUPON_DEFINITION_L2_TTL:10s}
-      lock-lease: ${COUPON_DEFINITION_L2_LOCK_LEASE:3s}
+      lock-lease: ${COUPON_DEFINITION_L2_LOCK_LEASE:5s}
       wait-timeout: ${COUPON_DEFINITION_L2_WAIT_TIMEOUT:60ms}
       poll-interval: ${COUPON_DEFINITION_L2_POLL_INTERVAL:10ms}
 

@@ -105,7 +105,7 @@ class V2IssuableCouponRoundQueryTest {
     @Test
     void releasesTheLoadPermitEvenWhenTheDatabaseFails() {
         RecordingL2 l2 = new RecordingL2();
-        CouponDefinitionQueryService failing = new CouponDefinitionQueryService(asOf -> {
+        CouponDefinitionQueryService failing = new CouponDefinitionQueryService(() -> {
             throw new IllegalStateException("db down");
         });
         V2IssuableCouponRoundQuery query = new V2IssuableCouponRoundQuery(
@@ -131,7 +131,7 @@ class V2IssuableCouponRoundQueryTest {
 
     private V2IssuableCouponRoundQuery query(
             CouponDefinitionL2CachePort l2, AtomicInteger loads, List<CouponDefinition> rows) {
-        CouponDefinitionQueryService service = new CouponDefinitionQueryService(asOf -> {
+        CouponDefinitionQueryService service = new CouponDefinitionQueryService(() -> {
             loads.incrementAndGet();
             return rows;
         });
@@ -154,7 +154,7 @@ class V2IssuableCouponRoundQueryTest {
     }
 
     private static TimeProvider timeProvider() {
-        return new TimeProvider(Clock.systemUTC());
+        return new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private static CouponDefinition definition(
@@ -203,5 +203,56 @@ class V2IssuableCouponRoundQueryTest {
         public void releaseLoad(String token) {
             released++;
         }
+    }
+
+    @Test
+    void doesNotLetALaterRequestHideARoundFromAnEarlierOne() {
+        // 캐시 키에는 시점이 없다. 시점으로 좁힌 값을 그 키에 담으면 누가 먼저 채웠는지가 답을
+        // 바꾼다 — 늦은 요청이 먼저 채우면 그 사이 닫힌 회차가 이른 요청에서도 사라진다.
+        AtomicInteger loads = new AtomicInteger();
+        CouponDefinition closingSoon = definition(7L, CouponRoundStatus.OPEN, -60, 30);
+        V2IssuableCouponRoundQuery query =
+                query(new DisabledCouponDefinitionL2Cache(), loads, List.of(closingSoon));
+
+        // 늦은 시점의 요청이 먼저 캐시를 채운다(회차는 이미 닫혔다).
+        assertThat(query.findOpenDefinitions(NOW.plusSeconds(60))).isEmpty();
+
+        // 그 뒤 도착한 이른 시점의 요청은 여전히 그 회차를 봐야 한다.
+        assertThat(query.findOpenDefinitions(NOW)).extracting(CouponDefinition::couponRoundId)
+                .containsExactly(7L);
+        assertThat(loads).as("두 번째 요청이 DB 를 다시 읽어 우연히 맞으면 안 된다").hasValue(1);
+    }
+
+    @Test
+    void measuresTheSharedCacheLifetimeFromTheWriteNotFromTheRequest() {
+        // Redis TTL 은 put 시점부터 흐른다. 요청의 asOf 를 쓰면 DB 왕복만큼 캐시가 경계를 넘어
+        // 살고, 그 값을 받은 L1 은 이미 지난 경계 때문에 즉시 만료된다.
+        RecordingL2 l2 = new RecordingL2();
+        MutableClock clock = new MutableClock(NOW);
+        CouponDefinitionQueryService slow = new CouponDefinitionQueryService(() -> {
+            clock.advanceSeconds(2);
+            return List.of(definition(7L, CouponRoundStatus.OPEN, -1, 10));
+        });
+        new V2IssuableCouponRoundQuery(cache(), slow, l2, l2Properties(), new TimeProvider(clock))
+                .findOpenDefinitions(NOW);
+
+        // 경계는 NOW+10, 질의가 2초를 썼으므로 남은 수명은 8초다.
+        assertThat(l2.putTtl).isEqualTo(Duration.ofSeconds(8));
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        private MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        private void advanceSeconds(long seconds) {
+            now = now.plusSeconds(seconds);
+        }
+
+        @Override public java.time.ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(java.time.ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
     }
 }

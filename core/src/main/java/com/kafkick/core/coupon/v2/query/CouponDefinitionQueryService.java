@@ -1,6 +1,5 @@
 package com.kafkick.core.coupon.v2.query;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
@@ -18,7 +17,7 @@ public class CouponDefinitionQueryService {
     }
 
     @Transactional(readOnly = true)
-    public List<CouponDefinition> findCandidates(Instant asOf) {
-        return queryPort.findCandidates(Objects.requireNonNull(asOf));
+    public List<CouponDefinition> findCandidates() {
+        return queryPort.findCandidates();
     }
 }
