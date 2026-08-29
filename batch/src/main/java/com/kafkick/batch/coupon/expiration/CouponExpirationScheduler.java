@@ -37,5 +37,16 @@ public class CouponExpirationScheduler {
                 result.scannedCount(),
                 result.expiredCount()
         );
+        if (!result.failedRoundIds().isEmpty()) {
+            log.error("coupon expiration skipped rounds after failures: {}",
+                    result.failedRoundIds());
+        }
+        if (!result.haltedRoundIds().isEmpty()) {
+            // 회차를 중단했다는 사실은 info 줄에 묻히면 안 된다 — 재동기화 요청이다.
+            log.error(
+                    "coupon expiration halted rounds (v2 stock restore over cap): {}",
+                    result.haltedRoundIds()
+            );
+        }
     }
 }

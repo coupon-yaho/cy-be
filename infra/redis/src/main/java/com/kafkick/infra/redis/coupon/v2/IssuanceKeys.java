@@ -1,7 +1,7 @@
 package com.kafkick.infra.redis.coupon.v2;
 
 /**
- * 회차 하나의 v2 키 네 개. <b>키 이름과 해시태그의 출처는 여기 한 곳이다.</b>
+ * 회차 하나의 v2 키 다섯 개. <b>키 이름과 해시태그의 출처는 여기 한 곳이다.</b>
  *
  * <p>리터럴을 호출부·테스트에 흩뿌리면 그중 하나만 바뀐 상태가 초록으로 남는다. 특히
  * 정합성 리더는 설정으로 키를 받으므로(11 문서 ③), 어긋난 사실은 부하 시험 끝에 gap 4축이
@@ -43,6 +43,14 @@ public final class IssuanceKeys {
     /** 누적 발급 수. 취소로 줄지 않는다. */
     public String issuedEver() {
         return key("issued_ever");
+    }
+
+    /**
+     * 복원 중단 표식. Lua 가 만지지 않지만 <b>같은 회차의 키</b>라 해시태그를 같이 쓴다 —
+     * 회차 하나를 지울 때 넷만 지우고 이것만 남는 일이 없어야 한다.
+     */
+    public String restorationHalt() {
+        return key("restore_halt");
     }
 
     private String key(String name) {

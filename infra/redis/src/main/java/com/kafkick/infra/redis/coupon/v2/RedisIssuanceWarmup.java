@@ -3,12 +3,16 @@ package com.kafkick.infra.redis.coupon.v2;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.kafkick.core.coupon.v2.IssuedValue;
 import com.kafkick.core.coupon.v2.IssuedValueCodec;
 import com.kafkick.core.coupon.v2.port.IssuanceWarmupPort;
+import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 import com.kafkick.core.coupon.v2.port.RebuiltIssued;
 
 /**
@@ -20,6 +24,8 @@ import com.kafkick.core.coupon.v2.port.RebuiltIssued;
  * 175k field 기준 11.6ms 를 한 스레드에서 태운다.
  */
 public class RedisIssuanceWarmup implements IssuanceWarmupPort {
+
+    private static final Logger log = LoggerFactory.getLogger(RedisIssuanceWarmup.class);
 
     /**
      * 재구성으로 들어온 값의 요청토큰과 멱등키 자리. {@code '|'} 를 포함하지 않아 4필드 codec 을
@@ -42,10 +48,16 @@ public class RedisIssuanceWarmup implements IssuanceWarmupPort {
     static final int HSET_BATCH_SIZE = 1_000;
 
     private final StringRedisTemplate redisTemplate;
+    private final RestorationHaltStore haltStore;
     private final IssuedValueCodec codec = new IssuedValueCodec();
 
-    public RedisIssuanceWarmup(StringRedisTemplate redisTemplate) {
-        this.redisTemplate = redisTemplate;
+    /**
+     * 복원 중단 표식은 <b>포트로</b> 지운다. 키를 여기서 직접 만들면 표식의 이름이 두 곳이
+     * 되고, 한쪽만 바뀌었다는 사실은 "재구성했는데 만료가 안 돈다" 로만 드러난다.
+     */
+    public RedisIssuanceWarmup(StringRedisTemplate redisTemplate, RestorationHaltStore haltStore) {
+        this.redisTemplate = Objects.requireNonNull(redisTemplate, "redisTemplate");
+        this.haltStore = Objects.requireNonNull(haltStore, "haltStore");
     }
 
     @Override
@@ -87,6 +99,17 @@ public class RedisIssuanceWarmup implements IssuanceWarmupPort {
         // 갈라질 수 있으면 언젠가 갈라진다.
         redisTemplate.opsForValue().set(keys.issuedEver(), Integer.toString(encoded.size()));
         redisTemplate.opsForValue().set(keys.stock(), Long.toString(remainingStock));
+        // 재고를 다시 세운 것이 곧 "어긋남을 되돌렸다" 이므로 복원 중단 표식도 여기서 푼다.
+        // 사람이 따로 눌러야 하는 해제 버튼을 두면 "고쳤는데 만료가 안 돈다" 가 된다.
+        try {
+            haltStore.clear(couponRoundId);
+        } catch (RuntimeException failure) {
+            // 여기까지 왔으면 재구성은 사실상 끝났다 — 카운터가 이미 다시 서 있다. 이 한
+            // 줄 때문에 시딩 전체를 예외로 끝내면 뒤 단계(엔진 잠금·재고 갱신)가 안 돌아
+            // "재고는 맞는데 게이트는 닫힌" 상태가 남는다. TTL 이 뒤를 받친다.
+            log.error("재구성이 복원 중단 표식을 지우지 못했습니다. TTL 까지 그 회차 만료가 "
+                    + "멈춰 있습니다. couponRoundId={}", couponRoundId, failure);
+        }
     }
 
     private String encode(RebuiltIssued member) {

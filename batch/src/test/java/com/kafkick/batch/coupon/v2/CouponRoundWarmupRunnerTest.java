@@ -49,6 +49,7 @@ import com.kafkick.infra.redis.coupon.v2.IssuanceKeys;
 import com.kafkick.infra.redis.coupon.v2.IssuanceScriptRunner;
 import com.kafkick.infra.redis.coupon.v2.RedisIssuanceGate;
 import com.kafkick.infra.redis.coupon.v2.RedisIssuanceWarmup;
+import com.kafkick.infra.redis.coupon.v2.RedisRestorationHaltStore;
 
 /**
  * 워밍업을 <b>실제 MySQL 과 실제 Redis</b> 에 태운다. 둘 중 하나라도 대역이면 이 단위가 지는
@@ -148,7 +149,8 @@ class CouponRoundWarmupRunnerTest {
         insertStock(ROUND_ID, TOTAL_QUANTITY, 0);
 
         gate = new RedisIssuanceGate(new IssuanceScriptRunner(redisTemplate), redisTemplate);
-        warmupPort = new RedisIssuanceWarmup(redisTemplate);
+        warmupPort = new RedisIssuanceWarmup(
+                redisTemplate, new RedisRestorationHaltStore(redisTemplate));
     }
 
     private CouponRoundWarmupRunner runner() {
