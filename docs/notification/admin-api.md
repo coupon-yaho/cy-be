@@ -60,7 +60,8 @@ public enum NotifyFailureReason {
 
 - 대상: `status IN ('FAILED','DEAD')`
 - 정렬: `id DESC` (과거 방향). `ix_notifications_failure_keyset` 사용
-- cursor: `beforeCursor` 는 `id` 의 문자열 표현. 파싱 실패 시 400
+- cursor: `beforeCursor` 는 `v1|notificationId` 를 padding 없이 Base64 URL 로 인코딩한 값.
+  최대 256자이며 canonical 인코딩·버전·양수 ID를 검증한다. 실패는 `COMMON-001` 400
 - `limit` 1~200, 기본 50 (기존 컨트롤러 검증 유지)
 - `hasOlder` 는 `limit + 1` 조회로 판정
 - 항목 필드: `notificationId`, `couponId`, `memberId`, `reason(NotifyFailureReason)`,
