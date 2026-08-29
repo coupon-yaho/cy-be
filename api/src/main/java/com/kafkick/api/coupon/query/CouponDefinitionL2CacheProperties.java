@@ -12,11 +12,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 호출자가 전부 물러난다 — 락을 두고도 herd 가 그대로 DB 로 간다. 두 값의 관계는 조립할 때
  * 검사한다({@code CouponDefinitionL1CacheConfiguration}).
  *
- * <p><b>{@code lockLease} 는 최악의 로드 시간보다 길어야 한다.</b> 짧으면 lease 가 먼저 끝나고,
- * 뒤늦게 끝난 로더가 그 사이 다른 인스턴스가 올린 새 값을 덮어쓴다. 근거는 storage.yml 의
- * 실제 값이다 — Hikari {@code connection-timeout} 3000ms(커넥션 대기 상한)에 정의 질의의
- * {@code jakarta.persistence.query.timeout} 300ms 를 더한 3.3초가 로드의 상한이다. 기본값
- * 5초는 거기에 여유를 둔 값이다. <b>storage.yml 의 그 두 값을 바꾸면 여기도 같이 본다.</b>
+ * <p><b>{@code lockLease} 는 {@code maxLoadTime} 보다 길어야 하고, 이 관계는 검증한다.</b>
+ * 짧으면 lease 가 먼저 끝나고, 뒤늦게 끝난 로더가 그 사이 다른 인스턴스가 올린 새 값을 덮어쓴다.
+ * 문서로만 두면 환경변수로 낮춘 배포에서 그 약속이 조용히 깨진다.
+ *
+ * <p>{@code maxLoadTime} 은 로드 한 번의 상한을 <b>이름 붙여 드러낸 가정</b>이다. 기본값
+ * 3300ms 의 근거는 다른 모듈에 있다 — storage.yml 의 Hikari {@code connection-timeout}
+ * 3000ms(커넥션 대기)에 정의 질의의 {@code jakarta.persistence.query.timeout} 300ms 를 더한
+ * 값이다. 세 값이 각자의 파일에 흩어져 있어 한쪽만 바뀌면 관계가 조용히 깨지므로,
+ * {@code CouponDefinitionL2LeaseBudgetTest} 가 그 파일들을 직접 읽어 기본값을 고정한다.
  *
  * <p><b>아래 값을 어기면 설정 바인딩 시점에 {@link IllegalArgumentException} 으로 기동이
  * 실패한다.</b>
@@ -24,9 +28,13 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <ul>
  *   <li>{@code ttl} · {@code lock-lease} · {@code poll-interval} 은 <b>0 이나 음수일 수 없다</b>
  *       — {@code poll-interval} 이 0 이면 대기가 바쁜 루프가 된다.</li>
- *   <li>{@code wait-timeout} 은 <b>음수일 수 없다</b>. 0 은 "기다리지 않는다" 는 뜻으로 허용한다.</li>
+ *   <li>{@code wait-timeout} 은 <b>{@code poll-interval} 이상</b>이어야 한다. 따라서 최소 1ms 다 —
+ *       기다리지 않으려면 이 값을 줄이는 것이 아니라 L2 자체를 쓰지 않는다.</li>
  *   <li>{@code poll-interval} 은 <b>{@code wait-timeout} 이하</b>여야 한다 — 더 길면 한 번도
  *       못 보고 대기가 끝나, 기다린 시간이 통째로 버려진다.</li>
+ *   <li>{@code poll-interval} 은 <b>1ms 이상</b>이어야 한다 — 대기가 밀리초로 절삭되므로
+ *       그보다 짧은 값은 {@code sleep(0)} 이 되어 대기 내내 Redis 를 바쁜 루프로 조회한다.</li>
+ *   <li>{@code lock-lease} 는 <b>{@code max-load-time} 보다 길어야</b> 한다.</li>
  * </ul>
  */
 @ConfigurationProperties(prefix = "coupon.definition-cache.l2")
@@ -34,18 +42,31 @@ public record CouponDefinitionL2CacheProperties(
         Duration ttl,
         Duration lockLease,
         Duration waitTimeout,
-        Duration pollInterval
+        Duration pollInterval,
+        Duration maxLoadTime
 ) {
     public CouponDefinitionL2CacheProperties {
         ttl = ttl == null ? Duration.ofSeconds(10) : ttl;
         lockLease = lockLease == null ? Duration.ofSeconds(5) : lockLease;
         waitTimeout = waitTimeout == null ? Duration.ofMillis(60) : waitTimeout;
         pollInterval = pollInterval == null ? Duration.ofMillis(10) : pollInterval;
+        maxLoadTime = maxLoadTime == null ? Duration.ofMillis(3_300) : maxLoadTime;
         if (ttl.isNegative() || ttl.isZero()
                 || lockLease.isNegative() || lockLease.isZero()
                 || waitTimeout.isNegative()
-                || pollInterval.isNegative() || pollInterval.isZero()) {
+                || pollInterval.isNegative() || pollInterval.isZero()
+                || maxLoadTime.isNegative() || maxLoadTime.isZero()) {
             throw new IllegalArgumentException("쿠폰 정의 L2 설정이 유효하지 않습니다.");
+        }
+        // 대기는 밀리초로 절삭된다. 1ms 미만은 sleep(0) 이 되어 대기 내내 바쁜 루프가 된다.
+        if (pollInterval.toMillis() < 1) {
+            throw new IllegalArgumentException(
+                    "쿠폰 정의 L2 poll-interval 은 1ms 이상이어야 합니다.");
+        }
+        if (lockLease.compareTo(maxLoadTime) <= 0) {
+            throw new IllegalArgumentException(
+                    "쿠폰 정의 L2 lock-lease(" + lockLease + ") 는 max-load-time("
+                            + maxLoadTime + ") 보다 길어야 합니다.");
         }
         if (pollInterval.compareTo(waitTimeout) > 0) {
             throw new IllegalArgumentException(

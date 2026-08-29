@@ -49,7 +49,8 @@ class CouponDefinitionL1CachePropertiesBindingTest {
                 "coupon.definition-cache.l2.ttl", "9s",
                 "coupon.definition-cache.l2.lock-lease", "4s",
                 "coupon.definition-cache.l2.wait-timeout", "70ms",
-                "coupon.definition-cache.l2.poll-interval", "5ms")))
+                "coupon.definition-cache.l2.poll-interval", "5ms",
+                "coupon.definition-cache.l2.max-load-time", "3s")))
                 .bind("coupon.definition-cache.l2", CouponDefinitionL2CacheProperties.class)
                 .get();
 
@@ -57,14 +58,35 @@ class CouponDefinitionL1CachePropertiesBindingTest {
         assertThat(bound.lockLease()).isEqualTo(Duration.ofSeconds(4));
         assertThat(bound.waitTimeout()).isEqualTo(Duration.ofMillis(70));
         assertThat(bound.pollInterval()).isEqualTo(Duration.ofMillis(5));
+        assertThat(bound.maxLoadTime()).isEqualTo(Duration.ofSeconds(3));
     }
 
     @Test
     void rejectsAPollIntervalLongerThanTheWaitBudget() {
         assertThatThrownBy(() -> new CouponDefinitionL2CacheProperties(
-                Duration.ofSeconds(10), Duration.ofSeconds(3),
-                Duration.ofMillis(10), Duration.ofMillis(50)))
+                Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofMillis(10), Duration.ofMillis(50), Duration.ofSeconds(3)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("poll-interval");
+    }
+
+    @Test
+    void rejectsASubMillisecondPollIntervalThatWouldBusyLoop() {
+        // 대기는 밀리초로 절삭된다. 500us 는 sleep(0) 이 되어 대기 내내 Redis 를 두들긴다.
+        assertThatThrownBy(() -> new CouponDefinitionL2CacheProperties(
+                Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofMillis(60), Duration.ofNanos(500_000), Duration.ofSeconds(3)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1ms");
+    }
+
+    @Test
+    void rejectsALeaseThatCannotOutlastTheWorstCaseLoad() {
+        // 문서가 아니라 검증이어야 한다 — 환경변수로 낮춘 배포에서 조용히 깨지면 안 된다.
+        assertThatThrownBy(() -> new CouponDefinitionL2CacheProperties(
+                Duration.ofSeconds(10), Duration.ofSeconds(3),
+                Duration.ofMillis(60), Duration.ofMillis(10), Duration.ofMillis(3_300)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("lock-lease");
     }
 }

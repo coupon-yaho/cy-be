@@ -27,6 +27,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CouponDefinitionL1CacheTest {
 
+    /**
+     * 스레드가 실제로 깨어났는지만 보는 <b>생존성</b> 상한이다. <b>검증 대상이 아니다</b> —
+     * 이 테스트가 고정하는 계약은 {@code load-timeout} 쪽 값(밀리초)이다.
+     *
+     * <p>넉넉한 이유는 모듈 넷을 동시에 돌릴 때 단일 로더 스레드가 스케줄되기까지 초 단위로
+     * 밀린 적이 있어서다(실측). 짧게 두면 그 부하에서만 빨갛게 되고, 그 빨강은 코드가 아니라
+     * 그날의 CPU 를 가리킨다. 길게 둬도 진짜 멈춘 로드는 여전히 잡는다 — 늦게 잡을 뿐이다.
+     */
+    private static final long LIVENESS_SECONDS = 30L;
+
     @Test
     void hasOneSharedKeyForTheMainCouponDefinitions() {
         assertThat(CouponDefinitionCacheKey.values()).containsExactly(CouponDefinitionCacheKey.ALL);
@@ -134,7 +144,7 @@ class CouponDefinitionL1CacheTest {
             assertThat(cache.get(key, () -> {
                 reloadStarted.countDown();
                 try {
-                    if (!releaseReload.await(5, TimeUnit.SECONDS)) {
+                    if (!releaseReload.await(LIVENESS_SECONDS, TimeUnit.SECONDS)) {
                         throw new IllegalStateException("test loader was not released");
                     }
                 } catch (InterruptedException interrupted) {
@@ -143,7 +153,7 @@ class CouponDefinitionL1CacheTest {
                 }
                 return new CouponDefinitionL1Cache.LoadedValue<>("new", now.plusSeconds(30));
             })).isEqualTo("old");
-            assertThat(reloadStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(reloadStarted.await(LIVENESS_SECONDS, TimeUnit.SECONDS)).isTrue();
         } finally {
             releaseReload.countDown();
             loaderExecutor.shutdownNow();
@@ -169,7 +179,7 @@ class CouponDefinitionL1CacheTest {
             for (int i = 0; i < 32; i++) {
                 results.add(executor.submit(() -> {
                     ready.countDown();
-                    assertThat(start.await(5, TimeUnit.SECONDS)).isTrue();
+                    assertThat(start.await(LIVENESS_SECONDS, TimeUnit.SECONDS)).isTrue();
                     return cache.get(key, () -> {
                         loads.incrementAndGet();
                         return new CouponDefinitionL1Cache.LoadedValue<>(
@@ -177,11 +187,11 @@ class CouponDefinitionL1CacheTest {
                     });
                 }));
             }
-            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(ready.await(LIVENESS_SECONDS, TimeUnit.SECONDS)).isTrue();
             start.countDown();
 
             for (Future<String> result : results) {
-                assertThat(result.get(5, TimeUnit.SECONDS)).isEqualTo("definition");
+                assertThat(result.get(LIVENESS_SECONDS, TimeUnit.SECONDS)).isEqualTo("definition");
             }
         } finally {
             executor.shutdownNow();
@@ -205,7 +215,7 @@ class CouponDefinitionL1CacheTest {
 
             assertThatThrownBy(() -> cache.get(CouponDefinitionCacheKey.ALL, () -> {
                 try {
-                    releaseReload.await(5, TimeUnit.SECONDS);
+                    releaseReload.await(LIVENESS_SECONDS, TimeUnit.SECONDS);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                 }

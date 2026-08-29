@@ -31,13 +31,17 @@ class CouponDefinitionL2LeaseBudgetTest {
         Duration queryTimeout = Duration.ofMillis(definitionQueryTimeoutMillis());
         Duration worstCaseLoad = connectionWait.plus(queryTimeout);
 
-        Duration lease = new CouponDefinitionL2CacheProperties(null, null, null, null).lockLease();
+        CouponDefinitionL2CacheProperties defaults =
+                new CouponDefinitionL2CacheProperties(null, null, null, null, null);
 
-        assertThat(lease)
-                .as("lease(%s) 가 최악 로드(%s = 커넥션 대기 %s + 질의 %s) 보다 짧으면"
-                        + " 만료된 로더가 남의 새 값을 덮는다",
-                        lease, worstCaseLoad, connectionWait, queryTimeout)
-                .isGreaterThan(worstCaseLoad);
+        // max-load-time 은 '로드 한 번의 상한' 이라는 가정에 이름을 붙인 것이다. 그 가정이
+        // 다른 모듈의 실제 값과 어긋나면, lock-lease 검증은 통과해도 전제가 틀린 채로 돈다.
+        assertThat(defaults.maxLoadTime())
+                .as("max-load-time 기본값이 커넥션 대기(%s) + 질의(%s) 를 못 덮는다",
+                        connectionWait, queryTimeout)
+                .isGreaterThanOrEqualTo(worstCaseLoad);
+        // lock-lease > max-load-time 자체는 컴팩트 생성자가 모든 설정에 대해 강제한다.
+        assertThat(defaults.lockLease()).isGreaterThan(defaults.maxLoadTime());
     }
 
     private static long definitionQueryTimeoutMillis() throws Exception {

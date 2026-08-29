@@ -149,8 +149,8 @@ class V2IssuableCouponRoundQueryTest {
 
     private static CouponDefinitionL2CacheProperties l2Properties() {
         return new CouponDefinitionL2CacheProperties(
-                Duration.ofSeconds(10), Duration.ofSeconds(3),
-                Duration.ofMillis(60), Duration.ofMillis(1));
+                Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofMillis(60), Duration.ofMillis(1), Duration.ofSeconds(3));
     }
 
     private static TimeProvider timeProvider() {

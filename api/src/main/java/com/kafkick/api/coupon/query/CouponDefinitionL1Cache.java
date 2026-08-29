@@ -109,6 +109,17 @@ public final class CouponDefinitionL1Cache<T> {
         }
     }
 
+    /**
+     * 로더가 돌려주는 값 한 벌.
+     *
+     * <p><b>두 필드 모두 null 일 수 없다.</b> null 이면 {@link NullPointerException} 으로 로드가
+     * 거부되고, 그 실패는 로더 계약 위반(500)으로 올라간다 — 조용히 비어 있는 목록을 캐시해
+     * TTL 동안 그 상태를 굳히는 것보다 낫다.
+     *
+     * @param value        캐시할 값
+     * @param nextBoundary 이 값이 더는 정확하지 않게 되는 첫 시각(회차 open/close). L1·L2 의
+     *                     수명이 이 값에서 잘린다
+     */
     public record LoadedValue<T>(T value, Instant nextBoundary) {
         public LoadedValue {
             Objects.requireNonNull(value);

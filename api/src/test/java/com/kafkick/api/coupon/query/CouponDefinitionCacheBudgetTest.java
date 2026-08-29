@@ -39,8 +39,8 @@ class CouponDefinitionCacheBudgetTest {
                 new CouponDefinitionL1CacheProperties(
                         Duration.ofSeconds(10), loadTimeout, Duration.ofSeconds(60), 1L),
                 new CouponDefinitionL2CacheProperties(
-                        Duration.ofSeconds(10), Duration.ofSeconds(3),
-                        waitTimeout, Duration.ofMillis(10)),
+                        Duration.ofSeconds(10), Duration.ofSeconds(5),
+                        waitTimeout, Duration.ofMillis(10), Duration.ofSeconds(3)),
                 Runnable::run,
                 registryProvider());
     }
