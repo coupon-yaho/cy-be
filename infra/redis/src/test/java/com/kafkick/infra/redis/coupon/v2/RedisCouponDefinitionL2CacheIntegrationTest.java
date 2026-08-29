@@ -75,10 +75,17 @@ class RedisCouponDefinitionL2CacheIntegrationTest {
      * 시도하고, 그 실패 알림을 종료 중인 Netty 이벤트 루프에 넣다가
      * {@code RejectedExecutionException: event executor terminated} 를 ERROR 로 뱉는다.
      * 단언은 이미 끝난 뒤라 빌드는 초록인데 로그만 시뻘게진다 — 진짜 실패와 구별이 안 된다.
+     *
+     * <p>null 을 보는 이유는 <b>컨테이너가 안 뜬 경우</b> 때문이다. 그때는 {@code connect()} 가
+     * {@code factory} 에 대입하기 전에 죽고, JUnit 은 그래도 이 메서드를 부른다. 무조건
+     * {@code destroy()} 하면 NPE 가 원래 실패에 suppressed 로 얹혀 리포트에서 원인을 찾기
+     * 어려워진다 — 컨테이너 기동 실패는 이 저장소 CI 에서 실제로 나는 일이다.
      */
     @AfterAll
     static void disconnect() {
-        factory.destroy();
+        if (factory != null) {
+            factory.destroy();
+        }
     }
 
     @BeforeEach
