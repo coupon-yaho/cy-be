@@ -12,6 +12,7 @@ import com.kafkick.api.admin.observability.PromQueryException;
 import com.kafkick.api.admin.observability.PromSample;
 import com.kafkick.core.consistency.ConsistencyGapType;
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.observation.SourceStatusCode;
 
@@ -48,6 +49,13 @@ public final class MockPromQuery implements PromQuery {
         }
         if (promQl.contains("time() - timestamp")) {
             return freshnessSamples();
+        }
+        if (promQl.contains(MetricAggregation.CPU_USAGE)
+                && promQl.contains(MetricAggregation.QUEUE_LENGTH)) {
+            return saturationSamples();
+        }
+        if (promQl.contains(MetricAggregation.ISSUANCE_OUTCOME_TOTAL)) {
+            return failureReasonSamples();
         }
         String message = "지원하지 않는 Prometheus 질의입니다: " + promQl;
         System.err.println(message);
@@ -90,7 +98,60 @@ public final class MockPromQuery implements PromQuery {
         samples.add(sample(MetricAggregation.COLLECT_LAST_SUCCESS_EPOCH,
                 Map.of(DomainMeterNames.TAG_COLLECT_PATH, DomainMeterNames.PATH_CONSISTENCY),
                 observedAt.toEpochMilli() / 1000d, now));
+        samples.add(sample(MetricAggregation.COLLECT_LAST_SUCCESS_EPOCH,
+                Map.of(DomainMeterNames.TAG_COLLECT_PATH, DomainMeterNames.PATH_STOCK),
+                observedAt.toEpochMilli() / 1000d, now));
         return samples;
+    }
+
+    private List<PromSample> saturationSamples() {
+        Instant now = Instant.now();
+        double loadRatio = Math.min(1, Math.max(0, totalRps() / 5_000d));
+        List<PromSample> samples = new ArrayList<>();
+        Map<String, String> api = Map.of("instance", instanceName(1));
+        Map<String, String> pool = Map.of(
+                "instance", instanceName(1),
+                "pool", "main-pool");
+        Map<String, String> heap = Map.of(
+                "instance", instanceName(1),
+                "area", "heap");
+
+        samples.add(sample(MetricAggregation.HIKARI_ACTIVE, pool, 4 + 6 * loadRatio, now));
+        samples.add(sample(MetricAggregation.HIKARI_PENDING, pool, 2 * loadRatio, now));
+        samples.add(sample(MetricAggregation.HIKARI_MAX, pool, 16, now));
+        samples.add(sample(MetricAggregation.TOMCAT_BUSY, api, 3 + 7 * loadRatio, now));
+        samples.add(sample(MetricAggregation.TOMCAT_MAX, api, 20, now));
+        samples.add(sample(MetricAggregation.CPU_USAGE, api, 0.18 + 0.5 * loadRatio, now));
+        samples.add(sample(MetricAggregation.JVM_MEMORY_USED, heap, 450 + 250 * loadRatio, now));
+        samples.add(sample(MetricAggregation.JVM_MEMORY_MAX, heap, 1_000, now));
+
+        double[] inFlight = {18, 10, 8, 6};
+        for (int instance = 1; instance <= INSTANCE_COUNT; instance++) {
+            Map<String, String> labels = Map.of("instance", instanceName(instance));
+            samples.add(sample(MetricAggregation.HTTP_IN_FLIGHT, labels,
+                    inFlight[instance - 1] * loadRatio, now));
+            samples.add(sample(MetricAggregation.UP, labels, 1, now));
+        }
+
+        samples.add(sample(MetricAggregation.QUEUE_LENGTH, Map.of(), 120 * loadRatio, now));
+        samples.add(sample(MetricAggregation.QUEUE_LENGTH_STATE, Map.of(),
+                SourceStatusCode.of(SourceStatus.VALID), now));
+        samples.add(sample(MetricAggregation.OBSERVED_COUPON_ID, Map.of(), 1, now));
+        return samples;
+    }
+
+    private List<PromSample> failureReasonSamples() {
+        Instant now = Instant.now();
+        double total = Math.max(0, totalRps());
+        return List.of(
+                failureReason(ReasonCode.TEMPORARILY_UNAVAILABLE, total * 0.0016, now),
+                failureReason(ReasonCode.INTERNAL_ERROR, total * 0.0008, now),
+                failureReason(ReasonCode.UNMAPPED, total * 0.0004, now));
+    }
+
+    private static PromSample failureReason(ReasonCode reasonCode, double rps, Instant now) {
+        return sample(MetricAggregation.ISSUANCE_OUTCOME_TOTAL,
+                Map.of("outcome", reasonCode.name()), rps, now);
     }
 
     private List<PromSample> latencySamples() {
