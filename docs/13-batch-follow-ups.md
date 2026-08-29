@@ -578,7 +578,7 @@ compose 가 넘긴다(`.gitignore` 가 `*.env` 를 막는다, CY-621). 이 컨�
 | ~~회차 상태 전이 스케줄러~~ | **완료 · CY-446.** `CouponRoundScheduler` 가 1분마다 `open_at` 도달 회차를 열고 `close_at` 도달 회차를 닫는다. **Spring Batch 잡이 아니다** — 1분 주기로 배치 메타를 쓰면 하루 1,440 인스턴스가 되어 CY-436 이 정리한 축이 되살아난다. **대상을 고르고 id 하나씩 조건부 UPDATE** 로 바꾸고, **어댑터를 `READ COMMITTED` 로 연다**. ⚠️ **발급을 살리는 것은 격리수준이다** — 기본(`REPEATABLE READ`)에서는 이 테이블을 훑는 `UPDATE` 가 X 락 151(전부 + supremum)을 잡아 재고 소진 `CLOSED` 와 발급 전 `FOR SHARE` 가 둘 다 `ERROR 1205` 였고, RC 에서는 `X,REC_NOT_GAP` 10 만 잡고 둘 다 통과했다. **id 단건은 그것과 별개**이고 격리수준이 되돌아가는 날의 두 번째 겹이다(돌연변이 확인: RC 에서는 집합 `UPDATE` 로 되돌려도 락 테스트가 전부 초록이었다). `close_at` 은 갱신하지 않고(docs/02 F5) `coupon_stocks` 도 안 건드린다. 관측은 **결과 축**이다 — 게이지 **다섯**: 대기 넷(`cy_coupon_round_pending_open`·`_pending_close`·`_missed_window`·`_blocked_no_stock`)을 **한 문장으로** 되읽고(문장을 나누면 RC 에서 read view 가 갈려 회차가 어느 게이지에도 안 잡히거나 이중 계상된다), `_scheduling_enabled` 가 **끈 구간을 알림 갈래에서 빼는 축**이다(만료·정리는 그 축을 안 쓰고 사람이 silence 를 건다 — docs/14), 카운터 넷(`_ticks_total`·`_select_failures_total`·`_transition_failures_total`·`_refresh_failures_total`)이 진단을 진다. 알림은 **열**이고 데이터 축 셋(`BlockedByMissingStock`·`MissedWindow`·`DataMetricsUnknown`)은 `channel: data` 로 갈랐다 |
 | ~~회차 생성 스케줄러~~ | **범위 밖 · CY-503.** 그때는 회차를 만드는 경로가 시드뿐이라 batch 가 그 축을 맡는 것이 자연스러웠는데, 지금은 **관리자 API 가 그 일을 한다**(`POST /api/v1/admin/coupon-templates/{id}/rounds` · CY-5). 배치가 매일 새벽에 하나 더 만들면 같은 테이블에 회차를 만드는 경로가 둘이 된다. 자리표시였던 `batch.schedule.coupon-create-cron` 을 걷었다 — 남겨 두면 다음 사람이 그것을 "하기로 되어 있는 일" 로 읽는다. **전이가 지는 전제는 그대로다** — 재고 행 없는 회차를 일부러 안 연다(발급 경로가 죽는다). 자동 생성이 필요해지면 그때 어느 쪽에 둘지 다시 정한다 |
 | 기동 가드가 배치 메타 **인덱스**를 안 본다 | **닫혔다(CY-686).** `SchemaPresenceGuard` 에 셋째 축을 더했다 — `information_schema.statistics` 로 `IX_JOB_EXEC_STATUS_END`·`IX_JOB_EXEC_CREATE_TIME` 을 묻고 없으면 거절한다. 앞 둘과 달리 이 축은 없어도 기동과 동작이 통과해서 조용히 느려질 뿐이라 늦게, 원인을 안 가리키며 드러났다. `coupon_clean`·`coupon_corrupt`·`app` 셋 다 이미 인덱스가 있어 기존 환경은 안 깨진다(실측) |
-| 업무 포트 노출 | ~~compose 티켓~~ ~~CY-359~~ **CY-368 에서 다시 정했다.** 그 포트에 인증 없는 admin 트리거가 열려 `batch.yml` 은 업무 포트를 **아예 안 내보낸다** — 필요할 때만 `batch-expose.yml` 을 얹어 `127.0.0.1:${BATCH_HOST_PORT:-9090}:9090` 으로 연다. 관리 포트(9092)는 어느 경우에도 안 올린다 |
+| 업무 포트 노출 | ~~compose 티켓~~ ~~CY-359~~ **CY-368 에서 다시 정했다.** 그 포트에 인증 없는 admin 트리거가 열려 `batch.yml` 은 업무 포트를 **아예 안 내보낸다** — 필요할 때만 `batch-expose.yml` 을 얹어 `127.0.0.1:${BATCH_HOST_PORT:-9091}:9091` 으로 연다. 관리 포트(9092)는 어느 경우에도 안 올린다 |
 
 ---
 
@@ -888,12 +888,12 @@ CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기�
 
 ```bash
 # ① 무엇이 남아 있나. 도는 실행은 여기 안 나온다.
-curl -s localhost:9090/api/v1/admin/expire/runs/stuck | jq .data
+curl -s localhost:9091/api/v1/admin/expire/runs/stuck | jq .data
 #   [{ "executionId": 41, "status": "STARTED", "createTime": "...", "startTime": "...",
 #      "lastProgress": "...", "stalledSeconds": 7412 }]
 
 # ② 한 번이면 된다. 재시도해도 안전하다(FAILED + END_TIME 으로 판정한다).
-curl -s -XPOST localhost:9090/api/v1/admin/expire/runs/41/recover | jq '.data, .error'
+curl -s -XPOST localhost:9091/api/v1/admin/expire/runs/41/recover | jq '.data, .error'
 #   409 / EXPIRATION-007 이면 걷어낼 대상이 아니다 — ① 을 다시 본다.
 #   404 / EXPIRATION-006 이면 만료 실행이 아니거나 없는 번호다.
 ```

@@ -77,7 +77,7 @@ import com.kafkick.core.support.response.ResponseEnvelope;
  *
  * <h2>노출</h2>
  *
- * <p>업무 포트(9090)에 열리고 <b>사용자 인증이 없다</b> — 누가 불렀는지는 못 가른다.
+ * <p>업무 포트(9091)에 열리고 <b>사용자 인증이 없다</b> — 누가 불렀는지는 못 가른다.
  * {@code batch.yml} 이 그 포트를 아예 안 내보내는 이유가 그것이고, 필요할 때만
  * {@code batch-expose.yml} 을 얹어 {@code 127.0.0.1} 에 묶는다({@code docs/13} §4).
  *

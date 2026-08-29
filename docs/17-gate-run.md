@@ -434,19 +434,19 @@ gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=se
   [ -n "${4:-}" ] && q="$q&seedRunId=$4"
   local ex
   ex=$(docker compose -f base.yml -f batch.yml exec -T batch \
-        curl -sS -X POST "http://127.0.0.1:9090/api/v1/admin/verify?$q" \
+        curl -sS -X POST "http://127.0.0.1:9091/api/v1/admin/verify?$q" \
        | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['executionId'])")
 
   # **202 비동기다.** 끝나기 전에 덤프를 돌리면 finishedAt 이 비어 있어 못 뜬다.
   # CLEAN 이 116초다. 20분이면 넉넉하고, 그 이상이면 뭔가 잘못된 것이다.
   n=0
   until docker compose -f base.yml -f batch.yml exec -T batch \
-        curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" \
+        curl -s "http://127.0.0.1:9091/api/v1/admin/verify/runs/$ex" \
         | grep -qE '"status":"(COMPLETED|FAILED|STOPPED|ABANDONED)"'; do
     n=$((n+1)); [ "$n" -gt 120 ] && {
       echo "검증이 20분 안에 안 끝났다. 마지막 응답:" >&2
       docker compose -f base.yml -f batch.yml exec -T batch \
-        curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" >&2; return 1; }
+        curl -s "http://127.0.0.1:9091/api/v1/admin/verify/runs/$ex" >&2; return 1; }
     sleep 10
   done
 
@@ -456,7 +456,7 @@ gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=se
   # REPORT_PUSH=1 이면 그 낡은 판정이 **원격에 공개**된다. 게이트가 거짓말하는 자리다.
   local st
   st=$(docker compose -f base.yml -f batch.yml exec -T batch \
-        curl -s "http://127.0.0.1:9090/api/v1/admin/verify/runs/$ex" \
+        curl -s "http://127.0.0.1:9091/api/v1/admin/verify/runs/$ex" \
        | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['status'])")
   [ "$st" = "COMPLETED" ] || {
     echo "검증이 $st 로 끝났다($2 attempt $3). 덤프를 돌리지 않는다." >&2; return 1; }

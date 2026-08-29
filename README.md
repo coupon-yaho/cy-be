@@ -167,8 +167,9 @@ curl http://localhost:9090/actuator/metrics/http.server.requests
 커스텀 `operation` 지표는 서버 내부 유즈케이스 시간을 뜻하며, 최종 성능 판정 기준은
 Locust가 클라이언트 응답 수신 시점에 측정한 값이다.
 
-API와 배치를 로컬에서 동시에 실행해 `9090` 포트가 겹치면 API에
-`MANAGEMENT_SERVER_PORT=19090`을 지정한다.
+API와 배치는 포트가 겹치지 않는다 — API 는 업무 `8080`·관리 `9090`, 배치는 업무 `9091`·관리 `9092` 다.
+(한때 배치 업무 포트가 `9090` 이라 API 관리 포트와 부딪혔고, 그때는
+`MANAGEMENT_SERVER_PORT=19090` 으로 피했다. CY-213 이 배치를 `9091` 로 옮겨 그 회피가 필요 없어졌다.)
 
 ### Docker 이미지
 

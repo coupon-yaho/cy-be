@@ -28,7 +28,7 @@
 # 예약 작업이라 사람이 그 순간을 못 본다. worktree 를 따로 두면 셋이 구조적으로 없어진다.
 #
 # ── 왜 컨테이너 안에서 curl 하나 ──────────────────────────────────────────
-# 업무 포트 9090 은 batch.yml 이 **호스트로 안 내보낸다** — batch-expose.yml 을 얹어야 열리고,
+# 업무 포트 9091 은 batch.yml 이 **호스트로 안 내보낸다** — batch-expose.yml 을 얹어야 열리고,
 # 그 포트에는 인증이 없다. 자동화를 위해 그것을 상시 열어 두는 것은 전제를 바꾸는 일이다.
 # compose exec 로 컨테이너 안에서 치면 호스트 포트를 안 열어도 된다.
 # docs/16 §3 이 막은 것은 "컨테이너에 GitHub 자격증명을 넣는 것" 이지 이것이 아니다.
@@ -242,7 +242,7 @@ dump() {
   local code
   code="$(docker compose "${COMPOSE_ARGS[@]}" exec -T "$SERVICE" \
       curl -sS --max-time "$HTTP_TIMEOUT" -o /dev/stdout -w '\n%{http_code}' \
-      "http://127.0.0.1:9090/api/v1/admin/verify/reports/latest?dataset=${dataset}&scope=${scope}" \
+      "http://127.0.0.1:9091/api/v1/admin/verify/reports/latest?dataset=${dataset}&scope=${scope}" \
       2>/dev/null | tee "$raw" | tail -1)"
 
   # **형태를 먼저 본다.** curl 이 -w 를 내기 전에 죽으면(SIGKILL 등) tail 이 본문의
