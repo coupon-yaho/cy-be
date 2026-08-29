@@ -35,13 +35,49 @@
 -- 이름이 `coupon_id` 인 것은 우연이 아니다. 시드 CORRUPT 에는 uk_coupon_member 가 애초에
 -- 없어, FK 를 걸 때 MySQL 이 자식 컬럼에 인덱스를 자동 생성하고 그 이름이 `coupon_id` 다.
 -- 여기서 다른 이름을 주면 두 스키마의 최종 모양이 갈린다 — CorruptSchemaParityTest 가 잡는다.
-CREATE INDEX `coupon_id` ON `issuances` (`coupon_id`);
+-- ⚠️ **더 안 만든다(CY-744).** main 의 V2026082502 가 idx_issuances_coupon_id
+--    (coupon_id, id) 를 만들어서 uk_coupon_member 를 떼도 FK 가 쓸 인덱스가 남는다.
+--    여기서 또 만들면 시드에 없는 인덱스가 생겨 파리티가 그 자리를 잡는다.
 
 DROP INDEX `uk_coupon_member` ON `issuances`;
 
 DROP INDEX `uk_coupon_code` ON `issuances`;
 
 ALTER TABLE `coupon_stocks` DROP CHECK `ck_stock_range`;
+
+-- ── CY-744 합류로 늘어난 것들 ────────────────────────────────────────────────
+--
+-- main 이 같은 불변식을 자기 이름으로 한 겹 더 걸어 뒀습니다. 하나라도 남으면 주입이
+-- INSERT 단계에서 튕겨 **규칙이 검출할 대상 자체가 안 생기고**, 테스트는 "검출 0건" 을
+-- 정상으로 읽습니다 — 규칙이 틀려도 초록입니다. 위 목록과 같은 이유로 전부 뗍니다.
+--
+--   ck_coupon_stock_active_range   재고 범위(V3) — ck_stock_range 와 같은 축, 이름만 다름
+--
+-- ⚠️ **다섯을 뺐다가 되돌렸다.** 아래는 CLEAN·CORRUPT 공통이다 — 오염 700건 중
+--    이 제약을 넘어야 하는 주입이 **하나도 없다**(cy-seed/seedgen/corrupt.py 전수 확인):
+--
+--      ck_coupon_stock_total_positive   total_quantity 를 만지는 주입 없음
+--      ck_coupon_round_time_range       open_at·close_at 을 만지는 주입 없음
+--      uk_issuance_usages_active        활성 사용 2건을 심는 유형 없음
+--                                       (유형 3 은 [(t1,t2),(t3,None)], 유형 7 은 [(t1,None)])
+--      uk_issuance_usages_issuance_order order_id 는 사용마다 난수
+--      ck_issuance_usages_cancel_time   canceled_at < used_at 을 심는 유형 없음
+--
+--    필요 없는데 떼면 **오염과 무관한 사고가 CORRUPT 에서만 조용히 통과한다** —
+--    이 파일 머리말이 적은 원칙("여기서 떨어뜨리는 셋이 곧 오염이 물리적으로 가능한
+--    이유")의 반대 방향 실패다.
+ALTER TABLE `coupon_stocks` DROP CHECK `ck_coupon_stock_active_range`;
+
+-- ⚠️ **uk_issuance_usages_active 도 떼지 않는다.** 한때 여기 "V5 가 이중 사용을
+--    심어야 하니 떼야 한다" 고 적혀 있었는데 **위 표가 그 반대를 실측해 뒀다.**
+--    근거는 그 표 하나만 든다 — 여기 다시 옮겨 적으면 오염 유형이 바뀌는 날 한쪽만
+--    고치게 된다. V5(USAGE_MISMATCH)가 잡는 것은 "활성 사용이 둘" 이 아니라
+--    **issuances.status 와 활성 사용 유무가 어긋난 것**이라, 그 오염은 이 UNIQUE 를
+--    건드리지 않는다.
+-- ⚠️ **상태 어휘 CHECK 두 개도 떼지 않는다.** 한 번 떼려다 되돌렸다 —
+--    "시드 CORRUPT 가 안 건다" 고 적었는데 **확인 안 하고 쓴 것이었다.**
+--    실제로 시드는 그 둘을 10_constraints_common.sql(공통)에 두므로 CORRUPT 에도 있다.
+--    오염 유형이 규약 밖 상태를 심지도 않아서 뗄 이유가 없다.
 
 -- 시드 CORRUPT 가 expected_findings 에 거는 보조 인덱스(ddl/12_constraints_corrupt.sql).
 -- 떼는 것만 재현하고 더하는 것을 빼면 두 스키마의 실행계획이 달라져,

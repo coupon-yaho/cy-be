@@ -77,7 +77,7 @@ import com.kafkick.core.support.response.ResponseEnvelope;
  *
  * <h2>노출</h2>
  *
- * <p>업무 포트(9090)에 열리고 <b>사용자 인증이 없다</b> — 누가 불렀는지는 못 가른다.
+ * <p>업무 포트(9091)에 열리고 <b>사용자 인증이 없다</b> — 누가 불렀는지는 못 가른다.
  * {@code batch.yml} 이 그 포트를 아예 안 내보내는 이유가 그것이고, 필요할 때만
  * {@code batch-expose.yml} 을 얹어 {@code 127.0.0.1} 에 묶는다({@code docs/13} §4).
  *
@@ -105,7 +105,8 @@ public class ExpireAdminController {
      */
     // **읽기에도 데드라인을 준다(CY-697).** 트랜잭션 밖이면 DataSourceUtils 가
     // queryTimeout 을 안 붙여 **끊을 수단이 없다** — 배치 메타가 잠긴 날 톰캣 스레드가
-    // 그대로 붙잡힌다. 인증이 없는 API 라 같은 번호로 요청이 몰리면 더 빨리 마른다.
+    // 그대로 붙잡힌다. 표준 스택은 관문이 꺼져 있고(batch.yml) 오버레이를 얹어도 공유 비밀
+    // 하나라, 같은 번호로 요청이 몰리면 더 빨리 마른다 — 누구를 막을지 고를 수단이 없다.
     // 형제 BatchRunMetricsRefresher 가 같은 이유로 같은 값(5초)을 쓴다.
     @Transactional(readOnly = true, timeoutString = "${batch.admin.timeout-seconds:5}")
     @GetMapping("/runs/stuck")

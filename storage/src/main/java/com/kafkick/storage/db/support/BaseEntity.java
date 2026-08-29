@@ -1,6 +1,6 @@
 package com.kafkick.storage.db.support;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.EntityListeners;
@@ -22,13 +22,21 @@ public abstract class BaseEntity {
 
     @CreatedDate
     @Column(nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
+
+    protected BaseEntity() {
+    }
+
+    protected BaseEntity(Long id, Instant createdAt) {
+        this.id = id;
+        this.createdAt = createdAt;
+    }
 
     public Long getId() {
         return id;
     }
 
-    public LocalDateTime getCreatedAt() {
+    public Instant getCreatedAt() {
         return createdAt;
     }
 }

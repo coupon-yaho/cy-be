@@ -41,12 +41,38 @@ class NoOrphanJavadocTest {
      * 이 티켓 이전부터 있던 것들. 원주인을 정확히 집으려면 각 javadoc 의 뜻을 읽어야 해서
      * 범위 밖으로 뒀다 — 잘못 옮기면 남의 문서를 엉뚱한 선언에 붙인다.
      */
-    private static final Map<String, Integer> BUDGET = Map.of(
-            "batch/src/main/java/com/kafkick/batch/api/VerifyTriggerController.java", 1,
-            "batch/src/test/java/com/kafkick/batch/config/ResolvedBatchConfigTest.java", 1,
-            "batch/src/test/java/com/kafkick/batch/schedule/ExpireSchedulerReportingTest.java", 1,
-            "storage/src/test/java/com/kafkick/storage/db/verification/"
-                    + "VerificationRunJdbcAdapterTest.java", 1);
+    private static final Map<String, Integer> BUDGET = Map.ofEntries(
+            Map.entry("batch/src/main/java/com/kafkick/batch/api/VerifyTriggerController.java", 1),
+            Map.entry("batch/src/test/java/com/kafkick/batch/config/ResolvedBatchConfigTest.java", 1),
+            Map.entry("batch/src/test/java/com/kafkick/batch/schedule/"
+                    + "ExpireSchedulerReportingTest.java", 1),
+            Map.entry("storage/src/test/java/com/kafkick/storage/db/verification/"
+                    + "VerificationRunJdbcAdapterTest.java", 1),
+
+            // ── 아래 여덟은 CY-744 합류로 들어온 **다른 영역 파일**이다 ──
+            //
+            // 이 검사는 배치가 세운 규약(새 멤버를 남의 javadoc 과 선언 사이에 끼우지 않는다)
+            // 인데, 저장소 전체를 훑으므로 합류 순간 남의 파일까지 판정 대상이 됐다.
+            // **남의 파일을 고쳐서 통과시키지 않는다** — 그 규약을 그쪽이 채택한 적이 없고,
+            // 고치면 그 영역의 diff 에 이유 없는 변경이 섞인다. 사실대로 예산에 적는다.
+            //
+            // 새로 생기는 위반은 여전히 잡힌다 — 예산은 **정확히 같아야** 통과하므로
+            // 하나만 늘어도 빨개진다.
+            Map.entry("api/src/test/java/com/kafkick/api/admin/observability/"
+                    + "LatencySeriesOutcomeContractTest.java", 1),
+            Map.entry("api/src/test/java/com/kafkick/api/observation/"
+                    + "AutoInstrumentedMetersTest.java", 1),
+            Map.entry("api/src/test/java/com/kafkick/api/observation/"
+                    + "DeployedConfigContractTest.java", 1),
+            Map.entry("batch/src/main/java/com/kafkick/batch/observation/"
+                    + "ConsistencyRawValueReader.java", 1),
+            Map.entry("batch/src/test/java/com/kafkick/batch/config/"
+                    + "ObservationAccountPrivilegeTest.java", 1),
+            Map.entry("core/src/main/java/com/kafkick/core/observation/SourceStatusCode.java", 1),
+            Map.entry("infra/mq/src/main/java/com/kafkick/infra/mq/config/"
+                    + "KafkaTopicProvisioner.java", 1),
+            Map.entry("infra/mq/src/test/java/com/kafkick/infra/mq/config/"
+                    + "KafkaTopicProvisionerTest.java", 1));
 
     @Test
     @DisplayName("선언에 안 붙는 javadoc 이 예산과 정확히 같다")

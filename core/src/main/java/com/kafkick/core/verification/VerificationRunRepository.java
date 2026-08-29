@@ -1,12 +1,15 @@
 package com.kafkick.core.verification;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 /**
  * 검증 실행 기록의 저장 계약.
  *
- * <p>batch 모듈은 storage 를 runtimeOnly 로만 보므로 JpaRepository 를 직접 참조할 수 없다.
+ * <p>batch 모듈은 storage 를 runtimeOnly 로만 보므로 스프링 데이터 리포지토리 타입을
+ * 직접 참조할 수 없다. (그 타입 이름을 여기 적지 않는다 — CoreArchitectureTest 가
+ * 소스 텍스트에서 찾아 막으므로 주석만으로도 위반이 된다.)
  * 계약은 여기 두고 어댑터는 storage 에 둔다.
  */
 public interface VerificationRunRepository {
@@ -68,6 +71,44 @@ public interface VerificationRunRepository {
      * 한 값으로 뭉친다.
      */
     Optional<VerificationRun> findLatestClosed(DatasetType dataset, ScopeType scope);
+
+    /**
+     * 최근 실행부터 페이지 하나. 관제 화면의 실행 이력이 쓴다.
+     *
+     * <p>{@code dataset} 이 null 이면 전체를 준다. 정렬은 {@code id} 내림차순이다 —
+     * {@code as_of} 는 같은 값으로 여러 번 돌 수 있어(재시도) 순서가 안 정해진다.
+     *
+     * <p><b>배치가 만든 실행만 준다.</b> 시드가 심는 기준 행은 이 목록에 안 들어간다 —
+     * 그것은 배치 실행이 아니라 <b>게이트가 대조하는 기준값</b>이고,
+     * {@code verdict} 의 뜻부터 다르다(CORRUPT 에서 시드는 {@code FAIL}, 배치는
+     * {@code PASS} — {@code docs/17}). 섞이면 <b>배치를 한 번도 안 돌린 정상셋에서
+     * 관제에 {@code PASS} 가 이미 그려진다.</b>
+     *
+     * <p>이것은 구현 편의가 아니라 <b>이 포트의 계약</b>이라 여기 적는다. 어댑터 쪽에만
+     * 두면 다음 구현체가 빠뜨려도 아무 데서도 안 걸린다 —
+     * {@code VerificationRunHistoryTest} 가 그 행을 직접 심어 잰다.
+     *
+     * <p><b>{@code anchor} 가 페이지 경계를 얼린다.</b> {@code null} 이면 지금 시점 전체를 본다.
+     * 값이 오면 {@code id <= anchor} 로 좁힌다 — {@code verification_runs} 는
+     * {@code cleanupJob} 이 <b>의도적으로 안 지우는</b> 이력이라 계속 늘어나고
+     * (온디맨드 트리거가 하루에도 여러 건을 만든다), {@code OFFSET} 만으로는 요청 사이의
+     * INSERT 에 페이지가 밀린다.
+     */
+    List<VerificationRun> findRecent(DatasetType dataset, int limit, int offset, Long anchor);
+
+    /**
+     * 같은 조건의 전체 건수. 화면이 마지막 페이지를 알아야 한다.
+     *
+     * <p>{@link #findRecent} 와 <b>같은 조건</b>이어야 한다 — 출처 필터까지 같다.
+     * 한쪽만 거르면 화면이 없는 페이지를 그린다.
+     */
+    int countRecent(DatasetType dataset, Long anchor);
+
+    /**
+     * 같은 조건(출처 필터 포함)에서 <b>가장 큰 실행 id</b>. 첫 요청이 경계를 잡는 데 쓴다.
+     * 페이지의 첫 행으로 대신하면 {@code offset > 0} 인 첫 요청에서 경계가 낮게 잡힌다.
+     */
+    Long latestRunId(DatasetType dataset);
 
     /**
      * 같은 {@code (asOf, dataset, scope)} 에서 <b>마지막으로 쓰인 attempt + 1</b>.

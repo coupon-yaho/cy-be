@@ -1,0 +1,51 @@
+package com.kafkick.api.coupontemplate.dto.request;
+
+import com.kafkick.core.coupontemplate.domain.CouponDayOfWeek;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
+import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.coupontemplate.service.command.CouponTemplateCreateCommand;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+
+import java.time.LocalTime;
+import java.util.Set;
+
+public record CouponTemplateCreateRequest(
+        @NotNull @Positive Long brandId,
+        @NotBlank @Size(max = 100) String name,
+        @NotNull CouponPolicyType policyType,
+        Integer discountRate,
+        Integer maxDiscountAmount,
+        Integer discountAmount,
+        @NotNull @Positive Integer validDays,
+        @NotNull @Min(1) @Max(4) Integer nthWeek,
+        @NotNull CouponDayOfWeek dayOfWeek,
+        @NotNull LocalTime startTime,
+        @NotNull @Positive Integer durationHours,
+        @NotNull @Positive Integer stockPerOccurrence,
+        @NotEmpty Set<@NotNull MembershipGrade> eligibleGrades
+) {
+
+    public CouponTemplateCreateCommand toCommand() {
+        return new CouponTemplateCreateCommand(
+                brandId,
+                name,
+                policyType,
+                discountRate,
+                maxDiscountAmount,
+                discountAmount,
+                validDays,
+                nthWeek,
+                dayOfWeek,
+                startTime,
+                durationHours,
+                stockPerOccurrence,
+                eligibleGrades
+        );
+    }
+}

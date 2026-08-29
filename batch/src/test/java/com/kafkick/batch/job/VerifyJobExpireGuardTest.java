@@ -25,8 +25,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import com.kafkick.batch.config.RunningJobFixture;
 import com.kafkick.batch.config.RunningJobProbe;
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 

@@ -8,9 +8,14 @@
 `contract.json` 이다. 이 저장소에는 읽기 전용 사본을 `docs/contract.json` 으로 둔다.
 
 ```
-원본   cy-seed-data-generator @ 96b12f2  (2026-08-13)
+원본   cy-seed-data-generator @ 18e7aaa  (2026-08-29)
 사본   docs/contract.json                 바이트 동일
 ```
+
+이 표와 사본은 **한 묶음이다.** 사본만 덮고 표를 두면 아래 검증 스크립트가 옛 리비전을
+받아 와 diff 가 갈리고, 그 스크립트는 그것을 *"사본을 손댄 것"* 으로 읽으라고 시킨다 —
+멀쩡한 사본을 옛 계약으로 되돌리는 데까지 간다. **실제로 그렇게 갈려 있었다.**
+`ContractCopyTest` 가 사본의 해시와 이 표의 SHA 를 함께 못박아 한쪽만 고치면 빨개진다.
 
 **사본을 손으로 고치지 않는다.**
 
@@ -23,16 +28,21 @@
 
 ```bash
 # 검증 — 기록된 리비전과 바이트 동일한가. 차이가 나면 사본을 손댄 것이다
+#
+# SHA 를 여기 또 적지 않는다. 위 표에서 읽는다 — 두 군데에 적으면 한쪽만 갱신돼
+# 검증이 "사본을 손댔다" 로 오진한다.
 set -o pipefail
+SHA=$(grep -oE '@ [0-9a-f]{7,40}' docs/11-batch-implementation.md | head -1 | cut -d' ' -f2)
 tmp=$(mktemp)
-gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=96b12f2" \
+gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=$SHA" \
   --jq '.content' | base64 -d > "$tmp" \
   && diff "$tmp" docs/contract.json && echo "사본이 원본과 같다"
 rm -f "$tmp"
 ```
 
 ```bash
-# 갱신 — 원본이 새 리비전으로 올라갔을 때만. 위 표의 SHA·날짜도 같이 고친다
+# 갱신 — 원본이 새 리비전으로 올라갔을 때만.
+# 위 표의 SHA·날짜와 ContractCopyTest 의 CONTRACT_REVISION·CONTRACT_DIGEST 를 같이 고친다
 set -o pipefail
 tmp=$(mktemp)
 gh api "repos/coupon-yaho/cy-seed-data-generator/contents/contract.json?ref=<새 SHA>" \
@@ -135,13 +145,29 @@ batch.scheduling.enabled: false   # 전 스케줄러를 @ConditionalOnProperty �
 
 ---
 
-## 2. JPA 를 쓰지 않는다
+## 2. 검증·리플레이는 JPA 를 쓰지 않는다
 
-배치는 JPA 엔티티를 만들지 않고 `JdbcTemplate` 과 Spring Batch JDBC 리더·라이터로 간다.
+대용량 검증·리플레이 경로는 JPA 영속성 컨텍스트를 사용하지 않고 JDBC reader/writer 로 처리한다.
+회차 생성·상태 전이·만료 도메인 경로는 공용 storage JPA 어댑터를 사용한다.
 
-**근거.** `batch → storage` 가 `runtimeOnly` 라 컴파일 타임에 Entity·JpaRepository 를 볼 수 없다.
-그런데 `DataSource` 는 Boot 자동설정 빈이고 `spring-jdbc` 타입이라 이 제약과 무관하게 주입된다.
-검증 규칙은 전부 집계 SQL 이고 리플레이는 이력 순회다 — **JPA 가 할 일이 없다.**
+**근거.** 검증 규칙은 전부 집계 SQL 이고 리플레이는 이력 순회다 — 거기엔 **JPA 가 할 일이 없다.**
+300만~534만 행에 영속성 컨텍스트를 얹지 않는다는 것이 이 장의 결정이고, 그건 그대로다.
+
+**바뀐 것.** 예전에는 "배치가 JPA 를 아예 안 쓴다" 였고 근거는 저장소에 엔티티가 0개라는
+사실이었다. CY-245 계보가 들어오면서 그 전제가 사라졌다 — 만료 스케줄러가 도메인 포트를 타고
+`IssuanceRepository` · `IssuanceHistoryRepository` · `CouponStockRepository` 를 부르는데 셋 다
+storage 의 JPA 구현이다. 그 세 곳의 잠금·조건부 갱신·예외 변환을 JDBC 로 다시 만드는 것보다,
+경계를 **경로별로** 긋는 것이 작고 일관된다.
+
+`batch → storage` 는 여전히 `runtimeOnly` 다. batch 본 코드는 Entity·JpaRepository 타입을
+컴파일 타임에 못 보고, 도메인 포트로만 부른다 — 그 경계는 그대로 살아 있다.
+
+**⚠️ 반쪽만 켜지 않는다.** `spring.autoconfigure.exclude` 의 JPA 두 줄과
+`storage.jpa.auditing.enabled` 는 한 쌍이다. storage 의 `@EnableJpaRepositories` 는 자동설정이
+아니라 `exclude` 로 막히지 않으므로, 자동설정만 빼면 리포지토리는 만들어지는데
+`EntityManagerFactory` 가 없어 기동이 죽는다. 반대로 auditing 만 끄면 기동은 되고 쓰기 시점에
+`created_at` 이 비어 실패한다 — 증상이 서로 다른 자리에서 나온다.
+`DomainGaugeConfigContractTest` 가 이 쌍을 지킨다.
 
 ```
 V1 V2 V6      tasklet + 단일 SQL
@@ -152,7 +178,7 @@ Step 0 · V4   발급건 식별자 창 기반 커스텀 ItemStreamReader → Pro
 시드 적재      JdbcBatchItemWriter + rewriteBatchedStatements=true
 ```
 
-엔티티 17개와 어댑터를 만들지 않는다. 300만~534만 행에 영속성 컨텍스트를 얹지 않는 것도 부수 효과다.
+검증 전용 엔티티와 어댑터는 만들지 않는다. 위 표의 경로는 전부 JDBC 다.
 
 ---
 
@@ -264,7 +290,7 @@ batch/src/main/java/com/kafkick/batch/
   seed/       생성기 · PII 암호화 · 분포
   corrupt/    유형별 주입 · expected_findings
   support/    지문 · 체크섬
-  api/        관리 포트 트리거
+  api/        내부 업무 포트 verify 트리거
 
 core/src/main/java/com/kafkick/core/
   coupon/       IssuanceStatus · IssuanceEventType · CouponStatus · CouponStateMachine
@@ -1196,16 +1222,25 @@ issuance_usages.used_at      > asOf   조용하다 — 활성 사용이 0 으로
 **회원가입·로그인은 과제 범위 밖이다.** 가상 회원 100만 명 중 지금 누가 요청하는지를 가려야 하므로
 **회원과 권한을 요청 헤더로 받는다.** 인증 체계가 아니라 사용자 구분 수단이다.
 
-서명이 없으므로 클라이언트가 무엇이든 주장할 수 있다. 그래서 방어선은 둘이다.
+서명이 없으므로 클라이언트가 무엇이든 주장할 수 있다. 네트워크 경계는 다음처럼 나눈다.
 
 | 무엇 | 어떻게 |
 |---|---|
 | 관리 경로 `/api/v1/admin/**` — 1차 | **관리 포트를 Compose 에서 외부에 노출하지 않는다** |
 | 관리 경로 `/api/v1/admin/**` — 2차 | **공유 비밀 헤더**(`X-Batch-Admin-Token`) — CY-742 |
+| 관리 화면 `/api/v1/admin/**` | 브라우저는 API 8080만 호출하고, API가 Batch 9091을 내부 호출한다 |
+| Actuator | API 9090·Batch 9092를 호스트에 노출하지 않고 Prometheus만 내부 접근한다 |
 | 사용자 경로 | 서버가 헤더 등급을 회차의 `eligible_grades_mask` 와 **대조**한다 |
 
 서명 없는 역할 클레임(`hasRole`)은 방어가 아니라 장식이므로 넣지 않는다.
 JWT · 세션 · Spring Security 도 도입하지 않는다.
+`X-User-Role: ADMIN` 문자열 검사도 호출자를 인증하지 않으므로 관리자 API의 보안 방어선으로
+간주하지 않는다. 실제 관리자 인증 또는 신뢰된 게이트웨이 경계는 후속 작업이다.
+
+> TODO(CY-209 배포 확인): 이 저장소에는 Compose가 없다. 배포 저장소에서
+> API 9090·Batch 9091·9092가 호스트에 매핑되지 않음을 확인하기 전에는 이 경계가
+> 보장된 것으로 간주하지 않는다. 브라우저가 Batch 9091을 직접 호출하도록
+> 라우팅해도 이 경계는 무효다.
 
 **2차 방어선을 왜 더했나 (CY-742).** 관제 화면에서 검증을 손으로 돌리기로 하면서 배치를
 **다른 호스트에 띄울 가능성**이 생겼다. 그러면 1차 방어선(포트 미노출)이 무너지는데,

@@ -8,6 +8,8 @@ public record ErrorResponse(
         int status,
         String code,
         String message,
+        Long currentRevision,
+        Object details,
         String requestId,
         Instant timestamp
 ) {
@@ -16,6 +18,8 @@ public record ErrorResponse(
                 errorCode.getStatus(),
                 errorCode.getCode(),
                 errorCode.getMessage(),
+                null,
+                null,
                 requestId,
                 timestamp
         );

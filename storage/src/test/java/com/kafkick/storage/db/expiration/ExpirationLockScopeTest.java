@@ -30,7 +30,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;
@@ -532,8 +532,8 @@ class ExpirationLockScopeTest {
             try (PreparedStatement insert = connection.prepareStatement("""
                     INSERT INTO issuances
                            (coupon_id, member_id, code, issued_grade, status,
-                            issued_at, expires_at, updated_at)
-                    VALUES (?, ?, 'LOCKSCOPE0000001', ?, 'ISSUED', ?, ?, ?)
+                            issued_at, expires_at, updated_at, created_at)
+                    VALUES (?, ?, 'LOCKSCOPE0000001', ?, 'ISSUED', ?, ?, ?, ?)
                     """)) {
                 insert.setLong(1, couponId);
                 insert.setLong(2, issuer.memberId());
@@ -541,6 +541,8 @@ class ExpirationLockScopeTest {
                 insert.setTimestamp(4, Timestamp.valueOf(AS_OF));
                 insert.setTimestamp(5, Timestamp.valueOf(ALIVE_AT));
                 insert.setTimestamp(6, Timestamp.valueOf(AS_OF));
+                // created_at — main 의 V5 가 도메인 발급시각과 감사시각을 갈랐다(NOT NULL).
+                insert.setTimestamp(7, Timestamp.valueOf(AS_OF));
                 insert.executeUpdate();
             } finally {
                 setSessionLockWaitTimeout(connection, original);

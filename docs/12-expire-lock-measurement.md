@@ -11,7 +11,7 @@
 > |---|---|
 > | `IDX(status, expires_at)` | `V2026082510__issuance_status_expires_index.sql` |
 > | `IDX(updated_at, id)` | `V2026082511__issuance_updated_at_index.sql` |
-> | `IDX(status, id)` | `V2026082501__issuance_status_id_index.sql` (§11) |
+> | `IDX(status, id)` | `V2026082901__issuance_status_id_index.sql` (§11) |
 >
 > **한때 이 문서가 `V11`·`V12` 를 약칭으로 썼다.** 그때는 그것이 실제 파일명이었다.
 > 번호가 날짜형으로 옮겨 간 뒤로는 그 약칭이 **다른 파일**을 가리킨다 —
@@ -30,7 +30,7 @@
 | **`V2026082510`** `(status, expires_at)` | 만료 대상을 **찾는** 비용 | 읽은 행 5,017 → **1** |
 | **READ COMMITTED** (만료 Step) | 만료가 **발급을 막는** 것 | 발급 INSERT 1205 → **통과** |
 | **`V2026082511`** `(updated_at, id)` | 청크 **경계를 구하는** 비용 | 첫 청크 200,017행 → **1,001** |
-| **`V2026082501`** `(status, id)` | 청크 **후보를 뽑는** 비용 | 16,999행 → **999** |
+| **`V2026082901`** `(status, id)` | 청크 **후보를 뽑는** 비용 | 16,999행 → **999** |
 
 하나로는 안 된다. 인덱스만 넣으면 발급이 계속 막히고, 격리만 내리면 테이블을 계속 훑는다.
 둘 다 넣어도 경계를 구하는 문장이 남는다.
@@ -38,7 +38,7 @@
 > **`V2026082511` 이 풀던 문장은 지금 없다.** 락 순서를 뒤집으면서(§11) 경계를 후보에서 알게 되어
 > `lastExpiredId` 를 지웠다. `V2026082511` 은 남긴다 — `appendExpireHistories` 가 아직
 > `updated_at = :committedAt` 으로 방금 넘긴 집합을 찾고, 되읽기 둘도 그 축을 쓴다.
-> **그리고 그 문장이 지던 위험은 `V2026082501` 이 물려받았다** — 위쪽으로 열린 문장이 후보 조회로
+> **그리고 그 문장이 지던 위험은 `V2026082901` 이 물려받았다** — 위쪽으로 열린 문장이 후보 조회로
 > 바뀌었을 뿐 성질은 같다.
 
 ---
@@ -436,14 +436,50 @@ UPDATE issuances SET … WHERE … AND id > :afterId AND id <= :ceiling;   -- �
 
 이 문서의 표에 없는 것은 아직 모르는 것이다.
 
-- ~~**300만 행에서의 실제 실행 시간.**~~ **쟀다 · CY-470 + CY-742.** 300만 발급 ·
-  516만 이력 · 회차 147 의 실제 셋에서 `verifyJob` FULL 이 **472초**(판정 경로)다
+- ~~**300만 행에서의 실제 실행 시간.**~~ **다시 쟀다 · CY-744.**
+  **300만 발급 · 534만 이력 · 132만 사용 · 회차 147 에서 `verifyJob` FULL 이 평균 180.8초**
+  (3회: 185.4 · 179.4 · 177.6 — 편차 ±2%). Step 별로도 5% 안이다:
+
+  | Step | 소요 | 비중 |
+  |---|---|---|
+  | `replayStep` | 80.3~85.3초 | **45%** |
+  | `usageCountStep` | 53.6~55.1초 | **30%** |
+  | `statsAggregateStep` | 20.5~21.4초 | 11% |
+  | `duplicateIssuanceStep` | 13.0~13.3초 | 7% |
+  | 나머지 일곱 | 합계 약 11초 | 6% |
+
+  같은 실행에서 **결정론 게이트도 통과했다** — 같은 `asOf` 로 `attempt` 만 바꿔 2회
+  돌려 `dataset_fingerprint`·`findings_checksum` 이 둘 다 같고, verdict `PASS` · 검출 0건이다.
+
+  ⚠️ **아래 472초는 재현 불가라 갈아 치운 것이지 "낡아서" 가 아니다.** 그 셋
+  (`coupon_clean`)은 `coupon_templates.created_at` 이 없어 **배치 앱이 기동조차 못 한다** —
+  그 사이 cy-be 마이그레이션이 앞서 나갔다. 시드 DDL 이 cy-be 의 최종 상태와 등가라는 것은
+  `SchemaParityTest` 가 보증하므로, 같은 시드(`20260812`)로 현재 스키마에 다시 깔아 쟀다.
+
+  **재현** — `cy-seed` 에서 `bin/seed.py all --dataset clean --schema coupon_bench --asof-state`
+  로 깔고, 배치 메타가 없으므로(`docs/13` §4a) `V11__batch_metadata.sql` 과
+  `V2026082513`·`V2026082514` 를 부은 뒤 `DB_NAME=coupon_bench` 로 배치를 띄워
+  `POST /api/v1/admin/verify?scope=FULL&dataset=CLEAN` 을 친다. `SchemaPresenceGuard` 가
+  빠진 인덱스를 이름까지 짚어 주므로 그 메시지를 따르면 된다.
+
+  ⚠️ **`usageCountStep` 이 30% 를 먹는 것은 아직 원인을 안 쟀다.** 옛 판에서는 17초(3.6%)라
+  2위가 아니었다. 후보는 둘이다 — 시드 DDL 이 `issuance_usages` 의 단일 `issuance_id`
+  인덱스를 `(issuance_id, order_id)` 복합으로 바꾼 것, 그리고 `canceled_at IS NULL` 필터가
+  무인덱스인 것(`idx_usage_issuance_active` 는 `--with-perf-indexes` 전용이다).
+  **인덱스를 넣을지는 인덱스 실측 티켓의 몫**이고 여기서 단정하지 않는다.
+
+  <details><summary>이전 기준선 (CY-470 + CY-742 · 재현 불가)</summary>
+
+  300만 발급 · 516만 이력 · 회차 147 의 셋에서 `verifyJob` FULL 이 **472초**(판정 경로)다
   (아래 만료 실측의 620만은 **같은 셋의 나중 시점**이다 — 그 사이 만료가 돌아 이력이 늘었다.
   ⚠️ 증분 104만이 이 문서의 만료 실측점 둘(340,529 · 859,471)과 산술로 안 맞는데,
   **두 시점 사이의 실행 이력을 따로 안 기록했다** — 지금은 못 맞춘다) —
   `replayStep` 312초 · `duplicateIssuanceStep` 59초 · `assertFrozenStep` 26초 ·
   `gradeViolationStep` 25초 · `usageCountStep` 17초 · 나머지 여섯이 합쳐 33초.
   같은 셋의 오염판(발급 60만)은 104초다.
+
+  </details>
+
   **만료도 쟀다 · CY-742.** `coupon_clean` 을 `coupon_expire_bench` 로 복제해 거기서
   돌렸다 — 만료는 `issuances` 를 쓰므로 원본에서 돌리면 `dataset_fingerprint` 가 바뀌어
   교차 검증 기준선을 잃는다. **300만 발급 · 620만 이력에서 340,529건 만료에 9.64초**
@@ -717,7 +753,7 @@ SIGKILL 했다(MySQL 8.4).
 | `releaseStock` | `JOIN … GROUP BY` 제거 → `WHERE coupon_id = :c AND active_count >= :n` |
 | 재고 행 없음 vs 모자람 | 갈라지는 자리가 달라졌다 — 없음은 `lockStock` false, 모자람은 `releaseStock` 갱신 0 |
 
-### `V2026082501` — 후보를 뽑는 비용
+### `V2026082901` — 후보를 뽑는 비용
 
 후보 조회는 `ORDER BY id` 가 있어 옵티마이저가 **정렬을 피하려고 PK 를 고른다.** 그러면
 `afterId` 위쪽의 누적된 `EXPIRED` 를 전부 지나가며 filter 한다. §5 가 `lastExpiredId` 에서
@@ -730,7 +766,7 @@ SIGKILL 했다(MySQL 8.4).
 |---|---:|
 | 그대로 — PK 스캔 | **16,999** |
 | `FORCE INDEX (status, expires_at)` + 정렬 | 4,000 |
-| **`V2026082501` `(status, id)`** | **999** |
+| **`V2026082901` `(status, id)`** | **999** |
 
 > **파일명이 연번이 아니라 날짜형인 이유** — 지금 원격에 `V12`~`V15` 가 각각 **두 가지**를
 > 가리킨다(`V12__issuance_updated_at_index` 와 `V12__drop_member_coupon_list_index` 처럼).

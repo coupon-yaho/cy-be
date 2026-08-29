@@ -3,8 +3,6 @@ package com.kafkick.batch.api;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.springframework.batch.core.job.JobExecution;
 
@@ -55,13 +53,6 @@ public record VerifyRunView(
         String failure
 ) {
 
-    /** 우리가 정의한 도메인 에러코드. 원문에서 이것만 그대로 통과시킨다. */
-    private static final Pattern DOMAIN_CODE = Pattern.compile("VERIFICATION-\\d{3}");
-
-    /** 그 밖에는 예외 <b>이름</b>만 남긴다. 메시지에는 SQL 조각이 섞일 수 있다. */
-    private static final Pattern EXCEPTION_TYPE =
-            Pattern.compile("([A-Za-z]+(?:Exception|Error))");
-
     public static VerifyRunView of(long executionId, JobExecution execution, Long runId,
             Optional<VerificationRun> run) {
         return new VerifyRunView(
@@ -109,21 +100,8 @@ public record VerifyRunView(
                 .filter(step -> step.getStatus().isUnsuccessful())
                 .findFirst()
                 .map(step -> step.getStepName() + ": "
-                        + summarize(step.getExitStatus().getExitDescription()))
+                        + FailureSummary.of(step.getExitStatus().getExitDescription()))
                 .orElse(null);
-    }
-
-    /** 도메인 에러코드가 보이면 그것을, 아니면 예외 클래스 이름만. 둘 다 없으면 {@code null}. */
-    private static String summarize(String description) {
-        if (description == null || description.isBlank()) {
-            return "원인이 기록되지 않았습니다";
-        }
-        Matcher code = DOMAIN_CODE.matcher(description);
-        if (code.find()) {
-            return code.group();
-        }
-        Matcher type = EXCEPTION_TYPE.matcher(description);
-        return type.find() ? type.group(1) : "알 수 없는 오류";
     }
 
     /**

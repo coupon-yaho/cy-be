@@ -10,6 +10,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Dockerfile 의 기본값은 api 다. 안 주면 batch 서비스가 api jar 로 뜬다.
+        APP_MODULE: batch
     environment:
       # ⚠️ **여기 적는 기준은 "기본값이 마음에 안 드는가" 가 아니다.**
       #    application.yml.example 의 환경변수는 **대부분 여기 없고 그게 맞다** —
@@ -118,6 +121,10 @@ services:
     # CY-368 이 그 포트에 admin 트리거(POST /api/v1/admin/verify)를 열었는데 인증이 없다 —
     # batch 에 Spring Security 가 없고 토큰 규약은 영역 ③의 몫이라 여기서 혼자 정하면
     # 두 벌이 된다. PRD 보안 ①이 그 상태를 /actuator/env 와 같은 급의 구멍으로 묶었다.
+    #
+    # ⚠️ **"인증이 없다" 는 이 파일 기준이다.** CY-742 가 토큰 관문을 만들었지만 위 87행이
+    #    그것을 꺼 둔다 — 포트를 안 내보내므로 막을 위협이 없어서다(근거는 73행).
+    #    포트를 내보내는 batch-expose.yml 에서는 켜진다.
     #
     # 필요할 때만 오버레이를 하나 더 얹는다:
     #   docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch

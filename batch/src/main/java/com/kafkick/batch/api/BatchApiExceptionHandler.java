@@ -50,8 +50,8 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
  * <b>이 배열과 실제 등록된 컨트롤러 집합이 같은지</b>를 기계로 확인한다.
  *
  * <p><b>메시지는 카탈로그 것만 나간다.</b> 예외의 {@code detail} 은 로그에만 남긴다 —
- * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 인증이
- * 없으므로 내부 사정을 더 조심해서 다룬다.
+ * {@code server.error.include-stacktrace: never} 와 같은 규율이고, 이 API 는 앞단이
+ * 얇으므로 내부 사정을 더 조심해서 다룬다.
  */
 // ⚠️ **컨트롤러를 여기 안 적으면 그 경로의 도메인 예외가 전부 500 으로 나간다.** 컴파일이
 // 안 잡는 결합이고, CY-697 이 CleanupAdminController 를 더하면서 실제로 밟았다 —
@@ -59,7 +59,8 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
 // (CY-590). 그때 그 테스트를 안 돌리고 흐름 테스트만 봐서 늦게 알았을 뿐이다.
 @RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
         ExpireAdminController.class, CleanupAdminController.class,
-        VerifyReportController.class})
+        VerifyReportController.class, BatchHistoryController.class,
+        VerifyHistoryController.class})
 public class BatchApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(BatchApiExceptionHandler.class);
@@ -73,7 +74,7 @@ public class BatchApiExceptionHandler {
     /**
      * <b>데드라인 초과는 500 이 아니다.</b> 이 API 들은 DB 가 아플 때 부르는 진단 도구라,
      * 그 상황에서 500 을 내면 운영자가 <i>"배치가 깨졌다"</i> 로 읽고 컨테이너를 내린다.
-     * 스택도 안 남긴다 — 앱이 깨진 것이 아니고, 인증 없는 API 라 ERROR 로그를 쌓는
+     * 스택도 안 남긴다 — 앱이 깨진 것이 아니고, 앞단이 얇은 API 라 ERROR 로그를 쌓는
      * 수단이 되면 안 된다.
      */
     // ⚠️ **socketTimeout 만료가 여기 안 걸리면 이 갈래가 반쪽이다.** 그 만료는
@@ -134,7 +135,7 @@ public class BatchApiExceptionHandler {
         // 안 가르면 트리거를 잘못 부른 것만으로 ERROR 로그가 쌓여 진짜가 묻힌다.
         //
         // detail 은 **로그에만** 남긴다. 클라이언트에 나가는 문구는 errorCode.getMessage()
-        // 다 — 저장소 규약이고, 이 API 에는 인증이 없어 더 지켜야 한다. detail 에는
+        // 다 — 저장소 규약이고, 앞단이 구성에 따라 없거나 소지만 묻는 관문 하나라 더 지켜야 한다. detail 에는
         // 설정 키·가드 이름·실행 id 가 들어간다.
         if (code.getStatus() >= 500) {
             log.error("batch admin API 가 실패했습니다. code={} detail={}",
@@ -150,8 +151,8 @@ public class BatchApiExceptionHandler {
      * <b>타입이 안 맞는 값은 400 이다.</b> {@code dataset=NOPE}·{@code asOf=garbage} 같은
      * 것들인데, {@code MethodArgumentTypeMismatchException} 은 {@code TypeMismatchException}
      * 만 상속하고 <b>{@code ErrorResponse} 를 구현하지 않는다</b>(바이트코드로 확인).
-     * 그래서 아래 갈래로 새면 500 이 되고, 인증이 없는 이 API 에서 <b>누구나 ERROR 로그에
-     * 스택트레이스를 원하는 만큼 쌓을 수 있다.</b>
+     * 그래서 아래 갈래로 새면 500 이 되고, 앞단이 얇은 이 API 에서 <b>포트에 닿는 쪽이
+     * ERROR 로그에 스택트레이스를 원하는 만큼 쌓을 수 있다.</b>
      *
      * <p>같은 "잘못된 요청" 인데 <i>값 누락</i>은 400, <i>타입 불일치</i>는 500 으로 갈리는
      * 것도 문제다 — {@code MissingServletRequestParameterException} 은 그 인터페이스를

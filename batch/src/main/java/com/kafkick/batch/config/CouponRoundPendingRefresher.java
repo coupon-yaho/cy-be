@@ -14,8 +14,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.kafkick.core.coupon.port.CouponRoundRepository;
-import com.kafkick.core.coupon.port.CouponRoundRepository.PendingCounts;
+import com.kafkick.core.coupon.port.CouponRoundTransitionRepository;
+import com.kafkick.core.coupon.port.CouponRoundTransitionRepository.PendingCounts;
 import com.kafkick.core.support.TimeProvider;
 
 import io.micrometer.core.instrument.Counter;
@@ -65,7 +65,7 @@ public class CouponRoundPendingRefresher {
 
     private static final Logger log = LoggerFactory.getLogger(CouponRoundPendingRefresher.class);
 
-    private final CouponRoundRepository rounds;
+    private final CouponRoundTransitionRepository rounds;
     private final TimeProvider timeProvider;
     private final Counter refreshFailures;
 
@@ -94,7 +94,7 @@ public class CouponRoundPendingRefresher {
             int blockedByMissingStock) {
     }
 
-    public CouponRoundPendingRefresher(CouponRoundRepository rounds, TimeProvider timeProvider,
+    public CouponRoundPendingRefresher(CouponRoundTransitionRepository rounds, TimeProvider timeProvider,
             MeterRegistry registry, PlatformTransactionManager transactionManager,
             @Value("${batch.metrics.coupon-round-refresh-ms:60000}") long refreshMillis,
             @Value("${batch.metrics.coupon-round-timeout-ms:5000}") long timeoutMillis,

@@ -369,7 +369,7 @@ class VerifyTriggerApiTest {
         assertThat(body.path("timestamp").isMissingNode()).isFalse();
         assertThat(body.path("detail").isMissingNode())
                 .as("detail 은 로그용이다. 클라이언트에 나가는 문구는 카탈로그 메시지뿐이고, "
-                        + "이 API 에는 인증이 없어 더 지켜야 한다")
+                        + "이 API 는 앞단이 얇아 더 지켜야 한다")
                 .isTrue();
     }
 
@@ -462,7 +462,7 @@ class VerifyTriggerApiTest {
 
     /**
      * <b>타입이 안 맞는 값은 400 이다.</b> {@code MethodArgumentTypeMismatchException} 은
-     * {@code ErrorResponse} 를 구현하지 않아 그냥 두면 500 으로 새고, 인증이 없는 이 API 에서
+     * {@code ErrorResponse} 를 구현하지 않아 그냥 두면 500 으로 새고, 앞단이 얇은 이 API 에서
      * 누구나 ERROR 로그를 채울 수 있게 된다.
      */
     @Test

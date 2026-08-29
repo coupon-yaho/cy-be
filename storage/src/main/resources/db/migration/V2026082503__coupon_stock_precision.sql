@@ -8,7 +8,7 @@
 -- 반대 방향도 있습니다. asOf 이후 0.4초에 일어난 진짜 갱신은 12:00:00 으로 내려가
 -- 가드를 통과하고, V1 이 움직인 재고와 비교해 재실행마다 다른 답을 냅니다.
 --
--- V2026082502__issuance_usage_precision.sql 이 issuance_usages 에 대해 고친 것과 같은 버그입니다.
+-- V2026082902__issuance_usage_precision.sql 이 issuance_usages 에 대해 고친 것과 같은 버그입니다.
 --
 -- ⚠️ 이미 반올림돼 굳은 값은 타입을 넓혀도 복구되지 않습니다. 재시드가 필요합니다.
 -- ⚠️ 게이트가 도는 CLEAN/CORRUPT 스키마는 시드 저장소가 자기 DDL 로 만듭니다 —

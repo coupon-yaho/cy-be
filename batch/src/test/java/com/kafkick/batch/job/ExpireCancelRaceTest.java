@@ -36,7 +36,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.batch.config.FixedClock;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 

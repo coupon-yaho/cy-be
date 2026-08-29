@@ -24,8 +24,8 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.kafkick.core.coupon.CouponStatus;
-import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.port.CouponRoundTransitionRepository;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupon.repository.CouponRoundJdbcAdapter;
 import com.kafkick.storage.db.VerificationSeed;
@@ -64,7 +64,7 @@ class CouponRoundLockScopeTest {
     private static final LocalDateTime NOW = LocalDateTime.of(2026, 4, 12, 5, 0);
 
     @Autowired
-    private CouponRoundRepository rounds;
+    private CouponRoundTransitionRepository rounds;
 
     /** 격리수준 단언이 어댑터의 실물 필드를 읽는다 — 포트에는 그 축이 없다. */
     @Autowired
@@ -101,8 +101,8 @@ class CouponRoundLockScopeTest {
     @Test
     @DisplayName("다른 세션이 남의 회차 행을 쥐고 있어도 전이가 통과한다 — 집합 UPDATE 면 1205 다")
     void transitionPassesWhileAnotherRoundIsLocked() throws Exception {
-        long target = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
-        long other = seed.round(CouponStatus.OPEN, NOW.minusDays(1), NOW.plusDays(1));
+        long target = seed.round(CouponRoundStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        long other = seed.round(CouponRoundStatus.OPEN, NOW.minusDays(1), NOW.plusDays(1));
 
         try (Connection held = dataSource.getConnection()) {
             held.setAutoCommit(false);
@@ -117,7 +117,7 @@ class CouponRoundLockScopeTest {
                     .as("여기서 1205 가 나면 전이가 대상 밖 행까지 잠근다는 뜻이다 — "
                             + "집합 UPDATE 로 되돌아간 상태가 정확히 그렇다")
                     .doesNotThrowAnyException();
-            assertThat(statusOf(target)).isEqualTo(CouponStatus.OPEN.name());
+            assertThat(statusOf(target)).isEqualTo(CouponRoundStatus.OPEN.name());
 
             held.rollback();
         }
@@ -132,8 +132,8 @@ class CouponRoundLockScopeTest {
     @Test
     @DisplayName("전이 중에도 다른 회차의 재고 소진 CLOSED 가 통과한다")
     void soldOutClosePassesWhileTransitioning() throws Exception {
-        long target = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
-        long soldOut = seed.round(CouponStatus.OPEN, NOW.minusDays(1), NOW.plusDays(1));
+        long target = seed.round(CouponRoundStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        long soldOut = seed.round(CouponRoundStatus.OPEN, NOW.minusDays(1), NOW.plusDays(1));
 
         assertThat(rounds.open(target, NOW)).isTrue();
 
@@ -157,10 +157,10 @@ class CouponRoundLockScopeTest {
     @DisplayName("id 단건 UPDATE 는 그 회차 행만 잠근다 — 집합 UPDATE 면 회차 수 + supremum 이다")
     void singleRowUpdateLocksOnlyThatRow() throws Exception {
         for (int i = 0; i < 5; i++) {
-            seed.round(CouponStatus.SCHEDULED,
+            seed.round(CouponRoundStatus.SCHEDULED,
                     NOW.minusMinutes(1), NOW.plusDays(1));
         }
-        long target = seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        long target = seed.round(CouponRoundStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
 
         try (Connection held = dataSource.getConnection()) {
             held.setAutoCommit(false);

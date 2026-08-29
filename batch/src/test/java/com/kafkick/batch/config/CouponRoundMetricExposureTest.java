@@ -19,7 +19,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
-import com.kafkick.core.coupon.CouponStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 
@@ -100,10 +100,10 @@ class CouponRoundMetricExposureTest {
     @Test
     @DisplayName("게이지 넷이 각자 다른 회차를 센다 — 술어가 뒤섞이면 잡힌다")
     void pendingGaugesReflectDatabase() throws Exception {
-        seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
-        seed.roundWithoutStock(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
-        seed.round(CouponStatus.SCHEDULED, NOW.minusDays(2), NOW.minusDays(1));
-        seed.round(CouponStatus.OPEN, NOW.minusDays(2), NOW.minusMinutes(1));
+        seed.round(CouponRoundStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        seed.roundWithoutStock(CouponRoundStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        seed.round(CouponRoundStatus.SCHEDULED, NOW.minusDays(2), NOW.minusDays(1));
+        seed.round(CouponRoundStatus.OPEN, NOW.minusDays(2), NOW.minusMinutes(1));
 
         refresher.refresh();
 
@@ -129,7 +129,7 @@ class CouponRoundMetricExposureTest {
     @Test
     @DisplayName("되읽기가 실패하면 게이지가 NaN 이 되고 실패 카운터가 오른다")
     void gaugesGoNaNWhenReadbackFails() throws Exception {
-        seed.round(CouponStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
+        seed.round(CouponRoundStatus.SCHEDULED, NOW.minusMinutes(1), NOW.plusDays(1));
         refresher.refresh();
         assertThat(metric(prometheusBody(), "cy_coupon_round_pending_open")).isEqualTo(1.0);
 

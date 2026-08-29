@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import jakarta.validation.ConstraintViolationException;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.http.HttpHeaders;
@@ -14,15 +15,18 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import com.kafkick.core.support.TimeProvider;
-import com.kafkick.core.support.response.ErrorResponse;
-import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.runtimeconfig.RuntimeConfigRevisionConflictException;
 import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;
+import com.kafkick.core.observation.Dependency;
+import com.kafkick.core.observation.RequestAttributeKeys;
+import com.kafkick.api.admin.benchmark.TopologyValidationException;
 
 /**
  * 모든 에러를 성공 응답과 같은 봉투로 감싼다. HTTP status 는 실제 4xx/5xx 를 유지한다.
@@ -43,8 +47,10 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ResponseEnvelope<Void>> handleBusinessException(BusinessException exception) {
+    public ResponseEntity<ResponseEnvelope<Void>> handleBusinessException(
+            BusinessException exception, HttpServletRequest request) {
         ErrorCode errorCode = exception.getErrorCode();
+        setDependency(request, errorCode.dependency());
         if (errorCode.getStatus() >= 500) {
             log.error("[{}] {}", errorCode.getCode(), exception.getMessage(), exception);
         } else {
@@ -52,11 +58,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             log.warn("[{}] {}", errorCode.getCode(), exception.getMessage());
         }
         return ResponseEntity.status(errorCode.getStatus())
-                .body(ResponseEnvelope.fail(body(errorCode)));
+                .body(ResponseEnvelope.fail(body(exception)));
     }
 
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<ResponseEnvelope<Void>> handleConstraintViolation(ConstraintViolationException exception) {
+    public ResponseEntity<ResponseEnvelope<Void>> handleConstraintViolation(
+            ConstraintViolationException exception, HttpServletRequest request) {
+        setDependency(request, Dependency.NONE);
         String message = exception.getConstraintViolations().stream()
                 .findFirst()
                 .map(violation -> violation.getMessage())
@@ -66,7 +74,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ResponseEnvelope<Void>> handleUnexpected(Exception exception) {
+    public ResponseEntity<ResponseEnvelope<Void>> handleUnexpected(
+            Exception exception, HttpServletRequest request) {
+        setDependency(request, CommonErrorCode.INTERNAL_ERROR.dependency());
         log.error("Unhandled exception", exception);
         return ResponseEntity.status(CommonErrorCode.INTERNAL_ERROR.getStatus())
                 .body(ResponseEnvelope.fail(body(CommonErrorCode.INTERNAL_ERROR)));
@@ -75,6 +85,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        setDependency(request, Dependency.NONE);
         String message = ex.getBindingResult().getAllErrors().stream()
                 .findFirst()
                 .map(MessageSourceResolvable::getDefaultMessage)
@@ -87,6 +98,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleHandlerMethodValidationException(
             HandlerMethodValidationException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        setDependency(request, Dependency.NONE);
         String message = ex.getParameterValidationResults().stream()
                 .flatMap(result -> result.getResolvableErrors().stream())
                 .findFirst()
@@ -101,6 +113,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(
             Exception ex, Object body, HttpHeaders headers, HttpStatusCode statusCode, WebRequest request) {
+        // 표준 MVC 예외는 인프라 ErrorCode를 운반하지 않는다. 5xx도 애플리케이션 실패로 고정한다.
+        setDependency(request, Dependency.NONE);
         // 위 검증 핸들러들이 이미 봉투로 감싸 호출하므로 이중 포장을 피한다.
         Object envelope = (body instanceof ResponseEnvelope<?>)
                 ? body
@@ -114,6 +128,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEnvelope.fail(error);
     }
 
+    private static void setDependency(HttpServletRequest request, Dependency dependency) {
+        request.setAttribute(RequestAttributeKeys.DEPENDENCY, dependency);
+    }
+
+    private static void setDependency(WebRequest request, Dependency dependency) {
+        if (request instanceof ServletWebRequest servletWebRequest) {
+            setDependency(servletWebRequest.getRequest(), dependency);
+        }
+        // 비-Servlet 호출에서는 관측 속성을 생략하되 원래 에러 응답은 계속 만든다.
+    }
+
     private ErrorResponse standardErrorBody(HttpStatusCode statusCode) {
         CommonErrorCode mapped = switch (statusCode.value()) {
             case 404 -> CommonErrorCode.NOT_FOUND;
@@ -124,17 +149,37 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         };
         // status 는 매핑된 코드가 아니라 실제 statusCode 를 쓴다. 415·406 등이 400 으로 뭉개지지 않게.
         return new ErrorResponse(
-                statusCode.value(), mapped.getCode(), mapped.getMessage(), requestId(), timeProvider.instant());
+                statusCode.value(), mapped.getCode(), mapped.getMessage(), null,
+                null,
+                requestId(), timeProvider.instant());
     }
 
     private ErrorResponse body(ErrorCode errorCode) {
         return ErrorResponse.of(errorCode, requestId(), timeProvider.instant());
     }
 
+    private ErrorResponse body(BusinessException exception) {
+        if (exception instanceof RuntimeConfigRevisionConflictException conflict) {
+            ErrorCode errorCode = conflict.getErrorCode();
+            return new ErrorResponse(
+                    errorCode.getStatus(), errorCode.getCode(), errorCode.getMessage(),
+                    conflict.getCurrentRevision(), null, requestId(), timeProvider.instant());
+        }
+        if (exception instanceof TopologyValidationException topology) {
+            ErrorCode errorCode = topology.getErrorCode();
+            return new ErrorResponse(
+                errorCode.getStatus(), errorCode.getCode(), errorCode.getMessage(), null,
+                topology.violations(), requestId(), timeProvider.instant());
+        }
+        return body(exception.getErrorCode());
+    }
+
     private ErrorResponse validationBody(String message) {
         ErrorCode errorCode = CommonErrorCode.INVALID_INPUT;
         return new ErrorResponse(
-                errorCode.getStatus(), errorCode.getCode(), message, requestId(), timeProvider.instant());
+                errorCode.getStatus(), errorCode.getCode(), message, null,
+                null,
+                requestId(), timeProvider.instant());
     }
 
     private String requestId() {

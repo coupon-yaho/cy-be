@@ -10,7 +10,9 @@
 | **한다** | `POST /api/v1/admin/verify/runs/{executionId}/stop` — 실행 중단. **진도가 멈춘 것만** |
 | **한다** | 업무 포트 노출 결정 — `application.yml.example` 이 이 티켓에 예약해 뒀다 |
 | **했다 (CY-590)** | `GET /api/v1/admin/verify/reports/latest?dataset=&scope=` — 제출용 리포트. 한때 이 표가 *"안 한다 — 별도 티켓"* 이라고 적었고, 그 별도 티켓이 CY-590 이다 |
-| **안 한다** | 인증·인가 — batch 에 Spring Security 가 없다. 아래 "남긴 것" |
+| **했다 (CY-744)** | `GET /api/v1/admin/verify/runs?dataset=&limit=&offset=&anchor=` — 검증 실행 이력. 기존 `runs` 리소스의 컬렉션이다. **`anchor` 는 페이지 경계를 얼린다** — 첫 요청은 안 보내고 응답이 준 값을 다음 요청부터 되돌려준다. 이 목록은 `cleanupJob` 이 **의도적으로 안 걷어** 단조 증가하고 손 트리거가 하루에도 여러 건을 더하므로, 안 얼리면 그 사이의 INSERT 에 페이지가 밀린다 |
+| **했다 (CY-744)** | `GET /api/v1/admin/batch/runs?jobName=&limit=&offset=&anchor=` — 세 잡의 실행 이력. 배치 메타에서 읽는다. `anchor` 는 위와 같다 — 보존 창(`CLEANUP_METADATA_KEEP_DAYS`)과 크론이 설정값이라 행 수에 상한이 없다. 회차 상태 전이는 `@Scheduled` 라 여기 안 나온다 |
+| **안 한다** | 인증·인가 — batch 에 Spring Security 가 없다. 아래 "남긴 것". ⚠️ **CY-742 가 뒤에 공유 비밀 관문을 붙였지만 포트를 내보낼 때만 켠다** |
 
 > **전제 — 검증은 만료가 도는 동안에는 안 돈다.** `startRunStep` 의 가드가 배치 메타에
 > 실행 중인 만료가 있으면 거절한다. 트리거를 여는 것이 그 제약을 푸는 것은 아니다.
@@ -326,7 +328,9 @@ POST /api/v1/admin/verify/runs/{id}/abandon   # STOPPED → ABANDONED
 > V1·V3·V5 가 반쯤 쓰인 상태를 읽고 예외 없이 조용히 틀린 답을 낸다.
 >
 > **도는 검증을 정말 세워야 하면 컨테이너를 내린다.** 강제 중단 파라미터를 열지 않는다 —
-> 이 API 에는 인증이 없어서, 여는 순간 배치 포트에 닿는 누구나 정상 검증을 멈출 수 있다.
+> 앞단이 얇아서, 여는 순간 배치 포트에 닿는 누구나 정상 검증을 멈출 수 있다. 표준 스택은
+> 토큰 관문이 아예 꺼져 있고(`batch.yml` 의 `BATCH_ADMIN_AUTH_REQUIRED` 기본값 `false`),
+> 켜지는 구성에서도 공유 비밀 하나라 그 값을 아는 쪽은 다 통과한다.
 > 그리고 열 필요가 없다: `docs/11` 이 *"부하 중 정지 수단이 설정이 아니라 컨테이너다"* 로
 > 이미 수단을 정해 뒀고, **만료와 검증이 같은 컨테이너**라 내리면 만료 크론도 안 떠서
 > `issuances.updated_at` 오염이 애초에 일어나지 않는다.
@@ -371,8 +375,8 @@ DB 조회로는 안 보인다. 살아 있는 잡은 그 뒤 자기 청크 경계
 안 집는 것이 맞다).
 
 **막고 있는 `executionId` 는 `GET /runs/running` 으로 얻는다.** 429 응답 본문에는 안 싣는다 —
-저장소 규약이 *"클라이언트에 나가는 문구는 `errorCode.getMessage()`"* 로 못 박았고, 인증이
-없는 API 라 자유 문장에 내부 값을 담지 않는 편이 맞다. 그 id 없이는 `stop`·`abandon` 을
+저장소 규약이 *"클라이언트에 나가는 문구는 `errorCode.getMessage()`"* 로 못 박았고, 앞단이
+얇아 자유 문장에 내부 값을 담지 않는 편이 맞다. 그 id 없이는 `stop`·`abandon` 을
 부를 방법이 없으므로 **조회 경로를 따로 연다.**
 
 응답은 성공도 실패도 `ResponseEnvelope` 다. 이것도 규약이고, batch 가 그것을 쓰려면
@@ -679,11 +683,39 @@ POST /api/v1/admin/cleanup/runs/{id}/recover       # 한 번에 FAILED 로 닫�
 - **정상 완료는 대상이 아니다** — `COMPLETED` 에 `recover` 를 부르면 409 다.
   200 이 나가면 실행 번호 오타 한 자리가 진짜 시체를 놓치게 만든다
 
+---
+
+**CY-744 (관제 이력 목록)** — 관제 화면이 원형그래프를 목록에서 직접 집계하므로,
+아래는 코드 주석이 아니라 **FE 와의 계약**이다.
+
+- **출처** — `GET /verify/runs` 는 `origin = 'BATCH'` 행만 준다. 시드가 심은 기준 행
+  (실측: CLEAN `PASS` 3건 · CORRUPT `FAIL` 800건 1건)은 배치 실행이 아니라 **게이트가
+  대조하는 기준값**이다. 안 거르면 배치를 한 번도 안 돌린 CLEAN DB 에서 화면에 `PASS` 가
+  이미 그려져 "안 돌린 채 통과했다" 가 성립한다 — `V2026082512` 가 지표 되읽기에서 막은
+  것과 같은 함정이고, `docs/17` 이 *"`verdict` 는 `origin` 에 따라 뜻이 다르다"* 로 적어 뒀다
+- **페이지 클램프** — `limit > 200` 은 200 으로, `limit < 1` 과 미지정은 50, 음수 `offset` 은
+  0 으로 접는다. **400 을 안 낸다** — 화면 실수 하나가 목록을 못 그리게 만들면 안 된다
+- **필터 대칭** — `jobName`·`dataset` 이 `items` 와 `total` 에 **함께** 걸린다.
+  한쪽에만 걸면 화면이 없는 페이지를 그린다
+- **시각 축** — `batch/runs` 의 `startedAt`·`finishedAt` 은 `BatchTimeAxis` 를 거친 **UTC**
+  라 `verify/runs` 의 `asOf`·`startedAt` 과 같은 좌표계다. 배치 메타 원본은 JVM 기본 존이다
+- **실패 사유** — `failure` 는 도메인 에러코드 또는 예외 **클래스 이름**뿐이다. 스택트레이스와
+  SQL 조각은 안 나간다(원문은 실측 2,178자). `COMPLETED`·`STARTING`·`STARTED`·`STOPPING`
+  에서는 `null` 이고, 그 밖(`STOPPED`·`FAILED`·`ABANDONED`·`UNKNOWN`·규약 밖 문자열·`NULL`)
+  은 전부 사유가 붙는다 — `BatchStatus.match` 는 모르는 값을 `COMPLETED` 로 접고
+  `STOPPED.isUnsuccessful()` 은 `false` 라, 둘 다 쓰면 안 된다(실측)
+- **`exitCode` 부재** — 안 싣는다. `SimpleJob` 이 잡 종료 코드를 마지막 Step 값으로 대입하는데
+  `statsAggregateStep` 이 CORRUPT 에서 `SKIPPED` 를 세워, 성공한 오염셋 검증이 스킵으로 읽힌다
+- **판정 전 값** — `verify/runs` 의 `findingCount`·`findingsChecksum` 은 판정 전에는 `null` 이다.
+  `0` 은 이 프로젝트에서 **"정합성 합격"** 의 신호값이라 도는 중인 실행이 무결로 읽힌다
+- **`fromTs`** — `INCREMENTAL` 이 막혀 있는 동안 **언제나 `null`** 이다. 필드는 미리 연다 —
+  증분이 열리는 날 응답 스키마를 바꾸면 화면도 같이 고쳐야 한다
+
 ## 남긴 것
 
 | 무엇 | 왜 |
 |---|---|
-| **인증·인가** | PRD 보안 ①이 `/api/v1/admin/**` 에 `ADMIN` 역할을 요구한다. batch 에 Spring Security 가 없고, 토큰 발급·검증은 영역 ③(인증)의 몫이라 여기서 규약을 혼자 정하면 두 벌이 된다. **이 티켓은 노출을 줄이는 데까지만 간다.** ⚠️ **그 축소가 막는 것은 인터넷뿐이다** — compose 서비스가 같은 기본 네트워크를 쓰므로 `docker compose exec prometheus curl http://batch:9090/...` 는 그대로 통한다. 내부 신뢰 경계는 없다 |
+| **인증·인가** | PRD 보안 ①이 `/api/v1/admin/**` 에 `ADMIN` 역할을 요구한다. batch 에 Spring Security 가 없고, 토큰 발급·검증은 영역 ③(인증)의 몫이라 여기서 규약을 혼자 정하면 두 벌이 된다. **이 티켓은 노출을 줄이는 데까지만 갔다.** ⚠️ **그 축소가 막는 것은 인터넷뿐이다** — compose 서비스가 같은 기본 네트워크를 쓰므로 `docker compose exec prometheus curl http://batch:9091/...` 는 그대로 통한다. **뒤에 CY-742 가 공유 비밀 헤더(`X-Batch-Admin-Token`)를 얹었지만 그것은 포트를 내보내는 `batch-expose.yml` 에서만 켜진다** — 표준 스택(`batch.yml`)은 여전히 관문이 없고, 켜지는 구성에서도 역할 구분은 없다(소지만 묻는다) |
 | **`INCREMENTAL` scope** | `rejectUnsupportedScope` 가 막는 상태 그대로 둔다. 여는 것은 증분 검증 티켓 |
 | ~~**리포트 덤프**~~ | **CY-590 이 했다** — `GET /reports/latest`. 이 티켓의 `/runs/{executionId}` 는 **배치 실행**이 어떻게 됐나이고, 그쪽은 **그 실행이 낸 판정**이다. `docs/10` 이 "두 얼굴" 로 가른 그 둘이다 |
 | **진행률** | `GET` 이 Step 단위 진행을 안 준다. 300만 전수라 사람이 궁금해할 값인데, 지금 지표로 그 축이 없다 |

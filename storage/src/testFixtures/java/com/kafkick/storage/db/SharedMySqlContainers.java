@@ -49,12 +49,50 @@ final class SharedMySqlContainers {
      * 시드({@code cy-seed})·compose 가 쓰는 버전과 갈렸는지 확인해라.
      * 검증 대상 데이터를 만드는 쪽과 검증하는 쪽이 다른 서버면 판정의 뜻이 약해진다.
      */
-    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:latest");
+    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4.6");
 
     /** 연결 상한의 기본값. {@code build.gradle} 이 컨텍스트 캐시 상한에서 계산해 넘긴다. */
     private static final String MAX_CONNECTIONS_PROPERTY = "test.mysql.maxConnections";
 
+    /**
+     * {@code infra/mysql/initdb/20-obs-account.sh} 에 env 로 건네는 값.
+     *
+     * <p><b>여기 하나뿐이다.</b> 한때 이 파일과 {@code MySqlContainerConfig} 가 같은
+     * 문자열을 각자 적고 있었다 — 한쪽은 컨테이너 계정을 만들고 한쪽은 접속 정보를
+     * 꽂는데, 값이 갈리면 컨테이너를 쓰는 <b>모든</b> 테스트가
+     * {@code Access denied for user 'obs'} 로 죽는다. 실패 메시지가 원인을 안 가리켜서
+     * 이스케이프 문제로 오진하기 딱 좋다.
+     */
+    static final String OBSERVATION_USERNAME = "obs";
+
+    /**
+     * <b>일부러 까다로운 값이다.</b> 두 문자가 각각 다른 실패를 만든다 —
+     * {@code '} 는 문자열을 조기에 닫고(배가로 막는다), {@code \} 는 MySQL 이 기본값에서
+     * 이스케이프 문자로 읽어 <b>값의 마지막 문자면</b> 닫는 따옴표를 먹는다({@code ERROR 1064}).
+     *
+     * <p>그래서 <b>백슬래시가 마지막 문자다.</b> 가운데 두면 그 실패가 재현되지 않아
+     * 이스케이프를 지워도 테스트가 통과한다. 평범한 값으로 두면 이 저장소에 그 회귀를
+     * 잡는 그물이 하나도 없게 된다.
+     */
+    static final String OBSERVATION_PASSWORD = "o'bs\\";
+
     private SharedMySqlContainers() {
+    }
+
+    /**
+     * 저장소 루트. 실행 디렉터리가 모듈마다 달라 위로 올라가며 {@code settings.gradle} 로
+     * 찾는다 — 상대 경로를 박으면 다른 모듈에서 돌릴 때 파일을 못 찾아 컨테이너가 안 뜬다.
+     */
+    private static java.nio.file.Path repoRoot() {
+        java.nio.file.Path candidate = java.nio.file.Path.of("").toAbsolutePath();
+        while (candidate != null) {
+            if (java.nio.file.Files.isRegularFile(candidate.resolve("settings.gradle"))) {
+                return candidate;
+            }
+            candidate = candidate.getParent();
+        }
+        throw new IllegalStateException("저장소 루트를 찾지 못했다. 실행 디렉터리: "
+                + java.nio.file.Path.of("").toAbsolutePath());
     }
 
     /**
@@ -168,6 +206,26 @@ final class SharedMySqlContainers {
                 .withCopyFileToContainer(
                         MountableFile.forClasspathResource("db/testcontainers/grant-process.sql"),
                         "/docker-entrypoint-initdb.d/10-grant-process.sql")
+                // 20 · 관측 전용 계정. **compose 가 마운트하는 것과 같은 파일**이라
+                //      테스트에서 도는 권한이 곧 로컬에서 도는 권한이다.
+                // ⚠️ 클래스패스가 아니라 **저장소 경로**에서 읽는다 — 이 파일은 compose 가
+                //    호스트 경로로 마운트하는 것이라 배포 jar 에 실릴 이유가 없다.
+                //    모드 0755 를 명시한다. entrypoint 가 .sh 를 실행하므로 실행 비트가
+                //    없으면 "bad interpreter: Permission denied" 로 컨테이너가 안 뜬다.
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(
+                                repoRoot().resolve("infra/mysql/initdb/20-obs-account.sh"), 0755),
+                        "/docker-entrypoint-initdb.d/20-obs-account.sh")
+                // 권한을 주는 쪽. **initdb.d 가 아니다** — 테이블 단위 GRANT 는 그 테이블이
+                // 이미 있어야 하는데 initdb 시점에는 하나도 없다(ERROR 1146). 여기서는 복사만
+                // 하고, 스키마 초기화가 끝난 뒤 MySqlContainerConfig 의 grant applier 가 돌린다.
+                // ⚠️ 디렉터리째 복사한다 — apply.sh 가 같은 디렉터리의 allowlist.txt 를 읽는다.
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(
+                                repoRoot().resolve("infra/mysql/obs-grants"), 0755),
+                        "/obs-grants")
+                .withEnv("DB_OBS_USERNAME", OBSERVATION_USERNAME)
+                .withEnv("DB_OBS_PASSWORD", OBSERVATION_PASSWORD)
                 .withUrlParam("serverTimezone", "UTC")
                 .withUrlParam("characterEncoding", "UTF-8")
                 .withUrlParam("useUnicode", "true")

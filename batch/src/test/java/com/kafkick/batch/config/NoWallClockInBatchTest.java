@@ -93,31 +93,34 @@ class NoWallClockInBatchTest {
      * 에 기대는 것은 {@code BatchRunMetricsRefresher} 와 같다.
      * </pre>
      */
-    private static final Map<String, Integer> INJECTED_CLOCK_BUDGET = Map.of(
-            "com/kafkick/batch/job/ExpireJobConfig.java", 1,
+    private static final Map<String, Integer> INJECTED_CLOCK_BUDGET = Map.ofEntries(
+            Map.entry("com/kafkick/batch/job/ExpireJobConfig.java", 1),
             // 둘이다 — 버려진 검증 컷오프(abandoned-after-hours)와
             // 배치 메타 보존 컷오프(batch.cleanup.metadata-keep-days). Step 이 갈려 있어 각자 잡는다.
-            "com/kafkick/batch/job/CleanupJobConfig.java", 2,
-            "com/kafkick/batch/schedule/ExpireScheduler.java", 2,
-            "com/kafkick/batch/schedule/CleanupScheduler.java", 2,
+            Map.entry("com/kafkick/batch/job/CleanupJobConfig.java", 2),
+            Map.entry("com/kafkick/batch/schedule/ExpireScheduler.java", 2),
+            Map.entry("com/kafkick/batch/schedule/CleanupScheduler.java", 2),
             // 둘이다 — 기동 가드의 크론 최대간격 계산과, 발화 때 슬롯을 구하는 자리.
             // 뒤엣것이 asOf 가 되지만 판정은 잡 안에서 그 값으로만 하므로 축이 안 섞인다.
-            "com/kafkick/batch/schedule/VerifyScheduler.java", 2,
+            Map.entry("com/kafkick/batch/schedule/VerifyScheduler.java", 2),
             // 하나다 — 한 tick 이 여는 대상과 닫는 대상을 **같은 시각**으로 판정한다.
             // 두 번 읽으면 그 사이에 경계를 넘은 회차가 열리고 바로 닫힌다.
-            "com/kafkick/batch/schedule/CouponRoundScheduler.java", 1,
+            Map.entry("com/kafkick/batch/schedule/CouponRoundScheduler.java", 1),
             // 하나다 — 대기 수 넷을 한 시각으로 센다. 갈리면 서로 다른 시각의 값이 나란히 나간다.
-            "com/kafkick/batch/config/CouponRoundPendingRefresher.java", 1,
+            Map.entry("com/kafkick/batch/config/CouponRoundPendingRefresher.java", 1),
             // 둘이다 — asOf 미래 검사와, 곧 뜰 만료와 겹치는지 보는 검사(CY-470).
             // 뒤엣것은 max-expire-skips=0 이 손 트리거의 방어를 없앤 자리를 접수 단계에서
             // 닫는다. 둘 다 판정에 안 들어간다 — 잡에 실리는 asOf 는 요청값 그대로다.
-            "com/kafkick/batch/api/VerifyTriggerController.java", 2,
-            "com/kafkick/batch/api/BatchApiExceptionHandler.java", 1,
+            Map.entry("com/kafkick/batch/api/VerifyTriggerController.java", 2),
+            Map.entry("com/kafkick/batch/api/BatchApiExceptionHandler.java", 1),
             // 하나다 — 거절 응답 봉투의 timestamp. BatchApiExceptionHandler 와 같은 축이고
             // 같은 이유로 예산에 든다: 판정이 아니라 **응답 메타**다. 이 필터는
             // DispatcherServlet 앞에서 응답해 그 핸들러를 못 지나므로 봉투를 직접 만든다 —
             // 안 만들면 같은 API 표면에서 error 필드 집합이 갈린다(CY-742 리뷰).
-            "com/kafkick/batch/config/AdminTokenFilter.java", 1);
+            Map.entry("com/kafkick/batch/config/AdminTokenFilter.java", 1),
+            // 하나다 — 설승환 님의 CY-254 관측 리더다(batch/observation). 판정이 아니라
+            // **게이지 관측 시각**이라 결정론 축과 무관하다. CY-744 합류로 들어왔다.
+            Map.entry("com/kafkick/batch/observation/ConsistencyRawValueReader.java", 1));
 
     /**
      * <b>주입된 시계도 예산을 갖는다.</b> {@code timeProvider.now()} 는 위 정규식에 안 걸리고,
@@ -182,11 +185,14 @@ class NoWallClockInBatchTest {
      *                     재료가 아니고, .coderabbit.yaml 이 그 둘만 예외로 뒀다.
      * DefaultZoneGuard 1  **검사 대상 자체가 그 값이다.** 기동 때 JVM 기본 존이 고정
      *                     오프셋 0 인지 보는 가드라, 이것을 안 읽으면 할 일이 없다.
+     * BatchRunView     1  배치 메타 시각을 응답에 실을 때 옮기는 자리. 존 인자 갈래에
+     *                     기본값을 주는 한 줄이고, 판정에 안 들어간다 — 이력 조회다.
      * </pre>
      */
     private static final Map<String, Integer> DEFAULT_ZONE_BUDGET = Map.of(
             "com/kafkick/batch/config/BatchTimeAxis.java", 1,
-            "com/kafkick/batch/config/DefaultZoneGuard.java", 1);
+            "com/kafkick/batch/config/DefaultZoneGuard.java", 1,
+            "com/kafkick/batch/api/BatchRunView.java", 1);
 
     @Test
     @DisplayName("JVM 기본 존을 읽는 파일과 횟수가 예산과 정확히 같다")

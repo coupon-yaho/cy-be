@@ -4,7 +4,7 @@ package com.kafkick.core.verification.replay;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 
 /**
  * {@code asof_state} 행은 여기에 {@code active_usage_count} 를 더해 완성됩니다.

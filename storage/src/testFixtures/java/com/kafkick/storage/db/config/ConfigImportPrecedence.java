@@ -169,6 +169,27 @@ public final class ConfigImportPrecedence {
     }
 
     /**
+     * <b>공유 파일이 모듈별 키를 정의하지 않는다.</b> {@link #assertOverridden} 의 반대다.
+     *
+     * <p>{@code spring.config.import} 로 들어온 문서는 선언 문서를 <b>이긴다</b>. 그래서
+     * 공유 파일이 모듈마다 달라야 하는 값(풀 크기 · 마이그레이션 소유자)을 정의하면,
+     * 각 모듈이 자기 파일에 적은 값이 <b>에러도 경고도 없이 무시된다.</b> 실제로 그랬다 —
+     * batch 의 {@code maximum-pool-size: 4} 가 무시되고 10 으로 떴다.
+     *
+     * <p>지금은 공유 파일이 그 키들을 안 갖는다. 이 검사는 <b>그 상태를 계약으로 고정</b>한다 —
+     * 누가 편의로 되돌려 놓으면 그 순간 빨개진다. 조용히 무시되는 쪽으로는 안 돌아간다.
+     */
+    public void assertNotDefinedByImport(String... keys) {
+        for (String key : keys) {
+            assertThat(importedKeys.stream().anyMatch(raw -> sameProperty(raw, key)))
+                    .as(importedResource + " 이 " + key + " 를 정의하면 각 모듈이 선언한 값이 "
+                            + "조용히 무시된다 — import 문서가 선언 문서를 이긴다. "
+                            + "그 키는 모듈마다 달라야 하므로 공유 파일에 두지 않는다")
+                    .isFalse();
+        }
+    }
+
+    /**
      * 지정한 키가 실제로 덮어쓰기인지 — 뒤 문서에도 있고 가져온 설정에도 있는지 확인한다.
      *
      * <p><b>{@link #overlaps} 를 쓰지 않는다.</b> 질문이 다르다 — {@code overlaps} 는

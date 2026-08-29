@@ -1,18 +1,11 @@
-# 배치 서버 관제 설정.
-#
-# CY-359 부터 읽는 쪽이 있다 — base.yml 이 이 디렉터리를 /etc/prometheus 로 마운트한다.
-#    확인은 파일 존재가 아니라 /api/v1/rules 응답으로 한다.
-#
-# 규칙 파일이 여기 있는 이유 — 예전에는 batch/src/main/resources/alerts/ 에 뒀는데,
-# 거기 두면 **jar 안에만 들어가고** Prometheus 는 jar 를 읽지 않는다.
-# "관제가 그대로 가져다 쓴다" 고 적어 놓고 통로를 안 만든 셈이었다.
-
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  # ⚠️ **1초는 부하 회차 시계열 해상도 때문이다**(main). 배치 알림은 15초로도 충분했지만,
+  #    측정 회차가 초 단위 곡선을 남겨야 해서 짧은 쪽으로 맞춘다. 알림 식은 전부
+  #    `*_over_time` 창 기반이라 간격이 짧아져도 판정이 안 바뀐다.
+  scrape_interval: 1s
+  scrape_timeout: 900ms
+  evaluation_interval: 1s
 
-# 알림이 나갈 곳. 이것이 없으면 규칙이 평가돼도 Prometheus 웹 UI 의 Alerts 탭에만 뜨고
-# 슬랙·PagerDuty 로는 한 줄도 안 간다 — 규칙을 저장소에 둔 이유가 사라진다.
 alerting:
   alertmanagers:
     - static_configs:
@@ -22,26 +15,21 @@ rule_files:
   - "rules/*.yml"
 
 scrape_configs:
-  # 배치 서버의 관리 포트. 서비스 포트(9090)가 아니라 management 포트다 —
-  # application.yml.example 의 BATCH_MANAGEMENT_PORT 와 같아야 한다.
-  - job_name: cy-batch
+  # ⚠️ **job 이름은 batch 다(cy-batch 아님).** api 의 PrometheusScrapeConfigContractTest 가
+  #    *"대상은 api·batch 둘"* 을 계약으로 고정한다 — 배포 기준선이 그쪽이라 알림 규칙을
+  #    맞췄다(batch-alerts.yml 의 up{job=...} 9곳). 여기만 바꾸면 그 알림이 영원히 안 뜬다.
+  - job_name: batch
     metrics_path: /actuator/prometheus
     static_configs:
       - targets: ["batch:9092"]
 
-  # 알림이 실제로 리시버까지 가는지 본다.
-  #
-  # 이 티켓의 제목이 "알림을 mock 리시버로 보낸다" 인데, 정작 **마지막 구간만 감시 밖**이었다.
-  # alert-sink 가 죽으면 Prometheus 는 계속 firing 이고 Alertmanager 는 실패를 자기 로그에만
-  # 남긴다 — `logs alert-sink` 에 새 줄이 없는 것을 사람은 "규칙이 틀렸다" 로 읽는다.
-  #
-  # 이 저장소가 ExpireMetricsUnknown·VerificationMetricsUnknown 으로 두 번 세운 축과 같다:
-  # **감시가 꺼진 것을 감시한다.**
-  - job_name: alertmanager
+  - job_name: api
+    metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ["alertmanager:9093"]
+      - targets: ["api:9090"]
 
-  # 규칙 평가와 알림 발송이 도는지. Prometheus 가 스스로를 못 긁으면 나머지도 못 믿는다.
-  - job_name: prometheus
-    static_configs:
-      - targets: ["localhost:9090"]
+  # ⚠️ **alertmanager·prometheus 자기 스크레이프는 뺐다(CY-744).**
+  #    feature/CY-15 에는 있었는데, ① 알림 규칙이 그 두 잡을 하나도 안 쓰고(실측 grep 0건)
+  #    ② api 의 PrometheusScrapeConfigContractTest 가 *"scrape 대상은 api·batch 둘이고
+  #    전부 /actuator/prometheus"* 를 계약으로 고정한다. 그 둘은 actuator 가 아니라
+  #    /metrics 를 열어서 계약을 만족시킬 수도 없다. 필요해지면 계약부터 고친다.

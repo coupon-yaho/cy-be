@@ -15,8 +15,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.TestPropertySource;
 
-import com.kafkick.core.coupon.IssuanceEventType;
-import com.kafkick.core.coupon.IssuanceStatus;
+import com.kafkick.core.coupon.domain.IssuanceEventType;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.verification.HourlyIssued;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.VerificationSeed;

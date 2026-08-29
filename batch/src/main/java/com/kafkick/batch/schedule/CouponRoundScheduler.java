@@ -12,7 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.port.CouponRoundTransitionRepository;
 import com.kafkick.batch.config.CouponRoundMetrics;
 import com.kafkick.core.support.TimeProvider;
 
@@ -51,7 +51,7 @@ public class CouponRoundScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(CouponRoundScheduler.class);
 
-    private final CouponRoundRepository rounds;
+    private final CouponRoundTransitionRepository rounds;
     private final TimeProvider timeProvider;
 
     /**
@@ -65,7 +65,7 @@ public class CouponRoundScheduler {
     private final java.util.Map<String, java.util.concurrent.atomic.AtomicLong>
             selectFailureStreaks = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public CouponRoundScheduler(CouponRoundRepository rounds, TimeProvider timeProvider,
+    public CouponRoundScheduler(CouponRoundTransitionRepository rounds, TimeProvider timeProvider,
             CouponRoundMetrics metrics, @Value(CRON) String couponOpenCron) {
         if (Scheduled.CRON_DISABLED.equals(couponOpenCron)) {
             // **끄는 수단은 하나여야 한다.** 형제 둘은 "-" 를 주면 asOf 를 만들 근거가
@@ -160,9 +160,20 @@ public class CouponRoundScheduler {
      * 닫기 쪽에서는 <b>정상 경로</b>다 — 재고 소진으로 발급 경로가 먼저 닫으면 여기는 0행이다.
      * 그것을 실패로 로그하면 <b>가장 흔한 마감이 매번 오류로 보고된다.</b>
      *
-     * <p>⚠️ <b>그 발급 경로는 아직 없다</b>({@code api} 에 발급 코드가 0줄이다). 그 티켓이
-     * 들어오기 전까지 닫기 쪽 {@code false} 는 <b>다른 원인</b>이고, 그때는 이 판단을 다시 봐야
-     * 한다 — 지금은 debug 로 낮춰 두었다.
+     * <p>⚠️ <b>그 발급 경로는 회차를 안 닫는다.</b> 한때 여기 "{@code api} 에 발급 코드가
+     * 0줄이다" 라고 적혀 있었는데, 병합으로 발급 코드는 생겼고 <b>그래도 결론은 같다</b> —
+     * {@code CouponIssueService.validateStockOccupation} 은 {@code SOLD_OUT} 을 던질 뿐
+     * {@code coupons.status} 를 안 건드리고, 저장소 어디에도 재고 소진으로 {@code CLOSED} 를
+     * 쓰는 코드가 없다(CY-744 3차 리뷰 실측). 그래서 닫기 쪽 {@code false} 는 지금도
+     * <b>다른 원인</b>이고, 지금은 debug 로 낮춰 두었다.
+     *
+     * <p>⚠️ <b>그 대가가 하나 남는다 — 재고 0 인데 {@code OPEN} 인 구간이 {@code close_at}
+     * 까지 지속된다.</b> 그동안 모든 발급 요청이 정책 검증을 통과해 <b>재고 행 락까지 잡은 뒤</b>
+     * {@code SOLD_OUT} 으로 튕긴다. 회차 상태만 봤으면 앞에서 막았을 트래픽이 재고 행 하나를
+     * 직렬로 지난다. 아래 {@code CLOSE_ROUND} 의 {@code close_at <= :now} 조건이 그 구간을
+     * 이 경로로는 못 닫게 하고, 되읽기의 어느 게이지도 그 상태를 안 센다
+     * ({@code pendingClose} 는 {@code close_at <= now} 만 본다). <b>닫는 자리는 재고 행 락을
+     * 이미 쥔 발급 경로</b>이지 1분 크론이 아니다 — 그 결정은 발급 영역의 몫이다.
      *
      * <p><b>스택트레이스는 tick 당 한 번이다.</b> 반복 실패는 대상 전부에서 <b>같은 원인</b>으로
      * 난다(락 대기 · 권한 · 커넥션). 회차마다 스택을 찍으면 한 tick 에 대상 수만큼 쌓이고

@@ -16,6 +16,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -94,6 +96,32 @@ abstract class SchemaParityTestBase {
             "BATCH_STEP_EXECUTION", "BATCH_STEP_EXECUTION_CONTEXT",
             "BATCH_STEP_EXECUTION_SEQ",
             "flyway_schema_history");
+
+    /**
+     * <b>시드가 만들 이유가 없는 표들</b>(CY-744 합류로 들어왔다).
+     *
+     * <p>이 검사가 지키는 것은 <i>"검증이 읽는 데이터셋의 모양이 두 저장소에서 같은가"</i> 다.
+     * 아래 아홉은 <b>관측·부하측정·관리 화면</b>의 표라 시드 데이터셋에 속하지 않는다 —
+     * 시드는 발급·이력·재고·판정만 만든다({@code cy-seed/ddl}). 그래서 대조에서 뺀다.
+     *
+     * <p><b>접두사가 아니라 이름 집합인 이유는 위 {@link #BATCH_METADATA} 와 같다.</b>
+     * {@code analytics_*} 로 거르면 나중에 {@code analytics} 로 시작하는 검증 표가 생겼을 때
+     * 네 축에서 통째로 사라져, cy-be 에만 있는 표가 있는데도 초록이 된다.
+     *
+     * <p>⚠️ <b>여기 이름을 더하는 것은 "시드가 안 만든다" 를 선언하는 것이다.</b> 검증이
+     * 읽는 표를 실수로 넣으면 그 표의 스키마 드리프트를 아무도 못 본다 — 더하기 전에
+     * 그 표를 {@code cy-seed/ddl} 이 만들어야 하는지부터 판단해라.
+     */
+    static final Set<String> OUTSIDE_SEED_DATASET = Set.of(
+            // 브랜드 분석 집계(CY-674) — 관리 화면이 읽는다
+            "analytics_runs", "analytics_daily_issues", "analytics_hourly_issues",
+            "analytics_issuance_statuses",
+            // 부하 측정 회차와 그 시계열·정합성 판정(CY-560)
+            "benchmark_runs", "run_timeseries", "consistency_finals",
+            // 발급 시도 이력 — Kafka consumer 가 적재한다(OBS-15)
+            "issue_attempts",
+            // 회차 생성 스케줄러의 싱글턴 가드
+            "coupon_round_schedule_guard");
 
     @Autowired
     private JdbcClient jdbcClient;
@@ -233,6 +261,172 @@ abstract class SchemaParityTestBase {
     }
 
     /**
+     * <b>사본이 원본과 바이트 동일한지 본다.</b>
+     *
+     * <p>{@code seed-ddl/README.md} 가 <i>"손으로 고치지 않는다"</i> 로 못 박은 규율인데,
+     * <b>지키는 그물이 없었다.</b> 형제 {@link #accountForEverySeedDdl} 은 <b>파일 이름만</b>
+     * 대조해서, 내용을 고쳐 파리티를 초록으로 만들어도 아무것도 안 걸렸다 —
+     * CY-744 합류에서 실제로 그렇게 했고 리뷰가 잡았다.
+     *
+     * <p><b>왜 이것이 치명적인가.</b> 이 클래스가 증명하기로 한 명제는
+     * <i>"cy-be Flyway 가 만든 최종 상태 == 시드가 만든 최종 상태"</i> 다. 사본을 cy-be 에
+     * 맞춰 고치면 이 검사는 <b>cy-be 를 cy-be 와 비교하는 항등식</b>이 된다. 게이트의
+     * "흔들리지 않는 축" 이 그 등식 위에 서 있다.
+     *
+     * <p><b>고치는 순서는 하나뿐이다</b> — 원본({@code cy-seed/ddl})을 고치고, 그쪽에서
+     * 시드를 다시 돌려 게이트가 성립하는 것을 확인하고, 그 다음에 사본을 덮고 아래 표와
+     * README 의 SHA 를 함께 갱신한다. 표만 고치면 이 검사는 다시 항등식이 된다.
+     */
+    @Test
+    @DisplayName("시드 DDL 사본이 README 가 못박은 리비전과 바이트 동일하다")
+    void seedDdlCopyIsPristine() throws IOException {
+        Map<String, String> actual = new java.util.TreeMap<>();
+        for (Resource resource : new PathMatchingResourcePatternResolver()
+                .getResources("classpath:seed-ddl/*.sql")) {
+            actual.put(resource.getFilename(), sha256(resource));
+        }
+
+        assertThat(actual)
+                .as("사본을 손으로 고치면 이 검사가 cy-be 를 cy-be 와 비교하는 항등식이 된다. "
+                        + "원본(cy-seed/ddl)을 먼저 고치고 거기서 게이트가 성립하는 것을 "
+                        + "확인한 뒤 사본을 덮어라 — README 의 SHA 도 함께 고친다")
+                .containsExactlyInAnyOrderEntriesOf(SEED_DDL_DIGESTS);
+    }
+
+    /**
+     * <b>사본이 온 곳을 한 번만 적게 만든다.</b> 리비전은 README 표와
+     * {@link #SEED_DDL_REVISION} 두 군데에 적히는데, 둘의 쓰임이 달라 한쪽으로 합칠 수가
+     * 없다 — README 쪽은 <b>사람이 갱신 스크립트에 붙여 넣는 값</b>이고 상수 쪽은
+     * 아래 해시가 <b>어느 시점 것인지</b>를 말한다. 그러면 남는 수는 <b>어긋남을 잡는 것</b>이다.
+     *
+     * <p><b>왜 그물이 필요한가.</b> 사본 갱신은 세 손질이 한 묶음이다 — 파일을 덮고,
+     * 해시를 고치고, README 의 SHA 를 고친다. 앞의 둘만 하면 {@link #seedDdlCopyIsPristine}
+     * 은 <b>초록으로 통과</b>한다(사본과 해시가 서로 맞으니까). 그런데 README 는 옛
+     * 리비전을 가리키고 있어서, 다음 사람이 거기 적힌 검증 스크립트를 돌리면 <b>옛
+     * 원본을 받아 와</b> diff 가 갈린다. README 가 그 상황을 "사본을 손댄 것이다" 로
+     * 읽으라고 시키므로 <b>멀쩡한 사본을 되돌리는</b> 데까지 간다.
+     */
+    @Test
+    @DisplayName("사본 해시가 못박은 리비전과 README 가 적은 리비전이 같다")
+    void seedDdlCopyPinsOneRevision() throws IOException {
+        String readme = new String(new PathMatchingResourcePatternResolver()
+                .getResource("classpath:seed-ddl/README.md")
+                .getContentAsByteArray(), StandardCharsets.UTF_8);
+
+        Matcher matcher = Pattern.compile("@ ([0-9a-f]{7,40})").matcher(readme);
+        assertThat(matcher.find())
+                .as("README 가 '@ <sha>' 꼴로 리비전을 적어야 갱신 스크립트가 그것을 읽는다")
+                .isTrue();
+
+        assertThat(matcher.group(1))
+                .as("사본을 갱신할 때 세 곳을 함께 고친다 — 파일 · SEED_DDL_DIGESTS · "
+                        + "README 의 SHA. 지금은 README 와 SEED_DDL_REVISION 이 갈렸다")
+                .isEqualTo(SEED_DDL_REVISION);
+    }
+
+    /**
+     * <b>비우는 목록에 빠진 표를 사람이 아니라 기계가 찾는다.</b>
+     * {@link AppTableCleaner#TABLES_IN_DELETE_ORDER} 안의 표를 FK 로 무는 표는 그 자신도
+     * 목록에 있어야 한다 — 없으면 {@code FOREIGN_KEY_CHECKS = 0} 상태의 TRUNCATE 가
+     * <b>고아를 남기고 AUTO_INCREMENT 를 되돌린다.</b>
+     *
+     * <p><b>형제 {@code VerificationSeed#clear} 는 이 실수를 스스로 알려 준다</b> —
+     * {@code DELETE} 는 FK 위반을 {@code ERROR 1451} 로 거부하기 때문이다. 그런데 컨텍스트
+     * 기동마다 도는 것은 TRUNCATE 쪽이라 <b>조용히 지나가고</b>, 다음 컨텍스트의
+     * {@code coupons} id=1 이 앞 테스트가 남긴 자식 행을 입양한 채 나온다. 그 실패는
+     * 클래스 실행 순서를 타므로 원인까지 가는 길이 멀다(CY-744 3차 리뷰가 잡았다 —
+     * {@code analytics_*} 셋이 실제로 빠져 있었다).
+     */
+    @Test
+    @DisplayName("비우는 표를 FK 로 무는 표가 전부 비우는 목록 안에 있다")
+    void appTableCleanerCoversEveryDependent() {
+        List<String> cleaned = AppTableCleaner.TABLES_IN_DELETE_ORDER;
+
+        List<String> dependents = jdbcClient.sql("""
+                        SELECT DISTINCT table_name
+                          FROM information_schema.key_column_usage
+                         WHERE table_schema = DATABASE()
+                           AND referenced_table_name IN (:tables)
+                        """)
+                .param("tables", cleaned)
+                .query(String.class)
+                .list();
+
+        assertThat(dependents)
+                .as("이 표들이 비우는 대상을 FK 로 문다. 목록에 없으면 TRUNCATE 가 고아를 "
+                        + "남기고 AUTO_INCREMENT 를 되돌린다 — AppTableCleaner 의 목록에 "
+                        + "자식이 먼저 오도록 넣어라")
+                .allSatisfy(table -> assertThat(cleaned).contains(table));
+    }
+
+    private static String sha256(Resource resource) throws IOException {
+        try (var in = resource.getInputStream()) {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(in.readAllBytes());
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16))
+                        .append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 이 없는 JVM 은 없다", e);
+        }
+    }
+
+    /**
+     * <b>사본이 온 리비전.</b> README 표가 같은 값을 적고 {@link #seedDdlCopyPinsOneRevision}
+     * 이 둘을 맞춰 본다 — 한쪽만 고치면 빨개진다.
+     *
+     * <p>드리프트가 실재한다. README 의 SHA 는 <b>갱신 스크립트가 읽는 값</b>이고 아래
+     * 해시는 <b>사본이 실제로 무엇인지</b>다. 사본과 해시만 갱신하고 README 를 두면
+     * 다음 사람이 검증 스크립트를 돌렸을 때 옛 리비전을 받아 와 diff 가 갈리고,
+     * <b>"사본을 손댔다" 로 오진</b>한다. 반대로 README 만 고치면 그 오진이 반대로 난다.
+     */
+    private static final String SEED_DDL_REVISION = "18e7aaa";
+
+    /** {@link #SEED_DDL_REVISION} 시점 사본의 해시. 사본을 갱신하면 함께 고친다. */
+    private static final Map<String, String> SEED_DDL_DIGESTS = Map.ofEntries(
+            Map.entry("00_schema.sql",
+                    "97041c599fdae419c72446aa0b5f205ae93ee3993f655441cc033caaa5f85c34"),
+            Map.entry("10_constraints_common.sql",
+                    "60e183564907e54307faa51185ea4f71e74c30d6a937dcdbadf80d440cc06ed0"),
+            Map.entry("11_constraints_clean.sql",
+                    "c675179a82473621049480068e09d4b22d90be24d51c512e6a502d48142608f2"),
+            Map.entry("12_constraints_corrupt.sql",
+                    "5d62c1052d4e7f48e4786515e5a7f0efd5ab1efbc615516c802793ede20e1b69"),
+            Map.entry("90_perf_indexes_optional.sql",
+                    "d3d12c54889cd2fed33973ae61a7d12f7640aeb1f1698fe72429ebea31d6dc35"));
+
+    /**
+     * <b>대조에서 뺀 표가 정말 시드 밖인지 기계로 본다.</b>
+     *
+     * <p>형제 {@link #BATCH_METADATA} 는 <i>"사람의 규율에 맡기지 않는다"</i> 며
+     * {@code V11__batch_metadata.sql} 을 파싱해 대조하는데, {@link #OUTSIDE_SEED_DATASET}
+     * 만 사람에게 맡기고 있었다.
+     *
+     * <p><b>위험한 방향만 조용하다.</b> 오타를 내면 그 이름이 아무것도 안 걸러 파리티가
+     * 빨개진다 — 바로 드러난다. 반대로 <b>검증이 읽는 표를 실수로 넣으면</b> 여섯 축
+     * 전부에서 그 표가 사라져 cy-be 에만 있는 컬럼·인덱스가 있어도 초록이 된다.
+     */
+    @Test
+    @DisplayName("대조에서 뺀 표는 시드 DDL 이 만들지 않는 표다")
+    void excludedTablesAreAbsentFromSeedDdl() throws IOException {
+        StringBuilder seedSql = new StringBuilder();
+        for (Resource resource : new PathMatchingResourcePatternResolver()
+                .getResources("classpath:seed-ddl/*.sql")) {
+            seedSql.append(new String(resource.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8)).append('\n');
+        }
+        String sql = seedSql.toString();
+
+        assertThat(OUTSIDE_SEED_DATASET)
+                .as("시드 DDL 이 만드는 표를 여기 넣으면 여섯 축에서 통째로 사라져 "
+                        + "그 표의 스키마 드리프트를 아무도 못 본다")
+                .noneMatch(table -> sql.matches("(?is).*\\b" + table + "\\b.*"));
+    }
+
+    /**
      * <b>목록에 없는 파일은 조용히 무시된다.</b> 시드가 DDL 파일을 하나 더 붓기 시작하면
      * 이 대조가 증명하는 것이 <i>"cy-be = 시드의 전부"</i> 에서 <i>"cy-be = 시드의 일부"</i> 로
      * 바뀌는데, 그것은 부등식이라 어긋남을 못 잡는다. 사람의 규율에 맡기지 않는다.
@@ -336,7 +530,10 @@ abstract class SchemaParityTestBase {
                          ORDER BY kcu.table_name, kcu.column_name, kcu.ordinal_position
                         """)
                 .param(schema)
+                // rowsToMap 을 안 지나는 유일한 축이라 제외 둘을 여기서도 적용한다.
+                // 하나만 빼면 관측·부하측정 표의 FK 가 이 축에서만 살아남는다(실측: 8건).
                 .query((rs, rowNum) -> BATCH_METADATA.contains(rs.getString("t"))
+                        || OUTSIDE_SEED_DATASET.contains(rs.getString("t"))
                         ? null : rs.getString("v"))
                 .list().stream().filter(java.util.Objects::nonNull).toList();
     }
@@ -391,7 +588,8 @@ abstract class SchemaParityTestBase {
     private Map<String, String> rowsToMap(String schema, String sql) {
         Map<String, String> out = new LinkedHashMap<>();
         jdbcClient.sql(sql).param(schema).query((rs, rowNum) -> {
-            if (!BATCH_METADATA.contains(rs.getString("t"))) {
+            String table = rs.getString("t");
+            if (!BATCH_METADATA.contains(table) && !OUTSIDE_SEED_DATASET.contains(table)) {
                 out.put(rs.getString("k"), rs.getString("v"));
             }
             return null;
