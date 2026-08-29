@@ -149,6 +149,12 @@ public class RedisIssuanceGate implements IssuanceGatePort {
     }
 
     @Override
+    public void closeGate(long couponRoundId) {
+        // UNLINK 다. 회수를 다른 스레드로 넘기지 않으면 그동안 발급이 전면 정지한다(§3.3).
+        redisTemplate.unlink(IssuanceKeys.of(couponRoundId).meta());
+    }
+
+    @Override
     public void writeMeta(long couponRoundId, GateMeta meta) {
         // 한 번에 쓴다. 다섯을 나눠 쓰면 그 사이에 도착한 선점이 부분 상태를 보고 -9 를 받는다.
         redisTemplate.opsForHash().putAll(IssuanceKeys.of(couponRoundId).meta(), Map.of(

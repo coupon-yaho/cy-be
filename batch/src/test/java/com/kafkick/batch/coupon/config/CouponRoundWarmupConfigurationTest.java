@@ -15,7 +15,9 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import com.kafkick.batch.coupon.v2.CouponRoundRebuildRunner;
 import com.kafkick.batch.coupon.v2.CouponRoundWarmupRunner;
+import com.kafkick.batch.coupon.v2.RoundGateWriteGuard;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.v2.port.IssuanceWarmupPort;
 import com.kafkick.core.support.TimeProvider;
@@ -26,6 +28,7 @@ class CouponRoundWarmupConfigurationTest {
             .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
             .withBean(PlatformTransactionManager.class, () -> mock(PlatformTransactionManager.class))
             .withBean(TimeProvider.class, () -> new TimeProvider(Clock.systemUTC()))
+            .withPropertyValues("coupon.rebuild.drain=2s")
             .withUserConfiguration(CouponRoundWarmupConfiguration.class);
 
     /**
@@ -64,6 +67,23 @@ class CouponRoundWarmupConfigurationTest {
         return runner.withBean((Class) type, () -> mock(type));
     }
 
+    /**
+     * drain 대기는 <b>기본값을 코드에 두지 않는다.</b> 설정과 코드 두 곳에 값이 있으면 한쪽만
+     * 바뀐 상태가 조용히 남고, 그 사실은 재구성 창이 다시 열릴 때에야 드러난다.
+     */
+    @Test
+    void failsStartupWhenTheRebuildDrainIsMissing() {
+        new ApplicationContextRunner()
+                .withBean(JdbcTemplate.class, () -> mock(JdbcTemplate.class))
+                .withBean(PlatformTransactionManager.class,
+                        () -> mock(PlatformTransactionManager.class))
+                .withBean(TimeProvider.class, () -> new TimeProvider(Clock.systemUTC()))
+                .withBean(IssuanceGatePort.class, () -> mock(IssuanceGatePort.class))
+                .withBean(IssuanceWarmupPort.class, () -> mock(IssuanceWarmupPort.class))
+                .withUserConfiguration(CouponRoundWarmupConfiguration.class)
+                .run(context -> assertThat(context).hasFailed());
+    }
+
     @Test
     void createsTheWarmupRunnerWhenBothRedisPortsExist() {
         base.withBean(IssuanceGatePort.class, () -> mock(IssuanceGatePort.class))
@@ -71,6 +91,9 @@ class CouponRoundWarmupConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(CouponRoundWarmupRunner.class);
+                    // 두 러너가 **같은** 가드를 받아야 서로의 겹침까지 막는다.
+                    assertThat(context).hasSingleBean(CouponRoundRebuildRunner.class);
+                    assertThat(context).hasSingleBean(RoundGateWriteGuard.class);
                 });
     }
 }

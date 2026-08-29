@@ -112,6 +112,12 @@ public class RedisIssuanceWarmup implements IssuanceWarmupPort {
         }
     }
 
+    @Override
+    public void setRemainingStock(long couponRoundId, long remainingStock) {
+        redisTemplate.opsForValue()
+                .set(IssuanceKeys.of(couponRoundId).stock(), Long.toString(remainingStock));
+    }
+
     private String encode(RebuiltIssued member) {
         return codec.encode(new IssuedValue(
                 // DB 에 행이 있다는 것이 곧 영속 완료다. P 로 되살리면 PENDING 계측(05)이

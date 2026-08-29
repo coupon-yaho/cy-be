@@ -163,7 +163,8 @@ class CouponRoundWarmupRunnerTest {
 
     private CouponRoundWarmupRunner runner(IssuanceGatePort gatePort, IssuanceWarmupPort seeder) {
         return new CouponRoundWarmupRunner(
-                jdbc, transactionTemplate, gatePort, seeder,
+                new CouponRoundGateJdbc(jdbc, transactionTemplate),
+                new RoundGateWriteGuard(), gatePort, seeder,
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
@@ -325,15 +326,14 @@ class CouponRoundWarmupRunnerTest {
         CountDownLatch seeding = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         // 먼저 들어온 쪽을 시딩 한가운데에 세워 둔다. HTTP 워커가 여럿이라 이 창은 실재한다.
-        CouponRoundWarmupRunner runner = runner(gate, (roundId, members, remaining) -> {
+        CouponRoundWarmupRunner runner = runner(gate, seederThatRuns(() -> {
             seeding.countDown();
             try {
                 release.await(10, TimeUnit.SECONDS);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
             }
-            warmupPort.seedCounters(roundId, members, remaining);
-        });
+        }));
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -417,9 +417,19 @@ class CouponRoundWarmupRunnerTest {
 
     /** 시딩 한가운데에서 DB 를 흔든다. 잠금이 정말 meta 직전인지는 이걸로만 드러난다. */
     private IssuanceWarmupPort seederThatRuns(Runnable duringSeeding) {
-        return (roundId, members, remaining) -> {
-            duringSeeding.run();
-            warmupPort.seedCounters(roundId, members, remaining);
+        return new IssuanceWarmupPort() {
+
+            @Override
+            public void seedCounters(
+                    long roundId, List<RebuiltIssued> members, long remaining) {
+                duringSeeding.run();
+                warmupPort.seedCounters(roundId, members, remaining);
+            }
+
+            @Override
+            public void setRemainingStock(long roundId, long remaining) {
+                warmupPort.setRemainingStock(roundId, remaining);
+            }
         };
     }
 
@@ -461,6 +471,11 @@ class CouponRoundWarmupRunnerTest {
         public com.kafkick.core.coupon.v2.port.ReclaimOutcome reclaimCorrupt(
                 long couponRoundId, long memberId, boolean restoreStock, long totalQuantity) {
             return delegate.reclaimCorrupt(couponRoundId, memberId, restoreStock, totalQuantity);
+        }
+
+        @Override
+        public void closeGate(long couponRoundId) {
+            delegate.closeGate(couponRoundId);
         }
 
         @Override

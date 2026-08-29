@@ -272,6 +272,20 @@ coupon:
     chunk-size: ${COUPON_EXPIRATION_CHUNK_SIZE:500}
     transaction-size: ${COUPON_EXPIRATION_TRANSACTION_SIZE:100}
 
+  # [CY-760] 열린 회차의 재구성 — 게이트를 닫고 카운터를 다시 세우는 경로.
+  rebuild:
+    # 게이트를 닫은 뒤 **진행 중인 쓰기가 빠지기를** 기다리는 시간.
+    #
+    # 게이트는 새 선점만 막는다. 닫기 직전에 선점을 끝낸 발급의 issuances 커밋은 그 뒤에
+    # 도착하고(발급은 선점 → DB 커밋 → 완료 순서다), 취소의 Redis INCR 은 DB 커밋보다
+    # 늦다(afterCommit). 이 대기가 없으면 그 건들이 집계 뒤에 도착해 issued 에서 통째로
+    # 빠지거나(LUA_GAP) 다시 쓴 stock 위에 얹힌다 — 후자는 초과 발급 방향이다.
+    #
+    # ⚠️ 값의 기준은 **발급 트랜잭션 시간과 afterCommit 지연의 상한**이다. 2s 는 그 둘 사이의
+    #    값이지 측정된 상한이 아니다. 부하 프로파일이 바뀌면 여기를 다시 봐라 — 짧으면 창이
+    #    남고, 길면 그만큼 그 회차가 오래 503 이다.
+    drain: ${COUPON_REBUILD_DRAIN:2s}
+
   round-generation:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
     max-days: ${COUPON_GENERATION_MAX_DAYS:30}

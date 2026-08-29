@@ -47,6 +47,24 @@ public interface IssuanceGatePort {
     ReclaimOutcome reclaimCorrupt(
             long couponRoundId, long memberId, boolean restoreStock, long totalQuantity);
 
+    /**
+     * 게이트를 <b>닫는다</b> — {@code meta} 를 지운다. 재구성의 1번 단계다(설계 §6.2).
+     *
+     * <p>이 호출 뒤 그 회차의 선점·복원은 전량 미준비({@code -9}·{@code -1})다. 그것이 재구성
+     * 창의 안전 상태다 — 카운터를 통째로 다시 쓰는 동안 아무도 낡은 값 위에서 발급받지 않는다.
+     * 도중에 죽어도 게이트가 닫힌 채 남으므로, 다시 돌리는 것이 곧 복구다.
+     *
+     * <p><b>{@code DEL} 이 아니라 {@code UNLINK} 다</b>(§3.3). 회수를 다른 스레드로 넘기지
+     * 않으면 그 시간만큼 Redis 단일 스레드가 서고, 그동안 발급이 전면 정지한다. {@code meta} 는
+     * 다섯 필드뿐이라 그 자체로는 짧지만, 같은 규칙을 키마다 다르게 적용하면 어느 키가 예외인지를
+     * 사람이 기억해야 한다.
+     *
+     * <p><b>게이트만 닫는다.</b> 카운터 세 키는 남는다 — 지우는 것은 시딩의 몫이고
+     * ({@link IssuanceWarmupPort#seedCounters}), 여기서 함께 지우면 집계를 읽기도 전에
+     * {@code issued} 가 사라져 도중에 죽었을 때 남은 상태가 아무것도 말해 주지 않는다.
+     */
+    void closeGate(long couponRoundId);
+
     /** 다섯 필드를 <b>한 번에</b> 쓴다. 부분 상태를 남기지 않는다. */
     void writeMeta(long couponRoundId, GateMeta meta);
 

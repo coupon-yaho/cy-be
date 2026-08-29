@@ -510,6 +510,11 @@ class V2IssuanceInterleaveConcurrencyTest {
         }
 
         @Override
+        public void closeGate(long couponRoundId) {
+            delegate.closeGate(couponRoundId);
+        }
+
+        @Override
         public void writeMeta(long couponRoundId, GateMeta meta) {
             delegate.writeMeta(couponRoundId, meta);
         }
