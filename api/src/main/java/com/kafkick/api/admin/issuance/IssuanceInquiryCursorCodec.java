@@ -32,7 +32,12 @@ public class IssuanceInquiryCursorCodec {
                 .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** 형식·정규 인코딩·버전·값 범위를 검증해 Core 문의 위치로 디코딩합니다. */
+    /**
+     * 형식·정규 인코딩·버전·값 범위를 검증해 Core 문의 위치로 디코딩합니다.
+     *
+     * @throws BusinessException cursor가 입력 길이, 정규 Base64 URL 형식, 버전 또는
+     *                           Keyset 값 계약을 위반한 경우(INVALID_INPUT, HTTP 400)
+     */
     public InquiryPosition decode(String cursor) {
         // 과도한 입력은 Base64 디코딩과 문자열 할당 전에 차단한다.
         if (cursor != null && cursor.length() > MAX_CURSOR_LENGTH) {
