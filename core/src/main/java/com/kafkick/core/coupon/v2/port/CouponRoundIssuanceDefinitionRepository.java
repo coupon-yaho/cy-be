@@ -7,6 +7,8 @@ import com.kafkick.core.observation.EngineVersion;
 
 public interface CouponRoundIssuanceDefinitionRepository {
 
+    Optional<CouponRoundIssuanceDefinition> findById(long couponRoundId);
+
     Optional<CouponRoundIssuanceDefinition> lockAndFindById(long couponRoundId);
 
     /**

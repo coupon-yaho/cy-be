@@ -107,7 +107,6 @@ class CouponIssueServiceTest {
         order.verify(issuanceHistoryRepository)
                 .save(any(IssuanceHistory.class));
         order.verify(couponStockRepository).occupyOne(10L, ISSUED_AT);
-        verify(couponStockRepository, never()).lockForUpdate(any());
 
         ArgumentCaptor<Issuance> issuanceCaptor =
                 ArgumentCaptor.forClass(Issuance.class);

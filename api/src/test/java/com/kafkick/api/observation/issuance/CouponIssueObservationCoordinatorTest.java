@@ -618,6 +618,14 @@ class CouponIssueObservationCoordinatorTest {
                 new CouponRoundIssuanceDefinitionRepository() {
 
                     @Override
+                    public Optional<CouponRoundIssuanceDefinition> findById(
+                            long couponRoundId
+                    ) {
+                        // 발급 경로는 lockAndFindById 만 쓴다. 여기로 오면 배선이 틀린 것이다.
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
                     public Optional<CouponRoundIssuanceDefinition> lockAndFindById(
                             long couponRoundId
                     ) {

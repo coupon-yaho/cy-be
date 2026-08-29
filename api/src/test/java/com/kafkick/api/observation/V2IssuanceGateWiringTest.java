@@ -14,6 +14,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
@@ -74,7 +75,7 @@ class V2IssuanceGateWiringTest {
     }
 
     /**
-     * 조건에 적힌 <b>컴포넌트 스캔 다섯</b>을 하나씩 빼며 전부 확인한다.
+     * 조건에 적힌 <b>컴포넌트 스캔 여섯</b>을 하나씩 빼며 전부 확인한다.
      *
      * <p>두어 개만 골라 보면 나머지가 조건에서 빠지는 회귀를 못 잡는다 — 목록과 테스트가
      * 같은 자리에서 갈리기 때문이다. 여기서는 목록 자체를 순회한다.
@@ -99,6 +100,7 @@ class V2IssuanceGateWiringTest {
                         IssuanceRepository.class,
                         IssuanceHistoryRepository.class,
                         IdempotencyRepository.class,
+                        CouponStockRepository.class,
                         CouponCodeGenerator.class,
                         PlatformTransactionManager.class)
                 .map(type -> Named.<Class<?>>of(type.getSimpleName(), type))
@@ -144,6 +146,7 @@ class V2IssuanceGateWiringTest {
                 IssuanceRepository.class,
                 IssuanceHistoryRepository.class,
                 IdempotencyRepository.class,
+                CouponStockRepository.class,
                 CouponCodeGenerator.class,
                 PlatformTransactionManager.class,
                 IdempotencyResultCodec.class)) {

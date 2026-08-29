@@ -18,6 +18,7 @@ import com.kafkick.core.coupon.v2.V2CouponIssueService;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
+import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
@@ -119,6 +120,7 @@ public class ApiObservationAutoConfiguration {
             IssuanceRepository.class,
             IssuanceHistoryRepository.class,
             IdempotencyRepository.class,
+            CouponStockRepository.class,
             CouponCodeGenerator.class,
             PlatformTransactionManager.class
     })
@@ -128,6 +130,7 @@ public class ApiObservationAutoConfiguration {
             IssuanceRepository issuances,
             IssuanceHistoryRepository histories,
             IdempotencyRepository idempotencies,
+            CouponStockRepository stocks,
             CouponCodeGenerator codeGenerator,
             IdempotencyResultCodec<CouponIssueResult> resultCodec,
             RequestTokenGenerator tokenGenerator,
@@ -138,7 +141,7 @@ public class ApiObservationAutoConfiguration {
         // 그 사실은 첫 발급 요청의 500 으로만 드러난다(실측). 여기서 직접 만든다.
         // 생성자 인자는 조건 평가가 아니라 빈 생성 시점에 풀리므로 자동설정 순서와 무관하다.
         return new V2CouponIssueService(
-                gate, issuances, histories, idempotencies, codeGenerator,
+                gate, issuances, histories, idempotencies, stocks, codeGenerator,
                 resultCodec, tokenGenerator, new TransactionTemplate(transactionManager)
         );
     }

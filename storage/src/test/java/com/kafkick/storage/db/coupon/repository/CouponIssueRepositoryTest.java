@@ -33,6 +33,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponStockOverflowException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
@@ -62,6 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -196,7 +198,102 @@ class CouponIssueRepositoryTest {
         assertThat(countRows("issuances")).isEqualTo(1);
         assertThat(countRows("issuance_histories")).isEqualTo(1);
         assertThat(countRows("idempotency_records")).isEqualTo(1);
+        assertThat(activeCount()).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 10", LocalDateTime.class))
+                .isEqualTo(LocalDateTime.ofInstant(ISSUED_AT, java.time.ZoneOffset.UTC));
         verify(gate).complete(any(Long.class), any(Long.class), any());
+    }
+
+    @Test
+    @DisplayName("V2에서 DB CHECK가 총재고 초과 발급을 롤백하고 Redis 선점을 보상한다")
+    void compensateV2WhenActiveCountCheckRejectsIssue() {
+        jdbcTemplate.update("UPDATE coupon_stocks SET total_quantity = 1 WHERE coupon_id = 10");
+        IssuanceGatePort gate = mock(IssuanceGatePort.class);
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(0L));
+        when(gate.complete(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompleteOutcome.PROMOTED);
+        when(gate.compensate(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompensateOutcome.REVERTED);
+        V2CouponIssueService v2 = v2Service(gate);
+        CouponRoundIssuanceDefinition definition = new CouponRoundIssuanceDefinition(
+                10L, 7, EngineVersion.V2);
+
+        v2.issue(new CouponIssueCommand(
+                10L, 1L, MembershipGrade.GOLD, IDEMPOTENCY_KEY, ISSUED_AT), definition);
+
+        assertThatThrownBy(() -> v2.issue(new CouponIssueCommand(
+                10L, 2L, MembershipGrade.GOLD,
+                "550e8400-e29b-41d4-a716-446655440001", ISSUED_AT), definition))
+                .isInstanceOf(V2CouponIssueException.class)
+                // CHECK 위반은 커넥션 끊김·락 타임아웃과 구분돼야 한다. 같은 예외로 뭉개면
+                // 관제에 "MySQL 실패 1건" 으로만 찍혀 초과 발급 시도가 사라진다.
+                .cause()
+                .isInstanceOf(CouponStockOverflowException.class);
+
+        assertThat(countRows("issuances")).isEqualTo(1);
+        assertThat(countRows("issuance_histories")).isEqualTo(1);
+        assertThat(countRows("idempotency_records")).isEqualTo(1);
+        assertThat(activeCount()).isEqualTo(1);
+        verify(gate).compensate(any(Long.class), any(Long.class), any());
+    }
+
+    @Test
+    @DisplayName("V2 선점 20건이 동시에 와도 DB 카운터는 재고 10장을 넘지 않는다")
+    void issueV2ExactlyAvailableStockConcurrently() throws Exception {
+        IssuanceGatePort gate = mock(IssuanceGatePort.class);
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(0L));
+        when(gate.complete(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompleteOutcome.PROMOTED);
+        when(gate.compensate(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompensateOutcome.REVERTED);
+        V2CouponIssueService v2 = v2Service(gate);
+        CouponRoundIssuanceDefinition definition = new CouponRoundIssuanceDefinition(
+                10L, 7, EngineVersion.V2);
+        CountDownLatch ready = new CountDownLatch(20);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(20);
+        List<Future<Boolean>> futures = new ArrayList<>();
+
+        try {
+            for (long memberId = 1; memberId <= 20; memberId++) {
+                long requestedMemberId = memberId;
+                futures.add(executor.submit(() -> {
+                    ready.countDown();
+                    if (!start.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("V2 동시 발급 시작 대기 시간이 초과되었습니다.");
+                    }
+                    try {
+                        return v2.issue(new CouponIssueCommand(
+                                10L, requestedMemberId, MembershipGrade.GOLD,
+                                "550e8400-e29b-41d4-a716-" + String.format("%012d", requestedMemberId),
+                                ISSUED_AT), definition).issueResult().isPresent();
+                    } catch (V2CouponIssueException expectedCheckFailure) {
+                        return false;
+                    }
+                }));
+            }
+            assertThat(ready.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            long succeeded = 0;
+            for (Future<Boolean> future : futures) {
+                if (future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    succeeded++;
+                }
+            }
+            assertThat(succeeded).isEqualTo(10);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
+        }
+
+        assertThat(countRows("issuances")).isEqualTo(10);
+        assertThat(countRows("issuance_histories")).isEqualTo(10);
+        assertThat(countRows("idempotency_records")).isEqualTo(10);
+        assertThat(activeCount()).isEqualTo(10);
+        verify(gate, times(10)).compensate(any(Long.class), any(Long.class), any());
     }
 
     @Test
@@ -231,6 +328,7 @@ class CouponIssueRepositoryTest {
                 issuanceRepository,
                 issuanceHistoryRepository,
                 idempotencyRepository,
+                couponStockRepository,
                 codes,
                 new com.kafkick.core.coupon.port.IdempotencyResultCodec<>() {
                     @Override

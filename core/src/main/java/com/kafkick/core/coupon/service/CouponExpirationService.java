@@ -23,11 +23,13 @@ public class CouponExpirationService {
     private final IssuanceRepository issuanceRepository;
     private final IssuanceHistoryRepository issuanceHistoryRepository;
     private final CouponStockRepository couponStockRepository;
+    private final V2StockRestorationService v2StockRestorationService;
 
     public CouponExpirationService(
             IssuanceRepository issuanceRepository,
             IssuanceHistoryRepository issuanceHistoryRepository,
-            CouponStockRepository couponStockRepository
+            CouponStockRepository couponStockRepository,
+            V2StockRestorationService v2StockRestorationService
     ) {
         this.issuanceRepository = Objects.requireNonNull(issuanceRepository);
         this.issuanceHistoryRepository = Objects.requireNonNull(
@@ -36,6 +38,7 @@ public class CouponExpirationService {
         this.couponStockRepository = Objects.requireNonNull(
                 couponStockRepository
         );
+        this.v2StockRestorationService = Objects.requireNonNull(v2StockRestorationService);
     }
 
     @Transactional
@@ -48,7 +51,6 @@ public class CouponExpirationService {
         List<Issuance> expiredIssuances = command.issuances().stream()
                 .map(issuance -> issuance.expire(command.asOf()))
                 .toList();
-        lockStock(command.couponRoundId());
         List<IssuanceHistory> histories = new ArrayList<>();
         for (int index = 0; index < command.issuances().size(); index++) {
             Issuance issuance = command.issuances().get(index);
@@ -71,6 +73,15 @@ public class CouponExpirationService {
         }
 
         if (!histories.isEmpty()) {
+            // 이력을 먼저 쓴다. release() 는 회차 재고 행에 X 락을 걸고 그 락은 커밋까지
+            // 유지되므로, 순서를 뒤집으면 이력 수백 건을 쓰는 동안 Redis 선점을 끝낸 V2
+            // 발급이 같은 행에서 대기한다(설계 §9.6 D9).
+            issuanceHistoryRepository.saveAllExpirations(histories);
+            // 엔진 판별은 coupons 를 한 번 읽는다. release() 뒤로 밀면 그 왕복이 재고 행
+            // X 락 보유 구간 안으로 들어간다. 등록만 하는 호출이라 순서를 앞당겨도 된다 —
+            // 롤백되면 afterCommit 은 애초에 실행되지 않는다.
+            v2StockRestorationService.restoreAfterCommit(
+                    command.couponRoundId(), histories.size());
             boolean stockReleased = couponStockRepository.release(
                     command.couponRoundId(),
                     histories.size(),
@@ -83,21 +94,11 @@ public class CouponExpirationService {
                         "couponRoundId=" + command.couponRoundId()
                 );
             }
-            issuanceHistoryRepository.saveAllExpirations(histories);
         }
         return new CouponExpirationResult(
                 command.issuances().size(),
                 histories.size()
         );
-    }
-
-    private void lockStock(Long couponRoundId) {
-        if (!couponStockRepository.lockForUpdate(couponRoundId)) {
-            throw new BusinessException(
-                    CouponExpirationErrorCode.COUPON_EXPIRATION_SAVE_FAILED,
-                    "couponRoundId=" + couponRoundId
-            );
-        }
     }
 
     private static void validateCommand(CouponExpirationCommand command) {

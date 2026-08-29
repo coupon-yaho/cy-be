@@ -11,7 +11,11 @@ public interface CouponStockRepository {
             Instant updatedAt
     );
 
-    boolean lockForUpdate(Long couponRoundId);
+    /** V2가 Redis 입장 판정 뒤 같은 DB 트랜잭션에서 파생 활성 수를 올린다. */
+    void incrementActiveCount(
+            Long couponRoundId,
+            Instant updatedAt
+    );
 
     boolean release(
             Long couponRoundId,

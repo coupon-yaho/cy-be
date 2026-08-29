@@ -4,9 +4,11 @@ import java.time.Instant;
 
 import org.springframework.stereotype.Repository;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
+import com.kafkick.core.coupon.exception.CouponStockOverflowException;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 
 @Repository
@@ -46,17 +48,23 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
     }
 
     @Override
-    public boolean lockForUpdate(Long couponRoundId) {
+    public void incrementActiveCount(Long couponRoundId, Instant updatedAt) {
         try {
-            return couponStockJpaRepository
-                    .findByCouponIdForUpdate(couponRoundId)
-                    .isPresent();
+            if (couponStockJpaRepository.incrementActiveCount(couponRoundId, updatedAt) != 1) {
+                throw new CouponPersistenceException(
+                        "쿠폰 재고 행이 없습니다. couponRoundId=" + couponRoundId,
+                        new IllegalStateException("coupon stock row missing"));
+            }
+        } catch (DataIntegrityViolationException overflow) {
+            // Redis 가 재고 판정 주체라, 이 CHECK 가 걸린 것은 매진이 아니라 Redis·DB 가
+            // 갈린 사고다. 아래 일반 catch 로 뭉개면 커넥션 끊김과 같은 줄로 집계된다.
+            throw new CouponStockOverflowException(
+                    "쿠폰 활성 수가 총재고를 넘었습니다. couponRoundId=" + couponRoundId,
+                    overflow);
         } catch (DataAccessException exception) {
             throw new CouponPersistenceException(
-                    "쿠폰 재고 잠금에 실패했습니다. couponRoundId="
-                            + couponRoundId,
-                    exception
-            );
+                    "쿠폰 활성 수 증가에 실패했습니다. couponRoundId=" + couponRoundId,
+                    exception);
         }
     }
 

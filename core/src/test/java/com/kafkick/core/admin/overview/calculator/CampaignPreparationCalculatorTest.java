@@ -7,6 +7,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.PreparationItem;
@@ -50,10 +52,10 @@ class CampaignPreparationCalculatorTest {
                 null, List.of(), SourceStatus.PENDING, null));
     }
 
-    /** DB 두 항목과 지원되지 않는 발급 경로를 각각 구분해 노출하는지 검증합니다. */
+    /** DB 두 항목은 V2 발급 경로가 준비되어 있어도 각각 실패로 노출한다. */
     @Test
-    @DisplayName("DB 설정·재고와 V2 발급 경로의 확정 실패 항목을 분리한다")
-    void listsConfirmedFailuresSeparately() {
+    @DisplayName("V2에서 DB 설정·재고 실패를 발급 경로 실패와 섞지 않는다")
+    void listsV2DatabaseFailuresWithoutIssuancePathFailure() {
         PreparationObservation result = calculator.calculate(
                 new PreparationSource(
                         false, false, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
@@ -63,24 +65,25 @@ class CampaignPreparationCalculatorTest {
                 false,
                 List.of(
                         PreparationItem.CAMPAIGN_CONFIGURATION,
-                        PreparationItem.DATABASE_STOCK,
-                        PreparationItem.ISSUANCE_PATH),
+                        PreparationItem.DATABASE_STOCK),
                 SourceStatus.VALID,
                 OBSERVED_AT));
     }
 
-    /** 현재 실제 발급 구현이 V1일 때만 네 항목 전체를 준비 완료로 보는지 검증합니다. */
-    @Test
-    @DisplayName("정상 DB 원천과 V1 설정은 준비 완료이며 실패 목록이 비어 있다")
-    void completesOnlyWithSupportedV1Path() {
+    /** V1·V2는 구현된 발급 경로이므로 정상 원천이면 준비 완료다. */
+    @ParameterizedTest
+    @EnumSource(value = EngineVersion.class, names = { "V1", "V2" })
+    @DisplayName("정상 DB 원천과 구현된 엔진 설정은 준비 완료이며 실패 목록이 비어 있다")
+    void completesWithSupportedIssuancePath(EngineVersion engineVersion) {
         PreparationObservation result = calculator.calculate(
                 new PreparationSource(
                         true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, OBSERVED_AT),
-                validRuntime(EngineVersion.V1));
+                validRuntime(engineVersion));
 
         assertThat(result).isEqualTo(new PreparationObservation(
                 true, List.of(), SourceStatus.VALID, OBSERVED_AT));
     }
+
 
     /** DB 설정은 유효하지만 실제 V1 발급 경로가 지원하지 않는 정책을 구분하는지 검증합니다. */
     @Test

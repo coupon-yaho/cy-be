@@ -43,6 +43,7 @@ class V2CorruptValueReclaimTest {
                 mock(IssuanceRepository.class),
                 mock(IssuanceHistoryRepository.class),
                 mock(IdempotencyRepository.class),
+                mock(com.kafkick.core.coupon.port.CouponStockRepository.class),
                 mock(CouponCodeGenerator.class),
                 mock(IdempotencyResultCodec.class),
                 new RequestTokenGenerator("api-1"),

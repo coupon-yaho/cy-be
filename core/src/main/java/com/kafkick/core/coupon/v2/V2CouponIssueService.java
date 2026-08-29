@@ -10,6 +10,7 @@ import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
+import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
@@ -32,6 +33,7 @@ public final class V2CouponIssueService {
     private final IssuanceRepository issuances;
     private final IssuanceHistoryRepository histories;
     private final IdempotencyRepository idempotencies;
+    private final CouponStockRepository stocks;
     private final CouponCodeGenerator codeGenerator;
     private final IdempotencyResultCodec<CouponIssueResult> resultCodec;
     private final RequestTokenGenerator tokenGenerator;
@@ -42,6 +44,7 @@ public final class V2CouponIssueService {
             IssuanceRepository issuances,
             IssuanceHistoryRepository histories,
             IdempotencyRepository idempotencies,
+            CouponStockRepository stocks,
             CouponCodeGenerator codeGenerator,
             IdempotencyResultCodec<CouponIssueResult> resultCodec,
             RequestTokenGenerator tokenGenerator,
@@ -51,6 +54,7 @@ public final class V2CouponIssueService {
         this.issuances = Objects.requireNonNull(issuances, "issuances");
         this.histories = Objects.requireNonNull(histories, "histories");
         this.idempotencies = Objects.requireNonNull(idempotencies, "idempotencies");
+        this.stocks = Objects.requireNonNull(stocks, "stocks");
         this.codeGenerator = Objects.requireNonNull(codeGenerator, "codeGenerator");
         this.resultCodec = Objects.requireNonNull(resultCodec, "resultCodec");
         this.tokenGenerator = Objects.requireNonNull(tokenGenerator, "tokenGenerator");
@@ -160,6 +164,7 @@ public final class V2CouponIssueService {
         if (!inserted) {
             throw new IllegalStateException("완료된 멱등 레코드가 저장되지 않았습니다.");
         }
+        stocks.incrementActiveCount(command.couponRoundId(), command.issuedAt());
         return result;
     }
 
