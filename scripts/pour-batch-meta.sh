@@ -22,6 +22,19 @@
 # 쓰는 법
 #   scripts/pour-batch-meta.sh coupon_clean
 #   MYSQL_CONTAINER=cy-mysql-1 scripts/pour-batch-meta.sh coupon_clean coupon_corrupt
+#
+# 이 스크립트가 재는 것과 안 재는 것
+#   잰다      V11 의 아홉 표가 이름으로 다 있는가 · 시퀀스 셋에 초기 행이 있는가 ·
+#             가드가 보는 인덱스 둘의 선두 컬럼이 맞는가
+#   안 잰다   각 표의 컬럼·타입·제약. **이름은 맞는데 모양이 다른 표**는 통과한다.
+#
+# 후자를 여기서 재지 않는 것은 V11 을 이 파일에 한 벌 더 옮겨 적는 일이기 때문이다
+# (사본을 안 만드는 것이 이 스크립트의 전제다). 대신 **적용이 그 상태를 밟으면 죽는다** —
+# 모양이 다른 표 위에서는 FK·인덱스 생성이 실패하고, 넘기는 오류 넷에 안 들어가 원문과
+# 함께 종료한다. 실측으로 확인했다(ERROR 3734·1824).
+#
+# 그래도 통과했는데 배치가 안 뜬다면 스키마가 손으로 망가진 것이다. 그때는 이 스크립트가
+# 아니라 **재시드**가 답이다 — 부분 수선으로 되돌릴 수 있는 상태가 아니다.
 set -euo pipefail
 
 CONTAINER="${MYSQL_CONTAINER:-cy-mysql-1}"
@@ -38,8 +51,7 @@ FILES=(
 # **V11 이 만드는 아홉 전부.** 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
 # 이름으로 묻는 것은 이 중 넷뿐이지만, **넷만 보고 건너뛰면 안 된다** — 나머지 다섯이
 # 없어도 "이미 온전하다" 로 빠져나가고, 그다음 Spring Batch 가 실행 문맥을 쓰려는
-# 순간 죽는다(리뷰가 잡았다). 이 스크립트가 약속하는 것은 "가드 통과" 가 아니라
-# **"배치가 뜬다"** 다.
+# 순간 죽는다(리뷰가 잡았다).
 #
 # "BATCH_ 로 시작하는 것이 아홉 개" 로 세지 않고 이름을 쓰는 이유는 그대로다 —
 # 엉뚱한 BATCH_* 가 자리를 채워도 개수는 맞는다.
@@ -50,6 +62,13 @@ REQUIRED_TABLES=(
   "BATCH_JOB_EXECUTION_PARAMS"
   "BATCH_JOB_EXECUTION_CONTEXT"
   "BATCH_STEP_EXECUTION_CONTEXT"
+  "BATCH_JOB_INSTANCE_SEQ"
+  "BATCH_JOB_EXECUTION_SEQ"
+  "BATCH_STEP_EXECUTION_SEQ"
+)
+
+# 위 아홉 중 **한 행이 들어 있어야 뜻이 있는** 셋.
+SEQ_TABLES=(
   "BATCH_JOB_INSTANCE_SEQ"
   "BATCH_JOB_EXECUTION_SEQ"
   "BATCH_STEP_EXECUTION_SEQ"
@@ -108,6 +127,14 @@ verify_schema() {
   local schema="$1" t idx name cols got n
   for t in "${REQUIRED_TABLES[@]}"; do
     has_table "$schema" "$t" || { echo "    ✗ 테이블 없음: $t" >&2; return 1; }
+  done
+  # **시퀀스 표는 있는 것만으로 부족하다.** Spring Batch 는 여기 든 한 행을 UPDATE 해
+  # 다음 id 를 얻으므로, 표만 있고 비면 잡이 id 를 못 만들고 죽는다. V11 의 INSERT 가
+  # WHERE NOT EXISTS 라 **다시 부으면 채워지는** 종류의 결손이라, 여기서 걸러 조기
+  # 건너뛰기만 막으면 스스로 복구된다.
+  for t in "${SEQ_TABLES[@]}"; do
+    [ "$(mysql_in "$schema" -N -e "SELECT COUNT(*) FROM \`$t\`;" 2>/dev/null | tr -d ' \r')" \
+        != "0" ] || { echo "    ✗ 시퀀스 초기 행 없음: $t" >&2; return 1; }
   done
   for idx in "${REQUIRED_INDEXES[@]}"; do
     t="${idx%%|*}"; name="$(echo "$idx" | cut -d'|' -f2)"; cols="${idx##*|}"
@@ -198,3 +225,4 @@ for schema in "$@"; do
 done
 
 echo "완료. 배치를 재기동하면 SchemaPresenceGuard 가 통과한다."
+echo "  (표·시퀀스 행·인덱스만 잰다. 이름은 맞고 모양이 다른 표는 못 잡는다 — 그때는 재시드다.)"
