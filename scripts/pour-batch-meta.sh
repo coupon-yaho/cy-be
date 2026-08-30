@@ -67,11 +67,19 @@ REQUIRED_TABLES=(
   "BATCH_STEP_EXECUTION_SEQ"
 )
 
-# 위 아홉 중 **한 행이 들어 있어야 뜻이 있는** 셋.
+# 위 아홉 중 **한 행이 들어 있어야 뜻이 있는** 셋. 각 줄은
+#   시퀀스표|본표|본표의 PK
+# 다. 본 표를 함께 적는 것은 **행 수만으로 부족하기 때문**이다 — 남은 한 행의 ID 가
+# 본 표의 최대 PK 보다 작으면 다음 실행이 기존 PK 와 부딪친다(리뷰가 잡았다).
+#
+# ⚠️ 이 함정은 손상뿐 아니라 **V11 자신이 만든다.** V11 의 INSERT 는 표가 비었을 때
+#    ID 를 무조건 0 으로 넣는다. 본 표에 이미 행이 있는 채로 시퀀스만 비면, 다시 부어도
+#    0 이 들어가 충돌한다 — "0 행은 다시 부으면 복구된다" 는 앞 커밋의 내 말이 그만큼
+#    넓었다. 그래서 개수가 아니라 **값**까지 잰다.
 SEQ_TABLES=(
-  "BATCH_JOB_INSTANCE_SEQ"
-  "BATCH_JOB_EXECUTION_SEQ"
-  "BATCH_STEP_EXECUTION_SEQ"
+  "BATCH_JOB_INSTANCE_SEQ|BATCH_JOB_INSTANCE|JOB_INSTANCE_ID"
+  "BATCH_JOB_EXECUTION_SEQ|BATCH_JOB_EXECUTION|JOB_EXECUTION_ID"
+  "BATCH_STEP_EXECUTION_SEQ|BATCH_STEP_EXECUTION|STEP_EXECUTION_ID"
 )
 
 # 가드의 셋째 축(CRITICAL_INDEXES). 이름만이 아니라 **선두 컬럼**을 본다 —
@@ -123,8 +131,21 @@ index_prefix() {
         AND index_name='$index' AND is_visible='YES' AND seq_in_index <= $n;" 2>/dev/null | tr -d ' \r'
 }
 
+# **고칠 SQL 을 그대로 찍는다.** "한 행만 남겨라" 는 안내가 부족했다 — 어느 행을
+# 남기느냐로 값이 갈리고, 낮은 값을 남기면 다음 실행이 기존 PK 와 부딪친다.
+# 아래 두 문장은 0행·복수행·낮은값 셋을 한꺼번에 고친다. 스크립트가 대신 안 돌리는 것은
+# **배치 메타를 지우는 일**이라 사람이 보고 눌러야 하기 때문이다.
+seq_fix() {
+  local schema="$1" t="$2" base="$3" pk="$4"
+  echo "      다시 부어도 안 고쳐진다(V11 의 INSERT 는 비었을 때만, 그것도 0 을 넣는다)." >&2
+  echo "      아래를 $schema 에 직접 돌린 뒤 이 스크립트를 다시 돌려라:" >&2
+  echo "        DELETE FROM \`$t\`;" >&2
+  echo "        INSERT INTO \`$t\` (ID, UNIQUE_KEY)" >&2
+  echo "          SELECT COALESCE(MAX(\`$pk\`), 0), '0' FROM \`$base\`;" >&2
+}
+
 verify_schema() {
-  local schema="$1" t idx name cols got n rows
+  local schema="$1" t idx name cols got n rows seq base pk gap
   for t in "${REQUIRED_TABLES[@]}"; do
     has_table "$schema" "$t" || { echo "    ✗ 테이블 없음: $t" >&2; return 1; }
   done
@@ -132,7 +153,8 @@ verify_schema() {
   # 다음 id 를 얻으므로, 표만 있고 비면 잡이 id 를 못 만들고 죽는다. V11 의 INSERT 가
   # WHERE NOT EXISTS 라 **다시 부으면 채워지는** 종류의 결손이라, 여기서 걸러 조기
   # 건너뛰기만 막으면 스스로 복구된다.
-  for t in "${SEQ_TABLES[@]}"; do
+  for seq in "${SEQ_TABLES[@]}"; do
+    t="${seq%%|*}"; base="$(echo "$seq" | cut -d'|' -f2)"; pk="${seq##*|}"
     # **조회 실패를 통과로 만들지 않는다.** 값을 그냥 "0 이 아닌가" 로 보면 조회가 죽어
     # 빈 문자열이 왔을 때 그 비교가 참이라 정상으로 샌다 — 리뷰가 잡은 fail-open 이었다.
     # 그래서 **숫자가 왔는가**를 먼저 묻고, 그다음 정확히 한 행인지 본다.
@@ -142,7 +164,22 @@ verify_schema() {
         echo "    ✗ 시퀀스 행을 못 셌다: $t" >&2
         echo "      ${rows:-(응답 없음)}" >&2
         return 1 ;;
-      1) ;;  # 정상은 이것뿐이다
+      1)
+        # **개수가 맞아도 값이 낮으면 못 쓴다.** 다음 id 가 본 표의 기존 PK 와 부딪친다.
+        gap="$(mysql_in "$schema" -N -e \
+          "SELECT (SELECT ID FROM \`$t\`) - (SELECT COALESCE(MAX(\`$pk\`),0) FROM \`$base\`);" \
+          2>&1 | tr -d ' \r')"
+        case "$gap" in
+          ''|*[!0-9-]*)
+            echo "    ✗ 시퀀스 값을 못 쟀다: $t" >&2
+            echo "      ${gap:-(응답 없음)}" >&2
+            return 1 ;;
+          -*)
+            echo "    ✗ 시퀀스 값이 본 표보다 낮다: $t (${gap#-} 만큼)" >&2
+            seq_fix "$schema" "$t" "$base" "$pk"
+            return 1 ;;
+        esac
+        ;;
       *)
         # **비어 있는 것만 결손이 아니다.** 스프링의 MySQL 증가기는 WHERE 없이
         # UPDATE ... last_insert_id(id+1) 로 표 전체를 밀고 값 하나만 읽는다.
@@ -153,8 +190,7 @@ verify_schema() {
         # 그 INSERT 가 안 고친다**(이미 있으니 아무것도 안 한다). 그래서 적용까지
         # 가도 안 풀리고, 사람이 지워야 한다 — 그 사실을 메시지에 적는다.
         echo "    ✗ 시퀀스 행이 ${rows}개다(1이어야 한다): $t" >&2
-        [ "$rows" = "0" ] \
-          || echo "      다시 부어도 안 고쳐진다 — 남길 한 행만 두고 지운 뒤 다시 돌려라." >&2
+        seq_fix "$schema" "$t" "$base" "$pk"
         return 1 ;;
     esac
   done
