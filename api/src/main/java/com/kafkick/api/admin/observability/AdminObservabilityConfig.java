@@ -53,7 +53,8 @@ import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
         PrometheusSeriesProperties.class,
         OverviewPrometheusProperties.class,
         AdminOverviewPolicyProperties.class,
-        AdminQueueMockProperties.class
+        AdminQueueMockProperties.class,
+        QueueGatewayPrometheusProperties.class
 })
 public class AdminObservabilityConfig {
 
