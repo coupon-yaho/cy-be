@@ -33,4 +33,16 @@ public interface IssuanceWarmupPort {
      *     Hash 가 조용히 접어 {@code HLEN < issued_ever} 가 되고 그것이 곧 {@code LUA_GAP} 이다
      */
     void seedCounters(long couponRoundId, List<RebuiltIssued> everMembers, long remainingStock);
+
+    /**
+     * {@code stock} <b>하나만</b> 다시 쓴다 — 재구성의 4′(설계 §6.2)다.
+     *
+     * <p>게이트가 닫힌 창에서도 취소·사용취소·만료는 커밋되므로, {@code meta} 를 쓰기 직전에
+     * 활성 집계를 다시 읽어 이 값을 갱신하지 않으면 그만큼 재고가 <b>적게</b> 복구된다.
+     *
+     * <p><b>{@link #seedCounters} 를 다시 부르지 않는다.</b> 그쪽은 {@code issued} 를 통째로
+     * 다시 쓰므로, 값 하나를 고치자고 O(N) 명령을 한 번 더 태우는 셈이다(§3.3). 누적 두 값은
+     * 취소로 변하지 않으니 다시 쓸 것도 없다 — 1인 1매는 평생 기준이다.
+     */
+    void setRemainingStock(long couponRoundId, long remainingStock);
 }

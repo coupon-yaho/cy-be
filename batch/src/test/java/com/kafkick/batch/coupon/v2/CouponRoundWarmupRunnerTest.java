@@ -3,7 +3,6 @@ package com.kafkick.batch.coupon.v2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.sql.Driver;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -16,22 +15,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.SimpleDriverDataSource;
-import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.mysql.MySQLContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import com.kafkick.batch.observation.ConsistencyRawValueReader;
 import com.kafkick.batch.observation.DomainGaugeProperties;
@@ -59,6 +49,7 @@ import com.kafkick.infra.redis.coupon.v2.RedisRestorationHaltStore;
  * <p><b>키는 {@link IssuanceKeys} 에서 온다.</b> 리터럴을 옮겨 적으면 어댑터가 키를 바꿔도
  * 여기는 계속 초록이고, 그 사실은 정합성 리더가 아무것도 못 읽을 때에야 드러난다.
  */
+@ResourceLock(V2GateContainers.SHARED_STATE)
 class CouponRoundWarmupRunnerTest {
 
     private static final long ROUND_ID = 500;
@@ -74,61 +65,15 @@ class CouponRoundWarmupRunnerTest {
     private static final Instant OPEN_AT = Instant.parse("2026-08-28T01:00:00Z");
     private static final Instant CLOSE_AT = Instant.parse("2026-08-28T02:00:00Z");
 
-    private static MySQLContainer mysql;
-    private static GenericContainer<?> redis;
-    private static JdbcTemplate jdbc;
-    private static TransactionTemplate transactionTemplate;
-    private static LettuceConnectionFactory redisFactory;
-    private static StringRedisTemplate redisTemplate;
+    private static final JdbcTemplate jdbc = V2GateContainers.jdbc();
+    private static final TransactionTemplate transactionTemplate = V2GateContainers.transactions();
+    private static final StringRedisTemplate redisTemplate = V2GateContainers.redis();
 
     private final IssuanceKeys keys = IssuanceKeys.of(ROUND_ID);
 
     private IssuanceGatePort gate;
     private IssuanceWarmupPort warmupPort;
 
-    @BeforeAll
-    @SuppressWarnings("unchecked")
-    static void startContainers() throws Exception {
-        mysql = new MySQLContainer(DockerImageName.parse("mysql:8.4"))
-                .withDatabaseName("app")
-                .withCommand("--default-time-zone=+00:00");
-        mysql.start();
-        Flyway.configure()
-                .dataSource(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())
-                .locations("classpath:db/migration")
-                .load()
-                .migrate();
-        SimpleDriverDataSource dataSource = new SimpleDriverDataSource();
-        dataSource.setDriverClass(
-                (Class<? extends Driver>) Class.forName(mysql.getDriverClassName()));
-        dataSource.setUrl(mysql.getJdbcUrl());
-        dataSource.setUsername(mysql.getUsername());
-        dataSource.setPassword(mysql.getPassword());
-        jdbc = new JdbcTemplate(dataSource);
-        transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
-
-        redis = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
-                .withExposedPorts(6379);
-        redis.start();
-        redisFactory = new LettuceConnectionFactory(
-                new RedisStandaloneConfiguration(redis.getHost(), redis.getFirstMappedPort()));
-        redisFactory.afterPropertiesSet();
-        redisFactory.start();
-        redisTemplate = new StringRedisTemplate(redisFactory);
-    }
-
-    @AfterAll
-    static void stopContainers() {
-        if (redisFactory != null) {
-            redisFactory.destroy();
-        }
-        if (mysql != null) {
-            mysql.stop();
-        }
-        if (redis != null) {
-            redis.stop();
-        }
-    }
 
     @BeforeEach
     void resetAndSeed() {
@@ -163,7 +108,8 @@ class CouponRoundWarmupRunnerTest {
 
     private CouponRoundWarmupRunner runner(IssuanceGatePort gatePort, IssuanceWarmupPort seeder) {
         return new CouponRoundWarmupRunner(
-                jdbc, transactionTemplate, gatePort, seeder,
+                new CouponRoundGateJdbc(jdbc, transactionTemplate),
+                new RoundGateWriteGuard(), gatePort, seeder,
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)));
     }
 
@@ -325,15 +271,14 @@ class CouponRoundWarmupRunnerTest {
         CountDownLatch seeding = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         // 먼저 들어온 쪽을 시딩 한가운데에 세워 둔다. HTTP 워커가 여럿이라 이 창은 실재한다.
-        CouponRoundWarmupRunner runner = runner(gate, (roundId, members, remaining) -> {
+        CouponRoundWarmupRunner runner = runner(gate, seederThatRuns(() -> {
             seeding.countDown();
             try {
                 release.await(10, TimeUnit.SECONDS);
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
             }
-            warmupPort.seedCounters(roundId, members, remaining);
-        });
+        }));
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -417,9 +362,19 @@ class CouponRoundWarmupRunnerTest {
 
     /** 시딩 한가운데에서 DB 를 흔든다. 잠금이 정말 meta 직전인지는 이걸로만 드러난다. */
     private IssuanceWarmupPort seederThatRuns(Runnable duringSeeding) {
-        return (roundId, members, remaining) -> {
-            duringSeeding.run();
-            warmupPort.seedCounters(roundId, members, remaining);
+        return new IssuanceWarmupPort() {
+
+            @Override
+            public void seedCounters(
+                    long roundId, List<RebuiltIssued> members, long remaining) {
+                duringSeeding.run();
+                warmupPort.seedCounters(roundId, members, remaining);
+            }
+
+            @Override
+            public void setRemainingStock(long roundId, long remaining) {
+                warmupPort.setRemainingStock(roundId, remaining);
+            }
         };
     }
 
@@ -461,6 +416,11 @@ class CouponRoundWarmupRunnerTest {
         public com.kafkick.core.coupon.v2.port.ReclaimOutcome reclaimCorrupt(
                 long couponRoundId, long memberId, boolean restoreStock, long totalQuantity) {
             return delegate.reclaimCorrupt(couponRoundId, memberId, restoreStock, totalQuantity);
+        }
+
+        @Override
+        public void closeGate(long couponRoundId) {
+            delegate.closeGate(couponRoundId);
         }
 
         @Override
