@@ -218,6 +218,16 @@ jobs:
                      | length == 2 and all(. == "false")' > /dev/null \
             || { echo "::error::검증용 배치에 스케줄러가 켜졌다. 그 DB 가 검증 대상이다"; exit 1; }
 
+          # 검증용 둘은 포트를 내보내므로 **토큰 관문이 꺼질 수 없어야** 한다.
+          # AdminTokenConfig 는 required=false 면 빈 토큰 검사까지 건너뛰고 필터를 끄는데,
+          # 이 둘은 스크랩 대상이 아니라 BatchAdminAuthDisabled 알림도 안 붙는다 —
+          # 꺼지면 아무도 모른다. 환경변수로 끌 수 있는지까지 본다.
+          BATCH_ADMIN_AUTH_REQUIRED=false \
+          docker compose -f base.yml -f batch.yml -f batch-verify.yml config --format json \
+            | jq -e '[.services["batch-clean","batch-corrupt"].environment.BATCH_ADMIN_AUTH_REQUIRED]
+                     | length == 2 and all(. == "true")' > /dev/null \
+            || { echo "::error::검증용 배치의 토큰 관문을 환경변수로 끌 수 있다"; exit 1; }
+
           # 기본 조합은 업무 포트를 아예 안 내보내야 한다. admin 트리거에 인증이 없어서다.
           docker compose -f base.yml -f batch.yml config --format json \
             | jq -e '(.services.batch.ports // []) | length == 0' \
