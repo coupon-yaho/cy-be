@@ -68,17 +68,20 @@ import com.kafkick.core.support.exception.BusinessException;
  * <pre>
  *   1  후보 선조회        락 없음. id 오름차순 LIMIT chunkSize
  *   2  연속부 자르기       첫 회차와 같은 것까지만        ExpireChunk.from
- *   3  만료 UPDATE        그 회차 · (afterId, lastId]   ← 첫 쓰기 락
- *   4  만료 UPDATE        그 회차 · (afterId, lastId]
- *   5  이력 INSERT
+ *   3  만료 UPDATE        그 회차 · (afterId, lastId]   ← 첫 쓰기 락(issuances)
+ *   4  이력 INSERT
+ *   5  재고 행 잠그기      SELECT … FOR UPDATE           ← 진단용. 순서 때문이 아니다
  *   6  재고 차감
  *   7  afterId = lastId
  * </pre>
  *
- * <p><b>3번이 1·2번 뒤에 오는 것이 이 잡의 전부다.</b> 잠글 재고 행을 알려면 어느 회차를
- * 건드릴지가 쓰기 전에 정해져 있어야 하고, 그것을 아는 방법이 후보를 먼저 읽는 것뿐이다.
- * 왜 그 순서여야 하는지는 {@link com.kafkick.core.expiration.ExpirationRepository} 에 있다 —
- * 반대로 잡으면 취소가 1213 으로 죽는다.
+ * <p><b>3번이 1·2번 뒤에 오는 것이 이 잡의 전부다.</b> 어느 회차를 건드릴지가 쓰기 전에
+ * 정해져 있어야 청크가 회차 하나로 닫히고, 그것을 아는 방법이 후보를 먼저 읽는 것뿐이다.
+ *
+ * <p><b>5번이 6번 바로 앞인 것도 계약이다.</b> 발급·취소·사용취소가 재고를 마지막에
+ * 건드리므로 만료도 그 자리에서 잡는다 — 반대로 잡으면 취소가 1213 으로 죽는다.
+ * 근거는 {@link com.kafkick.core.expiration.ExpirationRepository} 와
+ * {@code docs/12-expire-lock-measurement.md} §11.1 에 있다.
  */
 @Configuration(proxyBeanMethods = false)
 public class ExpireJobConfig {
