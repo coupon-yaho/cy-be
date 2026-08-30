@@ -1,5 +1,6 @@
 package com.kafkick.infra.redis.coupon.v2;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -198,10 +199,10 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
         }
     }
 
-    /** Redis Lua 반환값이 정수 타입 또는 정수 문자열인지 확인합니다. */
+    /** Redis Lua 반환값이 손실 없이 long으로 표현되는 정수 타입 또는 정수 문자열인지 확인합니다. */
     private static long number(Object value) {
         if (value instanceof Number number) {
-            return number.longValue();
+            return new BigDecimal(number.toString()).longValueExact();
         }
         return Long.parseLong(value.toString());
     }

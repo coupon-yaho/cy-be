@@ -34,16 +34,17 @@ public final class IssuanceScriptCodes {
          */
         public static final long BAD_ARGUMENT = -10;
         /**
-         * {@code stock}·{@code issued_ever}·{@code issued_revision} 을 읽을 수 없다 —
-         * 필수 키 부재 · 비정수 · 자료형 오류.
+         * {@code stock} 부재 또는 세 카운터의 비정수·자료형 오류. {@code issued_ever} 와
+         * {@code issued_revision} 부재는 초기 상태로 허용하며 성공한 {@code INCR} 이 생성한다.
          * <b>매진과 합치지 않는다.</b> 합쳐 두면 재고가 남아 있는데도 전량 종단 거절되고,
          * 재구성 창의 정상적인 {@code -9} 에 사고가 묻힌다. {@code -9} 는 "기다리면 풀린다",
          * 이건 "운영이 개입해야 한다" 다.
          *
-         * <p>이름이 {@code STOCK_MISSING} 이 아닌 이유 — <b>선점은 두 카운터를 다 본다.</b>
-         * 경보를 받은 사람이 {@code GET stock} 만 확인하고 닫으면 원인이 {@code issued_ever}
-         * 일 때 장애가 그대로 이어진다. {@code Restore} 는 {@code stock} 하나만 보므로
-         * 거기서는 이름이 그대로다 — <b>이름이 점검 범위다.</b>
+         * <p>이름이 {@code STOCK_MISSING} 이 아닌 이유 — <b>선점은 세 카운터를 다 본다.</b>
+         * 경보를 받은 사람이 {@code GET stock} 만 확인하고 닫으면 원인이
+         * {@code issued_ever}·{@code issued_revision} 일 때 장애가 그대로 이어진다.
+         * {@code Restore} 는 {@code stock} 하나만 보므로 거기서는 이름이 그대로다 —
+         * <b>이름이 점검 범위다.</b>
          */
         public static final long COUNTER_UNREADABLE = -11;
 
@@ -60,6 +61,7 @@ public final class IssuanceScriptCodes {
         /** field 가 사라졌다. 보상과 겹쳤다. */
         public static final long CLAIM_GONE = -1;
         public static final long FOREIGN_CLAIM = -2;
+        /** issued 값 형식 또는 issued_revision이 파손되어 완료 승격을 거절했다. */
         public static final long CORRUPT_VALUE = -3;
         /**
          * 인자 이상 — 쓸 수 없는 요청토큰(빈 값 · {@code '|'} 포함).

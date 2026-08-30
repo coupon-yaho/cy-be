@@ -143,6 +143,8 @@ public final class IssuanceScripts {
      *
      * <p>남은 인자인 토큰은 <b>쓰기 전에</b> 본다. 저장된 토큰은 {@code ([^|]+)} 라 빈 값이나
      * {@code '|'} 가 든 값과 <b>같아질 수 없어서</b>, 그런 인자는 비교가 아니라 버그다.
+     * {@code issued_revision} 이 잘못된 자료형·비정규 정수·증가 불가능한 상한이면 승격하지 않고
+     * {@code -3} 으로 거절한다. 이 코드는 issued 값 파손과 같은 운영 개입 대상이다.
      */
     public static final RedisScript<Long> COMPLETE = new DefaultRedisScript<>("""
             local function writableRevision(s)

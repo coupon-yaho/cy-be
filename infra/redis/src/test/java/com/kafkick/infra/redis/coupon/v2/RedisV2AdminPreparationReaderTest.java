@@ -83,6 +83,22 @@ class RedisV2AdminPreparationReaderTest {
         assertThat(result.get(11L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
+    /** 소수 플래그가 long 변환에서 절삭돼 준비 완료로 바뀌지 않는지 검증합니다. */
+    @Test
+    @DisplayName("소수형 준비 플래그는 UNAVAILABLE로 격리한다")
+    void rejectsFractionalReadinessFlag() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        when(redisTemplate.executePipelined(any(SessionCallback.class)))
+                .thenReturn(List.of(List.of(1L, 1.5d, 1L)));
+        RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
+
+        V2PreparationSource result = reader.read(List.of(request(10L)), SNAPSHOT).get(10L);
+
+        assertThat(result.status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(result.warmupReady()).isNull();
+        assertThat(result.gateReady()).isNull();
+    }
+
     /** 관리자 요청이 issued 크기와 무관하게 Hash 스캔 없이 끝나는지 검증합니다. */
     @Test
     @DisplayName("준비 상태 조회는 issued Hash를 스캔하지 않는다")
