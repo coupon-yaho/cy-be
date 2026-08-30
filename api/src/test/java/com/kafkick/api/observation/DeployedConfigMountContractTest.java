@@ -132,6 +132,10 @@ class DeployedConfigMountContractTest {
      * {@code Dockerfile} 이 jar 에 넣는 설정 리소스 전부. 모듈 목록을 박지 않는 이유는
      * 위 javadoc 에 있다 — 박으면 새 모듈이 조용히 검사 밖에 남는다.
      */
+    private static String text(Object value) {
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
+    }
+
     private List<Path> moduleResourceConfigs() throws IOException {
         List<Path> found = new ArrayList<>();
         try (var files = Files.walk(repoRoot())) {
@@ -160,12 +164,22 @@ class DeployedConfigMountContractTest {
                 if (!(document instanceof Map<?, ?> map)) {
                     continue;
                 }
-                Object block = map.get(MARKER_KEY);
-                if (block instanceof Map<?, ?> marker) {
-                    Object value = marker.get(MARKER_LEAF);
-                    if (value != null && !String.valueOf(value).isBlank()) {
-                        return String.valueOf(value);
+                // **중첩과 평면 둘 다 본다.** 스프링은 아래 두 모양을 같은 프로퍼티로
+                // 읽는데, 중첩만 보면 평면으로 적힌 마커가 jar 에 섞여 들어가도
+                // 못 잡는다(리뷰가 잡았다).
+                //
+                //   deployed-config:        deployed-config.marker: v
+                //     marker: v
+                Object nested = map.get(MARKER_KEY);
+                if (nested instanceof Map<?, ?> marker) {
+                    String value = text(marker.get(MARKER_LEAF));
+                    if (value != null) {
+                        return value;
                     }
+                }
+                String flat = text(map.get(MARKER_KEY + "." + MARKER_LEAF));
+                if (flat != null) {
+                    return flat;
                 }
             }
         }

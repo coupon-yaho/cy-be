@@ -4,13 +4,17 @@ package com.kafkick.core.support.config;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.Ordered;
+import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.mock.env.MockEnvironment;
@@ -56,13 +60,30 @@ class DeployedConfigGuardTest {
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    /**
+     * <b>파일에서 온 마커는 통과해야 한다.</b> 위 검사만 있으면 "전부 거절" 하는 구현도
+     * 통과한다 — 그 방향이 더 나쁘다(정상인 배포를 막는다).
+     *
+     * <p>실제 설정 파일을 읽어 얹는다. {@code MockEnvironment.setProperty} 는 Origin 이
+     * 없어 이 축을 못 태운다.
+     */
     @Test
-    @DisplayName("마커가 있으면 통과한다")
-    void passesWhenMarkerPresent() {
-        assertThatCode(() -> run(Map.of(
-                DeployedConfigGuard.REQUIRED, "true",
-                DeployedConfigGuard.MARKER, "root-application-yml")))
+    @DisplayName("설정 파일에서 온 마커는 통과한다 — 전부 거절하는 구현을 막는다")
+    void passesWhenMarkerComesFromAConfigFile() throws Exception {
+        Path file = Files.createTempFile("deployed-config", ".yml");
+        Files.writeString(file, DeployedConfigGuard.MARKER + ": from-file\n");
+
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource(
+                "switch", Map.of(DeployedConfigGuard.REQUIRED, "true")));
+        environment.getPropertySources().addFirst(
+                new YamlPropertySourceLoader()
+                        .load("mounted", new FileSystemResource(file)).get(0));
+        ConfigurationPropertySources.attach(environment);
+
+        assertThatCode(() -> guard.postProcessEnvironment(environment, null))
                 .doesNotThrowAnyException();
+        Files.deleteIfExists(file);
     }
 
     /**
@@ -76,9 +97,14 @@ class DeployedConfigGuardTest {
     @Test
     @DisplayName("환경변수·JVM 프로퍼티로 준 마커는 통과시키지 않는다 — 값이 아니라 출처를 본다")
     void ignoresMarkerFromOutsideConfigFiles() {
+        // **이름을 안 세므로 이름을 늘려도 뜻이 없다.** 가드는 값의 Origin 을 보는데,
+        // 아래 넷은 전부 그 출처가 없다 — 이름이 뭐든 통과하면 안 된다.
+        // 마지막 둘이 앞선 구현(금지 목록)이 놓치던 자리다: 목록에 없는 이름이라 통과했다.
         for (String sourceName : List.of(
                 StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
-                StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)) {
+                StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME,
+                "defaultProperties",
+                "someHandRolledSource")) {
 
             StandardEnvironment environment = new StandardEnvironment();
             environment.getPropertySources().addFirst(new MapPropertySource(
@@ -95,6 +121,7 @@ class DeployedConfigGuardTest {
             assertThatThrownBy(() -> guard.postProcessEnvironment(environment, null))
                     .as("%s 에서 온 마커가 통과했다 — 마운트가 비어도 지나간다", sourceName)
                     .isInstanceOf(IllegalStateException.class);
+
         }
     }
 
