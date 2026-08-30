@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 계측이 <b>내보내는</b> outcome 라벨과 O3 가 <b>읽을 줄 아는</b> 라벨이 같은 집합이어야 한다.
  *
- * <p>두 파일에 걸친 계약이다. {@code CampaignMeterRegistry} 는 기동 시 {@link ReasonCode} 전부에
+ * <p>두 파일에 걸친 계약이다. {@code CouponRoundMeterRegistry} 는 기동 시 {@link ReasonCode} 전부에
  * 카운터를 <b>미리 등록</b>하므로, 그 코드가 한 번도 발생하지 않아도 시계열은 0 값으로 존재하고
  * Prometheus 가 그대로 긁어간다. O3 는 모르는 라벨을 하나라도 보면
  * {@code onlyKnownOutcomeLabels} 에서 전체를 {@code UNAVAILABLE} 로 버린다 — 새 코드를 아무도
@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class OutcomeLabelCoverageContractTest {
 
-    /** {@code CampaignMeterRegistry} 가 등록하는 라벨. 이유 코드 전부 + 발급 + 대기열. */
+    /** {@code CouponRoundMeterRegistry} 가 등록하는 라벨. 이유 코드 전부 + 발급 + 대기열. */
     private static List<String> registeredOutcomeLabels() {
         List<String> labels = new ArrayList<>(
                 Arrays.stream(ReasonCode.values()).map(Enum::name).toList());

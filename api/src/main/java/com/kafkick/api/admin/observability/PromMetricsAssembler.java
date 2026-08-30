@@ -691,7 +691,7 @@ public class PromMetricsAssembler {
 
      * <p>⚠️ <b>0 인 행과 목록에 아예 없는 행은 다릅니다.</b> 카운터가 한 번도 등록되지 않아
      * 시계열 자체가 없으면 그 사유는 행으로도 안 나옵니다 — 등록은 기동 시점에
-     * {@code CampaignMeterRegistry} 가 사유 전종에 대해 하므로 정상 배선에서는 안 생깁니다.</p>
+     * {@code CouponRoundMeterRegistry} 가 사유 전종에 대해 하므로 정상 배선에서는 안 생깁니다.</p>
      *
      * <p><b>음수 표본이 하나라도 있으면 표를 통째로 비웁니다({@code UNAVAILABLE}).</b> 그 행만
      * 빼면 남은 행의 순위가 멀쩡한 것처럼 보이는데, 원천이 음수를 낼 정도면 나머지 값도 믿을

@@ -27,7 +27,7 @@ public class IssuanceFlowCalculator {
     public IssuanceFlowCalculator() { }
 
     /**
-     * 캠페인별 실제 경과시간 보정 발급률·버킷 점·상태를 한 번에 계산합니다.
+     * 쿠폰 회차별 실제 경과시간 보정 발급률·버킷 점·상태를 한 번에 계산합니다.
      *
      * <p>{@code currentPerMinute = completedCount / window minutes}이며, 현재 상태의 지속 시간은
      * 마지막 성공·raw scrape 시각이 아니라 연속 조건 시작부터 현재 평가 구간의
@@ -94,7 +94,7 @@ public class IssuanceFlowCalculator {
         }
         Duration duration = Duration.between(input.conditionStartedAt(), input.windowEnd());
         // 수요와 재고가 있는데 성공 0건이 임계시간 이상 지속된 경우에만 중단으로 판정합니다.
-        if (input.campaignStatus() == CouponRoundStatus.OPEN && input.completedCount() == 0d
+        if (input.couponRoundStatus() == CouponRoundStatus.OPEN && input.completedCount() == 0d
                 && !duration.isNegative() && duration.compareTo(policy.issuanceStoppedAfter()) >= 0) {
             return AdminOverviewSnapshot.IssuanceFlowState.STOPPED;
         }
@@ -151,8 +151,8 @@ public class IssuanceFlowCalculator {
     /**
      * O1 원천 입력입니다.
      *
-     * @param couponId 캠페인 식별자
-     * @param campaignStatus 확정 캠페인 상태
+     * @param couponId 쿠폰 회차 식별자
+     * @param couponRoundStatus 확정 쿠폰 회차 상태
      * @param stockAvailable 실제 재고가 남아 발급 중단 판정 대상인지 여부
      * @param windowStart 현재 발급 완료 수를 센 구간 시작 시각
      * @param windowEnd 현재 발급 완료 수를 센 구간 종료 시각
@@ -171,7 +171,7 @@ public class IssuanceFlowCalculator {
      * @param sourceStatus 원천 관측 상태
      * @param observedAt 원천 실제 관측 시각; 값 없는 상태에서는 null
      */
-    public record IssuanceFlowInput(Long couponId, CouponRoundStatus campaignStatus, Boolean stockAvailable,
+    public record IssuanceFlowInput(Long couponId, CouponRoundStatus couponRoundStatus, Boolean stockAvailable,
                                     Instant windowStart, Instant windowEnd,
                                     Instant trendWindowStart, Instant trendWindowEnd,
                                     Double attemptedCount,
@@ -183,7 +183,7 @@ public class IssuanceFlowCalculator {
         /** 입력의 식별자·수량·상태·시간 관계를 검증하고 존재하는 버킷 목록을 불변 복사합니다. */
         public IssuanceFlowInput {
             Objects.requireNonNull(couponId, "couponId");
-            Objects.requireNonNull(campaignStatus, "campaignStatus");
+            Objects.requireNonNull(couponRoundStatus, "couponRoundStatus");
             Objects.requireNonNull(sourceStatus, "sourceStatus");
             if (sourceStatus.carriesValue() != (observedAt != null)) {
                 throw new IllegalArgumentException("원천 상태와 observedAt 조합이 맞지 않습니다.");
@@ -227,7 +227,7 @@ public class IssuanceFlowCalculator {
                         && !lastCompletedAt.isBefore(windowStart) && !lastCompletedAt.isAfter(windowEnd)) {
                     throw new IllegalArgumentException("무완료 구간의 lastCompletedAt은 관측 구간 안에 있을 수 없습니다.");
                 }
-                if (campaignStatus == CouponRoundStatus.OPEN && stockAvailable && attemptedCount > 0d
+                if (couponRoundStatus == CouponRoundStatus.OPEN && stockAvailable && attemptedCount > 0d
                         && completedCount == 0d && lastCompletedAt != null
                         && lastCompletedAt.isAfter(conditionStartedAt)) {
                     throw new IllegalArgumentException("lastCompletedAt은 무발급 conditionStartedAt 이후일 수 없습니다.");
@@ -262,7 +262,7 @@ public class IssuanceFlowCalculator {
     /**
      * couponId별 O1 결과입니다.
      *
-     * @param issuanceFlows 캠페인별 발급 흐름 관측값; Map은 호출 뒤 변경할 수 없음
+     * @param issuanceFlows 쿠폰 회차별 발급 흐름 관측값; Map은 호출 뒤 변경할 수 없음
      */
     public record IssuanceFlowCalculation(
             Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows) {

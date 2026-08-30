@@ -65,7 +65,7 @@ class ConsistencyFinalControllerTest {
     }
 
     @Test
-    void differentGaugeCouponIsRejectedInsteadOfSavingAnotherCampaign() {
+    void differentGaugeCouponIsRejectedInsteadOfSavingAnotherCouponRound() {
         when(reader.read()).thenReturn(new DomainRawSnapshot(
                 8L, mock(ConsistencyRawSnapshot.class), null, SourceStatus.PENDING));
         var response = controller.evaluate(7L, EngineVersion.V3, RUN_FINALIZED_AT);

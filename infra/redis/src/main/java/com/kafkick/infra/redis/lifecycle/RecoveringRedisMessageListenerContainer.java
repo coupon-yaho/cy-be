@@ -43,7 +43,7 @@ final class RecoveringRedisMessageListenerContainer
                 runnable -> {
                     Thread thread = new Thread(
                             runnable,
-                            "campaign-lifecycle-redis-recovery"
+                            "coupon-round-lifecycle-redis-recovery"
                     );
                     thread.setDaemon(true);
                     return thread;
@@ -90,7 +90,7 @@ final class RecoveringRedisMessageListenerContainer
         super.stop();
         if (startupFailureLogged.compareAndSet(false, true)) {
             log.warn(
-                    "캠페인 종료 Redis 구독 초기 연결에 실패했습니다. "
+                    "쿠폰 회차 종료 Redis 구독 초기 연결에 실패했습니다. "
                             + "API 기동은 계속하고 재연결을 시도합니다. cause={}",
                     exception.toString()
             );

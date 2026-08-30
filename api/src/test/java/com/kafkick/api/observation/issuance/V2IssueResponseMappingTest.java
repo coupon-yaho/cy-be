@@ -90,7 +90,7 @@ class V2IssueResponseMappingTest {
 
     @ParameterizedTest(name = "{0} -> {1} {2}")
     @CsvSource({
-            "CLOSED,             409, COUPON-303, CAMPAIGN_CLOSED",
+            "CLOSED,             409, COUPON-303, COUPON_ROUND_CLOSED",
             "NOT_OPEN,           409, COUPON-302, NOT_OPENED",
             "GRADE_NOT_ALLOWED,  403, COUPON-304, GRADE_NOT_ELIGIBLE",
             "DUP_PER_MEMBER,     409, COUPON-305, ALREADY_ISSUED",
@@ -202,7 +202,7 @@ class V2IssueResponseMappingTest {
      */
     @ParameterizedTest(name = "{0} -> {1} {3}")
     @CsvSource({
-            "CLOSED,             409, COUPON-303, CAMPAIGN_CLOSED",
+            "CLOSED,             409, COUPON-303, COUPON_ROUND_CLOSED",
             "NOT_OPEN,           409, COUPON-302, NOT_OPENED",
             "GRADE_NOT_ALLOWED,  403, COUPON-304, GRADE_NOT_ELIGIBLE",
             "DUP_PER_MEMBER,     409, COUPON-305, ALREADY_ISSUED",

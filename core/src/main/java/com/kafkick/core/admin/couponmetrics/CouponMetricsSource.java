@@ -8,13 +8,13 @@ import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
- * 관리자 캠페인 상세 지표 계산에 전달하는 기술 중립 원천값입니다.
+ * 관리자 쿠폰 회차 상세 지표 계산에 전달하는 기술 중립 원천값입니다.
  *
  * <p>DB나 Redis 자료구조를 노출하지 않고, 값과 관측 상태 및 관측 시각을 함께 보존합니다.
  * 발급률 표본과 상태 전이 버킷은 생성 시 불변 복사하여 요청 중 원천값이 바뀌지 않게 합니다.</p>
  *
- * @param couponId 캠페인을 식별하는 양수 쿠폰 ID
- * @param campaign 캠페인 운영 상태와 오픈 시각
+ * @param couponId 쿠폰 회차를 식별하는 양수 쿠폰 ID
+ * @param couponRound 쿠폰 회차 운영 상태와 오픈 시각
  * @param stock 전체 수량과 활성 발급 수량
  * @param issuanceRateSamples Prometheus가 계산한 초당 발급률 표본
  * @param queue 현재 대기 수와 입장 관측 구간
@@ -23,7 +23,7 @@ import com.kafkick.core.observation.SourceStatus;
  */
 public record CouponMetricsSource(
         Long couponId,
-        CampaignRuntime campaign,
+        CouponRoundRuntime couponRound,
         Observation<StockCounts> stock,
         Observation<List<IssuanceRateSample>> issuanceRateSamples,
         Observation<QueueCounts> queue,
@@ -34,7 +34,7 @@ public record CouponMetricsSource(
     /** 원천값 전체의 필수 항목과 시계열 순서를 검증합니다. */
     public CouponMetricsSource {
         Objects.requireNonNull(couponId, "couponId");
-        Objects.requireNonNull(campaign, "campaign");
+        Objects.requireNonNull(couponRound, "couponRound");
         Objects.requireNonNull(stock, "stock");
         Objects.requireNonNull(issuanceRateSamples, "issuanceRateSamples");
         Objects.requireNonNull(queue, "queue");
@@ -80,11 +80,11 @@ public record CouponMetricsSource(
         }
     }
 
-    /** 캠페인의 실행 상태와 설정된 오픈 시각입니다. */
-    public record CampaignRuntime(CouponRoundStatus status, Instant opensAt) {
+    /** 쿠폰 회차의 실행 상태와 설정된 오픈 시각입니다. */
+    public record CouponRoundRuntime(CouponRoundStatus status, Instant opensAt) {
 
-        /** 필수 캠페인 정보를 검증합니다. */
-        public CampaignRuntime {
+        /** 필수 쿠폰 회차 정보를 검증합니다. */
+        public CouponRoundRuntime {
             Objects.requireNonNull(status, "status");
             Objects.requireNonNull(opensAt, "opensAt");
         }

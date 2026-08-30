@@ -153,8 +153,8 @@ class PrometheusExposureContractTest {
         }
 
         @Test
-        @DisplayName("캠페인 발급 미터 6종이 이름 · 라벨 · 값 그대로 scrape 에 실린다")
-        void scrapeServesCampaignIssuanceMeters() {
+        @DisplayName("쿠폰 회차 발급 미터 6종이 이름 · 라벨 · 값 그대로 scrape 에 실린다")
+        void scrapeServesCouponRoundIssuanceMeters() {
             IssuanceFlowEvent.Ctx context = new IssuanceFlowEvent.Ctx(
                     "obs25-exposure", 101L, 202L, Grade.GOLD, false,
                     Instant.parse("2026-08-23T00:00:00Z"), EngineVersion.V3, ReleaseStage.V3,
@@ -180,7 +180,7 @@ class PrometheusExposureContractTest {
                         "coupon_id", "202");
                 assertMetricSample(scrape.body(), "app_queue_event_last_admitted_epoch", 1_787_443_200d,
                         "coupon_id", "202");
-                assertMetricSample(scrape.body(), "app_observation_campaign_limit_exceeded_total", 0.0);
+                assertMetricSample(scrape.body(), "app_observation_coupon_round_limit_exceeded_total", 0.0);
             });
         }
 

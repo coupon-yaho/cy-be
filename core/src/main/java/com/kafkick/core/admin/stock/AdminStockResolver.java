@@ -7,9 +7,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
@@ -24,55 +24,55 @@ public final class AdminStockResolver {
     }
 
     /** 목록의 V1 DB 재고는 보존하고 V2 DB 미러는 Redis 정본 관측으로 교체합니다. */
-    public AdminCampaignCatalog resolve(AdminCampaignCatalog catalog, Instant observedAt) {
+    public AdminCouponRoundCatalog resolve(AdminCouponRoundCatalog catalog, Instant observedAt) {
         Objects.requireNonNull(catalog, "catalog");
         Objects.requireNonNull(observedAt, "observedAt");
         if (catalog.status() != SourceStatus.VALID) {
             return catalog;
         }
-        List<V2AdminStockReader.Request> requests = catalog.campaigns().stream()
-                .filter(campaign -> campaign.engineVersion() == EngineVersion.V2)
-                .filter(campaign -> campaign.stock().status().carriesValue())
-                .map(campaign -> new V2AdminStockReader.Request(
-                        campaign.couponId(), campaign.status(), campaign.stock().value().totalQuantity()))
+        List<V2AdminStockReader.Request> requests = catalog.couponRounds().stream()
+                .filter(couponRound -> couponRound.engineVersion() == EngineVersion.V2)
+                .filter(couponRound -> couponRound.stock().status().carriesValue())
+                .map(couponRound -> new V2AdminStockReader.Request(
+                        couponRound.couponId(), couponRound.status(), couponRound.stock().value().totalQuantity()))
                 .toList();
         Map<Long, CouponMetricsSource.Observation<AdminStockSnapshot>> redis =
                 requests.isEmpty() ? Map.of() : v2Reader.read(requests, observedAt);
-        ArrayList<AdminCampaignCatalog.CampaignData> resolved = new ArrayList<>();
-        for (AdminCampaignCatalog.CampaignData campaign : catalog.campaigns()) {
-            CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock = campaign.stock();
-            if (campaign.engineVersion() == EngineVersion.V2) {
+        ArrayList<AdminCouponRoundCatalog.CouponRoundData> resolved = new ArrayList<>();
+        for (AdminCouponRoundCatalog.CouponRoundData couponRound : catalog.couponRounds()) {
+            CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock = couponRound.stock();
+            if (couponRound.engineVersion() == EngineVersion.V2) {
                 // V2에서 DB active_count는 미러일 뿐이므로 Redis 실패를 DB 값으로 숨기지 않습니다.
-                stock = toLegacyCounts(redis.get(campaign.couponId()));
+                stock = toLegacyCounts(redis.get(couponRound.couponId()));
             }
-            resolved.add(new AdminCampaignCatalog.CampaignData(
-                    campaign.couponId(), campaign.campaignName(), campaign.brandName(), campaign.engineVersion(),
-                    campaign.status(), campaign.opensAt(), campaign.closesAt(), stock, campaign.preparation()));
+            resolved.add(new AdminCouponRoundCatalog.CouponRoundData(
+                    couponRound.couponId(), couponRound.couponName(), couponRound.brandName(), couponRound.engineVersion(),
+                    couponRound.status(), couponRound.opensAt(), couponRound.closesAt(), stock, couponRound.preparation()));
         }
-        return new AdminCampaignCatalog(catalog.status(), catalog.observedAt(), resolved);
+        return new AdminCouponRoundCatalog(catalog.status(), catalog.observedAt(), resolved);
     }
 
     /** 상세의 V1 DB 재고는 보존하고 V2 DB 미러만 Redis 정본으로 교체합니다. */
-    public AdminCampaignDetailData resolve(AdminCampaignDetailData detail, Instant observedAt) {
+    public AdminCouponRoundDetailData resolve(AdminCouponRoundDetailData detail, Instant observedAt) {
         Objects.requireNonNull(detail, "detail");
         Objects.requireNonNull(observedAt, "observedAt");
         if (detail.availability() != DetailAvailability.AVAILABLE
                 || detail.value().engineVersion() != EngineVersion.V2) {
             return detail;
         }
-        AdminCampaignDetailData.DetailValue value = detail.value();
+        AdminCouponRoundDetailData.DetailValue value = detail.value();
         CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock;
         if (!value.stock().status().carriesValue()) {
             stock = new CouponMetricsSource.Observation<>(null, SourceStatus.UNAVAILABLE, null);
         } else {
             V2AdminStockReader.Request request = new V2AdminStockReader.Request(
-                    value.couponId(), value.campaign().status(), value.stock().value().totalQuantity());
+                    value.couponId(), value.couponRound().status(), value.stock().value().totalQuantity());
             stock = toLegacyCounts(v2Reader.read(List.of(request), observedAt).get(value.couponId()));
         }
-        return new AdminCampaignDetailData(DetailAvailability.AVAILABLE,
-                new AdminCampaignDetailData.DetailValue(
-                        value.couponId(), value.campaignName(), value.brandName(), value.engineVersion(),
-                        value.campaign(), stock, value.holdingCounts(), value.transitions()));
+        return new AdminCouponRoundDetailData(DetailAvailability.AVAILABLE,
+                new AdminCouponRoundDetailData.DetailValue(
+                        value.couponId(), value.couponName(), value.brandName(), value.engineVersion(),
+                        value.couponRound(), stock, value.holdingCounts(), value.transitions()));
     }
 
     /** 기존 계산기 입력의 activeCount 자리에 권위 재고로부터 도출한 발급 수량을 싣습니다. */

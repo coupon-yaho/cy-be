@@ -3,7 +3,7 @@ package com.kafkick.core.observation;
 public enum ReasonCode {
 
     NOT_OPENED,
-    CAMPAIGN_CLOSED,
+    COUPON_ROUND_CLOSED,
     GRADE_NOT_ELIGIBLE,
     QUEUE_REQUIRED,
     NO_ENTRY_TOKEN,

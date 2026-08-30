@@ -10,12 +10,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** DB 캠페인 모집단에서 V2 Redis 준비 조회 대상과 결과 모집단을 확정합니다. */
+/** DB 쿠폰 회차 모집단에서 V2 Redis 준비 조회 대상과 결과 모집단을 확정합니다. */
 public final class AdminPreparationResolver {
 
     private final V2AdminPreparationReader v2Reader;
@@ -26,11 +26,11 @@ public final class AdminPreparationResolver {
     }
 
     /**
-     * DB 준비가 완료된 V2 예약 회차만 Redis로 조회하고 모든 캠페인 ID의 적용 여부를 반환합니다.
+     * DB 준비가 완료된 V2 예약 회차만 Redis로 조회하고 모든 쿠폰 회차 ID의 적용 여부를 반환합니다.
      * Reader 실패나 응답 모집단 위반은 요청한 V2 회차만 UNAVAILABLE로 격리합니다.
      */
     public Map<Long, V2PreparationSource> resolve(
-            AdminCampaignCatalog catalog,
+            AdminCouponRoundCatalog catalog,
             Instant observedAt
     ) {
         Objects.requireNonNull(catalog, "catalog");
@@ -41,16 +41,16 @@ public final class AdminPreparationResolver {
 
         LinkedHashMap<Long, V2PreparationSource> resolved = new LinkedHashMap<>();
         ArrayList<V2AdminPreparationReader.Request> requests = new ArrayList<>();
-        for (AdminCampaignCatalog.CampaignData campaign : catalog.campaigns()) {
-            resolved.put(campaign.couponId(), V2PreparationSource.notApplicable());
-            if (!requiresV2Preparation(campaign)) {
+        for (AdminCouponRoundCatalog.CouponRoundData couponRound : catalog.couponRounds()) {
+            resolved.put(couponRound.couponId(), V2PreparationSource.notApplicable());
+            if (!requiresV2Preparation(couponRound)) {
                 continue;
             }
             try {
-                requests.add(toRequest(campaign));
+                requests.add(toRequest(couponRound));
             } catch (RuntimeException exception) {
                 // DB 원천이 스스로 준비 완료라 했지만 요청 계약을 못 만들면 정상값으로 추측하지 않습니다.
-                resolved.put(campaign.couponId(), V2PreparationSource.unavailable());
+                resolved.put(couponRound.couponId(), V2PreparationSource.unavailable());
             }
         }
         if (requests.isEmpty()) {
@@ -82,28 +82,28 @@ public final class AdminPreparationResolver {
     }
 
     /** DB 정본 비교값을 모두 가진 V2 예약 회차인지 확인합니다. */
-    private static boolean requiresV2Preparation(AdminCampaignCatalog.CampaignData campaign) {
-        return campaign.engineVersion() == EngineVersion.V2
-                && campaign.status() == CouponRoundStatus.SCHEDULED
-                && campaign.preparation().status().carriesValue()
-                && Boolean.TRUE.equals(campaign.preparation().campaignConfigurationReady())
-                && Boolean.TRUE.equals(campaign.preparation().databaseStockReady())
-                && campaign.stock().status().carriesValue()
-                && campaign.stock().value() != null;
+    private static boolean requiresV2Preparation(AdminCouponRoundCatalog.CouponRoundData couponRound) {
+        return couponRound.engineVersion() == EngineVersion.V2
+                && couponRound.status() == CouponRoundStatus.SCHEDULED
+                && couponRound.preparation().status().carriesValue()
+                && Boolean.TRUE.equals(couponRound.preparation().couponRoundConfigurationReady())
+                && Boolean.TRUE.equals(couponRound.preparation().databaseStockReady())
+                && couponRound.stock().status().carriesValue()
+                && couponRound.stock().value() != null;
     }
 
-    /** DB 캠페인 값을 Redis Reader의 비교 요청으로 변환합니다. */
+    /** DB 쿠폰 회차 값을 Redis Reader의 비교 요청으로 변환합니다. */
     private static V2AdminPreparationReader.Request toRequest(
-            AdminCampaignCatalog.CampaignData campaign
+            AdminCouponRoundCatalog.CouponRoundData couponRound
     ) {
         return new V2AdminPreparationReader.Request(
-                campaign.couponId(),
-                campaign.status(),
-                campaign.opensAt(),
-                campaign.closesAt(),
-                campaign.preparation().eligibleGradesMask(),
-                campaign.stock().value().totalQuantity(),
-                campaign.stock().value().totalQuantity() - campaign.stock().value().activeCount());
+                couponRound.couponId(),
+                couponRound.status(),
+                couponRound.opensAt(),
+                couponRound.closesAt(),
+                couponRound.preparation().eligibleGradesMask(),
+                couponRound.stock().value().totalQuantity(),
+                couponRound.stock().value().totalQuantity() - couponRound.stock().value().activeCount());
     }
 
     /** 요청 순서를 보존한 ID 집합을 생성합니다. */
@@ -135,7 +135,7 @@ public final class AdminPreparationResolver {
         }
     }
 
-    /** 캠페인 순서를 유지하면서 결과 Map을 불변으로 반환합니다. */
+    /** 쿠폰 회차 순서를 유지하면서 결과 Map을 불변으로 반환합니다. */
     private static Map<Long, V2PreparationSource> immutableCopy(
             LinkedHashMap<Long, V2PreparationSource> source
     ) {

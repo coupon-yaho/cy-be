@@ -3,7 +3,7 @@ package com.kafkick.api.admin.observability;
 import java.time.Duration;
 import java.util.Objects;
 
-/** 캠페인 상세 발급률 조회가 사용하는 Prometheus 미터·라벨·PromQL 계약입니다. */
+/** 쿠폰 회차 상세 발급률 조회가 사용하는 Prometheus 미터·라벨·PromQL 계약입니다. */
 public final class CouponMetricsPrometheusContract {
 
     private static final String FLOW_TOTAL = "app_issuance_flow_total";
@@ -15,7 +15,7 @@ public final class CouponMetricsPrometheusContract {
     private CouponMetricsPrometheusContract() { }
 
     /**
-     * 한 캠페인의 성공 발급 초당 rate를 모든 API 인스턴스에 걸쳐 합산하는 질의를 만듭니다.
+     * 한 쿠폰 회차의 성공 발급 초당 rate를 모든 API 인스턴스에 걸쳐 합산하는 질의를 만듭니다.
      *
      * @param couponId 조회할 양수 쿠폰 ID
      * @param rateWindow Prometheus {@code rate}가 사용할 양수 관측 창

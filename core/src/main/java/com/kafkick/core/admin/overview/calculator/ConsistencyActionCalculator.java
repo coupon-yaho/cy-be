@@ -52,7 +52,7 @@ public class ConsistencyActionCalculator {
      * STALE 등 계산 불가 값, 엔진 버전과 맞지 않는 비적용 gap, 수치와 모순된 verdict·severity는
      * 정상 또는 빈 결과로 축약하지 않고 거부합니다.</p>
      *
-     * @param context 캠페인 표시 정보와 FINAL 판정 확정 시각을 포함한 입력 문맥
+     * @param context 쿠폰 회차 표시 정보와 FINAL 판정 확정 시각을 포함한 입력 문맥
      * @return 조치가 없거나 하나의 정합성 조치 후보
      * @throws NullPointerException 입력 문맥이 null인 경우
      * @throws IllegalArgumentException FINAL 판정에 계산 불가 값이 포함된 경우
@@ -179,7 +179,7 @@ public class ConsistencyActionCalculator {
     ) {
         return new AdminOverviewSnapshot.OperationActionItem(
                 context.couponId(),
-                context.campaignName(),
+                context.couponName(),
                 context.opensAt(),
                 Severity.CRITICAL,
                 customerImpact,

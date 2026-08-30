@@ -19,10 +19,10 @@ class OperationActionCalculatorTest {
 
     private static final Instant NOW = Instant.parse("2026-08-21T03:00:00Z");
 
-    /** 동일 캠페인의 여러 후보가 KPI를 중복 증가시키는 회귀를 방지합니다. */
+    /** 동일 쿠폰 회차의 여러 후보가 KPI를 중복 증가시키는 회귀를 방지합니다. */
     @Test
-    @DisplayName("동일 캠페인의 조치 후보는 최고 심각도 한 건으로 집계한다")
-    void selectsHighestSeverityPerCampaign() {
+    @DisplayName("동일 쿠폰 회차의 조치 후보는 최고 심각도 한 건으로 집계한다")
+    void selectsHighestSeverityPerCouponRound() {
         OperationActionCalculator calculator = new OperationActionCalculator();
         List<AdminOverviewSnapshot.OperationActionItem> decisions = List.of(
                 action(17L, Severity.WARN),
@@ -90,7 +90,7 @@ class OperationActionCalculatorTest {
         assertThat(reversed.items().topItems()).containsExactly(widespread);
     }
 
-    /** KPI와 top 20이 대표 Map과 다른 모집단을 사용하면 동일 캠페인이 다시 섞이는 회귀를 방지합니다. */
+    /** KPI와 top 20이 대표 Map과 다른 모집단을 사용하면 동일 쿠폰 회차가 다시 섞이는 회귀를 방지합니다. */
     @Test
     @DisplayName("대표 판정 Map은 불변이며 KPI와 목록의 유일한 모집단이다")
     void returnsImmutableRepresentativeMapUsedByKpisAndItems() {
@@ -105,7 +105,7 @@ class OperationActionCalculatorTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
-    /** 테스트에 필요한 캠페인 식별자와 심각도만 달리해 실제 조치 후보를 생성합니다. */
+    /** 테스트에 필요한 쿠폰 회차 식별자와 심각도만 달리해 실제 조치 후보를 생성합니다. */
     private static AdminOverviewSnapshot.OperationActionItem action(
             long couponId,
             Severity severity
@@ -137,7 +137,7 @@ class OperationActionCalculatorTest {
     ) {
         return new AdminOverviewSnapshot.OperationActionItem(
                 couponId,
-                "캠페인 " + couponId,
+                "쿠폰 회차 " + couponId,
                 NOW,
                 severity,
                 customerImpact,

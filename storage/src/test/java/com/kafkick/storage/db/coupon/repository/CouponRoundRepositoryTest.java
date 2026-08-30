@@ -48,7 +48,7 @@ import com.kafkick.core.coupon.port.CouponRoundScheduleLockPort;
 import com.kafkick.core.coupon.service.CouponRoundCreationService;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
-import com.kafkick.core.observation.SpringAfterCommitCampaignClosedEventPublisher;
+import com.kafkick.core.observation.SpringAfterCommitCouponRoundClosedEventPublisher;
 import com.kafkick.storage.db.RepositoryTest;
 import com.kafkick.storage.db.coupontemplate.repository.CouponTemplateRepositoryImpl;
 
@@ -61,7 +61,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         CouponRoundRepositoryImpl.class,
         CouponRoundScheduleLockAdapter.class,
         CouponRoundCreationService.class,
-        SpringAfterCommitCampaignClosedEventPublisher.class,
+        SpringAfterCommitCouponRoundClosedEventPublisher.class,
         CouponTemplateRepositoryImpl.class,
         CouponRoundRepositoryTest.AuditTestConfig.class
 })

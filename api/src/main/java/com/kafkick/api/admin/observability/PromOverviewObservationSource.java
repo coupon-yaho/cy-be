@@ -28,7 +28,7 @@ import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.Outc
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceBucket;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
-import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
+import com.kafkick.core.admin.overview.observation.CouponRoundObservationTarget;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
@@ -139,15 +139,15 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         return new OverviewObservationData(request, flowInputs, outcomeInput, aggregateRate, latency);
     }
 
-    /** OPEN 캠페인은 grouped 결과로 조립하고 그 밖의 캠페인은 질의 없이 N_A로 만듭니다. */
+    /** OPEN 쿠폰 회차는 grouped 결과로 조립하고 그 밖의 쿠폰 회차는 질의 없이 N_A로 만듭니다. */
     private List<IssuanceFlowInput> observeFlows(
             OverviewObservationRequest request, Instant evaluationAt, QueryBudget budget
     ) {
-        List<CampaignObservationTarget> openTargets = request.campaignTargets().stream()
-                .filter(target -> target.campaignStatus() == CouponRoundStatus.OPEN)
+        List<CouponRoundObservationTarget> openTargets = request.couponRoundTargets().stream()
+                .filter(target -> target.couponRoundStatus() == CouponRoundStatus.OPEN)
                 .toList();
         if (openTargets.isEmpty()) {
-            return request.campaignTargets().stream()
+            return request.couponRoundTargets().stream()
                     .map(target -> missingFlow(target, SourceStatus.N_A))
                     .toList();
         }
@@ -176,8 +176,8 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         }
 
         List<IssuanceFlowInput> result = new ArrayList<>();
-        for (CampaignObservationTarget target : request.campaignTargets()) {
-            result.add(target.campaignStatus() == CouponRoundStatus.OPEN
+        for (CouponRoundObservationTarget target : request.couponRoundTargets()) {
+            result.add(target.couponRoundStatus() == CouponRoundStatus.OPEN
                     ? openInputs.get(target.couponId())
                     : missingFlow(target, SourceStatus.N_A));
         }
@@ -188,7 +188,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
     private Map<Long, IssuanceFlowInput> buildOpenFlows(
             Instant snapshotAt,
             OverviewCalculationPolicy policy,
-            List<CampaignObservationTarget> targets,
+            List<CouponRoundObservationTarget> targets,
             List<PromRangeSeries> trend,
             List<PromSample> lastSuccess,
             List<PromSample> freshness,
@@ -215,7 +215,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         Map<Long, Instant> lastSuccessByCoupon = epochByCoupon(lastSuccess, snapshotAt);
         Map<StageKey, List<PromRangePoint>> trendByStage = trendByStage(trend);
         Map<Long, IssuanceFlowInput> inputs = new LinkedHashMap<>();
-        for (CampaignObservationTarget target : targets) {
+        for (CouponRoundObservationTarget target : targets) {
             inputs.put(target.couponId(), buildOpenFlow(
                     snapshotAt, policy, target,
                     freshnessByCoupon, lastSuccessByCoupon, trendByStage, failureObservedAt.get()));
@@ -223,11 +223,11 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         return Map.copyOf(inputs);
     }
 
-    /** 캠페인 하나의 값 존재·신선도·연속 조건을 평가해 O1 입력을 만듭니다. */
+    /** 쿠폰 회차 하나의 값 존재·신선도·연속 조건을 평가해 O1 입력을 만듭니다. */
     private IssuanceFlowInput buildOpenFlow(
             Instant snapshotAt,
             OverviewCalculationPolicy policy,
-            CampaignObservationTarget target,
+            CouponRoundObservationTarget target,
             Map<Long, Instant> freshnessByCoupon,
             Map<Long, Instant> lastSuccessByCoupon,
             Map<StageKey, List<PromRangePoint>> trendByStage,
@@ -280,7 +280,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         status = combineValueFlowAndStockStatus(
                 status, target.stockStatus(), attempts > 0d || successes > 0d);
         return new IssuanceFlowInput(
-                couponId, target.campaignStatus(), target.stockAvailable(),
+                couponId, target.couponRoundStatus(), target.stockAvailable(),
                 currentStart, snapshotAt, trendStart, snapshotAt,
                 attempts, successes, comparisonSuccesses,
                 comparisonStart, comparisonEnd, alignment.buckets(), lastCompletedAt,
@@ -579,19 +579,19 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         return OptionalDouble.of(samples.getFirst().value());
     }
 
-    /** 캠페인별 epoch gauge/timestamp 표본을 실제 시각으로 바꿉니다. */
+    /** 쿠폰 회차별 epoch gauge/timestamp 표본을 실제 시각으로 바꿉니다. */
     private static Map<Long, Instant> epochByCoupon(List<PromSample> samples, Instant snapshotAt) {
         Map<Long, Instant> epochs = new HashMap<>();
         for (PromSample sample : samples) {
             Instant epoch = epochOf(sample.value(), snapshotAt);
             if (epochs.put(couponId(sample), epoch) != null) {
-                throw new PromQueryException("grouped 캠페인 시각 표본이 중복되었습니다.");
+                throw new PromQueryException("grouped 쿠폰 회차 시각 표본이 중복되었습니다.");
             }
         }
         return Map.copyOf(epochs);
     }
 
-    /** range 시계열을 캠페인·stage별 점 목록으로 바꿉니다. */
+    /** range 시계열을 쿠폰 회차·stage별 점 목록으로 바꿉니다. */
     private static Map<StageKey, List<PromRangePoint>> trendByStage(List<PromRangeSeries> series) {
         Map<StageKey, List<PromRangePoint>> trends = new HashMap<>();
         for (PromRangeSeries item : series) {
@@ -686,33 +686,33 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
 
     /** 대상 목록 전체를 같은 값 없는 상태의 O1 입력으로 만듭니다. */
     private static Map<Long, IssuanceFlowInput> missingFlows(
-            List<CampaignObservationTarget> targets, SourceStatus status
+            List<CouponRoundObservationTarget> targets, SourceStatus status
     ) {
         Map<Long, IssuanceFlowInput> inputs = new LinkedHashMap<>();
-        for (CampaignObservationTarget target : targets) {
+        for (CouponRoundObservationTarget target : targets) {
             inputs.put(target.couponId(), missingFlow(target, status));
         }
         return Map.copyOf(inputs);
     }
 
-    /** 캠페인 하나를 값 없는 O1 입력으로 만듭니다. */
-    private static IssuanceFlowInput missingFlow(CampaignObservationTarget target, SourceStatus status) {
+    /** 쿠폰 회차 하나를 값 없는 O1 입력으로 만듭니다. */
+    private static IssuanceFlowInput missingFlow(CouponRoundObservationTarget target, SourceStatus status) {
         if (status.carriesValue()) {
             throw new IllegalArgumentException("값 없는 O1 상태가 아닙니다: " + status);
         }
         SourceStatus combinedStatus = combineMissingFlowAndStockStatus(target, status);
         return new IssuanceFlowInput(
-                target.couponId(), target.campaignStatus(), null,
+                target.couponId(), target.couponRoundStatus(), null,
                 null, null, null, null, null, null, null,
                 null, null, List.of(), null, null, combinedStatus, null);
     }
 
     /** 값 없는 O1 metric과 OPEN 재고 상태 중 UNAVAILABLE, PENDING 순으로 더 나쁜 상태를 선택합니다. */
     private static SourceStatus combineMissingFlowAndStockStatus(
-            CampaignObservationTarget target,
+            CouponRoundObservationTarget target,
             SourceStatus flowStatus
     ) {
-        if (target.campaignStatus() != CouponRoundStatus.OPEN || target.stockStatus().carriesValue()) {
+        if (target.couponRoundStatus() != CouponRoundStatus.OPEN || target.stockStatus().carriesValue()) {
             return flowStatus;
         }
         if (flowStatus == SourceStatus.UNAVAILABLE || target.stockStatus() == SourceStatus.UNAVAILABLE) {
@@ -755,7 +755,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         types.put("ALREADY_ISSUED", AdminOverviewSnapshot.CustomerOutcomeType.ALREADY_ISSUED);
         types.put("STOCK_EXHAUSTED", AdminOverviewSnapshot.CustomerOutcomeType.STOCK_EXHAUSTED);
         types.put("NOT_OPENED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
-        types.put("CAMPAIGN_CLOSED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
+        types.put("COUPON_ROUND_CLOSED", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("GRADE_NOT_ELIGIBLE", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("INVALID_TRANSITION", AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE);
         types.put("NO_ENTRY_TOKEN", AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED);
@@ -778,7 +778,7 @@ public class PromOverviewObservationSource implements OverviewObservationSource 
         return Collections.unmodifiableMap(types);
     }
 
-    /** 캠페인과 stage의 grouped 결과 키입니다. */
+    /** 쿠폰 회차와 stage의 grouped 결과 키입니다. */
     private record StageKey(Long couponId, String stage) {
         /** 키 구성요소를 필수로 검증합니다. */
         private StageKey {

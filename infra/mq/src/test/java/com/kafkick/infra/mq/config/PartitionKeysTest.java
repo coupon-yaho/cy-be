@@ -17,12 +17,12 @@ class PartitionKeysTest {
     }
 
     /**
-     * 단일 캠페인 부하에서 회원이 다르면 키도 달라야 한다. 같은 값이 나오면 파티션이 몇 개든
+     * 단일 쿠폰 회차 부하에서 회원이 다르면 키도 달라야 한다. 같은 값이 나오면 파티션이 몇 개든
      * 한 곳으로 몰린다 — {@code couponId} 를 키로 쓴 것과 같은 결과다.
      */
     @Test
-    @DisplayName("같은 캠페인의 서로 다른 회원은 서로 다른 키를 받는다")
-    void distinctMembersOfOneCampaignGetDistinctKeys() {
+    @DisplayName("같은 쿠폰 회차의 서로 다른 회원은 서로 다른 키를 받는다")
+    void distinctMembersOfOneCouponRoundGetDistinctKeys() {
         assertThat(PartitionKeys.forAttempt(1L)).isNotEqualTo(PartitionKeys.forAttempt(2L));
     }
 

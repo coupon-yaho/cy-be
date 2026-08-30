@@ -5,7 +5,7 @@ import java.util.List;
 
 import com.kafkick.core.admin.MetricsWindow;
 
-/** Prometheus 같은 외부 관측계에서 캠페인별 초당 발급률 표본을 읽습니다. */
+/** Prometheus 같은 외부 관측계에서 쿠폰 회차별 초당 발급률 표본을 읽습니다. */
 public interface CouponIssuanceRateReader {
 
     /**

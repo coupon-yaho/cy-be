@@ -14,7 +14,7 @@ import com.kafkick.core.support.exception.CommonErrorCode;
 /** 관리자 발급 이력 조회 조건의 외부 입력 오류 계약을 검증합니다. */
 class AdminIssuanceHistoryQueryTest {
 
-    /** 잘못된 캠페인 식별자가 공통 400 오류로 변환되는지 검증합니다. */
+    /** 잘못된 쿠폰 회차 식별자가 공통 400 오류로 변환되는지 검증합니다. */
     @Test
     @DisplayName("0 이하 couponId를 COMMON-001로 거부한다")
     void rejectsNonPositiveCouponIdAsInvalidInput() {

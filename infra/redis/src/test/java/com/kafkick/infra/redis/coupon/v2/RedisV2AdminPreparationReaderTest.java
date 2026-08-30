@@ -69,7 +69,7 @@ class RedisV2AdminPreparationReaderTest {
     /** 한 회차의 파손 응답이 이웃 회차의 정상 판정까지 지우지 않는지 검증합니다. */
     @Test
     @DisplayName("형식이 잘못된 회차 응답만 UNAVAILABLE로 격리한다")
-    void isolatesMalformedCampaignResponse() {
+    void isolatesMalformedCouponRoundResponse() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         when(redisTemplate.executePipelined(any(SessionCallback.class)))
                 .thenReturn(List.of(List.of(1L, 1L, 1L), List.of(1L, 2L, 0L)));

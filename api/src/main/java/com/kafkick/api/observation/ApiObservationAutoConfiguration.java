@@ -6,10 +6,10 @@ import javax.sql.DataSource;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
 import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
-import com.kafkick.api.observation.issuance.CampaignMeterProperties;
-import com.kafkick.api.observation.issuance.CampaignMeterRegistry;
+import com.kafkick.api.observation.issuance.CouponRoundMeterProperties;
+import com.kafkick.api.observation.issuance.CouponRoundMeterRegistry;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
-import com.kafkick.api.observation.issuance.MeterCampaignLifecycleRecorder;
+import com.kafkick.api.observation.issuance.MeterCouponRoundLifecycleRecorder;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
@@ -25,8 +25,8 @@ import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
-import com.kafkick.core.observation.ClosedCampaignRecoverySource;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCouponRoundRecoverySource;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -65,7 +65,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @EnableConfigurationProperties({
         ConsistencySeverityProperties.class,
         ObservationIssuanceProperties.class,
-        CampaignMeterProperties.class
+        CouponRoundMeterProperties.class
 })
 public class ApiObservationAutoConfiguration {
 
@@ -159,38 +159,38 @@ public class ApiObservationAutoConfiguration {
     }
 
     /**
-     * MeterRegistry 가 있는 프로세스에 JVM 내 캠페인 미터 기록기를 등록합니다.
+     * MeterRegistry 가 있는 프로세스에 JVM 내 쿠폰 회차 미터 기록기를 등록합니다.
      *
      * <p>조건은 {@link MeterRegistry} 하나뿐입니다. 다른 {@link EventRecorder} 가 있다고 해서
      * 물러서지 않습니다 — 이 기록기는 대체재가 아니라 병렬 sink 이고, 아래 fan-out 이 모두를
      * 함께 호출합니다. 예전처럼 "다른 EventRecorder 가 있으면 등록하지 않는다" 로 두면 사용자가
-     * 자기 기록기를 하나 얹는 순간 캠페인 미터가 통째로, <b>로그 한 줄 없이</b> 사라집니다.
+     * 자기 기록기를 하나 얹는 순간 쿠폰 회차 미터가 통째로, <b>로그 한 줄 없이</b> 사라집니다.
      *
      * @param issuanceProperties 기록 실패 로그의 유량 제한 간격
-     * @return 캠페인별 발급 미터 기록기
+     * @return 쿠폰 회차별 발급 미터 기록기
      */
     @Bean(name = "meterEventRecorder")
     @ConditionalOnBean(MeterRegistry.class)
     @ConditionalOnMissingBean(MeterEventRecorder.class)
     public MeterEventRecorder meterEventRecorder(
             ObservationIssuanceProperties issuanceProperties,
-            CampaignMeterRegistry campaignMeterRegistry
+            CouponRoundMeterRegistry couponRoundMeterRegistry
     ) {
-        return new MeterEventRecorder(campaignMeterRegistry,
+        return new MeterEventRecorder(couponRoundMeterRegistry,
                 issuanceProperties.resolvedAttemptFailureLogInterval());
     }
 
     @Bean(destroyMethod = "close")
     @ConditionalOnBean(MeterRegistry.class)
-    @ConditionalOnMissingBean(CampaignMeterRegistry.class)
-    public CampaignMeterRegistry campaignMeterRegistry(
+    @ConditionalOnMissingBean(CouponRoundMeterRegistry.class)
+    public CouponRoundMeterRegistry couponRoundMeterRegistry(
             MeterRegistry meterRegistry,
-            CampaignMeterProperties campaignMeterProperties,
+            CouponRoundMeterProperties couponRoundMeterProperties,
             ObservationIssuanceProperties issuanceProperties
     ) {
-        return new CampaignMeterRegistry(
+        return new CouponRoundMeterRegistry(
                 meterRegistry,
-                campaignMeterProperties,
+                couponRoundMeterProperties,
                 issuanceProperties.resolvedAttemptFailureLogInterval());
     }
 
@@ -236,34 +236,34 @@ public class ApiObservationAutoConfiguration {
     }
 
     /**
-     * 캠페인 수명 통지를 받을 기본 포트를 등록합니다.
+     * 쿠폰 회차 수명 통지를 받을 기본 포트를 등록합니다.
      *
      * <p>실구현(OBS-26)이 들어오기 전에도 호출부를 붙일 수 있게 무동작 구현을 기본값으로 둡니다.
      *
      * @return 통지를 버리는 기본 수명 기록 포트
      */
     @Bean
-    @ConditionalOnMissingBean(CampaignLifecycleRecorder.class)
-    public CampaignLifecycleRecorder campaignLifecycleRecorder(
-            ObjectProvider<CampaignMeterRegistry> campaignMeterRegistry
+    @ConditionalOnMissingBean(CouponRoundLifecycleRecorder.class)
+    public CouponRoundLifecycleRecorder couponRoundLifecycleRecorder(
+            ObjectProvider<CouponRoundMeterRegistry> couponRoundMeterRegistry
     ) {
-        CampaignMeterRegistry registry = campaignMeterRegistry.getIfAvailable();
+        CouponRoundMeterRegistry registry = couponRoundMeterRegistry.getIfAvailable();
         if (registry != null) {
-            return new MeterCampaignLifecycleRecorder(registry);
+            return new MeterCouponRoundLifecycleRecorder(registry);
         }
-        log.warn("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
-        return new NoOpCampaignLifecycleRecorder();
+        log.warn("CouponRoundLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+        return new NoOpCouponRoundLifecycleRecorder();
     }
 
     @Bean
-    @ConditionalOnBean(ClosedCampaignRecoverySource.class)
-    @ConditionalOnMissingBean(CampaignLifecycleStartupRecovery.class)
-    public CampaignLifecycleStartupRecovery campaignLifecycleStartupRecovery(
-            ClosedCampaignRecoverySource source,
-            CampaignLifecycleRecorder recorder,
+    @ConditionalOnBean(ClosedCouponRoundRecoverySource.class)
+    @ConditionalOnMissingBean(CouponRoundLifecycleStartupRecovery.class)
+    public CouponRoundLifecycleStartupRecovery couponRoundLifecycleStartupRecovery(
+            ClosedCouponRoundRecoverySource source,
+            CouponRoundLifecycleRecorder recorder,
             TimeProvider timeProvider
     ) {
-        return new CampaignLifecycleStartupRecovery(
+        return new CouponRoundLifecycleStartupRecovery(
                 source,
                 recorder,
                 timeProvider

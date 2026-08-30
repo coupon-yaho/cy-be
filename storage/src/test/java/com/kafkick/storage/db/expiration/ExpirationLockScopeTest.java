@@ -132,10 +132,15 @@ class ExpirationLockScopeTest {
 
 
     /**
-     * <b>잡의 청크 한 번을 그대로 밟는다</b> — 후보 → 연속부 → 재고 잠금 → 만료.
+     * <b>잡의 청크 한 번을 그대로 밟는다</b> — 후보 → 연속부 → 만료 → 재고 잠금.
      *
-     * <p>이 클래스가 재는 것이 <b>락 범위</b>라 순서를 흉내내면 의미가 없다. 재고 잠금이
-     * 첫 쓰기 락인 것까지 포함해 운영과 같은 문장을 같은 차례로 돌린다.
+     * <p>이 클래스가 재는 것이 <b>락 범위</b>라 순서를 흉내내면 의미가 없다. 운영과 같은
+     * 문장을 같은 차례로 돌린다 — 재고 잠금이 <b>마지막</b>인 것까지 포함해서다.
+     *
+     * <p><b>이 순서가 2026-08-30 에 뒤집혔다.</b> 발급·취소·사용취소 셋이 재고를 마지막에
+     * 잡도록 옮겨졌고(CY-750), 만료만 먼저 잡으면 그 셋과 사이에 1213 이 난다
+     * ({@code docs/12} §11.1). 이 헬퍼가 옛 순서를 유지하면 <b>이 클래스와
+     * {@code ExpireJobLockOrderTest} 가 서로 반대를 단언하면서 둘 다 초록</b>이 된다.
      */
     private int expireChunk(long afterId, int limit, List<Long> blocked) {
         ExpireChunk chunk = ExpireChunk.from(
@@ -145,11 +150,15 @@ class ExpirationLockScopeTest {
         if (chunk.isEmpty()) {
             return 0;
         }
-        assertThat(adapter.lockStock(chunk.couponId()))
-                .as("재고 행이 없으면 락이 안 걸린 채로 뒤 단언이 돈다 — "
-                        + "이 클래스가 재는 것이 락 수라 그때는 조용히 통과한다")
-                .isTrue();
-        return adapter.expireBatch(AS_OF, WROTE_AT, afterId, chunk.lastId(), chunk.couponId());
+        int expired = adapter.expireBatch(AS_OF, WROTE_AT, afterId, chunk.lastId(),
+                chunk.couponId());
+        if (expired > 0) {
+            assertThat(adapter.lockStock(chunk.couponId()))
+                    .as("재고 행이 없으면 락이 안 걸린 채로 뒤 단언이 돈다 — "
+                            + "이 클래스가 재는 것이 락 수라 그때는 조용히 통과한다")
+                    .isTrue();
+        }
+        return expired;
     }
 
     /** 기한을 직접 세운다. 시드는 발급 시각만 받아서 만료 시각을 따로 정할 수단이 없다. */
@@ -574,15 +583,19 @@ class ExpirationLockScopeTest {
      * 표는 <b>이 테스트가 재는 값</b>이고, 예전에는 그 표를 뒷받침하는 것이 아무것도 없었다.
      *
      * <p><b>발급 경로가 이미 쓰고 있는 순서가 여기 박힌다.</b>
-     * {@code coupon_stocks} → {@code issuances} → {@code issuance_histories}.
+     * {@code issuances} → {@code issuance_histories} → {@code coupon_stocks}.
      * {@code CouponIssueService}·{@code CouponCancelService}·{@code CouponCancelUseService} 가
-     * 전부 재고 행을 {@code FOR UPDATE} 로 먼저 잡는다 — 재고 판정이 곧 선착순 판정이라
-     * 그 행이 직렬화 지점이다.
+     * 전부 재고를 <b>마지막</b>에 건드린다(CY-750) — 선착순 판정은 조건부 원자 UPDATE
+     * ({@code occupyOne} · {@code release})가 그 자리에서 하므로, 앞에서 따로 잠글 이유가 없다.
      *
-     * <p><b>한때 만료만 반대였고, 그 대가가 1213 이었다.</b> MySQL 8.4 · READ COMMITTED ·
-     * 두 세션으로 재현했다: 만료가 발급건을 잡은 채 재고를 기다리고 취소가 그 반대로 기다리자
-     * <b>6/6 데드락</b>. 희생되는 쪽은 언제나 <b>취소</b>였다 — 그 시점까지 읽기만 해서 undo 가
-     * 비어 있고 InnoDB 는 한 일이 적은 쪽을 죽인다. 사용자 요청이 죽는데 배치 로그는 깨끗하다.
+     * <p><b>이 방향이 2026-08-30 에 뒤집혔다.</b> 그전에는 재고가 먼저였고, 그때 근거는
+     * <i>"발급 경로가 이미 그렇게 하고 있으니 바꿀 수 있는 쪽은 만료"</i> 였다
+     * ({@code docs/12} §11). CY-750 이 그 전제를 바꿨고, §11.1 이 양방향을 다시 쟀다.
+     *
+     * <p><b>어느 방향이든 하나만 반대면 1213 이다.</b> MySQL 8.4 · READ COMMITTED · 두
+     * 세션으로 두 번 재현했다 — 한 번은 만료만 반대였을 때, 한 번은 사용자 경로만 반대였을 때.
+     * 희생되는 쪽은 언제나 <b>취소</b>다 — 그 시점까지 읽기만 해서 undo 가 비어 있고 InnoDB 는
+     * 한 일이 적은 쪽을 죽인다. 사용자 요청이 죽는데 배치 로그는 깨끗하다.
      *
      * <p><b>정확한 락 개수는 못 박지 않는다.</b> 실행계획에 따라 남는 S 락이 뜨고 안 떠서
      * 단독 실행과 전체 스위트에서 값이 갈린다. 그래서 지키는 것은 <b>테이블 이름과 그 차례</b>,
@@ -601,7 +614,7 @@ class ExpirationLockScopeTest {
      * 호출 순서({@code ExpireJobLockOrderTest})가 맡는다 — 둘이 합쳐야 표 전체가 선다.
      */
     @Test
-    @DisplayName("문장마다 잠그는 테이블이 계약대로다 — stocks → issuances → histories")
+    @DisplayName("문장마다 잠그는 테이블이 계약대로다 — issuances → histories → stocks")
     void eachStatementLocksTheTablesItsContractSays() {
         int toExpire = 5;
         int beyond = 300;
@@ -616,26 +629,28 @@ class ExpirationLockScopeTest {
                     .as("후보 조회는 락을 안 잡는다 — 이것이 성립해야 이 순서가 성립한다")
                     .isEmpty();
 
-            assertThat(adapter.lockStock(chunk.couponId())).isTrue();
-            assertThat(lockedTables())
-                    .as("**재고가 먼저다.** 발급·취소가 잡는 그 행을 같은 차례에 잡는다")
-                    .containsOnlyKeys("coupon_stocks");
-
             assertThat(adapter.expireBatch(AS_OF, WROTE_AT, 0L, chunk.lastId(), chunk.couponId()))
                     .isEqualTo(toExpire);
-            assertThat(lockedTables().keySet())
-                    .as("그 다음이 원본이다")
-                    .containsExactlyInAnyOrder("coupon_stocks", "issuances");
+            assertThat(lockedTables())
+                    .as("**원본이 먼저다.** 발급·취소가 마지막에 잡는 재고 행을 우리도 "
+                            + "마지막에 잡는다 — 그래야 순환이 안 생긴다(docs/12 §11.1)")
+                    .containsOnlyKeys("issuances");
 
             int afterExpire = lockedTables().get("issuances");
             adapter.appendExpireHistories(AS_OF, WROTE_AT, 0L, chunk.lastId(), chunk.couponId());
-            assertThat(lockedTables().keySet())
+            assertThat(lockedTables())
                     .as("이력은 자기 테이블에만 넣는다. (넣은 행 자체의 락은 암묵적이라 "
                             + "data_locks 에 안 뜬다 — 충돌이 나야 실체화된다)")
-                    .containsExactlyInAnyOrder("coupon_stocks", "issuances");
+                    .containsOnlyKeys("issuances");
             assertThat(lockedTables().get("issuances"))
                     .as("이력 INSERT 가 원본으로 번지지 않는다")
                     .isEqualTo(afterExpire);
+
+            assertThat(adapter.lockStock(chunk.couponId())).isTrue();
+            assertThat(lockedTables().keySet())
+                    .as("**재고는 여기서 처음 나타난다.** 이 자리보다 앞이면 발급·취소와 "
+                            + "순서가 역전된다")
+                    .containsExactlyInAnyOrder("coupon_stocks", "issuances");
 
             adapter.releaseStock(chunk.couponId(), toExpire, WROTE_AT);
             assertThat(lockedTables().get("issuances"))

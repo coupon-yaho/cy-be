@@ -10,7 +10,7 @@ import java.util.Objects;
  * 생성합니다. 따라서 Service가 HTTP 응답 DTO에 의존하거나 DTO가 완전성 정책을 다시 계산하지
  * 않습니다.</p>
  *
- * @param snapshot 캠페인·관측 원천별 값과 상태를 조립한 기술 중립 Snapshot
+ * @param snapshot 쿠폰 회차·관측 원천별 값과 상태를 조립한 기술 중립 Snapshot
  * @param overallStatus 적용 원천 그룹의 상태를 종합한 전체 데이터 완전성
  */
 public record AdminOverviewResult(

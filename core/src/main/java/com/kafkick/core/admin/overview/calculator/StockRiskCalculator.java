@@ -23,15 +23,15 @@ public class StockRiskCalculator {
     public StockRiskCalculator() { }
 
     /**
-     * 캠페인별 V1 잔량·비율·ETA와 같은 모집단의 전체 소진 위험을 계산합니다.
+     * 쿠폰 회차별 V1 잔량·비율·ETA와 같은 모집단의 전체 소진 위험을 계산합니다.
      *
-     * <p>발급률 0, STALE, WARMING_UP, 값 없음은 ETA null이며 재고 수치는 보존합니다. 적용 캠페인
+     * <p>발급률 0, STALE, WARMING_UP, 값 없음은 ETA null이며 재고 수치는 보존합니다. 적용 쿠폰 회차
      * 하나라도 재고 또는 O1이 미수집이면 전역 위험은 부분 합계가 아닌 UNAVAILABLE입니다.
      * 소진 임박만으로는 조치 후보를 만들지 않습니다.</p>
      *
      * @param policy 소진 임박 기준 시간
      * @param inputs V1 수량과 couponId별 O1 관측값
-     * @return 캠페인별 O4와 전체 소진 위험 관측값
+     * @return 쿠폰 회차별 O4와 전체 소진 위험 관측값
      */
     public StockRiskCalculation calculate(OverviewCalculationPolicy policy, List<StockInput> inputs) {
         Objects.requireNonNull(policy, "policy");
@@ -50,7 +50,7 @@ public class StockRiskCalculator {
             }
             SourceStatus issuanceStatus = input.issuanceFlow() == null
                     ? SourceStatus.UNAVAILABLE : input.issuanceFlow().status();
-            // 예약·종료처럼 재고 위험이 적용되지 않는 캠페인은 전역 모집단에서도 제외합니다.
+            // 예약·종료처럼 재고 위험이 적용되지 않는 쿠폰 회차는 전역 모집단에서도 제외합니다.
             if (input.stockStatus() == SourceStatus.N_A || issuanceStatus == SourceStatus.N_A) {
                 continue;
             }
@@ -65,7 +65,7 @@ public class StockRiskCalculator {
             observedAt = observedAt == null || rowObservedAt.isBefore(observedAt)
                     ? rowObservedAt : observedAt;
             Duration eta = forecast.value().estimatedDepletion();
-            // 계산 가능한 ETA가 임계시간 이내인 캠페인만 상단 소진 위험에 집계합니다.
+            // 계산 가능한 ETA가 임계시간 이내인 쿠폰 회차만 상단 소진 위험에 집계합니다.
             if (eta != null && eta.compareTo(policy.stockDepletionThreshold()) <= 0) {
                 riskCount++;
                 if (nearest == null || eta.compareTo(nearest) < 0) {
@@ -147,7 +147,7 @@ public class StockRiskCalculator {
     /**
      * O4 재고 입력입니다.
      *
-     * @param couponId 캠페인 식별자
+     * @param couponId 쿠폰 회차 식별자
      * @param engineVersion 재고 엔진; 이번 계산은 V1만 수량 계산함
      * @param totalQuantity V1 전체 발급 가능 수량
      * @param activeCount V1에서 이미 활성화·발급된 수량
@@ -173,7 +173,7 @@ public class StockRiskCalculator {
      * O4 계산 결과입니다.
      *
      * @param stockForecasts couponId별 재고 관측값
-     * @param stockRisk 모든 적용 캠페인이 수집된 경우에만 계산한 전체 위험
+     * @param stockRisk 모든 적용 쿠폰 회차가 수집된 경우에만 계산한 전체 위험
      */
     public record StockRiskCalculation(
             Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast>> stockForecasts,

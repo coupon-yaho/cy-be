@@ -54,29 +54,31 @@ import java.util.List;
  * {@code EXPIRE: ISSUED → EXPIRED} 하나뿐</b>이라는 사실이다.
  * 그 전이표에 두 번째 길이 생기는 날 이 표식 방식을 다시 봐야 한다.
  *
- * <h2>락 순서 — {@code coupon_stocks} → {@code issuances} → {@code issuance_histories}</h2>
+ * <h2>락 순서 — {@code issuances} → {@code issuance_histories} → {@code coupon_stocks}</h2>
  *
- * <p>계약을 지는 것은 <b>쓰는 넷</b>이다 — {@link #lockStock} → {@link #expireBatch}
- * → {@link #appendExpireHistories} → {@link #releaseStock}.
+ * <p>계약을 지는 것은 <b>쓰는 넷</b>이다 — {@link #expireBatch}
+ * → {@link #appendExpireHistories} → {@link #lockStock} → {@link #releaseStock}.
  *
  * <p><b>이 순서는 우리가 고른 것이 아니라 시스템에 이미 있던 것이다.</b>
- * <b>재고를 건드리는 경로는 전부 {@code coupon_stocks} 를 먼저 잠근다.</b>
+ * <b>재고를 건드리는 경로는 전부 {@code coupon_stocks} 를 마지막에 건드린다.</b>
  *
  * <table border="1">
  *   <caption>사용자 경로가 재고 행을 언제 잠그나</caption>
- *   <tr><td>{@code CouponIssueService}</td><td>항상 — 첫 문장</td></tr>
- *   <tr><td>{@code CouponCancelService}</td><td>항상 — 첫 쓰기 전</td></tr>
+ *   <tr><td>{@code CouponIssueService}</td><td>마지막 — 조건부 {@code occupyOne}</td></tr>
+ *   <tr><td>{@code CouponCancelService}</td><td>마지막 — 조건부 {@code release}</td></tr>
  *   <tr><td>{@code CouponCancelUseService}</td>
  *       <td><b>{@code EXPIRED} 로 갈 때만.</b> 보통 경로({@code USED → ISSUED})는 재고를
  *           아예 안 건드려 이 순서 밖이다 — 그리고 <b>안 기다리므로 순환도 안 만든다</b></td></tr>
  * </table>
  *
- * <p>발급이 그렇게 하는 데는 이유가 있다 — <b>재고 판정이 곧 선착순 판정</b>이라 그 행이
- * 직렬화 지점이다. 바꿀 수 있는 쪽은 만료다.
+ * <p><b>이 방향이 2026-08-30 에 뒤집혔다.</b> 그전에는 발급이 재고를 먼저 잠갔고, 그때
+ * 근거는 <i>"재고 판정이 곧 선착순 판정이라 그 행이 직렬화 지점"</i> 이었다. CY-750 이
+ * 선착순 판정을 <b>조건부 원자 UPDATE</b> 로 옮기면서 앞에서 따로 잠글 이유가 사라졌고,
+ * 그러면 바꿀 수 있는 쪽이 만료가 된다({@code docs/12} §11.1).
  *
- * <p><b>반대로 잡으면 데드락이 난다. 재현했다</b> — MySQL 8.4 · READ COMMITTED · 두 세션.
- * 만료가 {@code issuances} 를 잡은 채 재고를 기다리고, 취소가 재고를 잡은 채 그 발급건을
- * 기다리자 오류 <b>1213</b> 이 났다. <b>6/6, 뜨는 순서와 무관.</b>
+ * <p><b>어느 방향이든 하나만 반대면 데드락이 난다. 두 번 다 재현했다</b> —
+ * MySQL 8.4 · READ COMMITTED · 두 세션. 한쪽이 {@code issuances} 를 잡은 채 재고를 기다리고
+ * 다른 쪽이 그 반대로 기다리면 오류 <b>1213</b> 이다. <b>6/6, 뜨는 순서와 무관.</b>
  *
  * <p><b>희생되는 쪽은 언제나 취소였다.</b> 취소는 그 시점까지 {@code FOR UPDATE} 읽기만 해서
  * undo 가 비어 있고, InnoDB 는 <b>한 일이 적은 쪽</b>을 죽인다. 그래서 운영에서 보이는 모습이
@@ -193,10 +195,14 @@ public interface ExpirationRepository {
             List<Long> blockedCoupons);
 
     /**
-     * 회차의 재고 행을 {@code SELECT … FOR UPDATE} 로 잠근다. <b>청크의 첫 쓰기 락이다.</b>
+     * 회차의 재고 행을 {@code SELECT … FOR UPDATE} 로 잠근다. <b>청크의 마지막 쓰기 락이다</b>
+     * — 발급·취소·사용취소가 재고를 마지막에 건드리므로 만료도 그 자리에서 잡는다(CY-750).
+     * 잠그는 이유는 순서가 아니라 <b>진단</b>이다: {@link #releaseStock} 이 0 을 돌려줬을 때
+     * <i>"행이 없다"</i> 와 <i>"재고가 모자란다"</i> 를 가른다.
      *
-     * <p>발급·취소·사용취소가 전부 이 행을 먼저 잠근다. 만료도 같은 자리에서 시작해야
-     * 순환이 안 생긴다 — 클래스 주석의 1213 재현이 그 이유다.
+     * <p><b>이 문장이 {@link #releaseStock} 바로 앞이어야 한다.</b> 앞으로 옮기면 재고 행을
+     * 청크 내내 쥐게 되고, 재고를 마지막에 건드리는 사용자 경로와 순서가 역전돼 순환이
+     * 생긴다 — 클래스 주석의 1213 재현이 그 이유다.
      *
      * <p><b>잠그기만 하고 아무것도 안 읽는다.</b> 뺄 수 있는지는 {@link #releaseStock} 의
      * {@code active_count >= n} 조건이 판단한다. 여기서 값을 읽어 자바에서 비교하면
@@ -218,7 +224,8 @@ public interface ExpirationRepository {
      * <p><b>0 이 종료 신호가 아니다.</b> 그 자리는 {@link #nextCandidates} 가 진다.
      * 여기서 0 은 <i>"그 구간이 전부 사용·취소됐다"</i> 는 뜻이고, 그때도 진도는 나간다.
      *
-     * @param couponId {@link ExpireChunk#couponId}. 이 회차의 재고 행을 이미 잠근 상태여야 한다
+     * @param couponId {@link ExpireChunk#couponId}. 이 회차의 만료 대상만 매치한다 —
+     *                 재고 락은 이 문장 <b>뒤</b>에 잡는다
      * @return 실제로 넘어간 건수
      */
     int expireBatch(LocalDateTime asOf, LocalDateTime committedAt, long afterId, long lastId,

@@ -3,6 +3,7 @@ package com.kafkick.api.observation;
 import java.io.IOException;
 import java.lang.reflect.RecordComponent;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -11,6 +12,8 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
+
+import com.kafkick.api.observation.issuance.CouponRoundMeterProperties;
 
 import static com.kafkick.api.observation.ConfigContractFixture.defaultOf;
 import static com.kafkick.api.observation.ConfigContractFixture.loadYaml;
@@ -31,7 +34,7 @@ class ObservationIssuancePropertiesBindingTest {
 
     private static final String PREFIX = "observation.issuance";
     /** 이 절 아래의 하위 그룹. 자기 {@code @ConfigurationProperties} 를 갖는다. */
-    private static final String NESTED_GROUP = "campaign";
+    private static final String NESTED_GROUP = "coupon-round";
 
     /**
      * yml 에 적힌 키가 전부 도달하는지 본다 — 반대 방향이 아니다.
@@ -91,6 +94,23 @@ class ObservationIssuancePropertiesBindingTest {
                 .isEqualTo(ObservationIssuanceProperties.DEFAULT_RETRY_AFTER_SECONDS);
         assertThat(bound.gateNotReadyRetryAfterSeconds())
                 .isEqualTo(ObservationIssuanceProperties.DEFAULT_RETRY_AFTER_SECONDS);
+    }
+
+    @Test
+    void couponRoundMeterKeysBindThroughTheRenamedPrefix() {
+        String prefix = PREFIX + ".coupon-round";
+        CouponRoundMeterProperties bound = new Binder(new MapConfigurationPropertySource(Map.of(
+                prefix + ".max-active-coupon-rounds", 7,
+                prefix + ".retire-grace-period", "2m",
+                prefix + ".tombstone-retention", "3h",
+                prefix + ".tombstone-max-entries", 11)))
+                .bind(prefix, CouponRoundMeterProperties.class)
+                .get();
+
+        assertThat(bound.resolvedMaxActiveCouponRounds()).isEqualTo(7);
+        assertThat(bound.resolvedRetireGracePeriod()).isEqualTo(Duration.ofMinutes(2));
+        assertThat(bound.resolvedTombstoneRetention()).isEqualTo(Duration.ofHours(3));
+        assertThat(bound.resolvedTombstoneMaxEntries()).isEqualTo(11);
     }
 
     private static List<String> componentNames() {

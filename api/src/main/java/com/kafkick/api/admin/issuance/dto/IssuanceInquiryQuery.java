@@ -19,7 +19,7 @@ import com.kafkick.core.observation.ReasonCode;
  * {@code limit}은 지정하는 경우 1~200으로 제한됩니다.</p>
  *
  * @param memberId 필수 회원 식별자
- * @param couponId 선택 쿠폰 캠페인 회차 필터
+ * @param couponId 선택 쿠폰 회차 필터
  * @param httpStatus 선택 HTTP 상태 필터
  * @param reasonCode 선택 실패·정책 결과 사유 필터
  * @param beforeCursor 현재 페이지보다 오래된 결과를 요청하는 불투명 cursor

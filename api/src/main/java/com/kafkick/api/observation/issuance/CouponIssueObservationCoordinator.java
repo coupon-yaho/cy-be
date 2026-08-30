@@ -247,7 +247,7 @@ public final class CouponIssueObservationCoordinator {
      */
     private BusinessException rejection(ClaimOutcome outcome) {
         return switch (outcome) {
-            case CLOSED -> new BusinessException(CouponIssueErrorCode.CAMPAIGN_CLOSED);
+            case CLOSED -> new BusinessException(CouponIssueErrorCode.COUPON_ROUND_CLOSED);
             case NOT_OPEN -> new BusinessException(CouponIssueErrorCode.NOT_OPENED);
             case GRADE_NOT_ALLOWED ->
                     new BusinessException(CouponIssueErrorCode.GRADE_NOT_ELIGIBLE);
