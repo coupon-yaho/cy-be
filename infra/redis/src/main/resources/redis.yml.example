@@ -14,3 +14,7 @@ runtime-config:
     engine-version: ${RUNTIME_CONFIG_BOOTSTRAP_ENGINE_VERSION:V1}
     release-stage: ${RUNTIME_CONFIG_BOOTSTRAP_RELEASE_STAGE:V1}
     queue-mode: ${RUNTIME_CONFIG_BOOTSTRAP_QUEUE_MODE:OFF}
+
+# 외부 게이트웨이 공유 계약은 설정으로 이름을 바꾸지 않는다.
+# API는 capacity:coupon-svc:v1, coupons:active, coupon:policy, stock:{couponId}만 쓰고,
+# 게이트웨이가 소유하는 gw:*, queue:*, admitted:*에는 쓰지 않는다.

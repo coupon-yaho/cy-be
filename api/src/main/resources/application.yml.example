@@ -193,3 +193,15 @@ observation:
       max-points: ${PROMETHEUS_SERIES_MAX_POINTS:300}
   datasource:
     enabled: true
+
+# 외부 대기열 게이트웨이에 Redis 상태를 공급하는 API 전용 스케줄입니다. 기본은 꺼져 있어
+# 게이트웨이와 함께 배포하는 환경에서만 명시적으로 켭니다.
+queue:
+  gateway:
+    publisher:
+      enabled: ${QUEUE_GATEWAY_PUBLISHER_ENABLED:false}
+      capacity-interval: ${QUEUE_GATEWAY_CAPACITY_INTERVAL:1s}
+      coupon-round-interval: ${QUEUE_GATEWAY_COUPON_ROUND_INTERVAL:5s}
+      # 실제 순간 여유량이 아니라 이 API 인스턴스에 설정한 안전 처리 상한입니다.
+      credits-per-second: ${QUEUE_GATEWAY_CREDITS_PER_SECOND:0}
+      instance-id: ${QUEUE_GATEWAY_INSTANCE_ID:${HOSTNAME:api-local}}

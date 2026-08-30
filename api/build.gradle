@@ -121,6 +121,8 @@ tasks.named('test') {
             // DeployedConfigContractTest 가 compose 의 포트 변수 이름이 여기 정의돼 있는지
             // 본다. 선언하지 않으면 이 파일에서 변수를 지워도 test 가 UP-TO-DATE 로 건너뛴다.
             rootProject.file('.env.example'),
+            // 외부 게이트웨이 공급 설정은 api example 과 .env.example 양쪽의 이름이 같아야 한다.
+            file('src/main/resources/application.yml.example'),
             // 컨테이너에 마운트되는 배포 설정. DeployedConfigContractTest 가 읽는다.
             rootProject.file('application.yml.example'),
             rootProject.file('batch/src/main/resources/management.yml.example'),
