@@ -3,7 +3,7 @@
 #
 # 왜 필요한가
 #   cy-seed 의 ddl/ 은 BATCH_* 를 **일부러** 안 만든다 — 잡 실행 이력은 도메인이 아니고
-#   그 DDL 의 주인은 cy-be 의 V11 이다(seed-ddl/README.md 가 그 경계를 적는다).
+#   그 DDL 의 주인은 이 저장소의 V11 이다(seed-ddl/README.md 가 그 경계를 적는다).
 #   그래서 재시드는 스키마를 새로 만들면서 이 테이블들을 매번 지운다.
 #
 #   그 자체는 설계대로다. 문제는 **다시 붓는 것을 사람이 기억해야 한다**는 점이고,
@@ -11,7 +11,7 @@
 #   Table 'coupon_clean.BATCH_JOB_EXECUTION' doesn't exist 로 배치가 안 뜨고,
 #   관제 화면에서 그 데이터셋 카드가 통째로 사라진다.
 #
-#   SchemaPresenceGuard 는 이미 처방을 정확히 알려 준다(파일 이름까지). 부족한 것은
+#   SchemaPresenceGuard 는 이미 처방을 파일 이름까지 정확히 알려 준다. 부족한 것은
 #   진단이 아니라 **절차가 한 번에 끝나지 않는다**는 것이라, 그 절차를 여기 묶는다.
 #
 # 왜 cy-seed 가 아니라 여기인가
@@ -19,15 +19,9 @@
 #   막으려는 바로 그 상태다. 이 스크립트는 **이 저장소의 마이그레이션 파일을 그대로 읽는다** —
 #   사본을 안 만든다.
 #
-# 인덱스 둘을 함께 붓는 이유
-#   테이블만 부으면 가드의 셋째 축(인덱스)이 그 자리에서 다시 거절한다(CY-686).
-#
 # 쓰는 법
 #   scripts/pour-batch-meta.sh coupon_clean
-#   scripts/pour-batch-meta.sh coupon_clean coupon_corrupt coupon_bench
-#
-#   컨테이너 이름과 root 비밀번호는 환경에 맞게 넘긴다.
-#   MYSQL_CONTAINER=cy-mysql-1 scripts/pour-batch-meta.sh coupon_clean
+#   MYSQL_CONTAINER=cy-mysql-1 scripts/pour-batch-meta.sh coupon_clean coupon_corrupt
 set -euo pipefail
 
 CONTAINER="${MYSQL_CONTAINER:-cy-mysql-1}"
@@ -41,49 +35,103 @@ FILES=(
   "V2026082514__ix_batch_job_execution_history.sql"
 )
 
+# 가드가 실제로 이름으로 묻는 테이블(VerificationRuleJdbcAdapter.BATCH_META_TABLES).
+# "BATCH_ 로 시작하는 것이 아홉 개" 로 세면 안 된다 — 엉뚱한 BATCH_* 가 자리를 채워도
+# 통과한다. 가드는 이름을 묻지 개수를 안 센다.
+REQUIRED_TABLES=(
+  "BATCH_JOB_INSTANCE"
+  "BATCH_JOB_EXECUTION"
+  "BATCH_STEP_EXECUTION"
+  "BATCH_JOB_EXECUTION_PARAMS"
+)
+
+# 가드의 셋째 축(CRITICAL_INDEXES). 이름만이 아니라 **선두 컬럼**을 본다 —
+# 같은 이름의 다른 모양이 통과하면 되읽기는 여전히 전체를 훑는다(CY-686).
+REQUIRED_INDEXES=(
+  "BATCH_JOB_EXECUTION|IX_JOB_EXEC_STATUS_END|STATUS,END_TIME"
+  "BATCH_JOB_EXECUTION|IX_JOB_EXEC_CREATE_TIME|CREATE_TIME"
+)
+
 if [ $# -eq 0 ]; then
   echo "사용법: $0 <스키마> [스키마...]" >&2
-  echo "예:    $0 coupon_clean coupon_corrupt" >&2
   exit 2
 fi
 
-# root 비밀번호를 호스트 셸 변수로 꺼내지 않는다 — 컨테이너 안에서 읽어 그대로 쓴다.
-root_pw() {
-  docker exec "$CONTAINER" printenv MYSQL_ROOT_PASSWORD
+# **비밀번호를 호스트 셸로 안 꺼낸다.** $(...) 로 받아 -e MYSQL_PWD=<값> 으로 넘기면
+# 그 값이 호스트 docker 프로세스의 명령행에 실려 ps 로 보인다. 컨테이너 **안에서**
+# MYSQL_ROOT_PASSWORD 를 MYSQL_PWD 로 옮긴다.
+mysql_in() {
+  local schema="$1"; shift
+  docker exec -i "$CONTAINER" sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --default-character-set=utf8mb4 "$@"' \
+    _ "$schema" "$@"
+}
+
+has_table() {
+  local schema="$1" table="$2"
+  [ "$(mysql_in "$schema" -N -e \
+      "SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema=DATABASE() AND table_name='$table';" 2>/dev/null | tr -d ' \r')" = "1" ]
+}
+
+# 선두 컬럼이 기대와 같은지까지 본다. 뒤에 컬럼이 더 붙은 것은 그 질의를 그대로
+# 태우므로 통과시킨다 — SchemaPresenceGuard.satisfies 와 같은 규칙이다.
+index_prefix() {
+  local schema="$1" table="$2" index="$3" n="$4"
+  mysql_in "$schema" -N -e \
+    "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
+       FROM information_schema.statistics
+      WHERE table_schema=DATABASE() AND table_name='$table'
+        AND index_name='$index' AND is_visible='YES' AND seq_in_index <= $n;" 2>/dev/null | tr -d ' \r'
+}
+
+verify_schema() {
+  local schema="$1" t idx name cols got n
+  for t in "${REQUIRED_TABLES[@]}"; do
+    has_table "$schema" "$t" || { echo "    ✗ 테이블 없음: $t" >&2; return 1; }
+  done
+  for idx in "${REQUIRED_INDEXES[@]}"; do
+    t="${idx%%|*}"; name="$(echo "$idx" | cut -d'|' -f2)"; cols="${idx##*|}"
+    n=$(( $(echo "$cols" | tr ',' '\n' | wc -l) ))
+    got="$(index_prefix "$schema" "$t" "$name" "$n")"
+    [ "$got" = "$cols" ] || {
+      echo "    ✗ 인덱스가 다르다: $t.$name 기대=$cols 실제=${got:-없음}" >&2; return 1; }
+  done
+  return 0
 }
 
 for schema in "$@"; do
   echo "▶ $schema"
+
+  # **--force 를 안 쓴다.** 그것은 "이미 있음" 뿐 아니라 모든 SQL 오류 뒤에도 계속 달려서,
+  # 중간 실패가 뒤의 성공에 묻힌다. 대신 먼저 재 보고 이미 온전하면 건너뛴다 —
+  # 재시드 뒤 습관적으로 부르는 것이 목적이라 멱등이어야 하는데, 그 멱등을
+  # 오류 무시가 아니라 **사전 확인**으로 얻는다.
+  if verify_schema "$schema" 2>/dev/null; then
+    echo "  이미 온전하다 — 건너뛴다"
+    continue
+  fi
+
   for f in "${FILES[@]}"; do
     path="$MIGRATIONS_DIR/$f"
-    if [ ! -f "$path" ]; then
+    [ -f "$path" ] || {
       echo "  ✗ 마이그레이션이 없다: $path" >&2
-      echo "    파일 이름이 바뀌었으면 이 스크립트와 SchemaPresenceGuard.META_MIGRATIONS 를" >&2
+      echo "    이름이 바뀌었으면 이 스크립트와 SchemaPresenceGuard.META_MIGRATIONS 를" >&2
       echo "    함께 고쳐야 한다." >&2
+      exit 1; }
+    if ! mysql_in "$schema" < "$path"; then
+      echo "  ✗ $f 적용 실패 — 위 오류를 그대로 남긴다" >&2
       exit 1
     fi
-    # --force 로 "이미 있음" 은 넘긴다. 이 스크립트는 여러 번 돌려도 안전해야 한다 —
-    # 재시드 뒤에 습관적으로 부르는 것이 목적이라 멱등이 아니면 쓰기가 꺼려진다.
-    if ! docker exec -i -e MYSQL_PWD="$(root_pw)" "$CONTAINER" \
-        mysql -uroot --force --default-character-set=utf8mb4 "$schema" < "$path" 2>/tmp/pour-err.$$; then
-      echo "  ✗ $f 적용 실패" >&2
-      head -3 /tmp/pour-err.$$ >&2
-      rm -f /tmp/pour-err.$$
-      exit 1
-    fi
-    rm -f /tmp/pour-err.$$
     echo "  ✓ $f"
   done
 
-  # 부었다고 믿지 않고 센다. 가드가 보는 것과 같은 축이다.
-  n=$(docker exec -e MYSQL_PWD="$(root_pw)" "$CONTAINER" mysql -uroot -N -e \
-    "SELECT COUNT(*) FROM information_schema.tables
-      WHERE table_schema='$schema' AND table_name LIKE 'BATCH\\_%';" 2>/dev/null | tr -d ' ')
-  if [ "${n:-0}" -lt 9 ]; then
-    echo "  ✗ BATCH_* 가 ${n:-0}개다. 아홉 개여야 한다." >&2
+  # 부었다고 믿지 않는다. 가드가 보는 축 그대로 다시 잰다.
+  if ! verify_schema "$schema"; then
+    echo "  ✗ 부었는데도 가드 조건을 못 만족한다" >&2
     exit 1
   fi
-  echo "  BATCH_* ${n}개 확인"
+  echo "  가드 조건 충족 — 테이블 ${#REQUIRED_TABLES[@]} · 인덱스 ${#REQUIRED_INDEXES[@]}"
 done
 
 echo "완료. 배치를 재기동하면 SchemaPresenceGuard 가 통과한다."
