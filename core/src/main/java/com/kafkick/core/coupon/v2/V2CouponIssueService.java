@@ -49,7 +49,6 @@ public final class V2CouponIssueService {
      */
     private final AtomicLong lastCompensationLogAt =
             new AtomicLong(System.nanoTime() - COMPENSATION_LOG_INTERVAL_NANOS);
-    private final AtomicLong suppressedCompensationLogs = new AtomicLong();
 
     private final IssuanceGatePort gate;
     private final IssuanceRepository issuances;
@@ -320,23 +319,28 @@ public final class V2CouponIssueService {
     }
 
     /**
-     * 보상 실패를 <b>한 창에 한 줄만</b> 남긴다. 억제된 건수를 함께 실어, 로그만 보고
-     * 사고 규모를 과소평가하지 않게 한다.
+     * 보상 실패의 <b>원인</b>을 한 창에 한 줄만 남긴다.
      *
-     * <p>정확한 창 경계는 필요 없다 — 목적이 감사 로그가 아니라 원인 파악이라, 같은 장애
-     * 구간에서 cause 하나와 대략의 건수면 충분하다. 그래서 락 없이 CAS 한 번으로 끝낸다.
+     * <p><b>규모는 로그가 아니라 미터가 말한다.</b> 억제한 건수를 세어 다음 줄에 실으면,
+     * 장애가 한 창 안에 끝났을 때 그 수가 영영 안 나가고 <b>다음 장애의 첫 줄에 뒤늦게
+     * 섞인다</b> — 없는 것보다 나쁘다. 건수는
+     * {@code claim.leaked}·{@code compensation.no.claim}·{@code compensation.already.done}
+     * 셋이 빠짐없이 세고 {@code V2IssuanceClaimLeaked} 경보가 그 위에 걸린다. 여기 남기는
+     * 것은 <b>원인 한 줄</b>이고, 같은 장애면 cause 가 같아 한 줄이면 충분하다.
+     *
+     * <p>정확한 창 경계는 필요 없다 — 목적이 감사 로그가 아니라 원인 파악이다.
+     * 그래서 락 없이 CAS 한 번으로 끝낸다.
      */
     private void logCompensationFailure(CouponIssueCommand command, RuntimeException failure) {
         if (!claimLogSlot(System.nanoTime())) {
             return;
         }
-        long suppressed = suppressedCompensationLogs.getAndSet(0);
-        log.warn("v2 보상 CAS 실패. couponRoundId={}, memberId={}, cause={}, 직전 창에서 생략={}",
-                command.couponRoundId(), command.memberId(), failure.toString(), suppressed);
+        log.warn("v2 보상 CAS 실패. couponRoundId={}, memberId={}, cause={}",
+                command.couponRoundId(), command.memberId(), failure.toString());
     }
 
     /**
-     * 이 호출이 로그를 남길 차례인지. 아니면 생략 건수를 올린다.
+     * 이 호출이 로그를 남길 차례인지.
      *
      * <p>시각을 인자로 받는다 — 창 경계를 테스트가 시계 없이 확인할 수 있어야 한다.
      * 이 판정이 조용히 틀리면 로그가 아예 안 나가고, 안 나가는 것은 "사고가 없다" 와
@@ -344,12 +348,8 @@ public final class V2CouponIssueService {
      */
     boolean claimLogSlot(long now) {
         long previous = lastCompensationLogAt.get();
-        if (now - previous < COMPENSATION_LOG_INTERVAL_NANOS
-                || !lastCompensationLogAt.compareAndSet(previous, now)) {
-            suppressedCompensationLogs.incrementAndGet();
-            return false;
-        }
-        return true;
+        return now - previous >= COMPENSATION_LOG_INTERVAL_NANOS
+                && lastCompensationLogAt.compareAndSet(previous, now);
     }
 
     private CompensateOutcome compensatePreserving(
@@ -368,9 +368,9 @@ public final class V2CouponIssueService {
             // 저장소에는 logback 설정이 없어 동기 콘솔 appender 다 — 스택을 빼도 단문이
             // 요청 수만큼 쌓이면 로그 I/O 가 락 하나에 직렬화되어 응답 지연을 밀어 올리고,
             // 그 지연이 이 작업이 재려는 failover 복구 시간에 그대로 들어간다. 원인은 한
-            // 창에 한 줄이면 충분하고(같은 장애면 cause 가 같다), 건수는 세 미터
-            // (claim.leaked·compensation.no.claim·compensation.already.done)가 센다.
-            // 억제한 건수도 함께 남겨 로그만 보고 "한 건이었다"로 읽지 않게 한다.
+            // 창에 한 줄이면 충분하다 — 같은 장애면 cause 가 같다. 규모는 세 미터
+            // (claim.leaked·compensation.no.claim·compensation.already.done)가 빠짐없이 세고
+            // V2IssuanceClaimLeaked 경보가 그 위에 걸린다. 로그로 건수를 세지 않는다.
             // 회차·회원 id 는 내부 식별자라 마스킹 대상이 아니다.
             logCompensationFailure(command, compensationFailure);
             // null 로 접지 않는다. null 은 "보상하지 않기로 했다"는 결정이고 이쪽은
