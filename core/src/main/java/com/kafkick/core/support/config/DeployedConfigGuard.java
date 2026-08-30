@@ -72,8 +72,21 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
 
     /**
      * 부트가 {@code ConfigurationPropertySources.attach} 로 맨 앞에 붙이는 파사드의 이름.
-     * 상수가 {@code private} 이라 리터럴로 쓴다 — 값이 바뀌면
-     * {@code DeployedConfigGuardTest} 의 환경변수 검사가 잡는다.
+     * 부트 쪽 상수가 {@code private} 이라 리터럴로 쓴다.
+     *
+     * <p><b>이 값이 어긋나면 정상인 배포가 거절당한다.</b> 파사드를 못 걸러 그것이 먼저
+     * 답하는데, 그 대리 응답에는 파일 출처가 안 실려 <b>파일에서 온 마커도 파일이 아닌 것으로
+     * 보인다.</b> 그래서 회귀는 <b>환경변수 검사가 아니라</b>
+     * {@code DeployedConfigGuardTest} 의 <i>"설정 파일에서 온 마커는 통과한다"</i> 가 잡는다.
+     *
+     * <p>한때 여기 <i>"환경변수 검사가 잡는다"</i> 고 적었는데 <b>틀렸다</b> — 리뷰가 짚었고
+     * 재 보니 그 검사는 파사드를 안 걸러도 통과한다(비파일 출처는 어느 쪽이든 거절되므로).
+     * 잡는 것은 반대 방향, 즉 <b>정상을 거절하지 않는가</b> 쪽이다.
+     *
+     * <pre>
+     * 상수를 틀린 값으로   → "설정 파일에서 온 마커는 통과한다" FAILED
+     * 건너뛰기를 제거      → 같은 검사 FAILED
+     * </pre>
      */
     private static final String ATTACHED_FACADE = "configurationProperties";
 
