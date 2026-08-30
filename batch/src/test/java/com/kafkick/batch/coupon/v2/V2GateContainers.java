@@ -38,6 +38,12 @@ import org.testcontainers.utility.DockerImageName;
  */
 final class V2GateContainers {
 
+    /**
+     * 공유 상태의 이름. 이 컨테이너 쌍을 쓰는 테스트 클래스는 전부 이 키를 잡아,
+     * 병렬 실행이 켜져도 서로의 정리에 지워지지 않는다.
+     */
+    static final String SHARED_STATE = "v2-gate-containers";
+
     @SuppressWarnings("rawtypes")
     private static final MySQLContainer MYSQL;
     private static final GenericContainer<?> REDIS;
@@ -80,12 +86,6 @@ final class V2GateContainers {
         factory.start();
         REDIS_TEMPLATE = new StringRedisTemplate(factory);
     }
-
-    /**
-     * 공유 상태의 이름. 이 컨테이너 쌍을 쓰는 테스트 클래스는 전부 이 키를 잡아,
-     * 병렬 실행이 켜져도 서로의 정리에 지워지지 않는다.
-     */
-    static final String SHARED_STATE = "v2-gate-containers";
 
     private V2GateContainers() {
     }
