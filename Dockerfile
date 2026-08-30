@@ -1,3 +1,12 @@
+# 두 앱(api·batch)을 같은 파일로 짓습니다. ARG APP_MODULE 이 무엇을 지을지 정합니다.
+#
+# ⚠️ **기본값이 api 다.** batch 를 지으려면 compose 가 build.args 로 APP_MODULE=batch 를
+#    줘야 한다 — 안 주면 batch 서비스가 api jar 를 담은 이미지로 뜬다(batch.yml 이 준다).
+#
+# 배치가 컨테이너여야 하는 이유: infra/prometheus/prometheus.yml 의 스크레이프 대상이
+# batch:9092 이고, 그 DNS 이름을 만드는 것은 compose 서비스뿐이다. 앱이 호스트 JVM 이면
+# 관제 컨테이너에서 이름 해석이 안 된다.
+
 # syntax=docker/dockerfile:1.7
 
 FROM eclipse-temurin:21-jdk-jammy AS builder

@@ -13,10 +13,12 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.exception.CouponQueryErrorCode;
 import com.kafkick.core.coupon.query.MemberCouponPage;
 import com.kafkick.core.coupon.query.MemberCouponSummary;
 import com.kafkick.core.coupon.service.MemberCouponQueryService;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.Mockito.never;
@@ -26,7 +28,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// 사용자 보유 쿠폰 목록 조회의 HTTP 계약을 검증합니다.
+// 사용자 보유 쿠폰 목록과 단건 상세 조회의 HTTP 계약을 검증합니다.
 
 @WebMvcTest(MemberCouponController.class)
 class MemberCouponControllerTest {
@@ -142,6 +144,91 @@ class MemberCouponControllerTest {
     }
 
     @Test
+    @DisplayName("회원이 소유한 쿠폰 한 건을 상세 조회한다")
+    void findOwnedMemberCoupon() throws Exception {
+        when(memberCouponQueryService.findOne(20L, 100L))
+                .thenReturn(coupon());
+
+        mockMvc.perform(get("/api/v1/coupons/100")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.issuanceId").value(100))
+                .andExpect(jsonPath("$.data.couponRoundId").value(10))
+                .andExpect(jsonPath("$.data.code")
+                        .value("ABCDEFGHJKLM2345"))
+                .andExpect(jsonPath("$.data.status").value("USED"))
+                .andExpect(jsonPath("$.data.name")
+                        .value("골드 VIP 20% 할인"))
+                .andExpect(jsonPath("$.data.policyType")
+                        .value("PERCENT_CAPPED"))
+                .andExpect(jsonPath("$.data.discountRate").value(20))
+                .andExpect(jsonPath("$.data.maxDiscountAmount")
+                        .value(10_000))
+                .andExpect(jsonPath("$.data.discountAmount")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.data.issuedAt")
+                        .value("2026-08-18T05:30:00Z"))
+                .andExpect(jsonPath("$.data.expiresAt")
+                        .value("2026-08-25T05:30:00Z"))
+                .andExpect(jsonPath("$.data.usedAt")
+                        .value("2026-08-19T05:30:00Z"))
+                .andExpect(jsonPath("$.data.usedDiscountAmount")
+                        .value(8_000))
+                .andExpect(jsonPath("$.data.orderId").value(30_001));
+
+        verify(memberCouponQueryService).findOne(20L, 100L);
+    }
+
+    @Test
+    @DisplayName("사용 취소 쿠폰 상세는 과거 사용 정보 필드를 null로 반환한다")
+    void includeNullUsageFieldsForCanceledCouponDetail() throws Exception {
+        when(memberCouponQueryService.findOne(20L, 101L))
+                .thenReturn(canceledCoupon());
+
+        mockMvc.perform(get("/api/v1/coupons/101")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.data.usedAt").value(nullValue()))
+                .andExpect(jsonPath("$.data.usedDiscountAmount")
+                        .value(nullValue()))
+                .andExpect(jsonPath("$.data.orderId").value(nullValue()));
+    }
+
+    @Test
+    @DisplayName("회원 소유 쿠폰이 없으면 404를 반환한다")
+    void rejectMissingOrUnownedMemberCoupon() throws Exception {
+        when(memberCouponQueryService.findOne(20L, 200L))
+                .thenThrow(new BusinessException(
+                        CouponQueryErrorCode.MEMBER_COUPON_NOT_FOUND
+                ));
+
+        mockMvc.perform(get("/api/v1/coupons/200")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COUPON-415"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("보유 쿠폰을 찾을 수 없습니다."));
+    }
+
+    @Test
+    @DisplayName("쿠폰 발급 ID가 양수가 아니면 400을 반환한다")
+    void rejectNonPositiveIssuanceId() throws Exception {
+        mockMvc.perform(get("/api/v1/coupons/0")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(memberCouponQueryService, never()).findOne(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong()
+        );
+    }
+
+    @Test
     @DisplayName("회원 헤더가 없으면 400을 반환한다")
     void rejectMissingMemberHeader() throws Exception {
         mockMvc.perform(get("/api/v1/coupons"))
@@ -212,6 +299,10 @@ class MemberCouponControllerTest {
 
     private static MemberCouponSummary unusedCoupon() {
         return couponWithoutUsage(100L, IssuanceStatus.ISSUED);
+    }
+
+    private static MemberCouponSummary canceledCoupon() {
+        return couponWithoutUsage(101L, IssuanceStatus.CANCELLED);
     }
 
     private static MemberCouponSummary couponWithoutUsage(

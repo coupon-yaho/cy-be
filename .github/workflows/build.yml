@@ -1,0 +1,295 @@
+name: Build
+
+# 빌드와 테스트를 PR 마다 돌린다.
+#
+# 이걸 세우기 전까지 테스트 360개가 **작성자 로컬에서만** 돌았다. CodeRabbit 은 코드를 읽을
+# 뿐 실행하지 않으므로, "테스트가 통과한다" 는 주장을 PR 에서 확인할 방법이 없었다.
+#
+# ⚠️ on.pull_request 에 branches 필터를 걸지 말 것.
+#    배치 PR 의 base 는 main 이 아니라 에픽 브랜치(feature/CY-15)다. base 를 main 으로
+#    좁히면 정작 검증할 PR 들이 통째로 빠진다. conventions.yml 도 같은 이유로 필터가 없다.
+#
+# required check 등록: Settings > Rules > Ruleset > Require status checks
+#   빌드·테스트
+# docs/03-collaboration.md 3.5a 절이 "빌드·테스트 CI 는 차단이다" 라고 못 박았다.
+# 등록하지 않으면 이 워크플로는 돌기만 하고 실패해도 머지를 못 막는다 —
+# 그러면 이 파일의 존재 이유가 없다.
+#
+# ⚠️ 액션은 전체 커밋 SHA 로 고정한다. 뒤 주석이 사람이 읽을 버전이다.
+#    메이저 태그(@v5)는 **이동 가능한 참조**다 — 2025 년 tj-actions/changed-files 사건에서
+#    v35 이후 태그가 악성 커밋으로 재지정돼 수천 저장소의 시크릿이 유출됐다.
+#    이 워크플로는 ./gradlew build 로 임의 JVM 코드를 실행하는 유일한 자리라 특히 그렇다.
+#    올릴 때는 태그를 SHA 로 다시 풀어서 넣는다:
+#      git ls-remote --tags https://github.com/<owner>/<repo> | grep 'refs/tags/<major>'
+#    나머지 워크플로 넷은 아직 태그(security-audit 은 @main)라 별도로 맞춰야 한다.
+#
+# ⚠️ 위 규율은 `uses:` 에만 걸려 있고 **`docker run` 이미지에는 안 걸려 있다.**
+#    이 파일이 쓰는 이미지 셋(prometheus·alertmanager·shellcheck)은 전부 **버전 태그**로 고정한다.
+#    태그도 재지정 가능한 참조라 논리적으로는 같은 위험인데, 지금 그렇게 두는 이유는
+#    ⑴ 이미 둘이 그 방식이라 새것만 digest 로 바꾸면 규율이 두 벌이 되고,
+#    ⑵ 이 스텝들은 secrets 를 안 읽고 `permissions: contents: read` 아래서 돈다.
+#    **다만 러너 환경 자체(체크아웃된 소스·GITHUB_TOKEN)에는 닿는다** —
+#    셋을 한꺼번에 digest 로 올리는 것은 별도 작업으로 남긴다. 여기 안 적어 두면 "규율이 있는데 코드가
+#    안 지킨다" 로 읽히고, 그 불일치가 규율 전체의 신뢰를 깎는다.
+#
+# ⚠️ 이 파일은 에픽 브랜치에도 있어야 한다.
+#    pull_request 이벤트는 워크플로를 PR 의 head 에서 가져온다. main 에만 넣으면
+#    main 보다 앞서 갈라진 에픽에서 자른 브랜치에는 파일이 없어 돌지 않는다.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 워크플로는 소스만 읽는다. 코멘트도 안 달고 릴리스도 안 만든다.
+permissions:
+  contents: read
+
+# 같은 PR 에 연속 푸시하면 앞 실행을 버린다. 테스트가 3~8분이라
+# 급하게 두세 번 밀어 넣으면 러너가 쌓이고 결과도 낡은 커밋 것이 섞인다.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 빌드·테스트
+    runs-on: ubuntu-latest
+    # 로컬 clean build 2분 20초. Testcontainers 가 mysql:latest 를 내려받고
+    # 컨테이너를 여러 번 띄우므로 CI 는 그보다 오래 걸린다. 넉넉히 두되 무한은 아니다.
+    timeout-minutes: 30
+
+    steps:
+      #
+      # persist-credentials: false — 기본값은 GITHUB_TOKEN 을 .git/config 에 남긴다.
+      # 이 워크플로는 ./gradlew build 로 **임의 JVM 코드를 실제로 실행하는 유일한 자리**다
+      # (빌드 스크립트 평가·애노테이션 프로세서·서드파티 플러그인). 오염된 의존성이 그 토큰을
+      # 읽을 수 있으므로 남기지 않는다. 이후 git 조작이 없어 부작용도 없다.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # 툴체인은 build.gradle 이 Java 21 로 못 박아 뒀다(languageVersion = 21).
+      # 여기서 같은 버전을 깔아 두면 Gradle 이 JDK 를 따로 내려받지 않는다.
+      - name: Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # 래퍼 JAR 이 바뀌지 않았는지 본다. gradle-wrapper.jar 는 바이너리라
+      # 리뷰에서 내용을 읽을 수 없어, 교체되면 빌드가 임의 코드를 실행한다.
+      - name: Gradle 래퍼 검증
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+
+      - name: Gradle 설정·캐시
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+
+      # ── 왜 컴파일과 테스트를 두 스텝으로 갈랐나 ────────────────────────────
+      #
+      # `./gradlew build` 한 방이면 **컴파일이 깨진 것도 11분 뒤에 안다.** 실측:
+      # 그 스텝 하나가 670초인데 나머지 스텝 전부 합쳐 20초였고, 670초의 대부분이
+      # 테스트다(테스트 실행 합계 320초 + MySQL 컨테이너 59회 기동).
+      # 컴파일·패키징만 하면 웜 데몬에서 3초다.
+      #
+      # 그래서 **싼 것을 먼저 돌린다.** 컴파일이나 설정 검사가 깨지면 테스트를 돌리기
+      # 전에 죽어서, 오타 하나에 11분을 안 쓴다. 두 번째 스텝은 이미 컴파일된 것을
+      # 쓰므로(Gradle up-to-date) 중복 비용이 없다.
+      #
+      # ⚠️ **잡을 쪼개지 않는다.** 룰셋이 required check 를 "빌드·테스트" 라는
+      #    **이름**으로 물고 있다(배치 브랜치 빌드 게이트). 잡 이름이 바뀌거나
+      #    새 잡이 required 로 안 걸리면 그 브랜치의 PR 이 영원히 BLOCKED 다.
+      #    스텝만 가르면 이름이 그대로라 룰셋을 안 건드린다.
+      #
+      # 로컬 application.yml·storage.yml 은 gitignore 대상이라 러너에 아예 없다.
+      # 빌드가 .example 을 resolved/ 로 복사하므로(build.gradle 참고) 그대로 돈다.
+      - name: 컴파일·패키징
+        run: ./gradlew build -x test --stacktrace
+
+      # 알림 규칙을 실제로 파싱한다.
+      #
+      # 이게 없으면 규칙 파일을 읽는 자동 검사가 BatchMetricExposureTest 의 정규식뿐인데,
+      # 그것은 Files.readString + 패턴 매칭이라 **YAML 도 PromQL 도 파싱하지 않는다.**
+      # BatchJobFailed 는 or/unless/and on(...) 이 겹친 열 줄짜리 식이라, 다음 편집에서
+      # 괄호 하나가 틀어지면 Prometheus 가 그 **파일 전체를 거부**하고(rule_files 로드
+      # 실패는 config 로드 실패다) 알림이 통째로 사라진다 — 그런데 PR 은 초록이다.
+      #
+      # check config 는 rule_files 글롭을 config 디렉터리 기준으로 풀어 규칙까지 함께 본다.
+      #
+      # ⚠️ 이미지 태그는 base.yml 의 prometheus 와 **같아야** 한다. 다르면 CI 가 통과한
+      #    규칙을 운영 Prometheus 가 거부할 수 있다.
+      - name: 알림 규칙 검사
+        run: |
+          docker run --rm -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 \
+            check config /etc/prometheus/prometheus.yml
+
+          # 문법 다음은 **동작**이다. check config 는 규칙이 "문법은 맞는데 영원히 안 뜨는"
+          # 상태로 바뀌어도 초록이다 — CY-392 가 실제로 두 번 그 상태를 만들었고
+          # (크래시루프 사각 · 되읽기 간헐 실패), 둘 다 재현해서 잡았다.
+          # 그 재현을 파일로 남겼으니 CI 가 매번 돌린다.
+          docker run --rm -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 \
+            test rules /etc/prometheus/tests/batch-alerts_test.yml
+
+      # mock 리시버는 이 저장소 최초의 파이썬 파일이고, 실행 가능한 코드인데 Java 쪽
+      # ./gradlew build 같은 게이트가 없다. 최소한 문법은 CI 가 본다 —
+      # 들여쓰기 하나가 틀어져도 compose 를 직접 띄우기 전까지 아무도 모르는 상태를 막는다.
+      - name: mock 리시버 구문 검사
+        run: python3 -m py_compile infra/alertmanager/alert-sink.py
+
+      # 셸 스크립트도 검사한다. mock 리시버와 같은 이유이고, 여기가 더 세다 —
+      # scripts/ 는 **예약 작업이 무인으로 돌리는 코드**라 사람이 그 순간을 못 본다.
+      # dump-verify-report.sh 는 git commit·push 를 부르므로 오타 하나가 조용히 사고가 된다.
+      #
+      # bash -n 은 문법만 본다. shellcheck 가 그 위를 본다 — 따옴표 없는 확장,
+      # 안 잡히는 종료코드, trap 안에서 지금 펴지는 변수 같은 것들.
+      #
+      # ⚠️ docs/measurements/ 는 **일부러 뺀다.** 그것은 과거 실측을 재현하는 기록이라,
+      #    린터를 만족시키려고 고치면 그 파일이 더 이상 "그 숫자를 낸 스크립트" 가 아니다.
+      #    문법 검사(bash -n)까지만 받는다.
+      #
+      # LC_ALL 이 없으면 한글 주석에서 컨테이너가 "invalid character" 로 죽는다(실측).
+      - name: 셸 스크립트 검사
+        run: |
+          set -euo pipefail
+          # 여기도 NUL 로 받는다. 위와 같은 이유다.
+          ALL=()
+          while IFS= read -r -d '' f; do
+            case "$f" in gradlew*) continue ;; esac
+            ALL+=("$f")
+          done < <(git ls-files -z '*.sh')
+          [ "${#ALL[@]}" -gt 0 ] || { echo "::error::검사할 .sh 를 못 찾았다"; exit 1; }
+          for f in "${ALL[@]}"; do bash -n "$f"; done
+
+          # **빈 목록이면 죽는다.** 없으면 검사기가 인자 없이 돌아 stdin 을 읽고
+          # 조용히 성공한다 — 그 초록은 "검사했다" 가 아니라 "아무것도 안 봤다" 다.
+          #
+          # ⚠️ 줄 첫머리에 `#` 다음 그 도구 이름을 쓰면 **지시문으로 해석된다**(SC1072/SC1073).
+          #    한글 설명이라도 마찬가지다. 그래서 여기서는 "검사기" 로 부른다.
+          #
+          # -z 로 NUL 을 구분자로 받는다. git ls-files 는 **공백이 든 경로를 따옴표로
+          # 안 감싼다**(실측: `scripts/a b.sh` 가 그대로 나온다). 줄 단위로 읽고 인용 없이
+          # 펴면 그 경로가 두 인자로 쪼개진다.
+          OPS=()
+          while IFS= read -r -d '' f; do OPS+=("$f"); done < <(git ls-files -z 'scripts/*.sh')
+          [ "${#OPS[@]}" -gt 0 ] || { echo "::error::scripts/ 에 .sh 가 없다"; exit 1; }
+          docker run --rm -e LC_ALL=C.UTF-8 -v "$PWD:/mnt:ro" -w /mnt \
+            koalaman/shellcheck:v0.10.0 "${OPS[@]}"
+
+      # 라우팅도 파싱한다. 여기가 깨지면 규칙은 평가되는데 알림이 아무 데도 안 간다.
+      - name: 알림 라우팅 검사
+        run: |
+          docker run --rm -v "$PWD/infra/alertmanager:/etc/alertmanager:ro" \
+            --entrypoint amtool prom/alertmanager:v0.28.1 \
+            check-config /etc/alertmanager/alertmanager.yml
+
+      # compose 도 파싱한다. 위 셋과 같은 이유다 — README 가 안내하는 **유일한 배포 경로**인데
+      # 지금까지 검사가 없었다. config 는 병합·보간까지 하므로 참조 오류도 함께 잡는다.
+      #
+      # 두 번째 명령이 포트 규율을 실행 가능한 검사로 바꾼다. `ports:` 에서 `127.0.0.1:` 을
+      # 지우면 compose 는 0.0.0.0 에 묶는데, 이 저장소는 공개라 공인 IP 가 붙은 호스트에서
+      # MySQL 이 app/app 으로 열린다. 주석으로만 적어 두면 지우는 PR 이 초록으로 통과한다.
+      - name: compose 파싱·포트 바인딩 검사
+        run: |
+          docker compose -f base.yml config -q
+          docker compose -f base.yml -f batch.yml config -q
+          docker compose -f base.yml -f batch.yml -f batch-expose.yml config -q
+
+          # 오버레이를 얹은 조합까지 본다. 그것이 업무 포트를 여는 유일한 경로라,
+          # 안 보면 정작 위험한 쪽이 검사 밖에 남는다.
+          loopback_only() {
+            docker compose "$@" config --format json \
+              | jq -e '[.services[].ports[]?.host_ip] | length > 0 and all(. == "127.0.0.1")' > /dev/null \
+              || { echo "::error::호스트 포트가 127.0.0.1 에 묶이지 않았다: $*"; exit 1; }
+          }
+          loopback_only -f base.yml -f batch.yml
+          loopback_only -f base.yml -f batch.yml -f batch-expose.yml
+
+          # 기본 조합은 업무 포트를 아예 안 내보내야 한다. admin 트리거에 인증이 없어서다.
+          docker compose -f base.yml -f batch.yml config --format json \
+            | jq -e '(.services.batch.ports // []) | length == 0' \
+            > /dev/null || { echo "::error::batch 업무 포트가 기본으로 노출됐다. batch-expose.yml 로 가른다"; exit 1; }
+
+      # 사본이 상류와 같은지 본다. 이게 없으면 SchemaParityTest 의 초록이
+      # "게이트가 도는 스키마와 같다" 가 아니라 "누가 언젠가 복사한 파일과 같다" 로
+      # 조용히 뜻이 바뀐다 — 그 테스트를 세운 이유 자체가 무력해지는 유일한 축이다.
+      #
+      # diff 실패는 차단(사본을 손댔다는 뜻), SHA 뒤처짐은 경고(상류가 앞서 나갔다는 뜻)로
+      # 가른다. 안 가르면 상류 커밋 하나에 남의 PR 이 전부 빨개진다.
+      - name: 시드 DDL 사본 신선도
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COPY: storage/src/test/resources/seed-ddl
+          UPSTREAM: coupon-yaho/cy-seed-data-generator
+        run: |
+          set -euo pipefail
+          SHA=$(grep -oE '@ [0-9a-f]{7,40}' "$COPY/README.md" | head -1 | cut -d' ' -f2)
+          [ -n "$SHA" ] || { echo "::error::사본 README 에 기준 리비전이 없다"; exit 1; }
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          gh api "repos/$UPSTREAM/contents/ddl?ref=$SHA" \
+            --jq '.[] | select(.name | endswith(".sql")) | .name' | while read -r f; do
+            gh api "repos/$UPSTREAM/contents/ddl/$f?ref=$SHA" \
+              --jq '.content' | base64 -d > "$tmp/$f"
+          done
+          diff -r "$tmp" "$COPY" --exclude=README.md
+          HEAD_SHA=$(gh api "repos/$UPSTREAM/commits/main" --jq '.sha')
+          if [ "${SHA}" != "${HEAD_SHA:0:${#SHA}}" ]; then
+            echo "::warning::사본은 $SHA, 상류 main 은 ${HEAD_SHA:0:7} 이다. 갱신 절차는 $COPY/README.md"
+          fi
+
+      # 여기까지 오면 컴파일도 설정도 멀쩡하다. 이제 비싼 것을 돌린다.
+      #
+      # `build` 가 아니라 `test` 인 것에 주의 — 패키징(jar·bootJar)은 위에서 이미 했다.
+      # 여기서 build 를 다시 부르면 up-to-date 라 공짜이긴 하지만, 스텝 이름과 실제
+      # 하는 일이 어긋난다.
+      - name: 테스트
+        run: ./gradlew test --stacktrace
+
+      # 어느 테스트가 깨졌는지 요약한다. Gradle raw 로그만 남으면 끝까지 스크롤해야 하고,
+      # 아티팩트는 내려받아야 열린다. 기존 워크플로 넷도 전부 이 자리에 요약을 남긴다.
+      #
+      # 실패 테스트가 0건이면 컴파일·패키징에서 깨진 것이다 — 그 둘을 구분해 준다.
+      - name: 실패 요약
+        if: failure()
+        run: |
+          python3 - >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import pathlib, re
+          rows = []
+          for p in pathlib.Path('.').rglob('build/test-results/test/*.xml'):
+              t = p.read_text(errors='ignore')
+              suite = re.search(r'<testsuite name="([^"]+)"', t)
+              for m in re.finditer(r'<testcase name="([^"]+)"[^>]*>\s*<(failure|error)', t):
+                  rows.append((suite.group(1) if suite else p.stem, m.group(1)))
+          print("## ❌ 빌드·테스트 실패")
+          print()
+          if rows:
+              for cls, name in rows[:40]:
+                  print(f"- `{cls.rsplit('.', 1)[-1]}` — {name}")
+              if len(rows) > 40:
+                  print()
+                  print(f"… 외 {len(rows) - 40}건")
+          else:
+              print("실패한 테스트는 없다. 컴파일·패키징 단계에서 깨졌다 — 잡 로그를 봐라.")
+          PY
+
+      # 실패했을 때 어느 테스트가 왜 깨졌는지 러너 로그만으로는 부족하다.
+      #
+      # ⚠️ 공개 저장소다. Gradle 은 테스트의 stdout/stderr 를 JUnit XML 의 <system-out> 에
+      #    그대로 담으므로, 여기 올라간 것은 7일간 누구나 내려받을 수 있다.
+      #    지금은 실을 것이 없다 — 테스트에 PII 리터럴이 없고 암호화 키도 아직 배선 전이며
+      #    Testcontainers 자격증명은 고정 기본값(test/test)이다.
+      #    회원 PII·*_enc 컬럼 테스트가 들어오는 시점에 SQL 파라미터 로깅을 끄고
+      #    업로드 경로를 좁혀야 한다.
+      - name: 테스트 리포트
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 7

@@ -11,6 +11,14 @@ dependencies {
     runtimeOnly project(':infra:redis')
     runtimeOnly project(':infra:mq')
     testImplementation testFixtures(project(':storage'))
+    // ApiResolvedConfigTest 가 HikariConfig 로 바인딩을 걸어 프로퍼티 이름 오타를 잡는다.
+    // storage 를 타고 런타임에는 오지만 직접 쓰므로 명시한다. 버전은 Boot BOM 이 준다.
+    testImplementation 'com.zaxxer:HikariCP'
+    // 같은 이유로 FlywayProperties 도 명시한다. api 가 마이그레이션 소유자라
+    // Flyway 키 오타가 가장 위험한데, 그 서브트리를 바인딩해야 잡힌다.
+    testImplementation 'org.springframework.boot:spring-boot-flyway'
+    // DataSourceProperties 가 여기 있다. spring-boot-jdbc-test 를 타고 오지만 직접 쓰므로 명시한다.
+    testImplementation 'org.springframework.boot:spring-boot-jdbc'
 
     // 테스트만 storage 를 본다. 관측 헬스 status 코드가 storage 코드와 api 의 management.yml
     // 양쪽에 걸쳐 있어서, 둘을 잇는 테스트가 그 상수를 직접 참조해야 하기 때문이다

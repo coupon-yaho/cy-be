@@ -71,7 +71,15 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * <b>다만 그때도 ①② 는 살아 있다</b>: DB 가 실제로 거부하므로, 못 본 질의는 운영에서
  * 조용히 통과하는 것이 아니라 1142 로 죽는다. 그것이 소스 스캔과 계정 권한의 차이다.
  */
-@SpringBootTest(properties = "spring.flyway.enabled=true")
+@SpringBootTest(properties = {
+        "spring.flyway.enabled=true",
+        // ⚠️ **모듈 application.yml 의 observation.datasource.enabled:true 가 여기선 안 온다.**
+        //    batch/src/test/resources/application.yml 이 그 파일을 통째로 가리기 때문이다
+        //    (테스트는 커밋 안 되는 application.yml 을 못 읽으므로 그 구조가 맞다).
+        //    그래서 이 검사가 필요로 하는 스위치만 여기서 켠다 — 전역으로 켜면
+        //    MySqlContainerConfig 를 안 import 하는 테스트가 관측 계정을 못 찾아 죽는다.
+        "observation.datasource.enabled=true"
+})
 @Import(MySqlContainerConfig.class)
 class ObservationAccountPrivilegeTest {
 
@@ -145,6 +153,21 @@ class ObservationAccountPrivilegeTest {
 
     /** 관측 계정 이름. 픽스처가 이 이름으로 계정을 만들고 재부여한다. */
     private static final String OBSERVATION_USERNAME = "obs";
+
+    /**
+     * <b>관측 계정에 주는 것만 본다.</b> 이 검사의 대상은 <i>"관측 계정이 스키마 단위 권한을
+     * 되찾는가"</i> 이지 <i>"저장소에 스키마 단위 GRANT 가 있는가"</i> 가 아니다.
+     *
+     * <p>구분이 필요해진 계기 — {@code SchemaParityTestBase} 가 CLEAN·CORRUPT 대조용
+     * <b>일회용 스키마</b>를 만들고 <b>컨테이너 자기 계정</b>({@code container.getUsername()},
+     * 기본 {@code test})에 그 스키마 권한을 준다. 그 계정은 원래 전권이고 스키마도 그 테스트가
+     * 만든 것이라, 관측 권한과 아무 상관이 없는데 위 정규식에 걸렸다(CY-744 합류에서 났다).
+     *
+     * <p>그래서 <b>수여 대상</b>을 함께 본다. 대상이 안 보이거나 관측 계정이면 잡고,
+     * 다른 계정이 명시돼 있으면 넘긴다 — 관측 계정을 놓치는 쪽으로는 안 느슨해진다.
+     */
+    private static final Pattern GRANTS_TO_OTHER_ACCOUNT = Pattern.compile(
+            "\\bTO\\s+'(?!" + OBSERVATION_USERNAME + "')[^']*'", Pattern.CASE_INSENSITIVE);
 
     /** ⑥ 이 심는 레거시 역할. 재부여가 이것까지 걷는지 본다. */
     private static final String LEGACY_ROLE = "obs_legacy_reader";
@@ -433,7 +456,8 @@ class ObservationAccountPrivilegeTest {
                             .filter(path -> !path.getFileName().toString().equals(THIS_TEST))
                             .forEach(path -> {
                         for (String literal : queryTextOf(read(path))) {
-                            if (SCHEMA_WIDE_GRANT.matcher(literal).find()) {
+                            if (SCHEMA_WIDE_GRANT.matcher(literal).find()
+                                    && !GRANTS_TO_OTHER_ACCOUNT.matcher(literal).find()) {
                                 offenders.add(path.getFileName() + " → " + literal.trim());
                             }
                         }

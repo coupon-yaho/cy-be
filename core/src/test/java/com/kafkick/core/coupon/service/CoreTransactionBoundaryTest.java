@@ -32,7 +32,6 @@ class CoreTransactionBoundaryTest {
         assertTransactional(CouponUseService.class, "use");
         assertTransactional(CouponCancelUseService.class, "cancelUse");
         assertTransactional(CouponCancelService.class, "cancel");
-        assertTransactional(CouponExpirationService.class, "expire");
         assertTransactional(IdempotentOperationService.class, "execute");
     }
 

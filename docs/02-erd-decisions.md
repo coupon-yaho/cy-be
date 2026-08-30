@@ -7,16 +7,28 @@
 
 > ### ⚠️ 어휘 — DDL 명칭이 정답이다
 >
-> | 지금 이름 | 뜻 | 이 문서의 구 어휘 |
+> **본문을 전부 현재 DDL 명칭으로 맞췄다.** 예전에는 이 문서가 `campaigns`(회차) ·
+> `coupons`(발급건) 어휘로 쓰여 있고 이 표가 *"치환해 읽어라"* 라고 안내했는데,
+> 두 어휘를 오가며 읽는 비용이 표 하나로 없어지지 않았다.
+>
+> | 이름 | 뜻 | 이 문서의 옛 어휘 |
 > |---|---|---|
 > | `coupons` | **회차** 147 | `campaigns` |
 > | `issuances` | **발급건** 300만 | `coupons` |
 > | `issuance_histories` | 이력 534만 | `coupon_histories` |
 > | `issuance_usages` | 사용 실적 132만 | `coupon_usages` |
 >
-> 컬럼명만 레거시로 남은 것 — `verification_findings.campaign_id` → `coupons.id`,
-> `.coupon_id` → `issuances.id`, `asof_state.coupon_id` → `issuances.id`.
-> 본문에 구 어휘가 남아 있으면 위 표로 치환해 읽는다.
+> **컬럼명만 레거시로 남은 셋은 안 바꿨다** — 스키마에 그 이름으로 실재해서, 고치면
+> ERD 가 없는 컬럼을 그리게 된다.
+>
+> | 컬럼 | 실제로 가리키는 것 |
+> |---|---|
+> | `verification_findings.campaign_id` | 회차 `coupons.id` |
+> | `verification_findings.coupon_id` | 발급건 `issuances.id` |
+> | `asof_state.coupon_id` | 발급건 `issuances.id` |
+>
+> 산문의 "쿠폰" 은 일상어 그대로 두었다 — 대개 **발급건**을 가리킨다.
+> 테이블을 뜻할 때는 반드시 백틱 친 식별자로 적었다.
 
 ---
 
@@ -24,28 +36,28 @@
 
 일정이 밀리면 "간단하게 합치자"는 말이 나오는데, 아래는 합치면 프로젝트가 망가진다.
 
-### 1. `coupon_stocks`를 캠페인에서 1:1로 뗀 것
+### 1. `coupon_stocks`를 회차에서 1:1로 뗀 것
 
 ```
-campaigns(id, template_id, ..., open_at, close_at, status)
-coupon_stocks(campaign_id PK, total_quantity, active_count)
+coupons(id, template_id, ..., open_at, close_at, status)
+coupon_stocks(coupon_id PK, total_quantity, active_count)
 ```
 
-**이게 이 ERD에서 제일 잘한 판단이다.** 재고를 캠페인 행에 두면 조회(캠페인 정보)와 수정(재고 차감)이 같은 행에 몰려서 v1의 `SELECT FOR UPDATE`가 캠페인 전체를 잠근다. 별도 행이면 재고 행만 잠긴다.
+**이게 이 ERD에서 제일 잘한 판단이다.** 재고를 회차 행에 두면 조회(회차 정보)와 수정(재고 차감)이 같은 행에 몰려서 v1의 `SELECT FOR UPDATE`가 회차 전체를 잠근다. 별도 행이면 재고 행만 잠긴다.
 
 v1이 "비관적 락으로 인한 병목"을 측정하는 버전인데, 잠금 범위가 필요 이상으로 넓으면 **측정하는 게 락 경합이 아니라 설계 실수**가 된다.
 
-### 2. 템플릿 → 캠페인 스냅샷
+### 2. 템플릿 → 회차(`coupons`) 스냅샷
 
-반복 규칙(`nth_week`, `day_of_week`, `start_time`)은 템플릿에, 회차는 캠페인에. 그리고 정책 컬럼을 캠페인에 **복사**한다.
+반복 규칙(`nth_week`, `day_of_week`, `start_time`)은 템플릿에, 회차별 값은 `coupons` 에. 그리고 정책 컬럼을 `coupons` 에 **복사**한다.
 
-3월 캠페인이 20% 할인으로 열렸는데 4월에 템플릿을 15%로 바꾸면, 스냅샷이 없을 경우 3월 쿠폰의 할인율이 소급 변경되고 `coupon_usages.discount_amount`와 어긋나 정합성 검증이 깨진다. 이건 비정규화가 아니라 **시점 고정**이다.
+3월 회차가 20% 할인으로 열렸는데 4월에 템플릿을 15%로 바꾸면, 스냅샷이 없을 경우 3월 쿠폰의 할인율이 소급 변경되고 `issuance_usages.discount_amount`와 어긋나 정합성 검증이 깨진다. 이건 비정규화가 아니라 **시점 고정**이다.
 
-### 3. `coupon_histories` append-only 분리
+### 3. `issuance_histories` append-only 분리
 
-상태는 `coupons.status`에서 갱신되고, 이력은 추가만 된다. **둘을 대조하는 게 정합성 검증 그 자체다.** 이력에 UPDATE가 생기는 순간 검증할 대상이 사라진다.
+상태는 `issuances.status`에서 갱신되고, 이력은 추가만 된다. **둘을 대조하는 게 정합성 검증 그 자체다.** 이력에 UPDATE가 생기는 순간 검증할 대상이 사라진다.
 
-### 4. `coupon_usages`를 이력과 따로 둔 것
+### 4. `issuance_usages`를 이력과 따로 둔 것
 
 이력은 "무슨 일이 일어났나"(상태 전이), usages는 "얼마를 할인했나"(실적). 성격이 다르다. 재사용 시 여러 행이 쌓이는 것도 자연스럽다.
 
@@ -67,13 +79,13 @@ v1이 "비관적 락으로 인한 병목"을 측정하는 버전인데, 잠금 �
 
 | 검증 규칙 | 위반이 발생하는 단위 | `coupon_id`로 표현되나 |
 |---|---|---|
-| 재고 정합 (`active_count` ↔ 실제 집계) | **캠페인** | ❌ |
-| 1인 1매 위반 | **(캠페인, 회원)** — 쿠폰 2장의 *쌍*이 문제 | ❌ |
+| 재고 정합 (`active_count` ↔ 실제 집계) | **회차** | ❌ |
+| 1인 1매 위반 | **(회차, 회원)** — 쿠폰 2장의 *쌍*이 문제 | ❌ |
 | 이력 리플레이 불일치 | 쿠폰 | ✅ |
 | 불법 전이 | **이력 행** — 어느 전이가 문제인지 | ❌ (쿠폰까지만) |
 | 사용 실적 불일치 | 쿠폰 | ✅ |
 
-오염셋 6유형 중 유형 6("동일 유저가 같은 캠페인에서 2건")은 **쿠폰 하나가 아니라 쌍**이다. `coupon_id` 하나만 적으면 나머지 한 장은 어디에 적나.
+오염셋 6유형 중 유형 6("동일 유저가 같은 회차에서 2건")은 **쿠폰 하나가 아니라 쌍**이다. `coupon_id` 하나만 적으면 나머지 한 장은 어디에 적나.
 
 그리고 **`detail`이 없어서 리포트가 "쿠폰 812934가 이상함"까지만 말한다.** 뭐가 어떻게 이상한지(기대값 vs 실제값)를 못 쓴다. 검증 리포트 자동화가 선택사항이라도 이건 있어야 한다 — 우리가 개발 중에 제일 많이 볼 화면이니까.
 
@@ -83,14 +95,15 @@ v1이 "비관적 락으로 인한 병목"을 측정하는 버전인데, 잠금 �
 verification_findings(
   id           BIGINT PK,
   run_id       BIGINT FK,
-  finding_type VARCHAR(40),      -- STOCK_MISMATCH / DUP_PER_MEMBER / REPLAY_MISMATCH / ...
-  campaign_id  BIGINT NULL,      -- 재고 불일치
-  member_id    BIGINT NULL,      -- 1인 다매
-  coupon_id    BIGINT NULL,      -- 쿠폰 단위
-  history_id   BIGINT NULL,      -- 불법 전이
-  expected     VARCHAR(200),     -- "active_count=9998"
-  actual       VARCHAR(200),     -- "coupons 집계=10001"
-  INDEX idx_run_type (run_id, finding_type)
+  finding_type VARCHAR(40)  NOT NULL,  -- STOCK_MISMATCH / DUP_PER_MEMBER / ...
+  target_key   VARCHAR(64)  NOT NULL,  -- 아래 "확정" 의 그 키. 비교는 전부 이것으로만
+  campaign_id  BIGINT NULL,            -- 재고 불일치. 레거시 이름 — 회차 coupons.id
+  member_id    BIGINT NULL,            -- 1인 다매
+  coupon_id    BIGINT NULL,            -- 레거시 이름 — 발급건 issuances.id
+  history_id   BIGINT NULL,            -- 불법 전이
+  expected     VARCHAR(200) NOT NULL,  -- "active_count=9998"
+  actual       VARCHAR(200) NOT NULL,  -- "issuances 집계=10001"
+  UNIQUE uk_run_finding (run_id, finding_type, target_key)
 )
 ```
 
@@ -137,9 +150,9 @@ assertThat(run2.findingsChecksum()).isEqualTo(run1.findingsChecksum());
 
 ---
 
-### 🟠 F3. `coupon_usages`가 검증 대조축에서 빠져 있다
+### 🟠 F3. `issuance_usages`가 검증 대조축에서 빠져 있다
 
-PRD는 **coupons ↔ histories** 대조만 강조한다. 그런데 진실의 축이 하나 더 있다.
+PRD는 **issuances ↔ histories** 대조만 강조한다. 그런데 진실의 축이 하나 더 있다.
 
 ```
 PRD 본문:  "현재 유효한 사용은 canceled_at IS NULL인 행이고,
@@ -151,9 +164,9 @@ PRD 본문:  "현재 유효한 사용은 canceled_at IS NULL인 행이고,
 **세 축이 서로 맞아야 한다.**
 
 ```
-coupons.status = 'USED'
-  ↔ coupon_histories 리플레이 결과 = USED
-  ↔ coupon_usages 에 canceled_at IS NULL 인 행이 정확히 1개
+issuances.status = 'USED'
+  ↔ issuance_histories 리플레이 결과 = USED
+  ↔ issuance_usages 에 canceled_at IS NULL 인 행이 정확히 1개
 ```
 
 **우리가 할 것** — 검증 규칙과 오염 유형을 각각 하나씩 추가한다.
@@ -169,14 +182,14 @@ V5  사용 실적 정합
     → 사용취소가 usages 를 안 건드리고 status 만 되돌린 버그의 형태
 ```
 
-오염셋이 600 → 700건이 되는데, **오염 유형이 늘어나는 건 검증이 강해진다는 뜻**이라 부담이 아니다. 인덱스 `idx_usage_coupon_active (coupon_id, canceled_at)`가 이미 있어서 검출 비용도 낮다.
+오염셋이 600 → 700건이 되는데, **오염 유형이 늘어나는 건 검증이 강해진다는 뜻**이라 부담이 아니다. 인덱스 `idx_usage_issuance_active (issuance_id, canceled_at)`가 이미 있어서 검출 비용도 낮다.
 
 ---
 
-### 🟠 F4. `coupon_histories`에 요청 추적 키가 없다
+### 🟠 F4. `issuance_histories`에 요청 추적 키가 없다
 
 ```
-현재:  coupon_histories { id, coupon_id, event_type, from_status, to_status, reason, created_at }
+현재:  issuance_histories { id, issuance_id, event_type, from_status, to_status, reason, created_at }
 ```
 
 `idempotency_records`와 **연결이 전혀 없다.** 멱등키로 처리된 요청이 어떤 이력을 남겼는지 추적할 수 없다.
@@ -188,18 +201,22 @@ V5  사용 실적 정합
 **우리가 할 것** — 컬럼 하나 추가. 비용 거의 0.
 
 ```sql
-coupon_histories 에  request_id VARCHAR(36) NULL  추가
-idempotency_records 에  coupon_id BIGINT NULL  추가   (양방향 추적)
+issuance_histories 에  request_id VARCHAR(36) NULL  추가
+idempotency_records 에  issuance_id BIGINT NULL  추가   (양방향 추적)
 ```
 
 `idempotency_records`는 어차피 함정 5(멱등 동시 요청) 때문에 `status` 컬럼을 추가해야 한다. **같이 손대는 김에 넣는다.**
+
+> 실제로는 `issuance_id BIGINT NOT NULL` 로 들어갔다(`V1__init_schema.sql`). 여기 `NULL` 은
+> 이 문서가 제안하던 시점의 값이라 그대로 두고, 결과만 적어 둔다 — 멱등 레코드는 언제나
+> 어느 발급건에 대한 요청인지가 정해져 있어서 `NULL` 을 허용할 자리가 없었다.
 
 ```sql
 idempotency_records(
   idem_key      VARCHAR(36) PK,
   request_hash  CHAR(64),
   status        VARCHAR(12),   -- IN_PROGRESS / DONE     ← 함정 5
-  coupon_id     BIGINT NULL,   -- 추적                    ← F4
+  issuance_id   BIGINT NULL,   -- 추적                    ← F4
   response_body TEXT,
   created_at    DATETIME(6)
 )
@@ -210,8 +227,8 @@ idempotency_records(
 ### 🟡 F5. 실제 소진 시각을 저장할 곳이 없다
 
 ```
-campaigns { open_at, close_at, status }
-campaign_stats { ..., sold_out_seconds }
+coupons { open_at, close_at, status }
+coupon_stats { ..., sold_out_seconds }
 ```
 
 상태머신은 `OPEN → CLOSED (재고 소진 또는 close_at)`이다. 재고 소진으로 닫히면 `close_at`은 예정값 그대로인가, 실제 마감 시각으로 갱신되나?
@@ -224,49 +241,49 @@ campaign_stats { ..., sold_out_seconds }
 **우리가 할 것** — 둘 중 싼 쪽. 컬럼을 안 늘리는 쪽을 택한다.
 
 ```
-sold_out_seconds = (해당 캠페인의 마지막 ISSUE 이력 created_at) − open_at
-                   단, 완판된 캠페인만. 미달 캠페인은 NULL
+sold_out_seconds = (해당 회차의 마지막 ISSUE 이력 created_at) − open_at
+                   단, 완판된 회차만. 미달 회차는 NULL
 ```
 
 검증 배치가 어차피 이력을 전수 스캔하므로 **같은 패스에서 공짜로 나온다.** `close_at`은 예정값으로 두고 건드리지 않는다.
 
-다만 이걸 명시해두지 않으면 구현자가 `close_at`을 갱신해버리고, 그 순간 "캠페인이 예정보다 일찍 닫혔다"는 정보가 소실된다.
+다만 이걸 명시해두지 않으면 구현자가 `close_at`을 갱신해버리고, 그 순간 "회차가 예정보다 일찍 닫혔다"는 정보가 소실된다.
 
 ---
 
-### 🟡 F6. 템플릿 재고와 과거 캠페인 재고가 다른 게 정상이다
+### 🟡 F6. 템플릿 재고와 과거 회차 재고가 다른 게 정상이다
 
 ```
 coupon_templates.stock_per_occurrence   회차당 재고 (고정값)
-coupon_stocks.total_quantity            실제 캠페인 재고
+coupon_stocks.total_quantity            실제 회차 재고
 ```
 
-PRD 캠페인 구성: 과거 144개는 **"캠페인당 재고 18,000~34,000장"으로 흩뿌린다.** 그런데 템플릿의 `stock_per_occurrence`는 브랜드당 하나의 고정값이다.
+PRD 회차 구성: 과거 144개는 **"회차당 재고 18,000~34,000장"으로 흩뿌린다.** 그런데 템플릿의 `stock_per_occurrence`는 브랜드당 하나의 고정값이다.
 
-→ 더미데이터는 스케줄러를 거치지 않고 직접 생성한다는 뜻이고, **템플릿 값과 과거 캠페인 재고가 불일치하는 게 정상**이다.
+→ 더미데이터는 회차 생성 경로를 거치지 않고 직접 넣는다는 뜻이고, **템플릿 값과 과거 회차 재고가 불일치하는 게 정상**이다.
 
-스냅샷 원칙상 캠페인이 진실이므로 설계는 맞다. 문제는 이걸 명시 안 하면 **검증 배치 짜는 사람이 "템플릿과 캠페인 재고 불일치"를 오염으로 잡을 수 있다는 것.**
+스냅샷 원칙상 회차가 진실이므로 설계는 맞다. 문제는 이걸 명시 안 하면 **검증 배치 짜는 사람이 "템플릿과 회차 재고 불일치"를 오염으로 잡을 수 있다는 것.**
 
 **우리가 할 것** — 검증 규칙에 명시적으로 제외를 적는다.
 
 ```
 ✗ 검증하지 않음: coupon_templates.stock_per_occurrence ↔ coupon_stocks.total_quantity
-   이유: 캠페인은 생성 시점 스냅샷. 템플릿은 이후 회차의 기본값일 뿐이다.
-        더미데이터의 과거 캠페인은 의도적으로 재고를 흩뿌렸다.
+   이유: 회차는 생성 시점 스냅샷. 템플릿은 이후 회차의 기본값일 뿐이다.
+        더미데이터의 과거 회차는 의도적으로 재고를 흩뿌렸다.
 ```
 
 ---
 
-### 🟢 F7. `coupons.updated_at` — 있으면 편하고 없어도 된다
+### 🟢 F7. `issuances.updated_at` — 있으면 편하고 없어도 된다
 
-현재 `coupons`는 `issued_at`, `expires_at`만 있고 **마지막 상태 변경 시각이 없다.**
+현재 `issuances`는 `issued_at`, `expires_at`만 있고 **마지막 상태 변경 시각이 없다.**
 
 이력이 진실이라는 설계 의도상 맞다. 다만 개발 중 검증 배치를 **수십 번 돌린다**고 PRD가 썼는데, 매번 300만 전수를 도는 것과 "직전 run 이후 바뀐 것만" 도는 것은 체감 차이가 크다.
 
 **우리가 할 것** — 컬럼은 넣되 검증 로직은 전수로 간다.
 
 ```sql
-coupons 에  updated_at DATETIME(6)  추가
+issuances 에  updated_at DATETIME(6)  추가
 ```
 
 과제가 "300만 전수"를 요구하므로 **최종 검증은 반드시 전수**다. `updated_at`은 개발 중 빠른 반복용이고, 제출·시연은 전수 모드로 돌린다. 두 모드가 같은 결과를 내는지도 확인해두면 그 자체가 좋은 테스트가 된다.
@@ -278,25 +295,25 @@ coupons 에  updated_at DATETIME(6)  추가
 PRD의 4종을 검토했는데 규모 대비 적절하다.
 
 ```sql
-idx_coupon_campaign_status  (campaign_id, status)      -- 재고 정합 검증
-idx_coupon_status_expires   (status, expires_at)       -- 만료 배치
-idx_history_coupon          (coupon_id, created_at)    -- 이력 리플레이
-idx_usage_coupon_active     (coupon_id, canceled_at)   -- 사용 실적 검증 (F3)
-uk_campaign_member          (campaign_id, member_id)   -- 제약 겸 인덱스. 1인 다매 검출 커버
+idx_issuance_coupon_status  (coupon_id, status)        -- 재고 정합 검증
+idx_issuance_status_expires (status, expires_at)       -- 만료 배치
+idx_history_issuance        (issuance_id, created_at)    -- 이력 리플레이
+idx_usage_issuance_active   (issuance_id, canceled_at)   -- 사용 실적 검증 (F3)
+uk_coupon_member            (coupon_id, member_id)     -- 제약 겸 인덱스. 1인 다매 검출 커버
 ```
 
 추가로 검토했지만 **불필요하다고 판단한 것들**:
 
 | 후보 | 판단 |
 |---|---|
-| `coupons(member_id)` | "내 쿠폰 목록" API가 없다. 대시보드도 캠페인 단위 |
-| `campaigns(status)`, `campaigns(open_at)` | 147행. 풀스캔이 인덱스보다 빠르다 |
-| `coupon_histories(created_at)` | 시계열은 애플리케이션 링버퍼. `hourly_stats`는 어차피 전수 스캔 |
+| `issuances(member_id)` | "내 쿠폰 목록" API가 없다. 대시보드도 회차 단위 |
+| `coupons(status)`, `coupons(open_at)` | 147행. 풀스캔이 인덱스보다 빠르다 |
+| `issuance_histories(created_at)` | 시계열은 애플리케이션 링버퍼. `hourly_stats`는 어차피 전수 스캔 |
 
 **한 가지만 실행 순서로 지킨다** — 더미데이터 적재 시 **인덱스는 나중에 만든다.**
 
 ```
-1. 인덱스·제약 없이 coupons 300만 · histories 520만 JDBC batch 적재
+1. 인덱스·제약 없이 issuances 300만 · histories 520만 JDBC batch 적재
 2. 적재 완료 후 CREATE INDEX + ADD CONSTRAINT
 ```
 
@@ -306,24 +323,34 @@ uk_campaign_member          (campaign_id, member_id)   -- 제약 겸 인덱스. 
 
 ## 손본 뒤의 ERD
 
-관계선은 그대로다. 바뀐 건 **검증 3테이블과 컬럼 5개**뿐이다.
+**연결 관계는 그대로다.** 이 문서가 PRD 원안에 더한 것은 **검증 3테이블과 컬럼 5개**뿐이고,
+어느 테이블이 어느 테이블에 걸리는지는 하나도 안 바뀌었다.
+
+두 가지가 겉보기로 달라졌는데 둘 다 모델 변경이 아니다.
+
+- **엔티티 이름을 현재 DDL 명칭으로 맞췄다** — `CAMPAIGNS`→`COUPONS`,
+  `COUPONS`→`ISSUANCES`, `COUPON_HISTORIES`→`ISSUANCE_HISTORIES`,
+  `COUPON_USAGES`→`ISSUANCE_USAGES`. 위 어휘 표의 그 리네이밍이다.
+- **회차 생성 라벨의 주체를 고쳤다** — *"스케줄러가"* → *"관리자 API 가"*.
+  회차를 만드는 것은 `POST /api/v1/admin/coupon-templates/{id}/rounds`(CY-5)이고,
+  배치는 그 축을 안 맡는다(CY-503).
 
 ```mermaid
 erDiagram
     BRANDS            ||--o{ COUPON_TEMPLATES   : "운영"
-    COUPON_TEMPLATES  ||--o{ CAMPAIGNS          : "스케줄러가 회차 생성"
-    CAMPAIGNS         ||--|| COUPON_STOCKS      : "재고 1:1"
-    CAMPAIGNS         ||--o{ COUPONS            : "발급"
-    MEMBERS           ||--o{ COUPONS            : "보유"
+    COUPON_TEMPLATES  ||--o{ COUPONS            : "관리자 API 가 회차 생성"
+    COUPONS           ||--|| COUPON_STOCKS      : "재고 1:1"
+    COUPONS           ||--o{ ISSUANCES          : "발급"
+    MEMBERS           ||--o{ ISSUANCES          : "보유"
     GRADES            ||--o{ MEMBERS            : "등급 코드"
-    COUPONS           ||--o{ COUPON_HISTORIES   : "상태 전이 이력"
-    COUPONS           ||--o{ COUPON_USAGES      : "사용·취소 실적"
-    COUPONS           ||--o{ IDEMPOTENCY_RECORDS: "상태 변경 요청"
+    ISSUANCES         ||--o{ ISSUANCE_HISTORIES : "상태 전이 이력"
+    ISSUANCES         ||--o{ ISSUANCE_USAGES    : "사용·취소 실적"
+    ISSUANCES         ||--o{ IDEMPOTENCY_RECORDS: "상태 변경 요청"
     VERIFICATION_RUNS ||--o{ VERIFICATION_FINDINGS : "검출 항목"
 
-    COUPONS {
+    ISSUANCES {
         bigint id PK
-        bigint campaign_id FK
+        bigint coupon_id FK
         bigint member_id FK
         char code UK
         varchar status
@@ -331,9 +358,9 @@ erDiagram
         datetime expires_at
         datetime updated_at "추가 · 증분 검증용"
     }
-    COUPON_HISTORIES {
+    ISSUANCE_HISTORIES {
         bigint id PK
-        bigint coupon_id FK
+        bigint issuance_id FK
         varchar event_type
         varchar from_status
         varchar to_status
@@ -345,7 +372,7 @@ erDiagram
         varchar idem_key PK
         char request_hash
         varchar status "추가 · IN_PROGRESS/DONE"
-        bigint coupon_id "추가 · 추적"
+        bigint issuance_id "추가 · 추적"
         text response_body
         datetime created_at
     }
@@ -362,16 +389,22 @@ erDiagram
         bigint id PK
         bigint run_id FK
         varchar finding_type
-        bigint campaign_id "추가 · 재고 불일치"
+        bigint campaign_id "레거시 이름 · 회차 coupons.id 를 가리킨다"
         bigint member_id "추가 · 1인 다매"
-        bigint coupon_id
+        bigint coupon_id "레거시 이름 · 발급건 issuances.id 를 가리킨다"
         bigint history_id "추가 · 불법 전이"
         varchar expected "추가 · 근거"
         varchar actual "추가 · 근거"
     }
 ```
 
-**나머지 테이블**(`BRANDS`, `COUPON_TEMPLATES`, `CAMPAIGNS`, `COUPON_STOCKS`, `MEMBERS`, `GRADES`, `COUPON_USAGES`, 집계 3종)은 **PRD 원안 그대로 간다.** 도메인 모델링은 손댈 게 없다.
+**⚠️ `verification_findings` 두 컬럼은 이름과 뜻이 어긋나 있다.** 회차·발급건이
+`campaigns`·`coupons` 이던 시절에 붙은 이름이 그대로 남았다 — 지금 `campaign_id` 는
+**회차**(`coupons.id`), `coupon_id` 는 **발급건**(`issuances.id`)이다. 스키마에 실재하는
+이름이라 ERD 에서 고치면 없는 컬럼을 그리게 되므로 그대로 두고 뜻만 밝힌다.
+집합 비교는 이 컬럼들이 아니라 `target_key` 로만 한다.
+
+**나머지 테이블**(`BRANDS`, `COUPON_TEMPLATES`, `COUPONS`, `COUPON_STOCKS`, `MEMBERS`, `GRADES`, `ISSUANCE_USAGES`, 집계 3종)은 **PRD 원안 그대로 간다.** 도메인 모델링은 손댈 게 없다.
 
 ---
 
@@ -383,11 +416,11 @@ erDiagram
 |---|---|---|---|
 | F1 | `verification_findings` 다형 키 + `expected`/`actual` | 검증 규칙 5개 중 3개가 쿠폰 단위가 아님 | 컬럼 5개 |
 | F2 | `verification_runs.findings_checksum` | 재실행 결정론을 한 줄로 증명 | 컬럼 1개 |
-| F3 | `coupon_usages` 대조축 + 검증 V5 + 오염 유형 7 | PRD가 "검증 대상"이라 써놓고 규칙에 없음 | 규칙 1개 |
-| F4 | `coupon_histories.request_id`, `idempotency_records.coupon_id` | 불일치를 찾은 다음 원인 추적 | 컬럼 2개 |
+| F3 | `issuance_usages` 대조축 + 검증 V5 + 오염 유형 7 | PRD가 "검증 대상"이라 써놓고 규칙에 없음 | 규칙 1개 |
+| F4 | `issuance_histories.request_id`, `idempotency_records.issuance_id` | 불일치를 찾은 다음 원인 추적 | 컬럼 2개 |
 | F5 | `sold_out_seconds`는 이력에서 계산, `close_at` 불변 | 실제 소진 시각 저장 위치 부재 | 컬럼 0개 |
-| F6 | 템플릿↔캠페인 재고 불일치를 검증 제외로 명시 | 오탐 방지 | 문서 1줄 |
-| F7 | `coupons.updated_at` | 개발 중 증분 검증. 최종은 전수 | 컬럼 1개 |
+| F6 | 템플릿↔회차 재고 불일치를 검증 제외로 명시 | 오탐 방지 | 문서 1줄 |
+| F7 | `issuances.updated_at` | 개발 중 증분 검증. 최종은 전수 | 컬럼 1개 |
 
 **도메인 모델은 그대로 간다.** `coupon_stocks` 분리, 스냅샷, append-only 이력, 비트마스크 — 전부 이유가 명확하고 우리가 더 나은 안을 못 낸다.
 

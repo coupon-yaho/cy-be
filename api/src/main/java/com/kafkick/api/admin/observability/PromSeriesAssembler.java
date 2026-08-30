@@ -52,6 +52,8 @@ public class PromSeriesAssembler {
     private static final String TAG_QUANTILE = "quantile";
     private static final String TAG_JOB = "job";
     private static final String JOB_API = "api";
+    private static final String TAG_CONSUMER_GROUP = "consumer_group";
+    private static final String ATTEMPT_ARCHIVE_GROUP = "coupon-attempt-archive";
     private static final String TAG_OUTCOME = OverviewPrometheusContract.OUTCOME;
     private static final String OUTCOME_SUCCESS = OverviewPrometheusContract.SUCCESS;
 
@@ -133,6 +135,8 @@ public class PromSeriesAssembler {
         // 원천이 아예 없다 — batch 가 1초마다 덮어쓰는 게이지라 과거가 남지 않는다.
         series.addAll(collect(SeriesKey.QUEUE_ADMISSION, admissionQueueQuery(couponId),
                 start, end, step, deadline));
+        series.addAll(collect(SeriesKey.QUEUE_PERSISTENCE, persistenceQueueQuery(),
+                start, end, step, deadline));
         // 포화의 선행 지표다. 처리량이 꺾이기 전에 먼저 오르므로 사후 분석의 시작점이 된다.
         series.addAll(collect(SeriesKey.IN_FLIGHT, inFlightQuery(),
                 start, end, step, deadline));
@@ -160,7 +164,6 @@ public class PromSeriesAssembler {
         series.addAll(collect(SeriesKey.LATENCY_P99_SYSTEM_FAILURE, latencyQuery(OUTCOME_SYSTEM_FAILURE),
                 start, end, step, deadline));
         // 원천이 없는 계열이다. 질의를 보내지 않으므로 예산을 쓰지 않고 절단 순서와도 무관하다.
-        series.add(sourceMissing(SeriesKey.QUEUE_PERSISTENCE));
         series.add(sourceMissing(SeriesKey.QUEUE_TELEMETRY));
 
         // 계열을 다 보낸 뒤다. 기준선은 계열이 있어야 의미가 있고, 둘 중 하나만 남길 수 있다면
@@ -287,6 +290,11 @@ public class PromSeriesAssembler {
     private static ScopedQuery admissionQueueQuery(Long couponId) {
         return scoped(MetricAggregation.QUEUE_LENGTH,
                 MetricAggregation.OBSERVED_COUPON_ID, couponId);
+    }
+
+    private static ScopedQuery persistenceQueueQuery() {
+        return ScopedQuery.global("sum(" + MetricAggregation.KAFKA_CONSUMER_LAG
+                + "{" + TAG_CONSUMER_GROUP + "=\"" + ATTEMPT_ARCHIVE_GROUP + "\"})");
     }
 
     /**
