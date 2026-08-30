@@ -435,6 +435,33 @@ services:
       # 적어 두는 편이 로그를 읽기 쉽다 — service_started 라 기동을 기다리지는 않는다.
       - api
       - batch
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+
+    # 무인증 관리 API를 호스트에 노출하지 않는다. silence 작업은 컨테이너 안에서 한다.
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # silence가 재기동 뒤에도 남아야 배포·성능 회차 중 의도한 알림이 다시 울지 않는다.
+      - alertmanager-data:/alertmanager
+
+    depends_on:
+      - alert-sink
+
+  alert-sink:
+    image: python:3.13-slim
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    environment:
+      # 없으면 stdout에만 남겨 로컬에서도 알림 경로를 끊지 않는다.
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - ./infra/alertmanager/alert-sink.py:/app/alert-sink.py:ro
+    command: ["python", "-u", "/app/alert-sink.py"]
 
 volumes:
   coupon-mysql-data:
@@ -445,3 +472,4 @@ volumes:
   # 모든 볼륨이 위 name: coupon-yaho 접두사를 받는다. 개별 name: 을 박으면 규칙이 둘이 되고,
   # 한쪽만 프로젝트 밖으로 공유되는 상태가 된다.
   prometheus-data:
+  alertmanager-data:

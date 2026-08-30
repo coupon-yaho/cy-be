@@ -128,6 +128,40 @@ class PrometheusScrapeConfigContractTest {
         }
     }
 
+    @Test
+    @DisplayName("성능 회차 설정은 API 발견 방식만 바꾸고 외부 게이트웨이·알림은 보존한다")
+    void performanceScrapePreservesGatewayAndAlertWiring() throws IOException {
+        Map<String, Object> baseline = loadYaml(
+                repoRoot().resolve("infra/prometheus/prometheus.yml"));
+        Map<String, Object> performance = loadYaml(
+                repoRoot().resolve("perf/env/prometheus.perf.yml"));
+
+        assertThat(performance.get("alerting")).isEqualTo(baseline.get("alerting"));
+        assertThat(performance.get("rule_files")).isEqualTo(baseline.get("rule_files"));
+        assertThat(jobNamed(performance, "queue-gateway"))
+                .as("회차 오버레이가 기본 설정을 덮어쓰므로 게이트웨이 job도 다시 적어야 한다")
+                .isEqualTo(jobNamed(baseline, "queue-gateway"));
+    }
+
+    @Test
+    @DisplayName("기본 Compose에서 Prometheus 알림이 Alertmanager와 sink까지 전달된다")
+    void composeProvidesTheWholeAlertDeliveryPath() throws IOException {
+        Map<String, Object> prometheus = serviceNamed("prometheus");
+        Map<String, Object> alertmanager = serviceNamed("alertmanager");
+        Map<String, Object> sink = serviceNamed("alert-sink");
+
+        assertThat(stringList(prometheus.get("depends_on"))).contains("alertmanager");
+        assertThat(stringList(alertmanager.get("depends_on"))).contains("alert-sink");
+        assertThat(stringList(alertmanager.get("volumes")))
+                .anyMatch(volume -> volume.startsWith(
+                        "./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml"));
+        assertThat(stringList(sink.get("volumes")))
+                .anyMatch(volume -> volume.startsWith(
+                        "./infra/alertmanager/alert-sink.py:/app/alert-sink.py"));
+        assertThat(alertmanager.get("ports")).as("무인증 Alertmanager를 호스트에 열지 않는다").isNull();
+        assertThat(sink.get("ports")).as("목 수신기도 호스트에 열지 않는다").isNull();
+    }
+
     // batch 의 관측 풀 ↔ health group 계약은 여기서 보지 않는다. 두 파일 다 batch 소유이고
     // batch/observation/DomainGaugeConfigContractTest 가 같은 계약을 이미 지킨다. 두 곳에 적어 둔
     // 동안 실제로 갈라졌다 — CY-309 가 스위치를 ${OBSERVATION_DATASOURCE_ENABLED:true} 로 열자
@@ -394,6 +428,16 @@ class PrometheusScrapeConfigContractTest {
             byJob.put(jobName, stringList(fileSd.get(0).get("files")).get(0));
         }
         return byJob;
+    }
+
+    private Map<String, Object> jobNamed(Map<String, Object> prometheus, String name) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> jobs =
+                (List<Map<String, Object>>) prometheus.get("scrape_configs");
+        return jobs.stream()
+                .filter(job -> name.equals(String.valueOf(job.get("job_name"))))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("scrape job이 없다: " + name));
     }
 
     /**
