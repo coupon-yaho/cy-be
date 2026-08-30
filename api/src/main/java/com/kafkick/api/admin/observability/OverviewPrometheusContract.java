@@ -62,7 +62,7 @@ public final class OverviewPrometheusContract {
                     // v2 의 사고 넷. 정상 운영에서 전부 0 이라 표에 뜨면 그게 원인이다.
                     VALUE_CORRUPT, GATE_NOT_READY, BAD_ARGUMENT, COUNTER_UNREADABLE -> true;
             // 403·409 로 나가는 설계된 거절과 대기열 계약 위반이다. 실패가 아니다.
-            case NOT_OPENED, CAMPAIGN_CLOSED, GRADE_NOT_ELIGIBLE, QUEUE_REQUIRED, NO_ENTRY_TOKEN,
+            case NOT_OPENED, COUPON_ROUND_CLOSED, GRADE_NOT_ELIGIBLE, QUEUE_REQUIRED, NO_ENTRY_TOKEN,
                     ENTRY_TOKEN_EXPIRED, ALREADY_ISSUED, STOCK_EXHAUSTED,
                     INVALID_TRANSITION,
                     // 멱등 재시도다. 장애가 아니라 클라이언트가 다시 누른 것이다.
@@ -85,19 +85,19 @@ public final class OverviewPrometheusContract {
                 + "{" + OUTCOME + "=~\"" + selector + "\"}[" + promDuration(window) + "]))";
     }
 
-    /** @return 현재 1분 attempt·success 캠페인별 증가량 질의 */
+    /** @return 현재 1분 attempt·success 쿠폰 회차별 증가량 질의 */
     public static String currentFlow() {
         return currentFlow(OverviewPrometheusProperties.defaults().currentWindow());
     }
 
-    /** 지정 집계 구간을 사용하는 attempt·success 캠페인별 증가량 질의를 만듭니다. */
+    /** 지정 집계 구간을 사용하는 attempt·success 쿠폰 회차별 증가량 질의를 만듭니다. */
     public static String currentFlow(Duration currentWindow) {
         return "sum by (" + COUPON_ID + ", " + STAGE + ") (increase(" + FLOW_TOTAL
                 + "{" + STAGE + "=~\"" + ATTEMPT + "|" + SUCCESS + "\"}["
                 + promDuration(currentWindow) + "]))";
     }
 
-    /** @return 직전 1분 success 캠페인별 증가량 질의 */
+    /** @return 직전 1분 success 쿠폰 회차별 증가량 질의 */
     public static String comparisonSuccess() {
         OverviewPrometheusProperties defaults = OverviewPrometheusProperties.defaults();
         return comparisonSuccess(defaults.currentWindow(), defaults.comparisonOffset());
@@ -120,12 +120,12 @@ public final class OverviewPrometheusContract {
         return currentFlow(currentWindow);
     }
 
-    /** @return 캠페인별 마지막 성공 이벤트 epoch 질의 */
+    /** @return 쿠폰 회차별 마지막 성공 이벤트 epoch 질의 */
     public static String lastSuccessEpoch() {
         return "max by (" + COUPON_ID + ") (" + LAST_SUCCESS_EPOCH + ")";
     }
 
-    /** @return 캠페인별 발급 흐름의 가장 오래된 실제 scrape 시각 질의 */
+    /** @return 쿠폰 회차별 발급 흐름의 가장 오래된 실제 scrape 시각 질의 */
     public static String flowFreshnessEpoch() {
         return "min by (" + COUPON_ID + ") (timestamp(" + FLOW_TOTAL
                 + "{" + STAGE + "=~\"" + ATTEMPT + "|" + SUCCESS + "\"}))";

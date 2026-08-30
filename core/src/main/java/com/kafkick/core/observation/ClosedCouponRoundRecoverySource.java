@@ -3,9 +3,9 @@ package com.kafkick.core.observation;
 import java.time.Instant;
 import java.util.List;
 
-public interface ClosedCampaignRecoverySource {
+public interface ClosedCouponRoundRecoverySource {
 
-    List<ClosedCampaign> findRecentlyClosed(
+    List<ClosedCouponRound> findRecentlyClosed(
             Instant fromInclusive,
             Instant toInclusive,
             int limit

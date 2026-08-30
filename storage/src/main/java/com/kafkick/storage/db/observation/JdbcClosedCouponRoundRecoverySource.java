@@ -10,16 +10,16 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import com.kafkick.core.observation.ClosedCampaign;
-import com.kafkick.core.observation.ClosedCampaignRecoverySource;
+import com.kafkick.core.observation.ClosedCouponRound;
+import com.kafkick.core.observation.ClosedCouponRoundRecoverySource;
 
 @Repository
 @ConditionalOnProperty(
         name = "observation.datasource.enabled",
         havingValue = "true"
 )
-public class JdbcClosedCampaignRecoverySource
-        implements ClosedCampaignRecoverySource {
+public class JdbcClosedCouponRoundRecoverySource
+        implements ClosedCouponRoundRecoverySource {
 
     private static final String SELECT_RECENT_CLOSED = """
             SELECT id, close_at
@@ -33,7 +33,7 @@ public class JdbcClosedCampaignRecoverySource
 
     private final JdbcTemplate observationJdbcTemplate;
 
-    public JdbcClosedCampaignRecoverySource(
+    public JdbcClosedCouponRoundRecoverySource(
             @Qualifier("obs") JdbcTemplate observationJdbcTemplate
     ) {
         this.observationJdbcTemplate = Objects.requireNonNull(
@@ -42,7 +42,7 @@ public class JdbcClosedCampaignRecoverySource
     }
 
     @Override
-    public List<ClosedCampaign> findRecentlyClosed(
+    public List<ClosedCouponRound> findRecentlyClosed(
             Instant fromInclusive,
             Instant toInclusive,
             int limit
@@ -56,7 +56,7 @@ public class JdbcClosedCampaignRecoverySource
         }
         return observationJdbcTemplate.query(
                 SELECT_RECENT_CLOSED,
-                (resultSet, rowNumber) -> new ClosedCampaign(
+                (resultSet, rowNumber) -> new ClosedCouponRound(
                         resultSet.getLong("id"),
                         resultSet.getTimestamp("close_at").toInstant()
                 ),

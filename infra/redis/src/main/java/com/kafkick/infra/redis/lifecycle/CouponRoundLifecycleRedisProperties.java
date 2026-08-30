@@ -2,11 +2,11 @@ package com.kafkick.infra.redis.lifecycle;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-@ConfigurationProperties("campaign.lifecycle.redis")
-public class CampaignLifecycleRedisProperties {
+@ConfigurationProperties("coupon-round.lifecycle.redis")
+public class CouponRoundLifecycleRedisProperties {
 
     public static final String DEFAULT_CHANNEL =
-            "campaign:lifecycle:closed";
+            "coupon-round:lifecycle:closed";
 
     private String channel = DEFAULT_CHANNEL;
     private boolean subscriberEnabled;

@@ -226,7 +226,7 @@ public final class HttpMetricsFilter extends OncePerRequestFilter {
 
             String[] segments = pattern.split("/");
             // OBS-45 (2026-08-25): 이 시점부터 issue는 실제 쿠폰 발급 트래픽을 뜻한다.
-            // 이전의 uri_group="issue"는 존재하지 않는 campaigns 경로를 판정해 항상 0이었다.
+            // 이전의 uri_group="issue"는 존재하지 않는 쿠폰 회차 경로를 판정해 항상 0이었다.
             if ("POST".equals(normalizedMethod)
                     && isItemAction(segments, "coupons", "issue")) {
                 return Optional.of(ISSUE);

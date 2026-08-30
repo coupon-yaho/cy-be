@@ -11,7 +11,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
-import com.kafkick.core.observation.ClosedCampaign;
+import com.kafkick.core.observation.ClosedCouponRound;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -23,7 +23,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-class JdbcClosedCampaignRecoverySourceTest {
+class JdbcClosedCouponRoundRecoverySourceTest {
 
     private static final Instant FROM =
             Instant.parse("2026-08-25T05:04:00Z");
@@ -33,7 +33,7 @@ class JdbcClosedCampaignRecoverySourceTest {
     @Test
     @DisplayName("최근 CLOSED만 최신순으로 제한하는 관측 SQL을 실행한다")
     @SuppressWarnings("unchecked")
-    void queryRecentClosedCampaignsNewestFirst() {
+    void queryRecentClosedCouponRoundsNewestFirst() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         when(jdbc.query(
                 anyString(),
@@ -42,8 +42,8 @@ class JdbcClosedCampaignRecoverySourceTest {
                 any(),
                 anyInt()
         )).thenReturn(List.of());
-        JdbcClosedCampaignRecoverySource source =
-                new JdbcClosedCampaignRecoverySource(jdbc);
+        JdbcClosedCouponRoundRecoverySource source =
+                new JdbcClosedCouponRoundRecoverySource(jdbc);
 
         source.findRecentlyClosed(FROM, TO, 1_000);
 
@@ -66,7 +66,7 @@ class JdbcClosedCampaignRecoverySourceTest {
     @Test
     @DisplayName("ID와 close_at을 기동 보정 값으로 매핑한다")
     @SuppressWarnings("unchecked")
-    void mapCampaignIdAndClosedAt() throws Exception {
+    void mapCouponRoundIdAndClosedAt() throws Exception {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         ResultSet resultSet = mock(ResultSet.class);
         when(resultSet.getLong("id")).thenReturn(201L);
@@ -79,22 +79,22 @@ class JdbcClosedCampaignRecoverySourceTest {
                 any(),
                 anyInt()
         )).thenAnswer(invocation -> {
-            RowMapper<ClosedCampaign> mapper = invocation.getArgument(1);
+            RowMapper<ClosedCouponRound> mapper = invocation.getArgument(1);
             return List.of(mapper.mapRow(resultSet, 0));
         });
-        JdbcClosedCampaignRecoverySource source =
-                new JdbcClosedCampaignRecoverySource(jdbc);
+        JdbcClosedCouponRoundRecoverySource source =
+                new JdbcClosedCouponRoundRecoverySource(jdbc);
 
         assertThat(source.findRecentlyClosed(FROM, TO, 1_000))
-                .containsExactly(new ClosedCampaign(201L, TO));
+                .containsExactly(new ClosedCouponRound(201L, TO));
     }
 
     @Test
     @DisplayName("0 이하 조회 상한은 DB 호출 전에 거부한다")
     void rejectNonPositiveLimit() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        JdbcClosedCampaignRecoverySource source =
-                new JdbcClosedCampaignRecoverySource(jdbc);
+        JdbcClosedCouponRoundRecoverySource source =
+                new JdbcClosedCouponRoundRecoverySource(jdbc);
 
         assertThatThrownBy(() -> source.findRecentlyClosed(FROM, TO, 0))
                 .isInstanceOf(IllegalArgumentException.class);

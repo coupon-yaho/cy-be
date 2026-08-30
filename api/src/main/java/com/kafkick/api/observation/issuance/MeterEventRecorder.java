@@ -11,10 +11,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Records the local, lossless campaign meters from OBS-24 flow events.
+ * Records the local, lossless coupon-round meters from OBS-24 flow events.
  *
  * <p>{@code ISSUE_ATTEMPT} is the one meter that counts replays: it is a stage, not a result, so every
- * retry increments it (see {@code EventType}). Every other meter here — the per-campaign success and
+ * retry increments it (see {@code EventType}). Every other meter here — the per-coupon-round success and
  * admitted counters and {@code app.issuance.outcome} — skips replays. {@code app.issuance.outcome} in
  * particular must stay one increment per logical result — a replay re-emits a stored result rather than computing a new one, so counting it
  * inflates the denominator of every issue-rate and failure-rate panel with no exception and no log.
@@ -23,11 +23,11 @@ import org.slf4j.LoggerFactory;
 public final class MeterEventRecorder implements EventRecorder {
 
     private static final Logger log = LoggerFactory.getLogger(MeterEventRecorder.class);
-    private final CampaignMeterRegistry campaignMeters;
+    private final CouponRoundMeterRegistry couponRoundMeters;
     private final FailureLogThrottle failureLog;
 
-    public MeterEventRecorder(CampaignMeterRegistry campaignMeters, Duration failureLogInterval) {
-        this.campaignMeters = Objects.requireNonNull(campaignMeters, "campaignMeters");
+    public MeterEventRecorder(CouponRoundMeterRegistry couponRoundMeters, Duration failureLogInterval) {
+        this.couponRoundMeters = Objects.requireNonNull(couponRoundMeters, "couponRoundMeters");
         this.failureLog = new FailureLogThrottle(failureLogInterval);
     }
 
@@ -42,10 +42,10 @@ public final class MeterEventRecorder implements EventRecorder {
 
     private void recordSafely(IssuanceFlowEvent event) {
         switch (event.eventType()) {
-            case ISSUE_ATTEMPT -> campaignMeters.campaignMeters(event.couponId())
+            case ISSUE_ATTEMPT -> couponRoundMeters.couponRoundMeters(event.couponId())
                     .ifPresent(meters -> meters.attempt().increment());
             case QUEUE_ADMITTED -> {
-                campaignMeters.campaignMeters(event.couponId()).ifPresent(meters -> {
+                couponRoundMeters.couponRoundMeters(event.couponId()).ifPresent(meters -> {
                     meters.admitted().increment();
                     meters.lastAdmittedEpoch().accumulateAndGet(epochSeconds(event.occurredAt()), Math::max);
                 });
@@ -62,14 +62,14 @@ public final class MeterEventRecorder implements EventRecorder {
             return;
         }
         if (event.reasonCode() != null) {
-            campaignMeters.recordRejectedOutcome(event.reasonCode());
+            couponRoundMeters.recordRejectedOutcome(event.reasonCode());
             return;
         }
-        campaignMeters.campaignMeters(event.couponId()).ifPresent(meters -> {
+        couponRoundMeters.couponRoundMeters(event.couponId()).ifPresent(meters -> {
             meters.success().increment();
             meters.lastSuccessEpoch().accumulateAndGet(epochSeconds(event.occurredAt()), Math::max);
         });
-        campaignMeters.recordIssuedOutcome();
+        couponRoundMeters.recordIssuedOutcome();
     }
 
     private void recordEntryResult(IssuanceFlowEvent event) {
@@ -77,11 +77,11 @@ public final class MeterEventRecorder implements EventRecorder {
             return;
         }
         if (event.reasonCode() != null) {
-            campaignMeters.recordRejectedOutcome(event.reasonCode());
+            couponRoundMeters.recordRejectedOutcome(event.reasonCode());
             return;
         }
         if (event.queueSequence() != null) {
-            campaignMeters.recordQueuedOutcome();
+            couponRoundMeters.recordQueuedOutcome();
         }
         // Immediate admission is followed by ISSUE_ATTEMPT; it has no distinct outcome label.
     }
@@ -98,7 +98,7 @@ public final class MeterEventRecorder implements EventRecorder {
         if (total.isEmpty()) {
             return;
         }
-        log.warn("캠페인 발급 미터 기록에 실패했습니다. 업무 흐름은 계속 진행합니다. "
+        log.warn("쿠폰 회차 발급 미터 기록에 실패했습니다. 업무 흐름은 계속 진행합니다. "
                         + "누적 {}건, eventType={}, couponId={}, cause={}",
                 total.getAsLong(),
                 event == null ? null : event.eventType(),

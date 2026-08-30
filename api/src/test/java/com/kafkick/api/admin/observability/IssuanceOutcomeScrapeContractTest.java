@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Test;
 import io.micrometer.prometheusmetrics.PrometheusConfig;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 
-import com.kafkick.api.observation.issuance.CampaignMeterProperties;
-import com.kafkick.api.observation.issuance.CampaignMeterRegistry;
+import com.kafkick.api.observation.issuance.CouponRoundMeterProperties;
+import com.kafkick.api.observation.issuance.CouponRoundMeterRegistry;
 import com.kafkick.core.observation.ReasonCode;
 
 /**
@@ -24,17 +24,17 @@ import com.kafkick.core.observation.ReasonCode;
 class IssuanceOutcomeScrapeContractTest {
 
     /**
-     * {@code CampaignMeterRegistry} 는 기동 시점에 사유 코드별 Counter 를 전부 등록하므로
+     * {@code CouponRoundMeterRegistry} 는 기동 시점에 사유 코드별 Counter 를 전부 등록하므로
      * 요청이 하나도 없어도 이름과 라벨은 나옵니다.
      */
     @Test
     @DisplayName("실패 사유 Counter 가 질의가 기대하는 이름·라벨로 scrape 에 나온다")
     void scrapeCarriesTheOutcomeNameAndLabelsTheQueryExpects() {
         PrometheusMeterRegistry meters = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
-        try (CampaignMeterRegistry campaigns = new CampaignMeterRegistry(meters,
-                new CampaignMeterProperties(8, Duration.ofMillis(1), Duration.ofHours(1), 10),
+        try (CouponRoundMeterRegistry couponRounds = new CouponRoundMeterRegistry(meters,
+                new CouponRoundMeterProperties(8, Duration.ofMillis(1), Duration.ofHours(1), 10),
                 Duration.ofSeconds(10))) {
-            assertThat(campaigns).isNotNull();
+            assertThat(couponRounds).isNotNull();
             String scrape = meters.scrape();
 
             assertThat(scrape)

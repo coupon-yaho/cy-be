@@ -11,8 +11,8 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
-import com.kafkick.core.observation.CampaignClosedEvent;
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
+import com.kafkick.core.observation.CouponRoundClosedEvent;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -24,9 +24,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class CampaignLifecycleRedisAutoConfigurationTest {
+class CouponRoundLifecycleRedisAutoConfigurationTest {
 
-    private static final CampaignClosedEvent EVENT = new CampaignClosedEvent(
+    private static final CouponRoundClosedEvent EVENT = new CouponRoundClosedEvent(
             201L,
             Instant.parse("2026-08-26T05:04:00Z")
     );
@@ -34,7 +34,7 @@ class CampaignLifecycleRedisAutoConfigurationTest {
     private final ApplicationContextRunner contextRunner =
             new ApplicationContextRunner()
                     .withConfiguration(AutoConfigurations.of(
-                            CampaignLifecycleRedisAutoConfiguration.class
+                            CouponRoundLifecycleRedisAutoConfiguration.class
                     ))
                     .withBean(
                             ObjectMapper.class,
@@ -44,7 +44,7 @@ class CampaignLifecycleRedisAutoConfigurationTest {
                     );
 
     @Test
-    @DisplayName("기본 캠페인 종료 채널 Publisher를 자동 설정한다")
+    @DisplayName("기본 쿠폰 회차 종료 채널 Publisher를 자동 설정한다")
     void configurePublisherWithDefaultChannel() {
         contextRunner.withBean(
                 StringRedisTemplate.class,
@@ -52,10 +52,10 @@ class CampaignLifecycleRedisAutoConfigurationTest {
         ).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(
-                    RedisCampaignClosedEventPublisher.class
+                    RedisCouponRoundClosedEventPublisher.class
             );
-            RedisCampaignClosedEventPublisher publisher = context.getBean(
-                    RedisCampaignClosedEventPublisher.class
+            RedisCouponRoundClosedEventPublisher publisher = context.getBean(
+                    RedisCouponRoundClosedEventPublisher.class
             );
             StringRedisTemplate redis = context.getBean(
                     StringRedisTemplate.class
@@ -64,23 +64,23 @@ class CampaignLifecycleRedisAutoConfigurationTest {
             publisher.publish(EVENT);
 
             verify(redis).convertAndSend(
-                    eq("campaign:lifecycle:closed"),
+                    eq("coupon-round:lifecycle:closed"),
                     anyString()
             );
         });
     }
 
     @Test
-    @DisplayName("캠페인 종료 Redis 채널을 환경별로 바꿀 수 있다")
+    @DisplayName("쿠폰 회차 종료 Redis 채널을 환경별로 바꿀 수 있다")
     void configurePublisherWithOverriddenChannel() {
         contextRunner.withPropertyValues(
-                "campaign.lifecycle.redis.channel=staging:campaign:closed"
+                "coupon-round.lifecycle.redis.channel=staging:coupon-round:closed"
         ).withBean(
                 StringRedisTemplate.class,
                 () -> mock(StringRedisTemplate.class)
         ).run(context -> {
-            RedisCampaignClosedEventPublisher publisher = context.getBean(
-                    RedisCampaignClosedEventPublisher.class
+            RedisCouponRoundClosedEventPublisher publisher = context.getBean(
+                    RedisCouponRoundClosedEventPublisher.class
             );
             StringRedisTemplate redis = context.getBean(
                     StringRedisTemplate.class
@@ -89,7 +89,7 @@ class CampaignLifecycleRedisAutoConfigurationTest {
             publisher.publish(EVENT);
 
             verify(redis).convertAndSend(
-                    eq("staging:campaign:closed"),
+                    eq("staging:coupon-round:closed"),
                     anyString()
             );
         });
@@ -101,7 +101,7 @@ class CampaignLifecycleRedisAutoConfigurationTest {
         contextRunner.run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(
-                    RedisCampaignClosedEventPublisher.class
+                    RedisCouponRoundClosedEventPublisher.class
             );
         });
     }
@@ -109,21 +109,21 @@ class CampaignLifecycleRedisAutoConfigurationTest {
     @Test
     @DisplayName("사용자 정의 Publisher가 있으면 자동 설정이 물러난다")
     void backOffForCustomPublisher() {
-        RedisCampaignClosedEventPublisher custom = mock(
-                RedisCampaignClosedEventPublisher.class
+        RedisCouponRoundClosedEventPublisher custom = mock(
+                RedisCouponRoundClosedEventPublisher.class
         );
         contextRunner.withBean(
                 StringRedisTemplate.class,
                 () -> mock(StringRedisTemplate.class)
         ).withBean(
-                RedisCampaignClosedEventPublisher.class,
+                RedisCouponRoundClosedEventPublisher.class,
                 () -> custom
         ).run(context -> {
             assertThat(context).hasSingleBean(
-                    RedisCampaignClosedEventPublisher.class
+                    RedisCouponRoundClosedEventPublisher.class
             );
             assertThat(context.getBean(
-                    RedisCampaignClosedEventPublisher.class
+                    RedisCouponRoundClosedEventPublisher.class
             )).isSameAs(custom);
         });
     }
@@ -135,8 +135,8 @@ class CampaignLifecycleRedisAutoConfigurationTest {
                 RedisConnectionFactory.class,
                 () -> mock(RedisConnectionFactory.class)
         ).withBean(
-                CampaignLifecycleRecorder.class,
-                () -> mock(CampaignLifecycleRecorder.class)
+                CouponRoundLifecycleRecorder.class,
+                () -> mock(CouponRoundLifecycleRecorder.class)
         ).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(
@@ -147,9 +147,9 @@ class CampaignLifecycleRedisAutoConfigurationTest {
 
     @Test
     @DisplayName("구독을 켜도 미터 회수 포트가 없는 JVM에는 리스너를 만들지 않는다")
-    void subscriberRequiresCampaignLifecycleRecorder() {
+    void subscriberRequiresCouponRoundLifecycleRecorder() {
         contextRunner.withPropertyValues(
-                "campaign.lifecycle.redis.subscriber-enabled=true"
+                "coupon-round.lifecycle.redis.subscriber-enabled=true"
         ).withBean(
                 RedisConnectionFactory.class,
                 () -> mock(RedisConnectionFactory.class)
@@ -171,13 +171,13 @@ class CampaignLifecycleRedisAutoConfigurationTest {
         );
 
         contextRunner.withPropertyValues(
-                "campaign.lifecycle.redis.subscriber-enabled=true"
+                "coupon-round.lifecycle.redis.subscriber-enabled=true"
         ).withBean(
                 RedisConnectionFactory.class,
                 () -> connectionFactory
         ).withBean(
-                CampaignLifecycleRecorder.class,
-                () -> mock(CampaignLifecycleRecorder.class)
+                CouponRoundLifecycleRecorder.class,
+                () -> mock(CouponRoundLifecycleRecorder.class)
         ).run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(
@@ -201,13 +201,13 @@ class CampaignLifecycleRedisAutoConfigurationTest {
         );
 
         contextRunner.withPropertyValues(
-                "campaign.lifecycle.redis.subscriber-enabled=true"
+                "coupon-round.lifecycle.redis.subscriber-enabled=true"
         ).withBean(
                 RedisConnectionFactory.class,
                 () -> connectionFactory
         ).withBean(
-                CampaignLifecycleRecorder.class,
-                () -> mock(CampaignLifecycleRecorder.class)
+                CouponRoundLifecycleRecorder.class,
+                () -> mock(CouponRoundLifecycleRecorder.class)
         ).run(context -> assertThat(context).hasFailed());
     }
 }

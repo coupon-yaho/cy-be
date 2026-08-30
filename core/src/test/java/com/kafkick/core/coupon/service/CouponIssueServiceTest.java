@@ -211,7 +211,7 @@ class CouponIssueServiceTest {
                         MembershipGrade.GOLD,
                         Instant.parse("2026-08-18T07:00:00Z")
                 ),
-                CouponIssueErrorCode.CAMPAIGN_CLOSED
+                CouponIssueErrorCode.COUPON_ROUND_CLOSED
         );
         verify(issuanceRepository, never()).save(any());
         verifyNoInteractions(
@@ -234,7 +234,7 @@ class CouponIssueServiceTest {
                         MembershipGrade.GOLD,
                         Instant.parse("2026-08-18T04:59:59Z")
                 ),
-                CouponIssueErrorCode.CAMPAIGN_CLOSED
+                CouponIssueErrorCode.COUPON_ROUND_CLOSED
         );
         verifyNoInteractions(
                 issuanceRepository,

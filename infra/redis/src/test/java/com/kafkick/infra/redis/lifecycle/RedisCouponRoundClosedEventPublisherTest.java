@@ -13,7 +13,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
-import com.kafkick.core.observation.CampaignClosedEvent;
+import com.kafkick.core.observation.CouponRoundClosedEvent;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -27,10 +27,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-class RedisCampaignClosedEventPublisherTest {
+class RedisCouponRoundClosedEventPublisherTest {
 
-    private static final String CHANNEL = "campaign:lifecycle:closed:test";
-    private static final CampaignClosedEvent EVENT = new CampaignClosedEvent(
+    private static final String CHANNEL = "coupon-round:lifecycle:closed:test";
+    private static final CouponRoundClosedEvent EVENT = new CouponRoundClosedEvent(
             201L,
             Instant.parse("2026-08-26T05:04:00Z")
     );
@@ -42,8 +42,8 @@ class RedisCampaignClosedEventPublisherTest {
     @DisplayName("종료 이벤트를 Jackson 3 JSON으로 직렬화해 설정 채널로 발행한다")
     void publishJsonToConfiguredChannel() throws Exception {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
-        RedisCampaignClosedEventPublisher publisher =
-                new RedisCampaignClosedEventPublisher(
+        RedisCouponRoundClosedEventPublisher publisher =
+                new RedisCouponRoundClosedEventPublisher(
                         redis,
                         objectMapper,
                         CHANNEL
@@ -53,9 +53,12 @@ class RedisCampaignClosedEventPublisherTest {
         publisher.publish(EVENT);
 
         verify(redis).convertAndSend(eq(CHANNEL), payload.capture());
+        assertThat(payload.getValue())
+                .contains("\"couponId\":201")
+                .doesNotContain("campaignCouponId");
         assertThat(objectMapper.readValue(
                 payload.getValue(),
-                CampaignClosedEvent.class
+                CouponRoundClosedEvent.class
         )).isEqualTo(EVENT);
     }
 
@@ -66,8 +69,8 @@ class RedisCampaignClosedEventPublisherTest {
         ObjectMapper failingMapper = mock(ObjectMapper.class);
         when(failingMapper.writeValueAsString(any()))
                 .thenThrow(mock(tools.jackson.core.JacksonException.class));
-        RedisCampaignClosedEventPublisher publisher =
-                new RedisCampaignClosedEventPublisher(
+        RedisCouponRoundClosedEventPublisher publisher =
+                new RedisCouponRoundClosedEventPublisher(
                         redis,
                         failingMapper,
                         CHANNEL
@@ -84,8 +87,8 @@ class RedisCampaignClosedEventPublisherTest {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.convertAndSend(eq(CHANNEL), any(String.class)))
                 .thenThrow(new RedisConnectionFailureException("연결 끊김"));
-        RedisCampaignClosedEventPublisher publisher =
-                new RedisCampaignClosedEventPublisher(
+        RedisCouponRoundClosedEventPublisher publisher =
+                new RedisCouponRoundClosedEventPublisher(
                         redis,
                         objectMapper,
                         CHANNEL
@@ -101,14 +104,14 @@ class RedisCampaignClosedEventPublisherTest {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.convertAndSend(eq(CHANNEL), any(String.class)))
                 .thenThrow(new RedisConnectionFailureException("연결 끊김"));
-        RedisCampaignClosedEventPublisher publisher =
-                new RedisCampaignClosedEventPublisher(
+        RedisCouponRoundClosedEventPublisher publisher =
+                new RedisCouponRoundClosedEventPublisher(
                         redis,
                         objectMapper,
                         CHANNEL
                 );
         Logger logger = (Logger) LoggerFactory.getLogger(
-                RedisCampaignClosedEventPublisher.class
+                RedisCouponRoundClosedEventPublisher.class
         );
         ListAppender<ILoggingEvent> logs = new ListAppender<>();
         logs.start();

@@ -9,17 +9,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import com.kafkick.core.observation.CampaignClosedEvent;
+import com.kafkick.core.observation.CouponRoundClosedEvent;
 
 import tools.jackson.databind.ObjectMapper;
 
-public class RedisCampaignClosedEventPublisher {
+public class RedisCouponRoundClosedEventPublisher {
 
     private static final long LOG_INTERVAL_NANOS =
             TimeUnit.SECONDS.toNanos(10);
 
     private static final Logger log = LoggerFactory.getLogger(
-            RedisCampaignClosedEventPublisher.class
+            RedisCouponRoundClosedEventPublisher.class
     );
 
     private final StringRedisTemplate redis;
@@ -28,7 +28,7 @@ public class RedisCampaignClosedEventPublisher {
     private final AtomicLong failureCount = new AtomicLong();
     private final AtomicLong nextLogAtNanos = new AtomicLong();
 
-    public RedisCampaignClosedEventPublisher(
+    public RedisCouponRoundClosedEventPublisher(
             StringRedisTemplate redis,
             ObjectMapper objectMapper,
             String channel
@@ -37,14 +37,14 @@ public class RedisCampaignClosedEventPublisher {
         this.objectMapper = Objects.requireNonNull(objectMapper);
         if (channel == null || channel.isBlank()) {
             throw new IllegalArgumentException(
-                    "캠페인 종료 Redis 채널은 빈 값일 수 없습니다."
+                    "쿠폰 회차 종료 Redis 채널은 빈 값일 수 없습니다."
             );
         }
         this.channel = channel;
     }
 
     @EventListener
-    public void publish(CampaignClosedEvent event) {
+    public void publish(CouponRoundClosedEvent event) {
         Objects.requireNonNull(event, "event");
         try {
             String payload = objectMapper.writeValueAsString(event);
@@ -55,7 +55,7 @@ public class RedisCampaignClosedEventPublisher {
     }
 
     private void logFailure(
-            CampaignClosedEvent event,
+            CouponRoundClosedEvent event,
             Exception exception
     ) {
         long count = failureCount.incrementAndGet();
@@ -68,9 +68,9 @@ public class RedisCampaignClosedEventPublisher {
                 );
         if (logDue) {
             log.warn(
-                    "캠페인 종료 Redis 발행 실패 누적 {}건. campaignCouponId={}, cause={}",
+                    "쿠폰 회차 종료 Redis 발행 실패 누적 {}건. couponId={}, cause={}",
                     count,
-                    event.campaignCouponId(),
+                    event.couponId(),
                     exception.toString()
             );
         }

@@ -1,15 +1,15 @@
 package com.kafkick.api.observation;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
-import com.kafkick.api.observation.issuance.MeterCampaignLifecycleRecorder;
+import com.kafkick.api.observation.issuance.MeterCouponRoundLifecycleRecorder;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
-import com.kafkick.core.observation.ClosedCampaignRecoverySource;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCouponRoundRecoverySource;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -77,12 +77,12 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context).hasSingleBean(IssuanceFlowEventFactory.class);
             assertThat(context).hasSingleBean(IssuanceObservationService.class);
             assertThat(context).hasSingleBean(TimeProvider.class);
-            assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
+            assertThat(context).hasSingleBean(CouponRoundLifecycleRecorder.class);
             assertThat(context).hasSingleBean(MeterEventRecorder.class);
             assertThat(context.getBean(EventRecorder.class))
                     .isInstanceOf(CompositeEventRecorder.class);
-            assertThat(context.getBean(CampaignLifecycleRecorder.class))
-                    .isInstanceOf(MeterCampaignLifecycleRecorder.class);
+            assertThat(context.getBean(CouponRoundLifecycleRecorder.class))
+                    .isInstanceOf(MeterCouponRoundLifecycleRecorder.class);
             assertThat(context.getBean(ConsistencyCalculator.class))
                     .isInstanceOf(DefaultConsistencyCalculator.class);
             assertThat(context.getBean(ConsistencySeverityPolicy.class).warnThreshold()).isEqualTo(10);
@@ -93,13 +93,13 @@ class ApiObservationAutoConfigurationTest {
     @Test
     void registersStartupRecoveryOnlyWhenRecoverySourceExists() {
         contextRunner.run(context -> assertThat(context)
-                .doesNotHaveBean(CampaignLifecycleStartupRecovery.class));
+                .doesNotHaveBean(CouponRoundLifecycleStartupRecovery.class));
 
         contextRunner.withBean(
-                ClosedCampaignRecoverySource.class,
-                () -> mock(ClosedCampaignRecoverySource.class)
+                ClosedCouponRoundRecoverySource.class,
+                () -> mock(ClosedCouponRoundRecoverySource.class)
         ).run(context -> assertThat(context)
-                .hasSingleBean(CampaignLifecycleStartupRecovery.class));
+                .hasSingleBean(CouponRoundLifecycleStartupRecovery.class));
     }
 
     @Test
@@ -168,8 +168,8 @@ class ApiObservationAutoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(EventRecorder.class);
             assertThat(context.getBean(EventRecorder.class)).isInstanceOf(NoOpEventRecorder.class);
-            assertThat(context.getBean(CampaignLifecycleRecorder.class))
-                    .isInstanceOf(NoOpCampaignLifecycleRecorder.class);
+            assertThat(context.getBean(CouponRoundLifecycleRecorder.class))
+                    .isInstanceOf(NoOpCouponRoundLifecycleRecorder.class);
         });
     }
 
@@ -180,7 +180,7 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
-    void meterEventRecorderCannotConstructAnIndependentCampaignRegistry() {
+    void meterEventRecorderCannotConstructAnIndependentCouponRoundRegistry() {
         assertThat(Arrays.stream(MeterEventRecorder.class.getConstructors())
                 .flatMap(constructor -> Arrays.stream(constructor.getParameterTypes())))
                 .doesNotContain(MeterRegistry.class);
@@ -219,7 +219,7 @@ class ApiObservationAutoConfigurationTest {
     @Test
         // 미터 기록기를 직접 주입하지 않는다. 그러면 "MeterRegistry → meterEventRecorder →
         // 합성 빈" 배선이 끊겨도 테스트가 통과한다 — 단언 대상은 컨텍스트의 레지스트리다.
-    void fansOutToTheCampaignMeterAndKafkaPublisher() {
+    void fansOutToTheCouponRoundMeterAndKafkaPublisher() {
         AtomicInteger publisherCalls = new AtomicInteger();
 
         contextRunner
@@ -373,74 +373,74 @@ class ApiObservationAutoConfigurationTest {
     }
 
     @Test
-    void defaultCampaignLifecycleRecorderDoesNothing() {
+    void defaultCouponRoundLifecycleRecorderDoesNothing() {
         contextRunner.run(context -> {
-            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+            CouponRoundLifecycleRecorder recorder = context.getBean(CouponRoundLifecycleRecorder.class);
             Instant closedAt = Instant.parse("2026-08-19T01:00:00Z");
 
-            assertThatCode(() -> recorder.retireCampaign(201L, closedAt))
+            assertThatCode(() -> recorder.retireCouponRound(201L, closedAt))
                     .doesNotThrowAnyException();
         });
     }
 
     @Test
-    void replacesTheNoOpCampaignLifecycleRecorderWhenMetersAreAvailable(CapturedOutput output) {
+    void replacesTheNoOpCouponRoundLifecycleRecorderWhenMetersAreAvailable(CapturedOutput output) {
         contextRunner.run(context -> {
-            assertThat(context).hasSingleBean(CampaignLifecycleRecorder.class);
-            assertThat(context.getBean(CampaignLifecycleRecorder.class))
-                    .isInstanceOf(MeterCampaignLifecycleRecorder.class);
-            assertThat(output).doesNotContain("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+            assertThat(context).hasSingleBean(CouponRoundLifecycleRecorder.class);
+            assertThat(context.getBean(CouponRoundLifecycleRecorder.class))
+                    .isInstanceOf(MeterCouponRoundLifecycleRecorder.class);
+            assertThat(output).doesNotContain("CouponRoundLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
         });
     }
 
     @Test
-    void defaultCampaignLifecycleRecorderWarnsInsteadOfThrowingOnNonPositiveCampaignCouponId(
+    void defaultCouponRoundLifecycleRecorderWarnsInsteadOfThrowingOnNonPositiveCouponRoundCouponId(
             CapturedOutput output
     ) {
         contextRunner.run(context -> {
-            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+            CouponRoundLifecycleRecorder recorder = context.getBean(CouponRoundLifecycleRecorder.class);
             Instant closedAt = Instant.parse("2026-08-19T01:00:00Z");
 
-            // 관측 통지가 캠페인 종료 트랜잭션을 롤백시키면 안 된다. 대신 조용하지도 않아야 한다.
-            assertThatCode(() -> recorder.retireCampaign(0L, closedAt))
+            // 관측 통지가 쿠폰 회차 종료 트랜잭션을 롤백시키면 안 된다. 대신 조용하지도 않아야 한다.
+            assertThatCode(() -> recorder.retireCouponRound(0L, closedAt))
                     .doesNotThrowAnyException();
-            assertThat(output).contains("캠페인 수명 통지의 값 계약을 위반했습니다");
-            assertThat(output).contains("campaignCouponId=0");
+            assertThat(output).contains("쿠폰 회차 수명 통지의 값 계약을 위반했습니다");
+            assertThat(output).contains("couponId=0");
         });
     }
 
     @Test
-    void defaultCampaignLifecycleRecorderWarnsInsteadOfThrowingOnNullClosedAt(
+    void defaultCouponRoundLifecycleRecorderWarnsInsteadOfThrowingOnNullClosedAt(
             CapturedOutput output
     ) {
         contextRunner.run(context -> {
-            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+            CouponRoundLifecycleRecorder recorder = context.getBean(CouponRoundLifecycleRecorder.class);
 
-            assertThatCode(() -> recorder.retireCampaign(201L, null))
+            assertThatCode(() -> recorder.retireCouponRound(201L, null))
                     .doesNotThrowAnyException();
-            assertThat(output).contains("캠페인 수명 통지의 값 계약을 위반했습니다");
+            assertThat(output).contains("쿠폰 회차 수명 통지의 값 계약을 위반했습니다");
             assertThat(output).contains("closedAt=null");
         });
     }
 
     @Test
-    void defaultCampaignLifecycleRecorderStaysSilentOnValidNotification(CapturedOutput output) {
+    void defaultCouponRoundLifecycleRecorderStaysSilentOnValidNotification(CapturedOutput output) {
         contextRunner.run(context -> {
-            CampaignLifecycleRecorder recorder = context.getBean(CampaignLifecycleRecorder.class);
+            CouponRoundLifecycleRecorder recorder = context.getBean(CouponRoundLifecycleRecorder.class);
 
-            recorder.retireCampaign(201L, Instant.parse("2026-08-19T01:00:00Z"));
+            recorder.retireCouponRound(201L, Instant.parse("2026-08-19T01:00:00Z"));
 
-            assertThat(output).doesNotContain("캠페인 수명 통지의 값 계약을 위반했습니다");
+            assertThat(output).doesNotContain("쿠폰 회차 수명 통지의 값 계약을 위반했습니다");
         });
     }
 
     @Test
-    void backsOffWhenCampaignLifecycleRecorderExists() {
-        CampaignLifecycleRecorder recorder = (couponId, closedAt) -> { };
+    void backsOffWhenCouponRoundLifecycleRecorderExists() {
+        CouponRoundLifecycleRecorder recorder = (couponId, closedAt) -> { };
 
         contextRunner
-                .withBean(CampaignLifecycleRecorder.class, () -> recorder)
-                .run(context -> assertThat(context.getBean(CampaignLifecycleRecorder.class))
+                .withBean(CouponRoundLifecycleRecorder.class, () -> recorder)
+                .run(context -> assertThat(context.getBean(CouponRoundLifecycleRecorder.class))
                         .isSameAs(recorder));
     }
 
@@ -554,7 +554,7 @@ class ApiObservationAutoConfigurationTest {
 
     @Test
     // EventRecorder 만 예외다. 나머지는 사용자 빈이 자동설정을 대체하지만, 기록기는 대체가
-    // 아니라 합류한다 — 관측 sink 를 하나 얹었다고 캠페인 미터가 사라지면 안 된다.
+    // 아니라 합류한다 — 관측 sink 를 하나 얹었다고 쿠폰 회차 미터가 사라지면 안 된다.
     void backsOffWhenImplementationsExist() {
         EventRecorder eventRecorder = event -> { };
         IssuanceFlowEventFactory eventFactory = new IssuanceFlowEventFactory(

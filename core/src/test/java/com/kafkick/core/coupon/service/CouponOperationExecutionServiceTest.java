@@ -174,7 +174,7 @@ class CouponOperationExecutionServiceTest {
     @ParameterizedTest
     @EnumSource(value = CouponIssueErrorCode.class, names = {
             "NOT_OPENED",
-            "CAMPAIGN_CLOSED",
+            "COUPON_ROUND_CLOSED",
             "GRADE_NOT_ELIGIBLE"
     })
     void policyRejectionDoesNotInvokeAttemptOrAuthoritativeTransaction(

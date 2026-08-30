@@ -19,9 +19,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.kafkick.ApiApplication;
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
-import com.kafkick.core.observation.ClosedCampaign;
-import com.kafkick.core.observation.ClosedCampaignRecoverySource;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCouponRound;
+import com.kafkick.core.observation.ClosedCouponRoundRecoverySource;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,7 +31,7 @@ import static org.mockito.Mockito.verify;
 
 @SpringBootTest(classes = ApiApplication.class, properties = {
         "observation.datasource.enabled=true",
-        "campaign.lifecycle.redis.subscriber-enabled=false",
+        "coupon-round.lifecycle.redis.subscriber-enabled=false",
         "coupon.idempotency.wait-timeout=1s",
         "coupon.idempotency.poll-interval=50ms",
         "coupon.idempotency.stale-after=30s",
@@ -39,7 +39,7 @@ import static org.mockito.Mockito.verify;
         "coupon.calendar.max-query-range-days=366"
 })
 @Import(MySqlContainerConfig.class)
-class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
+class CouponRoundLifecycleStartupRecoveryMySqlIntegrationTest {
 
     private static final Instant ANCHOR = Instant.now();
 
@@ -48,16 +48,16 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
     private JdbcTemplate jdbc;
 
     @Autowired
-    private ClosedCampaignRecoverySource source;
+    private ClosedCouponRoundRecoverySource source;
 
     @Autowired
-    private CampaignLifecycleStartupRecovery recovery;
+    private CouponRoundLifecycleStartupRecovery recovery;
 
     @MockitoBean
-    private CampaignLifecycleRecorder recorder;
+    private CouponRoundLifecycleRecorder recorder;
 
     @BeforeEach
-    void insertCampaignPopulation() {
+    void insertCouponRoundPopulation() {
         jdbc.update("DELETE FROM coupon_stocks");
         jdbc.update("DELETE FROM coupons");
         jdbc.update("DELETE FROM coupon_templates");
@@ -75,21 +75,21 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
                 """, timestamp(ANCHOR.minus(Duration.ofDays(3))),
                 timestamp(ANCHOR.minus(Duration.ofDays(3))));
 
-        List<Object[]> campaigns = new ArrayList<>();
+        List<Object[]> couponRounds = new ArrayList<>();
         for (long id = 1; id <= 1_002; id++) {
-            campaigns.add(campaign(
+            couponRounds.add(couponRound(
                     id,
                     "CLOSED",
                     ANCHOR.minus(Duration.ofHours(12)).plusSeconds(id)
             ));
         }
-        campaigns.add(campaign(2_001L, "CLOSED",
+        couponRounds.add(couponRound(2_001L, "CLOSED",
                 ANCHOR.minus(Duration.ofDays(2))));
-        campaigns.add(campaign(2_002L, "CLOSED",
+        couponRounds.add(couponRound(2_002L, "CLOSED",
                 ANCHOR.plus(Duration.ofDays(1))));
-        campaigns.add(campaign(2_003L, "OPEN",
+        couponRounds.add(couponRound(2_003L, "OPEN",
                 ANCHOR.minusSeconds(10)));
-        campaigns.add(campaign(2_004L, "SCHEDULED",
+        couponRounds.add(couponRound(2_004L, "SCHEDULED",
                 ANCHOR.minusSeconds(10)));
         jdbc.batchUpdate("""
                 INSERT INTO coupons(
@@ -98,7 +98,7 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
                     status, generated_at, created_at
                 ) VALUES (?, 1, 1, ?, 'FIXED_AMOUNT',
                           30, 1, ?, ?, ?, ?, ?)
-                """, campaigns);
+                """, couponRounds);
         clearInvocations(recorder);
     }
 
@@ -106,16 +106,16 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
     @DisplayName("실제 관측 계정으로 최신 CLOSED 1000건을 고른 뒤 오래된 순으로 회수한다")
     void recoverSelectedPopulationOldestFirst() throws Exception {
         Instant queryNow = Instant.now();
-        List<ClosedCampaign> selected = source.findRecentlyClosed(
+        List<ClosedCouponRound> selected = source.findRecentlyClosed(
                 queryNow.minus(Duration.ofDays(1)),
                 queryNow,
                 1_000
         );
 
         assertThat(selected).hasSize(1_000);
-        assertThat(selected.getFirst().campaignCouponId())
+        assertThat(selected.getFirst().couponId())
                 .isEqualTo(1_002L);
-        assertThat(selected.getLast().campaignCouponId())
+        assertThat(selected.getLast().couponId())
                 .isEqualTo(3L);
 
         recovery.run(null);
@@ -123,7 +123,7 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
         ArgumentCaptor<Long> ids = ArgumentCaptor.forClass(Long.class);
         ArgumentCaptor<Instant> closedAt =
                 ArgumentCaptor.forClass(Instant.class);
-        verify(recorder, times(1_000)).retireCampaign(
+        verify(recorder, times(1_000)).retireCouponRound(
                 ids.capture(),
                 closedAt.capture()
         );
@@ -135,7 +135,7 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
         assertThat(closedAt.getAllValues()).isSorted();
     }
 
-    private static Object[] campaign(
+    private static Object[] couponRound(
             long id,
             String status,
             Instant closeAt
@@ -143,7 +143,7 @@ class CampaignLifecycleStartupRecoveryMySqlIntegrationTest {
         Instant openAt = ANCHOR.minus(Duration.ofDays(3)).plusSeconds(id);
         return new Object[] {
                 id,
-                "campaign-" + id,
+                "couponRound-" + id,
                 timestamp(openAt),
                 timestamp(closeAt),
                 status,

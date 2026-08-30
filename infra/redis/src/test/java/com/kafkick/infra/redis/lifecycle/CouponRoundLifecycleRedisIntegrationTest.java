@@ -16,7 +16,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
-import com.kafkick.core.observation.CampaignClosedEvent;
+import com.kafkick.core.observation.CouponRoundClosedEvent;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -24,10 +24,10 @@ import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-class CampaignLifecycleRedisIntegrationTest {
+class CouponRoundLifecycleRedisIntegrationTest {
 
     private static final String CHANNEL =
-            "campaign:lifecycle:closed:integration";
+            "coupon-round:lifecycle:closed:integration";
     private static final ObjectMapper OBJECT_MAPPER =
             JsonMapper.builder().findAndAddModules().build();
 
@@ -80,8 +80,8 @@ class CampaignLifecycleRedisIntegrationTest {
     @Test
     @DisplayName("모든 API가 수신하고 단절 중 메시지는 유실되며 재연결 뒤 신규 메시지는 받는다")
     void fanOutLossAndReconnect() {
-        RedisCampaignClosedEventPublisher publisher =
-                new RedisCampaignClosedEventPublisher(
+        RedisCouponRoundClosedEventPublisher publisher =
+                new RedisCouponRoundClosedEventPublisher(
                         redisTemplate,
                         OBJECT_MAPPER,
                         CHANNEL
@@ -131,10 +131,10 @@ class CampaignLifecycleRedisIntegrationTest {
                 new RecoveringRedisMessageListenerContainer(100L);
         recoveringContainer.setConnectionFactory(recoveringConnection);
         recoveringContainer.addMessageListener(
-                new RedisCampaignClosedEventSubscriber(
+                new RedisCouponRoundClosedEventSubscriber(
                         OBJECT_MAPPER,
-                        (campaignCouponId, closedAt) ->
-                                recovered.add(campaignCouponId)
+                        (couponId, closedAt) ->
+                                recovered.add(couponId)
                 ),
                 new ChannelTopic(CHANNEL)
         );
@@ -160,7 +160,7 @@ class CampaignLifecycleRedisIntegrationTest {
             await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
                     assertThat(recoveringContainer.isListening()).isTrue());
 
-            new RedisCampaignClosedEventPublisher(
+            new RedisCouponRoundClosedEventPublisher(
                     recoveringTemplate,
                     OBJECT_MAPPER,
                     CHANNEL
@@ -178,11 +178,11 @@ class CampaignLifecycleRedisIntegrationTest {
     private static RedisMessageListenerContainer subscriber(
             List<Long> received
     ) {
-        RedisCampaignClosedEventSubscriber subscriber =
-                new RedisCampaignClosedEventSubscriber(
+        RedisCouponRoundClosedEventSubscriber subscriber =
+                new RedisCouponRoundClosedEventSubscriber(
                         OBJECT_MAPPER,
-                        (campaignCouponId, closedAt) ->
-                                received.add(campaignCouponId)
+                        (couponId, closedAt) ->
+                                received.add(couponId)
                 );
         RedisMessageListenerContainer container =
                 new RedisMessageListenerContainer();
@@ -195,9 +195,9 @@ class CampaignLifecycleRedisIntegrationTest {
         return container;
     }
 
-    private static CampaignClosedEvent event(long campaignCouponId) {
-        return new CampaignClosedEvent(
-                campaignCouponId,
+    private static CouponRoundClosedEvent event(long couponId) {
+        return new CouponRoundClosedEvent(
+                couponId,
                 Instant.parse("2026-08-26T05:04:00Z")
         );
     }

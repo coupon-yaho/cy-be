@@ -13,9 +13,9 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.mockito.InOrder;
 
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
-import com.kafkick.core.observation.ClosedCampaign;
-import com.kafkick.core.observation.ClosedCampaignRecoverySource;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCouponRound;
+import com.kafkick.core.observation.ClosedCouponRoundRecoverySource;
 import com.kafkick.core.support.TimeProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,7 +27,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(OutputCaptureExtension.class)
-class CampaignLifecycleStartupRecoveryTest {
+class CouponRoundLifecycleStartupRecoveryTest {
 
     private static final Instant NOW =
             Instant.parse("2026-08-26T05:04:00Z");
@@ -37,15 +37,15 @@ class CampaignLifecycleStartupRecoveryTest {
     @Test
     @DisplayName("최근 1일 최신 1000건을 조회하고 오래된 종료부터 회수한다")
     void recoverOldestFirstAfterSelectingNewest() throws Exception {
-        ClosedCampaignRecoverySource source =
-                mock(ClosedCampaignRecoverySource.class);
-        CampaignLifecycleRecorder recorder =
-                mock(CampaignLifecycleRecorder.class);
-        ClosedCampaign newest = new ClosedCampaign(203L,
+        ClosedCouponRoundRecoverySource source =
+                mock(ClosedCouponRoundRecoverySource.class);
+        CouponRoundLifecycleRecorder recorder =
+                mock(CouponRoundLifecycleRecorder.class);
+        ClosedCouponRound newest = new ClosedCouponRound(203L,
                 Instant.parse("2026-08-26T05:03:00Z"));
-        ClosedCampaign sameTimeHigherId = new ClosedCampaign(202L,
+        ClosedCouponRound sameTimeHigherId = new ClosedCouponRound(202L,
                 Instant.parse("2026-08-26T05:02:00Z"));
-        ClosedCampaign sameTimeLowerId = new ClosedCampaign(201L,
+        ClosedCouponRound sameTimeLowerId = new ClosedCouponRound(201L,
                 Instant.parse("2026-08-26T05:02:00Z"));
         when(source.findRecentlyClosed(DAY_AGO, NOW, 1_000))
                 .thenReturn(List.of(
@@ -53,7 +53,7 @@ class CampaignLifecycleStartupRecoveryTest {
                         sameTimeHigherId,
                         sameTimeLowerId
                 ));
-        CampaignLifecycleStartupRecovery recovery = recovery(
+        CouponRoundLifecycleStartupRecovery recovery = recovery(
                 source,
                 recorder
         );
@@ -62,16 +62,16 @@ class CampaignLifecycleStartupRecoveryTest {
 
         verify(source).findRecentlyClosed(DAY_AGO, NOW, 1_000);
         InOrder order = inOrder(recorder);
-        order.verify(recorder).retireCampaign(
-                sameTimeLowerId.campaignCouponId(),
+        order.verify(recorder).retireCouponRound(
+                sameTimeLowerId.couponId(),
                 sameTimeLowerId.closedAt()
         );
-        order.verify(recorder).retireCampaign(
-                sameTimeHigherId.campaignCouponId(),
+        order.verify(recorder).retireCouponRound(
+                sameTimeHigherId.couponId(),
                 sameTimeHigherId.closedAt()
         );
-        order.verify(recorder).retireCampaign(
-                newest.campaignCouponId(),
+        order.verify(recorder).retireCouponRound(
+                newest.couponId(),
                 newest.closedAt()
         );
     }
@@ -79,13 +79,13 @@ class CampaignLifecycleStartupRecoveryTest {
     @Test
     @DisplayName("DB 보정 실패는 API 기동을 막지 않고 미터를 건드리지 않는다")
     void isolateRecoverySourceFailure() {
-        ClosedCampaignRecoverySource source =
-                mock(ClosedCampaignRecoverySource.class);
-        CampaignLifecycleRecorder recorder =
-                mock(CampaignLifecycleRecorder.class);
+        ClosedCouponRoundRecoverySource source =
+                mock(ClosedCouponRoundRecoverySource.class);
+        CouponRoundLifecycleRecorder recorder =
+                mock(CouponRoundLifecycleRecorder.class);
         when(source.findRecentlyClosed(DAY_AGO, NOW, 1_000))
                 .thenThrow(new IllegalStateException("db unavailable"));
-        CampaignLifecycleStartupRecovery recovery = recovery(
+        CouponRoundLifecycleStartupRecovery recovery = recovery(
                 source,
                 recorder
         );
@@ -96,50 +96,50 @@ class CampaignLifecycleStartupRecoveryTest {
     }
 
     @Test
-    @DisplayName("최근 종료 캠페인의 미터 회수 요청 건수를 기록한다")
+    @DisplayName("최근 종료 쿠폰 회차의 미터 회수 요청 건수를 기록한다")
     void logRetirementRequestCount(CapturedOutput output) throws Exception {
-        ClosedCampaignRecoverySource source =
-                mock(ClosedCampaignRecoverySource.class);
-        CampaignLifecycleRecorder recorder =
-                mock(CampaignLifecycleRecorder.class);
+        ClosedCouponRoundRecoverySource source =
+                mock(ClosedCouponRoundRecoverySource.class);
+        CouponRoundLifecycleRecorder recorder =
+                mock(CouponRoundLifecycleRecorder.class);
         when(source.findRecentlyClosed(DAY_AGO, NOW, 1_000))
-                .thenReturn(List.of(new ClosedCampaign(201L, DAY_AGO)));
+                .thenReturn(List.of(new ClosedCouponRound(201L, DAY_AGO)));
 
         recovery(source, recorder).run(null);
 
         assertThat(output)
-                .contains("최근 종료 캠페인의 미터 회수를 요청했습니다.")
+                .contains("최근 종료 쿠폰 회차의 미터 회수를 요청했습니다.")
                 .contains("count=1");
     }
 
     @Test
-    @DisplayName("최근 종료 캠페인 조회가 상한에 도달하면 경고한다")
+    @DisplayName("최근 종료 쿠폰 회차 조회가 상한에 도달하면 경고한다")
     void warnWhenRecoveryLimitIsReached(CapturedOutput output)
             throws Exception {
-        ClosedCampaignRecoverySource source =
-                mock(ClosedCampaignRecoverySource.class);
-        CampaignLifecycleRecorder recorder =
-                mock(CampaignLifecycleRecorder.class);
-        List<ClosedCampaign> campaigns = LongStream.rangeClosed(1, 1_000)
-                .mapToObj(id -> new ClosedCampaign(id, DAY_AGO))
+        ClosedCouponRoundRecoverySource source =
+                mock(ClosedCouponRoundRecoverySource.class);
+        CouponRoundLifecycleRecorder recorder =
+                mock(CouponRoundLifecycleRecorder.class);
+        List<ClosedCouponRound> couponRounds = LongStream.rangeClosed(1, 1_000)
+                .mapToObj(id -> new ClosedCouponRound(id, DAY_AGO))
                 .toList();
         when(source.findRecentlyClosed(DAY_AGO, NOW, 1_000))
-                .thenReturn(campaigns);
+                .thenReturn(couponRounds);
 
         recovery(source, recorder).run(null);
 
         assertThat(output)
-                .contains("최근 종료 캠페인 조회가 상한에 도달했습니다.")
-                .contains("일부 캠페인이 미터 회수 대상에서 제외되었을 수 있습니다.")
+                .contains("최근 종료 쿠폰 회차 조회가 상한에 도달했습니다.")
+                .contains("일부 쿠폰 회차가 미터 회수 대상에서 제외되었을 수 있습니다.")
                 .contains("count=1000")
                 .contains("limit=1000");
     }
 
-    private static CampaignLifecycleStartupRecovery recovery(
-            ClosedCampaignRecoverySource source,
-            CampaignLifecycleRecorder recorder
+    private static CouponRoundLifecycleStartupRecovery recovery(
+            ClosedCouponRoundRecoverySource source,
+            CouponRoundLifecycleRecorder recorder
     ) {
-        return new CampaignLifecycleStartupRecovery(
+        return new CouponRoundLifecycleStartupRecovery(
                 source,
                 recorder,
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC))

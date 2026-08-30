@@ -10,11 +10,11 @@ import org.yaml.snakeyaml.Yaml;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class CampaignLifecycleRedisYamlContractTest {
+class CouponRoundLifecycleRedisYamlContractTest {
 
     @Test
-    @DisplayName("API 관측 설정만 캠페인 종료 Redis 구독을 켠다")
-    void apiEnablesCampaignLifecycleRedisSubscriber() throws IOException {
+    @DisplayName("API 관측 설정만 쿠폰 회차 종료 Redis 구독을 켠다")
+    void apiEnablesCouponRoundLifecycleRedisSubscriber() throws IOException {
         Map<String, Object> config;
         try (var input = new ClassPathResource(
                 "observation.yml.example"
@@ -22,9 +22,9 @@ class CampaignLifecycleRedisYamlContractTest {
             config = new Yaml().load(input);
         }
 
-        assertThat(path(config, "campaign", "lifecycle", "redis",
+        assertThat(path(config, "coupon-round", "lifecycle", "redis",
                 "subscriber-enabled")).isEqualTo(
-                        "${CAMPAIGN_LIFECYCLE_REDIS_SUBSCRIBER_ENABLED:true}"
+                        "${COUPON_ROUND_LIFECYCLE_REDIS_SUBSCRIBER_ENABLED:true}"
                 );
     }
 

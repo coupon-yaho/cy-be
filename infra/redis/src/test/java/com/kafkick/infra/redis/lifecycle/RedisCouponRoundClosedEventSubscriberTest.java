@@ -12,7 +12,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -25,7 +25,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-class RedisCampaignClosedEventSubscriberTest {
+class RedisCouponRoundClosedEventSubscriberTest {
 
     private static final Instant CLOSED_AT =
             Instant.parse("2026-08-26T05:04:00Z");
@@ -34,46 +34,46 @@ class RedisCampaignClosedEventSubscriberTest {
             JsonMapper.builder().findAndAddModules().build();
 
     @Test
-    @DisplayName("종료 JSON을 검증해 캠페인 미터 회수 포트로 전달한다")
-    void retireCampaignFromValidJson() {
-        CampaignLifecycleRecorder recorder = mock(CampaignLifecycleRecorder.class);
-        RedisCampaignClosedEventSubscriber subscriber = subscriber(recorder);
+    @DisplayName("종료 JSON을 검증해 쿠폰 회차 미터 회수 포트로 전달한다")
+    void retireCouponRoundFromValidJson() {
+        CouponRoundLifecycleRecorder recorder = mock(CouponRoundLifecycleRecorder.class);
+        RedisCouponRoundClosedEventSubscriber subscriber = subscriber(recorder);
 
         subscriber.onMessage(message("""
-                {"campaignCouponId":201,"closedAt":"2026-08-26T05:04:00Z"}
+                {"couponId":201,"closedAt":"2026-08-26T05:04:00Z"}
                 """), null);
 
-        verify(recorder).retireCampaign(201L, CLOSED_AT);
+        verify(recorder).retireCouponRound(201L, CLOSED_AT);
     }
 
     @Test
     @DisplayName("중복 종료 메시지도 포트에 전달해 기존 미터 회수 멱등성에 맡긴다")
     void delegateDuplicateMessagesWithoutSubscriberDeduplication() {
-        CampaignLifecycleRecorder recorder = mock(CampaignLifecycleRecorder.class);
-        RedisCampaignClosedEventSubscriber subscriber = subscriber(recorder);
+        CouponRoundLifecycleRecorder recorder = mock(CouponRoundLifecycleRecorder.class);
+        RedisCouponRoundClosedEventSubscriber subscriber = subscriber(recorder);
         DefaultMessage message = message("""
-                {"campaignCouponId":201,"closedAt":"2026-08-26T05:04:00Z"}
+                {"couponId":201,"closedAt":"2026-08-26T05:04:00Z"}
                 """);
 
         subscriber.onMessage(message, null);
         subscriber.onMessage(message, null);
 
-        verify(recorder, times(2)).retireCampaign(201L, CLOSED_AT);
+        verify(recorder, times(2)).retireCouponRound(201L, CLOSED_AT);
     }
 
     @Test
     @DisplayName("깨진 JSON과 값 계약 위반 메시지는 버리고 리스너 스레드를 유지한다")
     void isolateMalformedAndInvalidMessages() {
-        CampaignLifecycleRecorder recorder = mock(CampaignLifecycleRecorder.class);
-        RedisCampaignClosedEventSubscriber subscriber = subscriber(recorder);
+        CouponRoundLifecycleRecorder recorder = mock(CouponRoundLifecycleRecorder.class);
+        RedisCouponRoundClosedEventSubscriber subscriber = subscriber(recorder);
 
         assertThatCode(() -> subscriber.onMessage(message("not-json"), null))
                 .doesNotThrowAnyException();
         assertThatCode(() -> subscriber.onMessage(message("""
-                {"campaignCouponId":0,"closedAt":"2026-08-26T05:04:00Z"}
+                {"couponId":0,"closedAt":"2026-08-26T05:04:00Z"}
                 """), null)).doesNotThrowAnyException();
         assertThatCode(() -> subscriber.onMessage(message("""
-                {"campaignCouponId":201}
+                {"couponId":201}
                 """), null)).doesNotThrowAnyException();
 
         verifyNoInteractions(recorder);
@@ -82,24 +82,24 @@ class RedisCampaignClosedEventSubscriberTest {
     @Test
     @DisplayName("미터 회수 실패를 삼켜 다음 Redis 메시지를 받을 수 있게 한다")
     void isolateRecorderFailure() {
-        CampaignLifecycleRecorder recorder = mock(CampaignLifecycleRecorder.class);
+        CouponRoundLifecycleRecorder recorder = mock(CouponRoundLifecycleRecorder.class);
         doThrow(new IllegalStateException("meter failure"))
-                .when(recorder).retireCampaign(201L, CLOSED_AT);
-        RedisCampaignClosedEventSubscriber subscriber = subscriber(recorder);
+                .when(recorder).retireCouponRound(201L, CLOSED_AT);
+        RedisCouponRoundClosedEventSubscriber subscriber = subscriber(recorder);
 
         assertThatCode(() -> subscriber.onMessage(message("""
-                {"campaignCouponId":201,"closedAt":"2026-08-26T05:04:00Z"}
+                {"couponId":201,"closedAt":"2026-08-26T05:04:00Z"}
                 """), null)).doesNotThrowAnyException();
     }
 
     @Test
     @DisplayName("연속 오염 메시지를 제한된 WARN 한 줄로 요약한다")
     void throttleRepeatedFailureWarnings() {
-        RedisCampaignClosedEventSubscriber subscriber = subscriber(
-                mock(CampaignLifecycleRecorder.class)
+        RedisCouponRoundClosedEventSubscriber subscriber = subscriber(
+                mock(CouponRoundLifecycleRecorder.class)
         );
         Logger logger = (Logger) LoggerFactory.getLogger(
-                RedisCampaignClosedEventSubscriber.class
+                RedisCouponRoundClosedEventSubscriber.class
         );
         ListAppender<ILoggingEvent> logs = new ListAppender<>();
         logs.start();
@@ -117,15 +117,15 @@ class RedisCampaignClosedEventSubscriberTest {
                 .contains("누적 1건");
     }
 
-    private RedisCampaignClosedEventSubscriber subscriber(
-            CampaignLifecycleRecorder recorder
+    private RedisCouponRoundClosedEventSubscriber subscriber(
+            CouponRoundLifecycleRecorder recorder
     ) {
-        return new RedisCampaignClosedEventSubscriber(objectMapper, recorder);
+        return new RedisCouponRoundClosedEventSubscriber(objectMapper, recorder);
     }
 
     private static DefaultMessage message(String body) {
         return new DefaultMessage(
-                "campaign:lifecycle:closed".getBytes(StandardCharsets.UTF_8),
+                "coupon-round:lifecycle:closed".getBytes(StandardCharsets.UTF_8),
                 body.getBytes(StandardCharsets.UTF_8)
         );
     }

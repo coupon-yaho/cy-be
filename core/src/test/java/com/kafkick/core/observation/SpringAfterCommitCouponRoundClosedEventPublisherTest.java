@@ -16,22 +16,22 @@ import org.springframework.transaction.support.TransactionTemplate;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class SpringAfterCommitCampaignClosedEventPublisherTest {
+class SpringAfterCommitCouponRoundClosedEventPublisherTest {
 
-    private static final CampaignClosedEvent EVENT = new CampaignClosedEvent(
+    private static final CouponRoundClosedEvent EVENT = new CouponRoundClosedEvent(
             201L,
             Instant.parse("2026-08-26T05:04:00Z")
     );
 
     private final List<Object> publishedEvents = new ArrayList<>();
     private TransactionTemplate transactionTemplate;
-    private SpringAfterCommitCampaignClosedEventPublisher publisher;
+    private SpringAfterCommitCouponRoundClosedEventPublisher publisher;
 
     @BeforeEach
     void setUp() {
         ApplicationEventPublisher applicationEventPublisher =
                 publishedEvents::add;
-        publisher = new SpringAfterCommitCampaignClosedEventPublisher(
+        publisher = new SpringAfterCommitCouponRoundClosedEventPublisher(
                 applicationEventPublisher
         );
         transactionTemplate = new TransactionTemplate(

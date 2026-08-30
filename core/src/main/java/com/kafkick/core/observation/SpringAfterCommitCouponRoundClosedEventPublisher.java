@@ -8,12 +8,12 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Component
-public class SpringAfterCommitCampaignClosedEventPublisher
-        implements CampaignClosedEventPublisher {
+public class SpringAfterCommitCouponRoundClosedEventPublisher
+        implements CouponRoundClosedEventPublisher {
 
     private final ApplicationEventPublisher applicationEventPublisher;
 
-    public SpringAfterCommitCampaignClosedEventPublisher(
+    public SpringAfterCommitCouponRoundClosedEventPublisher(
             ApplicationEventPublisher applicationEventPublisher
     ) {
         this.applicationEventPublisher = Objects.requireNonNull(
@@ -22,13 +22,13 @@ public class SpringAfterCommitCampaignClosedEventPublisher
     }
 
     @Override
-    public void publishAfterCommit(CampaignClosedEvent event) {
+    public void publishAfterCommit(CouponRoundClosedEvent event) {
         Objects.requireNonNull(event, "event");
         if (!TransactionSynchronizationManager.isActualTransactionActive()
                 || !TransactionSynchronizationManager
                 .isSynchronizationActive()) {
             throw new IllegalStateException(
-                    "캠페인 종료 이벤트는 활성 트랜잭션에서만 등록할 수 있습니다."
+                    "쿠폰 회차 종료 이벤트는 활성 트랜잭션에서만 등록할 수 있습니다."
             );
         }
         TransactionSynchronizationManager.registerSynchronization(

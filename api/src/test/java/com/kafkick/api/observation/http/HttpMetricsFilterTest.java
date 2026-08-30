@@ -122,8 +122,8 @@ class HttpMetricsFilterTest {
         assertThat(UriGroup.of("POST", "/api/v1/coupons/{couponId}/cancel-use"))
                 .contains(UriGroup.USE);
         assertThat(UriGroup.of("POST", "/api/v1/coupons/42/issue")).isEmpty();
-        assertThat(UriGroup.of("GET", "/api/v1/admin/campaigns")).isEmpty();
-        assertThat(UriGroup.of("GET", "/admin/campaigns")).isEmpty();
+        assertThat(UriGroup.of("GET", "/api/v1/admin/coupon-rounds")).isEmpty();
+        assertThat(UriGroup.of("GET", "/admin/coupon-rounds")).isEmpty();
         assertThat(UriGroup.of("GET", "/actuator/prometheus")).isEmpty();
     }
 
@@ -647,7 +647,7 @@ class HttpMetricsFilterTest {
         Fixture fixture = new Fixture();
         MockMvc mockMvc = validationMockMvc(fixture);
 
-        var result = mockMvc.perform(get("/api/v1/campaigns/0/validation")
+        var result = mockMvc.perform(get("/api/v1/couponRounds/0/validation")
                         .requestAttr(RequestAttributeKeys.DEPENDENCY, Dependency.REDIS))
                 .andExpect(status().isBadRequest())
                 .andReturn();
@@ -813,7 +813,7 @@ class HttpMetricsFilterTest {
             return ResponseEntity.noContent().build();
         }
 
-        @GetMapping("/api/v1/campaigns/{id}/validation")
+        @GetMapping("/api/v1/couponRounds/{id}/validation")
         private ResponseEntity<Void> method(@PathVariable @Min(1) long id) {
             return ResponseEntity.noContent().build();
         }

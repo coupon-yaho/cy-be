@@ -111,7 +111,7 @@ class PromQueryClientTest {
                   {"metric":{"outcome":"ALREADY_ISSUED"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"STOCK_EXHAUSTED"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"NOT_OPENED"},"value":[1755000000,"1"]},
-                  {"metric":{"outcome":"CAMPAIGN_CLOSED"},"value":[1755000000,"1"]},
+                  {"metric":{"outcome":"COUPON_ROUND_CLOSED"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"GRADE_NOT_ELIGIBLE"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"NO_ENTRY_TOKEN"},"value":[1755000000,"1"]},
                   {"metric":{"outcome":"ENTRY_TOKEN_EXPIRED"},"value":[1755000000,"1"]},

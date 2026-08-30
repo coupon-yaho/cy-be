@@ -9,29 +9,29 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
 
-import com.kafkick.core.observation.CampaignClosedEvent;
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
+import com.kafkick.core.observation.CouponRoundClosedEvent;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
 
 import tools.jackson.databind.ObjectMapper;
 
-public final class RedisCampaignClosedEventSubscriber
+public final class RedisCouponRoundClosedEventSubscriber
         implements MessageListener {
 
     private static final long LOG_INTERVAL_NANOS =
             TimeUnit.SECONDS.toNanos(10);
 
     private static final Logger log = LoggerFactory.getLogger(
-            RedisCampaignClosedEventSubscriber.class
+            RedisCouponRoundClosedEventSubscriber.class
     );
 
     private final ObjectMapper objectMapper;
-    private final CampaignLifecycleRecorder recorder;
+    private final CouponRoundLifecycleRecorder recorder;
     private final AtomicLong failureCount = new AtomicLong();
     private final AtomicLong nextLogAtNanos = new AtomicLong();
 
-    public RedisCampaignClosedEventSubscriber(
+    public RedisCouponRoundClosedEventSubscriber(
             ObjectMapper objectMapper,
-            CampaignLifecycleRecorder recorder
+            CouponRoundLifecycleRecorder recorder
     ) {
         this.objectMapper = Objects.requireNonNull(objectMapper);
         this.recorder = Objects.requireNonNull(recorder);
@@ -40,12 +40,12 @@ public final class RedisCampaignClosedEventSubscriber
     @Override
     public void onMessage(Message message, byte[] pattern) {
         try {
-            CampaignClosedEvent event = objectMapper.readValue(
+            CouponRoundClosedEvent event = objectMapper.readValue(
                     message.getBody(),
-                    CampaignClosedEvent.class
+                    CouponRoundClosedEvent.class
             );
-            recorder.retireCampaign(
-                    event.campaignCouponId(),
+            recorder.retireCouponRound(
+                    event.couponId(),
                     event.closedAt()
             );
         } catch (Exception exception) {
@@ -64,7 +64,7 @@ public final class RedisCampaignClosedEventSubscriber
                 );
         if (logDue) {
             log.warn(
-                    "캠페인 종료 Redis 수신 처리 실패 누적 {}건. cause={}",
+                    "쿠폰 회차 종료 Redis 수신 처리 실패 누적 {}건. cause={}",
                     count,
                     exception.toString()
             );

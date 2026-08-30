@@ -33,13 +33,13 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
 import org.junit.jupiter.api.Test;
 
-class CampaignMeterRegistryTest {
+class CouponRoundMeterRegistryTest {
 
     @Test
-    void rejectsNewCampaignsAtTheCapWithoutCreatingTheirMeters() {
+    void rejectsNewCouponRoundsAtTheCapWithoutCreatingTheirMeters() {
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters, 1);
-        MeterEventRecorder recorder = recorder(campaigns, meters);
+        CouponRoundMeterRegistry couponRounds = registry(meters, 1);
+        MeterEventRecorder recorder = recorder(couponRounds, meters);
         try {
             IssuanceFlowEventFactory factory = factory();
             recorder.record(factory.issueAttempt(context(201L)));
@@ -54,35 +54,35 @@ class CampaignMeterRegistryTest {
             assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "202").counters()).isEmpty();
             assertThat(meters.find(MeterNames.ISSUANCE_OUTCOME).tag("outcome", "ISSUED")
                     .counter().count()).isEqualTo(1.0);
-            assertThat(meters.find(MeterNames.CAMPAIGN_LIMIT_EXCEEDED).counter().count()).isEqualTo(2.0);
+            assertThat(meters.find(MeterNames.COUPON_ROUND_LIMIT_EXCEEDED).counter().count()).isEqualTo(2.0);
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
     @Test
-    void retiresAllCampaignScopedMetersAndTombstonesDelayedEvents() {
+    void retiresAllCouponRoundScopedMetersAndTombstonesDelayedEvents() {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z"));
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
-        MeterEventRecorder recorder = recorder(campaigns, meters);
+        CouponRoundMeterRegistry couponRounds = registry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
+        MeterEventRecorder recorder = recorder(couponRounds, meters);
         IssuanceFlowEventFactory factory = factory();
 
         try {
             recorder.record(factory.issueAttempt(context(201L)));
             recorder.record(factory.admitted(context(201L), 1L));
             recorder.record(factory.issued(context(201L), 1L, "code"));
-            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
+            couponRounds.retireCouponRound(201L, clock.instant().minus(Duration.ofMinutes(1)));
 
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
             recorder.record(factory.issueAttempt(context(201L)));
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
 
             recorder.record(factory.issueAttempt(context(202L)));
             assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "202").counters()).hasSize(2);
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
@@ -90,24 +90,24 @@ class CampaignMeterRegistryTest {
     void schedulesOnlyOneRetirementForRepeatedNotifications() {
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
         ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1);
-        CampaignMeterRegistry campaigns = new CampaignMeterRegistry(meters,
-                new CampaignMeterProperties(1, Duration.ofHours(1), Duration.ofHours(1), 10),
+        CouponRoundMeterRegistry couponRounds = new CouponRoundMeterRegistry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofHours(1), Duration.ofHours(1), 10),
                 Duration.ofSeconds(10), Clock.systemUTC(), executor);
         try {
             Instant closedAt = Instant.now();
-            campaigns.retireCampaign(201L, closedAt);
-            campaigns.retireCampaign(201L, closedAt);
+            couponRounds.retireCouponRound(201L, closedAt);
+            couponRounds.retireCouponRound(201L, closedAt);
 
             assertThat(executor.getQueue()).hasSize(1);
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
     @Test
-    void registersOneCampaignMeterSetUnderConcurrentFirstEvents() throws Exception {
+    void registersOneCouponRoundMeterSetUnderConcurrentFirstEvents() throws Exception {
         CountingSimpleMeterRegistry meters = new CountingSimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters, 10);
+        CouponRoundMeterRegistry couponRounds = registry(meters, 10);
         int countersBefore = meters.counterCreations.get();
         int gaugesBefore = meters.gaugeCreations.get();
         int concurrency = 32;
@@ -126,7 +126,7 @@ class CampaignMeterRegistryTest {
                             Thread.currentThread().interrupt();
                             throw new AssertionError(exception);
                         }
-                        campaigns.campaignMeters(201L).orElseThrow().attempt().increment();
+                        couponRounds.couponRoundMeters(201L).orElseThrow().attempt().increment();
                     })).toList();
             assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
             fire.countDown();
@@ -142,7 +142,7 @@ class CampaignMeterRegistryTest {
             assertThat(meters.gaugeCreations).hasValue(gaugesBefore + 2);
         } finally {
             executor.shutdownNow();
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
@@ -150,21 +150,21 @@ class CampaignMeterRegistryTest {
     void evictsTheOldestTombstoneWhenItsBoundIsReached() {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z"));
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters,
-                new CampaignMeterProperties(2, Duration.ofMinutes(1), Duration.ofHours(1), 1), clock);
-        MeterEventRecorder recorder = recorder(campaigns, meters);
+        CouponRoundMeterRegistry couponRounds = registry(meters,
+                new CouponRoundMeterProperties(2, Duration.ofMinutes(1), Duration.ofHours(1), 1), clock);
+        MeterEventRecorder recorder = recorder(couponRounds, meters);
         try {
             recorder.record(factory().issueAttempt(context(201L)));
             recorder.record(factory().issueAttempt(context(202L)));
-            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
-            campaigns.retireCampaign(202L, clock.instant().minus(Duration.ofMinutes(1)));
+            couponRounds.retireCouponRound(201L, clock.instant().minus(Duration.ofMinutes(1)));
+            couponRounds.retireCouponRound(202L, clock.instant().minus(Duration.ofMinutes(1)));
 
             recorder.record(factory().issueAttempt(context(201L)));
             assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "201").counters()).hasSize(2);
             recorder.record(factory().issueAttempt(context(202L)));
-            assertNoCampaignMeters(meters, "202");
+            assertNoCouponRoundMeters(meters, "202");
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
@@ -172,82 +172,82 @@ class CampaignMeterRegistryTest {
     void allowsRegistrationAfterTombstoneRetentionExpires() {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z"));
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofMinutes(10), 10), clock);
-        MeterEventRecorder recorder = recorder(campaigns, meters);
+        CouponRoundMeterRegistry couponRounds = registry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofMinutes(10), 10), clock);
+        MeterEventRecorder recorder = recorder(couponRounds, meters);
         try {
             recorder.record(factory().issueAttempt(context(201L)));
-            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
+            couponRounds.retireCouponRound(201L, clock.instant().minus(Duration.ofMinutes(1)));
             recorder.record(factory().issueAttempt(context(201L)));
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
 
             clock.advance(Duration.ofMinutes(10).plusNanos(1));
             recorder.record(factory().issueAttempt(context(201L)));
             assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "201").counters()).hasSize(2);
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
     @Test
-    void continuesRemovingOtherCampaignMetersWhenOneRemovalFails() {
+    void continuesRemovingOtherCouponRoundMetersWhenOneRemovalFails() {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-24T00:00:00Z"));
         ThrowingRemoveMeterRegistry meters = new ThrowingRemoveMeterRegistry(MeterNames.ISSUANCE_FLOW);
-        CampaignMeterRegistry campaigns = registry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
+        CouponRoundMeterRegistry couponRounds = registry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
         try {
-            MeterEventRecorder recorder = recorder(campaigns, meters);
+            MeterEventRecorder recorder = recorder(couponRounds, meters);
             recorder.record(factory().issueAttempt(context(201L)));
-            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
+            couponRounds.retireCouponRound(201L, clock.instant().minus(Duration.ofMinutes(1)));
 
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
             assertThat(meters.find(MeterNames.QUEUE_ADMITTED).tag("coupon_id", "201").counters()).isEmpty();
             assertThat(meters.find(MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH).tag("coupon_id", "201")
                     .gauges()).isEmpty();
             assertThat(meters.find(MeterNames.QUEUE_EVENT_LAST_ADMITTED_EPOCH).tag("coupon_id", "201")
                     .gauges()).isEmpty();
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
     /**
-     * {@code removeCampaignMeters} <b>바깥</b>에서 난 예외도 회수를 멈추지 않는다.
+     * {@code removeCouponRoundMeters} <b>바깥</b>에서 난 예외도 회수를 멈추지 않는다.
      *
      * <p>CY-435 가 넣은 재시도는 미터 하나의 제거 실패만 덮는다 — 그건 그 메서드 안의 catch 다.
      * tombstone 삽입 · 맵 조작처럼 그 바깥에서 던지면 예전에는 로그 한 줄만 남고 끝나서, 그
-     * 캠페인의 미터는 재기동 전까지 레지스트리에 남아 계속 scrape 됐다.
+     * 쿠폰 회차의 미터는 재기동 전까지 레지스트리에 남아 계속 scrape 됐다.
      *
      * <p>시계로 터뜨린다. {@code addTombstone} 이 {@code clock.instant()} 를 부르므로 그 호출을
-     * 한 번 실패시키면 {@code campaigns.remove()} 에 닿기도 전에 바깥 catch 로 간다.
+     * 한 번 실패시키면 {@code couponRounds.remove()} 에 닿기도 전에 바깥 catch 로 간다.
      */
     @Test
     void reschedulesRetirementWhenTheFailureIsOutsideMeterRemoval() {
-        // 호출 순서: ① 아래 인자 평가 ② retireCampaign 의 지연 계산 ③ retireNow 의 addTombstone.
-        //           ③ 을 터뜨려야 retireNow 의 바깥 catch 로 간다 — ② 는 retireCampaign 이 자기 catch 로 삼킨다.
+        // 호출 순서: ① 아래 인자 평가 ② retireCouponRound 의 지연 계산 ③ retireNow 의 addTombstone.
+        //           ③ 을 터뜨려야 retireNow 의 바깥 catch 로 간다 — ② 는 retireCouponRound 이 자기 catch 로 삼킨다.
         //           한 번만 실패시켜서, 재예약된 재시도는 성공하고 미터가 실제로 걷혔음을 볼 수 있게 한다.
         FailingClock clock = new FailingClock(Instant.parse("2026-08-24T00:00:00Z"), 3, 1);
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
+        CouponRoundMeterRegistry couponRounds = registry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
         try {
-            MeterEventRecorder recorder = recorder(campaigns, meters);
+            MeterEventRecorder recorder = recorder(couponRounds, meters);
             recorder.record(factory().issueAttempt(context(201L)));
             assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", "201").counters()).isNotEmpty();
 
-            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
+            couponRounds.retireCouponRound(201L, clock.instant().minus(Duration.ofMinutes(1)));
 
             assertThat(clock.failed()).as("바깥 예외가 실제로 났어야 한다").isTrue();
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
     /**
      * 회수할 것이 없으면 재예약하지 않는다.
      *
-     * <p>조건 없이 재예약하면 이미 끝난 캠페인이 지연 간격마다 깨어나 아무것도 안 하고 다시
+     * <p>조건 없이 재예약하면 이미 끝난 쿠폰 회차가 지연 간격마다 깨어나 아무것도 안 하고 다시
      * 잠든다. {@code ImmediateScheduledExecutor} 는 예약을 인라인 실행하므로 그 상태는 테스트에서
      * 무한 재귀({@code StackOverflowError})로 드러난다.
      */
@@ -256,16 +256,16 @@ class CampaignMeterRegistryTest {
         // ③ 부터 계속 실패한다. 재시도도 같은 자리에서 터지므로, 재예약 조건이 없으면 멈추지 않는다.
         FailingClock clock = new FailingClock(Instant.parse("2026-08-24T00:00:00Z"), 3, Integer.MAX_VALUE);
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = registry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
+        CouponRoundMeterRegistry couponRounds = registry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10), clock);
         try {
-            // 미터를 한 번도 등록하지 않았다. campaigns · pendingRetirements 둘 다 비어 있다.
-            campaigns.retireCampaign(201L, clock.instant().minus(Duration.ofMinutes(1)));
+            // 미터를 한 번도 등록하지 않았다. couponRounds · pendingRetirements 둘 다 비어 있다.
+            couponRounds.retireCouponRound(201L, clock.instant().minus(Duration.ofMinutes(1)));
 
             assertThat(clock.failed()).isTrue();
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
@@ -278,12 +278,12 @@ class CampaignMeterRegistryTest {
      * 성질에 대해서는 아무 말도 하지 않는다. 그 차이가 문제가 되는 지점이 둘이다.
      *
      * <ul>
-     *   <li>등록된 캠페인 + 계속 실패하는 원인이면, 인라인 실행기에서는 무한 재귀
+     *   <li>등록된 쿠폰 회차 + 계속 실패하는 원인이면, 인라인 실행기에서는 무한 재귀
      *       ({@code StackOverflowError})가 되지만 실운영에서는 지연 간격마다 한 번 도는
      *       느린 루프다. 앞의 모양만 보고 "재귀가 터진다" 고 읽으면 안 된다.</li>
      *   <li>재시도가 큐에 앉아 있는 동안 같은 회차로 이벤트가 하나 더 들어오면
-     *       {@code campaignMeters()} 가 미터를 <b>다시 등록</b>할 수 있다. 그 뒤 재시도가 돌아
-     *       {@code campaigns.remove} 로 새로 만든 미터를 걷어 가면 살아 있는 회차의 시계열이
+     *       {@code couponRoundMeters()} 가 미터를 <b>다시 등록</b>할 수 있다. 그 뒤 재시도가 돌아
+     *       {@code couponRounds.remove} 로 새로 만든 미터를 걷어 가면 살아 있는 회차의 시계열이
      *       조용히 끊긴다.</li>
      * </ul>
      *
@@ -291,19 +291,19 @@ class CampaignMeterRegistryTest {
      */
     @Test
     void queuesAtMostOneRetryAtATimeWhileTheFailurePersists() {
-        // 호출 순서: ① retireCampaign 의 지연 계산 ② retireNow 의 addTombstone.
+        // 호출 순서: ① retireCouponRound 의 지연 계산 ② retireNow 의 addTombstone.
         //           테스트는 시계를 직접 부르지 않는다(닫는 시각이 리터럴이다).
         FailingClock clock = new FailingClock(Instant.parse("2026-08-24T00:00:00Z"), 2, Integer.MAX_VALUE);
         QueueingScheduledExecutor executor = new QueueingScheduledExecutor();
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = new CampaignMeterRegistry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10),
+        CouponRoundMeterRegistry couponRounds = new CouponRoundMeterRegistry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10),
                 Duration.ofSeconds(10), clock, executor);
         try {
-            MeterEventRecorder recorder = recorder(campaigns, meters);
+            MeterEventRecorder recorder = recorder(couponRounds, meters);
             recorder.record(factory().issueAttempt(context(201L)));
 
-            campaigns.retireCampaign(201L, Instant.parse("2026-08-23T23:59:00Z"));
+            couponRounds.retireCouponRound(201L, Instant.parse("2026-08-23T23:59:00Z"));
 
             // 첫 예약 하나. 드레인할 때마다 실패하고 정확히 하나를 다시 예약한다.
             for (int round = 0; round < 5; round++) {
@@ -314,7 +314,7 @@ class CampaignMeterRegistryTest {
             }
             assertThat(clock.failed()).isTrue();
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
@@ -329,22 +329,22 @@ class CampaignMeterRegistryTest {
      * 재귀로 끝나 "여러 번에 걸쳐 끝난다" 는 상태 자체가 없다.
      *
      * <p>TODO(@SH-Seol · 후속 티켓): 재시도 대기 창에서 같은 회차가 재등록됐을 때 그 새 미터를
-     * 걷어 가지 않는지는 아직 안 본다. {@code campaigns.remove(couponId, pending.campaignMeters())}
+     * 걷어 가지 않는지는 아직 안 본다. {@code couponRounds.remove(couponId, pending.couponRoundMeters())}
      * 2-인자 remove 로 막을 수 있는 자리다.
      */
     @Test
-    void blocksReRegistrationOnceTheRetrySucceedsAndTombstonesTheCampaign() {
+    void blocksReRegistrationOnceTheRetrySucceedsAndTombstonesTheCouponRound() {
         FailingClock clock = new FailingClock(Instant.parse("2026-08-24T00:00:00Z"), 2, 1);
         QueueingScheduledExecutor executor = new QueueingScheduledExecutor();
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        CampaignMeterRegistry campaigns = new CampaignMeterRegistry(meters,
-                new CampaignMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10),
+        CouponRoundMeterRegistry couponRounds = new CouponRoundMeterRegistry(meters,
+                new CouponRoundMeterProperties(1, Duration.ofMinutes(1), Duration.ofHours(1), 10),
                 Duration.ofSeconds(10), clock, executor);
         try {
-            MeterEventRecorder recorder = recorder(campaigns, meters);
+            MeterEventRecorder recorder = recorder(couponRounds, meters);
             recorder.record(factory().issueAttempt(context(201L)));
 
-            campaigns.retireCampaign(201L, Instant.parse("2026-08-23T23:59:00Z"));
+            couponRounds.retireCouponRound(201L, Instant.parse("2026-08-23T23:59:00Z"));
             // 첫 태스크는 실패하고 하나를 다시 예약한다. 큐가 빌 때까지 돌린다.
             for (int guard = 0; guard < 10 && executor.pending() > 0; guard++) {
                 executor.drainOnce();
@@ -354,29 +354,29 @@ class CampaignMeterRegistryTest {
             // 재시도가 끝나면 tombstone 이 박혀 재등록이 막혀야 한다.
             recorder.record(factory().issueAttempt(context(201L)));
 
-            assertNoCampaignMeters(meters, "201");
+            assertNoCouponRoundMeters(meters, "201");
         } finally {
-            campaigns.close();
+            couponRounds.close();
         }
     }
 
-    private static CampaignMeterRegistry registry(SimpleMeterRegistry meters, int cap) {
-        return new CampaignMeterRegistry(meters,
-                new CampaignMeterProperties(cap, Duration.ofMillis(1), Duration.ofHours(1), 10),
+    private static CouponRoundMeterRegistry registry(SimpleMeterRegistry meters, int cap) {
+        return new CouponRoundMeterRegistry(meters,
+                new CouponRoundMeterProperties(cap, Duration.ofMillis(1), Duration.ofHours(1), 10),
                 Duration.ofSeconds(10));
     }
 
-    private static CampaignMeterRegistry registry(
+    private static CouponRoundMeterRegistry registry(
             SimpleMeterRegistry meters,
-            CampaignMeterProperties properties,
+            CouponRoundMeterProperties properties,
             Clock clock
     ) {
-        return new CampaignMeterRegistry(meters, properties, Duration.ofSeconds(10), clock,
+        return new CouponRoundMeterRegistry(meters, properties, Duration.ofSeconds(10), clock,
                 new ImmediateScheduledExecutor());
     }
 
-    private static MeterEventRecorder recorder(CampaignMeterRegistry campaigns, SimpleMeterRegistry meters) {
-        return new MeterEventRecorder(campaigns, Duration.ofSeconds(10));
+    private static MeterEventRecorder recorder(CouponRoundMeterRegistry couponRounds, SimpleMeterRegistry meters) {
+        return new MeterEventRecorder(couponRounds, Duration.ofSeconds(10));
     }
 
     private static IssuanceFlowEventFactory factory() {
@@ -389,7 +389,7 @@ class CampaignMeterRegistryTest {
                 QueueMode.ADAPTIVE, 901L, "api-1");
     }
 
-    private static void assertNoCampaignMeters(SimpleMeterRegistry meters, String couponId) {
+    private static void assertNoCouponRoundMeters(SimpleMeterRegistry meters, String couponId) {
         assertThat(meters.find(MeterNames.ISSUANCE_FLOW).tag("coupon_id", couponId).counters()).isEmpty();
         assertThat(meters.find(MeterNames.QUEUE_ADMITTED).tag("coupon_id", couponId).counters()).isEmpty();
         assertThat(meters.find(MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH).tag("coupon_id", couponId)
@@ -401,7 +401,7 @@ class CampaignMeterRegistryTest {
     /**
      * {@code instant()} 의 {@code failFromCall} 번째 호출부터 {@code failCount} 번 던지는 시계.
      *
-     * <p>{@code removeCampaignMeters} <b>바깥</b>에서 나는 예외를 만드는 유일한 seam 이다 —
+     * <p>{@code removeCouponRoundMeters} <b>바깥</b>에서 나는 예외를 만드는 유일한 seam 이다 —
      * 레지스트리의 {@code remove} 를 던지게 하면 그 메서드 안쪽 catch 에 잡혀 이 경로를 아예 안 탄다.
      *
      * <p>횟수가 파라미터인 이유 — 한 번만 실패하는 시계로는 재예약 <b>조건</b>을 검사할 수 없다.

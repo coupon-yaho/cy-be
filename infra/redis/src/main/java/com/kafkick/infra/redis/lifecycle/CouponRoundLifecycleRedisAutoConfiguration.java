@@ -12,7 +12,7 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -20,44 +20,44 @@ import tools.jackson.databind.ObjectMapper;
         after = DataRedisAutoConfiguration.class,
         afterName = "com.kafkick.api.observation.ApiObservationAutoConfiguration"
 )
-@EnableConfigurationProperties(CampaignLifecycleRedisProperties.class)
-public class CampaignLifecycleRedisAutoConfiguration {
+@EnableConfigurationProperties(CouponRoundLifecycleRedisProperties.class)
+public class CouponRoundLifecycleRedisAutoConfiguration {
 
     @Bean
     @ConditionalOnBean(StringRedisTemplate.class)
-    @ConditionalOnMissingBean(RedisCampaignClosedEventPublisher.class)
-    RedisCampaignClosedEventPublisher redisCampaignClosedEventPublisher(
+    @ConditionalOnMissingBean(RedisCouponRoundClosedEventPublisher.class)
+    RedisCouponRoundClosedEventPublisher redisCouponRoundClosedEventPublisher(
             StringRedisTemplate redisTemplate,
             ObjectMapper objectMapper,
-            CampaignLifecycleRedisProperties properties
+            CouponRoundLifecycleRedisProperties properties
     ) {
-        return new RedisCampaignClosedEventPublisher(
+        return new RedisCouponRoundClosedEventPublisher(
                 redisTemplate,
                 objectMapper,
                 properties.getChannel()
         );
     }
 
-    @Bean(name = "campaignLifecycleRedisMessageListenerContainer")
+    @Bean(name = "couponRoundLifecycleRedisMessageListenerContainer")
     @ConditionalOnProperty(
-            prefix = "campaign.lifecycle.redis",
+            prefix = "coupon-round.lifecycle.redis",
             name = "subscriber-enabled",
             havingValue = "true"
     )
     @ConditionalOnBean({
             RedisConnectionFactory.class,
-            CampaignLifecycleRecorder.class
+            CouponRoundLifecycleRecorder.class
     })
     @ConditionalOnMissingBean(name =
-            "campaignLifecycleRedisMessageListenerContainer")
-    RedisMessageListenerContainer campaignLifecycleRedisMessageListenerContainer(
+            "couponRoundLifecycleRedisMessageListenerContainer")
+    RedisMessageListenerContainer couponRoundLifecycleRedisMessageListenerContainer(
             RedisConnectionFactory connectionFactory,
             ObjectMapper objectMapper,
-            CampaignLifecycleRecorder recorder,
-            CampaignLifecycleRedisProperties properties
+            CouponRoundLifecycleRecorder recorder,
+            CouponRoundLifecycleRedisProperties properties
     ) {
-        RedisCampaignClosedEventSubscriber subscriber =
-                new RedisCampaignClosedEventSubscriber(
+        RedisCouponRoundClosedEventSubscriber subscriber =
+                new RedisCouponRoundClosedEventSubscriber(
                         objectMapper,
                         recorder
                 );

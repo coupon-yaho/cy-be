@@ -49,7 +49,7 @@ final class CouponIssuePolicy {
         if (!issuedAt.isBefore(couponRound.closeAt())
                 || couponRound.status() == CouponRoundStatus.CLOSED) {
             throw new BusinessException(
-                    CouponIssueErrorCode.CAMPAIGN_CLOSED,
+                    CouponIssueErrorCode.COUPON_ROUND_CLOSED,
                     "couponRoundId=" + couponRound.id()
             );
         }

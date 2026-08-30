@@ -11,7 +11,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
-import com.kafkick.infra.redis.lifecycle.CampaignLifecycleRedisAutoConfiguration;
+import com.kafkick.infra.redis.lifecycle.CouponRoundLifecycleRedisAutoConfiguration;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.databind.ObjectMapper;
@@ -19,7 +19,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class CampaignLifecycleRedisWiringTest {
+class CouponRoundLifecycleRedisWiringTest {
 
     private static final GenericContainer<?> REDIS = new GenericContainer<>(
             DockerImageName.parse("redis:7.2-alpine")
@@ -41,10 +41,10 @@ class CampaignLifecycleRedisWiringTest {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(
                         ApiObservationAutoConfiguration.class,
-                        CampaignLifecycleRedisAutoConfiguration.class
+                        CouponRoundLifecycleRedisAutoConfiguration.class
                 ))
                 .withPropertyValues(
-                        "campaign.lifecycle.redis.subscriber-enabled=true"
+                        "coupon-round.lifecycle.redis.subscriber-enabled=true"
                 )
                 .withBean(ObjectMapper.class, () -> JsonMapper.builder()
                         .findAndAddModules()
