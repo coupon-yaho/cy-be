@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -107,6 +108,36 @@ public class VerifyReportController {
 
         return ResponseEnvelope.success(VerifyReportView.of(
                 run, byType(run), manifest(run)));
+    }
+
+    /**
+     * <b>진행 중인 실행의 중간 상태.</b> 화면이 "지금 검증" 을 누르고 결과를 기다리는 동안
+     * 무엇이 몇 건 잡혔는지 보여 주려고 연다.
+     *
+     * <p><b>{@code /reports/latest} 를 완화하지 않는다.</b> 그쪽은 {@code verdict IS NOT NULL
+     * AND finished_at IS NOT NULL} 로 <b>일부러</b> 진행 중 실행을 뺀다 — 게이트와
+     * {@code dump-verify-report.sh} 가 같은 질의를 쓰므로, 거기에 진행 중 run 이 섞이면
+     * 절반만 센 검출이 <i>최종 판정</i>으로 증적에 남는다. 그래서 <b>다른 경로·다른 타입</b>
+     * 으로 가른다.
+     *
+     * <p>검출 수는 {@code verification_findings} 를 직접 센다. {@code verification_runs}
+     * 의 {@code finding_count} 는 판정 Step 이 마감할 때 채워지므로 진행 중에는 안 맞는다.
+     *
+     * <pre>
+     * curl -sSf "localhost:9091/api/v1/admin/verify/runs/16/progress" -H "X-Batch-Admin-Token: …"
+     * </pre>
+     */
+    @GetMapping("/runs/{runId}/progress")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true,
+            timeoutString = "${batch.admin.timeout-seconds:5}")
+    public ResponseEnvelope<VerifyProgressView> progress(@PathVariable long runId) {
+
+        VerificationRun run = runs.findById(runId)
+                .orElseThrow(() -> new BusinessException(VerificationErrorCode.RUN_NOT_FOUND,
+                        "runId=" + runId));
+
+        return ResponseEnvelope.success(VerifyProgressView.of(
+                run, findings.countOf(runId), findings.countByType(runId)));
     }
 
     private Map<FindingType, Integer> byType(VerificationRun run) {
