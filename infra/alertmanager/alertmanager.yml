@@ -1,0 +1,52 @@
+# 알림을 어디로 보낼지 정합니다.
+#
+# ⚠️ 리시버는 alert-sink 하나지만, **그것이 Slack 으로 다시 넘긴다**(CY-651, docs/13 §2f).
+#    SLACK_WEBHOOK_URL 이 없으면 stdout 만 한다 — 이 파일은 어느 쪽이든 안 바뀐다.
+#    웹훅 URL 은 **저장소에 안 들어온다.** 환경변수로만 넘긴다.
+#
+#    한때 여기 "Slack 이 아니라 mock 리시버다(§2e)" 라고 적혀 있었다. 참조 번호도
+#    틀렸고(그 얘기는 §2f 다), CY-651 이 그 판단을 뒤집었다 — stdout 만 두면
+#    **아무도 안 본다.**
+#
+# ⚠️ 가르는 축이 severity 가 아니라 channel 이다.
+#    severity 로 가르면 warning 수신함에 서버 문제와 데이터 문제가 섞인다 —
+#    BatchJobRunningTooLong(성능)·ExpireMetricsUnknown(설정)이 warning 인데 서버 축이고,
+#    데이터 축도 전부 warning 이다 — ExpireSkippingBrokenCoupons · VerificationVerdictFailed ·
+#    CouponRound{BlockedByMissingStock,MissedWindow,DataMetricsUnknown}.
+#    ⚠️ 개수를 여기 적지 마라 — 대장은 docs/14 의 채널 표이고 AlertChannelRegistryTest 가 대조한다.
+#    severity 는 긴급도로 남기고, "어디를 봐야 하나" 는 channel 이 진다.
+
+route:
+  # 라벨이 없는 알림이 조용히 사라지지 않게 기본 경로를 둔다. 여기로 오는 것이 있으면
+  # 규칙에 channel 을 안 단 것이므로, 그것 자체가 고쳐야 할 신호다.
+  receiver: sink-unrouted
+  # dataset 을 빼면 CLEAN 과 CORRUPT 판정이 한 그룹으로 묶여 한 webhook 으로 나간다 —
+  # 리시버 로그에서 방금 넣은 알림을 눈으로 가를 수 없다. 라벨이 없는 알림에는
+  # 빈 값으로 취급되므로 만료 알림의 그룹핑은 안 바뀐다.
+  group_by: ["alertname", "spring_batch_job_name", "dataset"]
+  group_wait: 10s
+  group_interval: 1m
+  # 같은 알림을 다시 보내는 간격. 짧으면 mock 리시버 로그가 금방 읽기 어려워진다.
+  repeat_interval: 1h
+
+  routes:
+    - matchers: ["channel = server"]
+      receiver: sink-server
+    - matchers: ["channel = data"]
+      receiver: sink-data
+
+receivers:
+  - name: sink-server
+    webhook_configs:
+      - url: http://alert-sink:5001/server
+        send_resolved: true
+
+  - name: sink-data
+    webhook_configs:
+      - url: http://alert-sink:5001/data
+        send_resolved: true
+
+  - name: sink-unrouted
+    webhook_configs:
+      - url: http://alert-sink:5001/unrouted
+        send_resolved: true

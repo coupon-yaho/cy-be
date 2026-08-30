@@ -47,6 +47,17 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * 드러난 계기는 관리자 공통 Fixture 배선이었다. 관리자 화면과 아무 상관 없는 프로세스가 그 화면의
  * Fixture에 매여 있었고, 배치 쪽에서 설정으로 덮으면 결합이 그대로 남는다. 그래서 결합을 끊는다.
  *
+ * [CY-744] 발급·사용·취소 서비스(core.coupon.service)도 같은 근거로 뺀다.
+ *
+ * batch 는 그 패키지를 **본 코드에서 한 줄도 참조하지 않는다**(grep 0건). 그런데 열일곱이
+ * @Service 라 스캔에 걸리고, 그중 IdempotencyExecutionService 가 coupon.idempotency.* 를
+ * 요구해 **그 설정이 없으면 배치가 아예 안 뜬다** — 실측으로 batch 테스트 369개가 그렇게
+ * 죽었다. 쓰지도 않을 빈 때문에 배치 설정에 발급 도메인 손잡이를 들이는 것은 거꾸로다.
+ *
+ * ⚠️ 이 계보에서 그 패키지를 쓰던 것은 박지훈 님의 만료·회차 러너였는데 CY-744 가 걷어냈다
+ *    (만료·회차는 영역 ④ 이고 이 저장소에는 Spring Batch 잡으로 이미 있다). 배치가 다시
+ *    그 서비스를 쓰게 되면 이 필터부터 지워야 한다.
+ *
  * ⚠️ Spring Boot 4.1 의 @SpringBootApplication 에는 excludeFilters 속성이 **없다**(실측:
  *    "cannot find symbol: method excludeFilters()"). 그래서 @ComponentScan 을 따로 단다.
  *
@@ -61,7 +72,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         excludeFilters = {
                 @Filter(type = FilterType.CUSTOM, classes = TypeExcludeFilter.class),
                 @Filter(type = FilterType.CUSTOM, classes = AutoConfigurationExcludeFilter.class),
-                @Filter(type = FilterType.REGEX, pattern = "com\\.kafkick\\.core\\.admin\\..*")
+                @Filter(type = FilterType.REGEX, pattern = "com\\.kafkick\\.core\\.admin\\..*"),
+                @Filter(type = FilterType.REGEX, pattern = "com\\.kafkick\\.core\\.coupon\\.service\\..*")
         })
 @EnableScheduling
 public class BatchApplication {

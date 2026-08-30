@@ -6,10 +6,24 @@ spring:
     # 풀 10개가 그대로 묶이면 발급 경로가 통째로 정지한다 — 관측 풀만 3초에 끊기고 정작 운영이
     # 무방비인 상태를 막는 값이다.
     #
+    # ⚠️ **Hikari 의 connection-timeout 과 다른 축이다.** 저것은 **풀에서 커넥션을 빌리는**
+    #    시간이고, 이 둘은 **소켓** 시간이다. TCP 는 살아 있는데 응답이 안 오는 상태(방화벽
+    #    drop, 서버 멎음)는 Hikari 가 못 잡는다 — 빌려주기는 이미 끝났기 때문이다.
+    #
     # ⚠️ socketTimeout 은 innodb_lock_wait_timeout(기본 50s) 보다 커야 한다. v1(비관적 락)에서
     #    락 대기는 정상 동작인데, 이 값이 더 작으면 정상 대기가 통신 오류로 끊긴다. 서버 쪽
     #    락 대기 시간을 줄이면 이 값도 같이 내린다.
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&connectTimeout=${DB_CONNECT_TIMEOUT_MS:3000}&socketTimeout=${DB_SOCKET_TIMEOUT_MS:60000}
+    #
+    # ⚠️ **기본값은 발급 경로 기준(60초)이다. batch 는 이 값으로 못 산다** — 가장 긴 Step
+    #    데드라인(batch.verify.step-timeout-ms 600초)보다 커야 하고, 실측 근거는 docs/12 의
+    #    replayStep 312초다. 그래서 batch.yml 이 DB_SOCKET_TIMEOUT_MS=660000 을 명시적으로
+    #    준다. 그 관계는 DataSourceTimeoutGuard 가 기동 때 검사해 안 맞으면 거절한다.
+    #
+    # useAffectedRows=false — UPDATE 반환값을 matched rows 로 고정한다. 기본값이지만 명시한다:
+    # VerificationRunJdbcAdapter 가 "0행 = 실행 행이 없다" 로 해석하는데, 누가 UPSERT
+    # 반환값(삽입 1/갱신 2)을 쓰려고 true 로 바꾸면 값이 같은 UPDATE 가 0행이 되어 멀쩡한
+    # 행에 RUN_ROW_VANISHED 가 난다.
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:app}?serverTimezone=UTC&characterEncoding=UTF-8&useUnicode=true&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&useAffectedRows=false&connectTimeout=${DB_CONNECT_TIMEOUT_MS:3000}&socketTimeout=${DB_SOCKET_TIMEOUT_MS:60000}
     # 로컬 개발용 기본값. 운영은 환경변수로 최소 권한 계정을 주입한다.
     username: ${DB_USERNAME:app}
     password: ${DB_PASSWORD:app}
@@ -95,7 +109,9 @@ spring:
     properties:
       hibernate:
         jdbc:
-          time_zone: UTC   # 서버 default-time-zone='+00:00' 과 일치
+          # base.yml 이 mysql 을 --default-time-zone=+00:00 으로 띄운다(CY-392 가 박았다).
+          # 그 전에는 이 줄이 없는 사실을 적고 있었다 — 서버 기본은 time_zone=SYSTEM 이다.
+          time_zone: UTC
           batch_size: 100
         order_inserts: true
         order_updates: true

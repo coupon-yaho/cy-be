@@ -54,6 +54,8 @@ infra/mysql/my.cnf
 ### 시크릿 — PRD 보안 "설계에 비어 있던 구멍 ④", D1 최우선
 # 커밋 이력에 한 번이라도 들어가면 히스토리 삭제만으로 부족하고 키를 교체해야 한다.
 # 여기가 첫 번째 방어선이다.
+# 패턴은 아래 한 블록에 모아 뒀다 — CY-744 합류에서 두 브랜치가 같은 문제를
+# 각자 고쳐 3중 중복이 됐고, 그러면 다음 사람이 어느 줄이 진짜인지 못 가른다.
 .env
 .env.*
 !.env.example
@@ -96,6 +98,15 @@ hs_err_pid*
 replay_pid*
 *.hprof
 
+### 파이썬
+# CY-359 가 mock 알림 리시버(infra/alertmanager/alert-sink.py)로 저장소 최초의 파이썬
+# 파일을 들여왔다. CI 의 py_compile 스텝과 로컬 실행이 여기에 바이트코드를 남긴다.
+# 뒤이어 시드 도구(cy-seed)를 로컬에 나란히 두는 사람이 생겨 가상환경도 함께 잡는다.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
 ### OS
 .DS_Store
 Thumbs.db
@@ -105,9 +116,8 @@ Thumbs.db
 # 코드와 무관한 산출물이고 팀원 실명이 들어가므로 커밋되면 안 된다.
 _workspace/
 
-### Python — 시드 생성기·알림 싱크
-# `infra/alertmanager/` 와 시드 도구가 파이썬이라 바이트코드가 남는다.
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# DB 접속 정보 — 위 `*.env` 가 이미 잡지만 이름을 적어 의도를 남긴다.
+# `.env`·`*.pem` 은 위 블록에 있다. 여기 다시 적지 않는다.
+db.env
+.db.env
+/.alerts.json

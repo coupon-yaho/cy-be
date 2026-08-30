@@ -101,7 +101,9 @@
 - 상태 전이가 `CouponStateMachine` 을 경유하는가 (조건문 하드코딩이 아닌가)
 - `부재` **검증 배치도 같은 클래스**를 쓰는가 — 두 벌로 갈라지면 검증이 검증이 아니다
 - 상태가 4종(`ISSUED` `USED` `CANCELLED` `EXPIRED`) 밖으로 늘어나지 않았는가
-- `부재` 만료된 `USED` 의 사용취소 규칙이 명시돼 있는가 (→ 함정 3)
+- `부재` 만료된 `USED` 의 사용취소 규칙이 명시돼 있는가 (→ 함정 3 — CY-744 에서 **6행**으로 뒤집혔다)
+- 결과가 둘인 전이(`CANCEL_USE`)에서 **어느 쪽이었어야 하는지**까지 보는가 — 표에 있는지만
+  보면 런타임이 틀린 쪽을 써도 통과하고, 상태와 재고가 함께 바뀌므로 V1 도 침묵한다
 
 ### 검증 결정론 — blocker ③ 비결정론
 
@@ -163,9 +165,9 @@
 | 발급 서비스 · 락 · Lua<br>`**/*Issu*` `**/*Stock*` `**/*Lock*` `**/*Redis*` `**/*.lua` | 재고 엔티티, 마이그레이션 DDL 전체, `CouponStateMachine`, 멱등성 클래스 | 재고 · 1인1매 · 멱등성 · 상태전이 · 개인정보 |
 | 검증 · 배치 · 시드<br>`**/*Verif*` `**/*Batch*` `**/*Seed*` `**/*Corrupt*` `**/*Stats*` | `CouponStateMachine`, 검증 엔티티, 오염셋 정의, 마이그레이션 DDL | 검증결정론 · 상태전이 · 개인정보 |
 | 마이그레이션<br>`**/db/migration/*.sql` `**/schema*.sql` | **마이그레이션 이력 전체** (이전 것과의 순서가 판정에 필요), 대응 엔티티 | 재고 · 1인1매 · 멱등성 · 검증결정론 |
-| 도메인 · 상태전이<br>`**/domain/*.java` `**/coupon/*.java` `**/*StateMachine*` `**/*Campaign*` `**/scheduler/*.java` | 마이그레이션 DDL, 발급 서비스, 검증 배치 | 재고 · 상태전이 · 검증결정론 |
-| 컨트롤러 · DTO<br>`**/controller/*.java` `**/dto/*.java` `**/*Api.java` | 마스킹 유틸, 응답 코드 정의, 대상 서비스 | 개인정보 · 측정 · 1인1매 · 컨벤션 |
-| 설정<br>`**/application*.yml` `**/logback*.xml` `build.gradle` | **전 프로파일 yml** (하나만 보면 값 차이를 모른다), `build.gradle` | 설정복원력 · 개인정보 · 측정 |
+| 도메인 · 상태전이<br>`**/domain/*.java` `**/coupon/*.java` `**/*StateMachine*` `**/*Campaign*` `**/schedule/*.java` | 마이그레이션 DDL, 발급 서비스, 검증 배치 | 재고 · 상태전이 · 검증결정론 |
+| 컨트롤러 · DTO<br>`**/controller/*.java` · `**/api/*.java` `**/dto/*.java` `**/*Api.java` | 마스킹 유틸, 응답 코드 정의, 대상 서비스 | 개인정보 · 측정 · 1인1매 · 컨벤션 |
+| 설정<br>`**/application*.yml*` `**/logback*.xml` `**/build.gradle` | **전 프로파일 yml** (하나만 보면 값 차이를 모른다), `build.gradle` | 설정복원력 · 개인정보 · 측정 |
 | 대시보드 · 부하 · Chaos<br>`**/static/**` `loadtest/**` `chaos/**` | 응답 코드 정의, 마스킹 유틸 | 개인정보 · 측정 · 컨벤션 |
 | 인프라 · 비동기<br>`**/entry/*.java` `**/queue/*.java` `**/kafka/*.java` `**/mq/**/*.java` `**/resilience/*.java` | `application*.yml`, 발급 서비스 | 설정복원력 · 측정 · 개인정보 |
 | 그 외 `src/main` 자바 | — | 컨벤션 · 개인정보 |

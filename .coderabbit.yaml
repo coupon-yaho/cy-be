@@ -42,7 +42,7 @@ reviews:
   # 실제 리뷰는 `@coderabbitai review` 를 친 뒤에야 왔다(00:35 → 00:41).
   #
   # ⚠️ **이 키는 리뷰를 켜고 끄지 않는다.** 상태 메시지(스킵 안내 등)를 띄울지만
-  #    정한다. 호출 전용으로 만드는 것은 위의 `auto_review.enabled: false` 다.
+  #    정한다. 호출 전용으로 만드는 것은 `auto_review.enabled: false` 다.
   #    이 줄은 그 결정 뒤에 남는 **안내 코멘트**를 마저 없애는 것뿐이다.
   review_status: false
 
@@ -69,6 +69,16 @@ reviews:
     #   @coderabbitai full review   전체 다시
     # 근거: https://docs.coderabbit.ai/guides/commands
     #   "you can still manually request CodeRabbit to review changes using the commands"
+    #
+    # ⚠️ **이 파일은 main 에도 같은 값으로 있다**(#121). 여기 따로 두는 이유는
+    #    CodeRabbit 이 **PR 의 base 쪽 설정을 읽기 때문**이다. main 만 끄면
+    #    `→ feature/CY-15` 로 가는 배치 PR 에서는 여전히 자동으로 돈다 —
+    #    실측: PR #127(base=feature/CY-15)에서 껐는데도 돌았다.
+    #
+    # **한때 "Qodo 가 자동으로 도는지 모른다" 며 켜 뒀다.** 그 뒤 확인됐다 —
+    # PR #121·#123 이 열리자마자 Qodo 가 describe·review 를 자동으로 달았다.
+    # #119 에서 안 왔던 것은 그 PR 이 Qodo 설치 **전에** 열려
+    # `pull_request.opened` 가 이미 지나갔기 때문이다.
     enabled: false
     drafts: false
 
@@ -183,8 +193,12 @@ reviews:
         응답 DTO 에 마스킹 없는 PII. memberId 는 허용된다.
         예: `log.info("issued: {}", member)` → `log.info("issued: memberId={}", member.getId())`.
 
-        임계치가 코드에 하드코딩되어 있으면 지적한다 — 부하 테스트 중 재기동 없이
-        튜닝해야 하므로 application.yml 로 외부화한다.
+        **부하 경로의** 임계치가 코드에 하드코딩되어 있으면 지적한다 — 부하 테스트 중
+        재기동 없이 튜닝해야 하므로 application.yml 로 외부화한다.
+        부하 경로가 아닌 상수는 지적하지 않는다. 안전 상한(넘으면 거부하는 값),
+        구현 세부(JDBC 배치 크기 같은 관용값), 검증 배치처럼 부하가 끝난 뒤 도는 코드의
+        상수가 여기 해당한다. 외부화하면 아무도 안 만지는 설정 키만 늘고, 모듈 밖 이름공간의
+        키를 그 모듈이 읽게 되어 이름이 거짓이 된다.
 
     # ─────────────────────────────────────────────────────────
     # 발급 경로 — 동시성. 이 프로젝트의 존재 이유
@@ -271,10 +285,13 @@ reviews:
 
         상태 전이: `CouponStateMachine` 밖에서 상태를 직접 바꾸는 코드, 전이표에 없는 전이
         (종단 상태 CANCELLED/EXPIRED 에서 나가는 전이는 전부 위반).
-        **전이표는 시각을 인자로 받지 않는다** — 시간 기반 만료는 expireJob 이 EXPIRE 이력을
+        **리플레이가 쓰는 isLegal 은 시각을 안 받는다** — 런타임 transition 은 받는다
+        (CY-744 에서 그 분리를 명시했다). 시간 기반 만료는 expireJob 이 EXPIRE 이력을
         남겨서 표현하고, 이력에 없는 만료를 상태머신이 암묵적으로 적용하면 리플레이가
         비결정적이 되고 "만료 누락은 정상"이라는 계약이 깨진다. USED 는 만료 대상이 아니다
         (expireJob 은 status='ISSUED' 만 잡는다).
+        ⚠️ CANCEL_USE 는 **결과가 둘**이다(USED→ISSUED · USED→EXPIRED). 검증은 저장된
+        expires_at·created_at 으로 어느 쪽이었어야 하는지까지 본다 — 현재 시각은 안 쓴다.
         런타임과 검증 배치가 같은 상태머신을 쓰는지도 본다.
 
         DB 제약: `UNIQUE (campaign_id, member_id)` 를 제거하거나 우회하는 변경은 무조건
@@ -324,7 +341,12 @@ reviews:
         결정론을 깨는 것들 — 검증 배치 코드 안의 `now()` / `LocalDateTime.now()` /
         `Instant.now()` 는 발견 즉시 blocker 다. 주입된 `asOf` 를 써야 한다.
         **`TimeProvider` 주입도 같은 위반이다** — `timeProvider.now()` 는 결국 현재 시각이라
-        재실행하면 값이 달라진다. 검증 배치에서 시각은 오직 `asOf` 파라미터로만 들어온다.
+        재실행하면 값이 달라진다. 판정에 쓰는 시각은 오직 `asOf` 파라미터로만 들어온다.
+        예외는 `verification_runs.started_at`·`finished_at` 처럼 <b>실행을 관측해 남기는
+        컬럼</b>뿐이고, 이건 checksum·지문 재료가 아니다. 그 값도 `now()` 를 부르지 말고
+        Spring Batch 가 이미 기록한 시각을 쓴다 — `started_at` 은 `JobExecution.getStartTime()`,
+        `finished_at` 은 판정 Step 의 `StepExecution.getStartTime()` 이다.
+        (`JobExecution.getEndTime()` 은 잡이 아직 안 끝나 그 시점에 `null` 이다.)
         증분 윈도우도 절대 구간 `(from_ts, as_of_ts)` 로 받아야 한다. `최근 N분` 같은
         상대 윈도우는 현재 시각 기준이라 같은 파라미터 재실행이 재현되지 않는다.
         그 외: 정렬 타이브레이커 없음(리플레이 정렬은 **`(created_at, id)`** 여야 한다.
@@ -370,7 +392,13 @@ reviews:
         검증 배치가 자체 전이 로직을 가지면 런타임과 두 벌로 갈라져 같은 버그를 양쪽이
         재현한다 — 검증이 검증이 아니게 된다. `CouponStateMachine` 을 공유하는지 확인한다.
         리플레이는 자기가 추적한 상태를 진실로 보고 `from_status` 를 믿지 않는다.
-        불법 전이를 만나면 finding 으로 기록하되 상태는 전이시키지 않고 계속 진행한다.
+        **상태는 `created_at <= asOf` 이력을 `(created_at, id)` 오름차순 정렬한 마지막
+        `to_status` 다** (시드 저장소 contract.json `replay_rule.state`,
+        docs/11-batch-implementation.md). 불법 전이를 만나도 finding 으로 기록하고
+        그 행의 `to_status` 를 따라 계속 접는다. 상태를 안 옮기면 뒤 행이 연쇄로 불법이 되어
+        오염 200건이 수천 건으로 번지고, 오염 유형 4 에서 리플레이가 `EXPIRED` 를 내놓아
+        `issuances.status=USED` 와 어긋나 V3·V5 가 각각 100건씩 오탐한다.
+        접기가 상태를 안 옮기게 하라는 지적은 하지 않는다.
 
         **검증하면 안 되는 것** — `stock_per_occurrence ↔ total_quantity` 불일치,
         만료 누락(`expires_at < asOf` 인데 `ISSUED`), 스냅샷 컬럼 불일치는 전부 정상이다.
@@ -423,6 +451,15 @@ reviews:
       instructions: >-
         Flyway 마이그레이션이다. 되돌릴 수 없다는 전제로 본다.
         이미 적용된 버전 파일(`V1__*.sql`)을 수정하면 체크섬이 깨진다 — 새 버전을 추가해야 한다.
+        **새 파일명은 `V<YYYYMMDD><NN>__설명.sql` 로 10자리 고정이다.** 연번(`V17__*`)은 금지한다 —
+        브랜치마다 같은 번호가 다른 뜻이 되어 머지 때 Flyway 가 기동을 거부한다
+        (실제로 이 저장소의 두 계보가 V2~V15 열넷을 그렇게 쓰고 있었다).
+        **이미 푸시된 버전 번호를 다른 파일에 재사용하지 마라** — 그 DB 에는 체크섬이 남아 있다.
+        `testFixtures/resources/db/corrupt/V9999999999__*` 는 "항상 마지막" 을 뜻한다.
+        버전 자릿수가 10을 넘으면 그 센티널이 추월당하므로 하루 순번은 2자리를 넘기지 않는다.
+        **연번으로 남는 예외 둘은 이미 적용된 기준 파일이라 손대면 체크섬이 깨진다** —
+        `V1__init_schema.sql`(스키마 원점)과 `V11__batch_metadata.sql`(main 과 바이트 동일해야
+        머지 후 체크섬이 유지된다). 그 둘을 근거로 새 연번을 만들지 마라.
         불변식은 애플리케이션 로직이 아니라 DB 제약으로 표현되어야 한다
         (`UNIQUE (campaign_id, member_id)`, `CHECK (active_count <= total_quantity)` 등).
         제약을 제거·완화하는 변경은 이유가 PR 본문에 없으면 blocker 로 지적한다.
@@ -547,8 +584,18 @@ knowledge_base:
     filePatterns:
       # 설계 문서를 리뷰 기준으로 직접 읽힌다 — path_instructions 는 요약이고
       # 판단 근거의 원문은 여기 있다.
+      #
+      # ⚠️ path_instructions 와 여기가 다르면 **여기가 이긴다.** 규칙을 두 곳에 적으면
+      #    갈라진다. 실제로 아래 두 번 갈라져 리뷰어가 틀린 기준으로 blocker 를 냈다.
+      #      CY-14  만료된 USED 의 CANCEL_USE 처리
+      #      CY-16  불법 전이를 만났을 때의 상태 전이
+      #    검증·배치 규칙을 새로 적기 전에 docs/contract.json 을 먼저 본다.
       - files: "docs/01-what-we-build.md,docs/02-erd-decisions.md,docs/04-review-checklist.md"
         applyTo: "**/*.java"
+      # 검증 계약의 원본(시드 저장소 사본)과 배치 구현 방향.
+      # 리플레이·전이표·target_key·오염 매트릭스의 판단 근거가 전부 여기다.
+      - files: "docs/contract.json,docs/11-batch-implementation.md,docs/10-batch-design.md"
+        applyTo: "batch/**,**/{verification,replay,seed,stats}/**"
       - files: ".claude/agents/concurrency-reviewer.md"
         applyTo: "**/{issuance,issue,coupon,stock,lock}/**,infra/redis/**,**/*.lua"
       - files: ".claude/agents/consistency-reviewer.md"

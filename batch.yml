@@ -1,0 +1,147 @@
+# 배치 서버 오버레이입니다. base.yml 위에 겹쳐 올립니다.
+#
+#   docker compose -f base.yml -f batch.yml up batch
+#
+# 부하 중에는 이 파일을 안 올린다 — 정지 수단이 설정이 아니라 컨테이너라는 것이
+# docs/11-batch-implementation.md 의 결정이다.
+
+services:
+  batch:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Dockerfile 의 기본값은 api 다. 안 주면 batch 서비스가 api jar 로 뜬다.
+        APP_MODULE: batch
+    environment:
+      # ⚠️ **여기 적는 기준은 "기본값이 마음에 안 드는가" 가 아니다.**
+      #    application.yml.example 의 환경변수는 **대부분 여기 없고 그게 맞다** —
+      #    기본값으로 두면 되는 것들이다. (한때 "마흔여섯 중 서른아홉" 이라고 적었는데
+      #    수를 잘못 셌고, 애초에 파일이 바뀌면 낡는 단정이라 숫자를 안 적는다.)
+      #
+      #    여기 적어야 하는 것은 **기동 가드가 거절 판정에 쓰는 값**이다. 거절당하면 배치가
+      #    통째로 안 뜨고 @Scheduled 여덟이 다 서는데, 그 값이 여기 없으면 **되돌릴 방법이
+      #    이 파일을 고쳐 재배포하는 것뿐**이다. 이 세션에서 그 실수를 세 번 했다
+      #    (CY-686 인덱스 가드 · CY-697 타임아웃 가드 · CY-697 복구 데드라인).
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-app}
+      DB_USERNAME: ${DB_USERNAME:-app}
+      DB_PASSWORD: ${DB_PASSWORD:-app}
+      BATCH_MANAGEMENT_PORT: 9092
+      # **JVM 기본 존을 고정한다.** 배치는 시계를 둘 쓴다 — TimeProvider(Clock.systemUTC)와,
+      # 스프링 배치가 메타에 찍는 인자 없는 LocalDateTime.now()(= JVM 기본 존)다.
+      #
+      # ⚠️ **드라이버는 이 사이에 끼지 않는다.** LocalDateTime 파라미터는 존 변환 없이 벽시계
+      #    그대로 오간다 — TimestampMappingTest 가 JVM 존을 Asia/Seoul 로 바꾼 채 그것을
+      #    단언한다. 그래서 어긋남은 "드라이버가 민다" 가 아니라 **두 시계가 다른 벽시계를
+      #    쓴다** 는 것이다. (한때 여기에 드라이버 변환을 원인으로 적었는데 사실이 아니었다.)
+      #
+      # 판정에 쓰이는 컬럼(verification_runs.started_at · finished_at)은 CY-397 이
+      # TimeProvider 로 옮겨 이 존과 무관해졌다. 남은 것은 **배치 메타 자신**이다 —
+      # RunningJobProbe 의 시체 판정, BatchStuckExecution, 로그 시각이 전부 JVM 기본 존이고,
+      # MySQL 세션 존은 base.yml 이 UTC 로 못 박았다. 그 둘을 같은 값으로 두면 배치 메타를
+      # 손으로 조회할 때 보이는 시각과 로그가 일치한다.
+      #
+      # 실측: TZ 를 안 주면 호스트 존이 그대로 JVM 기본 존이 된다(KST 기기에서 Asia/Seoul).
+      # 그래서 bootRun 쪽에도 같은 값을 박아 뒀다 — batch/build.gradle.
+      #
+      # ⚠️ 이 값은 이제 기동 가드의 입력이다(CY-718). DefaultZoneGuard 가 JVM 기본 존이
+      # **고정 오프셋 0** 이 아니면 기동을 거절한다.
+      #
+      #    "지우면 안 뜬다" 가 아니다 — 이름이 아니라 오프셋으로 보므로 GMT·Etc/UTC·Z 도
+      #    통과하고, 지우면 베이스 이미지(eclipse-temurin)의 기본값이 그대로 JVM 기본 존이
+      #    되는데 그것이 지금 마침 UTC 라 통과한다. 즉 지우는 순간 이 줄이 보장하던 것을
+      #    **베이스 이미지가 대신 지게 된다** — 그것이 이 줄을 남겨 두는 이유다.
+      #    거절에 걸리는 것은 Asia/Seoul 처럼 오프셋이 0 이 아닌 존과, Europe/London 처럼
+      #    지금 0 이어도 전이가 있는 존이다. 일부러 그런 존으로 띄우려면
+      #    TIMEZONE_GUARD_REQUIRED=false 도 함께 준다.
+      TZ: UTC
+      # 기본은 끈다. 근거는 application.yml.example 에 있다 — 만료가 검증 셋을 보면
+      # 되돌릴 수 없고, 안 도는 쪽은 따라잡을 수 있다.
+      #
+      # CY-384 전에는 이유가 하나 더 있었다. 그때는 이 값이 true 이기만 해도 verifyJob 이
+      # 거절돼 두 잡의 알림을 한 기동으로는 못 봤다. 지금은 배제가 양방향이라 —
+      # 검증은 만료가 도는 중이면 거절하고, 만료는 검증이 도는 중이면 그 슬롯을 건너뛴다 —
+      # true 로 띄운 채 검증을 트리거해도 그 실행이 크론에 물려 버려지지 않는다.
+      BATCH_SCHEDULING_ENABLED: ${BATCH_SCHEDULING_ENABLED:-false}
+      # 배치 메타 성능 인덱스가 없을 때 기동을 거절할지(CY-686). 기본은 거절이다.
+      #
+      # ⚠️ **여기 안 적으면 손잡이가 안 닿는다.** Dockerfile 이 application.yml.example 을
+      #    사본으로 굽기 때문에 플레이스홀더는 이미지 안에 있는데, compose 는 environment 에
+      #    적힌 것만 넘긴다 — 안 적으면 항상 true 로 굳는다. ENTRYPOINT 에 command 도 없어
+      #    실행 인자로도 못 넣는다. 그런데 이 손잡이가 필요한 순간이 바로 이 경로다:
+      #    시연 중 인덱스를 빠뜨려 기동이 거절되면 배치가 통째로 안 떠 회차 전이까지 선다.
+      SCHEMA_GUARD_REQUIRE_BATCH_INDEXES: ${SCHEMA_GUARD_REQUIRE_BATCH_INDEXES:-true}
+      # 관측 전용 읽기 계정(OBS-5 도메인 Gauge). 바로 위 주석의 함정이 여기에도 그대로다 —
+      # **여기 안 적으면 손잡이가 안 닿는다.** storage.yml 의 기본값이 빈 문자열이고
+      # @NotBlank 라, 안 넘기면 기동이 BindValidationException 으로 죽는다(실제로 죽었다).
+      #
+      # 운영 계정으로 폴백하지 않는 것이 설계다. 폴백하면 관측이 read-write 계정으로 붙는데
+      # hikari 의 read-only 는 세션 속성일 뿐 권한이 아니라 아무것도 못 막는다.
+      # 값은 .env 에만 둔다 — 저장소가 공개라 커밋하면 안 된다.
+      DB_OBS_USERNAME: ${DB_OBS_USERNAME:-}
+      DB_OBS_PASSWORD: ${DB_OBS_PASSWORD:-}
+      # @Scheduled 수와 같아야 한다(application.yml 이 그 근거를 적는다). 여기 안 적으면
+      # 이미지에 구운 기본값으로 굳는데, 그 값이 @Scheduled 보다 작으면 기동 가드가 죽인다.
+      BATCH_SCHEDULER_POOL_SIZE: ${BATCH_SCHEDULER_POOL_SIZE:-10}
+      # 관리자 API 토큰 관문(CY-742). /api/v1/admin/** 에는 stop·recover·abandon 이 있어
+      # **포트에 닿는 누구나 도는 잡을 죽일 수 있다.** 주장이 아니라 소지를 묻는 2차 방어선이다.
+      #
+      # ⚠️ **여기서는 기본이 꺼짐이다 — 이 파일은 포트를 안 내보내기 때문이다.**
+      #    1차 방어선(포트 미노출)이 서 있는 동안에는 위협 자체가 없다. 여기서 켜 버리면
+      #    문서 여섯 곳의 표준 명령(`-f base.yml -f batch.yml up batch`)이 토큰 없이는
+      #    전부 기동 실패한다 — 보안 이득 없이 마찰만 는다.
+      #
+      #    **포트를 내보내는 batch-expose.yml 이 켠다.** 위협이 생기는 자리에서만 강제하고,
+      #    그때 BATCH_ADMIN_TOKEN 이 비어 있으면 기동을 거절한다("관문 있는 척" 이 제일 나쁘다).
+      #    앱 자체의 기본값은 켜짐이다(application.yml) — compose 밖에서 맨몸으로 띄우는
+      #    사람에게는 안전한 쪽이 기본이어야 한다.
+      #
+      # ⚠️ 토큰은 시크릿이다. 저장소가 공개라 여기 값을 적지 말고 .env 나 셸에서 준다.
+      BATCH_ADMIN_AUTH_REQUIRED: ${BATCH_ADMIN_AUTH_REQUIRED:-false}
+      BATCH_ADMIN_TOKEN: ${BATCH_ADMIN_TOKEN:-}
+      # 포트를 내보냈는지. 알림이 "무방비" 를 판정하는 데 쓴다 — 관문이 꺼진 것만으로는
+      # 위험한지 알 수 없고, **포트가 열린 채 꺼진 것**이 위험이다. batch-expose.yml 이 뒤집는다.
+      BATCH_ADMIN_PORT_EXPOSED: ${BATCH_ADMIN_PORT_EXPOSED:-false}
+      # 관제 화면이 브라우저에서 이 API 를 부를 오리진. * 는 쓰지 않는다.
+      BATCH_ADMIN_CORS_ORIGINS: ${BATCH_ADMIN_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
+
+      # JVM 기본 존이 UTC 가 아닐 때 기동을 거절할지(CY-718). **위 가드들과 같은 이유로**
+      # 여기 적는다 — compose 는 environment 에 적힌 것만 넘기므로, 안 적으면
+      # 이미지 안의 플레이스홀더가 기본값으로 굳고 손잡이가 안 닿는다.
+      TIMEZONE_GUARD_REQUIRED: ${TIMEZONE_GUARD_REQUIRED:-true}
+      # JDBC 소켓 타임아웃과 admin API 데드라인(CY-697). **위 가드들과 같은 이유로**
+      # 여기 적는다 — compose 는 environment 에 적힌 것만 넘기므로, 안 적으면 이미지 안의
+      # 플레이스홀더가 기본값으로 굳고 손잡이가 안 닿는다.
+      #
+      # ⚠️ DB_SOCKET_TIMEOUT_MS 는 **가장 긴 Step 데드라인보다 커야** DataSourceTimeoutGuard
+      #    를 지난다. batch.verify.step-timeout-ms 를 올리는 날 이 값도 같이 올려야 한다 —
+      #    안 올리면 기동이 거절되고, 그때 이 변수가 여기 없으면 되돌릴 방법이 없다.
+      #
+      #    ⚠️ **Step 데드라인 셋은 여기 없다.** 그것들은 환경변수로 조작할 일이 없다고 보고
+      #       기본값에 둔다 — 바꾸려면 application.yml 을 고쳐 이미지를 다시 굽는다.
+      #       즉 "둘을 같이 올린다" 는 배포 시점의 이야기이고, 런타임에 한쪽만 움직여
+      #       기동이 막히는 조합은 안 생긴다.
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-2000}
+      DB_SOCKET_TIMEOUT_MS: ${DB_SOCKET_TIMEOUT_MS:-660000}
+      BATCH_ADMIN_TIMEOUT_SECONDS: ${BATCH_ADMIN_TIMEOUT_SECONDS:-5}
+      BATCH_ADMIN_RECOVER_TIMEOUT_SECONDS: ${BATCH_ADMIN_RECOVER_TIMEOUT_SECONDS:-10}
+      DATASOURCE_TIMEOUT_GUARD_REQUIRED: ${DATASOURCE_TIMEOUT_GUARD_REQUIRED:-true}
+    # ports 가 없다. **업무 포트를 기본으로 안 내보낸다.**
+    #
+    # CY-368 이 그 포트에 admin 트리거(POST /api/v1/admin/verify)를 열었는데 인증이 없다 —
+    # batch 에 Spring Security 가 없고 토큰 규약은 영역 ③의 몫이라 여기서 혼자 정하면
+    # 두 벌이 된다. PRD 보안 ①이 그 상태를 /actuator/env 와 같은 급의 구멍으로 묶었다.
+    #
+    # ⚠️ **"인증이 없다" 는 이 파일 기준이다.** CY-742 가 토큰 관문을 만들었지만 위 87행이
+    #    그것을 꺼 둔다 — 포트를 안 내보내므로 막을 위협이 없어서다(근거는 73행).
+    #    포트를 내보내는 batch-expose.yml 에서는 켜진다.
+    #
+    # 필요할 때만 오버레이를 하나 더 얹는다:
+    #   docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
+    #
+    # 관리 포트 9092 는 어느 경우에도 안 내보낸다. 관제는 내부 네트워크에서 batch:9092 를 긁는다.
+    depends_on:
+      mysql:
+        condition: service_healthy

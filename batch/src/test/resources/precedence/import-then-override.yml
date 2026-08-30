@@ -1,0 +1,9 @@
+# 덮어쓰기를 --- 아래로 내린 경우 — 이기는 쪽
+spring:
+  config:
+    import: classpath:/precedence/imported.yml
+probe:
+  winner: declaring-same-document
+---
+probe:
+  winner: declaring-later-document

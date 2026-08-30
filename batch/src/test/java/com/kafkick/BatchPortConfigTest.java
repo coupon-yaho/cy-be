@@ -39,8 +39,14 @@ class BatchPortConfigTest {
 
         assertThat(template.getProperty("management.endpoints.web.exposure.include"))
                 .isEqualTo("health,metrics,prometheus");
+        // ⚠️ **열하나다(넷 아님).** include 가 * 로 넓어지는 날 실제로 열리는 것을 재 보니
+        //    16개였고 그중 위험한 것을 전부 적었다 — loggers 는 POST 로 런타임 로그 레벨을
+        //    바꾸는 **쓰기**다. CY-744 합류 전까지 이 파일은 넷만 갖고 있었고,
+        //    application.yml 이 적어 둔 열하나를 **조용히 덮고 있었다**
+        //    (import 문서가 선언 문서를 이긴다 — ActuatorWildcardExposureTest 가 200 을 받았다).
         assertThat(template.getProperty("management.endpoints.web.exposure.exclude"))
-                .isEqualTo("env,configprops,beans,heapdump");
+                .isEqualTo("env,configprops,beans,heapdump,loggers,threaddump,mappings,"
+                        + "scheduledtasks,conditions,flyway,sbom");
         assertThat(template.getProperty("management.endpoint.health.show-details")).isEqualTo("never");
     }
 

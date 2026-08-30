@@ -1,0 +1,78 @@
+-- 보존 삭제의 대상 선택이 매 청크 메타 전체를 훑고 filesort 하지 않게 한다.
+-- (CY-338 관리 화면의 이력 목록은 같은 인덱스를 타지만 아직 코드가 없다 — 아래 참조.)
+--
+-- **지금 이 인덱스를 쓰는 조회는 하나뿐이다** — CleanupJdbcAdapter.deleteBatchMetadataChunk
+-- 의 대상 선택(WHERE CREATE_TIME < ? ... ORDER BY CREATE_TIME, JOB_EXECUTION_ID LIMIT ?).
+-- 아래 "삭제 조회에도 쓰인다" 항목이 그것이고, 그게 이 마이그레이션의 실제 근거다.
+--
+-- CY-338 이 관리 화면에 붙일 이력 목록은 이런 모양이 될 것이다:
+--   SELECT ... FROM BATCH_JOB_EXECUTION e JOIN BATCH_JOB_INSTANCE i ...
+--    ORDER BY e.CREATE_TIME DESC, e.JOB_EXECUTION_ID DESC LIMIT ?
+-- ⚠️ **그 코드는 아직 저장소에 없다**(grep -rn "CREATE_TIME DESC" --include=*.java . → 0건). 아래 LIMIT 50 측정은
+--    그 티켓이 열릴 때를 위한 예측이지 현재 동작이 아니다. 현재형으로 읽지 마라.
+--
+-- V2 가 만든 인덱스는 PK 와 JOB_INST_EXEC_FK(JOB_INSTANCE_ID) 뿐이라 CREATE_TIME 정렬이
+-- 인덱스로 안 내려간다. LIMIT 이 있어도 **전체를 읽고 정렬한 뒤에** 자른다.
+--
+-- ⚠️ V14 의 (STATUS, END_TIME) 은 이 조회에 안 걸린다 — 선두 컬럼이 STATUS 인데
+--    이 조회에는 STATUS 조건이 없다. 그래서 인덱스를 따로 판다.
+--
+-- 실측(실행 30,000 · LIMIT 50, EXPLAIN ANALYZE):
+--
+--   없음            Table scan rows=30,000 → Sort: CREATE_TIME DESC   7.48ms
+--   (CREATE_TIME)   Index scan (reverse) rows=50                      0.89ms
+--
+-- **filesort 가 사라지고 읽는 행이 LIMIT 만큼으로 끊긴다.** 8배는 3만 행에서의 값이고,
+-- 진짜 이득은 배수가 아니라 **읽는 행이 데이터 양에 안 비례하게 된 것**이다.
+--
+-- 정렬 둘째 키(JOB_EXECUTION_ID)를 안 적는다. InnoDB 보조 인덱스는 PK 를 뒤에 붙이므로
+-- 이 인덱스가 사실상 (CREATE_TIME, JOB_EXECUTION_ID) 이고, 역방향 스캔이 두 키를 그대로
+-- 만족한다 — V14 가 같은 근거로 같은 모양을 쓴다.
+--
+-- **쓰기 비용을 쟀다**(MySQL 8.0, 실행 30,000 / 스텝 60,000 / 스텝컨텍스트 60,000):
+--   INSERT   BATCH_JOB_EXECUTION 30,000행 : 인덱스 없음 155·157ms → V14+V15 240·244ms
+--            = +2.9µs/행. 잡 실행당 1행이므로 **실행당 +3µs** 다.
+--   DELETE   보존 청크 10회(실행 5,000 + 딸린 행 전부)
+--            : 인덱스 없음 677·699·731ms → V14+V15 680·681·682ms = **회차 편차 안**.
+--            BATCH_JOB_EXECUTION 삭제만 떼면 40·41·62ms → 47·48·52ms(+7ms/5,000행).
+--   자식 테이블(스텝·컨텍스트·파라미터)이 삭제 비용의 대부분이라 보조 인덱스 둘의 유지
+--   비용이 묻힌다. 읽기 쪽 이득과 비교하면 순증이다 — 다만 **지금 실재하는 이득은 아래 삭제 조회 쪽**
+--   (지울 것이 0 인 밤에 테이블 전체를 안 훑는 것)이고, 위 LIMIT 50 표는 CY-338 이
+--   열린 뒤에 붙는 추가 이득이다.
+--
+-- ⚠️ **이 인덱스를 지금 쓰는 것은 삭제 조회다** — CleanupJdbcAdapter 의 대상 선택이
+--    WHERE CREATE_TIME < ? AND END_TIME IS NOT NULL AND END_TIME < ?
+--    ORDER BY CREATE_TIME, JOB_EXECUTION_ID LIMIT ? 다.
+--
+--    **정당한 것은 술어이지 정렬이 아니다.** 실행 3,000 · CREATE_TIME 90일 균등 ·
+--    id 오름차순 = 시각 오름차순(운영 형상)에서 컷오프를 훑었다(LIMIT 500):
+--
+--      대상 0        ORDER BY CREATE_TIME  index range     0행
+--                    ORDER BY PK           index range + Sort  0행
+--      대상 6        ORDER BY CREATE_TIME  index range     6행
+--                    ORDER BY PK           index range + Sort  6행
+--      대상 1,995    ORDER BY CREATE_TIME  index range   500행
+--                    ORDER BY PK           PRIMARY scan  500행
+--      대상 990      ORDER BY CREATE_TIME  **table scan 3,000행 + filesort**
+--                    ORDER BY PK           PRIMARY scan  500행
+--
+--    읽어야 할 것 둘. ① **정상 야간(대상 0~수십)은 둘 다 이 인덱스를 탄다** — 그것을
+--    가능하게 하는 것이 CREATE_TIME 술어다. 술어가 없으면 지울 것이 0 인 밤에도 테이블
+--    전체를 훑는다(실측: PK 스캔 30,000행 4.5ms → range 스캔 0행 0.10ms).
+--    ② **ORDER BY CREATE_TIME 이 계획을 고정해 주지는 않는다.** 중간 선택도(≈33%)에서
+--    옵티마이저가 range 를 버리고 table scan + filesort 로 내려간다. 그 구간은 보존 창을
+--    처음 넘긴 밤(백필)에만 지나가고 비용도 테이블 크기에 묶여 있다(3,000행 0.6ms).
+--    고정하려면 FORCE INDEX 가 필요한데, 그러면 인덱스 이름에 코드가 묶여 V15 를 지우는
+--    날 조용히 무시된다 — 이 티켓에서는 안 걸었다.
+--
+--    ⚠️ **한때 "PK 로 정렬하면 대상 1,201 에 1,201행을 읽는다" 고 적었는데 그건
+--    id 순서와 시각 순서가 뒤집힌 시드에서 나온 값이다.** 실제로는 실행 id 가 시각 순으로
+--    발급되므로 PK 정렬도 오래된 것부터 집는다. 위 표가 바로잡은 값이다.
+--
+-- ⚠️ **V14 의 낡은 문장 정정.** 그 파일이 "만료는 하루 288 인스턴스를 만들고 배치 메타를
+--    정리하는 잡이 아직 없다" 고 적었는데 둘 다 지금은 거짓이다 — CY-397 이 만료를 일 1회로
+--    옮겨 하루 1 이고, CY-436 이 정리를 붙였다. 이미 적용된 마이그레이션이라 체크섬 때문에
+--    그 파일을 못 고치므로 정정을 여기 둔다(BatchJobRepositoryConfig 이 같은 방식을 쓴다).
+--    그 파일이 가리킨 docs/13 §6 도 틀렸다 — BATCH_* 정리 항목은 §4 운영 표다.
+CREATE INDEX IX_JOB_EXEC_CREATE_TIME
+    ON BATCH_JOB_EXECUTION (CREATE_TIME);

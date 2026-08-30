@@ -947,7 +947,7 @@ hourly_stats(run_id, day_of_week, hour, issued)
 
 검증 배치의 마지막 Step에서 만듭니다
 
-앞 Step이 이력을 리플레이해 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다. "왜 사전 집계인가"를 발표에서 설명할 수 있는 것이 차트를 다섯 개 더 그린 것보다 점수에 가깝습니다.
+앞 Step이 이력을 리플레이해 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다. "왜 사전 집계인가"를 발표에서 설명할 수 있는 것이 차트를 다섯 개 더 그린 것보다 점수에 가깝습니다. *(→ `docs/11-batch-implementation.md` 에서 정정됨 — 통계는 `asof_state` 를 재사용하지 않는다. 통계가 세는 값은 `issuances.status` 이고 `asof_state.state` 와 다를 수 있는 것이 검증 대상이라 순환이 된다.)*
 
 run_id를 PK 앞에 붙여 스냅샷으로 쌓습니다
 
@@ -1386,13 +1386,13 @@ Q&A는 별도. 합계 20분을 절대 초과할 수 없습니다. 여유가 0이
 
 erDiagram
 BRANDS ||--o{ COUPON_TEMPLATES : "운영"
-COUPON_TEMPLATES ||--o{ CAMPAIGNS : "스케줄러가 회차 생성"
-CAMPAIGNS ||--|| COUPON_STOCKS : "재고 1:1"
-CAMPAIGNS ||--o{ COUPONS : "발급"
-MEMBERS ||--o{ COUPONS : "보유"
+COUPON_TEMPLATES ||--o{ COUPONS : "관리자 API 가 회차 생성"
+COUPONS ||--|| COUPON_STOCKS : "재고 1:1"
+COUPONS ||--o{ ISSUANCES : "발급"
+MEMBERS ||--o{ ISSUANCES : "보유"
 GRADES ||--o{ MEMBERS : "등급 코드"
-COUPONS ||--o{ COUPON_HISTORIES : "상태 전이 이력"
-COUPONS ||--o{ COUPON_USAGES : "사용·취소 실적"
+ISSUANCES ||--o{ ISSUANCE_HISTORIES : "상태 전이 이력"
+ISSUANCES ||--o{ ISSUANCE_USAGES : "사용·취소 실적"
 VERIFICATION_RUNS ||--o{ VERIFICATION_FINDINGS : "검출 항목"
 
 GRADES {
@@ -1420,7 +1420,7 @@ int stock_per_occurrence
 tinyint eligible_grades_mask
 boolean active
 }
-CAMPAIGNS {
+COUPONS {
 bigint id PK
 bigint template_id FK
 bigint brand_id
@@ -1434,7 +1434,7 @@ datetime close_at
 varchar status
 }
 COUPON_STOCKS {
-bigint campaign_id PK
+bigint coupon_id PK
 int total_quantity
 int active_count
 }
@@ -1446,27 +1446,27 @@ char email_hash UK
 varbinary phone_enc
 char phone_hash
 }
-COUPONS {
+ISSUANCES {
 bigint id PK
-bigint campaign_id FK
+bigint coupon_id FK
 bigint member_id FK
 char code UK
 varchar status
 datetime issued_at
 datetime expires_at
 }
-COUPON_HISTORIES {
+ISSUANCE_HISTORIES {
 bigint id PK
-bigint coupon_id FK
+bigint issuance_id FK
 varchar event_type
 varchar from_status
 varchar to_status
 varchar reason
 datetime created_at
 }
-COUPON_USAGES {
+ISSUANCE_USAGES {
 bigint id PK
-bigint coupon_id FK
+bigint issuance_id FK
 bigint order_id
 int discount_amount
 datetime used_at
@@ -1487,7 +1487,20 @@ bigint coupon_id
 
 ```
 
-이 외에 `idempotency_records`(멱등키) · `campaign_stats` · `grade_stats` · `hourly_stats`(집계 3종)가 독립 테이블로 존재합니다.
+이 외에 `idempotency_records`(멱등키) · `coupon_stats` · `grade_stats` · `hourly_stats`(집계 3종)가 독립 테이블로 존재합니다.
+
+> **⚠️ 이 ERD 만 현재 DDL 명칭으로 맞췄다.** 회차·발급건이 한때 `campaigns`·`coupons`
+> 였고, 지금은 `coupons`(회차) · `issuances`(발급건) · `issuance_histories` ·
+> `issuance_usages` 다. 대응표는 `docs/02-erd-decisions.md` 머리에 있다.
+>
+> **문서의 나머지는 옛 어휘 그대로다.** 일괄 치환하면 안 되기 때문이다 — API 경로·Redis
+> 키에도 같은 낱말이 들어 있는데 거기는 뜻이 다르다. 실제 경로는
+> `POST /api/v1/coupons/{issuanceId}/use` 로 **회차가 아니라 발급건**을 `coupons` 아래
+> 두고 있다(`CouponUseController` · CY-5). 기계적으로 바꾸면 없는 계약이 생긴다.
+>
+> **`VERIFICATION_FINDINGS` 컬럼도 안 바꿨다** — `campaign_id`·`coupon_id` 는 스키마에
+> 그 이름으로 실재하는 레거시 컬럼이고, 각각 회차 `coupons.id` 와 발급건 `issuances.id`
+> 를 가리킨다.
 
 ## 테이블 정의
 
@@ -1651,7 +1664,7 @@ coupon_usages 에 여러 행이 생기는 이유
 ``````
 | hourly_stats | run_id+day_of_week+hour PK · issued | 요일×시간 히트맵 |
 
-집계 3종은 검증 배치의 **마지막 Step**에서 산출합니다. 앞 Step이 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다.
+집계 3종은 검증 배치의 **마지막 Step**에서 산출합니다. 앞 Step이 만든 asof_state를 재사용하므로 원본 300만 건을 다시 읽지 않습니다. *(→ `docs/11-batch-implementation.md` 에서 정정됨 — 통계는 `asof_state` 를 재사용하지 않는다. 통계가 세는 값은 `issuances.status` 이고 `asof_state.state` 와 다를 수 있는 것이 검증 대상이라 순환이 된다.)*
 
 별도 Step으로 둔 이유는 dataset=CORRUPT일 때 건너뛰기 위해서입니다 — 오염 데이터 위의 집계는 의미가 없고 대시보드가 읽지도 않습니다. 그리고 통계가 병목으로 확인되면 이 Step만 별도 Job으로 떼어낼 수 있습니다.
 
