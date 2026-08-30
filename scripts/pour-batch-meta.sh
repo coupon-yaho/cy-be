@@ -35,14 +35,24 @@ FILES=(
   "V2026082514__ix_batch_job_execution_history.sql"
 )
 
-# 가드가 실제로 이름으로 묻는 테이블(VerificationRuleJdbcAdapter.BATCH_META_TABLES).
-# "BATCH_ 로 시작하는 것이 아홉 개" 로 세면 안 된다 — 엉뚱한 BATCH_* 가 자리를 채워도
-# 통과한다. 가드는 이름을 묻지 개수를 안 센다.
+# **V11 이 만드는 아홉 전부.** 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
+# 이름으로 묻는 것은 이 중 넷뿐이지만, **넷만 보고 건너뛰면 안 된다** — 나머지 다섯이
+# 없어도 "이미 온전하다" 로 빠져나가고, 그다음 Spring Batch 가 실행 문맥을 쓰려는
+# 순간 죽는다(리뷰가 잡았다). 이 스크립트가 약속하는 것은 "가드 통과" 가 아니라
+# **"배치가 뜬다"** 다.
+#
+# "BATCH_ 로 시작하는 것이 아홉 개" 로 세지 않고 이름을 쓰는 이유는 그대로다 —
+# 엉뚱한 BATCH_* 가 자리를 채워도 개수는 맞는다.
 REQUIRED_TABLES=(
   "BATCH_JOB_INSTANCE"
   "BATCH_JOB_EXECUTION"
   "BATCH_STEP_EXECUTION"
   "BATCH_JOB_EXECUTION_PARAMS"
+  "BATCH_JOB_EXECUTION_CONTEXT"
+  "BATCH_STEP_EXECUTION_CONTEXT"
+  "BATCH_JOB_INSTANCE_SEQ"
+  "BATCH_JOB_EXECUTION_SEQ"
+  "BATCH_STEP_EXECUTION_SEQ"
 )
 
 # 가드의 셋째 축(CRITICAL_INDEXES). 이름만이 아니라 **선두 컬럼**을 본다 —
@@ -67,7 +77,8 @@ mysql_in() {
     _ "$schema" "$@"
 }
 
-# 적용 전용. --force 로 끝까지 달린다 — 오류 분류는 호출부가 한다.
+# 적용 전용. --force 로 끝까지 달린다 — 오류 분류는 호출부가 stderr 로 한다.
+# 이 함수의 종료 코드는 SQL 오류를 안 알린다(--force 의 설계된 동작).
 mysql_force() {
   local schema="$1"
   docker exec -i "$CONTAINER" sh -c \
@@ -158,8 +169,11 @@ for schema in "$@"; do
     fi
     rm -f "${err_file}.fatal"
 
-    # ⑵ 아무 말 없이 죽은 경우. mysql --force 는 넘긴 오류가 있으면 0 이 아니므로
-    #    그때만 정상으로 본다.
+    # ⑵ 아무 말 없이 죽은 경우.
+    #    **mysql --force 는 SQL 오류를 넘겨도 종료 코드 0 이다**(실측 — ERROR 4줄에 rc=0).
+    #    그러니 SQL 오류 판정은 ⑴ 이 다 하고, 종료 코드는 **연결·docker·클라이언트 자체**가
+    #    죽은 경우만 잡는다. 그 실패는 대개 stderr 를 남기므로 ⑴ 에서 이미 걸리고,
+    #    여기는 아무 말도 없이 죽는 나머지를 받는 그물이다.
     skipped=$(grep -cE "^ERROR" "$err_file" || true)
     if [ "$rc" -ne 0 ] && [ "$skipped" -eq 0 ]; then
       echo "  ✗ $f 적용 실패 — 종료 코드 $rc, 오류 문구 없음" >&2
@@ -180,7 +194,7 @@ for schema in "$@"; do
     echo "  ✗ 부었는데도 가드 조건을 못 만족한다" >&2
     exit 1
   fi
-  echo "  가드 조건 충족 — 테이블 ${#REQUIRED_TABLES[@]} · 인덱스 ${#REQUIRED_INDEXES[@]}"
+  echo "  확인 — 메타 표 ${#REQUIRED_TABLES[@]} · 인덱스 ${#REQUIRED_INDEXES[@]}"
 done
 
 echo "완료. 배치를 재기동하면 SchemaPresenceGuard 가 통과한다."
