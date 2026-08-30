@@ -15,11 +15,12 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 import com.kafkick.infra.redis.observation.RedisLatencyAutoConfiguration;
 
+import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.v2.port.IssuanceWarmupPort;
 import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
-import com.kafkick.core.admin.stock.V2AdminStockReader;
 
 /**
  * v2 게이트 조립. 스크립트 5종은 {@link IssuanceScripts} 의 상수라 빈이 아니고,
@@ -58,6 +59,13 @@ public class IssuanceGateRedisAutoConfiguration {
     @ConditionalOnMissingBean(V2AdminStockReader.class)
     V2AdminStockReader v2AdminStockReader(StringRedisTemplate redisTemplate) {
         return new RedisV2AdminStockReader(redisTemplate);
+    }
+
+    /** 발급 게이트와 같은 Redis 연결에서 V2 예약 회차의 관리자 준비 상태를 제공합니다. */
+    @Bean
+    @ConditionalOnMissingBean(V2AdminPreparationReader.class)
+    V2AdminPreparationReader v2AdminPreparationReader(StringRedisTemplate redisTemplate) {
+        return new RedisV2AdminPreparationReader(redisTemplate);
     }
 
     /**

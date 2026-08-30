@@ -11,6 +11,7 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.admin.stock.AdminStockSnapshot;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -128,6 +129,40 @@ class AdminCampaignDataContractTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /** Redis meta 비교에 사용할 DB 등급 마스크가 준비 원천에서 손실되지 않는지 검증합니다. */
+    @Test
+    @DisplayName("VALID DB 준비 원천은 유효한 회차 등급 마스크를 보존한다")
+    void preparationSourceCarriesEligibleGradesMask() {
+        PreparationSource source = new PreparationSource(
+                true, true, CouponPolicyType.FIXED_AMOUNT, 3, SourceStatus.VALID, SNAPSHOT_AT);
+
+        assertThat(source.eligibleGradesMask()).isEqualTo(3);
+    }
+
+    /** 설정 완료 원천이 비어 있거나 지원하지 않는 등급 마스크를 정상값으로 싣는 것을 막습니다. */
+    @Test
+    @DisplayName("설정 완료 DB 준비 원천은 발급 도메인이 인정하는 등급 마스크가 필요하다")
+    void configuredPreparationSourceRejectsInvalidGradeMask() {
+        assertThatThrownBy(() -> new PreparationSource(
+                true, true, CouponPolicyType.FIXED_AMOUNT, null, SourceStatus.VALID, SNAPSHOT_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PreparationSource(
+                true, true, CouponPolicyType.FIXED_AMOUNT, 0, SourceStatus.VALID, SNAPSHOT_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PreparationSource(
+                true, true, CouponPolicyType.FIXED_AMOUNT, 16, SourceStatus.VALID, SNAPSHOT_AT))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 값 없는 DB 원천이 이전 등급 값을 남겨 확정값처럼 보이는 조합을 거부하는지 검증합니다. */
+    @Test
+    @DisplayName("값 없는 DB 준비 원천은 등급 마스크를 가질 수 없다")
+    void valueLessPreparationSourceRejectsGradeMask() {
+        assertThatThrownBy(() -> new PreparationSource(
+                null, null, null, 3, SourceStatus.PENDING, null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static AdminCampaignCatalog.CampaignData campaign(
             long couponId,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock
@@ -136,7 +171,7 @@ class AdminCampaignDataContractTest {
                 couponId, "캠페인 " + couponId, "브랜드", EngineVersion.V2,
                 CouponRoundStatus.SCHEDULED,
                 SNAPSHOT_AT.plusSeconds(60), SNAPSHOT_AT.plusSeconds(120), stock,
-                new PreparationSource(null, null, null, SourceStatus.PENDING, null));
+                new PreparationSource(null, null, null, null, SourceStatus.PENDING, null));
     }
 
     private static AdminCampaignDetailData.DetailValue detailValue(long couponId) {

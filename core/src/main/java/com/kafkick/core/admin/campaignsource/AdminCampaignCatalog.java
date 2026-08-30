@@ -110,13 +110,14 @@ public record AdminCampaignCatalog(
         private static PreparationSource preparationSource(PreparationObservation preparation) {
             Objects.requireNonNull(preparation, "preparation");
             if (!preparation.status().carriesValue()) {
-                return new PreparationSource(null, null, null, preparation.status(), null);
+                return new PreparationSource(null, null, null, null, preparation.status(), null);
             }
             boolean ready = Boolean.TRUE.equals(preparation.completed());
             return new PreparationSource(
                     ready,
                     ready,
                     CouponPolicyType.FIXED_AMOUNT,
+                    1,
                     preparation.status(),
                     preparation.observedAt());
         }
