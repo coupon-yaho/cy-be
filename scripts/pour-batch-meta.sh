@@ -146,17 +146,24 @@ seq_fix() {
   echo "" >&2
   echo "      멈춘 뒤 아래를 $schema 에 돌리고, 이 스크립트를 다시 돌려라:" >&2
   echo "" >&2
-  echo "        START TRANSACTION;" >&2
   echo "        SELECT GREATEST(COALESCE((SELECT MAX(ID) FROM \`$t\`), 0)," >&2
   echo "                        COALESCE((SELECT MAX(\`$pk\`) FROM \`$base\`), 0))" >&2
   echo "          INTO @next;" >&2
-  echo "        DELETE FROM \`$t\`;" >&2
-  echo "        INSERT INTO \`$t\` (ID, UNIQUE_KEY) VALUES (@next, '0');" >&2
-  echo "        COMMIT;" >&2
   echo "" >&2
-  echo "      GREATEST 로 잡는 것은 **되돌아가지 않게** 하기 위해서다 — 지금 든 값이" >&2
-  echo "      본 표보다 앞서 있으면 그 값을 지킨다. 한 트랜잭션에 묶는 것은 DELETE 와" >&2
-  echo "      INSERT 사이에 빈 표가 보이지 않게 하기 위해서다." >&2
+  echo "        INSERT INTO \`$t\` (ID, UNIQUE_KEY) VALUES (@next, '0') AS new" >&2
+  echo "          ON DUPLICATE KEY UPDATE ID = GREATEST(\`$t\`.ID, new.ID);" >&2
+  echo "" >&2
+  echo "        DELETE FROM \`$t\` WHERE UNIQUE_KEY <> '0';" >&2
+  echo "" >&2
+  echo "      **순서가 안전장치다.** 넣는 것이 먼저고 지우는 것이 나중이라, 어느 문장이" >&2
+  echo "      실패해도 표가 비지 않는다 — 트랜잭션도 필요 없다." >&2
+  echo "         첫 문장이 실패하면  아직 아무것도 안 지웠다" >&2
+  echo "         둘째가 실패하면    남길 행은 이미 제자리에 있다" >&2
+  echo "      (한때 여기 START TRANSACTION … DELETE … INSERT … COMMIT 을 적었는데," >&2
+  echo "       INSERT 가 죽어도 COMMIT 까지 가면 **삭제만 확정**된다. 순서로 푸는 편이 낫다.)" >&2
+  echo "" >&2
+  echo "      GREATEST 는 **되돌아가지 않게** 한다 — 지금 든 값이 본 표보다 앞서 있으면" >&2
+  echo "      그 값을 지킨다. ON DUPLICATE KEY 는 UNIQUE_KEY='0' 행이 이미 있을 때를 받는다." >&2
 }
 
 verify_schema() {
