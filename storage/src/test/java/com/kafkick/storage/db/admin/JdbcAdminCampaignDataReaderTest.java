@@ -236,67 +236,6 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(preparation.campaignConfigurationReady()).isFalse();
     }
 
-    /** DATA_GRANT의 양수 전용 용량만 설정된 행을 정상 캠페인 설정으로 판정하는지 검증합니다. */
-    @Test
-    @DisplayName("데이터 지급 정책은 전용 용량만 설정됐을 때 캠페인 설정이 준비된다")
-    void dataGrantPolicyRequiresOnlyDataGrantAmount() {
-        insertCoupon(10, 1, 1, "데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
-        writeJdbc.update("""
-                UPDATE coupons
-                   SET policy_type = 'DATA_GRANT',
-                       discount_amount = NULL,
-                       data_grant_mb = 1024
-                 WHERE id = 10
-                """);
-        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
-
-        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
-
-        assertThat(preparation.campaignConfigurationReady()).isTrue();
-        assertThat(preparation.policyType()).isEqualTo(CouponPolicyType.DATA_GRANT);
-    }
-
-    /** DATA_GRANT 행에 다른 정책의 할인 필드가 섞이면 배타성 위반으로 판정하는지 검증합니다. */
-    @Test
-    @DisplayName("데이터 지급 정책에 할인 금액이 섞이면 캠페인 설정이 준비되지 않는다")
-    void dataGrantPolicyRejectsDiscountFields() {
-        insertCoupon(10, 1, 1, "잘못된 데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
-        writeJdbc.update("""
-                UPDATE coupons
-                   SET policy_type = 'DATA_GRANT',
-                       discount_amount = 5000,
-                       data_grant_mb = 1024
-                 WHERE id = 10
-                """);
-        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
-
-        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
-
-        assertThat(preparation.campaignConfigurationReady()).isFalse();
-    }
-
-    /** DATA_GRANT의 전용 용량이 양수가 아니면 필수값 위반으로 판정하는지 검증합니다. */
-    @Test
-    @DisplayName("데이터 지급 정책의 전용 용량은 양수여야 한다")
-    void dataGrantPolicyRejectsNonPositiveAmount() {
-        insertCoupon(10, 1, 1, "용량 없는 데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
-        writeJdbc.update("""
-                UPDATE coupons
-                   SET policy_type = 'DATA_GRANT',
-                       discount_amount = NULL,
-                       data_grant_mb = 0
-                 WHERE id = 10
-                """);
-        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
-
-        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
-
-        assertThat(preparation.campaignConfigurationReady()).isFalse();
-    }
-
     @Test
     @DisplayName("역정규화 브랜드가 없으면 catalog와 detail 모두 UNAVAILABLE이다")
     void orphanBrandMakesBothQueriesUnavailable() {

@@ -15,6 +15,7 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.port.OrderNumberGenerator;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.support.exception.BusinessException;
@@ -26,12 +27,14 @@ public class CouponUseService {
     private final CouponRoundRepository couponRoundRepository;
     private final IssuanceUsageRepository issuanceUsageRepository;
     private final IssuanceHistoryRepository issuanceHistoryRepository;
+    private final OrderNumberGenerator orderNumberGenerator;
 
     public CouponUseService(
             IssuanceRepository issuanceRepository,
             CouponRoundRepository couponRoundRepository,
             IssuanceUsageRepository issuanceUsageRepository,
-            IssuanceHistoryRepository issuanceHistoryRepository
+            IssuanceHistoryRepository issuanceHistoryRepository,
+            OrderNumberGenerator orderNumberGenerator
     ) {
         this.issuanceRepository = Objects.requireNonNull(
                 issuanceRepository
@@ -44,6 +47,9 @@ public class CouponUseService {
         );
         this.issuanceHistoryRepository = Objects.requireNonNull(
                 issuanceHistoryRepository
+        );
+        this.orderNumberGenerator = Objects.requireNonNull(
+                orderNumberGenerator
         );
     }
 
@@ -83,10 +89,11 @@ public class CouponUseService {
                 couponRound,
                 command.orderAmount()
         );
+        long orderId = orderNumberGenerator.generate();
         IssuanceUsage savedUsage = issuanceUsageRepository.save(
                 IssuanceUsage.use(
                         issuance.id(),
-                        command.orderId(),
+                        orderId,
                         discountAmount,
                         command.usedAt()
                 )
@@ -114,8 +121,6 @@ public class CouponUseService {
                 || command.issuanceId() <= 0
                 || command.memberId() == null
                 || command.memberId() <= 0
-                || command.orderId() == null
-                || command.orderId() <= 0
                 || command.orderAmount() == null
                 || command.orderAmount() <= 0
                 || command.idempotencyKey() == null

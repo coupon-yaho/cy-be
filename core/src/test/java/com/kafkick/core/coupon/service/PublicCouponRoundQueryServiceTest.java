@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.port.PublicCouponRoundQueryPort;
 import com.kafkick.core.coupon.query.PublicCouponRoundPage;
+import com.kafkick.core.membership.domain.MembershipGrade;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
@@ -27,7 +28,7 @@ class PublicCouponRoundQueryServiceTest {
     private PublicCouponRoundQueryService queryService;
 
     @Test
-    @DisplayName("상태와 페이지 조건으로 공개 쿠폰 회차를 조회한다")
+    @DisplayName("상태와 회원 등급 및 페이지 조건으로 공개 쿠폰 회차를 조회한다")
     void findPublicCouponRoundPage() {
         PublicCouponRoundPage expected = new PublicCouponRoundPage(
                 List.of(),
@@ -36,16 +37,27 @@ class PublicCouponRoundQueryServiceTest {
                 0,
                 0
         );
-        when(queryPort.findPage(CouponRoundStatus.SCHEDULED, 1, 10))
+        when(queryPort.findPage(
+                CouponRoundStatus.SCHEDULED,
+                MembershipGrade.GOLD,
+                1,
+                10
+        ))
                 .thenReturn(expected);
 
         PublicCouponRoundPage result = queryService.findPage(
                 CouponRoundStatus.SCHEDULED,
+                MembershipGrade.GOLD,
                 1,
                 10
         );
 
         assertThat(result).isSameAs(expected);
-        verify(queryPort).findPage(CouponRoundStatus.SCHEDULED, 1, 10);
+        verify(queryPort).findPage(
+                CouponRoundStatus.SCHEDULED,
+                MembershipGrade.GOLD,
+                1,
+                10
+        );
     }
 }

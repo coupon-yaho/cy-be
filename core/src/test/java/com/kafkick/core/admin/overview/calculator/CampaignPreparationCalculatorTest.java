@@ -82,19 +82,6 @@ class CampaignPreparationCalculatorTest {
                 true, List.of(), SourceStatus.VALID, OBSERVED_AT));
     }
 
-    /** DB 설정은 유효하지만 실제 V1 발급 경로가 지원하지 않는 정책을 구분하는지 검증합니다. */
-    @Test
-    @DisplayName("V1에서 DATA_GRANT 정책은 발급 경로 실패다")
-    void dataGrantPolicyFailsV1IssuancePath() {
-        PreparationObservation result = calculator.calculate(
-                new PreparationSource(
-                        true, true, CouponPolicyType.DATA_GRANT, SourceStatus.VALID, OBSERVED_AT),
-                validRuntime(EngineVersion.V1));
-
-        assertThat(result).isEqualTo(new PreparationObservation(
-                false, List.of(PreparationItem.ISSUANCE_PATH), SourceStatus.VALID, OBSERVED_AT));
-    }
-
     /** 알 수 없는 정책 문자열은 설정 실패와 발급 경로 실패를 함께 확정하는지 검증합니다. */
     @Test
     @DisplayName("알 수 없는 정책은 캠페인 설정과 발급 경로 실패다")

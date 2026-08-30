@@ -201,14 +201,13 @@ public class CouponOperationExecutionService {
     public CouponUseResult use(
             Long issuanceId,
             Long memberId,
-            Long orderId,
             int orderAmount,
             String idempotencyKey
     ) {
         return idempotencyExecutionService.execute(
                 idempotencyKey,
                 () -> CouponUseCommand.canonicalRequest(
-                        issuanceId, memberId, orderId, orderAmount
+                        issuanceId, memberId, orderAmount
                 ),
                 CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
                 claimedAt -> operationService.execute(
@@ -218,7 +217,6 @@ public class CouponOperationExecutionService {
                         () -> couponUseService.use(new CouponUseCommand(
                                 issuanceId,
                                 memberId,
-                                orderId,
                                 orderAmount,
                                 idempotencyKey,
                                 claimedAt

@@ -57,6 +57,24 @@ public enum AdminApiErrorCode implements ErrorCode {
             400,
             "ADMIN-004",
             "이 조회는 아직 Benchmark 회차 범위 지정을 지원하지 않습니다."
+    ),
+
+    NOTIFICATION_NOT_FOUND(
+            404,
+            "ADMIN-005",
+            "해당 알림을 찾을 수 없습니다."
+    ),
+
+    NOTIFICATION_RESEND_CONFLICT(
+            409,
+            "ADMIN-006",
+            "알림을 재발송할 수 없는 상태이거나 중복 요청입니다."
+    ),
+
+    NOTIFICATION_RESEND_LIMIT_EXCEEDED(
+            409,
+            "ADMIN-007",
+            "알림 재발송 횟수 상한을 초과했습니다."
     );
 
     private final int status;

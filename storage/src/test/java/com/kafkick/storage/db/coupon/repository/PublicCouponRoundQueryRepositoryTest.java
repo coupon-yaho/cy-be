@@ -61,7 +61,12 @@ class PublicCouponRoundQueryRepositoryTest {
     @Test
     @DisplayName("회원 조건 없이 모든 상태의 회차를 최근 오픈 순으로 조회한다")
     void findAllPublicCouponRounds() {
-        PublicCouponRoundPage result = queryAdapter.findPage(null, 0, 20);
+        PublicCouponRoundPage result = queryAdapter.findPage(
+                null,
+                null,
+                0,
+                20
+        );
 
         assertThat(result.content())
                 .extracting(summary -> summary.couponRoundId())
@@ -83,6 +88,7 @@ class PublicCouponRoundQueryRepositoryTest {
     void filterPublicCouponRoundsByStatus() {
         PublicCouponRoundPage result = queryAdapter.findPage(
                 CouponRoundStatus.OPEN,
+                null,
                 0,
                 20
         );
@@ -93,6 +99,34 @@ class PublicCouponRoundQueryRepositoryTest {
         assertThat(result.content().get(0).status())
                 .isEqualTo(CouponRoundStatus.OPEN);
         assertThat(result.totalElements()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("공개 회차를 상태와 참여 가능한 회원 등급으로 함께 필터링한다")
+    void filterPublicCouponRoundsByStatusAndEligibleGrade() {
+        jdbcTemplate.update(
+                "UPDATE coupons SET eligible_grades_mask = 3 WHERE id = 10"
+        );
+
+        PublicCouponRoundPage welcomeClosed = queryAdapter.findPage(
+                CouponRoundStatus.CLOSED,
+                MembershipGrade.WELCOME,
+                0,
+                20
+        );
+        PublicCouponRoundPage goldClosed = queryAdapter.findPage(
+                CouponRoundStatus.CLOSED,
+                MembershipGrade.GOLD,
+                0,
+                20
+        );
+
+        assertThat(welcomeClosed.content())
+                .extracting(summary -> summary.couponRoundId())
+                .containsExactly(10L);
+        assertThat(welcomeClosed.totalElements()).isEqualTo(1);
+        assertThat(goldClosed.content()).isEmpty();
+        assertThat(goldClosed.totalElements()).isZero();
     }
 
     @Test
@@ -110,8 +144,18 @@ class PublicCouponRoundQueryRepositoryTest {
                 0
         );
 
-        PublicCouponRoundPage firstPage = queryAdapter.findPage(null, 0, 1);
-        PublicCouponRoundPage secondPage = queryAdapter.findPage(null, 1, 1);
+        PublicCouponRoundPage firstPage = queryAdapter.findPage(
+                null,
+                null,
+                0,
+                1
+        );
+        PublicCouponRoundPage secondPage = queryAdapter.findPage(
+                null,
+                null,
+                1,
+                1
+        );
 
         assertThat(firstPage.content())
                 .extracting(summary -> summary.couponRoundId())

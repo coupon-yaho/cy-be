@@ -48,21 +48,4 @@ class MemberCouponQueryRepositoryImplTest {
                 ));
     }
 
-    @Test
-    @DisplayName("회원 쿠폰 단건 조회 DB 오류를 공통 쿠폰 영속성 오류로 변환한다")
-    void convertSingleQueryDataAccessException() {
-        when(issuanceJpaRepository.findMemberCoupon(20L, 100L))
-                .thenThrow(new DataAccessResourceFailureException(
-                        "DB unavailable"
-                ));
-
-        assertThatThrownBy(() -> memberCouponQueryRepository
-                .findByMemberIdAndIssuanceId(20L, 100L))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(exception -> assertThat(
-                        ((BusinessException) exception).getErrorCode()
-                ).isEqualTo(
-                        CouponPersistenceErrorCode.COUPON_PERSISTENCE_FAILED
-                ));
-    }
 }
