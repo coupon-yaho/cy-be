@@ -55,11 +55,9 @@ public final class MeterNames {
     public static final String TOMCAT_MAX = "tomcat.threads.config.max";
 
     // ── 상태 전이·알림 카운터. 등록은 A 가 하고 Prometheus 가 함께 긁는다 ──────────
-    // TODO(CY-205 후속, @rudwnlee2): 아래 두 이름을 맞춘 뒤 주석을 푼다. 지금 임의로 확정하면
-    // 등록한 이름과 어긋났을 때 조회하는 쪽이 조용히 빈다 — 앱은 정상 기동하고 로그도 안 남고
-    // 화면만 비어서 발표 당일에 발견된다.
     // public static final String ISSUANCE_EXPIRED = "app.issuance.expired";
-    // public static final String NOTIFY_SENT      = "app.notify.sent";
+    public static final String NOTIFY_SENT =
+            com.kafkick.core.observation.DomainMeterNames.NOTIFY_SENT;
 
     private MeterNames() {
     }

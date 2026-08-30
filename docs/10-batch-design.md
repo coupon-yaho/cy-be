@@ -146,7 +146,11 @@ verdict        PASS / FAIL                    규칙 기준. D10 게이트가 �
 stats_status   COMPLETE / PARTIAL / SKIPPED   대시보드가 읽는다
 ```
 
-**`CORRUPT` run 은 통계 Step 을 아예 실행하지 않는다.** 오염 데이터 위의 집계는 의미가 없고, 대시보드가 어차피 안 읽는다. `JobExecutionDecider` 로 분기해서 "건너뛴 사실"이 배치 메타에 기록되게 한다 — `if` 문으로 감추면 실행 이력에서 추론해야 한다.
+**`CORRUPT` run 은 통계를 만들지 않는다.** 오염 데이터 위의 집계는 의미가 없고, 대시보드가 어차피 안 읽는다.
+
+> **`JobExecutionDecider` 는 쓰지 않기로 했다 (CY-202).** 원래 이 절은 decider 로 분기해 *"건너뛴 사실"* 이 배치 메타에 남게 하라고 정했다. 그 **의도는 맞지만 수단은 못 쓴다** — `SimpleJobBuilder.next(JobExecutionDecider)` 는 `JobFlowBuilder` 를 돌려주어 잡이 `FlowJob` 이 되고, 암묵 전이 패턴이 `COMPLETED` 라 **불일치 때 `ExitStatus` 가 `FAILED` 인 `finalizeRunStep` 에서 흐름이 끊겨 잡 자체가 실패로 끝난다.** *"불일치는 실행 실패가 아니라 판정 결과다"* 라는 계약이 뒤집히고 그것을 못 박은 테스트가 있다(`VerifyJobManifestTest`).
+>
+> 대신 **의도를 종료 코드로 이룬다.** `statsAggregateStep` 이 건너뛸 때 `ExitStatus("SKIPPED", 이유)` 를 세우므로 `BATCH_STEP_EXECUTION.EXIT_CODE`·`EXIT_MESSAGE` 에 사실이 남는다 — `if` 로 감추지 않는다. 건너뛰는 조건은 둘이다: `dataset != CLEAN`, 그리고 `verdict != PASS`.
 
 > 🔴 **게이트 지적 — 영상 오염 구간에 통계 패널이 빈다.**
 >
@@ -288,7 +292,7 @@ verification_findings(
 
 > `04-review-checklist.md` 가 `occurred_at` 으로 적혀 있었는데 스키마 컬럼명은 `created_at` 이다. ✅ **정정 완료.**
 
-### 리포트의 PII 규칙 — `PRD:2062` 가 이미 정했다
+### 리포트의 PII 규칙 — `PRD:2143` 이 이미 정했다
 
 > 집계값만. **`member_id` 는 남기되 이름·연락처 금지.**
 
@@ -391,22 +395,33 @@ V6  등급 자격 위반
 **V3가 이미 `asOf` 시점 상태를 재구성한다.** 그 산출물을 버리지 말고 테이블로 남기면 나머지 규칙이 공짜로 쓴다.
 
 ```
-Step 0   이력 리플레이 → asof_state (쿠폰별 asOf 시점 상태)
-           WHERE coupon_histories.created_at <= asOf
+Step 0   이력 리플레이 → asof_state (발급건별 asOf 시점 상태)  +  V4 불법 전이
+           WHERE issuance_histories.created_at <= asOf
            ORDER BY (created_at, id)          ← 타이브레이커
 ────────── 여기부터 완전 결정론 ──────────
-Step 1   V4  불법 전이       이력만
-Step 2   V2  1인 1매         asof_state 집계
-Step 3   V5  사용 실적       asof_state ↔ usages
+Step 1   V5  사용 실적       asof_state 안에서 끝난다
                              활성 사용 = used_at <= asOf
                                       AND (canceled_at IS NULL OR canceled_at > asOf)
+Step 2   V2  1인 1매         asof_state ⋈ issuances 집계
 ────────── 여기부터 현재 행을 읽음 ──────────
-Step 4   V3  리플레이 대조   asof_state ↔ coupons.status
-Step 5   V1  재고 정합       asof_state 집계 ↔ coupon_stocks.active_count
-Step 6   V6  등급 자격       coupons ⋈ campaigns ⋈ members ⋈ grades
+Step 3   V3  리플레이 대조   asof_state ↔ issuances.status
+Step 4   V1  재고 정합       asof_state 집계 ↔ coupon_stocks.active_count
+Step 5   V6  등급 자격       issuances ⋈ coupons ⋈ grades (issued_grade 스냅샷)
 ────────────────────────────────────
-Step 7   통계 집계 (CLEAN 만)
+Step 6   통계 집계 (CLEAN 만)
 ```
+
+> 이 표는 **설계상의 순서**다. 지금 무엇이 실제로 배선돼 있는지는
+> `11-batch-implementation.md` 의 "지금 배선된 것" 을 본다 — 규칙은 아직 다 붙지 않았다.
+
+**V4 는 Step 0 안에 있다.** 초안은 별도 Step 이었는데, 그러면 이력 534만 행을 다시 접어야 하고
+접기 구현이 두 벌로 갈라져 `asof_state` 와 V4 가 서로 다른 말을 하게 된다. 접기는 한 번만 돌고
+산출물 둘이 같은 청크 트랜잭션에서 나간다 — 갈라 놓으면 재시작 뒤에 상태는 있는데 검출은 없는
+구간이 생긴다.
+
+> `V1__init_schema.sql` 의 `asof_state` 테이블 주석에는 아직 초안 Step 번호가 남아 있다.
+> 적용된 마이그레이션이라 고치면 체크섬이 바뀌어 기존 DB 에서 Flyway 가 기동을 거부한다.
+> 주석을 맞추려면 별도 마이그레이션이 필요하다.
 
 **`asof_state` 는 추가 비용이 아니다.** V3가 어차피 만드는 중간 산출물을 테이블로 내보내는 것뿐이다.
 
@@ -480,14 +495,24 @@ coupons.status             =  ISSUED
 **같은 데이터원에서 나온다** — `verification_runs` + `verification_findings`. 형태만 다르다.
 
 ```
-개발용   GET /api/v1/admin/verify/runs/{runId}    JSON
+개발용   GET /api/v1/admin/verify/runs/{executionId}          JSON
          → ⑤가 "검증 실행 이력" 패널에서 렌더링
-제출용   최종 run 을 Markdown 으로 덤프           D13에 1회
+제출용   GET /api/v1/admin/verify/reports/latest?dataset=&scope=   JSON   D13에 1회
 ```
 
-**PII 규칙은 `PRD:2062` 가 이미 정했다** — *"집계값만. `member_id` 는 남기되 이름·연락처 금지."* `members` 조인 금지를 코드 규칙으로 박는다.
+> **⚠️ 둘 다 이 절이 쓰인 뒤에 바뀌었다(CY-590).** 개발용은 `{runId}` 가 아니라
+> **`{executionId}`** 로 찾는다. 제출용은 **Markdown 이 아니라 JSON** 이다 — Markdown 을
+> 고른 원래 이유(커밋되고 GitHub 이 렌더링하고 diff 가 된다)는 JSON 도 전부 만족하고,
+> 개발용 JSON 과 형식이 갈리지 않는 편이 낫다고 판단했다.
 
-**저장 위치 충돌도 해소된다** — 개발용은 API 라 파일이 없고, 제출용 Markdown 은 `.gitignore` 의 `*.csv` 에 안 걸린다. `docs/` 아래 커밋한다.
+**PII 규칙은 `PRD:2143` 이 이미 정했다** — *"집계값만. `member_id` 는 남기되 이름·연락처 금지."*
+`members` 조인 금지를 코드 규칙으로 박는다. **`member_id` 자체는 실린다** —
+`DUP_PER_MEMBER` 의 `target_key` 가 `COUPON:{id}|MEMBER:{id}` 이고, `PRD:385` 가 그 이유를
+적었다: *"마스킹하면 검증 리포트에서 어느 회원이 중복 발급됐는지를 쓸 수 없습니다."*
+
+**저장 위치 충돌도 해소된다** — 개발용은 화면이 읽고, 제출용은 응답을 그대로 떠서
+[`reports` 브랜치의 `verify/*.json`](https://github.com/coupon-yaho/cy-be/tree/reports/verify) 으로 커밋한다(`scripts/dump-verify-report.sh`).
+`.gitignore` 의 `*.csv` 에 안 걸린다.
 
 > **④에게 남는 일은 API 하나뿐이다.** 렌더링은 ⑤ 소관이고, 제출 문서는 D13에 최종 run 을 한 번 덤프하면 된다.
 

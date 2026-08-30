@@ -41,8 +41,9 @@ API 로컬 단계가 실패하면 batch를 호출하지 않는다. 로컬 단계
 
 ## 공식 측정 배포 선행 조건
 
-AB-G3의 공식 토폴로지는 API N=4와 MySQL `max_connections=50`을 전제로 한다. 현재 `compose.yml`은
-호스트 포트를 고정 매핑한 단일 API 개발 스택이고 MySQL 연결 상한도 설정하지 않으므로 공식 회차
+AB-G3의 공식 토폴로지는 API N=4·인스턴스당 운영 Hikari 13과 MySQL
+`max_connections=151`을 전제로 한다. 운영 풀만 52개고 obs·batch를 포함한 정상 합계는
+66개다. 현재 `compose.yml`은 이 상한을 명시하지만 호스트 포트를 고정 매핑한 단일 API 개발 스택이므로 공식 회차
 환경이 아니다. P-1 배포 작업에서 API N=4의 부하 분산 경로와 MySQL 연결 상한을 먼저 제공해야 하며,
 그 전에는 이 스택의 start gate 실패를 우회해서 회차를 열지 않는다.
 

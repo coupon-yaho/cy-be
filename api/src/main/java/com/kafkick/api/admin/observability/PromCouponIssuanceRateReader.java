@@ -14,6 +14,8 @@ import com.kafkick.core.observation.SourceStatus;
 /** Prometheus의 캠페인 성공 발급 rate matrix를 Core 발급률 관측으로 변환합니다. */
 public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
 
+    private static final Duration PROMETHEUS_TIMESTAMP_PRECISION = Duration.ofMillis(1);
+
     private final PromRangeQuery rangeQuery;
     private final PromTimeQuery timeQuery;
     private final PrometheusSeriesProperties seriesProperties;
@@ -90,7 +92,7 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
                 throw new PromQueryException("성공 발급률 range 결과는 단일 시계열이어야 합니다.");
             }
             List<CouponMetricsSource.IssuanceRateSample> samples = rateSamples(
-                    series.getFirst().points(), snapshotAt.minus(window.duration()), snapshotAt);
+                    series.getFirst().points(), snapshotAt.minus(window.duration()), snapshotAt, rateWindow);
             if (samples.isEmpty()) {
                 throw new PromQueryException("성공 발급률 range 결과에 평가점이 없습니다.");
             }
@@ -125,10 +127,12 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
     private static List<CouponMetricsSource.IssuanceRateSample> rateSamples(
             List<PromRangePoint> points,
             Instant windowStart,
-            Instant snapshotAt
+            Instant snapshotAt,
+            Duration step
     ) {
         List<CouponMetricsSource.IssuanceRateSample> samples = points.stream()
-                .map(point -> rateSample(point, windowStart, snapshotAt))
+                .map(point -> rateSample(alignToRequestedGrid(point, windowStart, snapshotAt, step),
+                        windowStart, snapshotAt))
                 .toList();
         for (int index = 1; index < samples.size(); index++) {
             if (!samples.get(index).observedAt().isAfter(samples.get(index - 1).observedAt())) {
@@ -136,6 +140,31 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
             }
         }
         return samples;
+    }
+
+    /**
+     * Prometheus가 query_range 평가 시각을 밀리초로 반올림해 돌려주는 손실을 요청 grid로 복원합니다.
+     * 1ms보다 크게 어긋난 표본은 실제 불완전 표본일 수 있으므로 그대로 두어 기존 범위·완전성 판정이
+     * 처리하게 합니다.
+     */
+    private static PromRangePoint alignToRequestedGrid(
+            PromRangePoint point,
+            Instant windowStart,
+            Instant snapshotAt,
+            Duration step
+    ) {
+        long stepNanos = step.toNanos();
+        long offsetNanos = Duration.between(windowStart, point.observedAt()).toNanos();
+        long gridIndex = Math.round((double) offsetNanos / stepNanos);
+        Instant expectedAt = windowStart.plus(step.multipliedBy(gridIndex));
+        if (expectedAt.isBefore(windowStart) || expectedAt.isAfter(snapshotAt)) {
+            return point;
+        }
+        Duration drift = Duration.between(expectedAt, point.observedAt()).abs();
+        if (drift.compareTo(PROMETHEUS_TIMESTAMP_PRECISION) > 0) {
+            return point;
+        }
+        return new PromRangePoint(expectedAt, point.value());
     }
 
     /** 한 range 점이 요청 구간 안의 유한·비음수 rate인지 확인합니다. */

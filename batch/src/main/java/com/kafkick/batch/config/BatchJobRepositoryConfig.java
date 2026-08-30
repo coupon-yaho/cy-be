@@ -9,20 +9,6 @@ import org.springframework.transaction.annotation.Isolation;
 /**
  * <b>이것이 없으면 배치 메타데이터가 어디에도 안 남는다.</b>
  *
- * <p><b>[CY-338 이관 주석] 이 파일은 {@code feature/CY-15} 에서 그대로 가져왔다.</b>
- * 아래 설명 중 <b>이 브랜치에서 아직 성립하지 않는 것</b>을 먼저 적는다 — 주석이 없는 코드를
- * 가리키면 읽는 사람이 그것을 찾다가 시간을 버린다.
- *
- * <ul>
- *   <li>{@code ExpireScheduler} · {@code expireJob} · {@code verifyJob} 은 <b>이 브랜치에 없다</b>
- *       (CY-15 소유). 여기서는 잡이 아직 하나도 없고, 이 설정은 <b>배치 메타 테이블을
- *       채우기 위해</b>서만 들어왔다 — 그것이 없으면 이력 조회 API 가 항상 빈 목록을
- *       돌려주면서 테스트까지 통과한다</li>
- *   <li>격리 수준 실측표(MySQL 26.7.0)는 CY-15 에서 측정한 값이다. 이 브랜치에서 다시
- *       재지 않았다 — 같은 스키마({@code V2__batch_metadata.sql} 가 두 계열에서 동일)라
- *       그대로 믿는다</li>
- * </ul>
- *
  * <p>Spring Batch 6 의 기본 {@code JobRepository} 는 {@code ResourcelessJobRepository} 이고
  * Boot 4 의 배치 자동설정은 그것을 그대로 쓴다. 즉 <b>아무 설정도 안 하면 메모리조차 아니고
  * 그냥 안 남는다.</b> 실측으로 확인했다 — 배선 전에 잡을 한 번 돌리고 센 값이다.
@@ -41,7 +27,7 @@ import org.springframework.transaction.annotation.Isolation;
  *       {@code ExpireScheduler} 가 {@code asOf} 를 분 단위로 자르는 근거가 그것이었다</li>
  *   <li>{@code JobExecutionAlreadyRunningException} ·
  *       {@code JobInstanceAlreadyCompleteException} 을 잡는 갈래가 도달 불가능해진다</li>
- *   <li>{@code V2__batch_metadata.sql} 이 만든 아홉 테이블이 영원히 비어 있고,
+ *   <li>{@code V11__batch_metadata.sql} 이 만든 아홉 테이블이 영원히 비어 있고,
  *       "언제 몇 건을 넘겼나" 를 볼 곳이 없다. 알림 규칙이 안내하는
  *       {@code BATCH_STEP_EXECUTION.WRITE_COUNT} 조회도 항상 0행이다</li>
  * </ul>
@@ -80,16 +66,17 @@ import org.springframework.transaction.annotation.Isolation;
  * 그 계약을 {@code BatchMetadataPersistenceTest} 가 고정한다 —
  * {@code DeadlockLoser} 가 오면 격리가 기본값으로 되돌아간 것이라 빨간불이 뜬다.
  *
- * <p>그래서 <b>내려서 명시한다.</b> 중복 방지는 {@code V2__batch_metadata.sql} 의
+ * <p>그래서 <b>내려서 명시한다.</b> 중복 방지는 {@code V11__batch_metadata.sql} 의
  * {@code JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)} 가 하고, 두 번째 INSERT 가 1062 로 거부된다.
  * 그 인덱스를 지우면 두 노드가 같은 {@code asOf} 로 각자 인스턴스를 만든다.
  *
- * <p><b>{@code V2__batch_metadata.sql} 의 머리말은 낡았다.</b> 그 파일은
+ * <p><b>{@code V11__batch_metadata.sql} 의 머리말은 낡았다.</b> 그 파일은
  * {@code spring.batch.jdbc.initialize-schema: never} 를 근거로 대는데 <b>Boot 4.1 에 그
  * 프로퍼티 그룹이 없다</b>({@code BatchProperties} 의 중첩 클래스가 {@code Job(name)} 하나뿐이다).
- * 그리고 그 파일이 없어도 <b>기동은 성공한다</b> — 첫 잡 실행에서
- * {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 로 죽는다. 이미 적용된 마이그레이션이라
- * 체크섬 때문에 손대지 않고 정정을 여기 둔다.
+ * 그리고 <b>지금은 기동에서 막힌다</b> — {@code SchemaPresenceGuard} 가 배치 메타 테이블을
+ * 보고 {@code SCHEMA_NOT_MIGRATED} 로 거절한다. 그 가드가 붙기 전에는 기동이 통과하고 첫 잡
+ * 실행에서 {@code Table 'BATCH_JOB_INSTANCE' doesn't exist} 로 죽었다. 이미 적용된
+ * 마이그레이션이라 체크섬 때문에 파일을 손대지 않고 정정을 여기 둔다.
  *
  * <p><b>{@code JobOperator} 가 동기로 돌아야 한다 — 그런데 그것을 여기서 못 박지 않는다.</b>
  * {@code BatchRegistrar} 는 이름이 {@code taskExecutor} 인 빈 <b>정의가 있으면</b> 그것을 쓰고,
@@ -107,12 +94,13 @@ import org.springframework.transaction.annotation.Isolation;
  * 것을 단언한다.</b> 누가 {@code @Bean("taskExecutor")} 를 넣으면 — 스프링 예제가 관례로 쓰는
  * 이름이다 — 거기서 빨간불이 뜬다.
  *
- * <p><b>[CY-338] 그 테스트는 {@code feature/CY-15} 에 있고 이 브랜치에는 없다.</b>
- * 여기서 같은 이름으로 만들면 합류 때 같은 경로에서 부딪히므로 만들지 않았다 —
- * 즉 <b>이 브랜치에서 그 방어선은 비어 있다.</b> 합류하면 그쪽 것이 그대로 이 자리를 맡는다.
+ * <p><b>[CY-338] 합류(CY-744)로 그 테스트가 이 자리에 들어왔다.</b> main 쪽은
+ * 이름 충돌을 피하려고 비워 뒀던 자리다.
  *
  * <p><b>배선의 대가</b> — 이제 {@code BATCH_*} 가 실제로 쌓인다. 만료가 5분마다 새 {@code asOf}
- * 로 도므로 하루 288 인스턴스 × 여섯 테이블이다. 정리 경로는 아직 없다(cleanup 티켓에서 본다).
+ * 로 돌던 시절에는 하루 288 인스턴스 × 여섯 테이블이었다. CY-397 이 배치 창(일 1회)으로
+ * 옮겨 <b>하루 1 인스턴스</b>가 됐고, 정리는 {@code CleanupJobConfig#purgeBatchMetadataStep}
+ * 이 {@code batch.cleanup.metadata-keep-days}(최소 8 — 되읽기 창 7일 초과)로 한다(CY-436).
  */
 /*
  * ── 아래 둘은 CY-15 원본에 없다. 이 브랜치의 풀 배선이 달라서 붙였다 ──
@@ -153,4 +141,13 @@ import org.springframework.transaction.annotation.Isolation;
         dataSourceRef = "mainDataSource",
         isolationLevelForCreate = Isolation.READ_COMMITTED)
 public class BatchJobRepositoryConfig {
+    /**
+     * <b>@EnableBatchProcessing 이 등록하는 공용 {@link org.springframework.batch.core.launch.JobOperator}
+     * 의 빈 이름.</b> 그 타입 빈이 둘이라({@code VerifyExecutorConfig.OPERATOR} 가 둘째)
+     * 주입부가 <b>반드시 명시해야 한다</b> — 타입만 쓰면 파라미터 이름 폴백에 기동이
+     * 매달리고, 실패하면 배치 프로세스 전체가 안 뜬다.
+     *
+     * <p>문자열을 세 곳(스케줄러 둘 · 만료 복구 API)에 적지 않으려고 여기 둔다.
+     */
+    public static final String SHARED_OPERATOR = "jobOperator";
 }

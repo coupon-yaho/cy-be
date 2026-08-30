@@ -30,6 +30,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
@@ -39,17 +40,20 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.domain.Issuance;
+import com.kafkick.core.expiration.ExpirationRepository;
+import com.kafkick.core.expiration.ExpireCandidate;
+import com.kafkick.storage.db.expiration.ExpirationJdbcAdapter;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
-import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.port.OrderNumberGenerator;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.coupon.service.CouponUseService;
@@ -59,12 +63,11 @@ import com.kafkick.core.coupon.service.CouponCancelUseService;
 import com.kafkick.core.coupon.service.command.CouponCancelCommand;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.CouponCancelService;
-import com.kafkick.core.coupon.service.command.CouponExpirationCommand;
-import com.kafkick.core.coupon.service.result.CouponExpirationResult;
-import com.kafkick.core.coupon.service.CouponExpirationService;
+import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
 import com.kafkick.core.coupon.service.V2StockRestorationService;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
+import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
@@ -79,6 +82,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         CouponStockRepositoryImpl.class,
         IssuanceRepositoryImpl.class,
         IssuanceUsageRepositoryImpl.class,
+        OrderNumberGeneratorImpl.class,
         IssuanceHistoryRepositoryImpl.class,
         IdempotencyRepositoryImpl.class,
         CouponUseRepositoryTest.AuditTestConfig.class
@@ -92,6 +96,9 @@ class CouponUseRepositoryTest {
     private static final String REQUEST_HASH = "a".repeat(64);
     private static final Instant USED_AT =
             Instant.parse("2026-08-20T05:30:00Z");
+
+    @Autowired
+    private CouponRoundIssuanceDefinitionRepository issuanceDefinitions;
 
     @Autowired
     private CouponRoundRepository couponRoundRepository;
@@ -109,21 +116,24 @@ class CouponUseRepositoryTest {
     private IssuanceHistoryRepository issuanceHistoryRepository;
 
     @Autowired
+    private OrderNumberGenerator orderNumberGenerator;
+
+    @Autowired
     private IdempotencyRepository idempotencyRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    /** 살아 있는 만료 경로. JdbcClient 하나만 받으므로 테스트에서 바로 조립한다. */
+    private ExpirationRepository expiration;
+
     @Autowired
     private PlatformTransactionManager transactionManager;
 
     private TransactionTemplate transactionTemplate;
-    @Autowired
-    private CouponRoundIssuanceDefinitionRepository issuanceDefinitions;
     private CouponUseService couponUseService;
     private CouponCancelUseService couponCancelUseService;
     private CouponCancelService couponCancelService;
-    private CouponExpirationService couponExpirationService;
     private ExecutorService executor;
 
     @BeforeEach
@@ -131,11 +141,13 @@ class CouponUseRepositoryTest {
         resetData();
         saveCouponData();
         transactionTemplate = new TransactionTemplate(transactionManager);
+        expiration = new ExpirationJdbcAdapter(JdbcClient.create(jdbcTemplate.getDataSource()));
         couponUseService = new CouponUseService(
                 issuanceRepository,
                 couponRoundRepository,
                 issuanceUsageRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                orderNumberGenerator
         );
         couponCancelUseService = new CouponCancelUseService(
                 issuanceRepository,
@@ -150,30 +162,46 @@ class CouponUseRepositoryTest {
                 couponStockRepository,
                 restorationService()
         );
-        couponExpirationService = new CouponExpirationService(
-                issuanceRepository,
-                issuanceHistoryRepository,
-                couponStockRepository,
-                restorationService()
-        );
     }
 
-    private V2StockRestorationService restorationService() {
-        return new V2StockRestorationService(
-                issuanceDefinitions,
-                emptyProvider(),
-                emptyProvider(),
-                emptyProvider());
-    }
 
     /**
-     * 이 테스트의 회차는 V1 이라 게이트·표식·계측 중 어느 것도 해석되지 않는다. 빈 provider 로
-     * 두면 조립이 그 사실을 드러낸다 — 실물을 물리면 V1 경로가 Redis 를 건드리게 된 변경이
-     * 여기서 안 잡힌다.
+     * <b>살아 있는 만료 경로로 만료시킨다.</b> {@code ExpireJobConfig} 의 청크가 도는
+     * 네 문장을 같은 순서로 부른다 — 재고 락 → 조건부 UPDATE → 이력 → 재고 반환.
+     *
+     * <p><b>왜 서비스가 아니라 이것인가.</b> 이 파일의 경합 검사들은 원래
+     * {@code CouponExpirationService} 를 만료 주체로 썼는데 그 서비스가 <b>호출자 0</b> 이라
+     * CY-769 에서 지웠다. 그런데 검사가 재는 것은 서비스가 아니라
+     * <b>{@code active_count} 가 현재 보유량과 일치하는가</b> — 이 과제의 본체다. 그리고
+     * <b>발급 ↔ 만료 · 사용 ↔ 만료 경합은 배치 테스트에 없다</b>(실측: 배치 테스트가
+     * {@code CouponIssueService}·{@code CouponUseService} 를 0회 참조한다). 그냥 지우면
+     * 커버리지가 셋 빈다. 그래서 <b>주체만 살아 있는 경로로 갈아끼웠다.</b>
+     *
+     * <p>⚠️ <b>{@code lockStock} 이 실패하면 0 을 돌려준다 — 정상적인 "만료할 것이 없다"
+     * 와 같은 값이다.</b> 배치도 그 자리에서 청크를 넘기므로 모양은 같지만, 검사에서는
+     * 그 둘이 구분이 안 된다는 것을 알고 봐야 한다. 재고 행이 없는 회차(그럴 일이 없게
+     * 시드가 함께 만든다)나 락 대기 초과가 그 갈래다 — 경합 검사가 예상과 다른 수를 내면
+     * <b>여기부터 의심한다.</b>
+     *
+     * @return 만료된 건수. 조건부 UPDATE 의 매치 수라 "실제로 우리가 바꾼 행" 이다.
+     *         {@code lockStock} 실패도 0 이다
      */
-    @SuppressWarnings("unchecked")
-    private static <T> org.springframework.beans.factory.ObjectProvider<T> emptyProvider() {
-        return org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+    private int expireViaBatchPath(long couponId, List<ExpireCandidate> candidates, Instant asOf) {
+        LocalDateTime at = LocalDateTime.ofInstant(asOf, ZoneOffset.UTC);
+        long afterId = candidates.stream().mapToLong(ExpireCandidate::id).min().orElseThrow() - 1;
+        long lastId = candidates.stream().mapToLong(ExpireCandidate::id).max().orElseThrow();
+
+        // 배치와 같은 순서다. 재고를 먼저 잠가야 발급·취소와 잠금 순서가 통일된다.
+        if (!expiration.lockStock(couponId)) {
+            return 0;
+        }
+        int expired = expiration.expireBatch(at, at, afterId, lastId, couponId);
+        if (expired == 0) {
+            return 0;
+        }
+        expiration.appendExpireHistories(at, at, afterId, lastId, couponId);
+        expiration.releaseStock(couponId, expired, at);
+        return expired;
     }
 
     @AfterEach
@@ -220,7 +248,7 @@ class CouponUseRepositoryTest {
         assertThat(((Number) usage.get("issuance_id")).longValue())
                 .isEqualTo(100L);
         assertThat(((Number) usage.get("order_id")).longValue())
-                .isEqualTo(30L);
+                .isEqualTo(result.orderId());
         assertThat(((Number) usage.get("discount_amount")).intValue())
                 .isEqualTo(5_000);
         assertThat(usage.get("canceled_at")).isNull();
@@ -234,6 +262,45 @@ class CouponUseRepositoryTest {
         assertThat(idempotency.get("response_body"))
                 .isEqualTo("stored-response");
         assertThat(activeCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("사용 취소 후 재사용하면 서버가 새로운 주문번호를 발급한다")
+    void generateNewOrderNumberWhenReusingCanceledCoupon() {
+        String firstUseKey =
+                "60400000-0000-4000-8000-000000000001";
+        String cancelUseKey =
+                "60400000-0000-4000-8000-000000000002";
+        String secondUseKey =
+                "60400000-0000-4000-8000-000000000003";
+        Instant canceledAt = USED_AT.plusSeconds(60);
+        Instant reusedAt = USED_AT.plusSeconds(120);
+
+        CouponUseResult first = executeUseAt(
+                firstUseKey,
+                REQUEST_HASH,
+                USED_AT
+        );
+        executeCancelUse(cancelUseKey, canceledAt);
+        CouponUseResult second = executeUseAt(
+                secondUseKey,
+                REQUEST_HASH,
+                reusedAt
+        );
+
+        assertThat(first.orderId()).isPositive();
+        assertThat(second.orderId()).isPositive().isNotEqualTo(first.orderId());
+        assertThat(jdbcTemplate.queryForList(
+                """
+                SELECT order_id
+                FROM issuance_usages
+                WHERE issuance_id = 100
+                ORDER BY id
+                """,
+                Long.class
+        )).containsExactly(first.orderId(), second.orderId());
+        assertThat(activeUsageCount()).isEqualTo(1);
+        assertThat(issuanceStatus()).isEqualTo("USED");
     }
 
     @Test
@@ -651,117 +718,8 @@ class CouponUseRepositoryTest {
         assertThat(countCancelHistories()).isEqualTo(1);
     }
 
-    @Test
-    @DisplayName("만료 후보는 ISSUED·기준 시각·마지막 ID 조건으로 keyset 조회한다")
-    void findExpiredIssuedCandidatesByKeyset() {
-        Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
-        insertIssuance(
-                101L,
-                21L,
-                "BCDEFGHJKLM23456",
-                "ISSUED",
-                Instant.parse("2026-08-25T05:30:00Z")
-        );
-        insertIssuance(
-                102L,
-                22L,
-                "CDEFGHJKLM234567",
-                "ISSUED",
-                Instant.parse("2026-08-25T05:30:00Z")
-        );
 
-        List<Issuance> firstPage = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 1);
-        List<Issuance> secondPage = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 100L, 1);
-        List<Issuance> thirdPage = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 101L, 1);
-        List<Issuance> lastPage = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 102L, 1);
 
-        assertThat(firstPage)
-                .extracting(Issuance::id)
-                .containsExactly(100L);
-        assertThat(secondPage)
-                .extracting(Issuance::id)
-                .containsExactly(101L);
-        assertThat(thirdPage)
-                .extracting(Issuance::id)
-                .containsExactly(102L);
-        assertThat(lastPage).isEmpty();
-    }
-
-    @Test
-    @DisplayName("같은 회차의 다건 만료 수만큼 재고와 EXPIRE 이력을 반영한다")
-    void expireMultipleIssuancesInOneRound() {
-        Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
-        insertIssuance(
-                101L,
-                21L,
-                "BCDEFGHJKLM23456",
-                "ISSUED",
-                Instant.parse("2026-08-25T05:30:00Z")
-        );
-        insertIssuance(
-                102L,
-                22L,
-                "CDEFGHJKLM234567",
-                "ISSUED",
-                Instant.parse("2026-08-25T05:30:00Z")
-        );
-        jdbcTemplate.update(
-                "UPDATE coupon_stocks SET active_count = 3 WHERE coupon_id = 10"
-        );
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
-
-        CouponExpirationResult result = transactionTemplate.execute(status ->
-                couponExpirationService.expire(
-                        new CouponExpirationCommand(10L, candidates, asOf)
-                )
-        );
-
-        assertThat(result.expiredCount()).isEqualTo(3);
-        assertThat(activeCount()).isZero();
-        assertThat(jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM issuances WHERE status = 'EXPIRED'",
-                Integer.class
-        )).isEqualTo(3);
-        assertThat(jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM issuance_histories WHERE event_type = 'EXPIRE'",
-                Integer.class
-        )).isEqualTo(3);
-    }
-
-    @Test
-    @DisplayName("만료 상태·회차 재고·EXPIRE 이력을 한 트랜잭션으로 반영한다")
-    void expireIssuanceAtomically() {
-        Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
-
-        CouponExpirationResult result = transactionTemplate.execute(status ->
-                couponExpirationService.expire(
-                        new CouponExpirationCommand(
-                                10L,
-                                candidates,
-                                asOf
-                        )
-                )
-        );
-
-        assertThat(result.expiredCount()).isEqualTo(1);
-        assertThat(issuanceStatus()).isEqualTo("EXPIRED");
-        assertThat(activeCount()).isZero();
-        assertThat(jdbcTemplate.queryForObject(
-                """
-                SELECT COUNT(*)
-                FROM issuance_histories
-                WHERE issuance_id = 100 AND event_type = 'EXPIRE'
-                """,
-                Integer.class
-        )).isEqualTo(1);
-    }
 
     @Test
     @DisplayName("신규 발급과 만료가 동시에 실행돼도 active_count는 현재 보유량과 일치한다")
@@ -784,14 +742,15 @@ class CouponUseRepositoryTest {
                 """,
                 Timestamp.from(issuedAt)
         );
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
+        List<ExpireCandidate> candidates = expiration.nextCandidates(
+                LocalDateTime.ofInstant(asOf, ZoneOffset.UTC), 0L, 10, List.of());
         CouponIssueService issueService = new CouponIssueService(
                 couponRoundRepository,
                 issuanceRepository,
                 couponStockRepository,
                 issuanceHistoryRepository,
-                () -> "DEFGHJKLM2345678"
+                () -> "DEFGHJKLM2345678",
+                org.mockito.Mockito.mock(NotificationRequestService.class)
         );
         executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
@@ -801,13 +760,7 @@ class CouponUseRepositoryTest {
             ready.countDown();
             awaitStart(start);
             transactionTemplate.executeWithoutResult(status ->
-                    couponExpirationService.expire(
-                            new CouponExpirationCommand(
-                                    10L,
-                                    candidates,
-                                    asOf
-                            )
-                    )
+                    expireViaBatchPath(10L, candidates, asOf)
             );
         });
         Future<?> issuance = executor.submit(() -> {
@@ -892,8 +845,8 @@ class CouponUseRepositoryTest {
                     Timestamp.from(issuedAt)
             );
         }
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
+        List<ExpireCandidate> candidates = expiration.nextCandidates(
+                LocalDateTime.ofInstant(asOf, ZoneOffset.UTC), 0L, 10, List.of());
         AtomicInteger codeSequence = new AtomicInteger();
         CouponIssueService issueService = new CouponIssueService(
                 couponRoundRepository,
@@ -903,7 +856,8 @@ class CouponUseRepositoryTest {
                 () -> String.format(
                         "E%015d",
                         codeSequence.incrementAndGet()
-                )
+                ),
+                org.mockito.Mockito.mock(NotificationRequestService.class)
         );
         executor = Executors.newFixedThreadPool(4);
         CountDownLatch ready = new CountDownLatch(4);
@@ -914,13 +868,7 @@ class CouponUseRepositoryTest {
             ready.countDown();
             awaitStart(start);
             transactionTemplate.executeWithoutResult(status ->
-                    couponExpirationService.expire(
-                            new CouponExpirationCommand(
-                                    10L,
-                                    candidates,
-                                    asOf
-                            )
-                    )
+                    expireViaBatchPath(10L, candidates, asOf)
             );
         }));
         for (long memberId = 23L; memberId <= 25L; memberId++) {
@@ -978,8 +926,8 @@ class CouponUseRepositoryTest {
     void releaseStockOnceDuringCancelAndExpiration() throws Exception {
         Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
         Instant canceledAt = Instant.parse("2026-08-25T05:29:59Z");
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
+        List<ExpireCandidate> candidates = expiration.nextCandidates(
+                LocalDateTime.ofInstant(asOf, ZoneOffset.UTC), 0L, 10, List.of());
         executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
@@ -987,16 +935,10 @@ class CouponUseRepositoryTest {
         Future<Boolean> expiration = executor.submit(() -> {
             ready.countDown();
             awaitStart(start);
-            CouponExpirationResult result = transactionTemplate.execute(
-                    status -> couponExpirationService.expire(
-                            new CouponExpirationCommand(
-                                    10L,
-                                    candidates,
-                                    asOf
-                            )
-                    )
+            int result = transactionTemplate.execute(
+                    status -> expireViaBatchPath(10L, candidates, asOf)
             );
-            return result.expiredCount() == 1;
+            return result == 1;
         });
         Future<Boolean> cancellation = executor.submit(() -> {
             ready.countDown();
@@ -1047,8 +989,8 @@ class CouponUseRepositoryTest {
             throws Exception {
         Instant asOf = Instant.parse("2026-08-26T05:30:00Z");
         Instant usedAt = Instant.parse("2026-08-25T05:29:59Z");
-        List<Issuance> candidates = issuanceRepository
-                .findExpiredIssuedAfterId(asOf, 0L, 10);
+        List<ExpireCandidate> candidates = expiration.nextCandidates(
+                LocalDateTime.ofInstant(asOf, ZoneOffset.UTC), 0L, 10, List.of());
         executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
@@ -1056,16 +998,10 @@ class CouponUseRepositoryTest {
         Future<Boolean> expiration = executor.submit(() -> {
             ready.countDown();
             awaitStart(start);
-            CouponExpirationResult result = transactionTemplate.execute(
-                    status -> couponExpirationService.expire(
-                            new CouponExpirationCommand(
-                                    10L,
-                                    candidates,
-                                    asOf
-                            )
-                    )
+            int result = transactionTemplate.execute(
+                    status -> expireViaBatchPath(10L, candidates, asOf)
             );
-            return result.expiredCount() == 1;
+            return result == 1;
         });
         Future<Boolean> usage = executor.submit(() -> {
             ready.countDown();
@@ -1075,7 +1011,6 @@ class CouponUseRepositoryTest {
                         couponUseService.use(new CouponUseCommand(
                                 100L,
                                 20L,
-                                223_001L,
                                 20_000,
                                 "22300000-0000-4000-8000-000000000003",
                                 usedAt
@@ -1120,19 +1055,29 @@ class CouponUseRepositoryTest {
     }
 
     private CouponUseResult executeUse(String key, String requestHash) {
+        return executeUseAt(key, requestHash, USED_AT);
+    }
+
+    private CouponUseResult executeUseAt(
+            String key,
+            String requestHash,
+            Instant usedAt
+    ) {
         return transactionTemplate.execute(status -> {
             assertThat(idempotencyRepository.tryStart(
                     key,
                     requestHash,
-                    USED_AT
+                    usedAt
             )).isTrue();
-            CouponUseResult result = couponUseService.use(command(key));
+            CouponUseResult result = couponUseService.use(
+                    command(key, usedAt)
+            );
             idempotencyRepository.complete(
                     key,
                     20L,
                     100L,
                     "stored-response",
-                    USED_AT
+                    usedAt
             );
             return result;
         });
@@ -1217,19 +1162,26 @@ class CouponUseRepositoryTest {
     }
 
     private CouponUseCommand command(String idempotencyKey) {
+        return command(idempotencyKey, USED_AT);
+    }
+
+    private CouponUseCommand command(
+            String idempotencyKey,
+            Instant usedAt
+    ) {
         return new CouponUseCommand(
                 100L,
                 20L,
-                30L,
                 20_000,
                 idempotencyKey,
-                USED_AT
+                usedAt
         );
     }
 
     private void resetData() {
         jdbcTemplate.update("DELETE FROM idempotency_records");
         jdbcTemplate.update("DELETE FROM issuance_usages");
+        jdbcTemplate.update("DELETE FROM coupon_order_numbers");
         jdbcTemplate.update("DELETE FROM issuance_histories");
         jdbcTemplate.update("DELETE FROM issuances");
         jdbcTemplate.update("DELETE FROM coupon_stocks");
@@ -1524,4 +1476,23 @@ class CouponUseRepositoryTest {
             return () -> Optional.of(USED_AT);
         }
     }
+    private V2StockRestorationService restorationService() {
+        return new V2StockRestorationService(
+                issuanceDefinitions,
+                emptyProvider(),
+                emptyProvider(),
+                emptyProvider());
+    }
+
+    /**
+     * 이 테스트의 회차는 V1 이라 게이트·표식·계측 중 어느 것도 해석되지 않는다. 빈 provider 로
+     * 두면 조립이 그 사실을 드러낸다 — 실물을 물리면 V1 경로가 Redis 를 건드리게 된 변경이
+     * 여기서 안 잡힌다.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> org.springframework.beans.factory.ObjectProvider<T> emptyProvider() {
+        return org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class);
+    }
+
+
 }

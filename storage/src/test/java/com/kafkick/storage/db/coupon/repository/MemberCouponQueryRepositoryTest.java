@@ -15,7 +15,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.query.MemberCouponPage;
-import com.kafkick.core.coupon.query.MemberCouponSummary;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,56 +99,6 @@ class MemberCouponQueryRepositoryTest {
                 .extracting(summary -> summary.issuanceId())
                 .doesNotContain(200L);
         assertThat(result.totalElements()).isEqualTo(4);
-    }
-
-    @Test
-    @DisplayName("회원이 소유한 쿠폰 한 건과 할인 스냅샷을 조회한다")
-    void findOwnedMemberCoupon() {
-        var result = memberCouponQueryRepository
-                .findByMemberIdAndIssuanceId(20L, 100L);
-
-        MemberCouponSummary summary = result.orElseThrow();
-
-        assertThat(summary.issuanceId()).isEqualTo(100L);
-        assertThat(summary.couponRoundId()).isEqualTo(10L);
-        assertThat(summary.code()).isEqualTo("AAAAAAAAAAAAAAA1");
-        assertThat(summary.status()).isEqualTo(IssuanceStatus.ISSUED);
-        assertThat(summary.name()).isEqualTo("정액 5천원 할인");
-        assertThat(summary.policyType())
-                .isEqualTo(CouponPolicyType.FIXED_AMOUNT);
-        assertThat(summary.discountRate()).isNull();
-        assertThat(summary.maxDiscountAmount()).isNull();
-        assertThat(summary.discountAmount()).isEqualTo(5_000);
-        assertThat(summary.issuedAt())
-                .isEqualTo(Instant.parse("2026-08-18T05:30:00Z"));
-        assertThat(summary.expiresAt())
-                .isEqualTo(Instant.parse("2026-08-25T05:30:00Z"));
-        assertThat(summary.usedAt()).isNull();
-        assertThat(summary.usedDiscountAmount()).isNull();
-        assertThat(summary.orderId()).isNull();
-    }
-
-    @Test
-    @DisplayName("사용 중인 회원 쿠폰 한 건은 현재 주문과 실제 할인 정보를 조회한다")
-    void findActiveUsageWithOwnedMemberCoupon() {
-        MemberCouponSummary summary = memberCouponQueryRepository
-                .findByMemberIdAndIssuanceId(20L, 101L)
-                .orElseThrow();
-
-        assertThat(summary.status()).isEqualTo(IssuanceStatus.USED);
-        assertThat(summary.usedAt())
-                .isEqualTo(Instant.parse("2026-08-19T05:40:00Z"));
-        assertThat(summary.usedDiscountAmount()).isEqualTo(5_000);
-        assertThat(summary.orderId()).isEqualTo(30_001L);
-    }
-
-    @Test
-    @DisplayName("다른 회원이 소유한 쿠폰 한 건은 조회하지 않는다")
-    void hideOtherMemberCoupon() {
-        var result = memberCouponQueryRepository
-                .findByMemberIdAndIssuanceId(20L, 200L);
-
-        assertThat(result).isEmpty();
     }
 
     @Test

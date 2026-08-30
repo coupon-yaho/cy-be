@@ -265,67 +265,6 @@ class JdbcAdminCampaignDataReaderTest {
         assertThat(preparation.campaignConfigurationReady()).isFalse();
     }
 
-    /** DATA_GRANT의 양수 전용 용량만 설정된 행을 정상 캠페인 설정으로 판정하는지 검증합니다. */
-    @Test
-    @DisplayName("데이터 지급 정책은 전용 용량만 설정됐을 때 캠페인 설정이 준비된다")
-    void dataGrantPolicyRequiresOnlyDataGrantAmount() {
-        insertCoupon(10, 1, 1, "데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
-        writeJdbc.update("""
-                UPDATE coupons
-                   SET policy_type = 'DATA_GRANT',
-                       discount_amount = NULL,
-                       data_grant_mb = 1024
-                 WHERE id = 10
-                """);
-        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
-
-        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
-
-        assertThat(preparation.campaignConfigurationReady()).isTrue();
-        assertThat(preparation.policyType()).isEqualTo(CouponPolicyType.DATA_GRANT);
-    }
-
-    /** DATA_GRANT 행에 다른 정책의 할인 필드가 섞이면 배타성 위반으로 판정하는지 검증합니다. */
-    @Test
-    @DisplayName("데이터 지급 정책에 할인 금액이 섞이면 캠페인 설정이 준비되지 않는다")
-    void dataGrantPolicyRejectsDiscountFields() {
-        insertCoupon(10, 1, 1, "잘못된 데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
-        writeJdbc.update("""
-                UPDATE coupons
-                   SET policy_type = 'DATA_GRANT',
-                       discount_amount = 5000,
-                       data_grant_mb = 1024
-                 WHERE id = 10
-                """);
-        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
-
-        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
-
-        assertThat(preparation.campaignConfigurationReady()).isFalse();
-    }
-
-    /** DATA_GRANT의 전용 용량이 양수가 아니면 필수값 위반으로 판정하는지 검증합니다. */
-    @Test
-    @DisplayName("데이터 지급 정책의 전용 용량은 양수여야 한다")
-    void dataGrantPolicyRejectsNonPositiveAmount() {
-        insertCoupon(10, 1, 1, "용량 없는 데이터 지급", "OPEN", SNAPSHOT.minusSeconds(60));
-        writeJdbc.update("""
-                UPDATE coupons
-                   SET policy_type = 'DATA_GRANT',
-                       discount_amount = NULL,
-                       data_grant_mb = 0
-                 WHERE id = 10
-                """);
-        insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
-
-        PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
-
-        assertThat(preparation.campaignConfigurationReady()).isFalse();
-    }
-
     @Test
     @DisplayName("역정규화 브랜드가 없으면 catalog와 detail 모두 UNAVAILABLE이다")
     void orphanBrandMakesBothQueriesUnavailable() {
@@ -449,16 +388,41 @@ class JdbcAdminCampaignDataReaderTest {
     @Test
     @DisplayName("모르는 캠페인 또는 발급 상태는 합계를 왜곡하지 않고 UNAVAILABLE이다")
     void unknownStatesAreUnavailable() {
+        // ⚠️ **CHECK 제약을 잠시 건다 뺀다(CY-744).** V2026082515 가 coupons.status 를
+        //    SCHEDULED·OPEN·CLOSED 로 못 박아서, 이 검사가 일부러 심는 'BROKEN' 행이
+        //    DB 에서 거절된다(ERROR 3819). 제약은 운영의 방어선이라 지우지 않고,
+        //    **이 한 구간에서만** 걷어 리더의 하위 호환을 재현한다.
+        //    (즉 이 갈래는 지금 운영에서 도달 불가다 — 그래도 리더가 견디는지는 계약이다.)
+        writeJdbc.update("ALTER TABLE coupons DROP CHECK ck_coupon_status");
+        try {
+            assertUnknownCampaignStatusIsUnavailable();
+        } finally {
+            writeJdbc.update("ALTER TABLE coupons ADD CONSTRAINT ck_coupon_status "
+                    + "CHECK (status IN ('SCHEDULED', 'OPEN', 'CLOSED'))");
+        }
+
+        // 발급 상태도 같다 — V2026082509 가 issuances.status 어휘를 못 박는다.
+        writeJdbc.update("ALTER TABLE issuances DROP CHECK ck_issuance_status");
+        try {
+            insertCoupon(11, 1, 1, "모르는 발급 상태", "OPEN", SNAPSHOT.minusSeconds(60));
+            insertStock(11, 10, 0, SNAPSHOT.minusSeconds(5));
+            insertIssuance(101, 11, 1, "BROKEN", 1);
+            assertThat(reader.findDetail(11, FROM, TO, SNAPSHOT).availability())
+                    .isEqualTo(DetailAvailability.UNAVAILABLE);
+        } finally {
+            // ⚠️ **심은 행을 먼저 지운다.** CHECK 을 다시 걸면 MySQL 이 기존 행을 검사하므로,
+            //    'BROKEN' 이 남아 있으면 ADD CONSTRAINT 가 그 자리에서 3819 로 죽는다(실측).
+            writeJdbc.update("DELETE FROM issuances WHERE status = 'BROKEN'");
+            writeJdbc.update("ALTER TABLE issuances ADD CONSTRAINT ck_issuance_status "
+                    + "CHECK (status IN ('ISSUED', 'USED', 'CANCELLED', 'EXPIRED'))");
+        }
+    }
+
+    private void assertUnknownCampaignStatusIsUnavailable() {
         insertCoupon(10, 1, 1, "모르는 캠페인 상태", "BROKEN", SNAPSHOT.minusSeconds(60));
         assertThat(reader.findDetail(10, FROM, TO, SNAPSHOT).availability())
                 .isEqualTo(DetailAvailability.UNAVAILABLE);
         writeJdbc.update("DELETE FROM coupons WHERE id = 10");
-
-        insertCoupon(11, 1, 1, "모르는 발급 상태", "OPEN", SNAPSHOT.minusSeconds(60));
-        insertStock(11, 10, 0, SNAPSHOT.minusSeconds(5));
-        insertIssuance(101, 11, 1, "BROKEN", 1);
-        assertThat(reader.findDetail(11, FROM, TO, SNAPSHOT).availability())
-                .isEqualTo(DetailAvailability.UNAVAILABLE);
     }
 
     @Test

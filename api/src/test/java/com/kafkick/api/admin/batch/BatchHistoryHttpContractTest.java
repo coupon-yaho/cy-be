@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
+import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 /**
@@ -30,7 +31,7 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 추측하지 않고 실제 HTTP 로 확인한다.
  *
  * <p>인증도 같은 자리에서 본다. {@code Caller} 파라미터는 값을 쓰지 않지만
- * {@code X-User-Id} 를 <b>필수로 만드는</b> 역할을 하고, 관리자 역할 확인은 그 밖에서
+ * {@code X-Member-Id} 를 <b>필수로 만드는</b> 역할을 하고, 관리자 역할 확인은 그 밖에서
  * {@code AdminAuthorizationInterceptor} 가 한다 — 두 장치가 함께 걸려야 이 경로가 닫힌다.
  */
 @SpringBootTest(classes = com.kafkick.ApiApplication.class,
@@ -47,7 +48,7 @@ class BatchHistoryHttpContractTest {
         HttpRequest.Builder builder = HttpRequest.newBuilder(
                 URI.create("http://localhost:" + port + PATH + query));
         if (userId != null) {
-            builder.header("X-User-Id", userId);
+            builder.header(MemberRequestHeaders.MEMBER_ID, userId);
         }
         if (role != null) {
             builder.header("X-User-Role", role);
@@ -76,7 +77,7 @@ class BatchHistoryHttpContractTest {
     }
 
     @Test
-    @DisplayName("X-User-Id 가 없으면 400 이다")
+    @DisplayName("X-Member-Id 가 없으면 400 이다")
     void missingCallerHeaderIsRejected() throws Exception {
         // Caller 를 Optional 로 선언하면 이 방어가 조용히 사라진다.
         assertThat(call("?limit=50", null, "ADMIN").statusCode()).isEqualTo(400);

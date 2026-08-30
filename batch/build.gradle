@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     id 'org.springframework.boot'
 }
@@ -25,10 +27,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-batch'
     // 300만 행 집계·리플레이는 전부 SQL 이다. starter-batch 가 끌어오지만 직접 쓰므로 명시한다.
     implementation 'org.springframework:spring-jdbc'
-    // 관제 API가 내부 네트워크에서 호출하는 verify 트리거를 제공한다.
+    // 관제 API 가 내부 네트워크에서 호출하는 verify 트리거를 제공한다 — CY-368 의
+    // POST /api/v1/admin/verify. **관리 포트가 아니다.** 프론트 계약(docs/05)이 그 경로로
+    // 고정돼 있어 옮기면 계약이 깨진다. 대신 batch.yml 이 그 포트를 기본으로 안 내보낸다
+    // (docs/15 결정 1). 노출 축소가 막는 것은 인터넷뿐이고 compose 네트워크 안은 그대로다.
     implementation 'org.springframework.boot:spring-boot-starter-web'
-    implementation 'org.springframework.boot:spring-boot-starter-actuator'
-    implementation 'io.micrometer:micrometer-registry-prometheus'
+    // actuator·micrometer 는 아래 관측 절에서 선언한다 — micrometer 를 여기서
+    // implementation 으로 두면 컴파일 클래스패스에 올라가 그쪽 runtimeOnly 방어선이 뚫린다.
 
     // 도메인 Gauge(OBS-5)가 Redis 재고 카운터를 읽는다. V1 회차는 Redis 자체가 없어 조회하지
     // 않지만, V2·V3 에서 같은 코드가 그대로 돌아야 하므로 통로는 컴파일 타임에 열어 둔다.
@@ -61,6 +66,14 @@ dependencies {
     // 드러난다(docs/14-v2-phase0/11 ③).
     testImplementation 'org.testcontainers:testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    // 관제가 Prometheus 로 batch JVM 을 직접 긁는다. 정합성 gap · 대기열 길이 · Kafka lag 은
+    // api 가 만들 수 없다 — 300만 행 집계라 발급 경로에 얹으면 성능 측정이 오염된다.
+    // 이 두 줄은 값이 나갈 통로만 연다. Gauge 등록은 관제 쪽 티켓(OBS-5)이 붙인다.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    // 코드가 import 하지 않는 순수 런타임 아티팩트다. implementation 으로 두면 컴파일
+    // 클래스패스에 Micrometer 가 올라가, 나중에 batch 가 MeterRegistry 를 직접 잡아도
+    // 컴파일이 통과한다 — storage 를 runtimeOnly 로 묶어 둔 것과 같은 방어선이다.
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 
     // JobLauncherTestUtils / JobRepositoryTestUtils
     testImplementation 'org.springframework.batch:spring-batch-test'
@@ -70,6 +83,66 @@ dependencies {
     // 컴파일 타임 가시성뿐이다 — 대역만 쓰는 테스트로는 CONVERT_TZ·행 별칭 Upsert·드라이버
     // 시각 변환이 한 줄도 실행되지 않는다.
     testImplementation 'org.flywaydb:flyway-core'
+}
+
+tasks.named('test') {
+    // **JVM 존을 DB 와 일부러 어긋나게 둔다.**
+    //
+    // MySqlContainerConfig 가 컨테이너를 --default-time-zone=+00:00 로 띄우는데, CI 러너의
+    // JVM 존도 UTC 라 둘이 같아진다. 그러면 드라이버의 존 변환이 항등이 되어
+    // **시간대 버그를 재현할 수 없다** — BatchRunMetricsRefresher 가 UNIX_TIMESTAMP 를 쓰는
+    // 대신 자바에서 변환하도록 되돌려도 CI 는 초록이다. 실제로 이 프로젝트에서 그 자리가
+    // 아홉 시간 어긋난 적이 있고(CY-392), 그때 잡아 준 것이 개발 기기의 KST 뿐이었다.
+    //
+    // user.timezone 은 JVM 기동 시점에 잡혀야 Connector/J 가 캐시하는 기본 존과도 맞는다 —
+    // 테스트 안에서 TimeZone.setDefault 로 바꾸면 이미 열린 커넥션이 옛 존을 들고 있다.
+    systemProperty 'user.timezone', 'Asia/Seoul'
+
+    // **모듈 밖 파일을 읽는 테스트가 있다. 입력으로 선언해야 한다.**
+    //
+    // AlertChannelRegistryTest 는 `../infra/prometheus/rules/batch-alerts.yml` 과
+    // `../docs/14-observability-wiring.md` 를 Path.of("..") 로 직접 읽어 **규칙과 채널 표를
+    // 잇는다.** BatchMetricExposureTest 는 같은 규칙 파일에서 메트릭 이름을 뽑아 실제 노출과
+    // 대조한다. 둘 다 태스크 입력에 안 들어 있어서, **그 두 파일만 바뀐 라운드는
+    // `:batch:test` 가 UP-TO-DATE 로 건너뛰었다** — 실측으로 확인했다(CY-661).
+    //
+    // 그러면 규칙 파일에 `channel` 없는 알림을 더해도 CI 가 초록이고, 그 알림은
+    // sink-unrouted 로 떨어져 아무도 안 본다. **잇는 검사가 있는데 안 도는 상태**가
+    // 제일 나쁘다 — 있다고 믿기 때문이다.
+    //
+    // `org.gradle.caching` 을 켜기 전부터 있던 구멍이다(up-to-date 검사와 캐시는 별개다).
+    // 다만 캐시가 CI 러너 사이로도 그 판정을 옮기므로 이 티켓에서 함께 막는다.
+    inputs.files(
+            rootProject.file('infra/prometheus/rules/batch-alerts.yml'),
+            rootProject.file('docs/14-observability-wiring.md'),
+            // DataSourceTimeoutGuardTest 가 이 파일의 URL 을 직접 읽어 가드와 대조한다.
+            // 안 걸면 이 파일만 바뀐 빌드에서 UP-TO-DATE 로 건너뛰어 불일치를 놓친다.
+            rootProject.file('storage/src/main/resources/storage.yml.example'))
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName('externalContractFiles')
+
+    // NoOrphanJavadocTest 가 저장소의 자바 소스를 **텍스트로** 훑는다. 클래스패스가 아니라
+    // 파일을 읽으므로 gradle 이 스스로 알 수 없다 — 선언 안 하면 다른 모듈의 **주석만**
+    // 바꿨을 때 :batch:test 가 UP-TO-DATE 로 건너뛴다(실측). 그러면 새 고아 javadoc 이
+    // 로컬에서 조용히 통과한다. NoWallClockInBatchTest 도 같은 방식으로 소스를 읽는다.
+    inputs.files(rootProject.fileTree(rootProject.projectDir) {
+        // **한 칸이 아니라 전부다.** settings.gradle 에 infra:mq · infra:redis 처럼 중첩된
+        // 모듈이 있어 `*/src/**` 로는 그 아래가 안 잡힌다 — 테스트는 뿌리부터 재귀로 훑으므로
+        // 스캔 범위와 캐시 키가 어긋난다. 지금은 그 둘에 자바 파일이 없어 잠복해 있다.
+        include '**/src/**/*.java'
+        exclude '**/build/**'
+    }).withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName('scannedJavaSources')
+}
+
+tasks.matching { it.name == 'bootRun' }.configureEach {
+    // **컨테이너와 같은 존으로 띄운다.** batch.yml 이 TZ=UTC 를 주는데 bootRun 은 그 파일을
+    // 안 읽으므로, 개발 기기 존이 그대로 JVM 기본 존이 된다(KST 기기에서 Asia/Seoul — 실측).
+    //
+    // 판정 컬럼은 TimeProvider 로 옮겨 이 값과 무관해졌지만, 배치 메타의 시각은 여전히
+    // 인자 없는 LocalDateTime.now() 다 — RunningJobProbe 의 시체 판정이 그 위에 선다.
+    // 로컬에서만 다른 존으로 돌면 그 가드의 동작이 운영과 달라진다.
+    systemProperty 'user.timezone', 'UTC'
 }
 
 bootJar {

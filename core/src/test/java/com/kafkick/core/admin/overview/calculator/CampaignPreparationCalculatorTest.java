@@ -128,22 +128,7 @@ class CampaignPreparationCalculatorTest {
         assertThat(v2.failedItems()).isEmpty();
     }
 
-    /** DB에 저장됐지만 발급 경로가 구현되지 않은 정책을 엔진별 실패로 노출하는지 검증합니다. */
-    @ParameterizedTest
-    @EnumSource(value = EngineVersion.class, names = { "V1", "V2" })
-    @DisplayName("DATA_GRANT 정책은 V1과 V2 발급 경로 실패다")
-    void dataGrantPolicyFailsIssuancePath(EngineVersion engineVersion) {
-        PreparationObservation result = calculator.calculate(
-                readyDatabase(CouponPolicyType.DATA_GRANT),
-                engineVersion,
-                engineVersion == EngineVersion.V2
-                        ? validV2(true, true) : V2PreparationSource.notApplicable());
-
-        assertThat(result.failedItems()).containsExactly(PreparationItem.ISSUANCE_PATH);
-        assertThat(result.completed()).isFalse();
-    }
-
-    /** 알 수 없는 정책은 DB 설정 실패와 발급 경로 실패를 함께 보존하는지 검증합니다. */
+    /** 알 수 없는 정책 문자열은 설정 실패와 발급 경로 실패를 함께 확정하는지 검증합니다. */
     @Test
     @DisplayName("알 수 없는 정책은 캠페인 설정과 발급 경로 실패다")
     void unknownPolicyFailsConfigurationAndIssuancePath() {

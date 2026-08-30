@@ -20,7 +20,7 @@ class AdminContractEnumTest {
                 "CREATED", "RUNNING", "STOPPING", "STOPPED", "FINALIZING", "FINALIZED", "FAILED");
         assertThat(names(BrandCategory.values())).containsExactly("CAFE", "SHOP", "DELIVERY", "CULTURE");
         assertThat(names(CouponPolicyType.values())).containsExactly(
-                "PERCENT_CAPPED", "FIXED_AMOUNT", "DATA_GRANT");
+                "PERCENT_CAPPED", "FIXED_AMOUNT");
         assertThat(names(MeasurementState.values())).containsExactly("RUNNING", "STOPPED");
         assertThat(names(VerificationRunState.values())).containsExactly(
                 "REQUESTED", "RUNNING", "COMPLETED", "FAILED");

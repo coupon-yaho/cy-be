@@ -1,0 +1,322 @@
+// 테스트용 MySQL 컨테이너를 만드는 자리입니다. 수명의 주인은 JVM 입니다.
+package com.kafkick.storage.db;
+
+import org.testcontainers.mysql.MySQLContainer;
+import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
+
+/**
+ * <b>만들기만 한다. 띄우지 않는다.</b>
+ *
+ * <h2>왜 별도 클래스인가</h2>
+ *
+ * <p>한때 이 팩토리가 {@link MySqlContainerConfig} 안에 있었고,
+ * {@link CorruptMySqlContainerConfig} 가 그것을 불렀다. 그런데 {@code static} 메서드 호출은
+ * <b>그 클래스의 정적 초기화를 강제한다</b>(JLS §12.4.1) — CLEAN 설정의
+ * {@code static { CONTAINER.start(); }} 가 함께 돌아서, <b>CORRUPT 만 쓰는 실행도 CLEAN
+ * 컨테이너를 띄웠다.</b>
+ *
+ * <p>실측: {@code ./gradlew :storage:test --tests '*Corrupt*'} 가 컨테이너를 <b>2회</b> 띄웠다.
+ * <i>"스키마 종류마다 하나"</i> 라고 적어 놓고 실제로는 <i>"CORRUPT 를 건드리면 무조건 둘"</i>
+ * 이었다. 팩토리를 밖으로 빼면 그 연쇄가 끊긴다.
+ *
+ * <h2>기동은 {@code @Bean} 에서 한다</h2>
+ *
+ * <p>정적 초기화자에서 띄우면 안 된다. 기동이 실패한 클래스는 {@code erroneous} 로 표시되어
+ * <b>이후 모든 접근이 {@code NoClassDefFoundError} 만 낸다</b>(JLS §12.4.2) — 원인 스택이
+ * 첫 실패 하나에만 붙고, 리포트에는 수백 건의 {@code Could not initialize class} 가 남는다.
+ * 이 저장소는 이미 <i>"컨테이너 기동 실패로 보여서 원인까지 가는 길이 멀다"</i> 로 시간을
+ * 태운 적이 있다. 그 거리를 더 늘리지 않는다.
+ */
+final class SharedMySqlContainers {
+
+    /**
+     * <b>팀 협의로 {@code latest} 를 쓴다.</b> 앞서 {@code 8.0.35} 로 고정했던 것을 되돌린 것이고,
+     * 되돌리면서 생기는 성질을 여기 적어 둔다 — 지우지 마라.
+     *
+     * <p><b>커밋이 그대로여도 결과가 달라질 수 있다.</b> 도커 허브가 가리키는 대상이 바뀌면
+     * 같은 코드가 다른 서버에서 돈다. 실제로 이 태그가 8.0 에서 <b>26.7 로 넘어간 것을
+     * 확인했다.</b> {@code sql-mode} 기본값·{@code CHECK} 강제·{@code DROP CHECK} 문법·
+     * 기본 collation 이 전부 버전에 묶여 있고, 아래 설정이 <i>"운영 기본값과 같다"</i> 는 주장도
+     * 그렇다. 파리티 테스트가 컬럼 collation 까지 대조하므로 이 축이 흔들리면 거기서 먼저 운다.
+     *
+     * <p><b>{@code V2026082509__issuance_status_check.sql} 의 <i>"시드·테스트·CI 는 8.0.35 로
+     * 고정돼 있다"</i> 는 문장은 이 결정으로 낡았다.</b> 그 파일은 이미 적용된 마이그레이션이라
+     * 주석만 고쳐도 Flyway 체크섬이 깨지므로 손대지 않는다 — 정정을 여기 둔다.
+     *
+     * <p><b>그래서 빨간불이 코드 탓이 아닐 수 있다.</b> 손댄 것이 없는데 갑자기 깨지면
+     * {@code docker run --rm mysql:latest mysqld --version} 을 먼저 찍어 보고,
+     * 시드({@code cy-seed})·compose 가 쓰는 버전과 갈렸는지 확인해라.
+     * 검증 대상 데이터를 만드는 쪽과 검증하는 쪽이 다른 서버면 판정의 뜻이 약해진다.
+     */
+    private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4.6");
+
+    /** 연결 상한의 기본값. {@code build.gradle} 이 컨텍스트 캐시 상한에서 계산해 넘긴다. */
+    private static final String MAX_CONNECTIONS_PROPERTY = "test.mysql.maxConnections";
+
+    /**
+     * {@code infra/mysql/initdb/20-obs-account.sh} 에 env 로 건네는 값.
+     *
+     * <p><b>여기 하나뿐이다.</b> 한때 이 파일과 {@code MySqlContainerConfig} 가 같은
+     * 문자열을 각자 적고 있었다 — 한쪽은 컨테이너 계정을 만들고 한쪽은 접속 정보를
+     * 꽂는데, 값이 갈리면 컨테이너를 쓰는 <b>모든</b> 테스트가
+     * {@code Access denied for user 'obs'} 로 죽는다. 실패 메시지가 원인을 안 가리켜서
+     * 이스케이프 문제로 오진하기 딱 좋다.
+     */
+    static final String OBSERVATION_USERNAME = "obs";
+
+    /**
+     * <b>일부러 까다로운 값이다.</b> 두 문자가 각각 다른 실패를 만든다 —
+     * {@code '} 는 문자열을 조기에 닫고(배가로 막는다), {@code \} 는 MySQL 이 기본값에서
+     * 이스케이프 문자로 읽어 <b>값의 마지막 문자면</b> 닫는 따옴표를 먹는다({@code ERROR 1064}).
+     *
+     * <p>그래서 <b>백슬래시가 마지막 문자다.</b> 가운데 두면 그 실패가 재현되지 않아
+     * 이스케이프를 지워도 테스트가 통과한다. 평범한 값으로 두면 이 저장소에 그 회귀를
+     * 잡는 그물이 하나도 없게 된다.
+     */
+    static final String OBSERVATION_PASSWORD = "o'bs\\";
+
+    private SharedMySqlContainers() {
+    }
+
+    /**
+     * 저장소 루트. 실행 디렉터리가 모듈마다 달라 위로 올라가며 {@code settings.gradle} 로
+     * 찾는다 — 상대 경로를 박으면 다른 모듈에서 돌릴 때 파일을 못 찾아 컨테이너가 안 뜬다.
+     */
+    private static java.nio.file.Path repoRoot() {
+        java.nio.file.Path candidate = java.nio.file.Path.of("").toAbsolutePath();
+        while (candidate != null) {
+            if (java.nio.file.Files.isRegularFile(candidate.resolve("settings.gradle"))) {
+                return candidate;
+            }
+            candidate = candidate.getParent();
+        }
+        throw new IllegalStateException("저장소 루트를 찾지 못했다. 실행 디렉터리: "
+                + java.nio.file.Path.of("").toAbsolutePath());
+    }
+
+    /**
+     * <b>기동에 성공한 뒤부터 {@code stop()} 을 무시한다.</b> 수명의 주인이 JVM 이라는 결정을
+     * 타입으로 박되, <b>Testcontainers 자신의 정리 경로는 살린다.</b>
+     *
+     * <h3>왜 무시하나</h3>
+     *
+     * <p>스프링이 컨텍스트를 닫을 때마다 {@code stop()} 을 부르는데, 싱글턴에 그것이 먹히면
+     * <b>먼저 닫힌 컨텍스트가 남의 컨테이너를 끈다.</b> 그 뒤 {@code start()} 는 같은 객체에
+     * <b>새 컨테이너를 새로 띄운다</b> — 그래서 막기 전에는 44회가 39회로만 줄었다.
+     *
+     * <p><b>{@code @Bean(destroyMethod = "")} 로는 못 막는다.</b> 그것은 스프링의 표준 소멸
+     * 훅이고, 부트의 {@code TestcontainersLifecycleBeanPostProcessor} 는
+     * {@code DestructionAwareBeanPostProcessor} 라 그 속성과 무관하게 {@code Startable.stop()}
+     * 을 부른다.
+     *
+     * <h3>왜 조건부여야 하나 — 무조건 비우면 CI 가 통째로 무너진다</h3>
+     *
+     * <p>한때 {@code stop()} 을 <b>완전히</b> 비웠다. 그런데 {@code stop()} 은 스프링만
+     * 부르는 것이 아니다 — <b>Testcontainers 가 기동 실패를 치울 때도 부른다.</b>
+     * {@code testcontainers-2.0.5} 바이트코드로 확인했다:
+     *
+     * <ul>
+     *   <li>{@code GenericContainer.tryStart} 의 실패 갈래가 로그를 남긴 뒤
+     *       {@code stop()} 을 부르고 {@code ContainerLaunchException} 을 던진다.</li>
+     *   <li>{@code stop()} 은 {@code containerId}·{@code containerInfo} 를 {@code null} 로
+     *       되돌리는 <b>유일한 자리</b>다.</li>
+     *   <li>{@code start()} 는 첫 줄이 {@code if (containerId != null) return;} 이다.</li>
+     * </ul>
+     *
+     * <p>그래서 무조건 비우면 <b>첫 기동이 실패한 순간 {@code containerId} 가 죽은 컨테이너
+     * id 로 고정된다.</b> 이후 {@code start()} 는 즉시 return 하고, {@code isRunning()} 이
+     * false 여도 되살아나지 않는다 — <b>JVM 안의 모든 뒤 컨텍스트가 죽은 컨테이너를 받는다.</b>
+     * 실패 수백 건에 원인 스택은 첫 하나뿐이다.
+     *
+     * <p>그것은 이 클래스가 <i>"원인까지 가는 길을 늘리지 않는다"</i> 며 정적 초기화자를 피한
+     * <b>바로 그 실패 모양</b>이다. 컨텍스트마다 컨테이너를 새로 만들던 시절에는 다음
+     * 컨텍스트가 새 객체로 회복했는데, 공유로 바꾸면서 그 회복 경로가 없어졌다.
+     *
+     * <p><b>{@code doStart()} 가 반환한 뒤에만 막는다.</b> {@code tryStart} 의 정리
+     * {@code stop()} 은 그 반환 <b>전에</b> 불리므로 그 시점 {@code startedOnce} 는 false 다.
+     *
+     * <h3>{@code close()} 는 오버라이드하지 않는다</h3>
+     *
+     * <p>{@code Startable.close()} 의 기본 구현이 {@code this.stop()} 한 줄이라(바이트코드
+     * 확인) 가상 디스패치로 아래 {@code stop()} 을 탄다. 따로 비우면 <b>위 조건을 건너뛰어</b>
+     * 기동 실패 정리가 다시 죽는다.
+     *
+     * <p>정리는 Testcontainers 가 한다 — Ryuk 사이드카가 기본이고, 그것을 끄면
+     * {@code JVMHookResourceReaper} 가 Docker API 로 직접 지운다. 둘 다 {@code stop()} 을
+     * 안 타므로 이 오버라이드가 회수를 막지 않는다 — {@link #warnIfRyukDisabled()} 참고.
+     */
+    private static final class SharedMySqlContainer extends MySQLContainer {
+
+        /**
+         * <b>{@code volatile} 이다.</b> 컨테이너를 만든 스레드와 컨텍스트를 닫는 스레드가
+         * 다를 수 있다 — 스프링 테스트는 셧다운 훅에서도 닫는다.
+         */
+        private volatile boolean startedOnce;
+
+        /**
+         * <b>{@code super.stop()} 으로 내려보낸 횟수.</b> 이것이 없으면 회귀 테스트가 무력하다 —
+         * 기동 전 {@code stop()} 은 {@code containerId} 가 null 이라 {@code super.stop()} 도
+         * 즉시 돌아오므로, <b>위임했는지 삼켰는지가 밖에서 안 보인다.</b>
+         * 무조건 no-op 이던 옛 구현에서도 테스트가 통과해 버린다.
+         */
+        private final java.util.concurrent.atomic.AtomicInteger delegatedStops =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        private SharedMySqlContainer(DockerImageName image) {
+            super(image);
+        }
+
+        /** 테스트가 이 전이를 잰다 — {@code SharedMySqlContainerTest}. */
+        boolean hasStartedOnce() {
+            return startedOnce;
+        }
+
+        int delegatedStopCount() {
+            return delegatedStops.get();
+        }
+
+        @Override
+        protected void doStart() {
+            super.doStart();
+            // 여기 오면 tryStart 가 성공한 것이다. 실패했으면 위에서 예외가 났다.
+            startedOnce = true;
+        }
+
+        @Override
+        public void stop() {
+            if (!startedOnce) {
+                // 기동 실패 정리 경로. 여기서 막으면 containerId 가 죽은 채 고정된다.
+                delegatedStops.incrementAndGet();
+                super.stop();
+            }
+        }
+    }
+
+    /**
+     * 컨테이너를 만든다. <b>띄우지는 않는다</b> — 부르는 쪽이 {@code @Bean} 안에서 띄운다.
+     */
+    static MySQLContainer create() {
+        warnIfRyukDisabled();
+        return new SharedMySqlContainer(IMAGE)
+                .withDatabaseName("app")
+                .withUsername("test")
+                // 락 범위를 재는 테스트가 performance_schema 를 읽는다. 파일 안에 이유를 적었다.
+                // initdb.d 는 root 로 도는 자리라 여기서만 권한을 줄 수 있다.
+                .withCopyFileToContainer(
+                        MountableFile.forClasspathResource("db/testcontainers/grant-process.sql"),
+                        "/docker-entrypoint-initdb.d/10-grant-process.sql")
+                // 20 · 관측 전용 계정. **compose 가 마운트하는 것과 같은 파일**이라
+                //      테스트에서 도는 권한이 곧 로컬에서 도는 권한이다.
+                // ⚠️ 클래스패스가 아니라 **저장소 경로**에서 읽는다 — 이 파일은 compose 가
+                //    호스트 경로로 마운트하는 것이라 배포 jar 에 실릴 이유가 없다.
+                //    모드 0755 를 명시한다. entrypoint 가 .sh 를 실행하므로 실행 비트가
+                //    없으면 "bad interpreter: Permission denied" 로 컨테이너가 안 뜬다.
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(
+                                repoRoot().resolve("infra/mysql/initdb/20-obs-account.sh"), 0755),
+                        "/docker-entrypoint-initdb.d/20-obs-account.sh")
+                // 권한을 주는 쪽. **initdb.d 가 아니다** — 테이블 단위 GRANT 는 그 테이블이
+                // 이미 있어야 하는데 initdb 시점에는 하나도 없다(ERROR 1146). 여기서는 복사만
+                // 하고, 스키마 초기화가 끝난 뒤 MySqlContainerConfig 의 grant applier 가 돌린다.
+                // ⚠️ 디렉터리째 복사한다 — apply.sh 가 같은 디렉터리의 allowlist.txt 를 읽는다.
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(
+                                repoRoot().resolve("infra/mysql/obs-grants"), 0755),
+                        "/obs-grants")
+                .withEnv("DB_OBS_USERNAME", OBSERVATION_USERNAME)
+                .withEnv("DB_OBS_PASSWORD", OBSERVATION_PASSWORD)
+                .withUrlParam("serverTimezone", "UTC")
+                .withUrlParam("characterEncoding", "UTF-8")
+                .withUrlParam("useUnicode", "true")
+                .withUrlParam("rewriteBatchedStatements", "true")
+                // UPDATE 반환값을 matched rows 로 고정한다. 기본값이지만 명시한다 —
+                // VerificationRunJdbcAdapter 가 "0행 = 실행 행이 없다" 로 해석하는데,
+                // 누가 UPSERT 반환값(삽입 1/갱신 2)을 쓰려고 useAffectedRows=true 를 붙이면
+                // 값이 같은 UPDATE 가 0행이 되어 멀쩡한 행에 RUN_ROW_VANISHED 가 난다.
+                .withUrlParam("useAffectedRows", "false")
+                // 운영 URL 과 같은 모양으로 맞춘다(CY-697). DataSourceTimeoutGuard 가
+                // 기동 때 이 둘의 존재와 대소 관계를 검사하므로, 없으면 컨텍스트를 띄우는
+                // 테스트가 전부 그 자리에서 깨진다 — 실제로 그렇게 확인하고 넣었다.
+                //
+                // 값도 운영과 같게 둔다. 테스트만 다른 값을 쓰면 "테스트는 통과하는데
+                // 운영에서만 끊긴다" 는 축이 새로 생긴다.
+                .withUrlParam("connectTimeout", "3000")
+                .withUrlParam("socketTimeout", "660000")
+                // 운영 MySQL 서버 설정(my.cnf) 중 쿼리 결과에 영향을 주는 항목만 옮겼다.
+                // 메모리·로깅·binlog 는 테스트에 불필요하므로 제외. 서버 설정이 바뀌면 여기도 같이 본다.
+                .withCommand(
+                        "--default-time-zone=+00:00",
+                        "--character-set-server=utf8mb4",
+                        "--collation-server=utf8mb4_0900_ai_ci",
+                        "--default-storage-engine=InnoDB",
+                        // ONLY_FULL_GROUP_BY 는 MySQL 8 기본값이다. 빼 두면 그룹 키를 잘못 좁힌
+                        // GROUP BY 를 서버가 거부하지 않고 임의 값을 골라 줘서,
+                        // 테스트가 운영보다 느슨한 모드에서 돈다.
+                        "--sql-mode=ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,"
+                                + "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+                        "--local-infile=0",
+                        // **컨테이너를 공유하면서 제약이 옮겨 갔다.** 예전에는 컨텍스트마다
+                        // mysqld 가 따로라 연결이 흩어졌는데, 지금은 캐시된 컨텍스트 전부가
+                        // 각자 Hikari 풀을 들고 **한 서버**에 붙는다. 기본값 151 로는
+                        // maxSize=32 에서 "Too many connections" 가 282번 났다(실측).
+                        //
+                        // **값은 build.gradle 이 컨텍스트 캐시 상한에서 계산해 넘긴다.**
+                        // 한쪽만 바꾸면 증상이 원인과 안 닮기 때문이다 — Too many connections 를
+                        // 받은 사람은 Hikari 를 의심하지 mysqld 인자를 의심하지 않는다.
+                        "--max-connections=" + System.getProperty(MAX_CONNECTIONS_PROPERTY, "1000"),
+                        // 위 주석대로 binlog 는 테스트에 불필요한데 이미지 기본값이 ON 이었다.
+                        // 켜져 있으면 SUPER 없는 계정이 트리거를 못 만들어(오류 1419),
+                        // "실행 중에 데이터가 바뀐다" 를 재현하는 테스트를 쓸 수 없다.
+                        "--skip-log-bin");
+    }
+
+    /**
+     * <b>테스트가 기동 여부 전이를 잰다.</b> {@code SharedMySqlContainer} 가 private 이라
+     * 밖에서 타입으로 못 잡으므로 여기서 열어 준다.
+     */
+    static boolean hasStartedOnce(MySQLContainer container) {
+        return container instanceof SharedMySqlContainer shared && shared.hasStartedOnce();
+    }
+
+    /**
+     * <b>{@code super.stop()} 으로 내려간 횟수.</b> 회귀 테스트가 <i>"삼켰나 위임했나"</i> 를
+     * 가르는 유일한 관측점이다 — 그 둘은 바깥에서 결과가 같아 보인다.
+     */
+    static int delegatedStopCount(MySQLContainer container) {
+        return container instanceof SharedMySqlContainer shared ? shared.delegatedStopCount() : -1;
+    }
+
+    /**
+     * <b>Ryuk 이 꺼져 있으면 무엇이 달라지는지 알린다. 죽이지는 않는다.</b>
+     *
+     * <p>한때 여기서 예외를 던졌다. 근거는 <i>"{@code stop()}·{@code close()} 를 비운 순간부터
+     * 회수 경로가 Ryuk 하나뿐"</i> 이었는데 <b>그 전제가 틀렸다.</b> 실측(testcontainers 2.0.5
+     * 바이트코드):
+     *
+     * <ul>
+     *   <li>{@code ResourceReaper.instance()} 가 {@code TESTCONTAINERS_RYUK_DISABLED} 를 읽어
+     *       참이면 경고를 찍고 {@code JVMHookResourceReaper} 를 쓴다.</li>
+     *   <li>그 구현은 {@code performCleanup()} 에서 <b>Docker API 로 직접 지운다</b>
+     *       ({@code removeContainerCmd}) — {@code GenericContainer.stop()} 을 안 탄다.
+     *       즉 이 클래스의 오버라이드가 그것을 무력화하지 않는다.</li>
+     * </ul>
+     *
+     * <p>그래서 rootless Podman·Bitbucket 처럼 Ryuk 을 못 쓰는 환경에서도 <b>정상 종료면
+     * 걷힌다.</b> 거기서 빌드를 통째로 막는 것은 과하다.
+     *
+     * <p><b>다만 같지는 않다.</b> JVM 훅은 <b>비정상 종료에 안 돈다</b> — {@code kill -9},
+     * OOM 킬, 러너 강제 종료면 컨테이너가 남는다. Ryuk 은 사이드카라 그 경우에도 걷는다.
+     * 그 차이를 알고 쓰라고 한 줄 남긴다.
+     */
+    private static void warnIfRyukDisabled() {
+        if (!Boolean.parseBoolean(System.getenv("TESTCONTAINERS_RYUK_DISABLED"))) {
+            return;
+        }
+        System.err.println(
+                "[cy-be] TESTCONTAINERS_RYUK_DISABLED 가 켜져 있습니다. "
+                        + "JVMHookResourceReaper 가 정상 종료에서 컨테이너를 걷지만, "
+                        + "kill -9·OOM 킬 같은 비정상 종료에는 안 돕니다 — "
+                        + "이 컨테이너는 stop() 을 무시하므로 그때는 손으로 지워야 합니다.");
+    }
+}

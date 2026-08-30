@@ -29,6 +29,7 @@ import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.command.CouponUseCommand;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.coupon.port.IssuanceUsageRepository;
+import com.kafkick.core.coupon.port.OrderNumberGenerator;
 import com.kafkick.core.support.exception.BusinessException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +60,9 @@ class CouponUseServiceTest {
     @Mock
     private IssuanceHistoryRepository issuanceHistoryRepository;
 
+    @Mock
+    private OrderNumberGenerator orderNumberGenerator;
+
     private CouponUseService couponUseService;
 
     @BeforeEach
@@ -67,7 +71,8 @@ class CouponUseServiceTest {
                 issuanceRepository,
                 couponRoundRepository,
                 issuanceUsageRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                orderNumberGenerator
         );
     }
 
@@ -83,6 +88,7 @@ class CouponUseServiceTest {
         ArgumentCaptor<IssuanceUsage> usageCaptor =
                 ArgumentCaptor.forClass(IssuanceUsage.class);
         verify(issuanceUsageRepository).save(usageCaptor.capture());
+        verify(orderNumberGenerator).generate();
         assertThat(usageCaptor.getValue().orderId()).isEqualTo(30L);
         assertThat(usageCaptor.getValue().discountAmount()).isEqualTo(3_000);
 
@@ -118,7 +124,6 @@ class CouponUseServiceTest {
         CouponUseCommand command = new CouponUseCommand(
                 100L,
                 21L,
-                30L,
                 10_000,
                 "550e8400-e29b-41d4-a716-446655440000",
                 USED_AT
@@ -128,7 +133,8 @@ class CouponUseServiceTest {
         verifyNoInteractions(
                 couponRoundRepository,
                 issuanceUsageRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                orderNumberGenerator
         );
         verify(issuanceRepository, never()).updateStatusIfCurrent(
                 any(), any(), any(), any(), any()
@@ -160,7 +166,8 @@ class CouponUseServiceTest {
         );
         verifyNoInteractions(
                 issuanceUsageRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                orderNumberGenerator
         );
     }
 
@@ -182,7 +189,8 @@ class CouponUseServiceTest {
         assertErrorCode(command(10_000), CouponIssueErrorCode.INVALID_TRANSITION);
         verifyNoInteractions(
                 issuanceUsageRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                orderNumberGenerator
         );
     }
 
@@ -198,6 +206,7 @@ class CouponUseServiceTest {
                 IssuanceStatus.USED,
                 USED_AT
         )).thenReturn(true);
+        when(orderNumberGenerator.generate()).thenReturn(30L);
         when(issuanceUsageRepository.save(any(IssuanceUsage.class)))
                 .thenAnswer(invocation -> {
                     IssuanceUsage usage = invocation.getArgument(0);
@@ -216,7 +225,6 @@ class CouponUseServiceTest {
         return new CouponUseCommand(
                 100L,
                 20L,
-                30L,
                 orderAmount,
                 "550e8400-e29b-41d4-a716-446655440000",
                 USED_AT

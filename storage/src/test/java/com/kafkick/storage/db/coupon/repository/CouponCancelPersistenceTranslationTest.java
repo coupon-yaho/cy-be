@@ -42,8 +42,8 @@ class CouponCancelPersistenceTranslationTest {
         when(issuanceJpaRepository.updateStatusIfCurrent(
                 100L,
                 20L,
-                IssuanceStatus.ISSUED,
-                IssuanceStatus.CANCELLED,
+                IssuanceStatus.ISSUED.name(),
+                IssuanceStatus.CANCELLED.name(),
                 CANCELED_AT
         )).thenThrow(new DataAccessResourceFailureException("db failed"));
 

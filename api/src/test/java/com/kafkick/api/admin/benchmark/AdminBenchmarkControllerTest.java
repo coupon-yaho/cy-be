@@ -129,7 +129,7 @@ class AdminBenchmarkControllerTest {
                 Optional.empty(), Optional.empty()));
 
         withoutSecret.perform(post("/api/v1/admin/benchmarks/7/finalize;a=b")
-                .header(com.kafkick.api.caller.HeaderCallerResolver.USER_ID_HEADER, "812934")
+                .header(com.kafkick.api.support.auth.MemberRequestHeaders.MEMBER_ID, "812934")
                 .header(com.kafkick.api.admin.support.AdminAuthorizationInterceptor.USER_ROLE_HEADER, "ADMIN"))
             .andExpect(status().isForbidden());
         verify(finalizeOrchestrator, never()).finalizeRun(7L);

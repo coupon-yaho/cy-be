@@ -18,12 +18,25 @@ dependencies {
 
     runtimeOnly 'com.mysql:mysql-connector-j'
 
+    // 시드 픽스처가 core 의 상태·사건 enum 을 시그니처에 노출한다.
+    testFixturesApi project(':core')
+
     testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
     testFixturesApi 'org.springframework.boot:spring-boot-starter-test'
     testFixturesApi 'org.springframework.boot:spring-boot-testcontainers'
     testFixturesApi 'org.springframework.boot:spring-boot-data-jpa-test'
     testFixturesApi 'org.springframework.boot:spring-boot-jdbc-test'
     testFixturesApi 'org.testcontainers:testcontainers-mysql'
+    // 설정 우선순위 검사기가 쓴다. starter 가 끌어오지만 직접 쓰므로 명시한다.
+    //
+    // api 가 아니라 implementation 이다 — 공개 시그니처에 SnakeYAML 타입이 없다.
+    //
+    // 다만 이것으로 소비 모듈이 자기 파서를 짜는 것을 막지는 못한다: 루트 build.gradle 이
+    // 모든 subproject 에 spring-boot-starter 를 걸고 그것이 snakeyaml 을 끌어온다.
+    // 판정을 한 벌로 유지하는 것은 규약이지 컴파일 강제가 아니다.
+    testFixturesImplementation 'org.yaml:snakeyaml'
+    // ConfigurationPropertyName 이 여기 있다. starter 두 단계를 거친 전이라 명시한다.
+    testFixturesImplementation 'org.springframework.boot:spring-boot'
 
     testFixturesRuntimeOnly 'com.mysql:mysql-connector-j'
 }

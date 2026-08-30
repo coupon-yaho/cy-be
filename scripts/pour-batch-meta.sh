@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# 검증용 셋에 Spring Batch 메타 스키마를 붓는다.
+#
+# 왜 필요한가
+#   cy-seed 의 ddl/ 은 BATCH_* 를 **일부러** 안 만든다 — 잡 실행 이력은 도메인이 아니고
+#   그 DDL 의 주인은 이 저장소의 V11 이다(seed-ddl/README.md 가 그 경계를 적는다).
+#   그래서 재시드는 스키마를 새로 만들면서 이 테이블들을 매번 지운다.
+#
+#   그 자체는 설계대로다. 문제는 **다시 붓는 것을 사람이 기억해야 한다**는 점이고,
+#   실제로 2026-08-30 에 두 번 잊었다. 두 번 다 증상이 같았다 —
+#   Table 'coupon_clean.BATCH_JOB_EXECUTION' doesn't exist 로 배치가 안 뜨고,
+#   관제 화면에서 그 데이터셋 카드가 통째로 사라진다.
+#
+#   SchemaPresenceGuard 는 이미 처방을 파일 이름까지 정확히 알려 준다. 부족한 것은
+#   진단이 아니라 **절차가 한 번에 끝나지 않는다**는 것이라, 그 절차를 여기 묶는다.
+#
+# 왜 cy-seed 가 아니라 여기인가
+#   DDL 을 cy-seed 로 복사하면 V11 이 두 벌이 되고, 그것은 seed-ddl 사본 대조 장치가
+#   막으려는 바로 그 상태다. 이 스크립트는 **이 저장소의 마이그레이션 파일을 그대로 읽는다** —
+#   사본을 안 만든다.
+#
+# 쓰는 법
+#   scripts/pour-batch-meta.sh coupon_clean
+#   MYSQL_CONTAINER=cy-mysql-1 scripts/pour-batch-meta.sh coupon_clean coupon_corrupt
+#
+# 이 스크립트가 재는 것과 안 재는 것
+#   잰다      V11 의 아홉 표가 이름으로 다 있는가 · 시퀀스 셋에 초기 행이 있는가 ·
+#             가드가 보는 인덱스 둘의 선두 컬럼이 맞는가
+#   안 잰다   각 표의 컬럼·타입·제약. **이름은 맞는데 모양이 다른 표**는 통과한다.
+#
+# 후자를 여기서 재지 않는 것은 V11 을 이 파일에 한 벌 더 옮겨 적는 일이기 때문이다
+# (사본을 안 만드는 것이 이 스크립트의 전제다). 대신 **적용이 그 상태를 밟으면 죽는다** —
+# 모양이 다른 표 위에서는 FK·인덱스 생성이 실패하고, 넘기는 오류 넷에 안 들어가 원문과
+# 함께 종료한다. 실측으로 확인했다(ERROR 3734·1824).
+#
+# 그래도 통과했는데 배치가 안 뜬다면 스키마가 손으로 망가진 것이다. 그때는 이 스크립트가
+# 아니라 **재시드**가 답이다 — 부분 수선으로 되돌릴 수 있는 상태가 아니다.
+set -euo pipefail
+
+CONTAINER="${MYSQL_CONTAINER:-cy-mysql-1}"
+MIGRATIONS_DIR="$(cd "$(dirname "$0")/.." && pwd)/storage/src/main/resources/db/migration"
+
+# SchemaPresenceGuard.META_MIGRATIONS 와 **같은 셋**이어야 한다. 갈리면 이 스크립트를
+# 돌리고도 가드가 거절하고, 그때 원인이 스크립트에 있다는 것을 아무도 못 본다.
+FILES=(
+  "V11__batch_metadata.sql"
+  "V2026082513__ix_batch_job_execution_lookup.sql"
+  "V2026082514__ix_batch_job_execution_history.sql"
+)
+
+# **V11 이 만드는 아홉 전부.** 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
+# 이름으로 묻는 것은 이 중 넷뿐이지만, **넷만 보고 건너뛰면 안 된다** — 나머지 다섯이
+# 없어도 "이미 온전하다" 로 빠져나가고, 그다음 Spring Batch 가 실행 문맥을 쓰려는
+# 순간 죽는다(리뷰가 잡았다).
+#
+# "BATCH_ 로 시작하는 것이 아홉 개" 로 세지 않고 이름을 쓰는 이유는 그대로다 —
+# 엉뚱한 BATCH_* 가 자리를 채워도 개수는 맞는다.
+REQUIRED_TABLES=(
+  "BATCH_JOB_INSTANCE"
+  "BATCH_JOB_EXECUTION"
+  "BATCH_STEP_EXECUTION"
+  "BATCH_JOB_EXECUTION_PARAMS"
+  "BATCH_JOB_EXECUTION_CONTEXT"
+  "BATCH_STEP_EXECUTION_CONTEXT"
+  "BATCH_JOB_INSTANCE_SEQ"
+  "BATCH_JOB_EXECUTION_SEQ"
+  "BATCH_STEP_EXECUTION_SEQ"
+)
+
+# 위 아홉 중 **한 행이 들어 있어야 뜻이 있는** 셋. 각 줄은
+#   시퀀스표|본표|본표의 PK
+# 다. 본 표를 함께 적는 것은 **행 수만으로 부족하기 때문**이다 — 남은 한 행의 ID 가
+# 본 표의 최대 PK 보다 작으면 다음 실행이 기존 PK 와 부딪친다(리뷰가 잡았다).
+#
+# ⚠️ 이 함정은 손상뿐 아니라 **V11 자신이 만든다.** V11 의 INSERT 는 표가 비었을 때
+#    ID 를 무조건 0 으로 넣는다. 본 표에 이미 행이 있는 채로 시퀀스만 비면, 다시 부어도
+#    0 이 들어가 충돌한다 — "0 행은 다시 부으면 복구된다" 는 앞 커밋의 내 말이 그만큼
+#    넓었다. 그래서 개수가 아니라 **값**까지 잰다.
+SEQ_TABLES=(
+  "BATCH_JOB_INSTANCE_SEQ|BATCH_JOB_INSTANCE|JOB_INSTANCE_ID"
+  "BATCH_JOB_EXECUTION_SEQ|BATCH_JOB_EXECUTION|JOB_EXECUTION_ID"
+  "BATCH_STEP_EXECUTION_SEQ|BATCH_STEP_EXECUTION|STEP_EXECUTION_ID"
+)
+
+# 가드의 셋째 축(CRITICAL_INDEXES). 이름만이 아니라 **선두 컬럼**을 본다 —
+# 같은 이름의 다른 모양이 통과하면 되읽기는 여전히 전체를 훑는다(CY-686).
+REQUIRED_INDEXES=(
+  "BATCH_JOB_EXECUTION|IX_JOB_EXEC_STATUS_END|STATUS,END_TIME"
+  "BATCH_JOB_EXECUTION|IX_JOB_EXEC_CREATE_TIME|CREATE_TIME"
+)
+
+if [ $# -eq 0 ]; then
+  echo "사용법: $0 <스키마> [스키마...]" >&2
+  exit 2
+fi
+
+# **비밀번호를 호스트 셸로 안 꺼낸다.** $(...) 로 받아 -e MYSQL_PWD=<값> 으로 넘기면
+# 그 값이 호스트 docker 프로세스의 명령행에 실려 ps 로 보인다. 컨테이너 **안에서**
+# MYSQL_ROOT_PASSWORD 를 MYSQL_PWD 로 옮긴다.
+mysql_in() {
+  local schema="$1"; shift
+  docker exec -i "$CONTAINER" sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --default-character-set=utf8mb4 "$@"' \
+    _ "$schema" "$@"
+}
+
+# 적용 전용. --force 로 끝까지 달린다 — 오류 분류는 호출부가 stderr 로 한다.
+# 이 함수의 종료 코드는 SQL 오류를 안 알린다(--force 의 설계된 동작).
+mysql_force() {
+  local schema="$1"
+  docker exec -i "$CONTAINER" sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --force --default-character-set=utf8mb4 "$1"' \
+    _ "$schema"
+}
+
+has_table() {
+  local schema="$1" table="$2"
+  [ "$(mysql_in "$schema" -N -e \
+      "SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema=DATABASE() AND table_name='$table';" 2>/dev/null | tr -d ' \r')" = "1" ]
+}
+
+# 선두 컬럼이 기대와 같은지까지 본다. 뒤에 컬럼이 더 붙은 것은 그 질의를 그대로
+# 태우므로 통과시킨다 — SchemaPresenceGuard.satisfies 와 같은 규칙이다.
+index_prefix() {
+  local schema="$1" table="$2" index="$3" n="$4"
+  mysql_in "$schema" -N -e \
+    "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index)
+       FROM information_schema.statistics
+      WHERE table_schema=DATABASE() AND table_name='$table'
+        AND index_name='$index' AND is_visible='YES' AND seq_in_index <= $n;" 2>/dev/null | tr -d ' \r'
+}
+
+# **고칠 SQL 을 그대로 찍는다.** "한 행만 남겨라" 는 안내가 부족했다 — 어느 행을
+# 남기느냐로 값이 갈리고, 낮은 값을 남기면 다음 실행이 기존 PK 와 부딪친다.
+# 아래 두 문장은 0행·복수행·낮은값 셋을 한꺼번에 고친다. 스크립트가 대신 안 돌리는 것은
+# **배치 메타를 지우는 일**이라 사람이 보고 눌러야 하기 때문이다.
+seq_fix() {
+  local schema="$1" t="$2" base="$3" pk="$4"
+  echo "      다시 부어도 안 고쳐진다(V11 의 INSERT 는 비었을 때만, 그것도 0 을 넣는다)." >&2
+  echo "" >&2
+  echo "      ⚠️ 먼저 이 스키마를 보는 배치를 멈춰라." >&2
+  echo "         도는 중에 고치면 **이미 id 를 받아 갔지만 본 표에 아직 안 쓴 실행**과" >&2
+  echo "         경쟁한다 — 그 순간 MAX($pk) 가 실제보다 낮아 복구값이 도로 뒤처지고," >&2
+  echo "         그 실행이 커밋하는 순간 다음 id 가 중복된다." >&2
+  echo "" >&2
+  echo "      멈춘 뒤 아래를 $schema 에 돌리고, 이 스크립트를 다시 돌려라:" >&2
+  echo "" >&2
+  echo "        SELECT GREATEST(COALESCE((SELECT MAX(ID) FROM \`$t\`), 0)," >&2
+  echo "                        COALESCE((SELECT MAX(\`$pk\`) FROM \`$base\`), 0))" >&2
+  echo "          INTO @next;" >&2
+  echo "" >&2
+  echo "        INSERT INTO \`$t\` (ID, UNIQUE_KEY) VALUES (@next, '0') AS new" >&2
+  echo "          ON DUPLICATE KEY UPDATE ID = GREATEST(\`$t\`.ID, new.ID);" >&2
+  echo "" >&2
+  echo "        DELETE FROM \`$t\` WHERE UNIQUE_KEY <> '0';" >&2
+  echo "" >&2
+  echo "      **순서가 안전장치다.** 넣는 것이 먼저고 지우는 것이 나중이라, 어느 문장이" >&2
+  echo "      실패해도 표가 비지 않는다 — 트랜잭션도 필요 없다." >&2
+  echo "         첫 문장이 실패하면  아직 아무것도 안 지웠다" >&2
+  echo "         둘째가 실패하면    남길 행은 이미 제자리에 있다" >&2
+  echo "      (한때 여기 START TRANSACTION … DELETE … INSERT … COMMIT 을 적었는데," >&2
+  echo "       INSERT 가 죽어도 COMMIT 까지 가면 **삭제만 확정**된다. 순서로 푸는 편이 낫다.)" >&2
+  echo "" >&2
+  echo "      GREATEST 는 **되돌아가지 않게** 한다 — 지금 든 값이 본 표보다 앞서 있으면" >&2
+  echo "      그 값을 지킨다. ON DUPLICATE KEY 는 UNIQUE_KEY='0' 행이 이미 있을 때를 받는다." >&2
+}
+
+verify_schema() {
+  local schema="$1" t idx name cols got n rows seq base pk gap
+  for t in "${REQUIRED_TABLES[@]}"; do
+    has_table "$schema" "$t" || { echo "    ✗ 테이블 없음: $t" >&2; return 1; }
+  done
+  # **시퀀스 표는 있는 것만으로 부족하다.** Spring Batch 는 여기 든 한 행을 UPDATE 해
+  # 다음 id 를 얻으므로, 표만 있고 비면 잡이 id 를 못 만들고 죽는다. V11 의 INSERT 가
+  # WHERE NOT EXISTS 라 **다시 부으면 채워지는** 종류의 결손이라, 여기서 걸러 조기
+  # 건너뛰기만 막으면 스스로 복구된다.
+  for seq in "${SEQ_TABLES[@]}"; do
+    t="${seq%%|*}"; base="$(echo "$seq" | cut -d'|' -f2)"; pk="${seq##*|}"
+    # **조회 실패를 통과로 만들지 않는다.** 값을 그냥 "0 이 아닌가" 로 보면 조회가 죽어
+    # 빈 문자열이 왔을 때 그 비교가 참이라 정상으로 샌다 — 리뷰가 잡은 fail-open 이었다.
+    # 그래서 **숫자가 왔는가**를 먼저 묻고, 그다음 정확히 한 행인지 본다.
+    rows="$(mysql_in "$schema" -N -e "SELECT COUNT(*) FROM \`$t\`;" 2>&1 | tr -d ' \r')"
+    case "$rows" in
+      ''|*[!0-9]*)
+        echo "    ✗ 시퀀스 행을 못 셌다: $t" >&2
+        echo "      ${rows:-(응답 없음)}" >&2
+        return 1 ;;
+      1)
+        # **개수가 맞아도 값이 낮으면 못 쓴다.** 다음 id 가 본 표의 기존 PK 와 부딪친다.
+        gap="$(mysql_in "$schema" -N -e \
+          "SELECT (SELECT ID FROM \`$t\`) - (SELECT COALESCE(MAX(\`$pk\`),0) FROM \`$base\`);" \
+          2>&1 | tr -d ' \r')"
+        case "$gap" in
+          ''|*[!0-9-]*)
+            echo "    ✗ 시퀀스 값을 못 쟀다: $t" >&2
+            echo "      ${gap:-(응답 없음)}" >&2
+            return 1 ;;
+          -*)
+            echo "    ✗ 시퀀스 값이 본 표보다 낮다: $t (${gap#-} 만큼)" >&2
+            seq_fix "$schema" "$t" "$base" "$pk"
+            return 1 ;;
+        esac
+        ;;
+      *)
+        # **비어 있는 것만 결손이 아니다.** 스프링의 MySQL 증가기는 WHERE 없이
+        # UPDATE ... last_insert_id(id+1) 로 표 전체를 밀고 값 하나만 읽는다.
+        # 그래서 두 행 이상이면 돌려주는 id 가 행 처리 순서에 좌우되어 중복·역행한다.
+        # UNIQUE(UNIQUE_KEY) 는 ('0'),('1') 같은 조합을 못 막으므로 여기서 센다.
+        #
+        # 0 행은 V11 의 INSERT ... WHERE NOT EXISTS 가 다시 채우지만, **2행 이상은
+        # 그 INSERT 가 안 고친다**(이미 있으니 아무것도 안 한다). 그래서 적용까지
+        # 가도 안 풀리고, 사람이 지워야 한다 — 그 사실을 메시지에 적는다.
+        echo "    ✗ 시퀀스 행이 ${rows}개다(1이어야 한다): $t" >&2
+        seq_fix "$schema" "$t" "$base" "$pk"
+        return 1 ;;
+    esac
+  done
+  for idx in "${REQUIRED_INDEXES[@]}"; do
+    t="${idx%%|*}"; name="$(echo "$idx" | cut -d'|' -f2)"; cols="${idx##*|}"
+    n=$(( $(echo "$cols" | tr ',' '\n' | wc -l) ))
+    got="$(index_prefix "$schema" "$t" "$name" "$n")"
+    [ "$got" = "$cols" ] || {
+      echo "    ✗ 인덱스가 다르다: $t.$name 기대=$cols 실제=${got:-없음}" >&2; return 1; }
+  done
+  return 0
+}
+
+for schema in "$@"; do
+  echo "▶ $schema"
+
+  # 재시드 뒤 습관적으로 부르는 것이 목적이라 멱등이어야 한다. 이미 온전하면
+  # 아무것도 안 건드리고 넘어간다.
+  if verify_schema "$schema" 2>/dev/null; then
+    echo "  이미 온전하다 — 건너뛴다"
+    continue
+  fi
+
+  # **부분 적용에서도 다시 달릴 수 있어야 한다.** 사전 확인만으로는 부족하다 —
+  # V11 이 문장 단위로 반쯤 적용된 상태에서 다시 부르면 첫 CREATE TABLE 이
+  # "이미 있다" 로 죽고 나머지를 못 만든다. 스스로 만든 상태에서 못 빠져나온다.
+  #
+  # 그래서 --force 로 **끝까지 달리되 나온 것을 분류한다.** 넘기는 것은 이 넷뿐이다.
+  #   1050 Table already exists   · 1061 Duplicate key name
+  #   1007 Database exists        · 1826 Duplicate foreign key
+  # --force 를 그냥 쓰면 **모든** SQL 오류를 삼켜 중간 실패가 뒤의 성공에 묻힌다.
+  #
+  # **종료 코드도 본다.** stderr 만 보면 docker 가 컨테이너를 못 찾은 경우처럼
+  # ERROR 로 시작하지 않는 실패가 성공으로 새어 나간다 — 리뷰가 그것을 잡았다.
+  # 그래서 두 축으로 가른다.
+  #   ⑴ 넘길 넷을 지우고 남은 줄이 있으면 → 실패 (docker 오류 문구도 여기서 걸린다)
+  #   ⑵ 남은 줄이 없는데 종료 코드가 0 도 아니고 MySQL 오류도 안 났으면 → 실패
+  #      (조용히 죽는 경우. 원인이 안 보이므로 종료 코드를 그대로 싣는다)
+  err_file="$(mktemp)"
+  for f in "${FILES[@]}"; do
+    path="$MIGRATIONS_DIR/$f"
+    [ -f "$path" ] || {
+      echo "  ✗ 마이그레이션이 없다: $path" >&2
+      echo "    이름이 바뀌었으면 이 스크립트와 SchemaPresenceGuard.META_MIGRATIONS 를" >&2
+      echo "    함께 고쳐야 한다." >&2
+      rm -f "$err_file"; exit 1; }
+
+    : > "$err_file"
+    set +e
+    mysql_force "$schema" < "$path" 2>"$err_file"
+    rc=$?
+    set -e
+
+    # ⑴ 넘길 넷과 빈 줄만 지운다. 한 줄이라도 남으면 그게 진짜 실패다.
+    grep -vE "^ERROR (1050|1061|1007|1826) " "$err_file" \
+      | grep -vE "^[[:space:]]*$" > "${err_file}.fatal" || true
+    if [ -s "${err_file}.fatal" ]; then
+      echo "  ✗ $f 적용 실패 (종료 코드 $rc)" >&2
+      sed 's/^/    /' "${err_file}.fatal" >&2
+      rm -f "$err_file" "${err_file}.fatal"; exit 1
+    fi
+    rm -f "${err_file}.fatal"
+
+    # ⑵ 아무 말 없이 죽은 경우.
+    #    **mysql --force 는 SQL 오류를 넘겨도 종료 코드 0 이다**(실측 — ERROR 4줄에 rc=0).
+    #    그러니 SQL 오류 판정은 ⑴ 이 다 하고, 종료 코드는 **연결·docker·클라이언트 자체**가
+    #    죽은 경우만 잡는다. 그 실패는 대개 stderr 를 남기므로 ⑴ 에서 이미 걸리고,
+    #    여기는 아무 말도 없이 죽는 나머지를 받는 그물이다.
+    skipped=$(grep -cE "^ERROR" "$err_file" || true)
+    if [ "$rc" -ne 0 ] && [ "$skipped" -eq 0 ]; then
+      echo "  ✗ $f 적용 실패 — 종료 코드 $rc, 오류 문구 없음" >&2
+      echo "    컨테이너($CONTAINER)가 떠 있는지부터 본다." >&2
+      rm -f "$err_file"; exit 1
+    fi
+
+    if [ "$skipped" -gt 0 ]; then
+      echo "  ✓ $f (이미 있는 객체 ${skipped}건 넘김)"
+    else
+      echo "  ✓ $f"
+    fi
+  done
+  rm -f "$err_file"
+
+  # 부었다고 믿지 않는다. 가드가 보는 축 그대로 다시 잰다.
+  if ! verify_schema "$schema"; then
+    echo "  ✗ 부었는데도 가드 조건을 못 만족한다" >&2
+    exit 1
+  fi
+  echo "  확인 — 메타 표 ${#REQUIRED_TABLES[@]} · 인덱스 ${#REQUIRED_INDEXES[@]}"
+done
+
+echo "완료. 배치를 재기동하면 SchemaPresenceGuard 가 통과한다."
+echo "  (표·시퀀스 행·인덱스만 잰다. 이름은 맞고 모양이 다른 표는 못 잡는다 — 그때는 재시드다.)"

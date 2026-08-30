@@ -44,8 +44,8 @@ public class ApiTopologyValidator {
         BatchTopologyPreflight batch,
         @Value("${benchmark.topology.app-replicas:4}") int expectedAppReplicas,
         @Value("${benchmark.topology.tomcat-workers-total:60}") int expectedTomcatWorkersTotal,
-        @Value("${benchmark.topology.hikari-pool-total:12}") int expectedHikariPoolTotal,
-        @Value("${benchmark.topology.mysql-max-connections:50}") int expectedMysqlMaxConnections,
+        @Value("${benchmark.topology.hikari-pool-total:52}") int expectedHikariPoolTotal,
+        @Value("${benchmark.topology.mysql-max-connections:151}") int expectedMysqlMaxConnections,
         @Value("${benchmark.protocol.load-hold-seconds:5}") int expectedLoadHoldSeconds,
         @Value("${benchmark.protocol.observation-hold-seconds:60}") int expectedObservationHoldSeconds
     ) {

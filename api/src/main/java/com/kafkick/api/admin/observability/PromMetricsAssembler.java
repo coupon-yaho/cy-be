@@ -102,6 +102,8 @@ public class PromMetricsAssembler {
     private static final String TAG_JOB = "job";
     private static final String JOB_API = "api";
     private static final String TAG_INSTANCE = "instance";
+    private static final String TAG_CONSUMER_GROUP = "consumer_group";
+    private static final String ATTEMPT_ARCHIVE_GROUP = "coupon-attempt-archive";
 
     /** 관측 전용 풀. 발급 경로 자원이 아니라 관측기 자신의 커넥션이다. */
     private static final String TAG_POOL = "pool";
@@ -166,7 +168,7 @@ public class PromMetricsAssembler {
         // in-flight · 큐 3영역이 통째로 UNAVAILABLE 이 되지만, 실패 원인 질의가 빠져도 실패
         // 분류 표는 살아 있다(그쪽 분자는 결과 rate 질의에서 나온다). 마지막 자리는 잃는 것이
         // 가장 적은 질의의 것이다.
-        QueryResult saturation = run(saturationQuery(), deadline);
+        QueryResult saturation = run(saturationQuery(window), deadline);
         QueryResult failureReasons =
                 run(OverviewPrometheusContract.failureReasonRates(window.duration()), deadline);
 
@@ -185,6 +187,10 @@ public class PromMetricsAssembler {
                 results, inGroup(UriGroup.ISSUE), http, SourceStatus.NO_TRAFFIC, denominatorTrusted);
         // 처리량도 한 번만 만든다. 큐 패널의 '입장 처리' 가 이 안의 값을 그대로 다시 쓴다.
         TrafficMetrics traffic = traffic(attempts, results, http, denominatorTrusted);
+        DependencyMetrics dependencyMetrics =
+                dependencies(latency, results, saturation, http, denominatorTrusted);
+        ObservedValue<PersistenceLagSummary> persistence =
+                persistence(results, saturation, http, traffic);
 
         return new AdminMetricsResponse(
                 // 예산에 얼마나 근접했는지가 이 값으로만 보인다. 잘려서 UNAVAILABLE 이 나오기
@@ -196,11 +202,11 @@ public class PromMetricsAssembler {
                 consistency(consistency, domain, query),
                 traffic,
                 latency(latency, results, http, denominatorTrusted),
-                dependencies(),
-                notWiredYet(),
+                dependencyMetrics,
+                persistence,
                 List.of(),
                 errors(attempts, results, http, failureReasons, denominatorTrusted),
-                saturation(saturation, http, stock, traffic, query));
+                saturation(saturation, http, stock, traffic, persistence, query));
     }
 
     // ── 질의 ────────────────────────────────────────────────────────────────────
@@ -211,12 +217,18 @@ public class PromMetricsAssembler {
         //
         // ⚠️ 이 질의에는 window 가 없다. 백분위의 관측 창은 Micrometer expiry(observation.yml,
         //    10s)가 정하고 PromQL 로는 바꿀 수 없다 — window 는 rate 계열에만 걸린다.
-        return MetricAggregation.HTTP_LATENCY_SECONDS + "{" + TAG_QUANTILE + "!=\"\"}";
+        return MetricAggregation.HTTP_LATENCY_SECONDS + "{" + TAG_QUANTILE + "!=\"\"}"
+                + " or " + MetricAggregation.KAFKA_TEMPLATE_SECONDS
+                + "{" + TAG_QUANTILE + "!=\"\"}";
     }
 
     private static String resultRateQuery(MetricsWindow window) {
         // window 는 되돌아볼 범위가 아니라 비율을 계산할 집계 창이다. 그래서 질의 안에 들어간다.
-        return "rate(" + MetricAggregation.HTTP_RESULT_TOTAL + "[" + window.seconds() + "s])";
+        return "rate(" + MetricAggregation.HTTP_RESULT_TOTAL + "[" + window.seconds() + "s])"
+                + " or rate(" + MetricAggregation.ATTEMPT_ARCHIVE_RATE + "["
+                + window.seconds() + "s])"
+                + " or rate(" + MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE + "["
+                + window.seconds() + "s])";
     }
 
     /**
@@ -235,15 +247,15 @@ public class PromMetricsAssembler {
     /**
      * 자원 6행 · in-flight · 큐가 쓰는 표본을 한 번에 받습니다.
      *
-     * <p><b>앞쪽 셀렉터에만 {@code job="api"} 를 겁니다.</b> batch 도 CPU · heap · HikariCP 를
-     * 내므로(실측) 라벨이 없으면 관측기 자신의 수치가 발급 경로 자원 행에 섞입니다. 반대로 큐
-     * 길이는 batch 가 유일한 원천이라 그 라벨을 걸면 표본이 통째로 사라집니다 — 그래서 두
-     * 셀렉터를 {@code or} 로 합칩니다.</p>
+     * <p>API 자원과 네트워크 rate에는 {@code job="api"} 를 겁니다. batch 도 CPU · heap ·
+     * HikariCP와 Tomcat 네트워크 미터를 내므로(실측) 라벨이 없으면 관측기 자신의 수치가 발급
+     * 경로 자원 행에 섞입니다. 반대로 큐 길이는 batch 가 유일한 원천이라 그 라벨을 걸면 표본이
+     * 통째로 사라집니다 — 그래서 큐 셀렉터만 job 범위를 두지 않습니다.</p>
      *
      * <p>{@code up} 은 미터가 아니라 Prometheus 가 만드는 시계열이지만 같은 셀렉터로 함께
      * 옵니다. 값을 더하면 살아 있는 인스턴스 수가 됩니다.</p>
      */
-    private static String saturationQuery() {
+    private static String saturationQuery(MetricsWindow window) {
         return "{__name__=~\"" + String.join("|",
                 MetricAggregation.CPU_USAGE,
                 MetricAggregation.JVM_MEMORY_USED,
@@ -254,11 +266,23 @@ public class PromMetricsAssembler {
                 MetricAggregation.TOMCAT_BUSY,
                 MetricAggregation.TOMCAT_MAX,
                 MetricAggregation.HTTP_IN_FLIGHT,
+                MetricAggregation.DISK_FREE,
+                MetricAggregation.DISK_TOTAL,
+                MetricAggregation.KAFKA_CONSUMER_LAG,
+                MetricAggregation.KAFKA_CONSUMER_LAG_MAX,
+                MetricAggregation.KAFKA_TOPICS_PROVISIONED,
+                MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE,
                 MetricAggregation.UP) + "\"," + TAG_JOB + "=\"" + JOB_API + "\"}"
                 + " or {__name__=~\"" + String.join("|",
                 MetricAggregation.QUEUE_LENGTH,
                 MetricAggregation.QUEUE_LENGTH_STATE,
-                MetricAggregation.OBSERVED_COUPON_ID) + "\"}";
+                MetricAggregation.OBSERVED_COUPON_ID) + "\"}"
+                + " or rate(" + MetricAggregation.NETWORK_RECEIVED_RATE
+                + "{" + TAG_JOB + "=\"" + JOB_API + "\"}["
+                + window.seconds() + "s])"
+                + " or rate(" + MetricAggregation.NETWORK_SENT_RATE
+                + "{" + TAG_JOB + "=\"" + JOB_API + "\"}["
+                + window.seconds() + "s])";
     }
 
     private static String consistencyQuery() {
@@ -1120,23 +1144,104 @@ public class PromMetricsAssembler {
         return observedCoupon.isEmpty() || Math.round(observedCoupon.getAsDouble()) != query.couponId();
     }
 
-    /**
-     * Redis·HikariCP·Kafka 의존성 지연입니다.
-     *
-     * <p>세 원천 모두 아직 미터가 없습니다. Redis 지연은 OBS-10 의 명시 wiring 이 있어야 나오고
-     * (없으면 영원히 0 입니다), Kafka 는 OBS-17 의 AdminClient 배선이 필요합니다. 0 을 채우면
-     * 화면이 "지연 없음" 을 그리므로 PENDING 으로 둡니다.</p>
-     */
-    private static DependencyMetrics dependencies() {
+    private static DependencyMetrics dependencies(
+            QueryResult latency, QueryResult results, QueryResult operational,
+            Freshness freshness, boolean denominatorTrusted) {
         return new DependencyMetrics(
                 PromMetricsAssembler.<DependencySnapshot>pending(),
                 PromMetricsAssembler.<DependencySnapshot>pending(),
-                PromMetricsAssembler.<DependencySnapshot>pending());
+                kafkaDependency(latency, results, operational, freshness, denominatorTrusted));
     }
 
-    /** Kafka persist lag 미터는 OBS-17 이 연다. 그전까지 0 이 아니라 빈 값이다. */
-    private static ObservedValue<PersistenceLagSummary> notWiredYet() {
-        return pending();
+    private static ObservedValue<DependencySnapshot> kafkaDependency(
+            QueryResult latency, QueryResult results, QueryResult operational,
+            Freshness freshness, boolean denominatorTrusted) {
+        // 세 질의 중 하나라도 실패하면 일부 표본으로 정상처럼 조립하지 않고 UNAVAILABLE 로
+        // 중단한다. 질의는 성공했지만 준비 상태·분모·지연·신선도 중 하나가 없으면 PENDING,
+        // 준비 상태가 값을 싣지 않는 상태면 그 상태를 그대로 보존한다. 신뢰 가능한 요청이
+        // 0건일 때만 Kafka 의존성이 적용되지 않았다는 N_A 로 내린다.
+        if (latency.unavailable() || results.unavailable() || operational.unavailable()) {
+            return unavailable();
+        }
+        Optional<SourceStatus> provisioned = readState(
+                MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE,
+                operational.filter(named(MetricAggregation.KAFKA_TOPICS_PROVISIONED_STATE)));
+        if (provisioned.isEmpty()) {
+            return pending();
+        }
+        if (!provisioned.get().carriesValue()) {
+            return new ObservedValue<>(null, provisioned.get(), null);
+        }
+        if (!denominatorTrusted) {
+            return pending();
+        }
+        OptionalDouble attempts = reduceOrUnknown(MetricAggregation.HTTP_RESULT_TOTAL,
+                results.filter(inGroup(UriGroup.ISSUE)));
+        if (attempts.isEmpty()) {
+            return pending();
+        }
+        if (attempts.getAsDouble() == 0d) {
+            return notApplicable();
+        }
+        List<PromSample> kafkaLatency = latency.filter(
+                named(MetricAggregation.KAFKA_TEMPLATE_SECONDS));
+        OptionalDouble p95 = kafkaQuantile(kafkaLatency, Q_P95);
+        OptionalDouble p99 = kafkaQuantile(kafkaLatency, Q_P99);
+        if (p95.isEmpty() || p99.isEmpty() || !freshness.known()) {
+            return pending();
+        }
+        OptionalDouble failures = reduceOrUnknown(
+                MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE,
+                results.filter(named(MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE)));
+        if (failures.isEmpty()) {
+            return pending();
+        }
+        double errorRate = failures.getAsDouble() / attempts.getAsDouble();
+        return new ObservedValue<>(
+                new DependencySnapshot(millis(p95), millis(p99), errorRate),
+                freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID,
+                freshness.observedAt());
+    }
+
+    private static OptionalDouble kafkaQuantile(List<PromSample> samples, String quantile) {
+        return reduceOrUnknown(MetricAggregation.KAFKA_TEMPLATE_SECONDS,
+                samples.stream()
+                        .filter(label(TAG_QUANTILE, quantile))
+                        .filter(sample -> !sample.label(TAG_INSTANCE).isEmpty())
+                        .toList());
+    }
+
+    private static ObservedValue<PersistenceLagSummary> persistence(
+            QueryResult results, QueryResult operational, Freshness freshness, TrafficMetrics traffic) {
+        // 결과·운영 질의가 실패하면 계산을 중단하고 UNAVAILABLE 로 내린다. 질의는 성공했지만
+        // 파티션 lag·최대 lag·처리율·유입률·신선도 중 하나가 없으면 0을 만들지 않고 PENDING,
+        // 필요한 값이 모두 있으면 HTTP 신선도에 따라 VALID 또는 STALE 로 보존한다.
+        if (results.unavailable() || operational.unavailable()) {
+            return unavailable();
+        }
+        List<PromSample> lag = operational.filter(named(MetricAggregation.KAFKA_CONSUMER_LAG)
+                .and(label(TAG_CONSUMER_GROUP, ATTEMPT_ARCHIVE_GROUP)));
+        List<PromSample> lagMax = operational.filter(named(MetricAggregation.KAFKA_CONSUMER_LAG_MAX)
+                .and(label(TAG_CONSUMER_GROUP, ATTEMPT_ARCHIVE_GROUP)));
+        OptionalDouble lagTotal = reduceOrUnknown(MetricAggregation.KAFKA_CONSUMER_LAG, lag);
+        OptionalDouble partitionMax = reduceOrUnknown(MetricAggregation.KAFKA_CONSUMER_LAG_MAX, lagMax);
+        OptionalDouble consumeRate = reduceOrUnknown(MetricAggregation.ATTEMPT_ARCHIVE_RATE,
+                results.filter(named(MetricAggregation.ATTEMPT_ARCHIVE_RATE)));
+        Double arrivalRate = traffic.issueAttemptRps().value();
+        if (lagTotal.isEmpty() || partitionMax.isEmpty() || consumeRate.isEmpty()
+                || arrivalRate == null || !freshness.known()) {
+            return pending();
+        }
+        double netDrainRate = consumeRate.getAsDouble() - arrivalRate;
+        Long etaMillis = netDrainRate > 0d
+                ? Math.round(lagTotal.getAsDouble() / netDrainRate * 1_000d)
+                : null;
+        return new ObservedValue<>(
+                new PersistenceLagSummary(
+                        Math.round(lagTotal.getAsDouble()), Math.round(partitionMax.getAsDouble()),
+                        arrivalRate, consumeRate.getAsDouble(), netDrainRate, etaMillis),
+                freshness.stale() ? SourceStatus.STALE : SourceStatus.VALID,
+                freshness.observedAt());
     }
 
     // ── 자원 포화 ───────────────────────────────────────────────────────────────
@@ -1152,11 +1257,13 @@ public class PromMetricsAssembler {
      * HTTP 시각으로 판정하면 늘 낡아 보입니다.</p>
      */
     private SaturationPanel saturation(QueryResult samples, Freshness http, Freshness stock,
-                                       TrafficMetrics traffic, MetricsQuery query) {
+                                       TrafficMetrics traffic,
+                                       ObservedValue<PersistenceLagSummary> persistence,
+                                       MetricsQuery query) {
         return new SaturationPanel(
                 resources(samples, http),
                 inFlight(samples, http),
-                queues(samples, stock, traffic, query),
+                queues(samples, stock, traffic, persistence, query),
                 SaturationPanel.THRESHOLDS);
     }
 
@@ -1183,8 +1290,7 @@ public class PromMetricsAssembler {
                                 MetricAggregation.MAX)),
                 // 아래 둘은 사용률의 분모가 없다. 0 으로 채우면 "여유" 를 그린다.
                 row(ResourceRowSpec.REDIS, ResourceRowSpec.REDIS.detail(), notApplicable()),
-                row(ResourceRowSpec.DISK_NETWORK, ResourceRowSpec.DISK_NETWORK.detail(),
-                        notApplicable()));
+                diskNetworkRow(samples, freshness));
     }
 
     private static ResourceRow row(ResourceRowSpec spec, String detail, ObservedValue<Double> utilization) {
@@ -1219,6 +1325,58 @@ public class PromMetricsAssembler {
                 samples.filter(named(MetricAggregation.CPU_USAGE)));
         return observedPercent(ratio.isEmpty() ? ratio : OptionalDouble.of(ratio.getAsDouble() * 100d),
                 freshness);
+    }
+
+    private static ResourceRow diskNetworkRow(QueryResult samples, Freshness freshness) {
+        // 묶음 질의 자체가 실패하면 행을 유지한 채 UNAVAILABLE 로 내린다. 질의는 성공했지만 디스크
+        // 표본이 없으면 사용률은 PENDING이고, RX/TX 중 하나가 없으면 사용률 상태는 보존하면서
+        // 상세 문구만 "네트워크 처리량 원천 없음"으로 내린다.
+        if (samples.unavailable()) {
+            return row(ResourceRowSpec.DISK_NETWORK, ResourceRowSpec.DISK_NETWORK.detail(), unavailable());
+        }
+        Map<String, List<PromSample>> byInstance = new LinkedHashMap<>();
+        for (PromSample sample : samples.filter(named(MetricAggregation.DISK_TOTAL)
+                .or(named(MetricAggregation.DISK_FREE)))) {
+            if (!sample.label(TAG_INSTANCE).isEmpty()) {
+                byInstance.computeIfAbsent(sample.label(TAG_INSTANCE), ignored -> new ArrayList<>())
+                        .add(sample);
+            }
+        }
+        List<PromSample> utilization = new ArrayList<>();
+        for (Map.Entry<String, List<PromSample>> entry : byInstance.entrySet()) {
+            OptionalDouble total = MetricAggregation.MAX.reduce(entry.getValue().stream()
+                    .filter(named(MetricAggregation.DISK_TOTAL)).toList());
+            OptionalDouble free = MetricAggregation.MAX.reduce(entry.getValue().stream()
+                    .filter(named(MetricAggregation.DISK_FREE)).toList());
+            if (total.isPresent() && free.isPresent() && total.getAsDouble() > 0d) {
+                double usedPercent = Math.max(0d,
+                        (total.getAsDouble() - free.getAsDouble()) / total.getAsDouble() * 100d);
+                utilization.add(new PromSample(
+                        MetricAggregation.DISK_TOTAL,
+                        Map.of(TAG_INSTANCE, entry.getKey()), usedPercent,
+                        entry.getValue().get(0).evaluatedAt()));
+            }
+        }
+        OptionalDouble diskPercent = utilization.stream().mapToDouble(PromSample::value).max();
+        OptionalDouble received = reduceOrUnknown(MetricAggregation.NETWORK_RECEIVED_RATE,
+                samples.filter(named(MetricAggregation.NETWORK_RECEIVED_RATE)));
+        OptionalDouble sent = reduceOrUnknown(MetricAggregation.NETWORK_SENT_RATE,
+                samples.filter(named(MetricAggregation.NETWORK_SENT_RATE)));
+        String detail = received.isPresent() && sent.isPresent()
+                ? "RX " + bytesPerSecond(received.getAsDouble())
+                        + " · TX " + bytesPerSecond(sent.getAsDouble())
+                : "네트워크 처리량 원천 없음";
+        return row(ResourceRowSpec.DISK_NETWORK, detail, observedPercent(diskPercent, freshness));
+    }
+
+    private static String bytesPerSecond(double bytes) {
+        if (bytes >= 1024d * 1024d) {
+            return String.format(Locale.ROOT, "%.1f MiB/s", bytes / (1024d * 1024d));
+        }
+        if (bytes >= 1024d) {
+            return String.format(Locale.ROOT, "%.1f KiB/s", bytes / 1024d);
+        }
+        return String.format(Locale.ROOT, "%.0f B/s", bytes);
     }
 
     /**
@@ -1353,7 +1511,8 @@ public class PromMetricsAssembler {
      * PENDING 입니다 — 원천이 없는 것과 큐가 빈 것은 다른 사건입니다.</p>
      */
     private List<QueueZoneSummary> queues(
-            QueryResult samples, Freshness stock, TrafficMetrics traffic, MetricsQuery query) {
+            QueryResult samples, Freshness stock, TrafficMetrics traffic,
+            ObservedValue<PersistenceLagSummary> persistence, MetricsQuery query) {
         ObservedValue<Double> waiting = toDouble(pairedLong(samples,
                 MetricAggregation.QUEUE_LENGTH, MetricAggregation.QUEUE_LENGTH_STATE,
                 any(), stock, query, MetricAggregation.OBSERVED_COUPON_ID));
@@ -1365,8 +1524,28 @@ public class PromMetricsAssembler {
                         // 추세는 한 시점 질의로 만들 수 없다. range 질의는 OBS-34 가 연다.
                         pending(),
                         pending())),
-                zone(QueueZone.PERSISTENCE, List.of(pending(), pending(), pending(), pending())),
+                zone(QueueZone.PERSISTENCE, persistenceQueue(persistence)),
                 zone(QueueZone.TELEMETRY, List.of(pending())));
+    }
+
+    private static List<ObservedValue<Double>> persistenceQueue(
+            ObservedValue<PersistenceLagSummary> persistence) {
+        if (persistence.value() == null) {
+            ObservedValue<Double> absent = new ObservedValue<>(
+                    null, persistence.state(), persistence.observedAt());
+            return List.of(absent, absent, absent, absent);
+        }
+        PersistenceLagSummary value = persistence.value();
+        return List.of(
+                queueValue(value.lagTotal(), persistence),
+                queueValue(value.arrivalRate(), persistence),
+                queueValue(value.consumeRate(), persistence),
+                queueValue(value.arrivalRate() - value.consumeRate(), persistence));
+    }
+
+    private static ObservedValue<Double> queueValue(
+            double value, ObservedValue<PersistenceLagSummary> source) {
+        return new ObservedValue<>(value, source.state(), source.observedAt());
     }
 
     private static QueueZoneSummary zone(QueueZone zone, List<ObservedValue<Double>> values) {

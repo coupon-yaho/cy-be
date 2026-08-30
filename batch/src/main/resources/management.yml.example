@@ -23,8 +23,17 @@ management:
   endpoints:
     web:
       exposure:
+        # ⚠️ **노출 목록의 정본은 여기다.** spring.config.import 로 들어오는 문서는
+        #    선언 문서(application.yml)를 **이긴다** — 예전에 양쪽에 두었더니 여기 4개가
+        #    저쪽 11개를 조용히 덮어 /actuator/loggers 가 열렸다(실측:
+        #    ActuatorWildcardExposureTest 가 200 을 받았다). loggers 는 읽기가 아니라
+        #    POST 로 런타임 로그 레벨을 바꾸는 **쓰기**다.
+        #
+        # 막는 본체는 include 화이트리스트다 — 여기 없는 것은 애초에 안 열린다.
+        # exclude 는 누가 include 를 * 로 바꾸는 날의 이중 방어다. include 가 * 일 때
+        # 실제로 열리는 것을 재 보니 16개였고, 그중 위험한 것을 전부 적었다.
         include: health,metrics,prometheus
-        exclude: env,configprops,beans,heapdump
+        exclude: env,configprops,beans,heapdump,loggers,threaddump,mappings,scheduledtasks,conditions,flyway,sbom
   health:
     # ⚠️ 이걸 빼면 batch 의 /actuator/health 가 DOWN 으로 굳는다. spring-boot-starter-data-redis 를
     #    올린 것만으로 RedisHealthContributorAutoConfiguration 이 붙어 localhost:6379 로 PING 을

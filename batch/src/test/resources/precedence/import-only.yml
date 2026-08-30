@@ -1,0 +1,6 @@
+# 덮어쓰기를 같은 문서에 둔 경우 — 지는 쪽
+spring:
+  config:
+    import: classpath:/precedence/imported.yml
+probe:
+  winner: declaring-same-document

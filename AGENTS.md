@@ -55,7 +55,7 @@ DB 계층 방어선이 됐지만, 소스 스캔은 그보다 **먼저** (CI 에�
 
 ### C. admin API 의 역할 헤더가 서명 없이 위조 가능하다
 
-`api/admin/support/AdminAuthorizationInterceptor` 가 `/api/v1/admin/**` 에서 `X-User-Role: ADMIN` 만 확인한다. 서명이 없어 클라이언트가 그대로 보내면 통과한다. `Caller`(`X-User-Id`)도 같은 성질이고, 그 레코드 javadoc 이 스스로 *"이 값을 권한 판정에 쓰지 않는다"* 고 적어 두었다.
+`api/admin/support/AdminAuthorizationInterceptor` 가 `/api/v1/admin/**` 에서 `X-User-Role: ADMIN` 만 확인한다. 서명이 없어 클라이언트가 그대로 보내면 통과한다. `Caller`(`X-Member-Id`)도 같은 성질이고, 그 레코드 javadoc 이 스스로 *"이 값을 권한 판정에 쓰지 않는다"* 고 적어 두었다.
 
 **CY-338 이 만든 문제가 아니다** — admin 엔드포인트 7종이 같은 문 뒤에 있고 CY-338 은 그중 하나(`GET /api/v1/admin/batch-executions`)를 추가했을 뿐이다.
 

@@ -28,6 +28,7 @@ public class PublicCouponRoundQueryAdapter
     @Override
     public PublicCouponRoundPage findPage(
             CouponRoundStatus status,
+            MembershipGrade eligibleGrade,
             int page,
             int size
     ) {
@@ -35,6 +36,9 @@ public class PublicCouponRoundQueryAdapter
             Page<CouponRoundDetailProjection> result =
                     couponRoundJpaRepository.findPublicCouponRounds(
                             status == null ? null : status.name(),
+                            eligibleGrade == null
+                                    ? null
+                                    : eligibleGrade.getBitValue(),
                             PageRequest.of(page, size)
                     );
 

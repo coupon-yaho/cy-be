@@ -1,0 +1,32 @@
+# batch/src/test/resources/application.yml 과 같은 이유로 존재한다.
+#
+# 이게 없으면 테스트가 main/resources/application.yml 을 읽는데, 그 파일은 .gitignore 대상이라
+# 있는 사람과 없는 사람의 결과가 갈린다. .example 을 복사한 순간 그 안의
+# spring.config.import: classpath:storage.yml 이 실파일을 못 찾아
+# ApiApplicationTests 가 ConfigDataResourceNotFoundException 으로 죽는다.
+#
+# 문서가 "각자 .example 을 복사해 쓴다" 를 원칙으로 세웠으므로,
+# 그 원칙을 따른 사람의 테스트가 깨지면 안 된다.
+spring:
+  # ⚠️ **이 파일은 main/resources/application.yml 을 가린다.** 그래서 여기에 없는 키는
+  #    api 컨텍스트에서 통째로 사라진다 — main 합류 뒤 실제로 그 일이 났다:
+  #    coupon.idempotency.* 를 못 찾아 idempotencyExecutionService 가 안 만들어지고
+  #    api 테스트 스무 개가 컨텍스트 로드에서 죽었다(실측).
+  #
+  #    그래서 **가리는 대신 얹는다.** 아래 import 가 빌드가 만든 .example 사본을 먼저
+  #    읽고, 이 파일의 키가 그 위를 덮는다. 새 키가 .example 에 생겨도 따라온다.
+  config:
+    import: classpath:/resolved/application.yml
+
+  flyway:
+    enabled: true          # api 가 마이그레이션 소유자다. 테스트 스키마도 여기서 만든다
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      # 운영(storage.yml)과 같은 값이어야 이 테스트가 엔티티와 스키마의 드리프트를 잡는다.
+      # ApiApplicationTests 는 전체 엔티티가 Flyway 로 만든 실제 MySQL 스키마와 만나는 유일한 지점이다.
+      #
+      # 지금은 구체 @Entity 가 0개(BaseEntity·UpdatableEntity 는 @MappedSuperclass)라
+      # 공허하게 통과한다. 엔티티가 생기는 날부터 일한다 — 그때 none 이었으면
+      # 마이그레이션과 어긋나도 컨텍스트가 뜨고, 운영 기동에서야 처음 터진다.
+      ddl-auto: validate
