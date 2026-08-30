@@ -1,6 +1,7 @@
 // 정답 매니페스트와 검출을 양방향으로 대조합니다.
 package com.kafkick.storage.db.verification;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -122,6 +123,48 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
                 .single();
 
         return count == null ? 0 : count;
+    }
+
+    /**
+     * <b>종류별로 "행수 ÷ 그 종류가 쓴 규칙 수" 를 더한다.</b> 오염 하나가 자기 규칙마다
+     * 한 행씩 낳으므로, 그 나눗셈이 곧 그 종류에 심은 오염 수다.
+     *
+     * <p><b>나눗셈이 딱 떨어지지 않으면 계약이 깨진 것이다</b> — 어떤 오염 종류가 규칙
+     * 하나에만 행을 더 남겼다는 뜻이고, 그러면 이 값 자체가 무의미하다.
+     *
+     * <p>그때 <b>반올림해서 넘기지 않는다.</b> 그러면 그럴듯한 숫자가 제출물과 화면에
+     * 실리고, 틀렸다는 것을 아무도 못 본다 — 이 응답은 매일 공개 저장소에 커밋된다.
+     * 없는 숫자보다 <b>틀린 숫자가 나쁘다</b>는 것이 이 필드를 만든 이유이기도 하다.
+     * 그래서 소수부가 남으면 그 사실과 실제 값을 싣고 죽는다.
+     *
+     * <p>(지금 데이터는 {@code 700.0000} 으로 떨어지는 것을 실측했다.)
+     */
+    @Override
+    public int corruptionCountOf(long seedRunId) {
+        BigDecimal total = jdbcClient.sql("""
+                        SELECT SUM(rows_per_type / rules_per_type)
+                          FROM (SELECT COUNT(*)                     AS rows_per_type,
+                                       COUNT(DISTINCT finding_type) AS rules_per_type
+                                  FROM expected_findings
+                                 WHERE seed_run_id = :seedRunId
+                                 GROUP BY corrupt_type) per_type
+                        """)
+                .param("seedRunId", seedRunId)
+                .query(BigDecimal.class)
+                .optional()
+                .orElse(null);
+
+        if (total == null) {
+            return 0;
+        }
+        if (total.stripTrailingZeros().scale() > 0) {
+            throw new IllegalStateException(
+                    ("오염 수가 정수로 안 떨어집니다: seedRunId=%d 합=%s. "
+                            + "오염 하나가 자기 규칙마다 한 행씩 낳는다는 계약이 깨졌습니다 "
+                            + "— docs/contract.json 의 corruption.matrix 와 expected_findings 를 "
+                            + "맞대 보십시오.").formatted(seedRunId, total.toPlainString()));
+        }
+        return total.intValueExact();
     }
 
     @Override
