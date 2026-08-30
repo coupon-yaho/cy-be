@@ -36,9 +36,9 @@ batch의 관리 포트는 호스트에 공개하지 않고 Prometheus만 Docker 
 | runtime-config GET | 501 | Provider가 미연결. |
 | runtime-config PUT | 501 | CAS 구현이 미연결. |
 
-모든 실서버 요청에는 `X-User-Id: 1`, `X-User-Role: ADMIN`을 넣었다. 목 서버는 인증을
-생략하므로 그 명령을 실배포에 그대로 쓰면 안 된다. `coupon-metrics`는 경로 형태가 달라
-OBS-38에서 별도로 다룬다.
+모든 실서버 요청에는 `X-User-Id: 1`, `X-User-Role: ADMIN`을 넣었다(당시 기록 — 회원 식별
+헤더는 이후 `X-Member-Id` 로 통일됐다). 목 서버는 인증을 생략하므로 그 명령을 실배포에
+그대로 쓰면 안 된다. `coupon-metrics`는 경로 형태가 달라 OBS-38에서 별도로 다룬다.
 
 ## main 병합 뒤에 반드시 갱신할 것
 
@@ -49,7 +49,7 @@ CY-5가 `main`에 병합되어 Docker 배포 워크플로가 성공하면, `api-
    전환하거나, 추적 가능한 새 `v*` 태그로 함께 전환한다.
 2. `docker compose pull` 뒤 API·batch·Prometheus를 재생성한다. batch도 반드시 교체해야
    `/actuator/prometheus`가 9092에서 살아 `up{job="batch"} == 1`이 된다.
-3. 18080에서 위 7개 계약을 `X-User-Id: 1`·`X-User-Role: ADMIN` 헤더와 함께 재실측한다.
+3. 18080에서 위 7개 계약을 `X-Member-Id: 1`·`X-User-Role: ADMIN` 헤더와 함께 재실측한다.
    목 서버는 인증을 생략하므로 그 명령을 실배포에 그대로 쓰면 안 된다.
 4. Prometheus에서 `up{job="api"} == 1`, `up{job="batch"} == 1`, `app_*` 시계열 수집을
    실측한다.

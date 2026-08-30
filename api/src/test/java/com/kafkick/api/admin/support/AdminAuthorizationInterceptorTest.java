@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.support.exception.BusinessException;
 
 /** 관리자 interceptor의 역할 검사와 CORS preflight 예외 동작을 단위 검증합니다. */
@@ -49,7 +50,7 @@ class AdminAuthorizationInterceptorTest {
     private MockHttpServletRequest request(String userId, String role) {
         MockHttpServletRequest request = new MockHttpServletRequest();
         if (userId != null) {
-            request.addHeader("X-User-Id", userId);
+            request.addHeader(MemberRequestHeaders.MEMBER_ID, userId);
         }
         if (role != null) {
             request.addHeader("X-User-Role", role);

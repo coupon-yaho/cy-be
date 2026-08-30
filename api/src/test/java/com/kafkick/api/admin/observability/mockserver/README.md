@@ -26,7 +26,7 @@ MOCK_PORT=18081 ./gradlew :api:mockServer
 
 ## 보장하지 않는 범위
 
-이 서버는 인증을 검사하지 않으므로 `X-User-Id`가 필요하지 않습니다. 또한
+이 서버는 인증을 검사하지 않으므로 `X-Member-Id`가 필요하지 않습니다. 또한
 `GlobalExceptionHandler` 경로의 오류 본문과 게이트웨이 오류를 재현하지 않습니다. 따라서 프론트의
 HTML 오류 응답 파싱 방어는 계속 필요합니다.
 

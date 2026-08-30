@@ -19,6 +19,7 @@ import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 
 import tools.jackson.databind.json.JsonMapper;
 
+import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.admin.support.config.AdminAnalyticsProperties;
 import com.kafkick.api.support.GlobalExceptionHandler;
 import com.kafkick.api.support.RequestIdFilter;
@@ -276,7 +277,7 @@ public final class AdminControllerContractTestSupport {
         if (defaultAdminHeaders) {
             // 정상 API 계약 테스트가 인증 실패에 가려지지 않도록 검증된 관리자 헤더를 공통 적용합니다.
             builder.defaultRequest(get("/")
-                    .header(HeaderCallerResolver.USER_ID_HEADER, "812934")
+                    .header(MemberRequestHeaders.MEMBER_ID, "812934")
                     .header(AdminAuthorizationInterceptor.USER_ROLE_HEADER, "ADMIN")
                     .header(BenchmarkCommandAuthorizationInterceptor.SECRET_HEADER,
                         "test-benchmark-secret-at-least-32-bytes"));
