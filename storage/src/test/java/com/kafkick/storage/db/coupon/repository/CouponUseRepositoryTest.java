@@ -65,6 +65,7 @@ import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.CouponCancelService;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
+import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.RepositoryTest;
 
@@ -741,7 +742,8 @@ class CouponUseRepositoryTest {
                 issuanceRepository,
                 couponStockRepository,
                 issuanceHistoryRepository,
-                () -> "DEFGHJKLM2345678"
+                () -> "DEFGHJKLM2345678",
+                org.mockito.Mockito.mock(NotificationRequestService.class)
         );
         executor = Executors.newFixedThreadPool(2);
         CountDownLatch ready = new CountDownLatch(2);
@@ -847,7 +849,8 @@ class CouponUseRepositoryTest {
                 () -> String.format(
                         "E%015d",
                         codeSequence.incrementAndGet()
-                )
+                ),
+                org.mockito.Mockito.mock(NotificationRequestService.class)
         );
         executor = Executors.newFixedThreadPool(4);
         CountDownLatch ready = new CountDownLatch(4);

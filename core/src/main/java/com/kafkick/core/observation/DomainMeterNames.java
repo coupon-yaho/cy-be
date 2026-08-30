@@ -82,6 +82,9 @@ public final class DomainMeterNames {
     // api 는 infra:mq 를 runtimeOnly 로만 의존해서 그 모듈의 상수를 컴파일 타임에 볼 수 없다.
     // 이름을 저쪽에 두면 조회하는 쪽이 문자열을 옮겨 적는 것 말고는 방법이 없다.
 
+    /** 종결된 고객 알림 수. {@code result=success|failure} 두 값으로만 나뉜다. */
+    public static final String NOTIFY_SENT = "app.notify.sent";
+
     /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
      *
