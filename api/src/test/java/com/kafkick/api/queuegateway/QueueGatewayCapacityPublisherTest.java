@@ -12,6 +12,7 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.availability.ApplicationAvailability;
 import org.springframework.boot.availability.ReadinessState;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import com.kafkick.core.queuegateway.QueueGatewayStatePort;
 
@@ -58,6 +59,17 @@ class QueueGatewayCapacityPublisherTest {
         publisher.removeCapacity();
 
         verify(port).removeCapacity("api-1");
+    }
+
+    @Test
+    void capacityUsesAFixedRateSoRedisCallTimeDoesNotShiftTheOneSecondCadence() throws Exception {
+        Scheduled schedule = QueueGatewayCapacityPublisher.class
+                .getDeclaredMethod("publishCapacity")
+                .getAnnotation(Scheduled.class);
+
+        org.assertj.core.api.Assertions.assertThat(schedule.fixedRateString())
+                .isEqualTo("${queue.gateway.publisher.capacity-interval:1s}");
+        org.assertj.core.api.Assertions.assertThat(schedule.fixedDelayString()).isEmpty();
     }
 
     private static QueueGatewayCapacityPublisher publisher(

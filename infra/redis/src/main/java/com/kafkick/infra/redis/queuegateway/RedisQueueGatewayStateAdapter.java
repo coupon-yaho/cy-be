@@ -20,7 +20,7 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
     static final String CAPACITY_KEY = "capacity:coupon-svc:v1";
     static final String ACTIVE_COUPONS_KEY = "coupons:active";
     static final String POLICY_KEY = "coupon:policy";
-    static final String STOCK_PREFIX = "stock:";
+    static final String STOCK_PREFIX = "stock:{";
 
     private static final RedisScript<Long> PUBLISH_SCRIPT = new DefaultRedisScript<>("""
             local activeType = redis.call('TYPE', KEYS[1])['ok']
@@ -39,14 +39,14 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
               local offset = 3 + ((index - 1) * 3)
               local couponId = ARGV[offset]
               incoming[couponId] = true
-              local stockKey = 'stock:' .. couponId
+              local stockKey = 'stock:{' .. couponId .. '}'
               local stockType = redis.call('TYPE', stockKey)['ok']
               if stockType ~= 'none' and stockType ~= 'string' then
                 return redis.error_reply('invalid type for ' .. stockKey)
               end
             end
             for _, couponId in ipairs(previous) do
-              local stockKey = 'stock:' .. couponId
+              local stockKey = 'stock:{' .. couponId .. '}'
               local stockType = redis.call('TYPE', stockKey)['ok']
               if stockType ~= 'none' and stockType ~= 'string' then
                 return redis.error_reply('invalid type for ' .. stockKey)
@@ -57,7 +57,7 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
               if not incoming[couponId] then
                 redis.call('SREM', KEYS[1], couponId)
                 redis.call('HDEL', KEYS[2], couponId)
-                redis.call('DEL', 'stock:' .. couponId)
+                redis.call('DEL', 'stock:{' .. couponId .. '}')
               end
             end
             for index = 1, count do
@@ -66,7 +66,7 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
               local hasStock = ARGV[offset + 1]
               local stock = ARGV[offset + 2]
               if hasStock == '1' then
-                redis.call('SET', 'stock:' .. couponId, stock)
+                redis.call('SET', 'stock:{' .. couponId .. '}', stock)
               end
               redis.call('HSET', KEYS[2], couponId, cjson.encode({mode = ARGV[1]}))
               redis.call('SADD', KEYS[1], couponId)
@@ -124,5 +124,9 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
         if (instanceId == null || instanceId.isBlank()) {
             throw new IllegalArgumentException("instanceId는 비어 있을 수 없습니다.");
         }
+    }
+
+    static String stockKey(long couponId) {
+        return STOCK_PREFIX + couponId + "}";
     }
 }

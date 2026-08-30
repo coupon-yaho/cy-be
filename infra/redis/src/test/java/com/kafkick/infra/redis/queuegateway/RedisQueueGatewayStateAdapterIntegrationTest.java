@@ -61,7 +61,7 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
     void publishesCapacityAndAtomicallyReconcilesTheFullCouponSnapshot() {
         redis.opsForSet().add("coupons:active", "9");
         redis.opsForHash().put("coupon:policy", "9", "{\"mode\":\"OFF\"}");
-        redis.opsForValue().set("stock:9", "1");
+        redis.opsForValue().set("stock:{9}", "1");
 
         adapter.reportCapacity("api-1", 250L, NOW);
         adapter.publishCouponRounds(List.of(
@@ -72,9 +72,9 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
         assertThat(redis.opsForHash().get("capacity:coupon-svc:v1", "api-1"))
                 .isEqualTo("{\"credits\":250,\"ts\":1788145200}");
         assertThat(redis.opsForSet().members("coupons:active")).containsExactlyInAnyOrder("10", "11");
-        assertThat(redis.opsForValue().get("stock:10")).isEqualTo("7");
-        assertThat(redis.hasKey("stock:11")).isFalse();
-        assertThat(redis.hasKey("stock:9")).isFalse();
+        assertThat(redis.opsForValue().get("stock:{10}")).isEqualTo("7");
+        assertThat(redis.hasKey("stock:{11}")).isFalse();
+        assertThat(redis.hasKey("stock:{9}")).isFalse();
         assertThat(redis.opsForHash().get("coupon:policy", "10"))
                 .isEqualTo("{\"mode\":\"ALWAYS\"}");
         assertThat(redis.opsForHash().get("coupon:policy", "11"))
@@ -86,7 +86,7 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
 
     @Test
     void unavailableOpenRoundPreservesLastNormalStockAndRepeatedSnapshotsConverge() {
-        redis.opsForValue().set("stock:11", "5");
+        redis.opsForValue().set("stock:{11}", "5");
         List<QueueGatewayCouponRoundState> snapshot = List.of(
                 new QueueGatewayCouponRoundState(11L, null, SourceStatus.UNAVAILABLE, null));
 
@@ -94,7 +94,7 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
         adapter.publishCouponRounds(snapshot, QueueMode.ADAPTIVE);
 
         assertThat(redis.opsForSet().members("coupons:active")).containsExactly("11");
-        assertThat(redis.opsForValue().get("stock:11")).isEqualTo("5");
+        assertThat(redis.opsForValue().get("stock:{11}")).isEqualTo("5");
         assertThat(redis.opsForHash().get("coupon:policy", "11"))
                 .isEqualTo("{\"mode\":\"ADAPTIVE\"}");
     }
@@ -102,13 +102,13 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
     @Test
     void preflightTypeFailureDoesNotPartiallyChangeAHealthySnapshot() {
         redis.opsForSet().add("coupons:active", "10");
-        redis.opsForValue().set("stock:10", "7");
+        redis.opsForValue().set("stock:{10}", "7");
         redis.opsForValue().set("coupon:policy", "wrong-type");
 
         assertThatThrownBy(() -> adapter.publishCouponRounds(List.of(state(10L, 8L)), QueueMode.OFF))
                 .isInstanceOf(RuntimeException.class);
 
-        assertThat(redis.opsForValue().get("stock:10")).isEqualTo("7");
+        assertThat(redis.opsForValue().get("stock:{10}")).isEqualTo("7");
         assertThat(redis.opsForSet().members("coupons:active")).containsExactly("10");
     }
 

@@ -76,7 +76,7 @@ class RedisQueueGatewayStateAdapterTest {
         assertThat(RedisQueueGatewayStateAdapter.CAPACITY_KEY).isEqualTo("capacity:coupon-svc:v1");
         assertThat(RedisQueueGatewayStateAdapter.ACTIVE_COUPONS_KEY).isEqualTo("coupons:active");
         assertThat(RedisQueueGatewayStateAdapter.POLICY_KEY).isEqualTo("coupon:policy");
-        assertThat(RedisQueueGatewayStateAdapter.STOCK_PREFIX).isEqualTo("stock:");
+        assertThat(RedisQueueGatewayStateAdapter.stockKey(10L)).isEqualTo("stock:{10}");
     }
 
     private static RedisQueueGatewayStateAdapter adapter(StringRedisTemplate redis) {
