@@ -2,14 +2,18 @@ package com.kafkick.infra.redis.coupon.v2;
 
 import java.time.Instant;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -17,6 +21,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 
 import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
 import com.kafkick.core.admin.preparation.V2PreparationSource;
+import com.kafkick.core.coupon.v2.IssuedValueCodec;
+import com.kafkick.core.coupon.v2.IssuedValueCorruptException;
 import com.kafkick.core.coupon.v2.port.GateStatus;
 import com.kafkick.core.observation.SourceStatus;
 
@@ -26,6 +32,7 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
     private static final Logger log = LoggerFactory.getLogger(RedisV2AdminPreparationReader.class);
     private static final long MISSING = 0L;
     private static final long VALID = 1L;
+    private static final long ISSUED_SCAN_COUNT = 200L;
 
     private static final RedisScript<List> READINESS_SCRIPT = new DefaultRedisScript<>("""
             local stockType = redis.call('TYPE', KEYS[1])['ok']
@@ -44,6 +51,7 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
             end
 
             local warmupReady = 1
+            local issuedSize = 0
             if stockType ~= 'string' or issuedEverType ~= 'string'
                 or (issuedType ~= 'hash' and issuedType ~= 'none') then
               warmupReady = 0
@@ -53,8 +61,8 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
               if not canonicalNonNegative(stock) or not canonicalNonNegative(issuedEver) then
                 warmupReady = 0
               else
-                local issuedSize = issuedType == 'hash' and redis.call('HLEN', KEYS[2]) or 0
-                if tonumber(stock) > tonumber(ARGV[4])
+                issuedSize = issuedType == 'hash' and redis.call('HLEN', KEYS[2]) or 0
+                if stock ~= ARGV[5]
                     or issuedSize ~= tonumber(issuedEver)
                     or (issuedType == 'none' and issuedEver ~= '0') then
                   warmupReady = 0
@@ -77,7 +85,7 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
               end
             end
 
-            return {1, warmupReady, gateReady}
+            return {1, warmupReady, gateReady, issuedSize}
             """.formatted(
             RedisIssuanceGate.META_STATUS,
             RedisIssuanceGate.META_OPEN_AT,
@@ -87,6 +95,7 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
             GateStatus.OPEN.wireValue()), List.class);
 
     private final StringRedisTemplate redisTemplate;
+    private final IssuedValueCodec issuedValueCodec = new IssuedValueCodec();
 
     /** 관리자 조회 전용 Redis 통로를 주입받습니다. */
     public RedisV2AdminPreparationReader(StringRedisTemplate redisTemplate) {
@@ -95,7 +104,8 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
 
     /**
      * 회차마다 네 키를 한 Lua에서 검증하고 회차별 결과를 요청 순서의 불변 Map으로 반환합니다.
-     * Redis 통신이나 pipeline 프레임이 실패하면 요청한 모든 회차를 UNAVAILABLE로 반환합니다.
+     * pipeline 프레임이 실패하면 모든 회차를, 개별 issued 스캔이 실패하면 해당 회차만
+     * UNAVAILABLE로 반환합니다.
      */
     @Override
     public Map<Long, V2PreparationSource> read(List<Request> requests, Instant observedAt) {
@@ -121,7 +131,8 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
                                 Long.toString(request.opensAt().toEpochMilli()),
                                 Long.toString(request.closesAt().toEpochMilli()),
                                 Integer.toString(request.expectedGradeMask()),
-                                Long.toString(request.expectedTotalQuantity()));
+                                Long.toString(request.expectedTotalQuantity()),
+                                Long.toString(request.expectedRemainingQuantity()));
                     }
                     return null;
                 }
@@ -132,8 +143,9 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
             for (int index = 0; index < snapshotRequests.size(); index++) {
                 Request request = snapshotRequests.get(index);
                 Object raw = rawResults.get(index);
-                results.put(request.couponId(), map(
-                        raw instanceof List<?> values ? values : null, observedAt));
+                Readiness readiness = map(
+                        raw instanceof List<?> values ? values : null, observedAt);
+                results.put(request.couponId(), verifyIssuedValues(request, readiness, observedAt));
             }
             return immutableCopy(results);
         } catch (RuntimeException exception) {
@@ -148,30 +160,95 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
         }
     }
 
-    /** Lua의 상태 코드와 두 0·1 플래그를 검증된 V2 준비 원천으로 변환합니다. */
-    private static V2PreparationSource map(List<?> raw, Instant observedAt) {
+    /** Lua의 상태 코드와 두 0·1 플래그·Hash 크기를 검증된 내부 판정으로 변환합니다. */
+    private static Readiness map(List<?> raw, Instant observedAt) {
         if (raw == null || raw.isEmpty()) {
-            return V2PreparationSource.unavailable();
+            return Readiness.unavailable();
         }
         try {
             long code = number(raw.getFirst());
             if (code == MISSING && raw.size() == 1) {
-                return new V2PreparationSource(null, null, SourceStatus.PENDING, null);
+                return new Readiness(
+                        new V2PreparationSource(null, null, SourceStatus.PENDING, null), null);
             }
-            if (code != VALID || raw.size() != 3) {
-                return V2PreparationSource.unavailable();
+            if (code != VALID || raw.size() != 4) {
+                return Readiness.unavailable();
             }
             long warmupReady = number(raw.get(1));
             long gateReady = number(raw.get(2));
-            if (!isBooleanFlag(warmupReady) || !isBooleanFlag(gateReady)) {
+            long issuedSize = number(raw.get(3));
+            if (!isBooleanFlag(warmupReady) || !isBooleanFlag(gateReady) || issuedSize < 0L) {
                 // 알 수 없는 Lua 값은 새 계약 신호일 수 있으므로 false로 축약하지 않습니다.
+                return Readiness.unavailable();
+            }
+            return new Readiness(new V2PreparationSource(
+                    warmupReady == 1L, gateReady == 1L, SourceStatus.VALID, observedAt), issuedSize);
+        } catch (RuntimeException exception) {
+            return Readiness.unavailable();
+        }
+    }
+
+    /** Lua의 O(1) 검증을 통과한 비어 있지 않은 issued Hash만 증분 스캔해 값 형식을 확인합니다. */
+    private V2PreparationSource verifyIssuedValues(
+            Request request,
+            Readiness readiness,
+            Instant observedAt
+    ) {
+        V2PreparationSource source = readiness.source();
+        if (source.status() != SourceStatus.VALID
+                || !Boolean.TRUE.equals(source.warmupReady())
+                || readiness.issuedSize() == null
+                || readiness.issuedSize() == 0L) {
+            return source;
+        }
+
+        try {
+            Set<String> scannedFields = new HashSet<>();
+            boolean corrupt = false;
+            ScanOptions options = ScanOptions.scanOptions().count(ISSUED_SCAN_COUNT).build();
+            String issuedKey = IssuanceKeys.of(request.couponId()).issued();
+            try (Cursor<Map.Entry<String, String>> cursor = redisTemplate
+                    .<String, String>opsForHash().scan(issuedKey, options)) {
+                while (cursor.hasNext()) {
+                    Map.Entry<String, String> entry = cursor.next();
+                    scannedFields.add(entry.getKey());
+                    try {
+                        issuedValueCodec.decode(entry.getValue());
+                    } catch (IssuedValueCorruptException exception) {
+                        corrupt = true;
+                    }
+                }
+            }
+            if (corrupt) {
+                return new V2PreparationSource(
+                        false, source.gateReady(), SourceStatus.VALID, observedAt);
+            }
+
+            Readiness rechecked = map(executeReadiness(request), observedAt);
+            if (!readiness.equals(rechecked) || scannedFields.size() != rechecked.issuedSize()) {
+                // HSCAN 중 Hash가 바뀌면 어느 시점의 완전한 모집단인지 보장할 수 없습니다.
                 return V2PreparationSource.unavailable();
             }
-            return new V2PreparationSource(
-                    warmupReady == 1L, gateReady == 1L, SourceStatus.VALID, observedAt);
+            return source;
         } catch (RuntimeException exception) {
+            log.warn("V2 관리자 issued 값 검증에 실패했습니다: couponId={}, exceptionType={}",
+                    request.couponId(), exception.getClass().getSimpleName(), exception);
             return V2PreparationSource.unavailable();
         }
+    }
+
+    /** 단일 회차의 Lua 판정을 스캔 뒤 재검증에 사용합니다. */
+    @SuppressWarnings("unchecked")
+    private List<?> executeReadiness(Request request) {
+        IssuanceKeys keys = IssuanceKeys.of(request.couponId());
+        return redisTemplate.execute(
+                READINESS_SCRIPT,
+                List.of(keys.stock(), keys.issued(), keys.meta(), keys.issuedEver()),
+                Long.toString(request.opensAt().toEpochMilli()),
+                Long.toString(request.closesAt().toEpochMilli()),
+                Integer.toString(request.expectedGradeMask()),
+                Long.toString(request.expectedTotalQuantity()),
+                Long.toString(request.expectedRemainingQuantity()));
     }
 
     /** Redis Lua 반환값이 정수 타입 또는 정수 문자열인지 확인합니다. */
@@ -192,5 +269,13 @@ public final class RedisV2AdminPreparationReader implements V2AdminPreparationRe
             LinkedHashMap<Long, V2PreparationSource> source
     ) {
         return Collections.unmodifiableMap(new LinkedHashMap<>(source));
+    }
+
+    /** Lua 판정과 그 원자 시점의 issued Hash 크기를 함께 보존합니다. */
+    private record Readiness(V2PreparationSource source, Long issuedSize) {
+
+        private static Readiness unavailable() {
+            return new Readiness(V2PreparationSource.unavailable(), null);
+        }
     }
 }

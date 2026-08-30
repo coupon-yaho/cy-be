@@ -118,6 +118,45 @@ class RedisV2AdminPreparationReaderIntegrationTest {
                 new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
     }
 
+    /** DB active_count로 확정한 잔여재고보다 작은 Redis stock을 준비 완료로 숨기지 않는지 검증합니다. */
+    @Test
+    @DisplayName("DB 기대 잔여재고와 다른 stock은 워밍업 실패다")
+    void rejectsStockDifferentFromExpectedRemainingQuantity() {
+        writeMeta(10L);
+        writeCounters(10L, "99", Map.of(), "0");
+
+        V2PreparationSource result = read(request(10L)).get(10L);
+
+        assertThat(result).isEqualTo(
+                new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** Hash 크기가 맞아도 실제 발급 스크립트가 해석하지 못하는 값을 준비로 판정하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("issued Hash의 파손 값은 워밍업 실패다")
+    void rejectsCorruptIssuedValue() {
+        writeMeta(10L);
+        writeCounters(10L, "100", Map.of("1", "BROKEN"), "1");
+
+        V2PreparationSource result = read(request(10L)).get(10L);
+
+        assertThat(result).isEqualTo(
+                new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** 실제 발급 코덱 값과 DB 기대 잔여재고가 맞으면 증분 스캔 뒤에도 준비 상태를 보존하는지 검증합니다. */
+    @Test
+    @DisplayName("정상 issued 값과 기대 잔여재고는 워밍업 준비다")
+    void acceptsValidIssuedValueAndExpectedRemainingStock() {
+        writeMeta(10L);
+        writeCounters(10L, "99", Map.of("1", "D|1|token|key"), "1");
+
+        V2PreparationSource result = read(request(10L, 99L)).get(10L);
+
+        assertThat(result).isEqualTo(
+                new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
     /** DB 정본과 다른 meta가 워밍업 판정을 가리지 않고 게이트만 실패시키는지 검증합니다. */
     @Test
     @DisplayName("DB와 meta가 다르면 게이트만 준비 실패다")
@@ -231,9 +270,18 @@ class RedisV2AdminPreparationReaderIntegrationTest {
 
     /** 정상 DB 비교값을 가진 예약 회차 요청을 생성합니다. */
     private static V2AdminPreparationReader.Request request(long couponId) {
+        return request(couponId, Long.parseLong(TOTAL_QUANTITY));
+    }
+
+    /** 정상 DB 비교값과 지정한 기대 잔여재고를 가진 예약 회차 요청을 생성합니다. */
+    private static V2AdminPreparationReader.Request request(
+            long couponId,
+            long expectedRemainingQuantity
+    ) {
         return new V2AdminPreparationReader.Request(
                 couponId, CouponRoundStatus.SCHEDULED,
-                OPENS_AT, CLOSES_AT, Integer.parseInt(GRADE_MASK), Long.parseLong(TOTAL_QUANTITY));
+                OPENS_AT, CLOSES_AT, Integer.parseInt(GRADE_MASK),
+                Long.parseLong(TOTAL_QUANTITY), expectedRemainingQuantity);
     }
 
     /** 실제 게이트가 쓰는 다섯 meta 필드를 정상 DB 비교값으로 저장합니다. */

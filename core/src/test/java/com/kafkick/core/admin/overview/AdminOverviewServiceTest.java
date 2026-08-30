@@ -191,6 +191,7 @@ class AdminOverviewServiceTest {
             assertThat(requests).singleElement().satisfies(request -> {
                 assertThat(request.couponId()).isEqualTo(701L);
                 assertThat(request.expectedTotalQuantity()).isEqualTo(100L);
+                assertThat(request.expectedRemainingQuantity()).isEqualTo(100L);
                 assertThat(request.expectedGradeMask()).isEqualTo(3);
             });
             return Map.of(701L, new V2PreparationSource(

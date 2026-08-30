@@ -50,6 +50,7 @@ class AdminPreparationResolverTest {
             assertThat(request.closesAt()).isEqualTo(CLOSES_AT);
             assertThat(request.expectedGradeMask()).isEqualTo(3);
             assertThat(request.expectedTotalQuantity()).isEqualTo(100L);
+            assertThat(request.expectedRemainingQuantity()).isEqualTo(75L);
         });
         assertThat(result).containsOnlyKeys(10L, 11L, 12L, 13L, 14L);
         assertThat(result.get(10L).status()).isEqualTo(SourceStatus.VALID);
@@ -180,7 +181,7 @@ class AdminPreparationResolverTest {
     /** DB 정본 총수량과 active_count를 값 보유 상태로 생성합니다. */
     private static CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> validStock() {
         return new CouponMetricsSource.Observation<>(
-                new CouponMetricsSource.StockCounts(100L, 0L), SourceStatus.VALID, SNAPSHOT);
+                new CouponMetricsSource.StockCounts(100L, 25L), SourceStatus.VALID, SNAPSHOT);
     }
 
     /** DB 재고를 읽지 못한 상태를 생성합니다. */
@@ -191,7 +192,7 @@ class AdminPreparationResolverTest {
     /** fallback Reader 검증에 사용할 정상 V2 예약 요청을 생성합니다. */
     private static V2AdminPreparationReader.Request request(long couponId) {
         return new V2AdminPreparationReader.Request(
-                couponId, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L);
+                couponId, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, 100L);
     }
 
     /** 실제 Reader 입력을 기록하고 지정된 응답을 반환합니다. */

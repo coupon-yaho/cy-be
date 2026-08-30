@@ -248,6 +248,7 @@ class AdminObservabilityConfigTest {
                 assertThat(request.couponId()).isEqualTo(10L);
                 assertThat(request.expectedGradeMask()).isEqualTo(3);
                 assertThat(request.expectedTotalQuantity()).isEqualTo(100L);
+                assertThat(request.expectedRemainingQuantity()).isEqualTo(100L);
             });
             assertThat(observedAt).isEqualTo(NOW);
             return Map.of(10L, new V2PreparationSource(true, true, SourceStatus.VALID, NOW));

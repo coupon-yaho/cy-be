@@ -12,8 +12,11 @@ import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
 import com.kafkick.core.admin.preparation.V2PreparationSource;
@@ -53,7 +56,7 @@ class RedisV2AdminPreparationReaderTest {
     void rejectsPipelineCardinalityMismatch() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         when(redisTemplate.executePipelined(any(SessionCallback.class)))
-                .thenReturn(List.of(List.of(1L, 1L, 1L)));
+                .thenReturn(List.of(List.of(1L, 1L, 1L, 0L)));
         RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
 
         Map<Long, V2PreparationSource> result = reader.read(
@@ -70,7 +73,7 @@ class RedisV2AdminPreparationReaderTest {
     void isolatesMalformedCampaignResponse() {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
         when(redisTemplate.executePipelined(any(SessionCallback.class)))
-                .thenReturn(List.of(List.of(1L, 1L, 1L), List.of(1L, 2L, 0L)));
+                .thenReturn(List.of(List.of(1L, 1L, 1L, 0L), List.of(1L, 2L, 0L, 0L)));
         RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
 
         Map<Long, V2PreparationSource> result = reader.read(
@@ -81,9 +84,103 @@ class RedisV2AdminPreparationReaderTest {
         assertThat(result.get(11L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
 
+    /** Lua의 크기 검사가 통과해도 Hash 값이 발급 코덱과 다르면 워밍업 실패인지 검증합니다. */
+    @Test
+    @DisplayName("issued Hash의 파손 값은 VALID 워밍업 실패로 반환한다")
+    @SuppressWarnings("unchecked")
+    void mapsCorruptIssuedValueToWarmupFailure() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        HashOperations<String, String, String> hashOperations = mock(HashOperations.class);
+        Cursor<Map.Entry<String, String>> cursor = mock(Cursor.class);
+        when(redisTemplate.executePipelined(any(SessionCallback.class)))
+                .thenReturn(List.of(List.of(1L, 1L, 1L, 1L)));
+        when(redisTemplate.<String, String>opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.scan(any(String.class), any())).thenReturn(cursor);
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(Map.entry("1", "BROKEN"));
+        RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
+
+        V2PreparationSource result = reader.read(List.of(request(10L)), SNAPSHOT).get(10L);
+
+        assertThat(result).isEqualTo(
+                new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** 한 회차의 증분 스캔 실패가 같은 pipeline의 다른 정상 회차까지 지우지 않는지 검증합니다. */
+    @Test
+    @DisplayName("issued 스캔 실패는 해당 회차만 UNAVAILABLE로 격리한다")
+    @SuppressWarnings("unchecked")
+    void isolatesIssuedScanFailureToAffectedCampaign() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        HashOperations<String, String, String> hashOperations = mock(HashOperations.class);
+        when(redisTemplate.executePipelined(any(SessionCallback.class))).thenReturn(List.of(
+                List.of(1L, 1L, 1L, 1L),
+                List.of(1L, 1L, 1L, 0L)));
+        when(redisTemplate.<String, String>opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.scan(any(String.class), any()))
+                .thenThrow(new RedisConnectionFailureException("scan down"));
+        RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
+
+        Map<Long, V2PreparationSource> result = reader.read(
+                List.of(request(10L), request(11L)), SNAPSHOT);
+
+        assertThat(result.get(10L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(result.get(11L)).isEqualTo(
+                new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** HSCAN 동안 모집단이 바뀌면 혼합 시점의 값을 정상으로 추측하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("issued 스캔 전후 모집단이 바뀌면 UNAVAILABLE이다")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void mapsIssuedMutationDuringScanToUnavailable() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        HashOperations<String, String, String> hashOperations = mock(HashOperations.class);
+        Cursor<Map.Entry<String, String>> cursor = mock(Cursor.class);
+        when(redisTemplate.executePipelined(any(SessionCallback.class)))
+                .thenReturn(List.of(List.of(1L, 1L, 1L, 1L)));
+        when(redisTemplate.<String, String>opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.scan(any(String.class), any())).thenReturn(cursor);
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(Map.entry("1", "D|1|token|key"));
+        when(redisTemplate.execute(any(RedisScript.class), any(List.class), any(Object[].class)))
+                .thenReturn(List.of(1L, 1L, 1L, 2L));
+        RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
+
+        V2PreparationSource result = reader.read(List.of(request(10L)), SNAPSHOT).get(10L);
+
+        assertThat(result.status()).isEqualTo(SourceStatus.UNAVAILABLE);
+    }
+
+    /** HSCAN의 허용된 중복 반환을 실제 Hash 크기 증가로 오인하지 않는지 검증합니다. */
+    @Test
+    @DisplayName("issued 스캔의 중복 field는 한 건으로 계산한다")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void deduplicatesIssuedFieldsReturnedByScan() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        HashOperations<String, String, String> hashOperations = mock(HashOperations.class);
+        Cursor<Map.Entry<String, String>> cursor = mock(Cursor.class);
+        when(redisTemplate.executePipelined(any(SessionCallback.class)))
+                .thenReturn(List.of(List.of(1L, 1L, 1L, 1L)));
+        when(redisTemplate.<String, String>opsForHash()).thenReturn(hashOperations);
+        when(hashOperations.scan(any(String.class), any())).thenReturn(cursor);
+        when(cursor.hasNext()).thenReturn(true, true, false);
+        when(cursor.next()).thenReturn(
+                Map.entry("1", "D|1|token|key"),
+                Map.entry("1", "D|1|token|key"));
+        when(redisTemplate.execute(any(RedisScript.class), any(List.class), any(Object[].class)))
+                .thenReturn(List.of(1L, 1L, 1L, 1L));
+        RedisV2AdminPreparationReader reader = new RedisV2AdminPreparationReader(redisTemplate);
+
+        V2PreparationSource result = reader.read(List.of(request(10L)), SNAPSHOT).get(10L);
+
+        assertThat(result).isEqualTo(
+                new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
     /** 반복 테스트가 사용하는 정상 예약 회차 비교값을 생성합니다. */
     private static V2AdminPreparationReader.Request request(long couponId) {
         return new V2AdminPreparationReader.Request(
-                couponId, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L);
+                couponId, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, 100L);
     }
 }

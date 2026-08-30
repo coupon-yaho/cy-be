@@ -17,7 +17,12 @@ public record PreparationSource(
         Instant observedAt
 ) {
 
-    /** 값 보유 상태와 두 DB 준비 판정·관측 시각의 조합을 검증합니다. */
+    /**
+     * 값 보유 상태와 두 DB 준비 판정·관측 시각의 조합을 검증합니다.
+     *
+     * @throws NullPointerException {@code status}가 {@code null}인 경우
+     * @throws IllegalArgumentException 상태와 값 조합이 맞지 않거나 설정 완료 등급 마스크가 유효하지 않은 경우
+     */
     public PreparationSource {
         Objects.requireNonNull(status, "status");
         if (status.carriesValue()) {

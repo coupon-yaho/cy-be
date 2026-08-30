@@ -13,7 +13,12 @@ public record V2PreparationSource(
         Instant observedAt
 ) {
 
-    /** 값 보유 상태와 두 준비 판정·관측 시각의 조합을 검증합니다. */
+    /**
+     * 값 보유 상태와 두 준비 판정·관측 시각의 조합을 검증합니다.
+     *
+     * @throws NullPointerException {@code status}가 {@code null}인 경우
+     * @throws IllegalArgumentException 지원하지 않는 상태이거나 상태와 판정·관측 시각 조합이 맞지 않는 경우
+     */
     public V2PreparationSource {
         Objects.requireNonNull(status, "status");
         if (status == SourceStatus.VALID) {

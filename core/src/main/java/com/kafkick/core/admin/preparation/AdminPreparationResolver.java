@@ -102,7 +102,8 @@ public final class AdminPreparationResolver {
                 campaign.opensAt(),
                 campaign.closesAt(),
                 campaign.preparation().eligibleGradesMask(),
-                campaign.stock().value().totalQuantity());
+                campaign.stock().value().totalQuantity(),
+                campaign.stock().value().totalQuantity() - campaign.stock().value().activeCount());
     }
 
     /** 요청 순서를 보존한 ID 집합을 생성합니다. */

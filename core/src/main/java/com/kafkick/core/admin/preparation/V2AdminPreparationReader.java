@@ -28,12 +28,18 @@ public interface V2AdminPreparationReader {
             Instant opensAt,
             Instant closesAt,
             int expectedGradeMask,
-            long expectedTotalQuantity
+            long expectedTotalQuantity,
+            long expectedRemainingQuantity
     ) {
 
         private static final Duration MAX_COUPON_ROUND_DURATION = Duration.ofHours(24L);
 
-        /** 예약 상태와 발급 도메인이 복원할 수 있는 DB 비교값만 허용합니다. */
+        /**
+         * 예약 상태와 발급 도메인이 복원할 수 있는 DB 비교값만 허용합니다.
+         *
+         * @throws NullPointerException 상태나 기간이 {@code null}인 경우
+         * @throws IllegalArgumentException 식별자·예약 상태·기간·등급 마스크·수량 관계가 유효하지 않은 경우
+         */
         public Request {
             Objects.requireNonNull(campaignStatus, "campaignStatus");
             Objects.requireNonNull(opensAt, "opensAt");
@@ -42,7 +48,9 @@ public interface V2AdminPreparationReader {
                     || campaignStatus != CouponRoundStatus.SCHEDULED
                     || !opensAt.isBefore(closesAt)
                     || Duration.between(opensAt, closesAt).compareTo(MAX_COUPON_ROUND_DURATION) > 0
-                    || expectedTotalQuantity <= 0L) {
+                    || expectedTotalQuantity <= 0L
+                    || expectedRemainingQuantity < 0L
+                    || expectedRemainingQuantity > expectedTotalQuantity) {
                 throw new IllegalArgumentException("V2 준비 요청의 DB 비교값이 유효하지 않습니다.");
             }
             MembershipGrade.fromMask(expectedGradeMask);

@@ -66,7 +66,7 @@ class V2AdminPreparationContractTest {
     @DisplayName("V2 준비 요청은 예약 회차의 DB 비교값을 보존한다")
     void requestCarriesScheduledRoundExpectedValues() {
         V2AdminPreparationReader.Request request = new V2AdminPreparationReader.Request(
-                10L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L);
+                10L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, 75L);
 
         assertThat(request.couponId()).isEqualTo(10L);
         assertThat(request.campaignStatus()).isEqualTo(CouponRoundStatus.SCHEDULED);
@@ -74,6 +74,7 @@ class V2AdminPreparationContractTest {
         assertThat(request.closesAt()).isEqualTo(CLOSES_AT);
         assertThat(request.expectedGradeMask()).isEqualTo(3);
         assertThat(request.expectedTotalQuantity()).isEqualTo(100L);
+        assertThat(request.expectedRemainingQuantity()).isEqualTo(75L);
     }
 
     /** 비예약 회차와 발급 도메인이 복원할 수 없는 DB 비교값을 조회 전에 거부하는지 검증합니다. */
@@ -81,7 +82,7 @@ class V2AdminPreparationContractTest {
     @DisplayName("V2 준비 요청은 비예약 회차와 잘못된 기간·등급·수량을 거부한다")
     void requestRejectsNonScheduledOrInvalidExpectedValues() {
         assertThatThrownBy(() -> new V2AdminPreparationReader.Request(
-                0L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L))
+                0L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, 100L))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> request(CouponRoundStatus.OPEN, OPENS_AT, CLOSES_AT, 3, 100L))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -100,6 +101,12 @@ class V2AdminPreparationContractTest {
         assertThatThrownBy(() -> request(
                 CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 0L))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new V2AdminPreparationReader.Request(
+                10L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, -1L))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new V2AdminPreparationReader.Request(
+                10L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, 101L))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /** 개별 거절 조건에서 반복되는 정상 필드를 한곳에 고정합니다. */
@@ -111,6 +118,6 @@ class V2AdminPreparationContractTest {
             long totalQuantity
     ) {
         return new V2AdminPreparationReader.Request(
-                10L, status, opensAt, closesAt, gradeMask, totalQuantity);
+                10L, status, opensAt, closesAt, gradeMask, totalQuantity, totalQuantity);
     }
 }
