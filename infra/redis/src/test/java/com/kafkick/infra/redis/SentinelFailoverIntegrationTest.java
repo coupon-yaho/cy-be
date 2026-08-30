@@ -39,7 +39,7 @@ class SentinelFailoverIntegrationTest {
     private static String masterAddress;
 
     @BeforeAll
-    static void startTopology() {
+    static void startTopology() throws Exception {
         // 별칭이 compose 의 서비스명과 같아야 커밋된 sentinel.conf 의 호스트명 감시가 성립한다.
         master = redisContainer("redis", "redis-server", "--appendonly", "yes",
                 "--maxmemory-policy", "noeviction");
@@ -52,17 +52,24 @@ class SentinelFailoverIntegrationTest {
                 "--appendonly", "yes", "--maxmemory-policy", "noeviction");
         replica1.start();
         replica2.start();
+        // **Sentinel 을 띄우기 전에** master 가 두 replica 를 인지할 때까지 기다린다.
+        // Sentinel 의 replica 탐지는 master 에 보내는 INFO 주기(기본 10초)에 걸린다 —
+        // 첫 INFO 가 connected_slaves:0 을 보면 다음 주기까지 아무것도 모르고, 컨테이너
+        // 기동이 느린 환경에서는 그 한 주기가 테스트 대기 예산을 넘긴다(CI 에서 실패했다).
+        // 여기서 먼저 붙여 두면 Sentinel 의 첫 INFO 가 곧바로 둘을 본다.
+        // redis-cli 는 이 컨테이너 안에서 돈다. 복제 확인에도 필요하므로 Sentinel 보다 먼저 올린다.
+        client = new GenericContainer<>(REDIS)
+                .withNetwork(NETWORK)
+                .withNetworkAliases("issuance-client")
+                .withCommand("/bin/sh", "-c", "while :; do sleep 3600; done");
+        client.start();
+        awaitConnectedReplicas(2);
         sentinel1 = sentinel("sentinel-1");
         sentinel2 = sentinel("sentinel-2");
         sentinel3 = sentinel("sentinel-3");
         sentinel1.start();
         sentinel2.start();
         sentinel3.start();
-        client = new GenericContainer<>(REDIS)
-                .withNetwork(NETWORK)
-                .withNetworkAliases("issuance-client")
-                .withCommand("/bin/sh", "-c", "while :; do sleep 3600; done");
-        client.start();
     }
 
     @AfterAll
@@ -128,9 +135,24 @@ class SentinelFailoverIntegrationTest {
         throw new AssertionError("Sentinel master address did not become " + expected + ": " + address);
     }
 
+    /** master 자신이 붙었다고 보고하는 replica 수. Sentinel 의 INFO 주기와 무관하다. */
+    private static void awaitConnectedReplicas(int expected) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        String seen = "";
+        while (System.nanoTime() < deadline) {
+            seen = redisCommand("redis", "INFO", "replication").lines()
+                    .map(String::trim)
+                    .filter(line -> line.startsWith("connected_slaves:"))
+                    .findFirst().orElse("");
+            if (seen.equals("connected_slaves:" + expected)) return;
+            Thread.sleep(200);
+        }
+        throw new AssertionError("master 가 replica " + expected + "대를 인지하지 못했다: " + seen);
+    }
+
     /** Sentinel 이 replica 를 몇 대 인지했는지. compose healthcheck 와 같은 술어를 쓴다. */
     private static void awaitReplicaCount(int expected) throws Exception {
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
         long seen = -1;
         while (System.nanoTime() < deadline) {
             seen = redisCommandAtPort("sentinel-1", "26379", "SENTINEL", "replicas", "coupon-master")

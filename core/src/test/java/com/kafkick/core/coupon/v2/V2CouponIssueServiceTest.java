@@ -620,4 +620,32 @@ class V2CouponIssueServiceTest {
                         .doInTransaction(mock(TransactionStatus.class)));
         return operations;
     }
+
+    /**
+     * <b>첫 보상 실패는 반드시 로그 후보가 된다.</b> 센티널을 {@code Long.MIN_VALUE} 로 두면
+     * {@code now - previous} 가 부호 있는 64비트를 넘겨 음수로 접히고, 그러면 첫 줄부터
+     * 영원히 억제된다 — 로그가 안 나가는 것은 "사고가 없다" 와 구분되지 않는다.
+     */
+    @Test
+    void theFirstCompensationFailureAlwaysGetsALogSlot() {
+        assertThat(service.claimLogSlot(System.nanoTime())).isTrue();
+    }
+
+    /** 같은 창 안의 두 번째는 생략한다 — failover 구간에 요청 수만큼 찍히면 안 된다. */
+    @Test
+    void asecondFailureInTheSameWindowIsSuppressed() {
+        long now = System.nanoTime();
+
+        assertThat(service.claimLogSlot(now)).isTrue();
+        assertThat(service.claimLogSlot(now)).isFalse();
+    }
+
+    /** 창이 지나면 다시 한 줄 남긴다. */
+    @Test
+    void aFailureAfterTheWindowGetsANewSlot() {
+        long now = System.nanoTime();
+        service.claimLogSlot(now);
+
+        assertThat(service.claimLogSlot(now + java.time.Duration.ofSeconds(1).toNanos())).isTrue();
+    }
 }

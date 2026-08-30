@@ -546,6 +546,12 @@ services:
     volumes:
       # 읽기 전용. 컨테이너가 제 설정을 덮어쓸 이유가 없다.
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # ⚠️ **규칙 디렉터리도 마운트해야 한다.** prometheus.yml 의 rule_files 는
+      #    `rules/*.yml` 상대 경로라 컨테이너의 /etc/prometheus/rules 를 본다. 없으면
+      #    glob 이 0개와 일치하고 **에러 없이 규칙 0건으로 뜬다** — 실측으로 확인했다
+      #    (설정만 마운트: /api/v1/rules 가 groups:[], 함께 마운트: 47건).
+      #    즉 알림이 조용히 하나도 안 걸린다. PrometheusRulesMountContractTest 가 지킨다.
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
       # ⚠️ named volume 이어야 한다. 컨테이너를 지우면 TSDB 가 같이 사라지고, 부하 회차
       #    데이터가 거기 있다. bind mount 로 바꾸면 호스트 uid 와 nobody(65534)가 어긋나
       #    기동에 실패한다.

@@ -39,7 +39,16 @@ public final class V2CouponIssueService {
     /** 보상 실패 로그의 최소 간격. 장애 구간에 요청 수만큼 찍히는 것을 막는다. */
     private static final long COMPENSATION_LOG_INTERVAL_NANOS = Duration.ofSeconds(1).toNanos();
 
-    private final AtomicLong lastCompensationLogAt = new AtomicLong(Long.MIN_VALUE);
+    /**
+     * 마지막으로 보상 실패를 남긴 시각.
+     *
+     * <p><b>{@code Long.MIN_VALUE} 를 센티널로 쓰지 않는다.</b> {@code nanoTime()} 이 양수인
+     * 흔한 환경에서 {@code now - Long.MIN_VALUE} 가 부호 있는 64비트를 넘겨 <b>음수로</b>
+     * 접히고, 그러면 첫 호출부터 억제 조건에 걸려 이 로그가 영원히 안 찍힌다 — "한 창에 한
+     * 줄" 이라는 약속이 조용히 깨진다. 한 창 전으로 앉혀 첫 호출이 반드시 통과하게 한다.
+     */
+    private final AtomicLong lastCompensationLogAt =
+            new AtomicLong(System.nanoTime() - COMPENSATION_LOG_INTERVAL_NANOS);
     private final AtomicLong suppressedCompensationLogs = new AtomicLong();
 
     private final IssuanceGatePort gate;
@@ -318,16 +327,29 @@ public final class V2CouponIssueService {
      * 구간에서 cause 하나와 대략의 건수면 충분하다. 그래서 락 없이 CAS 한 번으로 끝낸다.
      */
     private void logCompensationFailure(CouponIssueCommand command, RuntimeException failure) {
-        long now = System.nanoTime();
-        long previous = lastCompensationLogAt.get();
-        if (now - previous < COMPENSATION_LOG_INTERVAL_NANOS
-                || !lastCompensationLogAt.compareAndSet(previous, now)) {
-            suppressedCompensationLogs.incrementAndGet();
+        if (!claimLogSlot(System.nanoTime())) {
             return;
         }
         long suppressed = suppressedCompensationLogs.getAndSet(0);
         log.warn("v2 보상 CAS 실패. couponRoundId={}, memberId={}, cause={}, 직전 창에서 생략={}",
                 command.couponRoundId(), command.memberId(), failure.toString(), suppressed);
+    }
+
+    /**
+     * 이 호출이 로그를 남길 차례인지. 아니면 생략 건수를 올린다.
+     *
+     * <p>시각을 인자로 받는다 — 창 경계를 테스트가 시계 없이 확인할 수 있어야 한다.
+     * 이 판정이 조용히 틀리면 로그가 아예 안 나가고, 안 나가는 것은 "사고가 없다" 와
+     * 구분되지 않는다.
+     */
+    boolean claimLogSlot(long now) {
+        long previous = lastCompensationLogAt.get();
+        if (now - previous < COMPENSATION_LOG_INTERVAL_NANOS
+                || !lastCompensationLogAt.compareAndSet(previous, now)) {
+            suppressedCompensationLogs.incrementAndGet();
+            return false;
+        }
+        return true;
     }
 
     private CompensateOutcome compensatePreserving(

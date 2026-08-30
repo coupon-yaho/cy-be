@@ -48,6 +48,25 @@ class V2IssuanceAlertRuleContractTest {
                 .isEqualTo(alerts);
     }
 
+    /**
+     * <b>규칙 파일이 컨테이너 안에 있어야 로드된다.</b> {@code prometheus.yml} 의
+     * {@code rule_files} 는 {@code rules/*.yml} 상대 경로라 {@code /etc/prometheus/rules} 를
+     * 본다. 설정 파일만 마운트하면 glob 이 0개와 일치하고 <b>에러 없이 규칙 0건으로 뜬다</b> —
+     * 실측했다(설정만: {@code /api/v1/rules} 가 {@code groups:[]}, 함께 마운트: 47건).
+     *
+     * <p>즉 이 배선이 빠지면 이 파일의 알림도, batch 의 45건도 조용히 하나도 안 걸린다.
+     * 알림이 안 오는 것은 "사고가 없다"와 구분되지 않아 사람이 알아챌 방법이 없다.
+     */
+    @Test
+    @DisplayName("compose 가 규칙 디렉터리를 Prometheus 에 마운트한다")
+    void composeMountsTheRulesDirectoryIntoPrometheus() throws Exception {
+        String compose = Files.readString(
+                Path.of("../compose.yml"), StandardCharsets.UTF_8);
+
+        assertThat(compose).contains(
+                "./infra/prometheus/rules:/etc/prometheus/rules:ro");
+    }
+
     /** Micrometer 의 카운터 이름 변환. 점은 밑줄, 카운터는 {@code _total}. */
     private static String prometheusName(String meterName) {
         return meterName.replace('.', '_') + "_total";
