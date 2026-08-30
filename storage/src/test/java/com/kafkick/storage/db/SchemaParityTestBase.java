@@ -111,6 +111,10 @@ abstract class SchemaParityTestBase {
      * <p>⚠️ <b>여기 이름을 더하는 것은 "시드가 안 만든다" 를 선언하는 것이다.</b> 검증이
      * 읽는 표를 실수로 넣으면 그 표의 스키마 드리프트를 아무도 못 본다 — 더하기 전에
      * 그 표를 {@code cy-seed/ddl} 이 만들어야 하는지부터 판단해라.
+     *
+     * <p><b>그 판단을 주석에 안 맡긴다.</b> "검증이 안 읽는다" 는 이름을 더한 그 시점에
+     * 한 번 잰 사실일 뿐이라, 나중에 규칙이 그 표를 참조해도 아무도 못 본다.
+     * {@link OutsideSeedDatasetUnreferencedTest} 가 <b>매 빌드마다 다시 잰다.</b>
      */
     static final Set<String> OUTSIDE_SEED_DATASET = Set.of(
             // 브랜드 분석 집계(CY-674) — 관리 화면이 읽는다
@@ -121,7 +125,12 @@ abstract class SchemaParityTestBase {
             // 발급 시도 이력 — Kafka consumer 가 적재한다(OBS-15)
             "issue_attempts",
             // 회차 생성 스케줄러의 싱글턴 가드
-            "coupon_round_schedule_guard");
+            "coupon_round_schedule_guard",
+            // 알림 계약과 저장(CY-642) — 관리자 알림 화면과 발송 경로가 읽는다.
+            // 시드가 만드는 것은 발급·이력·재고·판정이고 알림은 런타임이 쌓는
+            // 산출물이라 데이터셋에 안 속한다.
+            "notifications", "notification_attempts",
+            "notification_resend_audits", "notification_outbox");
 
     @Autowired
     private JdbcClient jdbcClient;
