@@ -1,0 +1,71 @@
+groups:
+  - name: queue-gateway
+    rules:
+      - alert: QueueGatewayTargetDown
+        expr: max(up{job="queue-gateway"}) == 0 or (vector(1) unless up{job="queue-gateway"})
+        for: 10s
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "대기열 게이트웨이 지표가 보이지 않습니다"
+          description: "queue-gateway:8081/actuator/prometheus 응답과 Prometheus targets의 queue-gateway 상태를 먼저 확인합니다."
+
+      - alert: QueueGatewaySnapshotUnavailable
+        expr: max(waiting_snapshot_age{job="queue-gateway"}) < 0 or (vector(1) unless waiting_snapshot_age{job="queue-gateway"})
+        for: 10s
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "대기열 스냅샷을 만들지 못하고 있습니다"
+          description: "queue-gateway 로그와 /actuator/prometheus의 waiting_snapshot_age를 먼저 확인합니다. 음수는 스냅샷 생성 실패를 뜻합니다."
+
+      - alert: QueueGatewaySnapshotStale
+        expr: max(waiting_snapshot_age{job="queue-gateway"}) > 5
+        for: 10s
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "대기열 스냅샷이 5초 이상 갱신되지 않았습니다"
+          description: "queue-gateway 로그와 /actuator/prometheus의 waiting_snapshot_age, Redis 응답 상태를 순서대로 확인합니다."
+
+      - alert: QueueGatewayCapacityNodesMissing
+        expr: max(waiting_capacity_nodes{job="queue-gateway"}) == 0
+        for: 5s
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "처리 가능량을 보고하는 API 인스턴스가 없습니다"
+          description: "API 인스턴스와 Redis의 capacity:coupon-svc:v1 키, queue-gateway의 waiting_capacity_nodes를 먼저 확인합니다."
+
+      - alert: QueueGatewayJudgementDegraded
+        expr: sum(increase(waiting_judgement_total{job="queue-gateway",quality="degraded"}[1m])) > 0
+        for: 10s
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "대기열 입장 판정이 degraded 상태로 발생했습니다"
+          description: "queue-gateway 로그와 /actuator/prometheus의 waiting_judgement_total{quality=\"degraded\"}를 먼저 확인합니다."
+
+      - alert: QueueGatewayBackendFallback
+        expr: sum(increase(waiting_backend_fallback_total{job="queue-gateway"}[1m])) > 0
+        for: 10s
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "대기열 게이트웨이가 백엔드 fallback을 수행했습니다"
+          description: "queue-gateway 로그와 /actuator/prometheus의 waiting_backend_fallback_total, 백엔드 API 응답을 순서대로 확인합니다."
+
+      - alert: QueueGatewayAllocationOvershoot
+        expr: sum(increase(waiting_allocation_entered_overshoot_total{job="queue-gateway"}[1m])) > 0
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "대기열 입장 배정이 공급 한도를 초과했습니다"
+          description: "queue-gateway 로그와 /actuator/prometheus의 waiting_allocation_entered_overshoot_total, 배정 시점 capacity credit을 즉시 확인합니다."
