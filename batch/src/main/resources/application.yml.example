@@ -23,14 +23,16 @@ spring:
   task:
     scheduling:
       pool:
-        # @Scheduled 가 여덟이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
+        # @Scheduled 가 열이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
         # CleanupScheduler.cleanup(정리 잡을 동기로 끝까지 돌린다),
         # VerifyScheduler.verify(검증 잡을 동기로 끝까지 돌린다 — 300만에서 472초다),
         # CouponRoundScheduler.transitionRounds(회차를 열고 닫는다 — 1분),
         # VerificationMetricsRefresher.refresh(판정을 되읽는다),
         # BatchRunMetricsRefresher.refresh(마지막 성공 시각과 멈춘 실행 수를 되읽는다),
         # ExpirePendingRefresher.refresh(만료 대기 건수를 되읽는다),
-        # CouponRoundPendingRefresher.refresh(회차 전이 대기 수를 되읽는다).
+        # CouponRoundPendingRefresher.refresh(회차 전이 대기 수를 되읽는다),
+        # DomainGaugeRegistrar.refreshStock(재고 게이지 — 1초),
+        # DomainGaugeRegistrar.refreshConsistency(정합성 gap 집계 — 30초).
         #
         # 만료(04:10)·정리(04:30)·검증(05:00)은 서로 떨어져 있어 서로를 막지 않지만,
         # 되읽기 넷과 1분 크론인 회차 전이는 그 사이에도 돌아야 한다 — 그 구간이 관제가
@@ -42,19 +44,22 @@ spring:
         #
         # **여유를 안 둔다 — DB 풀과 다른 축이다.** 커넥션 풀은 keepalive·health 체크처럼
         # 우리가 안 세는 소비자가 붙어서 여유 둘을 뒀지만, 이 풀을 쓰는 것은 @Scheduled
-        # **여덟뿐**이고 아홉째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
+        # **열뿐**이고 열한째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
         # 신호가 되도록 정확히 그 수로 둔다 — 여유를 두면 그 신호가 사라진다.
         # (CY-421 이 ExpirePendingRefresher 를 더하면서 넷에서 다섯이 됐다. 신호가 일했다.
         #  CY-446 이 둘을 더하면서 일곱이 됐는데, 그때는 **신호를 한 번 지나쳤다** —
         #  리뷰가 @Scheduled 를 전수 세어 잡았다. 숫자가 코드와 함께 움직여야 신호가 산다.
-        #  CY-470 이 VerifyScheduler 를 더해 여덟이 됐다.)
+        #  CY-470 이 VerifyScheduler 를 더해 여덟이 됐다.
+        #  OBS-5 가 DomainGaugeRegistrar 의 둘을 더해 열이 됐는데 **이 숫자를 또 지나쳤다** —
+        #  스케줄러를 실제로 켠 2026-08-30 에야 기동 가드가 "풀=8 @Scheduled=10" 으로 잡았다.
+        #  기본값 8 로는 스케줄링을 켤 수 없으니, 그 값이 곧 "아직 안 켜 봤다" 는 증거였다.)
         #
         # ⚠️ 이 키는 Boot 가 직접 소비해서 @Value 스캔에 안 잡힌다. 그래서 둘이 함께 지킨다 —
         #    ResolvedBatchConfigTest 가 해석된 Environment 값을(키 경로),
         #    VerificationMetricExposureTest.schedulerPoolFitsScheduledTaskCount 가
         #    실제 스케줄러 빈의 코어 크기를(값이 정말 쓰이는지) 본다.
         #    앞의 것만으로는 "적힌 값이 떴다" 까지고, 그 값을 스케줄러가 쓴다는 보장이 아니다.
-        size: ${BATCH_SCHEDULER_POOL_SIZE:8}
+        size: ${BATCH_SCHEDULER_POOL_SIZE:10}
 
   # CY-368 이 업무 포트에 검증 트리거 컨트롤러를 열었다(POST /api/v1/admin/verify).
   # 인증이 없어서 compose 가 그 포트를 **기본으로 호스트에 안 내보낸다** —
