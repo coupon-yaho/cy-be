@@ -10,15 +10,15 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.campaignsource.PreparationItem;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.PreparationItem;
+import com.kafkick.core.admin.couponroundsource.PreparationObservation;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.preparation.V2PreparationSource;
 import com.kafkick.core.observation.EngineVersion;
 
 /** DB 회차 엔진과 V2 Redis 준비 원천을 결합하는 순수 계산기입니다. */
 @Component
-public class CampaignPreparationCalculator {
+public class CouponRoundPreparationCalculator {
 
     private static final Set<CouponPolicyType> ISSUANCE_POLICIES =
             Set.of(CouponPolicyType.PERCENT_CAPPED, CouponPolicyType.FIXED_AMOUNT);
@@ -28,12 +28,12 @@ public class CampaignPreparationCalculator {
             EngineVersion.V2, ISSUANCE_POLICIES);
 
     /** 상태가 없는 순수 계산기로 생성합니다. */
-    public CampaignPreparationCalculator() { }
+    public CouponRoundPreparationCalculator() { }
 
     /**
      * DB 설정·재고·회차 엔진과 V2 Redis 준비 상태를 결합해 확정 실패 항목만 반환합니다.
      *
-     * @param source DB에서 판정한 캠페인 설정·재고 준비 원천
+     * @param source DB에서 판정한 쿠폰 회차 설정·재고 준비 원천
      * @param engineVersion DB 회차에 저장된 발급 엔진 버전
      * @param v2Source V2 예약 회차의 Redis 준비 원천; V1에는 적용되지 않음
      * @return 모든 항목을 판정했을 때만 완료 여부와 확정 실패 목록을 가진 관측값
@@ -52,8 +52,8 @@ public class CampaignPreparationCalculator {
         }
 
         List<PreparationItem> failedItems = new ArrayList<>();
-        if (!source.campaignConfigurationReady()) {
-            failedItems.add(PreparationItem.CAMPAIGN_CONFIGURATION);
+        if (!source.couponRoundConfigurationReady()) {
+            failedItems.add(PreparationItem.COUPON_ROUND_CONFIGURATION);
         }
         if (!source.databaseStockReady()) {
             failedItems.add(PreparationItem.DATABASE_STOCK);

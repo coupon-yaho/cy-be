@@ -66,7 +66,7 @@ class KafkaLayerWiringTest {
     private ApplicationContext context;
 
     @Test
-    @DisplayName("Kafka 발행기와 캠페인 미터 합성기가 함께 api 컨텍스트에 올라온다")
+    @DisplayName("Kafka 발행기와 쿠폰 회차 미터 합성기가 함께 api 컨텍스트에 올라온다")
     void kafkaConfigLayerIsScannedFromTheApiContext() {
         assertThat(context.getBeanNamesForType(EventRecorder.class))
                 .as("발급 이벤트는 Kafka 발행과 JVM 내 미터를 함께 지나야 한다")

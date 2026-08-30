@@ -61,7 +61,7 @@ public record IssuanceInquiryPageResponse(List<IssuanceInquiryItem> items, Strin
      * 한 회원의 발급 시도 결과와, 존재할 경우 연결된 발급권의 현재 상태를 나타냅니다.
      *
      * @param memberId 문의 대상 회원 식별자
-     * @param couponId 관련 쿠폰 캠페인 회차 식별자; 확인할 수 없으면 null
+     * @param couponId 관련 쿠폰 회차 식별자; 확인할 수 없으면 null
      * @param issuanceId 생성된 발급권 식별자; 발급 실패 또는 미확인이면 null
      * @param httpStatus 발급 시도 HTTP 상태; 시도 로그가 없으면 null
      * @param reasonCode 실패·정책 결과 사유

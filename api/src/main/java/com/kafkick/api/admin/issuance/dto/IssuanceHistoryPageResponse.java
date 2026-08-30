@@ -98,7 +98,7 @@ public record IssuanceHistoryPageResponse(
      *
      * @param issuanceId 발급권 식별자
      * @param issuanceCodeMasked 마스킹된 발급 코드
-     * @param couponId 쿠폰 캠페인 회차 식별자
+     * @param couponId 쿠폰 회차 식별자
      * @param fromStatus 전이 이전 상태; 최초 발급이면 null
      * @param toStatus 전이 이후 상태
      * @param eventType 상태 전이를 일으킨 이벤트 유형

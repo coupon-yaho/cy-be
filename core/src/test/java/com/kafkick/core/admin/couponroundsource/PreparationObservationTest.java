@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.campaignsource;
+package com.kafkick.core.admin.couponroundsource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

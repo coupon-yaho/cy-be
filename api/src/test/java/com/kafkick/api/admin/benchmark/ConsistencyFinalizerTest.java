@@ -81,7 +81,7 @@ class ConsistencyFinalizerTest {
         now.set(FINALIZED_AT.plusSeconds(600));
         twice.calculate(7L);
 
-        // 10분 뒤 재실행해도 저장되는 시각은 그대로여야 캠페인별 최신 선택이 흔들리지 않는다.
+        // 10분 뒤 재실행해도 저장되는 시각은 그대로여야 쿠폰 회차별 최신 선택이 흔들리지 않는다.
         ArgumentCaptor<Instant> stored = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<String> tokens = ArgumentCaptor.forClass(String.class);
         verify(store, times(2)).complete(eq(7L), tokens.capture(), eq(11L), eq(EngineVersion.V3),

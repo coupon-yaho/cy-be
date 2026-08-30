@@ -11,20 +11,20 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.campaignsource.PreparationItem;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.PreparationItem;
+import com.kafkick.core.admin.couponroundsource.PreparationObservation;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.preparation.V2PreparationSource;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** DB 회차 엔진과 V2 Redis 원천을 결합하는 캠페인 준비 계산 규칙을 검증합니다. */
-class CampaignPreparationCalculatorTest {
+/** DB 회차 엔진과 V2 Redis 원천을 결합하는 쿠폰 회차 준비 계산 규칙을 검증합니다. */
+class CouponRoundPreparationCalculatorTest {
 
     private static final Instant DB_AT = Instant.parse("2026-08-27T00:00:00Z");
     private static final Instant REDIS_AT = Instant.parse("2026-08-26T23:59:59Z");
 
-    private final CampaignPreparationCalculator calculator = new CampaignPreparationCalculator();
+    private final CouponRoundPreparationCalculator calculator = new CouponRoundPreparationCalculator();
 
     /** DB 원천 값이 없으면 Redis 값으로 완료 여부를 새로 만들지 않는지 검증합니다. */
     @Test
@@ -51,7 +51,7 @@ class CampaignPreparationCalculatorTest {
         assertThat(result).isEqualTo(new PreparationObservation(
                 false,
                 List.of(
-                        PreparationItem.CAMPAIGN_CONFIGURATION,
+                        PreparationItem.COUPON_ROUND_CONFIGURATION,
                         PreparationItem.DATABASE_STOCK),
                 SourceStatus.VALID,
                 DB_AT));
@@ -130,7 +130,7 @@ class CampaignPreparationCalculatorTest {
 
     /** 알 수 없는 정책 문자열은 설정 실패와 발급 경로 실패를 함께 확정하는지 검증합니다. */
     @Test
-    @DisplayName("알 수 없는 정책은 캠페인 설정과 발급 경로 실패다")
+    @DisplayName("알 수 없는 정책은 쿠폰 회차 설정과 발급 경로 실패다")
     void unknownPolicyFailsConfigurationAndIssuancePath() {
         PreparationObservation result = calculator.calculate(
                 database(false, true, null),
@@ -139,7 +139,7 @@ class CampaignPreparationCalculatorTest {
 
         assertThat(result).isEqualTo(new PreparationObservation(
                 false,
-                List.of(PreparationItem.CAMPAIGN_CONFIGURATION, PreparationItem.ISSUANCE_PATH),
+                List.of(PreparationItem.COUPON_ROUND_CONFIGURATION, PreparationItem.ISSUANCE_PATH),
                 SourceStatus.VALID,
                 DB_AT));
     }

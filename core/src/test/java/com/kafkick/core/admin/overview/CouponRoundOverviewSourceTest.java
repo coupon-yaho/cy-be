@@ -7,13 +7,13 @@ import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.couponroundsource.PreparationObservation;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 캠페인 재고 원천의 상태·수량·관측 시각 불변식을 검증합니다. */
-class CampaignOverviewSourceTest {
+/** 쿠폰 회차 재고 원천의 상태·수량·관측 시각 불변식을 검증합니다. */
+class CouponRoundOverviewSourceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-22T03:00:00Z");
 
@@ -37,10 +37,10 @@ class CampaignOverviewSourceTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private static CampaignOverviewSource source(
+    private static CouponRoundOverviewSource source(
             long couponId, Long totalQuantity, Long activeCount, Instant stockObservedAt, SourceStatus stockStatus
     ) {
-        return new CampaignOverviewSource(couponId, "캠페인", "브랜드", CouponRoundStatus.OPEN,
+        return new CouponRoundOverviewSource(couponId, "쿠폰 회차", "브랜드", CouponRoundStatus.OPEN,
                 NOW, NOW.plusSeconds(60), EngineVersion.V1, totalQuantity, activeCount, stockObservedAt,
                 stockStatus, new PreparationObservation(true, SourceStatus.VALID, NOW));
     }

@@ -15,7 +15,7 @@ package com.kafkick.core.verification;
  * </pre>
  *
  * <p><b>어휘 주의.</b> {@code coupons} 는 쿠폰이 아니라 <b>회차</b>(CLEAN 147 · CORRUPT 291행)이고 발급건은
- * {@code issuances}(300만)입니다. 구 어휘의 {@code CAMPAIGN:} · {@code COUPON:{발급건}} 을 쓰면
+ * {@code issuances}(300만)입니다. 구 회차·발급건 접두사를 쓰면
  * 시드가 기록한 expected_findings 와 100% 어긋나, 개수는 맞는데 키가 달라 원인을 못 찾습니다.
  */
 public final class TargetKey {

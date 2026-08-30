@@ -170,7 +170,7 @@ class StockRiskCalculatorTest {
                 new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null));
     }
 
-    /** O1 N_A이면 재고 미수집 상태와 무관하게 해당 캠페인을 위험 모집단에서 제외합니다. */
+    /** O1 N_A이면 재고 미수집 상태와 무관하게 해당 쿠폰 회차를 위험 모집단에서 제외합니다. */
     @Test
     void excludesNotApplicableIssuanceFlowWhenStockIsUnavailable() {
         StockRiskCalculator.StockRiskCalculation result = new StockRiskCalculator().calculate(POLICY, List.of(

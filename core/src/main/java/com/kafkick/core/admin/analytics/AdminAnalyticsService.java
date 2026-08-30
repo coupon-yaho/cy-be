@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailability;
-import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CampaignRef;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CouponRoundRef;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
@@ -36,7 +36,7 @@ public final class AdminAnalyticsService {
         return calculator.calculate(query, dataset, evaluatedAt);
     }
 
-    /** 카탈로그가 확인된 경우에만 미존재와 브랜드·캠페인 소속 불일치를 404로 판정합니다. */
+    /** 카탈로그가 확인된 경우에만 미존재와 브랜드·쿠폰 회차 소속 불일치를 404로 판정합니다. */
     private static void validateRequestedCatalog(
             AdminAnalyticsQuery query,
             AdminAnalyticsDataset dataset
@@ -51,21 +51,21 @@ public final class AdminAnalyticsService {
                     AdminAnalyticsErrorCode.BRAND_NOT_FOUND,
                     "브랜드를 찾을 수 없습니다: " + query.brandId());
         }
-        CampaignRef requestedCampaign = null;
+        CouponRoundRef requestedCouponRound = null;
         if (query.couponId() != null) {
-            requestedCampaign = dataset.catalog().campaigns().stream()
-                    .filter(campaign -> campaign.couponId() == query.couponId())
+            requestedCouponRound = dataset.catalog().couponRounds().stream()
+                    .filter(couponRound -> couponRound.couponId() == query.couponId())
                     .findFirst()
                     .orElseThrow(() -> notFound(
-                            AdminAnalyticsErrorCode.CAMPAIGN_NOT_FOUND,
-                            "캠페인을 찾을 수 없습니다: " + query.couponId()));
+                            AdminAnalyticsErrorCode.COUPON_ROUND_NOT_FOUND,
+                            "쿠폰 회차를 찾을 수 없습니다: " + query.couponId()));
         }
-        if (requestedCampaign != null
+        if (requestedCouponRound != null
                 && query.brandId() != null
-                && requestedCampaign.brandId() != query.brandId()) {
+                && requestedCouponRound.brandId() != query.brandId()) {
             throw notFound(
-                    AdminAnalyticsErrorCode.CAMPAIGN_BRAND_MISMATCH,
-                    "캠페인이 요청 브랜드에 속하지 않습니다: " + query.couponId());
+                    AdminAnalyticsErrorCode.COUPON_ROUND_BRAND_MISMATCH,
+                    "쿠폰 회차가 요청 브랜드에 속하지 않습니다: " + query.couponId());
         }
     }
 

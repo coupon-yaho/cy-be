@@ -17,7 +17,7 @@ import com.kafkick.api.admin.support.validation.ValidAnalyticsRange;
  * @param from 필수 조회 시작일
  * @param to 필수 조회 종료일
  * @param brandId 선택 브랜드 필터
- * @param couponId 선택 쿠폰 캠페인 회차 필터
+ * @param couponId 선택 쿠폰 회차 필터
  */
 @ValidAnalyticsRange
 public record AnalyticsQuery(

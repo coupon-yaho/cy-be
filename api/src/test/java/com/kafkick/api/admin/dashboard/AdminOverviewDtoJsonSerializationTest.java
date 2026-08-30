@@ -19,7 +19,7 @@ import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
 import com.kafkick.api.admin.support.ObservedValue;
 import com.kafkick.api.admin.support.AdminJsonTest;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.admin.campaignsource.PreparationItem;
+import com.kafkick.core.admin.couponroundsource.PreparationItem;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -96,7 +96,7 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"actionRequired\":{\"value\":{\"totalCount\":2,\"urgentCount\":1,\"warningCount\":1},\"state\":\"VALID\",\"observedAt\":\"2026-08-17T05:03:57Z\"}")
                 .contains("\"openingSoon\":{\"value\":{\"totalCount\":2,\"preparationIncompleteCount\":1},\"state\":\"STALE\",\"observedAt\":\"2026-08-17T05:03:56Z\"}")
                 .contains("\"longestWait\":\"PT12M\"")
-                .contains("\"campaignName\":\"딜리버리고 여름특가\"")
+                .contains("\"couponName\":\"딜리버리고 여름특가\"")
                 .contains("\"duration\":\"PT2M18S\"")
                 .contains("\"code\":\"QUEUE_STALLED\"")
                 .contains("\"displayText\":\"D2에서 입장 처리 상태 확인\"")
@@ -140,7 +140,7 @@ class AdminOverviewDtoJsonSerializationTest {
                         SourceStatus.NO_TRAFFIC,
                         OBSERVED_AT),
                 new ObservedValue<>(
-                        new AdminOverviewResponse.CampaignStatusSummary(0, 0, 0),
+                        new AdminOverviewResponse.CouponRoundStatusSummary(0, 0, 0),
                         SourceStatus.VALID,
                         OBSERVED_AT),
                 new ObservedValue<>(
@@ -156,9 +156,9 @@ class AdminOverviewDtoJsonSerializationTest {
 
         assertThat(objectMapper.writeValueAsString(response))
                 .contains("\"topItems\":[]")
-                .contains("\"campaigns\":{\"value\":[],\"state\":\"VALID\"")
+                .contains("\"couponRounds\":{\"value\":[],\"state\":\"VALID\"")
                 .contains("\"state\":\"NO_TRAFFIC\"")
-                .doesNotContain("\"longestWait\":", "\"nearestDepletion\":");
+                .doesNotContain("\"campaigns\":", "\"longestWait\":", "\"nearestDepletion\":");
     }
 
     /** 정합성 실패 권장 행동의 공개 enum 코드가 Overview JSON에서 바뀌지 않아야 합니다. */
@@ -195,11 +195,11 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"code\":\"CONSISTENCY_FAILURE\"");
     }
 
-    /** 집계 4종, campaigns의 O1·O2·O4, 최상위 O3가 완전한 HTTP JSON 계약으로 직렬화되는지 검증합니다. */
+    /** 집계 4종, couponRounds의 O1·O2·O4, 최상위 O3가 완전한 HTTP JSON 계약으로 직렬화되는지 검증합니다. */
     @Test
-    @DisplayName("Overview JSON은 전체 집계와 campaigns O1 O2 O4 및 O3 결과를 직렬화한다")
-    void overviewSerializesAggregatesCampaignsAndCustomerOutcomes() throws Exception {
-        AdminOverviewResponse.CampaignOverview campaign = new AdminOverviewResponse.CampaignOverview(
+    @DisplayName("Overview JSON은 전체 집계와 couponRounds O1 O2 O4 및 O3 결과를 직렬화한다")
+    void overviewSerializesAggregatesCouponRoundsAndCustomerOutcomes() throws Exception {
+        AdminOverviewResponse.CouponRoundOverview couponRound = new AdminOverviewResponse.CouponRoundOverview(
                 1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.OPEN,
                 Instant.parse("2026-08-17T04:40:00Z"), null, Severity.CRITICAL,
                 new ObservedValue<>(
@@ -212,9 +212,9 @@ class AdminOverviewDtoJsonSerializationTest {
                                 Duration.ofMinutes(2)),
                         SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(
-                        new AdminOverviewResponse.CampaignQueueStatus(
+                        new AdminOverviewResponse.CouponRoundQueueStatus(
                                 3204, AdminOverviewSnapshot.TrendDirection.INCREASING, 180,
-                                0.0, null, AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED),
+                                0.0, null, AdminOverviewSnapshot.CouponRoundQueueAssessment.ADMISSION_STOPPED),
                         SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(
                         new AdminOverviewResponse.StockForecast(4650, 15000, 0.31, null),
@@ -242,11 +242,11 @@ class AdminOverviewDtoJsonSerializationTest {
                                 Instant.parse("2026-08-17T05:03:48Z"), SNAPSHOT_AT),
                         SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(
-                        new AdminOverviewResponse.CampaignStatusSummary(3, 1, 12),
+                        new AdminOverviewResponse.CouponRoundStatusSummary(3, 1, 12),
                         SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(new AdminOverviewResponse.ActionItemSummary(0, List.of()),
                         SourceStatus.VALID, OBSERVED_AT),
-                new ObservedValue<>(List.of(campaign), SourceStatus.VALID, OBSERVED_AT),
+                new ObservedValue<>(List.of(couponRound), SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(
                         new AdminOverviewResponse.CustomerOutcomeSummary(
                                 Instant.parse("2026-08-17T04:53:58Z"), SNAPSHOT_AT, 0.3d,
@@ -264,16 +264,19 @@ class AdminOverviewDtoJsonSerializationTest {
                 .contains("\"aggregateIssuanceRate\":{\"value\":{\"currentPerSecond\":612.0")
                 .contains("\"aggregateQueue\":{\"value\":{\"waitingCount\":3388")
                 .contains("\"successfulP99\":\"PT0.084S\"")
-                .contains("\"campaignStatusSummary\":{\"value\":{\"openCount\":3")
-                .contains("\"campaigns\":{\"value\":[{\"priority\":1,\"couponId\":17")
+                .contains("\"couponRoundStatusSummary\":{\"value\":{\"openCount\":3")
+                .contains("\"couponRounds\":{\"value\":[{\"priority\":1,\"couponId\":17")
+                .contains("\"couponName\":\"딜리버리고 여름특가\"")
                 .contains("\"windowStart\":\"2026-08-17T04:53:58Z\"")
-                .contains("\"campaignQueueStatus\":{\"value\":{\"waitingCount\":3204")
+                .contains("\"couponRoundQueueStatus\":{\"value\":{\"waitingCount\":3204")
                 .contains("\"remainingRatio\":0.31")
                 .contains("\"failedPreparationItems\":[\"REDIS_WARMUP\",\"REDIS_GATE\"]")
                 .contains("\"customerOutcomes\":{\"value\":{\"windowStart\":")
                 .contains("\"totalCount\":0.3")
                 .contains("\"type\":\"ISSUED\",\"count\":0.1,\"ratio\":0.3333333333333333")
-                .contains("\"campaigns\":{\"value\":[", "\"topItems\":[]")
+                .contains("\"couponRounds\":{\"value\":[", "\"topItems\":[]")
+                .doesNotContain("\"campaignStatusSummary\"", "\"campaigns\"",
+                        "\"campaignName\"", "\"campaignQueueStatus\"")
                 .doesNotContain("\"redisPreparation\"", "\"warmupReady\"", "\"gateReady\"")
                 .doesNotContain("\"admissionsPerMinute\":0.0,\"estimatedWait\":");
     }

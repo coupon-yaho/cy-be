@@ -15,18 +15,18 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.PreparationItem;
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.PreparationItem;
+import com.kafkick.core.admin.couponroundsource.PreparationObservation;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource.StockCounts;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundPreparationCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
@@ -84,25 +84,25 @@ class AdminOverviewServiceTest {
         assertThat(runtimeStore.getCalls).isEqualTo(1);
         assertThat(runtimeStore.lastKnownGoodCalls).isZero();
         assertThat(observationSource.calls).isEqualTo(1);
-        assertThat(observationSource.request.campaignTargets())
+        assertThat(observationSource.request.couponRoundTargets())
                 .extracting(target -> target.couponId())
                 .containsExactly(701L, 909L);
-        assertThat(result.snapshot().campaigns().value())
-                .extracting(AdminOverviewSnapshot.CampaignOverview::couponId)
+        assertThat(result.snapshot().couponRounds().value())
+                .extracting(AdminOverviewSnapshot.CouponRoundOverview::couponId)
                 .containsExactly(701L, 909L);
     }
 
     @Test
-    void makesCampaignSectionsUnavailableWhenCatalogIsUnavailable() {
-        AdminCampaignCatalog unavailable = new AdminCampaignCatalog(
+    void makesCouponRoundSectionsUnavailableWhenCatalogIsUnavailable() {
+        AdminCouponRoundCatalog unavailable = new AdminCouponRoundCatalog(
                 SourceStatus.UNAVAILABLE, null, List.of());
 
         AdminOverviewSnapshot snapshot = service(
                 new RecordingReader(unavailable), new RecordingRuntimeStore(),
                 new RecordingObservationSource()).getOverview().snapshot();
 
-        assertThat(snapshot.campaigns().status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(snapshot.campaignStatusSummary().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.couponRounds().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.couponRoundStatusSummary().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(snapshot.stockRisk().status()).isEqualTo(SourceStatus.UNAVAILABLE);
     }
@@ -125,7 +125,7 @@ class AdminOverviewServiceTest {
     /** 준비 원천 장애를 정상 빈 조치 목록으로 바꾸는 회귀를 방지합니다. */
     @Test
     void keepsActionSurfacesUnavailableWhenPreparationIsUnavailable() {
-        AdminCampaignCatalog catalog = scheduledCatalog(
+        AdminCouponRoundCatalog catalog = scheduledCatalog(
                 new PreparationObservation(null, SourceStatus.UNAVAILABLE, null));
 
         AdminOverviewSnapshot snapshot = service(
@@ -143,7 +143,7 @@ class AdminOverviewServiceTest {
     /** 마지막 준비 미완료 값의 참고 조치는 유지하되 전체 조치 상태를 최신값으로 올리지 않습니다. */
     @Test
     void keepsStalePreparationActionAndActionSurfaceStateStale() {
-        AdminCampaignCatalog catalog = scheduledCatalog(
+        AdminCouponRoundCatalog catalog = scheduledCatalog(
                 new PreparationObservation(false, SourceStatus.STALE, NOW.minusSeconds(1)));
 
         AdminOverviewSnapshot snapshot = service(
@@ -157,13 +157,13 @@ class AdminOverviewServiceTest {
         assertThat(snapshot.actionRequired().value().warningCount()).isEqualTo(1L);
         assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.STALE);
         assertThat(snapshot.actionItems().value().topItems().getFirst().recommendedAction().code())
-                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.COUPON_ROUND_NOT_READY);
     }
 
     /** 준비 미완료 판정 하나가 네 운영 화면에서 서로 다른 결과로 갈라지는 회귀를 방지합니다. */
     @Test
-    void linksValidIncompletePreparationToKpiActionListAndCampaignRow() {
-        AdminCampaignCatalog catalog = scheduledCatalog(
+    void linksValidIncompletePreparationToKpiActionListAndCouponRoundRow() {
+        AdminCouponRoundCatalog catalog = scheduledCatalog(
                 new PreparationObservation(false, SourceStatus.VALID, NOW));
         AdminOverviewService service = service(
                 new RecordingReader(catalog), new RecordingRuntimeStore(),
@@ -176,16 +176,16 @@ class AdminOverviewServiceTest {
         AdminOverviewSnapshot.OperationActionItem action =
                 snapshot.actionItems().value().topItems().getFirst();
         assertThat(action.recommendedAction().code())
-                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
-        AdminOverviewSnapshot.CampaignOverview campaign = snapshot.campaigns().value().getFirst();
-        assertThat(campaign.severity()).isEqualTo(com.kafkick.core.observation.Severity.WARN);
-        assertThat(campaign.customerImpact()).isEqualTo(action.customerImpact());
-        assertThat(campaign.recommendedAction()).isSameAs(action.recommendedAction());
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.COUPON_ROUND_NOT_READY);
+        AdminOverviewSnapshot.CouponRoundOverview couponRound = snapshot.couponRounds().value().getFirst();
+        assertThat(couponRound.severity()).isEqualTo(com.kafkick.core.observation.Severity.WARN);
+        assertThat(couponRound.customerImpact()).isEqualTo(action.customerImpact());
+        assertThat(couponRound.recommendedAction()).isSameAs(action.recommendedAction());
     }
 
     /** V2 게이트 실패가 기존 네 운영현황 영역에 같은 원인으로 연결되는지 검증합니다. */
     @Test
-    void linksV2GateFailureToKpiActionAndCampaignRow() {
+    void linksV2GateFailureToKpiActionAndCouponRoundRow() {
         RecordingReader catalogReader = new RecordingReader(v2ReadyCatalog(701L));
         V2AdminPreparationReader preparationReader = (requests, observedAt) -> {
             assertThat(requests).singleElement().satisfies(request -> {
@@ -207,8 +207,8 @@ class AdminOverviewServiceTest {
         AdminOverviewSnapshot.OperationActionItem action =
                 snapshot.actionItems().value().topItems().getFirst();
         assertThat(action.recommendedAction().code())
-                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
-        assertThat(snapshot.campaigns().value().getFirst().failedPreparationItems())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.COUPON_ROUND_NOT_READY);
+        assertThat(snapshot.couponRounds().value().getFirst().failedPreparationItems())
                 .containsExactly(PreparationItem.REDIS_GATE);
     }
 
@@ -224,14 +224,14 @@ class AdminOverviewServiceTest {
 
         assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.PENDING);
-        assertThat(snapshot.campaigns().value().getFirst().failedPreparationItems()).isEmpty();
+        assertThat(snapshot.couponRounds().value().getFirst().failedPreparationItems()).isEmpty();
     }
 
     /** V2 Redis 장애가 같은 목록의 V1 준비 완료를 실패 항목으로 바꾸지 않는지 검증합니다. */
     @Test
     void isolatesV2UnavailableFromV1Preparation() {
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
-                readyCampaign(701L, EngineVersion.V1), readyCampaign(702L, EngineVersion.V2)));
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                readyCouponRound(701L, EngineVersion.V1), readyCouponRound(702L, EngineVersion.V2)));
         V2AdminPreparationReader preparationReader = (requests, observedAt) -> Map.of(
                 702L, V2PreparationSource.unavailable());
 
@@ -239,22 +239,22 @@ class AdminOverviewServiceTest {
                 new RecordingReader(catalog), preparationReader).getOverview().snapshot();
 
         assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(snapshot.campaigns().value())
-                .allSatisfy(campaign -> assertThat(campaign.failedPreparationItems()).isEmpty());
+        assertThat(snapshot.couponRounds().value())
+                .allSatisfy(couponRound -> assertThat(couponRound.failedPreparationItems()).isEmpty());
     }
 
     @Test
     void preservesOpenStockValueStatusAndObservedAtInTheObservationRequest() {
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
-                campaign(701L, CouponRoundStatus.OPEN,
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                couponRound(701L, CouponRoundStatus.OPEN,
                         new CouponMetricsSource.Observation<>(new StockCounts(10, 4), SourceStatus.VALID, NOW)),
-                campaign(702L, CouponRoundStatus.OPEN,
+                couponRound(702L, CouponRoundStatus.OPEN,
                         new CouponMetricsSource.Observation<>(null, SourceStatus.UNAVAILABLE, null))));
         RecordingObservationSource source = new RecordingObservationSource();
 
         service(new RecordingReader(catalog), new RecordingRuntimeStore(), source).getOverview();
 
-        assertThat(source.request.campaignTargets()).satisfiesExactly(
+        assertThat(source.request.couponRoundTargets()).satisfiesExactly(
                 target -> {
                     assertThat(target.couponId()).isEqualTo(701L);
                     assertThat(target.stockAvailable()).isTrue();
@@ -274,13 +274,13 @@ class AdminOverviewServiceTest {
         RecordingRuntimeStore runtimeStore = new RecordingRuntimeStore(new RuntimeConfigSnapshot(
                 EngineVersion.V1, ReleaseStage.V1, QueueMode.OFF, 1L,
                 NOW, "test", SourceStatus.UNAVAILABLE));
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
-                campaign(701L, CouponRoundStatus.OPEN,
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                couponRound(701L, CouponRoundStatus.OPEN,
                         new CouponMetricsSource.Observation<>(new StockCounts(10, 4), SourceStatus.VALID, NOW))));
 
-        AdminOverviewSnapshot.CampaignOverview row = service(
+        AdminOverviewSnapshot.CouponRoundOverview row = service(
                 new RecordingReader(catalog), runtimeStore,
-                new RecordingObservationSource()).getOverview().snapshot().campaigns().value().getFirst();
+                new RecordingObservationSource()).getOverview().snapshot().couponRounds().value().getFirst();
 
         assertThat(row.stockForecast().status()).isEqualTo(SourceStatus.UNAVAILABLE);
         assertThat(runtimeStore.getCalls).isEqualTo(1);
@@ -291,7 +291,7 @@ class AdminOverviewServiceTest {
     void rejectsObservationDataForAnotherSnapshotRequest() {
         OverviewObservationSource mismatched = requested -> {
             OverviewObservationRequest other = new OverviewObservationRequest(
-                    requested.snapshotAt().minusSeconds(1), requested.campaignTargets(), requested.policy());
+                    requested.snapshotAt().minusSeconds(1), requested.couponRoundTargets(), requested.policy());
             return emptyObservationData(other);
         };
 
@@ -303,9 +303,9 @@ class AdminOverviewServiceTest {
     }
 
     @Test
-    void keepsActionSurfacesPendingButReusesStoppedIssuanceActionOnCampaignRow() {
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
-                campaign(701L, CouponRoundStatus.OPEN,
+    void keepsActionSurfacesPendingButReusesStoppedIssuanceActionOnCouponRoundRow() {
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                couponRound(701L, CouponRoundStatus.OPEN,
                         new CouponMetricsSource.Observation<>(new StockCounts(10, 4), SourceStatus.VALID, NOW))));
         OverviewObservationSource source = requested -> new OverviewObservationData(
                 requested, List.of(stoppedFlow(701L)),
@@ -318,8 +318,8 @@ class AdminOverviewServiceTest {
                 new RecordingReader(catalog), new RecordingRuntimeStore(), POLICY, source,
                 new PendingAdminQueueObservationSource(),
                 new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
-                new CampaignQueueCalculator(), new CustomerOutcomeCalculator(),
-                new StockRiskCalculator(), new CampaignOverviewCalculator(),
+                new CouponRoundQueueCalculator(), new CustomerOutcomeCalculator(),
+                new StockRiskCalculator(), new CouponRoundOverviewCalculator(),
                 notApplicableFinalReader(), new ConsistencyActionCalculator(), actionCalculator,
                 new OverviewStatusCalculator());
 
@@ -329,7 +329,7 @@ class AdminOverviewServiceTest {
         assertThat(result.snapshot().actionRequired().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(result.snapshot().actionItems().status()).isEqualTo(SourceStatus.PENDING);
         AdminOverviewSnapshot.RecommendedAction rowAction =
-                result.snapshot().campaigns().value().getFirst().recommendedAction();
+                result.snapshot().couponRounds().value().getFirst().recommendedAction();
         assertThat(rowAction.code()).isEqualTo(AdminOverviewSnapshot.ActionCode.ISSUANCE_STOPPED);
         assertThat(rowAction).isSameAs(actionCalculator.result.representativeByCoupon()
                 .get(701L).recommendedAction());
@@ -337,7 +337,7 @@ class AdminOverviewServiceTest {
 
     @Test
     void reportsUnavailableWhenNoCoreSourceCarriesAValue() {
-        AdminCampaignCatalog unavailable = new AdminCampaignCatalog(
+        AdminCouponRoundCatalog unavailable = new AdminCouponRoundCatalog(
                 SourceStatus.UNAVAILABLE, null, List.of());
 
         AdminOverviewResult result = service(
@@ -351,10 +351,10 @@ class AdminOverviewServiceTest {
     void invokesEveryCalculationBoundaryExactlyOncePerOverviewRequest() {
         IssuanceFlowCalculator issuance = org.mockito.Mockito.spy(new IssuanceFlowCalculator());
         IssuanceActionCalculator issuanceAction = org.mockito.Mockito.spy(new IssuanceActionCalculator());
-        CampaignQueueCalculator queue = org.mockito.Mockito.spy(new CampaignQueueCalculator());
+        CouponRoundQueueCalculator queue = org.mockito.Mockito.spy(new CouponRoundQueueCalculator());
         CustomerOutcomeCalculator outcome = org.mockito.Mockito.spy(new CustomerOutcomeCalculator());
         StockRiskCalculator stock = org.mockito.Mockito.spy(new StockRiskCalculator());
-        CampaignOverviewCalculator campaign = org.mockito.Mockito.spy(new CampaignOverviewCalculator());
+        CouponRoundOverviewCalculator couponRound = org.mockito.Mockito.spy(new CouponRoundOverviewCalculator());
         OperationActionCalculator action = org.mockito.Mockito.spy(new OperationActionCalculator());
         ConsistencyActionCalculator consistencyAction =
                 org.mockito.Mockito.spy(new ConsistencyActionCalculator());
@@ -364,20 +364,20 @@ class AdminOverviewServiceTest {
                 new RecordingReader(validCatalog(701L)), new RecordingRuntimeStore(), POLICY,
                 new RecordingObservationSource(), new PendingAdminQueueObservationSource(),
                 issuance, issuanceAction, queue, outcome, stock,
-                campaign, notApplicableFinalReader(), consistencyAction, action, status);
+                couponRound, notApplicableFinalReader(), consistencyAction, action, status);
 
         service.getOverview();
 
         assertThat(List.of(issuance, issuanceAction, queue, outcome, stock, consistencyAction, action, status))
                 .allSatisfy(calculator -> assertThat(
                         org.mockito.Mockito.mockingDetails(calculator).getInvocations()).hasSize(1));
-        assertThat(org.mockito.Mockito.mockingDetails(campaign).getInvocations())
+        assertThat(org.mockito.Mockito.mockingDetails(couponRound).getInvocations())
                 .extracting(invocation -> invocation.getMethod().getName())
                 .containsExactly("calculatePreparation", "calculate");
     }
 
     @Test
-    void readsLatestFinalsOnceForTheDatabaseCampaignPopulation() {
+    void readsLatestFinalsOnceForTheDatabaseCouponRoundPopulation() {
         RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
                 701L, finalObservation(SourceStatus.N_A, null),
                 909L, finalObservation(SourceStatus.N_A, null)));
@@ -390,7 +390,7 @@ class AdminOverviewServiceTest {
     }
 
     @Test
-    void rejectsFinalResponseForAnotherCampaignPopulation() {
+    void rejectsFinalResponseForAnotherCouponRoundPopulation() {
         RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
                 701L, finalObservation(SourceStatus.N_A, null)));
 
@@ -403,7 +403,7 @@ class AdminOverviewServiceTest {
     }
 
     @Test
-    void linksFinalFailureToKpiListAndCampaignRowWithEvaluatedAt() {
+    void linksFinalFailureToKpiListAndCouponRoundRowWithEvaluatedAt() {
         Instant evaluatedAt = NOW.minusSeconds(30);
         RecordingFinalReader finalReader = new RecordingFinalReader(Map.of(
                 701L, validFailedFinal(701L, 0L, 1L, evaluatedAt)));
@@ -419,8 +419,8 @@ class AdminOverviewServiceTest {
         assertThat(action.detectedAt()).isEqualTo(evaluatedAt);
         assertThat(snapshot.actionRequired().observedAt()).isEqualTo(evaluatedAt);
         assertThat(snapshot.actionItems().observedAt()).isEqualTo(evaluatedAt);
-        assertThat(action.campaignName()).isEqualTo("campaign-701");
-        AdminOverviewSnapshot.CampaignOverview row = snapshot.campaigns().value().getFirst();
+        assertThat(action.couponName()).isEqualTo("couponRound-701");
+        AdminOverviewSnapshot.CouponRoundOverview row = snapshot.couponRounds().value().getFirst();
         assertThat(row.recommendedAction()).isSameAs(action.recommendedAction());
     }
 
@@ -438,7 +438,7 @@ class AdminOverviewServiceTest {
         assertThat(snapshot.actionRequired().value().totalCount()).isZero();
         assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.actionItems().value().topItems()).isEmpty();
-        assertThat(snapshot.campaigns().value())
+        assertThat(snapshot.couponRounds().value())
                 .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
     }
 
@@ -456,7 +456,7 @@ class AdminOverviewServiceTest {
         assertThat(snapshot.actionRequired().value().totalCount()).isZero();
         assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.VALID);
         assertThat(snapshot.actionItems().value().topItems()).isEmpty();
-        assertThat(snapshot.campaigns().value())
+        assertThat(snapshot.couponRounds().value())
                 .allSatisfy(row -> assertThat(row.recommendedAction()).isNull());
     }
 
@@ -473,12 +473,12 @@ class AdminOverviewServiceTest {
                 snapshot.actionItems().value().topItems().getFirst();
         assertThat(action.customerImpact())
                 .isEqualTo(AdminOverviewSnapshot.CustomerImpact.WIDESPREAD);
-        assertThat(snapshot.campaigns().value().getFirst().recommendedAction())
+        assertThat(snapshot.couponRounds().value().getFirst().recommendedAction())
                 .isSameAs(action.recommendedAction());
     }
 
     private static AdminOverviewService service(
-            AdminCampaignDataReader reader,
+            AdminCouponRoundDataReader reader,
             RuntimeConfigStore runtimeStore,
             OverviewObservationSource observationSource
     ) {
@@ -487,7 +487,7 @@ class AdminOverviewServiceTest {
 
     /** 실제 준비 Resolver와 기본 V2 재고 fallback을 연결한 V2 서비스 fixture를 생성합니다. */
     private static AdminOverviewService serviceWithPreparation(
-            AdminCampaignDataReader reader,
+            AdminCouponRoundDataReader reader,
             V2AdminPreparationReader preparationReader
     ) {
         return new AdminOverviewService(
@@ -495,8 +495,8 @@ class AdminOverviewServiceTest {
                 new RecordingRuntimeStore(), POLICY, new RecordingObservationSource(),
                 new PendingAdminQueueObservationSource(),
                 new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
-                new CampaignQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
-                new CampaignOverviewCalculator(), new CampaignPreparationCalculator(),
+                new CouponRoundQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
+                new CouponRoundOverviewCalculator(), new CouponRoundPreparationCalculator(),
                 notApplicableFinalReader(), new ConsistencyActionCalculator(),
                 new OperationActionCalculator(), new OverviewStatusCalculator(),
                 new AdminStockResolver(AdminStockResolver.unavailableV2Reader()),
@@ -504,7 +504,7 @@ class AdminOverviewServiceTest {
     }
 
     private static AdminOverviewService service(
-            AdminCampaignDataReader reader,
+            AdminCouponRoundDataReader reader,
             RuntimeConfigStore runtimeStore,
             OverviewObservationSource observationSource,
             ConsistencyFinalReader finalReader
@@ -513,8 +513,8 @@ class AdminOverviewServiceTest {
                 new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), reader, runtimeStore, POLICY,
                 observationSource, new PendingAdminQueueObservationSource(),
                 new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
-                new CampaignQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
-                new CampaignOverviewCalculator(), finalReader, new ConsistencyActionCalculator(),
+                new CouponRoundQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
+                new CouponRoundOverviewCalculator(), finalReader, new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
                 new OverviewStatusCalculator());
     }
@@ -527,31 +527,31 @@ class AdminOverviewServiceTest {
                 java.util.LinkedHashMap::new));
     }
 
-    private static AdminCampaignCatalog validCatalog(Long... couponIds) {
-        return new AdminCampaignCatalog(SourceStatus.VALID, NOW,
+    private static AdminCouponRoundCatalog validCatalog(Long... couponIds) {
+        return new AdminCouponRoundCatalog(SourceStatus.VALID, NOW,
                 java.util.Arrays.stream(couponIds)
-                        .map(couponId -> new AdminCampaignCatalog.CampaignData(
-                                couponId, "campaign-" + couponId, "brand",
+                        .map(couponId -> new AdminCouponRoundCatalog.CouponRoundData(
+                                couponId, "couponRound-" + couponId, "brand",
                                 CouponRoundStatus.SCHEDULED, NOW.plusSeconds(600), NOW.plusSeconds(3600),
                                 new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                                 new PreparationObservation(null, SourceStatus.PENDING, null)))
                         .toList());
     }
 
-    private static AdminCampaignCatalog scheduledCatalog(PreparationObservation preparation) {
-        return new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
-                new AdminCampaignCatalog.CampaignData(
-                        701L, "campaign-701", "brand", CouponRoundStatus.SCHEDULED,
+    private static AdminCouponRoundCatalog scheduledCatalog(PreparationObservation preparation) {
+        return new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                new AdminCouponRoundCatalog.CouponRoundData(
+                        701L, "couponRound-701", "brand", CouponRoundStatus.SCHEDULED,
                         NOW.plusSeconds(600), NOW.plusSeconds(3600),
                         new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                         preparation)));
     }
 
-    private static AdminCampaignCatalog readyCatalog(Long... couponIds) {
-        return new AdminCampaignCatalog(SourceStatus.VALID, NOW,
+    private static AdminCouponRoundCatalog readyCatalog(Long... couponIds) {
+        return new AdminCouponRoundCatalog(SourceStatus.VALID, NOW,
                 java.util.Arrays.stream(couponIds)
-                        .map(couponId -> new AdminCampaignCatalog.CampaignData(
-                                couponId, "campaign-" + couponId, "brand",
+                        .map(couponId -> new AdminCouponRoundCatalog.CouponRoundData(
+                                couponId, "couponRound-" + couponId, "brand",
                                 CouponRoundStatus.SCHEDULED, NOW.plusSeconds(600), NOW.plusSeconds(3600),
                                 new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                                 new PreparationObservation(true, SourceStatus.VALID, NOW)))
@@ -559,18 +559,18 @@ class AdminOverviewServiceTest {
     }
 
     /** Redis 준비 비교값을 모두 가진 V2 예약 회차 카탈로그를 생성합니다. */
-    private static AdminCampaignCatalog v2ReadyCatalog(long couponId) {
-        return new AdminCampaignCatalog(
-                SourceStatus.VALID, NOW, List.of(readyCampaign(couponId, EngineVersion.V2)));
+    private static AdminCouponRoundCatalog v2ReadyCatalog(long couponId) {
+        return new AdminCouponRoundCatalog(
+                SourceStatus.VALID, NOW, List.of(readyCouponRound(couponId, EngineVersion.V2)));
     }
 
     /** DB 설정·재고 준비가 완료된 오픈 임박 회차를 지정한 엔진으로 생성합니다. */
-    private static AdminCampaignCatalog.CampaignData readyCampaign(
+    private static AdminCouponRoundCatalog.CouponRoundData readyCouponRound(
             long couponId,
             EngineVersion engineVersion
     ) {
-        return new AdminCampaignCatalog.CampaignData(
-                couponId, "campaign-" + couponId, "brand", engineVersion,
+        return new AdminCouponRoundCatalog.CouponRoundData(
+                couponId, "couponRound-" + couponId, "brand", engineVersion,
                 CouponRoundStatus.SCHEDULED, NOW.plusSeconds(600L), NOW.plusSeconds(3_600L),
                 new CouponMetricsSource.Observation<>(
                         new StockCounts(100L, 0L), SourceStatus.VALID, NOW),
@@ -603,13 +603,13 @@ class AdminOverviewServiceTest {
         return new ConsistencyFinalObservation(status, value);
     }
 
-    private static AdminCampaignCatalog.CampaignData campaign(
+    private static AdminCouponRoundCatalog.CouponRoundData couponRound(
             long couponId,
             CouponRoundStatus status,
             CouponMetricsSource.Observation<StockCounts> stock
     ) {
-        return new AdminCampaignCatalog.CampaignData(
-                couponId, "campaign-" + couponId, "brand", status,
+        return new AdminCouponRoundCatalog.CouponRoundData(
+                couponId, "couponRound-" + couponId, "brand", status,
                 NOW.minusSeconds(600), NOW.plusSeconds(3600), stock,
                 new PreparationObservation(null, SourceStatus.PENDING, null));
     }
@@ -628,12 +628,12 @@ class AdminOverviewServiceTest {
     }
 
     private static OverviewObservationData emptyObservationData(OverviewObservationRequest requested) {
-        List<IssuanceFlowInput> flows = requested.campaignTargets().stream()
+        List<IssuanceFlowInput> flows = requested.couponRoundTargets().stream()
                 .map(target -> {
-                    SourceStatus flowStatus = target.campaignStatus() == CouponRoundStatus.OPEN
+                    SourceStatus flowStatus = target.couponRoundStatus() == CouponRoundStatus.OPEN
                             ? SourceStatus.UNAVAILABLE : SourceStatus.N_A;
                     return new IssuanceFlowInput(
-                            target.couponId(), target.campaignStatus(), null,
+                            target.couponId(), target.couponRoundStatus(), null,
                             null, null, null, null, null, null, null,
                             null, null, null, null, null, flowStatus, null);
                 })
@@ -646,25 +646,25 @@ class AdminOverviewServiceTest {
                 new AdminOverviewSnapshot.Observation<>(null, SourceStatus.PENDING, null));
     }
 
-    private static final class RecordingReader implements AdminCampaignDataReader {
+    private static final class RecordingReader implements AdminCouponRoundDataReader {
 
-        private final AdminCampaignCatalog catalog;
+        private final AdminCouponRoundCatalog catalog;
         private int catalogCalls;
         private Instant snapshotAt;
 
-        private RecordingReader(AdminCampaignCatalog catalog) {
+        private RecordingReader(AdminCouponRoundCatalog catalog) {
             this.catalog = catalog;
         }
 
         @Override
-        public AdminCampaignCatalog loadCatalog(Instant requestedAt) {
+        public AdminCouponRoundCatalog loadCatalog(Instant requestedAt) {
             catalogCalls++;
             snapshotAt = requestedAt;
             return catalog;
         }
 
         @Override
-        public AdminCampaignDetailData findDetail(long couponId, Instant from, Instant to, Instant requestedAt) {
+        public AdminCouponRoundDetailData findDetail(long couponId, Instant from, Instant to, Instant requestedAt) {
             throw new AssertionError("Overview 요청에서 detail을 읽으면 안 됩니다.");
         }
     }

@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.campaignsource;
+package com.kafkick.core.admin.couponroundsource;
 
 import java.time.Instant;
 import java.util.List;
@@ -10,22 +10,22 @@ import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 관리자 운영현황의 DB 캠페인 모집단과 해당 조회 상태입니다. */
-public record AdminCampaignCatalog(
+/** 관리자 운영현황의 DB 쿠폰 회차 모집단과 해당 조회 상태입니다. */
+public record AdminCouponRoundCatalog(
         SourceStatus status,
         Instant observedAt,
-        List<CampaignData> campaigns
+        List<CouponRoundData> couponRounds
 ) {
 
     /** 카탈로그 상태와 값·관측 시각의 조합, 그리고 목록 불변성을 검증합니다. */
-    public AdminCampaignCatalog {
+    public AdminCouponRoundCatalog {
         Objects.requireNonNull(status, "status");
-        Objects.requireNonNull(campaigns, "campaigns");
-        campaigns = List.copyOf(campaigns);
+        Objects.requireNonNull(couponRounds, "couponRounds");
+        couponRounds = List.copyOf(couponRounds);
         switch (status) {
             case VALID -> Objects.requireNonNull(observedAt, "observedAt");
             case PENDING, UNAVAILABLE -> {
-                if (observedAt != null || !campaigns.isEmpty()) {
+                if (observedAt != null || !couponRounds.isEmpty()) {
                     throw new IllegalArgumentException(status + " 카탈로그는 observedAt 없이 빈 목록이어야 합니다.");
                 }
             }
@@ -33,10 +33,10 @@ public record AdminCampaignCatalog(
         }
     }
 
-    /** 카탈로그의 한 캠페인 기본 정보와 독립 재고·준비 관측값입니다. */
-    public record CampaignData(
+    /** 카탈로그의 한 쿠폰 회차 기본 정보와 독립 재고·준비 관측값입니다. */
+    public record CouponRoundData(
             long couponId,
-            String campaignName,
+            String couponName,
             String brandName,
             EngineVersion engineVersion,
             CouponRoundStatus status,
@@ -46,9 +46,9 @@ public record AdminCampaignCatalog(
             PreparationSource preparation
     ) {
 
-        /** 캠페인 메타데이터와 독립 관측값이 누락되지 않도록 검증합니다. */
-        public CampaignData {
-            Objects.requireNonNull(campaignName, "campaignName");
+        /** 쿠폰 회차 메타데이터와 독립 관측값이 누락되지 않도록 검증합니다. */
+        public CouponRoundData {
+            Objects.requireNonNull(couponName, "couponName");
             Objects.requireNonNull(brandName, "brandName");
             Objects.requireNonNull(engineVersion, "engineVersion");
             Objects.requireNonNull(status, "status");
@@ -64,9 +64,9 @@ public record AdminCampaignCatalog(
          * @deprecated 새 호출부는 회차 DB에서 읽은 {@link EngineVersion}을 명시해야 합니다.
          */
         @Deprecated
-        public CampaignData(
+        public CouponRoundData(
                 long couponId,
-                String campaignName,
+                String couponName,
                 String brandName,
                 CouponRoundStatus status,
                 Instant opensAt,
@@ -74,17 +74,17 @@ public record AdminCampaignCatalog(
                 CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
                 PreparationSource preparation
         ) {
-            this(couponId, campaignName, brandName, EngineVersion.V1, status,
+            this(couponId, couponName, brandName, EngineVersion.V1, status,
                     opensAt, closesAt, stock, preparation);
         }
 
         /**
          * 이전 fixture의 최종 준비 관측을 DB 원천 계약으로 변환합니다.
          *
-         * @param couponId 캠페인 식별자
-         * @param campaignName 캠페인명
+         * @param couponId 쿠폰 회차 식별자
+         * @param couponName 쿠폰 회차명
          * @param brandName 브랜드명
-         * @param status 캠페인 상태
+         * @param status 쿠폰 회차 상태
          * @param opensAt 오픈 시각
          * @param closesAt 종료 시각
          * @param stock 재고 관측값
@@ -92,9 +92,9 @@ public record AdminCampaignCatalog(
          * @deprecated 새 생산 코드와 fixture는 {@link PreparationSource}를 전달해야 합니다.
          */
         @Deprecated
-        public CampaignData(
+        public CouponRoundData(
                 long couponId,
-                String campaignName,
+                String couponName,
                 String brandName,
                 CouponRoundStatus status,
                 Instant opensAt,
@@ -102,7 +102,7 @@ public record AdminCampaignCatalog(
                 CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock,
                 PreparationObservation preparation
         ) {
-            this(couponId, campaignName, brandName, EngineVersion.V1, status, opensAt, closesAt, stock,
+            this(couponId, couponName, brandName, EngineVersion.V1, status, opensAt, closesAt, stock,
                     preparationSource(preparation));
         }
 

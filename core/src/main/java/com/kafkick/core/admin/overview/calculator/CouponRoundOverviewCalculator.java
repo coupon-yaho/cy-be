@@ -9,50 +9,50 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
-import com.kafkick.core.admin.overview.CampaignOverviewSource;
+import com.kafkick.core.admin.couponroundsource.PreparationObservation;
+import com.kafkick.core.admin.overview.CouponRoundOverviewSource;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
- * 캠페인 원천 목록에서 관리자 운영현황의 캠페인 영역을 계산합니다.
+ * 쿠폰 회차 원천 목록에서 관리자 운영현황의 쿠폰 회차 영역을 계산합니다.
  *
  * <p>Repository나 관측 저장소를 직접 조회하지 않고 전달받은 값만 사용하는 순수 계산 경계입니다.
- * 캠페인 상태 집계·우선순위와 O1·O2·O4 및 조치 대표 판정을 couponId별로 조립합니다. 준비 상태는
+ * 쿠폰 회차 상태 집계·우선순위와 O1·O2·O4 및 조치 대표 판정을 couponId별로 조립합니다. 준비 상태는
  * 별도 계산 경계에서 오픈 임박 KPI와 조치 후보를 함께 만듭니다.</p>
  */
 @Component
-public class CampaignOverviewCalculator {
+public class CouponRoundOverviewCalculator {
 
     private static final Duration OPENING_SOON_WINDOW = Duration.ofMinutes(30);
 
     /** 상태가 없는 순수 계산기로 생성합니다. */
-    public CampaignOverviewCalculator() { }
+    public CouponRoundOverviewCalculator() { }
 
     /**
-     * 동일한 기준 시각으로 캠페인 상태와 O1·O2·O4·대표 조치를 한 행으로 조립합니다.
+     * 동일한 기준 시각으로 쿠폰 회차 상태와 O1·O2·O4·대표 조치를 한 행으로 조립합니다.
      *
      * @param snapshotAt 모든 시간 경계 판정에 사용하는 스냅샷 기준 시각
-     * @param campaigns 계산할 캠페인 기본 원천 목록
+     * @param couponRounds 계산할 쿠폰 회차 기본 원천 목록
      * @param issuanceFlows couponId별 O1 계산 완료 관측값
      * @param queueStatuses couponId별 O2 계산 완료 관측값
      * @param stockForecasts couponId별 O4 계산 완료 관측값
      * @param representativeActions Action 계산기가 전체 모집단에서 선택한 couponId별 대표 조치
-     * @return 관리자 운영현황 조립에 사용할 캠페인 계산 결과
+     * @return 관리자 운영현황 조립에 사용할 쿠폰 회차 계산 결과
      * @throws NullPointerException 기준 시각, 목록 또는 목록 원소가 {@code null}인 경우
      */
-    public CampaignCalculation calculate(
+    public CouponRoundCalculation calculate(
             Instant snapshotAt,
-            List<CampaignOverviewSource> campaigns,
+            List<CouponRoundOverviewSource> couponRounds,
             java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows,
-            java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus>> queueStatuses,
+            java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CouponRoundQueueStatus>> queueStatuses,
             java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast>> stockForecasts,
             java.util.Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeActions
     ) {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
-        Objects.requireNonNull(campaigns, "campaigns");
+        Objects.requireNonNull(couponRounds, "couponRounds");
         Objects.requireNonNull(issuanceFlows, "issuanceFlows");
         Objects.requireNonNull(queueStatuses, "queueStatuses");
         Objects.requireNonNull(stockForecasts, "stockForecasts");
@@ -61,10 +61,10 @@ public class CampaignOverviewCalculator {
         long openCount = 0L;
         long scheduledCount = 0L;
         long closedCount = 0L;
-        for (int index = 0; index < campaigns.size(); index++) {
-            CampaignOverviewSource campaign = Objects.requireNonNull(
-                    campaigns.get(index), "campaigns에는 null을 포함할 수 없습니다.");
-            CouponRoundStatus status = Objects.requireNonNull(campaign.status(), "campaign.status");
+        for (int index = 0; index < couponRounds.size(); index++) {
+            CouponRoundOverviewSource couponRound = Objects.requireNonNull(
+                    couponRounds.get(index), "couponRounds에는 null을 포함할 수 없습니다.");
+            CouponRoundStatus status = Objects.requireNonNull(couponRound.status(), "couponRound.status");
 
             switch (status) {
                 case OPEN -> openCount++;
@@ -74,42 +74,42 @@ public class CampaignOverviewCalculator {
         }
 
         // 조치 심각도와 운영 상태를 먼저 반영한 뒤 행을 만들어 목록과 priority를 일치시킵니다.
-        List<CampaignOverviewSource> prioritizedSources = campaigns.stream()
-                .sorted(campaignPriority(snapshotAt, representativeActions))
+        List<CouponRoundOverviewSource> prioritizedSources = couponRounds.stream()
+                .sorted(couponRoundPriority(snapshotAt, representativeActions))
                 .toList();
-        List<AdminOverviewSnapshot.CampaignOverview> calculatedCampaigns = new ArrayList<>();
+        List<AdminOverviewSnapshot.CouponRoundOverview> calculatedCouponRounds = new ArrayList<>();
         for (int index = 0; index < prioritizedSources.size(); index++) {
-            CampaignOverviewSource campaign = prioritizedSources.get(index);
+            CouponRoundOverviewSource couponRound = prioritizedSources.get(index);
             // 위험도 정렬이 끝난 목록에 순번을 부여해 입력 조회 순서가 priority에 새지 않게 합니다.
-            calculatedCampaigns.add(toCampaignOverview(index + 1, campaign, issuanceFlows, queueStatuses,
+            calculatedCouponRounds.add(toCouponRoundOverview(index + 1, couponRound, issuanceFlows, queueStatuses,
                     stockForecasts, representativeActions));
         }
 
-        return new CampaignCalculation(
-                new AdminOverviewSnapshot.CampaignStatusSummary(
+        return new CouponRoundCalculation(
+                new AdminOverviewSnapshot.CouponRoundStatusSummary(
                         openCount, scheduledCount, closedCount),
-                calculatedCampaigns
+                calculatedCouponRounds
         );
     }
 
     /**
-     * 오픈 임박 예약 캠페인의 준비 KPI와 확인 조치 후보를 같은 모집단에서 한 번에 계산합니다.
+     * 오픈 임박 예약 쿠폰 회차의 준비 KPI와 확인 조치 후보를 같은 모집단에서 한 번에 계산합니다.
      *
      * <p>준비 완료가 확정된 {@code VALID true}는 KPI에만 포함하고, {@code VALID false}는 오픈 30분 전을
      * 감지 시각으로 한 확인 조치를 만듭니다. {@code PENDING}, {@code UNAVAILABLE}과 같은 값 없는 상태는
      * false로 바꾸지 않고 KPI 상태에 보존합니다.</p>
      *
      * @param snapshotAt 모든 시간 경계 판정에 사용하는 스냅샷 기준 시각
-     * @param campaigns 계산할 캠페인 기본 원천 목록
+     * @param couponRounds 계산할 쿠폰 회차 기본 원천 목록
      * @return 오픈 임박 KPI와 준비 미완료 조치 후보
      * @throws NullPointerException 기준 시각, 목록 또는 목록 원소가 {@code null}인 경우
      */
     public PreparationCalculation calculatePreparation(
             Instant snapshotAt,
-            List<CampaignOverviewSource> campaigns
+            List<CouponRoundOverviewSource> couponRounds
     ) {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
-        Objects.requireNonNull(campaigns, "campaigns");
+        Objects.requireNonNull(couponRounds, "couponRounds");
 
         long openingSoonCount = 0L;
         long preparationIncompleteCount = 0L;
@@ -117,16 +117,16 @@ public class CampaignOverviewCalculator {
         Instant preparationObservedAt = null;
         List<AdminOverviewSnapshot.OperationActionItem> actionCandidates = new ArrayList<>();
 
-        for (int index = 0; index < campaigns.size(); index++) {
-            CampaignOverviewSource campaign = Objects.requireNonNull(
-                    campaigns.get(index), "campaigns에는 null을 포함할 수 없습니다.");
-            // 예약 상태이며 스냅샷부터 30분 뒤까지 오픈하는 캠페인만 준비 판단 모집단으로 둡니다.
-            if (!isOpeningSoon(campaign, snapshotAt)) {
+        for (int index = 0; index < couponRounds.size(); index++) {
+            CouponRoundOverviewSource couponRound = Objects.requireNonNull(
+                    couponRounds.get(index), "couponRounds에는 null을 포함할 수 없습니다.");
+            // 예약 상태이며 스냅샷부터 30분 뒤까지 오픈하는 쿠폰 회차만 준비 판단 모집단으로 둡니다.
+            if (!isOpeningSoon(couponRound, snapshotAt)) {
                 continue;
             }
 
             openingSoonCount++;
-            PreparationObservation preparation = campaign.preparation();
+            PreparationObservation preparation = couponRound.preparation();
             // 값 없는 준비 상태를 false로 보정하지 않고 오픈 임박 KPI의 상태로 합성합니다.
             preparationStatus = combinePreparationStatus(preparationStatus, preparation.status());
             if (preparation.status().carriesValue()) {
@@ -140,7 +140,7 @@ public class CampaignOverviewCalculator {
             preparationIncompleteCount++;
             // 확정 또는 마지막 값이 false인 준비 관측만 오픈 30분 전 확인 조치 후보로 만듭니다.
             if (preparation.status() == SourceStatus.VALID || preparation.status() == SourceStatus.STALE) {
-                actionCandidates.add(preparationActionCandidate(campaign));
+                actionCandidates.add(preparationActionCandidate(couponRound));
             }
         }
 
@@ -150,7 +150,7 @@ public class CampaignOverviewCalculator {
     }
 
     /**
-     * 오픈 임박 캠페인의 준비 관측 상태를 상단 KPI에 보존합니다.
+     * 오픈 임박 쿠폰 회차의 준비 관측 상태를 상단 KPI에 보존합니다.
      *
      * <p>PENDING 준비 상태는 미완료 0건으로 보정하지 않습니다. 값 없는 준비 상태가 하나라도 있으면
      * 상단 KPI 전체를 해당 값 없는 상태로 둡니다.</p>
@@ -199,66 +199,66 @@ public class CampaignOverviewCalculator {
         return SourceStatus.VALID;
     }
 
-    /** 스냅샷 시각부터 정확히 30분 뒤까지 오픈하는 예약 캠페인을 운영자의 사전 확인 대상으로 포함합니다. */
+    /** 스냅샷 시각부터 정확히 30분 뒤까지 오픈하는 예약 쿠폰 회차를 운영자의 사전 확인 대상으로 포함합니다. */
     private static boolean isOpeningSoon(
-            CampaignOverviewSource campaign,
+            CouponRoundOverviewSource couponRound,
             Instant snapshotAt
     ) {
-        Instant opensAt = campaign.opensAt();
-        return campaign.status() == CouponRoundStatus.SCHEDULED
+        Instant opensAt = couponRound.opensAt();
+        return couponRound.status() == CouponRoundStatus.SCHEDULED
                 && opensAt != null
                 && !opensAt.isBefore(snapshotAt)
                 && !opensAt.isAfter(snapshotAt.plus(OPENING_SOON_WINDOW));
     }
 
-    /** 준비가 확인되지 않은 오픈 임박 캠페인을 위한 서버 제공 조치 후보를 만듭니다. */
+    /** 준비가 확인되지 않은 오픈 임박 쿠폰 회차를 위한 서버 제공 조치 후보를 만듭니다. */
     private static AdminOverviewSnapshot.OperationActionItem preparationActionCandidate(
-            CampaignOverviewSource campaign
+            CouponRoundOverviewSource couponRound
     ) {
         return new AdminOverviewSnapshot.OperationActionItem(
-                campaign.couponId(),
-                campaign.campaignName(),
-                campaign.opensAt(),
+                couponRound.couponId(),
+                couponRound.couponName(),
+                couponRound.opensAt(),
                 Severity.WARN,
                 AdminOverviewSnapshot.CustomerImpact.NONE,
                 "오픈 전 필수 준비 항목을 확인해야 합니다.",
-                campaign.opensAt().minus(OPENING_SOON_WINDOW),
+                couponRound.opensAt().minus(OPENING_SOON_WINDOW),
                 null,
                 new AdminOverviewSnapshot.RecommendedAction(
-                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY,
-                        "캠페인 준비 상태 확인",
-                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL));
+                        AdminOverviewSnapshot.ActionCode.COUPON_ROUND_NOT_READY,
+                        "쿠폰 회차 준비 상태 확인",
+                        AdminOverviewSnapshot.TargetScreen.COUPON_ROUND_DETAIL));
     }
 
-    /** 위험 캠페인을 먼저 두고 동일 위험도에서는 운영상태·오픈 시각·ID로 순서를 고정합니다. */
-    private static Comparator<CampaignOverviewSource> campaignPriority(
+    /** 위험 쿠폰 회차를 먼저 두고 동일 위험도에서는 운영상태·오픈 시각·ID로 순서를 고정합니다. */
+    private static Comparator<CouponRoundOverviewSource> couponRoundPriority(
             Instant snapshotAt,
             java.util.Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeActions
     ) {
         return Comparator.comparingInt(
-                        (CampaignOverviewSource campaign) -> severityRank(
-                                severityOf(campaign, snapshotAt, representativeActions)))
+                        (CouponRoundOverviewSource couponRound) -> severityRank(
+                                severityOf(couponRound, snapshotAt, representativeActions)))
                 .reversed()
-                .thenComparingInt(campaign -> statusPriority(campaign.status()))
+                .thenComparingInt(couponRound -> statusPriority(couponRound.status()))
                 .thenComparing(
-                        CampaignOverviewSource::opensAt,
+                        CouponRoundOverviewSource::opensAt,
                         Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(
-                        CampaignOverviewSource::couponId,
+                        CouponRoundOverviewSource::couponId,
                         Comparator.nullsLast(Comparator.naturalOrder()));
     }
 
     /** 전체 대표 Map의 심각도로 행 우선순위를 정해 상단 목록 절단과 무관한 순서를 보장합니다. */
     private static Severity severityOf(
-            CampaignOverviewSource campaign,
+            CouponRoundOverviewSource couponRound,
             Instant snapshotAt,
             java.util.Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeActions
     ) {
-        AdminOverviewSnapshot.OperationActionItem action = representativeActions.get(campaign.couponId());
+        AdminOverviewSnapshot.OperationActionItem action = representativeActions.get(couponRound.couponId());
         return action == null ? Severity.NONE : action.severity();
     }
 
-    /** enum 선언 순서와 무관하게 캠페인 위험 노출 순위를 고정합니다. */
+    /** enum 선언 순서와 무관하게 쿠폰 회차 위험 노출 순위를 고정합니다. */
     private static int severityRank(Severity severity) {
         return switch (severity) {
             case NONE -> 0;
@@ -267,7 +267,7 @@ public class CampaignOverviewCalculator {
         };
     }
 
-    /** 같은 위험도에서는 운영 중, 오픈 예정, 종료 캠페인 순으로 확인하도록 상태 순위를 반환합니다. */
+    /** 같은 위험도에서는 운영 중, 오픈 예정, 종료 쿠폰 회차 순으로 확인하도록 상태 순위를 반환합니다. */
     private static int statusPriority(CouponRoundStatus status) {
         return switch (status) {
             case OPEN -> 0;
@@ -277,22 +277,22 @@ public class CampaignOverviewCalculator {
     }
 
     /**
-     * 캠페인 기본 정보와 O1·O2·O4 관측 및 전체 모집단에서 확정된 대표 조치를 한 행으로 조립합니다.
+     * 쿠폰 회차 기본 정보와 O1·O2·O4 관측 및 전체 모집단에서 확정된 대표 조치를 한 행으로 조립합니다.
      *
      * <p>Map에 없는 영역만 원천 미연결 {@code UNAVAILABLE}로 두며, 입력 Map이 명시한 {@code N_A},
      * {@code STALE} 등 계산기의 상태는 그대로 보존합니다. 행의 심각도·고객 영향·다음 행동은 화면의
      * 상위 20개 목록이 아니라 Action 계산기의 전체 대표 Map에서만 가져옵니다.</p>
      */
-    private static AdminOverviewSnapshot.CampaignOverview toCampaignOverview(
+    private static AdminOverviewSnapshot.CouponRoundOverview toCouponRoundOverview(
             int priority,
-            CampaignOverviewSource campaign,
+            CouponRoundOverviewSource couponRound,
             java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.IssuanceFlow>> issuanceFlows,
-            java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus>> queueStatuses,
+            java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CouponRoundQueueStatus>> queueStatuses,
             java.util.Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast>> stockForecasts,
             java.util.Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeActions
     ) {
         AdminOverviewSnapshot.OperationActionItem representativeAction =
-                representativeActions.get(campaign.couponId());
+                representativeActions.get(couponRound.couponId());
         Severity severity = representativeAction == null ? Severity.NONE : representativeAction.severity();
         AdminOverviewSnapshot.CustomerImpact customerImpact = representativeAction == null
                 ? AdminOverviewSnapshot.CustomerImpact.NONE : representativeAction.customerImpact();
@@ -301,19 +301,19 @@ public class CampaignOverviewCalculator {
         AdminOverviewSnapshot.RecommendedAction recommendedAction = representativeAction == null
                 ? null : representativeAction.recommendedAction();
 
-        return new AdminOverviewSnapshot.CampaignOverview(
+        return new AdminOverviewSnapshot.CouponRoundOverview(
                 priority,
-                campaign.couponId(),
-                campaign.campaignName(),
-                campaign.brandName(),
-                campaign.status(),
-                campaign.opensAt(),
-                campaign.closesAt(),
+                couponRound.couponId(),
+                couponRound.couponName(),
+                couponRound.brandName(),
+                couponRound.status(),
+                couponRound.opensAt(),
+                couponRound.closesAt(),
                 severity,
-                observationOrUnavailable(issuanceFlows, campaign.couponId()),
-                observationOrUnavailable(queueStatuses, campaign.couponId()),
-                observationOrUnavailable(stockForecasts, campaign.couponId()),
-                campaign.preparation().failedItems(),
+                observationOrUnavailable(issuanceFlows, couponRound.couponId()),
+                observationOrUnavailable(queueStatuses, couponRound.couponId()),
+                observationOrUnavailable(stockForecasts, couponRound.couponId()),
+                couponRound.preparation().failedItems(),
                 customerImpact,
                 customerImpactText,
                 recommendedAction
@@ -335,29 +335,29 @@ public class CampaignOverviewCalculator {
     }
 
     /**
-     * 캠페인 원천 목록에서 계산한 상태 집계와 캠페인별 표시 결과입니다.
+     * 쿠폰 회차 원천 목록에서 계산한 상태 집계와 쿠폰 회차별 표시 결과입니다.
      *
-     * @param campaignStatusSummary 캠페인의 진행·예정·종료 상태별 수
-     * @param campaigns 캠페인 기본 정보와 독립적인 O1·O2·O4 원천 상태 목록
+     * @param couponRoundStatusSummary 쿠폰 회차의 진행·예정·종료 상태별 수
+     * @param couponRounds 쿠폰 회차 기본 정보와 독립적인 O1·O2·O4 원천 상태 목록
      */
-    public record CampaignCalculation(
-            AdminOverviewSnapshot.CampaignStatusSummary campaignStatusSummary,
-            List<AdminOverviewSnapshot.CampaignOverview> campaigns
+    public record CouponRoundCalculation(
+            AdminOverviewSnapshot.CouponRoundStatusSummary couponRoundStatusSummary,
+            List<AdminOverviewSnapshot.CouponRoundOverview> couponRounds
     ) {
 
         /** 호출 이후 원천 목록 변경이 계산 결과에 영향을 주지 않도록 불변 복사합니다. */
-        public CampaignCalculation {
-            Objects.requireNonNull(campaignStatusSummary, "campaignStatusSummary");
-            Objects.requireNonNull(campaigns, "campaigns");
-            campaigns = List.copyOf(campaigns);
+        public CouponRoundCalculation {
+            Objects.requireNonNull(couponRoundStatusSummary, "couponRoundStatusSummary");
+            Objects.requireNonNull(couponRounds, "couponRounds");
+            couponRounds = List.copyOf(couponRounds);
         }
     }
 
     /**
      * 오픈 임박 준비 상태의 상단 KPI와 조치 계산기가 확정할 후보 목록입니다.
      *
-     * @param openingSoon 30분 안에 오픈하는 캠페인과 준비 관측 상태
-     * @param actionCandidates 준비 미완료가 확정된 캠페인의 조치 후보
+     * @param openingSoon 30분 안에 오픈하는 쿠폰 회차와 준비 관측 상태
+     * @param actionCandidates 준비 미완료가 확정된 쿠폰 회차의 조치 후보
      */
     public record PreparationCalculation(
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.OpeningSoonSummary> openingSoon,

@@ -80,7 +80,7 @@ class OverviewStatusCalculatorTest {
                 valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.AggregateIssuanceRate.class)),
                 valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.AggregateQueue.class)),
                 valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.LatencySummary.class)),
-                valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.CampaignStatusSummary.class)),
+                valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.CouponRoundStatusSummary.class)),
                 valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.ActionItemSnapshot.class)),
                 valid(java.util.List.of()),
                 valid(org.mockito.Mockito.mock(AdminOverviewSnapshot.CustomerOutcomeSummary.class)));

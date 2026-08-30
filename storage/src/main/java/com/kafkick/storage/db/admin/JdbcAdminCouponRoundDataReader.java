@@ -22,25 +22,25 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 관측 전용 JDBC 풀에서 관리자 캠페인 카탈로그와 상세 원천값을 조회합니다. */
+/** 관측 전용 JDBC 풀에서 관리자 쿠폰 회차 카탈로그와 상세 원천값을 조회합니다. */
 @Repository
 @ConditionalOnProperty(name = "observation.datasource.enabled", havingValue = "true")
-public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
+public class JdbcAdminCouponRoundDataReader implements AdminCouponRoundDataReader {
 
     private static final Duration MAX_COUPON_ROUND_DURATION = Duration.ofHours(24);
 
-    private static final Logger log = LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
+    private static final Logger log = LoggerFactory.getLogger(JdbcAdminCouponRoundDataReader.class);
 
     private static final String CATALOG_SQL = """
             SELECT c.id, c.name, b.name AS brand_name, c.status,
@@ -84,50 +84,50 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
              GROUP BY h.event_type
             """;
 
-    private static final RowMapper<CampaignRow> CAMPAIGN_ROW_MAPPER =
-            JdbcAdminCampaignDataReader::mapCampaign;
+    private static final RowMapper<CouponRoundRow> COUPON_ROUND_ROW_MAPPER =
+            JdbcAdminCouponRoundDataReader::mapCouponRound;
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
     /** 운영 쓰기 풀과 섞이지 않도록 관측 한정자의 JDBC 템플릿만 주입받습니다. */
-    public JdbcAdminCampaignDataReader(
+    public JdbcAdminCouponRoundDataReader(
             @Qualifier("obs") NamedParameterJdbcTemplate jdbcTemplate
     ) {
         this.jdbcTemplate = Objects.requireNonNull(jdbcTemplate, "jdbcTemplate");
     }
 
     /**
-     * 캠페인 전 행과 독립 재고 관측을 지정된 정렬로 조회합니다.
+     * 쿠폰 회차 전 행과 독립 재고 관측을 지정된 정렬로 조회합니다.
      *
      * <p>브랜드와 재고를 {@code LEFT JOIN}하는 이유는 역정규화 이상을 숨기지 않고, 재고 행이
-     * 없는 캠페인도 모집단에 남기기 위해서입니다.</p>
+     * 없는 쿠폰 회차도 모집단에 남기기 위해서입니다.</p>
      */
     @Override
-    public AdminCampaignCatalog loadCatalog(Instant snapshotAt) {
+    public AdminCouponRoundCatalog loadCatalog(Instant snapshotAt) {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         try {
-            List<CampaignRow> rows = jdbcTemplate.query(
-                    CATALOG_SQL, Map.of(), CAMPAIGN_ROW_MAPPER);
-            List<AdminCampaignCatalog.CampaignData> campaigns = new ArrayList<>(rows.size());
-            for (CampaignRow row : rows) {
+            List<CouponRoundRow> rows = jdbcTemplate.query(
+                    CATALOG_SQL, Map.of(), COUPON_ROUND_ROW_MAPPER);
+            List<AdminCouponRoundCatalog.CouponRoundData> couponRounds = new ArrayList<>(rows.size());
+            for (CouponRoundRow row : rows) {
                 if (row.brandName() == null) {
                     return unavailableCatalog();
                 }
-                campaigns.add(new AdminCampaignCatalog.CampaignData(
+                couponRounds.add(new AdminCouponRoundCatalog.CouponRoundData(
                         row.couponId(),
-                        row.campaignName(),
+                        row.couponName(),
                         row.brandName(),
                         parseEngineVersion(row.engineVersion()),
-                        parseCampaignStatus(row.status()),
+                        parseCouponRoundStatus(row.status()),
                         row.opensAt(),
                         row.closesAt(),
                         stockObservation(row),
                         preparationSource(row, snapshotAt)
                 ));
             }
-            return new AdminCampaignCatalog(SourceStatus.VALID, snapshotAt, campaigns);
+            return new AdminCouponRoundCatalog(SourceStatus.VALID, snapshotAt, couponRounds);
         } catch (RuntimeException exception) {
-            log.warn("admin campaign catalog observation failed: snapshotAt={}, exceptionType={}",
+            log.warn("admin couponRound catalog observation failed: snapshotAt={}, exceptionType={}",
                     snapshotAt, exception.getClass().getSimpleName(), exception);
             return unavailableCatalog();
         }
@@ -141,7 +141,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
      */
     @Override
     @Transactional(transactionManager = "observationTransactionManager", readOnly = true)
-    public AdminCampaignDetailData findDetail(
+    public AdminCouponRoundDetailData findDetail(
             long couponId,
             Instant fromInclusive,
             Instant toExclusive,
@@ -152,50 +152,50 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             MapSqlParameterSource parameters = new MapSqlParameterSource("couponId", couponId)
                     .addValue("fromInclusive", Timestamp.from(fromInclusive))
                     .addValue("toExclusive", Timestamp.from(toExclusive));
-            List<CampaignRow> metadata = jdbcTemplate.query(
-                    DETAIL_SQL, parameters, CAMPAIGN_ROW_MAPPER);
+            List<CouponRoundRow> metadata = jdbcTemplate.query(
+                    DETAIL_SQL, parameters, COUPON_ROUND_ROW_MAPPER);
             if (metadata.isEmpty()) {
-                return new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null);
+                return new AdminCouponRoundDetailData(DetailAvailability.NOT_FOUND, null);
             }
 
-            CampaignRow campaign = metadata.getFirst();
-            if (campaign.brandName() == null) {
+            CouponRoundRow couponRound = metadata.getFirst();
+            if (couponRound.brandName() == null) {
                 return unavailableDetail();
             }
-            CouponRoundStatus campaignStatus = parseCampaignStatus(campaign.status());
-            EngineVersion engineVersion = parseEngineVersion(campaign.engineVersion());
+            CouponRoundStatus couponRoundStatus = parseCouponRoundStatus(couponRound.status());
+            EngineVersion engineVersion = parseEngineVersion(couponRound.engineVersion());
             HoldingResult holding = loadHolding(parameters);
             CouponMetricsSource.Observation<List<CouponMetricsSource.TransitionBucket>> transitions =
                     loadTransitions(parameters, fromInclusive, toExclusive, snapshotAt);
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock =
-                    stockObservation(campaign);
+                    stockObservation(couponRound);
 
             if (engineVersion == EngineVersion.V1
                     && stock.status().carriesValue()
                     && stock.value().activeCount()
                     != holding.counts().issued() + holding.counts().used()) {
                 // V1은 DB가 정본이라 불일치 상세을 거부합니다. V2 DB active는 Redis 정본의 미러입니다.
-                log.warn("admin campaign stock drift: couponId={}, activeCount={}, issuedPlusUsed={}",
+                log.warn("admin couponRound stock drift: couponId={}, activeCount={}, issuedPlusUsed={}",
                         couponId,
                         stock.value().activeCount(),
                         holding.counts().issued() + holding.counts().used());
                 return unavailableDetail();
             }
 
-            AdminCampaignDetailData.DetailValue value = new AdminCampaignDetailData.DetailValue(
-                    campaign.couponId(),
-                    campaign.campaignName(),
-                    campaign.brandName(),
+            AdminCouponRoundDetailData.DetailValue value = new AdminCouponRoundDetailData.DetailValue(
+                    couponRound.couponId(),
+                    couponRound.couponName(),
+                    couponRound.brandName(),
                     engineVersion,
-                    new CouponMetricsSource.CampaignRuntime(campaignStatus, campaign.opensAt()),
+                    new CouponMetricsSource.CouponRoundRuntime(couponRoundStatus, couponRound.opensAt()),
                     stock,
                     new CouponMetricsSource.Observation<>(
                             holding.counts(), holding.status(), snapshotAt),
                     transitions
             );
-            return new AdminCampaignDetailData(DetailAvailability.AVAILABLE, value);
+            return new AdminCouponRoundDetailData(DetailAvailability.AVAILABLE, value);
         } catch (RuntimeException exception) {
-            log.warn("admin campaign detail observation failed: couponId={}, exceptionType={}",
+            log.warn("admin couponRound detail observation failed: couponId={}, exceptionType={}",
                     couponId, exception.getClass().getSimpleName(), exception);
             return unavailableDetail();
         }
@@ -264,7 +264,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
 
     /** 재고 LEFT JOIN 부재와 부분 행은 실제 0이 아니므로 값 없는 UNAVAILABLE 관측으로 보존합니다. */
     private static CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stockObservation(
-            CampaignRow row
+            CouponRoundRow row
     ) {
         boolean noStock = row.totalQuantity() == null
                 && row.activeCount() == null
@@ -289,12 +289,12 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
     }
 
     /**
-     * 캠페인 설정과 재고 행의 실제 DB 값을 카탈로그 시점의 준비 원천으로 변환합니다.
+     * 쿠폰 회차 설정과 재고 행의 실제 DB 값을 카탈로그 시점의 준비 원천으로 변환합니다.
      *
      * <p>LEFT JOIN으로 재고 행이 없거나 부분 null인 행은 DB 재고 준비 미완료로 보존합니다.
      * 엔진 설정과 실제 발급 경로는 이 Reader가 아닌 Core 계산기가 결합합니다.</p>
      */
-    private static PreparationSource preparationSource(CampaignRow row, Instant snapshotAt) {
+    private static PreparationSource preparationSource(CouponRoundRow row, Instant snapshotAt) {
         boolean databaseStockReady = row.totalQuantity() != null
                 && row.totalQuantity() > 0L
                 && row.activeCount() != null
@@ -302,20 +302,20 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 && row.activeCount() <= row.totalQuantity()
                 && row.stockUpdatedAt() != null;
         CouponPolicyType policyType = policyTypeOf(row.policyType());
-        boolean campaignConfigurationReady = hasValidCampaignConfiguration(row, policyType);
+        boolean couponRoundConfigurationReady = hasValidCouponRoundConfiguration(row, policyType);
         // 재고 행 부재와 정책 스냅샷 위반은 각각 확정된 DB 준비 실패로 보존합니다.
         return new PreparationSource(
-                campaignConfigurationReady, databaseStockReady, policyType, row.eligibleGradesMask(),
+                couponRoundConfigurationReady, databaseStockReady, policyType, row.eligibleGradesMask(),
                 SourceStatus.VALID, snapshotAt);
     }
 
-    /** DB에 저장된 캠페인 스냅샷이 현재 발급 계약의 모든 필수 값을 갖췄는지 확인합니다. */
-    private static boolean hasValidCampaignConfiguration(
-            CampaignRow row,
+    /** DB에 저장된 쿠폰 회차 스냅샷이 현재 발급 계약의 모든 필수 값을 갖췄는지 확인합니다. */
+    private static boolean hasValidCouponRoundConfiguration(
+            CouponRoundRow row,
             CouponPolicyType policyType
     ) {
         // 실제 회차 도메인이 복원할 수 있는 24시간 이하의 기간만 준비된 설정입니다.
-        if (row.campaignName() == null || row.campaignName().isBlank()
+        if (row.couponName() == null || row.couponName().isBlank()
                 || row.opensAt() == null || row.closesAt() == null
                 || !row.opensAt().isBefore(row.closesAt())
                 || Duration.between(row.opensAt(), row.closesAt()).compareTo(MAX_COUPON_ROUND_DURATION) > 0
@@ -340,7 +340,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
     }
 
     /** 정책 종류별 할인 스냅샷 조합이 실제 발급 도메인 규칙과 맞는지 확인합니다. */
-    private static boolean hasValidDiscountPolicy(CampaignRow row, CouponPolicyType policyType) {
+    private static boolean hasValidDiscountPolicy(CouponRoundRow row, CouponPolicyType policyType) {
         if (policyType == null) {
             return false;
         }
@@ -371,8 +371,8 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         }
     }
 
-    private static CampaignRow mapCampaign(ResultSet resultSet, int rowNumber) throws SQLException {
-        return new CampaignRow(
+    private static CouponRoundRow mapCouponRound(ResultSet resultSet, int rowNumber) throws SQLException {
+        return new CouponRoundRow(
                 resultSet.getLong("id"),
                 resultSet.getString("name"),
                 resultSet.getString("brand_name"),
@@ -405,7 +405,7 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         return value == null ? null : value.toInstant();
     }
 
-    private static CouponRoundStatus parseCampaignStatus(String status) {
+    private static CouponRoundStatus parseCouponRoundStatus(String status) {
         return CouponRoundStatus.valueOf(status);
     }
 
@@ -441,17 +441,17 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         }
     }
 
-    private static AdminCampaignCatalog unavailableCatalog() {
-        return new AdminCampaignCatalog(SourceStatus.UNAVAILABLE, null, List.of());
+    private static AdminCouponRoundCatalog unavailableCatalog() {
+        return new AdminCouponRoundCatalog(SourceStatus.UNAVAILABLE, null, List.of());
     }
 
-    private static AdminCampaignDetailData unavailableDetail() {
-        return new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null);
+    private static AdminCouponRoundDetailData unavailableDetail() {
+        return new AdminCouponRoundDetailData(DetailAvailability.UNAVAILABLE, null);
     }
 
-    private record CampaignRow(
+    private record CouponRoundRow(
             long couponId,
-            String campaignName,
+            String couponName,
             String brandName,
             String status,
             Instant opensAt,

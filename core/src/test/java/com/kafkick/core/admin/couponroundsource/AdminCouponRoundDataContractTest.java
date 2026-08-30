@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.campaignsource;
+package com.kafkick.core.admin.couponroundsource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -18,56 +18,56 @@ import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 관리자 캠페인 DB 조회 경계의 상태·값·시각 계약을 검증합니다. */
-class AdminCampaignDataContractTest {
+/** 관리자 쿠폰 회차 DB 조회 경계의 상태·값·시각 계약을 검증합니다. */
+class AdminCouponRoundDataContractTest {
 
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-24T03:00:00Z");
 
     /** 빈 VALID 카탈로그가 실제로 조회된 빈 모집단과 오류 상태를 구별하는지 검증합니다. */
     @Test
-    @DisplayName("VALID 카탈로그는 빈 캠페인 목록을 허용한다")
+    @DisplayName("VALID 카탈로그는 빈 쿠폰 회차 목록을 허용한다")
     void allowsEmptyValidCatalog() {
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, SNAPSHOT_AT, List.of());
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(SourceStatus.VALID, SNAPSHOT_AT, List.of());
 
-        assertThat(catalog.campaigns()).isEmpty();
+        assertThat(catalog.couponRounds()).isEmpty();
         assertThat(catalog.observedAt()).isEqualTo(SNAPSHOT_AT);
     }
 
-    /** 카탈로그가 값 있는 목록을 불변 보존하고 캠페인별 재고 상태를 독립적으로 유지하는지 검증합니다. */
+    /** 카탈로그가 값 있는 목록을 불변 보존하고 쿠폰 회차별 재고 상태를 독립적으로 유지하는지 검증합니다. */
     @Test
-    @DisplayName("VALID 카탈로그는 재고 UNAVAILABLE 캠페인을 목록에 보존한다")
-    void preservesCampaignWhenItsStockIsUnavailable() {
-        ArrayList<AdminCampaignCatalog.CampaignData> mutableCampaigns = new ArrayList<>();
-        mutableCampaigns.add(campaign(11L, unavailableStock()));
+    @DisplayName("VALID 카탈로그는 재고 UNAVAILABLE 쿠폰 회차를 목록에 보존한다")
+    void preservesCouponRoundWhenItsStockIsUnavailable() {
+        ArrayList<AdminCouponRoundCatalog.CouponRoundData> mutableCouponRounds = new ArrayList<>();
+        mutableCouponRounds.add(couponRound(11L, unavailableStock()));
 
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(
-                SourceStatus.VALID, SNAPSHOT_AT, mutableCampaigns);
-        mutableCampaigns.clear();
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(
+                SourceStatus.VALID, SNAPSHOT_AT, mutableCouponRounds);
+        mutableCouponRounds.clear();
 
-        assertThat(catalog.campaigns()).singleElement().satisfies(data -> {
+        assertThat(catalog.couponRounds()).singleElement().satisfies(data -> {
             assertThat(data.couponId()).isEqualTo(11L);
             assertThat(data.engineVersion()).isEqualTo(EngineVersion.V2);
             assertThat(data.stock().status()).isEqualTo(SourceStatus.UNAVAILABLE);
             assertThat(data.stock().value()).isNull();
         });
-        assertThatThrownBy(() -> catalog.campaigns().clear())
+        assertThatThrownBy(() -> catalog.couponRounds().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
     /** PENDING과 UNAVAILABLE은 목록을 받은 것처럼 보이지 않도록 빈 목록·null 시각만 허용하는지 검증합니다. */
     @Test
-    @DisplayName("값 없는 카탈로그 상태는 관측 시각과 캠페인 목록을 가질 수 없다")
+    @DisplayName("값 없는 카탈로그 상태는 관측 시각과 쿠폰 회차 목록을 가질 수 없다")
     void rejectsValuesForUnavailableOrPendingCatalog() {
-        AdminCampaignCatalog unavailable = new AdminCampaignCatalog(SourceStatus.UNAVAILABLE, null, List.of());
-        AdminCampaignCatalog pending = new AdminCampaignCatalog(SourceStatus.PENDING, null, List.of());
+        AdminCouponRoundCatalog unavailable = new AdminCouponRoundCatalog(SourceStatus.UNAVAILABLE, null, List.of());
+        AdminCouponRoundCatalog pending = new AdminCouponRoundCatalog(SourceStatus.PENDING, null, List.of());
 
-        assertThat(unavailable.campaigns()).isEmpty();
-        assertThat(pending.campaigns()).isEmpty();
-        assertThatThrownBy(() -> new AdminCampaignCatalog(
+        assertThat(unavailable.couponRounds()).isEmpty();
+        assertThat(pending.couponRounds()).isEmpty();
+        assertThatThrownBy(() -> new AdminCouponRoundCatalog(
                 SourceStatus.UNAVAILABLE, SNAPSHOT_AT, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AdminCampaignCatalog(
-                SourceStatus.PENDING, null, List.of(campaign(12L, unavailableStock()))))
+        assertThatThrownBy(() -> new AdminCouponRoundCatalog(
+                SourceStatus.PENDING, null, List.of(couponRound(12L, unavailableStock()))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -75,43 +75,43 @@ class AdminCampaignDataContractTest {
     @Test
     @DisplayName("상세 조회는 AVAILABLE NOT_FOUND UNAVAILABLE을 구분한다")
     void distinguishesDetailAvailability() {
-        AdminCampaignDetailData available = new AdminCampaignDetailData(
+        AdminCouponRoundDetailData available = new AdminCouponRoundDetailData(
                 DetailAvailability.AVAILABLE, detailValue(21L));
-        AdminCampaignDetailData notFound = new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null);
-        AdminCampaignDetailData unavailable = new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null);
+        AdminCouponRoundDetailData notFound = new AdminCouponRoundDetailData(DetailAvailability.NOT_FOUND, null);
+        AdminCouponRoundDetailData unavailable = new AdminCouponRoundDetailData(DetailAvailability.UNAVAILABLE, null);
 
         assertThat(available.value().couponId()).isEqualTo(21L);
         assertThat(available.value().engineVersion()).isEqualTo(EngineVersion.V2);
         assertThat(notFound.value()).isNull();
         assertThat(unavailable.value()).isNull();
-        assertThatThrownBy(() -> new AdminCampaignDetailData(DetailAvailability.AVAILABLE, null))
+        assertThatThrownBy(() -> new AdminCouponRoundDetailData(DetailAvailability.AVAILABLE, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, detailValue(22L)))
+        assertThatThrownBy(() -> new AdminCouponRoundDetailData(DetailAvailability.NOT_FOUND, detailValue(22L)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** DB 조회 장애가 존재하지 않는 캠페인과 같은 404로 축약되지 않는지 검증합니다. */
+    /** DB 조회 장애가 존재하지 않는 쿠폰 회차와 같은 404로 축약되지 않는지 검증합니다. */
     @Test
-    @DisplayName("DB 관측 불가는 ADMIN-CAMPAIGN-001 503 오류 계약을 사용한다")
+    @DisplayName("DB 관측 불가는 ADMIN-COUPON-ROUND-001 503 오류 계약을 사용한다")
     void exposesUnavailableObservationAsServiceUnavailable() {
-        AdminCampaignDataErrorCode error = AdminCampaignDataErrorCode.OBSERVATION_UNAVAILABLE;
+        AdminCouponRoundDataErrorCode error = AdminCouponRoundDataErrorCode.OBSERVATION_UNAVAILABLE;
 
         assertThat(error.getStatus()).isEqualTo(503);
-        assertThat(error.getCode()).isEqualTo("ADMIN-CAMPAIGN-001");
-        assertThat(error.getMessage()).isEqualTo("캠페인 관측 데이터를 조회할 수 없습니다.");
+        assertThat(error.getCode()).isEqualTo("ADMIN-COUPON-ROUND-001");
+        assertThat(error.getMessage()).isEqualTo("쿠폰 회차 관측 데이터를 조회할 수 없습니다.");
     }
 
     /** A-F6 전 DB 조회 경계가 FINAL 상태나 조치 후보를 새로 노출하지 않는지 검증합니다. */
     @Test
-    @DisplayName("DB 캠페인 조회 계약은 FINAL 상태와 조치 후보를 표현하지 않는다")
+    @DisplayName("DB 쿠폰 회차 조회 계약은 FINAL 상태와 조치 후보를 표현하지 않는다")
     void doesNotRepresentFinalOrSynthesizeActionCandidates() {
-        assertThat(AdminCampaignDataReader.class.getDeclaredMethods())
+        assertThat(AdminCouponRoundDataReader.class.getDeclaredMethods())
                 .extracting(method -> method.getName())
                 .containsExactlyInAnyOrder("loadCatalog", "findDetail");
-        assertThat(AdminCampaignCatalog.CampaignData.class.getRecordComponents())
+        assertThat(AdminCouponRoundCatalog.CouponRoundData.class.getRecordComponents())
                 .extracting(RecordComponent::getName)
                 .doesNotContain("final", "finalStatus", "actionCandidate");
-        assertThat(AdminCampaignDetailData.DetailValue.class.getRecordComponents())
+        assertThat(AdminCouponRoundDetailData.DetailValue.class.getRecordComponents())
                 .extracting(RecordComponent::getName)
                 .doesNotContain("final", "finalStatus", "actionCandidate");
     }
@@ -163,24 +163,24 @@ class AdminCampaignDataContractTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private static AdminCampaignCatalog.CampaignData campaign(
+    private static AdminCouponRoundCatalog.CouponRoundData couponRound(
             long couponId,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock
     ) {
-        return new AdminCampaignCatalog.CampaignData(
-                couponId, "캠페인 " + couponId, "브랜드", EngineVersion.V2,
+        return new AdminCouponRoundCatalog.CouponRoundData(
+                couponId, "쿠폰 회차 " + couponId, "브랜드", EngineVersion.V2,
                 CouponRoundStatus.SCHEDULED,
                 SNAPSHOT_AT.plusSeconds(60), SNAPSHOT_AT.plusSeconds(120), stock,
                 new PreparationSource(null, null, null, null, SourceStatus.PENDING, null));
     }
 
-    private static AdminCampaignDetailData.DetailValue detailValue(long couponId) {
-        return new AdminCampaignDetailData.DetailValue(
+    private static AdminCouponRoundDetailData.DetailValue detailValue(long couponId) {
+        return new AdminCouponRoundDetailData.DetailValue(
                 couponId,
-                "캠페인 " + couponId,
+                "쿠폰 회차 " + couponId,
                 "브랜드",
                 EngineVersion.V2,
-                new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN, SNAPSHOT_AT.minusSeconds(60)),
+                new CouponMetricsSource.CouponRoundRuntime(CouponRoundStatus.OPEN, SNAPSHOT_AT.minusSeconds(60)),
                 observed(new CouponMetricsSource.StockCounts(100L, 40L)),
                 observed(new CouponMetricsSource.IssuanceStatusCounts(40L, 10L, 3L, 2L)),
                 observed(List.of(new CouponMetricsSource.TransitionBucket(

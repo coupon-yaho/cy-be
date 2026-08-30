@@ -58,18 +58,18 @@ class ExpectedFindingJdbcAdapterTest {
     }
 
     /** 정답 한 건. 식별자 컬럼은 규칙마다 다르게 채워 실제 모양을 흉내 낸다. */
-    private void expected(FindingType type, String targetKey, Long campaignId, Long memberId) {
+    private void expected(FindingType type, String targetKey, Long couponId, Long memberId) {
         jdbcClient.sql("""
                         INSERT INTO expected_findings
                             (seed_run_id, corrupt_type, finding_type, target_key,
                              campaign_id, member_id, note, created_at)
                         VALUES (:seedRunId, 1, :findingType, :targetKey,
-                                :campaignId, :memberId, '-', :createdAt)
+                                :couponId, :memberId, '-', :createdAt)
                         """)
                 .param("seedRunId", SEED_RUN)
                 .param("findingType", type.name())
                 .param("targetKey", targetKey)
-                .param("campaignId", campaignId)
+                .param("couponId", couponId)
                 .param("memberId", memberId)
                 .param("createdAt", AS_OF)
                 .update();

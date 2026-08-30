@@ -17,15 +17,15 @@ public interface V2AdminStockReader {
     );
 
     /** Redis 값 검증에 필요한 회차 상태와 DB 전체 수량입니다. */
-    record Request(long couponId, CouponRoundStatus campaignStatus, long expectedTotalQuantity) {
+    record Request(long couponId, CouponRoundStatus couponRoundStatus, long expectedTotalQuantity) {
 
         /** 잘못된 회차 식별자나 DB 전체 수량이 Redis 조회로 넘어가지 않게 막습니다. */
         public Request {
             if (couponId <= 0L) {
                 throw new IllegalArgumentException("couponId는 양수여야 합니다.");
             }
-            if (campaignStatus == null) {
-                throw new NullPointerException("campaignStatus");
+            if (couponRoundStatus == null) {
+                throw new NullPointerException("couponRoundStatus");
             }
             if (expectedTotalQuantity <= 0L) {
                 throw new IllegalArgumentException("expectedTotalQuantity는 양수여야 합니다.");

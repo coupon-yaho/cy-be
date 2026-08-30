@@ -19,18 +19,18 @@ public enum AdminAnalyticsErrorCode implements ErrorCode {
             "요청한 브랜드를 찾을 수 없습니다."
     ),
 
-    /** 요청한 캠페인이 확인된 분석 카탈로그에 존재하지 않습니다. */
-    CAMPAIGN_NOT_FOUND(
+    /** 요청한 쿠폰 회차가 확인된 분석 카탈로그에 존재하지 않습니다. */
+    COUPON_ROUND_NOT_FOUND(
             404,
             "ANALYTICS-003",
-            "요청한 캠페인을 찾을 수 없습니다."
+            "요청한 쿠폰 회차를 찾을 수 없습니다."
     ),
 
-    /** 요청한 캠페인이 함께 지정한 브랜드에 속하지 않습니다. */
-    CAMPAIGN_BRAND_MISMATCH(
+    /** 요청한 쿠폰 회차가 함께 지정한 브랜드에 속하지 않습니다. */
+    COUPON_ROUND_BRAND_MISMATCH(
             404,
             "ANALYTICS-004",
-            "캠페인이 요청 브랜드에 속하지 않습니다."
+            "쿠폰 회차가 요청 브랜드에 속하지 않습니다."
     );
 
     private final int status;

@@ -70,7 +70,7 @@ public class ConsistencyFinalizer {
             ConsistencyEvaluation evaluation = batch.evaluate(
                     run.couponId(), run.engineVersion(), finalizedAt);
             // evaluatedAt은 회차 확정 시각으로 고정한다. 재시도해도 바뀌지 않아야
-            // 캠페인별 최신 선택(evaluated_at DESC, run_id DESC)이 흔들리지 않는다.
+            // 쿠폰 회차별 최신 선택(evaluated_at DESC, run_id DESC)이 흔들리지 않는다.
             if (!store.complete(benchmarkRunId, token, run.couponId(), run.engineVersion(),
                     finalizedAt, evaluation)) {
                 // 소유권 상실은 비즈니스 상태 전이다. IllegalStateException 으로 두면 500 이 된다.

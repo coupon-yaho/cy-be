@@ -8,7 +8,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot.CampaignRuntimeSummary;
+import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot.CouponRoundRuntimeSummary;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot.IssuanceStatusCounts;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot.Observation;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot.QueueSummary;
@@ -18,7 +18,7 @@ import com.kafkick.core.admin.couponmetrics.CouponMetricsSnapshot.TransitionRate
 import com.kafkick.core.observation.SourceStatus;
 
 /**
- * 캠페인 상세 원천값을 요청 구간에 맞는 재고·발급·대기·사용 지표로 계산합니다.
+ * 쿠폰 회차 상세 원천값을 요청 구간에 맞는 재고·발급·대기·사용 지표로 계산합니다.
  *
  * <p>외부 저장소나 HTTP 타입에 의존하지 않는 순수 계산기입니다. 원천이 값을 싣지 않는 상태면
  * 계산을 시도하지 않고 같은 상태를 결과에 보존합니다.</p>
@@ -27,9 +27,9 @@ import com.kafkick.core.observation.SourceStatus;
 public class CouponMetricsCalculator {
 
     /**
-     * 한 캠페인의 상세 지표 스냅샷을 계산합니다.
+     * 한 쿠폰 회차의 상세 지표 스냅샷을 계산합니다.
      *
-     * @param source 상태와 관측 시각을 포함한 캠페인 원천값
+     * @param source 상태와 관측 시각을 포함한 쿠폰 회차 원천값
      * @param window 발급률·전이율 계산 구간
      * @param snapshotAt 요청 전체에서 공유하는 기준 시각
      * @return 계산 완료된 기술 중립 상세 지표
@@ -54,7 +54,7 @@ public class CouponMetricsCalculator {
                 issuanceProgress(source.stock()),
                 issuanceRate(source.issuanceRateSamples(), windowStart, snapshotAt),
                 queue(source.queue()),
-                new CampaignRuntimeSummary(source.campaign().status(), source.campaign().opensAt()),
+                new CouponRoundRuntimeSummary(source.couponRound().status(), source.couponRound().opensAt()),
                 usageRatio(source.holdingCounts()),
                 holdingCounts(source.holdingCounts()),
                 transitionRates(source.transitions(), windowStart, snapshotAt));

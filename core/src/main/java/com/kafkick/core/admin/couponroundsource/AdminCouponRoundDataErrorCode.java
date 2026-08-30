@@ -1,15 +1,15 @@
-package com.kafkick.core.admin.campaignsource;
+package com.kafkick.core.admin.couponroundsource;
 
 import com.kafkick.core.support.exception.ErrorCode;
 
-/** 관리자 캠페인 DB 관측 경계의 외부 오류 응답 계약입니다. */
-public enum AdminCampaignDataErrorCode implements ErrorCode {
+/** 관리자 쿠폰 회차 DB 관측 경계의 외부 오류 응답 계약입니다. */
+public enum AdminCouponRoundDataErrorCode implements ErrorCode {
 
-    /** DB 관측 실패로 캠페인 데이터를 확인할 수 없습니다. */
+    /** DB 관측 실패로 쿠폰 회차 데이터를 확인할 수 없습니다. */
     OBSERVATION_UNAVAILABLE(
             503,
-            "ADMIN-CAMPAIGN-001",
-            "캠페인 관측 데이터를 조회할 수 없습니다."
+            "ADMIN-COUPON-ROUND-001",
+            "쿠폰 회차 관측 데이터를 조회할 수 없습니다."
     );
 
     private final int status;
@@ -17,7 +17,7 @@ public enum AdminCampaignDataErrorCode implements ErrorCode {
     private final String message;
 
     /** HTTP 상태와 클라이언트 오류 표현을 보존합니다. */
-    AdminCampaignDataErrorCode(int status, String code, String message) {
+    AdminCouponRoundDataErrorCode(int status, String code, String message) {
         this.status = status;
         this.code = code;
         this.message = message;

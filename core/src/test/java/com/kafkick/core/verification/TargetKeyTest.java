@@ -36,7 +36,7 @@ class TargetKeyTest {
 
     @Test
     @DisplayName("구 어휘 CAMPAIGN 접두사를 쓰지 않는다 — 시드와 어긋나면 집합이 100% 불일치한다")
-    void doNotUseLegacyCampaignPrefix() {
+    void doNotUseLegacyCouponRoundPrefix() {
         assertThat(TargetKey.coupon(812)).doesNotStartWith("CAMPAIGN:");
         assertThat(TargetKey.couponMember(812, 9931)).doesNotContain("CAMPAIGN:");
     }

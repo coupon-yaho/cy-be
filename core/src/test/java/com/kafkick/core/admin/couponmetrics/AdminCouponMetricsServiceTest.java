@@ -11,11 +11,11 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.MetricsWindow;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataErrorCode;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataErrorCode;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
 import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
@@ -28,7 +28,7 @@ class AdminCouponMetricsServiceTest {
     private static final Instant SNAPSHOT_AT = Instant.parse("2026-08-22T00:00:00Z");
 
     @Test
-    void readsOpenCampaignRatesAtTheSameSnapshotAsTheDatabaseDetail() {
+    void readsOpenCouponRoundRatesAtTheSameSnapshotAsTheDatabaseDetail() {
         RecordingReader reader = new RecordingReader(availableDetail());
         RecordingRateReader rateReader = new RecordingRateReader(observedRates());
         AdminCouponMetricsService service = service(reader, rateReader);
@@ -54,7 +54,7 @@ class AdminCouponMetricsServiceTest {
     }
 
     @Test
-    void doesNotQueryRatesForNonOpenCampaigns() {
+    void doesNotQueryRatesForNonOpenCouponRounds() {
         RecordingRateReader rateReader = new RecordingRateReader(observedRates());
         AdminCouponMetricsService service = service(
                 new RecordingReader(availableDetail(CouponRoundStatus.SCHEDULED)), rateReader);
@@ -81,9 +81,9 @@ class AdminCouponMetricsServiceTest {
     }
 
     @Test
-    void mapsOnlyMissingCampaignToCommonNotFound() {
+    void mapsOnlyMissingCouponRoundToCommonNotFound() {
         AdminCouponMetricsService service = service(new RecordingReader(
-                new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null)), new RecordingRateReader(observedRates()));
+                new AdminCouponRoundDetailData(DetailAvailability.NOT_FOUND, null)), new RecordingRateReader(observedRates()));
 
         assertThatThrownBy(() -> service.getCouponMetrics(404L, MetricsWindow.ONE_MINUTE))
                 .isInstanceOfSatisfying(BusinessException.class,
@@ -91,18 +91,18 @@ class AdminCouponMetricsServiceTest {
     }
 
     @Test
-    void mapsDatabaseFailureToCampaignObservationUnavailable() {
+    void mapsDatabaseFailureToCouponRoundObservationUnavailable() {
         AdminCouponMetricsService service = service(new RecordingReader(
-                new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null)), new RecordingRateReader(observedRates()));
+                new AdminCouponRoundDetailData(DetailAvailability.UNAVAILABLE, null)), new RecordingRateReader(observedRates()));
 
         assertThatThrownBy(() -> service.getCouponMetrics(101L, MetricsWindow.ONE_MINUTE))
                 .isInstanceOfSatisfying(BusinessException.class,
                         exception -> assertThat(exception.getErrorCode())
-                                .isEqualTo(AdminCampaignDataErrorCode.OBSERVATION_UNAVAILABLE));
+                                .isEqualTo(AdminCouponRoundDataErrorCode.OBSERVATION_UNAVAILABLE));
     }
 
     private static AdminCouponMetricsService service(
-            AdminCampaignDataReader reader,
+            AdminCouponRoundDataReader reader,
             CouponIssuanceRateReader rateReader
     ) {
         return new AdminCouponMetricsService(
@@ -110,11 +110,11 @@ class AdminCouponMetricsServiceTest {
                 rateReader, new PendingAdminQueueObservationSource(), new CouponMetricsCalculator());
     }
 
-    private static AdminCampaignDetailData availableDetail() {
+    private static AdminCouponRoundDetailData availableDetail() {
         return availableDetail(CouponRoundStatus.OPEN);
     }
 
-    private static AdminCampaignDetailData availableDetail(CouponRoundStatus status) {
+    private static AdminCouponRoundDetailData availableDetail(CouponRoundStatus status) {
         CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock =
                 new CouponMetricsSource.Observation<>(
                         new CouponMetricsSource.StockCounts(10L, 4L), SourceStatus.VALID, SNAPSHOT_AT);
@@ -127,10 +127,10 @@ class AdminCouponMetricsServiceTest {
                         new CouponMetricsSource.TransitionBucket(
                                 SNAPSHOT_AT.minusSeconds(300), SNAPSHOT_AT, 2L, 1L, 1L, 1L)),
                         SourceStatus.VALID, SNAPSHOT_AT);
-        return new AdminCampaignDetailData(DetailAvailability.AVAILABLE,
-                new AdminCampaignDetailData.DetailValue(
-                        101L, "campaign", "brand",
-                        new CouponMetricsSource.CampaignRuntime(status,
+        return new AdminCouponRoundDetailData(DetailAvailability.AVAILABLE,
+                new AdminCouponRoundDetailData.DetailValue(
+                        101L, "couponRound", "brand",
+                        new CouponMetricsSource.CouponRoundRuntime(status,
                                 SNAPSHOT_AT.minusSeconds(60)), stock, holdings, transitions));
     }
 
@@ -141,26 +141,26 @@ class AdminCouponMetricsServiceTest {
                 SourceStatus.VALID, SNAPSHOT_AT);
     }
 
-    private static final class RecordingReader implements AdminCampaignDataReader {
+    private static final class RecordingReader implements AdminCouponRoundDataReader {
 
-        private final AdminCampaignDetailData detail;
+        private final AdminCouponRoundDetailData detail;
         private int calls;
         private long couponId;
         private Instant fromInclusive;
         private Instant toExclusive;
         private Instant snapshotAt;
 
-        private RecordingReader(AdminCampaignDetailData detail) {
+        private RecordingReader(AdminCouponRoundDetailData detail) {
             this.detail = detail;
         }
 
         @Override
-        public AdminCampaignCatalog loadCatalog(Instant requestedAt) {
+        public AdminCouponRoundCatalog loadCatalog(Instant requestedAt) {
             throw new AssertionError("상세 요청에서 catalog를 읽으면 안 됩니다.");
         }
 
         @Override
-        public AdminCampaignDetailData findDetail(
+        public AdminCouponRoundDetailData findDetail(
                 long requestedCouponId,
                 Instant requestedFrom,
                 Instant requestedTo,

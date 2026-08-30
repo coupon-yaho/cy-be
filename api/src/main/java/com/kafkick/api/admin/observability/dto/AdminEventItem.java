@@ -19,7 +19,7 @@ import com.kafkick.core.observation.ReasonCode;
  * @param eventId 논리 이벤트 중복 제거용 UUID
  * @param eventType EventRecorder 이벤트 유형
  * @param memberId 이벤트 대상 회원 식별자
- * @param couponId 이벤트 대상 쿠폰 캠페인 회차 식별자
+ * @param couponId 이벤트 대상 쿠폰 회차 식별자
  * @param issuanceId 생성된 발급권 식별자; 발급권이 없으면 null
  * @param issuanceCodeMasked 마스킹된 발급 코드; 발급권이 없으면 null
  * @param grade 이벤트에 기록된 회원 등급; 등급 조회 전 실패한 이벤트이면 null

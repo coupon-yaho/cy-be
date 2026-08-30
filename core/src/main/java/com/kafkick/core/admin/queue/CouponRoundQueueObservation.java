@@ -5,8 +5,8 @@ import java.util.Objects;
 
 import com.kafkick.core.observation.SourceStatus;
 
-/** 한 캠페인의 현재·이전 대기 인원과 입장 관측을 상태 및 시각과 함께 보존합니다. */
-public record CampaignQueueObservation(
+/** 한 쿠폰 회차의 현재·이전 대기 인원과 입장 관측을 상태 및 시각과 함께 보존합니다. */
+public record CouponRoundQueueObservation(
         Long couponId,
         Long currentWaitingCount,
         Long previousWaitingCount,
@@ -20,7 +20,7 @@ public record CampaignQueueObservation(
 ) {
 
     /** 값 유무를 SourceStatus와 일치시키고 대기열 시간·수량 관계를 검증합니다. */
-    public CampaignQueueObservation {
+    public CouponRoundQueueObservation {
         Objects.requireNonNull(couponId, "couponId");
         Objects.requireNonNull(sourceStatus, "sourceStatus");
         if (couponId <= 0L) {

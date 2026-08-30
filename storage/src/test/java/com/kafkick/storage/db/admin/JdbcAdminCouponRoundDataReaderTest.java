@@ -51,17 +51,17 @@ import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** Flyway 전체 스키마와 SELECT 전용 관측 계정에서 JDBC 캠페인 조회 계약을 검증합니다. */
-class JdbcAdminCampaignDataReaderTest {
+/** Flyway 전체 스키마와 SELECT 전용 관측 계정에서 JDBC 쿠폰 회차 조회 계약을 검증합니다. */
+class JdbcAdminCouponRoundDataReaderTest {
 
     private static final DockerImageName IMAGE = DockerImageName.parse("mysql:8.4.6");
     private static final Instant SNAPSHOT = Instant.parse("2026-08-24T12:00:00Z");
@@ -75,7 +75,7 @@ class JdbcAdminCampaignDataReaderTest {
     private static JdbcTemplate writeJdbc;
     private static JdbcTemplate observationJdbc;
     private static AnnotationConfigApplicationContext context;
-    private static JdbcAdminCampaignDataReader reader;
+    private static JdbcAdminCouponRoundDataReader reader;
 
     @BeforeAll
     static void startMySql() {
@@ -99,16 +99,16 @@ class JdbcAdminCampaignDataReaderTest {
         writeJdbc = new JdbcTemplate(writeDataSource);
         try (HikariDataSource rootDataSource = hikari("root", mysql.getPassword())) {
             JdbcTemplate root = new JdbcTemplate(rootDataSource);
-            root.execute("CREATE USER 'campaign_obs'@'%' IDENTIFIED BY 'campaign_obs'");
+            root.execute("CREATE USER 'coupon_round_obs'@'%' IDENTIFIED BY 'coupon_round_obs'");
             for (String table : observationTableAllowlist()) {
                 if (tableExists(root, table)) {
-                    root.execute("GRANT SELECT ON app.`" + table + "` TO 'campaign_obs'@'%'");
+                    root.execute("GRANT SELECT ON app.`" + table + "` TO 'coupon_round_obs'@'%'");
                 }
             }
             root.execute("FLUSH PRIVILEGES");
         }
 
-        rawObservationDataSource = hikari("campaign_obs", "campaign_obs");
+        rawObservationDataSource = hikari("coupon_round_obs", "coupon_round_obs");
         observationDataSource = new CountingDataSource(rawObservationDataSource);
         observationJdbc = new JdbcTemplate(observationDataSource);
         ReaderTestConfiguration.dataSource = observationDataSource;
@@ -117,7 +117,7 @@ class JdbcAdminCampaignDataReaderTest {
                 "reader-test", Map.of("observation.datasource.enabled", "true")));
         context.register(ReaderTestConfiguration.class);
         context.refresh();
-        reader = context.getBean(JdbcAdminCampaignDataReader.class);
+        reader = context.getBean(JdbcAdminCouponRoundDataReader.class);
     }
 
     @AfterAll
@@ -159,7 +159,7 @@ class JdbcAdminCampaignDataReaderTest {
     @Test
     @DisplayName("활성 스위치가 켜진 경우에만 관측 저장소 빈으로 등록된다")
     void readerIsConditionalRepository() {
-        Class<JdbcAdminCampaignDataReader> type = JdbcAdminCampaignDataReader.class;
+        Class<JdbcAdminCouponRoundDataReader> type = JdbcAdminCouponRoundDataReader.class;
 
         assertThat(type).hasAnnotation(Repository.class);
         ConditionalOnProperty condition = type.getAnnotation(ConditionalOnProperty.class);
@@ -174,13 +174,13 @@ class JdbcAdminCampaignDataReaderTest {
         assertThatThrownBy(() -> observationJdbc.update(
                 "UPDATE brands SET name = '변경' WHERE id = 1"))
                 .rootCause()
-                .hasMessageContaining("UPDATE command denied to user 'campaign_obs'");
+                .hasMessageContaining("UPDATE command denied to user 'coupon_round_obs'");
     }
 
     @Test
     @DisplayName("상세 조회는 이름이 지정된 관측 read-only 트랜잭션을 사용한다")
     void detailUsesNamedReadOnlyTransaction() throws Exception {
-        Transactional transactional = JdbcAdminCampaignDataReader.class
+        Transactional transactional = JdbcAdminCouponRoundDataReader.class
                 .getMethod("findDetail", long.class, Instant.class, Instant.class, Instant.class)
                 .getAnnotation(Transactional.class);
 
@@ -200,22 +200,22 @@ class JdbcAdminCampaignDataReaderTest {
         insertStock(10, 100, 0, SNAPSHOT.minusSeconds(60));
         insertStock(20, 200, 0, SNAPSHOT.minusSeconds(30));
 
-        AdminCampaignCatalog catalog = reader.loadCatalog(SNAPSHOT);
+        AdminCouponRoundCatalog catalog = reader.loadCatalog(SNAPSHOT);
 
         assertThat(catalog.status()).isEqualTo(SourceStatus.VALID);
         assertThat(catalog.observedAt()).isEqualTo(SNAPSHOT);
-        assertThat(catalog.campaigns()).extracting(AdminCampaignCatalog.CampaignData::couponId)
+        assertThat(catalog.couponRounds()).extracting(AdminCouponRoundCatalog.CouponRoundData::couponId)
                 .containsExactly(21L, 20L, 10L);
-        assertThat(catalog.campaigns().get(0).stock().status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(catalog.campaigns().get(1).stock().value())
+        assertThat(catalog.couponRounds().get(0).stock().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(catalog.couponRounds().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(200, 0));
-        assertThat(catalog.campaigns().get(0).preparation())
+        assertThat(catalog.couponRounds().get(0).preparation())
                 .isEqualTo(new PreparationSource(
                         true, false, CouponPolicyType.FIXED_AMOUNT, 1, SourceStatus.VALID, SNAPSHOT));
-        assertThat(catalog.campaigns().get(1).preparation())
+        assertThat(catalog.couponRounds().get(1).preparation())
                 .isEqualTo(new PreparationSource(
                         true, true, CouponPolicyType.FIXED_AMOUNT, 1, SourceStatus.VALID, SNAPSHOT));
-        assertThat(catalog.campaigns().get(2).preparation())
+        assertThat(catalog.couponRounds().get(2).preparation())
                 .isEqualTo(new PreparationSource(
                         true, true, CouponPolicyType.FIXED_AMOUNT, 1, SourceStatus.VALID, SNAPSHOT));
     }
@@ -223,26 +223,26 @@ class JdbcAdminCampaignDataReaderTest {
     /** DB 회차 버전이 전역 설정으로 덮이지 않고 목록과 상세 계약에 그대로 전달되는지 검증합니다. */
     @Test
     @DisplayName("카탈로그와 상세는 V2를 보존하고 NULL 엔진은 V1로 해석한다")
-    void mapsPerCampaignEngineVersionWithNullAsV1() {
-        insertCoupon(10, 1, 1, "V2 캠페인", "OPEN", SNAPSHOT.minusSeconds(60));
-        insertCoupon(11, 1, 1, "호환 캠페인", "SCHEDULED", SNAPSHOT.plusSeconds(60));
+    void mapsPerCouponRoundEngineVersionWithNullAsV1() {
+        insertCoupon(10, 1, 1, "V2 쿠폰 회차", "OPEN", SNAPSHOT.minusSeconds(60));
+        insertCoupon(11, 1, 1, "호환 쿠폰 회차", "SCHEDULED", SNAPSHOT.plusSeconds(60));
         writeJdbc.update("UPDATE coupons SET issuance_engine_version = 'V2' WHERE id = 10");
         writeJdbc.update("UPDATE coupons SET issuance_engine_version = NULL WHERE id = 11");
         insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
         insertStock(11, 100, 0, SNAPSHOT.minusSeconds(5));
 
-        AdminCampaignCatalog catalog = reader.loadCatalog(SNAPSHOT);
-        AdminCampaignDetailData detail = reader.findDetail(10, FROM, TO, SNAPSHOT);
+        AdminCouponRoundCatalog catalog = reader.loadCatalog(SNAPSHOT);
+        AdminCouponRoundDetailData detail = reader.findDetail(10, FROM, TO, SNAPSHOT);
 
-        assertThat(catalog.campaigns())
-                .filteredOn(campaign -> campaign.couponId() == 10L)
+        assertThat(catalog.couponRounds())
+                .filteredOn(couponRound -> couponRound.couponId() == 10L)
                 .singleElement()
-                .extracting(AdminCampaignCatalog.CampaignData::engineVersion)
+                .extracting(AdminCouponRoundCatalog.CouponRoundData::engineVersion)
                 .isEqualTo(EngineVersion.V2);
-        assertThat(catalog.campaigns())
-                .filteredOn(campaign -> campaign.couponId() == 11L)
+        assertThat(catalog.couponRounds())
+                .filteredOn(couponRound -> couponRound.couponId() == 11L)
                 .singleElement()
-                .extracting(AdminCampaignCatalog.CampaignData::engineVersion)
+                .extracting(AdminCouponRoundCatalog.CouponRoundData::engineVersion)
                 .isEqualTo(EngineVersion.V1);
         assertThat(detail.availability()).isEqualTo(DetailAvailability.AVAILABLE);
         assertThat(detail.value().engineVersion()).isEqualTo(EngineVersion.V2);
@@ -250,7 +250,7 @@ class JdbcAdminCampaignDataReaderTest {
 
     /** 실제 회차 도메인의 24시간 상한을 넘는 기간은 설정 실패로 판정하는지 검증합니다. */
     @Test
-    @DisplayName("24시간을 초과한 회차는 캠페인 설정이 준비되지 않는다")
+    @DisplayName("24시간을 초과한 회차는 쿠폰 회차 설정이 준비되지 않는다")
     void couponRoundDurationCannotExceedTwentyFourHours() {
         Instant opensAt = SNAPSHOT.minusSeconds(60);
         insertCoupon(10, 1, 1, "기간 초과", "OPEN", opensAt);
@@ -260,9 +260,9 @@ class JdbcAdminCampaignDataReaderTest {
         insertStock(10, 100, 0, SNAPSHOT.minusSeconds(5));
 
         PreparationSource preparation = reader.loadCatalog(SNAPSHOT)
-                .campaigns().getFirst().preparation();
+                .couponRounds().getFirst().preparation();
 
-        assertThat(preparation.campaignConfigurationReady()).isFalse();
+        assertThat(preparation.couponRoundConfigurationReady()).isFalse();
     }
 
     @Test
@@ -278,7 +278,7 @@ class JdbcAdminCampaignDataReaderTest {
     @Test
     @DisplayName("상세는 네 현재 상태와 네 전이 이벤트를 정확히 매핑한다")
     void detailMapsHoldingAndTransitionCounts() {
-        insertCoupon(10, 1, 1, "상태 캠페인", "OPEN", SNAPSHOT.minusSeconds(7200));
+        insertCoupon(10, 1, 1, "상태 쿠폰 회차", "OPEN", SNAPSHOT.minusSeconds(7200));
         insertStock(10, 20, 3, SNAPSHOT.minusSeconds(5));
         insertIssuance(101, 10, 1, "ISSUED", 1);
         insertMember(2);
@@ -295,10 +295,10 @@ class JdbcAdminCampaignDataReaderTest {
         insertHistory(204, 104, "CANCEL", FROM.plusSeconds(40));
         insertHistory(205, 105, "EXPIRE", FROM.plusSeconds(50));
 
-        AdminCampaignDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
+        AdminCouponRoundDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
 
         assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
-        assertThat(result.value().campaign().status()).isEqualTo(CouponRoundStatus.OPEN);
+        assertThat(result.value().couponRound().status()).isEqualTo(CouponRoundStatus.OPEN);
         assertThat(result.value().holdingCounts().status()).isEqualTo(SourceStatus.VALID);
         assertThat(result.value().holdingCounts().value())
                 .isEqualTo(new CouponMetricsSource.IssuanceStatusCounts(2, 1, 1, 1));
@@ -318,7 +318,7 @@ class JdbcAdminCampaignDataReaderTest {
             assertThat(reader.findDetail(10, FROM, TO, SNAPSHOT).availability())
                     .isEqualTo(DetailAvailability.UNAVAILABLE);
             assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
-                    .contains("admin campaign stock drift", "couponId=10", "activeCount=2", "issuedPlusUsed=1"));
+                    .contains("admin couponRound stock drift", "couponId=10", "activeCount=2", "issuedPlusUsed=1"));
         }
     }
 
@@ -331,7 +331,7 @@ class JdbcAdminCampaignDataReaderTest {
         insertStock(10, 20, 2, SNAPSHOT.minusSeconds(5));
         insertIssuance(101, 10, 1, "ISSUED", 1);
 
-        AdminCampaignDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
+        AdminCouponRoundDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
 
         assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
         assertThat(result.value().engineVersion()).isEqualTo(EngineVersion.V2);
@@ -350,7 +350,7 @@ class JdbcAdminCampaignDataReaderTest {
         insertHistory(203, 101, "USE", end.minusNanos(1_000));
         insertHistory(204, 101, "USE", end);
 
-        AdminCampaignDetailData result = reader.findDetail(10, start, end, SNAPSHOT);
+        AdminCouponRoundDetailData result = reader.findDetail(10, start, end, SNAPSHOT);
 
         assertThat(result.value().transitions().value().get(0).use()).isEqualTo(2);
         assertThat(result.value().transitions().value().get(0).windowStart()).isEqualTo(start);
@@ -362,7 +362,7 @@ class JdbcAdminCampaignDataReaderTest {
     void missingStockKeepsAvailableDetail() {
         insertCoupon(10, 1, 1, "재고 없음", "OPEN", SNAPSHOT.minusSeconds(60));
 
-        AdminCampaignDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
+        AdminCouponRoundDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
 
         assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
         assertThat(result.value().stock().status()).isEqualTo(SourceStatus.UNAVAILABLE);
@@ -372,10 +372,10 @@ class JdbcAdminCampaignDataReaderTest {
     @Test
     @DisplayName("발급과 전이가 비면 네 상태와 한 구간의 0값을 NO_TRAFFIC으로 반환한다")
     void emptyIssuanceAndTransitionAreNoTraffic() {
-        insertCoupon(10, 1, 1, "빈 캠페인", "SCHEDULED", SNAPSHOT.plusSeconds(60));
+        insertCoupon(10, 1, 1, "빈 쿠폰 회차", "SCHEDULED", SNAPSHOT.plusSeconds(60));
         insertStock(10, 10, 0, SNAPSHOT.minusSeconds(5));
 
-        AdminCampaignDetailData.DetailValue value = reader.findDetail(10, FROM, TO, SNAPSHOT).value();
+        AdminCouponRoundDetailData.DetailValue value = reader.findDetail(10, FROM, TO, SNAPSHOT).value();
 
         assertThat(value.holdingCounts().status()).isEqualTo(SourceStatus.NO_TRAFFIC);
         assertThat(value.holdingCounts().value())
@@ -386,7 +386,7 @@ class JdbcAdminCampaignDataReaderTest {
     }
 
     @Test
-    @DisplayName("모르는 캠페인 또는 발급 상태는 합계를 왜곡하지 않고 UNAVAILABLE이다")
+    @DisplayName("모르는 쿠폰 회차 또는 발급 상태는 합계를 왜곡하지 않고 UNAVAILABLE이다")
     void unknownStatesAreUnavailable() {
         // ⚠️ **CHECK 제약을 잠시 건다 뺀다(CY-744).** V2026082515 가 coupons.status 를
         //    SCHEDULED·OPEN·CLOSED 로 못 박아서, 이 검사가 일부러 심는 'BROKEN' 행이
@@ -395,7 +395,7 @@ class JdbcAdminCampaignDataReaderTest {
         //    (즉 이 갈래는 지금 운영에서 도달 불가다 — 그래도 리더가 견디는지는 계약이다.)
         writeJdbc.update("ALTER TABLE coupons DROP CHECK ck_coupon_status");
         try {
-            assertUnknownCampaignStatusIsUnavailable();
+            assertUnknownCouponRoundStatusIsUnavailable();
         } finally {
             writeJdbc.update("ALTER TABLE coupons ADD CONSTRAINT ck_coupon_status "
                     + "CHECK (status IN ('SCHEDULED', 'OPEN', 'CLOSED'))");
@@ -418,8 +418,8 @@ class JdbcAdminCampaignDataReaderTest {
         }
     }
 
-    private void assertUnknownCampaignStatusIsUnavailable() {
-        insertCoupon(10, 1, 1, "모르는 캠페인 상태", "BROKEN", SNAPSHOT.minusSeconds(60));
+    private void assertUnknownCouponRoundStatusIsUnavailable() {
+        insertCoupon(10, 1, 1, "모르는 쿠폰 회차 상태", "BROKEN", SNAPSHOT.minusSeconds(60));
         assertThat(reader.findDetail(10, FROM, TO, SNAPSHOT).availability())
                 .isEqualTo(DetailAvailability.UNAVAILABLE);
         writeJdbc.update("DELETE FROM coupons WHERE id = 10");
@@ -442,8 +442,8 @@ class JdbcAdminCampaignDataReaderTest {
     }
 
     @Test
-    @DisplayName("존재하지 않는 캠페인은 DB 장애와 다른 NOT_FOUND이다")
-    void missingCampaignIsNotFound() {
+    @DisplayName("존재하지 않는 쿠폰 회차는 DB 장애와 다른 NOT_FOUND이다")
+    void missingCouponRoundIsNotFound() {
         assertThat(reader.findDetail(404, FROM, TO, SNAPSHOT).availability())
                 .isEqualTo(DetailAvailability.NOT_FOUND);
     }
@@ -463,16 +463,16 @@ class JdbcAdminCampaignDataReaderTest {
                         throw new SQLException("forced observation failure");
                     }
                 });
-        JdbcAdminCampaignDataReader failingReader = new JdbcAdminCampaignDataReader(failingTemplate);
+        JdbcAdminCouponRoundDataReader failingReader = new JdbcAdminCouponRoundDataReader(failingTemplate);
 
         try (LogCapture logs = LogCapture.start()) {
             assertThat(failingReader.loadCatalog(SNAPSHOT).status()).isEqualTo(SourceStatus.UNAVAILABLE);
             assertThat(failingReader.findDetail(10, FROM, TO, SNAPSHOT).availability())
                     .isEqualTo(DetailAvailability.UNAVAILABLE);
             assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
-                    .contains("admin campaign catalog observation failed", "snapshotAt=" + SNAPSHOT));
+                    .contains("admin couponRound catalog observation failed", "snapshotAt=" + SNAPSHOT));
             assertThat(logs.messages()).anySatisfy(message -> assertThat(message)
-                    .contains("admin campaign detail observation failed", "couponId=10"));
+                    .contains("admin couponRound detail observation failed", "couponId=10"));
         }
     }
 
@@ -483,7 +483,7 @@ class JdbcAdminCampaignDataReaderTest {
         insertStock(10, 10, 0, SNAPSHOT.minusSeconds(5));
         observationDataSource.resetCount();
 
-        AdminCampaignDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
+        AdminCouponRoundDetailData result = reader.findDetail(10, FROM, TO, SNAPSHOT);
 
         assertThat(result.availability()).isEqualTo(DetailAvailability.AVAILABLE);
         assertThat(observationDataSource.connectionCount()).isEqualTo(1);
@@ -603,7 +603,7 @@ class JdbcAdminCampaignDataReaderTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableTransactionManagement(proxyTargetClass = true)
-    @Import(JdbcAdminCampaignDataReader.class)
+    @Import(JdbcAdminCouponRoundDataReader.class)
     static class ReaderTestConfiguration {
         private static DataSource dataSource;
 
@@ -651,7 +651,7 @@ class JdbcAdminCampaignDataReaderTest {
             implements AutoCloseable {
 
         private static LogCapture start() {
-            Logger logger = (Logger) LoggerFactory.getLogger(JdbcAdminCampaignDataReader.class);
+            Logger logger = (Logger) LoggerFactory.getLogger(JdbcAdminCouponRoundDataReader.class);
             ListAppender<ILoggingEvent> appender = new ListAppender<>();
             appender.start();
             logger.addAppender(appender);

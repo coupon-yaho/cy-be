@@ -1,4 +1,4 @@
-package com.kafkick.core.admin.campaignsource;
+package com.kafkick.core.admin.couponroundsource;
 
 import java.time.Instant;
 import java.util.List;
@@ -7,7 +7,7 @@ import java.util.Objects;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
- * 캠페인 필수 준비 항목의 완료 여부와 DB 관측 상태입니다.
+ * 쿠폰 회차 필수 준비 항목의 완료 여부와 DB 관측 상태입니다.
  *
  * <p>완료 여부와 실패 목록은 DB 원천과 Runtime 설정을 모두 판정한 Core 결과입니다. 원천을
  * 끝까지 확인하지 못하면 {@code false}와 실패 목록으로 바꾸지 않고 값 없는 상태로 보존합니다.</p>

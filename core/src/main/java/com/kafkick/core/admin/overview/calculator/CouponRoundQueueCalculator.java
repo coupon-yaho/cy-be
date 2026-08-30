@@ -17,25 +17,25 @@ import com.kafkick.core.observation.SourceStatus;
 
 /** O2 대기 변화·입장 처리율·ETA와 전체 대기 위험을 계산하는 순수 계산기입니다. */
 @Component
-public class CampaignQueueCalculator {
+public class CouponRoundQueueCalculator {
 
     /** 상태 없는 O2 순수 계산기를 생성합니다. */
-    public CampaignQueueCalculator() { }
+    public CouponRoundQueueCalculator() { }
 
     /**
-     * 캠페인별 대기열과 전체 KPI를 동일한 캠페인 계산 결과에서 만듭니다.
+     * 쿠폰 회차별 대기열과 전체 KPI를 동일한 쿠폰 회차 계산 결과에서 만듭니다.
      *
-     * <p>입장률 0은 실제 처리량 0이며 ETA는 null입니다. 적용 캠페인 하나라도 수집 불가면
+     * <p>입장률 0은 실제 처리량 0이며 ETA는 null입니다. 적용 쿠폰 회차 하나라도 수집 불가면
      * 부분 합계를 전체값처럼 내보내지 않고 두 전체 관측값을 UNAVAILABLE로 반환합니다.</p>
      *
      * @param policy 안내·입장 중단 정책
      * @param inputs 쿠폰별 대기열 원천 입력
-     * @return 캠페인 행, 전역 KPI 및 QUEUE_STALLED 후보를 함께 담은 불변 결과
+     * @return 쿠폰 회차 행, 전역 KPI 및 QUEUE_STALLED 후보를 함께 담은 불변 결과
      */
     public QueueCalculation calculate(OverviewCalculationPolicy policy, List<QueueInput> inputs) {
         Objects.requireNonNull(policy, "policy");
         Objects.requireNonNull(inputs, "inputs");
-        Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus>> statuses =
+        Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CouponRoundQueueStatus>> statuses =
                 new LinkedHashMap<>();
         List<AdminOverviewSnapshot.OperationActionItem> actions = new ArrayList<>();
         List<SourceStatus> applicableStatuses = new ArrayList<>();
@@ -51,7 +51,7 @@ public class CampaignQueueCalculator {
                 .toList();
         for (QueueInput input : orderedInputs) {
             Objects.requireNonNull(input, "inputs에는 null을 포함할 수 없습니다.");
-            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus> observation =
+            AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CouponRoundQueueStatus> observation =
                     calculateOne(policy, input);
             if (statuses.put(input.couponId(), observation) != null) {
                 throw new IllegalArgumentException("couponId는 중복될 수 없습니다.");
@@ -64,11 +64,11 @@ public class CampaignQueueCalculator {
             if (!input.sourceStatus().carriesValue()) {
                 continue;
             }
-            AdminOverviewSnapshot.CampaignQueueStatus queue = observation.value();
+            AdminOverviewSnapshot.CouponRoundQueueStatus queue = observation.value();
             waitingTotal = Math.addExact(waitingTotal, queue.waitingCount());
             admissionsPerMinuteTotal += queue.admissionsPerMinute();
             aggregateObservedAt = earlier(aggregateObservedAt, input.observedAt());
-            if (queue.assessment() != AdminOverviewSnapshot.CampaignQueueAssessment.NORMAL) {
+            if (queue.assessment() != AdminOverviewSnapshot.CouponRoundQueueAssessment.NORMAL) {
                 riskCount++;
             }
             if (queue.waitingCount() > 0L && queue.estimatedWait() == null) {
@@ -80,13 +80,13 @@ public class CampaignQueueCalculator {
                 longestWait = queue.estimatedWait();
             }
             if (input.sourceStatus() == SourceStatus.VALID
-                    && queue.assessment() == AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED) {
+                    && queue.assessment() == AdminOverviewSnapshot.CouponRoundQueueAssessment.ADMISSION_STOPPED) {
                 // 오래되거나 준비 중인 판정은 조치 후보로 승격하지 않고 최신 정상 관측만 사용합니다.
                 actions.add(stalledAction(input));
             }
         }
         SourceStatus aggregateStatus = aggregateStatus(applicableStatuses);
-        // 적용 캠페인 하나라도 값 없는 상태면 계산 가능한 일부를 전체 KPI처럼 반환하지 않습니다.
+        // 적용 쿠폰 회차 하나라도 값 없는 상태면 계산 가능한 일부를 전체 KPI처럼 반환하지 않습니다.
         if (!aggregateStatus.carriesValue()) {
             return new QueueCalculation(statuses,
                     unavailableObservation(aggregateStatus), unavailableObservation(aggregateStatus), actions);
@@ -103,8 +103,8 @@ public class CampaignQueueCalculator {
                                 aggregateEta), aggregateStatus, aggregateObservedAt), actions);
     }
 
-    /** 한 캠페인의 실제 구간 입장 수를 분당 처리율과 ETA로 변환합니다. */
-    private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus> calculateOne(
+    /** 한 쿠폰 회차의 실제 구간 입장 수를 분당 처리율과 ETA로 변환합니다. */
+    private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CouponRoundQueueStatus> calculateOne(
             OverviewCalculationPolicy policy, QueueInput input) {
         if (!input.sourceStatus().carriesValue()) {
             return unavailableObservation(input.sourceStatus());
@@ -115,27 +115,27 @@ public class CampaignQueueCalculator {
                 / Duration.between(input.windowStart(), input.windowEnd()).toNanos() * 1_000_000_000.0;
         Duration eta = admissionsPerMinute == 0.0 ? null
                 : secondsCeiling(input.currentWaitingCount() / admissionsPerMinute * 60.0);
-        AdminOverviewSnapshot.CampaignQueueAssessment assessment = assessmentOf(policy, input, eta);
-        return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.CampaignQueueStatus(
+        AdminOverviewSnapshot.CouponRoundQueueAssessment assessment = assessmentOf(policy, input, eta);
+        return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.CouponRoundQueueStatus(
                 input.currentWaitingCount(), trend(input.currentWaitingCount() - input.previousWaitingCount()),
                 input.currentWaitingCount() - input.previousWaitingCount(), admissionsPerMinute, eta, assessment),
                 input.sourceStatus(), input.observedAt());
     }
 
     /** 중단 판정은 안내 기준 초과보다 우선하며 대기자가 0이면 중단이 아닙니다. */
-    private static AdminOverviewSnapshot.CampaignQueueAssessment assessmentOf(
+    private static AdminOverviewSnapshot.CouponRoundQueueAssessment assessmentOf(
             OverviewCalculationPolicy policy, QueueInput input, Duration eta) {
         if (input.currentWaitingCount() > 0L && input.admittedCount() == 0L
                 && input.admissionStoppedStartedAt() != null
                 && !Duration.between(input.admissionStoppedStartedAt(), input.observedAt()).isNegative()
                 && Duration.between(input.admissionStoppedStartedAt(), input.observedAt())
                 .compareTo(policy.queueAdmissionStoppedAfter()) >= 0) {
-            return AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED;
+            return AdminOverviewSnapshot.CouponRoundQueueAssessment.ADMISSION_STOPPED;
         }
         if (eta != null && eta.compareTo(policy.queueGuidanceThreshold()) > 0) {
-            return AdminOverviewSnapshot.CampaignQueueAssessment.GUIDANCE_THRESHOLD_EXCEEDED;
+            return AdminOverviewSnapshot.CouponRoundQueueAssessment.GUIDANCE_THRESHOLD_EXCEEDED;
         }
-        return AdminOverviewSnapshot.CampaignQueueAssessment.NORMAL;
+        return AdminOverviewSnapshot.CouponRoundQueueAssessment.NORMAL;
     }
 
     /** 대기 인원 차이의 부호만으로 입력 순서와 무관한 추세를 정합니다. */
@@ -202,13 +202,13 @@ public class CampaignQueueCalculator {
                 input.admissionStoppedStartedAt(),
                 Duration.between(input.admissionStoppedStartedAt(), input.observedAt()),
                 new AdminOverviewSnapshot.RecommendedAction(AdminOverviewSnapshot.ActionCode.QUEUE_STALLED,
-                        "대기열 입장 처리 확인", AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL));
+                        "대기열 입장 처리 확인", AdminOverviewSnapshot.TargetScreen.COUPON_ROUND_DETAIL));
     }
 
     /**
      * O2 원천 입력입니다.
      *
-     * @param couponId 캠페인 식별자
+     * @param couponId 쿠폰 회차 식별자
      * @param currentWaitingCount 현재 실제 대기 인원; 0은 실제 빈 대기열
      * @param previousWaitingCount 정확히 1분 전 snapshot의 대기 인원; long 공개 계약의 분당 차이 기준
      * @param admittedCount 구간에서 실제 입장 완료된 수
@@ -290,7 +290,7 @@ public class CampaignQueueCalculator {
      * @param actionCandidates 중단된 입장 흐름의 중복 없는 조치 후보
      */
     public record QueueCalculation(
-            Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CampaignQueueStatus>> queueStatuses,
+            Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.CouponRoundQueueStatus>> queueStatuses,
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.QueueRiskSummary> queueRisk,
             AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateQueue> aggregateQueue,
             List<AdminOverviewSnapshot.OperationActionItem> actionCandidates) {

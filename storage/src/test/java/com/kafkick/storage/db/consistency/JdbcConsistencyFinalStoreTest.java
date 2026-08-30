@@ -143,14 +143,14 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
-    void outerValidWrapsInnerStaleGapAndCampaignName() {
+    void outerValidWrapsInnerStaleGapAndCouponName() {
         save(1, evaluation(SourceStatus.VALID));
         save(2, evaluation(SourceStatus.STALE));
         var latest = store.findLatestByCouponId(11L);
         assertThat(latest.status()).isEqualTo(SourceStatus.VALID);
         assertThat(latest.value().evaluation().gaps().get(ConsistencyGapType.LUA_GAP).state())
                 .isEqualTo(SourceStatus.STALE);
-        assertThat(latest.value().campaignName()).isEqualTo("first");
+        assertThat(latest.value().couponName()).isEqualTo("first");
         assertThat(latest.value().evaluatedAt()).isEqualTo(Instant.parse("2026-08-26T00:00:00Z"));
     }
 
@@ -178,7 +178,7 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
-    void missingFinalIsPendingAndMissingCampaignIsNotApplicable() {
+    void missingFinalIsPendingAndMissingCouponRoundIsNotApplicable() {
         insertCoupon(12, "pending");
         insertCoupon(17, "not-applied");
         insertFinalizedRun(12, "run-12", 12);
@@ -206,7 +206,7 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
-    void bulkReadReturnsEveryRequestedCampaignInFirstInputOrder() {
+    void bulkReadReturnsEveryRequestedCouponRoundInFirstInputOrder() {
         save(1, evaluation(SourceStatus.VALID));
         insertCoupon(16, "bulk-pending");
         insertFinalizedRun(13, "run-13", 16);
@@ -248,7 +248,7 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
-    void corruptFinalEnumMakesOnlyThatCampaignUnavailable() {
+    void corruptFinalEnumMakesOnlyThatCouponRoundUnavailable() {
         insertCoupon(15, "second");
         insertFinalizedRun(15, "run-15", 15);
         save(1, evaluation(SourceStatus.VALID));
@@ -273,7 +273,7 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
-    void sqlFailureMakesEveryRequestedCampaignUnavailable() throws Exception {
+    void sqlFailureMakesEveryRequestedCouponRoundUnavailable() throws Exception {
         DataSource unavailable = org.mockito.Mockito.mock(DataSource.class);
         org.mockito.Mockito.when(unavailable.getConnection())
                 .thenThrow(new SQLException("observation database down"));
@@ -404,7 +404,7 @@ class JdbcConsistencyFinalStoreTest {
     }
 
     @Test
-    void deletedCampaignKeepsStoredFinalVisibleInsteadOfFlippingToPending() {
+    void deletedCouponRoundKeepsStoredFinalVisibleInsteadOfFlippingToPending() {
         insertCoupon(13, "orphan");
         insertFinalizedRun(6, "run-6", 13);
         String token = store.claim(6, Duration.ofMinutes(5)).orElseThrow().token();
@@ -414,7 +414,7 @@ class JdbcConsistencyFinalStoreTest {
 
         var latest = store.findLatestByCouponId(13L);
         assertThat(latest.status()).isEqualTo(SourceStatus.VALID);
-        assertThat(latest.value().campaignName()).isNull();
+        assertThat(latest.value().couponName()).isNull();
     }
 
     @Test
