@@ -118,7 +118,8 @@ class JdbcConsistencyFinalStoreTest {
         jdbc.update("DELETE FROM consistency_finals");
         jdbc.update("""
             UPDATE benchmark_runs
-               SET consistency_status='NONE', consistency_failure_reason=NULL,
+               SET run_status='FINALIZED', finalized_at='2026-08-26 00:00:00',
+                   consistency_status='NONE', consistency_failure_reason=NULL,
                    consistency_claimed_at=NULL, consistency_claim_token=NULL
              WHERE id IN (1, 2)
             """);
