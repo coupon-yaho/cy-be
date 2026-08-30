@@ -67,6 +67,14 @@ mysql_in() {
     _ "$schema" "$@"
 }
 
+# 적용 전용. --force 로 끝까지 달린다 — 오류 분류는 호출부가 한다.
+mysql_force() {
+  local schema="$1"
+  docker exec -i "$CONTAINER" sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot --force --default-character-set=utf8mb4 "$1"' \
+    _ "$schema"
+}
+
 has_table() {
   local schema="$1" table="$2"
   [ "$(mysql_in "$schema" -N -e \
@@ -112,19 +120,43 @@ for schema in "$@"; do
     continue
   fi
 
+  # **부분 적용에서도 다시 달릴 수 있어야 한다.** 사전 확인만으로는 부족하다 —
+  # V11 이 문장 단위로 반쯤 적용된 상태에서 다시 부르면 첫 CREATE TABLE 이
+  # "이미 있다" 로 죽고 나머지를 못 만든다. 스스로 만든 상태에서 못 빠져나온다.
+  #
+  # 그래서 --force 로 **끝까지 달리되**, 나온 오류를 분류한다.
+  #   1050 Table already exists   · 1061 Duplicate key name
+  #   1007 Database exists        · 1826 Duplicate foreign key
+  # 이 넷만 "이미 있음" 으로 넘긴다. --force 를 그냥 쓰면 **모든** 오류를 삼켜
+  # 중간 실패가 뒤의 성공에 묻히는데, 그것이 앞선 리뷰가 잡은 결함이다.
+  err_file="$(mktemp)"
   for f in "${FILES[@]}"; do
     path="$MIGRATIONS_DIR/$f"
     [ -f "$path" ] || {
       echo "  ✗ 마이그레이션이 없다: $path" >&2
       echo "    이름이 바뀌었으면 이 스크립트와 SchemaPresenceGuard.META_MIGRATIONS 를" >&2
       echo "    함께 고쳐야 한다." >&2
-      exit 1; }
-    if ! mysql_in "$schema" < "$path"; then
-      echo "  ✗ $f 적용 실패 — 위 오류를 그대로 남긴다" >&2
-      exit 1
+      rm -f "$err_file"; exit 1; }
+
+    : > "$err_file"
+    mysql_force "$schema" < "$path" 2>"$err_file" || true
+
+    # 넘겨도 되는 것만 지운 뒤, 남은 줄이 있으면 진짜 실패다.
+    if grep -E "^ERROR" "$err_file" \
+       | grep -vE "^ERROR (1050|1061|1007|1826) " > "${err_file}.fatal"; then
+      echo "  ✗ $f 적용 실패" >&2
+      cat "${err_file}.fatal" >&2
+      rm -f "$err_file" "${err_file}.fatal"; exit 1
     fi
-    echo "  ✓ $f"
+    rm -f "${err_file}.fatal"
+
+    if grep -qE "^ERROR" "$err_file"; then
+      echo "  ✓ $f (이미 있는 객체는 넘김)"
+    else
+      echo "  ✓ $f"
+    fi
   done
+  rm -f "$err_file"
 
   # 부었다고 믿지 않는다. 가드가 보는 축 그대로 다시 잰다.
   if ! verify_schema "$schema"; then
