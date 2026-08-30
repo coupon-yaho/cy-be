@@ -2,7 +2,6 @@ package com.kafkick.batch.coupon.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.sql.Driver;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -18,22 +17,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.SimpleDriverDataSource;
-import org.springframework.jdbc.support.JdbcTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.mysql.MySQLContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import com.kafkick.core.coupon.v2.port.ClaimCommand;
 import com.kafkick.core.coupon.v2.port.ClaimOutcome;
@@ -80,12 +69,9 @@ class CouponRoundRebuildRunnerTest {
     private static final Instant OPEN_AT = NOW.minusSeconds(1_800);
     private static final Instant CLOSE_AT = NOW.plusSeconds(5_400);
 
-    private static MySQLContainer mysql;
-    private static GenericContainer<?> redis;
-    private static JdbcTemplate jdbc;
-    private static TransactionTemplate transactionTemplate;
-    private static LettuceConnectionFactory redisFactory;
-    private static StringRedisTemplate redisTemplate;
+    private static final JdbcTemplate jdbc = V2GateContainers.jdbc();
+    private static final TransactionTemplate transactionTemplate = V2GateContainers.transactions();
+    private static final StringRedisTemplate redisTemplate = V2GateContainers.redis();
 
     private final IssuanceKeys keys = IssuanceKeys.of(ROUND_ID);
 
@@ -93,49 +79,6 @@ class CouponRoundRebuildRunnerTest {
     private IssuanceWarmupPort warmupPort;
     private RoundGateWriteGuard guard;
 
-    @BeforeAll
-    @SuppressWarnings("unchecked")
-    static void startContainers() throws Exception {
-        mysql = new MySQLContainer(DockerImageName.parse("mysql:8.4"))
-                .withDatabaseName("app")
-                .withCommand("--default-time-zone=+00:00");
-        mysql.start();
-        Flyway.configure()
-                .dataSource(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword())
-                .locations("classpath:db/migration")
-                .load()
-                .migrate();
-        SimpleDriverDataSource dataSource = new SimpleDriverDataSource();
-        dataSource.setDriverClass(
-                (Class<? extends Driver>) Class.forName(mysql.getDriverClassName()));
-        dataSource.setUrl(mysql.getJdbcUrl());
-        dataSource.setUsername(mysql.getUsername());
-        dataSource.setPassword(mysql.getPassword());
-        jdbc = new JdbcTemplate(dataSource);
-        transactionTemplate = new TransactionTemplate(new JdbcTransactionManager(dataSource));
-
-        redis = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
-                .withExposedPorts(6379);
-        redis.start();
-        redisFactory = new LettuceConnectionFactory(
-                new RedisStandaloneConfiguration(redis.getHost(), redis.getFirstMappedPort()));
-        redisFactory.afterPropertiesSet();
-        redisFactory.start();
-        redisTemplate = new StringRedisTemplate(redisFactory);
-    }
-
-    @AfterAll
-    static void stopContainers() {
-        if (redisFactory != null) {
-            redisFactory.destroy();
-        }
-        if (mysql != null) {
-            mysql.stop();
-        }
-        if (redis != null) {
-            redis.stop();
-        }
-    }
 
     @BeforeEach
     void resetAndSeed() {
