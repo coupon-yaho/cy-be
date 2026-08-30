@@ -1,13 +1,15 @@
 // 마운트되는 배포 설정이 실제로 실렸는지 빈 생성 전에 확인합니다.
 package com.kafkick.core.support.config;
 
-import org.springframework.boot.SpringApplication;
+import org.apache.commons.logging.Log;
 import org.springframework.boot.EnvironmentPostProcessor;
-import org.springframework.core.Ordered;
-import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.logging.DeferredLogFactory;
 import org.springframework.boot.origin.Origin;
 import org.springframework.boot.origin.OriginLookup;
 import org.springframework.boot.origin.TextResourceOrigin;
+import org.springframework.core.Ordered;
+import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.PropertySource;
 import org.springframework.util.StringUtils;
 
@@ -68,6 +70,28 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
      */
     public static final String MARKER = "deployed-config.marker";
 
+    /**
+     * 부트가 {@code ConfigurationPropertySources.attach} 로 맨 앞에 붙이는 파사드의 이름.
+     * 상수가 {@code private} 이라 리터럴로 쓴다 — 값이 바뀌면
+     * {@code DeployedConfigGuardTest} 의 환경변수 검사가 잡는다.
+     */
+    private static final String ATTACHED_FACADE = "configurationProperties";
+
+    /**
+     * <b>보통의 로거는 여기서 안 나온다.</b> {@code EnvironmentPostProcessor} 는 로깅
+     * 시스템이 초기화되기 <b>전</b>에 돌아서, {@code LoggerFactory.getLogger} 로 찍은 줄은
+     * 조용히 사라진다 — 실측으로 확인했다(성공 로그가 한 줄도 안 나왔다).
+     *
+     * <p>부트가 그 자리에 쓰라고 준 것이 {@link DeferredLogFactory} 다. 로깅이 준비된 뒤
+     * 밀린 줄을 흘려보낸다. 부트 자신의 {@code ConfigDataEnvironmentPostProcessor} 도
+     * 같은 생성자를 받는다.
+     */
+    private final Log log;
+
+    public DeployedConfigGuard(DeferredLogFactory logFactory) {
+        this.log = logFactory.getLog(DeployedConfigGuard.class);
+    }
+
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment,
             SpringApplication application) {
@@ -76,7 +100,12 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
             // 울고, 그 소음이 정작 켠 경로의 실패를 묻는다.
             return;
         }
-        if (fileOriginOf(environment) != null) {
+        String file = fileOriginOf(environment);
+        if (file != null) {
+            // **어느 파일이 만족시켰는지 남긴다.** 이 검사는 "파일에서 왔는가" 까지만 보고
+            // "어느 파일인가" 는 안 보므로(위 javadoc), 뜻밖의 파일이 통과한 경우를
+            // 사람이 볼 수 있어야 한다.
+            log.info("배포 설정 확인 완료 — " + file + " 가 " + MARKER + " 를 실었습니다.");
             return;
         }
         throw new IllegalStateException(
@@ -91,6 +120,16 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
                         + "DEPLOYED_CONFIG_REQUIRED=false 로 이 거절을 끄십시오. "
                         + "환경변수나 -D 로 " + MARKER + " 를 주는 것은 이 검사를 통과시키지 "
                         + "않습니다 — 이 가드가 보는 것은 값이 아니라 그 값을 준 자리입니다.");
+    }
+
+    /**
+     * <b>설정 파일을 읽은 뒤여야 한다.</b> {@code ConfigDataEnvironmentPostProcessor} 보다
+     * 앞서 돌면 마커가 아직 안 실려 있어 <b>정상인 배포도 거절한다.</b> 그 뒤 아무 자리나
+     * 잡으면 되므로 가장 낮은 우선순위를 쓴다.
+     */
+    @Override
+    public int getOrder() {
+        return Ordered.LOWEST_PRECEDENCE;
     }
 
     /**
@@ -111,6 +150,23 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
      * <p>그래서 이름이 아니라 <b>값의 출처</b>를 본다. 부트는 설정 파일에서 온 값에
      * {@link TextResourceOrigin} 을 달아 준다 — 그 안에 실제 리소스가 들어 있다.
      * 환경변수·시스템 프로퍼티·손으로 얹은 맵에는 그 출처가 없다.
+     *
+     * <h2>여기까지가 이 검사가 말할 수 있는 전부다</h2>
+     *
+     * <p><b>"어느 파일인가" 는 안 본다 — 파일에서 왔는가만 본다.</b> 마운트 경로
+     * ({@code /app/config/application.yml})는 배포마다 다르고, 그것을 이 클래스에 박으면
+     * 공용 라이브러리가 compose 의 배치를 알게 된다. 로컬 {@code bootRun} 처럼 경로가
+     * 다른 실행은 그때 <b>정상인데 거절당한다.</b>
+     *
+     * <p>그래서 남는 틈이 있다 — <b>다른 외부 설정 파일이 마커를 주면 통과한다.</b>
+     * 그 틈은 둘로 좁힌다.
+     *
+     * <ol>
+     *   <li><b>jar 안의 리소스는 못 준다.</b> {@code DeployedConfigMountContractTest} 가
+     *       모듈 리소스에 이 키가 없는지 검사한다 — 있으면 CI 가 빨개진다.</li>
+     *   <li><b>어느 파일이 줬는지 로그에 남긴다.</b> 뜻밖의 파일이 만족시킨 경우가
+     *       기동 로그에 그대로 보인다. 조용히 통과하지 않는다.</li>
+     * </ol>
      *
      * @return 마커를 준 파일의 설명. 파일 밖에서 왔거나 없으면 {@code null}
      */
@@ -160,20 +216,4 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
         return (OriginLookup<String>) lookup;
     }
 
-    /**
-     * 부트가 {@code ConfigurationPropertySources.attach} 로 맨 앞에 붙이는 파사드의 이름.
-     * 상수가 {@code private} 이라 리터럴로 쓴다 — 값이 바뀌면
-     * {@code DeployedConfigGuardTest} 의 환경변수 검사가 잡는다.
-     */
-    private static final String ATTACHED_FACADE = "configurationProperties";
-
-    /**
-     * <b>설정 파일을 읽은 뒤여야 한다.</b> {@code ConfigDataEnvironmentPostProcessor} 보다
-     * 앞서 돌면 마커가 아직 안 실려 있어 <b>정상인 배포도 거절한다.</b> 그 뒤 아무 자리나
-     * 잡으면 되므로 가장 낮은 우선순위를 쓴다.
-     */
-    @Override
-    public int getOrder() {
-        return Ordered.LOWEST_PRECEDENCE;
-    }
 }

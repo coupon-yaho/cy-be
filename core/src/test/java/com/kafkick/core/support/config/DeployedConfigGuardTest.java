@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,7 +29,11 @@ import org.springframework.mock.env.MockEnvironment;
  */
 class DeployedConfigGuardTest {
 
-    private final DeployedConfigGuard guard = new DeployedConfigGuard();
+    /**
+     * <b>로깅이 준비되기 전에 도는 자리라 로거를 주입받는다.</b> {@code Supplier} 를 그대로
+     * 부르는 최소 구현으로 충분하다 — 이 테스트가 재는 것은 로그가 아니라 판정이다.
+     */
+    private final DeployedConfigGuard guard = new DeployedConfigGuard(Supplier::get);
 
     private void run(Map<String, String> properties) {
         MockEnvironment environment = new MockEnvironment();
