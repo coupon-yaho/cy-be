@@ -27,8 +27,14 @@ import org.testcontainers.utility.DockerImageName;
  * Testcontainers 의 Ryuk 이 맡는다 — {@code @AfterAll} 에서 멈추면 다음 클래스가 다시 띄운다.
  *
  * <p><b>상태 격리는 각 테스트가 진다.</b> 두 클래스 모두 {@code @BeforeEach} 에서 표를 비우고
- * {@code FLUSHALL} 한다. 같은 JVM 안에서 클래스는 순차 실행이므로(모듈에
- * {@code maxParallelForks} 를 주지 않았다) 그것으로 충분하다.
+ * {@code FLUSHALL} 한다 — 한 클래스의 그 정리가 다른 클래스의 데이터를 지우므로 <b>둘이 겹쳐
+ * 돌면 안 된다</b>.
+ *
+ * <p>그 전제를 <b>주석이 아니라 {@link #SHARED_STATE} 가 강제한다.</b> 지금은 JUnit 병렬
+ * 실행이 꺼져 있어 저절로 지켜지지만, 그건 이 파일 밖의 기본값이라 언제든 켜질 수 있다 —
+ * 켜지는 날 이 클래스를 아무도 다시 안 본다. 쓰는 클래스는 {@code @ResourceLock} 으로 이 키를
+ * 잡는다. (Gradle 의 {@code maxParallelForks} 는 JVM 을 나누므로 각 JVM 이 자기 컨테이너를
+ * 갖는다 — 그쪽은 겹침이 아니라 중복 기동 문제다.)
  */
 final class V2GateContainers {
 
@@ -74,6 +80,12 @@ final class V2GateContainers {
         factory.start();
         REDIS_TEMPLATE = new StringRedisTemplate(factory);
     }
+
+    /**
+     * 공유 상태의 이름. 이 컨테이너 쌍을 쓰는 테스트 클래스는 전부 이 키를 잡아,
+     * 병렬 실행이 켜져도 서로의 정리에 지워지지 않는다.
+     */
+    static final String SHARED_STATE = "v2-gate-containers";
 
     private V2GateContainers() {
     }

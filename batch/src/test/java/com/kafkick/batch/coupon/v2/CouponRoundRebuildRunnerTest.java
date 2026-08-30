@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -46,6 +47,7 @@ import com.kafkick.infra.redis.coupon.v2.RedisRestorationHaltStore;
  * <p>회차는 <b>이미 열려 있다</b>. 워밍업 테스트가 오픈 전 회차를 쓰는 것과 여기가 갈리는
  * 지점이고, 그것이 이 경로의 존재 이유다.
  */
+@ResourceLock(V2GateContainers.SHARED_STATE)
 class CouponRoundRebuildRunnerTest {
 
     private static final long ROUND_ID = 700;
@@ -486,6 +488,51 @@ class CouponRoundRebuildRunnerTest {
         assertThat(result.issuedHashIsShort()).isTrue();
         // 게이트는 연다 — 닫아 두면 부하 중에는 영원히 수렴하지 못한다.
         assertThat(gate.readMeta(ROUND_ID)).isPresent();
+    }
+
+    /**
+     * 재시딩 직전에 읽은 최신 집계가 <b>총재고를 넘으면</b> 그 사실이 판정에 반영돼야 한다.
+     * 첫 4′ 의 {@code applied = true} 를 그대로 들고 게이트를 열면, 그 시점의 낡은 활성 수로
+     * 계산한 재고가 실제보다 커진 채 발급이 재개된다 — 초과 발급 방향이다.
+     */
+    @Test
+    @DisplayName("재시딩 직전 집계가 총재고를 넘으면 게이트를 닫은 채 멈춘다")
+    void refusesToReopenWhenTheReseedSnapshotIsOverIssued() {
+        jdbc.update("UPDATE coupon_stocks SET total_quantity = 2 WHERE coupon_id = ?", ROUND_ID);
+        openGateWithStaleCounters();
+        insertIssuance(1, 1, "ISSUED");
+        AtomicBoolean firstSeeding = new AtomicBoolean(true);
+        AtomicBoolean firstRecount = new AtomicBoolean(true);
+
+        // 첫 4′ 는 활성 2 = 총재고 2 로 통과한다. 그 직후 한 건이 더 커밋돼 3 이 되고,
+        // 재시딩이 읽는 집계는 이미 총재고를 넘어 있다.
+        CouponRoundGateJdbc lateCommits = new CouponRoundGateJdbc(jdbc, transactionTemplate) {
+            @Override
+            public Recount recountAndUpdateActiveCount(
+                    long couponRoundId, long totalQuantity, java.time.Instant now) {
+                Recount recount = super.recountAndUpdateActiveCount(couponRoundId, totalQuantity, now);
+                if (firstRecount.getAndSet(false)) {
+                    insertIssuance(3, 3, "ISSUED");
+                }
+                return recount;
+            }
+        };
+        CouponRoundRebuildRunner runner = new CouponRoundRebuildRunner(
+                lateCommits, guard, gate, seederThatRuns(() -> {
+                    if (firstSeeding.getAndSet(false)) {
+                        insertIssuance(2, 2, "ISSUED");
+                    }
+                }), new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), Duration.ZERO);
+
+        CouponRoundRebuildResult result = runner.rebuild(ROUND_ID);
+
+        assertThat(result.status()).isEqualTo(CouponRoundRebuildStatus.OVER_ISSUED_ROUND);
+        assertThat(result.gateClosed()).isTrue();
+        assertThat(gate.readMeta(ROUND_ID)).isEmpty();
+        assertThat(result.recountedActiveCount()).isEqualTo(3);
+        // 초과를 알고도 다시 시딩하면 stock 에 음수가 적힌다. 게이트가 닫혀 있어 아무도 읽지
+        // 않지만, 다음 재구성이 그 값을 보고 시작한다 — 넘긴 채로 두지 않는다.
+        assertThat(Long.parseLong(redisTemplate.opsForValue().get(keys.stock()))).isNotNegative();
     }
 
     /**

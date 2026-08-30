@@ -282,15 +282,20 @@ public class CouponRoundRebuildRunner {
                 return closedAndRejected(couponRoundId, CouponRoundRebuildStatus.STOCK_ROW_MISSING);
             }
             CouponRoundGateWrites.requireMemberCountMatchesEverCount(couponRoundId, late);
-            if (totalQuantity - late.activeCount() >= 0) {
-                // 초과면 다시 쓰지 않는다 — 음수 stock 을 세우게 된다. 아래 재집계가 같은
-                // 결론을 내고 게이트를 닫은 채 끝낸다.
-                warmupPort.seedCounters(couponRoundId, late.everMembers(),
-                        totalQuantity - late.activeCount());
-                seededEverCount = late.everCount();
-                recount = roundJdbc.recountAndUpdateActiveCount(
-                        couponRoundId, totalQuantity, timeProvider.instant());
+            if (totalQuantity - late.activeCount() < 0) {
+                // **여기서 끝낸다.** 앞선 4′ 의 판정을 그대로 들고 내려가면 그때의 낡은 활성
+                // 수로 계산한 재고가 실제보다 큰 채로 게이트가 열린다 — 초과 발급 방향이고,
+                // 아래 검사는 이미 지나간 recount 를 보므로 이걸 못 잡는다.
+                log.error("회차 {} — 재시딩 직전 집계의 활성 건수({})가 총재고({})를 넘는다."
+                        + " 게이트를 닫은 채 멈춘다.", couponRoundId, late.activeCount(), totalQuantity);
+                return CouponRoundRebuildResult.overIssued(couponRoundId, true, totalQuantity,
+                        aggregate.activeCount(), late.activeCount());
             }
+            warmupPort.seedCounters(couponRoundId, late.everMembers(),
+                    totalQuantity - late.activeCount());
+            seededEverCount = late.everCount();
+            recount = roundJdbc.recountAndUpdateActiveCount(
+                    couponRoundId, totalQuantity, timeProvider.instant());
         }
         long recountedActive = recount.activeCount();
         long remainingStock = totalQuantity - recountedActive;

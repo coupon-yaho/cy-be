@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -48,6 +49,7 @@ import com.kafkick.infra.redis.coupon.v2.RedisRestorationHaltStore;
  * <p><b>키는 {@link IssuanceKeys} 에서 온다.</b> 리터럴을 옮겨 적으면 어댑터가 키를 바꿔도
  * 여기는 계속 초록이고, 그 사실은 정합성 리더가 아무것도 못 읽을 때에야 드러난다.
  */
+@ResourceLock(V2GateContainers.SHARED_STATE)
 class CouponRoundWarmupRunnerTest {
 
     private static final long ROUND_ID = 500;
