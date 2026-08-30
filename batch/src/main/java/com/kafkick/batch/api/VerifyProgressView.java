@@ -53,8 +53,16 @@ public record VerifyProgressView(
      * 판정 전에 죽는 것은 이 저장소에서 <b>정상 경로</b>다(얼림 가드·역전 검사가 일부러
      * 그렇게 죽인다). 그래서 "안 끝났다" 와 "안 끝날 것이다" 를 갈라야 한다.
      *
-     * <p>경계는 {@code batch.stuck-job-after-ms}(기본 30분)를 그대로 쓴다 —
-     * {@code RunningJobProbe} 가 "멈춘 잡" 을 판정하는 값과 같아야 두 화면이 안 갈린다.
+     * <p>경계 값은 {@code batch.stuck-job-after-ms}(기본 30분)를 빌려 쓴다. <b>다만
+     * {@code RunningJobProbe} 와 판정이 같다고 말할 수는 없다</b> — 그쪽은 Step 경계와 청크
+     * 커밋에서 갱신되는 <b>마지막 진도 시각</b>을 보고, 여기는 <b>시작 시각</b>만 본다.
+     * {@code verification_runs} 에 진도 컬럼이 없어서다.
+     *
+     * <p>그래서 <b>임계보다 오래 걸리는 정상 실행은 여기서 STALE 로 보인다.</b> 지금은
+     * 여유가 크다 — 실측으로 {@code verifyJob} FULL 이 300만 발급에서 180.8초이고(docs/12)
+     * 옛 판이 472초였으니 30분은 그 4배 위다. 규모가 커져 이 여유가 사라지면 진도 컬럼을
+     * 세우거나 배치 메타를 조인해야 한다. 그때까지는 <b>화면이 늦게 포기하는 쪽</b>으로
+     * 틀리므로 안전한 방향이다.
      */
     public static final String STALE = "STALE";
 

@@ -11,6 +11,7 @@ import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
 import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.core.verification.VerificationRunRepository;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,6 +57,15 @@ class VerifyProgressApiTest {
 
     @Autowired
     private JdbcClient jdbcClient;
+
+    /**
+     * <b>앱과 같은 좌표계를 쓴다.</b> {@code LocalDateTime.now()} 는 테스트 JVM 의 기본 존
+     * (이 팀은 KST)을 주는데 API 는 UTC {@code TimeProvider} 와 비교한다. 그러면 픽스처가
+     * <b>9시간 미래</b>가 되어 STALE 경계를 영영 안 넘고, RUNNING 검사가 통과는 하지만
+     * 아무것도 안 잠근다 — 리뷰가 그것을 잡았다.
+     */
+    @Autowired
+    private TimeProvider timeProvider;
 
     private VerifyApiProbe probe;
 
@@ -191,12 +201,14 @@ class VerifyProgressApiTest {
     /**
      * 판정도 마감 시각도 없는 <b>방금 시작한</b> 실행.
      *
-     * <p>시작 시각을 현재로 둔다 — {@code STALE} 경계가 실제 시각을 보므로, 픽스처 시각
-     * ({@code AS_OF}, 2026-01-15)을 그대로 쓰면 <b>모든 실행이 STALE</b> 이 되어
-     * RUNNING 경로를 아예 못 태운다. 픽스처 값이 런타임이 만들 수 있는 창을 이뤄야 한다.
+     * <p>시작 시각을 <b>앱의 현재</b>로 둔다 — {@code STALE} 경계가 그 시각을 보므로,
+     * 픽스처 시각({@code AS_OF}, 2026-01-15)을 그대로 쓰면 <b>모든 실행이 STALE</b> 이 되어
+     * RUNNING 경로를 아예 못 태운다. 반대로 {@code LocalDateTime.now()} 를 쓰면 KST 라
+     * 9시간 미래가 되어 이번엔 <b>영영 STALE 이 안 된다.</b> 두 방향 모두 검사를 장식으로
+     * 만든다 — 픽스처는 런타임이 만들 수 있는 창 안에 있어야 한다.
      */
     private long openRun() {
-        return openRunStartedAt(LocalDateTime.now());
+        return openRunStartedAt(timeProvider.now());
     }
 
     private long openRunStartedAt(LocalDateTime startedAt) {
@@ -207,7 +219,7 @@ class VerifyProgressApiTest {
     /** 닫혔는데 판정이 없는 행. finalize 가 판정을 못 쓰고 끝난 모양이다. */
     private void closeWithoutVerdict(long runId) {
         jdbcClient.sql("UPDATE verification_runs SET finished_at = :at WHERE id = :id")
-                .param("at", LocalDateTime.now()).param("id", runId).update();
+                .param("at", timeProvider.now()).param("id", runId).update();
     }
 
     private void close(long runId, VerdictType verdict, int findingCount) {
