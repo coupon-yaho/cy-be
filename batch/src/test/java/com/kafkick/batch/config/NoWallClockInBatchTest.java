@@ -113,6 +113,12 @@ class NoWallClockInBatchTest {
             // 닫는다. 둘 다 판정에 안 들어간다 — 잡에 실리는 asOf 는 요청값 그대로다.
             Map.entry("com/kafkick/batch/api/VerifyTriggerController.java", 2),
             Map.entry("com/kafkick/batch/api/BatchApiExceptionHandler.java", 1),
+            // 하나다 — 판정 없는 실행이 "아직 도는 중" 인지 "죽은 것" 인지 나이로 가르는 데 쓴다
+            // (/verify/runs/{runId}/progress 의 STALE). **판정에는 안 들어간다** — 이 경로는
+            // 읽기 전용이고, verdict 는 finalizeRunStep 이 쓴 값을 그대로 싣는다. 같은 asOf
+            // 재실행이 다른 답을 낼 여지가 없다. 이 값이 없으면 finalizeRunStep 앞에서 죽은
+            // 실행을 화면이 영원히 폴링한다(그렇게 죽는 것은 얼림 가드·역전 검사의 정상 경로다).
+            Map.entry("com/kafkick/batch/api/VerifyReportController.java", 1),
             // 하나다 — 거절 응답 봉투의 timestamp. BatchApiExceptionHandler 와 같은 축이고
             // 같은 이유로 예산에 든다: 판정이 아니라 **응답 메타**다. 이 필터는
             // DispatcherServlet 앞에서 응답해 그 핸들러를 못 지나므로 봉투를 직접 만든다 —
