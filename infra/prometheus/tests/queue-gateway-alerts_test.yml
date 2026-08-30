@@ -8,7 +8,7 @@ tests:
     interval: 1s
     input_series:
       - series: 'up{job="queue-gateway",instance="queue-gateway:8081"}'
-        values: '0x30'
+        values: '1x30'
       - series: 'waiting_snapshot_age{job="queue-gateway",instance="queue-gateway:8081"}'
         values: '-1x30'
       - series: 'waiting_capacity_nodes{job="queue-gateway",instance="queue-gateway:8081"}'
@@ -20,15 +20,6 @@ tests:
       - series: 'waiting_allocation_entered_overshoot_total{job="queue-gateway"}'
         values: '0+1x30'
     alert_rule_test:
-      - eval_time: 20s
-        alertname: QueueGatewayTargetDown
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              channel: server
-            exp_annotations:
-              summary: "대기열 게이트웨이 지표가 보이지 않습니다"
-              description: "queue-gateway:8081/actuator/prometheus 응답과 Prometheus targets의 queue-gateway 상태를 먼저 확인합니다."
       - eval_time: 20s
         alertname: QueueGatewaySnapshotUnavailable
         exp_alerts:
@@ -78,6 +69,8 @@ tests:
   - name: "스냅샷이 5초를 넘어 오래되면 stale 알림이 뜨다"
     interval: 1s
     input_series:
+      - series: 'up{job="queue-gateway",instance="queue-gateway:8081"}'
+        values: '1x30'
       - series: 'waiting_snapshot_age{job="queue-gateway",instance="queue-gateway:8081"}'
         values: '6x30'
     alert_rule_test:
@@ -91,8 +84,21 @@ tests:
               summary: "대기열 스냅샷이 5초 이상 갱신되지 않았습니다"
               description: "queue-gateway 로그와 /actuator/prometheus의 waiting_snapshot_age, Redis 응답 상태를 순서대로 확인합니다."
 
-  - name: "up과 snapshot age 시계열이 아예 없어도 장애를 숨기지 않는다"
+  - name: "수집 대상이 없는 기본 환경에서는 게이트웨이 알림을 끌 수 있다"
     interval: 1s
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: QueueGatewayTargetDown
+        exp_alerts: []
+      - eval_time: 15s
+        alertname: QueueGatewaySnapshotUnavailable
+        exp_alerts: []
+
+  - name: "설정한 게이트웨이 타겟이 다운되면 target 알림만 뜨다"
+    interval: 1s
+    input_series:
+      - series: 'up{job="queue-gateway",instance="external-gateway:8081"}'
+        values: '0x30'
     alert_rule_test:
       - eval_time: 15s
         alertname: QueueGatewayTargetDown
@@ -102,7 +108,17 @@ tests:
               channel: server
             exp_annotations:
               summary: "대기열 게이트웨이 지표가 보이지 않습니다"
-              description: "queue-gateway:8081/actuator/prometheus 응답과 Prometheus targets의 queue-gateway 상태를 먼저 확인합니다."
+              description: "외부 게이트웨이의 /actuator/prometheus 응답과 Prometheus targets의 queue-gateway 상태를 먼저 확인합니다."
+      - eval_time: 15s
+        alertname: QueueGatewaySnapshotUnavailable
+        exp_alerts: []
+
+  - name: "타겟은 살아 있지만 snapshot age가 없으면 unavailable이 뜨다"
+    interval: 1s
+    input_series:
+      - series: 'up{job="queue-gateway",instance="external-gateway:8081"}'
+        values: '1x30'
+    alert_rule_test:
       - eval_time: 15s
         alertname: QueueGatewaySnapshotUnavailable
         exp_alerts:
@@ -116,6 +132,8 @@ tests:
   - name: "카운터 리셋 자체는 새 장애로 계산하지 않는다"
     interval: 1s
     input_series:
+      - series: 'up{job="queue-gateway",instance="queue-gateway:8081"}'
+        values: '1x20'
       - series: 'waiting_judgement_total{job="queue-gateway",quality="degraded"}'
         values: '10 0x20'
       - series: 'waiting_backend_fallback_total{job="queue-gateway"}'

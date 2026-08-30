@@ -30,8 +30,10 @@ scrape_configs:
 
   - job_name: queue-gateway
     metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ["queue-gateway:8081"]
+    # 외부 서버 주소는 배포 환경마다 다르고 Prometheus 설정은 env 치환을 하지
+    # 않는다. 따라서 배포 시 targets/queue-gateway.yml만 예제와 같이 교체한다.
+    file_sd_configs:
+      - files: ["targets/queue-gateway.yml"]
 
   # ⚠️ **alertmanager·prometheus 자기 스크레이프는 뺐다(CY-744).**
   #    feature/CY-15 에는 있었는데, ① 알림 규칙이 그 두 잡을 하나도 안 쓰고(실측 grep 0건)
