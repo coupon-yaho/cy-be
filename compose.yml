@@ -240,6 +240,12 @@ services:
       # 재기동 중이어도 나머지로 클러스터를 찾게 하기 위함이다 — 한 대만 적으면 그 한 대가
       # 단일 실패점이 된다(연결 뒤에는 어차피 광고된 주소로 붙는다).
       KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      # **마운트한 설정이 실제로 실렸는지 기동 때 확인한다.** 아래 volumes 가 호스트의
+      # ./application.yml 을 붙이는데, 그 파일이 없으면 Docker 가 같은 이름의 디렉터리를
+      # 만들어 붙이고 스프링은 그것을 오류 없이 무시한다 — 설정이 통째로 비는데 아무도 못 본다.
+      # DeployedConfigGuard 가 marker 키를 보고 거절한다. 켜는 자리와 마운트하는 자리가
+      # 같아야 뜻이 있어서, DeployedConfigMountContractTest 가 그 짝을 검사한다.
+      DEPLOYED_CONFIG_REQUIRED: "true"
     volumes:
       - ./application.yml:/app/config/application.yml:ro
     ports:
@@ -284,6 +290,12 @@ services:
       SERVER_PORT: ${BATCH_PORT:-9091}
       # The API is the only Flyway migration owner.
       SPRING_FLYWAY_ENABLED: "false"
+      # **마운트한 설정이 실제로 실렸는지 기동 때 확인한다.** 아래 volumes 가 호스트의
+      # ./application.yml 을 붙이는데, 그 파일이 없으면 Docker 가 같은 이름의 디렉터리를
+      # 만들어 붙이고 스프링은 그것을 오류 없이 무시한다 — 설정이 통째로 비는데 아무도 못 본다.
+      # DeployedConfigGuard 가 marker 키를 보고 거절한다. 켜는 자리와 마운트하는 자리가
+      # 같아야 뜻이 있어서, DeployedConfigMountContractTest 가 그 짝을 검사한다.
+      DEPLOYED_CONFIG_REQUIRED: "true"
     volumes:
       - ./application.yml:/app/config/application.yml:ro
     # ⚠️ ports 를 두지 않는다. 9091 은 verify 온디맨드 트리거가 붙는 업무 포트이고

@@ -17,6 +17,17 @@
 #    TODO(CY-213 후속, @SH-Seol): 이 파일을 프로파일·${VAR} 매핑만 남기고 값은 모듈이
 #    소유하도록 정리할지 별도 티켓으로 정한다.
 
+# **이 파일이 실제로 실렸는지 앱이 확인하는 표식이다.** 지우지 말 것.
+#
+# compose 가 이 파일을 /app/config/application.yml 로 bind mount 하는데, 호스트에 파일이
+# 없으면 Docker 가 **같은 이름의 디렉터리**를 만들어 붙인다. 스프링은 디렉터리를 설정으로
+# 못 읽고 **오류 없이** jar 기본값으로 뜬다 — 2026-08-30 에 그 상태로 여섯 시간을 돌았다.
+#
+# DeployedConfigGuard 가 이 키를 보고 거절한다. jar 안에는 이 키가 없어야 한다 —
+# 있으면 마운트가 없어도 값이 보여 가드가 통째로 무의미해진다.
+deployed-config:
+  marker: root-application-yml
+
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
