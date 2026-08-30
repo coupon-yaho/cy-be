@@ -4,7 +4,6 @@ package com.kafkick.api.observation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -43,8 +42,10 @@ class DeployedConfigMountContractTest {
     /** {@link com.kafkick.core.support.config.DeployedConfigGuard#REQUIRED} 의 환경변수 이름. */
     private static final String SWITCH = "DEPLOYED_CONFIG_REQUIRED";
 
-    /** {@link com.kafkick.core.support.config.DeployedConfigGuard#MARKER} 가 찾는 키. */
+    /** {@link com.kafkick.core.support.config.DeployedConfigGuard#MARKER} 의 앞·뒤 마디. */
     private static final String MARKER_KEY = "deployed-config";
+
+    private static final String MARKER_LEAF = "marker";
 
     @Test
     @DisplayName("설정을 마운트하는 서비스는 전부 가드를 켠다 — 켜는 자리와 붙이는 자리가 같아야 한다")
@@ -81,40 +82,94 @@ class DeployedConfigMountContractTest {
     @Test
     @DisplayName("템플릿에 마커가 있다 — 거절 메시지가 시키는 복사가 실제로 문제를 푼다")
     void templateCarriesTheMarker() throws IOException {
-        String template = Files.readString(
-                repoRoot().resolve("application.yml.example"), StandardCharsets.UTF_8);
-
-        assertThat(template)
-                .as("%s 가 application.yml.example 에 없다. 가드가 시키는 복사를 해도 "
-                        + "여전히 거절당한다", MARKER_KEY)
-                .contains(MARKER_KEY + ":");
+        // **문자열로 찾으면 안 된다.** `# deployed-config:` 처럼 주석 처리해도 통과하는데,
+        // 그 템플릿을 복사하면 프로퍼티가 없어 정상 배포까지 거절당한다 — 이 테스트가
+        // 지킨다고 말한 계약이 정확히 그때 깨진다(리뷰가 잡았다). 그래서 파싱한다.
+        assertThat(markerValueIn(repoRoot().resolve("application.yml.example")))
+                .as("application.yml.example 에 %s.%s 가 실제 프로퍼티로 없다. "
+                        + "주석 처리된 것도 없는 것이다 — 가드가 시키는 복사를 해도 "
+                        + "여전히 거절당한다", MARKER_KEY, MARKER_LEAF)
+                .isNotBlank();
     }
 
     /**
-     * <b>jar 안에 같은 키가 있으면 가드가 통째로 무의미해진다.</b> 마운트가 없어도 값이
-     * 보이기 때문이다. 모듈 리소스의 {@code .example} 은 스프링이 안 읽지만, 누군가
-     * {@code application.yml} 로 이름을 바꿔 넣는 날 이 검사가 잡는다.
+     * <b>jar 안에 같은 키가 있으면 가드가 통째로 무의미해진다</b> — 마운트가 없어도 값이
+     * 보이기 때문이다.
+     *
+     * <p><b>{@code .yml.example} 을 봐야 한다.</b> 처음에 {@code .yml}·{@code .yaml} 만
+     * 훑었는데, 저장소에는 그런 파일이 <b>하나도 없어서</b> 이 검사가 파일 0개를 보고
+     * 통과했다(리뷰가 잡았다). 실제로 jar 에 들어가는 것은 이것들이다 —
+     * {@code Dockerfile} 이 이미지 빌드 때 확장자를 떼어 복사한다:
+     *
+     * <pre>
+     * find . -path '*&#47;src/main/resources/*.yml.example' \
+     *   -exec sh -c 'cp "$1" "${1%.example}"' _ {} \;
+     * </pre>
+     *
+     * <p><b>모듈 목록도 안 박는다.</b> {@code api·batch·core·storage} 만 적었다가
+     * {@code infra/redis} 를 빠뜨렸는데, 그 모듈의 {@code redis.yml.example} 도 같은 규칙으로
+     * jar 에 들어간다. Dockerfile 과 같은 패턴으로 <b>저장소 전체를 훑는다.</b>
      */
     @Test
     @DisplayName("모듈 리소스에는 마커가 없다 — 있으면 마운트 없이도 통과한다")
     void moduleResourcesDoNotCarryTheMarker() throws IOException {
-        for (String module : List.of("api", "batch", "core", "storage")) {
-            Path resources = repoRoot().resolve(module).resolve("src/main/resources");
-            if (!Files.isDirectory(resources)) {
-                continue;
-            }
-            try (var files = Files.walk(resources)) {
-                for (Path file : files.filter(Files::isRegularFile).toList()) {
-                    String name = file.getFileName().toString();
-                    if (!name.endsWith(".yml") && !name.endsWith(".yaml")) {
-                        continue;
-                    }
-                    assertThat(Files.readString(file, StandardCharsets.UTF_8))
-                            .as("%s 가 마커를 갖고 있다 — 마운트 없이도 가드가 통과한다", file)
-                            .doesNotContain(MARKER_KEY + ":");
+        List<Path> scanned = moduleResourceConfigs();
+
+        assertThat(scanned)
+                .as("훑은 파일이 하나도 없다 — 이 검사가 아무것도 안 잰다. Dockerfile 의 "
+                        + "복사 패턴이 바뀌었으면 여기도 함께 고쳐라")
+                .isNotEmpty();
+
+        for (Path file : scanned) {
+            assertThat(markerValueIn(file))
+                    .as("%s 가 마커를 갖고 있다 — Dockerfile 이 이 파일을 jar 에 넣으므로 "
+                            + "마운트가 없어도 가드가 통과한다", file)
+                    .isNull();
+        }
+    }
+
+    /**
+     * {@code Dockerfile} 이 jar 에 넣는 설정 리소스 전부. 모듈 목록을 박지 않는 이유는
+     * 위 javadoc 에 있다 — 박으면 새 모듈이 조용히 검사 밖에 남는다.
+     */
+    private List<Path> moduleResourceConfigs() throws IOException {
+        List<Path> found = new ArrayList<>();
+        try (var files = Files.walk(repoRoot())) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                String path = file.toString().replace('\\', '/');
+                if (!path.contains("/src/main/resources/") || path.contains("/build/")) {
+                    continue;
+                }
+                String name = file.getFileName().toString();
+                if (name.endsWith(".yml.example") || name.endsWith(".yaml.example")
+                        || name.endsWith(".yml") || name.endsWith(".yaml")) {
+                    found.add(file);
                 }
             }
         }
+        return found;
+    }
+
+    /**
+     * <b>파싱해서 값을 꺼낸다.</b> 문자열로 찾으면 주석까지 잡힌다. 여러 문서가 든 파일이라
+     * {@code loadAll} 로 전부 본다 — 프로파일 문서에 숨겨 둔 마커도 같은 효력이다.
+     */
+    private String markerValueIn(Path file) throws IOException {
+        try (var in = Files.newInputStream(file)) {
+            for (Object document : new Yaml().loadAll(in)) {
+                if (!(document instanceof Map<?, ?> map)) {
+                    continue;
+                }
+                Object block = map.get(MARKER_KEY);
+                if (block instanceof Map<?, ?> marker) {
+                    Object value = marker.get(MARKER_LEAF);
+                    if (value != null && !String.valueOf(value).isBlank()) {
+                        return String.valueOf(value);
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private List<String> servicesMounting(String target) throws IOException {

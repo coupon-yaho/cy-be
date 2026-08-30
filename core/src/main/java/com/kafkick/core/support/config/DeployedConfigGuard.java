@@ -4,7 +4,11 @@ package com.kafkick.core.support.config;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.core.Ordered;
+import java.util.Set;
+
 import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.PropertySource;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.util.StringUtils;
 
 /**
@@ -72,7 +76,8 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
             // 울고, 그 소음이 정작 켠 경로의 실패를 묻는다.
             return;
         }
-        if (StringUtils.hasText(environment.getProperty(MARKER))) {
+        String origin = sourceOf(environment);
+        if (origin != null) {
             return;
         }
         throw new IllegalStateException(
@@ -84,8 +89,64 @@ public class DeployedConfigGuard implements EnvironmentPostProcessor, Ordered {
                         + "cp application.yml.example application.yml "
                         + "(이미 디렉터리가 생겼으면 rmdir 로 지운 뒤 복사). "
                         + "설정을 마운트하지 않는 배포 경로라면 "
-                        + "DEPLOYED_CONFIG_REQUIRED=false 로 이 거절을 끄십시오.");
+                        + "DEPLOYED_CONFIG_REQUIRED=false 로 이 거절을 끄십시오. "
+                        + "환경변수나 -D 로 " + MARKER + " 를 주는 것은 이 검사를 통과시키지 "
+                        + "않습니다 — 이 가드가 보는 것은 값이 아니라 그 값을 준 자리입니다.");
     }
+
+    /**
+     * <b>값이 있는 것만으로 부족하다 — 어디서 왔는지 본다.</b>
+     *
+     * <p>{@code DEPLOYED_CONFIG_MARKER} 환경변수나 {@code -Ddeployed-config.marker} 로 같은
+     * 키를 주면, <b>마운트가 비어도 가드가 통과한다.</b> 그러면 원거리 설정 오류가 그대로
+     * 돌아온다 — 리뷰가 잡았다. 이 가드가 말하는 것은 <i>"값이 있다"</i> 가 아니라
+     * <b>"마운트한 파일이 실렸다"</b> 이므로, 그 값을 준 자리가 <b>설정 파일</b>이어야 한다.
+     *
+     * <p>허용 목록이 아니라 <b>금지 목록</b>을 쓴다. 설정 파일 소스의 이름은 스프링 버전과
+     * 경로에 따라 달라지는데({@code Config resource 'file [...]' via location ...}),
+     * 허용 목록으로 두면 그 문자열이 바뀌는 날 <b>정상인 배포를 거절한다.</b> 반대로 막아야
+     * 하는 자리는 이름이 고정돼 있다.
+     *
+     * @return 마커를 준 소스 이름. 파일 밖에서 왔거나 없으면 {@code null}
+     */
+    private String sourceOf(ConfigurableEnvironment environment) {
+        for (PropertySource<?> source : environment.getPropertySources()) {
+            // **맨 앞의 파사드를 건너뛴다.** 부트가 ConfigurationPropertySources.attach 로
+            // 붙이는 이 소스는 자기 값이 없고 **뒤의 모든 소스를 대신 답한다** — 그래서
+            // 환경변수로 준 값도 여기서 먼저 잡히고, 이름은 파일이 아니라 이것이 된다.
+            // 처음에 이걸 안 걸러서 DEPLOYED_CONFIG_MARKER=faked 가 그대로 통과했다(실측).
+            if (ATTACHED_FACADE.equals(source.getName())) {
+                continue;
+            }
+            Object value = source.getProperty(MARKER);
+            if (value == null || !StringUtils.hasText(String.valueOf(value))) {
+                continue;
+            }
+            // 첫 번째로 값을 가진 소스가 실제로 이기는 소스다. 그것이 파일이 아니면
+            // 뒤에 파일이 있더라도 지금 쓰이는 값은 파일 것이 아니다.
+            return NON_FILE_SOURCES.contains(source.getName()) ? null : source.getName();
+        }
+        return null;
+    }
+
+    /**
+     * 부트가 {@code ConfigurationPropertySources.attach} 로 맨 앞에 붙이는 파사드의 이름.
+     *
+     * <p><b>상수가 {@code private} 이라 리터럴로 쓴다.</b> 부트가 값을 바꾸면 이 가드가
+     * 파사드를 못 걸러 다시 느슨해지는데, 그 상태를 {@code DeployedConfigGuardTest} 의
+     * 환경변수 검사가 잡는다 — 이름을 여기 박는 대신 <b>동작으로</b> 지킨다.
+     */
+    private static final String ATTACHED_FACADE = "configurationProperties";
+
+    /**
+     * <b>설정 파일이 아닌 소스들.</b> 여기서 온 마커는 마운트의 증거가 아니다.
+     * 이름이 스프링이 고정해 둔 상수라 버전 사이에 안 바뀐다.
+     */
+    private static final Set<String> NON_FILE_SOURCES = Set.of(
+            StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+            StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME,
+            "commandLineArgs",
+            "spring.application.json");
 
     /**
      * <b>설정 파일을 읽은 뒤여야 한다.</b> {@code ConfigDataEnvironmentPostProcessor} 보다

@@ -4,11 +4,15 @@ package com.kafkick.core.support.config;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.core.Ordered;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
 import org.springframework.mock.env.MockEnvironment;
 
 /**
@@ -59,6 +63,39 @@ class DeployedConfigGuardTest {
                 DeployedConfigGuard.REQUIRED, "true",
                 DeployedConfigGuard.MARKER, "root-application-yml")))
                 .doesNotThrowAnyException();
+    }
+
+    /**
+     * <b>값이 있는 것만으로 통과하면 이 가드는 뜻이 없다.</b> 환경변수나 {@code -D} 로 같은
+     * 키를 주면 마운트가 비어도 지나가고, 그러면 원거리 설정 오류가 그대로 돌아온다.
+     *
+     * <p>{@link MockEnvironment#setProperty} 는 <b>이 축을 못 태운다</b> — 값을 일반
+     * 프로퍼티 소스에 넣기 때문이다. 그래서 실제 {@code systemEnvironment}·
+     * {@code systemProperties} 소스를 직접 얹어 잰다.
+     */
+    @Test
+    @DisplayName("환경변수·JVM 프로퍼티로 준 마커는 통과시키지 않는다 — 값이 아니라 출처를 본다")
+    void ignoresMarkerFromOutsideConfigFiles() {
+        for (String sourceName : List.of(
+                StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME,
+                StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)) {
+
+            StandardEnvironment environment = new StandardEnvironment();
+            environment.getPropertySources().addFirst(new MapPropertySource(
+                    sourceName, Map.of(
+                            DeployedConfigGuard.REQUIRED, "true",
+                            DeployedConfigGuard.MARKER, "faked")));
+            // **파사드를 붙여야 실제 기동과 같아진다.** 부트는 기동 때
+            // ConfigurationPropertySources.attach 로 맨 앞에 대리 소스를 얹는데, 그것이
+            // 뒤의 모든 소스를 대신 답한다. 안 붙이면 이 테스트가 그 경로를 안 태우고,
+            // 파사드를 안 거르는 구현도 초록으로 통과한다 — 실제로 그 상태를 컨테이너에서만
+            // 잡았다. 여기서 재현해 둔다.
+            ConfigurationPropertySources.attach(environment);
+
+            assertThatThrownBy(() -> guard.postProcessEnvironment(environment, null))
+                    .as("%s 에서 온 마커가 통과했다 — 마운트가 비어도 지나간다", sourceName)
+                    .isInstanceOf(IllegalStateException.class);
+        }
     }
 
     /**

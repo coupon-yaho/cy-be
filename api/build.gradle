@@ -95,6 +95,25 @@ jar {
 }
 
 tasks.named('test') {
+    // DeployedConfigMountContractTest 는 저장소 전체의 src/main/resources 를 훑어
+    // 마커가 섞여 들어갔는지 본다. 선언하지 않으면 **새 .yml.example 을 추가해도**
+    // Gradle 이 test 를 UP-TO-DATE 로 건너뛴다 — 가드가 있는데 안 도는 상태다.
+    //
+    // compose.yml 과 두 템플릿도 같은 이유로 넣는다. 이 테스트가 읽는 파일 전부다.
+    inputs.files(
+            rootProject.file('compose.yml'),
+            rootProject.file('application.yml.example'),
+            rootProject.file('api/src/main/resources'),
+            rootProject.file('batch/src/main/resources'),
+            rootProject.file('core/src/main/resources'),
+            rootProject.file('storage/src/main/resources'),
+            rootProject.file('infra/mq/src/main/resources'),
+            rootProject.file('infra/redis/src/main/resources'))
+        .withPropertyName('deployedConfigMountInputs')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+tasks.named('test') {
     // PrometheusScrapeConfigContractTest 는 저장소 루트의 설정 파일을 읽는다. 클래스패스 밖이라
     // 선언하지 않으면 Gradle 이 그 파일들의 변경을 모르고 test 를 UP-TO-DATE 로 건너뛴다.
     //
