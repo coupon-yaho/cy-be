@@ -137,12 +137,14 @@ class CouponRoundControllerTest {
     void findPublicCouponRounds() throws Exception {
         when(publicQueryService.findPage(
                 CouponRoundStatus.SCHEDULED,
+                MembershipGrade.GOLD,
                 0,
                 20
         )).thenReturn(publicPage());
 
         mockMvc.perform(get("/api/v1/coupon-rounds/public")
-                        .param("status", "SCHEDULED"))
+                        .param("status", "SCHEDULED")
+                        .param("eligibleGrade", "GOLD"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.content.length()").value(1))
@@ -166,6 +168,7 @@ class CouponRoundControllerTest {
 
         verify(publicQueryService).findPage(
                 CouponRoundStatus.SCHEDULED,
+                MembershipGrade.GOLD,
                 0,
                 20
         );
@@ -180,6 +183,23 @@ class CouponRoundControllerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
         verify(publicQueryService, never()).findPage(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt()
+        );
+    }
+
+    @Test
+    @DisplayName("공개 회차 조회에서 지원하지 않는 회원 등급은 400을 반환한다")
+    void rejectUnknownEligibleGrade() throws Exception {
+        mockMvc.perform(get("/api/v1/coupon-rounds/public")
+                        .param("eligibleGrade", "PLATINUM"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(publicQueryService, never()).findPage(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyInt()
@@ -197,6 +217,7 @@ class CouponRoundControllerTest {
                         .value("페이지 크기는 100 이하여야 합니다."));
 
         verify(publicQueryService, never()).findPage(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyInt()

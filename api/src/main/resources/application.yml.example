@@ -83,7 +83,10 @@ coupon:
 
   round-generation:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
-    max-days: ${COUPON_GENERATION_MAX_DAYS:30}
+
+  calendar:
+    schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-query-range-days: ${COUPON_CALENDAR_MAX_QUERY_RANGE_DAYS:366}
 
 ---
 # ⚠️ 이 아래는 storage.yml 을 이길 수 있는 자리다.

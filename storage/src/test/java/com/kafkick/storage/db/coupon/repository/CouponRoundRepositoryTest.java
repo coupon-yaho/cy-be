@@ -1,5 +1,6 @@
 package com.kafkick.storage.db.coupon.repository;
 
+import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -20,11 +21,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.support.EncodedResource;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -172,7 +176,7 @@ class CouponRoundRepositoryTest {
     }
 
     @Test
-    @DisplayName("회차 생성 대상은 활성 상태인 지원 할인 정책만 조회한다")
+    @DisplayName("회차 생성 대상은 활성 상태인 템플릿만 조회한다")
     void findOnlyActiveTemplatesByIdAsc() {
         saveTemplate();
         jdbcTemplate.update(
@@ -198,20 +202,39 @@ class CouponRoundRepositoryTest {
                 4,
                 false
         );
-        jdbcTemplate.update(
+        assertThat(couponTemplateRepository.findAllActiveByIdAsc())
+                .extracting(CouponTemplate::id)
+                .containsExactly(100L);
+    }
+
+    @Test
+    @DisplayName("DB는 DATA_GRANT 정책과 전용 컬럼을 허용하지 않는다")
+    void rejectDataGrantPolicyAndRemoveDedicatedColumns() {
+        Integer columns = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                  FROM information_schema.columns
+                 WHERE table_schema = DATABASE()
+                   AND table_name IN ('coupon_templates', 'coupons')
+                   AND column_name = 'data_grant_mb'
+                """,
+                Integer.class
+        );
+        assertThat(columns).isZero();
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
                 """
                 INSERT INTO coupon_templates (
                     id, brand_id, name, policy_type,
-                    data_grant_mb, valid_days, nth_week, day_of_week,
+                    valid_days, nth_week, day_of_week,
                     start_time, duration_hours, stock_per_occurrence,
                     eligible_grades_mask, active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 102L,
                 1L,
-                "지원 범위 밖 레거시 데이터 쿠폰",
+                "지원하지 않는 데이터 쿠폰",
                 "DATA_GRANT",
-                1_024,
                 7,
                 1,
                 CouponDayOfWeek.MON.name(),
@@ -220,11 +243,89 @@ class CouponRoundRepositoryTest {
                 100,
                 4,
                 true
-        );
+        )).isInstanceOf(DataAccessException.class);
+    }
 
-        assertThat(couponTemplateRepository.findAllActiveByIdAsc())
-                .extracting(CouponTemplate::id)
-                .containsExactly(100L);
+    @Test
+    @DisplayName("V17은 미지원 정책이 있으면 영구 DDL 전에 중단한다")
+    void stopV17BeforePermanentDdlWhenUnsupportedPolicyExists() {
+        jdbcTemplate.execute((ConnectionCallback<Void>) connection -> {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("""
+                        CREATE TEMPORARY TABLE coupon_templates (
+                            policy_type VARCHAR(20) NOT NULL,
+                            data_grant_mb INT
+                        )
+                        """);
+                statement.execute("""
+                        CREATE TEMPORARY TABLE coupons (
+                            policy_type VARCHAR(20) NOT NULL,
+                            data_grant_mb INT
+                        )
+                        """);
+                statement.execute("""
+                        INSERT INTO coupons (policy_type, data_grant_mb)
+                        VALUES ('DATA_GRANT', 1024)
+                        """);
+
+                assertThatThrownBy(() -> ScriptUtils.executeSqlScript(
+                        connection,
+                        new EncodedResource(new ClassPathResource(
+                                "db/migration/V17__remove_data_grant_policy.sql"
+                        ))
+                )).isInstanceOf(DataAccessException.class);
+
+                assertThat(statement.executeQuery(
+                        "SELECT data_grant_mb FROM coupon_templates LIMIT 0"
+                )).isNotNull();
+                assertThat(statement.executeQuery(
+                        "SELECT data_grant_mb FROM coupons LIMIT 0"
+                )).isNotNull();
+            } finally {
+                try (Statement cleanup = connection.createStatement()) {
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS v17_coupon_policy_guard");
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS coupon_templates");
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS coupons");
+                }
+            }
+            return null;
+        });
+    }
+
+    @Test
+    @DisplayName("V18은 미지원 회차 정책이 있으면 회차 DDL 전에 중단한다")
+    void stopV18BeforeCouponRoundDdlWhenUnsupportedPolicyExists() {
+        jdbcTemplate.execute((ConnectionCallback<Void>) connection -> {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("""
+                        CREATE TEMPORARY TABLE coupons (
+                            policy_type VARCHAR(20) NOT NULL,
+                            data_grant_mb INT
+                        )
+                        """);
+                statement.execute("""
+                        INSERT INTO coupons (policy_type, data_grant_mb)
+                        VALUES ('DATA_GRANT', 1024)
+                        """);
+
+                assertThatThrownBy(() -> ScriptUtils.executeSqlScript(
+                        connection,
+                        new EncodedResource(new ClassPathResource(
+                                "db/migration/V18__remove_coupon_round_data_grant_policy.sql"
+                        ))
+                )).isInstanceOf(DataAccessException.class);
+
+                assertThat(statement.executeQuery(
+                        "SELECT data_grant_mb FROM coupons LIMIT 0"
+                )).isNotNull();
+            } finally {
+                try (Statement cleanup = connection.createStatement()) {
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS v18_coupon_policy_guard");
+                    cleanup.execute("DROP TEMPORARY TABLE IF EXISTS coupons");
+                }
+            }
+            return null;
+        });
     }
 
     @Test

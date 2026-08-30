@@ -1278,11 +1278,11 @@ JWT · 세션 · Spring Security 도 도입하지 않는다.
 
 ---
 
-## 12. 아직 정하지 못한 것
+## 12. 확정된 쿠폰 정책과 아직 정하지 못한 것
 
-**`CouponPolicyType` 에 `DATA_GRANT` 가 없다.** `V1__init_schema.sql` 의 `coupon_templates` 에는
-`data_grant_mb` 컬럼이 있고 `policy_type` 주석이 `PERCENT_CAPPED / FIXED_AMOUNT / DATA_GRANT` 다.
-시드가 `DATA_GRANT` 를 넣는 순간 `@Enumerated(STRING)` 역직렬화가 터진다.
+쿠폰 정책은 `PERCENT_CAPPED`, `FIXED_AMOUNT` 두 종류만 지원한다.
+`DATA_GRANT` 정책과 `data_grant_mb` 컬럼은 Flyway `V17`에서 제거하며,
+시드와 배치에서도 생성하거나 해석하지 않는다.
 
 **③ 답변 대기 둘.** Redis 선점 카운터 TTL(미영속 발급 검증의 전제)과 Kafka DLT 계약.
 답이 오기 전까지 착수하지 않는다.
