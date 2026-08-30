@@ -5,13 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -216,7 +214,9 @@ class ExpireCancelRaceTest {
      * 취소 경로가 할 일을 <b>그 순서 그대로</b> 쓴다.
      *
      * <p><b>재고를 마지막에 잠근다.</b> {@code CouponCancelService} 가 실제로 그렇게 한다 —
-     * 조건부 {@code UPDATE} → {@code release} → 이력(CY-750). <b>이 헬퍼가 저장소와 다른
+     * 조건부 {@code UPDATE} → <b>이력</b> → {@code release}(CY-750). 이력이 재고보다
+     * <b>앞</b>이라는 것까지 맞춰야 한다 — 그 자리가 갈리면 이력 INSERT 가 끼는 회귀를
+     * 이 테스트가 못 본다. <b>이 헬퍼가 저장소와 다른
      * 순서를 쓰면 이 테스트는 계약을 재는 것이 아니라 비켜 간다</b> — 실제로 두 번 그랬다.
      * 처음에는 만료 쪽 순서를 썼고, 그다음에는 옛 취소 순서(재고 먼저)를 그대로 뒀다.
      * 둘 다 순환이 픽스처에서 성립하지 않게 만들어 초록으로 지나갔다.
@@ -244,14 +244,6 @@ class ExpireCancelRaceTest {
                 return 0;
             }
             jdbcClient.sql("""
-                            UPDATE coupon_stocks
-                               SET active_count = active_count - 1, updated_at = :at
-                             WHERE coupon_id = :coupon AND active_count >= 1
-                            """)
-                    .param("at", AS_OF.plusMinutes(1))
-                    .param("coupon", couponId)
-                    .update();
-            jdbcClient.sql("""
                             INSERT INTO issuance_histories
                                         (issuance_id, event_type, from_status, to_status,
                                          reason, created_at)
@@ -259,6 +251,14 @@ class ExpireCancelRaceTest {
                             """)
                     .param("id", target)
                     .param("at", AS_OF.plusMinutes(1))
+                    .update();
+            jdbcClient.sql("""
+                            UPDATE coupon_stocks
+                               SET active_count = active_count - 1, updated_at = :at
+                             WHERE coupon_id = :coupon AND active_count >= 1
+                            """)
+                    .param("at", AS_OF.plusMinutes(1))
+                    .param("coupon", couponId)
                     .update();
             return changed;
         });
@@ -403,18 +403,11 @@ class ExpireCancelRaceTest {
             // 재고 행을 안 쥐고 있기 때문이다. 두 트랜잭션이 정말로 겹친 상태이고,
             // 그래도 아래 재고 단언이 맞는 이유는 양쪽이 상대 차감을 쓰기 때문이다.
             assertThat(cancelled.get(30, TimeUnit.SECONDS))
-                    .as("만료가 재고를 안 쥐고 있으므로 취소가 끼어들 수 있다. 여기서 "
-                            + "멈추면 만료가 재고를 미리 잡은 것이고, 그때는 발급·취소 "
-                            + "경로와 순서가 역전돼 1213 이 난다")
+                    .as("**여기가 갈림이다.** 청크가 멈춰 있는 동안 취소가 끝나야 한다. "
+                            + "만료가 재고를 미리 잡는 구현이면 여기서 30초를 기다리다 "
+                            + "TimeoutException 으로 죽는다 — 그것이 이 테스트의 검출력이다")
                     .isEqualTo(1);
 
-            // **원인까지 지목한다.** 위 단언만 있으면 되돌린 구현이 "타임아웃" 으로만
-            // 빨개져, 락 대기인지 배선이 끊긴 것인지 안 갈린다. 이 값이 양수면 누군가
-            // coupon_stocks 를 쥔 채 남을 세워 둔 것이고, 그것이 곧 옛 순서다.
-            assertThat(stockLockWaits())
-                    .as("이 자리에서는 아무도 coupon_stocks 를 기다리면 안 된다. 양수면 "
-                            + "만료가 재고를 미리 잡은 것이다")
-                    .isZero();
 
             PauseBeforeReleaseConfig.RESUME.countDown();
 
@@ -462,30 +455,6 @@ class ExpireCancelRaceTest {
         });
     }
 
-
-    /**
-     * {@code coupon_stocks} 행을 기다리다 <b>실제로 블록된</b> 요청 수.
-     *
-     * <p><b>지금은 음의 단언으로 쓴다.</b> 예전에는 이 값이 <i>양수가 될 때까지</i> 기다렸다 —
-     * 만료가 청크 시작에 재고를 잡던 시절, 취소가 그 락에서 블록되는 것을 확인하는 장치였다.
-     * 순서를 뒤집은 뒤로는 반대가 계약이다: 그 자리에서 <b>아무도 안 기다려야</b> 한다.
-     *
-     * <p>{@code data_lock_waits} 는 <b>실제로 블록된 요청만</b> 담는다. 그래서 0 이라는 것은
-     * "아직 요청을 안 했다" 가 아니라 <b>요청했는데 안 막혔다</b> 는 관측이다 — 취소가 이미
-     * 끝난 것을 함께 단언하므로 그 구분이 선다.
-     */
-    private int stockLockWaits() {
-        Integer waits = jdbcClient.sql("""
-                        SELECT COUNT(*)
-                          FROM performance_schema.data_lock_waits w
-                          JOIN performance_schema.data_locks b
-                            ON b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID
-                         WHERE b.OBJECT_NAME = 'coupon_stocks'
-                        """)
-                .query(Integer.class)
-                .single();
-        return waits == null ? 0 : waits;
-    }
 
     /**
      * <b>{@code releaseStock} 직전에 멈춘다.</b> 그 자리는 청크 트랜잭션이 <b>열려 있고</b>

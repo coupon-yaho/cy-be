@@ -141,10 +141,15 @@ class ExpireGuardTest {
     /**
      * <b>재고 행이 없는 회차를 만났을 때 어느 가드로 나가는지 못 박는다.</b>
      *
-     * <p><b>이 판정이 청크의 맨 앞으로 옮겨 왔다.</b> 예전에는 만료를 넘긴 <i>뒤에</i>
-     * {@code expiredCouponCount} 와 {@code stockRowCount} 를 견줘 알았다 — 그 시점이면 이미
-     * <i>"재고 없이 만료된 상태"</i> 가 트랜잭션 안에 만들어져 있었고, 되돌리는 것은 롤백이었다.
-     * 이제 {@code lockStock} 이 <b>아무것도 쓰기 전에</b> 잡는다.
+     * <p><b>이 판정은 {@code releaseStock} 직전에 있다 — 쓰기를 막지 못하고 롤백시킨다.</b>
+     * 한때 청크 맨 앞으로 옮겨 예방으로 만들었는데, 락 순서를 뒤집으면서(CY-750 ·
+     * {@code docs/12} §11.1) 다시 뒤로 갔다. 그래서 이 가드가 울 때는 이미 만료 UPDATE 와
+     * 이력 INSERT 가 트랜잭션 안에 있고, 되돌리는 것은 롤백이다.
+     *
+     * <p><b>예방을 지는 것은 {@code blockedCoupons} 다.</b> 실행 시작에 재고 행 없는 회차를
+     * 후보에서 뺀다. 이 가드는 <b>그 사이에 행이 사라진 경우</b>를 잡는 2선이고, 그때
+     * 청크 하나분(최대 chunkSize 행)의 쓰기가 버려진다 — 다음 실행의
+     * {@code blockedCoupons} 가 그 회차를 걸러 반복되지는 않는다.
      *
      * <p>그러면서 조회 둘이 통째로 없어졌다. 그 둘이 있던 이유가 <i>"두 실패를 갈라 보려고"</i>
      * 였는데, 지금은 갈라지는 자리가 서로 다르다 — 재고 행 <b>없음</b>은 여기,
@@ -154,7 +159,7 @@ class ExpireGuardTest {
      * 누가 그 행을 만들고 있는 중이면 거짓이고, 운영자는 방금 자기가 넣은 행을 다시 의심한다.
      */
     @Test
-    @DisplayName("재고 행이 모자라면 STOCK_ROW_MISSING 으로 먼저 나간다 — 언더플로와 안 섞인다")
+    @DisplayName("재고 행이 없으면 STOCK_ROW_MISSING 으로 갈린다 — 언더플로와 안 섞인다")
     void reportsMissingStockRowBeforeAnythingElse() throws Exception {
         long target = seed.issuance(IssuanceStatus.ISSUED);
         jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")

@@ -9,7 +9,13 @@ import java.util.List;
  *
  * <h2>왜 회차를 하나로 묶나</h2>
  *
- * <p>만료가 <b>재고 행을 먼저</b> 잠그기 때문이다({@link ExpirationRepository} 의 락 순서 계약).
+ * <p>쓰는 세 문장이 전부 {@code coupon_id = :couponId} 로 닫혀 있기 때문이다 —
+ * {@code expireBatch} · {@code appendExpireHistories} · {@code releaseStock}. 청크가 여러
+ * 회차에 걸치면 그 셋을 회차 수만큼 반복해야 하고, {@code releaseStock} 이 첫 회차 것만
+ * 빼면 <b>재고가 조용히 샌다.</b>
+ *
+ * <p>(한때 이 이유를 <i>"만료가 재고 행을 먼저 잠그기 때문"</i> 이라고 적었는데, 락 순서가
+ * 뒤집힌 뒤로는 그 근거가 사라진다 — 그래도 회차를 하나로 묶어야 하는 이유는 위가 맞다.)
  * 잠글 재고 행을 알려면 어느 회차를 건드릴지가 <b>UPDATE 전에</b> 정해져 있어야 하는데,
  * {@code LIMIT} 이 회차 경계를 모르므로 후보가 여러 회차에 걸친다. 그것을 그대로 잠그면
  * 한 청크가 <b>회차 전부의 재고 행</b>을 쥐고, 그동안 그 회차들의 발급이 전부 선다.

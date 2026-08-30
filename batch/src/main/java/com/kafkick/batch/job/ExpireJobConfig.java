@@ -68,7 +68,7 @@ import com.kafkick.core.support.exception.BusinessException;
  * <pre>
  *   1  후보 선조회        락 없음. id 오름차순 LIMIT chunkSize
  *   2  연속부 자르기       첫 회차와 같은 것까지만        ExpireChunk.from
- *   3  재고 행 잠그기      SELECT … FOR UPDATE           ← 첫 쓰기 락
+ *   3  만료 UPDATE        그 회차 · (afterId, lastId]   ← 첫 쓰기 락
  *   4  만료 UPDATE        그 회차 · (afterId, lastId]
  *   5  이력 INSERT
  *   6  재고 차감

@@ -184,22 +184,27 @@ class CouponUseRepositoryTest {
      * <b>여기부터 의심한다.</b>
      *
      * @return 만료된 건수. 조건부 UPDATE 의 매치 수라 "실제로 우리가 바꾼 행" 이다.
-     *         {@code lockStock} 실패도 0 이다
+     *         {@code lockStock} 실패도 0 이다 — 다만 그 자리가 이제 만료 <b>뒤</b>라,
+     *         0 을 돌려줄 때는 이미 이 트랜잭션이 만료·이력을 쓴 상태다(호출부가 롤백한다)
      */
     private int expireViaBatchPath(long couponId, List<ExpireCandidate> candidates, Instant asOf) {
         LocalDateTime at = LocalDateTime.ofInstant(asOf, ZoneOffset.UTC);
         long afterId = candidates.stream().mapToLong(ExpireCandidate::id).min().orElseThrow() - 1;
         long lastId = candidates.stream().mapToLong(ExpireCandidate::id).max().orElseThrow();
 
-        // 배치와 같은 순서다. 재고를 먼저 잠가야 발급·취소와 잠금 순서가 통일된다.
-        if (!expiration.lockStock(couponId)) {
-            return 0;
-        }
+        // **배치와 같은 순서다 — 재고가 마지막이다.**
+        //
+        // 이 사본이 운영과 갈리면 이 클래스가 재는 만료×취소 경합이 **저장소에 없는 조합**을
+        // 재게 된다. 한때 재고를 먼저 잠갔고, 그 상태로는 순환이 픽스처에서 아예 성립하지
+        // 않아 계약이 깨져도 초록이었다(로컬 리뷰가 잡았다).
         int expired = expiration.expireBatch(at, at, afterId, lastId, couponId);
         if (expired == 0) {
             return 0;
         }
         expiration.appendExpireHistories(at, at, afterId, lastId, couponId);
+        if (!expiration.lockStock(couponId)) {
+            return 0;
+        }
         expiration.releaseStock(couponId, expired, at);
         return expired;
     }

@@ -782,9 +782,13 @@ SIGKILL 했다(MySQL 8.4).
 > **⚠️ 3 과 5 의 자리가 2026-08-30 에 바뀌었다 — 아래 §11.1 을 읽어라.** 이 절이 처음
 > 적을 때는 재고 행을 3 에서 잠갔고 그것이 첫 쓰기 락이었다. 지금은 마지막이다.
 
-**한 청크는 회차 하나만 담는다.** 후보가 여러 회차에 걸치면 그 재고 행을 전부 잠가야 하고,
-그동안 그 회차들의 발급이 전부 선다. 연속부까지만 자르면 잠기는 것이 **재고 한 행**이고
-대기하는 것도 **그 회차의 발급**뿐이다.
+**한 청크는 회차 하나만 담는다.** 쓰는 세 문장이 전부 `coupon_id = :couponId` 로 닫혀
+있어서다 — 여러 회차에 걸치면 그 셋을 회차 수만큼 반복해야 하고, `releaseStock` 이 첫
+회차 것만 빼면 **재고가 조용히 샌다.**
+
+> **⚠️ 이 문단의 옛 근거는 §11.1 에서 사라졌다.** 예전에는 *"여러 회차면 재고 행을 전부
+> 잠가야 하고 그동안 그 회차들의 발급이 선다"* 였는데, 재고를 마지막에 잡게 된 뒤로는
+> 발급이 만료를 기다리지 않는다. 회차를 하나로 묶어야 하는 이유는 위가 맞다.
 
 시드에서는 발급건 id 가 회차별로 완전히 뭉쳐 있다 — 생성기가
 `for coupon in catalog.coupons` 로 회차 단위로 돌면서 id 를 증가시킨다
@@ -797,7 +801,7 @@ SIGKILL 했다(MySQL 8.4).
 |---|---|
 | **종료 신호** | `expireBatch` 가 0 → **후보 0건**. 후보가 전부 사용된 청크에서 진도가 안 나가 같은 자리를 맴돌던 것이 여기서 풀린다 |
 | `lastExpiredId` | **삭제.** 경계를 후보에서 안다 |
-| `expiredCouponCount` · `stockRowCount` | **삭제.** `lockStock` 이 재고 행 존재를 먼저 보장하고, 회차가 하나로 고정된다 |
+| `expiredCouponCount` · `stockRowCount` | **삭제.** `lockStock` 이 `releaseStock` 직전에 재고 행 존재를 확인하고, 회차가 하나로 고정된다 |
 | `releaseStock` | `JOIN … GROUP BY` 제거 → `WHERE coupon_id = :c AND active_count >= :n` |
 | 재고 행 없음 vs 모자람 | 갈라지는 자리가 달라졌다 — 없음은 `lockStock` false, 모자람은 `releaseStock` 갱신 0 |
 
@@ -896,4 +900,6 @@ CY-750 이 그 전제를 바꿨다. 발급·취소·사용취소 **셋 다** 재
 §5 가 `lastExpiredId` 의 축을 같은 이유로 이 문서에 둔 것과 같은 규율이다.
 
 락 축은 테스트에 남아 있다 — `eachStatementLocksTheTablesItsContractSays` 가 문장마다
-잠기는 테이블을 떠서 `coupon_stocks → issuances → issuance_histories` 를 지킨다.
+잠기는 테이블을 떠서 `issuances → issuance_histories → coupon_stocks` 를 지킨다
+(§11.1 에서 방향이 뒤집혔고 그 테스트도 함께 뒤집었다 — 안 뒤집으면 그 테스트와
+`ExpireJobLockOrderTest` 가 **서로 반대를 단언하면서 둘 다 초록**이 된다).

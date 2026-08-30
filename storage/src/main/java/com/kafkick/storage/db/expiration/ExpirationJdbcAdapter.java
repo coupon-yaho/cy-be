@@ -1,4 +1,5 @@
-// 만료 처리 SQL 일곱입니다 — 청크가 쓰는 다섯과, 실행당 한 번 도는 읽기 둘입니다. 청크의 첫 쓰기 락은 재고 행 하나를 FOR UPDATE 로 잡는 읽기입니다.
+// 만료 처리 SQL 일곱입니다 — 청크가 쓰는 다섯과, 실행당 한 번 도는 읽기 둘입니다.
+// 청크의 첫 쓰기 락은 만료 UPDATE 가 잡는 issuances 이고, 재고 행은 마지막에 잡습니다.
 package com.kafkick.storage.db.expiration;
 
 import java.time.LocalDateTime;
@@ -126,7 +127,8 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
             """;
 
     /**
-     * <b>청크의 첫 쓰기 락이다.</b> 발급·취소·사용취소가 잠그는 그 행을 같은 방식으로 잡는다.
+     * <b>청크의 마지막 쓰기 락이다.</b> 발급·취소·사용취소가 재고를 마지막에 건드리므로
+     * 만료도 그 자리에서 잡는다(CY-750 · {@code docs/12} §11.1).
      *
      * <p>{@code coupon_id} 만 고른다 — 값을 안 읽는 것이 결정이다. 뺄 수 있는지는
      * {@code RELEASE_STOCK} 의 조건이 판단한다.
