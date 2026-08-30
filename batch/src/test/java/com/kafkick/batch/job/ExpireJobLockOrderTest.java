@@ -38,12 +38,26 @@ import com.kafkick.storage.db.VerificationSeed;
  * 지킬 수 있는 것은 <b>만료 쪽 순서뿐</b>이고, 상대가 바뀌면 이쪽 CI 는 아무 말도 안 한다.
  * <b>여기 단언을 고치기 전에 {@code docs/12-expire-lock-measurement.md} §11 을 읽어라.</b>
  *
- * <p><b>순서는 우리가 정하는 것이 아니다 — {@code coupon_stocks} → {@code issuances}
- * → {@code issuance_histories} 다.</b> 재고를 건드리는 사용자 경로가 이미 그 행을
- * {@code FOR UPDATE} 로 먼저 잡는다: 발급·취소는 항상, 사용취소는 {@code EXPIRED} 로
- * 갈 때만(보통 경로는 재고를 안 건드려 이 순서 밖이고, 안 기다리므로 순환도 안 만든다).
- * 만료만 반대였을 때 취소와 사이에 1213 이 나는 것을 재현했다
- * (MySQL 8.4 · READ COMMITTED · 두 세션 · 6/6).
+ * <p><b>순서는 우리가 정하는 것이 아니다 — {@code issuances} → {@code issuance_histories}
+ * → {@code coupon_stocks} 다.</b> 사용자 경로 셋이 그 순서로 잡는다.
+ *
+ * <p><b>⚠️ 이 방향은 2026-08-30 에 뒤집혔다.</b> 그전까지는 반대였고
+ * ({@code coupon_stocks} 를 먼저), {@code docs/12} §11 이 그렇게 정한 이유를 적어 뒀다 —
+ * <i>"발급 경로가 이미 있었고 그쪽이 재고를 먼저 잡고 있었다. 바꿀 수 있는 쪽은 만료였다."</i>
+ * <b>그 전제가 CY-750 에서 바뀌었다.</b> 발급·취소·사용취소 셋이 전부 재고를 마지막에
+ * 잡도록 옮겨졌고, 그러면 바꿀 수 있는 쪽이 이번엔 만료다.
+ *
+ * <p><b>양방향을 다시 쟀다</b>(MySQL 8.4 · READ COMMITTED · 두 세션).
+ *
+ * <pre>
+ * 옛 순서(만료 stocks 먼저 · 취소 issuances 먼저)   1213 발생 — §11 재현
+ * 새 순서(둘 다 issuances → stocks)                데드락 0회 / 6회
+ * </pre>
+ *
+ * <p>성능도 같은 방향이다. 재고 행 하나는 <b>회차 전체</b>의 직렬화 지점이라 그것을 청크
+ * 내내 쥐면 그 회차의 발급이 통째로 멈춘다 — 실측으로 청크(1000건)당
+ * {@code UPDATE 32.5ms + INSERT 7.5ms} 였다. 뒤로 옮기면 막히는 범위가 <b>만료 대상
+ * 발급건</b>으로 줄고, 그 사람들은 어차피 만료될 쿠폰의 주인이다.
  *
  * <p>저장소 메서드가 각각 어느 테이블을 잡는지는 이렇다.
  *
@@ -127,7 +141,7 @@ class ExpireJobLockOrderTest {
     }
 
     @Test
-    @DisplayName("한 청크가 coupon_stocks → issuances → issuance_histories 순으로 잡는다")
+    @DisplayName("한 청크가 issuances → issuance_histories → coupon_stocks 순으로 잡는다")
     void keepsLockOrderWithinChunk() throws Exception {
         long id = seed.issuance(IssuanceStatus.ISSUED);
         jdbcClient.sql("UPDATE issuances SET expires_at = :at WHERE id = :id")
@@ -141,7 +155,7 @@ class ExpireJobLockOrderTest {
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         assertThat(RecordingConfig.CALLS)
-                .as("재고를 나중에 잡으면 발급 경로와 순서가 역전돼 취소가 1213 으로 죽는다")
+                .as("재고를 먼저 잡으면 발급·취소 경로와 순서가 역전돼 취소가 1213 으로 죽는다")
                 .containsExactly(
                         // 순서 계약 밖이다 — 락을 안 잡기 때문이다. 다만 **그 성질을
                         // 지키는 것은 이 테스트가 아니다.** 여기는 이름의 순서만 보므로
@@ -150,10 +164,13 @@ class ExpireJobLockOrderTest {
                         // 여기 적는 이유는 따로다 — 호출이 하나 는 것을 이 목록이 잡는다.
                         "blockedCoupons",
                         "nextCandidates",
-                        // **여기가 이 테스트의 요지다.** 재고가 첫 쓰기 락이어야 한다.
-                        "lockStock",
+                        // **여기가 이 테스트의 요지다.** 재고가 **마지막** 쓰기 락이어야 한다.
                         "expireBatch",
                         "appendExpireHistories",
+                        // lockStock 은 releaseStock 바로 앞이다. 순서 때문이 아니라
+                        // **진단** 때문에 남아 있다 — releaseStock 이 0 을 돌려줬을 때
+                        // "행이 없다" 와 "재고가 모자란다" 를 가르는 자리다.
+                        "lockStock",
                         "releaseStock",
                         // 후보가 없어 끝난다 — 종료 신호가 만료 0 이 아니라 후보 0 이다
                         "nextCandidates",

@@ -185,22 +185,35 @@ class CouponUseRepositoryTest {
      * <b>여기부터 의심한다.</b>
      *
      * @return 만료된 건수. 조건부 UPDATE 의 매치 수라 "실제로 우리가 바꾼 행" 이다.
-     *         {@code lockStock} 실패도 0 이다
+     *         {@code lockStock} 실패는 <b>0 이 아니라 예외</b>다 — 운영 배치가 그 자리에서
+     *         {@code STOCK_ROW_MISSING} 을 던져 청크를 롤백하기 때문이다. 0 으로 돌려주면
+     *         이 트랜잭션이 <b>만료·이력만 쓰고 커밋</b>해, 운영에 없는 상태를 성공 경로로
+     *         관찰하게 된다
      */
     private int expireViaBatchPath(long couponId, List<ExpireCandidate> candidates, Instant asOf) {
         LocalDateTime at = LocalDateTime.ofInstant(asOf, ZoneOffset.UTC);
         long afterId = candidates.stream().mapToLong(ExpireCandidate::id).min().orElseThrow() - 1;
         long lastId = candidates.stream().mapToLong(ExpireCandidate::id).max().orElseThrow();
 
-        // 배치와 같은 순서다. 재고를 먼저 잠가야 발급·취소와 잠금 순서가 통일된다.
-        if (!expiration.lockStock(couponId)) {
-            return 0;
-        }
+        // **배치와 같은 순서다 — 재고가 마지막이다.**
+        //
+        // 이 사본이 운영과 갈리면 이 클래스가 재는 만료×취소 경합이 **저장소에 없는 조합**을
+        // 재게 된다. 한때 재고를 먼저 잠갔고, 그 상태로는 순환이 픽스처에서 아예 성립하지
+        // 않아 계약이 깨져도 초록이었다(로컬 리뷰가 잡았다).
         int expired = expiration.expireBatch(at, at, afterId, lastId, couponId);
         if (expired == 0) {
             return 0;
         }
         expiration.appendExpireHistories(at, at, afterId, lastId, couponId);
+        if (!expiration.lockStock(couponId)) {
+            // **0 으로 돌려주면 안 된다.** 이 시점에는 만료 UPDATE 와 이력 INSERT 가
+            // 이미 트랜잭션 안에 있어서, 조용히 반환하면 TransactionTemplate 이 그것을
+            // 커밋한다 — 재고는 그대로인데 발급건만 만료된, 운영에 없는 상태다.
+            // 운영 배치는 여기서 STOCK_ROW_MISSING 을 던져 청크를 롤백한다.
+            throw new IllegalStateException(
+                    "재고 행이 없다. 운영 배치는 이 자리에서 STOCK_ROW_MISSING 으로 "
+                            + "청크를 롤백한다. couponId=" + couponId);
+        }
         expiration.releaseStock(couponId, expired, at);
         return expired;
     }
