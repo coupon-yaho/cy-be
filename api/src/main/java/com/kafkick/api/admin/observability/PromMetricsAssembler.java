@@ -133,13 +133,27 @@ public class PromMetricsAssembler {
     private final TimeProvider timeProvider;
     private final Duration staleAfter;
     private final Duration totalBudget;
+    private final QueueGatewayPrometheusProperties queueGatewayProperties;
 
     public PromMetricsAssembler(
             PromQuery client, TimeProvider timeProvider, Duration staleAfter, Duration totalBudget) {
+        this(client, timeProvider, staleAfter, totalBudget,
+                new QueueGatewayPrometheusProperties(false, null));
+    }
+
+    public PromMetricsAssembler(
+            PromQuery client,
+            TimeProvider timeProvider,
+            Duration staleAfter,
+            Duration totalBudget,
+            QueueGatewayPrometheusProperties queueGatewayProperties
+    ) {
         this.client = Objects.requireNonNull(client, "client");
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.staleAfter = Objects.requireNonNull(staleAfter, "staleAfter");
         this.totalBudget = Objects.requireNonNull(totalBudget, "totalBudget");
+        this.queueGatewayProperties = Objects.requireNonNull(
+                queueGatewayProperties, "queueGatewayProperties");
     }
 
     /**
@@ -206,7 +220,7 @@ public class PromMetricsAssembler {
                 persistence,
                 List.of(),
                 errors(attempts, results, http, failureReasons, denominatorTrusted),
-                saturation(saturation, http, stock, traffic, persistence, query));
+                saturation(saturation, http, stock, traffic, persistence, query, evaluatedAt));
     }
 
     // ── 질의 ────────────────────────────────────────────────────────────────────
@@ -255,7 +269,7 @@ public class PromMetricsAssembler {
      * <p>{@code up} 은 미터가 아니라 Prometheus 가 만드는 시계열이지만 같은 셀렉터로 함께
      * 옵니다. 값을 더하면 살아 있는 인스턴스 수가 됩니다.</p>
      */
-    private static String saturationQuery(MetricsWindow window) {
+    private String saturationQuery(MetricsWindow window) {
         return "{__name__=~\"" + String.join("|",
                 MetricAggregation.CPU_USAGE,
                 MetricAggregation.JVM_MEMORY_USED,
@@ -282,7 +296,28 @@ public class PromMetricsAssembler {
                 + window.seconds() + "s])"
                 + " or rate(" + MetricAggregation.NETWORK_SENT_RATE
                 + "{" + TAG_JOB + "=\"" + JOB_API + "\"}["
-                + window.seconds() + "s])";
+                + window.seconds() + "s])"
+                + gatewaySaturationQuery();
+    }
+
+    private String gatewaySaturationQuery() {
+        if (!queueGatewayProperties.enabled()) {
+            return "";
+        }
+        String job = "{" + TAG_JOB + "=\"" + QueueGatewayPrometheusContract.JOB + "\"}";
+        return " or {__name__=~\"" + String.join("|",
+                MetricAggregation.GATEWAY_WAITING,
+                MetricAggregation.GATEWAY_SNAPSHOT_AGE,
+                MetricAggregation.GATEWAY_CAPACITY_CREDIT,
+                MetricAggregation.GATEWAY_CAPACITY_NODES,
+                MetricAggregation.GATEWAY_JUDGEMENT_TOTAL,
+                MetricAggregation.GATEWAY_BACKEND_FALLBACK_TOTAL,
+                MetricAggregation.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL,
+                MetricAggregation.UP) + "\"," + TAG_JOB + "=\""
+                + QueueGatewayPrometheusContract.JOB + "\"}"
+                + " or label_replace(max(time() - timestamp("
+                + MetricAggregation.GATEWAY_WAITING + job + ")), \"__name__\", \""
+                + MetricAggregation.GATEWAY_SCRAPE_AGE_SECONDS + "\", \"\", \"\")";
     }
 
     private static String consistencyQuery() {
@@ -1259,11 +1294,12 @@ public class PromMetricsAssembler {
     private SaturationPanel saturation(QueryResult samples, Freshness http, Freshness stock,
                                        TrafficMetrics traffic,
                                        ObservedValue<PersistenceLagSummary> persistence,
-                                       MetricsQuery query) {
+                                       MetricsQuery query,
+                                       Instant evaluatedAt) {
         return new SaturationPanel(
                 resources(samples, http),
                 inFlight(samples, http),
-                queues(samples, stock, traffic, persistence, query),
+                queues(samples, stock, traffic, persistence, query, evaluatedAt),
                 SaturationPanel.THRESHOLDS);
     }
 
@@ -1512,20 +1548,70 @@ public class PromMetricsAssembler {
      */
     private List<QueueZoneSummary> queues(
             QueryResult samples, Freshness stock, TrafficMetrics traffic,
-            ObservedValue<PersistenceLagSummary> persistence, MetricsQuery query) {
-        ObservedValue<Double> waiting = toDouble(pairedLong(samples,
-                MetricAggregation.QUEUE_LENGTH, MetricAggregation.QUEUE_LENGTH_STATE,
-                any(), stock, query, MetricAggregation.OBSERVED_COUPON_ID));
-        return List.of(
-                zone(QueueZone.ADMISSION, List.of(
+            ObservedValue<PersistenceLagSummary> persistence, MetricsQuery query,
+            Instant evaluatedAt) {
+        ObservedValue<Double> waiting = queueGatewayProperties.enabled()
+                ? gatewayWaiting(samples, query, evaluatedAt)
+                : toDouble(pairedLong(samples,
+                        MetricAggregation.QUEUE_LENGTH, MetricAggregation.QUEUE_LENGTH_STATE,
+                        any(), stock, query, MetricAggregation.OBSERVED_COUPON_ID));
+        List<ObservedValue<Double>> admission = queueGatewayProperties.enabled()
+                ? List.of(waiting, pending(), pending(), pending())
+                : List.of(
                         waiting,
                         // 같은 값을 두 번 재지 않는다. 입장 처리율은 트래픽 패널이 이미 낸 값이다.
                         traffic.queueAcceptedRps(),
                         // 추세는 한 시점 질의로 만들 수 없다. range 질의는 OBS-34 가 연다.
                         pending(),
-                        pending())),
+                        pending());
+        return List.of(
+                zone(QueueZone.ADMISSION, admission),
                 zone(QueueZone.PERSISTENCE, persistenceQueue(persistence)),
                 zone(QueueZone.TELEMETRY, List.of(pending())));
+    }
+
+    private ObservedValue<Double> gatewayWaiting(
+            QueryResult samples, MetricsQuery query, Instant evaluatedAt) {
+        if (samples.unavailable()) {
+            return unavailable();
+        }
+        if (query.couponId() != null) {
+            // 안내서에 회차 식별 라벨이 없어 전역 값을 특정 회차 값으로 가장하지 않습니다.
+            return pending();
+        }
+        List<PromSample> gatewayUp = samples.filter(named(MetricAggregation.UP)
+                .and(label(TAG_JOB, QueueGatewayPrometheusContract.JOB)));
+        OptionalDouble up = MetricAggregation.SUM.reduce(gatewayUp);
+        if (up.isEmpty() || up.getAsDouble() <= 0d) {
+            return unavailable();
+        }
+        List<PromSample> waitingSamples = samples.filter(named(MetricAggregation.GATEWAY_WAITING));
+        if (waitingSamples.isEmpty()) {
+            return pending();
+        }
+        if (waitingSamples.stream().anyMatch(sample -> !sample.hasNumericValue()
+                || sample.value() < 0d || sample.value() != Math.rint(sample.value()))) {
+            return unavailable();
+        }
+        OptionalDouble waiting = MetricAggregation.MAX.reduce(waitingSamples);
+        OptionalDouble snapshotAge = MetricAggregation.MAX.reduce(
+                samples.filter(named(MetricAggregation.GATEWAY_SNAPSHOT_AGE)));
+        OptionalDouble scrapeAge = MetricAggregation.MAX.reduce(
+                samples.filter(named(MetricAggregation.GATEWAY_SCRAPE_AGE_SECONDS)));
+        if (snapshotAge.isEmpty() || snapshotAge.getAsDouble() < 0d) {
+            return pending();
+        }
+        if (scrapeAge.isEmpty() || scrapeAge.getAsDouble() < 0d) {
+            return pending();
+        }
+        double observationAge = Math.max(snapshotAge.getAsDouble(), scrapeAge.getAsDouble());
+        Instant observedAt = evaluatedAt.minusMillis(Math.round(observationAge * 1000d));
+        boolean stale = snapshotAge.getAsDouble() > queueGatewayProperties.staleAfter().toMillis() / 1000d
+                || scrapeAge.getAsDouble() > queueGatewayProperties.staleAfter().toMillis() / 1000d;
+        SourceStatus status = stale
+                ? SourceStatus.STALE
+                : waiting.getAsDouble() == 0d ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
+        return new ObservedValue<>(waiting.getAsDouble(), status, observedAt);
     }
 
     private static List<ObservedValue<Double>> persistenceQueue(

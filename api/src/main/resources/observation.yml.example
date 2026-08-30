@@ -121,6 +121,10 @@ observation:
       tombstone-retention: ${OBSERVATION_COUPON_ROUND_TOMBSTONE_RETENTION:1d}
       tombstone-max-entries: ${OBSERVATION_COUPON_ROUND_TOMBSTONE_MAX_ENTRIES:1000}
   prometheus:
+    queue-gateway:
+      # 외부 게이트웨이 지표 계약이 배포에 연결된 환경에서만 전역 Admission 대기 인원을 바꾼다.
+      enabled: ${QUEUE_GATEWAY_PROMETHEUS_ENABLED:false}
+      stale-after: ${QUEUE_GATEWAY_PROMETHEUS_STALE_AFTER:5s}
     archive:
       connect-timeout: 1s
       read-timeout: 10s

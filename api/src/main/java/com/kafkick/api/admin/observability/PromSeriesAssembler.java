@@ -53,6 +53,7 @@ public class PromSeriesAssembler {
     private static final String TAG_JOB = "job";
     private static final String JOB_API = "api";
     private static final String TAG_CONSUMER_GROUP = "consumer_group";
+    private static final String TAG_SIGNAL = "signal";
     private static final String ATTEMPT_ARCHIVE_GROUP = "coupon-attempt-archive";
     private static final String TAG_OUTCOME = OverviewPrometheusContract.OUTCOME;
     private static final String OUTCOME_SUCCESS = OverviewPrometheusContract.SUCCESS;
@@ -94,12 +95,24 @@ public class PromSeriesAssembler {
     private final PromRangeQuery rangeQuery;
     private final TimeProvider timeProvider;
     private final PrometheusSeriesProperties properties;
+    private final QueueGatewayPrometheusProperties queueGatewayProperties;
 
     public PromSeriesAssembler(
             PromRangeQuery rangeQuery, TimeProvider timeProvider, PrometheusSeriesProperties properties) {
+        this(rangeQuery, timeProvider, properties, new QueueGatewayPrometheusProperties(false, null));
+    }
+
+    public PromSeriesAssembler(
+            PromRangeQuery rangeQuery,
+            TimeProvider timeProvider,
+            PrometheusSeriesProperties properties,
+            QueueGatewayPrometheusProperties queueGatewayProperties
+    ) {
         this.rangeQuery = Objects.requireNonNull(rangeQuery, "rangeQuery");
         this.timeProvider = Objects.requireNonNull(timeProvider, "timeProvider");
         this.properties = Objects.requireNonNull(properties, "properties");
+        this.queueGatewayProperties = Objects.requireNonNull(
+                queueGatewayProperties, "queueGatewayProperties");
     }
 
     /**
@@ -133,8 +146,14 @@ public class PromSeriesAssembler {
                 start, end, step, deadline));
         // 대기열은 부하 중에만 존재한다. 잘리면 대기열이 언제 얼마나 쌓였는지를 되짚을
         // 원천이 아예 없다 — batch 가 1초마다 덮어쓰는 게이지라 과거가 남지 않는다.
-        series.addAll(collect(SeriesKey.QUEUE_ADMISSION, admissionQueueQuery(couponId),
-                start, end, step, deadline));
+        if (queueGatewayProperties.enabled()) {
+            series.addAll(couponId == null
+                    ? collectGatewayAdmission(start, end, step, deadline)
+                    : List.of(sourceMissing(SeriesKey.QUEUE_ADMISSION)));
+        } else {
+            series.addAll(collect(SeriesKey.QUEUE_ADMISSION, admissionQueueQuery(couponId),
+                    start, end, step, deadline));
+        }
         series.addAll(collect(SeriesKey.QUEUE_PERSISTENCE, persistenceQueueQuery(),
                 start, end, step, deadline));
         // 포화의 선행 지표다. 처리량이 꺾이기 전에 먼저 오르므로 사후 분석의 시작점이 된다.
@@ -290,6 +309,21 @@ public class PromSeriesAssembler {
     private static ScopedQuery admissionQueueQuery(Long couponId) {
         return scoped(MetricAggregation.QUEUE_LENGTH,
                 MetricAggregation.OBSERVED_COUPON_ID, couponId);
+    }
+
+    private static String gatewayAdmissionQuery() {
+        String selector = "{job=\"" + QueueGatewayPrometheusContract.JOB + "\"}";
+        return signal("max(" + QueueGatewayPrometheusContract.WAITING + selector + ")", "waiting")
+                + " or " + signal("max(" + QueueGatewayPrometheusContract.SNAPSHOT_AGE
+                + selector + ")", "snapshot_age")
+                + " or " + signal("max(up" + selector + ")", "up")
+                + " or " + signal("max(time() - timestamp("
+                + QueueGatewayPrometheusContract.WAITING + selector + "))", "scrape_age");
+    }
+
+    private static String signal(String expression, String signal) {
+        return "label_replace(" + expression + ", \"" + TAG_SIGNAL + "\", \""
+                + signal + "\", \"__name__\", \".*\")";
     }
 
     private static ScopedQuery persistenceQueueQuery() {
@@ -531,6 +565,64 @@ public class PromSeriesAssembler {
                     key, displayLabels(series), scoped, SourceStatus.VALID, points(series)));
         }
         return List.copyOf(entries);
+    }
+
+    private List<SeriesEntry> collectGatewayAdmission(
+            Instant start, Instant end, Duration step, Deadline deadline) {
+        if (!deadline.allows()) {
+            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+        }
+        List<PromRangeSeries> raw;
+        try {
+            raw = rangeQuery.query(gatewayAdmissionQuery(), start, end, step);
+        } catch (PromQueryException failure) {
+            log.warn("게이트웨이 대기 추세 질의 실패로 이 계열만 UNAVAILABLE 처리합니다: {}",
+                    failure.getMessage());
+            log.debug("게이트웨이 대기 추세 질의 실패 상세", failure);
+            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+        }
+        Optional<PromRangeSeries> up = oneSignal(raw, "up");
+        if (up.isEmpty() || latest(up.get()).isEmpty() || latest(up.get()).get() <= 0d) {
+            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+        }
+        Optional<PromRangeSeries> waiting = oneSignal(raw, "waiting");
+        Optional<PromRangeSeries> snapshotAge = oneSignal(raw, "snapshot_age");
+        Optional<PromRangeSeries> scrapeAge = oneSignal(raw, "scrape_age");
+        if (waiting.isEmpty() || snapshotAge.isEmpty() || scrapeAge.isEmpty()
+                || latest(snapshotAge.get()).isEmpty() || latest(scrapeAge.get()).isEmpty()
+                || latest(snapshotAge.get()).get() < 0d || latest(scrapeAge.get()).get() < 0d) {
+            return List.of(new SeriesEntry(
+                    SeriesKey.QUEUE_ADMISSION, Map.of(), false, SourceStatus.PENDING, List.of()));
+        }
+        if (waiting.get().points().stream().anyMatch(point -> point.hasNumericValue()
+                && (point.value() < 0d || point.value() != Math.rint(point.value())))) {
+            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+        }
+        double threshold = queueGatewayProperties.staleAfter().toMillis() / 1000d;
+        boolean stale = latest(snapshotAge.get()).get() > threshold
+                || latest(scrapeAge.get()).get() > threshold;
+        List<SeriesPoint> points = points(waiting.get());
+        boolean allZero = !points.isEmpty() && points.stream()
+                .allMatch(point -> point.value() != null && point.value() == 0d);
+        SourceStatus state = stale ? SourceStatus.STALE
+                : allZero ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
+        return List.of(new SeriesEntry(
+                SeriesKey.QUEUE_ADMISSION, Map.of(), false, state, points));
+    }
+
+    private static Optional<PromRangeSeries> oneSignal(
+            List<PromRangeSeries> raw, String signal) {
+        List<PromRangeSeries> matched = raw.stream()
+                .filter(series -> signal.equals(series.label(TAG_SIGNAL)))
+                .toList();
+        return matched.size() == 1 ? Optional.of(matched.get(0)) : Optional.empty();
+    }
+
+    private static Optional<Double> latest(PromRangeSeries series) {
+        return series.points().stream()
+                .filter(PromRangePoint::hasNumericValue)
+                .reduce((left, right) -> right)
+                .map(PromRangePoint::value);
     }
 
     /**

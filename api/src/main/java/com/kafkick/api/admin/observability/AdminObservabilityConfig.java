@@ -257,16 +257,20 @@ public class AdminObservabilityConfig {
     @Bean
     public PromSeriesAssembler promSeriesAssembler(
             @Qualifier(SERIES_RANGE_CLIENT) PromRangeQuery rangeQuery,
-            TimeProvider timeProvider, PrometheusSeriesProperties seriesProperties) {
-        return new PromSeriesAssembler(rangeQuery, timeProvider, seriesProperties);
+            TimeProvider timeProvider, PrometheusSeriesProperties seriesProperties,
+            QueueGatewayPrometheusProperties queueGatewayProperties) {
+        return new PromSeriesAssembler(
+                rangeQuery, timeProvider, seriesProperties, queueGatewayProperties);
     }
 
     @Bean
     public PromMetricsAssembler promMetricsAssembler(
             @Qualifier(INSTANT_CLIENT) PromQuery client,
-            TimeProvider timeProvider, PrometheusQueryProperties properties) {
+            TimeProvider timeProvider, PrometheusQueryProperties properties,
+            QueueGatewayPrometheusProperties queueGatewayProperties) {
         return new PromMetricsAssembler(
-                client, timeProvider, properties.staleAfter(), properties.totalBudget());
+                client, timeProvider, properties.staleAfter(), properties.totalBudget(),
+                queueGatewayProperties);
     }
 
     @Bean
