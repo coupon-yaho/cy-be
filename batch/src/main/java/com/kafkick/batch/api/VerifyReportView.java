@@ -59,12 +59,19 @@ import com.kafkick.core.verification.VerificationRun;
  * 그것은 구조가 아니라 <b>지켜야 하는 규율</b>이다 — "구조적으로 불가능" 이라고 적어 두면
  * 다음 사람이 이 뷰에 PII 검사를 안 한다.
  *
+ * @param schema   이 배치가 붙어 있는 데이터베이스 이름. <b>{@code dataset} 만으로는
+ *                 화면이 카드를 못 가른다</b> — 정상셋 배치와 운영 배치가 둘 다
+ *                 {@code CLEAN} 이라, 이름표가 같은 카드 두 장이 된다. 그때 앞선 것을
+ *                 중복으로 버리면 <b>다른 데이터가 조용히 사라진다</b>(cy-fe 가 겪었다).
+ *                 {@code dataset} 은 <i>"어떤 종류를 검증하나"</i> 이고 이 값이
+ *                 <i>"어느 DB 를 보나"</i> 다 — 둘은 다른 축이라 하나로 못 접는다.
  * @param run      판정이 담긴 실행. {@code finished_at} 이 없는 행은 판정이 아니다
  * @param byType   규칙별 검출 수. <b>검출이 0인 규칙도 들어 있다</b> — 아래 {@code of} 참고
  * @param manifest 오염셋 대조. 정상셋이면 {@code null} 이다 — 대조할 정답이 없다
  */
-@com.fasterxml.jackson.annotation.JsonPropertyOrder({"run", "byType", "manifest"})
+@com.fasterxml.jackson.annotation.JsonPropertyOrder({"schema", "run", "byType", "manifest"})
 public record VerifyReportView(
+        String schema,
         VerificationRun run,
         Map<FindingType, Integer> byType,
         Manifest manifest
@@ -78,10 +85,15 @@ public record VerifyReportView(
      *
      * <p>규칙 목록의 주인은 {@link FindingType} 이므로 채우는 것도 여기서 한다.
      */
-    public static VerifyReportView of(VerificationRun run,
+    public static VerifyReportView of(String schema, VerificationRun run,
             Map<FindingType, Integer> counted, Manifest manifest) {
         if (run == null) {
             throw new IllegalArgumentException("리포트를 만들 검증 실행이 필요합니다.");
+        }
+        if (schema == null || schema.isBlank()) {
+            // 비어 있으면 화면이 카드를 못 가른다. 빈 값을 실어 보내면 "이름이 없다" 가
+            // "이름이 같다" 와 한 모양이 되어, 다른 데이터가 중복으로 버려진다.
+            throw new IllegalArgumentException("리포트에 실을 스키마 이름이 없습니다.");
         }
 
         Map<FindingType, Integer> filled = new LinkedHashMap<>();
@@ -90,7 +102,7 @@ public record VerifyReportView(
         }
         // **Map.copyOf 를 쓰면 안 된다.** 그것은 순서를 보장하지 않는다 — 제출물이 커밋돼
         // diff 되는데 규칙 순서가 실행마다 달라지면 "결과가 바뀐 것" 으로 읽힌다.
-        return new VerifyReportView(run, Collections.unmodifiableMap(filled), manifest);
+        return new VerifyReportView(schema, run, Collections.unmodifiableMap(filled), manifest);
     }
 
     /**
@@ -134,15 +146,22 @@ public record VerifyReportView(
      *
      * @param present         정답 묶음이 실제로 있나. <b>{@code false} 면 아래 수치가 전부 null</b>
      * @param seedRunId       대조한 시드 실행
+     * @param expectedCount   정답 행수. <b>위반</b>의 수다
+     * @param corruptionCount 심은 <b>오염</b>의 수. 위와 다르다 — 오염 하나가 규칙 여럿을
+     *                        어길 수 있어서, 지금 시드에서는 오염 700 이 위반 800 을 낳는다.
+     *                        이 값이 없으면 화면이 700 을 추정해야 하고, 그 추정은 시드가
+     *                        오염 종류를 하나 더 심는 날 조용히 틀린다
      * @param missingCount    정답에 있는데 못 잡은 것의 <b>총수</b>. 0건이 합격
      * @param unexpectedCount 잡았는데 정답에 없는 것의 <b>총수</b>. 0건이 합격
      * @param missing         위 총수의 앞 {@link #SAMPLE_LIMIT} 개. 판정용이 아니라 진단용
      * @param unexpected      위 총수의 앞 {@link #SAMPLE_LIMIT} 개. 판정용이 아니라 진단용
      */
     @com.fasterxml.jackson.annotation.JsonPropertyOrder({
-            "present", "seedRunId", "sampleLimit", "expectedCount", "expectedDigest",
+            "present", "seedRunId", "sampleLimit", "expectedCount", "corruptionCount",
+            "expectedDigest",
             "missingCount", "unexpectedCount", "matches", "truncated", "missing", "unexpected"})
     public record Manifest(boolean present, long seedRunId, Integer expectedCount,
+            Integer corruptionCount,
             String expectedDigest, Integer missingCount, Integer unexpectedCount,
             List<FindingKey> missing, List<FindingKey> unexpected) {
 
@@ -162,15 +181,18 @@ public record VerifyReportView(
             unexpected = unexpected == null ? List.of() : List.copyOf(unexpected);
 
             if (present) {
-                if (expectedCount == null || missingCount == null || unexpectedCount == null) {
+                if (expectedCount == null || missingCount == null || unexpectedCount == null
+                        || corruptionCount == null) {
                     throw new IllegalArgumentException(
-                            "대조를 했으면 수치가 다 있어야 합니다: expected=%s missing=%s unexpected=%s"
-                                    .formatted(expectedCount, missingCount, unexpectedCount));
+                            ("대조를 했으면 수치가 다 있어야 합니다: "
+                                    + "expected=%s corruption=%s missing=%s unexpected=%s")
+                                    .formatted(expectedCount, corruptionCount,
+                                            missingCount, unexpectedCount));
                 }
                 checkSample("missing", missingCount, missing.size());
                 checkSample("unexpected", unexpectedCount, unexpected.size());
             } else if (expectedCount != null || missingCount != null || unexpectedCount != null
-                    || expectedDigest != null
+                    || corruptionCount != null || expectedDigest != null
                     || !missing.isEmpty() || !unexpected.isEmpty()) {
                 // 대조를 못 했는데 결과가 실려 있으면 그 결과는 근거가 없다. 만들 수 없게 한다.
                 throw new IllegalArgumentException("대조를 못 했는데 대조 결과가 실려 있습니다.");
@@ -206,11 +228,11 @@ public record VerifyReportView(
          * 두면 그 어긋남이 구조적으로 안 생긴다.
          */
         public static Manifest compared(long seedRunId, int expectedCount,
-                String expectedDigest, List<FindingKey> missing,
+                int corruptionCount, String expectedDigest, List<FindingKey> missing,
                 List<FindingKey> unexpected) {
             List<FindingKey> allMissing = missing == null ? List.of() : missing;
             List<FindingKey> allUnexpected = unexpected == null ? List.of() : unexpected;
-            return new Manifest(true, seedRunId, expectedCount, expectedDigest,
+            return new Manifest(true, seedRunId, expectedCount, corruptionCount, expectedDigest,
                     allMissing.size(), allUnexpected.size(),
                     sample(allMissing), sample(allUnexpected));
         }
@@ -222,7 +244,8 @@ public record VerifyReportView(
 
         /** 정답 묶음이 사라진 상태. 대조 결과 대신 <b>그 사실만</b> 싣는다. */
         public static Manifest absent(long seedRunId) {
-            return new Manifest(false, seedRunId, null, null, null, null, List.of(), List.of());
+            return new Manifest(false, seedRunId, null, null, null, null, null,
+                    List.of(), List.of());
         }
 
         /**

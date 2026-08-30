@@ -81,6 +81,17 @@ dependencies {
 }
 
 tasks.named('test') {
+    // ContractCopyTest 도 docs/contract.json 을 읽는다. 이 선언은 이 PR 이 처음 넣는다 —
+    // 리뷰는 storage 만 짚었지만 **같은 결함이 원본에도 있었다.**
+    //
+    // 실측 — 선언 전에 injections 를 700→999 로 바꾸고 돌리니 `:batch:test UP-TO-DATE`,
+    // 925ms 만에 BUILD SUCCESSFUL 이었다. 계약이 갈려도 사본 대조가 안 돌던 상태다.
+    inputs.files(rootProject.file('docs/contract.json'))
+        .withPropertyName('corruptionContract')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+tasks.named('test') {
     // **JVM 존을 DB 와 일부러 어긋나게 둔다.**
     //
     // MySqlContainerConfig 가 컨테이너를 --default-time-zone=+00:00 로 띄우는데, CI 러너의

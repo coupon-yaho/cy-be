@@ -219,7 +219,7 @@ class VerifyReportApiTest {
 
         JsonNode data = VerifyApiProbe.data(probe.get(CORRUPT_FULL));
 
-        assertThat(keysOf(data)).containsExactly("run", "byType", "manifest");
+        assertThat(keysOf(data)).containsExactly("schema", "run", "byType", "manifest");
         assertThat(keysOf(data.path("run")))
                 .as("VerificationRun 에 컴포넌트가 붙으면 결정 없이 공개 리포트에 실린다")
                 .containsExactly(
@@ -231,7 +231,8 @@ class VerifyReportApiTest {
                         + "Jackson 이 메서드를 발견한 순서이고, JVM 이 그것을 보장하지 않는다. "
                         + "JDK 를 올린 날 코드 변경 없이 diff 가 생기면 그것이 판정 변화로 읽힌다")
                 .containsExactly(
-                        "present", "seedRunId", "sampleLimit", "expectedCount", "expectedDigest",
+                        "present", "seedRunId", "sampleLimit", "expectedCount",
+                        "corruptionCount", "expectedDigest",
                         "missingCount", "unexpectedCount", "matches", "truncated",
                         "missing", "unexpected");
     }
