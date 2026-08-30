@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.campaign.dto;
+package com.kafkick.api.admin.couponround.dto;
 
 import java.time.DayOfWeek;
 import java.time.LocalTime;

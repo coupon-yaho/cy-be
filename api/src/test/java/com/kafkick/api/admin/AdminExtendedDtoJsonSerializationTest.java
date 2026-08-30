@@ -14,9 +14,9 @@ import tools.jackson.databind.ObjectMapper;
 
 import com.kafkick.api.admin.benchmark.dto.BenchmarkCommandAcceptedResponse;
 import com.kafkick.api.admin.benchmark.dto.BenchmarkDetailResponse;
-import com.kafkick.api.admin.campaign.dto.BrandListResponse;
-import com.kafkick.api.admin.campaign.dto.CampaignListResponse;
-import com.kafkick.api.admin.campaign.dto.TemplateListResponse;
+import com.kafkick.api.admin.couponround.dto.BrandListResponse;
+import com.kafkick.api.admin.couponround.dto.CouponRoundListResponse;
+import com.kafkick.api.admin.couponround.dto.TemplateListResponse;
 import com.kafkick.api.admin.measurement.dto.MeasurementSessionResponse;
 import com.kafkick.api.admin.notification.dto.NotificationFailurePageResponse;
 import com.kafkick.api.admin.runtimeconfig.dto.RuntimeConfigResponse;
@@ -52,7 +52,7 @@ class AdminExtendedDtoJsonSerializationTest {
     /** 과거 방향 목록이 빈 배열과 이전 데이터 존재 여부를 유지하고 null cursor를 생략하는지 검증합니다. */
     @Test
     void historicalPagesKeepEmptyArraysNullableCursorsAndDirectionFlag() throws Exception {
-        assertThat(objectMapper.writeValueAsString(new CampaignListResponse(List.of(), null, false)))
+        assertThat(objectMapper.writeValueAsString(new CouponRoundListResponse(List.of(), null, false)))
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
         assertThat(objectMapper.writeValueAsString(new BrandListResponse(List.of(), null, false)))
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
@@ -70,9 +70,23 @@ class AdminExtendedDtoJsonSerializationTest {
                 .isEqualTo("{\"items\":[],\"hasOlder\":false}");
     }
 
+    @Test
+    void couponRoundListUsesExplicitCouponFieldsWithoutLegacyJsonNames() throws Exception {
+        CouponRoundListResponse response = new CouponRoundListResponse(
+                List.of(new CouponRoundListResponse.CouponRoundSummary(
+                        7L, 3L, "주말 쿠폰", com.kafkick.core.coupon.domain.CouponRoundStatus.OPEN,
+                        100, 40, AT, AT.plusSeconds(3600))),
+                null,
+                false);
+
+        assertThat(objectMapper.writeValueAsString(response))
+                .contains("\"couponId\":7", "\"couponName\":\"주말 쿠폰\"")
+                .doesNotContain("\"campaignId\"", "\"campaignName\"", "\"id\":7", "\"name\"");
+    }
+
     /** 브랜드 카테고리와 쿠폰 정책이 임의 문자열이 아닌 제한된 enum 이름으로 노출되는지 검증합니다. */
     @Test
-    void campaignCatalogUsesBoundedCategoryAndPolicyEnumNames() throws Exception {
+    void couponRoundCatalogUsesBoundedCategoryAndPolicyEnumNames() throws Exception {
         BrandListResponse brands = new BrandListResponse(
                 List.of(new BrandListResponse.BrandSummary(1L, "브랜드", BrandCategory.CAFE, true)), null, false);
         TemplateListResponse templates = new TemplateListResponse(

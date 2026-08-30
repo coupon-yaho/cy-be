@@ -1,4 +1,4 @@
-package com.kafkick.api.admin.campaign;
+package com.kafkick.api.admin.couponround;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -11,23 +11,23 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 
-/** 일반 CUD를 제외한 캠페인·브랜드·템플릿 조회와 상태 전환 명령 계약을 검증합니다. */
-class AdminCampaignControllerTest {
+/** 일반 CUD를 제외한 쿠폰 회차·브랜드·템플릿 조회와 상태 전환 명령 계약을 검증합니다. */
+class AdminCouponRoundControllerTest {
 
-    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(new AdminCampaignController());
+    private final MockMvc mockMvc = AdminControllerContractTestSupport.mockMvc(new AdminCouponRoundController());
 
     /** 세 카탈로그 조회가 각각 독립 경로로 등록되고 미연결 상태를 501로 표현하는지 검증합니다. */
     @Test
     void exposesThreeReadContracts() throws Exception {
-        assertNotImplemented(get("/api/v1/admin/campaigns"));
+        assertNotImplemented(get("/api/v1/admin/coupon-rounds"));
         assertNotImplemented(get("/api/v1/admin/brands"));
         assertNotImplemented(get("/api/v1/admin/templates"));
     }
 
-    /** 캠페인 상태 전환이 일반 수정이 아닌 전용 운영 명령 경로로 유지되는지 검증합니다. */
+    /** 쿠폰 회차 상태 전환이 일반 수정이 아닌 전용 운영 명령 경로로 유지되는지 검증합니다. */
     @Test
     void exposesStatusTransitionAsDedicatedCommand() throws Exception {
-        assertNotImplemented(post("/api/v1/admin/campaigns/1/status-transitions")
+        assertNotImplemented(post("/api/v1/admin/coupon-rounds/1/status-transitions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"targetStatus\":\"CLOSED\",\"reason\":\"운영자 강제 마감\"}"));
     }
@@ -35,10 +35,21 @@ class AdminCampaignControllerTest {
     /** 목표 상태는 확정 enum이어야 하고 감사 사유는 비어 있을 수 없음을 검증합니다. */
     @Test
     void statusTransitionRequiresKnownTargetAndAuditReason() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/campaigns/1/status-transitions")
+        mockMvc.perform(post("/api/v1/admin/coupon-rounds/1/status-transitions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"targetStatus\":\"UNKNOWN\",\"reason\":\"\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    /** 폐기한 관리자 campaign 경로가 새 계약과 함께 이중 등록되는 회귀를 막습니다. */
+    @Test
+    void doesNotExposeLegacyCampaignRoutes() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/campaigns"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/admin/campaigns/1/status-transitions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetStatus\":\"CLOSED\",\"reason\":\"운영자 강제 마감\"}"))
+                .andExpect(status().isNotFound());
     }
 
     private void assertNotImplemented(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request)
