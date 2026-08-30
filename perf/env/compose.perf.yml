@@ -60,6 +60,14 @@ services:
       #    하네스는 .env 를 안 읽으므로, 여기서 못박지 않으면 둘이 갈라져 V2 회차 생성이
       #    Connection refused 로 즉시 죽는다.
       BATCH_PORT: "9091"
+      # ⚠️ DataSourceTimeoutGuard 가 socketTimeout < 가장 긴 Step 데드라인이면 **기동을
+      #    거절한다.** storage.yml 기본값이 60초인데 batch.verify.step-timeout-ms 가 600초라
+      #    그대로 두면 batch 가 크래시루프에 빠진다(실측 2026-08-30).
+      #
+      #    그 값을 채우는 것은 batch.yml 오버레이인데 **회차 스택은 batch.yml 을 안 쓴다** —
+      #    compose.yml + 이 파일 둘뿐이다. 그래서 여기서 같은 값을 못박는다.
+      #    BATCH_PORT · REDIS_HOST 를 여기 적는 이유와 같은 구조다.
+      DB_SOCKET_TIMEOUT_MS: "${DB_SOCKET_TIMEOUT_MS:-660000}"
       JAVA_TOOL_OPTIONS: -Xms${PERF_BATCH_HEAP:-512m} -Xmx${PERF_BATCH_HEAP:-512m}
       # 회차 중 검증 배치가 MySQL 을 바꾸지 않게 한다(measurement-protocol.md).
       BATCH_SCHEDULING_ENABLED: "${PERF_BATCH_SCHEDULING_ENABLED:-false}"
