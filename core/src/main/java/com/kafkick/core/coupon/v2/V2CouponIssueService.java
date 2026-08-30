@@ -3,12 +3,16 @@ package com.kafkick.core.coupon.v2;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.transaction.support.TransactionOperations;
 
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
+import com.kafkick.core.coupon.domain.CouponStockOccupationResult;
+import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
@@ -28,6 +32,8 @@ import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.EngineVersion;
 
 public final class V2CouponIssueService {
+
+    private static final Logger log = LoggerFactory.getLogger(V2CouponIssueService.class);
 
     private final IssuanceGatePort gate;
     private final IssuanceRepository issuances;
@@ -97,10 +103,16 @@ public final class V2CouponIssueService {
                     command.couponRoundId(), command.memberId(),
                     command.membershipGrade().getBitValue(), command.idempotencyKey(), token));
         } catch (RuntimeException claimFailure) {
+            if (claimFailure instanceof IssuanceGateCircuitOpenException) {
+                // 차단기는 Lua를 보내지 않았다. 없는 선점을 보상하려고 Redis에 다시 붙으면 open의
+                // 목적(워커를 즉시 풀기)을 스스로 무너뜨린다.
+                throw new V2CouponIssueException(claimFailure, null, Dependency.REDIS, true);
+            }
             throw new V2CouponIssueException(
                     claimFailure,
                     compensatePreserving(claimFailure, command, token),
-                    Dependency.REDIS);
+                    Dependency.REDIS,
+                    true);
         }
         if (claim.outcome() == ClaimOutcome.REPLAY_DONE) {
             return replayDone(command, claim);
@@ -109,9 +121,19 @@ public final class V2CouponIssueService {
             return V2CouponIssueResult.rejected(claim);
         }
 
-        CouponIssueResult persisted;
+        Optional<CouponIssueResult> persisted;
         try {
             persisted = transactions.execute(status -> persist(command, definition));
+        } catch (V2CouponStockSoldOutException soldOut) {
+            return rejectAfterDatabaseSoldOut(command, token, soldOut);
+        } catch (CouponAlreadyIssuedException duplicate) {
+            // 게이트가 통과시킨 중복이다. **DB 가 판정을 확정했으므로 보상이 어떻게 끝났든
+            // 응답은 409 다** — 기다려도 바뀌지 않는 사실에 재시도를 권하면 이미 쿠폰을 받은
+            // 회원이 다시 누른다. 되돌아오지 않은 선점은 예외가 아니라 결과에 실어 관제로
+            // 넘긴다. 게이트의 회원 집합이 DB 와 갈렸다는 신호라, 게이트가 스스로 거른
+            // 중복과 같은 카운터에는 넣지 않는다.
+            return V2CouponIssueResult.rejectedAfterDatabaseDuplicate(
+                    compensatePreserving(duplicate, command, token));
         } catch (RuntimeException failure) {
             return resolveAfterFailure(command, claim, token, failure, Dependency.MYSQL);
         }
@@ -123,7 +145,7 @@ public final class V2CouponIssueService {
             return resolveAfterFailure(command, claim, token, failure, Dependency.REDIS);
         }
         // 검증은 catch 밖이다. 완료 CAS 이상은 재조회로 풀 수 있는 실패가 아니다.
-        return new V2CouponIssueResult(claim, persisted, healthy(completed), false);
+        return V2CouponIssueResult.issued(claim, persisted.orElseThrow(), healthy(completed));
     }
 
     private V2CouponIssueResult replayDone(
@@ -146,7 +168,7 @@ public final class V2CouponIssueService {
         );
     }
 
-    private CouponIssueResult persist(
+    private Optional<CouponIssueResult> persist(
             CouponIssueCommand command,
             CouponRoundIssuanceDefinition definition
     ) {
@@ -164,8 +186,33 @@ public final class V2CouponIssueService {
         if (!inserted) {
             throw new IllegalStateException("완료된 멱등 레코드가 저장되지 않았습니다.");
         }
-        stocks.incrementActiveCount(command.couponRoundId(), command.issuedAt());
-        return result;
+        // Redis는 빠른 선점·중복 게이트일 뿐이다. Sentinel 승격이 마지막 DECR을 잃어도 이
+        // 조건부 UPDATE가 총량을 넘기지 않으므로 DB가 최종 발급 권한이다. 반드시 마지막에
+        // 둔다: 같은 재고 행 X-lock에 앞선 INSERT들을 묶으면 회차 전체가 직렬화된다.
+        CouponStockOccupationResult occupation = stocks.occupyOne(
+                command.couponRoundId(), command.issuedAt());
+        if (occupation == CouponStockOccupationResult.SOLD_OUT) {
+            throw new V2CouponStockSoldOutException(command.couponRoundId());
+        }
+        if (occupation != CouponStockOccupationResult.OCCUPIED) {
+            throw new IllegalStateException("V2 발급 중 쿠폰 재고 행을 점유하지 못했습니다: " + occupation);
+        }
+        return Optional.of(result);
+    }
+
+    /**
+     * DB 가 매진을 확정했다. <b>보상이 어떻게 끝났든 응답은 SOLD_OUT 이다.</b>
+     *
+     * <p>보상 실패를 예외로 올리면 차단기가 열린 구간의 매진 응답이 통째로
+     * {@code REDIS_UNAVAILABLE}(503 + Retry-After) 로 바뀐다 — OPEN 상태의 보상 결과는
+     * {@link CompensateOutcome#NOT_ATTEMPTED_CIRCUIT_OPEN} 이 <b>기본값</b>이라 예외 상황이
+     * 아니라 정상 경로다. 그러면 클라이언트가 매진된 회차를 1초마다 무한 재시도하고,
+     * 관제에는 매진이 0 건으로 보인다. 되돌아오지 않은 선점은 결과에 실어 누수 카운터로 넘긴다.
+     */
+    private V2CouponIssueResult rejectAfterDatabaseSoldOut(
+            CouponIssueCommand command, String token, V2CouponStockSoldOutException soldOut) {
+        return V2CouponIssueResult.rejectedAfterDatabaseSoldOut(
+                compensatePreserving(soldOut, command, token));
     }
 
     private V2CouponIssueResult resolveAfterFailure(
@@ -202,8 +249,8 @@ public final class V2CouponIssueService {
                 // 발급은 이미 커밋됐다. 보상하면 DB 에 짝이 있는 재고를 되돌린다.
                 throw new V2CouponIssueException(failure, null, Dependency.REDIS);
             }
-            return new V2CouponIssueResult(
-                    claim, CouponIssueResult.from(committed.get()), healthy(completed), true);
+            return V2CouponIssueResult.recovered(
+                    claim, CouponIssueResult.from(committed.get()), healthy(completed));
         }
         throw new V2CouponIssueException(
                 failure,
@@ -265,7 +312,22 @@ public final class V2CouponIssueService {
             return gate.compensate(command.couponRoundId(), command.memberId(), token);
         } catch (RuntimeException compensationFailure) {
             suppress(original, compensationFailure);
-            return null;
+            // DB 가 판정을 확정한 경로에서는 원 예외가 던져지지 않고 버려진다 — 여기서
+            // 남기지 않으면 왜 깨졌는지가 저장소 어디에도 없다.
+            //
+            // ⚠️ **스택을 인자로 넘기지 않는다.** 이 자리는 failover 구간에 초당 수천 건이
+            // 되고 이 저장소에는 logback 설정이 없어 동기 콘솔 appender 다 — 스택 전문을
+            // 찍으면 로그 I/O 가 락 하나에 직렬화되어 응답 지연을 밀어 올리고, 그 지연이
+            // 이 작업이 재려는 failover 복구 시간에 그대로 들어간다. GlobalExceptionHandler
+            // 가 같은 이유로 만든 한 줄 요약 갈래와 형태를 맞춘다. 건당 원인 분포는
+            // claim.leaked·compensation.no.claim·compensation.already.done 세 미터가 센다.
+            // 회차·회원 id 는 내부 식별자라 마스킹 대상이 아니다.
+            log.warn("v2 보상 CAS 실패. couponRoundId={}, memberId={}, cause={}",
+                    command.couponRoundId(), command.memberId(),
+                    compensationFailure.toString());
+            // null 로 접지 않는다. null 은 "보상하지 않기로 했다"는 결정이고 이쪽은
+            // "보상이 깨졌다"라 선점의 행방을 모른다 — 응답 분류가 갈려야 한다.
+            return CompensateOutcome.ATTEMPT_FAILED;
         }
     }
 }

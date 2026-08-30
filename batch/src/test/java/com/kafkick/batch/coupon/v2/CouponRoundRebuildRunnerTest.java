@@ -159,6 +159,37 @@ class CouponRoundRebuildRunnerTest {
                 GRADE_MASK, TOTAL_QUANTITY));
     }
 
+    /**
+     * Sentinel이 되살리는 것은 재고가 아니라 가용성뿐이다. master 응답 뒤 replica에 닿지 못한
+     * 마지막 {@code DECR}을 흉내 내면 Redis는 DB보다 한 장 더 남았다고 말한다. 이 테스트는
+     * CY-760 재구성이 실제 MySQL 발급 행을 정본으로 그 차이를 0으로 만드는지 고정한다.
+     */
+    @Test
+    @DisplayName("failover로 되살아난 재고는 DB 재구성 뒤 0 차이로 회수된다")
+    void rebuildRecoversStockResurrectedByFailoverReplicationLoss() {
+        gate.writeMeta(ROUND_ID, new GateMeta(GateStatus.OPEN, OPEN_AT.toEpochMilli(),
+                CLOSE_AT.toEpochMilli(), GRADE_MASK, TOTAL_QUANTITY));
+        insertIssuance(1, 1, "ISSUED");
+        insertIssuance(2, 2, "ISSUED");
+
+        // 승격된 replica가 두 번째 DECR·issued 기록을 못 받은 상태다: DB 활성 2, Redis 발급 1.
+        redisTemplate.opsForValue().set(keys.stock(), Integer.toString(TOTAL_QUANTITY - 1));
+        redisTemplate.opsForValue().set(keys.issuedEver(), "1");
+        redisTemplate.opsForHash().put(keys.issued(), "1", "D|1|old|old");
+        long gapBefore = Long.parseLong(redisTemplate.opsForValue().get(keys.stock()))
+                - (TOTAL_QUANTITY - 2L);
+        assertThat(gapBefore).isEqualTo(1);
+
+        CouponRoundRebuildResult result = runner().rebuild(ROUND_ID);
+
+        assertThat(result.status()).isEqualTo(CouponRoundRebuildStatus.REBUILT);
+        long gapAfter = Long.parseLong(redisTemplate.opsForValue().get(keys.stock()))
+                - (TOTAL_QUANTITY - activeCountColumn());
+        assertThat(gapAfter).isZero();
+        assertThat(redisTemplate.opsForHash().size(keys.issued())).isEqualTo(2);
+        assertThat(redisTemplate.opsForValue().get(keys.issuedEver())).isEqualTo("2");
+    }
+
     @Test
     @DisplayName("재구성 중에는 그 회차 발급이 전량 -9 다 — 게이트가 먼저 닫힌다")
     void closesGateBeforeRewritingCounters() {

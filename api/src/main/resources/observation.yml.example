@@ -113,6 +113,9 @@ observation:
     #    대조하므로 ...retry-after 는 ...retryAfterSeconds 에 안 닿고, 안 닿아도 예외가 없다.
     replay-pending-retry-after-seconds: ${OBSERVATION_REPLAY_PENDING_RETRY_AFTER:1}
     gate-not-ready-retry-after-seconds: ${OBSERVATION_GATE_NOT_READY_RETRY_AFTER:1}
+    # Sentinel 승격·redisCB OPEN은 서버 재시도가 아니라 클라이언트가 뒤에 새 요청을 보내게 한다.
+    # timeout 전 선점은 PENDING일 수 있으므로 "실패했으니 즉시 재시도"라고 말하지 않는다.
+    redis-unavailable-retry-after-seconds: ${OBSERVATION_REDIS_UNAVAILABLE_RETRY_AFTER:1}
     coupon-round:
       # coupon_id 라벨 예외는 최대 100개까지만 허용한다. 초과 쿠폰 회차는 축출하지 않고 거부한다.
       max-active-coupon-rounds: ${OBSERVATION_COUPON_ROUND_MAX_ACTIVE:100}
