@@ -162,8 +162,7 @@ class AdminObservabilityControllerTest {
                 .andExpect(jsonPath("$.data.series[?(@.key == 'FAILURE_REASON_RATE')]").exists())
                 .andExpect(jsonPath("$.data.series[?(@.key == 'IN_FLIGHT')]").exists())
                 .andExpect(jsonPath("$.data.series[?(@.key == 'QUEUE_ADMISSION')]").exists())
-                .andExpect(jsonPath("$.data.series[?(@.key == 'QUEUE_PERSISTENCE')].state")
-                        .value("PENDING"))
+                .andExpect(jsonPath("$.data.series[?(@.key == 'QUEUE_PERSISTENCE')]").exists())
                 .andExpect(jsonPath("$.data.series[?(@.key == 'QUEUE_TELEMETRY')].state")
                         .value("PENDING"))
                 .andExpect(jsonPath("$.data.series[?(@.key == 'CONSISTENCY_GAP')]").exists());

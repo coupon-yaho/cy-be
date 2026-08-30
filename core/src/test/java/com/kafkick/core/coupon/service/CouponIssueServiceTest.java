@@ -30,6 +30,7 @@ import com.kafkick.core.coupon.port.CouponStockRepository;
 import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.notification.NotificationRequestService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,6 +64,9 @@ class CouponIssueServiceTest {
     @Mock
     private CouponCodeGenerator couponCodeGenerator;
 
+    @Mock
+    private NotificationRequestService notificationRequestService;
+
     private CouponIssueService couponIssueService;
 
     @BeforeEach
@@ -72,7 +76,8 @@ class CouponIssueServiceTest {
                 issuanceRepository,
                 couponStockRepository,
                 issuanceHistoryRepository,
-                couponCodeGenerator
+                couponCodeGenerator,
+                notificationRequestService
         );
     }
 
@@ -100,13 +105,15 @@ class CouponIssueServiceTest {
                 couponRoundRepository,
                 issuanceRepository,
                 couponStockRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                notificationRequestService
         );
         order.verify(couponRoundRepository).findById(10L);
         order.verify(issuanceRepository).save(any(Issuance.class));
         order.verify(issuanceHistoryRepository)
                 .save(any(IssuanceHistory.class));
         order.verify(couponStockRepository).occupyOne(10L, ISSUED_AT);
+        order.verify(notificationRequestService).request(any(Issuance.class));
 
         ArgumentCaptor<Issuance> issuanceCaptor =
                 ArgumentCaptor.forClass(Issuance.class);

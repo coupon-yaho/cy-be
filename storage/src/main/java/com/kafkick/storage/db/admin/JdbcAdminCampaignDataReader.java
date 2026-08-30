@@ -46,7 +46,6 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             SELECT c.id, c.name, b.name AS brand_name, c.status,
                    c.open_at, c.close_at, c.issuance_engine_version,
                    c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
-                   c.data_grant_mb,
                    c.valid_days, c.eligible_grades_mask,
                    s.total_quantity, s.active_count, s.updated_at
               FROM coupons c
@@ -59,7 +58,6 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             SELECT c.id, c.name, b.name AS brand_name, c.status,
                    c.open_at, c.close_at, c.issuance_engine_version,
                    c.policy_type, c.discount_rate, c.max_discount_amount, c.discount_amount,
-                   c.data_grant_mb,
                    c.valid_days, c.eligible_grades_mask,
                    s.total_quantity, s.active_count, s.updated_at
               FROM coupons c
@@ -307,7 +305,8 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
         boolean campaignConfigurationReady = hasValidCampaignConfiguration(row, policyType);
         // 재고 행 부재와 정책 스냅샷 위반은 각각 확정된 DB 준비 실패로 보존합니다.
         return new PreparationSource(
-                campaignConfigurationReady, databaseStockReady, policyType, SourceStatus.VALID, snapshotAt);
+                campaignConfigurationReady, databaseStockReady, policyType, row.eligibleGradesMask(),
+                SourceStatus.VALID, snapshotAt);
     }
 
     /** DB에 저장된 캠페인 스냅샷이 현재 발급 계약의 모든 필수 값을 갖췄는지 확인합니다. */
@@ -352,18 +351,11 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                     && row.discountRate() <= 100
                     && row.maxDiscountAmount() != null
                     && row.maxDiscountAmount() > 0
-                    && row.discountAmount() == null
-                    && row.dataGrantMb() == null;
+                    && row.discountAmount() == null;
             case FIXED_AMOUNT -> row.discountAmount() != null
                     && row.discountAmount() > 0
                     && row.discountRate() == null
-                    && row.maxDiscountAmount() == null
-                    && row.dataGrantMb() == null;
-            case DATA_GRANT -> row.dataGrantMb() != null
-                    && row.dataGrantMb() > 0
-                    && row.discountRate() == null
-                    && row.maxDiscountAmount() == null
-                    && row.discountAmount() == null;
+                    && row.maxDiscountAmount() == null;
         };
     }
 
@@ -392,7 +384,6 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
                 resultSet.getObject("discount_rate", Integer.class),
                 resultSet.getObject("max_discount_amount", Integer.class),
                 resultSet.getObject("discount_amount", Integer.class),
-                resultSet.getObject("data_grant_mb", Integer.class),
                 resultSet.getObject("valid_days", Integer.class),
                 resultSet.getObject("eligible_grades_mask", Integer.class),
                 resultSet.getObject("total_quantity", Long.class),
@@ -470,7 +461,6 @@ public class JdbcAdminCampaignDataReader implements AdminCampaignDataReader {
             Integer discountRate,
             Integer maxDiscountAmount,
             Integer discountAmount,
-            Integer dataGrantMb,
             Integer validDays,
             Integer eligibleGradesMask,
             Long totalQuantity,

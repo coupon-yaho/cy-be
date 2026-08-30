@@ -11,11 +11,12 @@ import org.springframework.boot.context.annotation.ImportCandidates;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
+import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 import com.kafkick.core.coupon.v2.port.RestoreOutcome;
 import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
-import com.kafkick.core.admin.stock.V2AdminStockReader;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -49,11 +50,14 @@ class IssuanceGateRedisAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(IssuanceScriptRunner.class);
                     assertThat(context).hasSingleBean(IssuanceGatePort.class);
+                    assertThat(context).hasSingleBean(V2AdminPreparationReader.class);
                     assertThat(context).hasSingleBean(V2AdminStockReader.class);
                     assertThat(context.getBean(IssuanceGatePort.class))
                             .isInstanceOf(RedisIssuanceGate.class);
                     assertThat(context.getBean(V2AdminStockReader.class))
                             .isInstanceOf(RedisV2AdminStockReader.class);
+                    assertThat(context.getBean(V2AdminPreparationReader.class))
+                            .isInstanceOf(RedisV2AdminPreparationReader.class);
                 });
     }
 
@@ -64,6 +68,7 @@ class IssuanceGateRedisAutoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(IssuanceGatePort.class);
             assertThat(context).doesNotHaveBean(IssuanceScriptRunner.class);
+            assertThat(context).doesNotHaveBean(V2AdminPreparationReader.class);
             assertThat(context).doesNotHaveBean(V2AdminStockReader.class);
         });
     }
@@ -127,5 +132,19 @@ class IssuanceGateRedisAutoConfigurationTest {
     @DisplayName("Redis 통로가 없으면 표식 저장소도 물러난다")
     void haltStoreStepsAsideWithoutRedis() {
         runner.run(context -> assertThat(context).doesNotHaveBean(RestorationHaltStore.class));
+    }
+
+    /** 사용자 준비 Reader가 자동설정 구현으로 덮이지 않는지 검증합니다. */
+    @Test
+    @DisplayName("사용자 V2 준비 Reader가 있으면 자동설정 Reader는 물러난다")
+    void userPreparationReaderWins() {
+        V2AdminPreparationReader userReader = mock(V2AdminPreparationReader.class);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
+                .withBean(V2AdminPreparationReader.class, () -> userReader)
+                .run(context -> assertThat(context.getBean(V2AdminPreparationReader.class))
+                        .isSameAs(userReader));
     }
 }

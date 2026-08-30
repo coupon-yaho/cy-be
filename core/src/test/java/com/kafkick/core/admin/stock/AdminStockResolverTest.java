@@ -69,7 +69,8 @@ class AdminStockResolverTest {
                 id, "campaign", "brand", engine, CouponRoundStatus.OPEN,
                 NOW.minusSeconds(60), NOW.plusSeconds(60),
                 observed(new CouponMetricsSource.StockCounts(total, active)),
-                new PreparationSource(true, true, CouponPolicyType.FIXED_AMOUNT, SourceStatus.VALID, NOW));
+                new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, 3, SourceStatus.VALID, NOW));
     }
 
     private static <T> CouponMetricsSource.Observation<T> observed(T value) {

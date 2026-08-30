@@ -14,14 +14,18 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
 import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.campaignsource.PreparationItem;
 import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.campaignsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource.StockCounts;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
 import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionContext;
@@ -37,6 +41,10 @@ import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
 import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
+import com.kafkick.core.admin.preparation.AdminPreparationResolver;
+import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
+import com.kafkick.core.admin.preparation.V2PreparationSource;
+import com.kafkick.core.admin.stock.AdminStockResolver;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.consistency.ConsistencyEvaluation;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
@@ -173,6 +181,66 @@ class AdminOverviewServiceTest {
         assertThat(campaign.severity()).isEqualTo(com.kafkick.core.observation.Severity.WARN);
         assertThat(campaign.customerImpact()).isEqualTo(action.customerImpact());
         assertThat(campaign.recommendedAction()).isSameAs(action.recommendedAction());
+    }
+
+    /** V2 게이트 실패가 기존 네 운영현황 영역에 같은 원인으로 연결되는지 검증합니다. */
+    @Test
+    void linksV2GateFailureToKpiActionAndCampaignRow() {
+        RecordingReader catalogReader = new RecordingReader(v2ReadyCatalog(701L));
+        V2AdminPreparationReader preparationReader = (requests, observedAt) -> {
+            assertThat(requests).singleElement().satisfies(request -> {
+                assertThat(request.couponId()).isEqualTo(701L);
+                assertThat(request.expectedTotalQuantity()).isEqualTo(100L);
+                assertThat(request.expectedRemainingQuantity()).isEqualTo(100L);
+                assertThat(request.expectedGradeMask()).isEqualTo(3);
+            });
+            return Map.of(701L, new V2PreparationSource(
+                    true, false, SourceStatus.VALID, NOW.minusSeconds(1L)));
+        };
+
+        AdminOverviewSnapshot snapshot = serviceWithPreparation(
+                catalogReader, preparationReader).getOverview().snapshot();
+
+        assertThat(catalogReader.catalogCalls).isEqualTo(1);
+        assertThat(snapshot.openingSoon().value().preparationIncompleteCount()).isEqualTo(1L);
+        assertThat(snapshot.actionRequired().value().warningCount()).isEqualTo(1L);
+        AdminOverviewSnapshot.OperationActionItem action =
+                snapshot.actionItems().value().topItems().getFirst();
+        assertThat(action.recommendedAction().code())
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
+        assertThat(snapshot.campaigns().value().getFirst().failedPreparationItems())
+                .containsExactly(PreparationItem.REDIS_GATE);
+    }
+
+    /** 아직 워밍업 전인 V2 회차를 확정 실패 조치로 만드는 회귀를 방지합니다. */
+    @Test
+    void keepsV2PendingWithoutFalsePreparationAction() {
+        V2AdminPreparationReader preparationReader = (requests, observedAt) -> Map.of(
+                701L, new V2PreparationSource(null, null, SourceStatus.PENDING, null));
+
+        AdminOverviewSnapshot snapshot = serviceWithPreparation(
+                new RecordingReader(v2ReadyCatalog(701L)), preparationReader)
+                .getOverview().snapshot();
+
+        assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(snapshot.actionItems().status()).isEqualTo(SourceStatus.PENDING);
+        assertThat(snapshot.campaigns().value().getFirst().failedPreparationItems()).isEmpty();
+    }
+
+    /** V2 Redis 장애가 같은 목록의 V1 준비 완료를 실패 항목으로 바꾸지 않는지 검증합니다. */
+    @Test
+    void isolatesV2UnavailableFromV1Preparation() {
+        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
+                readyCampaign(701L, EngineVersion.V1), readyCampaign(702L, EngineVersion.V2)));
+        V2AdminPreparationReader preparationReader = (requests, observedAt) -> Map.of(
+                702L, V2PreparationSource.unavailable());
+
+        AdminOverviewSnapshot snapshot = serviceWithPreparation(
+                new RecordingReader(catalog), preparationReader).getOverview().snapshot();
+
+        assertThat(snapshot.openingSoon().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(snapshot.campaigns().value())
+                .allSatisfy(campaign -> assertThat(campaign.failedPreparationItems()).isEmpty());
     }
 
     @Test
@@ -417,6 +485,24 @@ class AdminOverviewServiceTest {
         return service(reader, runtimeStore, observationSource, notApplicableFinalReader());
     }
 
+    /** 실제 준비 Resolver와 기본 V2 재고 fallback을 연결한 V2 서비스 fixture를 생성합니다. */
+    private static AdminOverviewService serviceWithPreparation(
+            AdminCampaignDataReader reader,
+            V2AdminPreparationReader preparationReader
+    ) {
+        return new AdminOverviewService(
+                new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC)), reader,
+                new RecordingRuntimeStore(), POLICY, new RecordingObservationSource(),
+                new PendingAdminQueueObservationSource(),
+                new IssuanceFlowCalculator(), new IssuanceActionCalculator(),
+                new CampaignQueueCalculator(), new CustomerOutcomeCalculator(), new StockRiskCalculator(),
+                new CampaignOverviewCalculator(), new CampaignPreparationCalculator(),
+                notApplicableFinalReader(), new ConsistencyActionCalculator(),
+                new OperationActionCalculator(), new OverviewStatusCalculator(),
+                new AdminStockResolver(AdminStockResolver.unavailableV2Reader()),
+                new AdminPreparationResolver(preparationReader));
+    }
+
     private static AdminOverviewService service(
             AdminCampaignDataReader reader,
             RuntimeConfigStore runtimeStore,
@@ -470,6 +556,26 @@ class AdminOverviewServiceTest {
                                 new CouponMetricsSource.Observation<>(null, SourceStatus.N_A, null),
                                 new PreparationObservation(true, SourceStatus.VALID, NOW)))
                         .toList());
+    }
+
+    /** Redis 준비 비교값을 모두 가진 V2 예약 회차 카탈로그를 생성합니다. */
+    private static AdminCampaignCatalog v2ReadyCatalog(long couponId) {
+        return new AdminCampaignCatalog(
+                SourceStatus.VALID, NOW, List.of(readyCampaign(couponId, EngineVersion.V2)));
+    }
+
+    /** DB 설정·재고 준비가 완료된 오픈 임박 회차를 지정한 엔진으로 생성합니다. */
+    private static AdminCampaignCatalog.CampaignData readyCampaign(
+            long couponId,
+            EngineVersion engineVersion
+    ) {
+        return new AdminCampaignCatalog.CampaignData(
+                couponId, "campaign-" + couponId, "brand", engineVersion,
+                CouponRoundStatus.SCHEDULED, NOW.plusSeconds(600L), NOW.plusSeconds(3_600L),
+                new CouponMetricsSource.Observation<>(
+                        new StockCounts(100L, 0L), SourceStatus.VALID, NOW),
+                new PreparationSource(
+                        true, true, CouponPolicyType.FIXED_AMOUNT, 3, SourceStatus.VALID, NOW));
     }
 
     private static ConsistencyFinalObservation validFailedFinal(

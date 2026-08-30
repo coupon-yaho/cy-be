@@ -39,18 +39,20 @@ public class IssuanceScriptRunner {
     public List<?> claim(long couponRoundId, Object... argv) {
         IssuanceKeys keys = IssuanceKeys.of(couponRoundId);
         return redisTemplate.execute(IssuanceScripts.CLAIM,
-                List.of(keys.stock(), keys.issued(), keys.meta(), keys.issuedEver()), argv);
+                List.of(keys.stock(), keys.issued(), keys.meta(), keys.issuedEver(),
+                        keys.issuedRevision()), argv);
     }
 
     public long complete(long couponRoundId, Object... argv) {
         IssuanceKeys keys = IssuanceKeys.of(couponRoundId);
-        return redisTemplate.execute(IssuanceScripts.COMPLETE, List.of(keys.issued()), argv);
+        return redisTemplate.execute(IssuanceScripts.COMPLETE,
+                List.of(keys.issued(), keys.issuedRevision()), argv);
     }
 
     public long compensate(long couponRoundId, Object... argv) {
         IssuanceKeys keys = IssuanceKeys.of(couponRoundId);
         return redisTemplate.execute(IssuanceScripts.COMPENSATE,
-                List.of(keys.stock(), keys.issued(), keys.issuedEver()), argv);
+                List.of(keys.stock(), keys.issued(), keys.issuedEver(), keys.issuedRevision()), argv);
     }
 
     public long restore(long couponRoundId, Object... argv) {
@@ -62,6 +64,6 @@ public class IssuanceScriptRunner {
     public long reclaimCorrupt(long couponRoundId, Object... argv) {
         IssuanceKeys keys = IssuanceKeys.of(couponRoundId);
         return redisTemplate.execute(IssuanceScripts.RECLAIM_CORRUPT,
-                List.of(keys.stock(), keys.issued(), keys.issuedEver()), argv);
+                List.of(keys.stock(), keys.issued(), keys.issuedEver(), keys.issuedRevision()), argv);
     }
 }

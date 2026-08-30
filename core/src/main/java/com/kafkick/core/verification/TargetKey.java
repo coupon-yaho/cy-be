@@ -14,7 +14,7 @@ package com.kafkick.core.verification;
  * V4        HISTORY:{issuance_histories.id}
  * </pre>
  *
- * <p><b>어휘 주의.</b> {@code coupons} 는 쿠폰이 아니라 <b>회차</b>(147행)이고 발급건은
+ * <p><b>어휘 주의.</b> {@code coupons} 는 쿠폰이 아니라 <b>회차</b>(CLEAN 147 · CORRUPT 291행)이고 발급건은
  * {@code issuances}(300만)입니다. 구 어휘의 {@code CAMPAIGN:} · {@code COUPON:{발급건}} 을 쓰면
  * 시드가 기록한 expected_findings 와 100% 어긋나, 개수는 맞는데 키가 달라 원인을 못 찾습니다.
  */
@@ -35,7 +35,7 @@ public final class TargetKey {
     public static String coupon(long couponId) {
         validateId(couponId, "회차 ID");
 
-        return COUPON_PREFIX + couponId;
+        return checked(COUPON_PREFIX + couponId);
     }
 
     /** V2 1인 1매·발급코드 중복 — (회차, 회원) 단위 */
@@ -43,21 +43,35 @@ public final class TargetKey {
         validateId(couponId, "회차 ID");
         validateId(memberId, "회원 ID");
 
-        return COUPON_PREFIX + couponId + MEMBER_SEPARATOR + memberId;
+        return checked(COUPON_PREFIX + couponId + MEMBER_SEPARATOR + memberId);
     }
 
     /** V3 리플레이 대조 · V5 사용 실적 · V6 등급 자격 — 발급건 단위 */
     public static String issuance(long issuanceId) {
         validateId(issuanceId, "발급건 ID");
 
-        return ISSUANCE_PREFIX + issuanceId;
+        return checked(ISSUANCE_PREFIX + issuanceId);
     }
 
     /** V4 불법 전이 — 이력 행 단위 */
     public static String history(long historyId) {
         validateId(historyId, "이력 ID");
 
-        return HISTORY_PREFIX + historyId;
+        return checked(HISTORY_PREFIX + historyId);
+    }
+
+    /**
+     * 컬럼이 {@code varchar(64)} 다. 넘으면 MySQL 이 잘라 저장하고, 잘린 키는 정답과 안 맞아
+     * <b>누락 N · 오탐 N 이 동시에</b> 뜬다 — 가장 찾기 어려운 형태다.
+     *
+     * <p>지금 형식으로는 넘을 수 없다(최장 조합이 53자). 형식이 바뀌는 순간을 위한 것이다.
+     */
+    private static String checked(String key) {
+        if (key.length() > MAX_LENGTH) {
+            throw new IllegalArgumentException(
+                    "검출 키가 " + MAX_LENGTH + "자를 넘습니다. 길이=" + key.length() + " 키=" + key);
+        }
+        return key;
     }
 
     private static void validateId(long id, String name) {

@@ -33,6 +33,7 @@ import com.kafkick.core.observation.DomainMeterNames;
  * up                      sum     살아 있는 인스턴스 수
  * 대기열 길이             단일     batch 한 곳에서만 나온다
  * Kafka lag               sum     파티션 합
+ * Kafka lag max           max     파티션별 지연 최댓값
  * 정합성 gap              단일     batch 한 곳에서만 나온다
  * </pre>
  *
@@ -90,6 +91,24 @@ public enum MetricAggregation {
      */
     public static final String TOMCAT_BUSY = promName(MeterNames.TOMCAT_BUSY) + "_threads";
     public static final String TOMCAT_MAX = promName(MeterNames.TOMCAT_MAX) + "_threads";
+    public static final String DISK_FREE = "disk_free_bytes";
+    public static final String DISK_TOTAL = "disk_total_bytes";
+    public static final String NETWORK_RECEIVED_RATE = "tomcat_global_received_bytes_total";
+    public static final String NETWORK_SENT_RATE = "tomcat_global_sent_bytes_total";
+    public static final String KAFKA_CONSUMER_LAG = "kafka_consumer_fetch_manager_records_lag";
+    public static final String KAFKA_CONSUMER_LAG_MAX =
+            "kafka_consumer_fetch_manager_records_lag_max";
+    public static final String KAFKA_ATTEMPT_ARRIVAL_RATE =
+            "kafka_producer_topic_record_send_total";
+    public static final String ATTEMPT_ARCHIVE_RATE =
+            promName(DomainMeterNames.ATTEMPT_ARCHIVE_OUTCOME) + "_total";
+    public static final String KAFKA_TEMPLATE_SECONDS = "spring_kafka_template_seconds";
+    public static final String KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE =
+            promName(DomainMeterNames.KAFKA_ATTEMPT_PUBLISH_FAILURES) + "_total";
+    public static final String KAFKA_TOPICS_PROVISIONED =
+            promName(DomainMeterNames.KAFKA_TOPICS_PROVISIONED);
+    public static final String KAFKA_TOPICS_PROVISIONED_STATE =
+            promName(DomainMeterNames.KAFKA_TOPICS_PROVISIONED_STATE);
 
     /**
      * 스크레이프 대상이 살아 있는지. 미터가 아니라 Prometheus 가 직접 만드는 시계열이라 미터
@@ -232,6 +251,18 @@ public enum MetricAggregation {
         table.put(TOMCAT_BUSY, SUM);
         table.put(TOMCAT_MAX, SUM);
         table.put(TOMCAT_THREAD_UTILIZATION, MAX);
+        table.put(DISK_FREE, MAX);
+        table.put(DISK_TOTAL, MAX);
+        table.put(NETWORK_RECEIVED_RATE, SUM);
+        table.put(NETWORK_SENT_RATE, SUM);
+        table.put(KAFKA_CONSUMER_LAG, SUM);
+        table.put(KAFKA_CONSUMER_LAG_MAX, MAX);
+        table.put(KAFKA_ATTEMPT_ARRIVAL_RATE, SUM);
+        table.put(ATTEMPT_ARCHIVE_RATE, SUM);
+        table.put(KAFKA_TEMPLATE_SECONDS, MAX);
+        table.put(KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE, SUM);
+        table.put(KAFKA_TOPICS_PROVISIONED, SINGLE);
+        table.put(KAFKA_TOPICS_PROVISIONED_STATE, SINGLE);
         table.put(JVM_MEMORY_MAX, MAX);
         table.put(JVM_HEAP_UTILIZATION, MAX);
         table.put(UP, SUM);

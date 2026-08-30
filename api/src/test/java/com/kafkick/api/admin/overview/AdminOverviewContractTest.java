@@ -262,7 +262,7 @@ class AdminOverviewContractTest {
                 1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.SCHEDULED,
                 TO, TO.plus(Duration.ofHours(1)), Severity.WARN,
                 unavailable(), unavailable(), unavailable(),
-                List.of(PreparationItem.DATABASE_STOCK),
+                List.of(PreparationItem.REDIS_WARMUP, PreparationItem.REDIS_GATE),
                 AdminOverviewSnapshot.CustomerImpact.NONE,
                 "오픈 전 필수 준비 항목을 확인해야 합니다.", recommendedAction);
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
@@ -291,7 +291,7 @@ class AdminOverviewContractTest {
         AdminOverviewResponse.CampaignOverview responseCampaign = response.campaigns().value().getFirst();
         assertThat(responseCampaign.severity()).isEqualTo(Severity.WARN);
         assertThat(responseCampaign.failedPreparationItems())
-                .containsExactly(PreparationItem.DATABASE_STOCK);
+                .containsExactly(PreparationItem.REDIS_WARMUP, PreparationItem.REDIS_GATE);
         assertThat(responseCampaign.customerImpact()).isEqualTo(responseAction.customerImpact());
         assertThat(responseCampaign.recommendedAction()).isEqualTo(responseAction.recommendedAction());
     }

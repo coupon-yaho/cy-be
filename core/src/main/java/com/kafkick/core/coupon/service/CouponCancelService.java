@@ -14,6 +14,7 @@ import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.command.CouponCancelCommand;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.core.support.exception.BusinessException;
 
 @Service

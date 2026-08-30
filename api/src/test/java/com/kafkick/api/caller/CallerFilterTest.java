@@ -12,6 +12,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
+import com.kafkick.api.support.auth.MemberRequestHeaders;
+
 class CallerFilterTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
@@ -25,7 +27,7 @@ class CallerFilterTest {
     }
 
     @Test
-    @DisplayName("X-User-Id 가 members.id 형식이면 요청 속성에 심는다")
+    @DisplayName("X-Member-Id 가 members.id 형식이면 요청 속성에 심는다")
     void putsCaller() throws Exception {
         assertThat(run("812934")).isEqualTo(new Caller(812934L));
     }
@@ -36,12 +38,23 @@ class CallerFilterTest {
         assertThat(run("  812934  ")).isEqualTo(new Caller(812934L));
     }
 
+    @Test
+    @DisplayName("옛 X-User-Id 는 더 이상 받지 않는다 — 폴백을 되살리면 여기서 걸린다")
+    void rejectsLegacyUserIdHeader() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-User-Id", "812934");
+
+        filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(request.getAttribute(CallerFilter.ATTRIBUTE)).isNull();
+    }
+
     private final CallerFilter filter = new CallerFilter(new HeaderCallerResolver());
 
     private Object run(String userId) throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
         if (userId != null) {
-            request.addHeader(HeaderCallerResolver.USER_ID_HEADER, userId);
+            request.addHeader(MemberRequestHeaders.MEMBER_ID, userId);
         }
         filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
         return request.getAttribute(CallerFilter.ATTRIBUTE);

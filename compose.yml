@@ -92,6 +92,7 @@ services:
     #    coupon-yaho_coupon-mysql-data 가 그 버전으로 초기화돼 있다(실측). latest(9.x)로
     #    올리면 기존 데이터 디렉터리를 못 읽고 기동에 실패한다.
     image: mysql:8.4
+    command: ["--max-connections=151"]
     restart: unless-stopped
     env_file:
       - .env

@@ -32,7 +32,6 @@ class CoreTransactionBoundaryTest {
         assertTransactional(CouponUseService.class, "use");
         assertTransactional(CouponCancelUseService.class, "cancelUse");
         assertTransactional(CouponCancelService.class, "cancel");
-        assertTransactional(CouponExpirationService.class, "expire");
         assertTransactional(IdempotentOperationService.class, "execute");
     }
 
@@ -42,7 +41,6 @@ class CoreTransactionBoundaryTest {
         assertReadOnly(CouponTemplateQueryService.class, "findById");
         assertReadOnly(CouponTemplateQueryService.class, "findPage");
         assertReadOnly(MemberCouponQueryService.class, "findPage");
-        assertReadOnly(MemberCouponQueryService.class, "findOne");
         assertReadOnly(CouponRoundDetailQueryService.class, "findById");
         assertReadOnly(PublicCouponRoundQueryService.class, "findPage");
         assertReadOnly(CouponIssuePolicyValidator.class, "validate");

@@ -16,7 +16,7 @@ public interface CouponStockJpaRepository
     @Query(value = """
             UPDATE coupon_stocks
             SET active_count = active_count + 1,
-                updated_at = :updatedAt
+                updated_at = GREATEST(updated_at, :updatedAt, CURRENT_TIMESTAMP(6))
             WHERE coupon_id = :couponRoundId
               AND active_count < total_quantity
             """, nativeQuery = true)
@@ -41,7 +41,7 @@ public interface CouponStockJpaRepository
     @Query(value = """
             UPDATE coupon_stocks
             SET active_count = active_count - :quantity,
-                updated_at = :updatedAt
+                updated_at = GREATEST(updated_at, :updatedAt, CURRENT_TIMESTAMP(6))
             WHERE coupon_id = :couponRoundId
               AND active_count >= :quantity
             """, nativeQuery = true)

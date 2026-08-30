@@ -26,9 +26,10 @@ import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 /**
  * 시딩 어댑터 통합 테스트. <b>키 리터럴을 베끼지 않는다</b> — 출처는 {@link IssuanceKeys} 하나다.
  *
- * <p>여기서 보는 것은 셋이다. 값이 4필드 codec 으로 다시 읽히는가, {@code HLEN} 과
+ * <p>여기서 보는 것은 넷이다. 값이 4필드 codec 으로 다시 읽히는가, {@code HLEN} 과
  * {@code issued_ever} 가 <b>같은 호출로</b> 맞춰지는가({@code LUA_GAP} 의 정의), 그리고
- * <b>{@code meta} 를 건드리지 않는가</b> — 여기서 게이트가 열리면 순서 계약이 무너진다.
+ * issued 검증 버전이 기록되는가, <b>{@code meta} 를 건드리지 않는가</b> — 여기서 게이트가
+ * 열리면 순서 계약이 무너진다.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class RedisIssuanceWarmupTest {
@@ -57,14 +58,15 @@ class RedisIssuanceWarmupTest {
 
     @BeforeEach
     void reset() {
-        redisTemplate.delete(List.of(keys.issued(), keys.issuedEver(), keys.stock(), keys.meta(),
-                keys.restorationHalt()));
+        redisTemplate.delete(List.of(
+                keys.issued(), keys.issuedEver(), keys.stock(), keys.meta(),
+                keys.issuedRevision(), keys.issuedVerifiedRevision(), keys.restorationHalt()));
         warmup = new RedisIssuanceWarmup(
                 redisTemplate, new RedisRestorationHaltStore(redisTemplate));
     }
 
     @Test
-    @DisplayName("세 키를 함께 쓰고 meta 는 건드리지 않는다")
+    @DisplayName("워밍업 키를 함께 쓰고 meta 는 건드리지 않는다")
     void seedsThreeKeysAndLeavesGateClosed() {
         warmup.seedCounters(ROUND_ID, List.of(
                 new RebuiltIssued(1, 1_700_000_000_000L),
@@ -74,6 +76,18 @@ class RedisIssuanceWarmupTest {
         assertThat(redisTemplate.opsForValue().get(keys.issuedEver())).isEqualTo("2");
         assertThat(redisTemplate.opsForValue().get(keys.stock())).isEqualTo("98");
         assertThat(redisTemplate.hasKey(keys.meta())).isFalse();
+    }
+
+    /** 모든 issued 값의 codec 검증이 끝난 뒤 같은 버전을 준비 완료 표식으로 기록하는지 검증합니다. */
+    @Test
+    @DisplayName("워밍업은 issued 변경 버전과 검증 버전을 같은 값으로 기록한다")
+    void recordsVerifiedIssuedRevision() {
+        warmup.seedCounters(ROUND_ID, List.of(new RebuiltIssued(1, 1L)), 5);
+
+        assertThat(redisTemplate.opsForValue().get(keys.issuedRevision()))
+                .isEqualTo("0");
+        assertThat(redisTemplate.opsForValue().get(keys.issuedVerifiedRevision()))
+                .isEqualTo("0");
     }
 
     @Test

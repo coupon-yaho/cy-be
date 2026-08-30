@@ -1,0 +1,209 @@
+package com.kafkick.storage.db.batch;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.simple.JdbcClient;
+
+import com.kafkick.core.batch.BatchRun;
+import com.kafkick.storage.db.RepositoryTest;
+
+/**
+ * 배치 실행 이력 조회.
+ *
+ * <p>배치 메타에 직접 심는다. 여기서 재려는 것은 잡의 동작이 아니라 조회 SQL 이고,
+ * 잡을 띄우면 상태·시각을 원하는 모양으로 못 만든다.
+ */
+@RepositoryTest
+@Import(BatchRunJdbcAdapter.class)
+class BatchRunHistoryTest {
+
+    @Autowired
+    private BatchRunJdbcAdapter adapter;
+
+    @Autowired
+    private JdbcClient jdbcClient;
+
+    @Test
+    @DisplayName("최근 실행부터 준다 — START_TIME 이 아니라 실행 id 순이다")
+    void ordersByExecutionIdDescending() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+
+        assertThat(adapter.findRecent(null, 10, 0, null)).extracting(BatchRun::executionId)
+                .containsExactly(2L, 1L);
+    }
+
+    /**
+     * <b>OFFSET 페이지네이션의 경계 이동을 실제로 만들어 본다.</b> 1·2번을 심고 첫 페이지를
+     * 받은 뒤, 두 번째 페이지를 요청하기 <b>전에</b> 3번이 생기는 상황이다.
+     *
+     * <p>{@code anchor} 없이는 목록이 통째로 한 칸 밀려 <b>1페이지에서 본 행을 2페이지에서
+     * 다시 보고</b>, 맨 뒤 행은 영영 안 나온다. {@code anchor} 를 되돌려주면 그 사이의
+     * INSERT 가 범위 밖이라 경계가 안 흔들린다.
+     *
+     * <p>한때 이 축을 <i>"전체가 수십 건이라 도달 불가"</i> 로 판단해 안 만들었는데
+     * <b>틀린 단정이었다</b> — 배치 메타는 보존 창·크론이 설정값이고 검증은 손 트리거가
+     * 열려 있다(CY-744 봇 리뷰).
+     */
+    @Test
+    @DisplayName("anchor 가 페이지 경계를 얼린다 — 중간에 실행이 생겨도 안 밀린다")
+    void anchorFreezesPageBoundary() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+
+        List<BatchRun> firstPage = adapter.findRecent(null, 1, 0, null);
+        assertThat(firstPage).extracting(BatchRun::executionId).containsExactly(2L);
+        long anchor = firstPage.getFirst().executionId();
+
+        // 두 번째 페이지를 받기 전에 새 실행이 들어온다.
+        plant(3, "cleanupJob", "COMPLETED", true);
+
+        assertThat(adapter.findRecent(null, 1, 1, anchor))
+                .as("경계를 얼렸으므로 2페이지는 여전히 1번이다")
+                .extracting(BatchRun::executionId).containsExactly(1L);
+        assertThat(adapter.countRecent(null, anchor))
+                .as("total 도 같은 경계로 세야 화면이 마지막 페이지를 맞게 계산한다")
+                .isEqualTo(2);
+
+        assertThat(adapter.findRecent(null, 1, 1, null))
+                .as("얼리지 않으면 1페이지에서 본 2번이 2페이지에 다시 나온다 — 그게 이 검사의 이유다")
+                .extracting(BatchRun::executionId).containsExactly(2L);
+    }
+
+    /**
+     * <b>첫 요청이 {@code offset > 0} 인 경우다.</b> 경계를 "그 페이지의 첫 행" 으로 잡으면
+     * 그것은 전체의 최댓값이 아니라 <b>이미 건너뛴 행들 아래</b>라, {@code total} 이 그만큼
+     * 줄고 다음 요청이 좁아진 창에 같은 {@code offset} 을 다시 적용해 행을 건너뛴다.
+     * 경계는 <b>그 조건의 MAX(id)</b> 여야 한다(봇 리뷰가 짚었다).
+     */
+    @Test
+    @DisplayName("offset 을 준 첫 요청도 경계는 전체 최댓값이다 — total 이 안 줄어든다")
+    void latestIdIgnoresOffset() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+        plant(3, "cleanupJob", "COMPLETED", true);
+
+        // 화면이 2페이지부터 요청했다. 경계를 페이지 첫 행(2번)으로 잡으면 total 이 2가 된다.
+        assertThat(adapter.findRecent(null, 1, 1, null))
+                .extracting(BatchRun::executionId).containsExactly(2L);
+
+        assertThat(adapter.latestExecutionId(null))
+                .as("경계는 건너뛴 3번을 포함한 전체 최댓값이어야 한다")
+                .isEqualTo(3L);
+        assertThat(adapter.countRecent(null, adapter.latestExecutionId(null)))
+                .as("그 경계로 세면 total 이 안 줄어든다")
+                .isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("잡 이름을 걸면 경계도 그 잡의 최댓값이다")
+    void latestIdHonoursJobFilter() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+
+        assertThat(adapter.latestExecutionId("expireJob"))
+                .as("목록·건수와 같은 필터가 아니면 total 과 경계가 서로 다른 집합을 가리킨다")
+                .isEqualTo(1L);
+        assertThat(adapter.latestExecutionId("nosuchJob")).isNull();
+    }
+
+    @Test
+    @DisplayName("시작조차 못 한 실행도 목록에 나온다 — 실행기가 거절한 행이 그 모양이다")
+    void includesExecutionsWithoutStartTime() {
+        plant(1, "verifyJob", "FAILED", false);
+
+        List<BatchRun> recent = adapter.findRecent(null, 10, 0, null);
+
+        assertThat(recent).hasSize(1);
+        assertThat(recent.getFirst().startedAtInBatchMetaZone())
+                .as("START_TIME 이 NULL 인 행을 정렬 키로 쓰거나 조인으로 걸러내면 사라진다")
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("jobName 을 주면 그 잡만, 안 주면 전체")
+    void filtersByJobName() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+
+        assertThat(adapter.findRecent("expireJob", 10, 0, null)).extracting(BatchRun::jobName)
+                .containsExactly("expireJob");
+        assertThat(adapter.countRecent("expireJob", null)).isEqualTo(1);
+        assertThat(adapter.countRecent(null, null)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("limit·offset 이 페이지를 가른다 — 조인·서브쿼리와 함께 도는지는 따로 재야 한다")
+    void paginates() {
+        plant(1, "expireJob", "COMPLETED", true);
+        plant(2, "verifyJob", "COMPLETED", true);
+        plant(3, "cleanupJob", "COMPLETED", true);
+
+        assertThat(adapter.findRecent(null, 2, 0, null)).extracting(BatchRun::executionId)
+                .containsExactly(3L, 2L);
+        assertThat(adapter.findRecent(null, 2, 2, null)).extracting(BatchRun::executionId)
+                .as("두 번째 페이지가 첫 페이지와 겹치면 화면이 같은 행을 두 번 그린다")
+                .containsExactly(1L);
+    }
+
+    @Test
+    @DisplayName("Step 이 하나도 없으면 카운트가 비어 있다 — 0 이면 '아무것도 안 했다' 로 읽힌다")
+    void hasNoCountsWhenNoStepRan() {
+        plant(1, "verifyJob", "FAILED", false);
+
+        BatchRun run = adapter.findRecent(null, 10, 0, null).getFirst();
+
+        assertThat(run.stepReadTotal())
+                .as("SUM() 은 대상이 없으면 NULL 이다. 널가드를 빼면 여기서 NPE 로 목록이 죽는다")
+                .isNull();
+        assertThat(run.stepWriteTotal()).isNull();
+    }
+
+    @Test
+    @DisplayName("Step 이 여럿이면 합쳐서 준다 — 화면이 '몇 건 처리했나' 로 읽는다")
+    void sumsStepCounts() {
+        plant(1, "expireJob", "COMPLETED", true);
+        step(1, 10, 100);
+        step(1, 20, 200);
+
+        assertThat(adapter.findRecent(null, 10, 0, null).getFirst().stepWriteTotal()).isEqualTo(300L);
+        assertThat(adapter.findRecent(null, 10, 0, null).getFirst().stepReadTotal()).isEqualTo(30L);
+    }
+
+    private void plant(long id, String jobName, String status, boolean started) {
+        jdbcClient.sql("""
+                INSERT INTO BATCH_JOB_INSTANCE (JOB_INSTANCE_ID, VERSION, JOB_NAME, JOB_KEY)
+                VALUES (:id, 0, :jobName, :key)
+                """).param("id", id).param("jobName", jobName)
+                .param("key", "k" + id).update();
+        jdbcClient.sql("""
+                INSERT INTO BATCH_JOB_EXECUTION
+                    (JOB_EXECUTION_ID, VERSION, JOB_INSTANCE_ID, CREATE_TIME, START_TIME,
+                     END_TIME, STATUS, EXIT_CODE, EXIT_MESSAGE)
+                VALUES (:id, 0, :id, NOW(), :start, :end, :status, :status, '')
+                """).param("id", id).param("status", status)
+                .param("start", started ? LocalDateTime.now() : null)
+                .param("end", started ? LocalDateTime.now().plusSeconds(3) : null)
+                .update();
+    }
+
+    private void step(long executionId, long readCount, long writeCount) {
+        jdbcClient.sql("""
+                INSERT INTO BATCH_STEP_EXECUTION
+                    (STEP_EXECUTION_ID, VERSION, STEP_NAME, JOB_EXECUTION_ID, CREATE_TIME,
+                     STATUS, COMMIT_COUNT, READ_COUNT, FILTER_COUNT, WRITE_COUNT,
+                     READ_SKIP_COUNT, WRITE_SKIP_COUNT, PROCESS_SKIP_COUNT, ROLLBACK_COUNT)
+                VALUES (:stepId, 0, 'step', :executionId, NOW(),
+                        'COMPLETED', 1, :readCount, 0, :writeCount, 0, 0, 0, 0)
+                """).param("stepId", executionId * 100 + writeCount)
+                .param("executionId", executionId)
+                .param("readCount", readCount).param("writeCount", writeCount).update();
+    }
+}

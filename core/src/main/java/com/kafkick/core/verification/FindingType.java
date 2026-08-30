@@ -7,7 +7,11 @@ package com.kafkick.core.verification;
  * <ul>
  *   <li>발급코드 중복은 {@link #DUP_PER_MEMBER} 의 두 번째 케이스입니다
  *       ({@code GROUP BY coupon_id, code}, {@code MIN(id)} 제외)</li>
- *   <li>고아 이력은 {@link #ILLEGAL_TRANSITION} 이 전이 연쇄로 잡습니다</li>
+ *   <li>고아 이력은 <b>검증하지 않습니다.</b> FK 가 발생을 막고, 리플레이 질의가
+ *       {@code INNER JOIN issuances} 라 입력에서 빠집니다 — 참조 구현
+ *       ({@code seedgen/verify.py})도 같습니다. 한때 여기 "{@link #ILLEGAL_TRANSITION} 이
+ *       전이 연쇄로 잡습니다" 라고 적혀 있었는데 <b>두 구현 다 안 잡습니다</b>
+ *       (CY-744 3차 리뷰). 계약({@code contract.json.not_verified})도 함께 고쳤습니다</li>
  * </ul>
  *
  * 별도 규칙을 만들면 같은 행이 두 규칙에 잡혀 target_key 집합 비교가 어긋납니다.
@@ -18,6 +22,11 @@ package com.kafkick.core.verification;
  *
  * <pre>
  * 규칙별 기대 행수   V1 200 · V2 200 · V3 100 · V4 200 · V5 100 · V6 0   합계 800
+ *
+ * V6 만 오염 유형이 없어 정상셋 0건이 유일한 검증이다. 시드의 {@code --plant-v6} 를 켜면
+ * {@code corrupt_type=8} 로 GRADE_VIOLATION 1건이 추가돼 정답이 <b>801행</b>이 된다 —
+ * 700 집계 밖이고 기본은 꺼져 있다. 대조는 800 을 상수로 박지 말고
+ * {@code expected_findings} 를 읽어서 해야 한다.
  * </pre>
  */
 public enum FindingType {
@@ -31,7 +40,7 @@ public enum FindingType {
     /** 리플레이 결과 ↔ issuances.status */
     REPLAY_MISMATCH(Grain.ISSUANCE, false),
 
-    /** 연쇄 불일치 + 전이표 위반 + 고아 이력. 가장 비쌉니다 */
+    /** 연쇄 불일치 + 전이표 위반 + 결과가 둘인 전이의 오답. 가장 비쌉니다 */
     ILLEGAL_TRANSITION(Grain.HISTORY, true),
 
     /** asof_state.active_usage_count ↔ state = USED 여부 */
@@ -55,16 +64,31 @@ public enum FindingType {
     /**
      * 현재 행을 읽지 않고 asOf 로 완전히 재구성되는가.
      *
-     * <p>Step 순서를 이것이 결정합니다 — 결정론 규칙이 먼저 돌아야 폭주로 중단돼도
+     * <p>Step 순서를 이것이 결정합니다 — {@code VerifyJobWiringTest} 가 강제합니다.
+     * 결정론 규칙이 먼저 돌아야 폭주로 중단돼도
      * 결정론적 부분은 이미 확보됩니다.
      *
-     * <pre>
-     * Step 1 V4   Step 2 V2   Step 3 V5     ← 완전 결정론
-     * Step 4 V3   Step 5 V1   Step 6 V6     ← 현재 행을 읽음
-     * </pre>
+     * <p><b>순서의 주인은 {@code VerifyJobConfig#verifyJob} 의 Step 체인이다.</b> 여기에 표를
+     * 두면 배선과 갈라진다. 체인이 이 값을 지키는지는 {@code VerifyJobWiringTest} 가 확인한다.
+     * ({@code V1__init_schema.sql} 의 {@code asof_state} 주석에도 초안 순서가 남아 있는데,
+     * 적용된 마이그레이션이라 고치면 체크섬이 바뀌어 기존 DB 가 기동을 거부한다.)
      *
-     * <p>V2 가 결정론인 이유 — 세는 대상이 "행의 존재"와 code 인데 둘 다 변하지 않습니다.
-     * 상태가 바뀌어도 행은 남고 코드는 발급 후 불변입니다.
+     * <p>V2 가 결정론인 이유 — {@code issuances} 만 읽는데 그 테이블에 {@code updated_at} 이 있어
+     * {@code updated_at <= asOf} 로 볼 대상을 완전히 고정할 수 있습니다.
+     * <b>"행의 존재는 변하지 않는다" 가 아닙니다</b> — 배치가 도는 동안에도 INSERT 는 일어나므로,
+     * 그 조건이 결정론의 전부입니다.
+     *
+     * <p><b>V6 는 결정론이 아닙니다.</b> {@code issued_grade} 는 스냅샷이지만
+     * {@code coupons.eligible_grades_mask} 는 살아 있는 행이고, {@code coupons} 에는
+     * {@code updated_at} 컬럼이 없어 시각으로는 가드를 걸 수 없습니다.
+     * {@code dataset_fingerprint} 재료에도 그 축이 없어서, 마스크가 바뀌면
+     * <b>지문은 같은데 검출만 달라집니다</b> — 데이터 변경이 검증기 탓으로 오인됩니다.
+     *
+     * <p><b>그래서 실행 중에는 값을 접어 얼립니다.</b> {@code VerificationRuleRepository#policyDigest}
+     * 가 {@code coupons(id, mask)} 와 {@code grades(code, bit_value)} 를 접고,
+     * {@code startRunStep} 이 잡 컨텍스트에 심어 {@code assertFrozenStep} 이 대조합니다.
+     * <b>이것은 {@code dataset_fingerprint} 와 다른 값입니다</b> — 그쪽은 계약이 정한
+     * 데이터셋 식별자이고, 이쪽은 한 실행 안에서 정책이 안 바뀌었는지만 봅니다.
      */
     public boolean isDeterministic() {
         return deterministic;

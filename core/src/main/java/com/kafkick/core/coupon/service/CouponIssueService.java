@@ -17,6 +17,7 @@ import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.notification.NotificationRequestService;
 
 @Service
 public class CouponIssueService {
@@ -26,13 +27,15 @@ public class CouponIssueService {
     private final CouponStockRepository couponStockRepository;
     private final IssuanceHistoryRepository issuanceHistoryRepository;
     private final CouponCodeGenerator couponCodeGenerator;
+    private final NotificationRequestService notificationRequestService;
 
     public CouponIssueService(
             CouponRoundRepository couponRoundRepository,
             IssuanceRepository issuanceRepository,
             CouponStockRepository couponStockRepository,
             IssuanceHistoryRepository issuanceHistoryRepository,
-            CouponCodeGenerator couponCodeGenerator
+            CouponCodeGenerator couponCodeGenerator,
+            NotificationRequestService notificationRequestService
     ) {
         this.couponRoundRepository = Objects.requireNonNull(
                 couponRoundRepository
@@ -49,6 +52,7 @@ public class CouponIssueService {
         this.couponCodeGenerator = Objects.requireNonNull(
                 couponCodeGenerator
         );
+        this.notificationRequestService = Objects.requireNonNull(notificationRequestService);
     }
 
     @Transactional
@@ -85,6 +89,8 @@ public class CouponIssueService {
                         command.issuedAt()
                 );
         validateStockOccupation(couponRound.id(), occupationResult);
+        // 재고 점유가 확정된 뒤에 알린다 — 매진으로 롤백될 발급을 알리지 않는다.
+        notificationRequestService.request(savedIssuance);
 
         return savedIssuance;
     }

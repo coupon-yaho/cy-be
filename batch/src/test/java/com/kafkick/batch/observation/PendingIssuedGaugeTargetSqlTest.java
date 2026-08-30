@@ -27,7 +27,15 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * WARMUP run 을 돌린 뒤 MAIN run 을 돌리면</b> 그 회차에 run 두 행이 공존한다. 그때 뒤늦은
  * WARMUP(V1) 행이 이기면 진행 중인 MAIN(V2) 의 PENDING 이 N_A 로 덮여 사라진다.
  */
-@SpringBootTest(properties = "spring.flyway.enabled=true")
+// ⚠️ **모듈 application.yml 의 observation.datasource.enabled:true 가 여기선 안 온다.**
+//    batch/src/test/resources/application.yml 이 같은 이름으로 그 파일을 **가린다**(보완이
+//    아니다). 이 줄이 없으면 ObservationDataSourceConfig 가 통째로 안 서고, 아래 @Qualifier("obs")
+//    JdbcTemplate 주입이 NoSuchBeanDefinition 으로 죽는다 — 형제 관측 테스트들이 같은 이유로
+//    같은 줄을 달고 있다(ObservationAccountPrivilegeTest · PendingIssuedGaugeConfigTest).
+@SpringBootTest(properties = {
+        "spring.flyway.enabled=true",
+        "observation.datasource.enabled=true"
+})
 @Import(MySqlContainerConfig.class)
 class PendingIssuedGaugeTargetSqlTest {
 

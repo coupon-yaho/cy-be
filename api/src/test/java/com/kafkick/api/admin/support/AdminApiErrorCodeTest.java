@@ -17,4 +17,14 @@ class AdminApiErrorCodeTest {
         assertThat(AdminApiErrorCode.NOT_IMPLEMENTED.getMessage())
                 .isEqualTo("관리자 API 구현이 아직 연결되지 않았습니다.");
     }
+
+    @Test
+    void notificationErrorsProvideStableContracts() {
+        assertThat(AdminApiErrorCode.NOTIFICATION_NOT_FOUND.getStatus()).isEqualTo(404);
+        assertThat(AdminApiErrorCode.NOTIFICATION_NOT_FOUND.getCode()).isEqualTo("ADMIN-005");
+        assertThat(AdminApiErrorCode.NOTIFICATION_RESEND_CONFLICT.getStatus()).isEqualTo(409);
+        assertThat(AdminApiErrorCode.NOTIFICATION_RESEND_CONFLICT.getCode()).isEqualTo("ADMIN-006");
+        assertThat(AdminApiErrorCode.NOTIFICATION_RESEND_LIMIT_EXCEEDED.getStatus()).isEqualTo(409);
+        assertThat(AdminApiErrorCode.NOTIFICATION_RESEND_LIMIT_EXCEEDED.getCode()).isEqualTo("ADMIN-007");
+    }
 }

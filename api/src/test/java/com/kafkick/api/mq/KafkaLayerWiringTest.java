@@ -41,7 +41,7 @@ import com.kafkick.testsupport.CommittedConfigStager;
         "coupon.idempotency.poll-interval=50ms",
         "coupon.idempotency.stale-after=30s",
         "coupon.round-generation.schedule-zone=Asia/Seoul",
-        "coupon.round-generation.max-days=30",
+        "coupon.calendar.max-query-range-days=366",
         "benchmark.topology.tomcat-workers-total=60",
         "benchmark.topology.hikari-pool-total=12",
         "benchmark.topology.mysql-max-connections=50"

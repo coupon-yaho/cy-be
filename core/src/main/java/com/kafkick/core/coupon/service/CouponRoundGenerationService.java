@@ -1,12 +1,9 @@
 package com.kafkick.core.coupon.service;
 
-import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
-import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
@@ -18,6 +15,7 @@ import org.springframework.stereotype.Service;
 import com.kafkick.core.coupon.domain.CouponRound;
 import com.kafkick.core.coupon.domain.CouponStock;
 import com.kafkick.core.coupontemplate.domain.CouponTemplate;
+import com.kafkick.core.coupontemplate.domain.CouponTemplateSchedule;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.exception.CouponRoundScheduleConflictException;
 import com.kafkick.core.coupon.service.result.CouponRoundGenerationResult;
@@ -29,30 +27,25 @@ public class CouponRoundGenerationService {
     private final CouponTemplateRepository couponTemplateRepository;
     private final CouponRoundCreationService couponRoundCreationService;
     private final ZoneId scheduleZone;
-    private final int maxGenerationDays;
 
     @Autowired
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
             CouponRoundCreationService couponRoundCreationService,
             @Value("${coupon.round-generation.schedule-zone}")
-            String scheduleZone,
-            @Value("${coupon.round-generation.max-days}")
-            int maxGenerationDays
+            String scheduleZone
     ) {
         this(
                 couponTemplateRepository,
                 couponRoundCreationService,
-                ZoneId.of(scheduleZone),
-                maxGenerationDays
+                ZoneId.of(scheduleZone)
         );
     }
 
     public CouponRoundGenerationService(
             CouponTemplateRepository couponTemplateRepository,
             CouponRoundCreationService couponRoundCreationService,
-            ZoneId scheduleZone,
-            int maxGenerationDays
+            ZoneId scheduleZone
     ) {
         this.couponTemplateRepository = Objects.requireNonNull(
                 couponTemplateRepository
@@ -61,12 +54,6 @@ public class CouponRoundGenerationService {
                 couponRoundCreationService
         );
         this.scheduleZone = Objects.requireNonNull(scheduleZone);
-        if (maxGenerationDays <= 0) {
-            throw new IllegalArgumentException(
-                    "최대 회차 생성 기간은 0보다 커야 합니다."
-            );
-        }
-        this.maxGenerationDays = maxGenerationDays;
     }
 
     public CouponRoundGenerationResult generate(
@@ -85,17 +72,19 @@ public class CouponRoundGenerationService {
 
         for (CouponTemplate template : activeTemplates) {
             for (YearMonth month : monthsBetween(fromDate, toDate)) {
-                LocalDate occurrenceDate = occurrenceDate(template, month);
+                LocalDate occurrenceDate =
+                        CouponTemplateSchedule.occurrenceDate(template, month);
                 if (occurrenceDate.isBefore(fromDate)
                         || occurrenceDate.isAfter(toDate)) {
                     continue;
                 }
 
                 creationTargets++;
-                Instant openAt = occurrenceDate
-                        .atTime(template.startTime())
-                        .atZone(scheduleZone)
-                        .toInstant();
+                Instant openAt = CouponTemplateSchedule.openAt(
+                        template,
+                        month,
+                        scheduleZone
+                );
                 CouponRound couponRound = CouponRound.schedule(
                         template,
                         openAt,
@@ -143,28 +132,6 @@ public class CouponRoundGenerationService {
                 .toList();
     }
 
-    private static LocalDate occurrenceDate(
-            CouponTemplate template,
-            YearMonth month
-    ) {
-        DayOfWeek dayOfWeek = switch (template.dayOfWeek()) {
-            case MON -> DayOfWeek.MONDAY;
-            case TUE -> DayOfWeek.TUESDAY;
-            case WED -> DayOfWeek.WEDNESDAY;
-            case THU -> DayOfWeek.THURSDAY;
-            case FRI -> DayOfWeek.FRIDAY;
-            case SAT -> DayOfWeek.SATURDAY;
-            case SUN -> DayOfWeek.SUNDAY;
-        };
-
-        return month.atDay(1).with(
-                TemporalAdjusters.dayOfWeekInMonth(
-                        template.nthWeek(),
-                        dayOfWeek
-                )
-        );
-    }
-
     private void validateRange(
             LocalDate fromDate,
             LocalDate toDate,
@@ -178,12 +145,6 @@ public class CouponRoundGenerationService {
         if (toDate.isBefore(fromDate)) {
             throw new IllegalArgumentException(
                     "회차 생성 종료일은 시작일보다 빠를 수 없습니다."
-            );
-        }
-        if (ChronoUnit.DAYS.between(fromDate, toDate)
-                >= maxGenerationDays) {
-            throw new IllegalArgumentException(
-                    "회차 생성 기간이 허용 범위를 초과했습니다."
             );
         }
     }

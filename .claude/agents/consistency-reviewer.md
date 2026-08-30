@@ -144,15 +144,22 @@ V4        HISTORY:{issuance_histories.id}
   현재값을 쓰면 시드가 일부러 심어 둔 *"현재는 부적격·스냅샷은 적격"* 3% 가 통째로 오탐이 된다
 - `V4` 가 **연쇄 불일치 + 전이표 위반 + 고아 이력**을 모두 잡는가
 
-합법 전이는 다섯 가지다. `USED → EXPIRED` 는 불가.
+합법 전이는 **여섯 가지**다(CY-744 에서 다섯에서 늘렸다).
 
 ```
 ISSUE       (NULL)  → ISSUED
 USE         ISSUED  → USED
-CANCEL_USE  USED    → ISSUED     역방향 허용 (주문 취소)
+CANCEL_USE  USED    → ISSUED     created_at <= expires_at (아직 안 만료)
+CANCEL_USE  USED    → EXPIRED    created_at >  expires_at (이미 만료)
 CANCEL      ISSUED  → CANCELLED  종단
 EXPIRE      ISSUED  → EXPIRED    종단
 ```
+
+⚠️ **결과가 둘인 것은 `CANCEL_USE` 하나다.** 그래서 검증은 표에 있는지만 보지 않고
+`HistoryReplay.settledOutcome` 이 **어느 쪽이었어야 하는지**까지 본다 — 안 그러면 런타임이
+틀린 쪽을 써도 통과하고, 그때 상태와 재고가 함께 바뀌므로 V1 도 침묵한다.
+판정에 쓰는 값은 `history.created_at` 과 `issuances.expires_at` 둘 다 **저장된 값**이라
+재실행 결정론이 안 깨진다 — 금지된 것은 **현재 시각**으로 갈래를 나누는 것이다.
 
 ### 6. `asof_state` 와 3축 대조
 
@@ -176,7 +183,8 @@ asof_state.state  ↔  issuances.status  ↔  issuance_usages 활성 행 수
 - **리플레이가 `from_status` 를 믿는가** → 자기가 추적한 상태를 진실로 봐야 한다.
   `from_status` 는 참고값이고 추적 상태와 다르면 **그 자체가 finding** 이다.
   이걸 안 지키면 오염 유형 3(`CANCEL_USE` 이중 기록)이 통과한다
-- 불법 전이를 만났을 때 **중단하는가** → 기록하고 계속해야 한다. 상태는 전이시키지 않되 중단하면 그 발급건의 나머지 이력이 검증되지 않는다
+- 불법 전이를 만났을 때 **중단하는가** → 기록하고 계속해야 한다. 중단하면 그 발급건의 나머지 이력이 검증되지 않는다
+- 계속할 때 **상태는 그 행의 `to_status` 를 따라간다** (`docs/contract.json` `replay_rule.state`). 상태를 안 옮기면 뒤 행이 연쇄로 불법이 되어 오염 200건이 수천 건으로 번지고, 오염 유형 4 에서 리플레이가 `EXPIRED` 를 내놓아 `issuances.status=USED` 와 어긋나 V3·V5 가 각각 100건 오탐한다. **상태를 옮기지 말라는 지적은 하지 않는다**
 
 ### 8. 오염 데이터셋 — 주입 700, 정답 800
 
