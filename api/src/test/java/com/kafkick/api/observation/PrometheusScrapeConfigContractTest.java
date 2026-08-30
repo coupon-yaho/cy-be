@@ -59,16 +59,15 @@ class PrometheusScrapeConfigContractTest {
             List.of("compose.yaml", "docker-compose.yaml", "docker-compose.yml");
 
     @Test
-    @DisplayName("scrape 대상은 api · batch 둘이고 관리 포트를 가리킨다 — 앱 포트로 긁으면 404 다")
+    @DisplayName("scrape 대상은 api · batch · queue-gateway이고 각 관리 포트를 가리킨다")
     void bothTargetsPointAtTheManagementPortsDeclaredByEachModule() throws IOException {
         Path repo = repoRoot();
         Map<String, Object> prometheus = loadYaml(repo.resolve("infra/prometheus/prometheus.yml"));
 
         Map<String, String> targets = targetsByJob(prometheus);
         assertThat(targets.keySet())
-                .as("대상이 둘이어야 한다. batch 를 빠뜨리면 정합성 gap · 대기열 길이 ·"
-                        + " Kafka lag 이 통째로 안 들어온다")
-                .containsExactlyInAnyOrder("api", "batch");
+                .as("queue-gateway가 빠지면 대기 인원과 게이트 판정 실패를 운영 관제가 알 수 없다")
+                .containsExactlyInAnyOrder("api", "batch", "queue-gateway");
 
         assertThat(targets.get("api"))
                 .as("api 관리 포트는 management.yml.example 이 정한다. 여기만 고치면 scrape 가"
@@ -80,6 +79,10 @@ class PrometheusScrapeConfigContractTest {
                 .as("batch 관리 포트도 마찬가지다")
                 .isEqualTo("batch:" + managementPortDefault(
                         repo.resolve("batch/src/main/resources/management.yml.example")));
+
+        assertThat(targets.get("queue-gateway"))
+                .as("외부 게이트웨이가 제공한 관리 포트 계약은 8081이다")
+                .isEqualTo("queue-gateway:8081");
     }
 
     @Test
