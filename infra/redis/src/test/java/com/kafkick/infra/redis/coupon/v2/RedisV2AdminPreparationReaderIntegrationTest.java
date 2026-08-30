@@ -26,7 +26,7 @@ import com.kafkick.core.admin.preparation.V2PreparationSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
-/** 실제 Redis 7.4에서 V2 워밍업 네 키와 게이트 meta의 준비 판정 계약을 검증합니다. */
+/** 실제 Redis 7.4에서 V2 워밍업 상태와 게이트 meta의 준비 판정 계약을 검증합니다. */
 @Testcontainers(disabledWithoutDocker = true)
 class RedisV2AdminPreparationReaderIntegrationTest {
 
@@ -82,7 +82,7 @@ class RedisV2AdminPreparationReaderIntegrationTest {
 
     /** 워밍업이 시작되지 않은 예약 회차를 확정 실패로 오인하지 않는지 검증합니다. */
     @Test
-    @DisplayName("네 Redis 키가 모두 없으면 PENDING이다")
+    @DisplayName("V2 준비 키가 모두 없으면 PENDING이다")
     void mapsAllMissingKeysToPending() {
         V2PreparationSource result = read(request(10L)).get(10L);
 
@@ -131,12 +131,13 @@ class RedisV2AdminPreparationReaderIntegrationTest {
                 new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
     }
 
-    /** Hash 크기가 맞아도 실제 발급 스크립트가 해석하지 못하는 값을 준비로 판정하지 않는지 검증합니다. */
+    /** 검증 버전 자체가 파손되면 준비 완료로 정규화하지 않는지 검증합니다. */
     @Test
-    @DisplayName("issued Hash의 파손 값은 워밍업 실패다")
-    void rejectsCorruptIssuedValue() {
+    @DisplayName("issued 검증 버전이 canonical 정수가 아니면 워밍업 실패다")
+    void rejectsCorruptIssuedVerifiedRevision() {
         writeMeta(10L);
-        writeCounters(10L, "100", Map.of("1", "BROKEN"), "1");
+        writeCounters(10L, "100", Map.of(), "0");
+        redis.opsForValue().set(IssuanceKeys.of(10L).issuedVerifiedRevision(), "01");
 
         V2PreparationSource result = read(request(10L)).get(10L);
 
@@ -144,7 +145,23 @@ class RedisV2AdminPreparationReaderIntegrationTest {
                 new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
     }
 
-    /** 실제 발급 코덱 값과 DB 기대 잔여재고가 맞으면 증분 스캔 뒤에도 준비 상태를 보존하는지 검증합니다. */
+    /** 검증 뒤 지원되는 issued 쓰기가 발생하면 같은 크기여도 준비 완료로 숨기지 않는지 검증합니다. */
+    @Test
+    @DisplayName("issued 변경 버전이 워밍업 검증 버전과 다르면 워밍업 실패다")
+    void rejectsIssuedRevisionDifferentFromVerifiedRevision() {
+        writeMeta(10L);
+        writeCounters(10L, "99", Map.of("1", "D|1|token|key"), "1");
+        IssuanceKeys keys = IssuanceKeys.of(10L);
+        redis.opsForValue().set(keys.issuedRevision(), "1");
+        redis.opsForValue().set(keys.issuedVerifiedRevision(), "0");
+
+        V2PreparationSource result = read(request(10L, 99L)).get(10L);
+
+        assertThat(result).isEqualTo(
+                new V2PreparationSource(false, true, SourceStatus.VALID, SNAPSHOT));
+    }
+
+    /** 워밍업 검증 버전과 DB 기대 잔여재고가 맞으면 준비 상태를 보존하는지 검증합니다. */
     @Test
     @DisplayName("정상 issued 값과 기대 잔여재고는 워밍업 준비다")
     void acceptsValidIssuedValueAndExpectedRemainingStock() {
@@ -294,7 +311,7 @@ class RedisV2AdminPreparationReaderIntegrationTest {
                 RedisIssuanceGate.META_TOTAL_QUANTITY, TOTAL_QUANTITY));
     }
 
-    /** 워밍업이 만드는 stock·issued·issued_ever 키를 주어진 값 그대로 저장합니다. */
+    /** 워밍업이 만드는 카운터와 issued, 검증 버전을 정상 상태로 저장합니다. */
     private static void writeCounters(
             long couponId,
             String stock,
@@ -307,5 +324,7 @@ class RedisV2AdminPreparationReaderIntegrationTest {
             redis.opsForHash().putAll(keys.issued(), new LinkedHashMap<>(issued));
         }
         redis.opsForValue().set(keys.issuedEver(), issuedEver);
+        redis.opsForValue().set(keys.issuedRevision(), "0");
+        redis.opsForValue().set(keys.issuedVerifiedRevision(), "0");
     }
 }

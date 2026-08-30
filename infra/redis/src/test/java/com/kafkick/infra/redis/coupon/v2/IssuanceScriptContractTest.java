@@ -64,6 +64,7 @@ class IssuanceScriptContractTest {
     private static final String ISSUED = KEYS.issued();
     private static final String META = KEYS.meta();
     private static final String ISSUED_EVER = KEYS.issuedEver();
+    private static final String ISSUED_REVISION = KEYS.issuedRevision();
 
     private static final String MEMBER = "42";
     private static final long HOUR = 3_600_000L;
@@ -98,9 +99,10 @@ class IssuanceScriptContractTest {
 
     @BeforeEach
     void resetKeys() {
-        redis.delete(List.of(STOCK, ISSUED, META, ISSUED_EVER));
+        redis.delete(List.of(STOCK, ISSUED, META, ISSUED_EVER, ISSUED_REVISION));
         redis.opsForValue().set(STOCK, Integer.toString(TOTAL));
         redis.opsForValue().set(ISSUED_EVER, "0");
+        redis.opsForValue().set(ISSUED_REVISION, "0");
         testNow = System.currentTimeMillis();
         givenOpenGate();
     }
@@ -127,6 +129,22 @@ class IssuanceScriptContractTest {
         assertThat(claimedAt())
                 .as("선점시각은 호출자가 아니라 Redis 가 정한다 — 인스턴스 시계가 섞이면 안 된다")
                 .isBetween(testNow - 5_000, testNow + 5_000);
+    }
+
+    @Test
+    @DisplayName("issued를 실제로 바꾼 스크립트만 변경 버전을 올린다")
+    void issuedMutationsIncrementRevision() {
+        assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.OK);
+        assertThat(redis.opsForValue().get(ISSUED_REVISION)).isEqualTo("1");
+
+        assertThat(claim("key-1", TOKEN_A)).isEqualTo(IssuanceScriptCodes.Claim.REPLAY_PENDING);
+        assertThat(redis.opsForValue().get(ISSUED_REVISION)).isEqualTo("1");
+
+        assertThat(complete(TOKEN_A)).isEqualTo(IssuanceScriptCodes.Complete.PROMOTED);
+        assertThat(redis.opsForValue().get(ISSUED_REVISION)).isEqualTo("2");
+
+        assertThat(complete(TOKEN_A)).isEqualTo(IssuanceScriptCodes.Complete.ALREADY_DONE);
+        assertThat(redis.opsForValue().get(ISSUED_REVISION)).isEqualTo("2");
     }
 
     @Test

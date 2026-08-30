@@ -34,7 +34,8 @@ public final class IssuanceScriptCodes {
          */
         public static final long BAD_ARGUMENT = -10;
         /**
-         * {@code stock}·{@code issued_ever} 를 읽을 수 없다 — 키 부재 · 비정수 · 자료형 오류.
+         * {@code stock}·{@code issued_ever}·{@code issued_revision} 을 읽을 수 없다 —
+         * 필수 키 부재 · 비정수 · 자료형 오류.
          * <b>매진과 합치지 않는다.</b> 합쳐 두면 재고가 남아 있는데도 전량 종단 거절되고,
          * 재구성 창의 정상적인 {@code -9} 에 사고가 묻힌다. {@code -9} 는 "기다리면 풀린다",
          * 이건 "운영이 개입해야 한다" 다.
@@ -81,7 +82,8 @@ public final class IssuanceScriptCodes {
         public static final long ALREADY_DONE = -1;
         public static final long CORRUPT_VALUE = -3;
         /**
-         * {@code stock}·{@code issued_ever} 를 읽을 수 없다 — 비숫자 · <b>비정수</b> · 자료형 오류.
+         * {@code stock}·{@code issued_ever}·{@code issued_revision} 을 읽을 수 없다 —
+         * 비숫자 · <b>비정수</b> · 자료형 오류.
          * <b>되돌리기 전에</b> 본다. 통과시키면 {@code HDEL}·{@code INCR} 만 적용된 채
          * {@code DECR} 이 터진다 — Lua 는 원자적이어도 이미 적용된 쓰기를 되돌리지 않는다.
          */
@@ -113,7 +115,7 @@ public final class IssuanceScriptCodes {
         public static final long NOTHING = 0;
         /** 파손이 아니다 — 살아 있는 선점이라 건드리지 않았다. */
         public static final long NOT_CORRUPT = -1;
-        /** {@code stock}·{@code issued_ever} 를 읽을 수 없다. 되돌리기 전에 본다. */
+        /** {@code stock}·{@code issued_ever}·{@code issued_revision} 을 읽을 수 없다. */
         public static final long COUNTER_UNREADABLE = -11;
         /**
          * 상한 초과 — {@code stock + 1 > total}. <b>파손 값에는 재고를 깎았다는 증거가 없다.</b>

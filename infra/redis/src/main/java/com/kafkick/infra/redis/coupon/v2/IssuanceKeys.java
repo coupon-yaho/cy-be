@@ -1,13 +1,13 @@
 package com.kafkick.infra.redis.coupon.v2;
 
 /**
- * 회차 하나의 v2 키 다섯 개. <b>키 이름과 해시태그의 출처는 여기 한 곳이다.</b>
+ * 회차 하나의 v2 키 일곱 개. <b>키 이름과 해시태그의 출처는 여기 한 곳이다.</b>
  *
  * <p>리터럴을 호출부·테스트에 흩뿌리면 그중 하나만 바뀐 상태가 초록으로 남는다. 특히
  * 정합성 리더는 설정으로 키를 받으므로(11 문서 ③), 어긋난 사실은 부하 시험 끝에 gap 4축이
  * 안 닫힐 때에야 드러난다.
  *
- * <p><b>해시태그 {@code {회차}} 는 선택이 아니다.</b> 네 키가 같은 슬롯에 떨어져야 하나의 Lua 가
+ * <p><b>해시태그 {@code {회차}} 는 선택이 아니다.</b> 관련 키가 같은 슬롯에 떨어져야 하나의 Lua 가
  * 그것들을 함께 만질 수 있다. Cluster 로 가는 시점에 붙이면 그때는 이미 스크립트가 전부
  * CROSSSLOT 이다. 그래서 키를 만드는 길 자체를 이 클래스 하나로 좁힌다.
  */
@@ -45,9 +45,19 @@ public final class IssuanceKeys {
         return key("issued_ever");
     }
 
+    /** 지원되는 issued 쓰기마다 원자적으로 증가하는 변경 버전. */
+    public String issuedRevision() {
+        return key("issued_revision");
+    }
+
+    /** 워밍업이 모든 issued 값을 codec으로 검증한 시점의 변경 버전. */
+    public String issuedVerifiedRevision() {
+        return key("issued_verified_revision");
+    }
+
     /**
      * 복원 중단 표식. Lua 가 만지지 않지만 <b>같은 회차의 키</b>라 해시태그를 같이 쓴다 —
-     * 회차 하나를 지울 때 넷만 지우고 이것만 남는 일이 없어야 한다.
+     * 회차 하나를 지울 때 다른 키만 지우고 이것만 남는 일이 없어야 한다.
      */
     public String restorationHalt() {
         return key("restore_halt");

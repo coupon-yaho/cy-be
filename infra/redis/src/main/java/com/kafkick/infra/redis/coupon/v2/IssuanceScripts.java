@@ -7,12 +7,14 @@ import org.springframework.data.redis.core.script.RedisScript;
 
 /**
  * v2 발급의 Lua 5종 — 선점 · 완료 CAS · 보상 CAS · 배치 복원 · 파손 회수.
- * 본문은 {@code docs/14-v2-phase0/02·03·06·13} 의 스크립트와 같고, 5종이 공유하는
- * 인자·카운터 규약은 {@code 12} 에 있다.
+ * 기본 발급 계약은 {@code docs/14-v2-phase0/02·03·06·13} 에 있고, 5종이 공유하는
+ * 인자·카운터 규약은 {@code 12} 에 있다. {@code issued_revision} 은 관리자 준비 조회가
+ * 요청 시 Hash를 스캔하지 않도록 이 구현에서 함께 갱신하는 관측용 확장이다.
  *
- * <p><b>선점의 세 쓰기는 반드시 한 스크립트 안에 있어야 한다</b> — {@code DECR stock} ·
- * {@code INCR issued_ever} · {@code HSETNX issued}. 하나라도 밖으로 나가면 {@code LUA_GAP} 이
- * 즉시 CRITICAL 이다.
+ * <p><b>선점의 네 쓰기는 반드시 한 스크립트 안에 있어야 한다</b> — {@code DECR stock} ·
+ * {@code INCR issued_ever} · {@code HSETNX issued} · {@code INCR issued_revision}. 앞의 셋 중
+ * 하나라도 밖으로 나가면 {@code LUA_GAP} 이 즉시 CRITICAL 이고, 버전 증가가 빠지면 관리자
+ * 준비 조회가 워밍업 뒤 변경을 감지하지 못한다.
  *
  * <p>값 파싱은 접두가 아니라 4필드 전체 분해다(01). 상태 문자는 {@code %a} 가 아니라
  * {@code [PD]} 로, 선점시각은 13자리까지로 제한한다 — Java codec 과 판정이 갈리면
@@ -39,7 +41,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 public final class IssuanceScripts {
 
     /**
-     * 선점. KEYS = stock, issued, meta, issued_ever /
+     * 선점. KEYS = stock, issued, meta, issued_ever, issued_revision /
      * ARGV = memberId, gradeBit, idempotencyKey, requestToken.
      *
      * <p><b>시각의 원본은 Redis 하나다</b>({@code TIME}). 호출 인스턴스가 자기 시계를 넘기면
@@ -108,11 +110,14 @@ public final class IssuanceScripts {
             -- DECR 이 터지고, 그때 HSETNX 는 이미 적용돼 있어 고아 P 가 남는다.
             local raw = redis.pcall('GET', KEYS[1])
             local rawEver = redis.pcall('GET', KEYS[4])                -- 키 부재는 예열이라 정상이다
+            local rawRevision = redis.pcall('GET', KEYS[5])
             -- 허용 집합은 INCR 에 대해 닫혀 있어야 한다. 15자리 9만 있는 값을 통과시키면
             -- 우리가 쓴 16자리를 다음 호출의 같은 가드가 파손으로 막는다.
             if not isCanonicalInt(raw, true)
                     or (rawEver ~= false and (not isCanonicalInt(rawEver, true)
-                        or string.match(rawEver, '^9+$') ~= nil and #rawEver == 15)) then
+                        or string.match(rawEver, '^9+$') ~= nil and #rawEver == 15))
+                    or (rawRevision ~= false and (not isCanonicalInt(rawRevision, false)
+                        or string.match(rawRevision, '^9+$') ~= nil and #rawRevision == 15)) then
                 redis.call('HDEL', KEYS[2], ARGV[1])                   -- 방금 잡은 선점만 되돌린다
                 return {-11}                                           -- 카운터를 못 읽는다. 매진이 아니다
             end
@@ -124,11 +129,12 @@ public final class IssuanceScripts {
 
             redis.call('DECR', KEYS[1])
             redis.call('INCR', KEYS[4])
+            redis.call('INCR', KEYS[5])
             return {0, left - 1}
             """, List.class);
 
     /**
-     * 완료 승격. KEYS = issued / ARGV = memberId, requestToken.
+     * 완료 승격. KEYS = issued, issued_revision / ARGV = memberId, requestToken.
      * 현재 값이 <b>자기 선점일 때만</b> 올린다.
      *
      * <p><b>상태 한 글자만 바꾼다.</b> 선점시각은 그대로 둔다 — 완료시각의 원본은 DB
@@ -139,6 +145,13 @@ public final class IssuanceScripts {
      * {@code '|'} 가 든 값과 <b>같아질 수 없어서</b>, 그런 인자는 비교가 아니라 버그다.
      */
     public static final RedisScript<Long> COMPLETE = new DefaultRedisScript<>("""
+            local function writableRevision(s)
+                if s == false then return true end
+                if type(s) == 'table' or #s > 15 then return false end
+                if s == '0' then return true end
+                return string.match(s, '^[1-9][0-9]*$') ~= nil
+                    and not (string.match(s, '^9+$') ~= nil and #s == 15)
+            end
             if #ARGV < 2 then return -10 end
             if #ARGV[1] == 0 or #ARGV[2] == 0 or string.find(ARGV[2], '|', 1, true) then return -10 end
             local stored = redis.call('HGET', KEYS[1], ARGV[1])
@@ -147,12 +160,15 @@ public final class IssuanceScripts {
             if st == nil or #ms > 13 then return -3 end
             if tk ~= ARGV[2] then return -2 end
             if st == 'D' then return 0 end
+            local revision = redis.pcall('GET', KEYS[2])
+            if not writableRevision(revision) then return -3 end
             redis.call('HSET', KEYS[1], ARGV[1], 'D|' .. ms .. '|' .. tk .. '|' .. key)
+            redis.call('INCR', KEYS[2])
             return 1
             """, Long.class);
 
     /**
-     * 보상. KEYS = stock, issued, issued_ever / ARGV = memberId, requestToken.
+     * 보상. KEYS = stock, issued, issued_ever, issued_revision / ARGV = memberId, requestToken.
      *
      * <p><b>쓸 수 없는 토큰은 {@code -10} 이다.</b> 빈 토큰을 그냥 비교하면 언제나
      * {@code 0}(내 것이 아님 = 정상)이 나가고, 선점 때 깎인 재고가 조용히 영구 잠긴다 —
@@ -180,10 +196,14 @@ public final class IssuanceScripts {
             if st == nil or #ms > 13 then return -3 end
             if tk ~= ARGV[2] then return 0 end
             if st ~= 'P' then return -1 end
-            if not readableCounters(KEYS[1], KEYS[3]) then return -11 end
+            local revision = redis.pcall('GET', KEYS[4])
+            if not readableCounters(KEYS[1], KEYS[3])
+                    or (revision ~= false and (not isCanonicalInt(revision, false)
+                        or string.match(revision, '^9+$') ~= nil and #revision == 15)) then return -11 end
             redis.call('HDEL', KEYS[2], ARGV[1])
             redis.call('INCR', KEYS[1])
             redis.call('DECR', KEYS[3])
+            redis.call('INCR', KEYS[4])
             return 1
             """, Long.class);
 
@@ -219,7 +239,7 @@ public final class IssuanceScripts {
             """, Long.class);
 
     /**
-     * 파손 값 회수. KEYS = stock, issued, issued_ever /
+     * 파손 값 회수. KEYS = stock, issued, issued_ever, issued_revision /
      * ARGV = memberId, 복원여부({@code '1'}/{@code '0'}), 총재고.
      *
      * <p>총재고를 <b>{@code meta} 가 아니라 인자로</b> 받는다 — 이 스크립트는 재구성 절차
@@ -259,8 +279,12 @@ public final class IssuanceScripts {
             if stored == false then return 0 end
             local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
             if st ~= nil and #ms <= 13 then return -1 end
+            local revision = redis.pcall('GET', KEYS[4])
+            if revision ~= false and (not isCanonicalInt(revision, false)
+                    or string.match(revision, '^9+$') ~= nil and #revision == 15) then return -11 end
             if ARGV[2] == '0' then                                     -- DB 에 발급이 있다
                 redis.call('HDEL', KEYS[2], ARGV[1])
+                redis.call('INCR', KEYS[4])
                 return 2
             end
             if not readableCounters(KEYS[1], KEYS[3]) then return -11 end
@@ -269,6 +293,7 @@ public final class IssuanceScripts {
             redis.call('HDEL', KEYS[2], ARGV[1])
             redis.call('INCR', KEYS[1])
             redis.call('DECR', KEYS[3])
+            redis.call('INCR', KEYS[4])
             return 1
             """, Long.class);
 

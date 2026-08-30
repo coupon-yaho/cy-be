@@ -79,11 +79,13 @@ public class RedisIssuanceWarmup implements IssuanceWarmupPort {
             }
         }
 
-        // issued 와 issued_ever 를 **함께** 지운다. issued 만 지우면 중간에 죽었을 때
+        // issued 와 issued_ever, 두 검증 버전을 **함께** 지운다. issued 만 지우면 중간에 죽었을 때
         // issued_ever 에 직전 회차 값이 남아 HLEN 과 갈라지고, 그 차가 곧 LUA_GAP 이다 —
         // 게이트는 닫혀 있어 발급 사고는 아니지만 크기와 무관하게 CRITICAL 이고, 원인이
         // "워밍업이 끊겼다" 라는 사실은 어디에도 안 남는다. 둘 다 없으면 리더가 예열로 읽는다.
-        redisTemplate.unlink(List.of(keys.issued(), keys.issuedEver()));
+        redisTemplate.unlink(List.of(
+                keys.issued(), keys.issuedEver(),
+                keys.issuedRevision(), keys.issuedVerifiedRevision()));
         Map<String, String> pending = new LinkedHashMap<>(HSET_BATCH_SIZE);
         for (Map.Entry<String, String> entry : encoded.entrySet()) {
             pending.put(entry.getKey(), entry.getValue());
@@ -99,6 +101,12 @@ public class RedisIssuanceWarmup implements IssuanceWarmupPort {
         // 갈라질 수 있으면 언젠가 갈라진다.
         redisTemplate.opsForValue().set(keys.issuedEver(), Integer.toString(encoded.size()));
         redisTemplate.opsForValue().set(keys.stock(), Long.toString(remainingStock));
+        // 모든 값은 위에서 codec으로 인코딩됐고 Hash·카운터 쓰기도 끝났다. 두 버전이 같은
+        // 동안만 관리자 조회가 이 검증을 신뢰한다. 이후 지원되는 issued 쓰기는 Lua 안에서
+        // issuedRevision만 올리므로 전체 Hash를 다시 훑지 않고도 검증 이후 변경을 감지한다.
+        // 직접 Redis를 수정하는 운영 조작은 이 계약 밖이며, 반드시 재워밍업으로 마쳐야 한다.
+        redisTemplate.opsForValue().set(keys.issuedRevision(), "0");
+        redisTemplate.opsForValue().set(keys.issuedVerifiedRevision(), "0");
         // 재고를 다시 세운 것이 곧 "어긋남을 되돌렸다" 이므로 복원 중단 표식도 여기서 푼다.
         // 사람이 따로 눌러야 하는 해제 버튼을 두면 "고쳤는데 만료가 안 돈다" 가 된다.
         try {
