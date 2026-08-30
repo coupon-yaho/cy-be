@@ -124,7 +124,7 @@ index_prefix() {
 }
 
 verify_schema() {
-  local schema="$1" t idx name cols got n
+  local schema="$1" t idx name cols got n rows
   for t in "${REQUIRED_TABLES[@]}"; do
     has_table "$schema" "$t" || { echo "    ✗ 테이블 없음: $t" >&2; return 1; }
   done
@@ -133,8 +133,19 @@ verify_schema() {
   # WHERE NOT EXISTS 라 **다시 부으면 채워지는** 종류의 결손이라, 여기서 걸러 조기
   # 건너뛰기만 막으면 스스로 복구된다.
   for t in "${SEQ_TABLES[@]}"; do
-    [ "$(mysql_in "$schema" -N -e "SELECT COUNT(*) FROM \`$t\`;" 2>/dev/null | tr -d ' \r')" \
-        != "0" ] || { echo "    ✗ 시퀀스 초기 행 없음: $t" >&2; return 1; }
+    # **조회 실패를 통과로 만들지 않는다.** 값을 그냥 "0 이 아닌가" 로 보면 조회가 죽어
+    # 빈 문자열이 왔을 때 그 비교가 참이라 정상으로 샌다 — 리뷰가 잡은 유일한 fail-open
+    # 이었다. 그래서 **숫자가 왔는가**를 먼저 묻고, 그다음 0 인지 본다.
+    rows="$(mysql_in "$schema" -N -e "SELECT COUNT(*) FROM \`$t\`;" 2>&1 | tr -d ' \r')"
+    case "$rows" in
+      ''|*[!0-9]*)
+        echo "    ✗ 시퀀스 행을 못 셌다: $t" >&2
+        echo "      ${rows:-(응답 없음)}" >&2
+        return 1 ;;
+      0)
+        echo "    ✗ 시퀀스 초기 행 없음: $t" >&2
+        return 1 ;;
+    esac
   done
   for idx in "${REQUIRED_INDEXES[@]}"; do
     t="${idx%%|*}"; name="$(echo "$idx" | cut -d'|' -f2)"; cols="${idx##*|}"
