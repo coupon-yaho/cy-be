@@ -331,7 +331,11 @@ class PrometheusScrapeConfigContractTest {
         assertThat(volumes)
                 .as("--config.file 이 가리키는 경로에 우리 prometheus.yml 이 실제로 마운트돼"
                         + " 있어야 한다. 한쪽만 고치면 컨테이너가 기본 설정으로 뜬다")
-                .anyMatch(v -> v.startsWith("./infra/prometheus/prometheus.yml:" + configFile));
+                .contains("./infra/prometheus:/etc/prometheus:ro");
+
+        assertThat(configFile)
+                .as("디렉터리 마운트 안의 실제 설정 파일을 가리켜야 한다")
+                .isEqualTo("/etc/prometheus/prometheus.yml");
     }
 
     @Test

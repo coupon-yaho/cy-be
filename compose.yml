@@ -422,8 +422,9 @@ services:
       #    설정을 고쳤으면 컨테이너를 재시작한다 — 아래 볼륨 덕분에 데이터는 남는다.
 
     volumes:
+      # prometheus.yml이 상대 경로로 rules/·targets/를 읽으므로 디렉터리 전체를 붙인다.
       # 읽기 전용. 컨테이너가 제 설정을 덮어쓸 이유가 없다.
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus:/etc/prometheus:ro
       # ⚠️ named volume 이어야 한다. 컨테이너를 지우면 TSDB 가 같이 사라지고, 부하 회차
       #    데이터가 거기 있다. bind mount 로 바꾸면 호스트 uid 와 nobody(65534)가 어긋나
       #    기동에 실패한다.
