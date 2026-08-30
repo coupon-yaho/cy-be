@@ -111,10 +111,8 @@ verify_schema() {
 for schema in "$@"; do
   echo "▶ $schema"
 
-  # **--force 를 안 쓴다.** 그것은 "이미 있음" 뿐 아니라 모든 SQL 오류 뒤에도 계속 달려서,
-  # 중간 실패가 뒤의 성공에 묻힌다. 대신 먼저 재 보고 이미 온전하면 건너뛴다 —
-  # 재시드 뒤 습관적으로 부르는 것이 목적이라 멱등이어야 하는데, 그 멱등을
-  # 오류 무시가 아니라 **사전 확인**으로 얻는다.
+  # 재시드 뒤 습관적으로 부르는 것이 목적이라 멱등이어야 한다. 이미 온전하면
+  # 아무것도 안 건드리고 넘어간다.
   if verify_schema "$schema" 2>/dev/null; then
     echo "  이미 온전하다 — 건너뛴다"
     continue
@@ -124,11 +122,17 @@ for schema in "$@"; do
   # V11 이 문장 단위로 반쯤 적용된 상태에서 다시 부르면 첫 CREATE TABLE 이
   # "이미 있다" 로 죽고 나머지를 못 만든다. 스스로 만든 상태에서 못 빠져나온다.
   #
-  # 그래서 --force 로 **끝까지 달리되**, 나온 오류를 분류한다.
+  # 그래서 --force 로 **끝까지 달리되 나온 것을 분류한다.** 넘기는 것은 이 넷뿐이다.
   #   1050 Table already exists   · 1061 Duplicate key name
   #   1007 Database exists        · 1826 Duplicate foreign key
-  # 이 넷만 "이미 있음" 으로 넘긴다. --force 를 그냥 쓰면 **모든** 오류를 삼켜
-  # 중간 실패가 뒤의 성공에 묻히는데, 그것이 앞선 리뷰가 잡은 결함이다.
+  # --force 를 그냥 쓰면 **모든** SQL 오류를 삼켜 중간 실패가 뒤의 성공에 묻힌다.
+  #
+  # **종료 코드도 본다.** stderr 만 보면 docker 가 컨테이너를 못 찾은 경우처럼
+  # ERROR 로 시작하지 않는 실패가 성공으로 새어 나간다 — 리뷰가 그것을 잡았다.
+  # 그래서 두 축으로 가른다.
+  #   ⑴ 넘길 넷을 지우고 남은 줄이 있으면 → 실패 (docker 오류 문구도 여기서 걸린다)
+  #   ⑵ 남은 줄이 없는데 종료 코드가 0 도 아니고 MySQL 오류도 안 났으면 → 실패
+  #      (조용히 죽는 경우. 원인이 안 보이므로 종료 코드를 그대로 싣는다)
   err_file="$(mktemp)"
   for f in "${FILES[@]}"; do
     path="$MIGRATIONS_DIR/$f"
@@ -139,19 +143,32 @@ for schema in "$@"; do
       rm -f "$err_file"; exit 1; }
 
     : > "$err_file"
-    mysql_force "$schema" < "$path" 2>"$err_file" || true
+    set +e
+    mysql_force "$schema" < "$path" 2>"$err_file"
+    rc=$?
+    set -e
 
-    # 넘겨도 되는 것만 지운 뒤, 남은 줄이 있으면 진짜 실패다.
-    if grep -E "^ERROR" "$err_file" \
-       | grep -vE "^ERROR (1050|1061|1007|1826) " > "${err_file}.fatal"; then
-      echo "  ✗ $f 적용 실패" >&2
-      cat "${err_file}.fatal" >&2
+    # ⑴ 넘길 넷과 빈 줄만 지운다. 한 줄이라도 남으면 그게 진짜 실패다.
+    grep -vE "^ERROR (1050|1061|1007|1826) " "$err_file" \
+      | grep -vE "^[[:space:]]*$" > "${err_file}.fatal" || true
+    if [ -s "${err_file}.fatal" ]; then
+      echo "  ✗ $f 적용 실패 (종료 코드 $rc)" >&2
+      sed 's/^/    /' "${err_file}.fatal" >&2
       rm -f "$err_file" "${err_file}.fatal"; exit 1
     fi
     rm -f "${err_file}.fatal"
 
-    if grep -qE "^ERROR" "$err_file"; then
-      echo "  ✓ $f (이미 있는 객체는 넘김)"
+    # ⑵ 아무 말 없이 죽은 경우. mysql --force 는 넘긴 오류가 있으면 0 이 아니므로
+    #    그때만 정상으로 본다.
+    skipped=$(grep -cE "^ERROR" "$err_file" || true)
+    if [ "$rc" -ne 0 ] && [ "$skipped" -eq 0 ]; then
+      echo "  ✗ $f 적용 실패 — 종료 코드 $rc, 오류 문구 없음" >&2
+      echo "    컨테이너($CONTAINER)가 떠 있는지부터 본다." >&2
+      rm -f "$err_file"; exit 1
+    fi
+
+    if [ "$skipped" -gt 0 ]; then
+      echo "  ✓ $f (이미 있는 객체 ${skipped}건 넘김)"
     else
       echo "  ✓ $f"
     fi
