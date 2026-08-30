@@ -2,8 +2,10 @@
 package com.kafkick.batch.api;
 
 import java.util.List;
+import java.time.Duration;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.response.ResponseEnvelope;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
@@ -68,12 +71,26 @@ public class VerifyReportController {
     private final VerificationFindingRepository findings;
     private final ExpectedFindingRepository expected;
 
+    /** 지금 시각. 판정 없는 실행이 "아직 도는 중" 인지 "죽은 것" 인지 나이로 가르는 데 쓴다. */
+    private final TimeProvider timeProvider;
+
+    /**
+     * 이 시간이 지나도록 판정이 안 나면 {@code STALE} 로 답한다.
+     * {@code RunningJobProbe} 가 "멈춘 잡" 을 보는 값과 <b>같은 손잡이</b>를 쓴다 —
+     * 둘이 갈리면 같은 실행을 한 화면은 살아 있다고, 다른 화면은 멈췄다고 말한다.
+     */
+    private final Duration stuckAfter;
+
     public VerifyReportController(VerificationRunRepository runs,
             VerificationFindingRepository findings,
-            ExpectedFindingRepository expected) {
+            ExpectedFindingRepository expected,
+            TimeProvider timeProvider,
+            @Value("${batch.stuck-job-after-ms:1800000}") long stuckAfterMs) {
         this.runs = runs;
         this.findings = findings;
         this.expected = expected;
+        this.timeProvider = timeProvider;
+        this.stuckAfter = Duration.ofMillis(stuckAfterMs);
     }
 
     /**
@@ -123,6 +140,11 @@ public class VerifyReportController {
      * <p>검출 수는 {@code verification_findings} 를 직접 센다. {@code verification_runs}
      * 의 {@code finding_count} 는 판정 Step 이 마감할 때 채워지므로 진행 중에는 안 맞는다.
      *
+     * <p><b>없는 실행은 404 다</b> — {@code VERIFICATION-003}({@code RUN_NOT_FOUND})을
+     * 봉투에 실어 보낸다. 화면이 트리거 응답의 {@code executionId}(배치 잡 실행)를 그대로
+     * 넣으면 이 경로를 탄다 — 여기가 받는 것은 {@code runId}(검증 실행)이고 둘은 다른
+     * 번호다. 실측에서 {@code executionId=15} 일 때 {@code runId=17} 이었다.
+     *
      * <pre>
      * curl -sSf "localhost:9091/api/v1/admin/verify/runs/16/progress" -H "X-Batch-Admin-Token: …"
      * </pre>
@@ -137,7 +159,8 @@ public class VerifyReportController {
                         "runId=" + runId));
 
         return ResponseEnvelope.success(VerifyProgressView.of(
-                run, findings.countOf(runId), findings.countByType(runId)));
+                run, findings.countOf(runId), findings.countByType(runId),
+                timeProvider.now(), stuckAfter));
     }
 
     private Map<FindingType, Integer> byType(VerificationRun run) {

@@ -119,6 +119,44 @@ class VerifyProgressApiTest {
         assertThat(data.path("findingCount").asInt()).isEqualTo(5);
     }
 
+    /**
+     * <b>판정 전에 죽는 것은 이 저장소에서 정상 경로다.</b> 얼림 가드와 역전 검사가 일부러
+     * {@code finalizeRunStep} 앞에서 죽인다. 그 행은 아무도 안 닫아 주므로, 나이로 가르지
+     * 않으면 화면이 영원히 폴링한다.
+     */
+    @Test
+    @DisplayName("판정 없이 오래 열려 있으면 STALE 이다 — 영원히 RUNNING 이면 안 된다")
+    void marksLongOpenRunAsStale() throws Exception {
+        // asOf 를 넘을 수 없다(VerificationRun.start 가 막는다). AS_OF 자체가 이미
+        // 한참 과거라 그대로 두면 stuck 경계를 넘는다.
+        long runId = openRunStartedAt(AS_OF);
+
+        JsonNode data = VerifyApiProbe.data(
+                probe.get("/api/v1/admin/verify/runs/" + runId + "/progress"));
+
+        assertThat(data.path("status").asString())
+                .as("RUNNING 으로 두면 죽은 잡을 화면이 계속 기다린다")
+                .isEqualTo("STALE");
+    }
+
+    /**
+     * {@code verdict IS NULL} 이 곧 "판정을 못 냈다" 다 — 이 저장소가 여러 곳에서 쓰는 등식이고
+     * {@code finished_at} 을 함께 걸지 않는다. 닫혔는데 판정이 빈 행도 마감으로 보면 안 된다.
+     */
+    @Test
+    @DisplayName("마감 시각은 있는데 판정이 없으면 DONE 이 아니다")
+    void closedWithoutVerdictIsNotDone() throws Exception {
+        long runId = openRun();
+        closeWithoutVerdict(runId);
+
+        JsonNode data = VerifyApiProbe.data(
+                probe.get("/api/v1/admin/verify/runs/" + runId + "/progress"));
+
+        assertThat(data.path("status").asString())
+                .as("finished_at 을 함께 걸면 이 행이 DONE 으로 새어 나간다")
+                .isNotEqualTo("DONE");
+    }
+
     @Test
     @DisplayName("마감된 실행은 DONE 이고 판정이 실린다")
     void reportsDoneAfterVerdict() throws Exception {
@@ -150,10 +188,26 @@ class VerifyProgressApiTest {
         }
     }
 
-    /** 판정도 마감 시각도 없는 실행 — 배치가 {@code startRunStep} 을 지난 직후의 모양이다. */
+    /**
+     * 판정도 마감 시각도 없는 <b>방금 시작한</b> 실행.
+     *
+     * <p>시작 시각을 현재로 둔다 — {@code STALE} 경계가 실제 시각을 보므로, 픽스처 시각
+     * ({@code AS_OF}, 2026-01-15)을 그대로 쓰면 <b>모든 실행이 STALE</b> 이 되어
+     * RUNNING 경로를 아예 못 태운다. 픽스처 값이 런타임이 만들 수 있는 창을 이뤄야 한다.
+     */
     private long openRun() {
+        return openRunStartedAt(LocalDateTime.now());
+    }
+
+    private long openRunStartedAt(LocalDateTime startedAt) {
         return runs.save(VerificationRun.start(
-                AS_OF, null, ScopeType.FULL, DatasetType.CORRUPT, 1, AS_OF)).id();
+                AS_OF, null, ScopeType.FULL, DatasetType.CORRUPT, 1, startedAt)).id();
+    }
+
+    /** 닫혔는데 판정이 없는 행. finalize 가 판정을 못 쓰고 끝난 모양이다. */
+    private void closeWithoutVerdict(long runId) {
+        jdbcClient.sql("UPDATE verification_runs SET finished_at = :at WHERE id = :id")
+                .param("at", LocalDateTime.now()).param("id", runId).update();
     }
 
     private void close(long runId, VerdictType verdict, int findingCount) {
