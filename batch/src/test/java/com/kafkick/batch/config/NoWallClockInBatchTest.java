@@ -114,10 +114,18 @@ class NoWallClockInBatchTest {
             Map.entry("com/kafkick/batch/api/VerifyTriggerController.java", 2),
             Map.entry("com/kafkick/batch/api/BatchApiExceptionHandler.java", 1),
             // 하나다 — 판정 없는 실행이 "아직 도는 중" 인지 "죽은 것" 인지 나이로 가르는 데 쓴다
-            // (/verify/runs/{runId}/progress 의 STALE). **판정에는 안 들어간다** — 이 경로는
-            // 읽기 전용이고, verdict 는 finalizeRunStep 이 쓴 값을 그대로 싣는다. 같은 asOf
-            // 재실행이 다른 답을 낼 여지가 없다. 이 값이 없으면 finalizeRunStep 앞에서 죽은
-            // 실행을 화면이 영원히 폴링한다(그렇게 죽는 것은 얼림 가드·역전 검사의 정상 경로다).
+            // (/verify/runs/{runId}/progress 의 STALE).
+            //
+            // **이 예산이 막으려는 것은 "판정이 벽시계를 타는 것" 이지 "응답이 변하는 것" 이
+            // 아니다.** 둘을 갈라 적는다:
+            //   verdict          asOf 에만 의존한다. 이 경로는 읽기 전용이고 finalizeRunStep 이
+            //                    쓴 값을 그대로 실어 나른다 — 여기서 시각을 봐도 판정은 안 바뀐다.
+            //   status·집계      **의도적으로 변한다.** RUNNING 은 시간이 지나면 STALE 이 되고
+            //                    findingCount 는 규칙 Step 이 커밋할 때마다 는다. 진행을 보여
+            //                    주는 것이 이 API 의 목적이라 그 변화가 곧 기능이다.
+            //
+            // 이 값이 없으면 finalizeRunStep 앞에서 죽은 실행을 화면이 영원히 폴링한다
+            // (그렇게 죽는 것은 얼림 가드·역전 검사의 정상 경로다).
             Map.entry("com/kafkick/batch/api/VerifyReportController.java", 1),
             // 하나다 — 거절 응답 봉투의 timestamp. BatchApiExceptionHandler 와 같은 축이고
             // 같은 이유로 예산에 든다: 판정이 아니라 **응답 메타**다. 이 필터는
