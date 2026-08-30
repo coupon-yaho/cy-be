@@ -215,10 +215,11 @@ class ExpireCancelRaceTest {
     /**
      * 취소 경로가 할 일을 <b>그 순서 그대로</b> 쓴다.
      *
-     * <p><b>재고를 먼저 잠근다.</b> {@code CouponCancelService} 가 실제로 그렇게 한다 —
-     * {@code lockStock} → 조건부 {@code UPDATE} → {@code release} → 이력. 예전에는 이 헬퍼가
-     * <b>만료 쪽 순서</b>(발급건 먼저)를 쓰고 있었고, 그래서 두 순서가 어긋나 있다는 사실을
-     * 이 테스트가 <b>구조적으로 볼 수 없었다.</b> 계약을 재는 것이 아니라 계약을 비켜 간 것이다.
+     * <p><b>재고를 마지막에 잠근다.</b> {@code CouponCancelService} 가 실제로 그렇게 한다 —
+     * 조건부 {@code UPDATE} → {@code release} → 이력(CY-750). <b>이 헬퍼가 저장소와 다른
+     * 순서를 쓰면 이 테스트는 계약을 재는 것이 아니라 비켜 간다</b> — 실제로 두 번 그랬다.
+     * 처음에는 만료 쪽 순서를 썼고, 그다음에는 옛 취소 순서(재고 먼저)를 그대로 뒀다.
+     * 둘 다 순환이 픽스처에서 성립하지 않게 만들어 초록으로 지나갔다.
      *
      * <p><b>조건부 {@code UPDATE} 의 반환값으로 판단하는 것이 핵심이다.</b> 먼저 조회해서
      * 상태를 확인하고 재고를 되돌리는 구조면, 그 사이에 만료가 끼어들어 둘 다 되돌린다.
@@ -227,12 +228,10 @@ class ExpireCancelRaceTest {
      */
     private int cancelIfStillIssued() {
         return new TransactionTemplate(transactionManager).execute(status -> {
-            // 재고 행을 먼저 잠근다 — 실제 취소 경로(CouponCancelService)의 첫 문장이다.
-            jdbcClient.sql("SELECT coupon_id FROM coupon_stocks WHERE coupon_id = :coupon "
-                            + "FOR UPDATE")
-                    .param("coupon", couponId)
-                    .query(Long.class)
-                    .list();
+            // **재고를 먼저 잠그지 않는다.** 실제 취소 경로(CouponCancelService)가
+            // issuances 를 먼저 잡고 재고는 마지막에 잡는다(CY-750). 여기서 옛 순서를
+            // 흉내 내면 이 테스트만 저장소와 다른 세계를 잰다 — 그러면 만료×취소 순환이
+            // 픽스처에서 아예 성립하지 않아, 계약이 깨져도 초록으로 지나간다.
             int changed = jdbcClient.sql("""
                             UPDATE issuances
                                SET status = 'CANCELLED', updated_at = :at
@@ -409,6 +408,14 @@ class ExpireCancelRaceTest {
                             + "경로와 순서가 역전돼 1213 이 난다")
                     .isEqualTo(1);
 
+            // **원인까지 지목한다.** 위 단언만 있으면 되돌린 구현이 "타임아웃" 으로만
+            // 빨개져, 락 대기인지 배선이 끊긴 것인지 안 갈린다. 이 값이 양수면 누군가
+            // coupon_stocks 를 쥔 채 남을 세워 둔 것이고, 그것이 곧 옛 순서다.
+            assertThat(stockLockWaits())
+                    .as("이 자리에서는 아무도 coupon_stocks 를 기다리면 안 된다. 양수면 "
+                            + "만료가 재고를 미리 잡은 것이다")
+                    .isZero();
+
             PauseBeforeReleaseConfig.RESUME.countDown();
 
             JobExecution execution = job.get(60, TimeUnit.SECONDS);
@@ -428,12 +435,10 @@ class ExpireCancelRaceTest {
     /** 만료 대상이 아닌 형제 건을 취소한다. 회차가 같으므로 재고는 같은 행을 건드린다. */
     private int cancelSibling() {
         return new TransactionTemplate(transactionManager).execute(status -> {
-            // 재고 행을 먼저 잠근다 — 실제 취소 경로(CouponCancelService)의 첫 문장이다.
-            jdbcClient.sql("SELECT coupon_id FROM coupon_stocks WHERE coupon_id = :coupon "
-                            + "FOR UPDATE")
-                    .param("coupon", couponId)
-                    .query(Long.class)
-                    .list();
+            // **재고를 먼저 잠그지 않는다.** 실제 취소 경로(CouponCancelService)가
+            // issuances 를 먼저 잡고 재고는 마지막에 잡는다(CY-750). 여기서 옛 순서를
+            // 흉내 내면 이 테스트만 저장소와 다른 세계를 잰다 — 그러면 만료×취소 순환이
+            // 픽스처에서 아예 성립하지 않아, 계약이 깨져도 초록으로 지나간다.
             int changed = jdbcClient.sql("""
                             UPDATE issuances
                                SET status = 'CANCELLED', updated_at = :at
@@ -459,23 +464,16 @@ class ExpireCancelRaceTest {
 
 
     /**
-     * 취소 세션이 <b>{@code coupon_stocks} 에서</b> 락을 기다리는 상태가 될 때까지 기다린다.
+     * {@code coupon_stocks} 행을 기다리다 <b>실제로 블록된</b> 요청 수.
      *
-     * <p>{@code data_lock_waits} 는 <b>실제로 블록된 요청만</b> 담는다. 그래서 이 값이 1 이
-     * 되는 것은 취소가 그 행을 요구했고 못 받았다는 관측이다 — 스레드가 늦은 것과 갈린다.
-     * 이 클래스가 {@code lockedTables()} 로 이미 쓰는 것과 같은 방식이다.
+     * <p><b>지금은 음의 단언으로 쓴다.</b> 예전에는 이 값이 <i>양수가 될 때까지</i> 기다렸다 —
+     * 만료가 청크 시작에 재고를 잡던 시절, 취소가 그 락에서 블록되는 것을 확인하는 장치였다.
+     * 순서를 뒤집은 뒤로는 반대가 계약이다: 그 자리에서 <b>아무도 안 기다려야</b> 한다.
+     *
+     * <p>{@code data_lock_waits} 는 <b>실제로 블록된 요청만</b> 담는다. 그래서 0 이라는 것은
+     * "아직 요청을 안 했다" 가 아니라 <b>요청했는데 안 막혔다</b> 는 관측이다 — 취소가 이미
+     * 끝난 것을 함께 단언하므로 그 구분이 선다.
      */
-    private void awaitStockLockWait() {
-        Awaitility.await("취소가 coupon_stocks 락 대기에 들어가기")
-                .atMost(Duration.ofSeconds(30))
-                .pollInterval(Duration.ofMillis(50))
-                .untilAsserted(() -> assertThat(stockLockWaits())
-                        .as("취소가 coupon_stocks 에서 블록되지 않았다. 만료가 그 행을 안 잡고 "
-                                + "있다는 뜻이고, 그러면 이 테스트가 재려던 것이 사라진다")
-                        .isPositive());
-    }
-
-    /** {@code coupon_stocks} 행을 기다리다 <b>실제로 블록된</b> 요청 수. */
     private int stockLockWaits() {
         Integer waits = jdbcClient.sql("""
                         SELECT COUNT(*)
@@ -491,16 +489,16 @@ class ExpireCancelRaceTest {
 
     /**
      * <b>{@code releaseStock} 직전에 멈춘다.</b> 그 자리는 청크 트랜잭션이 <b>열려 있고</b>
-     * 만료가 이미 대상 행을 넘긴 뒤이며, <b>재고 행은 우리가 쥐고 있다.</b>
+     * 만료가 이미 대상 행을 넘긴 뒤이고, <b>재고 행은 아직 아무도 안 쥐고 있다.</b>
      *
-     * <p><b>재개 신호의 주인이 바뀌었다.</b> 예전에는 <i>취소가 끝나면</i> 청크가 이어 갔다 —
-     * 그때는 취소가 재고 행을 락 없이 지나갈 수 있어서 그 순서가 성립했다. 이제는 취소가
-     * <b>우리 락을 기다리므로</b> 그 신호를 기다리면 서로 기다리다 시한에 걸린다.
-     * 그래서 <b>본문이</b> 재개를 신호한다.
+     * <p><b>멈추는 자리가 {@code lockStock} 앞이다.</b> 청크 순서가
+     * {@code expireBatch → appendExpireHistories → lockStock → releaseStock} 이므로
+     * {@code appendExpireHistories} 직후는 재고 락을 <b>아직 안 잡은</b> 지점이다.
+     * 그래서 같은 회차의 취소가 끼어들 수 있고, 그 겹침이 이 테스트가 재는 것이다.
      *
-     * <p>{@code appendExpireHistories} 뒤에 건다 — 청크 순서가
-     * {@code lockStock → expireBatch → appendExpireHistories → releaseStock} 이라
-     * 그 자리가 곧 "재고 차감 직전" 이다.
+     * <p><b>본문이 재개를 신호한다.</b> 취소가 끝난 것을 본 뒤에 청크를 이어 가게 해서,
+     * 겹침이 <b>실제로 성립했다</b>는 것을 확정한다. 취소 완료를 안 보고 재개시키면
+     * 두 트랜잭션이 겹쳤는지 아닌지가 스케줄러에 달린다.
      */
     @TestConfiguration
     static class PauseBeforeReleaseConfig {
