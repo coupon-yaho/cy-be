@@ -256,21 +256,22 @@ public class ExpireJobConfig {
                                 + expirations.latestHistoryId());
                         return RepeatStatus.FINISHED;
                     }
-                    // ③ 여기가 이 청크의 첫 쓰기 락이다. 발급·취소가 잠그는 그 행을
-                    //    같은 방식으로 먼저 잡아야 순환이 안 생긴다.
-                    if (!expirations.lockStock(chunk.couponId())) {
-                        // blockedCoupons 가 재고 행 없는 회차를 이미 걸렀어야 한다.
-                        // 여기 왔다는 것은 그 사이에 재고 행이 사라졌다는 뜻이고, 판정이
-                        // 아니라 사고다.
-                        throw new BusinessException(
-                                ExpirationErrorCode.STOCK_ROW_MISSING,
-                                "재고 행이 없는 회차입니다. 그 행을 만들어야 합니다 — "
-                                        + "지금 누가 만들고 있는 중이라면 다음 주기가 알아서 "
-                                        + "지나갑니다. 회차=" + chunk.couponId());
-                    }
-
-                    // ④ 후보를 다시 판단한다. 후보 수가 아니라 이 매치 건수가 만료 건수다 —
+                    // ③ 후보를 다시 판단한다. 후보 수가 아니라 이 매치 건수가 만료 건수다 —
                     //    ①과 ③ 사이에 사용·취소된 건은 여기서 안 잡힌다.
+                    //
+                    // ⚠️ **재고 행은 여기서 안 잡는다.** 한때 이 위에서 lockStock 으로 먼저
+                    //    잡았고 주석도 "발급·취소가 잠그는 그 행을 먼저 잡아야 순환이 안
+                    //    생긴다" 고 적었는데, 그 전제가 CY-750 에서 뒤집혔다 — 발급·취소가
+                    //    재고를 **마지막에** 잡도록 바뀌었다. 그대로 두면 순서가 반대라
+                    //    ABBA 가 성립한다(취소: issuances → stocks / 만료: stocks → issuances).
+                    //
+                    //    먼저 잡는 것은 성능에서도 나쁘다. 재고 행 하나는 **회차 전체**의
+                    //    직렬화 지점이라, 그것을 청크 내내 쥐면 그 회차의 발급·취소가 통째로
+                    //    멈춘다. 뒤로 옮기면 막히는 범위가 **만료 대상 발급건**으로 줄고,
+                    //    그 사람들은 어차피 만료될 쿠폰의 주인이다.
+                    //
+                    //    실측(회차 하나, 청크 1000건): UPDATE 32.5ms + INSERT 7.5ms.
+                    //    그만큼을 회차 단위로 잠그던 것이 행 단위로 바뀐다.
                     long lastId = chunk.lastId();
                     int expired = expirations.expireBatch(
                             asOf, committedAt, afterId, lastId, chunk.couponId());
@@ -290,15 +291,35 @@ public class ExpireJobConfig {
 
                         // V2 회차면 Redis 재고도 되돌린다(설계 §5 · CY-750).
                         //
-                        // **releaseStock 앞에 둔다.** 그 UPDATE 는 회차 재고 행에 X 락을 걸고
-                        // 그 락은 커밋까지 유지되므로, 뒤로 밀면 엔진 판별의 coupons 왕복이
-                        // 락 보유 구간 안으로 들어간다. 여기는 afterCommit 등록만 하는
-                        // 호출이라 앞당겨도 안전하다 — 롤백되면 afterCommit 은 애초에
-                        // 실행되지 않는다.
+                        // **재고 락 앞에 둔다.** 아래 lockStock·releaseStock 이 회차 재고 행에
+                        // X 락을 걸고 그 락은 커밋까지 유지되므로, 뒤로 밀면 엔진 판별의
+                        // coupons 왕복이 락 보유 구간 안으로 들어간다. 여기는 afterCommit
+                        // 등록만 하는 호출이라 앞당겨도 안전하다 — 롤백되면 afterCommit 은
+                        // 애초에 실행되지 않는다.
                         v2StockRestoration.restoreAfterCommit(chunk.couponId(), expired);
 
-                        // 재고 행은 ③에서 이미 우리 것이라, 여기서 실패하는 경우는 하나뿐이다:
-                        // 뺄 재고가 모자란다. 재고 행이 없는 경우는 ③이 먼저 잡는다.
+                        // ⑤ **재고 행은 여기서 처음 잡는다.** 발급·취소와 같은 순서다
+                        //    (issuances → issuance_histories → coupon_stocks).
+                        //
+                        //    잠그는 이유는 순서가 아니라 **진단**이다. releaseStock 은
+                        //    조건부 원자 UPDATE(active_count >= :expired)라 정합성 자체는
+                        //    락 없이도 지켜지지만, 0 을 돌려줬을 때 "행이 없다" 와
+                        //    "재고가 모자란다" 를 못 가른다. 앞에서 존재를 확인해 두면
+                        //    아래 실패가 후자 하나로 좁혀진다.
+                        //
+                        //    expired 가 0 이면 여기 안 온다 — 뺄 것이 없으면 잠글 이유도 없다.
+                        if (!expirations.lockStock(chunk.couponId())) {
+                            // blockedCoupons 가 재고 행 없는 회차를 이미 걸렀어야 한다.
+                            // 여기 왔다는 것은 그 사이에 재고 행이 사라졌다는 뜻이고, 판정이
+                            // 아니라 사고다.
+                            throw new BusinessException(
+                                    ExpirationErrorCode.STOCK_ROW_MISSING,
+                                    "재고 행이 없는 회차입니다. 그 행을 만들어야 합니다 — "
+                                            + "지금 누가 만들고 있는 중이라면 다음 주기가 알아서 "
+                                            + "지나갑니다. 회차=" + chunk.couponId());
+                        }
+                        // 행이 있는 것을 방금 확인했으므로 여기서 실패하는 경우는 하나뿐이다:
+                        // 뺄 재고가 모자란다.
                         if (expirations.releaseStock(chunk.couponId(), expired, committedAt) != 1) {
                             throw new BusinessException(
                                     ExpirationErrorCode.STOCK_UNDERFLOW,

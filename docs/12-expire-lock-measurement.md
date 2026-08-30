@@ -772,12 +772,15 @@ SIGKILL 했다(MySQL 8.4).
 ```
 1  후보 선조회        락 없음. id 오름차순 LIMIT chunkSize
 2  연속부 자르기       첫 회차와 같은 것까지만        ExpireChunk.from
-3  재고 행 잠그기      SELECT … FOR UPDATE           ← 첫 쓰기 락
-4  만료 UPDATE        그 회차 · (afterId, lastId]
-5  이력 INSERT
+3  만료 UPDATE        그 회차 · (afterId, lastId]    ← 첫 쓰기 락(issuances)
+4  이력 INSERT
+5  재고 행 잠그기      SELECT … FOR UPDATE           ← 진단용. 순서 때문이 아니다
 6  재고 차감
 7  afterId = lastId
 ```
+
+> **⚠️ 3 과 5 의 자리가 2026-08-30 에 바뀌었다 — 아래 §11.1 을 읽어라.** 이 절이 처음
+> 적을 때는 재고 행을 3 에서 잠갔고 그것이 첫 쓰기 락이었다. 지금은 마지막이다.
 
 **한 청크는 회차 하나만 담는다.** 후보가 여러 회차에 걸치면 그 재고 행을 전부 잠가야 하고,
 그동안 그 회차들의 발급이 전부 선다. 연속부까지만 자르면 잠기는 것이 **재고 한 행**이고
@@ -797,6 +800,47 @@ SIGKILL 했다(MySQL 8.4).
 | `expiredCouponCount` · `stockRowCount` | **삭제.** `lockStock` 이 재고 행 존재를 먼저 보장하고, 회차가 하나로 고정된다 |
 | `releaseStock` | `JOIN … GROUP BY` 제거 → `WHERE coupon_id = :c AND active_count >= :n` |
 | 재고 행 없음 vs 모자람 | 갈라지는 자리가 달라졌다 — 없음은 `lockStock` false, 모자람은 `releaseStock` 갱신 0 |
+
+### 11.1 방향이 다시 뒤집혔다 — 2026-08-30
+
+**위에서 고른 방향의 근거가 사라졌다.** 그때 재고를 먼저 잡기로 한 이유는 이것이었다.
+
+> 발급 경로가 이미 있었고, 그쪽이 재고를 먼저 잡고 있었다. **바꿀 수 있는 쪽은 만료였다.**
+
+CY-750 이 그 전제를 바꿨다. 발급·취소·사용취소 **셋 다** 재고를 마지막에 잡도록 옮겼다.
+
+| 경로 | 첫 락 (지금) |
+|---|---|
+| `CouponIssueService` | `issuances` — 재고는 `occupyOne` 이 마지막에 |
+| `CouponCancelService` | `issuances` — 재고는 `release` 가 마지막에 |
+| `CouponCancelUseService` | `issuances` — 같음 |
+| **만료 (이 잡)** | **`issuances`** ← 맞춰서 옮겼다 |
+
+**양방향을 다시 쟀다**(MySQL 8.4 · READ COMMITTED · 두 세션 · 같은 픽스처).
+
+| 조합 | 결과 |
+|---|---|
+| 옛 순서 — 만료 `stocks` 먼저 · 취소 `issuances` 먼저 | **1213** — §11 재현 |
+| 새 순서 — 둘 다 `issuances` → `stocks` | **데드락 0회 / 6회** |
+
+**성능도 같은 방향이다.** 재고 행 하나는 **회차 전체**의 직렬화 지점이라, 그것을 청크
+내내 쥐면 그 회차의 발급이 통째로 멈춘다.
+
+```
+청크 1000건    UPDATE issuances 32.5ms + INSERT histories 7.5ms
+```
+
+먼저 잡으면 그 40ms 동안 **회차 단위**로 잠긴다. 뒤로 옮기면 막히는 범위가
+**만료 대상 발급건**으로 줄고, 그 사람들은 어차피 만료될 쿠폰의 주인이다.
+
+**`lockStock` 은 지우지 않았다.** 순서 때문이 아니라 **진단** 때문에 남는다 —
+`releaseStock` 이 0 을 돌려줬을 때 *"행이 없다"* 와 *"재고가 모자란다"* 를 가르는 자리다.
+`releaseStock` 은 조건부 원자 UPDATE(`active_count >= :expired`)라 정합성 자체는 락 없이도
+지켜진다.
+
+**딸려 온 것** — `ExpireCancelRaceTest` 의 단언이 되돌아갔다. 취소가 **기다린다** 에서
+**끼어들어도 둘 다 빠진다** 로 바뀌었고, 그것이 맞는 이유는 양쪽이 상대 차감을 쓰기
+때문이다. 절대값으로 바꾸면 그 순간 한 번만 빠진다 — 그 테스트가 그것을 잡는다.
 
 ### `V2026082901` — 후보를 뽑는 비용
 

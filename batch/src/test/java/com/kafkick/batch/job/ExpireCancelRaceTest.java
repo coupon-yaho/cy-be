@@ -369,21 +369,22 @@ class ExpireCancelRaceTest {
      * 위험한 조합은 <b>같은 회차의 다른 발급건</b>이다. 발급건 쪽 락은 안 겹치지만
      * <b>재고 행이 겹친다.</b>
      *
-     * <p><b>락 순서를 뒤집으면서 이 자리의 답이 바뀌었다.</b> 예전에는 만료가 재고를 마지막에
-     * 잡아서, 취소가 <b>락 없이 통과해 같은 재고 행을 먼저 건드렸다</b> — 두 트랜잭션이 정말로
-     * 겹쳤고, 안전한 이유는 양쪽이 <i>상대 차감</i>({@code active_count - N})을 쓴다는 것뿐이었다.
+     * <p><b>이 자리의 답이 두 번 바뀌었다.</b> 처음에는 만료가 재고를 마지막에 잡아 취소가
+     * 락 없이 통과했고, 그다음 만료를 청크 시작으로 옮겨 취소가 <b>기다리게</b> 했다.
+     * <b>지금은 다시 마지막이다</b> — 발급·취소·사용취소 셋이 CY-750 에서 재고를 마지막으로
+     * 옮겼고, 만료만 반대로 두면 그 셋과 사이에 1213 이 난다({@code docs/12} §11).
      *
-     * <p>이제 만료가 <b>청크 시작에</b> 그 행을 잡는다. 같은 회차의 취소는 끼어드는 대신
-     * <b>기다린다.</b> 그것이 이 변경의 값어치다 — 겹치지 않으면 순서가 어긋날 일도 없고,
-     * 취소가 1213 으로 죽을 일도 없다. 그래서 이 테스트가 재는 것도 바뀐다:
-     * <b>정말로 기다리는가</b>, 그리고 <b>기다린 뒤에 자기 몫이 빠지는가</b>.
+     * <p>그래서 이 테스트가 재는 것도 되돌아간다. <b>두 트랜잭션이 정말로 겹치고</b>, 그래도
+     * 재고가 맞는 이유는 <b>양쪽이 상대 차감</b>({@code active_count - N})을 쓰기 때문이다.
+     * 절대값으로 바뀌면 겹치는 순간 한쪽이 덮어써 한 번만 빠진다 — 마지막 단언이 그것을 잡는다.
      *
-     * <p>상대 차감은 그대로 지킨다. 절대값으로 바뀌면 직렬화돼 있어도
-     * {@code updated_at} 축이 어긋나므로, 마지막 단언이 여전히 그것을 잡는다.
+     * <p><b>기다림을 단언하지 않는다.</b> 이제 기다릴 이유가 없다 — 만료는 그 시점에 재고 행을
+     * 안 쥐고 있고, 취소가 건드리는 발급건도 만료 대상과 다르다. 없는 성질을 단언하면 그것이
+     * 락을 되돌리라는 압력이 된다.
      */
     @Test
-    @DisplayName("청크가 열린 동안 같은 회차의 취소는 기다렸다가 자기 몫을 뺀다")
-    void concurrentCancelOnSiblingWaitsThenDeducts() throws Exception {
+    @DisplayName("청크가 열린 동안 같은 회차의 취소가 끼어들어도 재고는 둘 다 빠진다")
+    void concurrentCancelOnSiblingOverlapsAndBothDeduct() throws Exception {
         // 스레드 둘이 필요하다 — 하나는 취소, 하나는 잡. 본문은 그 사이에서 판정만 한다.
         ExecutorService worker = Executors.newSingleThreadExecutor();
         ExecutorService worker0 = Executors.newSingleThreadExecutor();
@@ -399,24 +400,18 @@ class ExpireCancelRaceTest {
                     .as("청크가 재고 차감 직전에서 멈춰야 이 겹침을 만들 수 있다")
                     .isTrue();
 
-            // **대기의 원인을 직접 본다.** 벽시계 타임아웃만으로는 "락에서 기다린다" 와
-            // "스레드가 아직 시작도 안 했다" 를 구분하지 못한다 — 그러면 lockStock 이
-            // 지워져 취소가 통과해도 CI 가 느린 날 초록으로 지나간다. 한 방향으로만
-            // 조용히 통과하는 단언은 없는 단언과 같다.
-            awaitStockLockWait();
-
-            assertThat(cancelled.isDone())
-                    .as("**여기가 요지다.** 만료가 재고 행을 쥐고 있으므로 같은 회차의 취소는 "
-                            + "끼어들지 못하고 기다린다. 끝나 있으면 락 순서가 예전으로 "
-                            + "돌아간 것이고, 그때는 취소가 1213 으로 죽을 수 있다")
-                    .isFalse();
+            // **여기가 요지다.** 만료가 청크를 열어 둔 채 멈춰 있는데도 취소가 끝난다 —
+            // 재고 행을 안 쥐고 있기 때문이다. 두 트랜잭션이 정말로 겹친 상태이고,
+            // 그래도 아래 재고 단언이 맞는 이유는 양쪽이 상대 차감을 쓰기 때문이다.
+            assertThat(cancelled.get(30, TimeUnit.SECONDS))
+                    .as("만료가 재고를 안 쥐고 있으므로 취소가 끼어들 수 있다. 여기서 "
+                            + "멈추면 만료가 재고를 미리 잡은 것이고, 그때는 발급·취소 "
+                            + "경로와 순서가 역전돼 1213 이 난다")
+                    .isEqualTo(1);
 
             PauseBeforeReleaseConfig.RESUME.countDown();
 
             JobExecution execution = job.get(60, TimeUnit.SECONDS);
-            assertThat(cancelled.get(30, TimeUnit.SECONDS))
-                    .as("기다린 뒤에는 통과한다. 0 이면 취소가 죽은 것이다")
-                    .isEqualTo(1);
             assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         } finally {
             worker.shutdownNow();
