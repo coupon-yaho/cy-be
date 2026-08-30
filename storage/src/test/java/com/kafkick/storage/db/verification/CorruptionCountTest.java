@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.storage.db.RepositoryTest;
 
@@ -108,26 +109,44 @@ class CorruptionCountTest {
     }
 
     /**
-     * <b>반올림하면 그럴듯한 거짓말이 제출물에 실린다.</b> 규칙 둘짜리 종류에 행이 홀수로
-     * 남으면 계약이 깨진 것이고, 그때 나온 값은 무의미하다 — 그것을 {@code HALF_UP} 으로
-     * 접으면 화면과 매일 커밋되는 리포트에 <b>틀렸다는 표시 없이</b> 실린다.
+     * <b>계약이 깨지면 그럴듯한 숫자를 안 내보낸다.</b> 규칙별 행수가 갈린 순간
+     * "심은 오염 수" 라는 값이 무엇의 개수도 아니게 되는데, 그것을 화면과 매일 커밋되는
+     * 리포트에 <b>틀렸다는 표시 없이</b> 실으면 아무도 못 본다.
      *
-     * <p>이 필드를 만든 이유가 <i>"틀린 숫자보다 없는 숫자가 낫다"</i> 였으므로, 여기서
-     * 같은 기준을 지킨다.
+     * <p>이 필드를 만든 이유가 <i>"틀린 숫자보다 없는 숫자가 낫다"</i> 였으므로 같은 기준을
+     * 지킨다.
      */
     @Test
-    @DisplayName("정수로 안 떨어지면 반올림하지 않고 죽는다 — 그럴듯한 거짓말을 안 싣는다")
-    void refusesToRoundWhenContractIsBroken() {
+    @DisplayName("규칙별 행수가 갈리면 죽는다 — 그럴듯한 거짓말을 안 싣는다")
+    void refusesWhenRulesAreUneven() {
         rows(3, FindingType.ILLEGAL_TRANSITION, 3);
         rows(3, FindingType.STOCK_MISMATCH, 2);
 
-        assertThat(rowCount())
-                .as("전제가 깨졌다 — 5행 ÷ 규칙 2개 라야 소수부가 남는다")
-                .isEqualTo(5);
         assertThatThrownBy(() -> adapter.corruptionCountOf(SEED_RUN))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("정수로 안 떨어집니다")
-                .hasMessageContaining("2.5");
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("편차=1");
+    }
+
+    /**
+     * <b>이 검사가 앞선 구현을 잡았다.</b> 한때 {@code SUM(행수 / 규칙 수)} 로 두고
+     * <i>"소수부가 남으면 계약이 깨진 것"</i> 이라 적었는데, <b>그 검사가 계약보다 약했다</b> —
+     * 4행·2행은 합 6 ÷ 규칙 2 = 3 으로 <b>딱 떨어져서 통과한다.</b> 깨진 계약이 정상
+     * 오염 수로 나가는 자리였다.
+     *
+     * <p>계약이 요구하는 것은 나눗셈이 떨어지는 것이 아니라 <b>규칙별 행수가 같은 것</b>이다.
+     */
+    @Test
+    @DisplayName("나눗셈이 떨어져도 규칙별로 갈렸으면 죽는다 — 소수부 검사로는 못 잡는다")
+    void refusesEvenlyDivisibleButUnevenRules() {
+        rows(3, FindingType.ILLEGAL_TRANSITION, 4);
+        rows(3, FindingType.STOCK_MISMATCH, 2);
+
+        assertThat(rowCount() % 2)
+                .as("전제가 깨졌다 — 총 행수가 규칙 수로 나눠떨어져야 이 검사가 뜻이 있다")
+                .isZero();
+        assertThatThrownBy(() -> adapter.corruptionCountOf(SEED_RUN))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("편차=2");
     }
 
     @Test
@@ -140,16 +159,24 @@ class CorruptionCountTest {
     }
 
     /**
-     * <b>구현과 계약을 맞대 본다.</b> {@code docs/contract.json} 의 {@code corruption.matrix}
-     * 를 그대로 심고, 세어 나온 값이 같은 파일의 {@code corruption.injections} 와 맞는지 본다.
+     * <b>이 검사가 재는 것을 정확히 적는다.</b> {@code corruption.matrix} 를 그대로 심고
+     * 세어 나온 값이 같은 파일의 {@code corruption.injections} 와 맞는지 본다.
+     *
+     * <p>그러므로 이것이 잡는 것은 둘이다 — <b>계약 파일 안에서 matrix 와 injections 가
+     * 어긋나는 것</b>, 그리고 <b>구현이 matrix 모양에서 injections 를 못 재현하는 것</b>.
+     *
+     * <p><b>잡지 못하는 것도 적는다.</b> 실제 시드({@code cy-seed})의 출력을 안 쓰므로
+     * <b>시드만 바뀌고 계약이 그대로인 드리프트는 여기서 안 잡힌다.</b> 한때 이 자리에
+     * <i>"시드가 오염 구성을 바꾸면서 계약을 안 고치면 갈린다"</i> 고 적었는데 <b>거짓이었다</b> —
+     * 리뷰가 잡았다. 그 축은 오염셋에 실제로 검증을 돌릴 때 {@code missing}·{@code unexpected}
+     * 가 드러내고, cy-seed 쪽 {@code verify.py} 도 같은 대조를 한다.
      *
      * <p>계약 값을 응답에 <b>싣지는 않는다</b> — 그러면 선언을 측정인 척 내보내는 것이다.
-     * 여기서는 <b>검사에만</b> 쓴다. 시드가 오염 구성을 바꾸면서 계약을 안 고치거나,
-     * 계약만 고치고 시드를 안 고치면 이 자리에서 갈린다.
+     * 여기서는 검사에만 쓴다.
      */
     @Test
-    @DisplayName("계약이 선언한 오염 수와 구현이 센 값이 같다")
-    void agreesWithContract() throws IOException {
+    @DisplayName("계약의 matrix 로 심으면 계약의 injections 가 나온다")
+    void reproducesContractInjectionsFromItsMatrix() throws IOException {
         JsonNode corruption = new ObjectMapper()
                 .readTree(Files.readString(CONTRACT, StandardCharsets.UTF_8))
                 .path("corruption");

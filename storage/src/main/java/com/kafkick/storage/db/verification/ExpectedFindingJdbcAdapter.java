@@ -1,14 +1,15 @@
 // 정답 매니페스트와 검출을 양방향으로 대조합니다.
 package com.kafkick.storage.db.verification;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 
 /**
  * <b>MySQL 에는 {@code MINUS} 가 없습니다.</b> {@code LEFT JOIN … IS NULL} 로 같은 뜻을 만듭니다.
@@ -126,45 +127,51 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
     }
 
     /**
-     * <b>종류별로 "행수 ÷ 그 종류가 쓴 규칙 수" 를 더한다.</b> 오염 하나가 자기 규칙마다
-     * 한 행씩 낳으므로, 그 나눗셈이 곧 그 종류에 심은 오염 수다.
+     * <b>오염 종류마다 "규칙 하나가 가진 행수" 가 곧 그 종류에 심은 오염 수다.</b>
+     * 오염 하나가 자기 규칙 목록마다 정확히 한 행씩 낳기 때문이다
+     * ({@code docs/contract.json} 의 {@code corruption.matrix}).
      *
-     * <p><b>나눗셈이 딱 떨어지지 않으면 계약이 깨진 것이다</b> — 어떤 오염 종류가 규칙
-     * 하나에만 행을 더 남겼다는 뜻이고, 그러면 이 값 자체가 무의미하다.
+     * <p><b>그래서 나누지 않고 규칙별로 세어 맞대 본다.</b> 한때
+     * {@code SUM(행수 / 규칙 수)} 로 두고 <i>"소수부가 남으면 계약이 깨진 것"</i> 이라
+     * 적었는데, <b>그 검사가 계약보다 약했다</b> — 규칙 둘짜리 종류에 4행·2행이 들어와도
+     * 합 6 ÷ 2 = 3 으로 딱 떨어져 <b>깨진 계약이 정상 오염 수로 나간다.</b> 계약이 요구하는
+     * 것은 나눗셈이 떨어지는 것이 아니라 <b>규칙별 행수가 같은 것</b>이다.
      *
-     * <p>그때 <b>반올림해서 넘기지 않는다.</b> 그러면 그럴듯한 숫자가 제출물과 화면에
-     * 실리고, 틀렸다는 것을 아무도 못 본다 — 이 응답은 매일 공개 저장소에 커밋된다.
-     * 없는 숫자보다 <b>틀린 숫자가 나쁘다</b>는 것이 이 필드를 만든 이유이기도 하다.
-     * 그래서 소수부가 남으면 그 사실과 실제 값을 싣고 죽는다.
+     * <p>그래서 종류별로 규칙별 행수의 최소·최대를 같이 받아, 갈리면 죽는다. 값 자체는
+     * 최대값을 쓴다(같으므로 어느 쪽이든 같다).
      *
-     * <p>(지금 데이터는 {@code 700.0000} 으로 떨어지는 것을 실측했다.)
+     * <p><b>못 잡는 것도 적어 둔다.</b> 어떤 종류의 규칙이 <b>통째로 빠진</b> 경우는
+     * 여기서 안 보인다 — 남은 규칙들끼리는 고르기 때문이다. 그것은 DB 만으로는 알 수 없고
+     * (기대 규칙 목록이 DB 에 없다) {@code CorruptionCountTest} 가 계약과 맞대 본다.
+     *
+     * <p>(지금 데이터는 여덟 (종류,규칙) 짝이 전부 100 인 것을 실측했다 — 오염 700.)
      */
     @Override
     public int corruptionCountOf(long seedRunId) {
-        BigDecimal total = jdbcClient.sql("""
-                        SELECT SUM(rows_per_type / rules_per_type)
-                          FROM (SELECT COUNT(*)                     AS rows_per_type,
-                                       COUNT(DISTINCT finding_type) AS rules_per_type
-                                  FROM expected_findings
-                                 WHERE seed_run_id = :seedRunId
+        return jdbcClient.sql("""
+                        SELECT COALESCE(SUM(mx), 0)             AS corruption_count,
+                               COALESCE(SUM(mx - mn), 0)        AS unevenness
+                          FROM (SELECT MIN(rows_per_rule) AS mn, MAX(rows_per_rule) AS mx
+                                  FROM (SELECT corrupt_type, finding_type,
+                                               COUNT(*) AS rows_per_rule
+                                          FROM expected_findings
+                                         WHERE seed_run_id = :seedRunId
+                                         GROUP BY corrupt_type, finding_type) per_rule
                                  GROUP BY corrupt_type) per_type
                         """)
                 .param("seedRunId", seedRunId)
-                .query(BigDecimal.class)
-                .optional()
-                .orElse(null);
-
-        if (total == null) {
-            return 0;
-        }
-        if (total.stripTrailingZeros().scale() > 0) {
-            throw new IllegalStateException(
-                    ("오염 수가 정수로 안 떨어집니다: seedRunId=%d 합=%s. "
-                            + "오염 하나가 자기 규칙마다 한 행씩 낳는다는 계약이 깨졌습니다 "
-                            + "— docs/contract.json 의 corruption.matrix 와 expected_findings 를 "
-                            + "맞대 보십시오.").formatted(seedRunId, total.toPlainString()));
-        }
-        return total.intValueExact();
+                .query((rs, rowNum) -> {
+                    long uneven = rs.getLong("unevenness");
+                    if (uneven > 0) {
+                        throw new BusinessException(
+                                VerificationErrorCode.CORRUPTION_MANIFEST_UNEVEN,
+                                "seedRunId=%d 규칙별 행수 편차=%d. docs/contract.json 의 "
+                                        .formatted(seedRunId, uneven)
+                                        + "corruption.matrix 와 expected_findings 를 맞대 보십시오.");
+                    }
+                    return rs.getInt("corruption_count");
+                })
+                .single();
     }
 
     @Override
