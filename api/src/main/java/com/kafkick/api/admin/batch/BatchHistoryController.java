@@ -78,7 +78,7 @@ public class BatchHistoryController {
      * @param jobName 특정 잡만 볼 때 지정합니다. 비우면 전체입니다
      * @param limit 최대 건수. 기본 50, 허용 1~200
      * @param caller 요청자 식별용. <b>권한 판정에 쓰지 않는다</b>({@code Caller} javadoc) —
-     *        이 파라미터가 하는 일은 {@code X-User-Id} 를 <b>필수로 만드는 것</b>이다
+     *        이 파라미터가 하는 일은 {@code X-Member-Id} 를 <b>필수로 만드는 것</b>이다
      *        ({@code CallerArgumentResolver} 가 없으면 400 을 던진다. {@code Optional<Caller>}
      *        로 선언하면 없어도 통과한다). 관리자 역할 확인은 이 메서드 밖에서 —
      *        {@code AdminWebConfig} 가 {@code /api/v1/admin/**} 에 건

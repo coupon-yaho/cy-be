@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
+import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 /**
@@ -53,7 +54,7 @@ class BatchHistoryDisabledHttpContractTest {
         return HttpClient.newHttpClient().send(
                 HttpRequest.newBuilder(URI.create(
                                 "http://localhost:" + port + "/api/v1/admin/batch-executions?limit=50"))
-                        .header("X-User-Id", "812934")
+                        .header(MemberRequestHeaders.MEMBER_ID, "812934")
                         .header("X-User-Role", "ADMIN")
                         .GET().build(),
                 HttpResponse.BodyHandlers.ofString());

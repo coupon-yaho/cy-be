@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.admin.dashboard.AdminDashboardController;
 
 /** 관리자 헤더 검사가 실제 HTTP 실패 봉투의 400·403 상태로 변환되는지 검증합니다. */
@@ -31,12 +32,12 @@ class AdminAuthorizationHttpContractTest {
     @Test
     @DisplayName("관리자 API는 누락되거나 ADMIN이 아닌 역할을 403으로 거부한다")
     void rejectsMissingOrIncorrectAdminRole() throws Exception {
-        mockMvc.perform(get("/api/v1/admin/overview").header("X-User-Id", "1"))
+        mockMvc.perform(get("/api/v1/admin/overview").header(MemberRequestHeaders.MEMBER_ID, "1"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-002"));
 
         mockMvc.perform(get("/api/v1/admin/overview")
-                        .header("X-User-Id", "1")
+                        .header(MemberRequestHeaders.MEMBER_ID, "1")
                         .header("X-User-Role", "admin"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("ADMIN-002"));
@@ -65,7 +66,7 @@ class AdminAuthorizationHttpContractTest {
         MockHttpServletRequestBuilder request =
                 get("/api/v1/admin/overview").header("X-User-Role", "ADMIN");
         if (userId != null) {
-            request.header("X-User-Id", userId);
+            request.header(MemberRequestHeaders.MEMBER_ID, userId);
         }
         mockMvc.perform(request)
                 .andExpect(status().isBadRequest())

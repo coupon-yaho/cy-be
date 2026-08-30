@@ -211,7 +211,7 @@ UNIQUE(template_id, open_at) -- 스케줄러 중복 실행 방어
 요청의 `X-User-Grade` 헤더로 등급을 받으므로 DB 조회가 없습니다. 검증은 락 밖에서 문자열 비교 한 번으로 끝납니다.
 
 ```
-X-User-Id: 812934
+X-Member-Id: 812934
 X-User-Grade: GOLD
 ```
 
@@ -618,7 +618,7 @@ Redis를 죽이면 v1만 살아남는다
 
 ## API
 
-공통 헤더 `X-User-Id` · `X-User-Grade` · 상태 변경은 `Idempotency-Key`
+공통 헤더 `X-Member-Id` · `X-User-Grade` · 상태 변경은 `Idempotency-Key`
 `X-User-Role`을 포함한 요청 헤더는 데모의 사용자·등급·역할 구분 값이며 인증 수단이 아니다.
 현재 `X-User-Role: ADMIN` 검사는 테스트·화면 계약일 뿐이고 관리자 접근을 보호하지 않는다.
 실제 인증 또는 외부 헤더를 제거·주입하는 신뢰된 게이트웨이 경계는 후속 작업이다.

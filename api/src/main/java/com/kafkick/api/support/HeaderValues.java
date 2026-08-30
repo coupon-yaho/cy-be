@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * SQL·HTML 문맥의 안전을 보장하지 않는다. 그런 문맥에서는 각자 이스케이프해야 한다.
  *
  * <p>형식이 정해진 헤더는 이걸 쓰지 말고 그 형식으로 직접 파싱한다. 예를 들어
- * {@code X-User-Id} 는 {@code long} 으로 파싱한다.
+ * {@code X-Member-Id} 는 {@code long} 으로 파싱한다.
  */
 public final class HeaderValues {
 

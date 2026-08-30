@@ -12,7 +12,7 @@ import com.kafkick.core.support.exception.BusinessException;
 /**
  * 관리자 HTTP 요청의 역할 헤더만 검증합니다.
  *
- * <p>{@code X-User-Id} 파싱과 {@code Caller} 생성은 기존 caller 필터·resolver가 전담합니다.
+ * <p>{@code X-Member-Id} 파싱과 {@code Caller} 생성은 기존 caller 필터·resolver가 전담합니다.
  * 이 interceptor는 관리자 경로에서 정확한 {@code X-User-Role: ADMIN}만 확인하며, 브라우저의 CORS
  * preflight는 실제 요청이 아니므로 역할 헤더 없이 통과시킵니다.</p>
  */
