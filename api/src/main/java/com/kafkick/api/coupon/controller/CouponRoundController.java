@@ -15,6 +15,7 @@ import com.kafkick.api.coupon.dto.response.CouponRoundDetailResponse;
 import com.kafkick.api.coupon.dto.response.IssuableCouponRoundPageResponse;
 import com.kafkick.api.coupon.dto.response.PublicCouponRoundPageResponse;
 import com.kafkick.api.support.ResponseEnvelope;
+import com.kafkick.api.support.auth.MemberGradeHeaderResolver;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupon.service.CouponRoundDetailQueryService;
 import com.kafkick.core.coupon.service.IssuableCouponRoundQueryService;
@@ -80,8 +81,10 @@ public class CouponRoundController {
             @RequestHeader(MemberRequestHeaders.MEMBER_ID)
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
-            @RequestHeader(MemberRequestHeaders.MEMBERSHIP_GRADE)
-            MembershipGrade membershipGrade,
+            @RequestHeader(value = MemberRequestHeaders.MEMBER_GRADE, required = false)
+            MembershipGrade memberGrade,
+            @RequestHeader(value = MemberRequestHeaders.MEMBERSHIP_GRADE, required = false)
+            MembershipGrade legacyMembershipGrade,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "페이지 번호는 0 이상이어야 합니다.")
             int page,
@@ -94,7 +97,10 @@ public class CouponRoundController {
                 IssuableCouponRoundPageResponse.from(
                         queryService.findPage(
                                 memberId,
-                                membershipGrade,
+                                MemberGradeHeaderResolver.resolve(
+                                        memberGrade,
+                                        legacyMembershipGrade
+                                ),
                                 timeProvider.instant(),
                                 page,
                                 size

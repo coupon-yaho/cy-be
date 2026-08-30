@@ -18,6 +18,7 @@ import com.kafkick.api.coupon.monitoring.CouponIssueMetrics;
 import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.support.RequestIdFilter;
+import com.kafkick.api.support.auth.MemberGradeHeaderResolver;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
@@ -47,8 +48,10 @@ public class CouponIssueController {
             @RequestHeader(MemberRequestHeaders.MEMBER_ID)
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
-            @RequestHeader(MemberRequestHeaders.MEMBERSHIP_GRADE)
-            MembershipGrade membershipGrade,
+            @RequestHeader(value = MemberRequestHeaders.MEMBER_GRADE, required = false)
+            MembershipGrade memberGrade,
+            @RequestHeader(value = MemberRequestHeaders.MEMBERSHIP_GRADE, required = false)
+            MembershipGrade legacyMembershipGrade,
             @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
             String idempotencyKey
     ) {
@@ -60,7 +63,7 @@ public class CouponIssueController {
                     requestId,
                     couponRoundId,
                     memberId,
-                    membershipGrade,
+                    MemberGradeHeaderResolver.resolve(memberGrade, legacyMembershipGrade),
                     idempotencyKey
             );
             couponIssueMetrics.recordSuccess(

@@ -55,7 +55,7 @@ class CouponRoundControllerTest {
     private TimeProvider timeProvider;
 
     @Test
-    @DisplayName("회원이 발급 가능한 쿠폰 회차 페이지를 조회한다")
+    @DisplayName("게이트웨이 회원 등급 헤더로 발급 가능한 쿠폰 회차 페이지를 조회한다")
     void findIssuableCouponRounds() throws Exception {
         when(timeProvider.instant()).thenReturn(AS_OF);
         when(queryService.findPage(
@@ -68,7 +68,7 @@ class CouponRoundControllerTest {
 
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "GOLD"))
+                        .header("X-Member-Grade", "GOLD"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.content.length()").value(1))
