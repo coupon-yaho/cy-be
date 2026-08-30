@@ -138,10 +138,25 @@ index_prefix() {
 seq_fix() {
   local schema="$1" t="$2" base="$3" pk="$4"
   echo "      다시 부어도 안 고쳐진다(V11 의 INSERT 는 비었을 때만, 그것도 0 을 넣는다)." >&2
-  echo "      아래를 $schema 에 직접 돌린 뒤 이 스크립트를 다시 돌려라:" >&2
+  echo "" >&2
+  echo "      ⚠️ 먼저 이 스키마를 보는 배치를 멈춰라." >&2
+  echo "         도는 중에 고치면 **이미 id 를 받아 갔지만 본 표에 아직 안 쓴 실행**과" >&2
+  echo "         경쟁한다 — 그 순간 MAX($pk) 가 실제보다 낮아 복구값이 도로 뒤처지고," >&2
+  echo "         그 실행이 커밋하는 순간 다음 id 가 중복된다." >&2
+  echo "" >&2
+  echo "      멈춘 뒤 아래를 $schema 에 돌리고, 이 스크립트를 다시 돌려라:" >&2
+  echo "" >&2
+  echo "        START TRANSACTION;" >&2
+  echo "        SELECT GREATEST(COALESCE((SELECT MAX(ID) FROM \`$t\`), 0)," >&2
+  echo "                        COALESCE((SELECT MAX(\`$pk\`) FROM \`$base\`), 0))" >&2
+  echo "          INTO @next;" >&2
   echo "        DELETE FROM \`$t\`;" >&2
-  echo "        INSERT INTO \`$t\` (ID, UNIQUE_KEY)" >&2
-  echo "          SELECT COALESCE(MAX(\`$pk\`), 0), '0' FROM \`$base\`;" >&2
+  echo "        INSERT INTO \`$t\` (ID, UNIQUE_KEY) VALUES (@next, '0');" >&2
+  echo "        COMMIT;" >&2
+  echo "" >&2
+  echo "      GREATEST 로 잡는 것은 **되돌아가지 않게** 하기 위해서다 — 지금 든 값이" >&2
+  echo "      본 표보다 앞서 있으면 그 값을 지킨다. 한 트랜잭션에 묶는 것은 DELETE 와" >&2
+  echo "      INSERT 사이에 빈 표가 보이지 않게 하기 위해서다." >&2
 }
 
 verify_schema() {
