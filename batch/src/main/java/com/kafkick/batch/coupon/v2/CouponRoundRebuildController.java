@@ -63,7 +63,7 @@ public class CouponRoundRebuildController {
             case CONFIRMATION_MISMATCH -> HttpStatus.BAD_REQUEST;
             case ROUND_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case REBUILD_IN_PROGRESS, STOCK_ROW_MISSING, ENGINE_NOT_V2,
-                 OVER_ISSUED_ROUND -> HttpStatus.CONFLICT;
+                 OVER_ISSUED_ROUND, REBUILD_FAILED -> HttpStatus.CONFLICT;
         };
     }
 }

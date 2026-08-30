@@ -1,7 +1,6 @@
 package com.kafkick.batch.coupon.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Driver;
 import java.time.Clock;
@@ -12,6 +11,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -234,10 +235,14 @@ class CouponRoundRebuildRunnerTest {
         openGateWithStaleCounters();
         insertIssuance(1, 1, "ISSUED");
 
-        assertThatThrownBy(() -> runner(seederThatRuns(() -> {
+        // 게이트를 닫은 뒤의 실패는 예외로 나가지 않는다 — 그러면 500 이 되어 "게이트가
+        // 닫혔다" 는 사실이 응답에서 사라진다. 결과로 나가고, 게이트는 닫힌 채다.
+        CouponRoundRebuildResult failed = runner(seederThatRuns(() -> {
             throw new IllegalStateException("시딩 도중 죽었다");
-        })).rebuild(ROUND_ID)).isInstanceOf(IllegalStateException.class);
+        })).rebuild(ROUND_ID);
 
+        assertThat(failed.status()).isEqualTo(CouponRoundRebuildStatus.REBUILD_FAILED);
+        assertThat(failed.gateClosed()).isTrue();
         assertThat(gate.readMeta(ROUND_ID)).isEmpty();
 
         CouponRoundRebuildResult rerun = runner().rebuild(ROUND_ID);
@@ -489,22 +494,75 @@ class CouponRoundRebuildRunnerTest {
     /**
      * drain 을 넘겨 커밋된 선점은 {@code everMembers} 에 없고, 시딩은 {@code issued} 를 통째로
      * 덮는다 — 그 회원의 Redis 층 1인 1매 방어가 사라지고 {@code uk_coupon_member} 만 남는다.
-     * <b>재구성이 그 사실을 스스로 말하지 않으면</b> 신호가 사후 {@code LUA_GAP} 하나뿐이다.
+     * 게이트가 아직 닫혀 있는 동안이 그것을 고칠 수 있는 마지막 순간이다.
      */
     @Test
-    @DisplayName("시딩 뒤에 커밋된 발급을 재구성이 스스로 보고한다 — issued 가 그만큼 모자라다")
-    void reportsIssuancesCommittedAfterSeeding() {
+    @DisplayName("시딩 뒤에 커밋된 발급을 최신 목록으로 다시 시딩해 메운다")
+    void reseedsOnceWhenIssuancesLandAfterSeeding() {
+        openGateWithStaleCounters();
+        insertIssuance(1, 1, "ISSUED");
+        AtomicBoolean first = new AtomicBoolean(true);
+
+        CouponRoundRebuildResult result = runner(seederThatRuns(() -> {
+            if (first.getAndSet(false)) {
+                insertIssuance(2, 2, "ISSUED");
+            }
+        })).rebuild(ROUND_ID);
+
+        assertThat(result.status()).isEqualTo(CouponRoundRebuildStatus.REBUILT);
+        // 늦게 온 회원까지 issued 에 들어간다 — Redis 층의 1인 1매 방어가 되살아난다.
+        assertThat(redisTemplate.opsForHash().keys(keys.issued()))
+                .containsExactlyInAnyOrder("1", "2");
+        assertThat(redisTemplate.opsForValue().get(keys.issuedEver())).isEqualTo("2");
+        assertThat(result.issuedEverCount()).isEqualTo(2);
+        assertThat(result.recountedIssuedEverCount()).isEqualTo(2);
+        assertThat(result.issuedHashIsShort()).isFalse();
+        assertThat(result.remainingStock()).isEqualTo(TOTAL_QUANTITY - 2);
+    }
+
+    /**
+     * 재시딩은 <b>한 번만</b> 돈다. 그보다도 늦은 커밋은 남고, 그때 재구성이 스스로 말하지
+     * 않으면 신호가 사후 {@code LUA_GAP} 하나뿐이다.
+     */
+    @Test
+    @DisplayName("다시 시딩한 뒤에도 늦게 커밋되면 몇 건인지 보고하고 게이트는 연다")
+    void reportsIssuancesThatOutrunTheReseed() {
+        openGateWithStaleCounters();
+        insertIssuance(1, 1, "ISSUED");
+        AtomicInteger nextId = new AtomicInteger(2);
+
+        // 시딩할 때마다 한 건씩 더 커밋된다 — 재시딩도 따라잡지 못하는 상황이다.
+        CouponRoundRebuildResult result = runner(seederThatRuns(() -> {
+            int id = nextId.getAndIncrement();
+            insertIssuance(id, id, "ISSUED");
+        })).rebuild(ROUND_ID);
+
+        assertThat(result.status()).isEqualTo(CouponRoundRebuildStatus.REBUILT);
+        assertThat(result.issuedEverCount()).isEqualTo(2);
+        assertThat(result.recountedIssuedEverCount()).isEqualTo(3);
+        assertThat(result.issuedHashIsShort()).isTrue();
+        // 게이트는 연다 — 닫아 두면 부하 중에는 영원히 수렴하지 못한다.
+        assertThat(gate.readMeta(ROUND_ID)).isPresent();
+    }
+
+    /**
+     * 게이트를 닫은 뒤의 <b>예외</b>도 같은 계약을 진다. 그대로 흘려보내면 500 이 나가고,
+     * 그 순간 "게이트가 닫혔다" 는 사실이 응답에서 사라진다.
+     */
+    @Test
+    @DisplayName("게이트를 닫은 뒤 예외로 멈춰도 500 이 아니라 gateClosed 로 나간다")
+    void reportsUnexpectedFailuresAfterCloseAsGateClosed() {
         openGateWithStaleCounters();
         insertIssuance(1, 1, "ISSUED");
 
+        // 집계는 끝났고 meta 는 없다. 그 창에서 재고 행이 사라져 4′ 가 터진다.
         CouponRoundRebuildResult result = runner(seederThatRuns(
-                () -> insertIssuance(2, 2, "ISSUED"))).rebuild(ROUND_ID);
+                () -> jdbc.update("DELETE FROM coupon_stocks WHERE coupon_id = ?", ROUND_ID)))
+                .rebuild(ROUND_ID);
 
-        assertThat(result.status()).isEqualTo(CouponRoundRebuildStatus.REBUILT);
-        // 시딩에 들어간 값과 게이트를 열 때의 DB 값이 다르다는 사실이 결과에 남는다.
-        assertThat(result.issuedEverCount()).isEqualTo(1);
-        assertThat(result.recountedIssuedEverCount()).isEqualTo(2);
-        assertThat(redisTemplate.opsForValue().get(keys.issuedEver())).isEqualTo("1");
+        assertThat(result.status()).isEqualTo(CouponRoundRebuildStatus.REBUILD_FAILED);
+        assertThat(result.gateClosed()).isTrue();
+        assertThat(gate.readMeta(ROUND_ID)).isEmpty();
     }
 
     @Test

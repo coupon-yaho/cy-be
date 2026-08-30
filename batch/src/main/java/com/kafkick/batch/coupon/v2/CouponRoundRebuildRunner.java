@@ -69,16 +69,24 @@ import com.kafkick.core.support.TimeProvider;
  * </ul>
  *
  * <p>그래서 게이트를 닫은 <b>직후·집계를 읽기 전에</b> {@code coupon.rebuild.drain} 만큼
- * 기다린다. 그 시간이 지나면 닫기 전에 시작된 쓰기는 전부 도착해 있고, 집계는 그것들을
- * 빠짐없이 본다. 07 이 복원 중단 표식에 대해 "게이트를 닫고 진행 중인 복원이 빠진 뒤에
- * 시딩해야 한다" 고 적은 요구도 같은 대기 하나로 함께 지켜진다 — 표식을 지우는 것은 시딩이고,
- * 시딩은 이 대기 뒤다.
+ * 기다린다. 07 이 복원 중단 표식에 대해 "게이트를 닫고 진행 중인 복원이 빠진 뒤에 시딩해야
+ * 한다" 고 적은 요구도 같은 대기 하나로 함께 지켜진다 — 표식을 지우는 것은 시딩이고, 시딩은
+ * 이 대기 뒤다.
  *
- * <p><b>그래도 남는 창이 하나 있다.</b> 4′ 재집계에 잡힌 취소의 {@code INCR} 이 {@code meta}
- * 쓰기보다 <b>뒤에</b> 도착하면 그 한 건이 두 번 반영된다(재집계에 한 번, {@code INCRBY} 로 한 번).
- * 4′ 와 {@code meta} 사이는 명령 두 개라 그 창은 밀리초 아래이고, 여기를 더 닫으려면 07 이
- * 검토하고 접은 재구성 세대 필드가 필요하다 — {@code meta} 5필드 형식과 Lua 다섯 종이 함께
- * 움직이는 일이라 이 단위에서 하지 않는다. {@code LUA_GAP} 이 그 편차를 잡는다.
+ * <p><b>이 대기는 barrier 가 아니다.</b> 진행 중인 트랜잭션의 완료를 확인하지 않고 정해진
+ * 시간만 잔다 — 그보다 오래 걸린 커밋은 그냥 늦게 도착한다. 대기는 창을 <b>좁힐</b> 뿐이고,
+ * 그래서 아래 두 가지가 남는다. 이 문단을 "그 뒤로는 안전하다" 로 읽으면 안 된다.
+ *
+ * <ul>
+ * <li><b>늦은 발급.</b> 4′ 에서 누적 수를 다시 세어 <b>탐지</b>하고, 잡히면 최신 목록으로
+ *     <b>한 번 더 시딩</b>한다. 그 재시딩보다도 늦은 커밋은 남고, 그때는 몇 건인지를 결과와
+ *     로그로 낸다 — {@code issued} 에 없는 회원은 Redis 층의 1인 1매 방어가 없다.</li>
+ * <li><b>늦은 복원.</b> 4′ 재집계에 잡힌 취소의 {@code INCR} 이 {@code meta} 쓰기보다 뒤에
+ *     도착하면 그 한 건이 두 번 반영된다(재집계에 한 번, {@code INCRBY} 로 한 번). 4′ 와
+ *     {@code meta} 사이는 명령 두 개라 창은 밀리초 아래지만 0 은 아니다. 닫으려면 07 이
+ *     검토하고 접은 재구성 세대 필드가 필요하고, {@code meta} 5필드 형식과 Lua 다섯 종이 함께
+ *     움직이는 일이라 이 단위에서 하지 않는다. {@code LUA_GAP} 이 그 편차를 잡는다.</li>
+ * </ul>
  *
  * <p><b>07 이 함께 적은 "{@code issued} 의 {@code P} 재계수" 는 이 조립에서 항상 0 이다.</b>
  * 3번 시딩이 모든 값을 {@code D}(완료)와 {@code __rebuilt__} 토큰으로 덮으므로, 창 안에 도착한
@@ -188,6 +196,26 @@ public class CouponRoundRebuildRunner {
                 couponRoundId);
         gate.closeGate(couponRoundId);
 
+        try {
+            return rebuildWithGateClosed(couponRoundId, round);
+        } catch (RuntimeException failure) {
+            // **예외를 그대로 흘리면 500 이 나가고, 게이트가 닫혔다는 사실이 응답에서 사라진다.**
+            // 원인은 스택으로 남기고 응답에는 "닫힌 채 멈췄다" 를 남긴다 — 운영자가 다음에 할
+            // 일(다시 돌린다)이 그 둘 중 뒤엣것으로만 정해지기 때문이다.
+            log.error("회차 {} 재구성이 예상치 못한 실패로 멈췄다. **게이트는 닫힌 채다** —"
+                    + " 그 회차의 발급은 다시 돌릴 때까지 전량 503 이다.", couponRoundId, failure);
+            return CouponRoundRebuildResult.rejectedAfterClose(
+                    couponRoundId, CouponRoundRebuildStatus.REBUILD_FAILED);
+        }
+    }
+
+    /**
+     * 게이트가 닫힌 창. <b>여기서 나가는 모든 길은 게이트를 다시 열거나
+     * {@code gateClosed = true} 를 달고 나간다</b> — 예외로 빠지는 길까지 포함해서다.
+     */
+    private CouponRoundRebuildResult rebuildWithGateClosed(
+            long couponRoundId, CouponRoundGateJdbc.RoundRow round) {
+
         // 1.5 진행 중인 쓰기가 빠지기를 기다린다. 이 대기가 없으면 닫기 직전에 선점한 발급의
         //     커밋이 아래 집계 뒤에 도착해 그 회원이 issued 에서 통째로 빠지고(LUA_GAP), 취소의
         //     늦은 INCR 이 재구성이 다시 쓴 stock 위에 얹힌다.
@@ -237,6 +265,33 @@ public class CouponRoundRebuildRunner {
         //     취소의 감소분을 절대값 UPDATE 가 덮어 없앤다.
         CouponRoundGateJdbc.Recount recount = roundJdbc.recountAndUpdateActiveCount(
                 couponRoundId, totalQuantity, timeProvider.instant());
+
+        // 4″. 시딩 뒤에 발급이 커밋됐으면 **최신 목록으로 한 번 더 시딩한다.** 그 회원은 방금
+        //     다시 쓴 issued Hash 에 없어 Redis 층의 1인 1매 방어가 없는데, 게이트는 아직 닫혀
+        //     있으니 지금이 고칠 수 있는 마지막 순간이다.
+        //
+        //     **한 번만 돈다.** 다시 돌 때마다 또 늦은 커밋이 올 수 있어 반복은 부하 중에
+        //     수렴하지 못하고, 시딩은 O(N) 이라(§3.3) 그 반복이 그대로 Redis 단일 스레드에
+        //     쌓인다. 남는 것은 아래에서 세어 보고한다.
+        long seededEverCount = aggregate.everCount();
+        if (recount.applied() && recount.everCount() > seededEverCount) {
+            log.warn("회차 {} — 시딩({})과 4′({}) 사이에 발급이 커밋됐다. 최신 목록으로 다시 시딩한다.",
+                    couponRoundId, seededEverCount, recount.everCount());
+            CouponRoundGateJdbc.Aggregate late = roundJdbc.readAggregate(couponRoundId);
+            if (late.totalQuantity() == null) {
+                return closedAndRejected(couponRoundId, CouponRoundRebuildStatus.STOCK_ROW_MISSING);
+            }
+            CouponRoundGateWrites.requireMemberCountMatchesEverCount(couponRoundId, late);
+            if (totalQuantity - late.activeCount() >= 0) {
+                // 초과면 다시 쓰지 않는다 — 음수 stock 을 세우게 된다. 아래 재집계가 같은
+                // 결론을 내고 게이트를 닫은 채 끝낸다.
+                warmupPort.seedCounters(couponRoundId, late.everMembers(),
+                        totalQuantity - late.activeCount());
+                seededEverCount = late.everCount();
+                recount = roundJdbc.recountAndUpdateActiveCount(
+                        couponRoundId, totalQuantity, timeProvider.instant());
+            }
+        }
         long recountedActive = recount.activeCount();
         long remainingStock = totalQuantity - recountedActive;
         if (!recount.applied()) {
@@ -253,16 +308,16 @@ public class CouponRoundRebuildRunner {
         }
         warmupPort.setRemainingStock(couponRoundId, remainingStock);
 
-        if (recount.everCount() > aggregate.everCount()) {
+        if (recount.everCount() > seededEverCount) {
             // 시딩 뒤에 발급이 커밋됐다 — drain 을 넘겨 도착한 선점분이다. 그 회원은 방금 다시
             // 쓴 issued Hash 에 없어 **Redis 층의 1인 1매 방어가 없다**(DB 의 uk_coupon_member
             // 하나만 남는다). stock 은 4′ 가 바로잡았으므로 게이트는 연다 — 닫아 두면 부하 중
             // 재구성이 영원히 수렴하지 못한다. 대신 그 사실을 여기서 말한다. 지금까지 이 상태의
             // 유일한 신호는 사후 LUA_GAP 뿐이었다.
-            log.error("회차 {} — 시딩({})과 게이트 오픈({}) 사이에 발급 {}건이 커밋됐다."
+            log.error("회차 {} — 다시 시딩한 뒤({})에도 발급 {}건이 더 커밋됐다({})."
                             + " 그 회원들은 issued Hash 에 없다. 다시 돌려 채워라.",
-                    couponRoundId, aggregate.everCount(), recount.everCount(),
-                    recount.everCount() - aggregate.everCount());
+                    couponRoundId, seededEverCount,
+                    recount.everCount() - seededEverCount, recount.everCount());
         }
 
         // 5. 게이트를 연다. 다섯 필드가 한 덩어리라 부분 상태가 남지 않는다.
@@ -275,10 +330,10 @@ public class CouponRoundRebuildRunner {
 
         log.warn("회차 {} 재구성 완료 — 총재고 {} · 활성 {}→{} · 누적 {} · 잔여 {}",
                 couponRoundId, totalQuantity, aggregate.activeCount(), recountedActive,
-                aggregate.everCount(), remainingStock);
+                seededEverCount, remainingStock);
         return new CouponRoundRebuildResult(
                 couponRoundId, CouponRoundRebuildStatus.REBUILT, false, totalQuantity,
-                aggregate.activeCount(), recountedActive, aggregate.everCount(),
+                aggregate.activeCount(), recountedActive, seededEverCount,
                 recount.everCount(), remainingStock);
     }
 
