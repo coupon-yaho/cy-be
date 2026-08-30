@@ -90,6 +90,11 @@ class SentinelFailoverIntegrationTest {
         // healthcheck 가 막는 바로 그 상태를 여기서도 막는다 — 안 막으면 이 테스트는
         // "승격 실패"를 타임아웃으로만 보고 플레이키가 된다.
         awaitReplicaCount(2);
+        // **Sentinel 끼리 서로를 알아야 승격이 된다.** 서로를 찾는 통로가 master 의
+        // __sentinel__:hello 라, master 가 먼저 죽으면 남은 Sentinel 들은 서로를 모른 채
+        // 각자 SDOWN 만 본다 — 정족수 2를 못 채워 ODOWN 도, 리더 선출도 없다. 승격이
+        // 아니라 그냥 정지가 되고, 테스트는 그것을 30초 타임아웃으로만 본다(CI 에서 실패했다).
+        awaitKnownSentinels(2);
 
         master.stop(); // docker stop과 같은 SIGTERM 경로
 
@@ -150,6 +155,19 @@ class SentinelFailoverIntegrationTest {
         throw new AssertionError("master 가 replica " + expected + "대를 인지하지 못했다: " + seen);
     }
 
+    /** Sentinel 이 서로를 몇 대 인지했는지. 정족수는 이 수 위에서만 성립한다. */
+    private static void awaitKnownSentinels(int expected) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        long seen = -1;
+        while (System.nanoTime() < deadline) {
+            seen = redisCommandAtPort("sentinel-1", "26379", "SENTINEL", "sentinels", "coupon-master")
+                    .lines().map(String::trim).filter("name"::equals).count();
+            if (seen >= expected) return;
+            Thread.sleep(200);
+        }
+        throw new AssertionError("Sentinel 이 서로 " + expected + "대를 인지하지 못했다: " + seen);
+    }
+
     /** Sentinel 이 replica 를 몇 대 인지했는지. compose healthcheck 와 같은 술어를 쓴다. */
     private static void awaitReplicaCount(int expected) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
@@ -164,7 +182,9 @@ class SentinelFailoverIntegrationTest {
     }
 
     private static String awaitDifferentMaster(String oldMaster) throws Exception {
-        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        // down-after 1s + ODOWN 합의 + 리더 선출 + 승격. 로컬에서는 수 초면 끝나지만
+        // 컨테이너 기동이 느린 환경에서는 각 단계가 늘어난다 — 예산을 넉넉히 둔다.
+        long deadline = System.nanoTime() + Duration.ofSeconds(60).toNanos();
         while (System.nanoTime() < deadline) {
             String candidate = awaitMasterAddress(null);
             if (!oldMaster.equals(candidate)) return candidate;
