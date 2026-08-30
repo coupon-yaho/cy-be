@@ -2,6 +2,7 @@ package com.kafkick.api.coupon.controller;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,10 +14,16 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
+import com.kafkick.core.coupon.exception.CouponRoundErrorCode;
+import com.kafkick.core.coupon.query.CouponRoundDetail;
 import com.kafkick.core.coupon.query.MemberCouponPage;
 import com.kafkick.core.coupon.query.MemberCouponSummary;
+import com.kafkick.core.coupon.service.CouponRoundDetailQueryService;
 import com.kafkick.core.coupon.service.MemberCouponQueryService;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.support.exception.BusinessException;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.Mockito.never;
@@ -36,6 +43,9 @@ class MemberCouponControllerTest {
 
     @MockitoBean
     private MemberCouponQueryService memberCouponQueryService;
+
+    @MockitoBean
+    private CouponRoundDetailQueryService couponRoundDetailQueryService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -181,6 +191,33 @@ class MemberCouponControllerTest {
                         .value("페이지 크기는 100 이하여야 합니다."));
     }
 
+    @Test
+    @DisplayName("게이트웨이 쿠폰 상세 경로로 쿠폰 회차를 조회한다")
+    void findCouponDetailFromGatewayPath() throws Exception {
+        when(couponRoundDetailQueryService.findById(10L)).thenReturn(detail());
+
+        mockMvc.perform(get("/api/v1/coupons/{couponId}", 10L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.couponRoundId").value(10))
+                .andExpect(jsonPath("$.data.name").value("골드 VIP 20% 할인"))
+                .andExpect(jsonPath("$.data.status").value("OPEN"));
+
+        verify(couponRoundDetailQueryService).findById(10L);
+    }
+
+    @Test
+    @DisplayName("게이트웨이 쿠폰 상세 경로에서 회차가 없으면 404를 반환한다")
+    void rejectMissingCouponDetailFromGatewayPath() throws Exception {
+        when(couponRoundDetailQueryService.findById(999L)).thenThrow(
+                new BusinessException(CouponRoundErrorCode.COUPON_ROUND_NOT_FOUND)
+        );
+
+        mockMvc.perform(get("/api/v1/coupons/{couponId}", 999L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("COUPON_ROUND-204"));
+    }
+
     private static MemberCouponPage page() {
         return new MemberCouponPage(
                 List.of(coupon()),
@@ -212,6 +249,26 @@ class MemberCouponControllerTest {
 
     private static MemberCouponSummary unusedCoupon() {
         return couponWithoutUsage(100L, IssuanceStatus.ISSUED);
+    }
+
+    private static CouponRoundDetail detail() {
+        return new CouponRoundDetail(
+                10L,
+                1L,
+                2L,
+                "골드 VIP 20% 할인",
+                CouponPolicyType.PERCENT_CAPPED,
+                20,
+                10_000,
+                null,
+                7,
+                Set.of(MembershipGrade.VIP, MembershipGrade.GOLD),
+                Instant.parse("2026-08-24T01:00:00Z"),
+                Instant.parse("2026-08-24T03:00:00Z"),
+                CouponRoundStatus.OPEN,
+                100,
+                80
+        );
     }
 
     private static MemberCouponSummary couponWithoutUsage(
