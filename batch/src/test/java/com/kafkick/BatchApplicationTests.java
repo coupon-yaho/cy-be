@@ -12,6 +12,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 
 import com.kafkick.core.admin.overview.AdminOverviewService;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 // JPA 스키마 검증이 켜져 있다(storage.yml 의 ddl-auto: validate). batch 는 마이그레이션
@@ -83,6 +84,29 @@ class BatchApplicationTests {
                         + "만료·회차는 이 저장소에서 Spring Batch 잡이 진다 — "
                         + "그 패키지의 빈이 여기 있다면 BatchApplication 의 스캔 제외가 풀린 것이다")
                 .isEmpty();
+    }
+
+    /**
+     * <b>만료가 쓰는 복원 서비스가 실물로 있다.</b> 위 두 단언이 "batch 에 없어야 할 것" 을
+     * 재는 그물이라면, 이것은 <b>있어야 할 것</b>을 재는 반대쪽 그물이다.
+     *
+     * <p>이 검사가 필요한 이유는 이력이다. {@code V2StockRestorationService} 는 한때
+     * {@code core.coupon.service} 에 있었는데, CY-744 가 그 패키지를 batch 스캔에서 빼면서
+     * {@code expireStep} 이 주입받을 빈이 사라졌다 — <b>컨텍스트가 통째로 안 뜨고
+     * batch 테스트 378 개가 한꺼번에 빨개졌다.</b>
+     *
+     * <p>그리고 그 회귀를 <b>{@code ExpireV2StockRestorationTest} 가 못 잡았다.</b> 그쪽은
+     * 호출을 검증하려고 {@code @MockitoBean} 을 물리는데, 그 애노테이션은 <b>없는 빈이면
+     * 새로 만들어 준다.</b> 배선 구멍이 정확히 그 자리에서 덮인다. 그래서 실물의 존재는
+     * 목을 안 쓰는 이 컨텍스트에서 따로 잰다.
+     */
+    @Test
+    void startsBatchContextWithV2StockRestorationService() {
+        assertThat(context.getBeansOfType(V2StockRestorationService.class))
+                .as("만료 잡이 이 빈을 생성자로 받는다. 없으면 expireStep 부터 조립이 깨져 "
+                        + "batch 컨텍스트가 통째로 안 뜬다 — @MockitoBean 을 쓰는 테스트는 "
+                        + "그 구멍을 덮으므로 여기서 잰다")
+                .isNotEmpty();
     }
 
 }

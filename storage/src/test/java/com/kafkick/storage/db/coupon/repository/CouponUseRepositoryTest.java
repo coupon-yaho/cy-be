@@ -64,7 +64,7 @@ import com.kafkick.core.coupon.service.command.CouponCancelCommand;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
 import com.kafkick.core.coupon.service.CouponCancelService;
 import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
-import com.kafkick.core.coupon.service.V2StockRestorationService;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.core.coupon.service.command.CouponIssueCommand;
 import com.kafkick.core.coupon.service.CouponIssueService;
 import com.kafkick.core.notification.NotificationRequestService;

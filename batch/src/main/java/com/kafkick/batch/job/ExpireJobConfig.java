@@ -30,7 +30,7 @@ import com.kafkick.batch.config.CleanSchemaGuard;
 import com.kafkick.batch.config.ExpireMetrics;
 import com.kafkick.batch.config.ExpireStepContext;
 import com.kafkick.batch.schedule.CronSlot;
-import com.kafkick.core.coupon.service.V2StockRestorationService;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.core.expiration.ExpireChunk;
 import com.kafkick.core.expiration.exception.ExpirationErrorCode;

@@ -20,7 +20,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.service.V2StockRestorationService;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.storage.db.MySqlContainerConfig;
 import com.kafkick.storage.db.VerificationSeed;
 

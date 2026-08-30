@@ -1,4 +1,4 @@
-package com.kafkick.core.coupon.service;
+package com.kafkick.core.coupon.v2;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;

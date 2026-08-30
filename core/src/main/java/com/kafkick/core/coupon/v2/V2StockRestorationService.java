@@ -1,4 +1,4 @@
-package com.kafkick.core.coupon.service;
+package com.kafkick.core.coupon.v2;
 
 import java.util.Objects;
 import java.util.Set;

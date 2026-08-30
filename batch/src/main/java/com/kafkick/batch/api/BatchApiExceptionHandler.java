@@ -12,6 +12,8 @@ import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.response.ErrorResponse;
 import com.kafkick.core.support.response.ResponseEnvelope;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.batch.coupon.v2.CouponRoundRebuildController;
+import com.kafkick.batch.coupon.v2.CouponRoundWarmupController;
 import com.kafkick.core.support.exception.CommonErrorCode;
 import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
@@ -57,10 +59,13 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
 // 안 잡는 결합이고, CY-697 이 CleanupAdminController 를 더하면서 실제로 밟았다 —
 // 409·404 가 전부 500 이었다. **BatchApiExceptionHandlerCoverageTest 가 그 자리를 지킨다**
 // (CY-590). 그때 그 테스트를 안 돌리고 흐름 테스트만 봐서 늦게 알았을 뿐이다.
+// v2 회차 컨트롤러 둘은 다른 패키지(batch.coupon.v2)다. 이름을 하나씩 적는 규약은 그대로다 —
+// 패키지로 넓히면 다음 컨트롤러가 이 규약을 의식하지 않고 따라온다.
 @RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
         ExpireAdminController.class, CleanupAdminController.class,
         VerifyReportController.class, BatchHistoryController.class,
-        VerifyHistoryController.class})
+        VerifyHistoryController.class,
+        CouponRoundWarmupController.class, CouponRoundRebuildController.class})
 public class BatchApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(BatchApiExceptionHandler.class);
