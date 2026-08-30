@@ -43,8 +43,22 @@ set -euo pipefail
 CONTAINER="${MYSQL_CONTAINER:-cy-mysql-1}"
 MIGRATIONS_DIR="$(cd "$(dirname "$0")/.." && pwd)/storage/src/main/resources/db/migration"
 
-# SchemaPresenceGuard.META_MIGRATIONS 와 **같은 셋**이어야 한다. 갈리면 이 스크립트를
-# 돌리고도 가드가 거절하고, 그때 원인이 스크립트에 있다는 것을 아무도 못 본다.
+# **가드가 요구하는 셋을 다 담되, 그것보다 넓다.**
+#
+#   SchemaPresenceGuard.META_MIGRATIONS 의 셋(V11 · 인덱스 둘)은 여기 전부 있어야 한다.
+#   빠지면 이 스크립트를 돌리고도 가드가 거절하고, 그때 원인이 스크립트에 있다는 것을
+#   아무도 못 본다.
+#
+#   반대로 **여기가 더 많은 것은 정상이다.** 알림 마이그레이션이 그렇다 — 가드는 그 표를
+#   안 보는데(BATCH_META_TABLES 에 없다) 배치는 그것 없이 못 뜬다. 하이버네이트가
+#   ddl-auto=validate 로 엔티티 전부를 검사하기 때문이다.
+#
+# ⚠️ **그 경우 가드는 말할 기회조차 없다.** SchemaPresenceGuard 는 ApplicationRunner 라
+#    컨텍스트가 다 뜬 뒤에 도는데, 하이버네이트 검증은 그 전에 터진다. 실측한 메시지가
+#    가드 것이 아니라 하이버네이트 것이었다:
+#      Schema validation: missing table [notification_attempts]
+#    그래서 가드의 안내 문구에 알림 파일을 더하지 않는다 — 그 문구는 BATCH_* 가 빠졌을
+#    때만 나오고, 거기에 알림을 섞으면 엉뚱한 처방을 읽히게 된다.
 FILES=(
   "V11__batch_metadata.sql"
   "V2026082513__ix_batch_job_execution_lookup.sql"
