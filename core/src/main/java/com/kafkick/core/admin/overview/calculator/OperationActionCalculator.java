@@ -12,10 +12,10 @@ import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
 
 /**
- * 판정 완료된 캠페인별 조치 후보에서 상단 KPI와 우선 노출 목록을 계산합니다.
+ * 판정 완료된 쿠폰 회차별 조치 후보에서 상단 KPI와 우선 노출 목록을 계산합니다.
  *
  * <p>이 계산기는 대기열 중단이나 재고 위험의 임계치를 직접 판정하지 않습니다. 각 원천의 정책이
- * 생성한 조치 후보를 받아 캠페인별 대표 판정을 선택하고, 동일한 모집단에서 KPI와 목록을 함께
+ * 생성한 조치 후보를 받아 쿠폰 회차별 대표 판정을 선택하고, 동일한 모집단에서 KPI와 목록을 함께
  * 생성합니다. Repository나 관측 저장소를 조회하지 않는 순수 계산 경계입니다.</p>
  */
 @Component
@@ -47,7 +47,7 @@ public class OperationActionCalculator {
                             AdminOverviewSnapshot.OperationActionItem::duration,
                             Comparator.nullsLast(Comparator.reverseOrder()))
                     .thenComparing(
-                            AdminOverviewSnapshot.OperationActionItem::campaignName,
+                            AdminOverviewSnapshot.OperationActionItem::couponName,
                             Comparator.nullsLast(Comparator.naturalOrder()))
                     .thenComparing(
                             AdminOverviewSnapshot.OperationActionItem::opensAt,
@@ -63,14 +63,14 @@ public class OperationActionCalculator {
     public OperationActionCalculator() { }
 
     /**
-     * 조치 후보를 캠페인별로 중복 제거한 뒤 심각도 KPI와 상위 20개 목록을 계산합니다.
+     * 조치 후보를 쿠폰 회차별로 중복 제거한 뒤 심각도 KPI와 상위 20개 목록을 계산합니다.
      *
      * <p>{@link Severity#WARN WARN}과 {@link Severity#CRITICAL CRITICAL}만 조치 대상으로 사용합니다.
-     * 같은 캠페인의 후보가 여러 개이면 최고 심각도를 우선하고, 심각도가 같으면 먼저 감지된 후보를
+     * 같은 쿠폰 회차의 후보가 여러 개이면 최고 심각도를 우선하고, 심각도가 같으면 먼저 감지된 후보를
      * 선택합니다. 전체 건수는 모든 대표 후보를 보존하고 화면 목록만 우선순위에 따라 20건으로
      * 제한합니다.</p>
      *
-     * @param decisions 원천별 정책에서 판정한 캠페인 조치 후보
+     * @param decisions 원천별 정책에서 판정한 쿠폰 회차 조치 후보
      * @return 같은 중복 제거 결과에서 계산한 조치 KPI와 목록
      * @throws NullPointerException 목록 또는 목록의 원소가 null인 경우
      */
@@ -85,7 +85,7 @@ public class OperationActionCalculator {
             if (!requiresAction(decision)) {
                 continue;
             }
-            // 한 캠페인의 여러 이상 신호를 동일한 결정 규칙으로 대표 한 건에 축약합니다.
+            // 한 쿠폰 회차의 여러 이상 신호를 동일한 결정 규칙으로 대표 한 건에 축약합니다.
             representativeByCoupon.merge(
                     decision.couponId(),
                     decision,
@@ -122,7 +122,7 @@ public class OperationActionCalculator {
     }
 
     /**
-     * 동일 캠페인의 여러 판정 중 화면을 대표할 한 건을 결정적으로 선택합니다.
+     * 동일 쿠폰 회차의 여러 판정 중 화면을 대표할 한 건을 결정적으로 선택합니다.
      *
      * <p>심각도가 높은 판정을 우선하고, 심각도가 같으면 감지 시각·행동 코드·고객 영향과 나머지
      * 표시 필드를 순서대로 비교합니다. 모든 의미 필드를 결정성 키로 사용하므로 DB나 원천 조회의
@@ -175,7 +175,7 @@ public class OperationActionCalculator {
     /**
      * 조치 KPI와 조치 목록을 같은 중복 제거 결과에서 계산한 값입니다.
      *
-     * @param required 전체·긴급·주의 캠페인 수
+     * @param required 전체·긴급·주의 쿠폰 회차 수
      * @param items 전체 건수와 우선 노출할 최대 20개 조치 항목
      * @param representativeByCoupon KPI와 목록을 만든 couponId별 대표 조치의 불변 모집단
      */
@@ -185,7 +185,7 @@ public class OperationActionCalculator {
             Map<Long, AdminOverviewSnapshot.OperationActionItem> representativeByCoupon
     ) {
 
-        /** 대표 모집단을 불변 복사하여 KPI·목록·캠페인 행이 같은 판정을 재사용하게 합니다. */
+        /** 대표 모집단을 불변 복사하여 KPI·목록·쿠폰 회차 행이 같은 판정을 재사용하게 합니다. */
         public ActionCalculation {
             Objects.requireNonNull(required, "required");
             Objects.requireNonNull(items, "items");

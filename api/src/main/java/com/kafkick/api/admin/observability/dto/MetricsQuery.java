@@ -14,7 +14,7 @@ import com.kafkick.core.admin.MetricsWindow;
  * 범위입니다. 쿠폰과 Benchmark 실행 범위는 동시에 적용할 수 없어 클래스 수준 constraint로 차단합니다.</p>
  *
  * @param window 필수 지표 집계 구간
- * @param couponId 선택 쿠폰 캠페인 회차 범위
+ * @param couponId 선택 쿠폰 회차 범위
  * @param benchmarkRunId 선택 Benchmark 실행 범위
  */
 @MutuallyExclusiveMetricsScope

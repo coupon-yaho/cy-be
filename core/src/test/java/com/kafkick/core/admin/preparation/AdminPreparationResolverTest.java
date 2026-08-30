@@ -14,14 +14,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.admin.CouponPolicyType;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** DB 캠페인 모집단에서 V2 Redis 준비 조회 대상과 응답 모집단을 확정하는 규칙을 검증합니다. */
+/** DB 쿠폰 회차 모집단에서 V2 Redis 준비 조회 대상과 응답 모집단을 확정하는 규칙을 검증합니다. */
 class AdminPreparationResolverTest {
 
     private static final Instant SNAPSHOT = Instant.parse("2026-08-29T09:00:00Z");
@@ -31,15 +31,15 @@ class AdminPreparationResolverTest {
     /** V1·열린 V2·DB 미준비 회차가 Redis 요청에 섞이는 회귀를 방지합니다. */
     @Test
     @DisplayName("DB 준비가 끝난 V2 예약 회차만 Redis로 조회한다")
-    void readsOnlyDbReadyScheduledV2Campaigns() {
+    void readsOnlyDbReadyScheduledV2CouponRounds() {
         RecordingReader reader = new RecordingReader(Map.of(
                 10L, new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT)));
-        AdminCampaignCatalog catalog = catalog(
-                campaign(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()),
-                campaign(11L, EngineVersion.V1, CouponRoundStatus.SCHEDULED, true, true, validStock()),
-                campaign(12L, EngineVersion.V2, CouponRoundStatus.OPEN, true, true, validStock()),
-                campaign(13L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, false, true, validStock()),
-                campaign(14L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, unavailableStock()));
+        AdminCouponRoundCatalog catalog = catalog(
+                couponRound(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()),
+                couponRound(11L, EngineVersion.V1, CouponRoundStatus.SCHEDULED, true, true, validStock()),
+                couponRound(12L, EngineVersion.V2, CouponRoundStatus.OPEN, true, true, validStock()),
+                couponRound(13L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, false, true, validStock()),
+                couponRound(14L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, unavailableStock()));
 
         Map<Long, V2PreparationSource> result =
                 new AdminPreparationResolver(reader).resolve(catalog, SNAPSHOT);
@@ -70,7 +70,7 @@ class AdminPreparationResolverTest {
             calls.incrementAndGet();
             return Map.of();
         };
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(
                 SourceStatus.UNAVAILABLE, null, List.of());
 
         Map<Long, V2PreparationSource> result =
@@ -84,9 +84,9 @@ class AdminPreparationResolverTest {
     @Test
     @DisplayName("Reader 응답 ID가 누락되면 요청한 V2 회차 전체를 UNAVAILABLE로 만든다")
     void rejectsMissingReaderPopulation() {
-        AdminCampaignCatalog catalog = catalog(
-                campaign(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()),
-                campaign(11L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()));
+        AdminCouponRoundCatalog catalog = catalog(
+                couponRound(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()),
+                couponRound(11L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()));
         V2AdminPreparationReader reader = (requests, observedAt) -> Map.of(
                 10L, new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
 
@@ -101,8 +101,8 @@ class AdminPreparationResolverTest {
     @Test
     @DisplayName("Reader 응답 ID가 초과되면 요청한 V2 회차 전체를 UNAVAILABLE로 만든다")
     void rejectsExtraReaderPopulation() {
-        AdminCampaignCatalog catalog = catalog(
-                campaign(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()));
+        AdminCouponRoundCatalog catalog = catalog(
+                couponRound(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()));
         V2AdminPreparationReader reader = (requests, observedAt) -> Map.of(
                 10L, new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT),
                 99L, new V2PreparationSource(true, true, SourceStatus.VALID, SNAPSHOT));
@@ -117,10 +117,10 @@ class AdminPreparationResolverTest {
     /** 어댑터가 예외를 던져도 전체 Overview가 깨지지 않고 V2 대상만 미판정하는지 검증합니다. */
     @Test
     @DisplayName("Reader 예외는 V2 조회 대상만 UNAVAILABLE로 격리한다")
-    void isolatesReaderFailureFromNonTargetCampaigns() {
-        AdminCampaignCatalog catalog = catalog(
-                campaign(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()),
-                campaign(11L, EngineVersion.V1, CouponRoundStatus.SCHEDULED, true, true, validStock()));
+    void isolatesReaderFailureFromNonTargetCouponRounds() {
+        AdminCouponRoundCatalog catalog = catalog(
+                couponRound(10L, EngineVersion.V2, CouponRoundStatus.SCHEDULED, true, true, validStock()),
+                couponRound(11L, EngineVersion.V1, CouponRoundStatus.SCHEDULED, true, true, validStock()));
         V2AdminPreparationReader reader = (requests, observedAt) -> {
             throw new IllegalStateException("down");
         };
@@ -156,13 +156,13 @@ class AdminPreparationResolverTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 여러 캠페인을 VALID DB 모집단으로 생성합니다. */
-    private static AdminCampaignCatalog catalog(AdminCampaignCatalog.CampaignData... campaigns) {
-        return new AdminCampaignCatalog(SourceStatus.VALID, SNAPSHOT, List.of(campaigns));
+    /** 여러 쿠폰 회차를 VALID DB 모집단으로 생성합니다. */
+    private static AdminCouponRoundCatalog catalog(AdminCouponRoundCatalog.CouponRoundData... couponRounds) {
+        return new AdminCouponRoundCatalog(SourceStatus.VALID, SNAPSHOT, List.of(couponRounds));
     }
 
-    /** 엔진·상태·DB 준비·재고 상태가 명시된 캠페인을 생성합니다. */
-    private static AdminCampaignCatalog.CampaignData campaign(
+    /** 엔진·상태·DB 준비·재고 상태가 명시된 쿠폰 회차를 생성합니다. */
+    private static AdminCouponRoundCatalog.CouponRoundData couponRound(
             long couponId,
             EngineVersion engineVersion,
             CouponRoundStatus status,
@@ -170,8 +170,8 @@ class AdminPreparationResolverTest {
             boolean databaseStockReady,
             CouponMetricsSource.Observation<CouponMetricsSource.StockCounts> stock
     ) {
-        return new AdminCampaignCatalog.CampaignData(
-                couponId, "캠페인 " + couponId, "브랜드", engineVersion, status,
+        return new AdminCouponRoundCatalog.CouponRoundData(
+                couponId, "쿠폰 회차 " + couponId, "브랜드", engineVersion, status,
                 OPENS_AT, CLOSES_AT, stock,
                 new PreparationSource(
                         configurationReady, databaseStockReady,

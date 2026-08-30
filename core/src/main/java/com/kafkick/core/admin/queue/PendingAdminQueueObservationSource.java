@@ -13,9 +13,9 @@ public final class PendingAdminQueueObservationSource implements AdminQueueObser
     /** 값 없는 기본 대기열 원천을 생성합니다. */
     public PendingAdminQueueObservationSource() { }
 
-    /** 요청한 각 캠페인에 값 없는 PENDING 관측값을 반환합니다. */
+    /** 요청한 각 쿠폰 회차에 값 없는 PENDING 관측값을 반환합니다. */
     @Override
-    public Map<Long, CampaignQueueObservation> observe(
+    public Map<Long, CouponRoundQueueObservation> observe(
             List<Long> couponIds,
             Instant windowStart,
             Instant windowEnd,
@@ -23,10 +23,10 @@ public final class PendingAdminQueueObservationSource implements AdminQueueObser
     ) {
         List<Long> requestedIds = AdminQueueObservationSource.requireRequest(
                 couponIds, windowStart, windowEnd, snapshotAt);
-        Map<Long, CampaignQueueObservation> observations = new LinkedHashMap<>();
+        Map<Long, CouponRoundQueueObservation> observations = new LinkedHashMap<>();
         for (Long couponId : requestedIds) {
             // 0은 실제 빈 대기열이라는 뜻이므로 미연결 원천에는 만들지 않습니다.
-            observations.put(couponId, new CampaignQueueObservation(
+            observations.put(couponId, new CouponRoundQueueObservation(
                     couponId, null, null, null, null, null,
                     null, null, SourceStatus.PENDING, null));
         }

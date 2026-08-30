@@ -8,7 +8,7 @@ package com.kafkick.core.consistency;
  * {@code ISSUED + USED + CANCELLED + EXPIRED} 누적 집합을 셉니다.
  * {@code redisRemaining}과 {@code storedActiveCount}는 이상 상태의 원본을 보존하기 위해 음수도 허용합니다.
  *
- * @param totalQuantity 캠페인에 설정된 총 발급 수량
+ * @param totalQuantity 쿠폰 회차에 설정된 총 발급 수량
  * @param redisRemaining Redis에 저장된 현재 잔여 수량
  * @param redisIssuedEverCount Redis 발급 완료 누적 카운터
  * @param redisMemberEverCount Redis 발급 회원 누적 집합의 원소 수

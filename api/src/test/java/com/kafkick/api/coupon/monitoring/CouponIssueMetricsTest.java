@@ -12,8 +12,8 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.api.observation.MeterNames;
-import com.kafkick.api.observation.issuance.CampaignMeterProperties;
-import com.kafkick.api.observation.issuance.CampaignMeterRegistry;
+import com.kafkick.api.observation.issuance.CouponRoundMeterProperties;
+import com.kafkick.api.observation.issuance.CouponRoundMeterRegistry;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.core.member.Grade;
 import com.kafkick.core.observation.EngineVersion;
@@ -36,13 +36,13 @@ class CouponIssueMetricsTest {
     @Test
     @DisplayName("한 번의 발급 성공은 EventRecorder 카운터와 서버 지연만 한 번 기록한다")
     void recordSuccessOnlyThroughEventRecorderAndKeepDuration() {
-        CampaignMeterRegistry campaignMeters = new CampaignMeterRegistry(
+        CouponRoundMeterRegistry couponRoundMeters = new CouponRoundMeterRegistry(
                 meterRegistry,
-                new CampaignMeterProperties(null, null, null, null),
+                new CouponRoundMeterProperties(null, null, null, null),
                 Duration.ofSeconds(10)
         );
         MeterEventRecorder eventRecorder = new MeterEventRecorder(
-                campaignMeters,
+                couponRoundMeters,
                 Duration.ofSeconds(10)
         );
         IssuanceFlowEventFactory eventFactory =

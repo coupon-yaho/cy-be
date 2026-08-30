@@ -9,10 +9,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -30,16 +30,16 @@ class AdminStockResolverTest {
             assertThat(requests).extracting(V2AdminStockReader.Request::couponId).containsExactly(2L);
             return Map.of(2L, observed(new AdminStockSnapshot(100L, 30L)));
         };
-        AdminCampaignCatalog catalog = new AdminCampaignCatalog(SourceStatus.VALID, NOW, List.of(
-                campaign(1L, EngineVersion.V1, 100L, 20L),
-                campaign(2L, EngineVersion.V2, 100L, 20L)));
+        AdminCouponRoundCatalog catalog = new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                couponRound(1L, EngineVersion.V1, 100L, 20L),
+                couponRound(2L, EngineVersion.V2, 100L, 20L)));
 
-        AdminCampaignCatalog resolved = new AdminStockResolver(reader).resolve(catalog, NOW);
+        AdminCouponRoundCatalog resolved = new AdminStockResolver(reader).resolve(catalog, NOW);
 
         assertThat(calls).hasValue(1);
-        assertThat(resolved.campaigns().get(0).stock().value())
+        assertThat(resolved.couponRounds().get(0).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(100L, 20L));
-        assertThat(resolved.campaigns().get(1).stock().value())
+        assertThat(resolved.couponRounds().get(1).stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(100L, 70L));
     }
 
@@ -49,24 +49,24 @@ class AdminStockResolverTest {
                 2L, observed(new AdminStockSnapshot(100L, 30L)));
         CouponMetricsSource.Observation<CouponMetricsSource.IssuanceStatusCounts> holdings =
                 observed(new CouponMetricsSource.IssuanceStatusCounts(1L, 2L, 3L, 4L));
-        AdminCampaignDetailData detail = new AdminCampaignDetailData(DetailAvailability.AVAILABLE,
-                new AdminCampaignDetailData.DetailValue(
-                        2L, "campaign", "brand", EngineVersion.V2,
-                        new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN, NOW.minusSeconds(60)),
+        AdminCouponRoundDetailData detail = new AdminCouponRoundDetailData(DetailAvailability.AVAILABLE,
+                new AdminCouponRoundDetailData.DetailValue(
+                        2L, "couponRound", "brand", EngineVersion.V2,
+                        new CouponMetricsSource.CouponRoundRuntime(CouponRoundStatus.OPEN, NOW.minusSeconds(60)),
                         observed(new CouponMetricsSource.StockCounts(100L, 20L)), holdings,
                         observed(List.of())));
 
-        AdminCampaignDetailData resolved = new AdminStockResolver(reader).resolve(detail, NOW);
+        AdminCouponRoundDetailData resolved = new AdminStockResolver(reader).resolve(detail, NOW);
 
         assertThat(resolved.value().stock().value())
                 .isEqualTo(new CouponMetricsSource.StockCounts(100L, 70L));
         assertThat(resolved.value().holdingCounts()).isSameAs(holdings);
     }
 
-    private static AdminCampaignCatalog.CampaignData campaign(
+    private static AdminCouponRoundCatalog.CouponRoundData couponRound(
             long id, EngineVersion engine, long total, long active) {
-        return new AdminCampaignCatalog.CampaignData(
-                id, "campaign", "brand", engine, CouponRoundStatus.OPEN,
+        return new AdminCouponRoundCatalog.CouponRoundData(
+                id, "couponRound", "brand", engine, CouponRoundStatus.OPEN,
                 NOW.minusSeconds(60), NOW.plusSeconds(60),
                 observed(new CouponMetricsSource.StockCounts(total, active)),
                 new PreparationSource(

@@ -24,7 +24,7 @@ public interface V2AdminPreparationReader {
     /** Redis 준비 계약을 DB 정본과 비교하는 데 필요한 예약 회차 값입니다. */
     record Request(
             long couponId,
-            CouponRoundStatus campaignStatus,
+            CouponRoundStatus couponRoundStatus,
             Instant opensAt,
             Instant closesAt,
             int expectedGradeMask,
@@ -41,11 +41,11 @@ public interface V2AdminPreparationReader {
          * @throws IllegalArgumentException 식별자·예약 상태·기간·등급 마스크·수량 관계가 유효하지 않은 경우
          */
         public Request {
-            Objects.requireNonNull(campaignStatus, "campaignStatus");
+            Objects.requireNonNull(couponRoundStatus, "couponRoundStatus");
             Objects.requireNonNull(opensAt, "opensAt");
             Objects.requireNonNull(closesAt, "closesAt");
             if (couponId <= 0L
-                    || campaignStatus != CouponRoundStatus.SCHEDULED
+                    || couponRoundStatus != CouponRoundStatus.SCHEDULED
                     || !opensAt.isBefore(closesAt)
                     || Duration.between(opensAt, closesAt).compareTo(MAX_COUPON_ROUND_DURATION) > 0
                     || expectedTotalQuantity <= 0L

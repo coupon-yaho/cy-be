@@ -13,7 +13,7 @@ import com.kafkick.core.observation.SourceStatus;
 /**
  * 관리자 운영현황의 원천별 상태를 전체 응답 완전성으로 계산합니다.
  *
- * <p>캠페인·발급·대기열·재고를 핵심 원천 그룹으로 취급하며 HTTP 지연은 보조 원천으로
+ * <p>쿠폰 회차·발급·대기열·재고를 핵심 원천 그룹으로 취급하며 HTTP 지연은 보조 원천으로
  * 취급합니다. 조치 KPI와 목록은 다른 원천에서 파생한 결과이므로 독립 원천으로 중복 계산하지
  * 않습니다. Repository나 관측 저장소를 조회하지 않고 완성된 Snapshot의 상태만 판정합니다.</p>
  */
@@ -21,7 +21,7 @@ import com.kafkick.core.observation.SourceStatus;
 public class OverviewStatusCalculator {
 
     /**
-     * 최상위 및 캠페인 내부 관측 상태를 전체 응답 완전성으로 축약합니다.
+     * 최상위 및 쿠폰 회차 내부 관측 상태를 전체 응답 완전성으로 축약합니다.
      *
      * <p>{@link SourceStatus#N_A N_A}는 현재 조건에 적용되지 않는 상태이므로 완전성을 낮추지
      * 않습니다. 적용 가능한 모든 원천이 {@code VALID} 또는 {@code NO_TRAFFIC}이면 COMPLETE이며,
@@ -35,7 +35,7 @@ public class OverviewStatusCalculator {
     public OverallStatus calculate(AdminOverviewSnapshot snapshot) {
         Objects.requireNonNull(snapshot, "snapshot");
         List<List<SourceStatus>> coreGroups = List.of(
-                campaignSourceStatuses(snapshot),
+                couponRoundSourceStatuses(snapshot),
                 issuanceSourceStatuses(snapshot),
                 queueSourceStatuses(snapshot),
                 stockSourceStatuses(snapshot)
@@ -58,50 +58,50 @@ public class OverviewStatusCalculator {
         return OverallStatus.PARTIAL;
     }
 
-    /** 캠페인·설정 원천이 만드는 오픈 임박, 상태 집계, 기본 목록 상태를 묶습니다. */
-    private static List<SourceStatus> campaignSourceStatuses(AdminOverviewSnapshot snapshot) {
+    /** 쿠폰 회차·설정 원천이 만드는 오픈 임박, 상태 집계, 기본 목록 상태를 묶습니다. */
+    private static List<SourceStatus> couponRoundSourceStatuses(AdminOverviewSnapshot snapshot) {
         return List.of(
                 statusOf(snapshot.openingSoon()),
-                statusOf(snapshot.campaignStatusSummary()),
-                statusOf(snapshot.campaigns())
+                statusOf(snapshot.couponRoundStatusSummary()),
+                statusOf(snapshot.couponRounds())
         );
     }
 
-    /** 발급 관측 원천이 만드는 전체 발급률, 고객 결과, 캠페인별 O1 상태를 묶습니다. */
+    /** 발급 관측 원천이 만드는 전체 발급률, 고객 결과, 쿠폰 회차별 O1 상태를 묶습니다. */
     private static List<SourceStatus> issuanceSourceStatuses(AdminOverviewSnapshot snapshot) {
         List<SourceStatus> statuses = new ArrayList<>();
         statuses.add(statusOf(snapshot.aggregateIssuanceRate()));
         statuses.add(statusOf(snapshot.customerOutcomes()));
-        campaigns(snapshot).forEach(campaign -> statuses.add(statusOf(campaign.issuanceFlow())));
+        couponRounds(snapshot).forEach(couponRound -> statuses.add(statusOf(couponRound.issuanceFlow())));
         return statuses;
     }
 
-    /** 대기열 원천이 만드는 상단 위험, 전체 대기, 캠페인별 O2 상태를 묶습니다. */
+    /** 대기열 원천이 만드는 상단 위험, 전체 대기, 쿠폰 회차별 O2 상태를 묶습니다. */
     private static List<SourceStatus> queueSourceStatuses(AdminOverviewSnapshot snapshot) {
         List<SourceStatus> statuses = new ArrayList<>();
         statuses.add(statusOf(snapshot.queueRisk()));
         statuses.add(statusOf(snapshot.aggregateQueue()));
-        campaigns(snapshot).forEach(
-                campaign -> statuses.add(statusOf(campaign.campaignQueueStatus())));
+        couponRounds(snapshot).forEach(
+                couponRound -> statuses.add(statusOf(couponRound.couponRoundQueueStatus())));
         return statuses;
     }
 
-    /** 재고 원천이 만드는 상단 소진 위험과 캠페인별 O4 상태를 묶습니다. */
+    /** 재고 원천이 만드는 상단 소진 위험과 쿠폰 회차별 O4 상태를 묶습니다. */
     private static List<SourceStatus> stockSourceStatuses(AdminOverviewSnapshot snapshot) {
         List<SourceStatus> statuses = new ArrayList<>();
         statuses.add(statusOf(snapshot.stockRisk()));
-        campaigns(snapshot).forEach(campaign -> statuses.add(statusOf(campaign.stockForecast())));
+        couponRounds(snapshot).forEach(couponRound -> statuses.add(statusOf(couponRound.stockForecast())));
         return statuses;
     }
 
     /** 기본 목록을 읽지 못했으면 중첩 상태를 임의 생성하지 않고 빈 모집단을 반환합니다. */
-    private static List<AdminOverviewSnapshot.CampaignOverview> campaigns(
+    private static List<AdminOverviewSnapshot.CouponRoundOverview> couponRounds(
             AdminOverviewSnapshot snapshot
     ) {
-        if (snapshot.campaigns() == null || snapshot.campaigns().value() == null) {
+        if (snapshot.couponRounds() == null || snapshot.couponRounds().value() == null) {
             return List.of();
         }
-        return snapshot.campaigns().value();
+        return snapshot.couponRounds().value();
     }
 
     /** 누락된 관측 영역은 정상값이 아니라 명시적인 미수집 상태로 취급합니다. */

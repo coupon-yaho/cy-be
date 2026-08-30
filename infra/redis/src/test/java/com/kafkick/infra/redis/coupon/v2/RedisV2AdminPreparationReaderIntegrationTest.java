@@ -215,7 +215,7 @@ class RedisV2AdminPreparationReaderIntegrationTest {
     /** Redis 자료형 파손이 명령 오류로 batch 전체를 덮지 않고 해당 축 실패로 남는지 검증합니다. */
     @Test
     @DisplayName("잘못된 Redis 자료형은 해당 회차 준비 실패로 반환한다")
-    void rejectsWrongRedisTypesPerCampaign() {
+    void rejectsWrongRedisTypesPerCouponRound() {
         writeMeta(10L);
         IssuanceKeys stockHash = IssuanceKeys.of(10L);
         redis.opsForHash().put(stockHash.stock(), "field", "100");

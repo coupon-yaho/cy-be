@@ -108,7 +108,7 @@ public final class RedisV2AdminStockReader implements V2AdminStockReader {
         long code = number(raw.getFirst());
         if (code == MISSING) {
             // 예약 회차는 아직 워밍업될 수 있지만 OPEN/CLOSED 회차의 키 부재는 이미 운영 장애입니다.
-            return request.campaignStatus() == CouponRoundStatus.SCHEDULED
+            return request.couponRoundStatus() == CouponRoundStatus.SCHEDULED
                     ? pending() : unavailable();
         }
         if (code != VALID || raw.size() != 4) {

@@ -39,7 +39,7 @@ import com.kafkick.core.observation.ReasonCode;
  * @param eventId 중복 제거용 UUID
  * @param eventType 관측 단계
  * @param memberId 회원 식별자
- * @param couponId 캠페인 회차 식별자
+ * @param couponId 쿠폰 회차 식별자
  * @param issuanceId 발급권 식별자. 201 ISSUE_RESULT 에만 있다
  * @param issuanceCodeMasked 발급 코드 앞 8자. 발급권이 없으면 null
  * @param grade 회원 등급. 등급 조회 전 실패했으면 null

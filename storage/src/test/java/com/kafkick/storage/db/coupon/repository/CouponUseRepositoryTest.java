@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.auditing.DateTimeProvider;
@@ -935,10 +936,17 @@ class CouponUseRepositoryTest {
         Future<Boolean> expiration = executor.submit(() -> {
             ready.countDown();
             awaitStart(start);
-            int result = transactionTemplate.execute(
-                    status -> expireViaBatchPath(10L, candidates, asOf)
-            );
-            return result == 1;
+            try {
+                int result = transactionTemplate.execute(
+                        status -> expireViaBatchPath(10L, candidates, asOf)
+                );
+                return result == 1;
+            } catch (CannotAcquireLockException exception) {
+                // MySQL이 이 트랜잭션을 deadlock victim으로 고르면 경합에서 진 것과 같다.
+                // 예외를 성공으로 바꾸지 않고 false로 보존하며, 아래 최종 상태 단언이
+                // 상대 트랜잭션만 커밋되고 이쪽은 전부 롤백됐는지 검증한다.
+                return false;
+            }
         });
         Future<Boolean> cancellation = executor.submit(() -> {
             ready.countDown();

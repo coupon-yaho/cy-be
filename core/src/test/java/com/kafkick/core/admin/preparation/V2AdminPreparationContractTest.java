@@ -69,7 +69,7 @@ class V2AdminPreparationContractTest {
                 10L, CouponRoundStatus.SCHEDULED, OPENS_AT, CLOSES_AT, 3, 100L, 75L);
 
         assertThat(request.couponId()).isEqualTo(10L);
-        assertThat(request.campaignStatus()).isEqualTo(CouponRoundStatus.SCHEDULED);
+        assertThat(request.couponRoundStatus()).isEqualTo(CouponRoundStatus.SCHEDULED);
         assertThat(request.opensAt()).isEqualTo(OPENS_AT);
         assertThat(request.closesAt()).isEqualTo(CLOSES_AT);
         assertThat(request.expectedGradeMask()).isEqualTo(3);

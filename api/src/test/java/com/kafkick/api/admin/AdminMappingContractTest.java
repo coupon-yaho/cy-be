@@ -13,7 +13,7 @@ import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 import com.kafkick.api.admin.benchmark.AdminBenchmarkController;
-import com.kafkick.api.admin.campaign.AdminCampaignController;
+import com.kafkick.api.admin.couponround.AdminCouponRoundController;
 import com.kafkick.api.admin.dashboard.AdminDashboardController;
 import com.kafkick.api.admin.issuance.AdminIssuanceController;
 import com.kafkick.api.admin.measurement.AdminMeasurementController;
@@ -32,7 +32,7 @@ class AdminMappingContractTest {
             AdminNotificationController.class,
             AdminObservabilityController.class,
             AdminBenchmarkController.class,
-            AdminCampaignController.class,
+            AdminCouponRoundController.class,
             AdminVerificationController.class,
             AdminMeasurementController.class,
             AdminRuntimeConfigController.class);
@@ -57,10 +57,10 @@ class AdminMappingContractTest {
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/client-result",
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/archive/retry",
             "POST /api/v1/admin/benchmarks/{benchmarkRunId}/consistency/retry",
-            "GET /api/v1/admin/campaigns",
+            "GET /api/v1/admin/coupon-rounds",
             "GET /api/v1/admin/brands",
             "GET /api/v1/admin/templates",
-            "POST /api/v1/admin/campaigns/{campaignId}/status-transitions",
+            "POST /api/v1/admin/coupon-rounds/{couponId}/status-transitions",
             "POST /api/v1/admin/verify",
             "GET /api/v1/admin/verification-runs",
             "GET /api/v1/admin/verification-runs/{runId}",

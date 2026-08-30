@@ -91,14 +91,14 @@ class CouponIssuePolicyValidatorTest {
 
     @Test
     @DisplayName("마감된 회차는 정책 사유로 먼저 거부한다")
-    void rejectsClosedCampaignByPolicyFirst() {
+    void rejectsClosedCouponRoundByPolicyFirst() {
         when(couponRoundRepository.findIssuePolicySnapshot(10L, 20L))
                 .thenReturn(Optional.of(new CouponIssuePolicySnapshot(
                         couponRound(CouponRoundStatus.CLOSED), false)));
 
         assertErrorCode(
                 command(MembershipGrade.GOLD, ISSUED_AT),
-                CouponIssueErrorCode.CAMPAIGN_CLOSED
+                CouponIssueErrorCode.COUPON_ROUND_CLOSED
         );
     }
 

@@ -113,20 +113,20 @@ observation:
     #    대조하므로 ...retry-after 는 ...retryAfterSeconds 에 안 닿고, 안 닿아도 예외가 없다.
     replay-pending-retry-after-seconds: ${OBSERVATION_REPLAY_PENDING_RETRY_AFTER:1}
     gate-not-ready-retry-after-seconds: ${OBSERVATION_GATE_NOT_READY_RETRY_AFTER:1}
-    campaign:
-      # coupon_id 라벨 예외는 최대 100개까지만 허용한다. 초과 캠페인은 축출하지 않고 거부한다.
-      max-active-campaigns: ${OBSERVATION_CAMPAIGN_MAX_ACTIVE:100}
-      retire-grace-period: ${OBSERVATION_CAMPAIGN_RETIRE_GRACE:30m}
+    coupon-round:
+      # coupon_id 라벨 예외는 최대 100개까지만 허용한다. 초과 쿠폰 회차는 축출하지 않고 거부한다.
+      max-active-coupon-rounds: ${OBSERVATION_COUPON_ROUND_MAX_ACTIVE:100}
+      retire-grace-period: ${OBSERVATION_COUPON_ROUND_RETIRE_GRACE:30m}
       # 운영 보관 요구가 확정되기 전의 임시 기본값: 지연 재처리는 하루 동안 막고, 개수도 제한한다.
-      tombstone-retention: ${OBSERVATION_CAMPAIGN_TOMBSTONE_RETENTION:1d}
-      tombstone-max-entries: ${OBSERVATION_CAMPAIGN_TOMBSTONE_MAX_ENTRIES:1000}
+      tombstone-retention: ${OBSERVATION_COUPON_ROUND_TOMBSTONE_RETENTION:1d}
+      tombstone-max-entries: ${OBSERVATION_COUPON_ROUND_TOMBSTONE_MAX_ENTRIES:1000}
   prometheus:
     archive:
       connect-timeout: 1s
       read-timeout: 10s
 
-campaign:
+coupon-round:
   lifecycle:
     redis:
       # API JVM만 구독한다. Batch는 종료 이벤트 발행자이므로 기본값(false)을 유지한다.
-      subscriber-enabled: ${CAMPAIGN_LIFECYCLE_REDIS_SUBSCRIBER_ENABLED:true}
+      subscriber-enabled: ${COUPON_ROUND_LIFECYCLE_REDIS_SUBSCRIBER_ENABLED:true}

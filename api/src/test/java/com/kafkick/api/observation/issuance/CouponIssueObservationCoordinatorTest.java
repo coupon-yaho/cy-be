@@ -203,7 +203,7 @@ class CouponIssueObservationCoordinatorTest {
     @ParameterizedTest
     @CsvSource({
             "NOT_OPENED, 409, NOT_OPENED, NONE",
-            "CAMPAIGN_CLOSED, 409, CAMPAIGN_CLOSED, NONE",
+            "COUPON_ROUND_CLOSED, 409, COUPON_ROUND_CLOSED, NONE",
             "GRADE_NOT_ELIGIBLE, 403, GRADE_NOT_ELIGIBLE, NONE"
     })
     void recordsPolicyRejectionWithoutAnAttempt(

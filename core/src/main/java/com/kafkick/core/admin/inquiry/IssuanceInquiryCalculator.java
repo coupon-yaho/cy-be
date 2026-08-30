@@ -55,7 +55,7 @@ public class IssuanceInquiryCalculator {
         List<InquiryItem> joined = new ArrayList<>();
 
         for (RawAttempt attempt : representativeAttempts(source.attempts())) {
-            // 회원·캠페인·발생 시각은 재시도를 오연결할 수 있어 정확한 ID와 requestId만 사용한다.
+            // 회원·쿠폰 회차·발생 시각은 재시도를 오연결할 수 있어 정확한 ID와 requestId만 사용한다.
             RawIssuance issuance = findLinkedIssuance(
                     attempt, issuanceById, issueHistoryByRequest);
             if (issuance != null) {
@@ -93,7 +93,7 @@ public class IssuanceInquiryCalculator {
         Map<RequestScope, RawAttempt> representativeByRequest = new HashMap<>();
         for (RawAttempt attempt : attempts) {
             // 같은 requestId의 시도·결과는 결과 우선 규칙으로 먼저 대표 한 행을 고른다.
-            // 회원·캠페인·requestId 범위가 다른 재시도는 서로 다른 문의 행으로 유지된다.
+            // 회원·쿠폰 회차·requestId 범위가 다른 재시도는 서로 다른 문의 행으로 유지된다.
             representativeByRequest.merge(
                     RequestScope.of(attempt),
                     attempt,
@@ -214,7 +214,7 @@ public class IssuanceInquiryCalculator {
         return before == null || NEWEST_POSITION_FIRST.compare(position, before) > 0;
     }
 
-    /** requestId 재사용이 다른 회원·캠페인의 문의 행을 합치지 못하게 하는 연결 범위입니다. */
+    /** requestId 재사용이 다른 회원·쿠폰 회차의 문의 행을 합치지 못하게 하는 연결 범위입니다. */
     private record RequestScope(long memberId, long couponId, String requestId) {
 
         private static RequestScope of(RawAttempt attempt) {

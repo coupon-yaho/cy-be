@@ -22,7 +22,7 @@ public class IssuanceActionCalculator {
      * 최신 정상 O1 관측의 발급 중단만 조치 후보로 변환합니다.
      *
      * <p>오래된·준비 중·미수집 관측과 발급 감소는 운영 조치로 승격하지 않습니다. 이 계산기는
-     * 화면 표시용 캠페인 이름·오픈 시각을 모르며 Service 조립 경계가 같은 couponId의 정보를
+     * 화면 표시용 쿠폰 회차 이름·오픈 시각을 모르며 Service 조립 경계가 같은 couponId의 정보를
      * 보강합니다.</p>
      *
      * @param issuanceFlows couponId별 계산 완료 O1 관측값

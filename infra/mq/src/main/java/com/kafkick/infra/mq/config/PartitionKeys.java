@@ -11,7 +11,7 @@ import com.kafkick.core.observation.IssuanceFlowEvent;
  * notify   → memberId
  * </pre>
  *
- * <p><b>{@code couponId} 를 키로 쓰지 않는다.</b> 그건 캠페인 회차라 부하 테스트처럼 캠페인이
+ * <p><b>{@code couponId} 를 키로 쓰지 않는다.</b> 그건 쿠폰 회차라 부하 테스트처럼 쿠폰 회차가
  * 하나뿐인 상황에서 모든 레코드가 한 파티션으로 몰린다. 파티션을 6으로 잡은 의미가 사라지고
  * 컨슈머를 몇 개 띄우든 하나만 일한다.
  *

@@ -78,7 +78,7 @@ class VerificationFindingJdbcAdapterTest {
 
     @Test
     @DisplayName("회차 검출은 campaign_id 에 들어간다 — 레거시 컬럼명이 회차를 가리킨다")
-    void mapCouponToLegacyCampaignColumn() {
+    void mapCouponToLegacyCouponRoundColumn() {
         adapter.appendAll(runId, List.of(VerificationFinding.forCoupon(
                 FindingType.STOCK_MISMATCH, 812, "active_count=9998", "집계=10001")));
 

@@ -100,7 +100,7 @@ public record AdminAnalyticsResponse(
     /** 서버가 실제 분석에 적용한 양끝 포함 조회 기간입니다. */
     public record TimeRange(LocalDate from, LocalDate to) { }
 
-    /** 서버가 적용한 선택 브랜드·캠페인 회차 필터입니다. */
+    /** 서버가 적용한 선택 브랜드·쿠폰 회차 필터입니다. */
     public record AnalyticsFilterSummary(Long brandId, Long couponId) { }
 
     /** 차트 범례에 사용할 브랜드 식별자와 표시 이름입니다. */

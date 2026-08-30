@@ -35,7 +35,7 @@ import com.kafkick.core.observation.SourceStatus;
 class DashboardIssuanceDtoJsonSerializationTest {
 
     private static final Instant OBSERVED_AT = Instant.parse("2026-08-16T00:00:00Z");
-    private static final Instant CAMPAIGN_OPENS_AT = Instant.parse("2026-08-15T23:00:00Z");
+    private static final Instant COUPON_ROUND_OPENS_AT = Instant.parse("2026-08-15T23:00:00Z");
 
     private final ObjectMapper objectMapper;
 
@@ -46,7 +46,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
 
     /** 쿠폰 지표가 원천별 상태와 관측 시각을 잃지 않고 확정 enum 이름으로 직렬화되는지 확인합니다. */
     @Test
-    void couponMetricsSerializesNestedObservedValuesAndCampaignStatus() throws Exception {
+    void couponMetricsSerializesNestedObservedValuesAndCouponRoundStatus() throws Exception {
         ObservedValue<Long> initialCount = new ObservedValue<>(100L, SourceStatus.VALID, OBSERVED_AT);
         ObservedValue<Long> remainingCount = new ObservedValue<>(40L, SourceStatus.VALID, OBSERVED_AT);
         CouponMetricsResponse response = new CouponMetricsResponse(
@@ -60,7 +60,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
                         new ObservedValue<>(null, SourceStatus.PENDING, null),
                         new ObservedValue<>(null, SourceStatus.PENDING, null)
                 ),
-                new CouponMetricsResponse.CampaignRuntimeSummary(CouponRoundStatus.OPEN, OBSERVED_AT),
+                new CouponMetricsResponse.CouponRoundRuntimeSummary(CouponRoundStatus.OPEN, OBSERVED_AT),
                 new ObservedValue<>(0.2, SourceStatus.VALID, OBSERVED_AT),
                 new ObservedValue<>(new CouponMetricsResponse.IssuanceStatusCounts(10, 5, 1, 2),
                         SourceStatus.VALID, OBSERVED_AT),
@@ -72,10 +72,12 @@ class DashboardIssuanceDtoJsonSerializationTest {
         assertThat(json)
                 .contains("\"couponId\":7")
                 .contains("\"window\":\"FIVE_MINUTES\"")
+                .contains("\"couponRound\":{\"status\":\"OPEN\"")
                 .contains("\"initialCount\":{\"value\":100,\"state\":\"VALID\"")
                 .contains("\"waitingCount\":{\"state\":\"PENDING\"")
                 .contains("\"status\":\"OPEN\"")
-                .contains("\"transitionRate\":{\"state\":\"PENDING\"");
+                .contains("\"transitionRate\":{\"state\":\"PENDING\"")
+                .doesNotContain("\"campaign\":");
     }
 
     @Test
@@ -89,7 +91,7 @@ class DashboardIssuanceDtoJsonSerializationTest {
                 snapshotObserved(0.6),
                 snapshotObserved(new CouponMetricsSnapshot.RateSummary(12.5, 20.0)),
                 new CouponMetricsSnapshot.QueueSummary(count, snapshotObserved(Duration.ofMillis(1_250L))),
-                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponRoundStatus.OPEN, CAMPAIGN_OPENS_AT),
+                new CouponMetricsSnapshot.CouponRoundRuntimeSummary(CouponRoundStatus.OPEN, COUPON_ROUND_OPENS_AT),
                 snapshotObserved(0.2),
                 snapshotObserved(new CouponMetricsSnapshot.IssuanceStatusCounts(8L, 2L, 1L, 1L)),
                 snapshotObserved(new CouponMetricsSnapshot.TransitionRateSummary(2.5, 1.5, 0.5, 0.25)));

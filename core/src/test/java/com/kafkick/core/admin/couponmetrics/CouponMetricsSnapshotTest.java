@@ -40,7 +40,7 @@ class CouponMetricsSnapshotTest {
                 issuanceProgress,
                 observed(new CouponMetricsSnapshot.RateSummary(1.0, 1.0)),
                 new CouponMetricsSnapshot.QueueSummary(count, observed(Duration.ZERO)),
-                new CouponMetricsSnapshot.CampaignRuntimeSummary(CouponRoundStatus.OPEN, OBSERVED_AT),
+                new CouponMetricsSnapshot.CouponRoundRuntimeSummary(CouponRoundStatus.OPEN, OBSERVED_AT),
                 usageRatio,
                 observed(new CouponMetricsSnapshot.IssuanceStatusCounts(1L, 0L, 0L, 0L)),
                 observed(new CouponMetricsSnapshot.TransitionRateSummary(1.0, 1.0, 1.0, 1.0)));
