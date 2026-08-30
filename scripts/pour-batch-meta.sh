@@ -2,9 +2,12 @@
 # 검증용 셋에 Spring Batch 메타 스키마를 붓는다.
 #
 # 왜 필요한가
-#   cy-seed 의 ddl/ 은 BATCH_* 를 **일부러** 안 만든다 — 잡 실행 이력은 도메인이 아니고
-#   그 DDL 의 주인은 이 저장소의 V11 이다(seed-ddl/README.md 가 그 경계를 적는다).
+#   cy-seed 의 ddl/ 은 BATCH_* 와 알림 표를 **일부러** 안 만든다 — 잡 실행 이력도 알림도
+#   도메인이 아니고, 그 DDL 의 주인은 이 저장소다(seed-ddl/README.md 가 그 경계를 적는다).
 #   그래서 재시드는 스키마를 새로 만들면서 이 테이블들을 매번 지운다.
+#
+#   알림 표는 **배치가 안 읽는데도** 필요하다. 하이버네이트가 ddl-auto=validate 로
+#   엔티티 전부를 검사해서, 없으면 검증용 셋에 붙은 배치가 아예 안 뜬다.
 #
 #   그 자체는 설계대로다. 문제는 **다시 붓는 것을 사람이 기억해야 한다**는 점이고,
 #   실제로 2026-08-30 에 두 번 잊었다. 두 번 다 증상이 같았다 —
@@ -46,9 +49,17 @@ FILES=(
   "V11__batch_metadata.sql"
   "V2026082513__ix_batch_job_execution_lookup.sql"
   "V2026082514__ix_batch_job_execution_history.sql"
+  # 알림 표(CY-642). **배치가 안 읽는데도 여기 있는 이유** —
+  # 하이버네이트가 ddl-auto=validate 로 **엔티티 전부**를 검사한다. 이 표들이 없으면
+  # 검증용 셋에 붙은 배치가 통째로 안 뜬다:
+  #   Schema validation: missing table [notification_attempts]
+  # 시드가 안 만드는 것이 맞고(관측·알림은 도메인이 아니다) 스키마 대조에서도 뺐지만,
+  # 하이버네이트는 그 구분을 안 한다. 2026-08-30 재빌드에서 실제로 겪었다 —
+  # 그전 이미지에는 이 엔티티가 없어서 안 드러났다.
+  "V2026082701__notifications.sql"
 )
 
-# **V11 이 만드는 아홉 전부.** 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
+# **부어야 하는 표 전부.** 배치 메타 아홉과 알림 넷이다. 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
 # 이름으로 묻는 것은 이 중 넷뿐이지만, **넷만 보고 건너뛰면 안 된다** — 나머지 다섯이
 # 없어도 "이미 온전하다" 로 빠져나가고, 그다음 Spring Batch 가 실행 문맥을 쓰려는
 # 순간 죽는다(리뷰가 잡았다).
@@ -56,6 +67,10 @@ FILES=(
 # "BATCH_ 로 시작하는 것이 아홉 개" 로 세지 않고 이름을 쓰는 이유는 그대로다 —
 # 엉뚱한 BATCH_* 가 자리를 채워도 개수는 맞는다.
 REQUIRED_TABLES=(
+  "notifications"
+  "notification_attempts"
+  "notification_resend_audits"
+  "notification_outbox"
   "BATCH_JOB_INSTANCE"
   "BATCH_JOB_EXECUTION"
   "BATCH_STEP_EXECUTION"
