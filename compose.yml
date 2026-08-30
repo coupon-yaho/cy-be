@@ -131,12 +131,14 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: "no"
+    # 복제 역할을 **명령줄이 아니라 볼륨의 conf 로** 둔다. Sentinel 은 승격·강등을 REPLICAOF
+    # 로 알리고 Redis 는 그것을 자기 설정 파일에 다시 쓴다(실측). 명령줄에 박으면 재기동이
+    # 그 기록을 덮어써서, failover 뒤 스택을 다시 올릴 때 승격본이 옛 master 를 도로 따라가고
+    # 승격 이후의 쓰기가 full sync 로 사라진다 — config:runtime 은 DB 재구성 대상이 아니라
+    # 그대로 유실되고 RuntimeConfigBootstrap 이 revision 0 을 다시 심는다.
+    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --maxmemory-policy
-      - noeviction
+      - 'if [ ! -f /data/redis.conf ]; then : > /data/redis.conf; fi; exec redis-server /data/redis.conf --appendonly yes --maxmemory-policy noeviction'
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -147,12 +149,15 @@ services:
       timeout: 3s
       retries: 20
 
-  # replicaof 가 명령줄에 박혀 있어 재시작하면 Sentinel 이 정한 토폴로지를 덮어쓰고
-  # 강등된 옛 master 를 다시 따라간다. 위와 같은 이유로 자동 복귀를 막는다.
+  # 자동 복귀는 막는다 — failover 중 한 대만 되살아나면 그 순간의 토폴로지가 갈린다.
   redis-replica-1:
     image: redis:7.4-alpine
     restart: "no"
-    command: ["redis-server", "--replicaof", "redis", "6379", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    # replicaof 는 **첫 기동에만** 심는다. 그 뒤로는 Sentinel 이 정한 역할이 이 파일에
+    # 남고, 재기동은 그것을 그대로 읽는다 — 승격된 replica 가 master 로 다시 뜬다.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'if [ ! -f /data/redis.conf ]; then echo "replicaof redis 6379" > /data/redis.conf; fi; exec redis-server /data/redis.conf --appendonly yes --maxmemory-policy noeviction'
     depends_on:
       redis:
         condition: service_healthy
@@ -164,12 +169,15 @@ services:
       timeout: 3s
       retries: 20
 
-  # replicaof 가 명령줄에 박혀 있어 재시작하면 Sentinel 이 정한 토폴로지를 덮어쓰고
-  # 강등된 옛 master 를 다시 따라간다. 위와 같은 이유로 자동 복귀를 막는다.
+  # 위와 같다.
   redis-replica-2:
     image: redis:7.4-alpine
     restart: "no"
-    command: ["redis-server", "--replicaof", "redis", "6379", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    # replicaof 는 **첫 기동에만** 심는다. 그 뒤로는 Sentinel 이 정한 역할이 이 파일에
+    # 남고, 재기동은 그것을 그대로 읽는다 — 승격된 replica 가 master 로 다시 뜬다.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'if [ ! -f /data/redis.conf ]; then echo "replicaof redis 6379" > /data/redis.conf; fi; exec redis-server /data/redis.conf --appendonly yes --maxmemory-policy noeviction'
     depends_on:
       redis:
         condition: service_healthy
@@ -181,26 +189,22 @@ services:
       timeout: 3s
       retries: 20
 
-  # Sentinel 상태는 tmpfs 라 컨테이너와 함께 사라진다. 영속시키면 승격된 master 이름을
-  # 기억한 채 뜨는데, replica 는 command 의 --replicaof 로 초기 master 를 다시 따라가므로
-  # 둘이 어긋난다 — Sentinel 이 replica 를 master 로 알려 주고 애플리케이션의 발급 Lua 가
-  # READONLY 로 전부 실패한다. 비우면 매 기동이 sentinel.conf 의 선언 토폴로지에서 시작해
-  # --replicaof 와 항상 일치한다. 데이터 노드와 같은 이유로 자동 복귀도 걸지 않는다:
-  # failover 중 한 대만 되살아나 초기 토폴로지를 주장하면 같은 어긋남이 생긴다.
-  # 세 대를 한꺼번에 재기동하면 셋 다 선언 토폴로지에서 시작한다 — 옛 master 가 살아 있으면
-  # INFO 의 role 로 실제 master 를 다시 찾아가고, 죽어 있으면 SDOWN 뒤 failover 를 새로 돌린다.
-  # 어느 쪽이든 수렴하지만 그 창의 발급은 503 이므로, 측정 회차 사이에만 재기동한다.
+  # Sentinel 상태를 **영속시킨다**. 데이터 노드가 자기 역할을 conf 에 기록하게 됐으므로
+  # (위 두 블록) 재기동하면 셋이 같은 토폴로지를 읽는다 — 예전처럼 Sentinel 만 승격을
+  # 기억하고 replica 는 명령줄 replicaof 로 되돌아가는 어긋남이 생기지 않는다.
+  # 반대로 Sentinel 상태를 비우면 승격 기억이 사라져 옛 master 를 다시 감시하고, 그 사이
+  # 승격본이 옛 master 에 full sync 되어 승격 이후의 쓰기가 통째로 사라진다.
+  # 자동 복귀는 걸지 않는다 — failover 중 한 대만 되살아나면 그 순간 정족수가 흔들린다.
   redis-sentinel-1: &redis-sentinel
     image: redis:7.4-alpine
     restart: "no"
     entrypoint: ["/bin/sh", "-ec"]
-    # ⚠️ Redis 인증은 배선돼 있지 않다 — 정본은 docs/12-v2-redis-design.md §6.1.1 이다.
+    # ⚠️ Redis 인증은 배선돼 있지 않다 — 정본은 docs/12-v2-redis-design.md §6.1.2 이다.
     command:
       - 'if [ ! -f /data/sentinel.conf ]; then cp /config/sentinel.conf /data/sentinel.conf; fi; exec redis-server /data/sentinel.conf --sentinel'
     volumes:
       - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
-    tmpfs:
-      - /data
+      - coupon-redis-sentinel-1-data:/data
     depends_on:
       redis:
         condition: service_healthy
@@ -230,9 +234,15 @@ services:
 
   redis-sentinel-2:
     <<: *redis-sentinel
+    volumes:
+      - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
+      - coupon-redis-sentinel-2-data:/data
 
   redis-sentinel-3:
     <<: *redis-sentinel
+    volumes:
+      - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
+      - coupon-redis-sentinel-3-data:/data
 
   # 신규 로컬 환경에서 명시적으로 한 번만 실행한다:
   #   docker compose --profile runtime-config-seed run --rm runtime-config-seed
@@ -552,6 +562,9 @@ volumes:
   coupon-redis-data:
   coupon-redis-replica-1-data:
   coupon-redis-replica-2-data:
+  coupon-redis-sentinel-1-data:
+  coupon-redis-sentinel-2-data:
+  coupon-redis-sentinel-3-data:
   coupon-kafka-1-data:
   coupon-kafka-2-data:
   coupon-kafka-3-data:

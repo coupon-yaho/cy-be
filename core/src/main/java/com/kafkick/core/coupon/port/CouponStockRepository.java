@@ -8,6 +8,17 @@ import com.kafkick.core.coupon.exception.CouponStockOverflowException;
 
 public interface CouponStockRepository {
 
+    /**
+     * 재고 한 장을 조건부로 점유한다. 총량을 넘기지 않는 것은 이 UPDATE 의 {@code WHERE} 절이고,
+     * 판정은 affected rows 다 — 애플리케이션이 읽고 비교하지 않는다.
+     *
+     * @param couponRoundId 회차
+     * @param updatedAt 갱신 시각. <b>{@code null} 이면 DB 에 가기 전에 거절한다</b> —
+     *     그대로 보내면 {@code NOT NULL} 위반이 되어 호출부 버그가 재고 사고로 오분류된다
+     * @return 점유했으면 {@code OCCUPIED}, 총량에 도달했으면 {@code SOLD_OUT},
+     *     회차 재고 행이 없으면 {@code NOT_FOUND}
+     * @throws IllegalArgumentException {@code updatedAt} 이 {@code null} 일 때
+     */
     CouponStockOccupationResult occupyOne(
             Long couponRoundId,
             Instant updatedAt

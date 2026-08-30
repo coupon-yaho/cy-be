@@ -71,6 +71,11 @@ public class IssuanceGateRedisAutoConfiguration {
     CircuitBreakerRegistry redisIssuanceCircuitBreakerRegistry(RedisCircuitBreakerProperties properties) {
         // Retry는 붙이지 않는다. timeout 뒤 Lua가 선점을 끝냈을 수 있어, 새 requestToken으로
         // 다시 보내면 완료·보상 CAS가 앞선 PENDING과 갈린다.
+        //
+        // **아래 조합은 기동을 거절한다.** 표본 창보다 최소 호출 수가 크면 차단기가 영영
+        // 열리지 않는데(표본이 임계에 못 미친다), 값 하나만 보면 둘 다 정상이라
+        // RedisCircuitBreakerProperties 의 setter 가 잡을 수 없다. 조용히 통과시키면
+        // "차단기를 걸었는데 안 열린다"가 장애 중에 드러난다.
         if (properties.getMinimumNumberOfCalls() > properties.getSlidingWindowSize()) {
             throw new IllegalStateException(
                     "redisCB minimum-number-of-calls는 sliding-window-size보다 클 수 없습니다.");

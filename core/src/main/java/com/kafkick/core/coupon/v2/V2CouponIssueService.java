@@ -1,6 +1,8 @@
 package com.kafkick.core.coupon.v2;
 
+import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -34,6 +36,11 @@ import com.kafkick.core.observation.EngineVersion;
 public final class V2CouponIssueService {
 
     private static final Logger log = LoggerFactory.getLogger(V2CouponIssueService.class);
+    /** 보상 실패 로그의 최소 간격. 장애 구간에 요청 수만큼 찍히는 것을 막는다. */
+    private static final long COMPENSATION_LOG_INTERVAL_NANOS = Duration.ofSeconds(1).toNanos();
+
+    private final AtomicLong lastCompensationLogAt = new AtomicLong(Long.MIN_VALUE);
+    private final AtomicLong suppressedCompensationLogs = new AtomicLong();
 
     private final IssuanceGatePort gate;
     private final IssuanceRepository issuances;
@@ -303,6 +310,26 @@ public final class V2CouponIssueService {
         }
     }
 
+    /**
+     * 보상 실패를 <b>한 창에 한 줄만</b> 남긴다. 억제된 건수를 함께 실어, 로그만 보고
+     * 사고 규모를 과소평가하지 않게 한다.
+     *
+     * <p>정확한 창 경계는 필요 없다 — 목적이 감사 로그가 아니라 원인 파악이라, 같은 장애
+     * 구간에서 cause 하나와 대략의 건수면 충분하다. 그래서 락 없이 CAS 한 번으로 끝낸다.
+     */
+    private void logCompensationFailure(CouponIssueCommand command, RuntimeException failure) {
+        long now = System.nanoTime();
+        long previous = lastCompensationLogAt.get();
+        if (now - previous < COMPENSATION_LOG_INTERVAL_NANOS
+                || !lastCompensationLogAt.compareAndSet(previous, now)) {
+            suppressedCompensationLogs.incrementAndGet();
+            return;
+        }
+        long suppressed = suppressedCompensationLogs.getAndSet(0);
+        log.warn("v2 보상 CAS 실패. couponRoundId={}, memberId={}, cause={}, 직전 창에서 생략={}",
+                command.couponRoundId(), command.memberId(), failure.toString(), suppressed);
+    }
+
     private CompensateOutcome compensatePreserving(
             RuntimeException original,
             CouponIssueCommand command,
@@ -315,16 +342,15 @@ public final class V2CouponIssueService {
             // DB 가 판정을 확정한 경로에서는 원 예외가 던져지지 않고 버려진다 — 여기서
             // 남기지 않으면 왜 깨졌는지가 저장소 어디에도 없다.
             //
-            // ⚠️ **스택을 인자로 넘기지 않는다.** 이 자리는 failover 구간에 초당 수천 건이
-            // 되고 이 저장소에는 logback 설정이 없어 동기 콘솔 appender 다 — 스택 전문을
-            // 찍으면 로그 I/O 가 락 하나에 직렬화되어 응답 지연을 밀어 올리고, 그 지연이
-            // 이 작업이 재려는 failover 복구 시간에 그대로 들어간다. GlobalExceptionHandler
-            // 가 같은 이유로 만든 한 줄 요약 갈래와 형태를 맞춘다. 건당 원인 분포는
-            // claim.leaked·compensation.no.claim·compensation.already.done 세 미터가 센다.
+            // ⚠️ **건당 남기지 않는다.** 이 자리는 failover 구간에 초당 수천 건이 되고 이
+            // 저장소에는 logback 설정이 없어 동기 콘솔 appender 다 — 스택을 빼도 단문이
+            // 요청 수만큼 쌓이면 로그 I/O 가 락 하나에 직렬화되어 응답 지연을 밀어 올리고,
+            // 그 지연이 이 작업이 재려는 failover 복구 시간에 그대로 들어간다. 원인은 한
+            // 창에 한 줄이면 충분하고(같은 장애면 cause 가 같다), 건수는 세 미터
+            // (claim.leaked·compensation.no.claim·compensation.already.done)가 센다.
+            // 억제한 건수도 함께 남겨 로그만 보고 "한 건이었다"로 읽지 않게 한다.
             // 회차·회원 id 는 내부 식별자라 마스킹 대상이 아니다.
-            log.warn("v2 보상 CAS 실패. couponRoundId={}, memberId={}, cause={}",
-                    command.couponRoundId(), command.memberId(),
-                    compensationFailure.toString());
+            logCompensationFailure(command, compensationFailure);
             // null 로 접지 않는다. null 은 "보상하지 않기로 했다"는 결정이고 이쪽은
             // "보상이 깨졌다"라 선점의 행방을 모른다 — 응답 분류가 갈려야 한다.
             return CompensateOutcome.ATTEMPT_FAILED;

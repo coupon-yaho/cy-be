@@ -15,7 +15,7 @@ v1(`SELECT … FOR UPDATE`)에서 v2(Redis Lua 원자 카운터)로. 발급 경�
 | D1 | 부하 | 스파이크 — 2만 요청이 1~3초 내 전량 |
 | D2 | 영속화 | Redis 선점 → 동기 DB INSERT → 실패 시 보상 롤백 |
 | D3 | 재고 복원 | 취소·사용취소·만료도 Redis 동시 갱신. 순서는 DB→Redis(발급과 반대) |
-| D4 | Redis 가용성 | Sentinel(1 master·2 replica·3 Sentinel)로 failover 가용성을 얻는다. Redis 복제 유실의 정합성 회수는 CY-760 DB 재구성이 전담한다; redisCB OPEN은 503 + Retry-After. **여섯 노드 모두 무인증이다 — §6.1.1** |
+| D4 | Redis 가용성 | Sentinel(1 master·2 replica·3 Sentinel)로 failover 가용성을 얻는다. Redis 복제 유실의 정합성 회수는 CY-760 DB 재구성이 전담한다; redisCB OPEN은 503 + Retry-After. **여섯 노드 모두 무인증이다 — §6.1.2** |
 | D5 | 조회 캐시 | 2계층 — L1 Caffeine(힙) + L2 Redis. SWR 미채택, stale-if-error 만 |
 | D6 | 멱등 | Redis `HSETNX` 가 게이트만 대체. 레코드는 발급 TX 안에서 DONE. 값 전이는 **요청토큰 CAS**(§4.4), stale **자동 회수 없음**(§4.10) |
 | D7 | 대기열 | v2 측정에서 OFF |
@@ -556,7 +556,21 @@ failover가 정상 요청 수천 건을 `503`으로 바꾸기 때문이다. 연�
 
 D2(동기 INSERT)를 택한 시점에 성공한 발급은 예외 없이 `issuances` 에 남는다. Redis 의 어떤 키도 원본이 아니고 전부 DB 에서 다시 만들 수 있다.
 
-### 6.1.1 인증 — 배선하지 않았다 (정본)
+### 6.1.1 재기동 — 역할은 파일이 기억한다
+
+**복제 역할을 명령줄에 박지 않는다.** Sentinel 은 승격·강등을 `REPLICAOF` 로 알리고 Redis 는
+그것을 자기 설정 파일에 다시 쓴다(실측 — 승격된 replica 의 conf 에서 `replicaof` 가 사라지고,
+돌아온 옛 master 의 conf 에는 새 master 가 적힌다). 명령줄에 박으면 재기동이 그 기록을 덮는다.
+
+그 상태로 failover 뒤 스택을 다시 올리면 **승격본이 옛 master 를 도로 따라가 full sync 하고,
+승격 이후의 쓰기가 통째로 사라진다.** `config:runtime` 은 §6.2 재구성 대상이 아니라 되살릴 곳이
+없고, 비면 `RuntimeConfigBootstrap` 이 `revision 0` 기본값을 다시 심어 **운영 중 설정이 조용히
+되돌아간다.** 그래서 세 데이터 노드는 볼륨의 conf 로 뜨고 첫 기동에만 `replicaof` 를 심는다.
+
+Sentinel 상태도 같은 이유로 영속시킨다. 셋이 같은 토폴로지를 읽어야 재기동이 어긋나지 않는다 —
+한쪽만 기억하면 Sentinel 이 replica 를 master 로 알려 주고 발급 Lua 가 `READONLY` 로 전부 실패한다.
+
+### 6.1.2 인증 — 배선하지 않았다 (정본)
 
 **master·replica·Sentinel 여섯 노드 모두 무인증이다.** `REDIS_PASSWORD` 를 채우면 잠기는 것이
 아니라 **기동이 깨진다** — 클라이언트만 `AUTH` 를 보내고 서버에는 비밀번호가 없어 Redis 가

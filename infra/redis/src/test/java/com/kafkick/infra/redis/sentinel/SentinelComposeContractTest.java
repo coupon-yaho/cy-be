@@ -29,11 +29,17 @@ class SentinelComposeContractTest {
                 .doesNotContain("COUPON_V2_SENTINEL_STARTUP_CLOSE_ENABLED")
                 // Sentinel·replica 는 인증이 없다. 호스트로 열면 그대로 무인증 엔드포인트가 된다.
                 .doesNotContain("26379:26379")
-                // Sentinel 상태를 영속시키면 승격된 master 를 기억한 채 뜨는데 replica 는
-                // --replicaof 로 초기 master 를 따라가 어긋난다. 볼륨이 되살아나면 안 된다.
-                .doesNotContain("coupon-redis-sentinel-1-data");
-        // Sentinel 세 대의 /data 는 tmpfs 다 — 매 기동이 선언 토폴로지에서 시작한다.
-        assertThat(compose.split("tmpfs:\n      - /data", -1)).hasSize(2);
+                // 복제 역할을 명령줄에 박으면 재기동이 Sentinel 이 기록한 역할을 덮어써,
+                // failover 뒤 승격본이 옛 master 에 full sync 되어 승격 이후의 쓰기가 사라진다.
+                // config:runtime 은 DB 재구성 대상이 아니라 그대로 유실된다.
+                .doesNotContain("--replicaof");
+        // 세 데이터 노드는 자기 역할을 볼륨의 conf 에 남기고, Sentinel 도 승격을 기억한다.
+        // 셋이 같은 토폴로지를 읽어야 재기동이 어긋나지 않는다.
+        assertThat(compose).contains(
+                "echo \"replicaof redis 6379\" > /data/redis.conf",
+                "coupon-redis-sentinel-1-data:/data",
+                "coupon-redis-sentinel-2-data:/data",
+                "coupon-redis-sentinel-3-data:/data");
         // healthcheck 는 PING 이 아니라 감시 상태를 묻는다. PING 은 master·replica 를 하나도
         // 인지하지 못한 Sentinel 도 통과시켜, 승격 대상이 없는 상태로 api 를 기동시킨다.
         // replica 는 띄운 수(2)만큼 요구한다 — 1대만 인지하면 승격 뒤 남는 replica 가 0 이다.
@@ -48,10 +54,13 @@ class SentinelComposeContractTest {
         // 미배선 사실의 정본은 설계 문서 한 곳이다. 세 파일이 각자 설명을 들고 있으면
         // 배선하는 날 한 곳만 고쳐지고 나머지가 남아 다음 사람이 반대로 읽는다.
         String design = Files.readString(Path.of("../../docs/12-v2-redis-design.md"));
-        assertThat(design).contains("### 6.1.1 인증 — 배선하지 않았다 (정본)");
-        assertThat(compose).contains("docs/12-v2-redis-design.md §6.1.1");
-        assertThat(config).contains("docs/12-v2-redis-design.md §6.1.1");
-        assertThat(environment).contains("docs/12-v2-redis-design.md §6.1.1");
+        assertThat(design).contains(
+                "### 6.1.2 인증 — 배선하지 않았다 (정본)",
+                // 재기동이 승격을 유실하지 않는다는 근거도 같은 문서가 정본이다.
+                "### 6.1.1 재기동 — 역할은 파일이 기억한다");
+        assertThat(compose).contains("docs/12-v2-redis-design.md §6.1.2");
+        assertThat(config).contains("docs/12-v2-redis-design.md §6.1.2");
+        assertThat(environment).contains("docs/12-v2-redis-design.md §6.1.2");
         // 주석은 세는 대상이 아니다 — 지시어로 살아 있는 줄만 본다.
         assertThat(config.lines().map(String::strip).filter(line -> !line.startsWith("#")))
                 .noneMatch(line -> line.startsWith("sentinel auth-pass"));

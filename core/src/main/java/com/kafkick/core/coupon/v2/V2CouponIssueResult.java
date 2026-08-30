@@ -21,7 +21,10 @@ import com.kafkick.core.coupon.v2.port.CompleteOutcome;
  *
  * @throws NullPointerException 위 조합에서 필수인 값이 비었을 때
  * @throws IllegalArgumentException 거절인데 발급·완료 결과가 있거나, replay 인데 완료 CAS 가
- *     실려 있을 때
+ *     실려 있을 때. <b>DB 괴리 표시도 제 거절에만 붙는다</b> —
+ *     {@code databaseSoldOutAfterRedisClaim} 은 {@link ClaimOutcome#SOLD_OUT},
+ *     {@code databaseDuplicateAfterRedisClaim} 은 {@link ClaimOutcome#DUP_PER_MEMBER} 이
+ *     아니면 거절한다. 엉뚱한 거절에 붙으면 관제가 매진과 회원 괴리를 뒤바꿔 읽는다
  */
 public record V2CouponIssueResult(
         ClaimResult claimResult,
