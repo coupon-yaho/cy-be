@@ -121,7 +121,13 @@ abstract class SchemaParityTestBase {
             // 발급 시도 이력 — Kafka consumer 가 적재한다(OBS-15)
             "issue_attempts",
             // 회차 생성 스케줄러의 싱글턴 가드
-            "coupon_round_schedule_guard");
+            "coupon_round_schedule_guard",
+            // 알림 계약과 저장(CY-642) — 관리자 알림 화면과 발송 경로가 읽는다.
+            // **검증은 이 표들을 안 읽는다**(core/verification · storage/db/verification ·
+            // batch/job 전부 참조 0건). 시드가 만드는 것은 발급·이력·재고·판정이고
+            // 알림은 런타임이 쌓는 산출물이라 데이터셋에 안 속한다.
+            "notifications", "notification_attempts",
+            "notification_resend_audits", "notification_outbox");
 
     @Autowired
     private JdbcClient jdbcClient;
