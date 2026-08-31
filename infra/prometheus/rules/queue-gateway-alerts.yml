@@ -12,7 +12,7 @@ groups:
           description: "외부 게이트웨이의 /actuator/prometheus 응답과 Prometheus targets의 queue-gateway 상태를 먼저 확인합니다."
 
       - alert: QueueGatewaySnapshotUnavailable
-        expr: (waiting_snapshot_age{job="queue-gateway"} < 0) or (up{job="queue-gateway"} == 1 unless on(instance) waiting_snapshot_age{job="queue-gateway"})
+        expr: ((waiting_snapshot_age{job="queue-gateway"} < 0) and on(instance) (up{job="queue-gateway"} == 1)) or (up{job="queue-gateway"} == 1 unless on(instance) waiting_snapshot_age{job="queue-gateway"})
         for: 10s
         labels:
           severity: critical
