@@ -45,7 +45,12 @@ public final class QueueGatewayCouponRoundPublisher {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    /** 한 DB 스냅샷의 OPEN 회차만 골라 정책과 버전별 권위 재고를 함께 반영합니다. */
+    /**
+     * 한 DB 스냅샷의 OPEN 회차만 골라 정책과 버전별 권위 재고를 함께 반영합니다.
+     *
+     * <p>카탈로그 상태가 {@link SourceStatus#VALID}가 아니면 새 스냅샷을 공급하지 않고 조기
+     * 종료합니다. 이때 Redis의 이전 게이트웨이 스냅샷을 그대로 보존합니다.
+     */
     @Scheduled(
             fixedDelayString = "${queue.gateway.publisher.coupon-round-interval:5s}",
             scheduler = QueueGatewayPublisherConfiguration.COUPON_ROUND_SCHEDULER
