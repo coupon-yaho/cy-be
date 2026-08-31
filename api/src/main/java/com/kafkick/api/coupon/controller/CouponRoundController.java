@@ -1,5 +1,7 @@
 package com.kafkick.api.coupon.controller;
 
+import java.util.List;
+
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
@@ -82,9 +84,9 @@ public class CouponRoundController {
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
             @RequestHeader(value = MemberRequestHeaders.MEMBER_GRADE, required = false)
-            MembershipGrade memberGrade,
+            List<String> memberGradeValues,
             @RequestHeader(value = MemberRequestHeaders.MEMBERSHIP_GRADE, required = false)
-            MembershipGrade legacyMembershipGrade,
+            List<String> legacyMembershipGradeValues,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "페이지 번호는 0 이상이어야 합니다.")
             int page,
@@ -98,8 +100,8 @@ public class CouponRoundController {
                         queryService.findPage(
                                 memberId,
                                 MemberGradeHeaderResolver.resolve(
-                                        memberGrade,
-                                        legacyMembershipGrade
+                                        memberGradeValues,
+                                        legacyMembershipGradeValues
                                 ),
                                 timeProvider.instant(),
                                 page,

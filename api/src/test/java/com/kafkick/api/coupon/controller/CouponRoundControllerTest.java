@@ -120,6 +120,24 @@ class CouponRoundControllerTest {
     }
 
     @Test
+    @DisplayName("같은 게이트웨이 등급 헤더가 여러 값이면 요청을 거부한다")
+    void rejectMultipleMemberGradeHeaderValues() throws Exception {
+        mockMvc.perform(get("/api/v1/coupon-rounds")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD", "VIP"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(queryService, never()).findPage(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt()
+        );
+    }
+
+    @Test
     @DisplayName("페이지 크기가 100을 초과하면 400을 반환한다")
     void rejectOversizedPage() throws Exception {
         mockMvc.perform(get("/api/v1/coupon-rounds")

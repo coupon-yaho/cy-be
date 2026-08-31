@@ -135,6 +135,25 @@ class CouponIssueControllerTest {
     }
 
     @Test
+    @DisplayName("같은 게이트웨이 등급 헤더가 여러 값이면 요청을 거부한다")
+    void rejectMultipleMemberGradeHeaderValues() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD", "VIP")
+                        .header(CouponRequestHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_KEY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(observationCoordinator, never())
+                .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     @DisplayName("요청 ID 헤더가 없으면 필터가 생성한 ID로 발급한다")
     void issueCouponWithGeneratedRequestId() throws Exception {
         when(observationCoordinator.issue(

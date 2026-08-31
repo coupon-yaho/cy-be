@@ -1,5 +1,7 @@
 package com.kafkick.api.coupon.controller;
 
+import java.util.List;
+
 import jakarta.validation.constraints.Positive;
 
 import org.springframework.http.HttpStatus;
@@ -49,9 +51,9 @@ public class CouponIssueController {
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
             @RequestHeader(value = MemberRequestHeaders.MEMBER_GRADE, required = false)
-            MembershipGrade memberGrade,
+            List<String> memberGradeValues,
             @RequestHeader(value = MemberRequestHeaders.MEMBERSHIP_GRADE, required = false)
-            MembershipGrade legacyMembershipGrade,
+            List<String> legacyMembershipGradeValues,
             @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
             String idempotencyKey
     ) {
@@ -63,7 +65,10 @@ public class CouponIssueController {
                     requestId,
                     couponRoundId,
                     memberId,
-                    MemberGradeHeaderResolver.resolve(memberGrade, legacyMembershipGrade),
+                    MemberGradeHeaderResolver.resolve(
+                            memberGradeValues,
+                            legacyMembershipGradeValues
+                    ),
                     idempotencyKey
             );
             couponIssueMetrics.recordSuccess(
