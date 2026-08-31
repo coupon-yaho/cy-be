@@ -26,6 +26,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -55,7 +56,7 @@ class CouponIssueControllerTest {
     }
 
     @Test
-    @DisplayName("회원과 등급 헤더로 쿠폰을 발급하면 201을 반환한다")
+    @DisplayName("게이트웨이 회원 등급 헤더로 쿠폰을 발급하면 201을 반환한다")
     void issueCoupon() throws Exception {
         CouponIssueResult result = issueResult();
         when(observationCoordinator.issue(
@@ -70,7 +71,7 @@ class CouponIssueControllerTest {
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                "X-Member-Grade",
                                 "GOLD"
                         )
                         .header(
@@ -78,6 +79,10 @@ class CouponIssueControllerTest {
                                 IDEMPOTENCY_KEY
                         ))
                 .andExpect(status().isCreated())
+                .andExpect(header().string(
+                        RequestIdFilter.REQUEST_ID_HEADER,
+                        REQUEST_ID
+                ))
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.issuanceId").value(100))
                 .andExpect(jsonPath("$.data.couponRoundId").value(10))
@@ -102,6 +107,25 @@ class CouponIssueControllerTest {
     }
 
     @Test
+    @DisplayName("같은 게이트웨이 등급 헤더가 여러 값이면 요청을 거부한다")
+    void rejectMultipleMemberGradeHeaderValues() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD", "VIP")
+                        .header(CouponRequestHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_KEY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(observationCoordinator, never())
+                .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     @DisplayName("요청 ID 헤더가 없으면 필터가 생성한 ID로 발급한다")
     void issueCouponWithGeneratedRequestId() throws Exception {
         when(observationCoordinator.issue(
@@ -115,7 +139,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                MemberRequestHeaders.MEMBER_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -151,7 +175,7 @@ class CouponIssueControllerTest {
                             .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                             .header(MemberRequestHeaders.MEMBER_ID, "20")
                             .header(
-                                    MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                    MemberRequestHeaders.MEMBER_GRADE,
                                     "GOLD"
                             )
                             .header(
@@ -194,7 +218,7 @@ class CouponIssueControllerTest {
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                MemberRequestHeaders.MEMBER_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -220,7 +244,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(
-                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                MemberRequestHeaders.MEMBER_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -240,12 +264,30 @@ class CouponIssueControllerTest {
     }
 
     @Test
+    @DisplayName("새 등급 헤더와 기존 등급 헤더가 모두 없으면 요청을 거부한다")
+    void rejectMissingMembershipGradeHeaders() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(CouponRequestHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_KEY))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(observationCoordinator, never())
+                .issue(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     @DisplayName("지원하지 않는 등급 헤더는 400을 반환한다")
     void rejectInvalidMembershipGrade() throws Exception {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                MemberRequestHeaders.MEMBER_GRADE,
                                 "PLATINUM"
                         )
                         .header(
@@ -263,7 +305,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                                MemberRequestHeaders.MEMBER_GRADE,
                                 "GOLD"
                         ))
                 .andExpect(status().isBadRequest())
