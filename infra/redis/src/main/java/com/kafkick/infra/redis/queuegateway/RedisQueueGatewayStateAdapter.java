@@ -82,6 +82,8 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
               local stock = ARGV[offset + 2]
               if hasStock == '1' then
                 redis.call('SET', 'stock:{' .. couponId .. '}', stock)
+              else
+                redis.call('DEL', 'stock:{' .. couponId .. '}')
               end
               redis.call('HSET', KEYS[2], couponId, cjson.encode({mode = ARGV[2]}))
               redis.call('SADD', KEYS[1], couponId)
