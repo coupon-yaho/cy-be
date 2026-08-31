@@ -1,551 +1,284 @@
-# coupon-yaho
+# 쿠폰 야~호
 
-선착순 쿠폰 발급 시스템
+> 트래픽이 한순간에 몰리는 브랜드데이에서 한정 수량 쿠폰을 정확하게 발급하고,
+> 그 결과를 데이터와 지표로 검증하는 선착순 쿠폰 플랫폼입니다.
 
-## 패키지 구조
+## 1. 프로젝트 소개
 
-### 모듈 의존 관계
+쿠폰 야~호는 정해진 시각에 한정 수량 쿠폰을 공개하고, 많은 사용자가 동시에 요청해도
+재고를 초과하거나 한 사람이 중복 발급받지 않도록 설계한 시스템입니다.
+단순히 요청을 빠르게 처리하는 데서 끝나지 않고, 병목이 발생한 위치를 측정한 뒤
+DB 락, 원자 갱신, Redis 선점, 적응형 대기열 순서로 구조를 발전시켰습니다.
+발급 이후에는 이력을 다시 계산하는 검증 배치와 운영 지표를 통해 결과가 실제로
+정확한지 확인합니다.
 
-```mermaid
-graph TD
-    api["api<br/>HTTP 진입점"]
-    batch["batch<br/>스케줄 작업"]
-    storage["storage<br/>JPA · Flyway"]
-    mq["infra:mq<br/>Kafka"]
-    redis["infra:redis<br/>Redis"]
-    core["core<br/>도메인 · 유즈케이스 · 포트"]
+### 핵심 목표
 
-    api --> core
-    batch --> core
-    api -. runtimeOnly .-> storage
-    batch -. runtimeOnly .-> storage
-    storage --> core
-    mq --> core
-    redis --> core
+- **정확한 발급** — 재고 초과 발급 0건, 회차별 1인 1매
+- **유입 보호** — 시스템 가용량에 맞춰 대기열 입장량 조절
+- **장애 회복** — Redis 선점 실패 보상, 재구성, 멱등 재처리
+- **검증 가능성** — 발급 이력을 다시 계산해 저장 상태와 교차 검증
+- **운영 가시성** — 발급 결과, 지연, 재고, 배치 상태를 지표와 관리자 API로 제공
 
-    classDef pending stroke-dasharray: 5 5,color:#888
-    class mq,redis pending
+### 프로젝트 범위
+
+이 문서는 프론트엔드를 제외하고 쿠폰 백엔드, 적응형 대기열 게이트웨이,
+대용량 시드 데이터 생성기와 검증 배치를 중심으로 설명합니다.
+
+## 2. 구조의 발전 과정
+
+쿠폰 야~호는 처음부터 모든 인프라를 도입하지 않았습니다. 같은 재고와 요청 조건에서
+현재 구조의 병목을 확인하고, 그 구조로 해결할 수 없는 한계가 드러났을 때 다음 단계로
+확장했습니다.
+
+
+| 버전   | 상태        | 핵심 방식                                 | 해결한 문제                              | 남은 한계                         |
+| ---- | --------- | ------------------------------------- | ----------------------------------- | ----------------------------- |
+| v1.1 | 구현·측정 기준선 | MySQL 비관적 락 (`SELECT ... FOR UPDATE`) | 동시 발급 시 재고 정합성 보장                   | 단일 재고 행에서 요청 직렬화, 락 대기 증가     |
+| v1.2 | 구현        | 조건부 원자 `UPDATE`                       | 조회와 갱신을 한 문장으로 줄여 락 보유 구간과 DB 왕복 축소 | 단일 재고 행 경합과 요청별 동기 DB 트랜잭션 유지 |
+| v2.1 | 구현        | Redis Lua 원자 재고 선점                    | 재고 판정과 차감을 Redis로 옮겨 DB 재고 경합 완화    | 순간 유입과 발급 성공 건별 DB 영속화 유지     |
+| v2.2 | 핵심 경로 구현  | 적응형 대기열 게이트웨이                         | 평시 요청은 즉시 통과시키고, 혼잡 시 가용량에 맞춰 유입 제어 | 요청별 동기 DB 커밋의 처리량 한계 유지       |
+| v3   | **설계**    | Kafka 기반 비동기 발급 이벤트                   | 요청 처리와 DB 영속화를 분리하고 배치 저장하는 방향 설계   | 발급 엔진의 구현·성능 검증은 진행하지 않음      |
+
+
+### 전환 흐름
+
+```text
+v1.1  정확성 확보
+      └─ 비관적 락 대기와 커넥션 점유
+          ↓
+v1.2  조건부 원자 UPDATE
+      └─ 락 구간은 줄었지만 단일 재고 행과 동기 DB 처리 유지
+          ↓
+v2.1  Redis Lua 재고 선점
+      └─ DB 재고 경합은 줄었지만 순간 유입과 건별 영속화 유지
+          ↓
+v2.2  적응형 대기열
+      └─ 유입은 제어하지만 성공 요청마다 DB 커밋 필요
+          ↓
+v3    Kafka 비동기 영속화 구조 설계
 ```
 
-실선은 `implementation`, 점선 화살표는 `runtimeOnly`, 점선 테두리는 아직 연결되지 않은 모듈이다.
+버전별 비교는 재고 10,000장, 요청 20,000건, 같은 초기 데이터와 같은 부하 스크립트를
+사용하는 것을 원칙으로 합니다. 한 번의 결과로 결론을 내리지 않고 동일 조건을 반복한 뒤
+중앙값을 비교하며, 성공 응답과 매진 응답의 지연 분포를 분리합니다.
+부하 발생과 응답시간 측정에는 **Locust**를 사용했습니다.
 
-| 모듈 | 역할 |
-|---|---|
-| `api` | HTTP 진입점. 요청/응답 변환, 전역 예외 처리 |
-| `batch` | 스케줄 작업 (쿠폰 만료 등) + 검증 배치. 관리용 HTTP 트리거를 연다 — **공유 비밀 토큰 관문(기본 켬), 기본 비노출** |
-| `core` | 도메인 모델, 유즈케이스, 포트 인터페이스 |
-| `storage` | JPA 어댑터, Flyway 마이그레이션 |
-| `infra:mq` | Kafka 프로듀서·컨슈머 어댑터 |
-| `infra:redis` | Redis 어댑터 (재고 카운터 등) |
+## 3. 시스템 아키텍처
 
-`api`와 `batch`는 어댑터(`storage`, `infra:*`)를 **`runtimeOnly`로만** 의존한다.
-컴파일 시점에 `JpaRepository`나 `KafkaTemplate`을 직접 참조하지 못하게 막아,
-`core`가 정의한 포트 인터페이스만 사용하도록 강제하기 위함이다.
+### v1 — MySQL 중심 동기 발급
 
-### 디렉터리
+![v1 MySQL 중심 동기 발급 아키텍처](docs/architecture-v1.png)
 
+쿠폰 서비스가 MySQL에서 발급과 재고를 동기적으로 처리하는 구조입니다.
+정합성은 보장하지만 요청이 몰리면 단일 재고 행의 경합과 DB 커넥션 점유가 병목이 됩니다.
+
+### v2 — Redis 선점과 적응형 대기열
+
+![v2 Redis 선점 및 적응형 대기열 아키텍처](docs/architecture-v2.png)
+
+대기열 서비스가 백엔드 가용량에 맞춰 유입을 조절하고, 쿠폰 서비스는 Redis에서 재고를
+원자적으로 선점합니다. MySQL은 발급 이력과 최종 데이터를 보관하며 Kafka는 알림 이벤트
+전달에 사용합니다.
+
+### v3 — Kafka 비동기 영속화 설계안
+
+![v3 Kafka 비동기 영속화 아키텍처 설계안](docs/architecture-v3.png)
+
+발급 요청 처리와 MySQL 영속화를 Kafka로 분리하는 목표 구조입니다.
+**v3는 구현 결과가 아니라 설계까지만 진행한 아키텍처입니다.**
+
+### 요청 흐름과 컴포넌트 책임
+
+1. 대기열 게이트웨이는 쿠폰 요청을 받아 현재 모드와 백엔드 가용량을 기준으로 즉시 통과,
+기, 거절을 판정합니다. 게이트웨이는 입장만 책임지고 발급이나 재고 차감은 수행하지 않습니다.
+2. 통과한 발급 요청은 쿠폰 API에서 멱등키와 사용자·등급 요청값을 검증한 뒤 도메인 서비스로
+달됩니다.
+3. v1 계열은 MySQL의 조건부 재고 갱신을 최종 방어선으로 사용합니다. v2.1은 Redis Lua로
+고를 먼저 선점하고, DB 영속화 실패 시 요청 토큰을 확인해 Redis 선점을 보상합니다.
+4. MySQL은 회차, 재고, 발급, 상태 이력, 사용 실적과 멱등 응답을 보관합니다.
+edis는 v2 재고와 발급 게이트, 런타임 설정 및 캐시 상태를 담당합니다.
+5. 배치 애플리케이션은 만료·정리·검증·통계를 발급 API와 분리해 수행합니다.
+측용 읽기는 별도 DataSource와 양성 목록 권한을 사용해 운영 쿼리와 격리합니다.
+6. Prometheus는 API·배치·대기열의 지표를 수집하고, 관리자 API는 운영 현황·성능 회차·검증
+과를 조회할 수 있는 백엔드 계약을 제공합니다.
+7. v3는 발급 결과를 Kafka 이벤트로 전달해 요청 처리와 DB 영속화를 분리하는 방향까지
+계했습니다. 현재 발급 엔진의 구현·부하 검증 결과로 설명하지 않습니다.
+
+## 4. 핵심 기능
+
+### 사용자 기능
+
+- 브랜드데이·캘린더·공개 쿠폰 회차 조회
+- 발급 가능한 쿠폰 목록과 상세 조회
+- 등급 및 회차 상태를 반영한 선착순 쿠폰 발급
+- 보유 쿠폰 조회, 사용, 사용 취소, 발급 취소
+- 대기열 진입, 순번·예상 대기시간 확인, 입장 토큰 발급
+
+### 관리자 기능
+
+- 쿠폰 템플릿 생성·조회·활성 상태 변경
+- 쿠폰 회차 생성, 목록 조회, 상태 전이
+- 회원별 발급 조회와 발급 이력 조회
+- 쿠폰 지표, 분석 데이터 조회
+- 검증 실행·진행률·이력 조회
+- 배치 실행 이력과 중단된 만료·정리 작업 복구
+- 관측 지표·이벤트·알림 실패 및 재전송 상태 조회
+
+## 5. 핵심 기술 설계
+
+### 동시성 제어와 재고 정합성
+
+재고는 누적 발급량이 아니라 현재 활성 상태인 `ISSUED + USED` 수량인
+`active_count`로 관리합니다. 잔여 재고는 `total_quantity - active_count`입니다.
+
+- **v1.1** — 재고 행을 비관적 락으로 잠가 동시에 한 요청만 재고를 변경
+- **v1.2** — `active_count < total_quantity` 조건을 가진 원자 `UPDATE`의 변경 행 수로
+발급 성공 여부 판정
+- **v2.1** — Redis Lua가 재고·회원 발급 여부·멱등 요청 토큰을 한 번에 판정하고 선점
+- **DB 최종 방어선** — `UNIQUE(coupon_id, member_id)`로 회차별 1인 1매를 물리적으로 보장
+- **검증 방어선** — 이력을 상태 머신으로 다시 접어 현재 상태와 재고 카운터를 교차 검증
+
+### 적응형 대기열
+
+대기열은 쿠폰 백엔드와 분리된 WebFlux 기반 게이트웨이로 구현했습니다.
+
+- 평시 또는 대기열 OFF 모드에서는 불필요한 대기 없이 백엔드로 통과
+- 혼잡 시 대기열에 등록하고 전역 순번과 ETA 제공
+- 백엔드 인스턴스의 가용량을 수집해 입장 허용량 계산
+- Redis 리더 선출과 임대 시간으로 제어 평면의 단일 결정권 유지
+- 이탈자 정리, 입장 토큰, 재진입 유예, 매진 회차 정리
+- 순번 역행과 기존 대기자 추월을 금지하는 공정성 불변식 유지
+
+현재 저장소 문서 기준으로 입장 판정부터 큐 생명주기까지의 핵심 단계는 닫혔고,
+장애 회복력과 규모 확장 검증은 별도 단계로 관리합니다.
+
+### 멱등성과 실패 복구
+
+- `Idempotency-Key`는 UUID v4 형식을 검증합니다.
+- 같은 키와 같은 요청은 저장된 결과를 재사용하고, 같은 키의 다른 요청은 거절합니다.
+- 진행 중 레코드는 `IN_PROGRESS`, 완료 응답은 `DONE`으로 구분합니다.
+- v2 발급은 Redis 선점 → DB 저장 순서로 수행합니다.
+- DB 저장 실패 시 선점 당시의 요청 토큰과 일치하는 경우에만 Redis 재고를 보상합니다.
+- Redis 상태가 유실되거나 불일치하면 DB 상태를 기준으로 회차 재고를 재구성합니다.
+- 사용·취소·만료도 조건부 상태 전이와 저장된 이력을 함께 남겨 재시도 결과를 판정합니다.
+
+### 검증 배치
+
+검증 배치는 런타임과 같은 `CouponStateMachine`을 사용해 발급 이력을 순서대로 재생합니다.
+다만 현재 상태를 그대로 믿지 않고, 재생 결과·재고 카운터·사용 실적을 서로 대조합니다.
+
+검증기가 실제로 오류를 찾는지도 별도로 검증합니다. 시드 생성기는 다음 두 데이터셋을 만듭니다.
+
+
+| 데이터셋    | 규모와 합격 기준                                                  |
+| ------- | ---------------------------------------------------------- |
+| CLEAN   | 회원 1,000,000명, 발급 3,000,000건, 이력 5,340,000건에서 검출 0건        |
+| CORRUPT | 의도적으로 주입한 700건이 800개의 기대 finding을 만들며, 검출 800건·누락 0건·오탐 0건 |
+
+
+단순히 검출 개수만 비교하지 않고 `(finding_type, target_key)` 집합과 체크섬을 비교합니다.
+생성·적재·자가 검증 결과는 시드 데이터 생성기의 실행 로그와 결과 이미지로 보존합니다.
+
+### 관측과 운영
+
+- 발급 결과를 성공·정상 거절·시스템 실패로 분리한 카운터
+- API 전체 지연과 발급 유즈케이스 내부 지연을 분리한 타이머
+- Redis 명령 지연, 회로 차단기 상태, 재고·대기열·배치 상태 지표
+- HTTP 업무 포트와 Actuator 관리 포트 분리
+- API와 배치의 관측용 DB 풀 분리
+- 양성 목록 테이블만 읽는 관측 전용 MySQL 계정
+- 벤치마크 조건, 서버 시계열, 클라이언트 결과, 최종 정합성 판정을 한 회차로 보존
+- Alertmanager 알림과 관리자 관제 API를 통한 장애 원인 추적
+
+### v3 Kafka 설계
+
+v3의 목표는 HTTP 요청이 모든 DB 쓰기를 기다리는 구조를 바꾸는 것입니다.
+
+```text
+발급 요청
+  → 재고·중복 판정
+  → 발급 이벤트 Kafka 발행
+  → 파티션 순서를 유지한 소비
+  → 여러 결과를 묶어 MySQL 저장
+  → 소비 지연과 실패를 지표·재처리 대상으로 관리
 ```
-coupon-yaho
-├── api                                  HTTP 진입점
-│   └── src/main/java/com/kafkick
-│       ├── ApiApplication.java          스캔·자동설정 기준 패키지라 한 단계 위에 둠
-│       └── api/support/                 응답 봉투, 전역 예외 처리, requestId 필터
-│
-├── batch                                스케줄 작업 + 검증 배치
-│   └── src/main/java/com/kafkick
-│       ├── BatchApplication.java
-│       └── batch/
-│           ├── api/                     admin API — verify 트리거·조회, expire·cleanup 복구,
-│           │                             실행 이력 조회 (docs/15)
-│           ├── config/                  기동 가드, 지표, 전용 실행기, 시각 축 변환
-│           ├── job/                     Spring Batch 잡 정의
-│           ├── replay/                  이력 리플레이
-│           └── schedule/                @Scheduled 진입점
-│
-├── core                                 도메인 + 유즈케이스
-│   └── src/main/java/com/kafkick/core
-│       ├── coupon/                      도메인별 묶음
-│       │   ├── domain/                  도메인 모델
-│       │   ├── service/                 유즈케이스
-│       │   └── port/                    어댑터가 구현할 인터페이스
-│       ├── batch/                       배치 실행 이력 포트 — 세 잡이 공유하므로 평면
-│       ├── expiration/                  만료 포트 + 청크 값 객체 — 평면
-│       ├── verification/                검증 포트 + 도메인 enum — 평면
-│       └── support/                     TimeProvider(UTC), ErrorCode, BusinessException
-│
-├── storage                              DB 어댑터
-│   ├── src/main/java/com/kafkick/storage/db
-│   │   ├── coupon/                      JPA 도메인 — 엔티티가 있으므로 셋으로 가른다
-│   │   │   ├── entity/                  JPA 엔티티
-│   │   │   ├── repository/              JpaRepository + core port 구현체
-│   │   │   └── mapper/                  엔티티 ↔ 도메인 모델 변환
-│   │   ├── batch/                       배치 메타(BATCH_JOB_EXECUTION) 조회 어댑터 — 평면
-│   │   ├── verification/                검증 JDBC 어댑터 — 평면
-│   │   ├── expiration/                  만료 JDBC 어댑터 — 평면
-│   │   ├── support/                     BaseEntity, UpdatableEntity
-│   │   └── config/                      JPA Auditing
-│   ├── src/main/resources
-│   │   ├── storage.yml.example          DataSource·JPA·Flyway 공통 설정
-│   │   └── db/migration/                Flyway DDL — 기준 둘(V1 · V11) + V<YYYYMMDD><NN>__*.sql
-│   └── src/testFixtures/java/…/db       테스트 컨테이너 설정, @RepositoryTest
-│
-│   ※ entity/repository/mapper 3분할은 JPA 도메인만이다. 검증·만료는 300만~534만 행을
-│     집계 SQL 로 훑느라 JPA 를 안 쓰기로 했고(엔티티도 매퍼도 없다) 평면으로 둔다.
-│
+
+현재 `infra:mq`에는 Kafka 토픽·프로듀서·컨슈머 기반과 알림·관측 이벤트 경로가 존재하지만,
+이를 v3 비동기 발급 엔진의 완료 또는 성능 검증 결과로 간주하지 않습니다.
+**발급 이벤트의 end-to-end 비동기 영속화는 설계 범위이며, v3는 설계까지만 진행했습니다.**
+
+## 6. ERD
+
+![쿠폰 야호 ERD](docs/erd.png)
+
+- `coupons`는 발급 회차이며 `coupon_stocks`와 1:1로 재고를 관리합니다.
+- `issuances`는 회원과 회차를 연결하며 회차별 회원 유일 제약이 1인 1매의 최종 방어선입니다.
+- 상태 변화는 `issuance_histories`, 사용과 사용 취소는 `issuance_usages`에 보존합니다.
+- `idempotency_records`는 요청 해시, 처리 상태, 저장 응답을 통해 재시도 결과를 보장합니다.
+- `verification_runs`와 findings·통계 테이블은 검증 실행 단위와 결과를 재현 가능하게 보존합니다.
+
+## 7. 패키지·모듈 구조
+
+```text
+cy-be
+├── api          # HTTP 진입점, 요청·응답 변환, 관리자·관측 API
+├── batch        # 만료·정리·검증·통계 배치와 관리용 트리거
+├── core         # 도메인 모델, 상태 머신, 유즈케이스, 포트 인터페이스
+├── storage      # MySQL JPA/JDBC 어댑터, Flyway 마이그레이션
 ├── infra
-│   ├── mq                               Kafka 어댑터 (토픽·프로듀서 설정 계층)
-│   └── redis                            Redis 어댑터
-│
-└── build.gradle, settings.gradle
+│   ├── redis    # Redis 재고 선점, 런타임 상태, 캐시, 회로 차단기
+│   └── mq       # Kafka 토픽·프로듀서·컨슈머 어댑터
+└── perf         # 부하 측정 환경 점검, 결과 수집·요약
 ```
 
-### 설정 파일
-
-`application.yml`, `storage.yml`, `redis.yml`, `kafka.yml` 등 실행용 설정은 커밋하지 않는다.
-`spring.config.import`는 optional이 아니라서 파일 하나가 없으면 기동이 중단된다
-(`redis.yml`·`kafka.yml`이 그렇다).
-
-**Gradle 빌드·테스트는 이 복사를 알아서 한다.** 루트 `build.gradle`의 `processResources`가
-빌드 산출물에서 빠진 이름을 `.example`로 채운다 — 신규 클론에서 `./gradlew build`가 아무 수동
-단계 없이 통과한다. 소스 트리에는 쓰지 않으므로, 각자 만든 실제 파일이 있으면 그쪽이 이긴다.
-
-앱을 Gradle 밖에서 띄우거나(IDE가 Gradle에 위임하지 않는 설정) 파일을 직접 고쳐 쓰려면
-아래로 복사한다. **설정 파일이 늘어나는 브랜치를 받은 뒤에도 다시 돌린다.**
-
-```bash
-find . -path '*/src/main/resources/*.yml.example' \
-  -exec sh -c '[ -f "${1%.example}" ] || cp "$1" "${1%.example}"' _ {} \;
-```
-
-⚠️ **없을 때만 복사한다.** 예전에는 무조건 덮어써서, 브랜치를 받고 이 명령을 다시 돌리면
-로컬에서 고친 DB 접속 정보나 스위치가 조용히 사라졌다. 어떤 파일을 최신 `.example` 값으로
-되돌리고 싶으면 그 파일을 지우고 다시 돌린다.
-
-⚠️ 이 복사를 빼먹어도 앱은 **죽지 않고 설정 없이 뜬다.** `application.yml`이 없으면 그 안의
-`spring.config.import`가 통째로 안 돌아서, 나머지 파일이 없다는 사실조차 드러나지 않는다.
-그 상태의 증상은 조건부 빈이 사라지는 것뿐이라 원인을 찾기 어렵다 — 위 자동 복사를 둔 이유다.
-
-⚠️ **위 명령은 모듈 리소스만 채운다.** compose 로 띄울 때 필요한 저장소 루트의 두 파일은
-따로 복사해야 한다 — `compose.yml`이 `./application.yml`을 컨테이너에 bind mount 하고
-`.env`를 `env_file`로 읽는다. 둘 다 gitignore 대상이라 신규 클론에는 없다.
-
-```bash
-[ -f .env ] || cp .env.example .env
-[ -f application.yml ] || cp application.yml.example application.yml
-```
-
-빼먹고 `docker compose up` 하면 Docker가 `application.yml`이라는 **디렉터리**를 만들어
-마운트한다(실측). 설정이 통째로 비는데 에러에는 그 원인이 안 나온다.
-
-⚠️ 위 조건이 `-e`가 아니라 **`-f`**인 이유가 그것이다. `-e`는 그렇게 생긴 디렉터리도
-"있다"로 판정해 복사를 건너뛴다 — 한 번 이 상태에 빠지면 명령을 다시 돌려도 낫지 않는다.
-디렉터리가 생겼으면 먼저 지운다.
-
-```bash
-[ -d application.yml ] && rmdir application.yml
-```
-
-DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
-환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
-
-### API 모니터링
-
-API Actuator는 애플리케이션 포트와 분리된 관리 포트(기본 `9090`)에서만 노출한다.
-노출 엔드포인트는 `health`, `metrics`, `prometheus`이며 `env`, `configprops`,
-`beans`, `heapdump`는 명시적으로 차단한다.
-
-```bash
-curl http://localhost:9090/actuator/health
-curl http://localhost:9090/actuator/metrics/app.issuance.outcome
-curl http://localhost:9090/actuator/metrics/coupon.issue.operation.duration
-curl http://localhost:9090/actuator/metrics/hikaricp.connections.active
-curl http://localhost:9090/actuator/metrics/http.server.requests
-```
-
-쿠폰 발급 시작·종료 과정 로그는 `COUPON_ISSUE_LOG_LEVEL=TRACE`일 때만 출력한다.
-부하 테스트에서는 로그 I/O가 측정값을 오염시키지 않도록 기본값 `INFO`를 유지한다.
-커스텀 `operation` 지표는 서버 내부 유즈케이스 시간을 뜻하며, 최종 성능 판정 기준은
-Locust가 클라이언트 응답 수신 시점에 측정한 값이다.
-
-API와 배치는 포트가 겹치지 않는다 — API 는 업무 `8080`·관리 `9090`, 배치는 업무 `9091`·관리 `9092` 다.
-(한때 배치 업무 포트가 `9090` 이라 API 관리 포트와 부딪혔고, 그때는
-`MANAGEMENT_SERVER_PORT=19090` 으로 피했다. CY-213 이 배치를 `9091` 로 옮겨 그 회피가 필요 없어졌다.)
-
-### 대기열 게이트웨이 HTTP 연동 (`v0.4.0`)
-
-현재 로컬 연동에는 앞단 인그레스가 없다. 호출자는 `/api/v1/coupons/**`를 대기열
-게이트웨이 업무 포트 `:9090`으로 보내고, 그 밖의 API는 쿠폰 서비스 `:8080`으로 보낸다.
-게이트웨이는 아래 경로만 받고 나머지는 404로 응답한다.
-
-| 경로 | 메서드 | 처리 |
-|---|---|---|
-| `/api/v1/coupons/{couponId}/issue` | `POST` | 대기열 통과 요청만 쿠폰 서비스로 프록시 |
-| `/api/v1/coupons` | `GET` | 쿠폰 조회를 쿠폰 서비스로 프록시 |
-| `/api/v1/coupons/{couponId}` | `GET` | 쿠폰 상세 조회를 쿠폰 서비스로 프록시 |
-| `/api/v1/coupons/{couponId}/queue` | `GET` | 게이트웨이가 순번을 직접 응답 |
-
-쿠폰 서비스가 발급 요청에서 읽는 게이트웨이 연동 헤더는 다음과 같다.
-
-| 헤더 | 계약 |
-|---|---|
-| `X-Member-Id` | 양의 정수 형식만 검증하며 인증·권한 정본으로 사용하지 않는다 |
-| `X-Member-Grade` | 등급 헤더. **이름은 이것 하나다.** 없거나 값이 둘 이상이면 400 이고, 응답이 그 이유를 말한다 |
-| `Idempotency-Key` | 게이트웨이가 덮어쓴 값을 발급 멱등 처리에 사용 |
-| `X-Request-Id` | 안전한 값은 로그·응답에 그대로 사용하고 잘못된 값은 서버 ID로 교체 |
-
-`Idempotency-Key`는 쿠폰 서비스의 V1·V2 공통 계약에 따라 **UUID v4여야 한다.** 게이트웨이가
-클라이언트 값을 덮어쓰거나 자체 생성할 때도 이 형식을 지켜야 하며, 아니면 발급 요청은
-`400`으로 거부된다. 게이트웨이 배포 전 실제 생성값으로 반드시 확인한다.
-
-게이트웨이 관리 지표는 `:8081/actuator/prometheus`에서 수집한다. 이 포트는 관제 네트워크에만
-연결하고 외부 업무 포트로 공개하지 않는다.
-
-현재 `compose.yml`은 쿠폰 서비스 업무 포트 `8080`을 호스트에 직접 매핑한다. 따라서 이 저장소의
-설정만으로는 클라이언트의 직접 발급 호출과 대기열 우회를 막지 못한다. 운영에서 우회를 차단하려면
-인그레스 경로 분기, 네트워크 ACL 또는 서명된 게이트웨이 인증 중 하나를 별도로 적용해야 한다.
-
-### Docker 이미지
-
-`main` 브랜치 push 또는 `v*` 태그 push 시 GitHub Actions가 API와 배치 이미지를
-각각 빌드해 하나의 Docker Hub 저장소에 태그를 구분하여 올린다. 수동 실행도 가능하다.
-
-- 주소: `https://hub.docker.com/r/${DOCKERHUB_USERNAME}/coupon-yaho`
-- API 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:api-latest`
-- 배치 이미지: `${DOCKERHUB_USERNAME}/coupon-yaho:batch-latest`
-
-GitHub 저장소의 **Settings → Secrets and variables → Actions**에 아래 값을 등록한다.
-
-- Variable `DOCKERHUB_USERNAME`: Docker Hub 사용자명 또는 조직명
-- Secret `DOCKERHUB_TOKEN`: Docker Hub의 read/write 권한 Personal access token
-
-Docker Hub에는 `coupon-yaho` 저장소를 한 번 생성해야 한다.
-
-로컬 빌드는 다음과 같다.
-
-```bash
-docker build --build-arg APP_MODULE=api -t coupon-yaho-api .
-docker build --build-arg APP_MODULE=batch -t coupon-yaho-batch .
-```
-
-테스트는 Testcontainers 로 실제 MySQL 을 띄우므로 Docker 가 필요하다.
-
-### 신규 환경의 런타임 설정 초기화
-
-`config:runtime`은 API 기동 시에만 부트스트랩한다. 새 Redis 볼륨에서 키가 없으면 API가
-기본값(revision 0)을 `SET NX`로 한 번 저장하므로, compose를 쓰지 않는 Docker 배포도
-별도 시드 없이 시작할 수 있다. 기본값은 `runtime-config.bootstrap` 블록 또는
-`RUNTIME_CONFIG_BOOTSTRAP_*` 환경변수로 정한다.
-
-compose의 시드 프로파일은 그대로 남긴다. API보다 먼저 값을 넣어야 하는 운영 절차에서는
-다음 명령을 실행할 수 있으며, API 부트스트랩과 겹쳐도 `SET NX`라 서로 덮어쓰지 않는다.
-
-```bash
-docker compose up -d redis
-docker compose --profile runtime-config-seed run --rm runtime-config-seed
-docker compose up -d
-```
-
-기동 뒤에 키가 사라진 경우에는 읽기 경로가 값을 다시 심지 않는다. last-known-good가 있으면
-`STALE`을, 없으면 `STORE_MISSING`을 반환해 사고를 드러낸다. 기동 단계의 부트스트랩과 읽기
-경로의 미스 처리는 의도적으로 다르다.
-
-### 관측 계정 권한 재부여 (`--profile obs-grants`)
-
-관측 전용 계정은 **양성 목록의 테이블만** 읽는다. 목록의 정본은
-`infra/mysql/obs-grants/allowlist.txt` 이고, `apply.sh` 가 그것을 GRANT 로 옮긴다.
-
-```bash
-# ⚠️ api 가 한 번 떠서 Flyway 마이그레이션이 끝난 뒤에 친다
-docker compose --profile obs-grants run --rm obs-grants
-```
-
-**이 순서를 지켜야 한다.** 테이블 단위 GRANT 는 그 테이블이 이미 있어야 한다.
-`initdb.d` 로 옮기면 그 시점에는 테이블이 하나도 없어서 `ERROR 1146` 으로
-**MySQL 컨테이너 자체가 안 뜬다** — 그래서 계정 생성(`initdb`)과 권한 부여(여기)가
-따로 있는 것이다. 앞으로 되돌리고 싶어지면 `20-obs-account.sh` 맨 위 ⚠️ 를 먼저 읽을 것.
-
-#### 안 돌리면 어떻게 되나
-
-두 갈래이고, 증상이 정반대다.
-
-| 상태 | 증상 |
-|---|---|
-| **신규 클론** (볼륨 없음) | obs 계정에 권한이 아예 없다(`USAGE` 뿐). **관측 풀이 커넥션을 못 연다** — JDBC URL 이 스키마를 지정하므로 질의가 아니라 접속에서 거부된다: `SQLException 1044 (Access denied for user 'obs'@'%' to database 'app')`. 관리자 배치 이력 화면 500, 도메인 게이지 수집 실패 로그, obs 헬스 기여자 DOWN |
-| **기존 볼륨** (OBS-36 이전) | 예전 `GRANT SELECT ON app.*` 가 그대로 남아 **아무 증상이 없다.** 관측은 잘 돌고, obs 계정은 `members` 도 계속 읽는다 |
-
-두 번째가 이 절이 존재하는 이유다. **증상이 없으므로 스스로 알아차릴 방법이 없다.**
-확인은 이렇게 한다 — 아래 출력에 `` `app`.* `` 가 보이면 아직 안 돌린 것이다.
-
-```bash
-docker compose exec -T mysql sh -c \
-  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -N -e "SHOW GRANTS FOR \"$DB_OBS_USERNAME\"@\"%\""'
-```
-
-재부여 뒤에는 테이블별 `GRANT SELECT ON \`app\`.\`issuances\`` 같은 줄만 남는다.
-
-기동 시 자기 진단은 두지 않았다. 위 표의 조용한 쪽은 **일회성 이행 상태**라, 그것을
-잡으려고 기동 경로에 상시 DB 왕복과 아무도 안 읽는 WARN 로그를 영구히 남기는 값이
-안 맞는다고 판단했다. 대신 목록과 실제 질의가 어긋나는 회귀는
-`ObservationAccountPrivilegeTest` 가 CI 에서 양방향으로 막는다.
-
-#### 목록에 테이블을 추가할 때
-
-읽는 코드를 **먼저** 넣는다. 그러면 `ObservationAccountPrivilegeTest` 가
-"목록에 없는 테이블을 관측 풀로 읽는다" 며 깨져서 추가를 강제한다. 반대로 아무도 안 읽는
-테이블을 미리 넣으면 같은 테스트의 반대 방향 단언이 깨진다 — 양성 목록이 두 번째
-스키마 GRANT 로 자라는 것을 그렇게 막는다.
-
-추가한 뒤에는 위 `run --rm obs-grants` 를 다시 돌린다. 몇 번을 돌려도 같은 결과다.
-
-### 기존 MySQL 볼륨에 관측 계정 추가
-
-관측 전용 계정(`DB_OBS_USERNAME`)은 compose 가 자동으로 만든다 —
-`infra/mysql/initdb/20-obs-account.sh` 가 그 자리다.
-
-**다만 `initdb.d` 는 데이터 디렉터리가 비어 있을 때만 돈다.** 이미
-`coupon-mysql-data` 볼륨이 있는 환경에서는 그 파일을 고쳐도 아무 일이 일어나지 않고,
-관측 조회가 첫 요청에서 `Access denied` 로 죽는다. 기존 볼륨을 쓰는 사람에게는
-재현이 안 되므로 *"내 로컬은 되는데"* 가 되기 쉬운 자리다.
-
-그때는 **초기화 스크립트를 그대로 한 번 돌린다.** SQL 을 손으로 옮겨 적지 않는다 —
-그 스크립트가 식별자 검증·따옴표와 백슬래시 이스케이프·`ALTER USER`(비밀번호 회전)를
-전부 갖고 있고, 손으로 적은 명령은 그것을 잃는다.
-
-```bash
-# 1) 컨테이너를 다시 만든다. 데이터 볼륨은 유지된다
-docker compose up -d mysql
-
-# 2) STATUS 가 healthy 가 될 때까지 기다린다
-docker compose ps mysql
-
-# 3) 스크립트를 한 번 돌린다
-docker compose exec mysql sh /docker-entrypoint-initdb.d/20-obs-account.sh
-```
-
-⚠️ **1번을 건너뛰면 3번이 실패한다.** `docker compose exec` 는 컨테이너를 다시 만들지
-않으므로, 이 변경 **이전에 만들어진 컨테이너에는 그 스크립트가 마운트돼 있지 않다.**
-실제로 확인하면 이렇다.
-
-```
-$ docker compose exec -T mysql ls -l /docker-entrypoint-initdb.d/
-total 0
-```
-
-`up -d` 는 데이터 볼륨(`coupon-mysql-data`)을 그대로 두고 컨테이너만 새 정의로 바꾼다.
-데이터 디렉터리가 비어 있지 않으므로 `initdb.d` 는 여전히 자동 실행되지 않는다 —
-그래서 3번을 손으로 돌리는 것이다.
-
-값을 셸에 올릴 필요는 없다. `compose.yml` 의 mysql 서비스가 `env_file: .env` 로
-`DB_OBS_USERNAME` · `DB_OBS_PASSWORD` · `MYSQL_*` 를 갖고 있고, 다시 만든 컨테이너가
-그 값과 마운트를 함께 받는다.
-
-> ⚠️ **`. ./.env` 로 소싱하지 말 것.** 그러면 값 안의 `$(...)` 가 호스트 셸에서 실행된다.
-> 비밀번호 관리 도구가 만든 값에 그런 문자가 들어갈 수 있다.
-
-몇 번을 돌려도 같은 결과다 — `CREATE USER IF NOT EXISTS` 뒤에 `ALTER USER` 가 붙어 있어
-비밀번호도 매번 맞춰진다.
-
-⚠️ **이 절차는 계정만 만든다. 권한은 안 준다.** [OBS-36] 이후 그 스크립트에서 `GRANT` 가
-빠졌다 — 위의 **관측 계정 권한 재부여** 절을 이어서 돌려야 관측 조회가 실제로 된다.
-안 돌리면 계정은 생겼는데 권한이 `USAGE` 뿐이라, 관측 접속이 `Access denied ... to database`(1044)로
-계속 거부된다.
-
-> **이 자리에 있던 "GRANT 는 스키마 단위여야 한다" 는 문단은 [OBS-36] 이 지웠다.**
-> 그 문단은 테이블 단위로 열거하면 `BATCH_JOB_EXECUTION` 같은 것이 조용히 빠진다고 경고했는데,
-> 지금은 `ObservationAccountPrivilegeTest` 가 **양성 목록과 실제 질의문을 양방향으로 대조**해
-> 그 누락을 CI 에서 막는다. 반대로 스키마 단위 GRANT 는 `members` 노출을 되살린다.
-> 초기화 경로에서 테이블 단위가 불가능한 것은 여전히 맞고(`ERROR 1146`), 그래서 부여가
-> 위의 별도 절차로 나가 있다.
-
-### 컨테이너로 띄우기
-
-```bash
-docker compose -f base.yml up                     # DB·관제만. batch 는 안 뜬다
-DB_HOST=127.0.0.1 ./gradlew :api:bootRun          # ← 마이그레이션. 한 번만 (아래 참조)
-docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올린다
-```
-
-> ### ⚠️ `compose.yml` 로 띄운다면 Redis 계열 여섯을 다 올린다
->
-> `compose.yml` 의 api·batch 는 `SPRING_PROFILES_ACTIVE` 에 **`redis-sentinel` 이 박혀
-> 있다.** 그 프로파일은 `redis-sentinel-1..3` 을 찾으므로, `redis` 하나만 띄우면
-> **호스트 이름을 못 찾아 런타임 설정 저장소가 통째로 죽는다.**
->
-> ```
-> docker compose -p <프로젝트> up -d redis redis-replica-1 redis-replica-2 \
->                                  redis-sentinel-1 redis-sentinel-2 redis-sentinel-3
-> ```
->
-> **증상이 원인을 안 가리킨다.** 발급은 멀쩡히 201 인데 관리자 화면만 통째로 안 뜬다 —
-> `GET /api/v1/admin/overview` 가 `503 RUNTIME_CONFIG-004` 를 낸다. 화면 쪽에서는
-> "관리자가 안 뜬다" 하나만 보이므로 프론트부터 뒤지게 된다(실제로 그럴 뻔했다).
->
-> **띄운 뒤에 `unhealthy` 로 남으면 감시 대상 IP 를 본다.** 센티넬은 호스트 이름이 아니라
-> `REDIS_MASTER_IP` 로 주입된 **IP** 를 감시한다(`.env`, 기본값이 박혀 있다). 그 값이 실제
-> 네트워크 대역과 다르면 마스터 이름만 알고 **replica 도 동료 센티넬도 0** 이라 헬스체크가
-> 계속 실패한다 — 프로세스는 멀쩡히 떠 있어서 로그만 봐서는 안 보인다.
->
-> ```bash
-> docker inspect <redis 컨테이너> --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
-> docker exec <sentinel> redis-cli -p 26379 sentinel get-master-addr-by-name coupon-master
-> ```
->
-> 둘이 다르면 `REDIS_MASTER_IP` 를 맞추고 **센티넬 데이터 볼륨을 지운 뒤** 다시 만든다.
-> `sentinel.conf` 는 처음 한 번만 생성되고 볼륨에 남으므로, 환경변수만 고쳐서는 안 바뀐다.
->
-> #### 센티넬 없이 단일 Redis 로 돌리려면
->
-> **프로파일을 빼는 것만으로는 안 된다.** `api` 와 `batch` 는 `depends_on` 으로 센티넬 셋의
-> `service_healthy` 를 기다리는데, 그것은 환경변수와 무관하게 남는다. 그래서 <b>둘 다</b>
-> 해야 한다 — 프로파일을 빼고, `--no-deps` 로 그 대기를 건너뛴다.
->
-> 빈 `sentinel.master` 도 Boot 에는 Sentinel 구성이라 환경변수를 비우는 것으로는 단일 모드가
-> 안 된다(`infra/redis/src/main/resources/redis.yml.example` 의 주석). 프로파일을 빼야 한다.
->
-> ```yaml
-> # 오버레이 파일
-> services:
->   api:
->     environment:
->       SPRING_PROFILES_ACTIVE: api        # redis-sentinel 을 뺀다
->   batch:
->     environment:
->       SPRING_PROFILES_ACTIVE: batch      # 배치도 같은 의존을 갖는다
-> ```
->
-> ⚠️ **`--no-deps` 는 센티넬만 건너뛰는 것이 아니다.** MySQL 도 함께 건너뛴다 — api 는
-> MySQL 이 healthy 여야 Flyway 가 돌고, batch 는 MySQL 과 api 를 둘 다 기다린다. 그래서
-> **필요한 것을 먼저 손으로 올리고** 마지막에만 의존을 건너뛴다.
->
-> ```bash
-> # ① 뒷단을 먼저 올린다 (여기는 --no-deps 를 쓰지 않는다)
-> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d mysql redis
->
-> # ② mysql 이 healthy 가 될 때까지 기다린다
-> docker compose -p <프로젝트> ps mysql
->
-> # ③ 센티넬 대기만 건너뛴다. api 를 먼저, batch 를 그다음에
-> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps api
-> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps batch
-> ```
->
-> ③에서 `--no-deps` 를 빼면 센티넬을 기다리다 `dependency failed to start` 로 멈춘다.
-> 반대로 ①을 건너뛰면 api 가 DB 를 못 찾아 죽는다 — **둘 다 필요하다.**
->
-> api 와 batch 를 한 명령으로 묶지 않는 것도 그래서다. batch 는 `api: service_started` 를
-> 기다리는데 `--no-deps` 가 그것도 건너뛰므로, 순서를 명령으로 세운다.
-
-**배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
-(`POST /api/v1/admin/verify`)와 복구(`/api/v1/admin/expire/runs/**`)가 있는데, **사용자
-인증이 없다** — batch 에 Spring Security 가 없고 토큰 규약은 다른 영역의 몫이라 혼자 정하면
-두 벌이 된다. 그래서 **방어선이 둘**이다:
-
-1. **포트 미노출** — 기본. 열 때만 오버레이를 얹는다.
-2. **공유 비밀 헤더**(`X-Batch-Admin-Token`, CY-742) — 오버레이를 얹으면 **자동으로 켜지고**,
-   `BATCH_ADMIN_TOKEN` 이 없으면 기동을 거절한다. 주장이 아니라 **소지**를 묻는 것이라
-   "서명 없는 역할 클레임은 안 넣는다"(`docs/11` §11)는 결정과 다르다.
-
-```bash
-export BATCH_ADMIN_TOKEN=$(openssl rand -hex 24)
-docker compose -f base.yml -f batch.yml -f batch-expose.yml up batch
-```
-
-**가운데 줄을 빼면 batch 가 기동에서 죽는다.** `base.yml` 의 mysql 은 **빈 DB** 만 만들고,
-스택 어디에도 마이그레이션을 돌리는 것이 없다 — `depends_on: service_healthy` 가 보장하는
-것은 `mysqladmin ping` 뿐이다. batch 는 `flyway.enabled:false` 라(마이그레이션 소유자는
-`api` 하나로 고정) 스스로 만들지 않는다.
-
-예전에는 그 상태로도 **기동이 그냥 성공**하고 첫 잡 실행에서 SQL 에러로 죽었다.
-지금은 `SchemaPresenceGuard` 가 기동 시점에 막고 **무엇이 없는지와 조치를 말한다** —
-`api` 를 먼저 띄우라는 것인지, 배치 메타 마이그레이션 셋만 부으면 되는지, 접속 URL 에서
-DB 이름을 빠뜨린 것인지 셋을 가른다.
-
-`api` 를 한 번 띄우는 것이 번거로우면 마이그레이션만 직접 부어도 된다. Flyway 이력이
-남지 않으므로 **로컬 실험용으로만** 쓴다.
-
-> 검증용 셋(`coupon_clean`·`coupon_corrupt`)은 cy-seed 로 만드는데 거기에는 Spring Batch
-> 메타 테이블이 없다. 그 DB 를 보게 batch 를 띄우려면 `V11__batch_metadata.sql` 과 인덱스
-> 둘(`V2026082513__ix_batch_job_execution_lookup.sql` · `V2026082514__ix_batch_job_execution_history.sql`)을
-> 따로 부어야 한다 — 절차는 `docs/14` 시연 절차, 배경은 `docs/13` §4a.
-> **인덱스도 기동 가드가 본다**(CY-686) — 빠뜨리면 `SCHEMA_NOT_MIGRATED` 로 기동을 거절한다.
-> 이름뿐 아니라 선두 컬럼까지 대조한다. 급하면 `batch.schema-guard.require-batch-indexes=false` 로 끌 수 있다.
-
-> ### ⚠️ 이 브랜치를 처음 받았다면 DB 를 비우고 시작한다
->
-> 마이그레이션 **버전 번호가 전부 바뀌었다**(연번 → 날짜형). 이유는 이 계보와 `main` 이
-> `V2`~`V15` 열넷을 서로 다른 뜻으로 쓰고 있었기 때문이다 — 그대로 머지되면 Flyway 가
-> 같은 버전 둘을 보고 기동을 거부한다.
->
-> **그래서 옛 번호로 적용된 DB 는 그대로 못 쓴다.** `flyway_schema_history` 에 남은 버전이
-> 지금 파일들과 안 맞아 체크섬 검증(`validate-on-migrate: true`)에서 막히고, 통과시켜도
-> 이미 있는 인덱스를 다시 만들려다 `1061 Duplicate key name` 으로 죽는다.
-> `clean-disabled: true` 라 `flyway clean` 도 막혀 있다.
->
-> ```bash
-> docker compose -f base.yml down -v     # 볼륨까지 지운다
-> docker compose -f base.yml up -d
-> ./gradlew :api:bootRun                 # 새 번호로 처음부터 적용된다
-> ```
-
-**둘로 가른 것은 k6 측정 때문이다.** 부하 중에는 배치가 재고를 건드리면 안 되는데, 그 정지
-수단이 설정이 아니라 컨테이너다 — `base.yml` 이 한 글자도 안 바뀌어야 부하 비교표의
-*"동일 리소스 limit"* 이 유지된다(`docs/11-batch-implementation.md`).
-
-`.example` 복사는 이미지 안에서 **다시 한 번** 일어난다(`Dockerfile`). 위 `find` 명령이 로컬
-실행용이라면, 컨테이너는 자기 빌드 컨텍스트에서 같은 절차를 밟는다 — 로컬에서 만든
-`application.yml` 은 `.dockerignore` 가 막아 이미지에 안 들어간다.
-
-**포트는 전부 `127.0.0.1` 에만 묶는다.** `0.0.0.0` 으로 열면 인증이 없는 Prometheus·
-Alertmanager 와 기본 비밀번호를 쓰는 MySQL 이 그대로 노출된다. 배치의 **관리 포트(9092)는
-호스트로 안 내보낸다** — 관제는 컨테이너 네트워크에서 `batch:9092` 로 긁는다.
-
-| 서비스 | 호스트 | 용도 |
-|---|---|---|
-| `batch` | `9091` | 업무 포트 — **기본으로 안 내보낸다.** `batch-expose.yml` 을 얹을 때만 열린다 |
-| `mysql` | `3306` | |
-| `prometheus` | `9490` | 규칙·타깃 확인 (`/api/v1/rules`, `/api/v1/targets`) |
-| `alertmanager` | `9493` | |
-| `alert-sink` | 없음 | 받은 알림을 **Slack 으로 넘긴다**(CY-651). `SLACK_WEBHOOK_URL` 이 없으면 stdout 만 하고 안 죽는다 — 그때는 `docker compose logs alert-sink` 로 본다 |
-
-### 새 코드를 어디에 둘 것인가
-
-쿠폰 발급 기능을 예로 들면:
-
-```
-core/coupon/
-    domain/     CouponRound, Issuance        발급 쿠폰 도메인 모델
-    service/    CouponIssueService           유즈케이스
-    port/       IssuanceRepository           인터페이스만. 구현은 어댑터가
-
-core/coupontemplate/
-    domain/     CouponTemplate               쿠폰 템플릿 도메인 모델
-    service/    CouponTemplateCreateService  템플릿 유즈케이스
-    port/       CouponTemplateRepository     템플릿 저장 인터페이스
-
-storage/db/coupon/
-    entity/     IssuanceEntity
-    repository/ IssuanceJpaRepository
-                IssuanceRepositoryImpl       core 의 port 구현
-    mapper/     IssuanceEntityMapper         엔티티 ↔ 도메인 모델 변환
-
-storage/db/coupontemplate/
-    entity/     CouponTemplateEntity
-    repository/ CouponTemplateJpaRepository
-                CouponTemplateRepositoryImpl core 의 port 구현
-    mapper/     CouponTemplateEntityMapper   엔티티 ↔ 도메인 모델 변환
-
-infra/mq/coupon/
-    CouponEventPublisher                     core 의 port 구현
-
-api/coupon/
-    controller/  CouponController
-    dto/request/ CouponUseRequest
-    dto/response/CouponIssueResponse
-
-api/coupontemplate/
-    controller/  CouponTemplateController
-    dto/request/ CouponTemplateCreateRequest
-    dto/response/CouponTemplateDetailResponse
-```
-
-각 모듈의 `support/` 패키지는 그 모듈 안의 횡단 관심사를 담는다.
+`core`가 비즈니스 규칙과 포트를 정의하고 `storage`, `infra:*`가 이를 구현합니다.
+`api`와 `batch`는 인프라 모듈을 `runtimeOnly`로 연결하므로 컴파일 시점에는 구체 어댑터 대신
+`core`의 포트만 참조합니다. 검증·만료처럼 대용량 집계가 필요한 경로는 JPA 객체 그래프 대신
+JDBC와 집계 SQL을 사용합니다.
+
+## 8. 테스트와 검증
+
+
+| 검증 대상     | 확인 내용                                      | 근거                                                                                                                           |
+| --------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| 동시 발급     | 실제 MySQL에서 재고 초과 발급과 회차별 중복 발급 차단          | [`CouponIssueRepositoryTest`](storage/src/test/java/com/kafkick/storage/db/coupon/repository/CouponIssueRepositoryTest.java) |
+| Redis 원자성 | Lua 선점·완료·보상 코드와 요청 토큰 소유권                 | [`infra/redis`](infra/redis/src/test) 테스트                                                                                    |
+| 버전별 성능    | 같은 Locust 시나리오, 같은 초기 데이터, 반복 측정, 성공·매진 분리 | Locust 실행 결과 파일                                                                                                              |
+| 대기열 공정성   | 순번 역행·추월 금지, 입장량 제어, 큐 생명주기                | 대기열 자동 판정 테스트                                                                                                                |
+| 정합성 검증    | CLEAN 0건, CORRUPT 기대 집합과 검출 집합 일치          | 시드 생성·자가 검증 결과                                                                                                               |
+| 배치 복구     | 중단 실행 탐지, stop·abandon·recover 상태 전이       | [`batch`](batch/src/test) 테스트                                                                                                |
+| 운영 관측     | Prometheus 이름·라벨·알림 규칙과 실제 scrape 계약       | [`docs/14-observability-wiring.md`](docs/14-observability-wiring.md)                                                         |
+| DB 권한     | 관측 계정이 양성 목록 테이블만 읽고 업무 테이블을 거부            | [`infra/mysql/obs-grants`](infra/mysql/obs-grants) 및 컨테이너 테스트                                                                |
+
+
+성능 표에는 Locust 원본 결과, 테스트 환경, 초기 재고, 요청 수와 사후 재고 상태가 함께
+남은 회차만 사용합니다. 설정한 부하와 실제 처리량을 구분하고, 부하 생성기나 네트워크가
+병목인 회차는 서버 성능 근거에서 제외합니다.
+
+## 9. 기술 스택
+
+
+| 구분             | 기술과 사용 범위                                                          |
+| -------------- | ------------------------------------------------------------------ |
+| Language       | Java 21, Python 3.9+                                               |
+| Backend        | Spring Boot 4.1.0, Spring MVC, Spring Batch, Spring Data JPA, JDBC |
+| Queue Gateway  | Spring WebFlux, Spring Cloud Gateway                               |
+| Database       | MySQL 8.4, Flyway                                                  |
+| Cache / State  | Redis 7.4, Lua, Caffeine, Resilience4j                             |
+| Messaging      | Kafka 4.1.0 — 알림·관측 인프라, v3 발급 엔진은 설계 범위                           |
+| Monitoring     | Spring Boot Actuator, Micrometer, Prometheus 3.6, Alertmanager     |
+| Test           | JUnit 5, AssertJ, Testcontainers, Locust                           |
+| Infrastructure | Docker, Docker Compose, NGINX, GitHub Actions                      |
+
+
+## 10. 팀 구성과 역할
+
+
+| 팀원  | 담당 영역     | 주요 기여                     |
+| --- | --------- | ------------------------- |
+| 허건  | 배치·검증·스키마 | 시드 생성기, 정합성 검증, DB 마이그레이션 |
+| 유희준 | 대기열 게이트웨이 | 입장 판정, 전역 순번, 리더 선출       |
+| 설승환 | 관측·인프라    | 관측 이벤트, Redis, 벤치마크 환경    |
+| 이경주 | 관리자·관제    | 관리자 API, 관제 백엔드, 알림 계약    |
+| 박지훈 | 쿠폰 도메인    | 쿠폰·회차, 발급 API, 재고 차감      |
