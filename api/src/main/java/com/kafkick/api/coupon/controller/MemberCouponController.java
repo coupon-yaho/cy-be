@@ -5,15 +5,18 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.kafkick.api.coupon.dto.response.CouponRoundDetailResponse;
 import com.kafkick.api.coupon.dto.response.MemberCouponPageResponse;
 import com.kafkick.api.support.ResponseEnvelope;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.service.CouponRoundDetailQueryService;
 import com.kafkick.core.coupon.service.MemberCouponQueryService;
 
 @RestController
@@ -21,11 +24,14 @@ import com.kafkick.core.coupon.service.MemberCouponQueryService;
 public class MemberCouponController {
 
     private final MemberCouponQueryService memberCouponQueryService;
+    private final CouponRoundDetailQueryService couponRoundDetailQueryService;
 
     public MemberCouponController(
-            MemberCouponQueryService memberCouponQueryService
+            MemberCouponQueryService memberCouponQueryService,
+            CouponRoundDetailQueryService couponRoundDetailQueryService
     ) {
         this.memberCouponQueryService = memberCouponQueryService;
+        this.couponRoundDetailQueryService = couponRoundDetailQueryService;
     }
 
     @GetMapping
@@ -50,6 +56,17 @@ public class MemberCouponController {
                         page,
                         size
                 )
+        ));
+    }
+
+    @GetMapping("/{couponId}")
+    public ResponseEnvelope<CouponRoundDetailResponse> findOne(
+            @PathVariable
+            @Positive(message = "쿠폰 ID는 0보다 커야 합니다.")
+            Long couponId
+    ) {
+        return ResponseEnvelope.success(CouponRoundDetailResponse.from(
+                couponRoundDetailQueryService.findById(couponId)
         ));
     }
 

@@ -40,7 +40,7 @@ class ApiCorsConfigTest {
                 "http://localhost:5173",
                 "POST",
                 MemberRequestHeaders.MEMBER_ID + ","
-                        + MemberRequestHeaders.MEMBERSHIP_GRADE + ","
+                        + MemberRequestHeaders.MEMBER_GRADE + ","
                         + CouponRequestHeaders.IDEMPOTENCY_KEY + ",Content-Type");
 
         assertThat(response.getStatus()).isEqualTo(200);
@@ -54,7 +54,10 @@ class ApiCorsConfigTest {
     void allowsEveryHeaderTheIssuePathRequires() throws Exception {
         for (String header : List.of(
                 MemberRequestHeaders.MEMBER_ID,
-                MemberRequestHeaders.MEMBERSHIP_GRADE,
+                MemberRequestHeaders.MEMBER_GRADE,
+                // 서버가 안 읽어도 브라우저가 보내면 열려 있어야 한다. 프론트가 전환기 동안
+                // 두 이름으로 함께 보내는데, 이 하나가 막히면 요청 자체가 안 나간다.
+                MemberRequestHeaders.LEGACY_MEMBER_GRADE,
                 CouponRequestHeaders.IDEMPOTENCY_KEY)) {
             MockHttpServletResponse response =
                     preflight("http://localhost:5173", "POST", header);

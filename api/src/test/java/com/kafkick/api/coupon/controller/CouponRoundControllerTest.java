@@ -55,7 +55,7 @@ class CouponRoundControllerTest {
     private TimeProvider timeProvider;
 
     @Test
-    @DisplayName("회원이 발급 가능한 쿠폰 회차 페이지를 조회한다")
+    @DisplayName("게이트웨이 회원 등급 헤더로 발급 가능한 쿠폰 회차 페이지를 조회한다")
     void findIssuableCouponRounds() throws Exception {
         when(timeProvider.instant()).thenReturn(AS_OF);
         when(queryService.findPage(
@@ -68,7 +68,7 @@ class CouponRoundControllerTest {
 
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "GOLD"))
+                        .header("X-Member-Grade", "GOLD"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.content.length()").value(1))
@@ -106,7 +106,25 @@ class CouponRoundControllerTest {
     void rejectUnknownMembershipGrade() throws Exception {
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "BRONZE"))
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "BRONZE"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"));
+
+        verify(queryService, never()).findPage(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt()
+        );
+    }
+
+    @Test
+    @DisplayName("같은 게이트웨이 등급 헤더가 여러 값이면 요청을 거부한다")
+    void rejectMultipleMemberGradeHeaderValues() throws Exception {
+        mockMvc.perform(get("/api/v1/coupon-rounds")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD", "VIP"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
@@ -124,7 +142,7 @@ class CouponRoundControllerTest {
     void rejectOversizedPage() throws Exception {
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "GOLD")
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD")
                         .param("size", "101"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"))
