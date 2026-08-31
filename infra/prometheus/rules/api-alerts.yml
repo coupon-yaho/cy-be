@@ -1,0 +1,53 @@
+# 발급 API 알림 규칙. 관제(Prometheus)가 `rules/*.yml` 로 그대로 가져다 쓴다.
+#
+# 여기 메트릭은 V2IssuanceOutcomeMeters 가 직접 등록하고 api 의 관리 포트
+# /actuator/prometheus 로 나간다. 이름이 바뀌면 규칙이 조용히 0 을 보게 되므로
+# V2IssuanceAlertRuleContractTest 가 이 파일과 MeterNames 의 상수를 대조한다.
+#
+# ⚠️ 알림마다 channel 라벨이 붙는다 — alertmanager 가 그것으로 수신함을 가른다.
+#    빠뜨리면 sink-unrouted 로 떨어진다(docs/14).
+#    여기 둘은 **데이터 축**이다. 서버가 죽은 것이 아니라 Redis 와 DB 의 재고·회원 집합이
+#    갈린 것이라, 봐야 할 곳이 서버 로그가 아니라 그 회차의 상태다.
+
+groups:
+  - name: cy-api-v2-issuance
+    rules:
+
+      # 되돌아오지 않은 선점. 보상이 실패했거나 남의 토큰이 덮어 이 요청의 DECR 이 복구되지
+      # 않았다는 뜻이고, 그 회차 Redis 재고가 그만큼 영구히 낮아진다.
+      #
+      # **기준선이 0 이라 임계를 고를 필요가 없다.** 이 미터를 셋(claim.leaked ·
+      # compensation.no.claim · compensation.already.done)으로 가른 이유가 그것이다 —
+      # "되돌릴 것이 없었다" 를 여기 합치면 부하 회차마다 상시 올라 임계를 못 잡는다.
+      #
+      # 방향이 **과소 발급**이라 응답에는 드러나지 않는다. 사람이 대시보드를 안 보면
+      # 회차가 끝날 때까지 아무도 모르는 유일한 사고라 warning 이 아니라 여기서 잡는다.
+      - alert: V2IssuanceClaimLeaked
+        expr: increase(app_issuance_v2_claim_leaked_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          channel: data
+        annotations:
+          summary: "v2 발급 선점이 되돌아오지 않았다 (5분 {{ $value }}건)"
+          description: >-
+            그 회차의 Redis 재고가 그만큼 낮아진 채 남는다. 과소 발급 방향이라 응답에는
+            안 드러난다. 회차의 Redis stock 과 DB active_count 를 대조하고,
+            회수는 CY-760 재구성 절차를 따른다.
+
+      # Redis 게이트가 통과시킨 요청을 DB uk_coupon_member 가 막았다.
+      # 게이트의 회원 집합이 DB 와 갈렸다는 직접 신호이고, Sentinel 승격으로 복제가
+      # 유실되면 정확히 이 상태가 된다.
+      #
+      # dup.per.member 와 갈라 센다 — 합치면 이 스파이크가 평범한 재요청 물결로 읽힌다.
+      - alert: V2IssuanceMemberSetDiverged
+        expr: increase(app_issuance_v2_database_member_divergence_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          channel: data
+        annotations:
+          summary: "Redis 가 통과시킨 중복을 DB 가 막았다 (5분 {{ $value }}건)"
+          description: >-
+            게이트의 회원 집합이 DB 와 갈렸다. 승격 직후라면 복제 유실이다.
+            응답은 409 로 정상이므로 사용자 영향은 없고, 봐야 할 것은 게이트 상태다.

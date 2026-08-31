@@ -6,8 +6,10 @@ import java.util.List;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 
 /**
  * <b>MySQL 에는 {@code MINUS} 가 없습니다.</b> {@code LEFT JOIN … IS NULL} 로 같은 뜻을 만듭니다.
@@ -122,6 +124,54 @@ public class ExpectedFindingJdbcAdapter implements ExpectedFindingRepository {
                 .single();
 
         return count == null ? 0 : count;
+    }
+
+    /**
+     * <b>오염 종류마다 "규칙 하나가 가진 행수" 가 곧 그 종류에 심은 오염 수다.</b>
+     * 오염 하나가 자기 규칙 목록마다 정확히 한 행씩 낳기 때문이다
+     * ({@code docs/contract.json} 의 {@code corruption.matrix}).
+     *
+     * <p><b>그래서 나누지 않고 규칙별로 세어 맞대 본다.</b> 한때
+     * {@code SUM(행수 / 규칙 수)} 로 두고 <i>"소수부가 남으면 계약이 깨진 것"</i> 이라
+     * 적었는데, <b>그 검사가 계약보다 약했다</b> — 규칙 둘짜리 종류에 4행·2행이 들어와도
+     * 합 6 ÷ 2 = 3 으로 딱 떨어져 <b>깨진 계약이 정상 오염 수로 나간다.</b> 계약이 요구하는
+     * 것은 나눗셈이 떨어지는 것이 아니라 <b>규칙별 행수가 같은 것</b>이다.
+     *
+     * <p>그래서 종류별로 규칙별 행수의 최소·최대를 같이 받아, 갈리면 죽는다. 값 자체는
+     * 최대값을 쓴다(같으므로 어느 쪽이든 같다).
+     *
+     * <p><b>못 잡는 것도 적어 둔다.</b> 어떤 종류의 규칙이 <b>통째로 빠진</b> 경우는
+     * 여기서 안 보인다 — 남은 규칙들끼리는 고르기 때문이다. 그것은 DB 만으로는 알 수 없고
+     * (기대 규칙 목록이 DB 에 없다) {@code CorruptionCountTest} 가 계약과 맞대 본다.
+     *
+     * <p>(지금 데이터는 여덟 (종류,규칙) 짝이 전부 100 인 것을 실측했다 — 오염 700.)
+     */
+    @Override
+    public int corruptionCountOf(long seedRunId) {
+        return jdbcClient.sql("""
+                        SELECT COALESCE(SUM(mx), 0)             AS corruption_count,
+                               COALESCE(SUM(mx - mn), 0)        AS unevenness
+                          FROM (SELECT MIN(rows_per_rule) AS mn, MAX(rows_per_rule) AS mx
+                                  FROM (SELECT corrupt_type, finding_type,
+                                               COUNT(*) AS rows_per_rule
+                                          FROM expected_findings
+                                         WHERE seed_run_id = :seedRunId
+                                         GROUP BY corrupt_type, finding_type) per_rule
+                                 GROUP BY corrupt_type) per_type
+                        """)
+                .param("seedRunId", seedRunId)
+                .query((rs, rowNum) -> {
+                    long uneven = rs.getLong("unevenness");
+                    if (uneven > 0) {
+                        throw new BusinessException(
+                                VerificationErrorCode.CORRUPTION_MANIFEST_UNEVEN,
+                                "seedRunId=%d 규칙별 행수 편차=%d. docs/contract.json 의 "
+                                        .formatted(seedRunId, uneven)
+                                        + "corruption.matrix 와 expected_findings 를 맞대 보십시오.");
+                    }
+                    return rs.getInt("corruption_count");
+                })
+                .single();
     }
 
     @Override

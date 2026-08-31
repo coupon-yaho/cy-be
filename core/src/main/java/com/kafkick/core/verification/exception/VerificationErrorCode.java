@@ -270,6 +270,24 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-023",
             "이력의 created_at 순서가 id 순서와 뒤집혀 리플레이 정렬을 신뢰할 수 없습니다."
+    ),
+
+    /**
+     * 오염 하나가 자기 규칙마다 <b>정확히 한 행씩</b> 낳는다는 계약이 깨졌다
+     * ({@code docs/contract.json} 의 {@code corruption.matrix}).
+     *
+     * <p>그러면 <b>심은 오염 수를 되짚어 셀 수 없다</b> — 규칙별 행수가 갈린 순간
+     * "행수 ÷ 규칙 수" 가 무엇의 개수도 아니게 된다. 그때 그럴듯한 숫자를 내보내면
+     * 매일 공개 저장소에 커밋되는 리포트에 <b>틀렸다는 표시 없이</b> 실린다.
+     *
+     * <p><b>재실행이 처방이 아니다.</b> 이미 저장된 {@code expected_findings} 의 모양
+     * 문제라, 멈췄다 다시 돌려도 같은 자리에서 죽는다 — {@link #HISTORY_ORDER_INVERTED}
+     * 와 같은 부류다. 처방은 시드의 오염 주입과 계약을 맞대 보는 것이다.
+     */
+    CORRUPTION_MANIFEST_UNEVEN(
+            500,
+            "VERIFICATION-024",
+            "오염 종류별 규칙 행수가 고르지 않아 심은 오염 수를 셀 수 없습니다."
     );
 
     private final int status;
