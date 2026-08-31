@@ -380,6 +380,19 @@ docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올�
 > `GET /api/v1/admin/overview` 가 `503 RUNTIME_CONFIG-004` 를 낸다. 화면 쪽에서는
 > "관리자가 안 뜬다" 하나만 보이므로 프론트부터 뒤지게 된다(실제로 그럴 뻔했다).
 >
+> **띄운 뒤에 `unhealthy` 로 남으면 감시 대상 IP 를 본다.** 센티넬은 호스트 이름이 아니라
+> `REDIS_MASTER_IP` 로 주입된 **IP** 를 감시한다(`.env`, 기본값이 박혀 있다). 그 값이 실제
+> 네트워크 대역과 다르면 마스터 이름만 알고 **replica 도 동료 센티넬도 0** 이라 헬스체크가
+> 계속 실패한다 — 프로세스는 멀쩡히 떠 있어서 로그만 봐서는 안 보인다.
+>
+> ```bash
+> docker inspect <redis 컨테이너> --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+> docker exec <sentinel> redis-cli -p 26379 sentinel get-master-addr-by-name coupon-master
+> ```
+>
+> 둘이 다르면 `REDIS_MASTER_IP` 를 맞추고 **센티넬 데이터 볼륨을 지운 뒤** 다시 만든다.
+> `sentinel.conf` 는 처음 한 번만 생성되고 볼륨에 남으므로, 환경변수만 고쳐서는 안 바뀐다.
+>
 > 센티넬 없이 단일 Redis 로만 돌리려면 그 프로파일을 빼야 한다. 빈 `sentinel.master` 도
 > Boot 에는 Sentinel 구성이라, 환경변수를 비우는 것으로는 단일 모드가 안 된다
 > (`infra/redis/src/main/resources/redis.yml.example` 의 주석).
