@@ -332,13 +332,17 @@ class VerificationMetricExposureTest {
         // 그 값이 들어와 빨개지는데 원인이 코드에 없어 찾기 어렵다. 정확한 값은
         // ResolvedBatchConfigTest 가 키 경로로 지키고, 여기가 막는 것은 "1 로 폴백" 이다.
         //
-        // **다만 하한은 @Scheduled 수와 함께 움직여야 한다.** CY-446 이 둘을 더했을 때
-        // 이 값이 5 로 남아 초록으로 지나갔다 — 그 순간 이 단언은 아무것도 안 지켰다.
-        // CY-470 이 VerifyScheduler 를 더해 여덟이 됐다.
+        // **하한을 상수로 적지 않는다.** 예전에는 여기 숫자를 손으로 적었는데 CY-446 이 둘을
+        // 더했을 때 5 로 남아 초록으로 지나갔고, CY-699 가 열한째를 더했을 때도 8 로 남아
+        // 또 지나갔다 — 그 동안 이 단언은 아무것도 안 지켰다. 등록 수를 직접 물으면
+        // 코드와 자동으로 같아진다. 이 컨텍스트의 등록 수는 배포보다 적지만(스케줄러 넷과
+        // 관측 빈 셋이 안 뜬다) **폴백 1 을 막는다는 이 단언의 목적에는 그것으로 충분하다** —
+        // 배포 형상의 수와 파일 기본값을 맞추는 것은 SchedulerPoolGuardTest 몫이다.
+        int registered = taskHolder.getScheduledTasks().size();
         assertThat(taskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
                 .as("spring.task.scheduling.pool.size 키 경로가 죽으면 Boot 가 조용히 1 로 "
-                        + "폴백한다. 그러면 여덟 @Scheduled 가 스레드 하나를 다툰다")
-                .isGreaterThanOrEqualTo(8);
+                        + "폴백한다. 그러면 등록된 %d 개가 스레드 하나를 다툰다", registered)
+                .isGreaterThanOrEqualTo(registered);
     }
 
     /**

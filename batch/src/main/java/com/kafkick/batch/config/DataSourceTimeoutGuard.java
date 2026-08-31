@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
  * <b>풀에서 빌리는</b> 시간이지 소켓 시간이 아니다. TCP 는 살아 있는데 응답이 안 오는 상태
  * (방화벽 drop · 서버 멎음)에서 빌려주기는 이미 끝났으므로 그 가드가 안 걸린다.
  * {@link SchemaPresenceGuard} 는 {@code @Order(HIGHEST_PRECEDENCE)} 러너라 거기서 멈추면
- * <b>컨테이너는 "떠 있음" 인데 {@code @Scheduled} 여덟이 하나도 안 돈다</b> —
+ * <b>컨테이너는 "떠 있음" 인데 등록된 스케줄 작업이 하나도 안 돈다</b> —
  * {@code CouponRoundScheduler} 까지 서서 발급 문이 안 열린다.
  *
  * <p>그래서 <b>둘 다 있어야 하고, 하나는 충분히 커야 한다.</b> 그 관계를 기동 때 못 박는다 —
