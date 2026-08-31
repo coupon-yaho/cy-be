@@ -30,32 +30,6 @@ public final class MeterNames {
     public static final String ISSUANCE_V2_DUP_PER_MEMBER = "app.issuance.v2.dup.per.member";
     public static final String ISSUANCE_V2_REPLAY_DONE = "app.issuance.v2.replay.done";
     public static final String ISSUANCE_V2_REPLAY_PENDING = "app.issuance.v2.replay.pending";
-    /** Redis 선점은 성공했지만 DB 최종 재고가 매진으로 막은 요청. 복제 유실의 직접 신호다. */
-    public static final String ISSUANCE_V2_DATABASE_STOCK_DIVERGENCE =
-            "app.issuance.v2.database.stock.divergence";
-    /** Redis 게이트가 통과시킨 회원을 DB uk_coupon_member 가 막은 요청. 복제 유실의 직접 신호다. */
-    public static final String ISSUANCE_V2_DATABASE_MEMBER_DIVERGENCE =
-            "app.issuance.v2.database.member.divergence";
-    /**
-     * DB 가 막아 거절했는데 Redis 선점이 되돌아오지 않은 요청. 그 회차의 Redis 재고가
-     * 그만큼 영구히 낮아진다 — 과소 발급 방향이라 응답에는 드러나지 않는다.
-     */
-    public static final String ISSUANCE_V2_CLAIM_LEAKED = "app.issuance.v2.claim.leaked";
-    /**
-     * 보상이 되돌릴 선점을 <b>찾지 못한</b> 요청(보상 Lua {@code 2}). 다른 절차가 이미
-     * 정리한 것이라 이 요청이 게이트에 남긴 선점은 없다 — 누수가 아니다. 남의 토큰이 덮은
-     * 경우({@code 0})는 갈려 나가 {@link #ISSUANCE_V2_CLAIM_LEAKED} 로 간다(CY-781).
-     */
-    public static final String ISSUANCE_V2_COMPENSATION_NO_CLAIM =
-            "app.issuance.v2.compensation.no.claim";
-    /**
-     * 이미 완료 승격된 선점에 보상이 도달한 요청. <b>이 요청이 되돌릴 것은 없으나</b>, DB
-     * 트랜잭션이 롤백된 경로였다면 그 회차 Redis 재고가 한 장 낮아진 채 남는다 — 경보 대상이다.
-     */
-    public static final String ISSUANCE_V2_COMPENSATION_ALREADY_DONE =
-            "app.issuance.v2.compensation.already.done";
-    /** Redis failover·차단기·보상 불일치로 COUPON-325를 반환한 요청. */
-    public static final String ISSUANCE_V2_REDIS_UNAVAILABLE = "app.issuance.v2.redis.unavailable";
 
     public static final String COUPON_ROUND_LIMIT_EXCEEDED =
             "app.observation.coupon.round.limit.exceeded";

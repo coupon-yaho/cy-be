@@ -55,7 +55,7 @@ class IssuanceObservationContextFactoryTest {
         factory = new IssuanceObservationContextFactory(
                 runtimeConfigStore,
                 timeProvider,
-                new ObservationIssuanceProperties(null, "api-17", null, null, null)
+                new ObservationIssuanceProperties(null, "api-17", null, null)
         );
     }
 

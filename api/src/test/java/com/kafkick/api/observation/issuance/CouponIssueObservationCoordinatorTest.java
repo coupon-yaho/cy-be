@@ -93,7 +93,7 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new ObservationIssuanceProperties(null, "api-1", null, null, null),
+                new ObservationIssuanceProperties(null, "api-1", null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
         context = new IssuanceFlowEvent.Ctx(
@@ -659,7 +659,7 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new ObservationIssuanceProperties(null, "api-1", null, null, null),
+                new ObservationIssuanceProperties(null, "api-1", null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
     }
@@ -705,7 +705,7 @@ class CouponIssueObservationCoordinatorTest {
                         v1Router(),
                         noV2Service(),
                         new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                        new ObservationIssuanceProperties(null, "api-1", null, null, null),
+                        new ObservationIssuanceProperties(null, "api-1", null, null),
                         timeProvider
                 );
 

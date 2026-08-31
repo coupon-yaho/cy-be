@@ -5,21 +5,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
 
 import io.micrometer.core.instrument.MeterRegistry;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
-
-import org.springframework.dao.DataAccessException;
 
 import com.kafkick.infra.redis.observation.RedisLatencyAutoConfiguration;
 
@@ -47,7 +39,6 @@ import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
                 RedisLatencyAutoConfiguration.COMPOSITE_METER_REGISTRY_AUTO_CONFIGURATION
         })
 @ConditionalOnBean(StringRedisTemplate.class)
-@EnableConfigurationProperties(RedisCircuitBreakerProperties.class)
 public class IssuanceGateRedisAutoConfiguration {
 
     @Bean
@@ -59,59 +50,8 @@ public class IssuanceGateRedisAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(IssuanceGatePort.class)
     IssuanceGatePort issuanceGatePort(
-            IssuanceScriptRunner scriptRunner,
-            StringRedisTemplate redisTemplate,
-            @Qualifier("redisIssuanceCircuitBreaker") CircuitBreaker redisIssuanceCircuitBreaker) {
-        return new Resilience4jIssuanceGate(
-                new RedisIssuanceGate(scriptRunner, redisTemplate), redisIssuanceCircuitBreaker);
-    }
-
-    @Bean("redisIssuanceCircuitBreakerRegistry")
-    @ConditionalOnMissingBean(name = "redisIssuanceCircuitBreakerRegistry")
-    CircuitBreakerRegistry redisIssuanceCircuitBreakerRegistry(RedisCircuitBreakerProperties properties) {
-        // Retry는 붙이지 않는다. timeout 뒤 Lua가 선점을 끝냈을 수 있어, 새 requestToken으로
-        // 다시 보내면 완료·보상 CAS가 앞선 PENDING과 갈린다.
-        //
-        // **아래 조합은 기동을 거절한다.** 표본 창보다 최소 호출 수가 크면 차단기가 영영
-        // 열리지 않는데(표본이 임계에 못 미친다), 값 하나만 보면 둘 다 정상이라
-        // RedisCircuitBreakerProperties 의 setter 가 잡을 수 없다. 조용히 통과시키면
-        // "차단기를 걸었는데 안 열린다"가 장애 중에 드러난다.
-        if (properties.getMinimumNumberOfCalls() > properties.getSlidingWindowSize()) {
-            throw new IllegalStateException(
-                    "redisCB minimum-number-of-calls는 sliding-window-size보다 클 수 없습니다.");
-        }
-        CircuitBreakerConfig config = CircuitBreakerConfig.custom()
-                .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
-                .slidingWindowSize(properties.getSlidingWindowSize())
-                .minimumNumberOfCalls(properties.getMinimumNumberOfCalls())
-                .failureRateThreshold(properties.getFailureRateThreshold())
-                .waitDurationInOpenState(properties.getWaitDurationInOpenState())
-                .permittedNumberOfCallsInHalfOpenState(1)
-                .recordException(failure -> failure instanceof DataAccessException)
-                .build();
-        return CircuitBreakerRegistry.of(config);
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(name = "redisIssuanceCircuitBreaker")
-    CircuitBreaker redisIssuanceCircuitBreaker(
-            @Qualifier("redisIssuanceCircuitBreakerRegistry")
-            CircuitBreakerRegistry redisIssuanceCircuitBreakerRegistry
-    ) {
-        return redisIssuanceCircuitBreakerRegistry.circuitBreaker("redisCB");
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(TaggedCircuitBreakerMetrics.class)
-    @ConditionalOnBean(MeterRegistry.class)
-    TaggedCircuitBreakerMetrics redisCircuitBreakerMetrics(
-            @Qualifier("redisIssuanceCircuitBreakerRegistry")
-            CircuitBreakerRegistry redisIssuanceCircuitBreakerRegistry, MeterRegistry meterRegistry
-    ) {
-        TaggedCircuitBreakerMetrics metrics = TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(
-                redisIssuanceCircuitBreakerRegistry);
-        metrics.bindTo(meterRegistry);
-        return metrics;
+            IssuanceScriptRunner scriptRunner, StringRedisTemplate redisTemplate) {
+        return new RedisIssuanceGate(scriptRunner, redisTemplate);
     }
 
     /** 발급 게이트와 같은 Redis 연결에서 관리자용 V2 재고 정본 조회 포트를 제공합니다. */

@@ -193,10 +193,7 @@ public final class IssuanceScripts {
             if #ARGV < 2 then return -10 end
             if #ARGV[1] == 0 or #ARGV[2] == 0 or string.find(ARGV[2], '|', 1, true) then return -10 end
             local stored = redis.call('HGET', KEYS[2], ARGV[1])
-            -- 2 와 0 을 가른다. 없는 것(2)은 되돌릴 내 선점이 애초에 없다는 뜻이고,
-            -- 남의 토큰(0)은 내 DECR 이 복구되지 않았다는 뜻이라 재고 결과가 반대다.
-            -- 한 코드로 접으면 이 값을 읽는 모든 자리가 둘 중 하나를 추측해야 한다.
-            if stored == false then return 2 end
+            if stored == false then return 0 end
             local st, ms, tk, key = string.match(stored, '^([PD])|(%d+)|([^|]+)|(.+)$')
             if st == nil or #ms > 13 then return -3 end
             if tk ~= ARGV[2] then return 0 end

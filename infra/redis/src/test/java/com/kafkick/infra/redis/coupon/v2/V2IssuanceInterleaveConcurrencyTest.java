@@ -537,15 +537,12 @@ class V2IssuanceInterleaveConcurrencyTest {
         when(idempotencies.findByKey(any())).thenReturn(Optional.empty());
         IdempotencyResultCodec<CouponIssueResult> resultCodec = mock(IdempotencyResultCodec.class);
         when(resultCodec.write(any())).thenReturn("{result}");
-        CouponStockRepository stocks = mock(CouponStockRepository.class);
-        when(stocks.occupyOne(any(), any()))
-                .thenReturn(com.kafkick.core.coupon.domain.CouponStockOccupationResult.OCCUPIED);
         return new V2CouponIssueService(
                 gate,
                 issuances,
                 mock(IssuanceHistoryRepository.class),
                 idempotencies,
-                stocks,
+                mock(CouponStockRepository.class),
                 () -> "1234567890ABCDEF",
                 resultCodec,
                 new RequestTokenGenerator("api-s9"),

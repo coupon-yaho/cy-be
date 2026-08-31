@@ -94,7 +94,7 @@ class CouponDefinitionL2LeaseBudgetTest {
         try (InputStream stream = CouponDefinitionL2LeaseBudgetTest.class
                 .getResourceAsStream(REDIS_CONFIG)) {
             assertThat(stream).as("%s 가 테스트 클래스패스에 없다", REDIS_CONFIG).isNotNull();
-            Map<String, Object> root = (Map<String, Object>) new Yaml().loadAll(stream).iterator().next();
+            Map<String, Object> root = new Yaml().load(stream);
             Object raw = ((Map<String, Object>) nested(root, "spring", "data", "redis")).get(key);
             assertThat(raw).as("%s 에서 %s 를 찾지 못했다", REDIS_CONFIG, key).isNotNull();
             Matcher placeholder = Pattern.compile("\\$\\{[^:}]+:([^}]*)}").matcher(raw.toString());

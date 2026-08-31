@@ -3,8 +3,6 @@ package com.kafkick.infra.redis.coupon.v2;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
-import java.util.concurrent.atomic.AtomicInteger;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -16,21 +14,11 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
 import com.kafkick.core.admin.stock.V2AdminStockReader;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
-import com.kafkick.core.coupon.v2.port.ClaimCommand;
-import com.kafkick.core.coupon.v2.port.ClaimResult;
-import com.kafkick.core.coupon.v2.IssuanceGateCircuitOpenException;
 import com.kafkick.core.coupon.v2.port.RestorationHaltStore;
 import com.kafkick.core.coupon.v2.port.RestoreOutcome;
 import com.kafkick.core.coupon.v2.port.V2RestorationMeters;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
-
-import org.springframework.data.redis.RedisConnectionFailureException;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 /**
  * 조립은 <b>기동에서만</b> 증명된다. 통합 테스트는 어댑터를 손으로 {@code new} 하므로
@@ -65,75 +53,11 @@ class IssuanceGateRedisAutoConfigurationTest {
                     assertThat(context).hasSingleBean(V2AdminPreparationReader.class);
                     assertThat(context).hasSingleBean(V2AdminStockReader.class);
                     assertThat(context.getBean(IssuanceGatePort.class))
-                            .isInstanceOf(Resilience4jIssuanceGate.class);
+                            .isInstanceOf(RedisIssuanceGate.class);
                     assertThat(context.getBean(V2AdminStockReader.class))
                             .isInstanceOf(RedisV2AdminStockReader.class);
                     assertThat(context.getBean(V2AdminPreparationReader.class))
                             .isInstanceOf(RedisV2AdminPreparationReader.class);
-                });
-    }
-
-    @Test
-    void bindsRedisCircuitBreakerThresholdsFromConfiguration() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
-                .withPropertyValues(
-                        "coupon.v2.redis-circuit-breaker.sliding-window-size=30",
-                        "coupon.v2.redis-circuit-breaker.minimum-number-of-calls=10",
-                        "coupon.v2.redis-circuit-breaker.failure-rate-threshold=40",
-                        "coupon.v2.redis-circuit-breaker.wait-duration-in-open-state=7s")
-                .run(context -> {
-                    CircuitBreaker breaker = context.getBean(CircuitBreaker.class);
-                    assertThat(breaker.getName()).isEqualTo("redisCB");
-                    assertThat(breaker.getCircuitBreakerConfig().getSlidingWindowSize()).isEqualTo(30);
-                    assertThat(breaker.getCircuitBreakerConfig().getMinimumNumberOfCalls()).isEqualTo(10);
-                    assertThat(breaker.getCircuitBreakerConfig().getFailureRateThreshold()).isEqualTo(40f);
-                    assertThat(breaker.getCircuitBreakerConfig().getWaitIntervalFunctionInOpenState()
-                            .apply(1)).isEqualTo(7_000L);
-                });
-    }
-
-    @Test
-    void defaultCircuitBreakerOnlyOpensForRedisCommunicationFailures() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
-                .run(context -> {
-                    CircuitBreaker breaker = context.getBean(CircuitBreaker.class);
-
-                    assertThat(breaker.getCircuitBreakerConfig().getSlidingWindowSize()).isEqualTo(5);
-                    assertThat(breaker.getCircuitBreakerConfig().getMinimumNumberOfCalls()).isEqualTo(5);
-                    assertThat(breaker.getCircuitBreakerConfig().getFailureRateThreshold()).isEqualTo(100f);
-                });
-    }
-
-    @Test
-    void actualDefaultCircuitBreakerStopsCallingRedisAfterFiveConsecutiveFailures() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
-                .run(context -> {
-                    IssuanceGatePort delegate = mock(IssuanceGatePort.class);
-                    AtomicInteger calls = new AtomicInteger();
-                    when(delegate.claim(any())).thenAnswer(invocation -> {
-                        if (calls.incrementAndGet() <= 10) {
-                            throw new RedisConnectionFailureException("down");
-                        }
-                        return ClaimResult.claimed(1L);
-                    });
-                    Resilience4jIssuanceGate gate = new Resilience4jIssuanceGate(
-                            delegate, context.getBean(CircuitBreaker.class));
-                    ClaimCommand command = new ClaimCommand(1L, 2L, 1, "key", "token");
-
-                    for (int attempt = 0; attempt < 5; attempt++) {
-                        assertThatThrownBy(() -> gate.claim(command))
-                                .isInstanceOf(RedisConnectionFailureException.class);
-                    }
-
-                    assertThatThrownBy(() -> gate.claim(command))
-                            .isInstanceOf(IssuanceGateCircuitOpenException.class);
-                    assertThat(calls).hasValue(5);
                 });
     }
 
@@ -180,23 +104,6 @@ class IssuanceGateRedisAutoConfigurationTest {
                             .contains(MicrometerV2RestorationMeters.FAILURE_OUTCOME,
                                     MicrometerV2RestorationMeters.HALT_WRITE_FAILURE_OUTCOME)
                             .hasSize(RestoreOutcome.values().length + 2);
-                });
-    }
-
-    @Test
-    void bindsRedisCircuitBreakerStateMetricsWhenMeterRegistryIsPresent() {
-        new ApplicationContextRunner()
-                .withConfiguration(AutoConfigurations.of(
-                        DataRedisAutoConfiguration.class, IssuanceGateRedisAutoConfiguration.class))
-                .withBean(SimpleMeterRegistry.class)
-                .run(context -> {
-                    assertThat(context).hasSingleBean(TaggedCircuitBreakerMetrics.class);
-                    SimpleMeterRegistry registry = context.getBean(SimpleMeterRegistry.class);
-                    assertThat(registry.getMeters())
-                            .extracting(meter -> meter.getId().getName())
-                            .contains("resilience4j.circuitbreaker.state");
-                    assertThat(registry.find("resilience4j.circuitbreaker.state")
-                            .tag("name", "redisCB").gauges()).isNotEmpty();
                 });
     }
 

@@ -77,16 +77,6 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.error.code").value("COUPON-320"));
     }
 
-    @Test
-    void mapsRedisFailoverToRetryableServiceUnavailable() throws Exception {
-        MockMvc mockMvc = mockMvc();
-
-        mockMvc.perform(get("/test/redis-unavailable"))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(header().string("Retry-After", "1"))
-                .andExpect(jsonPath("$.error.code").value("COUPON-325"));
-    }
-
     /** Retry-After 는 재시도로 풀리는 실패에만 붙는다. */
     @Test
     void omitsRetryAfterHeaderForOtherBusinessFailures() throws Exception {
@@ -121,11 +111,6 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/retry-after")
         void retryable() {
             throw new RetryAfterException(CouponIssueV2ErrorCode.REPLAY_PENDING, 1);
-        }
-
-        @GetMapping("/test/redis-unavailable")
-        void redisUnavailable() {
-            throw new RetryAfterException(CouponIssueV2ErrorCode.REDIS_UNAVAILABLE, 1);
         }
 
         @GetMapping("/test/business")

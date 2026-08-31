@@ -30,7 +30,6 @@ class BatchPortConfigTest {
 
         assertThat(template.getProperty("spring.config.import[0]")).isEqualTo("classpath:storage.yml");
         assertThat(template.getProperty("spring.config.import[1]")).isEqualTo("classpath:management.yml");
-        assertThat(template.getProperty("spring.config.import[2]")).isEqualTo("classpath:redis.yml");
     }
 
     @Test

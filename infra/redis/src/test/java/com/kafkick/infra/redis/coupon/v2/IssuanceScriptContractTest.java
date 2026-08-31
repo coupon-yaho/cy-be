@@ -1147,15 +1147,4 @@ class IssuanceScriptContractTest {
     private long issuedEver() {
         return Long.parseLong(redis.opsForValue().get(ISSUED_EVER));
     }
-
-    @Test
-    @DisplayName("되돌릴 선점이 없으면 NO_CLAIM 이다 — 남의 토큰(NOT_MINE)과 재고 결과가 반대다")
-    void compensateSeparatesAnAbsentClaimFromAForeignToken() {
-        // 아무도 선점하지 않은 회원을 보상한다.
-        assertThat(compensate(TOKEN_A)).isEqualTo(IssuanceScriptCodes.Compensate.NO_CLAIM);
-
-        // 같은 자리를 남이 잡고 있으면 코드가 다르다. 이 요청의 DECR 은 복구되지 않는다.
-        claim("key-1", TOKEN_A);
-        assertThat(compensate(TOKEN_B)).isEqualTo(IssuanceScriptCodes.Compensate.NOT_MINE);
-    }
 }

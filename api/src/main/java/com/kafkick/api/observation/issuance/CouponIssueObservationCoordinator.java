@@ -5,7 +5,6 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.dao.DataAccessException;
 
 import com.kafkick.api.observation.ObservationIssuanceProperties;
 import com.kafkick.api.support.RetryAfterException;
@@ -20,10 +19,7 @@ import com.kafkick.core.coupon.v2.CouponIssuanceRouter;
 import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
 import com.kafkick.core.coupon.v2.V2CouponIssueResult;
 import com.kafkick.core.coupon.v2.V2CouponIssueService;
-import com.kafkick.core.coupon.v2.V2CouponIssueException;
-import com.kafkick.core.coupon.v2.IssuanceGateCircuitOpenException;
 import com.kafkick.core.coupon.v2.port.ClaimOutcome;
-import com.kafkick.core.coupon.v2.port.CompensateOutcome;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.membership.domain.MembershipGrade;
@@ -55,7 +51,7 @@ public final class CouponIssueObservationCoordinator {
      * @param dependencyMapper 발급 실패 관측 분류기
      * @param router 회차별 발급 엔진 라우터
      * @param v2Services 게이트가 있을 때만 존재하는 v2 발급 서비스
-     * @param v2Meters v2 발급 결과 카운터 아홉 종
+     * @param v2Meters v2 중복·재시도 카운터 세 종
      * @param issuanceProperties {@code Retry-After} 초를 포함한 발급 관측 임계치
      * @param timeProvider 발급 시각 공급자
      */
@@ -150,57 +146,6 @@ public final class CouponIssueObservationCoordinator {
     }
 
     /**
-     * 게이트 통신 실패는 요청 안에서 재시도하지 않는다. 명령 timeout 뒤에도 Redis 스크립트는
-     * 선점을 끝낼 수 있어 새 requestToken으로 다시 보내면 완료·보상 CAS가 앞선 선점과 갈린다.
-     */
-    private RuntimeException redisUnavailable(RuntimeException failure) {
-        if (failure instanceof V2CouponIssueException gateFailure
-                && (transportFailedBeforeClaim(gateFailure)
-                        || compensationLeftTheClaimUnresolved(gateFailure))) {
-            return new RetryAfterException(
-                    CouponIssueV2ErrorCode.REDIS_UNAVAILABLE,
-                    issuanceProperties.redisUnavailableRetryAfterSeconds(), gateFailure);
-        }
-        return failure;
-    }
-
-    /** 선점 결과조차 받지 못한 통신·차단기 실패. 게이트 상태를 모르므로 서버가 되돌릴 수 없다. */
-    private static boolean transportFailedBeforeClaim(V2CouponIssueException gateFailure) {
-        return gateFailure.dependency() == Dependency.REDIS
-                && gateFailure.claimFailedBeforeResult()
-                && (gateFailure.getCause() instanceof DataAccessException
-                        || gateFailure.getCause() instanceof IssuanceGateCircuitOpenException);
-    }
-
-    /**
-     * 보상이 선점을 정리했다고 확언하지 못한 결과. 셋 모두 <b>이 요청의 선점이 어떻게 됐는지
-     * 서버가 모른다</b>는 뜻이라 재시도를 권한다 — 되돌아온 것이 확실한 {@code REVERTED} 나,
-     * DB 가 이미 판정을 확정한 1인 다매·매진 거절은 여기로 오지 않는다.
-     *
-     * <p><b>재고 사실({@link #leftClaimBehind})에서 파생시키고, 정책 차이만 따로 뺀다.</b>
-     * 두 자리가 각자 값 목록을 들면 같은 값을 반대로 읽는 사고가 난다 — 실제로 이 경로에서
-     * 반복됐다. 그래서 목록은 하나뿐이고, 여기서는 그 사실에 <b>이름 있는 예외 하나</b>만
-     * 얹는다: {@code BAD_ARGUMENT} 는 선점을 남기지만 <b>호출부 버그</b>라 다시 눌러도 같은
-     * 실패다({@code CouponIssueV2ErrorCode.BAD_ARGUMENT} 가 이미 {@link Dependency#NONE} 으로
-     * 같은 판단을 했다). 남은 선점은 {@code claim.leaked} 가 세고, 응답만 재시도를 권하지 않는다.
-     *
-     * <p><b>의존성으로 거르지 않는다.</b> 보상은 정의상 항상 Redis 왕복이라, DB 실패로 들어온
-     * 요청({@link Dependency#MYSQL})의 보상이 깨진 것도 똑같이 선점 행방을 모르는 상태다.
-     * 여기서 의존성을 요구하면 그 경로만 재시도 안내 없는 500 으로 새어 나간다.
-     *
-     * <p><b>보상 결과가 아예 없는 경우({@code Optional.empty})는 여기 넣지 않는다.</b> 그것은
-     * 발급이 이미 커밋됐거나 완료 CAS 가 비정상이라 <b>보상하지 않기로 한</b> 경로다 —
-     * 재시도를 권하면 쿠폰을 이미 받은 클라이언트가 다시 누른다. 보상이 깨진 경우는
-     * {@link CompensateOutcome#ATTEMPT_FAILED} 로 따로 온다.
-     */
-    private static boolean compensationLeftTheClaimUnresolved(V2CouponIssueException gateFailure) {
-        return gateFailure.compensateOutcome()
-                .filter(CouponIssueObservationCoordinator::leftClaimBehind)
-                .filter(outcome -> outcome != CompensateOutcome.BAD_ARGUMENT)
-                .isPresent();
-    }
-
-    /**
      * V2 회차의 발급을 실행합니다.
      *
      * <p><b>멱등키 형식을 게이트보다 먼저 봅니다.</b> 재구성은 원래 멱등키를 복원할 수 없어
@@ -243,22 +188,13 @@ public final class CouponIssueObservationCoordinator {
                     definition
             );
             ClaimOutcome outcome = execution.claimResult().outcome();
-            if (execution.databaseSoldOutAfterRedisClaim()) {
-                v2Meters.recordDatabaseStockDivergence();
-            }
-            if (execution.databaseDuplicateAfterRedisClaim()) {
-                v2Meters.recordDatabaseMemberDivergence();
-            }
-            // 되돌아오지 않은 선점은 그 회차 Redis 재고를 영구히 낮춘다. 괴리 카운터는
-            // "DB 가 막았다"까지만 말하므로 이 누수를 구분하지 못한다.
-            execution.compensateOutcome().ifPresent(this::countCompensationAnomaly);
             if (outcome.isClaimed()) {
                 observation.recordClaimedAttempt();
             } else if (execution.replayed()) {
                 observation.recordReplayAttempt();
                 v2Meters.recordReplayDone();
             } else {
-                countRejection(outcome, execution.databaseDuplicateAfterRedisClaim());
+                countRejection(outcome);
                 throw rejection(outcome);
             }
             CouponIssueResult result = execution.issueResult()
@@ -267,19 +203,8 @@ public final class CouponIssueObservationCoordinator {
             observation.completeIssued(result);
             return result;
         } catch (RuntimeException failure) {
-            // 보상 결과가 결과 객체에 실리는 것은 DB 가 판정을 확정한 매진·중복 두 경로뿐이다.
-            // 나머지 실패는 전부 예외로 나가므로, 여기서 세지 않으면 그 경로의 누수가
-            // 하나도 안 잡힌다.
-            if (failure instanceof V2CouponIssueException gateFailure) {
-                gateFailure.compensateOutcome().ifPresent(this::countCompensationAnomaly);
-            }
-            RuntimeException responseFailure = redisUnavailable(failure);
-            if (responseFailure instanceof RetryAfterException retryAfter
-                    && retryAfter.getErrorCode() == CouponIssueV2ErrorCode.REDIS_UNAVAILABLE) {
-                v2Meters.recordRedisUnavailable();
-            }
-            completeFailure(observation, responseFailure, failure);
-            throw responseFailure;
+            completeFailure(observation, failure);
+            throw failure;
         } finally {
             observation.finish();
         }
@@ -292,79 +217,12 @@ public final class CouponIssueObservationCoordinator {
      * 되고, 컴파일도 테스트도 그때 깨지지 않습니다.
      *
      * @param outcome 선점 거절 결과
-     * @param caughtOnlyByDatabase 게이트를 통과했는데 DB 제약이 잡은 중복인지
      */
-    private void countRejection(ClaimOutcome outcome, boolean caughtOnlyByDatabase) {
+    private void countRejection(ClaimOutcome outcome) {
         if (outcome == ClaimOutcome.DUP_PER_MEMBER) {
-            // 게이트가 <b>막지 못한</b> 건은 세지 않는다. 이 카운터의 정의가 "1인1매 방어의
-            // 발동 빈도" 라, 게이트를 통과한 건을 섞으면 정의가 둘이 되고 위 javadoc 이
-            // 경고한 그 부풀림이 된다. 합계가 필요하면 질의에서 회원 괴리와 더한다.
-            if (!caughtOnlyByDatabase) {
-                v2Meters.recordDupPerMember();
-            }
+            v2Meters.recordDupPerMember();
         } else if (outcome == ClaimOutcome.REPLAY_PENDING) {
             v2Meters.recordReplayPending();
-        }
-    }
-
-    /**
-     * 이 보상 결과가 게이트에 선점을 <b>남겼는가</b>.
-     *
-     * <p><b>보상 결과를 해석하는 자리는 여기 하나다.</b> 응답(재시도 권유)과 관제(누수 계수)가
-     * 각자 술어를 들면 같은 값을 반대로 읽는 일이 생기고, 실제로 그 사고가 이 경로에서
-     * 반복됐다. 두 소비자가 이 함수만 본다.
-     *
-     * <p><b>{@code switch} 문이 아니라 식이다.</b> 문은 열거형 전수를 강요하지 않아 새 값이
-     * 조용히 빠진다 — 식이라야 값이 늘 때 컴파일이 깨져 사람이 분류를 다시 본다.
-     */
-    private static boolean leftClaimBehind(CompensateOutcome compensation) {
-        return switch (compensation) {
-            // 되돌렸다 / 되돌릴 것이 애초에 없었다(다른 절차가 먼저 정리했다).
-            case REVERTED, NO_CLAIM -> false;
-            // 게이트가 이미 D 로 승격시켰다. 이 요청이 <b>되돌릴 것</b>은 없다 — DB 트랜잭션이
-            // 롤백된 경로라면 재고 한 장이 소비된 채 남지만, 그것은 이 요청의 선점이 아니라
-            // 승격된 발급의 몫이고 compensation.already.done 이 따로 센다.
-            case ALREADY_DONE -> false;
-            // 남의 토큰이 덮었거나(NOT_MINE), 보내지 못했거나, 호출이 깨졌거나, 인자가
-            // 거부됐거나(BAD_ARGUMENT), 값·카운터를 못 읽었다. 어느 쪽이든 HDEL·INCR 이
-            // 하나도 실행되지 않아 이 요청의 DECR 이 복구되지 않은 채 끝난다.
-            //
-            // BAD_ARGUMENT 는 지금 도달할 수 없다 — 보상의 인자 가드가 선점의 것과 술어가
-            // 같고(memberId 는 Long.toString 이라 빈 값이 될 수 없고 토큰은 선점에 넘긴 그
-            // 인스턴스다), 선점이 -10 으로 거절됐으면 그 요청은 보상을 부르지 않는다.
-            // 두 스크립트의 가드가 갈리는 변경이 들어오면 도달하게 되고, 그때는 선점 성공
-            // 여부를 여기서 알 수 없으므로 <b>보수적으로 누수로 센다</b> — 기준선이 0 이어야
-            // 하는 미터에 없는 건을 더하는 쪽이, 있는 누수를 빠뜨리는 쪽보다 낫다.
-            case NOT_MINE, NOT_ATTEMPTED_CIRCUIT_OPEN, ATTEMPT_FAILED,
-                    CORRUPT_VALUE, COUNTER_UNREADABLE, BAD_ARGUMENT -> true;
-        };
-    }
-
-    /**
-     * 되돌아오지 않은 선점을 셉니다.
-     *
-     * <p>판정은 {@link #leftClaimBehind(CompensateOutcome)} 이 합니다 — 응답 분류와 같은
-     * 함수라, 같은 값을 두 곳이 반대로 읽는 일이 생기지 않습니다.
-     *
-     * <p><b>{@code claim.leaked} 의 기준선은 0 이어야 합니다.</b> 그래야 임계 경보를 걸 수
-     * 있고, 진짜 Sentinel 승격 유실이 잡음에 묻히지 않습니다. 그래서 남긴 것이 없는 결과는
-     * 이 미터에 넣지 않고 {@code compensation.no.claim}·{@code compensation.already.done}
-     * 으로 갈라 셉니다. CY-781 이 Lua 의 {@code 0} 을 "없다"({@code NO_CLAIM})와
-     * "남의 토큰"({@code NOT_MINE})으로 나눈 뒤부터 이 구분이 추측이 아니라 사실입니다.
-     *
-     * @param compensation 보상 CAS 결과
-     */
-    private void countCompensationAnomaly(CompensateOutcome compensation) {
-        if (leftClaimBehind(compensation)) {
-            v2Meters.recordClaimLeaked();
-            return;
-        }
-        // 남긴 것이 없는 결과 중 둘은 그래도 봐 둘 사건이다. 되돌릴 선점이 없었다는 것은
-        // 다른 절차가 먼저 정리했다는 뜻이고, 이미 승격된 선점에 보상이 온 것은 경보다.
-        if (compensation == CompensateOutcome.NO_CLAIM) {
-            v2Meters.recordCompensationFoundNoClaim();
-        } else if (compensation == CompensateOutcome.ALREADY_DONE) {
-            v2Meters.recordCompensationOnCompletedClaim();
         }
     }
 
@@ -382,7 +240,7 @@ public final class CouponIssueObservationCoordinator {
      * <p>{@code default} 절이 없습니다 — 게이트 결과가 늘면 여기서 컴파일이 깨집니다. 조용히
      * 한 덩어리로 접히면 새 반환 코드가 {@code UNMAPPED} 로 관제에 도착합니다.
      *
-     * <p><b>부수효과가 없습니다.</b> 계수는 {@link #countRejection(ClaimOutcome, boolean)} 이 합니다.
+     * <p><b>부수효과가 없습니다.</b> 계수는 {@link #countRejection(ClaimOutcome)} 이 합니다.
      *
      * @param outcome 선점 거절 결과
      * @return 그 거절에 대응하는 업무 예외
@@ -448,35 +306,13 @@ public final class CouponIssueObservationCoordinator {
             ObservationScope observation,
         RuntimeException failure
     ) {
-        completeFailure(observation, failure, failure);
-    }
-
-    /**
-     * 업무 실패를 매핑해 등록합니다. <b>응답과 귀속의 출처를 나눕니다.</b>
-     *
-     * <p>{@code REDIS_UNAVAILABLE} 로 옮긴 예외를 그대로 매퍼에 넘기면 그 코드의
-     * {@link Dependency#REDIS} 가 관측에 박혀 <b>MySQL 장애가 Redis 장애로 집계됩니다</b> —
-     * 어댑터가 확정해 실어 보낸 {@code dependency()} 가 응답 매핑 한 줄에 덮이는 것이라,
-     * {@code V2CouponIssueException} 이 그 값을 나르는 이유 자체가 사라집니다. Chaos 리포트가
-     * "MySQL 주입 구간에 Redis 장애 급증" 으로 뒤집혀 읽힙니다. HTTP 상태·사유는 클라이언트가
-     * 볼 응답에서, 의존성은 <b>원 실패</b>에서 가져옵니다.
-     *
-     * @param observation 요청 단위 관측
-     * @param responseFailure 클라이언트에게 나갈 예외 — HTTP 상태·사유의 출처
-     * @param originalFailure 무엇이 실제로 막혔는지 아는 예외 — 의존성 귀속의 출처
-     */
-    private void completeFailure(
-            ObservationScope observation,
-            RuntimeException responseFailure,
-            RuntimeException originalFailure
-    ) {
         try {
             CouponIssueObservationFailure mapped =
-                    dependencyMapper.classify(responseFailure);
+                    dependencyMapper.classify(failure);
             observation.completeRejected(
                     mapped.httpStatus(),
                     mapped.reasonCode(),
-                    dependencyMapper.dependency(originalFailure)
+                    mapped.dependency()
             );
         } catch (RuntimeException ignored) {
             // 관측 매핑 실패는 원래 발급 예외를 그대로 보존한다.

@@ -78,16 +78,7 @@ public final class IssuanceScriptCodes {
     public static final class Compensate {
 
         public static final long REVERTED = 1;
-        /**
-         * 되돌릴 선점이 <b>없다</b> — 다른 절차가 이미 정리했다. 아무것도 하지 않았고
-         * 이 요청이 게이트에 남긴 것도 없다. 정상이다.
-         */
-        public static final long NO_CLAIM = 2;
-        /**
-         * 그 자리를 <b>다른 토큰이</b> 잡고 있다 — 내 선점이 덮였다. 아무것도 하지 않았고
-         * 이 요청의 {@code DECR} 은 복구되지 않는다. {@link #NO_CLAIM} 과 갈라야 하는 이유가
-         * 이것이다 — 재고 결과가 정반대다.
-         */
+        /** 이미 없거나 내 선점이 아니다 — 아무것도 하지 않았다. 정상이다. */
         public static final long NOT_MINE = 0;
         /** 이미 {@code D} 다. 보상 금지 — 경보. */
         public static final long ALREADY_DONE = -1;

@@ -7,24 +7,6 @@ spring:
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
 
----
-# 빈 sentinel.master도 Boot에는 Sentinel 구성이다. 따라서 환경변수의 빈 문자열로 단일 모드를
-# 고르지 않고 프로파일이 이 문서를 통째로 켠다. compose는 api,batch에 redis-sentinel을 더한다.
-spring:
-  config:
-    activate:
-      on-profile: redis-sentinel
-  data:
-    redis:
-      sentinel:
-        # 기본값을 비워 둔다. 없으면 프로퍼티 해석이 먼저 터져
-        # "Could not resolve placeholder" 스택이 나가고, 정작 무엇이 필요한지 말해 주는
-        # RedisSentinelConfigurationGuardAutoConfiguration 의 메시지는 영영 안 나온다.
-        # 판정은 그 가드 한 곳에서만 한다.
-        master: ${REDIS_SENTINEL_MASTER:}
-        nodes: ${REDIS_SENTINEL_NODES:}
-
----
 # Redis가 새로 비었을 때 api 기동이 한 번만 저장한다(SET NX). 현재 batch는 이 자동설정을
 # 제외하므로 부트스트랩하지 않는다.
 runtime-config:
@@ -32,11 +14,3 @@ runtime-config:
     engine-version: ${RUNTIME_CONFIG_BOOTSTRAP_ENGINE_VERSION:V1}
     release-stage: ${RUNTIME_CONFIG_BOOTSTRAP_RELEASE_STAGE:V1}
     queue-mode: ${RUNTIME_CONFIG_BOOTSTRAP_QUEUE_MODE:OFF}
-
-coupon:
-  v2:
-    redis-circuit-breaker:
-      sliding-window-size: ${REDIS_CB_SLIDING_WINDOW_SIZE:5}
-      minimum-number-of-calls: ${REDIS_CB_MINIMUM_NUMBER_OF_CALLS:5}
-      failure-rate-threshold: ${REDIS_CB_FAILURE_RATE_THRESHOLD:100}
-      wait-duration-in-open-state: ${REDIS_CB_WAIT_DURATION_IN_OPEN_STATE:1s}

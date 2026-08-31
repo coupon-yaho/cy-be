@@ -19,15 +19,13 @@ import java.time.Duration;
  *                                       생략하면 {@link #DEFAULT_RETRY_AFTER_SECONDS}
  * @param gateNotReadyRetryAfterSeconds v2 {@code -9}(재구성 창) 응답의 {@code Retry-After} 초;
  *                                      생략하면 {@link #DEFAULT_RETRY_AFTER_SECONDS}
- * @param redisUnavailableRetryAfterSeconds Redis failover·차단기 개방 응답의 {@code Retry-After} 초
  */
 @ConfigurationProperties(prefix = "observation.issuance")
 public record ObservationIssuanceProperties(
         Duration attemptFailureLogInterval,
         String producerInstanceId,
         Integer replayPendingRetryAfterSeconds,
-        Integer gateNotReadyRetryAfterSeconds,
-        Integer redisUnavailableRetryAfterSeconds
+        Integer gateNotReadyRetryAfterSeconds
 ) {
 
     private static final String DEFAULT_PRODUCER_INSTANCE_ID = "api-local";
@@ -58,8 +56,6 @@ public record ObservationIssuanceProperties(
                 requirePositiveSeconds(replayPendingRetryAfterSeconds, "replayPendingRetryAfterSeconds");
         gateNotReadyRetryAfterSeconds =
                 requirePositiveSeconds(gateNotReadyRetryAfterSeconds, "gateNotReadyRetryAfterSeconds");
-        redisUnavailableRetryAfterSeconds = requirePositiveSeconds(
-                redisUnavailableRetryAfterSeconds, "redisUnavailableRetryAfterSeconds");
     }
 
     /**

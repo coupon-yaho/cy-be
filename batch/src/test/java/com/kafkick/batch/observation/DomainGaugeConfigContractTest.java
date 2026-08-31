@@ -91,27 +91,15 @@ class DomainGaugeConfigContractTest {
             .isNotBlank();
     }
 
-    /**
-     * <b>Redis 타임아웃의 정본은 {@code redis.yml} 이다</b>(CY-781). {@code spring.config.import}
-     * 로 들어온 문서가 선언 문서를 이기므로, {@code application.yml} 에 같은 키를 적으면
-     * 에러도 경고도 없이 죽는다 — 실제로 이 자리에 있던 {@code 800ms} 가 Sentinel import 합류
-     * 뒤로 죽어 있었고, 최종 바인딩은 {@code 500ms} 였다. 그래서 <b>정본에서 값을 확인하고,
-     * 선언 문서에는 그 키가 없다는 것</b>을 함께 고정한다.
-     */
     @Test
-    @DisplayName("Redis 접속·타임아웃은 redis.yml 이 갖고 application.yml 은 다시 적지 않는다")
+    @DisplayName("Redis 접속·타임아웃과 스케줄러 풀이 템플릿에 있다")
     void redisAndSchedulerAreConfigured() {
         Properties template = applicationTemplate();
-        Properties redis = load("redis.yml.example");
 
-        assertThat(redis.getProperty("spring.data.redis.timeout"))
-            .as("없으면 Lettuce 기본 60초가 걸려 수집 스레드를 그동안 점유한다")
-            .isEqualTo("${REDIS_COMMAND_TIMEOUT:500ms}");
-        assertThat(redis.getProperty("spring.data.redis.connect-timeout")).isNotBlank();
         assertThat(template.getProperty("spring.data.redis.timeout"))
-            .as("여기 적으면 import 에 져서 조용히 죽는다 — 바꿀 값은 redis.yml 로 간다")
-            .isNull();
-        assertThat(template.getProperty("spring.data.redis.connect-timeout")).isNull();
+            .as("없으면 Lettuce 기본 60초가 걸려 수집 스레드를 그동안 점유한다")
+            .isEqualTo("${REDIS_TIMEOUT_MS:800}ms");
+        assertThat(template.getProperty("spring.data.redis.connect-timeout")).isNotBlank();
         assertThat(defaultOf(template.getProperty("spring.task.scheduling.pool.size")))
             .as("풀이 1이면 느린 집계가 1초 주기 재고 갱신을 막는다")
             .isGreaterThanOrEqualTo(2);

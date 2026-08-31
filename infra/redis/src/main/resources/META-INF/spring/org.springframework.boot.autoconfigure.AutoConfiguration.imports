@@ -1,5 +1,3 @@
-com.kafkick.infra.redis.RedisMasterOnlyReadAutoConfiguration
-com.kafkick.infra.redis.RedisSentinelConfigurationGuardAutoConfiguration
 com.kafkick.infra.redis.coupon.v2.IssuanceGateRedisAutoConfiguration
 com.kafkick.infra.redis.coupon.v2.CouponDefinitionL2RedisAutoConfiguration
 com.kafkick.infra.redis.observation.RedisLatencyAutoConfiguration
