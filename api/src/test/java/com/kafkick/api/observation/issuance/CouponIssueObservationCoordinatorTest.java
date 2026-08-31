@@ -8,12 +8,15 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import com.kafkick.api.observation.ObservationIssuanceProperties;
 
+import org.springframework.dao.CannotAcquireLockException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -60,6 +63,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -83,6 +87,23 @@ class CouponIssueObservationCoordinatorTest {
     private CouponIssueObservationCoordinator coordinator;
     private IssuanceFlowEvent.Ctx context;
 
+    /** 같은 코디네이터를 주어진 레지스트리로 만든다 — 지표를 직접 읽어야 하는 테스트용. */
+    private CouponIssueObservationCoordinator coordinatorWith(MeterRegistry registry) {
+        return new CouponIssueObservationCoordinator(
+                operationExecutionService,
+                contextFactory,
+                observationService,
+                new CouponIssueObservationDependencyMapper(),
+                v1Router(),
+                noV2Service(),
+                new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(registry),
+                IssueLockRetryProperties.defaults(),
+                new ObservationIssuanceProperties(null, "api-1", null, null, null),
+                new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
+        );
+    }
+
     @BeforeEach
     void setUp() {
         coordinator = new CouponIssueObservationCoordinator(
@@ -93,6 +114,8 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -109,6 +132,157 @@ class CouponIssueObservationCoordinatorTest {
                 901L,
                 "api-1"
         );
+    }
+
+    /**
+     * <b>동시 발급이 같은 회차에 몰리면 MySQL 이 한쪽을 데드락으로 걷어낸다.</b> 실측했다 —
+     * 저장소 동시성 테스트에서 재시도를 빼고 여섯 번 돌리면 한 번 실패한다. 다시 시도하지
+     * 않으면 그 요청은 사용자에게 500 이고 부하 회차의 에러율에 그대로 얹힌다.
+     *
+     * <p>발급·이력·재고·멱등 기록이 한 트랜잭션이라 롤백이 넷을 전부 되돌린다. 그래서 다시
+     * 시도해도 막히지 않고 중복도 안 생긴다.
+     */
+    @Test
+    @DisplayName("락 경합으로 물러선 발급은 다시 시도한다")
+    void retriesIssueWhenLockCannotBeAcquired() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        ))
+                .thenThrow(new CannotAcquireLockException("deadlock"))
+                .thenAnswer(invocation -> {
+                    IssueAttemptCallback callback = invocation.getArgument(4);
+                    callback.onPolicyPassed();
+                    return new CouponIssueExecutionResult(issueResult(), false);
+                });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(operationExecutionService, times(2)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
+    /**
+     * <b>운영에서 오는 모양은 감싸인 쪽이다.</b> 저장소 어댑터가 {@code DataAccessException}
+     * 을 {@code CouponPersistenceException} 으로 감싸므로, 원본 타입만 잡으면
+     * <b>재시도가 사실상 안 돈다.</b> 처음에 그렇게 만들었고 리뷰가 잡았다.
+     */
+    @Test
+    @DisplayName("어댑터가 감싼 락 경합도 다시 시도한다")
+    void retriesWhenLockContentionIsWrappedByAnAdapter() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        ))
+                .thenThrow(new CouponPersistenceException(
+                        "쿠폰 재고 점유에 실패했습니다.",
+                        new CannotAcquireLockException("deadlock")))
+                .thenAnswer(invocation -> {
+                    IssueAttemptCallback callback = invocation.getArgument(4);
+                    callback.onPolicyPassed();
+                    return new CouponIssueExecutionResult(issueResult(), false);
+                });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(operationExecutionService, times(2)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
+    /**
+     * <b>락 경합이 아닌 실패는 한 번에 끝낸다.</b> 넓게 잡아 아무 실패나 재시도하면 진짜
+     * 결함을 세 번 반복하고 응답만 느려진다.
+     */
+    @Test
+    @DisplayName("락 경합이 아닌 영속 실패는 다시 시도하지 않는다")
+    void doesNotRetryPersistenceFailuresThatAreNotLockContention() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(new CouponPersistenceException(
+                "쿠폰 재고 점유에 실패했습니다.", new IllegalStateException("다른 이유")));
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
+                .isInstanceOf(CouponPersistenceException.class);
+
+        verify(operationExecutionService, times(1)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
+    /**
+     * <b>지표는 요청 단위로 배타여야 한다.</b> 물러섬마다 올리면 두 번 물러선 요청이 둘로
+     * 세어지고, 끝내 실패한 요청이 {@code recovered} 와 {@code exhausted} 에 동시에 들어가
+     * <i>"재시도가 몇 건을 살렸나"</i> 를 계산할 수 없게 된다. 처음에 그렇게 만들었다.
+     */
+    @Test
+    @DisplayName("두 번 물러섰다 성공해도 회복은 요청당 한 번만 센다")
+    void countsRecoveryOncePerRequest() {
+        prepareContext();
+        MeterRegistry registry = new SimpleMeterRegistry();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        ))
+                .thenThrow(new CannotAcquireLockException("deadlock"))
+                .thenThrow(new CannotAcquireLockException("deadlock"))
+                .thenAnswer(invocation -> {
+                    IssueAttemptCallback callback = invocation.getArgument(4);
+                    callback.onPolicyPassed();
+                    return new CouponIssueExecutionResult(issueResult(), false);
+                });
+
+        coordinatorWith(registry).issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
+
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "recovered").counter().count()).isEqualTo(1.0);
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "exhausted").counter().count()).isEqualTo(0.0);
+    }
+
+    /** 끝내 실패한 요청은 {@code exhausted} 하나만 센다 — 회복으로도 세면 합이 안 맞는다. */
+    @Test
+    @DisplayName("끝내 실패한 요청은 회복으로 세지 않는다")
+    void doesNotCountExhaustedRequestAsRecovered() {
+        prepareContext();
+        MeterRegistry registry = new SimpleMeterRegistry();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(new CannotAcquireLockException("deadlock"));
+
+        assertThatThrownBy(() -> coordinatorWith(registry).issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
+                .isInstanceOf(CannotAcquireLockException.class);
+
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "recovered").counter().count()).isEqualTo(0.0);
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "exhausted").counter().count()).isEqualTo(1.0);
+    }
+
+    /**
+     * <b>상한이나 시간 예산에 닿으면 그대로 던진다.</b> 무한히 다시 시도하면 응답만 느려지고
+     * 원인이 안 드러난다. 원인이 반복 데드락인지 지속 병목인지는 코드가 구분하지 못하므로
+     * 단정하지 않고, 사실(상한까지 갔다)만 로그와 지표에 남긴다.
+     */
+    @Test
+    @DisplayName("락 경합이 상한까지 이어지면 그대로 실패시킨다")
+    void stopsRetryingAfterTheAttemptLimit() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(new CannotAcquireLockException("deadlock"));
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
+                .isInstanceOf(CannotAcquireLockException.class);
+
+        verify(operationExecutionService, times(3)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
     }
 
     @Test
@@ -659,6 +833,8 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -705,6 +881,8 @@ class CouponIssueObservationCoordinatorTest {
                         v1Router(),
                         noV2Service(),
                         new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                         new ObservationIssuanceProperties(null, "api-1", null, null, null),
                         timeProvider
                 );

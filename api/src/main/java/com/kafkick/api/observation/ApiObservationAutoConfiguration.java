@@ -65,6 +65,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @EnableConfigurationProperties({
         ConsistencySeverityProperties.class,
         ObservationIssuanceProperties.class,
+        com.kafkick.api.observation.issuance.IssueLockRetryProperties.class,
         CouponRoundMeterProperties.class
 })
 public class ApiObservationAutoConfiguration {
