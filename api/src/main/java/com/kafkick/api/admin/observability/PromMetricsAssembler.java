@@ -1656,6 +1656,13 @@ public class PromMetricsAssembler {
                         state, observedAt));
     }
 
+    /**
+     * 게이트웨이 운영 지표 하나를 같은 scrape 상태로 감쌉니다.
+     *
+     * <p>숫자 표본이 없으면 아직 관측되지 않은 값이므로 {@code PENDING}, 집계값이 음수이면
+     * 계약을 위반한 표본이므로 {@code UNAVAILABLE}입니다. 두 실패는 다른 게이트웨이 지표로
+     * 전파하지 않습니다.</p>
+     */
     private static ObservedValue<Double> gatewayMetric(
             QueryResult samples, String metricName, SourceStatus state, Instant observedAt) {
         OptionalDouble value = MetricAggregation.of(metricName).reduce(
