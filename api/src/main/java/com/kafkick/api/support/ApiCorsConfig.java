@@ -70,7 +70,7 @@ public class ApiCorsConfig {
         configuration.setAllowedHeaders(List.of(
                 HttpHeaders.CONTENT_TYPE,
                 MemberRequestHeaders.MEMBER_ID,
-                MemberRequestHeaders.MEMBER_GRADE,
+                MemberRequestHeaders.MEMBERSHIP_GRADE,
                 CouponRequestHeaders.IDEMPOTENCY_KEY,
                 RequestIdFilter.REQUEST_ID_HEADER,
                 AdminAuthorizationInterceptor.USER_ROLE_HEADER,

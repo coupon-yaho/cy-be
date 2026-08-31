@@ -47,7 +47,7 @@ public class CouponIssueController {
             @RequestHeader(MemberRequestHeaders.MEMBER_ID)
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
-            @RequestHeader(MemberRequestHeaders.MEMBER_GRADE)
+            @RequestHeader(MemberRequestHeaders.MEMBERSHIP_GRADE)
             MembershipGrade membershipGrade,
             @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
             String idempotencyKey

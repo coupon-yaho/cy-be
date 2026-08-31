@@ -70,7 +70,7 @@ class CouponIssueControllerTest {
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBER_GRADE,
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -115,7 +115,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBER_GRADE,
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -151,7 +151,7 @@ class CouponIssueControllerTest {
                             .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                             .header(MemberRequestHeaders.MEMBER_ID, "20")
                             .header(
-                                    MemberRequestHeaders.MEMBER_GRADE,
+                                    MemberRequestHeaders.MEMBERSHIP_GRADE,
                                     "GOLD"
                             )
                             .header(
@@ -194,7 +194,7 @@ class CouponIssueControllerTest {
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBER_GRADE,
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -220,7 +220,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .header(
-                                MemberRequestHeaders.MEMBER_GRADE,
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "GOLD"
                         )
                         .header(
@@ -245,7 +245,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBER_GRADE,
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "PLATINUM"
                         )
                         .header(
@@ -263,7 +263,7 @@ class CouponIssueControllerTest {
         mockMvc.perform(post("/api/v1/coupons/10/issue")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
                         .header(
-                                MemberRequestHeaders.MEMBER_GRADE,
+                                MemberRequestHeaders.MEMBERSHIP_GRADE,
                                 "GOLD"
                         ))
                 .andExpect(status().isBadRequest())

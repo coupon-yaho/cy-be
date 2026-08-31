@@ -68,7 +68,7 @@ class CouponRoundControllerTest {
 
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD"))
+                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "GOLD"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.content.length()").value(1))
@@ -106,7 +106,7 @@ class CouponRoundControllerTest {
     void rejectUnknownMembershipGrade() throws Exception {
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBER_GRADE, "BRONZE"))
+                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "BRONZE"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"));
 
@@ -124,7 +124,7 @@ class CouponRoundControllerTest {
     void rejectOversizedPage() throws Exception {
         mockMvc.perform(get("/api/v1/coupon-rounds")
                         .header(MemberRequestHeaders.MEMBER_ID, "20")
-                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD")
+                        .header(MemberRequestHeaders.MEMBERSHIP_GRADE, "GOLD")
                         .param("size", "101"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"))

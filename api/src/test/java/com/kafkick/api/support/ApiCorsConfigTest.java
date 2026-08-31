@@ -40,7 +40,7 @@ class ApiCorsConfigTest {
                 "http://localhost:5173",
                 "POST",
                 MemberRequestHeaders.MEMBER_ID + ","
-                        + MemberRequestHeaders.MEMBER_GRADE + ","
+                        + MemberRequestHeaders.MEMBERSHIP_GRADE + ","
                         + CouponRequestHeaders.IDEMPOTENCY_KEY + ",Content-Type");
 
         assertThat(response.getStatus()).isEqualTo(200);
@@ -54,7 +54,7 @@ class ApiCorsConfigTest {
     void allowsEveryHeaderTheIssuePathRequires() throws Exception {
         for (String header : List.of(
                 MemberRequestHeaders.MEMBER_ID,
-                MemberRequestHeaders.MEMBER_GRADE,
+                MemberRequestHeaders.MEMBERSHIP_GRADE,
                 CouponRequestHeaders.IDEMPOTENCY_KEY)) {
             MockHttpServletResponse response =
                     preflight("http://localhost:5173", "POST", header);
