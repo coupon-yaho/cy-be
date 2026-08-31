@@ -153,6 +153,11 @@ public class LockContentionRetry {
      *
      * <p>락 경합이 아닌 실패는 여기서 {@code false} 라 곧바로 원형 그대로 다시 던져진다.
      * 넓게 잡아 아무 실패나 재시도하면 진짜 결함을 세 번 반복하고 응답만 느려진다.
+     *
+     * <p><b>상한에 닿으면 반대로도 틀린다.</b> 열여섯 겹보다 깊은 곳에 진짜 락 경합이 있어도
+     * {@code false} 로 분류하고, 그러면 다시 시도하지 않고 그대로 던진다. 순환에서 안 멈추는
+     * 쪽이 더 나쁘다고 보고 고른 값이다 — 어댑터가 한두 겹 감싸는 이 저장소에서 열여섯 겹은
+     * 실제로 안 나온다. 나오면 상한이 아니라 그 사슬을 먼저 의심한다.
      */
     private static boolean causedByLockContention(Throwable failure) {
         Throwable cause = failure;

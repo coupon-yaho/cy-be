@@ -75,6 +75,10 @@ public final class LockContentionRetries {
      * MySQLTransactionRollbackException}.
      *
      * <p>깊이를 {@link #CAUSE_CHAIN_LIMIT} 로 끊는다. 순환 사슬에서 안 멈추게 하려는 것이다.
+     * <p><b>상한에 닿으면 반대로도 틀린다.</b> 열여섯 겹보다 깊은 곳에 진짜 락 경합이 있어도
+     * {@code false} 로 분류하고, 그러면 다시 시도하지 않고 그대로 던진다. 순환에서 안 멈추는
+     * 쪽이 더 나쁘다고 보고 고른 값이다 — 어댑터가 한두 겹 감싸는 이 저장소에서 열여섯 겹은
+     * 실제로 안 나온다. 나오면 상한이 아니라 그 사슬을 먼저 의심한다.
      */
     public static boolean isLockContention(Throwable failure) {
         Throwable cause = failure;
