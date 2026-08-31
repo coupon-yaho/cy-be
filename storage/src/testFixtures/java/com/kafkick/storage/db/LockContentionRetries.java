@@ -38,6 +38,13 @@ public final class LockContentionRetries {
     /** 물러서는 상한. 계속되는 락 장애까지 성공으로 숨기지 않으려고 낮게 둔다. */
     public static final int MAX_ATTEMPTS = 3;
 
+    /**
+     * 사슬을 훑는 깊이 상한. <b>자기참조만 끊으면 부족하다</b> — A → B → A 처럼 노드가
+     * 둘 이상인 순환에서는 그 검사가 안 걸려 검사 스레드가 영영 안 끝난다. 운영 쪽
+     * {@code LockContentionRetry} 는 이 상한을 갖고 있었는데, 여기로 옮기면서 빠뜨렸다.
+     */
+    private static final int CAUSE_CHAIN_LIMIT = 16;
+
     private static final long BACKOFF_MIN_NANOS = 1_000_000L;
     private static final long BACKOFF_MAX_NANOS = 5_000_000L;
 
@@ -66,15 +73,19 @@ public final class LockContentionRetries {
      * 감싸므로 바깥 타입만 보면 못 잡는다. CI 가 남긴 사슬이 정확히 그 모양이었다 —
      * {@code IdempotencyPersistenceException → CannotAcquireLockException →
      * MySQLTransactionRollbackException}.
+     *
+     * <p>깊이를 {@link #CAUSE_CHAIN_LIMIT} 로 끊는다. 순환 사슬에서 안 멈추게 하려는 것이다.
      */
     public static boolean isLockContention(Throwable failure) {
-        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+        Throwable cause = failure;
+        for (int depth = 0; cause != null && depth < CAUSE_CHAIN_LIMIT; depth++) {
             if (cause instanceof PessimisticLockingFailureException) {
                 return true;
             }
             if (cause.getCause() == cause) {
                 return false;
             }
+            cause = cause.getCause();
         }
         return false;
     }

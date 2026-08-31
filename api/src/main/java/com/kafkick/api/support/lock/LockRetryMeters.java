@@ -16,11 +16,12 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 발급·사용·사용취소·발급취소가 같은 멱등 행과 발급 행을 치므로, 어느 쪽이 부딪히는지
  * 나눠 봐야 한다.
  *
- * <p><b>재시도의 효과는 지표로만 보인다.</b> 다시 시도해 살아난 요청은 응답이 201 이라
- * 에러율에도, 응답 코드 분포에도 흔적이 없다. 이 값이 없으면 부하 회차에서
- * <i>"재시도 덕에 에러율이 얼마나 내려갔나"</i> 를 로그 grep 으로 증명해야 한다.
+ * <p><b>재시도의 효과는 지표로만 보인다.</b> 다시 시도해 살아난 요청은 <b>성공 응답</b>이라
+ * 에러율에도, 응답 코드 분포에도 흔적이 없다(경로마다 코드가 달라 여기 숫자로 적지 않는다).
+ * 이 값이 없으면 부하 회차에서 <i>"재시도 덕에 에러율이 얼마나 내려갔나"</i> 를 로그 grep
+ * 으로 증명해야 한다.
  *
- * <p>두 결말을 가른다.
+ * <p><b>결말을 셋으로 가른다.</b>
  *
  * <ul>
  *   <li>{@code recovered} — 물러섰다가 <b>끝내 성공한 요청</b>. 이 수가 곧 재시도가
@@ -40,13 +41,26 @@ import io.micrometer.core.instrument.MeterRegistry;
  *
  * <p>물러선 <i>횟수</i>가 필요해지면 그때 별도 카운터를 둔다. 지금 이름에 섞지 않는다.
  *
- * <p><b>Micrometer description 도 같은 단위로 적는다.</b> 대시보드에서 사람이 먼저 보는
- * 것은 이 설명이라, 여기만 "횟수" 로 남으면 요청 단위 값을 시도 횟수로 읽는다.
+ * <p><b>description 은 결말마다 다르게 못 적는다.</b> Prometheus 는 메트릭 패밀리당 HELP 를
+ * 하나만 유지하므로, 태그별로 다른 설명을 등록해도 먼저 등록된 것 하나만 노출된다 —
+ * 처음에 결말별로 적었더니 {@code exhausted}·{@code abandoned} 가 {@code recovered} 의
+ * 설명을 달고 나가는 꼴이었다(리뷰가 잡았다). 그래서 <b>결말에 중립인 한 문장</b>을 쓰고,
+ * 결말의 뜻은 이 javadoc 과 위 목록이 진다.
+ *
+ * <p>그 한 문장도 <b>요청 단위</b>로 적는다. 대시보드에서 사람이 먼저 보는 것은 설명이라,
+ * 여기만 "횟수" 로 남으면 요청 단위 값을 시도 횟수로 읽는다.
  */
 @Component
 public final class LockRetryMeters {
 
     private static final String NAME = MeterNames.COUPON_LOCK_RETRY;
+
+    /**
+     * 패밀리 하나에 설명도 하나다. <b>결말에 중립이어야 한다</b> — 결말마다 다르게 적으면
+     * 먼저 등록된 것만 노출돼, 실패 결말이 성공 요청 수라는 설명을 달고 나간다.
+     */
+    private static final String DESCRIPTION =
+            "락 경합으로 물러선 요청 수. outcome 태그가 결말을 가른다 (요청당 1)";
 
     /**
      * 경로 × 결말을 <b>기동 때 미리 등록한다.</b> 첫 증가 때 만들면, 한 번도 안 부딪힌
@@ -59,7 +73,7 @@ public final class LockRetryMeters {
         Objects.requireNonNull(registry, "registry");
         Map<String, Map<String, Counter>> counters = new HashMap<>();
         for (String outcome : LockRetryOperations.OUTCOMES) {
-            counters.put(outcome, counters(registry, outcome, DESCRIPTIONS.get(outcome)));
+            counters.put(outcome, counters(registry, outcome));
         }
         this.byOutcome = Map.copyOf(counters);
     }
@@ -86,20 +100,11 @@ public final class LockRetryMeters {
         counter(LockRetryOperations.ABANDONED, operation).increment();
     }
 
-    private static final Map<String, String> DESCRIPTIONS = Map.of(
-            LockRetryOperations.RECOVERED,
-            "락 경합으로 물러섰다가 끝내 성공한 요청 수 (요청당 1)",
-            LockRetryOperations.EXHAUSTED,
-            "락 경합으로 상한이나 예산까지 가서 끝내 실패한 요청 수 (요청당 1)",
-            LockRetryOperations.ABANDONED,
-            "락 경합으로 물러섰지만 다른 실패로 끝난 요청 수 (요청당 1)");
-
-    private static Map<String, Counter> counters(
-            MeterRegistry registry, String outcome, String description) {
+    private static Map<String, Counter> counters(MeterRegistry registry, String outcome) {
         Map<String, Counter> byOperation = new HashMap<>();
         for (String operation : LockRetryOperations.ALL) {
             byOperation.put(operation, Counter.builder(NAME)
-                    .description(description)
+                    .description(DESCRIPTION)
                     .tag("operation", operation)
                     .tag("outcome", outcome)
                     .register(registry));
