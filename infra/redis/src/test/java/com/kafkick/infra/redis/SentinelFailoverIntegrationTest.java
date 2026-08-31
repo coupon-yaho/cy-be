@@ -21,8 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 배포가 쓰는 것과 다른 것을 검증하게 된다 — 실제 파일은 master 를 <b>호스트명</b>으로
  * 감시하고 {@code resolve-hostnames}·{@code announce-hostnames} 를 켜는데, IP 로 감시하는
  * 사본은 그 해석 경로를 한 번도 지나지 않는다. 그래서 master 컨테이너의 별칭을
- * {@code redis} 로 두어 파일의 {@code sentinel monitor coupon-master redis 6379 2} 가
- * 그대로 성립하게 하고, 테스트 시간을 줄이는 {@code down-after} 한 줄만 sed 로 바꾼다.
+ * {@code redis} 로 두고, compose 와 <b>같은 방식</b>으로 자리표시자를 기동 시 해석한 IP 로
+ * 바꾼다. 테스트 시간을 줄이는 {@code down-after} 한 줄만 더 손댄다.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class SentinelFailoverIntegrationTest {
@@ -116,7 +116,10 @@ class SentinelFailoverIntegrationTest {
         // 배포가 쓰는 파일을 복사한다. 바꾸는 것은 down-after 하나뿐이다 — 5초를 그대로 두면
         // 테스트가 매번 그만큼 더 걸린다. 나머지(호스트명 감시·resolve/announce-hostnames·
         // failover-timeout·parallel-syncs)는 손대지 않아야 검증하는 의미가 있다.
-        String config = "sed 's/^sentinel down-after-milliseconds coupon-master .*/"
+        // compose 와 같은 주입을 한다 — 자리표시자를 기동 시 해석한 IP 로 바꾼다.
+        // 바꾸는 것은 그 밖에 down-after 하나뿐이다(5초를 그대로 두면 테스트가 그만큼 길어진다).
+        String config = "sed -e 's/__MASTER_ADDR__/" + masterAddress + "/'"
+                + " -e 's/^sentinel down-after-milliseconds coupon-master .*/"
                 + "sentinel down-after-milliseconds coupon-master 1000/' /config/sentinel.conf"
                 + " > /tmp/sentinel.conf && exec redis-server /tmp/sentinel.conf --sentinel";
         return new GenericContainer<>(REDIS).withNetwork(NETWORK).withNetworkAliases(alias)

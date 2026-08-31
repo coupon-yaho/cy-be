@@ -570,6 +570,30 @@ D2(동기 INSERT)를 택한 시점에 성공한 발급은 예외 없이 `issuanc
 Sentinel 상태도 같은 이유로 영속시킨다. 셋이 같은 토폴로지를 읽어야 재기동이 어긋나지 않는다 —
 한쪽만 기억하면 Sentinel 이 replica 를 master 로 알려 주고 발급 Lua 가 `READONLY` 로 전부 실패한다.
 
+### 6.1.1.1 감시 대상은 호스트명이 아니라 IP 다
+
+`sentinel monitor` 를 호스트명으로 두면 **failover 가 아예 일어나지 않는다.**
+
+`resolve-hostnames yes` 는 Sentinel 이 SDOWN 을 판정할 때마다 이름을 **다시 해석**하게 한다.
+그런데 감시 대상 컨테이너가 멈추면 Docker DNS 에서 그 이름이 사라진다. 해석이 실패하고
+판정이 거기서 멈춘다 — SDOWN → ODOWN → 리더 선출 → 승격 사슬이 첫 칸에서 끊긴다.
+**죽은 이름을 해석해야 죽음을 판정할 수 있다는 모순이다.**
+
+실측(같은 토폴로지, 변수 하나만 다름):
+
+| 감시 대상 | master kill 후 |
+|---|---|
+| 호스트명 `redis` + resolve-hostnames | 45초까지 **승격 없음**. `Failed to resolve hostname 'redis'` 를 매초 기록 |
+| IP | **5초에 승격** |
+
+`resolve-hostnames no` 는 해법이 아니다 — 호스트명이 남아 있으면 이 파일이 아예 못 뜬다
+(`Can't resolve instance hostname` 기동 실패, 실측).
+
+그래서 파일에는 `__MASTER_ADDR__` 자리표시자를 두고 **entrypoint 가 기동 시 한 번** 해석해
+넣는다. 승격 뒤 토폴로지는 §6.1.1 대로 Sentinel 이 자기 파일에 다시 쓰므로, 이 주입은 첫
+기동에만 돈다. IP 를 박아도 재기동 동작은 그대로다 — 실측에서 되살아난 옛 master 가
+`role:slave` 로 강등되고 Sentinel 은 승격본을 계속 master 로 알렸다.
+
 ### 6.1.2 인증 — 배선하지 않았다 (정본)
 
 **master·replica·Sentinel 여섯 노드 모두 무인증이다.** `REDIS_PASSWORD` 를 채우면 잠기는 것이

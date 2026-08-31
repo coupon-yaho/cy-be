@@ -16,9 +16,9 @@ class SentinelComposeContractTest {
         String environment = Files.readString(Path.of("../../.env.example"));
 
         assertThat(config).contains(
-                "sentinel monitor coupon-master redis 6379 2",
-                "sentinel resolve-hostnames yes",
-                "sentinel announce-hostnames yes",
+                // 호스트명으로 감시하면 감시 대상이 멈출 때 이름 해석이 실패해 SDOWN 판정이
+                // 멈추고 failover 가 아예 안 일어난다(실측). entrypoint 가 기동 시 IP 를 넣는다.
+                "sentinel monitor coupon-master __MASTER_ADDR__ 6379 2",
                 "sentinel down-after-milliseconds coupon-master 5000");
         assertThat(compose).contains(
                 "coupon-redis-replica-1-data:/data",

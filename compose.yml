@@ -199,9 +199,16 @@ services:
     image: redis:7.4-alpine
     restart: "no"
     entrypoint: ["/bin/sh", "-ec"]
+    # 기동 시 `redis` 를 **한 번** 해석해 IP 로 박는다. 호스트명으로 감시하면
+    # resolve-hostnames 가 SDOWN 판정마다 이름을 다시 해석하는데, 감시 대상이 멈추면
+    # Docker DNS 에서 그 이름이 사라져 해석이 실패하고 판정이 거기서 멈춘다 —
+    # failover 가 아예 안 일어난다(실측). 자세한 근거는 sentinel.conf 주석.
+    # 승격 뒤 토폴로지는 Sentinel 이 /data/sentinel.conf 에 다시 쓰므로, 이 주입은
+    # **첫 기동에만** 돈다(§6.1.1 과 같은 규칙).
+    #
     # ⚠️ Redis 인증은 배선돼 있지 않다 — 정본은 docs/12-v2-redis-design.md §6.1.2 이다.
     command:
-      - 'if [ ! -f /data/sentinel.conf ]; then cp /config/sentinel.conf /data/sentinel.conf; fi; exec redis-server /data/sentinel.conf --sentinel'
+      - 'if [ ! -f /data/sentinel.conf ]; then addr=$$(getent hosts redis | awk "{print \$$1; exit}"); [ -n "$$addr" ] || { echo "redis 를 해석하지 못했다"; exit 1; }; sed "s/__MASTER_ADDR__/$$addr/" /config/sentinel.conf > /data/sentinel.conf; fi; exec redis-server /data/sentinel.conf --sentinel'
     volumes:
       - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
       - coupon-redis-sentinel-1-data:/data
