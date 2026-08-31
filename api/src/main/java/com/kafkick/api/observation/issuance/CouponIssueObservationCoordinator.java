@@ -3,6 +3,7 @@ package com.kafkick.api.observation.issuance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DeadlockLoserDataAccessException;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -165,17 +166,47 @@ public final class CouponIssueObservationCoordinator {
                         idempotencyKey,
                         observation::recordClaimedAttempt
                 );
-            } catch (CannotAcquireLockException lockLost) {
+            } catch (RuntimeException failure) {
+                if (!causedByLockContention(failure)) {
+                    throw failure;
+                }
                 if (attempt >= ISSUE_LOCK_MAX_ATTEMPTS) {
-                    // 계속 못 얻는 것은 경합이 아니라 병목이다. 삼키지 않고 드러낸다.
+                    // 상한까지 갔다는 사실만 남긴다. 원인이 반복 데드락인지 지속 병목인지는
+                    // 여기서 구분하지 못한다 — 그 판정은 이 로그를 본 사람이 한다.
                     log.warn("발급이 락 경합으로 {}회 연속 실패했습니다. couponRoundId={} memberId={}",
                             attempt, couponRoundId, memberId);
-                    throw lockLost;
+                    // 바깥 예외를 그대로 보존한다. 어댑터가 붙인 맥락을 벗기지 않는다.
+                    throw failure;
                 }
                 log.warn("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
                         attempt, ISSUE_LOCK_MAX_ATTEMPTS, couponRoundId, memberId);
             }
         }
+    }
+
+    /**
+     * <b>원인 사슬을 훑는다.</b> 저장소 어댑터가 {@code DataAccessException} 을
+     * {@code CouponPersistenceException}·{@code IdempotencyPersistenceException} 으로 감싸므로,
+     * <b>운영에서 오는 락 경합은 대개 그 안에 들어 있다.</b> 처음에는 원본 타입만 잡았는데
+     * 그러면 감싸인 쪽이 안 걸려서 재시도가 사실상 안 돌았다(리뷰가 잡았다).
+     *
+     * <p>감싸이지 않은 경우도 있다 — JPA 가 INSERT 를 커밋 시점으로 미루면 어댑터의
+     * {@code catch} 밖에서 터진다. 그래서 <b>양쪽을 다 본다.</b>
+     *
+     * <p>락 경합이 아닌 실패는 여기서 {@code false} 라 곧바로 원형 그대로 다시 던져진다.
+     * 넓게 잡아 아무 실패나 재시도하면 진짜 결함을 세 번 반복하고 응답만 느려진다.
+     */
+    private static boolean causedByLockContention(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof CannotAcquireLockException
+                    || cause instanceof DeadlockLoserDataAccessException) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                return false;
+            }
+        }
+        return false;
     }
 
     private CouponIssueResult issueV1(

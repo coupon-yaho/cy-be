@@ -148,6 +148,56 @@ class CouponIssueObservationCoordinatorTest {
      * <b>계속 못 얻는 것은 경합이 아니라 병목이다.</b> 무한히 다시 시도하면 응답만 느려지고
      * 원인이 안 드러난다. 상한에서 그대로 던져 밖에서 보이게 한다.
      */
+    /**
+     * <b>운영에서 오는 모양은 감싸인 쪽이다.</b> 저장소 어댑터가 {@code DataAccessException}
+     * 을 {@code CouponPersistenceException} 으로 감싸므로, 원본 타입만 잡으면
+     * <b>재시도가 사실상 안 돈다.</b> 처음에 그렇게 만들었고 리뷰가 잡았다.
+     */
+    @Test
+    @DisplayName("어댑터가 감싼 락 경합도 다시 시도한다")
+    void retriesWhenLockContentionIsWrappedByAnAdapter() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        ))
+                .thenThrow(new CouponPersistenceException(
+                        "쿠폰 재고 점유에 실패했습니다.",
+                        new CannotAcquireLockException("deadlock")))
+                .thenAnswer(invocation -> {
+                    IssueAttemptCallback callback = invocation.getArgument(4);
+                    callback.onPolicyPassed();
+                    return new CouponIssueExecutionResult(issueResult(), false);
+                });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(operationExecutionService, times(2)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
+    /**
+     * <b>락 경합이 아닌 실패는 한 번에 끝낸다.</b> 넓게 잡아 아무 실패나 재시도하면 진짜
+     * 결함을 세 번 반복하고 응답만 느려진다.
+     */
+    @Test
+    @DisplayName("락 경합이 아닌 영속 실패는 다시 시도하지 않는다")
+    void doesNotRetryPersistenceFailuresThatAreNotLockContention() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(new CouponPersistenceException(
+                "쿠폰 재고 점유에 실패했습니다.", new IllegalStateException("다른 이유")));
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
+                .isInstanceOf(CouponPersistenceException.class);
+
+        verify(operationExecutionService, times(1)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
     @Test
     @DisplayName("락 경합이 상한까지 이어지면 그대로 실패시킨다")
     void stopsRetryingAfterTheAttemptLimit() {
