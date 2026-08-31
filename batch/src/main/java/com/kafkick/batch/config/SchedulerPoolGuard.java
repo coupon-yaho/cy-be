@@ -1,4 +1,4 @@
-// 스케줄러 풀이 @Scheduled 수보다 작으면 기동을 거절합니다.
+// 스케줄러 풀이 등록된 스케줄 작업 수보다 작으면 기동을 거절합니다.
 package com.kafkick.batch.config;
 
 import org.slf4j.Logger;
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * <b>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 우리 코드가 안 읽는다.</b>
  * 그래서 키 경로가 죽거나 운영이 {@code BATCH_SCHEDULER_POOL_SIZE=1} 을 주면 <b>아무 데서도
- * 안 드러난다</b> — 기동은 성공하고, 여덟 {@code @Scheduled} 가 스레드 하나를 다툰다.
+ * 안 드러난다</b> — 기동은 성공하고, 등록된 작업 열하나가 스레드 하나를 다툰다.
  *
  * <p><b>그 상태가 왜 나쁜가.</b> 검증이 한 번에 8분(실측 472초)을 잡고 있는데, 그동안 되읽기
  * 넷이 못 돌면 게이지가 그만큼 낡는다. 그리고 그 게이지가 SLA 알림의 근거다 —
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
  *
  * <h2>왜 상수로 안 세나</h2>
  *
- * <p>{@code application.yml.example} 이 <i>"{@code @Scheduled} 가 여덟이다"</i> 를 손으로 세어
+ * <p>{@code application.yml.example} 이 <i>"스케줄 작업이 열하나다"</i> 를 손으로 세어
  * 적고 있고, 그 수가 코드와 함께 움직여야 신호가 산다. 여기서 또 하나를 손으로 적으면
  * <b>세어야 할 자리가 하나 더 는다</b> — CY-446 이 그 신호를 한 번 지나쳤던 이유가 그것이다.
  * {@link ScheduledAnnotationBeanPostProcessor} 에게 <b>실제로 등록된 태스크 수</b>를 물으면
@@ -59,14 +59,16 @@ public class SchedulerPoolGuard implements ApplicationRunner {
 
         if (pool < registered) {
             throw new IllegalStateException(
-                    "spring.task.scheduling.pool.size 가 @Scheduled 수보다 작습니다. "
-                            + "풀=" + pool + " @Scheduled=" + registered + ". "
+                    "spring.task.scheduling.pool.size 가 등록된 스케줄 작업 수보다 작습니다. "
+                            + "풀=" + pool + " 등록=" + registered
+                            + " (@Scheduled 애노테이션과 SchedulingConfigurer 로 등록된 것을 "
+                            + "모두 셉니다 — 애노테이션만 grep 하면 수가 안 맞습니다). "
                             + "그러면 한 작업이 도는 동안 다른 작업이 스레드를 기다립니다 — "
                             + "검증은 한 번에 8분을 잡고 있고, 그동안 되읽기가 못 돌면 게이지가 "
                             + "그만큼 낡습니다. 배치는 멀쩡한데 SLA 알림이 울고, 되읽기가 "
                             + "실패한 것도 아니라 cy_batch_refresh_failures_total 도 안 오릅니다. "
                             + "BATCH_SCHEDULER_POOL_SIZE 를 " + registered + " 이상으로 주십시오.");
         }
-        log.info("스케줄러 풀이 @Scheduled 수를 받칩니다. 풀={} @Scheduled={}", pool, registered);
+        log.info("스케줄러 풀이 등록된 스케줄 작업 수를 받칩니다. 풀={} 등록={}", pool, registered);
     }
 }

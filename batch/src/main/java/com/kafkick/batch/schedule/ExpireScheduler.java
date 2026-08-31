@@ -241,13 +241,12 @@ public class ExpireScheduler {
      * 남겨 두는 것은 다중 인스턴스로 늘어나는 날을 위해서다(그때는 같은 {@code asOf} 로
      * 두 서버가 부딪힌다).
      *
-     * <p><b>스케줄러 풀은 batch 의 모든 {@code @Scheduled} 가 공유한다.</b> CY-359 가
-     * {@code spring.task.scheduling.pool.size} 를 올려 뒀다 — 지금은 <b>8</b> 이고
-     * {@code @Scheduled} 도 여덟이다(만료 · 정리 · <b>검증</b> · 회차 상태 전이 ·
-     * 검증 판정 되읽기 · 실행 지표 되읽기 · 만료 대기 되읽기 · 회차 전이 대기 되읽기).
-     * 여덟째는 CY-470 이 더한 {@code VerifyScheduler} 다.
-     * 근거는 {@code application.yml.example} 의 그 키에
-     * 적혀 있다. 그것이 이 잡을 자기 자신과
+     * <p><b>스케줄러 풀은 batch 의 모든 스케줄 작업이 공유한다.</b> CY-359 가
+     * {@code spring.task.scheduling.pool.size} 를 올려 뒀고, 그 값은 등록된 작업 수와
+     * 같게 유지한다. <b>여기서 그 수를 다시 세지 않는다</b> — 세는 자리가 늘수록 한 곳이
+     * 낡는다(CY-446 · OBS-5 · CY-699 가 그렇게 어긋났다). 목록과 수, 왜 여유를 안 두는지는
+     * {@code application.yml.example} 의 그 키 주석 한 곳에 있고
+     * {@code SchedulerPoolGuardTest} 가 그것을 등록 수와 대조한다. 그것이 이 잡을 자기 자신과
      * 겹치게 만들지는 않는다 — 위 문단대로 크론 트리거가 직전 실행을 기다리기 때문이고,
      * 풀 크기와 무관하다. <b>바뀌는 것은 다른 스케줄러와 나란히 도는 것</b>이다.
      *
