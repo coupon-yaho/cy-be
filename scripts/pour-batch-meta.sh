@@ -2,9 +2,12 @@
 # 검증용 셋에 Spring Batch 메타 스키마를 붓는다.
 #
 # 왜 필요한가
-#   cy-seed 의 ddl/ 은 BATCH_* 를 **일부러** 안 만든다 — 잡 실행 이력은 도메인이 아니고
-#   그 DDL 의 주인은 이 저장소의 V11 이다(seed-ddl/README.md 가 그 경계를 적는다).
+#   cy-seed 의 ddl/ 은 BATCH_* 와 알림 표를 **일부러** 안 만든다 — 잡 실행 이력도 알림도
+#   도메인이 아니고, 그 DDL 의 주인은 이 저장소다(seed-ddl/README.md 가 그 경계를 적는다).
 #   그래서 재시드는 스키마를 새로 만들면서 이 테이블들을 매번 지운다.
+#
+#   알림 표는 **배치가 안 읽는데도** 필요하다. 하이버네이트가 ddl-auto=validate 로
+#   엔티티 전부를 검사해서, 없으면 검증용 셋에 붙은 배치가 아예 안 뜬다.
 #
 #   그 자체는 설계대로다. 문제는 **다시 붓는 것을 사람이 기억해야 한다**는 점이고,
 #   실제로 2026-08-30 에 두 번 잊었다. 두 번 다 증상이 같았다 —
@@ -40,15 +43,37 @@ set -euo pipefail
 CONTAINER="${MYSQL_CONTAINER:-cy-mysql-1}"
 MIGRATIONS_DIR="$(cd "$(dirname "$0")/.." && pwd)/storage/src/main/resources/db/migration"
 
-# SchemaPresenceGuard.META_MIGRATIONS 와 **같은 셋**이어야 한다. 갈리면 이 스크립트를
-# 돌리고도 가드가 거절하고, 그때 원인이 스크립트에 있다는 것을 아무도 못 본다.
+# **가드가 요구하는 셋을 다 담되, 그것보다 넓다.**
+#
+#   SchemaPresenceGuard.META_MIGRATIONS 의 셋(V11 · 인덱스 둘)은 여기 전부 있어야 한다.
+#   빠지면 이 스크립트를 돌리고도 가드가 거절하고, 그때 원인이 스크립트에 있다는 것을
+#   아무도 못 본다.
+#
+#   반대로 **여기가 더 많은 것은 정상이다.** 알림 마이그레이션이 그렇다 — 가드는 그 표를
+#   안 보는데(BATCH_META_TABLES 에 없다) 배치는 그것 없이 못 뜬다. 하이버네이트가
+#   ddl-auto=validate 로 엔티티 전부를 검사하기 때문이다.
+#
+# ⚠️ **그 경우 가드는 말할 기회조차 없다.** SchemaPresenceGuard 는 ApplicationRunner 라
+#    컨텍스트가 다 뜬 뒤에 도는데, 하이버네이트 검증은 그 전에 터진다. 실측한 메시지가
+#    가드 것이 아니라 하이버네이트 것이었다:
+#      Schema validation: missing table [notification_attempts]
+#    그래서 가드의 안내 문구에 알림 파일을 더하지 않는다 — 그 문구는 BATCH_* 가 빠졌을
+#    때만 나오고, 거기에 알림을 섞으면 엉뚱한 처방을 읽히게 된다.
 FILES=(
   "V11__batch_metadata.sql"
   "V2026082513__ix_batch_job_execution_lookup.sql"
   "V2026082514__ix_batch_job_execution_history.sql"
+  # 알림 표(CY-642). **배치가 안 읽는데도 여기 있는 이유** —
+  # 하이버네이트가 ddl-auto=validate 로 **엔티티 전부**를 검사한다. 이 표들이 없으면
+  # 검증용 셋에 붙은 배치가 통째로 안 뜬다:
+  #   Schema validation: missing table [notification_attempts]
+  # 시드가 안 만드는 것이 맞고(관측·알림은 도메인이 아니다) 스키마 대조에서도 뺐지만,
+  # 하이버네이트는 그 구분을 안 한다. 2026-08-30 재빌드에서 실제로 겪었다 —
+  # 그전 이미지에는 이 엔티티가 없어서 안 드러났다.
+  "V2026082701__notifications.sql"
 )
 
-# **V11 이 만드는 아홉 전부.** 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
+# **부어야 하는 표 전부.** 배치 메타 아홉과 알림 넷이다. 가드(VerificationRuleJdbcAdapter.BATCH_META_TABLES)가
 # 이름으로 묻는 것은 이 중 넷뿐이지만, **넷만 보고 건너뛰면 안 된다** — 나머지 다섯이
 # 없어도 "이미 온전하다" 로 빠져나가고, 그다음 Spring Batch 가 실행 문맥을 쓰려는
 # 순간 죽는다(리뷰가 잡았다).
@@ -56,6 +81,10 @@ FILES=(
 # "BATCH_ 로 시작하는 것이 아홉 개" 로 세지 않고 이름을 쓰는 이유는 그대로다 —
 # 엉뚱한 BATCH_* 가 자리를 채워도 개수는 맞는다.
 REQUIRED_TABLES=(
+  "notifications"
+  "notification_attempts"
+  "notification_resend_audits"
+  "notification_outbox"
   "BATCH_JOB_INSTANCE"
   "BATCH_JOB_EXECUTION"
   "BATCH_STEP_EXECUTION"

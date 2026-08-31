@@ -22,6 +22,7 @@ import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFindingRepository;
 import com.kafkick.core.verification.VerificationRun;
+import com.kafkick.core.verification.VerificationRuleRepository;
 import com.kafkick.core.verification.VerificationRunRepository;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
 
@@ -71,6 +72,13 @@ public class VerifyReportController {
     private final VerificationFindingRepository findings;
     private final ExpectedFindingRepository expected;
 
+    /**
+     * <b>스키마 이름을 여기서 얻는다.</b> {@code DB_NAME} 을 다시 읽지 않는 것은, 그 값이
+     * <i>"주려던 것"</i> 이고 이 포트가 주는 것은 <b>실제로 붙은 곳</b>({@code DATABASE()})
+     * 이라서다. {@code SchemaPresenceGuard} 가 기동 로그에 찍는 것과 같은 출처다.
+     */
+    private final VerificationRuleRepository rules;
+
     /** 지금 시각. 판정 없는 실행이 "아직 도는 중" 인지 "죽은 것" 인지 나이로 가르는 데 쓴다. */
     private final TimeProvider timeProvider;
 
@@ -84,11 +92,13 @@ public class VerifyReportController {
     public VerifyReportController(VerificationRunRepository runs,
             VerificationFindingRepository findings,
             ExpectedFindingRepository expected,
+            VerificationRuleRepository rules,
             TimeProvider timeProvider,
             @Value("${batch.stuck-job-after-ms:1800000}") long stuckAfterMs) {
         this.runs = runs;
         this.findings = findings;
         this.expected = expected;
+        this.rules = rules;
         this.timeProvider = timeProvider;
         this.stuckAfter = Duration.ofMillis(stuckAfterMs);
     }
@@ -124,7 +134,7 @@ public class VerifyReportController {
                         "dataset=" + dataset + " scope=" + scope));
 
         return ResponseEnvelope.success(VerifyReportView.of(
-                run, byType(run), manifest(run)));
+                rules.currentSchema(), run, byType(run), manifest(run)));
     }
 
     /**
@@ -200,7 +210,7 @@ public class VerifyReportController {
 
         // 자르는 것은 Manifest 가 한다. 여기서 자르면 총수와 목록이 어긋날 수 있다.
         return VerifyReportView.Manifest.compared(seedRunId,
-                expected.countOf(seedRunId), expected.digestOf(seedRunId),
-                missing, unexpected);
+                expected.countOf(seedRunId), expected.corruptionCountOf(seedRunId),
+                expected.digestOf(seedRunId), missing, unexpected);
     }
 }

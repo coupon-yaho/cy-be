@@ -27,6 +27,10 @@ public class CouponStockRepositoryImpl implements CouponStockRepository {
             Long couponRoundId,
             Instant updatedAt
     ) {
+        if (updatedAt == null) {
+            throw new IllegalArgumentException(
+                    "쿠폰 재고 점유에는 갱신 시각이 필요합니다. couponRoundId=" + couponRoundId);
+        }
         try {
             int affectedRows = couponStockJpaRepository.occupyOne(
                     couponRoundId,

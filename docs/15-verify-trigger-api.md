@@ -536,9 +536,48 @@ REPORT_DATASETS=CLEAN REPORT_PUSH=1 bash scripts/dump-verify-report.sh  # 밀기
 틀린 것이 한 값이 되고, 제출물이 `verdict=PASS` 와 `matches=false` 를 **같은 본문에** 싣는다.
 그것을 보는 사람은 어느 쪽을 믿을지 알 수 없다. 이유는 `present` 에 남는다.
 
-같은 이유로 대조를 못 한 상태에서는 **수치 넷이 전부 `null`** 이다. `expectedCount=0` 은
-*"정답 묶음이 사라졌다"* 와 *"정답이 0건인 시드다"* 를 뭉치고, `missingCount=0` 을 보는 쪽은
-**그것을 합격으로 읽는다.** 레코드 생성자가 그 조합 자체를 거부한다.
+같은 이유로 대조를 못 한 상태에서는 **수치가 전부 `null`** 이다
+(`expectedCount`·`corruptionCount`·`missingCount`·`unexpectedCount`, 그리고 `expectedDigest`).
+`expectedCount=0` 은 *"정답 묶음이 사라졌다"* 와 *"정답이 0건인 시드다"* 를 뭉치고,
+`missingCount=0` 을 보는 쪽은 **그것을 합격으로 읽는다.** 레코드 생성자가 그 조합 자체를
+거부한다 — **어느 하나만 빠져도** 거부한다.
+
+#### `expectedCount` 와 `corruptionCount` 는 다른 축이다
+
+`expectedCount` 는 **위반**의 수, `corruptionCount` 는 **심은 오염**의 수다. 오염 하나가
+규칙 여럿을 어길 수 있어 둘이 갈린다 — 지금 시드는 **오염 700 이 위반 800 을 낳는다**
+(`corrupt_type 3` 이 `ILLEGAL_TRANSITION` 과 `STOCK_MISMATCH` 를 한 번에 낳는다).
+
+화면이 *"오염 700건이 낳는 위반 800건을 전부 잡음"* 으로 그리려면 그 700 이 필요한데,
+**서버가 안 주면 프론트가 추정해야 한다.** `종류 수 × 100` 은 종류당 건수가 같다는 가정이라
+시드가 한 종류만 200건 심는 날 화면만 조용히 틀린다.
+
+`docs/contract.json` 의 `corruption.injections` 를 그대로 싣지 **않는다** — 그것은 선언이지
+측정이 아니라, 시드가 바뀌고 계약을 안 고치면 하드코딩과 똑같이 거짓말한다. 대신 DB 에서
+센다. 쓰는 가정은 하나뿐이다 — **오염 하나가 자기 규칙 목록마다 정확히 한 행씩 낳는다.**
+
+```sql
+SELECT SUM(rows_per_type / rules_per_type)
+  FROM (SELECT COUNT(*)                     AS rows_per_type,
+               COUNT(DISTINCT finding_type) AS rules_per_type
+          FROM expected_findings WHERE seed_run_id = :seedRunId
+         GROUP BY corrupt_type) per_type
+```
+
+그 가정 자체는 계약(`corruption.matrix`)이 적어 둔 것이라, `CorruptionCountTest` 가 두 값을
+맞대 본다. 시드 구성만 바뀌거나 계약만 바뀌면 그 자리에서 갈린다.
+
+#### `schema` 는 `dataset` 과 다른 축이다
+
+`dataset` 은 *"어떤 종류를 검증하나"*(`CLEAN`·`CORRUPT`)이고, `schema` 는 *"어느 DB 를 보나"*
+(`coupon_clean`·`app`·`coupon_corrupt`)다. **하나로 못 접는다** — 정상셋 배치와 운영 배치가
+둘 다 `CLEAN` 이라, `dataset` 만 보면 이름표가 같은 카드 두 장이 된다. 화면이 그때 뒤에 온
+쪽을 중복으로 버리면 **다른 데이터가 조용히 사라진다**(2026-08-30 에 실제로 그랬다).
+
+값의 출처는 `DB_NAME` 이 아니라 `DATABASE()` 다 — 전자는 *"주려던 것"*, 후자는 **실제로 붙은
+곳**이다. `SchemaPresenceGuard` 가 기동 로그에 찍는 것과 같은 출처(`rules.currentSchema()`)를
+쓴다. 빈 값이면 팩터리가 거부한다 — 빈 이름을 실어 보내면 *"이름이 없다"* 가 *"이름이 같다"* 와
+한 모양이 되어 같은 사고가 난다.
 
 #### 조회 하나가 트랜잭션 하나다
 

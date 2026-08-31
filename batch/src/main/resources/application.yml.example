@@ -18,12 +18,15 @@ spring:
     import:
       - classpath:storage.yml
       - classpath:management.yml
+      # api와 같은 Redis 연결 계약이다. redis-sentinel 프로파일을 켠 배포에서는 이 import가
+      # 없으면 batch만 죽은 master의 host/port를 계속 물게 된다.
+      - classpath:redis.yml
 
   # 관제 API의 내부 verify 요청을 받기 위해 servlet 로 실행한다.
   task:
     scheduling:
       pool:
-        # @Scheduled 가 열이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
+        # 스케줄 작업이 열하나다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
         # CleanupScheduler.cleanup(정리 잡을 동기로 끝까지 돌린다),
         # VerifyScheduler.verify(검증 잡을 동기로 끝까지 돌린다 — 300만에서 472초다),
         # CouponRoundScheduler.transitionRounds(회차를 열고 닫는다 — 1분),
@@ -32,7 +35,12 @@ spring:
         # ExpirePendingRefresher.refresh(만료 대기 건수를 되읽는다),
         # CouponRoundPendingRefresher.refresh(회차 전이 대기 수를 되읽는다),
         # DomainGaugeRegistrar.refreshStock(재고 게이지 — 1초),
-        # DomainGaugeRegistrar.refreshConsistency(정합성 gap 집계 — 30초).
+        # DomainGaugeRegistrar.refreshConsistency(정합성 gap 집계 — 30초),
+        # PendingIssuedGaugeScheduler(v2 issued Hash 의 노후 PENDING·파손 계측 — 30초).
+        #
+        # ⚠️ **마지막 하나는 @Scheduled 가 아니다.** SchedulingConfigurer 로 등록해서
+        #    `@Scheduled` 를 grep 해도 안 보인다. 이 값을 맞출 때 애노테이션만 세면 하나가
+        #    빈다 — 아래 이력의 CY-699 가 정확히 그렇게 샜다.
         #
         # 만료(04:10)·정리(04:30)·검증(05:00)은 서로 떨어져 있어 서로를 막지 않지만,
         # 되읽기 넷과 1분 크론인 회차 전이는 그 사이에도 돌아야 한다 — 그 구간이 관제가
@@ -43,8 +51,8 @@ spring:
         # 서로를 막지 않게 한다.
         #
         # **여유를 안 둔다 — DB 풀과 다른 축이다.** 커넥션 풀은 keepalive·health 체크처럼
-        # 우리가 안 세는 소비자가 붙어서 여유 둘을 뒀지만, 이 풀을 쓰는 것은 @Scheduled
-        # **열뿐**이고 열한째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
+        # 우리가 안 세는 소비자가 붙어서 여유 둘을 뒀지만, 이 풀을 쓰는 것은 위의
+        # **열하나뿐**이고 열둘째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
         # 신호가 되도록 정확히 그 수로 둔다 — 여유를 두면 그 신호가 사라진다.
         # (CY-421 이 ExpirePendingRefresher 를 더하면서 넷에서 다섯이 됐다. 신호가 일했다.
         #  CY-446 이 둘을 더하면서 일곱이 됐는데, 그때는 **신호를 한 번 지나쳤다** —
@@ -52,14 +60,27 @@ spring:
         #  CY-470 이 VerifyScheduler 를 더해 여덟이 됐다.
         #  OBS-5 가 DomainGaugeRegistrar 의 둘을 더해 열이 됐는데 **이 숫자를 또 지나쳤다** —
         #  스케줄러를 실제로 켠 2026-08-30 에야 기동 가드가 "풀=8 @Scheduled=10" 으로 잡았다.
-        #  기본값 8 로는 스케줄링을 켤 수 없으니, 그 값이 곧 "아직 안 켜 봤다" 는 증거였다.)
+        #  기본값 8 로는 스케줄링을 켤 수 없으니, 그 값이 곧 "아직 안 켜 봤다" 는 증거였다.
+        #  CY-699 가 PendingIssuedGaugeScheduler 를 더해 열하나가 됐는데 **또 지나쳤다** —
+        #  #118 을 머지한 뒤 배치가 "풀=10 @Scheduled=11" 로 기동을 거절해서 알았다.
+        #  이번은 성격이 다르다. 애노테이션이 아니라 SchedulingConfigurer 라 전수 grep 에
+        #  안 잡혔고, 조건부 빈이라(observation.datasource · pending-issued-gauge 둘 다 기본
+        #  true) 배포에서는 서는데 테스트 컨텍스트에서만 안 만들어졌다.)
         #
-        # ⚠️ 이 키는 Boot 가 직접 소비해서 @Value 스캔에 안 잡힌다. 그래서 둘이 함께 지킨다 —
+        # ⚠️ 이 키는 Boot 가 직접 소비해서 @Value 스캔에 안 잡힌다. 그래서 셋이 함께 지킨다 —
         #    ResolvedBatchConfigTest 가 해석된 Environment 값을(키 경로),
         #    VerificationMetricExposureTest.schedulerPoolFitsScheduledTaskCount 가
-        #    실제 스케줄러 빈의 코어 크기를(값이 정말 쓰이는지) 본다.
+        #    실제 스케줄러 빈의 코어 크기를(값이 정말 쓰이는지),
+        #    SchedulerPoolGuardTest.WhenShapedLikeDeployment 가 **바로 이 줄의 기본값**을
+        #    등록 수와 대조한다(batch.yml 의 기본값도 같이).
         #    앞의 것만으로는 "적힌 값이 떴다" 까지고, 그 값을 스케줄러가 쓴다는 보장이 아니다.
-        size: ${BATCH_SCHEDULER_POOL_SIZE:10}
+        #
+        #    셋째가 없던 동안 앞의 둘은 **이 줄을 한 번도 안 봤다.** 테스트 컨텍스트의 풀은
+        #    batch/src/test/resources/application.yml 이 주는 16 이라 등록이 몇이든 통과했고,
+        #    그 파일이 **빌드가 이 .example 로 만든 build/resources/main/application.yml 을**
+        #    가려서(루트 build.gradle 의 processResources) 관측 스위치 셋이 꺼진 채 등록 수마저
+        #    배포와 달랐다(8 대 11). 그래서 셋째는 스위치를 켜 배포 형상으로 맞춘 뒤 잰다.
+        size: ${BATCH_SCHEDULER_POOL_SIZE:11}
 
   # CY-368 이 업무 포트에 검증 트리거 컨트롤러를 열었다(POST /api/v1/admin/verify).
   # 인증이 없어서 compose 가 그 포트를 **기본으로 호스트에 안 내보낸다** —
@@ -89,18 +110,21 @@ spring:
     job:
       enabled: false             # 기동 시 Job 자동 실행 금지. 스케줄러와 API 만 띄운다
 
-  # Redis 접속·타임아웃. 값이 없으면 Lettuce 기본 커맨드 타임아웃(60초)이 걸리는데, 5초 주기
-  # 수집이 60초를 잡고 있으면 스케줄러 스레드를 그동안 점유한다. 예외도 안 나므로 UNAVAILABLE
-  # 전환도 안 걸리고, 마지막 값이 정상 그래프처럼 계속 긁혀 나간다.
-  # 관측 풀은 connectTimeout·socketTimeout·query-timeout·max_execution_time 네 겹, 운영 풀은
-  # 앞 두 겹만이다(CY-488 에서 뒤 두 겹을 의도적으로 비웠다 — storage.yml.example 참고).
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      # 수집 주기(1초)보다 짧게. 주기보다 길면 다음 수집이 밀린다.
-      timeout: ${REDIS_TIMEOUT_MS:800}ms
-      connect-timeout: ${REDIS_CONNECT_TIMEOUT_MS:500}ms
+  # ⚠️ **Redis 접속·타임아웃을 여기 두지 않는다 — classpath:redis.yml 이 정본이다**(CY-781).
+  #    import 문서가 선언 문서를 이기므로 여기 적으면 조용히 죽는다. 이 자리에 있던
+  #    timeout ${REDIS_TIMEOUT_MS:800}ms · connect-timeout ${REDIS_CONNECT_TIMEOUT_MS:500}ms 는
+  #    redis.yml import 가 합류한 순간부터 이미 죽어 있었다 — 실측으로 확인한 최종 바인딩은
+  #    timeout 500ms · connect-timeout 1s 다(flyway.enabled 와 같은 함정).
+  #
+  #    값이 없으면 Lettuce 기본 커맨드 타임아웃(60초)이 걸리는데, 5초 주기 수집이 60초를 잡고
+  #    있으면 스케줄러 스레드를 그동안 점유한다. 예외도 안 나므로 UNAVAILABLE 전환도 안 걸리고,
+  #    마지막 값이 정상 그래프처럼 계속 긁혀 나간다. redis.yml 의 500ms 가 수집 주기(1초)보다
+  #    짧아 그 요건은 지켜지고, DomainGaugeRuntimeConfigTest 가 그것을 redis.yml 에서 확인한다.
+  #    바꾸려면 이 문서가 아니라 .env 의 REDIS_COMMAND_TIMEOUT·REDIS_CONNECT_TIMEOUT 을 쓴다.
+  #    compose 는 batch 에만 REDIS_CONNECT_TIMEOUT=500ms 를 덮는다 — 공용 기본 1s 는 수집
+  #    주기(1초)와 같아져 승격 창의 재연결 한 번이 다음 주기를 미루기 때문이다.
+  #    관측 풀은 connectTimeout·socketTimeout·query-timeout·max_execution_time 네 겹, 운영 풀은
+  #    앞 두 겹만이다(CY-488 에서 뒤 두 겹을 의도적으로 비웠다 — storage.yml.example 참고).
 
   # ⚠️ **스케줄러 풀은 위 spring.task 블록 하나가 정한다.** main 에도 같은 키가 있었는데
   #    (SCHEDULER_POOL_SIZE:4) 합치면 YAML 중복 키가 되어 컨텍스트가 통째로 안 뜬다
