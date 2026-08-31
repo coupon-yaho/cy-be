@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
@@ -115,6 +117,33 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .map(MessageSourceResolvable::getDefaultMessage)
                 .orElse(VALIDATION_FALLBACK_MESSAGE);
         log.warn("[{}] validation: {}", CommonErrorCode.INVALID_INPUT.getCode(), message);
+        return super.handleExceptionInternal(
+                ex, ResponseEnvelope.fail(validationBody(message)), headers, status, request);
+    }
+
+    /**
+     * <b>어느 헤더가 없는지 응답에 적는다.</b>
+     *
+     * <p>이 갈래는 원래 공통 지점으로 빠져 {@code "잘못된 요청입니다."} 만 나갔다. 그러면
+     * 호출자가 받는 정보는 <b>400 이라는 사실뿐</b>이라, 헤더 이름 하나가 어긋났을 때
+     * 서버 결함과 구분이 안 된다. 실제로 대기열 게이트웨이가 {@code X-Member-Grade} 를
+     * 보내고 발급이 {@code X-Membership-Grade} 를 요구하던 동안, 양쪽 담당자가 이 400 을
+     * 각자 한참 들여다봤다. 이름을 맞추는 것으로는 <b>다음번 다른 헤더</b>를 못 막는다.
+     *
+     * <p><b>헤더 <i>이름</i>만 싣는다.</b> 값은 회원 식별자나 등급이라 응답에도 로그에도
+     * 넣지 않는다 — 이 처리기의 규칙이 "응답에는 카탈로그 메시지만" 인 이유와 같다.
+     *
+     * <p>헤더 누락이 아닌 다른 바인딩 실패(경로 변수·요청 파라미터 등)는 이름을 특정할 수
+     * 없으므로 기존 문구를 그대로 쓴다.
+     */
+    @Override
+    protected ResponseEntity<Object> handleServletRequestBindingException(
+            ServletRequestBindingException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        setDependency(request, Dependency.NONE);
+        String message = (ex instanceof MissingRequestHeaderException missing)
+                ? "필수 요청 헤더가 없습니다: " + missing.getHeaderName()
+                : VALIDATION_FALLBACK_MESSAGE;
+        log.warn("[{}] binding: {}", CommonErrorCode.INVALID_INPUT.getCode(), message);
         return super.handleExceptionInternal(
                 ex, ResponseEnvelope.fail(validationBody(message)), headers, status, request);
     }
