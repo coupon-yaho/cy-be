@@ -71,6 +71,18 @@ class MetricAggregationTest {
                 .isEqualTo(MetricAggregation.SINGLE);
         assertThat(MetricAggregation.of(MetricAggregation.OBSERVED_COUPON_ID))
                 .isEqualTo(MetricAggregation.SINGLE);
+        assertThat(MetricAggregation.of(MetricAggregation.GATEWAY_WAITING))
+                .isEqualTo(MetricAggregation.MAX);
+        assertThat(MetricAggregation.of(MetricAggregation.GATEWAY_SNAPSHOT_AGE))
+                .isEqualTo(MetricAggregation.MAX);
+        assertThat(MetricAggregation.of(MetricAggregation.GATEWAY_CAPACITY_NODES))
+                .isEqualTo(MetricAggregation.MAX);
+        assertThat(MetricAggregation.of(MetricAggregation.GATEWAY_JUDGEMENT_TOTAL))
+                .isEqualTo(MetricAggregation.SUM);
+        assertThat(MetricAggregation.of(MetricAggregation.GATEWAY_BACKEND_FALLBACK_TOTAL))
+                .isEqualTo(MetricAggregation.SUM);
+        assertThat(MetricAggregation.of(MetricAggregation.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL))
+                .isEqualTo(MetricAggregation.SUM);
     }
 
     /**

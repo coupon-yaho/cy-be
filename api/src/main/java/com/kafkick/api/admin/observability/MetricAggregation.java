@@ -145,6 +145,17 @@ public enum MetricAggregation {
      */
     public static final String HTTP_FRESHNESS_AGE_SECONDS = "app.http.freshness.age.seconds";
 
+    public static final String GATEWAY_WAITING = QueueGatewayPrometheusContract.WAITING;
+    public static final String GATEWAY_SNAPSHOT_AGE = QueueGatewayPrometheusContract.SNAPSHOT_AGE;
+    public static final String GATEWAY_CAPACITY_CREDIT = QueueGatewayPrometheusContract.CAPACITY_CREDIT;
+    public static final String GATEWAY_CAPACITY_NODES = QueueGatewayPrometheusContract.CAPACITY_NODES;
+    public static final String GATEWAY_JUDGEMENT_TOTAL = QueueGatewayPrometheusContract.JUDGEMENT_TOTAL;
+    public static final String GATEWAY_BACKEND_FALLBACK_TOTAL =
+            QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL;
+    public static final String GATEWAY_ALLOCATION_OVERSHOOT_TOTAL =
+            QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL;
+    public static final String GATEWAY_SCRAPE_AGE_SECONDS = QueueGatewayPrometheusContract.SCRAPE_AGE;
+
     /**
      * DB 풀 사용률. 미터가 아니라 {@link #HIKARI_ACTIVE} 를 풀 크기로 나눈 파생값이라 이름이
      * Prometheus 에 존재하지 않는다. 규칙표에서 빠지면 패널이 sum 을 골라 200% 를 그린다.
@@ -280,6 +291,14 @@ public enum MetricAggregation {
         table.put(CONSISTENCY_COUPON_ID, SINGLE);
         table.put(COLLECT_LAST_SUCCESS_EPOCH, SINGLE);
         table.put(HTTP_FRESHNESS_AGE_SECONDS, MAX);
+        table.put(GATEWAY_WAITING, MAX);
+        table.put(GATEWAY_SNAPSHOT_AGE, MAX);
+        table.put(GATEWAY_CAPACITY_CREDIT, MAX);
+        table.put(GATEWAY_CAPACITY_NODES, MAX);
+        table.put(GATEWAY_JUDGEMENT_TOTAL, SUM);
+        table.put(GATEWAY_BACKEND_FALLBACK_TOTAL, SUM);
+        table.put(GATEWAY_ALLOCATION_OVERSHOOT_TOTAL, SUM);
+        table.put(GATEWAY_SCRAPE_AGE_SECONDS, MAX);
         return Map.copyOf(table);
     }
 }

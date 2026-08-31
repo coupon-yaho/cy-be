@@ -6,3 +6,4 @@ com.kafkick.infra.redis.observation.RedisLatencyAutoConfiguration
 com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration
 com.kafkick.infra.redis.stream.AttemptLiveRedisAutoConfiguration
 com.kafkick.infra.redis.lifecycle.CouponRoundLifecycleRedisAutoConfiguration
+com.kafkick.infra.redis.queuegateway.QueueGatewayRedisAutoConfiguration
