@@ -211,7 +211,7 @@ class ResolvedBatchConfigTest {
                 // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
                 // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
                 // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
-                // 기본값(현재 8)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **8 을 주면 안 된다** —
+                // 기본값(현재 11)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **8 을 주면 안 된다** —
                 // 폴백해도 같은 값이라 이 단언이 아무것도 안 지킨다.
                 "--BATCH_SCHEDULER_POOL_SIZE=6",
                 "--BATCH_RUN_METRICS_REFRESH_MS=62000",
