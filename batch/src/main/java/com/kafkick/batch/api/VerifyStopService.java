@@ -90,7 +90,7 @@ public class VerifyStopService {
      * <b>타임아웃을 건다.</b> 선점문이 행 X 락을 잡은 채 {@code stop} 의 메타 쓰기까지
      * 이어진다. 인증 없는 POST 라 같은 실행 번호로 요청이 몰리면 뒤엣것들이
      * {@code innodb_lock_wait_timeout}(기본 50초)까지 커넥션을 물고 기다리고, 그동안
-     * {@code @Scheduled} 여덟이 풀에서 커넥션을 못 얻는다.
+     * 등록된 스케줄 작업 열하나가 풀에서 커넥션을 못 얻는다.
      * {@code ExpireRecoveryService.recover} 와 같은 근거다.
      */
     @Transactional(timeoutString = "${batch.admin.recover-timeout-seconds:10}")
