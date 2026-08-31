@@ -413,13 +413,27 @@ docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올�
 >       SPRING_PROFILES_ACTIVE: batch      # 배치도 같은 의존을 갖는다
 > ```
 >
+> ⚠️ **`--no-deps` 는 센티넬만 건너뛰는 것이 아니다.** MySQL 도 함께 건너뛴다 — api 는
+> MySQL 이 healthy 여야 Flyway 가 돌고, batch 는 MySQL 과 api 를 둘 다 기다린다. 그래서
+> **필요한 것을 먼저 손으로 올리고** 마지막에만 의존을 건너뛴다.
+>
 > ```bash
-> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d redis
-> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps api batch
+> # ① 뒷단을 먼저 올린다 (여기는 --no-deps 를 쓰지 않는다)
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d mysql redis
+>
+> # ② mysql 이 healthy 가 될 때까지 기다린다
+> docker compose -p <프로젝트> ps mysql
+>
+> # ③ 센티넬 대기만 건너뛴다. api 를 먼저, batch 를 그다음에
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps api
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps batch
 > ```
 >
-> `--no-deps` 를 빼면 `dependency failed to start` 로 멈춘다. 이 절차는 **단일 Redis 로 띄운
-> 스택에서 실제로 밟아 확인했다** — 그때 프로파일만 바꾸고 `--no-deps` 로 올렸었다.
+> ③에서 `--no-deps` 를 빼면 센티넬을 기다리다 `dependency failed to start` 로 멈춘다.
+> 반대로 ①을 건너뛰면 api 가 DB 를 못 찾아 죽는다 — **둘 다 필요하다.**
+>
+> api 와 batch 를 한 명령으로 묶지 않는 것도 그래서다. batch 는 `api: service_started` 를
+> 기다리는데 `--no-deps` 가 그것도 건너뛰므로, 순서를 명령으로 세운다.
 
 **배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
 (`POST /api/v1/admin/verify`)와 복구(`/api/v1/admin/expire/runs/**`)가 있는데, **사용자
