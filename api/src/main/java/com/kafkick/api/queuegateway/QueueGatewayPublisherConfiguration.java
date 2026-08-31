@@ -86,8 +86,13 @@ public class QueueGatewayPublisherConfiguration {
      * 뒤에 쓰기가 완료</b>되어 필드가 되살아난다.
      *
      * <p>기다리는 시간을 짧게 묶는 이유 — 이 보고는 1초 주기이고 실패해도 게이트웨이가
-     * 하한으로 물러난다. 종료를 몇 초씩 잡을 값어치가 없다. 그 안에 안 끝나면
-     * 인터럽트로 넘어가는데, 그때는 위 {@code @DependsOn} 이 만든 순서가 남는다.
+     * 하한으로 물러난다. 종료를 몇 초씩 잡을 값어치가 없다.
+     *
+     * <p>⚠️ <b>상한을 넘겨도 인터럽트를 강제하지는 않는다.</b>
+     * {@code awaitTerminationSeconds} 는 <b>기다리는 상한</b>일 뿐이고, 그 안에 안 끝나면
+     * 기다리기를 그만두고 종료가 진행된다. 그때 남는 보호는 위 {@code @DependsOn} 이
+     * 만든 순서 하나다 — 스케줄러 종료 절차가 먼저 시작되고 그다음에 제거가 돈다.
+     * 여기 적힌 것 이상을 보장하려면 종료 동작을 따로 구현해야 한다.
      */
     private static ThreadPoolTaskScheduler scheduler(String threadNamePrefix) {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
