@@ -18,7 +18,11 @@ public class RetryAfterException extends BusinessException {
     private final int retryAfterSeconds;
 
     public RetryAfterException(ErrorCode errorCode, int retryAfterSeconds) {
-        super(errorCode);
+        this(errorCode, retryAfterSeconds, null);
+    }
+
+    public RetryAfterException(ErrorCode errorCode, int retryAfterSeconds, Throwable cause) {
+        super(errorCode, errorCode.getMessage(), cause);
         // 0 은 "즉시 다시 보내라" 라서 재시도 폭주와 같다. 이 클래스가 막으려는 것 자체다.
         if (retryAfterSeconds < 1) {
             throw new IllegalArgumentException("retryAfterSeconds는 1 이상이어야 합니다.");

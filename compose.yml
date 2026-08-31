@@ -119,21 +119,32 @@ services:
       retries: 30
       start_period: 20s
 
-  # CY-263 로컬 개발용 단일 Redis다. 운영 HA(Primary/Replica + Sentinel 또는 관리형
-  # Redis)는 팀 합의 후 별도로 구성한다. RuntimeConfig는 revision 일관성이 필요하므로
-  # replica를 일반 읽기 endpoint로 사용하지 않는다.
+  # Sentinel이 감시하는 초기 master. 애플리케이션은 redis를 직접 보지 않고 sentinel 세 대로
+  # master를 찾는다. Redis 읽기는 전부 MASTER로 고정한다 — replica의 낡은 재고를 읽으면
+  # 초과 발급 방향이다. Sentinel은 가용성만 주며, 복제 유실의 회수는 CY-760 재구성의 몫이다.
   #
   # AOF는 프로세스·컨테이너 재시작 뒤 데이터를 복구하고, noeviction은 메모리 부족 때
   # config:runtime을 조용히 축출하지 않고 쓰기를 실패시킨다. 서로 다른 유실 원인을 막는다.
+  # restart 를 걸지 않는다. Sentinel 이 replica 를 승격시킨 뒤 이 컨테이너가 되살아나면
+  # command 에 replicaof 가 없어 master 로 기동하고, Sentinel 이 강등시키기 전까지 master 가
+  # 둘이다. 그 창에서 받은 선점은 강등과 함께 통째로 사라진다. 복귀는 Chaos 절차가 정한다.
   redis:
     image: redis:7.4-alpine
-    restart: unless-stopped
+    restart: "no"
+    # sentinel.conf 의 감시 대상이 이 주소다. 호스트명이면 감시 대상이 멈출 때 이름 해석이
+    # 실패해 failover 가 아예 안 일어나고, DNS 로 해석해 주입하면 그때그때의 동적 주소가
+    # 볼륨에 영속돼 재생성 뒤 폐기된 주소를 감시한다 — .env 고정이 그 둘을 함께 없앤다.
+    networks:
+      default:
+        ipv4_address: ${REDIS_MASTER_IP:-172.31.240.10}
+    # 복제 역할을 **명령줄이 아니라 볼륨의 conf 로** 둔다. Sentinel 은 승격·강등을 REPLICAOF
+    # 로 알리고 Redis 는 그것을 자기 설정 파일에 다시 쓴다(실측). 명령줄에 박으면 재기동이
+    # 그 기록을 덮어써서, failover 뒤 스택을 다시 올릴 때 승격본이 옛 master 를 도로 따라가고
+    # 승격 이후의 쓰기가 full sync 로 사라진다 — config:runtime 은 DB 재구성 대상이 아니라
+    # 그대로 유실되고 RuntimeConfigBootstrap 이 revision 0 을 다시 심는다.
+    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --maxmemory-policy
-      - noeviction
+      - 'if [ ! -f /data/redis.conf ]; then : > /data/redis.conf; fi; exec redis-server /data/redis.conf --appendonly yes --maxmemory-policy noeviction'
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -143,6 +154,116 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # 자동 복귀는 막는다 — failover 중 한 대만 되살아나면 그 순간의 토폴로지가 갈린다.
+  redis-replica-1:
+    image: redis:7.4-alpine
+    restart: "no"
+    # replicaof 는 **첫 기동에만** 심는다. 그 뒤로는 Sentinel 이 정한 역할이 이 파일에
+    # 남고, 재기동은 그것을 그대로 읽는다 — 승격된 replica 가 master 로 다시 뜬다.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'if [ ! -f /data/redis.conf ]; then echo "replicaof redis 6379" > /data/redis.conf; fi; exec redis-server /data/redis.conf --appendonly yes --maxmemory-policy noeviction'
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - coupon-redis-replica-1-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 위와 같다.
+  redis-replica-2:
+    image: redis:7.4-alpine
+    restart: "no"
+    # replicaof 는 **첫 기동에만** 심는다. 그 뒤로는 Sentinel 이 정한 역할이 이 파일에
+    # 남고, 재기동은 그것을 그대로 읽는다 — 승격된 replica 가 master 로 다시 뜬다.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'if [ ! -f /data/redis.conf ]; then echo "replicaof redis 6379" > /data/redis.conf; fi; exec redis-server /data/redis.conf --appendonly yes --maxmemory-policy noeviction'
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - coupon-redis-replica-2-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Sentinel 상태를 **영속시킨다**. 데이터 노드가 자기 역할을 conf 에 기록하게 됐으므로
+  # (위 두 블록) 재기동하면 셋이 같은 토폴로지를 읽는다 — 예전처럼 Sentinel 만 승격을
+  # 기억하고 replica 는 명령줄 replicaof 로 되돌아가는 어긋남이 생기지 않는다.
+  # 반대로 Sentinel 상태를 비우면 승격 기억이 사라져 옛 master 를 다시 감시하고, 그 사이
+  # 승격본이 옛 master 에 full sync 되어 승격 이후의 쓰기가 통째로 사라진다.
+  # 자동 복귀는 걸지 않는다 — failover 중 한 대만 되살아나면 그 순간 정족수가 흔들린다.
+  redis-sentinel-1: &redis-sentinel
+    image: redis:7.4-alpine
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    # 감시 대상 주소를 첫 기동에만 주입한다. 그 뒤로는 Sentinel 이 승격 결과를 이 파일에
+    # 다시 쓰므로 덮지 않는다(§6.1.1). 주소는 .env 에 고정돼 있어 재생성으로 변하지 않는다.
+    #
+    # ⚠️ **REDIS_MASTER_IP 가 비면 기동을 중단한다.** 빈 값으로 치환하면 sentinel.conf 가
+    #    깨진 채 떠서 감시 대상이 없는 Sentinel 이 되는데, healthcheck 가 그것을 잡을 때까지
+    #    무엇이 잘못됐는지 아무도 모른다. 그 자리에서 이름을 대고 죽는 편이 낫다.
+    #
+    # ⚠️ Redis 인증은 배선돼 있지 않다 — 정본은 docs/12-v2-redis-design.md §6.1.2 이다.
+    command:
+      - 'if [ ! -f /data/sentinel.conf ]; then [ -n "$$REDIS_MASTER_IP" ] || { echo "REDIS_MASTER_IP 가 비어 있다 — .env 를 확인한다"; exit 1; }; sed "s/__MASTER_ADDR__/$$REDIS_MASTER_IP/" /config/sentinel.conf > /data/sentinel.conf; fi; exec redis-server /data/sentinel.conf --sentinel'
+    environment:
+      REDIS_MASTER_IP: ${REDIS_MASTER_IP:-172.31.240.10}
+    volumes:
+      - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
+      - coupon-redis-sentinel-1-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    # PING 이 아니라 감시 상태를 묻는다. Sentinel 프로세스는 뜨는 즉시 PONG 이라, master 를
+    # 아직 못 찾았거나 replica 를 하나도 못 본 상태에서도 healthy 가 된다 — 그 상태의
+    # failover 는 승격 대상이 없어 실패하는데, api·batch 는 이 healthy 만 보고 기동해
+    # "failover 경로를 검증한다"가 검증되지 않은 채 초록불이 난다. sentinel.conf 가 경고한
+    # 바로 그 자리다. master 와 replica 를 둘 다 인지했을 때만 통과시킨다.
+    #
+    # **서로를 아는지도 함께 본다.** Sentinel 은 서로를 master 의 __sentinel__:hello 로
+    # 발견한다 — 그 전에 master 가 죽으면 남은 Sentinel 들은 서로를 모른 채 각자 SDOWN 만
+    # 보고, 정족수 2를 못 채워 ODOWN 도 리더 선출도 없다. 승격이 아니라 그냥 정지다.
+    # master·replica 만 보면 이 창이 healthy 로 통과해, "failover 를 검증한다" 가 다시
+    # 검증되지 않은 채 초록불이 난다(SentinelFailoverIntegrationTest 가 CI 에서 이걸로 깨졌다).
+    #
+    # grep 대상은 값이 아니라 **필드명**이다. SENTINEL MASTER/REPLICAS 는 flat key-value 를
+    # 돌려주므로 '^ip' 줄 수가 곧 인지한 replica 수다. IP 대역을 이 파일에 박지 않으려고
+    # 이렇게 쓴다. **2대를 요구한다** — 1대만 인지한 상태도 1차 failover 는 되지만 승격 뒤
+    # 남는 replica 가 0 이라 2차 Chaos 가 전면 503 이 된다. 띄운 수와 같아야 한다.
+    # ckquorum 으로 바꾸지 않는다 — 그것은 정족수만 보고 replica 인지 여부를 안 본다.
+    # 이미지 태그를 올릴 때 이 응답 스키마가 그대로인지 확인한다(현재 redis:7.4-alpine 고정).
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'redis-cli -p 26379 sentinel master coupon-master | grep -q "^coupon-master$$" && [ "$$(redis-cli -p 26379 sentinel replicas coupon-master | grep -c "^ip$$")" -ge 2 ] && [ "$$(redis-cli -p 26379 sentinel sentinels coupon-master | grep -c "^name$$")" -ge 2 ]'
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis-sentinel-2:
+    <<: *redis-sentinel
+    volumes:
+      - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
+      - coupon-redis-sentinel-2-data:/data
+
+  redis-sentinel-3:
+    <<: *redis-sentinel
+    volumes:
+      - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
+      - coupon-redis-sentinel-3-data:/data
 
   # 신규 로컬 환경에서 명시적으로 한 번만 실행한다:
   #   docker compose --profile runtime-config-seed run --rm runtime-config-seed
@@ -230,10 +351,12 @@ services:
     env_file:
       - .env
     environment:
-      SPRING_PROFILES_ACTIVE: api
+      SPRING_PROFILES_ACTIVE: api,redis-sentinel
       SPRING_FLYWAY_ENABLED: "true"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_SENTINEL_MASTER: coupon-master
+      REDIS_SENTINEL_NODES: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
       # .env 의 KAFKA_BOOTSTRAP_SERVERS 는 호스트에서 IDE/Gradle 로 띄울 때의 값이라
       # 컨테이너 안에서는 틀리다(localhost 는 api 자신이다). REDIS_HOST 를 덮는 것과 같은
       # 구조로 여기서 서비스 DNS 로 덮는다. 세 대를 다 적는 이유는 부트스트랩 한 대가
@@ -263,6 +386,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
       # ⚠️ kafka 를 여기 적지 않는다. 적으면 KAFKA_ENABLED=false 인 회차(v1·v2)에서도
       #    api 기동이 브로커 세 대의 healthy 를 기다리게 되고, 브로커가 안 뜨는 환경에서는
       #    쿠폰 발급 API 가 통째로 안 뜬다 — Kafka 를 쓰지도 않는데. 토픽 생성은 기동 경로
@@ -287,7 +416,16 @@ services:
     env_file:
       - .env
     environment:
-      SPRING_PROFILES_ACTIVE: batch
+      SPRING_PROFILES_ACTIVE: batch,redis-sentinel
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_SENTINEL_MASTER: coupon-master
+      REDIS_SENTINEL_NODES: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      # batch 는 접속 대기를 수집 주기(1초)보다 짧게 잡는다. redis.yml 의 공용 기본값 1s 는
+      # 주기와 같아져 승격 창에서 재연결 한 번이 다음 주기를 통째로 민다 — CY-781 이
+      # redis.yml import 를 붙이며 batch 가 갖고 있던 500ms 를 덮었으므로 여기서 되돌린다.
+      # api 는 L2 예산 산식이 1s 를 전제하므로 덮지 않는다(application.yml.example 참고).
+      REDIS_CONNECT_TIMEOUT: 500ms
       # .env also contains the API's SERVER_PORT. Override the Spring property
       # so the batch web server listens on its own configured port.
       # 기본값을 둔다 — .env 에 BATCH_PORT 가 없으면 빈 문자열이 들어가 기동이 실패한다.
@@ -296,17 +434,22 @@ services:
       SPRING_FLYWAY_ENABLED: "false"
     volumes:
       - ./application.yml:/app/config/application.yml:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+      api:
+        condition: service_started
     # ⚠️ ports 를 두지 않는다. 9091 은 verify 온디맨드 트리거가 붙는 업무 포트이고
     #    무인증이라, 열어 두면 아무나 300만 행 검증 배치를 실행시킬 수 있다 — 부하 측정
     #    중에 그러면 비교표 수치가 오염된다. 관제 API 가 내부 네트워크에서 batch:9091 로
     #    호출한다. 관리 포트 9092 도 열지 않는다(Prometheus 가 내부에서 긁는다).
     #    PrometheusScrapeConfigContractTest 가 비노출을 고정한다.
-    depends_on:
-      mysql:
-        condition: service_healthy
-      api:
-        condition: service_started
-
   # ── OBS-35 Kafka 브로커 ─────────────────────────────────────────────────────
   #
   # 세 대인 것은 로컬 편의를 포기한 결과다. infra/mq 의 선언이 RF3 · min.insync.replicas=2 라
@@ -424,6 +567,12 @@ services:
     volumes:
       # 읽기 전용. 컨테이너가 제 설정을 덮어쓸 이유가 없다.
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # ⚠️ **규칙 디렉터리도 마운트해야 한다.** prometheus.yml 의 rule_files 는
+      #    `rules/*.yml` 상대 경로라 컨테이너의 /etc/prometheus/rules 를 본다. 없으면
+      #    glob 이 0개와 일치하고 **에러 없이 규칙 0건으로 뜬다** — 실측으로 확인했다
+      #    (설정만 마운트: /api/v1/rules 가 groups:[], 함께 마운트: 47건).
+      #    즉 알림이 조용히 하나도 안 걸린다. PrometheusRulesMountContractTest 가 지킨다.
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
       # ⚠️ named volume 이어야 한다. 컨테이너를 지우면 TSDB 가 같이 사라지고, 부하 회차
       #    데이터가 거기 있다. bind mount 로 바꾸면 호스트 uid 와 nobody(65534)가 어긋나
       #    기동에 실패한다.
@@ -435,9 +584,27 @@ services:
       - api
       - batch
 
+networks:
+  # 기본 네트워크의 대역을 고정한다. 다른 서비스는 그대로 DNS 로 서로를 찾고, redis 만
+  # 주소가 박힌다 — sentinel.conf 가 그 주소를 감시하기 때문이다(§6.1.1.1).
+  #
+  # ⚠️ **기본값은 Docker 기본 주소 풀(172.17~172.31/16) 안이다.** 다른 compose 네트워크가
+  #    이미 그 대역을 쓰고 있으면 "overlaps with other one" 으로 기동이 실패한다. 그때는
+  #    .env 의 REDIS_SUBNET·REDIS_MASTER_IP 를 **함께** 옮긴다 — 둘이 갈리면 Sentinel 이
+  #    대역 밖 주소를 감시하게 되어 승격 대상을 영영 못 찾는다.
+  default:
+    ipam:
+      config:
+        - subnet: ${REDIS_SUBNET:-172.31.240.0/24}
+
 volumes:
   coupon-mysql-data:
   coupon-redis-data:
+  coupon-redis-replica-1-data:
+  coupon-redis-replica-2-data:
+  coupon-redis-sentinel-1-data:
+  coupon-redis-sentinel-2-data:
+  coupon-redis-sentinel-3-data:
   coupon-kafka-1-data:
   coupon-kafka-2-data:
   coupon-kafka-3-data:

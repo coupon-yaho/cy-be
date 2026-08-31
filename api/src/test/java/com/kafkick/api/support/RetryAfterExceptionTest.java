@@ -30,4 +30,13 @@ class RetryAfterExceptionTest {
         assertThat(exception.getErrorCode()).isSameAs(CouponIssueV2ErrorCode.GATE_NOT_READY);
         assertThat(exception.retryAfterSeconds()).isEqualTo(2);
     }
+
+    @Test
+    void representsRedisFailoverAsAOneSecondRetryableServiceUnavailable() {
+        RetryAfterException exception = new RetryAfterException(
+                CouponIssueV2ErrorCode.REDIS_UNAVAILABLE, 1);
+
+        assertThat(exception.getErrorCode()).isSameAs(CouponIssueV2ErrorCode.REDIS_UNAVAILABLE);
+        assertThat(exception.retryAfterSeconds()).isEqualTo(1);
+    }
 }

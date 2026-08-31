@@ -17,15 +17,26 @@ public final class V2CouponIssueException extends RuntimeException {
 
     private final CompensateOutcome nullableCompensateOutcome;
     private final Dependency dependency;
+    private final boolean claimFailedBeforeResult;
 
     public V2CouponIssueException(
             RuntimeException cause,
             CompensateOutcome nullableCompensateOutcome,
             Dependency dependency
     ) {
+        this(cause, nullableCompensateOutcome, dependency, false);
+    }
+
+    public V2CouponIssueException(
+            RuntimeException cause,
+            CompensateOutcome nullableCompensateOutcome,
+            Dependency dependency,
+            boolean claimFailedBeforeResult
+    ) {
         super(cause.getMessage(), cause);
         this.nullableCompensateOutcome = nullableCompensateOutcome;
         this.dependency = Objects.requireNonNull(dependency, "dependency");
+        this.claimFailedBeforeResult = claimFailedBeforeResult;
     }
 
     /** 실패를 일으킨 직접 의존성. 게이트 호출이면 REDIS, 발급 트랜잭션이면 MYSQL. */
@@ -35,5 +46,10 @@ public final class V2CouponIssueException extends RuntimeException {
 
     public Optional<CompensateOutcome> compensateOutcome() {
         return Optional.ofNullable(nullableCompensateOutcome);
+    }
+
+    /** true면 선점 결과조차 받지 못한 통신·차단기 실패다. */
+    public boolean claimFailedBeforeResult() {
+        return claimFailedBeforeResult;
     }
 }
