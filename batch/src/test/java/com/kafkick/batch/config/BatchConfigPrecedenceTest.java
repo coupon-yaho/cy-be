@@ -20,14 +20,25 @@ import org.junit.jupiter.api.Test;
  */
 class BatchConfigPrecedenceTest {
 
+    /**
+     * batch 가 실제로 import 하는 목록. 하나라도 늘면 {@code ConfigImportPrecedence.of} 가
+     * 그 자리에서 빨개진다 — 새 파일이 선언 문서와 키를 다투는데 아무도 안 보는 상태를 막는다.
+     *
+     * <p>⚠️ **management.yml 이 CY-744 합류로, redis.yml 이 CY-781 Sentinel 도입으로 늘었다.**
+     * import 문서가 선언 문서를 이기므로 선언 문서에는 같은 키를 두지 않는다.
+     *
+     * <p><b>대조는 storage.yml 하나다.</b> management.yml 은 {@code management.*} 만 갖고 선언
+     * 문서와 겹치는 키가 없다. redis.yml 은 겹치지만({@code spring.data.redis.*}) 프로파일
+     * 문서까지 셋으로 갈린 파일이라 이 판정기의 단일 문서 전제를 못 넘는다 — 그래서 겹침
+     * 축은 못 켜고, 대신 {@code batch/application.yml.example} 이 그 키를 아예 선언하지 않는
+     * 것으로 지킨다. 판정기가 다중 문서 import 를 받는 날 이 목록에 더한다.
+     */
+    private static final String[] IMPORTS = {
+            "classpath:storage.yml", "classpath:management.yml", "classpath:redis.yml"};
+
     private ConfigImportPrecedence precedence() {
         return ConfigImportPrecedence.of(getClass(),
-                "/application.yml.example", "/storage.yml.example",
-                // ⚠️ **management.yml 이 CY-744 합류로 늘었다.** 그 파일이 노출 목록의 정본이고
-                //    (import 문서가 선언 문서를 이긴다) 선언 문서에는 같은 키를 두지 않는다.
-                //    대조는 여전히 storage.yml 하나다 — management.yml 은 management.* 만 갖고
-                //    선언 문서와 겹치는 키가 없다. 겹치는 날 이 목록에 더한다.
-                "classpath:storage.yml", "classpath:management.yml");
+                "/application.yml.example", "/storage.yml.example", IMPORTS);
     }
 
     @Test

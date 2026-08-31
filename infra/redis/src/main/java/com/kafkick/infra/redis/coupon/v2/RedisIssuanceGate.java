@@ -63,6 +63,7 @@ public class RedisIssuanceGate implements IssuanceGatePort {
 
     private static final Map<Long, CompensateOutcome> COMPENSATE_OUTCOMES = Map.of(
             IssuanceScriptCodes.Compensate.REVERTED, CompensateOutcome.REVERTED,
+            IssuanceScriptCodes.Compensate.NO_CLAIM, CompensateOutcome.NO_CLAIM,
             IssuanceScriptCodes.Compensate.NOT_MINE, CompensateOutcome.NOT_MINE,
             IssuanceScriptCodes.Compensate.ALREADY_DONE, CompensateOutcome.ALREADY_DONE,
             IssuanceScriptCodes.Compensate.CORRUPT_VALUE, CompensateOutcome.CORRUPT_VALUE,
