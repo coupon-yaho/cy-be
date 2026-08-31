@@ -17,8 +17,8 @@ class SentinelComposeContractTest {
 
         assertThat(config).contains(
                 // 호스트명으로 감시하면 감시 대상이 멈출 때 이름 해석이 실패해 SDOWN 판정이
-                // 멈추고 failover 가 아예 안 일어난다(실측). entrypoint 가 기동 시 IP 를 넣는다.
-                "sentinel monitor coupon-master __MASTER_ADDR__ 6379 2",
+                // 멈추고 failover 가 아예 안 일어난다(실측). compose 가 subnet 을 고정한다.
+                "sentinel monitor coupon-master 172.31.240.10 6379 2",
                 "sentinel down-after-milliseconds coupon-master 5000");
         assertThat(compose).contains(
                 "coupon-redis-replica-1-data:/data",
@@ -54,6 +54,8 @@ class SentinelComposeContractTest {
         // 셋(master requirepass · replica masterauth · sentinel auth-pass)을 함께 넣는 날
         // 이 단언을 그 전부를 확인하는 것으로 바꾼다.
         assertThat(compose).doesNotContain("--requirepass");
+        // 주소를 고정하지 않으면 재생성 때 IP 가 바뀌어 세 Sentinel 이 폐기된 주소를 감시한다.
+        assertThat(compose).contains("ipv4_address: 172.31.240.10", "subnet: 172.31.240.0/24");
         // 미배선 사실의 정본은 설계 문서 한 곳이다. 세 파일이 각자 설명을 들고 있으면
         // 배선하는 날 한 곳만 고쳐지고 나머지가 남아 다음 사람이 반대로 읽는다.
         String design = Files.readString(Path.of("../../docs/12-v2-redis-design.md"));

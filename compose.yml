@@ -131,6 +131,12 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: "no"
+    # sentinel.conf 가 이 주소를 감시 대상으로 못 박는다. 호스트명이면 감시 대상이 멈출 때
+    # 이름 해석이 실패해 failover 가 아예 안 일어나고, 기동 시 해석해 주입하면 그 주소가
+    # 볼륨에 영속돼 재생성 뒤 폐기된 주소를 감시한다 — 고정이 그 둘을 함께 없앤다.
+    networks:
+      default:
+        ipv4_address: 172.31.240.10
     # 복제 역할을 **명령줄이 아니라 볼륨의 conf 로** 둔다. Sentinel 은 승격·강등을 REPLICAOF
     # 로 알리고 Redis 는 그것을 자기 설정 파일에 다시 쓴다(실측). 명령줄에 박으면 재기동이
     # 그 기록을 덮어써서, failover 뒤 스택을 다시 올릴 때 승격본이 옛 master 를 도로 따라가고
@@ -199,16 +205,9 @@ services:
     image: redis:7.4-alpine
     restart: "no"
     entrypoint: ["/bin/sh", "-ec"]
-    # 기동 시 `redis` 를 **한 번** 해석해 IP 로 박는다. 호스트명으로 감시하면
-    # resolve-hostnames 가 SDOWN 판정마다 이름을 다시 해석하는데, 감시 대상이 멈추면
-    # Docker DNS 에서 그 이름이 사라져 해석이 실패하고 판정이 거기서 멈춘다 —
-    # failover 가 아예 안 일어난다(실측). 자세한 근거는 sentinel.conf 주석.
-    # 승격 뒤 토폴로지는 Sentinel 이 /data/sentinel.conf 에 다시 쓰므로, 이 주입은
-    # **첫 기동에만** 돈다(§6.1.1 과 같은 규칙).
-    #
     # ⚠️ Redis 인증은 배선돼 있지 않다 — 정본은 docs/12-v2-redis-design.md §6.1.2 이다.
     command:
-      - 'if [ ! -f /data/sentinel.conf ]; then addr=$$(getent hosts redis | awk "{print \$$1; exit}"); [ -n "$$addr" ] || { echo "redis 를 해석하지 못했다"; exit 1; }; sed "s/__MASTER_ADDR__/$$addr/" /config/sentinel.conf > /data/sentinel.conf; fi; exec redis-server /data/sentinel.conf --sentinel'
+      - 'if [ ! -f /data/sentinel.conf ]; then cp /config/sentinel.conf /data/sentinel.conf; fi; exec redis-server /data/sentinel.conf --sentinel'
     volumes:
       - ./infra/redis/sentinel.conf:/config/sentinel.conf:ro
       - coupon-redis-sentinel-1-data:/data
@@ -575,6 +574,14 @@ services:
       # 적어 두는 편이 로그를 읽기 쉽다 — service_started 라 기동을 기다리지는 않는다.
       - api
       - batch
+
+networks:
+  # 기본 네트워크의 대역을 고정한다. 다른 서비스는 그대로 DNS 로 서로를 찾고, redis 만
+  # 주소가 박힌다 — sentinel.conf 가 그 주소를 감시하기 때문이다(§6.1.1.1).
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
 
 volumes:
   coupon-mysql-data:
