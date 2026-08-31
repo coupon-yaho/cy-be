@@ -42,6 +42,18 @@ dependencies {
 }
 
 tasks.named('test') {
+    // CorruptionCountTest 는 클래스패스 밖의 docs/contract.json 을 직접 읽는다. 선언하지
+    // 않으면 **계약만 고쳤을 때** Gradle 이 test 를 UP-TO-DATE 로 건너뛴다 — 가드가 있는데
+    // 안 도는 상태가 가드가 없는 것보다 나쁘다.
+    //
+    // 실측 — 선언 전에 injections 를 700→650 으로 바꾸고 그냥 돌리니 915ms 만에
+    // BUILD SUCCESSFUL 이었다. --rerun-tasks 를 줘야 비로소 빨개졌다.
+    inputs.files(rootProject.file('docs/contract.json'))
+        .withPropertyName('corruptionContract')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+tasks.named('test') {
     // 컨테이너 픽스처가 클래스패스 밖 파일을 읽는다. 선언하지 않으면 Gradle 이 그 변경을
     // 모르고 test 를 UP-TO-DATE 로 건너뛴다.
     //

@@ -56,6 +56,30 @@ public interface ExpectedFindingRepository {
     boolean exists(long seedRunId);
 
     /**
+     * <b>심은 오염의 수.</b> 정답 행수({@link #countOf})와 다르다 — 오염 하나가 규칙 여럿을
+     * 어길 수 있어서다. 지금 시드에서는 오염 700 이 위반 800 을 낳는다.
+     *
+     * <p>화면이 <i>"오염 700건이 낳는 위반 800건을 전부 잡음"</i> 으로 그리려면 이 값이
+     * 필요한데, 없으면 프론트가 700 을 <b>추정</b>해야 한다. 그 추정이 곧 하드코딩이라
+     * 시드가 오염 종류를 하나 더 심는 날 화면만 조용히 틀린다.
+     *
+     * <p><b>종류당 건수가 같다고 가정하지 않는다.</b> {@code 종류 수 × 100} 으로 세면
+     * 시드가 한 종류만 200건 심는 순간 틀린다. 대신 <b>오염 하나가 자기 규칙 목록마다
+     * 정확히 한 행씩 낳는다</b>는 계약만 쓴다 — {@code docs/contract.json} 의
+     * {@code corruption.matrix} 가 그 계약이다.
+     *
+     * <pre>
+     * 종류별로  (그 종류의 행수) / (그 종류가 쓴 규칙 수) 를 더한다
+     *   type 3   200행 / 규칙 2개 = 100     ILLEGAL_TRANSITION · STOCK_MISMATCH
+     *   나머지   100행 / 규칙 1개 = 100
+     *                                합계 700
+     * </pre>
+     *
+     * <p>정답 묶음이 없으면 {@code 0} 이다 — {@link #exists} 로 먼저 거르는 것이 전제다.
+     */
+    int corruptionCountOf(long seedRunId);
+
+    /**
      * 정답 묶음의 총 행수. 실패 메시지에 검출 총수와 함께 실어 <b>실패 모양을 가른다</b> —
      * {@code 정답 800 / 검출 0} 은 규칙이 안 돈 것이고, {@code 정답 800 / 검출 800} 인데
      * 누락·오탐이 400씩이면 {@code target_key} 포맷이 어긋난 것이다.

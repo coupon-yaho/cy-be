@@ -29,6 +29,9 @@ import com.kafkick.core.verification.VerificationRun;
  */
 class VerifyReportViewTest {
 
+    /** 실제 배치가 붙는 이름 중 하나. 빈 값이면 팩터리가 거절한다. */
+    private static final String SCHEMA = "coupon_corrupt";
+
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 1, 15, 9, 0);
 
     private static VerificationRun run(DatasetType dataset, Long seedRunId) {
@@ -45,7 +48,7 @@ class VerifyReportViewTest {
         @Test
         @DisplayName("검출이 0인 규칙도 0으로 채워서 준다 — 빠지면 '안 돌렸다' 로 읽힌다")
         void fillsZeroForRulesWithoutFindings() {
-            VerifyReportView view = VerifyReportView.of(
+            VerifyReportView view = VerifyReportView.of(SCHEMA,
                     run(DatasetType.CLEAN, null),
                     Map.of(FindingType.STOCK_MISMATCH, 3),
                     null);
@@ -60,7 +63,7 @@ class VerifyReportViewTest {
         @Test
         @DisplayName("정상셋은 여섯 규칙이 전부 0이다 — 본문이 비어 보이면 안 된다")
         void cleanRunShowsAllRulesAsZero() {
-            VerifyReportView view = VerifyReportView.of(
+            VerifyReportView view = VerifyReportView.of(SCHEMA,
                     run(DatasetType.CLEAN, null), Map.of(), null);
 
             assertThat(view.byType())
@@ -71,7 +74,7 @@ class VerifyReportViewTest {
         @Test
         @DisplayName("저장소가 null 을 줘도 여섯을 채운다")
         void toleratesNullCounts() {
-            VerifyReportView view = VerifyReportView.of(
+            VerifyReportView view = VerifyReportView.of(SCHEMA,
                     run(DatasetType.CLEAN, null), null, null);
 
             assertThat(view.byType()).hasSize(FindingType.values().length);
@@ -80,7 +83,7 @@ class VerifyReportViewTest {
         @Test
         @DisplayName("규칙 순서는 FindingType 선언 순서다 — 실행마다 같아야 diff 가 뜻을 갖는다")
         void keepsDeclarationOrder() {
-            VerifyReportView view = VerifyReportView.of(
+            VerifyReportView view = VerifyReportView.of(SCHEMA,
                     run(DatasetType.CLEAN, null), Map.of(), null);
 
             assertThat(view.byType().keySet())
@@ -94,7 +97,7 @@ class VerifyReportViewTest {
 
         private static VerifyReportView.Manifest compared(
                 List<FindingKey> missing, List<FindingKey> unexpected) {
-            return VerifyReportView.Manifest.compared(11L, 800, "digest", missing, unexpected);
+            return VerifyReportView.Manifest.compared(11L, 800, 700, "digest", missing, unexpected);
         }
 
         private static List<FindingKey> keys(int count) {
@@ -157,7 +160,7 @@ class VerifyReportViewTest {
         @DisplayName("생성자에 null 목록을 직접 넘겨도 빈 목록이 된다 — 방어가 죽어 있지 않다")
         void canonicalConstructorTakesNullLists() {
             VerifyReportView.Manifest manifest = new VerifyReportView.Manifest(
-                    true, 11L, 800, "d", 0, 0, null, null);
+                    true, 11L, 800, 700, "d", 0, 0, null, null);
 
             assertThat(manifest.missing()).isEmpty();
             assertThat(manifest.unexpected()).isEmpty();
@@ -207,12 +210,12 @@ class VerifyReportViewTest {
             @DisplayName("대조를 안 했는데 결과가 실린 객체는 만들 수 없다")
             void rejectsResultsWithoutComparison() {
                 assertThatThrownBy(() -> new VerifyReportView.Manifest(
-                        false, 11L, 800, null, 0, 0, List.of(), List.of()))
+                        false, 11L, 800, null, null, 0, 0, List.of(), List.of()))
                         .isInstanceOf(IllegalArgumentException.class)
                         .hasMessageContaining("대조를 못 했는데");
 
                 assertThatThrownBy(() -> new VerifyReportView.Manifest(
-                        false, 11L, null, null, null, null,
+                        false, 11L, null, null, null, null, null,
                         List.of(new FindingKey("STOCK_MISMATCH", "COUPON:1")), List.of()))
                         .as("목록만 실려도 근거 없는 결과다")
                         .isInstanceOf(IllegalArgumentException.class);
@@ -222,9 +225,47 @@ class VerifyReportViewTest {
             @DisplayName("대조를 했는데 수치가 비면 만들 수 없다 — 반대 방향도 막는다")
             void rejectsComparisonWithoutNumbers() {
                 assertThatThrownBy(() -> new VerifyReportView.Manifest(
-                        true, 11L, null, "d", null, null, List.of(), List.of()))
+                        true, 11L, null, 700, "d", null, null, List.of(), List.of()))
                         .isInstanceOf(IllegalArgumentException.class)
                         .hasMessageContaining("수치가 다 있어야");
+            }
+
+            /**
+             * <b>새 필드를 규율 밖에 두지 않는다.</b> {@code corruptionCount} 만 빠뜨려도
+             * 대조를 했다고 말하는 객체가 만들어지면, 화면이 <i>"오염 몇 건"</i> 자리를
+             * 비운 채 그리고 그 빈 자리를 아무도 실패로 안 읽는다.
+             */
+            @Test
+            @DisplayName("오염 수만 빠져도 대조했다고 말할 수 없다")
+            void rejectsComparisonWithoutCorruptionCount() {
+                assertThatThrownBy(() -> new VerifyReportView.Manifest(
+                        true, 11L, 800, null, "d", 0, 0, List.of(), List.of()))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("수치가 다 있어야");
+            }
+
+            @Test
+            @DisplayName("대조를 안 했는데 오염 수만 실려도 만들 수 없다")
+            void rejectsCorruptionCountWithoutComparison() {
+                assertThatThrownBy(() -> new VerifyReportView.Manifest(
+                        false, 11L, null, 700, null, null, null, List.of(), List.of()))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("대조를 못 했는데");
+            }
+
+            /**
+             * 오염 수와 위반 수는 <b>다른 축</b>이다. 같은 값으로 접으면 화면이
+             * <i>"오염 800건이 위반 800건을 낳는다"</i> 로 그려 관계가 사라진다.
+             */
+            @Test
+            @DisplayName("오염 수와 정답 행수를 따로 싣는다 — 하나로 접으면 관계가 사라진다")
+            void keepsCorruptionAndExpectedApart() {
+                VerifyReportView.Manifest manifest =
+                        VerifyReportView.Manifest.compared(11L, 800, 700, "d",
+                                List.of(), List.of());
+
+                assertThat(manifest.expectedCount()).isEqualTo(800);
+                assertThat(manifest.corruptionCount()).isEqualTo(700);
             }
         }
 
@@ -293,7 +334,7 @@ class VerifyReportViewTest {
                 List<FindingKey> two = keys(2);
 
                 assertThatThrownBy(() -> new VerifyReportView.Manifest(
-                        true, 11L, 800, "d", 1, 0, two, List.of()))
+                        true, 11L, 800, 700, "d", 1, 0, two, List.of()))
                         .isInstanceOf(IllegalArgumentException.class)
                         .hasMessageContaining("총수가 실린 목록보다 작습니다");
             }
@@ -307,7 +348,7 @@ class VerifyReportViewTest {
             @DisplayName("자르지 않았는데 총수가 더 크면 만들 수 없다")
             void rejectsCountLargerThanUntruncatedList() {
                 assertThatThrownBy(() -> new VerifyReportView.Manifest(
-                        true, 11L, 800, "d", 5_000, 0, keys(3), List.of()))
+                        true, 11L, 800, 700, "d", 5_000, 0, keys(3), List.of()))
                         .isInstanceOf(IllegalArgumentException.class)
                         .hasMessageContaining("잘리지 않았는데");
             }
@@ -335,10 +376,39 @@ class VerifyReportViewTest {
         }
     }
 
+    /**
+     * <b>{@code dataset} 만으로는 카드를 못 가른다.</b> 정상셋 배치와 운영 배치가 둘 다
+     * {@code CLEAN} 이라, 이름표가 같은 카드 두 장이 된다 — 화면이 그때 앞선 것을 중복으로
+     * 버리면 <b>다른 데이터가 조용히 사라진다</b>(cy-fe 가 실제로 겪었다).
+     *
+     * <p>그래서 빈 이름을 거절한다. 실어 보내면 <i>"이름이 없다"</i> 가 <i>"이름이 같다"</i>
+     * 와 한 모양이 되어 같은 사고가 난다.
+     */
+    @Test
+    @DisplayName("스키마 이름이 비면 리포트를 만들 수 없다 — 빈 이름은 '같은 이름' 이 된다")
+    void rejectsBlankSchema() {
+        VerificationRun run = run(DatasetType.CLEAN, null);
+
+        assertThatThrownBy(() -> VerifyReportView.of(null, run, Map.of(), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("스키마 이름");
+        assertThatThrownBy(() -> VerifyReportView.of("   ", run, Map.of(), null))
+                .as("공백만 있는 이름도 이름이 아니다")
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("스키마 이름을 그대로 싣는다 — 같은 dataset 두 장을 이것으로 가른다")
+    void carriesSchemaName() {
+        assertThat(VerifyReportView.of("coupon_clean", run(DatasetType.CLEAN, null),
+                Map.of(), null).schema())
+                .isEqualTo("coupon_clean");
+    }
+
     @Test
     @DisplayName("실행이 없으면 리포트를 만들 수 없다")
     void rejectsNullRun() {
-        assertThatThrownBy(() -> VerifyReportView.of(null, Map.of(), null))
+        assertThatThrownBy(() -> VerifyReportView.of(SCHEMA, null, Map.of(), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("검증 실행");
     }
@@ -348,7 +418,7 @@ class VerifyReportViewTest {
     void carriesTheRunItself() {
         VerificationRun run = run(DatasetType.CORRUPT, 11L);
 
-        assertThat(VerifyReportView.of(run, Map.of(), null).run())
+        assertThat(VerifyReportView.of(SCHEMA, run, Map.of(), null).run())
                 .as("같은 것을 두 군데서 관리하지 않는다는 것이 이 모양의 이유다")
                 .isSameAs(run);
     }

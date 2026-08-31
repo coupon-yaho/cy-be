@@ -15,7 +15,7 @@ v1(`SELECT … FOR UPDATE`)에서 v2(Redis Lua 원자 카운터)로. 발급 경�
 | D1 | 부하 | 스파이크 — 2만 요청이 1~3초 내 전량 |
 | D2 | 영속화 | Redis 선점 → 동기 DB INSERT → 실패 시 보상 롤백 |
 | D3 | 재고 복원 | 취소·사용취소·만료도 Redis 동시 갱신. 순서는 DB→Redis(발급과 반대) |
-| D4 | Redis 가용성 | 당장 대응 없음. replica·Sentinel 없음, redisCB 열리면 503 |
+| D4 | Redis 가용성 | Sentinel(1 master·2 replica·3 Sentinel)로 failover 가용성을 얻는다. Redis 복제 유실의 정합성 회수는 CY-760 DB 재구성이 전담한다; redisCB OPEN은 503 + Retry-After. **여섯 노드 모두 무인증이다 — §6.1.2** |
 | D5 | 조회 캐시 | 2계층 — L1 Caffeine(힙) + L2 Redis. SWR 미채택, stale-if-error 만 |
 | D6 | 멱등 | Redis `HSETNX` 가 게이트만 대체. 레코드는 발급 TX 안에서 DONE. 값 전이는 **요청토큰 CAS**(§4.4), stale **자동 회수 없음**(§4.10) |
 | D7 | 대기열 | v2 측정에서 OFF |
@@ -122,7 +122,8 @@ v2 의 절반은 원자 카운터, 나머지 절반은 **거절을 DB 에 닿기
 | 단일 키 처리량 | **112,941 rps** (필요 20,000 대비 5.6배) |
 | 지연 | avg 0.42 · p50 0.38 · p95 0.70 · **p99 1.40** · max 10.32 ms |
 
-`max 10.32ms` 때문에 Lua 호출 타임아웃을 100ms 로 둔다(§6.3). L2 는 Redis 전용 머신 + 유선이라 처리량은 이보다 높고 지연에 RTT 0.1~0.3ms 가 더해진다.
+`max 10.32ms`는 로컬 Lua 실행 시간이다. 실제 명령 타임아웃은 네트워크·AOF 지연을 포함해 500ms로
+둔다(§6.3). timeout 뒤에도 Lua가 완료될 수 있으므로 요청 안 재시도는 금지한다.
 
 ### 3.2 MySQL 이 천장이다
 
@@ -253,6 +254,14 @@ return {0, left - 1}
 `DECR stock`·`INCR issued_ever`·`HSETNX issued` 세 쓰기가 **반드시 같은 스크립트 안**에 있어야 한다. 하나라도 밖으로 나가면 `LUA_GAP` 이 즉시 CRITICAL 이 된다.
 
 **멱등키는 접두가 아니라 전체가 일치해야 한다.** 멱등키는 클라이언트가 정하므로 `abc` 와 `abcdef` 같은 접두 충돌을 유도할 수 있고, 접두 비교로 두면 §4.4 보상이 **남의 선점을 되돌린다** — 초과 발급 방향이다. 그래서 값의 마지막 필드를 통째로 비교하고, 완료 여부도 `|DONE|` 문자열 탐색이 아니라 첫 필드가 `D` 인지로 판정한다. `-8` 은 값 형식이 깨진 경우이며 정상 운영에서 0이어야 한다.
+
+**보상의 `0` 은 "남의 토큰"만 뜻한다(CY-781).** 예전에는 `HGET` 이 비었을 때와 토큰이 어긋날
+때가 둘 다 `0` 이었다. 두 경우의 재고 결과는 정반대다 — 앞은 다른 절차가 이미 정리해 이 요청이
+남긴 것이 없고, 뒤는 내 선점이 덮여 `DECR` 이 복구되지 않는다. 한 코드로 접어 두면 그 값을 읽는
+자리마다 둘 중 하나를 추측해야 하고, 실제로 같은 값이 한쪽에서는 "정상", 다른 쪽에서는 "누수"로
+판정되는 사고가 반복됐다. 그래서 **없음은 `2`(`NO_CLAIM`), 남의 토큰은 `0`(`NOT_MINE`)** 으로
+가른다. 판정은 `CouponIssueObservationCoordinator.leftClaimBehind` 한 곳에서만 하고, 응답
+분류와 누수 계수가 그 함수만 읽는다 — `switch` 식이라 값이 늘면 컴파일이 깨진다.
 
 **`요청토큰` 은 "이 선점이 누구 것인가"를 가리킨다.** 같은 멱등키로 두 번 들어온 요청도 토큰은 서로 다르다. 완료 승격과 보상(§4.4)이 **자기 토큰일 때만** 값을 건드리게 하는 근거가 이 필드다. 전역 유일성은 필요 없고 같은 field 안에서만 겹치지 않으면 되므로 `<인스턴스ID>-<스레드ID>-<카운터>` 로 충분하다. `|` 를 포함해서는 안 된다.
 
@@ -529,9 +538,97 @@ return 1
 
 ### 6.1 결정
 
-**DB 집계로 재구성한다. replica 도 Sentinel 도 두지 않는다.**
+**Sentinel로 failover 가용성을 얻고, DB 집계로 정합성을 재구성한다.**
+
+Sentinel은 master가 죽은 뒤 새 master를 찾아 주는 장치일 뿐이다. Redis 복제는 비동기라
+승격본에 도달하지 못한 `DECR`은 재고를 되살린다. 그러므로 Sentinel을 붙여도 §6.2의 DB
+재구성은 **failover 유실의 최종 회수 수단**으로 남는다(CY-760). 이것은 두 장치의 대체 관계가
+아니라, 가용성과 정합성을 각각 맡기는 분업이다.
+
+Sentinel 승격은 전 회차 게이트를 닫는 전역 정지 신호로 쓰지 않는다. 그렇게 하면 한 요청의
+failover가 정상 요청 수천 건을 `503`으로 바꾸기 때문이다. 연결 전환에 걸린 요청만 `503 + Retry-After`
+로 끝내고, 승격 뒤 Redis에 다시 연결된 요청은 계속 받는다.
+
+정합성의 최종 방어는 DB다. `uk_coupon_member`가 1인 다매를, `WHERE active_count < total_quantity`
+조건부 UPDATE가 총량 초과를 막는다. 승격본 Redis가 낡아 선점을 허용해도 DB가 거절하면 Redis 선점을
+보상하고 `409`를 반환한다. 이때 발생한 Redis·DB 발산은 계측·경보하고 **CY-760 DB 재구성**으로
+회수한다. 재구성 때만 §6.2의 `meta` 폐쇄를 사용한다.
 
 D2(동기 INSERT)를 택한 시점에 성공한 발급은 예외 없이 `issuances` 에 남는다. Redis 의 어떤 키도 원본이 아니고 전부 DB 에서 다시 만들 수 있다.
+
+### 6.1.1 재기동 — 역할은 파일이 기억한다
+
+**복제 역할을 명령줄에 박지 않는다.** Sentinel 은 승격·강등을 `REPLICAOF` 로 알리고 Redis 는
+그것을 자기 설정 파일에 다시 쓴다(실측 — 승격된 replica 의 conf 에서 `replicaof` 가 사라지고,
+돌아온 옛 master 의 conf 에는 새 master 가 적힌다). 명령줄에 박으면 재기동이 그 기록을 덮는다.
+
+그 상태로 failover 뒤 스택을 다시 올리면 **승격본이 옛 master 를 도로 따라가 full sync 하고,
+승격 이후의 쓰기가 통째로 사라진다.** `config:runtime` 은 §6.2 재구성 대상이 아니라 되살릴 곳이
+없고, 비면 `RuntimeConfigBootstrap` 이 `revision 0` 기본값을 다시 심어 **운영 중 설정이 조용히
+되돌아간다.** 그래서 세 데이터 노드는 볼륨의 conf 로 뜨고 첫 기동에만 `replicaof` 를 심는다.
+
+Sentinel 상태도 같은 이유로 영속시킨다. 셋이 같은 토폴로지를 읽어야 재기동이 어긋나지 않는다 —
+한쪽만 기억하면 Sentinel 이 replica 를 master 로 알려 주고 발급 Lua 가 `READONLY` 로 전부 실패한다.
+
+### 6.1.1.1 감시 대상은 호스트명이 아니라 IP 다
+
+`sentinel monitor` 를 호스트명으로 두면 **failover 가 아예 일어나지 않는다.**
+
+`resolve-hostnames yes` 는 Sentinel 이 SDOWN 을 판정할 때마다 이름을 **다시 해석**하게 한다.
+그런데 감시 대상 컨테이너가 멈추면 Docker DNS 에서 그 이름이 사라진다. 해석이 실패하고
+판정이 거기서 멈춘다 — SDOWN → ODOWN → 리더 선출 → 승격 사슬이 첫 칸에서 끊긴다.
+**죽은 이름을 해석해야 죽음을 판정할 수 있다는 모순이다.**
+
+실측(같은 토폴로지, 변수 하나만 다름):
+
+| 감시 대상 | master kill 후 |
+|---|---|
+| 호스트명 `redis` + resolve-hostnames | 45초까지 **승격 없음**. `Failed to resolve hostname 'redis'` 를 매초 기록 |
+| IP | **5초에 승격** |
+
+`resolve-hostnames no` 는 해법이 아니다 — 호스트명이 남아 있으면 이 파일이 아예 못 뜬다
+(`Can't resolve instance hostname` 기동 실패, 실측).
+
+**기동 시 해석해 주입하지도 않는다.** 그러면 그 주소가 Sentinel 볼륨에 영속되는데, 컨테이너나
+네트워크가 재생성돼 IP 가 바뀌면 세 Sentinel 이 폐기된 주소를 계속 감시한다 — 이름 해석 실패를
+주소 노후화로 바꿀 뿐이다. 대신 **대역과 주소를 `.env` 에 고정**한다(`REDIS_SUBNET`·`REDIS_MASTER_IP`). compose 가 그
+대역으로 기본 네트워크를 만들고 `redis` 에 그 주소를 박으며, Sentinel 의 감시 대상도 같은
+값으로 주입한다 — **셋이 한 설정에서 나온다.** 갈리면 Sentinel 이 대역 밖 주소를 감시해
+승격 대상을 영영 못 찾는다. 다른 서비스는 그대로 DNS 로 서로를 찾는다(실측: 재생성 뒤에도
+같은 주소, 다른 서비스의 `redis-cli -h redis` 는 PONG).
+
+기본 대역은 Docker 기본 주소 풀(`172.17~172.31/16`) 안이라 다른 compose 네트워크와 겹칠 수
+있다. `overlaps with other one` 으로 기동이 실패하면 두 값을 **함께** 옮긴다(실측: 두 값을
+`10.77.88.x` 로 바꾸면 subnet·redis 주소·Sentinel 주입이 모두 따라간다).
+
+IP 를 박아도 재기동 동작은 그대로다 — 실측에서 되살아난 옛 master 가 `role:slave` 로 강등되고
+Sentinel 은 승격본을 계속 master 로 알렸다.
+
+### 6.1.2 인증 — 배선하지 않았다 (정본)
+
+**master·replica·Sentinel 여섯 노드 모두 무인증이다.** `REDIS_PASSWORD` 를 채우면 잠기는 것이
+아니라 **기동이 깨진다** — 클라이언트만 `AUTH` 를 보내고 서버에는 비밀번호가 없어 Redis 가
+`ERR AUTH ... called without any password configured` 로 거부한다(실측). 이 절이 그 사실의 정본이고,
+`compose.yml`·`infra/redis/sentinel.conf`·`.env.example` 의 경고는 여기를 가리킨다.
+
+인증은 **세 곳을 함께** 걸어야 성립한다. 하나라도 빠지면 조용히 깨진다.
+
+| 위치 | 지시어 | 빠뜨렸을 때 |
+|---|---|---|
+| master | `--requirepass` | 인증이 걸린 줄 알지만 실제로는 누구나 쓰기 가능 |
+| replica | `--masterauth` (+ `--requirepass`) | 복제가 끊겨 승격 대상이 사라진다 |
+| Sentinel | `sentinel auth-pass coupon-master` | 세 대가 `INFO`에서 `NOAUTH`로 거부당해 failover 판정이 멈춘다 |
+
+셋 중 하나만 거는 것이 셋 다 안 거는 것보다 나쁘다 — "인증됐다"는 착각을 만들고, 그
+전제로 네트워크 경계를 낮추면 같은 네트워크의 누구나 재고 키를 직접 고칠 수 있다.
+그래서 이번 작업은 **전부 걸지 않는 쪽**을 택하고 그 사실을 계약 테스트로 고정했다
+(`SentinelComposeContractTest` 가 `--requirepass` 부재와 `sentinel auth-pass` 활성 지시어
+부재를 단언한다 — 배선하는 PR 에서 이 두 단언이 정확히 실패한다).
+
+**이 결정은 로컬 측정 하네스 전제에 의존한다.** master 는 `127.0.0.1` 로만 바인딩되고
+Sentinel·replica 는 호스트에 포트를 열지 않으며 compose 네트워크 안에만 있다.
+**운영 배포로 옮길 때는 반드시 재검토해야 한다** — 그때는 위 세 곳을 함께 배선하고,
+`.env.example` 의 `REDIS_PASSWORD` 주석과 계약 테스트를 같이 고친다. 별도 티켓이다.
 
 ### 6.2 재구성 절차
 
@@ -594,12 +691,15 @@ POST http://batch:9091/internal/v1/coupon-rounds/{r}/warmup
 
 프로세스가 죽는 것보다 흔한 건 죽지 않고 느려지는 것이다(eviction, AOF rewrite fork, 누가 `KEYS` 를 때림). Sentinel 은 이걸 장애로 판정하지 않는다.
 
-- Lua 호출 타임아웃 **100ms**. 초과하면 실패로 간주
-- 연속 실패가 임계를 넘으면 **redisCB OPEN → 503**. 매달려 톰캣 스레드를 소진시키는 것보다 낫다
+- Lua 호출 타임아웃 **500ms**. 초과 응답은 실행되지 않았다는 뜻이 아니므로 요청 안에서 재시도하지 않는다.
+- Redis 통신 실패 비율이 외부 설정한 임계를 넘으면 **redisCB OPEN → 503**. 기본은 관측 창 5,
+  최소 표본 5, 실패율 100%(연속 5건), open 1초다. timeout(500ms)보다 짧은 "느림"을 차단 조건에
+  넣으면 정상 혼잡도 전역 503으로 증폭한다. 느림은 latency/slowlog로 경보만 내고, redisCB는
+  완전 단절에서 워커를 보호하는 용도다. 모든 값은 `REDIS_CB_*`로 바꾼다.
 - `slowlog-log-slower-than` **1000µs**
 - `maxmemory-policy` **`noeviction`**. 조회 캐시가 재고 키를 evict 하면 그 자체가 사고다. 캐시 키는 전부 TTL 로 스스로 사라지게 한다
 
-### 6.4 가용성 장치를 얹지 않은 이유
+### 6.4 Sentinel의 한계와 재구성의 책임
 
 | | 가용성 | 정합성 | 노드 |
 |---|---|---|---|
@@ -612,6 +712,20 @@ POST http://batch:9091/internal/v1/coupon-rounds/{r}/warmup
 **replica·Sentinel·Cluster 는 전부 가용성 장치이고 정합성은 하나도 해결하지 않는다.** Redis 복제는 비동기라, 마스터가 `DECR` 응답을 보낸 뒤 그 명령이 replica 에 닿기 전에 죽으면 승격된 replica 에서 그 발급들이 없던 일이 되어 재고가 되살아난다. `WAIT 1 100` 은 왕복이 붙고 합의도 아니다.
 
 재구성과 replica 는 배타적이지 않다. 나중에 얹더라도 §6.2 는 **failover 유실의 최종 회수 수단**으로 남는다.
+
+### 6.5 failover 중 발급 계약
+
+- 발급 요청 안에서는 Redis 명령을 **재시도하지 않는다**. timeout 뒤에도 Lua 선점이 끝났을 수
+  있고, 새 requestToken으로 보내면 앞선 `P`와 완료·보상 CAS가 갈린다.
+- Redis 통신 실패·느린 호출 비율이 설정 임계를 넘으면 `redisCB`를 설정한 시간(기본 1초) 연다.
+  열린 동안 claim·compensate는 Redis 명령을 보내지 않는다. compensate는 성공으로 위장하지 않고
+  `NOT_ATTEMPTED_CIRCUIT_OPEN`으로 남겨 PENDING 가능성을 재구성 대상으로 보존한다. 응답은
+  `503 Service Unavailable` + `Retry-After: 1`이고, 만료 뒤 한 요청만 half-open probe로 보낸다.
+- timeout을 받은 요청은 Redis에 `PENDING`이 남을 수 있다. 자동 회수 스위퍼는 원 요청과 경쟁해
+  초과 발급을 만들므로 두지 않는다. `stalePendingCount > 0`이 5분 지속하면 운영자가 경보를 받고
+  CY-760 재구성을 실행한다.
+- shared connection factory의 `ReadFrom`은 명시적으로 `MASTER`다. L2 조회 캐시도 같은 연결을
+  쓰므로 별도 연결을 만들기 전까지 replica 읽기는 없다.
 
 ---
 
@@ -1114,7 +1228,7 @@ FastHttpUser  u200 p4    58,892 rps
 k6 클라이언트 타임아웃
   > 서버 요청 전체 예산
       > 커넥션 획득 타임아웃      ← 여기가 실질 대기 상한
-          > Redis 명령 타임아웃 100ms (§6.3)
+          > Redis 명령 타임아웃 500ms (§6.3)
 ```
 
 **커넥션 풀 크기.** v1 대비 비교는 **같은 풀**로 낸다 — 버전마다 다른 풀로 재면 같은 자가 아니고, 좁은 풀이 오히려 v2 에 유리하다(v1 은 그 커넥션을 어차피 매진될 요청에도 내주고 v2 는 안 내준다). 용량 최적화 수치는 **별도 항목으로 따로** 낸다. 두 숫자를 섞어 쓰지 않는다.
@@ -1139,7 +1253,7 @@ k6 클라이언트 타임아웃
 | `idx_issuances_member_issued` 재추가 | V12 가 **의도적으로** 지웠고 나중에 붙일 예정. 그때까지 내 쿠폰함은 filesort |
 | ~~api 를 N대로 늘릴 때~~ **이미 N대다** | L2 미스 분산 락·L1 evict 는 §0.1 에서 반려. **낡음의 상한은 TTL 이 보장**하고 무효화는 최적화로만 다룬다 |
 | **Prometheus 가 단일 타깃** | `targets: ['api:9090']` 하나라 스크레이프마다 다른 인스턴스를 긁는다. **인스턴스별로 나누지 않으면 §10 수치를 못 쓴다** |
-| **설정이 이 문서와 어긋난다** | Redis 명령 타임아웃 실제 `500ms`(문서 100ms) · 커넥션 풀 **yml 미설정** · 톰캣 스레드 실제 `15`. **측정 전에 정렬한다** |
+| **설정이 이 문서와 어긋난다** | Redis 명령 타임아웃은 문서·실제 모두 `500ms`다. 커넥션 풀 **yml 미설정** · 톰캣 스레드 실제 `15`는 측정 전에 정렬한다. |
 | **재구성 동시 실행 차단** | api 가 여러 대라 §6.2·§9.7 이 겹쳐 돌 수 있다. batch 단독 소유 또는 락(§6.2) |
 | **V1-1 · V1-2 를 둘 다 측정하는가** | 그러면 사다리가 4단. PRD 의 "v1 = 비관적 락" 서술을 V1-1 로 좁혀야 한다(§8.2) |
 | **V1-2 를 CY-5 로 가져오기** | `1b5c7fa5` 는 `main` 기반이라 CY-5 pull 로는 안 따라온다. cherry-pick 필요 |

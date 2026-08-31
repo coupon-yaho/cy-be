@@ -34,6 +34,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.exception.CouponStockOverflowException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.CouponStockRepository;
@@ -203,9 +204,13 @@ class CouponIssueRepositoryTest {
         assertThat(countRows("issuance_histories")).isEqualTo(1);
         assertThat(countRows("idempotency_records")).isEqualTo(1);
         assertThat(activeCount()).isEqualTo(1);
+        // occupyOne 은 updated_at 을 GREATEST(updated_at, :updatedAt, CURRENT_TIMESTAMP(6)) 로 쓴다.
+        // 정확일치를 요구하면 CY-769 가 닫은 백데이트 구멍을 도로 여는 방향이다 — 요청 시각으로
+        // 과거를 적을 수 있게 되면 만료 배치의 판정 창이 그 쓰기를 못 거른다. 뒤로 가지
+        // 않는다는 것만 고정한다. (v1 incrementActiveCount 는 :updatedAt 을 그대로 쓴다.)
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 10", LocalDateTime.class))
-                .isEqualTo(LocalDateTime.ofInstant(ISSUED_AT, java.time.ZoneOffset.UTC));
+                .isAfterOrEqualTo(LocalDateTime.ofInstant(ISSUED_AT, java.time.ZoneOffset.UTC));
         verify(gate).complete(any(Long.class), any(Long.class), any());
     }
 
@@ -215,6 +220,15 @@ class CouponIssueRepositoryTest {
         assertThatThrownBy(() -> couponStockRepository.incrementActiveCount(10L, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .isNotInstanceOf(CouponStockOverflowException.class);
+
+        assertThat(activeCount()).isZero();
+    }
+
+    @Test
+    void v2FinalStockOccupationAlsoRejectsNullTimestampBeforeDatabaseClassification() {
+        assertThatThrownBy(() -> couponStockRepository.occupyOne(10L, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .isNotInstanceOf(CouponPersistenceException.class);
 
         assertThat(activeCount()).isZero();
     }
@@ -236,14 +250,13 @@ class CouponIssueRepositoryTest {
         v2.issue(new CouponIssueCommand(
                 10L, 1L, MembershipGrade.GOLD, IDEMPOTENCY_KEY, ISSUED_AT), definition);
 
-        assertThatThrownBy(() -> v2.issue(new CouponIssueCommand(
+        V2CouponIssueResult soldOut = v2.issue(new CouponIssueCommand(
                 10L, 2L, MembershipGrade.GOLD,
-                "550e8400-e29b-41d4-a716-446655440001", ISSUED_AT), definition))
-                .isInstanceOf(V2CouponIssueException.class)
-                // CHECK 위반은 커넥션 끊김·락 타임아웃과 구분돼야 한다. 같은 예외로 뭉개면
-                // 관제에 "MySQL 실패 1건" 으로만 찍혀 초과 발급 시도가 사라진다.
-                .cause()
-                .isInstanceOf(CouponStockOverflowException.class);
+                "550e8400-e29b-41d4-a716-446655440001", ISSUED_AT), definition);
+
+        assertThat(soldOut.claimResult().outcome())
+                .isEqualTo(com.kafkick.core.coupon.v2.port.ClaimOutcome.SOLD_OUT);
+        assertThat(soldOut.databaseSoldOutAfterRedisClaim()).isTrue();
 
         assertThat(countRows("issuances")).isEqualTo(1);
         assertThat(countRows("issuance_histories")).isEqualTo(1);
@@ -332,6 +345,33 @@ class CouponIssueRepositoryTest {
         assertThat(countRows("issuances")).isEqualTo(1);
         assertThat(countRows("issuance_histories")).isEqualTo(1);
         verify(gate).compensate(any(Long.class), any(Long.class), any());
+    }
+
+    @Test
+    @DisplayName("Sentinel 유실 뒤 DB 1인 1매 제약이 잡으면 V2는 500 대신 중복 거절하고 Redis를 보상한다")
+    void v2MapsTheRealDatabaseUniqueConstraintToDuplicateRejection() {
+        IssuanceGatePort gate = mock(IssuanceGatePort.class);
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(0L));
+        when(gate.complete(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompleteOutcome.PROMOTED);
+        when(gate.compensate(any(Long.class), any(Long.class), any()))
+                .thenReturn(CompensateOutcome.REVERTED);
+        V2CouponIssueService v2 = v2Service(gate);
+        CouponRoundIssuanceDefinition definition = new CouponRoundIssuanceDefinition(
+                10L, 7, EngineVersion.V2);
+
+        v2.issue(new CouponIssueCommand(
+                10L, 1L, MembershipGrade.GOLD, IDEMPOTENCY_KEY, ISSUED_AT), definition);
+        V2CouponIssueResult duplicate = v2.issue(new CouponIssueCommand(
+                10L, 1L, MembershipGrade.GOLD,
+                "550e8400-e29b-41d4-a716-446655440001", ISSUED_AT), definition);
+
+        assertThat(duplicate.claimResult().outcome()).isEqualTo(
+                com.kafkick.core.coupon.v2.port.ClaimOutcome.DUP_PER_MEMBER);
+        assertThat(duplicate.issueResult()).isEmpty();
+        assertThat(countRows("issuances")).isEqualTo(1);
+        assertThat(activeCount()).isEqualTo(1);
+        verify(gate, times(1)).compensate(any(Long.class), any(Long.class), any());
     }
 
     private V2CouponIssueService v2Service(IssuanceGatePort gate) {
