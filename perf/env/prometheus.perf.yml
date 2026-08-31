@@ -15,6 +15,14 @@ global:
   scrape_timeout: 900ms
   evaluation_interval: 1s
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - "rules/*.yml"
+
 scrape_configs:
   - job_name: api
     metrics_path: /actuator/prometheus
@@ -28,3 +36,8 @@ scrape_configs:
     metrics_path: /actuator/prometheus
     static_configs:
       - targets: ['batch:9092']
+
+  - job_name: queue-gateway
+    metrics_path: /actuator/prometheus
+    file_sd_configs:
+      - files: ["targets/queue-gateway.yml"]
