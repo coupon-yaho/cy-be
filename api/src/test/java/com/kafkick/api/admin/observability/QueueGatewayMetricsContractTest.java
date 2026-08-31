@@ -29,6 +29,13 @@ class QueueGatewayMetricsContractTest {
     private static final Instant NOW = Instant.parse("2026-08-31T04:00:00Z");
     private static final TimeProvider TIME =
             new TimeProvider(Clock.fixed(NOW, ZoneOffset.UTC));
+    private static final List<SeriesKey> GATEWAY_SERIES_KEYS = List.of(
+            SeriesKey.QUEUE_ADMISSION,
+            SeriesKey.GATEWAY_CAPACITY_CREDIT,
+            SeriesKey.GATEWAY_CAPACITY_NODES,
+            SeriesKey.GATEWAY_JUDGEMENT_TOTAL,
+            SeriesKey.GATEWAY_BACKEND_FALLBACK_TOTAL,
+            SeriesKey.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL);
 
     @Test
     void globalWaitingUsesTheMaximumReplicaGaugeAndOldestObservationTime() {
@@ -171,6 +178,88 @@ class QueueGatewayMetricsContractTest {
     }
 
     @Test
+    void gatewayOperationalMetricsAreIncludedInTheSeriesResponse() {
+        List<String> queries = new ArrayList<>();
+        PromRangeQuery range = (promQl, start, end, step) -> {
+            queries.add(promQl);
+            if (!promQl.contains(QueueGatewayPrometheusContract.WAITING)) {
+                return List.of(new PromRangeSeries(Map.of(),
+                        List.of(new PromRangePoint(NOW, 1d))));
+            }
+            return List.of(
+                    range("waiting", 100d, 120d),
+                    range("snapshot_age", 1d),
+                    range("scrape_age", 1d),
+                    range("up", 1d),
+                    range(QueueGatewayPrometheusContract.CAPACITY_CREDIT, 200d, 250d),
+                    range(QueueGatewayPrometheusContract.CAPACITY_NODES, 1d, 2d),
+                    range(QueueGatewayPrometheusContract.JUDGEMENT_TOTAL, 900d, 1000d),
+                    range(QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL, 2d, 3d),
+                    range(QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL, 0d, 1d));
+        };
+
+        AdminMetricsSeriesResponse response = new PromSeriesAssembler(
+                range, TIME, PrometheusSeriesProperties.defaults(),
+                new QueueGatewayPrometheusProperties(true, Duration.ofSeconds(5)))
+                .assemble(globalQuery());
+
+        assertThat(pointsOf(response, "GATEWAY_CAPACITY_CREDIT"))
+                .containsExactly(200d, 250d);
+        assertThat(pointsOf(response, "GATEWAY_CAPACITY_NODES"))
+                .containsExactly(1d, 2d);
+        assertThat(pointsOf(response, "GATEWAY_JUDGEMENT_TOTAL"))
+                .containsExactly(900d, 1000d);
+        assertThat(pointsOf(response, "GATEWAY_BACKEND_FALLBACK_TOTAL"))
+                .containsExactly(2d, 3d);
+        assertThat(pointsOf(response, "GATEWAY_ALLOCATION_OVERSHOOT_TOTAL"))
+                .containsExactly(0d, 1d);
+        assertThat(queries.stream().filter(QueueGatewayMetricsContractTest::isGatewayQuery))
+                .singleElement()
+                .satisfies(query -> assertThat(query).contains(
+                        "max(waiting_capacity_credit{job=\"queue-gateway\"})",
+                        "max(waiting_capacity_nodes{job=\"queue-gateway\"})",
+                        "sum(waiting_judgement_total{job=\"queue-gateway\"})",
+                        "sum(waiting_backend_fallback_total{job=\"queue-gateway\"})",
+                        "sum(waiting_allocation_entered_overshoot_total{job=\"queue-gateway\"})"));
+    }
+
+    @Test
+    void missingOrInvalidOperationalMetricDoesNotHideItsSiblings() {
+        PromRangeQuery range = (promQl, start, end, step) -> {
+            if (!promQl.contains(QueueGatewayPrometheusContract.WAITING)) {
+                return List.of(new PromRangeSeries(Map.of(),
+                        List.of(new PromRangePoint(NOW, 1d))));
+            }
+            return List.of(
+                    range("waiting", 120d),
+                    range("snapshot_age", 1d),
+                    range("scrape_age", 1d),
+                    range("up", 1d),
+                    range(QueueGatewayPrometheusContract.CAPACITY_NODES, -1d),
+                    range(QueueGatewayPrometheusContract.JUDGEMENT_TOTAL, 1000d),
+                    range(QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL, 3d),
+                    range(QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL, 1d));
+        };
+
+        AdminMetricsSeriesResponse response = new PromSeriesAssembler(
+                range, TIME, PrometheusSeriesProperties.defaults(),
+                new QueueGatewayPrometheusProperties(true, Duration.ofSeconds(5)))
+                .assemble(globalQuery());
+
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_CAPACITY_CREDIT).state())
+                .isEqualTo(SourceStatus.PENDING);
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_CAPACITY_NODES).state())
+                .isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_JUDGEMENT_TOTAL).state())
+                .isEqualTo(SourceStatus.VALID);
+        assertThat(pointsOf(response, "GATEWAY_JUDGEMENT_TOTAL")).containsExactly(1000d);
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_BACKEND_FALLBACK_TOTAL).state())
+                .isEqualTo(SourceStatus.VALID);
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL).state())
+                .isEqualTo(SourceStatus.VALID);
+    }
+
+    @Test
     void nonFiniteOnlyGatewayWaitingSeriesIsPending() {
         PromRangeQuery range = (promQl, start, end, step) -> {
             if (!promQl.contains(QueueGatewayPrometheusContract.WAITING)) {
@@ -213,6 +302,14 @@ class QueueGatewayMetricsContractTest {
                 .findFirst().orElseThrow();
 
         assertThat(admission.state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(response.series())
+                .filteredOn(entry -> GATEWAY_SERIES_KEYS.contains(entry.key()))
+                .hasSize(GATEWAY_SERIES_KEYS.size())
+                .allSatisfy(entry -> {
+                    assertThat(entry.state()).isEqualTo(SourceStatus.PENDING);
+                    assertThat(entry.points()).isEmpty();
+                    assertThat(entry.scoped()).isFalse();
+                });
         assertThat(queries).noneMatch(query -> query.contains(
                 QueueGatewayPrometheusContract.WAITING));
     }
@@ -263,6 +360,32 @@ class QueueGatewayMetricsContractTest {
             points.add(new PromRangePoint(NOW.minusSeconds(values.length - index - 1L), values[index]));
         }
         return new PromRangeSeries(Map.of("signal", signal), points);
+    }
+
+    private static List<Double> pointsOf(AdminMetricsSeriesResponse response, String key) {
+        return response.series().stream()
+                .filter(entry -> entry.key().name().equals(key))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("시계열 키가 없습니다: " + key))
+                .points().stream()
+                .map(AdminMetricsSeriesResponse.SeriesPoint::value)
+                .toList();
+    }
+
+    private static SeriesEntry seriesOf(AdminMetricsSeriesResponse response, SeriesKey key) {
+        return response.series().stream()
+                .filter(entry -> entry.key() == key)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("시계열 키가 없습니다: " + key));
+    }
+
+    private static boolean isGatewayQuery(String query) {
+        return query.contains(QueueGatewayPrometheusContract.WAITING)
+                || query.contains(QueueGatewayPrometheusContract.CAPACITY_CREDIT)
+                || query.contains(QueueGatewayPrometheusContract.CAPACITY_NODES)
+                || query.contains(QueueGatewayPrometheusContract.JUDGEMENT_TOTAL)
+                || query.contains(QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL)
+                || query.contains(QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL);
     }
 
     private static MetricsQuery globalQuery() {

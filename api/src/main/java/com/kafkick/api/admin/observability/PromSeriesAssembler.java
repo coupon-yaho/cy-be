@@ -34,10 +34,10 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * Prometheus range 결과를 {@link AdminMetricsSeriesResponse} 한 장으로 조립합니다.
  *
- * <p><b>계열마다 질의를 따로 보냅니다.</b> 한 질의에 여러 계열을 담으면 계열 하나가 해석되지 않을
- * 때 그래프 전체가 사라집니다 — 화면 요구는 그 반대입니다. 왕복이 계열 수만큼 늘지만 이 경로는
- * 전용 예산에 5~10초 주기라 감당 범위이고, {@link PromMetricsAssembler} 가 instant 질의 다섯 개를
- * 각각 격리하는 구조를 그대로 따릅니다.</p>
+ * <p><b>원칙적으로 계열마다 질의를 따로 보냅니다.</b> 다만 게이트웨이 계열은 같은 타깃의
+ * {@code up}·scrape age를 한 평가 시점에서 함께 판정해야 하므로 한 질의로 묶고, 응답을 계열별
+ * 상태로 다시 나눕니다. 그 밖의 계열은 하나가 해석되지 않을 때 그래프 전체가 사라지지 않도록
+ * 각각 격리합니다.</p>
  *
  * <p><b>예산을 넘긴 계열은 보내지 않습니다.</b> 순서가 우선순위입니다 — 잘리는 것은 항상 뒤입니다.
  * 이 예산은 {@link PrometheusSeriesProperties} 가 정하며 {@code /metrics} 의 1초 폴링 예산과
@@ -92,6 +92,23 @@ public class PromSeriesAssembler {
     /** 실패 분류 비율의 단위. 스냅샷 {@code errors.classes[].rate} 와 같은 0~100 퍼센트다. */
     private static final String PERCENT = " * 100";
 
+    private static final List<GatewaySeriesSpec> GATEWAY_OPERATIONAL_SERIES = List.of(
+            new GatewaySeriesSpec(
+                    SeriesKey.GATEWAY_CAPACITY_CREDIT,
+                    QueueGatewayPrometheusContract.CAPACITY_CREDIT),
+            new GatewaySeriesSpec(
+                    SeriesKey.GATEWAY_CAPACITY_NODES,
+                    QueueGatewayPrometheusContract.CAPACITY_NODES),
+            new GatewaySeriesSpec(
+                    SeriesKey.GATEWAY_JUDGEMENT_TOTAL,
+                    QueueGatewayPrometheusContract.JUDGEMENT_TOTAL),
+            new GatewaySeriesSpec(
+                    SeriesKey.GATEWAY_BACKEND_FALLBACK_TOTAL,
+                    QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL),
+            new GatewaySeriesSpec(
+                    SeriesKey.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL,
+                    QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL));
+
     private final PromRangeQuery rangeQuery;
     private final TimeProvider timeProvider;
     private final PrometheusSeriesProperties properties;
@@ -144,15 +161,16 @@ public class PromSeriesAssembler {
         // 합격 판정을 가르는 값이다. /metrics 가 정합성을 KPI 첫 칸에 두는 것과 같은 이유다.
         series.addAll(collect(SeriesKey.CONSISTENCY_GAP, consistencyGapQuery(couponId),
                 start, end, step, deadline));
-        // 대기열은 부하 중에만 존재한다. 잘리면 대기열이 언제 얼마나 쌓였는지를 되짚을
-        // 원천이 아예 없다 — batch 가 1초마다 덮어쓰는 게이지라 과거가 남지 않는다.
+        // 대기열은 부하 중에만 존재한다. 잘리면 대기 인원과 게이트웨이 처리 여유가 언제
+        // 변했는지를 되짚을 원천이 없다 — 현재값은 덮어쓰는 게이지·누계라 과거 모양을 못 낸다.
         if (queueGatewayProperties.enabled()) {
             series.addAll(couponId == null
-                    ? collectGatewayAdmission(start, end, step, deadline)
-                    : List.of(sourceMissing(SeriesKey.QUEUE_ADMISSION)));
+                    ? collectGatewaySeries(start, end, step, deadline)
+                    : gatewayPendingSeries());
         } else {
             series.addAll(collect(SeriesKey.QUEUE_ADMISSION, admissionQueueQuery(couponId),
                     start, end, step, deadline));
+            series.addAll(gatewayOperationalPendingSeries());
         }
         series.addAll(collect(SeriesKey.QUEUE_PERSISTENCE, persistenceQueueQuery(),
                 start, end, step, deadline));
@@ -183,7 +201,7 @@ public class PromSeriesAssembler {
         series.addAll(collect(SeriesKey.LATENCY_P99_SYSTEM_FAILURE, latencyQuery(OUTCOME_SYSTEM_FAILURE),
                 start, end, step, deadline));
         // 원천이 없는 계열이다. 질의를 보내지 않으므로 예산을 쓰지 않고 절단 순서와도 무관하다.
-        series.add(sourceMissing(SeriesKey.QUEUE_TELEMETRY));
+        series.add(pendingSeries(SeriesKey.QUEUE_TELEMETRY));
 
         // 계열을 다 보낸 뒤다. 기준선은 계열이 있어야 의미가 있고, 둘 중 하나만 남길 수 있다면
         // 남길 것은 계열이다.
@@ -311,14 +329,25 @@ public class PromSeriesAssembler {
                 MetricAggregation.OBSERVED_COUPON_ID, couponId);
     }
 
-    private static String gatewayAdmissionQuery() {
+    private static String gatewaySeriesQuery() {
         String selector = "{job=\"" + QueueGatewayPrometheusContract.JOB + "\"}";
-        return signal("max(" + QueueGatewayPrometheusContract.WAITING + selector + ")", "waiting")
+        String query = signal("max(" + QueueGatewayPrometheusContract.WAITING
+                + selector + ")", "waiting")
                 + " or " + signal("max(" + QueueGatewayPrometheusContract.SNAPSHOT_AGE
                 + selector + ")", "snapshot_age")
                 + " or " + signal("max(up" + selector + ")", "up")
                 + " or " + signal("max(time() - timestamp("
                 + QueueGatewayPrometheusContract.WAITING + selector + "))", "scrape_age");
+        for (GatewaySeriesSpec spec : GATEWAY_OPERATIONAL_SERIES) {
+            String aggregation = switch (MetricAggregation.of(spec.metric())) {
+                case MAX -> "max";
+                case SUM -> "sum";
+                case SINGLE -> throw new IllegalStateException(
+                        "게이트웨이 다중 타깃 지표에는 SINGLE 집계를 쓸 수 없습니다: " + spec.metric());
+            };
+            query += " or " + signal(aggregation + "(" + spec.metric() + selector + ")", spec.metric());
+        }
+        return query;
     }
 
     private static String signal(String expression, String signal) {
@@ -423,15 +452,8 @@ public class PromSeriesAssembler {
 
     // ── 실행 ────────────────────────────────────────────────────────────────────
 
-    /**
-     * 원천이 아직 없는 계열입니다. 질의를 보내지 않고 자리만 냅니다.
-     *
-     * <p><b>{@code UNAVAILABLE} 이 아니라 {@code PENDING} 입니다.</b> 원천이 죽은 것이 아니라
-     * 아직 만들어지지 않은 것이고, 둘은 운영자가 취할 행동이 반대입니다. 0 은 더 나쁩니다 —
-     * "큐가 비었다" 는 거짓말이 됩니다.</p>
-     */
-    private static SeriesEntry sourceMissing(SeriesKey key) {
-        // 원천이 없으니 좁힐 것도 없다. 원천이 생기면 그때 회차 식별자 짝이 있는지부터 본다.
+    /** 숫자 표본이 없거나 기능·범위상 조회하지 않은 계열을 {@code PENDING}으로 냅니다. */
+    private static SeriesEntry pendingSeries(SeriesKey key) {
         return new SeriesEntry(key, Map.of(), false, SourceStatus.PENDING, List.of());
     }
 
@@ -567,51 +589,108 @@ public class PromSeriesAssembler {
         return List.copyOf(entries);
     }
 
-    private List<SeriesEntry> collectGatewayAdmission(
+    /**
+     * 게이트웨이 시계열을 한 평가 결과에서 분리합니다.
+     *
+     * <p>예산 초과·질의 실패·생존 타깃 부재는 여섯 계열 모두 {@code UNAVAILABLE}, scrape age
+     * 누락·음수는 모두 {@code PENDING}입니다. 이후 개별 운영 지표의 누락·음수는 그 계열에만
+     * 가두고 다른 게이트웨이 계열은 유지합니다.</p>
+     */
+    private List<SeriesEntry> collectGatewaySeries(
             Instant start, Instant end, Duration step, Deadline deadline) {
         if (!deadline.allows()) {
-            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+            return gatewayUnavailableSeries();
         }
         List<PromRangeSeries> raw;
         try {
-            raw = rangeQuery.query(gatewayAdmissionQuery(), start, end, step);
+            raw = rangeQuery.query(gatewaySeriesQuery(), start, end, step);
         } catch (PromQueryException failure) {
-            log.warn("게이트웨이 대기 추세 질의 실패로 이 계열만 UNAVAILABLE 처리합니다: {}",
+            log.warn("게이트웨이 추세 질의 실패로 관련 계열을 UNAVAILABLE 처리합니다: {}",
                     failure.getMessage());
-            log.debug("게이트웨이 대기 추세 질의 실패 상세", failure);
-            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+            log.debug("게이트웨이 추세 질의 실패 상세", failure);
+            return gatewayUnavailableSeries();
         }
         Optional<PromRangeSeries> up = oneSignal(raw, "up");
         if (up.isEmpty() || latest(up.get()).isEmpty() || latest(up.get()).get() <= 0d) {
-            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+            return gatewayUnavailableSeries();
         }
+        Optional<PromRangeSeries> scrapeAge = oneSignal(raw, "scrape_age");
+        if (scrapeAge.isEmpty() || latest(scrapeAge.get()).isEmpty()
+                || latest(scrapeAge.get()).get() < 0d) {
+            return gatewayPendingSeries();
+        }
+
+        double threshold = queueGatewayProperties.staleAfter().toMillis() / 1000d;
+        SourceStatus operationalState = latest(scrapeAge.get()).get() > threshold
+                ? SourceStatus.STALE : SourceStatus.VALID;
+        List<SeriesEntry> entries = new ArrayList<>();
+        entries.add(gatewayAdmission(raw, scrapeAge.get(), threshold));
+        for (GatewaySeriesSpec spec : GATEWAY_OPERATIONAL_SERIES) {
+            entries.add(gatewayOperationalSeries(raw, spec, operationalState));
+        }
+        return List.copyOf(entries);
+    }
+
+    private static SeriesEntry gatewayAdmission(
+            List<PromRangeSeries> raw, PromRangeSeries scrapeAge, double threshold) {
         Optional<PromRangeSeries> waiting = oneSignal(raw, "waiting");
         Optional<PromRangeSeries> snapshotAge = oneSignal(raw, "snapshot_age");
-        Optional<PromRangeSeries> scrapeAge = oneSignal(raw, "scrape_age");
-        if (waiting.isEmpty() || snapshotAge.isEmpty() || scrapeAge.isEmpty()
-                || latest(snapshotAge.get()).isEmpty() || latest(scrapeAge.get()).isEmpty()
-                || latest(snapshotAge.get()).get() < 0d || latest(scrapeAge.get()).get() < 0d) {
-            return List.of(new SeriesEntry(
-                    SeriesKey.QUEUE_ADMISSION, Map.of(), false, SourceStatus.PENDING, List.of()));
+        if (waiting.isEmpty() || snapshotAge.isEmpty() || latest(snapshotAge.get()).isEmpty()
+                || latest(snapshotAge.get()).get() < 0d) {
+            return pendingSeries(SeriesKey.QUEUE_ADMISSION);
         }
         if (waiting.get().points().stream().anyMatch(point -> point.hasNumericValue()
                 && (point.value() < 0d || point.value() != Math.rint(point.value())))) {
-            return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+            return SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false);
         }
         if (waiting.get().points().stream().noneMatch(PromRangePoint::hasNumericValue)) {
-            return List.of(new SeriesEntry(
-                    SeriesKey.QUEUE_ADMISSION, Map.of(), false, SourceStatus.PENDING, List.of()));
+            return pendingSeries(SeriesKey.QUEUE_ADMISSION);
         }
-        double threshold = queueGatewayProperties.staleAfter().toMillis() / 1000d;
         boolean stale = latest(snapshotAge.get()).get() > threshold
-                || latest(scrapeAge.get()).get() > threshold;
+                || latest(scrapeAge).orElseThrow() > threshold;
         List<SeriesPoint> points = points(waiting.get());
         boolean allZero = !points.isEmpty() && points.stream()
                 .allMatch(point -> point.value() != null && point.value() == 0d);
         SourceStatus state = stale ? SourceStatus.STALE
                 : allZero ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
-        return List.of(new SeriesEntry(
-                SeriesKey.QUEUE_ADMISSION, Map.of(), false, state, points));
+        return new SeriesEntry(SeriesKey.QUEUE_ADMISSION, Map.of(), false, state, points);
+    }
+
+    /** 누락·비수치뿐이면 {@code PENDING}, 음수 표본이 있으면 {@code UNAVAILABLE}입니다. */
+    private static SeriesEntry gatewayOperationalSeries(
+            List<PromRangeSeries> raw, GatewaySeriesSpec spec, SourceStatus state) {
+        Optional<PromRangeSeries> metric = oneSignal(raw, spec.metric());
+        if (metric.isEmpty()
+                || metric.get().points().stream().noneMatch(PromRangePoint::hasNumericValue)) {
+            return pendingSeries(spec.key());
+        }
+        if (metric.get().points().stream().anyMatch(
+                point -> point.hasNumericValue() && point.value() < 0d)) {
+            return SeriesEntry.unavailable(spec.key(), false);
+        }
+        return new SeriesEntry(spec.key(), Map.of(), false, state, points(metric.get()));
+    }
+
+    private static List<SeriesEntry> gatewayPendingSeries() {
+        List<SeriesEntry> entries = new ArrayList<>();
+        entries.add(pendingSeries(SeriesKey.QUEUE_ADMISSION));
+        entries.addAll(gatewayOperationalPendingSeries());
+        return List.copyOf(entries);
+    }
+
+    private static List<SeriesEntry> gatewayOperationalPendingSeries() {
+        return GATEWAY_OPERATIONAL_SERIES.stream()
+                .map(spec -> pendingSeries(spec.key()))
+                .toList();
+    }
+
+    private static List<SeriesEntry> gatewayUnavailableSeries() {
+        List<SeriesEntry> entries = new ArrayList<>();
+        entries.add(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
+        entries.addAll(GATEWAY_OPERATIONAL_SERIES.stream()
+                .map(spec -> SeriesEntry.unavailable(spec.key(), false))
+                .toList());
+        return List.copyOf(entries);
     }
 
     private static Optional<PromRangeSeries> oneSignal(
@@ -628,6 +707,8 @@ public class PromSeriesAssembler {
                 .reduce((left, right) -> right)
                 .map(PromRangePoint::value);
     }
+
+    private record GatewaySeriesSpec(SeriesKey key, String metric) { }
 
     /**
      * 남은 시간을 세는 조립 1회분 상태입니다.

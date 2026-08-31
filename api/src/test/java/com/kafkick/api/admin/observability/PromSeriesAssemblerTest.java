@@ -594,13 +594,13 @@ class PromSeriesAssemblerTest {
     }
 
     /**
-     * <b>원천이 생겨도 아무도 이 자리를 안 고치는 것을 막는다.</b> 원천이 없어 질의를 보내지 않는
-     * 계열은 정상 원천에서도 PENDING 으로 남는다. OBS-15 가 Kafka lag 을 열면 이 목록이 줄어야
-     * 하고, 줄이지 않으면 이 테스트가 red 가 되어 배선을 잊은 것이 드러난다.
+     * <b>원천 미구현과 명시적 비활성만 PENDING 입니다.</b> 게이트웨이 기본값은 비활성이라
+     * 운영 지표 다섯 자리는 질의 없이 PENDING 으로 유지합니다. 기능을 켠 테스트에서 이 값들은
+     * 실제 range 결과로 채워지는지 별도 계약이 검증합니다.
      */
     @Test
-    @DisplayName("질의 없이 PENDING 인 계열은 원천이 없다고 선언한 둘뿐이다")
-    void onlyDeclaredSourcelessSeriesStayPending() {
+    @DisplayName("원천 미구현 또는 명시적으로 비활성인 계열만 PENDING 이다")
+    void onlySourcelessOrDisabledSeriesStayPending() {
         AdminMetricsSeriesResponse response =
                 assembler(FakePromRangeQuery.alwaysOnePoint(), PrometheusSeriesProperties.defaults())
                         .assemble(global(MetricsWindow.ONE_MINUTE));
@@ -608,8 +608,13 @@ class PromSeriesAssemblerTest {
         assertThat(response.series())
                 .filteredOn(entry -> entry.state() == SourceStatus.PENDING)
                 .extracting(SeriesEntry::key)
-                // 화면 수신 시각이 필요한 Telemetry 만 서버에서 잴 수 없다.
-                .containsExactly(SeriesKey.QUEUE_TELEMETRY);
+                .containsExactlyInAnyOrder(
+                        SeriesKey.GATEWAY_CAPACITY_CREDIT,
+                        SeriesKey.GATEWAY_CAPACITY_NODES,
+                        SeriesKey.GATEWAY_JUDGEMENT_TOTAL,
+                        SeriesKey.GATEWAY_BACKEND_FALLBACK_TOTAL,
+                        SeriesKey.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL,
+                        SeriesKey.QUEUE_TELEMETRY);
     }
 
     private static List<AdminMetricsSeriesResponse.SeriesPoint> pointsOf(

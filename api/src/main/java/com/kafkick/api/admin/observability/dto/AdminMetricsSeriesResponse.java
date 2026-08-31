@@ -248,10 +248,26 @@ public record AdminMetricsSeriesResponse(
         /**
          * 대기열 대기 인원.
          *
-         * <p>원천이 batch 한 곳뿐이라 집계하지 않습니다. 값 미터가 NaN 인 점은 이유를 상태 미터가
-         * 내지만 <b>점에는 상태를 실을 자리가 없어</b> null 로 나갑니다 — 화면은 선을 끊어야 합니다.</p>
+         * <p>게이트웨이 관제가 켜지면 외부 게이트웨이 복제본의 최댓값, 꺼지면 batch 단일 원천을
+         * 사용합니다. 값 미터가 NaN 인 점은 이유를 상태 미터가 내지만 <b>점에는 상태를 실을
+         * 자리가 없어</b> null 로 나갑니다 — 화면은 선을 끊어야 합니다.</p>
          */
         QUEUE_ADMISSION,
+
+        /** 게이트웨이가 보고한 현재 API 처리 가능량 credit. */
+        GATEWAY_CAPACITY_CREDIT,
+
+        /** 게이트웨이에 처리 가능량을 보고하는 API 노드 수. */
+        GATEWAY_CAPACITY_NODES,
+
+        /** 게이트웨이의 누적 입장 판정 수. */
+        GATEWAY_JUDGEMENT_TOTAL,
+
+        /** 게이트웨이의 누적 백엔드 fallback 수. */
+        GATEWAY_BACKEND_FALLBACK_TOTAL,
+
+        /** 게이트웨이의 누적 공급 한도 초과 입장 수. */
+        GATEWAY_ALLOCATION_OVERSHOOT_TOTAL,
 
         /**
          * 저장 대기(Kafka consumer lag).
