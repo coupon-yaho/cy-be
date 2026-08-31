@@ -22,7 +22,9 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
 import com.kafkick.api.observation.issuance.CouponIssueObservationCoordinator;
-import com.kafkick.api.observation.issuance.IssueLockRetryMeters;
+import com.kafkick.api.support.lock.LockContentionRetry;
+import com.kafkick.api.support.lock.LockRetryConfiguration;
+import com.kafkick.api.support.lock.LockRetryMeters;
 import com.kafkick.api.observation.issuance.V2IssuanceOutcomeMeters;
 import com.kafkick.api.observation.issuance.CouponIssueObservationDependencyMapper;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
@@ -288,7 +290,9 @@ class ApiObservationAutoConfigurationTest {
                 .withUserConfiguration(
                         CouponIssueObservationCoordinator.class,
                         V2IssuanceOutcomeMeters.class,
-                        IssueLockRetryMeters.class
+                        LockRetryMeters.class,
+                        LockContentionRetry.class,
+                        LockRetryConfiguration.class
                 )
                 .withBean("auditEventRecorder", EventRecorder.class, () -> event -> { })
                 .withBean(

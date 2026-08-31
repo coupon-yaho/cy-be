@@ -1,19 +1,16 @@
 package com.kafkick.api.observation.issuance;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import java.util.concurrent.locks.LockSupport;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.Objects;
 import java.util.Optional;
 
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
 
 import com.kafkick.api.observation.ObservationIssuanceProperties;
 import com.kafkick.api.support.RetryAfterException;
+import com.kafkick.api.support.lock.LockContentionRetry;
+import com.kafkick.api.support.lock.LockRetryOperations;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponIssueV2ErrorCode;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
@@ -41,16 +38,6 @@ import com.kafkick.core.observation.EngineVersion;
 @Component
 public final class CouponIssueObservationCoordinator {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(CouponIssueObservationCoordinator.class);
-
-    /** 원인 사슬을 훑는 깊이 상한. 순환 사슬에서 요청 스레드가 갇히지 않게 한다. */
-    private static final int CAUSE_CHAIN_LIMIT = 16;
-
-    /** 다시 시도하기 전 물러서는 시간. 진 쪽들이 같은 순간에 되돌아와 다시 부딪히지 않게 한다. */
-    private static final long BACKOFF_MIN_NANOS = 1_000_000L;
-    private static final long BACKOFF_MAX_NANOS = 5_000_000L;
-
     private final CouponOperationExecutionService operationExecutionService;
     private final IssuanceObservationContextFactory contextFactory;
     private final IssuanceObservationService observationService;
@@ -58,8 +45,7 @@ public final class CouponIssueObservationCoordinator {
     private final CouponIssuanceRouter router;
     private final ObjectProvider<V2CouponIssueService> v2Services;
     private final V2IssuanceOutcomeMeters v2Meters;
-    private final IssueLockRetryMeters lockRetryMeters;
-    private final IssueLockRetryProperties lockRetryProperties;
+    private final LockContentionRetry lockContentionRetry;
     private final ObservationIssuanceProperties issuanceProperties;
     private final TimeProvider timeProvider;
 
@@ -84,8 +70,7 @@ public final class CouponIssueObservationCoordinator {
             CouponIssuanceRouter router,
             ObjectProvider<V2CouponIssueService> v2Services,
             V2IssuanceOutcomeMeters v2Meters,
-            IssueLockRetryMeters lockRetryMeters,
-            IssueLockRetryProperties lockRetryProperties,
+            LockContentionRetry lockContentionRetry,
             ObservationIssuanceProperties issuanceProperties,
             TimeProvider timeProvider
     ) {
@@ -96,8 +81,7 @@ public final class CouponIssueObservationCoordinator {
         this.router = Objects.requireNonNull(router);
         this.v2Services = Objects.requireNonNull(v2Services);
         this.v2Meters = Objects.requireNonNull(v2Meters);
-        this.lockRetryMeters = Objects.requireNonNull(lockRetryMeters, "lockRetryMeters");
-        this.lockRetryProperties = Objects.requireNonNull(lockRetryProperties, "lockRetryProperties");
+        this.lockContentionRetry = Objects.requireNonNull(lockContentionRetry, "lockContentionRetry");
         this.issuanceProperties = Objects.requireNonNull(issuanceProperties);
         this.timeProvider = Objects.requireNonNull(timeProvider);
     }
@@ -163,98 +147,17 @@ public final class CouponIssueObservationCoordinator {
             String idempotencyKey,
             ObservationScope observation
     ) {
-        int maxAttempts = lockRetryProperties.maxAttempts();
-        long deadline = System.nanoTime() + lockRetryProperties.budget().toNanos();
-        // 요청 단위로 센다. 물러섬마다 올리면 두 번 물러선 요청이 둘로 세어지고,
-        // 끝내 실패한 요청이 recovered 와 exhausted 에 동시에 들어간다.
-        boolean retried = false;
-        for (int attempt = 1; ; attempt++) {
-            try {
-                CouponIssueExecutionResult result = operationExecutionService.issueWithMetadata(
+        return lockContentionRetry.call(
+                LockRetryOperations.ISSUE,
+                () -> "couponRoundId=%d memberId=%d".formatted(couponRoundId, memberId),
+                () -> operationExecutionService.issueWithMetadata(
                         couponRoundId,
                         memberId,
                         membershipGrade,
                         idempotencyKey,
                         observation::recordClaimedAttempt
-                );
-                if (retried) {
-                    lockRetryMeters.recovered();
-                }
-                return result;
-            } catch (RuntimeException failure) {
-                if (!causedByLockContention(failure)) {
-                    throw failure;
-                }
-                long remaining = deadline - System.nanoTime();
-                if (attempt >= maxAttempts || remaining <= 0L) {
-                    throw giveUp(failure, attempt, couponRoundId, memberId);
-                }
-                retried = true;
-                // 부하 구간에 요청마다 warn 을 찍으면 로그 I/O 가 측정값을 오염시킨다.
-                log.debug("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
-                        attempt, maxAttempts, couponRoundId, memberId);
-                // **남은 예산 안에서만 기다린다.** 예산을 넘겨 자면 깨어난 뒤에 시도가
-                // 하나 더 시작되는데, 그것이 락 대기 타임아웃만큼 더 걸릴 수 있다.
-                //
-                // ⚠️ 예산은 **응답 상한이 아니다.** 진행 중인 DB 시도를 중단시키지 못하므로
-                //    첫 시도가 락 대기로 50초를 쓰면 응답은 이미 예산을 크게 넘긴다.
-                //    이 값이 보장하는 것은 하나 — **예산이 끝난 뒤에는 새 시도를 시작하지
-                //    않는다.** 그래서 최악이 시도 횟수만큼 배가 되지는 않는다.
-                LockSupport.parkNanos(Math.min(remaining, backoffNanos()));
-                if (System.nanoTime() >= deadline) {
-                    throw giveUp(failure, attempt, couponRoundId, memberId);
-                }
-            }
-        }
-    }
-
-    /** 물러서는 시간에 지터를 준다. 진 쪽들이 같은 순간에 되돌아와 다시 부딪히지 않게 한다. */
-    private static long backoffNanos() {
-        return ThreadLocalRandom.current().nextLong(BACKOFF_MIN_NANOS, BACKOFF_MAX_NANOS);
-    }
-
-    /**
-     * 상한이나 시간 예산에 닿았다. <b>사실만 남긴다</b> — 원인이 반복 데드락인지 지속
-     * 병목인지는 이 코드가 구분하지 못한다. 그 판정은 로그와 지표를 본 사람이 한다.
-     *
-     * <p>바깥 예외를 그대로 돌려준다. 어댑터가 붙인 맥락을 벗기지 않는다.
-     */
-    private RuntimeException giveUp(
-            RuntimeException failure,
-            int attempt,
-            Long couponRoundId,
-            Long memberId
-    ) {
-        lockRetryMeters.exhausted();
-        log.warn("발급이 락 경합으로 {}회 만에 포기했습니다. couponRoundId={} memberId={}",
-                attempt, couponRoundId, memberId);
-        return failure;
-    }
-
-    /**
-     * <b>원인 사슬을 훑는다.</b> 저장소 어댑터가 {@code DataAccessException} 을
-     * {@code CouponPersistenceException}·{@code IdempotencyPersistenceException} 으로 감싸므로,
-     * <b>운영에서 오는 락 경합은 대개 그 안에 들어 있다.</b> 처음에는 원본 타입만 잡았는데
-     * 그러면 감싸인 쪽이 안 걸려서 재시도가 사실상 안 돌았다(리뷰가 잡았다).
-     *
-     * <p>감싸이지 않은 경우도 있다 — JPA 가 INSERT 를 커밋 시점으로 미루면 어댑터의
-     * {@code catch} 밖에서 터진다. 그래서 <b>양쪽을 다 본다.</b>
-     *
-     * <p>락 경합이 아닌 실패는 여기서 {@code false} 라 곧바로 원형 그대로 다시 던져진다.
-     * 넓게 잡아 아무 실패나 재시도하면 진짜 결함을 세 번 반복하고 응답만 느려진다.
-     */
-    private static boolean causedByLockContention(Throwable failure) {
-        Throwable cause = failure;
-        for (int depth = 0; cause != null && depth < CAUSE_CHAIN_LIMIT; depth++) {
-            if (cause instanceof PessimisticLockingFailureException) {
-                return true;
-            }
-            if (cause.getCause() == cause) {
-                return false;
-            }
-            cause = cause.getCause();
-        }
-        return false;
+                )
+        );
     }
 
     private CouponIssueResult issueV1(

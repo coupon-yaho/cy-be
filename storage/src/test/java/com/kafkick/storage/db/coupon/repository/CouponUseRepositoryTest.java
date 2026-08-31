@@ -38,11 +38,19 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
+import java.time.Duration;
+import com.kafkick.core.coupon.exception.CouponUseErrorCode;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyClaimService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyPolicy;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.core.expiration.ExpireCandidate;
+import com.kafkick.storage.db.LockContentionRetries;
 import com.kafkick.storage.db.expiration.ExpirationJdbcAdapter;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
@@ -457,6 +465,72 @@ class CouponUseRepositoryTest {
                         reclaimedAt
                 )
         );
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM idempotency_records WHERE idem_key = ?",
+                String.class,
+                IDEMPOTENCY_KEY
+        )).isEqualTo("DONE");
+    }
+
+    /**
+     * <b>이 PR 의 안전성 논거를 실제 DB 로 태운다.</b>
+     *
+     * <p>사용·취소의 재시도가 안전한 이유는 하나뿐이다 — 처리가 예외로 끝나면
+     * {@code IdempotencyExecutionService} 가 자기 선점을 풀어 주므로 다음 시도가 처음처럼
+     * 선점한다. 그 논거가 산문으로만 서 있으면, 누군가 {@code release} 를 삭제 대신
+     * {@code UPDATE ... status='FAILED'} 로 바꾸는 순간 <b>락 경합 한 번이 사용자에게
+     * 30초짜리 409 잠금</b>이 되는데 아무 검사도 안 깨진다.
+     *
+     * <p>그래서 목을 쓰지 않는다. 실제 {@code IdempotencyExecutionService} 와 실제 저장소로
+     * 첫 시도를 감싸인 락 경합으로 죽이고, 운영과 같은 술어로 다시 시도한다.
+     *
+     * <p>단언 셋이 함께 서야 한다 — 응답을 받았고, 사용은 <b>정확히 한 번만</b> 일어났고,
+     * 멱등 기록이 {@code DONE} 이다. 선점이 안 풀렸다면 두 번째 시도가
+     * {@code CONFLICT_IN_PROGRESS} 로 끝나 첫 단언에서 걸린다.
+     */
+    @Test
+    @DisplayName("처리가 락 경합으로 죽으면 선점이 풀려 다시 시도가 처음처럼 선점한다")
+    void releasedClaimLetsTheRetryStartOver() {
+        IdempotencyExecutionService execution = new IdempotencyExecutionService(
+                new IdempotencyClaimService(idempotencyRepository),
+                new TimeProvider(Clock.fixed(USED_AT, ZoneOffset.UTC)),
+                new IdempotencyPolicy(
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(30)
+                )
+        );
+        AtomicInteger attempts = new AtomicInteger();
+
+        String response = LockContentionRetries.withRetry(() -> execution.execute(
+                IDEMPOTENCY_KEY,
+                () -> REQUEST_HASH,
+                CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
+                requestAt -> transactionTemplate.execute(status -> {
+                    if (attempts.incrementAndGet() == 1) {
+                        // 어댑터가 감싼 모양 그대로 — 운영에서 오는 것이 이 모양이다.
+                        throw new IdempotencyPersistenceException(
+                                "멱등 기록 저장에 실패했습니다.",
+                                new CannotAcquireLockException("Deadlock found"));
+                    }
+                    couponUseService.use(command(IDEMPOTENCY_KEY));
+                    idempotencyRepository.complete(
+                            IDEMPOTENCY_KEY, 20L, 100L, "stored-response", USED_AT);
+                    return "stored-response";
+                }),
+                stored -> stored
+        ));
+
+        assertThat(response)
+                .as("선점이 안 풀렸으면 두 번째 시도가 CONFLICT_IN_PROGRESS 로 끝난다")
+                .isEqualTo("stored-response");
+        assertThat(attempts.get())
+                .as("한 번에 성공했으면 이 검사는 아무것도 안 태운 것이다")
+                .isEqualTo(2);
+        assertThat(countRows("issuance_usages"))
+                .as("선점만 풀리고 사용이 두 번 남으면 이중 사용이다")
+                .isEqualTo(1);
+        assertThat(countUseHistories()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT status FROM idempotency_records WHERE idem_key = ?",
                 String.class,
@@ -1142,16 +1216,18 @@ class CouponUseRepositoryTest {
 
     private String processIdempotentRequest(CountDownLatch completed)
             throws InterruptedException {
-        boolean firstRequest = Boolean.TRUE.equals(transactionTemplate.execute(
-                status -> idempotencyRepository.tryStart(
-                        IDEMPOTENCY_KEY,
-                        REQUEST_HASH,
-                        USED_AT
+        boolean firstRequest = Boolean.TRUE.equals(LockContentionRetries.withRetry(
+                () -> transactionTemplate.execute(
+                        status -> idempotencyRepository.tryStart(
+                                IDEMPOTENCY_KEY,
+                                REQUEST_HASH,
+                                USED_AT
+                        )
                 )
         ));
         if (firstRequest) {
             try {
-                return transactionTemplate.execute(status -> {
+                return LockContentionRetries.withRetry(() -> transactionTemplate.execute(status -> {
                     couponUseService.use(command(IDEMPOTENCY_KEY));
                     idempotencyRepository.complete(
                             IDEMPOTENCY_KEY,
@@ -1161,7 +1237,7 @@ class CouponUseRepositoryTest {
                             USED_AT
                     );
                     return "stored-response";
-                });
+                }));
             } finally {
                 completed.countDown();
             }

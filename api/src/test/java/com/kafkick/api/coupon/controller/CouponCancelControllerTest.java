@@ -14,7 +14,7 @@ import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
-import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.api.coupon.service.CouponOperationRetryingExecutor;
 import com.kafkick.core.support.TimeProvider;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -37,7 +37,7 @@ class CouponCancelControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponOperationExecutionService executionService;
+    private CouponOperationRetryingExecutor executionService;
 
     @MockitoBean
     private TimeProvider timeProvider;

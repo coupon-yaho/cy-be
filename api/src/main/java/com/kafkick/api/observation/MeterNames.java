@@ -18,6 +18,9 @@ public final class MeterNames {
     public static final String HTTP_RESULT = "app.http.result";
     public static final String IN_FLIGHT = "app.http.inflight";
 
+    // ── 락 경합 재시도. 발급·사용·사용취소·발급취소가 operation 태그로 갈린다 ──────
+    public static final String COUPON_LOCK_RETRY = "coupon.lock.retry";
+
     // ── OBS-25 가 직접 만드는 쿠폰 회차 발급 미터 ─────────────────────────────
     public static final String ISSUANCE_FLOW = "app.issuance.flow";
     public static final String QUEUE_ADMITTED = "app.queue.admitted";

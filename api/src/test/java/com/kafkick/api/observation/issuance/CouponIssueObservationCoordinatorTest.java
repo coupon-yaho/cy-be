@@ -26,6 +26,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import com.kafkick.api.support.lock.LockContentionRetry;
+import com.kafkick.api.support.lock.LockRetryMeters;
+import com.kafkick.api.support.lock.LockRetryProperties;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponAlreadyIssuedException;
@@ -97,8 +100,7 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new IssueLockRetryMeters(registry),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(registry), LockRetryProperties.defaults()),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -114,8 +116,7 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new IssueLockRetryMeters(new SimpleMeterRegistry()),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(new SimpleMeterRegistry()), LockRetryProperties.defaults()),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -238,10 +239,10 @@ class CouponIssueObservationCoordinatorTest {
         coordinatorWith(registry).issue(
                 REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
 
-        assertThat(registry.get("coupon.issue.lock.retry")
-                .tag("outcome", "recovered").counter().count()).isEqualTo(1.0);
-        assertThat(registry.get("coupon.issue.lock.retry")
-                .tag("outcome", "exhausted").counter().count()).isEqualTo(0.0);
+        assertThat(registry.get("coupon.lock.retry")
+                .tag("operation", "issue").tag("outcome", "recovered").counter().count()).isEqualTo(1.0);
+        assertThat(registry.get("coupon.lock.retry")
+                .tag("operation", "issue").tag("outcome", "exhausted").counter().count()).isEqualTo(0.0);
     }
 
     /** 끝내 실패한 요청은 {@code exhausted} 하나만 센다 — 회복으로도 세면 합이 안 맞는다. */
@@ -258,10 +259,10 @@ class CouponIssueObservationCoordinatorTest {
                 REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
                 .isInstanceOf(CannotAcquireLockException.class);
 
-        assertThat(registry.get("coupon.issue.lock.retry")
-                .tag("outcome", "recovered").counter().count()).isEqualTo(0.0);
-        assertThat(registry.get("coupon.issue.lock.retry")
-                .tag("outcome", "exhausted").counter().count()).isEqualTo(1.0);
+        assertThat(registry.get("coupon.lock.retry")
+                .tag("operation", "issue").tag("outcome", "recovered").counter().count()).isEqualTo(0.0);
+        assertThat(registry.get("coupon.lock.retry")
+                .tag("operation", "issue").tag("outcome", "exhausted").counter().count()).isEqualTo(1.0);
     }
 
     /**
@@ -833,8 +834,7 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new IssueLockRetryMeters(new SimpleMeterRegistry()),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(new SimpleMeterRegistry()), LockRetryProperties.defaults()),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -881,8 +881,7 @@ class CouponIssueObservationCoordinatorTest {
                         v1Router(),
                         noV2Service(),
                         new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new IssueLockRetryMeters(new SimpleMeterRegistry()),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(new SimpleMeterRegistry()), LockRetryProperties.defaults()),
                         new ObservationIssuanceProperties(null, "api-1", null, null, null),
                         timeProvider
                 );

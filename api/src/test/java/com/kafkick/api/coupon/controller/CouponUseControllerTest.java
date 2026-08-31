@@ -11,11 +11,13 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.springframework.dao.CannotAcquireLockException;
+import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.dto.request.CouponUseRequest;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.api.coupon.service.CouponOperationRetryingExecutor;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.support.TimeProvider;
 
@@ -42,7 +44,7 @@ class CouponUseControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponOperationExecutionService executionService;
+    private CouponOperationRetryingExecutor executionService;
 
     @MockitoBean
     private TimeProvider timeProvider;
@@ -126,5 +128,35 @@ class CouponUseControllerTest {
         verify(executionService, never()).use(
                 anyLong(), anyLong(), anyInt(), anyString()
         );
+    }
+
+    /**
+     * <b>재시도가 소진된 뒤의 응답을 고정한다.</b> {@code LockContentionRetry} 는 상한에
+     * 닿으면 어댑터가 감싼 예외를 <b>그대로</b> 올린다 — 맥락을 벗기지 않으려는 것인데,
+     * 그러면 무엇이 클라이언트에 나가는지는 전역 처리기가 정한다.
+     *
+     * <p>부하 집계와 Chaos 자동 판정의 근거가 응답 코드라, 그 값이 조용히 바뀌면 측정이
+     * 바뀐다. 여기서 못 박아 둔다.
+     */
+    @Test
+    @DisplayName("락 재시도가 소진되면 500 과 COUPON-407 로 끝난다")
+    void exhaustedLockRetryEndsAsServerError() throws Exception {
+        when(executionService.use(eq(100L), eq(20L), anyInt(), anyString()))
+                .thenThrow(new IdempotencyPersistenceException(
+                        "멱등 기록 저장에 실패했습니다.",
+                        new CannotAcquireLockException("Deadlock found")));
+
+        mockMvc.perform(post("/api/v1/coupons/100/use")
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(CouponRequestHeaders.IDEMPOTENCY_KEY, "a".repeat(32))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "orderAmount": 20000
+                                }
+                                """))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("COUPON-407"));
     }
 }
