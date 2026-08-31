@@ -22,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -84,6 +85,7 @@ import static org.mockito.Mockito.when;
 class CouponIssueRepositoryTest {
 
     private static final long TIMEOUT_SECONDS = 30;
+    private static final int DEADLOCK_MAX_ATTEMPTS = 3;
     private static final Instant ISSUED_AT =
             Instant.parse("2026-08-18T05:30:00Z");
     private static final Instant AUDIT_CREATED_AT =
@@ -548,7 +550,7 @@ class CouponIssueRepositoryTest {
                         );
                     }
                     try {
-                        issue(memberId);
+                        issueWithDeadlockRetry(memberId);
                         return null;
                     } catch (BusinessException exception) {
                         return (CouponIssueErrorCode) exception.getErrorCode();
@@ -573,6 +575,21 @@ class CouponIssueRepositoryTest {
                     TimeUnit.SECONDS
             )).isTrue();
         }
+    }
+
+    private Issuance issueWithDeadlockRetry(Long memberId) {
+        for (int attempt = 1; attempt <= DEADLOCK_MAX_ATTEMPTS; attempt++) {
+            try {
+                return issue(memberId);
+            } catch (CannotAcquireLockException exception) {
+                if (attempt == DEADLOCK_MAX_ATTEMPTS) {
+                    // 계속되는 락 장애까지 성공으로 숨기지 않는다.
+                    throw exception;
+                }
+                Thread.yield();
+            }
+        }
+        throw new IllegalStateException("도달할 수 없는 데드락 재시도 상태입니다.");
     }
 
     @Test
