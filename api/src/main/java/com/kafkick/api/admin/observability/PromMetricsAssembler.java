@@ -239,10 +239,11 @@ public class PromMetricsAssembler {
 
     private static String resultRateQuery(MetricsWindow window) {
         // window 는 되돌아볼 범위가 아니라 비율을 계산할 집계 창이다. 그래서 질의 안에 들어간다.
-        return "rate(" + MetricAggregation.HTTP_RESULT_TOTAL + "[" + window.seconds() + "s])"
-                + " or rate(" + MetricAggregation.ATTEMPT_ARCHIVE_RATE + "["
+        String function = window == MetricsWindow.THREE_SECONDS ? "irate" : "rate";
+        return function + "(" + MetricAggregation.HTTP_RESULT_TOTAL + "[" + window.seconds() + "s])"
+                + " or " + function + "(" + MetricAggregation.ATTEMPT_ARCHIVE_RATE + "["
                 + window.seconds() + "s])"
-                + " or rate(" + MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE + "["
+                + " or " + function + "(" + MetricAggregation.KAFKA_ATTEMPT_PUBLISH_FAILURE_RATE + "["
                 + window.seconds() + "s])";
     }
 

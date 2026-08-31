@@ -21,6 +21,7 @@ import java.time.Duration;
  */
 public enum MetricsWindow {
 
+    THREE_SECONDS(Duration.ofSeconds(3)),
     ONE_MINUTE(Duration.ofMinutes(1)),
     FIVE_MINUTES(Duration.ofMinutes(5)),
     FIFTEEN_MINUTES(Duration.ofMinutes(15));

@@ -15,6 +15,7 @@ class MetricsWindowConverterTest {
     /** 지원하는 세 query 값이 각각의 도메인 구간으로 변환되는지 검증합니다. */
     @Test
     void convertsSupportedHttpValues() {
+        assertThat(converter.convert("3s")).isEqualTo(MetricsWindow.THREE_SECONDS);
         assertThat(converter.convert("1m")).isEqualTo(MetricsWindow.ONE_MINUTE);
         assertThat(converter.convert("5m")).isEqualTo(MetricsWindow.FIVE_MINUTES);
         assertThat(converter.convert("15m")).isEqualTo(MetricsWindow.FIFTEEN_MINUTES);
@@ -23,6 +24,7 @@ class MetricsWindowConverterTest {
     /** 기존 enum 이름 표기도 같은 구간으로 변환되는지 검증합니다. */
     @Test
     void convertsEnumNames() {
+        assertThat(converter.convert("THREE_SECONDS")).isEqualTo(MetricsWindow.THREE_SECONDS);
         assertThat(converter.convert("ONE_MINUTE")).isEqualTo(MetricsWindow.ONE_MINUTE);
         assertThat(converter.convert("FIVE_MINUTES")).isEqualTo(MetricsWindow.FIVE_MINUTES);
         assertThat(converter.convert("FIFTEEN_MINUTES")).isEqualTo(MetricsWindow.FIFTEEN_MINUTES);

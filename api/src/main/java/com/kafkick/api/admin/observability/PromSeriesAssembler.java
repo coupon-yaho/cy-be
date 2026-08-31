@@ -142,7 +142,7 @@ public class PromSeriesAssembler {
         Objects.requireNonNull(query, "query");
         MetricsWindow window = query.window();
         Long couponId = query.couponId();
-        Duration step = properties.step();
+        Duration step = properties.stepFor(window);
         Instant end = timeProvider.instant().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         Instant start = end.minus(window.duration());
 

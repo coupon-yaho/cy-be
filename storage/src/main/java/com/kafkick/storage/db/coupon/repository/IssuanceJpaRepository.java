@@ -93,7 +93,7 @@ public interface IssuanceJpaRepository
      * ({@code ExpirationJdbcAdapter} — {@code GREATEST(updated_at, :committedAt)}).
      * 사건 시각은 이 컬럼이 아니라 {@code issuance_histories.created_at} 이 진다.
      *
-     * <p>⚠️ <b>{@code CURRENT_TIMESTAMP(6)} 은 "커밋 시각" 이 아니다 — 문장 시작에 한 번
+     * <p>⚠️ <b>{@code UTC_TIMESTAMP(6)} 은 "커밋 시각" 이 아니다 — 문장 시작에 한 번
      * 고정되고 행 락 대기를 안 따라간다.</b> 실측(MySQL 8.4):
      *
      * <pre>
@@ -112,7 +112,7 @@ public interface IssuanceJpaRepository
      * 그것은 이 티켓 밖이다. 검증 쪽은 시작의 {@code rejectIssuancesUpdatedAfterAsOf} 와
      * 끝의 {@code assertStillFrozen} 두 겹으로 창을 더 좁힌다.
      *
-     * <p>JPQL 을 네이티브로 내린 이유는 {@code CURRENT_TIMESTAMP} 가 MySQL 에서 <b>초 정밀도</b>
+     * <p>JPQL 을 네이티브로 내린 이유는 {@code UTC_TIMESTAMP} 가 MySQL 에서 <b>초 정밀도</b>
      * 라서다. 이 컬럼은 {@code datetime(6)} 이고 리플레이가 마이크로초까지 본다.
      *
      * <p>⚠️ <b>상태는 {@code String} 으로 받는다.</b> 네이티브 질의라 {@code @Enumerated} 변환이
@@ -124,7 +124,7 @@ public interface IssuanceJpaRepository
     @Query(value = """
             UPDATE issuances
             SET status = :nextStatus,
-                updated_at = GREATEST(updated_at, :updatedAt, CURRENT_TIMESTAMP(6))
+                updated_at = GREATEST(updated_at, :updatedAt, UTC_TIMESTAMP(6))
             WHERE id = :issuanceId
               AND member_id = :memberId
               AND status = :currentStatus

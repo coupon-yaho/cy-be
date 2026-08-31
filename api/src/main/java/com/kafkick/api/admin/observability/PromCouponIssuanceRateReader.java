@@ -80,7 +80,7 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
         Objects.requireNonNull(snapshotAt, "snapshotAt");
         try {
             Deadline deadline = Deadline.startingNow(seriesProperties.totalBudget(), nanoTime);
-            Duration rateWindow = seriesProperties.step();
+            Duration rateWindow = seriesProperties.stepFor(window);
             requireBudget(deadline);
             List<PromRangeSeries> series = rangeQuery.query(
                     CouponMetricsPrometheusContract.successRate(couponId, rateWindow),
@@ -202,14 +202,15 @@ public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
             MetricsWindow window,
             Instant snapshotAt
     ) {
-        long expectedPoints = window.duration().toSeconds() / seriesProperties.step().toSeconds() + 1L;
+        Duration step = seriesProperties.stepFor(window);
+        long expectedPoints = window.duration().toSeconds() / step.toSeconds() + 1L;
         if (samples.size() != expectedPoints
                 || !samples.getFirst().observedAt().equals(snapshotAt.minus(window.duration()))
                 || !samples.getLast().observedAt().equals(snapshotAt)) {
             return false;
         }
         for (int index = 1; index < samples.size(); index++) {
-            Instant expectedAt = samples.get(index - 1).observedAt().plus(seriesProperties.step());
+            Instant expectedAt = samples.get(index - 1).observedAt().plus(step);
             if (!samples.get(index).observedAt().equals(expectedAt)) {
                 return false;
             }

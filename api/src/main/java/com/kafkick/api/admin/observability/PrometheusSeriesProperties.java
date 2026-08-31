@@ -1,6 +1,7 @@
 package com.kafkick.api.admin.observability;
 
 import java.time.Duration;
+import java.util.Objects;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -94,16 +95,32 @@ public record PrometheusSeriesProperties(
         // 계약이 두 곳에 걸린다 — 조회 구간은 MetricsWindow 가 정하고 평가점 상한은 여기가 정한다.
         // 어느 한쪽만 바뀌어도 가장 긴 창에서만 조용히 터지므로 기동에서 둘을 함께 본다.
         for (MetricsWindow window : MetricsWindow.values()) {
-            if (window.duration().toSeconds() % step.toSeconds() != 0L) {
+            Duration effectiveStep = effectiveStep(window, step);
+            if (window.duration().toSeconds() % effectiveStep.toSeconds() != 0L) {
                 throw new IllegalArgumentException(
                         "series step은 모든 MetricsWindow 를 나누어야 합니다: " + window);
             }
-            long points = window.duration().toSeconds() / step.toSeconds() + 1L;
+            long points = window.duration().toSeconds() / effectiveStep.toSeconds() + 1L;
             if (points > maxPoints) {
                 throw new IllegalArgumentException(
                         window + " 창의 평가점(" + points + ")이 series max-points(" + maxPoints + ")를 넘습니다.");
             }
         }
+    }
+
+    /**
+     * 조회 창이 기본 평가 간격보다 짧으면 창 전체를 한 평가 간격으로 사용합니다.
+     *
+     * @param window 조회 창
+     * @return 해당 창에서 사용할 평가 간격
+     */
+    public Duration stepFor(MetricsWindow window) {
+        Objects.requireNonNull(window, "window");
+        return effectiveStep(window, step);
+    }
+
+    private static Duration effectiveStep(MetricsWindow window, Duration configuredStep) {
+        return window.duration().compareTo(configuredStep) < 0 ? window.duration() : configuredStep;
     }
 
     /**

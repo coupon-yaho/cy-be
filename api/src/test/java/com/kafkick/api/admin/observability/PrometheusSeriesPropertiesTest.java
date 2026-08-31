@@ -26,6 +26,8 @@ class PrometheusSeriesPropertiesTest {
         assertThat(series.totalBudget()).isGreaterThan(query.totalBudget());
         assertThat(series.connectTimeout()).isGreaterThan(query.connectTimeout());
         assertThat(series.readTimeout()).isGreaterThan(query.readTimeout());
+        assertThat(series.stepFor(MetricsWindow.THREE_SECONDS)).isEqualTo(Duration.ofSeconds(3));
+        assertThat(series.stepFor(MetricsWindow.ONE_MINUTE)).isEqualTo(Duration.ofSeconds(5));
     }
 
     /** 예산은 "새 질의를 시작하지 않는 시점" 이라 최악은 budget + connect + read 다. */
@@ -47,7 +49,7 @@ class PrometheusSeriesPropertiesTest {
     @DisplayName("모든 MetricsWindow 가 step 으로 나누어지고 평가점 상한 안에 든다")
     void everyWindowFitsStepAndMaxPoints(MetricsWindow window) {
         PrometheusSeriesProperties properties = PrometheusSeriesProperties.defaults();
-        long stepSeconds = properties.step().toSeconds();
+        long stepSeconds = properties.stepFor(window).toSeconds();
 
         assertThat(window.duration().toSeconds() % stepSeconds).isZero();
         assertThat(window.duration().toSeconds() / stepSeconds + 1L)

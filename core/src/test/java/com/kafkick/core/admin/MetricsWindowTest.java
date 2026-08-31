@@ -16,6 +16,7 @@ class MetricsWindowTest {
     @Test
     @DisplayName("각 구간의 길이는 이름이 말하는 값과 같다")
     void durationMatchesName() {
+        assertThat(MetricsWindow.THREE_SECONDS.duration()).isEqualTo(Duration.ofSeconds(3));
         assertThat(MetricsWindow.ONE_MINUTE.duration()).isEqualTo(Duration.ofMinutes(1));
         assertThat(MetricsWindow.FIVE_MINUTES.duration()).isEqualTo(Duration.ofMinutes(5));
         assertThat(MetricsWindow.FIFTEEN_MINUTES.duration()).isEqualTo(Duration.ofMinutes(15));

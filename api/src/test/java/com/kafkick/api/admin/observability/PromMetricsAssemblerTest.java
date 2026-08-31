@@ -176,6 +176,18 @@ class PromMetricsAssemblerTest {
         assertThat(rateQuery(oneMinute)).isNotEqualTo(rateQuery(fifteen));
     }
 
+    /** 1초 scrape에서 3초 실시간 창은 마지막 두 표본으로 즉시 RPS를 계산합니다. */
+    @Test
+    @DisplayName("3초 창은 결과 counter를 irate 3초로 계산한다")
+    void threeSecondWindowUsesIrate() {
+        FakePromQuery client = FakePromQuery.empty();
+
+        assemble(client, new MetricsQuery(MetricsWindow.THREE_SECONDS, null, null));
+
+        assertThat(client.queries()).anyMatch(q -> q.startsWith("irate(") && q.contains("[3s]"));
+        assertThat(client.queries()).noneMatch(q -> q.startsWith("rate(") && q.contains("[3s]"));
+    }
+
     // ── 처리량 ──────────────────────────────────────────────────────────────────
 
     /** 결과 Counter 는 인스턴스 값을 더합니다. 발급 경로는 uri 그룹으로 먼저 쪼갠 뒤 집계합니다. */

@@ -1,8 +1,10 @@
 package com.kafkick.storage.db.coupon.repository;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,15 +24,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.support.EncodedResource;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.coupon.domain.Issuance;
+import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
@@ -183,6 +190,153 @@ class CouponIssueRepositoryTest {
         assertThat(historyRow.get("from_status")).isNull();
         assertThat(historyRow.get("to_status")).isEqualTo("ISSUED");
         assertThat(historyRow.get("request_id")).isEqualTo("request-1");
+    }
+
+
+    @Test
+    @DisplayName("DB 세션이 KST여도 재고 갱신 시각은 UTC 축에 저장한다")
+    void storesStockUpdateOnUtcAxisWhenDatabaseSessionIsKst() {
+        transactionTemplate.executeWithoutResult(status -> {
+            jdbcTemplate.execute("SET time_zone = '+09:00'");
+            try {
+                Instant before = Instant.now();
+
+                couponStockRepository.occupyOne(10L, before.minusSeconds(60));
+
+                Instant after = Instant.now();
+                LocalDateTime stored = jdbcTemplate.queryForObject(
+                        "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 10",
+                        LocalDateTime.class
+                );
+                assertThat(stored).isBetween(
+                        LocalDateTime.ofInstant(before, ZoneOffset.UTC),
+                        LocalDateTime.ofInstant(after.plusSeconds(1), ZoneOffset.UTC)
+                );
+            } finally {
+                jdbcTemplate.execute("SET time_zone = '+00:00'");
+            }
+        });
+    }
+
+    @Test
+    @DisplayName("DB 세션이 KST여도 발급 상태 갱신 시각은 UTC 축에 저장한다")
+    void storesIssuanceUpdateOnUtcAxisWhenDatabaseSessionIsKst() {
+        Issuance issuance = issue(1L);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            jdbcTemplate.execute("SET time_zone = '+09:00'");
+            try {
+                Instant before = Instant.now();
+
+                assertThat(issuanceRepository.updateStatusIfCurrent(
+                        issuance.id(), 1L, IssuanceStatus.ISSUED,
+                        IssuanceStatus.USED, before.minusSeconds(60)
+                )).isTrue();
+
+                Instant after = Instant.now();
+                LocalDateTime stored = jdbcTemplate.queryForObject(
+                        "SELECT updated_at FROM issuances WHERE id = ?",
+                        LocalDateTime.class,
+                        issuance.id()
+                );
+                assertThat(stored).isBetween(
+                        LocalDateTime.ofInstant(before, ZoneOffset.UTC),
+                        LocalDateTime.ofInstant(after.plusSeconds(1), ZoneOffset.UTC)
+                );
+            } finally {
+                jdbcTemplate.execute("SET time_zone = '+00:00'");
+            }
+        });
+    }
+
+
+    @Test
+    @DisplayName("UTC 미래인 쿠폰 시각만 보정하고 과거 시각은 보존한다")
+    void repairsOnlyFutureCouponTimestampsOnUtcAxis() {
+        Issuance futureIssuance = issue(1L);
+        Issuance pastIssuance = issue(2L);
+        LocalDateTime past = LocalDateTime.of(2020, 1, 1, 0, 0);
+        LocalDateTime future = LocalDateTime.now(ZoneOffset.UTC).plusHours(9);
+
+        jdbcTemplate.update(
+                """
+                INSERT INTO coupons (
+                    id, template_id, brand_id, name, policy_type,
+                    discount_amount, valid_days, eligible_grades_mask,
+                    open_at, close_at, status, generated_at, created_at
+                )
+                SELECT 11, template_id, brand_id, name, policy_type,
+                       discount_amount, valid_days, eligible_grades_mask,
+                       TIMESTAMPADD(DAY, 1, open_at),
+                       TIMESTAMPADD(DAY, 1, close_at),
+                       status, generated_at, created_at
+                  FROM coupons
+                 WHERE id = 10
+                """
+        );
+        jdbcTemplate.update(
+                """
+                INSERT INTO coupon_stocks (
+                    coupon_id, total_quantity, active_count, updated_at
+                ) VALUES (11, 10, 0, ?)
+                """,
+                past
+        );
+        jdbcTemplate.update(
+                "UPDATE coupon_stocks SET updated_at = ? WHERE coupon_id = 10",
+                future
+        );
+        jdbcTemplate.update(
+                "UPDATE issuances SET updated_at = ? WHERE id = ?",
+                future,
+                futureIssuance.id()
+        );
+        jdbcTemplate.update(
+                "UPDATE issuances SET updated_at = ? WHERE id = ?",
+                past,
+                pastIssuance.id()
+        );
+
+        ClassPathResource migration = new ClassPathResource(
+                "db/migration/V2026083101__repair_future_coupon_timestamps.sql"
+        );
+        assertThat(migration.exists())
+                .as("미래 쿠폰 시각을 보정할 Flyway migration")
+                .isTrue();
+
+        Instant before = Instant.now();
+        jdbcTemplate.execute((ConnectionCallback<Void>) connection -> {
+            ScriptUtils.executeSqlScript(
+                    connection,
+                    new EncodedResource(migration, StandardCharsets.UTF_8)
+            );
+            return null;
+        });
+        Instant after = Instant.now();
+
+        LocalDateTime lower = LocalDateTime.ofInstant(before, ZoneOffset.UTC);
+        LocalDateTime upper = LocalDateTime.ofInstant(
+                after.plusSeconds(1),
+                ZoneOffset.UTC
+        );
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 10",
+                LocalDateTime.class
+        )).isBetween(lower, upper);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM issuances WHERE id = ?",
+                LocalDateTime.class,
+                futureIssuance.id()
+        )).isBetween(lower, upper);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 11",
+                LocalDateTime.class
+        )).isEqualTo(past);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT updated_at FROM issuances WHERE id = ?",
+                LocalDateTime.class,
+                pastIssuance.id()
+        )).isEqualTo(past);
     }
 
     @Test
