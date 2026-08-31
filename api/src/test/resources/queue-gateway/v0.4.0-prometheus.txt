@@ -1,0 +1,21 @@
+# HELP waiting_queue_waiting Current global waiting count.
+# TYPE waiting_queue_waiting gauge
+waiting_queue_waiting 120
+# HELP waiting_snapshot_age Age of the decision snapshot in seconds; negative means unavailable.
+# TYPE waiting_snapshot_age gauge
+waiting_snapshot_age 1
+# HELP waiting_capacity_credit Current global admission credits.
+# TYPE waiting_capacity_credit gauge
+waiting_capacity_credit 250
+# HELP waiting_capacity_nodes Fresh capacity reporter count.
+# TYPE waiting_capacity_nodes gauge
+waiting_capacity_nodes 2
+# HELP waiting_judgement_total Waiting decisions by quality.
+# TYPE waiting_judgement_total counter
+waiting_judgement_total{quality="degraded"} 3
+# HELP waiting_backend_fallback_total Requests completed by the gateway fallback.
+# TYPE waiting_backend_fallback_total counter
+waiting_backend_fallback_total 1
+# HELP waiting_allocation_entered_overshoot_total Admissions above allocation.
+# TYPE waiting_allocation_entered_overshoot_total counter
+waiting_allocation_entered_overshoot_total 0

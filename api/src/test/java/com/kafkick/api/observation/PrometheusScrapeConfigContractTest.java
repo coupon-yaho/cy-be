@@ -17,9 +17,10 @@ import org.junit.jupiter.api.Test;
 /**
  * P-1(CY-213) 이 세운 scrape 설정이 <b>스스로 모순되지 않는지</b>를 본다.
  *
- * <p>이 계약은 네 파일에 걸쳐 있다.
+ * <p>이 계약은 여섯 파일에 걸쳐 있다.
  * <ul>
  *   <li>{@code infra/prometheus/prometheus.yml} — 어느 호스트:포트를 긁을지
+ *   <li>{@code infra/prometheus/targets/queue-gateway.yml[.template]} — 외부 타겟의 비활성 기본값과 배포 템플릿
  *   <li>{@code compose.yml} — 그 호스트 이름을 만드는 곳이자 설정 파일을 마운트하는 곳
  *   <li>{@code api/src/main/resources/management.yml.example} — api 관리 포트 기본값
  *   <li>{@code batch/src/main/resources/management.yml.example} — batch 관리 포트 기본값
@@ -59,16 +60,15 @@ class PrometheusScrapeConfigContractTest {
             List.of("compose.yaml", "docker-compose.yaml", "docker-compose.yml");
 
     @Test
-    @DisplayName("scrape 대상은 api · batch 둘이고 관리 포트를 가리킨다 — 앱 포트로 긁으면 404 다")
-    void bothTargetsPointAtTheManagementPortsDeclaredByEachModule() throws IOException {
+    @DisplayName("scrape 대상은 api · batch · queue-gateway이고 각 수집 계약을 가리킨다")
+    void allTargetsPointAtTheDeclaredScrapeContracts() throws IOException {
         Path repo = repoRoot();
         Map<String, Object> prometheus = loadYaml(repo.resolve("infra/prometheus/prometheus.yml"));
 
         Map<String, String> targets = targetsByJob(prometheus);
         assertThat(targets.keySet())
-                .as("대상이 둘이어야 한다. batch 를 빠뜨리면 정합성 gap · 대기열 길이 ·"
-                        + " Kafka lag 이 통째로 안 들어온다")
-                .containsExactlyInAnyOrder("api", "batch");
+                .as("queue-gateway가 빠지면 대기 인원과 게이트 판정 실패를 운영 관제가 알 수 없다")
+                .containsExactlyInAnyOrder("api", "batch", "queue-gateway");
 
         assertThat(targets.get("api"))
                 .as("api 관리 포트는 management.yml.example 이 정한다. 여기만 고치면 scrape 가"
@@ -80,6 +80,19 @@ class PrometheusScrapeConfigContractTest {
                 .as("batch 관리 포트도 마찬가지다")
                 .isEqualTo("batch:" + managementPortDefault(
                         repo.resolve("batch/src/main/resources/management.yml.example")));
+
+        assertThat(targets.get("queue-gateway"))
+                .as("외부 서버 주소는 배포 환경이 file_sd 파일로 공급한다")
+                .isEqualTo("targets/queue-gateway.yml");
+
+        assertThat(Files.readString(repo.resolve("infra/prometheus/targets/queue-gateway.yml")).strip())
+                .as("기본 Compose에는 외부 게이트웨이가 없으므로 타겟과 알림이 비활성이어야 한다")
+                .isEqualTo("[]");
+
+        assertThat(Files.readString(repo.resolve(
+                "infra/prometheus/targets/queue-gateway.yml.template")))
+                .as("배포자가 외부 주소와 문서화된 8081 포트를 주입할 템플릿이 필요하다")
+                .contains(":8081");
     }
 
     @Test
@@ -113,6 +126,40 @@ class PrometheusScrapeConfigContractTest {
                             + " 이 파일이 그 모듈을 긁고 있는 한 함께 봐야 한다", module, module)
                     .contains("prometheus");
         }
+    }
+
+    @Test
+    @DisplayName("성능 회차 설정은 API 발견 방식만 바꾸고 외부 게이트웨이·알림은 보존한다")
+    void performanceScrapePreservesGatewayAndAlertWiring() throws IOException {
+        Map<String, Object> baseline = loadYaml(
+                repoRoot().resolve("infra/prometheus/prometheus.yml"));
+        Map<String, Object> performance = loadYaml(
+                repoRoot().resolve("perf/env/prometheus.perf.yml"));
+
+        assertThat(performance.get("alerting")).isEqualTo(baseline.get("alerting"));
+        assertThat(performance.get("rule_files")).isEqualTo(baseline.get("rule_files"));
+        assertThat(jobNamed(performance, "queue-gateway"))
+                .as("회차 오버레이가 기본 설정을 덮어쓰므로 게이트웨이 job도 다시 적어야 한다")
+                .isEqualTo(jobNamed(baseline, "queue-gateway"));
+    }
+
+    @Test
+    @DisplayName("기본 Compose에서 Prometheus 알림이 Alertmanager와 sink까지 전달된다")
+    void composeProvidesTheWholeAlertDeliveryPath() throws IOException {
+        Map<String, Object> prometheus = serviceNamed("prometheus");
+        Map<String, Object> alertmanager = serviceNamed("alertmanager");
+        Map<String, Object> sink = serviceNamed("alert-sink");
+
+        assertThat(stringList(prometheus.get("depends_on"))).contains("alertmanager");
+        assertThat(stringList(alertmanager.get("depends_on"))).contains("alert-sink");
+        assertThat(stringList(alertmanager.get("volumes")))
+                .anyMatch(volume -> volume.startsWith(
+                        "./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml"));
+        assertThat(stringList(sink.get("volumes")))
+                .anyMatch(volume -> volume.startsWith(
+                        "./infra/alertmanager/alert-sink.py:/app/alert-sink.py"));
+        assertThat(alertmanager.get("ports")).as("무인증 Alertmanager를 호스트에 열지 않는다").isNull();
+        assertThat(sink.get("ports")).as("목 수신기도 호스트에 열지 않는다").isNull();
     }
 
     // batch 의 관측 풀 ↔ health group 계약은 여기서 보지 않는다. 두 파일 다 batch 소유이고
@@ -316,9 +363,15 @@ class PrometheusScrapeConfigContractTest {
 
         String configFile = flagValue(commandOf(service), "--config.file");
         assertThat(volumes)
-                .as("--config.file 이 가리키는 경로에 우리 prometheus.yml 이 실제로 마운트돼"
-                        + " 있어야 한다. 한쪽만 고치면 컨테이너가 기본 설정으로 뜬다")
-                .anyMatch(v -> v.startsWith("./infra/prometheus/prometheus.yml:" + configFile));
+                .as("--config.file 과 file_sd_configs 가 읽는 설정·target 경로가 실제로 마운트돼"
+                        + " 있어야 한다. 한쪽만 고치면 기본 설정으로 뜨거나 게이트웨이를 못 찾는다")
+                .contains(
+                        "./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro",
+                        "./infra/prometheus/targets:/etc/prometheus/targets:ro");
+
+        assertThat(configFile)
+                .as("명시적으로 마운트한 실제 설정 파일을 가리켜야 한다")
+                .isEqualTo("/etc/prometheus/prometheus.yml");
     }
 
     @Test
@@ -359,13 +412,34 @@ class PrometheusScrapeConfigContractTest {
             assertThat(job.get("metrics_path"))
                     .as("%s — actuator 기본 경로가 아니면 404 다", job.get("job_name"))
                     .isEqualTo("/actuator/prometheus");
+            String jobName = String.valueOf(job.get("job_name"));
+            if (job.containsKey("static_configs")) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> statics =
+                        (List<Map<String, Object>>) job.get("static_configs");
+                byJob.put(jobName, stringList(statics.get(0).get("targets")).get(0));
+                continue;
+            }
+
             @SuppressWarnings("unchecked")
-            List<Map<String, Object>> statics =
-                    (List<Map<String, Object>>) job.get("static_configs");
-            byJob.put(String.valueOf(job.get("job_name")),
-                    stringList(statics.get(0).get("targets")).get(0));
+            List<Map<String, Object>> fileSd =
+                    (List<Map<String, Object>>) job.get("file_sd_configs");
+            assertThat(fileSd)
+                    .as("%s — static target과 file_sd 둘 중 하나는 필요하다", jobName)
+                    .isNotEmpty();
+            byJob.put(jobName, stringList(fileSd.get(0).get("files")).get(0));
         }
         return byJob;
+    }
+
+    private Map<String, Object> jobNamed(Map<String, Object> prometheus, String name) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> jobs =
+                (List<Map<String, Object>>) prometheus.get("scrape_configs");
+        return jobs.stream()
+                .filter(job -> name.equals(String.valueOf(job.get("job_name"))))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("scrape job이 없다: " + name));
     }
 
     /**
