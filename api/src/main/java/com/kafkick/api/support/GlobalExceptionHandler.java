@@ -32,7 +32,16 @@ import com.kafkick.api.admin.benchmark.TopologyValidationException;
 
 /**
  * 모든 에러를 성공 응답과 같은 봉투로 감싼다. HTTP status 는 실제 4xx/5xx 를 유지한다.
- * 응답에는 errorCode 카탈로그 메시지만 담고, 예외 detail 과 스택은 로그에만 남긴다.
+ *
+ * <p><b>응답 메시지가 늘 카탈로그 문구인 것은 아니다.</b> 업무 예외는 {@code errorCode} 의
+ * 카탈로그 메시지를 그대로 쓰지만, 검증 실패는 제약이 선언한 문구를, 헤더 누락은 빠진
+ * 헤더 이름을 싣는다 — 호출자가 <b>무엇을 고쳐야 하는지</b> 응답만 보고 알아야 하는
+ * 자리들이다. 한때 이 문단이 "카탈로그 메시지만 담는다" 고 단정했는데, 그때도 검증
+ * 갈래는 이미 제약 문구를 싣고 있었다.
+ *
+ * <p><b>경계는 "요청에서 온 값" 이다.</b> 예외 detail·스택, 그리고 헤더나 파라미터의
+ * <b>값</b>은 응답에 안 넣고 로그에만 남긴다. 위에서 싣는 것은 전부 코드가 정한 문구이거나
+ * 이름이라 요청 내용을 되비추지 않는다.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
@@ -130,8 +139,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
      * 보내고 발급이 {@code X-Membership-Grade} 를 요구하던 동안, 양쪽 담당자가 이 400 을
      * 각자 한참 들여다봤다. 이름을 맞추는 것으로는 <b>다음번 다른 헤더</b>를 못 막는다.
      *
-     * <p><b>헤더 <i>이름</i>만 싣는다.</b> 값은 회원 식별자나 등급이라 응답에도 로그에도
-     * 넣지 않는다 — 이 처리기의 규칙이 "응답에는 카탈로그 메시지만" 인 이유와 같다.
+     * <p><b>헤더 <i>이름</i>만 싣는다.</b> 이름은 API 계약이라 이미 공개돼 있고, 값은 회원
+     * 식별자나 등급이라 응답에도 로그에도 넣지 않는다 — 위 클래스 주석이 적은 경계
+     * ("요청에서 온 값은 안 되비춘다") 를 그대로 따른다.
      *
      * <p>헤더 누락이 아닌 다른 바인딩 실패(경로 변수·요청 파라미터 등)는 이름을 특정할 수
      * 없으므로 기존 문구를 그대로 쓴다.
