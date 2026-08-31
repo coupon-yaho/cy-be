@@ -577,14 +577,16 @@ services:
       #    설정을 고쳤으면 컨테이너를 재시작한다 — 아래 볼륨 덕분에 데이터는 남는다.
 
     volumes:
-      # prometheus.yml이 상대 경로로 rules/·targets/를 읽으므로 디렉터리 전체를 붙인다.
-      # 읽기 전용. 컨테이너가 제 설정을 덮어쓸 이유가 없다.
-      - ./infra/prometheus:/etc/prometheus:ro
+      # 설정·규칙·외부 target을 각각 명시적으로 붙인다. 모두 읽기 전용이다.
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # ⚠️ **규칙 디렉터리도 마운트해야 한다.** prometheus.yml 의 rule_files 는
       #    `rules/*.yml` 상대 경로라 컨테이너의 /etc/prometheus/rules 를 본다. 없으면
       #    glob 이 0개와 일치하고 **에러 없이 규칙 0건으로 뜬다** — 실측으로 확인했다
       #    (설정만 마운트: /api/v1/rules 가 groups:[], 함께 마운트: 47건).
       #    즉 알림이 조용히 하나도 안 걸린다. PrometheusRulesMountContractTest 가 지킨다.
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
+      # file_sd_configs가 외부 게이트웨이 target 파일을 이 경로에서 읽는다.
+      - ./infra/prometheus/targets:/etc/prometheus/targets:ro
       # ⚠️ named volume 이어야 한다. 컨테이너를 지우면 TSDB 가 같이 사라지고, 부하 회차
       #    데이터가 거기 있다. bind mount 로 바꾸면 호스트 uid 와 nobody(65534)가 어긋나
       #    기동에 실패한다.

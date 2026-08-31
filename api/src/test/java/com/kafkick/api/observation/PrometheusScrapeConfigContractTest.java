@@ -363,12 +363,14 @@ class PrometheusScrapeConfigContractTest {
 
         String configFile = flagValue(commandOf(service), "--config.file");
         assertThat(volumes)
-                .as("--config.file 이 가리키는 경로에 우리 prometheus.yml 이 실제로 마운트돼"
-                        + " 있어야 한다. 한쪽만 고치면 컨테이너가 기본 설정으로 뜬다")
-                .contains("./infra/prometheus:/etc/prometheus:ro");
+                .as("--config.file 과 file_sd_configs 가 읽는 설정·target 경로가 실제로 마운트돼"
+                        + " 있어야 한다. 한쪽만 고치면 기본 설정으로 뜨거나 게이트웨이를 못 찾는다")
+                .contains(
+                        "./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro",
+                        "./infra/prometheus/targets:/etc/prometheus/targets:ro");
 
         assertThat(configFile)
-                .as("디렉터리 마운트 안의 실제 설정 파일을 가리켜야 한다")
+                .as("명시적으로 마운트한 실제 설정 파일을 가리켜야 한다")
                 .isEqualTo("/etc/prometheus/prometheus.yml");
     }
 
