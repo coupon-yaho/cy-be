@@ -3,8 +3,6 @@ package com.kafkick.api.support.auth;
 import java.util.List;
 
 import com.kafkick.core.membership.domain.MembershipGrade;
-import com.kafkick.core.support.exception.BusinessException;
-import com.kafkick.core.support.exception.CommonErrorCode;
 
 /**
  * 회원 등급 헤더 하나를 값으로 바꾸면서 모호한 요청을 걷어냅니다.
@@ -20,10 +18,6 @@ import com.kafkick.core.support.exception.CommonErrorCode;
  * (cy-waiting 의 {@code MemberIdentityFilter}). 따라서 게이트웨이를 거치든 직행이든
  * 서버의 회원 등급 판정은 같은 헤더 하나를 사용합니다.
  *
- * <p><b>다만 CORS 허용 목록에는 옛 이름이 남아 있습니다</b>
- * ({@link MemberRequestHeaders#LEGACY_MEMBER_GRADE}). 프론트가 전환기 동안 두 이름으로
- * 함께 보내는데 허용 목록에서 빼면 요청이 프리플라이트에서 막히기 때문입니다 — <b>값을
- * 읽지 않는 것과 브라우저가 보낼 수 있는 것은 다른 층</b>이라, 읽는 쪽만 하나로 줄였습니다.
  */
 public final class MemberGradeHeaderResolver {
 
@@ -35,23 +29,26 @@ public final class MemberGradeHeaderResolver {
      *
      * @param values {@code X-Member-Grade} 로 실려 온 값들. 없으면 {@code null} 또는 빈 목록
      * @return 판정된 등급
-     * @throws BusinessException 헤더가 없거나 값이 여럿이거나 아는 등급이 아닐 때
+     * @throws RequestHeaderContractException 헤더가 없거나 값이 여럿이거나 아는 등급이 아닐 때.
+     *         그 문구는 <b>응답에 그대로 나갑니다</b> — 호출자가 무엇을 고쳐야 하는지
+     *         응답만 보고 알아야 하는 자리라 카탈로그 문구로 뭉개지 않습니다
      */
     public static MembershipGrade resolve(List<String> values) {
         if (values == null || values.isEmpty()) {
-            throw invalid("회원 등급 헤더가 없습니다.");
+            throw invalid(RequestHeaderContractException.Reason.MISSING_MEMBER_GRADE);
         }
         if (values.size() != 1) {
-            throw invalid("회원 등급 헤더는 하나의 값만 허용합니다.");
+            throw invalid(RequestHeaderContractException.Reason.MULTIPLE_MEMBER_GRADE);
         }
         try {
             return MembershipGrade.valueOf(values.getFirst().trim());
         } catch (IllegalArgumentException exception) {
-            throw invalid("지원하지 않는 회원 등급입니다.");
+            throw invalid(RequestHeaderContractException.Reason.UNKNOWN_MEMBER_GRADE);
         }
     }
 
-    private static BusinessException invalid(String detail) {
-        return new BusinessException(CommonErrorCode.INVALID_INPUT, detail);
+    private static RequestHeaderContractException invalid(
+            RequestHeaderContractException.Reason reason) {
+        return new RequestHeaderContractException(reason);
     }
 }

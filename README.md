@@ -189,8 +189,7 @@ API와 배치는 포트가 겹치지 않는다 — API 는 업무 `8080`·관리
 | 헤더 | 계약 |
 |---|---|
 | `X-Member-Id` | 양의 정수 형식만 검증하며 인증·권한 정본으로 사용하지 않는다 |
-| `X-Member-Grade` | 등급 헤더. **서버가 읽는 이름은 이것 하나다.** 값이 둘 이상 실리면 거부한다 |
-| `X-Membership-Grade` | 옛 이름. **서버는 안 읽는다.** 프론트가 전환기 동안 함께 보내므로 CORS 허용 목록에만 남겨 둔다 — 빼면 프리플라이트에서 요청이 막힌다 |
+| `X-Member-Grade` | 등급 헤더. **이름은 이것 하나다.** 없거나 값이 둘 이상이면 400 이고, 응답이 그 이유를 말한다 |
 | `Idempotency-Key` | 게이트웨이가 덮어쓴 값을 발급 멱등 처리에 사용 |
 | `X-Request-Id` | 안전한 값은 로그·응답에 그대로 사용하고 잘못된 값은 서버 ID로 교체 |
 
@@ -365,6 +364,76 @@ docker compose -f base.yml up                     # DB·관제만. batch 는 안
 DB_HOST=127.0.0.1 ./gradlew :api:bootRun          # ← 마이그레이션. 한 번만 (아래 참조)
 docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올린다
 ```
+
+> ### ⚠️ `compose.yml` 로 띄운다면 Redis 계열 여섯을 다 올린다
+>
+> `compose.yml` 의 api·batch 는 `SPRING_PROFILES_ACTIVE` 에 **`redis-sentinel` 이 박혀
+> 있다.** 그 프로파일은 `redis-sentinel-1..3` 을 찾으므로, `redis` 하나만 띄우면
+> **호스트 이름을 못 찾아 런타임 설정 저장소가 통째로 죽는다.**
+>
+> ```
+> docker compose -p <프로젝트> up -d redis redis-replica-1 redis-replica-2 \
+>                                  redis-sentinel-1 redis-sentinel-2 redis-sentinel-3
+> ```
+>
+> **증상이 원인을 안 가리킨다.** 발급은 멀쩡히 201 인데 관리자 화면만 통째로 안 뜬다 —
+> `GET /api/v1/admin/overview` 가 `503 RUNTIME_CONFIG-004` 를 낸다. 화면 쪽에서는
+> "관리자가 안 뜬다" 하나만 보이므로 프론트부터 뒤지게 된다(실제로 그럴 뻔했다).
+>
+> **띄운 뒤에 `unhealthy` 로 남으면 감시 대상 IP 를 본다.** 센티넬은 호스트 이름이 아니라
+> `REDIS_MASTER_IP` 로 주입된 **IP** 를 감시한다(`.env`, 기본값이 박혀 있다). 그 값이 실제
+> 네트워크 대역과 다르면 마스터 이름만 알고 **replica 도 동료 센티넬도 0** 이라 헬스체크가
+> 계속 실패한다 — 프로세스는 멀쩡히 떠 있어서 로그만 봐서는 안 보인다.
+>
+> ```bash
+> docker inspect <redis 컨테이너> --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+> docker exec <sentinel> redis-cli -p 26379 sentinel get-master-addr-by-name coupon-master
+> ```
+>
+> 둘이 다르면 `REDIS_MASTER_IP` 를 맞추고 **센티넬 데이터 볼륨을 지운 뒤** 다시 만든다.
+> `sentinel.conf` 는 처음 한 번만 생성되고 볼륨에 남으므로, 환경변수만 고쳐서는 안 바뀐다.
+>
+> #### 센티넬 없이 단일 Redis 로 돌리려면
+>
+> **프로파일을 빼는 것만으로는 안 된다.** `api` 와 `batch` 는 `depends_on` 으로 센티넬 셋의
+> `service_healthy` 를 기다리는데, 그것은 환경변수와 무관하게 남는다. 그래서 <b>둘 다</b>
+> 해야 한다 — 프로파일을 빼고, `--no-deps` 로 그 대기를 건너뛴다.
+>
+> 빈 `sentinel.master` 도 Boot 에는 Sentinel 구성이라 환경변수를 비우는 것으로는 단일 모드가
+> 안 된다(`infra/redis/src/main/resources/redis.yml.example` 의 주석). 프로파일을 빼야 한다.
+>
+> ```yaml
+> # 오버레이 파일
+> services:
+>   api:
+>     environment:
+>       SPRING_PROFILES_ACTIVE: api        # redis-sentinel 을 뺀다
+>   batch:
+>     environment:
+>       SPRING_PROFILES_ACTIVE: batch      # 배치도 같은 의존을 갖는다
+> ```
+>
+> ⚠️ **`--no-deps` 는 센티넬만 건너뛰는 것이 아니다.** MySQL 도 함께 건너뛴다 — api 는
+> MySQL 이 healthy 여야 Flyway 가 돌고, batch 는 MySQL 과 api 를 둘 다 기다린다. 그래서
+> **필요한 것을 먼저 손으로 올리고** 마지막에만 의존을 건너뛴다.
+>
+> ```bash
+> # ① 뒷단을 먼저 올린다 (여기는 --no-deps 를 쓰지 않는다)
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d mysql redis
+>
+> # ② mysql 이 healthy 가 될 때까지 기다린다
+> docker compose -p <프로젝트> ps mysql
+>
+> # ③ 센티넬 대기만 건너뛴다. api 를 먼저, batch 를 그다음에
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps api
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps batch
+> ```
+>
+> ③에서 `--no-deps` 를 빼면 센티넬을 기다리다 `dependency failed to start` 로 멈춘다.
+> 반대로 ①을 건너뛰면 api 가 DB 를 못 찾아 죽는다 — **둘 다 필요하다.**
+>
+> api 와 batch 를 한 명령으로 묶지 않는 것도 그래서다. batch 는 `api: service_started` 를
+> 기다리는데 `--no-deps` 가 그것도 건너뛰므로, 순서를 명령으로 세운다.
 
 **배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
 (`POST /api/v1/admin/verify`)와 복구(`/api/v1/admin/expire/runs/**`)가 있는데, **사용자

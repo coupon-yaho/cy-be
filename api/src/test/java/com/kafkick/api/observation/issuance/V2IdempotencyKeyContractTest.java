@@ -75,6 +75,8 @@ class V2IdempotencyKeyContractTest {
                 v2Router(),
                 v2ServiceProvider(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );

@@ -86,6 +86,8 @@ class V2IssueResponseMappingTest {
                 v2Router(),
                 v2ServiceProvider(),
                 meters,
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", 3, 5, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -538,6 +540,8 @@ class V2IssueResponseMappingTest {
                 v2Router(),
                 v2ServiceProvider(),
                 meters,
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", 3, 5, null),
                 timeProvider
         );
