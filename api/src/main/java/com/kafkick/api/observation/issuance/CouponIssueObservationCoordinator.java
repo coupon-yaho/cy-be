@@ -1,5 +1,8 @@
 package com.kafkick.api.observation.issuance;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.CannotAcquireLockException;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -35,6 +38,17 @@ import com.kafkick.core.observation.EngineVersion;
 /** 쿠폰 발급 업무 결과를 바꾸지 않고 요청 단위 관측 수명주기를 연결합니다. */
 @Component
 public final class CouponIssueObservationCoordinator {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(CouponIssueObservationCoordinator.class);
+
+    /**
+     * 락 경합으로 물러설 때 다시 시도하는 총 횟수.
+     *
+     * <p><b>작게 둔다.</b> 데드락은 한쪽이 이미 롤백된 상태라 대개 다음 시도에서 풀린다.
+     * 크게 두면 락이 계속 안 풀리는 진짜 병목을 재시도로 덮어 응답만 느려진다.
+     */
+    private static final int ISSUE_LOCK_MAX_ATTEMPTS = 3;
 
     private final CouponOperationExecutionService operationExecutionService;
     private final IssuanceObservationContextFactory contextFactory;
@@ -111,6 +125,59 @@ public final class CouponIssueObservationCoordinator {
         );
     }
 
+    /**
+     * <b>락 경합으로 물러선 발급을 다시 시도한다.</b>
+     *
+     * <p><b>실측했다.</b> 동시 발급 테스트에서 이 겹을 빼고 여섯 번 돌리면 한 번 실패한다 —
+     * 같은 회차에 발급이 몰리면 MySQL 이 한쪽을 데드락으로 걷어낸다. 다시 시도하지 않으면
+     * 그 요청은 사용자에게 500 이고, 부하 회차의 에러율에 그대로 얹힌다.
+     *
+     * <p><b>다시 시도해도 안전한 이유는 트랜잭션이 하나이기 때문이다.</b>
+     * 발급·이력·재고·멱등 기록이 한 트랜잭션이라 데드락 롤백이 넷을 전부 되돌린다. 멱등
+     * 기록도 안 남으므로 다시 시도해도 <i>"이미 처리된 키"</i> 에 막히지 않고 중복 발급도
+     * 생기지 않는다.
+     *
+     * <h2>왜 core 가 아니라 여기인가</h2>
+     *
+     * <p>{@code CannotAcquireLockException} 은 {@code org.springframework.dao} 이고,
+     * <b>core 는 그 패키지를 참조할 수 없다</b>({@code CoreArchitectureTest} 가 전용 검사로
+     * 막는다). 락 경합은 도메인 규칙이 아니라 인프라 실패 모드라 그 경계가 맞다.
+     *
+     * <p>관측 범위는 시도마다 열지 않는다. 사용자는 요청을 한 번 했고, 이 값은 그 요청의
+     * 체감 시간이다. 다시 시도한 사실은 아래 경고 로그에 남는다.
+     *
+     * <p>V2 는 대상이 아니다 — 경합이 Redis 에서 먼저 걸러지고 DB 쓰기가 짧다. 거기서도
+     * 같은 것이 관측되면 그때 넓힌다. 안 재고 넓히지 않는다.
+     */
+    private CouponIssueExecutionResult issueRetryingOnLockContention(
+            Long couponRoundId,
+            Long memberId,
+            MembershipGrade membershipGrade,
+            String idempotencyKey,
+            ObservationScope observation
+    ) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return operationExecutionService.issueWithMetadata(
+                        couponRoundId,
+                        memberId,
+                        membershipGrade,
+                        idempotencyKey,
+                        observation::recordClaimedAttempt
+                );
+            } catch (CannotAcquireLockException lockLost) {
+                if (attempt >= ISSUE_LOCK_MAX_ATTEMPTS) {
+                    // 계속 못 얻는 것은 경합이 아니라 병목이다. 삼키지 않고 드러낸다.
+                    log.warn("발급이 락 경합으로 {}회 연속 실패했습니다. couponRoundId={} memberId={}",
+                            attempt, couponRoundId, memberId);
+                    throw lockLost;
+                }
+                log.warn("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
+                        attempt, ISSUE_LOCK_MAX_ATTEMPTS, couponRoundId, memberId);
+            }
+        }
+    }
+
     private CouponIssueResult issueV1(
             String requestId,
             Long couponRoundId,
@@ -127,14 +194,8 @@ public final class CouponIssueObservationCoordinator {
                 engineVersion
         );
         try {
-            CouponIssueExecutionResult execution =
-                    operationExecutionService.issueWithMetadata(
-                            couponRoundId,
-                            memberId,
-                            membershipGrade,
-                            idempotencyKey,
-                            observation::recordClaimedAttempt
-                    );
+            CouponIssueExecutionResult execution = issueRetryingOnLockContention(
+                    couponRoundId, memberId, membershipGrade, idempotencyKey, observation);
             if (execution.replayed()) {
                 observation.recordReplayAttempt();
             } else {

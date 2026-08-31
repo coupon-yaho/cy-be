@@ -12,8 +12,10 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import com.kafkick.api.observation.ObservationIssuanceProperties;
 
+import org.springframework.dao.CannotAcquireLockException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -60,6 +62,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -109,6 +112,56 @@ class CouponIssueObservationCoordinatorTest {
                 901L,
                 "api-1"
         );
+    }
+
+    /**
+     * <b>동시 발급이 같은 회차에 몰리면 MySQL 이 한쪽을 데드락으로 걷어낸다.</b> 실측했다 —
+     * 저장소 동시성 테스트에서 재시도를 빼고 여섯 번 돌리면 한 번 실패한다. 다시 시도하지
+     * 않으면 그 요청은 사용자에게 500 이고 부하 회차의 에러율에 그대로 얹힌다.
+     *
+     * <p>발급·이력·재고·멱등 기록이 한 트랜잭션이라 롤백이 넷을 전부 되돌린다. 그래서 다시
+     * 시도해도 막히지 않고 중복도 안 생긴다.
+     */
+    @Test
+    @DisplayName("락 경합으로 물러선 발급은 다시 시도한다")
+    void retriesIssueWhenLockCannotBeAcquired() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        ))
+                .thenThrow(new CannotAcquireLockException("deadlock"))
+                .thenAnswer(invocation -> {
+                    IssueAttemptCallback callback = invocation.getArgument(4);
+                    callback.onPolicyPassed();
+                    return new CouponIssueExecutionResult(issueResult(), false);
+                });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(operationExecutionService, times(2)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
+    /**
+     * <b>계속 못 얻는 것은 경합이 아니라 병목이다.</b> 무한히 다시 시도하면 응답만 느려지고
+     * 원인이 안 드러난다. 상한에서 그대로 던져 밖에서 보이게 한다.
+     */
+    @Test
+    @DisplayName("락 경합이 상한까지 이어지면 그대로 실패시킨다")
+    void stopsRetryingAfterTheAttemptLimit() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(new CannotAcquireLockException("deadlock"));
+
+        assertThatThrownBy(() -> coordinator.issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
+                .isInstanceOf(CannotAcquireLockException.class);
+
+        verify(operationExecutionService, times(3)).issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
     }
 
     @Test
