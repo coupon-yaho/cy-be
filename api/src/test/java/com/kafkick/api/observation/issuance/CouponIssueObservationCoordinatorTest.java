@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import com.kafkick.api.observation.ObservationIssuanceProperties;
@@ -85,6 +86,23 @@ class CouponIssueObservationCoordinatorTest {
 
     private CouponIssueObservationCoordinator coordinator;
     private IssuanceFlowEvent.Ctx context;
+
+    /** 같은 코디네이터를 주어진 레지스트리로 만든다 — 지표를 직접 읽어야 하는 테스트용. */
+    private CouponIssueObservationCoordinator coordinatorWith(MeterRegistry registry) {
+        return new CouponIssueObservationCoordinator(
+                operationExecutionService,
+                contextFactory,
+                observationService,
+                new CouponIssueObservationDependencyMapper(),
+                v1Router(),
+                noV2Service(),
+                new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(registry),
+                IssueLockRetryProperties.defaults(),
+                new ObservationIssuanceProperties(null, "api-1", null, null, null),
+                new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
+        );
+    }
 
     @BeforeEach
     void setUp() {
@@ -194,6 +212,56 @@ class CouponIssueObservationCoordinatorTest {
 
         verify(operationExecutionService, times(1)).issueWithMetadata(
                 eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
+    }
+
+    /**
+     * <b>지표는 요청 단위로 배타여야 한다.</b> 물러섬마다 올리면 두 번 물러선 요청이 둘로
+     * 세어지고, 끝내 실패한 요청이 {@code recovered} 와 {@code exhausted} 에 동시에 들어가
+     * <i>"재시도가 몇 건을 살렸나"</i> 를 계산할 수 없게 된다. 처음에 그렇게 만들었다.
+     */
+    @Test
+    @DisplayName("두 번 물러섰다 성공해도 회복은 요청당 한 번만 센다")
+    void countsRecoveryOncePerRequest() {
+        prepareContext();
+        MeterRegistry registry = new SimpleMeterRegistry();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        ))
+                .thenThrow(new CannotAcquireLockException("deadlock"))
+                .thenThrow(new CannotAcquireLockException("deadlock"))
+                .thenAnswer(invocation -> {
+                    IssueAttemptCallback callback = invocation.getArgument(4);
+                    callback.onPolicyPassed();
+                    return new CouponIssueExecutionResult(issueResult(), false);
+                });
+
+        coordinatorWith(registry).issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY);
+
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "recovered").counter().count()).isEqualTo(1.0);
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "exhausted").counter().count()).isEqualTo(0.0);
+    }
+
+    /** 끝내 실패한 요청은 {@code exhausted} 하나만 센다 — 회복으로도 세면 합이 안 맞는다. */
+    @Test
+    @DisplayName("끝내 실패한 요청은 회복으로 세지 않는다")
+    void doesNotCountExhaustedRequestAsRecovered() {
+        prepareContext();
+        MeterRegistry registry = new SimpleMeterRegistry();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any()
+        )).thenThrow(new CannotAcquireLockException("deadlock"));
+
+        assertThatThrownBy(() -> coordinatorWith(registry).issue(
+                REQUEST_ID, 10L, 20L, MembershipGrade.GOLD, IDEMPOTENCY_KEY))
+                .isInstanceOf(CannotAcquireLockException.class);
+
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "recovered").counter().count()).isEqualTo(0.0);
+        assertThat(registry.get("coupon.issue.lock.retry")
+                .tag("outcome", "exhausted").counter().count()).isEqualTo(1.0);
     }
 
     /**

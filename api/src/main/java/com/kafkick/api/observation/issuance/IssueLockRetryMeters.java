@@ -17,14 +17,16 @@ import io.micrometer.core.instrument.MeterRegistry;
  * <p>두 결말을 가른다.
  *
  * <ul>
- *   <li>{@code recovered} — 물러섰고 다시 시도했다. <b>이 수가 곧 재시도가 없었으면
- *       500 이 됐을 요청 수</b>다</li>
- *   <li>{@code exhausted} — 상한이나 시간 예산까지 갔고 그대로 실패했다. 이 수가 오르면
- *       재시도로 덮을 수 없는 무언가가 있다는 뜻이라 사람이 봐야 한다</li>
+ *   <li>{@code recovered} — 물러섰다가 <b>끝내 성공한 요청</b>. 이 수가 곧 재시도가
+ *       없었으면 500 이 됐을 요청 수다</li>
+ *   <li>{@code exhausted} — 상한이나 시간 예산까지 가서 <b>끝내 실패한 요청</b></li>
  * </ul>
  *
- * <p>둘을 한 이름의 태그로 두는 이유 — 합이 곧 락 경합 총 발생 수다. 이름을 나누면
- * 그 합을 대시보드에서 다시 만들어야 한다.
+ * <p><b>둘 다 요청 단위이고 서로 배타다.</b> 물러섬마다 올리면 두 번 물러선 요청이 둘로
+ * 세어지고, 끝내 실패한 요청이 양쪽에 동시에 들어가 <i>"재시도가 몇 건을 살렸나"</i> 를
+ * 계산할 수 없게 된다. 합은 <b>락 경합을 한 번이라도 만난 요청 수</b>다.
+ *
+ * <p>물러선 <i>횟수</i>가 필요해지면 그때 별도 카운터를 둔다. 지금 이름에 섞지 않는다.
  */
 @Component
 public final class IssueLockRetryMeters {
@@ -46,12 +48,12 @@ public final class IssueLockRetryMeters {
                 .register(registry);
     }
 
-    /** 물러섰고 다시 시도한다. */
+    /** 물러섰다가 끝내 성공했다. 요청당 한 번만 부른다. */
     public void recovered() {
         recovered.increment();
     }
 
-    /** 상한이나 시간 예산까지 갔고 그대로 실패한다. */
+    /** 상한이나 시간 예산까지 가서 끝내 실패했다. 요청당 한 번만 부른다. */
     public void exhausted() {
         exhausted.increment();
     }

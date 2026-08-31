@@ -165,36 +165,65 @@ public final class CouponIssueObservationCoordinator {
     ) {
         int maxAttempts = lockRetryProperties.maxAttempts();
         long deadline = System.nanoTime() + lockRetryProperties.budget().toNanos();
+        // 요청 단위로 센다. 물러섬마다 올리면 두 번 물러선 요청이 둘로 세어지고,
+        // 끝내 실패한 요청이 recovered 와 exhausted 에 동시에 들어간다.
+        boolean retried = false;
         for (int attempt = 1; ; attempt++) {
             try {
-                return operationExecutionService.issueWithMetadata(
+                CouponIssueExecutionResult result = operationExecutionService.issueWithMetadata(
                         couponRoundId,
                         memberId,
                         membershipGrade,
                         idempotencyKey,
                         observation::recordClaimedAttempt
                 );
+                if (retried) {
+                    lockRetryMeters.recovered();
+                }
+                return result;
             } catch (RuntimeException failure) {
                 if (!causedByLockContention(failure)) {
                     throw failure;
                 }
-                if (attempt >= maxAttempts || System.nanoTime() >= deadline) {
-                    // 상한까지 갔다는 사실만 남긴다. 원인이 반복 데드락인지 지속 병목인지는
-                    // 여기서 구분하지 못한다 — 그 판정은 이 로그와 지표를 본 사람이 한다.
-                    lockRetryMeters.exhausted();
-                    log.warn("발급이 락 경합으로 {}회 만에 포기했습니다. couponRoundId={} memberId={}",
-                            attempt, couponRoundId, memberId);
-                    // 바깥 예외를 그대로 보존한다. 어댑터가 붙인 맥락을 벗기지 않는다.
-                    throw failure;
+                long remaining = deadline - System.nanoTime();
+                if (attempt >= maxAttempts || remaining <= 0L) {
+                    throw giveUp(failure, attempt, couponRoundId, memberId);
                 }
-                lockRetryMeters.recovered();
+                retried = true;
                 // 부하 구간에 요청마다 warn 을 찍으면 로그 I/O 가 측정값을 오염시킨다.
                 log.debug("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
                         attempt, maxAttempts, couponRoundId, memberId);
-                LockSupport.parkNanos(ThreadLocalRandom.current()
-                        .nextLong(BACKOFF_MIN_NANOS, BACKOFF_MAX_NANOS));
+                // **남은 예산 안에서만 기다린다.** 예산을 넘겨 자면 깨어난 뒤의 시도가
+                // 락 대기 타임아웃만큼 더 걸려 응답 상한이라는 목적이 무너진다.
+                LockSupport.parkNanos(Math.min(remaining, backoffNanos()));
+                if (System.nanoTime() >= deadline) {
+                    throw giveUp(failure, attempt, couponRoundId, memberId);
+                }
             }
         }
+    }
+
+    /** 물러서는 시간에 지터를 준다. 진 쪽들이 같은 순간에 되돌아와 다시 부딪히지 않게 한다. */
+    private static long backoffNanos() {
+        return ThreadLocalRandom.current().nextLong(BACKOFF_MIN_NANOS, BACKOFF_MAX_NANOS);
+    }
+
+    /**
+     * 상한이나 시간 예산에 닿았다. <b>사실만 남긴다</b> — 원인이 반복 데드락인지 지속
+     * 병목인지는 이 코드가 구분하지 못한다. 그 판정은 로그와 지표를 본 사람이 한다.
+     *
+     * <p>바깥 예외를 그대로 돌려준다. 어댑터가 붙인 맥락을 벗기지 않는다.
+     */
+    private RuntimeException giveUp(
+            RuntimeException failure,
+            int attempt,
+            Long couponRoundId,
+            Long memberId
+    ) {
+        lockRetryMeters.exhausted();
+        log.warn("발급이 락 경합으로 {}회 만에 포기했습니다. couponRoundId={} memberId={}",
+                attempt, couponRoundId, memberId);
+        return failure;
     }
 
     /**
