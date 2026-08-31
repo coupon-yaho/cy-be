@@ -15,15 +15,12 @@ import com.kafkick.core.support.exception.CommonErrorCode;
  *
  * <h2>이름은 하나다</h2>
  *
- * <p>서버가 읽는 이름은 {@code X-Member-Grade} 뿐입니다. 대기열 게이트웨이는 헤더를
- * <b>넣지도 지우지도 않고</b> 이 헤더가 없으면 요청을 거부합니다
- * (cy-waiting 의 {@code MemberIdentityFilter}). 따라서 게이트웨이를 거치든 직행이든
- * 서버의 회원 등급 판정은 같은 헤더 하나를 사용합니다.
+ * <p>이 서버가 회원 등급 판정에 사용하는 이름은 {@code X-Member-Grade} 하나입니다.
+ * 이 헤더가 없거나 값이 여러 개이면 아래 {@link #resolve(List)}가 요청을 거부합니다.
  *
  * <p><b>다만 CORS 허용 목록에는 옛 이름이 남아 있습니다</b>
- * ({@link MemberRequestHeaders#LEGACY_MEMBER_GRADE}). 프론트가 전환기 동안 두 이름으로
- * 함께 보내는데 허용 목록에서 빼면 요청이 프리플라이트에서 막히기 때문입니다 — <b>값을
- * 읽지 않는 것과 브라우저가 보낼 수 있는 것은 다른 층</b>이라, 읽는 쪽만 하나로 줄였습니다.
+ * ({@link MemberRequestHeaders#LEGACY_MEMBER_GRADE}). 이 이름이 요청 헤더에 포함돼도 브라우저의
+ * CORS 프리플라이트를 통과하게 하는 호환 경계이며, 이 리졸버는 그 값을 읽지 않습니다.
  */
 public final class MemberGradeHeaderResolver {
 
