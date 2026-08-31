@@ -29,17 +29,22 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  */
 class DomainGaugeRuntimeConfigTest {
 
+    /**
+     * <b>정본 파일에서 읽는다.</b> 이 값을 {@code application.yml.example} 에서 읽으면 거짓
+     * 보증이 된다 — 그 문서의 Redis 타임아웃은 {@code classpath:redis.yml} import 에 져서
+     * 실행 시 적용되지 않는데, 템플릿만 단독으로 읽는 테스트는 그것을 알아채지 못한다(CY-781).
+     */
     @Test
-    @DisplayName("Redis 타임아웃이 실제 커넥션 팩토리에 800ms 로 먹는다 — 기본값 60초를 대체한다")
+    @DisplayName("Redis 타임아웃이 실제 커넥션 팩토리에 500ms 로 먹는다 — 기본값 60초를 대체한다")
     void redisTimeoutsReachTheConnectionFactory() {
         new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(DataRedisAutoConfiguration.class))
-            .withPropertyValues(committed("spring.data.redis."))
+            .withPropertyValues(committed("redis.yml.example", "spring.data.redis."))
             .run(context -> {
                 LettuceConnectionFactory factory = context.getBean(LettuceConnectionFactory.class);
                 assertThat(factory.getClientConfiguration().getCommandTimeout())
                     .as("5초 주기 수집이 60초를 잡고 있으면 UNAVAILABLE 전환도 안 걸린다")
-                    .isEqualTo(Duration.ofMillis(800))
+                    .isEqualTo(Duration.ofMillis(500))
                     .isLessThan(Duration.ofSeconds(1));
                 assertThat(factory.getPort()).isEqualTo(6379);
             });
@@ -51,7 +56,7 @@ class DomainGaugeRuntimeConfigTest {
         new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(TaskSchedulingAutoConfiguration.class))
             .withUserConfiguration(SchedulingOn.class)
-            .withPropertyValues(committed("spring.task.scheduling."))
+            .withPropertyValues(committed("application.yml.example", "spring.task.scheduling."))
             .run(context -> {
                 ThreadPoolTaskScheduler scheduler = context.getBean(ThreadPoolTaskScheduler.class);
                 assertThat(scheduler.getScheduledThreadPoolExecutor().getCorePoolSize())
@@ -60,13 +65,19 @@ class DomainGaugeRuntimeConfigTest {
             });
     }
 
-    /** 커밋된 템플릿에서 접두사가 같은 키만 골라 {@code key=value} 형태로 돌려준다. */
-    private static String[] committed(String prefix) {
+    /**
+     * 커밋된 템플릿에서 접두사가 같은 키만 골라 {@code key=value} 형태로 돌려준다.
+     *
+     * <p>{@code sentinel.*} 는 뺀다 — {@code redis.yml} 의 그 키들은 프로파일로만 켜지는 별도
+     * 문서에 있고 기본값이 없어, 단일 모드 구성에 섞으면 해석되지 않는 자리표시자가 된다.
+     */
+    private static String[] committed(String resource, String prefix) {
         YamlPropertiesFactoryBean factory = new YamlPropertiesFactoryBean();
-        factory.setResources(new ClassPathResource("application.yml.example"));
+        factory.setResources(new ClassPathResource(resource));
         Properties template = factory.getObject();
         return template.stringPropertyNames().stream()
             .filter(name -> name.startsWith(prefix))
+            .filter(name -> !name.contains(".sentinel."))
             .map(name -> name + "=" + template.getProperty(name))
             .toArray(String[]::new);
     }

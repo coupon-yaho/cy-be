@@ -17,6 +17,8 @@ dependencies {
     api 'io.micrometer:micrometer-core'
 
     implementation 'org.springframework.boot:spring-boot-starter-jackson'
+    implementation 'io.github.resilience4j:resilience4j-circuitbreaker:2.3.0'
+    implementation 'io.github.resilience4j:resilience4j-micrometer:2.3.0'
 
     // 버킷 부재는 Prometheus 레지스트리의 scrape 출력으로만 증명된다. SimpleMeterRegistry 의
     // histogramCounts() 는 histogram(true) 로 바꿔도 비어 있어 가드가 아무것도 증명하지 못했다(실측).
@@ -37,7 +39,13 @@ tasks.named('test') {
     // 검사됐다는 거짓 초록불이 남는다.
     inputs.files(
             file('src/main/resources/redis.yml.example'),
-            rootProject.file('README.md'))
+            file('sentinel.conf'),
+            rootProject.file('README.md'),
+            rootProject.file('compose.yml'),
+            rootProject.file('.env.example'),
+            // 인증 미배선의 정본. SentinelComposeContractTest 가 이 절의 존재와
+            // 세 설정 파일의 참조를 대조하므로, 문서가 바뀌면 다시 돌아야 한다.
+            rootProject.file('docs/12-v2-redis-design.md'))
             .withPropertyName('runtimeConfigBootstrapContractInputs')
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }
