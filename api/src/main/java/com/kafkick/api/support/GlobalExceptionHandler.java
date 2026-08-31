@@ -39,9 +39,17 @@ import com.kafkick.api.admin.benchmark.TopologyValidationException;
  * 자리들이다. 한때 이 문단이 "카탈로그 메시지만 담는다" 고 단정했는데, 그때도 검증
  * 갈래는 이미 제약 문구를 싣고 있었다.
  *
- * <p><b>경계는 "요청에서 온 값" 이다.</b> 예외 detail·스택, 그리고 헤더나 파라미터의
- * <b>값</b>은 응답에 안 넣고 로그에만 남긴다. 위에서 싣는 것은 전부 코드가 정한 문구이거나
- * 이름이라 요청 내용을 되비추지 않는다.
+ * <p><b>어디까지 어디로 가는지는 둘로 갈린다.</b> 섞어 적으면 다음 사람이 요청 값을
+ * 로그에 남겨도 되는 것으로 읽는다.
+ *
+ * <ul>
+ *   <li><b>예외 detail 과 스택</b> — 응답에는 안 넣고 <b>로그에만</b> 남긴다. 업무 예외의
+ *       detail 에는 식별자가 들어 있을 수 있고(예: {@code memberId=…}), 그것이 응답으로
+ *       새지 않는지는 {@code GlobalExceptionHandlerTest} 가 지킨다.</li>
+ *   <li><b>요청 헤더·파라미터의 값</b> — <b>응답에도 로그에도 안 남긴다.</b> 헤더 누락
+ *       갈래가 싣는 것은 헤더 <i>이름</i> 하나뿐이고, 검증 갈래가 싣는 것은 제약이 코드에
+ *       선언한 문구다. 둘 다 요청 내용을 되비추지 않는다.</li>
+ * </ul>
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
