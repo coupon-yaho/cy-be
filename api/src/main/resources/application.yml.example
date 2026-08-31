@@ -89,6 +89,19 @@ api:
     allowed-origins: ${API_CORS_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
 
 coupon:
+  issue:
+    lock-retry:
+      # 발급이 락 경합으로 물러설 때의 한도. 부하 회차 중에 재기동 없이 만져야 해서
+      # 상수로 두지 않는다.
+      #
+      # ⚠️ **횟수만으로는 부족하다.** 스프링은 데드락(1213)과 락 대기 타임아웃(1205)을
+      #    같은 CannotAcquireLockException 으로 번역한다. 데드락은 밀리초 안에 실패해
+      #    예산 안에 다시 들어오지만, 락 대기 타임아웃은 innodb_lock_wait_timeout
+      #    (기본 50초)을 다 쓰고 온다 — 횟수만 두면 그 한 요청이 커넥션을 150초 물고
+      #    있게 되고, 운영 풀이 13이라 열셋이면 통째로 마른다. 첫 실패가 이미 예산을
+      #    넘겼으면 다시 시도하지 않는다.
+      max-attempts: ${COUPON_ISSUE_LOCK_MAX_ATTEMPTS:3}
+      budget: ${COUPON_ISSUE_LOCK_RETRY_BUDGET:500ms}
   definition-cache:
     l1:
       ttl: ${COUPON_DEFINITION_L1_TTL:10s}

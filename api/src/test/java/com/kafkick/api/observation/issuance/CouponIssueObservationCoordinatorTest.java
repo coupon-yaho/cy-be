@@ -96,6 +96,8 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -144,10 +146,6 @@ class CouponIssueObservationCoordinatorTest {
                 eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
     }
 
-    /**
-     * <b>계속 못 얻는 것은 경합이 아니라 병목이다.</b> 무한히 다시 시도하면 응답만 느려지고
-     * 원인이 안 드러난다. 상한에서 그대로 던져 밖에서 보이게 한다.
-     */
     /**
      * <b>운영에서 오는 모양은 감싸인 쪽이다.</b> 저장소 어댑터가 {@code DataAccessException}
      * 을 {@code CouponPersistenceException} 으로 감싸므로, 원본 타입만 잡으면
@@ -198,6 +196,11 @@ class CouponIssueObservationCoordinatorTest {
                 eq(10L), eq(20L), eq(MembershipGrade.GOLD), eq(IDEMPOTENCY_KEY), any());
     }
 
+    /**
+     * <b>상한이나 시간 예산에 닿으면 그대로 던진다.</b> 무한히 다시 시도하면 응답만 느려지고
+     * 원인이 안 드러난다. 원인이 반복 데드락인지 지속 병목인지는 코드가 구분하지 못하므로
+     * 단정하지 않고, 사실(상한까지 갔다)만 로그와 지표에 남긴다.
+     */
     @Test
     @DisplayName("락 경합이 상한까지 이어지면 그대로 실패시킨다")
     void stopsRetryingAfterTheAttemptLimit() {
@@ -762,6 +765,8 @@ class CouponIssueObservationCoordinatorTest {
                 v1Router(),
                 noV2Service(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -808,6 +813,8 @@ class CouponIssueObservationCoordinatorTest {
                         v1Router(),
                         noV2Service(),
                         new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new IssueLockRetryMeters(new SimpleMeterRegistry()),
+                IssueLockRetryProperties.defaults(),
                         new ObservationIssuanceProperties(null, "api-1", null, null, null),
                         timeProvider
                 );

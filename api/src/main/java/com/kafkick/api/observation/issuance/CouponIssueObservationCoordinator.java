@@ -2,11 +2,12 @@ package com.kafkick.api.observation.issuance;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.CannotAcquireLockException;
-import org.springframework.dao.DeadlockLoserDataAccessException;
+import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
@@ -43,13 +44,12 @@ public final class CouponIssueObservationCoordinator {
     private static final Logger log =
             LoggerFactory.getLogger(CouponIssueObservationCoordinator.class);
 
-    /**
-     * 락 경합으로 물러설 때 다시 시도하는 총 횟수.
-     *
-     * <p><b>작게 둔다.</b> 데드락은 한쪽이 이미 롤백된 상태라 대개 다음 시도에서 풀린다.
-     * 크게 두면 락이 계속 안 풀리는 진짜 병목을 재시도로 덮어 응답만 느려진다.
-     */
-    private static final int ISSUE_LOCK_MAX_ATTEMPTS = 3;
+    /** 원인 사슬을 훑는 깊이 상한. 순환 사슬에서 요청 스레드가 갇히지 않게 한다. */
+    private static final int CAUSE_CHAIN_LIMIT = 16;
+
+    /** 다시 시도하기 전 물러서는 시간. 진 쪽들이 같은 순간에 되돌아와 다시 부딪히지 않게 한다. */
+    private static final long BACKOFF_MIN_NANOS = 1_000_000L;
+    private static final long BACKOFF_MAX_NANOS = 5_000_000L;
 
     private final CouponOperationExecutionService operationExecutionService;
     private final IssuanceObservationContextFactory contextFactory;
@@ -58,6 +58,8 @@ public final class CouponIssueObservationCoordinator {
     private final CouponIssuanceRouter router;
     private final ObjectProvider<V2CouponIssueService> v2Services;
     private final V2IssuanceOutcomeMeters v2Meters;
+    private final IssueLockRetryMeters lockRetryMeters;
+    private final IssueLockRetryProperties lockRetryProperties;
     private final ObservationIssuanceProperties issuanceProperties;
     private final TimeProvider timeProvider;
 
@@ -82,6 +84,8 @@ public final class CouponIssueObservationCoordinator {
             CouponIssuanceRouter router,
             ObjectProvider<V2CouponIssueService> v2Services,
             V2IssuanceOutcomeMeters v2Meters,
+            IssueLockRetryMeters lockRetryMeters,
+            IssueLockRetryProperties lockRetryProperties,
             ObservationIssuanceProperties issuanceProperties,
             TimeProvider timeProvider
     ) {
@@ -92,6 +96,8 @@ public final class CouponIssueObservationCoordinator {
         this.router = Objects.requireNonNull(router);
         this.v2Services = Objects.requireNonNull(v2Services);
         this.v2Meters = Objects.requireNonNull(v2Meters);
+        this.lockRetryMeters = Objects.requireNonNull(lockRetryMeters, "lockRetryMeters");
+        this.lockRetryProperties = Objects.requireNonNull(lockRetryProperties, "lockRetryProperties");
         this.issuanceProperties = Objects.requireNonNull(issuanceProperties);
         this.timeProvider = Objects.requireNonNull(timeProvider);
     }
@@ -157,6 +163,8 @@ public final class CouponIssueObservationCoordinator {
             String idempotencyKey,
             ObservationScope observation
     ) {
+        int maxAttempts = lockRetryProperties.maxAttempts();
+        long deadline = System.nanoTime() + lockRetryProperties.budget().toNanos();
         for (int attempt = 1; ; attempt++) {
             try {
                 return operationExecutionService.issueWithMetadata(
@@ -170,16 +178,21 @@ public final class CouponIssueObservationCoordinator {
                 if (!causedByLockContention(failure)) {
                     throw failure;
                 }
-                if (attempt >= ISSUE_LOCK_MAX_ATTEMPTS) {
+                if (attempt >= maxAttempts || System.nanoTime() >= deadline) {
                     // 상한까지 갔다는 사실만 남긴다. 원인이 반복 데드락인지 지속 병목인지는
-                    // 여기서 구분하지 못한다 — 그 판정은 이 로그를 본 사람이 한다.
-                    log.warn("발급이 락 경합으로 {}회 연속 실패했습니다. couponRoundId={} memberId={}",
+                    // 여기서 구분하지 못한다 — 그 판정은 이 로그와 지표를 본 사람이 한다.
+                    lockRetryMeters.exhausted();
+                    log.warn("발급이 락 경합으로 {}회 만에 포기했습니다. couponRoundId={} memberId={}",
                             attempt, couponRoundId, memberId);
                     // 바깥 예외를 그대로 보존한다. 어댑터가 붙인 맥락을 벗기지 않는다.
                     throw failure;
                 }
-                log.warn("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
-                        attempt, ISSUE_LOCK_MAX_ATTEMPTS, couponRoundId, memberId);
+                lockRetryMeters.recovered();
+                // 부하 구간에 요청마다 warn 을 찍으면 로그 I/O 가 측정값을 오염시킨다.
+                log.debug("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
+                        attempt, maxAttempts, couponRoundId, memberId);
+                LockSupport.parkNanos(ThreadLocalRandom.current()
+                        .nextLong(BACKOFF_MIN_NANOS, BACKOFF_MAX_NANOS));
             }
         }
     }
@@ -197,14 +210,15 @@ public final class CouponIssueObservationCoordinator {
      * 넓게 잡아 아무 실패나 재시도하면 진짜 결함을 세 번 반복하고 응답만 느려진다.
      */
     private static boolean causedByLockContention(Throwable failure) {
-        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof CannotAcquireLockException
-                    || cause instanceof DeadlockLoserDataAccessException) {
+        Throwable cause = failure;
+        for (int depth = 0; cause != null && depth < CAUSE_CHAIN_LIMIT; depth++) {
+            if (cause instanceof PessimisticLockingFailureException) {
                 return true;
             }
             if (cause.getCause() == cause) {
                 return false;
             }
+            cause = cause.getCause();
         }
         return false;
     }
