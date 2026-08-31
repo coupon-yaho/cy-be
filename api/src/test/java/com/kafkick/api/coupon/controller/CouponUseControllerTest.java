@@ -15,7 +15,7 @@ import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.dto.request.CouponUseRequest;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
-import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.api.coupon.service.CouponOperationRetryingExecutor;
 import com.kafkick.core.coupon.service.result.CouponUseResult;
 import com.kafkick.core.support.TimeProvider;
 
@@ -42,7 +42,7 @@ class CouponUseControllerTest {
     private MockMvc mockMvc;
 
     @MockitoBean
-    private CouponOperationExecutionService executionService;
+    private CouponOperationRetryingExecutor executionService;
 
     @MockitoBean
     private TimeProvider timeProvider;

@@ -20,6 +20,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import com.kafkick.api.observation.MeterNames;
 import com.kafkick.api.observation.ObservationIssuanceProperties;
 import com.kafkick.api.support.RetryAfterException;
+import com.kafkick.api.support.lock.LockContentionRetry;
+import com.kafkick.api.support.lock.LockRetryMeters;
+import com.kafkick.api.support.lock.LockRetryProperties;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponIssueV2ErrorCode;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
@@ -86,8 +89,7 @@ class V2IssueResponseMappingTest {
                 v2Router(),
                 v2ServiceProvider(),
                 meters,
-                new IssueLockRetryMeters(new SimpleMeterRegistry()),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(new SimpleMeterRegistry()), LockRetryProperties.defaults()),
                 new ObservationIssuanceProperties(null, "api-1", 3, 5, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
@@ -540,8 +542,7 @@ class V2IssueResponseMappingTest {
                 v2Router(),
                 v2ServiceProvider(),
                 meters,
-                new IssueLockRetryMeters(new SimpleMeterRegistry()),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(new SimpleMeterRegistry()), LockRetryProperties.defaults()),
                 new ObservationIssuanceProperties(null, "api-1", 3, 5, null),
                 timeProvider
         );

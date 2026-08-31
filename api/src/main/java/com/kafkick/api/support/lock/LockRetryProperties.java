@@ -1,4 +1,4 @@
-package com.kafkick.api.observation.issuance;
+package com.kafkick.api.support.lock;
 
 import java.time.Duration;
 
@@ -30,8 +30,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *         <b>바인딩에서 던지므로 기동이 중단된다</b> — 잘못된 값으로 뜬 채 부하를 받는 것보다
  *         그 자리에서 이름을 대고 죽는 편이 낫다
  */
-@ConfigurationProperties(prefix = "coupon.issue.lock-retry")
-public record IssueLockRetryProperties(
+@ConfigurationProperties(prefix = "coupon.lock-retry")
+public record LockRetryProperties(
         Integer maxAttempts,
         Duration budget
 ) {
@@ -50,7 +50,7 @@ public record IssueLockRetryProperties(
      */
     static final Duration BUDGET_LIMIT = Duration.ofSeconds(10);
 
-    public IssueLockRetryProperties {
+    public LockRetryProperties {
         maxAttempts = maxAttempts == null ? DEFAULT_MAX_ATTEMPTS : maxAttempts;
         if (maxAttempts < 1 || maxAttempts > MAX_ATTEMPTS_LIMIT) {
             throw new IllegalArgumentException(
@@ -64,7 +64,7 @@ public record IssueLockRetryProperties(
     }
 
     /** 기본값 그대로. 테스트가 값을 안 바꿀 때 쓴다. */
-    public static IssueLockRetryProperties defaults() {
-        return new IssueLockRetryProperties(null, null);
+    public static LockRetryProperties defaults() {
+        return new LockRetryProperties(null, null);
     }
 }

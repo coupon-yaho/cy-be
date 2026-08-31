@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,6 +91,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class CouponUseRepositoryTest {
+
+    /** 락 경합에 물러서는 상한. 발급 쪽 검사와 같은 값이다. */
+    private static final int DEADLOCK_MAX_ATTEMPTS = 3;
 
     private static final long TIMEOUT_SECONDS = 30;
     private static final String IDEMPOTENCY_KEY =
@@ -1140,18 +1144,68 @@ class CouponUseRepositoryTest {
         );
     }
 
+    /**
+     * 락 경합이면 물러섰다가 다시 한다. <b>운영이 하는 것과 같은 처치를 검사 쪽에도 둔다.</b>
+     *
+     * <p>열 스레드가 같은 멱등 행과 같은 재고 행을 동시에 친다. 그 조건에서 MySQL 이
+     * 데드락 피해자를 고르는 것은 결함이 아니라 정상 동작이고, 운영에서는
+     * {@code LockContentionRetry} 가 그걸 받아 다시 한다. 검사만 그 처치가 없으면
+     * <b>운영에서 안 나는 실패가 CI 에서만 난다</b> — 실제로 그렇게 깨졌다.
+     *
+     * <p>선점과 처리 <b>양쪽</b>을 감싼다. 어느 쪽이 피해자로 뽑혔는지는 CI 로그만으로
+     * 가려내지 못했고, 국소 재현도 안 됐다(같은 검사를 여기서 여러 번 돌려도 다 통과했다).
+     * 둘 다 같은 행을 두고 다투므로 한쪽만 감싸면 남은 쪽에서 같은 증상이 다시 난다.
+     *
+     * <p><b>계속되는 락 장애까지 숨기지는 않는다</b> — 상한에 닿으면 그대로 던진다.
+     * 발급 쪽 {@code CouponIssueRepositoryTest} 도 같은 방식이다.
+     */
+    private static <T> T withLockRetry(Supplier<T> action) {
+        for (int attempt = 1; attempt <= DEADLOCK_MAX_ATTEMPTS; attempt++) {
+            try {
+                return action.get();
+            } catch (RuntimeException exception) {
+                if (!isLockContention(exception) || attempt == DEADLOCK_MAX_ATTEMPTS) {
+                    throw exception;
+                }
+                Thread.yield();
+            }
+        }
+        throw new IllegalStateException("도달할 수 없는 데드락 재시도 상태입니다.");
+    }
+
+    /**
+     * <b>원인 사슬을 훑는다.</b> 저장소 어댑터가 {@code DataAccessException} 을
+     * {@code IdempotencyPersistenceException} 으로 감싸므로 바깥 타입만 보면 못 잡는다.
+     * CI 가 남긴 사슬이 정확히 그 모양이었다 —
+     * {@code IdempotencyPersistenceException → CannotAcquireLockException →
+     * MySQLTransactionRollbackException}.
+     */
+    private static boolean isLockContention(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof CannotAcquireLockException) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                return false;
+            }
+        }
+        return false;
+    }
+
     private String processIdempotentRequest(CountDownLatch completed)
             throws InterruptedException {
-        boolean firstRequest = Boolean.TRUE.equals(transactionTemplate.execute(
-                status -> idempotencyRepository.tryStart(
-                        IDEMPOTENCY_KEY,
-                        REQUEST_HASH,
-                        USED_AT
+        boolean firstRequest = Boolean.TRUE.equals(withLockRetry(
+                () -> transactionTemplate.execute(
+                        status -> idempotencyRepository.tryStart(
+                                IDEMPOTENCY_KEY,
+                                REQUEST_HASH,
+                                USED_AT
+                        )
                 )
         ));
         if (firstRequest) {
             try {
-                return transactionTemplate.execute(status -> {
+                return withLockRetry(() -> transactionTemplate.execute(status -> {
                     couponUseService.use(command(IDEMPOTENCY_KEY));
                     idempotencyRepository.complete(
                             IDEMPOTENCY_KEY,
@@ -1161,7 +1215,7 @@ class CouponUseRepositoryTest {
                             USED_AT
                     );
                     return "stored-response";
-                });
+                }));
             } finally {
                 completed.countDown();
             }

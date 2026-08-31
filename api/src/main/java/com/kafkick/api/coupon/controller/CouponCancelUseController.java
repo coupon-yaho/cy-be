@@ -12,16 +12,16 @@ import com.kafkick.api.coupon.http.CouponRequestHeaders;
 import com.kafkick.api.support.auth.MemberRequestHeaders;
 import com.kafkick.api.coupon.dto.response.CouponCancelUseResponse;
 import com.kafkick.api.support.ResponseEnvelope;
-import com.kafkick.core.coupon.service.CouponOperationExecutionService;
+import com.kafkick.api.coupon.service.CouponOperationRetryingExecutor;
 
 @RestController
 @RequestMapping("/api/v1/coupons")
 public class CouponCancelUseController {
 
-    private final CouponOperationExecutionService executionService;
+    private final CouponOperationRetryingExecutor executionService;
 
     public CouponCancelUseController(
-            CouponOperationExecutionService executionService
+            CouponOperationRetryingExecutor executionService
     ) {
         this.executionService = executionService;
     }

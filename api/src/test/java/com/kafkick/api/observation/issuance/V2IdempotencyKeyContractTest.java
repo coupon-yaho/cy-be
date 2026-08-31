@@ -14,6 +14,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.ObjectProvider;
 
 import com.kafkick.api.observation.ObservationIssuanceProperties;
+import com.kafkick.api.support.lock.LockContentionRetry;
+import com.kafkick.api.support.lock.LockRetryMeters;
+import com.kafkick.api.support.lock.LockRetryProperties;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.service.CouponOperationExecutionService;
@@ -75,8 +78,7 @@ class V2IdempotencyKeyContractTest {
                 v2Router(),
                 v2ServiceProvider(),
                 new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
-                new IssueLockRetryMeters(new SimpleMeterRegistry()),
-                IssueLockRetryProperties.defaults(),
+                new LockContentionRetry(new LockRetryMeters(new SimpleMeterRegistry()), LockRetryProperties.defaults()),
                 new ObservationIssuanceProperties(null, "api-1", null, null, null),
                 new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
