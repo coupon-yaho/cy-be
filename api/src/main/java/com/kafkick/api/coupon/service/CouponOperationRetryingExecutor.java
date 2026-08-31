@@ -41,8 +41,13 @@ import com.kafkick.core.coupon.service.result.CouponUseResult;
  * 선점한다.
  *
  * <p>푸는 것까지 실패하면(그 예외는 원래 예외에 suppressed 로 붙는다) 선점이 남고 다음
- * 시도는 {@code CONFLICT_IN_PROGRESS} 를 받는다. 그 경우는 재시도가 아니라
- * {@code stale-after} 회수가 처리한다.
+ * 시도는 {@code CONFLICT_IN_PROGRESS} 를 받는다. <b>그때는 "처리된다" 가 아니라
+ * "잠긴다" 로 적어야 맞다</b> — {@code stale-after} 가 <b>30초</b>이므로, 그 사이 같은
+ * 멱등키로 다시 눌러도 계속 409 다. {@code release} 는 방금 데드락이 난 바로 그 행을
+ * 다시 지우는 것이라 같은 경합 구간에서 실패할 수 있다.
+ *
+ * <p>그 결말은 {@code coupon.lock.retry} 의 {@code abandoned} 로 잡힌다 — 물러섰는데
+ * 락 경합이 아닌 실패로 끝난 요청이다. 이 값이 0 이 아니면 위 잠금을 의심한다.
  */
 @Service
 public class CouponOperationRetryingExecutor {

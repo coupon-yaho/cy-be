@@ -23,6 +23,19 @@ public final class LockRetryOperations {
      */
     public static final List<String> ALL = List.of(ISSUE, USE, CANCEL_USE, CANCEL);
 
+    /**
+     * {@code outcome} 태그로 나갈 값 전부. <b>셋이라야 합이 맞는다</b> — 물러선 요청은
+     * 성공(recovered)·소진(exhausted) 말고 <b>다른 실패로 끝나는 셋째 결말</b>이 있다.
+     * 사용·취소에서는 그게 드문 일도 아니다: 경합에서 진 뒤 다시 하면 상대가 이미 상태를
+     * 바꿔 놨을 수 있고, 그때는 락 경합이 아니라 전이 거절로 끝난다.
+     */
+    public static final String RECOVERED = "recovered";
+    public static final String EXHAUSTED = "exhausted";
+    public static final String ABANDONED = "abandoned";
+
+    /** 위 셋 전부. 미터가 이걸 훑어 경로마다 미리 등록한다. */
+    public static final List<String> OUTCOMES = List.of(RECOVERED, EXHAUSTED, ABANDONED);
+
     private LockRetryOperations() {
     }
 }

@@ -22,7 +22,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.data.auditing.DateTimeProvider;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -60,6 +59,7 @@ import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.storage.db.LockContentionRetries;
 import com.kafkick.storage.db.RepositoryTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -85,7 +85,6 @@ import static org.mockito.Mockito.when;
 class CouponIssueRepositoryTest {
 
     private static final long TIMEOUT_SECONDS = 30;
-    private static final int DEADLOCK_MAX_ATTEMPTS = 3;
     private static final Instant ISSUED_AT =
             Instant.parse("2026-08-18T05:30:00Z");
     private static final Instant AUDIT_CREATED_AT =
@@ -577,51 +576,10 @@ class CouponIssueRepositoryTest {
         }
     }
 
-    /** 운영과 같은 판별 — 어댑터가 감싼 것까지 사슬로 본다. */
-    private static boolean isLockContention(Throwable failure) {
-        for (Throwable c = failure; c != null; c = c.getCause()) {
-            if (c instanceof CannotAcquireLockException) {
-                return true;
-            }
-            if (c.getCause() == c) {
-                return false;
-            }
-        }
-        return false;
-    }
 
-    /**
-     * <b>운영이 하는 일을 이 테스트가 대신한다.</b>
-     *
-     * <p>이 테스트는 {@code CouponIssueService.issue} 를 직접 부른다. 그 메서드는
-     * {@code @Transactional} 이라 <b>그 안에서는 다시 시도할 수 없고</b>, 운영에서 다시
-     * 시도하는 자리는 트랜잭션 바깥인 {@code CouponIssueObservationCoordinator} 다.
-     * 즉 이 헬퍼가 없으면 <b>운영에는 있는 겹이 테스트에만 없는 상태</b>가 된다.
-     *
-     * <p><b>재시도가 무엇을 가리는지도 재 뒀다.</b> 이 겹을 빼고 열아홉 번 돌리면 한 번
-     * 실패한다 — 동시 발급이 같은 회차에 몰릴 때 MySQL 이 한쪽을 데드락으로 걷어내기
-     * 때문이다. 그것을 운영에서 다루는 것이 위 재시도이고, 여기서는 같은 횟수·같은 판별로 흉내 낸다
-     * — 어댑터가 감싼 것까지 사슬로 본다.
-     *
-     * <p>상한까지 실패하면 그대로 던진다. 계속되는 락 장애까지 성공으로 숨기지 않는다 —
-     * 운영 쪽 상한과 같은 판단이다.
-     */
+    /** 락 경합이면 물러섰다 다시 한다. 술어·백오프는 {@link LockContentionRetries} 하나뿐이다. */
     private Issuance issueWithDeadlockRetry(Long memberId) {
-        for (int attempt = 1; attempt <= DEADLOCK_MAX_ATTEMPTS; attempt++) {
-            try {
-                return issue(memberId);
-            } catch (RuntimeException exception) {
-                if (!isLockContention(exception)) {
-                    throw exception;
-                }
-                if (attempt == DEADLOCK_MAX_ATTEMPTS) {
-                    // 계속되는 락 장애까지 성공으로 숨기지 않는다.
-                    throw exception;
-                }
-                Thread.yield();
-            }
-        }
-        throw new IllegalStateException("도달할 수 없는 데드락 재시도 상태입니다.");
+        return LockContentionRetries.withRetry(() -> issue(memberId));
     }
 
     @Test

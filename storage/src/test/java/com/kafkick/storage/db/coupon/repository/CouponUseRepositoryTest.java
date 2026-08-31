@@ -15,7 +15,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Supplier;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,11 +38,19 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
+import java.time.Duration;
+import com.kafkick.core.coupon.exception.CouponUseErrorCode;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyClaimService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
+import com.kafkick.core.coupon.service.idempotency.IdempotencyPolicy;
+import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.coupon.domain.IdempotencyRecord;
 import com.kafkick.core.coupon.domain.IdempotencyStatus;
 import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.expiration.ExpirationRepository;
 import com.kafkick.core.expiration.ExpireCandidate;
+import com.kafkick.storage.db.LockContentionRetries;
 import com.kafkick.storage.db.expiration.ExpirationJdbcAdapter;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.membership.domain.MembershipGrade;
@@ -91,9 +98,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class CouponUseRepositoryTest {
-
-    /** 락 경합에 물러서는 상한. 발급 쪽 검사와 같은 값이다. */
-    private static final int DEADLOCK_MAX_ATTEMPTS = 3;
 
     private static final long TIMEOUT_SECONDS = 30;
     private static final String IDEMPOTENCY_KEY =
@@ -461,6 +465,72 @@ class CouponUseRepositoryTest {
                         reclaimedAt
                 )
         );
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM idempotency_records WHERE idem_key = ?",
+                String.class,
+                IDEMPOTENCY_KEY
+        )).isEqualTo("DONE");
+    }
+
+    /**
+     * <b>이 PR 의 안전성 논거를 실제 DB 로 태운다.</b>
+     *
+     * <p>사용·취소의 재시도가 안전한 이유는 하나뿐이다 — 처리가 예외로 끝나면
+     * {@code IdempotencyExecutionService} 가 자기 선점을 풀어 주므로 다음 시도가 처음처럼
+     * 선점한다. 그 논거가 산문으로만 서 있으면, 누군가 {@code release} 를 삭제 대신
+     * {@code UPDATE ... status='FAILED'} 로 바꾸는 순간 <b>락 경합 한 번이 사용자에게
+     * 30초짜리 409 잠금</b>이 되는데 아무 검사도 안 깨진다.
+     *
+     * <p>그래서 목을 쓰지 않는다. 실제 {@code IdempotencyExecutionService} 와 실제 저장소로
+     * 첫 시도를 감싸인 락 경합으로 죽이고, 운영과 같은 술어로 다시 시도한다.
+     *
+     * <p>단언 셋이 함께 서야 한다 — 응답을 받았고, 사용은 <b>정확히 한 번만</b> 일어났고,
+     * 멱등 기록이 {@code DONE} 이다. 선점이 안 풀렸다면 두 번째 시도가
+     * {@code CONFLICT_IN_PROGRESS} 로 끝나 첫 단언에서 걸린다.
+     */
+    @Test
+    @DisplayName("처리가 락 경합으로 죽으면 선점이 풀려 다시 시도가 처음처럼 선점한다")
+    void releasedClaimLetsTheRetryStartOver() {
+        IdempotencyExecutionService execution = new IdempotencyExecutionService(
+                new IdempotencyClaimService(idempotencyRepository),
+                new TimeProvider(Clock.fixed(USED_AT, ZoneOffset.UTC)),
+                new IdempotencyPolicy(
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(30)
+                )
+        );
+        AtomicInteger attempts = new AtomicInteger();
+
+        String response = LockContentionRetries.withRetry(() -> execution.execute(
+                IDEMPOTENCY_KEY,
+                () -> REQUEST_HASH,
+                CouponUseErrorCode.INVALID_COUPON_USE_REQUEST,
+                requestAt -> transactionTemplate.execute(status -> {
+                    if (attempts.incrementAndGet() == 1) {
+                        // 어댑터가 감싼 모양 그대로 — 운영에서 오는 것이 이 모양이다.
+                        throw new IdempotencyPersistenceException(
+                                "멱등 기록 저장에 실패했습니다.",
+                                new CannotAcquireLockException("Deadlock found"));
+                    }
+                    couponUseService.use(command(IDEMPOTENCY_KEY));
+                    idempotencyRepository.complete(
+                            IDEMPOTENCY_KEY, 20L, 100L, "stored-response", USED_AT);
+                    return "stored-response";
+                }),
+                stored -> stored
+        ));
+
+        assertThat(response)
+                .as("선점이 안 풀렸으면 두 번째 시도가 CONFLICT_IN_PROGRESS 로 끝난다")
+                .isEqualTo("stored-response");
+        assertThat(attempts.get())
+                .as("한 번에 성공했으면 이 검사는 아무것도 안 태운 것이다")
+                .isEqualTo(2);
+        assertThat(countRows("issuance_usages"))
+                .as("선점만 풀리고 사용이 두 번 남으면 이중 사용이다")
+                .isEqualTo(1);
+        assertThat(countUseHistories()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT status FROM idempotency_records WHERE idem_key = ?",
                 String.class,
@@ -1144,57 +1214,9 @@ class CouponUseRepositoryTest {
         );
     }
 
-    /**
-     * 락 경합이면 물러섰다가 다시 한다. <b>운영이 하는 것과 같은 처치를 검사 쪽에도 둔다.</b>
-     *
-     * <p>열 스레드가 같은 멱등 행과 같은 재고 행을 동시에 친다. 그 조건에서 MySQL 이
-     * 데드락 피해자를 고르는 것은 결함이 아니라 정상 동작이고, 운영에서는
-     * {@code LockContentionRetry} 가 그걸 받아 다시 한다. 검사만 그 처치가 없으면
-     * <b>운영에서 안 나는 실패가 CI 에서만 난다</b> — 실제로 그렇게 깨졌다.
-     *
-     * <p>선점과 처리 <b>양쪽</b>을 감싼다. 어느 쪽이 피해자로 뽑혔는지는 CI 로그만으로
-     * 가려내지 못했고, 국소 재현도 안 됐다(같은 검사를 여기서 여러 번 돌려도 다 통과했다).
-     * 둘 다 같은 행을 두고 다투므로 한쪽만 감싸면 남은 쪽에서 같은 증상이 다시 난다.
-     *
-     * <p><b>계속되는 락 장애까지 숨기지는 않는다</b> — 상한에 닿으면 그대로 던진다.
-     * 발급 쪽 {@code CouponIssueRepositoryTest} 도 같은 방식이다.
-     */
-    private static <T> T withLockRetry(Supplier<T> action) {
-        for (int attempt = 1; attempt <= DEADLOCK_MAX_ATTEMPTS; attempt++) {
-            try {
-                return action.get();
-            } catch (RuntimeException exception) {
-                if (!isLockContention(exception) || attempt == DEADLOCK_MAX_ATTEMPTS) {
-                    throw exception;
-                }
-                Thread.yield();
-            }
-        }
-        throw new IllegalStateException("도달할 수 없는 데드락 재시도 상태입니다.");
-    }
-
-    /**
-     * <b>원인 사슬을 훑는다.</b> 저장소 어댑터가 {@code DataAccessException} 을
-     * {@code IdempotencyPersistenceException} 으로 감싸므로 바깥 타입만 보면 못 잡는다.
-     * CI 가 남긴 사슬이 정확히 그 모양이었다 —
-     * {@code IdempotencyPersistenceException → CannotAcquireLockException →
-     * MySQLTransactionRollbackException}.
-     */
-    private static boolean isLockContention(Throwable failure) {
-        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-            if (cause instanceof CannotAcquireLockException) {
-                return true;
-            }
-            if (cause.getCause() == cause) {
-                return false;
-            }
-        }
-        return false;
-    }
-
     private String processIdempotentRequest(CountDownLatch completed)
             throws InterruptedException {
-        boolean firstRequest = Boolean.TRUE.equals(withLockRetry(
+        boolean firstRequest = Boolean.TRUE.equals(LockContentionRetries.withRetry(
                 () -> transactionTemplate.execute(
                         status -> idempotencyRepository.tryStart(
                                 IDEMPOTENCY_KEY,
@@ -1205,7 +1227,7 @@ class CouponUseRepositoryTest {
         ));
         if (firstRequest) {
             try {
-                return withLockRetry(() -> transactionTemplate.execute(status -> {
+                return LockContentionRetries.withRetry(() -> transactionTemplate.execute(status -> {
                     couponUseService.use(command(IDEMPOTENCY_KEY));
                     idempotencyRepository.complete(
                             IDEMPOTENCY_KEY,

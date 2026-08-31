@@ -1,0 +1,7 @@
+# EnvironmentPostProcessor 는 컴포넌트 스캔이 아니라 여기로 등록된다 — 빈이 하나도
+# 만들어지기 전에 돌아야 하기 때문이다. core 의 DeployedConfigGuard 와 같은 이유다.
+#
+# ⚠️ 키가 org.springframework.boot.EnvironmentPostProcessor 다. Boot 4 에서 이 인터페이스가
+#    org.springframework.boot.env 에서 옮겨졌고, 옛 키로 적으면 오류 없이 그냥 안 불린다.
+org.springframework.boot.EnvironmentPostProcessor=\
+  com.kafkick.api.support.lock.RenamedLockRetryKeyGuard

@@ -17,8 +17,13 @@ import org.springframework.stereotype.Component;
  *
  * <p>처음에는 발급 경로에만 두었다. 그런데 사용 경로가 CI 에서 같은 증상으로 깨졌다 —
  * 같은 멱등키로 열 번 동시에 누르면 {@code MySQLTransactionRollbackException} 이 올라온다.
- * 네 경로가 결국 <b>같은 재고 행과 같은 멱등 행</b>을 치므로, 판별 기준과 물러서는 방식이
+ * 네 경로가 결국 <b>같은 멱등 행과 같은 발급 행</b>을 치므로, 판별 기준과 물러서는 방식이
  * 갈리면 한쪽만 고쳐 두고 나머지는 못 고친 채로 남는다.
+ *
+ * <p><b>재고 행은 넷이 다 치지 않는다.</b> 재서 확인했다 — {@code CouponUseService} 는
+ * {@code CouponStockRepository} 를 아예 들고 있지 않다. 재고를 쓰는 것은 발급
+ * ({@code occupyOne})·발급취소·사용취소(만료 전이일 때) 셋이다. 처음에는 넷 다 친다고
+ * 적었는데 리뷰가 잡았다.
  *
  * <h2>여기 두는 이유 — 트랜잭션 바깥이어야 한다</h2>
  *
@@ -80,6 +85,12 @@ public class LockContentionRetry {
                 return result;
             } catch (RuntimeException failure) {
                 if (!causedByLockContention(failure)) {
+                    // 물러선 뒤 다른 실패로 끝났다. 이 요청은 락 경합을 만났으므로
+                    // 어딘가에 세야 한다 — 안 세면 recovered + exhausted 합이
+                    // "경합을 만난 요청 수" 가 아니게 된다.
+                    if (retried) {
+                        meters.abandoned(operation);
+                    }
                     throw failure;
                 }
                 long remaining = deadline - System.nanoTime();

@@ -5,7 +5,7 @@ import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 발급이 락 경합으로 물러설 때의 재시도 한도.
+ * 락 경합으로 물러설 때의 재시도 한도. 발급·사용·사용취소·발급취소가 함께 쓴다.
  *
  * <p><b>상수로 두지 않는 이유</b> — 데드락이 예상보다 잦아 상한을 올리고 싶을 때 코드를
  * 고치고 이미지를 다시 굽지 않아도 되게 한다.
@@ -45,7 +45,7 @@ public record LockRetryProperties(
     /**
      * 예산 상한. <b>범위를 안 막으면 요청 경로에서 터진다</b> — {@code Duration.toNanos()} 는
      * 나노초 범위를 넘는 값에서 {@code ArithmeticException} 을 내고, 범위 안이라도 아주 큰
-     * 값은 마감 시각 덧셈을 넘치게 해 <b>즉시 만료</b>처럼 동작한다. 발급 한 건을 10초 넘게
+     * 값은 마감 시각 덧셈을 넘치게 해 <b>즉시 만료</b>처럼 동작한다. 쿠폰 작업 한 건을 10초 넘게
      * 붙잡을 이유도 없다.
      */
     static final Duration BUDGET_LIMIT = Duration.ofSeconds(10);

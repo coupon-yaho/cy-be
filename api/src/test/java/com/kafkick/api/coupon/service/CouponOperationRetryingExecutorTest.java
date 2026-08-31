@@ -28,7 +28,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 /**
  * 사용·취소가 락 경합에서 물러섰다 다시 하는지 본다.
  *
- * <p>발급만 고쳐 두었을 때 이쪽이 그대로 남아 있었다. 세 경로가 같은 재고 행을 치므로
+ * <p>발급만 고쳐 두었을 때 이쪽이 그대로 남아 있었다. 네 경로가 같은 멱등 행을 치므로
  * 발급에만 처치를 두면 부하 구간에 사용·취소가 데드락을 그대로 사용자에게 돌려준다.
  */
 class CouponOperationRetryingExecutorTest {
@@ -120,6 +120,46 @@ class CouponOperationRetryingExecutorTest {
     }
 
     /**
+     * <b>물러선 뒤 다른 실패로 끝난 요청도 세야 한다.</b> 사용·취소에서는 이게 드문 일이
+     * 아니다 — 경합에서 진 뒤 다시 하면 상대가 이미 상태를 바꿔 놓아 전이가 거절된다.
+     * 이 결말을 안 세면 {@code recovered + exhausted} 합이 "경합을 만난 요청 수" 가 아니게
+     * 되고, "사용 경로에 경합이 얼마나 있었나" 를 물으면 0 이라는 답이 나온다.
+     */
+    @Test
+    @DisplayName("물러선 뒤 다른 실패로 끝나면 abandoned 로 센다")
+    void countsRequestAbandonedAfterBackingOff() {
+        IllegalStateException rejected = new IllegalStateException("이미 사용된 쿠폰입니다.");
+        when(delegate.use(ISSUANCE_ID, MEMBER_ID, 1000, IDEMPOTENCY_KEY))
+                .thenThrow(wrappedDeadlock())
+                .thenThrow(rejected);
+
+        assertThatThrownBy(() ->
+                executor().use(ISSUANCE_ID, MEMBER_ID, 1000, IDEMPOTENCY_KEY))
+                .isSameAs(rejected);
+
+        assertThat(counter("use", "abandoned")).isEqualTo(1.0);
+        assertThat(counter("use", "recovered")).isEqualTo(0.0);
+        assertThat(counter("use", "exhausted")).isEqualTo(0.0);
+    }
+
+    /**
+     * <b>물러선 적이 없으면 abandoned 도 아니다.</b> 첫 시도가 곧바로 도메인 규칙에 걸린
+     * 것은 락 경합을 만난 적이 없다. 이것까지 세면 합이 다시 틀린다.
+     */
+    @Test
+    @DisplayName("한 번도 안 물러섰으면 abandoned 로도 안 센다")
+    void doesNotCountAbandonedWithoutBackingOff() {
+        when(delegate.use(ISSUANCE_ID, MEMBER_ID, 1000, IDEMPOTENCY_KEY))
+                .thenThrow(new IllegalStateException("이미 사용된 쿠폰입니다."));
+
+        assertThatThrownBy(() ->
+                executor().use(ISSUANCE_ID, MEMBER_ID, 1000, IDEMPOTENCY_KEY))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(counter("use", "abandoned")).isEqualTo(0.0);
+    }
+
+    /**
      * 경로마다 태그가 갈려야 어느 쪽이 부딪히는지 보인다. 넷이 한 시계열로 합쳐지면
      * 지표를 봐도 손댈 곳을 못 고른다.
      */
@@ -149,8 +189,12 @@ class CouponOperationRetryingExecutorTest {
         executor();
 
         for (String operation : List.of("issue", "use", "cancel-use", "cancel")) {
-            assertThat(counter(operation, "recovered")).isEqualTo(0.0);
-            assertThat(counter(operation, "exhausted")).isEqualTo(0.0);
+            for (String outcome : List.of("recovered", "exhausted", "abandoned")) {
+                assertThat(counter(operation, outcome))
+                        .as("%s/%s 가 미리 안 서 있으면 대시보드에 데이터 없음이 뜬다",
+                                operation, outcome)
+                        .isEqualTo(0.0);
+            }
         }
     }
 

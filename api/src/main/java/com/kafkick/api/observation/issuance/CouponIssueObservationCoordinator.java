@@ -1,7 +1,5 @@
 package com.kafkick.api.observation.issuance;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -39,13 +37,6 @@ import com.kafkick.core.observation.EngineVersion;
 /** 쿠폰 발급 업무 결과를 바꾸지 않고 요청 단위 관측 수명주기를 연결합니다. */
 @Component
 public final class CouponIssueObservationCoordinator {
-
-    private static final Logger log =
-            LoggerFactory.getLogger(CouponIssueObservationCoordinator.class);
-
-    /** 원인 사슬을 훑는 깊이 상한. 순환 사슬에서 요청 스레드가 갇히지 않게 한다. */
-
-    /** 다시 시도하기 전 물러서는 시간. 진 쪽들이 같은 순간에 되돌아와 다시 부딪히지 않게 한다. */
 
     private final CouponOperationExecutionService operationExecutionService;
     private final IssuanceObservationContextFactory contextFactory;
