@@ -52,8 +52,6 @@ public class CouponIssueController {
             Long memberId,
             @RequestHeader(value = MemberRequestHeaders.MEMBER_GRADE, required = false)
             List<String> memberGradeValues,
-            @RequestHeader(value = MemberRequestHeaders.MEMBERSHIP_GRADE, required = false)
-            List<String> legacyMembershipGradeValues,
             @RequestHeader(CouponRequestHeaders.IDEMPOTENCY_KEY)
             String idempotencyKey
     ) {
@@ -65,10 +63,7 @@ public class CouponIssueController {
                     requestId,
                     couponRoundId,
                     memberId,
-                    MemberGradeHeaderResolver.resolve(
-                            memberGradeValues,
-                            legacyMembershipGradeValues
-                    ),
+                    MemberGradeHeaderResolver.resolve(memberGradeValues),
                     idempotencyKey
             );
             couponIssueMetrics.recordSuccess(

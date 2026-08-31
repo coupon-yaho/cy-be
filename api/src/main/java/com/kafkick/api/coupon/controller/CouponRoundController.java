@@ -85,8 +85,6 @@ public class CouponRoundController {
             Long memberId,
             @RequestHeader(value = MemberRequestHeaders.MEMBER_GRADE, required = false)
             List<String> memberGradeValues,
-            @RequestHeader(value = MemberRequestHeaders.MEMBERSHIP_GRADE, required = false)
-            List<String> legacyMembershipGradeValues,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "페이지 번호는 0 이상이어야 합니다.")
             int page,
@@ -99,10 +97,7 @@ public class CouponRoundController {
                 IssuableCouponRoundPageResponse.from(
                         queryService.findPage(
                                 memberId,
-                                MemberGradeHeaderResolver.resolve(
-                                        memberGradeValues,
-                                        legacyMembershipGradeValues
-                                ),
+                                MemberGradeHeaderResolver.resolve(memberGradeValues),
                                 timeProvider.instant(),
                                 page,
                                 size
