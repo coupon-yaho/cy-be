@@ -24,6 +24,11 @@ import com.kafkick.core.support.exception.CommonErrorCode;
  * <p>두 이름을 남기면 새 화면을 붙일 때마다 어느 쪽이 정본인지 확인해야 하고, 그 확인을
  * 한 번 빠뜨리면 이번처럼 원인이 안 보이는 400 이 됩니다. 호환 겹의 값어치는 "우리가 못
  * 바꾸는 클라이언트의 수" 에 비례하는데 여기서는 그 집합이 비어 있습니다.
+ *
+ * <p><b>다만 CORS 허용 목록에는 옛 이름이 남아 있습니다</b>
+ * ({@link MemberRequestHeaders#LEGACY_MEMBER_GRADE}). 프론트가 전환기 동안 두 이름으로
+ * 함께 보내는데 허용 목록에서 빼면 요청이 프리플라이트에서 막히기 때문입니다 — <b>값을
+ * 읽지 않는 것과 브라우저가 보낼 수 있는 것은 다른 층</b>이라, 읽는 쪽만 하나로 줄였습니다.
  */
 public final class MemberGradeHeaderResolver {
 
