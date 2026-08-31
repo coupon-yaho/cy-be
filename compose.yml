@@ -218,6 +218,12 @@ services:
     # "failover 경로를 검증한다"가 검증되지 않은 채 초록불이 난다. sentinel.conf 가 경고한
     # 바로 그 자리다. master 와 replica 를 둘 다 인지했을 때만 통과시킨다.
     #
+    # **서로를 아는지도 함께 본다.** Sentinel 은 서로를 master 의 __sentinel__:hello 로
+    # 발견한다 — 그 전에 master 가 죽으면 남은 Sentinel 들은 서로를 모른 채 각자 SDOWN 만
+    # 보고, 정족수 2를 못 채워 ODOWN 도 리더 선출도 없다. 승격이 아니라 그냥 정지다.
+    # master·replica 만 보면 이 창이 healthy 로 통과해, "failover 를 검증한다" 가 다시
+    # 검증되지 않은 채 초록불이 난다(SentinelFailoverIntegrationTest 가 CI 에서 이걸로 깨졌다).
+    #
     # grep 대상은 값이 아니라 **필드명**이다. SENTINEL MASTER/REPLICAS 는 flat key-value 를
     # 돌려주므로 '^ip' 줄 수가 곧 인지한 replica 수다. IP 대역을 이 파일에 박지 않으려고
     # 이렇게 쓴다. **2대를 요구한다** — 1대만 인지한 상태도 1차 failover 는 되지만 승격 뒤
@@ -227,7 +233,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'redis-cli -p 26379 sentinel master coupon-master | grep -q "^coupon-master$$" && [ "$$(redis-cli -p 26379 sentinel replicas coupon-master | grep -c "^ip$$")" -ge 2 ]'
+        - 'redis-cli -p 26379 sentinel master coupon-master | grep -q "^coupon-master$$" && [ "$$(redis-cli -p 26379 sentinel replicas coupon-master | grep -c "^ip$$")" -ge 2 ] && [ "$$(redis-cli -p 26379 sentinel sentinels coupon-master | grep -c "^name$$")" -ge 2 ]'
       interval: 5s
       timeout: 3s
       retries: 30

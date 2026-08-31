@@ -45,7 +45,10 @@ class SentinelComposeContractTest {
         // replica 는 띄운 수(2)만큼 요구한다 — 1대만 인지하면 승격 뒤 남는 replica 가 0 이다.
         assertThat(compose).contains(
                 "sentinel master coupon-master | grep -q \"^coupon-master$$\"",
-                "sentinel replicas coupon-master | grep -c \"^ip$$\")\" -ge 2");
+                "sentinel replicas coupon-master | grep -c \"^ip$$\")\" -ge 2",
+                // 서로를 모르면 정족수를 못 채워 승격 자체가 없다 — master·replica 만 보면
+                // 그 창이 healthy 로 통과한다.
+                "sentinel sentinels coupon-master | grep -c \"^name$$\")\" -ge 2");
         // Redis 인증은 배선돼 있지 않다. 한쪽만 넣으면 "인증이 걸렸다"는 오해가 생기고,
         // 그 상태로 경계를 낮추면 같은 네트워크 누구나 재고 키를 고칠 수 있다.
         // 셋(master requirepass · replica masterauth · sentinel auth-pass)을 함께 넣는 날
