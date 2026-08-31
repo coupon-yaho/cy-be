@@ -9,6 +9,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
 import com.kafkick.core.admin.stock.AdminStockResolver;
@@ -22,6 +23,19 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 @EnableConfigurationProperties(QueueGatewayPublisherProperties.class)
 @ConditionalOnProperty(prefix = "queue.gateway.publisher", name = "enabled", havingValue = "true")
 public class QueueGatewayPublisherConfiguration {
+
+    static final String CAPACITY_SCHEDULER = "queueGatewayCapacityScheduler";
+    static final String COUPON_ROUND_SCHEDULER = "queueGatewayCouponRoundScheduler";
+
+    @Bean(name = CAPACITY_SCHEDULER)
+    ThreadPoolTaskScheduler queueGatewayCapacityScheduler() {
+        return scheduler("queue-gateway-capacity-");
+    }
+
+    @Bean(name = COUPON_ROUND_SCHEDULER)
+    ThreadPoolTaskScheduler queueGatewayCouponRoundScheduler() {
+        return scheduler("queue-gateway-coupon-round-");
+    }
 
     @Bean
     QueueGatewayCapacityPublisher queueGatewayCapacityPublisher(
@@ -48,5 +62,14 @@ public class QueueGatewayPublisherConfiguration {
                 runtimeConfigStore,
                 statePort,
                 clock.getIfAvailable(Clock::systemUTC));
+    }
+
+    private static ThreadPoolTaskScheduler scheduler(String threadNamePrefix) {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix(threadNamePrefix);
+        scheduler.setRemoveOnCancelPolicy(true);
+        scheduler.setWaitForTasksToCompleteOnShutdown(false);
+        return scheduler;
     }
 }

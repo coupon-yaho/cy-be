@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import com.kafkick.core.admin.CouponPolicyType;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
@@ -52,12 +53,13 @@ class QueueGatewayCouponRoundPublisherTest {
             return result;
         };
         QueueGatewayStatePort port = mock(QueueGatewayStatePort.class);
+        when(port.reserveCouponRoundSnapshotVersion()).thenReturn(7L);
 
         publisher(reader, new AdminStockResolver(v2Reader), runtimeConfig(QueueMode.ADAPTIVE), port)
                 .publishCouponRounds();
 
         verify(reader).loadCatalog(NOW);
-        verify(port).publishCouponRounds(List.of(
+        verify(port).publishCouponRounds(7L, List.of(
                 new QueueGatewayCouponRoundState(10L, 70L, SourceStatus.VALID, NOW),
                 new QueueGatewayCouponRoundState(11L, 25L, SourceStatus.VALID, NOW)),
                 QueueMode.ADAPTIVE);
@@ -69,11 +71,12 @@ class QueueGatewayCouponRoundPublisherTest {
         when(reader.loadCatalog(NOW)).thenReturn(catalog(List.of(
                 round(11L, EngineVersion.V2, CouponRoundStatus.OPEN, 100L, 80L))));
         QueueGatewayStatePort port = mock(QueueGatewayStatePort.class);
+        when(port.reserveCouponRoundSnapshotVersion()).thenReturn(8L);
 
         publisher(reader, new AdminStockResolver(AdminStockResolver.unavailableV2Reader()),
                 runtimeConfig(QueueMode.ALWAYS), port).publishCouponRounds();
 
-        verify(port).publishCouponRounds(List.of(
+        verify(port).publishCouponRounds(8L, List.of(
                 new QueueGatewayCouponRoundState(11L, null, SourceStatus.UNAVAILABLE, null)),
                 QueueMode.ALWAYS);
     }
@@ -86,14 +89,24 @@ class QueueGatewayCouponRoundPublisherTest {
         QueueGatewayStatePort firstPort = mock(QueueGatewayStatePort.class);
         publisher(unavailable, new AdminStockResolver(AdminStockResolver.unavailableV2Reader()),
                 runtimeConfig(QueueMode.OFF), firstPort).publishCouponRounds();
-        verify(firstPort, never()).publishCouponRounds(any(), any());
+        verify(firstPort, never()).publishCouponRounds(any(Long.class), any(), any());
 
         AdminCouponRoundDataReader failing = mock(AdminCouponRoundDataReader.class);
         when(failing.loadCatalog(NOW)).thenThrow(new IllegalStateException("db down"));
         QueueGatewayStatePort secondPort = mock(QueueGatewayStatePort.class);
         publisher(failing, new AdminStockResolver(AdminStockResolver.unavailableV2Reader()),
                 runtimeConfig(QueueMode.OFF), secondPort).publishCouponRounds();
-        verify(secondPort, never()).publishCouponRounds(any(), any());
+        verify(secondPort, never()).publishCouponRounds(any(Long.class), any(), any());
+    }
+
+    @Test
+    void couponRoundPublisherUsesItsOwnScheduler() throws Exception {
+        Scheduled schedule = QueueGatewayCouponRoundPublisher.class
+                .getDeclaredMethod("publishCouponRounds")
+                .getAnnotation(Scheduled.class);
+
+        org.assertj.core.api.Assertions.assertThat(schedule.scheduler())
+                .isEqualTo(QueueGatewayPublisherConfiguration.COUPON_ROUND_SCHEDULER);
     }
 
     private static QueueGatewayCouponRoundPublisher publisher(

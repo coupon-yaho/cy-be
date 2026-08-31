@@ -46,10 +46,15 @@ public final class QueueGatewayCouponRoundPublisher {
     }
 
     /** 한 DB 스냅샷의 OPEN 회차만 골라 정책과 버전별 권위 재고를 함께 반영합니다. */
-    @Scheduled(fixedDelayString = "${queue.gateway.publisher.coupon-round-interval:5s}")
+    @Scheduled(
+            fixedDelayString = "${queue.gateway.publisher.coupon-round-interval:5s}",
+            scheduler = QueueGatewayPublisherConfiguration.COUPON_ROUND_SCHEDULER
+    )
     public void publishCouponRounds() {
         Instant snapshotAt = clock.instant();
         try {
+            // DB를 읽기 전에 중앙 버전을 예약해야 늦게 끝난 과거 조회가 최신 결과를 덮지 못한다.
+            long snapshotVersion = statePort.reserveCouponRoundSnapshotVersion();
             AdminCouponRoundCatalog catalog = couponRoundDataReader.loadCatalog(snapshotAt);
             if (catalog.status() != SourceStatus.VALID) {
                 log.warn("쿠폰 회차 카탈로그가 {} 상태라 이전 게이트웨이 스냅샷을 보존합니다.",
@@ -62,7 +67,7 @@ public final class QueueGatewayCouponRoundPublisher {
                     .filter(round -> round.status() == CouponRoundStatus.OPEN)
                     .map(QueueGatewayCouponRoundPublisher::toGatewayState)
                     .toList();
-            statePort.publishCouponRounds(openRounds, runtimeConfig.queueMode());
+            statePort.publishCouponRounds(snapshotVersion, openRounds, runtimeConfig.queueMode());
         } catch (RuntimeException exception) {
             // 읽기 실패 때 빈 목록을 쓰면 정상 회차까지 종료 처리된다. 이전 스냅샷 보존이 안전하다.
             log.warn("대기열 게이트웨이 쿠폰 회차 상태 공급에 실패해 이전 스냅샷을 보존합니다.", exception);

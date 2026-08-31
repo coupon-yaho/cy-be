@@ -20,6 +20,7 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
     static final String CAPACITY_KEY = "capacity:coupon-svc:v1";
     static final String ACTIVE_COUPONS_KEY = "coupons:active";
     static final String POLICY_KEY = "coupon:policy";
+    static final String SNAPSHOT_COORDINATION_KEY = "coupon-svc:queue-gateway:snapshot";
     static final String STOCK_PREFIX = "stock:{";
 
     private static final RedisScript<Long> PUBLISH_SCRIPT = new DefaultRedisScript<>("""
@@ -31,12 +32,26 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
             if policyType ~= 'none' and policyType ~= 'hash' then
               return redis.error_reply('invalid type for ' .. KEYS[2])
             end
+            local coordinationType = redis.call('TYPE', KEYS[3])['ok']
+            if coordinationType ~= 'none' and coordinationType ~= 'hash' then
+              return redis.error_reply('invalid type for ' .. KEYS[3])
+            end
+
+            local incomingVersion = tonumber(ARGV[1])
+            local appliedValue = redis.call('HGET', KEYS[3], 'applied')
+            local appliedVersion = tonumber(appliedValue)
+            if appliedValue and not appliedVersion then
+              return redis.error_reply('invalid applied snapshot version')
+            end
+            if incomingVersion <= (appliedVersion or 0) then
+              return 0
+            end
 
             local previous = redis.call('SMEMBERS', KEYS[1])
             local incoming = {}
-            local count = tonumber(ARGV[2])
+            local count = tonumber(ARGV[3])
             for index = 1, count do
-              local offset = 3 + ((index - 1) * 3)
+              local offset = 4 + ((index - 1) * 3)
               local couponId = ARGV[offset]
               incoming[couponId] = true
               local stockKey = 'stock:{' .. couponId .. '}'
@@ -61,16 +76,17 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
               end
             end
             for index = 1, count do
-              local offset = 3 + ((index - 1) * 3)
+              local offset = 4 + ((index - 1) * 3)
               local couponId = ARGV[offset]
               local hasStock = ARGV[offset + 1]
               local stock = ARGV[offset + 2]
               if hasStock == '1' then
                 redis.call('SET', 'stock:{' .. couponId .. '}', stock)
               end
-              redis.call('HSET', KEYS[2], couponId, cjson.encode({mode = ARGV[1]}))
+              redis.call('HSET', KEYS[2], couponId, cjson.encode({mode = ARGV[2]}))
               redis.call('SADD', KEYS[1], couponId)
             end
+            redis.call('HSET', KEYS[3], 'applied', incomingVersion)
             return count
             """, Long.class);
 
@@ -99,12 +115,29 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
     }
 
     @Override
-    public void publishCouponRounds(List<QueueGatewayCouponRoundState> couponRounds, QueueMode queueMode) {
+    public long reserveCouponRoundSnapshotVersion() {
+        Long version = redis.opsForHash().increment(SNAPSHOT_COORDINATION_KEY, "next", 1L);
+        if (version == null || version <= 0L) {
+            throw new IllegalStateException("Redis가 유효한 게이트웨이 스냅샷 버전을 반환하지 않았습니다.");
+        }
+        return version;
+    }
+
+    @Override
+    public void publishCouponRounds(
+            long snapshotVersion,
+            List<QueueGatewayCouponRoundState> couponRounds,
+            QueueMode queueMode
+    ) {
+        if (snapshotVersion <= 0L) {
+            throw new IllegalArgumentException("snapshotVersion은 양수여야 합니다.");
+        }
         Objects.requireNonNull(couponRounds, "couponRounds");
         Objects.requireNonNull(queueMode, "queueMode");
         List<QueueGatewayCouponRoundState> snapshot = List.copyOf(couponRounds);
         HashSet<Long> ids = new HashSet<>();
-        ArrayList<String> arguments = new ArrayList<>(2 + snapshot.size() * 3);
+        ArrayList<String> arguments = new ArrayList<>(3 + snapshot.size() * 3);
+        arguments.add(Long.toString(snapshotVersion));
         arguments.add(queueMode.name());
         arguments.add(Integer.toString(snapshot.size()));
         for (QueueGatewayCouponRoundState round : snapshot) {
@@ -116,7 +149,8 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
             arguments.add(round.stockStatus().carriesValue() ? "1" : "0");
             arguments.add(round.remainingStock() == null ? "" : Long.toString(round.remainingStock()));
         }
-        redis.execute(PUBLISH_SCRIPT, List.of(ACTIVE_COUPONS_KEY, POLICY_KEY),
+        redis.execute(PUBLISH_SCRIPT,
+                List.of(ACTIVE_COUPONS_KEY, POLICY_KEY, SNAPSHOT_COORDINATION_KEY),
                 arguments.toArray());
     }
 

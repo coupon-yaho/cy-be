@@ -5,7 +5,13 @@ import java.util.Objects;
 
 import com.kafkick.core.observation.SourceStatus;
 
-/** 외부 대기열 게이트웨이에 미러링할 한 쿠폰 회차의 재고 관측값입니다. */
+/**
+ * 외부 대기열 게이트웨이에 미러링할 한 쿠폰 회차의 재고 관측값입니다.
+ *
+ * <p>회차 ID는 양수, 재고는 0 이상이어야 합니다. 값을 싣는 상태에는 재고와 관측 시각이 모두
+ * 필요하고 값을 싣지 않는 상태에는 둘 다 없어야 하며, 위반하면 생성 시점에
+ * {@link IllegalArgumentException}을 던집니다.</p>
+ */
 public record QueueGatewayCouponRoundState(
         long couponId,
         Long remainingStock,

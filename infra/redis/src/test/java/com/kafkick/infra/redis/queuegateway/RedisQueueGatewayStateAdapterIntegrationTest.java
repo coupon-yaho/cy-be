@@ -64,7 +64,7 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
         redis.opsForValue().set("stock:{9}", "1");
 
         adapter.reportCapacity("api-1", 250L, NOW);
-        adapter.publishCouponRounds(List.of(
+        adapter.publishCouponRounds(adapter.reserveCouponRoundSnapshotVersion(), List.of(
                 state(10L, 7L),
                 new QueueGatewayCouponRoundState(11L, null, SourceStatus.UNAVAILABLE, null)),
                 QueueMode.ALWAYS);
@@ -90,8 +90,10 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
         List<QueueGatewayCouponRoundState> snapshot = List.of(
                 new QueueGatewayCouponRoundState(11L, null, SourceStatus.UNAVAILABLE, null));
 
-        adapter.publishCouponRounds(snapshot, QueueMode.ADAPTIVE);
-        adapter.publishCouponRounds(snapshot, QueueMode.ADAPTIVE);
+        adapter.publishCouponRounds(adapter.reserveCouponRoundSnapshotVersion(),
+                snapshot, QueueMode.ADAPTIVE);
+        adapter.publishCouponRounds(adapter.reserveCouponRoundSnapshotVersion(),
+                snapshot, QueueMode.ADAPTIVE);
 
         assertThat(redis.opsForSet().members("coupons:active")).containsExactly("11");
         assertThat(redis.opsForValue().get("stock:{11}")).isEqualTo("5");
@@ -105,11 +107,27 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
         redis.opsForValue().set("stock:{10}", "7");
         redis.opsForValue().set("coupon:policy", "wrong-type");
 
-        assertThatThrownBy(() -> adapter.publishCouponRounds(List.of(state(10L, 8L)), QueueMode.OFF))
+        assertThatThrownBy(() -> adapter.publishCouponRounds(
+                adapter.reserveCouponRoundSnapshotVersion(), List.of(state(10L, 8L)), QueueMode.OFF))
                 .isInstanceOf(RuntimeException.class);
 
         assertThat(redis.opsForValue().get("stock:{10}")).isEqualTo("7");
         assertThat(redis.opsForSet().members("coupons:active")).containsExactly("10");
+    }
+
+    @Test
+    void olderSnapshotCannotOverwriteANewerSnapshot() {
+        long older = adapter.reserveCouponRoundSnapshotVersion();
+        long newer = adapter.reserveCouponRoundSnapshotVersion();
+
+        adapter.publishCouponRounds(newer, List.of(state(20L, 9L)), QueueMode.ALWAYS);
+        adapter.publishCouponRounds(older, List.of(state(10L, 7L)), QueueMode.OFF);
+
+        assertThat(redis.opsForSet().members("coupons:active")).containsExactly("20");
+        assertThat(redis.opsForValue().get("stock:{20}")).isEqualTo("9");
+        assertThat(redis.hasKey("stock:{10}")).isFalse();
+        assertThat(redis.opsForHash().get("coupon-svc:queue-gateway:snapshot", "applied"))
+                .isEqualTo(Long.toString(newer));
     }
 
     private static QueueGatewayCouponRoundState state(long couponId, long stock) {

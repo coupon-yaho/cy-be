@@ -70,6 +70,8 @@ class QueueGatewayCapacityPublisherTest {
         org.assertj.core.api.Assertions.assertThat(schedule.fixedRateString())
                 .isEqualTo("${queue.gateway.publisher.capacity-interval:1s}");
         org.assertj.core.api.Assertions.assertThat(schedule.fixedDelayString()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(schedule.scheduler())
+                .isEqualTo(QueueGatewayPublisherConfiguration.CAPACITY_SCHEDULER);
     }
 
     private static QueueGatewayCapacityPublisher publisher(

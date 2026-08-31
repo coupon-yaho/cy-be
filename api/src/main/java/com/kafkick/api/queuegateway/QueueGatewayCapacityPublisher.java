@@ -36,7 +36,10 @@ public final class QueueGatewayCapacityPublisher {
     }
 
     /** 준비 완료 인스턴스에는 설정된 안전 상한을, 그 밖에는 0을 보고합니다. */
-    @Scheduled(fixedRateString = "${queue.gateway.publisher.capacity-interval:1s}")
+    @Scheduled(
+            fixedRateString = "${queue.gateway.publisher.capacity-interval:1s}",
+            scheduler = QueueGatewayPublisherConfiguration.CAPACITY_SCHEDULER
+    )
     public void publishCapacity() {
         long credits = availability.getReadinessState() == ReadinessState.ACCEPTING_TRAFFIC
                 ? properties.creditsPerSecond()

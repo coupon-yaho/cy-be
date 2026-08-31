@@ -4,7 +4,12 @@ import java.time.Duration;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-/** 외부 대기열 게이트웨이에 상태를 공급하는 주기와 인스턴스별 안전 상한입니다. */
+/**
+ * 외부 대기열 게이트웨이에 상태를 공급하는 주기와 인스턴스별 안전 상한입니다.
+ *
+ * <p>주기는 양수, 처리 상한은 0~10000, 인스턴스 ID는 1~100자여야 합니다. 공급기를 활성화하면서
+ * 처리 상한을 0으로 두는 설정도 거부하며, 이 검증 실패는 애플리케이션 기동 실패로 드러납니다.</p>
+ */
 @ConfigurationProperties(prefix = "queue.gateway.publisher")
 public record QueueGatewayPublisherProperties(
         Boolean enabled,

@@ -42,19 +42,33 @@ class RedisQueueGatewayStateAdapterTest {
     @Test
     void passesAFullSnapshotToOneAtomicRedisScript() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
-        when(redis.execute(any(), eq(List.of("coupons:active", "coupon:policy")),
-                eq("ALWAYS"), eq("2"), eq("10"), eq("1"), eq("7"),
+        when(redis.execute(any(), eq(List.of("coupons:active", "coupon:policy",
+                        "coupon-svc:queue-gateway:snapshot")),
+                eq("7"), eq("ALWAYS"), eq("2"), eq("10"), eq("1"), eq("7"),
                 eq("11"), eq("0"), eq(""))).thenReturn(1L);
         RedisQueueGatewayStateAdapter adapter = adapter(redis);
 
-        adapter.publishCouponRounds(List.of(
+        adapter.publishCouponRounds(7L, List.of(
                 new QueueGatewayCouponRoundState(10L, 7L, SourceStatus.VALID, NOW),
                 new QueueGatewayCouponRoundState(11L, null, SourceStatus.UNAVAILABLE, null)),
                 QueueMode.ALWAYS);
 
-        verify(redis).execute(any(), eq(List.of("coupons:active", "coupon:policy")),
-                eq("ALWAYS"), eq("2"), eq("10"), eq("1"), eq("7"),
+        verify(redis).execute(any(), eq(List.of("coupons:active", "coupon:policy",
+                        "coupon-svc:queue-gateway:snapshot")),
+                eq("7"), eq("ALWAYS"), eq("2"), eq("10"), eq("1"), eq("7"),
                 eq("11"), eq("0"), eq(""));
+    }
+
+    @Test
+    void reservesSnapshotVersionsFromOneRedisSequence() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashes = mock(HashOperations.class);
+        when(redis.opsForHash()).thenReturn(hashes);
+        when(hashes.increment("coupon-svc:queue-gateway:snapshot", "next", 1L))
+                .thenReturn(9L);
+
+        assertThat(adapter(redis).reserveCouponRoundSnapshotVersion()).isEqualTo(9L);
     }
 
     @Test
@@ -65,9 +79,11 @@ class RedisQueueGatewayStateAdapterTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> adapter.reportCapacity("api", -1L, NOW))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> adapter.publishCouponRounds(List.of(
+        assertThatThrownBy(() -> adapter.publishCouponRounds(1L, List.of(
                 new QueueGatewayCouponRoundState(10L, 7L, SourceStatus.VALID, NOW),
                 new QueueGatewayCouponRoundState(10L, 6L, SourceStatus.VALID, NOW)), QueueMode.OFF))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> adapter.publishCouponRounds(0L, List.of(), QueueMode.OFF))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
