@@ -365,7 +365,7 @@ DB_HOST=127.0.0.1 ./gradlew :api:bootRun          # ← 마이그레이션. 한 
 docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올린다
 ```
 
-> ### ⚠️ `compose.yml` 로 띄운다면 Redis 를 다섯 개 다 올린다
+> ### ⚠️ `compose.yml` 로 띄운다면 Redis 계열 여섯을 다 올린다
 >
 > `compose.yml` 의 api·batch 는 `SPRING_PROFILES_ACTIVE` 에 **`redis-sentinel` 이 박혀
 > 있다.** 그 프로파일은 `redis-sentinel-1..3` 을 찾으므로, `redis` 하나만 띄우면
@@ -393,16 +393,33 @@ docker compose -f base.yml -f batch.yml up batch  # 배치 서버를 겹쳐 올�
 > 둘이 다르면 `REDIS_MASTER_IP` 를 맞추고 **센티넬 데이터 볼륨을 지운 뒤** 다시 만든다.
 > `sentinel.conf` 는 처음 한 번만 생성되고 볼륨에 남으므로, 환경변수만 고쳐서는 안 바뀐다.
 >
-> 센티넬 없이 단일 Redis 로만 돌리려면 그 프로파일을 빼야 한다. 빈 `sentinel.master` 도
-> Boot 에는 Sentinel 구성이라, 환경변수를 비우는 것으로는 단일 모드가 안 된다
-> (`infra/redis/src/main/resources/redis.yml.example` 의 주석).
+> #### 센티넬 없이 단일 Redis 로 돌리려면
+>
+> **프로파일을 빼는 것만으로는 안 된다.** `api` 와 `batch` 는 `depends_on` 으로 센티넬 셋의
+> `service_healthy` 를 기다리는데, 그것은 환경변수와 무관하게 남는다. 그래서 <b>둘 다</b>
+> 해야 한다 — 프로파일을 빼고, `--no-deps` 로 그 대기를 건너뛴다.
+>
+> 빈 `sentinel.master` 도 Boot 에는 Sentinel 구성이라 환경변수를 비우는 것으로는 단일 모드가
+> 안 된다(`infra/redis/src/main/resources/redis.yml.example` 의 주석). 프로파일을 빼야 한다.
 >
 > ```yaml
+> # 오버레이 파일
 > services:
 >   api:
 >     environment:
->       SPRING_PROFILES_ACTIVE: api      # redis-sentinel 을 뺀다
+>       SPRING_PROFILES_ACTIVE: api        # redis-sentinel 을 뺀다
+>   batch:
+>     environment:
+>       SPRING_PROFILES_ACTIVE: batch      # 배치도 같은 의존을 갖는다
 > ```
+>
+> ```bash
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d redis
+> docker compose -p <프로젝트> -f compose.yml -f <오버레이> up -d --no-deps api batch
+> ```
+>
+> `--no-deps` 를 빼면 `dependency failed to start` 로 멈춘다. 이 절차는 **단일 Redis 로 띄운
+> 스택에서 실제로 밟아 확인했다** — 그때 프로파일만 바꾸고 `--no-deps` 로 올렸었다.
 
 **배치의 업무 포트는 기본으로 안 열린다.** 거기에 검증 트리거
 (`POST /api/v1/admin/verify`)와 복구(`/api/v1/admin/expire/runs/**`)가 있는데, **사용자

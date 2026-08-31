@@ -37,6 +37,19 @@ class GlobalExceptionHandlerTest {
      *
      * <p>값이 아니라 <b>이름만</b> 나가는 것도 함께 본다. 값은 회원 식별자나 등급이다.
      */
+    @Test
+    @DisplayName("헤더가 없으면 어느 헤더인지 응답이 말한다")
+    void namesTheMissingRequestHeader() throws Exception {
+        MockMvc mockMvc = mockMvc();
+
+        mockMvc.perform(get("/test/needs-header"))
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.status").value(400))
+                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
+                .andExpect(jsonPath("$.error.message")
+                        .value("필수 요청 헤더가 없습니다: X-Member-Grade"));
+    }
+
     /**
      * <b>등급 헤더는 위 갈래를 안 탄다.</b> 게이트웨이 전환 때 {@code required = false} 로
      * 받아 리졸버가 직접 거부하게 됐기 때문이다 — 스프링의 누락 예외가 안 나므로 헤더 이름을
@@ -56,19 +69,6 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.error.code").value("COMMON-001"))
                 .andExpect(jsonPath("$.error.message")
                         .value("회원 등급 헤더는 하나의 값만 허용합니다."));
-    }
-
-    @Test
-    @DisplayName("헤더가 없으면 어느 헤더인지 응답이 말한다")
-    void namesTheMissingRequestHeader() throws Exception {
-        MockMvc mockMvc = mockMvc();
-
-        mockMvc.perform(get("/test/needs-header"))
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.error.status").value(400))
-                .andExpect(jsonPath("$.error.code").value("COMMON-001"))
-                .andExpect(jsonPath("$.error.message")
-                        .value("필수 요청 헤더가 없습니다: X-Member-Grade"));
     }
 
     @Test
@@ -175,7 +175,8 @@ class GlobalExceptionHandlerTest {
         /** 헤더 계약 위반. 리졸버가 던지는 것과 같은 예외다. */
         @GetMapping("/test/header-contract")
         void headerContract() {
-            throw new RequestHeaderContractException("회원 등급 헤더는 하나의 값만 허용합니다.");
+            throw new RequestHeaderContractException(
+                    RequestHeaderContractException.Reason.MULTIPLE_MEMBER_GRADE);
         }
 
         /** 헤더 하나를 필수로 받는다. 안 주면 MissingRequestHeaderException 이 난다. */

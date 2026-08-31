@@ -125,6 +125,32 @@ class CouponIssueControllerTest {
                         org.mockito.ArgumentMatchers.any());
     }
 
+    /**
+     * <b>헤더 계약 위반은 장애가 아니라 입력 거절이다.</b>
+     *
+     * <p>이 컨트롤러는 {@code BusinessException} 을 입력 거절로, 그 밖의
+     * {@code RuntimeException} 을 예기치 못한 장애로 집계한다. 헤더 계약 위반이 뒤쪽으로
+     * 새면 <b>클라이언트 잘못이 서버 에러율에 얹힌다</b> — 부하 측정의 판정 근거가 그만큼
+     * 오염되는데, 응답은 400 이라 화면에서도 로그에서도 안 보인다.
+     *
+     * <p>실제로 한 번 그렇게 만들었다가 리뷰가 잡았다. 상속을 되돌리면 이 단언이 깨진다.
+     */
+    @Test
+    @DisplayName("등급 헤더 계약 위반은 장애가 아니라 입력 거절로 집계된다")
+    void countsHeaderContractFailureAsRejectionNotError() throws Exception {
+        mockMvc.perform(post("/api/v1/coupons/10/issue")
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
+                        .header(MemberRequestHeaders.MEMBER_ID, "20")
+                        .header(MemberRequestHeaders.MEMBER_GRADE, "GOLD", "VIP")
+                        .header(CouponRequestHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_KEY))
+                .andExpect(status().isBadRequest());
+
+        verify(couponIssueMetrics, never()).recordUnexpectedFailure(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong());
+    }
+
     @Test
     @DisplayName("요청 ID 헤더가 없으면 필터가 생성한 ID로 발급한다")
     void issueCouponWithGeneratedRequestId() throws Exception {

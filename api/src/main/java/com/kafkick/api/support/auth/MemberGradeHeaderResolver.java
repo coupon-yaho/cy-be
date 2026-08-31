@@ -40,19 +40,20 @@ public final class MemberGradeHeaderResolver {
      */
     public static MembershipGrade resolve(List<String> values) {
         if (values == null || values.isEmpty()) {
-            throw invalid("회원 등급 헤더가 없습니다.");
+            throw invalid(RequestHeaderContractException.Reason.MISSING_MEMBER_GRADE);
         }
         if (values.size() != 1) {
-            throw invalid("회원 등급 헤더는 하나의 값만 허용합니다.");
+            throw invalid(RequestHeaderContractException.Reason.MULTIPLE_MEMBER_GRADE);
         }
         try {
             return MembershipGrade.valueOf(values.getFirst().trim());
         } catch (IllegalArgumentException exception) {
-            throw invalid("지원하지 않는 회원 등급입니다.");
+            throw invalid(RequestHeaderContractException.Reason.UNKNOWN_MEMBER_GRADE);
         }
     }
 
-    private static RequestHeaderContractException invalid(String message) {
-        return new RequestHeaderContractException(message);
+    private static RequestHeaderContractException invalid(
+            RequestHeaderContractException.Reason reason) {
+        return new RequestHeaderContractException(reason);
     }
 }
