@@ -19,16 +19,16 @@ import com.kafkick.core.observation.SourceStatus;
 /**
  * 관리자 운영현황 계산기로 전달할 O1·O3·전체 관측의 기술 중립 묶음입니다.
  *
- * <p>O1 입력은 요청한 각 캠페인을 정확히 한 번씩 포함하고, 같은 캠페인 상태를 유지해야 합니다. 진행
- * 캠페인의 O1 입력은 대상의 명시 재고 값 또는 값 없는 상태보다 나아질 수 없습니다. 진행 중이 아닌
+ * <p>O1 입력은 요청한 각 쿠폰 회차를 정확히 한 번씩 포함하고, 같은 쿠폰 회차 상태를 유지해야 합니다. 진행
+ * 쿠폰 회차의 O1 입력은 대상의 명시 재고 값 또는 값 없는 상태보다 나아질 수 없습니다. 진행 중이 아닌
  * 대상의 재고는 O1 상태 판정에 의미가 없으므로 기존 입력이 가진 값을 정규화하거나 비교하지 않습니다.
  * 전체 발급률과 지연 관측은 기존 {@link Observation} 생성자가 보장하는 상태·값·관측 시각 규칙을
  * 그대로 사용합니다.</p>
  *
- * @param request 이 관측 묶음이 응답하는 기준 시각과 캠페인 모집단
- * @param issuanceFlowInputs 요청 캠페인마다 하나씩 존재하는 O1 입력
- * @param outcomeInput 전체 캠페인 O3 고객 결과 입력
- * @param aggregateIssuanceRate 전체 캠페인 발급률 관측
+ * @param request 이 관측 묶음이 응답하는 기준 시각과 쿠폰 회차 모집단
+ * @param issuanceFlowInputs 요청 쿠폰 회차마다 하나씩 존재하는 O1 입력
+ * @param outcomeInput 전체 쿠폰 회차 O3 고객 결과 입력
+ * @param aggregateIssuanceRate 전체 쿠폰 회차 발급률 관측
  * @param latencySummary 성공·실패 응답 지연 관측
  */
 public record OverviewObservationData(
@@ -46,18 +46,18 @@ public record OverviewObservationData(
         Objects.requireNonNull(outcomeInput, "outcomeInput");
         Objects.requireNonNull(aggregateIssuanceRate, "aggregateIssuanceRate");
         Objects.requireNonNull(latencySummary, "latencySummary");
-        validateCampaignPopulation(request, issuanceFlowInputs);
+        validateCouponRoundPopulation(request, issuanceFlowInputs);
         validateSnapshotBoundary(request, issuanceFlowInputs, outcomeInput, aggregateIssuanceRate, latencySummary);
     }
 
-    /** 요청 대상과 O1 입력이 같은 쿠폰 ID·캠페인 상태 모집단을 중복 없이 표현하는지 검증합니다. */
-    private static void validateCampaignPopulation(
+    /** 요청 대상과 O1 입력이 같은 쿠폰 ID·쿠폰 회차 상태 모집단을 중복 없이 표현하는지 검증합니다. */
+    private static void validateCouponRoundPopulation(
             OverviewObservationRequest request,
             List<IssuanceFlowInput> issuanceFlowInputs
     ) {
-        Map<Long, CampaignObservationTarget> targetByCouponId = new HashMap<>();
-        for (CampaignObservationTarget campaignTarget : request.campaignTargets()) {
-            targetByCouponId.put(campaignTarget.couponId(), campaignTarget);
+        Map<Long, CouponRoundObservationTarget> targetByCouponId = new HashMap<>();
+        for (CouponRoundObservationTarget couponRoundTarget : request.couponRoundTargets()) {
+            targetByCouponId.put(couponRoundTarget.couponId(), couponRoundTarget);
         }
         Set<Long> observedCouponIds = new HashSet<>();
         for (IssuanceFlowInput issuanceFlowInput : issuanceFlowInputs) {
@@ -65,40 +65,40 @@ public record OverviewObservationData(
             if (!observedCouponIds.add(issuanceFlowInput.couponId())) {
                 throw new IllegalArgumentException("issuanceFlowInputs의 couponId는 중복될 수 없습니다.");
             }
-            CampaignObservationTarget campaignTarget = targetByCouponId.get(issuanceFlowInput.couponId());
-            if (campaignTarget != null) {
-                validateTargetMetadata(campaignTarget, issuanceFlowInput);
+            CouponRoundObservationTarget couponRoundTarget = targetByCouponId.get(issuanceFlowInput.couponId());
+            if (couponRoundTarget != null) {
+                validateTargetMetadata(couponRoundTarget, issuanceFlowInput);
             }
         }
         // 빠진 대상과 요청에 없던 입력을 모두 같은 모집단 불일치로 거부합니다.
         if (!targetByCouponId.keySet().equals(observedCouponIds)) {
-            throw new IllegalArgumentException("O1 캠페인 모집단이 요청 대상과 일치해야 합니다.");
+            throw new IllegalArgumentException("O1 쿠폰 회차 모집단이 요청 대상과 일치해야 합니다.");
         }
     }
 
-    /** 요청 대상의 캠페인 상태와 진행 중 재고 가능 여부가 O1 입력과 모순되지 않는지 검증합니다. */
+    /** 요청 대상의 쿠폰 회차 상태와 진행 중 재고 가능 여부가 O1 입력과 모순되지 않는지 검증합니다. */
     private static void validateTargetMetadata(
-            CampaignObservationTarget campaignTarget,
+            CouponRoundObservationTarget couponRoundTarget,
             IssuanceFlowInput issuanceFlowInput
     ) {
-        if (campaignTarget.campaignStatus() != issuanceFlowInput.campaignStatus()) {
-            throw new IllegalArgumentException("O1 입력의 campaignStatus가 요청 대상과 일치해야 합니다.");
+        if (couponRoundTarget.couponRoundStatus() != issuanceFlowInput.couponRoundStatus()) {
+            throw new IllegalArgumentException("O1 입력의 couponRoundStatus가 요청 대상과 일치해야 합니다.");
         }
-        if (campaignTarget.campaignStatus() != CouponRoundStatus.OPEN) {
+        if (couponRoundTarget.couponRoundStatus() != CouponRoundStatus.OPEN) {
             return;
         }
-        if (campaignTarget.stockStatus().carriesValue()) {
+        if (couponRoundTarget.stockStatus().carriesValue()) {
             // 값 있는 O1은 실제 재고 boolean·최신성·가장 오래된 provenance를 함께 보존해야 합니다.
             if (issuanceFlowInput.sourceStatus().carriesValue()
-                    && !campaignTarget.stockAvailable().equals(issuanceFlowInput.stockAvailable())) {
+                    && !couponRoundTarget.stockAvailable().equals(issuanceFlowInput.stockAvailable())) {
                 throw new IllegalArgumentException("진행 중 O1 입력의 stockAvailable이 요청 대상과 일치해야 합니다.");
             }
             if (issuanceFlowInput.sourceStatus().carriesValue()
-                    && issuanceFlowInput.observedAt().isAfter(campaignTarget.stockObservedAt())) {
+                    && issuanceFlowInput.observedAt().isAfter(couponRoundTarget.stockObservedAt())) {
                 throw new IllegalArgumentException("O1 observedAt은 재고 관측 시각보다 뒤일 수 없습니다.");
             }
         }
-        if (campaignTarget.rejectsFlowStatus(issuanceFlowInput.sourceStatus())) {
+        if (couponRoundTarget.rejectsFlowStatus(issuanceFlowInput.sourceStatus())) {
             throw new IllegalArgumentException("재고 원천보다 O1 입력 상태가 나을 수 없습니다.");
         }
     }

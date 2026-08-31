@@ -18,7 +18,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailabil
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateObservation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.BrandRef;
-import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CampaignRef;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CouponRoundRef;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CatalogSnapshot;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.support.TimeProvider;
@@ -51,14 +51,14 @@ class AdminAnalyticsServiceTest {
         assertThat(timeProvider.callCount).isEqualTo(1);
     }
 
-    /** 카탈로그가 확인된 경우 브랜드·캠페인 소속 불일치를 0건으로 숨기지 않는지 검증합니다. */
+    /** 카탈로그가 확인된 경우 브랜드·쿠폰 회차 소속 불일치를 0건으로 숨기지 않는지 검증합니다. */
     @Test
-    @DisplayName("Service는 브랜드와 캠페인 소속이 다르면 ANALYTICS-004를 반환한다")
-    void rejectsCampaignOwnedByAnotherBrand() {
+    @DisplayName("Service는 브랜드와 쿠폰 회차 소속이 다르면 ANALYTICS-004를 반환한다")
+    void rejectsCouponRoundOwnedByAnotherBrand() {
         CatalogSnapshot catalog = new CatalogSnapshot(
                 AggregateAvailability.AVAILABLE,
                 List.of(new BrandRef(1L, "브랜드 1"), new BrandRef(2L, "브랜드 2")),
-                List.of(new CampaignRef(
+                List.of(new CouponRoundRef(
                         101L, 2L, LocalDate.parse("2026-01-01"), LocalDate.parse("2026-12-31"))));
         RecordingSource source = new RecordingSource(dataset(catalog));
 
@@ -82,10 +82,10 @@ class AdminAnalyticsServiceTest {
                         .getErrorCode().getCode()).isEqualTo("ANALYTICS-002"));
     }
 
-    /** 확인된 카탈로그에 요청 캠페인이 없으면 캠페인 전용 오류로 구분하는지 검증합니다. */
+    /** 확인된 카탈로그에 요청 쿠폰 회차가 없으면 쿠폰 회차 전용 오류로 구분하는지 검증합니다. */
     @Test
-    @DisplayName("Service는 존재하지 않는 캠페인에 ANALYTICS-003을 반환한다")
-    void rejectsMissingCampaign() {
+    @DisplayName("Service는 존재하지 않는 쿠폰 회차에 ANALYTICS-003을 반환한다")
+    void rejectsMissingCouponRound() {
         AdminAnalyticsQuery query = new AdminAnalyticsQuery(
                 QUERY.from(), QUERY.to(), null, 999L, QUERY.zoneId());
         RecordingSource source = new RecordingSource(availableDataset());
@@ -125,7 +125,7 @@ class AdminAnalyticsServiceTest {
         return dataset(new CatalogSnapshot(
                 AggregateAvailability.AVAILABLE,
                 List.of(new BrandRef(1L, "브랜드 1")),
-                List.of(new CampaignRef(
+                List.of(new CouponRoundRef(
                         101L, 1L, LocalDate.parse("2026-01-01"), LocalDate.parse("2026-12-31")))));
     }
 

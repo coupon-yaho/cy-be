@@ -15,7 +15,7 @@ import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.SourceStatus;
 
-/** V1 재고와 O1 발급률을 결합해 O4 소진 예상과 전체 위험을 계산하는 순수 계산기입니다. */
+/** 권위 재고와 O1 발급률을 결합해 O4 소진 예상과 전체 위험을 계산하는 순수 계산기입니다. */
 @Component
 public class StockRiskCalculator {
 
@@ -23,15 +23,15 @@ public class StockRiskCalculator {
     public StockRiskCalculator() { }
 
     /**
-     * 캠페인별 V1 잔량·비율·ETA와 같은 모집단의 전체 소진 위험을 계산합니다.
+     * 쿠폰 회차별 V1 잔량·비율·ETA와 같은 모집단의 전체 소진 위험을 계산합니다.
      *
-     * <p>발급률 0, STALE, WARMING_UP, 값 없음은 ETA null이며 재고 수치는 보존합니다. 적용 캠페인
+     * <p>발급률 0, STALE, WARMING_UP, 값 없음은 ETA null이며 재고 수치는 보존합니다. 적용 쿠폰 회차
      * 하나라도 재고 또는 O1이 미수집이면 전역 위험은 부분 합계가 아닌 UNAVAILABLE입니다.
      * 소진 임박만으로는 조치 후보를 만들지 않습니다.</p>
      *
      * @param policy 소진 임박 기준 시간
      * @param inputs V1 수량과 couponId별 O1 관측값
-     * @return 캠페인별 O4와 전체 소진 위험 관측값
+     * @return 쿠폰 회차별 O4와 전체 소진 위험 관측값
      */
     public StockRiskCalculation calculate(OverviewCalculationPolicy policy, List<StockInput> inputs) {
         Objects.requireNonNull(policy, "policy");
@@ -50,13 +50,8 @@ public class StockRiskCalculator {
             }
             SourceStatus issuanceStatus = input.issuanceFlow() == null
                     ? SourceStatus.UNAVAILABLE : input.issuanceFlow().status();
-            // 예약·종료처럼 재고 위험이 적용되지 않는 캠페인은 전역 모집단에서도 제외합니다.
+            // 예약·종료처럼 재고 위험이 적용되지 않는 쿠폰 회차는 전역 모집단에서도 제외합니다.
             if (input.stockStatus() == SourceStatus.N_A || issuanceStatus == SourceStatus.N_A) {
-                continue;
-            }
-            if (input.engineVersion() != EngineVersion.V1) {
-                // 아직 계산 계약이 없는 엔진을 V1 수량식으로 추정하지 않습니다.
-                applicableStatuses.add(SourceStatus.UNAVAILABLE);
                 continue;
             }
             applicableStatuses.add(aggregateStatus(List.of(input.stockStatus(), issuanceStatus)));
@@ -70,7 +65,7 @@ public class StockRiskCalculator {
             observedAt = observedAt == null || rowObservedAt.isBefore(observedAt)
                     ? rowObservedAt : observedAt;
             Duration eta = forecast.value().estimatedDepletion();
-            // 계산 가능한 ETA가 임계시간 이내인 캠페인만 상단 소진 위험에 집계합니다.
+            // 계산 가능한 ETA가 임계시간 이내인 쿠폰 회차만 상단 소진 위험에 집계합니다.
             if (eta != null && eta.compareTo(policy.stockDepletionThreshold()) <= 0) {
                 riskCount++;
                 if (nearest == null || eta.compareTo(nearest) < 0) {
@@ -87,16 +82,13 @@ public class StockRiskCalculator {
         return new StockRiskCalculation(forecasts, risk);
     }
 
-    /** V1 재고 수량이 유효할 때만 실제 잔량을 만들고, 적격 O1만 ETA 계산에 사용합니다. */
+    /** 권위 재고 수량이 유효할 때 실제 잔량을 만들고, 적격 O1만 ETA 계산에 사용합니다. */
     private static AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast> calculateOne(StockInput input) {
         if (!input.stockStatus().carriesValue()) {
             return new AdminOverviewSnapshot.Observation<>(null, input.stockStatus(), null);
         }
-        if (input.engineVersion() != EngineVersion.V1) {
-            return new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null);
-        }
         validateQuantity(input.totalQuantity(), input.activeCount());
-        // V1의 활성 수량은 이미 발급된 수량이므로 전체 수량에서 차감해 잔량을 구합니다.
+        // Resolver가 V1 DB active와 V2 Redis 잔량을 모두 같은 '발급 수량' 의미로 정규화했습니다.
         long remaining = input.totalQuantity() - input.activeCount();
         Duration eta = depletionEta(remaining, input.issuanceFlow());
         return new AdminOverviewSnapshot.Observation<>(new AdminOverviewSnapshot.StockForecast(remaining,
@@ -155,7 +147,7 @@ public class StockRiskCalculator {
     /**
      * O4 재고 입력입니다.
      *
-     * @param couponId 캠페인 식별자
+     * @param couponId 쿠폰 회차 식별자
      * @param engineVersion 재고 엔진; 이번 계산은 V1만 수량 계산함
      * @param totalQuantity V1 전체 발급 가능 수량
      * @param activeCount V1에서 이미 활성화·발급된 수량
@@ -181,7 +173,7 @@ public class StockRiskCalculator {
      * O4 계산 결과입니다.
      *
      * @param stockForecasts couponId별 재고 관측값
-     * @param stockRisk 모든 적용 캠페인이 수집된 경우에만 계산한 전체 위험
+     * @param stockRisk 모든 적용 쿠폰 회차가 수집된 경우에만 계산한 전체 위험
      */
     public record StockRiskCalculation(
             Map<Long, AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.StockForecast>> stockForecasts,

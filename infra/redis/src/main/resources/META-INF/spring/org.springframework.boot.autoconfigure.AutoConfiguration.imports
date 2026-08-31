@@ -1,4 +1,6 @@
+com.kafkick.infra.redis.coupon.v2.IssuanceGateRedisAutoConfiguration
+com.kafkick.infra.redis.coupon.v2.CouponDefinitionL2RedisAutoConfiguration
 com.kafkick.infra.redis.observation.RedisLatencyAutoConfiguration
 com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration
 com.kafkick.infra.redis.stream.AttemptLiveRedisAutoConfiguration
-com.kafkick.infra.redis.lifecycle.CampaignLifecycleRedisAutoConfiguration
+com.kafkick.infra.redis.lifecycle.CouponRoundLifecycleRedisAutoConfiguration

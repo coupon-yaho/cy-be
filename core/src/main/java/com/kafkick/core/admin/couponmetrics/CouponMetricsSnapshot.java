@@ -9,7 +9,7 @@ import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 
 /**
- * 관리자 캠페인 상세 화면에 전달할 계산 완료 결과입니다.
+ * 관리자 쿠폰 회차 상세 화면에 전달할 계산 완료 결과입니다.
  *
  * <p>HTTP 표현과 분리된 Core 계약이며, 모든 계산값은 원천 상태와 관측 시각을 함께 유지합니다.</p>
  *
@@ -20,7 +20,7 @@ import com.kafkick.core.observation.SourceStatus;
  * @param issuanceProgress 전체 수량 대비 활성 발급 진행 비율
  * @param issuanceRate 현재 및 구간 최고 초당 발급 수
  * @param queue 현재 대기 수와 예상 대기시간
- * @param campaign 캠페인 상태와 오픈 시각
+ * @param couponRound 쿠폰 회차 상태와 오픈 시각
  * @param usageRatio 발급·사용 상태 중 사용 비율
  * @param holdingCounts 발급 상태별 현재 보유량
  * @param transitionRate 구간별 초당 상태 전이 수
@@ -33,7 +33,7 @@ public record CouponMetricsSnapshot(
         Observation<Double> issuanceProgress,
         Observation<RateSummary> issuanceRate,
         QueueSummary queue,
-        CampaignRuntimeSummary campaign,
+        CouponRoundRuntimeSummary couponRound,
         Observation<Double> usageRatio,
         Observation<IssuanceStatusCounts> holdingCounts,
         Observation<TransitionRateSummary> transitionRate
@@ -50,7 +50,7 @@ public record CouponMetricsSnapshot(
         Objects.requireNonNull(issuanceProgress, "issuanceProgress");
         Objects.requireNonNull(issuanceRate, "issuanceRate");
         Objects.requireNonNull(queue, "queue");
-        Objects.requireNonNull(campaign, "campaign");
+        Objects.requireNonNull(couponRound, "couponRound");
         Objects.requireNonNull(usageRatio, "usageRatio");
         Objects.requireNonNull(holdingCounts, "holdingCounts");
         Objects.requireNonNull(transitionRate, "transitionRate");
@@ -91,11 +91,11 @@ public record CouponMetricsSnapshot(
         }
     }
 
-    /** 캠페인의 현재 운영 상태와 설정된 오픈 시각입니다. */
-    public record CampaignRuntimeSummary(CouponRoundStatus status, Instant opensAt) {
+    /** 쿠폰 회차의 현재 운영 상태와 설정된 오픈 시각입니다. */
+    public record CouponRoundRuntimeSummary(CouponRoundStatus status, Instant opensAt) {
 
-        /** 캠페인 실행 정보를 검증합니다. */
-        public CampaignRuntimeSummary {
+        /** 쿠폰 회차 실행 정보를 검증합니다. */
+        public CouponRoundRuntimeSummary {
             Objects.requireNonNull(status, "status");
             Objects.requireNonNull(opensAt, "opensAt");
         }

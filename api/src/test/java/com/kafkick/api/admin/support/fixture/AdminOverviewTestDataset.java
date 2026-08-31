@@ -6,23 +6,23 @@ import java.util.Objects;
 import java.util.Set;
 
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.admin.overview.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.CouponRoundOverviewSource;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
+import com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator.QueueInput;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
 
 /**
- * 관리자 Controller 계약 테스트의 계산 정책·관측 입력·캠페인 원천을 함께 보존합니다.
+ * 관리자 Controller 계약 테스트의 계산 정책·관측 입력·쿠폰 회차 원천을 함께 보존합니다.
  *
- * <p>두 목록을 같은 Dataset으로 묶어 캠페인 기본 목록과 그 캠페인에서 파생된 조치 판정이 서로
+ * <p>두 목록을 같은 Dataset으로 묶어 쿠폰 회차 기본 목록과 그 쿠폰 회차에서 파생된 조치 판정이 서로
  * 다른 기준 시각이나 모집단을 사용하지 않도록 합니다.</p>
  *
  * @param policy O1·O2·O4 판정에 공통으로 사용하는 화면 시나리오 정책
  * @param issuanceFlowInputs couponId별 O1 발급 흐름 원천 목록
  * @param queueInputs couponId별 O2 대기열 원천 목록
- * @param outcomeInput 전체 캠페인 O3 고객 결과 원천
- * @param campaigns 캠페인 상태·오픈 임박·재고 계산에 사용할 원천 목록
+ * @param outcomeInput 전체 쿠폰 회차 O3 고객 결과 원천
+ * @param couponRounds 쿠폰 회차 상태·오픈 임박·재고 계산에 사용할 원천 목록
  * @param aggregateIssuanceRate 전체 신규 발급 완료율 원천 관측값
  * @param latencySummary 성공·실패 응답 p99 원천 관측값
  */
@@ -31,7 +31,7 @@ public record AdminOverviewTestDataset(
         List<IssuanceFlowInput> issuanceFlowInputs,
         List<QueueInput> queueInputs,
         OutcomeInput outcomeInput,
-        List<CampaignOverviewSource> campaigns,
+        List<CouponRoundOverviewSource> couponRounds,
         AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.AggregateIssuanceRate> aggregateIssuanceRate,
         AdminOverviewSnapshot.Observation<AdminOverviewSnapshot.LatencySummary> latencySummary
 ) {
@@ -42,22 +42,22 @@ public record AdminOverviewTestDataset(
         Objects.requireNonNull(issuanceFlowInputs, "issuanceFlowInputs");
         Objects.requireNonNull(queueInputs, "queueInputs");
         Objects.requireNonNull(outcomeInput, "outcomeInput");
-        Objects.requireNonNull(campaigns, "campaigns");
+        Objects.requireNonNull(couponRounds, "couponRounds");
         Objects.requireNonNull(aggregateIssuanceRate, "aggregateIssuanceRate");
         Objects.requireNonNull(latencySummary, "latencySummary");
         issuanceFlowInputs = List.copyOf(issuanceFlowInputs);
         queueInputs = List.copyOf(queueInputs);
-        campaigns = List.copyOf(campaigns);
-        Set<Long> campaignIds = uniqueCampaignIds(campaigns);
+        couponRounds = List.copyOf(couponRounds);
+        Set<Long> couponIds = uniqueCouponRoundIds(couponRounds);
         requireExactlySameCouponIds("issuanceFlowInputs", issuanceFlowInputs.stream()
-                .map(IssuanceFlowInput::couponId).toList(), campaignIds);
+                .map(IssuanceFlowInput::couponId).toList(), couponIds);
         requireExactlySameCouponIds("queueInputs", queueInputs.stream()
-                .map(QueueInput::couponId).toList(), campaignIds);
+                .map(QueueInput::couponId).toList(), couponIds);
     }
 
-    /** 캠페인 행이 정확히 한 번씩만 O1·O2·O4·Action 모집단에 참여하도록 고유 ID를 검증합니다. */
-    private static Set<Long> uniqueCampaignIds(List<CampaignOverviewSource> campaigns) {
-        return uniqueCouponIds("campaigns", campaigns.stream().map(CampaignOverviewSource::couponId).toList());
+    /** 쿠폰 회차 행이 정확히 한 번씩만 O1·O2·O4·Action 모집단에 참여하도록 고유 ID를 검증합니다. */
+    private static Set<Long> uniqueCouponRoundIds(List<CouponRoundOverviewSource> couponRounds) {
+        return uniqueCouponIds("couponRounds", couponRounds.stream().map(CouponRoundOverviewSource::couponId).toList());
     }
 
     /** 목록의 couponId 중복을 계산기나 Service 경계까지 늦추지 않고 Dataset 생성 시점에 거부합니다. */
@@ -75,11 +75,11 @@ public record AdminOverviewTestDataset(
     private static void requireExactlySameCouponIds(
             String name,
             List<Long> inputCouponIds,
-            Set<Long> campaignIds
+            Set<Long> couponIds
     ) {
         Set<Long> inputIds = uniqueCouponIds(name, inputCouponIds);
-        if (!inputIds.equals(campaignIds)) {
-            throw new IllegalArgumentException(name + "의 couponId는 campaigns와 정확히 일치해야 합니다.");
+        if (!inputIds.equals(couponIds)) {
+            throw new IllegalArgumentException(name + "의 couponId는 couponRounds와 정확히 일치해야 합니다.");
         }
     }
 }

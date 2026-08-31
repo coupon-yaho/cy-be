@@ -9,18 +9,18 @@ import java.util.Objects;
 import com.kafkick.core.observation.Severity;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
-import com.kafkick.core.admin.campaignsource.PreparationItem;
+import com.kafkick.core.admin.couponroundsource.PreparationItem;
 
 /**
  * 관리자 운영현황 Service와 순수 Calculator가 조립하는 기술 중립 결과입니다.
  *
- * <p>HTTP 응답 DTO를 그대로 복제하지 않고 상단 위험 KPI, 전체 발급·대기·지연·캠페인 상태 집계,
- * 조치 목록, 캠페인별 O1·O2·O4, 전체 캠페인 O3 결과 집계로 구성합니다. 각 의미 단위는
+ * <p>HTTP 응답 DTO를 그대로 복제하지 않고 상단 위험 KPI, 전체 발급·대기·지연·쿠폰 회차 상태 집계,
+ * 조치 목록, 쿠폰 회차별 O1·O2·O4, 전체 쿠폰 회차 O3 결과 집계로 구성합니다. 각 의미 단위는
  * {@link Observation}으로 값과 원천 상태 및 실제 관측 시각을 분리합니다. 따라서 미관측 값을 0이나
  * 정상 상태로 위조하지 않고 {@code value=null}과 적절한 {@link SourceStatus}로 전달할 수 있습니다.</p>
  *
  * <p>이 모델은 DB Entity, Redis 자료구조, Kafka record, Micrometer meter에 직접 의존하지 않습니다.
- * 캠페인 Repository와 관측 조회 구성요소가 만든 의미 값을 이 Snapshot으로 조립한 뒤 HTTP 응답으로
+ * 쿠폰 회차 Repository와 관측 조회 구성요소가 만든 의미 값을 이 Snapshot으로 조립한 뒤 HTTP 응답으로
  * 변환합니다. 실제 운영 원천이 연결되기 전에는 값을 0으로 대신하지 않고 각 영역을 명시적인
  * {@code UNAVAILABLE} 상태로 표현합니다.</p>
  *
@@ -29,17 +29,17 @@ import com.kafkick.core.admin.campaignsource.PreparationItem;
  * 호출해 상태·값·관측 시각을 보존하며 Core가 API 표현 타입에 의존하지 않게 합니다.</p>
  *
  * @param snapshotAt 여러 원천을 하나의 결과로 조립한 전체 기준 시각
- * @param actionRequired 조치 필요 캠페인의 전체·긴급·주의 수와 해당 관측 상태
- * @param openingSoon 30분 내 오픈 및 준비 미완료 캠페인 수와 해당 관측 상태
+ * @param actionRequired 조치 필요 쿠폰 회차의 전체·긴급·주의 수와 해당 관측 상태
+ * @param openingSoon 30분 내 오픈 및 준비 미완료 쿠폰 회차 수와 해당 관측 상태
  * @param queueRisk 대기 기준 초과 수와 최장 대기시간 및 해당 관측 상태
  * @param stockRisk 소진 위험 수와 가장 가까운 예상 소진시간 및 해당 관측 상태
- * @param aggregateIssuanceRate 전체 캠페인의 현재·세션 최고 발급률과 관측 상태
- * @param aggregateQueue 전체 캠페인의 대기 인원·입장 처리율·예상 대기시간과 관측 상태
+ * @param aggregateIssuanceRate 전체 쿠폰 회차의 현재·세션 최고 발급률과 관측 상태
+ * @param aggregateQueue 전체 쿠폰 회차의 대기 인원·입장 처리율·예상 대기시간과 관측 상태
  * @param latencySummary 성공·실패 응답 p99와 관측 구간 및 관측 상태
- * @param campaignStatusSummary 진행·예정·종료 캠페인 수와 관측 상태
+ * @param couponRoundStatusSummary 진행·예정·종료 쿠폰 회차 수와 관측 상태
  * @param actionItems 서버가 판정한 전체 건수와 상위 20개 조치 및 해당 관측 상태
- * @param campaigns 캠페인 기본 목록과 O1·O2·O4 중첩 관측값; 바깥 상태는 기본 목록 조회 상태만 의미
- * @param customerOutcomes 최근 관측 구간의 전체 캠페인 O3 고객 결과 집계와 관측 상태
+ * @param couponRounds 쿠폰 회차 기본 목록과 O1·O2·O4 중첩 관측값; 바깥 상태는 기본 목록 조회 상태만 의미
+ * @param customerOutcomes 최근 관측 구간의 전체 쿠폰 회차 O3 고객 결과 집계와 관측 상태
  */
 public record AdminOverviewSnapshot(
         Instant snapshotAt,
@@ -50,15 +50,15 @@ public record AdminOverviewSnapshot(
         Observation<AggregateIssuanceRate> aggregateIssuanceRate,
         Observation<AggregateQueue> aggregateQueue,
         Observation<LatencySummary> latencySummary,
-        Observation<CampaignStatusSummary> campaignStatusSummary,
+        Observation<CouponRoundStatusSummary> couponRoundStatusSummary,
         Observation<ActionItemSnapshot> actionItems,
-        Observation<List<CampaignOverview>> campaigns,
+        Observation<List<CouponRoundOverview>> couponRounds,
         Observation<CustomerOutcomeSummary> customerOutcomes) {
 
     public AdminOverviewSnapshot {
-        if (campaigns != null && campaigns.value() != null) {
-            campaigns = new Observation<>(
-                    List.copyOf(campaigns.value()), campaigns.status(), campaigns.observedAt());
+        if (couponRounds != null && couponRounds.value() != null) {
+            couponRounds = new Observation<>(
+                    List.copyOf(couponRounds.value()), couponRounds.status(), couponRounds.observedAt());
         }
     }
 
@@ -103,26 +103,26 @@ public record AdminOverviewSnapshot(
     }
 
     /**
-     * 화면의 ‘조치 필요 캠페인’ KPI를 구성하는 서버 판정 결과입니다.
+     * 화면의 ‘조치 필요 쿠폰 회차’ KPI를 구성하는 서버 판정 결과입니다.
      *
-     * @param totalCount 전체 조치 필요 캠페인 수
-     * @param urgentCount 긴급 조치 캠페인 수
-     * @param warningCount 주의 조치 캠페인 수
+     * @param totalCount 전체 조치 필요 쿠폰 회차 수
+     * @param urgentCount 긴급 조치 쿠폰 회차 수
+     * @param warningCount 주의 조치 쿠폰 회차 수
      */
     public record ActionRequiredSummary(long totalCount, long urgentCount, long warningCount) { }
 
     /**
      * 화면의 ‘30분 내 오픈’ KPI를 구성하는 서버 판정 결과입니다.
      *
-     * @param totalCount 30분 안에 오픈하는 전체 캠페인 수
-     * @param preparationIncompleteCount 그중 준비 완료가 확인되지 않은 캠페인 수
+     * @param totalCount 30분 안에 오픈하는 전체 쿠폰 회차 수
+     * @param preparationIncompleteCount 그중 준비 완료가 확인되지 않은 쿠폰 회차 수
      */
     public record OpeningSoonSummary(long totalCount, long preparationIncompleteCount) { }
 
     /**
      * 화면의 ‘대기 기준 초과’ KPI를 구성하는 서버 판정 결과입니다.
      *
-     * @param thresholdExceededCount 대기 기준을 초과한 캠페인 수
+     * @param thresholdExceededCount 대기 기준을 초과한 쿠폰 회차 수
      * @param longestWait 가장 긴 대기시간; 미관측이거나 계산할 수 없으면 null
      */
     public record QueueRiskSummary(long thresholdExceededCount, Duration longestWait) { }
@@ -130,13 +130,13 @@ public record AdminOverviewSnapshot(
     /**
      * 화면의 ‘소진 임박’ KPI를 구성하는 서버 판정 결과입니다.
      *
-     * @param depletionRiskCount 소진 위험으로 판정된 캠페인 수
+     * @param depletionRiskCount 소진 위험으로 판정된 쿠폰 회차 수
      * @param nearestDepletion 가장 가까운 예상 소진까지의 시간; 미관측 또는 예측 불가이면 null
      */
     public record StockRiskSummary(long depletionRiskCount, Duration nearestDepletion) { }
 
     /**
-     * 운영 현황 전체 캠페인의 발급 속도 요약입니다.
+     * 운영 현황 전체 쿠폰 회차의 발급 속도 요약입니다.
      *
      * <p>두 값의 단위는 초당 성공 발급 건수입니다. 실제 요청이 없을 때의 0은
      * {@link SourceStatus#NO_TRAFFIC}과 함께 사용하고, 관측할 수 없으면 이 값 전체를 null로 둡니다.</p>
@@ -147,7 +147,7 @@ public record AdminOverviewSnapshot(
     public record AggregateIssuanceRate(double currentPerSecond, double sessionPeakPerSecond) { }
 
     /**
-     * 운영 현황 전체 캠페인의 대기열 요약입니다.
+     * 운영 현황 전체 쿠폰 회차의 대기열 요약입니다.
      *
      * @param waitingCount 현재 대기 중인 전체 인원; 실제 대기자가 없으면 0
      * @param admissionsPerSecond 현재 초당 입장 처리 인원; 실제 처리량이 0이면 0
@@ -170,49 +170,49 @@ public record AdminOverviewSnapshot(
                                  Instant windowStart, Instant windowEnd) { }
 
     /**
-     * 현재 조립 시각을 기준으로 한 캠페인 회차 상태별 건수입니다.
+     * 현재 조립 시각을 기준으로 한 쿠폰 회차 상태별 건수입니다.
      *
-     * @param openCount 현재 진행 중인 {@link CouponRoundStatus#OPEN} 캠페인 수
-     * @param scheduledCount 오픈 예정인 {@link CouponRoundStatus#SCHEDULED} 캠페인 수
-     * @param closedCount 종료된 {@link CouponRoundStatus#CLOSED} 캠페인 수
+     * @param openCount 현재 진행 중인 {@link CouponRoundStatus#OPEN} 쿠폰 회차 수
+     * @param scheduledCount 오픈 예정인 {@link CouponRoundStatus#SCHEDULED} 쿠폰 회차 수
+     * @param closedCount 종료된 {@link CouponRoundStatus#CLOSED} 쿠폰 회차 수
      */
-    public record CampaignStatusSummary(long openCount, long scheduledCount, long closedCount) { }
+    public record CouponRoundStatusSummary(long openCount, long scheduledCount, long closedCount) { }
 
     /**
-     * 캠페인 운영 상태표와 O1·O2·O4가 함께 사용하는 캠페인별 계약입니다.
+     * 쿠폰 회차 운영 상태표와 O1·O2·O4가 함께 사용하는 쿠폰 회차별 계약입니다.
      *
-     * <p>{@code campaigns} 바깥 {@link Observation}은 이 기본 목록을 읽은 상태만 나타냅니다.
+     * <p>{@code couponRounds} 바깥 {@link Observation}은 이 기본 목록을 읽은 상태만 나타냅니다.
      * 발급 흐름, 대기열, 재고는 서로 다른 원천에서 관측되므로 각 내부 Observation의 상태와
      * {@code observedAt}을 독립적으로 해석해야 합니다.</p>
      *
      * @param priority 서버가 결정한 운영 조치 우선순위; 1이 가장 먼저 확인할 항목
-     * @param couponId 현재 Query 및 관리자 계약에서 사용하는 쿠폰 캠페인 회차 식별자
-     * @param campaignName 화면에 표시할 캠페인 이름
+     * @param couponId 현재 Query 및 관리자 계약에서 사용하는 쿠폰 회차 식별자
+     * @param couponName 화면에 표시할 쿠폰 회차 이름
      * @param brandName 화면 필터와 표에 표시할 브랜드 이름
-     * @param status 캠페인 회차의 예약·진행·종료 상태
-     * @param opensAt 캠페인 오픈 시각
+     * @param status 쿠폰 회차의 예약·진행·종료 상태
+     * @param opensAt 쿠폰 회차 오픈 시각
      * @param closesAt 예정 종료 시각; 종료 미지정이면 null
      * @param severity 운영 조치 우선순위를 색상으로 표현할 심각도
-     * @param issuanceFlow O1 캠페인별 실관측 발급 흐름과 해당 원천 상태; CY-413의 O4 ETA는
+     * @param issuanceFlow O1 쿠폰 회차별 실관측 발급 흐름과 해당 원천 상태; CY-413의 O4 ETA는
      *                     이 값이 아닌 별도 Mock O1 입력으로 계산
-     * @param campaignQueueStatus O2 캠페인별 대기 상태와 해당 원천 상태
-     * @param stockForecast O4 캠페인별 재고·소진 예상과 해당 원천 상태
+     * @param couponRoundQueueStatus O2 쿠폰 회차별 대기 상태와 해당 원천 상태
+     * @param stockForecast O4 쿠폰 회차별 재고·소진 예상과 해당 원천 상태
      * @param failedPreparationItems Core가 확정한 준비 실패 항목; 미판정이면 빈 목록
      * @param customerImpact 고객 영향 범위
      * @param customerImpactText 운영 담당자에게 표시할 고객 영향 설명
      * @param recommendedAction 서버가 제공하는 다음 행동; 조치가 필요 없으면 null
      */
-    public record CampaignOverview(
+    public record CouponRoundOverview(
             int priority,
             Long couponId,
-            String campaignName,
+            String couponName,
             String brandName,
             CouponRoundStatus status,
             Instant opensAt,
             Instant closesAt,
             Severity severity,
             Observation<IssuanceFlow> issuanceFlow,
-            Observation<CampaignQueueStatus> campaignQueueStatus,
+            Observation<CouponRoundQueueStatus> couponRoundQueueStatus,
             Observation<StockForecast> stockForecast,
             List<PreparationItem> failedPreparationItems,
             CustomerImpact customerImpact,
@@ -220,29 +220,29 @@ public record AdminOverviewSnapshot(
             RecommendedAction recommendedAction) {
 
         /** 확정 실패 목록이 외부 변경으로 바뀌지 않도록 불변 복사합니다. */
-        public CampaignOverview {
+        public CouponRoundOverview {
             failedPreparationItems = List.copyOf(failedPreparationItems);
         }
 
         /** 이전 fixture의 행 생성 시 준비 실패 목록을 빈 목록으로 둡니다. */
         @Deprecated
-        public CampaignOverview(
-                int priority, Long couponId, String campaignName, String brandName,
+        public CouponRoundOverview(
+                int priority, Long couponId, String couponName, String brandName,
                 CouponRoundStatus status, Instant opensAt, Instant closesAt, Severity severity,
                 Observation<IssuanceFlow> issuanceFlow,
-                Observation<CampaignQueueStatus> campaignQueueStatus,
+                Observation<CouponRoundQueueStatus> couponRoundQueueStatus,
                 Observation<StockForecast> stockForecast,
                 CustomerImpact customerImpact, String customerImpactText,
                 RecommendedAction recommendedAction
         ) {
-            this(priority, couponId, campaignName, brandName, status, opensAt, closesAt, severity,
-                    issuanceFlow, campaignQueueStatus, stockForecast, List.of(), customerImpact,
+            this(priority, couponId, couponName, brandName, status, opensAt, closesAt, severity,
+                    issuanceFlow, couponRoundQueueStatus, stockForecast, List.of(), customerImpact,
                     customerImpactText, recommendedAction);
         }
     }
 
     /**
-     * O1 캠페인별 발급 속도와 최근 추세입니다.
+     * O1 쿠폰 회차별 발급 속도와 최근 추세입니다.
      *
      * @param currentPerMinute 현재 분당 성공 발급 건수; 실제 무트래픽이면 0
      * @param windowStart 시계열 관측 구간 시작 시각
@@ -272,10 +272,10 @@ public record AdminOverviewSnapshot(
     public record IssuanceRatePoint(Instant observedAt, double issuancesPerMinute) { }
 
     /**
-     * O2 캠페인별 대기 인원과 입장 처리 상태입니다.
+     * O2 쿠폰 회차별 대기 인원과 입장 처리 상태입니다.
      *
      * <p>기존 {@code com.kafkick.core.admin.QueueState} 수명주기 enum과 의미가 다르므로
-     * {@code CampaignQueueStatus}라는 이름을 사용합니다.</p>
+     * {@code CouponRoundQueueStatus}라는 이름을 사용합니다.</p>
      *
      * @param waitingCount 현재 대기 인원; 실제 대기자가 없으면 0
      * @param trend 최근 대기 인원 변화 방향
@@ -284,25 +284,25 @@ public record AdminOverviewSnapshot(
      * @param estimatedWait 예상 대기시간; 처리율 0 또는 계산 불가이면 null
      * @param assessment 서버가 판정한 정상·입장 중단·안내 기준 초과 상태
      */
-    public record CampaignQueueStatus(
+    public record CouponRoundQueueStatus(
             long waitingCount,
             TrendDirection trend,
             long waitingDeltaPerMinute,
             Double admissionsPerMinute,
             Duration estimatedWait,
-            CampaignQueueAssessment assessment) { }
+            CouponRoundQueueAssessment assessment) { }
 
     /**
-     * O4 캠페인별 재고와 예상 소진 상태입니다.
+     * O4 쿠폰 회차별 재고와 예상 소진 상태입니다.
      *
      * <p>V1은 MySQL 재고, V2·V3는 Redis 재고를 사용하지만 이 계약에는 기술 원천을 노출하지
      * 않습니다. 원천 선택과 실제 계산은 구현체가 담당합니다. CY-413 동안 O4 예상 소진은 같은 행의
-     * 실관측 {@link CampaignOverview#issuanceFlow()}가 아니라 별도로 유지한 Mock O1 입력으로 계산합니다.
+     * 실관측 {@link CouponRoundOverview#issuanceFlow()}가 아니라 별도로 유지한 Mock O1 입력으로 계산합니다.
      * 재고 원천과 화면 O1의 상태·관측 시각을 독립적으로 유지하기 위해 이 record에 발급 속도를
      * 중복 저장하지 않습니다.</p>
      *
      * @param remainingQuantity 현재 잔여 수량; 실제 소진이면 0
-     * @param totalQuantity 캠페인의 전체 발급 가능 수량
+     * @param totalQuantity 쿠폰 회차의 전체 발급 가능 수량
      * @param remainingRatio 잔여 비율 0~1; 예를 들어 5%는 0.05
      * @param estimatedDepletion 예상 소진까지의 시간; 발급률 0 또는 예측 불가이면 null
      */
@@ -310,7 +310,7 @@ public record AdminOverviewSnapshot(
                                 double remainingRatio, Duration estimatedDepletion) { }
 
     /**
-     * O3 최근 관측 구간의 전체 캠페인 고객 결과 집계입니다.
+     * O3 최근 관측 구간의 전체 쿠폰 회차 고객 결과 집계입니다.
      *
      * @param windowStart 집계 구간 시작 시각
      * @param windowEnd 집계 구간 종료 시각
@@ -407,9 +407,9 @@ public record AdminOverviewSnapshot(
      * 드러나는 {@link Duration}을 사용하고 계산할 수 없으면 null입니다. 권장 행동의 코드·표시 문구·버튼
      * 목적지는 서버가 {@link RecommendedAction}으로 함께 제공하므로 프론트가 문구를 재판정하지 않습니다.</p>
      *
-     * @param couponId 조치 대상 쿠폰 캠페인 회차의 필수 식별자
-     * @param campaignName 운영 화면에 표시할 캠페인 이름
-     * @param opensAt 캠페인 오픈 시각; 오픈 시각이 없거나 확인할 수 없으면 null
+     * @param couponId 조치 대상 쿠폰 회차의 필수 식별자
+     * @param couponName 운영 화면에 표시할 쿠폰 회차 이름
+     * @param opensAt 쿠폰 회차 오픈 시각; 오픈 시각이 없거나 확인할 수 없으면 null
      * @param severity 운영 조치 우선순위의 심각도
      * @param customerImpact 고객 영향 범위
      * @param customerImpactText 현재 고객 영향을 설명하는 서버 제공 문구
@@ -419,7 +419,7 @@ public record AdminOverviewSnapshot(
      */
     public record OperationActionItem(
             Long couponId,
-            String campaignName,
+            String couponName,
             Instant opensAt,
             Severity severity,
             CustomerImpact customerImpact,
@@ -444,7 +444,7 @@ public record AdminOverviewSnapshot(
 
     /** HTML의 대표 조치 유형을 안정적인 서버 권장 행동 코드로 표현합니다. */
     public enum ActionCode {
-        CAMPAIGN_NOT_READY,
+        COUPON_ROUND_NOT_READY,
         QUEUE_STALLED,
         ISSUANCE_STOPPED,
         CONSISTENCY_FAILURE,
@@ -452,7 +452,7 @@ public record AdminOverviewSnapshot(
         DATA_UNAVAILABLE
     }
 
-    /** O1에서 서버가 판정해 화면에 표시하는 캠페인 발급 흐름 상태입니다. */
+    /** O1에서 서버가 판정해 화면에 표시하는 쿠폰 회차 발급 흐름 상태입니다. */
     public enum IssuanceFlowState {
         STOPPED,
         DECREASING,
@@ -467,7 +467,7 @@ public record AdminOverviewSnapshot(
     }
 
     /** O2에서 대기 깊이와 입장 처리율을 함께 보고 내린 운영 판정입니다. */
-    public enum CampaignQueueAssessment {
+    public enum CouponRoundQueueAssessment {
         ADMISSION_STOPPED,
         GUIDANCE_THRESHOLD_EXCEEDED,
         NORMAL
@@ -481,10 +481,22 @@ public record AdminOverviewSnapshot(
         STOCK_EXHAUSTED,
         INELIGIBLE,
         ENTRY_EXPIRED,
-        SYSTEM_FAILURE
+        SYSTEM_FAILURE,
+        /**
+         * 같은 멱등키의 요청이 아직 처리 중이라 결과가 아직 없다. v2 가 만든 결과다 — v1 은
+         * 이 자리에서 폴링하며 기다려 클라이언트에게 이 상태가 보이지 않았다.
+         *
+         * <p><b>{@link #ALREADY_ISSUED} 로 접지 않는다.</b> 그건 "다른 시도가 이미 그 회원으로
+         * 받았다" 는 거절이고 이건 다시 보내면 대개 쿠폰을 받는다 — 뭉치면 중복 급증이 재시도
+         * 물결에 묻힌다. {@link #SYSTEM_FAILURE} 도 아니다: 멱등이 설계대로 동작한 결과다.
+         *
+         * <p><b>기존 7종의 이름과 선언 순서를 그대로 두고 끝에 붙였다.</b> 선언 순서가 화면의
+         * 행 순서라 중간에 넣으면 기존 행이 밀린다.
+         */
+        RETRY_IN_PROGRESS
     }
 
-    /** 캠페인별 고객 영향의 범위를 제한된 서버 코드로 표현합니다. */
+    /** 쿠폰 회차별 고객 영향의 범위를 제한된 서버 코드로 표현합니다. */
     public enum CustomerImpact {
         NONE,
         LIMITED,
@@ -494,7 +506,7 @@ public record AdminOverviewSnapshot(
     /** 권장 행동 버튼이 이동할 관리자 화면을 제한된 코드로 표현합니다. */
     public enum TargetScreen {
         OVERVIEW,
-        CAMPAIGN_DETAIL,
+        COUPON_ROUND_DETAIL,
         METRICS,
         ISSUANCE_INQUIRY,
         NOTIFICATION_FAILURES

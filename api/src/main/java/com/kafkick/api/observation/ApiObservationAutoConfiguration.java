@@ -6,17 +6,27 @@ import javax.sql.DataSource;
 
 import com.kafkick.api.observation.issuance.IssuanceObservationService;
 import com.kafkick.api.observation.issuance.IssuanceObservationContextFactory;
-import com.kafkick.api.observation.issuance.CampaignMeterProperties;
-import com.kafkick.api.observation.issuance.CampaignMeterRegistry;
+import com.kafkick.api.observation.issuance.CouponRoundMeterProperties;
+import com.kafkick.api.observation.issuance.CouponRoundMeterRegistry;
 import com.kafkick.api.observation.issuance.CompositeEventRecorder;
-import com.kafkick.api.observation.issuance.MeterCampaignLifecycleRecorder;
+import com.kafkick.api.observation.issuance.MeterCouponRoundLifecycleRecorder;
 import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
+import com.kafkick.core.coupon.v2.RequestTokenGenerator;
+import com.kafkick.core.coupon.v2.V2CouponIssueService;
+import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.coupon.port.IdempotencyRepository;
+import com.kafkick.core.coupon.port.IdempotencyResultCodec;
+import com.kafkick.core.coupon.port.CouponStockRepository;
+import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
+import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
+import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.consistency.ConsistencySeverityPolicy;
 import com.kafkick.core.consistency.DefaultConsistencyCalculator;
-import com.kafkick.core.observation.CampaignLifecycleRecorder;
-import com.kafkick.core.observation.ClosedCampaignRecoverySource;
+import com.kafkick.core.observation.CouponRoundLifecycleRecorder;
+import com.kafkick.core.observation.ClosedCouponRoundRecoverySource;
 import com.kafkick.core.observation.EventIdGenerator;
 import com.kafkick.core.observation.EventRecorder;
 import com.kafkick.core.observation.IssuanceFlowEventFactory;
@@ -35,6 +45,8 @@ import org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterR
 import org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @AutoConfiguration(
         after = {
@@ -43,16 +55,96 @@ import org.springframework.context.annotation.Primary;
         },
         afterName = {
                 "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
-                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration"
+                "com.kafkick.infra.redis.runtimeconfig.RuntimeConfigRedisAutoConfiguration",
+                // v2CouponIssueService 가 @ConditionalOnBean(IssuanceGatePort) 다. 그 조건은
+                // 평가 시점에 이미 등록된 빈만 보므로, 게이트 자동설정이 뒤에 돌면 조건이
+                // 조용히 거짓이 되어 서비스가 아예 안 만들어진다 — 기동은 성공하고 첫 발급
+                // 요청에서 500 이 난다. V2IssuanceGateWiringTest 가 이 줄을 지킨다.
+                "com.kafkick.infra.redis.coupon.v2.IssuanceGateRedisAutoConfiguration"
         })
 @EnableConfigurationProperties({
         ConsistencySeverityProperties.class,
         ObservationIssuanceProperties.class,
-        CampaignMeterProperties.class
+        CouponRoundMeterProperties.class
 })
 public class ApiObservationAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(ApiObservationAutoConfiguration.class);
+
+    @Bean
+    @ConditionalOnMissingBean(RequestTokenGenerator.class)
+    public RequestTokenGenerator requestTokenGenerator(
+            ObservationIssuanceProperties issuanceProperties
+    ) {
+        return new RequestTokenGenerator(issuanceProperties.producerInstanceId());
+    }
+
+    /**
+     * v2 발급 서비스.
+     *
+     * <p>조건에 <b>게이트만</b> 걸면 안 된다. Redis 는 있는데 storage 가 없는 컨텍스트
+     * (관리 포트·미터 계약 테스트가 그렇다)에서 이 빈이 생성을 시도하다 의존성을 못 찾고
+     * 컨텍스트를 통째로 떨어뜨린다.
+     *
+     * <p><b>조건이 검사하는 여섯의 순서 보장은 두 갈래다.</b>
+     *
+     * <ul>
+     *   <li>{@link IssuanceGatePort} 하나만 <b>자동설정 빈</b>이다
+     *       ({@code IssuanceGateRedisAutoConfiguration}). 자동설정끼리는 등록 순서가 정해져
+     *       있지 않으므로 이 클래스의 {@code afterName} 선언이 그 순서를 강제한다 — 그 선언이
+     *       빠졌던 것이 이 조건을 조용히 거짓으로 만들었다.</li>
+     *   <li>나머지 다섯은 storage·core 의 <b>컴포넌트 스캔 빈</b>이라 자동설정 평가보다 먼저
+     *       등록된다. 이쪽은 순서 선언이 필요 없다.</li>
+     * </ul>
+     *
+     * <p><b>조건에 넣지 못하는 것 둘.</b>
+     *
+     * <ul>
+     *   <li>{@code IdempotencyResultCodec<CouponIssueResult>} — 어노테이션에 제네릭을 쓸 수
+     *       없다. 원시 타입으로 걸면 발급·사용·취소·사용취소 <b>네 codec 중 아무거나</b> 있어도
+     *       참이 되어 오탐이다. 구현 타입({@code CouponIssueResultCodec})으로 거는 것은 api 가
+     *       storage 를 컴파일 단계에서 보게 만들어 모듈 경계를 깬다.</li>
+     *   <li>{@code RequestTokenGenerator} — 이 설정이 스스로 만드는 빈이라 조건에 걸 대상이
+     *       아니다.</li>
+     * </ul>
+     *
+     * <p>그래서 이 조건은 <b>"필요한 것을 전부 검사한다"가 아니라 "검사할 수 있는 것을
+     * 검사한다"</b>이다. 검사 못 하는 codec 이 없으면 조건을 통과한 뒤 빈 생성에서 실패한다 —
+     * 다만 그 codec 은 리포지터리 셋과 같은 storage 컴포넌트 스캔에서 나오므로, 리포지터리가
+     * 있는데 codec 만 없는 컨텍스트는 storage 를 반쯤 얹은 것이고 그때는 <b>조용히 빠지는
+     * 것보다 기동 실패가 낫다.</b>
+     */
+    @Bean
+    @ConditionalOnBean({
+            IssuanceGatePort.class,
+            IssuanceRepository.class,
+            IssuanceHistoryRepository.class,
+            IdempotencyRepository.class,
+            CouponStockRepository.class,
+            CouponCodeGenerator.class,
+            PlatformTransactionManager.class
+    })
+    @ConditionalOnMissingBean(V2CouponIssueService.class)
+    public V2CouponIssueService v2CouponIssueService(
+            IssuanceGatePort gate,
+            IssuanceRepository issuances,
+            IssuanceHistoryRepository histories,
+            IdempotencyRepository idempotencies,
+            CouponStockRepository stocks,
+            CouponCodeGenerator codeGenerator,
+            IdempotencyResultCodec<CouponIssueResult> resultCodec,
+            RequestTokenGenerator tokenGenerator,
+            PlatformTransactionManager transactionManager
+    ) {
+        // TransactionOperations 를 조건으로 걸지 않는다 — 그런 빈은 저장소 어디에도 없고
+        // Boot 도 자동 등록하지 않는다. 조건에 넣으면 영원히 거짓이라 v2 가 조립되지 않고,
+        // 그 사실은 첫 발급 요청의 500 으로만 드러난다(실측). 여기서 직접 만든다.
+        // 생성자 인자는 조건 평가가 아니라 빈 생성 시점에 풀리므로 자동설정 순서와 무관하다.
+        return new V2CouponIssueService(
+                gate, issuances, histories, idempotencies, stocks, codeGenerator,
+                resultCodec, tokenGenerator, new TransactionTemplate(transactionManager)
+        );
+    }
 
     @Bean
     @ConditionalOnMissingBean(EventIdGenerator.class)
@@ -67,38 +159,38 @@ public class ApiObservationAutoConfiguration {
     }
 
     /**
-     * MeterRegistry 가 있는 프로세스에 JVM 내 캠페인 미터 기록기를 등록합니다.
+     * MeterRegistry 가 있는 프로세스에 JVM 내 쿠폰 회차 미터 기록기를 등록합니다.
      *
      * <p>조건은 {@link MeterRegistry} 하나뿐입니다. 다른 {@link EventRecorder} 가 있다고 해서
      * 물러서지 않습니다 — 이 기록기는 대체재가 아니라 병렬 sink 이고, 아래 fan-out 이 모두를
      * 함께 호출합니다. 예전처럼 "다른 EventRecorder 가 있으면 등록하지 않는다" 로 두면 사용자가
-     * 자기 기록기를 하나 얹는 순간 캠페인 미터가 통째로, <b>로그 한 줄 없이</b> 사라집니다.
+     * 자기 기록기를 하나 얹는 순간 쿠폰 회차 미터가 통째로, <b>로그 한 줄 없이</b> 사라집니다.
      *
      * @param issuanceProperties 기록 실패 로그의 유량 제한 간격
-     * @return 캠페인별 발급 미터 기록기
+     * @return 쿠폰 회차별 발급 미터 기록기
      */
     @Bean(name = "meterEventRecorder")
     @ConditionalOnBean(MeterRegistry.class)
     @ConditionalOnMissingBean(MeterEventRecorder.class)
     public MeterEventRecorder meterEventRecorder(
             ObservationIssuanceProperties issuanceProperties,
-            CampaignMeterRegistry campaignMeterRegistry
+            CouponRoundMeterRegistry couponRoundMeterRegistry
     ) {
-        return new MeterEventRecorder(campaignMeterRegistry,
+        return new MeterEventRecorder(couponRoundMeterRegistry,
                 issuanceProperties.resolvedAttemptFailureLogInterval());
     }
 
     @Bean(destroyMethod = "close")
     @ConditionalOnBean(MeterRegistry.class)
-    @ConditionalOnMissingBean(CampaignMeterRegistry.class)
-    public CampaignMeterRegistry campaignMeterRegistry(
+    @ConditionalOnMissingBean(CouponRoundMeterRegistry.class)
+    public CouponRoundMeterRegistry couponRoundMeterRegistry(
             MeterRegistry meterRegistry,
-            CampaignMeterProperties campaignMeterProperties,
+            CouponRoundMeterProperties couponRoundMeterProperties,
             ObservationIssuanceProperties issuanceProperties
     ) {
-        return new CampaignMeterRegistry(
+        return new CouponRoundMeterRegistry(
                 meterRegistry,
-                campaignMeterProperties,
+                couponRoundMeterProperties,
                 issuanceProperties.resolvedAttemptFailureLogInterval());
     }
 
@@ -144,34 +236,34 @@ public class ApiObservationAutoConfiguration {
     }
 
     /**
-     * 캠페인 수명 통지를 받을 기본 포트를 등록합니다.
+     * 쿠폰 회차 수명 통지를 받을 기본 포트를 등록합니다.
      *
      * <p>실구현(OBS-26)이 들어오기 전에도 호출부를 붙일 수 있게 무동작 구현을 기본값으로 둡니다.
      *
      * @return 통지를 버리는 기본 수명 기록 포트
      */
     @Bean
-    @ConditionalOnMissingBean(CampaignLifecycleRecorder.class)
-    public CampaignLifecycleRecorder campaignLifecycleRecorder(
-            ObjectProvider<CampaignMeterRegistry> campaignMeterRegistry
+    @ConditionalOnMissingBean(CouponRoundLifecycleRecorder.class)
+    public CouponRoundLifecycleRecorder couponRoundLifecycleRecorder(
+            ObjectProvider<CouponRoundMeterRegistry> couponRoundMeterRegistry
     ) {
-        CampaignMeterRegistry registry = campaignMeterRegistry.getIfAvailable();
+        CouponRoundMeterRegistry registry = couponRoundMeterRegistry.getIfAvailable();
         if (registry != null) {
-            return new MeterCampaignLifecycleRecorder(registry);
+            return new MeterCouponRoundLifecycleRecorder(registry);
         }
-        log.warn("CampaignLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
-        return new NoOpCampaignLifecycleRecorder();
+        log.warn("CouponRoundLifecycleRecorder 실구현이 없어 no-op을 사용합니다.");
+        return new NoOpCouponRoundLifecycleRecorder();
     }
 
     @Bean
-    @ConditionalOnBean(ClosedCampaignRecoverySource.class)
-    @ConditionalOnMissingBean(CampaignLifecycleStartupRecovery.class)
-    public CampaignLifecycleStartupRecovery campaignLifecycleStartupRecovery(
-            ClosedCampaignRecoverySource source,
-            CampaignLifecycleRecorder recorder,
+    @ConditionalOnBean(ClosedCouponRoundRecoverySource.class)
+    @ConditionalOnMissingBean(CouponRoundLifecycleStartupRecovery.class)
+    public CouponRoundLifecycleStartupRecovery couponRoundLifecycleStartupRecovery(
+            ClosedCouponRoundRecoverySource source,
+            CouponRoundLifecycleRecorder recorder,
             TimeProvider timeProvider
     ) {
-        return new CampaignLifecycleStartupRecovery(
+        return new CouponRoundLifecycleStartupRecovery(
                 source,
                 recorder,
                 timeProvider

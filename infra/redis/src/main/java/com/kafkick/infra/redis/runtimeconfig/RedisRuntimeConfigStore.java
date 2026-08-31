@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class RedisRuntimeConfigStore implements RuntimeConfigStore {
 
-    private static final String CONFIG_KEY = "config:runtime";
+    static final String CONFIG_KEY = "config:runtime";
     private static final String AUDIT_KEY = "config:runtime:audit";
     private static final String REQUEST_ID = "requestId";
     private static final long CAS_SUCCESS = -1;

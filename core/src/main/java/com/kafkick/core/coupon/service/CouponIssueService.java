@@ -66,13 +66,6 @@ public class CouponIssueService {
                 ));
 
         CouponIssuePolicy.validateIssuable(couponRound, command);
-        if (!couponStockRepository.lockForUpdate(couponRound.id())) {
-            throw new BusinessException(
-                    CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND,
-                    "couponRoundId=" + couponRound.id()
-            );
-        }
-
         Issuance issuance = Issuance.issue(
                 couponRound.id(),
                 command.memberId(),
@@ -82,20 +75,21 @@ public class CouponIssueService {
                 command.issuedAt()
         );
 
-        // 재고 행을 먼저 잠가 발급·취소·만료 경로의 잠금 순서를 통일한다.
-        // 이후 발급건 선점과 재고 차감은 동일 트랜잭션에서 함께 커밋·롤백된다.
+        // 1인 1매 UNIQUE 선점과 ISSUE 이력을 먼저 저장한 뒤 재고 행을
+        // 조건부 원자 UPDATE한다. 재고가 없으면 동일 트랜잭션이 전부 롤백된다.
         Issuance savedIssuance = issuanceRepository.save(issuance);
-        CouponStockOccupationResult occupationResult =
-                couponStockRepository.occupyAfterLock(
-                couponRound.id(),
-                command.issuedAt()
-        );
-        validateStockOccupation(couponRound.id(), occupationResult);
         issuanceHistoryRepository.save(IssuanceHistory.issue(
                 savedIssuance.id(),
                 command.idempotencyKey(),
                 command.issuedAt()
         ));
+        CouponStockOccupationResult occupationResult =
+                couponStockRepository.occupyOne(
+                        couponRound.id(),
+                        command.issuedAt()
+                );
+        validateStockOccupation(couponRound.id(), occupationResult);
+        // 재고 점유가 확정된 뒤에 알린다 — 매진으로 롤백될 발급을 알리지 않는다.
         notificationRequestService.request(savedIssuance);
 
         return savedIssuance;

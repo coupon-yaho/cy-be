@@ -20,7 +20,12 @@ public class BenchmarkRunCursorCodec {
         String value = "v1|" + position.startedAt().getEpochSecond() + "|" + position.startedAt().getNano() + "|" + position.benchmarkRunId();
         return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
-    /** HTTP cursor를 검증한 Core Keyset 위치로 디코딩합니다. */
+    /**
+     * HTTP cursor를 검증한 Core Keyset 위치로 디코딩합니다.
+     *
+     * @throws BusinessException cursor가 입력 길이, 정규 Base64 URL 형식, 버전 또는
+     *                           Keyset 값 계약을 위반한 경우(INVALID_INPUT, HTTP 400)
+     */
     public BenchmarkRunPosition decode(String cursor) {
         try {
             if (cursor == null || cursor.isBlank() || cursor.length() > 256 || cursor.indexOf('=') >= 0) throw new IllegalArgumentException();

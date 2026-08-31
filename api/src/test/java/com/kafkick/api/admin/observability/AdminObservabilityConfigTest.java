@@ -20,18 +20,21 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import com.kafkick.api.admin.support.AdminApiErrorCode;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
+import com.kafkick.core.admin.CouponPolicyType;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
 import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
+import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver.ArchiveStore;
 import com.kafkick.core.admin.overview.AdminOverviewService;
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundPreparationCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
@@ -40,11 +43,15 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.preparation.AdminPreparationResolver;
+import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
+import com.kafkick.core.admin.preparation.V2PreparationSource;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
 import com.kafkick.core.consistency.ConsistencyFinalObservation;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
+import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.runtimeconfig.ReadOnlyRuntimeConfigStore;
 import com.kafkick.core.runtimeconfig.RuntimeConfigSnapshot;
@@ -54,7 +61,7 @@ import com.kafkick.core.observation.QueueMode;
 import com.kafkick.core.observation.ReleaseStage;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
-import com.kafkick.storage.db.admin.JdbcAdminCampaignDataReader;
+import com.kafkick.storage.db.admin.JdbcAdminCouponRoundDataReader;
 
 class AdminObservabilityConfigTest {
 
@@ -69,11 +76,11 @@ class AdminObservabilityConfigTest {
                     CouponMetricsCalculator.class,
                     IssuanceFlowCalculator.class,
                     IssuanceActionCalculator.class,
-                    CampaignQueueCalculator.class,
+                    CouponRoundQueueCalculator.class,
                     CustomerOutcomeCalculator.class,
                     StockRiskCalculator.class,
-                    CampaignOverviewCalculator.class,
-                    CampaignPreparationCalculator.class,
+                    CouponRoundOverviewCalculator.class,
+                    CouponRoundPreparationCalculator.class,
                     ConsistencyActionCalculator.class,
                     OperationActionCalculator.class,
                     OverviewStatusCalculator.class)
@@ -120,14 +127,14 @@ class AdminObservabilityConfigTest {
     void usesTheAvailableCoreReaderWithoutCreatingThePendingFallback() {
         contextRunner.withPropertyValues("observation.datasource.enabled=true")
                 .run(context -> {
-                    assertThat(context).hasSingleBean(AdminCampaignDataReader.class);
-                    assertThat(context.getBean(AdminCampaignDataReader.class))
-                            .isInstanceOf(JdbcAdminCampaignDataReader.class);
-                    assertThat(context).doesNotHaveBean(PendingAdminCampaignDataReader.class);
+                    assertThat(context).hasSingleBean(AdminCouponRoundDataReader.class);
+                    assertThat(context.getBean(AdminCouponRoundDataReader.class))
+                            .isInstanceOf(JdbcAdminCouponRoundDataReader.class);
+                    assertThat(context).doesNotHaveBean(PendingAdminCouponRoundDataReader.class);
                     assertThat(context).hasSingleBean(AdminOverviewService.class);
                     assertThat(ReflectionTestUtils.getField(
-                            context.getBean(AdminOverviewService.class), "campaignDataReader"))
-                            .isSameAs(context.getBean(AdminCampaignDataReader.class));
+                            context.getBean(AdminOverviewService.class), "couponRoundDataReader"))
+                            .isSameAs(context.getBean(AdminCouponRoundDataReader.class));
                     assertThat(context).hasBean(AdminObservabilityConfig.OVERVIEW_RANGE_CLIENT);
                     assertThat(context).hasBean(AdminObservabilityConfig.SERIES_RANGE_CLIENT);
                     assertThat(context).hasSingleBean(OverviewObservationSource.class);
@@ -233,15 +240,52 @@ class AdminObservabilityConfigTest {
         });
     }
 
+    /** Redis 준비 Reader가 있으면 Overview 준비 Resolver가 같은 인스턴스로 V2 회차를 판정합니다. */
+    @Test
+    void injectsTheAvailableV2PreparationReaderIntoOverviewService() {
+        V2AdminPreparationReader reader = (requests, observedAt) -> {
+            assertThat(requests).singleElement().satisfies(request -> {
+                assertThat(request.couponId()).isEqualTo(10L);
+                assertThat(request.expectedGradeMask()).isEqualTo(3);
+                assertThat(request.expectedTotalQuantity()).isEqualTo(100L);
+                assertThat(request.expectedRemainingQuantity()).isEqualTo(100L);
+            });
+            assertThat(observedAt).isEqualTo(NOW);
+            return Map.of(10L, new V2PreparationSource(true, true, SourceStatus.VALID, NOW));
+        };
+
+        contextRunner.withBean(V2AdminPreparationReader.class, () -> reader)
+                .run(context -> {
+                    AdminPreparationResolver resolver = preparationResolver(context.getBean(
+                            AdminOverviewService.class));
+
+                    assertThat(ReflectionTestUtils.getField(resolver, "v2Reader")).isSameAs(reader);
+                    assertThat(resolver.resolve(v2ReadyCatalog(), NOW)).containsEntry(
+                            10L, new V2PreparationSource(true, true, SourceStatus.VALID, NOW));
+                });
+    }
+
+    /** Redis 준비 Reader Bean이 없으면 조회 대상 V2 회차만 UNAVAILABLE로 반환합니다. */
+    @Test
+    void usesUnavailableV2PreparationReaderWhenRedisReaderIsAbsent() {
+        contextRunner.run(context -> {
+            AdminPreparationResolver resolver = preparationResolver(context.getBean(
+                    AdminOverviewService.class));
+
+            assertThat(resolver.resolve(v2ReadyCatalog(), NOW))
+                    .containsEntry(10L, V2PreparationSource.unavailable());
+        });
+    }
+
     /** 최신 series 배선과 CY-455의 DB Reader fallback이 같은 context에서 공존함을 검증합니다. */
     @Test
     void createsExactlyOnePendingReaderWhenObservationReaderIsAbsent() {
         contextRunner.run(context -> {
-            assertThat(context).hasSingleBean(AdminCampaignDataReader.class);
-            assertThat(context).hasSingleBean(PendingAdminCampaignDataReader.class);
-            AdminCampaignDataReader reader = context.getBean(AdminCampaignDataReader.class);
+            assertThat(context).hasSingleBean(AdminCouponRoundDataReader.class);
+            assertThat(context).hasSingleBean(PendingAdminCouponRoundDataReader.class);
+            AdminCouponRoundDataReader reader = context.getBean(AdminCouponRoundDataReader.class);
             assertThat(reader.loadCatalog(NOW)).isEqualTo(
-                    new AdminCampaignCatalog(SourceStatus.PENDING, null, java.util.List.of()));
+                    new AdminCouponRoundCatalog(SourceStatus.PENDING, null, java.util.List.of()));
             org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                             reader.findDetail(1L, NOW.minusSeconds(60), NOW, NOW))
                     .isInstanceOfSatisfying(BusinessException.class,
@@ -315,13 +359,42 @@ class AdminObservabilityConfigTest {
                 NOW, "test", SourceStatus.VALID));
     }
 
+    /** Overview Service에 주입된 V2 준비 Resolver를 배선 검증용으로 읽습니다. */
+    private static AdminPreparationResolver preparationResolver(AdminOverviewService service) {
+        return (AdminPreparationResolver) ReflectionTestUtils.getField(service, "preparationResolver");
+    }
+
+    /** Redis 준비 조회 계약을 모두 충족하는 V2 예약 회차 카탈로그를 만듭니다. */
+    private static AdminCouponRoundCatalog v2ReadyCatalog() {
+        return new AdminCouponRoundCatalog(SourceStatus.VALID, NOW, List.of(
+                new AdminCouponRoundCatalog.CouponRoundData(
+                        10L,
+                        "V2 couponRound",
+                        "brand",
+                        EngineVersion.V2,
+                        CouponRoundStatus.SCHEDULED,
+                        NOW.plusSeconds(600),
+                        NOW.plusSeconds(3_600),
+                        new CouponMetricsSource.Observation<>(
+                                new CouponMetricsSource.StockCounts(100L, 0L),
+                                SourceStatus.VALID,
+                                NOW),
+                        new PreparationSource(
+                                true,
+                                true,
+                                CouponPolicyType.FIXED_AMOUNT,
+                                3,
+                                SourceStatus.VALID,
+                                NOW))));
+    }
+
     @Configuration(proxyBeanMethods = false)
     @ComponentScan(
-            basePackageClasses = JdbcAdminCampaignDataReader.class,
+            basePackageClasses = JdbcAdminCouponRoundDataReader.class,
             useDefaultFilters = false,
             includeFilters = @ComponentScan.Filter(
                     type = FilterType.ASSIGNABLE_TYPE,
-                    classes = JdbcAdminCampaignDataReader.class))
+                    classes = JdbcAdminCouponRoundDataReader.class))
     static class StorageReaderScanConfiguration {
 
         @Bean

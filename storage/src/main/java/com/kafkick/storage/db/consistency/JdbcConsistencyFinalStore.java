@@ -194,7 +194,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
                        f.persist_gap_value, f.persist_gap_state, f.persist_gap_observed_at,
                        f.db_counter_gap_value, f.db_counter_gap_state, f.db_counter_gap_observed_at,
                        f.over_issued_value, f.over_issued_state, f.over_issued_observed_at,
-                       c.name AS campaign_name, c.open_at
+                       c.name AS coupon_name, c.open_at
                   FROM benchmark_rounds b
                   LEFT JOIN ranked_finals f
                     ON f.coupon_id = b.coupon_id AND f.final_rank = 1
@@ -249,7 +249,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
         return new FinalRow(
                 rs.getLong("requested_coupon_id"), rs.getObject("run_id") != null,
                 rs.getBoolean("has_non_expired_run"),
-                rs.getString("campaign_name"), instant(rs, "open_at"),
+                rs.getString("coupon_name"), instant(rs, "open_at"),
                 instant(rs, "evaluated_at"), rs.getString("engine_version"),
                 rs.getString("verdict"), rs.getString("severity"),
                 rawGap(rs, "active_db_gap"), rawGap(rs, "lua_gap"),
@@ -274,7 +274,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
                 gaps, gap(row.overIssued()), ConsistencyPhase.FINAL,
                 Verdict.valueOf(row.verdict()), Severity.valueOf(row.severity()));
         return new ConsistencyActionContext(
-                row.couponId(), row.campaignName(), row.opensAt(), row.evaluatedAt(),
+                row.couponId(), row.couponName(), row.opensAt(), row.evaluatedAt(),
                 EngineVersion.valueOf(row.engineVersion()), evaluation);
     }
 
@@ -288,7 +288,7 @@ public class JdbcConsistencyFinalStore implements ConsistencyFinalStore {
             long couponId,
             boolean hasFinal,
             boolean hasNonExpiredRun,
-            String campaignName,
+            String couponName,
             Instant opensAt,
             Instant evaluatedAt,
             String engineVersion,

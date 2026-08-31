@@ -4,6 +4,8 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponIssueV2ErrorCode;
+import com.kafkick.core.coupon.v2.V2CouponIssueException;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.exception.BusinessException;
@@ -65,12 +67,19 @@ public class CouponIssueObservationDependencyMapper {
             ErrorCode errorCode = businessException.getErrorCode();
             Dependency mapped = errorCode.dependency();
             // 쿠폰 발급 업무 코드는 NONE까지 확정한 값이므로 내부 cause가 덮어쓰지 않습니다.
-            if (errorCode instanceof CouponIssueErrorCode) {
+            // v2 의 BAD_ARGUMENT 가 특히 그렇다 — 호출부 버그를 Redis 장애로 집계하면 안 된다.
+            if (errorCode instanceof CouponIssueErrorCode
+                    || errorCode instanceof CouponIssueV2ErrorCode) {
                 return mapped;
             }
             if (mapped != Dependency.NONE) {
                 return mapped;
             }
+        }
+        // v2 게이트 실패는 어댑터가 확정해 실어 보낸다. Redis 기술 예외도
+        // DataAccessException 이라 아래 판정에 맡기면 전부 MySQL 로 집계된다.
+        if (failure instanceof V2CouponIssueException gateFailure) {
+            return gateFailure.dependency();
         }
         return hasDataAccessCause(failure)
                 ? Dependency.MYSQL

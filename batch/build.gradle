@@ -61,6 +61,11 @@ dependencies {
     testImplementation project(':infra:redis')
     testImplementation testFixtures(project(':infra:redis'))
 
+    // 정합성 리더의 Redis 자료형 분기는 실제 Redis 에서만 증명된다. 목은 Lua 를 실행하지
+    // 않아서, hash 분기가 없어도 통과한다 — 그 결함은 부하 시험 끝에 gap 4축이 안 닫힐 때에야
+    // 드러난다(docs/14-v2-phase0/11 ③).
+    testImplementation 'org.testcontainers:testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     // 관제가 Prometheus 로 batch JVM 을 직접 긁는다. 정합성 gap · 대기열 길이 · Kafka lag 은
     // api 가 만들 수 없다 — 300만 행 집계라 발급 경로에 얹으면 성능 측정이 오염된다.
     // 이 두 줄은 값이 나갈 통로만 연다. Gauge 등록은 관제 쪽 티켓(OBS-5)이 붙인다.

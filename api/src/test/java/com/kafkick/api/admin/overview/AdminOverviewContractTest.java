@@ -14,7 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.api.admin.dashboard.dto.AdminOverviewResponse;
-import com.kafkick.core.admin.campaignsource.PreparationItem;
+import com.kafkick.core.admin.couponroundsource.PreparationItem;
 import com.kafkick.core.admin.overview.AdminOverviewResult.OverallStatus;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
 import com.kafkick.core.observation.Severity;
@@ -114,11 +114,11 @@ class AdminOverviewContractTest {
         assertThat(item.recommendedAction().targetScreen()).isEqualTo(AdminOverviewSnapshot.TargetScreen.METRICS);
     }
 
-    /** `/overview`가 소유한 전체 집계 4종과 O1~O4 캠페인 계약을 한 Snapshot으로 표현하는지 검증합니다. */
+    /** `/overview`가 소유한 전체 집계 4종과 O1~O4 쿠폰 회차 계약을 한 Snapshot으로 표현하는지 검증합니다. */
     @Test
-    @DisplayName("Snapshot은 전체 집계 4종과 campaigns의 O1 O2 O4 및 최상위 O3를 표현한다")
+    @DisplayName("Snapshot은 전체 집계 4종과 couponRounds의 O1 O2 O4 및 최상위 O3를 표현한다")
     void snapshotRepresentsAllOverviewOwnedSections() {
-        AdminOverviewSnapshot.CampaignOverview campaign = new AdminOverviewSnapshot.CampaignOverview(
+        AdminOverviewSnapshot.CouponRoundOverview couponRound = new AdminOverviewSnapshot.CouponRoundOverview(
                 1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.OPEN, FROM, TO,
                 Severity.CRITICAL,
                 new AdminOverviewSnapshot.Observation<>(
@@ -131,9 +131,9 @@ class AdminOverviewContractTest {
                                 Duration.ofMinutes(2)),
                         SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
-                        new AdminOverviewSnapshot.CampaignQueueStatus(
+                        new AdminOverviewSnapshot.CouponRoundQueueStatus(
                                 3204, AdminOverviewSnapshot.TrendDirection.INCREASING, 180,
-                                0.0, null, AdminOverviewSnapshot.CampaignQueueAssessment.ADMISSION_STOPPED),
+                                0.0, null, AdminOverviewSnapshot.CouponRoundQueueAssessment.ADMISSION_STOPPED),
                         SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.StockForecast(4650, 15000, 0.31, null),
@@ -167,19 +167,19 @@ class AdminOverviewContractTest {
                                 Duration.ofMillis(84), Duration.ofMillis(110), FROM, TO),
                         SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
-                        new AdminOverviewSnapshot.CampaignStatusSummary(3, 1, 12), SourceStatus.VALID, TO),
+                        new AdminOverviewSnapshot.CouponRoundStatusSummary(3, 1, 12), SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.ActionItemSnapshot(0, List.of()),
                         SourceStatus.VALID,
                         TO),
-                new AdminOverviewSnapshot.Observation<>(List.of(campaign), SourceStatus.VALID, TO),
+                new AdminOverviewSnapshot.Observation<>(List.of(couponRound), SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(outcomes, SourceStatus.VALID, TO));
 
         assertThat(snapshot.aggregateIssuanceRate().value().currentPerSecond()).isEqualTo(612.0);
         assertThat(snapshot.aggregateQueue().value().waitingCount()).isEqualTo(3388);
         assertThat(snapshot.latencySummary().value().successfulP99()).isEqualTo(Duration.ofMillis(84));
-        assertThat(snapshot.campaignStatusSummary().value().openCount()).isEqualTo(3);
-        assertThat(snapshot.campaigns().value()).containsExactly(campaign);
+        assertThat(snapshot.couponRoundStatusSummary().value().openCount()).isEqualTo(3);
+        assertThat(snapshot.couponRounds().value()).containsExactly(couponRound);
         assertThat(snapshot.customerOutcomes().value().outcomes().getFirst().ratio())
                 .isEqualTo(1847d / 12558d);
         assertThat(Arrays.stream(AdminOverviewSnapshot.class.getRecordComponents())
@@ -187,10 +187,16 @@ class AdminOverviewContractTest {
                 .doesNotContain("issuanceInquiries", "issuanceHistories", "notificationSummary", "events");
     }
 
-    /** HTML의 O3 결과 구분이 축약되거나 임의 코드가 추가되는 회귀를 방지합니다. */
+    /**
+     * HTML의 O3 결과 구분이 축약되거나 임의 코드가 추가되는 회귀를 방지합니다.
+     *
+     * <p>{@code RETRY_IN_PROGRESS} 는 v2 가 만든 새 고객 결과다 — v1 은 이 자리에서 폴링하며
+     * 기다려 클라이언트에게 이 상태가 보이지 않았다. 기존 7종의 이름과 순서는 그대로 두고
+     * 끝에 붙였다: 선언 순서가 화면 행 순서라 중간에 넣으면 기존 행이 밀린다.
+     */
     @Test
-    @DisplayName("O3 고객 결과 코드는 확정된 7종만 제공한다")
-    void customerOutcomeTypeKeepsExactlySevenConfirmedValues() {
+    @DisplayName("O3 고객 결과 코드는 확정된 8종만 제공한다")
+    void customerOutcomeTypeKeepsExactlyEightConfirmedValues() {
         assertThat(Arrays.stream(AdminOverviewSnapshot.CustomerOutcomeType.values())
                 .map(Enum::name))
                 .containsExactly(
@@ -200,7 +206,8 @@ class AdminOverviewContractTest {
                         "STOCK_EXHAUSTED",
                         "INELIGIBLE",
                         "ENTRY_EXPIRED",
-                        "SYSTEM_FAILURE");
+                        "SYSTEM_FAILURE",
+                        "RETRY_IN_PROGRESS");
     }
 
     /** O3 비율의 0~1 계약이 잘못된 Adapter 값이나 NaN을 HTTP 계층까지 전달하지 않도록 검증합니다. */
@@ -238,24 +245,24 @@ class AdminOverviewContractTest {
 
     /** 준비 미완료 판정이 DTO 필드 추가 없이 기존 네 HTTP 영역에 함께 노출되는지 검증합니다. */
     @Test
-    @DisplayName("준비 미완료는 기존 HTTP DTO의 KPI 조치 목록 캠페인 행에 함께 노출된다")
+    @DisplayName("준비 미완료는 기존 HTTP DTO의 KPI 조치 목록 쿠폰 회차 행에 함께 노출된다")
     void exposesIncompletePreparationAcrossExistingHttpResponseShape() {
         AdminOverviewSnapshot.RecommendedAction recommendedAction =
                 new AdminOverviewSnapshot.RecommendedAction(
-                        AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY,
-                        "캠페인 준비 상태 확인",
-                        AdminOverviewSnapshot.TargetScreen.CAMPAIGN_DETAIL);
+                        AdminOverviewSnapshot.ActionCode.COUPON_ROUND_NOT_READY,
+                        "쿠폰 회차 준비 상태 확인",
+                        AdminOverviewSnapshot.TargetScreen.COUPON_ROUND_DETAIL);
         AdminOverviewSnapshot.OperationActionItem action =
                 new AdminOverviewSnapshot.OperationActionItem(
                         17L, "딜리버리고 여름특가", TO, Severity.WARN,
                         AdminOverviewSnapshot.CustomerImpact.NONE,
                         "오픈 전 필수 준비 항목을 확인해야 합니다.",
                         TO.minus(Duration.ofMinutes(30)), null, recommendedAction);
-        AdminOverviewSnapshot.CampaignOverview campaign = new AdminOverviewSnapshot.CampaignOverview(
+        AdminOverviewSnapshot.CouponRoundOverview couponRound = new AdminOverviewSnapshot.CouponRoundOverview(
                 1, 17L, "딜리버리고 여름특가", "딜리버리고", CouponRoundStatus.SCHEDULED,
                 TO, TO.plus(Duration.ofHours(1)), Severity.WARN,
                 unavailable(), unavailable(), unavailable(),
-                List.of(PreparationItem.DATABASE_STOCK),
+                List.of(PreparationItem.REDIS_WARMUP, PreparationItem.REDIS_GATE),
                 AdminOverviewSnapshot.CustomerImpact.NONE,
                 "오픈 전 필수 준비 항목을 확인해야 합니다.", recommendedAction);
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
@@ -263,9 +270,9 @@ class AdminOverviewContractTest {
                 observed(new AdminOverviewSnapshot.ActionRequiredSummary(1, 0, 1)),
                 observed(new AdminOverviewSnapshot.OpeningSoonSummary(1, 1)),
                 unavailable(), unavailable(), unavailable(), unavailable(), unavailable(),
-                observed(new AdminOverviewSnapshot.CampaignStatusSummary(0, 1, 0)),
+                observed(new AdminOverviewSnapshot.CouponRoundStatusSummary(0, 1, 0)),
                 observed(new AdminOverviewSnapshot.ActionItemSnapshot(1, List.of(action))),
-                observed(List.of(campaign)), unavailable());
+                observed(List.of(couponRound)), unavailable());
 
         AdminOverviewResponse response = AdminOverviewResponse.from(snapshot, OverallStatus.PARTIAL);
 
@@ -274,19 +281,19 @@ class AdminOverviewContractTest {
                 .containsExactly(
                         "snapshotAt", "overallStatus", "actionRequired", "openingSoon", "queueRisk",
                         "stockRisk", "aggregateIssuanceRate", "aggregateQueue", "latencySummary",
-                        "campaignStatusSummary", "actionItems", "campaigns", "customerOutcomes");
+                        "couponRoundStatusSummary", "actionItems", "couponRounds", "customerOutcomes");
         assertThat(response.openingSoon().value().preparationIncompleteCount()).isEqualTo(1L);
         assertThat(response.actionRequired().value().warningCount()).isEqualTo(1L);
         AdminOverviewResponse.OperationActionItem responseAction =
                 response.actionItems().value().topItems().getFirst();
         assertThat(responseAction.recommendedAction().code())
-                .isEqualTo(AdminOverviewSnapshot.ActionCode.CAMPAIGN_NOT_READY);
-        AdminOverviewResponse.CampaignOverview responseCampaign = response.campaigns().value().getFirst();
-        assertThat(responseCampaign.severity()).isEqualTo(Severity.WARN);
-        assertThat(responseCampaign.failedPreparationItems())
-                .containsExactly(PreparationItem.DATABASE_STOCK);
-        assertThat(responseCampaign.customerImpact()).isEqualTo(responseAction.customerImpact());
-        assertThat(responseCampaign.recommendedAction()).isEqualTo(responseAction.recommendedAction());
+                .isEqualTo(AdminOverviewSnapshot.ActionCode.COUPON_ROUND_NOT_READY);
+        AdminOverviewResponse.CouponRoundOverview responseCouponRound = response.couponRounds().value().getFirst();
+        assertThat(responseCouponRound.severity()).isEqualTo(Severity.WARN);
+        assertThat(responseCouponRound.failedPreparationItems())
+                .containsExactly(PreparationItem.REDIS_WARMUP, PreparationItem.REDIS_GATE);
+        assertThat(responseCouponRound.customerImpact()).isEqualTo(responseAction.customerImpact());
+        assertThat(responseCouponRound.recommendedAction()).isEqualTo(responseAction.recommendedAction());
     }
 
     private AdminOverviewSnapshot snapshotWithActions(List<AdminOverviewSnapshot.OperationActionItem> actions) {
@@ -309,7 +316,7 @@ class AdminOverviewContractTest {
                         new AdminOverviewSnapshot.LatencySummary(null, null, FROM, TO),
                         SourceStatus.NO_TRAFFIC, TO),
                 new AdminOverviewSnapshot.Observation<>(
-                        new AdminOverviewSnapshot.CampaignStatusSummary(0, 0, 0), SourceStatus.VALID, TO),
+                        new AdminOverviewSnapshot.CouponRoundStatusSummary(0, 0, 0), SourceStatus.VALID, TO),
                 new AdminOverviewSnapshot.Observation<>(
                         new AdminOverviewSnapshot.ActionItemSnapshot(actions.size(), actions),
                         SourceStatus.VALID,

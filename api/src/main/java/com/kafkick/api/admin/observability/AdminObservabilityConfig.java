@@ -10,14 +10,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
 import com.kafkick.core.admin.couponmetrics.AdminCouponMetricsService;
 import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator;
 import com.kafkick.core.admin.overview.AdminOverviewService;
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundPreparationCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
@@ -26,9 +26,13 @@ import com.kafkick.core.admin.overview.calculator.OperationActionCalculator;
 import com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator;
 import com.kafkick.core.admin.overview.calculator.StockRiskCalculator;
 import com.kafkick.core.admin.overview.observation.OverviewObservationSource;
+import com.kafkick.core.admin.preparation.AdminPreparationResolver;
+import com.kafkick.core.admin.preparation.V2AdminPreparationReader;
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
 import com.kafkick.core.admin.queue.PendingAdminQueueObservationSource;
 import com.kafkick.core.admin.queue.mock.MockAdminQueueObservationSource;
+import com.kafkick.core.admin.stock.AdminStockResolver;
+import com.kafkick.core.admin.stock.V2AdminStockReader;
 import com.kafkick.core.consistency.ConsistencyFinalReader;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
@@ -127,46 +131,52 @@ public class AdminObservabilityConfig {
         return new PendingAdminQueueObservationSource();
     }
 
-    /** API 전용 Prom 관측 원천과 Core 계산기를 기술 중립 Overview Service에 명시적으로 배선합니다. */
+    /** API 관측 원천과 V2 재고·준비 Reader를 기술 중립 Overview Service에 명시적으로 배선합니다. */
     @Bean
     public AdminOverviewService adminOverviewService(
             TimeProvider timeProvider,
-            AdminCampaignDataReader campaignDataReader,
+            AdminCouponRoundDataReader couponRoundDataReader,
             RuntimeConfigStore runtimeConfigStore,
             AdminOverviewPolicyProperties policyProperties,
             OverviewObservationSource observationSource,
             AdminQueueObservationSource queueObservationSource,
             IssuanceFlowCalculator issuanceFlowCalculator,
             IssuanceActionCalculator issuanceActionCalculator,
-            CampaignQueueCalculator campaignQueueCalculator,
+            CouponRoundQueueCalculator couponRoundQueueCalculator,
             CustomerOutcomeCalculator customerOutcomeCalculator,
             StockRiskCalculator stockRiskCalculator,
-            CampaignOverviewCalculator campaignOverviewCalculator,
-            CampaignPreparationCalculator campaignPreparationCalculator,
+            CouponRoundOverviewCalculator couponRoundOverviewCalculator,
+            CouponRoundPreparationCalculator couponRoundPreparationCalculator,
             ObjectProvider<ConsistencyFinalReader> consistencyFinalReaderProvider,
             ConsistencyActionCalculator consistencyActionCalculator,
             OperationActionCalculator operationActionCalculator,
-            OverviewStatusCalculator overviewStatusCalculator
+            OverviewStatusCalculator overviewStatusCalculator,
+            ObjectProvider<V2AdminStockReader> v2AdminStockReaderProvider,
+            ObjectProvider<V2AdminPreparationReader> v2AdminPreparationReaderProvider
     ) {
         ConsistencyFinalReader consistencyFinalReader = consistencyFinalReaderProvider
                 .getIfAvailable(PendingConsistencyFinalReader::new);
         return new AdminOverviewService(
-                timeProvider, campaignDataReader, runtimeConfigStore, policyProperties.toCorePolicy(),
+                timeProvider, couponRoundDataReader, runtimeConfigStore, policyProperties.toCorePolicy(),
                 observationSource, queueObservationSource, issuanceFlowCalculator,
-                issuanceActionCalculator, campaignQueueCalculator, customerOutcomeCalculator,
-                stockRiskCalculator, campaignOverviewCalculator, campaignPreparationCalculator,
+                issuanceActionCalculator, couponRoundQueueCalculator, customerOutcomeCalculator,
+                stockRiskCalculator, couponRoundOverviewCalculator, couponRoundPreparationCalculator,
                 consistencyFinalReader, consistencyActionCalculator,
-                operationActionCalculator, overviewStatusCalculator);
+                operationActionCalculator, overviewStatusCalculator,
+                new AdminStockResolver(v2AdminStockReaderProvider
+                        .getIfAvailable(AdminStockResolver::unavailableV2Reader)),
+                new AdminPreparationResolver(v2AdminPreparationReaderProvider
+                        .getIfAvailable(AdminPreparationResolver::unavailableV2Reader)));
     }
 
     /** 관측 JDBC Reader가 없을 때만 관측 비활성 오류를 내는 Core Port 구현을 제공합니다. */
     @Bean
-    @ConditionalOnMissingBean(AdminCampaignDataReader.class)
-    public AdminCampaignDataReader pendingAdminCampaignDataReader() {
-        return new PendingAdminCampaignDataReader();
+    @ConditionalOnMissingBean(AdminCouponRoundDataReader.class)
+    public AdminCouponRoundDataReader pendingAdminCouponRoundDataReader() {
+        return new PendingAdminCouponRoundDataReader();
     }
 
-    /** 캠페인 상세 발급률은 series 전용 range와 instant freshness 경계를 함께 사용합니다. */
+    /** 쿠폰 회차 상세 발급률은 series 전용 range와 instant freshness 경계를 함께 사용합니다. */
     @Bean
     public CouponIssuanceRateReader promCouponIssuanceRateReader(
             @Qualifier(SERIES_RANGE_CLIENT) PromRangeQuery rangeQuery,
@@ -182,13 +192,16 @@ public class AdminObservabilityConfig {
     @Bean
     public AdminCouponMetricsService adminCouponMetricsService(
             TimeProvider timeProvider,
-            AdminCampaignDataReader campaignDataReader,
+            AdminCouponRoundDataReader couponRoundDataReader,
             CouponIssuanceRateReader issuanceRateReader,
             AdminQueueObservationSource queueObservationSource,
-            CouponMetricsCalculator calculator
+            CouponMetricsCalculator calculator,
+            ObjectProvider<V2AdminStockReader> v2AdminStockReaderProvider
     ) {
         return new AdminCouponMetricsService(
-                timeProvider, campaignDataReader, issuanceRateReader, queueObservationSource, calculator);
+                timeProvider, couponRoundDataReader, issuanceRateReader, queueObservationSource, calculator,
+                new AdminStockResolver(v2AdminStockReaderProvider
+                        .getIfAvailable(AdminStockResolver::unavailableV2Reader)));
     }
 
     /** 동일한 연결·읽기 타임아웃의 Prometheus 전용 RestClient를 생성합니다. */

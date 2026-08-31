@@ -5,11 +5,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 
-import com.kafkick.core.admin.campaignsource.PreparationObservation;
+import com.kafkick.core.admin.couponroundsource.PreparationObservation;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.admin.overview.CampaignOverviewSource;
+import com.kafkick.core.admin.overview.CouponRoundOverviewSource;
 import com.kafkick.core.admin.overview.OverviewCalculationPolicy;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.QueueInput;
+import com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator.QueueInput;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCount;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeInput;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceBucket;
@@ -23,7 +23,7 @@ import static com.kafkick.core.observation.SourceStatus.*;
  * 관리자 운영현황 테스트에서 사용할 화면 Fixture를 생성합니다.
  *
  * <p>실행 날짜에 따라 오픈 임박 판정이 달라지지 않도록 절대 날짜를 저장하지 않고, 호출자가 전달한
- * 스냅샷 시각을 기준으로 모든 캠페인 시각을 상대적으로 생성합니다. 이 정책·수치는 운영 기본값이
+ * 스냅샷 시각을 기준으로 모든 쿠폰 회차 시각을 상대적으로 생성합니다. 이 정책·수치는 운영 기본값이
  * 아니라 화면 조립·표시 시나리오 전용 Fixture입니다.</p>
  *
  * <p>이 Fixture는 test source에만 있으며 테스트가 직접 생성합니다. 생산 Bean으로 등록하지 않아
@@ -34,8 +34,8 @@ public class AdminOverviewTestFixture {
     /**
      * O1~O4 조립을 검증할 운영·오픈 임박·준비 미완료·종료 화면 시나리오를 생성합니다.
      *
-     * @param snapshotAt 캠페인 시각과 조치 감지 시각을 만드는 기준 시각
-     * @return 동일한 기준 시각으로 생성한 캠페인 원천과 조치 후보
+     * @param snapshotAt 쿠폰 회차 시각과 조치 감지 시각을 만드는 기준 시각
+     * @return 동일한 기준 시각으로 생성한 쿠폰 회차 원천과 조치 후보
      * @throws NullPointerException snapshotAt이 {@code null}인 경우
      */
     public AdminOverviewTestDataset create(Instant snapshotAt) {
@@ -48,7 +48,7 @@ public class AdminOverviewTestFixture {
                 Duration.ofMinutes(10),
                 Duration.ofMinutes(2),
                 Duration.ofMinutes(10));
-        CampaignOverviewSource admissionStoppedCampaign = new CampaignOverviewSource(
+        CouponRoundOverviewSource admissionStoppedCouponRound = new CouponRoundOverviewSource(
                 101L,
                 "입장 중단 쿠폰",
                 "카프킥",
@@ -62,7 +62,7 @@ public class AdminOverviewTestFixture {
                 VALID,
                 preparation(true, snapshotAt)
         );
-        CampaignOverviewSource depletionCampaign = new CampaignOverviewSource(
+        CouponRoundOverviewSource depletionCouponRound = new CouponRoundOverviewSource(
                 102L,
                 "소진 임박 쿠폰",
                 "카프킥",
@@ -76,7 +76,7 @@ public class AdminOverviewTestFixture {
                 VALID,
                 preparation(true, snapshotAt)
         );
-        CampaignOverviewSource decreasingQueueCampaign = new CampaignOverviewSource(
+        CouponRoundOverviewSource decreasingQueueCouponRound = new CouponRoundOverviewSource(
                 103L,
                 "정상 발급 감소 대기 쿠폰",
                 "카프킥",
@@ -90,7 +90,7 @@ public class AdminOverviewTestFixture {
                 VALID,
                 preparation(true, snapshotAt)
         );
-        CampaignOverviewSource readyScheduledCampaign = new CampaignOverviewSource(
+        CouponRoundOverviewSource readyScheduledCouponRound = new CouponRoundOverviewSource(
                 104L,
                 "준비 완료 예약 쿠폰",
                 "카프킥",
@@ -104,12 +104,12 @@ public class AdminOverviewTestFixture {
                 N_A,
                 preparation(true, snapshotAt)
         );
-        CampaignOverviewSource incompleteCampaign = new CampaignOverviewSource(
+        CouponRoundOverviewSource incompleteCouponRound = new CouponRoundOverviewSource(
                 105L, "준비 미완료 예약 쿠폰", "카프킥", CouponRoundStatus.SCHEDULED,
                 snapshotAt.plus(Duration.ofMinutes(10)), snapshotAt.plus(Duration.ofHours(3)),
                 EngineVersion.V1, null, null, null, N_A,
                 new PreparationObservation(null, PENDING, null));
-        CampaignOverviewSource closedCampaign = new CampaignOverviewSource(
+        CouponRoundOverviewSource closedCouponRound = new CouponRoundOverviewSource(
                 106L, "종료된 시즌 쿠폰", "카프킥", CouponRoundStatus.CLOSED,
                 snapshotAt.minus(Duration.ofHours(5)), snapshotAt.minus(Duration.ofHours(1)),
                 EngineVersion.V1, null, null, null, N_A, preparation(true, snapshotAt));
@@ -145,8 +145,8 @@ public class AdminOverviewTestFixture {
                 VALID, snapshotAt);
 
         return new AdminOverviewTestDataset(policy, issuanceFlowInputs, queueInputs, outcomeInput,
-                List.of(admissionStoppedCampaign, depletionCampaign, decreasingQueueCampaign,
-                        readyScheduledCampaign, incompleteCampaign, closedCampaign),
+                List.of(admissionStoppedCouponRound, depletionCouponRound, decreasingQueueCouponRound,
+                        readyScheduledCouponRound, incompleteCouponRound, closedCouponRound),
                 aggregateIssuanceRate(snapshotAt), latencySummary(snapshotAt));
     }
 
@@ -206,7 +206,7 @@ public class AdminOverviewTestFixture {
                 snapshotAt.minus(Duration.ofMinutes(3)), VALID, snapshotAt);
     }
 
-    /** SCHEDULED·CLOSED 캠페인의 비적용 O1 원천을 N_A로 명시합니다. */
+    /** SCHEDULED·CLOSED 쿠폰 회차의 비적용 O1 원천을 N_A로 명시합니다. */
     private static IssuanceFlowInput notApplicableIssuance(long couponId, CouponRoundStatus status) {
         return new IssuanceFlowInput(couponId, status, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, N_A, null);
@@ -223,7 +223,7 @@ public class AdminOverviewTestFixture {
                 VALID, snapshotAt);
     }
 
-    /** SCHEDULED·CLOSED 캠페인의 비적용 O2 원천을 N_A로 명시합니다. */
+    /** SCHEDULED·CLOSED 쿠폰 회차의 비적용 O2 원천을 N_A로 명시합니다. */
     private static QueueInput notApplicableQueue(long couponId) {
         return new QueueInput(couponId, null, null, null, null, null, null, null,
                 N_A, null);

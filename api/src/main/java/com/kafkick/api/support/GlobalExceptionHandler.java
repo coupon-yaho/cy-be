@@ -51,14 +51,24 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             BusinessException exception, HttpServletRequest request) {
         ErrorCode errorCode = exception.getErrorCode();
         setDependency(request, errorCode.dependency());
-        if (errorCode.getStatus() >= 500) {
+        if (errorCode.getStatus() >= 500 && errorCode.logStackTrace()) {
             log.error("[{}] {}", errorCode.getCode(), exception.getMessage(), exception);
+        } else if (errorCode.getStatus() >= 500) {
+            // 의존성 장애 동안 초당 수천 건이 되는 완화 응답이다. 스택을 찍으면 로그 I/O 가
+            // 응답 지연을 밀어 올려 측정 자체가 오염된다.
+            log.error("[{}] {}: {}", errorCode.getCode(), exception.getMessage(),
+                    exception.getCause() == null ? "-" : exception.getCause().toString());
         } else {
             // 재고 소진처럼 정상 흐름에서 대량 발생하므로 스택은 남기지 않는다.
             log.warn("[{}] {}", errorCode.getCode(), exception.getMessage());
         }
-        return ResponseEntity.status(errorCode.getStatus())
-                .body(ResponseEnvelope.fail(body(exception)));
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(errorCode.getStatus());
+        if (exception instanceof RetryAfterException retryAfter) {
+            // 서버가 대신 기다리지 않고 클라이언트가 기다리게 한다.
+            response.header(HttpHeaders.RETRY_AFTER,
+                    Integer.toString(retryAfter.retryAfterSeconds()));
+        }
+        return response.body(ResponseEnvelope.fail(body(exception)));
     }
 
     @ExceptionHandler(ConstraintViolationException.class)

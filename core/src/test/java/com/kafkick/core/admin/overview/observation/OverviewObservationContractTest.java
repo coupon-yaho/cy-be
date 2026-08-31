@@ -38,32 +38,32 @@ class OverviewObservationContractTest {
                 .isInstanceOf(NullPointerException.class);
     }
 
-    /** 요청은 원본 대상 목록 변경과 외부 수정을 차단하고 유효한 고유 캠페인만 받습니다. */
+    /** 요청은 원본 대상 목록 변경과 외부 수정을 차단하고 유효한 고유 쿠폰 회차만 받습니다. */
     @Test
-    void requestDefensivelyCopiesUniqueCampaignTargets() {
-        List<CampaignObservationTarget> targets = new ArrayList<>();
+    void requestDefensivelyCopiesUniqueCouponRoundTargets() {
+        List<CouponRoundObservationTarget> targets = new ArrayList<>();
         targets.add(target(11L));
 
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT_AT, targets, POLICY);
 
         targets.clear();
 
-        assertThat(request.campaignTargets()).containsExactly(target(11L));
-        assertThatThrownBy(() -> request.campaignTargets().clear())
+        assertThat(request.couponRoundTargets()).containsExactly(target(11L));
+        assertThatThrownBy(() -> request.couponRoundTargets().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT, null, POLICY))
                 .isInstanceOf(NullPointerException.class);
-        List<CampaignObservationTarget> targetsWithNull = new ArrayList<>();
+        List<CouponRoundObservationTarget> targetsWithNull = new ArrayList<>();
         targetsWithNull.add(null);
         assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT, targetsWithNull, POLICY))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new OverviewObservationRequest(SNAPSHOT_AT,
                 List.of(target(11L), target(11L)), POLICY))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 0L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT_AT))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 -1L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT_AT))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -71,7 +71,7 @@ class OverviewObservationContractTest {
     /** Snapshot 이후에 관측한 재고가 현재 O1 판정에 섞이는 회귀를 요청 생성 시 차단합니다. */
     @Test
     void requestRejectsValueCarryingStockObservedAfterSnapshot() {
-        CampaignObservationTarget futureStock = new CampaignObservationTarget(
+        CouponRoundObservationTarget futureStock = new CouponRoundObservationTarget(
                 12L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT_AT.plusNanos(1L));
 
         assertThatThrownBy(() -> new OverviewObservationRequest(
@@ -106,43 +106,43 @@ class OverviewObservationContractTest {
                 latency)).isInstanceOf(NullPointerException.class);
     }
 
-    /** 진행 캠페인은 재고 값 또는 미관측 상태를 보존하고 비진행 캠페인은 N_A만 허용합니다. */
+    /** 진행 쿠폰 회차는 재고 값 또는 미관측 상태를 보존하고 비진행 쿠폰 회차는 N_A만 허용합니다. */
     @Test
-    void targetRequiresStockAvailabilityOnlyForOpenCampaigns() {
-        CampaignObservationTarget pending = new CampaignObservationTarget(
+    void targetRequiresStockAvailabilityOnlyForOpenCouponRounds() {
+        CouponRoundObservationTarget pending = new CouponRoundObservationTarget(
                 11L, CouponRoundStatus.OPEN, null, SourceStatus.PENDING);
-        CampaignObservationTarget unavailable = new CampaignObservationTarget(
+        CouponRoundObservationTarget unavailable = new CouponRoundObservationTarget(
                 12L, CouponRoundStatus.OPEN, null, SourceStatus.UNAVAILABLE);
 
         assertThat(pending.stockAvailable()).isNull();
         assertThat(pending.stockStatus()).isEqualTo(SourceStatus.PENDING);
         assertThat(unavailable.stockAvailable()).isNull();
         assertThat(unavailable.stockStatus()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(new CampaignObservationTarget(
+        assertThat(new CouponRoundObservationTarget(
                 13L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT_AT).stockStatus())
                 .isEqualTo(SourceStatus.VALID);
-        assertThat(new CampaignObservationTarget(
+        assertThat(new CouponRoundObservationTarget(
                 13L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT_AT).stockObservedAt())
                 .isEqualTo(SNAPSHOT_AT);
-        assertThat(new CampaignObservationTarget(
+        assertThat(new CouponRoundObservationTarget(
                 14L, CouponRoundStatus.SCHEDULED, null, SourceStatus.N_A, null).stockStatus())
                 .isEqualTo(SourceStatus.N_A);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 15L, CouponRoundStatus.OPEN, null, SourceStatus.VALID, SNAPSHOT_AT))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 16L, CouponRoundStatus.CLOSED, true, SourceStatus.N_A, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 17L, CouponRoundStatus.OPEN, true, SourceStatus.PENDING, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 18L, CouponRoundStatus.OPEN, null, SourceStatus.VALID, SNAPSHOT_AT))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 18L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CampaignObservationTarget(
+        assertThatThrownBy(() -> new CouponRoundObservationTarget(
                 19L, CouponRoundStatus.CLOSED, null, SourceStatus.PENDING, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -151,10 +151,10 @@ class OverviewObservationContractTest {
     @Test
     void dataPreservesNonValueOpenStockStatusInO1Input() {
         OverviewObservationRequest pendingRequest = new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         20L, CouponRoundStatus.OPEN, null, SourceStatus.PENDING)), POLICY);
         OverviewObservationRequest unavailableRequest = new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         21L, CouponRoundStatus.OPEN, null, SourceStatus.UNAVAILABLE)), POLICY);
 
         assertThatThrownBy(() -> data(pendingRequest, List.of(flowInput(20L, 1L, 1L)),
@@ -179,11 +179,11 @@ class OverviewObservationContractTest {
     @Test
     void dataRejectsO1StatusThatPromotesValueCarryingStockSource() {
         OverviewObservationRequest staleRequest = new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         22L, CouponRoundStatus.OPEN, true, SourceStatus.STALE,
                         SNAPSHOT_AT.minusSeconds(1))), POLICY);
         OverviewObservationRequest warmingRequest = new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         23L, CouponRoundStatus.OPEN, true, SourceStatus.WARMING_UP,
                         SNAPSHOT_AT.minusSeconds(1))), POLICY);
 
@@ -213,9 +213,9 @@ class OverviewObservationContractTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
-    /** O1 데이터는 요청한 캠페인 모집단을 빠짐없이 중복 없이 정확히 한 번씩만 포함해야 합니다. */
+    /** O1 데이터는 요청한 쿠폰 회차 모집단을 빠짐없이 중복 없이 정확히 한 번씩만 포함해야 합니다. */
     @Test
-    void dataRejectsMissingExtraAndDuplicateO1CampaignInputs() {
+    void dataRejectsMissingExtraAndDuplicateO1CouponRoundInputs() {
         OverviewObservationRequest request = request(31L, 32L);
 
         assertThatThrownBy(() -> data(request, List.of(flowInput(31L, 1L, 1L)),
@@ -229,12 +229,12 @@ class OverviewObservationContractTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** O1 입력은 같은 couponId라도 요청 대상의 캠페인 상태와 진행 중 재고 조건을 바꿀 수 없습니다. */
+    /** O1 입력은 같은 couponId라도 요청 대상의 쿠폰 회차 상태와 진행 중 재고 조건을 바꿀 수 없습니다. */
     @Test
-    void dataRejectsO1InputThatContradictsRequestedCampaignStateOrOpenStock() {
+    void dataRejectsO1InputThatContradictsRequestedCouponRoundStateOrOpenStock() {
         OverviewObservationRequest openRequest = request(37L);
         OverviewObservationRequest closedRequest = new OverviewObservationRequest(SNAPSHOT_AT,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         38L, CouponRoundStatus.CLOSED, null, SourceStatus.N_A, null)), POLICY);
 
         assertThatThrownBy(() -> data(openRequest, List.of(flowInput(
@@ -436,15 +436,15 @@ class OverviewObservationContractTest {
         assertThat(result.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
     }
 
-    /** 유효한 진행 캠페인 관측 대상을 만듭니다. */
-    private static CampaignObservationTarget target(long couponId) {
-        return new CampaignObservationTarget(
+    /** 유효한 진행 쿠폰 회차 관측 대상을 만듭니다. */
+    private static CouponRoundObservationTarget target(long couponId) {
+        return new CouponRoundObservationTarget(
                 couponId, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT_AT);
     }
 
     /** 지정 couponId의 요청 모집단을 만듭니다. */
     private static OverviewObservationRequest request(long... couponIds) {
-        List<CampaignObservationTarget> targets = new ArrayList<>();
+        List<CouponRoundObservationTarget> targets = new ArrayList<>();
         for (long couponId : couponIds) {
             targets.add(target(couponId));
         }
@@ -461,14 +461,14 @@ class OverviewObservationContractTest {
     /** 지정 상태·재고·관측 시각을 갖는 값 있는 O1 입력을 만듭니다. */
     private static IssuanceFlowCalculator.IssuanceFlowInput flowInput(
             long couponId,
-            CouponRoundStatus campaignStatus,
+            CouponRoundStatus couponRoundStatus,
             boolean stockAvailable,
             double attemptedCount,
             double completedCount,
             Instant observedAt
     ) {
         return new IssuanceFlowCalculator.IssuanceFlowInput(
-                couponId, campaignStatus, stockAvailable, WINDOW_START, SNAPSHOT_AT,
+                couponId, couponRoundStatus, stockAvailable, WINDOW_START, SNAPSHOT_AT,
                 WINDOW_START, SNAPSHOT_AT,
                 attemptedCount, completedCount, completedCount,
                 WINDOW_START, SNAPSHOT_AT, List.of(), completedCount == 0d ? null : SNAPSHOT_AT,

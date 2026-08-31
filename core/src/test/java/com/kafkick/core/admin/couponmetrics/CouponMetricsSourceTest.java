@@ -117,7 +117,7 @@ class CouponMetricsSourceTest {
     ) {
         return new CouponMetricsSource(
                 couponId,
-                new CouponMetricsSource.CampaignRuntime(CouponRoundStatus.OPEN, OBSERVED_AT.minusSeconds(60)),
+                new CouponMetricsSource.CouponRoundRuntime(CouponRoundStatus.OPEN, OBSERVED_AT.minusSeconds(60)),
                 stock,
                 samples,
                 observed(new CouponMetricsSource.QueueCounts(

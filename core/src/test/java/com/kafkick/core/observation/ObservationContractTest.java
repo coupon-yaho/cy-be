@@ -27,9 +27,11 @@ class ObservationContractTest {
         assertThat(names(ReleaseStage.values())).containsExactly("V1", "V2_1", "V2_2", "V3");
         assertThat(names(QueueMode.values())).containsExactly("OFF", "ALWAYS", "ADAPTIVE");
         assertThat(names(ReasonCode.values())).containsExactly(
-                "NOT_OPENED", "CAMPAIGN_CLOSED", "GRADE_NOT_ELIGIBLE", "QUEUE_REQUIRED",
+                "NOT_OPENED", "COUPON_ROUND_CLOSED", "GRADE_NOT_ELIGIBLE", "QUEUE_REQUIRED",
                 "NO_ENTRY_TOKEN", "ENTRY_TOKEN_EXPIRED", "ALREADY_ISSUED", "STOCK_EXHAUSTED",
-                "INVALID_TRANSITION", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED"
+                "INVALID_TRANSITION", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR",
+                "REPLAY_IN_PROGRESS", "VALUE_CORRUPT", "GATE_NOT_READY",
+                "BAD_ARGUMENT", "COUNTER_UNREADABLE", "UNMAPPED"
         );
         assertThat(names(ConsistencyGapType.values())).containsExactly(
                 "ACTIVE_DB_GAP", "LUA_GAP", "PERSIST_GAP", "DB_COUNTER_GAP"

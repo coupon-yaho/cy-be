@@ -12,11 +12,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.exception.CouponIssueV2ErrorCode;
 import com.kafkick.core.coupon.exception.IdempotencyPersistenceException;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.support.exception.BusinessException;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -65,6 +67,25 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.error.code").value("COUPON-407"));
     }
 
+    @Test
+    void addsRetryAfterHeaderForRetryableIssueFailures() throws Exception {
+        MockMvc mockMvc = mockMvc();
+
+        mockMvc.perform(get("/test/retry-after"))
+                .andExpect(status().isConflict())
+                .andExpect(header().string("Retry-After", "1"))
+                .andExpect(jsonPath("$.error.code").value("COUPON-320"));
+    }
+
+    /** Retry-After 는 재시도로 풀리는 실패에만 붙는다. */
+    @Test
+    void omitsRetryAfterHeaderForOtherBusinessFailures() throws Exception {
+        MockMvc mockMvc = mockMvc();
+
+        mockMvc.perform(get("/test/business"))
+                .andExpect(header().doesNotExist("Retry-After"));
+    }
+
     private MockMvc mockMvc() {
         TimeProvider timeProvider = new TimeProvider(Clock.fixed(
                 FIXED_AT,
@@ -85,6 +106,11 @@ class GlobalExceptionHandlerTest {
                     "테스트 코덱 실패",
                     new IllegalStateException("cause")
             );
+        }
+
+        @GetMapping("/test/retry-after")
+        void retryable() {
+            throw new RetryAfterException(CouponIssueV2ErrorCode.REPLAY_PENDING, 1);
         }
 
         @GetMapping("/test/business")

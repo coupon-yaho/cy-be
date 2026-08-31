@@ -2,6 +2,7 @@ package com.kafkick.storage.db.coupon.repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -18,6 +19,22 @@ public interface IssuanceJpaRepository
 
     /** 회차와 회원이 같은 기존 발급건의 존재 여부를 조회합니다. */
     boolean existsByCouponIdAndMemberId(Long couponId, Long memberId);
+
+    @Query(value = """
+            SELECT issuance.*
+            FROM issuances issuance
+            JOIN issuance_histories history
+              ON history.issuance_id = issuance.id
+             AND history.event_type = 'ISSUE'
+            WHERE issuance.coupon_id = :couponRoundId
+              AND issuance.member_id = :memberId
+              AND history.request_id = :idempotencyKey
+            """, nativeQuery = true)
+    Optional<IssuanceEntity> findForCouponRoundMemberAndIdempotencyKey(
+            @Param("couponRoundId") Long couponRoundId,
+            @Param("memberId") Long memberId,
+            @Param("idempotencyKey") String idempotencyKey
+    );
 
     @Query(
             value = """

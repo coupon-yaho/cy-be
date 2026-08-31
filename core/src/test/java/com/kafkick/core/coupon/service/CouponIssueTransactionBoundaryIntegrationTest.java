@@ -27,6 +27,7 @@ import com.kafkick.core.coupon.port.CouponRoundRepository;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
 import com.kafkick.core.coupon.port.IdempotencyResultCodec;
 import com.kafkick.core.coupon.port.IssuanceRepository;
+import com.kafkick.core.coupon.query.CouponIssuePolicySnapshot;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyClaimService;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyExecutionService;
 import com.kafkick.core.coupon.service.idempotency.IdempotencyPolicy;
@@ -55,11 +56,8 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             CouponOperationExecutionService service = context.getBean(
                     CouponOperationExecutionService.class
             );
-            CouponIssuePolicyValidator validator = context.getBean(
-                    CouponIssuePolicyValidator.class
-            );
-            IdempotencyExecutionService idempotency = context.getBean(
-                    IdempotencyExecutionService.class
+            CouponIssuePreflightService preflight = context.getBean(
+                    CouponIssuePreflightService.class
             );
             IdempotentOperationService operation = context.getBean(
                     IdempotentOperationService.class
@@ -67,8 +65,7 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             BoundaryTrace trace = context.getBean(BoundaryTrace.class);
 
             assertThat(AopUtils.isAopProxy(service)).isFalse();
-            assertThat(AopUtils.isAopProxy(validator)).isTrue();
-            assertThat(AopUtils.isAopProxy(idempotency)).isTrue();
+            assertThat(AopUtils.isAopProxy(preflight)).isTrue();
             assertThat(AopUtils.isAopProxy(operation)).isTrue();
 
             CouponIssueExecutionResult result = service.issueWithMetadata(
@@ -86,12 +83,11 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             assertThat(result.replayed()).isFalse();
             assertThat(result.result().issuanceId()).isEqualTo(100L);
             assertThat(trace.events()).containsExactly(
-                    "claim",
-                    "policy-round",
-                    "policy-existing",
+                    "preflight-idempotency",
+                    "policy-snapshot",
                     "callback",
                     "authoritative-operation",
-                    "idempotency-complete"
+                    "idempotency-insert"
             );
             assertThat(TransactionSynchronizationManager
                     .isActualTransactionActive()).isFalse();
@@ -118,35 +114,13 @@ class CouponIssueTransactionBoundaryIntegrationTest {
         }
 
         @Bean
-        IdempotencyClaimService idempotencyClaimService(
-                BoundaryTrace trace
+        CouponIssuePreflightService couponIssuePreflightService(
+                IdempotencyRepository repository,
+                CouponIssuePolicyValidator policyValidator
         ) {
-            IdempotencyClaimService service = mock(
-                    IdempotencyClaimService.class
-            );
-            when(service.tryStart(any(), any(), any())).thenAnswer(
-                    invocation -> {
-                        trace.add("claim");
-                        assertWriteTransaction();
-                        return true;
-                    }
-            );
-            return service;
-        }
-
-        @Bean
-        IdempotencyExecutionService idempotencyExecutionService(
-                IdempotencyClaimService claimService,
-                TimeProvider timeProvider
-        ) {
-            return new IdempotencyExecutionService(
-                    claimService,
-                    timeProvider,
-                    new IdempotencyPolicy(
-                            Duration.ofSeconds(1),
-                            Duration.ofMillis(10),
-                            Duration.ofSeconds(30)
-                    )
+            return new CouponIssuePreflightService(
+                    repository,
+                    policyValidator
             );
         }
 
@@ -155,35 +129,28 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             CouponRoundRepository repository = mock(
                     CouponRoundRepository.class
             );
-            when(repository.findById(10L)).thenAnswer(invocation -> {
-                trace.add("policy-round");
-                assertReadOnlyTransaction();
-                return Optional.of(couponRound());
-            });
-            return repository;
-        }
-
-        @Bean
-        IssuanceRepository issuanceRepository(BoundaryTrace trace) {
-            IssuanceRepository repository = mock(IssuanceRepository.class);
-            when(repository.existsForCouponRoundAndMember(10L, 20L))
+            when(repository.findIssuePolicySnapshot(10L, 20L))
                     .thenAnswer(invocation -> {
-                        trace.add("policy-existing");
+                        trace.add("policy-snapshot");
                         assertReadOnlyTransaction();
-                        return false;
+                        return Optional.of(new CouponIssuePolicySnapshot(
+                                couponRound(),
+                                false
+                        ));
                     });
             return repository;
         }
 
         @Bean
+        IssuanceRepository issuanceRepository() {
+            return mock(IssuanceRepository.class);
+        }
+
+        @Bean
         CouponIssuePolicyValidator couponIssuePolicyValidator(
-                CouponRoundRepository couponRoundRepository,
-                IssuanceRepository issuanceRepository
+                CouponRoundRepository couponRoundRepository
         ) {
-            return new CouponIssuePolicyValidator(
-                    couponRoundRepository,
-                    issuanceRepository
-            );
+            return new CouponIssuePolicyValidator(couponRoundRepository);
         }
 
         @Bean
@@ -191,13 +158,18 @@ class CouponIssueTransactionBoundaryIntegrationTest {
             IdempotencyRepository repository = mock(
                     IdempotencyRepository.class
             );
-            org.mockito.Mockito.doAnswer(invocation -> {
-                trace.add("idempotency-complete");
+            when(repository.findByKey(any())).thenAnswer(invocation -> {
+                trace.add("preflight-idempotency");
+                assertReadOnlyTransaction();
+                return java.util.Optional.empty();
+            });
+            when(repository.insertCompleted(
+                    any(), any(), any(), any(), any(), any()
+            )).thenAnswer(invocation -> {
+                trace.add("idempotency-insert");
                 assertWriteTransaction();
-                return null;
-            }).when(repository).complete(
-                    any(), any(), any(), any(), any()
-            );
+                return true;
+            });
             return repository;
         }
 
@@ -231,17 +203,18 @@ class CouponIssueTransactionBoundaryIntegrationTest {
 
         @Bean
         CouponOperationExecutionService couponOperationExecutionService(
-                IdempotencyExecutionService idempotencyExecutionService,
                 IdempotentOperationService operationService,
                 CouponIssueService couponIssueService,
-                CouponIssuePolicyValidator policyValidator,
+                CouponIssuePreflightService preflightService,
+                TimeProvider timeProvider,
                 IdempotencyResultCodec<CouponIssueResult> issueCodec
         ) {
             return new CouponOperationExecutionService(
-                    idempotencyExecutionService,
+                    mock(IdempotencyExecutionService.class),
                     operationService,
                     couponIssueService,
-                    policyValidator,
+                    preflightService,
+                    timeProvider,
                     mock(CouponUseService.class),
                     mock(CouponCancelUseService.class),
                     mock(CouponCancelService.class),

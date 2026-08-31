@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.kafkick.core.admin.queue.AdminQueueObservationSource;
-import com.kafkick.core.admin.queue.CampaignQueueObservation;
+import com.kafkick.core.admin.queue.CouponRoundQueueObservation;
 import com.kafkick.core.observation.SourceStatus;
 
 /** 프론트 연동용으로 couponId와 요청 시각에만 의존하는 결정적 대기열 원천입니다. */
@@ -21,7 +21,7 @@ public final class MockAdminQueueObservationSource implements AdminQueueObservat
      * @return 요청 구간과 snapshotAt을 그대로 반영한 불변 Mock 관측값
      */
     @Override
-    public Map<Long, CampaignQueueObservation> observe(
+    public Map<Long, CouponRoundQueueObservation> observe(
             List<Long> couponIds,
             Instant windowStart,
             Instant windowEnd,
@@ -29,7 +29,7 @@ public final class MockAdminQueueObservationSource implements AdminQueueObservat
     ) {
         List<Long> requestedIds = AdminQueueObservationSource.requireRequest(
                 couponIds, windowStart, windowEnd, snapshotAt);
-        Map<Long, CampaignQueueObservation> observations = new LinkedHashMap<>();
+        Map<Long, CouponRoundQueueObservation> observations = new LinkedHashMap<>();
         for (Long couponId : requestedIds) {
             observations.put(couponId, observation(couponId, windowStart, windowEnd, snapshotAt));
         }
@@ -37,7 +37,7 @@ public final class MockAdminQueueObservationSource implements AdminQueueObservat
     }
 
     /** couponId별 고정 패턴을 실제 계산기에 필요한 원천값으로 변환합니다. */
-    private static CampaignQueueObservation observation(
+    private static CouponRoundQueueObservation observation(
             long couponId,
             Instant windowStart,
             Instant windowEnd,
@@ -55,14 +55,14 @@ public final class MockAdminQueueObservationSource implements AdminQueueObservat
             return admitted(couponId, 8L, 20L, 14L, windowStart, windowEnd, snapshotAt);
         }
         // 대기자가 있는 무입장은 중단 시작 시각을 함께 제공해야 중단 조치 계산이 가능합니다.
-        return new CampaignQueueObservation(
+        return new CouponRoundQueueObservation(
                 couponId, 24L, 24L, 0L, windowStart, windowEnd,
                 windowStart.minusSeconds(121L), windowStart.minusSeconds(120L),
                 SourceStatus.VALID, snapshotAt);
     }
 
     /** 입장이 있는 패턴의 마지막 입장 시각을 요청 구간 안에 고정합니다. */
-    private static CampaignQueueObservation admitted(
+    private static CouponRoundQueueObservation admitted(
             long couponId,
             long currentWaitingCount,
             long previousWaitingCount,
@@ -71,7 +71,7 @@ public final class MockAdminQueueObservationSource implements AdminQueueObservat
             Instant windowEnd,
             Instant snapshotAt
     ) {
-        return new CampaignQueueObservation(
+        return new CouponRoundQueueObservation(
                 couponId, currentWaitingCount, previousWaitingCount, admittedCount,
                 windowStart, windowEnd, windowEnd.minusNanos(1L), null,
                 SourceStatus.VALID, snapshotAt);

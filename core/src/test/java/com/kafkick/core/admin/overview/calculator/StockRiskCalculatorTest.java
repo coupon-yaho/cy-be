@@ -73,9 +73,9 @@ class StockRiskCalculatorTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** O1 미수집과 V2·V3 재고는 행과 전역 모두 부분 위험 0으로 축약하면 안 됩니다. */
+    /** O1 미수집은 보존하되 권위 재고가 확정된 V2는 V1과 같은 수량식으로 계산하는지 검증합니다. */
     @Test
-    void preservesO1AndUnsupportedEngineUnavailabilityInGlobalRisk() {
+    void preservesO1UnavailabilityAndCalculatesV2AuthoritativeStock() {
         StockRiskCalculator.StockRiskCalculation pendingRate = new StockRiskCalculator().calculate(POLICY, List.of(
                 input(9L, 10L, 5L, new AdminOverviewSnapshot.Observation<>(
                         null, SourceStatus.PENDING, null))));
@@ -84,8 +84,9 @@ class StockRiskCalculatorTest {
                         SourceStatus.VALID, NOW, flow(1.0, SourceStatus.VALID))));
 
         assertThat(pendingRate.stockRisk().status()).isEqualTo(SourceStatus.PENDING);
-        assertThat(v2.stockForecasts().get(10L).status()).isEqualTo(SourceStatus.UNAVAILABLE);
-        assertThat(v2.stockRisk().status()).isEqualTo(SourceStatus.UNAVAILABLE);
+        assertThat(v2.stockForecasts().get(10L).status()).isEqualTo(SourceStatus.VALID);
+        assertThat(v2.stockForecasts().get(10L).value().remainingQuantity()).isEqualTo(5L);
+        assertThat(v2.stockRisk().status()).isEqualTo(SourceStatus.VALID);
     }
 
     /** N_A 전용·빈 모집단은 N_A이며, 0 rate는 관측된 비위험이지 미수집이 아닙니다. */
@@ -169,7 +170,7 @@ class StockRiskCalculatorTest {
                 new AdminOverviewSnapshot.Observation<>(null, SourceStatus.UNAVAILABLE, null));
     }
 
-    /** O1 N_A이면 재고 미수집 상태와 무관하게 해당 캠페인을 위험 모집단에서 제외합니다. */
+    /** O1 N_A이면 재고 미수집 상태와 무관하게 해당 쿠폰 회차를 위험 모집단에서 제외합니다. */
     @Test
     void excludesNotApplicableIssuanceFlowWhenStockIsUnavailable() {
         StockRiskCalculator.StockRiskCalculation result = new StockRiskCalculator().calculate(POLICY, List.of(

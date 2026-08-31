@@ -31,6 +31,8 @@ import com.kafkick.api.admin.benchmark.BenchmarkRunConfiguration;
 import com.kafkick.api.admin.benchmark.BenchmarkStartOrchestrator;
 import com.kafkick.api.admin.observability.AdminObservabilityConfig;
 import com.kafkick.api.admin.observability.PromQueryClient;
+import com.kafkick.api.coupon.query.CouponDefinitionL1Cache;
+import com.kafkick.api.coupon.query.V2IssuableCouponRoundQuery;
 import com.kafkick.core.benchmark.BenchmarkRunRepository;
 import com.kafkick.core.benchmark.BenchmarkRunService;
 import com.kafkick.core.benchmark.RunTimeseriesArchiver;
@@ -111,11 +113,11 @@ class ApiApplicationTests {
                 .withBean(com.kafkick.core.admin.couponmetrics.CouponMetricsCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator.class)
-                .withBean(com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator.class)
+                .withBean(com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.StockRiskCalculator.class)
-                .withBean(com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator.class)
-                .withBean(com.kafkick.core.admin.overview.calculator.CampaignPreparationCalculator.class)
+                .withBean(com.kafkick.core.admin.overview.calculator.CouponRoundOverviewCalculator.class)
+                .withBean(com.kafkick.core.admin.overview.calculator.CouponRoundPreparationCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.OperationActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator.class)
                 .withBean(com.kafkick.core.admin.overview.calculator.OverviewStatusCalculator.class)
@@ -146,6 +148,12 @@ class ApiApplicationTests {
                     .as("%s must be a transactional proxy", serviceType)
                     .isTrue();
         }
+    }
+
+    @Test
+    void couponDefinitionL1AndV2QueryAreWiredInTheProductionContext() {
+        assertThat(applicationContext.getBean(CouponDefinitionL1Cache.class)).isNotNull();
+        assertThat(applicationContext.getBean(V2IssuableCouponRoundQuery.class)).isNotNull();
     }
 
     @Test

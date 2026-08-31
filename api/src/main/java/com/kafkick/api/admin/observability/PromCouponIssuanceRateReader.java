@@ -11,7 +11,7 @@ import com.kafkick.core.admin.couponmetrics.CouponIssuanceRateReader;
 import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.core.observation.SourceStatus;
 
-/** Prometheus의 캠페인 성공 발급 rate matrix를 Core 발급률 관측으로 변환합니다. */
+/** Prometheus의 쿠폰 회차 성공 발급 rate matrix를 Core 발급률 관측으로 변환합니다. */
 public class PromCouponIssuanceRateReader implements CouponIssuanceRateReader {
 
     private static final Duration PROMETHEUS_TIMESTAMP_PRECISION = Duration.ofMillis(1);

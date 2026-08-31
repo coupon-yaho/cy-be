@@ -17,6 +17,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.kafkick.api.observation.ObservationIssuanceProperties;
 import com.kafkick.core.member.Grade;
 import com.kafkick.core.membership.domain.MembershipGrade;
+import com.kafkick.core.coupon.v2.CouponIssuanceRouter;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinitionCache;
+import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
 import com.kafkick.core.observation.EngineVersion;
 import com.kafkick.core.observation.IssuanceFlowEvent;
 import com.kafkick.core.observation.QueueMode;
@@ -27,6 +31,7 @@ import com.kafkick.core.runtimeconfig.RuntimeConfigStore;
 import com.kafkick.core.support.TimeProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -50,7 +55,7 @@ class IssuanceObservationContextFactoryTest {
         factory = new IssuanceObservationContextFactory(
                 runtimeConfigStore,
                 timeProvider,
-                new ObservationIssuanceProperties(null, "api-17")
+                new ObservationIssuanceProperties(null, "api-17", null, null)
         );
     }
 
@@ -65,7 +70,8 @@ class IssuanceObservationContextFactoryTest {
                 "request-1",
                 20L,
                 10L,
-                MembershipGrade.GOLD
+                MembershipGrade.GOLD,
+                EngineVersion.V2
         );
 
         assertThat(result).contains(new IssuanceFlowEvent.Ctx(
@@ -75,7 +81,7 @@ class IssuanceObservationContextFactoryTest {
                 Grade.GOLD,
                 false,
                 OCCURRED_AT,
-                EngineVersion.V3,
+                EngineVersion.V2,
                 ReleaseStage.V3,
                 QueueMode.ADAPTIVE,
                 null,
@@ -83,6 +89,35 @@ class IssuanceObservationContextFactoryTest {
         ));
         verify(runtimeConfigStore).get();
         verify(runtimeConfigStore, never()).getLastKnownGood();
+    }
+
+    @Test
+    void roundRoutingDecisionStampsV1AndV2WithoutUsingGlobalEngineVersion() {
+        CouponRoundIssuanceDefinitionRepository definitions =
+                mock(CouponRoundIssuanceDefinitionRepository.class);
+        when(definitions.lockAndFindById(10L)).thenReturn(Optional.of(
+                new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V1)));
+        when(definitions.lockAndFindById(11L)).thenReturn(Optional.of(
+                new CouponRoundIssuanceDefinition(11L, 7, EngineVersion.V2)));
+        CouponIssuanceRouter router = new CouponIssuanceRouter(
+                new CouponRoundIssuanceDefinitionCache(definitions));
+        when(runtimeConfigStore.get()).thenReturn(snapshot(SourceStatus.VALID));
+        when(timeProvider.instant()).thenReturn(OCCURRED_AT);
+
+        EngineVersion v1 = router.route(10L,
+                definition -> createFor(definition).engineVersion(),
+                definition -> createFor(definition).engineVersion());
+        EngineVersion v2 = router.route(11L,
+                definition -> createFor(definition).engineVersion(),
+                definition -> createFor(definition).engineVersion());
+
+        assertThat(v1).isEqualTo(EngineVersion.V1);
+        assertThat(v2).isEqualTo(EngineVersion.V2);
+    }
+
+    private IssuanceFlowEvent.Ctx createFor(CouponRoundIssuanceDefinition definition) {
+        return factory.create("request-1", 20L, definition.couponRoundId(),
+                MembershipGrade.GOLD, definition.engineVersion()).orElseThrow();
     }
 
     @ParameterizedTest
@@ -96,7 +131,8 @@ class IssuanceObservationContextFactoryTest {
                 "request-1",
                 20L,
                 10L,
-                MembershipGrade.GOLD
+                MembershipGrade.GOLD,
+                EngineVersion.V1
         );
 
         assertThat(result).isEmpty();
@@ -120,7 +156,8 @@ class IssuanceObservationContextFactoryTest {
                 "request-1",
                 20L,
                 10L,
-                membershipGrade
+                membershipGrade,
+                EngineVersion.V1
         ).orElseThrow();
 
         assertThat(context.grade()).isEqualTo(expectedGrade);

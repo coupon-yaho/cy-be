@@ -44,7 +44,7 @@ public record AdminAnalyticsDataset(
                 observation.observedAt());
     }
 
-    /** AVAILABLE 집계 행의 브랜드·캠페인 조합이 함께 받은 카탈로그와 일치하는지 검증합니다. */
+    /** AVAILABLE 집계 행의 브랜드·쿠폰 회차 조합이 함께 받은 카탈로그와 일치하는지 검증합니다. */
     private static void validateCatalogReferences(
             CatalogSnapshot catalog,
             AggregateObservation<List<DailyIssueAggregate>> monthlyTrend,
@@ -65,45 +65,45 @@ public record AdminAnalyticsDataset(
         for (BrandRef brand : catalog.brands()) {
             brandIds.add(brand.brandId());
         }
-        Map<Long, Long> campaignOwners = new HashMap<>();
-        for (CampaignRef campaign : catalog.campaigns()) {
-            if (!brandIds.contains(campaign.brandId())) {
-                throw new IllegalArgumentException("카탈로그 캠페인의 소유 브랜드가 없습니다.");
+        Map<Long, Long> couponRoundOwners = new HashMap<>();
+        for (CouponRoundRef couponRound : catalog.couponRounds()) {
+            if (!brandIds.contains(couponRound.brandId())) {
+                throw new IllegalArgumentException("카탈로그 쿠폰 회차의 소유 브랜드가 없습니다.");
             }
-            Long previous = campaignOwners.put(campaign.couponId(), campaign.brandId());
-            if (previous != null && previous != campaign.brandId()) {
-                throw new IllegalArgumentException("카탈로그 캠페인 소속이 중복됩니다: " + campaign.couponId());
+            Long previous = couponRoundOwners.put(couponRound.couponId(), couponRound.brandId());
+            if (previous != null && previous != couponRound.brandId()) {
+                throw new IllegalArgumentException("카탈로그 쿠폰 회차 소속이 중복됩니다: " + couponRound.couponId());
             }
         }
 
         if (monthlyTrend.value() != null) {
             for (DailyIssueAggregate row : monthlyTrend.value()) {
-                requireCatalogPair(row.brandId(), row.couponId(), brandIds, campaignOwners);
+                requireCatalogPair(row.brandId(), row.couponId(), brandIds, couponRoundOwners);
             }
         }
         if (hourlyHeatmap.value() != null) {
             for (HourlyIssueAggregate row : hourlyHeatmap.value()) {
-                requireCatalogPair(row.brandId(), row.couponId(), brandIds, campaignOwners);
+                requireCatalogPair(row.brandId(), row.couponId(), brandIds, couponRoundOwners);
             }
         }
         if (issuanceStatuses.value() != null) {
             for (IssuanceStatusAggregate row : issuanceStatuses.value()) {
-                requireCatalogPair(row.brandId(), row.couponId(), brandIds, campaignOwners);
+                requireCatalogPair(row.brandId(), row.couponId(), brandIds, couponRoundOwners);
             }
         }
     }
 
-    /** 한 집계 행의 브랜드가 존재하고 캠페인의 실제 소유 브랜드와 같은지 확인합니다. */
+    /** 한 집계 행의 브랜드가 존재하고 쿠폰 회차의 실제 소유 브랜드와 같은지 확인합니다. */
     private static void requireCatalogPair(
             long brandId,
             long couponId,
             Set<Long> brandIds,
-            Map<Long, Long> campaignOwners
+            Map<Long, Long> couponRoundOwners
     ) {
-        Long ownerBrandId = campaignOwners.get(couponId);
+        Long ownerBrandId = couponRoundOwners.get(couponId);
         if (!brandIds.contains(brandId) || ownerBrandId == null || ownerBrandId != brandId) {
             throw new IllegalArgumentException(
-                    "집계 행이 카탈로그의 브랜드·캠페인 소속과 일치하지 않습니다.");
+                    "집계 행이 카탈로그의 브랜드·쿠폰 회차 소속과 일치하지 않습니다.");
         }
     }
 
@@ -124,18 +124,18 @@ public record AdminAnalyticsDataset(
     public record CatalogSnapshot(
             AggregateAvailability availability,
             List<BrandRef> brands,
-            List<CampaignRef> campaigns
+            List<CouponRoundRef> couponRounds
     ) {
 
         /** AVAILABLE만 메타데이터를 보유하도록 검증하고 목록을 불변 복사합니다. */
         public CatalogSnapshot {
             Objects.requireNonNull(availability, "availability");
             Objects.requireNonNull(brands, "brands");
-            Objects.requireNonNull(campaigns, "campaigns");
+            Objects.requireNonNull(couponRounds, "couponRounds");
             brands = List.copyOf(brands);
-            campaigns = List.copyOf(campaigns);
+            couponRounds = List.copyOf(couponRounds);
             if (availability != AggregateAvailability.AVAILABLE
-                    && (!brands.isEmpty() || !campaigns.isEmpty())) {
+                    && (!brands.isEmpty() || !couponRounds.isEmpty())) {
                 throw new IllegalArgumentException("미수집 카탈로그는 메타데이터를 가질 수 없습니다.");
             }
         }
@@ -189,11 +189,11 @@ public record AdminAnalyticsDataset(
         }
     }
 
-    /** 캠페인의 브랜드 소속과 KST 운영 날짜 범위입니다. */
-    public record CampaignRef(long couponId, long brandId, LocalDate opensOn, LocalDate closesOn) {
+    /** 쿠폰 회차의 브랜드 소속과 KST 운영 날짜 범위입니다. */
+    public record CouponRoundRef(long couponId, long brandId, LocalDate opensOn, LocalDate closesOn) {
 
         /** 식별자와 양끝을 포함하는 운영 날짜 범위를 검증합니다. */
-        public CampaignRef {
+        public CouponRoundRef {
             requirePositive(couponId, "couponId");
             requirePositive(brandId, "brandId");
             Objects.requireNonNull(opensOn, "opensOn");
@@ -203,13 +203,13 @@ public record AdminAnalyticsDataset(
             }
         }
 
-        /** 캠페인 운영 기간이 요청 기간과 하루 이상 겹치는지 반환합니다. */
+        /** 쿠폰 회차 운영 기간이 요청 기간과 하루 이상 겹치는지 반환합니다. */
         public boolean overlaps(LocalDate from, LocalDate to) {
             return !closesOn.isBefore(from) && !opensOn.isAfter(to);
         }
     }
 
-    /** 날짜·브랜드·캠페인별 발급 수 집계 행입니다. */
+    /** 날짜·브랜드·쿠폰 회차별 발급 수 집계 행입니다. */
     public record DailyIssueAggregate(
             LocalDate date,
             long brandId,
@@ -226,7 +226,7 @@ public record AdminAnalyticsDataset(
         }
     }
 
-    /** KST 날짜·시간·브랜드·캠페인별 발급 수 집계 행입니다. */
+    /** KST 날짜·시간·브랜드·쿠폰 회차별 발급 수 집계 행입니다. */
     public record HourlyIssueAggregate(
             LocalDate date,
             int hour,

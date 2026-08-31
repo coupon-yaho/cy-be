@@ -25,6 +25,7 @@ BATCH_JOB_INSTANCE
 
 # ── 벤치마크 회차 ──
 #    조회만 관측 풀이다. 생성·전이는 운영 풀이 한다(JdbcBenchmarkRunRepository 주석 참조).
+#    v2 PENDING 계측이 대상 회차를 고를 때도 읽는다(PendingIssuedGaugeCollector).
 benchmark_runs
 #    관리자 Benchmark 상세가 완료 회차의 archive 표본을 읽는다(JdbcBenchmarkTimeseriesReader).
 run_timeseries

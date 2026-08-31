@@ -33,19 +33,19 @@ import com.kafkick.core.admin.couponmetrics.CouponMetricsSource;
 import com.kafkick.api.admin.support.fixture.AdminCouponMetricsTestFixture;
 import com.kafkick.api.admin.support.fixture.AdminOverviewTestDataset;
 import com.kafkick.api.admin.support.fixture.AdminOverviewTestFixture;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
-import com.kafkick.core.admin.campaignsource.PreparationSource;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
+import com.kafkick.core.admin.couponroundsource.PreparationSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsCalculator;
 import com.kafkick.core.admin.analytics.AdminAnalyticsFreshnessPolicy;
 import com.kafkick.core.admin.analytics.AdminAnalyticsPendingSource;
 import com.kafkick.core.admin.analytics.AdminAnalyticsService;
 import com.kafkick.core.admin.overview.AdminOverviewService;
 import com.kafkick.core.admin.overview.AdminOverviewSnapshot;
-import com.kafkick.core.admin.overview.calculator.CampaignOverviewCalculator;
-import com.kafkick.core.admin.overview.calculator.CampaignQueueCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundOverviewCalculator;
+import com.kafkick.core.admin.overview.calculator.CouponRoundQueueCalculator;
 import com.kafkick.core.admin.overview.calculator.ConsistencyActionCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceActionCalculator;
@@ -89,20 +89,20 @@ public final class AdminControllerContractTestSupport {
     /** 지정한 Clock으로 관리자 Overview의 실제 Service 조립을 재사용합니다. */
     public static AdminOverviewService overviewService(Clock clock) {
         AdminOverviewTestFixture fixture = new AdminOverviewTestFixture();
-        return overviewService(clock, campaignReader(fixture), fixture);
+        return overviewService(clock, couponRoundReader(fixture), fixture);
     }
 
     /** 오류 분기 HTTP 계약 테스트가 지정한 Core Reader를 Overview에도 그대로 사용합니다. */
     public static AdminOverviewService overviewService(
             Clock clock,
-            AdminCampaignDataReader reader
+            AdminCouponRoundDataReader reader
     ) {
         return overviewService(clock, reader, new AdminOverviewTestFixture());
     }
 
     private static AdminOverviewService overviewService(
             Clock clock,
-            AdminCampaignDataReader reader,
+            AdminCouponRoundDataReader reader,
             AdminOverviewTestFixture fixture
     ) {
         Instant snapshotAt = clock.instant();
@@ -123,10 +123,10 @@ public final class AdminControllerContractTestSupport {
                 new PendingAdminQueueObservationSource(),
                 new IssuanceFlowCalculator(),
                 new IssuanceActionCalculator(),
-                new CampaignQueueCalculator(),
+                new CouponRoundQueueCalculator(),
                 new CustomerOutcomeCalculator(),
                 new StockRiskCalculator(),
-                new CampaignOverviewCalculator(),
+                new CouponRoundOverviewCalculator(),
                 finalReader,
                 new ConsistencyActionCalculator(),
                 new OperationActionCalculator(),
@@ -157,7 +157,7 @@ public final class AdminControllerContractTestSupport {
             return new OverviewObservationData(
                     request,
                     dataset.issuanceFlowInputs().stream()
-                            .filter(input -> request.campaignTargets().stream()
+                            .filter(input -> request.couponRoundTargets().stream()
                                     .anyMatch(target -> target.couponId().equals(input.couponId())))
                             .toList(),
                     dataset.outcomeInput(),
@@ -166,12 +166,12 @@ public final class AdminControllerContractTestSupport {
         };
     }
 
-    /** 지정한 Clock과 Overview 모집단으로 캠페인 상세 지표 실제 Service를 구성합니다. */
+    /** 지정한 Clock과 Overview 모집단으로 쿠폰 회차 상세 지표 실제 Service를 구성합니다. */
     public static AdminCouponMetricsService couponMetricsService(Clock clock) {
         AdminOverviewTestFixture overviewFixture = new AdminOverviewTestFixture();
         return new AdminCouponMetricsService(
                 new TimeProvider(clock),
-                campaignReader(overviewFixture),
+                couponRoundReader(overviewFixture),
                 pendingCouponIssuanceRateReader(),
                 new PendingAdminQueueObservationSource(),
                 new CouponMetricsCalculator());
@@ -180,7 +180,7 @@ public final class AdminControllerContractTestSupport {
     /** 오류 분기 HTTP 계약 테스트가 지정한 Core Reader를 그대로 사용합니다. */
     public static AdminCouponMetricsService couponMetricsService(
             Clock clock,
-            AdminCampaignDataReader reader
+            AdminCouponRoundDataReader reader
     ) {
         return new AdminCouponMetricsService(
                 new TimeProvider(clock), reader, pendingCouponIssuanceRateReader(),
@@ -194,41 +194,42 @@ public final class AdminControllerContractTestSupport {
     }
 
     /** 기존 Controller JSON fixture를 Core Port 형태로만 제공해 API가 Storage 구현을 참조하지 않게 합니다. */
-    private static AdminCampaignDataReader campaignReader(AdminOverviewTestFixture overviewFixture) {
+    private static AdminCouponRoundDataReader couponRoundReader(AdminOverviewTestFixture overviewFixture) {
         AdminCouponMetricsTestFixture detailFixture = new AdminCouponMetricsTestFixture(overviewFixture);
-        return new AdminCampaignDataReader() {
+        return new AdminCouponRoundDataReader() {
             @Override
-            public AdminCampaignCatalog loadCatalog(Instant snapshotAt) {
+            public AdminCouponRoundCatalog loadCatalog(Instant snapshotAt) {
                 AdminOverviewTestDataset dataset = overviewFixture.create(snapshotAt);
-                return new AdminCampaignCatalog(SourceStatus.VALID, snapshotAt,
-                        dataset.campaigns().stream()
-                                .map(campaign -> new AdminCampaignCatalog.CampaignData(
-                                        campaign.couponId(), campaign.campaignName(), campaign.brandName(),
-                                        campaign.status(), campaign.opensAt(), campaign.closesAt(),
+                return new AdminCouponRoundCatalog(SourceStatus.VALID, snapshotAt,
+                        dataset.couponRounds().stream()
+                                .map(couponRound -> new AdminCouponRoundCatalog.CouponRoundData(
+                                        couponRound.couponId(), couponRound.couponName(), couponRound.brandName(),
+                                        couponRound.status(), couponRound.opensAt(), couponRound.closesAt(),
                                         new CouponMetricsSource.Observation<>(
-                                                campaign.stockStatus().carriesValue()
+                                                couponRound.stockStatus().carriesValue()
                                                         ? new CouponMetricsSource.StockCounts(
-                                                        campaign.totalQuantity(), campaign.activeCount()) : null,
-                                                campaign.stockStatus(), campaign.stockObservedAt()),
-                                        new PreparationSource(null, null, null, SourceStatus.PENDING, null)))
+                                                        couponRound.totalQuantity(), couponRound.activeCount()) : null,
+                                                couponRound.stockStatus(), couponRound.stockObservedAt()),
+                                        new PreparationSource(
+                                                null, null, null, null, SourceStatus.PENDING, null)))
                                 .toList());
             }
 
             @Override
-            public AdminCampaignDetailData findDetail(
+            public AdminCouponRoundDetailData findDetail(
                     long couponId,
                     Instant fromInclusive,
                     Instant toExclusive,
                     Instant snapshotAt
             ) {
                 return detailFixture.find(snapshotAt, couponId)
-                        .map(source -> new AdminCampaignDetailData(
+                        .map(source -> new AdminCouponRoundDetailData(
                                 DetailAvailability.AVAILABLE,
-                                new AdminCampaignDetailData.DetailValue(
-                                        source.couponId(), "campaign-" + source.couponId(), "brand",
-                                        source.campaign(), source.stock(), source.holdingCounts(),
+                                new AdminCouponRoundDetailData.DetailValue(
+                                        source.couponId(), "couponRound-" + source.couponId(), "brand",
+                                        source.couponRound(), source.stock(), source.holdingCounts(),
                                         source.transitions())))
-                        .orElseGet(() -> new AdminCampaignDetailData(DetailAvailability.NOT_FOUND, null));
+                        .orElseGet(() -> new AdminCouponRoundDetailData(DetailAvailability.NOT_FOUND, null));
             }
         };
     }

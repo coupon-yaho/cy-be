@@ -14,6 +14,7 @@ import com.kafkick.core.coupon.port.IssuanceHistoryRepository;
 import com.kafkick.core.coupon.port.IssuanceRepository;
 import com.kafkick.core.coupon.service.command.CouponCancelCommand;
 import com.kafkick.core.coupon.service.result.CouponCancelResult;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.core.support.exception.BusinessException;
 
 @Service
@@ -22,11 +23,13 @@ public class CouponCancelService {
     private final IssuanceRepository issuanceRepository;
     private final IssuanceHistoryRepository issuanceHistoryRepository;
     private final CouponStockRepository couponStockRepository;
+    private final V2StockRestorationService v2StockRestorationService;
 
     public CouponCancelService(
             IssuanceRepository issuanceRepository,
             IssuanceHistoryRepository issuanceHistoryRepository,
-            CouponStockRepository couponStockRepository
+            CouponStockRepository couponStockRepository,
+            V2StockRestorationService v2StockRestorationService
     ) {
         this.issuanceRepository = Objects.requireNonNull(issuanceRepository);
         this.issuanceHistoryRepository = Objects.requireNonNull(
@@ -35,6 +38,7 @@ public class CouponCancelService {
         this.couponStockRepository = Objects.requireNonNull(
                 couponStockRepository
         );
+        this.v2StockRestorationService = Objects.requireNonNull(v2StockRestorationService);
     }
 
     @Transactional
@@ -49,7 +53,6 @@ public class CouponCancelService {
         validateOwner(issuance, command.memberId());
         Issuance canceledIssuance = issuance.cancel(command.canceledAt());
 
-        lockStock(issuance.couponRoundId());
         boolean statusChanged = issuanceRepository.updateStatusIfCurrent(
                 issuance.id(),
                 issuance.memberId(),
@@ -64,6 +67,17 @@ public class CouponCancelService {
             );
         }
 
+        issuanceHistoryRepository.save(IssuanceHistory.cancel(
+                issuance.id(),
+                issuance.status(),
+                command.idempotencyKey(),
+                command.canceledAt()
+        ));
+
+        // 재고 행 X 락은 커밋까지 유지된다. 만료(§9.6 D9)와 같은 순서로 마지막에 잡아
+        // coupon_stocks 가 세 경로 모두에서 마지막 잠금이 되게 한다.
+        // 엔진 판별의 coupons 왕복을 재고 행 X 락 밖에 둔다(§9.6 D9).
+        v2StockRestorationService.restoreAfterCommit(issuance.couponRoundId(), 1);
         boolean stockReleased = couponStockRepository.release(
                 issuance.couponRoundId(),
                 1,
@@ -75,27 +89,12 @@ public class CouponCancelService {
                     "couponRoundId=" + issuance.couponRoundId()
             );
         }
-        issuanceHistoryRepository.save(IssuanceHistory.cancel(
-                issuance.id(),
-                issuance.status(),
-                command.idempotencyKey(),
-                command.canceledAt()
-        ));
 
         return new CouponCancelResult(
                 issuance.id(),
                 canceledIssuance.status(),
                 command.canceledAt()
         );
-    }
-
-    private void lockStock(Long couponRoundId) {
-        if (!couponStockRepository.lockForUpdate(couponRoundId)) {
-            throw new BusinessException(
-                    CouponUseErrorCode.COUPON_STOCK_RELEASE_FAILED,
-                    "couponRoundId=" + couponRoundId
-            );
-        }
     }
 
     private static void validateCommand(CouponCancelCommand command) {

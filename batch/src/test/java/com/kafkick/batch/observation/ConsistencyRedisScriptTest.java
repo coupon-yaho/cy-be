@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.stream.StreamRecords;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -93,7 +95,11 @@ class ConsistencyRedisScriptTest {
     void unexpectedMemberKeyTypeIsAFailure() {
         redisTemplate.opsForValue().set("coupon:7:stock:remaining", "960");
         redisTemplate.opsForValue().set("coupon:7:issued", "40");
-        redisTemplate.opsForHash().put("coupon:7:members", "field", "value");
+        // 자료형 표본이 hash 에서 stream 으로 바뀌었다 — v2 의 cy:v2:issued 가 Hash 라
+        // hash 는 이제 지원 자료형이다(11 문서 ③). 표본을 안 바꾸면 이 테스트는 "지원되는
+        // 자료형을 고장이라 부르라" 는 요구가 되어 계약과 반대 방향으로 굳는다.
+        redisTemplate.opsForStream().add(StreamRecords.mapBacked(Map.of("field", "value"))
+                .withStreamKey("coupon:7:members"));
 
         assertThat(reader().read().consistency().redisObservation().status())
                 .as("키를 잘못 가리킨 설정을 예열로 두면 영영 안 나올 값을 기다리게 된다")

@@ -18,7 +18,7 @@ public final class MeterNames {
     public static final String HTTP_RESULT = "app.http.result";
     public static final String IN_FLIGHT = "app.http.inflight";
 
-    // ── OBS-25 가 직접 만드는 캠페인 발급 미터 ─────────────────────────────
+    // ── OBS-25 가 직접 만드는 쿠폰 회차 발급 미터 ─────────────────────────────
     public static final String ISSUANCE_FLOW = "app.issuance.flow";
     public static final String QUEUE_ADMITTED = "app.queue.admitted";
     public static final String ISSUANCE_OUTCOME = "app.issuance.outcome";
@@ -26,8 +26,13 @@ public final class MeterNames {
             "app.issuance.event.last.success.epoch";
     public static final String QUEUE_EVENT_LAST_ADMITTED_EPOCH =
             "app.queue.event.last.admitted.epoch";
-    public static final String CAMPAIGN_LIMIT_EXCEEDED =
-            "app.observation.campaign.limit.exceeded";
+    // ── v2 발급의 중복·재시도 카운터. 셋을 합치지 않는다(문서 04) ──────────────
+    public static final String ISSUANCE_V2_DUP_PER_MEMBER = "app.issuance.v2.dup.per.member";
+    public static final String ISSUANCE_V2_REPLAY_DONE = "app.issuance.v2.replay.done";
+    public static final String ISSUANCE_V2_REPLAY_PENDING = "app.issuance.v2.replay.pending";
+
+    public static final String COUPON_ROUND_LIMIT_EXCEEDED =
+            "app.observation.coupon.round.limit.exceeded";
 
     // ── 자동 계측. 아래 이름은 우리가 정한 게 아니라 Micrometer 바인더가 정한 것이다 ──
     /** Spring Boot 자동 계측 Timer. observation.yml 이 이 이름으로 백분위 · expiry 를 건다. */

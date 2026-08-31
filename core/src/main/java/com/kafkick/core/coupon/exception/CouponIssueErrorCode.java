@@ -20,9 +20,9 @@ public enum CouponIssueErrorCode implements ErrorCode {
             409, "COUPON-302", "아직 쿠폰 발급이 시작되지 않았습니다.",
             ReasonCode.NOT_OPENED, Dependency.NONE
     ),
-    CAMPAIGN_CLOSED(
+    COUPON_ROUND_CLOSED(
             409, "COUPON-303", "쿠폰 발급이 마감되었습니다.",
-            ReasonCode.CAMPAIGN_CLOSED, Dependency.NONE
+            ReasonCode.COUPON_ROUND_CLOSED, Dependency.NONE
     ),
     GRADE_NOT_ELIGIBLE(
             403, "COUPON-304", "쿠폰 발급 대상 등급이 아닙니다.",

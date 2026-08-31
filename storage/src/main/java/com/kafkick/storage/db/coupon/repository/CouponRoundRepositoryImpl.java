@@ -18,13 +18,20 @@ import com.kafkick.core.coupon.domain.CouponRoundStatus;
 import com.kafkick.core.coupon.exception.CouponPersistenceException;
 import com.kafkick.core.coupon.exception.CouponRoundAlreadyExistsException;
 import com.kafkick.core.coupon.port.CouponRoundRepository;
+import com.kafkick.core.coupon.query.CouponIssuePolicySnapshot;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
+import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
+import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.coupontemplate.domain.CouponPolicyType;
+import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.storage.db.coupon.entity.CouponRoundEntity;
 import com.kafkick.storage.db.coupon.entity.CouponStockEntity;
 import com.kafkick.storage.db.coupon.mapper.CouponRoundEntityMapper;
 import com.kafkick.storage.db.support.SqlErrorInspector;
 
 @Repository
-public class CouponRoundRepositoryImpl implements CouponRoundRepository {
+public class CouponRoundRepositoryImpl implements CouponRoundRepository,
+        CouponRoundIssuanceDefinitionRepository {
 
     private static final int MYSQL_DUPLICATE_KEY_ERROR = 1062;
 
@@ -40,6 +47,49 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
         this.couponRoundJpaRepository = couponRoundJpaRepository;
         this.couponStockJpaRepository = couponStockJpaRepository;
         this.entityManager = entityManager;
+    }
+
+    @Override
+    public Optional<CouponIssuePolicySnapshot> findIssuePolicySnapshot(
+            Long couponRoundId,
+            Long memberId
+    ) {
+        try {
+            return couponRoundJpaRepository
+                    .findIssuePolicySnapshot(couponRoundId, memberId)
+                    .map(CouponRoundRepositoryImpl::toSnapshot);
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "쿠폰 발급 사전검증 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    private static CouponIssuePolicySnapshot toSnapshot(
+            CouponIssuePolicyProjection projection
+    ) {
+        CouponRound couponRound = CouponRound.restore(
+                projection.getCouponRoundId(),
+                projection.getTemplateId(),
+                projection.getBrandId(),
+                projection.getName(),
+                CouponPolicyType.valueOf(projection.getPolicyType()),
+                projection.getDiscountRate(),
+                projection.getMaxDiscountAmount(),
+                projection.getDiscountAmount(),
+                projection.getValidDays(),
+                MembershipGrade.fromMask(projection.getEligibleGradesMask()),
+                projection.getOpenAt(),
+                projection.getCloseAt(),
+                CouponRoundStatus.valueOf(projection.getStatus()),
+                projection.getGeneratedAt()
+        );
+        return new CouponIssuePolicySnapshot(
+                couponRound,
+                projection.getAlreadyIssued() != null
+                        && projection.getAlreadyIssued() != 0L
+        );
     }
 
     @Override
@@ -88,6 +138,64 @@ public class CouponRoundRepositoryImpl implements CouponRoundRepository {
     public Optional<CouponRound> findById(Long couponRoundId) {
         return couponRoundJpaRepository.findById(couponRoundId)
                 .map(CouponRoundEntityMapper::toDomain);
+    }
+
+    @Override
+    public Optional<CouponRoundIssuanceDefinition> findById(long couponRoundId) {
+        try {
+            return couponRoundJpaRepository.findIssuanceDefinitionById(couponRoundId)
+                    .map(projection -> new CouponRoundIssuanceDefinition(
+                            projection.getCouponRoundId(), projection.getValidDays(),
+                            projection.getEngineVersion() == null ? EngineVersion.V1
+                                    : EngineVersion.valueOf(projection.getEngineVersion())));
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException("회차 발급 엔진 정의 조회에 실패했습니다.", exception);
+        }
+    }
+
+    @Override
+    @Transactional
+    public Optional<CouponRoundIssuanceDefinition> lockAndFindById(long couponRoundId) {
+        try {
+            if (couponRoundJpaRepository.lockIssuanceEngine(couponRoundId) != 1) {
+                return Optional.empty();
+            }
+            return couponRoundJpaRepository.findIssuanceDefinitionById(couponRoundId)
+                    .map(projection -> new CouponRoundIssuanceDefinition(
+                            projection.getCouponRoundId(),
+                            projection.getValidDays(),
+                            projection.getEngineVersion() == null
+                                    ? EngineVersion.V1
+                                    : EngineVersion.valueOf(projection.getEngineVersion())
+                    ));
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "회차 발급 엔진 정의 조회에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
+    @Transactional
+    public boolean updateEngineVersionWhenNotOpen(
+            long couponRoundId,
+            EngineVersion engineVersion
+    ) {
+        if (engineVersion == null || engineVersion == EngineVersion.V3) {
+            throw new IllegalArgumentException("회차 발급 엔진은 V1 또는 V2여야 합니다.");
+        }
+        try {
+            return couponRoundJpaRepository.updateIssuanceEngineWhenNotOpen(
+                    couponRoundId,
+                    engineVersion.name()
+            ) == 1;
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "회차 발급 엔진 변경에 실패했습니다.",
+                    exception
+            );
+        }
     }
 
     @Override

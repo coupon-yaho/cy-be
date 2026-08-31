@@ -33,7 +33,7 @@ import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator;
 import com.kafkick.core.admin.overview.calculator.CustomerOutcomeCalculator.OutcomeCount;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator;
 import com.kafkick.core.admin.overview.calculator.IssuanceFlowCalculator.IssuanceFlowInput;
-import com.kafkick.core.admin.overview.observation.CampaignObservationTarget;
+import com.kafkick.core.admin.overview.observation.CouponRoundObservationTarget;
 import com.kafkick.core.admin.overview.observation.OverviewObservationData;
 import com.kafkick.core.admin.overview.observation.OverviewObservationRequest;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
@@ -69,7 +69,7 @@ class PromOverviewObservationSourceTest {
 
         assertThatThrownBy(() -> source.observe(new OverviewObservationRequest(
                 SNAPSHOT,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT.plusNanos(1L))),
                 POLICY)))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -91,13 +91,13 @@ class PromOverviewObservationSourceTest {
         assertThat(instant.evaluationTimes).containsOnly(SNAPSHOT);
     }
 
-    /** OPEN 재고 미관측은 수치로 추정하지 않고 해당 캠페인의 O1 상태로 그대로 보존합니다. */
+    /** OPEN 재고 미관측은 수치로 추정하지 않고 해당 쿠폰 회차의 O1 상태로 그대로 보존합니다. */
     @Test
-    @DisplayName("OPEN 재고 PENDING UNAVAILABLE을 캠페인 O1 값 없는 상태로 보존한다")
+    @DisplayName("OPEN 재고 PENDING UNAVAILABLE을 쿠폰 회차 O1 값 없는 상태로 보존한다")
     void preservesMissingOpenStockStatusAsMissingFlow() {
         for (SourceStatus stockStatus : List.of(SourceStatus.PENDING, SourceStatus.UNAVAILABLE)) {
             OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                    new CampaignObservationTarget(101L, CouponRoundStatus.OPEN, null, stockStatus)), POLICY);
+                    new CouponRoundObservationTarget(101L, CouponRoundStatus.OPEN, null, stockStatus)), POLICY);
 
             OverviewObservationData data = new PromOverviewObservationSource(
                     new RecordingPromQuery(this::happyInstant),
@@ -117,9 +117,9 @@ class PromOverviewObservationSourceTest {
     @DisplayName("OPEN 재고와 O1 metric 상태 중 더 나쁜 값 없는 상태를 보존한다")
     void preservesWorseStatusBetweenStockAndFlowMetric() {
         OverviewObservationRequest pendingStockRequest = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponRoundStatus.OPEN, null, SourceStatus.PENDING)), POLICY);
+                new CouponRoundObservationTarget(101L, CouponRoundStatus.OPEN, null, SourceStatus.PENDING)), POLICY);
         OverviewObservationRequest unavailableStockRequest = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(101L, CouponRoundStatus.OPEN, null, SourceStatus.UNAVAILABLE)), POLICY);
+                new CouponRoundObservationTarget(101L, CouponRoundStatus.OPEN, null, SourceStatus.UNAVAILABLE)), POLICY);
 
         OverviewObservationData metricUnavailable = new PromOverviewObservationSource(
                 new RecordingPromQuery(this::happyInstant),
@@ -150,7 +150,7 @@ class PromOverviewObservationSourceTest {
                     : expectation.getKey() == SourceStatus.VALID
                     ? SNAPSHOT : SNAPSHOT.minus(Duration.ofMinutes(1));
             OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                    new CampaignObservationTarget(
+                    new CouponRoundObservationTarget(
                             101L, CouponRoundStatus.OPEN, true, expectation.getKey(), stockObservedAt)), POLICY);
             OverviewObservationData data = new PromOverviewObservationSource(
                     new RecordingPromQuery(this::happyInstant),
@@ -178,7 +178,7 @@ class PromOverviewObservationSourceTest {
         }
     }
 
-    /** 캠페인 수와 무관한 grouped 조회로 1분 현재값·10분 추세·O3·성공 p99를 조립합니다. */
+    /** 쿠폰 회차 수와 무관한 grouped 조회로 1분 현재값·10분 추세·O3·성공 p99를 조립합니다. */
     @Test
     @DisplayName("grouped query 결과를 모든 Overview 관측 입력으로 변환한다")
     void convertsGroupedQueriesToOverviewInputs() {
@@ -187,11 +187,11 @@ class PromOverviewObservationSourceTest {
         PromOverviewObservationSource source = new PromOverviewObservationSource(
                 instant, range, Duration.ofMinutes(2), Duration.ofSeconds(10));
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(
+                new CouponRoundObservationTarget(
                         101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT),
-                new CampaignObservationTarget(
+                new CouponRoundObservationTarget(
                         102L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT),
-                new CampaignObservationTarget(
+                new CouponRoundObservationTarget(
                         103L, CouponRoundStatus.CLOSED, null, SourceStatus.N_A, null)), POLICY);
 
         OverviewObservationData data = source.observe(request);
@@ -229,9 +229,10 @@ class PromOverviewObservationSourceTest {
                 AdminOverviewSnapshot.CustomerOutcomeType.QUEUED, 5d,
                 AdminOverviewSnapshot.CustomerOutcomeType.ALREADY_ISSUED, 4d,
                 AdminOverviewSnapshot.CustomerOutcomeType.STOCK_EXHAUSTED, 5d,
-                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 35d,
-                AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 19d,
-                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 36d));
+                AdminOverviewSnapshot.CustomerOutcomeType.INELIGIBLE, 30d,
+                AdminOverviewSnapshot.CustomerOutcomeType.ENTRY_EXPIRED, 21d,
+                AdminOverviewSnapshot.CustomerOutcomeType.SYSTEM_FAILURE, 105d,
+                AdminOverviewSnapshot.CustomerOutcomeType.RETRY_IN_PROGRESS, 19d));
         assertThat(data.aggregateIssuanceRate().status()).isEqualTo(SourceStatus.PENDING);
         assertThat(data.latencySummary().status()).isEqualTo(SourceStatus.VALID);
         assertThat(data.latencySummary().value().successfulP99()).isEqualTo(Duration.ofMillis(400));
@@ -279,7 +280,7 @@ class PromOverviewObservationSourceTest {
         Instant nanosecondSnapshot = SNAPSHOT.plusNanos(456_789L);
         OverviewObservationRequest request = new OverviewObservationRequest(
                 nanosecondSnapshot,
-                List.of(new CampaignObservationTarget(
+                List.of(new CouponRoundObservationTarget(
                         101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)),
                 POLICY);
 
@@ -498,7 +499,7 @@ class PromOverviewObservationSourceTest {
 
     /** 재고가 없으면 Core가 NORMAL로 확정하므로 zero-success duration history가 필요하지 않습니다. */
     @Test
-    @DisplayName("재고 없는 캠페인의 불완전 무발급 history는 WARMING_UP이 아니다")
+    @DisplayName("재고 없는 쿠폰 회차의 불완전 무발급 history는 WARMING_UP이 아니다")
     void keepsIncompleteZeroSuccessValidWhenStockIsUnavailable() {
         RecordingPromQuery instant = new RecordingPromQuery(this::happyInstant);
         RecordingRangeQuery range = new RecordingRangeQuery(query -> List.of(
@@ -507,7 +508,7 @@ class PromOverviewObservationSourceTest {
                 new PromRangeSeries(Map.of("coupon_id", "101", "stage", "success"),
                         endpointPoints(0d, 0d))));
         OverviewObservationRequest request = new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(
+                new CouponRoundObservationTarget(
                         101L, CouponRoundStatus.OPEN, false, SourceStatus.VALID, SNAPSHOT)), POLICY);
 
         IssuanceFlowInput flow = input(new PromOverviewObservationSource(
@@ -760,11 +761,11 @@ class PromOverviewObservationSourceTest {
                         .calculate(data.outcomeInput()).customerOutcomes().value();
 
         assertThat(data.outcomeInput().sourceStatus()).isEqualTo(SourceStatus.VALID);
-        assertThat(calculated.totalCount()).isEqualTo(104.1d);
+        assertThat(calculated.totalCount()).isEqualTo(189.1d);
         assertThat(calculated.outcomes()).first().satisfies(outcome -> {
             assertThat(outcome.type()).isEqualTo(AdminOverviewSnapshot.CustomerOutcomeType.ISSUED);
             assertThat(outcome.count()).isEqualTo(0.1d);
-            assertThat(outcome.ratio()).isCloseTo(0.1d / 104.1d, within(1e-15));
+            assertThat(outcome.ratio()).isCloseTo(0.1d / 189.1d, within(1e-15));
         });
         assertThat(OverviewPrometheusContract.outcomes())
                 .contains("sum by (outcome)", "increase(", "[5m]");
@@ -947,7 +948,7 @@ class PromOverviewObservationSourceTest {
                           {"metric":{"outcome":"ALREADY_ISSUED"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"STOCK_EXHAUSTED"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NOT_OPENED"},"value":[1755000000,"1"]},
-                          {"metric":{"outcome":"CAMPAIGN_CLOSED"},"value":[1755000000,"1"]},
+                          {"metric":{"outcome":"COUPON_ROUND_CLOSED"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"GRADE_NOT_ELIGIBLE"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"NO_ENTRY_TOKEN"},"value":[1755000000,"1"]},
                           {"metric":{"outcome":"ENTRY_TOKEN_EXPIRED"},"value":[1755000000,"1"]},
@@ -1015,14 +1016,15 @@ class PromOverviewObservationSourceTest {
         throw new AssertionError("예상하지 않은 instant query: " + query);
     }
 
-    /** 14개 raw outcome의 increase 값을 base + (1-based index * increment)로 만듭니다. */
+    /**
+     * known raw outcome 전부의 increase 값을 base + (1-based index * increment)로 만듭니다.
+     *
+     * <p>목록을 리터럴로 적지 않고 {@code PromOverviewObservationSource} 가 아는 집합을 그대로
+     * 씁니다. 한쪽만 늘면 이 픽스처가 개수 불일치로 조용히 {@code PENDING} 을 만들어, 정작
+     * 검증하려던 것과 다른 이유로 초록이 됩니다.
+     */
     private static List<PromSample> outcomeSamples(double base, double increment) {
-        String[] labels = {
-                "ISSUED", "QUEUED", "QUEUE_REQUIRED", "ALREADY_ISSUED", "STOCK_EXHAUSTED",
-                "NOT_OPENED", "CAMPAIGN_CLOSED", "GRADE_NOT_ELIGIBLE", "NO_ENTRY_TOKEN",
-                "ENTRY_TOKEN_EXPIRED", "TEMPORARILY_UNAVAILABLE", "INTERNAL_ERROR", "UNMAPPED",
-                "INVALID_TRANSITION"
-        };
+        String[] labels = PromOverviewObservationSource.knownOutcomeLabels().toArray(String[]::new);
         List<PromSample> samples = new ArrayList<>();
         for (int index = 0; index < labels.length; index++) {
             samples.add(sample(Map.of("outcome", labels[index]), base + ((index + 1) * increment)));
@@ -1056,7 +1058,7 @@ class PromOverviewObservationSourceTest {
                 .toList();
     }
 
-    /** 두 OPEN 캠페인의 11-point matrix에 current·comparison endpoint를 명시합니다. */
+    /** 두 OPEN 쿠폰 회차의 11-point matrix에 current·comparison endpoint를 명시합니다. */
     private List<PromRangeSeries> happyRange(String query) {
         List<PromRangeSeries> series = new ArrayList<>();
         for (String couponId : List.of("101", "102")) {
@@ -1114,7 +1116,7 @@ class PromOverviewObservationSourceTest {
         return points.stream().filter(point -> !point.observedAt().equals(excludedAt)).toList();
     }
 
-    /** 두 캠페인 라벨을 가진 동일 값 표본을 만듭니다. */
+    /** 두 쿠폰 회차 라벨을 가진 동일 값 표본을 만듭니다. */
     private static List<PromSample> couponSamples(String stage, double value) {
         if (stage.isEmpty()) {
             return List.of(
@@ -1131,7 +1133,7 @@ class PromOverviewObservationSourceTest {
         return new PromSample("", labels, value, SNAPSHOT);
     }
 
-    /** 결과에서 지정 캠페인의 O1 입력을 찾습니다. */
+    /** 결과에서 지정 쿠폰 회차의 O1 입력을 찾습니다. */
     private static IssuanceFlowInput input(OverviewObservationData data, long couponId) {
         return data.issuanceFlowInputs().stream()
                 .filter(input -> input.couponId() == couponId)
@@ -1139,7 +1141,7 @@ class PromOverviewObservationSourceTest {
                 .orElseThrow();
     }
 
-    /** 한 OPEN 캠페인의 고정 요청을 관측합니다. */
+    /** 한 OPEN 쿠폰 회차의 고정 요청을 관측합니다. */
     private OverviewObservationData observe(
             Function<String, List<PromSample>> instantResponder,
             Function<String, List<PromRangeSeries>> rangeResponder
@@ -1175,10 +1177,10 @@ class PromOverviewObservationSourceTest {
         return data;
     }
 
-    /** adapter 경계 상태 시험에 사용할 한 OPEN 캠페인 요청입니다. */
+    /** adapter 경계 상태 시험에 사용할 한 OPEN 쿠폰 회차 요청입니다. */
     private static OverviewObservationRequest request() {
         return new OverviewObservationRequest(SNAPSHOT, List.of(
-                new CampaignObservationTarget(
+                new CouponRoundObservationTarget(
                         101L, CouponRoundStatus.OPEN, true, SourceStatus.VALID, SNAPSHOT)), POLICY);
     }
 

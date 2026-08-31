@@ -277,14 +277,14 @@ class ConsistencyActionCalculatorTest {
         assertThat(result.isComplete()).isFalse();
     }
 
-    /** 순수 조치 계산에 필요한 FINAL 판정과 캠페인 표시 문맥을 함께 만듭니다. */
+    /** 순수 조치 계산에 필요한 FINAL 판정과 쿠폰 회차 표시 문맥을 함께 만듭니다. */
     private static ConsistencyActionContext context(ConsistencyEvaluation evaluation) {
         return context(EngineVersion.V2, evaluation);
     }
 
     private static ConsistencyActionContext context(long couponId, ConsistencyEvaluation evaluation) {
         return new ConsistencyActionContext(
-                couponId, "campaign-" + couponId, OPENS_AT, EVALUATED_AT,
+                couponId, "couponRound-" + couponId, OPENS_AT, EVALUATED_AT,
                 EngineVersion.V2, evaluation);
     }
 
@@ -295,7 +295,7 @@ class ConsistencyActionCalculatorTest {
         return new ConsistencyFinalObservation(status, value);
     }
 
-    /** 엔진별 FINAL 적용성 검증에 필요한 캠페인 문맥을 만듭니다. */
+    /** 엔진별 FINAL 적용성 검증에 필요한 쿠폰 회차 문맥을 만듭니다. */
     private static ConsistencyActionContext context(
             EngineVersion engineVersion,
             ConsistencyEvaluation evaluation

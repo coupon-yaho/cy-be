@@ -13,7 +13,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailabil
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateObservation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.BrandRef;
-import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CampaignRef;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CouponRoundRef;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CatalogSnapshot;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.DailyIssueAggregate;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.HourlyIssueAggregate;
@@ -60,13 +60,13 @@ class AdminAnalyticsDatasetTest {
 
     /** 집계 행이 카탈로그와 다른 브랜드 소속을 주장하면 계산 전에 거부하는지 검증합니다. */
     @Test
-    @DisplayName("AVAILABLE 집계 행은 카탈로그의 캠페인 소속과 일치해야 한다")
+    @DisplayName("AVAILABLE 집계 행은 카탈로그의 쿠폰 회차 소속과 일치해야 한다")
     void availableAggregateRejectsUnknownCatalogReference() {
         Instant observedAt = Instant.parse("2026-01-02T00:00:00Z");
         CatalogSnapshot catalog = new CatalogSnapshot(
                 AggregateAvailability.AVAILABLE,
                 List.of(new BrandRef(1L, "브랜드")),
-                List.of(new CampaignRef(
+                List.of(new CouponRoundRef(
                         101L, 1L, LocalDate.parse("2026-01-01"), LocalDate.parse("2026-12-31"))));
 
         assertThatThrownBy(() -> new AdminAnalyticsDataset(

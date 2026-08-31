@@ -6,6 +6,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.dao.TransientDataAccessResourceException;
 
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
+import com.kafkick.core.coupon.v2.V2CouponIssueException;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.ReasonCode;
 import com.kafkick.core.support.exception.BusinessException;
@@ -23,7 +24,7 @@ class CouponIssueObservationDependencyMapperTest {
                 CouponIssueErrorCode.INVALID_COUPON_ISSUE_REQUEST,
                 CouponIssueErrorCode.COUPON_ROUND_NOT_FOUND,
                 CouponIssueErrorCode.NOT_OPENED,
-                CouponIssueErrorCode.CAMPAIGN_CLOSED,
+                CouponIssueErrorCode.COUPON_ROUND_CLOSED,
                 CouponIssueErrorCode.GRADE_NOT_ELIGIBLE,
                 CouponIssueErrorCode.ALREADY_ISSUED,
                 CouponIssueErrorCode.SOLD_OUT,
@@ -39,7 +40,7 @@ class CouponIssueObservationDependencyMapperTest {
             "INVALID_COUPON_ISSUE_REQUEST, 400, UNMAPPED, NONE",
             "COUPON_ROUND_NOT_FOUND, 404, UNMAPPED, NONE",
             "NOT_OPENED, 409, NOT_OPENED, NONE",
-            "CAMPAIGN_CLOSED, 409, CAMPAIGN_CLOSED, NONE",
+            "COUPON_ROUND_CLOSED, 409, COUPON_ROUND_CLOSED, NONE",
             "GRADE_NOT_ELIGIBLE, 403, GRADE_NOT_ELIGIBLE, NONE",
             "ALREADY_ISSUED, 409, ALREADY_ISSUED, NONE",
             "SOLD_OUT, 409, STOCK_EXHAUSTED, NONE",
@@ -93,6 +94,32 @@ class CouponIssueObservationDependencyMapperTest {
                 new TransientDataAccessResourceException(
                         "database unavailable"
                 )
+        );
+
+        assertThat(mapper.dependency(failure)).isEqualTo(Dependency.MYSQL);
+    }
+
+    @Test
+    void attributesAGateFailureToRedisEvenWhenItsCauseIsADataAccessException() {
+        // Spring Data Redis 의 연결 예외도 DataAccessException 이다. 원인 체인만 보면
+        // Redis 장애가 MySQL 장애로 집계되어 Chaos 판정의 귀속이 뒤바뀐다.
+        RuntimeException failure = new V2CouponIssueException(
+                new TransientDataAccessResourceException("redis unavailable"),
+                null,
+                Dependency.REDIS
+        );
+
+        assertThat(mapper.dependency(failure)).isEqualTo(Dependency.REDIS);
+        assertThat(mapper.classify(failure).dependency()).isEqualTo(Dependency.REDIS);
+        assertThat(mapper.classify(failure).httpStatus()).isEqualTo(500);
+    }
+
+    @Test
+    void keepsMysqlAttributionForAPersistenceFailureInsideTheGateFlow() {
+        RuntimeException failure = new V2CouponIssueException(
+                new TransientDataAccessResourceException("database unavailable"),
+                null,
+                Dependency.MYSQL
         );
 
         assertThat(mapper.dependency(failure)).isEqualTo(Dependency.MYSQL);

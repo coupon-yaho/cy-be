@@ -21,11 +21,11 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
-import com.kafkick.api.admin.observability.PendingAdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignCatalog;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDataReader;
-import com.kafkick.core.admin.campaignsource.AdminCampaignDetailData;
-import com.kafkick.core.admin.campaignsource.DetailAvailability;
+import com.kafkick.api.admin.observability.PendingAdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundCatalog;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDataReader;
+import com.kafkick.core.admin.couponroundsource.AdminCouponRoundDetailData;
+import com.kafkick.core.admin.couponroundsource.DetailAvailability;
 
 /** 관리자 개요 Service 연결과 나머지 선구축 조회의 요청 경계를 검증합니다. */
 class AdminDashboardControllerTest {
@@ -41,7 +41,7 @@ class AdminDashboardControllerTest {
                     AdminControllerContractTestSupport.analyticsService(CLOCK))
     );
 
-    /** 개요 조회가 DB 캠페인과 연결된 관측, 미연결 PENDING을 같은 성공 봉투에 보존하는지 검증합니다. */
+    /** 개요 조회가 DB 쿠폰 회차와 연결된 관측, 미연결 PENDING을 같은 성공 봉투에 보존하는지 검증합니다. */
     @Test
     @DisplayName("관리자 개요 조회는 관측값과 aggregate PENDING을 PARTIAL 응답으로 반환한다")
     void overviewReturnsObservedAndPendingBoundaryResponse() throws Exception {
@@ -55,22 +55,22 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.actionRequired.value").doesNotExist())
                 .andExpect(jsonPath("$.data.openingSoon.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.openingSoon.value").doesNotExist())
-                .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaignStatusSummary.value.openCount").value(3))
-                .andExpect(jsonPath("$.data.campaignStatusSummary.value.scheduledCount").value(2))
-                .andExpect(jsonPath("$.data.campaignStatusSummary.value.closedCount").value(1))
+                .andExpect(jsonPath("$.data.couponRoundStatusSummary.state").value("VALID"))
+                .andExpect(jsonPath("$.data.couponRoundStatusSummary.value.openCount").value(3))
+                .andExpect(jsonPath("$.data.couponRoundStatusSummary.value.scheduledCount").value(2))
+                .andExpect(jsonPath("$.data.couponRoundStatusSummary.value.closedCount").value(1))
                 .andExpect(jsonPath("$.data.actionItems.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.actionItems.value").doesNotExist())
-                .andExpect(jsonPath("$.data.campaigns.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value.length()").value(6))
-                .andExpect(jsonPath("$.data.campaigns.value[0].couponId").value(101))
-                .andExpect(jsonPath("$.data.campaigns.value[0].priority").value(1))
-                .andExpect(jsonPath("$.data.campaigns.value[0].campaignQueueStatus.state")
+                .andExpect(jsonPath("$.data.couponRounds.state").value("VALID"))
+                .andExpect(jsonPath("$.data.couponRounds.value.length()").value(6))
+                .andExpect(jsonPath("$.data.couponRounds.value[0].couponId").value(101))
+                .andExpect(jsonPath("$.data.couponRounds.value[0].priority").value(1))
+                .andExpect(jsonPath("$.data.couponRounds.value[0].couponRoundQueueStatus.state")
                         .value("PENDING"))
-                .andExpect(jsonPath("$.data.campaigns.value[1].couponId").value(102))
-                .andExpect(jsonPath("$.data.campaigns.value[1].issuanceFlow.value.currentPerMinute")
+                .andExpect(jsonPath("$.data.couponRounds.value[1].couponId").value(102))
+                .andExpect(jsonPath("$.data.couponRounds.value[1].issuanceFlow.value.currentPerMinute")
                         .value(49.0))
-                .andExpect(jsonPath("$.data.campaigns.value[1].stockForecast.value.estimatedDepletion")
+                .andExpect(jsonPath("$.data.couponRounds.value[1].stockForecast.value.estimatedDepletion")
                         .value("PT7M9S"))
                 .andExpect(jsonPath("$.data.queueRisk.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.stockRisk.state").value("VALID"))
@@ -82,12 +82,12 @@ class AdminDashboardControllerTest {
                 .andExpect(jsonPath("$.data.latencySummary.value.failedP99").doesNotExist())
                 .andExpect(content().string(not(containsString("\"failedP99\""))))
                 .andExpect(jsonPath("$.data.latencySummary.value.windowEnd").value(NOW.toString()))
-                .andExpect(jsonPath("$.data.campaigns.value[2].couponId").value(103))
-                .andExpect(jsonPath("$.data.campaigns.value[2].stockForecast.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value[2].issuanceFlow.state").value("VALID"))
-                .andExpect(jsonPath("$.data.campaigns.value[2].campaignQueueStatus.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.couponRounds.value[2].couponId").value(103))
+                .andExpect(jsonPath("$.data.couponRounds.value[2].stockForecast.state").value("VALID"))
+                .andExpect(jsonPath("$.data.couponRounds.value[2].issuanceFlow.state").value("VALID"))
+                .andExpect(jsonPath("$.data.couponRounds.value[2].couponRoundQueueStatus.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.customerOutcomes.state").value("VALID"))
-                .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(7))
+                .andExpect(jsonPath("$.data.customerOutcomes.value.outcomes.length()").value(8))
                 .andExpect(jsonPath("$.error").doesNotExist());
     }
 
@@ -158,7 +158,7 @@ class AdminDashboardControllerTest {
 
     /** Overview 모집단에 없는 couponId를 공통 404 봉투로 반환하는지 검증합니다. */
     @Test
-    @DisplayName("쿠폰 지표 조회는 없는 캠페인에 COMMON-002를 반환한다")
+    @DisplayName("쿠폰 지표 조회는 없는 쿠폰 회차에 COMMON-002를 반환한다")
     void couponMetricsReturns404ForUnknownCoupon() throws Exception {
         mockMvc.perform(get("/api/v1/admin/coupon-metrics")
                         .param("couponId", "999999")
@@ -169,7 +169,7 @@ class AdminDashboardControllerTest {
     }
 
     @Test
-    @DisplayName("쿠폰 지표 DB 장애는 ADMIN-CAMPAIGN-001 503을 반환한다")
+    @DisplayName("쿠폰 지표 DB 장애는 ADMIN-COUPON-ROUND-001 503을 반환한다")
     void couponMetricsReturns503ForDatabaseFailure() throws Exception {
         MockMvc unavailableMvc = mockMvcWithReader(new UnavailableDetailReader());
 
@@ -177,13 +177,13 @@ class AdminDashboardControllerTest {
                         .param("couponId", "101")
                         .param("window", "1m"))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.error.code").value("ADMIN-CAMPAIGN-001"));
+                .andExpect(jsonPath("$.error.code").value("ADMIN-COUPON-ROUND-001"));
     }
 
     @Test
     @DisplayName("관측 비활성 쿠폰 지표는 ADMIN-003 503을 반환한다")
     void couponMetricsReturns503WhenObservationIsDisabled() throws Exception {
-        MockMvc disabledMvc = mockMvcWithReader(new PendingAdminCampaignDataReader());
+        MockMvc disabledMvc = mockMvcWithReader(new PendingAdminCouponRoundDataReader());
 
         disabledMvc.perform(get("/api/v1/admin/coupon-metrics")
                         .param("couponId", "101")
@@ -195,7 +195,7 @@ class AdminDashboardControllerTest {
     @Test
     @DisplayName("관측 비활성 운영현황은 빈 PENDING 모집단을 200으로 반환한다")
     void overviewReturnsPendingWhenObservationIsDisabled() throws Exception {
-        AdminCampaignDataReader reader = new PendingAdminCampaignDataReader();
+        AdminCouponRoundDataReader reader = new PendingAdminCouponRoundDataReader();
         MockMvc disabledMvc = AdminControllerContractTestSupport.mockMvcWithNonNullJson(
                 new AdminDashboardController(
                         AdminControllerContractTestSupport.overviewService(CLOCK, reader),
@@ -205,13 +205,13 @@ class AdminDashboardControllerTest {
         disabledMvc.perform(get("/api/v1/admin/overview"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.campaigns.state").value("PENDING"))
-                .andExpect(jsonPath("$.data.campaigns.value").doesNotExist())
-                .andExpect(jsonPath("$.data.campaignStatusSummary.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.couponRounds.state").value("PENDING"))
+                .andExpect(jsonPath("$.data.couponRounds.value").doesNotExist())
+                .andExpect(jsonPath("$.data.couponRoundStatusSummary.state").value("PENDING"))
                 .andExpect(jsonPath("$.data.openingSoon.state").value("PENDING"));
     }
 
-    private static MockMvc mockMvcWithReader(AdminCampaignDataReader reader) {
+    private static MockMvc mockMvcWithReader(AdminCouponRoundDataReader reader) {
         return AdminControllerContractTestSupport.mockMvcWithNonNullJson(
                 new AdminDashboardController(
                         AdminControllerContractTestSupport.overviewService(CLOCK),
@@ -219,20 +219,20 @@ class AdminDashboardControllerTest {
                         AdminControllerContractTestSupport.analyticsService(CLOCK)));
     }
 
-    private static final class UnavailableDetailReader implements AdminCampaignDataReader {
+    private static final class UnavailableDetailReader implements AdminCouponRoundDataReader {
         @Override
-        public AdminCampaignCatalog loadCatalog(Instant snapshotAt) {
+        public AdminCouponRoundCatalog loadCatalog(Instant snapshotAt) {
             throw new AssertionError("상세 HTTP 테스트에서 catalog를 읽으면 안 됩니다.");
         }
 
         @Override
-        public AdminCampaignDetailData findDetail(
+        public AdminCouponRoundDetailData findDetail(
                 long couponId,
                 Instant fromInclusive,
                 Instant toExclusive,
                 Instant snapshotAt
         ) {
-            return new AdminCampaignDetailData(DetailAvailability.UNAVAILABLE, null);
+            return new AdminCouponRoundDetailData(DetailAvailability.UNAVAILABLE, null);
         }
     }
 

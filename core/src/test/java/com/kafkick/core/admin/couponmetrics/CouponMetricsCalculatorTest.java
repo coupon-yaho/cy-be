@@ -342,7 +342,7 @@ class CouponMetricsCalculatorTest {
     ) {
         return new CouponMetricsSource(
                 101L,
-                new CouponMetricsSource.CampaignRuntime(
+                new CouponMetricsSource.CouponRoundRuntime(
                         CouponRoundStatus.OPEN, SNAPSHOT_AT.minus(Duration.ofHours(1))),
                 stock,
                 samples,

@@ -116,6 +116,16 @@ Thumbs.db
 # 코드와 무관한 산출물이고 팀원 실명이 들어가므로 커밋되면 안 된다.
 _workspace/
 
+### Python — 시드 생성기·알림 싱크
+# `infra/alertmanager/` 와 시드 도구가 파이썬이라 바이트코드가 남는다.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Claude Code 개인 설정. 공유해야 하는 것(gradle 범위 가드 훅 등록 등)은
+# .claude/settings.json 에 둔다 — local 은 추적되지 않아 새 워크트리에 안 따라온다.
+.claude/settings.local.json
 # DB 접속 정보 — 위 `*.env` 가 이미 잡지만 이름을 적어 의도를 남긴다.
 # `.env`·`*.pem` 은 위 블록에 있다. 여기 다시 적지 않는다.
 db.env

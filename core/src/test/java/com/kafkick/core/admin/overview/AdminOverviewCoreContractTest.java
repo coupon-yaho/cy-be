@@ -25,7 +25,7 @@ class AdminOverviewCoreContractTest {
     void actionItemPreservesCustomerImpact() {
         AdminOverviewSnapshot.OperationActionItem item = new AdminOverviewSnapshot.OperationActionItem(
                 1L,
-                "캠페인",
+                "쿠폰 회차",
                 FROM,
                 Severity.WARN,
                 AdminOverviewSnapshot.CustomerImpact.LIMITED,
@@ -207,20 +207,20 @@ class AdminOverviewCoreContractTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** 전체 Snapshot이 생성 후 원본 campaigns 변경의 영향을 받지 않고 수정 불가능한 목록을 노출합니다. */
+    /** 전체 Snapshot이 생성 후 원본 couponRounds 변경의 영향을 받지 않고 수정 불가능한 목록을 노출합니다. */
     @Test
-    void snapshotDefensivelyCopiesCampaigns() {
-        List<AdminOverviewSnapshot.CampaignOverview> campaigns = new ArrayList<>();
-        campaigns.add(campaign(1L));
-        AdminOverviewSnapshot.Observation<List<AdminOverviewSnapshot.CampaignOverview>> observation =
-                new AdminOverviewSnapshot.Observation<>(campaigns, SourceStatus.VALID, FROM);
+    void snapshotDefensivelyCopiesCouponRounds() {
+        List<AdminOverviewSnapshot.CouponRoundOverview> couponRounds = new ArrayList<>();
+        couponRounds.add(couponRound(1L));
+        AdminOverviewSnapshot.Observation<List<AdminOverviewSnapshot.CouponRoundOverview>> observation =
+                new AdminOverviewSnapshot.Observation<>(couponRounds, SourceStatus.VALID, FROM);
 
         AdminOverviewSnapshot snapshot = new AdminOverviewSnapshot(
                 FROM, null, null, null, null, null, null, null, null, null, observation, null);
-        campaigns.clear();
+        couponRounds.clear();
 
-        assertThat(snapshot.campaigns().value()).hasSize(1);
-        assertThatThrownBy(() -> snapshot.campaigns().value().clear())
+        assertThat(snapshot.couponRounds().value()).hasSize(1);
+        assertThatThrownBy(() -> snapshot.couponRounds().value().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
@@ -228,7 +228,7 @@ class AdminOverviewCoreContractTest {
             Long couponId, Severity severity, Instant detectedAt) {
         return new AdminOverviewSnapshot.OperationActionItem(
                 couponId,
-                "캠페인 " + couponId,
+                "쿠폰 회차 " + couponId,
                 FROM,
                 severity,
                 AdminOverviewSnapshot.CustomerImpact.LIMITED,
@@ -241,9 +241,9 @@ class AdminOverviewCoreContractTest {
                         AdminOverviewSnapshot.TargetScreen.METRICS));
     }
 
-    private AdminOverviewSnapshot.CampaignOverview campaign(Long couponId) {
-        return new AdminOverviewSnapshot.CampaignOverview(
-                1, couponId, "캠페인", "브랜드", CouponRoundStatus.OPEN, FROM, TO, Severity.NONE,
+    private AdminOverviewSnapshot.CouponRoundOverview couponRound(Long couponId) {
+        return new AdminOverviewSnapshot.CouponRoundOverview(
+                1, couponId, "쿠폰 회차", "브랜드", CouponRoundStatus.OPEN, FROM, TO, Severity.NONE,
                 null, null, null, AdminOverviewSnapshot.CustomerImpact.NONE, "영향 없음", null);
     }
 }

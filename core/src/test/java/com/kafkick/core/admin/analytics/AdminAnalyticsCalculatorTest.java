@@ -17,7 +17,7 @@ import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateAvailabil
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AggregateObservation;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.AnalyticsSourceType;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.BrandRef;
-import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CampaignRef;
+import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CouponRoundRef;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.CatalogSnapshot;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.DailyIssueAggregate;
 import com.kafkick.core.admin.analytics.AdminAnalyticsDataset.HourlyIssueAggregate;
@@ -176,13 +176,13 @@ class AdminAnalyticsCalculatorTest {
         assertThat(result.brandTrends().observedAt()).isNull();
     }
 
-    /** 브랜드와 캠페인 필터가 세 분석 원천에 같은 기준으로 적용되는지 검증합니다. */
+    /** 브랜드와 쿠폰 회차 필터가 세 분석 원천에 같은 기준으로 적용되는지 검증합니다. */
     @Test
-    @DisplayName("브랜드와 캠페인 필터는 선택한 캠페인의 집계만 계산한다")
+    @DisplayName("브랜드와 쿠폰 회차 필터는 선택한 쿠폰 회차의 집계만 계산한다")
     void appliesBrandAndCouponFilters() {
         AdminAnalyticsQuery filteredQuery = new AdminAnalyticsQuery(
                 QUERY.from(), QUERY.to(), 1L, 101L, QUERY.zoneId());
-        AdminAnalyticsDataset dataset = twoCampaignDataset(
+        AdminAnalyticsDataset dataset = twoCouponRoundDataset(
                 available(List.of(
                         new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 1L, 101L, 12L),
                         new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 2L, 102L, 8L))),
@@ -206,11 +206,11 @@ class AdminAnalyticsCalculatorTest {
         assertThat(result.issuanceStatusDistribution().value().totalIssued()).isEqualTo(12L);
     }
 
-    /** 브랜드와 캠페인 필터가 각각 단독으로도 모집단을 제한하는지 검증합니다. */
+    /** 브랜드와 쿠폰 회차 필터가 각각 단독으로도 모집단을 제한하는지 검증합니다. */
     @Test
-    @DisplayName("브랜드와 캠페인 단독 필터는 각각 해당 모집단만 반환한다")
+    @DisplayName("브랜드와 쿠폰 회차 단독 필터는 각각 해당 모집단만 반환한다")
     void appliesBrandAndCouponFiltersIndependently() {
-        AdminAnalyticsDataset dataset = twoCampaignDataset(
+        AdminAnalyticsDataset dataset = twoCouponRoundDataset(
                 available(List.of(
                         new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 1L, 101L, 12L),
                         new DailyIssueAggregate(LocalDate.parse("2026-01-15"), 2L, 102L, 8L))),
@@ -236,13 +236,13 @@ class AdminAnalyticsCalculatorTest {
         assertThat(couponResult.issuanceStatusDistribution().value().totalIssued()).isEqualTo(8L);
     }
 
-    /** 선택하지 않은 캠페인의 기간 계약은 현재 요청 계산에 영향을 주지 않는지 검증합니다. */
+    /** 선택하지 않은 쿠폰 회차의 기간 계약은 현재 요청 계산에 영향을 주지 않는지 검증합니다. */
     @Test
     @DisplayName("상태 집계 기간은 요청 필터를 통과한 행에만 검증한다")
     void validatesStatusWindowAfterQueryFilter() {
         AdminAnalyticsQuery filteredQuery = new AdminAnalyticsQuery(
                 QUERY.from(), QUERY.to(), 1L, 101L, QUERY.zoneId());
-        AdminAnalyticsDataset dataset = twoCampaignDataset(
+        AdminAnalyticsDataset dataset = twoCouponRoundDataset(
                 available(List.of()),
                 available(List.of()),
                 available(List.of(
@@ -289,9 +289,9 @@ class AdminAnalyticsCalculatorTest {
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드"), new BrandRef(2L, "기간 밖 브랜드")),
                         List.of(
-                                new CampaignRef(101L, 1L,
+                                new CouponRoundRef(101L, 1L,
                                         LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
-                                new CampaignRef(102L, 2L,
+                                new CouponRoundRef(102L, 2L,
                                         LocalDate.parse("2025-01-01"), LocalDate.parse("2025-12-31")))),
                 available(List.of(new DailyIssueAggregate(
                         LocalDate.parse("2026-01-15"), 2L, 102L, 8L))),
@@ -345,7 +345,7 @@ class AdminAnalyticsCalculatorTest {
                 new CatalogSnapshot(
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드")),
-                        List.of(new CampaignRef(
+                        List.of(new CouponRoundRef(
                                 101L,
                                 1L,
                                 LocalDate.parse("2025-12-01"),
@@ -355,8 +355,8 @@ class AdminAnalyticsCalculatorTest {
                 statuses);
     }
 
-    /** 필터 경계 테스트에 사용할 두 브랜드·캠페인 Dataset을 만듭니다. */
-    private static AdminAnalyticsDataset twoCampaignDataset(
+    /** 필터 경계 테스트에 사용할 두 브랜드·쿠폰 회차 Dataset을 만듭니다. */
+    private static AdminAnalyticsDataset twoCouponRoundDataset(
             AggregateObservation<List<DailyIssueAggregate>> daily,
             AggregateObservation<List<HourlyIssueAggregate>> hourly,
             AggregateObservation<List<IssuanceStatusAggregate>> statuses
@@ -367,9 +367,9 @@ class AdminAnalyticsCalculatorTest {
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드1"), new BrandRef(2L, "브랜드2")),
                         List.of(
-                                new CampaignRef(101L, 1L,
+                                new CouponRoundRef(101L, 1L,
                                         LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
-                                new CampaignRef(102L, 2L,
+                                new CouponRoundRef(102L, 2L,
                                         LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")))),
                 daily,
                 hourly,
@@ -388,9 +388,9 @@ class AdminAnalyticsCalculatorTest {
                         AggregateAvailability.AVAILABLE,
                         List.of(new BrandRef(1L, "브랜드"), new BrandRef(2L, "기간 밖 브랜드")),
                         List.of(
-                                new CampaignRef(101L, 1L,
+                                new CouponRoundRef(101L, 1L,
                                         LocalDate.parse("2025-12-01"), LocalDate.parse("2026-12-31")),
-                                new CampaignRef(102L, 2L,
+                                new CouponRoundRef(102L, 2L,
                                         LocalDate.parse("2025-01-01"), LocalDate.parse("2025-12-31")))),
                 daily,
                 hourly,
@@ -407,7 +407,7 @@ class AdminAnalyticsCalculatorTest {
         return status(1L, 101L, QUERY, total, issued, used, cancelled, expired);
     }
 
-    /** 임의의 브랜드·캠페인·기간에 대한 상태 집계 행을 만듭니다. */
+    /** 임의의 브랜드·쿠폰 회차·기간에 대한 상태 집계 행을 만듭니다. */
     private static IssuanceStatusAggregate status(
             long brandId,
             long couponId,

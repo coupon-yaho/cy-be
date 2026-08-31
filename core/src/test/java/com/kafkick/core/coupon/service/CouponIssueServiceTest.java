@@ -82,19 +82,18 @@ class CouponIssueServiceTest {
     }
 
     @Test
-    @DisplayName("재고를 잠근 뒤 발급건 선점과 재고 차감, ISSUE 이력을 저장한다")
+    @DisplayName("1인 1매와 이력을 선점한 뒤 재고를 원자적으로 갱신한다")
     void issueCouponInRequiredOrder() {
         CouponRound couponRound = couponRound(CouponRoundStatus.OPEN);
         when(couponRoundRepository.findById(10L))
                 .thenReturn(Optional.of(couponRound));
         when(couponCodeGenerator.generate())
                 .thenReturn("ABCDEFGHJKLM2345");
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.save(any(Issuance.class)))
                 .thenAnswer(invocation -> persisted(
                         invocation.getArgument(0)
                 ));
-        when(couponStockRepository.occupyAfterLock(10L, ISSUED_AT))
+        when(couponStockRepository.occupyOne(10L, ISSUED_AT))
                 .thenReturn(CouponStockOccupationResult.OCCUPIED);
 
         Issuance result = couponIssueService.issue(command(
@@ -110,11 +109,10 @@ class CouponIssueServiceTest {
                 notificationRequestService
         );
         order.verify(couponRoundRepository).findById(10L);
-        order.verify(couponStockRepository).lockForUpdate(10L);
         order.verify(issuanceRepository).save(any(Issuance.class));
-        order.verify(couponStockRepository).occupyAfterLock(10L, ISSUED_AT);
         order.verify(issuanceHistoryRepository)
                 .save(any(IssuanceHistory.class));
+        order.verify(couponStockRepository).occupyOne(10L, ISSUED_AT);
         order.verify(notificationRequestService).request(any(Issuance.class));
 
         ArgumentCaptor<Issuance> issuanceCaptor =
@@ -143,11 +141,10 @@ class CouponIssueServiceTest {
     void rejectSoldOutStockInCore() {
         when(couponRoundRepository.findById(10L))
                 .thenReturn(Optional.of(couponRound(CouponRoundStatus.OPEN)));
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(couponCodeGenerator.generate()).thenReturn("ABCDEFGHJKLM2345");
         when(issuanceRepository.save(any(Issuance.class)))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
-        when(couponStockRepository.occupyAfterLock(10L, ISSUED_AT))
+        when(couponStockRepository.occupyOne(10L, ISSUED_AT))
                 .thenReturn(CouponStockOccupationResult.SOLD_OUT);
 
         assertErrorCode(
@@ -155,7 +152,7 @@ class CouponIssueServiceTest {
                 CouponIssueErrorCode.SOLD_OUT
         );
 
-        verifyNoInteractions(issuanceHistoryRepository);
+        verify(issuanceHistoryRepository).save(any(IssuanceHistory.class));
     }
 
     @Test
@@ -163,20 +160,19 @@ class CouponIssueServiceTest {
     void rejectMissingStockInCore() {
         when(couponRoundRepository.findById(10L))
                 .thenReturn(Optional.of(couponRound(CouponRoundStatus.OPEN)));
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(false);
+        when(couponCodeGenerator.generate()).thenReturn("ABCDEFGHJKLM2345");
+        when(issuanceRepository.save(any(Issuance.class)))
+                .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
+        when(couponStockRepository.occupyOne(10L, ISSUED_AT))
+                .thenReturn(CouponStockOccupationResult.NOT_FOUND);
 
         assertErrorCode(
                 command(MembershipGrade.GOLD, ISSUED_AT),
                 CouponIssueErrorCode.COUPON_STOCK_NOT_FOUND
         );
 
-        verifyNoInteractions(
-                issuanceRepository,
-                issuanceHistoryRepository,
-                couponCodeGenerator
-        );
-        verify(couponStockRepository, never())
-                .occupyAfterLock(any(), any());
+        verify(issuanceRepository).save(any(Issuance.class));
+        verify(issuanceHistoryRepository).save(any(IssuanceHistory.class));
     }
 
     @Test
@@ -215,7 +211,7 @@ class CouponIssueServiceTest {
                         MembershipGrade.GOLD,
                         Instant.parse("2026-08-18T07:00:00Z")
                 ),
-                CouponIssueErrorCode.CAMPAIGN_CLOSED
+                CouponIssueErrorCode.COUPON_ROUND_CLOSED
         );
         verify(issuanceRepository, never()).save(any());
         verifyNoInteractions(
@@ -238,7 +234,7 @@ class CouponIssueServiceTest {
                         MembershipGrade.GOLD,
                         Instant.parse("2026-08-18T04:59:59Z")
                 ),
-                CouponIssueErrorCode.CAMPAIGN_CLOSED
+                CouponIssueErrorCode.COUPON_ROUND_CLOSED
         );
         verifyNoInteractions(
                 issuanceRepository,

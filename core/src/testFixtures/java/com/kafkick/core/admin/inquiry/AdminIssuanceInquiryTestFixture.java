@@ -42,7 +42,7 @@ public final class AdminIssuanceInquiryTestFixture {
                 // 로그에는 ID가 있지만 DB 행이 없으므로 실제 발급으로 확정하지 않는 사례다.
                 attempt(106L, EventType.ISSUE_RESULT, "inquiry-unconfirmed", 1_001L, 2_003L,
                         5_999L, 201, null, minutesBefore(6)),
-                // 회원·캠페인이 같아도 requestId가 다른 두 재시도는 별도 결과로 남는다.
+                // 회원·쿠폰 회차가 같아도 requestId가 다른 두 재시도는 별도 결과로 남는다.
                 attempt(107L, EventType.ISSUE_RESULT, "inquiry-retry-a", 1_001L, 2_004L,
                         null, 409, ReasonCode.ALREADY_ISSUED, minutesBefore(5)),
                 attempt(108L, EventType.ISSUE_RESULT, "inquiry-retry-b", 1_001L, 2_004L,

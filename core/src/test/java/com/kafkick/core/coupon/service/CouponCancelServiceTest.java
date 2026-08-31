@@ -16,6 +16,7 @@ import com.kafkick.core.coupon.domain.Issuance;
 import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
@@ -56,6 +57,8 @@ class CouponCancelServiceTest {
 
     @Mock
     private CouponStockRepository couponStockRepository;
+    @Mock
+    private V2StockRestorationService v2StockRestorationService;
 
     private CouponCancelService cancelService;
 
@@ -64,7 +67,8 @@ class CouponCancelServiceTest {
         cancelService = new CouponCancelService(
                 issuanceRepository,
                 issuanceHistoryRepository,
-                couponStockRepository
+                couponStockRepository,
+                v2StockRestorationService
         );
     }
 
@@ -74,7 +78,6 @@ class CouponCancelServiceTest {
         Issuance issuance = issuance(CANCELED_AT.plusSeconds(1));
         when(issuanceRepository.findById(100L))
                 .thenReturn(Optional.of(issuance));
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.updateStatusIfCurrent(
                 100L,
                 20L,
@@ -93,9 +96,9 @@ class CouponCancelServiceTest {
         InOrder ordered = inOrder(
                 couponStockRepository,
                 issuanceRepository,
-                issuanceHistoryRepository
+                issuanceHistoryRepository,
+                v2StockRestorationService
         );
-        ordered.verify(couponStockRepository).lockForUpdate(10L);
         ordered.verify(issuanceRepository).updateStatusIfCurrent(
                 100L,
                 20L,
@@ -103,15 +106,19 @@ class CouponCancelServiceTest {
                 IssuanceStatus.CANCELLED,
                 CANCELED_AT
         );
+        ArgumentCaptor<IssuanceHistory> historyCaptor =
+                ArgumentCaptor.forClass(IssuanceHistory.class);
+        // 이력 INSERT 는 재고 행 X 락 밖이다. 세 경로(취소·사용취소·만료)가 같은 순서를
+        // 지켜야 coupon_stocks 가 항상 마지막 잠금이 된다(설계 §9.6 D9).
+        ordered.verify(issuanceHistoryRepository)
+                .save(historyCaptor.capture());
+        // coupons 왕복은 재고 행 X 락 밖이어야 한다.
+        ordered.verify(v2StockRestorationService).restoreAfterCommit(10L, 1L);
         ordered.verify(couponStockRepository).release(
                 10L,
                 1,
                 CANCELED_AT
         );
-        ArgumentCaptor<IssuanceHistory> historyCaptor =
-                ArgumentCaptor.forClass(IssuanceHistory.class);
-        ordered.verify(issuanceHistoryRepository)
-                .save(historyCaptor.capture());
         assertThat(historyCaptor.getValue().eventType())
                 .isEqualTo(IssuanceEventType.CANCEL);
         assertThat(historyCaptor.getValue().fromStatus())
@@ -173,7 +180,6 @@ class CouponCancelServiceTest {
                 .thenReturn(Optional.of(issuance(
                         CANCELED_AT.plusSeconds(1)
                 )));
-        when(couponStockRepository.lockForUpdate(10L)).thenReturn(true);
         when(issuanceRepository.updateStatusIfCurrent(
                 100L,
                 20L,

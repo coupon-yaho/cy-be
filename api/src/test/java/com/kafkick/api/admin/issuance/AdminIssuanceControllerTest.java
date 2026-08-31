@@ -147,9 +147,9 @@ class AdminIssuanceControllerTest {
                 .andExpect(jsonPath("$.data.items[0].reasonCode").doesNotExist());
     }
 
-    /** 같은 회원·캠페인의 서로 다른 재시도가 별도 문의 행으로 유지되는지 검증합니다. */
+    /** 같은 회원·쿠폰 회차의 서로 다른 재시도가 별도 문의 행으로 유지되는지 검증합니다. */
     @Test
-    @DisplayName("발급 문의 조회는 같은 회원과 캠페인의 재시도 두 건을 합치지 않는다")
+    @DisplayName("발급 문의 조회는 같은 회원과 쿠폰 회차의 재시도 두 건을 합치지 않는다")
     void issuanceInquiriesKeepRetriesAsSeparateRows() throws Exception {
         mockMvc.perform(get("/api/v1/admin/members/issuance-inquiries")
                         .param("memberId", "1001")

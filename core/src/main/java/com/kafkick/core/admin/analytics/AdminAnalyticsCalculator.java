@@ -63,7 +63,7 @@ public final class AdminAnalyticsCalculator {
                 calculateStatuses(query, responseBrandIds, dataset.issuanceStatuses(), evaluatedAt));
     }
 
-    /** 요청 기간에 운영 캠페인이 있거나 명시적으로 선택된 브랜드를 응답 모집단으로 고릅니다. */
+    /** 요청 기간에 운영 쿠폰 회차가 있거나 명시적으로 선택된 브랜드를 응답 모집단으로 고릅니다. */
     private static List<BrandRef> responseBrands(
             AdminAnalyticsQuery query,
             AdminAnalyticsDataset dataset
@@ -77,12 +77,12 @@ public final class AdminAnalyticsCalculator {
                 continue;
             }
             boolean selected = query.brandId() != null && query.brandId().equals(brand.brandId());
-            boolean hasOverlappingCampaign = dataset.catalog().campaigns().stream()
-                    .anyMatch(campaign -> campaign.brandId() == brand.brandId()
+            boolean hasOverlappingCouponRound = dataset.catalog().couponRounds().stream()
+                    .anyMatch(couponRound -> couponRound.brandId() == brand.brandId()
                             && (query.couponId() == null
-                            || query.couponId().equals(campaign.couponId()))
-                            && campaign.overlaps(query.from(), query.to()));
-            if (selected || hasOverlappingCampaign) {
+                            || query.couponId().equals(couponRound.couponId()))
+                            && couponRound.overlaps(query.from(), query.to()));
+            if (selected || hasOverlappingCouponRound) {
                 brands.put(brand.brandId(), brand);
             }
         }
@@ -250,7 +250,7 @@ public final class AdminAnalyticsCalculator {
             merge(counts, IssuanceStatus.EXPIRED, row.expired());
         }
 
-        // 캠페인별 비율 평균은 모집단 크기를 잃으므로 수량을 모두 합산한 뒤 한 번만 나눕니다.
+        // 쿠폰 회차별 비율 평균은 모집단 크기를 잃으므로 수량을 모두 합산한 뒤 한 번만 나눕니다.
         List<StatusCount> statuses = new ArrayList<>(IssuanceStatus.values().length);
         for (IssuanceStatus issuanceStatus : IssuanceStatus.values()) {
             long count = counts.get(issuanceStatus);
@@ -293,7 +293,7 @@ public final class AdminAnalyticsCalculator {
         return !date.isBefore(query.from()) && !date.isAfter(query.to());
     }
 
-    /** 브랜드·캠페인 선택 필터를 모두 만족하는 행인지 확인합니다. */
+    /** 브랜드·쿠폰 회차 선택 필터를 모두 만족하는 행인지 확인합니다. */
     private static boolean matchesFilter(long brandId, long couponId, AdminAnalyticsQuery query) {
         return (query.brandId() == null || query.brandId() == brandId)
                 && (query.couponId() == null || query.couponId() == couponId);

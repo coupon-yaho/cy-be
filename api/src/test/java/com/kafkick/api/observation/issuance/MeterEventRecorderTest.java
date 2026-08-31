@@ -39,7 +39,7 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 class MeterEventRecorderTest {
 
     @Test
-    void mapsEveryEventKindToItsCampaignMeterAndOutcome() {
+    void mapsEveryEventKindToItsCouponRoundMeterAndOutcome() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
@@ -74,7 +74,7 @@ class MeterEventRecorderTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         recorder(registry);
 
-        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(14);
+        assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters()).hasSize(19);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters())
                 .allMatch(counter -> counter.getId().getTag("coupon_id") == null);
         assertThat(registry.find(MeterNames.ISSUANCE_OUTCOME).counters().stream()
@@ -215,21 +215,21 @@ class MeterEventRecorderTest {
     @Test
     void rejectsNonPositiveFailureLogIntervals() {
         assertThatThrownBy(() -> new MeterEventRecorder(
-                new CampaignMeterRegistry(new SimpleMeterRegistry(),
-                        new CampaignMeterProperties(null, null, null, null), Duration.ofSeconds(1)), Duration.ZERO))
+                new CouponRoundMeterRegistry(new SimpleMeterRegistry(),
+                        new CouponRoundMeterProperties(null, null, null, null), Duration.ofSeconds(1)), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("failureLogInterval must be positive");
     }
 
     @Test
-    void registersCampaignMetersOnlyOnceUnderConcurrentFirstEvents() throws Exception {
+    void registersCouponRoundMetersOnlyOnceUnderConcurrentFirstEvents() throws Exception {
         CountingSimpleMeterRegistry registry = new CountingSimpleMeterRegistry();
         MeterEventRecorder recorder = recorder(registry);
         IssuanceFlowEventFactory factory = new IssuanceFlowEventFactory(java.util.UUID::randomUUID);
-        int countersBeforeCampaignRegistration = registry.counterCreations.get();
-        int gaugesBeforeCampaignRegistration = registry.gaugeCreations.get();
+        int countersBeforeCouponRoundRegistration = registry.counterCreations.get();
+        int gaugesBeforeCouponRoundRegistration = registry.gaugeCreations.get();
         // 스레드를 순차 소비하면 대부분 등록이 끝난 뒤 실행되어 최초 등록 경합 창이 닫힌다.
-        // 32개를 모두 띄워 놓고 한 번에 발사해야 campaignMeters 진입이 실제로 겹친다.
+        // 32개를 모두 띄워 놓고 한 번에 발사해야 couponRoundMeters 진입이 실제로 겹친다.
         int concurrency = 32;
         CountDownLatch ready = new CountDownLatch(concurrency);
         CountDownLatch fire = new CountDownLatch(1);
@@ -266,11 +266,11 @@ class MeterEventRecorderTest {
                 .hasSize(2);
         assertThat(counter(registry, MeterNames.ISSUANCE_FLOW,
                 "coupon_id", "201", "stage", "attempt")).isEqualTo(32.0);
-        assertThat(registry.counterCreations).hasValue(countersBeforeCampaignRegistration + 3);
-        assertThat(registry.gaugeCreations).hasValue(gaugesBeforeCampaignRegistration + 2);
+        assertThat(registry.counterCreations).hasValue(countersBeforeCouponRoundRegistration + 3);
+        assertThat(registry.gaugeCreations).hasValue(gaugesBeforeCouponRoundRegistration + 2);
 
         // 미터 개수만 세면 등록이 겹쳐도 통과한다 — Micrometer 가 같은 id 를 합쳐 주기 때문이다.
-        // 겹치면 갈라지는 것은 gauge 가 읽는 홀더다. 등록이 두 번 일어나면 맵에 남은 CampaignMeters
+        // 겹치면 갈라지는 것은 gauge 가 읽는 홀더다. 등록이 두 번 일어나면 맵에 남은 CouponRoundMeters
         // 의 홀더와 registry 가 붙든 홀더가 달라져, 성공을 아무리 기록해도 gauge 는 NaN 에 멈춘다.
         recorder.record(factory.issued(context(201L), 1L, "coupon-code-0001"));
         assertThat(gauge(registry, MeterNames.ISSUANCE_EVENT_LAST_SUCCESS_EPOCH, "coupon_id", "201"))
@@ -283,7 +283,7 @@ class MeterEventRecorderTest {
 
         assertThatCode(() -> recorder.record(null)).doesNotThrowAnyException();
         assertThatCode(() -> recorder.record(null)).doesNotThrowAnyException();
-        assertThat(output).contains("캠페인 발급 미터 기록에 실패했습니다")
+        assertThat(output).contains("쿠폰 회차 발급 미터 기록에 실패했습니다")
                 .contains("누적 1건");
     }
 
@@ -304,8 +304,8 @@ class MeterEventRecorderTest {
     }
 
     private static MeterEventRecorder recorder(io.micrometer.core.instrument.MeterRegistry registry) {
-        return new MeterEventRecorder(new CampaignMeterRegistry(registry,
-                new CampaignMeterProperties(null, null, null, null), Duration.ofSeconds(10)),
+        return new MeterEventRecorder(new CouponRoundMeterRegistry(registry,
+                new CouponRoundMeterProperties(null, null, null, null), Duration.ofSeconds(10)),
                 Duration.ofSeconds(10));
     }
 

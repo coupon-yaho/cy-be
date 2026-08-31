@@ -8,6 +8,10 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
+import com.kafkick.api.observation.ObservationIssuanceProperties;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,6 +20,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import com.kafkick.core.coupon.domain.IssuanceStatus;
@@ -27,6 +32,11 @@ import com.kafkick.core.coupon.service.CouponOperationExecutionService;
 import com.kafkick.core.coupon.service.IssueAttemptCallback;
 import com.kafkick.core.coupon.service.result.CouponIssueExecutionResult;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
+import com.kafkick.core.coupon.v2.CouponIssuanceRouter;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinition;
+import com.kafkick.core.coupon.v2.CouponRoundIssuanceDefinitionCache;
+import com.kafkick.core.coupon.v2.V2CouponIssueService;
+import com.kafkick.core.coupon.v2.port.CouponRoundIssuanceDefinitionRepository;
 import com.kafkick.core.member.Grade;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.observation.Dependency;
@@ -79,7 +89,12 @@ class CouponIssueObservationCoordinatorTest {
                 operationExecutionService,
                 contextFactory,
                 observationService,
-                new CouponIssueObservationDependencyMapper()
+                new CouponIssueObservationDependencyMapper(),
+                v1Router(),
+                noV2Service(),
+                new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new ObservationIssuanceProperties(null, "api-1", null, null),
+                new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
         context = new IssuanceFlowEvent.Ctx(
                 REQUEST_ID,
@@ -156,10 +171,39 @@ class CouponIssueObservationCoordinatorTest {
         verify(session).finish();
     }
 
+    @Test
+    void doesNotRecordASecondAttemptWhenAuthoritativeContentionReplays() {
+        prepareContext();
+        when(operationExecutionService.issueWithMetadata(
+                eq(10L), eq(20L), eq(MembershipGrade.GOLD),
+                eq(IDEMPOTENCY_KEY), any()
+        )).thenAnswer(invocation -> {
+            IssueAttemptCallback callback = invocation.getArgument(4);
+            callback.onPolicyPassed();
+            return new CouponIssueExecutionResult(issueResult(), true);
+        });
+
+        CouponIssueResult actual = coordinator.issue(
+                REQUEST_ID,
+                10L,
+                20L,
+                MembershipGrade.GOLD,
+                IDEMPOTENCY_KEY
+        );
+
+        assertThat(actual).isEqualTo(issueResult());
+        verify(observationService).recordIssueAttempt(context);
+        verify(observationService, never()).recordIssueAttempt(
+                context.withReplayed(true)
+        );
+        verify(session, never()).completeIssued(any(Long.class), any());
+        verify(session).finish();
+    }
+
     @ParameterizedTest
     @CsvSource({
             "NOT_OPENED, 409, NOT_OPENED, NONE",
-            "CAMPAIGN_CLOSED, 409, CAMPAIGN_CLOSED, NONE",
+            "COUPON_ROUND_CLOSED, 409, COUPON_ROUND_CLOSED, NONE",
             "GRADE_NOT_ELIGIBLE, 403, GRADE_NOT_ELIGIBLE, NONE"
     })
     void recordsPolicyRejectionWithoutAnAttempt(
@@ -270,7 +314,7 @@ class CouponIssueObservationCoordinatorTest {
     @Test
     void contextFactoryFailureDoesNotChangeTheBusinessResult() {
         when(contextFactory.create(
-                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD, EngineVersion.V1
         )).thenThrow(new IllegalStateException("runtime config unavailable"));
         when(operationExecutionService.issueWithMetadata(
                 eq(10L), eq(20L), eq(MembershipGrade.GOLD),
@@ -511,7 +555,7 @@ class CouponIssueObservationCoordinatorTest {
     @Test
     void beginFailurePreservesOriginalBusinessResultWithoutFinishing() {
         when(contextFactory.create(
-                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD, EngineVersion.V1
         )).thenReturn(Optional.of(context));
         when(observationService.begin(context)).thenThrow(
                 new IllegalStateException("session unavailable")
@@ -537,7 +581,7 @@ class CouponIssueObservationCoordinatorTest {
     @Test
     void beginFailurePreservesOriginalExceptionWithoutFinishing() {
         when(contextFactory.create(
-                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD, EngineVersion.V1
         )).thenReturn(Optional.of(context));
         when(observationService.begin(context)).thenThrow(
                 new IllegalStateException("session unavailable")
@@ -563,9 +607,45 @@ class CouponIssueObservationCoordinatorTest {
 
     private void prepareContext() {
         when(contextFactory.create(
-                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD, EngineVersion.V1
         )).thenReturn(Optional.of(context));
         when(observationService.begin(context)).thenReturn(session);
+    }
+
+    /** 프로덕션과 같은 라우터 경유 배선으로 V1 회차를 흘린다. */
+    private static CouponIssuanceRouter v1Router() {
+        return new CouponIssuanceRouter(new CouponRoundIssuanceDefinitionCache(
+                new CouponRoundIssuanceDefinitionRepository() {
+
+                    @Override
+                    public Optional<CouponRoundIssuanceDefinition> findById(
+                            long couponRoundId
+                    ) {
+                        // 발급 경로는 lockAndFindById 만 쓴다. 여기로 오면 배선이 틀린 것이다.
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Optional<CouponRoundIssuanceDefinition> lockAndFindById(
+                            long couponRoundId
+                    ) {
+                        return Optional.of(new CouponRoundIssuanceDefinition(
+                                couponRoundId, 30, EngineVersion.V1));
+                    }
+
+                    @Override
+                    public boolean updateEngineVersionWhenNotOpen(
+                            long couponRoundId,
+                            EngineVersion engineVersion
+                    ) {
+                        throw new UnsupportedOperationException();
+                    }
+                }));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<V2CouponIssueService> noV2Service() {
+        return mock(ObjectProvider.class);
     }
 
     private CouponIssueObservationCoordinator coordinator(
@@ -575,7 +655,12 @@ class CouponIssueObservationCoordinatorTest {
                 operationExecutionService,
                 contextFactory,
                 observationService,
-                mapper
+                mapper,
+                v1Router(),
+                noV2Service(),
+                new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                new ObservationIssuanceProperties(null, "api-1", null, null),
+                new TimeProvider(Clock.fixed(AT, ZoneOffset.UTC))
         );
     }
 
@@ -599,7 +684,7 @@ class CouponIssueObservationCoordinatorTest {
                         timeProvider
                 );
         when(contextFactory.create(
-                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD
+                REQUEST_ID, 20L, 10L, MembershipGrade.GOLD, EngineVersion.V1
         )).thenReturn(Optional.of(context));
         when(operationExecutionService.issueWithMetadata(
                 eq(10L), eq(20L), eq(MembershipGrade.GOLD),
@@ -616,7 +701,12 @@ class CouponIssueObservationCoordinatorTest {
                         operationExecutionService,
                         contextFactory,
                         actualObservationService,
-                        new CouponIssueObservationDependencyMapper()
+                        new CouponIssueObservationDependencyMapper(),
+                        v1Router(),
+                        noV2Service(),
+                        new V2IssuanceOutcomeMeters(new SimpleMeterRegistry()),
+                        new ObservationIssuanceProperties(null, "api-1", null, null),
+                        timeProvider
                 );
 
         assertThatThrownBy(() -> actualCoordinator.issue(

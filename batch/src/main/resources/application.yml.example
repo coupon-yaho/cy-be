@@ -807,6 +807,24 @@ observation:
     engine-version: ${ISSUANCE_ENGINE_VERSION:V1}
     # Redis 키 규약. V2·V3 발급 구현이 정하는 이름이라 여기서 맞춰 둔다.
     # {couponId} 는 관측 대상 회차로 치환된다.
+    #
+    # ⚠️ 아래 기본값은 V1 이름이다. engine-version 만 V2 로 뒤집고 이 넷을 안 바꾸면 리더는
+    #    없는 키를 읽어 영구히 PENDING 이고, 그 사실은 부하 시험 끝에 gap 4축이 안 닫힐 때에야
+    #    드러난다. V2 로 켤 때는 넷을 같이 바꾼다 — 키 이름의 출처는 IssuanceKeys 다.
+    #
+    #      DOMAIN_GAUGE_REMAINING_KEY=cy:v2:stock:{{couponId}}
+    #      DOMAIN_GAUGE_ISSUED_EVER_KEY=cy:v2:issued_ever:{{couponId}}
+    #      DOMAIN_GAUGE_MEMBER_EVER_KEY=cy:v2:issued:{{couponId}}
+    #
+    #    대기열 키는 **그대로 둔다.** 빈 값을 넣어도 아래 기본값(V1 키)으로 되돌아갈 뿐이다
+    #    (DomainGaugeProperties 가 blank 를 기본값으로 친다). V2 에는 대기열 자체가 없어
+    #    어느 키를 줘도 그 게이지는 PENDING 으로 남는다 — "V2 = 대기열 없음" 을 N_A 로
+    #    표현하는 것은 S7 부채다(10-작업분할). 지금은 화면이 "준비 중" 으로 보일 뿐
+    #    경보는 아니다.
+    #
+    #    바깥 중괄호는 Redis 해시태그이고 안쪽이 치환 자리다. 해시태그가 빠지면 Cluster 에서
+    #    네 키가 다른 슬롯으로 흩어져 Lua 가 통째로 CROSSSLOT 이다.
+    #    위 세 줄이 IssuanceKeys 와 어긋나면 DomainGaugeV2KeyTemplateContractTest 가 잡는다.
     remaining-key: ${DOMAIN_GAUGE_REMAINING_KEY:coupon:{couponId}:stock:remaining}
     issued-ever-key: ${DOMAIN_GAUGE_ISSUED_EVER_KEY:coupon:{couponId}:issued}
     member-ever-key: ${DOMAIN_GAUGE_MEMBER_EVER_KEY:coupon:{couponId}:members}
@@ -814,6 +832,14 @@ observation:
     # 이 횟수부터 수집 실패를 ERROR 로 올린다. 재고(1초)와 정합성(30초)은 같은 횟수라도 뜻하는
     # 시간이 다르므로, 경보가 시끄러우면 여기서 조인다.
     consecutive-failure-alarm: ${DOMAIN_GAUGE_FAILURE_ALARM:3}
+  pending-issued-gauge:
+    enabled: ${PENDING_ISSUED_GAUGE_ENABLED:true}
+    # FINAL 전 benchmark 회차의 v2 issued Hash를 HSCAN으로 나눠 읽는다. 부하 중에는 이 주기를 늘린다.
+    interval: ${PENDING_ISSUED_GAUGE_INTERVAL:30s}
+    scan-count: ${PENDING_ISSUED_GAUGE_SCAN_COUNT:200}
+    stale-after: ${PENDING_ISSUED_GAUGE_STALE_AFTER:5m}
+    # Hash field를 지우거나 재고를 복원하는 작업은 S8 재동기화만 담당한다.
+    issued-key: ${PENDING_ISSUED_GAUGE_KEY:cy:v2:issued:{couponRoundId}}
 
 # ⚠️ storage.jpa.auditing.enabled 를 끄지 않는다. 위 자동설정 제외와 한 쌍이었다 — 엔티티가
 #    0개일 때 @EnableJpaAuditing 이 "JPA metamodel must not be empty" 로 기동을 세웠기 때문이다.
@@ -828,6 +854,35 @@ logging:
     # runId 를 MDC 에 심어 한 run 의 모든 Step 로그를 같은 키로 묶는다.
     console: "%d{HH:mm:ss.SSS} %-5level [%X{runId:-}] %logger{36} - %msg%n"
 
+coupon:
+  idempotency:
+    wait-timeout: ${COUPON_IDEMPOTENCY_WAIT_TIMEOUT:1s}
+    poll-interval: ${COUPON_IDEMPOTENCY_POLL_INTERVAL:50ms}
+    stale-after: ${COUPON_IDEMPOTENCY_STALE_AFTER:30s}
+
+  expiration:
+    cron: "${COUPON_EXPIRATION_CRON:0 * * * * *}"
+    zone: ${COUPON_EXPIRATION_ZONE:UTC}
+    chunk-size: ${COUPON_EXPIRATION_CHUNK_SIZE:500}
+    transaction-size: ${COUPON_EXPIRATION_TRANSACTION_SIZE:100}
+
+  # [CY-760] 열린 회차의 재구성 — 게이트를 닫고 카운터를 다시 세우는 경로.
+  rebuild:
+    # 게이트를 닫은 뒤 **진행 중인 쓰기가 빠지기를** 기다리는 시간.
+    #
+    # 게이트는 새 선점만 막는다. 닫기 직전에 선점을 끝낸 발급의 issuances 커밋은 그 뒤에
+    # 도착하고(발급은 선점 → DB 커밋 → 완료 순서다), 취소의 Redis INCR 은 DB 커밋보다
+    # 늦다(afterCommit). 이 대기가 없으면 그 건들이 집계 뒤에 도착해 issued 에서 통째로
+    # 빠지거나(LUA_GAP) 다시 쓴 stock 위에 얹힌다 — 후자는 초과 발급 방향이다.
+    #
+    # ⚠️ 값의 기준은 **발급 트랜잭션 시간과 afterCommit 지연의 상한**이다. 2s 는 그 둘 사이의
+    #    값이지 측정된 상한이 아니다. 부하 프로파일이 바뀌면 여기를 다시 봐라 — 짧으면 창이
+    #    남고, 길면 그만큼 그 회차가 오래 503 이다.
+    drain: ${COUPON_REBUILD_DRAIN:2s}
+
+  round-generation:
+    schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
+    max-days: ${COUPON_GENERATION_MAX_DAYS:30}
 # ⚠️ **`---` 뒤 문서를 없앴다(CY-744).** 예전에는 storage.yml 이 spring.flyway.enabled 와
 #    spring.datasource.hikari.maximum-pool-size 를 정의해서, import 로 들어온 그 값이
 #    이 파일의 선언을 조용히 이겼다 — 그래서 덮어쓰기 전용 문서를 따로 뒀다.

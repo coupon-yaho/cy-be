@@ -17,6 +17,7 @@ import com.kafkick.core.coupon.domain.IssuanceEventType;
 import com.kafkick.core.coupon.domain.IssuanceHistory;
 import com.kafkick.core.coupon.domain.IssuanceStatus;
 import com.kafkick.core.coupon.domain.IssuanceUsage;
+import com.kafkick.core.coupon.v2.V2StockRestorationService;
 import com.kafkick.core.membership.domain.MembershipGrade;
 import com.kafkick.core.coupon.exception.CouponIssueErrorCode;
 import com.kafkick.core.coupon.exception.CouponUseErrorCode;
@@ -58,6 +59,8 @@ class CouponCancelUseServiceTest {
 
     @Mock
     private CouponStockRepository couponStockRepository;
+    @Mock
+    private V2StockRestorationService v2StockRestorationService;
 
     private CouponCancelUseService cancelUseService;
 
@@ -67,7 +70,8 @@ class CouponCancelUseServiceTest {
                 issuanceRepository,
                 issuanceUsageRepository,
                 issuanceHistoryRepository,
-                couponStockRepository
+                couponStockRepository,
+                v2StockRestorationService
         );
     }
 
@@ -83,6 +87,8 @@ class CouponCancelUseServiceTest {
         assertThat(result.discountAmount()).isEqualTo(5_000);
         assertThat(result.canceledAt()).isEqualTo(CANCELED_AT);
         verifyNoInteractions(couponStockRepository);
+        // ISSUED 로 되돌아간 건은 재고를 쓴 적이 없다. 여기서 복원하면 Redis 가 부푼다.
+        verifyNoInteractions(v2StockRestorationService);
         verifyStateAndHistory(IssuanceStatus.ISSUED);
     }
 
@@ -96,9 +102,11 @@ class CouponCancelUseServiceTest {
         assertThat(result.status()).isEqualTo(IssuanceStatus.EXPIRED);
         InOrder ordered = inOrder(
                 couponStockRepository,
-                issuanceRepository
+                issuanceRepository,
+                issuanceUsageRepository,
+                issuanceHistoryRepository,
+                v2StockRestorationService
         );
-        ordered.verify(couponStockRepository).lockForUpdate(10L);
         ordered.verify(issuanceRepository).updateStatusIfCurrent(
                 100L,
                 20L,
@@ -106,6 +114,11 @@ class CouponCancelUseServiceTest {
                 IssuanceStatus.EXPIRED,
                 CANCELED_AT
         );
+        ordered.verify(issuanceUsageRepository).cancelIfActive(200L, CANCELED_AT);
+        // 이력 INSERT 는 재고 행 X 락 밖이다(설계 §9.6 D9).
+        ordered.verify(issuanceHistoryRepository).save(org.mockito.ArgumentMatchers.any());
+        // coupons 왕복은 재고 행 X 락 밖이어야 한다.
+        ordered.verify(v2StockRestorationService).restoreAfterCommit(10L, 1L);
         ordered.verify(couponStockRepository).release(
                 10L,
                 1,
@@ -251,8 +264,6 @@ class CouponCancelUseServiceTest {
         when(issuanceUsageRepository.cancelIfActive(200L, CANCELED_AT))
                 .thenReturn(true);
         if (nextStatus == IssuanceStatus.EXPIRED) {
-            when(couponStockRepository.lockForUpdate(10L))
-                    .thenReturn(true);
             when(couponStockRepository.release(10L, 1, CANCELED_AT))
                     .thenReturn(true);
         }

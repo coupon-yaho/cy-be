@@ -280,6 +280,16 @@ services:
     image: ${COUPON_IMAGE}:${BATCH_IMAGE_TAG}
     pull_policy: always
     restart: unless-stopped
+    # ⚠️ 1대인 것은 편의가 아니라 **정합성 계약**이다(docs/14-v2-phase0/07 의 (a)).
+    #    v2 회차 워밍업이 재고 카운터를 통째로 쓰는데, 그 동시 실행 차단을 "batch 는 1대다" 로
+    #    대신하고 있다. 2대가 공존하면 늦은 쪽이 이미 열린 게이트 뒤에서 issued 를 지우고
+    #    stock 을 되돌린다 — 1인 1매 붕괴와 초과 발급이 동시에 난다.
+    #    프로세스 안의 겹침은 CouponRoundWarmupRunner 의 회차 단위 가드가 막지만, 프로세스가
+    #    둘이 되는 순간 그 가드는 아무것도 안 한다(JVM 힙이다).
+    #    ⚠️ --scale batch=2 는 이 값을 이긴다. 롤링 배포로 잠깐 공존하는 것도 같다.
+    #       진짜 차단이 필요해지면 07 의 (b) 회차 단위 Redis 락이 그 자리다(S8b).
+    deploy:
+      replicas: 1
     env_file:
       - .env
     environment:

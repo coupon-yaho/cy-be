@@ -4,8 +4,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-import jakarta.persistence.EntityManager;
-
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
@@ -31,14 +29,11 @@ public class IssuanceRepositoryImpl
     private static final String MEMBER_FOREIGN_KEY = "member_id";
 
     private final IssuanceJpaRepository issuanceJpaRepository;
-    private final EntityManager entityManager;
 
     public IssuanceRepositoryImpl(
-            IssuanceJpaRepository issuanceJpaRepository,
-            EntityManager entityManager
+            IssuanceJpaRepository issuanceJpaRepository
     ) {
         this.issuanceJpaRepository = issuanceJpaRepository;
-        this.entityManager = entityManager;
     }
 
     /**
@@ -72,7 +67,6 @@ public class IssuanceRepositoryImpl
             IssuanceEntity saved = issuanceJpaRepository.saveAndFlush(
                     IssuanceEntityMapper.toEntity(issuance)
             );
-            entityManager.refresh(saved);
             return IssuanceEntityMapper.toDomain(saved);
         } catch (DataIntegrityViolationException exception) {
             if (isMemberDuplicate(exception)) {
@@ -90,6 +84,27 @@ public class IssuanceRepositoryImpl
             }
             throw new CouponPersistenceException(
                     "쿠폰 발급건 저장에 실패했습니다.",
+                    exception
+            );
+        }
+    }
+
+    @Override
+    public Optional<Issuance> findForCouponRoundMemberAndIdempotencyKey(
+            Long couponRoundId,
+            Long memberId,
+            String idempotencyKey
+    ) {
+        try {
+            return issuanceJpaRepository.findForCouponRoundMemberAndIdempotencyKey(
+                            couponRoundId,
+                            memberId,
+                            idempotencyKey
+                    )
+                    .map(IssuanceEntityMapper::toDomain);
+        } catch (DataAccessException exception) {
+            throw new CouponPersistenceException(
+                    "회차와 회원의 쿠폰 발급 결과 조회에 실패했습니다.",
                     exception
             );
         }

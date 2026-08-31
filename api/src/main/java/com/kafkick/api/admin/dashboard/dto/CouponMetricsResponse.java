@@ -12,20 +12,20 @@ import com.kafkick.core.observation.SourceStatus;
 import com.kafkick.core.coupon.domain.CouponRoundStatus;
 
 /**
- * 특정 쿠폰 캠페인의 재고·발급·대기열·보유 상태를 동일 snapshot 기준으로 반환하는 응답 초안입니다.
+ * 특정 쿠폰 회차의 재고·발급·대기열·보유 상태를 동일 snapshot 기준으로 반환하는 응답 초안입니다.
  *
  * <p>독립적으로 실패할 수 있는 수치는 {@link ObservedValue}로 감싸 원천 상태와 관측 시각을 함께 보존합니다.
  * DB 재고가 있어도 Redis 대기열이 미수집이면 해당 항목만 {@code PENDING}으로 표현하며 0으로 대체하지 않습니다.
  * {@code window}와 전이 집계도 명시적인 enum·record로 고정해 임의 문자열이나 비정형 객체를 허용하지 않습니다.</p>
  *
- * @param couponId 쿠폰 캠페인 회차 식별자
+ * @param couponId 쿠폰 회차 식별자
  * @param snapshotAt 응답 지표의 기준 시각
  * @param window 집계 구간
  * @param stock 최초·잔여 재고 요약
  * @param issuanceProgress 전체 수량 대비 발급 진행률
  * @param issuanceRate 현재·최고 초당 발급량
  * @param queue 대기 인원과 예상 대기 시간
- * @param campaign 권위 DB의 캠페인 실행 상태
+ * @param couponRound 권위 DB의 쿠폰 회차 실행 상태
  * @param usageRatio 발급 후 사용 완료 비율
  * @param holdingCounts 발급권 상태별 보유 건수
  * @param transitionRate 사용·취소·만료 전이별 집계
@@ -38,7 +38,7 @@ public record CouponMetricsResponse(
         ObservedValue<Double> issuanceProgress,
         ObservedValue<RateSummary> issuanceRate,
         QueueSummary queue,
-        CampaignRuntimeSummary campaign,
+        CouponRoundRuntimeSummary couponRound,
         ObservedValue<Double> usageRatio,
         ObservedValue<IssuanceStatusCounts> holdingCounts,
         ObservedValue<TransitionRateSummary> transitionRate
@@ -66,7 +66,7 @@ public record CouponMetricsResponse(
     /**
      * Core 계산 결과를 값·상태·관측 시각 손실 없이 HTTP 응답으로 변환합니다.
      *
-     * @param snapshot 계산 완료된 기술 중립 캠페인 상세 지표
+     * @param snapshot 계산 완료된 기술 중립 쿠폰 회차 상세 지표
      * @return 관리자 상세 지표 HTTP 응답
      */
     public static CouponMetricsResponse from(CouponMetricsSnapshot snapshot) {
@@ -84,8 +84,8 @@ public record CouponMetricsResponse(
                 new QueueSummary(
                         observed(snapshot.queue().waitingCount()),
                         observed(snapshot.queue().estimatedWait(), Duration::toMillis)),
-                new CampaignRuntimeSummary(
-                        snapshot.campaign().status(), snapshot.campaign().opensAt()),
+                new CouponRoundRuntimeSummary(
+                        snapshot.couponRound().status(), snapshot.couponRound().opensAt()),
                 observed(snapshot.usageRatio()),
                 observed(snapshot.holdingCounts(), counts -> new IssuanceStatusCounts(
                         counts.issued(), counts.used(), counts.cancelled(), counts.expired())),
@@ -97,7 +97,7 @@ public record CouponMetricsResponse(
     /**
      * 아직 원천이 연결되지 않은 쿠폰 지표 응답 예시를 만듭니다.
      *
-     * @param couponId 예시에 사용할 쿠폰 캠페인 회차 식별자
+     * @param couponId 예시에 사용할 쿠폰 회차 식별자
      * @param window 예시에 사용할 집계 구간
      * @return 수집 지표가 PENDING/null인 쿠폰 지표 응답
      */
@@ -122,7 +122,7 @@ public record CouponMetricsResponse(
     /**
      * 최초 발행 가능 수량과 현재 잔여 수량을 원천 상태와 함께 제공합니다.
      *
-     * @param initialCount 캠페인 최초 발행 가능 수량
+     * @param initialCount 쿠폰 회차 최초 발행 가능 수량
      * @param remainingCount 현재 잔여 수량
      */
     public record StockSummary(ObservedValue<Long> initialCount, ObservedValue<Long> remainingCount) {
@@ -169,15 +169,15 @@ public record CouponMetricsResponse(
     }
 
     /**
-     * 권위 DB의 캠페인 상태와 설정된 오픈 시각입니다.
+     * 권위 DB의 쿠폰 회차 상태와 설정된 오픈 시각입니다.
      *
-     * @param status 권위 DB의 캠페인 상태
-     * @param opensAt 설정된 캠페인 오픈 시각
+     * @param status 권위 DB의 쿠폰 회차 상태
+     * @param opensAt 설정된 쿠폰 회차 오픈 시각
      */
-    public record CampaignRuntimeSummary(CouponRoundStatus status, Instant opensAt) {
+    public record CouponRoundRuntimeSummary(CouponRoundStatus status, Instant opensAt) {
 
-        /** 캠페인 상태가 항상 존재하는지 검증합니다. */
-        public CampaignRuntimeSummary {
+        /** 쿠폰 회차 상태가 항상 존재하는지 검증합니다. */
+        public CouponRoundRuntimeSummary {
             Objects.requireNonNull(status, "status");
             Objects.requireNonNull(opensAt, "opensAt");
         }

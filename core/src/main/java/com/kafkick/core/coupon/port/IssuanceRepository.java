@@ -22,6 +22,12 @@ public interface IssuanceRepository {
 
     Issuance save(Issuance issuance);
 
+    Optional<Issuance> findForCouponRoundMemberAndIdempotencyKey(
+            Long couponRoundId,
+            Long memberId,
+            String idempotencyKey
+    );
+
     Optional<Issuance> findById(Long issuanceId);
 
     boolean updateStatusIfCurrent(
