@@ -260,6 +260,61 @@ class QueueGatewayMetricsContractTest {
     }
 
     @Test
+    void gatewayUpMissingAtRangeEndMakesEveryGatewaySeriesUnavailable() {
+        AdminMetricsSeriesResponse response = assembleSeries(
+                gatewayRangeEndingBeforeNow("up"));
+
+        assertThat(response.series())
+                .filteredOn(entry -> GATEWAY_SERIES_KEYS.contains(entry.key()))
+                .hasSize(GATEWAY_SERIES_KEYS.size())
+                .allSatisfy(entry -> {
+                    assertThat(entry.state()).isEqualTo(SourceStatus.UNAVAILABLE);
+                    assertThat(entry.points()).isEmpty();
+                });
+    }
+
+    @Test
+    void gatewayScrapeAgeMissingAtRangeEndMakesEveryGatewaySeriesPending() {
+        AdminMetricsSeriesResponse response = assembleSeries(
+                gatewayRangeEndingBeforeNow("scrape_age"));
+
+        assertThat(response.series())
+                .filteredOn(entry -> GATEWAY_SERIES_KEYS.contains(entry.key()))
+                .hasSize(GATEWAY_SERIES_KEYS.size())
+                .allSatisfy(entry -> {
+                    assertThat(entry.state()).isEqualTo(SourceStatus.PENDING);
+                    assertThat(entry.points()).isEmpty();
+                });
+    }
+
+    @Test
+    void nonNumericScrapeAgeAtRangeEndDoesNotReuseThePreviousValue() {
+        AdminMetricsSeriesResponse response = assembleSeries(gatewayRangeWith(
+                "scrape_age", 1d, Double.NaN));
+
+        assertThat(response.series())
+                .filteredOn(entry -> GATEWAY_SERIES_KEYS.contains(entry.key()))
+                .hasSize(GATEWAY_SERIES_KEYS.size())
+                .allSatisfy(entry -> {
+                    assertThat(entry.state()).isEqualTo(SourceStatus.PENDING);
+                    assertThat(entry.points()).isEmpty();
+                });
+    }
+
+    @Test
+    void operationalMetricMissingAtRangeEndIsPendingWithoutHidingItsSibling() {
+        AdminMetricsSeriesResponse response = assembleSeries(gatewayRangeEndingBeforeNow(
+                QueueGatewayPrometheusContract.CAPACITY_CREDIT));
+
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_CAPACITY_CREDIT).state())
+                .isEqualTo(SourceStatus.PENDING);
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_CAPACITY_CREDIT).points()).isEmpty();
+        assertThat(seriesOf(response, SeriesKey.GATEWAY_JUDGEMENT_TOTAL).state())
+                .isEqualTo(SourceStatus.VALID);
+        assertThat(pointsOf(response, "GATEWAY_JUDGEMENT_TOTAL")).containsExactly(1000d);
+    }
+
+    @Test
     void nonFiniteOnlyGatewayWaitingSeriesIsPending() {
         PromRangeQuery range = (promQl, start, end, step) -> {
             if (!promQl.contains(QueueGatewayPrometheusContract.WAITING)) {
@@ -360,6 +415,49 @@ class QueueGatewayMetricsContractTest {
             points.add(new PromRangePoint(NOW.minusSeconds(values.length - index - 1L), values[index]));
         }
         return new PromRangeSeries(Map.of("signal", signal), points);
+    }
+
+    private static AdminMetricsSeriesResponse assembleSeries(List<PromRangeSeries> gateway) {
+        PromRangeQuery range = (promQl, start, end, step) ->
+                promQl.contains(QueueGatewayPrometheusContract.WAITING)
+                        ? gateway
+                        : List.of(new PromRangeSeries(Map.of(),
+                                List.of(new PromRangePoint(NOW, 1d))));
+        return new PromSeriesAssembler(
+                range, TIME, PrometheusSeriesProperties.defaults(),
+                new QueueGatewayPrometheusProperties(true, Duration.ofSeconds(5)))
+                .assemble(globalQuery());
+    }
+
+    private static List<PromRangeSeries> gatewayRangeEndingBeforeNow(String signal) {
+        return completeGatewayRange().stream()
+                .map(series -> signal.equals(series.label("signal"))
+                        ? new PromRangeSeries(series.labels(), series.points().stream()
+                                .map(point -> new PromRangePoint(
+                                        point.observedAt().minusSeconds(5), point.value()))
+                                .toList())
+                        : series)
+                .toList();
+    }
+
+    private static List<PromRangeSeries> gatewayRangeWith(String signal, double... values) {
+        return completeGatewayRange().stream()
+                .map(series -> signal.equals(series.label("signal"))
+                        ? range(signal, values) : series)
+                .toList();
+    }
+
+    private static List<PromRangeSeries> completeGatewayRange() {
+        return List.of(
+                range("waiting", 120d),
+                range("snapshot_age", 1d),
+                range("scrape_age", 1d),
+                range("up", 1d),
+                range(QueueGatewayPrometheusContract.CAPACITY_CREDIT, 250d),
+                range(QueueGatewayPrometheusContract.CAPACITY_NODES, 2d),
+                range(QueueGatewayPrometheusContract.JUDGEMENT_TOTAL, 1000d),
+                range(QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL, 3d),
+                range(QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL, 1d));
     }
 
     private static List<Double> pointsOf(AdminMetricsSeriesResponse response, String key) {

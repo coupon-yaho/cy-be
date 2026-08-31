@@ -34,10 +34,10 @@ import com.kafkick.core.support.TimeProvider;
 /**
  * Prometheus range 결과를 {@link AdminMetricsSeriesResponse} 한 장으로 조립합니다.
  *
- * <p><b>원칙적으로 계열마다 질의를 따로 보냅니다.</b> 다만 게이트웨이 계열은 같은 타깃의
- * {@code up}·scrape age를 한 평가 시점에서 함께 판정해야 하므로 한 질의로 묶고, 응답을 계열별
- * 상태로 다시 나눕니다. 그 밖의 계열은 하나가 해석되지 않을 때 그래프 전체가 사라지지 않도록
- * 각각 격리합니다.</p>
+ * <p><b>원칙적으로 계열마다 질의를 따로 보냅니다.</b> 게이트웨이 계열은 평가 구간을 공유하도록
+ * 한 질의로 묶지만, 신호마다 복제본을 독립적으로 {@code max}/{@code sum} 집계하므로 타깃
+ * 식별자는 보존하지 않습니다. 조립기는 이 전역 집계 결과를 계열별 상태로 나눕니다. 그 밖의
+ * 계열은 하나가 해석되지 않을 때 그래프 전체가 사라지지 않도록 각각 격리합니다.</p>
  *
  * <p><b>예산을 넘긴 계열은 보내지 않습니다.</b> 순서가 우선순위입니다 — 잘리는 것은 항상 뒤입니다.
  * 이 예산은 {@link PrometheusSeriesProperties} 가 정하며 {@code /metrics} 의 1초 폴링 예산과
@@ -592,9 +592,10 @@ public class PromSeriesAssembler {
     /**
      * 게이트웨이 시계열을 한 평가 결과에서 분리합니다.
      *
-     * <p>예산 초과·질의 실패·생존 타깃 부재는 여섯 계열 모두 {@code UNAVAILABLE}, scrape age
-     * 누락·음수는 모두 {@code PENDING}입니다. 이후 개별 운영 지표의 누락·음수는 그 계열에만
-     * 가두고 다른 게이트웨이 계열은 유지합니다.</p>
+     * <p>조회 종료 시점의 숫자 표본만 현재 상태 판정에 사용합니다. 그 시점의 {@code up}이
+     * 없거나 0 이하면 여섯 계열 모두 {@code UNAVAILABLE}, scrape age가 없거나 음수이면 모두
+     * {@code PENDING}입니다. 이후 개별 운영 지표의 종료 시점 누락은 {@code PENDING}, 구간 안
+     * 음수 표본은 {@code UNAVAILABLE}로 그 계열에만 가두고 다른 게이트웨이 계열은 유지합니다.</p>
      */
     private List<SeriesEntry> collectGatewaySeries(
             Instant start, Instant end, Duration step, Deadline deadline) {
@@ -611,32 +612,40 @@ public class PromSeriesAssembler {
             return gatewayUnavailableSeries();
         }
         Optional<PromRangeSeries> up = oneSignal(raw, "up");
-        if (up.isEmpty() || latest(up.get()).isEmpty() || latest(up.get()).get() <= 0d) {
+        if (up.isEmpty() || valueAt(up.get(), end).isEmpty()
+                || valueAt(up.get(), end).get() <= 0d) {
             return gatewayUnavailableSeries();
         }
         Optional<PromRangeSeries> scrapeAge = oneSignal(raw, "scrape_age");
-        if (scrapeAge.isEmpty() || latest(scrapeAge.get()).isEmpty()
-                || latest(scrapeAge.get()).get() < 0d) {
+        if (scrapeAge.isEmpty() || valueAt(scrapeAge.get(), end).isEmpty()
+                || valueAt(scrapeAge.get(), end).get() < 0d) {
             return gatewayPendingSeries();
         }
 
         double threshold = queueGatewayProperties.staleAfter().toMillis() / 1000d;
-        SourceStatus operationalState = latest(scrapeAge.get()).get() > threshold
+        double scrapeAgeAtEnd = valueAt(scrapeAge.get(), end).orElseThrow();
+        SourceStatus operationalState = scrapeAgeAtEnd > threshold
                 ? SourceStatus.STALE : SourceStatus.VALID;
         List<SeriesEntry> entries = new ArrayList<>();
-        entries.add(gatewayAdmission(raw, scrapeAge.get(), threshold));
+        entries.add(gatewayAdmission(raw, scrapeAgeAtEnd, threshold, end));
         for (GatewaySeriesSpec spec : GATEWAY_OPERATIONAL_SERIES) {
-            entries.add(gatewayOperationalSeries(raw, spec, operationalState));
+            entries.add(gatewayOperationalSeries(raw, spec, operationalState, end));
         }
         return List.copyOf(entries);
     }
 
+    /**
+     * 종료 시점 대기 인원·snapshot age가 없으면 {@code PENDING}입니다. 숫자 대기 인원 중
+     * 음수나 소수가 하나라도 있으면 사람 수 계약 위반이므로 {@code UNAVAILABLE}로 거부합니다.
+     */
     private static SeriesEntry gatewayAdmission(
-            List<PromRangeSeries> raw, PromRangeSeries scrapeAge, double threshold) {
+            List<PromRangeSeries> raw, double scrapeAgeAtEnd, double threshold, Instant end) {
         Optional<PromRangeSeries> waiting = oneSignal(raw, "waiting");
         Optional<PromRangeSeries> snapshotAge = oneSignal(raw, "snapshot_age");
-        if (waiting.isEmpty() || snapshotAge.isEmpty() || latest(snapshotAge.get()).isEmpty()
-                || latest(snapshotAge.get()).get() < 0d) {
+        if (waiting.isEmpty() || snapshotAge.isEmpty()
+                || valueAt(waiting.get(), end).isEmpty()
+                || valueAt(snapshotAge.get(), end).isEmpty()
+                || valueAt(snapshotAge.get(), end).get() < 0d) {
             return pendingSeries(SeriesKey.QUEUE_ADMISSION);
         }
         if (waiting.get().points().stream().anyMatch(point -> point.hasNumericValue()
@@ -646,8 +655,8 @@ public class PromSeriesAssembler {
         if (waiting.get().points().stream().noneMatch(PromRangePoint::hasNumericValue)) {
             return pendingSeries(SeriesKey.QUEUE_ADMISSION);
         }
-        boolean stale = latest(snapshotAge.get()).get() > threshold
-                || latest(scrapeAge).orElseThrow() > threshold;
+        boolean stale = valueAt(snapshotAge.get(), end).orElseThrow() > threshold
+                || scrapeAgeAtEnd > threshold;
         List<SeriesPoint> points = points(waiting.get());
         boolean allZero = !points.isEmpty() && points.stream()
                 .allMatch(point -> point.value() != null && point.value() == 0d);
@@ -656,12 +665,11 @@ public class PromSeriesAssembler {
         return new SeriesEntry(SeriesKey.QUEUE_ADMISSION, Map.of(), false, state, points);
     }
 
-    /** 누락·비수치뿐이면 {@code PENDING}, 음수 표본이 있으면 {@code UNAVAILABLE}입니다. */
+    /** 종료 시점 표본이 없으면 {@code PENDING}, 음수 표본이 있으면 {@code UNAVAILABLE}입니다. */
     private static SeriesEntry gatewayOperationalSeries(
-            List<PromRangeSeries> raw, GatewaySeriesSpec spec, SourceStatus state) {
+            List<PromRangeSeries> raw, GatewaySeriesSpec spec, SourceStatus state, Instant end) {
         Optional<PromRangeSeries> metric = oneSignal(raw, spec.metric());
-        if (metric.isEmpty()
-                || metric.get().points().stream().noneMatch(PromRangePoint::hasNumericValue)) {
+        if (metric.isEmpty() || valueAt(metric.get(), end).isEmpty()) {
             return pendingSeries(spec.key());
         }
         if (metric.get().points().stream().anyMatch(
@@ -701,10 +709,11 @@ public class PromSeriesAssembler {
         return matched.size() == 1 ? Optional.of(matched.get(0)) : Optional.empty();
     }
 
-    private static Optional<Double> latest(PromRangeSeries series) {
+    private static Optional<Double> valueAt(PromRangeSeries series, Instant at) {
         return series.points().stream()
+                .filter(point -> point.observedAt().equals(at))
                 .filter(PromRangePoint::hasNumericValue)
-                .reduce((left, right) -> right)
+                .findFirst()
                 .map(PromRangePoint::value);
     }
 
