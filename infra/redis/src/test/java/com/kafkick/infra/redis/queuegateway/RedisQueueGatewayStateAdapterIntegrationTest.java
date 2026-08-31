@@ -85,7 +85,7 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
     }
 
     @Test
-    void unavailableOpenRoundPreservesLastNormalStockAndRepeatedSnapshotsConverge() {
+    void unavailableOpenRoundRemovesLastNormalStockAndRepeatedSnapshotsConverge() {
         redis.opsForValue().set("stock:{11}", "5");
         List<QueueGatewayCouponRoundState> snapshot = List.of(
                 new QueueGatewayCouponRoundState(11L, null, SourceStatus.UNAVAILABLE, null));
@@ -96,7 +96,7 @@ class RedisQueueGatewayStateAdapterIntegrationTest {
                 snapshot, QueueMode.ADAPTIVE);
 
         assertThat(redis.opsForSet().members("coupons:active")).containsExactly("11");
-        assertThat(redis.opsForValue().get("stock:{11}")).isEqualTo("5");
+        assertThat(redis.hasKey("stock:{11}")).isFalse();
         assertThat(redis.opsForHash().get("coupon:policy", "11"))
                 .isEqualTo("{\"mode\":\"ADAPTIVE\"}");
     }
