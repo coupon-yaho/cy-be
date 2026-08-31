@@ -15,15 +15,10 @@ import com.kafkick.core.support.exception.CommonErrorCode;
  *
  * <h2>이름은 하나다</h2>
  *
- * <p>{@code X-Member-Grade} 뿐입니다. 한때 {@code X-Membership-Grade} 를 호환용으로 함께
- * 받았는데 <b>그 이름을 보내는 클라이언트가 없습니다.</b> 대기열 게이트웨이는 헤더를
- * <b>넣지도 지우지도 않고</b> {@code X-Member-Grade} 가 없으면 요청을 거부합니다
- * (cy-waiting 의 {@code MemberIdentityFilter}). 즉 게이트웨이를 거치든 직행이든
- * <b>클라이언트가 보내야 하는 이름은 같습니다.</b>
- *
- * <p>두 이름을 남기면 새 화면을 붙일 때마다 어느 쪽이 정본인지 확인해야 하고, 그 확인을
- * 한 번 빠뜨리면 이번처럼 원인이 안 보이는 400 이 됩니다. 호환 겹의 값어치는 "우리가 못
- * 바꾸는 클라이언트의 수" 에 비례하는데 여기서는 그 집합이 비어 있습니다.
+ * <p>서버가 읽는 이름은 {@code X-Member-Grade} 뿐입니다. 대기열 게이트웨이는 헤더를
+ * <b>넣지도 지우지도 않고</b> 이 헤더가 없으면 요청을 거부합니다
+ * (cy-waiting 의 {@code MemberIdentityFilter}). 따라서 게이트웨이를 거치든 직행이든
+ * 서버의 회원 등급 판정은 같은 헤더 하나를 사용합니다.
  *
  * <p><b>다만 CORS 허용 목록에는 옛 이름이 남아 있습니다</b>
  * ({@link MemberRequestHeaders#LEGACY_MEMBER_GRADE}). 프론트가 전환기 동안 두 이름으로
