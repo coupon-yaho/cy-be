@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
@@ -30,7 +32,24 @@ import com.kafkick.api.admin.benchmark.TopologyValidationException;
 
 /**
  * 모든 에러를 성공 응답과 같은 봉투로 감싼다. HTTP status 는 실제 4xx/5xx 를 유지한다.
- * 응답에는 errorCode 카탈로그 메시지만 담고, 예외 detail 과 스택은 로그에만 남긴다.
+ *
+ * <p><b>응답 메시지가 늘 카탈로그 문구인 것은 아니다.</b> 업무 예외는 {@code errorCode} 의
+ * 카탈로그 메시지를 그대로 쓰지만, 검증 실패는 제약이 선언한 문구를, 헤더 누락은 빠진
+ * 헤더 이름을 싣는다 — 호출자가 <b>무엇을 고쳐야 하는지</b> 응답만 보고 알아야 하는
+ * 자리들이다. 한때 이 문단이 "카탈로그 메시지만 담는다" 고 단정했는데, 그때도 검증
+ * 갈래는 이미 제약 문구를 싣고 있었다.
+ *
+ * <p><b>어디까지 어디로 가는지는 둘로 갈린다.</b> 섞어 적으면 다음 사람이 요청 값을
+ * 로그에 남겨도 되는 것으로 읽는다.
+ *
+ * <ul>
+ *   <li><b>예외 detail 과 스택</b> — 응답에는 안 넣고 <b>로그에만</b> 남긴다. 업무 예외의
+ *       detail 에는 식별자가 들어 있을 수 있고(예: {@code memberId=…}), 그것이 응답으로
+ *       새지 않는지는 {@code GlobalExceptionHandlerTest} 가 지킨다.</li>
+ *   <li><b>요청 헤더·파라미터의 값</b> — <b>응답에도 로그에도 안 남긴다.</b> 헤더 누락
+ *       갈래가 싣는 것은 헤더 <i>이름</i> 하나뿐이고, 검증 갈래가 싣는 것은 제약이 코드에
+ *       선언한 문구다. 둘 다 요청 내용을 되비추지 않는다.</li>
+ * </ul>
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
@@ -115,6 +134,34 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .map(MessageSourceResolvable::getDefaultMessage)
                 .orElse(VALIDATION_FALLBACK_MESSAGE);
         log.warn("[{}] validation: {}", CommonErrorCode.INVALID_INPUT.getCode(), message);
+        return super.handleExceptionInternal(
+                ex, ResponseEnvelope.fail(validationBody(message)), headers, status, request);
+    }
+
+    /**
+     * <b>어느 헤더가 없는지 응답에 적는다.</b>
+     *
+     * <p>이 갈래는 원래 공통 지점으로 빠져 {@code "잘못된 요청입니다."} 만 나갔다. 그러면
+     * 호출자가 받는 정보는 <b>400 이라는 사실뿐</b>이라, 헤더 이름 하나가 어긋났을 때
+     * 서버 결함과 구분이 안 된다. 실제로 대기열 게이트웨이가 {@code X-Member-Grade} 를
+     * 보내고 발급이 {@code X-Membership-Grade} 를 요구하던 동안, 양쪽 담당자가 이 400 을
+     * 각자 한참 들여다봤다. 이름을 맞추는 것으로는 <b>다음번 다른 헤더</b>를 못 막는다.
+     *
+     * <p><b>헤더 <i>이름</i>만 싣는다.</b> 이름은 API 계약이라 이미 공개돼 있고, 값은 회원
+     * 식별자나 등급이라 응답에도 로그에도 넣지 않는다 — 위 클래스 주석이 적은 경계
+     * ("요청에서 온 값은 안 되비춘다") 를 그대로 따른다.
+     *
+     * <p>헤더 누락이 아닌 다른 바인딩 실패(경로 변수·요청 파라미터 등)는 이름을 특정할 수
+     * 없으므로 기존 문구를 그대로 쓴다.
+     */
+    @Override
+    protected ResponseEntity<Object> handleServletRequestBindingException(
+            ServletRequestBindingException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        setDependency(request, Dependency.NONE);
+        String message = (ex instanceof MissingRequestHeaderException missing)
+                ? "필수 요청 헤더가 없습니다: " + missing.getHeaderName()
+                : VALIDATION_FALLBACK_MESSAGE;
+        log.warn("[{}] binding: {}", CommonErrorCode.INVALID_INPUT.getCode(), message);
         return super.handleExceptionInternal(
                 ex, ResponseEnvelope.fail(validationBody(message)), headers, status, request);
     }
