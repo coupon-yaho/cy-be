@@ -18,7 +18,7 @@ class SentinelComposeContractTest {
         assertThat(config).contains(
                 // 호스트명으로 감시하면 감시 대상이 멈출 때 이름 해석이 실패해 SDOWN 판정이
                 // 멈추고 failover 가 아예 안 일어난다(실측). compose 가 subnet 을 고정한다.
-                "sentinel monitor coupon-master 172.31.240.10 6379 2",
+                "sentinel monitor coupon-master __MASTER_ADDR__ 6379 2",
                 "sentinel down-after-milliseconds coupon-master 5000");
         assertThat(compose).contains(
                 "coupon-redis-replica-1-data:/data",
@@ -55,7 +55,14 @@ class SentinelComposeContractTest {
         // 이 단언을 그 전부를 확인하는 것으로 바꾼다.
         assertThat(compose).doesNotContain("--requirepass");
         // 주소를 고정하지 않으면 재생성 때 IP 가 바뀌어 세 Sentinel 이 폐기된 주소를 감시한다.
-        assertThat(compose).contains("ipv4_address: 172.31.240.10", "subnet: 172.31.240.0/24");
+        // 대역·주소·감시 대상이 **한 설정**에서 나와야 한다. 갈리면 Sentinel 이 대역 밖
+        // 주소를 감시해 승격 대상을 영영 못 찾는다. 기본 대역은 Docker 기본 주소 풀 안이라
+        // 다른 네트워크와 겹칠 수 있어, 환경별로 옮길 수 있어야 한다.
+        assertThat(compose).contains(
+                "subnet: ${REDIS_SUBNET:-172.31.240.0/24}",
+                "ipv4_address: ${REDIS_MASTER_IP:-172.31.240.10}",
+                "s/__MASTER_ADDR__/$$REDIS_MASTER_IP/");
+        assertThat(environment).contains("REDIS_SUBNET=", "REDIS_MASTER_IP=");
         // 미배선 사실의 정본은 설계 문서 한 곳이다. 세 파일이 각자 설명을 들고 있으면
         // 배선하는 날 한 곳만 고쳐지고 나머지가 남아 다음 사람이 반대로 읽는다.
         String design = Files.readString(Path.of("../../docs/12-v2-redis-design.md"));
