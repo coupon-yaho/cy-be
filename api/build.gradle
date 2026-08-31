@@ -104,6 +104,10 @@ tasks.named('test') {
     // 가드가 없는 것보다 나쁘다 — 초록불이 검사했다는 증거로 읽히기 때문이다.
     inputs.files(
             rootProject.file('infra/prometheus/prometheus.yml'),
+            // 게이트웨이 target 정본과 배포 template을 계약 테스트가 직접 읽는다.
+            // 둘 중 하나만 바뀌어도 UP-TO-DATE로 건너뛰지 않아야 한다.
+            rootProject.file('infra/prometheus/targets/queue-gateway.yml'),
+            rootProject.file('infra/prometheus/targets/queue-gateway.yml.template'),
             // 컨테이너 픽스처가 이 스크립트를 마운트해 관측 계정을 만든다. 클래스패스 밖이라
             // 선언하지 않으면 스크립트를 고쳐도 :api:test 가 UP-TO-DATE 로 건너뛴다.
             rootProject.file('infra/mysql/initdb/20-obs-account.sh'),

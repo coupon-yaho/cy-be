@@ -598,6 +598,10 @@ public class PromSeriesAssembler {
                 && (point.value() < 0d || point.value() != Math.rint(point.value())))) {
             return List.of(SeriesEntry.unavailable(SeriesKey.QUEUE_ADMISSION, false));
         }
+        if (waiting.get().points().stream().noneMatch(PromRangePoint::hasNumericValue)) {
+            return List.of(new SeriesEntry(
+                    SeriesKey.QUEUE_ADMISSION, Map.of(), false, SourceStatus.PENDING, List.of()));
+        }
         double threshold = queueGatewayProperties.staleAfter().toMillis() / 1000d;
         boolean stale = latest(snapshotAge.get()).get() > threshold
                 || latest(scrapeAge.get()).get() > threshold;

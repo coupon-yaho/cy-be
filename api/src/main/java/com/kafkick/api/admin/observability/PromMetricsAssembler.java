@@ -31,6 +31,7 @@ import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.Meta;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScope;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.MetricsScopeType;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.InFlightSummary;
+import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.GatewayMetrics;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.PersistenceLagSummary;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.QueueGateMode;
 import com.kafkick.api.admin.observability.dto.AdminMetricsResponse.QueueMetric;
@@ -1300,6 +1301,7 @@ public class PromMetricsAssembler {
                 resources(samples, http),
                 inFlight(samples, http),
                 queues(samples, stock, traffic, persistence, query, evaluatedAt),
+                gatewayMetrics(samples, query, evaluatedAt),
                 SaturationPanel.THRESHOLDS);
     }
 
@@ -1612,6 +1614,51 @@ public class PromMetricsAssembler {
                 ? SourceStatus.STALE
                 : waiting.getAsDouble() == 0d ? SourceStatus.NO_TRAFFIC : SourceStatus.VALID;
         return new ObservedValue<>(waiting.getAsDouble(), status, observedAt);
+    }
+
+    private GatewayMetrics gatewayMetrics(
+            QueryResult samples, MetricsQuery query, Instant evaluatedAt) {
+        if (!queueGatewayProperties.enabled() || query.couponId() != null) {
+            return GatewayMetrics.pending();
+        }
+        if (samples.unavailable()) {
+            return GatewayMetrics.unavailable();
+        }
+        OptionalDouble up = MetricAggregation.SUM.reduce(samples.filter(
+                named(MetricAggregation.UP)
+                        .and(label(TAG_JOB, QueueGatewayPrometheusContract.JOB))));
+        if (up.isEmpty() || up.getAsDouble() <= 0d) {
+            return GatewayMetrics.unavailable();
+        }
+        OptionalDouble scrapeAge = MetricAggregation.MAX.reduce(
+                samples.filter(named(MetricAggregation.GATEWAY_SCRAPE_AGE_SECONDS)));
+        if (scrapeAge.isEmpty() || scrapeAge.getAsDouble() < 0d) {
+            return GatewayMetrics.pending();
+        }
+        Instant observedAt = evaluatedAt.minusMillis(Math.round(scrapeAge.getAsDouble() * 1000d));
+        SourceStatus state = scrapeAge.getAsDouble()
+                > queueGatewayProperties.staleAfter().toMillis() / 1000d
+                ? SourceStatus.STALE : SourceStatus.VALID;
+        return new GatewayMetrics(
+                gatewayMetric(samples, MetricAggregation.GATEWAY_CAPACITY_CREDIT, state, observedAt),
+                gatewayMetric(samples, MetricAggregation.GATEWAY_CAPACITY_NODES, state, observedAt),
+                gatewayMetric(samples, MetricAggregation.GATEWAY_JUDGEMENT_TOTAL, state, observedAt),
+                gatewayMetric(samples, MetricAggregation.GATEWAY_BACKEND_FALLBACK_TOTAL, state, observedAt),
+                gatewayMetric(samples, MetricAggregation.GATEWAY_ALLOCATION_OVERSHOOT_TOTAL,
+                        state, observedAt));
+    }
+
+    private static ObservedValue<Double> gatewayMetric(
+            QueryResult samples, String metricName, SourceStatus state, Instant observedAt) {
+        OptionalDouble value = MetricAggregation.of(metricName).reduce(
+                samples.filter(named(metricName)));
+        if (value.isEmpty()) {
+            return pending();
+        }
+        if (value.getAsDouble() < 0d) {
+            return unavailable();
+        }
+        return new ObservedValue<>(value.getAsDouble(), state, observedAt);
     }
 
     private static List<ObservedValue<Double>> persistenceQueue(

@@ -361,12 +361,14 @@ public record AdminMetricsResponse(
      * @param resources 자원별 사용률 6행
      * @param inFlight 처리 중인 요청 수
      * @param queues 의미가 다른 큐 3영역. 하나로 합치지 않습니다
+     * @param gateway 외부 대기열 게이트웨이의 처리 가능량·판정·fallback·초과 배정 지표
      * @param thresholds 세 단계 공통 임계(%)
      */
     public record SaturationPanel(
             List<ResourceRow> resources,
             InFlightSummary inFlight,
             List<QueueZoneSummary> queues,
+            GatewayMetrics gateway,
             SaturationThresholds thresholds
     ) {
 
@@ -401,7 +403,40 @@ public record AdminMetricsResponse(
                     rows,
                     new InFlightSummary(pending, pending, "", 0, QueueGateMode.OFF, 0, 0, List.of()),
                     queues,
+                    GatewayMetrics.pending(),
                     THRESHOLDS);
+        }
+    }
+
+    /**
+     * 외부 게이트웨이가 공개한 운영 지표입니다. 값이 없는 상태를 0으로 바꾸지 않고 지표별
+     * {@link ObservedValue}로 유지합니다.
+     *
+     * @param capacityCredit 현재 API 처리 가능량 credit
+     * @param capacityNodes capacity를 보고하는 API 노드 수
+     * @param judgementTotal 누적 입장 판정 수
+     * @param backendFallbackTotal 누적 백엔드 fallback 수
+     * @param allocationOvershootTotal 누적 공급 한도 초과 입장 수
+     */
+    public record GatewayMetrics(
+            ObservedValue<Double> capacityCredit,
+            ObservedValue<Double> capacityNodes,
+            ObservedValue<Double> judgementTotal,
+            ObservedValue<Double> backendFallbackTotal,
+            ObservedValue<Double> allocationOvershootTotal
+    ) {
+
+        public static GatewayMetrics pending() {
+            return all(SourceStatus.PENDING);
+        }
+
+        public static GatewayMetrics unavailable() {
+            return all(SourceStatus.UNAVAILABLE);
+        }
+
+        private static GatewayMetrics all(SourceStatus state) {
+            ObservedValue<Double> value = new ObservedValue<>(null, state, null);
+            return new GatewayMetrics(value, value, value, value, value);
         }
     }
 

@@ -106,6 +106,27 @@ class QueueGatewayMetricsContractTest {
     }
 
     @Test
+    void gatewayOperationalMetricsAreIncludedInTheResponse() {
+        List<PromSample> samples = new ArrayList<>(gatewaySamples(120d, 1d, 1d));
+        samples.add(sample(QueueGatewayPrometheusContract.CAPACITY_CREDIT, 250d));
+        samples.add(sample(QueueGatewayPrometheusContract.CAPACITY_NODES, 2d));
+        samples.add(sample(QueueGatewayPrometheusContract.JUDGEMENT_TOTAL, 1000d));
+        samples.add(sample(QueueGatewayPrometheusContract.BACKEND_FALLBACK_TOTAL, 3d));
+        samples.add(sample(QueueGatewayPrometheusContract.ALLOCATION_OVERSHOOT_TOTAL, 1d));
+
+        AdminMetricsResponse response = assemble(
+                promQl -> promQl.contains(QueueGatewayPrometheusContract.WAITING)
+                        ? List.copyOf(samples) : List.of(),
+                globalQuery());
+
+        assertThat(response.saturation().gateway().capacityCredit().value()).isEqualTo(250d);
+        assertThat(response.saturation().gateway().capacityNodes().value()).isEqualTo(2d);
+        assertThat(response.saturation().gateway().judgementTotal().value()).isEqualTo(1000d);
+        assertThat(response.saturation().gateway().backendFallbackTotal().value()).isEqualTo(3d);
+        assertThat(response.saturation().gateway().allocationOvershootTotal().value()).isEqualTo(1d);
+    }
+
+    @Test
     void gatewayQueryFailureIsIsolatedAsUnavailable() {
         PromQuery client = promQl -> {
             if (promQl.contains(QueueGatewayPrometheusContract.WAITING)) {
@@ -147,6 +168,31 @@ class QueueGatewayMetricsContractTest {
                 .containsExactly(100d, 120d);
         assertThat(queries.stream().filter(query -> query.contains(
                 QueueGatewayPrometheusContract.WAITING))).hasSize(1);
+    }
+
+    @Test
+    void nonFiniteOnlyGatewayWaitingSeriesIsPending() {
+        PromRangeQuery range = (promQl, start, end, step) -> {
+            if (!promQl.contains(QueueGatewayPrometheusContract.WAITING)) {
+                return List.of(new PromRangeSeries(Map.of(),
+                        List.of(new PromRangePoint(NOW, 1d))));
+            }
+            return List.of(
+                    range("waiting", Double.NaN, Double.POSITIVE_INFINITY),
+                    range("snapshot_age", 1d),
+                    range("scrape_age", 1d),
+                    range("up", 1d));
+        };
+
+        SeriesEntry admission = new PromSeriesAssembler(
+                range, TIME, PrometheusSeriesProperties.defaults(),
+                new QueueGatewayPrometheusProperties(true, Duration.ofSeconds(5)))
+                .assemble(globalQuery()).series().stream()
+                .filter(entry -> entry.key() == SeriesKey.QUEUE_ADMISSION)
+                .findFirst().orElseThrow();
+
+        assertThat(admission.state()).isEqualTo(SourceStatus.PENDING);
+        assertThat(admission.points()).isEmpty();
     }
 
     @Test

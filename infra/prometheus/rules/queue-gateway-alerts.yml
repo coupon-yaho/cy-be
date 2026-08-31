@@ -2,7 +2,7 @@ groups:
   - name: queue-gateway
     rules:
       - alert: QueueGatewayTargetDown
-        expr: min(up{job="queue-gateway"}) == 0
+        expr: up{job="queue-gateway"} == 0
         for: 10s
         labels:
           severity: critical
@@ -12,7 +12,7 @@ groups:
           description: "외부 게이트웨이의 /actuator/prometheus 응답과 Prometheus targets의 queue-gateway 상태를 먼저 확인합니다."
 
       - alert: QueueGatewaySnapshotUnavailable
-        expr: ((max(waiting_snapshot_age{job="queue-gateway"}) < 0) or (vector(1) unless waiting_snapshot_age{job="queue-gateway"})) and on() (min(up{job="queue-gateway"}) == 1)
+        expr: (waiting_snapshot_age{job="queue-gateway"} < 0) or (up{job="queue-gateway"} == 1 unless on(instance) waiting_snapshot_age{job="queue-gateway"})
         for: 10s
         labels:
           severity: critical
@@ -22,7 +22,7 @@ groups:
           description: "queue-gateway 로그와 /actuator/prometheus의 waiting_snapshot_age를 먼저 확인합니다. 음수는 스냅샷 생성 실패를 뜻합니다."
 
       - alert: QueueGatewaySnapshotStale
-        expr: (max(waiting_snapshot_age{job="queue-gateway"}) > 5) and on() (min(up{job="queue-gateway"}) == 1)
+        expr: (waiting_snapshot_age{job="queue-gateway"} > 5) and on(instance) (up{job="queue-gateway"} == 1)
         for: 10s
         labels:
           severity: warning
@@ -32,7 +32,7 @@ groups:
           description: "queue-gateway 로그와 /actuator/prometheus의 waiting_snapshot_age, Redis 응답 상태를 순서대로 확인합니다."
 
       - alert: QueueGatewayCapacityNodesMissing
-        expr: (max(waiting_capacity_nodes{job="queue-gateway"}) == 0) and on() (min(up{job="queue-gateway"}) == 1)
+        expr: (waiting_capacity_nodes{job="queue-gateway"} == 0) and on(instance) (up{job="queue-gateway"} == 1)
         for: 5s
         labels:
           severity: warning
