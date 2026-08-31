@@ -29,6 +29,7 @@ import com.kafkick.core.support.exception.ErrorCode;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.RequestAttributeKeys;
 import com.kafkick.api.admin.benchmark.TopologyValidationException;
+import com.kafkick.api.support.auth.RequestHeaderContractException;
 
 /**
  * 모든 에러를 성공 응답과 같은 봉투로 감싼다. HTTP status 는 실제 4xx/5xx 를 유지한다.
@@ -100,6 +101,26 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .orElse(VALIDATION_FALLBACK_MESSAGE);
         log.warn("[{}] validation: {}", CommonErrorCode.INVALID_INPUT.getCode(), message);
         return ResponseEntity.badRequest().body(ResponseEnvelope.fail(validationBody(message)));
+    }
+
+    /**
+     * <b>헤더 계약 위반은 문구를 응답에 그대로 싣는다.</b>
+     *
+     * <p>같은 400 이라도 {@code BusinessException} 은 카탈로그 문구만 나가고 detail 은 로그에
+     * 남는다 — detail 에 식별자가 들어 있을 수 있어서다. 헤더 계약은 그 반대다. <b>호출자가
+     * 무엇을 고쳐야 하는지 응답만 보고 알아야</b> 하고, 문구는 코드가 정한 고정 문자열이라
+     * 요청 내용을 되비추지 않는다. 제약 애노테이션 문구를 싣는 것과 같은 등급이다.
+     *
+     * <p>이것이 없던 동안 등급 헤더 이름이 게이트웨이와 어긋난 요청은 {@code "잘못된
+     * 요청입니다."} 만 돌려줬고, 양쪽 담당자가 그 400 을 각자 한참 들여다봤다.
+     */
+    @ExceptionHandler(RequestHeaderContractException.class)
+    public ResponseEntity<ResponseEnvelope<Void>> handleRequestHeaderContract(
+            RequestHeaderContractException exception, HttpServletRequest request) {
+        setDependency(request, Dependency.NONE);
+        log.warn("[{}] header: {}", CommonErrorCode.INVALID_INPUT.getCode(), exception.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ResponseEnvelope.fail(validationBody(exception.getMessage())));
     }
 
     @ExceptionHandler(Exception.class)

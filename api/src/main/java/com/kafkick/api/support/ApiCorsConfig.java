@@ -67,17 +67,10 @@ public class ApiCorsConfig {
         configuration.setAllowedMethods(List.of("GET", "POST"));
 
         // 요청 헤더가 하나라도 안 열려 있으면 브라우저가 실제 요청을 안 보낸다.
-        //
-        // ⚠️ LEGACY_MEMBER_GRADE 는 **서버가 안 읽는데도 여기 있다.** 프론트가 게이트웨이
-        //    전환기 동안 등급 헤더를 두 이름으로 함께 보내는데, 허용 목록에서 빼면 그 요청이
-        //    프리플라이트에서 통째로 막힌다 — 서버가 값을 무시하는 것과 브라우저가 보낼 수
-        //    있는 것은 다른 층이다. 값은 MemberGradeHeaderResolver 가 안 본다.
-        //    프론트가 옛 이름을 그만 보내면 이 줄을 지운다.
         configuration.setAllowedHeaders(List.of(
                 HttpHeaders.CONTENT_TYPE,
                 MemberRequestHeaders.MEMBER_ID,
                 MemberRequestHeaders.MEMBER_GRADE,
-                MemberRequestHeaders.LEGACY_MEMBER_GRADE,
                 CouponRequestHeaders.IDEMPOTENCY_KEY,
                 RequestIdFilter.REQUEST_ID_HEADER,
                 AdminAuthorizationInterceptor.USER_ROLE_HEADER,
