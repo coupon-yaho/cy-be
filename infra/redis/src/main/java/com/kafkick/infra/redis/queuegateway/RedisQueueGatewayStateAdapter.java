@@ -23,6 +23,29 @@ public final class RedisQueueGatewayStateAdapter implements QueueGatewayStatePor
     static final String SNAPSHOT_COORDINATION_KEY = "coupon-svc:queue-gateway:snapshot";
     static final String STOCK_PREFIX = "stock:{";
 
+    /**
+     * 회차 스냅샷을 한 번에 바꾼다. <b>도중에 물러서지 않고 통째로 거부한다.</b>
+     *
+     * <h2>거부 조건 셋 — 전부 {@code redis.error_reply} 로 공급을 중단한다</h2>
+     *
+     * <ul>
+     *   <li>{@code coupons:active} 가 set 이 아니다</li>
+     *   <li>{@code coupon:policy} 또는 조정 키가 hash 가 아니다</li>
+     *   <li>조정 키의 {@code applied} 가 수로 안 읽힌다</li>
+     * </ul>
+     *
+     * <p><b>거부되면 기존 스냅샷은 그대로 남고</b> 호출부는 예외를 받는다. 게이트웨이는
+     * 낡은 스냅샷을 계속 쓰다가 신선도가 끊기면 크레딧을 하한으로 내린다 — 잘못된 값으로
+     * 덮어쓰는 것보다 낫다.
+     *
+     * <p><b>운영에서 이걸 만나는 경우는 하나다</b> — 그 키를 다른 형식으로 쓰던 Redis 에
+     * 이 공급기를 붙였을 때다. 이름이 같은 키를 게이트웨이 밖에서 만들어 두면 공급이 통째로
+     * 멈추는데, 증상은 "가용량 보고가 없다" 로만 보인다. 그때는 위 세 키의 {@code TYPE} 을
+     * 먼저 본다.
+     *
+     * <p>버전이 같거나 낮으면 거부가 아니라 {@code 0} 을 돌려주고 아무것도 안 바꾼다.
+     * 늦게 도착한 스냅샷이 새 것을 덮지 않게 하는 것이라 실패가 아니다.
+     */
     private static final RedisScript<Long> PUBLISH_SCRIPT = new DefaultRedisScript<>("""
             local activeType = redis.call('TYPE', KEYS[1])['ok']
             if activeType ~= 'none' and activeType ~= 'set' then
