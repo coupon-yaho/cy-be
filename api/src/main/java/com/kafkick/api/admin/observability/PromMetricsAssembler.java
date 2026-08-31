@@ -1616,6 +1616,14 @@ public class PromMetricsAssembler {
         return new ObservedValue<>(waiting.getAsDouble(), status, observedAt);
     }
 
+    /**
+     * 게이트웨이 운영 지표를 수집 상태와 함께 조립합니다.
+     *
+     * <p>게이트웨이 관제가 꺼졌거나 쿠폰별 조회이면 {@code PENDING}, Prometheus 조회 실패나
+     * 살아 있는 타깃이 없으면 {@code UNAVAILABLE}입니다. scrape age가 없거나 음수이면 전체를
+     * {@code PENDING}으로 두고, 기준 시간을 넘으면 존재하는 지표를 {@code STALE}로 표시합니다.
+     * 개별 지표가 없으면 그 지표만 {@code PENDING}, 음수이면 {@code UNAVAILABLE}입니다.
+     */
     private GatewayMetrics gatewayMetrics(
             QueryResult samples, MetricsQuery query, Instant evaluatedAt) {
         if (!queueGatewayProperties.enabled() || query.couponId() != null) {
