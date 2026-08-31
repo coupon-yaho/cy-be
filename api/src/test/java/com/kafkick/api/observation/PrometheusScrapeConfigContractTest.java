@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
  * <p>이 계약은 여섯 파일에 걸쳐 있다.
  * <ul>
  *   <li>{@code infra/prometheus/prometheus.yml} — 어느 호스트:포트를 긁을지
- *   <li>{@code infra/prometheus/targets/queue-gateway.yml[.example]} — 외부 타겟의 비활성 기본값과 배포 템플릿
+ *   <li>{@code infra/prometheus/targets/queue-gateway.yml[.template]} — 외부 타겟의 비활성 기본값과 배포 템플릿
  *   <li>{@code compose.yml} — 그 호스트 이름을 만드는 곳이자 설정 파일을 마운트하는 곳
  *   <li>{@code api/src/main/resources/management.yml.example} — api 관리 포트 기본값
  *   <li>{@code batch/src/main/resources/management.yml.example} — batch 관리 포트 기본값
@@ -90,7 +90,7 @@ class PrometheusScrapeConfigContractTest {
                 .isEqualTo("[]");
 
         assertThat(Files.readString(repo.resolve(
-                "infra/prometheus/targets/queue-gateway.yml.example")))
+                "infra/prometheus/targets/queue-gateway.yml.template")))
                 .as("배포자가 외부 주소와 문서화된 8081 포트를 주입할 템플릿이 필요하다")
                 .contains(":8081");
     }
