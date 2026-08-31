@@ -101,6 +101,9 @@ coupon:
       #    (기본 50초)을 다 쓰고 온다 — 횟수만 두면 그 한 요청이 커넥션을 150초 물고
       #    있게 되고, 운영 풀이 13이라 열셋이면 통째로 마른다. 첫 실패가 이미 예산을
       #    넘겼으면 다시 시도하지 않는다.
+      #
+      # ⚠️ **응답 상한은 아니다.** 진행 중인 시도를 중단시키지 못하므로 첫 락 대기 하나만
+      #    으로도 예산을 넘길 수 있다. 이 값이 막는 것은 그 뒤에 시도가 더 붙는 것이다.
       max-attempts: ${COUPON_ISSUE_LOCK_MAX_ATTEMPTS:3}
       budget: ${COUPON_ISSUE_LOCK_RETRY_BUDGET:500ms}
   definition-cache:

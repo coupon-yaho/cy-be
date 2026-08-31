@@ -27,6 +27,9 @@ import io.micrometer.core.instrument.MeterRegistry;
  * 계산할 수 없게 된다. 합은 <b>락 경합을 한 번이라도 만난 요청 수</b>다.
  *
  * <p>물러선 <i>횟수</i>가 필요해지면 그때 별도 카운터를 둔다. 지금 이름에 섞지 않는다.
+ *
+ * <p><b>Micrometer description 도 같은 단위로 적는다.</b> 대시보드에서 사람이 먼저 보는
+ * 것은 이 설명이라, 여기만 "횟수" 로 남으면 요청 단위 값을 시도 횟수로 읽는다.
  */
 @Component
 public final class IssueLockRetryMeters {
@@ -39,11 +42,11 @@ public final class IssueLockRetryMeters {
     public IssueLockRetryMeters(MeterRegistry registry) {
         Objects.requireNonNull(registry, "registry");
         this.recovered = Counter.builder(NAME)
-                .description("발급이 락 경합으로 물러선 뒤 다시 시도한 횟수")
+                .description("락 경합으로 물러섰다가 끝내 성공한 발급 요청 수 (요청당 1)")
                 .tag("outcome", "recovered")
                 .register(registry);
         this.exhausted = Counter.builder(NAME)
-                .description("발급이 락 경합으로 상한까지 가서 실패한 횟수")
+                .description("락 경합으로 상한이나 예산까지 가서 끝내 실패한 발급 요청 수 (요청당 1)")
                 .tag("outcome", "exhausted")
                 .register(registry);
     }

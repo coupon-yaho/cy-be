@@ -21,7 +21,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                    데드락은 밀리초 안에 실패해 예산에 다시 들어오지만, 락 대기 타임아웃은
  *                    {@code innodb_lock_wait_timeout}(기본 50초)을 다 쓰고 온다.
  *                    횟수만 두면 그 한 요청이 커넥션을 150초 물게 된다 — 첫 실패가 이미
- *                    예산을 넘겼으면 다시 시도하지 않는다
+ *                    예산을 넘겼으면 다시 시도하지 않는다.
+ *                    <b>응답 상한은 아니다</b> — 진행 중인 시도를 중단시키지 못하므로 첫
+ *                    락 대기 하나만으로도 예산을 넘길 수 있다. 막는 것은 그 뒤의 배수다
  *
  * @throws IllegalArgumentException {@code maxAttempts} 가 1 미만이거나 {@link #MAX_ATTEMPTS_LIMIT}
  *         초과일 때, 또는 {@code budget} 이 0 이하이거나 {@link #BUDGET_LIMIT} 초과일 때.

@@ -193,8 +193,13 @@ public final class CouponIssueObservationCoordinator {
                 // 부하 구간에 요청마다 warn 을 찍으면 로그 I/O 가 측정값을 오염시킨다.
                 log.debug("발급이 락 경합으로 물러섭니다. attempt={}/{} couponRoundId={} memberId={}",
                         attempt, maxAttempts, couponRoundId, memberId);
-                // **남은 예산 안에서만 기다린다.** 예산을 넘겨 자면 깨어난 뒤의 시도가
-                // 락 대기 타임아웃만큼 더 걸려 응답 상한이라는 목적이 무너진다.
+                // **남은 예산 안에서만 기다린다.** 예산을 넘겨 자면 깨어난 뒤에 시도가
+                // 하나 더 시작되는데, 그것이 락 대기 타임아웃만큼 더 걸릴 수 있다.
+                //
+                // ⚠️ 예산은 **응답 상한이 아니다.** 진행 중인 DB 시도를 중단시키지 못하므로
+                //    첫 시도가 락 대기로 50초를 쓰면 응답은 이미 예산을 크게 넘긴다.
+                //    이 값이 보장하는 것은 하나 — **예산이 끝난 뒤에는 새 시도를 시작하지
+                //    않는다.** 그래서 최악이 시도 횟수만큼 배가 되지는 않는다.
                 LockSupport.parkNanos(Math.min(remaining, backoffNanos()));
                 if (System.nanoTime() >= deadline) {
                     throw giveUp(failure, attempt, couponRoundId, memberId);
