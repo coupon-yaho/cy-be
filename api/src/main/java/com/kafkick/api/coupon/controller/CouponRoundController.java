@@ -80,7 +80,7 @@ public class CouponRoundController {
             @RequestHeader(MemberRequestHeaders.MEMBER_ID)
             @Positive(message = "회원 ID는 0보다 커야 합니다.")
             Long memberId,
-            @RequestHeader(MemberRequestHeaders.MEMBERSHIP_GRADE)
+            @RequestHeader(MemberRequestHeaders.MEMBER_GRADE)
             MembershipGrade membershipGrade,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "페이지 번호는 0 이상이어야 합니다.")

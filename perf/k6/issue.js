@@ -130,7 +130,7 @@ function issue(roundId, memberId, grade) {
     {
       headers: {
         'X-Member-Id': String(memberId),
-        'X-Membership-Grade': grade,
+        'X-Member-Grade': grade,
         // ⚠️ 서버가 UUID v4 형식을 강제한다. 형식이 아니면 발급 경로를 타기도 전에
         //    COUPON-300 으로 전량 거절되고, 그 회차는 "거절 6001건"으로 보인다(실측).
         //    요청마다 달라야 하지만 재현 가능해야 하므로 (회차, 회원)에서 결정적으로 만든다.
