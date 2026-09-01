@@ -282,3 +282,80 @@ JDBC와 집계 SQL을 사용합니다.
 | 설승환 | 관측·인프라    | 관측 이벤트, Redis, 벤치마크 환경    |
 | 이경주 | 관리자·관제    | 관리자 API, 관제 백엔드, 알림 계약    |
 | 박지훈 | 쿠폰 도메인    | 쿠폰·회차, 발급 API, 재고 차감      |
+
+---
+
+## 11. 로컬 실행 준비
+
+> 이 절은 **되살린 것이다.** README 를 새로 쓰면서 빠졌는데, `compose.yml` 에는 아래 절차가
+> 쓰는 시드 프로파일이 그대로 남아 있어 **문서만 사라진 상태**였다.
+> `RedisRuntimeConfigContractTest` 가 이 내용을 계약으로 잡고 있어 빌드도 함께 깨져 있었다.
+
+### 설정 파일 복사
+
+`application.yml`, `storage.yml`, `redis.yml`, `kafka.yml` 등 실행용 설정은 커밋하지 않는다.
+`spring.config.import`는 optional이 아니라서 파일 하나가 없으면 기동이 중단된다
+(`redis.yml`·`kafka.yml`이 그렇다).
+
+**Gradle 빌드·테스트는 이 복사를 알아서 한다.** 루트 `build.gradle`의 `processResources`가
+빌드 산출물에서 빠진 이름을 `.example`로 채운다 — 신규 클론에서 `./gradlew build`가 아무 수동
+단계 없이 통과한다. 소스 트리에는 쓰지 않으므로, 각자 만든 실제 파일이 있으면 그쪽이 이긴다.
+
+앱을 Gradle 밖에서 띄우거나(IDE가 Gradle에 위임하지 않는 설정) 파일을 직접 고쳐 쓰려면
+아래로 복사한다. **설정 파일이 늘어나는 브랜치를 받은 뒤에도 다시 돌린다.**
+
+```bash
+find . -path '*/src/main/resources/*.yml.example' \
+  -exec sh -c '[ -f "${1%.example}" ] || cp "$1" "${1%.example}"' _ {} \;
+```
+
+⚠️ **없을 때만 복사한다.** 예전에는 무조건 덮어써서, 브랜치를 받고 이 명령을 다시 돌리면
+로컬에서 고친 DB 접속 정보나 스위치가 조용히 사라졌다. 어떤 파일을 최신 `.example` 값으로
+되돌리고 싶으면 그 파일을 지우고 다시 돌린다.
+
+⚠️ 이 복사를 빼먹어도 앱은 **죽지 않고 설정 없이 뜬다.** `application.yml`이 없으면 그 안의
+`spring.config.import`가 통째로 안 돌아서, 나머지 파일이 없다는 사실조차 드러나지 않는다.
+그 상태의 증상은 조건부 빈이 사라지는 것뿐이라 원인을 찾기 어렵다 — 위 자동 복사를 둔 이유다.
+
+⚠️ **위 명령은 모듈 리소스만 채운다.** compose 로 띄울 때 필요한 저장소 루트의 두 파일은
+따로 복사해야 한다 — `compose.yml`이 `./application.yml`을 컨테이너에 bind mount 하고
+`.env`를 `env_file`로 읽는다. 둘 다 gitignore 대상이라 신규 클론에는 없다.
+
+```bash
+[ -f .env ] || cp .env.example .env
+[ -f application.yml ] || cp application.yml.example application.yml
+```
+
+빼먹고 `docker compose up` 하면 Docker가 `application.yml`이라는 **디렉터리**를 만들어
+마운트한다(실측). 설정이 통째로 비는데 에러에는 그 원인이 안 나온다.
+
+⚠️ 위 조건이 `-e`가 아니라 **`-f`**인 이유가 그것이다. `-e`는 그렇게 생긴 디렉터리도
+"있다"로 판정해 복사를 건너뛴다 — 한 번 이 상태에 빠지면 명령을 다시 돌려도 낫지 않는다.
+디렉터리가 생겼으면 먼저 지운다.
+
+```bash
+[ -d application.yml ] && rmdir application.yml
+```
+
+DB 접속 정보는 파일에 적지 않고 `DB_HOST`·`DB_NAME`·`DB_USERNAME`·`DB_PASSWORD`
+환경변수로 주입한다. `.example`의 값은 로컬 개발용 기본값이다.
+
+### Redis 런타임 설정 (`config:runtime`)
+
+`config:runtime`은 API 기동 시에만 부트스트랩한다. 새 Redis 볼륨에서 키가 없으면 API가
+기본값(revision 0)을 `SET NX`로 한 번 저장하므로, compose를 쓰지 않는 Docker 배포도
+별도 시드 없이 시작할 수 있다. 기본값은 `runtime-config.bootstrap` 블록 또는
+`RUNTIME_CONFIG_BOOTSTRAP_*` 환경변수로 정한다.
+
+compose의 시드 프로파일은 그대로 남긴다. API보다 먼저 값을 넣어야 하는 운영 절차에서는
+다음 명령을 실행할 수 있으며, API 부트스트랩과 겹쳐도 `SET NX`라 서로 덮어쓰지 않는다.
+
+```bash
+docker compose up -d redis
+docker compose --profile runtime-config-seed run --rm runtime-config-seed
+docker compose up -d
+```
+
+기동 뒤에 키가 사라진 경우에는 읽기 경로가 값을 다시 심지 않는다. last-known-good가 있으면
+`STALE`을, 없으면 `STORE_MISSING`을 반환해 사고를 드러낸다. 기동 단계의 부트스트랩과 읽기
+경로의 미스 처리는 의도적으로 다르다.
