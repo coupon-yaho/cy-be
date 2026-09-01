@@ -10,6 +10,7 @@
 | **한다** | `POST /api/v1/admin/verify/runs/{executionId}/stop` — 실행 중단. **진도가 멈춘 것만** |
 | **한다** | 업무 포트 노출 결정 — `application.yml.example` 이 이 티켓에 예약해 뒀다 |
 | **했다 (CY-590)** | `GET /api/v1/admin/verify/reports/latest?dataset=&scope=` — 제출용 리포트. 한때 이 표가 *"안 한다 — 별도 티켓"* 이라고 적었고, 그 별도 티켓이 CY-590 이다 |
+| **했다** | `GET /api/v1/admin/verify/runs/{runId}/progress` — **진행 중** 실행의 중간 검출 수. 화면이 "지금 검증" 을 누르고 기다리는 동안 무엇이 몇 건 잡혔는지 보여 준다. ⚠️ **여기가 받는 것은 `runId`(검증 실행)이고 트리거 응답이 주는 `executionId`(배치 잡 실행)와 다른 번호다** — 실측에서 `executionId=15` 일 때 `runId=17` 이었다. 그대로 넣으면 404 `VERIFICATION-003` 이다. 검출 수는 `verification_findings` 를 직접 센다 — `verification_runs.finding_count` 는 판정 Step 이 마감할 때 채워져 진행 중에는 안 맞는다. **`/reports/latest` 를 완화하지 않고 경로를 가른 이유**는 그쪽이 게이트와 `dump-verify-report.sh` 와 같은 질의를 쓰기 때문이다 — 진행 중 run 이 섞이면 절반만 센 검출이 최종 판정으로 증적에 남는다 |
 | **했다 (CY-744)** | `GET /api/v1/admin/verify/runs?dataset=&limit=&offset=&anchor=` — 검증 실행 이력. 기존 `runs` 리소스의 컬렉션이다. **`anchor` 는 페이지 경계를 얼린다** — 첫 요청은 안 보내고 응답이 준 값을 다음 요청부터 되돌려준다. 이 목록은 `cleanupJob` 이 **의도적으로 안 걷어** 단조 증가하고 손 트리거가 하루에도 여러 건을 더하므로, 안 얼리면 그 사이의 INSERT 에 페이지가 밀린다 |
 | **했다 (CY-744)** | `GET /api/v1/admin/batch/runs?jobName=&limit=&offset=&anchor=` — 세 잡의 실행 이력. 배치 메타에서 읽는다. `anchor` 는 위와 같다 — 보존 창(`CLEANUP_METADATA_KEEP_DAYS`)과 크론이 설정값이라 행 수에 상한이 없다. 회차 상태 전이는 `@Scheduled` 라 여기 안 나온다 |
 | **안 한다** | 인증·인가 — batch 에 Spring Security 가 없다. 아래 "남긴 것". ⚠️ **CY-742 가 뒤에 공유 비밀 관문을 붙였지만 포트를 내보낼 때만 켠다** |
