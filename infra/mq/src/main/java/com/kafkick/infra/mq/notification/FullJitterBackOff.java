@@ -40,9 +40,13 @@ public final class FullJitterBackOff {
     /**
      * {@code base << attempt} 의 자리이동 상한.
      *
-     * <p>{@code long} 이라 63 까지 밀 수 있지만, 30 이면 {@code base=200ms} 에서
-     * {@code 200 × 2^30 = 214,748,364,800ms} <b>≈ 6.8년</b>이라 어떤 {@code cap} 이든 넘는다.
-     * 더 밀 이유가 없고, 밀면 부호가 뒤집혀 <b>음수 상한</b>이 되어 {@code nextLong} 이 던진다.
+     * <p>30 이면 {@code base=200ms} 에서 {@code 200 × 2^30 = 214,748,364,800ms}
+     * <b>≈ 6.8년</b>이라 어떤 {@code cap} 이든 넘는다. 더 밀 이유가 없다.
+     *
+     * <p><b>이 상수만으로는 오버플로가 안 막힌다.</b> 30 이 안전한 것은 {@code base} 가
+     * 작을 때뿐이다 — {@code base} 가 365일이면 {@code base << 30} 이 {@code long} 을 넘어
+     * <b>-3,031,965,985,755,103,232</b> 이 되고, 음수 상한을 받은 {@code nextLong} 이 던진다.
+     * 그래서 {@link #nextDelay} 가 자리이동 <b>결과</b>를 직접 본다.
      */
     private static final int MAX_SHIFT = 30;
 
@@ -68,7 +72,12 @@ public final class FullJitterBackOff {
      */
     public Duration nextDelay(int attempt) {
         int shift = Math.min(Math.max(attempt, 1), MAX_SHIFT);
-        long ceiling = Math.min(capMillis, baseMillis << shift);
+
+        // 자리이동 **결과**를 본다. MAX_SHIFT 는 base 가 작을 때만 안전하고, 넘친 값은
+        // 음수라 곧바로 cap 을 뜻한다 — 지수 구간을 이미 지났다는 신호다.
+        long shifted = baseMillis << shift;
+        long ceiling = shifted < 0 ? capMillis : Math.min(capMillis, shifted);
+
         // nextLong 의 상한은 배타적이다. ceiling 자체도 나올 수 있어야 한다.
         return Duration.ofMillis(ThreadLocalRandom.current().nextLong(0, ceiling + 1));
     }

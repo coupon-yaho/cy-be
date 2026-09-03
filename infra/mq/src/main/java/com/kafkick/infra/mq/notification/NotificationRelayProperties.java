@@ -6,6 +6,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("kafka.notification.relay")
 public class NotificationRelayProperties {
+
+    /**
+     * <b>상한을 여기서 막는다 — 어댑터가 아니라.</b> 저장소의 지연 변환기는 365일을 넘으면
+     * 던지는데, 그것은 <b>첫 실패가 실제로 났을 때</b> 터진다. 설정이 틀린 사실을 운영 중
+     * 첫 장애 때 알게 되는 셈이라, 기동 시점으로 당긴다.
+     */
+    private static final Duration MAX_BACKOFF = Duration.ofDays(365);
+
     private Duration lease = Duration.ofSeconds(30);
     private long fixedDelayMs = 100L;
 
@@ -49,13 +57,6 @@ public class NotificationRelayProperties {
     public void setBackoffCap(Duration backoffCap) {
         this.backoffCap = requirePositive(backoffCap, "backoff cap");
     }
-
-    /**
-     * <b>상한을 여기서 막는다 — 어댑터가 아니라.</b> 저장소의 지연 변환기는 365일을 넘으면
-     * 던지는데, 그것은 <b>첫 실패가 실제로 났을 때</b> 터진다. 설정이 틀린 사실을 운영 중
-     * 첫 장애 때 알게 되는 셈이라, 기동 시점으로 당긴다.
-     */
-    private static final Duration MAX_BACKOFF = Duration.ofDays(365);
 
     private static Duration requirePositive(Duration value, String name) {
         if (value == null || value.isZero() || value.isNegative()) {
