@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.event.NotificationRequestedEventPublisher;
+import com.kafkick.infra.mq.notification.FullJitterBackOff;
 import com.kafkick.infra.mq.notification.NotificationOutboxRelay;
 import com.kafkick.infra.mq.notification.NotificationRelayProperties;
 import com.kafkick.infra.mq.notification.NotificationRelayScheduler;
@@ -29,7 +30,9 @@ public class NotificationRelayConfig {
             NotificationRelayProperties properties,
             ObjectProvider<Clock> clocks) {
         return new NotificationOutboxRelay(outboxes, notifications, publisher,
-                properties.getLease(), clocks.getIfAvailable(Clock::systemUTC));
+                properties.getLease(),
+                new FullJitterBackOff(properties.getBackoffBase(), properties.getBackoffCap()),
+                clocks.getIfAvailable(Clock::systemUTC));
     }
 
     @Bean
