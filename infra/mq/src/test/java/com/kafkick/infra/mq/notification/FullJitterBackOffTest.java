@@ -41,11 +41,24 @@ class FullJitterBackOffTest {
         assertThat(seen).hasSizeGreaterThan(100);
     }
 
-    /** 하한이 0 이어야 한다. 하한을 두면(Equal Jitter) 그 구간에 다시 뭉친다. */
+    /**
+     * 하한이 0 이어야 한다. 하한을 두면(Equal Jitter) 그 구간에 다시 뭉친다.
+     *
+     * <p><b>전용 백오프를 쓴다.</b> 공용 픽스처({@code base=200ms})로는 첫 재시도 상한이
+     * 400ms 라 값이 401개고, 2,000번 뽑아도 0 이 한 번도 안 나올 확률이
+     * {@code (400/401)^2000 ≈ 0.68%} 다 — <b>147번에 한 번 깨진다.</b> 확률적 테스트는
+     * 뽑는 횟수가 아니라 <b>표본 공간</b>을 좁혀야 안정된다.
+     *
+     * <p>{@code base=cap=1ms} 면 상한이 {@code min(1, 1<<1)=1} 이라 값이 {0,1} 둘뿐이고,
+     * 20번에 0 이 안 나올 확률이 {@code 0.5^20 ≈ 1e-6} 이다.
+     */
     @Test
     void canReturnZeroSoThereIsNoFloorToClusterOn() {
-        boolean sawZero = IntStream.range(0, 2000)
-                .anyMatch(i -> backOff.nextDelay(1).isZero());
+        FullJitterBackOff coinFlip =
+                new FullJitterBackOff(Duration.ofMillis(1), Duration.ofMillis(1));
+
+        boolean sawZero = IntStream.range(0, 20)
+                .anyMatch(i -> coinFlip.nextDelay(1).isZero());
 
         assertThat(sawZero).isTrue();
     }

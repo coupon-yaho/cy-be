@@ -23,6 +23,21 @@ import com.kafkick.storage.db.notification.entity.NotificationOutboxEntity;
 
 @Repository
 public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepository {
+    /**
+     * <b>여기는 아직 고정 1초다 — 발행 실패 경로만 흩뜨렸다(CY-903).</b>
+     *
+     * <p>같은 결함이 남아 있고, 사실 <b>이쪽이 더 잘 뭉친다</b>. 발행 실패는 확률적으로
+     * 흩어져 일어나지만 lease 만료는 <b>릴레이가 죽거나 재기동이 느릴 때 인플라이트가
+     * 한꺼번에</b> 만료되기 때문이다. 그것들이 전부 같은 1초 창으로 돌아온다.
+     *
+     * <p><b>같이 안 고친 이유는 한 줄이 아니어서다.</b> 이 메서드는 어댑터 안이라
+     * {@code FullJitterBackOff} 에 닿지 못한다. 백오프를 어댑터에 넘기면 CY-903 이 세운
+     * <i>"지연 정책은 릴레이에 둔다"</i> 를 부분적으로 되돌리므로, 어디에 두어야 두 경로가
+     * <b>한 벌</b>을 공유하는지가 먼저 정해져야 한다. 그 결정을 재시도 로직 리뷰에 섞으면
+     * 둘 다 흐려진다.
+     *
+     * <p>티켓 — <a href="https://github.com/coupon-yaho/cy-be/issues/196">#196 (CY-907)</a>
+     */
     private static final long EXPIRED_CLAIM_RETRY_DELAY_SECONDS = 1;
 
     private final NotificationOutboxJpaRepository repository;

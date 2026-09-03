@@ -40,9 +40,9 @@ public final class FullJitterBackOff {
     /**
      * {@code base << attempt} 의 자리이동 상한.
      *
-     * <p>{@code long} 이라 63 까지 밀 수 있지만, 30 이면 {@code base=200ms} 에서 이미
-     * 약 2.5년이라 어떤 {@code cap} 이든 넘는다. 더 밀 이유가 없고, 밀면 부호가 뒤집혀
-     * <b>음수 상한</b>이 되어 {@code nextLong} 이 던진다.
+     * <p>{@code long} 이라 63 까지 밀 수 있지만, 30 이면 {@code base=200ms} 에서
+     * {@code 200 × 2^30 = 214,748,364,800ms} <b>≈ 6.8년</b>이라 어떤 {@code cap} 이든 넘는다.
+     * 더 밀 이유가 없고, 밀면 부호가 뒤집혀 <b>음수 상한</b>이 되어 {@code nextLong} 이 던진다.
      */
     private static final int MAX_SHIFT = 30;
 
