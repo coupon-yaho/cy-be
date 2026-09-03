@@ -82,6 +82,28 @@ class FullJitterBackOffTest {
     }
 
     /**
+     * <b>큰 {@code base} 와 큰 {@code attempt} 를 함께 태운다.</b>
+     *
+     * <p>위 테스트는 {@code base=200ms} 픽스처로만 돌아서 <b>틀린 구현도 통과시킨다</b> —
+     * 작은 {@code base} 는 30번을 밀어도 {@code long} 을 안 넘기 때문이다.
+     * {@code base} 가 365일이면 {@code base << 30} 이 넘쳐
+     * {@code -3,031,965,985,755,103,232} 이 되고, 음수 상한을 받은 {@code nextLong} 이 던진다.
+     *
+     * <p>지금 호출 경로로는 도달하지 않는다({@code failureCount ≤ 10} 이라 자리이동이 11 까지다).
+     * 그래도 막는 이유는 이 클래스가 <b>예외로 발행을 막지 않겠다</b>고 스스로 적었기 때문이다.
+     */
+    @Test
+    void doesNotOverflowEvenWhenBaseIsAtTheConfigurableMaximum() {
+        Duration yearLong = Duration.ofDays(365);
+        FullJitterBackOff huge = new FullJitterBackOff(yearLong, yearLong);
+
+        for (int attempt : new int[] {1, 11, 29, 30, 31, Integer.MAX_VALUE}) {
+            assertThat(huge.nextDelay(attempt).toMillis())
+                    .isBetween(0L, yearLong.toMillis());
+        }
+    }
+
+    /**
      * 0 이나 음수는 1 로 본다. 지연 계산이 부르는 쪽의 산술 실수로 예외를 던져
      * <b>발행을 막는 것</b>이 더 나쁘다.
      */
