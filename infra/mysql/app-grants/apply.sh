@@ -68,9 +68,19 @@ app_roles="$(query_as_root "SELECT CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST
 #    끝났는지 아는 방법 셋을 모두 본다:
 #      ⑴ flyway_schema_history 가 있는가        — 없으면 아직 시작도 안 했다
 #      ⑵ 실패한 마이그레이션이 없는가            — 있으면 스키마가 확정되지 않았다
-#      ⑶ 그 테이블에 락을 잡을 수 있는가          — Flyway 는 도는 동안 이 테이블을 잡는다
+#      ⑶ 사용자 수준 락이 잡혀 있지 않은가        — Flyway 가 도는 동안 잡는 그 락이다
 #
 #    ⑶ 이 핵심이다. ⑴⑵ 만 보면 **마이그레이션이 절반쯤 진행된 순간**에도 통과한다.
+#
+#    ⚠️ 한때 ⑶ 을 `flyway_schema_history FOR UPDATE NOWAIT` 로 했는데 **틀렸다.**
+#       MySQL 용 Flyway 는 행 잠금이 아니라 **네임드 락**으로 직렬화한다 —
+#       flyway-mysql 12.4.0 의 MySQLNamedLockTemplate 이 `SELECT GET_LOCK(?,10)` 을
+#       쓴다(바이트코드로 확인). 행 잠금은 마이그레이션 중에도 잡히므로 그 검사는
+#       아무것도 못 걸렀다.
+#
+#       락 **이름**은 Flyway 내부에서 만들어 재현할 수 없다. 대신 MySQL 이 사용자 수준
+#       락을 performance_schema 에 노출한다 — 이름을 몰라도 **잡혀 있다는 사실**은 보인다
+#       (실측: OBJECT_TYPE='USER LEVEL LOCK', LOCK_STATUS='GRANTED').
 wait_seconds="${APP_GRANTS_WAIT_SECONDS:-120}"
 waited=0
 while :; do
@@ -84,11 +94,18 @@ while :; do
             echo "거부: 실패한 마이그레이션이 ${failed}건 있다. 스키마가 확정되지 않았다." >&2
             exit 1
         fi
-        # 락을 못 잡으면 Flyway 가 아직 돌고 있다. NOWAIT 라 즉시 돌아온다.
-        if query_as_root "START TRANSACTION;
-                          SELECT COUNT(*) FROM \`${MYSQL_DATABASE}\`.flyway_schema_history
-                           FOR UPDATE NOWAIT;
-                          COMMIT;" >/dev/null 2>&1; then
+        # 사용자 수준 락이 하나도 없으면 Flyway 가 놓은 것이다.
+        held="$(query_as_root "SELECT COUNT(*) FROM performance_schema.metadata_locks
+                                WHERE OBJECT_TYPE = 'USER LEVEL LOCK'
+                                  AND LOCK_STATUS = 'GRANTED'" || echo "unknown")"
+        if [ "${held}" = "0" ]; then
+            break
+        fi
+        if [ "${held}" = "unknown" ]; then
+            # performance_schema 가 꺼져 있거나 못 읽는다. 확인 못 한 것을 확인한 것처럼
+            # 넘어가지 않는다 — 순서를 사람이 지켜야 한다고 말하고 진행한다.
+            echo "경고: 사용자 수준 락을 확인할 수 없다(performance_schema). 마이그레이션이" >&2
+            echo "  끝난 뒤인지 스스로 판단할 수 없으므로 순서를 배포 절차가 지켜야 한다." >&2
             break
         fi
     fi
@@ -123,11 +140,17 @@ REVOKE IF EXISTS ALL PRIVILEGES, GRANT OPTION FROM '${DB_USERNAME}'@'%';
 GRANT CREATE, ALTER, INDEX, REFERENCES ON \`${MYSQL_DATABASE}\`.* TO '${DB_USERNAME}'@'%';
 "
 
-for app_role in ${app_roles}; do
+# **줄 단위로 읽는다.** `for x in ${app_roles}` 는 공백에서 쪼개므로
+# `'legacy reader'@'%'` 같은 유효한 역할명이 두 토큰이 되어 REVOKE 가 깨진다.
+# 그러면 이미 권한을 걷힌 앱 계정이 DML 없이 남는다 — obs 쪽 apply.sh 가 같은 이유로
+# `while IFS= read -r` 를 쓴다.
+while IFS= read -r app_role; do
     [ -n "${app_role}" ] || continue
     statements="${statements}
 REVOKE ${app_role} FROM '${DB_USERNAME}'@'%';"
-done
+done <<ROLES
+${app_roles}
+ROLES
 
 for table in ${tables}; do
     case "${table}" in

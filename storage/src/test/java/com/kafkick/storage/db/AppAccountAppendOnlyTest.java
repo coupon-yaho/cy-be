@@ -56,6 +56,9 @@ class AppAccountAppendOnlyTest {
     private static final String PROBE_USER = "app_probe";
     private static final String PROBE_PASSWORD = "probe-pw";
 
+    /** 프로브 계정에 심는 레거시 역할. 스크립트가 역할까지 걷는지 이것으로 잰다. */
+    private static final String LEGACY_ROLE = "app_probe_legacy_writer";
+
     /** 운영에서 도는 그 디렉터리다. 목록 파일을 같이 옮겨야 스크립트가 읽는다. */
     private static final Path SCRIPT_DIR = Path.of("..", "infra", "mysql", "app-grants");
 
@@ -99,6 +102,15 @@ class AppAccountAppendOnlyTest {
         // 도커 이미지가 만드는 계정과 같은 출발점 — 스키마 전권이다.
         root.execute("GRANT ALL PRIVILEGES ON `" + mySqlContainer.getDatabaseName()
                 + "`.* TO '" + PROBE_USER + "'@'%'");
+
+        // **역할로도 권한이 들어온다.** REVOKE ALL PRIVILEGES 는 역할을 떼지 않으므로,
+        // 스크립트가 role_edges 를 안 걷으면 이 역할이 UPDATE·DELETE 를 그대로 준다.
+        // 이 줄이 없으면 역할 회수 경로가 깨져도 아래 ②③ 이 통과한다(리뷰가 짚었다).
+        root.execute("CREATE ROLE IF NOT EXISTS '" + LEGACY_ROLE + "'");
+        root.execute("GRANT UPDATE, DELETE ON `" + mySqlContainer.getDatabaseName()
+                + "`.* TO '" + LEGACY_ROLE + "'");
+        root.execute("GRANT '" + LEGACY_ROLE + "' TO '" + PROBE_USER + "'@'%'");
+        root.execute("SET DEFAULT ROLE ALL TO '" + PROBE_USER + "'@'%'");
         root.execute("FLUSH PRIVILEGES");
 
         mySqlContainer.copyFileToContainer(
@@ -128,6 +140,7 @@ class AppAccountAppendOnlyTest {
             probeDataSource.close();
         }
         rootTemplate.get().execute("DROP USER IF EXISTS '" + PROBE_USER + "'@'%'");
+        rootTemplate.get().execute("DROP ROLE IF EXISTS '" + LEGACY_ROLE + "'");
         if (rootDataSource != null) {
             rootDataSource.close();
             rootDataSource = null;
