@@ -350,12 +350,11 @@ services:
   #    풀), 스크립트가 그것과 경쟁하면 테이블 목록이 불완전해지고 **빠진 테이블은 DML 권한을
   #    못 받아 앱이 런타임에 1142 로 죽는다.**
   #
-  # ⚠️ **아래 depends_on 은 그 순서를 보장하지 못한다.** `service_started` 는 프로세스 시작만
-  #    기다리고 api 에는 healthcheck 가 없다. 그래서 **스크립트가 스스로 기다린다** —
-  #    이 빌드가 싣고 온 마이그레이션 버전이 전부 flyway_schema_history 에 success=1 로
-  #    들어올 때까지 폴링한다. 그래서 db/migration 을 읽기 전용으로 마운트한다.
-  #    `restart: no` 라 한 번 실패하면 재시도되지 않으므로 거부보다 대기가 맞다.
-  #    대기 상한은 APP_GRANTS_WAIT_SECONDS(기본 120초).
+  # 순서는 **아래 depends_on 이 지킨다** — api 의 healthcheck 가 actuator 응답을 보는데,
+  # 그 응답은 Flyway 가 끝난 뒤에야 나온다(api 의 healthcheck 주석에 실측을 적었다).
+  # `restart: no` 라 한 번 실패하면 재시도되지 않으므로, 스크립트가 스스로 판정하려 들지
+  # 않고 compose 가 세운 순서를 믿는다 — 스스로 판정하려던 두 번의 시도가 왜 틀렸는지는
+  # apply.sh ② 에 적혀 있다.
   app-grants:
     image: mysql:8.4
     profiles: ["app-grants"]
@@ -368,18 +367,15 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       DB_USERNAME: ${DB_USERNAME}
       MYSQL_HOST: mysql
-      # 스크립트가 마이그레이션을 기다리는 상한. 안 넘기면 주석이 약속한 값을 못 쓴다.
-      APP_GRANTS_WAIT_SECONDS: ${APP_GRANTS_WAIT_SECONDS:-120}
     depends_on:
       mysql:
         condition: service_healthy
       api:
-        condition: service_started
+        # **service_started 가 아니다.** 프로세스 시작은 Flyway 종료를 뜻하지 않는다.
+        condition: service_healthy
     volumes:
       # 디렉터리째 마운트한다. apply.sh 가 같은 디렉터리의 append-only.txt 를 읽는다.
       - ./infra/mysql/app-grants:/app-grants:ro
-      # Flyway 종료 판정의 정답지. 파일명의 버전을 flyway_schema_history 와 대조한다.
-      - ./storage/src/main/resources/db/migration:/migrations:ro
     entrypoint: ["sh", "/app-grants/apply.sh"]
 
   api:
@@ -425,6 +421,30 @@ services:
       #
       #    확인은 컨테이너 안에서 한다:
       #      docker exec coupon-yaho-api-1 wget -qO- localhost:9090/actuator/health
+    # **Flyway 종료 신호다.** Spring 은 Flyway 를 컨텍스트 초기화 중에 돌리고 웹 서버는
+    # 그 뒤에 뜬다 — 실측으로 기동 로그에서 "Successfully applied 45 migrations" 가
+    # "Tomcat started on port" 보다 앞선다. 그래서 actuator 가 응답한다는 것은
+    # **마이그레이션이 끝났다**는 뜻이고, 그 신호를 **실행 중인 이미지 자신이** 낸다.
+    # app-grants 가 이것을 기다린다(service_healthy) — 체크아웃과 이미지 태그가 어긋나도
+    # 정확한 유일한 판정이다.
+    #
+    # ⚠️ **/actuator/health 가 아니라 /actuator/metrics 다.** 여기서 알고 싶은 것은
+    #    "떴는가"(=Flyway 가 끝났는가)이지 "건강한가" 가 아니다. health 는 Redis·Kafka
+    #    인디케이터를 합산하므로, 위에서 kafka 를 depends_on 에 일부러 안 적어 둔 회차에서
+    #    api 가 영영 healthy 가 안 되고 **권한 적용이 통째로 안 도는** 상태가 된다.
+    #    metrics 는 컨텍스트가 떴으면 200 을 준다 — 딱 필요한 만큼만 본다.
+    #
+    # 포트는 관리 포트다. .env 가 덮을 수 있으므로 같은 변수를 쓴다 — 9090 을 박으면
+    # 그 값을 바꾼 환경에서 api 가 영영 healthy 가 안 된다.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:${MANAGEMENT_SERVER_PORT:-9090}/actuator/metrics
+      interval: 5s
+      timeout: 3s
+      # 마이그레이션 45건이 도는 시간까지 포함한다 — 첫 기동은 스키마를 통째로 만든다.
+      start_period: 60s
+      retries: 30
     depends_on:
       mysql:
         condition: service_healthy
