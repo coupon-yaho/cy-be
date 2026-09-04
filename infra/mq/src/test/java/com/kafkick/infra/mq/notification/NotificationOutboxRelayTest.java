@@ -1,6 +1,7 @@
 package com.kafkick.infra.mq.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -165,9 +166,14 @@ class NotificationOutboxRelayTest {
     }
 
     /**
-     * <b>알림 릴레이 설정 하나가 접수 API 기동 전체를 막으면 안 된다.</b>
-     * 상한이 없으면 큰 lease 에서 {@code Duration.toMillis()} 가
-     * {@code ArithmeticException} 으로 터진다.
+     * <b>어차피 기동이 안 될 것이라면 원인을 말하고 죽는다.</b>
+     *
+     * <p>상한이 없으면 큰 lease 에서 {@code Duration.toMillis()} 가
+     * {@code ArithmeticException} 으로 죽는데, 그 예외는 <b>무엇이 틀렸는지 말하지 않는다.</b>
+     * 이 검사는 기동을 막는 것을 피하지 않는다 — 같은 기동 실패를 <b>읽을 수 있게</b> 만든다.
+     *
+     * <p>상한은 저장소 어댑터가 받는 범위(365일)와 같다. 더 좁히면 저장소가 받는 설정을
+     * 릴레이가 거부하게 된다.
      */
     @Test
     void rejectsLeaseTooLargeToConvertSafely() {
@@ -176,6 +182,15 @@ class NotificationOutboxRelayTest {
                 new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("lease");
+    }
+
+    /** 저장소가 받는 범위(365일)는 릴레이도 받아야 한다. 여기서 더 좁히면 설정이 갈린다. */
+    @Test
+    void acceptsTheSameLeaseRangeTheAdapterSupports() {
+        assertThatCode(() -> new NotificationOutboxRelay(outboxes, notifications, publisher,
+                Duration.ofDays(365), BATCH, new FullJitterBackOff(BASE, CAP),
+                Clock.fixed(AT, ZoneOffset.UTC)))
+                .doesNotThrowAnyException();
     }
 
     @Test
