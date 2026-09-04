@@ -27,5 +27,10 @@ issuance_histories
 #   docker compose --profile app-grants run --rm app-grants
 #
 #   ⚠️ **Flyway 뒤에 돌린다.** 마이그레이션이 이 계정으로 돌고, 새 테이블은 이 스크립트가
-#      다시 돌기 전까지 DML 권한이 없다. compose 가 api 기동 뒤로 묶어 둔 이유다.
-#      마이그레이션을 추가하는 배포에서는 **다시 돌려야 한다.**
+#      다시 돌기 전까지 DML 권한이 없다. 마이그레이션을 추가하는 배포에서는 **다시 돌려야 한다.**
+#      스크립트가 flyway_schema_history 를 보고 미완이면 거부하지만, compose 의
+#      service_started 는 프로세스 시작만 기다리므로 **그 거부에 기대지 말고 순서를 지켜라.**
+#
+#   ⚠️ **DROP 권한을 주지 않는다.** TRUNCATE TABLE 이 DROP 권한으로 돌아서, 주면 DELETE 를
+#      막아도 이력을 통째로 날릴 수 있다. 마이그레이션이 DROP TABLE 을 쓰게 되면 그 자리에서
+#      막히고, 그때는 **DDL 계정을 분리**해야 한다 — 이 파일을 고쳐 DROP 을 주면 안 된다.
