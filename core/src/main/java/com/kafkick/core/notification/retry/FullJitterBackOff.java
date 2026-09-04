@@ -1,5 +1,5 @@
 // 실패한 발행 명령을 언제 다시 집을지 정합니다. 값이 흩어지는 것이 이 클래스의 목적입니다.
-package com.kafkick.infra.mq.notification;
+package com.kafkick.core.notification.retry;
 
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;

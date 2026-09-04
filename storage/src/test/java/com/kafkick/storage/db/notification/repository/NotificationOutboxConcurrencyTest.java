@@ -23,10 +23,13 @@ import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
+import com.kafkick.core.notification.retry.NotificationRetryBackOffConfig;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
-@Import(NotificationOutboxRepositoryImpl.class)
+// 지연 정책은 core 가 소유한다(CY-907). @DataJpaTest 는 그 @Configuration 을 스캔하지 않으므로
+// 여기서 명시로 붙인다 — 안 붙이면 어댑터가 백오프를 못 받아 컨텍스트가 안 뜬다.
+@Import({NotificationOutboxRepositoryImpl.class, NotificationRetryBackOffConfig.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationOutboxConcurrencyTest {
     private static final Duration LEASE = Duration.ofMinutes(1);

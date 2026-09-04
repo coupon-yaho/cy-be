@@ -1,4 +1,4 @@
-package com.kafkick.infra.mq.notification;
+package com.kafkick.core.notification.retry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

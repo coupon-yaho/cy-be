@@ -18,8 +18,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.event.NotificationRequestedEventPublisher;
+import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.observation.DomainMeterNames;
-import com.kafkick.infra.mq.notification.FullJitterBackOff;
 import com.kafkick.infra.mq.notification.NotificationOutboxRelay;
 import com.kafkick.infra.mq.notification.NotificationRelayProperties;
 import com.kafkick.infra.mq.notification.NotificationRelayScheduler;
@@ -82,6 +82,7 @@ public class NotificationRelayConfig {
             NotificationRequestedEventPublisher publisher,
             NotificationRelayProperties properties,
             ThreadPoolTaskExecutor notificationRelayWorkers,
+            FullJitterBackOff notificationRetryBackOff,
             ObjectProvider<Clock> clocks) {
         return new NotificationOutboxRelay(outboxes, notifications, publisher,
                 properties.getLease(),
@@ -91,7 +92,9 @@ public class NotificationRelayConfig {
                 // **풀 크기와 같은 값이어야 한다.** 여기서 갈리면 lease 검사가 실제보다
                 // 얕은 파도를 가정하고 통과시킨다. 그래서 둘 다 같은 속성에서 꺼낸다.
                 properties.getWorkerCount(),
-                new FullJitterBackOff(properties.getBackoffBase(), properties.getBackoffCap()),
+                // **여기서 새로 만들지 않는다.** lease 만료 회수 경로(storage 어댑터)가 같은
+                // 빈을 주입받으므로, 두 경로가 한 벌을 공유한다는 것이 배선으로 강제된다.
+                notificationRetryBackOff,
                 clocks.getIfAvailable(Clock::systemUTC));
     }
 
