@@ -16,10 +16,13 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.domain.NotificationOutbox;
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.notification.domain.NotificationOutboxStatus;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
@@ -28,6 +31,12 @@ import com.kafkick.storage.db.notification.entity.NotificationOutboxEntity;
 
 @Repository
 public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepository {
+    /**
+     * 이 횟수째 실패에서 종착시킨다. <b>여기 하나에만 적는다</b> — 만료 회수도 같은 값을
+     * 쓰는데, 두 벌로 두면 한쪽만 고쳐질 때 <b>경로에 따라 종착 시점이 달라진다.</b>
+     */
+    private static final int DEAD_AFTER_FAILURES = 10;
+
 
     private final NotificationOutboxJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
@@ -195,13 +204,18 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                 """, (rs, row) -> new ExpiredClaim(rs.getLong("id"), rs.getInt("failure_count")),
                 -leaseSeconds, max);
 
+        // **센 것을 모아 뒀다가 커밋 뒤에 낸다.** 이 트랜잭션은 여러 행을 고치므로, 뒤쪽
+        // 행의 오류가 앞쪽까지 되돌려도 미터는 트랜잭션을 안 타 숫자만 그대로 남는다.
+        List<Duration> recovered = new ArrayList<>();
+        int deaths = 0;
         for (ExpiredClaim claim : expired) {
             int nextFailureCount = claim.failureCount() + 1;
-            // failureCount 는 **이번 실패를 세기 전** 값이라 +1 이 이번이 몇 번째 재시도인지다.
-            // 릴레이의 실패 경로가 쓰는 것과 같은 계산이다 — 같은 객체를 쓰므로 갈릴 수 없다.
+            boolean dead = nextFailureCount >= DEAD_AFTER_FAILURES;
+            String nextStatus = dead ? "DEAD" : "PENDING";
+            // 지연은 **건마다 따로** 뽑는다. 한 번 뽑아 배치 전체에 쓰면 지터를 넣고도
+            // 같이 만료된 것들이 여전히 같은 시각으로 돌아온다.
             Duration retryDelay = backOff.nextDelay(nextFailureCount);
             long retryMicros = durationMicros(retryDelay, "expired claim retry delay");
-            String nextStatus = nextFailureCount >= 10 ? "DEAD" : "PENDING";
             int updated = jdbcTemplate.update("""
                     UPDATE notification_outbox
                        SET failure_count=?, status=?,
@@ -211,23 +225,55 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                        AND claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))
                     """, nextFailureCount, nextStatus, retryMicros,
                     claim.id(), claim.failureCount(), -leaseSeconds);
-            if (updated == 1) {
-                // **쓰기가 실제로 먹었을 때만 센다.** 조건부 갱신이라 남이 먼저 회수하면
-                // 0행이고, 그때 세면 지표가 실제 회수보다 크게 나온다.
+            if (updated != 1) {
+                // 조건부 갱신이라 남이 먼저 회수하면 0행이다. 그때 세면 지표가 실제
+                // 회수보다 커진다.
                 //
                 // ⚠️ **이 분기는 테스트가 못 태운다.** 0행이 되려면 SELECT 와 UPDATE 사이에
-                //    남이 같은 행을 회수해야 하는데, 그 끼어듦을 테스트가 확실히 일으킬
-                //    방법이 없다. 두 스레드로 돌려 보는 테스트는 끼어듦이 안 나면 조용히
-                //    통과하므로 없는 것만 못하다. 돌연변이로 확인했고 — 이 조건을 빼도
-                //    아무 테스트도 안 깨진다 — 그 사실을 숨기지 않고 적어 둔다.
-                //    바로 아래 DEAD 판정이 예전부터 같은 모양이고 같은 한계를 갖는다.
-                meter.leaseExpired(retryDelay);
-                if (nextFailureCount >= 10) {
-                    failManualNotification(claim.id());
-                    meter.dead(NotificationOutboxMeter.LEASE_EXPIRED);
-                }
+                //    남이 같은 행을 회수해야 하는데, 그 끼어듦을 확실히 일으킬 방법이 없다.
+                //    두 스레드로 돌려 보는 테스트는 끼어듦이 안 나면 조용히 통과하므로
+                //    없는 것만 못하다. 그 사실을 숨기지 않고 적어 둔다.
+                continue;
+            }
+            if (dead) {
+                failManualNotification(claim.id());
+                deaths++;
+            } else {
+                recovered.add(retryDelay);
             }
         }
+
+        int deadCount = deaths;
+        afterCommit(() -> {
+            recovered.forEach(delay -> meter.retried(OutboxRetryReason.LEASE_EXPIRED, delay));
+            for (int i = 0; i < deadCount; i++) {
+                meter.dead(OutboxRetryReason.LEASE_EXPIRED);
+            }
+        });
+    }
+
+    /**
+     * 커밋된 <b>뒤에</b> 돌린다. 트랜잭션 밖이면 그 자리에서 돌린다.
+     *
+     * <p>미터는 트랜잭션을 안 탄다 — 쓰기 전에 세면 롤백돼도 지표에는 남고, 그 숫자를
+     * 보는 사람은 일어나지 않은 일을 본다.
+     *
+     * <p><b>패키지 가시성인 이유</b> — 롤백돼도 안 도는지를 직접 태워 보려고 열었다.
+     * {@code private} 로 두면 그 분기를 태울 방법이 없고, 실제로 처음에는
+     * 돌연변이(커밋 전에 세기)가 <b>안 잡혔다.</b>
+     */
+    static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        action.run();
+                    }
+                });
     }
 
     private static long durationMicros(Duration duration, String name) {
@@ -260,7 +306,9 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay) {
+    public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay,
+            OutboxRetryReason reason) {
+        Objects.requireNonNull(reason, "reason");
         long retryMicros = durationMicros(retryDelay, "outbox retry delay");
         Optional<Integer> current = jdbcTemplate.query("""
                 SELECT failure_count FROM notification_outbox
@@ -269,7 +317,8 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                 .stream().findFirst();
         if (current.isEmpty()) return false;
         int nextFailureCount = current.orElseThrow() + 1;
-        String nextStatus = nextFailureCount >= 10 ? "DEAD" : "PENDING";
+        boolean dead = nextFailureCount >= DEAD_AFTER_FAILURES;
+        String nextStatus = dead ? "DEAD" : "PENDING";
         boolean updated = jdbcTemplate.update("""
                 UPDATE notification_outbox
                    SET failure_count=?, status=?,
@@ -278,13 +327,21 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                  WHERE id=? AND status='IN_PROGRESS' AND claim_token=? AND failure_count=?
                 """, nextFailureCount, nextStatus, retryMicros,
                 outboxId, claimToken, current.orElseThrow()) == 1;
-        if (updated && nextFailureCount >= 10) {
-            failManualNotification(outboxId);
-            // 사유를 발행 실패로 적는다 — 어댑터는 릴레이가 왜 되돌렸는지 안 받는다.
-            // 그 한계는 NotificationOutboxMeter.PUBLISH_FAILED 에 적어 뒀다.
-            meter.dead(NotificationOutboxMeter.PUBLISH_FAILED);
+        if (!updated) {
+            // 남이 먼저 가져갔다. **아무것도 세지 않는다** — 이 건은 이미 남의 것이다.
+            return false;
         }
-        return updated;
+        if (dead) {
+            failManualNotification(outboxId);
+        }
+        afterCommit(() -> {
+            if (dead) {
+                meter.dead(reason);
+            } else {
+                meter.retried(reason, retryDelay);
+            }
+        });
+        return true;
     }
 
     /**

@@ -29,10 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
-import com.kafkick.core.observation.DomainMeterNames;
-import io.micrometer.core.instrument.Timer;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.AttemptTrigger;
@@ -63,12 +60,6 @@ class NotificationOutboxRelayTest {
     @Mock NotificationRepository notifications;
     @Mock NotificationRequestedEventPublisher publisher;
 
-    /**
-     * <b>대역이 아니라 진짜 레지스트리다.</b> 미터가 실제로 등록되는지, 태그 값이 닫혀
-     * 있는지를 이 안에서 읽어 확인한다 — 모의 객체로는 이름과 태그가 틀려도 통과한다.
-     */
-    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
-
     private NotificationOutboxRelay relay;
 
     @BeforeEach
@@ -79,8 +70,8 @@ class NotificationOutboxRelayTest {
     private NotificationOutboxRelay relayWith(Duration lease, int batch, Executor workers,
             int maxInFlight, int workerCount) {
         return new NotificationOutboxRelay(outboxes, notifications, publisher, lease, batch,
-                new NotificationRetryMeter(registry), workers, maxInFlight, workerCount,
-                new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC));
+                workers, maxInFlight, workerCount, new FullJitterBackOff(BASE, CAP),
+                Clock.fixed(AT, ZoneOffset.UTC));
     }
 
     @Test
@@ -283,7 +274,7 @@ class NotificationOutboxRelayTest {
 
         assertThat(relay.inFlight()).isZero();
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
-                any(), any());
+                any(), any(), any());
     }
 
     /**
@@ -320,7 +311,7 @@ class NotificationOutboxRelayTest {
         verify(outboxes).releaseClaim(3L, "token-3");
         verify(outboxes, never()).releaseClaim(1L, "token-1");
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
-                any(), any());
+                any(), any(), any());
         assertThat(relay.inFlight()).isZero();
     }
 
@@ -444,42 +435,30 @@ class NotificationOutboxRelayTest {
         assertThat(relay.poll()).isEqualTo(1);
 
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
-                any(), any());
+                any(), any(), any());
     }
 
     /**
-     * <b>되돌린 것이 세어지고, 계획한 그 값이 히스토그램에 들어간다.</b>
+     * <b>두 실패 경로가 서로 다른 사유로 넘어간다.</b>
      *
-     * <p>쓰는 값과 세는 값이 <b>다르면</b> 히스토그램이 실제로 적힌 것과 다른 분포를
-     * 보여 준다 — 그 지표를 믿고 보는 사람이 있다는 점에서 지표가 없는 것보다 나쁘다.
-     * 그래서 {@code markFailed} 에 넘어간 값과 {@code Timer} 에 들어간 값을 <b>맞대어</b>
-     * 본다. 지연이 난수라 "같은 값" 이라는 단언이 가능한 유일한 방법이다.
+     * <p>첫 판은 릴레이가 직접 셌는데 틀렸다 — 릴레이는 그 쓰기가 먹었는지도, 상한을
+     * 넘겨 종착했는지도 모른다. 세는 것은 결과를 아는 저장소가 하고, <b>사유만</b>
+     * 여기서 넘어간다. 그래서 여기서 잴 것은 "무엇이 넘어갔는가" 하나다.
      */
     @Test
-    void aRetryIsCountedWithTheVeryDelayItWasScheduledWith() {
+    void theMissingNotificationPathPassesItsOwnReason() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
         when(notifications.findById(41L)).thenReturn(Optional.empty());
 
         relay.poll();
 
-        Duration written = capturedRetryDelay();
-        Timer timer = registry.find(DomainMeterNames.OUTBOX_RETRY_DELAY)
-                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.NOTIFICATION_MISSING)
-                .timer();
-        assertThat(timer).as("미터가 등록되지 않았습니다").isNotNull();
-        assertThat(timer.count()).isEqualTo(1);
-        assertThat((long) timer.totalTime(TimeUnit.NANOSECONDS))
-                .as("적어 넣은 지연과 세어 넣은 지연이 다르면 히스토그램이 거짓을 그린다")
-                .isEqualTo(written.toNanos());
-
-        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY)
-                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.NOTIFICATION_MISSING)
-                .counter().count()).isEqualTo(1.0);
+        verify(outboxes).markFailed(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("token"), any(),
+                org.mockito.ArgumentMatchers.eq(OutboxRetryReason.NOTIFICATION_MISSING));
     }
 
-    /** 두 실패 경로가 <b>서로 다른 사유</b>로 잡혀야 한다. 한 값으로 뭉치면 구분이 사라진다. */
     @Test
-    void thePublishFailurePathIsCountedUnderItsOwnReason() {
+    void thePublishFailurePathPassesItsOwnReason() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
         when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
         org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
@@ -487,42 +466,15 @@ class NotificationOutboxRelayTest {
 
         relay.poll();
 
-        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY)
-                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.PUBLISH_FAILED)
-                .counter().count()).isEqualTo(1.0);
-        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY)
-                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.NOTIFICATION_MISSING)
-                .counter().count())
-                .as("두 경로가 한 사유로 뭉치면 무엇이 실패했는지 못 읽는다")
-                .isZero();
-    }
-
-    /**
-     * <b>한 번도 실패하지 않은 인스턴스에도 시계열이 있어야 한다.</b>
-     *
-     * <p>없으면 대시보드가 <b>0 과 "지표 없음" 을 구분하지 못한다</b> — {@code rate()} 가
-     * 둘 다 빈칸으로 그린다. 그래서 미터를 생성자에서 미리 등록한다.
-     */
-    @Test
-    void everyReasonHasASeriesBeforeAnythingFails() {
-        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY).counters())
-                .as("실패가 나야 시계열이 생기면 0 과 '지표 없음' 이 같아 보인다")
-                .hasSize(2);
-    }
-
-    /** 태그 값을 열어 두면 오타 하나가 아무도 안 보는 시계열을 만든다. */
-    @Test
-    void anUnknownReasonIsRejectedRatherThanRegistered() {
-        NotificationRetryMeter meter = new NotificationRetryMeter(registry);
-
-        assertThatThrownBy(() -> meter.retried("typo", Duration.ofMillis(1)))
-                .isInstanceOf(IllegalArgumentException.class);
+        verify(outboxes).markFailed(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("token"), any(),
+                org.mockito.ArgumentMatchers.eq(OutboxRetryReason.PUBLISH_FAILED));
     }
 
     private Duration capturedRetryDelay() {
         ArgumentCaptor<Duration> delay = ArgumentCaptor.forClass(Duration.class);
         verify(outboxes).markFailed(org.mockito.ArgumentMatchers.eq(7L),
-                org.mockito.ArgumentMatchers.eq("token"), delay.capture());
+                org.mockito.ArgumentMatchers.eq("token"), delay.capture(), any());
         return delay.getValue();
     }
 

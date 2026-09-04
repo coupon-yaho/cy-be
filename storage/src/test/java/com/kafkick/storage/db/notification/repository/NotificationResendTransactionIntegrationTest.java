@@ -31,6 +31,7 @@ import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.notification.retry.NotificationRetryBackOffConfig;
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
@@ -176,7 +177,8 @@ class NotificationResendTransactionIntegrationTest {
         }
 
         @Override
-        public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay) {
+        public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay,
+                OutboxRetryReason reason) {
             throw new UnsupportedOperationException();
         }
 

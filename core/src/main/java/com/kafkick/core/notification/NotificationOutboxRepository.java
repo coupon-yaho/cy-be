@@ -30,7 +30,19 @@ public interface NotificationOutboxRepository {
      */
     List<NotificationOutboxClaim> claimBatch(Duration lease, int max);
     boolean markPublished(Long outboxId, String claimToken, Instant publishedAt);
-    boolean markFailed(Long outboxId, String claimToken, Duration retryDelay);
+    /**
+     * 실패를 적고 되돌린다. 실패 횟수가 상한에 닿으면 <b>되돌리지 않고 종착시킨다.</b>
+     *
+     * <p><b>{@code reason} 은 지표 때문에 받는다.</b> 무엇이 실패했는지는 부르는 쪽만 알고,
+     * <b>그 쓰기가 실제로 먹었는지·상한을 넘겼는지는 여기만 안다.</b> 둘이 만나야 지표가
+     * 맞으므로 사유가 포트를 타고 넘어온다 — 안 받으면 어댑터가 모든 실패를 한 사유로
+     * 뭉뚱그리고, 되돌린 것과 <b>종착한 것</b>을 구분하지 못해 재시도 수를 부풀린다.
+     *
+     * @return 되돌렸거나 종착시켰으면 {@code true}. 토큰이 안 맞거나 이미 남이 가져갔으면
+     *         {@code false} — <b>그때는 아무것도 세지 않는다</b>, 이 건은 이미 남의 것이다
+     */
+    boolean markFailed(Long outboxId, String claimToken, Duration retryDelay,
+            OutboxRetryReason reason);
 
     /**
      * <b>집어 놓고 보내 보지도 못한 것을 되돌린다.</b> 즉시 다시 집을 수 있는 상태로 만들고
