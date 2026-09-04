@@ -17,11 +17,26 @@ public class NotificationOutboxRelay {
     private final NotificationOutboxRepository outboxes;
     private final NotificationRepository notifications;
     private final NotificationRequestedEventPublisher publisher;
+    /**
+     * 건당 발행에 넉넉히 잡는 시간. <b>측정값이 아니라 예산이다</b> — 이 값을 넘기면
+     * 배치가 lease 를 태워 뒤쪽 행이 회수된다는 관계를 기동 시 검사하는 데만 쓴다.
+     *
+     * <p>로컬 Kafka 발행은 보통 한 자릿수 ms 다. 100ms 는 그 열 배 이상이라 평시에는
+     * 안 걸리고, <b>배치를 크게 잡거나 lease 를 줄일 때</b> 걸린다 — 그 두 경우가 정확히
+     * 위험한 경우다.
+     */
+    private static final int PER_ITEM_PUBLISH_BUDGET_MILLIS = 100;
+
     private final Duration lease;
     private final int claimBatchSize;
     private final FullJitterBackOff backOff;
     private final Clock clock;
 
+    /**
+     * @throws IllegalArgumentException {@code claimBatchSize} 가 1 미만이거나,
+     *         {@code claimBatchSize × 건당 발행 예산} 이 {@code lease} 이상일 때 —
+     *         후자는 배치 뒤쪽 행이 처리 전에 회수되어 <b>중복 발행</b>이 되는 구성이다
+     */
     public NotificationOutboxRelay(NotificationOutboxRepository outboxes,
             NotificationRepository notifications,
             NotificationRequestedEventPublisher publisher,
@@ -37,6 +52,18 @@ public class NotificationOutboxRelay {
             throw new IllegalArgumentException(
                     "claimBatchSize 는 1 이상이어야 합니다. 0 이면 릴레이가 아무것도 집지 않고 "
                             + "조용히 정상으로 보입니다. 받은 값=" + claimBatchSize);
+        }
+        // **배치 전체가 한 lease 를 공유한다.** 집는 순간 전부 claimed_at 이 찍히는데
+        // 발행은 차례로 도므로, 뒤쪽 행은 앞쪽이 끝나기를 기다리는 동안 lease 를 태운다.
+        // 그 합이 lease 를 넘으면 **아직 처리도 안 한 행이 회수되어 남이 다시 발행한다.**
+        long budgetMillis = claimBatchSize * (long) PER_ITEM_PUBLISH_BUDGET_MILLIS;
+        if (budgetMillis >= lease.toMillis()) {
+            throw new IllegalArgumentException(
+                    "claimBatchSize × 건당 발행 예산(" + PER_ITEM_PUBLISH_BUDGET_MILLIS
+                            + "ms) 이 lease 이상입니다. 배치 뒤쪽 행이 처리 전에 회수되어 "
+                            + "다른 워커가 같은 이벤트를 다시 발행합니다. "
+                            + "claimBatchSize=" + claimBatchSize + " 예산합=" + budgetMillis
+                            + "ms lease=" + lease.toMillis() + "ms");
         }
         this.claimBatchSize = claimBatchSize;
         this.backOff = Objects.requireNonNull(backOff, "backOff");

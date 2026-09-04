@@ -73,6 +73,10 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                 .map(NotificationOutboxEntity::getTrigger);
     }
 
+    /**
+     * @throws IllegalArgumentException {@code max} 가 1 미만이거나 {@code lease} 가
+     *         정수 초가 아닐 때
+     */
     @Override
     public List<NotificationOutboxClaim> claimBatch(Duration lease, int max) {
         if (max < 1) {
@@ -150,9 +154,14 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * <p>한 건씩 되돌리면 <b>릴레이가 죽었을 때 회복이 가장 느리다</b> — 그때는 인플라이트가
      * 한꺼번에 만료되는데, 주기마다 한 건씩만 걷으면 밀린 만큼 주기가 곱해진다.
      *
-     * <p>선점 표시와 달리 여기는 {@code SKIP LOCKED} 를 쓰지 않는다. 되돌리는 것은
-     * <b>남이 잡고 있지 않은 행</b>(lease 가 지났다는 것이 그 뜻이다)이라 경합이 드물고,
-     * 조건부 갱신({@code AND failure_count=?})이 이미 동시 회수를 가른다.
+     * <p>선점 표시와 달리 여기는 {@code SKIP LOCKED} 를 쓰지 않는다.
+     * <b>lease 만료는 애플리케이션 시간 조건이지 DB 락이 없다는 뜻이 아니다</b> —
+     * 만료된 행을 다른 트랜잭션이 그 순간 잡고 있을 수 있고, 그래서 이 경로는 여전히
+     * {@code PessimisticLockingFailureException} 을 만날 수 있다(부르는 쪽이 잡아 접는다).
+     *
+     * <p>그럼에도 안 쓰는 이유는 <b>정확성이 이미 다른 데서 나오기 때문</b>이다 —
+     * 조건부 갱신({@code AND failure_count=?})이 동시 회수를 가르므로 둘이 부딪혀도
+     * 한쪽만 이긴다. 여기서 건너뛰면 오히려 회수가 밀린다.
      *
      * <p>⚠️ 지연은 아직 고정 1초다 — 발행 실패 경로만 흩뜨렸다(CY-903). 근거와 후속은
      * {@link #EXPIRED_CLAIM_RETRY_DELAY_SECONDS} 에 적었다.
