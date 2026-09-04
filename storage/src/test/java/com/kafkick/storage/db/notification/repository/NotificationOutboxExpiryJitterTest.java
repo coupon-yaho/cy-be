@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.observation.DomainMeterNames;
 import com.kafkick.core.notification.domain.AttemptTrigger;
@@ -164,7 +165,7 @@ class NotificationOutboxExpiryJitterTest {
         repository.claimBatch(Duration.ofSeconds(60), ROWS);
 
         Timer delays = registry.find(DomainMeterNames.OUTBOX_RETRY_DELAY)
-                .tag(DomainMeterNames.TAG_REASON, NotificationOutboxMeter.LEASE_EXPIRED)
+                .tag(DomainMeterNames.TAG_REASON, OutboxRetryReason.LEASE_EXPIRED.tag())
                 .timer();
         assertThat(delays).as("미터가 등록되지 않았습니다").isNotNull();
         assertThat(delays.count())
@@ -189,6 +190,95 @@ class NotificationOutboxExpiryJitterTest {
         assertThat(delays.max(TimeUnit.MICROSECONDS))
                 .as("최대와 평균이 같으면 히스토그램이 한 점으로 뭉친 것이다")
                 .isGreaterThan(delays.mean(TimeUnit.MICROSECONDS));
+    }
+
+    /**
+     * <b>종착한 것은 재시도가 아니다.</b>
+     *
+     * <p>열 번째 실패에서 명령은 {@code DEAD} 로 가고 <b>다시 시도되지 않는다.</b> 그런데
+     * 첫 판은 그것까지 {@code app.outbox.retry} 로 셌고, <b>아무도 기다리지 않을 지연을</b>
+     * 히스토그램에 넣었다 — 재시도 수는 부풀고 분포는 오염된다. 리뷰가 짚었다.
+     *
+     * <p>{@code failure_count} 를 상한 직전까지 올려 두고 한 번 더 만료시킨다.
+     * 그 한 건은 {@code dead} 로만 세어져야 한다.
+     */
+    @Test
+    @DisplayName("종착한 건은 dead 로만 세어진다 — 기다릴 일 없는 지연이 분포에 안 섞인다")
+    void aDeadCommandIsNotCountedAsARetry() {
+        repository.save(NotificationOutbox.pending(NOTIFICATION_ID, 1, AttemptTrigger.INITIAL, AT));
+        repository.claimBatch(Duration.ofMinutes(1), 1);
+        // 다음 실패가 상한(10)에 닿도록 직전까지 올려 둔다.
+        jdbcTemplate.update("UPDATE notification_outbox SET failure_count=9"
+                + " WHERE notification_id=?", NOTIFICATION_ID);
+        jdbcTemplate.update("UPDATE notification_outbox"
+                + " SET claimed_at=TIMESTAMPADD(SECOND,-120,CURRENT_TIMESTAMP(6))"
+                + " WHERE notification_id=?", NOTIFICATION_ID);
+
+        double retriesBefore = retryCount(OutboxRetryReason.LEASE_EXPIRED);
+        double deathsBefore = deadCount(OutboxRetryReason.LEASE_EXPIRED);
+        long delaysBefore = delayCount(OutboxRetryReason.LEASE_EXPIRED);
+
+        repository.claimBatch(Duration.ofSeconds(60), 5);
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM notification_outbox WHERE notification_id=?",
+                String.class, NOTIFICATION_ID)).isEqualTo("DEAD");
+        assertThat(deadCount(OutboxRetryReason.LEASE_EXPIRED) - deathsBefore).isEqualTo(1.0);
+        assertThat(retryCount(OutboxRetryReason.LEASE_EXPIRED) - retriesBefore)
+                .as("다시 시도되지 않는 건을 재시도로 세면 재시도 수가 부풀고 분포가 오염된다")
+                .isZero();
+        assertThat(delayCount(OutboxRetryReason.LEASE_EXPIRED) - delaysBefore)
+                .as("아무도 기다리지 않을 지연이 히스토그램에 섞이면 분포가 거짓이 된다")
+                .isZero();
+    }
+
+    /**
+     * <b>롤백된 회수가 지표에 남으면 안 된다.</b> 미터는 트랜잭션을 안 타므로, 쓰기 전에
+     * 세면 그 트랜잭션이 되돌려져도 숫자만 그대로 남는다 — 숫자를 보는 사람은 <b>일어나지
+     * 않은 일</b>을 본다. 리뷰가 짚었다.
+     *
+     * <p>회수는 {@code REQUIRES_NEW} 라 바깥에서 되돌릴 수 없다. 그래서 여기서는
+     * <b>커밋 뒤에 센다</b>는 사실만 확인한다 — 회수가 끝난 뒤에야 값이 보이는지.
+     */
+    @Test
+    @DisplayName("회수 지표는 커밋 뒤에 올라온다 — 쓰기 전에 세면 롤백돼도 숫자가 남는다")
+    void recoveryMetricsAppearOnlyAfterTheWriteCommitted() {
+        repository.save(NotificationOutbox.pending(NOTIFICATION_ID, 1, AttemptTrigger.INITIAL, AT));
+        repository.claimBatch(Duration.ofMinutes(1), 1);
+        jdbcTemplate.update("UPDATE notification_outbox"
+                + " SET claimed_at=TIMESTAMPADD(SECOND,-120,CURRENT_TIMESTAMP(6))"
+                + " WHERE notification_id=?", NOTIFICATION_ID);
+
+        double before = retryCount(OutboxRetryReason.LEASE_EXPIRED);
+
+        // 만료시켜 놓기만 하고 아직 회수는 안 했다. 쓰기 전에 세는 구현이면 여기서 오른다.
+        assertThat(retryCount(OutboxRetryReason.LEASE_EXPIRED) - before)
+                .as("회수 전인데 값이 올랐으면 미터가 실제 쓰기와 무관하게 오른 것이다")
+                .isZero();
+
+        repository.claimBatch(Duration.ofSeconds(60), 5);
+
+        assertThat(retryCount(OutboxRetryReason.LEASE_EXPIRED) - before).isEqualTo(1.0);
+    }
+
+    /**
+     * <b>절대값이 아니라 증분으로 본다.</b> 스프링이 컨텍스트를 재사용하므로 레지스트리도
+     * 클래스 안에서 공유된다 — 앞선 테스트가 올려 둔 값이 그대로 남아 있어서, 0 을
+     * 기대하면 <b>실행 순서에 따라 통과하고 실패한다.</b>
+     */
+    private double retryCount(OutboxRetryReason reason) {
+        return registry.find(DomainMeterNames.OUTBOX_RETRY)
+                .tag(DomainMeterNames.TAG_REASON, reason.tag()).counter().count();
+    }
+
+    private double deadCount(OutboxRetryReason reason) {
+        return registry.find(DomainMeterNames.OUTBOX_DEAD)
+                .tag(DomainMeterNames.TAG_REASON, reason.tag()).counter().count();
+    }
+
+    private long delayCount(OutboxRetryReason reason) {
+        return registry.find(DomainMeterNames.OUTBOX_RETRY_DELAY)
+                .tag(DomainMeterNames.TAG_REASON, reason.tag()).timer().count();
     }
 
     /** 판정 기준을 앱 시계가 아니라 <b>DB 시계</b>로 잡는다 — 값을 쓴 것도 DB 다. */

@@ -23,7 +23,6 @@ import com.kafkick.core.observation.DomainMeterNames;
 import com.kafkick.infra.mq.notification.NotificationOutboxRelay;
 import com.kafkick.infra.mq.notification.NotificationRelayProperties;
 import com.kafkick.infra.mq.notification.NotificationRelayScheduler;
-import com.kafkick.infra.mq.notification.NotificationRetryMeter;
 import com.kafkick.infra.mq.notification.RelayBinlogFormatGuard;
 
 @Configuration(proxyBeanMethods = false)
@@ -83,13 +82,11 @@ public class NotificationRelayConfig {
             NotificationRequestedEventPublisher publisher,
             NotificationRelayProperties properties,
             ThreadPoolTaskExecutor notificationRelayWorkers,
-            NotificationRetryMeter notificationRetryMeter,
             FullJitterBackOff notificationRetryBackOff,
             ObjectProvider<Clock> clocks) {
         return new NotificationOutboxRelay(outboxes, notifications, publisher,
                 properties.getLease(),
                 properties.getClaimBatchSize(),
-                notificationRetryMeter,
                 notificationRelayWorkers,
                 properties.getMaxInFlight(),
                 // **풀 크기와 같은 값이어야 한다.** 여기서 갈리면 lease 검사가 실제보다
@@ -114,15 +111,6 @@ public class NotificationRelayConfig {
         return Gauge.builder(DomainMeterNames.NOTIFY_RELAY_IN_FLIGHT, relay,
                         NotificationOutboxRelay::inFlight)
                 .register(registry);
-    }
-
-    /**
-     * <b>릴레이보다 먼저 만들어져야 한다.</b> 생성자가 받으므로 스프링이 알아서 순서를
-     * 잡지만, 이 빈이 없으면 릴레이가 아예 안 뜬다 — 지표가 조용히 빠지는 것보다 낫다.
-     */
-    @Bean
-    public NotificationRetryMeter notificationRetryMeter(MeterRegistry registry) {
-        return new NotificationRetryMeter(registry);
     }
 
     @Bean
