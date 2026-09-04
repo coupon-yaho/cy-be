@@ -97,6 +97,16 @@ public final class DomainMeterNames {
     public static final String NOTIFY_SENT = "app.notify.sent";
 
     /**
+     * outbox 릴레이가 <b>지금 워커 풀에 물려 둔</b> 건수. 태그 없이 하나다.
+     *
+     * <p><b>이 값이 상한에 붙어 있으면 백프레셔가 걸린 상태다</b> — 클레임을 건너뛰고 있다는
+     * 뜻이고, 발행이 유입을 못 따라간다는 신호다. 0 에 붙어 있으면 반대로 집을 것이 없다.
+     * 둘을 구분하려면 이 값만으로는 모자라고 <b>백로그와 함께</b> 봐야 한다 — 상한에 붙어
+     * 있는데 백로그가 안 줄면 워커를 늘려야 하고, 백로그도 0 이면 그냥 한가한 것이다.
+     */
+    public static final String NOTIFY_RELAY_IN_FLIGHT = "app.notify.relay.inflight";
+
+    /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
      *
      * <p>0 이 아니면 화면의 attempt 수치가 이미 비어 있다는 뜻이다. 다만 이 값으로 TPS·성공률을
