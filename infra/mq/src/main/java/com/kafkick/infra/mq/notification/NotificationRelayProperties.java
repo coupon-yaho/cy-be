@@ -29,10 +29,20 @@ public class NotificationRelayProperties {
      * Full Jitter 의 지연 상한.
      *
      * <p><b>이 값이 사는 대가는 회복이 느려지는 것이다.</b> {@code failure_count} 상한이
-     * 10 이므로 계속 실패하는 명령이 {@code DEAD} 에 닿는 시간이 함께 늘어난다 —
-     * 고정 1초였을 때 약 10초였던 것이 <b>기대값 약 43초 · 최악 200초</b>가 된다
-     * ({@code 200·400·800·1600·3200·6400} 뒤로는 상한 20초에 걸리므로
-     * 기대값은 그 절반씩의 합이다).
+     * 10 이므로 계속 실패하는 명령이 {@code DEAD} 에 닿는 시간이 함께 늘어난다.
+     *
+     * <pre>
+     *   attempt별 상한(ms)  400 · 800 · 1,600 · 3,200 · 6,400 · 12,800 · 20,000 · 20,000 · 20,000
+     *                       (200 &lt;&lt; 7 = 25,600 이라 7회차부터 cap 에 걸린다)
+     *
+     *   실제로 기다리는 것은 아홉 번이다 — 열 번째 실패는 {@code failure_count} 를 10 으로
+     *   올려 그 자리에서 {@code DEAD} 로 보내므로 그 지연은 쓰이지 않는다.
+     *
+     *   최악 85.2초 · 기대 42.6초      (고정 1초였을 때는 최악 9초)
+     * </pre>
+     *
+     * <p><b>{@code 10 × cap = 200초} 가 아니다.</b> 앞쪽 회차의 상한이 작기 때문이고,
+     * 한때 그렇게 적었다가 Qodo 리뷰가 잡았다.
      *
      * <p><b>그 교환을 받아들이는 이유</b> — 이 저장소의 알림에는 "언제까지 종착 상태여야
      * 한다" 는 마감이 없다. 늦게 가는 것보다 <b>한꺼번에 몰려 다시 실패하는 것</b>이 나쁘다.
@@ -46,6 +56,11 @@ public class NotificationRelayProperties {
         return backoffBase;
     }
 
+    /**
+     * @throws IllegalArgumentException {@code null}·0·음수이거나 365일을 넘을 때.
+     *         {@code @ConfigurationProperties} 는 setter 로 바인딩하므로 이 예외는
+     *         <b>기동 중 빈 생성에서</b> 터진다 — 그것이 이 검사를 여기 둔 이유다
+     */
     public void setBackoffBase(Duration backoffBase) {
         this.backoffBase = requirePositive(backoffBase, "backoff base");
     }
@@ -54,6 +69,10 @@ public class NotificationRelayProperties {
         return backoffCap;
     }
 
+    /**
+     * @throws IllegalArgumentException {@code null}·0·음수이거나 365일을 넘을 때.
+     *         {@link #setBackoffBase} 와 같은 시점에 터진다
+     */
     public void setBackoffCap(Duration backoffCap) {
         this.backoffCap = requirePositive(backoffCap, "backoff cap");
     }

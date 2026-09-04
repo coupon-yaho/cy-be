@@ -34,8 +34,20 @@ import java.util.concurrent.ThreadLocalRandom;
  *
  * <p>음수나 0 을 받으면 1 로 본다 — 지연 계산이 부르는 쪽의 산술 실수로 <b>예외를 던져
  * 발행을 막는 것</b>이 더 나쁘다. 이 클래스는 정확성이 아니라 분산을 담당한다.
+ *
+ * <p><b>생성만은 예외다.</b> 설정이 틀린 것은 부르는 쪽의 산술 실수와 달리 기동 시점에
+ * 드러나야 한다 — 생성자 참조.
  */
 public final class FullJitterBackOff {
+
+    /**
+     * 경계값 상한. 저장소의 지연 변환기가 이 위에서 던지는데, 그것은
+     * <b>첫 실패가 실제로 났을 때</b> 터진다. 여기서 막으면 생성 시점에 드러난다.
+     *
+     * <p>이 상한이 {@link #nextDelay} 의 {@code ceiling + 1} 오버플로도 함께 막는다 —
+     * 상한이 없으면 {@code cap} 이 {@code Long.MAX_VALUE} 밀리초일 때 그 덧셈이 뒤집힌다.
+     */
+    private static final long MAX_MILLIS = Duration.ofDays(365).toMillis();
 
     /**
      * {@code base << attempt} 의 자리이동 상한.
@@ -43,49 +55,82 @@ public final class FullJitterBackOff {
      * <p>30 이면 {@code base=200ms} 에서 {@code 200 × 2^30 = 214,748,364,800ms}
      * <b>≈ 6.8년</b>이라 어떤 {@code cap} 이든 넘는다. 더 밀 이유가 없다.
      *
-     * <p><b>이 상수만으로는 오버플로가 안 막힌다.</b> 30 이 안전한 것은 {@code base} 가
-     * 작을 때뿐이다 — {@code base} 가 365일이면 {@code base << 30} 이 {@code long} 을 넘어
-     * <b>-3,031,965,985,755,103,232</b> 이 되고, 음수 상한을 받은 {@code nextLong} 이 던진다.
-     * 그래서 {@link #nextDelay} 가 자리이동 <b>결과</b>를 직접 본다.
+     * <p><b>이 상수는 오버플로를 막지 않는다.</b> 그것은 {@link #ceilingMillis} 가 나눗셈으로
+     * 한다 — 근거는 거기 적었다.
      */
     private static final int MAX_SHIFT = 30;
 
     private final long baseMillis;
     private final long capMillis;
 
+    /**
+     * @param base 기본 간격. 첫 재시도 상한이 {@code base × 2} 다
+     * @param cap  지연 상한
+     * @throws IllegalArgumentException {@code null}·0·음수이거나, 365일을 넘거나,
+     *         <b>밀리초로 환산해 0 이 되거나</b>(예: {@code Duration.ofNanos(1)}),
+     *         {@code cap} 이 {@code base} 보다 작을 때
+     */
     public FullJitterBackOff(Duration base, Duration cap) {
-        long baseMillis = requirePositiveMillis(base, "backoff base");
-        long capMillis = requirePositiveMillis(cap, "backoff cap");
+        this.baseMillis = requireUsableMillis(base, "backoff base");
+        this.capMillis = requireUsableMillis(cap, "backoff cap");
         if (capMillis < baseMillis) {
             throw new IllegalArgumentException(
                     "backoff cap 은 base 이상이어야 합니다. 그렇지 않으면 첫 재시도부터 상한에 "
                             + "걸려 지수 구간이 통째로 사라집니다. base=" + baseMillis
                             + "ms cap=" + capMillis + "ms");
         }
-        this.baseMillis = baseMillis;
-        this.capMillis = capMillis;
     }
 
     /**
      * @param attempt 몇 번째 재시도인가. 부르는 쪽이 {@code failure_count + 1} 을 준다
-     * @return {@code [0, min(cap, base × 2^attempt)]} 안의 값. 밀리초 정밀도다
+     * @return {@code [0, ceilingMillis(attempt)]} 안의 값. 밀리초 정밀도다
      */
     public Duration nextDelay(int attempt) {
-        int shift = Math.min(Math.max(attempt, 1), MAX_SHIFT);
-
-        // 자리이동 **결과**를 본다. MAX_SHIFT 는 base 가 작을 때만 안전하고, 넘친 값은
-        // 음수라 곧바로 cap 을 뜻한다 — 지수 구간을 이미 지났다는 신호다.
-        long shifted = baseMillis << shift;
-        long ceiling = shifted < 0 ? capMillis : Math.min(capMillis, shifted);
-
         // nextLong 의 상한은 배타적이다. ceiling 자체도 나올 수 있어야 한다.
+        // ceiling 은 cap 이하이고 cap 은 MAX_MILLIS 이하라 이 덧셈은 넘치지 않는다.
+        long ceiling = ceilingMillis(attempt);
         return Duration.ofMillis(ThreadLocalRandom.current().nextLong(0, ceiling + 1));
     }
 
-    private static long requirePositiveMillis(Duration duration, String name) {
+    /**
+     * {@code min(cap, base × 2^attempt)} — <b>자리이동을 하지 않고</b> 구한다.
+     *
+     * <p><b>자리이동 결과로 오버플로를 판별할 수 없다.</b> {@code long} 은 음수로만 넘치지
+     * 않는다 — 작은 양수나 <b>0</b> 으로도 감긴다. 허용 범위 안의 {@code base = 2^34ms}
+     * (약 198.8일)를 30 밀면 정확히 {@code 2^64} 라 <b>0 으로 감기고</b>, 그러면 상한이 0 이
+     * 되어 <b>모든 재시도가 즉시</b> 실행된다 — 흩뜨리려고 만든 클래스가 정확히 반대로 동작한다.
+     * 한때 {@code shifted < 0} 로 걸렀는데 그 사례를 못 잡았다.
+     *
+     * <p>그래서 <b>나눗셈으로 먼저 묻는다</b> — {@code base > cap / 2^attempt} 면 곱이 이미
+     * {@code cap} 을 넘은 것이다. 아니라면 곱은 {@code cap} 이하라 자리이동이 안전하다.
+     * {@code attempt} 가 {@link #MAX_SHIFT} 로 잘려 있어 우변의 자리이동도 안전하다
+     * (자바는 이동 수를 63 으로 마스킹하므로 그 잘림이 없으면 이 판별식 자체가 무너진다).
+     *
+     * <p>가시성이 package-private 인 것은 <b>테스트가 표본이 아니라 값을 보게</b> 하기
+     * 위해서다. 상한을 난수로 확인하면 검증이 확률적이 된다.
+     */
+    long ceilingMillis(int attempt) {
+        int shift = Math.min(Math.max(attempt, 1), MAX_SHIFT);
+        return baseMillis > (capMillis >> shift) ? capMillis : (baseMillis << shift);
+    }
+
+    private static long requireUsableMillis(Duration duration, String name) {
         if (duration == null || duration.isZero() || duration.isNegative()) {
             throw new IllegalArgumentException(name + " 은 양수여야 합니다.");
         }
-        return duration.toMillis();
+        if (duration.compareTo(Duration.ofDays(365)) > 0) {
+            throw new IllegalArgumentException(
+                    name + " 은 365일 이하여야 합니다. 저장소의 지연 변환기가 그 위에서 "
+                            + "던지는데, 그것은 첫 실패가 났을 때야 터집니다. 받은 값=" + duration);
+        }
+        long millis = duration.toMillis();
+        if (millis < 1) {
+            // 양수인데 환산하면 0 이 되는 구간이 있다. 그대로 두면 상한이 0 이라
+            // 지터가 사라지고 모든 재시도가 즉시 실행된다 — 조용히 반대로 동작한다.
+            throw new IllegalArgumentException(
+                    name + " 은 1ms 이상이어야 합니다. 밀리초로 환산하면 0 이 되어 지터가 "
+                            + "사라지고 재시도가 즉시 실행됩니다. 받은 값=" + duration);
+        }
+        return Math.min(millis, MAX_MILLIS);
     }
 }
