@@ -48,8 +48,9 @@ class FullJitterBackOffTest {
         Duration wrapsToZero = Duration.ofMillis(1L << 34);
         FullJitterBackOff huge = new FullJitterBackOff(wrapsToZero, wrapsToZero);
 
+        // nextDelay 의 결과를 단언하지 않는다 — 0 은 합법이고, 그것이 이 정책의 핵심이다.
+        // 상한을 직접 보는 것으로 충분하다.
         assertThat(huge.ceilingMillis(30)).isEqualTo(1L << 34);
-        assertThat(huge.nextDelay(30).toMillis()).isPositive();
     }
 
     /** 작은 양수로 감기는 경우도 같다 — {@code 2^34+1} 을 30 밀면 {@code 2^30} 이 된다. */
@@ -59,6 +60,29 @@ class FullJitterBackOffTest {
         FullJitterBackOff huge = new FullJitterBackOff(wrapsSmall, wrapsSmall);
 
         assertThat(huge.ceilingMillis(30)).isEqualTo((1L << 34) + 1);
+    }
+
+    /**
+     * <b>자르는 것이 계약을 깎으면 안 된다.</b> 한때 상한이 30 이었고, 그때
+     * {@code base=1ms · cap=365일 · attempt=35} 의 상한이 계약(365일)이 아니라
+     * 12.4일이었다 — 자리이동 결과의 부호로 오버플로를 걸던 시절의 잔재였다.
+     */
+    @Test
+    void ceilingReachesTheCapEvenWithATinyBase() {
+        Duration year = Duration.ofDays(365);
+        FullJitterBackOff tiny = new FullJitterBackOff(Duration.ofMillis(1), year);
+
+        assertThat(tiny.ceilingMillis(35)).isEqualTo(year.toMillis());
+        assertThat(tiny.ceilingMillis(62)).isEqualTo(year.toMillis());
+        assertThat(tiny.ceilingMillis(Integer.MAX_VALUE)).isEqualTo(year.toMillis());
+    }
+
+    /** {@code cap == base} 도 유효한 구성이다. 그때 첫 상한은 {@code base × 2} 가 아니라 {@code base} 다. */
+    @Test
+    void firstCeilingIsBaseWhenCapEqualsBase() {
+        FullJitterBackOff flat = new FullJitterBackOff(BASE, BASE);
+
+        assertThat(flat.ceilingMillis(1)).isEqualTo(BASE.toMillis());
     }
 
     @Test

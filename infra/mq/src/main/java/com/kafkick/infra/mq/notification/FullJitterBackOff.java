@@ -50,21 +50,24 @@ public final class FullJitterBackOff {
     private static final long MAX_MILLIS = Duration.ofDays(365).toMillis();
 
     /**
-     * {@code base << attempt} 의 자리이동 상한.
+     * 자리이동 수 상한. <b>자바가 {@code long} 이동 수를 63 으로 마스킹하기 때문에만 있다</b> —
+     * {@code x << 64} 는 {@code x << 0} 이라, 자르지 않으면 큰 {@code attempt} 에서 판별식
+     * 자체가 무너진다.
      *
-     * <p>30 이면 {@code base=200ms} 에서 {@code 200 × 2^30 = 214,748,364,800ms}
-     * <b>≈ 6.8년</b>이라 어떤 {@code cap} 이든 넘는다. 더 밀 이유가 없다.
-     *
-     * <p><b>이 상수는 오버플로를 막지 않는다.</b> 그것은 {@link #ceilingMillis} 가 나눗셈으로
-     * 한다 — 근거는 거기 적었다.
+     * <p><b>오버플로 방어가 아니다.</b> 그것은 {@link #ceilingMillis} 의 나눗셈이 한다.
+     * 한때 이 값이 30 이었는데, 그때는 자리이동 결과의 부호로 오버플로를 걸렀기 때문이다.
+     * 나눗셈으로 바꾼 뒤에는 그 역할이 없어졌고 <b>계약을 깎기만 했다</b> —
+     * {@code base=1ms · cap=365일 · attempt=35} 에서 계약상 상한은 365일인데
+     * 30 에서 잘려 12.4일이 됐다(Qodo 리뷰가 잡았다).
      */
-    private static final int MAX_SHIFT = 30;
+    private static final int MAX_SHIFT = 62;
 
     private final long baseMillis;
     private final long capMillis;
 
     /**
-     * @param base 기본 간격. 첫 재시도 상한이 {@code base × 2} 다
+     * @param base 기본 간격. 첫 재시도 상한이 {@code min(cap, base × 2)} 다 —
+     *             {@code cap == base} 인 구성도 유효하고 그때는 {@code base} 다
      * @param cap  지연 상한
      * @throws IllegalArgumentException {@code null}·0·음수이거나, 365일을 넘거나,
      *         <b>밀리초로 환산해 0 이 되거나</b>(예: {@code Duration.ofNanos(1)}),
@@ -103,8 +106,10 @@ public final class FullJitterBackOff {
      *
      * <p>그래서 <b>나눗셈으로 먼저 묻는다</b> — {@code base > cap / 2^attempt} 면 곱이 이미
      * {@code cap} 을 넘은 것이다. 아니라면 곱은 {@code cap} 이하라 자리이동이 안전하다.
-     * {@code attempt} 가 {@link #MAX_SHIFT} 로 잘려 있어 우변의 자리이동도 안전하다
-     * (자바는 이동 수를 63 으로 마스킹하므로 그 잘림이 없으면 이 판별식 자체가 무너진다).
+     * {@code attempt} 가 {@link #MAX_SHIFT}(62) 로 잘려 있어 우변의 자리이동도 안전하다 —
+     * 자바는 이동 수를 63 으로 마스킹하므로 그 잘림이 없으면 판별식 자체가 무너진다.
+     * 62 는 <b>깎지 않는다</b>: {@code cap >> 62} 는 0 이고 {@code base} 는 1 이상이라
+     * 그 지점에서 판별식이 {@code cap} 을 고른다 — 계약과 같다.
      *
      * <p>가시성이 package-private 인 것은 <b>테스트가 표본이 아니라 값을 보게</b> 하기
      * 위해서다. 상한을 난수로 확인하면 검증이 확률적이 된다.
