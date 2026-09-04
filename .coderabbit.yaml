@@ -143,6 +143,12 @@ reviews:
         - 클래스 멤버 순서: 상수 → 필드 → 생성자 → public 메서드 → private 메서드.
         - DTO·값 객체는 `record` 를 기본으로 한다 (`ResponseEnvelope`, `ErrorResponse` 참고).
         - 조회 결과가 없을 때 `null` 비교 대신 `Optional.orElseThrow` 를 쓴다.
+          다만 **없음이 정상이고 `null` 이 그대로 값**인 자리 — 응답 DTO 의 nullable 필드,
+          nullable 을 받는 인자, "없으면 null" 을 계약으로 둔 포트 — 는 이 규칙의 대상이
+          아니다. 금지하는 것은 **조회 결과를 `== null` 로 비교해 분기하는 것**이지
+          nullable 값 자체가 아니다. 그 자리를 `orElseThrow` 로 바꾸면 **없는 것이 정상인
+          경우에 예외가 난다.** 지금 남아 있는 자리는 `OrElseNullBudgetTest` 가 이유와
+          함께 들고 있고, 그 목록이 늘거나 줄면 테스트가 깨진다.
         - 비즈니스 규칙 위반은 `BusinessException(ErrorCode)` 로 던진다. `IllegalStateException`·
           `RuntimeException` 을 그대로 던지면 `GlobalExceptionHandler` 에서 500 으로 뭉개진다.
         - `BusinessException` 의 `detail` 은 **로그용**이고 클라이언트에 나가는 문구는

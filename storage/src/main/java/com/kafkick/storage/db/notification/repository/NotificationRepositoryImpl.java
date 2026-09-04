@@ -53,8 +53,12 @@ public class NotificationRepositoryImpl implements NotificationRepository {
         if (attemptIncrement < 0 || attemptIncrement > 1) {
             throw new IllegalArgumentException("시도 횟수는 CAS에서 1만 증가할 수 있습니다.");
         }
-        Notification current = findById(notification.id()).orElse(null);
-        if (current == null || current.status() != expectedStatus
+        Optional<Notification> found = findById(notification.id());
+        if (found.isEmpty()) {
+            return false;
+        }
+        Notification current = found.orElseThrow();
+        if (current.status() != expectedStatus
                 || current.attemptCount() != expectedAttemptCount
                 || current.resendCount() != expectedResendCount) {
             return false;

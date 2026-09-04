@@ -53,10 +53,12 @@ public class NotificationResendService {
         requirePositive(notificationId, "notificationId");
         requirePositive(requestedBy, "requestedBy");
         Instant requestedAt = timeProvider.instant();
-        Notification current = notifications.findById(notificationId).orElse(null);
-        if (current == null) {
-            reject(notificationId, requestedBy, requestedAt, NotificationResendRejection.NOT_FOUND);
-        }
+        // **분기가 아니라 orElseThrow 다.** reject() 는 던지지만 그 사실을 컴파일러가
+        // 모르므로, 예전 모양(null 검사 뒤 계속 진행)에서는 아래 current.status() 가
+        // 컴파일러 눈에 NPE 후보였다 — reject() 를 읽어야만 안전하다는 것을 알 수 있었다.
+        Notification current = notifications.findById(notificationId)
+                .orElseThrow(() -> rejection(notificationId, requestedBy, requestedAt,
+                        NotificationResendRejection.NOT_FOUND));
         if (current.status() != NotificationStatus.FAILED
                 && current.status() != NotificationStatus.DEAD) {
             reject(notificationId, requestedBy, requestedAt, NotificationResendRejection.CONFLICT);
@@ -88,8 +90,20 @@ public class NotificationResendService {
 
     private void reject(Long notificationId, Long requestedBy, Instant requestedAt,
             NotificationResendRejection rejection) {
+        throw rejection(notificationId, requestedBy, requestedAt, rejection);
+    }
+
+    /**
+     * 거절을 <b>기록하고 예외를 만들어 돌려준다 — 던지지는 않는다.</b>
+     *
+     * <p>{@code orElseThrow} 가 이 모양을 요구한다. 던지는 쪽을 {@link #reject} 로 남겨 둔
+     * 이유는, 나머지 분기들이 여전히 "검사하고 던진다" 모양이라 거기서는 그쪽이 읽기 쉽기
+     * 때문이다 — <b>기록은 어느 쪽으로 들어와도 한 번만</b> 일어난다.
+     */
+    private NotificationResendRejectedException rejection(Long notificationId, Long requestedBy,
+            Instant requestedAt, NotificationResendRejection rejection) {
         rejectedAudits.write(notificationId, requestedBy, requestedAt, rejection.code());
-        throw new NotificationResendRejectedException(rejection);
+        return new NotificationResendRejectedException(rejection);
     }
 
     private static void requirePositive(Long value, String name) {

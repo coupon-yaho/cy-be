@@ -243,20 +243,17 @@ public class BenchmarkRunService {
      * 하나로 뭉치면 회차 중에 "왜 안 되는지" 를 알 방법이 없다.
      */
     private BusinessException transitionFailure(long id, BenchmarkRunStatus expected) {
-        BenchmarkRun run = repository.findById(id).orElse(null);
-        if (run == null) {
-            return notFound(id);
-        }
-        return illegalTransition(id, run.runStatus(), expected);
+        return repository.findById(id)
+                .<BusinessException>map(run -> illegalTransition(id, run.runStatus(), expected))
+                .orElseGet(() -> notFound(id));
     }
 
     private BusinessException summaryFailure(long id) {
-        BenchmarkRun run = repository.findById(id).orElse(null);
-        if (run == null) {
-            return notFound(id);
-        }
-        return new BusinessException(BenchmarkErrorCode.SUMMARY_LOCKED,
-                "benchmarkRunId=" + id + " status=" + run.runStatus());
+        return repository.findById(id)
+                .<BusinessException>map(run -> new BusinessException(
+                        BenchmarkErrorCode.SUMMARY_LOCKED,
+                        "benchmarkRunId=" + id + " status=" + run.runStatus()))
+                .orElseGet(() -> notFound(id));
     }
 
     private static BusinessException illegalTransition(long id, BenchmarkRunStatus actual,

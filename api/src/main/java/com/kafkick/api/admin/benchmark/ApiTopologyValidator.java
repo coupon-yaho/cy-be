@@ -2,6 +2,7 @@ package com.kafkick.api.admin.benchmark;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import javax.sql.DataSource;
 
@@ -133,7 +134,9 @@ public class ApiTopologyValidator {
             violations, "hikari.pool.total", operational.getMaximumPoolSize(), expectedAppReplicas);
         Integer mysqlMaxConnections = null;
         boolean mysqlQueryFailed = false;
-        BenchmarkTopologyObservation.CouponStock stock = null;
+        // 조회 결과의 **없음**은 여기서 Optional 로 들고 있다가, 응답 필드를 만들 때만
+        // null 이 된다 — 그 필드는 nullable 이 정상이라 그대로 둔다(CY-909 갈래 ③).
+        Optional<BenchmarkTopologyObservation.CouponStock> stock = Optional.empty();
         boolean stockQueryFailed = false;
         if (database != null) {
             try {
@@ -144,15 +147,17 @@ public class ApiTopologyValidator {
                     "unavailable", failure.getClass().getSimpleName()));
             }
             try {
-                stock = database.couponStock(couponId).orElse(null);
+                stock = database.couponStock(couponId);
             } catch (DataAccessException failure) {
                 stockQueryFailed = true;
                 violations.add(new Violation("coupon-stock", "readable stock row",
                     "unavailable", failure.getClass().getSimpleName()));
             }
         }
-        Integer actualStockTotal = stock == null ? null : stock.totalQuantity();
-        Integer activeStockCount = stock == null ? null : stock.activeCount();
+        Integer actualStockTotal = stock
+                .map(BenchmarkTopologyObservation.CouponStock::totalQuantity).orElse(null);
+        Integer activeStockCount = stock
+                .map(BenchmarkTopologyObservation.CouponStock::activeCount).orElse(null);
 
         mismatch(violations, "api.replicas", expectedAppReplicas, appReplicas,
             "시작 요청의 replica 수가 배포 토폴로지와 다르다");
@@ -192,7 +197,10 @@ public class ApiTopologyValidator {
                 "coupon-stock.total-quantity", stockTotal.toString(), String.valueOf(actualStockTotal),
                 "시작 요청의 회차 재고가 실제 쿠폰 재고와 다르다"));
         }
-        if (stock != null) {
+        // **isPresent() 다.** Optional 로 바꾸면서 `stock != null` 을 그대로 두면 항상 참이
+        // 되어, 재고 행이 없을 때도 active-count 위반이 하나 더 붙는다 — 같은 부재를 두 번
+        // 보고하는 셈이다. 기존 테스트가 그 자리에서 잡았다.
+        if (stock.isPresent()) {
             mismatch(violations, "coupon-stock.active-count", 0, activeStockCount,
                 "리허설 발급이 남은 쿠폰은 새 측정 회차로 사용할 수 없다");
         }

@@ -577,14 +577,14 @@ public class CleanupJobConfig {
                     // 종료 상태를 마지막 Step 의 것으로 덮으므로(6.0.4), 여기서 COMPLETED 로
                     // 끝내면 앞 Step 이 물러난 주기가 BatchRunMetricsRefresher 의 마지막
                     // 성공 시각을 밀어 버린다. 그래서 코드는 YIELDED 를 잇고 설명만 합친다.
-                    ExitStatus yielded = yieldedFrom(self.getJobExecution());
-                    contribution.setExitStatus(yielded != null
-                            ? new ExitStatus(yielded.getExitCode(),
-                                    yielded.getExitDescription() + " " + meta)
+                    contribution.setExitStatus(yieldedFrom(self.getJobExecution())
+                            .map(yielded -> new ExitStatus(yielded.getExitCode(),
+                                    yielded.getExitDescription() + " " + meta))
                             // 종료 **코드**는 COMPLETED 그대로 둔다. 바꾸면 SimpleJob 이
                             // 그것을 잡 EXIT_CODE 로 덮어 BatchRunMetricsRefresher 의
                             // YIELDED 필터가 흔들린다.
-                            : new ExitStatus(ExitStatus.COMPLETED.getExitCode(), meta));
+                            .orElseGet(() -> new ExitStatus(
+                                    ExitStatus.COMPLETED.getExitCode(), meta)));
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
                 .transactionAttribute(timeout)
@@ -595,14 +595,13 @@ public class CleanupJobConfig {
      * <b>앞 Step 이 {@code YIELDED} 로 끝났나.</b> 그렇다면 그 종료 상태를 <b>메시지까지</b>
      * 그대로 돌려준다 — 코드만 옮기면 <i>"몇 건 걷고 멈췄나"</i> 를 잃는다.
      */
-    private static ExitStatus yieldedFrom(JobExecution jobExecution) {
+    private static Optional<ExitStatus> yieldedFrom(JobExecution jobExecution) {
         return jobExecution.getStepExecutions().stream()
                 .map(StepExecution::getExitStatus)
                 .filter(status -> YIELDED_EXIT_CODE.equals(status.getExitCode()))
                 // **가장 마지막 것을 집는다.** findFirst 면 Step 이 셋이 되는 날 3단계가
                 // 2단계가 아니라 1단계의 메시지를 보고한다 — 그 메시지가 "몇 행에서
                 // 멈췄나" 를 지고 있어서 값이 조용히 틀린다.
-                .reduce((earlier, later) -> later)
-                .orElse(null);
+                .reduce((earlier, later) -> later);
     }
 }
