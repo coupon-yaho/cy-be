@@ -97,6 +97,21 @@ public final class DomainMeterNames {
     public static final String NOTIFY_SENT = "app.notify.sent";
 
     /**
+     * outbox 릴레이가 <b>지금 워커 풀에 물려 둔</b> 건수 — 실행 중인 것과 큐에서 기다리는 것.
+     * 태그 없이 하나다.
+     *
+     * <p><b>이 게이지는 그 이상을 말하지 않는다.</b> 백프레셔가 걸렸는지는 여기서 못 읽는다 —
+     * 건너뛰는 판정은 {@code poll()} 이 불린 그 순간에만 나고, 스크레이프는 그 사이 아무
+     * 때나 찍힌다. 상한에 붙은 값 하나로는 <b>실제로 건너뛰었는지</b> 알 수 없고, 0 도
+     * <b>백로그가 없다는 뜻이 아니다</b>(방금 다 비운 직후일 수도, 아직 못 집은 것일 수도
+     * 있다). 한때 이 자리에 그 둘을 단정으로 적었다가 리뷰가 잡았다.
+     *
+     * <p>건너뛴 횟수와 백로그는 <b>별도 지표</b>여야 한다 — CY-908(#197)이 붙인다.
+     * 그전까지 이 값은 <b>"지금 몇 건 물고 있나"</b> 하나로만 읽는다.
+     */
+    public static final String NOTIFY_RELAY_IN_FLIGHT = "app.notify.relay.inflight";
+
+    /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
      *
      * <p>0 이 아니면 화면의 attempt 수치가 이미 비어 있다는 뜻이다. 다만 이 값으로 TPS·성공률을
