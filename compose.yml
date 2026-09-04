@@ -344,6 +344,33 @@ services:
       - ./infra/mysql/obs-grants:/obs-grants:ro
     entrypoint: ["sh", "/obs-grants/apply.sh"]
 
+  # 앱 계정의 스키마 단위 권한을 걷고 테이블 단위로 다시 준다.
+  #
+  # ⚠️ **Flyway 뒤에 돌려야 한다.** 마이그레이션이 이 계정으로 도는데(storage.yml 의 @Primary
+  #    풀), 새 테이블은 이 서비스가 다시 돌기 전까지 DML 권한이 없다. api 가 뜬 뒤로 묶는
+  #    이유가 그것이다 — obs-grants 와 같은 순서다.
+  app-grants:
+    image: mysql:8.4
+    profiles: ["app-grants"]
+    restart: "no"
+    # obs-grants 와 같은 이유로 env_file 을 안 쓴다. root 로 GRANT 를 주는 자리라 무관한
+    # 시크릿까지 프로세스 환경에 실리면 안 된다.
+    # 앱 계정 **비밀번호**는 일부러 뺐다 — 권한을 주는 데는 이름만 필요하다.
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      MYSQL_HOST: mysql
+    depends_on:
+      mysql:
+        condition: service_healthy
+      api:
+        condition: service_started
+    volumes:
+      # 디렉터리째 마운트한다. apply.sh 가 같은 디렉터리의 append-only.txt 를 읽는다.
+      - ./infra/mysql/app-grants:/app-grants:ro
+    entrypoint: ["sh", "/app-grants/apply.sh"]
+
   api:
     image: ${COUPON_IMAGE}:${API_IMAGE_TAG}
     pull_policy: always
