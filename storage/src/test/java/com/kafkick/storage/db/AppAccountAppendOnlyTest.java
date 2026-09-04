@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.MountableFile;
 
@@ -61,6 +62,14 @@ class AppAccountAppendOnlyTest {
 
     /** 운영에서 도는 그 디렉터리다. 목록 파일을 같이 옮겨야 스크립트가 읽는다. */
     private static final Path SCRIPT_DIR = Path.of("..", "infra", "mysql", "app-grants");
+
+    /**
+     * 스크립트가 Flyway 종료를 판정할 때 대조하는 정답지. compose 가 마운트하는 것과 같은
+     * 디렉터리다 — 컨테이너에는 Testcontainers 가 Flyway 를 이미 다 돌려 놓았으므로
+     * 여기 있는 버전이 전부 {@code flyway_schema_history} 에 들어와 있어야 통과한다.
+     */
+    private static final Path MIGRATION_DIR =
+            Path.of("src", "main", "resources", "db", "migration");
 
     @Autowired
     MySQLContainer mySqlContainer;
@@ -115,6 +124,8 @@ class AppAccountAppendOnlyTest {
 
         mySqlContainer.copyFileToContainer(
                 MountableFile.forHostPath(SCRIPT_DIR), "/app-grants");
+        mySqlContainer.copyFileToContainer(
+                MountableFile.forHostPath(MIGRATION_DIR), "/migrations");
         var result = mySqlContainer.execInContainer(
                 "env",
                 "MYSQL_ROOT_PASSWORD=" + mySqlContainer.getPassword(),
@@ -265,5 +276,43 @@ class AppAccountAppendOnlyTest {
         }).doesNotThrowAnyException();
         // DROP 권한이 없으므로 정리는 root 가 한다 — 그 사실 자체가 이 PR 의 요점이다.
         rootTemplate.get().execute("DROP TABLE IF EXISTS probe_ddl_check");
+    }
+
+    /**
+     * <b>"락이 없다" 를 "끝났다" 로 읽으면 안 된다.</b> 락이 없다는 것은 아직 시작을 안 한
+     * 것이기도 하다 — 기존 스키마가 있는 재배포에서 스크립트가 Flyway 보다 먼저 통과해
+     * 버리면, 새로 생길 테이블이 DML 권한을 못 받고 앱이 런타임에 1142 로 죽는다.
+     * 리뷰가 짚은 이 구멍 때문에 판정을 <b>버전 대조</b>로 바꿨다.
+     *
+     * <p>여기서는 이 빌드에만 있고 아직 적용되지 않은 마이그레이션을 하나 끼워 넣는다.
+     * 컨테이너의 {@code flyway_schema_history} 는 이미 완전하고 락도 없으므로 <b>옛 검사는
+     * 그대로 통과했을</b> 상황이다. 버전 대조는 통과하면 안 된다.
+     */
+    @Test
+    @DisplayName("⑧ 안 돌아간 마이그레이션이 남아 있으면 통과하지 않는다")
+    void refusesWhenAShippedMigrationHasNotRunYet() throws Exception {
+        String unapplied = "V9999999999__probe_never_applied.sql";
+        mySqlContainer.copyFileToContainer(
+                Transferable.of("SELECT 1;"), "/migrations/" + unapplied);
+        try {
+            var result = mySqlContainer.execInContainer(
+                    "env",
+                    "MYSQL_ROOT_PASSWORD=" + mySqlContainer.getPassword(),
+                    "MYSQL_DATABASE=" + mySqlContainer.getDatabaseName(),
+                    "DB_USERNAME=" + PROBE_USER,
+                    "MYSQL_HOST=127.0.0.1",
+                    // 기다릴 이유가 없다 — 이 버전은 영원히 안 온다.
+                    "APP_GRANTS_WAIT_SECONDS=0",
+                    "sh", "/app-grants/apply.sh");
+            assertThat(result.getExitCode())
+                    .as("적용 안 된 마이그레이션이 남았는데 통과했습니다.%nstdout=%s%nstderr=%s",
+                            result.getStdout(), result.getStderr())
+                    .isNotZero();
+            assertThat(result.getStderr())
+                    .as("몇 건 중 몇 건인지 말해 주지 않으면 사람이 원인을 못 찾는다")
+                    .contains("마이그레이션이 끝나지 않았다");
+        } finally {
+            mySqlContainer.execInContainer("rm", "-f", "/migrations/" + unapplied);
+        }
     }
 }

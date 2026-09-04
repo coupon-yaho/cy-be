@@ -65,22 +65,63 @@ app_roles="$(query_as_root "SELECT CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST
 #    api 에는 healthcheck 가 없다. 그래서 이 스크립트가 Flyway 와 경쟁할 수 있는데,
 #    `restart: no` 라 한 번 실패하면 재시도되지 않는다. 스스로 기다리는 편이 낫다.
 #
-#    끝났는지 아는 방법 셋을 모두 본다:
-#      ⑴ flyway_schema_history 가 있는가        — 없으면 아직 시작도 안 했다
-#      ⑵ 실패한 마이그레이션이 없는가            — 있으면 스키마가 확정되지 않았다
-#      ⑶ 사용자 수준 락이 잡혀 있지 않은가        — Flyway 가 도는 동안 잡는 그 락이다
+#    **끝났다는 것을 추론하지 않고 명시적으로 확인한다** — 이 빌드가 싣고 온 마이그레이션
+#    버전이 하나도 빠짐없이 flyway_schema_history 에 success=1 로 들어와 있는가.
+#    Flyway 는 마이그레이션이 성공한 **뒤에** 그 행을 넣으므로, 마지막 버전의 행이 보이면
+#    그 앞은 전부 끝난 것이다.
 #
-#    ⑶ 이 핵심이다. ⑴⑵ 만 보면 **마이그레이션이 절반쯤 진행된 순간**에도 통과한다.
+#    ⚠️ 한때 이 자리에서 **락이 잡혀 있는지**를 봤는데 **틀렸다.**
+#       락이 없다는 것은 "끝났다" 이기도 하지만 **"아직 시작도 안 했다"** 이기도 하다.
+#       기존 스키마가 있는 재배포에서는 Flyway 가 뜨기 전에 그대로 통과해 버려서,
+#       새로 생길 테이블이 DML 권한을 못 받고 앱이 런타임에 1142 로 죽는다.
+#       게다가 Flyway 의 락 **이름**은 내부에서 만들어 재현할 수 없어 "아무 사용자 락"으로
+#       셀 수밖에 없었는데, 그러면 **무관한 세션의 GET_LOCK() 하나가 적용을 통째로 막는다.**
+#       버전 대조는 둘 다 성립하지 않는다 — 이름이 특정되고, 안 끝난 상태와 안 시작한
+#       상태를 구분한다.
 #
-#    ⚠️ 한때 ⑶ 을 `flyway_schema_history FOR UPDATE NOWAIT` 로 했는데 **틀렸다.**
-#       MySQL 용 Flyway 는 행 잠금이 아니라 **네임드 락**으로 직렬화한다 —
-#       flyway-mysql 12.4.0 의 MySQLNamedLockTemplate 이 `SELECT GET_LOCK(?,10)` 을
-#       쓴다(바이트코드로 확인). 행 잠금은 마이그레이션 중에도 잡히므로 그 검사는
-#       아무것도 못 걸렀다.
-#
-#       락 **이름**은 Flyway 내부에서 만들어 재현할 수 없다. 대신 MySQL 이 사용자 수준
-#       락을 performance_schema 에 노출한다 — 이름을 몰라도 **잡혀 있다는 사실**은 보인다
-#       (실측: OBJECT_TYPE='USER LEVEL LOCK', LOCK_STATUS='GRANTED').
+#    재배포가 새 마이그레이션을 하나도 안 싣고 왔다면 "안 시작" 과 "끝남" 이 내용상
+#    구분되지 않지만, 그 경우엔 **구분할 필요가 없다** — 스키마가 이미 최종형이라
+#    지금 열거하는 테이블 목록이 완전하다.
+migration_dir="${APP_GRANTS_MIGRATION_DIR:-/migrations}"
+[ -d "${migration_dir}" ] || {
+    echo "거부: 마이그레이션 디렉터리가 없다: ${migration_dir}" >&2
+    echo "  이 스크립트는 이 빌드의 마이그레이션 목록과 대조해서 Flyway 종료를 판정한다." >&2
+    echo "  compose 가 storage 의 db/migration 을 읽기 전용으로 마운트해야 한다." >&2
+    exit 1
+}
+
+# 반복 마이그레이션(R__)은 version 이 NULL 이라 이 대조에 안 잡힌다. 지금은 0개인데,
+# 나중에 생기면 조용히 새는 대신 여기서 멈춘다.
+repeatable="$(find "${migration_dir}" -maxdepth 1 -name 'R__*.sql' | head -1)"
+[ -z "${repeatable}" ] || {
+    echo "거부: 반복 마이그레이션이 있다(${repeatable})." >&2
+    echo "  version 이 NULL 이라 버전 대조로는 종료를 판정할 수 없다. 검사를 고쳐야 한다." >&2
+    exit 1
+}
+
+# V<버전>__<설명>.sql 의 <버전> 이 flyway_schema_history.version 에 그대로 들어간다(실측).
+expected_versions="$(find "${migration_dir}" -maxdepth 1 -name 'V*__*.sql' -exec basename {} \; \
+                     | sed -e 's/^V//' -e 's/__.*//' | sort -u)"
+[ -n "${expected_versions}" ] || {
+    echo "거부: ${migration_dir} 에 마이그레이션이 하나도 없다. 마운트가 잘못됐다." >&2
+    exit 1
+}
+expected_count="$(printf '%s\n' "${expected_versions}" | wc -l | tr -d '[:space:]')"
+
+# SQL 리터럴로 만든다. 버전 문자열은 Flyway 문법상 숫자와 점뿐이므로 그것만 통과시킨다.
+version_list=""
+while IFS= read -r version; do
+    case "${version}" in
+        '' ) continue ;;
+        *[!0-9.]* )
+            echo "거부: 마이그레이션 버전에 숫자·점 외 문자가 있다: ${version}" >&2
+            exit 1 ;;
+    esac
+    version_list="${version_list}${version_list:+,}'${version}'"
+done <<VERSIONS
+${expected_versions}
+VERSIONS
+
 wait_seconds="${APP_GRANTS_WAIT_SECONDS:-120}"
 waited=0
 while :; do
@@ -94,29 +135,24 @@ while :; do
             echo "거부: 실패한 마이그레이션이 ${failed}건 있다. 스키마가 확정되지 않았다." >&2
             exit 1
         fi
-        # 사용자 수준 락이 하나도 없으면 Flyway 가 놓은 것이다.
-        held="$(query_as_root "SELECT COUNT(*) FROM performance_schema.metadata_locks
-                                WHERE OBJECT_TYPE = 'USER LEVEL LOCK'
-                                  AND LOCK_STATUS = 'GRANTED'" || echo "unknown")"
-        if [ "${held}" = "0" ]; then
+        applied="$(query_as_root "SELECT COUNT(DISTINCT version)
+                                    FROM \`${MYSQL_DATABASE}\`.flyway_schema_history
+                                   WHERE success = 1 AND version IN (${version_list})")"
+        if [ "${applied}" = "${expected_count}" ]; then
             break
         fi
-        if [ "${held}" = "unknown" ]; then
-            # performance_schema 가 꺼져 있거나 못 읽는다. 확인 못 한 것을 확인한 것처럼
-            # 넘어가지 않는다 — 순서를 사람이 지켜야 한다고 말하고 진행한다.
-            echo "경고: 사용자 수준 락을 확인할 수 없다(performance_schema). 마이그레이션이" >&2
-            echo "  끝난 뒤인지 스스로 판단할 수 없으므로 순서를 배포 절차가 지켜야 한다." >&2
-            break
-        fi
+    else
+        applied=0
     fi
 
     if [ "${waited}" -ge "${wait_seconds}" ]; then
-        echo "거부: ${wait_seconds}초 동안 마이그레이션이 끝나지 않았다." >&2
+        echo "거부: ${wait_seconds}초 동안 마이그레이션이 끝나지 않았다" >&2
+        echo "  (이 빌드의 ${expected_count}건 중 ${applied}건 적용됨)." >&2
         echo "  이 스크립트는 Flyway 뒤에 돌아야 한다 — 앞서 돌면 테이블 목록이 불완전해" >&2
         echo "  빠진 테이블에 DML 권한이 안 가고 앱이 런타임에 1142 로 죽는다." >&2
         exit 1
     fi
-    echo "마이그레이션을 기다리는 중… (${waited}/${wait_seconds}초)"
+    echo "마이그레이션을 기다리는 중… ${applied}/${expected_count} (${waited}/${wait_seconds}초)"
     sleep 2
     waited=$((waited + 2))
 done
