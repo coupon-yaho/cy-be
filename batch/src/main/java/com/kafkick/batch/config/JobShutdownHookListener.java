@@ -122,7 +122,14 @@ public class JobShutdownHookListener implements JobExecutionListener, SmartIniti
         this.shutdownHooks = shutdownHooks;
     }
 
-    /** 컨텍스트가 다 뜬 뒤 {@code Job} 빈 전부에 자기를 붙인다. */
+    /**
+     * 컨텍스트가 다 뜬 뒤 {@code Job} 빈에 자기를 붙인다.
+     *
+     * <p><b>{@code AbstractJob} 인 것만 붙는다.</b> 아닌 것은 WARN 을 남기고 건너뛰므로,
+     * 그런 구현이 생기면 <b>그 잡만</b> SIGTERM 에 시체를 남긴다.
+     * 지금 이 저장소의 잡 셋은 전부 {@code AbstractJob} 이고
+     * {@code JobShutdownHookWiringTest} 가 그것을 못 박는다.
+     */
     @Override
     public void afterSingletonsInstantiated() {
         jobs.stream().forEach(job -> {
@@ -173,6 +180,18 @@ public class JobShutdownHookListener implements JobExecutionListener, SmartIniti
      * <b>해제 실패를 삼키는 것이 정상 경로다.</b> 종료 훅이 잡을 멈추면 {@code afterJob} 이
      * 종료 시퀀스 <b>안에서</b> 돌고, 그때 {@code removeShutdownHook} 은 언제나
      * {@code IllegalStateException} 을 던진다. 그것이 밖으로 나가면 정상 종료가 예외로 끝난다.
+     *
+     * <h2>{@code afterJob} 에서 떼도 안전한 근거 — 최종 상태가 이미 저장돼 있다</h2>
+     *
+     * <p>{@code AbstractJob.execute} 의 6.0.4 바이트코드는 네 갈래 모두
+     * {@code setEndTime → jobRepository.update → afterJob → update} 순서다.
+     * 즉 이 메서드가 도는 시점에 DB 행은 <b>이미 종단</b>이고, 그 뒤에 SIGTERM 이 와도
+     * {@code STARTED} 로 남지 않는다.
+     *
+     * <p>한때 리뷰가 <i>"모든 {@code afterJob} 이 끝난 뒤에 저장하므로 무보호 구간이
+     * 생긴다"</i> 고 지적했는데 순서가 반대였다. <b>바이트코드는 지금 버전의 사실이지
+     * 계약이 아니므로</b> {@code JobExecutionPersistedBeforeAfterJobTest} 가 그 가정을
+     * 런타임으로 붙잡는다.
      */
     private void removeQuietly(Thread hook, Long executionId) {
         try {
