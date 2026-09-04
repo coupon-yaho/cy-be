@@ -346,9 +346,15 @@ services:
 
   # 앱 계정의 스키마 단위 권한을 걷고 테이블 단위로 다시 준다.
   #
-  # ⚠️ **Flyway 뒤에 돌려야 한다.** 마이그레이션이 이 계정으로 도는데(storage.yml 의 @Primary
-  #    풀), 새 테이블은 이 서비스가 다시 돌기 전까지 DML 권한이 없다. api 가 뜬 뒤로 묶는
-  #    이유가 그것이다 — obs-grants 와 같은 순서다.
+  # ⚠️ **Flyway 뒤에 돌아야 한다.** 마이그레이션이 이 계정으로 도는데(storage.yml 의 @Primary
+  #    풀), 스크립트가 그것과 경쟁하면 테이블 목록이 불완전해지고 **빠진 테이블은 DML 권한을
+  #    못 받아 앱이 런타임에 1142 로 죽는다.**
+  #
+  # ⚠️ **아래 depends_on 은 그 순서를 보장하지 못한다.** `service_started` 는 프로세스 시작만
+  #    기다리고 api 에는 healthcheck 가 없다. 그래서 **스크립트가 스스로 기다린다** —
+  #    flyway_schema_history 가 생기고, 실패한 항목이 없고, 그 테이블에 락을 잡을 수 있을
+  #    때까지(= Flyway 가 놓을 때까지) 폴링한다. `restart: no` 라 한 번 실패하면 재시도되지
+  #    않으므로 거부보다 대기가 맞다. 대기 상한은 APP_GRANTS_WAIT_SECONDS(기본 120초).
   app-grants:
     image: mysql:8.4
     profiles: ["app-grants"]
