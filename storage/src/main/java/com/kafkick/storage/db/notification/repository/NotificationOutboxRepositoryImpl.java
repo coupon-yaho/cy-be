@@ -140,6 +140,12 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * <p>{@code next_attempt_at} 이 {@code datetime(6)} 이므로 마이크로초까지 표현된다.
      * lease 는 여전히 {@link #durationSeconds} 를 쓴다 — 그쪽은 30초 단위라 정밀도가 필요 없고,
      * 음수로 뒤집어 쓰는 자리라 계산이 단순한 편이 낫다.
+     *
+     * <p><b>0 은 받는다.</b> Full Jitter 의 하한이 0 이고, 그것이 하한을 두지 않는 이유다.
+     *
+     * @throws IllegalArgumentException {@code null}·음수이거나 365일을 넘을 때.
+     *         <b>이것은 쓰기 시점에 터진다</b> — 설정에서 온 값이라면 그 전에
+     *         {@code NotificationRelayProperties} 가 기동 시점에 걸러야 한다
      */
     private static long durationMicros(Duration duration, String name) {
         if (duration == null || duration.isNegative()
