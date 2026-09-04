@@ -250,6 +250,7 @@ JDBC와 집계 SQL을 사용합니다.
 | 배치 복구     | 중단 실행 탐지, stop·abandon·recover 상태 전이       | [`batch`](batch/src/test) 테스트                                                                                                |
 | 운영 관측     | Prometheus 이름·라벨·알림 규칙과 실제 scrape 계약       | [`docs/14-observability-wiring.md`](docs/14-observability-wiring.md)                                                         |
 | DB 권한     | 관측 계정이 양성 목록 테이블만 읽고 업무 테이블을 거부            | [`infra/mysql/obs-grants`](infra/mysql/obs-grants) 및 컨테이너 테스트                                                                |
+| DB 권한     | 앱 계정이 발급 이력을 넣기만 하고 고치거나 지우지 못함              | [`infra/mysql/app-grants`](infra/mysql/app-grants) 및 컨테이너 테스트                                                                |
 
 
 성능 표에는 Locust 원본 결과, 테스트 환경, 초기 재고, 요청 수와 사후 재고 상태가 함께
