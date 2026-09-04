@@ -21,11 +21,19 @@ public class NotificationOutboxRelay {
      * 건당 발행에 넉넉히 잡는 시간. <b>측정값이 아니라 예산이다</b> — 이 값을 넘기면
      * 배치가 lease 를 태워 뒤쪽 행이 회수된다는 관계를 기동 시 검사하는 데만 쓴다.
      *
-     * <p>로컬 Kafka 발행은 보통 한 자릿수 ms 다. 100ms 는 그 열 배 이상이라 평시에는
-     * 안 걸리고, <b>배치를 크게 잡거나 lease 를 줄일 때</b> 걸린다 — 그 두 경우가 정확히
-     * 위험한 경우다.
+     * <p><b>이 값이 얼마여야 하는지는 안 쟀다.</b> 재려면 발행 지연을 계측해야 하고
+     * 그것은 이 클래스가 할 일이 아니다. 100ms 를 고른 것은 <b>기본 구성(배치 64 · lease 30s)이
+     * 여유 있게 통과하면서, 배치를 키우거나 lease 를 줄일 때는 걸리는</b> 값이기 때문이다 —
+     * 그 두 경우가 정확히 위험한 경우다.
      */
     private static final int PER_ITEM_PUBLISH_BUDGET_MILLIS = 100;
+
+    /**
+     * lease 상한. <b>{@link Duration#toMillis()} 가 넘치지 않게</b> 하는 것이 목적이다 —
+     * 상한이 없으면 큰 값에서 {@code ArithmeticException} 이 나고, 그러면 알림 릴레이 설정
+     * 하나가 <b>접수 API 기동 전체</b>를 막는다.
+     */
+    private static final Duration MAX_LEASE = Duration.ofDays(1);
 
     private final Duration lease;
     private final int claimBatchSize;
@@ -56,6 +64,12 @@ public class NotificationOutboxRelay {
         // **배치 전체가 한 lease 를 공유한다.** 집는 순간 전부 claimed_at 이 찍히는데
         // 발행은 차례로 도므로, 뒤쪽 행은 앞쪽이 끝나기를 기다리는 동안 lease 를 태운다.
         // 그 합이 lease 를 넘으면 **아직 처리도 안 한 행이 회수되어 남이 다시 발행한다.**
+        // lease 를 먼저 거른다. 상한이 없으면 아래 toMillis() 가 ArithmeticException 으로
+        // 터져 **알림 릴레이 설정 하나가 접수 API 기동을 막는다.**
+        if (lease.isNegative() || lease.isZero() || lease.compareTo(MAX_LEASE) > 0) {
+            throw new IllegalArgumentException(
+                    "lease 는 양수이고 " + MAX_LEASE + " 이하여야 합니다. 받은 값=" + lease);
+        }
         long budgetMillis = claimBatchSize * (long) PER_ITEM_PUBLISH_BUDGET_MILLIS;
         if (budgetMillis >= lease.toMillis()) {
             throw new IllegalArgumentException(

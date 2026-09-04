@@ -23,8 +23,11 @@ import org.springframework.core.annotation.Order;
  *
  * <p>이 저장소에 같은 검사가 이미 있다. 하지만 그것은 <b>{@code batch} 모듈</b>의
  * {@code expireJob} 리스너이고, <b>알림 릴레이는 {@code api} 애플리케이션에서 돈다</b>
- * ({@code kafka.yml} 이 {@code api/src/main/resources} 에 있다). 그리고 {@code api} 는
- * {@code :core} 만 의존하므로 그 가드를 <b>클래스패스에서 볼 수조차 없다.</b>
+ * ({@code kafka.yml} 이 {@code api/src/main/resources} 에 있다).
+ *
+ * <p>그리고 {@code api} 는 <b>{@code batch} 를 의존하지 않는다</b> — {@code :core} ·
+ * {@code :storage} · {@code :infra:redis} · {@code :infra:mq} 는 물지만 {@code :batch} 는
+ * 없다. 그래서 그 가드를 <b>클래스패스에서 볼 수조차 없다.</b>
  *
  * <p>한때 PR 본문에 <i>"기존 가드가 이 전제를 지킨다"</i> 고 적었는데 사실이 아니었다
  * (Qodo 리뷰가 잡았다). 전제를 쓰는 쪽에 검사를 둔다.
