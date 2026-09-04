@@ -59,22 +59,50 @@ app_roles="$(query_as_root "SELECT CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST
                               FROM mysql.role_edges
                              WHERE TO_USER = '${DB_USERNAME}' AND TO_HOST = '%'")"
 
-# ② 마이그레이션이 끝난 뒤인지 확인한다. Flyway 가 도는 중이면 목록이 불완전하고,
-#    그때 빠진 테이블은 DML 권한을 못 받아 앱이 런타임에 1142 로 죽는다.
-flyway_state="$(query_as_root "SELECT COUNT(*) FROM information_schema.TABLES
-                                WHERE TABLE_SCHEMA = '${MYSQL_DATABASE}'
-                                  AND TABLE_NAME = 'flyway_schema_history'")"
-if [ "${flyway_state}" != "1" ]; then
-    echo "거부: flyway_schema_history 가 없다. 마이그레이션 전이라 테이블 목록이 불완전하다." >&2
-    echo "  이 스크립트는 Flyway 뒤에 돌려야 한다." >&2
-    exit 1
-fi
-pending="$(query_as_root "SELECT COUNT(*) FROM \`${MYSQL_DATABASE}\`.flyway_schema_history
-                           WHERE success = 0")"
-if [ "${pending}" != "0" ]; then
-    echo "거부: 실패한 마이그레이션이 ${pending}건 있다. 스키마가 확정되지 않았다." >&2
-    exit 1
-fi
+# ② 마이그레이션이 끝날 때까지 기다린다.
+#
+#    거부가 아니라 **대기**인 이유 — compose 의 service_started 는 프로세스 시작만 기다리고
+#    api 에는 healthcheck 가 없다. 그래서 이 스크립트가 Flyway 와 경쟁할 수 있는데,
+#    `restart: no` 라 한 번 실패하면 재시도되지 않는다. 스스로 기다리는 편이 낫다.
+#
+#    끝났는지 아는 방법 셋을 모두 본다:
+#      ⑴ flyway_schema_history 가 있는가        — 없으면 아직 시작도 안 했다
+#      ⑵ 실패한 마이그레이션이 없는가            — 있으면 스키마가 확정되지 않았다
+#      ⑶ 그 테이블에 락을 잡을 수 있는가          — Flyway 는 도는 동안 이 테이블을 잡는다
+#
+#    ⑶ 이 핵심이다. ⑴⑵ 만 보면 **마이그레이션이 절반쯤 진행된 순간**에도 통과한다.
+wait_seconds="${APP_GRANTS_WAIT_SECONDS:-120}"
+waited=0
+while :; do
+    history_exists="$(query_as_root "SELECT COUNT(*) FROM information_schema.TABLES
+                                      WHERE TABLE_SCHEMA = '${MYSQL_DATABASE}'
+                                        AND TABLE_NAME = 'flyway_schema_history'")"
+    if [ "${history_exists}" = "1" ]; then
+        failed="$(query_as_root "SELECT COUNT(*) FROM \`${MYSQL_DATABASE}\`.flyway_schema_history
+                                  WHERE success = 0")"
+        if [ "${failed}" != "0" ]; then
+            echo "거부: 실패한 마이그레이션이 ${failed}건 있다. 스키마가 확정되지 않았다." >&2
+            exit 1
+        fi
+        # 락을 못 잡으면 Flyway 가 아직 돌고 있다. NOWAIT 라 즉시 돌아온다.
+        if query_as_root "START TRANSACTION;
+                          SELECT COUNT(*) FROM \`${MYSQL_DATABASE}\`.flyway_schema_history
+                           FOR UPDATE NOWAIT;
+                          COMMIT;" >/dev/null 2>&1; then
+            break
+        fi
+    fi
+
+    if [ "${waited}" -ge "${wait_seconds}" ]; then
+        echo "거부: ${wait_seconds}초 동안 마이그레이션이 끝나지 않았다." >&2
+        echo "  이 스크립트는 Flyway 뒤에 돌아야 한다 — 앞서 돌면 테이블 목록이 불완전해" >&2
+        echo "  빠진 테이블에 DML 권한이 안 가고 앱이 런타임에 1142 로 죽는다." >&2
+        exit 1
+    fi
+    echo "마이그레이션을 기다리는 중… (${waited}/${wait_seconds}초)"
+    sleep 2
+    waited=$((waited + 2))
+done
 
 tables="$(query_as_root "SELECT TABLE_NAME FROM information_schema.TABLES
                           WHERE TABLE_SCHEMA = '${MYSQL_DATABASE}' AND TABLE_TYPE = 'BASE TABLE'")"
