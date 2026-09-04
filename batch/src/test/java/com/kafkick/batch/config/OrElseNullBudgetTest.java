@@ -72,19 +72,82 @@ class OrElseNullBudgetTest {
     private static final Pattern OR_ELSE_NULL = Pattern.compile("orElse\\(\\s*null\\s*\\)");
 
     /**
-     * 주석과 javadoc. <b>세기 전에 걷어낸다.</b>
+     * 주석과 javadoc 을 걷어낸다. <b>정규식이 아니라 한 글자씩 읽는다.</b>
+     *
+     * <h2>왜 걷어내나</h2>
      *
      * <p>안 걷어내면 <b>이 규칙을 설명하는 주석</b>이 위반으로 잡힌다 — 왜 그 자리를
      * 그대로 두는지 적으려면 그 표현을 쓸 수밖에 없는데, 쓰는 순간 예산을 올려야 하고
      * 그러면 <b>진짜 코드 하나가 늘어난 것과 구분되지 않는다.</b> 설명을 적을수록
      * 검사가 무뎌지는 셈이라 방향이 거꾸로다.
      *
-     * <p>문자열 리터럴 안의 {@code //} 까지 가르지는 않는다. 그 정확도를 얻으려면
-     * 파서가 필요하고, 이 저장소에 {@code orElse(null)} 을 <b>문자열로</b> 담은 곳은
-     * 없다(실측) — 생기면 그때 값이 하나 튀므로 조용히 새지 않는다.
+     * <h2>왜 정규식이 아닌가</h2>
+     *
+     * <p>첫 판은 {@code /*…*&#47;|//…} 정규식이었는데 <b>문자열 리터럴을 못 가른다.</b>
+     * 이 저장소에는 {@code "http://…"} 같은 문자열이 여럿 있고(실측), 그 {@code //} 부터
+     * 줄 끝까지가 주석으로 지워진다 — 같은 줄 뒤쪽 코드가 통째로 사라진다.
+     * 문자열 안의 {@code /*} 는 더 나빠서, 다음 {@code *&#47;} 가 나올 때까지
+     * <b>파일 여러 줄이 한꺼번에</b> 지워진다. 그러면 진짜 위반이 조용히 안 잡힌다 —
+     * <b>거짓 통과</b>라 아무도 모른다.
+     *
+     * <p>그래서 상태를 들고 한 글자씩 읽는다. 문자열·문자 리터럴 안에서는 주석이 시작되지
+     * 않고, 이스케이프({@code \\"})와 텍스트 블록({@code \"\"\"})도 가른다.
      */
-    private static final Pattern COMMENTS =
-            Pattern.compile("/\\*.*?\\*/|//[^\\n]*", Pattern.DOTALL);
+    private static String stripComments(String source) {
+        StringBuilder code = new StringBuilder(source.length());
+        int i = 0;
+        while (i < source.length()) {
+            char c = source.charAt(i);
+            if (c == '"' && source.startsWith("\"\"\"", i)) {
+                i = skipTextBlock(source, i);
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                i = skipLiteral(source, i, c);
+                continue;
+            }
+            if (c == '/' && i + 1 < source.length()) {
+                char next = source.charAt(i + 1);
+                if (next == '/') {
+                    while (i < source.length() && source.charAt(i) != '\n') {
+                        i++;
+                    }
+                    continue;
+                }
+                if (next == '*') {
+                    int end = source.indexOf("*/", i + 2);
+                    i = end < 0 ? source.length() : end + 2;
+                    continue;
+                }
+            }
+            code.append(c);
+            i++;
+        }
+        return code.toString();
+    }
+
+    /** 여는 따옴표부터 닫는 따옴표 <b>다음</b> 위치까지. 이스케이프 한 글자를 건너뛴다. */
+    private static int skipLiteral(String source, int open, char quote) {
+        int i = open + 1;
+        while (i < source.length()) {
+            char c = source.charAt(i);
+            if (c == '\\') {
+                i += 2;
+                continue;
+            }
+            if (c == quote || c == '\n') {
+                return i + 1;
+            }
+            i++;
+        }
+        return source.length();
+    }
+
+    /** 텍스트 블록. 안에 {@code //} 를 담은 SQL 이 여럿이라 이것도 가려야 한다. */
+    private static int skipTextBlock(String source, int open) {
+        int end = source.indexOf("\"\"\"", open + 3);
+        return end < 0 ? source.length() : end + 3;
+    }
 
     /**
      * 갈래 ③ — <b>없음이 정상이고 {@code null} 이 그대로 값</b>인 자리.
@@ -131,9 +194,8 @@ class OrElseNullBudgetTest {
                     .toList()) {
                 String relative = REPO_ROOT.relativize(path).toString().replace('\\', '/');
                 visited.add(relative);
-                String code = COMMENTS
-                        .matcher(Files.readString(path, StandardCharsets.UTF_8))
-                        .replaceAll("");
+                String code = stripComments(
+                        Files.readString(path, StandardCharsets.UTF_8));
                 long found = OR_ELSE_NULL.matcher(code).results().count();
                 int budget = BUDGET.getOrDefault(relative, 0);
                 if (found != budget) {
