@@ -310,11 +310,12 @@ public class ExpirationJdbcAdapter implements ExpirationRepository {
 
     @Override
     public long latestHistoryId() {
-        Long max = jdbcClient.sql("SELECT MAX(id) FROM issuance_histories")
+        // 빈 테이블이면 MAX(id) 가 없다. 그때의 값이 **0 이라고 이미 정해져 있으므로**
+        // null 을 한 번 거쳐 다시 비교할 이유가 없다.
+        return jdbcClient.sql("SELECT MAX(id) FROM issuance_histories")
                 .query(Long.class)
                 .optional()
-                .orElse(null);
-        return max == null ? 0L : max;
+                .orElse(0L);
     }
 
     @Override

@@ -63,9 +63,31 @@ kafka:
 
   notification:
     relay:
-      # DB claim은 30초 뒤 다른 인스턴스가 회수하고, 한 번에 한 행씩 100ms 간격으로 발행한다.
+      # DB claim 은 lease 가 지나면 다른 인스턴스가 회수한다.
+      # 한 회차에 claim-batch-size 만큼 집어 **워커 풀에 뿌리고 즉시 반환**하고,
+      # fixed-delay-ms 마다 돈다. 발행 자체는 worker-count 개의 스레드가 나눠 한다.
+      #
+      # ⚠️ 네 값이 서로 묶여 있다. 한 회차에 집은 것이 **한 lease 를 공유**하는데 워커는
+      #    유한하므로, 워커 수를 넘는 만큼은 큐에서 기다리며 lease 를 태운다. 마지막
+      #    파도가 lease 를 넘으면 **아직 처리도 안 한 행이 회수되어 남이 같은 이벤트를
+      #    다시 발행한다.** NotificationOutboxRelay 가 기동 시
+      #    `ceil(max-in-flight / worker-count) × 건당 예산(100ms) < lease` 를 검사한다 —
+      #    인플라이트를 키우거나 워커를 줄이거나 lease 를 줄일 때 걸린다.
       lease: ${KAFKA_NOTIFICATION_RELAY_LEASE:30s}
       fixed-delay-ms: ${KAFKA_NOTIFICATION_RELAY_FIXED_DELAY_MS:100}
+      claim-batch-size: ${KAFKA_NOTIFICATION_RELAY_CLAIM_BATCH_SIZE:64}
+      # 동시에 물려 둘 최대 건수 = 백프레셔의 기준선. 여유가 없으면 그 회차는 아예 안 집는다.
+      # 안 막으면 클레임이 처리 속도를 앞질러 IN_PROGRESS 가 쌓이고, lease 만료로
+      # 회수 → 재클레임 → 다시 만료가 돌아 일은 안 늘고 DB 쓰기만 는다.
+      max-in-flight: ${KAFKA_NOTIFICATION_RELAY_MAX_IN_FLIGHT:64}
+      # 발행 스레드 수. 실측(대기 500건 · 건당 20ms 발행 · 실제 MySQL):
+      #   워커 1 · 배치 1 = 24.6건/s   워커 1 · 배치 64 = 32.1건/s   워커 8 · 배치 64 = 297건/s
+      # 배치 클레임만으로는 30% 밖에 안 는다 — 집는 것을 넓혀도 보내는 것이 차례면 거기서 막힌다.
+      # 8 은 처리량이 아니라 비용에서 고른 값이다. 이 풀은 접수 API 프로세스 안에서 돈다.
+      worker-count: ${KAFKA_NOTIFICATION_RELAY_WORKER_COUNT:8}
+      # ⚠️ 재시도 지연은 여기 없다 — notification.outbox.retry 로 옮겼다(CY-907).
+      #    같은 정책을 lease 만료 회수 경로(storage 어댑터)도 쓰는데, 그 모듈은
+      #    이 kafka 속성 클래스를 볼 수 없다. 한 벌로 두려면 core 가 소유해야 한다.
 
 # ── 지표 개수 (실측 · 2026-08-22) ───────────────────────────────────────────────
 # 프로듀서 클라이언트 메트릭은 client.id 당 74개 이름이고, 이 계층은 프로듀서를 둘

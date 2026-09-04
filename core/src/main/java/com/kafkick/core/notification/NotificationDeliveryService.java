@@ -3,6 +3,7 @@ package com.kafkick.core.notification;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,8 +36,12 @@ public class NotificationDeliveryService {
     public NotificationDeliveryDecision prepare(NotificationRequestedEvent event, Instant at) {
         Objects.requireNonNull(event, "event");
         Objects.requireNonNull(at, "at");
-        Notification current = notifications.findById(event.notificationId()).orElse(null);
-        if (current == null || current.status() == NotificationStatus.SENT
+        Optional<Notification> found = notifications.findById(event.notificationId());
+        if (found.isEmpty()) {
+            return NotificationDeliveryDecision.acknowledge();
+        }
+        Notification current = found.orElseThrow();
+        if (current.status() == NotificationStatus.SENT
                 || current.status() == NotificationStatus.DEAD) {
             return NotificationDeliveryDecision.acknowledge();
         }
@@ -102,18 +107,17 @@ public class NotificationDeliveryService {
         }
         for (int sequence = event.attemptSeq(); sequence <= currentAttempt; sequence++) {
             int expected = sequence;
-            NotificationAttempt attempt = completed.stream()
+            Optional<NotificationAttempt> attempt = completed.stream()
                     .filter(candidate -> candidate.attemptSeq() == expected)
-                    .findFirst().orElse(null);
-            if (sequence == currentAttempt && attempt == null) {
-                return true;
-            }
-            if (attempt == null) {
-                return false;
+                    .findFirst();
+            if (attempt.isEmpty()) {
+                // **없다는 사실이 두 가지 뜻이다.** 마지막 회차가 비어 있으면 아직 결과가
+                // 안 적힌 것(=진행 중)이고, 중간 회차가 비어 있으면 이력이 깨진 것이다.
+                return sequence == currentAttempt;
             }
             AttemptTrigger expectedTrigger = sequence == event.attemptSeq()
                     ? event.trigger() : AttemptTrigger.AUTO;
-            if (attempt.trigger() != expectedTrigger) {
+            if (attempt.orElseThrow().trigger() != expectedTrigger) {
                 return false;
             }
         }
