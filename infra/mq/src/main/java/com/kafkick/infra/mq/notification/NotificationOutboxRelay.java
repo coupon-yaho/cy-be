@@ -18,6 +18,7 @@ public class NotificationOutboxRelay {
     private final NotificationRepository notifications;
     private final NotificationRequestedEventPublisher publisher;
     private final Duration lease;
+    private final int claimBatchSize;
     private final FullJitterBackOff backOff;
     private final Clock clock;
 
@@ -25,12 +26,19 @@ public class NotificationOutboxRelay {
             NotificationRepository notifications,
             NotificationRequestedEventPublisher publisher,
             Duration lease,
+            int claimBatchSize,
             FullJitterBackOff backOff,
             Clock clock) {
         this.outboxes = Objects.requireNonNull(outboxes, "outboxes");
         this.notifications = Objects.requireNonNull(notifications, "notifications");
         this.publisher = Objects.requireNonNull(publisher, "publisher");
         this.lease = Objects.requireNonNull(lease, "lease");
+        if (claimBatchSize < 1) {
+            throw new IllegalArgumentException(
+                    "claimBatchSize 는 1 이상이어야 합니다. 0 이면 릴레이가 아무것도 집지 않고 "
+                            + "조용히 정상으로 보입니다. 받은 값=" + claimBatchSize);
+        }
+        this.claimBatchSize = claimBatchSize;
         this.backOff = Objects.requireNonNull(backOff, "backOff");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
@@ -46,8 +54,23 @@ public class NotificationOutboxRelay {
         return backOff.nextDelay(claim.failureCount() + 1);
     }
 
-    public boolean poll() {
-        return outboxes.claimNext(lease).map(this::publish).orElse(false);
+    /**
+     * 한 번에 여러 건 집어 <b>차례로</b> 발행한다.
+     *
+     * <p><b>아직 차례로다.</b> 배치로 집는 것과 동시에 보내는 것은 다른 문제이고,
+     * 워커 풀은 CY-906(#195)이 붙인다. 여기까지만으로도 선점 경합이 사라지고 왕복이 줄지만,
+     * 발행 자체가 느린 대상(예: 외부 HTTP)에서는 <b>동시성이 없으면 처리량이 안 는다.</b>
+     *
+     * @return 실제로 발행한 건수. 0 이면 집을 것이 없었거나 전부 실패했다
+     */
+    public int poll() {
+        int published = 0;
+        for (NotificationOutboxClaim claim : outboxes.claimBatch(lease, claimBatchSize)) {
+            if (publish(claim)) {
+                published++;
+            }
+        }
+        return published;
     }
 
     private boolean publish(NotificationOutboxClaim claim) {

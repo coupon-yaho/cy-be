@@ -18,6 +18,33 @@ public class NotificationRelayProperties {
     private long fixedDelayMs = 100L;
 
     /**
+     * 한 회차에 집을 최대 건수.
+     *
+     * <p><b>64 는 처리량이 아니라 락 보유 구간에서 나온 값이다.</b> 선점은 한 트랜잭션이고,
+     * 그 안에서 잠근 행은 커밋까지 잡혀 있다. 크게 잡으면 왕복은 줄지만 그만큼 오래 잡는다.
+     *
+     * <p>{@code SKIP LOCKED} 가 다른 워커를 기다리게 하지는 않으므로 <b>경합이 아니라
+     * 회복 지연</b>이 비용이다 — 이 배치가 도는 동안 죽으면 그만큼이 lease 만료를 기다린다.
+     */
+    private int claimBatchSize = 64;
+
+    public int getClaimBatchSize() {
+        return claimBatchSize;
+    }
+
+    /**
+     * @throws IllegalArgumentException 1 미만일 때. 0 이면 릴레이가 아무것도 집지 않고
+     *         <b>조용히 정상으로 보인다</b>
+     */
+    public void setClaimBatchSize(int claimBatchSize) {
+        if (claimBatchSize < 1) {
+            throw new IllegalArgumentException(
+                    "claim batch size 는 1 이상이어야 합니다. 받은 값=" + claimBatchSize);
+        }
+        this.claimBatchSize = claimBatchSize;
+    }
+
+    /**
      * Full Jitter 의 기본 간격. 첫 재시도 상한이 {@code base × 2} 다.
      *
      * <p>200ms 인 이유 — 이보다 짧으면 실패한 것들이 사실상 즉시 다시 와 지터가 무의미하고,

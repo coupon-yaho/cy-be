@@ -162,7 +162,7 @@ class NotificationResendTransactionIntegrationTest {
         }
 
         @Override
-        public Optional<NotificationOutboxClaim> claimNext(Duration lease) {
+        public java.util.List<NotificationOutboxClaim> claimBatch(Duration lease, int max) {
             throw new UnsupportedOperationException();
         }
 

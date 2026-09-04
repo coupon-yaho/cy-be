@@ -31,6 +31,7 @@ public class NotificationRelayConfig {
             ObjectProvider<Clock> clocks) {
         return new NotificationOutboxRelay(outboxes, notifications, publisher,
                 properties.getLease(),
+                properties.getClaimBatchSize(),
                 new FullJitterBackOff(properties.getBackoffBase(), properties.getBackoffCap()),
                 clocks.getIfAvailable(Clock::systemUTC));
     }

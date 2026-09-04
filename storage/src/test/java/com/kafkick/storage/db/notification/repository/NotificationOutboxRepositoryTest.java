@@ -48,10 +48,10 @@ class NotificationOutboxRepositoryTest {
         assertThat(saved.createdAt()).isEqualTo(AT);
         assertThat(repository.findTriggerByNotificationIdAndAttemptSeq(1L, 1))
                 .contains(AttemptTrigger.INITIAL);
-        var claim = repository.claimNext(Duration.ofMinutes(1)).orElseThrow();
+        var claim = claimOne(Duration.ofMinutes(1)).orElseThrow();
         assertThat(claim.outboxId()).isEqualTo(saved.id());
         assertThat(claim.requestedAt()).isEqualTo(AT);
-        assertThat(repository.claimNext(Duration.ofMinutes(1))).isEmpty();
+        assertThat(claimOne(Duration.ofMinutes(1))).isEmpty();
         assertThat(repository.markPublished(saved.id(), "wrong", AT.plusSeconds(1))).isFalse();
         assertThat(repository.markPublished(saved.id(), claim.claimToken(), AT.plusSeconds(1))).isTrue();
     }
@@ -62,26 +62,26 @@ class NotificationOutboxRepositoryTest {
                 3L, 1, AttemptTrigger.INITIAL, AT));
         NotificationOutbox next = repository.save(NotificationOutbox.pending(
                 4L, 1, AttemptTrigger.INITIAL, AT));
-        var first = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+        var first = claimOne(Duration.ofSeconds(1)).orElseThrow();
         jdbcTemplate.update("UPDATE notification_outbox SET claimed_at="
                 + "TIMESTAMPADD(SECOND,-2,CURRENT_TIMESTAMP(6)) WHERE id=?", poison.id());
-        var nextClaim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+        var nextClaim = claimOne(Duration.ofSeconds(1)).orElseThrow();
         assertThat(nextClaim.outboxId()).isEqualTo(next.id());
         assertThat(repository.markPublished(next.id(), nextClaim.claimToken(), AT.plusSeconds(1))).isTrue();
-        assertThat(repository.claimNext(Duration.ofSeconds(1))).isEmpty();
+        assertThat(claimOne(Duration.ofSeconds(1))).isEmpty();
         jdbcTemplate.update("UPDATE notification_outbox SET next_attempt_at="
                 + "TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6)) WHERE id=?", poison.id());
-        var recovered = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+        var recovered = claimOne(Duration.ofSeconds(1)).orElseThrow();
         assertThat(recovered.outboxId()).isEqualTo(poison.id());
         assertThat(recovered.claimToken()).isNotEqualTo(first.claimToken());
         for (int failure = 0; failure < 9; failure++) {
             assertThat(repository.markFailed(poison.id(), recovered.claimToken(), Duration.ZERO))
                     .isTrue();
             if (failure < 8) {
-                recovered = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+                recovered = claimOne(Duration.ofSeconds(1)).orElseThrow();
             }
         }
-        assertThat(repository.claimNext(Duration.ofSeconds(1))).isEmpty();
+        assertThat(claimOne(Duration.ofSeconds(1))).isEmpty();
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT failure_count FROM notification_outbox WHERE id=?", Integer.class, poison.id()))
                 .isEqualTo(10);
@@ -109,7 +109,7 @@ class NotificationOutboxRepositoryTest {
         NotificationOutbox outbox = repository.save(NotificationOutbox.pending(
                 9001L, 1, AttemptTrigger.MANUAL, AT));
         for (int failure = 0; failure < 10; failure++) {
-            var claim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+            var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
             assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
         }
 
@@ -130,16 +130,16 @@ class NotificationOutboxRepositoryTest {
     void repeatedLeaseExpiryAlsoReturnsManualNotificationToFailed() {
         insertSendingNotification(9002L);
         repository.save(NotificationOutbox.pending(9002L, 1, AttemptTrigger.MANUAL, AT));
-        var claim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+        var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
         for (int expiry = 0; expiry < 10; expiry++) {
             jdbcTemplate.update("UPDATE notification_outbox SET claimed_at="
                     + "TIMESTAMPADD(SECOND,-2,CURRENT_TIMESTAMP(6)) WHERE id=?", claim.outboxId());
-            var next = repository.claimNext(Duration.ofSeconds(1));
+            var next = claimOne(Duration.ofSeconds(1));
             if (expiry < 9) {
                 assertThat(next).isEmpty();
                 jdbcTemplate.update("UPDATE notification_outbox SET next_attempt_at="
                         + "TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6)) WHERE id=?", claim.outboxId());
-                claim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+                claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
             } else {
                 assertThat(next).isEmpty();
             }
@@ -160,7 +160,7 @@ class NotificationOutboxRepositoryTest {
         NotificationOutbox outbox = repository.save(NotificationOutbox.pending(
                 9003L, 1, AttemptTrigger.INITIAL, AT));
         for (int failure = 0; failure < 10; failure++) {
-            var claim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+            var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
             assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
         }
 
@@ -184,7 +184,7 @@ class NotificationOutboxRepositoryTest {
         NotificationOutbox outbox = repository.save(NotificationOutbox.pending(
                 9004L, 1, AttemptTrigger.MANUAL, AT));
         for (int failure = 0; failure < 10; failure++) {
-            var claim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+            var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
             assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
         }
 
@@ -210,7 +210,7 @@ class NotificationOutboxRepositoryTest {
         NotificationOutbox outbox = repository.save(NotificationOutbox.pending(
                 9005L, 1, AttemptTrigger.MANUAL, AT));
         for (int failure = 0; failure < 10; failure++) {
-            var claim = repository.claimNext(Duration.ofSeconds(1)).orElseThrow();
+            var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
             assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
         }
 
@@ -243,4 +243,13 @@ class NotificationOutboxRepositoryTest {
                 """, id, id);
     }
 
+
+    /**
+     * 한 건만 집는다. 배치 API 를 그대로 쓰되 이 테스트들이 보는 단위가 한 건이라
+     * 여기서만 좁힌다 — 포트에 편의 메서드를 남기면 <b>운영이 안 쓰는 API</b> 가 생긴다.
+     */
+    private java.util.Optional<com.kafkick.core.notification.domain.NotificationOutboxClaim>
+            claimOne(Duration lease) {
+        return repository.claimBatch(lease, 1).stream().findFirst();
+    }
 }
