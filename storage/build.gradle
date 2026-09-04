@@ -35,6 +35,9 @@ dependencies {
     // 모든 subproject 에 spring-boot-starter 를 걸고 그것이 snakeyaml 을 끌어온다.
     // 판정을 한 벌로 유지하는 것은 규약이지 컴파일 강제가 아니다.
     testFixturesImplementation 'org.yaml:snakeyaml'
+    // AppGrantsComposeContractTest 가 저장소 루트의 compose.yml 을 직접 읽는다.
+    // infra:mq 의 KafkaBrokerComposeContractTest 와 같은 이유로 명시한다.
+    testImplementation 'org.yaml:snakeyaml'
     // ConfigurationPropertyName 이 여기 있다. starter 두 단계를 거친 전이라 명시한다.
     testFixturesImplementation 'org.springframework.boot:spring-boot'
 
@@ -92,5 +95,10 @@ tasks.named('test') {
 tasks.named('test') {
     inputs.dir(rootProject.file('infra/mysql/app-grants'))
             .withPropertyName('appGrantScripts')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    // 같은 이유로 compose.yml 도 선언한다 — AppGrantsComposeContractTest 가 순서 계약을
+    // 여기서 읽는다. 빠뜨리면 depends_on 을 service_started 로 되돌려도 UP-TO-DATE 다.
+    inputs.files(rootProject.file('compose.yml'))
+            .withPropertyName('composeFile')
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }
