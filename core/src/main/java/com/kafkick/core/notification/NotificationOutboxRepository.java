@@ -31,4 +31,21 @@ public interface NotificationOutboxRepository {
     List<NotificationOutboxClaim> claimBatch(Duration lease, int max);
     boolean markPublished(Long outboxId, String claimToken, Instant publishedAt);
     boolean markFailed(Long outboxId, String claimToken, Duration retryDelay);
+
+    /**
+     * <b>집어 놓고 보내 보지도 못한 것을 되돌린다.</b> 즉시 다시 집을 수 있는 상태로 만들고
+     * {@code failure_count} 는 <b>건드리지 않는다.</b>
+     *
+     * <p>{@link #markFailed} 와 다른 이유가 이것이다. 워커 풀이 제출을 거부한 건은
+     * <b>발행이 실패한 것이 아니라 시작도 안 한 것</b>이라, 실패로 세면 거부가 잦은 순간에
+     * {@code failure_count} 가 실제 발행 실패 없이 10 에 닿아 <b>한 번도 안 보낸 알림이
+     * {@code DEAD} 가 된다.</b>
+     *
+     * <p>안 되돌리면 그 행은 <b>lease 가 만료될 때까지</b> {@code IN_PROGRESS} 로 아무도
+     * 못 집는다. 기본 lease 가 30초이므로 그만큼 늦는다.
+     *
+     * @return 되돌렸으면 {@code true}. 토큰이 안 맞거나 이미 남이 가져갔으면 {@code false} —
+     *         <b>그 경우 아무것도 하지 않는 것이 맞다</b>, 이 건은 이미 남의 것이다
+     */
+    boolean releaseClaim(Long outboxId, String claimToken);
 }

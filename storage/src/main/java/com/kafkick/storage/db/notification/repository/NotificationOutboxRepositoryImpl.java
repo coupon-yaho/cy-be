@@ -250,6 +250,29 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
         return updated;
     }
 
+    /**
+     * <b>{@code failure_count} 를 안 건드린다.</b> 이 경로는 발행이 실패한 것이 아니라
+     * <b>시작도 못 한 것</b>이다 — 워커 풀이 제출을 거부한 건을 실패로 세면, 거부가 잦은
+     * 순간에 {@code failure_count} 가 실제 발행 실패 없이 10 에 닿아 <b>한 번도 안 보낸
+     * 알림이 {@code DEAD} 가 된다.</b>
+     *
+     * <p>{@code next_attempt_at} 을 현재 시각으로 둔다. 지연을 주면 되돌린 의미가 없다 —
+     * 이 건은 아직 아무 대가도 치르지 않았다.
+     *
+     * <p>{@code REQUIRES_NEW} 인 이유는 {@link #markFailed}·{@link #markPublished} 와 같다 —
+     * 부르는 쪽의 트랜잭션과 운명을 같이하면 <b>되돌리려던 것이 함께 롤백된다.</b>
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean releaseClaim(Long outboxId, String claimToken) {
+        return jdbcTemplate.update("""
+                UPDATE notification_outbox
+                   SET status='PENDING', next_attempt_at=CURRENT_TIMESTAMP(6),
+                       claimed_at=NULL, claim_token=NULL
+                 WHERE id=? AND status='IN_PROGRESS' AND claim_token=?
+                """, outboxId, claimToken) == 1;
+    }
+
     private void failManualNotification(Long outboxId) {
         int won = jdbcTemplate.update("""
                 INSERT IGNORE INTO notification_attempts (

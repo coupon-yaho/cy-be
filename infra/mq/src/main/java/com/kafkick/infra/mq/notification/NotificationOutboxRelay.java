@@ -9,6 +9,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
+import org.springframework.context.SmartLifecycle;
+
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.Notification;
@@ -16,7 +18,7 @@ import com.kafkick.core.notification.domain.NotificationOutboxClaim;
 import com.kafkick.core.notification.event.NotificationRequestedEvent;
 import com.kafkick.core.notification.event.NotificationRequestedEventPublisher;
 
-public class NotificationOutboxRelay implements AutoCloseable {
+public class NotificationOutboxRelay implements SmartLifecycle {
 
     /**
      * 건당 발행에 넉넉히 잡는 시간. <b>측정값이 아니라 예산이다</b> — 배치가 lease 를 태워
@@ -31,6 +33,13 @@ public class NotificationOutboxRelay implements AutoCloseable {
 
     /** {@link #awaitDrain} 이 인플라이트를 다시 볼 때까지 쉬는 간격. */
     private static final long DRAIN_POLL_NANOS = 1_000_000L;
+
+    /**
+     * 배수 대기 상한. <b>{@link Duration#toNanos()} 가 던지지 않는 범위</b>여야 한다 —
+     * 그 예외는 {@code stopping} 을 이미 세운 뒤에 터져서, <b>배수도 못 끝낸 릴레이가
+     * 영영 새로 안 집는 상태</b>로 남는다. 종료를 기다리는 것이므로 하루면 넘치고도 남는다.
+     */
+    private static final Duration MAX_DRAIN_TIMEOUT = Duration.ofDays(1);
 
     /**
      * lease 상한. <b>저장소 어댑터와 같은 365일</b>이다 — 여기서 더 좁히면 저장소가 받는
@@ -81,6 +90,19 @@ public class NotificationOutboxRelay implements AutoCloseable {
      * 안 그러면 배수하는 동안 스케줄러가 계속 새로 집어 영영 안 끝난다.
      */
     private volatile boolean stopping;
+
+    /**
+     * {@link #poll()} 의 <b>{@code stopping} 검사부터 제출까지</b>와 {@link #awaitDrain} 의
+     * <b>{@code stopping} 세우기</b>를 서로 배제한다.
+     *
+     * <p>없으면 이런 순서가 가능하다 — 폴링이 {@code stopping=false} 를 읽고, 그 사이
+     * 종료 스레드가 깃발을 세우고 인플라이트 0 을 보고 <b>배수 완료로 판정</b>하고, 그 뒤
+     * 폴링이 새로 집어 제출한다. {@code @Scheduled} 의 {@code fixedDelay} 는 폴링끼리만
+     * 직렬화하지 종료 스레드와는 아무 관계가 없다.
+     *
+     * <p>잡고 있는 구간은 짧다 — 제출은 즉시 반환하고 발행은 워커가 한다.
+     */
+    private final Object claimGate = new Object();
 
     /**
      * @throws NullPointerException 인자가 {@code null} 일 때 —
@@ -195,18 +217,40 @@ public class NotificationOutboxRelay implements AutoCloseable {
      *         백프레셔로 건너뛰었거나 종료 중이다
      */
     public int poll() {
-        if (stopping) {
-            return 0;
+        synchronized (claimGate) {
+            if (stopping) {
+                return 0;
+            }
+            int capacity = maxInFlight - inFlight.get();
+            if (capacity <= 0) {
+                return 0;
+            }
+            return dispatch(outboxes.claimBatch(lease, Math.min(claimBatchSize, capacity)));
         }
-        int capacity = maxInFlight - inFlight.get();
-        if (capacity <= 0) {
-            return 0;
-        }
-        List<NotificationOutboxClaim> claims =
-                outboxes.claimBatch(lease, Math.min(claimBatchSize, capacity));
-        for (NotificationOutboxClaim claim : claims) {
+    }
+
+    /**
+     * 집은 것을 워커에 넘긴다. <b>거부되면 넘기다 만 나머지까지 전부 되돌린다.</b>
+     *
+     * <p>되돌리지 않으면 그 행들은 <b>lease 가 만료될 때까지</b> {@code IN_PROGRESS} 로
+     * 아무도 못 집는다 — 기본 30초다. 거부는 이미 집은 뒤에 나므로, 집은 것을 원래대로
+     * 놓아 주는 쪽이 이 상황에서 할 수 있는 유일하게 맞는 일이다.
+     *
+     * <p><b>{@code markFailed} 가 아니라 {@code releaseClaim} 이다.</b> 거부는 발행 실패가
+     * 아니라 <b>시작도 못 한 것</b>이라, 실패로 세면 거부가 잦은 순간에
+     * {@code failure_count} 가 실제 발행 실패 없이 10 에 닿아 <b>한 번도 안 보낸 알림이
+     * {@code DEAD} 가 된다.</b>
+     *
+     * <p>되돌린 뒤 예외를 다시 던진다. 삼키면 <b>풀이 포화라는 사실이 아무 데도 안 남는다</b> —
+     * 백프레셔가 제 몫을 하는 한 여기는 도달하지 않아야 하는 자리다.
+     *
+     * @return 실제로 넘긴 건수
+     */
+    private int dispatch(List<NotificationOutboxClaim> claims) {
+        for (int i = 0; i < claims.size(); i++) {
+            NotificationOutboxClaim claim = claims.get(i);
             // **먼저 올리고 넘긴다.** 워커가 먼저 돌아 내리는 것을 막으려는 것이 아니라,
-            // execute() 가 거부(RejectedExecutionException)할 때 올린 것을 되돌리기 위해서다.
+            // execute() 가 거부할 때 올린 것을 되돌리기 위해서다.
             inFlight.incrementAndGet();
             try {
                 workers.execute(() -> {
@@ -218,8 +262,9 @@ public class NotificationOutboxRelay implements AutoCloseable {
                 });
             } catch (RuntimeException rejected) {
                 inFlight.decrementAndGet();
-                // 집어 놓고 못 돌린 것은 lease 만료로 회수된다. 여기서 markFailed 를 부르면
-                // **거부가 곧 실패 1회로 세어져** failure_count 가 실제 발행 실패 없이 오른다.
+                for (NotificationOutboxClaim stranded : claims.subList(i, claims.size())) {
+                    outboxes.releaseClaim(stranded.outboxId(), stranded.claimToken());
+                }
                 throw rejected;
             }
         }
@@ -244,7 +289,17 @@ public class NotificationOutboxRelay implements AutoCloseable {
      */
     public boolean awaitDrain(Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
-        stopping = true;
+        if (timeout.isNegative() || timeout.compareTo(MAX_DRAIN_TIMEOUT) > 0) {
+            // **깃발을 세우기 전에 거른다.** toNanos() 가 던지면 stopping 만 세워진 채
+            // 배수를 못 끝낸 릴레이가 남는다 — 그 뒤로는 영영 새로 안 집는다.
+            throw new IllegalArgumentException(
+                    "배수 대기는 음수가 아니고 " + MAX_DRAIN_TIMEOUT + " 이하여야 합니다. "
+                            + "받은 값=" + timeout);
+        }
+        synchronized (claimGate) {
+            // 게이트 안에서 세운다. 이 뒤로는 검사를 통과한 폴링이 남아 있지 않다.
+            stopping = true;
+        }
         long deadline = System.nanoTime() + timeout.toNanos();
         while (inFlight.get() > 0) {
             if (System.nanoTime() - deadline >= 0) {
@@ -265,8 +320,31 @@ public class NotificationOutboxRelay implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public void start() {
+        stopping = false;
+    }
+
+    /**
+     * <b>{@code destroyMethod} 가 아니라 {@link SmartLifecycle} 인 이유 — 순서다.</b>
+     *
+     * <p>{@code ThreadPoolTaskExecutor} 도 {@code SmartLifecycle} 이고 단계가
+     * {@code Integer.MAX_VALUE / 2} 다(실측). 스프링은 <b>단계 내림차순</b>으로 멈추므로
+     * 기본 단계({@code MAX_VALUE})인 이 빈이 <b>풀보다 먼저</b> 멈춘다 — 실측으로
+     * {@code relay.stop → pool.stop → pool.destroy} 순서를 확인했다.
+     *
+     * <p><b>첫 판은 {@code destroyMethod = "close"} 였고 그것이 틀렸다.</b> 소멸 콜백은
+     * lifecycle {@code stop} <b>뒤에</b> 돌아서, 그 사이에 스케줄러가 한 회차를 돌면
+     * 풀이 이미 멈춘 뒤라 <b>제출이 거부되고 집어 둔 행이 붕 뜬다.</b> 리뷰가 짚었고,
+     * 소멸 순서만 재던 그때의 테스트는 그것을 못 봤다 — {@code stop} 을 안 계측했다.
+     */
+    @Override
+    public void stop() {
         awaitDrain(defaultDrainTimeout());
+    }
+
+    @Override
+    public boolean isRunning() {
+        return !stopping;
     }
 
     private boolean publish(NotificationOutboxClaim claim) {

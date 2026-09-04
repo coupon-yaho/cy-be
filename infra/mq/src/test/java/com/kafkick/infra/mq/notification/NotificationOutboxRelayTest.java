@@ -275,6 +275,108 @@ class NotificationOutboxRelayTest {
     }
 
     /**
+     * <b>배치 중간에 거부되면 아직 안 넘긴 나머지까지 되돌린다.</b>
+     *
+     * <p>{@code claimBatch} 는 <b>전부 먼저 선점한다.</b> 그래서 제출 루프가 중간에 멈추면
+     * 남은 행은 넘겨지지도, 실패로 적히지도 않은 채 {@code IN_PROGRESS} 로 남는다 —
+     * <b>lease 가 만료될 때까지</b>(기본 30초) 아무도 못 집는다. 리뷰가 짚었고, 그때의
+     * 거부 테스트는 클레임이 하나뿐이라 이 부분 배치 지연을 못 봤다.
+     *
+     * <p>되돌리는 것은 {@code markFailed} 가 아니라 {@code releaseClaim} 이다 — 거부는
+     * 발행 실패가 아니라 <b>시작도 못 한 것</b>이라, 실패로 세면 거부가 잦은 순간에
+     * <b>한 번도 안 보낸 알림이 {@code DEAD} 로 간다.</b>
+     */
+    @Test
+    void aRejectionMidBatchReleasesTheStrandedRemainder() {
+        java.util.concurrent.atomic.AtomicInteger accepted =
+                new java.util.concurrent.atomic.AtomicInteger();
+        Executor rejectsAfterFirst = task -> {
+            if (accepted.getAndIncrement() >= 1) {
+                throw new RejectedExecutionException("pool full");
+            }
+            task.run();
+        };
+        NotificationOutboxRelay relay = relayWith(LEASE, BATCH, rejectsAfterFirst, 4, 4);
+        when(outboxes.claimBatch(LEASE, 4))
+                .thenReturn(List.of(claim(1L), claim(2L), claim(3L)));
+        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+
+        assertThatThrownBy(relay::poll).isInstanceOf(RejectedExecutionException.class);
+
+        // 첫 건은 실제로 돌았고, 거부된 2번과 아직 못 넘긴 3번이 되돌려져야 한다.
+        verify(outboxes).releaseClaim(2L, "token-2");
+        verify(outboxes).releaseClaim(3L, "token-3");
+        verify(outboxes, never()).releaseClaim(1L, "token-1");
+        verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
+                any(), any());
+        assertThat(relay.inFlight()).isZero();
+    }
+
+    /**
+     * <b>배수 대기 상한을 넘기면 깃발을 세우기 전에 거절한다.</b>
+     *
+     * <p>{@link Duration#toNanos()} 가 큰 값에서 던지는데, 그 예외가
+     * {@code stopping} 을 세운 <b>뒤에</b> 터지면 <b>배수도 못 끝낸 릴레이가 영영 새로 안
+     * 집는 상태</b>로 남는다. 그래서 검사가 대입보다 앞이어야 한다 — 이 테스트는
+     * 예외가 나는 것뿐 아니라 <b>그 뒤에도 릴레이가 계속 돈다</b>는 것까지 본다.
+     */
+    @Test
+    void anOutOfRangeDrainTimeoutIsRejectedBeforeTheStopFlagIsSet() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> relay.awaitDrain(Duration.ofDays(400)))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(relay.isRunning())
+                .as("거절이 릴레이를 멈춘 상태로 남기면 그 뒤로 영영 새로 안 집습니다").isTrue();
+        assertThat(relay.poll()).isZero();
+        verify(outboxes).claimBatch(LEASE, BATCH);
+    }
+
+    /**
+     * <b>배수가 끝난 뒤에는 이미 진행 중이던 폴링도 새로 집지 못한다.</b>
+     *
+     * <p>{@code stopping} 검사와 클레임이 원자적으로 묶이지 않으면 이런 순서가 가능하다 —
+     * 폴링이 {@code false} 를 읽고, 종료 스레드가 깃발을 세우고 인플라이트 0 을 보고
+     * <b>배수 완료로 판정</b>하고, 그 뒤 폴링이 새로 집어 제출한다. {@code fixedDelay} 는
+     * 폴링끼리만 직렬화하지 종료 스레드와는 아무 관계가 없다. 리뷰가 짚었다.
+     *
+     * <p>여기서는 <b>클레임 도중에</b> 다른 스레드가 배수를 끝내게 만든다. 게이트가
+     * 없으면 그 폴링이 집은 것을 그대로 제출해 <b>배수 뒤 인플라이트</b>가 생긴다.
+     */
+    @Test
+    void aPollAlreadyInProgressCannotClaimPastACompletedDrain() throws Exception {
+        CountDownLatch claiming = new CountDownLatch(1);
+        CountDownLatch drained = new CountDownLatch(1);
+        when(outboxes.claimBatch(LEASE, BATCH)).thenAnswer(invocation -> {
+            claiming.countDown();
+            // 게이트가 없다면 이 사이에 배수가 끝난다.
+            assertThat(drained.await(2, TimeUnit.SECONDS)).isFalse();
+            return List.of(claim());
+        });
+        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            var polling = caller.submit(relay::poll);
+            assertThat(claiming.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // 게이트를 잡을 때까지 여기서 막힌다 — 그것이 이 테스트의 요점이다.
+            assertThat(relay.awaitDrain(Duration.ofSeconds(5))).isTrue();
+            drained.countDown();
+
+            assertThat(polling.get(5, TimeUnit.SECONDS))
+                    .as("게이트가 없으면 배수가 끝난 뒤에 이 폴링이 제출합니다").isEqualTo(1);
+            assertThat(relay.inFlight())
+                    .as("배수가 끝났는데 인플라이트가 남아 있으면 종료 보장이 깨진 것입니다")
+                    .isZero();
+            assertThat(relay.poll()).isZero();
+        } finally {
+            caller.shutdownNow();
+        }
+    }
+
+    /**
      * <b>늦은 워커의 결과는 버려진다.</b> lease 가 만료되어 남이 다시 집은 뒤에 끝난 워커는
      * {@code claim_token} 이 안 맞아 <b>0행</b>을 고친다. 저장소가 그것을 {@code false} 로
      * 돌려주는 것은 이미 재고 있고({@code NotificationOutboxRepositoryTest}), 여기서 보는
@@ -315,6 +417,12 @@ class NotificationOutboxRelayTest {
     private static NotificationOutboxClaim claim(int failureCount) {
         return new NotificationOutboxClaim(7L, 41L, 1,
                 AttemptTrigger.INITIAL, "token", AT, failureCount);
+    }
+
+    /** 배치 안에서 <b>어느 건이</b> 되돌려졌는지 보려면 id·토큰이 달라야 한다. */
+    private static NotificationOutboxClaim claim(long outboxId) {
+        return new NotificationOutboxClaim(outboxId, 41L, 1,
+                AttemptTrigger.INITIAL, "token-" + outboxId, AT, 0);
     }
 
     private static Notification notification() {
