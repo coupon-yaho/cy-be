@@ -262,13 +262,31 @@ public class NotificationOutboxRelay implements SmartLifecycle {
                 });
             } catch (RuntimeException rejected) {
                 inFlight.decrementAndGet();
-                for (NotificationOutboxClaim stranded : claims.subList(i, claims.size())) {
-                    outboxes.releaseClaim(stranded.outboxId(), stranded.claimToken());
-                }
+                releaseAll(claims.subList(i, claims.size()), rejected);
                 throw rejected;
             }
         }
         return claims.size();
+    }
+
+    /**
+     * 붕 뜬 클레임을 <b>건별로</b> 되돌린다. 하나가 실패해도 나머지를 계속 시도한다.
+     *
+     * <p>첫 판은 그냥 루프였는데, <b>되돌리는 문장 자체가 던질 수 있다</b>(락 경합·연결
+     * 끊김). 그러면 그 뒤의 클레임이 또 lease 만료까지 남는다 — 되돌리기를 넣은 이유가
+     * 바로 그것인데 같은 구멍을 한 겹 안쪽에 다시 판 셈이다. 리뷰가 짚었다.
+     *
+     * <p>실패는 <b>원래 거부에 매달아</b> 보낸다. 삼키면 되돌리기가 실패했다는 사실이
+     * 아무 데도 안 남고, 대신 던지면 <b>진짜 원인인 거부가 가려진다.</b>
+     */
+    private void releaseAll(List<NotificationOutboxClaim> stranded, RuntimeException cause) {
+        for (NotificationOutboxClaim claim : stranded) {
+            try {
+                outboxes.releaseClaim(claim.outboxId(), claim.claimToken());
+            } catch (RuntimeException failed) {
+                cause.addSuppressed(failed);
+            }
+        }
     }
 
     /** 지금 워커 풀에 물려 둔 건수. 게이지가 읽는다. */

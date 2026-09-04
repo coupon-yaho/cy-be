@@ -313,6 +313,38 @@ class NotificationOutboxRelayTest {
     }
 
     /**
+     * <b>되돌리는 문장이 던져도 나머지는 계속 되돌린다.</b>
+     *
+     * <p>{@code releaseClaim} 자체가 실패할 수 있다(락 경합·연결 끊김). 거기서 루프가
+     * 멈추면 그 뒤의 클레임이 또 lease 만료까지 {@code IN_PROGRESS} 로 남는다 —
+     * <b>되돌리기를 넣은 이유가 바로 그것인데 같은 구멍을 한 겹 안쪽에 다시 파는 셈이다.</b>
+     * 리뷰가 짚었다.
+     *
+     * <p>실패는 원래 거부에 {@code suppressed} 로 매달린다. 삼키면 되돌리기가 실패한
+     * 사실이 안 남고, 대신 던지면 진짜 원인인 거부가 가려진다.
+     */
+    @Test
+    void aFailingReleaseDoesNotStrandTheRestOfTheBatch() {
+        Executor rejecting = task -> {
+            throw new RejectedExecutionException("pool full");
+        };
+        NotificationOutboxRelay relay = relayWith(LEASE, BATCH, rejecting, 4, 4);
+        when(outboxes.claimBatch(LEASE, 4))
+                .thenReturn(List.of(claim(1L), claim(2L), claim(3L)));
+        when(outboxes.releaseClaim(1L, "token-1"))
+                .thenThrow(new IllegalStateException("lock wait timeout"));
+
+        assertThatThrownBy(relay::poll)
+                .isInstanceOf(RejectedExecutionException.class)
+                .satisfies(thrown -> assertThat(thrown.getSuppressed())
+                        .as("되돌리기가 실패한 사실이 아무 데도 안 남으면 안 됩니다")
+                        .hasSize(1));
+
+        verify(outboxes).releaseClaim(2L, "token-2");
+        verify(outboxes).releaseClaim(3L, "token-3");
+    }
+
+    /**
      * <b>배수 대기 상한을 넘기면 깃발을 세우기 전에 거절한다.</b>
      *
      * <p>{@link Duration#toNanos()} 가 큰 값에서 던지는데, 그 예외가
