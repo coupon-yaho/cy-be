@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.Set;
+import java.util.List;
+import java.util.ArrayList;
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
@@ -18,10 +21,13 @@ import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.domain.NotificationOutboxStatus;
+import com.kafkick.core.notification.retry.NotificationRetryBackOffConfig;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
-@Import(NotificationOutboxRepositoryImpl.class)
+// 지연 정책은 core 가 소유한다(CY-907). @DataJpaTest 는 그 @Configuration 을 스캔하지 않으므로
+// 여기서 명시로 붙인다 — 안 붙이면 어댑터가 백오프를 못 받아 컨텍스트가 안 뜬다.
+@Import({NotificationOutboxRepositoryImpl.class, NotificationRetryBackOffConfig.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationOutboxRepositoryTest {
     private static final Instant AT = Instant.parse("2026-08-27T00:00:00Z");
@@ -68,6 +74,13 @@ class NotificationOutboxRepositoryTest {
         var nextClaim = claimOne(Duration.ofSeconds(1)).orElseThrow();
         assertThat(nextClaim.outboxId()).isEqualTo(next.id());
         assertThat(repository.markPublished(next.id(), nextClaim.claimToken(), AT.plusSeconds(1))).isTrue();
+        // 재시도 시각을 **테스트가 정한다.** 예전에는 회수 지연이 고정 1초라 그냥
+        // isEmpty() 를 걸어도 됐는데, 지금은 Full Jitter 라 random(0, 400ms) 다(CY-907) —
+        // 0 에 가까운 값이 나오면 곧바로 다시 집힌다. 그것은 지터의 정의대로이지 결함이
+        // 아니므로, **여기서 재려는 것**(재시도 시각 전에는 안 집힌다)만 남기고 값에 대한
+        // 의존을 끊는다.
+        jdbcTemplate.update("UPDATE notification_outbox SET next_attempt_at="
+                + "TIMESTAMPADD(SECOND,60,CURRENT_TIMESTAMP(6)) WHERE id=?", poison.id());
         assertThat(claimOne(Duration.ofSeconds(1))).isEmpty();
         jdbcTemplate.update("UPDATE notification_outbox SET next_attempt_at="
                 + "TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6)) WHERE id=?", poison.id());

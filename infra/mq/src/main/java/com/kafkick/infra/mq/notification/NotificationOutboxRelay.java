@@ -11,6 +11,8 @@ import java.util.concurrent.locks.LockSupport;
 
 import org.springframework.context.SmartLifecycle;
 
+import com.kafkick.core.notification.retry.FullJitterBackOff;
+
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.Notification;

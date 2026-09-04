@@ -6,6 +6,7 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,6 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.domain.NotificationOutbox;
+import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.notification.domain.NotificationOutboxStatus;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
 import com.kafkick.core.notification.domain.AttemptTrigger;
@@ -26,36 +28,42 @@ import com.kafkick.storage.db.notification.entity.NotificationOutboxEntity;
 
 @Repository
 public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepository {
-    /**
-     * <b>여기는 아직 고정 1초다 — 발행 실패 경로만 흩뜨렸다(CY-903).</b>
-     *
-     * <p>같은 결함이 남아 있고, 사실 <b>이쪽이 더 잘 뭉친다</b>. 발행 실패는 확률적으로
-     * 흩어져 일어나지만 lease 만료는 <b>릴레이가 죽거나 재기동이 느릴 때 인플라이트가
-     * 한꺼번에</b> 만료되기 때문이다. 그것들이 전부 같은 1초 창으로 돌아온다.
-     *
-     * <p><b>같이 안 고친 이유는 한 줄이 아니어서다.</b> 이 메서드는 어댑터 안이라
-     * {@code FullJitterBackOff} 에 닿지 못한다. 백오프를 어댑터에 넘기면 CY-903 이 세운
-     * <i>"지연 정책은 릴레이에 둔다"</i> 를 부분적으로 되돌리므로, 어디에 두어야 두 경로가
-     * <b>한 벌</b>을 공유하는지가 먼저 정해져야 한다. 그 결정을 재시도 로직 리뷰에 섞으면
-     * 둘 다 흐려진다.
-     *
-     * <p>티켓 — <a href="https://github.com/coupon-yaho/cy-be/issues/196">#196 (CY-907)</a>
-     */
-    private static final long EXPIRED_CLAIM_RETRY_DELAY_SECONDS = 1;
 
     private final NotificationOutboxJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate requiresNew;
 
+    /**
+     * <b>이 어댑터는 지연 정책을 소유하지 않는다 — 주입받아 쓸 뿐이다.</b>
+     *
+     * <p>한때 여기 {@code EXPIRED_CLAIM_RETRY_DELAY_SECONDS = 1} 이 있었다. 발행 실패
+     * 경로만 흩뜨리고(CY-903) 이쪽은 고정 1초로 남겨 뒀는데, <b>사실 이쪽이 더 잘
+     * 뭉친다</b> — 발행 실패는 확률적으로 흩어져 나지만 lease 만료는 릴레이가 죽거나
+     * 재기동이 느릴 때 <b>인플라이트가 한꺼번에</b> 만료되고, 그것들이 전부 같은 1초
+     * 창으로 돌아왔다.
+     *
+     * <p>정책이 {@code core} 에 있는 이유와 후보 셋 중 무엇을 왜 골랐는지는
+     * {@code NotificationRetryBackOffConfig} 에 적었다.
+     */
+    private final FullJitterBackOff backOff;
+
+    /**
+     * @throws NullPointerException {@code backOff} 가 {@code null} 일 때.
+     *         <b>여기서 막는 이유</b> — 안 막으면 그 사실이 <b>lease 가 처음 만료되는
+     *         순간</b>에야 드러난다. 그때는 회수가 통째로 실패하고, 인플라이트가 아무도
+     *         못 집는 상태로 쌓인다. 기동 시점으로 당긴다
+     */
     public NotificationOutboxRepositoryImpl(
             NotificationOutboxJpaRepository repository,
             JdbcTemplate jdbcTemplate,
-            PlatformTransactionManager transactionManager
+            PlatformTransactionManager transactionManager,
+            FullJitterBackOff backOff
     ) {
         this.repository = repository;
         this.jdbcTemplate = jdbcTemplate;
         this.requiresNew = new TransactionTemplate(transactionManager);
         this.requiresNew.setPropagationBehavior(Propagation.REQUIRES_NEW.value());
+        this.backOff = Objects.requireNonNull(backOff, "backOff");
     }
 
     @Override
@@ -163,8 +171,9 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * 조건부 갱신({@code AND failure_count=?})이 동시 회수를 가르므로 둘이 부딪혀도
      * 한쪽만 이긴다. 여기서 건너뛰면 오히려 회수가 밀린다.
      *
-     * <p>⚠️ 지연은 아직 고정 1초다 — 발행 실패 경로만 흩뜨렸다(CY-903). 근거와 후속은
-     * {@link #EXPIRED_CLAIM_RETRY_DELAY_SECONDS} 에 적었다.
+     * <p>지연은 <b>건마다 따로</b> 뽑는다. 한 번 뽑아 배치 전체에 쓰면 <b>지터를 넣고도
+     * 같이 만료된 것들이 여전히 같은 시각으로 돌아온다</b> — 이 티켓이 고치려는 것이
+     * 정확히 그 뭉침이라, 값을 재사용하는 순간 고친 게 없어진다.
      */
     private void recoverExpiredClaims(long leaseSeconds, int max) {
         record ExpiredClaim(long id, int failureCount) { }
@@ -180,15 +189,19 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
 
         for (ExpiredClaim claim : expired) {
             int nextFailureCount = claim.failureCount() + 1;
+            // failureCount 는 **이번 실패를 세기 전** 값이라 +1 이 이번이 몇 번째 재시도인지다.
+            // 릴레이의 실패 경로가 쓰는 것과 같은 계산이다 — 같은 객체를 쓰므로 갈릴 수 없다.
+            long retryMicros = durationMicros(backOff.nextDelay(nextFailureCount),
+                    "expired claim retry delay");
             String nextStatus = nextFailureCount >= 10 ? "DEAD" : "PENDING";
             int updated = jdbcTemplate.update("""
                     UPDATE notification_outbox
                        SET failure_count=?, status=?,
-                           next_attempt_at=TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6)),
+                           next_attempt_at=TIMESTAMPADD(MICROSECOND, ?, CURRENT_TIMESTAMP(6)),
                            claimed_at=NULL, claim_token=NULL
                      WHERE id=? AND status='IN_PROGRESS' AND failure_count=?
                        AND claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))
-                    """, nextFailureCount, nextStatus, EXPIRED_CLAIM_RETRY_DELAY_SECONDS,
+                    """, nextFailureCount, nextStatus, retryMicros,
                     claim.id(), claim.failureCount(), -leaseSeconds);
             if (updated == 1 && nextFailureCount >= 10) {
                 failManualNotification(claim.id());
