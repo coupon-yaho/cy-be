@@ -8,12 +8,15 @@ import java.util.List;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -42,9 +45,13 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * {@code management.metrics.use-global-registry} 를 끄거나 레지스트리 배선이 바뀌면
  * 이 지표들이 <b>조용히</b> 사라진다 — 노출 목록에는 그대로 있으니 설정만 봐서는 모른다.
  *
- * <h2>커스텀 지표와 겹치지 않는다</h2>
+ * <h2>커스텀 지표와 겹치지 않았다 — 2026-09-04 한 번 훑은 결과다</h2>
  *
- * <p>{@code cy_*} 33종을 훑어 봤는데 내장과 겹치는 것이 <b>없다.</b>
+ * <p><b>이 테스트가 지키는 것이 아니다.</b> 아래는 그날 {@code cy_*} 33종을 손으로 훑은
+ * 기록이고, 이 클래스는 <b>내장 지표가 도달하는지</b>만 본다. 겹침 여부는 의미 판단이라
+ * 기계가 가릴 수 없다 — 이름이 달라도 같은 것을 재면 겹치는 것이다.
+ *
+ * <p>커스텀 지표를 늘릴 때 이 목록을 다시 훑는 것은 사람의 몫이다.
  *
  * <ul>
  *   <li>{@code cy_batch_last_success_seconds} 는 <b>마지막 성공 시각</b>이고 내장은
@@ -74,10 +81,26 @@ class SpringBatchMeterBridgeTest {
     @Autowired
     private MeterRegistry registry;
 
+    @Autowired
+    private JobRepository jobRepository;
+
+    /**
+     * <b>배치 메타를 비우고 시작한다.</b> 같은 식별 파라미터로 완료된 실행이 공유 DB 에
+     * 남아 있으면 {@code JobInstanceAlreadyCompleteException} 으로 죽는다 —
+     * 이 클래스가 재는 것과 아무 상관 없는 이유로, 실행 순서에 따라 깨진다.
+     *
+     * <p>{@code CleanupJobTest} 가 같은 이유로 같은 것을 한다.
+     */
+    @BeforeEach
+    void clearBatchMetadata() {
+        new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+    }
+
     @Test
     void batchMetersReachTheActuatorRegistry() throws Exception {
         JobExecution execution = jobOperator.start(cleanupJob, new JobParametersBuilder()
                 .addLocalDateTime("asOf", LocalDateTime.of(2026, 4, 1, 9, 0))
+                .addString("probe", "meter-bridge")
                 .addLong("attempt", 1L)
                 .toJobParameters());
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
