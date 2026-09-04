@@ -47,6 +47,12 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      */
     private final FullJitterBackOff backOff;
 
+    /**
+     * @throws NullPointerException {@code backOff} 가 {@code null} 일 때.
+     *         <b>여기서 막는 이유</b> — 안 막으면 그 사실이 <b>lease 가 처음 만료되는
+     *         순간</b>에야 드러난다. 그때는 회수가 통째로 실패하고, 인플라이트가 아무도
+     *         못 집는 상태로 쌓인다. 기동 시점으로 당긴다
+     */
     public NotificationOutboxRepositoryImpl(
             NotificationOutboxJpaRepository repository,
             JdbcTemplate jdbcTemplate,
