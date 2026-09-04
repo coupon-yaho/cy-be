@@ -96,9 +96,13 @@ class AppGrantsComposeContractTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("management.yml.example 에 관리 포트 선언이 없습니다"));
 
+        // `$$` 여야 한다. `$` 하나면 compose 가 호스트에서 치환하는데, api 가 실제로 쓰는
+        // 값은 env_file 로 컨테이너에 주입된 것이라 출처가 다르다 — 셸에 같은 이름이
+        // export 돼 있거나 --env-file 로 다른 파일을 주면 엇갈린다.
         assertThat(healthcheck.get("test").toString())
-                .as("앱은 %s 를 읽는데 healthcheck 가 다른 이름을 쓰면, 포트를 옮긴 환경에서"
-                        + " api 가 영영 healthy 가 안 되고 app-grants 가 안 돕니다", declared)
-                .contains("${" + declared + ":-");
+                .as("앱은 %s 를 읽는데 healthcheck 가 다른 이름을 쓰거나 호스트에서 미리"
+                        + " 치환되면, api 가 떠 있어도 healthy 가 안 되고 app-grants 가 안 돕니다",
+                        declared)
+                .contains("$${" + declared + ":-");
     }
 }
