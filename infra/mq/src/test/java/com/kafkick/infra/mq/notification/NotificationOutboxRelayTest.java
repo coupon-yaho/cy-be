@@ -1,6 +1,7 @@
 package com.kafkick.infra.mq.notification;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -137,5 +138,29 @@ class NotificationOutboxRelayTest {
         return new Notification(41L, 10L, 20L, 100L, Notification.DEFAULT_CHANNEL,
                 NotificationStatus.PENDING, 0, 0, null, "member:20", "coupon-issued:100",
                 AT, AT, null, null);
+    }
+
+    /**
+     * <b>배치 전체가 한 lease 를 공유한다.</b> 집는 순간 전부 {@code claimed_at} 이 찍히는데
+     * 발행은 차례로 도므로, 뒤쪽 행은 앞쪽을 기다리며 lease 를 태운다. 그 합이 lease 를
+     * 넘으면 <b>아직 처리도 안 한 행이 회수되어 남이 같은 이벤트를 다시 발행한다.</b>
+     *
+     * <p>Qodo 리뷰가 잡았다 — 배치 크기와 lease 를 따로 정할 수 있게 두면 그 조합이
+     * 조용히 중복 발행을 만든다.
+     */
+    @Test
+    void rejectsBatchSizeThatWouldOutlastTheLease() {
+        // 64 × 100ms = 6.4s 는 30s lease 안쪽이다. 400 × 100ms = 40s 는 넘는다.
+        assertThatThrownBy(() -> new NotificationOutboxRelay(outboxes, notifications, publisher,
+                LEASE, 400, new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("lease");
+    }
+
+    @Test
+    void rejectsNonPositiveBatchSize() {
+        assertThatThrownBy(() -> new NotificationOutboxRelay(outboxes, notifications, publisher,
+                LEASE, 0, new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

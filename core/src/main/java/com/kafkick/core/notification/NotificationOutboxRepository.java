@@ -25,6 +25,8 @@ public interface NotificationOutboxRepository {
      * @param max   한 번에 집을 최대 건수
      * @return 선점한 것들. 없으면 빈 목록. <b>요청한 수보다 적을 수 있다</b> —
      *         남이 이미 잠근 행은 조용히 건너뛴다
+     * @throws IllegalArgumentException {@code max} 가 1 미만일 때. 0 이면 {@code LIMIT 0} 이
+     *         오류 없이 0건을 돌려줘 <b>릴레이가 조용히 멈춘다</b>
      */
     List<NotificationOutboxClaim> claimBatch(Duration lease, int max);
     boolean markPublished(Long outboxId, String claimToken, Instant publishedAt);

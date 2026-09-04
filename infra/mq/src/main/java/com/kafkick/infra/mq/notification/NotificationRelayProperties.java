@@ -33,13 +33,26 @@ public class NotificationRelayProperties {
     }
 
     /**
-     * @throws IllegalArgumentException 1 미만일 때. 0 이면 릴레이가 아무것도 집지 않고
-     *         <b>조용히 정상으로 보인다</b>
+     * 한 회차에 집을 수 있는 절대 상한.
+     *
+     * <p><b>메모리와 SQL 크기 때문이다.</b> 집은 수만큼 id·UUID 를 메모리에 만들고 같은 수의
+     * {@code IN} 자리표시자를 붙인다. 백로그가 큰 상태에서 큰 값을 주면 릴레이가 그것 때문에 죽는다.
+     *
+     * <p>1,000 은 그 선을 넉넉히 아래로 잡은 값이다 — 실제로는 lease 관계
+     * ({@code NotificationOutboxRelay} 의 발행 예산 검사)가 훨씬 먼저 걸린다.
+     */
+    private static final int MAX_CLAIM_BATCH_SIZE = 1_000;
+
+    /**
+     * @throws IllegalArgumentException 1 미만이거나 {@value #MAX_CLAIM_BATCH_SIZE} 초과일 때.
+     *         0 이면 릴레이가 아무것도 집지 않고 <b>조용히 정상으로 보이고</b>,
+     *         너무 크면 메모리와 SQL 크기로 릴레이가 죽는다
      */
     public void setClaimBatchSize(int claimBatchSize) {
-        if (claimBatchSize < 1) {
+        if (claimBatchSize < 1 || claimBatchSize > MAX_CLAIM_BATCH_SIZE) {
             throw new IllegalArgumentException(
-                    "claim batch size 는 1 이상이어야 합니다. 받은 값=" + claimBatchSize);
+                    "claim batch size 는 1 이상 " + MAX_CLAIM_BATCH_SIZE + " 이하여야 합니다. "
+                            + "받은 값=" + claimBatchSize);
         }
         this.claimBatchSize = claimBatchSize;
     }
