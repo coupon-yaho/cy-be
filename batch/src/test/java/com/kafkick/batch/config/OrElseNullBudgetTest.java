@@ -72,6 +72,21 @@ class OrElseNullBudgetTest {
     private static final Pattern OR_ELSE_NULL = Pattern.compile("orElse\\(\\s*null\\s*\\)");
 
     /**
+     * 주석과 javadoc. <b>세기 전에 걷어낸다.</b>
+     *
+     * <p>안 걷어내면 <b>이 규칙을 설명하는 주석</b>이 위반으로 잡힌다 — 왜 그 자리를
+     * 그대로 두는지 적으려면 그 표현을 쓸 수밖에 없는데, 쓰는 순간 예산을 올려야 하고
+     * 그러면 <b>진짜 코드 하나가 늘어난 것과 구분되지 않는다.</b> 설명을 적을수록
+     * 검사가 무뎌지는 셈이라 방향이 거꾸로다.
+     *
+     * <p>문자열 리터럴 안의 {@code //} 까지 가르지는 않는다. 그 정확도를 얻으려면
+     * 파서가 필요하고, 이 저장소에 {@code orElse(null)} 을 <b>문자열로</b> 담은 곳은
+     * 없다(실측) — 생기면 그때 값이 하나 튀므로 조용히 새지 않는다.
+     */
+    private static final Pattern COMMENTS =
+            Pattern.compile("/\\*.*?\\*/|//[^\\n]*", Pattern.DOTALL);
+
+    /**
      * 갈래 ③ — <b>없음이 정상이고 {@code null} 이 그대로 값</b>인 자리.
      *
      * <p>전부 <b>바깥으로 나가는 nullable 값</b>을 만든다. 응답 DTO 필드이거나,
@@ -116,9 +131,10 @@ class OrElseNullBudgetTest {
                     .toList()) {
                 String relative = REPO_ROOT.relativize(path).toString().replace('\\', '/');
                 visited.add(relative);
-                long found = OR_ELSE_NULL
+                String code = COMMENTS
                         .matcher(Files.readString(path, StandardCharsets.UTF_8))
-                        .results().count();
+                        .replaceAll("");
+                long found = OR_ELSE_NULL.matcher(code).results().count();
                 int budget = BUDGET.getOrDefault(relative, 0);
                 if (found != budget) {
                     offenders.add(relative + " orElse(null)=" + found + " 예산=" + budget);
