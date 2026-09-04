@@ -16,6 +16,21 @@ class NotificationRelayPropertiesTest {
         assertThat(properties.getFixedDelayMs()).isEqualTo(100L);
         assertThat(properties.getBackoffBase()).isEqualTo(Duration.ofMillis(200));
         assertThat(properties.getBackoffCap()).isEqualTo(Duration.ofSeconds(20));
+        assertThat(properties.getClaimBatchSize()).isEqualTo(64);
+    }
+
+    /**
+     * 집은 수만큼 id·UUID 를 메모리에 만들고 같은 수의 {@code IN} 자리표시자를 붙인다.
+     * 백로그가 큰 상태에서 큰 값을 주면 릴레이가 그것 때문에 죽는다.
+     */
+    @Test
+    void rejectsBatchSizeOutsideTheSupportedRange() {
+        NotificationRelayProperties properties = new NotificationRelayProperties();
+
+        assertThatThrownBy(() -> properties.setClaimBatchSize(0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> properties.setClaimBatchSize(1_001))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**

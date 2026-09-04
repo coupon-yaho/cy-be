@@ -14,8 +14,53 @@ public class NotificationRelayProperties {
      */
     private static final Duration MAX_BACKOFF = Duration.ofDays(365);
 
+    /**
+     * 한 회차에 집을 수 있는 절대 상한.
+     *
+     * <p><b>메모리와 SQL 크기 때문이다.</b> 집은 수만큼 id·UUID 를 메모리에 만들고 같은 수의
+     * {@code IN} 자리표시자를 붙인다. 백로그가 큰 상태에서 큰 값을 주면 릴레이가 그것 때문에 죽는다.
+     *
+     * <p>1,000 은 그 선을 넉넉히 아래로 잡은 값이다.
+     *
+     * <p><b>lease 관계 검사와 어느 쪽이 먼저 걸리는지는 lease 에 달렸다.</b>
+     * 기본 lease(30초)에서는 배치 300 부터 그쪽이 먼저 막지만, lease 가 100초를 넘으면
+     * 1,000 도 그 검사를 통과하므로 이 상한이 유일한 방어선이 된다. 한때 여기에
+     * <i>"실제로는 lease 관계가 훨씬 먼저 걸린다"</i> 고 적었는데 lease 를 상수로 가정한 것이었다.
+     */
+    private static final int MAX_CLAIM_BATCH_SIZE = 1_000;
+
     private Duration lease = Duration.ofSeconds(30);
     private long fixedDelayMs = 100L;
+
+    /**
+     * 한 회차에 집을 최대 건수.
+     *
+     * <p><b>64 는 처리량이 아니라 락 보유 구간에서 나온 값이다.</b> 선점은 한 트랜잭션이고,
+     * 그 안에서 잠근 행은 커밋까지 잡혀 있다. 크게 잡으면 왕복은 줄지만 그만큼 오래 잡는다.
+     *
+     * <p>{@code SKIP LOCKED} 가 다른 워커를 기다리게 하지는 않으므로 <b>경합이 아니라
+     * 회복 지연</b>이 비용이다 — 이 배치가 도는 동안 죽으면 그만큼이 lease 만료를 기다린다.
+     */
+    private int claimBatchSize = 64;
+
+    public int getClaimBatchSize() {
+        return claimBatchSize;
+    }
+
+
+    /**
+     * @throws IllegalArgumentException 1 미만이거나 {@value #MAX_CLAIM_BATCH_SIZE} 초과일 때.
+     *         0 이면 릴레이가 아무것도 집지 않고 <b>조용히 정상으로 보이고</b>,
+     *         너무 크면 메모리와 SQL 크기로 릴레이가 죽는다
+     */
+    public void setClaimBatchSize(int claimBatchSize) {
+        if (claimBatchSize < 1 || claimBatchSize > MAX_CLAIM_BATCH_SIZE) {
+            throw new IllegalArgumentException(
+                    "claim batch size 는 1 이상 " + MAX_CLAIM_BATCH_SIZE + " 이하여야 합니다. "
+                            + "받은 값=" + claimBatchSize);
+        }
+        this.claimBatchSize = claimBatchSize;
+    }
 
     /**
      * Full Jitter 의 기본 간격. 첫 재시도 상한이 {@code base × 2} 다.

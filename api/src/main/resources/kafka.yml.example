@@ -63,9 +63,21 @@ kafka:
 
   notification:
     relay:
-      # DB claim은 30초 뒤 다른 인스턴스가 회수하고, 한 번에 한 행씩 100ms 간격으로 발행한다.
+      # DB claim 은 lease 가 지나면 다른 인스턴스가 회수한다.
+      # 한 회차에 claim-batch-size 만큼 집어 **차례로** 발행하고, fixed-delay-ms 마다 돈다.
+      #
+      # ⚠️ 세 값이 서로 묶여 있다. 배치 전체가 **한 lease 를 공유**하는데 발행은 차례로
+      #    돌므로, 뒤쪽 행은 앞쪽이 끝나기를 기다리며 lease 를 태운다. 그 합이 lease 를
+      #    넘으면 **아직 처리도 안 한 행이 회수되어 남이 같은 이벤트를 다시 발행한다.**
+      #    NotificationOutboxRelay 가 기동 시 `claim-batch-size × 건당 예산(100ms) < lease`
+      #    를 검사한다 — 배치를 키우거나 lease 를 줄일 때 걸린다.
       lease: ${KAFKA_NOTIFICATION_RELAY_LEASE:30s}
       fixed-delay-ms: ${KAFKA_NOTIFICATION_RELAY_FIXED_DELAY_MS:100}
+      claim-batch-size: ${KAFKA_NOTIFICATION_RELAY_CLAIM_BATCH_SIZE:64}
+      # 실패한 발행을 다시 집기까지의 지연. Full Jitter — random(0, min(cap, base × 2^attempt)).
+      # 고정 지연이면 같이 실패한 것들이 같은 시각에 함께 돌아온다.
+      backoff-base: ${KAFKA_NOTIFICATION_RELAY_BACKOFF_BASE:200ms}
+      backoff-cap: ${KAFKA_NOTIFICATION_RELAY_BACKOFF_CAP:20s}
 
 # ── 지표 개수 (실측 · 2026-08-22) ───────────────────────────────────────────────
 # 프로듀서 클라이언트 메트릭은 client.id 당 74개 이름이고, 이 계층은 프로듀서를 둘
