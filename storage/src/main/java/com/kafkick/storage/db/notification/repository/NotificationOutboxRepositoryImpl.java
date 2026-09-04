@@ -3,6 +3,9 @@ package com.kafkick.storage.db.notification.repository;
 import java.time.Instant;
 import java.time.Duration;
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -71,82 +74,119 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     }
 
     @Override
-    public Optional<NotificationOutboxClaim> claimNext(Duration lease) {
+    public List<NotificationOutboxClaim> claimBatch(Duration lease, int max) {
+        if (max < 1) {
+            throw new IllegalArgumentException(
+                    "claim batch size 는 1 이상이어야 합니다. 0 이면 LIMIT 0 이 오류 없이 "
+                            + "0건을 돌려줘 릴레이가 조용히 멈춥니다. 받은 값=" + max);
+        }
         long leaseSeconds = durationSeconds(lease, true, "outbox lease");
         try {
-            requiresNew.executeWithoutResult(ignored -> recoverExpiredClaim(leaseSeconds));
-            return requiresNew.execute(ignored -> claimPending());
+            requiresNew.executeWithoutResult(ignored -> recoverExpiredClaims(leaseSeconds, max));
+            return requiresNew.execute(ignored -> claimPending(max));
         } catch (PessimisticLockingFailureException contention) {
-            return Optional.empty();
+            // SKIP LOCKED 가 대부분을 막지만 회수 경로는 여전히 기다린다. 이번 회차를 접는다.
+            return List.of();
         }
     }
 
-    private Optional<NotificationOutboxClaim> claimPending() {
-        String token = UUID.randomUUID().toString();
-        int updated = jdbcTemplate.update("""
-                    UPDATE notification_outbox
-                       SET status='IN_PROGRESS', claimed_at=CURRENT_TIMESTAMP(6), claim_token=?
-                     WHERE status='PENDING' AND next_attempt_at <= CURRENT_TIMESTAMP(6)
-                     ORDER BY next_attempt_at, id
-                     LIMIT 1
-                    """, token);
-        if (updated != 1) return Optional.empty();
+    /**
+     * <b>먼저 잠그고, 잠근 것만 선점 표시한다.</b>
+     *
+     * <p>한 문장으로 {@code UPDATE ... LIMIT n} 을 쓰면 갱신 대상을 찾는 동안 남이 잠근 행에서
+     * 멈춘다. {@code SKIP LOCKED} 는 그 행을 <b>조용히 결과에서 빼므로</b> 워커가 서로를
+     * 기다리지 않는다 — MySQL 레퍼런스가 큐 테이블 용도로 지목한 바로 그 성질이다.
+     *
+     * <p><b>토큰은 배치가 아니라 행마다 다르다.</b> {@code uk_notification_outbox_claim_token}
+     * 이 유일 제약이라 한 배치에 같은 토큰을 쓰면 두 번째 행에서 중복키로 죽는다.
+     * 게다가 토큰은 <b>펜싱</b> 수단이라 행마다 다른 편이 맞다 — 늦게 돌아온 워커가 자기
+     * 것만 못 쓰게 되어야지, 배치 전체를 무효로 만들면 안 된다.
+     *
+     * <p>⚠️ {@code SKIP LOCKED} 는 결과가 비결정적이라 <b>statement-based replication 에
+     * unsafe</b> 다(MySQL 문서 명시). 이 저장소는 {@code BinlogFormatGuard} 가 ROW 포맷을
+     * 확인하므로 전제가 지켜진다 — 그 가드가 이제 이 질의의 선행조건이기도 하다.
+     */
+    private List<NotificationOutboxClaim> claimPending(int max) {
+        List<Long> ids = jdbcTemplate.query("""
+                SELECT id FROM notification_outbox
+                 WHERE status='PENDING' AND next_attempt_at <= CURRENT_TIMESTAMP(6)
+                 ORDER BY next_attempt_at, id
+                 LIMIT ?
+                   FOR UPDATE SKIP LOCKED
+                """, (rs, row) -> rs.getLong("id"), max);
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        List<Object[]> args = new ArrayList<>(ids.size());
+        for (Long id : ids) {
+            args.add(new Object[] {UUID.randomUUID().toString(), id});
+        }
+        jdbcTemplate.batchUpdate("""
+                UPDATE notification_outbox
+                   SET status='IN_PROGRESS', claimed_at=CURRENT_TIMESTAMP(6), claim_token=?
+                 WHERE id=? AND status='PENDING'
+                """, args);
+
+        String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
         return jdbcTemplate.query("""
                 SELECT id, notification_id, attempt_seq, `trigger`, claim_token, created_at,
                        failure_count
-                  FROM notification_outbox WHERE claim_token=?
-                """, (rs, row) -> new NotificationOutboxClaim(rs.getLong("id"),
+                  FROM notification_outbox
+                 WHERE id IN (%s) AND status='IN_PROGRESS'
+                 ORDER BY next_attempt_at, id
+                """.formatted(placeholders),
+                (rs, row) -> new NotificationOutboxClaim(rs.getLong("id"),
                         rs.getLong("notification_id"), rs.getInt("attempt_seq"),
                         AttemptTrigger.valueOf(rs.getString("trigger")), rs.getString("claim_token"),
                         rs.getTimestamp("created_at").toInstant(),
-                        rs.getInt("failure_count")), token)
-                .stream().findFirst();
+                        rs.getInt("failure_count")),
+                ids.toArray());
     }
 
-    private void recoverExpiredClaim(long leaseSeconds) {
+    /**
+     * lease 가 지난 선점을 되돌린다. <b>한 번에 여러 건</b> 본다.
+     *
+     * <p>한 건씩 되돌리면 <b>릴레이가 죽었을 때 회복이 가장 느리다</b> — 그때는 인플라이트가
+     * 한꺼번에 만료되는데, 주기마다 한 건씩만 걷으면 밀린 만큼 주기가 곱해진다.
+     *
+     * <p>선점 표시와 달리 여기는 {@code SKIP LOCKED} 를 쓰지 않는다. 되돌리는 것은
+     * <b>남이 잡고 있지 않은 행</b>(lease 가 지났다는 것이 그 뜻이다)이라 경합이 드물고,
+     * 조건부 갱신({@code AND failure_count=?})이 이미 동시 회수를 가른다.
+     *
+     * <p>⚠️ 지연은 아직 고정 1초다 — 발행 실패 경로만 흩뜨렸다(CY-903). 근거와 후속은
+     * {@link #EXPIRED_CLAIM_RETRY_DELAY_SECONDS} 에 적었다.
+     */
+    private void recoverExpiredClaims(long leaseSeconds, int max) {
         record ExpiredClaim(long id, int failureCount) { }
-        Optional<ExpiredClaim> expired = jdbcTemplate.query("""
+        List<ExpiredClaim> expired = jdbcTemplate.query("""
                 SELECT id, failure_count
                   FROM notification_outbox
                  WHERE status='IN_PROGRESS'
                    AND claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))
                  ORDER BY claimed_at, id
-                 LIMIT 1
+                 LIMIT ?
                 """, (rs, row) -> new ExpiredClaim(rs.getLong("id"), rs.getInt("failure_count")),
-                -leaseSeconds).stream().findFirst();
-        if (expired.isEmpty()) return;
-        ExpiredClaim claim = expired.orElseThrow();
-        int nextFailureCount = claim.failureCount() + 1;
-        String nextStatus = nextFailureCount >= 10 ? "DEAD" : "PENDING";
-        int updated = jdbcTemplate.update("""
-                UPDATE notification_outbox
-                   SET failure_count=?, status=?,
-                       next_attempt_at=TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6)),
-                       claimed_at=NULL, claim_token=NULL
-                 WHERE id=? AND status='IN_PROGRESS' AND failure_count=?
-                   AND claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))
-                """, nextFailureCount, nextStatus, EXPIRED_CLAIM_RETRY_DELAY_SECONDS,
-                claim.id(), claim.failureCount(), -leaseSeconds);
-        if (updated == 1 && nextFailureCount >= 10) {
-            failManualNotification(claim.id());
+                -leaseSeconds, max);
+
+        for (ExpiredClaim claim : expired) {
+            int nextFailureCount = claim.failureCount() + 1;
+            String nextStatus = nextFailureCount >= 10 ? "DEAD" : "PENDING";
+            int updated = jdbcTemplate.update("""
+                    UPDATE notification_outbox
+                       SET failure_count=?, status=?,
+                           next_attempt_at=TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6)),
+                           claimed_at=NULL, claim_token=NULL
+                     WHERE id=? AND status='IN_PROGRESS' AND failure_count=?
+                       AND claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))
+                    """, nextFailureCount, nextStatus, EXPIRED_CLAIM_RETRY_DELAY_SECONDS,
+                    claim.id(), claim.failureCount(), -leaseSeconds);
+            if (updated == 1 && nextFailureCount >= 10) {
+                failManualNotification(claim.id());
+            }
         }
     }
 
-    /**
-     * <b>재시도 지연은 초로 자르면 안 된다.</b> Full Jitter 의 첫 재시도 상한이
-     * {@code base=200ms} 기준 400ms 라, 초로 자르면 전부 0 이 되어 실패한 것들이
-     * <b>즉시 동시에</b> 다시 온다 — 흩뜨리려고 넣은 지터가 오히려 뭉치게 만든다.
-     *
-     * <p>{@code next_attempt_at} 이 {@code datetime(6)} 이므로 마이크로초까지 표현된다.
-     * lease 는 여전히 {@link #durationSeconds} 를 쓴다 — 그쪽은 30초 단위라 정밀도가 필요 없고,
-     * 음수로 뒤집어 쓰는 자리라 계산이 단순한 편이 낫다.
-     *
-     * <p><b>0 은 받는다.</b> Full Jitter 의 하한이 0 이고, 그것이 하한을 두지 않는 이유다.
-     *
-     * @throws IllegalArgumentException {@code null}·음수이거나 365일을 넘을 때.
-     *         <b>이것은 쓰기 시점에 터진다</b> — 설정에서 온 값이라면 그 전에
-     *         {@code NotificationRelayProperties} 가 기동 시점에 걸러야 한다
-     */
     private static long durationMicros(Duration duration, String name) {
         if (duration == null || duration.isNegative()
                 || duration.compareTo(Duration.ofDays(365)) > 0) {
