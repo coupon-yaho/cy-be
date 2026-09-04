@@ -63,7 +63,7 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     private final NotificationOutboxMeter meter;
 
     /**
-     * @throws NullPointerException {@code backOff} 가 {@code null} 일 때.
+     * @throws NullPointerException {@code backOff} 나 {@code meter} 가 {@code null} 일 때.
      *         <b>여기서 막는 이유</b> — 안 막으면 그 사실이 <b>lease 가 처음 만료되는
      *         순간</b>에야 드러난다. 그때는 회수가 통째로 실패하고, 인플라이트가 아무도
      *         못 집는 상태로 쌓인다. 기동 시점으로 당긴다
@@ -304,6 +304,12 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
         return updated;
     }
 
+    /**
+     * @throws NullPointerException {@code reason} 이 {@code null} 일 때. <b>쓰기 전에</b>
+     *         막는다 — 뒤에서 터지면 상태는 이미 바뀌었는데 그 사실이 지표에 안 남아,
+     *         되돌려진 건수와 세어진 건수가 조용히 어긋난다
+     * @throws IllegalArgumentException {@code retryDelay} 가 음수이거나 365일을 넘을 때
+     */
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay,

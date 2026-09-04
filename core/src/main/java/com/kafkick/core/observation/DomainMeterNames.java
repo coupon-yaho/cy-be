@@ -144,14 +144,16 @@ public final class DomainMeterNames {
     public static final String OUTBOX_RETRY_DELAY = "app.outbox.retry.delay";
 
     /**
-     * 재시도 상한(10회)을 넘겨 <b>종착</b>한 outbox 명령 수. {@link #TAG_REASON} 으로 나뉜다.
+     * 재시도 상한(10회)을 넘겨 <b>종착</b>한 outbox <b>명령</b> 수.
+     * {@link #TAG_REASON} 으로 나뉘고, 값은 {@link #OUTBOX_RETRY} 와 <b>같은 셋</b>이다 —
+     * 마지막 실패의 사유가 그대로 붙는다.
      *
-     * <p>0 이 아니면 그만큼의 알림이 <b>영영 안 간다.</b> {@link #OUTBOX_RETRY} 와 함께
-     * 보면 상한까지 가는 데 걸린 시간을 셀 수 있다.
+     * <p><b>세는 단위가 명령이지 알림이 아니다.</b> 종착한 알림을 사람이 다시 보내면
+     * 새 명령이 생기므로, 이 값이 곧 "영영 안 간 알림 수" 는 아니다 — 그렇게 읽으면
+     * 재발송으로 살아난 것까지 실패로 센다. <b>지금 사람 손이 필요한 건수</b>로 읽는다.
      *
      * <p>전이가 저장소 어댑터에서만 일어나므로({@code markFailed} 와 만료 회수) 세는 곳도
-     * 거기다. 값은 {@code publish_failed} 와 {@code lease_expired} 둘이다 —
-     * {@code notification_missing} 은 {@code markFailed} 를 타므로 앞의 것으로 셈된다.
+     * 거기다.
      */
     public static final String OUTBOX_DEAD = "app.outbox.dead";
 
