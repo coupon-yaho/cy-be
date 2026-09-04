@@ -3,9 +3,10 @@ package com.kafkick.batch.config;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.job.AbstractJob;
 import org.springframework.batch.core.job.Job;
@@ -65,16 +66,21 @@ class JobExecutionPersistedBeforeAfterJobTest {
     private JobRepository jobRepository;
 
     /**
-     * <b>배치 메타를 비우고 시작한다.</b> 같은 식별 파라미터로 완료된 실행이 공유 DB 에
-     * 남아 있으면 {@code JobInstanceAlreadyCompleteException} 으로 죽는다 —
-     * 이 클래스가 재는 것과 아무 상관 없는 이유로, 실행 순서에 따라 깨진다.
+     * <b>이 테스트가 만든 실행만 지운다.</b>
      *
-     * <p>{@code CleanupJobTest} 가 같은 이유로 같은 것을 한다.
+     * <p>인자 없는 {@code removeJobExecutions()} 는 <b>배치 메타를 전부</b> 지우는데,
+     * {@code MySqlContainerConfig} 의 컨테이너는 JVM 전체가 공유한다 — 남의 메타까지
+     * 날린다. 고유 {@code probe} 파라미터가 이미 인스턴스를 가르므로 전역 삭제는
+     * 필요하지도 않다.
      */
-    @BeforeEach
-    void clearBatchMetadata() {
-        new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+    @AfterEach
+    void removeOwnExecution() {
+        if (started != null) {
+            new JobRepositoryTestUtils(jobRepository).removeJobExecution(started);
+        }
     }
+
+    private JobExecution started;
 
     @Test
     void terminalStateIsPersistedBeforeAfterJobRuns() throws Exception {
@@ -100,9 +106,9 @@ class JobExecutionPersistedBeforeAfterJobTest {
             }
         });
 
-        jobOperator.start(cleanupJob, new JobParametersBuilder()
+        started = jobOperator.start(cleanupJob, new JobParametersBuilder()
                 .addLocalDateTime("asOf", LocalDateTime.of(2026, 4, 1, 9, 0))
-                .addString("probe", "persisted-before-afterjob")
+                .addString("probe", "persisted-before-afterjob-" + UUID.randomUUID())
                 .addLong("attempt", 1L)
                 .toJobParameters());
 
