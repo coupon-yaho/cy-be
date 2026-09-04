@@ -29,11 +29,17 @@ public class NotificationOutboxRelay {
     private static final int PER_ITEM_PUBLISH_BUDGET_MILLIS = 100;
 
     /**
-     * lease 상한. <b>{@link Duration#toMillis()} 가 넘치지 않게</b> 하는 것이 목적이다 —
-     * 상한이 없으면 큰 값에서 {@code ArithmeticException} 이 나고, 그러면 알림 릴레이 설정
-     * 하나가 <b>접수 API 기동 전체</b>를 막는다.
+     * lease 상한. <b>{@code 저장소 어댑터가 받는 범위와 같다</b>
+     * ({@code durationSeconds} 가 365일까지 받는다) — 여기서 더 좁히면 저장소가 받는 설정을
+     * 릴레이가 거부하게 된다.
+     *
+     * <p><b>이 상한이 기동을 막는다. 그것이 목적이다.</b> 상한이 없으면 큰 값에서
+     * {@link Duration#toMillis()} 가 {@code ArithmeticException} 으로 죽는데, 그 예외는
+     * <b>무엇이 틀렸는지 말하지 않는다.</b> 어차피 기동이 안 될 것이라면 원인을 말하고
+     * 죽는 편이 낫다 — {@code ExpireJobConfig} 가 {@code chunk-size} 에 하는 것과 같다.
      */
-    private static final Duration MAX_LEASE = Duration.ofDays(1);
+    private static final Duration MAX_LEASE = Duration.ofDays(365);
+
 
     private final Duration lease;
     private final int claimBatchSize;
@@ -41,9 +47,14 @@ public class NotificationOutboxRelay {
     private final Clock clock;
 
     /**
-     * @throws IllegalArgumentException {@code claimBatchSize} 가 1 미만이거나,
-     *         {@code claimBatchSize × 건당 발행 예산} 이 {@code lease} 이상일 때 —
-     *         후자는 배치 뒤쪽 행이 처리 전에 회수되어 <b>중복 발행</b>이 되는 구성이다
+     * @throws IllegalArgumentException 아래 셋 중 하나일 때. <b>전부 빈 생성에서 터지므로
+     *         기동이 거부된다</b> — 잘못 설정된 릴레이가 조용히 도는 것보다 낫다
+     *         <ul>
+     *           <li>{@code lease} 가 {@code null}·0·음수이거나 365일을 넘을 때</li>
+     *           <li>{@code claimBatchSize} 가 1 미만일 때</li>
+     *           <li>{@code claimBatchSize × 건당 발행 예산} 이 {@code lease} 이상일 때 —
+     *               배치 뒤쪽 행이 처리 전에 회수되어 <b>중복 발행</b>이 되는 구성이다</li>
+     *         </ul>
      */
     public NotificationOutboxRelay(NotificationOutboxRepository outboxes,
             NotificationRepository notifications,
@@ -68,7 +79,8 @@ public class NotificationOutboxRelay {
         // 터져 **알림 릴레이 설정 하나가 접수 API 기동을 막는다.**
         if (lease.isNegative() || lease.isZero() || lease.compareTo(MAX_LEASE) > 0) {
             throw new IllegalArgumentException(
-                    "lease 는 양수이고 " + MAX_LEASE + " 이하여야 합니다. 받은 값=" + lease);
+                    "lease 는 양수이고 " + MAX_LEASE + " 이하여야 합니다. 저장소 어댑터가 받는 "
+                            + "범위와 같습니다. 받은 값=" + lease);
         }
         long budgetMillis = claimBatchSize * (long) PER_ITEM_PUBLISH_BUDGET_MILLIS;
         if (budgetMillis >= lease.toMillis()) {
