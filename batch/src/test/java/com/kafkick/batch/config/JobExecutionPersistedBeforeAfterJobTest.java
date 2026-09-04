@@ -5,12 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.job.AbstractJob;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.batch.test.JobRepositoryTestUtils;
 import org.springframework.batch.core.listener.JobExecutionListener;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -58,6 +61,21 @@ class JobExecutionPersistedBeforeAfterJobTest {
     @Autowired
     private JdbcClient jdbcClient;
 
+    @Autowired
+    private JobRepository jobRepository;
+
+    /**
+     * <b>배치 메타를 비우고 시작한다.</b> 같은 식별 파라미터로 완료된 실행이 공유 DB 에
+     * 남아 있으면 {@code JobInstanceAlreadyCompleteException} 으로 죽는다 —
+     * 이 클래스가 재는 것과 아무 상관 없는 이유로, 실행 순서에 따라 깨진다.
+     *
+     * <p>{@code CleanupJobTest} 가 같은 이유로 같은 것을 한다.
+     */
+    @BeforeEach
+    void clearBatchMetadata() {
+        new JobRepositoryTestUtils(jobRepository).removeJobExecutions();
+    }
+
     @Test
     void terminalStateIsPersistedBeforeAfterJobRuns() throws Exception {
         AtomicReference<String> statusSeenInAfterJob = new AtomicReference<>();
@@ -84,6 +102,7 @@ class JobExecutionPersistedBeforeAfterJobTest {
 
         jobOperator.start(cleanupJob, new JobParametersBuilder()
                 .addLocalDateTime("asOf", LocalDateTime.of(2026, 4, 1, 9, 0))
+                .addString("probe", "persisted-before-afterjob")
                 .addLong("attempt", 1L)
                 .toJobParameters());
 
