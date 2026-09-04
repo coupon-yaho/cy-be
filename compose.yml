@@ -367,6 +367,8 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       DB_USERNAME: ${DB_USERNAME}
       MYSQL_HOST: mysql
+      # 스크립트가 마이그레이션을 기다리는 상한. 안 넘기면 주석이 약속한 값을 못 쓴다.
+      APP_GRANTS_WAIT_SECONDS: ${APP_GRANTS_WAIT_SECONDS:-120}
     depends_on:
       mysql:
         condition: service_healthy
