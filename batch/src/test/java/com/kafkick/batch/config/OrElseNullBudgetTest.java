@@ -143,10 +143,27 @@ class OrElseNullBudgetTest {
         return source.length();
     }
 
-    /** 텍스트 블록. 안에 {@code //} 를 담은 SQL 이 여럿이라 이것도 가려야 한다. */
+    /**
+     * 텍스트 블록. 안에 {@code //} 를 담은 SQL 이 여럿이라 이것도 가려야 한다.
+     *
+     * <p><b>이스케이프를 건너뛴다.</b> 첫 판은 {@code indexOf} 로 닫는 구분자를 찾았는데,
+     * 텍스트 블록 안에서 {@code \\"} 로 시작하는 세 따옴표를 <b>닫는 것으로 오인</b>한다 —
+     * 그러면 블록이 일찍 끝나고 <b>그 뒤 본문이 코드로 읽혀</b> 없는 위반이 생기거나,
+     * 반대로 뒤따르는 진짜 코드가 문자열로 먹힌다. 어느 쪽이든 값이 조용히 틀린다.
+     */
     private static int skipTextBlock(String source, int open) {
-        int end = source.indexOf("\"\"\"", open + 3);
-        return end < 0 ? source.length() : end + 3;
+        int i = open + 3;
+        while (i < source.length()) {
+            if (source.charAt(i) == '\\') {
+                i += 2;
+                continue;
+            }
+            if (source.startsWith("\"\"\"", i)) {
+                return i + 3;
+            }
+            i++;
+        }
+        return source.length();
     }
 
     /**
