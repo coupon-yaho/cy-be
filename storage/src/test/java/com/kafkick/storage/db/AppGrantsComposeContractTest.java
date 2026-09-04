@@ -71,4 +71,34 @@ class AppGrantsComposeContractTest {
                         + " 그것들이 없는 회차에 api 가 영영 healthy 가 안 된다")
                 .contains("/actuator/metrics");
     }
+
+    /**
+     * <b>healthcheck 가 두드리는 포트는 앱이 실제로 여는 포트여야 한다.</b>
+     *
+     * <p>첫 판은 {@code MANAGEMENT_SERVER_PORT} 를 썼는데 <b>그 이름은 죽어 있었다</b> —
+     * {@code application.yml} 과 {@code management.yml} 이 같은 키를 서로 다른 변수로
+     * 적고 있었고, {@code spring.config.import} 로 들어온 문서가 이긴다(실측: 두 변수를
+     * 9391·9392 로 주고 컨텍스트를 띄우니 {@code management.server.port} 가 9391 이었다).
+     * 기본값이 양쪽 다 9090 이라 <b>기본 배포에서는 증상이 없다</b> — 포트를 옮긴 환경에서만
+     * api 가 영영 healthy 가 안 되고 권한 적용이 통째로 멈춘다. 그래서 눈으로는 안 잡힌다.
+     */
+    @Test
+    @DisplayName("healthcheck 의 포트 변수가 앱이 읽는 그 이름이다 — 기본값이 같아 눈으로는 안 잡힌다")
+    void theHealthcheckUsesThePortVariableTheAppActuallyReads() throws IOException {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> healthcheck = (Map<String, Object>) service("api").get("healthcheck");
+
+        String appConfig = Files.readString(Path.of("..", "api", "src", "main", "resources",
+                "management.yml.example"));
+        String declared = appConfig.lines()
+                .filter(line -> line.contains("port: ${"))
+                .map(line -> line.substring(line.indexOf("${") + 2, line.indexOf(':', line.indexOf("${"))))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("management.yml.example 에 관리 포트 선언이 없습니다"));
+
+        assertThat(healthcheck.get("test").toString())
+                .as("앱은 %s 를 읽는데 healthcheck 가 다른 이름을 쓰면, 포트를 옮긴 환경에서"
+                        + " api 가 영영 healthy 가 안 되고 app-grants 가 안 돕니다", declared)
+                .contains("${" + declared + ":-");
+    }
 }
