@@ -3,6 +3,7 @@ package com.kafkick.infra.mq.notification;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.NotificationRepository;
@@ -50,11 +51,14 @@ public class NotificationOutboxRelay {
     }
 
     private boolean publish(NotificationOutboxClaim claim) {
-        Notification notification = notifications.findById(claim.notificationId()).orElse(null);
-        if (notification == null) {
+        Optional<Notification> found = notifications.findById(claim.notificationId());
+        if (found.isEmpty()) {
+            // 발행 대상이 사라졌다. 지연은 발행 실패와 같은 계산을 쓴다 — 한쪽만
+            // 지터를 주면 나머지가 다시 뭉친다.
             outboxes.markFailed(claim.outboxId(), claim.claimToken(), retryDelay(claim));
             return false;
         }
+        Notification notification = found.orElseThrow();
 
         NotificationRequestedEvent event = new NotificationRequestedEvent(
                 notification.id(), notification.memberId(), notification.couponId(),
