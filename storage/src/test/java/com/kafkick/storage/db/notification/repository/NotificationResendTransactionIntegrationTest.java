@@ -41,7 +41,8 @@ import com.kafkick.storage.db.RepositoryTest;
         TransactionalNotificationRejectedAuditWriter.class,
         NotificationResendTransactionIntegrationTest.Config.class,
         // 지연 정책은 core 가 소유한다(CY-907). @DataJpaTest 는 그것을 안 스캔한다.
-        NotificationRetryBackOffConfig.class
+        NotificationRetryBackOffConfig.class,
+        OutboxMeterTestConfig.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationResendTransactionIntegrationTest {

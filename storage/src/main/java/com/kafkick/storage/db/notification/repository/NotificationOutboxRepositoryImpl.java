@@ -48,6 +48,12 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     private final FullJitterBackOff backOff;
 
     /**
+     * 이 어댑터 안에서만 일어나는 일을 센다 — lease 만료 회수와 {@code DEAD} 전이.
+     * 왜 릴레이가 못 세는지는 {@link NotificationOutboxMeter} 에 적었다.
+     */
+    private final NotificationOutboxMeter meter;
+
+    /**
      * @throws NullPointerException {@code backOff} 가 {@code null} 일 때.
      *         <b>여기서 막는 이유</b> — 안 막으면 그 사실이 <b>lease 가 처음 만료되는
      *         순간</b>에야 드러난다. 그때는 회수가 통째로 실패하고, 인플라이트가 아무도
@@ -57,13 +63,15 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
             NotificationOutboxJpaRepository repository,
             JdbcTemplate jdbcTemplate,
             PlatformTransactionManager transactionManager,
-            FullJitterBackOff backOff
+            FullJitterBackOff backOff,
+            NotificationOutboxMeter meter
     ) {
         this.repository = repository;
         this.jdbcTemplate = jdbcTemplate;
         this.requiresNew = new TransactionTemplate(transactionManager);
         this.requiresNew.setPropagationBehavior(Propagation.REQUIRES_NEW.value());
         this.backOff = Objects.requireNonNull(backOff, "backOff");
+        this.meter = Objects.requireNonNull(meter, "meter");
     }
 
     @Override
@@ -191,8 +199,8 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
             int nextFailureCount = claim.failureCount() + 1;
             // failureCount 는 **이번 실패를 세기 전** 값이라 +1 이 이번이 몇 번째 재시도인지다.
             // 릴레이의 실패 경로가 쓰는 것과 같은 계산이다 — 같은 객체를 쓰므로 갈릴 수 없다.
-            long retryMicros = durationMicros(backOff.nextDelay(nextFailureCount),
-                    "expired claim retry delay");
+            Duration retryDelay = backOff.nextDelay(nextFailureCount);
+            long retryMicros = durationMicros(retryDelay, "expired claim retry delay");
             String nextStatus = nextFailureCount >= 10 ? "DEAD" : "PENDING";
             int updated = jdbcTemplate.update("""
                     UPDATE notification_outbox
@@ -203,8 +211,21 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                        AND claimed_at < TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6))
                     """, nextFailureCount, nextStatus, retryMicros,
                     claim.id(), claim.failureCount(), -leaseSeconds);
-            if (updated == 1 && nextFailureCount >= 10) {
-                failManualNotification(claim.id());
+            if (updated == 1) {
+                // **쓰기가 실제로 먹었을 때만 센다.** 조건부 갱신이라 남이 먼저 회수하면
+                // 0행이고, 그때 세면 지표가 실제 회수보다 크게 나온다.
+                //
+                // ⚠️ **이 분기는 테스트가 못 태운다.** 0행이 되려면 SELECT 와 UPDATE 사이에
+                //    남이 같은 행을 회수해야 하는데, 그 끼어듦을 테스트가 확실히 일으킬
+                //    방법이 없다. 두 스레드로 돌려 보는 테스트는 끼어듦이 안 나면 조용히
+                //    통과하므로 없는 것만 못하다. 돌연변이로 확인했고 — 이 조건을 빼도
+                //    아무 테스트도 안 깨진다 — 그 사실을 숨기지 않고 적어 둔다.
+                //    바로 아래 DEAD 판정이 예전부터 같은 모양이고 같은 한계를 갖는다.
+                meter.leaseExpired(retryDelay);
+                if (nextFailureCount >= 10) {
+                    failManualNotification(claim.id());
+                    meter.dead(NotificationOutboxMeter.LEASE_EXPIRED);
+                }
             }
         }
     }
@@ -259,6 +280,9 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                 outboxId, claimToken, current.orElseThrow()) == 1;
         if (updated && nextFailureCount >= 10) {
             failManualNotification(outboxId);
+            // 사유를 발행 실패로 적는다 — 어댑터는 릴레이가 왜 되돌렸는지 안 받는다.
+            // 그 한계는 NotificationOutboxMeter.PUBLISH_FAILED 에 적어 뒀다.
+            meter.dead(NotificationOutboxMeter.PUBLISH_FAILED);
         }
         return updated;
     }

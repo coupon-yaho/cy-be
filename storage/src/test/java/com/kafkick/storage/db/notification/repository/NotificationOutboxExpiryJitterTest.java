@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,7 +18,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+
 import com.kafkick.core.notification.NotificationOutboxRepository;
+import com.kafkick.core.observation.DomainMeterNames;
 import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
@@ -58,7 +63,8 @@ import com.kafkick.storage.db.RepositoryTest;
  */
 @RepositoryTest
 @Import({NotificationOutboxRepositoryImpl.class,
-        NotificationOutboxExpiryJitterTest.WideBackOff.class})
+        NotificationOutboxExpiryJitterTest.WideBackOff.class,
+        OutboxMeterTestConfig.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationOutboxExpiryJitterTest {
 
@@ -85,6 +91,7 @@ class NotificationOutboxExpiryJitterTest {
 
     @Autowired NotificationOutboxRepository repository;
     @Autowired JdbcTemplate jdbcTemplate;
+    @Autowired MeterRegistry registry;
 
     @AfterEach
     void cleanCommittedFixture() {
@@ -128,6 +135,60 @@ class NotificationOutboxExpiryJitterTest {
                 .as("회수에 걸린 시간(%dus)보다 지연의 폭(%dus)이 넓어야 행마다 새로 뽑은 것이다",
                         span, spread)
                 .isGreaterThan(span);
+    }
+
+    /**
+     * <b>지표가 실제 흩어짐을 보여 주는가.</b>
+     *
+     * <p>이 티켓(CY-908)이 만든 히스토그램은 <b>분포가 평평한지</b>를 보려고 있다.
+     * 그런데 미터를 붙여 놓고 <b>실제로 적힌 값과 다른 것을 세면</b> 지표가 거짓을 그린다 —
+     * 지표가 없는 것보다 나쁘다, 믿고 보는 사람이 있으니까.
+     *
+     * <p>그래서 DB 에 적힌 지연과 미터에 들어간 지연을 <b>맞대어</b> 본다. 회수는
+     * 조건부 갱신이라 0행일 수 있는데, 그때 세면 지표가 실제 회수보다 커진다 — 그것도
+     * 여기서 걸린다(건수가 안 맞는다).
+     */
+    @Test
+    @DisplayName("만료 회수가 세어지고, 히스토그램에 들어간 값이 DB 에 적힌 지연과 같다")
+    void theRecoveryIsCountedWithTheDelaysActuallyWritten() {
+        for (int i = 0; i < ROWS; i++) {
+            repository.save(NotificationOutbox.pending(
+                    NOTIFICATION_ID, i + 1, AttemptTrigger.INITIAL, AT));
+        }
+        repository.claimBatch(Duration.ofMinutes(1), ROWS);
+        long before = dbNowMicros();
+        jdbcTemplate.update("UPDATE notification_outbox"
+                + " SET claimed_at=TIMESTAMPADD(SECOND,-120,CURRENT_TIMESTAMP(6))"
+                + " WHERE notification_id=?", NOTIFICATION_ID);
+
+        repository.claimBatch(Duration.ofSeconds(60), ROWS);
+
+        Timer delays = registry.find(DomainMeterNames.OUTBOX_RETRY_DELAY)
+                .tag(DomainMeterNames.TAG_REASON, NotificationOutboxMeter.LEASE_EXPIRED)
+                .timer();
+        assertThat(delays).as("미터가 등록되지 않았습니다").isNotNull();
+        assertThat(delays.count())
+                .as("회수한 건수와 센 건수가 다르면 조건부 갱신이 0행인 경우를 잘못 센 것이다")
+                .isEqualTo(ROWS);
+
+        // DB 에 적힌 지연의 합. 기준 시각이 행마다 조금씩 다르므로 정확히 같을 수는 없고,
+        // **회수에 걸린 시간(span)만큼** 벌어질 수 있다. 그 폭 안이면 같은 값이다.
+        Long writtenSumMicros = jdbcTemplate.queryForObject(
+                "SELECT SUM(TIMESTAMPDIFF(MICROSECOND, ?, next_attempt_at))"
+                        + " FROM notification_outbox WHERE notification_id=?",
+                Long.class, new java.sql.Timestamp(before / 1_000L), NOTIFICATION_ID);
+        long meteredMicros = (long) delays.totalTime(TimeUnit.MICROSECONDS);
+        long span = dbNowMicros() - before;
+
+        assertThat(Math.abs(writtenSumMicros - meteredMicros))
+                .as("적어 넣은 값(%dus)과 세어 넣은 값(%dus)이 회수 소요(%dus)보다 더 벌어졌다"
+                        + " — 미터가 다른 값을 세고 있다", writtenSumMicros, meteredMicros, span)
+                .isLessThanOrEqualTo(span * ROWS);
+
+        // 흩어짐이 히스토그램에도 남는지. 한 값만 반복해 넣으면 최대와 평균이 같아진다.
+        assertThat(delays.max(TimeUnit.MICROSECONDS))
+                .as("최대와 평균이 같으면 히스토그램이 한 점으로 뭉친 것이다")
+                .isGreaterThan(delays.mean(TimeUnit.MICROSECONDS));
     }
 
     /** 판정 기준을 앱 시계가 아니라 <b>DB 시계</b>로 잡는다 — 값을 쓴 것도 DB 다. */

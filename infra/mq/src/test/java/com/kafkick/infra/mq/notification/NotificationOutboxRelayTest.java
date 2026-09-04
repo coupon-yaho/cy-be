@@ -29,6 +29,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
+import com.kafkick.core.observation.DomainMeterNames;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.AttemptTrigger;
@@ -58,6 +62,13 @@ class NotificationOutboxRelayTest {
     @Mock NotificationOutboxRepository outboxes;
     @Mock NotificationRepository notifications;
     @Mock NotificationRequestedEventPublisher publisher;
+
+    /**
+     * <b>대역이 아니라 진짜 레지스트리다.</b> 미터가 실제로 등록되는지, 태그 값이 닫혀
+     * 있는지를 이 안에서 읽어 확인한다 — 모의 객체로는 이름과 태그가 틀려도 통과한다.
+     */
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
     private NotificationOutboxRelay relay;
 
     @BeforeEach
@@ -68,8 +79,8 @@ class NotificationOutboxRelayTest {
     private NotificationOutboxRelay relayWith(Duration lease, int batch, Executor workers,
             int maxInFlight, int workerCount) {
         return new NotificationOutboxRelay(outboxes, notifications, publisher, lease, batch,
-                workers, maxInFlight, workerCount, new FullJitterBackOff(BASE, CAP),
-                Clock.fixed(AT, ZoneOffset.UTC));
+                new NotificationRetryMeter(registry), workers, maxInFlight, workerCount,
+                new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC));
     }
 
     @Test
@@ -434,6 +445,78 @@ class NotificationOutboxRelayTest {
 
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
                 any(), any());
+    }
+
+    /**
+     * <b>되돌린 것이 세어지고, 계획한 그 값이 히스토그램에 들어간다.</b>
+     *
+     * <p>쓰는 값과 세는 값이 <b>다르면</b> 히스토그램이 실제로 적힌 것과 다른 분포를
+     * 보여 준다 — 그 지표를 믿고 보는 사람이 있다는 점에서 지표가 없는 것보다 나쁘다.
+     * 그래서 {@code markFailed} 에 넘어간 값과 {@code Timer} 에 들어간 값을 <b>맞대어</b>
+     * 본다. 지연이 난수라 "같은 값" 이라는 단언이 가능한 유일한 방법이다.
+     */
+    @Test
+    void aRetryIsCountedWithTheVeryDelayItWasScheduledWith() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findById(41L)).thenReturn(Optional.empty());
+
+        relay.poll();
+
+        Duration written = capturedRetryDelay();
+        Timer timer = registry.find(DomainMeterNames.OUTBOX_RETRY_DELAY)
+                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.NOTIFICATION_MISSING)
+                .timer();
+        assertThat(timer).as("미터가 등록되지 않았습니다").isNotNull();
+        assertThat(timer.count()).isEqualTo(1);
+        assertThat((long) timer.totalTime(TimeUnit.NANOSECONDS))
+                .as("적어 넣은 지연과 세어 넣은 지연이 다르면 히스토그램이 거짓을 그린다")
+                .isEqualTo(written.toNanos());
+
+        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY)
+                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.NOTIFICATION_MISSING)
+                .counter().count()).isEqualTo(1.0);
+    }
+
+    /** 두 실패 경로가 <b>서로 다른 사유</b>로 잡혀야 한다. 한 값으로 뭉치면 구분이 사라진다. */
+    @Test
+    void thePublishFailurePathIsCountedUnderItsOwnReason() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
+                .when(publisher).publish(any());
+
+        relay.poll();
+
+        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY)
+                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.PUBLISH_FAILED)
+                .counter().count()).isEqualTo(1.0);
+        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY)
+                .tag(DomainMeterNames.TAG_REASON, NotificationRetryMeter.NOTIFICATION_MISSING)
+                .counter().count())
+                .as("두 경로가 한 사유로 뭉치면 무엇이 실패했는지 못 읽는다")
+                .isZero();
+    }
+
+    /**
+     * <b>한 번도 실패하지 않은 인스턴스에도 시계열이 있어야 한다.</b>
+     *
+     * <p>없으면 대시보드가 <b>0 과 "지표 없음" 을 구분하지 못한다</b> — {@code rate()} 가
+     * 둘 다 빈칸으로 그린다. 그래서 미터를 생성자에서 미리 등록한다.
+     */
+    @Test
+    void everyReasonHasASeriesBeforeAnythingFails() {
+        assertThat(registry.find(DomainMeterNames.OUTBOX_RETRY).counters())
+                .as("실패가 나야 시계열이 생기면 0 과 '지표 없음' 이 같아 보인다")
+                .hasSize(2);
+    }
+
+    /** 태그 값을 열어 두면 오타 하나가 아무도 안 보는 시계열을 만든다. */
+    @Test
+    void anUnknownReasonIsRejectedRatherThanRegistered() {
+        NotificationRetryMeter meter = new NotificationRetryMeter(registry);
+
+        assertThatThrownBy(() -> meter.retried("typo", Duration.ofMillis(1)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private Duration capturedRetryDelay() {
