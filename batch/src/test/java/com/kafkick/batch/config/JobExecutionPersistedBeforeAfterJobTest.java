@@ -44,6 +44,16 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  *
  * <p><b>바이트코드는 지금 버전의 사실이지 계약이 아니다.</b> 스프링이 순서를 바꾸면
  * 훅 해제 시점이 실제로 위험해지므로, 그 가정을 여기서 런타임으로 붙잡는다.
+ *
+ * <h2>다른 스레드에서 읽는 이유</h2>
+ *
+ * <p>{@code afterJob} 과 <b>같은 스레드</b>로 읽으면 아직 커밋되지 않은 변경까지 보인다 —
+ * <i>"저장됐다"</i> 와 <i>"저장될 예정이다"</i> 를 못 가른다. JVM 이 그 사이에 죽으면
+ * 후자는 롤백되므로 둘은 완전히 다른 결말이다.
+ *
+ * <p>스레드가 다르면 트랜잭션 문맥({@code TransactionSynchronizationManager} 은 스레드에
+ * 묶인다)도 커넥션도 다르다. <b>거기서 보이면 커밋된 것이다.</b>
+ * 리뷰가 이 구멍을 짚었고, 첫 판은 실제로 같은 스레드로 읽고 있었다.
  */
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
@@ -90,9 +100,10 @@ class JobExecutionPersistedBeforeAfterJobTest {
         ((AbstractJob) cleanupJob).registerJobExecutionListener(new JobExecutionListener() {
             @Override
             public void afterJob(JobExecution execution) {
-                // 캐시가 아니라 **DB 를 직접** 본다. JobExecution 객체는 메모리에서 이미
-                // 종단이라 그것으로는 저장 여부를 가릴 수 없다.
-                jdbcClient.sql("""
+                // **다른 스레드에서 읽는다.** 같은 스레드로 읽으면 아직 커밋되지 않은
+                // 변경까지 보이므로 "저장됐다" 와 "저장될 예정이다" 를 못 가른다.
+                // 스레드가 다르면 트랜잭션 문맥도 커넥션도 다르니, 보이면 커밋된 것이다.
+                Thread reader = new Thread(() -> jdbcClient.sql("""
                         SELECT STATUS, END_TIME IS NOT NULL AS ended
                           FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID = ?
                         """)
@@ -102,7 +113,14 @@ class JobExecutionPersistedBeforeAfterJobTest {
                             endTimeSeenInAfterJob.set(rs.getBoolean("ended"));
                             return null;
                         })
-                        .list();
+                        .list());
+                reader.start();
+                try {
+                    reader.join();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("커밋 확인이 중단됐습니다.", interrupted);
+                }
             }
         });
 
