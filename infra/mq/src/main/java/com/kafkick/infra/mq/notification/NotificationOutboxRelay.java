@@ -14,6 +14,7 @@ import org.springframework.context.SmartLifecycle;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.Notification;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
@@ -68,6 +69,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
     private final int claimBatchSize;
     private final FullJitterBackOff backOff;
     private final Clock clock;
+
     private final Executor workers;
 
     /**
@@ -194,6 +196,18 @@ public class NotificationOutboxRelay implements SmartLifecycle {
      */
     private Duration retryDelay(NotificationOutboxClaim claim) {
         return backOff.nextDelay(claim.failureCount() + 1);
+    }
+
+    /**
+     * 되돌린다. <b>사유를 함께 넘긴다 — 세는 것은 저장소가 한다.</b>
+     *
+     * <p>첫 판은 여기서 셌는데 틀렸다. 릴레이는 <b>그 쓰기가 먹었는지도, 상한을 넘겨
+     * 종착했는지도 모른다.</b> 그래서 0행도 재시도로 셌고, 다시 시도되지 않을
+     * {@code DEAD} 건까지 재시도로 세며 기다릴 일 없는 지연을 히스토그램에 넣었다.
+     * 결과를 아는 곳은 어댑터뿐이고, <b>사유를 아는 곳은 여기뿐</b>이라 사유가 넘어간다.
+     */
+    private void returnToPending(NotificationOutboxClaim claim, OutboxRetryReason reason) {
+        outboxes.markFailed(claim.outboxId(), claim.claimToken(), retryDelay(claim), reason);
     }
 
     /**
@@ -372,7 +386,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
         if (found.isEmpty()) {
             // 발행 대상이 사라졌다. 지연은 발행 실패와 같은 계산을 쓴다 — 한쪽만
             // 지터를 주면 나머지가 다시 뭉친다.
-            outboxes.markFailed(claim.outboxId(), claim.claimToken(), retryDelay(claim));
+            returnToPending(claim, OutboxRetryReason.NOTIFICATION_MISSING);
             return false;
         }
         Notification notification = found.orElseThrow();
@@ -385,7 +399,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
             outboxes.markPublished(claim.outboxId(), claim.claimToken(), clock.instant());
             return true;
         } catch (RuntimeException failure) {
-            outboxes.markFailed(claim.outboxId(), claim.claimToken(), retryDelay(claim));
+            returnToPending(claim, OutboxRetryReason.PUBLISH_FAILED);
             return false;
         }
     }

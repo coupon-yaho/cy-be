@@ -22,12 +22,14 @@ import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.domain.NotificationOutboxStatus;
 import com.kafkick.core.notification.retry.NotificationRetryBackOffConfig;
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
 // 지연 정책은 core 가 소유한다(CY-907). @DataJpaTest 는 그 @Configuration 을 스캔하지 않으므로
 // 여기서 명시로 붙인다 — 안 붙이면 어댑터가 백오프를 못 받아 컨텍스트가 안 뜬다.
-@Import({NotificationOutboxRepositoryImpl.class, NotificationRetryBackOffConfig.class})
+@Import({NotificationOutboxRepositoryImpl.class, NotificationRetryBackOffConfig.class,
+        OutboxMeterTestConfig.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationOutboxRepositoryTest {
     private static final Instant AT = Instant.parse("2026-08-27T00:00:00Z");
@@ -88,7 +90,7 @@ class NotificationOutboxRepositoryTest {
         assertThat(recovered.outboxId()).isEqualTo(poison.id());
         assertThat(recovered.claimToken()).isNotEqualTo(first.claimToken());
         for (int failure = 0; failure < 9; failure++) {
-            assertThat(repository.markFailed(poison.id(), recovered.claimToken(), Duration.ZERO))
+            assertThat(repository.markFailed(poison.id(), recovered.claimToken(), Duration.ZERO, OutboxRetryReason.PUBLISH_FAILED))
                     .isTrue();
             if (failure < 8) {
                 recovered = claimOne(Duration.ofSeconds(1)).orElseThrow();
@@ -102,7 +104,7 @@ class NotificationOutboxRepositoryTest {
                 "SELECT status FROM notification_outbox WHERE id=?", String.class, poison.id()))
                 .isEqualTo("DEAD");
         assertThat(repository.markFailed(
-                poison.id(), recovered.claimToken(), Duration.ZERO)).isFalse();
+                poison.id(), recovered.claimToken(), Duration.ZERO, OutboxRetryReason.PUBLISH_FAILED)).isFalse();
     }
 
     @Test
@@ -173,7 +175,7 @@ class NotificationOutboxRepositoryTest {
                 9001L, 1, AttemptTrigger.MANUAL, AT));
         for (int failure = 0; failure < 10; failure++) {
             var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
-            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
+            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO, OutboxRetryReason.PUBLISH_FAILED)).isTrue();
         }
 
         assertThat(jdbcTemplate.queryForObject(
@@ -224,7 +226,7 @@ class NotificationOutboxRepositoryTest {
                 9003L, 1, AttemptTrigger.INITIAL, AT));
         for (int failure = 0; failure < 10; failure++) {
             var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
-            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
+            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO, OutboxRetryReason.PUBLISH_FAILED)).isTrue();
         }
 
         assertThat(jdbcTemplate.queryForObject(
@@ -248,7 +250,7 @@ class NotificationOutboxRepositoryTest {
                 9004L, 1, AttemptTrigger.MANUAL, AT));
         for (int failure = 0; failure < 10; failure++) {
             var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
-            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
+            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO, OutboxRetryReason.PUBLISH_FAILED)).isTrue();
         }
 
         assertThat(jdbcTemplate.queryForObject(
@@ -274,7 +276,7 @@ class NotificationOutboxRepositoryTest {
                 9005L, 1, AttemptTrigger.MANUAL, AT));
         for (int failure = 0; failure < 10; failure++) {
             var claim = claimOne(Duration.ofSeconds(1)).orElseThrow();
-            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO)).isTrue();
+            assertThat(repository.markFailed(outbox.id(), claim.claimToken(), Duration.ZERO, OutboxRetryReason.PUBLISH_FAILED)).isTrue();
         }
 
         assertThat(jdbcTemplate.queryForObject(

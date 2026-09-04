@@ -31,6 +31,7 @@ import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
 import com.kafkick.core.support.TimeProvider;
 import com.kafkick.core.notification.retry.NotificationRetryBackOffConfig;
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
@@ -41,7 +42,8 @@ import com.kafkick.storage.db.RepositoryTest;
         TransactionalNotificationRejectedAuditWriter.class,
         NotificationResendTransactionIntegrationTest.Config.class,
         // 지연 정책은 core 가 소유한다(CY-907). @DataJpaTest 는 그것을 안 스캔한다.
-        NotificationRetryBackOffConfig.class
+        NotificationRetryBackOffConfig.class,
+        OutboxMeterTestConfig.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationResendTransactionIntegrationTest {
@@ -175,7 +177,8 @@ class NotificationResendTransactionIntegrationTest {
         }
 
         @Override
-        public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay) {
+        public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay,
+                OutboxRetryReason reason) {
             throw new UnsupportedOperationException();
         }
 

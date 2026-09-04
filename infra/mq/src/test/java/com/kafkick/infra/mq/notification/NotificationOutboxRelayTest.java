@@ -29,6 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
+import com.kafkick.core.notification.OutboxRetryReason;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.AttemptTrigger;
@@ -58,6 +59,7 @@ class NotificationOutboxRelayTest {
     @Mock NotificationOutboxRepository outboxes;
     @Mock NotificationRepository notifications;
     @Mock NotificationRequestedEventPublisher publisher;
+
     private NotificationOutboxRelay relay;
 
     @BeforeEach
@@ -272,7 +274,7 @@ class NotificationOutboxRelayTest {
 
         assertThat(relay.inFlight()).isZero();
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
-                any(), any());
+                any(), any(), any());
     }
 
     /**
@@ -309,7 +311,7 @@ class NotificationOutboxRelayTest {
         verify(outboxes).releaseClaim(3L, "token-3");
         verify(outboxes, never()).releaseClaim(1L, "token-1");
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
-                any(), any());
+                any(), any(), any());
         assertThat(relay.inFlight()).isZero();
     }
 
@@ -433,13 +435,46 @@ class NotificationOutboxRelayTest {
         assertThat(relay.poll()).isEqualTo(1);
 
         verify(outboxes, never()).markFailed(org.mockito.ArgumentMatchers.anyLong(),
-                any(), any());
+                any(), any(), any());
+    }
+
+    /**
+     * <b>두 실패 경로가 서로 다른 사유로 넘어간다.</b>
+     *
+     * <p>첫 판은 릴레이가 직접 셌는데 틀렸다 — 릴레이는 그 쓰기가 먹었는지도, 상한을
+     * 넘겨 종착했는지도 모른다. 세는 것은 결과를 아는 저장소가 하고, <b>사유만</b>
+     * 여기서 넘어간다. 그래서 여기서 잴 것은 "무엇이 넘어갔는가" 하나다.
+     */
+    @Test
+    void theMissingNotificationPathPassesItsOwnReason() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findById(41L)).thenReturn(Optional.empty());
+
+        relay.poll();
+
+        verify(outboxes).markFailed(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("token"), any(),
+                org.mockito.ArgumentMatchers.eq(OutboxRetryReason.NOTIFICATION_MISSING));
+    }
+
+    @Test
+    void thePublishFailurePathPassesItsOwnReason() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
+                .when(publisher).publish(any());
+
+        relay.poll();
+
+        verify(outboxes).markFailed(org.mockito.ArgumentMatchers.eq(7L),
+                org.mockito.ArgumentMatchers.eq("token"), any(),
+                org.mockito.ArgumentMatchers.eq(OutboxRetryReason.PUBLISH_FAILED));
     }
 
     private Duration capturedRetryDelay() {
         ArgumentCaptor<Duration> delay = ArgumentCaptor.forClass(Duration.class);
         verify(outboxes).markFailed(org.mockito.ArgumentMatchers.eq(7L),
-                org.mockito.ArgumentMatchers.eq("token"), delay.capture());
+                org.mockito.ArgumentMatchers.eq("token"), delay.capture(), any());
         return delay.getValue();
     }
 

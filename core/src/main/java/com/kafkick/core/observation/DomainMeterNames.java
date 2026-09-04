@@ -112,6 +112,52 @@ public final class DomainMeterNames {
     public static final String NOTIFY_RELAY_IN_FLIGHT = "app.notify.relay.inflight";
 
     /**
+     * outbox 명령이 <b>다시 집히도록 되돌려진</b> 횟수. {@link #TAG_REASON} 으로 나뉜다.
+     *
+     * <p>값은 <b>실제로 나오는 것만</b> 닫아 둔다 — {@code publish_failed}(발행이 던졌다) ·
+     * {@code notification_missing}(발행 대상이 사라졌다) · {@code lease_expired}(잡고 있던
+     * 워커가 lease 안에 못 끝냈다). 앞의 둘은 릴레이가, 마지막은 저장소 어댑터가 센다.
+     *
+     * <p><b>이름이 {@code app.notify.*} 가 아니라 {@code app.outbox.*} 인 이유</b> —
+     * 세는 대상이 <b>알림</b>이 아니라 <b>발행 명령</b>이다. 한 알림이 여러 번 되돌려질 수
+     * 있어서 {@link #NOTIFY_SENT} 와 축이 다르다. 같은 접두사에 두면 두 값을 나눠 보고
+     * "재시도율" 이라 부르고 싶어지는데, 분모가 다르다.
+     */
+    public static final String OUTBOX_RETRY = "app.outbox.retry";
+
+    /**
+     * 되돌릴 때 <b>계획한</b> 대기 시간. {@link #TAG_REASON} 으로 나뉜다.
+     *
+     * <p><b>이 티켓의 핵심이다</b> — 분포가 평평하면 Full Jitter 가 일하는 것이고,
+     * 뾰족하면 아직 뭉치는 것이다. 그것은 백분위로는 안 보이고 <b>버킷</b>으로만 보이므로
+     * {@code observation.yml} 에서 이 이름에만 {@code percentiles-histogram} 을 켠다.
+     *
+     * <p><b>{@code Timer} 지만 잰 시간이 아니다.</b> 실제로 얼마나 기다렸는지가 아니라
+     * <b>얼마를 기다리라고 적었는지</b>다. 그래서 {@code _sum / _count} 를 지연으로 읽으면
+     * 안 된다 — 그 값은 "평균 계획 대기" 이지 처리 지연이 아니다.
+     *
+     * <p><b>{@link #TAG_REASON} 을 붙이는 대가</b> — 값 3종 × 버킷이라 시계열이 3배다.
+     * 그래도 붙이는 이유는, 뭉침이 가장 잘 나는 것이 {@code lease_expired} 인데
+     * 섞어 놓으면 <b>다른 둘이 그 봉우리를 덮어 버리기 때문</b>이다. 그것을 보려고 만든
+     * 지표가 그것을 못 보게 된다.
+     */
+    public static final String OUTBOX_RETRY_DELAY = "app.outbox.retry.delay";
+
+    /**
+     * 재시도 상한(10회)을 넘겨 <b>종착</b>한 outbox <b>명령</b> 수.
+     * {@link #TAG_REASON} 으로 나뉘고, 값은 {@link #OUTBOX_RETRY} 와 <b>같은 셋</b>이다 —
+     * 마지막 실패의 사유가 그대로 붙는다.
+     *
+     * <p><b>세는 단위가 명령이지 알림이 아니다.</b> 종착한 알림을 사람이 다시 보내면
+     * 새 명령이 생기므로, 이 값이 곧 "영영 안 간 알림 수" 는 아니다 — 그렇게 읽으면
+     * 재발송으로 살아난 것까지 실패로 센다. <b>지금 사람 손이 필요한 건수</b>로 읽는다.
+     *
+     * <p>전이가 저장소 어댑터에서만 일어나므로({@code markFailed} 와 만료 회수) 세는 곳도
+     * 거기다.
+     */
+    public static final String OUTBOX_DEAD = "app.outbox.dead";
+
+    /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
      *
      * <p>0 이 아니면 화면의 attempt 수치가 이미 비어 있다는 뜻이다. 다만 이 값으로 TPS·성공률을
