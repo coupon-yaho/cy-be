@@ -51,7 +51,11 @@ benchmark:
 
 management:
   server:
-    port: ${MANAGEMENT_SERVER_PORT:9090}
+    # ⚠️ 이 값은 management.yml 이 덮는다 — spring.config.import 로 들어온 문서가 이긴다
+    #    (실측: 두 변수를 다른 값으로 주면 management.yml 쪽 이름이 이겼다). 그래도 **이름은
+    #    같아야 한다.** 예전에는 여기만 MANAGEMENT_SERVER_PORT 였는데, .env 에도 앱에도
+    #    그 이름을 읽는 곳이 없어서 "여기를 고치면 포트가 바뀐다" 는 거짓 약속이었다.
+    port: ${MANAGEMENT_PORT:9090}
   endpoints:
     web:
       exposure:
