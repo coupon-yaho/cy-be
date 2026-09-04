@@ -6,10 +6,11 @@ import static org.mockito.Mockito.mock;
 
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.job.AbstractJob;
 import org.springframework.batch.core.job.Job;
@@ -29,8 +30,46 @@ class JobShutdownHookListenerTest {
     private final JobOperator operator = mock(JobOperator.class);
     private final Job[] attached = new Job[] {};
 
+    private final FakeShutdownHooks jvm = new FakeShutdownHooks();
+
     private JobShutdownHookListener listener(Job... jobs) {
-        return new JobShutdownHookListener(provider(operator), provider(jobs));
+        return new JobShutdownHookListener(provider(operator), provider(jobs), jvm);
+    }
+
+    /**
+     * <b>테스트가 진짜 {@code Runtime} 에 훅을 붙이면 안 된다.</b> 붙은 채로 테스트가 끝나면
+     * 테스트 JVM 이 죽을 때까지 남고, 그 훅이 죽은 실행을 가리킨다.
+     *
+     * <p>그리고 <b>catch 두 개를 태우려면 실패를 만들 수 있어야 한다</b> — 실제 등록 거부는
+     * JVM 이 종료 중이어야만 나므로 테스트가 만들 수 없다.
+     */
+    private static final class FakeShutdownHooks
+            implements JobShutdownHookListener.ShutdownHooks {
+        private final Set<Thread> registered = new HashSet<>();
+        private RuntimeException addFailure;
+        private RuntimeException removeFailure;
+
+        @Override
+        public void add(Thread hook) {
+            if (addFailure != null) {
+                throw addFailure;
+            }
+            if (!registered.add(hook)) {
+                throw new IllegalArgumentException("Hook previously registered");
+            }
+        }
+
+        @Override
+        public void remove(Thread hook) {
+            if (removeFailure != null) {
+                throw removeFailure;
+            }
+            registered.remove(hook);
+        }
+
+        int size() {
+            return registered.size();
+        }
     }
 
     private JobShutdownHookListener listener() {
@@ -38,15 +77,6 @@ class JobShutdownHookListenerTest {
     }
 
     private JobShutdownHookListener subject;
-
-    @AfterEach
-    void cleanUp() {
-        // 테스트가 남긴 훅을 JVM 에 두고 가지 않는다.
-        if (subject != null) {
-            subject.afterJob(execution(1L));
-            subject.afterJob(execution(2L));
-        }
-    }
 
     @Test
     void registersAHookWhileTheJobRuns() {
@@ -98,25 +128,53 @@ class JobShutdownHookListenerTest {
         subject = listener();
         JobExecution execution = execution(1L);
         subject.beforeJob(execution);
+        jvm.removeFailure = new IllegalStateException("Shutdown in progress");
 
-        // 훅을 몰래 떼어 두면 removeShutdownHook 이 false 를 돌려주고, 실제 종료 중이면
-        // IllegalStateException 이 난다. 둘 다 밖으로 나가면 안 된다.
-        assertThatCode(() -> {
-            subject.afterJob(execution);
-            subject.afterJob(execution);   // 두 번째는 맵에 없다
-        }).doesNotThrowAnyException();
+        assertThatCode(() -> subject.afterJob(execution)).doesNotThrowAnyException();
+        assertThat(subject.registeredHookCount())
+                .as("해제에 실패해도 맵에서는 빠져야 합니다 — 안 빠지면 다음 실행이 못 붙습니다")
+                .isZero();
     }
 
-    /** 훅을 못 붙여도 잡은 계속 돌아야 한다 — 관측 장치가 업무를 죽이면 안 된다. */
+    /** 맵에 없는 실행의 {@code afterJob} 은 아무 일도 안 한다. */
+    @Test
+    void ignoresAfterJobForAnExecutionItNeverRegistered() {
+        subject = listener();
+
+        assertThatCode(() -> subject.afterJob(execution(99L))).doesNotThrowAnyException();
+    }
+
+    /**
+     * 훅을 못 붙여도 잡은 계속 돌아야 한다 — 관측 장치가 업무를 죽이면 안 된다.
+     *
+     * <p><b>실제로 등록을 거부시킨다.</b> 예전에는 같은 실행으로 {@code beforeJob} 을 두 번
+     * 불러 흉내내려 했는데, 호출마다 새 {@code Thread} 를 만들므로 <b>두 번째도 정상 등록됐다</b>
+     * — catch 를 한 번도 안 태우면서 통과하던 테스트였다(Qodo 리뷰가 잡았다).
+     */
     @Test
     void doesNotFailTheJobWhenTheHookCannotBeRegistered() {
+        subject = listener();
+        jvm.addFailure = new IllegalStateException("Shutdown in progress");
+
+        assertThatCode(() -> subject.beforeJob(execution(1L))).doesNotThrowAnyException();
+        assertThat(subject.registeredHookCount())
+                .as("등록에 실패했는데 맵에 남으면 afterJob 이 없는 훅을 떼려 한다")
+                .isZero();
+    }
+
+    /** 같은 실행에 두 번 붙으면 앞 훅을 뗀다 — 안 떼면 JVM 이 죽을 때까지 샌다. */
+    @Test
+    void removesThePreviousHookWhenTheSameExecutionIsRegisteredTwice() {
         subject = listener();
         JobExecution execution = execution(1L);
 
         subject.beforeJob(execution);
-        // 같은 실행으로 다시 부르면 addShutdownHook 이 IllegalArgumentException 을 던지는
-        // 상황을 흉내낸다. 맵이 덮이더라도 예외는 밖으로 안 나간다.
-        assertThatCode(() -> subject.beforeJob(execution)).doesNotThrowAnyException();
+        subject.beforeJob(execution);
+
+        assertThat(jvm.size())
+                .as("앞 훅이 JVM 에 남았습니다")
+                .isEqualTo(1);
+        assertThat(subject.registeredHookCount()).isEqualTo(1);
     }
 
     /**
