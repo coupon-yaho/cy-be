@@ -437,6 +437,13 @@ services:
     # 포트는 **MANAGEMENT_PORT** 다. 9090 을 박으면 그 값을 바꾼 환경에서 api 가 영영
     # healthy 가 안 되고 권한 적용이 안 돈다.
     #
+    # ⚠️ **`$$` 다.** `$` 하나면 compose 가 **호스트에서** 치환하는데, api 가 실제로 쓰는
+    #    값은 `env_file: .env` 로 **컨테이너에** 주입된 것이다. 둘의 출처가 달라서
+    #    셸에 MANAGEMENT_PORT 가 export 돼 있거나 `--env-file` 로 다른 파일을 주면
+    #    엇갈린다 — api 는 멀쩡히 떠 있는데 healthcheck 만 엉뚱한 포트를 두드리고,
+    #    이것을 기다리는 app-grants 가 영영 안 돈다. `$$` 로 넘기면 컨테이너 셸이
+    #    자기 환경에서 편다(CMD-SHELL 은 /bin/sh -c 다).
+    #
     # ⚠️ 첫 판은 MANAGEMENT_SERVER_PORT 를 썼는데 **그 이름은 죽어 있다.** api 의
     #    application.yml 과 management.yml 이 같은 키를 서로 다른 변수로 적고 있었고,
     #    spring.config.import 로 들어온 문서가 이긴다 — 실측했다: 둘을 각각 9391·9392 로
@@ -445,7 +452,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - wget -q -O /dev/null http://127.0.0.1:${MANAGEMENT_PORT:-9090}/actuator/metrics
+        - wget -q -O /dev/null http://127.0.0.1:$${MANAGEMENT_PORT:-9090}/actuator/metrics
       interval: 5s
       timeout: 3s
       # 마이그레이션 45건이 도는 시간까지 포함한다 — 첫 기동은 스키마를 통째로 만든다.
