@@ -85,3 +85,12 @@ tasks.named('test') {
         .withPropertyName('observationQueryScopeInputs')
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// AppAccountAppendOnlyTest 가 클래스패스 **밖**의 스크립트와 목록을 읽고, 컨테이너 안에서
+// 그 스크립트를 그대로 돌린다. 입력으로 선언하지 않으면 목록만 고쳤을 때 Gradle 이
+// UP-TO-DATE 로 건너뛰어 **권한 계약이 검증되지 않은 채 통과한다.**
+tasks.named('test') {
+    inputs.dir(rootProject.file('infra/mysql/app-grants'))
+            .withPropertyName('appGrantScripts')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+}

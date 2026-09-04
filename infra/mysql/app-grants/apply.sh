@@ -52,6 +52,30 @@ if [ -n "${mandatory_roles}" ]; then
     exit 1
 fi
 
+# 계정에 **부여된 역할**도 걷는다. REVOKE ALL PRIVILEGES 는 역할을 떼지 않으므로,
+# 역할이 UPDATE·DELETE 를 주고 있으면 append-only 가 통째로 무효가 된다.
+# obs 쪽 apply.sh 가 같은 이유로 같은 것을 한다.
+app_roles="$(query_as_root "SELECT CONCAT(QUOTE(FROM_USER), '@', QUOTE(FROM_HOST))
+                              FROM mysql.role_edges
+                             WHERE TO_USER = '${DB_USERNAME}' AND TO_HOST = '%'")"
+
+# ② 마이그레이션이 끝난 뒤인지 확인한다. Flyway 가 도는 중이면 목록이 불완전하고,
+#    그때 빠진 테이블은 DML 권한을 못 받아 앱이 런타임에 1142 로 죽는다.
+flyway_state="$(query_as_root "SELECT COUNT(*) FROM information_schema.TABLES
+                                WHERE TABLE_SCHEMA = '${MYSQL_DATABASE}'
+                                  AND TABLE_NAME = 'flyway_schema_history'")"
+if [ "${flyway_state}" != "1" ]; then
+    echo "거부: flyway_schema_history 가 없다. 마이그레이션 전이라 테이블 목록이 불완전하다." >&2
+    echo "  이 스크립트는 Flyway 뒤에 돌려야 한다." >&2
+    exit 1
+fi
+pending="$(query_as_root "SELECT COUNT(*) FROM \`${MYSQL_DATABASE}\`.flyway_schema_history
+                           WHERE success = 0")"
+if [ "${pending}" != "0" ]; then
+    echo "거부: 실패한 마이그레이션이 ${pending}건 있다. 스키마가 확정되지 않았다." >&2
+    exit 1
+fi
+
 tables="$(query_as_root "SELECT TABLE_NAME FROM information_schema.TABLES
                           WHERE TABLE_SCHEMA = '${MYSQL_DATABASE}' AND TABLE_TYPE = 'BASE TABLE'")"
 [ -n "${tables}" ] || {
@@ -62,9 +86,20 @@ tables="$(query_as_root "SELECT TABLE_NAME FROM information_schema.TABLES
 statements="
 REVOKE IF EXISTS ALL PRIVILEGES, GRANT OPTION FROM '${DB_USERNAME}'@'%';
 -- Flyway 가 이 계정으로 돈다. DDL 은 스키마 단위로 준다 — 새 테이블을 만들어야 하므로
--- 테이블 단위로는 줄 수 없다. append-only 는 DML 축의 제약이고 DDL 은 다른 축이다.
-GRANT CREATE, ALTER, DROP, INDEX, REFERENCES ON \`${MYSQL_DATABASE}\`.* TO '${DB_USERNAME}'@'%';
+-- 테이블 단위로는 줄 수 없다.
+--
+-- ⚠️ **DROP 을 주지 않는다.** TRUNCATE TABLE 이 DROP 권한으로 돌아서, 주면 DELETE 를
+--    막아도 이력을 통째로 날릴 수 있다 — append-only 가 성립하지 않는다.
+--    지금 마이그레이션 중 DROP TABLE·TRUNCATE 를 쓰는 것은 하나도 없다(실측).
+--    쓰게 되면 그 마이그레이션이 여기서 막히고, 그때 **DDL 계정을 분리**해야 한다.
+GRANT CREATE, ALTER, INDEX, REFERENCES ON \`${MYSQL_DATABASE}\`.* TO '${DB_USERNAME}'@'%';
 "
+
+for app_role in ${app_roles}; do
+    [ -n "${app_role}" ] || continue
+    statements="${statements}
+REVOKE ${app_role} FROM '${DB_USERNAME}'@'%';"
+done
 
 for table in ${tables}; do
     case "${table}" in

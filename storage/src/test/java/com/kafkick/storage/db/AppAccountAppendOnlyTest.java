@@ -9,8 +9,6 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.List;
 
-import javax.sql.DataSource;
-
 import com.zaxxer.hikari.HikariDataSource;
 
 import org.junit.jupiter.api.AfterEach;
@@ -23,6 +21,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.mysql.MySQLContainer;
+import org.testcontainers.utility.MountableFile;
 
 /**
  * <b>append-only 는 규율이 아니라 제약이어야 한다.</b>
@@ -57,6 +56,9 @@ class AppAccountAppendOnlyTest {
     private static final String PROBE_USER = "app_probe";
     private static final String PROBE_PASSWORD = "probe-pw";
 
+    /** 운영에서 도는 그 디렉터리다. 목록 파일을 같이 옮겨야 스크립트가 읽는다. */
+    private static final Path SCRIPT_DIR = Path.of("..", "infra", "mysql", "app-grants");
+
     @Autowired
     MySQLContainer mySqlContainer;
 
@@ -64,29 +66,54 @@ class AppAccountAppendOnlyTest {
     JdbcTemplate jdbcTemplate;
 
     private HikariDataSource probeDataSource;
+    private HikariDataSource rootDataSource;
 
-    /** {@code apply.sh} 가 만드는 것과 <b>같은 형태</b>의 권한을 프로브 계정에 준다. */
+    /** 루트 풀은 <b>하나만</b> 만든다. 호출마다 만들면 커넥션과 풀 스레드가 쌓인다. */
+    private final java.util.function.Supplier<JdbcTemplate> rootTemplate = () -> {
+        if (rootDataSource == null) {
+            rootDataSource = new HikariDataSource();
+            rootDataSource.setJdbcUrl(mySqlContainer.getJdbcUrl());
+            rootDataSource.setUsername("root");
+            rootDataSource.setPassword(mySqlContainer.getPassword());
+            rootDataSource.setMaximumPoolSize(1);
+        }
+        return new JdbcTemplate(rootDataSource);
+    };
+
+    /**
+     * <b>운영에서 도는 그 스크립트를 그대로 돌린다.</b>
+     *
+     * <p>권한 SQL 을 자바로 다시 쓰면 <b>스크립트가 깨져도 이 테스트는 통과한다</b> —
+     * 셸 문법, 역할 회수, 테이블 열거가 전부 검증 대상에서 빠진다. 리뷰가 그것을 짚었고,
+     * 첫 판이 실제로 그랬다.
+     *
+     * <p>대상만 프로브 계정으로 바꾼다({@code DB_USERNAME}). 진짜 앱 계정을 좁히면
+     * 픽스처를 정리하려고 이력을 {@code DELETE} 하는 다른 테스트 넷이 깨진다.
+     */
     @BeforeEach
-    void grantLikeTheScriptDoes() throws Exception {
-        String database = mySqlContainer.getDatabaseName();
-        JdbcTemplate root = rootTemplate();
-
+    void runTheRealScript() throws Exception {
+        JdbcTemplate root = rootTemplate.get();
         root.execute("CREATE USER IF NOT EXISTS '" + PROBE_USER + "'@'%' IDENTIFIED BY '"
                 + PROBE_PASSWORD + "'");
         root.execute("ALTER USER '" + PROBE_USER + "'@'%' IDENTIFIED BY '" + PROBE_PASSWORD + "'");
-        // ① 먼저 전권을 준다 — 도커 이미지가 만드는 계정과 같은 출발점이다.
-        root.execute("GRANT ALL PRIVILEGES ON `" + database + "`.* TO '" + PROBE_USER + "'@'%'");
-        // ② 스크립트와 같은 순서로 걷고 다시 준다.
-        root.execute("REVOKE ALL PRIVILEGES, GRANT OPTION FROM '" + PROBE_USER + "'@'%'");
-        root.execute("GRANT CREATE, ALTER, DROP, INDEX, REFERENCES ON `" + database
+        // 도커 이미지가 만드는 계정과 같은 출발점 — 스키마 전권이다.
+        root.execute("GRANT ALL PRIVILEGES ON `" + mySqlContainer.getDatabaseName()
                 + "`.* TO '" + PROBE_USER + "'@'%'");
-        for (String table : appendOnlyTables()) {
-            root.execute("GRANT SELECT, INSERT ON `" + database + "`.`" + table + "` TO '"
-                    + PROBE_USER + "'@'%'");
-        }
-        root.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON `" + database
-                + "`.`issuances` TO '" + PROBE_USER + "'@'%'");
         root.execute("FLUSH PRIVILEGES");
+
+        mySqlContainer.copyFileToContainer(
+                MountableFile.forHostPath(SCRIPT_DIR), "/app-grants");
+        var result = mySqlContainer.execInContainer(
+                "env",
+                "MYSQL_ROOT_PASSWORD=" + mySqlContainer.getPassword(),
+                "MYSQL_DATABASE=" + mySqlContainer.getDatabaseName(),
+                "DB_USERNAME=" + PROBE_USER,
+                "MYSQL_HOST=127.0.0.1",
+                "sh", "/app-grants/apply.sh");
+        assertThat(result.getExitCode())
+                .as("apply.sh 가 실패했습니다.%nstdout=%s%nstderr=%s",
+                        result.getStdout(), result.getStderr())
+                .isZero();
 
         probeDataSource = new HikariDataSource();
         probeDataSource.setJdbcUrl(mySqlContainer.getJdbcUrl());
@@ -100,14 +127,29 @@ class AppAccountAppendOnlyTest {
         if (probeDataSource != null) {
             probeDataSource.close();
         }
-        rootTemplate().execute("DROP USER IF EXISTS '" + PROBE_USER + "'@'%'");
+        rootTemplate.get().execute("DROP USER IF EXISTS '" + PROBE_USER + "'@'%'");
+        if (rootDataSource != null) {
+            rootDataSource.close();
+            rootDataSource = null;
+        }
     }
 
+    /**
+     * <b>{@code SELECT COUNT(*)} 는 INSERT 권한을 검증하지 않는다.</b> 첫 판이 그랬고,
+     * 그래서 GRANT 에서 {@code INSERT} 가 빠져도 통과했다(리뷰가 짚었다).
+     *
+     * <p>행을 남기지 않는 {@code INSERT ... SELECT ... WHERE 1=0} 으로 <b>권한만</b> 태운다 —
+     * 권한 검사는 실행 계획보다 먼저 돌므로 0행이어도 1142 가 난다.
+     */
     @Test
     @DisplayName("① 넣는 것은 된다 — append-only 는 쓰기를 막는 것이 아니다")
     void canStillInsertHistory() {
-        assertThatCode(() -> probe().queryForObject(
-                "SELECT COUNT(*) FROM issuance_histories", Integer.class))
+        assertThatCode(() -> probe().update("""
+                INSERT INTO issuance_histories
+                       (issuance_id, event_type, from_status, to_status, created_at)
+                SELECT 0, 'PROBE', NULL, 'PROBE', CURRENT_TIMESTAMP(6)
+                  FROM DUAL WHERE 1 = 0
+                """))
                 .doesNotThrowAnyException();
     }
 
@@ -133,15 +175,17 @@ class AppAccountAppendOnlyTest {
                         .isEqualTo(1142));
     }
 
+    /**
+     * <b>예외가 아예 없어야 한다.</b> 첫 판은 <i>"1142 만 아니면 통과"</i> 였는데,
+     * 그러면 연결 오류나 문법 오류도 성공으로 친다(리뷰가 짚었다).
+     * 실재하는 컬럼을 0행 갱신한다.
+     */
     @Test
     @DisplayName("④ 목록 밖 테이블은 그대로 고칠 수 있다 — 좁힌 것이 이력뿐이어야 한다")
     void otherTablesKeepFullAccess() {
         assertThatCode(() -> probe().update(
-                "UPDATE issuances SET reason_placeholder = reason_placeholder WHERE 1 = 0"))
-                .satisfiesAnyOf(
-                        // 컬럼이 없으면 1054 다 — 권한 문제가 아니라는 것이 요점이다.
-                        thrown -> assertThat(thrown).isNull(),
-                        thrown -> assertThat(rootErrorCode(thrown)).isNotEqualTo(1142));
+                "UPDATE issuances SET status = status WHERE 1 = 0"))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -162,30 +206,13 @@ class AppAccountAppendOnlyTest {
         }
     }
 
-    private static int rootErrorCode(Throwable thrown) {
-        Throwable cause = thrown;
-        while (cause.getCause() != null) {
-            cause = cause.getCause();
-        }
-        return cause instanceof SQLException sql ? sql.getErrorCode() : -1;
-    }
-
     private JdbcTemplate probe() {
         return new JdbcTemplate(probeDataSource);
     }
 
-    private JdbcTemplate rootTemplate() {
-        HikariDataSource root = new HikariDataSource();
-        root.setJdbcUrl(mySqlContainer.getJdbcUrl());
-        root.setUsername("root");
-        root.setPassword(mySqlContainer.getPassword());
-        root.setMaximumPoolSize(1);
-        return new JdbcTemplate((DataSource) root);
-    }
-
     /** 스크립트가 읽는 것과 <b>같은 파일</b>을 읽는다. 목록을 여기 옮겨 적으면 갈린다. */
     private static List<String> appendOnlyTables() {
-        Path file = Path.of("..", "infra", "mysql", "app-grants", "append-only.txt");
+        Path file = SCRIPT_DIR.resolve("append-only.txt");
         try {
             return Files.readAllLines(file).stream()
                     .map(line -> line.replaceAll("#.*", "").trim())
@@ -194,5 +221,36 @@ class AppAccountAppendOnlyTest {
         } catch (Exception e) {
             throw new IllegalStateException("append-only 목록을 못 읽었습니다: " + file.toAbsolutePath(), e);
         }
+    }
+
+    /**
+     * <b>DELETE 를 막아도 DROP 권한이 있으면 이력을 통째로 날릴 수 있다.</b>
+     * {@code TRUNCATE TABLE} 이 {@code DROP} 권한으로 돌기 때문이다 — 리뷰가 짚었고,
+     * 첫 판은 Flyway 때문에 {@code DROP} 을 스키마 단위로 주고 있어서 <b>append-only 가
+     * 성립하지 않았다.</b>
+     *
+     * <p>지금 마이그레이션 중 {@code DROP TABLE}·{@code TRUNCATE} 를 쓰는 것은 하나도 없다
+     * (실측). 쓰게 되면 그 마이그레이션이 막히고, 그때 DDL 계정을 분리해야 한다.
+     */
+    @Test
+    @DisplayName("⑥ 비우는 것도 막힌다 — TRUNCATE 는 DROP 권한으로 돈다")
+    void cannotTruncateHistory() {
+        assertThatThrownBy(() -> probe().execute("TRUNCATE TABLE issuance_histories"))
+                .as("DROP 을 스키마 단위로 주면 이 문장이 성공해 append-only 가 무너진다")
+                .rootCause()
+                .isInstanceOfSatisfying(SQLException.class, cause -> assertThat(cause.getErrorCode())
+                        .isEqualTo(1142));
+    }
+
+    /** 마이그레이션이 계속 돌아야 한다 — DDL 을 통째로 걷으면 다음 배포가 죽는다. */
+    @Test
+    @DisplayName("⑦ 스키마 변경은 여전히 된다 — Flyway 가 이 계정으로 돈다")
+    void ddlStillWorksForFlyway() {
+        assertThatCode(() -> {
+            probe().execute("CREATE TABLE probe_ddl_check (id BIGINT PRIMARY KEY)");
+            probe().execute("ALTER TABLE probe_ddl_check ADD COLUMN note VARCHAR(10)");
+        }).doesNotThrowAnyException();
+        // DROP 권한이 없으므로 정리는 root 가 한다 — 그 사실 자체가 이 PR 의 요점이다.
+        rootTemplate.get().execute("DROP TABLE IF EXISTS probe_ddl_check");
     }
 }
