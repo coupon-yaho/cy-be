@@ -68,6 +68,12 @@ public class NotificationOutboxRelay implements SmartLifecycle {
     private final int claimBatchSize;
     private final FullJitterBackOff backOff;
     private final Clock clock;
+
+    /**
+     * 되돌린 것을 센다. <b>계획한 지연도 같이 넣는다</b> — 분포가 평평해야 지터가 일하는
+     * 것이고, 뾰족하면 아직 뭉치는 것이다.
+     */
+    private final NotificationRetryMeter retries;
     private final Executor workers;
 
     /**
@@ -125,6 +131,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
             NotificationRequestedEventPublisher publisher,
             Duration lease,
             int claimBatchSize,
+            NotificationRetryMeter retries,
             Executor workers,
             int maxInFlight,
             int workerCount,
@@ -134,6 +141,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
         this.notifications = Objects.requireNonNull(notifications, "notifications");
         this.publisher = Objects.requireNonNull(publisher, "publisher");
         this.lease = Objects.requireNonNull(lease, "lease");
+        this.retries = Objects.requireNonNull(retries, "retries");
         if (claimBatchSize < 1) {
             throw new IllegalArgumentException(
                     "claimBatchSize 는 1 이상이어야 합니다. 0 이면 릴레이가 아무것도 집지 않고 "
@@ -194,6 +202,20 @@ public class NotificationOutboxRelay implements SmartLifecycle {
      */
     private Duration retryDelay(NotificationOutboxClaim claim) {
         return backOff.nextDelay(claim.failureCount() + 1);
+    }
+
+    /**
+     * 되돌리고 센다. <b>쓰기와 세기를 한 자리에 묶는다</b> — 떨어뜨려 두면 한쪽만 도는
+     * 경로가 생기고, 그러면 지표가 조용히 실제와 어긋난다.
+     *
+     * <p>지연은 <b>한 번만</b> 뽑는다. 쓰는 값과 세는 값이 다르면 히스토그램이 실제로
+     * 적힌 것과 다른 분포를 보여 준다 — 그 지표를 믿고 보는 사람이 있다는 점에서
+     * 지표가 없는 것보다 나쁘다.
+     */
+    private void returnToPending(NotificationOutboxClaim claim, String reason) {
+        Duration delay = retryDelay(claim);
+        outboxes.markFailed(claim.outboxId(), claim.claimToken(), delay);
+        retries.retried(reason, delay);
     }
 
     /**
@@ -372,7 +394,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
         if (found.isEmpty()) {
             // 발행 대상이 사라졌다. 지연은 발행 실패와 같은 계산을 쓴다 — 한쪽만
             // 지터를 주면 나머지가 다시 뭉친다.
-            outboxes.markFailed(claim.outboxId(), claim.claimToken(), retryDelay(claim));
+            returnToPending(claim, NotificationRetryMeter.NOTIFICATION_MISSING);
             return false;
         }
         Notification notification = found.orElseThrow();
@@ -385,7 +407,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
             outboxes.markPublished(claim.outboxId(), claim.claimToken(), clock.instant());
             return true;
         } catch (RuntimeException failure) {
-            outboxes.markFailed(claim.outboxId(), claim.claimToken(), retryDelay(claim));
+            returnToPending(claim, NotificationRetryMeter.PUBLISH_FAILED);
             return false;
         }
     }
