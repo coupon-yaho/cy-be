@@ -14,6 +14,7 @@ import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.launch.support.JobExecutionShutdownHook;
 import org.springframework.batch.core.listener.JobExecutionListener;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -44,8 +45,13 @@ import org.springframework.stereotype.Component;
  *
  * <p>{@code .listener(...)} 로 잡 빌더에 붙이면 <b>새 잡을 만드는 사람이 빠뜨릴 수 있다.</b>
  * {@link AbstractJob#registerJobExecutionListener} 가 public 이므로 컨텍스트가 다 뜬 뒤
- * {@code Job} 빈 전부에 붙인다 — {@code BatchRunMetrics} 가 {@code List<Job>} 에서 게이지를
- * 자동으로 만드는 것과 같은 방식이고, 그래서 <b>잡을 추가하면 이것도 따라온다.</b>
+ * {@code Job} 빈에 붙인다 — {@code BatchRunMetrics} 가 {@code List<Job>} 에서 게이지를
+ * 자동으로 만드는 것과 같은 방식이고, 그래서 <b>{@code AbstractJob} 을 상속한 잡을 추가하면
+ * 이것도 따라온다.</b>
+ *
+ * <p><b>다만 "전부" 는 아니다.</b> {@code AbstractJob} 이 아닌 구현에는 붙일 수 없고, 그때는
+ * WARN 을 남기고 넘어간다 — 그 잡만 SIGTERM 에 시체를 남긴다. 지금 이 저장소의 잡 셋은
+ * 전부 {@code AbstractJob} 이고 {@code JobShutdownHookWiringTest} 가 그것을 못 박는다.
  *
  * <h2>{@code kill -9} 는 못 막는다</h2>
  *
@@ -65,17 +71,55 @@ public class JobShutdownHookListener implements JobExecutionListener, SmartIniti
 
     private final ObjectProvider<JobOperator> jobOperator;
     private final ObjectProvider<Job> jobs;
+    private final ShutdownHooks shutdownHooks;
+
+    /**
+     * <b>{@link Runtime} 을 직접 부르면 catch 두 개를 테스트가 못 태운다.</b>
+     * 등록 거부는 JVM 이 종료 중이어야 나고, 해제 실패도 마찬가지다 — 둘 다 테스트가
+     * 만들 수 없는 상태다. 그래서 그 두 호출만 이 좁은 이음매 뒤로 뺀다.
+     *
+     * <p>이음매를 넓히지 않는다. {@code Runtime} 전체가 아니라 <b>우리가 쓰는 두 동작</b>만
+     * 가린다.
+     */
+    interface ShutdownHooks {
+        void add(Thread hook);
+
+        void remove(Thread hook);
+
+        ShutdownHooks JVM = new ShutdownHooks() {
+            @Override
+            public void add(Thread hook) {
+                Runtime.getRuntime().addShutdownHook(hook);
+            }
+
+            @Override
+            public void remove(Thread hook) {
+                Runtime.getRuntime().removeShutdownHook(hook);
+            }
+        };
+    }
 
     /**
      * <b>둘 다 {@link ObjectProvider} 로 받는다.</b> {@code JobOperator} 는 {@code JobRegistry} 를
      * 거쳐 잡을 알고, 이 빈은 그 잡들에 자기를 붙인다 — 생성자에서 직접 받으면 그 고리가
      * 순환이 될 수 있다. 실제로 필요한 시점은 둘 다 컨텍스트가 다 뜬 뒤다.
      */
+    @Autowired
     public JobShutdownHookListener(
             @Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) ObjectProvider<JobOperator> jobOperator,
             ObjectProvider<Job> jobs) {
+        this(jobOperator, jobs, ShutdownHooks.JVM);
+    }
+
+    /**
+     * 테스트 전용. <b>{@link Autowired} 를 위 생성자에 붙인 것은 이 생성자 때문이다</b> —
+     * 생성자가 둘이면 스프링이 기본 생성자를 찾다가 {@code NoSuchMethodException} 으로 죽는다.
+     */
+    JobShutdownHookListener(ObjectProvider<JobOperator> jobOperator, ObjectProvider<Job> jobs,
+            ShutdownHooks shutdownHooks) {
         this.jobOperator = jobOperator;
         this.jobs = jobs;
+        this.shutdownHooks = shutdownHooks;
     }
 
     /** 컨텍스트가 다 뜬 뒤 {@code Job} 빈 전부에 자기를 붙인다. */
@@ -99,8 +143,15 @@ public class JobShutdownHookListener implements JobExecutionListener, SmartIniti
     public void beforeJob(JobExecution jobExecution) {
         Thread hook = new JobExecutionShutdownHook(jobExecution, jobOperator.getObject());
         try {
-            Runtime.getRuntime().addShutdownHook(hook);
-            hooks.put(jobExecution.getId(), hook);
+            shutdownHooks.add(hook);
+            Thread previous = hooks.put(jobExecution.getId(), hook);
+            if (previous != null) {
+                // 같은 실행에 두 번 붙는 것은 배선 사고다. 앞 훅을 떼지 않으면 JVM 이
+                // 죽을 때까지 남는다 — 조용히 새는 쪽이 시끄럽게 실패하는 쪽보다 나쁘다.
+                log.warn("같은 실행에 종료 훅이 두 번 붙었습니다. 앞 훅을 뗍니다. executionId={}",
+                        jobExecution.getId());
+                removeQuietly(previous, jobExecution.getId());
+            }
         } catch (IllegalStateException | IllegalArgumentException refused) {
             // JVM 이 이미 종료 중이거나 같은 훅이 이미 붙어 있다. 어느 쪽이든
             // **잡을 실패시키지 않는다** — 관측·정리 장치가 업무를 죽이면 안 된다.
@@ -113,15 +164,21 @@ public class JobShutdownHookListener implements JobExecutionListener, SmartIniti
     @Override
     public void afterJob(JobExecution jobExecution) {
         Thread hook = hooks.remove(jobExecution.getId());
-        if (hook == null) {
-            return;
+        if (hook != null) {
+            removeQuietly(hook, jobExecution.getId());
         }
+    }
+
+    /**
+     * <b>해제 실패를 삼키는 것이 정상 경로다.</b> 종료 훅이 잡을 멈추면 {@code afterJob} 이
+     * 종료 시퀀스 <b>안에서</b> 돌고, 그때 {@code removeShutdownHook} 은 언제나
+     * {@code IllegalStateException} 을 던진다. 그것이 밖으로 나가면 정상 종료가 예외로 끝난다.
+     */
+    private void removeQuietly(Thread hook, Long executionId) {
         try {
-            Runtime.getRuntime().removeShutdownHook(hook);
+            shutdownHooks.remove(hook);
         } catch (IllegalStateException shuttingDown) {
-            // **정상 경로다.** 종료 훅이 잡을 멈추면 afterJob 이 종료 시퀀스 안에서 돌고,
-            // 그때 removeShutdownHook 은 언제나 이것을 던진다. 훅은 어차피 곧 사라진다.
-            log.debug("종료 중이라 훅을 떼지 않았습니다. executionId={}", jobExecution.getId());
+            log.debug("종료 중이라 훅을 떼지 않았습니다. executionId={}", executionId);
         }
     }
 
