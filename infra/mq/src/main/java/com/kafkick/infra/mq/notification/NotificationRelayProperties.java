@@ -14,6 +14,21 @@ public class NotificationRelayProperties {
      */
     private static final Duration MAX_BACKOFF = Duration.ofDays(365);
 
+    /**
+     * 한 회차에 집을 수 있는 절대 상한.
+     *
+     * <p><b>메모리와 SQL 크기 때문이다.</b> 집은 수만큼 id·UUID 를 메모리에 만들고 같은 수의
+     * {@code IN} 자리표시자를 붙인다. 백로그가 큰 상태에서 큰 값을 주면 릴레이가 그것 때문에 죽는다.
+     *
+     * <p>1,000 은 그 선을 넉넉히 아래로 잡은 값이다.
+     *
+     * <p><b>lease 관계 검사와 어느 쪽이 먼저 걸리는지는 lease 에 달렸다.</b>
+     * 기본 lease(30초)에서는 배치 300 부터 그쪽이 먼저 막지만, lease 가 100초를 넘으면
+     * 1,000 도 그 검사를 통과하므로 이 상한이 유일한 방어선이 된다. 한때 여기에
+     * <i>"실제로는 lease 관계가 훨씬 먼저 걸린다"</i> 고 적었는데 lease 를 상수로 가정한 것이었다.
+     */
+    private static final int MAX_CLAIM_BATCH_SIZE = 1_000;
+
     private Duration lease = Duration.ofSeconds(30);
     private long fixedDelayMs = 100L;
 
@@ -32,16 +47,6 @@ public class NotificationRelayProperties {
         return claimBatchSize;
     }
 
-    /**
-     * 한 회차에 집을 수 있는 절대 상한.
-     *
-     * <p><b>메모리와 SQL 크기 때문이다.</b> 집은 수만큼 id·UUID 를 메모리에 만들고 같은 수의
-     * {@code IN} 자리표시자를 붙인다. 백로그가 큰 상태에서 큰 값을 주면 릴레이가 그것 때문에 죽는다.
-     *
-     * <p>1,000 은 그 선을 넉넉히 아래로 잡은 값이다 — 실제로는 lease 관계
-     * ({@code NotificationOutboxRelay} 의 발행 예산 검사)가 훨씬 먼저 걸린다.
-     */
-    private static final int MAX_CLAIM_BATCH_SIZE = 1_000;
 
     /**
      * @throws IllegalArgumentException 1 미만이거나 {@value #MAX_CLAIM_BATCH_SIZE} 초과일 때.

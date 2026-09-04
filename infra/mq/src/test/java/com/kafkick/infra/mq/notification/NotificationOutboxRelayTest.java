@@ -163,4 +163,26 @@ class NotificationOutboxRelayTest {
                 LEASE, 0, new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>알림 릴레이 설정 하나가 접수 API 기동 전체를 막으면 안 된다.</b>
+     * 상한이 없으면 큰 lease 에서 {@code Duration.toMillis()} 가
+     * {@code ArithmeticException} 으로 터진다.
+     */
+    @Test
+    void rejectsLeaseTooLargeToConvertSafely() {
+        assertThatThrownBy(() -> new NotificationOutboxRelay(outboxes, notifications, publisher,
+                Duration.ofSeconds(Long.MAX_VALUE / 1000), BATCH,
+                new FullJitterBackOff(BASE, CAP), Clock.fixed(AT, ZoneOffset.UTC)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("lease");
+    }
+
+    @Test
+    void rejectsNonPositiveLease() {
+        assertThatThrownBy(() -> new NotificationOutboxRelay(outboxes, notifications, publisher,
+                Duration.ZERO, BATCH, new FullJitterBackOff(BASE, CAP),
+                Clock.fixed(AT, ZoneOffset.UTC)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
