@@ -41,6 +41,12 @@ import org.junit.jupiter.api.Test;
  *       <td><b>그대로 둔다</b> — 아래 예산</td></tr>
  * </table>
  *
+ * <p><b>예산 합은 15 가 아니라 17 이다.</b> 갈래 ① 을 고치면서
+ * {@code ApiTopologyValidator} 의 {@code orElse(null)} 하나가 <b>둘로 늘었다</b> —
+ * 조회 결과를 {@code Optional} 로 들고 있다가 응답 필드 <b>두 개</b>를 만들 때 각각
+ * {@code null} 이 되기 때문이다. 늘어난 둘도 갈래 ③ 이다(nullable 응답 필드).
+ * <b>고쳤는데 숫자가 늘어난 것</b>이라 헷갈리기 쉬워 여기 적어 둔다.
+ *
  * <p>규칙의 의도는 <b>"조회 결과가 없을 때 null 비교"</b> 를 없애는 것이지 nullable 값
  * 자체를 금지하는 것이 아니다. 응답 DTO 의 nullable 필드를 {@code orElseThrow} 로 바꾸면
  * <b>없는 것이 정상인 자리에서 예외가 난다.</b>
@@ -58,7 +64,12 @@ class OrElseNullBudgetTest {
     /** 저장소 뿌리. 배치 테스트의 작업 디렉터리가 모듈 안이라 한 칸 올라간다. */
     private static final Path REPO_ROOT = Path.of("..");
 
-    private static final Pattern OR_ELSE_NULL = Pattern.compile("orElse\\(null\\)");
+    /**
+     * 공백을 넣거나 줄을 바꿔도 잡는다. {@code orElse\u0028null\u0029} 만 찾으면
+     * {@code orElse( null )} 이나 여러 줄로 쓴 같은 호출이 <b>검사를 그냥 지나간다</b> —
+     * 동작은 똑같은데 예산에는 안 잡히는 구멍이 된다.
+     */
+    private static final Pattern OR_ELSE_NULL = Pattern.compile("orElse\\(\\s*null\\s*\\)");
 
     /**
      * 갈래 ③ — <b>없음이 정상이고 {@code null} 이 그대로 값</b>인 자리.
@@ -96,6 +107,7 @@ class OrElseNullBudgetTest {
     void orElseNullStaysInsideItsBudget() throws IOException {
         try (Stream<Path> sources = Files.walk(REPO_ROOT)) {
             List<String> offenders = new ArrayList<>();
+            List<String> visited = new ArrayList<>();
             for (Path path : sources
                     .filter(file -> file.toString().endsWith(".java"))
                     .filter(file -> file.toString().replace('\\', '/').contains("/src/main/"))
@@ -103,6 +115,7 @@ class OrElseNullBudgetTest {
                     .sorted()
                     .toList()) {
                 String relative = REPO_ROOT.relativize(path).toString().replace('\\', '/');
+                visited.add(relative);
                 long found = OR_ELSE_NULL
                         .matcher(Files.readString(path, StandardCharsets.UTF_8))
                         .results().count();
@@ -117,6 +130,14 @@ class OrElseNullBudgetTest {
                             + "없음이 정상이고 null 이 그대로 값인 자리라면 BUDGET 에 "
                             + "이유와 함께 적으십시오. 고쳤으면 BUDGET 에서 지우십시오")
                     .isEmpty();
+
+            // **없는 파일은 위 순회가 아예 안 본다.** 파일이 지워지거나 옮겨지면 그 예산은
+            // 검사되지 않은 채 조용히 통과하고, 예산표는 그때부터 사실이 아니게 된다 —
+            // 나중에 같은 경로에 새 파일이 생기면 잘못된 면제까지 딸려 온다.
+            assertThat(visited)
+                    .as("BUDGET 에 있는 경로가 실제로 없습니다. 옮겼으면 경로를 고치고, "
+                            + "지웠으면 BUDGET 에서도 지우십시오")
+                    .containsAll(BUDGET.keySet());
         }
     }
 }
