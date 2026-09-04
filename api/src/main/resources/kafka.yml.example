@@ -85,10 +85,9 @@ kafka:
       # 배치 클레임만으로는 30% 밖에 안 는다 — 집는 것을 넓혀도 보내는 것이 차례면 거기서 막힌다.
       # 8 은 처리량이 아니라 비용에서 고른 값이다. 이 풀은 접수 API 프로세스 안에서 돈다.
       worker-count: ${KAFKA_NOTIFICATION_RELAY_WORKER_COUNT:8}
-      # 실패한 발행을 다시 집기까지의 지연. Full Jitter — random(0, min(cap, base × 2^attempt)).
-      # 고정 지연이면 같이 실패한 것들이 같은 시각에 함께 돌아온다.
-      backoff-base: ${KAFKA_NOTIFICATION_RELAY_BACKOFF_BASE:200ms}
-      backoff-cap: ${KAFKA_NOTIFICATION_RELAY_BACKOFF_CAP:20s}
+      # ⚠️ 재시도 지연은 여기 없다 — notification.outbox.retry 로 옮겼다(CY-907).
+      #    같은 정책을 lease 만료 회수 경로(storage 어댑터)도 쓰는데, 그 모듈은
+      #    이 kafka 속성 클래스를 볼 수 없다. 한 벌로 두려면 core 가 소유해야 한다.
 
 # ── 지표 개수 (실측 · 2026-08-22) ───────────────────────────────────────────────
 # 프로듀서 클라이언트 메트릭은 client.id 당 74개 이름이고, 이 계층은 프로듀서를 둘

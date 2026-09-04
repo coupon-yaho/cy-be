@@ -30,6 +30,7 @@ import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.NotificationOutbox;
 import com.kafkick.core.notification.domain.NotificationOutboxClaim;
 import com.kafkick.core.support.TimeProvider;
+import com.kafkick.core.notification.retry.NotificationRetryBackOffConfig;
 import com.kafkick.storage.db.RepositoryTest;
 
 @RepositoryTest
@@ -38,7 +39,9 @@ import com.kafkick.storage.db.RepositoryTest;
         NotificationOutboxRepositoryImpl.class,
         NotificationResendAuditRepositoryImpl.class,
         TransactionalNotificationRejectedAuditWriter.class,
-        NotificationResendTransactionIntegrationTest.Config.class
+        NotificationResendTransactionIntegrationTest.Config.class,
+        // 지연 정책은 core 가 소유한다(CY-907). @DataJpaTest 는 그것을 안 스캔한다.
+        NotificationRetryBackOffConfig.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class NotificationResendTransactionIntegrationTest {

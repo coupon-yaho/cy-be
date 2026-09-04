@@ -153,6 +153,21 @@ coupon:
     schedule-zone: ${COUPON_SCHEDULE_ZONE:Asia/Seoul}
     max-query-range-days: ${COUPON_CALENDAR_MAX_QUERY_RANGE_DAYS:366}
 
+# 알림 발행 명령을 다시 집기까지의 지연. Full Jitter — random(0, min(cap, base × 2^attempt)).
+# 고정 지연이면 같이 실패한 것들이 같은 시각에 함께 돌아온다.
+#
+# ⚠️ **한 벌이다.** 두 경로가 이 값을 함께 쓴다 — 발행 실패(infra:mq 릴레이)와
+#    lease 만료 회수(storage 어댑터). 그래서 kafka.* 아래가 아니라 여기 있다:
+#    storage 는 kafka 속성 클래스를 볼 수 없다(모듈 의존이 없다). CY-907.
+#
+# lease 만료 쪽이 더 잘 뭉친다 — 발행 실패는 확률적으로 흩어져 나지만, 릴레이가 죽거나
+# 재기동이 느리면 인플라이트 lease 가 한꺼번에 만료되어 전부 같은 창으로 돌아온다.
+notification:
+  outbox:
+    retry:
+      base: ${NOTIFICATION_OUTBOX_RETRY_BASE:200ms}
+      cap: ${NOTIFICATION_OUTBOX_RETRY_CAP:20s}
+
 ---
 # ⚠️ 이 아래는 storage.yml 을 이길 수 있는 자리다.
 #

@@ -29,6 +29,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.kafkick.core.notification.NotificationOutboxRepository;
+import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.notification.domain.Notification;
