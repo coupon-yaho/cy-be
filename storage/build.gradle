@@ -101,4 +101,8 @@ tasks.named('test') {
     inputs.files(rootProject.file('compose.yml'))
             .withPropertyName('composeFile')
             .withPathSensitivity(PathSensitivity.RELATIVE)
+    // healthcheck 가 두드리는 포트 변수와 앱이 읽는 변수를 잇는 계약이 이 파일을 읽는다.
+    inputs.files(rootProject.file('api/src/main/resources/management.yml.example'))
+            .withPropertyName('apiManagementConfig')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
