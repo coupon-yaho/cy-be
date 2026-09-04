@@ -175,6 +175,11 @@ class NotificationResendTransactionIntegrationTest {
         public boolean markFailed(Long outboxId, String claimToken, Duration retryDelay) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public boolean releaseClaim(Long outboxId, String claimToken) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class ForcedOutboxFailure extends RuntimeException {

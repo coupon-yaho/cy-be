@@ -67,10 +67,15 @@ public class NotificationRelayConfig {
     }
 
     /**
-     * <b>{@code destroyMethod = "close"} 가 배수를 부른다.</b> 안 부르면 인플라이트가
-     * {@code IN_PROGRESS} 로 남아 lease 만료까지 아무도 못 집는다.
+     * <b>배수는 {@code SmartLifecycle.stop()} 이 한다 — {@code destroyMethod} 가 아니다.</b>
+     *
+     * <p>{@code ThreadPoolTaskExecutor} 도 {@code SmartLifecycle} 이고 단계가
+     * {@code Integer.MAX_VALUE / 2} 라(실측), 기본 단계인 릴레이가 <b>풀보다 먼저</b> 멈춘다.
+     * 소멸 콜백은 lifecycle {@code stop} 뒤라서, 첫 판({@code destroyMethod = "close"})은
+     * <b>풀이 이미 멈춘 뒤에 배수를 시작했다</b> — 그 사이 스케줄러가 한 회차를 돌면
+     * 제출이 거부되고 집어 둔 행이 붕 뜬다.
      */
-    @Bean(destroyMethod = "close")
+    @Bean
     public NotificationOutboxRelay notificationOutboxRelay(
             NotificationOutboxRepository outboxes,
             NotificationRepository notifications,
@@ -93,9 +98,9 @@ public class NotificationRelayConfig {
     /**
      * 인플라이트 게이지.
      *
-     * <p>이 값만으로는 <b>한가한 것과 막힌 것을 구분하지 못한다</b> — 상한에 붙어 있는데
-     * 백로그가 안 줄면 워커가 모자란 것이고, 백로그도 0 이면 그냥 보낼 것이 없는 것이다.
-     * 백로그 쪽 지표는 CY-908(#197)이 붙인다.
+     * <p><b>"지금 몇 건 물고 있나" 하나로만 읽는다.</b> 백프레셔가 걸렸는지는 여기서 못
+     * 읽는다 — 그 판정은 {@code poll()} 이 불린 순간에만 나고 스크레이프는 그 사이 아무
+     * 때나 찍힌다. 건너뛴 횟수와 백로그는 CY-908(#197)이 별도 지표로 붙인다.
      */
     @Bean
     public Gauge notificationRelayInFlightGauge(MeterRegistry registry,

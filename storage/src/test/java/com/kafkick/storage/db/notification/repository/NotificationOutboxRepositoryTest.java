@@ -103,6 +103,56 @@ class NotificationOutboxRepositoryTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * <b>집어 놓고 보내 보지도 못한 것을 되돌린다 — {@code failure_count} 는 안 건드린다.</b>
+     *
+     * <p>워커 풀이 제출을 거부한 건이 여기로 온다. {@code markFailed} 로 세면 거부가 잦은
+     * 순간에 {@code failure_count} 가 실제 발행 실패 없이 10 에 닿아 <b>한 번도 안 보낸
+     * 알림이 {@code DEAD} 가 된다.</b>
+     *
+     * <p>되돌린 뒤 <b>즉시</b> 다시 집혀야 한다. 지연을 주면 되돌린 의미가 없다 — 이 건은
+     * 아직 아무 대가도 치르지 않았다.
+     */
+    @Test
+    void releaseClaimReturnsTheRowImmediatelyWithoutCountingAFailure() {
+        NotificationOutbox saved = repository.save(NotificationOutbox.pending(
+                2L, 1, AttemptTrigger.INITIAL, AT));
+        var claim = claimOne(Duration.ofMinutes(1)).orElseThrow();
+
+        assertThat(repository.releaseClaim(saved.id(), claim.claimToken())).isTrue();
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM notification_outbox WHERE id=?", String.class, saved.id()))
+                .isEqualTo("PENDING");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT failure_count FROM notification_outbox WHERE id=?",
+                Integer.class, saved.id()))
+                .as("거부는 발행 실패가 아니다 — 세면 안 보낸 알림이 DEAD 로 간다")
+                .isZero();
+
+        var again = claimOne(Duration.ofMinutes(1)).orElseThrow();
+        assertThat(again.outboxId()).as("되돌렸으면 즉시 다시 집혀야 합니다")
+                .isEqualTo(saved.id());
+        assertThat(again.claimToken()).isNotEqualTo(claim.claimToken());
+    }
+
+    /** 토큰이 안 맞으면 아무것도 안 한다 — 그 건은 이미 남의 것이다. */
+    @Test
+    void releaseClaimDoesNothingForAStaleToken() {
+        NotificationOutbox saved = repository.save(NotificationOutbox.pending(
+                2L, 1, AttemptTrigger.INITIAL, AT));
+        var claim = claimOne(Duration.ofMinutes(1)).orElseThrow();
+
+        assertThat(repository.releaseClaim(saved.id(), "wrong")).isFalse();
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM notification_outbox WHERE id=?", String.class, saved.id()))
+                .as("남의 클레임을 풀어 주면 그 워커가 아직 발행 중인데 남이 또 집습니다")
+                .isEqualTo("IN_PROGRESS");
+        assertThat(repository.markPublished(saved.id(), claim.claimToken(), AT.plusSeconds(1)))
+                .isTrue();
+    }
+
     @Test
     void manualOutboxDeadReturnsSendingNotificationToFailed() {
         insertSendingNotification(9001L);
