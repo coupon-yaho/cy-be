@@ -199,11 +199,13 @@ class BatchControlApiTest {
      *   unsuccessful=true                : FAILED · ABANDONED · UNKNOWN
      * </pre>
      *
-     * <p>여기서 재는 것은 <b>거절되지 않는다</b>는 것까지다. 실제 재시작이 성공하는지는
-     * 잡 정의와 스텝 상태에 달렸고 그 판정은 프레임워크가 한다 — 우리가 막지만 않으면 된다.
+     * <p><b>여기서 재는 것은 "우리가 막지 않는다" 하나다.</b> 실제 재시작이 성공하는지는
+     * 잡 정의와 스텝 상태에 달렸고 그 판정은 프레임워크가 한다 — 심어 둔 픽스처는 진짜
+     * 스텝 이력이 아니라서, 여기서 성공까지 요구하면 <b>프레임워크를 재는 테스트</b>가 된다.
+     * 그래서 단언이 {@code isNotEqualTo("BATCH-002")} 인 것이 <b>의도</b>다.
      */
     @Test
-    @DisplayName("사람이 멈춘 STOPPED 실행은 재시작이 거절되지 않는다")
+    @DisplayName("STOPPED 실행을 우리가 BATCH-002 로 막지 않는다 — 성공까지는 프레임워크 몫")
     void restartingAStoppedExecutionIsNotRefusedAsCompleted() throws Exception {
         try (RunningJobFixture stopped = RunningJobFixture.plant(
                 jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(4), DEAD, DEAD)) {
