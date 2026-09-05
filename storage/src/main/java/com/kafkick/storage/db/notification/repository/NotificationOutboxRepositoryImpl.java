@@ -38,6 +38,16 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     private static final int DEAD_AFTER_FAILURES = 10;
 
 
+    /**
+     * 백로그 질의.
+     *
+     * <p><b>패키지 가시성이다</b> — {@code BacklogPlanContractTest} 가 <b>이 문자열 그대로</b>
+     * 실행계획을 잰다. 테스트가 자기 SQL 을 적어 두면 구현을 바꿔도 <b>테스트는 그대로
+     * 통과한다</b>(실제로 그랬다).
+     */
+    static final String COUNT_BACKLOG =
+            "SELECT COUNT(*) FROM notification_outbox WHERE status IN ('PENDING','IN_PROGRESS')";
+
     private final NotificationOutboxJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate requiresNew;
@@ -362,6 +372,7 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * <p>{@code REQUIRES_NEW} 인 이유는 {@link #markFailed}·{@link #markPublished} 와 같다 —
      * 부르는 쪽의 트랜잭션과 운명을 같이하면 <b>되돌리려던 것이 함께 롤백된다.</b>
      */
+
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean releaseClaim(Long outboxId, String claimToken) {
@@ -371,6 +382,34 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                        claimed_at=NULL, claim_token=NULL
                  WHERE id=? AND status='IN_PROGRESS' AND claim_token=?
                 """, outboxId, claimToken) == 1;
+    }
+
+    /**
+     * <b>인덱스의 두 구간만 읽는다 — 표도, 인덱스 전체도 안 훑는다.</b>
+     *
+     * <p>15초마다 도는 질의라 <b>누적 행 수에 비례해 비싸지면 관측이 사고를 키운다.</b>
+     * 그래서 그렇지 않다는 것을 실측으로 확인했다 — {@code PUBLISHED} 300건을 심고
+     * {@code EXPLAIN ANALYZE} 를 걸면:
+     *
+     * <pre>
+     *   Covering index range scan using ix_notification_outbox_pending
+     *     over (status = 'IN_PROGRESS') OR (status = 'PENDING')
+     *     (actual rows=5)
+     * </pre>
+     *
+     * <p>읽은 행이 <b>백로그 크기(5)</b>이지 표 크기(305)가 아니다.
+     *
+     * <p>⚠️ <b>한때 이것을 상태별 질의 둘로 쪼갰다.</b> {@code EXPLAIN} 의
+     * {@code type=index} 를 <i>"인덱스를 끝까지 훑는다"</i> 로 읽었기 때문인데,
+     * <b>접근 방식 이름만 보고 비용을 단정한 것이었다</b> — 리뷰가 그 단정이 입증되지
+     * 않았다고 짚었고, 재 보니 실제로는 두 구간만 읽는다. 쪼개면 질의가 둘이라
+     * <b>그 사이에 행이 옮겨 가</b> 두 번 세이거나 안 세이므로, 되돌리는 것이 단순하면서
+     * 더 정확하다 — 한 문장이면 스냅샷 걱정 자체가 없다.
+     */
+    @Override
+    public long countBacklog() {
+        Long count = jdbcTemplate.queryForObject(COUNT_BACKLOG, Long.class);
+        return count == null ? 0L : count;
     }
 
     private void failManualNotification(Long outboxId) {

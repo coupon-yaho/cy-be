@@ -31,11 +31,15 @@ import com.kafkick.core.support.response.ResponseEnvelope;
  *
  * <h2>가드를 새로 짜지 않았다</h2>
  *
- * <p>{@code JobOperator} 시그니처를 실측하니 위험한 전이를 이미 전부 거절한다 —
- * 성공한 인스턴스 재시작은 {@code JobInstanceAlreadyCompleteException}, 안 도는 실행
- * 중단은 {@code JobExecutionNotRunningException}. <b>같은 판정을 우리가 다시 쓰면
- * 프레임워크가 조건을 바꾸는 날 둘이 갈리고 우리 쪽이 틀린 답을 낸다.</b>
- * 그래서 이 클래스는 <b>예외를 HTTP 로 옮기기만</b> 한다.
+ * <p>{@code JobOperator} 시그니처를 실측하니 위험한 전이를 <b>대부분</b> 이미 거절한다 —
+ * 안 도는 실행 중단은 {@code JobExecutionNotRunningException}, 못 돌리는 재시작은
+ * {@code JobRestartException}. <b>같은 판정을 우리가 다시 쓰면 프레임워크가 조건을
+ * 바꾸는 날 둘이 갈리고 우리 쪽이 틀린 답을 낸다.</b>
+ *
+ * <p><b>딱 하나가 우리에게 남았다 — {@code COMPLETED} 재시작.</b> 그 판정은 id 받는
+ * {@code restart(long)} 이 {@code JobInstanceAlreadyCompleteException} 으로 냈는데,
+ * 그 오버로드가 <b>제거 예정</b>이라 {@code JobExecution} 을 받는 쪽에는 없다.
+ * <b>프레임워크가 안 하는 것만 우리가 한다</b>는 규칙은 그대로이고, 그 하나를 여기 적어 둔다.
  *
  * <h2>잡 이름을 안 받는다</h2>
  *
@@ -83,10 +87,14 @@ public class BatchControlController {
     /**
      * <b>끝나지 않았거나 실패했거나 멈춘</b> 실행을 같은 파라미터로 다시 돌린다.
      *
-     * <p><b>막는 것은 {@code COMPLETED} 하나다.</b> {@code STOPPED}(사람이 멈춘 것)와
-     * {@code FAILED}·{@code ABANDONED} 는 정상적인 재시작 대상이고, 실제로 돌 수 있는지는
-     * 프레임워크가 판단한다 — 한때 이 문장이 "실패한 실행" 만 말해서 {@code STOPPED} 가
-     * 대상인지 읽을 수 없었다.
+     * <p><b>우리가 막는 것은 {@code COMPLETED} 하나다.</b> {@code STOPPED}(사람이 멈춘 것)와
+     * {@code FAILED} 는 정상적인 재시작 대상이고, 한때 이 문장이 "실패한 실행" 만 말해서
+     * {@code STOPPED} 가 대상인지 읽을 수 없었다.
+     *
+     * <p><b>{@code ABANDONED} 는 우리가 안 막지만 재시작되지도 않는다</b> — 그것은
+     * "이 실행은 없던 것으로 친다" 는 표시라 프레임워크가 거절한다
+     * ({@code JobRestartException} → {@code 409 BATCH-003}). 우리가 막는 목록에 넣지 않는
+     * 이유는 <b>같은 판정을 두 벌로 두지 않기 위해서</b>이지 대상이라서가 아니다.
      *
      * <p><b>성공한 실행은 거절된다</b>({@code 409 BATCH-002}). 그것이 이 동작의 핵심
      * 안전장치다 — 성공한 실행을 다시 돌리면 같은 일이 두 번 처리된다. 같은 조건으로 또

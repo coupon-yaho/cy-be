@@ -186,6 +186,11 @@ class NotificationResendTransactionIntegrationTest {
         public boolean releaseClaim(Long outboxId, String claimToken) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public long countBacklog() {
+            throw new UnsupportedOperationException();
+        }
     }
 
     private static final class ForcedOutboxFailure extends RuntimeException {

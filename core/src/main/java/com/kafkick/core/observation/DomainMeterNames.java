@@ -106,8 +106,15 @@ public final class DomainMeterNames {
      * <b>백로그가 없다는 뜻이 아니다</b>(방금 다 비운 직후일 수도, 아직 못 집은 것일 수도
      * 있다). 한때 이 자리에 그 둘을 단정으로 적었다가 리뷰가 잡았다.
      *
-     * <p>건너뛴 횟수와 백로그는 <b>별도 지표</b>여야 한다 — CY-908(#197)이 붙인다.
-     * 그전까지 이 값은 <b>"지금 몇 건 물고 있나"</b> 하나로만 읽는다.
+     * <p>이 값은 <b>"지금 몇 건 물고 있나"</b> 하나로만 읽는다. 한가한 것과 막힌 것을
+     * 가르려면 {@link #OUTBOX_BACKLOG} 와 <b>함께</b> 봐야 한다 — 상한에 붙어 있는데
+     * 백로그가 안 줄면 워커가 모자란 것이고, 백로그도 0 이면 그냥 한가한 것이다.
+     *
+     * <p><b>백프레셔로 건너뛴 횟수는 아직 없다.</b> CY-906·CY-908 이 "CY-908 이 붙인다" 고
+     * 적어 뒀는데 그 티켓이 안 붙이고 닫혔다 — <b>닫힌 티켓을 가리키는 약속이 코드에
+     * 남아 있었다.</b> CY-913 이 백로그는 붙이고, 스킵 횟수는 <b>안 붙이기로 정했다</b>:
+     * 백로그와 인플라이트 둘이면 "막혔나" 에 답이 되고, 스킵은 그 둘에서 파생되는 값이라
+     * 세는 자리를 하나 더 두는 값어치가 없다.
      */
     public static final String NOTIFY_RELAY_IN_FLIGHT = "app.notify.relay.inflight";
 
@@ -156,6 +163,21 @@ public final class DomainMeterNames {
      * 거기다.
      */
     public static final String OUTBOX_DEAD = "app.outbox.dead";
+
+    /**
+     * 아직 안 나간 발행 명령 수 — <b>백로그</b>. 태그 없이 하나다.
+     *
+     * <p><b>{@link #NOTIFY_RELAY_IN_FLIGHT} 와 짝이다.</b> 인플라이트만으로는 <b>한가한
+     * 것과 막힌 것을 구분하지 못한다</b> — 상한에 붙어 있는데 백로그가 안 줄면 워커가
+     * 모자란 것이고, 백로그도 0 이면 그냥 보낼 것이 없는 것이다. CY-906·CY-908 이
+     * <i>"백로그는 별도 지표여야 한다"</i> 고 적어 두고 안 붙였던 자리다.
+     *
+     * <p>{@code PENDING} 과 {@code IN_PROGRESS} 를 <b>함께</b> 센다. 둘 다 "아직 안 나갔다"
+     * 이고, {@code IN_PROGRESS} 를 빼면 <b>릴레이가 붙잡고 못 끝내는 상태에서 0 으로
+     * 보인다</b> — 그것이 정확히 사고 상태다. {@code DEAD} 는 안 센다: 다시 시도되지 않으니
+     * 백로그가 아니라 사람이 처리할 목록이고, 그 축은 {@link #OUTBOX_DEAD} 가 진다.
+     */
+    public static final String OUTBOX_BACKLOG = "app.outbox.backlog";
 
     /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
