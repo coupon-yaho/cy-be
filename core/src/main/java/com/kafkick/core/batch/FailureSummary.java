@@ -1,4 +1,4 @@
-package com.kafkick.batch.api;
+package com.kafkick.core.batch;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
  * <p>한 곳에 둔 이유는 호출부마다 복사하면 반드시 갈리기 때문이다 — 실제로 갈렸다.
  * VerifyRunView 와 BatchRunView 가 같은 EXIT_MESSAGE 에 다른 답을 냈다.
  */
-final class FailureSummary {
+public final class FailureSummary {
 
     /**
      * 우리가 정의한 도메인 에러코드. 접두사를 열거한다.
@@ -25,15 +25,16 @@ final class FailureSummary {
      * <p>{@code [A-Z]+-\d{3}} 로 넓히면 오탐한다 — {@code ISO-8859-1} 에서 {@code ISO-885} 를
      * 잡고, find() 는 첫 매치를 쓰므로 뒤에 있는 진짜 코드가 가려진다.
      */
-    private static final Pattern DOMAIN_CODE =
-            Pattern.compile("(?:VERIFICATION|EXPIRATION|COMMON)-\\d{3}");
+    private static final Pattern DOMAIN_CODE = Pattern.compile(
+            "(?:ADMIN|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY|COUPON"
+                    + "|EXPIRATION|NOTIFY|OVERVIEW|VERIFICATION)-\\d{3}");
 
     /** 그 밖에는 예외 이름만 남긴다. 메시지에는 SQL 조각이 섞일 수 있다. */
     private static final Pattern EXCEPTION_TYPE =
             Pattern.compile("([A-Za-z]+(?:Exception|Error))");
 
-    static final String NOT_RECORDED = "원인이 기록되지 않았습니다";
-    static final String UNKNOWN = "알 수 없는 오류";
+    public static final String NOT_RECORDED = "원인이 기록되지 않았습니다";
+    public static final String UNKNOWN = "알 수 없는 오류";
 
     private FailureSummary() {
     }
@@ -44,7 +45,7 @@ final class FailureSummary {
      * <p>못 알아본 것과 원인이 없는 것을 문구로 가른다. 둘 다 null 로 접으면 화면이
      * "성공이라 원인이 없다" 로 읽어 서버 로그를 열어야 한다는 사실 자체가 안 보인다.
      */
-    static String of(String rawMessage) {
+    public static String of(String rawMessage) {
         if (rawMessage == null || rawMessage.isBlank()) {
             return NOT_RECORDED;
         }

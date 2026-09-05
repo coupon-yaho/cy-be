@@ -20,8 +20,14 @@
 
 # ── Spring Batch 메타. 우리가 만든 것이 아니라 프레임워크가 만든다 ──
 #    관리자 배치 이력 화면이 읽는다(JdbcBatchExecutionRepository).
+#
+#    BATCH_STEP_EXECUTION 은 "어떻게 돌았나" 를 지고 있다 — 읽기/쓰기/스킵/롤백 카운터가
+#    거기 있고, 잡 수준 표는 "돌았다/안 돌았다" 까지만 답한다(CY-910).
+#    실패 원문(EXIT_MESSAGE)도 이 표에 있지만 그대로 내보내지 않는다 — FailureSummary 가
+#    도메인 에러코드나 예외 이름까지만 남긴다.
 BATCH_JOB_EXECUTION
 BATCH_JOB_INSTANCE
+BATCH_STEP_EXECUTION
 
 # ── 벤치마크 회차 ──
 #    조회만 관측 풀이다. 생성·전이는 운영 풀이 한다(JdbcBenchmarkRunRepository 주석 참조).

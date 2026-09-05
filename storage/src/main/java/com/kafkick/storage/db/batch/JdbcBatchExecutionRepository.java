@@ -14,6 +14,8 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.batch.BatchExecution;
+import com.kafkick.core.batch.BatchStepExecution;
+import com.kafkick.core.batch.FailureSummary;
 import com.kafkick.core.batch.BatchExecutionRepository;
 
 /**
@@ -93,6 +95,69 @@ public class JdbcBatchExecutionRepository implements BatchExecutionRepository {
     public List<BatchExecution> findRecentByJobName(String jobName, int limit) {
         return observationJdbcTemplate.query(
                 SELECT + " WHERE i.JOB_NAME = ?" + ORDER_AND_LIMIT, MAPPER, jobName, limit);
+    }
+
+    /**
+     * <b>카운터 여덟 개를 그대로 읽는다.</b> 여기서 더하거나 해석하지 않는다 — 뜻의 주인이
+     * Spring Batch 라, 이 계층이 해석을 넣으면 프레임워크가 뜻을 바꾸는 날 화면만 조용히
+     * 틀린다.
+     *
+     * <p><b>{@code BATCH_JOB_INSTANCE} 조인이 없다.</b> 잡 이름은 상위 목록이 이미 준다.
+     * 여기서 또 조인하면 같은 사실을 두 질의가 각자 읽는다.
+     */
+    private static final String SELECT_STEPS = """
+            SELECT s.STEP_EXECUTION_ID,
+                   s.JOB_EXECUTION_ID,
+                   s.STEP_NAME,
+                   s.STATUS,
+                   s.EXIT_CODE,
+                   s.EXIT_MESSAGE,
+                   s.CREATE_TIME,
+                   s.START_TIME,
+                   s.END_TIME,
+                   s.READ_COUNT,
+                   s.WRITE_COUNT,
+                   s.FILTER_COUNT,
+                   s.COMMIT_COUNT,
+                   s.ROLLBACK_COUNT,
+                   s.READ_SKIP_COUNT,
+                   s.PROCESS_SKIP_COUNT,
+                   s.WRITE_SKIP_COUNT
+              FROM BATCH_STEP_EXECUTION s
+             WHERE s.JOB_EXECUTION_ID = ?
+             ORDER BY s.STEP_EXECUTION_ID
+            """;
+
+    /**
+     * 카운터 컬럼은 <b>nullable 이다</b>(공식 스키마의 {@code BIGINT}, NOT NULL 이 아니다).
+     * {@code rs.getLong} 은 {@code NULL} 을 0 으로 돌려주는데, 여기서는 <b>그것이 맞다</b> —
+     * 아직 아무것도 안 읽은 스텝의 read count 는 0 이다.
+     */
+    private static final RowMapper<BatchStepExecution> STEP_MAPPER =
+            (rs, rowNum) -> new BatchStepExecution(
+                    rs.getLong("STEP_EXECUTION_ID"),
+                    rs.getLong("JOB_EXECUTION_ID"),
+                    rs.getString("STEP_NAME"),
+                    rs.getString("STATUS"),
+                    rs.getString("EXIT_CODE"),
+                    // **원문을 그대로 싣지 않는다.** 스택트레이스가 통째로 들어 있고
+                    // 이 API 에는 사용자 인증이 없다 — 판단 근거는 FailureSummary 에 있다.
+                    FailureSummary.of(rs.getString("EXIT_MESSAGE")),
+                    instant(rs, "CREATE_TIME"),
+                    instant(rs, "START_TIME"),
+                    instant(rs, "END_TIME"),
+                    rs.getLong("READ_COUNT"),
+                    rs.getLong("WRITE_COUNT"),
+                    rs.getLong("FILTER_COUNT"),
+                    rs.getLong("COMMIT_COUNT"),
+                    rs.getLong("ROLLBACK_COUNT"),
+                    rs.getLong("READ_SKIP_COUNT"),
+                    rs.getLong("PROCESS_SKIP_COUNT"),
+                    rs.getLong("WRITE_SKIP_COUNT"));
+
+    @Override
+    public List<BatchStepExecution> findSteps(long jobExecutionId) {
+        return observationJdbcTemplate.query(SELECT_STEPS, STEP_MAPPER, jobExecutionId);
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {
