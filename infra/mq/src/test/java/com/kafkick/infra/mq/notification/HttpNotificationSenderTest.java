@@ -190,29 +190,58 @@ class HttpNotificationSenderTest {
     }
 
     /**
-     * <b>분 단위 타임아웃을 막는다.</b> 한 레코드 처리가 {@code max.poll.interval.ms} 를
-     * 넘기면 소비자가 그룹에서 쫓겨나고 <b>그 레코드가 재전달된다.</b>
+     * <b>한 건이 아니라 한 묶음을 재 본다.</b> 한 번의 {@code poll} 이 기본 500 건을
+     * 가져오고 그것을 <b>차례로</b> 보내므로, 건당 상한이 아무리 그럴듯해도
+     * {@code 500 × 건당} 이 {@code max.poll.interval.ms}(기본 5분)를 넘으면 소비자가
+     * 그룹에서 쫓겨나고 <b>그 묶음이 통째로 재전달된다</b> — 이미 보낸 것까지 다시 보낸다.
      *
-     * <p>⚠️ 한때 이 검사가 <b>릴레이의 건당 발행 예산(100ms)</b>과 비교했는데 축이 달랐다 —
-     * 그 예산은 릴레이가 Kafka 로 발행하는 시간이고 이 발송기는 소비자 쪽에서 돈다.
-     * 그대로 뒀으면 <b>멀쩡한 설정이 기동을 거부당했다.</b> 리뷰가 짚었다.
+     * <p>⚠️ 두 번 틀렸다. 처음엔 <b>릴레이의 건당 발행 예산(100ms)</b>과 비교했는데 축이
+     * 달랐다 — 그 예산은 릴레이가 Kafka 로 발행하는 시간이고 이 발송기는 소비자 쪽에서
+     * 돈다. 고쳐 놓은 10초는 <b>한 건만 보고 손으로 고른 값</b>이라 500 건이면 83 분이 되어
+     * 5 분 한계를 훌쩍 넘겼다. 둘 다 리뷰가 짚었다. 지금 값은 유도한 것이다 —
+     * {@code 300,000 / 500 = 600ms}.
      */
     @Test
-    @DisplayName("타임아웃 합이 상한을 넘으면 기동에서 거절한다")
-    void refusesTimeoutsBeyondTheAbsoluteCap() {
+    @DisplayName("초 단위 타임아웃은 기동에서 거절한다 — 500건 묶음이 5분을 넘긴다")
+    void refusesTimeoutsThatCannotFinishAPollBatch() {
         assertThatThrownBy(() -> new HttpNotificationSender("http://notify.test/send",
-                Duration.ofSeconds(6), Duration.ofSeconds(6)))
+                Duration.ofSeconds(1), Duration.ofSeconds(3)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** 각각은 상한 안인데 <b>합이</b> 넘는 경우도 막아야 한다 — 실제로 도는 건 합이다. */
+    @Test
+    @DisplayName("각각은 상한 안이어도 합이 넘으면 거절한다")
+    void refusesTimeoutsWhoseSumExceedsTheCap() {
+        assertThatThrownBy(() -> new HttpNotificationSender("http://notify.test/send",
+                Duration.ofMillis(400), Duration.ofMillis(400)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("max.poll.interval.ms");
     }
 
-    /** 소비자에게 맞는 타임아웃은 통과해야 한다 — 방어선이 성능을 정하는 자리가 아니다. */
+    /** 상한 안의 값은 통과해야 한다 — 방어선이 성능을 정하는 자리가 아니다. */
     @Test
-    @DisplayName("초 단위 타임아웃은 정상이다 — 이 발송기는 소비자 쪽에서 돈다")
-    void acceptsSecondScaleTimeouts() {
+    @DisplayName("유도한 상한 안의 타임아웃은 통과한다")
+    void acceptsTimeoutsWithinTheDerivedCap() {
         assertThatCode(() -> new HttpNotificationSender("http://notify.test/send",
-                Duration.ofSeconds(1), Duration.ofSeconds(3)))
+                Duration.ofMillis(200), Duration.ofMillis(400)))
                 .doesNotThrowAnyException();
+    }
+
+    /**
+     * <b>합만 보면 넘침으로 상한을 그냥 지나간다.</b> {@code toMillis()} 둘을 더해
+     * {@code long} 이 넘치면 <b>음수</b>가 되고, 음수는 어떤 상한보다도 작아서 검사를
+     * 통과한다 — 상한이 있는데 없는 것과 같다. 리뷰가 짚었다.
+     *
+     * <p>그래서 <b>더하기 전에 각각</b>을 먼저 상한에 건다. 이 테스트는 그 순서를 지킨다:
+     * 각 항 검사를 지우면 여기서 넘침이 통과해 버린다(돌연변이로 확인했다).
+     */
+    @Test
+    @DisplayName("타임아웃 합이 long 을 넘겨도 상한을 우회하지 못한다")
+    void refusesTimeoutsWhoseSumOverflowsLong() {
+        assertThatThrownBy(() -> new HttpNotificationSender("http://notify.test/send",
+                Duration.ofMillis(Long.MAX_VALUE), Duration.ofMillis(Long.MAX_VALUE)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**
