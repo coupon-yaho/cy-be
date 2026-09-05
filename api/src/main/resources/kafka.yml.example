@@ -91,8 +91,9 @@ kafka:
       #    정하게 되고, 스크레이프 대상이 늘거나 간격이 짧아지면 관측이 사고를 키운다.
       #    대가는 해상도다: 이 주기보다 짧은 스파이크는 안 보인다.
       #
-      # 세는 비용은 커버링 인덱스 하나다(실측: EXPLAIN 이 type=index
-      # key=ix_notification_outbox_pending Extra="Using where; Using index").
+      # 세는 비용은 인덱스 구간 조회 둘이다(실측: EXPLAIN 이 type=ref).
+      # 상태를 IN 으로 묶으면 type=index 가 되어 인덱스를 끝까지 훑는다 —
+      # PUBLISHED·DEAD 가 쌓일수록 비싸지므로 그렇게 안 한다.
       backlog-refresh-ms: ${KAFKA_NOTIFICATION_RELAY_BACKLOG_REFRESH_MS:15000}
       # ⚠️ 재시도 지연은 여기 없다 — notification.outbox.retry 로 옮겼다(CY-907).
       #    같은 정책을 lease 만료 회수 경로(storage 어댑터)도 쓰는데, 그 모듈은
