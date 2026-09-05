@@ -69,16 +69,28 @@ class OutboxAlertRuleContractTest {
     }
 
     /**
-     * <b>규칙 동작 시험이 같이 있어야 한다.</b> {@code promtool check rules} 는 문법만 보므로
-     * "문법은 맞는데 영원히 안 뜨는" 규칙이 CI 를 통과한다 — batch 쪽이 실제로 두 번
-     * 그 상태였다. 시험 파일이 있는지를 여기서 못 박는다.
+     * <b>규칙 동작 시험이 있고, CI 가 그것을 실제로 돌린다.</b>
+     *
+     * <p>{@code promtool check rules} 는 문법만 보므로 "문법은 맞는데 영원히 안 뜨는"
+     * 규칙이 CI 를 통과한다 — batch 쪽이 실제로 두 번 그 상태였다.
+     *
+     * <p><b>파일이 있는지만 보면 모자란다.</b> 처음에 그렇게 썼는데, CI 가 시험 파일을
+     * <b>이름으로 하나씩</b> 돌리고 있어서 새로 더한 파일이 <b>한 번도 안 돌았다</b> —
+     * 통과하는 것처럼 보이지만 아무도 안 돌린 상태였다. 리뷰가 잡았다.
+     * 워크플로를 글롭으로 바꾸고, <b>그 글롭이 유지되는지</b>를 여기서 본다.
      */
     @Test
-    @DisplayName("규칙 동작 시험 파일이 함께 있다 — 문법 검사만으로는 안 뜨는 규칙을 못 잡는다")
-    void theRulesHaveABehaviourTest() {
+    @DisplayName("CI 가 시험 파일을 이름이 아니라 글롭으로 돌린다 — 새 파일이 저절로 걸린다")
+    void ciRunsEveryBehaviourTestFile() throws Exception {
         assertThat(Path.of("../infra/prometheus/tests/outbox-alerts_test.yml"))
                 .as("promtool test rules 가 읽는 파일이다")
                 .exists();
+
+        String workflow = Files.readString(
+                Path.of("../.github/workflows/build.yml"), StandardCharsets.UTF_8);
+        assertThat(workflow)
+                .as("이름을 하나씩 적으면 새 시험 파일이 CI 에서 한 번도 안 돕니다")
+                .contains("for f in infra/prometheus/tests/*_test.yml");
     }
 
     /** 카운터는 점→밑줄에 {@code _total} 이 붙는다. */
