@@ -24,10 +24,18 @@ public final class FailureSummary {
      *
      * <p>{@code [A-Z]+-\d{3}} 로 넓히면 오탐한다 — {@code ISO-8859-1} 에서 {@code ISO-885} 를
      * 잡고, find() 는 첫 매치를 쓰므로 뒤에 있는 진짜 코드가 가려진다.
+     * 이 저장소에는 {@code SHA-256} 도 있어서 같은 함정에 걸린다(실측).
+     *
+     * <p><b>밑줄이 들어간 접두사가 셋 있다</b> — {@code COUPON_ROUND}·{@code COUPON_TEMPLATE}·
+     * {@code RUNTIME_CONFIG}. 처음에 이 목록을 만들 때 {@code [A-Z]+-} 로 훑어서
+     * <b>셋을 통째로 빠뜨렸고</b>, 그러면 그 코드들이 예외 이름으로 뭉개진다.
+     * 리뷰가 잡았다. 사람이 다시 세지 않도록 {@link FailureSummaryPrefixContractTest} 가
+     * <b>저장소의 실제 코드와 이 목록을 대조</b>한다 — 새 도메인이 생기면 그 테스트가 깨진다.
      */
     private static final Pattern DOMAIN_CODE = Pattern.compile(
-            "(?:ADMIN|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY|COUPON"
-                    + "|EXPIRATION|NOTIFY|OVERVIEW|VERIFICATION)-\\d{3}");
+            "(?:ADMIN|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY"
+                    + "|COUPON_ROUND|COUPON_TEMPLATE|COUPON"
+                    + "|EXPIRATION|NOTIFY|OVERVIEW|RUNTIME_CONFIG|VERIFICATION)-\\d{3}");
 
     /** 그 밖에는 예외 이름만 남긴다. 메시지에는 SQL 조각이 섞일 수 있다. */
     private static final Pattern EXCEPTION_TYPE =
