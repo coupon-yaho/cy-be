@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.batch.BatchExecution;
+import com.kafkick.core.batch.BatchStepExecution;
 import com.kafkick.core.batch.BatchExecutionRepository;
 
 /**
@@ -45,6 +46,19 @@ class BatchHistoryControllerTest {
             return List.of(execution(2L, jobName));
         }
 
+        /**
+         * <b>요청받은 실행 id 를 그대로 되돌려 준다.</b> 고정값을 주면 컨트롤러가 경로
+         * 변수를 통째로 무시해도 통과한다 — 위 두 조회를 구분되는 값으로 만든 것과 같은
+         * 이유다.
+         */
+        @Override
+        public List<BatchStepExecution> findSteps(long jobExecutionId) {
+            return List.of(new BatchStepExecution(11L, jobExecutionId, "step-one",
+                    "COMPLETED", "COMPLETED", "원인이 기록되지 않았습니다",
+                    Instant.parse("2026-08-23T00:00:00Z"), null, null,
+                    7, 3, 1, 2, 4, 1, 2, 3));
+        }
+
         private static BatchExecution execution(long id, String jobName) {
             return new BatchExecution(id, jobName, "COMPLETED", "COMPLETED",
                     Instant.parse("2026-08-23T00:00:00Z"), null, null);
@@ -72,6 +86,38 @@ class BatchHistoryControllerTest {
                 return repository;
             }
         };
+    }
+
+    /**
+     * <b>경로 변수가 실제로 어댑터까지 간다.</b> 스텁이 받은 id 를 되돌려 주므로,
+     * 컨트롤러가 그것을 무시하면 여기서 값이 안 맞는다.
+     */
+    @Test
+    @DisplayName("스텝 조회가 경로의 실행 id 를 그대로 넘긴다")
+    void passesTheExecutionIdThrough() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/batch-executions/4242/steps"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.jobExecutionId").value(4242))
+                .andExpect(jsonPath("$.data.steps[0].stepName").value("step-one"));
+    }
+
+    /**
+     * <b>카운터 여덟 개가 응답에서도 자리를 안 바꾼다.</b> 전부 숫자라 뒤바뀌어도 예외가
+     * 안 나고 <b>그럴듯한 값</b>이 나간다 — 그래서 여덟을 전부 다른 값으로 둔다.
+     */
+    @Test
+    @DisplayName("응답의 카운터 8종이 자리를 바꾸지 않는다")
+    void serializesAllEightCountersToTheirOwnFields() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/batch-executions/1/steps"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.steps[0].readCount").value(7))
+                .andExpect(jsonPath("$.data.steps[0].writeCount").value(3))
+                .andExpect(jsonPath("$.data.steps[0].filterCount").value(1))
+                .andExpect(jsonPath("$.data.steps[0].commitCount").value(2))
+                .andExpect(jsonPath("$.data.steps[0].rollbackCount").value(4))
+                .andExpect(jsonPath("$.data.steps[0].readSkipCount").value(1))
+                .andExpect(jsonPath("$.data.steps[0].processSkipCount").value(2))
+                .andExpect(jsonPath("$.data.steps[0].writeSkipCount").value(3));
     }
 
     @Test

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.ObjectProvider;
 
 import com.kafkick.api.admin.batch.dto.BatchHistoryResponse;
+import com.kafkick.api.admin.batch.dto.BatchStepHistoryResponse;
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.caller.Caller;
 import com.kafkick.api.support.ResponseEnvelope;
@@ -99,5 +101,36 @@ public class BatchHistoryController {
                 ? source.findRecent(limit)
                 : source.findRecentByJobName(jobName, limit);
         return ResponseEnvelope.success(BatchHistoryResponse.of(executions));
+    }
+
+    /**
+     * 한 실행이 <b>어떻게</b> 돌았는지 — 스텝별 카운터와 결과.
+     *
+     * <p><b>목록에 끼우지 않고 따로 둔 이유</b> — 실행마다 스텝을 붙이면 목록이 N+1 이 되고,
+     * 조인해도 실행당 스텝 수만큼 행이 불어난다. 사람이 파고드는 것은 한 건이라, 정본
+     * (Spring Cloud Data Flow 대시보드)도 목록 → 상세 → 스텝으로 단계를 나눈다.
+     *
+     * <p><b>잡 이름을 안 받는다.</b> 실행 id 하나면 충분하고, 받으면 <b>이 통로가 특정 잡을
+     * 알게 된다</b> — 이 관제가 범용인 이유가 Spring Batch 메타만 보고 잡을 하나도 모르는
+     * 것이라, 그 성질을 여기서 깨지 않는다.
+     *
+     * <p><b>없는 실행도 200 에 빈 목록이다.</b> 404 로 가르려면 실행을 한 번 더 조회해야
+     * 하는데, 그 왕복의 값어치가 이 화면에는 없다 — 목록에서 눌러 들어오는 경로라
+     * 없는 id 가 오는 것 자체가 드물다. 포트 javadoc 에 같은 근거를 적었다.
+     *
+     * @param jobExecutionId 실행 식별자
+     * @param caller 요청자 식별용. <b>권한 판정에 쓰지 않는다</b> — 위 메서드와 같다
+     * @return 실행 순서대로의 스텝 목록
+     */
+    @GetMapping("/batch-executions/{jobExecutionId}/steps")
+    public ResponseEnvelope<BatchStepHistoryResponse> steps(
+            @PathVariable long jobExecutionId,
+            Caller caller) {
+        BatchExecutionRepository source = repository.getIfAvailable();
+        if (source == null) {
+            throw new BusinessException(AdminApiErrorCode.OBSERVATION_DISABLED);
+        }
+        return ResponseEnvelope.success(
+                BatchStepHistoryResponse.of(jobExecutionId, source.findSteps(jobExecutionId)));
     }
 }
