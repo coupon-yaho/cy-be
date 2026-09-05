@@ -85,6 +85,15 @@ kafka:
       # 배치 클레임만으로는 30% 밖에 안 는다 — 집는 것을 넓혀도 보내는 것이 차례면 거기서 막힌다.
       # 8 은 처리량이 아니라 비용에서 고른 값이다. 이 풀은 접수 API 프로세스 안에서 돈다.
       worker-count: ${KAFKA_NOTIFICATION_RELAY_WORKER_COUNT:8}
+      # 백로그(아직 안 나간 명령)를 세는 주기. 게이지가 이 주기로 DB 를 센다.
+      #
+      # ⚠️ 게이지 콜백에서 직접 세지 않는 이유 — 그러면 조회 주기를 프로메테우스 설정이
+      #    정하게 되고, 스크레이프 대상이 늘거나 간격이 짧아지면 관측이 사고를 키운다.
+      #    대가는 해상도다: 이 주기보다 짧은 스파이크는 안 보인다.
+      #
+      # 세는 비용은 커버링 인덱스 하나다(실측: EXPLAIN 이 type=index
+      # key=ix_notification_outbox_pending Extra="Using where; Using index").
+      backlog-refresh-ms: ${KAFKA_NOTIFICATION_RELAY_BACKLOG_REFRESH_MS:15000}
       # ⚠️ 재시도 지연은 여기 없다 — notification.outbox.retry 로 옮겼다(CY-907).
       #    같은 정책을 lease 만료 회수 경로(storage 어댑터)도 쓰는데, 그 모듈은
       #    이 kafka 속성 클래스를 볼 수 없다. 한 벌로 두려면 core 가 소유해야 한다.
