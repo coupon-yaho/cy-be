@@ -25,7 +25,11 @@
 #    거기 있고, 잡 수준 표는 "돌았다/안 돌았다" 까지만 답한다(CY-910).
 #    실패 원문(EXIT_MESSAGE)도 이 표에 있지만 그대로 내보내지 않는다 — FailureSummary 가
 #    도메인 에러코드나 예외 이름까지만 남긴다.
+#
+#    BATCH_JOB_EXECUTION_PARAMS 는 "무슨 조건으로 돌았나" 를 진다 — 실패한 실행을
+#    재현하는 시작점이고, IDENTIFYING 이 "같은 조건으로 또 돌린 것" 을 가른다(CY-911).
 BATCH_JOB_EXECUTION
+BATCH_JOB_EXECUTION_PARAMS
 BATCH_JOB_INSTANCE
 BATCH_STEP_EXECUTION
 

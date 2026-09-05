@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.kafkick.core.batch.BatchExecution;
+import com.kafkick.core.batch.BatchJobParameter;
 import com.kafkick.core.batch.BatchStepExecution;
 import com.kafkick.core.batch.BatchExecutionRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
@@ -51,6 +52,8 @@ class BatchExecutionQueryContractTest {
     @BeforeEach
     void seed() {
         jdbcTemplate.update("DELETE FROM BATCH_STEP_EXECUTION WHERE JOB_EXECUTION_ID >= ?", ID_BASE);
+        jdbcTemplate.update(
+                "DELETE FROM BATCH_JOB_EXECUTION_PARAMS WHERE JOB_EXECUTION_ID >= ?", ID_BASE);
         jdbcTemplate.update("DELETE FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID >= ?", ID_BASE);
         jdbcTemplate.update("DELETE FROM BATCH_JOB_INSTANCE WHERE JOB_INSTANCE_ID >= ?", ID_BASE);
 
@@ -81,6 +84,18 @@ class BatchExecutionQueryContractTest {
         // 시작도 못 한 스텝. 카운터가 전부 0 이고 시각이 비어 있다.
         step(22, 11, "step-one", "STARTING", "EXECUTING", null, null, null,
                 0, 0, 0, 0, 0, 0, 0, 0);
+
+        // 실행 12 의 파라미터. **삽입 순서를 이름 역순으로** 넣어 정렬이 실제로 도는지 본다.
+        parameter(12, "attempt", "java.lang.Long", "2", "N");
+        parameter(12, "asOf", "java.time.LocalDateTime", "2026-08-22T00:00", "Y");
+    }
+
+    private void parameter(long executionId, String name, String type, String value,
+            String identifying) {
+        jdbcTemplate.update("INSERT INTO BATCH_JOB_EXECUTION_PARAMS"
+                + " (JOB_EXECUTION_ID, PARAMETER_NAME, PARAMETER_TYPE, PARAMETER_VALUE,"
+                + "  IDENTIFYING) VALUES (?, ?, ?, ?, ?)",
+                ID_BASE + executionId, name, type, value, identifying);
     }
 
     @SuppressWarnings("checkstyle:ParameterNumber")
@@ -113,6 +128,43 @@ class BatchExecutionQueryContractTest {
                 + "  END_TIME, STATUS, EXIT_CODE, EXIT_MESSAGE, LAST_UPDATED)"
                 + " VALUES (?, 0, ?, ?, ?, ?, ?, ?, '', ?)",
                 ID_BASE + id, ID_BASE + instanceId, create, start, end, status, exitCode, create);
+    }
+
+    /**
+     * <b>{@code IDENTIFYING} 이 {@code boolean} 으로 넘어온다.</b>
+     *
+     * <p>저장은 {@code 'Y'}/{@code 'N'} 인데 문자열로 흘려보내면 화면이 문자 비교를 하게
+     * 되고, 그 비교는 <b>예외 없이 조용히 틀린다.</b> 경계에서 바꾸고 그것을 여기서 못 박는다.
+     */
+    @Test
+    @DisplayName("IDENTIFYING 이 boolean 으로 넘어온다 — 문자 비교를 화면에 넘기지 않는다")
+    void mapsIdentifyingToBoolean() {
+        List<BatchJobParameter> parameters = repository.findParameters(ID_BASE + 12);
+
+        assertThat(parameters).extracting(BatchJobParameter::name, BatchJobParameter::identifying)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple("asOf", true),
+                        org.assertj.core.api.Assertions.tuple("attempt", false));
+    }
+
+    /**
+     * <b>정렬이 없으면 같은 실행을 두 번 열 때 순서가 달라진다.</b> 이 표에는 기본키가
+     * 없어(공식 스키마·우리 마이그레이션 둘 다 외래키뿐) 저장 순서가 곧 조회 순서라는
+     * 보장이 없다. 시드는 <b>일부러 이름 역순으로</b> 넣었다.
+     */
+    @Test
+    @DisplayName("파라미터가 이름순으로 나온다 — 삽입 순서가 아니다")
+    void ordersParametersByName() {
+        assertThat(repository.findParameters(ID_BASE + 12))
+                .extracting(BatchJobParameter::name)
+                .containsExactly("asOf", "attempt");
+    }
+
+    /** 파라미터 없이 돈 실행이 실재한다. 빈 목록을 오류로 바꾸면 그 정상 실행이 오류로 보인다. */
+    @Test
+    @DisplayName("파라미터 없이 돈 실행은 빈 목록이다")
+    void returnsEmptyForAnExecutionWithoutParameters() {
+        assertThat(repository.findParameters(ID_BASE + 13)).isEmpty();
     }
 
     /**

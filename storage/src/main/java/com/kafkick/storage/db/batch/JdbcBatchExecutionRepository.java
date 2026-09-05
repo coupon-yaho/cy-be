@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.batch.BatchExecution;
+import com.kafkick.core.batch.BatchJobParameter;
 import com.kafkick.core.batch.BatchStepExecution;
 import com.kafkick.core.batch.FailureSummary;
 import com.kafkick.core.batch.BatchExecutionRepository;
@@ -154,6 +155,34 @@ public class JdbcBatchExecutionRepository implements BatchExecutionRepository {
                     rs.getLong("READ_SKIP_COUNT"),
                     rs.getLong("PROCESS_SKIP_COUNT"),
                     rs.getLong("WRITE_SKIP_COUNT"));
+
+    /**
+     * <b>{@code IDENTIFYING} 을 경계에서 {@code boolean} 으로 바꾼다.</b> 저장은
+     * {@code CHAR(1)} 의 {@code 'Y'}/{@code 'N'} 인데, 문자열로 흘려보내면 화면이 문자
+     * 비교를 하게 되고 대소문자 하나에 <b>조용히 틀린다.</b>
+     */
+    private static final String SELECT_PARAMS = """
+            SELECT p.PARAMETER_NAME,
+                   p.PARAMETER_TYPE,
+                   p.PARAMETER_VALUE,
+                   p.IDENTIFYING
+              FROM BATCH_JOB_EXECUTION_PARAMS p
+             WHERE p.JOB_EXECUTION_ID = ?
+             ORDER BY p.PARAMETER_NAME
+            """;
+
+    private static final RowMapper<BatchJobParameter> PARAM_MAPPER =
+            (rs, rowNum) -> new BatchJobParameter(
+                    rs.getString("PARAMETER_NAME"),
+                    rs.getString("PARAMETER_TYPE"),
+                    rs.getString("PARAMETER_VALUE"),
+                    // 'Y' 만 참이다. 'y'·'1'·NULL 을 참으로 읽으면 정체성 판정이 뒤집힌다.
+                    "Y".equals(rs.getString("IDENTIFYING")));
+
+    @Override
+    public List<BatchJobParameter> findParameters(long jobExecutionId) {
+        return observationJdbcTemplate.query(SELECT_PARAMS, PARAM_MAPPER, jobExecutionId);
+    }
 
     @Override
     public List<BatchStepExecution> findSteps(long jobExecutionId) {

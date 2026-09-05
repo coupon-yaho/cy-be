@@ -92,4 +92,17 @@ public interface BatchExecutionRepository {
      *         실행을 한 번 더 조회해야 하는데, 그 왕복의 값어치가 이 화면에는 없다
      */
     List<BatchStepExecution> findSteps(long jobExecutionId);
+
+    /**
+     * 한 실행의 파라미터를 <b>이름순</b>으로 조회한다.
+     *
+     * <p><b>정렬을 이름으로 잡는 이유</b> — 이 표에는 기본키가 없다(공식 스키마에도, 우리
+     * {@code V11__batch_metadata.sql} 에도 외래키뿐이다). 정렬을 안 주면 <b>같은 실행을 두 번
+     * 열었을 때 순서가 달라질 수 있고</b>, 사람은 그것을 값이 바뀐 것으로 읽는다.
+     *
+     * @param jobExecutionId 잡 실행 식별자
+     * @return 이름순 파라미터 목록. 파라미터 없이 돈 실행이면 빈 목록 —
+     *         {@link #findSteps} 와 같은 이유로 <b>실행이 없는 것과 여기서 가르지 않는다</b>
+     */
+    List<BatchJobParameter> findParameters(long jobExecutionId);
 }

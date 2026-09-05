@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.kafkick.api.admin.support.AdminControllerContractTestSupport;
 import com.kafkick.core.batch.BatchExecution;
+import com.kafkick.core.batch.BatchJobParameter;
 import com.kafkick.core.batch.BatchStepExecution;
 import com.kafkick.core.batch.BatchExecutionRepository;
 
@@ -57,6 +58,14 @@ class BatchHistoryControllerTest {
                     "COMPLETED", "COMPLETED", "원인이 기록되지 않았습니다",
                     Instant.parse("2026-08-23T00:00:00Z"), null, null,
                     7, 3, 1, 2, 4, 1, 2, 3));
+        }
+
+        @Override
+        public List<BatchJobParameter> findParameters(long jobExecutionId) {
+            return List.of(
+                    new BatchJobParameter("asOf", "java.time.LocalDateTime",
+                            "2026-08-22T00:00", true),
+                    new BatchJobParameter("attempt", "java.lang.Long", "2", false));
         }
 
         private static BatchExecution execution(long id, String jobName) {
@@ -118,6 +127,22 @@ class BatchHistoryControllerTest {
                 .andExpect(jsonPath("$.data.steps[0].readSkipCount").value(1))
                 .andExpect(jsonPath("$.data.steps[0].processSkipCount").value(2))
                 .andExpect(jsonPath("$.data.steps[0].writeSkipCount").value(3));
+    }
+
+    /**
+     * <b>{@code identifying} 이 JSON 에서도 boolean 이다.</b> 문자열로 나가면 화면이
+     * {@code "Y"} 와 {@code "true"} 중 무엇을 볼지 몰라 <b>둘 다 대응하는 코드</b>가 생기고,
+     * 그 코드는 한쪽이 바뀌는 날 조용히 틀린다.
+     */
+    @Test
+    @DisplayName("파라미터 응답의 identifying 이 boolean 이다")
+    void serializesIdentifyingAsBoolean() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/batch-executions/7/parameters"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.jobExecutionId").value(7))
+                .andExpect(jsonPath("$.data.parameters[0].name").value("asOf"))
+                .andExpect(jsonPath("$.data.parameters[0].identifying").value(true))
+                .andExpect(jsonPath("$.data.parameters[1].identifying").value(false));
     }
 
     @Test
