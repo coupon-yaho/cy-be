@@ -17,6 +17,7 @@ import com.kafkick.core.notification.NotificationSendException;
 import com.kafkick.core.notification.NotificationSender;
 import com.kafkick.core.notification.domain.Notification;
 import com.kafkick.core.notification.domain.NotifyFailureReason;
+import com.kafkick.infra.mq.config.KafkaConsumerGroups;
 
 /**
  * 알림을 <b>실제로 밖으로 보낸다.</b> outbox 가 나르던 것이 여기서 처음으로 도착한다.
@@ -28,21 +29,29 @@ import com.kafkick.core.notification.domain.NotifyFailureReason;
  * outbox 가 푸는 문제(dual-write)는 <i>"보낸 것이 유실되면 안 된다"</i> 인데, 보내는 것이
  * 없으면 유실될 것도 없다.
  *
- * <h2>타임아웃이 lease 와 묶여 있다</h2>
+ * <h2>타임아웃이 poll 예산과 묶여 있다</h2>
  *
- * <p><b>안 걸면 워커가 무한히 붙잡힌다.</b> 그러면 그 클레임의 lease 가 만료되고 다른
- * 워커가 <b>같은 알림을 다시 보낸다</b> — 릴레이가 기동 시 검사하는
- * {@code ceil(maxInFlight / workerCount) × 건당 예산 < lease} 관계가 그것이다(CY-906).
- * 그래서 여기 타임아웃은 <b>그 예산 안에 있어야 하고</b>, 기동 시 검사한다.
+ * <p><b>안 걸면 소비자가 무한히 붙잡힌다.</b> 이 발송기는 Kafka 소비자 스레드에서 돌고,
+ * 한 번의 {@code poll} 이 가져온 <b>여러 건을 차례로</b> 보낸다. 그 묶음이
+ * {@code max.poll.interval.ms} 안에 안 끝나면 소비자가 그룹에서 쫓겨나고
+ * <b>묶음이 통째로 재전달된다</b> — 이미 보낸 것까지 다시 보낸다. 그래서 건당 타임아웃은
+ * {@link #MAX_TOTAL_TIMEOUT_MILLIS} 안에 있어야 하고, <b>기동 시 검사한다.</b>
+ *
+ * <p>⚠️ 한때 이 자리에 <b>릴레이의 lease 예산</b>(CY-906 의
+ * {@code ceil(maxInFlight / workerCount) × 건당 예산 < lease})이 적혀 있었는데 <b>축이
+ * 다르다.</b> 그 예산은 릴레이가 클레임을 쥔 채 Kafka 로 <i>발행</i>하는 시간이고, 이
+ * 발송기는 그 뒤 소비자 쪽에서 돈다. 리뷰가 짚었다.
  *
  * <h2>at-least-once 는 우리가 못 막는다</h2>
  *
  * <p>outbox 도 Kafka 도 at-least-once 라 <b>같은 알림이 두 번 갈 수 있다.</b> 그것을 막는
  * 것은 <b>받는 쪽</b>이고, 우리가 할 일은 <b>같은 시도에 같은 키를 주는 것</b>이다.
  *
- * <p>키는 {@code notificationId:attemptCount} 다. 같은 시도가 재전달되면 같은 키이고,
- * 사람이 재발송해 <b>새 시도</b>가 되면 다른 키다 — 그것은 실제로 다시 보내야 하는 건이라
- * 합쳐지면 안 된다. Stripe·IETF 의 {@code Idempotency-Key} 가 같은 자리를 쓴다.
+ * <p><b>키를 여기서 만들지 않는다.</b> 무엇이 "같은 발송" 인지는 {@code Notification}
+ * 하나로 알 수 없다 — 자동 재시도는 같은 발송이고 사람의 재발송은 다른 발송인데, 그
+ * 경계를 아는 것은 배달 판정({@code NotificationDeliveryDecision#idempotencyKey})이다.
+ * 그쪽이 {@code notificationId:baseAttemptSeq} 로 만들어 넘기고, 이 클래스는 <b>받은 것을
+ * 그대로 헤더에 싣기만</b> 한다. Stripe·IETF 의 {@code Idempotency-Key} 가 같은 자리를 쓴다.
  *
  * <h2>실패를 재시도 가능 여부로 옮긴다</h2>
  *
@@ -57,23 +66,21 @@ import com.kafkick.core.notification.domain.NotifyFailureReason;
 public class HttpNotificationSender implements NotificationSender {
 
     /**
-     * 이 발송에 허용하는 시간의 절대 상한.
+     * 한 건에 허용하는 시간의 절대 상한 — <b>손으로 고르지 않고 유도한다.</b>
      *
-     * <p>⚠️ <b>릴레이의 건당 발행 예산과 비교하던 것을 걷어냈다 — 축이 달랐다.</b>
-     * 그 예산은 <b>릴레이가 Kafka 로 발행하는</b> 시간이 lease 안에 드는지를 보는 값인데,
-     * 이 발송기는 <b>Kafka 소비자 쪽</b>에서 돈다. 두 경로는 스레드도 트랜잭션도 다르고
-     * lease 와 아무 관계가 없다. 그대로 뒀으면 <b>멀쩡한 설정이 기동을 거부당했다.</b>
-     * 리뷰가 짚었다.
+     * <p>한 묶음의 레코드를 <b>차례로</b> 보내므로 최악은
+     * {@code max.poll.records × 건당 시간} 이다. 그것이 {@code max.poll.interval.ms} 를
+     * 넘기면 소비자가 그룹에서 쫓겨나고 그 묶음이 통째로 재전달된다 —
+     * <b>이미 보낸 것까지 다시 보낸다.</b>
      *
-     * <p><b>여기서 진짜 경계는 {@code max.poll.interval.ms} 다.</b> 한 레코드 처리가 그것을
-     * 넘기면 소비자가 그룹에서 쫓겨나고 <b>그 레코드가 재전달된다</b> — 이 저장소의 다른
-     * 소비자들이 같은 함정을 주석에 적어 뒀다({@code AttemptLiveConsumer}).
-     * 기본값은 5분이라 아래 상한(10초)이 그 안에 넉넉히 든다.
-     *
-     * <p>10초를 고른 이유는 <b>재현 가능한 기준이 아니라 방어선</b>이라서다 — 분 단위
-     * 타임아웃을 적어 넣는 실수를 막는 값이지, 여기가 성능을 정하는 자리가 아니다.
+     * <p>⚠️ 처음엔 10초를 <b>손으로</b> 적었다. 한 건만 보고 고른 값이라
+     * <b>500건 × 10초 = 83분</b> 이 되어 5분 한계를 훌쩍 넘겼다 — 리뷰가 짚었다.
+     * 지금은 {@link KafkaConsumerGroups} 가 못박은 두 값에서 계산한다
+     * ({@code 300,000 / 500 = 600ms}). 컨슈머 설정을 바꾸면 <b>여기가 따라온다</b> —
+     * 숫자를 박아 두면 그 관계가 끊긴다.
      */
-    private static final long MAX_TOTAL_TIMEOUT_MILLIS = 10_000;
+    private static final long MAX_TOTAL_TIMEOUT_MILLIS =
+            KafkaConsumerGroups.MAX_POLL_INTERVAL_MILLIS / KafkaConsumerGroups.MAX_POLL_RECORDS;
 
     private final HttpClient http;
     private final URI endpoint;
@@ -87,7 +94,8 @@ public class HttpNotificationSender implements NotificationSender {
      *               그대로 두면 <b>모든 알림이 매번 실패</b>하고, 4xx 도 5xx 도 아니라
      *               {@code CONNECTION_ERROR} 로 재시도되다 전부 {@code DEAD} 로 간다</li>
      *           <li>타임아웃이 0 이거나 음수일 때 — 0 은 "무한" 이 아니라 즉시 실패다</li>
-     *           <li>합이 {@link #MAX_TOTAL_TIMEOUT_MILLIS} 를 넘을 때</li>
+     *           <li>어느 하나가, 또는 합이 {@link #MAX_TOTAL_TIMEOUT_MILLIS} 를 넘을 때 —
+     *               <b>한 묶음이 poll 간격 안에 못 끝난다</b></li>
      *         </ul>
      */
     public HttpNotificationSender(
@@ -95,19 +103,31 @@ public class HttpNotificationSender implements NotificationSender {
             @Value("${notification.sender.http.connect-timeout:30ms}") Duration connectTimeout,
             @Value("${notification.sender.http.request-timeout:60ms}") Duration requestTimeout) {
         this.endpoint = requireHttpUri(Objects.requireNonNull(endpoint, "endpoint"));
-        this.requestTimeout = requirePositive(requestTimeout, "요청");
-        requirePositive(connectTimeout, "연결");
+        this.requestTimeout = requireWithinCap(requestTimeout, "요청");
+        requireWithinCap(connectTimeout, "연결");
+        // **각각을 먼저 상한 안으로 거른 뒤 더한다.** 그냥 더하면 큰 값 둘에서 long 이
+        // 넘쳐 음수가 되고, 그 음수가 상한 검사를 통과한다(리뷰가 짚었다).
         long total = connectTimeout.toMillis() + requestTimeout.toMillis();
         if (total > MAX_TOTAL_TIMEOUT_MILLIS) {
             throw new IllegalArgumentException(
                     "연결+요청 타임아웃 합(" + total + "ms)이 상한("
-                            + MAX_TOTAL_TIMEOUT_MILLIS + "ms)을 넘습니다. 한 레코드 처리가 "
-                            + "max.poll.interval.ms 를 넘기면 소비자가 그룹에서 쫓겨나고 "
-                            + "그 레코드가 재전달됩니다.");
+                            + MAX_TOTAL_TIMEOUT_MILLIS + "ms)을 넘습니다. 한 묶음("
+                            + KafkaConsumerGroups.MAX_POLL_RECORDS + "건)을 차례로 보내면 "
+                            + "max.poll.interval.ms(" + KafkaConsumerGroups.MAX_POLL_INTERVAL_MILLIS
+                            + "ms)를 넘겨 소비자가 그룹에서 쫓겨나고, 그 묶음이 통째로 "
+                            + "재전달됩니다 — 이미 보낸 것까지 다시 보냅니다.");
         }
         this.http = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
     }
 
+    /**
+     * @param notification 보낼 알림
+     * @param idempotencyKey 배달 판정이 만든 키. <b>여기서 만들지 않는다</b>
+     * @throws NullPointerException 인자가 {@code null} 일 때. <b>키가 없으면 받는 쪽이 중복을
+     *         못 합치므로</b> 조용히 빈 키로 보내지 않고 그 자리에서 멈춘다
+     * @throws NotificationSendException 보내지 못했을 때. {@code reason} 이 재시도 가능
+     *         여부를 진다
+     */
     @Override
     public void send(Notification notification, String idempotencyKey) {
         Objects.requireNonNull(notification, "notification");
@@ -233,12 +253,26 @@ public class HttpNotificationSender implements NotificationSender {
         return uri;
     }
 
-    /** 0 은 "무한" 이 아니라 <b>즉시 실패</b>다 — 그대로 두면 모든 알림이 타임아웃된다. */
-    private static Duration requirePositive(Duration timeout, String name) {
+    /**
+     * 하나씩 <b>양수이고 상한 안</b>인지 본다.
+     *
+     * <p>0 은 "무한" 이 아니라 <b>즉시 실패</b>다 — 그대로 두면 모든 알림이 타임아웃된다.
+     *
+     * <p>상한을 <b>더하기 전에 각각</b> 보는 이유는 넘침이다. {@code Duration.ofDays(...)}
+     * 둘의 {@code toMillis()} 를 더하면 {@code long} 이 넘쳐 <b>음수</b>가 되고, 그 음수는
+     * 합 검사를 그냥 통과한다 — 상한이 있는데도 없는 것과 같아진다(리뷰가 짚었다).
+     * 각 항이 상한 이하이면 합은 상한의 두 배를 못 넘으므로 넘칠 수가 없다.
+     */
+    private static Duration requireWithinCap(Duration timeout, String name) {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException(
                     name + " 타임아웃은 양수여야 합니다. 0 은 무한이 아니라 즉시 실패입니다. "
                             + "받은 값=" + timeout);
+        }
+        if (timeout.toMillis() > MAX_TOTAL_TIMEOUT_MILLIS) {
+            throw new IllegalArgumentException(
+                    name + " 타임아웃(" + timeout + ")이 한 건 상한("
+                            + MAX_TOTAL_TIMEOUT_MILLIS + "ms)을 넘습니다.");
         }
         return timeout;
     }

@@ -86,4 +86,44 @@ class KafkaConsumerGroupsTest {
         assertThatThrownBy(() -> KafkaConsumerGroups.consumerConfig(KafkaConsumerGroups.PERSIST, null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * <b>기본값과 같아도 못박혀 있어야 한다.</b> 이 둘은 단순 튜닝 값이 아니라
+     * <b>한 묶음의 처리 시간 예산</b>이고, {@code HttpNotificationSender} 가 여기서
+     * 건당 상한을 계산해 간다. 설정 맵에 안 실리면 클라이언트 판이 올라가며 값이 조용히
+     * 바뀔 수 있고, 그 순간 그 상한이 근거 없는 숫자가 된다.
+     *
+     * <p>기본값이 마침 같다는 것은 <b>실측했다</b>({@code kafka-clients} 4.2.1:
+     * {@code max.poll.records=500}, {@code max.poll.interval.ms=300000}). 같다는 사실이
+     * 안 적어도 된다는 뜻은 아니다 — 같다는 것 자체가 다음 판에서 안 같아질 수 있다.
+     */
+    @Test
+    @DisplayName("한 묶음의 처리 시간 예산은 기본값에 맡기지 않고 설정 맵에 싣는다")
+    void pollBudgetIsPinnedInTheConfigInsteadOfLeftToDefaults() {
+        Map<String, Object> config =
+                KafkaConsumerGroups.consumerConfig(KafkaConsumerGroups.NOTIFY_DISPATCH, "localhost:9094");
+
+        assertThat(config.get(ConsumerConfig.MAX_POLL_RECORDS_CONFIG))
+                .as("한 poll 이 가져오는 건수 — 건당 상한의 분모다")
+                .isEqualTo((int) KafkaConsumerGroups.MAX_POLL_RECORDS);
+        assertThat(config.get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG))
+                .as("그 묶음을 처리할 시간 — 건당 상한의 분자다")
+                .isEqualTo((int) KafkaConsumerGroups.MAX_POLL_INTERVAL_MILLIS);
+    }
+
+    /**
+     * 예산이 <b>나눠떨어져야</b> 유도한 상한이 실제 최악을 덮는다. 예컨대 500 건에 601ms 를
+     * 허용하면 최악이 {@code 300.5초} 로 5분을 <b>넘는다</b> — 소수점 아래를 버리는 나눗셈이
+     * 상한을 과대평가하지 않는지 여기서 잡는다.
+     */
+    @Test
+    @DisplayName("건당 상한 × 묶음 건수가 poll 간격을 넘지 않는다")
+    void derivedPerRecordCapCoversTheWholeBatch() {
+        long perRecord =
+                KafkaConsumerGroups.MAX_POLL_INTERVAL_MILLIS / KafkaConsumerGroups.MAX_POLL_RECORDS;
+
+        assertThat(perRecord * KafkaConsumerGroups.MAX_POLL_RECORDS)
+                .as("건당 상한을 꽉 채워 쓴 최악이 poll 간격 안이어야 한다")
+                .isLessThanOrEqualTo(KafkaConsumerGroups.MAX_POLL_INTERVAL_MILLIS);
+    }
 }
