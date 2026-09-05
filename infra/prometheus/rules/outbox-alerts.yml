@@ -1,0 +1,91 @@
+# 알림 발행(outbox) 릴레이 알림 규칙. 관제(Prometheus)가 `rules/*.yml` 로 그대로 가져다 쓴다.
+#
+# 여기 메트릭은 NotificationOutboxMeter(storage)와 NotificationOutboxBacklogGauge(infra:mq)가
+# 등록하고 api 의 관리 포트 /actuator/prometheus 로 나간다. 이름의 정본은
+# core 의 DomainMeterNames 이고, OutboxAlertRuleContractTest 가 이 파일과 그 상수를 대조한다.
+#
+# ⚠️ 알림마다 channel 라벨이 붙는다 — alertmanager 가 그것으로 수신함을 가른다.
+#    빠뜨리면 sink-unrouted 로 떨어진다(docs/14).
+#
+# ⚠️ **배치 알림의 3중 구조(미성공·미도래·지표부재)를 그대로 복제하지 않았다.**
+#    그쪽 축은 "마지막 성공이 언제냐" 인데, 릴레이는 크론이 아니라 상시라 그 축이 없다.
+#    상시 처리기의 증상은 **밀리는 것**과 **영영 안 가는 것** 둘이고, 아래가 그 둘이다.
+#    Prometheus 권고("alert on symptoms", "avoid pages where there is nothing to do")를
+#    그대로 적용한 결과다.
+
+groups:
+  - name: cy-notification-outbox
+    rules:
+
+      # 재시도 상한(10회)을 넘겨 종착한 명령. **사람이 다시 보내야 한다.**
+      #
+      # 기준선이 0 이라 임계를 고를 필요가 없다 — 정상 운영에서 이 값은 안 오른다.
+      # 오르면 그만큼의 알림이 스스로는 영영 안 나가고, 그 사실은 **응답 어디에도 안 드러난다**
+      # (접수는 이미 200 으로 끝났다). 사람이 지표를 안 보면 아무도 모르는 종류의 사고다.
+      #
+      # reason 으로 갈려 오므로 무엇이 죽였는지가 알림에 그대로 실린다 —
+      # publish_failed(브로커) · notification_missing(대상 소실) · lease_expired(워커가 못 끝냄).
+      - alert: OutboxCommandsDead
+        expr: increase(app_outbox_dead_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "알림 발행 명령이 종착했습니다 ({{ $labels.reason }}, 10분 {{ $value }}건)"
+          description: >-
+            그만큼의 알림이 스스로는 영영 안 나갑니다. 접수는 이미 200 으로 끝났으므로
+            사용자도 응답도 이 사실을 모릅니다.
+            reason 이 publish_failed 면 브로커부터 봅니다 — app_outbox_retry_total 이 같은
+            reason 으로 함께 올랐는지, Kafka 대상이 살아 있는지.
+            notification_missing 이면 발행 대상 알림 행이 사라진 것이라 그 원인이 먼저입니다.
+            lease_expired 면 워커가 lease 안에 못 끝낸 것이니 app_notify_relay_inflight 와
+            app_outbox_backlog 를 함께 봅니다 — 상한에 붙어 있으면 워커가 모자랍니다.
+            종착한 건은 notification_outbox 의 DEAD 행이고, 재발송은 알림 재발송 API 가 합니다.
+
+      # 밀리는 것. 백로그가 계속 늘면 릴레이가 유입을 못 따라간다는 뜻이다.
+      #
+      # **절대값이 아니라 기울기를 본다.** 백로그 1,000 이 사고인지 정상인지는 유입량에
+      # 달렸고 그 임계를 여기서 정할 수 없다 — 반면 "30분째 계속 늘고 있다" 는 유입량과
+      # 무관하게 나쁘다. deriv 가 그 축이다.
+      #
+      # ⚠️ 게이지가 없거나 못 읽는 상태는 여기서 안 잡는다. deriv 는 계열이 끊기면 빈
+      #    결과가 되어 for 타이머가 리셋된다 — 그 사건은 아래 OutboxBacklogGaugeMissing 이
+      #    따로 진다. 배치 쪽 *GaugeMissing 이 같은 이유로 따로 서 있다.
+      - alert: OutboxBacklogGrowing
+        expr: deriv(app_outbox_backlog[15m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "알림 발행 백로그가 30분째 늘고 있습니다 (지금 {{ $value }}/s 로 증가)"
+          description: >-
+            릴레이가 유입을 못 따라가고 있습니다. app_notify_relay_inflight 를 함께 봅니다 —
+            상한(kafka.notification.relay.max-in-flight, 기본 64)에 붙어 있으면 워커가
+            모자란 것이고, 0 에 가까운데 백로그가 늘면 집는 쪽이 막힌 것입니다(DB 경합·
+            바이너리 로그 포맷 가드·클레임 실패).
+            app_outbox_retry_total 이 함께 오르면 발행이 실패해 되돌아오는 중입니다 —
+            그때는 대상(브로커)이 원인이지 릴레이가 아닙니다.
+            워커는 kafka.notification.relay.worker-count 로 늘립니다. 늘릴 때
+            max-in-flight 와의 비가 lease 검사를 정하므로 릴레이가 기동에서 거절할 수 있습니다.
+
+      # 게이지 자체가 없는 상태. 값이 -1 이면 **한 번도 못 셌다**는 뜻이고,
+      # 계열이 아예 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것이다.
+      #
+      # **이것이 없으면 "백로그를 못 보는 상태" 가 영구 침묵이다.** 위 알림은 값이 있어야
+      # 도는데, 값이 없는 쪽이 더 나쁘다 — 밀리는 것을 아무도 못 본다.
+      - alert: OutboxBacklogGaugeMissing
+        expr: (app_outbox_backlog == -1) or (absent(app_outbox_backlog) == 1)
+        for: 15m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "알림 발행 백로그를 볼 수 없습니다"
+          description: >-
+            -1 은 한 번도 못 셌다는 뜻입니다 — 게이지가 DB 를 못 읽고 있습니다.
+            (실패해도 직전 값을 유지하도록 만들었으므로, -1 은 첫 조회부터 실패한 상태입니다.)
+            계열 자체가 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것입니다 —
+            그 경우 발행 자체가 안 도는 것이니 백로그보다 그쪽이 먼저입니다.
+            조회 주기는 kafka.notification.relay.backlog-refresh-ms(기본 15초)입니다.

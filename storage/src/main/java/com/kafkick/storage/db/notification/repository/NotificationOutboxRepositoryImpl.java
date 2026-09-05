@@ -362,6 +362,7 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * <p>{@code REQUIRES_NEW} 인 이유는 {@link #markFailed}·{@link #markPublished} 와 같다 —
      * 부르는 쪽의 트랜잭션과 운명을 같이하면 <b>되돌리려던 것이 함께 롤백된다.</b>
      */
+
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean releaseClaim(Long outboxId, String claimToken) {
@@ -371,6 +372,24 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                        claimed_at=NULL, claim_token=NULL
                  WHERE id=? AND status='IN_PROGRESS' AND claim_token=?
                 """, outboxId, claimToken) == 1;
+    }
+
+    /**
+     * <b>{@code status} 인덱스로 세지, 표를 훑지 않는다.</b> 스크레이프마다 도는 질의라
+     * 백로그가 클수록 비싸지면 <b>관측이 사고를 키운다</b> — 볼 수 없는 것보다 나쁘다.
+     *
+     * <p>{@code ix_notification_outbox_pending} 가 선두 컬럼으로
+     * {@code status} 를 갖고 있어 <b>커버링 인덱스만으로</b> 센다 — 실측:
+     * {@code EXPLAIN} 이 {@code type=index}, {@code key=ix_notification_outbox_pending},
+     * {@code Extra="Using where; Using index"} 를 낸다.
+     */
+    @Override
+    public long countBacklog() {
+        Long count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM notification_outbox
+                 WHERE status IN ('PENDING','IN_PROGRESS')
+                """, Long.class);
+        return count == null ? 0L : count;
     }
 
     private void failManualNotification(Long outboxId) {

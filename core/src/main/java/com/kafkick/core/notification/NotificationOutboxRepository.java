@@ -60,4 +60,22 @@ public interface NotificationOutboxRepository {
      *         <b>그 경우 아무것도 하지 않는 것이 맞다</b>, 이 건은 이미 남의 것이다
      */
     boolean releaseClaim(Long outboxId, String claimToken);
+
+    /**
+     * 아직 안 나간 발행 명령 수 — <b>백로그</b>.
+     *
+     * <p><b>인플라이트 게이지만으로는 한가한 것과 막힌 것을 구분하지 못한다.</b>
+     * 상한에 붙어 있는데 백로그가 안 줄면 워커가 모자란 것이고, 백로그도 0 이면 그냥
+     * 보낼 것이 없는 것이다 — 같은 게이지 값이 두 뜻이라, 이 수와 <b>함께 봐야</b> 갈린다.
+     *
+     * <p>{@code PENDING} 과 {@code IN_PROGRESS} 를 <b>함께</b> 센다. 둘 다 "아직 안 나갔다"
+     * 이고, {@code IN_PROGRESS} 를 빼면 <b>릴레이가 붙잡고 못 끝내는 상태에서 백로그가
+     * 0 으로 보인다</b> — 그것이 정확히 사고 상태다.
+     *
+     * <p>{@code DEAD} 는 안 센다. 그것은 <b>다시 시도되지 않으므로</b> 백로그가 아니라
+     * 사람이 처리할 목록이고, 그 축은 {@code app.outbox.dead} 가 따로 진다.
+     *
+     * @return 아직 안 나간 건수
+     */
+    long countBacklog();
 }

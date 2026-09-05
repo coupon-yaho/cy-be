@@ -20,6 +20,7 @@ import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.event.NotificationRequestedEventPublisher;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.infra.mq.notification.NotificationOutboxBacklogGauge;
 import com.kafkick.infra.mq.notification.NotificationOutboxRelay;
 import com.kafkick.infra.mq.notification.NotificationRelayProperties;
 import com.kafkick.infra.mq.notification.NotificationRelayScheduler;
@@ -103,7 +104,8 @@ public class NotificationRelayConfig {
      *
      * <p><b>"지금 몇 건 물고 있나" 하나로만 읽는다.</b> 백프레셔가 걸렸는지는 여기서 못
      * 읽는다 — 그 판정은 {@code poll()} 이 불린 순간에만 나고 스크레이프는 그 사이 아무
-     * 때나 찍힌다. 건너뛴 횟수와 백로그는 CY-908(#197)이 별도 지표로 붙인다.
+     * 때나 찍힌다. 한가한 것과 막힌 것을 가르는 것은
+     * {@link NotificationOutboxBacklogGauge} 와 함께 보는 일이다(CY-913).
      */
     @Bean
     public Gauge notificationRelayInFlightGauge(MeterRegistry registry,
@@ -111,6 +113,17 @@ public class NotificationRelayConfig {
         return Gauge.builder(DomainMeterNames.NOTIFY_RELAY_IN_FLIGHT, relay,
                         NotificationOutboxRelay::inFlight)
                 .register(registry);
+    }
+
+    /**
+     * <b>인플라이트 게이지의 짝이다.</b> 인플라이트만으로는 한가한 것과 막힌 것을 구분하지
+     * 못한다 — 상한에 붙어 있는데 백로그가 안 줄면 워커가 모자란 것이고, 백로그도 0 이면
+     * 그냥 보낼 것이 없는 것이다. CY-906·CY-908 이 "붙인다" 고 적어 두고 안 붙였던 자리다.
+     */
+    @Bean
+    public NotificationOutboxBacklogGauge notificationOutboxBacklogGauge(
+            NotificationOutboxRepository outboxes, MeterRegistry registry) {
+        return new NotificationOutboxBacklogGauge(outboxes, registry);
     }
 
     @Bean
