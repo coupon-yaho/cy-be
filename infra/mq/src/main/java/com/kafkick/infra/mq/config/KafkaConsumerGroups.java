@@ -51,6 +51,25 @@ public final class KafkaConsumerGroups {
      */
     public static final String DLT_REPROCESS = "coupon-dlt-reprocess";
 
+    /**
+     * 한 번의 {@code poll} 이 가져오는 최대 레코드 수. <b>Kafka 기본값과 같은 500 이지만
+     * 못박는다</b> — 이 값이 {@link #MAX_POLL_INTERVAL_MILLIS} 와 짝을 이뤄 <b>한 묶음을 처리할
+     * 시간 예산</b>을 정하기 때문이다. 기본값에 맡기면 클라이언트 판이 올라가며 조용히 바뀔 수
+     * 있고, 그 순간 그 예산에서 유도한 상한이 근거를 잃는다.
+     *
+     * <p>이 둘을 바꾸면 {@code HttpNotificationSender} 의 건당 상한이 함께 바뀐다 —
+     * 그쪽이 여기서 계산해 가므로 <b>따로 고칠 것은 없다.</b>
+     */
+    public static final long MAX_POLL_RECORDS = 500;
+
+    /**
+     * 한 {@code poll} 묶음을 처리할 수 있는 시간(기본값과 같은 5분, 못박는다).
+     *
+     * <p>넘기면 소비자가 그룹에서 <b>쫓겨나고 그 묶음이 통째로 재전달된다</b> — 이미 처리한
+     * 것까지 다시 온다. 알림은 그것이 곧 중복 발송이다.
+     */
+    public static final long MAX_POLL_INTERVAL_MILLIS = 300_000;
+
     public static final String EARLIEST = "earliest";
     public static final String LATEST = "latest";
 
@@ -94,6 +113,9 @@ public final class KafkaConsumerGroups {
         config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, offsetResetOf(groupId));
         config.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         config.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
+        // 기본값과 같은 값을 굳이 적는다 — 위 두 상수 주석 참고. 처리 시간 예산의 분모·분자다.
+        config.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, (int) MAX_POLL_RECORDS);
+        config.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, (int) MAX_POLL_INTERVAL_MILLIS);
         return config;
     }
 }
