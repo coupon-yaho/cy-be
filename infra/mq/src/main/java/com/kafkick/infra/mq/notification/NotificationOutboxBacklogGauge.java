@@ -36,9 +36,15 @@ import com.kafkick.core.observation.DomainMeterNames;
 public class NotificationOutboxBacklogGauge {
 
     /**
-     * 마지막으로 센 값. <b>{@code -1} 로 시작한다</b> — 아직 한 번도 못 센 상태와
-     * "백로그가 0" 을 가르기 위해서다. 둘을 0 으로 합치면 <b>DB 를 못 읽는 상황이
-     * 가장 평온해 보인다.</b>
+     * 마지막으로 센 값. <b>{@code -1} 은 "지금 못 보고 있다" 는 뜻이다.</b>
+     *
+     * <p>그 상태가 되는 경우는 둘이다 — <b>아직 한 번도 못 셌거나</b>(초기값),
+     * <b>연속 실패가 {@link #FAILURES_BEFORE_GIVING_UP} 를 넘어 포기했거나.</b>
+     * 둘을 가르지 않는 이유는 <b>사람이 할 일이 같기 때문</b>이다: 게이지가 DB 를 못 읽고
+     * 있으니 그쪽을 본다. 알림({@code OutboxBacklogGaugeMissing})도 하나로 잡는다.
+     *
+     * <p>이 값을 0 과 합치면 <b>DB 를 못 읽는 상황이 가장 평온해 보인다</b> —
+     * "백로그가 0" 과 구분이 안 된다.
      */
     private final AtomicLong backlog = new AtomicLong(-1);
 
