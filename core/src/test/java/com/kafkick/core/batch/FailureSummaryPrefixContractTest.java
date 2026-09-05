@@ -42,8 +42,17 @@ class FailureSummaryPrefixContractTest {
     /** 저장소 뿌리. core 테스트의 작업 디렉터리가 모듈 안이라 한 칸 올라간다. */
     private static final Path REPO_ROOT = Path.of("..");
 
-    /** {@code "COUPON_ROUND-001"} 처럼 <b>문자열 리터럴로 적힌</b> 에러코드. */
-    private static final Pattern LITERAL_CODE = Pattern.compile("\"([A-Z][A-Z_]*)-\\d{3}\"");
+    /**
+     * {@code "COUPON_ROUND-001"}·{@code "ADMIN-INQUIRY-001"} 처럼 <b>문자열 리터럴로 적힌</b>
+     * 에러코드.
+     *
+     * <p><b>접두사에 하이픈이 여러 개 올 수 있다.</b> 첫 판은 {@code [A-Z][A-Z_]*-} 로 써서
+     * {@code ADMIN-COUPON-ROUND-001} 을 <b>아예 수집하지 못했고</b>, 그래서 이 검사가
+     * 조용히 통과했다 — <b>세는 쪽이 알아보는 쪽과 같은 맹점</b>을 가지면 검사가 검사를
+     * 못 한다. 리뷰가 잡았다.
+     */
+    private static final Pattern LITERAL_CODE =
+            Pattern.compile("\"([A-Z][A-Z_]*(?:-[A-Z][A-Z_]*)*)-\\d{3}\"");
 
     /**
      * 에러코드가 아닌데 형태가 같은 것들. <b>이것이 정규식을 못 넓히는 이유의 증거다.</b>
@@ -87,7 +96,7 @@ class FailureSummaryPrefixContractTest {
                 .isEmpty();
     }
 
-    /** 밑줄이 들어간 접두사가 실제로 살아난다 — 리뷰가 잡은 그 자리다. */
+    /** 밑줄이 들어간 접두사가 실제로 살아난다 — 리뷰가 잡은 첫 자리다. */
     @Test
     @DisplayName("밑줄이 들어간 접두사도 알아본다")
     void recognisesPrefixesWithUnderscores() {
@@ -95,6 +104,23 @@ class FailureSummaryPrefixContractTest {
                 .isEqualTo("COUPON_ROUND-002");
         assertThat(FailureSummary.of("RUNTIME_CONFIG-001 값이 없습니다"))
                 .isEqualTo("RUNTIME_CONFIG-001");
+    }
+
+    /**
+     * 하이픈이 여러 개인 접두사 — 리뷰가 잡은 <b>두 번째</b> 자리다.
+     *
+     * <p>{@code ADMIN} 이 먼저 걸려 {@code ADMIN-INQUIRY-001} 을 못 알아보면, 그 코드는
+     * 예외 이름으로 뭉개져 화면에서 사라진다.
+     */
+    @Test
+    @DisplayName("하이픈이 여러 개인 접두사도 알아본다")
+    void recognisesPrefixesWithMultipleHyphens() {
+        assertThat(FailureSummary.of("ADMIN-INQUIRY-002 조회 실패"))
+                .isEqualTo("ADMIN-INQUIRY-002");
+        assertThat(FailureSummary.of("ADMIN-COUPON-ROUND-001 회차 데이터 없음"))
+                .isEqualTo("ADMIN-COUPON-ROUND-001");
+        // 짧은 쪽도 그대로 산다.
+        assertThat(FailureSummary.of("ADMIN-003 관측 꺼짐")).isEqualTo("ADMIN-003");
     }
 
     /**
