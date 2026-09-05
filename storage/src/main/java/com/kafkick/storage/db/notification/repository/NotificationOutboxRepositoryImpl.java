@@ -38,6 +38,16 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     private static final int DEAD_AFTER_FAILURES = 10;
 
 
+    /**
+     * 백로그를 상태 하나씩 세는 질의.
+     *
+     * <p><b>패키지 가시성이다</b> — {@code BacklogPlanContractTest} 가 <b>이 문자열 그대로</b>
+     * {@code EXPLAIN} 을 건다. 테스트가 자기 SQL 을 적어 두면 어댑터를 {@code IN} 하나로
+     * 되돌려도 <b>테스트는 그대로 통과한다</b>(실제로 그랬다).
+     */
+    static final String COUNT_BY_STATUS =
+            "SELECT COUNT(*) FROM notification_outbox WHERE status = ?";
+
     private final NotificationOutboxJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate requiresNew;
@@ -375,20 +385,31 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     }
 
     /**
-     * <b>{@code status} 인덱스로 세지, 표를 훑지 않는다.</b> 스크레이프마다 도는 질의라
-     * 백로그가 클수록 비싸지면 <b>관측이 사고를 키운다</b> — 볼 수 없는 것보다 나쁘다.
+     * <b>상태마다 따로 세서 더한다 — {@code IN} 하나로 묶지 않는다.</b>
      *
-     * <p>{@code ix_notification_outbox_pending} 가 선두 컬럼으로
-     * {@code status} 를 갖고 있어 <b>커버링 인덱스만으로</b> 센다 — 실측:
-     * {@code EXPLAIN} 이 {@code type=index}, {@code key=ix_notification_outbox_pending},
-     * {@code Extra="Using where; Using index"} 를 낸다.
+     * <p>실측이 그 이유다. 같은 인덱스를 쓰는데 접근 방식이 다르다:
+     *
+     * <pre>
+     *   WHERE status IN ('PENDING','IN_PROGRESS')  →  type=index  (인덱스 **전체** 스캔)
+     *   WHERE status = 'PENDING'                   →  type=ref    (그 값 구간만)
+     * </pre>
+     *
+     * <p>{@code type=index} 는 커버링이라 표는 안 읽지만 <b>인덱스는 끝까지 훑는다</b> —
+     * {@code PUBLISHED}·{@code DEAD} 가 쌓일수록 비용이 는다. 15초마다 도는 질의가
+     * 누적 행 수에 비례해 비싸지면 <b>관측이 사고를 키운다.</b> 리뷰가 짚었고,
+     * 처음에 나는 {@code Using index} 만 보고 "인덱스만으로 센다" 로 읽었다 —
+     * <b>커버링인 것과 구간만 읽는 것은 다르다.</b>
+     *
+     * <p>{@code ref} 두 번이 {@code index} 한 번보다 싸다. 두 값은 서로 겹치지 않는
+     * 상태라 더하면 같은 수다.
      */
     @Override
     public long countBacklog() {
-        Long count = jdbcTemplate.queryForObject("""
-                SELECT COUNT(*) FROM notification_outbox
-                 WHERE status IN ('PENDING','IN_PROGRESS')
-                """, Long.class);
+        return countByStatus("PENDING") + countByStatus("IN_PROGRESS");
+    }
+
+    private long countByStatus(String status) {
+        Long count = jdbcTemplate.queryForObject(COUNT_BY_STATUS, Long.class, status);
         return count == null ? 0L : count;
     }
 
