@@ -61,10 +61,14 @@ import com.kafkick.core.verification.exception.VerificationErrorCode;
 // (CY-590). 그때 그 테스트를 안 돌리고 흐름 테스트만 봐서 늦게 알았을 뿐이다.
 // v2 회차 컨트롤러 둘은 다른 패키지(batch.coupon.v2)다. 이름을 하나씩 적는 규약은 그대로다 —
 // 패키지로 넓히면 다음 컨트롤러가 이 규약을 의식하지 않고 따라온다.
+//
+// CY-912 의 BatchControlController 도 같은 자리를 밟았다. 위 문단이 예고한 그대로 404·409 가
+// 전부 500 으로 나갔고, 그 커버리지 테스트가 잡아서 알았다 — 사람의 기대가 아니라 검사가
+// 지킨다는 것이 세 번째로 확인된 셈이다.
 @RestControllerAdvice(assignableTypes = {VerifyTriggerController.class,
         ExpireAdminController.class, CleanupAdminController.class,
         VerifyReportController.class, BatchHistoryController.class,
-        VerifyHistoryController.class,
+        VerifyHistoryController.class, BatchControlController.class,
         CouponRoundWarmupController.class, CouponRoundRebuildController.class})
 public class BatchApiExceptionHandler {
 

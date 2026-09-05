@@ -65,7 +65,7 @@ public final class FailureSummary {
     private static final Pattern DOMAIN_CODE = Pattern.compile(
             // 앞 경계. 영숫자·밑줄·하이픈이 붙어 있으면 그 코드가 아니다 — 아래 설명.
             "(?<![\\p{L}\\p{N}_-])"
-                    + "(?:ADMIN-COUPON-ROUND|ADMIN-INQUIRY|ADMIN"
+                    + "(?:ADMIN-COUPON-ROUND|ADMIN-INQUIRY|ADMIN|BATCH"
                     + "|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY"
                     + "|COUPON_ROUND|COUPON_TEMPLATE|COUPON"
                     + "|EXPIRATION|NOTIFY|OVERVIEW|RUNTIME_CONFIG|VERIFICATION)-\\d{3}"
