@@ -14,6 +14,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.kafkick.core.batch.BatchExecution;
+import com.kafkick.core.batch.BatchJobParameter;
+import com.kafkick.core.batch.BatchStepExecution;
 import com.kafkick.core.batch.BatchExecutionRepository;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
@@ -49,6 +51,9 @@ class BatchExecutionQueryContractTest {
 
     @BeforeEach
     void seed() {
+        jdbcTemplate.update("DELETE FROM BATCH_STEP_EXECUTION WHERE JOB_EXECUTION_ID >= ?", ID_BASE);
+        jdbcTemplate.update(
+                "DELETE FROM BATCH_JOB_EXECUTION_PARAMS WHERE JOB_EXECUTION_ID >= ?", ID_BASE);
         jdbcTemplate.update("DELETE FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID >= ?", ID_BASE);
         jdbcTemplate.update("DELETE FROM BATCH_JOB_INSTANCE WHERE JOB_INSTANCE_ID >= ?", ID_BASE);
 
@@ -66,6 +71,48 @@ class BatchExecutionQueryContractTest {
         // 다른 잡. 잡 필터가 섞으면 안 된다.
         execution(13, 2, "2026-08-23 10:00:00.000000", "2026-08-23 10:00:01.000000",
                 "2026-08-23 10:00:02.000000", "COMPLETED", "COMPLETED");
+
+        // 실행 12(FAILED)의 스텝 둘. 순서가 흔들리면 같은 실행이 두 번 다르게 보인다.
+        step(20, 12, "step-two", "FAILED", "FAILED",
+                "org.springframework.dao.DataIntegrityViolationException: Duplicate entry"
+                        + " 'x' for key 'uk_issuance_usage' ... 스택 2,000자",
+                "2026-08-22 10:00:03.000000", "2026-08-22 10:00:05.000000",
+                7, 3, 1, 2, 4, 1, 2, 3);
+        step(21, 12, "step-one", "COMPLETED", "COMPLETED", "",
+                "2026-08-22 10:00:01.000000", "2026-08-22 10:00:03.000000",
+                100, 100, 0, 10, 0, 0, 0, 0);
+        // 시작도 못 한 스텝. 카운터가 전부 0 이고 시각이 비어 있다.
+        step(22, 11, "step-one", "STARTING", "EXECUTING", null, null, null,
+                0, 0, 0, 0, 0, 0, 0, 0);
+
+        // 실행 12 의 파라미터. **삽입 순서를 이름 역순으로** 넣어 정렬이 실제로 도는지 본다.
+        parameter(12, "attempt", "java.lang.Long", "2", "N");
+        parameter(12, "asOf", "java.time.LocalDateTime", "2026-08-22T00:00", "Y");
+    }
+
+    private void parameter(long executionId, String name, String type, String value,
+            String identifying) {
+        jdbcTemplate.update("INSERT INTO BATCH_JOB_EXECUTION_PARAMS"
+                + " (JOB_EXECUTION_ID, PARAMETER_NAME, PARAMETER_TYPE, PARAMETER_VALUE,"
+                + "  IDENTIFYING) VALUES (?, ?, ?, ?, ?)",
+                ID_BASE + executionId, name, type, value, identifying);
+    }
+
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    private void step(long id, long executionId, String name, String status, String exitCode,
+            String exitMessage, String start, String end,
+            long read, long write, long filter, long commit,
+            long rollback, long readSkip, long processSkip, long writeSkip) {
+        jdbcTemplate.update("INSERT INTO BATCH_STEP_EXECUTION"
+                + " (STEP_EXECUTION_ID, VERSION, STEP_NAME, JOB_EXECUTION_ID, CREATE_TIME,"
+                + "  START_TIME, END_TIME, STATUS, COMMIT_COUNT, READ_COUNT, FILTER_COUNT,"
+                + "  WRITE_COUNT, READ_SKIP_COUNT, WRITE_SKIP_COUNT, PROCESS_SKIP_COUNT,"
+                + "  ROLLBACK_COUNT, EXIT_CODE, EXIT_MESSAGE, LAST_UPDATED)"
+                + " VALUES (?, 0, ?, ?, '2026-08-22 10:00:00.000000', ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+                + "  ?, ?, ?, ?, '2026-08-22 10:00:00.000000')",
+                ID_BASE + id, name, ID_BASE + executionId, start, end, status,
+                commit, read, filter, write, readSkip, writeSkip, processSkip, rollback,
+                exitCode, exitMessage);
     }
 
     private void instance(long id, String jobName) {
@@ -81,6 +128,128 @@ class BatchExecutionQueryContractTest {
                 + "  END_TIME, STATUS, EXIT_CODE, EXIT_MESSAGE, LAST_UPDATED)"
                 + " VALUES (?, 0, ?, ?, ?, ?, ?, ?, '', ?)",
                 ID_BASE + id, ID_BASE + instanceId, create, start, end, status, exitCode, create);
+    }
+
+    /**
+     * <b>{@code IDENTIFYING} 이 {@code boolean} 으로 넘어온다.</b>
+     *
+     * <p>저장은 {@code 'Y'}/{@code 'N'} 인데 문자열로 흘려보내면 화면이 문자 비교를 하게
+     * 되고, 그 비교는 <b>예외 없이 조용히 틀린다.</b> 경계에서 바꾸고 그것을 여기서 못 박는다.
+     */
+    @Test
+    @DisplayName("IDENTIFYING 이 boolean 으로 넘어온다 — 문자 비교를 화면에 넘기지 않는다")
+    void mapsIdentifyingToBoolean() {
+        List<BatchJobParameter> parameters = repository.findParameters(ID_BASE + 12);
+
+        assertThat(parameters).extracting(BatchJobParameter::name, BatchJobParameter::identifying)
+                .containsExactly(
+                        org.assertj.core.api.Assertions.tuple("asOf", true),
+                        org.assertj.core.api.Assertions.tuple("attempt", false));
+    }
+
+    /**
+     * <b>정렬이 없으면 같은 실행을 두 번 열 때 순서가 달라진다.</b> 이 표에는 기본키가
+     * 없어(공식 스키마·우리 마이그레이션 둘 다 외래키뿐) 저장 순서가 곧 조회 순서라는
+     * 보장이 없다. 시드는 <b>일부러 이름 역순으로</b> 넣었다.
+     */
+    @Test
+    @DisplayName("파라미터가 이름순으로 나온다 — 삽입 순서가 아니다")
+    void ordersParametersByName() {
+        assertThat(repository.findParameters(ID_BASE + 12))
+                .extracting(BatchJobParameter::name)
+                .containsExactly("asOf", "attempt");
+    }
+
+    /** 파라미터 없이 돈 실행이 실재한다. 빈 목록을 오류로 바꾸면 그 정상 실행이 오류로 보인다. */
+    @Test
+    @DisplayName("파라미터 없이 돈 실행은 빈 목록이다")
+    void returnsEmptyForAnExecutionWithoutParameters() {
+        assertThat(repository.findParameters(ID_BASE + 13)).isEmpty();
+    }
+
+    /**
+     * <b>카운터 여덟 개가 자기 자리에 들어간다.</b>
+     *
+     * <p>이 매핑이 어긋나는 방향은 전부 <b>예외가 안 나는</b> 쪽이다 — 전부 {@code long} 이라
+     * read 와 write 를 바꿔 넣어도 컴파일도 되고 질의도 돈다. 그러면 화면은
+     * <b>그럴듯한 숫자</b>를 보여 주고 아무도 모른다. 그래서 여덟 개를 <b>전부 다른 값</b>으로
+     * 심는다 — 하나라도 자리가 바뀌면 여기서 걸린다.
+     */
+    @Test
+    @DisplayName("스텝 카운터 8종이 자리를 바꾸지 않는다")
+    void mapsAllEightCountersToTheirOwnFields() {
+        BatchStepExecution failed = repository.findSteps(ID_BASE + 12).stream()
+                .filter(step -> step.stepExecutionId() == ID_BASE + 20).findFirst().orElseThrow();
+
+        assertThat(failed.readCount()).isEqualTo(7);
+        assertThat(failed.writeCount()).isEqualTo(3);
+        assertThat(failed.filterCount()).isEqualTo(1);
+        assertThat(failed.commitCount()).isEqualTo(2);
+        assertThat(failed.rollbackCount()).isEqualTo(4);
+        assertThat(failed.readSkipCount()).isEqualTo(1);
+        assertThat(failed.processSkipCount()).isEqualTo(2);
+        assertThat(failed.writeSkipCount()).isEqualTo(3);
+    }
+
+    /**
+     * <b>실패 원문이 그대로 나가면 안 된다.</b> {@code EXIT_MESSAGE} 에는 스택트레이스가
+     * 통째로 들어가고 첫 줄에도 SQL 조각·제약 이름이 섞인다. 이 API 에는 <b>사용자 인증이
+     * 없다</b> — 공유 비밀 관문은 소지만 묻고 누가 불렀는지는 안 가른다.
+     */
+    @Test
+    @DisplayName("실패 원문 대신 요약만 나간다 — 제약 이름도 SQL 조각도 안 실린다")
+    void neverLeaksTheRawExitMessage() {
+        BatchStepExecution failed = repository.findSteps(ID_BASE + 12).stream()
+                .filter(step -> step.stepExecutionId() == ID_BASE + 20).findFirst().orElseThrow();
+
+        assertThat(failed.failure())
+                .as("예외 클래스 이름까지만 남아야 합니다")
+                .isEqualTo("DataIntegrityViolationException");
+        assertThat(failed.failure()).doesNotContain("uk_issuance_usage", "Duplicate entry", "스택");
+    }
+
+    /**
+     * <b>정렬이 흔들리면 같은 실행을 두 번 열었을 때 화면이 달라진다.</b> 시작 시각은
+     * nullable 이고 병렬 스텝이면 같은 값이 여럿 나온다 — 그래서 {@code STEP_EXECUTION_ID}
+     * 로 잇는다. 시드는 <b>일부러 이름 순서와 id 순서를 어긋나게</b> 넣었다
+     * (id 20 = step-two, id 21 = step-one).
+     */
+    @Test
+    @DisplayName("스텝이 STEP_EXECUTION_ID 순서로 나온다 — 이름 순서가 아니다")
+    void ordersStepsByExecutionId() {
+        assertThat(repository.findSteps(ID_BASE + 12))
+                .extracting(BatchStepExecution::stepName)
+                .containsExactly("step-two", "step-one");
+    }
+
+    /** 시작 못 한 스텝도 0 이나 생성 시각으로 메우지 않는다 — 화면이 "즉시 끝났다" 로 읽는다. */
+    @Test
+    @DisplayName("시작도 못 한 스텝의 시각이 비어 있다")
+    void keepsNullTimesForANeverStartedStep() {
+        BatchStepExecution notStarted = repository.findSteps(ID_BASE + 11).getFirst();
+
+        assertThat(notStarted.startedAt()).isNull();
+        assertThat(notStarted.endedAt()).isNull();
+        assertThat(notStarted.createdAt()).isNotNull();
+    }
+
+    /**
+     * <b>이 관제의 범용성이 여기 걸려 있다.</b> 어댑터가 잡 이름을 하나도 모르므로
+     * 도메인이 바뀌어도(쿠폰 → 사전예약) 새 잡이 그날부터 이 화면에 뜬다.
+     * 시드의 {@code alphaJob}·{@code betaJob} 은 이 저장소에 없는 이름이다 —
+     * <b>없는 잡의 스텝이 나온다는 것 자체가 증거다.</b>
+     */
+    @Test
+    @DisplayName("모르는 잡의 스텝도 그대로 나온다 — 잡 이름을 박지 않았다")
+    void worksForJobsThisRepositoryDoesNotKnow() {
+        assertThat(repository.findSteps(ID_BASE + 12)).isNotEmpty();
+    }
+
+    /** 없는 실행은 빈 목록이다. 예외로 죽으면 목록에서 눌러 들어온 사람이 500 을 본다. */
+    @Test
+    @DisplayName("없는 실행은 빈 목록이다")
+    void returnsEmptyForAnUnknownExecution() {
+        assertThat(repository.findSteps(ID_BASE + 9_999)).isEmpty();
     }
 
     @Test

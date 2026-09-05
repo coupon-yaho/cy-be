@@ -5,6 +5,15 @@ plugins {
 dependencies {
     implementation project(':core')
 
+    // outbox 재시도 지표(CY-908). **이 모듈의 첫 미터다.**
+    //
+    // 저장소에 미터를 두는 것이 가벼운 결정은 아니지만, 여기 말고는 셀 자리가 없다 —
+    // lease 만료 회수와 DEAD 전이가 **이 어댑터 안에서만** 일어난다. 릴레이는 그 일이
+    // 있었다는 사실조차 모른다(claimBatch 가 회수를 안쪽에서 하고 결과를 안 돌려준다).
+    //
+    // infra:mq 가 같은 이유로 같은 것을 물고 있다 — 레지스트리 구현은 앱의 actuator 가 준다.
+    implementation 'io.micrometer:micrometer-core'
+
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-jackson'
@@ -35,6 +44,9 @@ dependencies {
     // 모든 subproject 에 spring-boot-starter 를 걸고 그것이 snakeyaml 을 끌어온다.
     // 판정을 한 벌로 유지하는 것은 규약이지 컴파일 강제가 아니다.
     testFixturesImplementation 'org.yaml:snakeyaml'
+    // AppGrantsComposeContractTest 가 저장소 루트의 compose.yml 을 직접 읽는다.
+    // infra:mq 의 KafkaBrokerComposeContractTest 와 같은 이유로 명시한다.
+    testImplementation 'org.yaml:snakeyaml'
     // ConfigurationPropertyName 이 여기 있다. starter 두 단계를 거친 전이라 명시한다.
     testFixturesImplementation 'org.springframework.boot:spring-boot'
 
@@ -84,4 +96,22 @@ tasks.named('test') {
             rootProject.file('infra/redis/src/main/java'))
         .withPropertyName('observationQueryScopeInputs')
         .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// AppAccountAppendOnlyTest 가 클래스패스 **밖**의 스크립트와 목록을 읽고, 컨테이너 안에서
+// 그 스크립트를 그대로 돌린다. 입력으로 선언하지 않으면 목록만 고쳤을 때 Gradle 이
+// UP-TO-DATE 로 건너뛰어 **권한 계약이 검증되지 않은 채 통과한다.**
+tasks.named('test') {
+    inputs.dir(rootProject.file('infra/mysql/app-grants'))
+            .withPropertyName('appGrantScripts')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    // 같은 이유로 compose.yml 도 선언한다 — AppGrantsComposeContractTest 가 순서 계약을
+    // 여기서 읽는다. 빠뜨리면 depends_on 을 service_started 로 되돌려도 UP-TO-DATE 다.
+    inputs.files(rootProject.file('compose.yml'))
+            .withPropertyName('composeFile')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    // healthcheck 가 두드리는 포트 변수와 앱이 읽는 변수를 잇는 계약이 이 파일을 읽는다.
+    inputs.files(rootProject.file('api/src/main/resources/management.yml.example'))
+            .withPropertyName('apiManagementConfig')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }

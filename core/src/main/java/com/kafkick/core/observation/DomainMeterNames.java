@@ -97,6 +97,89 @@ public final class DomainMeterNames {
     public static final String NOTIFY_SENT = "app.notify.sent";
 
     /**
+     * outbox 릴레이가 <b>지금 워커 풀에 물려 둔</b> 건수 — 실행 중인 것과 큐에서 기다리는 것.
+     * 태그 없이 하나다.
+     *
+     * <p><b>이 게이지는 그 이상을 말하지 않는다.</b> 백프레셔가 걸렸는지는 여기서 못 읽는다 —
+     * 건너뛰는 판정은 {@code poll()} 이 불린 그 순간에만 나고, 스크레이프는 그 사이 아무
+     * 때나 찍힌다. 상한에 붙은 값 하나로는 <b>실제로 건너뛰었는지</b> 알 수 없고, 0 도
+     * <b>백로그가 없다는 뜻이 아니다</b>(방금 다 비운 직후일 수도, 아직 못 집은 것일 수도
+     * 있다). 한때 이 자리에 그 둘을 단정으로 적었다가 리뷰가 잡았다.
+     *
+     * <p>이 값은 <b>"지금 몇 건 물고 있나"</b> 하나로만 읽는다. 한가한 것과 막힌 것을
+     * 가르려면 {@link #OUTBOX_BACKLOG} 와 <b>함께</b> 봐야 한다 — 상한에 붙어 있는데
+     * 백로그가 안 줄면 워커가 모자란 것이고, 백로그도 0 이면 그냥 한가한 것이다.
+     *
+     * <p><b>백프레셔로 건너뛴 횟수는 아직 없다.</b> CY-906·CY-908 이 "CY-908 이 붙인다" 고
+     * 적어 뒀는데 그 티켓이 안 붙이고 닫혔다 — <b>닫힌 티켓을 가리키는 약속이 코드에
+     * 남아 있었다.</b> CY-913 이 백로그는 붙이고, 스킵 횟수는 <b>안 붙이기로 정했다</b>:
+     * 백로그와 인플라이트 둘이면 "막혔나" 에 답이 되고, 스킵은 그 둘에서 파생되는 값이라
+     * 세는 자리를 하나 더 두는 값어치가 없다.
+     */
+    public static final String NOTIFY_RELAY_IN_FLIGHT = "app.notify.relay.inflight";
+
+    /**
+     * outbox 명령이 <b>다시 집히도록 되돌려진</b> 횟수. {@link #TAG_REASON} 으로 나뉜다.
+     *
+     * <p>값은 <b>실제로 나오는 것만</b> 닫아 둔다 — {@code publish_failed}(발행이 던졌다) ·
+     * {@code notification_missing}(발행 대상이 사라졌다) · {@code lease_expired}(잡고 있던
+     * 워커가 lease 안에 못 끝냈다). 앞의 둘은 릴레이가, 마지막은 저장소 어댑터가 센다.
+     *
+     * <p><b>이름이 {@code app.notify.*} 가 아니라 {@code app.outbox.*} 인 이유</b> —
+     * 세는 대상이 <b>알림</b>이 아니라 <b>발행 명령</b>이다. 한 알림이 여러 번 되돌려질 수
+     * 있어서 {@link #NOTIFY_SENT} 와 축이 다르다. 같은 접두사에 두면 두 값을 나눠 보고
+     * "재시도율" 이라 부르고 싶어지는데, 분모가 다르다.
+     */
+    public static final String OUTBOX_RETRY = "app.outbox.retry";
+
+    /**
+     * 되돌릴 때 <b>계획한</b> 대기 시간. {@link #TAG_REASON} 으로 나뉜다.
+     *
+     * <p><b>이 티켓의 핵심이다</b> — 분포가 평평하면 Full Jitter 가 일하는 것이고,
+     * 뾰족하면 아직 뭉치는 것이다. 그것은 백분위로는 안 보이고 <b>버킷</b>으로만 보이므로
+     * {@code observation.yml} 에서 이 이름에만 {@code percentiles-histogram} 을 켠다.
+     *
+     * <p><b>{@code Timer} 지만 잰 시간이 아니다.</b> 실제로 얼마나 기다렸는지가 아니라
+     * <b>얼마를 기다리라고 적었는지</b>다. 그래서 {@code _sum / _count} 를 지연으로 읽으면
+     * 안 된다 — 그 값은 "평균 계획 대기" 이지 처리 지연이 아니다.
+     *
+     * <p><b>{@link #TAG_REASON} 을 붙이는 대가</b> — 값 3종 × 버킷이라 시계열이 3배다.
+     * 그래도 붙이는 이유는, 뭉침이 가장 잘 나는 것이 {@code lease_expired} 인데
+     * 섞어 놓으면 <b>다른 둘이 그 봉우리를 덮어 버리기 때문</b>이다. 그것을 보려고 만든
+     * 지표가 그것을 못 보게 된다.
+     */
+    public static final String OUTBOX_RETRY_DELAY = "app.outbox.retry.delay";
+
+    /**
+     * 재시도 상한(10회)을 넘겨 <b>종착</b>한 outbox <b>명령</b> 수.
+     * {@link #TAG_REASON} 으로 나뉘고, 값은 {@link #OUTBOX_RETRY} 와 <b>같은 셋</b>이다 —
+     * 마지막 실패의 사유가 그대로 붙는다.
+     *
+     * <p><b>세는 단위가 명령이지 알림이 아니다.</b> 종착한 알림을 사람이 다시 보내면
+     * 새 명령이 생기므로, 이 값이 곧 "영영 안 간 알림 수" 는 아니다 — 그렇게 읽으면
+     * 재발송으로 살아난 것까지 실패로 센다. <b>지금 사람 손이 필요한 건수</b>로 읽는다.
+     *
+     * <p>전이가 저장소 어댑터에서만 일어나므로({@code markFailed} 와 만료 회수) 세는 곳도
+     * 거기다.
+     */
+    public static final String OUTBOX_DEAD = "app.outbox.dead";
+
+    /**
+     * 아직 안 나간 발행 명령 수 — <b>백로그</b>. 태그 없이 하나다.
+     *
+     * <p><b>{@link #NOTIFY_RELAY_IN_FLIGHT} 와 짝이다.</b> 인플라이트만으로는 <b>한가한
+     * 것과 막힌 것을 구분하지 못한다</b> — 상한에 붙어 있는데 백로그가 안 줄면 워커가
+     * 모자란 것이고, 백로그도 0 이면 그냥 보낼 것이 없는 것이다. CY-906·CY-908 이
+     * <i>"백로그는 별도 지표여야 한다"</i> 고 적어 두고 안 붙였던 자리다.
+     *
+     * <p>{@code PENDING} 과 {@code IN_PROGRESS} 를 <b>함께</b> 센다. 둘 다 "아직 안 나갔다"
+     * 이고, {@code IN_PROGRESS} 를 빼면 <b>릴레이가 붙잡고 못 끝내는 상태에서 0 으로
+     * 보인다</b> — 그것이 정확히 사고 상태다. {@code DEAD} 는 안 센다: 다시 시도되지 않으니
+     * 백로그가 아니라 사람이 처리할 목록이고, 그 축은 {@link #OUTBOX_DEAD} 가 진다.
+     */
+    public static final String OUTBOX_BACKLOG = "app.outbox.backlog";
+
+    /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
      *
      * <p>0 이 아니면 화면의 attempt 수치가 이미 비어 있다는 뜻이다. 다만 이 값으로 TPS·성공률을

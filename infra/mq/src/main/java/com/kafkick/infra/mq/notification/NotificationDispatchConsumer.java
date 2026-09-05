@@ -52,7 +52,7 @@ public class NotificationDispatchConsumer {
         }
 
         try {
-            sender.send(decision.notification());
+            sender.send(decision.notification(), decision.idempotencyKey());
         } catch (NotificationSendException failure) {
             settleFailure(decision, failure.reason(), failure, startedAt, acknowledgment);
             return;

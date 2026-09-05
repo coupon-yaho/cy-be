@@ -344,6 +344,40 @@ services:
       - ./infra/mysql/obs-grants:/obs-grants:ro
     entrypoint: ["sh", "/obs-grants/apply.sh"]
 
+  # 앱 계정의 스키마 단위 권한을 걷고 테이블 단위로 다시 준다.
+  #
+  # ⚠️ **Flyway 뒤에 돌아야 한다.** 마이그레이션이 이 계정으로 도는데(storage.yml 의 @Primary
+  #    풀), 스크립트가 그것과 경쟁하면 테이블 목록이 불완전해지고 **빠진 테이블은 DML 권한을
+  #    못 받아 앱이 런타임에 1142 로 죽는다.**
+  #
+  # 순서는 **아래 depends_on 이 지킨다** — api 의 healthcheck 가 actuator 응답을 보는데,
+  # 그 응답은 Flyway 가 끝난 뒤에야 나온다(api 의 healthcheck 주석에 실측을 적었다).
+  # `restart: no` 라 한 번 실패하면 재시도되지 않으므로, 스크립트가 스스로 판정하려 들지
+  # 않고 compose 가 세운 순서를 믿는다 — 스스로 판정하려던 두 번의 시도가 왜 틀렸는지는
+  # apply.sh ② 에 적혀 있다.
+  app-grants:
+    image: mysql:8.4
+    profiles: ["app-grants"]
+    restart: "no"
+    # obs-grants 와 같은 이유로 env_file 을 안 쓴다. root 로 GRANT 를 주는 자리라 무관한
+    # 시크릿까지 프로세스 환경에 실리면 안 된다.
+    # 앱 계정 **비밀번호**는 일부러 뺐다 — 권한을 주는 데는 이름만 필요하다.
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      MYSQL_HOST: mysql
+    depends_on:
+      mysql:
+        condition: service_healthy
+      api:
+        # **service_started 가 아니다.** 프로세스 시작은 Flyway 종료를 뜻하지 않는다.
+        condition: service_healthy
+    volumes:
+      # 디렉터리째 마운트한다. apply.sh 가 같은 디렉터리의 append-only.txt 를 읽는다.
+      - ./infra/mysql/app-grants:/app-grants:ro
+    entrypoint: ["sh", "/app-grants/apply.sh"]
+
   api:
     image: ${COUPON_IMAGE}:${API_IMAGE_TAG}
     pull_policy: always
@@ -387,6 +421,43 @@ services:
       #
       #    확인은 컨테이너 안에서 한다:
       #      docker exec coupon-yaho-api-1 wget -qO- localhost:9090/actuator/health
+    # **Flyway 종료 신호다.** Spring 은 Flyway 를 컨텍스트 초기화 중에 돌리고 웹 서버는
+    # 그 뒤에 뜬다 — 실측으로 기동 로그에서 "Successfully applied 45 migrations" 가
+    # "Tomcat started on port" 보다 앞선다. 그래서 actuator 가 응답한다는 것은
+    # **마이그레이션이 끝났다**는 뜻이고, 그 신호를 **실행 중인 이미지 자신이** 낸다.
+    # app-grants 가 이것을 기다린다(service_healthy) — 체크아웃과 이미지 태그가 어긋나도
+    # 정확한 유일한 판정이다.
+    #
+    # ⚠️ **/actuator/health 가 아니라 /actuator/metrics 다.** 여기서 알고 싶은 것은
+    #    "떴는가"(=Flyway 가 끝났는가)이지 "건강한가" 가 아니다. health 는 Redis·Kafka
+    #    인디케이터를 합산하므로, 위에서 kafka 를 depends_on 에 일부러 안 적어 둔 회차에서
+    #    api 가 영영 healthy 가 안 되고 **권한 적용이 통째로 안 도는** 상태가 된다.
+    #    metrics 는 컨텍스트가 떴으면 200 을 준다 — 딱 필요한 만큼만 본다.
+    #
+    # 포트는 **MANAGEMENT_PORT** 다. 9090 을 박으면 그 값을 바꾼 환경에서 api 가 영영
+    # healthy 가 안 되고 권한 적용이 안 돈다.
+    #
+    # ⚠️ **`$$` 다.** `$` 하나면 compose 가 **호스트에서** 치환하는데, api 가 실제로 쓰는
+    #    값은 `env_file: .env` 로 **컨테이너에** 주입된 것이다. 둘의 출처가 달라서
+    #    셸에 MANAGEMENT_PORT 가 export 돼 있거나 `--env-file` 로 다른 파일을 주면
+    #    엇갈린다 — api 는 멀쩡히 떠 있는데 healthcheck 만 엉뚱한 포트를 두드리고,
+    #    이것을 기다리는 app-grants 가 영영 안 돈다. `$$` 로 넘기면 컨테이너 셸이
+    #    자기 환경에서 편다(CMD-SHELL 은 /bin/sh -c 다).
+    #
+    # ⚠️ 첫 판은 MANAGEMENT_SERVER_PORT 를 썼는데 **그 이름은 죽어 있다.** api 의
+    #    application.yml 과 management.yml 이 같은 키를 서로 다른 변수로 적고 있었고,
+    #    spring.config.import 로 들어온 문서가 이긴다 — 실측했다: 둘을 각각 9391·9392 로
+    #    주고 컨텍스트를 띄우니 management.server.port 가 **9391**(=MANAGEMENT_PORT)이었다.
+    #    같은 커밋에서 application.yml 쪽 이름도 맞췄다.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:$${MANAGEMENT_PORT:-9090}/actuator/metrics
+      interval: 5s
+      timeout: 3s
+      # 마이그레이션 45건이 도는 시간까지 포함한다 — 첫 기동은 스키마를 통째로 만든다.
+      start_period: 60s
+      retries: 30
     depends_on:
       mysql:
         condition: service_healthy
