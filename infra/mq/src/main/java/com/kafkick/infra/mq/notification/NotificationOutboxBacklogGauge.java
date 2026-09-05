@@ -27,9 +27,10 @@ import com.kafkick.core.observation.DomainMeterNames;
  * <h2>세는 비용</h2>
  *
  * <p>{@code ix_notification_outbox_pending} 이 {@code status} 를 선두로 갖고 있어
- * <b>커버링 인덱스만으로 센다</b>(실측: {@code EXPLAIN} 이
- * {@code type=index key=ix_notification_outbox_pending Extra=Using where; Using index}).
- * 표를 훑지 않으므로 백로그가 커져도 비용이 그만큼 늘지 않는다.
+ * <b>그 상태 구간만 읽는다</b>(실측: {@code EXPLAIN} 이 {@code type=ref}).
+ * 상태마다 따로 세서 더하는 이유가 그것이다 — {@code IN} 하나로 묶으면 {@code type=index}
+ * 가 되어 <b>인덱스를 끝까지 훑고</b>, {@code PUBLISHED}·{@code DEAD} 가 쌓일수록 비싸진다.
+ * 자세한 근거는 어댑터의 {@code countBacklog} 에 적었다.
  */
 public class NotificationOutboxBacklogGauge {
 

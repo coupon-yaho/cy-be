@@ -400,10 +400,21 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * 처음에 나는 {@code Using index} 만 보고 "인덱스만으로 센다" 로 읽었다 —
      * <b>커버링인 것과 구간만 읽는 것은 다르다.</b>
      *
-     * <p>{@code ref} 두 번이 {@code index} 한 번보다 싸다. 두 값은 서로 겹치지 않는
-     * 상태라 더하면 같은 수다.
+     * <p>{@code ref} 두 번이 {@code index} 한 번보다 싸다.
+     *
+     * <h2>두 질의를 한 스냅샷으로 묶는다</h2>
+     *
+     * <p>나눠 세면 <b>그 사이에 행이 옮겨 갈 수 있다.</b> 클레임이
+     * {@code PENDING → IN_PROGRESS} 로 옮기면 <b>두 번 세어지고</b>, 되돌리기가 반대로
+     * 옮기면 <b>한 번도 안 세어진다.</b> 한때 여기 <i>"두 값은 겹치지 않으니 더하면 같은
+     * 수"</i> 라고 적었는데, 그것은 <b>같은 순간에 볼 때</b>만 참이다 — 리뷰가 짚었다.
+     *
+     * <p>{@code REPEATABLE READ} 라 한 트랜잭션 안의 두 조회가 같은 스냅샷을 본다
+     * (실측: {@code @@transaction_isolation = REPEATABLE-READ}). 읽기 전용이라 잠금도
+     * 안 잡는다.
      */
     @Override
+    @Transactional(readOnly = true)
     public long countBacklog() {
         return countByStatus("PENDING") + countByStatus("IN_PROGRESS");
     }
