@@ -46,6 +46,10 @@ class FailureSummaryPrefixContractTest {
      * {@code "COUPON_ROUND-001"}·{@code "ADMIN-INQUIRY-001"} 처럼 <b>문자열 리터럴로 적힌</b>
      * 에러코드.
      *
+     * <p><b>주석 속 예시도 걷힌다.</b> 이 정규식은 따옴표만 보고 코드인지 아닌지는 모른다 —
+     * 본코드 javadoc 에 {@code "XCOUPON-002"} 같은 예시를 <b>따옴표째</b> 적으면 진짜
+     * 에러코드로 걷혀 이 검사가 빨개진다(실제로 그랬다). 그래서 예시는 따옴표 없이 적는다.
+     *
      * <p><b>접두사에 하이픈이 여러 개 올 수 있다.</b> 첫 판은 {@code [A-Z][A-Z_]*-} 로 써서
      * {@code ADMIN-COUPON-ROUND-001} 을 <b>아예 수집하지 못했고</b>, 그래서 이 검사가
      * 조용히 통과했다 — <b>세는 쪽이 알아보는 쪽과 같은 맹점</b>을 가지면 검사가 검사를
@@ -94,6 +98,27 @@ class FailureSummaryPrefixContractTest {
                 .as("이 접두사의 코드는 예외 이름으로 뭉개져 화면에서 사라집니다. "
                         + "FailureSummary.DOMAIN_CODE 에 추가하십시오")
                 .isEmpty();
+    }
+
+    /**
+     * <b>접두사가 낱말 가운데 있으면 코드가 아니다.</b>
+     *
+     * <p>{@code find()} 는 문자열 어디서든 찾는다. 실패 원문은 스택트레이스라 클래스
+     * 이름·패키지 조각이 잔뜩 섞여 있고, 그중 하나가 우연히 우리 접두사로 끝나면
+     * <b>없는 에러코드가 화면에 뜬다.</b> 실측으로 {@code NOTADMIN-001} 에서
+     * {@code ADMIN-001} 이 나오는 것을 확인했다(경계 넣기 전).
+     */
+    @Test
+    @DisplayName("접두사가 낱말 가운데 있으면 코드로 안 읽는다")
+    void doesNotMatchInsideALongerWord() {
+        assertThat(FailureSummary.of("NOTADMIN-001 실패")).isNotEqualTo("ADMIN-001");
+        assertThat(FailureSummary.of("XCOUPON-002")).isNotEqualTo("COUPON-002");
+        assertThat(FailureSummary.of("프리BATCH-003")).isNotEqualTo("BATCH-003");
+        // 정상 위치는 그대로 산다 — 경계를 넣다 진짜 코드까지 막으면 더 나쁘다.
+        assertThat(FailureSummary.of("ADMIN-001 정상")).isEqualTo("ADMIN-001");
+        assertThat(FailureSummary.of("처리 중 COMMON-004 발생")).isEqualTo("COMMON-004");
+        // 한국어 조사가 붙어도 산다. 뒤 경계는 숫자만 막는다.
+        assertThat(FailureSummary.of("COMMON-001입니다")).isEqualTo("COMMON-001");
     }
 
     /** 밑줄이 들어간 접두사가 실제로 살아난다 — 리뷰가 잡은 첫 자리다. */

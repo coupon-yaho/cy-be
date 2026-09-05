@@ -38,12 +38,39 @@ public final class FailureSummary {
      *
      * <p><b>교대 순서는 긴 것부터다.</b> {@code ADMIN} 이 {@code ADMIN-INQUIRY} 를 가리지
      * 않도록 — 역추적이 있어 순서가 없어도 맞지만, 읽는 사람에게 의도를 남긴다.
+     *
+     * <p><b>앞뒤에 경계가 있다.</b> 없으면 부분 일치한다 — 실측이다:
+     *
+     * <pre>
+     *   NOTADMIN-001 실패  -&gt;  ADMIN-001     (경계 없을 때)
+     *   XCOUPON-002        -&gt;  COUPON-002
+     * </pre>
+     *
+     * <p><b>이 예시에 따옴표를 안 쓴다.</b> {@link FailureSummaryPrefixContractTest} 가
+     * 본코드의 <b>문자열 리터럴</b>을 훑어 접두사를 모으는데, 주석 속 예시도 따옴표가
+     * 있으면 진짜 에러코드로 걷힌다 — 실제로 {@code XCOUPON} 이 그렇게 걸렸다.
+     *
+     * <p>{@code find()} 는 <b>문자열 어디서든</b> 찾으므로 접두사가 낱말 가운데 있어도
+     * 걸린다. 실패 원문은 스택트레이스라 <b>클래스 이름·패키지 조각이 잔뜩 섞여 있고</b>,
+     * 그중 하나가 우연히 우리 접두사로 끝나면 <b>없는 에러코드가 화면에 뜬다.</b>
+     * 리뷰가 잡았다.
+     *
+     * <p>앞 경계는 <b>유니코드 글자</b>까지 본다({@code \p{L}}) — ASCII 만 막으면
+     * 한국어 낱말이 바로 앞에 붙은 경우를 놓친다.
+     *
+     * <p>뒤 경계는 숫자만 막는다({@code (?![0-9])}) — 세 자리로 정의된 코드이므로 네 자리는
+     * 우리 것이 아니다. 뒤에 글자가 오는 것은 막지 않는다: {@code COMMON-001입니다} 처럼
+     * 조사가 붙는 한국어 문장이 실제로 온다.
      */
     private static final Pattern DOMAIN_CODE = Pattern.compile(
-            "(?:ADMIN-COUPON-ROUND|ADMIN-INQUIRY|ADMIN"
+            // 앞 경계. 영숫자·밑줄·하이픈이 붙어 있으면 그 코드가 아니다 — 아래 설명.
+            "(?<![\\p{L}\\p{N}_-])"
+                    + "(?:ADMIN-COUPON-ROUND|ADMIN-INQUIRY|ADMIN"
                     + "|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY"
                     + "|COUPON_ROUND|COUPON_TEMPLATE|COUPON"
-                    + "|EXPIRATION|NOTIFY|OVERVIEW|RUNTIME_CONFIG|VERIFICATION)-\\d{3}");
+                    + "|EXPIRATION|NOTIFY|OVERVIEW|RUNTIME_CONFIG|VERIFICATION)-\\d{3}"
+                    // 뒤 경계. 네 자리 이상이면 우리 코드가 아니다(예: ISO-8859-1).
+                    + "(?![0-9])");
 
     /** 그 밖에는 예외 이름만 남긴다. 메시지에는 SQL 조각이 섞일 수 있다. */
     private static final Pattern EXCEPTION_TYPE =
