@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.ObjectProvider;
 
 import com.kafkick.api.admin.batch.dto.BatchHistoryResponse;
+import com.kafkick.api.admin.batch.dto.BatchParameterResponse;
 import com.kafkick.api.admin.batch.dto.BatchStepHistoryResponse;
 import com.kafkick.api.admin.support.AdminApiErrorCode;
 import com.kafkick.api.caller.Caller;
@@ -132,5 +133,28 @@ public class BatchHistoryController {
         }
         return ResponseEnvelope.success(
                 BatchStepHistoryResponse.of(jobExecutionId, source.findSteps(jobExecutionId)));
+    }
+
+    /**
+     * 한 실행이 <b>무슨 조건으로</b> 돌았는지 — 재현의 시작점.
+     *
+     * <p>스텝 조회와 같은 이유로 목록에 안 끼운다(N+1). 그리고 같은 이유로 없는 실행도
+     * 200 에 빈 목록이다 — <b>파라미터 없이 돈 실행</b>이 실재하므로, 빈 목록을 404 로
+     * 바꾸면 그 정상 실행이 오류로 보인다.
+     *
+     * @param jobExecutionId 실행 식별자
+     * @param caller 요청자 식별용. <b>권한 판정에 쓰지 않는다</b>
+     * @return 이름순 파라미터 목록
+     */
+    @GetMapping("/batch-executions/{jobExecutionId}/parameters")
+    public ResponseEnvelope<BatchParameterResponse> parameters(
+            @PathVariable long jobExecutionId,
+            Caller caller) {
+        BatchExecutionRepository source = repository.getIfAvailable();
+        if (source == null) {
+            throw new BusinessException(AdminApiErrorCode.OBSERVATION_DISABLED);
+        }
+        return ResponseEnvelope.success(
+                BatchParameterResponse.of(jobExecutionId, source.findParameters(jobExecutionId)));
     }
 }
