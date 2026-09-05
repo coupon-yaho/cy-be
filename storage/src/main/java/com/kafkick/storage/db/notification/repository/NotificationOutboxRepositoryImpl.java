@@ -39,14 +39,14 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
 
 
     /**
-     * 백로그를 상태 하나씩 세는 질의.
+     * 백로그 질의.
      *
      * <p><b>패키지 가시성이다</b> — {@code BacklogPlanContractTest} 가 <b>이 문자열 그대로</b>
-     * {@code EXPLAIN} 을 건다. 테스트가 자기 SQL 을 적어 두면 어댑터를 {@code IN} 하나로
-     * 되돌려도 <b>테스트는 그대로 통과한다</b>(실제로 그랬다).
+     * 실행계획을 잰다. 테스트가 자기 SQL 을 적어 두면 구현을 바꿔도 <b>테스트는 그대로
+     * 통과한다</b>(실제로 그랬다).
      */
-    static final String COUNT_BY_STATUS =
-            "SELECT COUNT(*) FROM notification_outbox WHERE status = ?";
+    static final String COUNT_BACKLOG =
+            "SELECT COUNT(*) FROM notification_outbox WHERE status IN ('PENDING','IN_PROGRESS')";
 
     private final NotificationOutboxJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
@@ -385,42 +385,30 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     }
 
     /**
-     * <b>상태마다 따로 세서 더한다 — {@code IN} 하나로 묶지 않는다.</b>
+     * <b>인덱스의 두 구간만 읽는다 — 표도, 인덱스 전체도 안 훑는다.</b>
      *
-     * <p>실측이 그 이유다. 같은 인덱스를 쓰는데 접근 방식이 다르다:
+     * <p>15초마다 도는 질의라 <b>누적 행 수에 비례해 비싸지면 관측이 사고를 키운다.</b>
+     * 그래서 그렇지 않다는 것을 실측으로 확인했다 — {@code PUBLISHED} 300건을 심고
+     * {@code EXPLAIN ANALYZE} 를 걸면:
      *
      * <pre>
-     *   WHERE status IN ('PENDING','IN_PROGRESS')  →  type=index  (인덱스 **전체** 스캔)
-     *   WHERE status = 'PENDING'                   →  type=ref    (그 값 구간만)
+     *   Covering index range scan using ix_notification_outbox_pending
+     *     over (status = 'IN_PROGRESS') OR (status = 'PENDING')
+     *     (actual rows=5)
      * </pre>
      *
-     * <p>{@code type=index} 는 커버링이라 표는 안 읽지만 <b>인덱스는 끝까지 훑는다</b> —
-     * {@code PUBLISHED}·{@code DEAD} 가 쌓일수록 비용이 는다. 15초마다 도는 질의가
-     * 누적 행 수에 비례해 비싸지면 <b>관측이 사고를 키운다.</b> 리뷰가 짚었고,
-     * 처음에 나는 {@code Using index} 만 보고 "인덱스만으로 센다" 로 읽었다 —
-     * <b>커버링인 것과 구간만 읽는 것은 다르다.</b>
+     * <p>읽은 행이 <b>백로그 크기(5)</b>이지 표 크기(305)가 아니다.
      *
-     * <p>{@code ref} 두 번이 {@code index} 한 번보다 싸다.
-     *
-     * <h2>두 질의를 한 스냅샷으로 묶는다</h2>
-     *
-     * <p>나눠 세면 <b>그 사이에 행이 옮겨 갈 수 있다.</b> 클레임이
-     * {@code PENDING → IN_PROGRESS} 로 옮기면 <b>두 번 세어지고</b>, 되돌리기가 반대로
-     * 옮기면 <b>한 번도 안 세어진다.</b> 한때 여기 <i>"두 값은 겹치지 않으니 더하면 같은
-     * 수"</i> 라고 적었는데, 그것은 <b>같은 순간에 볼 때</b>만 참이다 — 리뷰가 짚었다.
-     *
-     * <p>{@code REPEATABLE READ} 라 한 트랜잭션 안의 두 조회가 같은 스냅샷을 본다
-     * (실측: {@code @@transaction_isolation = REPEATABLE-READ}). 읽기 전용이라 잠금도
-     * 안 잡는다.
+     * <p>⚠️ <b>한때 이것을 상태별 질의 둘로 쪼갰다.</b> {@code EXPLAIN} 의
+     * {@code type=index} 를 <i>"인덱스를 끝까지 훑는다"</i> 로 읽었기 때문인데,
+     * <b>접근 방식 이름만 보고 비용을 단정한 것이었다</b> — 리뷰가 그 단정이 입증되지
+     * 않았다고 짚었고, 재 보니 실제로는 두 구간만 읽는다. 쪼개면 질의가 둘이라
+     * <b>그 사이에 행이 옮겨 가</b> 두 번 세이거나 안 세이므로, 되돌리는 것이 단순하면서
+     * 더 정확하다 — 한 문장이면 스냅샷 걱정 자체가 없다.
      */
     @Override
-    @Transactional(readOnly = true)
     public long countBacklog() {
-        return countByStatus("PENDING") + countByStatus("IN_PROGRESS");
-    }
-
-    private long countByStatus(String status) {
-        Long count = jdbcTemplate.queryForObject(COUNT_BY_STATUS, Long.class, status);
+        Long count = jdbcTemplate.queryForObject(COUNT_BACKLOG, Long.class);
         return count == null ? 0L : count;
     }
 
