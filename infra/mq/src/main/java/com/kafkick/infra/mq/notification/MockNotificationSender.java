@@ -26,7 +26,7 @@ import com.kafkick.core.notification.domain.Notification;
         matchIfMissing = true)
 public class MockNotificationSender implements NotificationSender {
     @Override
-    public void send(Notification notification) {
+    public void send(Notification notification, String idempotencyKey) {
         if (notification == null) {
             throw new IllegalArgumentException("notification은 필수입니다.");
         }
