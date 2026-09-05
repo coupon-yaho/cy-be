@@ -31,9 +31,10 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 있게 갈리는지.
  *
  * <p><b>없는 실행이 500 이 아니라 404 인 것이 특히 중요하다.</b>
- * {@code JobRepository.getJobExecution} 은 없으면 {@code null} 을 돌려주는데, 그것을 그대로
- * {@code JobOperator} 에 넘기면 {@code NullPointerException} 이 나고 화면은 500 을 본다 —
- * "없는 실행" 과 "서버가 깨졌다" 를 구분하지 못한다.
+ * {@code JobRepository.getJobExecution} 은 없는 id 에 <b>{@code EmptyResultDataAccessException}
+ * 을 던진다</b>(실측 — 처음에는 {@code null} 을 돌려준다고 적어 뒀다가 틀렸다).
+ * 그것을 안 잡으면 화면은 500 을 보고 <b>"없는 실행" 과 "서버가 깨졌다" 를 구분하지
+ * 못한다.</b>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
@@ -180,6 +181,44 @@ class BatchControlApiTest {
             assertThat(VerifyApiProbe.json(response).path("error").path("code").asText())
                     .as("성공한 실행을 다시 돌리면 같은 일이 두 번 처리된다")
                     .isEqualTo("BATCH-002");
+        }
+    }
+
+    /**
+     * <b>사람이 멈춘 잡은 다시 돌릴 수 있어야 한다.</b>
+     *
+     * <p>첫 판의 가드가 {@code isUnsuccessful() || isRunning()} 이었고 <b>틀렸다.</b>
+     * {@code BatchStatus} 를 실측하니 {@code STOPPED} 는 둘 다 {@code false} 다 —
+     * 그래서 방금 중단한 잡을 다시 못 돌렸고, 그것도 <b>"이미 성공했다"(BATCH-002)는
+     * 거짓 이유</b>로 거절했다. 중단 기능을 쓴 사람이 바로 다음에 막히는 셈이라 최악이다.
+     * 리뷰가 잡았다.
+     *
+     * <pre>
+     *   running=false unsuccessful=false : COMPLETED · STOPPED   ← 둘을 가려야 한다
+     *   running=true                     : STARTING · STARTED · STOPPING
+     *   unsuccessful=true                : FAILED · ABANDONED · UNKNOWN
+     * </pre>
+     *
+     * <p><b>여기서 재는 것은 "우리가 막지 않는다" 하나다.</b> 실제 재시작이 성공하는지는
+     * 잡 정의와 스텝 상태에 달렸고 그 판정은 프레임워크가 한다 — 심어 둔 픽스처는 진짜
+     * 스텝 이력이 아니라서, 여기서 성공까지 요구하면 <b>프레임워크를 재는 테스트</b>가 된다.
+     * 그래서 단언이 {@code isNotEqualTo("BATCH-002")} 인 것이 <b>의도</b>다.
+     */
+    @Test
+    @DisplayName("STOPPED 실행을 우리가 BATCH-002 로 막지 않는다 — 성공까지는 프레임워크 몫")
+    void restartingAStoppedExecutionIsNotRefusedAsCompleted() throws Exception {
+        try (RunningJobFixture stopped = RunningJobFixture.plant(
+                jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(4), DEAD, DEAD)) {
+            jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET STATUS='STOPPED', EXIT_CODE='STOPPED',"
+                            + " END_TIME=CURRENT_TIMESTAMP(6) WHERE JOB_EXECUTION_ID=:id")
+                    .param("id", stopped.executionId()).update();
+
+            var response = api().post(
+                    "/api/v1/admin/batch/runs/" + stopped.executionId() + "/restart");
+
+            assertThat(VerifyApiProbe.json(response).path("error").path("code").asText())
+                    .as("중단 기능을 쓴 사람이 바로 다음에 '이미 성공했다' 로 막히면 안 된다")
+                    .isNotEqualTo("BATCH-002");
         }
     }
 

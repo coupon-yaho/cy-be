@@ -1,6 +1,7 @@
 // 배치 실행을 사람이 다시 돌리거나 멈춥니다.
 package com.kafkick.batch.api;
 
+import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.launch.JobExecutionNotRunningException;
 import org.springframework.batch.core.launch.JobOperator;
@@ -80,7 +81,12 @@ public class BatchControlController {
     }
 
     /**
-     * 실패한 실행을 <b>같은 파라미터로</b> 다시 돌린다.
+     * <b>끝나지 않았거나 실패했거나 멈춘</b> 실행을 같은 파라미터로 다시 돌린다.
+     *
+     * <p><b>막는 것은 {@code COMPLETED} 하나다.</b> {@code STOPPED}(사람이 멈춘 것)와
+     * {@code FAILED}·{@code ABANDONED} 는 정상적인 재시작 대상이고, 실제로 돌 수 있는지는
+     * 프레임워크가 판단한다 — 한때 이 문장이 "실패한 실행" 만 말해서 {@code STOPPED} 가
+     * 대상인지 읽을 수 없었다.
      *
      * <p><b>성공한 실행은 거절된다</b>({@code 409 BATCH-002}). 그것이 이 동작의 핵심
      * 안전장치다 — 성공한 실행을 다시 돌리면 같은 일이 두 번 처리된다. 같은 조건으로 또
@@ -96,21 +102,33 @@ public class BatchControlController {
     @PostMapping("/runs/{executionId}/restart")
     public ResponseEnvelope<Restarted> restart(@PathVariable long executionId) {
         JobExecution execution = require(executionId);
-        // **성공한 인스턴스는 여기서 막는다.** id 받는 restart 가 이 판정을 예외로 냈는데
+        // **막는 것은 COMPLETED 하나다.** id 받는 restart 가 이 판정을 예외로 냈는데
         // 그 오버로드가 제거 예정이라, JobExecution 을 받는 쪽으로 옮기면서 판정 하나가
         // 우리에게 남았다 — 프레임워크가 안 하는 것만 우리가 한다.
-        if (execution.getStatus().isUnsuccessful() || execution.getStatus().isRunning()) {
-            try {
-                return ResponseEnvelope.success(new Restarted(executionId,
-                        jobOperator.restart(execution).getId()));
-            } catch (JobRestartException refused) {
-                throw new BusinessException(BatchControlErrorCode.RESTART_REFUSED,
-                        "jobExecutionId=" + executionId
-                                + " cause=" + refused.getClass().getSimpleName());
-            }
+        //
+        // ⚠️ 첫 판은 `isUnsuccessful() || isRunning()` 이었고 **틀렸다.**
+        //    BatchStatus 를 실측하니 STOPPED 는 둘 다 false 다 —
+        //    사람이 방금 멈춘 잡을 다시 못 돌리게 막고, 그것도 "이미 성공했다"(BATCH-002)는
+        //    거짓 이유로 거절했다. 리뷰가 잡았다.
+        //
+        //    running=false unsuccessful=false : COMPLETED · STOPPED
+        //    running=true                     : STARTING · STARTED · STOPPING
+        //    unsuccessful=true                : FAILED · ABANDONED · UNKNOWN
+        //
+        //    다시 시작하면 안 되는 것은 **COMPLETED 뿐**이다. 나머지는 프레임워크가
+        //    판단한다(못 돌리면 JobRestartException 을 던진다).
+        if (execution.getStatus() == BatchStatus.COMPLETED) {
+            throw new BusinessException(BatchControlErrorCode.ALREADY_COMPLETED,
+                    "jobExecutionId=" + executionId + " status=" + execution.getStatus());
         }
-        throw new BusinessException(BatchControlErrorCode.ALREADY_COMPLETED,
-                "jobExecutionId=" + executionId + " status=" + execution.getStatus());
+        try {
+            return ResponseEnvelope.success(new Restarted(executionId,
+                    jobOperator.restart(execution).getId()));
+        } catch (JobRestartException refused) {
+            throw new BusinessException(BatchControlErrorCode.RESTART_REFUSED,
+                    "jobExecutionId=" + executionId
+                            + " cause=" + refused.getClass().getSimpleName());
+        }
     }
 
     /**

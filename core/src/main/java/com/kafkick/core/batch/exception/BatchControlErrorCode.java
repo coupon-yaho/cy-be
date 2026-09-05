@@ -86,19 +86,6 @@ public enum BatchControlErrorCode implements ErrorCode {
             409,
             "BATCH-004",
             "돌고 있지 않은 실행은 멈출 수 없습니다."
-    ),
-
-    /**
-     * 잡 정의를 못 찾는다.
-     *
-     * <p>{@code NoSuchJobException} 이 온다. <b>실행 이력은 남았는데 그 잡이 이제 없는
-     * 경우</b>다 — 잡 이름을 바꾸거나 없앤 뒤 옛 실행을 재시작하면 여기로 온다.
-     * 이 관제가 범용이라 <b>모르는 잡의 이력도 보여 주기 때문에</b> 실재하는 경로다.
-     */
-    JOB_NOT_FOUND(
-            409,
-            "BATCH-005",
-            "그 실행의 잡 정의를 찾을 수 없습니다."
     );
 
     private final int status;
