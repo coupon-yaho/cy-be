@@ -26,14 +26,22 @@ public final class FailureSummary {
      * 잡고, find() 는 첫 매치를 쓰므로 뒤에 있는 진짜 코드가 가려진다.
      * 이 저장소에는 {@code SHA-256} 도 있어서 같은 함정에 걸린다(실측).
      *
-     * <p><b>밑줄이 들어간 접두사가 셋 있다</b> — {@code COUPON_ROUND}·{@code COUPON_TEMPLATE}·
-     * {@code RUNTIME_CONFIG}. 처음에 이 목록을 만들 때 {@code [A-Z]+-} 로 훑어서
-     * <b>셋을 통째로 빠뜨렸고</b>, 그러면 그 코드들이 예외 이름으로 뭉개진다.
-     * 리뷰가 잡았다. 사람이 다시 세지 않도록 {@link FailureSummaryPrefixContractTest} 가
-     * <b>저장소의 실제 코드와 이 목록을 대조</b>한다 — 새 도메인이 생기면 그 테스트가 깨진다.
+     * <p><b>접두사가 한 낱말이 아니다.</b> 두 모양이 섞여 있다 —
+     * 밑줄({@code COUPON_ROUND}·{@code COUPON_TEMPLATE}·{@code RUNTIME_CONFIG})과
+     * 하이픈({@code ADMIN-INQUIRY}·{@code ADMIN-COUPON-ROUND}).
+     *
+     * <p><b>둘 다 처음에 빠뜨렸고 둘 다 리뷰가 잡았다.</b> 밑줄은 {@code [A-Z]+-} 로 세다가,
+     * 하이픈은 그 다음 판에서 {@code [A-Z][A-Z_]*-} 로 세다가 놓쳤다 — 세는 정규식이
+     * <b>알아보는 정규식과 같은 맹점</b>을 가지고 있어서, 검사가 조용히 통과했다.
+     * 그래서 {@link FailureSummaryPrefixContractTest} 의 수집 정규식은 이제 두 모양을
+     * 모두 받는다. 놓치면 그 코드가 <b>예외 이름으로 뭉개져</b> 화면에서 사라진다.
+     *
+     * <p><b>교대 순서는 긴 것부터다.</b> {@code ADMIN} 이 {@code ADMIN-INQUIRY} 를 가리지
+     * 않도록 — 역추적이 있어 순서가 없어도 맞지만, 읽는 사람에게 의도를 남긴다.
      */
     private static final Pattern DOMAIN_CODE = Pattern.compile(
-            "(?:ADMIN|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY"
+            "(?:ADMIN-COUPON-ROUND|ADMIN-INQUIRY|ADMIN"
+                    + "|ANALYTICS|BENCHMARK|COMMON|CONSISTENCY"
                     + "|COUPON_ROUND|COUPON_TEMPLATE|COUPON"
                     + "|EXPIRATION|NOTIFY|OVERVIEW|RUNTIME_CONFIG|VERIFICATION)-\\d{3}");
 
