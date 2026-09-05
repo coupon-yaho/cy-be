@@ -216,6 +216,11 @@ class BatchControlApiTest {
             var response = api().post(
                     "/api/v1/admin/batch/runs/" + stopped.executionId() + "/restart");
 
+            // **500 을 통과시키면 안 된다.** isNotEqualTo("BATCH-002") 하나만 보면
+            // 서버가 깨져도, 응답이 비어도 초록이다 — 리뷰가 짚었다.
+            assertThat(response.statusCode())
+                    .as("우리 판정을 지났으면 프레임워크가 답한다. 500 은 그 둘 다 아니다")
+                    .isIn(200, 409);
             assertThat(VerifyApiProbe.json(response).path("error").path("code").asText())
                     .as("중단 기능을 쓴 사람이 바로 다음에 '이미 성공했다' 로 막히면 안 된다")
                     .isNotEqualTo("BATCH-002");

@@ -1,6 +1,7 @@
 package com.kafkick.infra.mq.notification;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import io.micrometer.core.instrument.Gauge;
@@ -41,6 +42,21 @@ public class NotificationOutboxBacklogGauge {
      */
     private final AtomicLong backlog = new AtomicLong(-1);
 
+    /**
+     * 연속 실패를 이만큼 넘기면 <b>값을 못 보는 상태({@code -1})로 내린다.</b>
+     *
+     * <p>실패에 직전 값을 유지하는 것은 <b>짧은 흔들림</b>을 위한 것이다. 계속 실패하면
+     * 그 값은 <b>거짓말이 된다</b> — 화면에는 백로그가 멈춘 것처럼 보이는데 실제로는
+     * 아무도 안 세고 있고, 알림은 {@code -1} 도 부재도 아니라 <b>영원히 조용하다.</b>
+     * 리뷰가 짚었다.
+     *
+     * <p>4회면 기본 주기(15초)로 1분이다. 그 정도면 흔들림이 아니라 고장이다.
+     */
+    private static final int FAILURES_BEFORE_GIVING_UP = 4;
+
+    /** 연속 실패 수. 한 번이라도 성공하면 0 으로 돌아간다. */
+    private final AtomicInteger consecutiveFailures = new AtomicInteger();
+
     private final NotificationOutboxRepository outboxes;
 
     public NotificationOutboxBacklogGauge(NotificationOutboxRepository outboxes,
@@ -58,15 +74,24 @@ public class NotificationOutboxBacklogGauge {
      * 직전 값을 유지하면 사람이 <b>값이 멈춘 것</b>을 보고 의심할 수 있다. 그 판정을 돕는
      * 것이 프로메테우스 쪽 stale 검사다.
      *
+     * <p><b>다만 계속 실패하면 포기한다.</b> 직전 값을 무한히 붙들면 그 값이 거짓말이
+     * 된다 — 화면에는 백로그가 멈춘 것처럼 보이는데 아무도 안 세고 있고, 알림은
+     * {@code -1} 도 부재도 아니라 <b>영원히 조용하다.</b>
+     * {@link #FAILURES_BEFORE_GIVING_UP} 회를 넘기면 {@code -1} 로 내려
+     * {@code OutboxBacklogGaugeMissing} 이 잡게 한다.
+     *
      * <p>예외를 삼키는 것이 맞는 자리다. 여기서 던지면 스케줄러가 그 작업을 계속 다시
-     * 부르고 로그만 쌓이는데, <b>이 값이 늦는 것은 사고가 아니다.</b>
+     * 부르고 로그만 쌓이는데, <b>이 값이 잠깐 늦는 것은 사고가 아니다.</b>
      */
     @Scheduled(fixedDelayString = "${kafka.notification.relay.backlog-refresh-ms:15000}")
     public void refresh() {
         try {
             backlog.set(outboxes.countBacklog());
+            consecutiveFailures.set(0);
         } catch (RuntimeException failure) {
-            // 직전 값을 유지한다 — 위 설명.
+            if (consecutiveFailures.incrementAndGet() > FAILURES_BEFORE_GIVING_UP) {
+                backlog.set(-1);
+            }
         }
     }
 

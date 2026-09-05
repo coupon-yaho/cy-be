@@ -82,6 +82,53 @@ class NotificationOutboxBacklogGaugeTest {
     }
 
     /**
+     * <b>계속 실패하면 못 보는 상태로 내린다.</b>
+     *
+     * <p>직전 값을 무한히 붙들면 그 값이 거짓말이 된다 — 화면에는 백로그가 멈춘 것처럼
+     * 보이는데 아무도 안 세고 있고, 알림은 {@code -1} 도 부재도 아니라 <b>영원히
+     * 조용하다.</b> 리뷰가 짚었다.
+     */
+    @Test
+    @DisplayName("연속 실패가 이어지면 -1 로 내려 알림이 잡게 한다")
+    void givesUpAfterRepeatedFailures() {
+        when(outboxes.countBacklog())
+                .thenReturn(7L)
+                .thenThrow(new IllegalStateException("connection lost"));
+        NotificationOutboxBacklogGauge gauge = gauge();
+
+        gauge.refresh();
+        for (int attempt = 0; attempt < 5; attempt++) {
+            gauge.refresh();
+        }
+
+        assertThat(gaugeValue())
+                .as("멈춘 값이 계속 보이면 아무 알림도 안 뜬다")
+                .isEqualTo(-1);
+    }
+
+    /** 한 번이라도 성공하면 실패 셈이 돌아간다 — 간헐 실패가 쌓여 포기하면 안 된다. */
+    @Test
+    @DisplayName("성공이 끼면 실패 셈이 0 으로 돌아간다")
+    void resetsTheFailureStreakOnSuccess() {
+        when(outboxes.countBacklog())
+                .thenThrow(new IllegalStateException("blip"))
+                .thenThrow(new IllegalStateException("blip"))
+                .thenThrow(new IllegalStateException("blip"))
+                .thenReturn(9L)
+                .thenThrow(new IllegalStateException("blip"))
+                .thenThrow(new IllegalStateException("blip"));
+        NotificationOutboxBacklogGauge gauge = gauge();
+
+        for (int attempt = 0; attempt < 6; attempt++) {
+            gauge.refresh();
+        }
+
+        assertThat(gaugeValue())
+                .as("간헐 실패가 쌓여 포기하면 멀쩡한 값이 사라진다")
+                .isEqualTo(9);
+    }
+
+    /**
      * <b>예외를 밖으로 안 던진다.</b> 던지면 스케줄러가 계속 다시 부르며 로그만 쌓이는데,
      * 이 값이 늦는 것은 사고가 아니다.
      */
