@@ -78,26 +78,6 @@ public class JdbcBatchExecutionRepository implements BatchExecutionRepository {
             instant(rs, "START_TIME"),
             instant(rs, "END_TIME"));
 
-    /** 조회 전용. 관측 풀이다. */
-    private final JdbcTemplate observationJdbcTemplate;
-
-    public JdbcBatchExecutionRepository(
-            @Qualifier("obs") JdbcTemplate observationJdbcTemplate
-    ) {
-        this.observationJdbcTemplate = observationJdbcTemplate;
-    }
-
-    @Override
-    public List<BatchExecution> findRecent(int limit) {
-        return observationJdbcTemplate.query(SELECT + ORDER_AND_LIMIT, MAPPER, limit);
-    }
-
-    @Override
-    public List<BatchExecution> findRecentByJobName(String jobName, int limit) {
-        return observationJdbcTemplate.query(
-                SELECT + " WHERE i.JOB_NAME = ?" + ORDER_AND_LIMIT, MAPPER, jobName, limit);
-    }
-
     /**
      * <b>카운터 여덟 개를 그대로 읽는다.</b> 여기서 더하거나 해석하지 않는다 — 뜻의 주인이
      * Spring Batch 라, 이 계층이 해석을 넣으면 프레임워크가 뜻을 바꾸는 날 화면만 조용히
@@ -179,14 +159,38 @@ public class JdbcBatchExecutionRepository implements BatchExecutionRepository {
                     // 'Y' 만 참이다. 'y'·'1'·NULL 을 참으로 읽으면 정체성 판정이 뒤집힌다.
                     "Y".equals(rs.getString("IDENTIFYING")));
 
-    @Override
-    public List<BatchJobParameter> findParameters(long jobExecutionId) {
-        return observationJdbcTemplate.query(SELECT_PARAMS, PARAM_MAPPER, jobExecutionId);
+    /** 조회 전용. 관측 풀이다. */
+    private final JdbcTemplate observationJdbcTemplate;
+
+    public JdbcBatchExecutionRepository(
+            @Qualifier("obs") JdbcTemplate observationJdbcTemplate
+    ) {
+        this.observationJdbcTemplate = observationJdbcTemplate;
     }
+
+    @Override
+    public List<BatchExecution> findRecent(int limit) {
+        return observationJdbcTemplate.query(SELECT + ORDER_AND_LIMIT, MAPPER, limit);
+    }
+
+    @Override
+    public List<BatchExecution> findRecentByJobName(String jobName, int limit) {
+        return observationJdbcTemplate.query(
+                SELECT + " WHERE i.JOB_NAME = ?" + ORDER_AND_LIMIT, MAPPER, jobName, limit);
+    }
+
+
+
+
 
     @Override
     public List<BatchStepExecution> findSteps(long jobExecutionId) {
         return observationJdbcTemplate.query(SELECT_STEPS, STEP_MAPPER, jobExecutionId);
+    }
+
+    @Override
+    public List<BatchJobParameter> findParameters(long jobExecutionId) {
+        return observationJdbcTemplate.query(SELECT_PARAMS, PARAM_MAPPER, jobExecutionId);
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

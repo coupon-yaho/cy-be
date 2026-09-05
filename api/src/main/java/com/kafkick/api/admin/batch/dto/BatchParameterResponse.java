@@ -15,10 +15,16 @@ import com.kafkick.core.batch.BatchJobParameter;
  * 기여한 파라미터</b>다. 이 표시가 있으면 "같은 잡을 같은 조건으로 또 돌린 것" 과
  * "다른 조건" 을 화면에서 가를 수 있고, <b>재시작이 왜 거부되는지</b>도 여기서 읽힌다.
  *
- * <p><b>값을 줄이지 않는다.</b> 실패 원문과 달리 파라미터는 <b>우리가 넣는 값</b>이라
- * 통제가 가능하다 — 대신 <b>"잡 파라미터에 PII 를 넣지 않는다"</b> 가 규약이 된다.
- * 지금 들어오는 것은 {@code asOf}·{@code attempt}·{@code dataset}·{@code scope}·
- * {@code seedRunId}·{@code firedAt} 뿐이다(실측).
+ * <p><b>값을 줄이지 않는다.</b> 실패 원문({@code EXIT_MESSAGE})은 <b>프레임워크가</b> 스택을
+ * 넣는 자리라 통제 못 하지만, 파라미터는 <b>우리가 넣는 값</b>이라 통제가 가능하다.
+ * 값을 줄이면 재현에 필요한 정보(어떤 {@code asOf} 로 돌았나)가 같이 사라지므로,
+ * <b>값은 그대로 두고 무엇을 넣을지를 붙든다.</b>
+ *
+ * <p>그 규약은 주석이 아니라 <b>검사</b>다 — {@code JobParameterNameBudgetTest} 가 저장소의
+ * {@code JobParametersBuilder} 호출을 훑어 예산과 대조하고, 이름이 하나만 늘어도 깨진다.
+ * 리뷰가 짚은 자리다: 규약이 주석으로만 있으면 <b>새 파라미터를 추가하는 사람이 그것을
+ * 읽을 이유가 없다.</b> 지금 들어오는 것은 {@code asOf}·{@code attempt}·{@code dataset}·
+ * {@code scope}·{@code seedRunId}·{@code firedAt} 뿐이다(실측).
  *
  * @param source 이 목록의 원천. 지금은 항상 {@code BATCH_JOB_EXECUTION_PARAMS}
  * @param jobExecutionId 어느 실행의 파라미터인지
