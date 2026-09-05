@@ -95,6 +95,22 @@ kafka:
       # 상태를 IN 으로 묶으면 type=index 가 되어 인덱스를 끝까지 훑는다 —
       # PUBLISHED·DEAD 가 쌓일수록 비싸지므로 그렇게 안 한다.
       backlog-refresh-ms: ${KAFKA_NOTIFICATION_RELAY_BACKLOG_REFRESH_MS:15000}
+
+# 알림을 실제로 보내는 곳. **끄면 MockNotificationSender 가 대신 선다** — 아무 데도 안 보낸다.
+#
+# ⚠️ 스위치를 안 켠 회차에서도 app_notify_sent{result=success} 가 올라간다.
+#    그 지표를 운영 판단에 쓰려면 이 스위치가 켜져 있는지 먼저 본다.
+#
+# ⚠️ 타임아웃 합이 건당 발행 예산(100ms)을 넘으면 **기동을 거절한다.** 넘긴 채로 돌면
+#    워커가 lease 를 태워 뒤쪽 행이 회수되고 **같은 알림이 두 번 나간다**(CY-906 의
+#    ceil(max-in-flight / worker-count) × 예산 < lease 관계).
+notification:
+  sender:
+    http:
+      enabled: ${NOTIFICATION_SENDER_HTTP_ENABLED:false}
+      endpoint: ${NOTIFICATION_SENDER_HTTP_ENDPOINT:http://notify-mock:8080/send}
+      connect-timeout: ${NOTIFICATION_SENDER_HTTP_CONNECT_TIMEOUT:30ms}
+      request-timeout: ${NOTIFICATION_SENDER_HTTP_REQUEST_TIMEOUT:60ms}
       # ⚠️ 재시도 지연은 여기 없다 — notification.outbox.retry 로 옮겼다(CY-907).
       #    같은 정책을 lease 만료 회수 경로(storage 어댑터)도 쓰는데, 그 모듈은
       #    이 kafka 속성 클래스를 볼 수 없다. 한 벌로 두려면 core 가 소유해야 한다.
