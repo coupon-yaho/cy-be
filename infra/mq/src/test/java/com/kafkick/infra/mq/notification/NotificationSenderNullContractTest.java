@@ -73,7 +73,7 @@ class NotificationSenderNullContractTest {
     @Test
     @DisplayName("소스의 발송기 구현이 늘면 이 계약 목록도 늘어야 한다")
     void theContractListCoversEveryImplementationInTheSource() throws IOException {
-        Path repo = Path.of("..", "..").toAbsolutePath().normalize();
+        Path repo = repositoryRoot();
         List<String> implementations;
         try (Stream<Path> files = Files.walk(repo)) {
             implementations = files
@@ -88,6 +88,27 @@ class NotificationSenderNullContractTest {
         assertThat(implementations)
                 .as("새 발송기가 생겼다면 senders() 에 추가하고 이 기대값도 늘려라")
                 .containsExactly("HttpNotificationSender", "MockNotificationSender");
+    }
+
+    /**
+     * <b>모듈 깊이를 상수로 적지 않는다.</b> Gradle 이 테스트를 도는 작업 디렉터리는 저장소
+     * 루트가 아니라 <b>모듈 디렉터리</b>다(실측: {@code .../cy-be/infra/mq}). 그래서
+     * {@code ../..} 가 지금은 맞지만, 그 숫자는 이 테스트가 <b>어느 모듈에 있는지</b>를
+     * 적어 둔 것이라 파일이 옮겨지면 조용히 엉뚱한 트리를 걷는다.
+     *
+     * <p>{@code settings.gradle} 이 나올 때까지 올라가면 그 결합이 사라지고, 못 찾으면
+     * <b>빈 목록으로 헷갈리게 실패하는 대신</b> 이유를 말하고 멈춘다.
+     */
+    private static Path repositoryRoot() {
+        for (Path candidate = Path.of("").toAbsolutePath(); candidate != null;
+                candidate = candidate.getParent()) {
+            if (Files.exists(candidate.resolve("settings.gradle"))
+                    || Files.exists(candidate.resolve("settings.gradle.kts"))) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException(
+                "settings.gradle 을 못 찾았다. 시작 위치=" + Path.of("").toAbsolutePath());
     }
 
     private static boolean implementsTheSenderPort(Path path) {
