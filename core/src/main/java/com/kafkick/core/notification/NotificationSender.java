@@ -18,8 +18,16 @@ import com.kafkick.core.notification.domain.Notification;
 public interface NotificationSender {
 
     /**
+     * <p><b>둘 다 {@code null} 이면 보내지 않고 그 자리에서 멈춘다.</b> 특히 키가 없으면
+     * 받는 쪽이 중복을 <b>못 합치므로</b>, 빈 키를 실어 조용히 보내는 것보다 안 보내는 것이
+     * 낫다 — 안 보낸 것은 재시도로 회복되지만 <b>키 없이 두 번 간 것은 회복이 없다.</b>
+     * 구현이 이 검사를 빠뜨리지 않도록 계약으로 적는다.
+     *
      * @param notification 보낼 알림
      * @param idempotencyKey 같은 논리적 발송을 가리키는 키. <b>자동 재시도 사이에 안 변한다</b>
+     * @throws NullPointerException 둘 중 하나가 {@code null} 일 때
+     * @throws NotificationSendException 보내지 못했을 때. {@code reason} 이 재시도 가능
+     *         여부를 진다
      */
     void send(Notification notification, String idempotencyKey);
 }

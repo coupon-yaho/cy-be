@@ -1,5 +1,7 @@
 package com.kafkick.infra.mq.notification;
 
+import java.util.Objects;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -25,10 +27,15 @@ import com.kafkick.core.notification.domain.Notification;
 @ConditionalOnProperty(name = "notification.sender.http.enabled", havingValue = "false",
         matchIfMissing = true)
 public class MockNotificationSender implements NotificationSender {
+
+    /**
+     * <b>아무 데도 안 보내지만 계약은 똑같이 건다.</b> 이 저장소의 통합 테스트가 이것으로
+     * 도는데, 여기서 {@code null} 키를 그냥 받아 주면 키를 빠뜨린 호출자가 <b>로컬에서
+     * 전부 통과</b>하고 실제 연동에서만 터진다. 그때 터지는 모양이 중복 발송이라 회복이 없다.
+     */
     @Override
     public void send(Notification notification, String idempotencyKey) {
-        if (notification == null) {
-            throw new IllegalArgumentException("notification은 필수입니다.");
-        }
+        Objects.requireNonNull(notification, "notification");
+        Objects.requireNonNull(idempotencyKey, "idempotencyKey");
     }
 }

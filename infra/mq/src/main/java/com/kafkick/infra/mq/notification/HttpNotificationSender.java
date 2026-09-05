@@ -87,6 +87,9 @@ public class HttpNotificationSender implements NotificationSender {
     private final Duration requestTimeout;
 
     /**
+     * @throws NullPointerException {@code endpoint} 가 {@code null} 일 때. <b>타임아웃이
+     *         {@code null} 인 것은 {@code IllegalArgumentException} 이다</b> — 그쪽은 "안 준
+     *         것" 과 "0 을 준 것" 이 같은 실수(둘 다 발송이 전부 실패한다)라 한 갈래로 묶는다
      * @throws IllegalArgumentException 아래 셋 중 하나일 때. <b>전부 빈 생성에서 터지므로
      *         기동이 거부된다</b> — 잘못 설정된 발송기가 조용히 도는 것보다 낫다
      *         <ul>
