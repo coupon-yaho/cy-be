@@ -6,6 +6,7 @@ import java.time.ZoneId;
 import java.util.Set;
 
 import com.kafkick.batch.config.BatchTimeAxis;
+import com.kafkick.core.batch.FailureSummary;
 import com.kafkick.core.batch.BatchRun;
 
 /**
