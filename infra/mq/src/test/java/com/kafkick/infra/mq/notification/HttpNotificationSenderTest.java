@@ -87,7 +87,7 @@ class HttpNotificationSenderTest {
 
     private static NotifyFailureReason reasonOf(int httpStatus, HttpNotificationSender sender) {
         try {
-            sender.send(notification());
+            sender.send(notification(), "41:1");
             throw new AssertionError("보내기가 성공해 버렸습니다. status=" + httpStatus);
         } catch (NotificationSendException failure) {
             return failure.reason();
@@ -99,7 +99,7 @@ class HttpNotificationSenderTest {
     void successOnTwoHundred() {
         status.set(202);
 
-        assertThatCode(() -> sender().send(notification())).doesNotThrowAnyException();
+        assertThatCode(() -> sender().send(notification(), "41:1")).doesNotThrowAnyException();
     }
 
     /**
@@ -108,7 +108,7 @@ class HttpNotificationSenderTest {
      * 다르다.
      */
     @Test
-    @DisplayName("5xx 와 429 는 재시도 가능, 400·422 는 불가")
+    @DisplayName("5xx·429·408 은 재시도 가능, 400·422·403 은 불가")
     void mapsStatusToRetryability() {
         HttpNotificationSender sender = sender();
 
@@ -127,6 +127,11 @@ class HttpNotificationSenderTest {
         assertThat(reasonOf(422, sender).retryable()).isFalse();
         status.set(403);
         assertThat(reasonOf(403, sender).retryable()).isFalse();
+
+        status.set(408);
+        assertThat(reasonOf(408, sender).retryable())
+                .as("408 을 기본 4xx 갈래로 흘리면 잠깐 느렸던 것을 영영 포기한다")
+                .isTrue();
     }
 
     /**
@@ -152,21 +157,22 @@ class HttpNotificationSenderTest {
     }
 
     /**
-     * <b>같은 시도는 같은 키다.</b> outbox 도 Kafka 도 at-least-once 라 같은 알림이 두 번
-     * 갈 수 있고, 그것을 합치는 것은 <b>받는 쪽</b>이다 — 우리가 할 일은 키를 일관되게
-     * 주는 것뿐이다.
+     * <b>키를 발송기가 만들지 않는다.</b> 무엇이 "같은 발송" 인지는 {@code Notification}
+     * 하나로 알 수 없다 — 자동 재시도가 {@code attemptCount} 를 올리므로 그것으로 키를
+     * 만들면 <b>재시도마다 키가 바뀌어</b> 받는 쪽이 못 합친다. 그 경계를 아는 배달 판정이
+     * 만들어 넘기고, 발송기는 <b>그대로 싣기만</b> 한다.
      */
     @Test
-    @DisplayName("멱등 키가 notificationId:attemptCount 이고 재전달에도 같다")
-    void sendsAStableIdempotencyKey() {
+    @DisplayName("받은 멱등 키를 그대로 보낸다 — 스스로 만들지 않는다")
+    void sendsTheGivenIdempotencyKey() {
         HttpNotificationSender sender = sender();
 
-        sender.send(notification());
-        sender.send(notification());
+        sender.send(notification(), "41:1");
+        sender.send(notification(), "41:1");
 
         assertThat(idempotencyKeys)
-                .as("같은 시도가 두 번 가도 받는 쪽이 하나로 합칠 수 있어야 한다")
-                .containsExactly("41:2", "41:2");
+                .as("받은 키를 그대로 보내야 받는 쪽이 합칠 수 있다")
+                .containsExactly("41:1", "41:1");
     }
 
     /** 본문에 수신처와 메시지가 실린다 — <b>여기서만</b> 그렇다. 예외에는 안 실린다. */
@@ -174,25 +180,84 @@ class HttpNotificationSenderTest {
     @DisplayName("본문은 보내되 실패 예외에는 수신처가 안 실린다")
     void carriesTheRecipientInTheBodyButNotInFailures() {
         HttpNotificationSender sender = sender();
-        sender.send(notification());
+        sender.send(notification(), "41:1");
         assertThat(bodies.getFirst()).contains("member:20", "coupon-issued:100");
 
         status.set(500);
-        assertThatThrownBy(() -> sender.send(notification()))
+        assertThatThrownBy(() -> sender.send(notification(), "41:1"))
                 .hasMessageNotContaining("member:20")
                 .hasMessageNotContaining("coupon-issued:100");
     }
 
     /**
-     * <b>타임아웃 합이 건당 예산을 넘으면 기동을 막는다.</b> 넘긴 채로 돌면 워커가 lease 를
-     * 태워 <b>같은 알림이 두 번 나간다</b> — 운영 중 첫 지연에서야 드러날 일을 기동으로 당긴다.
+     * <b>분 단위 타임아웃을 막는다.</b> 한 레코드 처리가 {@code max.poll.interval.ms} 를
+     * 넘기면 소비자가 그룹에서 쫓겨나고 <b>그 레코드가 재전달된다.</b>
+     *
+     * <p>⚠️ 한때 이 검사가 <b>릴레이의 건당 발행 예산(100ms)</b>과 비교했는데 축이 달랐다 —
+     * 그 예산은 릴레이가 Kafka 로 발행하는 시간이고 이 발송기는 소비자 쪽에서 돈다.
+     * 그대로 뒀으면 <b>멀쩡한 설정이 기동을 거부당했다.</b> 리뷰가 짚었다.
      */
     @Test
-    @DisplayName("타임아웃이 건당 예산을 넘으면 기동에서 거절한다")
-    void refusesTimeoutsBeyondThePerItemBudget() {
+    @DisplayName("타임아웃 합이 상한을 넘으면 기동에서 거절한다")
+    void refusesTimeoutsBeyondTheAbsoluteCap() {
         assertThatThrownBy(() -> new HttpNotificationSender("http://notify.test/send",
-                Duration.ofMillis(50), Duration.ofMillis(80)))
+                Duration.ofSeconds(6), Duration.ofSeconds(6)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("두 번");
+                .hasMessageContaining("max.poll.interval.ms");
+    }
+
+    /** 소비자에게 맞는 타임아웃은 통과해야 한다 — 방어선이 성능을 정하는 자리가 아니다. */
+    @Test
+    @DisplayName("초 단위 타임아웃은 정상이다 — 이 발송기는 소비자 쪽에서 돈다")
+    void acceptsSecondScaleTimeouts() {
+        assertThatCode(() -> new HttpNotificationSender("http://notify.test/send",
+                Duration.ofSeconds(1), Duration.ofSeconds(3)))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * <b>제어문자가 본문을 깨뜨리면 안 된다.</b> 메시지에 줄바꿈이 하나만 들어와도
+     * 깨진 JSON 이 되어 받는 쪽이 400 을 내고, 그러면 <b>재시도 불가로 읽혀 그 알림이
+     * {@code DEAD} 로 간다.</b> 사용자 문구에 줄바꿈은 흔하다.
+     */
+    @Test
+    @DisplayName("줄바꿈이 든 메시지도 유효한 JSON 으로 나간다")
+    void escapesControlCharacters() {
+        Notification withNewline = new Notification(41L, 10L, 20L, 100L,
+                Notification.DEFAULT_CHANNEL, NotificationStatus.PENDING, 2, 0, null,
+                "member:20", "첫 줄\n둘째 줄\t끝", Instant.parse("2026-09-05T00:00:00Z"),
+                Instant.parse("2026-09-05T00:00:00Z"), null, null);
+
+        sender().send(withNewline, "41:1");
+
+        String body = bodies.getFirst();
+        assertThat(body)
+                .as("원문 줄바꿈이 들어가면 JSON 이 깨진다")
+                .doesNotContain("\n둘째")
+                .contains("\\n", "\\t");
+    }
+
+    /** 잘못된 endpoint 를 두면 <b>모든 알림이 매번 실패</b>하다 전부 종착한다. */
+    @Test
+    @DisplayName("http(s) 가 아니거나 호스트가 없는 endpoint 는 기동에서 거절한다")
+    void refusesAnEndpointThatIsNotHttp() {
+        assertThatThrownBy(() -> new HttpNotificationSender("notify.test/send",
+                Duration.ofMillis(30), Duration.ofMillis(60)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new HttpNotificationSender("ftp://notify.test/send",
+                Duration.ofMillis(30), Duration.ofMillis(60)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** {@code 0} 은 "무한" 이 아니라 즉시 실패다 — 그대로 두면 모든 알림이 타임아웃된다. */
+    @Test
+    @DisplayName("0 이나 음수 타임아웃은 기동에서 거절한다")
+    void refusesNonPositiveTimeouts() {
+        assertThatThrownBy(() -> new HttpNotificationSender("http://notify.test/send",
+                Duration.ZERO, Duration.ofMillis(60)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new HttpNotificationSender("http://notify.test/send",
+                Duration.ofMillis(30), Duration.ofMillis(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

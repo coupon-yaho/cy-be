@@ -2,6 +2,7 @@ package com.kafkick.infra.mq.notification;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,7 +54,7 @@ class NotificationDispatchConsumerTest {
 
         consumer.consume(record(), acknowledgment);
 
-        verify(sender).send(decision.notification());
+        verify(sender).send(decision.notification(), decision.idempotencyKey());
         verify(meter).success();
         verify(acknowledgment).acknowledge();
     }
@@ -65,7 +66,7 @@ class NotificationDispatchConsumerTest {
 
         consumer.consume(record(), acknowledgment);
 
-        verify(sender, never()).send(org.mockito.ArgumentMatchers.any());
+        verify(sender, never()).send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         verify(acknowledgment).acknowledge();
     }
 
@@ -75,7 +76,7 @@ class NotificationDispatchConsumerTest {
         when(deliveries.prepare(event(), AT)).thenReturn(decision);
         org.mockito.Mockito.doThrow(new NotificationSendException(
                 NotifyFailureReason.SEND_TIMEOUT, new RuntimeException("timeout")))
-                .when(sender).send(decision.notification());
+                .when(sender).send(any(), any());
         when(deliveries.completeFailure(decision, NotifyFailureReason.SEND_TIMEOUT, AT, AT))
                 .thenReturn(FailureOutcome.RETRY);
 
@@ -92,7 +93,7 @@ class NotificationDispatchConsumerTest {
         when(deliveries.prepare(event(), AT)).thenReturn(decision);
         org.mockito.Mockito.doThrow(new NotificationSendException(
                 NotifyFailureReason.SEND_TIMEOUT, new RuntimeException("timeout")))
-                .when(sender).send(decision.notification());
+                .when(sender).send(any(), any());
         when(deliveries.completeFailure(decision, NotifyFailureReason.SEND_TIMEOUT, AT, AT))
                 .thenReturn(FailureOutcome.TERMINAL);
 
@@ -109,7 +110,7 @@ class NotificationDispatchConsumerTest {
         when(deliveries.prepare(event(), AT)).thenReturn(decision);
         org.mockito.Mockito.doThrow(new NotificationSendException(
                 NotifyFailureReason.SEND_TIMEOUT, new RuntimeException("timeout")))
-                .when(sender).send(decision.notification());
+                .when(sender).send(any(), any());
         when(deliveries.completeFailure(decision, NotifyFailureReason.SEND_TIMEOUT, AT, AT))
                 .thenReturn(FailureOutcome.DUPLICATE);
 
