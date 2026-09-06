@@ -139,6 +139,31 @@ class ConsistencyAlertRuleContractTest {
                 .contains("absent(" + gauge + ")");
     }
 
+    /**
+     * <b>굳은 값으로 사람을 부르지 않는다.</b> {@code for} 는 조건이 유지된 <b>시간</b>만
+     * 세므로, 수집이 멈춘 채 같은 값이 반복 스크레이프되면 <b>한 번 튄 값이 그대로 for 를
+     * 채운다</b>(리뷰가 짚었다). 그래서 초과발급 알림이 <b>신선도를 함께</b> 본다.
+     *
+     * <p>그 규칙은 지어낸 것이 아니다 — {@code COLLECT_LAST_SUCCESS_EPOCH} 의 javadoc 이
+     * {@code time() - 값 > 120} 을 직접 지정해 뒀고, 그 지표가 있는 이유로
+     * <i>"화면은 조용한데 초과 발급 KPI 가 죽는다"</i> 를 적어 뒀다.
+     *
+     * <p><b>가두기만 하면 침묵이 된다.</b> 그래서 굳었다는 사실 자체를 알리는 짝
+     * ({@code ObservationCollectStalled})이 함께 있어야 한다.
+     */
+    @Test
+    @DisplayName("초과발급 알림이 수집 신선도를 함께 보고, 굳은 것은 따로 알린다")
+    void theOverIssuanceAlertIsGatedOnFreshnessAndTheStallHasItsOwnAlert() throws Exception {
+        Map<String, String> byAlert = expressionsByAlert();
+        String freshness = gaugeName(DomainMeterNames.COLLECT_LAST_SUCCESS_EPOCH);
+
+        assertThat(exprOf(byAlert, "OverIssuanceDetected"))
+                .as("굳은 값으로 critical 을 울리면 안 된다")
+                .contains(freshness);
+        assertNamesExactly(exprOf(byAlert, "ObservationCollectStalled"), freshness,
+                "가두기만 하고 굳은 것을 안 알리면 그 구간이 통째로 침묵이다");
+    }
+
     private static String gaugeName(String meterName) {
         return meterName.replace('.', '_');
     }

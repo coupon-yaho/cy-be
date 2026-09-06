@@ -17,6 +17,9 @@ tests:
     input_series:
       - series: 'app_consistency_over_issued'
         values: '0x5 3x20'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각을 따라 오르는 값 — 수집이 살아 있는 상태다(60 초에서 시작해 1분마다 +60).
+        values: '60+60x30'
     alert_rule_test:
       - eval_time: 10m
         alertname: OverIssuanceDetected
@@ -27,7 +30,7 @@ tests:
             exp_annotations:
               summary: "초과발급이 관측됐습니다 (지금 3건)"
               description: >-
-                팔지 않은 재고를 판 상태입니다. app_consistency_coupon_id 의 **값**이 관측 대상 회차입니다(회차는 라벨이 아니라 값으로 싣습니다 — 라벨로 두면 회차마다 시계열이 갈려 비교 질의를 못 씁니다). **검증 배치를 기다리지 마십시오** — 그쪽 크론은 하루 한 번(0 0 5 * * *)이라 이 알림이 먼저 옵니다. 확정 판정이 필요하면 검증을 온디맨드로 돌립니다. 발급과 재고 중 어느 쪽이 어긋났는지는 app_consistency_gap 을 gap_type 별로 함께 봅니다.
+                팔지 않은 재고를 판 상태입니다. app_consistency_coupon_id 의 **값**이 관측 대상 회차입니다(회차는 라벨이 아니라 값으로 싣습니다 — 라벨로 두면 회차마다 시계열이 갈려 비교 질의를 못 씁니다). **검증 배치를 기다리지 마십시오** — 그쪽 크론은 하루 한 번(0 0 5 * * *)이라 이 알림이 먼저 옵니다. 확정 판정이 필요하면 검증을 온디맨드로 돌립니다. 발급과 재고 중 어느 쪽이 어긋났는지는 app_consistency_gap 을 gap_type 별로 함께 봅니다. 이 알림은 **수집이 살아 있을 때만** 뜹니다(마지막 성공이 120초 안) — 굳은 값으로 부르지 않기 위해서입니다. 수집이 멈춘 것은 ObservationCollectStalled 가 따로 알립니다.
 
   # 0 이면 안 뜬다 — 정상 운영마다 알림이 오면 안 된다.
   - interval: 1m
@@ -35,6 +38,9 @@ tests:
     input_series:
       - series: 'app_consistency_over_issued'
         values: '0x20'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각을 따라 오르는 값 — 수집이 살아 있는 상태다(60 초에서 시작해 1분마다 +60).
+        values: '60+60x30'
     alert_rule_test:
       - eval_time: 10m
         alertname: OverIssuanceDetected
@@ -46,6 +52,9 @@ tests:
     input_series:
       - series: 'app_consistency_over_issued'
         values: '0x5 3x20'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각을 따라 오르는 값 — 수집이 살아 있는 상태다(60 초에서 시작해 1분마다 +60).
+        values: '60+60x30'
     alert_rule_test:
       - eval_time: 6m
         alertname: OverIssuanceDetected
@@ -112,4 +121,50 @@ tests:
     alert_rule_test:
       - eval_time: 20m
         alertname: ConsistencyGaugeMissing
+        exp_alerts: []
+
+  # ── 수집이 멈춘 구간 ─────────────────────────────────────────────────────
+  # **이것이 리뷰가 짚은 자리다.** 한 번 튄 값이 굳은 채 반복 스크레이프되면
+  # for 는 채워지지만 "여러 번 쟀다" 는 아니다. 그때 사람을 부르지 않아야 한다.
+  - interval: 1m
+    name: "수집이 멈추면 굳은 값으로 초과발급 알림이 뜨지 않는다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        # 5분째에 3 이 되고 그대로 굳는다.
+        values: '0x5 3x25'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 5분(300초)에서 멈춘다 — 그 뒤로 갱신이 없다.
+        values: '60+60x5 300x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  - interval: 1m
+    name: "수집이 멈추면 ObservationCollectStalled 가 뜬다"
+    input_series:
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        values: '60+60x5 300x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ObservationCollectStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              path: consistency
+            exp_annotations:
+              summary: "정합성 수집이 15m 0s째 성공하지 못했습니다"
+              description: >-
+                값이 굳었습니다 — 마지막으로 성공한 수집이 그만큼 전입니다. **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
+
+  # 수집이 살아 있으면 stalled 가 안 뜬다.
+  - interval: 1m
+    name: "수집이 살아 있으면 ObservationCollectStalled 가 안 뜬다"
+    input_series:
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        values: '60+60x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ObservationCollectStalled
         exp_alerts: []

@@ -30,13 +30,19 @@ groups:
       # for 가 2분인 이유 — 집계 스냅샷이 트랜잭션 한복판을 지나가면 한 번 튈 수 있어서,
       # 그것으로 사람을 부르지 않으려는 것이다.
       #
-      # ⚠️ **네 표본을 보장하지 않는다.** for 는 규칙 평가에서 조건이 유지된 **시간**을 셀
-      #    뿐이고, 게이지가 몇 번 갱신됐는지는 안 본다(리뷰가 짚었다). 갱신이 멈춘 채 같은
-      #    값이 반복 스크레이프되면 **한 번 튄 값이 그대로 2분을 채운다.** 갱신 간격
-      #    (aggregate-interval-ms)을 2분 이상으로 올리면 그 상태가 정상 운영이 된다.
-      #    그래서 이 for 는 "여러 번 쟀다" 는 근거가 아니라 **깜빡임 억제**로만 읽는다.
+      # ⚠️ **for 만으로는 "여러 번 쟀다" 가 안 된다.** for 는 규칙 평가에서 조건이 유지된
+      #    **시간**을 셀 뿐이고 게이지가 몇 번 갱신됐는지는 안 본다(리뷰가 짚었다).
+      #    수집이 멈춘 채 같은 값이 반복 스크레이프되면 **한 번 튄 값이 그대로 2분을 채운다.**
+      #
+      # 그래서 **수집이 살아 있는지를 함께 본다.** COLLECT_LAST_SUCCESS_EPOCH 의 javadoc 이
+      # 그 규칙을 직접 지정해 뒀다 — `time() - 값 > 120`. 그 지표가 있는 이유도 같다:
+      #   "5분째 같은 이유로 잘린다 ... 화면은 조용한데 초과 발급 KPI 가 죽는다."
+      # 굳은 값으로는 사람을 안 부르고, 굳었다는 사실은 아래 ObservationCollectStalled 가 진다.
       - alert: OverIssuanceDetected
-        expr: app_consistency_over_issued > 0
+        expr: >-
+          app_consistency_over_issued > 0
+          and on(job, instance)
+            (time() - app_observation_collect_last_success_epoch{path="consistency"}) < 120
         for: 2m
         labels:
           severity: critical
@@ -51,6 +57,9 @@ groups:
             이 알림이 먼저 옵니다. 확정 판정이 필요하면 검증을 온디맨드로 돌립니다.
             발급과 재고 중 어느 쪽이 어긋났는지는 app_consistency_gap 을 gap_type 별로
             함께 봅니다.
+            이 알림은 **수집이 살아 있을 때만** 뜹니다(마지막 성공이 120초 안) —
+            굳은 값으로 부르지 않기 위해서입니다. 수집이 멈춘 것은
+            ObservationCollectStalled 가 따로 알립니다.
 
       # 못 재는 상태. **값 미터가 0 이 아니라 NaN 을 싣는다**(DomainMeterNames).
       #
@@ -102,3 +111,30 @@ groups:
             **batch 자체가 안 떠 있으면** 그 API 도 하루 한 번 도는 검증 크론도 함께
             멈춘 것이라, 초과발급을 볼 수단이 남아 있지 않습니다 —
             cy_batch_last_success_seconds 계열과 batch 기동부터 확인하십시오.
+
+      # 수집이 멈춘 상태. **위 알림이 침묵하는 구간이라 이것이 그 짝이다.**
+      #
+      # 지표의 javadoc 이 규칙을 직접 지정해 뒀다 — `time() - 값 > 120`.
+      # 횟수가 아니라 시각인 이유도 거기 있다: 수집 루프의 주기가 서로 다르다
+      # (재고 1초 · 정합성 30초). "연속 3회" 는 한쪽이 3초, 다른 쪽이 90초라 같은 임계를
+      # 못 쓴다.
+      #
+      # ⚠️ **한 번도 성공 못 하면 NaN 이다.** NaN 에는 뺄셈도 비교도 거짓이라 이 규칙이
+      #    조용하다 — 그 경우는 값 계열이 아예 없거나 NaN 이라 위의 GaugeMissing ·
+      #    Unmeasurable 이 진다.
+      - alert: ObservationCollectStalled
+        expr: >-
+          (time() - app_observation_collect_last_success_epoch{path="consistency"}) > 120
+        for: 5m
+        labels:
+          severity: warning
+          channel: data
+        annotations:
+          summary: "정합성 수집이 {{ $value | humanizeDuration }}째 성공하지 못했습니다"
+          description: >-
+            값이 굳었습니다 — 마지막으로 성공한 수집이 그만큼 전입니다.
+            **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지
+            않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다.
+            원인은 app_consistency_over_issued_state 가 코드로 답합니다 —
+            6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다.
+            길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
