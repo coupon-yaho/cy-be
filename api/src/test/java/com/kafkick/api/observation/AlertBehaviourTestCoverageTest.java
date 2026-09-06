@@ -57,13 +57,18 @@ class AlertBehaviourTestCoverageTest {
     @Test
     @DisplayName("모든 알림에 동작 시험이 있거나, 없는 이유가 적혀 있다")
     void everyAlertIsEitherExercisedOrExplainedAway() throws IOException {
-        List<String> tested = alertsProvenToFire();
+        Map<String, List<String>> tested = provenFiringByRuleFile();
         List<String> untested = new ArrayList<>();
-        for (String alert : alertsInRules()) {
-            if (tested.contains(alert) || hasRealExcuse(alert)) {
-                continue;
+        for (Map.Entry<String, List<String>> rules : alertsByRuleFile().entrySet()) {
+            List<String> proven = tested.getOrDefault(rules.getKey(), List.of());
+            for (String alert : rules.getValue()) {
+                if (proven.contains(alert) || hasRealExcuse(alert)) {
+                    continue;
+                }
+                // **파일 이름을 함께 싣는다.** 같은 이름이 두 파일에 있으면
+                // 어느 쪽이 안 덮였는지가 안 보인다(리뷰가 짚은 자리다).
+                untested.add(rules.getKey() + " → " + alert);
             }
-            untested.add(alert);
         }
 
         assertThat(untested)
@@ -87,7 +92,8 @@ class AlertBehaviourTestCoverageTest {
     @Test
     @DisplayName("시험이 있는 알림은 '일부러 안 썼다' 목록에 남아 있지 않다")
     void nothingIsBothTestedAndExcused() throws IOException {
-        List<String> tested = alertsProvenToFire();
+        List<String> tested = provenFiringByRuleFile().values().stream()
+                .flatMap(List::stream).toList();
 
         assertThat(DELIBERATELY_UNTESTED.keySet().stream().filter(tested::contains))
                 .as("시험을 썼으면 DELIBERATELY_UNTESTED 에서 빼십시오")
@@ -129,9 +135,10 @@ class AlertBehaviourTestCoverageTest {
      * CI 의 promtool 루프가 같은 이유로 글롭이다.
      */
     @SuppressWarnings("unchecked")
-    private static List<String> alertsInRules() throws IOException {
-        List<String> alerts = new ArrayList<>();
+    private static Map<String, List<String>> alertsByRuleFile() throws IOException {
+        Map<String, List<String>> byFile = new LinkedHashMap<>();
         for (Path file : ymlIn(RULES_DIR)) {
+            List<String> alerts = new ArrayList<>();
             Map<String, Object> root = new Yaml().load(Files.readString(file, UTF_8));
             for (Map<String, Object> group : (List<Map<String, Object>>) root.get("groups")) {
                 for (Map<String, Object> rule : (List<Map<String, Object>>) group.get("rules")) {
@@ -141,9 +148,15 @@ class AlertBehaviourTestCoverageTest {
                     }
                 }
             }
+            byFile.put(file.getFileName().toString(), alerts);
         }
-        assertThat(alerts).as("규칙에서 알림 이름을 하나도 못 읽었다").isNotEmpty();
-        return alerts;
+        assertThat(byFile.values().stream().flatMap(List::stream))
+                .as("규칙에서 알림 이름을 하나도 못 읽었다").isNotEmpty();
+        return byFile;
+    }
+
+    private static List<String> alertsInRules() throws IOException {
+        return alertsByRuleFile().values().stream().flatMap(List::stream).toList();
     }
 
     /**
@@ -155,12 +168,23 @@ class AlertBehaviourTestCoverageTest {
      *
      * <p>그래서 {@code exp_alerts} 가 <b>비어 있지 않은</b> 단언이 하나라도 있어야 센다.
      * 부정 시험은 그 위에 얹는 것이지 그것만으로는 부족하다.
+     *
+     * <p>⚠️ <b>규칙 파일 단위로 묶는다 — 이름 전역이 아니다.</b> 시험 파일은 자기
+     * {@code rule_files} 만 불러오므로, 다른 파일에 <b>같은 이름</b>의 알림이 생기면
+     * 기존 단언이 그 새 규칙까지 덮은 것으로 세어 버린다(리뷰가 짚었다).
      */
     @SuppressWarnings("unchecked")
-    private static List<String> alertsProvenToFire() throws IOException {
-        List<String> proven = new ArrayList<>();
+    private static Map<String, List<String>> provenFiringByRuleFile() throws IOException {
+        Map<String, List<String>> byRuleFile = new LinkedHashMap<>();
         for (Path file : ymlIn(TESTS_DIR)) {
             Map<String, Object> root = new Yaml().load(Files.readString(file, UTF_8));
+            // **그 시험이 실제로 불러오는 규칙 파일**에만 공을 돌린다.
+            List<String> loaded = ((List<String>) root.get("rule_files")).stream()
+                    .map(entry -> Path.of(entry).getFileName().toString())
+                    .toList();
+            assertThat(loaded).as("%s 가 규칙 파일을 하나도 안 부른다", file).isNotEmpty();
+
+            List<String> proven = new ArrayList<>();
             for (Map<String, Object> test : (List<Map<String, Object>>) root.get("tests")) {
                 List<Map<String, Object>> cases =
                         (List<Map<String, Object>>) test.get("alert_rule_test");
@@ -174,9 +198,13 @@ class AlertBehaviourTestCoverageTest {
                     }
                 }
             }
+            for (String rules : loaded) {
+                byRuleFile.computeIfAbsent(rules, key -> new ArrayList<>()).addAll(proven);
+            }
         }
-        assertThat(proven).as("뜨는 것을 본 단언이 하나도 없다").isNotEmpty();
-        return proven;
+        assertThat(byRuleFile.values().stream().flatMap(List::stream))
+                .as("뜨는 것을 본 단언이 하나도 없다").isNotEmpty();
+        return byRuleFile;
     }
 
     private static List<Path> ymlIn(Path directory) throws IOException {
