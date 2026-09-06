@@ -148,7 +148,7 @@ class AlertChannelRegistryTest {
                 .as("channel 이 없거나 라우팅이 없는 알림은 sink-unrouted 로 갑니다 — "
                         + "뜨는데 아무도 못 봅니다")
                 .allSatisfy(entry -> assertThat(routed)
-                        .as("알림 %s 의 channel=%s", entry.getKey(), entry.getValue())
+                        .as("%s 의 channel=\"%s\"", entry.getKey(), entry.getValue())
                         .contains(entry.getValue()));
         assertThat(routed)
                 .as("안 쓰이는 route 가 남으면 라우팅이 실제보다 넓어 보입니다")
@@ -156,8 +156,14 @@ class AlertChannelRegistryTest {
     }
 
     /**
-     * 알림 이름 → {@code channel} 라벨. <b>라벨이 없으면 빈 문자열</b>이라 위 검사에서
-     * 걸린다 — 없는 것과 틀린 것을 같은 자리에서 잡는다.
+     * <b>{@code 파일 → 알림}</b> → {@code channel} 라벨.
+     *
+     * <p>라벨이 없으면 <b>빈 문자열</b>이라 위 검사에서 걸린다 — 없는 것과 틀린 것을
+     * 같은 자리에서 잡는다.
+     *
+     * <p>⚠️ 키에 <b>파일을 넣는다.</b> 알림 이름만 키로 쓰면 같은 이름이 두 파일에 있을 때
+     * <b>뒤엣것이 앞엣것을 덮어</b>, 앞 규칙의 채널 누락이 사라진다(리뷰가 짚었다).
+     * 실패 메시지에도 파일이 실려 어느 쪽인지 바로 보인다.
      */
     @SuppressWarnings("unchecked")
     private static Map<String, String> channelByAlert() throws IOException {
@@ -172,7 +178,8 @@ class AlertChannelRegistryTest {
                     }
                     Map<String, Object> labels = (Map<String, Object>) rule.get("labels");
                     Object channel = labels == null ? null : labels.get("channel");
-                    channelOf.put(alert.toString(), channel == null ? "" : channel.toString());
+                    channelOf.put(file.getFileName() + " → " + alert,
+                            channel == null ? "" : channel.toString());
                 }
             }
         }
