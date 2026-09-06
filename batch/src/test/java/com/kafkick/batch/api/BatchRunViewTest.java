@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.springframework.batch.core.BatchStatus;
 import org.junit.jupiter.api.Test;
 
+import com.kafkick.core.batch.FailureSummary;
 import com.kafkick.core.batch.BatchRun;
 
 /**

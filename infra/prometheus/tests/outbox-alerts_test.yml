@@ -1,0 +1,234 @@
+# outbox 알림 규칙의 **동작**을 못 박는다.
+#
+# promtool check rules 는 문법만 본다. 그래서 규칙이 "문법은 맞는데 영원히 안 뜨는" 상태로
+# 바뀌어도 CI 가 초록이다 — batch-alerts_test.yml 이 같은 이유로 서 있고, 그쪽은 실제로
+# 두 번 그 상태를 잡았다.
+#
+# ⚠️ 이 디렉터리는 rules/ 밖이다. prometheus.yml 의 rule_files 글롭(rules/*.yml)에 걸리면
+#    프로메테우스가 이 파일을 규칙으로 읽으려다 기동에 실패한다.
+rule_files:
+  - ../rules/outbox-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 종착: 기준선이 0 이라 한 건이면 뜬다 ─────────────────────────────────
+  - interval: 1m
+    name: "종착이 한 건이라도 나면 OutboxCommandsDead 가 뜬다"
+    input_series:
+      - series: 'app_outbox_dead_total{reason="publish_failed"}'
+        # 5분째에 한 번 오르고 그대로 유지된다(카운터).
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OutboxCommandsDead
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              reason: publish_failed
+            exp_annotations:
+              summary: "알림 발행 명령이 종착했습니다 (publish_failed, 10분 1건)"
+              description: >-
+                그만큼의 알림이 스스로는 영영 안 나갑니다. 접수는 이미 200 으로 끝났으므로 사용자도 응답도 이 사실을 모릅니다. reason 이 publish_failed 면 브로커부터 봅니다 — app_outbox_retry_total 이 같은 reason 으로 함께 올랐는지, Kafka 대상이 살아 있는지. notification_missing 이면 발행 대상 알림 행이 사라진 것이라 그 원인이 먼저입니다. lease_expired 면 워커가 lease 안에 못 끝낸 것이니 app_notify_relay_inflight 와 app_outbox_backlog 를 함께 봅니다 — 상한에 붙어 있으면 워커가 모자랍니다. 종착한 건은 notification_outbox 의 DEAD 행이고, 재발송은 알림 재발송 API 가 합니다.
+
+  # ── 종착이 없으면 안 뜬다. 기준선이 0 이라는 전제를 못 박는다 ─────────────
+  - interval: 1m
+    name: "종착이 0 이면 OutboxCommandsDead 가 안 뜬다"
+    input_series:
+      - series: 'app_outbox_dead_total{reason="publish_failed"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: OutboxCommandsDead
+        exp_alerts: []
+
+  # ── 밀림: 계속 늘어야 뜬다 ──────────────────────────────────────────────
+  #
+  # **절대값이 아니라 기울기다.** 백로그가 커도 줄고 있으면 안 뜨는 것이 이 규칙의 요점이라,
+  # 아래 두 시험이 그 둘을 가른다.
+  - interval: 1m
+    name: "백로그가 계속 늘면 OutboxBacklogGrowing 이 뜬다"
+    input_series:
+      - series: 'app_outbox_backlog'
+        # 1분마다 10씩 는다.
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: OutboxBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "알림 발행 백로그가 30분째 늘고 있습니다 (지금 0.16666666666666666/s 로 증가)"
+              description: >-
+                릴레이가 유입을 못 따라가고 있습니다. app_notify_relay_inflight 를 함께 봅니다 — 상한(kafka.notification.relay.max-in-flight, 기본 64)에 붙어 있으면 워커가 모자란 것이고, 0 에 가까운데 백로그가 늘면 집는 쪽이 막힌 것입니다(DB 경합· 바이너리 로그 포맷 가드·클레임 실패). app_outbox_retry_total 이 함께 오르면 발행이 실패해 되돌아오는 중입니다 — 그때는 대상(브로커)이 원인이지 릴레이가 아닙니다. 워커는 kafka.notification.relay.worker-count 로 늘립니다. 늘릴 때 max-in-flight 와의 비가 lease 검사를 정하므로 릴레이가 기동에서 거절할 수 있습니다.
+
+  # 백로그가 **크지만 줄고 있으면** 안 뜬다. 절대값 임계였다면 여기서 떴을 것이다.
+  - interval: 1m
+    name: "백로그가 커도 줄고 있으면 OutboxBacklogGrowing 이 안 뜬다"
+    input_series:
+      - series: 'app_outbox_backlog'
+        values: '5000-10x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: OutboxBacklogGrowing
+        exp_alerts: []
+
+  # ── 못 보는 상태 ───────────────────────────────────────────────────────
+  - interval: 1m
+    name: "게이지가 -1 이면 OutboxBacklogGaugeMissing 이 뜬다"
+    input_series:
+      - series: 'app_outbox_backlog'
+        values: '-1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OutboxBacklogGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "알림 발행 백로그를 볼 수 없습니다"
+              description: >-
+                -1 은 한 번도 못 셌다는 뜻입니다 — 게이지가 DB 를 못 읽고 있습니다. (실패해도 직전 값을 유지하도록 만들었으므로, -1 은 첫 조회부터 실패한 상태입니다.) 계열 자체가 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것입니다 — 그 경우 발행 자체가 안 도는 것이니 백로그보다 그쪽이 먼저입니다. 조회 주기는 kafka.notification.relay.backlog-refresh-ms(기본 15초)입니다.
+
+  # **계열이 아예 없어도 뜬다.** 이것이 없으면 "백로그를 못 보는 상태" 가 영구 침묵이다.
+  - interval: 1m
+    name: "게이지 계열이 아예 없어도 OutboxBacklogGaugeMissing 이 뜬다"
+    input_series:
+      - series: 'up{job="api"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OutboxBacklogGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "알림 발행 백로그를 볼 수 없습니다"
+              description: >-
+                -1 은 한 번도 못 셌다는 뜻입니다 — 게이지가 DB 를 못 읽고 있습니다. (실패해도 직전 값을 유지하도록 만들었으므로, -1 은 첫 조회부터 실패한 상태입니다.) 계열 자체가 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것입니다 — 그 경우 발행 자체가 안 도는 것이니 백로그보다 그쪽이 먼저입니다. 조회 주기는 kafka.notification.relay.backlog-refresh-ms(기본 15초)입니다.
+
+  # ── 워커/풀 검사: 0 이면 뜨고 1 이면 안 뜬다 ──────────────────────────────
+  - interval: 1m
+    name: "검사를 못 지난 채 떠 있으면 RelayPoolHeadroomUnverified 가 뜬다"
+    input_series:
+      - series: 'cy_notify_relay_pool_headroom_verified'
+        # 껐거나 풀 크기를 못 읽은 상태로 계속 떠 있다.
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayPoolHeadroomUnverified
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "릴레이 워커/풀 검사를 못 지난 채 떠 있습니다"
+              description: >-
+                RELAY_POOL_HEADROOM_GUARD_REQUIRED=false 로 거절을 껐거나, DataSource 에서 최대 풀 크기를 못 읽어 검사를 건너뛴 상태입니다. **설정이 나쁘다는 뜻이 아니라, 워커 수와 풀 크기의 관계가 확인되지 않은 상태라는 뜻입니다** — 검사가 안 걸려 있으니 나빠져도 아무도 모릅니다. 직접 확인하십시오: kafka.notification.relay.worker-count + 2 가 DB_POOL_SIZE 이하여야 합니다. 넘으면 릴레이 워커가 접수 몫 커넥션을 남기지 못해 접수 지연이 네 배(워커 12)에서 여덟 배(워커 16)가 되는데, 앱은 정상으로 보이고 오류도 안 납니다 (실측: 풀 13 에서 워커 11 → p99 999µs, 워커 12 → 4,069µs. docs/18). 기동 로그의 "릴레이 워커/풀" ERROR/WARN 이 어느 갈래인지 답합니다. 고친 뒤에는 거절을 다시 켜십시오.
+
+  # 통과한 상태에서는 안 떠야 한다 — 안 그러면 정상 배포마다 알림이 온다.
+  - interval: 1m
+    name: "검사를 지났으면 RelayPoolHeadroomUnverified 가 안 뜬다"
+    input_series:
+      - series: 'cy_notify_relay_pool_headroom_verified'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayPoolHeadroomUnverified
+        exp_alerts: []
+
+  # 5분을 안 채우면 안 뜬다. for 를 지우는 변경을 여기서 잡는다.
+  - interval: 1m
+    name: "0 이 된 지 5분이 안 되면 아직 안 뜬다"
+    input_series:
+      - series: 'cy_notify_relay_pool_headroom_verified'
+        values: '1x5 0x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RelayPoolHeadroomUnverified
+        exp_alerts: []
+
+  # ── 목 발송기가 성공으로 세는 상태 ───────────────────────────────────────
+  - interval: 1m
+    name: "목인데 성공이 오르면 NotifySuccessesAreNotReal 이 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              # `and` 의 왼쪽 계열 라벨이 그대로 실린다 — alertmanager 가 이것으로 가른다.
+              result: success
+              job: cy-api
+              instance: api-1:9292
+            exp_annotations:
+              summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 15건)"
+              description: >-
+                이 인스턴스는 목 발송기(MockNotificationSender)로 도는데 성공 카운터가 오르고 있습니다. **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로 outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다. 운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오 — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.** 로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가 그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.
+
+  # 실물이면 안 뜬다 — 정상 운영마다 알림이 오면 안 된다.
+  - interval: 1m
+    name: "실물 발송기면 성공이 올라도 안 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts: []
+
+  # 목이지만 아무것도 안 보내면 안 뜬다 — 한가한 로컬에서 울리면 안 된다.
+  # ("avoid having pages where there is nothing to do")
+  - interval: 1m
+    name: "목이어도 성공이 안 오르면 안 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
+        values: '0x30'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts: []
+
+  # ⚠️ **롤링 배포**. 새 판(api-2)은 실물, 옛 판(api-1)은 아직 목이다.
+  #    빈 on() 이면 api-2 의 성공까지 "아무 데도 안 갔다" 고 보고했다(리뷰가 잡았다).
+  #    목인 api-1 하나만 떠야 한다.
+  - interval: 1m
+    name: "실물 인스턴스와 목 인스턴스가 섞이면 목 쪽만 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
+        values: '0x30'
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-2:9292"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-2:9292"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              result: success
+              job: cy-api
+              instance: api-1:9292
+            exp_annotations:
+              summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 15건)"
+              description: >-
+                이 인스턴스는 목 발송기(MockNotificationSender)로 도는데 성공 카운터가 오르고 있습니다. **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로 outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다. 운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오 — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.** 로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가 그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.

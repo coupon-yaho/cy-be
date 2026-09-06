@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import org.springframework.batch.core.job.JobExecution;
 
+import com.kafkick.core.batch.FailureSummary;
 import com.kafkick.batch.config.BatchTimeAxis;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;

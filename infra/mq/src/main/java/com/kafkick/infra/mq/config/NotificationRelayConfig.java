@@ -8,6 +8,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -20,10 +21,12 @@ import com.kafkick.core.notification.NotificationRepository;
 import com.kafkick.core.notification.event.NotificationRequestedEventPublisher;
 import com.kafkick.core.notification.retry.FullJitterBackOff;
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.infra.mq.notification.NotificationOutboxBacklogGauge;
 import com.kafkick.infra.mq.notification.NotificationOutboxRelay;
 import com.kafkick.infra.mq.notification.NotificationRelayProperties;
 import com.kafkick.infra.mq.notification.NotificationRelayScheduler;
 import com.kafkick.infra.mq.notification.RelayBinlogFormatGuard;
+import com.kafkick.infra.mq.notification.RelayWorkerPoolHeadroomGuard;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty("kafka.enabled")
@@ -103,7 +106,8 @@ public class NotificationRelayConfig {
      *
      * <p><b>"지금 몇 건 물고 있나" 하나로만 읽는다.</b> 백프레셔가 걸렸는지는 여기서 못
      * 읽는다 — 그 판정은 {@code poll()} 이 불린 순간에만 나고 스크레이프는 그 사이 아무
-     * 때나 찍힌다. 건너뛴 횟수와 백로그는 CY-908(#197)이 별도 지표로 붙인다.
+     * 때나 찍힌다. 한가한 것과 막힌 것을 가르는 것은
+     * {@link NotificationOutboxBacklogGauge} 와 함께 보는 일이다(CY-913).
      */
     @Bean
     public Gauge notificationRelayInFlightGauge(MeterRegistry registry,
@@ -111,6 +115,17 @@ public class NotificationRelayConfig {
         return Gauge.builder(DomainMeterNames.NOTIFY_RELAY_IN_FLIGHT, relay,
                         NotificationOutboxRelay::inFlight)
                 .register(registry);
+    }
+
+    /**
+     * <b>인플라이트 게이지의 짝이다.</b> 인플라이트만으로는 한가한 것과 막힌 것을 구분하지
+     * 못한다 — 상한에 붙어 있는데 백로그가 안 줄면 워커가 모자란 것이고, 백로그도 0 이면
+     * 그냥 보낼 것이 없는 것이다. CY-906·CY-908 이 "붙인다" 고 적어 두고 안 붙였던 자리다.
+     */
+    @Bean
+    public NotificationOutboxBacklogGauge notificationOutboxBacklogGauge(
+            NotificationOutboxRepository outboxes, MeterRegistry registry) {
+        return new NotificationOutboxBacklogGauge(outboxes, registry);
     }
 
     @Bean
@@ -125,5 +140,22 @@ public class NotificationRelayConfig {
     @Bean
     public RelayBinlogFormatGuard relayBinlogFormatGuard(DataSource dataSource) {
         return new RelayBinlogFormatGuard(dataSource);
+    }
+
+    /**
+     * <b>워커 풀을 만드는 자리에 함께 둔다.</b> 이 검사는 빈 하나의 불변식이 아니라
+     * <b>워커 수와 커넥션 풀 크기 사이의 관계</b>다. 릴레이 생성자에 얹으면 lease 검사들
+     * 사이에 성격이 다른 것이 섞이고, 바깥의 {@code @Component} 로 두면 <b>릴레이가 없는
+     * 프로파일에서도</b> 돌아 없는 워커를 검사한다. 풀을 만드는 이 설정이 정확히 그 관계가
+     * 성립하는 범위다.
+     */
+    @Bean
+    public RelayWorkerPoolHeadroomGuard relayWorkerPoolHeadroomGuard(
+            DataSource dataSource,
+            NotificationRelayProperties properties,
+            @Value("${" + RelayWorkerPoolHeadroomGuard.REQUIRED + ":true}") boolean required,
+            ObjectProvider<MeterRegistry> registries) {
+        return new RelayWorkerPoolHeadroomGuard(dataSource, properties.getWorkerCount(),
+                required, registries.getIfAvailable());
     }
 }

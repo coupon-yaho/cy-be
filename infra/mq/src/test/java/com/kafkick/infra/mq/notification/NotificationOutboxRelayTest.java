@@ -86,7 +86,7 @@ class NotificationOutboxRelayTest {
     @Test
     void publishesClaimAndMarksItWithFencingToken() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim()));
-        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
 
         assertThat(relay.poll()).isEqualTo(1);
 
@@ -106,7 +106,7 @@ class NotificationOutboxRelayTest {
     @Test
     void publishFailureReturnsClaimToPendingAfterAJitteredDelay() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
-        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
         org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
                 .when(publisher).publish(any());
 
@@ -121,7 +121,7 @@ class NotificationOutboxRelayTest {
     @Test
     void missingNotificationAlsoUsesTheJitteredDelay() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
-        when(notifications.findById(41L)).thenReturn(Optional.empty());
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of());
 
         // 반환값은 **넘긴 수**다 — 발행 성공 여부는 아래 markFailed 로 본다.
         assertThat(relay.poll()).isEqualTo(1);
@@ -137,7 +137,7 @@ class NotificationOutboxRelayTest {
     @Test
     void ceilingGrowsWithTheClaimsFailureCount() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(3)));
-        when(notifications.findById(41L)).thenReturn(Optional.empty());
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of());
 
         // 반환값은 **넘긴 수**다 — 발행 성공 여부는 아래 markFailed 로 본다.
         assertThat(relay.poll()).isEqualTo(1);
@@ -173,7 +173,7 @@ class NotificationOutboxRelayTest {
             });
             NotificationOutboxRelay bounded = relayWith(LEASE, BATCH, blocking, 2, 2);
             when(outboxes.claimBatch(LEASE, 2)).thenReturn(List.of(claim(), claim()));
-            when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+            when(notifications.findAllByIdIn(org.mockito.ArgumentMatchers.anyList())).thenReturn(List.of(notification()));
 
             assertThat(bounded.poll()).isEqualTo(2);
             assertThat(started.await(5, TimeUnit.SECONDS))
@@ -231,7 +231,7 @@ class NotificationOutboxRelayTest {
             });
             NotificationOutboxRelay draining = relayWith(LEASE, BATCH, blocking, 1, 1);
             when(outboxes.claimBatch(LEASE, 1)).thenReturn(List.of(claim()));
-            when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+            when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
 
             assertThat(draining.poll()).isEqualTo(1);
             assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
@@ -302,7 +302,7 @@ class NotificationOutboxRelayTest {
         NotificationOutboxRelay relay = relayWith(LEASE, BATCH, rejectsAfterFirst, 4, 4);
         when(outboxes.claimBatch(LEASE, 4))
                 .thenReturn(List.of(claim(1L), claim(2L), claim(3L)));
-        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        when(notifications.findAllByIdIn(org.mockito.ArgumentMatchers.anyList())).thenReturn(List.of(notification()));
 
         assertThatThrownBy(relay::poll).isInstanceOf(RejectedExecutionException.class);
 
@@ -389,7 +389,7 @@ class NotificationOutboxRelayTest {
             assertThat(drained.await(2, TimeUnit.SECONDS)).isFalse();
             return List.of(claim());
         });
-        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
 
         ExecutorService caller = Executors.newSingleThreadExecutor();
         try {
@@ -427,7 +427,7 @@ class NotificationOutboxRelayTest {
     @Test
     void aStaleWorkerResultIsDiscardedRatherThanRetried() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim()));
-        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
         // 그 사이 lease 가 만료되어 남이 다시 집었다 — 토큰이 안 맞아 0행이다.
         when(outboxes.markPublished(org.mockito.ArgumentMatchers.eq(7L),
                 org.mockito.ArgumentMatchers.eq("token"), any())).thenReturn(false);
@@ -448,7 +448,7 @@ class NotificationOutboxRelayTest {
     @Test
     void theMissingNotificationPathPassesItsOwnReason() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
-        when(notifications.findById(41L)).thenReturn(Optional.empty());
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of());
 
         relay.poll();
 
@@ -460,7 +460,7 @@ class NotificationOutboxRelayTest {
     @Test
     void thePublishFailurePathPassesItsOwnReason() {
         when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
-        when(notifications.findById(41L)).thenReturn(Optional.of(notification()));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
         org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
                 .when(publisher).publish(any());
 
@@ -580,5 +580,85 @@ class NotificationOutboxRelayTest {
     void rejectsNonPositiveLease() {
         assertThatThrownBy(() -> relayWith(Duration.ZERO, BATCH, DIRECT, MAX_IN_FLIGHT, WORKERS))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>배치당 한 번 읽어야 한다 — 건당이 아니라.</b>
+     *
+     * <p>워커가 건당 {@code findById} 를 부르면 발행 한 건에 커넥션을 <b>두 번</b> 빌리고,
+     * 그 풀을 접수 요청과 공유한다. 실측(CY-926): 배치 조회로 바꾸니 <b>처리량이 전 구간
+     * 20~30% 올랐다</b>(워커 8 기준 738 → 930~937건/s).
+     *
+     * <p>이 테스트가 없으면 누가 {@code publish} 안에서 다시 건별로 읽어도 아무도 모른다 —
+     * 기능은 그대로 동작하고 <b>느려지기만</b> 한다.
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("한 회차의 알림을 배치로 한 번만 읽는다 — 건당이 아니다")
+    void loadsTheBatchOnceInsteadOfPerClaim() {
+        NotificationOutboxRelay relay = relayWith(LEASE, BATCH, Runnable::run, 64, 8);
+        when(outboxes.claimBatch(LEASE, BATCH))
+                .thenReturn(List.of(claim(1L), claim(2L), claim(3L)));
+        when(notifications.findAllByIdIn(org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(List.of(notification()));
+
+        relay.poll();
+
+        verify(notifications, org.mockito.Mockito.times(1))
+                .findAllByIdIn(org.mockito.ArgumentMatchers.anyList());
+        verify(notifications, never()).findById(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    /**
+     * <b>같은 알림이 한 배치에 둘 들어올 수 있다.</b> 유일 키가
+     * {@code (notification_id, attempt_seq)} 라, 자동 재시도로 회차가 다른 두 건이 함께
+     * 집힌다. 중복을 그대로 넘기면 {@code IN} 절만 길어진다.
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("한 배치에 같은 알림이 둘이면 id 를 한 번만 넘긴다")
+    void passesEachNotificationIdOnlyOnce() {
+        NotificationOutboxRelay relay = relayWith(LEASE, BATCH, Runnable::run, 64, 8);
+        when(outboxes.claimBatch(LEASE, BATCH))
+                .thenReturn(List.of(claim(1L), claim(2L)));
+        when(notifications.findAllByIdIn(org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(List.of(notification()));
+
+        relay.poll();
+
+        org.mockito.ArgumentCaptor<java.util.Collection<Long>> ids =
+                org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(notifications).findAllByIdIn(ids.capture());
+        assertThat(ids.getValue())
+                .as("두 claim 이 같은 알림을 가리킨다")
+                .containsExactly(41L);
+    }
+
+    /**
+     * <b>배치 조회 하나가 실패하면 집은 전부가 묶인다.</b>
+     *
+     * <p>건별 조회일 때는 한 건만 lease 만료를 기다렸다. 배치로 옮기면서 <b>한 번의 실패가
+     * 최대 64건을 기본 30초 동안 {@code IN_PROGRESS} 로 붙잡는</b> 모양이 됐다 — 이 회차가
+     * 통째로 멈추고, 그동안 아무도 그 행들을 못 집는다. 리뷰가 잡았다.
+     *
+     * <p>되돌린 뒤 <b>예외를 다시 던진다.</b> 삼키면 조회가 실패했다는 사실이 아무 데도
+     * 안 남는다 — 아래 거부 경로와 같은 판단이다.
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("배치 조회가 실패하면 집은 전부를 되돌리고 다시 던진다")
+    void aFailedBatchLoadReleasesEveryClaimItHadTaken() {
+        NotificationOutboxRelay relay = relayWith(LEASE, BATCH, Runnable::run, 64, 8);
+        when(outboxes.claimBatch(LEASE, BATCH))
+                .thenReturn(List.of(claim(1L), claim(2L), claim(3L)));
+        RuntimeException lookupFailed = new IllegalStateException("커넥션 없음");
+        when(notifications.findAllByIdIn(org.mockito.ArgumentMatchers.anyList()))
+                .thenThrow(lookupFailed);
+
+        assertThatThrownBy(relay::poll).isSameAs(lookupFailed);
+
+        verify(outboxes).releaseClaim(1L, "token-1");
+        verify(outboxes).releaseClaim(2L, "token-2");
+        verify(outboxes).releaseClaim(3L, "token-3");
+        assertThat(relay.inFlight())
+                .as("아무것도 안 넘겼으므로 인플라이트가 남으면 안 된다")
+                .isZero();
     }
 }

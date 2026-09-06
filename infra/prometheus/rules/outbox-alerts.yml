@@ -1,0 +1,156 @@
+# 알림 발행(outbox) 릴레이 알림 규칙. 관제(Prometheus)가 `rules/*.yml` 로 그대로 가져다 쓴다.
+#
+# 여기 메트릭은 NotificationOutboxMeter(storage)와 NotificationOutboxBacklogGauge(infra:mq)가
+# 등록하고 api 의 관리 포트 /actuator/prometheus 로 나간다. 이름의 정본은
+# core 의 DomainMeterNames 이고, OutboxAlertRuleContractTest 가 이 파일과 그 상수를 대조한다.
+#
+# ⚠️ 알림마다 channel 라벨이 붙는다 — alertmanager 가 그것으로 수신함을 가른다.
+#    빠뜨리면 sink-unrouted 로 떨어진다(docs/14).
+#
+# ⚠️ **배치 알림의 3중 구조(미성공·미도래·지표부재)를 그대로 복제하지 않았다.**
+#    그쪽 축은 "마지막 성공이 언제냐" 인데, 릴레이는 크론이 아니라 상시라 그 축이 없다.
+#    상시 처리기의 증상은 **밀리는 것**과 **영영 안 가는 것** 둘이고, 아래가 그 둘이다.
+#    Prometheus 권고("alert on symptoms", "avoid pages where there is nothing to do")를
+#    그대로 적용한 결과다.
+
+groups:
+  - name: cy-notification-outbox
+    rules:
+
+      # 재시도 상한(10회)을 넘겨 종착한 명령. **사람이 다시 보내야 한다.**
+      #
+      # 기준선이 0 이라 임계를 고를 필요가 없다 — 정상 운영에서 이 값은 안 오른다.
+      # 오르면 그만큼의 알림이 스스로는 영영 안 나가고, 그 사실은 **응답 어디에도 안 드러난다**
+      # (접수는 이미 200 으로 끝났다). 사람이 지표를 안 보면 아무도 모르는 종류의 사고다.
+      #
+      # reason 으로 갈려 오므로 무엇이 죽였는지가 알림에 그대로 실린다 —
+      # publish_failed(브로커) · notification_missing(대상 소실) · lease_expired(워커가 못 끝냄).
+      - alert: OutboxCommandsDead
+        expr: increase(app_outbox_dead_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "알림 발행 명령이 종착했습니다 ({{ $labels.reason }}, 10분 {{ $value }}건)"
+          description: >-
+            그만큼의 알림이 스스로는 영영 안 나갑니다. 접수는 이미 200 으로 끝났으므로
+            사용자도 응답도 이 사실을 모릅니다.
+            reason 이 publish_failed 면 브로커부터 봅니다 — app_outbox_retry_total 이 같은
+            reason 으로 함께 올랐는지, Kafka 대상이 살아 있는지.
+            notification_missing 이면 발행 대상 알림 행이 사라진 것이라 그 원인이 먼저입니다.
+            lease_expired 면 워커가 lease 안에 못 끝낸 것이니 app_notify_relay_inflight 와
+            app_outbox_backlog 를 함께 봅니다 — 상한에 붙어 있으면 워커가 모자랍니다.
+            종착한 건은 notification_outbox 의 DEAD 행이고, 재발송은 알림 재발송 API 가 합니다.
+
+      # 밀리는 것. 백로그가 계속 늘면 릴레이가 유입을 못 따라간다는 뜻이다.
+      #
+      # **절대값이 아니라 기울기를 본다.** 백로그 1,000 이 사고인지 정상인지는 유입량에
+      # 달렸고 그 임계를 여기서 정할 수 없다 — 반면 "30분째 계속 늘고 있다" 는 유입량과
+      # 무관하게 나쁘다. deriv 가 그 축이다.
+      #
+      # ⚠️ 게이지가 없거나 못 읽는 상태는 여기서 안 잡는다. deriv 는 계열이 끊기면 빈
+      #    결과가 되어 for 타이머가 리셋된다 — 그 사건은 아래 OutboxBacklogGaugeMissing 이
+      #    따로 진다. 배치 쪽 *GaugeMissing 이 같은 이유로 따로 서 있다.
+      - alert: OutboxBacklogGrowing
+        expr: deriv(app_outbox_backlog[15m]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "알림 발행 백로그가 30분째 늘고 있습니다 (지금 {{ $value }}/s 로 증가)"
+          description: >-
+            릴레이가 유입을 못 따라가고 있습니다. app_notify_relay_inflight 를 함께 봅니다 —
+            상한(kafka.notification.relay.max-in-flight, 기본 64)에 붙어 있으면 워커가
+            모자란 것이고, 0 에 가까운데 백로그가 늘면 집는 쪽이 막힌 것입니다(DB 경합·
+            바이너리 로그 포맷 가드·클레임 실패).
+            app_outbox_retry_total 이 함께 오르면 발행이 실패해 되돌아오는 중입니다 —
+            그때는 대상(브로커)이 원인이지 릴레이가 아닙니다.
+            워커는 kafka.notification.relay.worker-count 로 늘립니다. 늘릴 때
+            max-in-flight 와의 비가 lease 검사를 정하므로 릴레이가 기동에서 거절할 수 있습니다.
+
+      # 게이지 자체가 없는 상태. 값이 -1 이면 **한 번도 못 셌다**는 뜻이고,
+      # 계열이 아예 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것이다.
+      #
+      # **이것이 없으면 "백로그를 못 보는 상태" 가 영구 침묵이다.** 위 알림은 값이 있어야
+      # 도는데, 값이 없는 쪽이 더 나쁘다 — 밀리는 것을 아무도 못 본다.
+      - alert: OutboxBacklogGaugeMissing
+        expr: (app_outbox_backlog == -1) or (absent(app_outbox_backlog) == 1)
+        for: 15m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "알림 발행 백로그를 볼 수 없습니다"
+          description: >-
+            -1 은 한 번도 못 셌다는 뜻입니다 — 게이지가 DB 를 못 읽고 있습니다.
+            (실패해도 직전 값을 유지하도록 만들었으므로, -1 은 첫 조회부터 실패한 상태입니다.)
+            계열 자체가 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것입니다 —
+            그 경우 발행 자체가 안 도는 것이니 백로그보다 그쪽이 먼저입니다.
+            조회 주기는 kafka.notification.relay.backlog-refresh-ms(기본 15초)입니다.
+
+      # 워커/풀 검사를 통과 못 한 채 떠 있는 상태. 끄고 띄웠거나 풀 크기를 못 읽었다.
+      # 기동 로그의 ERROR/WARN 한 줄이 유일한 흔적이라 이 스택에서는 안 보인다
+      # (batch-alerts.yml 의 BatchJdbcTimeoutUnverified 와 같은 모양이다).
+      #
+      # ⚠️ **absent() 갈래를 안 둔다.** 이 게이지는 릴레이가 있을 때만 등록되므로,
+      #    계열이 없는 것은 "kafka.enabled 가 꺼진 배포" 이지 고장이 아니다 —
+      #    OutboxBacklogGaugeMissing 과 다른 점이다. 빈이 아예 안 실리는 사고는
+      #    런타임이 아니라 빌드에서 막는다(KafkaLayerWiringTest 가 게이지 1 을 본다).
+      - alert: RelayPoolHeadroomUnverified
+        expr: cy_notify_relay_pool_headroom_verified == 0
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "릴레이 워커/풀 검사를 못 지난 채 떠 있습니다"
+          description: >-
+            RELAY_POOL_HEADROOM_GUARD_REQUIRED=false 로 거절을 껐거나, DataSource 에서
+            최대 풀 크기를 못 읽어 검사를 건너뛴 상태입니다.
+            **설정이 나쁘다는 뜻이 아니라, 워커 수와 풀 크기의 관계가 확인되지 않은
+            상태라는 뜻입니다** — 검사가 안 걸려 있으니 나빠져도 아무도 모릅니다.
+            직접 확인하십시오: kafka.notification.relay.worker-count + 2 가
+            DB_POOL_SIZE 이하여야 합니다. 넘으면 릴레이 워커가 접수 몫 커넥션을 남기지
+            못해 접수 지연이 네 배(워커 12)에서 여덟 배(워커 16)가 되는데, 앱은 정상으로
+            보이고 오류도 안 납니다 (실측: 풀 13 에서 워커 11 → p99 999µs,
+            워커 12 → 4,069µs. docs/18).
+            기동 로그의 "릴레이 워커/풀" ERROR/WARN 이 어느 갈래인지 답합니다.
+            고친 뒤에는 거절을 다시 켜십시오.
+
+      # 성공 지표가 오르는데 그 인스턴스가 목 발송기로 도는 상태.
+      #
+      # MockNotificationSender 는 안 보내면서 예외도 안 던진다. 그래서 그것이 선 환경에서도
+      # app_notify_sent_total{result="success"} 가 정상적으로 오르고, outbox 는 PUBLISHED 가
+      # 되며 소비자도 정상 소비한다 — **파이프라인 전체가 초록인데 사용자에게는 아무것도
+      # 안 간다.** 위의 어떤 알림도 이 상태를 안 잡는다.
+      #
+      # ⚠️ **목으로 도는 것 자체는 알리지 않는다.** 로컬·테스트·시연이 그것으로 돌고,
+      #    통합 테스트도 그것으로 돈다. 그건 정상이다. 문제는 **그것을 성공으로 세는
+      #    순간**이라, and 로 둘을 묶어 그때만 뜨게 한다. 한가한 환경에서는 안 뜬다
+      #    ("avoid having pages where there is nothing to do").
+      - alert: NotifySuccessesAreNotReal
+        # ⚠️ **on(job, instance) 다 — 빈 on() 이 아니다.** 빈 on() 은 job·instance 를
+        #    무시해서, **목 인스턴스가 하나라도 있으면 실물 인스턴스의 성공까지** 미발송으로
+        #    판정한다. 롤링 배포 중(새 판은 실물, 옛 판은 아직 목)이나 인스턴스별 설정이
+        #    갈렸을 때 **실제로 나간 알림을 "아무 데도 안 갔다" 고 보고한다**(리뷰가 잡았다).
+        #    인스턴스로 묶으면 목인 그 인스턴스만 뜬다.
+        expr: >-
+          increase(app_notify_sent_total{result="success"}[15m]) > 0
+          and on(job, instance) cy_notify_sender_live == 0
+        for: 0m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 {{ $value }}건)"
+          description: >-
+            이 인스턴스는 목 발송기(MockNotificationSender)로 도는데 성공 카운터가
+            오르고 있습니다.
+            **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로
+            outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다.
+            운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오
+            — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.**
+            로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가
+            그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.

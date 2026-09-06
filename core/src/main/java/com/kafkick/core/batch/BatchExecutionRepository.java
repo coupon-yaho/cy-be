@@ -73,4 +73,36 @@ public interface BatchExecutionRepository {
      * @return 실행 목록. 그 이름의 잡이 없거나 한 번도 안 돌았으면 빈 목록
      */
     List<BatchExecution> findRecentByJobName(String jobName, int limit);
+
+    /**
+     * 한 실행의 스텝들을 <b>실행 순서대로</b> 조회한다.
+     *
+     * <p><b>목록에 끼워 넣지 않고 따로 받는 이유</b> — 실행 N 건마다 스텝을 조회하면 목록이
+     * N+1 이 되고, 한 번에 조인해도 실행당 스텝 수만큼 행이 불어난다. 사람이 실제로 파고드는
+     * 것은 <b>한 건</b>이라, 정본(Spring Cloud Data Flow 대시보드)도 목록 → 상세 → 스텝
+     * 으로 단계를 나눈다.
+     *
+     * <p><b>정렬은 {@code STEP_EXECUTION_ID} 다.</b> 시작 시각은 nullable 이고(시작 못 한
+     * 스텝), 병렬 스텝이면 같은 시각이 여럿 나온다 — 그때 순서가 흔들리면 <b>같은 실행을
+     * 두 번 열었을 때 화면이 달라진다.</b>
+     *
+     * @param jobExecutionId 잡 실행 식별자
+     * @return 스텝 목록. 그 실행이 없거나 스텝이 하나도 안 돌았으면 빈 목록 —
+     *         <b>실행이 없는 것과 스텝이 없는 것을 여기서 가르지 않는다.</b> 가르려면
+     *         실행을 한 번 더 조회해야 하는데, 그 왕복의 값어치가 이 화면에는 없다
+     */
+    List<BatchStepExecution> findSteps(long jobExecutionId);
+
+    /**
+     * 한 실행의 파라미터를 <b>이름순</b>으로 조회한다.
+     *
+     * <p><b>정렬을 이름으로 잡는 이유</b> — 이 표에는 기본키가 없다(공식 스키마에도, 우리
+     * {@code V11__batch_metadata.sql} 에도 외래키뿐이다). 정렬을 안 주면 <b>같은 실행을 두 번
+     * 열었을 때 순서가 달라질 수 있고</b>, 사람은 그것을 값이 바뀐 것으로 읽는다.
+     *
+     * @param jobExecutionId 잡 실행 식별자
+     * @return 이름순 파라미터 목록. 파라미터 없이 돈 실행이면 빈 목록 —
+     *         {@link #findSteps} 와 같은 이유로 <b>실행이 없는 것과 여기서 가르지 않는다</b>
+     */
+    List<BatchJobParameter> findParameters(long jobExecutionId);
 }
