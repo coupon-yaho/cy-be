@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory;
  *   워커  8   요청 p99  862µs      ← 기본값
  *   워커 10   요청 p99  1,343µs
  *   워커 11   요청 p99  999µs      ← 여기까지 평평하다
- *   워커 12   요청 p99  4,069µs    ← 2.7 배로 뛴다
+ *   워커 12   요청 p99  4,069µs    ← 4.1 배로 뛴다
  *   워커 13   요청 p99  3,689µs
  *   워커 16   요청 p99  6,606µs
  * </pre>
@@ -44,7 +44,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>그쪽은 <b>운영 환경의 성질</b>(복제 형식)이라 이 프로세스가 고칠 수 없고, 막으면 접수
  * API 전체가 안 뜬다. 이쪽은 <b>우리 설정 둘 사이의 관계</b>다 — 배포하는 사람이 값을
- * 고치면 그 자리에서 풀린다. 그리고 걸렸을 때의 증상이 <b>접수 지연 일곱 배</b>인데
+ * 고치면 그 자리에서 풀린다. 그리고 걸렸을 때의 증상이 <b>접수 지연 네 배</b>(경계인
+ * 워커 12) <b>에서 여덟 배</b>(워커 16)인데
  * 앱은 정상으로 보이므로, 조용히 뜨는 것이 더 나쁘다.
  *
  * <p><b>끄는 손잡이는 둔다.</b> {@link com.kafkick.infra.mq.config.NotificationRelayConfig}
@@ -70,6 +71,17 @@ public class RelayWorkerPoolHeadroomGuard {
     public static final String REQUIRED =
             "kafka.notification.relay.pool-headroom-guard.required";
 
+    /**
+     * 검사 결과를 싣는 게이지.
+     *
+     * <p><b>알림 규칙이 이 이름을 그대로 쓴다</b>({@code rules/outbox-alerts.yml} 의
+     * {@code RelayPoolHeadroomUnverified}). 여기서 이름을 바꾸고 규칙을 안 고치면
+     * Prometheus 는 에러가 아니라 <b>빈 결과</b>를 돌려주고 알림이 영원히 안 뜬다 —
+     * 그리고 알림이 안 오는 것은 "정상" 과 구분되지 않는다.
+     * {@code OutboxAlertRuleContractTest} 가 이 상수와 규칙 파일을 대조한다.
+     */
+    public static final String GAUGE = "cy_notify_relay_pool_headroom_verified";
+
     /** 게이지가 읽는 값. 생성자가 한 번만 도므로 필드에 남긴다. */
     private volatile boolean verified;
 
@@ -90,7 +102,7 @@ public class RelayWorkerPoolHeadroomGuard {
                             + ")에서 접수 몫 " + REQUEST_HEADROOM + " 을 남기지 못합니다. "
                             + "이 릴레이는 접수 API 와 같은 풀을 쓰고, 워커는 건당 커넥션을 "
                             + "두 번 빌립니다 — 남는 것이 하나뿐이면 접수 요청 p99 가 "
-                            + "일곱 배가 되는데 앱은 정상으로 보입니다"
+                            + "네 배가 되는데 앱은 정상으로 보입니다"
                             + "(실측: 풀 13 에서 워커 11 → 999µs, 워커 12 → 4,069µs. "
                             + "docs/18). 워커를 " + (maxPoolSize - REQUEST_HEADROOM)
                             + " 이하로 줄이거나 DB_POOL_SIZE 를 "
@@ -112,7 +124,7 @@ public class RelayWorkerPoolHeadroomGuard {
         if (registry == null) {
             return;
         }
-        Gauge.builder("cy_notify_relay_pool_headroom_verified", this, self -> self.verified ? 1 : 0)
+        Gauge.builder(GAUGE, this, self -> self.verified ? 1 : 0)
                 .description("릴레이 워커가 접수 몫 커넥션을 남기는가 — 1 통과 · 0 못 했거나 껐다")
                 .register(registry);
     }

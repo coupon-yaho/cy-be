@@ -111,3 +111,44 @@ tests:
               summary: "알림 발행 백로그를 볼 수 없습니다"
               description: >-
                 -1 은 한 번도 못 셌다는 뜻입니다 — 게이지가 DB 를 못 읽고 있습니다. (실패해도 직전 값을 유지하도록 만들었으므로, -1 은 첫 조회부터 실패한 상태입니다.) 계열 자체가 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것입니다 — 그 경우 발행 자체가 안 도는 것이니 백로그보다 그쪽이 먼저입니다. 조회 주기는 kafka.notification.relay.backlog-refresh-ms(기본 15초)입니다.
+
+  # ── 워커/풀 검사: 0 이면 뜨고 1 이면 안 뜬다 ──────────────────────────────
+  - interval: 1m
+    name: "검사를 못 지난 채 떠 있으면 RelayPoolHeadroomUnverified 가 뜬다"
+    input_series:
+      - series: 'cy_notify_relay_pool_headroom_verified'
+        # 껐거나 풀 크기를 못 읽은 상태로 계속 떠 있다.
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayPoolHeadroomUnverified
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "릴레이 워커/풀 검사를 못 지난 채 떠 있습니다"
+              description: >-
+                RELAY_POOL_HEADROOM_GUARD_REQUIRED=false 로 거절을 껐거나, DataSource 에서 최대 풀 크기를 못 읽어 검사를 건너뛴 상태입니다. **릴레이 워커가 접수 요청의 커넥션을 다 가져갈 수 있습니다** — 그러면 접수 지연이 네 배에서 여덟 배가 되는데 앱은 정상으로 보이고 오류도 안 납니다 (실측: 풀 13 에서 워커 11 → p99 999µs, 워커 12 → 4,069µs. docs/18). 기동 로그의 "릴레이 워커/풀" ERROR/WARN 이 어느 갈래인지 답합니다. 껐던 것이면 kafka.notification.relay.worker-count 를 풀 크기 -2 이하로 줄이거나 DB_POOL_SIZE 를 올린 뒤 거절을 다시 켜십시오.
+
+  # 통과한 상태에서는 안 떠야 한다 — 안 그러면 정상 배포마다 알림이 온다.
+  - interval: 1m
+    name: "검사를 지났으면 RelayPoolHeadroomUnverified 가 안 뜬다"
+    input_series:
+      - series: 'cy_notify_relay_pool_headroom_verified'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayPoolHeadroomUnverified
+        exp_alerts: []
+
+  # 5분을 안 채우면 안 뜬다. for 를 지우는 변경을 여기서 잡는다.
+  - interval: 1m
+    name: "0 이 된 지 5분이 안 되면 아직 안 뜬다"
+    input_series:
+      - series: 'cy_notify_relay_pool_headroom_verified'
+        values: '1x5 0x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RelayPoolHeadroomUnverified
+        exp_alerts: []
