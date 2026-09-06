@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.infra.mq.notification.RelayWorkerPoolHeadroomGuard;
 
 /**
  * outbox 알림 규칙이 <b>실제로 나가는 메트릭 이름</b>을 쓰는지 대조한다.
@@ -38,6 +39,9 @@ class OutboxAlertRuleContractTest {
         assertThat(rules)
                 .as("백로그 게이지 — 게이지에는 _total 이 안 붙는다")
                 .contains(gaugeName(DomainMeterNames.OUTBOX_BACKLOG));
+        assertThat(rules)
+                .as("워커/풀 가드 게이지 — 이름이 갈리면 알림이 영원히 안 뜬다")
+                .contains(RelayWorkerPoolHeadroomGuard.GAUGE);
     }
 
     /**

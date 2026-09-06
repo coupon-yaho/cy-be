@@ -89,3 +89,29 @@ groups:
             계열 자체가 없으면 릴레이가 안 떴거나 kafka.enabled 가 꺼진 것입니다 —
             그 경우 발행 자체가 안 도는 것이니 백로그보다 그쪽이 먼저입니다.
             조회 주기는 kafka.notification.relay.backlog-refresh-ms(기본 15초)입니다.
+
+      # 워커/풀 검사를 통과 못 한 채 떠 있는 상태. 끄고 띄웠거나 풀 크기를 못 읽었다.
+      # 기동 로그의 ERROR/WARN 한 줄이 유일한 흔적이라 이 스택에서는 안 보인다
+      # (batch-alerts.yml 의 BatchJdbcTimeoutUnverified 와 같은 모양이다).
+      #
+      # ⚠️ **absent() 갈래를 안 둔다.** 이 게이지는 릴레이가 있을 때만 등록되므로,
+      #    계열이 없는 것은 "kafka.enabled 가 꺼진 배포" 이지 고장이 아니다 —
+      #    OutboxBacklogGaugeMissing 과 다른 점이다. 빈이 아예 안 실리는 사고는
+      #    런타임이 아니라 빌드에서 막는다(KafkaLayerWiringTest 가 게이지 1 을 본다).
+      - alert: RelayPoolHeadroomUnverified
+        expr: cy_notify_relay_pool_headroom_verified == 0
+        for: 5m
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "릴레이 워커/풀 검사를 못 지난 채 떠 있습니다"
+          description: >-
+            RELAY_POOL_HEADROOM_GUARD_REQUIRED=false 로 거절을 껐거나, DataSource 에서
+            최대 풀 크기를 못 읽어 검사를 건너뛴 상태입니다.
+            **릴레이 워커가 접수 요청의 커넥션을 다 가져갈 수 있습니다** — 그러면 접수
+            지연이 네 배에서 여덟 배가 되는데 앱은 정상으로 보이고 오류도 안 납니다
+            (실측: 풀 13 에서 워커 11 → p99 999µs, 워커 12 → 4,069µs. docs/18).
+            기동 로그의 "릴레이 워커/풀" ERROR/WARN 이 어느 갈래인지 답합니다.
+            껐던 것이면 kafka.notification.relay.worker-count 를 풀 크기 -2 이하로
+            줄이거나 DB_POOL_SIZE 를 올린 뒤 거절을 다시 켜십시오.
