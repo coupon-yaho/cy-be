@@ -1,0 +1,103 @@
+# api 알림 규칙의 **동작**을 못 박는다.
+#
+# promtool check rules 는 문법만 본다. 규칙이 "문법은 맞는데 영원히 안 뜨는" 상태로
+# 바뀌어도 CI 가 초록이다 — batch-alerts_test.yml 이 같은 이유로 서 있고, 그쪽은 실제로
+# 두 번 그 상태를 잡았다.
+#
+# ⚠️ 이 디렉터리는 rules/ 밖이다. prometheus.yml 의 글롭(rules/*.yml)에 걸리면
+#    프로메테우스가 이 파일을 규칙으로 읽으려다 기동에 실패한다.
+rule_files:
+  - ../rules/api-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 선점 누수: 기준선이 0 이라 한 건이면 뜬다 ────────────────────────────
+  # **응답에 안 드러나는 유일한 사고다.** 과소 발급 방향이라 사용자도 5xx 도 없다 —
+  # 이 알림이 안 뜨면 회차가 끝날 때까지 아무도 모른다.
+  - interval: 1m
+    name: "선점이 되돌아오지 않으면 V2IssuanceClaimLeaked 가 뜬다"
+    input_series:
+      - series: 'app_issuance_v2_claim_leaked_total'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: V2IssuanceClaimLeaked
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: data
+            exp_annotations:
+              summary: "v2 발급 선점이 되돌아오지 않았다 (5분 1건)"
+              description: >-
+                그 회차의 Redis 재고가 그만큼 낮아진 채 남는다. 과소 발급 방향이라 응답에는 안 드러난다. 회차의 Redis stock 과 DB active_count 를 대조하고, 회수는 CY-760 재구성 절차를 따른다.
+
+  - interval: 1m
+    name: "누수가 없으면 V2IssuanceClaimLeaked 가 안 뜬다"
+    input_series:
+      - series: 'app_issuance_v2_claim_leaked_total'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: V2IssuanceClaimLeaked
+        exp_alerts: []
+
+  # **창이 5분이라 그 밖으로 나가면 내려간다.** 카운터가 멈춘 뒤 창을 지나면
+  # increase 가 0 이 되어 알림이 해소된다.
+  #
+  # ⚠️ **이 시험이 창 축소를 잡는 것은 아니다.** 창을 줄여도 여기서는 여전히 0 이라
+  #    통과한다 — 한때 그렇게 적어 뒀는데 틀렸다(리뷰가 짚었다).
+  #    창 축소는 **위의 "뜬다" 시험**이 잡는다: 증가 시점과 평가 시점이 5분 창 안이라,
+  #    창을 2분으로 줄이면 그쪽이 깨진다(실측으로 확인했다).
+  #    여기서 지키는 것은 **해소된다**는 성질 하나다.
+  - interval: 1m
+    name: "누수가 멈추고 5분이 지나면 내려간다"
+    input_series:
+      - series: 'app_issuance_v2_claim_leaked_total'
+        values: '0 1 1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: V2IssuanceClaimLeaked
+        exp_alerts: []
+
+  # ── 회원 집합 갈림: Redis 게이트가 통과시킨 것을 DB 가 막았다 ────────────
+  - interval: 1m
+    name: "게이트와 DB 가 갈리면 V2IssuanceMemberSetDiverged 가 뜬다"
+    input_series:
+      - series: 'app_issuance_v2_database_member_divergence_total'
+        values: '0x5 2x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: V2IssuanceMemberSetDiverged
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+            exp_annotations:
+              summary: "Redis 가 통과시킨 중복을 DB 가 막았다 (5분 2건)"
+              description: >-
+                게이트의 회원 집합이 DB 와 갈렸다. 승격 직후라면 복제 유실이다. 응답은 409 로 정상이므로 사용자 영향은 없고, 봐야 할 것은 게이트 상태다.
+
+  - interval: 1m
+    name: "갈림이 없으면 V2IssuanceMemberSetDiverged 가 안 뜬다"
+    input_series:
+      - series: 'app_issuance_v2_database_member_divergence_total'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: V2IssuanceMemberSetDiverged
+        exp_alerts: []
+
+  # **둘을 갈라 센다.** 합치면 누수 스파이크가 평범한 재요청 물결로 읽힌다 —
+  # 한쪽만 올랐을 때 다른 쪽이 안 뜨는지 본다.
+  - interval: 1m
+    name: "갈림만 올라도 누수 알림은 안 뜬다"
+    input_series:
+      - series: 'app_issuance_v2_database_member_divergence_total'
+        values: '0x5 5x20'
+      - series: 'app_issuance_v2_claim_leaked_total'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: V2IssuanceClaimLeaked
+        exp_alerts: []
