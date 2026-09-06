@@ -274,7 +274,17 @@ public class NotificationOutboxRelay implements SmartLifecycle {
         // 그 사이 지워진 알림이 NOTIFICATION_MISSING 이 됐고, 지금은 선점 직후에 읽으므로
         // 그 뒤에 지워지면 그대로 발행된다. 어느 쪽이든 "읽은 뒤 발행 전" 창은 남고
         // 없앨 수 없다 — 어디에 있는지만 달라진다.
-        Map<Long, Notification> loaded = load(claims);
+        // ⚠️ **여기서 던지면 배치가 통째로 묶인다.** 건별 조회일 때는 한 건만 lease 만료를
+        // 기다렸는데, 배치로 옮기면서 한 번의 실패가 **집은 전부**(최대 64건)를 기본 30초
+        // 동안 IN_PROGRESS 로 붙잡는 모양이 됐다 — 리뷰가 짚었다. 아래 거부 경로와 같이
+        // 되돌리고 원래 예외를 다시 던진다.
+        Map<Long, Notification> loaded;
+        try {
+            loaded = load(claims);
+        } catch (RuntimeException failure) {
+            releaseAll(claims, failure);
+            throw failure;
+        }
         for (int i = 0; i < claims.size(); i++) {
             NotificationOutboxClaim claim = claims.get(i);
             // **먼저 올리고 넘긴다.** 워커가 먼저 돌아 내리는 것을 막으려는 것이 아니라,
@@ -415,8 +425,10 @@ public class NotificationOutboxRelay implements SmartLifecycle {
     }
 
     /**
-     * @param notification 배치 조회에서 온 알림. <b>{@code null} 이면 그 사이 사라진 것</b>이라
-     *         {@code NOTIFICATION_MISSING} 으로 되돌린다
+     * @param notification 배치 조회에서 온 알림. <b>{@code null} 이면 그 조회 결과에 없었다는
+     *         뜻</b>이다 — 선점 시점에 이미 없었거나 선점과 조회 사이에 사라진 것이라
+     *         {@code NOTIFICATION_MISSING} 으로 되돌린다. <b>조회 뒤에 지워진 것은 여기서
+     *         못 본다</b>(그 창은 아래 발행까지 열려 있고 없앨 수 없다)
      */
     private boolean publish(NotificationOutboxClaim claim, Notification notification) {
         if (notification == null) {

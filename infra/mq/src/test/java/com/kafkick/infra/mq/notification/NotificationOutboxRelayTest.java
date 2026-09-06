@@ -631,4 +631,34 @@ class NotificationOutboxRelayTest {
                 .as("두 claim 이 같은 알림을 가리킨다")
                 .containsExactly(41L);
     }
+
+    /**
+     * <b>배치 조회 하나가 실패하면 집은 전부가 묶인다.</b>
+     *
+     * <p>건별 조회일 때는 한 건만 lease 만료를 기다렸다. 배치로 옮기면서 <b>한 번의 실패가
+     * 최대 64건을 기본 30초 동안 {@code IN_PROGRESS} 로 붙잡는</b> 모양이 됐다 — 이 회차가
+     * 통째로 멈추고, 그동안 아무도 그 행들을 못 집는다. 리뷰가 잡았다.
+     *
+     * <p>되돌린 뒤 <b>예외를 다시 던진다.</b> 삼키면 조회가 실패했다는 사실이 아무 데도
+     * 안 남는다 — 아래 거부 경로와 같은 판단이다.
+     */
+    @Test
+    @org.junit.jupiter.api.DisplayName("배치 조회가 실패하면 집은 전부를 되돌리고 다시 던진다")
+    void aFailedBatchLoadReleasesEveryClaimItHadTaken() {
+        NotificationOutboxRelay relay = relayWith(LEASE, BATCH, Runnable::run, 64, 8);
+        when(outboxes.claimBatch(LEASE, BATCH))
+                .thenReturn(List.of(claim(1L), claim(2L), claim(3L)));
+        RuntimeException lookupFailed = new IllegalStateException("커넥션 없음");
+        when(notifications.findAllByIdIn(org.mockito.ArgumentMatchers.anyList()))
+                .thenThrow(lookupFailed);
+
+        assertThatThrownBy(relay::poll).isSameAs(lookupFailed);
+
+        verify(outboxes).releaseClaim(1L, "token-1");
+        verify(outboxes).releaseClaim(2L, "token-2");
+        verify(outboxes).releaseClaim(3L, "token-3");
+        assertThat(relay.inFlight())
+                .as("아무것도 안 넘겼으므로 인플라이트가 남으면 안 된다")
+                .isZero();
+    }
 }
