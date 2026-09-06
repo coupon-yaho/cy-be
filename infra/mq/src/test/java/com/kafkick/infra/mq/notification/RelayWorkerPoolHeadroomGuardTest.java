@@ -18,8 +18,12 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
- * <b>경계는 실측에서 왔다.</b> 풀 13 에서 워커 11(접수 몫 둘)은 요청 p99 999µs,
- * 워커 12(하나)는 4,069µs 다 — 2.7 배로 뛴다. 이 테스트가 그 두 점을 그대로 태운다.
+ * <b>경계는 실측에서 왔다.</b> 배포와 같은 조건(풀 13, <b>요청 스레드 15</b>)에서
+ * 워커 9(접수 몫 넷)는 워커 8 과 구분이 안 되고, 워커 10(셋)에서 p99 분산이 터진다
+ * (1,595~5,451µs). 이 테스트가 그 두 점을 그대로 태운다.
+ *
+ * <p>⚠️ 첫 판은 <b>요청 스레드 하나</b>로 재서 경계를 11→12 로 잡았고 헤드룸이 2 였다.
+ * 배포의 톰캣 워커는 15 다 — <b>재는 조건이 실제와 다르면 "실측" 도 틀린다.</b>
  *
  * <p>상수만 검사하면 안 된다. {@code REQUEST_HEADROOM} 을 1 이나 3 으로 바꾸는 돌연변이가
  * <b>둘 중 한쪽에서 걸려야</b> 경계를 실제로 지키는 것이다.
@@ -102,31 +106,36 @@ class RelayWorkerPoolHeadroomGuardTest {
     }
 
     /**
-     * <b>잰 좋은 점이다.</b> 풀 13 · 워커 11 → 요청 p99 999µs. 여기서 거절하면
-     * <b>멀쩡한 설정이 기동을 거부당한다</b> — 가드가 성능을 정하는 자리가 아니다.
+     * <b>잰 좋은 점이다.</b> 풀 13 · 워커 9 → 요청 p99 1,225~1,695µs 로 워커 8 과 구분이
+     * 안 된다. 여기서 거절하면 <b>멀쩡한 설정이 기동을 거부당한다</b> — 가드가 성능을
+     * 정하는 자리가 아니다.
      */
     @Test
-    @DisplayName("접수 몫이 둘 남으면 통과한다 — 실측에서 평평한 지점")
-    void passesWhenTwoConnectionsRemainForRequests() {
+    @DisplayName("접수 몫이 넷 남으면 통과한다 — 실측에서 기본값과 구분 안 되는 지점")
+    void passesWhenFourConnectionsRemainForRequests() {
         MeterRegistry registry = new SimpleMeterRegistry();
 
-        assertThatCode(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 11, true, registry))
+        assertThatCode(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 9, true, registry))
                 .doesNotThrowAnyException();
         assertThat(gauge(registry)).isEqualTo(1);
     }
 
     /**
-     * <b>잰 나쁜 점이다.</b> 풀 13 · 워커 12 → 요청 p99 4,069µs. 앱은 정상으로 뜨고
-     * 접수만 느려지므로, 조용히 통과시키면 아무도 못 알아챈다.
+     * <b>잰 나쁜 점이다.</b> 풀 13 · 워커 10 → 요청 p99 가 1,595~5,451µs 로 <b>세 배 넘게
+     * 흔들린다</b>(max 48ms). 앱은 정상으로 뜨고 접수만 느려지므로, 조용히 통과시키면
+     * 아무도 못 알아챈다.
+     *
+     * <p><b>평균이 아니라 분산이 무너지는 것이 신호다.</b> 한 회차만 보면 1,595µs 라
+     * 멀쩡해 보인다 — 그래서 회차를 셋 돌렸다.
      */
     @Test
-    @DisplayName("접수 몫이 하나뿐이면 기동에서 거절한다 — 실측에서 무너지는 지점")
-    void refusesWhenOnlyOneConnectionRemainsForRequests() {
+    @DisplayName("접수 몫이 셋뿐이면 기동에서 거절한다 — 실측에서 분산이 터지는 지점")
+    void refusesWhenOnlyThreeConnectionsRemainForRequests() {
         MeterRegistry registry = new SimpleMeterRegistry();
 
-        assertThatThrownBy(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 12, true, registry))
+        assertThatThrownBy(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 10, true, registry))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("워커를 11 이하로")
+                .hasMessageContaining("워커를 9 이하로")
                 .hasMessageContaining("DB_POOL_SIZE 를 14 이상으로");
     }
 
@@ -169,7 +178,7 @@ class RelayWorkerPoolHeadroomGuardTest {
     void whenTheGuardIsTurnedOffItStillReportsThroughTheGauge() {
         MeterRegistry registry = new SimpleMeterRegistry();
 
-        assertThatCode(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 12, false, registry))
+        assertThatCode(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 10, false, registry))
                 .doesNotThrowAnyException();
         assertThat(gauge(registry)).isEqualTo(0);
     }
@@ -178,7 +187,7 @@ class RelayWorkerPoolHeadroomGuardTest {
     @Test
     @DisplayName("MeterRegistry 가 없어도 검사는 돈다")
     void worksWithoutAMeterRegistry() {
-        assertThatThrownBy(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 12, true, null))
+        assertThatThrownBy(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 10, true, null))
                 .isInstanceOf(IllegalStateException.class);
         assertThatCode(() -> new RelayWorkerPoolHeadroomGuard(new PoolStub(13), 8, true, null))
                 .doesNotThrowAnyException();
