@@ -114,4 +114,24 @@ class KafkaLayerWiringTest {
                 .as("0 이면 풀 크기를 못 읽고 지나간 것이다 — 검사가 무력화된 상태")
                 .isEqualTo(1);
     }
+
+    /**
+     * <b>이 컨텍스트는 목 발송기로 돈다</b>({@code notification.sender.http.enabled} 를
+     * 안 켰다). 그러니 게이지가 <b>0 이어야 한다</b> — 1 이면 이 컨텍스트의 성공 카운터가
+     * 진짜 발송을 뜻한다고 잘못 말하는 것이다.
+     *
+     * <p>값이 아니라 <b>배선</b>을 지키는 자리이기도 하다. 게이지 빈이 안 실리면 계열이
+     * 아예 없어 {@code NotifySuccessesAreNotReal} 의 {@code and} 가 항상 빈 결과가 되고,
+     * <b>알림이 영원히 안 뜬다</b> — 그건 "사고가 없다" 와 구분되지 않는다.
+     */
+    @Test
+    @DisplayName("발송기 모드 게이지가 실려 있고, 목으로 도는 이 컨텍스트에서 0 이다")
+    void theSenderModeGaugeIsWiredAndReportsTheMock() {
+        assertThat(context.containsBean("notificationSenderModeGauge")).isTrue();
+
+        MeterRegistry registry = context.getBean(MeterRegistry.class);
+        assertThat(registry.get("cy_notify_sender_live").gauge().value())
+                .as("이 컨텍스트는 목으로 돈다 — 1 이면 성공 카운터가 거짓을 말하게 된다")
+                .isEqualTo(0);
+    }
 }
