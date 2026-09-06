@@ -57,7 +57,9 @@ class DomainMeterAlertCoverageTest {
         DELIBERATELY_UNALERTED.put("app.consistency.gap",
                 "0 이 아닌 것이 곧 사고가 아니다(집계 시점 차이로 잠깐 벌어진다). 임계를 안 쟀다");
         DELIBERATELY_UNALERTED.put("app.consistency.severity",
-                "판정 축이라 cy_verification_verdict 알림과 겹친다");
+                "gap 을 등급으로 접은 값이다. gap 자체의 임계를 안 쟀으므로 그 등급의 임계도 "
+                        + "안 잰 것이다. 검증 판정(cy_verification_verdict)은 조용해진 뒤 도는 "
+                        + "다른 축이라 이것을 대신하지 않는다 — 실시간 축은 비어 있는 것이 맞다");
         DELIBERATELY_UNALERTED.put("app.consistency.source.skew.seconds",
                 "두 원천의 관측 시각 차이. 크기를 함께 실으려고 만든 값이지 임계가 있는 값이 아니다");
         DELIBERATELY_UNALERTED.put("app.queue.length",
@@ -132,14 +134,23 @@ class DomainMeterAlertCoverageTest {
                 .isEmpty();
     }
 
-    /** 이유가 비면 목록이 <b>통과용 도장</b>이 된다. */
+    /**
+     * 이유가 <b>한 문장은 되어야</b> 목록이 통과용 도장이 안 된다.
+     *
+     * <p>비어 있지 않은 것만 보면 {@code "-"} 한 글자로도 통과한다. 그렇다고 길이가 뜻을
+     * 보장하지도 않으니, <b>기계가 걸 수 있는 최소선</b>으로 {@value #MIN_EXCUSE_LENGTH}자를
+     * 둔다 — 그 이상은 사람이 리뷰에서 본다.
+     */
+    static final int MIN_EXCUSE_LENGTH = 10;
+
     @Test
-    @DisplayName("안 붙인 이유가 비어 있지 않다")
+    @DisplayName("안 붙인 이유가 최소 " + MIN_EXCUSE_LENGTH + "자를 넘는다 — 한 글자 도장을 막는다")
     void everyExcuseActuallySaysSomething() {
         assertThat(DELIBERATELY_UNALERTED.entrySet())
                 .allSatisfy(entry -> assertThat(entry.getValue().strip())
-                        .as("%s 의 이유", entry.getKey())
-                        .hasSizeGreaterThan(10));
+                        .as("%s 의 이유가 %d자를 넘어야 한다 — 짧으면 왜 안 붙였는지가 안 남는다",
+                                entry.getKey(), MIN_EXCUSE_LENGTH)
+                        .hasSizeGreaterThan(MIN_EXCUSE_LENGTH));
     }
 
     /** 사라진 지표를 목록이 붙들고 있으면 그 문장이 거짓이 된다. */
@@ -173,6 +184,11 @@ class DomainMeterAlertCoverageTest {
                 for (Map<String, Object> group : (List<Map<String, Object>>) root.get("groups")) {
                     for (Map<String, Object> rule
                             : (List<Map<String, Object>>) group.get("rules")) {
+                        // **기록 규칙(record:)은 알림이 아니다.** 지표를 쓰기만 하는 규칙이
+                        // 생기면 "알림이 있다" 로 세어 버린다(리뷰가 짚었다).
+                        if (rule.get("alert") == null) {
+                            continue;
+                        }
                         expressions.add(rule.get("expr").toString());
                     }
                 }
@@ -195,13 +211,34 @@ class DomainMeterAlertCoverageTest {
      * 여기서 면제하는 것은 <b>요구하지 않는다</b> 는 뜻이다.
      */
     private static boolean isCompanionOfAValueMeter(String meter) {
-        return meter.endsWith(".state") || meter.endsWith(".cause");
+        for (String suffix : List.of(".state", ".cause")) {
+            if (!meter.endsWith(suffix)) {
+                continue;
+            }
+            // **짝이 실재하는지까지 본다.** 접미어만 보면, 이 이름을 쓰는 <b>독립</b> 지표가
+            // 생겼을 때 짝이 없는데도 조용히 면제된다(리뷰가 짚었다).
+            String base = meter.substring(0, meter.length() - suffix.length());
+            if (domainMeters().contains(base)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    /** Micrometer 는 점을 밑줄로 바꾸고 <b>카운터에만</b> {@code _total} 을 붙인다. */
+    /**
+     * Micrometer 가 이름 뒤에 붙이는 것들.
+     *
+     * <p><b>게이지는 그대로, 카운터는 {@code _total}, 타이머·분포는
+     * {@code _count}·{@code _sum}·{@code _max}·{@code _bucket}</b> 이다.
+     * 타이머 계열을 안 보면 <b>알림을 실제로 붙여도 "결정 안 됨" 으로 깨진다</b> —
+     * {@code app.outbox.retry.delay} 가 Timer 다(리뷰가 짚었다).
+     */
+    private static final List<String> METRIC_SUFFIXES =
+            List.of("", "_total", "_count", "_sum", "_max", "_bucket");
+
     private static boolean isReferenced(String rules, String meter) {
         String prom = meter.replace('.', '_');
-        return find(rules, prom) || find(rules, prom + "_total");
+        return METRIC_SUFFIXES.stream().anyMatch(suffix -> find(rules, prom + suffix));
     }
 
     private static boolean find(String rules, String name) {
