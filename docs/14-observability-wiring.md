@@ -169,6 +169,11 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `VerificationVerdictFailed` | `data` |
 | `VerificationMetricsUnknown` · `VerificationMetricsStale` | `server` |
 | `AlertDeliveryFailing` | `server` |
+| `V2IssuanceClaimLeaked` · `V2IssuanceMemberSetDiverged` | `data` |
+| `AttemptContractViolations` · `AttemptLiveAppendFailing` · `KafkaTopicsUnprovisioned` | `server` |
+| `ConsistencyGaugeMissing` · `ConsistencyUnmeasurable` · `ObservationCollectStalled` · `OverIssuanceDetected` | `data` |
+| `NotifySuccessesAreNotReal` · `OutboxBacklogGaugeMissing` · `OutboxBacklogGrowing` · `OutboxCommandsDead` · `RelayPoolHeadroomUnverified` | `server` |
+| `QueueGatewayAllocationOvershoot` · `QueueGatewayBackendFallback` · `QueueGatewayCapacityNodesMissing` · `QueueGatewayJudgementDegraded` · `QueueGatewaySnapshotStale` · `QueueGatewaySnapshotUnavailable` · `QueueGatewayTargetDown` | `server` |
 
 **검증** — 양쪽 경로를 태워 리시버가 받은 것을 확인한다. 발화 수단은 임시 스모크 규칙을
 **별 파일**(`infra/prometheus/rules/smoke.yml`)에 두고 확인 후 지운다.

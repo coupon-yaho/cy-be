@@ -111,7 +111,7 @@ tasks.named('test') {
 
     // **모듈 밖 파일을 읽는 테스트가 있다. 입력으로 선언해야 한다.**
     //
-    // AlertChannelRegistryTest 는 `../infra/prometheus/rules/batch-alerts.yml` 과
+    // AlertChannelRegistryTest 는 `../infra/prometheus/rules/` 전부와 `alertmanager.yml`,
     // `../docs/14-observability-wiring.md` 를 Path.of("..") 로 직접 읽어 **규칙과 채널 표를
     // 잇는다.** BatchMetricExposureTest 는 같은 규칙 파일에서 메트릭 이름을 뽑아 실제 노출과
     // 대조한다. 둘 다 태스크 입력에 안 들어 있어서, **그 두 파일만 바뀐 라운드는
@@ -124,7 +124,13 @@ tasks.named('test') {
     // `org.gradle.caching` 을 켜기 전부터 있던 구멍이다(up-to-date 검사와 캐시는 별개다).
     // 다만 캐시가 CI 러너 사이로도 그 판정을 옮기므로 이 티켓에서 함께 막는다.
     inputs.files(
-            rootProject.file('infra/prometheus/rules/batch-alerts.yml'),
+            // ⚠️ **파일 하나가 아니라 디렉터리다.** AlertChannelRegistryTest 가 규칙
+            //    디렉터리를 글롭으로 읽으므로, batch-alerts.yml 만 선언하면 다른 규칙
+            //    파일을 고쳐도 :batch:test 가 UP-TO-DATE 로 건너뛴다 — 채널 대조가
+            //    안 도는데 초록불이다(실제로 돌연변이가 안 잡혀서 드러났다).
+            rootProject.fileTree('infra/prometheus/rules') { include '*.yml' },
+            // 채널 값이 실제로 라우팅되는지도 이 테스트가 본다.
+            rootProject.file('infra/alertmanager/alertmanager.yml'),
             rootProject.file('docs/14-observability-wiring.md'),
             // DataSourceTimeoutGuardTest 가 이 파일의 URL 을 직접 읽어 가드와 대조한다.
             // 안 걸면 이 파일만 바뀐 빌드에서 UP-TO-DATE 로 건너뛰어 불일치를 놓친다.
