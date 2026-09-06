@@ -43,6 +43,15 @@ class DomainMeterAlertCoverageTest {
     private static final Path RULES_DIR = Path.of("../infra/prometheus/rules");
 
     /**
+     * 이유가 <b>한 문장은 되어야</b> 목록이 통과용 도장이 안 된다.
+     *
+     * <p>비어 있지 않은 것만 보면 {@code "-"} 한 글자로도 통과한다. 그렇다고 길이가 뜻을
+     * 보장하지도 않으니, <b>기계가 걸 수 있는 최소선</b>으로 {@value #MIN_EXCUSE_LENGTH}자를
+     * 둔다 — 그 이상은 사람이 리뷰에서 본다.
+     */
+    static final int MIN_EXCUSE_LENGTH = 10;
+
+    /**
      * <b>일부러 알림을 안 붙인 지표와 그 이유.</b>
      *
      * <p>이유를 <b>자유 문장</b>으로 둔다. enum 으로 가두면 다음 사유가 생길 때 그것부터
@@ -133,15 +142,6 @@ class DomainMeterAlertCoverageTest {
                 .as("알림을 붙였으면 DELIBERATELY_UNALERTED 에서 빼십시오")
                 .isEmpty();
     }
-
-    /**
-     * 이유가 <b>한 문장은 되어야</b> 목록이 통과용 도장이 안 된다.
-     *
-     * <p>비어 있지 않은 것만 보면 {@code "-"} 한 글자로도 통과한다. 그렇다고 길이가 뜻을
-     * 보장하지도 않으니, <b>기계가 걸 수 있는 최소선</b>으로 {@value #MIN_EXCUSE_LENGTH}자를
-     * 둔다 — 그 이상은 사람이 리뷰에서 본다.
-     */
-    static final int MIN_EXCUSE_LENGTH = 10;
 
     @Test
     @DisplayName("안 붙인 이유가 최소 " + MIN_EXCUSE_LENGTH + "자를 넘는다 — 한 글자 도장을 막는다")
