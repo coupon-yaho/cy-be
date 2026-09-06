@@ -3,19 +3,19 @@ package com.kafkick.api.observation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.Yaml;
 
 /**
  * <b>모든 알림에 동작 시험이 있거나, 없는 이유가 적혀 있다.</b>
@@ -37,10 +37,11 @@ class AlertBehaviourTestCoverageTest {
     private static final Path RULES_DIR = Path.of("../infra/prometheus/rules");
     private static final Path TESTS_DIR = Path.of("../infra/prometheus/tests");
 
-    private static final Pattern ALERT = Pattern.compile("^\\s*- alert:\\s*(\\w+)\\s*$",
-            Pattern.MULTILINE);
-    private static final Pattern ALERTNAME = Pattern.compile("^\\s*alertname:\\s*(\\w+)\\s*$",
-            Pattern.MULTILINE);
+    /**
+     * 이유가 <b>한 문장은 되어야</b> 목록이 통과용 도장이 안 된다 —
+     * {@link DomainMeterAlertCoverageTest#MIN_EXCUSE_LENGTH} 와 같은 기준이다.
+     */
+    static final int MIN_EXCUSE_LENGTH = 10;
 
     /**
      * <b>일부러 동작 시험을 안 쓴 알림과 그 이유.</b>
@@ -56,10 +57,10 @@ class AlertBehaviourTestCoverageTest {
     @Test
     @DisplayName("모든 알림에 동작 시험이 있거나, 없는 이유가 적혀 있다")
     void everyAlertIsEitherExercisedOrExplainedAway() throws IOException {
-        List<String> tested = namesIn(TESTS_DIR, ALERTNAME);
+        List<String> tested = alertsProvenToFire();
         List<String> untested = new ArrayList<>();
-        for (String alert : namesIn(RULES_DIR, ALERT)) {
-            if (tested.contains(alert) || DELIBERATELY_UNTESTED.containsKey(alert)) {
+        for (String alert : alertsInRules()) {
+            if (tested.contains(alert) || hasRealExcuse(alert)) {
                 continue;
             }
             untested.add(alert);
@@ -73,11 +74,20 @@ class AlertBehaviourTestCoverageTest {
                 .isEmpty();
     }
 
+    /**
+     * <b>이름만 올려 두고 넘어가는 것을 막는다.</b> {@code containsKey} 만 보면 빈 이유로도
+     * 동작 시험 전체를 건너뛴다 — 나중 사람이 <b>왜 안 썼는지</b>를 알 수 없다(리뷰가 짚었다).
+     */
+    private static boolean hasRealExcuse(String alert) {
+        String excuse = DELIBERATELY_UNTESTED.get(alert);
+        return excuse != null && excuse.strip().length() > MIN_EXCUSE_LENGTH;
+    }
+
     /** 시험을 쓰고도 면제 목록에 남아 있으면, 다음 사람이 <b>없는 줄 알고</b> 또 쓴다. */
     @Test
     @DisplayName("시험이 있는 알림은 '일부러 안 썼다' 목록에 남아 있지 않다")
     void nothingIsBothTestedAndExcused() throws IOException {
-        List<String> tested = namesIn(TESTS_DIR, ALERTNAME);
+        List<String> tested = alertsProvenToFire();
 
         assertThat(DELIBERATELY_UNTESTED.keySet().stream().filter(tested::contains))
                 .as("시험을 썼으면 DELIBERATELY_UNTESTED 에서 빼십시오")
@@ -88,7 +98,7 @@ class AlertBehaviourTestCoverageTest {
     @Test
     @DisplayName("'일부러 안 썼다' 목록이 실재하는 알림만 가리킨다")
     void theExcuseListDoesNotNameGhosts() throws IOException {
-        assertThat(namesIn(RULES_DIR, ALERT))
+        assertThat(alertsInRules())
                 .as("규칙에 없는 알림 이름이 목록에 있다")
                 .containsAll(DELIBERATELY_UNTESTED.keySet());
     }
@@ -109,23 +119,72 @@ class AlertBehaviourTestCoverageTest {
     }
 
     /**
-     * <b>글롭으로 읽는다.</b> 파일 이름을 적으면 새 규칙·시험 파일이 조용히 빠진다 —
+     * 규칙 파일의 <b>알림 이름 전부.</b>
+     *
+     * <p>⚠️ 첫 판은 정규식 {@code - alert:\s*(\w+)} 이었다. 그러면 따옴표·콜론·하이픈이
+     * 든 <b>합법적인 YAML 이름을 놓치고</b>, 그런 알림이 조용히 검사 밖으로 빠진다
+     * (리뷰가 짚었다). YAML 로 읽는다.
+     *
+     * <p><b>글롭으로 읽는다.</b> 파일 이름을 적으면 새 규칙 파일이 조용히 빠진다 —
      * CI 의 promtool 루프가 같은 이유로 글롭이다.
      */
-    private static List<String> namesIn(Path directory, Pattern pattern) throws IOException {
+    @SuppressWarnings("unchecked")
+    private static List<String> alertsInRules() throws IOException {
+        List<String> alerts = new ArrayList<>();
+        for (Path file : ymlIn(RULES_DIR)) {
+            Map<String, Object> root = new Yaml().load(Files.readString(file, UTF_8));
+            for (Map<String, Object> group : (List<Map<String, Object>>) root.get("groups")) {
+                for (Map<String, Object> rule : (List<Map<String, Object>>) group.get("rules")) {
+                    Object alert = rule.get("alert");
+                    if (alert != null) {
+                        alerts.add(alert.toString());
+                    }
+                }
+            }
+        }
+        assertThat(alerts).as("규칙에서 알림 이름을 하나도 못 읽었다").isNotEmpty();
+        return alerts;
+    }
+
+    /**
+     * <b>실제로 뜨는 것을 본 알림만</b> 세운다.
+     *
+     * <p>⚠️ 첫 판은 {@code alertname} 이 나오기만 하면 "시험됨" 으로 셌다. 그러면
+     * <b>부정 시험 하나만 붙여도</b>(예: {@code exp_alerts: []}) <b>영원히 안 뜨는 규칙이
+     * 덮인 것으로 처리된다</b> — 이 테스트가 막으려는 바로 그 회귀다(리뷰가 짚었다).
+     *
+     * <p>그래서 {@code exp_alerts} 가 <b>비어 있지 않은</b> 단언이 하나라도 있어야 센다.
+     * 부정 시험은 그 위에 얹는 것이지 그것만으로는 부족하다.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<String> alertsProvenToFire() throws IOException {
+        List<String> proven = new ArrayList<>();
+        for (Path file : ymlIn(TESTS_DIR)) {
+            Map<String, Object> root = new Yaml().load(Files.readString(file, UTF_8));
+            for (Map<String, Object> test : (List<Map<String, Object>>) root.get("tests")) {
+                List<Map<String, Object>> cases =
+                        (List<Map<String, Object>>) test.get("alert_rule_test");
+                if (cases == null) {
+                    continue;
+                }
+                for (Map<String, Object> assertion : cases) {
+                    List<Object> expected = (List<Object>) assertion.get("exp_alerts");
+                    if (expected != null && !expected.isEmpty()) {
+                        proven.add(assertion.get("alertname").toString());
+                    }
+                }
+            }
+        }
+        assertThat(proven).as("뜨는 것을 본 단언이 하나도 없다").isNotEmpty();
+        return proven;
+    }
+
+    private static List<Path> ymlIn(Path directory) throws IOException {
         try (Stream<Path> files = Files.list(directory)) {
             List<Path> yml = files.filter(p -> p.toString().endsWith(".yml")).sorted().toList();
             assertThat(yml).as("%s 에 yml 이 하나도 없다 — 경로가 바뀌었는지 확인하라", directory)
                     .isNotEmpty();
-            List<String> names = new ArrayList<>();
-            for (Path file : yml) {
-                Matcher matcher = pattern.matcher(Files.readString(file, StandardCharsets.UTF_8));
-                while (matcher.find()) {
-                    names.add(matcher.group(1));
-                }
-            }
-            assertThat(names).as("%s 에서 이름을 하나도 못 읽었다", directory).isNotEmpty();
-            return names;
+            return yml;
         }
     }
 }
