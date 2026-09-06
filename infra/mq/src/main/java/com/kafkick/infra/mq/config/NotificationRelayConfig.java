@@ -8,6 +8,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -25,6 +26,7 @@ import com.kafkick.infra.mq.notification.NotificationOutboxRelay;
 import com.kafkick.infra.mq.notification.NotificationRelayProperties;
 import com.kafkick.infra.mq.notification.NotificationRelayScheduler;
 import com.kafkick.infra.mq.notification.RelayBinlogFormatGuard;
+import com.kafkick.infra.mq.notification.RelayWorkerPoolHeadroomGuard;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty("kafka.enabled")
@@ -138,5 +140,22 @@ public class NotificationRelayConfig {
     @Bean
     public RelayBinlogFormatGuard relayBinlogFormatGuard(DataSource dataSource) {
         return new RelayBinlogFormatGuard(dataSource);
+    }
+
+    /**
+     * <b>워커 풀을 만드는 자리에 함께 둔다.</b> 이 검사는 빈 하나의 불변식이 아니라
+     * <b>워커 수와 커넥션 풀 크기 사이의 관계</b>다. 릴레이 생성자에 얹으면 lease 검사들
+     * 사이에 성격이 다른 것이 섞이고, 바깥의 {@code @Component} 로 두면 <b>릴레이가 없는
+     * 프로파일에서도</b> 돌아 없는 워커를 검사한다. 풀을 만드는 이 설정이 정확히 그 관계가
+     * 성립하는 범위다.
+     */
+    @Bean
+    public RelayWorkerPoolHeadroomGuard relayWorkerPoolHeadroomGuard(
+            DataSource dataSource,
+            NotificationRelayProperties properties,
+            @Value("${" + RelayWorkerPoolHeadroomGuard.REQUIRED + ":true}") boolean required,
+            ObjectProvider<MeterRegistry> registries) {
+        return new RelayWorkerPoolHeadroomGuard(dataSource, properties.getWorkerCount(),
+                required, registries.getIfAvailable());
     }
 }
