@@ -111,7 +111,7 @@ tasks.named('test') {
 
     // **모듈 밖 파일을 읽는 테스트가 있다. 입력으로 선언해야 한다.**
     //
-    // AlertChannelRegistryTest 는 `../infra/prometheus/rules/batch-alerts.yml` 과
+    // AlertChannelRegistryTest 는 `../infra/prometheus/rules/` 전부와 `alertmanager.yml`,
     // `../docs/14-observability-wiring.md` 를 Path.of("..") 로 직접 읽어 **규칙과 채널 표를
     // 잇는다.** BatchMetricExposureTest 는 같은 규칙 파일에서 메트릭 이름을 뽑아 실제 노출과
     // 대조한다. 둘 다 태스크 입력에 안 들어 있어서, **그 두 파일만 바뀐 라운드는
