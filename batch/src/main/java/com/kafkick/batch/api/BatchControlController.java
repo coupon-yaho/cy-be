@@ -1,8 +1,11 @@
 // 배치 실행을 사람이 다시 돌리거나 멈춥니다.
 package com.kafkick.batch.api;
 
+import java.time.Duration;
+
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.JobExecution;
+import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException;
 import org.springframework.batch.core.launch.JobExecutionNotRunningException;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.launch.JobRestartException;
@@ -15,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.kafkick.batch.config.BatchJobRepositoryConfig;
+import com.kafkick.batch.config.RunningJobProbe;
 import com.kafkick.core.batch.exception.BatchControlErrorCode;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.support.response.ResponseEnvelope;
@@ -77,11 +81,20 @@ public class BatchControlController {
      */
     private final JobRepository jobRepository;
 
+    /**
+     * <b>시체 판정을 여기서 새로 만들지 않는다.</b> 잡별 관제가 이미 같은 판정을 이 빈으로
+     * 하고 있어(CY-429·CY-678·CY-697), 두 벌로 두면 <b>통로에 따라 죽었는지 여부가
+     * 갈린다.</b>
+     */
+    private final RunningJobProbe runningJobProbe;
+
     public BatchControlController(
             @Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
-            JobRepository jobRepository) {
+            JobRepository jobRepository,
+            RunningJobProbe runningJobProbe) {
         this.jobOperator = jobOperator;
         this.jobRepository = jobRepository;
+        this.runningJobProbe = runningJobProbe;
     }
 
     /**
@@ -177,6 +190,79 @@ public class BatchControlController {
     }
 
     /**
+     * <b>죽은 실행을 걷는다.</b> {@code stop} 이 신호만 남기고 못 하는 일이다.
+     *
+     * <h2>왜 범용 관제에 있어야 하나</h2>
+     *
+     * <p>{@code expireJob}·{@code verifyJob}·{@code cleanupJob} 은 각자 회수 API 를 갖고
+     * 있다. 그런데 <b>이 관제가 범용인 이유</b>는 Spring Batch 메타데이터만 읽어 잡 이름을
+     * 모른다는 것인데, 조치만 잡별 API 에 기대면 <b>주제가 바뀌는 순간 걷을 방법이
+     * 사라진다.</b> 새 도메인의 잡에는 그 API 가 없다.
+     *
+     * <h2>두 단계다 — {@code abandon} 하나로는 안 된다</h2>
+     *
+     * <p>실측(Spring Batch 6.0.4): 죽은 {@code STARTED} 에 {@code abandon} 을 바로 부르면
+     * <b>거부된다</b>({@code JobExecutionAlreadyRunningException: JobExecution is running or
+     * complete and therefore cannot be aborted}) — {@code STARTED.isRunning()} 이 참이라
+     * 프레임워크가 "도는 중" 으로 본다. {@code stop} 을 먼저 부르면 {@code STOPPED} 가 되고,
+     * 그때 {@code abandon} 이 {@code ABANDONED} 로 내린다.
+     *
+     * <h2>⚠️ 시체 판정을 지난다</h2>
+     *
+     * <p>회수는 <b>되돌릴 수 없다.</b> 살아 있는 실행에 하면 그 잡이 통째로 죽는다.
+     * 그래서 마지막 진도가 {@code batch.stuck-job-after-ms} 넘게 안 움직였을 때만 받고,
+     * 아니면 <b>남은 시간을 실어 409</b>({@code BATCH-005})로 거절한다. 잡별 API 가 거는
+     * 것과 <b>같은 판정</b>이다({@link RunningJobProbe}).
+     *
+     * <p><b>{@code batch.stuck-job-after-ms} 를 내리는 변경이 이 API 의 안전을 직접 깎는다</b>
+     * — {@code ExpireAdminController} 가 같은 문장을 적어 뒀다.
+     *
+     * <h2>정리해도 같은 파라미터로 다시 돌지는 않는다</h2>
+     *
+     * <p>실측: 회수 뒤 같은 파라미터로 시작하면 {@code JobInstanceAlreadyCompleteException}
+     * 이다. 운영에는 영향이 없다 — 세 스케줄러가 전부 {@code firedAt}·{@code asOf} 를 식별
+     * 파라미터로 넘겨 회차마다 새 인스턴스다. <b>회수의 값은 "다시 돌리기" 가 아니라
+     * "관제가 거짓말을 멈추는 것"</b> 이다({@code cy_batch_stuck_executions} 가 내려간다).
+     *
+     * @param executionId 걷을 실행
+     * @return 누르기 전 상태와 최종 상태
+     */
+    @PostMapping("/runs/{executionId}/abandon")
+    public ResponseEnvelope<Abandoned> abandon(@PathVariable long executionId) {
+        JobExecution execution = require(executionId);
+        if (!execution.getStatus().isRunning()) {
+            // 회수는 시체용이다. 이미 끝난 실행에 하면 끝난 결과를 ABANDONED 로 덮는다.
+            throw new BusinessException(BatchControlErrorCode.NOT_RUNNING,
+                    "jobExecutionId=" + executionId + " status=" + execution.getStatus());
+        }
+        Duration remaining = runningJobProbe.untilStuck(execution);
+        if (!remaining.isNegative() && !remaining.isZero()) {
+            throw new BusinessException(BatchControlErrorCode.NOT_STUCK_YET,
+                    "jobExecutionId=" + executionId + " remainingMs=" + remaining.toMillis());
+        }
+        // **누르기 전 상태를 먼저 잡는다.** 아래 두 호출이 이 객체의 상태를 바꿔 놓으므로,
+        // 뒤에서 읽으면 "무엇을 눌렀는지" 가 아니라 "누른 결과" 가 나간다 — stop 과 같다.
+        String statusWhenAbandoned = execution.getStatus().name();
+        try {
+            jobOperator.stop(execution);
+        } catch (JobExecutionNotRunningException raced) {
+            // 위에서 isRunning 을 봤는데 여기서 아니라면 그 사이 진짜로 끝난 것이다.
+            throw new BusinessException(BatchControlErrorCode.NOT_RUNNING,
+                    "jobExecutionId=" + executionId + " status=" + execution.getStatus());
+        }
+        try {
+            JobExecution abandoned = jobOperator.abandon(execution);
+            return ResponseEnvelope.success(new Abandoned(executionId, statusWhenAbandoned,
+                    abandoned.getStatus().name()));
+        } catch (JobExecutionAlreadyRunningException stillRunning) {
+            // stop 이 STOPPING 에서 멈춘 경우다 — 읽을 프로세스가 있어 협조 중이라는 뜻이라
+            // 죽은 실행이 아니다. 여기서 억지로 내리지 않는다.
+            throw new BusinessException(BatchControlErrorCode.NOT_STUCK_YET,
+                    "jobExecutionId=" + executionId + " status=" + execution.getStatus());
+        }
+    }
+
+    /**
      * 실행을 꺼내거나 404 로 끊는다.
      *
      * <p><b>{@code null} 이 아니라 예외가 온다</b> — {@code JobRepository.getJobExecution} 은
@@ -198,6 +284,14 @@ public class BatchControlController {
      * @param newJobExecutionId 새로 만들어진 실행. <b>이것을 이력에서 보면 결과를 안다</b>
      */
     public record Restarted(long jobExecutionId, Long newJobExecutionId) {
+    }
+
+    /**
+     * @param jobExecutionId 걷은 실행
+     * @param statusWhenAbandoned 누르기 전 상태. <b>무엇을 걷었는지</b>가 여기 있다
+     * @param status 걷은 뒤 상태. 정상이면 {@code ABANDONED}
+     */
+    public record Abandoned(long jobExecutionId, String statusWhenAbandoned, String status) {
     }
 
     /**

@@ -86,6 +86,22 @@ public enum BatchControlErrorCode implements ErrorCode {
             409,
             "BATCH-004",
             "돌고 있지 않은 실행은 멈출 수 없습니다."
+    ),
+
+    /**
+     * 아직 <b>시체로 판정되지 않은</b> 실행을 회수하려 했다.
+     *
+     * <p>회수는 {@code STOPPED} 를 거쳐 {@code ABANDONED} 로 내리는 <b>되돌릴 수 없는</b>
+     * 표시다. 살아 있는 실행에 하면 <b>그 잡이 통째로 죽는다</b> — 그래서 마지막 진도가
+     * {@code batch.stuck-job-after-ms} 넘게 안 움직였을 때만 받는다.
+     *
+     * <p><b>{@code batch.stuck-job-after-ms} 를 내리는 변경이 이 안전을 직접 깎는다.</b>
+     * {@code ExpireAdminController} 가 같은 문장을 적어 뒀다 — 두 API 가 같은 값에 기댄다.
+     */
+    NOT_STUCK_YET(
+            409,
+            "BATCH-005",
+            "아직 진도가 있는 실행은 회수할 수 없습니다."
     );
 
     private final int status;
