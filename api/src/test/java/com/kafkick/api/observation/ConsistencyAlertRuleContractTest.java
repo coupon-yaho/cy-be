@@ -179,7 +179,7 @@ class ConsistencyAlertRuleContractTest {
      */
     private static void assertNamesExactly(String rules, String gauge, String as) {
         assertThat(Pattern.compile(
-                        Pattern.quote(gauge) + "(?![A-Za-z0-9_])")
+                        "(?<![A-Za-z0-9_])" + Pattern.quote(gauge) + "(?![A-Za-z0-9_])")
                 .matcher(rules).find())
                 .as(as)
                 .isTrue();

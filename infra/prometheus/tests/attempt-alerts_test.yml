@@ -1,0 +1,122 @@
+# attempt 알림 규칙의 **동작**을 못 박는다.
+#
+# promtool check rules 는 문법만 본다. 규칙이 "문법은 맞는데 영원히 안 뜨는" 상태로 바뀌어도
+# CI 가 초록이다.
+#
+# ⚠️ 이 디렉터리는 rules/ 밖이다. prometheus.yml 의 글롭(rules/*.yml)에 걸리면
+#    프로메테우스가 이 파일을 규칙으로 읽으려다 기동에 실패한다.
+rule_files:
+  - ../rules/attempt-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 계약 위반: 기준선이 0 이라 한 건이면 뜬다 ────────────────────────────
+  - interval: 1m
+    name: "레코드를 버리면 AttemptContractViolations 가 뜬다"
+    input_series:
+      - series: 'app_attempt_contract_violations_total{reason="unknown_enum"}'
+        values: '0x5 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AttemptContractViolations
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              reason: unknown_enum
+            exp_annotations:
+              summary: "attempt 레코드를 버렸습니다 (unknown_enum, 10분 1건)"
+              description: >-
+                계약을 위반한 레코드를 격리하고 offset 을 넘겼습니다 — 그만큼의 관측 이벤트가 사라졌습니다. 넘기지 않으면 poison message 로 그 파티션의 소비가 멈추므로 넘기는 것이 맞고, **이 카운터가 유일한 흔적입니다.** reason 이 unknown_enum 이면 발행 쪽이 모르는 enum 값을 보냈다는 뜻이라 배포 순서를 봅니다(소비자가 먼저 떠야 합니다). unsupported_schema 면 schemaVersion 이 이 소비자보다 앞선 것이고, other 면 그 둘 밖이라 격리된 레코드를 직접 봐야 합니다.
+
+  # 안 버리면 안 뜬다.
+  - interval: 1m
+    name: "버린 것이 없으면 AttemptContractViolations 가 안 뜬다"
+    input_series:
+      - series: 'app_attempt_contract_violations_total{reason="unknown_enum"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AttemptContractViolations
+        exp_alerts: []
+
+  # ── live 쓰기 실패: 삼켜지므로 이 알림 말고는 신호가 없다 ────────────────
+  - interval: 1m
+    name: "live 쓰기가 실패하면 AttemptLiveAppendFailing 이 뜬다"
+    input_series:
+      - series: 'app_attempt_live_append_failures_total'
+        values: '0x5 2x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AttemptLiveAppendFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "실시간 attempt 화면이 조용히 비고 있습니다 (10분 2건)"
+              description: >-
+                live 버퍼 쓰기가 실패했고 **그 실패는 삼켜집니다** — offset 을 막지 않으므로 Kafka 소비는 정상으로 보이고 컨슈머 지표도 멀쩡합니다. 화면만 빕니다. 버퍼는 Redis 이므로 그쪽부터 봅니다. app_attempt_live_unreadable_total(읽기 실패)도 함께 봅니다. **쓰기가 0 인데 읽기만 오르면** 원인은 Redis 가 아니라 **형식**입니다 — 배포 경계를 사이에 두고 두 형식이 버퍼에 함께 앉아 있다는 뜻입니다. **둘 다 오르면 형식만으로 단정하지 마십시오** — 두 카운터는 서로 다른 경로에서 세므로 Redis 장애와 형식 문제가 **겹칠 수 있습니다.**
+
+  - interval: 1m
+    name: "live 쓰기가 멀쩡하면 안 뜬다"
+    input_series:
+      - series: 'app_attempt_live_append_failures_total'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AttemptLiveAppendFailing
+        exp_alerts: []
+
+  # ── 토픽 프로비저닝: 상태 미터를 본다 ────────────────────────────────────
+  # **값 미터로는 못 잡는다** — 확인 전에는 NaN 이라 어떤 비교도 거짓이다.
+  - interval: 1m
+    name: "확인하지 못한 상태(UNAVAILABLE=6)면 KafkaTopicsUnprovisioned 가 뜬다"
+    input_series:
+      - series: 'app_kafka_topics_provisioned_state'
+        values: '6x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KafkaTopicsUnprovisioned
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+            exp_annotations:
+              summary: "토픽 선언이 브로커에 반영됐는지 확인하지 못했습니다"
+              description: >-
+                **이 상태로 발급이 시작되면 브로커가 토픽을 대신 만듭니다** (auto.create.topics.enable 기본값 true, RF 1). 그러면 RF3·ISR2·파티션6 계약이 무효가 되고 **RF 는 되돌릴 수 없습니다** — 토픽을 다시 만들어야 합니다. 원인은 app_kafka_topics_provisioned_cause 가 가릅니다: **unconfirmed** 면 브로커가 아직 안 뜬 것이라 재기동·대기로 낫고, **mismatched** 면 선언과 다른 토픽이 이미 있는 것입니다 — **무엇이 다른지부터 봅니다.** 복제본이 모자라면 재배치(reassignment)로, 파티션이 모자라면 파티션 추가로 고칠 수 있습니다. **재생성은 그 둘로 안 될 때의 마지막 수단이고, 그 토픽의 데이터를 버립니다.** 상태 미터만으로는 unconfirmed 와 mismatched 가 같은 값으로 보입니다.
+
+  # 반영됨(VALID=1)이면 안 뜬다.
+  - interval: 1m
+    name: "반영된 상태(VALID=1)면 안 뜬다"
+    input_series:
+      - series: 'app_kafka_topics_provisioned_state'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KafkaTopicsUnprovisioned
+        exp_alerts: []
+
+  # 끈 회차(N_A=7)와 기동 직후(PENDING=2)는 사고가 아니다.
+  - interval: 1m
+    name: "프로비저닝을 끈 회차(N_A=7)는 안 뜬다"
+    input_series:
+      - series: 'app_kafka_topics_provisioned_state'
+        values: '7x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KafkaTopicsUnprovisioned
+        exp_alerts: []
+
+  # 기동 직후 PENDING 이 5분 안에 VALID 로 가면 안 떠야 한다 — for 가 그 구간을 넘긴다.
+  - interval: 1m
+    name: "기동 직후 잠깐 확인 못 한 뒤 반영되면 안 뜬다"
+    input_series:
+      - series: 'app_kafka_topics_provisioned_state'
+        values: '2 6 6 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KafkaTopicsUnprovisioned
+        exp_alerts: []
