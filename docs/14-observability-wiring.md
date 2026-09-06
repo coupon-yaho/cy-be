@@ -175,6 +175,42 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `NotifySuccessesAreNotReal` · `OutboxBacklogGaugeMissing` · `OutboxBacklogGrowing` · `OutboxCommandsDead` · `RelayPoolHeadroomUnverified` | `server` |
 | `QueueGatewayAllocationOvershoot` · `QueueGatewayBackendFallback` · `QueueGatewayCapacityNodesMissing` · `QueueGatewayJudgementDegraded` · `QueueGatewaySnapshotStale` · `QueueGatewaySnapshotUnavailable` · `QueueGatewayTargetDown` | `server` |
 
+### 관측 사슬 — 어느 고리를 무엇이 지키나 (CY-932~936)
+
+지표가 사람에게 닿기까지 고리가 다섯이다. **각 고리마다 무엇이 지키는지**를 적어 둔다 —
+안 적으면 다음 사람이 매번 처음부터 센다(CY-932·933 이 실제로 그랬다).
+
+| 고리 | 지키는 것 | 안 지키면 |
+|---|---|---|
+| 지표가 **알림에 쓰이나** | `DomainMeterAlertCoverageTest` | 사고를 재는 값이 있는데 아무도 안 본다 |
+| 알림이 **실제로 뜨나** | `promtool test rules` 6개 + `AlertBehaviourTestCoverageTest` | "문법은 맞는데 영원히 안 뜨는" 규칙이 초록불 |
+| 알림에 **channel 이 있나** | `AlertChannelRegistryTest` | `sink-unrouted` 로 가서 아무도 못 본다 |
+| channel 값이 **라우팅되나** | 같은 테스트 | 새 채널이 조용히 `sink-unrouted` |
+| 지표가 **실제로 나가나** | `BatchMetricExposureTest`(batch) · `PrometheusExposureContractTest`·`KafkaLayerWiringTest`(api 일부) | 규칙이 빈 결과를 보고 영원히 안 뜬다 |
+
+**앞의 넷은 전수다.** 새 지표·알림·채널이 생기면 그 자리에서 결정을 요구받는다.
+
+#### ⚠️ 마지막 고리만 전수가 아니다
+
+`BatchMetricExposureTest` 는 `batch-alerts.yml` 의 `cy_*`·`spring_batch_*` **31개**를 실제
+스크레이프 본문과 대조한다. 그런데 **api 계열 규칙이 읽는 `app_*` 아홉 개**는 그런 대조가
+없다(개별 배선 테스트가 일부를 덮을 뿐이다).
+
+**전수로 만들려면 "어느 앱이 어느 지표를 내보내나" 가 필요한데, 그것이 파일에 없다.**
+같은 `app_consistency_*` 라도 `DomainGaugeRegistrar` 는 **batch** 에서 돌고,
+`app_outbox_*` 는 **api** 에서 돈다. 규칙 파일은 앱으로 안 갈려 있다.
+
+> 그래서 **손으로 유지하는 대응표**를 만들어야 하는데, 이 저장소가 그런 표에 대해 세운
+> 방향은 *"문장으로 잇지 않고 파일을 읽어서 잇는다"* 다(`BatchMetricExposureTest`).
+> **읽을 파일이 없는 대응을 표로 만들면 그 표가 낡는 것을 아무도 못 잡는다** —
+> 채널 표가 21개를 빠뜨린 채 완전해 보였던 것과 같은 모양이 된다.
+
+**지금 상태를 사실로 적어 둔다.** 이 고리를 닫으려면 먼저 **규칙 파일을 앱 축으로 가르거나**
+(예: `rules/batch/`·`rules/api/`), 스크레이프 잡 라벨을 규칙 셀렉터에 못박아야 한다.
+둘 다 운영 파일의 구조를 바꾸는 일이라 별도 티켓이다.
+
+---
+
 **검증** — 양쪽 경로를 태워 리시버가 받은 것을 확인한다. 발화 수단은 임시 스모크 규칙을
 **별 파일**(`infra/prometheus/rules/smoke.yml`)에 두고 확인 후 지운다.
 
