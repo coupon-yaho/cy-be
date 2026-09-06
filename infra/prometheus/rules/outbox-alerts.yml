@@ -118,3 +118,33 @@ groups:
             워커 12 → 4,069µs. docs/18).
             기동 로그의 "릴레이 워커/풀" ERROR/WARN 이 어느 갈래인지 답합니다.
             고친 뒤에는 거절을 다시 켜십시오.
+
+      # 성공 지표가 오르는데 실제로는 아무 데도 안 보내는 상태.
+      #
+      # MockNotificationSender 는 안 보내면서 예외도 안 던진다. 그래서 그것이 선 환경에서도
+      # app_notify_sent_total{result="success"} 가 정상적으로 오르고, outbox 는 PUBLISHED 가
+      # 되며 소비자도 정상 소비한다 — **파이프라인 전체가 초록인데 사용자에게는 아무것도
+      # 안 간다.** 위의 어떤 알림도 이 상태를 안 잡는다.
+      #
+      # ⚠️ **목으로 도는 것 자체는 알리지 않는다.** 로컬·테스트·시연이 그것으로 돌고,
+      #    통합 테스트도 그것으로 돈다. 그건 정상이다. 문제는 **그것을 성공으로 세는
+      #    순간**이라, and 로 둘을 묶어 그때만 뜨게 한다. 한가한 환경에서는 안 뜬다
+      #    ("avoid having pages where there is nothing to do").
+      - alert: NotifySuccessesAreNotReal
+        expr: >-
+          increase(app_notify_sent_total{result="success"}[15m]) > 0
+          and on() cy_notify_sender_live == 0
+        for: 0m
+        labels:
+          severity: critical
+          channel: server
+        annotations:
+          summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 {{ $value }}건)"
+          description: >-
+            목 발송기(MockNotificationSender)가 선 상태에서 성공 카운터가 오르고 있습니다.
+            **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로
+            outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다.
+            운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오
+            — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.**
+            로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가
+            그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.

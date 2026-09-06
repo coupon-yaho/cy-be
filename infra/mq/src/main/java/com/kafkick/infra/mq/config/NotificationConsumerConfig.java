@@ -22,8 +22,10 @@ import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
 import org.springframework.util.backoff.BackOff;
 
+import com.kafkick.core.notification.NotificationSender;
 import com.kafkick.core.notification.event.NotificationRequestedEvent;
 import com.kafkick.infra.mq.notification.NotificationResultMeter;
+import com.kafkick.infra.mq.notification.NotificationSenderModeGauge;
 import com.kafkick.infra.mq.notification.NotificationTerminalFailureException;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -72,6 +74,22 @@ public class NotificationConsumerConfig {
     public NotificationResultMeter notificationResultMeter(
             ObjectProvider<MeterRegistry> meterRegistries) {
         return new NotificationResultMeter(
+                meterRegistries.getIfAvailable(SimpleMeterRegistry::new));
+    }
+
+    /**
+     * <b>{@link NotificationResultMeter} 의 짝이다.</b> 그쪽이 세는 성공은 <b>목 발송기가
+     * 선 환경에서도 오른다</b> — 아무 데도 안 보내고 예외도 안 던지기 때문이다. 이 게이지가
+     * 없으면 그 성공이 진짜인지 볼 방법이 지표에 없다.
+     *
+     * <p><b>발송기 빈을 받아 실제로 무엇이 섰는지 본다.</b> 프로퍼티를 읽으면 프로퍼티와
+     * 조건부 배선이 갈렸을 때 지표가 배선이 아니라 <b>의도</b>를 말한다.
+     */
+    @Bean
+    public NotificationSenderModeGauge notificationSenderModeGauge(
+            NotificationSender notificationSender,
+            ObjectProvider<MeterRegistry> meterRegistries) {
+        return new NotificationSenderModeGauge(notificationSender,
                 meterRegistries.getIfAvailable(SimpleMeterRegistry::new));
     }
 

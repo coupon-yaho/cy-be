@@ -152,3 +152,52 @@ tests:
       - eval_time: 8m
         alertname: RelayPoolHeadroomUnverified
         exp_alerts: []
+
+  # ── 목 발송기가 성공으로 세는 상태 ───────────────────────────────────────
+  - interval: 1m
+    name: "목인데 성공이 오르면 NotifySuccessesAreNotReal 이 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              # `and` 의 왼쪽 계열 라벨이 그대로 실린다 — alertmanager 가 이것으로 가른다.
+              result: success
+            exp_annotations:
+              summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 15건)"
+              description: >-
+                목 발송기(MockNotificationSender)가 선 상태에서 성공 카운터가 오르고 있습니다. **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로 outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다. 운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오 — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.** 로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가 그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.
+
+  # 실물이면 안 뜬다 — 정상 운영마다 알림이 오면 안 된다.
+  - interval: 1m
+    name: "실물 발송기면 성공이 올라도 안 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts: []
+
+  # 목이지만 아무것도 안 보내면 안 뜬다 — 한가한 로컬에서 울리면 안 된다.
+  # ("avoid having pages where there is nothing to do")
+  - interval: 1m
+    name: "목이어도 성공이 안 오르면 안 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success"}'
+        values: '0x30'
+      - series: 'cy_notify_sender_live'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts: []

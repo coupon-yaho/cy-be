@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.observation.DomainMeterNames;
+import com.kafkick.infra.mq.notification.NotificationSenderModeGauge;
 import com.kafkick.infra.mq.notification.RelayWorkerPoolHeadroomGuard;
 
 /**
@@ -42,6 +43,9 @@ class OutboxAlertRuleContractTest {
         assertThat(rules)
                 .as("워커/풀 가드 게이지 — 이름이 갈리면 알림이 영원히 안 뜬다")
                 .contains(RelayWorkerPoolHeadroomGuard.GAUGE);
+        assertThat(rules)
+                .as("발송기 모드 게이지 — 이 이름이 갈리면 성공 지표의 거짓말을 못 잡는다")
+                .contains(NotificationSenderModeGauge.GAUGE);
     }
 
     /**
