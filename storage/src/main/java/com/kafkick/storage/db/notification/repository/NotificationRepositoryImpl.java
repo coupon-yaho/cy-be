@@ -1,5 +1,6 @@
 package com.kafkick.storage.db.notification.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,6 +32,15 @@ public class NotificationRepositoryImpl implements NotificationRepository {
         return toDomain(repository.saveAndFlush(toEntity(notification)));
     }
     @Override public Optional<Notification> findById(Long id) { return repository.findById(id).map(NotificationRepositoryImpl::toDomain); }
+
+    /**
+     * <b>없는 id 는 결과에서 빠진다.</b> {@code findAllById} 가 그렇게 동작하고, 포트의
+     * 계약도 그렇다 — 부르는 쪽이 빠진 것을 보고 판단한다.
+     */
+    @Override
+    public List<Notification> findAllByIdIn(Collection<Long> ids) {
+        return repository.findAllById(ids).stream().map(NotificationRepositoryImpl::toDomain).toList();
+    }
     @Override public long countByCouponId(Long id) { return repository.countByCouponId(id); }
     @Override public long countAll() { return repository.count(); }
     @Override public long countByCouponIdAndStatusIn(Long id, List<NotificationStatus> statuses) {

@@ -97,6 +97,12 @@ class NotificationQueryServiceTransactionTest {
         }
 
         @Override
+        public java.util.List<Notification> findAllByIdIn(
+                java.util.Collection<Long> notificationIds) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public long countByCouponId(Long couponId) {
             throw new UnsupportedOperationException();
         }

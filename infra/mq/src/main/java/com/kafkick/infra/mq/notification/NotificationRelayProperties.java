@@ -118,6 +118,11 @@ public class NotificationRelayProperties {
      * {@link RelayWorkerPoolHeadroomGuard} 가 기동 때 못 박는다(CY-923). 기본값은
      * 8 + 2 = 10 ≤ 13 이라 셋이 더 남는다.
      *
+     * <p><b>CY-926 뒤의 값은 더 높다.</b> 워커가 건당 빌리던 커넥션을 둘에서 하나로 줄여
+     * 전 구간 20~30% 올랐다(워커 8 기준 738 → 930~937건/s). <b>절벽 위치는 안 움직였다</b> —
+     * 그것을 정하는 것은 빌린 횟수가 아니라 <b>동시에 쥘 수 있는 최대 수</b>(=워커 수)라,
+     * 위 규칙은 그대로다(다시 재서 확인했다).
+     *
      * <p>전체 표·재현 절차·<b>네 번 헛잰 기록</b>은
      * {@code docs/18-relay-throughput-measurement.md} 에 있다.
      *

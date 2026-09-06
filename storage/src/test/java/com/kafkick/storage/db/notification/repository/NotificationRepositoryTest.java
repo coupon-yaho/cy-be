@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.List;
 
 import jakarta.persistence.EntityManager;
 
@@ -100,6 +101,33 @@ class NotificationRepositoryTest {
                 .isEqualTo("010-1234-5678");
         assertThat(saved.createdAt()).isEqualTo(AT);
         assertThat(saved.updatedAt()).isEqualTo(AT);
+    }
+
+    /**
+     * <b>없는 id 는 결과에서 빠진다 — 예외가 아니다.</b>
+     *
+     * <p>릴레이가 선점한 배치를 이것으로 한 번에 읽고, <b>빠진 것을
+     * {@code NOTIFICATION_MISSING} 으로 되돌린다.</b> 여기서 던지면 알림 하나가 사라진
+     * 것이 <b>나머지 63건의 발행까지 막는다.</b>
+     */
+    @Test
+    void missingIdsAreOmittedInsteadOfFailingTheWholeBatch() {
+        Notification first = repository.save(pending(101L));
+        Notification second = repository.save(pending(102L));
+        long absent = first.id() + second.id() + 10_000L;
+
+        List<Notification> found =
+                repository.findAllByIdIn(List.of(first.id(), absent, second.id()));
+
+        assertThat(found).extracting(Notification::id)
+                .as("없는 id 하나가 나머지를 막으면 안 된다")
+                .containsExactlyInAnyOrder(first.id(), second.id());
+    }
+
+    /** 빈 것을 주면 빈 결과다 — 릴레이가 빈 배치를 집는 회차에서 여기까지 온다. */
+    @Test
+    void emptyInputGivesEmptyResult() {
+        assertThat(repository.findAllByIdIn(List.of())).isEmpty();
     }
 
     private static Notification pending(long issuanceId) {
