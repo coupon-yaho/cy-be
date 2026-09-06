@@ -175,6 +175,7 @@ class AlertBehaviourTestCoverageTest {
      */
     @SuppressWarnings("unchecked")
     private static Map<String, List<String>> provenFiringByRuleFile() throws IOException {
+        Map<String, List<String>> declaredIn = alertsByRuleFile();
         Map<String, List<String>> byRuleFile = new LinkedHashMap<>();
         for (Path file : ymlIn(TESTS_DIR)) {
             Map<String, Object> root = new Yaml().load(Files.readString(file, UTF_8));
@@ -198,8 +199,13 @@ class AlertBehaviourTestCoverageTest {
                     }
                 }
             }
+            // **그 이름을 실제로 정의한 파일에만** 공을 돌린다.
+            // 한 시험이 규칙 파일 둘을 부를 때 통째로 복사하면, 한쪽만 시험해도
+            // 다른 쪽의 안 덮인 알림이 덮인 것으로 처리된다(리뷰가 짚었다).
             for (String rules : loaded) {
-                byRuleFile.computeIfAbsent(rules, key -> new ArrayList<>()).addAll(proven);
+                List<String> declared = declaredIn.getOrDefault(rules, List.of());
+                byRuleFile.computeIfAbsent(rules, key -> new ArrayList<>())
+                        .addAll(proven.stream().filter(declared::contains).toList());
             }
         }
         assertThat(byRuleFile.values().stream().flatMap(List::stream))
