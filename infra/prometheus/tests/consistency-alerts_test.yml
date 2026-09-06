@@ -156,7 +156,7 @@ tests:
             exp_annotations:
               summary: "정합성 수집이 15m 0s째 성공하지 못했습니다"
               description: >-
-                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **미래 시각이어도 여기서 뜹니다**: batch 시계가 Prometheus 보다 앞선 경우라 그때는 수집이 아니라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
+                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **앞뒤 어느 쪽이든 120초를 넘게 벌어지면 뜹니다**: 뒤처졌으면 수집이 멈춘 것이고, 앞섰으면 batch 시계가 Prometheus 보다 그만큼 빠른 것이라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). 120초 안의 어긋남은 정상 오차로 보고 여기서 안 뜹니다. **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
 
   # 수집이 살아 있으면 stalled 가 안 뜬다.
   - interval: 1m
@@ -201,4 +201,4 @@ tests:
             exp_annotations:
               summary: "정합성 수집이 1h 3m 20s째 성공하지 못했습니다"
               description: >-
-                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **미래 시각이어도 여기서 뜹니다**: batch 시계가 Prometheus 보다 앞선 경우라 그때는 수집이 아니라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
+                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **앞뒤 어느 쪽이든 120초를 넘게 벌어지면 뜹니다**: 뒤처졌으면 수집이 멈춘 것이고, 앞섰으면 batch 시계가 Prometheus 보다 그만큼 빠른 것이라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). 120초 안의 어긋남은 정상 오차로 보고 여기서 안 뜹니다. **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
