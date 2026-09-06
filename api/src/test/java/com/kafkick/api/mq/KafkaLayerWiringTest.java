@@ -37,6 +37,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 @SpringBootTest(classes = ApiApplication.class, properties = {
         "spring.config.location=file:build/cy266-kafka-wiring/kafka.yml",
         "kafka.enabled=true",
+        // ⚠️ **풀 크기를 배포와 같게 박는다.** 이 테스트는 spring.config.location 을 갈아끼워
+        //    application.yml.example 을 안 읽으므로, 안 적으면 Hikari 기본값 10 으로 뜬다.
+        //    그러면 RelayWorkerPoolHeadroomGuard 가 기본 워커 8 을 거절해(8+4 > 10)
+        //    컨텍스트가 아예 안 뜬다 — 가드가 맞고 이 컨텍스트가 배포와 달랐던 것이다.
+        "spring.datasource.hikari.maximum-pool-size=13",
         "kafka.provision-topics=false",
         "observation.datasource.enabled=false",
         "coupon.idempotency.wait-timeout=1s",
