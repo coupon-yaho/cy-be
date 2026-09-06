@@ -131,6 +131,10 @@ tasks.named('test') {
             // OutboxAlertRuleContractTest 가 읽는 둘. 규칙 파일만 넣고 워크플로를 빼면,
             // CI 가 시험 파일을 이름으로 되돌려도 UP-TO-DATE 로 건너뛴다.
             rootProject.file('infra/prometheus/rules/outbox-alerts.yml'),
+            // ConsistencyAlertRuleContractTest 가 읽는다. 선언 안 하면 규칙을 고쳐도
+            // :api:test 가 UP-TO-DATE 로 건너뛴다 — 초과발급 알림이 사라져도 초록불이다
+            // (실제로 돌연변이가 안 잡혀서 드러났다).
+            rootProject.file('infra/prometheus/rules/consistency-alerts.yml'),
             rootProject.file('.github/workflows/build.yml'),
             // 알림 규칙. V2IssuanceAlertRuleContractTest 가 이 파일과 MeterNames 를 대조하므로
             // 선언하지 않으면 규칙을 고쳐도 UP-TO-DATE 로 건너뛴다 — 이름이 어긋난 규칙은

@@ -1,0 +1,93 @@
+# 정합성 관측 알림. 관제(Prometheus)가 `rules/*.yml` 로 그대로 가져다 쓴다.
+#
+# 여기 메트릭은 DomainGaugeRegistrar(batch)가 등록하고 batch 의 관리 포트로 나간다.
+# 이름의 정본은 core 의 DomainMeterNames 이고, ConsistencyAlertRuleContractTest 가
+# 이 파일과 그 상수를 대조한다.
+#
+# ⚠️ 알림마다 channel 라벨이 붙는다 — alertmanager 가 그것으로 수신함을 가른다.
+#    정합성은 `data` 다. 서버를 고치는 것이 아니라 데이터를 확인하는 일이라서다.
+#
+# ⚠️ **검증 배치 알림(VerificationVerdictFailed)을 대체하지 않는다.**
+#    그쪽은 대조 **판정**이고 이쪽은 실시간 **관측**이다. 둘은 서로 다른 것을 본다 —
+#    게이지가 못 재는 구간(NaN)을 판정이 덮고, 판정이 하루를 기다리는 구간을 게이지가 덮는다.
+#    검증 크론은 `0 0 5 * * *`(하루 한 번)이고 이 게이지는 30초마다 갱신된다.
+#
+# ⚠️ **gap 은 여기서 안 잡는다.** `app_consistency_gap` 은 0 이 아닌 것이 곧 사고는 아니다
+#    (집계 시점 차이로 잠깐 벌어진다). 임계를 고르려면 그 값을 재야 하는데 안 쟀다 —
+#    안 잰 임계로 알림을 만들면 "할 일이 없는 페이지" 가 된다. over-issued 는 다르다:
+#    **기준선이 0** 이고 DomainMeterNames 가 그 뜻을 못박아 뒀다.
+
+groups:
+  - name: cy-consistency
+    rules:
+
+      # 팔지 않은 재고를 판 상태. **이 저장소가 막으려는 그것이다.**
+      #
+      # DomainMeterNames 가 적어 둔 뜻 그대로다 —
+      #   "0 보다 크면 팔지 않은 재고를 판 것이다."
+      # 기준선이 0 이라 임계를 고를 필요가 없다.
+      #
+      # for 가 2분인 이유 — 게이지 갱신이 30초라 네 표본은 봐야 한다.
+      # 집계 스냅샷이 트랜잭션 한복판을 지나가면 한 표본이 튈 수 있다.
+      - alert: OverIssuanceDetected
+        expr: app_consistency_over_issued > 0
+        for: 2m
+        labels:
+          severity: critical
+          channel: data
+        annotations:
+          summary: "초과발급이 관측됐습니다 (지금 {{ $value }}건)"
+          description: >-
+            팔지 않은 재고를 판 상태입니다. app_consistency_coupon_id 의 **값**이
+            관측 대상 회차입니다(회차는 라벨이 아니라 값으로 싣습니다 — 라벨로 두면
+            회차마다 시계열이 갈려 비교 질의를 못 씁니다).
+            **검증 배치를 기다리지 마십시오** — 그쪽 크론은 하루 한 번(0 0 5 * * *)이라
+            이 알림이 먼저 옵니다. 확정 판정이 필요하면 검증을 온디맨드로 돌립니다.
+            발급과 재고 중 어느 쪽이 어긋났는지는 app_consistency_gap 을 gap_type 별로
+            함께 봅니다.
+
+      # 못 재는 상태. **값 미터가 0 이 아니라 NaN 을 싣는다**(DomainMeterNames).
+      #
+      # 이것이 없으면 위 알림이 **조용히 무력화된다** — NaN 에는 `> 0` 이 거짓이라
+      # 초과발급이 나도 안 뜬다. absent() 로는 못 잡는다(계열은 있다).
+      # NaN != NaN 이 참인 것을 쓴다(batch-alerts.yml 이 같은 수법을 쓴다).
+      #
+      # 이유는 상태 미터가 진다 — SourceStatusCode:
+      #   1 VALID · 2 PENDING · 3 WARMING_UP · 4 STALE · 5 NO_TRAFFIC · 6 UNAVAILABLE · 7 N_A
+      - alert: ConsistencyUnmeasurable
+        expr: app_consistency_over_issued != app_consistency_over_issued
+        for: 10m
+        labels:
+          severity: warning
+          channel: data
+        annotations:
+          summary: "초과발급을 못 재고 있습니다"
+          description: >-
+            값이 NaN 입니다 — 못 쟀다는 뜻이지 0 이라는 뜻이 아닙니다.
+            **이 구간에서는 OverIssuanceDetected 가 안 뜹니다**(NaN 에는 > 0 이 거짓).
+            이유는 app_consistency_over_issued_state 가 코드로 답합니다 —
+            2 PENDING · 3 WARMING_UP · 4 STALE · 5 NO_TRAFFIC · 6 UNAVAILABLE · 7 N_A.
+            6(UNAVAILABLE)이면 관측 원천(관측 전용 풀·Redis)을 먼저 봅니다.
+            이 구간이 길어지면 확정 판정은 검증 배치뿐입니다.
+
+      # 계열 자체가 없는 상태. **DomainObservationConfig 의 javadoc 이 요구한 알림이다** —
+      #   "관측 풀 스위치를 끄면 도메인 Gauge 가 조용히 사라진다. 기동도 로그도 정상인데
+      #    app_consistency_gap 이 없다. 그 상황은 Prometheus 쪽에서 absent() 로 잡아야 한다."
+      #
+      # 스위치가 둘이다(observation.datasource.enabled · observation.domain-gauge.enabled).
+      # 둘 중 하나만 꺼도 이 설정 전체가 안 실리고, 그때 위 알림 둘이 **함께** 침묵한다.
+      - alert: ConsistencyGaugeMissing
+        expr: absent(app_consistency_over_issued) == 1
+        for: 15m
+        labels:
+          severity: warning
+          channel: data
+        annotations:
+          summary: "정합성 게이지가 아예 없습니다"
+          description: >-
+            계열이 없습니다 — 스위치가 꺼졌거나 batch 가 안 떴습니다.
+            observation.datasource.enabled 와 observation.domain-gauge.enabled 를
+            함께 확인하십시오. **둘 중 하나만 꺼도 도메인 Gauge 가 통째로 사라지고,
+            기동도 로그도 정상으로 보입니다.**
+            이 상태에서는 OverIssuanceDetected 와 ConsistencyUnmeasurable 이 **둘 다**
+            침묵하므로, 초과발급을 볼 수 있는 것은 하루 한 번 도는 검증 배치뿐입니다.
