@@ -101,7 +101,7 @@ tests:
             exp_annotations:
               summary: "정합성 게이지가 아예 없습니다"
               description: >-
-                계열이 없습니다 — 스위치가 꺼졌거나 batch 가 안 떴습니다. observation.datasource.enabled 와 observation.domain-gauge.enabled 를 함께 확인하십시오. **둘 중 하나만 꺼도 도메인 Gauge 가 통째로 사라지고, 기동도 로그도 정상으로 보입니다.** 이 상태에서는 OverIssuanceDetected 와 ConsistencyUnmeasurable 이 **둘 다** 침묵하므로, 초과발급을 볼 수 있는 것은 하루 한 번 도는 검증 배치뿐입니다.
+                계열이 없습니다 — 스위치가 꺼졌거나 batch 가 안 떴습니다. observation.datasource.enabled 와 observation.domain-gauge.enabled 를 함께 확인하십시오. **둘 중 하나만 꺼도 도메인 Gauge 가 통째로 사라지고, 기동도 로그도 정상으로 보입니다.** 이 상태에서는 OverIssuanceDetected 와 ConsistencyUnmeasurable 이 **둘 다** 침묵합니다. 대안은 갈래에 따라 다릅니다 — **batch 가 떠 있고 스위치만 꺼진 것이면** 온디맨드 검증 (POST /api/v1/admin/verify)으로 지금 확인할 수 있습니다. **batch 자체가 안 떠 있으면** 그 API 도 하루 한 번 도는 검증 크론도 함께 멈춘 것이라, 초과발급을 볼 수단이 남아 있지 않습니다 — cy_batch_last_success_seconds 계열과 batch 기동부터 확인하십시오.
 
   # 계열이 있으면 missing 이 안 뜬다 — NaN 이어도 계열은 있는 것이다.
   - interval: 1m
