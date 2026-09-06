@@ -1,0 +1,204 @@
+# 정합성 알림 규칙의 **동작**을 못 박는다.
+#
+# promtool check rules 는 문법만 본다. 규칙이 "문법은 맞는데 영원히 안 뜨는" 상태로 바뀌어도
+# CI 가 초록이다 — batch-alerts_test.yml 이 같은 이유로 서 있고, 그쪽은 실제로 두 번 잡았다.
+#
+# ⚠️ 이 디렉터리는 rules/ 밖이다. prometheus.yml 의 글롭(rules/*.yml)에 걸리면
+#    프로메테우스가 이 파일을 규칙으로 읽으려다 기동에 실패한다.
+rule_files:
+  - ../rules/consistency-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 초과발급: 기준선이 0 이라 1 이면 뜬다 ─────────────────────────────────
+  - interval: 1m
+    name: "초과발급이 나면 OverIssuanceDetected 가 뜬다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x5 3x20'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각을 따라 오르는 값 — 수집이 살아 있는 상태다(60 초에서 시작해 1분마다 +60).
+        values: '60+60x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OverIssuanceDetected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: data
+            exp_annotations:
+              summary: "초과발급이 관측됐습니다 (지금 3건)"
+              description: >-
+                팔지 않은 재고를 판 상태입니다. app_consistency_coupon_id 의 **값**이 관측 대상 회차입니다(회차는 라벨이 아니라 값으로 싣습니다 — 라벨로 두면 회차마다 시계열이 갈려 비교 질의를 못 씁니다). **검증 배치를 기다리지 마십시오** — 그쪽 크론은 하루 한 번(0 0 5 * * *)이라 이 알림이 먼저 옵니다. 확정 판정이 필요하면 검증을 온디맨드로 돌립니다. 발급과 재고 중 어느 쪽이 어긋났는지는 app_consistency_gap 을 gap_type 별로 함께 봅니다. 이 알림은 **수집이 살아 있을 때만** 뜹니다(마지막 성공이 120초 안) — 굳은 값으로 부르지 않기 위해서입니다. 수집이 멈춘 것은 ObservationCollectStalled 가 따로 알립니다.
+
+  # 0 이면 안 뜬다 — 정상 운영마다 알림이 오면 안 된다.
+  - interval: 1m
+    name: "초과발급이 0 이면 안 뜬다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x20'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각을 따라 오르는 값 — 수집이 살아 있는 상태다(60 초에서 시작해 1분마다 +60).
+        values: '60+60x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  # 2분을 안 채우면 안 뜬다. 한 표본이 튀는 것을 알림으로 만들지 않는다.
+  - interval: 1m
+    name: "초과발급이 난 지 2분이 안 되면 아직 안 뜬다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x5 3x20'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각을 따라 오르는 값 — 수집이 살아 있는 상태다(60 초에서 시작해 1분마다 +60).
+        values: '60+60x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  # ── NaN: 초과발급 알림이 조용해지는 구간 ─────────────────────────────────
+  # **이 시험이 핵심이다.** NaN 에서 OverIssuanceDetected 는 안 뜨고
+  # ConsistencyUnmeasurable 이 대신 떠야 한다. 둘 다 안 뜨면 침묵이다.
+  - interval: 1m
+    name: "못 재는 구간에는 ConsistencyUnmeasurable 이 뜨고 초과발급 알림은 안 뜬다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x5 NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConsistencyUnmeasurable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+            exp_annotations:
+              summary: "초과발급을 못 재고 있습니다"
+              description: >-
+                값이 NaN 입니다 — 못 쟀다는 뜻이지 0 이라는 뜻이 아닙니다. **이 구간에서는 OverIssuanceDetected 가 안 뜹니다**(NaN 에는 > 0 이 거짓). 이유는 app_consistency_over_issued_state 가 코드로 답합니다 — 2 PENDING · 3 WARMING_UP · 4 STALE · 5 NO_TRAFFIC · 6 UNAVAILABLE · 7 N_A. 6(UNAVAILABLE)이면 관측 원천(관측 전용 풀·Redis)을 먼저 봅니다. 이 구간이 길어지면 확정 판정은 검증 배치뿐입니다.
+      - eval_time: 20m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  # 정상 값에서는 NaN 알림이 안 뜬다.
+  - interval: 1m
+    name: "값이 있으면 ConsistencyUnmeasurable 이 안 뜬다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConsistencyUnmeasurable
+        exp_alerts: []
+
+  # ── 계열 부재: 위 둘이 함께 침묵하는 구간 ────────────────────────────────
+  - interval: 1m
+    name: "계열이 아예 없으면 ConsistencyGaugeMissing 이 뜬다"
+    input_series:
+      - series: 'up{job="cy-batch"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConsistencyGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+            exp_annotations:
+              summary: "정합성 게이지가 아예 없습니다"
+              description: >-
+                계열이 없습니다 — 스위치가 꺼졌거나 batch 가 안 떴습니다. observation.datasource.enabled 와 observation.domain-gauge.enabled 를 함께 확인하십시오. **둘 중 하나만 꺼도 도메인 Gauge 가 통째로 사라지고, 기동도 로그도 정상으로 보입니다.** 이 상태에서는 OverIssuanceDetected 와 ConsistencyUnmeasurable 이 **둘 다** 침묵합니다. 대안은 갈래에 따라 다릅니다 — **batch 가 떠 있고 스위치만 꺼진 것이면** 온디맨드 검증 (POST /api/v1/admin/verify)으로 지금 확인할 수 있습니다. **batch 자체가 안 떠 있으면** 그 API 도 하루 한 번 도는 검증 크론도 함께 멈춘 것이라, 초과발급을 볼 수단이 남아 있지 않습니다 — cy_batch_last_success_seconds 계열과 batch 기동부터 확인하십시오.
+
+  # 계열이 있으면 missing 이 안 뜬다 — NaN 이어도 계열은 있는 것이다.
+  - interval: 1m
+    name: "NaN 이어도 계열이 있으면 ConsistencyGaugeMissing 은 안 뜬다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConsistencyGaugeMissing
+        exp_alerts: []
+
+  # ── 수집이 멈춘 구간 ─────────────────────────────────────────────────────
+  # **이것이 리뷰가 짚은 자리다.** 한 번 튄 값이 굳은 채 반복 스크레이프되면
+  # for 는 채워지지만 "여러 번 쟀다" 는 아니다. 그때 사람을 부르지 않아야 한다.
+  - interval: 1m
+    name: "수집이 멈추면 굳은 값으로 초과발급 알림이 뜨지 않는다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        # 5분째에 3 이 되고 그대로 굳는다.
+        values: '0x5 3x25'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 5분(300초)에서 멈춘다 — 그 뒤로 갱신이 없다.
+        values: '60+60x5 300x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  - interval: 1m
+    name: "수집이 멈추면 ObservationCollectStalled 가 뜬다"
+    input_series:
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        values: '60+60x5 300x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ObservationCollectStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              path: consistency
+            exp_annotations:
+              summary: "정합성 수집이 15m 0s째 성공하지 못했습니다"
+              description: >-
+                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **앞뒤 어느 쪽이든 120초를 넘게 벌어지면 뜹니다**: 뒤처졌으면 수집이 멈춘 것이고, 앞섰으면 batch 시계가 Prometheus 보다 그만큼 빠른 것이라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). 120초 안의 어긋남은 정상 오차로 보고 여기서 안 뜹니다. **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
+
+  # 수집이 살아 있으면 stalled 가 안 뜬다.
+  - interval: 1m
+    name: "수집이 살아 있으면 ObservationCollectStalled 가 안 뜬다"
+    input_series:
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        values: '60+60x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ObservationCollectStalled
+        exp_alerts: []
+
+  # ── 미래 시각: batch 시계가 앞선 뒤 수집이 멈춘 경우 ──────────────────────
+  # **abs() 가 없으면 여기서 굳은 사고값이 critical 까지 간다**(리뷰가 짚었다).
+  - interval: 1m
+    name: "수집 시각이 미래여도 굳은 값으로 초과발급 알림이 뜨지 않는다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x5 3x25'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각보다 1시간 앞선 값에서 굳는다 — 차가 음수라 그냥 빼면 통과한다.
+        values: '5000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  # 그 경우가 침묵이 되면 안 된다 — 짝이 대칭이라 여기서 뜬다.
+  - interval: 1m
+    name: "수집 시각이 미래면 ObservationCollectStalled 가 대신 뜬다"
+    input_series:
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        values: '5000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ObservationCollectStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              path: consistency
+            exp_annotations:
+              summary: "정합성 수집이 1h 3m 20s째 성공하지 못했습니다"
+              description: >-
+                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **앞뒤 어느 쪽이든 120초를 넘게 벌어지면 뜹니다**: 뒤처졌으면 수집이 멈춘 것이고, 앞섰으면 batch 시계가 Prometheus 보다 그만큼 빠른 것이라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). 120초 안의 어긋남은 정상 오차로 보고 여기서 안 뜹니다. **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
