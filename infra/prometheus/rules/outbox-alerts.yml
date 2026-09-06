@@ -119,7 +119,7 @@ groups:
             기동 로그의 "릴레이 워커/풀" ERROR/WARN 이 어느 갈래인지 답합니다.
             고친 뒤에는 거절을 다시 켜십시오.
 
-      # 성공 지표가 오르는데 실제로는 아무 데도 안 보내는 상태.
+      # 성공 지표가 오르는데 그 인스턴스가 목 발송기로 도는 상태.
       #
       # MockNotificationSender 는 안 보내면서 예외도 안 던진다. 그래서 그것이 선 환경에서도
       # app_notify_sent_total{result="success"} 가 정상적으로 오르고, outbox 는 PUBLISHED 가
@@ -131,9 +131,14 @@ groups:
       #    순간**이라, and 로 둘을 묶어 그때만 뜨게 한다. 한가한 환경에서는 안 뜬다
       #    ("avoid having pages where there is nothing to do").
       - alert: NotifySuccessesAreNotReal
+        # ⚠️ **on(job, instance) 다 — 빈 on() 이 아니다.** 빈 on() 은 job·instance 를
+        #    무시해서, **목 인스턴스가 하나라도 있으면 실물 인스턴스의 성공까지** 미발송으로
+        #    판정한다. 롤링 배포 중(새 판은 실물, 옛 판은 아직 목)이나 인스턴스별 설정이
+        #    갈렸을 때 **실제로 나간 알림을 "아무 데도 안 갔다" 고 보고한다**(리뷰가 잡았다).
+        #    인스턴스로 묶으면 목인 그 인스턴스만 뜬다.
         expr: >-
           increase(app_notify_sent_total{result="success"}[15m]) > 0
-          and on() cy_notify_sender_live == 0
+          and on(job, instance) cy_notify_sender_live == 0
         for: 0m
         labels:
           severity: critical
@@ -141,7 +146,8 @@ groups:
         annotations:
           summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 {{ $value }}건)"
           description: >-
-            목 발송기(MockNotificationSender)가 선 상태에서 성공 카운터가 오르고 있습니다.
+            이 인스턴스는 목 발송기(MockNotificationSender)로 도는데 성공 카운터가
+            오르고 있습니다.
             **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로
             outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다.
             운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오

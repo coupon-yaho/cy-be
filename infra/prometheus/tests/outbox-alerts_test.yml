@@ -157,9 +157,9 @@ tests:
   - interval: 1m
     name: "목인데 성공이 오르면 NotifySuccessesAreNotReal 이 뜬다"
     input_series:
-      - series: 'app_notify_sent_total{result="success"}'
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
         values: '0x5 1+1x20'
-      - series: 'cy_notify_sender_live'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 20m
@@ -170,18 +170,20 @@ tests:
               channel: server
               # `and` 의 왼쪽 계열 라벨이 그대로 실린다 — alertmanager 가 이것으로 가른다.
               result: success
+              job: cy-api
+              instance: api-1:9292
             exp_annotations:
               summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 15건)"
               description: >-
-                목 발송기(MockNotificationSender)가 선 상태에서 성공 카운터가 오르고 있습니다. **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로 outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다. 운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오 — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.** 로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가 그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.
+                이 인스턴스는 목 발송기(MockNotificationSender)로 도는데 성공 카운터가 오르고 있습니다. **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로 outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다. 운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오 — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.** 로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가 그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.
 
   # 실물이면 안 뜬다 — 정상 운영마다 알림이 오면 안 된다.
   - interval: 1m
     name: "실물 발송기면 성공이 올라도 안 뜬다"
     input_series:
-      - series: 'app_notify_sent_total{result="success"}'
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
         values: '0x5 1+1x20'
-      - series: 'cy_notify_sender_live'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 20m
@@ -193,11 +195,40 @@ tests:
   - interval: 1m
     name: "목이어도 성공이 안 오르면 안 뜬다"
     input_series:
-      - series: 'app_notify_sent_total{result="success"}'
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
         values: '0x30'
-      - series: 'cy_notify_sender_live'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 20m
         alertname: NotifySuccessesAreNotReal
         exp_alerts: []
+
+  # ⚠️ **롤링 배포**. 새 판(api-2)은 실물, 옛 판(api-1)은 아직 목이다.
+  #    빈 on() 이면 api-2 의 성공까지 "아무 데도 안 갔다" 고 보고했다(리뷰가 잡았다).
+  #    목인 api-1 하나만 떠야 한다.
+  - interval: 1m
+    name: "실물 인스턴스와 목 인스턴스가 섞이면 목 쪽만 뜬다"
+    input_series:
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-1:9292"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-1:9292"}'
+        values: '0x30'
+      - series: 'app_notify_sent_total{result="success", job="cy-api", instance="api-2:9292"}'
+        values: '0x5 1+1x20'
+      - series: 'cy_notify_sender_live{job="cy-api", instance="api-2:9292"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NotifySuccessesAreNotReal
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              channel: server
+              result: success
+              job: cy-api
+              instance: api-1:9292
+            exp_annotations:
+              summary: "알림 발송 성공이 실제 발송이 아닙니다 (15분 15건)"
+              description: >-
+                이 인스턴스는 목 발송기(MockNotificationSender)로 도는데 성공 카운터가 오르고 있습니다. **그만큼의 알림이 아무 데도 안 갔습니다** — 목은 안 보내면서 예외도 안 던지므로 outbox 는 PUBLISHED 가 되고 소비자도 정상 소비합니다. 종착도 백로그도 안 뜹니다. 운영이라면 notification.sender.http.enabled=true 와 발송 endpoint 를 확인하십시오 — 이 스위치는 matchIfMissing=true 라 **설정을 빠뜨리면 조용히 목이 뜹니다.** 로컬·시연 환경이라면 정상입니다. 그 경우 이 알림이 오는 것 자체가 그 환경에서 성공 지표를 운영 판단에 쓰면 안 된다는 뜻입니다.
