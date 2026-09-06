@@ -112,10 +112,11 @@ public class NotificationRelayProperties {
      * 기전은 단순하다 — 워커는 발행 후 outbox 를 갱신하느라 <b>커넥션을 하나씩 잡고</b>,
      * 워커가 풀보다 많으면 릴레이만으로 풀이 차서 <b>접수 요청이 커넥션을 기다린다.</b>
      *
-     * <p><b>그래서 규칙은 코어가 아니라 풀이다 — 워커 수 &lt; {@code DB_POOL_SIZE}.</b>
-     * 배포 기본값이 13 이라({@code application.yml.example}) 8 이면 접수에 다섯이 남는다.
-     * 16 으로 올리면서 풀을 안 키우면 <b>릴레이 혼자 풀을 넘겨</b> 접수 p99 가 일곱 배가
-     * 되는데, <b>앱은 정상 기동하고 아무 경고도 없다.</b> 기동 검사는 아직 없다.
+     * <p><b>그래서 규칙은 코어가 아니라 풀이다.</b> 8 과 16 사이를 다시 재 보니 절벽이
+     * <b>12 에서 시작한다</b> — 풀 13 에서 워커 11(접수 몫 둘)은 요청 p99 999µs 인데
+     * 워커 12(하나)는 4,069µs 다. 규칙은 <b>{@code workerCount + 2 ≤ 풀 크기}</b> 이고,
+     * {@link RelayWorkerPoolHeadroomGuard} 가 기동 때 못 박는다(CY-923). 기본값은
+     * 8 + 2 = 10 ≤ 13 이라 셋이 더 남는다.
      *
      * <p>전체 표·재현 절차·<b>네 번 헛잰 기록</b>은
      * {@code docs/18-relay-throughput-measurement.md} 에 있다.
