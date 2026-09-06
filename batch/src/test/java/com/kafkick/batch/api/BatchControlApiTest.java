@@ -243,81 +243,105 @@ class BatchControlApiTest {
     }
 
     /**
-     * <b>죽은 실행을 걷는다.</b> {@code stop} 은 신호만 남기고 못 하는 일이다 —
-     * 그 신호를 읽을 프로세스가 없어 영영 안 멈춘다.
+     * <b>중단 신호만 남고 프로세스가 죽은 실행을 걷는다.</b>
      *
-     * <p><b>{@code abandon} 하나로는 안 된다</b>(실측). {@code STARTED.isRunning()} 이 참이라
-     * 프레임워크가 <i>"도는 중"</i> 으로 보고 거절한다 — {@code stop} 으로 {@code STOPPED} 를
-     * 만든 뒤에야 받는다. 이 테스트는 <b>그 두 단계가 다 일어났는지</b>를 최종 상태로 본다.
+     * <p>{@code stop} 은 도는 잡이 있으면 {@code STOPPING} 을 남기고 청크 경계에서
+     * {@code STOPPED} 로 가지만, <b>하드킬로 잡이 이미 없으면 그 자리에 머문다.</b>
+     * 그 행이 이 API 의 주 사용처다.
      */
     @Test
-    @DisplayName("시체가 된 실행은 회수되어 ABANDONED 로 내려간다")
-    void aDeadExecutionIsAbandoned() throws Exception {
+    @DisplayName("STOPPING 에 멈춘 실행을 버린다 — 신호를 읽을 프로세스가 없는 경우다")
+    void anExecutionStrandedInStoppingIsAbandoned() throws Exception {
         try (RunningJobFixture dead = RunningJobFixture.plant(
                 jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(7), DEAD, DEAD)) {
+            jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET STATUS='STOPPING'"
+                            + " WHERE JOB_EXECUTION_ID=:id")
+                    .param("id", dead.executionId()).update();
 
             var response = api().post(
                     "/api/v1/admin/batch/runs/" + dead.executionId() + "/abandon");
 
             assertThat(response.statusCode()).isEqualTo(200);
-            var body = VerifyApiProbe.json(response).path("data");
-            assertThat(body.path("statusWhenAbandoned").asText())
-                    .as("무엇을 걷었는지가 응답에 남아야 한다")
-                    .isEqualTo("STARTED");
-            assertThat(body.path("status").asText())
-                    .as("stop 만 되고 abandon 이 안 됐으면 STOPPED 에서 멈춘다")
+            assertThat(VerifyApiProbe.json(response).path("data").path("status").asText())
                     .isEqualTo("ABANDONED");
         }
     }
 
     /**
-     * <b>이것이 이 API 의 핵심 안전장치다.</b> 회수는 되돌릴 수 없어서, 살아 있는 실행에
-     * 하면 <b>그 잡이 통째로 죽는다.</b>
-     *
-     * <p>그래서 <b>진도가 아직 있는</b> 실행은 거절한다 — 오래 돌지만 청크를 넘기고 있는
-     * 잡이 정확히 그 모양이다. 잡별 관제가 거는 것과 같은 판정이다(CY-678).
+     * <b>{@code STOPPED} 도 받아야 한다.</b> 안 받으면 {@code stop} 은 됐는데 버리기가
+     * 실패한 실행이 <b>범용 경로로는 끝낼 수 없게</b> 된다 — 리뷰가 짚은 자리다.
      */
     @Test
-    @DisplayName("진도가 있는 실행은 회수를 409 와 BATCH-005 로 거절한다")
-    void anExecutionThatIsStillMakingProgressIsRefused() throws Exception {
-        // 오래 돌지만(2시간) 진도는 방금 났다 — 살아 있는 잡의 모양이다.
-        try (RunningJobFixture alive = RunningJobFixture.plant(
-                jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(8),
-                DEAD, Duration.ZERO)) {
+    @DisplayName("이미 STOPPED 인 실행도 버릴 수 있다 — 중간에 실패해도 이어서 끝낸다")
+    void anExecutionAlreadyStoppedCanStillBeAbandoned() throws Exception {
+        try (RunningJobFixture stopped = RunningJobFixture.plant(
+                jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(8), DEAD, DEAD)) {
+            jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET STATUS='STOPPED',"
+                            + " EXIT_CODE='STOPPED' WHERE JOB_EXECUTION_ID=:id")
+                    .param("id", stopped.executionId()).update();
 
             var response = api().post(
-                    "/api/v1/admin/batch/runs/" + alive.executionId() + "/abandon");
+                    "/api/v1/admin/batch/runs/" + stopped.executionId() + "/abandon");
+
+            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(VerifyApiProbe.json(response).path("data").path("status").asText())
+                    .isEqualTo("ABANDONED");
+        }
+    }
+
+    /**
+     * <b>도는 실행은 먼저 {@code stop} 이다.</b> 여기서 바로 버리면 살아 있는 잡을 걷는다.
+     *
+     * <p>{@code stop} 을 이 안에서 이어 부르지 않는 이유이기도 하다 — 그러면 이 거절이
+     * 사라지고, {@code stop} 만 성공한 중간 상태가 생긴다.
+     */
+    @Test
+    @DisplayName("도는 실행은 버리기를 409 와 BATCH-005 로 거절한다 — 먼저 stop 이다")
+    void aRunningExecutionMustBeStoppedFirst() throws Exception {
+        try (RunningJobFixture running = RunningJobFixture.plant(
+                jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(9), DEAD, DEAD)) {
+
+            var response = api().post(
+                    "/api/v1/admin/batch/runs/" + running.executionId() + "/abandon");
 
             assertThat(response.statusCode()).isEqualTo(409);
             assertThat(VerifyApiProbe.json(response).path("error").path("code").asText())
-                    .as("살아 있는 실행을 걷으면 그 잡이 통째로 죽는다")
                     .isEqualTo("BATCH-005");
         }
     }
 
-    /** 회수는 시체용이다. 이미 끝난 실행에 하면 끝난 결과를 ABANDONED 로 덮는다. */
+    /**
+     * <b>끝난 실행을 막는 것이 핵심이다.</b> 프레임워크는 {@code isLessThan(STOPPING)} 일
+     * 때만 거부하므로 {@code FAILED} 는 통과한다 — 그대로 두면 <b>실패 이력을
+     * {@code ABANDONED} 로 덮고 {@code END_TIME} 을 현재로 다시 쓴다.</b> 이 저장소는
+     * 실행 이력을 판정 근거로 삼는다(docs/11).
+     */
     @Test
-    @DisplayName("이미 끝난 실행은 회수를 409 와 BATCH-004 로 거절한다")
-    void aFinishedExecutionCannotBeAbandoned() throws Exception {
-        try (RunningJobFixture done = RunningJobFixture.plant(
-                jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(9), DEAD, DEAD)) {
-            jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET STATUS='COMPLETED',"
-                            + " EXIT_CODE='COMPLETED', END_TIME=CURRENT_TIMESTAMP(6)"
-                            + " WHERE JOB_EXECUTION_ID=:id")
-                    .param("id", done.executionId()).update();
+    @DisplayName("실패로 끝난 실행은 버리기를 거절한다 — 증거를 덮으면 안 된다")
+    void aFailedExecutionIsNotOverwritten() throws Exception {
+        try (RunningJobFixture failed = RunningJobFixture.plant(
+                jobRepository, jdbcClient, CleanupJobConfig.JOB_NAME, key(10), DEAD, DEAD)) {
+            jdbcClient.sql("UPDATE BATCH_JOB_EXECUTION SET STATUS='FAILED', EXIT_CODE='FAILED',"
+                            + " END_TIME=CURRENT_TIMESTAMP(6) WHERE JOB_EXECUTION_ID=:id")
+                    .param("id", failed.executionId()).update();
 
             var response = api().post(
-                    "/api/v1/admin/batch/runs/" + done.executionId() + "/abandon");
+                    "/api/v1/admin/batch/runs/" + failed.executionId() + "/abandon");
 
             assertThat(response.statusCode()).isEqualTo(409);
             assertThat(VerifyApiProbe.json(response).path("error").path("code").asText())
-                    .isEqualTo("BATCH-004");
+                    .isEqualTo("BATCH-005");
+            assertThat(jdbcClient.sql("SELECT STATUS FROM BATCH_JOB_EXECUTION"
+                            + " WHERE JOB_EXECUTION_ID=:id")
+                    .param("id", failed.executionId()).query(String.class).single())
+                    .as("거절했는데 상태가 바뀌었으면 증거를 덮은 것이다")
+                    .isEqualTo("FAILED");
         }
     }
 
     /** 없는 실행은 500 이 아니라 404 다 — 화면이 "없다" 와 "깨졌다" 를 갈라야 한다. */
     @Test
-    @DisplayName("없는 실행을 회수하려 하면 404 다")
+    @DisplayName("없는 실행을 버리려 하면 404 다")
     void abandoningAnAbsentExecutionIsNotFound() throws Exception {
         var response = api().post("/api/v1/admin/batch/runs/999999999/abandon");
 
