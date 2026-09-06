@@ -7,10 +7,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,7 +32,24 @@ import org.junit.jupiter.api.Test;
  */
 class AlertChannelRegistryTest {
 
-    private static final Path RULES = Path.of("../infra/prometheus/rules/batch-alerts.yml");
+    /**
+     * <b>디렉터리를 통째로 읽는다 — 파일 하나가 아니다.</b>
+     *
+     * <p>⚠️ 한때 여기가 {@code batch-alerts.yml} 하나였다. 그래서 <b>다른 다섯 파일의
+     * 알림 21개가 표와 대조되지 않은 채</b> 통과했다 — 이 클래스가 막으려는 것이
+     * 정확히 "표가 완전한 등록부처럼 보이는 것" 인데, 그 자신이 그 상태였다.
+     *
+     * <p>글롭으로 읽으면 새 규칙 파일이 그날부터 대조에 들어온다.
+     */
+    private static final Path RULES_DIR = Path.of("../infra/prometheus/rules");
+
+    /** 채널 값이 실제로 라우팅되는지 잇는 자리. */
+    private static final Path ROUTING = Path.of("../infra/alertmanager/alertmanager.yml");
+
+    private static final Pattern CHANNEL_LABEL = Pattern.compile("(?m)^\\s+channel:\\s*(\\w+)\\s*$");
+
+    private static final Pattern ROUTE_MATCHER =
+            Pattern.compile("channel\\s*=\\s*(\\w+)");
 
     private static final Path CHANNEL_DOC = Path.of("../docs/14-observability-wiring.md");
 
@@ -41,7 +60,7 @@ class AlertChannelRegistryTest {
     @Test
     @DisplayName("규칙 파일의 알림 전부가 docs/14 채널 표에 있다 — 빠지면 sink-unrouted 로 간다")
     void everyAlertIsRegisteredInTheChannelTable() throws IOException {
-        Set<String> declared = matches(ALERT, Files.readString(RULES, StandardCharsets.UTF_8));
+        Set<String> declared = matches(ALERT, allRules());
         Set<String> listed = matches(BACKTICKED, channelTable());
 
         // **비어 있으면 allSatisfy 가 무조건 통과한다.** 정규식이 어긋나 0개를 뽑으면
@@ -61,7 +80,7 @@ class AlertChannelRegistryTest {
     @Test
     @DisplayName("채널 표에 없는 알림 이름이 표에 남아 있지 않다 — 지운 알림의 잔재")
     void channelTableHasNoStaleEntries() throws IOException {
-        Set<String> declared = matches(ALERT, Files.readString(RULES, StandardCharsets.UTF_8));
+        Set<String> declared = matches(ALERT, allRules());
         Set<String> listed = matches(BACKTICKED, channelTable());
 
         assertThat(listed).as("채널 표에서 이름을 하나도 못 뽑았다").isNotEmpty();
@@ -98,5 +117,48 @@ class AlertChannelRegistryTest {
     private static Set<String> matches(Pattern pattern, String text) {
         Matcher matcher = pattern.matcher(text);
         return matcher.results().map(result -> result.group(1)).collect(Collectors.toSet());
+    }
+
+    /**
+     * <b>채널 값이 실제로 라우팅되는지 잇는다.</b>
+     *
+     * <p>표에 이름을 적고 라벨을 달아도, alertmanager 에 그 값의 route 가 없으면
+     * <b>{@code sink-unrouted} 로 간다</b> — 알림은 뜨는데 아무도 못 본다.
+     * 이 클래스의 다른 검사들은 <b>이름</b>을 보지 <b>값</b>을 안 본다.
+     *
+     * <p>반대 방향도 본다. 안 쓰이는 route 가 남으면 라우팅 파일이 <b>실제보다 넓어
+     * 보이고</b>, 다음 사람이 "그 채널은 이미 열려 있다" 고 읽는다.
+     */
+    @Test
+    @DisplayName("규칙이 쓰는 channel 값이 alertmanager 라우팅에 실재한다")
+    void everyChannelValueHasARoute() throws IOException {
+        Set<String> used = matches(CHANNEL_LABEL, allRules());
+        Set<String> routed = matches(ROUTE_MATCHER,
+                Files.readString(ROUTING, StandardCharsets.UTF_8));
+
+        assertThat(used).as("규칙에서 channel 값을 하나도 못 뽑았다").isNotEmpty();
+        assertThat(routed).as("라우팅에서 matcher 를 하나도 못 뽑았다").isNotEmpty();
+        assertThat(used)
+                .as("라우팅이 없는 channel 은 sink-unrouted 로 갑니다 — 뜨는데 아무도 못 봅니다")
+                .allSatisfy(channel -> assertThat(routed).contains(channel));
+        assertThat(routed)
+                .as("안 쓰이는 route 가 남으면 라우팅이 실제보다 넓어 보입니다")
+                .allSatisfy(channel -> assertThat(used).contains(channel));
+    }
+
+    /**
+     * <b>규칙 파일 전부를 이어 읽는다.</b> 하나만 읽으면 나머지가 조용히 빠지고,
+     * 그 상태가 <b>완전한 등록부처럼</b> 보인다 — 실제로 21개가 그랬다.
+     */
+    private static String allRules() throws IOException {
+        try (Stream<Path> files = Files.list(RULES_DIR)) {
+            List<Path> yml = files.filter(p -> p.toString().endsWith(".yml")).sorted().toList();
+            assertThat(yml).as("규칙 파일이 하나도 없다 — 경로가 바뀌었는지 확인하라").isNotEmpty();
+            StringBuilder all = new StringBuilder();
+            for (Path file : yml) {
+                all.append(Files.readString(file, StandardCharsets.UTF_8)).append('\n');
+            }
+            return all.toString();
+        }
     }
 }
