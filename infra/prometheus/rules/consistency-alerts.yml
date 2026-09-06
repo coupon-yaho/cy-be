@@ -38,11 +38,16 @@ groups:
       # 그 규칙을 직접 지정해 뒀다 — `time() - 값 > 120`. 그 지표가 있는 이유도 같다:
       #   "5분째 같은 이유로 잘린다 ... 화면은 조용한데 초과 발급 KPI 가 죽는다."
       # 굳은 값으로는 사람을 안 부르고, 굳었다는 사실은 아래 ObservationCollectStalled 가 진다.
+      #
+      # ⚠️ **abs() 다.** 그냥 빼면 **미래 시각이 통과한다** — batch 시계가 Prometheus 보다
+      #    앞선 뒤 수집이 멈추면 차가 음수라 `< 120` 이 참이고, 굳은 값이 그대로 울린다
+      #    (리뷰가 짚었다). 양쪽으로 막는다: 앞서 있어도 못 믿는 값이다.
+      #    그 경우가 침묵이 되지 않도록 아래 짝도 abs() 로 대칭이다.
       - alert: OverIssuanceDetected
         expr: >-
           app_consistency_over_issued > 0
           and on(job, instance)
-            (time() - app_observation_collect_last_success_epoch{path="consistency"}) < 120
+            abs(time() - app_observation_collect_last_success_epoch{path="consistency"}) < 120
         for: 2m
         labels:
           severity: critical
@@ -119,12 +124,15 @@ groups:
       # (재고 1초 · 정합성 30초). "연속 3회" 는 한쪽이 3초, 다른 쪽이 90초라 같은 임계를
       # 못 쓴다.
       #
+      # ⚠️ **abs() 라 미래 시각도 여기서 뜬다.** batch 시계가 앞서면 차가 음수인데, 그것도
+      #    "값을 못 믿는다" 는 뜻은 같다 — 위 알림이 그때 닫히므로 여기가 안 뜨면 침묵이다.
+      #
       # ⚠️ **한 번도 성공 못 하면 NaN 이다.** NaN 에는 뺄셈도 비교도 거짓이라 이 규칙이
       #    조용하다 — 그 경우는 값 계열이 아예 없거나 NaN 이라 위의 GaugeMissing ·
       #    Unmeasurable 이 진다.
       - alert: ObservationCollectStalled
         expr: >-
-          (time() - app_observation_collect_last_success_epoch{path="consistency"}) > 120
+          abs(time() - app_observation_collect_last_success_epoch{path="consistency"}) > 120
         for: 5m
         labels:
           severity: warning
@@ -132,7 +140,9 @@ groups:
         annotations:
           summary: "정합성 수집이 {{ $value | humanizeDuration }}째 성공하지 못했습니다"
           description: >-
-            값이 굳었습니다 — 마지막으로 성공한 수집이 그만큼 전입니다.
+            값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다.
+            **미래 시각이어도 여기서 뜹니다**: batch 시계가 Prometheus 보다 앞선 경우라
+            그때는 수집이 아니라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP).
             **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지
             않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다.
             원인은 app_consistency_over_issued_state 가 코드로 답합니다 —

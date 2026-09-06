@@ -156,7 +156,7 @@ tests:
             exp_annotations:
               summary: "정합성 수집이 15m 0s째 성공하지 못했습니다"
               description: >-
-                값이 굳었습니다 — 마지막으로 성공한 수집이 그만큼 전입니다. **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
+                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **미래 시각이어도 여기서 뜹니다**: batch 시계가 Prometheus 보다 앞선 경우라 그때는 수집이 아니라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
 
   # 수집이 살아 있으면 stalled 가 안 뜬다.
   - interval: 1m
@@ -168,3 +168,37 @@ tests:
       - eval_time: 20m
         alertname: ObservationCollectStalled
         exp_alerts: []
+
+  # ── 미래 시각: batch 시계가 앞선 뒤 수집이 멈춘 경우 ──────────────────────
+  # **abs() 가 없으면 여기서 굳은 사고값이 critical 까지 간다**(리뷰가 짚었다).
+  - interval: 1m
+    name: "수집 시각이 미래여도 굳은 값으로 초과발급 알림이 뜨지 않는다"
+    input_series:
+      - series: 'app_consistency_over_issued'
+        values: '0x5 3x25'
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        # 평가 시각보다 1시간 앞선 값에서 굳는다 — 차가 음수라 그냥 빼면 통과한다.
+        values: '5000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: OverIssuanceDetected
+        exp_alerts: []
+
+  # 그 경우가 침묵이 되면 안 된다 — 짝이 대칭이라 여기서 뜬다.
+  - interval: 1m
+    name: "수집 시각이 미래면 ObservationCollectStalled 가 대신 뜬다"
+    input_series:
+      - series: 'app_observation_collect_last_success_epoch{path="consistency"}'
+        values: '5000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ObservationCollectStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: data
+              path: consistency
+            exp_annotations:
+              summary: "정합성 수집이 1h 3m 20s째 성공하지 못했습니다"
+              description: >-
+                값을 못 믿는 상태입니다 — 마지막 수집 성공 시각이 지금과 그만큼 벌어져 있습니다. **미래 시각이어도 여기서 뜹니다**: batch 시계가 Prometheus 보다 앞선 경우라 그때는 수집이 아니라 **시계**를 먼저 봅니다(DefaultZoneGuard·NTP). **이 구간에는 OverIssuanceDetected 가 안 뜹니다**(굳은 값으로 사람을 부르지 않도록 신선도를 함께 보기 때문입니다). 즉 지금은 초과발급을 못 보는 상태입니다. 원인은 app_consistency_over_issued_state 가 코드로 답합니다 — 6(UNAVAILABLE)이면 관측 전용 풀과 Redis 를 먼저 봅니다. 길어지면 온디맨드 검증(POST /api/v1/admin/verify)으로 확정 판정을 받습니다.
