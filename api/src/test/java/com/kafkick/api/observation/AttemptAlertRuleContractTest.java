@@ -68,7 +68,8 @@ class AttemptAlertRuleContractTest {
         assertNamesExactly(expr, gaugeName(DomainMeterNames.KAFKA_TOPICS_PROVISIONED_STATE),
                 "상태 미터를 봐야 한다");
         assertThat(Pattern.compile(
-                        Pattern.quote(gaugeName(DomainMeterNames.KAFKA_TOPICS_PROVISIONED))
+                        "(?<![A-Za-z0-9_])"
+                                + Pattern.quote(gaugeName(DomainMeterNames.KAFKA_TOPICS_PROVISIONED))
                                 + "(?![A-Za-z0-9_])")
                 .matcher(expr).find())
                 .as("값 미터는 확인 전에 NaN 이라 어떤 비교도 거짓이다 — 그것으로는 못 잡는다")
@@ -127,9 +128,12 @@ class AttemptAlertRuleContractTest {
         return byAlert.get(alert);
     }
 
-    /** <b>부분문자열로 보면 안 된다.</b> 이름 뒤에 접미어를 붙인 규칙도 통과한다. */
+    /**
+     * <b>부분문자열로 보면 안 된다.</b> 뒤 경계만 보면 접미어를 붙인 이름이 걸리고,
+     * <b>앞 경계까지 봐야</b> 접두어를 붙인 것도 걸린다 — 한때 뒤만 봤고 리뷰가 짚었다.
+     */
     private static void assertNamesExactly(String haystack, String name, String as) {
-        assertThat(Pattern.compile(Pattern.quote(name) + "(?![A-Za-z0-9_])")
+        assertThat(Pattern.compile("(?<![A-Za-z0-9_])" + Pattern.quote(name) + "(?![A-Za-z0-9_])")
                 .matcher(haystack).find())
                 .as(as)
                 .isTrue();
