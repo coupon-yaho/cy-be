@@ -2,7 +2,9 @@ package com.kafkick.infra.mq.notification;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Executor;
@@ -263,6 +265,16 @@ public class NotificationOutboxRelay implements SmartLifecycle {
      * @return 실제로 넘긴 건수
      */
     private int dispatch(List<NotificationOutboxClaim> claims) {
+        // **여기서 한 번만 읽는다.** 워커마다 findById 를 부르면 발행 한 건에 커넥션을
+        // 두 번 빌리는데, 그 풀을 접수 요청과 공유한다 — CY-923 이 그 절벽을 쟀다
+        // (풀 13 에서 워커 12 부터 요청 p99 가 네 배). 배치로 읽으면 워커에 남는 빌림은
+        // markPublished 하나다.
+        //
+        // ⚠️ **레이스 창이 없어지는 것이 아니라 옮겨간다.** 전에는 발행 직전에 읽어서
+        // 그 사이 지워진 알림이 NOTIFICATION_MISSING 이 됐고, 지금은 선점 직후에 읽으므로
+        // 그 뒤에 지워지면 그대로 발행된다. 어느 쪽이든 "읽은 뒤 발행 전" 창은 남고
+        // 없앨 수 없다 — 어디에 있는지만 달라진다.
+        Map<Long, Notification> loaded = load(claims);
         for (int i = 0; i < claims.size(); i++) {
             NotificationOutboxClaim claim = claims.get(i);
             // **먼저 올리고 넘긴다.** 워커가 먼저 돌아 내리는 것을 막으려는 것이 아니라,
@@ -271,7 +283,7 @@ public class NotificationOutboxRelay implements SmartLifecycle {
             try {
                 workers.execute(() -> {
                     try {
-                        publish(claim);
+                        publish(claim, loaded.get(claim.notificationId()));
                     } finally {
                         inFlight.decrementAndGet();
                     }
@@ -381,15 +393,38 @@ public class NotificationOutboxRelay implements SmartLifecycle {
         return !stopping;
     }
 
-    private boolean publish(NotificationOutboxClaim claim) {
-        Optional<Notification> found = notifications.findById(claim.notificationId());
-        if (found.isEmpty()) {
+    /**
+     * 선점한 배치의 알림을 <b>한 질의로</b> 읽는다.
+     *
+     * <p>없는 id 는 결과에서 빠진다 — 그 claim 은 {@code NOTIFICATION_MISSING} 으로
+     * 되돌아간다. 하나가 없다고 나머지의 발행을 막지 않는다.
+     */
+    private Map<Long, Notification> load(List<NotificationOutboxClaim> claims) {
+        // **distinct 다.** 같은 알림이 서로 다른 attempt_seq 로 한 배치에 둘 들어올 수 있다
+        // (uk 가 (notification_id, attempt_seq) 라 허용된다). 중복을 그대로 넘기면 IN 절만
+        // 길어진다.
+        List<Long> ids = claims.stream()
+                .map(NotificationOutboxClaim::notificationId)
+                .distinct()
+                .toList();
+        Map<Long, Notification> byId = new HashMap<>(ids.size());
+        for (Notification notification : notifications.findAllByIdIn(ids)) {
+            byId.put(notification.id(), notification);
+        }
+        return byId;
+    }
+
+    /**
+     * @param notification 배치 조회에서 온 알림. <b>{@code null} 이면 그 사이 사라진 것</b>이라
+     *         {@code NOTIFICATION_MISSING} 으로 되돌린다
+     */
+    private boolean publish(NotificationOutboxClaim claim, Notification notification) {
+        if (notification == null) {
             // 발행 대상이 사라졌다. 지연은 발행 실패와 같은 계산을 쓴다 — 한쪽만
             // 지터를 주면 나머지가 다시 뭉친다.
             returnToPending(claim, OutboxRetryReason.NOTIFICATION_MISSING);
             return false;
         }
-        Notification notification = found.orElseThrow();
 
         NotificationRequestedEvent event = new NotificationRequestedEvent(
                 notification.id(), notification.memberId(), notification.couponId(),
