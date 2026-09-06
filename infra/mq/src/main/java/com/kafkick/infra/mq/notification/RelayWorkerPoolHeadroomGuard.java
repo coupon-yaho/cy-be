@@ -118,10 +118,11 @@ public class RelayWorkerPoolHeadroomGuard {
             reject(registry, required,
                     "릴레이 워커 수(" + workerCount + ")가 커넥션 풀(" + maxPoolSize
                             + ")에서 접수 몫 " + REQUEST_HEADROOM + " 을 남기지 못합니다. "
-                            + "이 릴레이는 접수 API 와 같은 풀을 쓰고, 워커는 건당 커넥션을 "
-                            + "두 번 빌립니다 — 남는 것이 하나뿐이면 접수 요청 p99 가 "
-                            + "네 배가 되는데 앱은 정상으로 보입니다"
-                            + "(실측: 풀 13 에서 워커 11 → 999µs, 워커 12 → 4,069µs. "
+                            + "이 릴레이는 접수 API 와 같은 풀을 쓰고, 배포의 요청 스레드는 "
+                            + "15 입니다(TOMCAT_THREADS_MAX) — 요청이 이미 커넥션을 두고 "
+                            + "경합하는 위에 릴레이가 더 붙습니다"
+                            + "(실측: 풀 13 에서 워커 9 는 워커 8 과 구분이 안 되고, "
+                            + "워커 10 부터 요청 p99 분산이 1,595~5,451µs 로 터집니다. "
                             + "docs/18). 워커를 " + (maxPoolSize - REQUEST_HEADROOM)
                             + " 이하로 줄이거나 DB_POOL_SIZE 를 "
                             + (workerCount + REQUEST_HEADROOM) + " 이상으로 올리십시오.");
