@@ -199,19 +199,16 @@ class CouponIssueRepositoryTest {
         transactionTemplate.executeWithoutResult(status -> {
             jdbcTemplate.execute("SET time_zone = '+09:00'");
             try {
-                Instant before = Instant.now();
+                LocalDateTime before = dbUtcNow();
 
-                couponStockRepository.occupyOne(10L, before.minusSeconds(60));
+                couponStockRepository.occupyOne(10L, Instant.now().minusSeconds(60));
 
-                Instant after = Instant.now();
+                LocalDateTime after = dbUtcNow();
                 LocalDateTime stored = jdbcTemplate.queryForObject(
                         "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 10",
                         LocalDateTime.class
                 );
-                assertThat(stored).isBetween(
-                        LocalDateTime.ofInstant(before, ZoneOffset.UTC),
-                        LocalDateTime.ofInstant(after.plusSeconds(1), ZoneOffset.UTC)
-                );
+                assertThat(stored).isBetween(before, after);
             } finally {
                 jdbcTemplate.execute("SET time_zone = '+00:00'");
             }
@@ -226,23 +223,20 @@ class CouponIssueRepositoryTest {
         transactionTemplate.executeWithoutResult(status -> {
             jdbcTemplate.execute("SET time_zone = '+09:00'");
             try {
-                Instant before = Instant.now();
+                LocalDateTime before = dbUtcNow();
 
                 assertThat(issuanceRepository.updateStatusIfCurrent(
                         issuance.id(), 1L, IssuanceStatus.ISSUED,
-                        IssuanceStatus.USED, before.minusSeconds(60)
+                        IssuanceStatus.USED, Instant.now().minusSeconds(60)
                 )).isTrue();
 
-                Instant after = Instant.now();
+                LocalDateTime after = dbUtcNow();
                 LocalDateTime stored = jdbcTemplate.queryForObject(
                         "SELECT updated_at FROM issuances WHERE id = ?",
                         LocalDateTime.class,
                         issuance.id()
                 );
-                assertThat(stored).isBetween(
-                        LocalDateTime.ofInstant(before, ZoneOffset.UTC),
-                        LocalDateTime.ofInstant(after.plusSeconds(1), ZoneOffset.UTC)
-                );
+                assertThat(stored).isBetween(before, after);
             } finally {
                 jdbcTemplate.execute("SET time_zone = '+00:00'");
             }
@@ -304,7 +298,7 @@ class CouponIssueRepositoryTest {
                 .as("미래 쿠폰 시각을 보정할 Flyway migration")
                 .isTrue();
 
-        Instant before = Instant.now();
+        LocalDateTime before = dbUtcNow();
         jdbcTemplate.execute((ConnectionCallback<Void>) connection -> {
             ScriptUtils.executeSqlScript(
                     connection,
@@ -312,13 +306,8 @@ class CouponIssueRepositoryTest {
             );
             return null;
         });
-        Instant after = Instant.now();
-
-        LocalDateTime lower = LocalDateTime.ofInstant(before, ZoneOffset.UTC);
-        LocalDateTime upper = LocalDateTime.ofInstant(
-                after.plusSeconds(1),
-                ZoneOffset.UTC
-        );
+        LocalDateTime lower = before;
+        LocalDateTime upper = dbUtcNow();
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT updated_at FROM coupon_stocks WHERE coupon_id = 10",
                 LocalDateTime.class
@@ -966,5 +955,29 @@ class CouponIssueRepositoryTest {
     private interface MemberIdProvider {
 
         long memberId(int requestIndex);
+    }
+
+    /**
+     * <b>기준 시계를 DB 에서 읽는다 — 호스트가 아니라.</b>
+     *
+     * <p>⚠️ 한때 이 자리들이 {@code Instant.now()}(호스트 시계)로 구간을 잡았고,
+     * <b>macOS 개발 기계에서 매번 깨졌다</b>(CI 는 매번 통과). 실측하니 Docker Desktop 의
+     * VM 시계가 호스트보다 <b>0.4~0.6ms 뒤</b>인데, 단언은 <b>상한에만 1초를 주고 하한에는
+     * 여유가 없었다</b> — 그래서 DB 가 조금이라도 뒤면 무조건 실패였다.
+     *
+     * <pre>
+     *   PROBE 재현 stored=...262648 lower=...263028 하한여유=-380µs
+     * </pre>
+     *
+     * <p><b>여유를 넓히는 것은 답이 아니다.</b> 이 테스트가 잡으려는 것은 <b>9시간짜리 축
+     * 오류</b>(KST 로 저장되는 것)인데, 호스트 시계를 기준으로 쓰는 한 값이 기계마다 달라지고
+     * 여유만 커진다. 기준을 DB 자신의 시계로 옮기면 <b>호스트↔VM 차이가 식에서 사라지고</b>
+     * 재는 것이 축 하나로 좁아진다. 9시간은 어떤 여유로도 안 가려지므로 <b>여전히 잡는다.</b>
+     *
+     * <p>세션 존을 KST 로 바꿔 둔 구간에서도 이 값은 <b>UTC</b> 다 —
+     * {@code UTC_TIMESTAMP} 는 세션 존을 안 탄다. 그것이 이 테스트가 재려는 축이다.
+     */
+    private LocalDateTime dbUtcNow() {
+        return jdbcTemplate.queryForObject("SELECT UTC_TIMESTAMP(6)", LocalDateTime.class);
     }
 }
