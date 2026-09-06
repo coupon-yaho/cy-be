@@ -77,11 +77,19 @@ public class BatchControlController {
      */
     private final JobRepository jobRepository;
 
+    /**
+     * <b>회수 프로토콜을 여기서 짜지 않는다.</b> 선점 UPDATE·상태 집합·트랜잭션 경계가
+     * 형제 넷과 같아야 해서, 그 모양을 서비스 하나로 모아 둔다.
+     */
+    private final BatchRunAbandonService abandonService;
+
     public BatchControlController(
             @Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
-            JobRepository jobRepository) {
+            JobRepository jobRepository,
+            BatchRunAbandonService abandonService) {
         this.jobOperator = jobOperator;
         this.jobRepository = jobRepository;
+        this.abandonService = abandonService;
     }
 
     /**
@@ -174,6 +182,24 @@ public class BatchControlController {
             throw new BusinessException(BatchControlErrorCode.NOT_RUNNING,
                     "jobExecutionId=" + executionId);
         }
+    }
+
+    /**
+     * <b>중단된 실행을 버린다.</b> 하드킬로 남은 행을 걷어내는 복구 절차다.
+     *
+     * <p><b>도는 실행에는 못 쓴다 — 먼저 {@code stop} 이다.</b> 이어 부르지 않는 이유와
+     * 나머지 판단은 {@link BatchRunAbandonService} 에 있다.
+     *
+     * <p><b>왜 범용 관제에 있어야 하나</b> — 잡별 회수 API 는 도메인이 바뀌면 존재하지
+     * 않는다. 이 통로가 잡 이름을 모르는 것이 그 답이다.
+     *
+     * @param executionId 버릴 실행
+     * @return 버린 실행과 그 상태
+     */
+    @PostMapping("/runs/{executionId}/abandon")
+    public ResponseEnvelope<BatchRunAbandonService.Abandoned> abandon(
+            @PathVariable long executionId) {
+        return ResponseEnvelope.success(abandonService.abandon(executionId));
     }
 
     /**

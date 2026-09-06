@@ -86,6 +86,26 @@ public enum BatchControlErrorCode implements ErrorCode {
             409,
             "BATCH-004",
             "돌고 있지 않은 실행은 멈출 수 없습니다."
+    ),
+
+    /**
+     * <b>중단되지 않은 실행</b>을 버리려 했다.
+     *
+     * <p>버리기는 {@code STOPPING}·{@code STOPPED} 만 받는다. 도는 실행이면 <b>먼저
+     * {@code stop} 을 부르고</b>, 이미 끝난 실행이면 버릴 것이 없다.
+     *
+     * <p><b>끝난 실행을 막는 것이 핵심이다.</b> Spring Batch 는 {@code isLessThan(STOPPING)}
+     * 일 때만 거부하므로 {@code FAILED}·{@code ABANDONED} 가 프레임워크를 통과한다 —
+     * 그대로 두면 실패 이력을 {@code ABANDONED} 로 덮고 {@code END_TIME} 을 현재로 다시
+     * 쓴다. 이 저장소는 실행 이력을 판정 근거로 삼으므로(docs/11) 증거를 조용히 바꾸는
+     * 일이다. {@code VerifyAbandonService} 가 같은 판정을 같은 이유로 한다.
+     *
+     * <p>선점에 진 경우도 이 코드다 — 그 사이 상태가 바뀐 것이라 답이 같다.
+     */
+    NOT_ABANDONABLE(
+            409,
+            "BATCH-005",
+            "중단된 실행만 버릴 수 있습니다."
     );
 
     private final int status;
