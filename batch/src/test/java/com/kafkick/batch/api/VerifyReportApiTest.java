@@ -220,7 +220,8 @@ class VerifyReportApiTest {
 
         JsonNode data = VerifyApiProbe.data(probe.get(CORRUPT_FULL));
 
-        assertThat(keysOf(data)).containsExactly("schema", "run", "byType", "manifest");
+        assertThat(keysOf(data))
+                .containsExactly("schema", "run", "examined", "byType", "manifest");
         assertThat(keysOf(data.path("run")))
                 .as("VerificationRun 에 컴포넌트가 붙으면 결정 없이 공개 리포트에 실린다")
                 .containsExactly(
@@ -611,5 +612,40 @@ class VerifyReportApiTest {
                 .filter(rule -> type.name().equals(rule.path("type").asString()))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(type + " 가 응답에 없다"));
+    }
+
+    /**
+     * <b>{@code PASS 0건} 의 분모다.</b> 그 수가 없으면 <i>"다 보고 못 찾았다"</i> 와
+     * <i>"거의 아무것도 안 봤다"</i> 가 응답에서 같은 모양이 된다.
+     */
+    @Test
+    @DisplayName("리포트가 무엇을 몇 건 봤는지 함께 낸다")
+    void reportCarriesTheExaminedScale() throws Exception {
+        long runId = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        jdbcClient.sql("UPDATE verification_runs "
+                        + "SET examined_issuance_count = 3000000, examined_history_count = 5340000 "
+                        + "WHERE id = :id")
+                .param("id", runId).update();
+
+        JsonNode data = VerifyApiProbe.data(probe.get(CLEAN_FULL));
+
+        assertThat(data.path("examined").path("issuanceCount").asLong()).isEqualTo(3_000_000L);
+        assertThat(data.path("examined").path("historyCount").asLong()).isEqualTo(5_340_000L);
+    }
+
+    /**
+     * <b>없는 것을 0 으로 채우지 않는다.</b> 이 컬럼이 생기기 전 실행이 그 상태이고,
+     * 0 으로 내면 <i>"안 봤다"</i> 로 읽힌다 — 이 축이 막으려는 바로 그 오독이다.
+     */
+    @Test
+    @DisplayName("규모를 안 남긴 실행은 null 이다 — 0 이 아니다")
+    void missingScaleIsNullNotZero() throws Exception {
+        closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+
+        JsonNode data = VerifyApiProbe.data(probe.get(CLEAN_FULL));
+
+        assertThat(data.path("examined").isNull())
+                .as("0 으로 채우면 '안 봤다' 와 구분이 안 된다")
+                .isTrue();
     }
 }

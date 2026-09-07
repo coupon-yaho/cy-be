@@ -392,12 +392,12 @@ abstract class SchemaParityTestBase {
      * 다음 사람이 검증 스크립트를 돌렸을 때 옛 리비전을 받아 와 diff 가 갈리고,
      * <b>"사본을 손댔다" 로 오진</b>한다. 반대로 README 만 고치면 그 오진이 반대로 난다.
      */
-    private static final String SEED_DDL_REVISION = "d220722";
+    private static final String SEED_DDL_REVISION = "7415dfe";
 
     /** {@link #SEED_DDL_REVISION} 시점 사본의 해시. 사본을 갱신하면 함께 고친다. */
     private static final Map<String, String> SEED_DDL_DIGESTS = Map.ofEntries(
             Map.entry("00_schema.sql",
-                    "d6dfcb9fee92179ff66887cfd9156b2e7037121973e579c5f440d9a7b154795a"),
+                    "aad170c63ce7aeabcd9dbb01bf7d5491b5b02857d2b3abd6f3c859d303fb83cd"),
             Map.entry("10_constraints_common.sql",
                     "6d5e4e54ff38e38d5686d84669c7433e98b5acac1fea977533566bfe459de4e6"),
             Map.entry("11_constraints_clean.sql",

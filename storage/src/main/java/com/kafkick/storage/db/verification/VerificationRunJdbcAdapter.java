@@ -14,6 +14,7 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.verification.DatasetScale;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
@@ -328,6 +329,50 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                     VerificationErrorCode.RUN_ROW_VANISHED,
                     "대조한 정답 묶음을 기록하지 못했습니다. runId=" + runId + " 갱신행=" + updated);
         }
+    }
+
+    @Override
+    public void recordExaminedScale(long runId, DatasetScale scale) {
+        int updated = jdbcClient.sql("""
+                        UPDATE verification_runs
+                           SET examined_issuance_count = :issuances,
+                               examined_history_count  = :histories
+                         WHERE id = :id
+                        """)
+                .param("issuances", scale.issuanceCount())
+                .param("histories", scale.historyCount())
+                .param("id", runId)
+                .update();
+
+        if (updated != 1) {
+            throw new BusinessException(
+                    VerificationErrorCode.RUN_ROW_VANISHED,
+                    "검사 규모를 남길 실행 행이 없습니다. runId=" + runId);
+        }
+    }
+
+    /**
+     * <b>{@code origin = 'BATCH'} 를 건다.</b> 시드가 심은 기준 행의 규모를 배치 리포트로
+     * 내보내면 안 된다 — {@code SELECT_BY_ID} 와 같은 이유다.
+     */
+    @Override
+    public Optional<DatasetScale> examinedScaleOf(long runId) {
+        return jdbcClient.sql("""
+                        SELECT examined_issuance_count, examined_history_count
+                          FROM verification_runs
+                         WHERE id = :id AND origin = 'BATCH'
+                        """)
+                .param("id", runId)
+                .query((rs, rowNum) -> {
+                    long issuances = rs.getLong("examined_issuance_count");
+                    // 컬럼이 생기기 전 실행이다. 0 으로 내면 "안 봤다" 로 읽힌다.
+                    if (rs.wasNull()) {
+                        return null;
+                    }
+                    long histories = rs.getLong("examined_history_count");
+                    return rs.wasNull() ? null : new DatasetScale(issuances, histories);
+                })
+                .optional();
     }
 
     @Override

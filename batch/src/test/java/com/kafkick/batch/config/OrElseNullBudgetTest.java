@@ -192,6 +192,10 @@ class OrElseNullBudgetTest {
                     + "BenchmarkDetailResponse.java", 1),
             Map.entry("batch/src/main/java/com/kafkick/batch/api/VerifyRunView.java", 10),
 
+            // 검사 규모는 "그 컬럼이 생기기 전 실행" 이면 없다. 0 으로 채우면 "안 봤다" 로
+            // 읽히는데 그것이 이 축이 막으려는 오독이라(CY-945) null 이 그대로 값이다.
+            Map.entry("batch/src/main/java/com/kafkick/batch/api/VerifyReportView.java", 1),
+
             // nullable 을 받는 자리로 넘긴다 — 창을 못 읽어도 판정을 포기하지 않는다는
             // 것이 CY-768 이 정한 동작이고, 그 근거가 그 자리 주석에 적혀 있다.
             Map.entry("batch/src/main/java/com/kafkick/batch/config/"

@@ -301,6 +301,16 @@ public interface VerificationRuleRepository {
     String datasetFingerprint(LocalDateTime asOf);
 
     /**
+     * <b>이 실행이 실제로 무엇을 몇 건 보았나.</b> {@code PASS 0건} 의 분모다.
+     *
+     * <p>{@link #datasetFingerprint} 와 <b>같은 질의</b>에서 나온다. 지문은 그 수들을 해시로
+     * 접어 같음/다름만 말하는데, 사람도 화면도 거기서 <i>"몇 건을 봤나"</i> 를 못 꺼낸다.
+     *
+     * @param asOf 지문과 <b>같은 기준 시각</b>. 다르면 규모가 그 판정의 재료가 못 된다
+     */
+    DatasetScale datasetScale(LocalDateTime asOf);
+
+    /**
      * <b>배치 메타의 성능 인덱스 중 없는 것.</b> 테이블·컬럼 축과 달리 이쪽이 빠져도
      * <b>기동과 동작이 통과한다</b> — 되읽기가 데드라인을 넘겨 게이지가 {@code NaN} 이
      * 되거나 정리 잡이 매 청크 전체 스캔을 하는 것으로만 늦게 드러난다.
