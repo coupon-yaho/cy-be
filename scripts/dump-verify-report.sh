@@ -240,9 +240,28 @@ dump() {
   # -w 로 상태코드를 따로 받는다. -f 만 쓰면 404 와 "배치가 안 떴다" 가 같은 종료코드라
   # **구조적으로 없는 것**과 **고장난 것**을 못 가른다 — 아래 갈림의 근거가 그 코드다.
   local code
-  code="$(docker compose "${COMPOSE_ARGS[@]}" exec -T "$SERVICE" \
-      curl -sS --max-time "$HTTP_TIMEOUT" -o /dev/stdout -w '\n%{http_code}' \
-      "http://127.0.0.1:9091/api/v1/admin/verify/reports/latest?dataset=${dataset}&scope=${scope}" \
+  # **토큰 헤더를 늘 싣는다.** 기본 REPORT_COMPOSE(base+batch)는 관문이 꺼져 있어
+  # (batch.yml 이 BATCH_ADMIN_AUTH_REQUIRED=false) 지금은 없어도 돈다.
+  #
+  # 그런데 REPORT_COMPOSE 는 바깥에서 갈아 끼우라고 만든 손잡이이고, **끼울 대상이 이미
+  # 저장소에 있다** — batch-verify.yml 은 관문을 "true" 로 **손잡이도 없이 박아** 뒀고
+  # (그 파일이 그 결정을 굵게 적어 뒀다) CI 가 환경변수로 못 끄는지까지 검사한다. 그래서
+  #   REPORT_COMPOSE="base.yml batch.yml batch-verify.yml" REPORT_SERVICE=batch-clean
+  # 로 부르면 이 조회는 **가정이 아니라 확정 401** 이었다. batch-expose.yml 을 얹는 쪽도
+  # 마찬가지고, 하필 포트를 열어 놓고 제출물을 뽑는 날이다.
+  #
+  # 반대로 관문이 꺼져 있어도 무해하다 — 값이 비면 **curl 이 그 헤더를 아예 안 보낸다**
+  # (빈 값 헤더는 curl 에게 삭제 지시다). 필터가 등록 안 된다는 것보다 강한 사실이고,
+  # 기본 스택에서 요청이 바이트 단위로 이전과 같다는 뜻이다.
+  #
+  # 값은 **컨테이너 안**에서 편다. 이 스크립트를 부르는 셸에는 그 변수가 없을 수 있고,
+  # 있어도 컨테이너의 것과 다를 수 있다 — 관문이 보는 것은 컨테이너 쪽이다.
+  # set -u 는 새 sh 로 상속되지 않으므로 변수가 없어도 에러가 아니라 빈 값이다.
+  code="$(docker compose "${COMPOSE_ARGS[@]}" exec -T "$SERVICE" sh -c \
+      'curl -sS --max-time "$1" -o /dev/stdout -w "\n%{http_code}" \
+           -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+           "http://127.0.0.1:9091/api/v1/admin/verify/reports/latest?dataset=$2&scope=$3"' \
+      _ "$HTTP_TIMEOUT" "$dataset" "$scope" \
       2>/dev/null | tee "$raw" | tail -1)"
 
   # **형태를 먼저 본다.** curl 이 -w 를 내기 전에 죽으면(SIGKILL 등) tail 이 본문의

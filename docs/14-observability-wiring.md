@@ -600,10 +600,17 @@ CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케�
 
    **CY-368 이 트리거 API 를 열었다.** 업무 포트가 기본으로 안 열리므로 오버레이를 얹는다.
 
+   **⚠️ 그 오버레이가 토큰 관문도 같이 켠다.** `batch-expose.yml` 이
+   `BATCH_ADMIN_AUTH_REQUIRED` 를 `true` 로 올린다(포트를 안 여는 `batch.yml` 만 `false`다).
+   그래서 순서가 둘이다 — **토큰을 안 주면 401 이 아니라 기동이 거절된다.**
+   `AdminTokenConfig` 가 "관문 있는 척" 을 막으려고 `IllegalStateException` 을 던진다.
+
    ```bash
+   export BATCH_ADMIN_TOKEN=$(openssl rand -hex 24)
    docker compose -f base.yml -f batch.yml -f batch-expose.yml up -d batch
 
-   curl -X POST "http://127.0.0.1:9091/api/v1/admin/verify?asOf=<시드의 as_of>"
+   curl -X POST -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+        "http://127.0.0.1:9091/api/v1/admin/verify?asOf=<시드의 as_of>"
    # → 202 {"success":true,"data":{"executionId":41,"asOf":...,"dataset":"CLEAN",
    #                                 "scope":"FULL","attempt":3},"error":null}
    ```
@@ -612,7 +619,8 @@ CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케�
    채운다. **`attempt` 를 손으로 줄 때만** 시드가 점유한 값(CLEAN 1·2, CORRUPT 1)을 피해야 한다.
 
    ```bash
-   curl "http://127.0.0.1:9091/api/v1/admin/verify/runs/41"
+   curl -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+        "http://127.0.0.1:9091/api/v1/admin/verify/runs/41"
    # 같은 요청을 **종료 상태까지 반복**한다. 41 은 POST 응답의 data.executionId 다.
    #
    # 도는 중:   {"success":true,"data":{"executionId":41,"runId":null,"status":"STARTED", ...}}
@@ -624,7 +632,8 @@ CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케�
    띄우려면 오염셋을 돌린다 — 그쪽은 `seedRunId` 가 필수다.
 
    ```bash
-   curl -X POST "http://127.0.0.1:9091/api/v1/admin/verify?asOf=<시드의 as_of>&dataset=CORRUPT&seedRunId=<시드 run>"
+   curl -X POST -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+        "http://127.0.0.1:9091/api/v1/admin/verify?asOf=<시드의 as_of>&dataset=CORRUPT&seedRunId=<시드 run>"
    # → 판정 뒤 조회하면:
    #   {"success":true,"data":{"verdict":"PASS","findingCount":800,"statsStatus":"SKIPPED",...}}
    #   ← 검출 800건이 정답 매니페스트와 **양방향으로** 일치했다는 뜻이다(누락 0 · 오탐 0).
