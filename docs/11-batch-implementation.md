@@ -284,7 +284,8 @@ batch 범위 밖으로 나갔다. 판정 기준의 예시로는 그대로 유효
 ```
 batch/src/main/java/com/kafkick/batch/
   job/        계층 2 — Spring Batch 인 것만
-  schedule/   계층 1·3 — @Scheduled (Job 을 띄우는 것과 core 포트를 직접 쓰는 것 둘 다)
+  schedule/   계층 1·3 — @Scheduled (Job 을 띄우는 것, core 포트를 직접 쓰는 것,
+              그리고 배치 메타를 걷는 것 — StuckRunSweeper)
   rule/       VerificationRule 과 V1~V6
   replay/     이력 접기 · aggregating Reader
   seed/       생성기 · PII 암호화 · 분포

@@ -579,15 +579,20 @@ batch:
   # (RunningJobProbe · /runs/stuck · BatchStuckExecution) 조치가 사람 손뿐이었다 —
   # 새벽에 배치 JVM 이 죽으면 그 행 하나가 STARTED 로 남아 다음 회차를 계속 밀어낸다.
   #
-  # ⚠️ **끄는 스위치를 따로 안 둔다.** 위 batch.scheduling.enabled 하나로 함께 멈춘다.
-  #    스윕만 끄면 탐지·알림은 그대로 울리는데 조치만 꺼진 상태가 되고, 그것이 정확히
-  #    이 키가 없애려는 상태다. 시체를 남겨 두고 보고 싶으면 stuck-job-after-ms 를
-  #    올린다 — 판정을 늦추는 것이 조치를 끄는 것보다 정직하다.
+  # ⚠️ **stuck-job-after-ms 를 올려서 끄는 것은 답이 아니다.** 그 임계 하나가 지표와
+  #    /runs/stuck 목록과 사람이 부르는 recover 의 관문까지 전부 구동한다 — 올리면
+  #    조치만 꺼지는 게 아니라 알림이 조용해지고 목록이 비고 수동 회수가 거절된다.
+  #    조치만 세우려면 아래 enabled 다.
   #
   # 걷는 방식은 abandon 이 아니라 recover 다. FAILED 로 닫으므로 재시작이 되고 이력이
   # 남는다 — ABANDONED 는 그 JobInstance 를 같은 파라미터로 영원히 못 돌리게 해서
   # 만료의 크론 슬롯을 통째로 없앤다(BatchHistoryController#stuck 이 적어 둔 사실).
   stuck-sweep:
+    # **조치만 끄는 손잡이다.** batch.scheduling.enabled 는 스케줄러 다섯을 함께 무는데
+    # 그중 회차 전이는 1분마다 도는 사용자 대면 동작이라 운영 중엔 쓸 수 없다.
+    # 끄면 cy_batch_stuck_sweep_enabled 가 0 이 되고, 시체가 쌓이면
+    # BatchStuckExecution 이 그대로 울면서 그 게이지가 "왜 아무도 안 걷는지"를 말한다.
+    enabled: ${BATCH_STUCK_SWEEP_ENABLED:true}
     # 한 주기에 걷을 상한. 배치 메타 전체가 시체인 상황에서 한 주기가 수백 건의
     # 트랜잭션을 열지 않게 한다. 남은 것은 다음 주기가 가져가고 그동안 알림은 계속 운다.
     # 0 은 못 준다 — 스케줄러는 도는데 아무것도 안 하는 상태를 아무도 안 말해 준다.

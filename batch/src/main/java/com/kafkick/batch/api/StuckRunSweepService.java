@@ -10,12 +10,16 @@ import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import com.kafkick.batch.config.BatchJobRepositoryConfig;
@@ -32,9 +36,15 @@ import com.kafkick.batch.config.BatchJobRepositoryConfig;
  * 돌린다.</b> 만료는 {@code asOf} 가 식별 파라미터라 <b>그 크론 슬롯이 통째로 사라진다</b> —
  * 사람이 눌러 놓고 아는 것과 스윕이 새벽에 조용히 하는 것은 무게가 다르다.
  *
- * <p>{@code recover} 는 {@code FAILED} 로 닫는다. 재시작이 되고 이력이 남는다.
- * 그래서 <b>자동화해도 되돌릴 수 있는 조치</b>다. {@code abandon} 은 사람이 부르는
- * 마지막 통로로 남는다.
+ * <p>{@code recover} 는 {@code FAILED} 로 닫는다. 이력이 남고 <b>그 크론 슬롯이 안
+ * 사라진다</b> — 만료는 다음 발화가 {@code asOf=D+1} 로 새 인스턴스를 만들어 D 의 잔여분을
+ * 통째로 가져간다. 그래서 <b>자동화해도 되돌릴 수 있는 조치</b>다. {@code abandon} 은
+ * 사람이 부르는 마지막 통로로 남는다.
+ *
+ * <p>⚠️ <b>"재시작이 된다" 는 잡마다 다르다.</b> {@code verifyJob} 은
+ * {@code VerifyJobConfig} 가 {@code preventRestart()} 라 <b>같은 JobInstance 를 못 돌린다</b> —
+ * 같은 {@code asOf} 를 다시 재려면 {@code attempt} 를 올려 새 실행으로 간다. 그것이
+ * 그 잡의 설계이고 이 스윕이 바꾼 것이 아니다. 알림 문구도 그 형태로 적는다.
  *
  * <h2>{@code SimpleJobOperator.recover} 실측(6.0.4 바이트코드)</h2>
  *
@@ -80,16 +90,38 @@ public class StuckRunSweepService {
     private final JobOperator jobOperator;
     private final JdbcClient jdbcClient;
     private final Counter recovered;
+    private final Counter failures;
 
+    /**
+     * @param armed 스윕이 실제로 돌 형상인가. <b>둘 다 참이어야 돈다</b> —
+     *              {@code StuckRunSweeper} 의 {@code @ConditionalOnProperty} 와 같은 조건이고,
+     *              그 빈은 조건부라 자기가 없다는 것을 스스로 말할 수 없다. 그래서 조건 없는
+     *              이 빈이 게이지로 든다({@code cy_batch_stuck_sweep_enabled}).
+     *              {@code cy_coupon_round_scheduling_enabled} 가 같은 이유로 같은 모양이다
+     */
     public StuckRunSweepService(JobRepository jobRepository,
             @Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
-            JdbcClient jdbcClient, MeterRegistry registry) {
+            JdbcClient jdbcClient, MeterRegistry registry,
+            @Value("${batch.scheduling.enabled:false}") boolean schedulingEnabled,
+            @Value("${batch.stuck-sweep.enabled:true}") boolean sweepEnabled) {
         this.jobRepository = jobRepository;
         this.jobOperator = jobOperator;
         this.jdbcClient = jdbcClient;
         this.recovered = Counter.builder("cy_batch_stuck_recovered_total")
                 .description("자동으로 걷어낸 시체 수. 자동 조치가 조용하면 사고를 덮는다")
                 .register(registry);
+        this.failures = Counter.builder("cy_batch_stuck_sweep_failures_total")
+                .description("시체 스윕이 조회나 회수에서 끊긴 횟수. 로그는 감시 수단이 아니다")
+                .register(registry);
+        boolean armed = schedulingEnabled && sweepEnabled;
+        Gauge.builder("cy_batch_stuck_sweep_enabled", () -> armed ? 1 : 0)
+                .description("시체 스윕이 무장돼 있나. 0 이면 시체는 사람이 걷어야 한다")
+                .register(registry);
+    }
+
+    /** 스윕이 한 잡에서 끊겼다. <b>성공에만 계측이 있으면 조용한 실패를 못 본다.</b> */
+    public void recordFailure() {
+        failures.increment();
     }
 
     /**
@@ -128,11 +160,34 @@ public class StuckRunSweepService {
             throw new IllegalStateException("recover 가 실행을 닫지 못했습니다. status="
                     + closed.getStatus() + " executionId=" + executionId);
         }
-        this.recovered.increment();
+        countAfterCommit();
         log.warn("진도가 멈춘 실행을 자동으로 걷어냈습니다. {} 로 닫았으므로 재시작할 수 "
                         + "있습니다. jobName={} executionId={}",
                 BatchStatus.FAILED, closed.getJobInstance().getJobName(), executionId);
         return true;
+    }
+
+    /**
+     * <b>커밋 뒤에 센다.</b> 그 자리에서 올리면 <b>커밋이 실패한 건에도</b>
+     * {@code BatchStuckAutoRecovered} 가 울린다 — 이 클래스의 논거가 <i>"자동 조치가
+     * 조용하면 사고를 덮는다"</i> 인데 그 반대 방향(안 고친 것을 고쳤다고 말함)은 더 나쁘다.
+     *
+     * <p><b>동기화가 없으면 그 자리에서 센다.</b> 트랜잭션 밖에서 부르는 테스트가 있고,
+     * 그때 조용히 0 이 되면 <i>"세고 있다"</i> 는 계약이 소리 없이 깨진다.
+     * {@code ExpireMetrics.processed} 가 같은 이유로 같은 모양이다.
+     */
+    private void countAfterCommit() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            recovered.increment();
+                        }
+                    });
+            return;
+        }
+        recovered.increment();
     }
 
     /** {@code JobRepository.getJobExecution} 은 없는 id 에 예외를 던진다(실측). */

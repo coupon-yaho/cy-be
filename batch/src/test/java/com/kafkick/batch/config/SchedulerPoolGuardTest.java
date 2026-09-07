@@ -32,7 +32,7 @@ import com.kafkick.storage.db.MySqlContainerConfig;
  * 안 잡힌다.</b> {@code ResolvedBatchConfigTest} 가 해석된 값을 키 경로로 지키고
  * {@code VerificationMetricExposureTest} 가 스케줄러 빈의 코어 크기를 보지만, <b>둘 다
  * 운영에서 환경변수로 1 을 주는 경로는 못 막았다</b> — 기동은 성공하고 등록된
- * 스케줄 작업 열하나가 스레드 하나를 다툰다(CodeRabbit 지적).
+ * 스케줄 작업 열둘이 스레드 하나를 다툰다(CodeRabbit 지적).
  *
  * <p>이 클래스가 재는 것은 <b>가드가 그 상태를 기동에서 끊는가</b>다.
  */
@@ -80,7 +80,7 @@ class SchedulerPoolGuardTest {
     }
 
     /**
-     * <b>수를 손으로 안 센다.</b> {@code .example} 이 <i>"스케줄 작업이 열하나다"</i> 를 손으로
+     * <b>수를 손으로 안 센다.</b> {@code .example} 이 <i>"스케줄 작업이 열둘이다"</i> 를 손으로
      * 적고 있는데, 여기서 또 세면 세어야 할 자리가 하나 더 는다. 등록된 태스크 수를 직접
      * 물으면 그 수가 코드와 자동으로 같아진다.
      */

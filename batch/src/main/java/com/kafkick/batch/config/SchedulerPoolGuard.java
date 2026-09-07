@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
  *
  * <h2>왜 상수로 안 세나</h2>
  *
- * <p>{@code application.yml.example} 이 <i>"스케줄 작업이 열하나다"</i> 를 손으로 세어
+ * <p>{@code application.yml.example} 이 <i>"스케줄 작업이 열둘이다"</i> 를 손으로 세어
  * 적고 있고, 그 수가 코드와 함께 움직여야 신호가 산다. 여기서 또 하나를 손으로 적으면
  * <b>세어야 할 자리가 하나 더 는다</b> — CY-446 이 그 신호를 한 번 지나쳤던 이유가 그것이다.
  * {@link ScheduledAnnotationBeanPostProcessor} 에게 <b>실제로 등록된 태스크 수</b>를 물으면

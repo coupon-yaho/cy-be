@@ -3,6 +3,7 @@ package com.kafkick.batch.schedule;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -27,6 +28,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 import com.kafkick.batch.api.StuckRunSweepService;
 import com.kafkick.batch.config.ExpireStepContext;
@@ -74,8 +78,29 @@ class StuckRunSweeperTest {
     @Autowired
     private List<Job> jobs;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private MeterRegistry registry;
+
     private StuckRunSweeper sweeperWithCap(int cap) {
-        return new StuckRunSweeper(sweepService, runningJobs, jobs, cap);
+        return sweeper(sweepService, runningJobs, cap);
+    }
+
+    private StuckRunSweeper sweeper(StuckRunSweepService service, RunningJobProbe probe,
+            int cap) {
+        return sweeper(service, probe, cap, true);
+    }
+
+    private StuckRunSweeper sweeper(StuckRunSweepService service, RunningJobProbe probe,
+            int cap, boolean enabled) {
+        return new StuckRunSweeper(service, probe, jobs, transactionManager, cap, enabled, 5);
+    }
+
+    private double counter(String name) {
+        return registry.find(name).counter() == null ? 0d
+                : registry.find(name).counter().count();
     }
 
     private BatchStatus statusOf(long executionId) {
@@ -208,7 +233,7 @@ class StuckRunSweeperTest {
             when(flaky.stuckExecutions(eq(ExpireStepContext.JOB_NAME)))
                     .thenReturn(List.of(planted));
 
-            new StuckRunSweeper(sweepService, flaky, jobs, 20).sweep();
+            sweeper(sweepService, flaky, 20).sweep();
 
             assertThat(statusOf(corpse.executionId()))
                     .as("cleanupJob 이 던졌다고 expireJob 의 시체가 남으면 안 된다")
@@ -296,11 +321,97 @@ class StuckRunSweeperTest {
             when(counting.stuckExecutions(eq(CleanupJobConfig.JOB_NAME)))
                     .thenReturn(List.of(planted));
 
-            new StuckRunSweeper(sweepService, counting, jobs, 1)
+            sweeper(sweepService, counting, 1)
                     .sweep();
 
             verify(counting).stuckExecutions(CleanupJobConfig.JOB_NAME);
             verify(counting, never()).stuckExecutions(ExpireStepContext.JOB_NAME);
+        }
+    }
+
+    /**
+     * <b>회수 하나가 던지면 그 잡의 나머지가 어떻게 되나.</b> 한때 {@code try/catch} 가
+     * <b>잡 단위</b>였다 — 그러면 이 한 건이 그 잡의 나머지 시체를 전부 이번 주기에서
+     * 밀어내고, 목록이 id 오름차순이고 롤백으로 선점이 되돌아가므로 <b>다음 주기도 같은
+     * 자리에서 끊긴다.</b> id 가 큰 시체는 영구히 안 걷힌다.
+     *
+     * <p>기존 {@code oneFailingJobDoesNotStopTheRest} 는 <b>조회</b>만 던지게 해서 이 갈래를
+     * 못 잡았다 — 잡 단위 catch 와 건 단위 catch 를 구분하지 못한다.
+     */
+    @Test
+    @DisplayName("회수 하나가 던져도 같은 잡의 다음 시체를 계속 본다")
+    void oneFailingRecoveryDoesNotStopTheSameJob() {
+        LocalDateTime now = LocalDateTime.now();
+        try (RunningJobFixture first = RunningJobFixture.plant(jobRepository, jdbcClient,
+                CleanupJobConfig.JOB_NAME, now, DEAD, DEAD);
+                RunningJobFixture second = RunningJobFixture.plant(jobRepository, jdbcClient,
+                        CleanupJobConfig.JOB_NAME, now.plusSeconds(1), DEAD, DEAD)) {
+
+            long firstId = Math.min(first.executionId(), second.executionId());
+            long secondId = Math.max(first.executionId(), second.executionId());
+
+            StuckRunSweepService flaky = mock(StuckRunSweepService.class);
+            when(flaky.recover(eq(firstId), any()))
+                    .thenThrow(new IllegalStateException("이 한 건이 터졌다"));
+            when(flaky.recover(eq(secondId), any())).thenReturn(true);
+
+            sweeper(flaky, runningJobs, 20).sweep();
+
+            verify(flaky).recover(eq(secondId), any());
+            verify(flaky).recordFailure();
+        }
+    }
+
+    /**
+     * <b>지표가 정말 오르나.</b> 저장소에 {@code cy_batch_stuck_recovered_total} 의 증가를
+     * 단언하는 자리가 하나도 없었다 — {@code increment()} 를 지우는 돌연변이가 전 테스트
+     * 초록으로 살아남고, 그러면 {@code BatchStuckAutoRecovered} 가 영원히 안 운다.
+     * {@code BatchMetricExposureTest} 는 이름의 <b>존재</b>만 보지 값은 안 본다.
+     *
+     * <p><b>커밋 뒤에 오르는 것까지 본다.</b> 그 자리에서 올리면 커밋이 실패한 건에도
+     * 알림이 울어, <i>"안 고친 것을 고쳤다"</i> 고 말한다.
+     */
+    @Test
+    @DisplayName("걷은 만큼 지표가 오른다")
+    void theCounterFollowsWhatWasActuallyClosed() {
+        double before = counter("cy_batch_stuck_recovered_total");
+        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
+                ExpireStepContext.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+
+            sweeperWithCap(20).sweep();
+
+            assertThat(counter("cy_batch_stuck_recovered_total"))
+                    .as("걷었는데 안 오르면 알림이 영원히 안 운다")
+                    .isEqualTo(before + 1);
+            assertThat(statusOf(corpse.executionId())).isEqualTo(BatchStatus.FAILED);
+        }
+    }
+
+    /**
+     * <b>상한 경고가 마지막 잡에서도 나오나.</b> 바깥 검사에만 로그를 두면 이름 순 마지막
+     * 잡에서 예산이 떨어질 때 <b>한 줄도 안 남는다</b> — 그런데 알림 설명이 운영자에게
+     * 그 로그를 보라고 시킨다. 시체가 몰리는 것은 대개 한 잡이라 이쪽이 흔한 경우다.
+     *
+     * <p>로그를 단언하는 대신 <b>예산이 정말 거기서 끊겼는지</b>를 잰다 — 마지막 잡
+     * (이름 순으로 {@code verifyJob})에 둘을 심고 상한을 1 로 준다.
+     */
+    @Test
+    @DisplayName("이름 순 마지막 잡에서 예산이 떨어져도 상한이 끊는다")
+    void theCapHoldsOnTheLastJobToo() {
+        String last = jobs.stream().map(Job::getName).sorted()
+                .reduce((a, b) -> b)
+                .orElseThrow();
+        LocalDateTime now = LocalDateTime.now();
+        try (RunningJobFixture first = RunningJobFixture.plant(jobRepository, jdbcClient,
+                last, now, DEAD, DEAD);
+                RunningJobFixture second = RunningJobFixture.plant(jobRepository, jdbcClient,
+                        last, now.plusSeconds(1), DEAD, DEAD)) {
+
+            sweeperWithCap(1).sweep();
+
+            assertThat(List.of(statusOf(first.executionId()), statusOf(second.executionId())))
+                    .as("마지막 잡에서는 바깥 검사가 한 번도 안 탄다")
+                    .containsExactlyInAnyOrder(BatchStatus.FAILED, BatchStatus.STARTED);
         }
     }
 
@@ -312,10 +423,36 @@ class StuckRunSweeperTest {
     @Test
     @DisplayName("상한을 0 으로 주면 기동을 거절한다")
     void rejectsACapThatDisablesTheSweepSilently() {
-        assertThatThrownBy(() ->
-                new StuckRunSweeper(sweepService, runningJobs, jobs, 0))
+        assertThatThrownBy(() -> sweeperWithCap(0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("batch.scheduling.enabled=false");
+                .hasMessageContaining("batch.stuck-sweep.enabled=false");
+    }
+
+    /**
+     * <b>끄는 손잡이가 정말 조치만 끄나.</b> 이것이 있어야 운영자가
+     * {@code batch.scheduling.enabled} 를 내리지 않는다 — 그 스위치는 1분마다 도는
+     * 회차 전이까지 함께 무는 사용자 대면 동작이라 운영 중에 못 쓴다.
+     *
+     * <p><b>탐지는 살아 있어야 한다.</b> 끈 뒤에도 그 실행이 시체 목록에 남아야
+     * {@code BatchStuckExecution} 이 계속 울고, 그때 {@code cy_batch_stuck_sweep_enabled} 가
+     * <i>왜 아무도 안 걷는지</i>를 말한다. 조치와 탐지가 함께 꺼지면 그것이 사고다 —
+     * {@code batch.stuck-job-after-ms} 를 올리는 방법을 버린 이유가 정확히 그것이다.
+     */
+    @Test
+    @DisplayName("꺼 두면 조치만 멈추고 탐지는 그대로다")
+    void disablingStopsTheActionButNotTheDetection() {
+        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
+                ExpireStepContext.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+
+            sweeper(sweepService, runningJobs, 20, false).sweep();
+
+            assertThat(statusOf(corpse.executionId()))
+                    .as("꺼져 있는데 걷으면 손잡이가 아무것도 아니다")
+                    .isEqualTo(BatchStatus.STARTED);
+            assertThat(runningJobs.stuckExecutions(ExpireStepContext.JOB_NAME))
+                    .as("탐지까지 꺼지면 아무도 이 행을 모른다")
+                    .anyMatch(run -> run.execution().getId() == corpse.executionId());
+        }
     }
 
     /**
