@@ -63,6 +63,23 @@ public final class RetryBudget {
      */
     static final int MAX_FAILURE_COUNT_LIMIT = 1000;
 
+    /**
+     * 한 번의 시도 비용 상한. {@link #MAX_FAILURE_COUNT_LIMIT} 를 곱해도
+     * {@code Duration} 안에 들어야 한다 — 안 그러면 {@code multipliedBy} 가 던지고,
+     * 기동 검사에서 부를 때 <b>검사가 아니라 기동을 끊는다.</b>
+     *
+     * <p>365일이다. {@link FullJitterBackOff} 가 지연에 거는 상한과 같은 값이라 두 상한이
+     * 한 이야기를 한다 — 그보다 큰 시도 비용은 이 계산의 대상이 아니다.
+     *
+     * <p><b>이 값 자체는 {@code Duration} 을 안 넘긴다.</b> 실측: {@code 365일 × 1000} 은
+     * 365,000일이고 {@code Duration} 의 상한은 그보다 열두 자릿수 크다. 그래서 이 상한은
+     * <b>오버플로를 막는 것이 아니라</b> 말이 안 되는 입력을 <b>계산 전에</b> 돌려보내는
+     * 것이다 — 실제 오버플로는 {@code multipliedBy} 가 exact 산술이라 조용히 감기지 않고
+     * 던진다. 던지는 것이 문제인 이유는 <b>기동 검사에서 부를 때 검사가 아니라 기동을
+     * 끊기 때문</b>이다.
+     */
+    static final Duration MAX_PER_ATTEMPT_COST = Duration.ofDays(365);
+
     private final FullJitterBackOff backOff;
 
     public RetryBudget(FullJitterBackOff backOff) {
@@ -110,6 +127,16 @@ public final class RetryBudget {
     public Duration worstCaseTotal(int failureCountLimit, Duration perAttemptCost) {
         if (perAttemptCost == null || perAttemptCost.isNegative()) {
             throw new IllegalArgumentException("perAttemptCost 는 음수가 아니어야 합니다.");
+        }
+        // **곱이 Duration 을 넘으면 그 자리에서 거절한다.** 그대로 두면
+        // multipliedBy 가 ArithmeticException 을 던지는데, 이 계산을 기동 검사에서
+        // 부르는 순간 그 예외가 **검사가 아니라 기동 전체를 끊는다** — 마감을 못 지키는
+        // 구성을 "거절" 하는 것과 앱이 안 뜨는 것은 다르다.
+        if (perAttemptCost.compareTo(MAX_PER_ATTEMPT_COST) > 0) {
+            throw new IllegalArgumentException(
+                    "perAttemptCost 는 " + MAX_PER_ATTEMPT_COST + " 이하여야 합니다. "
+                            + "그보다 크면 시도 횟수를 곱한 값이 Duration 을 넘습니다. "
+                            + "받은 값=" + perAttemptCost);
         }
         return worstCaseTotalWait(failureCountLimit)
                 .plus(perAttemptCost.multipliedBy(failureCountLimit));

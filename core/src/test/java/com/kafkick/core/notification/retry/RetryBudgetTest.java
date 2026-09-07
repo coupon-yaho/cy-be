@@ -33,14 +33,22 @@ class RetryBudgetTest {
      */
     private static final Path REPO_ROOT = Path.of("..");
 
-    /** 기본값. {@link NotificationRetryBackOffProperties} 의 필드 초기값과 같다. */
-    private static final Duration BASE = Duration.ofMillis(200);
-    private static final Duration CAP = Duration.ofSeconds(20);
+    /**
+     * <b>운영 기본값을 그 객체에서 읽는다 — 리터럴로 베끼지 않는다.</b>
+     *
+     * <p>한때 {@code 200ms}·{@code 20s} 를 이 파일에 적어 뒀는데, 그러면 <b>이 시험이
+     * 막겠다는 그 결함을 자기가 갖는다</b> — 운영 기본값 {@code cap} 을 60초로 바꿔도
+     * 자기 사본으로 85.2초를 계산해 <b>통과했다</b>(실측). 문서가 거짓이 되는 그 변경이
+     * 정확히 안 잡히는 상태였다.
+     */
+    private static final NotificationRetryBackOffProperties DEFAULTS =
+            new NotificationRetryBackOffProperties();
 
     /** 문서가 근거로 드는 실패 상한. 아래 시험이 이 값을 실제 원본과 맞댄다. */
     private static final int DOCUMENTED_LIMIT = 10;
 
-    private final RetryBudget budget = new RetryBudget(new FullJitterBackOff(BASE, CAP));
+    private final RetryBudget budget =
+            new RetryBudget(new FullJitterBackOff(DEFAULTS.getBase(), DEFAULTS.getCap()));
 
     /**
      * <b>{@code 10 × cap} 이 아니다.</b> 앞쪽 회차는 아직 상한에 안 닿는다 —
@@ -66,8 +74,12 @@ class RetryBudgetTest {
     @Test
     @DisplayName("cap 을 세 배로 올려도 총합은 세 배가 아니다")
     void doesNotScaleLinearlyWithCap() {
-        RetryBudget tripled = new RetryBudget(new FullJitterBackOff(BASE, Duration.ofSeconds(60)));
+        RetryBudget tripled = new RetryBudget(
+                new FullJitterBackOff(DEFAULTS.getBase(), DEFAULTS.getCap().multipliedBy(3)));
 
+        assertThat(DEFAULTS.getCap())
+                .as("아래 162초는 cap 20초를 세 배로 올린 값에서 나온다")
+                .isEqualTo(Duration.ofSeconds(20));
         assertThat(tripled.worstCaseTotalWait(DOCUMENTED_LIMIT))
                 .isEqualTo(Duration.ofMillis(162_000));
     }
@@ -142,6 +154,11 @@ class RetryBudgetTest {
         assertThatThrownBy(() -> budget.worstCaseTotal(10, null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> budget.worstCaseTotal(10, Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> budget.worstCaseTotal(
+                10, RetryBudget.MAX_PER_ATTEMPT_COST.plusDays(1)))
+                .as("기동 검사에서 부를 때 ArithmeticException 이 나가면 검사가 아니라 "
+                        + "기동이 끊긴다 — 계산 전에 돌려보낸다")
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> budget.fitsWithin(10, Duration.ZERO, null))
                 .isInstanceOf(IllegalArgumentException.class);
