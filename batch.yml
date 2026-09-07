@@ -87,7 +87,7 @@ services:
       # 애노테이션 전수 grep 은 하나 적게 나온다. 여기 안 적으면 이미지에 구운 기본값으로
       # 굳는데, 그 값이 등록 수보다 작으면 기동 가드가 죽인다.
       # SchedulerPoolGuardTest.WhenShapedLikeDeployment 가 이 줄의 값을 등록 수와 대조한다.
-      BATCH_SCHEDULER_POOL_SIZE: ${BATCH_SCHEDULER_POOL_SIZE:-11}
+      BATCH_SCHEDULER_POOL_SIZE: ${BATCH_SCHEDULER_POOL_SIZE:-12}
       # 관리자 API 토큰 관문(CY-742). /api/v1/admin/** 에는 stop·recover·abandon 이 있어
       # **포트에 닿는 누구나 도는 잡을 죽일 수 있다.** 주장이 아니라 소지를 묻는 2차 방어선이다.
       #

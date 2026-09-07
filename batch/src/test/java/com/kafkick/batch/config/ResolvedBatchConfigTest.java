@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import com.kafkick.batch.job.CleanupJobConfig;
 import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.schedule.CleanupScheduler;
+import com.kafkick.batch.schedule.StuckRunSweeper;
 import com.kafkick.batch.schedule.CouponRoundScheduler;
 import com.kafkick.batch.schedule.ExpireScheduler;
 import com.kafkick.batch.schedule.VerifyScheduler;
@@ -102,7 +103,10 @@ class ResolvedBatchConfigTest {
             // CY-718. 이 목록에 빠지면 batch.timezone-guard.required 키 경로에 오타가 나도
             // 기본값(true)으로 조용히 폴백한다 — 정작 그 손잡이가 필요한 순간은 배치가
             // 통째로 못 뜨는 때라, 그때 "안 먹는다" 를 만난다.
-            DefaultZoneGuard.class);
+            DefaultZoneGuard.class,
+            // CY-946. 빠지면 batch.stuck-sweep.* 키 경로에 오타가 나도 기본값으로
+            // 조용히 폴백한다 — 상한이 안 먹는 것을 아는 날은 메타 전체가 시체인 날이다.
+            StuckRunSweeper.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
@@ -156,7 +160,11 @@ class ResolvedBatchConfigTest {
             "batch.schedule.expire-cron",
             "batch.schedule.verify-cron",
             "batch.verify.metrics-refresh-ms",
-            "batch.timezone-guard.required");
+            "batch.timezone-guard.required",
+            // 시체 자동 스윕(CY-946). 끄는 스위치는 새로 안 생겼다 —
+            // batch.scheduling.enabled 를 형제 넷과 같이 쓴다.
+            "batch.stuck-sweep.max-per-sweep",
+            "batch.stuck-sweep.interval-ms");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.

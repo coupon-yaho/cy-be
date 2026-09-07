@@ -26,7 +26,7 @@ spring:
   task:
     scheduling:
       pool:
-        # 스케줄 작업이 열하나다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
+        # 스케줄 작업이 열둘이다 — ExpireScheduler.expire(만료 잡을 동기로 끝까지 돌린다),
         # CleanupScheduler.cleanup(정리 잡을 동기로 끝까지 돌린다),
         # VerifyScheduler.verify(검증 잡을 동기로 끝까지 돌린다 — 300만에서 472초다),
         # CouponRoundScheduler.transitionRounds(회차를 열고 닫는다 — 1분),
@@ -36,9 +36,10 @@ spring:
         # CouponRoundPendingRefresher.refresh(회차 전이 대기 수를 되읽는다),
         # DomainGaugeRegistrar.refreshStock(재고 게이지 — 1초),
         # DomainGaugeRegistrar.refreshConsistency(정합성 gap 집계 — 30초),
-        # PendingIssuedGaugeScheduler(v2 issued Hash 의 노후 PENDING·파손 계측 — 30초).
+        # PendingIssuedGaugeScheduler(v2 issued Hash 의 노후 PENDING·파손 계측 — 30초),
+        # StuckRunSweeper.sweep(진도가 멈춘 실행을 FAILED 로 걷어낸다 — 60초).
         #
-        # ⚠️ **마지막 하나는 @Scheduled 가 아니다.** SchedulingConfigurer 로 등록해서
+        # ⚠️ **PendingIssuedGaugeScheduler 는 @Scheduled 가 아니다.** SchedulingConfigurer 로 등록해서
         #    `@Scheduled` 를 grep 해도 안 보인다. 이 값을 맞출 때 애노테이션만 세면 하나가
         #    빈다 — 아래 이력의 CY-699 가 정확히 그렇게 샜다.
         #
@@ -52,7 +53,7 @@ spring:
         #
         # **여유를 안 둔다 — DB 풀과 다른 축이다.** 커넥션 풀은 keepalive·health 체크처럼
         # 우리가 안 세는 소비자가 붙어서 여유 둘을 뒀지만, 이 풀을 쓰는 것은 위의
-        # **열하나뿐**이고 열둘째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
+        # **열둘뿐**이고 열셋째가 생기려면 코드가 바뀌어야 한다. 그때 이 값도 함께 올리라는
         # 신호가 되도록 정확히 그 수로 둔다 — 여유를 두면 그 신호가 사라진다.
         # (CY-421 이 ExpirePendingRefresher 를 더하면서 넷에서 다섯이 됐다. 신호가 일했다.
         #  CY-446 이 둘을 더하면서 일곱이 됐는데, 그때는 **신호를 한 번 지나쳤다** —
@@ -65,7 +66,8 @@ spring:
         #  #118 을 머지한 뒤 배치가 "풀=10 @Scheduled=11" 로 기동을 거절해서 알았다.
         #  이번은 성격이 다르다. 애노테이션이 아니라 SchedulingConfigurer 라 전수 grep 에
         #  안 잡혔고, 조건부 빈이라(observation.datasource · pending-issued-gauge 둘 다 기본
-        #  true) 배포에서는 서는데 테스트 컨텍스트에서만 안 만들어졌다.)
+        #  true) 배포에서는 서는데 테스트 컨텍스트에서만 안 만들어졌다.
+        #  CY-946 이 StuckRunSweeper 를 더해 열둘이 됐다.)
         #
         # ⚠️ 이 키는 Boot 가 직접 소비해서 @Value 스캔에 안 잡힌다. 그래서 셋이 함께 지킨다 —
         #    ResolvedBatchConfigTest 가 해석된 Environment 값을(키 경로),
@@ -80,7 +82,7 @@ spring:
         #    그 파일이 **빌드가 이 .example 로 만든 build/resources/main/application.yml 을**
         #    가려서(루트 build.gradle 의 processResources) 관측 스위치 셋이 꺼진 채 등록 수마저
         #    배포와 달랐다(8 대 11). 그래서 셋째는 스위치를 켜 배포 형상으로 맞춘 뒤 잰다.
-        size: ${BATCH_SCHEDULER_POOL_SIZE:11}
+        size: ${BATCH_SCHEDULER_POOL_SIZE:12}
 
   # CY-368 이 업무 포트에 검증 트리거 컨트롤러를 열었다(POST /api/v1/admin/verify).
   # 인증이 없어서 compose 가 그 포트를 **기본으로 호스트에 안 내보낸다** —
@@ -572,6 +574,27 @@ batch:
   # 되돌릴 수 있고 감지도 되는 쪽을 기본으로 둔다. 운영은 true 를 명시해서 띄운다.
   scheduling:
     enabled: ${BATCH_SCHEDULING_ENABLED:false}
+
+  # 진도가 멈춘 실행을 자동으로 걷어내는 스윕(CY-946). 탐지는 셋이었는데
+  # (RunningJobProbe · /runs/stuck · BatchStuckExecution) 조치가 사람 손뿐이었다 —
+  # 새벽에 배치 JVM 이 죽으면 그 행 하나가 STARTED 로 남아 다음 회차를 계속 밀어낸다.
+  #
+  # ⚠️ **끄는 스위치를 따로 안 둔다.** 위 batch.scheduling.enabled 하나로 함께 멈춘다.
+  #    스윕만 끄면 탐지·알림은 그대로 울리는데 조치만 꺼진 상태가 되고, 그것이 정확히
+  #    이 키가 없애려는 상태다. 시체를 남겨 두고 보고 싶으면 stuck-job-after-ms 를
+  #    올린다 — 판정을 늦추는 것이 조치를 끄는 것보다 정직하다.
+  #
+  # 걷는 방식은 abandon 이 아니라 recover 다. FAILED 로 닫으므로 재시작이 되고 이력이
+  # 남는다 — ABANDONED 는 그 JobInstance 를 같은 파라미터로 영원히 못 돌리게 해서
+  # 만료의 크론 슬롯을 통째로 없앤다(BatchHistoryController#stuck 이 적어 둔 사실).
+  stuck-sweep:
+    # 한 주기에 걷을 상한. 배치 메타 전체가 시체인 상황에서 한 주기가 수백 건의
+    # 트랜잭션을 열지 않게 한다. 남은 것은 다음 주기가 가져가고 그동안 알림은 계속 운다.
+    # 0 은 못 준다 — 스케줄러는 도는데 아무것도 안 하는 상태를 아무도 안 말해 준다.
+    max-per-sweep: ${BATCH_STUCK_SWEEP_MAX:20}
+    # fixedDelay 다. fixedRate 로 두면 앞 주기가 락 대기에 걸린 동안 다음 주기가 겹쳐
+    # 뜨고 둘이 같은 실행을 선점하려고 다툰다.
+    interval-ms: ${BATCH_STUCK_SWEEP_INTERVAL_MS:60000}
 
   schedule:
     # ⚠️ 크론을 어느 좌표계로 푸는가. @Scheduled 는 이 값을 안 주면 JVM 기본 타임존을 쓰는데,

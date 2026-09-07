@@ -1712,7 +1712,55 @@ tests:
             exp_annotations:
               summary: "verifyJob 에 진도가 멈춘 실행이 남아 있습니다"
               description: >-
-                BATCH_JOB_EXECUTION 에서 STATUS 가 STARTING/STARTED/STOPPING 인데 BATCH_STEP_EXECUTION.LAST_UPDATED 가 batch.stuck-job-after-ms 넘게 안 움직인 행입니다. 대개 docker compose down 이 잡 한복판에 걸린 흔적입니다. **이 행이 있는 동안 만료와 검증의 상호 배제가 그만큼 꺼져 있습니다.** **손 SQL 은 마지막 수단입니다** — 살아 있는 실행에 쓰면 VERSION 이 올라가 다음 update() 가 터집니다. API 도 같은 쓰기를 하지만, 시체 판정을 통과한 실행에만 한다는 점이 다릅니다(batch.stuck-job-after-ms). 어느 실행인지는 GET /api/v1/admin/batch/runs/stuck 이 전 잡을 한 번에 줍니다(CY-938) — 잡별 경로를 몰라도 되고, 잡이 늘어도 따라옵니다. 아래 잡별 경로는 그다음 조치입니다. expireJob 이면 GET /api/v1/admin/expire/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다 — 재시도해도 안전합니다. verifyJob 이면 /api/v1/admin/verify 쪽 stop → abandon 을 씁니다. 그 stop 도 시체 판정을 지납니다(CY-678) — 진도가 있으면 409 로 거절합니다. cleanupJob 이면 GET /api/v1/admin/cleanup/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다(CY-697) — 만료와 같은 모양이고 재시도해도 안전합니다. 업무 포트가 안 열려 있으면 batch-expose.yml 을 얹습니다(docs/13 §4). asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
+                BATCH_JOB_EXECUTION 에서 STATUS 가 STARTING/STARTED/STOPPING 인데 BATCH_STEP_EXECUTION.LAST_UPDATED 가 batch.stuck-job-after-ms 넘게 안 움직인 행입니다. 대개 docker compose down 이 잡 한복판에 걸린 흔적입니다. **이 행이 있는 동안 만료와 검증의 상호 배제가 그만큼 꺼져 있습니다.** ⚠️ **CY-946 부터 이 알림의 뜻이 바뀌었습니다.** StuckRunSweeper 가 60초마다 같은 판정으로 걷어내므로, 10분을 버텼다는 것은 **스윕이 안 돌고 있다**는 뜻입니다 — 먼저 batch.scheduling.enabled 와 "시체 스윕" 로그를 봅니다. (스윕이 매 주기 선점에 지고 있다면 그 실행은 진도를 내고 있는 것이고, 그때는 batch.stuck-job-after-ms 가 실제 무진도 구간보다 짧은 것입니다.) 아래는 스윕이 안 도는 동안의 수동 절차입니다. **손 SQL 은 마지막 수단입니다** — 살아 있는 실행에 쓰면 VERSION 이 올라가 다음 update() 가 터집니다. API 도 같은 쓰기를 하지만, 시체 판정을 통과한 실행에만 한다는 점이 다릅니다(batch.stuck-job-after-ms). 어느 실행인지는 GET /api/v1/admin/batch/runs/stuck 이 전 잡을 한 번에 줍니다(CY-938) — 잡별 경로를 몰라도 되고, 잡이 늘어도 따라옵니다. 아래 잡별 경로는 그다음 조치입니다. expireJob 이면 GET /api/v1/admin/expire/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다 — 재시도해도 안전합니다. verifyJob 이면 /api/v1/admin/verify 쪽 stop → abandon 을 씁니다. 그 stop 도 시체 판정을 지납니다(CY-678) — 진도가 있으면 409 로 거절합니다. cleanupJob 이면 GET /api/v1/admin/cleanup/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다(CY-697) — 만료와 같은 모양이고 재시도해도 안전합니다. 업무 포트가 안 열려 있으면 batch-expose.yml 을 얹습니다(docs/13 §4). asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
+
+  # ── 스윕이 실제로 걷었다: 자동 조치가 조용하면 사고를 덮는다 ─────────────
+  - interval: 1m
+    name: "스윕이 시체를 걷으면 BatchStuckAutoRecovered 가 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_recovered_total'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BatchStuckAutoRecovered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "진도가 멈춘 배치 실행을 스윕이 자동으로 걷어냈습니다"
+              description: >-
+                StuckRunSweeper 가 배치 메타에서 시체 판정을 통과한 실행을 FAILED 로 닫았습니다. **조치는 이미 끝났습니다** — 이 알림은 그 사실을 사람에게 알리는 것이고, 남은 질문은 "왜 죽었나" 입니다. 대개 docker compose down 이나 OOM 이 잡 한복판에 걸린 흔적입니다. 어느 실행이었는지는 "진도가 멈춘 실행을 자동으로 걷어냈습니다" WARN 로그가 jobName 과 executionId 로 남깁니다. FAILED 라 재시작할 수 있습니다 — 만료면 그 asOf 슬롯이 그대로 살아 있고, 검증이면 같은 (dataset, scope) 로 다시 돌리면 됩니다. ⚠️ **이 알림이 매일 울리면 스윕을 보지 말고 잡을 보십시오.** 스윕은 증상을 치우는 것이지 원인을 고치지 않습니다. 상한(batch.stuck-sweep.max-per-sweep)에 걸린 주기가 있었으면 "시체 스윕 상한에 걸려" WARN 로그가 함께 남습니다.
+
+  # **한 번만 걷힌 날이 이 알림의 존재 이유다.** for 를 얹으면 그날이 창을 못 채워
+  # 통째로 안 울린다 — 매일 한 건씩 죽는 잡이 정확히 그 모양으로 숨는다.
+  - interval: 1m
+    name: "한 번만 걷혀도 뜬다 — for 를 더하는 변경을 여기서 잡는다"
+    input_series:
+      - series: 'cy_batch_stuck_recovered_total'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: BatchStuckAutoRecovered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "진도가 멈춘 배치 실행을 스윕이 자동으로 걷어냈습니다"
+              description: >-
+                StuckRunSweeper 가 배치 메타에서 시체 판정을 통과한 실행을 FAILED 로 닫았습니다. **조치는 이미 끝났습니다** — 이 알림은 그 사실을 사람에게 알리는 것이고, 남은 질문은 "왜 죽었나" 입니다. 대개 docker compose down 이나 OOM 이 잡 한복판에 걸린 흔적입니다. 어느 실행이었는지는 "진도가 멈춘 실행을 자동으로 걷어냈습니다" WARN 로그가 jobName 과 executionId 로 남깁니다. FAILED 라 재시작할 수 있습니다 — 만료면 그 asOf 슬롯이 그대로 살아 있고, 검증이면 같은 (dataset, scope) 로 다시 돌리면 됩니다. ⚠️ **이 알림이 매일 울리면 스윕을 보지 말고 잡을 보십시오.** 스윕은 증상을 치우는 것이지 원인을 고치지 않습니다. 상한(batch.stuck-sweep.max-per-sweep)에 걸린 주기가 있었으면 "시체 스윕 상한에 걸려" WARN 로그가 함께 남습니다.
+
+  # 아무것도 안 걷혔으면 조용해야 한다. > 0 을 >= 0 으로 바꾸는 변경을 여기서 잡는다.
+  - interval: 1m
+    name: "걷은 것이 없으면 안 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_recovered_total'
+        values: '3x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchStuckAutoRecovered
+        exp_alerts: []
 
   # 10분을 안 채우면 안 뜬다 — for 를 지우는 변경을 여기서 잡는다.
   - interval: 1m

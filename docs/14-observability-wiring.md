@@ -23,7 +23,7 @@
 | **안 한다** | 아직 없는 잡(회차 **생성**)의 알림 — 그 잡을 만들 때 단다. `cleanupJob` 은 CY-397 이 만들면서 규칙 넷을, **회차 전이는 CY-446 이 만들면서 열을** 함께 달았다 |
 | **안 한다** | `api` 컨테이너 — 스크레이프 대상이 아니다. 배포 순서 위반은 `batch` 쪽 기동 가드로 잡는다 |
 
-> **범용인 것은 `BatchJobFailed` 와 `BatchStuckExecution` 둘이다.** 셀렉터에 잡 이름이 없어
+> **범용인 것은 `BatchJobFailed` · `BatchStuckExecution` · `BatchStuckAutoRecovered` 셋이다.** 셀렉터에 잡 이름이 없어
 > 새 잡이 생기면 그날 바로 커버된다 — 뒤엣것은 CY-392 가 `job` 라벨로 냈고, 지켜보는 잡을
 > `Job` 빈에서 모으므로 잡이 늘면 시계열도 따라 는다.
 >
@@ -145,6 +145,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
 | `ExpireGaugeMissing` · `BatchTargetDown` · `BatchJobRunningTooLong` | `server` |
 | `BatchStuckExecution` · `BatchRunMetricsUnknown` · `BatchRunMetricsStale` | `server` |
+| `BatchStuckAutoRecovered` | `server` |
 | `ExpireMetricsStale` · `ExpireMetricsBackdated` | `server` |
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |
