@@ -108,7 +108,9 @@ class BatchControlApiTest {
      * <b>죽은 실행에도 신호가 받아들여진다 — 그리고 영영 안 멈춘다.</b>
      *
      * <p>처음에 이 테스트는 409 를 기대했다. <b>틀렸다</b> — 실측하니
-     * {@code BatchStatus.STARTED.isRunning()} 이 참이라 {@code JobOperator} 가 거절하지 않고
+     * {@code SimpleJobOperator.stop} 의 관문이 {@code STARTED}·{@code STARTING} 두 상태라
+     * ({@code isRunning()} 이 아니다 — 그것은 {@code STOPPING} 에도 참인데 stop 은 그것을
+     * 거절한다) {@code JobOperator} 가 거절하지 않고
      * {@code true} 를 돌려준다. 신호는 DB 에 적히지만 <b>그것을 읽을 프로세스가 없다.</b>
      *
      * <p>그래서 이 테스트는 <b>내가 바라는 동작이 아니라 실제 동작</b>을 못 박는다. 그리고

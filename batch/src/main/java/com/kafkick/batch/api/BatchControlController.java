@@ -156,8 +156,15 @@ public class BatchControlController {
      * 화면이 "눌렀는데 안 멈춘다" 를 정상으로 읽어야 한다.
      *
      * <p><b>⚠️ 죽은 실행에도 신호가 받아들여진다.</b> 배치 JVM 이 죽으면 그 행이
-     * {@code STARTED} 로 영원히 남는데, {@code BatchStatus.STARTED.isRunning()} 이 참이라
-     * {@code JobOperator} 는 <b>거절하지 않고 {@code true} 를 돌려준다</b>(실측).
+     * {@code STARTED} 로 영원히 남는데, {@code SimpleJobOperator.stop} 의 관문이
+     * <b>{@code STARTED}·{@code STARTING} 두 상태</b>라 <b>거절하지 않고 {@code true} 를
+     * 돌려준다</b>(6.0.4 바이트코드로 확인).
+     *
+     * <p>⚠️ <b>한때 그 근거를 {@code isRunning()} 이라고 적었는데 틀렸다.</b>
+     * {@code isRunning()} 은 {@code STOPPING} 에도 참인데 {@code stop} 은 그것을
+     * <b>거절한다</b>(409) — 그 문장대로 읽으면 "STOPPING 시체도 stop 된다" 가 나온다.
+     * {@code isRunning()} 은 그 뒤 <b>Step 루프</b>에 나오는 것이지 관문이 아니다.
+     * {@link StuckRunClaim} 이 같은 사실을 처음부터 맞게 적어 뒀다.
      * 신호는 DB 에 적히지만 <b>그것을 읽을 프로세스가 없어 영영 안 멈춘다.</b>
      *
      * <p>그래서 응답에 {@code status} 를 함께 싣는다 — 오래된 {@code STARTED} 를 누른
