@@ -116,7 +116,8 @@ public class VerifyReportController {
      * <i>"아직 안 끝났다"</i> 와 한 값으로 뭉친다.
      *
      * <pre>
-     * curl -sSf "localhost:9091/api/v1/admin/verify/reports/latest?dataset=CLEAN&amp;scope=FULL" \
+     * curl -sSf -H "X-Batch-Admin-Token: …" \
+     *   "localhost:9091/api/v1/admin/verify/reports/latest?dataset=CLEAN&amp;scope=FULL" \
      *   &gt; verify-clean-full.json
      * </pre>
      */
