@@ -288,6 +288,44 @@ public enum VerificationErrorCode implements ErrorCode {
             500,
             "VERIFICATION-024",
             "오염 종류별 규칙 행수가 고르지 않아 심은 오염 수를 셀 수 없습니다."
+    ),
+
+    /**
+     * <b>두 실행을 맞댈 수 없다.</b> 뺄셈이 뜻을 가지려면 두 실행이 <b>같은 것을 본</b>
+     * 실행이어야 한다 — {@code dataset}·{@code scope} 가 다르면 규칙도 대상도 달라서
+     * 차이가 <i>"고쳐졌다"</i> 가 아니라 <i>"다른 것을 셌다"</i> 다.
+     *
+     * <p><b>0 으로 답하지 않는다.</b> 비교 불가를 0 으로 내면 화면이 그것을
+     * <i>"차이가 없다"</i> 로 읽는다 — 이 저장소가 반복해서 막아 온 모양이다
+     * ({@code /reports/latest} 가 검출 0인 규칙을 채워서 내는 것과 같은 이유).
+     *
+     * <p><b>파라미터 축만 진다.</b> {@code dataset}·{@code scope} 불일치와 같은 실행끼리
+     * 맞대는 것 둘이다 — 둘 다 <b>번호를 고쳐야</b> 풀린다. 상태 축(아직 판정이 없음)은
+     * {@link #RUN_NOT_CLOSED} 로 가른다.
+     */
+    RUNS_NOT_COMPARABLE(
+            400,
+            "VERIFICATION-025",
+            "두 검증 실행을 맞댈 수 없습니다."
+    ),
+
+    /**
+     * <b>아직 판정이 안 난 실행이라 맞댈 수 없다.</b> 검출 수가 <b>중간값</b>이다.
+     *
+     * <p><b>400 이 아니라 409 인 이유가 있다.</b> 던진 파라미터가 아니라 <b>그 실행의
+     * 지금 상태</b>가 문제라, 올바른 다음 동작이 <b>같은 번호로 잠시 뒤 다시 부르는 것</b>
+     * 이다 — 400 은 정확히 그 반대(파라미터를 고쳐라)를 지시한다.
+     * {@link #RUNTIME_NOT_QUIESCED} 가 같은 갈림을 적어 뒀고, 형제
+     * {@code VERIFY_NOT_RUNNING}·{@code VERIFY_EXECUTION_NOT_STUCK} 도 409 다.
+     *
+     * <p>{@link #RUNS_NOT_COMPARABLE} 과 가르는 이유가 그것이다. 한 코드에 뭉치면
+     * 화면에 나가는 문구가 같아져({@code BatchApiExceptionHandler} 가 {@code detail} 을
+     * 로그에만 남긴다) <b>번호를 고쳐야 하는지 기다려야 하는지</b>를 운영자가 알 수 없다.
+     */
+    RUN_NOT_CLOSED(
+            409,
+            "VERIFICATION-026",
+            "아직 판정이 나지 않은 검증 실행입니다."
     );
 
     private final int status;

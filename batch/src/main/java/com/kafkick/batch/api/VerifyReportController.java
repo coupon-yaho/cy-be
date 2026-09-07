@@ -175,6 +175,72 @@ public class VerifyReportController {
                 timeProvider.now(), stuckAfter));
     }
 
+    /**
+     * <b>두 실행을 맞대어 무엇이 줄었는지 낸다.</b>
+     *
+     * <p>{@code /reports/latest} 는 <b>한 실행</b>의 판정이라 <i>"원래 0건이었다"</i> 와
+     * <i>"고쳐서 0건이 됐다"</i> 를 구분하지 못한다. 정합률을 <b>주장이 아니라 증거</b>로
+     * 만들려면 고치기 전과 뒤가 나란히 있어야 한다.
+     *
+     * <p><b>어느 둘인지 부르는 쪽이 고른다.</b> "직전 것" 을 자동으로 집지 않는다 —
+     * 손 트리거가 하루에도 여러 건 쌓이므로({@code docs/15}) 그 사이에 낀 실행이 있으면
+     * <b>비교 대상이 조용히 달라진다.</b>
+     *
+     * <p><b>비교 불가는 0 이 아니라 거절이다.</b> {@code dataset}·{@code scope} 가 다르면
+     * 규칙도 대상도 달라서 뺄셈이 <i>"고쳐졌다"</i> 가 아니라 <i>"다른 것을 셌다"</i> 다.
+     * 0 으로 답하면 화면이 그것을 <b>차이 없음</b>으로 읽는다.
+     *
+     * <p><b>판정이 없는 실행도 거절한다.</b> 아직 안 끝났거나 가드에 걸려 죽은 실행이라
+     * 검출 수가 <b>중간값</b>이다 — {@code /reports/latest} 가 {@code verdict IS NOT NULL}
+     * 을 요구하는 것과 같은 이유이고, 그 완화가 왜 안 되는지는 {@link #progress} 에 적혀 있다.
+     *
+     * <pre>
+     * curl -sSf -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     *   "localhost:9091/api/v1/admin/verify/reports/diff?before=17&amp;after=23"
+     * </pre>
+     */
+    @GetMapping("/reports/diff")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true,
+            timeoutString = "${batch.admin.timeout-seconds:5}")
+    public ResponseEnvelope<VerifyReportDiffView> diff(
+            @RequestParam long before,
+            @RequestParam long after) {
+
+        VerificationRun was = closedRun(before);
+        VerificationRun now = closedRun(after);
+        requireComparable(was, now);
+
+        return ResponseEnvelope.success(VerifyReportDiffView.of(
+                rules.currentSchema(), was, byType(was), now, byType(now)));
+    }
+
+    /** 판정이 난 실행만 맞댄다. 없는 번호와 안 끝난 실행을 <b>다른 코드로</b> 가른다. */
+    private VerificationRun closedRun(long runId) {
+        VerificationRun run = runs.findById(runId)
+                .orElseThrow(() -> new BusinessException(VerificationErrorCode.RUN_NOT_FOUND,
+                        "runId=" + runId));
+        if (run.verdict() == null) {
+            // **파라미터가 아니라 그 실행의 상태다.** 같은 번호로 잠시 뒤 다시 부르면 된다 —
+            // 400 으로 내면 자동화가 "파라미터를 고쳐 재시도" 루프에 빠진다.
+            throw new BusinessException(VerificationErrorCode.RUN_NOT_CLOSED,
+                    "runId=" + runId + " 은 아직 판정이 없습니다. 검출 수가 중간값입니다.");
+        }
+        return run;
+    }
+
+    private static void requireComparable(VerificationRun was, VerificationRun now) {
+        if (was.id() == now.id()) {
+            throw new BusinessException(VerificationErrorCode.RUNS_NOT_COMPARABLE,
+                    "같은 실행끼리는 맞댈 수 없습니다. runId=" + was.id());
+        }
+        if (was.dataset() != now.dataset() || was.scope() != now.scope()) {
+            throw new BusinessException(VerificationErrorCode.RUNS_NOT_COMPARABLE,
+                    "dataset·scope 가 다르면 규칙도 대상도 달라 뺄셈이 뜻을 잃습니다. "
+                            + "before=" + was.dataset() + "/" + was.scope()
+                            + " after=" + now.dataset() + "/" + now.scope());
+        }
+    }
+
     private Map<FindingType, Integer> byType(VerificationRun run) {
         return findings.countByType(run.id());
     }

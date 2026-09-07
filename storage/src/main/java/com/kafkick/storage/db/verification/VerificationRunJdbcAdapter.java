@@ -55,6 +55,19 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
              WHERE id = :id
             """;
 
+    /**
+     * <b>{@code origin = 'BATCH'} 를 건다 — 이 자리만 빠져 있었다.</b>
+     *
+     * <p>형제 질의 넷이 전부 걸고 있었고 {@code CleanupJdbcAdapter} 가
+     * <i>"모든 선택 질의에 건다"</i> 고 적어 뒀는데, id 조회만 안 걸려 있었다. 그 상태로
+     * CY-944 가 <b>두 실행을 맞대는 조회</b>를 열면서 드러났다 — 시드가 심은 기준 행
+     * ({@code SEED / CORRUPT / FULL / FAIL / 800건})을 {@code before} 로 주면, 배치가
+     * 아무것도 안 고쳤는데 <b>"800건을 고쳤다" 는 증거</b>가 나온다.
+     *
+     * <p>시드 행의 id 는 낮은 번호라 <b>사람이 제일 먼저 찍어 보는 번호</b>이기도 하다.
+     * {@code docs/17} 의 <i>"verdict 는 origin 에 따라 뜻이 다르다"</i> 가 막으려던 모순이
+     * 그 경로로 되살아난다.
+     */
     private static final String SELECT_BY_ID = """
             SELECT id, as_of, from_ts, scope, dataset, attempt,
                    verdict, stats_status, finding_count,
@@ -62,6 +75,7 @@ public class VerificationRunJdbcAdapter implements VerificationRunRepository {
                    seed_run_id
               FROM verification_runs
              WHERE id = :id
+               AND origin = 'BATCH'
             """;
 
     private static final String SELECT_BY_PARAMS = """

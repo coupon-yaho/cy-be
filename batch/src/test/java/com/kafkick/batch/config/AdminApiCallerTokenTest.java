@@ -31,6 +31,8 @@ import org.junit.jupiter.api.Test;
  * 적힌 대로면 <b>기동조차 안 됐다</b> — {@code AdminTokenConfig} 가 토큰 없이 관문을
  * 켜는 것을 거절한다.
  *
+ * <p>지금은 <b>열다섯</b>이다 — CY-944 가 {@code /reports/diff} 예시를 하나 더했다.
+ *
  * <h2>왜 기계가 봐야 하나</h2>
  *
  * <p><b>사람이 훑는 것으로 안 된다는 근거가 이력에 있다.</b> 관문은 CY-742 가
@@ -104,7 +106,7 @@ class AdminApiCallerTokenTest {
      *
      * <p>호출을 <b>늘리는</b> 티켓이 이 수를 같이 올려야 한다. 그것이 이 상수의 값이다.
      */
-    private static final int KNOWN_CALLS = 14;
+    private static final int KNOWN_CALLS = 15;
 
     /** 이 파일. {@link #scanned()} 가 자기 표본을 안 잡게 뺀다. */
     private static final String SELF = "AdminApiCallerTokenTest.java";
