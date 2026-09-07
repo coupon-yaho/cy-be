@@ -105,6 +105,26 @@ jobs:
       #
       # 로컬 application.yml·storage.yml 은 gitignore 대상이라 러너에 아예 없다.
       # 빌드가 .example 을 resolved/ 로 복사하므로(build.gradle 참고) 그대로 돈다.
+      # **파이썬부터 본다.** 아래 «싼 것을 먼저 돌린다» 와 같은 이유이고, 여기가 더 싸다 —
+      # 순수 파이썬이라 도커도 Gradle 데몬도 안 쓴다. mock 리시버와 문서 검사 스크립트는
+      # 실행 가능한 코드인데 ./gradlew build 같은 게이트가 없어, 들여쓰기 하나가 틀어져도
+      # compose 를 직접 띄우기 전까지 아무도 모른다.
+      - name: 파이썬 구문 검사
+        run: |
+          python3 -m py_compile infra/alertmanager/alert-sink.py \
+                                scripts/check-doc-shell.py
+
+      # **문서 안 셸 블록은 «셸 스크립트 검사» 가 못 본다.** git ls-files '*.sh' 는 실물
+      # 파일만 훑는데, docs/17 의 게이트 실행 절차는 붙여 넣어 돌리라고 둔 함수 덩어리다.
+      # CY-939·CY-941 이 거기와 docs/14 에 `sh -c '...' _ "$q"` 같은 중첩 인용을 넣었고 —
+      # 따옴표 하나로 조용히 깨지는 형태다 — 그 두 티켓에서는 사람이 손으로 bash -n 을
+      # 돌려 확인했다. 다음 사람은 안 한다.
+      #
+      # ⚠️ 이 검사가 초록이라고 중첩 인용이 **맞다**는 뜻은 아니다. bash -n 은 파싱만 한다 —
+      #    무엇을 못 잡는지 스크립트 docstring 이 돌연변이 실측으로 적어 뒀다.
+      - name: 문서 셸 블록 검사
+        run: python3 scripts/check-doc-shell.py
+
       - name: 컴파일·패키징
         run: ./gradlew build -x test --stacktrace
 
@@ -160,13 +180,7 @@ jobs:
             --entrypoint amtool prom/alertmanager:v0.28.1 \
             check-config /etc/alertmanager/alertmanager.yml
 
-      # mock 리시버는 이 저장소 최초의 파이썬 파일이고, 실행 가능한 코드인데 Java 쪽
-      # ./gradlew build 같은 게이트가 없다. 최소한 문법은 CI 가 본다 —
-      # 들여쓰기 하나가 틀어져도 compose 를 직접 띄우기 전까지 아무도 모르는 상태를 막는다.
-      - name: mock 리시버 구문 검사
-        run: python3 -m py_compile infra/alertmanager/alert-sink.py
-
-      # 셸 스크립트도 검사한다. mock 리시버와 같은 이유이고, 여기가 더 세다 —
+      # 셸 스크립트도 검사한다. 위쪽 «파이썬 구문 검사» 와 같은 이유이고, 여기가 더 세다 —
       # scripts/ 는 **예약 작업이 무인으로 돌리는 코드**라 사람이 그 순간을 못 본다.
       # dump-verify-report.sh 는 git commit·push 를 부르므로 오타 하나가 조용히 사고가 된다.
       #
