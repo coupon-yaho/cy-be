@@ -41,6 +41,7 @@ import com.kafkick.batch.replay.IssuanceHistoryGroup;
 import com.kafkick.batch.replay.IssuanceHistoryGroupReader;
 import com.kafkick.batch.replay.ReplayProcessor;
 import com.kafkick.core.support.exception.BusinessException;
+import com.kafkick.core.verification.DatasetScale;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
@@ -102,6 +103,11 @@ public class VerifyJobConfig {
     static final String POLICY_DIGEST_KEY = "policy.digest";
 
     static final String FINGERPRINT_KEY = "dataset.fingerprint";
+
+    /** {@link #FINGERPRINT_KEY} 와 같은 자리에서 얼린다 — 두 값이 같은 스냅샷이어야 한다. */
+    private static final String EXAMINED_ISSUANCES_KEY = "examinedIssuanceCount";
+
+    private static final String EXAMINED_HISTORIES_KEY = "examinedHistoryCount";
 
     static final String SEED_RUN_ID_KEY = "manifest.seedRunId";
 
@@ -345,9 +351,22 @@ public class VerifyJobConfig {
                     // 규칙 Step 은 각자 자기 트랜잭션에서 이미 돌았다. 등식을 지키는 것은
                     // 앞 네 가드다 — 사용 축은 성격이 다르다(지문 재료에 없는 축을 대신
                     // 막는다). 가드를 빼면 이 등식이 깨진다.
-                    chunkContext.getStepContext().getStepExecution().getJobExecution()
-                            .getExecutionContext()
-                            .putString(FINGERPRINT_KEY, rules.datasetFingerprint(asOf));
+                    ExecutionContext frozen = chunkContext.getStepContext()
+                            .getStepExecution().getJobExecution().getExecutionContext();
+                    frozen.putString(FINGERPRINT_KEY, rules.datasetFingerprint(asOf));
+
+                    // **검사 규모도 여기서 얼린다 — 지문과 같은 이유다.** finalize 에서
+                    // 읽으면 그 사이 발급 한 건에 규모가 움직여, <b>지문은 앞 데이터셋을
+                    // 규모는 뒤 데이터셋을</b> 가리킨다. 두 값이 같은 스냅샷을 말한다는
+                    // 것이 이 축의 전제인데, 그때 그 전제가 조용히 깨진다.
+                    //
+                    // 한때 finalize 에서 읽고 "assertFrozenStep 이 지났으므로 안 움직인다"
+                    // 고 적었는데 **틀렸다** — 이 Step 과 finalize 사이에는 락도 쓰기 차단도
+                    // 없다. 그 사이를 다시 보는 것은 assertStillFrozen 이고, finalize 는
+                    // 그것을 안 부른다.
+                    DatasetScale scale = rules.datasetScale(asOf);
+                    frozen.putLong(EXAMINED_ISSUANCES_KEY, scale.issuanceCount());
+                    frozen.putLong(EXAMINED_HISTORIES_KEY, scale.historyCount());
 
                     return RepeatStatus.FINISHED;
                 }, transactionManager)
@@ -409,14 +428,13 @@ public class VerifyJobConfig {
                                         + " scope=" + run.scope());
                     }
 
-                    // **분모를 남긴다.** 지문과 같은 asOf 로 재고, 지문과 같은 질의에서
-                    // 나온다 — 새로 세지 않는다. assertFrozenStep 이 이미 지났으므로
-                    // 그 사이 데이터는 안 움직인다.
+                    // **분모를 남긴다.** 값은 assertFrozenStep 이 지문과 함께 얼린 것이다 —
+                    // 여기서 다시 읽으면 지문과 다른 스냅샷을 가리킬 수 있다.
                     //
                     // ⚠️ 판정에는 안 쓴다. 재고 불일치 규칙이 coupons 에서 시작해 발급건을
                     //    LEFT JOIN 하므로 발급건 0에서도 검출을 낸다 — 규모로 판정을 가르면
                     //    진짜 검출을 덮는다(DatasetScale 참조).
-                    runs.recordExaminedScale(runId, rules.datasetScale(run.asOf()));
+                    runs.recordExaminedScale(runId, frozenScale(jobExecution));
 
                     int detected = findings.countOf(runId);
                     VerdictType verdict = dataset == DatasetType.CLEAN
@@ -1397,6 +1415,22 @@ public class VerifyJobConfig {
      */
     static VerdictType verdictOfClean(int detected) {
         return detected == 0 ? VerdictType.PASS : VerdictType.FAIL;
+    }
+
+    /**
+     * <b>{@code assertFrozenStep} 이 지문과 함께 얼린 규모.</b> 없으면 그 Step 이 안 돈
+     * 것이라, 조용히 다시 읽지 않고 <b>거기서 멈춘다</b> — 다시 읽으면 지문과 다른
+     * 스냅샷의 수가 리포트에 실린다.
+     */
+    private static DatasetScale frozenScale(JobExecution jobExecution) {
+        ExecutionContext context = jobExecution.getExecutionContext();
+        if (!context.containsKey(EXAMINED_ISSUANCES_KEY)) {
+            throw new IllegalStateException(
+                    "검사 규모가 실행 문맥에 없습니다. assertFrozenStep 이 먼저 돌아야 합니다.");
+        }
+        return new DatasetScale(
+                context.getLong(EXAMINED_ISSUANCES_KEY),
+                context.getLong(EXAMINED_HISTORIES_KEY));
     }
 
     private static long requireRunId(JobExecution jobExecution) {

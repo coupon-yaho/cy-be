@@ -53,6 +53,11 @@ public interface VerificationRunRepository {
      * <p><b>{@code finish} 에 안 싣는 이유</b>도 같다. 그 메서드는 <b>판정</b>을 담는 자리이고
      * 규모는 판정에 안 쓰인다({@link DatasetScale} 참조) — 섞으면 <b>판정에 쓰이는 값처럼
      * 읽힌다.</b>
+     *
+     * @throws com.kafkick.core.support.exception.BusinessException 그 실행 행이 없을 때
+     *         ({@code RUN_ROW_VANISHED}). <b>조용히 넘어가지 않는다</b> — 규모를 못 남긴
+     *         실행은 리포트에서 <i>"안 봤다"</i> 와 구분되지 않고, 그것이 이 축이 막으려는
+     *         바로 그 오독이다
      */
     void recordExaminedScale(long runId, DatasetScale scale);
 
