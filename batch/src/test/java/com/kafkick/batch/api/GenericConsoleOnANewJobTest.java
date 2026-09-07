@@ -51,12 +51,17 @@ import tools.jackson.databind.JsonNode;
  *
  * <h2>실측해 둔 것</h2>
  *
- * <p><b>컨텍스트가 정확히 하나 는다.</b> 아래 중첩 {@code @TestConfiguration} 이 이
- * 클래스의 설정 집합에 들어가 {@code MergedContextConfiguration} 이 형제들과 달라진다
- * (그 중첩 클래스는 {@code @Import} 없이도 잡힌다 — {@code @Import} 에 적은 것은
- * 형제 {@code BatchMetadataPersistenceTest} 와 모양을 맞춘 것이고 중복이다) — 셋을 함께 돌려
- * 기동이 두 번인 것을 확인했다({@code BatchStuckApiTest} 하나 + 이 클래스 하나,
- * {@code JobCalibrationContractTest} 는 앞의 것을 재사용). 그 한 번이 이 계약의 값이다.
+ * <p><b>컨텍스트 비용 — 2026-09-07 에 잰 값이고, 이 파일이 지키는 계약은 아니다.</b>
+ * 아래 중첩 {@code @TestConfiguration} 이 이 클래스의 설정 집합에 들어가
+ * {@code MergedContextConfiguration} 이 형제들과 달라진다(그 중첩 클래스는
+ * {@code @Import} 없이도 잡힌다 — {@code @Import} 에 적은 것은 형제
+ * {@code BatchMetadataPersistenceTest} 와 모양을 맞춘 것이고 중복이다). 셋을 함께 돌렸을
+ * 때 기동이 <b>두 번</b>이었다 — {@code BatchStuckApiTest} 하나 + 이 클래스 하나,
+ * {@code JobCalibrationContractTest} 는 앞의 것을 재사용.
+ *
+ * <p><b>그 수를 재는 코드는 없다.</b> 형제의 {@code properties} 가 한 글자만 달라져도
+ * 조용히 늘고 이 시험들은 그대로 통과한다. 그래서 <b>보장이 아니라 관측</b>으로 적는다 —
+ * 비용이 궁금해지는 날 {@code -i} 로 {@code "Started ... in"} 을 세면 된다.
  *
  * <h2>⚠️ 이 시험이 통과해도 "잡 빈만 더하면 된다" 는 아니다</h2>
  *
