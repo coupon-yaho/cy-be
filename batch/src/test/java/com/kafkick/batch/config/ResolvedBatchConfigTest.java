@@ -161,8 +161,9 @@ class ResolvedBatchConfigTest {
             "batch.schedule.verify-cron",
             "batch.verify.metrics-refresh-ms",
             "batch.timezone-guard.required",
-            // 시체 자동 스윕(CY-946). 끄는 스위치는 새로 안 생겼다 —
-            // batch.scheduling.enabled 를 형제 넷과 같이 쓴다.
+            // 시체 자동 스윕(CY-946). enabled 는 **조치만 세우는** 손잡이다 —
+            // batch.scheduling.enabled 는 1분 크론인 회차 전이까지 함께 물어 운영 중엔
+            // 못 쓴다. 그 축은 StuckRunSweeper 의 javadoc 이 진다.
             "batch.stuck-sweep.enabled",
             "batch.stuck-sweep.max-per-sweep",
             "batch.stuck-sweep.interval-ms",

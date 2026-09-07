@@ -20,9 +20,10 @@ import com.kafkick.batch.config.RunningJobProbe.StuckRun;
 /**
  * <b>탐지는 세 겹이었는데 조치가 없었다.</b> {@link RunningJobProbe#stuckExecutions} 가
  * 판정하고, {@code GET /runs/stuck} 이 보여 주고, {@code BatchStuckExecution} 이 10분 뒤
- * 울린다 — 그리고 <b>거기서 끝이었다.</b> 회수 경로 넷({@code ExpireRecoveryService} ·
+ * 울린다 — 그리고 <b>거기서 끝이었다.</b> 회수 경로 다섯({@code ExpireRecoveryService} ·
  * {@code CleanupRecoveryService} · {@code VerifyStopService} ·
- * {@code BatchRunAbandonService})의 호출자를 전수로 세면 전부 컨트롤러다.
+ * {@code VerifyAbandonService} · {@code BatchRunAbandonService})의 호출자를 전수로 세면
+ * 전부 컨트롤러다.
  *
  * <p>배치 JVM 이 하드킬로 죽은 새벽에는 아무도 안 누른다. 사전예약 PRD FR-C-01 의 수용
  * 기준이 <i>"처리가 정체된 건이 <b>자동으로</b> 해소됩니다"</i> 인 것이 이 자리다.

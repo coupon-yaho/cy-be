@@ -161,8 +161,13 @@ public class StuckRunSweepService {
                     + closed.getStatus() + " executionId=" + executionId);
         }
         countAfterCommit();
-        log.warn("진도가 멈춘 실행을 자동으로 걷어냈습니다. {} 로 닫았으므로 재시작할 수 "
-                        + "있습니다. jobName={} executionId={}",
+        // **"재시작하면 된다" 를 여기서 말하지 않는다.** 이 줄은 잡을 안 가리는데
+        // verifyJob 은 preventRestart 라 그 말이 거짓이다(위 javadoc). 그리고 이 로그가
+        // 곧 BatchStuckAutoRecovered 가 운영자에게 보라고 시키는 줄이라, 처방은 잡을
+        // 가르는 그 알림 description 한 곳에만 둔다.
+        log.warn("진도가 멈춘 실행을 자동으로 걷어냈습니다. {} 로 닫았습니다. "
+                        + "다시 돌리는 방법은 잡마다 다릅니다 — BatchStuckAutoRecovered 를 "
+                        + "보십시오. jobName={} executionId={}",
                 BatchStatus.FAILED, closed.getJobInstance().getJobName(), executionId);
         return true;
     }

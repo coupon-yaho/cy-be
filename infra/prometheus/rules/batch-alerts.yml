@@ -937,18 +937,29 @@ groups:
       # 여기서 빼면 BatchMetricExposureTest 의 노출 대조가 조용히 사라진다 — 그 검사는
       # 규칙 파일에서 이름을 정규식으로 뽑기 때문에, 산문에만 남으면 문장을 다듬는 날
       # 함께 없어진다.
+      #
+      # ⚠️ **게이지 0 의 원인이 둘이라 한쪽을 뺀다.** 그 값은
+      # `batch.scheduling.enabled && batch.stuck-sweep.enabled` 인데, **배포 기본값이
+      # BATCH_SCHEDULING_ENABLED=false** 다(batch.yml, 그리고 batch-verify.yml 은 아예 박아
+      # 뒀다). 안 빼면 아무도 안 건드린 형상에서 두 시간 만에 뜨면서 **운영자가 손댄 적
+      # 없는 변수를 지목한다** — 그 갈래는 BatchSchedulingDisabled 가 25시간에 지고,
+      # 이쪽이 23시간 먼저 잘못된 말을 하게 된다.
       - alert: BatchStuckSweepDisabled
         expr: cy_batch_stuck_sweep_enabled == 0
+              unless on(instance, job) cy_coupon_round_scheduling_enabled == 0
         for: 2h
         labels:
           severity: warning
           channel: server
         annotations:
-          summary: "시체 자동 회수가 꺼져 있습니다 — 두 시간째입니다"
+          summary: "시체 자동 회수만 꺼져 있습니다 — 두 시간째입니다"
           description: >-
-            BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로 돌지만
-            **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이
+            스케줄러는 도는데 BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로
+            돌지만 **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이
             10분 뒤부터 함께 웁니다.
+            배치 스케줄링 자체가 꺼진 경우는 여기 안 나옵니다. 그쪽은
+            BatchSchedulingDisabled 가 25시간에 집니다 — 게이지 하나가 두 원인을
+            합치므로 이 규칙이 그 갈래를 빼고 봅니다.
             끈 것이 의도라면 이 알림에 silence 를 겁니다. 되돌리려면 그 환경변수를
             지우거나 true 로 주고 배치를 다시 띄웁니다.
             ⚠️ **batch.stuck-job-after-ms 를 올려서 끄지 마십시오** — 그 임계 하나가

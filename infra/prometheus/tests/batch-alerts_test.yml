@@ -1803,11 +1803,16 @@ tests:
         exp_alerts: []
 
   # ── 조치를 꺼 두고 잊는다 ───────────────────────────────────────────────
+  #
+  # 세 시리즈가 다 필요하다. 게이지 0 의 원인이 둘이라 unless 로 한쪽을 빼는데,
+  # 그 unless 를 지우는 변경을 아래 셋째 케이스가 잡는다.
   - interval: 1m
-    name: "스윕을 두 시간 꺼 두면 BatchStuckSweepDisabled 가 뜬다"
+    name: "스케줄러는 도는데 스윕만 두 시간 꺼 두면 BatchStuckSweepDisabled 가 뜬다"
     input_series:
-      - series: 'cy_batch_stuck_sweep_enabled'
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
         values: '0x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
     alert_rule_test:
       - eval_time: 130m
         alertname: BatchStuckSweepDisabled
@@ -1815,19 +1820,38 @@ tests:
           - exp_labels:
               severity: warning
               channel: server
+              instance: "batch:9090"
+              job: "cy-batch"
             exp_annotations:
-              summary: "시체 자동 회수가 꺼져 있습니다 — 두 시간째입니다"
+              summary: "시체 자동 회수만 꺼져 있습니다 — 두 시간째입니다"
               description: >-
-                BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로 돌지만 **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이 10분 뒤부터 함께 웁니다. 끈 것이 의도라면 이 알림에 silence 를 겁니다. 되돌리려면 그 환경변수를 지우거나 true 로 주고 배치를 다시 띄웁니다. ⚠️ **batch.stuck-job-after-ms 를 올려서 끄지 마십시오** — 그 임계 하나가 지표와 GET /runs/stuck 목록과 사람이 부르는 recover 의 관문까지 전부 구동합니다. 올리면 조치만 꺼지는 것이 아니라 탐지와 수동 처방이 함께 꺼집니다.
+                스케줄러는 도는데 BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로 돌지만 **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이 10분 뒤부터 함께 웁니다. 배치 스케줄링 자체가 꺼진 경우는 여기 안 나옵니다. 그쪽은 BatchSchedulingDisabled 가 25시간에 집니다 — 게이지 하나가 두 원인을 합치므로 이 규칙이 그 갈래를 빼고 봅니다. 끈 것이 의도라면 이 알림에 silence 를 겁니다. 되돌리려면 그 환경변수를 지우거나 true 로 주고 배치를 다시 띄웁니다. ⚠️ **batch.stuck-job-after-ms 를 올려서 끄지 마십시오** — 그 임계 하나가 지표와 GET /runs/stuck 목록과 사람이 부르는 recover 의 관문까지 전부 구동합니다. 올리면 조치만 꺼지는 것이 아니라 탐지와 수동 처방이 함께 꺼집니다.
 
   # 잠깐 껐다 켜는 것은 정상 조치다. for 를 지우는 변경을 여기서 잡는다.
   - interval: 1m
     name: "한 시간만 껐으면 아직 안 뜬다"
     input_series:
-      - series: 'cy_batch_stuck_sweep_enabled'
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
         values: '0x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
     alert_rule_test:
       - eval_time: 60m
+        alertname: BatchStuckSweepDisabled
+        exp_alerts: []
+
+  # **배포 기본 형상이다.** BATCH_SCHEDULING_ENABLED 가 false 라 스윕 게이지도 0 인데,
+  # 그것은 아무도 스윕 스위치를 건드린 적이 없다는 뜻이다. 여기서 뜨면 이 알림이
+  # 손댄 적 없는 변수를 지목한다 — unless 를 지우는 변경을 이 케이스가 잡는다.
+  - interval: 1m
+    name: "스케줄링 자체가 꺼진 형상에서는 안 뜬다 — 그쪽은 BatchSchedulingDisabled 다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '0x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '0x150'
+    alert_rule_test:
+      - eval_time: 130m
         alertname: BatchStuckSweepDisabled
         exp_alerts: []
 
@@ -1835,7 +1859,9 @@ tests:
   - interval: 1m
     name: "스윕이 켜져 있으면 안 뜬다"
     input_series:
-      - series: 'cy_batch_stuck_sweep_enabled'
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
         values: '1x150'
     alert_rule_test:
       - eval_time: 130m

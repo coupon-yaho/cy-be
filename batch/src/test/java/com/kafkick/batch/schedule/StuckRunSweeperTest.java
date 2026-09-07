@@ -29,6 +29,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -41,7 +42,7 @@ import com.kafkick.batch.job.CleanupJobConfig;
 import com.kafkick.storage.db.MySqlContainerConfig;
 
 /**
- * <b>탐지는 세 겹이었는데 조치가 없었다.</b> 회수 경로 넷의 호출자를 전수로 세면 전부
+ * <b>탐지는 세 겹이었는데 조치가 없었다.</b> 회수 경로 다섯의 호출자를 전수로 세면 전부
  * 컨트롤러다 — 새벽에 배치가 하드킬로 죽으면 알림만 울고 아무 일도 안 일어난다.
  * 사전예약 PRD FR-C-01 의 수용 기준이 <i>"자동으로 해소됩니다"</i> 인 자리다.
  *
@@ -368,8 +369,9 @@ class StuckRunSweeperTest {
      * 초록으로 살아남고, 그러면 {@code BatchStuckAutoRecovered} 가 영원히 안 운다.
      * {@code BatchMetricExposureTest} 는 이름의 <b>존재</b>만 보지 값은 안 본다.
      *
-     * <p><b>커밋 뒤에 오르는 것까지 본다.</b> 그 자리에서 올리면 커밋이 실패한 건에도
-     * 알림이 울어, <i>"안 고친 것을 고쳤다"</i> 고 말한다.
+     * <p>커밋 뒤에 오르는 축은 {@link #theCounterDoesNotMoveWhenTheWriteIsRolledBack()} 가
+     * 따로 진다 — 이 테스트만으로는 {@code countAfterCommit()} 을 그 자리 증가로 바꾸는
+     * 돌연변이가 살아남는다(성공 경로에서는 두 구현이 같은 값을 낸다).
      */
     @Test
     @DisplayName("걷은 만큼 지표가 오른다")
@@ -384,6 +386,45 @@ class StuckRunSweeperTest {
                     .as("걷었는데 안 오르면 알림이 영원히 안 운다")
                     .isEqualTo(before + 1);
             assertThat(statusOf(corpse.executionId())).isEqualTo(BatchStatus.FAILED);
+        }
+    }
+
+    /**
+     * <b>롤백된 회수가 지표를 올리면 안 된다.</b> {@code recover} 는 {@code REQUIRED} 라
+     * 바깥 트랜잭션이 있으면 그것에 합류한다 — 바깥이 뒤집히면 <b>배치 메타에 아무것도
+     * 안 남는데</b> 그 자리에서 센 카운터는 이미 올라가 있다. 그러면
+     * {@code BatchStuckAutoRecovered} 가 <i>"걷었다"</i> 고 말하는데 그 행은 그대로
+     * {@code STARTED} 다 — 이 클래스의 논거(<i>"자동 조치가 조용하면 사고를 덮는다"</i>)의
+     * <b>반대 방향</b>이고, 안 고친 것을 고쳤다고 말하는 쪽이 더 나쁘다.
+     *
+     * <p>성공 경로만으로는 두 구현이 같은 값을 내므로 이 갈래가 유일한 판별점이다.
+     */
+    @Test
+    @DisplayName("회수가 롤백되면 지표가 안 오른다")
+    void theCounterDoesNotMoveWhenTheWriteIsRolledBack() {
+        double before = counter("cy_batch_stuck_recovered_total");
+        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
+                ExpireStepContext.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+            StuckRun planted = runningJobs.stuckExecutions(ExpireStepContext.JOB_NAME).stream()
+                    .filter(run -> run.execution().getId() == corpse.executionId())
+                    .findFirst()
+                    .orElseThrow();
+
+            // 바깥 트랜잭션을 열고 회수까지 시킨 뒤 뒤집는다. recover 는 REQUIRED 라
+            // 여기 합류하므로 그 쓰기도 함께 사라진다.
+            assertThatThrownBy(() -> new TransactionTemplate(transactionManager).execute(
+                    status -> {
+                        sweepService.recover(corpse.executionId(), planted.stuckBefore());
+                        throw new IllegalStateException("바깥이 뒤집힌다");
+                    }))
+                    .isInstanceOf(IllegalStateException.class);
+
+            assertThat(statusOf(corpse.executionId()))
+                    .as("전제가 무너지면 아래 단언이 아무것도 안 잰다 — 롤백이 안 됐다는 뜻이다")
+                    .isEqualTo(BatchStatus.STARTED);
+            assertThat(counter("cy_batch_stuck_recovered_total"))
+                    .as("안 걷혔는데 오르면 알림이 '고쳤다' 고 거짓말한다")
+                    .isEqualTo(before);
         }
     }
 
