@@ -47,23 +47,63 @@ import subprocess
 import sys
 import tempfile
 
-# **들여쓴 펜스도 잡는다.** `^```` 로 0열만 보면 리스트 항목 안의 블록이 통째로 빠진다 —
-# 실측에서 docs/14 의 다섯이 그랬고, 그중 하나가 이 검사가 막겠다고 한 그 블록이었다.
-# 백틱은 **셋 이상**(`{3,}`)이라 표준 세 개와 네 개 이상을 다 받고, 언어 태그도
-# shell·zsh·console 까지 받는다. `[^\S\n]` 는 개행 아닌 공백이다.
-FENCE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<ticks>`{3,})(?:bash|sh|shell|zsh|console)"
-    r"[^\n]*\n(?P<body>.*?)^(?P=indent)(?P=ticks)[^\S\n]*$",
-    re.S | re.M)
+# **펜스는 정규식 하나가 아니라 스캐너로 찾는다.** CommonMark 의 규칙이 정규식에 안 맞는다 —
+# 여는 펜스는 백틱이든 물결표든 셋 이상이고, 닫는 펜스는 **같은 문자로 그만큼 이상**이면
+# 되며 들여쓰기가 여는 쪽과 같을 필요도 없다. 그것을 한 패턴에 욱여넣었더니 두 가지가 났다:
+# `~~~bash` 블록이 **양쪽 계산에서 모두 빠져** 하한 가드도 못 잡았고, 닫는 펜스가 더 긴
+# 정상 마크다운이 "못 본 펜스" 로 신고돼 **정상 문서가 CI 를 빨갛게** 만들 뻔했다.
+#
+# 스캐너가 여는 펜스와 닫는 펜스를 함께 보므로, 못 본 형태는 "안 닫힌 블록" 으로 드러난다.
+OPENING = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<marks>`{3,}|~{3,})"
+    r"(?P<info>[^\n]*)$")
 
-# 여는 펜스만 센다. FENCE 가 잡은 수와 어긋나면 **못 본 블록이 있다는 뜻**이다.
-OPENING = re.compile(r"^[ \t]*`{3,}(?:bash|sh|shell|zsh|console)\b", re.M)
+# 붙여 넣어 돌리는 블록의 언어 태그. info string 은 첫 낱말만 언어다(``` bash title=... ).
+SHELL = re.compile(r"^(?:bash|sh|shell|zsh|console)\b")
 
 # 값 자리를 꺾쇠로 싼 것. 리다이렉트·프로세스 치환·히어독은 앞에서 걸러 낸다.
 PLACEHOLDER = re.compile(r"<[^>\s][^>]{0,40}>")
 
 # 자리표시자로 오해하면 안 되는 셸 문법. `<<EOF` · `<(cmd)` · `<&3` · `<<<"$x"`.
 REAL_SHELL = re.compile(r"<<|<\(|<&")
+
+
+def fences(body: str) -> tuple[list[tuple[int, str]], list[int]]:
+    """셸 블록들과, 여는 펜스는 있는데 못 닫힌 줄들.
+
+    CommonMark 대로 본다 — 닫는 펜스는 <b>같은 문자로 여는 것만큼 이상</b>이면 되고,
+    들여쓰기가 같을 필요는 없다. 그 둘을 강제하면 <b>정상 문서가 빨개진다.</b>
+    """
+    lines = body.splitlines()
+    blocks: list[tuple[int, str]] = []
+    unterminated: list[int] = []
+    index = 0
+    while index < len(lines):
+        opened = OPENING.match(lines[index])
+        if not opened:
+            index += 1
+            continue
+
+        marks = opened.group("marks")
+        closing = re.compile(r"^[ \t]*" + re.escape(marks[0])
+                             + "{" + str(len(marks)) + r",}[^\S\n]*$")
+        shell = bool(SHELL.match(opened.group("info").strip()))
+
+        end = index + 1
+        while end < len(lines) and not closing.match(lines[end]):
+            end += 1
+        if end >= len(lines):
+            # **셸 블록일 때만 신고한다.** 이 저장소의 docs/PRD-v4.15.md 는 표 안에서
+            # 백틱 여덟~열넷을 **장식 줄**로 쓴다 — 코드 펜스가 아닌데 규칙상 펜스로
+            # 읽히고, 서로 열고 닫다가 마지막 하나가 안 닫힌 채로 남는다. 그것을
+            # 신고하면 **정상 문서가 빨개진다**. 이 검사가 지키는 것은 셸 블록이다.
+            if shell:
+                unterminated.append(index + 1)
+            break
+        if shell:
+            blocks.append((index + 2, "\n".join(lines[index + 1:end])))
+        index = end + 1
+    return blocks, unterminated
 
 
 def redact(line: str) -> str:
@@ -104,26 +144,21 @@ def main() -> int:
             body = doc.read_text(encoding="utf-8")
             rel = doc.relative_to(root)
 
-            found = list(FENCE.finditer(body))
-            # **하한 가드.** 0건만 막으면 정규식이 조용히 좁아져도 초록이다 — 이 저장소가
-            # CY-913 에서 겪은 그대로다(그 교훈이 build.yml 에 적혀 있다). 여는 펜스 수와
-            # 맞대면 새 펜스 형태가 들어와도 "조용히 빠짐" 이 아니라 "빨감" 이 된다.
-            opening = len(OPENING.findall(body))
-            if opening != len(found):
-                missed.append((rel, opening, len(found)))
+            found, unterminated = fences(body)
+            for line in unterminated:
+                missed.append((rel, line))
 
-            for match in found:
+            for line, block in found:
                 checked += 1
-                line = body[:match.start("body")].count("\n") + 1
-                result = parseable(match.group("body"), work)
+                result = parseable(block, work)
                 if result.returncode:
                     broken.append((rel, line, clean(result.stderr, work, line)))
 
     for rel, line, detail in broken:
         print(f"::error file={rel},line={line}::셸 블록의 문법이 깨졌다 — {detail}")
-    for rel, opening, seen in missed:
-        print(f"::error file={rel}::셸 펜스가 {opening}개인데 {seen}개만 잡혔다 — "
-              f"이 검사가 못 보는 펜스 형태가 들어왔다")
+    for rel, line in missed:
+        print(f"::error file={rel},line={line}::셸 블록이 안 닫혔다 — 닫는 펜스를 못 찾았다. "
+              f"이 검사가 못 보는 펜스 형태이거나 문서가 실제로 깨졌다")
 
     if not checked:
         print("::error::검사할 셸 블록을 하나도 못 찾았다")
