@@ -155,7 +155,17 @@ tasks.named('test') {
             //    **틀렸다.** 여덟 자리는 관문이 생기기 **전에** 쓰였다 — 헤더 없는 절차가
             //    관문 뒤에 복사돼 들어온 적은 없다.
             rootProject.fileTree('docs') { include '*.md' },
-            rootProject.fileTree('scripts') { include '*.sh' })
+            rootProject.fileTree('scripts') { include '*.sh' },
+            // DbPasswordHandlingTest 는 infra 아래 .sh 를 **재귀로** 훑는다 —
+            // MYSQL_PWD 대입 열셋 중 **다섯이 그 아래**다(app-grants·obs-grants·initdb).
+            // 아래에 20-obs-account.sh 와 obs-grants 디렉터리가 따로 걸려 있지만 그 둘로는
+            // app-grants/apply.sh 가 안 덮인다 — 그 파일만 바뀐 라운드에서 :batch:test 가
+            // UP-TO-DATE 로 건너뛴다.
+            //
+            // build 는 뺀다. scannedJavaSources 와 같은 이유이고 더 급하다 —
+            // infra 아래 파일 600개 중 442개가 build/ 라, 거기 .sh 가 하나 떨어지면
+            // **다른 태스크의 출력이 이 태스크의 입력**이 된다.
+            rootProject.fileTree('infra') { include '**/*.sh'; exclude '**/build/**' })
             .withPathSensitivity(PathSensitivity.RELATIVE)
             .withPropertyName('externalContractFiles')
 
