@@ -913,10 +913,16 @@ CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기�
 > `LAST_UPDATED` 하트비트 휴리스틱이지 증명이 아니다 — `batch.stuck-job-after-ms` 를
 > 내리는 변경은 이 API 의 안전을 직접 깎는다.
 
+> **⚠️ 세 호출 다 관문을 지난다.** 이 절차가 마지막에 얹으라고 하는 `batch-expose.yml` 이
+> `BATCH_ADMIN_AUTH_REQUIRED` 를 **`true` 로 올린다**(앱 기본도 `true`, 포트를 안 여는
+> `batch.yml` 만 `false`다). 그러니 오버레이를 얹은 뒤에는 헤더 없이 부르면 **401 이고
+> 조회부터 못 넘어간다.** 아래는 그 헤더를 실은 형태다 — 값은 `BATCH_ADMIN_TOKEN` 과 같다.
+
 ```bash
 # ① 어느 잡에 남아 있나. 배포된 잡을 한 번에 본다(CY-938). 잡 이름을 몰라도 되고,
 #    잡이 늘어도 따라온다 — 이름은 Job 빈에서 받는다.
-curl -s localhost:9091/api/v1/admin/batch/runs/stuck | jq .data
+curl -s -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     localhost:9091/api/v1/admin/batch/runs/stuck | jq .data
 #   [{ "jobName": "cleanupJob", "runs": [] },
 #    { "jobName": "expireJob",  "runs": [{ "executionId": 41, ... }] },
 #    { "jobName": "verifyJob",  "runs": [] }]
@@ -925,12 +931,14 @@ curl -s localhost:9091/api/v1/admin/batch/runs/stuck | jq .data
 #      잡별 recover 다(ABANDONED 는 그 asOf 를 영구히 막는다).
 
 # ② 그 잡의 목록을 다시 본다. 도는 실행은 여기 안 나온다.
-curl -s localhost:9091/api/v1/admin/expire/runs/stuck | jq .data
+curl -s -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     localhost:9091/api/v1/admin/expire/runs/stuck | jq .data
 #   [{ "executionId": 41, "status": "STARTED", "createTime": "...", "startTime": "...",
 #      "lastProgress": "...", "stalledSeconds": 7412 }]
 
 # ③ 한 번이면 된다. 재시도해도 안전하다(FAILED + END_TIME 으로 판정한다).
-curl -s -XPOST localhost:9091/api/v1/admin/expire/runs/41/recover | jq '.data, .error'
+curl -s -XPOST -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     localhost:9091/api/v1/admin/expire/runs/41/recover | jq '.data, .error'
 #   409 / EXPIRATION-007 이면 걷어낼 대상이 아니다 — ② 를 다시 본다.
 #   404 / EXPIRATION-006 이면 만료 실행이 아니거나 없는 번호다.
 ```
