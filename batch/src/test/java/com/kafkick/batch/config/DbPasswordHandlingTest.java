@@ -110,6 +110,9 @@ class DbPasswordHandlingTest {
      */
     private static final int KNOWN_ASSIGNMENTS = 13;
 
+    /** 산문의 자리표시자. {@code <값>}·{@code <password>} 처럼 꺾쇠로 싼 것. */
+    private static final Pattern PLACEHOLDER = Pattern.compile("^<[^>]+>$");
+
     private record Assignment(Path file, int line, String value) {
     }
 
@@ -256,9 +259,6 @@ class DbPasswordHandlingTest {
     private static String slashed(Path path) {
         return path.toString().replace('\\', '/');
     }
-
-    /** 산문의 자리표시자. {@code <값>}·{@code <password>} 처럼 꺾쇠로 싼 것. */
-    private static final Pattern PLACEHOLDER = Pattern.compile("^<[^>]+>$");
 
     /**
      * <b>셸이 실제로 도는 자리만 본다</b> — 문서 블록과 {@code .sh}.
