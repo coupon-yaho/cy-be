@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * <b>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 우리 코드가 안 읽는다.</b>
  * 그래서 키 경로가 죽거나 운영이 {@code BATCH_SCHEDULER_POOL_SIZE=1} 을 주면 <b>아무 데서도
- * 안 드러난다</b> — 기동은 성공하고, 등록된 작업 열하나가 스레드 하나를 다툰다.
+ * 안 드러난다</b> — 기동은 성공하고, 등록된 작업 열둘이 스레드 하나를 다툰다.
  *
  * <p><b>그 상태가 왜 나쁜가.</b> 검증이 한 번에 8분(실측 472초)을 잡고 있는데, 그동안 되읽기
  * 넷이 못 돌면 게이지가 그만큼 낡는다. 그리고 그 게이지가 SLA 알림의 근거다 —

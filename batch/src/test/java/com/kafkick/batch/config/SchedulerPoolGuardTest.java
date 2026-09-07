@@ -143,7 +143,7 @@ class SchedulerPoolGuardTest {
 
     /**
      * <b>스케줄러를 켠 컨텍스트가 진짜 판이다.</b> 위 클래스는
-     * {@code batch.scheduling.enabled=false} 라 그 스위치를 단 넷이 안 등록된다 —
+     * {@code batch.scheduling.enabled=false} 라 그 스위치를 단 다섯이 안 등록된다 —
      * 그 상태만 재면 <b>운영에서 실제로 등록되는 수</b>를 한 번도 안 본다.
      *
      * <p>속성 집합은 {@code CleanupSchedulerTest.WhenEnabled} 와 글자 그대로 같다(컨텍스트 재사용).
@@ -152,6 +152,11 @@ class SchedulerPoolGuardTest {
     @SpringBootTest(properties = {
             "spring.batch.job.enabled=false",
             "batch.scheduling.enabled=true",
+            // ⚠️ **스윕을 끈다.** 이 컨텍스트는 JVM 끝까지 캐시되는데, 스윕은
+            //    fixedDelay 라 초기 지연 없이 뜨자마자 한 번 돌고 그 뒤 60초마다
+            //    돈다 — 공유 컨테이너에서 **다른 테스트가 심은 시체를 걷어** 그쪽을
+            //    이유 없이 빨갛게 만든다(CY-946). 여기서 재는 것은 스윕이 아니다.
+            "batch.stuck-sweep.enabled=false",
             "batch.schedule.expire-cron=0 0 0 1 1 *",
             "batch.schedule.cleanup-cron=0 0 0 1 1 *",
             "batch.metrics.cleanup-sla-seconds=999999999",
@@ -167,7 +172,7 @@ class SchedulerPoolGuardTest {
         private ApplicationContext context;
 
         @Test
-        @DisplayName("스케줄러 넷이 더 붙어도 풀이 받친다")
+        @DisplayName("스케줄러 다섯이 더 붙어도 풀이 받친다")
         void poolStillCoversEveryTask() {
             int registered = context.getBean(ScheduledAnnotationBeanPostProcessor.class)
                     .getScheduledTasks().size();
@@ -205,6 +210,11 @@ class SchedulerPoolGuardTest {
     @SpringBootTest(properties = {
             "spring.batch.job.enabled=false",
             "batch.scheduling.enabled=true",
+            // ⚠️ **스윕을 끈다.** 이 컨텍스트는 JVM 끝까지 캐시되는데, 스윕은
+            //    fixedDelay 라 초기 지연 없이 뜨자마자 한 번 돌고 그 뒤 60초마다
+            //    돈다 — 공유 컨테이너에서 **다른 테스트가 심은 시체를 걷어** 그쪽을
+            //    이유 없이 빨갛게 만든다(CY-946). 여기서 재는 것은 스윕이 아니다.
+            "batch.stuck-sweep.enabled=false",
             "batch.schedule.expire-cron=0 0 0 1 1 *",
             "batch.schedule.cleanup-cron=0 0 0 1 1 *",
             "batch.schedule.verify-cron=0 0 0 1 1 *",

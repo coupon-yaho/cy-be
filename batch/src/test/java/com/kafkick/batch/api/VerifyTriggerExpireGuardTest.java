@@ -58,6 +58,11 @@ import com.kafkick.storage.db.VerificationSeed;
         "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=true",
+        // ⚠️ **스윕을 끈다.** 이 컨텍스트는 JVM 끝까지 캐시되는데, 스윕은
+        //    fixedDelay 라 초기 지연 없이 뜨자마자 한 번 돌고 그 뒤 60초마다
+        //    돈다 — 공유 컨테이너에서 **다른 테스트가 심은 시체를 걷어** 그쪽을
+        //    이유 없이 빨갛게 만든다(CY-946). 여기서 재는 것은 스윕이 아니다.
+        "batch.stuck-sweep.enabled=false",
         "batch.schedule.expire-cron=0 0 0 1 1 *",
         // 이 클래스는 플래그가 켜져도 접수되는 것을 잰다 — 그래서 플래그를 켜 둬야 한다.
         // 발화는 크론을 1월 1일로 밀어 막는다. **그 시각에 도는 CI 는 이 잡을 한 번
@@ -216,6 +221,11 @@ class VerifyTriggerExpireGuardTest {
             // **스케줄러를 켜야 한다.** 꺼져 있으면 만료가 아예 안 떠서 이 가드가 통째로
             // 비활성이다 — 그 상태로 재면 항상 202 라 아무것도 안 지킨다.
             "batch.scheduling.enabled=true",
+            // ⚠️ **스윕을 끈다.** 이 컨텍스트는 JVM 끝까지 캐시되는데, 스윕은
+            //    fixedDelay 라 초기 지연 없이 뜨자마자 한 번 돌고 그 뒤 60초마다
+            //    돈다 — 공유 컨테이너에서 **다른 테스트가 심은 시체를 걷어** 그쪽을
+            //    이유 없이 빨갛게 만든다(CY-946). 여기서 재는 것은 스윕이 아니다.
+            "batch.stuck-sweep.enabled=false",
             // ⚠️ **진짜로 뜨는 크론을 쓰면 안 된다.** 1분 크론을 줬다가 CodeRabbit 이 잡았다 —
             //    분 경계에 만료가 실제로 발화하면 접수가 VERIFICATION-017 이 아니라
             //    **먼저 오는 검사**인 VERIFICATION-012(이미 도는 만료)에 걸려 간헐 실패한다.

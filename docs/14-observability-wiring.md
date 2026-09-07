@@ -149,7 +149,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
 | `ExpireGaugeMissing` · `BatchTargetDown` · `BatchJobRunningTooLong` | `server` |
 | `BatchStuckExecution` · `BatchRunMetricsUnknown` · `BatchRunMetricsStale` | `server` |
-| `BatchStuckAutoRecovered` · `BatchStuckSweepFailing` | `server` |
+| `BatchStuckAutoRecovered` · `BatchStuckSweepFailing` · `BatchStuckSweepDisabled` | `server` |
 | `ExpireMetricsStale` · `ExpireMetricsBackdated` | `server` |
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |

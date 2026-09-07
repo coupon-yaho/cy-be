@@ -927,6 +927,34 @@ groups:
             **이 알림이 도는 동안 BatchStuckExecution 은 뒤늦게 따라옵니다** —
             시체가 안 걷히면 10분 뒤 그쪽도 웁니다.
 
+      # 조치를 사람이 꺼 뒀다. **끈 것을 알림이 모르는 상태를 안 만든다.**
+      #
+      # 끄는 것 자체는 정당한 조치다(스윕이 살아 있는 실행을 걷는 것 같을 때). 그래서
+      # 즉시 울리지 않고 두 시간을 준다 — 그 뒤에도 꺼져 있으면 되돌리는 것을 잊은 것이고,
+      # 그동안 시체는 다시 사람이 걷어야 한다.
+      #
+      # ⚠️ **이 규칙이 cy_batch_stuck_sweep_enabled 를 expr 에서 쓰는 유일한 자리다.**
+      # 여기서 빼면 BatchMetricExposureTest 의 노출 대조가 조용히 사라진다 — 그 검사는
+      # 규칙 파일에서 이름을 정규식으로 뽑기 때문에, 산문에만 남으면 문장을 다듬는 날
+      # 함께 없어진다.
+      - alert: BatchStuckSweepDisabled
+        expr: cy_batch_stuck_sweep_enabled == 0
+        for: 2h
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "시체 자동 회수가 꺼져 있습니다 — 두 시간째입니다"
+          description: >-
+            BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로 돌지만
+            **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이
+            10분 뒤부터 함께 웁니다.
+            끈 것이 의도라면 이 알림에 silence 를 겁니다. 되돌리려면 그 환경변수를
+            지우거나 true 로 주고 배치를 다시 띄웁니다.
+            ⚠️ **batch.stuck-job-after-ms 를 올려서 끄지 마십시오** — 그 임계 하나가
+            지표와 GET /runs/stuck 목록과 사람이 부르는 recover 의 관문까지 전부
+            구동합니다. 올리면 조치만 꺼지는 것이 아니라 탐지와 수동 처방이 함께 꺼집니다.
+
       # 한 실행이 지나치게 오래 끄는 상태.
       #
       # **임계를 주기에서 떼어 냈다.** 5분 크론일 때는 "주기보다 오래" 가 곧 "슬롯이 사라진다"

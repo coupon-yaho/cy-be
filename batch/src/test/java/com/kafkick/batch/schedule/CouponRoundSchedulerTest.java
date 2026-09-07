@@ -40,6 +40,11 @@ import io.micrometer.core.instrument.MeterRegistry;
         "spring.batch.job.enabled=false",
         // 이 빈을 재려면 켜야 한다 — @ConditionalOnProperty 가 걸려 있다.
         "batch.scheduling.enabled=true",
+        // ⚠️ **스윕을 끈다.** 이 컨텍스트는 JVM 끝까지 캐시되는데, 스윕은
+        //    fixedDelay 라 초기 지연 없이 뜨자마자 한 번 돌고 그 뒤 60초마다
+        //    돈다 — 공유 컨테이너에서 **다른 테스트가 심은 시체를 걷어** 그쪽을
+        //    이유 없이 빨갛게 만든다(CY-946). 여기서 재는 것은 스윕이 아니다.
+        "batch.stuck-sweep.enabled=false",
         // 크론을 연 1회로 밀어 테스트 중에 실제로 돌지 않게 한다. **그 시각에 도는 CI 는
         // 한 번 발화한다** — 연 1회 1초짜리 창이고, 스케줄러를 끄면 이 클래스가 재려는
         // 축이 사라지므로 그 창을 남긴다. ExpireSchedulerTest 가 같은 판단을 했다.
