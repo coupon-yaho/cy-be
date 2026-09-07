@@ -220,6 +220,11 @@ class AdminApiCallerTokenTest {
         return String.join("\n", lines.subList(from, pathLine + 1));
     }
 
+    /** 경로 구분자를 편다. 형제들과 같은 관용이다. */
+    private static String slashed(Path path) {
+        return path.toString().replace('\\', '/');
+    }
+
     private static List<Path> scanned() throws IOException {
         try (Stream<Path> docs = Files.list(REPO_ROOT.resolve("docs"));
                 Stream<Path> scripts = Files.list(REPO_ROOT.resolve("scripts"));
@@ -233,8 +238,13 @@ class AdminApiCallerTokenTest {
                                     // src 아래, build 밖. 스캔이 그보다 넓으면 그 파일은
                                     // **잡히기는 하는데 캐시 키에는 없는** 상태가 되어,
                                     // 그것만 바꾼 라운드에서 UP-TO-DATE 로 안 돈다.
-                                    .filter(path -> path.toString().contains("/src/"))
-                                    .filter(path -> !path.toString().contains("/build/"))
+                                    //
+                                    // 구분자를 먼저 편다 — 형제 넷이 같은 자리에서 같은
+                                    // 모양을 쓴다(NoOrphanJavadocTest 등). 안 펴면 역슬래시
+                                    // 플랫폼에서 두 filter 가 **둘 다 빗나가** 자바가 통째로
+                                    // 안 잡히고, 그러면 위반 0 건이 "없다" 로 읽힌다.
+                                    .filter(path -> slashed(path).contains("/src/"))
+                                    .filter(path -> !slashed(path).contains("/build/"))
                                     // **자기 자신은 뺀다.** 아래 Detection 의 표본이
                                     // 일부러 헤더 없는 호출이라, 안 빼면 이 시험이
                                     // 자기 표본을 위반으로 신고하고 영영 빨갛다.
