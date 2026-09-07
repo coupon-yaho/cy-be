@@ -53,6 +53,7 @@ class VerifyReportApiTest {
             "/api/v1/admin/verify/reports/latest?dataset=CLEAN&scope=FULL";
     private static final String CORRUPT_FULL =
             "/api/v1/admin/verify/reports/latest?dataset=CORRUPT&scope=FULL";
+    private static final String DIFF = "/api/v1/admin/verify/reports/diff";
 
     @LocalServerPort
     private int port;
@@ -337,5 +338,278 @@ class VerifyReportApiTest {
                 .param("targetKey", targetKey)
                 .param("at", AS_OF)
                 .update();
+    }
+
+    // ── 두 실행 맞대기 (CY-944) ──────────────────────────────────────────────
+
+    /**
+     * <b>이것이 이 티켓의 전부다.</b> 한 실행의 판정만으로는 <i>"원래 0건이었다"</i> 와
+     * <i>"고쳐서 0건이 됐다"</i> 가 구분되지 않는다.
+     */
+    @Test
+    @DisplayName("고치기 전과 뒤를 맞대어 규칙별로 줄어든 수를 낸다")
+    void diffShowsWhatWasFixed() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forHistory(FindingType.ILLEGAL_TRANSITION, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+
+        JsonNode data = VerifyApiProbe.data(probe.get(DIFF + "?before=" + was + "&after=" + now));
+
+        assertThat(data.path("before").path("findingCount").asInt()).isEqualTo(2);
+        assertThat(data.path("after").path("findingCount").asInt()).isEqualTo(1);
+        // **응답이 자기를 설명해야 한다.** 번호만 있으면 저장된 JSON 하나로는 before 가
+        // 무엇이었는지 DB 를 다시 물어야 하고, before/after 를 뒤집어 넣은 것도 못 알아챈다.
+        assertThat(data.path("before").path("dataset").asString()).isEqualTo("CORRUPT");
+        assertThat(data.path("before").path("scope").asString()).isEqualTo("FULL");
+        assertThat(data.path("before").path("attempt").asInt()).isEqualTo(1);
+        assertThat(data.path("before").path("startedAt").asString()).isNotBlank();
+        assertThat(data.path("before").path("verdict").asString()).isEqualTo("FAIL");
+        assertThat(data.path("schema").asString())
+                .as("dataset 만으로는 정상셋 배치와 운영 배치가 같은 이름표가 된다")
+                .isNotBlank();
+        assertThat(data.path("totalDelta").asInt())
+                .as("음수가 줄어든 것이다 — 대사가 성공하면 음수가 나온다")
+                .isEqualTo(-1);
+
+        JsonNode byType = data.path("byType");
+        assertThat(byType.size())
+                .as("검출이 0인 규칙도 채운다 — 빠지면 '그 규칙을 안 봤다' 와 같아진다")
+                .isEqualTo(FindingType.values().length);
+        assertThat(ruleOf(byType, FindingType.ILLEGAL_TRANSITION).path("delta").asInt())
+                .isEqualTo(-1);
+        assertThat(ruleOf(byType, FindingType.STOCK_MISMATCH).path("delta").asInt())
+                .as("안 고친 규칙은 0 이어야 한다 — 총합만 보면 이것이 안 보인다")
+                .isZero();
+    }
+
+    /**
+     * <b>판정이 바뀌는 쪽을 태워야 한다.</b> 안 바뀌는 경우만 재면
+     * {@code verdictChanged} 를 <b>{@code false} 상수</b>로 바꿔도 통과한다 — 실제로 그
+     * 돌연변이가 살아남았다.
+     */
+    @Test
+    @DisplayName("FAIL 에서 PASS 로 가면 판정이 바뀐 것으로 낸다")
+    void reportsAVerdictFlip() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forHistory(FindingType.ILLEGAL_TRANSITION, 1, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.PASS, 0, 2);
+
+        JsonNode data = VerifyApiProbe.data(probe.get(DIFF + "?before=" + was + "&after=" + now));
+
+        assertThat(data.path("verdictChanged").asBoolean()).isTrue();
+        assertThat(data.path("after").path("verdict").asString())
+                .as("방향은 두 verdict 로 파생한다 — boolean 하나로 충분하다")
+                .isEqualTo("PASS");
+        assertThat(data.path("totalDelta").asInt()).isEqualTo(-1);
+    }
+
+    /**
+     * <b>총합만 내면 제일 위험한 상태가 안 보인다.</b> 한 규칙이 줄고 다른 규칙이 같은
+     * 수만큼 늘면 합은 그대로다 — 그것을 <i>"변화 없음"</i> 으로 읽으면 새로 생긴 사고를
+     * 놓친다.
+     */
+    @Test
+    @DisplayName("합이 같아도 규칙별로는 갈린다")
+    void perRuleDeltasSurviveACancellingTotal() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forHistory(FindingType.ILLEGAL_TRANSITION, 1, "a", "b")));
+
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+
+        JsonNode data = VerifyApiProbe.data(probe.get(DIFF + "?before=" + was + "&after=" + now));
+
+        assertThat(data.path("totalDelta").asInt()).isZero();
+        assertThat(ruleOf(data.path("byType"), FindingType.ILLEGAL_TRANSITION).path("delta")
+                .asInt()).isEqualTo(-1);
+        assertThat(ruleOf(data.path("byType"), FindingType.STOCK_MISMATCH).path("delta").asInt())
+                .as("총합 0 뒤에 숨은 새 검출이다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * <b>비교 불가는 0 이 아니라 거절이다.</b> 0 으로 내면 화면이 <i>"차이 없음"</i> 으로
+     * 읽는다 — 이 저장소가 반복해서 막아 온 모양이다.
+     */
+    @Test
+    @DisplayName("dataset 이 다르면 맞대지 않고 거절한다")
+    void refusesRunsThatSawDifferentThings() throws Exception {
+        long clean = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long corrupt = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 1);
+
+        var response = probe.get(DIFF + "?before=" + clean + "&after=" + corrupt);
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-025");
+    }
+
+    /**
+     * <b>{@code dataset} 이 같아도 {@code scope} 가 다르면 거절한다.</b> 앞 시험은 dataset
+     * 만 갈라서, {@code scope} 비교를 지워도 통과했다 — 축을 하나씩 태운다.
+     */
+    @Test
+    @DisplayName("scope 만 달라도 맞대지 않는다")
+    void refusesRunsWithDifferentScope() throws Exception {
+        long full = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        // 증분은 시작 시각이 필수다 — 도메인이 그것을 요구한다.
+        LocalDateTime from = AS_OF.minusHours(1);
+        long incremental = runs.save(VerificationRun.start(
+                AS_OF, from, ScopeType.INCREMENTAL, DatasetType.CLEAN, 1, AS_OF)).id();
+        runs.update(VerificationRun.restore(
+                incremental, AS_OF, from, ScopeType.INCREMENTAL, DatasetType.CLEAN, 1,
+                VerdictType.PASS, StatsStatus.COMPLETE, 0, "checksum", "fingerprint",
+                AS_OF, AS_OF.plusMinutes(2), null));
+
+        var response = probe.get(DIFF + "?before=" + full + "&after=" + incremental);
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-025");
+    }
+
+    /**
+     * <b>시드가 심은 기준 행은 실행이 아니다.</b> 그것을 {@code before} 로 받으면
+     * <i>"배치가 800건을 고쳤다"</i> 는 거짓 증거가 나온다 — 배치는 아무것도 안 고쳤고
+     * 시드의 기준값과 배치 결과를 뺀 것이다. 시드 행의 id 는 낮은 번호라 사람이 제일
+     * 먼저 찍어 보는 번호이기도 하다.
+     */
+    @Test
+    @DisplayName("시드가 심은 행은 맞대기 대상이 아니다 — 404 다")
+    void seedRowsAreNotVisibleToTheConsole() throws Exception {
+        long batchRun = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 0, 1);
+        long seed = plantSeedRun();
+
+        var response = probe.get(DIFF + "?before=" + seed + "&after=" + batchRun);
+
+        assertThat(response.statusCode())
+                .as("origin 을 안 걸면 200 이 나오고 '고쳤다' 는 증거가 만들어진다")
+                .isEqualTo(404);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-003");
+    }
+
+    /**
+     * 아직 판정이 없는 실행은 검출 수가 <b>중간값</b>이다 — {@code /reports/latest} 가
+     * {@code verdict IS NOT NULL} 을 요구하는 것과 같은 이유다.
+     */
+    @Test
+    @DisplayName("판정이 없는 실행은 맞대지 않는다 — 409 다")
+    void refusesARunWithoutAVerdict() throws Exception {
+        long closed = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long running = runs.save(VerificationRun.start(
+                AS_OF.plusHours(1), null, ScopeType.FULL, DatasetType.CLEAN, 9,
+                AS_OF.plusHours(1))).id();
+
+        var response = probe.get(DIFF + "?before=" + closed + "&after=" + running);
+
+        assertThat(response.statusCode())
+                .as("파라미터가 아니라 그 실행의 상태다 — 같은 번호로 잠시 뒤 다시 부르면 "
+                        + "된다. 400 이면 자동화가 파라미터를 고치는 루프에 빠진다")
+                .isEqualTo(409);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-026");
+    }
+
+    /**
+     * <b>판정만 있고 종료 시각이 없는 행도 안 닫힌 것이다.</b>
+     * {@code SELECT_LATEST_CLOSED} 가 둘을 함께 요구한다 — 한쪽만 보면
+     * {@code /reports/latest} 가 안 내주는 행을 이 조회가 증적으로 내보낸다.
+     */
+    @Test
+    @DisplayName("종료 시각이 없으면 판정이 있어도 맞대지 않는다")
+    void refusesARunWithoutAFinishTime() throws Exception {
+        long closed = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long halfOpen = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 2);
+        jdbcClient.sql("UPDATE verification_runs SET finished_at = NULL WHERE id = :id")
+                .param("id", halfOpen).update();
+
+        var response = probe.get(DIFF + "?before=" + closed + "&after=" + halfOpen);
+
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-026");
+    }
+
+    /**
+     * <b>없는 번호와 못 맞대는 실행은 처방이 다르다.</b> 전자는 번호를 다시 찾아야 하고,
+     * 후자는 둘 중 하나를 바꿔야 한다.
+     */
+    @Test
+    @DisplayName("없는 실행은 404 다")
+    void missingRunIsNotFound() throws Exception {
+        long closed = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+
+        var response = probe.get(DIFF + "?before=" + closed + "&after=999999");
+
+        assertThat(response.statusCode()).isEqualTo(404);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-003");
+    }
+
+    /** 같은 실행을 뺀 값은 언제나 0 이라 <b>아무것도 안 말한다.</b> */
+    @Test
+    @DisplayName("같은 실행끼리는 맞대지 않는다")
+    void refusesTheSameRunTwice() throws Exception {
+        long only = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+
+        var response = probe.get(DIFF + "?before=" + only + "&after=" + only);
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .as("CommonErrorCode.INVALID_INPUT 도 400 이라 상태코드만으로는 안 갈린다")
+                .isEqualTo("VERIFICATION-025");
+    }
+
+    /**
+     * <b>이름을 가른다 — 오버로드로 두면 조용히 틀린다.</b> 기존 {@code closedRun} 의
+     * 마지막 인자가 {@code Long seedRunId} 라, {@code closedRun(..., 11)} 처럼 {@code L}
+     * 하나를 빠뜨리면 <b>컴파일이 통과한 채 attempt=11 · seedRunId=null</b> 로 간다 —
+     * 그리고 그 시험은 대조를 재려던 시험이다. 같은 파일에 {@code 11L} 이 다섯 곳 있다.
+     *
+     * <p>attempt 를 받는 이유는 {@code uk_run_params} 가
+     * {@code (as_of, dataset, scope, attempt)} 라 같은 창에 두 실행을 못 만들기 때문이다 —
+     * 맞대기 시험은 <b>정의상 둘</b>이 필요하다.
+     */
+    private long closedRunWithAttempt(DatasetType dataset, VerdictType verdict,
+            int findingCount, int attempt) {
+        VerificationRun saved = runs.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, dataset, attempt, AS_OF));
+        runs.update(VerificationRun.restore(
+                saved.id(), AS_OF, null, ScopeType.FULL, dataset, attempt,
+                verdict, StatsStatus.COMPLETE, findingCount, "checksum", "fingerprint",
+                AS_OF, AS_OF.plusMinutes(2), null));
+        return saved.id();
+    }
+
+    /** {@code VerificationRunHistoryTest} 와 같은 관용 — 포트에는 시드를 심는 길이 없다. */
+    private long plantSeedRun() {
+        jdbcClient.sql("""
+                        INSERT INTO verification_runs
+                                    (as_of, scope, dataset, attempt, origin,
+                                     verdict, finding_count, started_at, finished_at)
+                        VALUES (:asOf, 'FULL', 'CORRUPT', 9, 'SEED',
+                                'FAIL', 800, :at, :at)
+                        """)
+                .param("asOf", AS_OF)
+                .param("at", AS_OF)
+                .update();
+        return jdbcClient.sql("SELECT id FROM verification_runs WHERE origin = 'SEED'")
+                .query(Long.class).single();
+    }
+
+    private static JsonNode ruleOf(JsonNode byType, FindingType type) {
+        return byType.valueStream()
+                .filter(rule -> type.name().equals(rule.path("type").asString()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(type + " 가 응답에 없다"));
     }
 }
