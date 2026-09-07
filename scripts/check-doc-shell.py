@@ -31,10 +31,15 @@ CY-939·CY-941 이 거기와 docs/14 에 `sh -c '...' _ "$q"` 같은 중첩 인�
 블록이 있지만, 이 검사가 생긴 이유가 <b>붙여 넣어 돌리는 운영 절차</b>라 그것이 사는
 자리부터 건다. 넓히는 것은 그 문서들의 블록이 실제로 절차인지 본 뒤다.
 
-**자리표시자는 그 줄만 지운다.** `<ID>`·`<시드의 as_of>` 처럼 사람이 값을 채우라고 둔 것은
-그대로는 셸이 아니다. 한때 그런 것이 하나라도 들면 **블록 전체**를 건너뛰었는데, 이 저장소
-문서는 셸 블록 주석에 한글 설명을 길게 쓰는 문체라 — `docs/14` 의 한 블록은 스물여섯 줄 중
-열다섯이 주석이다 — 주석 한 줄의 `<값>` 때문에 **블록 전체가 사라졌다.**
+**자리표시자는 그 토큰만 바꾼다.** `<ID>`·`<시드의 as_of>` 처럼 사람이 값을 채우라고 둔 것은
+그대로는 셸이 아니라, 안전한 낱말로 치환하고 나머지는 그대로 본다.
+
+두 번 좁혔다. ① 한때 그런 것이 하나라도 들면 **블록 전체**를 건너뛰었는데, 이 저장소 문서는
+셸 블록 주석에 한글 설명을 길게 쓰는 문체라 — `docs/14` 의 한 블록은 스물여섯 줄 중 열다섯이
+주석이다 — 주석 한 줄의 `<값>` 때문에 블록이 통째로 사라졌다. ② 그다음엔 **그 줄**을 지웠는데,
+그러면 그 줄의 따옴표와 문법도 같이 사라진다 — `docs/measurement-protocol.md` 의
+`echo "... <측정 실패>로 기록할 것 ..." >&2` 는 **멀쩡한 실행 줄**이고, 그 줄의 닫는 따옴표가
+깨져도 초록이었다.
 """
 import pathlib
 import re
@@ -44,7 +49,8 @@ import tempfile
 
 # **들여쓴 펜스도 잡는다.** `^```` 로 0열만 보면 리스트 항목 안의 블록이 통째로 빠진다 —
 # 실측에서 docs/14 의 다섯이 그랬고, 그중 하나가 이 검사가 막겠다고 한 그 블록이었다.
-# 백틱 넷 이상과 shell·zsh·console 도 함께 받는다. `[^\S\n]` 는 개행 아닌 공백이다.
+# 백틱은 **셋 이상**(`{3,}`)이라 표준 세 개와 네 개 이상을 다 받고, 언어 태그도
+# shell·zsh·console 까지 받는다. `[^\S\n]` 는 개행 아닌 공백이다.
 FENCE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<ticks>`{3,})(?:bash|sh|shell|zsh|console)"
     r"[^\n]*\n(?P<body>.*?)^(?P=indent)(?P=ticks)[^\S\n]*$",
@@ -60,16 +66,24 @@ PLACEHOLDER = re.compile(r"<[^>\s][^>]{0,40}>")
 REAL_SHELL = re.compile(r"<<|<\(|<&")
 
 
-def has_placeholder(line: str) -> bool:
-    """자리표시자가 든 줄인가. 셸 문법이 섞인 줄은 아니라고 본다."""
-    return bool(PLACEHOLDER.search(line)) and not REAL_SHELL.search(line)
+def redact(line: str) -> str:
+    """자리표시자 <b>토큰만</b> 안전한 낱말로 바꾼다.
+
+    ⚠️ **줄째 지우면 안 된다.** 그 줄의 따옴표와 셸 문법이 함께 사라져,
+    {@code docs/measurement-protocol.md} 의 실제 실행 줄처럼 <b>자리표시자를 낱말로 품은
+    멀쩡한 명령</b>이 검사에서 빠진다 — 그 줄의 닫는 따옴표가 깨져도 초록이다.
+    토큰만 바꾸면 따옴표와 구조가 남는다.
+
+    셸 문법이 섞인 줄은 손대지 않는다. {@code <<EOF}·{@code <(cmd)}·{@code <&3} 은
+    자리표시자가 아니라 진짜 문법이고, 바꾸면 그것이 오히려 문법을 깬다.
+    """
+    if REAL_SHELL.search(line):
+        return line
+    return PLACEHOLDER.sub("PLACEHOLDER", line)
 
 
 def parseable(block: str, work: pathlib.Path) -> subprocess.CompletedProcess:
-    # **줄 단위로 지운다.** 자리표시자가 든 줄만 빈 줄로 바꾸고 나머지는 그대로 본다.
-    # 블록째 건너뛰면 주석 한 줄이 블록 전체를 가린다.
-    redacted = "\n".join("" if has_placeholder(line) else line
-                         for line in block.splitlines())
+    redacted = "\n".join(redact(line) for line in block.splitlines())
     work.write_text(redacted, encoding="utf-8")
     return subprocess.run(["bash", "-n", str(work)], capture_output=True, text=True)
 
