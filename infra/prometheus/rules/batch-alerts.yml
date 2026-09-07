@@ -842,6 +842,9 @@ groups:
             **손 SQL 은 마지막 수단입니다** — 살아 있는 실행에 쓰면 VERSION 이 올라가
             다음 update() 가 터집니다. API 도 같은 쓰기를 하지만, 시체 판정을 통과한
             실행에만 한다는 점이 다릅니다(batch.stuck-job-after-ms).
+            어느 실행인지는 GET /api/v1/admin/batch/runs/stuck 이 전 잡을 한 번에
+            줍니다(CY-938) — 잡별 경로를 몰라도 되고, 잡이 늘어도 따라옵니다.
+            아래 잡별 경로는 그다음 조치입니다.
             expireJob 이면 GET /api/v1/admin/expire/runs/stuck 으로 확인하고
             POST .../runs/{id}/recover 한 번이면 됩니다 — 재시도해도 안전합니다.
             verifyJob 이면 /api/v1/admin/verify 쪽 stop → abandon 을 씁니다.

@@ -914,14 +914,24 @@ CY-384 전에는 이 상황이 아예 못 생겼다 — 스케줄러를 켠 기�
 > 내리는 변경은 이 API 의 안전을 직접 깎는다.
 
 ```bash
-# ① 무엇이 남아 있나. 도는 실행은 여기 안 나온다.
+# ① 어느 잡에 남아 있나. 배포된 잡을 한 번에 본다(CY-938). 잡 이름을 몰라도 되고,
+#    잡이 늘어도 따라온다 — 이름은 Job 빈에서 받는다.
+curl -s localhost:9091/api/v1/admin/batch/runs/stuck | jq .data
+#   [{ "jobName": "cleanupJob", "runs": [] },
+#    { "jobName": "expireJob",  "runs": [{ "executionId": 41, ... }] },
+#    { "jobName": "verifyJob",  "runs": [] }]
+#   시체가 없는 잡도 빈 그룹으로 나온다 — 빼면 "봤는데 없었다" 와 "안 봤다" 가 같아진다.
+#   ⚠️ 여기서 찾은 번호를 범용 abandon 에 바로 넣지 않는다. 만료·정리의 처방은 아래
+#      잡별 recover 다(ABANDONED 는 그 asOf 를 영구히 막는다).
+
+# ② 그 잡의 목록을 다시 본다. 도는 실행은 여기 안 나온다.
 curl -s localhost:9091/api/v1/admin/expire/runs/stuck | jq .data
 #   [{ "executionId": 41, "status": "STARTED", "createTime": "...", "startTime": "...",
 #      "lastProgress": "...", "stalledSeconds": 7412 }]
 
-# ② 한 번이면 된다. 재시도해도 안전하다(FAILED + END_TIME 으로 판정한다).
+# ③ 한 번이면 된다. 재시도해도 안전하다(FAILED + END_TIME 으로 판정한다).
 curl -s -XPOST localhost:9091/api/v1/admin/expire/runs/41/recover | jq '.data, .error'
-#   409 / EXPIRATION-007 이면 걷어낼 대상이 아니다 — ① 을 다시 본다.
+#   409 / EXPIRATION-007 이면 걷어낼 대상이 아니다 — ② 를 다시 본다.
 #   404 / EXPIRATION-006 이면 만료 실행이 아니거나 없는 번호다.
 ```
 
