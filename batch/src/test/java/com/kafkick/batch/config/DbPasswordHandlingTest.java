@@ -94,9 +94,14 @@ class DbPasswordHandlingTest {
     /**
      * {@code -p}·{@code --password} 로 넘기는 형태. {@code MYSQL_PWD} 를 쓰는 이유가 바로
      * 이것을 피하려는 것이라, 그 규칙을 산문에만 적어 두면 아무도 안 지킨다.
+     *
+     * <p><b>{@code -p} 뒤는 <i>공백도 하이픈도 아닌 무엇이든</i> 값이다.</b> 한때
+     * {@code [A-Za-z0-9"$]} 로 좁혀 뒀는데 {@code mysql -p'S3cr3t!'} 를 놓쳤다 — 셸이
+     * 작은따옴표를 벗겨 비밀번호를 <b>한 인자로</b> 넘기는 정상 형태다. 하이픈을 빼는 것은
+     * {@code --password} 를 이 갈래가 두 번 세지 않게 하기 위해서다.
      */
     private static final Pattern NAKED_PASSWORD =
-            Pattern.compile("mysql\\b[^\\n]*?(?:--password[= ]|\\s-p[A-Za-z0-9\"$])");
+            Pattern.compile("mysql\\b.*?(?:--password[= ]|\\s-p[^\\s-])", Pattern.DOTALL);
 
     /**
      * <b>정확한 수를 못 박는다.</b> {@code isEmpty()} 만 두면 스캔이 조용히 좁아져도
@@ -144,18 +149,60 @@ class DbPasswordHandlingTest {
                 .isEmpty();
     }
 
+    /**
+     * <b>한 줄씩 보면 줄이음으로 빠져나간다.</b> {@code -e \\} 다음 줄에
+     * {@code MYSQL_PWD="$MYSQL_ROOT_PASSWORD"} 를 두면 <b>두 검사가 모두 통과</b>한다 —
+     * 값 검사는 그 텍스트를 정상으로 읽고, 자리 검사는 {@code -e} 와 {@code MYSQL_PWD=} 가
+     * 다른 줄이라 아예 안 걸린다. <b>이 검사가 막으려던 바로 그 회귀</b>다.
+     *
+     * <p>그래서 {@code \\} 로 이어진 줄을 <b>한 명령으로 이어 붙여</b> 본다. 형제
+     * {@code AdminApiCallerTokenTest} 가 같은 이유로 같은 경계를 쓴다.
+     */
     private static List<String> matching(Pattern forbidden) throws IOException {
         List<String> found = new ArrayList<>();
         for (Path file : scanned()) {
             List<String> lines = Files.readAllLines(file);
             for (int i = 0; i < lines.size(); i++) {
-                if (forbidden.matcher(lines.get(i)).find()) {
+                String command = commandAt(lines, i);
+                if (forbidden.matcher(command).find()) {
                     found.add(REPO_ROOT.relativize(file) + ":" + (i + 1)
-                            + " → " + lines.get(i).strip());
+                            + " → " + command.strip());
                 }
             }
         }
         return found;
+    }
+
+    /**
+     * {@code i} 번째 줄에서 <b>시작하는</b> 명령. 앞줄이 이어지고 있으면 그 줄은 이미
+     * 앞에서 세었으므로 빈 문자열이다 — 같은 명령을 두 번 신고하지 않는다.
+     */
+    private static String commandAt(List<String> lines, int i) {
+        if (i > 0 && continues(lines.get(i - 1))) {
+            return "";
+        }
+        int end = i;
+        while (end < lines.size() - 1 && continues(lines.get(end))) {
+            end++;
+        }
+        return joinContinuations(lines.subList(i, end + 1));
+    }
+
+    /**
+     * <b>셸이 보는 대로 한 줄로 만든다</b> — 끝의 {@code \\} 를 떼고 공백으로 잇는다.
+     * 개행을 남긴 채 이으면 {@code -e \\}↵{@code MYSQL_PWD=} 사이에 <b>백슬래시가 남아</b>
+     * {@code \\s+} 가 안 걸린다. 실제로 그렇게 짜서 표본이 빨갛게 나왔다.
+     */
+    private static String joinContinuations(List<String> lines) {
+        return lines.stream()
+                .map(line -> continues(line)
+                        ? line.stripTrailing().substring(0, line.stripTrailing().length() - 1)
+                        : line)
+                .collect(java.util.stream.Collectors.joining(" "));
+    }
+
+    private static boolean continues(String line) {
+        return line.stripTrailing().endsWith("\\");
     }
 
     private static String where(Assignment one) {
@@ -305,6 +352,41 @@ class DbPasswordHandlingTest {
                     .find())
                     .as("-N 같은 다른 짧은 옵션을 -p 로 오해하면 안 된다")
                     .isFalse();
+        }
+
+        /** Qodo 가 짚은 자리다. 한 줄씩 보면 이 형태가 두 검사를 모두 통과했다. */
+        @Test
+        @DisplayName("줄이음으로 -e 와 대입을 갈라 놓아도 잡는다")
+        void seesThroughALineContinuation() {
+            List<String> split = List.of(
+                    "docker compose exec -T \\",
+                    "  -e \\",
+                    "  MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql mysql -uroot");
+
+            assertThat(ON_HOST_COMMAND_LINE.matcher(joinedFrom(split)).find())
+                    .as("이어 붙이면 -e 와 MYSQL_PWD= 가 한 명령 안에 있다")
+                    .isTrue();
+            assertThat(split.stream().anyMatch(l -> ON_HOST_COMMAND_LINE.matcher(l).find()))
+                    .as("한 줄씩 보면 어느 줄도 안 걸린다 — 그것이 이 시험의 이유다")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("작은따옴표로 싼 -p 값도 잡는다")
+        void flagsAQuotedShortPassword() {
+            assertThat(NAKED_PASSWORD.matcher("mysql -uroot -p'S3cr3t!' coupon_v6").find())
+                    .isTrue();
+            assertThat(NAKED_PASSWORD.matcher("mysql -uroot -p\"$DB_ROOT_PASSWORD\"").find())
+                    .isTrue();
+            assertThat(NAKED_PASSWORD.matcher("mysql --protocol=tcp -uroot -N -e 'SELECT 1'")
+                    .find())
+                    .as("-p 로 시작하지 않는 다른 옵션을 오해하면 안 된다")
+                    .isFalse();
+        }
+
+        /** {@link #commandAt} 과 **같은 함수**로 잇는다 — 규칙이 갈리면 표본이 거짓말한다. */
+        private String joinedFrom(List<String> lines) {
+            return joinContinuations(lines);
         }
 
         @Test
