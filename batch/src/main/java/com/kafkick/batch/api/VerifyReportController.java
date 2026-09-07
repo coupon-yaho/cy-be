@@ -214,16 +214,25 @@ public class VerifyReportController {
                 rules.currentSchema(), was, byType(was), now, byType(now)));
     }
 
-    /** 판정이 난 실행만 맞댄다. 없는 번호와 안 끝난 실행을 <b>다른 코드로</b> 가른다. */
+    /**
+     * <b>닫힌 실행만 맞댄다.</b> 없는 번호와 안 끝난 실행을 <b>다른 코드로</b> 가른다.
+     *
+     * <p><b>{@code verdict} 만 보면 절반이다.</b> {@code SELECT_LATEST_CLOSED} 가
+     * {@code verdict IS NOT NULL} <b>과</b> {@code finished_at IS NOT NULL} 둘을 요구한다 —
+     * 그것이 이 저장소가 <i>"닫혔다"</i> 로 정한 조건이고, 한쪽만 보면
+     * <b>{@code /reports/latest} 가 안 내주는 행을 이 조회가 증적으로 내보낸다.</b>
+     */
     private VerificationRun closedRun(long runId) {
         VerificationRun run = runs.findById(runId)
                 .orElseThrow(() -> new BusinessException(VerificationErrorCode.RUN_NOT_FOUND,
                         "runId=" + runId));
-        if (run.verdict() == null) {
+        if (run.verdict() == null || run.finishedAt() == null) {
             // **파라미터가 아니라 그 실행의 상태다.** 같은 번호로 잠시 뒤 다시 부르면 된다 —
             // 400 으로 내면 자동화가 "파라미터를 고쳐 재시도" 루프에 빠진다.
             throw new BusinessException(VerificationErrorCode.RUN_NOT_CLOSED,
-                    "runId=" + runId + " 은 아직 판정이 없습니다. 검출 수가 중간값입니다.");
+                    "runId=" + runId + " 은 아직 안 닫혔습니다. verdict=" + run.verdict()
+                            + " finishedAt=" + run.finishedAt()
+                            + " — 검출 수가 중간값입니다.");
         }
         return run;
     }

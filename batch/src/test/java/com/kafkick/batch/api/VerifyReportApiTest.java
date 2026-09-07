@@ -53,6 +53,7 @@ class VerifyReportApiTest {
             "/api/v1/admin/verify/reports/latest?dataset=CLEAN&scope=FULL";
     private static final String CORRUPT_FULL =
             "/api/v1/admin/verify/reports/latest?dataset=CORRUPT&scope=FULL";
+    private static final String DIFF = "/api/v1/admin/verify/reports/diff";
 
     @LocalServerPort
     private int port;
@@ -341,8 +342,6 @@ class VerifyReportApiTest {
 
     // ── 두 실행 맞대기 (CY-944) ──────────────────────────────────────────────
 
-    private static final String DIFF = "/api/v1/admin/verify/reports/diff";
-
     /**
      * <b>이것이 이 티켓의 전부다.</b> 한 실행의 판정만으로는 <i>"원래 0건이었다"</i> 와
      * <i>"고쳐서 0건이 됐다"</i> 가 구분되지 않는다.
@@ -516,6 +515,26 @@ class VerifyReportApiTest {
                 .as("파라미터가 아니라 그 실행의 상태다 — 같은 번호로 잠시 뒤 다시 부르면 "
                         + "된다. 400 이면 자동화가 파라미터를 고치는 루프에 빠진다")
                 .isEqualTo(409);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-026");
+    }
+
+    /**
+     * <b>판정만 있고 종료 시각이 없는 행도 안 닫힌 것이다.</b>
+     * {@code SELECT_LATEST_CLOSED} 가 둘을 함께 요구한다 — 한쪽만 보면
+     * {@code /reports/latest} 가 안 내주는 행을 이 조회가 증적으로 내보낸다.
+     */
+    @Test
+    @DisplayName("종료 시각이 없으면 판정이 있어도 맞대지 않는다")
+    void refusesARunWithoutAFinishTime() throws Exception {
+        long closed = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long halfOpen = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 2);
+        jdbcClient.sql("UPDATE verification_runs SET finished_at = NULL WHERE id = :id")
+                .param("id", halfOpen).update();
+
+        var response = probe.get(DIFF + "?before=" + closed + "&after=" + halfOpen);
+
+        assertThat(response.statusCode()).isEqualTo(409);
         assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
                 .isEqualTo("VERIFICATION-026");
     }
