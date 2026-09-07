@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -57,11 +59,12 @@ import org.junit.jupiter.api.Test;
  * {@code scannedJavaSources} 가 자바를 이미 건다. 안 걸면 문서만 고친 라운드에서
  * {@code :batch:test} 가 UP-TO-DATE 로 건너뛴다 — 검사가 있는데 안 도는 상태다.
  *
- * <p>⚠️ <b>자바는 {@code src} 아래에만 있다.</b> 이 스캔은 {@code /build/} 만 빼고 전부
- * 훑는데 {@code scannedJavaSources} 는 {@code **}{@code /src/**}{@code /*.java} 만 건다 —
- * 오늘은 <b>1459 대 1459 로 같다</b>(실측). {@code src} 밖에 {@code .java} 를 하나 두는
- * 순간 그 파일은 <b>스캔에는 잡히고 캐시 키에는 없는</b> 상태가 되므로, 그때 입력 선언을
- * 함께 넓힌다.
+ * <p>⚠️ <b>자바는 {@code src} 아래만 본다.</b> {@code scannedJavaSources} 가 거는 범위가
+ * 정확히 그것이라({@code **}{@code /src/**}{@code /*.java}) <b>맞춰서 자른 것</b>이다.
+ * 한때 {@code /build/} 만 빼고 전부 훑으면서 <i>"오늘은 1459 대 1459 로 같다"</i> 고
+ * 적어 뒀는데, 그것은 <b>우연이지 계약이 아니었다</b> — {@code src} 밖에 {@code .java} 가
+ * 하나 생기는 순간 그 파일은 스캔에는 잡히고 캐시 키에는 없어, 그것만 바꾼 라운드에서
+ * 검사가 안 돈다.
  *
  * <p>⚠️ <b>{@code docs} 는 최상위만 본다({@code Files.list}).</b> Gradle 쪽 글롭
  * {@code include '*.md'} 가 {@code /} 를 안 넘는 것과 <b>맞춰 둔 것</b>이다 — 한쪽만
@@ -81,14 +84,17 @@ class AdminApiCallerTokenTest {
     private static final List<String> CLIENTS = List.of("curl", "wget");
 
     /**
-     * <b>경로줄과 그 <i>앞</i> 세 줄만 본다.</b> 뒤는 안 본다 — 저장소의 열셋 전부에서
-     * 헤더가 <b>경로줄보다 앞이나 같은 줄</b>에 있었고(실측), 뒤까지 보면
-     * <b>헤더 없는 호출이 헤더 있는 호출 바로 위에 오는 것만으로 가려진다.</b>
-     * {@code docs/17} 은 거의 같은 블록 넷이 여덟 줄 간격이라 그 모양이 실제로 나온다.
+     * <b>헤더가 든 값의 형태.</b> 리터럴을 박아 두면 그것이 그대로 나가고, 관문이 켜지면
+     * 이름은 맞는데 값이 틀려 <b>401 은 그대로다</b>. 실제로 {@code VerifyReportController}
+     * 의 붙여 넣기 예시 둘이 {@code "X-Batch-Admin-Token: …"} 이었다.
      *
-     * <p>셋인 이유는 여유다. 지금 가장 먼 것이 {@code dump-verify-report.sh} 의 두 줄이다.
+     * <p><b>{@code 헤더:} 형태일 때만 본다.</b> 이름만 언급하는 산문이 있다 —
+     * {@code docs/15} 의 보안 표가 <i>"CY-742 가 공유 비밀 헤더(`X-Batch-Admin-Token`)를
+     * 얹었다"</i> 로 <b>백틱 안에 이름만</b> 쓴다. 거기까지 값을 요구하면 그 문장에
+     * {@code $BATCH_ADMIN_TOKEN} 을 끼워 넣는 <b>틀린 고침</b>을 부른다.
      */
-    private static final int LOOKBACK = 3;
+    private static final Pattern HEADER_VALUE =
+            Pattern.compile(java.util.regex.Pattern.quote(HEADER) + ":\\s*(\\S+)");
 
     /**
      * <b>정확한 수를 못 박는다.</b> {@code isNotEmpty()} 만 두면 스캔이 조용히 좁아져도
@@ -118,6 +124,31 @@ class AdminApiCallerTokenTest {
                 .as("관문이 켜진 배포(batch-expose.yml · batch-verify.yml)에서 이 호출들은 "
                         + "401 이다. 값이 비면 curl 이 헤더를 아예 안 보내므로 관문이 꺼진 "
                         + "구성에서도 요청은 그대로다 — 늘 실어 두면 된다")
+                .isEmpty();
+    }
+
+    /**
+     * <b>이름이 맞아도 값이 리터럴이면 401 은 그대로다.</b> 헤더를 실었다는 사실만 보면
+     * {@code "X-Batch-Admin-Token: …"} 같은 자리표시자가 통과하고, 그것을 붙여 넣은
+     * 사람은 <b>헤더를 실었는데 왜 401 인지</b>를 디버깅한다.
+     */
+    @Test
+    @DisplayName("헤더 값은 환경변수로 편다 — 리터럴 자리표시자가 아니다")
+    void tokenValueComesFromTheEnvironment() throws IOException {
+        List<String> literals = new ArrayList<>();
+        for (Call call : adminApiCalls()) {
+            Matcher value = HEADER_VALUE.matcher(call.context());
+            while (value.find()) {
+                if (!value.group(1).contains("$")) {
+                    literals.add(REPO_ROOT.relativize(call.file()) + ":" + call.line()
+                            + " → " + value.group(1));
+                }
+            }
+        }
+
+        assertThat(literals)
+                .as("붙여 넣으면 그 값이 그대로 나간다. 관문이 켜지면 이름은 맞고 값이 "
+                        + "틀려 401 이고, 헤더를 실었으니 맞겠거니 하고 다른 데를 판다")
                 .isEmpty();
     }
 
@@ -159,7 +190,7 @@ class AdminApiCallerTokenTest {
                 if (!lines.get(i).contains(ADMIN_PATH)) {
                     continue;
                 }
-                String before = window(lines, i);
+                String before = command(lines, i);
                 if (CLIENTS.stream().noneMatch(before::contains)) {
                     continue;
                 }
@@ -169,9 +200,24 @@ class AdminApiCallerTokenTest {
         return calls;
     }
 
-    /** 경로줄과 그 앞 {@link #LOOKBACK} 줄. */
-    private static String window(List<String> lines, int pathLine) {
-        return String.join("\n", lines.subList(Math.max(0, pathLine - LOOKBACK), pathLine + 1));
+    /**
+     * <b>한 명령의 범위.</b> 경로줄에서 <b>줄이음({@code \\})을 거슬러</b> 올라가고,
+     * 이어지지 않는 줄을 만나면 멈춘다.
+     *
+     * <p><b>줄 수로 세면 양쪽으로 가려진다.</b> 앞뒤 몇 줄을 보는 창은 <b>이웃 명령의
+     * 헤더를 이 명령 것으로 인정</b>한다 — 헤더 있는 호출 위든 아래든, 헤더 없는 호출을
+     * 몇 줄 옆에 붙이는 것만으로 통과한다. {@code docs/17} 은 거의 같은 블록 넷이 여덟 줄
+     * 간격이라 복붙 한 번이면 나오는 모양이다.
+     *
+     * <p>줄이음은 <b>셸이 실제로 한 명령으로 읽는 경계</b>라 그 오해가 구조적으로 없다.
+     * 저장소의 열넷이 전부 이 경계 안에 헤더를 갖는다(실측) — 창을 좁혀서 놓치는 것이 없다.
+     */
+    private static String command(List<String> lines, int pathLine) {
+        int from = pathLine;
+        while (from > 0 && lines.get(from - 1).stripTrailing().endsWith("\\")) {
+            from--;
+        }
+        return String.join("\n", lines.subList(from, pathLine + 1));
     }
 
     private static List<Path> scanned() throws IOException {
@@ -182,6 +228,12 @@ class AdminApiCallerTokenTest {
                             docs.filter(path -> path.toString().endsWith(".md")),
                             scripts.filter(path -> path.toString().endsWith(".sh")),
                             java.filter(path -> path.toString().endsWith(".java"))
+                                    // **입력 선언과 같은 범위로 자른다.**
+                                    // scannedJavaSources 가 거는 것이 정확히 이 둘이다 —
+                                    // src 아래, build 밖. 스캔이 그보다 넓으면 그 파일은
+                                    // **잡히기는 하는데 캐시 키에는 없는** 상태가 되어,
+                                    // 그것만 바꾼 라운드에서 UP-TO-DATE 로 안 돈다.
+                                    .filter(path -> path.toString().contains("/src/"))
                                     .filter(path -> !path.toString().contains("/build/"))
                                     // **자기 자신은 뺀다.** 아래 Detection 의 표본이
                                     // 일부러 헤더 없는 호출이라, 안 빼면 이 시험이
@@ -246,6 +298,29 @@ class AdminApiCallerTokenTest {
                     "     http://x/api/v1/admin/verify/runs/2"))).isOne();
         }
 
+        /**
+         * <b>위 호출의 헤더가 아래 호출의 누락을 가리지 않는다.</b> 앞뒤 몇 줄을 보는
+         * 창에서는 이쪽이 뚫린다 — 헤더 있는 호출 <b>바로 다음 줄</b>에 헤더 없는 호출을
+         * 붙이면 통과한다. 줄이음 경계는 그 둘을 다른 명령으로 읽는다.
+         */
+        @Test
+        @DisplayName("위 호출의 헤더가 아래 호출의 누락을 가리지 않는다")
+        void doesNotLetAnEarlierHeaderMaskALaterMiss() {
+            assertThat(violations(List.of(
+                    "curl -sS -H \"X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN\" \\",
+                    "     http://x/api/v1/admin/verify/runs/1",
+                    "curl -sS http://x/api/v1/admin/verify/runs/2"))).isOne();
+        }
+
+        @Test
+        @DisplayName("이어진 줄은 한 명령으로 읽는다")
+        void keepsAContinuedCommandTogether() {
+            assertThat(violations(List.of(
+                    "curl -sS \\",
+                    "     -H \"X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN\" \\",
+                    "     http://x/api/v1/admin/verify"))).isZero();
+        }
+
         private long hits(List<String> lines) {
             return windows(lines).size();
         }
@@ -257,7 +332,7 @@ class AdminApiCallerTokenTest {
         private List<String> windows(List<String> lines) {
             List<String> found = new ArrayList<>();
             for (int i = 0; i < lines.size(); i++) {
-                String before = window(lines, i);
+                String before = command(lines, i);
                 if (lines.get(i).contains(ADMIN_PATH)
                         && CLIENTS.stream().anyMatch(before::contains)) {
                     found.add(before);

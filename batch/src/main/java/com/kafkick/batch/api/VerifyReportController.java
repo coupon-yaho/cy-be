@@ -116,7 +116,7 @@ public class VerifyReportController {
      * <i>"아직 안 끝났다"</i> 와 한 값으로 뭉친다.
      *
      * <pre>
-     * curl -sSf -H "X-Batch-Admin-Token: …" \
+     * curl -sSf -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
      *   "localhost:9091/api/v1/admin/verify/reports/latest?dataset=CLEAN&amp;scope=FULL" \
      *   &gt; verify-clean-full.json
      * </pre>
@@ -157,7 +157,8 @@ public class VerifyReportController {
      * 번호다. 실측에서 {@code executionId=15} 일 때 {@code runId=17} 이었다.
      *
      * <pre>
-     * curl -sSf "localhost:9091/api/v1/admin/verify/runs/16/progress" -H "X-Batch-Admin-Token: …"
+     * curl -sSf -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     *   "localhost:9091/api/v1/admin/verify/runs/16/progress"
      * </pre>
      */
     @GetMapping("/runs/{runId}/progress")
