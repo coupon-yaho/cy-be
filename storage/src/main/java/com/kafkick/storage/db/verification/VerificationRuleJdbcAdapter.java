@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import com.kafkick.core.verification.DatasetScale;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationRuleRepository;
@@ -666,6 +667,20 @@ public class VerificationRuleJdbcAdapter implements VerificationRuleRepository {
                 .single();
 
         return DigestValues.sha256Hex(material);
+    }
+
+    /**
+     * <b>지문과 같은 질의를 쓴다.</b> 두 벌로 두면 지문이 접은 수와 화면이 읽는 수가
+     * 갈리고, 그때 <b>어느 쪽이 그 판정의 재료였는지</b> 알 수 없다.
+     */
+    @Override
+    public DatasetScale datasetScale(LocalDateTime asOf) {
+        return jdbcClient.sql(SELECT_FINGERPRINT_INPUT)
+                .param("asOf", asOf)
+                .query((rs, rowNum) -> new DatasetScale(
+                        rs.getLong("issuance_count"),
+                        rs.getLong("history_count")))
+                .single();
     }
 
     @Override

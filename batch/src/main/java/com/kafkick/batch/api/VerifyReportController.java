@@ -135,7 +135,8 @@ public class VerifyReportController {
                         "dataset=" + dataset + " scope=" + scope));
 
         return ResponseEnvelope.success(VerifyReportView.of(
-                rules.currentSchema(), run, byType(run), manifest(run)));
+                rules.currentSchema(), run, runs.examinedScaleOf(run.id()),
+                byType(run), manifest(run)));
     }
 
     /**

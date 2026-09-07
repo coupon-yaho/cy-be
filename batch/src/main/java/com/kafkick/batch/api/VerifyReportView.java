@@ -5,8 +5,10 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import com.kafkick.core.verification.FindingKey;
+import com.kafkick.core.verification.DatasetScale;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.VerificationRun;
 
@@ -69,10 +71,12 @@ import com.kafkick.core.verification.VerificationRun;
  * @param byType   규칙별 검출 수. <b>검출이 0인 규칙도 들어 있다</b> — 아래 {@code of} 참고
  * @param manifest 오염셋 대조. 정상셋이면 {@code null} 이다 — 대조할 정답이 없다
  */
-@com.fasterxml.jackson.annotation.JsonPropertyOrder({"schema", "run", "byType", "manifest"})
+@com.fasterxml.jackson.annotation.JsonPropertyOrder(
+        {"schema", "run", "examined", "byType", "manifest"})
 public record VerifyReportView(
         String schema,
         VerificationRun run,
+        DatasetScale examined,
         Map<FindingType, Integer> byType,
         Manifest manifest
 ) {
@@ -84,9 +88,15 @@ public record VerifyReportView(
      * 0건이라 <b>본문이 통째로 비어 보인다.</b>
      *
      * <p>규칙 목록의 주인은 {@link FindingType} 이므로 채우는 것도 여기서 한다.
+     *
+     * <p><b>{@code examined} 가 이 응답의 분모다.</b> {@code PASS 0건} 만으로는
+     * <i>"다 보고 못 찾았다"</i> 와 <i>"거의 아무것도 안 봤다"</i> 가 구분되지 않는다.
+     * {@code Optional} 로 받아 <b>여기서 푼다</b> — 비어 있음이 곧 응답의 값인 자리라,
+     * 부르는 쪽이 풀면 그 판단이 흩어진다. <b>0 으로 채우면 "안 봤다" 로 읽힌다.</b>
      */
     public static VerifyReportView of(String schema, VerificationRun run,
-            Map<FindingType, Integer> counted, Manifest manifest) {
+            Optional<DatasetScale> examined, Map<FindingType, Integer> counted,
+            Manifest manifest) {
         if (run == null) {
             throw new IllegalArgumentException("리포트를 만들 검증 실행이 필요합니다.");
         }
@@ -102,7 +112,9 @@ public record VerifyReportView(
         }
         // **Map.copyOf 를 쓰면 안 된다.** 그것은 순서를 보장하지 않는다 — 제출물이 커밋돼
         // diff 되는데 규칙 순서가 실행마다 달라지면 "결과가 바뀐 것" 으로 읽힌다.
-        return new VerifyReportView(schema, run, Collections.unmodifiableMap(filled), manifest);
+        return new VerifyReportView(
+                schema, run, examined.orElse(null),
+                Collections.unmodifiableMap(filled), manifest);
     }
 
     /**

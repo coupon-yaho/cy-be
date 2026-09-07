@@ -382,7 +382,9 @@ public class VerifyJobConfig {
     public Step finalizeRunStep(
             VerificationRunRepository runs,
             VerificationFindingRepository findings,
-            ExpectedFindingRepository expected
+            ExpectedFindingRepository expected,
+            // 판정과 함께 **분모**를 남긴다. "검출 0건" 은 그 자체로 아무것도 증명하지 않는다.
+            VerificationRuleRepository rules
     ) {
         return new StepBuilder("finalizeRunStep", jobRepository)
                 .tasklet((contribution, chunkContext) -> {
@@ -406,6 +408,15 @@ public class VerifyJobConfig {
                                         + "이 경로는 열리면 안 됩니다. runId=" + runId
                                         + " scope=" + run.scope());
                     }
+
+                    // **분모를 남긴다.** 지문과 같은 asOf 로 재고, 지문과 같은 질의에서
+                    // 나온다 — 새로 세지 않는다. assertFrozenStep 이 이미 지났으므로
+                    // 그 사이 데이터는 안 움직인다.
+                    //
+                    // ⚠️ 판정에는 안 쓴다. 재고 불일치 규칙이 coupons 에서 시작해 발급건을
+                    //    LEFT JOIN 하므로 발급건 0에서도 검출을 낸다 — 규모로 판정을 가르면
+                    //    진짜 검출을 덮는다(DatasetScale 참조).
+                    runs.recordExaminedScale(runId, rules.datasetScale(run.asOf()));
 
                     int detected = findings.countOf(runId);
                     VerdictType verdict = dataset == DatasetType.CLEAN

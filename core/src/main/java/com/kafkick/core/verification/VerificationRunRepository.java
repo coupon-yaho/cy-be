@@ -45,6 +45,25 @@ public interface VerificationRunRepository {
      */
     void recordComparedManifest(long runId, long seedRunId);
 
+    /**
+     * <b>이 실행이 본 규모를 남긴다.</b> {@link #recordComparedManifest} 와 같은 모양이다 —
+     * {@code INSERT}·{@code UPDATE} 어느 쪽도 이 컬럼을 안 건드리므로 덮어쓰기 사고가 없고,
+     * {@code VerificationRun} 을 안 넓혀 {@code restore} 호출부를 안 건드린다.
+     *
+     * <p><b>{@code finish} 에 안 싣는 이유</b>도 같다. 그 메서드는 <b>판정</b>을 담는 자리이고
+     * 규모는 판정에 안 쓰인다({@link DatasetScale} 참조) — 섞으면 <b>판정에 쓰이는 값처럼
+     * 읽힌다.</b>
+     */
+    void recordExaminedScale(long runId, DatasetScale scale);
+
+    /**
+     * <b>그 실행이 남긴 규모.</b> 이 컬럼이 생기기 전 실행에는 없다.
+     *
+     * <p><b>0 으로 채우지 않는다.</b> 없는 것을 0 으로 내면 <i>"안 봤다"</i> 로 읽히고,
+     * 그것이 이 축이 막으려는 바로 그 오독이다 — 그래서 {@code Optional} 이다.
+     */
+    Optional<DatasetScale> examinedScaleOf(long runId);
+
     Optional<VerificationRun> findById(long id);
 
     /**

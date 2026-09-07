@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingKey;
+import com.kafkick.core.verification.DatasetScale;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.StatsStatus;
@@ -28,6 +30,10 @@ import com.kafkick.core.verification.VerificationRun;
  * 판정을 잘못 읽는데, 그 순간에는 아무것도 안 깨진다.
  */
 class VerifyReportViewTest {
+
+    /** 이 클래스는 조립 규칙을 잰다 — 규모 자체는 {@code VerifyReportApiTest} 가 본다. */
+    private static final Optional<DatasetScale> EXAMINED =
+            Optional.of(new DatasetScale(10, 20));
 
     /** 실제 배치가 붙는 이름 중 하나. 빈 값이면 팩터리가 거절한다. */
     private static final String SCHEMA = "coupon_corrupt";
@@ -49,7 +55,7 @@ class VerifyReportViewTest {
         @DisplayName("검출이 0인 규칙도 0으로 채워서 준다 — 빠지면 '안 돌렸다' 로 읽힌다")
         void fillsZeroForRulesWithoutFindings() {
             VerifyReportView view = VerifyReportView.of(SCHEMA,
-                    run(DatasetType.CLEAN, null),
+                    run(DatasetType.CLEAN, null), EXAMINED,
                     Map.of(FindingType.STOCK_MISMATCH, 3),
                     null);
 
@@ -64,7 +70,7 @@ class VerifyReportViewTest {
         @DisplayName("정상셋은 여섯 규칙이 전부 0이다 — 본문이 비어 보이면 안 된다")
         void cleanRunShowsAllRulesAsZero() {
             VerifyReportView view = VerifyReportView.of(SCHEMA,
-                    run(DatasetType.CLEAN, null), Map.of(), null);
+                    run(DatasetType.CLEAN, null), EXAMINED, Map.of(), null);
 
             assertThat(view.byType())
                     .hasSize(FindingType.values().length)
@@ -75,7 +81,7 @@ class VerifyReportViewTest {
         @DisplayName("저장소가 null 을 줘도 여섯을 채운다")
         void toleratesNullCounts() {
             VerifyReportView view = VerifyReportView.of(SCHEMA,
-                    run(DatasetType.CLEAN, null), null, null);
+                    run(DatasetType.CLEAN, null), EXAMINED, null, null);
 
             assertThat(view.byType()).hasSize(FindingType.values().length);
         }
@@ -84,7 +90,7 @@ class VerifyReportViewTest {
         @DisplayName("규칙 순서는 FindingType 선언 순서다 — 실행마다 같아야 diff 가 뜻을 갖는다")
         void keepsDeclarationOrder() {
             VerifyReportView view = VerifyReportView.of(SCHEMA,
-                    run(DatasetType.CLEAN, null), Map.of(), null);
+                    run(DatasetType.CLEAN, null), EXAMINED, Map.of(), null);
 
             assertThat(view.byType().keySet())
                     .containsExactly(FindingType.values());
@@ -389,10 +395,10 @@ class VerifyReportViewTest {
     void rejectsBlankSchema() {
         VerificationRun run = run(DatasetType.CLEAN, null);
 
-        assertThatThrownBy(() -> VerifyReportView.of(null, run, Map.of(), null))
+        assertThatThrownBy(() -> VerifyReportView.of(null, run, EXAMINED, Map.of(), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("스키마 이름");
-        assertThatThrownBy(() -> VerifyReportView.of("   ", run, Map.of(), null))
+        assertThatThrownBy(() -> VerifyReportView.of("   ", run, EXAMINED, Map.of(), null))
                 .as("공백만 있는 이름도 이름이 아니다")
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -400,7 +406,7 @@ class VerifyReportViewTest {
     @Test
     @DisplayName("스키마 이름을 그대로 싣는다 — 같은 dataset 두 장을 이것으로 가른다")
     void carriesSchemaName() {
-        assertThat(VerifyReportView.of("coupon_clean", run(DatasetType.CLEAN, null),
+        assertThat(VerifyReportView.of("coupon_clean", run(DatasetType.CLEAN, null), EXAMINED,
                 Map.of(), null).schema())
                 .isEqualTo("coupon_clean");
     }
@@ -408,7 +414,7 @@ class VerifyReportViewTest {
     @Test
     @DisplayName("실행이 없으면 리포트를 만들 수 없다")
     void rejectsNullRun() {
-        assertThatThrownBy(() -> VerifyReportView.of(SCHEMA, null, Map.of(), null))
+        assertThatThrownBy(() -> VerifyReportView.of(SCHEMA, null, EXAMINED, Map.of(), null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("검증 실행");
     }
@@ -418,7 +424,7 @@ class VerifyReportViewTest {
     void carriesTheRunItself() {
         VerificationRun run = run(DatasetType.CORRUPT, 11L);
 
-        assertThat(VerifyReportView.of(SCHEMA, run, Map.of(), null).run())
+        assertThat(VerifyReportView.of(SCHEMA, run, EXAMINED, Map.of(), null).run())
                 .as("같은 것을 두 군데서 관리하지 않는다는 것이 이 모양의 이유다")
                 .isSameAs(run);
     }

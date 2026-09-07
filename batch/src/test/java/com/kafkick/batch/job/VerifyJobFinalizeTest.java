@@ -315,6 +315,33 @@ class VerifyJobFinalizeTest {
         return messages;
     }
 
+    /**
+     * <b>판정 옆에 분모가 남아야 한다.</b> 이 값이 없으면 리포트에서 <i>"다 보고 못 찾았다"</i>
+     * 와 <i>"거의 아무것도 안 봤다"</i> 가 같은 모양이 된다.
+     *
+     * <p>지문이 쓰는 바로 그 수라 <b>새로 세지 않는다</b> — 두 벌로 두면 지문이 접은 수와
+     * 화면이 읽는 수가 갈리고, 그때 어느 쪽이 그 판정의 재료였는지 알 수 없다.
+     */
+    @Test
+    @DisplayName("판정과 함께 무엇을 몇 건 봤는지 남긴다")
+    void recordsWhatItExamined() throws Exception {
+        cleanIssuance();
+
+        launch(31);
+
+        Map<String, Object> row = jdbcClient
+                .sql("SELECT examined_issuance_count AS i, examined_history_count AS h "
+                        + "FROM verification_runs WHERE attempt = 31 AND origin = 'BATCH'")
+                .query().singleRow();
+
+        assertThat(((Number) row.get("i")).longValue())
+                .as("cleanIssuance 가 발급건 하나를 심는다")
+                .isEqualTo(1L);
+        assertThat(((Number) row.get("h")).longValue())
+                .as("그 발급건의 이력 하나다")
+                .isEqualTo(1L);
+    }
+
     private JobExecution launch(int attempt) throws Exception {
         return jobOperator.start(verifyJob, new JobParametersBuilder()
                 .addLocalDateTime("asOf", AS_OF)
