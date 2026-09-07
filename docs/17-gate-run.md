@@ -358,7 +358,8 @@ DB_NAME=coupon_clean docker compose -f base.yml -f batch.yml up -d --force-recre
 # ── 0. 서버 스위치와 권한 ────────────────────────────────────────────────
 # ⚠️ mysql 컨테이너를 다시 만들면 local_infile 은 **다시 풀린다**. 그때 여기로 돌아온다.
 cd ~/URECA/comprehensiveProject/cy-be
-docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql mysql -uroot -e "
+docker compose -f base.yml exec -T mysql sh -c \
+  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -e "$1"' _ "
   SET GLOBAL local_infile = 1;
   CREATE DATABASE IF NOT EXISTS coupon_clean;
   CREATE DATABASE IF NOT EXISTS coupon_corrupt;
@@ -412,7 +413,8 @@ for S in coupon_clean coupon_corrupt; do
   for F in V11__batch_metadata.sql \
            V2026082513__ix_batch_job_execution_lookup.sql \
            V2026082514__ix_batch_job_execution_history.sql; do
-    docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql mysql -uroot "$S" \
+    docker compose -f base.yml exec -T mysql sh -c \
+      'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$1"' _ "$S" \
       < storage/src/main/resources/db/migration/$F
   done
 done
@@ -485,8 +487,10 @@ gate() {                      # $1=스키마  $2=데이터셋  $3=attempt  $4=se
 # "누락 800 · 오탐 800 으로 나타나 규칙을 의심하게 만든다" 고 적어 뒀다.
 seed_run_of() {   # $1 = 스키마
   local v
-  v=$(docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql \
-      mysql -uroot -N -e "SELECT DISTINCT seed_run_id FROM $1.expected_findings;" | tr -d '\r')
+  v=$(docker compose -f base.yml exec -T mysql sh -c \
+      'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N \
+           -e "SELECT DISTINCT seed_run_id FROM $1.expected_findings;"' _ "$1" \
+      | tr -d '\r')
   # **하나가 아니면 멈춘다.** 둘 이상이면 사람이 골라야 하고, 없으면 주입을 안 돌린 것이다.
   if [ "$(printf '%s\n' "$v" | grep -c .)" -ne 1 ]; then
     echo "seed_run_id 가 정확히 하나가 아니다: [$v]" >&2; return 1
@@ -515,12 +519,14 @@ cd ../cy-seed && set -a; . ./.env; set +a
 ./.venv/bin/python bin/seed.py all --dataset corrupt --schema coupon_v6 \
   --as-of "$ASOF" --plant-v6
 cd ../cy-be
-docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql mysql -uroot -e "
+docker compose -f base.yml exec -T mysql sh -c \
+  'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -e "$1"' _ "
   GRANT SELECT, INSERT, UPDATE, DELETE ON coupon_v6.* TO 'app'@'%'; FLUSH PRIVILEGES;"
 for F in V11__batch_metadata.sql \
          V2026082513__ix_batch_job_execution_lookup.sql \
          V2026082514__ix_batch_job_execution_history.sql; do
-  docker compose -f base.yml exec -T -e MYSQL_PWD=root mysql mysql -uroot coupon_v6 \
+  docker compose -f base.yml exec -T mysql sh -c \
+    'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot coupon_v6' \
     < storage/src/main/resources/db/migration/$F
 done
 # ⚠️ **리포트를 다른 자리에 쌓는다.** runId 는 스키마마다 따로 매겨져서,

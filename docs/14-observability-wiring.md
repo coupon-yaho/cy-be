@@ -663,10 +663,15 @@ CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케�
      **`CleanupRunningTooLong` 으로만** 드러난다.
 
    ```bash
-   # 변수 이름에 주의. MYSQL_ROOT_PASSWORD 는 **컨테이너 안** 이름이고, 호스트 셸이
-   # 펼치는 것은 DB_ROOT_PASSWORD 다. 전자를 쓰면 빈 문자열이 되어 mysql 이 대화형
-   # 프롬프트로 가고, stdin 은 SQL 파일이라 첫 줄을 비밀번호로 읽고 죽는다.
-   # -p 를 인자로 주면 ps 에 남으므로 MYSQL_PWD 로 넘긴다.
+   # **비밀번호를 호스트 셸로 안 꺼낸다.** 호스트에서 펴서 -e MYSQL_PWD=<값> 으로
+   # 넘기면 그 값이 호스트 docker 프로세스의 명령행에 실려 ps 로 보인다 —
+   # scripts/pour-batch-meta.sh 가 그 근거를 적어 두고 이 형태를 쓴다.
+   # 컨테이너 **안**에서 MYSQL_ROOT_PASSWORD 를 MYSQL_PWD 로 옮긴다.
+   # 그 값을 주는 호스트 손잡이는 DB_ROOT_PASSWORD 다 — base.yml 이
+   #   MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+   # 로 넘긴다. 이름이 둘인 이유가 그것이고, 호스트에서 컨테이너 쪽 이름을 펴면
+   # 빈 문자열이 되어 ERROR 1045 (using password: NO) 로 죽는다.
+   # -p 를 인자로 줘도 같은 이유로 안 된다.
    #
    # ⚠️ **두 스키마에 다 부어야 한다.** 아래 CORRUPT 트리거는 coupon_corrupt 를 보는
    #    기동에서 돌리는데, 그 스키마에도 BATCH_* 가 없어 첫 실행이 메타 테이블 오류로 죽는다.
@@ -677,8 +682,8 @@ CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케�
      for F in V11__batch_metadata.sql \
               V2026082513__ix_batch_job_execution_lookup.sql \
               V2026082514__ix_batch_job_execution_history.sql; do
-       docker compose -f base.yml exec -T -e MYSQL_PWD="${DB_ROOT_PASSWORD:-root}" mysql \
-         mysql -uroot "$SCHEMA" \
+       docker compose -f base.yml exec -T mysql sh -c \
+         'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$1"' _ "$SCHEMA" \
          < storage/src/main/resources/db/migration/$F
      done
    done
