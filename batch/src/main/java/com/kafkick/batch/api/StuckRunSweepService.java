@@ -2,6 +2,7 @@
 package com.kafkick.batch.api;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,7 +92,12 @@ public class StuckRunSweepService {
     private final JdbcClient jdbcClient;
     private final Counter recovered;
     private final Counter failures;
-    private final Counter capped;
+
+    /**
+     * <b>지금 상한에 밀려 있는 건수.</b> 마지막 스윕이 <b>고르지도 못한</b> 수이고,
+     * 남긴 것이 없으면 0 이다.
+     */
+    private final AtomicLong backlog = new AtomicLong();
 
     /**
      * <b>게이지는 {@code StuckRunSweeper} 의 조건과 <i>같은 규칙</i>으로 읽어야 한다.</b>
@@ -129,8 +135,12 @@ public class StuckRunSweepService {
         this.failures = Counter.builder("cy_batch_stuck_sweep_failures_total")
                 .description("시체 스윕이 조회나 회수에서 끊긴 횟수. 로그는 감시 수단이 아니다")
                 .register(registry);
-        this.capped = Counter.builder("cy_batch_stuck_sweep_capped_total")
-                .description("상한 때문에 시도조차 못 한 실행 수. 단위는 주기가 아니라 건이다")
+        // **카운터가 아니라 게이지다.** 안 걷힌 실행은 다음 주기 조회에 **다시 나온다** —
+        // 카운터로 누적하면 increase(...[15m]) 가 "실행 수" 가 아니라 "실행마다 밀린
+        // 주기 수" 까지 합산해서, 그 값으로 상한을 산정하면 훨씬 큰 수가 나온다.
+        // 적체는 흐름이 아니라 **상태**다.
+        Gauge.builder("cy_batch_stuck_sweep_backlog", backlog, AtomicLong::doubleValue)
+                .description("상한에 밀려 이번 주기에 고르지도 못한 실행 수. 상한 증설량이 이 수다")
                 .register(registry);
         boolean armed = isOn(schedulingEnabled) && isOn(sweepEnabled);
         Gauge.builder("cy_batch_stuck_sweep_enabled", () -> armed ? 1 : 0)
@@ -159,11 +169,14 @@ public class StuckRunSweepService {
     }
 
     /**
-     * <b>상한 때문에 시도조차 못 한 실행 수.</b>
+     * <b>이번 주기가 상한에 밀려 남긴 수를 적는다.</b> 남긴 것이 없으면 0 이 들어온다 —
+     * <b>매 주기 부른다.</b> 안 부르면 한 번 밀린 값이 그대로 굳어, 상한을 올려 해소한
+     * 뒤에도 관제가 계속 밀려 있다고 말한다.
      *
-     * <p><b>단위가 건이다 — 주기가 아니다.</b> 주기마다 1 을 올리면 운영자가 증분으로
-     * <i>얼마나 모자란지</i>를 못 읽는다. {@code increase(...[15m])} 가 곧
-     * <b>"지난 15분에 상한 때문에 못 건드린 건수"</b> 여야 상한을 얼마로 올릴지가 나온다.
+     * <p><b>왜 카운터가 아닌가.</b> 안 걷힌 실행은 <b>다음 주기 조회에 다시 나온다.</b>
+     * 카운터로 누적하면 {@code increase(...[15m])} 가 실행 수가 아니라 <b>실행마다 밀린
+     * 주기 수</b>까지 합산한다 — 60초 주기면 한 건이 15분에 열다섯으로 세어져, 그 값으로
+     * 상한을 정하면 실제 필요량의 열다섯 배가 나온다. <b>적체는 흐름이 아니라 상태다.</b>
      *
      * <p><b>회수 실패는 여기 안 들어온다.</b> 시도했다가 던진 건은 여전히 시체로 남지만
      * 그 축은 {@link #recordFailure()} 가 진다 — 둘을 합치면 <i>"상한을 올리십시오"</i> 와
@@ -175,10 +188,10 @@ public class StuckRunSweepService {
      * <i>"실행이 매 주기 되살아난다"</i> 로 단정하는데, <b>상한 소진도 같은 모양</b>이라
      * 운영자가 임계를 만지러 간다 — 정작 필요한 것은 상한을 올리는 것이다.
      *
-     * @param notAttempted 이번 주기에 <b>고르지도 못한</b> 실행 수
+     * @param notAttempted 이번 주기에 <b>고르지도 못한</b> 실행 수. 없으면 0
      */
-    public void recordCapped(long notAttempted) {
-        capped.increment(notAttempted);
+    public void recordBacklog(long notAttempted) {
+        backlog.set(notAttempted);
     }
 
     /**

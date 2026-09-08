@@ -243,9 +243,11 @@ public class StuckRunSweeper {
                 }
             }
         }
+        // **매 주기 적는다 — 0 도 적는다.** 남았을 때만 적으면 상한을 올려 해소한 뒤에도
+        // 게이지가 옛 값으로 굳어 관제가 계속 밀려 있다고 말한다.
+        sweep.recordBacklog(notAttempted);
         if (notAttempted > 0) {
-            sweep.recordCapped(notAttempted);
-            log.warn("시체 스윕 상한에 걸려 {}건을 이번 주기에 **고르지도 못했습니다**. "
+            log.warn("시체 스윕 상한에 걸려 {}건을 이번 주기에 고르지도 못했습니다. "
                     + "다음 주기는 다른 잡부터 봅니다. 상한={}", notAttempted, maxPerSweep);
         }
         if (closed > 0) {

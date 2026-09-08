@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -104,6 +105,11 @@ class StuckRunSweeperTest {
     private double counter(String name) {
         return registry.find(name).counter() == null ? 0d
                 : registry.find(name).counter().count();
+    }
+
+    private double gauge(String name) {
+        return registry.find(name).gauge() == null ? -1d
+                : registry.find(name).gauge().value();
     }
 
     private BatchStatus statusOf(long executionId) {
@@ -313,7 +319,6 @@ class StuckRunSweeperTest {
     @Test
     @DisplayName("예산이 잡 경계에서 떨어져도 남은 잡을 세어 적체로 남긴다")
     void anExhaustedBudgetStillCountsTheBacklogBehindIt() {
-        double before = counter("cy_batch_stuck_sweep_capped_total");
         LocalDateTime now = LocalDateTime.now();
         String first = jobs.stream().map(Job::getName).sorted().findFirst().orElseThrow();
         String second = jobs.stream().map(Job::getName).sorted().skip(1)
@@ -330,9 +335,9 @@ class StuckRunSweeperTest {
             assertThat(statusOf(behind.executionId()))
                     .as("상한이 쓰기를 막는 축은 그대로여야 한다")
                     .isEqualTo(BatchStatus.STARTED);
-            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
-                    .as("뒤 잡에 남았는데 안 세면 알림이 임계를 지목한다")
-                    .isGreaterThan(before);
+            assertThat(gauge("cy_batch_stuck_sweep_backlog"))
+                    .as("뒤 잡에 하나 남았다. 안 세면 알림이 임계를 지목한다")
+                    .isEqualTo(1);
         }
     }
 
@@ -502,11 +507,18 @@ class StuckRunSweeperTest {
      * {@code BatchStuckExecution} 이 <i>"둘 다 정상인데 뜬다"</i> 를 곧바로
      * <i>"실행이 되살아난다"</i> 로 단정하고, 운영자가 임계를 만지러 간다 — 정작 필요한
      * 것은 상한을 올리는 것이다.
+     *
+     * <p><b>그런데 그것이 카운터면 안 된다 — 적체는 흐름이 아니라 상태다.</b> 누적하면
+     * 안 걷힌 실행이 <b>다음 주기 조회에 다시 나와</b> 또 더해진다. 60초 주기면 한 건이
+     * 15분에 열다섯으로 세어지고, 그 값으로 상한을 정하면 <b>실제 필요량의 열다섯 배</b>가
+     * 나온다.
+     *
+     * <p>그래서 <b>두 번 돌리고 값이 안 늘어나는지</b>까지 본다. 그것이 카운터와 게이지를
+     * 가르는 유일한 관측이다.
      */
     @Test
-    @DisplayName("상한 지표는 주기가 아니라 못 고른 건수를 센다")
-    void theCapMetricCountsRunsNotSweeps() {
-        double before = counter("cy_batch_stuck_sweep_capped_total");
+    @DisplayName("적체 게이지는 지금 밀린 건수다 — 주기마다 누적되지 않는다")
+    void theBacklogGaugeIsAStateNotAFlow() {
         LocalDateTime now = LocalDateTime.now();
         try (RunningJobFixture a = RunningJobFixture.plant(jobRepository, jdbcClient,
                 CleanupJobConfig.JOB_NAME, now, DEAD, DEAD);
@@ -515,12 +527,34 @@ class StuckRunSweeperTest {
                 RunningJobFixture c = RunningJobFixture.plant(jobRepository, jdbcClient,
                         CleanupJobConfig.JOB_NAME, now.plusSeconds(2), DEAD, DEAD)) {
 
-            // 셋 중 하나만 고른다 — 둘이 남는다.
-            sweeperWithCap(1).sweep();
+            // 셋 중 하나만 고른다 — 둘이 남는다. 아무것도 안 걷는 서비스라 계속 남는다.
+            StuckRunSweepService noop = mock(StuckRunSweepService.class);
+            when(noop.recover(anyLong(), any())).thenReturn(false);
+            StuckRunSweeper sweeper = sweeper(noop, runningJobs, 1);
 
-            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
-                    .as("주기마다 1 이면 운영자가 증분으로 상한을 얼마로 올릴지 못 읽는다")
-                    .isEqualTo(before + 2);
+            sweeper.sweep();
+            verify(noop).recordBacklog(2L);
+
+            sweeper.sweep();
+            verify(noop, times(2)).recordBacklog(2L);
+        }
+    }
+
+    /**
+     * <b>해소된 뒤에는 0 으로 내려와야 한다.</b> 남았을 때만 적으면 상한을 올려 해소한
+     * 뒤에도 게이지가 옛 값으로 굳어, 관제가 <b>계속 밀려 있다</b>고 말한다.
+     */
+    @Test
+    @DisplayName("남긴 것이 없는 주기는 게이지를 0 으로 내린다")
+    void aCleanSweepClearsTheBacklogGauge() {
+        try (RunningJobFixture only = RunningJobFixture.plant(jobRepository, jdbcClient,
+                CleanupJobConfig.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+
+            sweeperWithCap(20).sweep();
+
+            assertThat(gauge("cy_batch_stuck_sweep_backlog"))
+                    .as("옛 값이 굳으면 해소한 뒤에도 관제가 밀려 있다고 말한다")
+                    .isZero();
         }
     }
 
@@ -530,9 +564,8 @@ class StuckRunSweeperTest {
      * <i>"왜 못 걷는지 보십시오"</i> 라는 <b>서로 다른 처방</b>이 한 수에 섞인다.
      */
     @Test
-    @DisplayName("회수가 던져도 상한 지표는 안 오른다")
+    @DisplayName("회수가 던져도 적체 게이지는 0 이다")
     void aFailedRecoveryIsNotCapPressure() {
-        double before = counter("cy_batch_stuck_sweep_capped_total");
         try (RunningJobFixture only = RunningJobFixture.plant(jobRepository, jdbcClient,
                 CleanupJobConfig.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
 
@@ -543,10 +576,7 @@ class StuckRunSweeperTest {
             sweeper(flaky, runningJobs, 20).sweep();
 
             verify(flaky).recordFailure();
-            verify(flaky, never()).recordCapped(anyLong());
-            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
-                    .as("상한이 모자라서 남은 게 아니다 — 걷다 실패한 것이다")
-                    .isEqualTo(before);
+            verify(flaky).recordBacklog(0L);
         }
     }
 
@@ -560,7 +590,6 @@ class StuckRunSweeperTest {
     @Test
     @DisplayName("예산이 딱 맞으면 상한 지표가 안 오른다")
     void exactlyFittingTheBudgetIsNotACapacityProblem() {
-        double before = counter("cy_batch_stuck_sweep_capped_total");
         try (RunningJobFixture only = RunningJobFixture.plant(jobRepository, jdbcClient,
                 CleanupJobConfig.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
 
@@ -569,9 +598,9 @@ class StuckRunSweeperTest {
             assertThat(statusOf(only.executionId()))
                     .as("전제가 무너지면 아래 단언이 아무것도 안 잰다")
                     .isEqualTo(BatchStatus.FAILED);
-            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
-                    .as("남긴 것이 없는데 오르면 알림이 멀쩡한 용량을 지목한다")
-                    .isEqualTo(before);
+            assertThat(gauge("cy_batch_stuck_sweep_backlog"))
+                    .as("남긴 것이 없는데 0 이 아니면 알림이 멀쩡한 용량을 지목한다")
+                    .isZero();
         }
     }
 
