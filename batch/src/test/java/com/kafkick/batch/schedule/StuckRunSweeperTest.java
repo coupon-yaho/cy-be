@@ -504,20 +504,49 @@ class StuckRunSweeperTest {
      * 것은 상한을 올리는 것이다.
      */
     @Test
-    @DisplayName("남긴 것이 있으면 상한을 지표로 남긴다")
-    void hittingTheCapIsCounted() {
+    @DisplayName("상한 지표는 주기가 아니라 못 고른 건수를 센다")
+    void theCapMetricCountsRunsNotSweeps() {
         double before = counter("cy_batch_stuck_sweep_capped_total");
         LocalDateTime now = LocalDateTime.now();
         try (RunningJobFixture a = RunningJobFixture.plant(jobRepository, jdbcClient,
                 CleanupJobConfig.JOB_NAME, now, DEAD, DEAD);
                 RunningJobFixture b = RunningJobFixture.plant(jobRepository, jdbcClient,
-                        CleanupJobConfig.JOB_NAME, now.plusSeconds(1), DEAD, DEAD)) {
+                        CleanupJobConfig.JOB_NAME, now.plusSeconds(1), DEAD, DEAD);
+                RunningJobFixture c = RunningJobFixture.plant(jobRepository, jdbcClient,
+                        CleanupJobConfig.JOB_NAME, now.plusSeconds(2), DEAD, DEAD)) {
 
+            // 셋 중 하나만 고른다 — 둘이 남는다.
             sweeperWithCap(1).sweep();
 
             assertThat(counter("cy_batch_stuck_sweep_capped_total"))
-                    .as("로그만 남기면 관제가 용량 부족을 회수 실패와 못 가른다")
-                    .isGreaterThan(before);
+                    .as("주기마다 1 이면 운영자가 증분으로 상한을 얼마로 올릴지 못 읽는다")
+                    .isEqualTo(before + 2);
+        }
+    }
+
+    /**
+     * <b>회수 실패는 상한 지표에 안 섞인다.</b> 던진 건도 여전히 시체로 남지만, 그 축은
+     * {@code recordFailure} 가 진다 — 합치면 <i>"상한을 올리십시오"</i> 와
+     * <i>"왜 못 걷는지 보십시오"</i> 라는 <b>서로 다른 처방</b>이 한 수에 섞인다.
+     */
+    @Test
+    @DisplayName("회수가 던져도 상한 지표는 안 오른다")
+    void aFailedRecoveryIsNotCapPressure() {
+        double before = counter("cy_batch_stuck_sweep_capped_total");
+        try (RunningJobFixture only = RunningJobFixture.plant(jobRepository, jdbcClient,
+                CleanupJobConfig.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+
+            StuckRunSweepService flaky = mock(StuckRunSweepService.class);
+            when(flaky.recover(anyLong(), any()))
+                    .thenThrow(new IllegalStateException("걷다 터졌다"));
+
+            sweeper(flaky, runningJobs, 20).sweep();
+
+            verify(flaky).recordFailure();
+            verify(flaky, never()).recordCapped(anyLong());
+            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
+                    .as("상한이 모자라서 남은 게 아니다 — 걷다 실패한 것이다")
+                    .isEqualTo(before);
         }
     }
 

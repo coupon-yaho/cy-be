@@ -130,7 +130,7 @@ public class StuckRunSweepService {
                 .description("시체 스윕이 조회나 회수에서 끊긴 횟수. 로그는 감시 수단이 아니다")
                 .register(registry);
         this.capped = Counter.builder("cy_batch_stuck_sweep_capped_total")
-                .description("상한에 걸려 이번 주기를 못 끝낸 횟수. 처리 용량 부족을 회수 실패와 가른다")
+                .description("상한 때문에 시도조차 못 한 실행 수. 단위는 주기가 아니라 건이다")
                 .register(registry);
         boolean armed = isOn(schedulingEnabled) && isOn(sweepEnabled);
         Gauge.builder("cy_batch_stuck_sweep_enabled", () -> armed ? 1 : 0)
@@ -159,21 +159,26 @@ public class StuckRunSweepService {
     }
 
     /**
-     * 상한에 걸려 이번 주기를 못 끝냈다.
+     * <b>상한 때문에 시도조차 못 한 실행 수.</b>
      *
-     * <p><b>확실히 남긴 것에만 올린다.</b> 예산이 딱 맞아떨어져 끝난 주기는 남은 것이
-     * 없을 수도 있는데, 그때 올리면 알림이 <i>"상한을 올리십시오"</i> 라고 <b>멀쩡한 용량을
-     * 지목한다.</b> 그래서 <b>목록 한복판에서 끊었을 때만</b> 부른다 — 그 자리에서만
-     * 남은 것이 있다는 증거가 손에 있다.
+     * <p><b>단위가 건이다 — 주기가 아니다.</b> 주기마다 1 을 올리면 운영자가 증분으로
+     * <i>얼마나 모자란지</i>를 못 읽는다. {@code increase(...[15m])} 가 곧
+     * <b>"지난 15분에 상한 때문에 못 건드린 건수"</b> 여야 상한을 얼마로 올릴지가 나온다.
      *
-     * <p><b>실패와 가르는 이유.</b> 시체가 안 줄어드는 상태는 원인이 셋인데
+     * <p><b>회수 실패는 여기 안 들어온다.</b> 시도했다가 던진 건은 여전히 시체로 남지만
+     * 그 축은 {@link #recordFailure()} 가 진다 — 둘을 합치면 <i>"상한을 올리십시오"</i> 와
+     * <i>"왜 못 걷는지 보십시오"</i> 라는 <b>서로 다른 처방</b>이 한 수에 섞인다.
+     *
+     * <p><b>왜 이 축이 따로 필요한가.</b> 시체가 안 줄어드는 상태는 원인이 셋인데
      * ({@code enabled=0} · 회수 실패 · <b>처리 용량 부족</b>) 앞의 둘만 지표가 있었다.
      * 그러면 {@code BatchStuckExecution} 이 <i>"둘 다 정상인데 뜬다"</i> 를 곧바로
      * <i>"실행이 매 주기 되살아난다"</i> 로 단정하는데, <b>상한 소진도 같은 모양</b>이라
      * 운영자가 임계를 만지러 간다 — 정작 필요한 것은 상한을 올리는 것이다.
+     *
+     * @param notAttempted 이번 주기에 <b>고르지도 못한</b> 실행 수
      */
-    public void recordCapped() {
-        capped.increment();
+    public void recordCapped(long notAttempted) {
+        capped.increment(notAttempted);
     }
 
     /**

@@ -191,7 +191,7 @@ public class StuckRunSweeper {
         }
         int budget = maxPerSweep;
         int closed = 0;
-        long leftBehind = 0;
+        long notAttempted = 0;
         for (String jobName : rotated()) {
             // **예산이 0 이어도 남은 잡을 센다.** 한때 여기서 끊었는데, 그러면 앞 잡이
             // 상한을 **정확히** 소진하고 뒤 잡에 시체가 남은 주기가 "용량 정상" 으로
@@ -212,9 +212,15 @@ public class StuckRunSweeper {
             }
             // **남긴 수를 추측하지 않고 뺀다.** 증거 없이 세면 예산이 딱 맞아떨어진
             // 주기에도 카운터가 올라 알림이 멀쩡한 용량을 지목하고, 안 세면 반대로
-            // 진짜 적체를 놓친다. 본 목록에서 처리한 만큼을 빼면 둘 다 안 난다.
+            // 진짜 적체를 놓친다. 본 목록에서 **고른** 만큼을 빼면 둘 다 안 난다.
+            //
+            // ⚠️ **"고른" 이지 "걷은" 이 아니다.** 아래에서 recover 가 던진 건도 taken 에
+            // 들어가 있어 여전히 시체로 남는다 — 그 축은 recordFailure 가 따로 진다.
+            // 둘을 한 수에 합치면 "상한을 올리십시오" 와 "왜 못 걷는지 보십시오" 라는
+            // 서로 다른 처방이 섞인다. 이 값이 답하는 질문은 **"상한이 얼마나 모자랐나"**
+            // 하나다.
             int taken = Math.min(budget, stuckRuns.size());
-            leftBehind += stuckRuns.size() - taken;
+            notAttempted += stuckRuns.size() - taken;
             for (int i = 0; i < taken; i++) {
                 StuckRun stuck = stuckRuns.get(i);
                 budget--;
@@ -237,10 +243,10 @@ public class StuckRunSweeper {
                 }
             }
         }
-        if (leftBehind > 0) {
-            sweep.recordCapped();
-            log.warn("시체 스윕 상한에 걸려 {}건을 이번 주기에 못 걷었습니다. 다음 주기는 "
-                    + "다른 잡부터 봅니다. 상한={}", leftBehind, maxPerSweep);
+        if (notAttempted > 0) {
+            sweep.recordCapped(notAttempted);
+            log.warn("시체 스윕 상한에 걸려 {}건을 이번 주기에 **고르지도 못했습니다**. "
+                    + "다음 주기는 다른 잡부터 봅니다. 상한={}", notAttempted, maxPerSweep);
         }
         if (closed > 0) {
             log.warn("시체 스윕이 실행 {}건을 FAILED 로 닫았습니다.", closed);
