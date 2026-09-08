@@ -687,6 +687,26 @@ class StuckRunSweeperTest {
     }
 
     /**
+     * <b>꺼진 주기는 적체 게이지를 안 건드린다.</b> 주석이 <i>"매 주기 0 도 적는다"</i> 고
+     * 적혀 있었는데 조기 반환이 그 호출 앞이라 거짓이었다 — 산문과 흐름이 갈린 자리다.
+     *
+     * <p><b>그리고 그것이 맞는 동작이다.</b> 0 으로 내리면 <b>적체가 없다고 거짓말</b>한다 —
+     * 아무도 안 걷는 동안 그 행들은 실제로 남아 있다. 왜 안 줄어드는지는
+     * {@code cy_batch_stuck_sweep_enabled} 가 진다. 그래서 <b>동작을 두고 계약을 좁혔고</b>,
+     * 다음에 또 갈리지 않게 여기서 잰다.
+     */
+    @Test
+    @DisplayName("꺼진 주기는 적체 게이지를 갱신하지 않는다")
+    void aDisabledSweepLeavesTheBacklogGaugeUntouched() {
+        StuckRunSweepService spy = mock(StuckRunSweepService.class);
+
+        sweeper(spy, runningJobs, 20, false).sweep();
+
+        verify(spy, never()).recordBacklog(anyLong());
+        verify(spy, never()).recover(anyLong(), any());
+    }
+
+    /**
      * <b>게이지가 조건과 같은 규칙으로 읽는가.</b> {@code @Value boolean} 은 스프링의
      * {@code StringToBooleanConverter} 를 타서 {@code true·on·yes·1} 을 전부 참으로 보는데
      * (7.0.8 바이트코드로 확인), {@code @ConditionalOnProperty(havingValue = "true")} 는
