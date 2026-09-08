@@ -96,7 +96,8 @@ class StuckRunSweeperTest {
 
     private StuckRunSweeper sweeper(StuckRunSweepService service, RunningJobProbe probe,
             int cap, boolean enabled) {
-        return new StuckRunSweeper(service, probe, jobs, transactionManager, cap, enabled, 5);
+        return new StuckRunSweeper(service, probe, jobs, transactionManager, cap, enabled,
+                60_000L, 5);
     }
 
     private double counter(String name) {
@@ -457,6 +458,85 @@ class StuckRunSweeperTest {
     }
 
     /**
+     * <b>앞 잡이 상한을 계속 먹으면 뒤 잡은 어떻게 되나.</b> 고정 순서 + 전역 상한이면
+     * <b>뒤 잡은 조회조차 안 되고</b>, 예산이 0 이라 조회를 건너뛰므로 그 사실이
+     * 지표에도 안 잡힌다 — 그 잡의 시체는 자동 회수 대상에서 조용히 빠진다.
+     *
+     * <p>여기서 재는 것은 <b>두 번째 주기가 다른 잡부터 보는가</b>다. 상한 1 로 두 주기를
+     * 돌리면 회전이 없을 때 같은 잡을 두 번 보고, 있으면 각각 한 번씩 본다.
+     */
+    @Test
+    @DisplayName("주기마다 시작 잡을 돌려 뒤쪽 잡이 안 굶는다")
+    void theStartingJobRotatesSoLaterJobsAreNotStarved() {
+        RunningJobProbe counting = mock(RunningJobProbe.class);
+        when(counting.stuckExecutions(anyString())).thenReturn(List.of());
+
+        LocalDateTime now = LocalDateTime.now();
+        String first = jobs.stream().map(Job::getName).sorted().findFirst().orElseThrow();
+        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
+                first, now, DEAD, DEAD)) {
+            StuckRun planted = runningJobs.stuckExecutions(first).stream()
+                    .filter(run -> run.execution().getId() == corpse.executionId())
+                    .findFirst()
+                    .orElseThrow();
+            // 첫 잡이 매 주기 상한을 통째로 먹는다.
+            when(counting.stuckExecutions(eq(first))).thenReturn(List.of(planted));
+
+            StuckRunSweeper sweeper = sweeper(sweepService, counting, 1);
+            sweeper.sweep();
+            sweeper.sweep();
+
+            String second = jobs.stream().map(Job::getName).sorted().skip(1)
+                    .findFirst().orElseThrow();
+            verify(counting).stuckExecutions(second);
+        }
+    }
+
+    /**
+     * <b>상한에 걸린 것을 지표가 말하나.</b> 시체가 안 줄어드는 원인이 셋인데
+     * (꺼짐 · 회수 실패 · <b>처리 용량 부족</b>) 앞의 둘만 계측이 있었다. 그러면
+     * {@code BatchStuckExecution} 이 <i>"둘 다 정상인데 뜬다"</i> 를 곧바로
+     * <i>"실행이 되살아난다"</i> 로 단정하고, 운영자가 임계를 만지러 간다 — 정작 필요한
+     * 것은 상한을 올리는 것이다.
+     */
+    @Test
+    @DisplayName("상한에 걸리면 그것도 지표로 남는다")
+    void hittingTheCapIsCounted() {
+        double before = counter("cy_batch_stuck_sweep_capped_total");
+        LocalDateTime now = LocalDateTime.now();
+        try (RunningJobFixture a = RunningJobFixture.plant(jobRepository, jdbcClient,
+                CleanupJobConfig.JOB_NAME, now, DEAD, DEAD);
+                RunningJobFixture b = RunningJobFixture.plant(jobRepository, jdbcClient,
+                        CleanupJobConfig.JOB_NAME, now.plusSeconds(1), DEAD, DEAD)) {
+
+            sweeperWithCap(1).sweep();
+
+            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
+                    .as("로그만 남기면 관제가 용량 부족을 회수 실패와 못 가른다")
+                    .isGreaterThan(before);
+        }
+    }
+
+    /**
+     * <b>주기가 알림 창보다 길면 기동을 거절한다.</b> {@code BatchStuckExecution} 이
+     * 10분에 뜨는데 주기가 그보다 길면 <b>시체가 한 번도 안 걷힌 채</b> 그 알림이 뜬다 —
+     * 그런데 그 알림의 진단문은 <i>"지표가 정상이면 실행이 매 주기 되살아나는 것"</i> 이라고
+     * 말한다. 설정이 그 말을 거짓으로 만드는 상태를 기동에서 끊는다.
+     */
+    @Test
+    @DisplayName("주기가 알림 창의 절반을 넘으면 기동을 거절한다")
+    void rejectsAnIntervalThatOutlivesTheAlertWindow() {
+        assertThatThrownBy(() -> new StuckRunSweeper(sweepService, runningJobs, jobs,
+                transactionManager, 20, true, 600_000L, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BatchStuckExecution");
+        assertThatThrownBy(() -> new StuckRunSweeper(sweepService, runningJobs, jobs,
+                transactionManager, 20, true, 0L, 5))
+                .as("0 은 주기가 아니다 — 스프링에 넘기기 전에 우리가 끊는다")
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
      * <b>0 으로 끄는 길을 안 연다.</b> 스케줄러는 도는데 아무것도 안 하는 상태가 되고,
      * 그것을 알림에 말해 주는 것이 아무것도 없다 — {@code CleanupScheduler} 가 크론
      * {@code "-"} 를 거절하는 것과 같은 근거다.
@@ -497,6 +577,51 @@ class StuckRunSweeperTest {
     }
 
     /**
+     * <b>게이지가 조건과 같은 규칙으로 읽는가.</b> {@code @Value boolean} 은 스프링의
+     * {@code StringToBooleanConverter} 를 타서 {@code true·on·yes·1} 을 전부 참으로 보는데
+     * (7.0.8 바이트코드로 확인), {@code @ConditionalOnProperty(havingValue = "true")} 는
+     * <b>문자열 {@code "true"} 만</b> 받는다.
+     *
+     * <p>둘이 갈리면 {@code BATCH_SCHEDULING_ENABLED=1} 인 형상에서 <b>스케줄 작업은
+     * 안 뜨는데 게이지만 1</b> 이 되고, {@code BatchStuckSweepDisabled} 까지 함께 침묵한다 —
+     * <b>안 도는 것을 돈다고 말하는</b> 방향이라 조용한 실패보다 나쁘다.
+     */
+    @Nested
+    @SpringBootTest(properties = {
+            "spring.config.location=classpath:/resolved/application.yml,classpath:/application.yml",
+            "spring.batch.job.enabled=false",
+            // @ConditionalOnProperty 는 이것을 참으로 안 본다. @Value boolean 은 본다.
+            "batch.scheduling.enabled=1",
+            "batch.stuck-sweep.enabled=true"
+    })
+    @Import(MySqlContainerConfig.class)
+    @DisplayName("스케줄링 스위치가 1 일 때")
+    class WhenTheSwitchIsNotLiterallyTrue {
+
+        @Autowired
+        private ApplicationContext context;
+
+        @Autowired
+        private MeterRegistry registry;
+
+        @Test
+        @DisplayName("작업이 안 뜨면 무장 게이지도 0 이다")
+        void theGaugeAgreesWithTheCondition() {
+            assertThat(context.getBeansOfType(StuckRunSweeper.class))
+                    .as("전제가 무너지면 아래 단언이 아무것도 안 잰다 — "
+                            + "@ConditionalOnProperty 는 \"1\" 을 참으로 안 본다")
+                    .isEmpty();
+
+            assertThat(registry.find("cy_batch_stuck_sweep_enabled").gauge())
+                    .as("게이지가 없으면 알림이 갈래를 못 가른다")
+                    .isNotNull();
+            assertThat(registry.find("cy_batch_stuck_sweep_enabled").gauge().value())
+                    .as("빈이 없는데 1 이면 안 도는 것을 돈다고 말하는 것이다")
+                    .isZero();
+        }
+    }
+
+    /**
      * <b>가드가 있는데 안 도는 상태가 가드가 없는 것보다 나쁘다.</b> 위 테스트들은 전부
      * 손으로 부른 것이라, {@code @ConditionalOnProperty} 를 잘못 적어 빈이 아예 안 생겨도
      * <b>전부 초록</b>이다. 여기서 재는 것은 <b>운영 형상에서 이 작업이 실제로 등록되는가</b>다.
@@ -516,9 +641,12 @@ class StuckRunSweeperTest {
             "batch.metrics.expire-sla-seconds=999999999",
             "batch.metrics.cleanup-sla-seconds=999999999",
             "batch.metrics.verify-sla-seconds=999999999",
-            // 남의 시체를 안 건드리게 판정을 통째로 미룬다. 재는 것은 등록뿐이다.
-            "batch.stuck-job-after-ms=86400000",
-            "batch.stuck-sweep.interval-ms=3600000"
+            // 남의 시체를 안 건드리게 조치를 끄고 판정도 미룬다. 재는 것은 **등록**뿐이고,
+            // enabled 가 @Value 라 꺼도 작업은 그대로 등록된다 — 그 선택이 여기서 값을 한다.
+            // ⚠️ 주기를 크게 주는 방법은 이제 못 쓴다. 생성자가 알림 창(10분)의 절반을
+            //    넘는 주기를 거절한다 — 그 가드가 이 줄을 실제로 한 번 거절했다.
+            "batch.stuck-sweep.enabled=false",
+            "batch.stuck-job-after-ms=86400000"
     })
     @Import(MySqlContainerConfig.class)
     @DisplayName("스케줄러를 켰을 때")

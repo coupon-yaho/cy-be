@@ -91,19 +91,35 @@ public class StuckRunSweepService {
     private final JdbcClient jdbcClient;
     private final Counter recovered;
     private final Counter failures;
+    private final Counter capped;
 
     /**
-     * @param armed 스윕이 실제로 돌 형상인가. <b>둘 다 참이어야 돈다</b> —
-     *              {@code StuckRunSweeper} 의 {@code @ConditionalOnProperty} 와 같은 조건이고,
-     *              그 빈은 조건부라 자기가 없다는 것을 스스로 말할 수 없다. 그래서 조건 없는
-     *              이 빈이 게이지로 든다({@code cy_batch_stuck_sweep_enabled}).
-     *              {@code cy_coupon_round_scheduling_enabled} 가 같은 이유로 같은 모양이다
+     * <b>게이지는 {@code StuckRunSweeper} 의 조건과 <i>같은 규칙</i>으로 읽어야 한다.</b>
+     * 그 빈은 조건부라 자기가 없다는 것을 스스로 말할 수 없어 조건 없는 이 빈이 게이지를
+     * 든다({@code cy_coupon_round_scheduling_enabled} 가 같은 이유로 같은 모양이다).
+     * 그런데 <b>두 축의 boolean 해석이 다르다.</b>
+     *
+     * <pre>
+     * &#64;Value boolean                 StringToBooleanConverter — true·on·yes·1 이 참
+     * &#64;ConditionalOnProperty         havingValue="true" — 문자열 "true" 만 참
+     * </pre>
+     *
+     * <p>(7.0.8 바이트코드로 확인: 그 변환기의 참 집합이 {@code true/on/yes/1} 이다.)
+     * {@code boolean} 으로 받으면 {@code BATCH_SCHEDULING_ENABLED=1} 인 형상에서
+     * <b>스케줄 작업은 안 뜨는데 게이지만 1</b> 이 되고, 그러면
+     * {@code BatchStuckSweepDisabled} 까지 함께 침묵한다 — <b>안 도는 것을 돈다고 말하는</b>
+     * 가장 나쁜 방향이다. 그래서 <b>문자열로 받아 조건과 같은 비교를 한다.</b>
+     *
+     * @param schedulingEnabled {@code batch.scheduling.enabled} 의 <b>원값</b>
+     * @param sweepEnabled {@code batch.stuck-sweep.enabled} 의 원값. 이쪽은 조건이 아니라
+     *                     {@code StuckRunSweeper} 의 {@code @Value boolean} 이 읽지만,
+     *                     둘을 다르게 읽을 이유가 없어 같은 규칙으로 맞춘다
      */
     public StuckRunSweepService(JobRepository jobRepository,
             @Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
             JdbcClient jdbcClient, MeterRegistry registry,
-            @Value("${batch.scheduling.enabled:false}") boolean schedulingEnabled,
-            @Value("${batch.stuck-sweep.enabled:true}") boolean sweepEnabled) {
+            @Value("${batch.scheduling.enabled:false}") String schedulingEnabled,
+            @Value("${batch.stuck-sweep.enabled:true}") String sweepEnabled) {
         this.jobRepository = jobRepository;
         this.jobOperator = jobOperator;
         this.jdbcClient = jdbcClient;
@@ -113,15 +129,39 @@ public class StuckRunSweepService {
         this.failures = Counter.builder("cy_batch_stuck_sweep_failures_total")
                 .description("시체 스윕이 조회나 회수에서 끊긴 횟수. 로그는 감시 수단이 아니다")
                 .register(registry);
-        boolean armed = schedulingEnabled && sweepEnabled;
+        this.capped = Counter.builder("cy_batch_stuck_sweep_capped_total")
+                .description("상한에 걸려 이번 주기를 못 끝낸 횟수. 처리 용량 부족을 회수 실패와 가른다")
+                .register(registry);
+        boolean armed = isOn(schedulingEnabled) && isOn(sweepEnabled);
         Gauge.builder("cy_batch_stuck_sweep_enabled", () -> armed ? 1 : 0)
                 .description("시체 스윕이 무장돼 있나. 0 이면 시체는 사람이 걷어야 한다")
                 .register(registry);
     }
 
+    /**
+     * {@code @ConditionalOnProperty(havingValue = "true")} 와 <b>같은 판정</b>.
+     * 그쪽은 {@code String.equalsIgnoreCase} 라 {@code "1"}·{@code "yes"} 를 안 받는다.
+     */
+    private static boolean isOn(String value) {
+        return "true".equalsIgnoreCase(value);
+    }
+
     /** 스윕이 한 잡에서 끊겼다. <b>성공에만 계측이 있으면 조용한 실패를 못 본다.</b> */
     public void recordFailure() {
         failures.increment();
+    }
+
+    /**
+     * 상한에 걸려 이번 주기를 못 끝냈다.
+     *
+     * <p><b>실패와 가르는 이유.</b> 시체가 안 줄어드는 상태는 원인이 셋인데
+     * ({@code enabled=0} · 회수 실패 · <b>처리 용량 부족</b>) 앞의 둘만 지표가 있었다.
+     * 그러면 {@code BatchStuckExecution} 이 <i>"둘 다 정상인데 뜬다"</i> 를 곧바로
+     * <i>"실행이 매 주기 되살아난다"</i> 로 단정하는데, <b>상한 소진도 같은 모양</b>이라
+     * 운영자가 임계를 만지러 간다 — 정작 필요한 것은 상한을 올리는 것이다.
+     */
+    public void recordCapped() {
+        capped.increment();
     }
 
     /**

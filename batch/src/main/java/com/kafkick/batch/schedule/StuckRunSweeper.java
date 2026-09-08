@@ -1,7 +1,10 @@
 // 진도가 멈춘 실행을 주기적으로 걷어냅니다.
 package com.kafkick.batch.schedule;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,12 +91,26 @@ public class StuckRunSweeper {
 
     private static final Logger log = LoggerFactory.getLogger(StuckRunSweeper.class);
 
+    /**
+     * {@code BatchStuckExecution} 의 {@code for} 다. <b>손으로 맞춘다</b> — 규칙 파일을
+     * 코드가 읽을 수 없어서이고, {@code batch.metrics.*-running-too-long-seconds} 셋이
+     * 같은 이유로 같은 모양이다. 규칙의 값을 바꾸면 여기도 함께 옮긴다.
+     */
+    private static final Duration ALERT_WINDOW = Duration.ofMinutes(10);
+
     private final StuckRunSweepService sweep;
     private final RunningJobProbe runningJobs;
     private final List<String> jobNames;
     private final int maxPerSweep;
     private final boolean enabled;
     private final TransactionTemplate readStuck;
+
+    /**
+     * <b>어느 잡부터 볼지.</b> {@code @Scheduled} 는 이 빈에 대해 단일 스레드라 동기화가
+     * 필요 없지만({@code ExpireScheduler} 가 같은 사실을 적어 뒀다), 손 호출을 섞는
+     * 테스트가 있어 원자형으로 든다.
+     */
+    private final AtomicInteger startAt = new AtomicInteger();
 
     /**
      * <b>이름 순으로 정렬한다 — 빈 순서는 보장이 없다.</b> 상한에 걸려 일부만 걷는 날
@@ -120,6 +137,7 @@ public class StuckRunSweeper {
             List<Job> jobs, PlatformTransactionManager transactionManager,
             @Value("${batch.stuck-sweep.max-per-sweep:20}") int maxPerSweep,
             @Value("${batch.stuck-sweep.enabled:true}") boolean enabled,
+            @Value("${batch.stuck-sweep.interval-ms:60000}") long intervalMillis,
             @Value("${batch.admin.timeout-seconds:5}") int readTimeoutSeconds) {
         if (maxPerSweep < 1) {
             // 0 으로 끄는 길을 안 연다. 그러면 스케줄러는 도는데 아무것도 안 하는 상태가
@@ -130,6 +148,19 @@ public class StuckRunSweeper {
                             + "batch.stuck-sweep.enabled=false 를 쓰십시오 — 그쪽은 "
                             + "cy_batch_stuck_sweep_enabled 로 관제에 보입니다. 받은 값="
                             + maxPerSweep);
+        }
+        // **주기와 알림을 한자리에서 맞춘다.** BatchStuckExecution 이 for: 10m 이라,
+        // 주기가 그보다 길면 시체가 **한 번도 안 걷힌 채** 그 알림이 뜬다 — 그런데 그
+        // 알림의 진단문은 "게이지도 1이고 실패도 없으면 실행이 매 주기 되살아나는 것"
+        // 이라고 말한다. 설정이 그 말을 거짓으로 만드는 상태를 기동에서 끊는다.
+        // CleanupScheduler 가 크론과 SLA 를 같은 방식으로 맞춘다.
+        if (intervalMillis < 1 || intervalMillis > ALERT_WINDOW.toMillis() / 2) {
+            throw new IllegalArgumentException(
+                    "batch.stuck-sweep.interval-ms 는 1 이상이면서 "
+                            + ALERT_WINDOW.toMillis() / 2 + " 이하여야 합니다. "
+                            + "BatchStuckExecution 이 " + ALERT_WINDOW.toMinutes()
+                            + "분에 뜨는데 그 안에 스윕이 최소 두 번은 돌아야 "
+                            + "'아무도 안 걷고 있다' 가 사실이 됩니다. 받은 값=" + intervalMillis);
         }
         this.sweep = sweep;
         this.runningJobs = runningJobs;
@@ -157,7 +188,7 @@ public class StuckRunSweeper {
         }
         int budget = maxPerSweep;
         int closed = 0;
-        for (String jobName : jobNames) {
+        for (String jobName : rotated()) {
             // **이 검사가 지는 것은 정정이 아니라 질의다.** 지워도 아래 안쪽 검사가
             // 곧바로 끊어 결과는 같다(돌연변이로 확인했다). 여기 있는 이유는
             // stuckExecutions 가 실행마다 DAO 세 번, Step 마다 한 번을 더 부르는 비싼
@@ -209,9 +240,32 @@ public class StuckRunSweeper {
         }
     }
 
+    /**
+     * <b>매 주기 시작 잡을 한 칸 민다.</b> 고정 순서 + 전역 상한이면 <b>앞 잡이 상한 이상을
+     * 계속 내는 동안 뒤 잡은 영원히 조회조차 안 된다</b> — 그 잡의 시체는 자동 회수의
+     * 대상에서 빠지고, 그 사실을 아무도 말해 주지 않는다(예산이 0 이라 조회를 건너뛰므로
+     * 지표에도 안 잡힌다).
+     *
+     * <p>한 칸씩만 민다. 무작위로 섞으면 <b>상한에 걸린 날 어느 잡이 남았는지 추적할 수
+     * 없다</b> — 이름 순 정렬을 유지한 이유가 그것이고, 회전은 그 순서를 안 깬다.
+     */
+    private List<String> rotated() {
+        if (jobNames.isEmpty()) {
+            return jobNames;
+        }
+        int offset = Math.floorMod(startAt.getAndIncrement(), jobNames.size());
+        List<String> order = new ArrayList<>(jobNames.size());
+        for (int i = 0; i < jobNames.size(); i++) {
+            order.add(jobNames.get((offset + i) % jobNames.size()));
+        }
+        return order;
+    }
+
     /** 상한 경고는 두 자리에서 나오므로 문구를 한 곳에 둔다 — 갈리면 검색이 안 걸린다. */
     private void warnCapped(String jobName) {
+        sweep.recordCapped();
         log.warn("시체 스윕 상한에 걸려 이번 주기를 여기서 끊습니다. 남은 것은 다음 주기가 "
-                + "가져갑니다. 상한={} 멈춘잡={}", maxPerSweep, jobName);
+                + "가져갑니다(다음 주기는 다른 잡부터 봅니다). 상한={} 멈춘잡={}",
+                maxPerSweep, jobName);
     }
 }
