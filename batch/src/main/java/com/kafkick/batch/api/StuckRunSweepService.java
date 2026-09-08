@@ -111,9 +111,9 @@ public class StuckRunSweepService {
      * 가장 나쁜 방향이다. 그래서 <b>문자열로 받아 조건과 같은 비교를 한다.</b>
      *
      * @param schedulingEnabled {@code batch.scheduling.enabled} 의 <b>원값</b>
-     * @param sweepEnabled {@code batch.stuck-sweep.enabled} 의 원값. 이쪽은 조건이 아니라
-     *                     {@code StuckRunSweeper} 의 {@code @Value boolean} 이 읽지만,
-     *                     둘을 다르게 읽을 이유가 없어 같은 규칙으로 맞춘다
+     * @param sweepEnabled {@code batch.stuck-sweep.enabled} 의 원값. {@code StuckRunSweeper}
+     *                     도 <b>같은 {@link #isOn} 을 부른다</b> — 그쪽만 관대한 변환을
+     *                     쓰면 <b>스윕은 도는데 게이지가 0</b> 인 반대 방향이 난다
      */
     public StuckRunSweepService(JobRepository jobRepository,
             @Qualifier(BatchJobRepositoryConfig.SHARED_OPERATOR) JobOperator jobOperator,
@@ -139,10 +139,17 @@ public class StuckRunSweepService {
     }
 
     /**
-     * {@code @ConditionalOnProperty(havingValue = "true")} 와 <b>같은 판정</b>.
-     * 그쪽은 {@code String.equalsIgnoreCase} 라 {@code "1"}·{@code "yes"} 를 안 받는다.
+     * <b>스위치 하나를 읽는 유일한 규칙.</b>
+     * {@code @ConditionalOnProperty(havingValue = "true")} 와 같은 판정이다 — 그쪽은
+     * {@code String.equalsIgnoreCase} 라 {@code "1"}·{@code "yes"}·{@code "on"} 을 안 받는다.
+     *
+     * <p><b>{@code public} 인 것은 {@link com.kafkick.batch.schedule.StuckRunSweeper} 가
+     * 같은 규칙을 써야 하기 때문이다.</b> 한때 이 클래스만 문자열로 바꾸고 스위퍼는
+     * {@code @Value boolean} 그대로 뒀는데, 그러면 {@code BATCH_STUCK_SWEEP_ENABLED=1} 에서
+     * <b>스윕은 도는데 게이지가 0</b> 이 되어 앞서 고친 것의 정반대가 난다. 두 곳에 적으면
+     * 갈린다 — {@code StuckRunClaim} 이 SQL 을 한 곳에 모아 둔 것과 같은 이유다.
      */
-    private static boolean isOn(String value) {
+    public static boolean isOn(String value) {
         return "true".equalsIgnoreCase(value);
     }
 
@@ -153,6 +160,11 @@ public class StuckRunSweepService {
 
     /**
      * 상한에 걸려 이번 주기를 못 끝냈다.
+     *
+     * <p><b>확실히 남긴 것에만 올린다.</b> 예산이 딱 맞아떨어져 끝난 주기는 남은 것이
+     * 없을 수도 있는데, 그때 올리면 알림이 <i>"상한을 올리십시오"</i> 라고 <b>멀쩡한 용량을
+     * 지목한다.</b> 그래서 <b>목록 한복판에서 끊었을 때만</b> 부른다 — 그 자리에서만
+     * 남은 것이 있다는 증거가 손에 있다.
      *
      * <p><b>실패와 가르는 이유.</b> 시체가 안 줄어드는 상태는 원인이 셋인데
      * ({@code enabled=0} · 회수 실패 · <b>처리 용량 부족</b>) 앞의 둘만 지표가 있었다.

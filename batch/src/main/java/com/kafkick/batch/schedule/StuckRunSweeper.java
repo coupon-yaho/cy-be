@@ -136,7 +136,7 @@ public class StuckRunSweeper {
     public StuckRunSweeper(StuckRunSweepService sweep, RunningJobProbe runningJobs,
             List<Job> jobs, PlatformTransactionManager transactionManager,
             @Value("${batch.stuck-sweep.max-per-sweep:20}") int maxPerSweep,
-            @Value("${batch.stuck-sweep.enabled:true}") boolean enabled,
+            @Value("${batch.stuck-sweep.enabled:true}") String enabled,
             @Value("${batch.stuck-sweep.interval-ms:60000}") long intervalMillis,
             @Value("${batch.admin.timeout-seconds:5}") int readTimeoutSeconds) {
         if (maxPerSweep < 1) {
@@ -166,7 +166,10 @@ public class StuckRunSweeper {
         this.runningJobs = runningJobs;
         this.jobNames = jobs.stream().map(Job::getName).sorted().toList();
         this.maxPerSweep = maxPerSweep;
-        this.enabled = enabled;
+        // **게이지와 같은 규칙으로 읽는다.** 여기만 @Value boolean 으로 두면
+        // StringToBooleanConverter 가 1·yes·on 을 참으로 봐서, 스윕은 도는데
+        // cy_batch_stuck_sweep_enabled 가 0 인 상태가 난다.
+        this.enabled = StuckRunSweepService.isOn(enabled);
         this.readStuck = new TransactionTemplate(transactionManager);
         this.readStuck.setReadOnly(true);
         this.readStuck.setTimeout(readTimeoutSeconds);
@@ -195,7 +198,12 @@ public class StuckRunSweeper {
             // 조회라서다 — 예산이 0 인데 남은 잡마다 그것을 부르는 것은 배치 메타가
             // 이미 아픈 날에 부담만 더한다. 그래서 테스트도 결과가 아니라 호출을 잰다.
             if (budget == 0) {
-                warnCapped(jobName);
+                // **여기서는 지표를 안 올린다.** 남은 잡에 시체가 있는지 안 봤다 —
+                // 보려면 그 비싼 조회를 해야 하는데, 예산이 0 인데 조회를 건너뛰는 것이
+                // 이 검사의 존재 이유다. 증거 없이 올리면 예산이 딱 맞아떨어진 주기에도
+                // 카운터가 올라, 알림이 **멀쩡한 용량을 지목한다.**
+                // 그 잡이 정말 굶고 있으면 다음 주기가 그쪽부터 본다(회전).
+                warnCapped(jobName, "남은 잡은 안 봤습니다");
                 break;
             }
             List<StuckRun> stuckRuns;
@@ -212,7 +220,11 @@ public class StuckRunSweeper {
                     // **안쪽에서도 말해야 한다.** 이름 순 마지막 잡에서 예산이 떨어지면
                     // 바깥 검사는 한 번도 안 타고, 그러면 상한에 걸린 주기가 한 줄도
                     // 안 남는다 — 시체가 몰리는 것은 대개 한 잡이라 그쪽이 흔한 경우다.
-                    warnCapped(jobName);
+                    //
+                    // **여기가 지표를 올리는 유일한 자리다.** 목록 한복판에서 끊었으므로
+                    // 남은 것이 있다는 증거가 손에 있다. 바깥 검사에는 그 증거가 없다.
+                    sweep.recordCapped();
+                    warnCapped(jobName, "이 잡에 아직 남았습니다");
                     break;
                 }
                 budget--;
@@ -262,10 +274,8 @@ public class StuckRunSweeper {
     }
 
     /** 상한 경고는 두 자리에서 나오므로 문구를 한 곳에 둔다 — 갈리면 검색이 안 걸린다. */
-    private void warnCapped(String jobName) {
-        sweep.recordCapped();
-        log.warn("시체 스윕 상한에 걸려 이번 주기를 여기서 끊습니다. 남은 것은 다음 주기가 "
-                + "가져갑니다(다음 주기는 다른 잡부터 봅니다). 상한={} 멈춘잡={}",
-                maxPerSweep, jobName);
+    private void warnCapped(String jobName, String evidence) {
+        log.warn("시체 스윕 상한에 걸려 이번 주기를 여기서 끊습니다. 다음 주기는 다른 잡부터 "
+                + "봅니다. 상한={} 멈춘잡={} {}", maxPerSweep, jobName, evidence);
     }
 }

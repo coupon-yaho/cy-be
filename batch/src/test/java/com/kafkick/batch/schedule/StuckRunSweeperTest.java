@@ -96,8 +96,8 @@ class StuckRunSweeperTest {
 
     private StuckRunSweeper sweeper(StuckRunSweepService service, RunningJobProbe probe,
             int cap, boolean enabled) {
-        return new StuckRunSweeper(service, probe, jobs, transactionManager, cap, enabled,
-                60_000L, 5);
+        return new StuckRunSweeper(service, probe, jobs, transactionManager, cap,
+                String.valueOf(enabled), 60_000L, 5);
     }
 
     private double counter(String name) {
@@ -500,7 +500,7 @@ class StuckRunSweeperTest {
      * 것은 상한을 올리는 것이다.
      */
     @Test
-    @DisplayName("상한에 걸리면 그것도 지표로 남는다")
+    @DisplayName("남긴 것이 있으면 상한을 지표로 남긴다")
     void hittingTheCapIsCounted() {
         double before = counter("cy_batch_stuck_sweep_capped_total");
         LocalDateTime now = LocalDateTime.now();
@@ -518,6 +518,54 @@ class StuckRunSweeperTest {
     }
 
     /**
+     * <b>예산이 딱 맞아떨어진 주기는 용량 부족이 아니다.</b> 상한이 1 이고 시체도 1 이면
+     * 남긴 것이 없는데, 바깥 검사에서 세면 카운터가 오른다 — 그러면 알림이
+     * <i>"BATCH_STUCK_SWEEP_MAX 를 올리십시오"</i> 라고 <b>멀쩡한 용량을 지목한다.</b>
+     *
+     * <p>지표는 <b>증거가 손에 있을 때만</b> 오른다 — 목록 한복판에서 끊은 자리 하나다.
+     */
+    @Test
+    @DisplayName("예산이 딱 맞으면 상한 지표가 안 오른다")
+    void exactlyFittingTheBudgetIsNotACapacityProblem() {
+        double before = counter("cy_batch_stuck_sweep_capped_total");
+        try (RunningJobFixture only = RunningJobFixture.plant(jobRepository, jdbcClient,
+                CleanupJobConfig.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+
+            sweeperWithCap(1).sweep();
+
+            assertThat(statusOf(only.executionId()))
+                    .as("전제가 무너지면 아래 단언이 아무것도 안 잰다")
+                    .isEqualTo(BatchStatus.FAILED);
+            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
+                    .as("남긴 것이 없는데 오르면 알림이 멀쩡한 용량을 지목한다")
+                    .isEqualTo(before);
+        }
+    }
+
+    /**
+     * <b>스위퍼와 게이지가 같은 규칙으로 스위치를 읽는가.</b> 앞선 라운드에서 게이지만
+     * 문자열 비교로 바꾸고 스위퍼는 {@code @Value boolean} 을 뒀는데, 그러면
+     * {@code BATCH_STUCK_SWEEP_ENABLED=1} 에서 <b>스윕은 도는데 게이지가 0</b> 이 되어
+     * 고친 것의 <b>정반대</b>가 난다. 규칙을 {@link StuckRunSweepService#isOn} 한 곳에 뒀고,
+     * 여기서 재는 것은 스위퍼가 정말 그것을 부르는가다.
+     */
+    @Test
+    @DisplayName("1 은 스위퍼에게도 켜짐이 아니다 — 게이지와 같은 규칙이다")
+    void theSweeperReadsItsSwitchWithTheSameRuleAsTheGauge() {
+        assertThat(StuckRunSweepService.isOn("1")).isFalse();
+        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
+                ExpireStepContext.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
+
+            new StuckRunSweeper(sweepService, runningJobs, jobs, transactionManager, 20,
+                    "1", 60_000L, 5).sweep();
+
+            assertThat(statusOf(corpse.executionId()))
+                    .as("관대한 변환을 쓰면 여기서 걷고, 그동안 게이지는 0 을 낸다")
+                    .isEqualTo(BatchStatus.STARTED);
+        }
+    }
+
+    /**
      * <b>주기가 알림 창보다 길면 기동을 거절한다.</b> {@code BatchStuckExecution} 이
      * 10분에 뜨는데 주기가 그보다 길면 <b>시체가 한 번도 안 걷힌 채</b> 그 알림이 뜬다 —
      * 그런데 그 알림의 진단문은 <i>"지표가 정상이면 실행이 매 주기 되살아나는 것"</i> 이라고
@@ -527,11 +575,11 @@ class StuckRunSweeperTest {
     @DisplayName("주기가 알림 창의 절반을 넘으면 기동을 거절한다")
     void rejectsAnIntervalThatOutlivesTheAlertWindow() {
         assertThatThrownBy(() -> new StuckRunSweeper(sweepService, runningJobs, jobs,
-                transactionManager, 20, true, 600_000L, 5))
+                transactionManager, 20, "true", 600_000L, 5))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("BatchStuckExecution");
         assertThatThrownBy(() -> new StuckRunSweeper(sweepService, runningJobs, jobs,
-                transactionManager, 20, true, 0L, 5))
+                transactionManager, 20, "true", 0L, 5))
                 .as("0 은 주기가 아니다 — 스프링에 넘기기 전에 우리가 끊는다")
                 .isInstanceOf(IllegalArgumentException.class);
     }
