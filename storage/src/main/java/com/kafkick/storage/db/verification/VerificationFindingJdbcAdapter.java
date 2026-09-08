@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.EnumMap;
 import java.util.Map;
 
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Repository;
 
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.ResidualCount;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
@@ -65,6 +67,38 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
 
     private static final String SELECT_COUNT = """
             SELECT COUNT(*) FROM verification_findings WHERE run_id = :runId
+            """;
+
+    /**
+     * <b>키를 자바로 안 올리고 DB 에서 접는다.</b> 규칙당 상한이 10,000 이고 규칙이 여섯이라
+     * 한 실행이 최대 6만 키다 — 두 실행이면 12만이고, 이 조회는 관리자 API 의 5초 예산
+     * 안에서 끝나야 한다. 돌려주는 것은 <b>규칙 수만큼의 행</b>이다.
+     *
+     * <p><b>안쪽 {@code GROUP BY} 가 두 실행을 키로 겹친다.</b> 한 키가 한 실행에 두 번
+     * 못 나오므로({@code uk_run_finding}) {@code sides} 는 1 아니면 2 다 —
+     * <b>2 면 두 실행에 다 있다</b>. 1 이면 {@code has_after} 가 어느 쪽인지 가른다.
+     * 그 유니크가 사라지면 같은 실행 안의 중복이 {@code sides = 2} 를 만들어
+     * <b>지속을 과대 보고</b>한다.
+     *
+     * <p>{@code run_id} 가 {@code uk_run_finding} 의 선두라 {@code IN} 두 값이 각각 그
+     * 인덱스로 들어간다. 그 뒤 {@code GROUP BY} 는 두 구간을 합쳐야 해서 인덱스 순서를
+     * 그대로 못 쓴다 — <b>여기가 이 조회에서 비싼 자리다.</b> 실제로 예산을 넘기는 것을
+     * 보는 날 {@code (finding_type, target_key)} 인덱스를 재는 것이 다음 수인데,
+     * 그것은 마이그레이션이라 시드 DDL 과 함께 가야 한다(CY-945 가 겪은 비용).
+     */
+    private static final String SELECT_RESIDUAL_BY_TYPE = """
+            SELECT k.finding_type AS finding_type,
+                   SUM(k.sides = 2)                        AS persisted,
+                   SUM(k.sides = 1 AND k.has_after = 1)    AS introduced,
+                   SUM(k.sides = 1 AND k.has_after = 0)    AS resolved
+              FROM (SELECT finding_type,
+                           target_key,
+                           COUNT(*)                  AS sides,
+                           MAX(run_id = :afterRunId) AS has_after
+                      FROM verification_findings
+                     WHERE run_id IN (:beforeRunId, :afterRunId)
+                     GROUP BY finding_type, target_key) k
+             GROUP BY k.finding_type
             """;
 
     /**
@@ -137,6 +171,33 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                 SELECT_COUNT, new MapSqlParameterSource("runId", runId), Integer.class);
 
         return count == null ? 0 : count;
+    }
+
+    /**
+     * <b>같은 실행을 두 번 주면 전부 "지속" 이 된다 — 그래서 여기서 막는다.</b>
+     * 부르는 쪽({@code VerifyReportController})도 같은 검사를 하지만, 이 SQL 은
+     * {@code IN (:a, :b)} 라 두 값이 같으면 <b>조용히 한 실행만 훑고</b> 모든 키가
+     * {@code sides = 1}·{@code has_after = 1} 이 되어 <b>전부 "새로 생겼다"</b> 로 나온다.
+     * 답이 틀린 채로 나가는 갈래라 포트 안에서도 끊는다.
+     */
+    @Override
+    public Map<FindingType, ResidualCount> residualByType(long beforeRunId, long afterRunId) {
+        if (beforeRunId == afterRunId) {
+            throw new IllegalArgumentException(
+                    "같은 실행끼리는 맞댈 수 없습니다. runId=" + beforeRunId);
+        }
+        Map<FindingType, ResidualCount> residual = new EnumMap<>(FindingType.class);
+        jdbcTemplate.query(SELECT_RESIDUAL_BY_TYPE,
+                new MapSqlParameterSource()
+                        .addValue("beforeRunId", beforeRunId)
+                        .addValue("afterRunId", afterRunId),
+                rs -> {
+                    residual.put(FindingType.valueOf(rs.getString("finding_type")),
+                            new ResidualCount(rs.getInt("persisted"),
+                                    rs.getInt("introduced"), rs.getInt("resolved")));
+                });
+
+        return residual;
     }
 
     /**

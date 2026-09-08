@@ -18,6 +18,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.ResidualCount;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationRun;
@@ -48,6 +49,79 @@ class VerificationFindingJdbcAdapterTest {
     private long newRun(int attempt) {
         return runAdapter.save(VerificationRun.start(
                 AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, attempt, AS_OF)).id();
+    }
+
+    /**
+     * <b>세 갈래가 실제로 갈리는가.</b> 개수만 맞대는 {@code /reports/diff} 로는
+     * <i>"같은 3건"</i> 과 <i>"다 고쳐지고 새로 3건"</i> 이 같은 모양이라, 이 조회가
+     * 갈라 주지 못하면 티켓이 아무것도 안 한 것이다.
+     *
+     * <p>한 번에 셋을 다 심는다 — <b>세 갈래가 서로를 안 먹는지</b>까지 봐야 한다.
+     * 하나씩 재면 "전부 지속" 으로 답하는 구현도 통과한다.
+     */
+    @Test
+    @DisplayName("두 실행을 맞대면 지속·신규·해소가 갈린다")
+    void residualSplitsPersistedIntroducedAndResolved() {
+        // attempt 1 은 setUp 이 이미 썼다 — uk_run_params 가 (asOf, dataset, scope, attempt) 다.
+        long before = newRun(2);
+        long after = newRun(3);
+
+        // ⚠️ **세 수를 다르게 만든다.** 1·1·1 로 두면 신규와 해소를 맞바꾸는 돌연변이가
+        //    살아남는다 — 실제로 그렇게 썼다가 M-1 이 통과했다.
+        //    지속 1(HISTORY:1) / 해소 2(HISTORY:2·4) / 신규 3(HISTORY:3·5·6)
+        adapter.appendAll(before, List.of(
+                finding(1), finding(2), finding(4)));
+        adapter.appendAll(after, List.of(
+                finding(1), finding(3), finding(5), finding(6)));
+
+        Map<FindingType, ResidualCount> residual = adapter.residualByType(before, after);
+
+        assertThat(residual.get(FindingType.ILLEGAL_TRANSITION))
+                .as("셋이 서로 다른 수여야 방향을 바꾸는 실수가 잡힌다")
+                .isEqualTo(new ResidualCount(1, 3, 2));
+        assertThat(residual.get(FindingType.ILLEGAL_TRANSITION).remaining())
+                .as("PRD 가 말하는 잔여 불일치 건수는 지속 + 신규다")
+                .isEqualTo(4);
+    }
+
+    /**
+     * <b>방향이 바뀌면 신규와 해소가 뒤집힌다.</b> {@code has_after} 를 반대로 읽거나
+     * 인자 둘을 바꿔 넘기는 실수를 여기서 잡는다 — 개수만 보는 단언은 그 실수를 통과시킨다.
+     */
+    @Test
+    @DisplayName("앞뒤를 바꿔 부르면 신규와 해소가 맞바뀐다")
+    void swappingTheRunsSwapsIntroducedAndResolved() {
+        long before = newRun(4);
+        long after = newRun(5);
+        // **비대칭이어야 한다.** 양쪽 수가 같으면 맞바꿔도 같은 답이라 아무것도 안 잰다.
+        adapter.appendAll(before, List.of(finding(2)));
+        adapter.appendAll(after, List.of(finding(3), finding(7)));
+
+        assertThat(adapter.residualByType(before, after).get(FindingType.ILLEGAL_TRANSITION))
+                .as("앞에만 1건, 뒤에만 2건 — 신규 2 · 해소 1")
+                .isEqualTo(new ResidualCount(0, 2, 1));
+        assertThat(adapter.residualByType(after, before).get(FindingType.ILLEGAL_TRANSITION))
+                .as("방향을 뒤집으면 그 둘이 맞바뀐다")
+                .isEqualTo(new ResidualCount(0, 1, 2));
+    }
+
+    /** 같은 규칙·다른 대상의 검출 하나. 세 갈래를 수로 가르려면 키만 달라지면 된다. */
+    private static VerificationFinding finding(long historyId) {
+        return VerificationFinding.forHistory(
+                FindingType.ILLEGAL_TRANSITION, historyId, "기대", "실제");
+    }
+
+    /**
+     * <b>같은 실행을 두 번 주면 답이 틀린 채로 나간다.</b> {@code IN (:a, :b)} 가 두 값이
+     * 같으면 한 실행만 훑고, 모든 키가 {@code sides = 1}·{@code has_after = 1} 이라
+     * <b>전부 "새로 생겼다"</b> 로 나온다 — 조용한 오답이라 포트 안에서 끊는다.
+     */
+    @Test
+    @DisplayName("같은 실행끼리는 맞대기를 거절한다")
+    void refusesToCompareARunWithItself() {
+        assertThatThrownBy(() -> adapter.residualByType(runId, runId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(String.valueOf(runId));
     }
 
     @Test
