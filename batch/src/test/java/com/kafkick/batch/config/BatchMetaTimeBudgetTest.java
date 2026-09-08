@@ -53,6 +53,8 @@ class BatchMetaTimeBudgetTest {
      *                            untilStuck 이 LocalDateTime.now() 로 같은 축에서 뺀다
      * ExpireRecoveryService   3  null 검사와 "이미 끝났나" 판정뿐. 값을 밖으로 안 낸다
      * CleanupRecoveryService  3  같은 축
+     * StuckRunSweepService    1  recover 가 정말 닫았는지 보는 널 검사 하나뿐. 값을 밖으로
+     *                            안 낸다 — 로그에도 실행 번호만 나간다
      * </pre>
      */
     private static final Map<String, Integer> BUDGET = Map.of(
@@ -62,7 +64,8 @@ class BatchMetaTimeBudgetTest {
             "com/kafkick/batch/api/StuckRunView.java", 2,
             "com/kafkick/batch/config/RunningJobProbe.java", 3,
             "com/kafkick/batch/api/ExpireRecoveryService.java", 3,
-            "com/kafkick/batch/api/CleanupRecoveryService.java", 3);
+            "com/kafkick/batch/api/CleanupRecoveryService.java", 3,
+            "com/kafkick/batch/api/StuckRunSweepService.java", 1);
 
     @Test
     @DisplayName("배치 메타 시각을 읽는 파일과 횟수가 예산과 정확히 같다")

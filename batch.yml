@@ -87,7 +87,20 @@ services:
       # 애노테이션 전수 grep 은 하나 적게 나온다. 여기 안 적으면 이미지에 구운 기본값으로
       # 굳는데, 그 값이 등록 수보다 작으면 기동 가드가 죽인다.
       # SchedulerPoolGuardTest.WhenShapedLikeDeployment 가 이 줄의 값을 등록 수와 대조한다.
-      BATCH_SCHEDULER_POOL_SIZE: ${BATCH_SCHEDULER_POOL_SIZE:-11}
+      BATCH_SCHEDULER_POOL_SIZE: ${BATCH_SCHEDULER_POOL_SIZE:-12}
+      # 시체 판정 임계와 자동 스윕(CY-946). ⚠️ **위 함정이 여기에도 그대로다** —
+      # 안 적으면 이미지에 구운 1800000/true/20/60000 으로 굳고 되돌리는 길이 재배포뿐이다.
+      # 그리고 이 손잡이들이 필요한 순간이 정확히 그때다: 스윕이 살아 있는 실행을 걷는 것
+      # 같으면 BATCH_STUCK_SWEEP_ENABLED=false 로 조치만 세운다.
+      #
+      # ⚠️ BATCH_STUCK_JOB_AFTER_MS 를 올려서 "시체를 남겨 두는" 것은 답이 아니다.
+      #    그 임계 하나가 cy_batch_stuck_executions 와 /runs/stuck 목록과 사람이 부르는
+      #    recover 의 관문까지 전부 구동한다 — 올리면 알림이 조용해지고 목록이 비고
+      #    수동 회수가 EXPIRE_EXECUTION_NOT_STUCK 으로 거절된다. 조치만 끄려면 아래 스위치다.
+      BATCH_STUCK_JOB_AFTER_MS: ${BATCH_STUCK_JOB_AFTER_MS:-1800000}
+      BATCH_STUCK_SWEEP_ENABLED: ${BATCH_STUCK_SWEEP_ENABLED:-true}
+      BATCH_STUCK_SWEEP_MAX: ${BATCH_STUCK_SWEEP_MAX:-20}
+      BATCH_STUCK_SWEEP_INTERVAL_MS: ${BATCH_STUCK_SWEEP_INTERVAL_MS:-60000}
       # 관리자 API 토큰 관문(CY-742). /api/v1/admin/** 에는 stop·recover·abandon 이 있어
       # **포트에 닿는 누구나 도는 잡을 죽일 수 있다.** 주장이 아니라 소지를 묻는 2차 방어선이다.
       #

@@ -49,6 +49,11 @@ import com.kafkick.storage.db.VerificationSeed;
 @SpringBootTest(properties = {
         "spring.batch.job.enabled=false",
         "batch.scheduling.enabled=true",
+        // ⚠️ **스윕을 끈다.** 이 컨텍스트는 JVM 끝까지 캐시되는데, 스윕은
+        //    fixedDelay 라 초기 지연 없이 뜨자마자 한 번 돌고 그 뒤 60초마다
+        //    돈다 — 공유 컨테이너에서 **다른 테스트가 심은 시체를 걷어** 그쪽을
+        //    이유 없이 빨갛게 만든다(CY-946). 여기서 재는 것은 스윕이 아니다.
+        "batch.stuck-sweep.enabled=false",
         "batch.schedule.expire-cron=0 0 0 1 1 *",
         // 이 클래스는 플래그가 켜져도 가드가 안 막는 것을 잰다 — 그래서 플래그를 켜 둬야 한다.
         // 발화는 크론을 1월 1일로 밀어 막는다. **그 시각에 도는 CI 는 이 잡을 한 번

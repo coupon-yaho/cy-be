@@ -27,6 +27,10 @@
 > 새 잡이 생기면 그날 바로 커버된다 — 뒤엣것은 CY-392 가 `job` 라벨로 냈고, 지켜보는 잡을
 > `Job` 빈에서 모으므로 잡이 늘면 시계열도 따라 는다.
 >
+> **CY-946 이 더한 셋도 범용인데 결이 다르다.** `BatchStuckAutoRecovered` ·
+> `BatchStuckSweepFailing` · (게이지 `cy_batch_stuck_sweep_enabled`)는 **잡 라벨이 아예 없다** —
+> 스윕이 잡 이름을 모른 채 돌기 때문이다. 어느 실행이었는지는 지표가 아니라 로그가 진다.
+>
 > **`ExpireNotSucceeding`·`BatchJobRunningTooLong` 은 `expireJob` 에 박혀 있다.**
 > 둘 다 `{spring_batch_job_name="expireJob"}` 로 좁힌다 — 앞엣것은 우리 게이지의 라벨이고
 > 뒤엣것은 스프링 배치가 내는 라벨인데, CY-392 가 이름을 맞춰 뒀다.
@@ -145,6 +149,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 | `BatchJobFailed` · `ExpireNotSucceeding` · `ExpireNeverSucceeded` | `server` |
 | `ExpireGaugeMissing` · `BatchTargetDown` · `BatchJobRunningTooLong` | `server` |
 | `BatchStuckExecution` · `BatchRunMetricsUnknown` · `BatchRunMetricsStale` | `server` |
+| `BatchStuckAutoRecovered` · `BatchStuckSweepFailing` · `BatchStuckSweepDisabled` | `server` |
 | `ExpireMetricsStale` · `ExpireMetricsBackdated` | `server` |
 | `CleanupNotSucceeding` · `CleanupNeverSucceeded` · `CleanupGaugeMissing` | `server` |
 | `CleanupRunningTooLong` | `server` |
@@ -192,7 +197,7 @@ alertmanager 가 그것으로 가른다. `severity` 는 긴급도로 남긴다.
 
 #### ⚠️ 마지막 고리만 전수가 아니다
 
-`BatchMetricExposureTest` 는 `batch-alerts.yml` 의 `cy_*`·`spring_batch_*` **31개**를 실제
+`BatchMetricExposureTest` 는 `batch-alerts.yml` 의 `cy_*`·`spring_batch_*` **41개**를 실제
 스크레이프 본문과 대조한다. 그런데 **api 계열 규칙이 읽는 `app_*` 아홉 개**는 그런 대조가
 없다(개별 배선 테스트가 일부를 덮을 뿐이다).
 
@@ -452,11 +457,18 @@ docker compose -f base.yml exec -T alertmanager amtool silence expire --alertman
 > **콜드 스타트용 26시간 silence 와 대상이 겹친다. 둘 다 걸지 말 것** —
 > 볼륨을 지우고 띄운 직후만이면 그쪽(26h), 스케줄러를 계속 끄고 둘 것이면 이쪽 하나만 건다.
 
-**스위치는 하나다.** `batch.scheduling.enabled` 가 `ExpireScheduler`·`CleanupScheduler`·
-`VerifyScheduler`·`CouponRoundScheduler` 를 **모두** 문고(`@ConditionalOnProperty`),
+**스케줄러를 통째로 세우는 스위치는 하나다.** `batch.scheduling.enabled` 가
+`ExpireScheduler`·`CleanupScheduler`·`VerifyScheduler`·`CouponRoundScheduler`·
+`StuckRunSweeper` **다섯을** 문고(`@ConditionalOnProperty`),
 게이지 `cy_coupon_round_scheduling_enabled` 는 그 속성을 그대로 읽는다
 (`CouponRoundPendingRefresher:101,148`). ⚠️ **이름이 회차 전용처럼 보이지만 아니다** —
 CY-446 이 회차 축을 만들며 붙인 이름이고, 지금은 배치 스케줄링 전체를 대표한다.
+
+⚠️ **그래서 이 스위치는 운영 중에 못 쓴다.** `CouponRoundScheduler` 가 1분마다 회차를
+열고 닫는 **사용자 대면 동작**이라, 시체 스윕만 세우려고 이것을 내리면 회차가 함께 선다.
+그 목적으로는 `batch.stuck-sweep.enabled`(CY-946)가 따로 있고, 그 상태는 게이지
+`cy_batch_stuck_sweep_enabled` 가 낸다 — **끈 것을 알림이 모르는 상태**를 안 만들려고
+조치 스위치마다 게이지를 하나씩 둔다.
 
 **그 축을 쓰는 알림과 사람이 재우는 알림이 갈린다.** 규칙 파일에서 센 것이 정본이다.
 

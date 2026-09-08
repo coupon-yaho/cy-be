@@ -839,6 +839,23 @@ groups:
             BATCH_STEP_EXECUTION.LAST_UPDATED 가 batch.stuck-job-after-ms 넘게 안 움직인
             행입니다. 대개 docker compose down 이 잡 한복판에 걸린 흔적입니다.
             **이 행이 있는 동안 만료와 검증의 상호 배제가 그만큼 꺼져 있습니다.**
+            ⚠️ **CY-946 부터 이 알림의 뜻이 바뀌었습니다.** StuckRunSweeper 가 60초마다
+            같은 판정으로 FAILED 로 닫으므로, 10분을 버텼다는 것은 **아무도 안 걷고
+            있다**는 뜻입니다. 갈래를 지표로 가릅니다 —
+            cy_batch_stuck_sweep_enabled 가 0 이면 스윕이 꺼진 것이고(그 손잡이는
+            BATCH_STUCK_SWEEP_ENABLED 입니다), 1인데도 이 알림이 뜨면
+            cy_batch_stuck_sweep_failures_total 증분과 cy_batch_stuck_sweep_backlog
+            값을 함께 봅니다 — **뒤엣것이 0 보다 크면 처리 용량 부족입니다.**
+            그때 필요한 것은 임계가 아니라 BATCH_STUCK_SWEEP_MAX 를 올리는 것이고,
+            **얼마나 올릴지가 그 게이지 값입니다.**
+            (게이지지 카운터가 아닙니다 — 안 걷힌 실행은 다음 주기에 다시 나오므로
+            누적하면 실행 수가 아니라 밀린 주기 수까지 합산됩니다. 적체는 상태입니다.
+            걷다 실패한 건은 여기 안 들어옵니다. 그쪽은 실패 카운터가 집니다 —
+            처방이 다르기 때문입니다.)
+            셋 다 정상인데 뜨면 그 실행이 매 주기 되살아나는 것이고, 그때는
+            batch.stuck-job-after-ms 가 실제 무진도 구간보다 짧은 것입니다.
+            **아래는 스윕이 안 도는 형상의 수동 절차입니다** — 스윕이 살아 있으면
+            여기까지 안 옵니다.
             **손 SQL 은 마지막 수단입니다** — 살아 있는 실행에 쓰면 VERSION 이 올라가
             다음 update() 가 터집니다. API 도 같은 쓰기를 하지만, 시체 판정을 통과한
             실행에만 한다는 점이 다릅니다(batch.stuck-job-after-ms).
@@ -854,6 +871,107 @@ groups:
             재시도해도 안전합니다.
             업무 포트가 안 열려 있으면 batch-expose.yml 을 얹습니다(docs/13 §4).
             asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
+
+      # ──────────────────────────────────────────────────────────────────────
+      # 스윕이 실제로 무엇을 걷었다. **자동 조치가 조용하면 사고를 덮는다** — 시체가 계속
+      # 생기고 계속 걷히면 위 BatchStuckExecution 은 10분을 못 채워 한 번도 안 울리고,
+      # 그동안 잡이 매일 죽고 있다는 사실을 아무도 모른다.
+      #
+      # 이것은 "고쳤다" 가 아니라 **"고칠 것이 있었다"** 는 알림이다. 조치는 끝났으므로
+      # 급하지 않지만, 왜 죽었는지는 남는다. FAILED 로 닫으므로 그 실행은 재시작할 수 있고
+      # 이력도 그대로다(abandon 이 아니다).
+      #
+      # for 를 안 둔다. 카운터라 increase() 창 자체가 그 역할을 하고, for 를 얹으면
+      # **한 번만 걷힌 날**이 창을 못 채워 통째로 안 울린다 — 그날이 정확히 볼 날이다.
+      - alert: BatchStuckAutoRecovered
+        expr: increase(cy_batch_stuck_recovered_total[15m]) > 0
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "진도가 멈춘 배치 실행을 스윕이 자동으로 걷어냈습니다"
+          description: >-
+            StuckRunSweeper 가 배치 메타에서 시체 판정을 통과한 실행을 FAILED 로 닫았습니다.
+            **조치는 이미 끝났습니다** — 이 알림은 그 사실을 사람에게 알리는 것이고,
+            남은 질문은 "왜 죽었나" 입니다.
+            대개 docker compose down 이나 OOM 이 잡 한복판에 걸린 흔적입니다.
+            어느 실행이었는지는 "진도가 멈춘 실행을 자동으로 걷어냈습니다" WARN 로그가
+            jobName 과 executionId 로 남깁니다.
+            **닫힌 실행을 다시 돌리는 방법은 잡마다 다릅니다.** 만료·정리는 다음 크론
+            발화가 새 인스턴스를 만들어 잔여분을 통째로 가져갑니다 — 아무것도 안 해도 됩니다.
+            **verifyJob 은 preventRestart 라 같은 JobInstance 를 못 돌립니다** — 같은
+            asOf 를 다시 재려면 attempt 를 올려 새 실행으로 갑니다.
+            그리고 스윕은 배치 메타만 닫습니다 — verification_runs 의 열린 행은 그대로라,
+            검증이면 그쪽도 함께 봅니다.
+            ⚠️ **이 알림이 매일 울리면 스윕을 보지 말고 잡을 보십시오.** 스윕은 증상을
+            치우는 것이지 원인을 고치지 않습니다.
+            상한에 걸려 밀린 것이 있으면 cy_batch_stuck_executions 가 안 내려갑니다 —
+            그때 BatchStuckExecution 이 이어받습니다.
+
+      # ──────────────────────────────────────────────────────────────────────
+      # **성공에만 계측이 있으면 조용한 실패를 못 본다.** 스윕이 매 주기 터져도 지금까지
+      # 프로메테우스에 아무 신호가 없었다 — 이 저장소가 반복해 적어 둔
+      # "로그는 감시 수단이 아니다" 가 그대로 걸린다.
+      #
+      # 조회 실패와 회수 실패를 한 카운터로 묶는다. 갈래는 로그가 가른다("시체 조회가
+      # 끊겼습니다" vs "시체 하나를 걷지 못했습니다") — 여기서 필요한 것은 **사람을
+      # 부르는 것**이고, 그 뒤 판단은 로그가 지어도 된다.
+      - alert: BatchStuckSweepFailing
+        expr: increase(cy_batch_stuck_sweep_failures_total[15m]) > 0
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "시체 스윕이 끊기고 있습니다 — 자동 회수가 그만큼 안 돌았습니다"
+          description: >-
+            StuckRunSweeper 가 배치 메타 조회나 회수에서 예외를 만났습니다.
+            스윕은 계속 돌지만 **그 건은 이번 주기에 안 걷혔습니다** — 다음 주기가 같은
+            행을 다시 만납니다. 계속 오르면 그 행이 영원히 안 걷히고 있는 것입니다.
+            조회 실패면 "시체 조회가 끊겼습니다" 로그에 jobName 이,
+            회수 실패면 "시체 하나를 걷지 못했습니다" 로그에 executionId 가 함께 남습니다.
+            조회 실패는 배치 메타가 batch.admin.timeout-seconds 를 넘긴 것이고,
+            회수 실패는 그 행이 다른 트랜잭션에 물렸거나 실행 문맥을 못 푸는 것입니다.
+            **이 알림이 도는 동안 BatchStuckExecution 은 뒤늦게 따라옵니다** —
+            시체가 안 걷히면 10분 뒤 그쪽도 웁니다.
+
+      # 조치를 사람이 꺼 뒀다. **끈 것을 알림이 모르는 상태를 안 만든다.**
+      #
+      # 끄는 것 자체는 정당한 조치다(스윕이 살아 있는 실행을 걷는 것 같을 때). 그래서
+      # 즉시 울리지 않고 두 시간을 준다 — 그 뒤에도 꺼져 있으면 되돌리는 것을 잊은 것이고,
+      # 그동안 시체는 다시 사람이 걷어야 한다.
+      #
+      # ⚠️ **이 규칙이 cy_batch_stuck_sweep_enabled 를 expr 에서 쓰는 유일한 자리다.**
+      # 여기서 빼면 BatchMetricExposureTest 의 노출 대조가 조용히 사라진다 — 그 검사는
+      # 규칙 파일에서 이름을 정규식으로 뽑기 때문에, 산문에만 남으면 문장을 다듬는 날
+      # 함께 없어진다.
+      #
+      # ⚠️ **게이지 0 의 원인이 둘이라 한쪽을 뺀다.** 그 값은
+      # `batch.scheduling.enabled && batch.stuck-sweep.enabled` 인데, **배포 기본값이
+      # BATCH_SCHEDULING_ENABLED=false** 다(batch.yml, 그리고 batch-verify.yml 은 아예 박아
+      # 뒀다). 안 빼면 아무도 안 건드린 형상에서 두 시간 만에 뜨면서 **운영자가 손댄 적
+      # 없는 변수를 지목한다** — 그 갈래는 BatchSchedulingDisabled 가 25시간에 지고,
+      # 이쪽이 23시간 먼저 잘못된 말을 하게 된다.
+      - alert: BatchStuckSweepDisabled
+        expr: cy_batch_stuck_sweep_enabled == 0
+              unless on(instance, job) cy_coupon_round_scheduling_enabled == 0
+        for: 2h
+        labels:
+          severity: warning
+          channel: server
+        annotations:
+          summary: "시체 자동 회수만 꺼져 있습니다 — 두 시간째입니다"
+          description: >-
+            스케줄러는 도는데 BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로
+            돌지만 **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이
+            10분 뒤부터 함께 웁니다.
+            배치 스케줄링 자체가 꺼진 경우는 여기 안 나옵니다. 그쪽은
+            BatchSchedulingDisabled 가 25시간에 집니다 — 게이지 하나가 두 원인을
+            합치므로 이 규칙이 그 갈래를 빼고 봅니다.
+            끈 것이 의도라면 이 알림에 silence 를 겁니다. 되돌리려면 그 환경변수를
+            지우거나 true 로 주고 배치를 다시 띄웁니다.
+            ⚠️ **batch.stuck-job-after-ms 를 올려서 끄지 마십시오** — 그 임계 하나가
+            지표와 GET /runs/stuck 목록과 사람이 부르는 recover 의 관문까지 전부
+            구동합니다. 올리면 조치만 꺼지는 것이 아니라 탐지와 수동 처방이 함께 꺼집니다.
 
       # 한 실행이 지나치게 오래 끄는 상태.
       #

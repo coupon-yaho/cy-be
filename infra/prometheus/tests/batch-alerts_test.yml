@@ -1712,7 +1712,7 @@ tests:
             exp_annotations:
               summary: "verifyJob 에 진도가 멈춘 실행이 남아 있습니다"
               description: >-
-                BATCH_JOB_EXECUTION 에서 STATUS 가 STARTING/STARTED/STOPPING 인데 BATCH_STEP_EXECUTION.LAST_UPDATED 가 batch.stuck-job-after-ms 넘게 안 움직인 행입니다. 대개 docker compose down 이 잡 한복판에 걸린 흔적입니다. **이 행이 있는 동안 만료와 검증의 상호 배제가 그만큼 꺼져 있습니다.** **손 SQL 은 마지막 수단입니다** — 살아 있는 실행에 쓰면 VERSION 이 올라가 다음 update() 가 터집니다. API 도 같은 쓰기를 하지만, 시체 판정을 통과한 실행에만 한다는 점이 다릅니다(batch.stuck-job-after-ms). 어느 실행인지는 GET /api/v1/admin/batch/runs/stuck 이 전 잡을 한 번에 줍니다(CY-938) — 잡별 경로를 몰라도 되고, 잡이 늘어도 따라옵니다. 아래 잡별 경로는 그다음 조치입니다. expireJob 이면 GET /api/v1/admin/expire/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다 — 재시도해도 안전합니다. verifyJob 이면 /api/v1/admin/verify 쪽 stop → abandon 을 씁니다. 그 stop 도 시체 판정을 지납니다(CY-678) — 진도가 있으면 409 로 거절합니다. cleanupJob 이면 GET /api/v1/admin/cleanup/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다(CY-697) — 만료와 같은 모양이고 재시도해도 안전합니다. 업무 포트가 안 열려 있으면 batch-expose.yml 을 얹습니다(docs/13 §4). asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
+                BATCH_JOB_EXECUTION 에서 STATUS 가 STARTING/STARTED/STOPPING 인데 BATCH_STEP_EXECUTION.LAST_UPDATED 가 batch.stuck-job-after-ms 넘게 안 움직인 행입니다. 대개 docker compose down 이 잡 한복판에 걸린 흔적입니다. **이 행이 있는 동안 만료와 검증의 상호 배제가 그만큼 꺼져 있습니다.** ⚠️ **CY-946 부터 이 알림의 뜻이 바뀌었습니다.** StuckRunSweeper 가 60초마다 같은 판정으로 FAILED 로 닫으므로, 10분을 버텼다는 것은 **아무도 안 걷고 있다**는 뜻입니다. 갈래를 지표로 가릅니다 — cy_batch_stuck_sweep_enabled 가 0 이면 스윕이 꺼진 것이고(그 손잡이는 BATCH_STUCK_SWEEP_ENABLED 입니다), 1인데도 이 알림이 뜨면 cy_batch_stuck_sweep_failures_total 증분과 cy_batch_stuck_sweep_backlog 값을 함께 봅니다 — **뒤엣것이 0 보다 크면 처리 용량 부족입니다.** 그때 필요한 것은 임계가 아니라 BATCH_STUCK_SWEEP_MAX 를 올리는 것이고, **얼마나 올릴지가 그 게이지 값입니다.** (게이지지 카운터가 아닙니다 — 안 걷힌 실행은 다음 주기에 다시 나오므로 누적하면 실행 수가 아니라 밀린 주기 수까지 합산됩니다. 적체는 상태입니다. 걷다 실패한 건은 여기 안 들어옵니다. 그쪽은 실패 카운터가 집니다 — 처방이 다르기 때문입니다.) 셋 다 정상인데 뜨면 그 실행이 매 주기 되살아나는 것이고, 그때는 batch.stuck-job-after-ms 가 실제 무진도 구간보다 짧은 것입니다. **아래는 스윕이 안 도는 형상의 수동 절차입니다** — 스윕이 살아 있으면 여기까지 안 옵니다. **손 SQL 은 마지막 수단입니다** — 살아 있는 실행에 쓰면 VERSION 이 올라가 다음 update() 가 터집니다. API 도 같은 쓰기를 하지만, 시체 판정을 통과한 실행에만 한다는 점이 다릅니다(batch.stuck-job-after-ms). 어느 실행인지는 GET /api/v1/admin/batch/runs/stuck 이 전 잡을 한 번에 줍니다(CY-938) — 잡별 경로를 몰라도 되고, 잡이 늘어도 따라옵니다. 아래 잡별 경로는 그다음 조치입니다. expireJob 이면 GET /api/v1/admin/expire/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다 — 재시도해도 안전합니다. verifyJob 이면 /api/v1/admin/verify 쪽 stop → abandon 을 씁니다. 그 stop 도 시체 판정을 지납니다(CY-678) — 진도가 있으면 409 로 거절합니다. cleanupJob 이면 GET /api/v1/admin/cleanup/runs/stuck 으로 확인하고 POST .../runs/{id}/recover 한 번이면 됩니다(CY-697) — 만료와 같은 모양이고 재시도해도 안전합니다. 업무 포트가 안 열려 있으면 batch-expose.yml 을 얹습니다(docs/13 §4). asof_state DELETE 와 헷갈리지 마십시오. 그쪽은 다른 사고입니다.
 
   # 10분을 안 채우면 안 뜬다 — for 를 지우는 변경을 여기서 잡는다.
   - interval: 1m
@@ -1723,6 +1723,149 @@ tests:
     alert_rule_test:
       - eval_time: 12m
         alertname: BatchStuckExecution
+        exp_alerts: []
+
+  # ── 스윕이 실제로 걷었다: 자동 조치가 조용하면 사고를 덮는다 ─────────────
+  - interval: 1m
+    name: "스윕이 시체를 걷으면 BatchStuckAutoRecovered 가 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_recovered_total'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BatchStuckAutoRecovered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "진도가 멈춘 배치 실행을 스윕이 자동으로 걷어냈습니다"
+              description: >-
+                StuckRunSweeper 가 배치 메타에서 시체 판정을 통과한 실행을 FAILED 로 닫았습니다. **조치는 이미 끝났습니다** — 이 알림은 그 사실을 사람에게 알리는 것이고, 남은 질문은 "왜 죽었나" 입니다. 대개 docker compose down 이나 OOM 이 잡 한복판에 걸린 흔적입니다. 어느 실행이었는지는 "진도가 멈춘 실행을 자동으로 걷어냈습니다" WARN 로그가 jobName 과 executionId 로 남깁니다. **닫힌 실행을 다시 돌리는 방법은 잡마다 다릅니다.** 만료·정리는 다음 크론 발화가 새 인스턴스를 만들어 잔여분을 통째로 가져갑니다 — 아무것도 안 해도 됩니다. **verifyJob 은 preventRestart 라 같은 JobInstance 를 못 돌립니다** — 같은 asOf 를 다시 재려면 attempt 를 올려 새 실행으로 갑니다. 그리고 스윕은 배치 메타만 닫습니다 — verification_runs 의 열린 행은 그대로라, 검증이면 그쪽도 함께 봅니다. ⚠️ **이 알림이 매일 울리면 스윕을 보지 말고 잡을 보십시오.** 스윕은 증상을 치우는 것이지 원인을 고치지 않습니다. 상한에 걸려 밀린 것이 있으면 cy_batch_stuck_executions 가 안 내려갑니다 — 그때 BatchStuckExecution 이 이어받습니다.
+
+  # **한 번만 걷힌 날이 이 알림의 존재 이유다.** for 를 얹으면 그날이 창을 못 채워
+  # 통째로 안 울린다 — 매일 한 건씩 죽는 잡이 정확히 그 모양으로 숨는다.
+  - interval: 1m
+    name: "한 번만 걷혀도 뜬다 — for 를 더하는 변경을 여기서 잡는다"
+    input_series:
+      - series: 'cy_batch_stuck_recovered_total'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: BatchStuckAutoRecovered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "진도가 멈춘 배치 실행을 스윕이 자동으로 걷어냈습니다"
+              description: >-
+                StuckRunSweeper 가 배치 메타에서 시체 판정을 통과한 실행을 FAILED 로 닫았습니다. **조치는 이미 끝났습니다** — 이 알림은 그 사실을 사람에게 알리는 것이고, 남은 질문은 "왜 죽었나" 입니다. 대개 docker compose down 이나 OOM 이 잡 한복판에 걸린 흔적입니다. 어느 실행이었는지는 "진도가 멈춘 실행을 자동으로 걷어냈습니다" WARN 로그가 jobName 과 executionId 로 남깁니다. **닫힌 실행을 다시 돌리는 방법은 잡마다 다릅니다.** 만료·정리는 다음 크론 발화가 새 인스턴스를 만들어 잔여분을 통째로 가져갑니다 — 아무것도 안 해도 됩니다. **verifyJob 은 preventRestart 라 같은 JobInstance 를 못 돌립니다** — 같은 asOf 를 다시 재려면 attempt 를 올려 새 실행으로 갑니다. 그리고 스윕은 배치 메타만 닫습니다 — verification_runs 의 열린 행은 그대로라, 검증이면 그쪽도 함께 봅니다. ⚠️ **이 알림이 매일 울리면 스윕을 보지 말고 잡을 보십시오.** 스윕은 증상을 치우는 것이지 원인을 고치지 않습니다. 상한에 걸려 밀린 것이 있으면 cy_batch_stuck_executions 가 안 내려갑니다 — 그때 BatchStuckExecution 이 이어받습니다.
+
+  # 아무것도 안 걷혔으면 조용해야 한다. > 0 을 >= 0 으로 바꾸는 변경을 여기서 잡는다.
+  - interval: 1m
+    name: "걷은 것이 없으면 안 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_recovered_total'
+        values: '3x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchStuckAutoRecovered
+        exp_alerts: []
+
+  # ── 스윕 자신이 끊긴다: 성공에만 계측이 있으면 조용한 실패를 못 본다 ─────
+  - interval: 1m
+    name: "스윕이 끊기면 BatchStuckSweepFailing 이 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_failures_total'
+        values: '0x5 1x25'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BatchStuckSweepFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+            exp_annotations:
+              summary: "시체 스윕이 끊기고 있습니다 — 자동 회수가 그만큼 안 돌았습니다"
+              description: >-
+                StuckRunSweeper 가 배치 메타 조회나 회수에서 예외를 만났습니다. 스윕은 계속 돌지만 **그 건은 이번 주기에 안 걷혔습니다** — 다음 주기가 같은 행을 다시 만납니다. 계속 오르면 그 행이 영원히 안 걷히고 있는 것입니다. 조회 실패면 "시체 조회가 끊겼습니다" 로그에 jobName 이, 회수 실패면 "시체 하나를 걷지 못했습니다" 로그에 executionId 가 함께 남습니다. 조회 실패는 배치 메타가 batch.admin.timeout-seconds 를 넘긴 것이고, 회수 실패는 그 행이 다른 트랜잭션에 물렸거나 실행 문맥을 못 푸는 것입니다. **이 알림이 도는 동안 BatchStuckExecution 은 뒤늦게 따라옵니다** — 시체가 안 걷히면 10분 뒤 그쪽도 웁니다.
+
+  # 안 끊기면 조용해야 한다. 이 카운터는 평시에 안 움직인다.
+  - interval: 1m
+    name: "스윕이 멀쩡하면 안 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_failures_total'
+        values: '4x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BatchStuckSweepFailing
+        exp_alerts: []
+
+  # ── 조치를 꺼 두고 잊는다 ───────────────────────────────────────────────
+  #
+  # 세 시리즈가 다 필요하다. 게이지 0 의 원인이 둘이라 unless 로 한쪽을 빼는데,
+  # 그 unless 를 지우는 변경을 아래 셋째 케이스가 잡는다.
+  - interval: 1m
+    name: "스케줄러는 도는데 스윕만 두 시간 꺼 두면 BatchStuckSweepDisabled 가 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '0x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: BatchStuckSweepDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: server
+              instance: "batch:9090"
+              job: "cy-batch"
+            exp_annotations:
+              summary: "시체 자동 회수만 꺼져 있습니다 — 두 시간째입니다"
+              description: >-
+                스케줄러는 도는데 BATCH_STUCK_SWEEP_ENABLED 가 false 입니다. 탐지는 그대로 돌지만 **진도가 멈춘 실행을 아무도 안 걷습니다** — 쌓이면 BatchStuckExecution 이 10분 뒤부터 함께 웁니다. 배치 스케줄링 자체가 꺼진 경우는 여기 안 나옵니다. 그쪽은 BatchSchedulingDisabled 가 25시간에 집니다 — 게이지 하나가 두 원인을 합치므로 이 규칙이 그 갈래를 빼고 봅니다. 끈 것이 의도라면 이 알림에 silence 를 겁니다. 되돌리려면 그 환경변수를 지우거나 true 로 주고 배치를 다시 띄웁니다. ⚠️ **batch.stuck-job-after-ms 를 올려서 끄지 마십시오** — 그 임계 하나가 지표와 GET /runs/stuck 목록과 사람이 부르는 recover 의 관문까지 전부 구동합니다. 올리면 조치만 꺼지는 것이 아니라 탐지와 수동 처방이 함께 꺼집니다.
+
+  # 잠깐 껐다 켜는 것은 정상 조치다. for 를 지우는 변경을 여기서 잡는다.
+  - interval: 1m
+    name: "한 시간만 껐으면 아직 안 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '0x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: BatchStuckSweepDisabled
+        exp_alerts: []
+
+  # **배포 기본 형상이다.** BATCH_SCHEDULING_ENABLED 가 false 라 스윕 게이지도 0 인데,
+  # 그것은 아무도 스윕 스위치를 건드린 적이 없다는 뜻이다. 여기서 뜨면 이 알림이
+  # 손댄 적 없는 변수를 지목한다 — unless 를 지우는 변경을 이 케이스가 잡는다.
+  - interval: 1m
+    name: "스케줄링 자체가 꺼진 형상에서는 안 뜬다 — 그쪽은 BatchSchedulingDisabled 다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '0x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '0x150'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: BatchStuckSweepDisabled
+        exp_alerts: []
+
+  # 켜져 있으면 조용해야 한다. == 0 을 >= 0 으로 바꾸는 변경을 여기서 잡는다.
+  - interval: 1m
+    name: "스윕이 켜져 있으면 안 뜬다"
+    input_series:
+      - series: 'cy_batch_stuck_sweep_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
+      - series: 'cy_coupon_round_scheduling_enabled{instance="batch:9090", job="cy-batch"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 130m
+        alertname: BatchStuckSweepDisabled
         exp_alerts: []
 
   # ── 만료가 오래 돈다 ────────────────────────────────────────────────────

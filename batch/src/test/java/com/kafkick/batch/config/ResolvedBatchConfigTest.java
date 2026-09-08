@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import com.kafkick.batch.job.CleanupJobConfig;
 import com.kafkick.batch.job.ExpireJobConfig;
 import com.kafkick.batch.schedule.CleanupScheduler;
+import com.kafkick.batch.schedule.StuckRunSweeper;
 import com.kafkick.batch.schedule.CouponRoundScheduler;
 import com.kafkick.batch.schedule.ExpireScheduler;
 import com.kafkick.batch.schedule.VerifyScheduler;
@@ -102,7 +103,10 @@ class ResolvedBatchConfigTest {
             // CY-718. 이 목록에 빠지면 batch.timezone-guard.required 키 경로에 오타가 나도
             // 기본값(true)으로 조용히 폴백한다 — 정작 그 손잡이가 필요한 순간은 배치가
             // 통째로 못 뜨는 때라, 그때 "안 먹는다" 를 만난다.
-            DefaultZoneGuard.class);
+            DefaultZoneGuard.class,
+            // CY-946. 빠지면 batch.stuck-sweep.* 키 경로에 오타가 나도 기본값으로
+            // 조용히 폴백한다 — 상한이 안 먹는 것을 아는 날은 메타 전체가 시체인 날이다.
+            StuckRunSweeper.class);
 
     private static final Set<String> EXPECTED_VALUE_KEYS = Set.of(
             "batch.stuck-job-after-ms",
@@ -156,7 +160,15 @@ class ResolvedBatchConfigTest {
             "batch.schedule.expire-cron",
             "batch.schedule.verify-cron",
             "batch.verify.metrics-refresh-ms",
-            "batch.timezone-guard.required");
+            "batch.timezone-guard.required",
+            // 시체 자동 스윕(CY-946). enabled 는 **조치만 세우는** 손잡이다 —
+            // batch.scheduling.enabled 는 1분 크론인 회차 전이까지 함께 물어 운영 중엔
+            // 못 쓴다. 그 축은 StuckRunSweeper 의 javadoc 이 진다.
+            "batch.stuck-sweep.enabled",
+            "batch.stuck-sweep.max-per-sweep",
+            "batch.stuck-sweep.interval-ms",
+            // 조회 데드라인. 스위퍼가 형제(BatchHistoryController)와 같은 키를 쓴다.
+            "batch.admin.timeout-seconds");
 
     /**
      * 셸이 아니라 이 JVM 에서 직접 오염시킨다. 밀폐가 깨지면 아래 단언이 이 값을 보고 실패한다.
@@ -211,13 +223,20 @@ class ResolvedBatchConfigTest {
                 // 이것은 Boot 가 직접 소비해 어떤 @Value 에도 리터럴로 안 나온다. 그래서
                 // 아래 애노테이션 스캔이 구조적으로 못 본다 — 값을 직접 단언하는 수밖에 없다.
                 // 실제 스케줄러 빈의 코어 크기는 VerificationMetricExposureTest 가 본다.
-                // 기본값(현재 11)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **8 을 주면 안 된다** —
+                // 기본값(현재 12)과 달라야 키 경로가 죽은 것을 구분할 수 있다. **8 을 주면 안 된다** —
                 // 폴백해도 같은 값이라 이 단언이 아무것도 안 지킨다.
                 "--BATCH_SCHEDULER_POOL_SIZE=6",
                 "--BATCH_RUN_METRICS_REFRESH_MS=62000",
                 "--EXPIRE_PENDING_REFRESH_MS=63000",
                 "--EXPIRE_PENDING_INITIAL_DELAY_MS=64000",
                 "--CLEANUP_METADATA_KEEP_DAYS=31",
+                // CY-946 이 넣은 셋. 앞 문단이 경계한 상황과 **글자까지 같다** —
+                // .example 기본값(true/20/60000)과 자바 기본값이 같아서, 환경변수
+                // 이름을 오타 내도 결과가 똑같다. 그러면 운영에서 상한을 내려도 안 먹고,
+                // 그 사실을 아는 날이 이 키의 javadoc 이 적은 "메타 전체가 시체인 날" 이다.
+                "--BATCH_STUCK_SWEEP_ENABLED=false",
+                "--BATCH_STUCK_SWEEP_MAX=21",
+                "--BATCH_STUCK_SWEEP_INTERVAL_MS=61001",
                 // CY-446 이 넣은 다섯. **이름을 실제로 실행해야 한다** — .example 기본값과
                 // @Value 기본값이 글자까지 같아서, 환경변수 이름을 오타 내도 결과가 똑같다.
                 "--COUPON_OPEN_CRON=0 0 0 1 1 *",
@@ -383,6 +402,13 @@ class ResolvedBatchConfigTest {
                 .isEqualTo("250000");
         assertThat(environment.getProperty("batch.metrics.verify-sla-seconds"))
                 .isEqualTo("90001");
+        // CY-946. 위 CY-384 문단과 같은 이유다 — 이름 축을 안 재면 오타가 조용히 지나간다.
+        assertThat(environment.getProperty("batch.stuck-sweep.enabled"))
+                .as("조치만 세우는 유일한 손잡이다. 이름이 죽으면 true 로 폴백해 "
+                        + "끈 줄 알고 있는 동안 스윕이 계속 돈다")
+                .isEqualTo("false");
+        assertThat(environment.getProperty("batch.stuck-sweep.max-per-sweep")).isEqualTo("21");
+        assertThat(environment.getProperty("batch.stuck-sweep.interval-ms")).isEqualTo("61001");
         assertThat(environment.getProperty("spring.task.scheduling.pool.size"))
                 .as("1 이면 만료가 도는 5분 내내 판정 되읽기가 멈춘다. 그것은 실패가 아니라 "
                         + "실행 자체가 안 된 것이라 refresh-failures 카운터도 안 오른다")

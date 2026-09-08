@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 /**
  * <b>{@code spring.task.scheduling.pool.size} 는 Boot 가 직접 소비해서 우리 코드가 안 읽는다.</b>
  * 그래서 키 경로가 죽거나 운영이 {@code BATCH_SCHEDULER_POOL_SIZE=1} 을 주면 <b>아무 데서도
- * 안 드러난다</b> — 기동은 성공하고, 등록된 작업 열하나가 스레드 하나를 다툰다.
+ * 안 드러난다</b> — 기동은 성공하고, 등록된 작업 열둘이 스레드 하나를 다툰다.
  *
  * <p><b>그 상태가 왜 나쁜가.</b> 검증이 한 번에 8분(실측 472초)을 잡고 있는데, 그동안 되읽기
  * 넷이 못 돌면 게이지가 그만큼 낡는다. 그리고 그 게이지가 SLA 알림의 근거다 —
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
  *
  * <h2>왜 상수로 안 세나</h2>
  *
- * <p>{@code application.yml.example} 이 <i>"스케줄 작업이 열하나다"</i> 를 손으로 세어
+ * <p>{@code application.yml.example} 이 <i>"스케줄 작업이 열둘이다"</i> 를 손으로 세어
  * 적고 있고, 그 수가 코드와 함께 움직여야 신호가 산다. 여기서 또 하나를 손으로 적으면
  * <b>세어야 할 자리가 하나 더 는다</b> — CY-446 이 그 신호를 한 번 지나쳤던 이유가 그것이다.
  * {@link ScheduledAnnotationBeanPostProcessor} 에게 <b>실제로 등록된 태스크 수</b>를 물으면
