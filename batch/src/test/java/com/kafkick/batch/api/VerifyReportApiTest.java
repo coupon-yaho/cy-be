@@ -342,95 +342,6 @@ class VerifyReportApiTest {
                 .update();
     }
 
-    // ── 잔여 불일치 (CY-947) ────────────────────────────────────────────────
-
-    /**
-     * <b>이것이 이 티켓의 전부다.</b> {@code /reports/diff} 는 개수만 맞대므로
-     * <i>"그 3건이 그대로"</i> 와 <i>"3건 고쳐지고 새로 3건"</i> 이 <b>같은 응답</b>이다 —
-     * 처방이 정반대인데.
-     *
-     * <p>그래서 <b>두 실행의 검출 수를 같게 두고</b> 그 안에서 갈리는지 본다. diff 로는
-     * 그 상태가 {@code delta = 0} 이라 <i>"아무 일도 없었다"</i> 로 보인다.
-     */
-    @Test
-    @DisplayName("개수가 그대로여도 무엇이 남고 무엇이 새로 생겼는지 가른다")
-    void residualSplitsWhatDiffCannot() throws Exception {
-        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
-        findings.appendAll(was, java.util.List.of(
-                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
-                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
-
-        // 개수는 그대로 2건. 그런데 하나는 그대로 남았고 하나는 바뀌었다.
-        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 2);
-        findings.appendAll(now, java.util.List.of(
-                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
-                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b")));
-
-        JsonNode diff = VerifyApiProbe.data(probe.get(DIFF + "?before=" + was + "&after=" + now));
-        assertThat(diff.path("totalDelta").asInt())
-                .as("전제 — diff 로는 아무 일도 없어 보인다. 그래서 이 조회가 필요하다")
-                .isZero();
-
-        JsonNode data = VerifyApiProbe.data(
-                probe.get(RESIDUAL + "?before=" + was + "&after=" + now));
-
-        JsonNode stock = ruleOf(data, "STOCK_MISMATCH");
-        assertThat(stock.path("persisted").asInt())
-                .as("COUPON:1 은 두 실행에 다 있다 — 아무도 안 고치고 있다")
-                .isEqualTo(1);
-        assertThat(stock.path("introduced").asInt())
-                .as("COUPON:3 은 그 사이에 새로 생겼다")
-                .isEqualTo(1);
-        assertThat(stock.path("resolved").asInt())
-                .as("COUPON:2 는 사라졌다")
-                .isEqualTo(1);
-
-        assertThat(data.path("remaining").asInt())
-                .as("PRD 가 말하는 잔여 불일치 건수는 지속 + 신규다")
-                .isEqualTo(2);
-        assertThat(data.path("introduced").asInt()).isEqualTo(1);
-        assertThat(data.path("resolved").asInt()).isEqualTo(1);
-
-        // **응답이 자기를 설명해야 한다.** diff 가 같은 이유로 같은 것을 싣는다.
-        assertThat(data.path("before").path("attempt").asInt()).isEqualTo(1);
-        assertThat(data.path("after").path("attempt").asInt()).isEqualTo(2);
-        assertThat(data.path("schema").asString()).isNotBlank();
-    }
-
-    /**
-     * <b>검출이 없는 규칙도 0 으로 낸다.</b> 빼면 <i>"그 규칙을 봤는데 없었다"</i> 와
-     * <i>"그 규칙이 아예 안 돌았다"</i> 가 응답에서 같은 모양이 된다.
-     */
-    @Test
-    @DisplayName("검출이 없는 규칙도 0 으로 나온다")
-    void residualListsEveryRule() throws Exception {
-        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 1);
-        findings.appendAll(was, java.util.List.of(
-                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b")));
-        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.PASS, 0, 2);
-
-        JsonNode data = VerifyApiProbe.data(
-                probe.get(RESIDUAL + "?before=" + was + "&after=" + now));
-
-        assertThat(data.path("byType").size())
-                .as("규칙 여섯이 전부 나와야 한다")
-                .isEqualTo(FindingType.values().length);
-        assertThat(ruleOf(data, "DUP_PER_MEMBER").path("persisted").asInt()).isZero();
-        assertThat(ruleOf(data, "STOCK_MISMATCH").path("resolved").asInt())
-                .as("고쳐서 사라졌다")
-                .isEqualTo(1);
-        assertThat(data.path("remaining").asInt()).isZero();
-    }
-
-    private static JsonNode ruleOf(JsonNode data, String type) {
-        for (JsonNode rule : data.path("byType")) {
-            if (type.equals(rule.path("type").asString())) {
-                return rule;
-            }
-        }
-        throw new AssertionError("byType 에 " + type + " 이 없다: " + data.path("byType"));
-    }
-
     // ── 두 실행 맞대기 (CY-944) ──────────────────────────────────────────────
 
     /**
@@ -737,5 +648,144 @@ class VerifyReportApiTest {
         assertThat(data.path("examined").isNull())
                 .as("0 으로 채우면 '안 봤다' 와 구분이 안 된다")
                 .isTrue();
+    }
+
+    // ── 잔여 불일치 (CY-947) ────────────────────────────────────────────────
+
+    /**
+     * <b>이것이 이 티켓의 전부다.</b> {@code /reports/diff} 는 개수만 맞대므로
+     * <i>"그 3건이 그대로"</i> 와 <i>"3건 고쳐지고 새로 3건"</i> 이 <b>같은 응답</b>이다 —
+     * 처방이 정반대인데.
+     *
+     * <p>그래서 <b>두 실행의 검출 수를 같게 두고</b> 그 안에서 갈리는지 본다. diff 로는
+     * 그 상태가 {@code delta = 0} 이라 <i>"아무 일도 없었다"</i> 로 보인다.
+     */
+    @Test
+    @DisplayName("개수가 그대로여도 무엇이 남고 무엇이 새로 생겼는지 가른다")
+    void residualSplitsWhatDiffCannot() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+
+        // 개수는 그대로 2건. 그런데 하나는 그대로 남았고 하나는 바뀌었다.
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b")));
+
+        JsonNode diff = VerifyApiProbe.data(probe.get(DIFF + "?before=" + was + "&after=" + now));
+        assertThat(diff.path("totalDelta").asInt())
+                .as("전제 — diff 로는 아무 일도 없어 보인다. 그래서 이 조회가 필요하다")
+                .isZero();
+
+        JsonNode data = VerifyApiProbe.data(
+                probe.get(RESIDUAL + "?before=" + was + "&after=" + now));
+
+        JsonNode stock = ruleOf(data.path("byType"), FindingType.STOCK_MISMATCH);
+        assertThat(stock.path("persisted").asInt())
+                .as("COUPON:1 은 두 실행에 다 있다 — 아무도 안 고치고 있다")
+                .isEqualTo(1);
+        assertThat(stock.path("introduced").asInt())
+                .as("COUPON:3 은 그 사이에 새로 생겼다")
+                .isEqualTo(1);
+        assertThat(stock.path("resolved").asInt())
+                .as("COUPON:2 는 사라졌다")
+                .isEqualTo(1);
+
+        assertThat(data.path("remaining").asInt())
+                .as("PRD 가 말하는 잔여 불일치 건수는 지속 + 신규다")
+                .isEqualTo(2);
+        assertThat(data.path("introduced").asInt()).isEqualTo(1);
+        assertThat(data.path("resolved").asInt()).isEqualTo(1);
+
+        // **응답이 자기를 설명해야 한다.** diff 가 같은 이유로 같은 것을 싣는다.
+        assertThat(data.path("before").path("attempt").asInt()).isEqualTo(1);
+        assertThat(data.path("after").path("attempt").asInt()).isEqualTo(2);
+        assertThat(data.path("schema").asString()).isNotBlank();
+    }
+
+    /**
+     * <b>검출이 없는 규칙도 0 으로 낸다.</b> 빼면 <i>"그 규칙을 봤는데 없었다"</i> 와
+     * <i>"그 규칙이 아예 안 돌았다"</i> 가 응답에서 같은 모양이 된다.
+     */
+    @Test
+    @DisplayName("검출이 없는 규칙도 0 으로 나온다")
+    void residualListsEveryRule() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.PASS, 0, 2);
+
+        JsonNode data = VerifyApiProbe.data(
+                probe.get(RESIDUAL + "?before=" + was + "&after=" + now));
+
+        assertThat(data.path("byType").size())
+                .as("규칙 여섯이 전부 나와야 한다")
+                .isEqualTo(FindingType.values().length);
+        assertThat(ruleOf(data.path("byType"), FindingType.DUP_PER_MEMBER)
+                .path("persisted").asInt()).isZero();
+        assertThat(ruleOf(data.path("byType"), FindingType.STOCK_MISMATCH)
+                .path("resolved").asInt())
+                .as("고쳐서 사라졌다")
+                .isEqualTo(1);
+        assertThat(data.path("remaining").asInt()).isZero();
+    }
+
+    /**
+     * <b>거절 경로를 안 태우면 가드가 있는지 없는지 아무도 모른다.</b> 이 시험을 쓰기 전에는
+     * {@code requireComparable(was, now)} 한 줄을 <b>지워도 전 스위트가 초록</b>이었다 —
+     * 같은 실행 둘은 500 으로, {@code dataset} 이 다른 둘은 <b>뜻 없는 집합 연산이 200 으로</b>
+     * 나가는데 아무도 안 잡았다.
+     *
+     * <p>{@code diff} 는 같은 축에 시험이 일곱이다. 같은 가드를 지나는데 한쪽만 안 재는
+     * 상태가 이 티켓이 만든 것이다.
+     */
+    @Test
+    @DisplayName("같은 실행끼리는 맞대지 않는다 — 500 이 아니라 400 이다")
+    void residualRefusesTheSameRunTwice() throws Exception {
+        long run = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+
+        var response = probe.get(RESIDUAL + "?before=" + run + "&after=" + run);
+
+        assertThat(response.statusCode())
+                .as("어댑터가 raw 예외를 던지면 여기가 500 이 된다")
+                .isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-025");
+    }
+
+    @Test
+    @DisplayName("dataset 이 다르면 맞대지 않는다")
+    void residualRefusesRunsFromDifferentDatasets() throws Exception {
+        long clean = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long corrupt = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 2);
+
+        var response = probe.get(RESIDUAL + "?before=" + clean + "&after=" + corrupt);
+
+        assertThat(response.statusCode())
+                .as("규칙도 대상도 달라 집합 연산이 뜻을 잃는다 — 0 이 아니라 거절이다")
+                .isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-025");
+    }
+
+    /**
+     * <b>안 닫힌 실행은 400 이 아니라 409 다.</b> 파라미터가 아니라 그 실행의 상태라,
+     * 400 으로 내면 자동화가 <i>"파라미터를 고쳐 재시도"</i> 루프에 빠진다 —
+     * {@code closedRun} 이 {@code diff} 에 대해 적어 둔 근거가 여기에도 그대로 선다.
+     */
+    @Test
+    @DisplayName("아직 안 닫힌 실행은 409 로 거절한다")
+    void residualRefusesAnOpenRun() throws Exception {
+        long closed = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long open = runs.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 2, AS_OF)).id();
+
+        var response = probe.get(RESIDUAL + "?before=" + closed + "&after=" + open);
+
+        assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-026");
     }
 }

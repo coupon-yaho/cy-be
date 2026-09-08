@@ -229,8 +229,13 @@ public class VerifyReportController {
      * 집는다 — 그쪽이 이미 정한 것이고, 여기서 다르게 하면 같은 API 안에서 규칙이 둘이 된다.
      * {@code dataset}·{@code scope} 가 다르면 규칙도 대상도 달라 집합 연산이 뜻을 잃는다.
      *
-     * <p>정리가 지운 행이 이 대조를 끊지 않는다는 것은 실측했다 —
-     * 근거는 {@link VerifyResidualView} 에 있다.
+     * <p>정리가 지운 행이 이 대조를 끊지 않는다는 것은 <b>코드로 증명했다</b>(프로브가
+     * 아니라 세 자리를 읽어 연쇄를 확인한 것이다) — 근거는 {@link VerifyResidualView} 에 있다.
+     *
+     * <pre>
+     * curl -sSf -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     *   "localhost:9091/api/v1/admin/verify/reports/residual?before=17&amp;after=23"
+     * </pre>
      *
      * @param before 앞 실행
      * @param after 뒤 실행

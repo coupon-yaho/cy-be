@@ -27,7 +27,8 @@ import com.kafkick.core.verification.VerificationRun;
  * <h2>삭제가 이 대조를 안 끊는다 — 실측</h2>
  *
  * <p>{@code CleanupJdbcAdapter.deleteFindings} 가 검출 행을 지우므로 <i>"앞 실행에 없었다"</i>
- * 를 <b>행의 부재로 읽으면 안 되는 것 아닌가</b> 를 먼저 쟀다. <b>안 끊는다.</b>
+ * 를 <b>행의 부재로 읽으면 안 되는 것 아닌가</b> 를 먼저 봤다. <b>안 끊는다</b> — 아래는
+ * 프로브가 아니라 <b>세 자리를 읽어 확인한 연쇄</b>다.
  *
  * <ul>
  *   <li>지우는 대상이 {@code verdict IS NULL}(버려진 실행) 또는
@@ -62,6 +63,15 @@ public record VerifyResidualView(
      * @param resolved 앞 실행에만 있다
      */
     public record RuleResidual(FindingType type, int persisted, int introduced, int resolved) {
+
+        /**
+         * <b>정의를 여기서 다시 쓰지 않는다.</b> <i>"잔여 = 지속 + 신규"</i> 를 두 곳에
+         * 적으면 한쪽만 고치는 날 규칙별 합과 총합이 갈린다 —
+         * {@link ResidualCount#remaining()} 이 그 정의의 자리다.
+         */
+        public int remaining() {
+            return new ResidualCount(persisted, introduced, resolved).remaining();
+        }
     }
 
     /**
@@ -72,7 +82,7 @@ public record VerifyResidualView(
      * <p>순서는 {@code FindingType.values()} 다. 맵의 순회 순서에 기대면 제출물이
      * 실행마다 달라진다 — {@code VerifyReportView.of} 가 같은 이유로 같은 모양을 쓴다.
      */
-    static VerifyResidualView of(String schema,
+    public static VerifyResidualView of(String schema,
             VerificationRun was, int beforeCount,
             VerificationRun now, int afterCount,
             Map<FindingType, ResidualCount> residual) {
@@ -89,7 +99,7 @@ public record VerifyResidualView(
                 VerifyReportDiffView.Side.of(was, beforeCount),
                 VerifyReportDiffView.Side.of(now, afterCount),
                 byType,
-                byType.stream().mapToInt(r -> r.persisted() + r.introduced()).sum(),
+                byType.stream().mapToInt(RuleResidual::remaining).sum(),
                 byType.stream().mapToInt(RuleResidual::introduced).sum(),
                 byType.stream().mapToInt(RuleResidual::resolved).sum());
     }

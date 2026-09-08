@@ -4,8 +4,8 @@ package com.kafkick.storage.db.verification;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -80,11 +80,14 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 그 유니크가 사라지면 같은 실행 안의 중복이 {@code sides = 2} 를 만들어
      * <b>지속을 과대 보고</b>한다.
      *
-     * <p>{@code run_id} 가 {@code uk_run_finding} 의 선두라 {@code IN} 두 값이 각각 그
-     * 인덱스로 들어간다. 그 뒤 {@code GROUP BY} 는 두 구간을 합쳐야 해서 인덱스 순서를
-     * 그대로 못 쓴다 — <b>여기가 이 조회에서 비싼 자리다.</b> 실제로 예산을 넘기는 것을
-     * 보는 날 {@code (finding_type, target_key)} 인덱스를 재는 것이 다음 수인데,
-     * 그것은 마이그레이션이라 시드 DDL 과 함께 가야 한다(CY-945 가 겪은 비용).
+     * <p><b>인덱스 모양은 사실이고 실행계획은 안 쟀다.</b> {@code run_id} 는
+     * {@code uk_run_finding} 의 선두이고 이 SELECT 가 읽는 세 컬럼이 정확히 그 인덱스의
+     * 컬럼이다({@code V1__init_schema.sql} 에서 확인). 반면 {@code GROUP BY} 가 그
+     * 인덱스의 <b>접미</b>라 정렬을 그대로 못 쓸 것으로 <b>보이는데</b>, 옵티마이저가
+     * 실제로 무엇을 고르는지와 어디가 제일 비싼지는 <b>EXPLAIN 도 타이밍도 안 떴다.</b>
+     * 예산을 실제로 넘기는 것을 보는 날 그때 재고 고른다 — 후보는
+     * {@code (finding_type, target_key)} 인덱스인데, 그것은 마이그레이션이라 시드 DDL 과
+     * 함께 가야 한다(CY-945 가 겪은 비용).
      */
     private static final String SELECT_RESIDUAL_BY_TYPE = """
             SELECT k.finding_type AS finding_type,
@@ -183,7 +186,11 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
     @Override
     public Map<FindingType, ResidualCount> residualByType(long beforeRunId, long afterRunId) {
         if (beforeRunId == afterRunId) {
-            throw new IllegalArgumentException(
+            // **raw 예외를 안 던진다.** BatchApiExceptionHandler 의 마지막 그물이
+            // Exception 을 500 으로 뭉개므로, 컨트롤러 가드가 어느 날 빠지면 이 조용한
+            // 오답이 **500 + 스프링 기본 본문**으로 나간다. 컨트롤러의 requireComparable 이
+            // 던지는 것과 **같은 코드**를 쓴다 — 두 자리가 다른 답을 내면 안 된다.
+            throw new BusinessException(VerificationErrorCode.RUNS_NOT_COMPARABLE,
                     "같은 실행끼리는 맞댈 수 없습니다. runId=" + beforeRunId);
         }
         Map<FindingType, ResidualCount> residual = new EnumMap<>(FindingType.class);
@@ -192,7 +199,11 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                         .addValue("beforeRunId", beforeRunId)
                         .addValue("afterRunId", afterRunId),
                 rs -> {
-                    residual.put(FindingType.valueOf(rs.getString("finding_type")),
+                    // **valueOf 를 직접 부르지 않는다.** 그 컬럼에 CHECK 가 없어서 enum 밖
+                    // 값이 들어갈 수 있고, 그러면 형제 조회는 UNKNOWN_FINDING_TYPE 봉투를
+                    // 내주는데 여기만 500 + 스프링 기본 본문으로 끝난다. 같은 사고에
+                    // 답이 갈리면 안 된다 — 근거는 toType 에 있다.
+                    residual.put(toType(rs.getString("finding_type"), afterRunId),
                             new ResidualCount(rs.getInt("persisted"),
                                     rs.getInt("introduced"), rs.getInt("resolved")));
                 });

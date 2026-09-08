@@ -2,6 +2,7 @@ package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -19,6 +20,7 @@ import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ResidualCount;
+import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationRun;
@@ -105,6 +107,63 @@ class VerificationFindingJdbcAdapterTest {
                 .isEqualTo(new ResidualCount(0, 1, 2));
     }
 
+    /**
+     * <b>남의 실행이 섞이면 안 된다.</b> {@code WHERE run_id IN (...)} 를 통째로 지워도
+     * 다른 시험은 전부 초록이었다 — 그 시험들에는 <b>검출을 가진 제3의 실행이 없기</b>
+     * 때문이다(어댑터 시험은 롤백, API 시험은 매번 검출을 지운다).
+     *
+     * <p>운영 DB 는 실행이 계속 쌓이는 표라 그 가드가 빠지면 <b>남의 검출이 통째로
+     * 섞여</b> 지속·신규가 다 틀린다. 그것이 안 보이는 상태가 이 시험이 없던 상태다.
+     */
+    @Test
+    @DisplayName("맞대는 두 실행 밖의 검출은 안 섞인다")
+    void residualIgnoresOtherRuns() {
+        long before = newRun(6);
+        long after = newRun(7);
+        long stranger = newRun(8);
+
+        adapter.appendAll(before, List.of(finding(10)));
+        adapter.appendAll(after, List.of(finding(10)));
+        // 남의 실행이 같은 키를 갖고 있다 — 섞이면 sides 가 3 이 되어 지속이 0 으로 뒤집힌다.
+        adapter.appendAll(stranger, List.of(finding(10), finding(11)));
+
+        assertThat(adapter.residualByType(before, after).get(FindingType.ILLEGAL_TRANSITION))
+                .as("HISTORY:10 하나가 지속이고, 남의 HISTORY:11 은 답에 없어야 한다")
+                .isEqualTo(new ResidualCount(1, 0, 0));
+    }
+
+    /**
+     * <b>규칙이 다르면 같은 대상이라도 다른 검출이다.</b> {@code REPLAY_MISMATCH} ·
+     * {@code USAGE_MISMATCH} · {@code GRADE_VIOLATION} 은 전부 {@code Grain.ISSUANCE} 라
+     * <b>같은 {@code ISSUANCE:<id>} 키</b>를 만든다 — 한 발급건이 두 규칙에 잡히는 것이
+     * 실재한다.
+     *
+     * <p>안쪽 {@code GROUP BY} 에서 {@code finding_type} 을 빼면 그 둘이 한 키로 묶여
+     * {@code sides = 2} 가 되고, <b>한 번도 지속된 적 없는 것이 "지속" 으로</b> 보고된다.
+     * 규칙 하나만 심는 시험으로는 그 돌연변이가 안 죽는다.
+     */
+    @Test
+    @DisplayName("같은 대상이라도 규칙이 다르면 따로 센다")
+    void residualKeepsRulesApartEvenOnTheSameTarget() {
+        long before = newRun(9);
+        long after = newRun(10);
+
+        // 한 발급건이 앞 실행에서는 V3, 뒤 실행에서는 V5 에 잡혔다 — 지속이 아니다.
+        adapter.appendAll(before, List.of(VerificationFinding.forIssuance(
+                FindingType.REPLAY_MISMATCH, 77, "기대", "실제")));
+        adapter.appendAll(after, List.of(VerificationFinding.forIssuance(
+                FindingType.USAGE_MISMATCH, 77, "기대", "실제")));
+
+        Map<FindingType, ResidualCount> residual = adapter.residualByType(before, after);
+
+        assertThat(residual.get(FindingType.REPLAY_MISMATCH))
+                .as("앞에만 있었다 — 해소다")
+                .isEqualTo(new ResidualCount(0, 0, 1));
+        assertThat(residual.get(FindingType.USAGE_MISMATCH))
+                .as("뒤에만 있다 — 신규다. 규칙을 안 가르면 이 둘이 '지속' 하나가 된다")
+                .isEqualTo(new ResidualCount(0, 1, 0));
+    }
+
     /** 같은 규칙·다른 대상의 검출 하나. 세 갈래를 수로 가르려면 키만 달라지면 된다. */
     private static VerificationFinding finding(long historyId) {
         return VerificationFinding.forHistory(
@@ -120,8 +179,13 @@ class VerificationFindingJdbcAdapterTest {
     @DisplayName("같은 실행끼리는 맞대기를 거절한다")
     void refusesToCompareARunWithItself() {
         assertThatThrownBy(() -> adapter.residualByType(runId, runId))
-                .isInstanceOf(IllegalArgumentException.class)
+                .as("raw 예외면 컨트롤러 가드가 빠지는 날 500 + 스프링 기본 본문으로 나간다")
+                .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(String.valueOf(runId));
+        assertThat(catchThrowableOfType(BusinessException.class,
+                () -> adapter.residualByType(runId, runId)).getErrorCode())
+                .as("컨트롤러의 requireComparable 과 같은 코드여야 답이 안 갈린다")
+                .isEqualTo(VerificationErrorCode.RUNS_NOT_COMPARABLE);
     }
 
     @Test
