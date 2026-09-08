@@ -24,7 +24,7 @@ import com.kafkick.core.verification.VerificationRun;
  * <p>사전예약 PRD 대사 보고서 5단계가 요구하는 넷 중 <b>잔여 불일치</b> 축이다 —
  * 검사 건수는 CY-945 가 냈고, 정정·복구는 대사가 <b>쓰기</b>를 하는 축이라 예약 도메인이 진다.
  *
- * <h2>삭제가 이 대조를 안 끊는다 — 실측</h2>
+ * <h2>삭제가 이 대조를 안 끊는다 — 코드로 확인</h2>
  *
  * <p>{@code CleanupJdbcAdapter.deleteFindings} 가 검출 행을 지우므로 <i>"앞 실행에 없었다"</i>
  * 를 <b>행의 부재로 읽으면 안 되는 것 아닌가</b> 를 먼저 봤다. <b>안 끊는다</b> — 아래는

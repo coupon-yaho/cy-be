@@ -164,6 +164,39 @@ class VerificationFindingJdbcAdapterTest {
                 .isEqualTo(new ResidualCount(0, 1, 0));
     }
 
+    /**
+     * <b>바이트가 다르면 다른 검출이다.</b> 두 컬럼에 {@code COLLATE} 가 없어 서버 기본
+     * ({@code utf8mb4_0900_ai_ci})을 물려받는데 그것은 <b>대소문자를 무시</b>한다 —
+     * 기본 콜레이션으로 묶으면 {@code HISTORY:20} 과 {@code history:20} 이 한 키가 되어
+     * <b>한 번도 지속된 적 없는 것이 "지속" 으로</b> 잡힌다.
+     *
+     * <p>같은 파일의 checksum 질의가 <b>같은 이유로 같은 캐스팅</b>을 쓴다. 그 계약을
+     * 이 조회도 지키는지 여기서 잰다.
+     *
+     * <p><b>도메인으로는 이 값을 못 만든다</b> — {@code TargetKey} 가 대문자 접두사를
+     * 붙인다. 그래서 SQL 로 직접 심는다. 도달하려면 쓰기 경로가 깨져야 하지만, 그때
+     * <b>조용히 틀린 답</b>이 나가는 것과 말해 주는 것은 다르다.
+     */
+    @Test
+    @DisplayName("대소문자만 다른 키는 같은 검출이 아니다")
+    void residualComparesKeysByBytes() {
+        long before = newRun(11);
+        long after = newRun(12);
+        adapter.appendAll(before, List.of(finding(20)));
+        // 같은 대상을 소문자 키로 뒤 실행에 심는다 — 기본 콜레이션이면 한 키로 합쳐진다.
+        jdbcClient.sql("""
+                        INSERT INTO verification_findings
+                               (run_id, finding_type, target_key, history_id, expected, actual)
+                        VALUES (:runId, 'ILLEGAL_TRANSITION', 'history:20', 20, '기대', '실제')
+                        """)
+                .param("runId", after)
+                .update();
+
+        assertThat(adapter.residualByType(before, after).get(FindingType.ILLEGAL_TRANSITION))
+                .as("합쳐지면 (1,0,0) 이 된다 — 한 번도 지속된 적 없는데")
+                .isEqualTo(new ResidualCount(0, 1, 1));
+    }
+
     /** 같은 규칙·다른 대상의 검출 하나. 세 갈래를 수로 가르려면 키만 달라지면 된다. */
     private static VerificationFinding finding(long historyId) {
         return VerificationFinding.forHistory(

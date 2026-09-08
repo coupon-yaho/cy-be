@@ -74,6 +74,18 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 한 실행이 최대 6만 키다 — 두 실행이면 12만이고, 이 조회는 관리자 API 의 5초 예산
      * 안에서 끝나야 한다. 돌려주는 것은 <b>규칙 수만큼의 행</b>이다.
      *
+     * <p><b>{@code CAST(... AS BINARY)} 로 묶는다 — 기본 콜레이션은 이 비교에 쓰면 안 된다.</b>
+     * 두 컬럼에 {@code COLLATE} 가 없어 서버 기본({@code utf8mb4_0900_ai_ci})을 물려받는데,
+     * 그것은 <b>대소문자·악센트를 무시</b>한다. 그대로 묶으면 바이트가 다른 두 검출이 한
+     * 키가 되어 <b>한 번도 지속된 적 없는 것이 "지속" 으로</b> 잡히고, 신규·해소와 잔여
+     * 건수가 함께 틀어진다. 같은 파일의 {@code SELECT_CHECKSUM_INPUT} 이 <b>같은 이유로
+     * 같은 캐스팅</b>을 쓴다 — 집합을 맞대는 자리에서는 바이트가 계약이다.
+     *
+     * <p>안쪽이 바이트로 갈리므로 한 그룹의 {@code finding_type} 은 전부 같은 값이고,
+     * {@code MIN} 은 그것을 그대로 낸다({@code ONLY_FULL_GROUP_BY} 를 지나려면 필요하다).
+     * 대소문자만 다른 값이 실제로 있으면 두 행으로 남아 {@code toType} 이
+     * {@code UNKNOWN_FINDING_TYPE} 으로 <b>말한다</b> — 조용히 합치는 것보다 낫다.
+     *
      * <p><b>안쪽 {@code GROUP BY} 가 두 실행을 키로 겹친다.</b> 한 키가 한 실행에 두 번
      * 못 나오므로({@code uk_run_finding}) {@code sides} 는 1 아니면 2 다 —
      * <b>2 면 두 실행에 다 있다</b>. 1 이면 {@code has_after} 가 어느 쪽인지 가른다.
@@ -90,18 +102,18 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 함께 가야 한다(CY-945 가 겪은 비용).
      */
     private static final String SELECT_RESIDUAL_BY_TYPE = """
-            SELECT k.finding_type AS finding_type,
+            SELECT MIN(k.finding_type) AS finding_type,
                    SUM(k.sides = 2)                        AS persisted,
                    SUM(k.sides = 1 AND k.has_after = 1)    AS introduced,
                    SUM(k.sides = 1 AND k.has_after = 0)    AS resolved
-              FROM (SELECT finding_type,
-                           target_key,
+              FROM (SELECT MIN(finding_type)         AS finding_type,
                            COUNT(*)                  AS sides,
                            MAX(run_id = :afterRunId) AS has_after
                       FROM verification_findings
                      WHERE run_id IN (:beforeRunId, :afterRunId)
-                     GROUP BY finding_type, target_key) k
-             GROUP BY k.finding_type
+                     GROUP BY CAST(finding_type AS BINARY),
+                              CAST(target_key AS BINARY)) k
+             GROUP BY CAST(k.finding_type AS BINARY)
             """;
 
     /**
@@ -177,7 +189,7 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
     }
 
     /**
-     * <b>같은 실행을 두 번 주면 전부 "지속" 이 된다 — 그래서 여기서 막는다.</b>
+     * <b>같은 실행을 두 번 주면 전부 "새로 생겼다" 로 나온다 — 그래서 여기서 막는다.</b>
      * 부르는 쪽({@code VerifyReportController})도 같은 검사를 하지만, 이 SQL 은
      * {@code IN (:a, :b)} 라 두 값이 같으면 <b>조용히 한 실행만 훑고</b> 모든 키가
      * {@code sides = 1}·{@code has_after = 1} 이 되어 <b>전부 "새로 생겼다"</b> 로 나온다.
@@ -203,7 +215,10 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                     // 값이 들어갈 수 있고, 그러면 형제 조회는 UNKNOWN_FINDING_TYPE 봉투를
                     // 내주는데 여기만 500 + 스프링 기본 본문으로 끝난다. 같은 사고에
                     // 답이 갈리면 안 된다 — 근거는 toType 에 있다.
-                    residual.put(toType(rs.getString("finding_type"), afterRunId),
+                    // **어느 실행인지 이 결과로는 못 가른다** — 두 실행을 합쳐 집계한
+                    // 행이다. 뒤 실행만 적으면 앞 실행의 오염을 보고 운영자가 멀쩡한
+                    // 실행을 뒤진다. 둘 다 적는다.
+                    residual.put(toType(rs.getString("finding_type"), beforeRunId, afterRunId),
                             new ResidualCount(rs.getInt("persisted"),
                                     rs.getInt("introduced"), rs.getInt("resolved")));
                 });
@@ -261,12 +276,26 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 그 리포트가 <b>합격 증거로 쓰인다.</b> 못 읽으면 못 읽는다고 말해야 한다.
      */
     private static FindingType toType(String raw, long runId) {
+        return toType(raw, "run=" + runId);
+    }
+
+    /**
+     * <b>어느 실행인지 못 가르는 자리를 위한 것이다.</b> 잔여 집계는 두 실행을 합쳐
+     * 접은 행이라, 뒤 실행만 적으면 앞 실행의 오염을 보고 운영자가 <b>멀쩡한 실행을
+     * 뒤진다.</b> 판정 자체는 위와 같다.
+     */
+    private static FindingType toType(String raw, long beforeRunId, long afterRunId) {
+        return toType(raw, "before=" + beforeRunId + " after=" + afterRunId);
+    }
+
+    /** 두 오버로드가 <b>같은 예외·같은 코드</b>를 내게 판정을 한 곳에 둔다. */
+    private static FindingType toType(String raw, String where) {
         try {
             return FindingType.valueOf(raw);
         } catch (IllegalArgumentException e) {
             throw new BusinessException(
                     VerificationErrorCode.UNKNOWN_FINDING_TYPE,
-                    "run=" + runId + " finding_type=" + raw);
+                    where + " finding_type=" + raw);
         }
     }
 
