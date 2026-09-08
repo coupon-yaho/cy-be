@@ -216,6 +216,49 @@ public class VerifyReportController {
     }
 
     /**
+     * <b>같은 3건인가, 다 고쳐지고 새로 3건인가.</b> {@link #diff} 의 응답에서는 그 둘이
+     * 같은 모양이라 <b>처방이 정반대인데 구분이 안 됐다</b> — 앞엣것은 아무도 안 고치고
+     * 있는 것이고, 뒤엣것은 지금도 계속 깨지고 있는 것이다.
+     *
+     * <p>사전예약 PRD 대사 보고서의 <b>잔여 불일치</b> 축이다. 갈라 주는 것은 개수가 아니라
+     * {@code (finding_type, target_key)} 단위의 집합 연산이고, 그 접기는 <b>DB 가 한다</b> —
+     * 규칙당 상한이 10,000 이라 키를 자바로 올리면 두 실행에 최대 12만이고 이 조회의
+     * 예산은 5초다.
+     *
+     * <p><b>{@code diff} 와 같은 규칙으로 둘을 받는다.</b> <i>"직전 것"</i> 을 자동으로 안
+     * 집는다 — 그쪽이 이미 정한 것이고, 여기서 다르게 하면 같은 API 안에서 규칙이 둘이 된다.
+     * {@code dataset}·{@code scope} 가 다르면 규칙도 대상도 달라 집합 연산이 뜻을 잃는다.
+     *
+     * <p>정리가 지운 행이 이 대조를 끊지 않는다는 것은 <b>코드로 증명했다</b>(프로브가
+     * 아니라 세 자리를 읽어 연쇄를 확인한 것이다) — 근거는 {@link VerifyResidualView} 에 있다.
+     *
+     * <pre>
+     * curl -sSf -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     *   "localhost:9091/api/v1/admin/verify/reports/residual?before=17&amp;after=23"
+     * </pre>
+     *
+     * @param before 앞 실행
+     * @param after 뒤 실행
+     */
+    @GetMapping("/reports/residual")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true,
+            timeoutString = "${batch.admin.timeout-seconds:5}")
+    public ResponseEnvelope<VerifyResidualView> residual(
+            @RequestParam long before,
+            @RequestParam long after) {
+
+        VerificationRun was = closedRun(before);
+        VerificationRun now = closedRun(after);
+        requireComparable(was, now);
+
+        return ResponseEnvelope.success(VerifyResidualView.of(
+                rules.currentSchema(),
+                was, findings.countOf(was.id()),
+                now, findings.countOf(now.id()),
+                findings.residualByType(was.id(), now.id())));
+    }
+
+    /**
      * <b>닫힌 실행만 맞댄다.</b> 없는 번호와 안 끝난 실행을 <b>다른 코드로</b> 가른다.
      *
      * <p><b>{@code verdict} 만 보면 절반이다.</b> {@code SELECT_LATEST_CLOSED} 가

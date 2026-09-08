@@ -32,6 +32,26 @@ public interface VerificationFindingRepository {
     int countOf(long runId);
 
     /**
+     * <b>두 실행의 검출을 {@code (finding_type, target_key)} 단위로 맞댄다.</b>
+     * 유형별 개수만 맞대는 {@code /reports/diff}(CY-944)가 <i>"같은 3건"</i> 과
+     * <i>"다 고쳐지고 새로 3건"</i> 을 못 가르는 자리를 메운다.
+     *
+     * <p><b>집계는 DB 가 접는다.</b> 키 집합을 자바로 올리면 규칙당 상한
+     * ({@code batch.verify.max-findings-per-rule}, 기본 10,000)에 규칙 여섯을 곱해
+     * 한 실행이 최대 6만 키다 — 두 실행이면 12만이고, 이 조회는 관리자 API 의
+     * 5초 예산 안에서 돌아야 한다. 그래서 돌려주는 것은 <b>규칙 수만큼의 행</b>이다.
+     *
+     * <p><b>한 키가 한 실행에 두 번 못 나오는 것이 이 집계의 전제다</b> —
+     * {@code uk_run_finding} 이 그것을 막는다. 그 유니크가 사라지면 "두 실행에 다 있다"
+     * 판정이 같은 실행 안의 중복으로도 성립해 <b>지속을 과대 보고</b>한다.
+     *
+     * @param beforeRunId 앞 실행. 닫힌 실행이어야 한다 — 부르는 쪽이 지킨다
+     * @param afterRunId 뒤 실행
+     * @return 검출이 하나라도 있는 규칙만. 없는 규칙은 키가 없다
+     */
+    Map<FindingType, ResidualCount> residualByType(long beforeRunId, long afterRunId);
+
+    /**
      * 검출 집합의 checksum. <b>재실행 결정론 판정의 근거</b>입니다.
      *
      * <p>계약({@code docs/contract.json} 의 {@code findings_checksum})이 정한 인코딩을 그대로 씁니다 —
