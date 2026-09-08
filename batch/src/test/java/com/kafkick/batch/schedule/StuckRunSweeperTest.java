@@ -4,6 +4,7 @@ package com.kafkick.batch.schedule;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -299,35 +300,39 @@ class StuckRunSweeperTest {
     }
 
     /**
-     * <b>바깥 예산 검사가 무엇을 지는지.</b> 이것도 돌연변이가 살아남아서 생겼다 —
-     * 지워도 결과는 같다(안쪽 검사가 곧바로 끊으므로). 그래서 이 검사가 지는 것은
-     * <b>정정이 아니라 질의</b>다: {@code stuckExecutions} 는 실행마다 DAO 를 세 번,
-     * Step 마다 한 번 더 부르는 비싼 조회라, 예산이 0 인데 남은 잡마다 그것을 부르는 것은
-     * <b>배치 메타가 이미 아픈 날</b>에 부담을 더한다.
+     * <b>예산이 잡 경계에서 딱 떨어져도 뒤쪽 적체를 놓치지 않는다.</b>
      *
-     * <p>그래서 <b>결과가 아니라 호출</b>을 잰다. 결과로는 이 분기를 못 가른다.
+     * <p>한때 예산이 0 이면 남은 잡을 <b>조회조차 안 했다</b>. 그러면 앞 잡이 상한을
+     * 정확히 소진하고 뒤 잡에 시체가 남은 주기가 <b>"용량 정상"</b> 으로 보이고, 그
+     * 상태에서 {@code BatchStuckExecution} 이 뜨면 진단문이 남은 갈래
+     * (<i>"실행이 매 주기 되살아난다"</i>)를 지목해 운영자가 <b>임계를 만지러 간다.</b>
+     *
+     * <p>아끼던 것은 잡 수만큼의 조회(지금 셋이면 최대 둘)였다 — 적체를 정확히 아는 것과
+     * 맞바꿀 값이 아니다. <b>상한이 막는 것은 쓰기</b>이고 그 축은 그대로다.
      */
     @Test
-    @DisplayName("예산이 떨어지면 남은 잡은 조회조차 안 한다")
-    void anExhaustedBudgetSkipsTheRemainingQueries() {
-        RunningJobProbe counting = mock(RunningJobProbe.class);
-        when(counting.stuckExecutions(anyString())).thenReturn(List.of());
+    @DisplayName("예산이 잡 경계에서 떨어져도 남은 잡을 세어 적체로 남긴다")
+    void anExhaustedBudgetStillCountsTheBacklogBehindIt() {
+        double before = counter("cy_batch_stuck_sweep_capped_total");
+        LocalDateTime now = LocalDateTime.now();
+        String first = jobs.stream().map(Job::getName).sorted().findFirst().orElseThrow();
+        String second = jobs.stream().map(Job::getName).sorted().skip(1)
+                .findFirst().orElseThrow();
+        try (RunningJobFixture head = RunningJobFixture.plant(jobRepository, jdbcClient,
+                first, now, DEAD, DEAD);
+                RunningJobFixture behind = RunningJobFixture.plant(jobRepository, jdbcClient,
+                        second, now, DEAD, DEAD)) {
 
-        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
-                CleanupJobConfig.JOB_NAME, LocalDateTime.now(), DEAD, DEAD)) {
-            StuckRun planted = runningJobs.stuckExecutions(CleanupJobConfig.JOB_NAME).stream()
-                    .filter(run -> run.execution().getId() == corpse.executionId())
-                    .findFirst()
-                    .orElseThrow();
-            // 이름 순으로 cleanupJob 이 먼저다. 그것 하나로 예산을 다 쓴다.
-            when(counting.stuckExecutions(eq(CleanupJobConfig.JOB_NAME)))
-                    .thenReturn(List.of(planted));
+            // 상한 1 — 앞 잡이 정확히 소진한다. 안쪽 분기는 한 번도 안 탄다.
+            sweeperWithCap(1).sweep();
 
-            sweeper(sweepService, counting, 1)
-                    .sweep();
-
-            verify(counting).stuckExecutions(CleanupJobConfig.JOB_NAME);
-            verify(counting, never()).stuckExecutions(ExpireStepContext.JOB_NAME);
+            assertThat(statusOf(head.executionId())).isEqualTo(BatchStatus.FAILED);
+            assertThat(statusOf(behind.executionId()))
+                    .as("상한이 쓰기를 막는 축은 그대로여야 한다")
+                    .isEqualTo(BatchStatus.STARTED);
+            assertThat(counter("cy_batch_stuck_sweep_capped_total"))
+                    .as("뒤 잡에 남았는데 안 세면 알림이 임계를 지목한다")
+                    .isGreaterThan(before);
         }
     }
 
@@ -459,36 +464,35 @@ class StuckRunSweeperTest {
 
     /**
      * <b>앞 잡이 상한을 계속 먹으면 뒤 잡은 어떻게 되나.</b> 고정 순서 + 전역 상한이면
-     * <b>뒤 잡은 조회조차 안 되고</b>, 예산이 0 이라 조회를 건너뛰므로 그 사실이
-     * 지표에도 안 잡힌다 — 그 잡의 시체는 자동 회수 대상에서 조용히 빠진다.
+     * <b>예산이 언제나 같은 잡으로 간다</b> — 뒤 잡의 시체는 조회는 되는데 영원히
+     * 안 걷힌다.
      *
-     * <p>여기서 재는 것은 <b>두 번째 주기가 다른 잡부터 보는가</b>다. 상한 1 로 두 주기를
-     * 돌리면 회전이 없을 때 같은 잡을 두 번 보고, 있으면 각각 한 번씩 본다.
+     * <p>재는 것은 <b>두 번째 주기가 다른 잡에 예산을 주는가</b>다. 회전이 없으면 같은
+     * 실행을 두 번 시도하고, 있으면 각각 한 번씩 간다.
      */
     @Test
     @DisplayName("주기마다 시작 잡을 돌려 뒤쪽 잡이 안 굶는다")
     void theStartingJobRotatesSoLaterJobsAreNotStarved() {
-        RunningJobProbe counting = mock(RunningJobProbe.class);
-        when(counting.stuckExecutions(anyString())).thenReturn(List.of());
-
         LocalDateTime now = LocalDateTime.now();
         String first = jobs.stream().map(Job::getName).sorted().findFirst().orElseThrow();
-        try (RunningJobFixture corpse = RunningJobFixture.plant(jobRepository, jdbcClient,
-                first, now, DEAD, DEAD)) {
-            StuckRun planted = runningJobs.stuckExecutions(first).stream()
-                    .filter(run -> run.execution().getId() == corpse.executionId())
-                    .findFirst()
-                    .orElseThrow();
-            // 첫 잡이 매 주기 상한을 통째로 먹는다.
-            when(counting.stuckExecutions(eq(first))).thenReturn(List.of(planted));
+        String second = jobs.stream().map(Job::getName).sorted().skip(1)
+                .findFirst().orElseThrow();
+        try (RunningJobFixture a = RunningJobFixture.plant(jobRepository, jdbcClient,
+                first, now, DEAD, DEAD);
+                RunningJobFixture b = RunningJobFixture.plant(jobRepository, jdbcClient,
+                        second, now, DEAD, DEAD)) {
 
-            StuckRunSweeper sweeper = sweeper(sweepService, counting, 1);
+            // 아무것도 안 걷는 서비스 — 시체가 목록에 계속 남아 회전만 잰다.
+            StuckRunSweepService noop = mock(StuckRunSweepService.class);
+            when(noop.recover(anyLong(), any())).thenReturn(false);
+
+            StuckRunSweeper sweeper = sweeper(noop, runningJobs, 1);
             sweeper.sweep();
             sweeper.sweep();
 
-            String second = jobs.stream().map(Job::getName).sorted().skip(1)
-                    .findFirst().orElseThrow();
-            verify(counting).stuckExecutions(second);
+            verify(noop).recover(eq(a.executionId()), any());
+            // 회전이 없으면 예산이 매 주기 같은 잡으로 가고 뒤 잡은 영원히 굶는다.
+            verify(noop).recover(eq(b.executionId()), any());
         }
     }
 

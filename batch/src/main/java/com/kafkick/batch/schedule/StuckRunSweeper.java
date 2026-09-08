@@ -191,21 +191,16 @@ public class StuckRunSweeper {
         }
         int budget = maxPerSweep;
         int closed = 0;
+        long leftBehind = 0;
         for (String jobName : rotated()) {
-            // **이 검사가 지는 것은 정정이 아니라 질의다.** 지워도 아래 안쪽 검사가
-            // 곧바로 끊어 결과는 같다(돌연변이로 확인했다). 여기 있는 이유는
-            // stuckExecutions 가 실행마다 DAO 세 번, Step 마다 한 번을 더 부르는 비싼
-            // 조회라서다 — 예산이 0 인데 남은 잡마다 그것을 부르는 것은 배치 메타가
-            // 이미 아픈 날에 부담만 더한다. 그래서 테스트도 결과가 아니라 호출을 잰다.
-            if (budget == 0) {
-                // **여기서는 지표를 안 올린다.** 남은 잡에 시체가 있는지 안 봤다 —
-                // 보려면 그 비싼 조회를 해야 하는데, 예산이 0 인데 조회를 건너뛰는 것이
-                // 이 검사의 존재 이유다. 증거 없이 올리면 예산이 딱 맞아떨어진 주기에도
-                // 카운터가 올라, 알림이 **멀쩡한 용량을 지목한다.**
-                // 그 잡이 정말 굶고 있으면 다음 주기가 그쪽부터 본다(회전).
-                warnCapped(jobName, "남은 잡은 안 봤습니다");
-                break;
-            }
+            // **예산이 0 이어도 남은 잡을 센다.** 한때 여기서 끊었는데, 그러면 앞 잡이
+            // 상한을 **정확히** 소진하고 뒤 잡에 시체가 남은 주기가 "용량 정상" 으로
+            // 보인다 — 그 상태에서 BatchStuckExecution 이 뜨면 진단문이 남은 갈래
+            // ("실행이 매 주기 되살아난다")를 지목해 운영자가 임계를 만지러 간다.
+            //
+            // 아끼는 것은 잡 수만큼의 조회다(지금 셋이면 최대 둘). 그 값과 **적체를
+            // 정확히 아는 것**을 맞바꿀 이유가 없다. 상한이 막는 것은 **쓰기**이고,
+            // 그것은 아래 taken 이 그대로 진다.
             List<StuckRun> stuckRuns;
             try {
                 stuckRuns = readStuck.execute(status -> runningJobs.stuckExecutions(jobName));
@@ -215,18 +210,13 @@ public class StuckRunSweeper {
                         jobName, e);
                 continue;
             }
-            for (StuckRun stuck : stuckRuns) {
-                if (budget == 0) {
-                    // **안쪽에서도 말해야 한다.** 이름 순 마지막 잡에서 예산이 떨어지면
-                    // 바깥 검사는 한 번도 안 타고, 그러면 상한에 걸린 주기가 한 줄도
-                    // 안 남는다 — 시체가 몰리는 것은 대개 한 잡이라 그쪽이 흔한 경우다.
-                    //
-                    // **여기가 지표를 올리는 유일한 자리다.** 목록 한복판에서 끊었으므로
-                    // 남은 것이 있다는 증거가 손에 있다. 바깥 검사에는 그 증거가 없다.
-                    sweep.recordCapped();
-                    warnCapped(jobName, "이 잡에 아직 남았습니다");
-                    break;
-                }
+            // **남긴 수를 추측하지 않고 뺀다.** 증거 없이 세면 예산이 딱 맞아떨어진
+            // 주기에도 카운터가 올라 알림이 멀쩡한 용량을 지목하고, 안 세면 반대로
+            // 진짜 적체를 놓친다. 본 목록에서 처리한 만큼을 빼면 둘 다 안 난다.
+            int taken = Math.min(budget, stuckRuns.size());
+            leftBehind += stuckRuns.size() - taken;
+            for (int i = 0; i < taken; i++) {
+                StuckRun stuck = stuckRuns.get(i);
                 budget--;
                 long executionId = stuck.execution().getId();
                 try {
@@ -246,6 +236,11 @@ public class StuckRunSweeper {
                             + "jobName={} executionId={}", jobName, executionId, e);
                 }
             }
+        }
+        if (leftBehind > 0) {
+            sweep.recordCapped();
+            log.warn("시체 스윕 상한에 걸려 {}건을 이번 주기에 못 걷었습니다. 다음 주기는 "
+                    + "다른 잡부터 봅니다. 상한={}", leftBehind, maxPerSweep);
         }
         if (closed > 0) {
             log.warn("시체 스윕이 실행 {}건을 FAILED 로 닫았습니다.", closed);
@@ -271,11 +266,5 @@ public class StuckRunSweeper {
             order.add(jobNames.get((offset + i) % jobNames.size()));
         }
         return order;
-    }
-
-    /** 상한 경고는 두 자리에서 나오므로 문구를 한 곳에 둔다 — 갈리면 검색이 안 걸린다. */
-    private void warnCapped(String jobName, String evidence) {
-        log.warn("시체 스윕 상한에 걸려 이번 주기를 여기서 끊습니다. 다음 주기는 다른 잡부터 "
-                + "봅니다. 상한={} 멈춘잡={} {}", maxPerSweep, jobName, evidence);
     }
 }
