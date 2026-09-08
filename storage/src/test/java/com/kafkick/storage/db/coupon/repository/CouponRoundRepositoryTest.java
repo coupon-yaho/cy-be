@@ -2,6 +2,8 @@ package com.kafkick.storage.db.coupon.repository;
 
 import java.sql.Statement;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
@@ -69,6 +71,29 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CouponRoundRepositoryTest {
 
     private static final long CONCURRENCY_TIMEOUT_SECONDS = 10;
+
+    /**
+     * <b>"아직 안 열린 회차" 를 절대 날짜로 적으면 그날이 온다.</b> 실제로 왔다 —
+     * {@code 2026-09-08T05:00Z} 로 박아 둔 값이 <b>그날</b> 만료되어
+     * {@code :storage:test} 가 저장소 전체에서 깨졌다(CY-948).
+     *
+     * <p><b>관측 둘만 적는다.</b> CI 는 {@code 06:44Z} 에 깨졌고, 같은 커밋이 로컬에서는
+     * {@code 09:43Z} 에 통과했다. <b>그 둘이 갈린 경로는 안 쟀다</b> — 존 차이로 보이지만
+     * 컨테이너가 {@code --default-time-zone=+00:00} 이라 그렇게 단정할 근거가 부족하고,
+     * <b>고치는 데 그 답이 필요하지도 않다</b>: 어느 좌표계든 이 날짜는 이미 과거이거나
+     * 곧 과거가 된다. 나중에 여기를 근거로 시간대를 파지 말 것.
+     *
+     * <p>이 픽스처가 말하려는 것은 <b>날짜가 아니라 "아직 안 열렸다"</b> 이고, 그 판정은
+     * DB 의 {@code NOW()} 와 {@code open_at} 을 맞대서 난다 — {@code CouponRound.schedule}
+     * 자체는 현재 시각을 안 본다(실측: 널 검사와 {@code closeAt = openAt + durationHours}
+     * 뿐이다). 그러니 실행 시각에서 밀어야 의도가 그대로 산다.
+     *
+     * <p><b>자바 쪽만 고정 시계로 바꾸지 않는 이유.</b> 이 클래스의 단언이 기대는 것이
+     * 컨테이너의 {@code NOW()} 라, 한쪽만 고정하면 두 시계가 갈려 같은 사고가 모양만
+     * 바꿔 돌아온다.
+     */
+    private static final Instant NOT_YET_OPEN =
+            Instant.now().plus(365, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
     private static final Instant AUDIT_CREATED_AT =
             Instant.parse("2030-01-01T00:00:00Z");
 
@@ -160,10 +185,18 @@ class CouponRoundRepositoryTest {
                 .isEqualTo(7);
         assertThat(((Number) roundRow.get("eligible_grades_mask")).intValue())
                 .isEqualTo(12);
+        // **같은 출처에서 파생시킨다.** 여기에 절대 날짜를 다시 적으면 픽스처와 단언이
+        // 두 벌이 되고, 그중 하나만 고치는 날 이 검사가 조용히 아무것도 안 지킨다 —
+        // CY-948 이 고친 사고가 정확히 그 모양이었다.
+        //
+        // 컨테이너가 --default-time-zone=+00:00 이라 저장된 벽시계가 곧 UTC 다(실측:
+        // KST 21:08 에 심은 값이 12:08 로 읽혔다). 그 축을 여기 한 번만 적는다.
+        // 닫는 시각은 템플릿의 durationHours(2)가 정한다 — schedule 이 openAt 에 더한다.
         assertThat(roundRow.get("open_at"))
-                .isEqualTo(LocalDateTime.of(2026, 9, 8, 5, 0));
+                .isEqualTo(LocalDateTime.ofInstant(NOT_YET_OPEN, ZoneOffset.UTC));
         assertThat(roundRow.get("close_at"))
-                .isEqualTo(LocalDateTime.of(2026, 9, 8, 7, 0));
+                .isEqualTo(LocalDateTime.ofInstant(
+                        NOT_YET_OPEN.plus(2, ChronoUnit.HOURS), ZoneOffset.UTC));
         assertThat(roundRow.get("status"))
                 .isEqualTo(CouponRoundStatus.SCHEDULED.name());
         assertThat(roundRow.get("generated_at"))
@@ -540,8 +573,8 @@ class CouponRoundRepositoryTest {
         CouponRound round = couponRoundCreationService.create(
                 CouponRound.schedule(
                         template,
-                        Instant.parse("2026-09-08T05:00:00Z"),
-                        Instant.parse("2026-09-08T06:00:00Z"),
+                        NOT_YET_OPEN,
+                        NOT_YET_OPEN.plus(1, ChronoUnit.HOURS),
                         generatedAt
                 ),
                 CouponStock.initialize(100, generatedAt)
@@ -657,7 +690,7 @@ class CouponRoundRepositoryTest {
     ) {
         return CouponRound.schedule(
                 template,
-                Instant.parse("2026-09-08T05:00:00Z"),
+                NOT_YET_OPEN,
                 generatedAt
         );
     }
