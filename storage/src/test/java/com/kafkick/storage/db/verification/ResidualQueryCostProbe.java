@@ -12,8 +12,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
@@ -26,34 +24,58 @@ import com.kafkick.storage.db.RepositoryTest;
  * <b>CY-947 이 "안 쟀다" 고 적어 둔 자리를 닫는다.</b> 그 PR 은 상한 계산만 적고
  * 실행계획도 시간도 안 뗐다 — 예산을 넘기는 날 무엇을 해야 할지가 어디에도 없다.
  *
- * <h2>접근 방식 이름이 아니라 읽은 행 수를 본다</h2>
+ * <h2>이름이 아니라 재는 것을 본다 — 그런데 재도 안 되는 것이 있다</h2>
  *
  * <p>⚠️ <b>첫 판은 {@code EXPLAIN} 의 {@code access_type} 으로 비용을 말했다.</b>
- * {@code index} 가 나오면 <i>"전체 인덱스 스캔"</i>, {@code range} 면 <i>"두 구간"</i> 으로
- * 읽고 그 위에 결론을 세웠는데, <b>같은 모듈이 이미 그 추론으로 반려당했다</b> —
- * {@code BacklogPlanContractTest} 가 <i>"이름은 비용을 말하지 않는다"</i> 를 적고
- * {@code Handler_read_*} 로 갈아탔다. <b>옆에 있는 선례를 안 보고 같은 실수를 했다.</b>
+ * 같은 모듈이 이미 그 추론으로 반려당했는데({@code BacklogPlanContractTest}:
+ * <i>"이름은 비용을 말하지 않는다"</i>) <b>옆에 있는 선례를 안 보고 같은 실수를 했다.</b>
  *
- * <p>그래서 여기도 <b>스토리지 엔진 읽기 호출 수</b>를 센다. {@code EXPLAIN} 은
- * <b>모양</b>(어느 인덱스인가·커버링인가·정렬이 붙는가)만 단언하고, <b>비싼가</b> 는
- * 호출 수와 시간이 답한다. {@code EXPLAIN} 의 {@code rows} 는 추정치라 안 쓴다.
+ * <p>그래서 {@code Handler_read_*}(스토리지 엔진 읽기 호출)로 갈아탔는데,
+ * <b>그것도 단언할 만큼 안정적이지 않았다.</b>
+ *
+ * <pre>
+ * 표 120,000행(대상 100%)   673,910
+ * 표 240,000행( 50%)      1,033,912   ← 같은 형상을 따로 재면 793,910 이 나오기도 한다
+ * 표 360,000행( 33%)      1,033,912
+ * 표 480,000행( 25%)      1,153,912
+ * 표 600,000행( 20%)      1,273,912
+ * 표 720,000행( 17%)        673,910   ← 기준값으로 되돌아온다
+ * </pre>
+ *
+ * <p>옵티마이저가 비율에 따라 계획을 갈아타는 것으로 <b>보이지만</b>, 여섯 점으로 그 법칙을
+ * 세울 수는 없다 — <b>단조롭지도 재현되지도 않는다.</b> 여기에 단언을 걸면 남의 PR 이
+ * 이유 없이 빨개진다. <b>그래서 안 건다.</b>
+ *
+ * <p><b>결정에 쓰는 축은 시간이다.</b> 표가 <b>6배</b>가 되는 동안 <b>260~290ms 로
+ * 평평하다</b> — 예산 5초의 6% 안쪽이고, 지배하는 것은 대상 12만 키의 임시 테이블
+ * 집계다. 인덱스를 안 만드는 근거가 이것이다.
  *
  * <h2>못 박는 것과 로그로만 남기는 것</h2>
  *
  * <ul>
- *   <li><b>단언한다</b> — 어느 인덱스를 타는가, 커버링인가, {@code filesort} 가 붙는가,
- *       그리고 <b>읽기 호출이 표 크기를 안 따르는가</b></li>
- *   <li><b>로그로만 남긴다</b> — 벽시계. 러너마다 달라 임계를 걸면 남의 PR 이 이유 없이
- *       빨개진다. 그 수는 사람이 문서에 옮긴다</li>
+ *   <li><b>단언한다</b> — 계획의 <b>모양</b>(어느 인덱스·커버링·{@code filesort}),
+ *       상한에서의 정답, 그리고 프로브가 재는 값이 <b>아직 배포 상한과 같은가</b></li>
+ *   <li><b>로그로만 남긴다</b> — 벽시계와 읽기 호출. <b>둘 다 재현이 안 된다</b>
+ *       (러너·버퍼풀·옵티마이저). 임계를 걸면 남의 PR 이 이유 없이 빨개진다 —
+ *       그 수는 사람이 읽고 문서에 옮긴다</li>
  * </ul>
  *
- * <p>{@code @Transactional(NOT_SUPPORTED)} 이다 — {@code Handler_read_*} 는 세션 상태라
- * 같은 커넥션에서 읽어야 하고, 형제도 같은 이유로 같은 모양을 쓴다.
- * <b>그래서 심은 행을 손으로 지운다.</b>
+ * <h2>트랜잭션 안에서 잰다 — 그것이 같은 세션을 보장한다</h2>
+ *
+ * <p>⚠️ <b>첫 판은 {@code @Transactional(NOT_SUPPORTED)} 이었다.</b> <i>"세션 상태라
+ * 트랜잭션 밖에서 읽어야 한다"</i> 고 거꾸로 생각한 것인데, 사실은 <b>반대다</b> —
+ * 트랜잭션이 없으면 스프링이 커넥션을 스레드에 안 묶어 {@code JdbcClient} 호출마다
+ * 풀이 <b>다른 세션</b>을 줄 수 있다. 그러면 {@code Handler_read_*} 전후를 서로 다른
+ * 세션에서 빼는 셈이라 <b>수가 뜻을 잃는다.</b>
+ *
+ * <p>기본 동작({@code @DataJpaTest} 의 트랜잭션)으로 되돌리면 어댑터의 질의까지
+ * <b>같은 커넥션</b>에 묶이고, 덤으로 심은 18만 행이 롤백으로 사라진다.
+ * (형제 {@code BacklogPlanContractTest} 는 {@code NOT_SUPPORTED} 인데, 그쪽은 같은
+ * 위험을 안고 있다 — 이 티켓이 고칠 자리는 아니지만 <b>선례를 그대로 베끼지 않은</b>
+ * 이유다.)
  */
 @RepositoryTest
 @Import({VerificationFindingJdbcAdapter.class, VerificationRunJdbcAdapter.class})
-@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ResidualQueryCostProbe {
 
     /**
@@ -86,7 +108,7 @@ class ResidualQueryCostProbe {
     @Test
     @DisplayName("잔여 집계가 무엇을 읽고 얼마나 걸리는지")
     void measureAtTheCap() {
-        try {
+        {
             long before = newRun(1);
             long after = newRun(2);
             // **겹치지 않게 심는다.** 절반을 겹치면 안쪽 GROUP BY 의 키가 9만으로 줄어
@@ -126,19 +148,11 @@ class ResidualQueryCostProbe {
                     + "행 · 읽기호출 " + biggerReads + " · 소요 "
                     + biggerElapsed.toMillis() + "ms");
 
-            // **읽기 호출은 표를 따라 는다 — 그것은 사실이고 막을 것이 아니다.**
-            // 막을 것은 그것이 **행당 한 번을 넘는 것**이다. 커버링이 깨지거나 조인이
-            // 붙으면 추가분이 배수로 뛴다 — 그때는 표가 커질수록 예산이 무너진다.
-            long addedRows = CAP_KEYS;
-            assertThat(biggerReads - reads)
-                    .as("표에 %d행을 더했는데 읽기 호출이 그보다 훨씬 많이 늘었다. "
-                            + "커버링이 깨졌거나 대상 밖 행을 여러 번 읽는다", addedRows)
-                    .isLessThan((long) (addedRows * 1.1));
+            // **여기에 단언을 안 건다.** 같은 형상을 두 번 재도 값이 달라진다(위 표) —
+            // 걸면 남의 PR 이 이유 없이 빨개진다. 결정에 쓰는 축은 시간이고 그것도
+            // 러너마다 다르다. 못 박는 것은 계획의 모양이다.
 
-        } finally {
-            jdbcClient.sql("DELETE FROM verification_findings").update();
-            jdbcClient.sql("DELETE FROM verification_runs").update();
-        }
+    }
     }
 
     /**
@@ -156,7 +170,7 @@ class ResidualQueryCostProbe {
                 .isEqualTo(PER_RULE);
     }
 
-    /** {@code EXPLAIN} 은 <b>모양만</b> 단언한다 — 비싼가는 읽기 호출과 시간이 답한다. */
+    /** {@code EXPLAIN} 은 <b>모양만</b> 단언한다 — 비싼가는 시간이 답하고, 그것은 로그다. */
     private void assertPlanShape(long before, long after) {
         String plan = jdbcClient.sql(
                         "EXPLAIN FORMAT=JSON "
