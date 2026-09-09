@@ -92,7 +92,7 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 그 유니크가 사라지면 같은 실행 안의 중복이 {@code sides = 2} 를 만들어
      * <b>지속을 과대 보고</b>한다.
      *
-     * <h3>실측 — 상한 12만 키에서 <b>260~290ms</b>, 예산의 6% 안쪽 (CY-949)</h3>
+     * <h3>실측 — 상한 12만 키에서 <b>256~292ms</b>, 예산의 6% 안쪽 (CY-949)</h3>
      *
      * <p>{@code ResidualQueryCostProbe} 가 규칙당 10,000 × 규칙 6 × 실행 2 = <b>12만 키</b>를
      * <b>겹치지 않게</b> 심고 잰 값이다(겹치면 안쪽 그룹의 키가 줄어 상한이 아니다).
