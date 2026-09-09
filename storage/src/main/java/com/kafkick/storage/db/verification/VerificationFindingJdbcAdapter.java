@@ -92,14 +92,29 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 그 유니크가 사라지면 같은 실행 안의 중복이 {@code sides = 2} 를 만들어
      * <b>지속을 과대 보고</b>한다.
      *
-     * <p><b>인덱스 모양은 사실이고 실행계획은 안 쟀다.</b> {@code run_id} 는
-     * {@code uk_run_finding} 의 선두이고 이 SELECT 가 읽는 세 컬럼이 정확히 그 인덱스의
-     * 컬럼이다({@code V1__init_schema.sql} 에서 확인). 반면 {@code GROUP BY} 가 그
-     * 인덱스의 <b>접미</b>라 정렬을 그대로 못 쓸 것으로 <b>보이는데</b>, 옵티마이저가
-     * 실제로 무엇을 고르는지와 어디가 제일 비싼지는 <b>EXPLAIN 도 타이밍도 안 떴다.</b>
-     * 예산을 실제로 넘기는 것을 보는 날 그때 재고 고른다 — 후보는
-     * {@code (finding_type, target_key)} 인덱스인데, 그것은 마이그레이션이라 시드 DDL 과
-     * 함께 가야 한다(CY-945 가 겪은 비용).
+     * <h3>실측 — 상한 12만 키에서 <b>약 270ms</b>, 예산의 5%다 (CY-949)</h3>
+     *
+     * <p>{@code ResidualQueryCostProbe} 가 규칙당 10,000 × 규칙 6 × 실행 2 = <b>12만 키</b>를
+     * 심고 잰 값이다. 계획도 함께 떴다.
+     *
+     * <pre>
+     * key            uk_run_finding      used_key_parts  run_id · finding_type · target_key
+     * using_index    true                <b>커버링이다 — 표를 안 짚는다</b>
+     * 임시테이블     안팎 둘 다 true     using_filesort  false
+     * </pre>
+     *
+     * <p><b>접근 방식은 비율을 따른다.</b> 대상이 표의 67%(120k/180k)면
+     * {@code access_type=index}(전체 커버링 스캔)를 고르고, 29%(120k/420k)면
+     * {@code range} 다 — 둘 다 이 인덱스이고 <b>소요는 275ms / 268ms 로 사실상 같다.</b>
+     * 그래서 <b>비용은 표 크기가 아니라 대상 행 수를 따른다</b>고 읽는다.
+     * (한때 여기 <i>"IN 두 값이 각각 구간으로 들어간다"</i> 고 단정했는데 <b>절반만
+     * 맞았다</b> — 구간이 되는 것은 비율이 낮을 때뿐이다.)
+     *
+     * <p>{@code GROUP BY} 가 인덱스의 <b>접미</b>라 임시 테이블이 붙는 것은 예상대로였고,
+     * {@code filesort} 는 안 붙는다. <b>그 대가가 270ms 이고 예산은 5초</b>라 지금은
+     * 넉넉하다. {@code (finding_type, target_key)} 인덱스는 <b>안 만든다</b> —
+     * 마이그레이션이라 시드 DDL 과 함께 가야 하는데(CY-945 가 겪은 비용) 그것을 살 이유가
+     * 지금은 없다. 규칙당 상한을 크게 올리는 날 이 프로브를 다시 돌린다.
      */
     private static final String SELECT_RESIDUAL_BY_TYPE = """
             SELECT MIN(k.finding_type) AS finding_type,
