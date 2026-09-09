@@ -63,6 +63,17 @@ tasks.named('test') {
     inputs.files(rootProject.file('docs/contract.json'))
         .withPropertyName('corruptionContract')
         .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // ResidualQueryCostProbe 는 **다른 모듈**의 설정 파일을 Path.of("..") 로 직접 읽어
+    // 배포 상한과 프로브 상한을 대조한다(CY-949). 선언하지 않으면 그 파일만 바뀐 라운드에
+    // :storage:test 가 UP-TO-DATE 로 건너뛰고, **상한이 갈린 채로 초록**이 된다 —
+    // 그러면 문서가 "상한에서 쟀다" 를 계속 주장한다.
+    //
+    // 이 저장소가 같은 결함을 여러 번 냈다(CY-661·CY-921·CY-932~934·CY-936).
+    // 테스트에 Path.of("..") 가 보이면 그 즉시 여기를 본다.
+    inputs.files(rootProject.file('batch/src/main/resources/application.yml.example'))
+        .withPropertyName('verifyFindingCapDefault')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.named('test') {

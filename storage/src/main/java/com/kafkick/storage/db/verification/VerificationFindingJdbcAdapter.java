@@ -92,16 +92,40 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 그 유니크가 사라지면 같은 실행 안의 중복이 {@code sides = 2} 를 만들어
      * <b>지속을 과대 보고</b>한다.
      *
-     * <p><b>인덱스 모양은 사실이고 실행계획은 안 쟀다.</b> {@code run_id} 는
-     * {@code uk_run_finding} 의 선두이고 이 SELECT 가 읽는 세 컬럼이 정확히 그 인덱스의
-     * 컬럼이다({@code V1__init_schema.sql} 에서 확인). 반면 {@code GROUP BY} 가 그
-     * 인덱스의 <b>접미</b>라 정렬을 그대로 못 쓸 것으로 <b>보이는데</b>, 옵티마이저가
-     * 실제로 무엇을 고르는지와 어디가 제일 비싼지는 <b>EXPLAIN 도 타이밍도 안 떴다.</b>
-     * 예산을 실제로 넘기는 것을 보는 날 그때 재고 고른다 — 후보는
-     * {@code (finding_type, target_key)} 인덱스인데, 그것은 마이그레이션이라 시드 DDL 과
-     * 함께 가야 한다(CY-945 가 겪은 비용).
+     * <h3>실측 — 상한 12만 키에서 <b>260~290ms</b>, 예산의 6% 안쪽 (CY-949)</h3>
+     *
+     * <p>{@code ResidualQueryCostProbe} 가 규칙당 10,000 × 규칙 6 × 실행 2 = <b>12만 키</b>를
+     * <b>겹치지 않게</b> 심고 잰 값이다(겹치면 안쪽 그룹의 키가 줄어 상한이 아니다).
+     * 계획의 모양은 그 프로브가 <b>단언</b>한다 — {@code key=uk_run_finding} ·
+     * {@code using_index=true}(커버링) · {@code filesort} 없음.
+     *
+     * <p><b>표를 120,000 → 720,000행으로 키우며 같은 대상을 여섯 번 쟀다. 시간은
+     * 256~292ms 로 평평했다</b> — 표가 6배가 되는 동안 안 움직인다. 지배하는 것은
+     * 대상 12만 키의 임시 테이블 집계이고, 인덱스를 훑는 것 자체는 싸다.
+     * <b>재현되는 것은 실험이지 값이 아니다</b> — 프로브를 돌리면 같은 여섯 형상이 다시
+     * 만들어지지만 수가 같으리란 보장은 없다(러너·버퍼풀·옵티마이저). 위 표는 <b>한
+     * 기기의 한 실행</b>이다. 한때 2배까지만 재 놓고 6배 결론을 적었다가 리뷰에 잡혔고,
+     * 그래서 스윕을 프로브 안에 넣었다 — <b>이 수들은 계약이 아니라 관측이다.</b>
+     *
+     * <p>⚠️ <b>읽기 호출({@code Handler_read_*})은 법칙을 못 세웠다.</b> 표를 키우면 따라
+     * 늘다가 17% 구간에서 기준값으로 <b>되돌아왔고</b>, 같은 형상을 두 번 재면 값이
+     * 달라졌다(240k 에서 793,910 / 1,033,912, 720k 에서 673,910 / 1,393,912).
+     * 옵티마이저가 비율에 따라 계획을 갈아타는 것으로 보이지만 <b>단조성도 재현성도
+     * 못 보였다</b> — 그래서 프로브가 그 축에 단언을 안 건다.
+     *
+     * <p>⚠️ <b>여기 두 번 틀린 문장을 적었다.</b> CY-947 은 <i>"IN 두 값이 각각 구간으로
+     * 들어간다"</i>(계획 이름으로 단정), CY-949 첫 판은 <i>"비용은 대상 행 수를 따른다"</i>
+     * (표 크기만 바꿔 놓고 해석). 둘 다 <b>재고 나서 뒤집혔다.</b>
+     *
+     * <p>{@code (finding_type, target_key)} 인덱스는 <b>안 만든다</b> — 마이그레이션이라
+     * 시드 DDL 과 함께 가야 하는데(CY-945 가 겪은 비용) 300ms 안쪽으로는 살 이유가 없다.
+     *
+     * <p><b>패키지 공개인 이유는 하나다 — {@code ResidualQueryCostProbe} 가 <i>이 문장</i>의
+     * 계획을 떠야 하기 때문이다.</b> 프로브가 사본을 들면 한쪽을 고치는 날 <b>남의 질의의
+     * 계획을 보고 문서에 수를 적는다</b> — 이 티켓이 없애려던 상태가 정확히 그것이다.
+     * {@code StuckRunClaim.CLAIM} 이 같은 이유로 같은 가시성을 갖는다.
      */
-    private static final String SELECT_RESIDUAL_BY_TYPE = """
+    static final String SELECT_RESIDUAL_BY_TYPE = """
             SELECT MIN(k.finding_type) AS finding_type,
                    SUM(k.sides = 2)                        AS persisted,
                    SUM(k.sides = 1 AND k.has_after = 1)    AS introduced,
