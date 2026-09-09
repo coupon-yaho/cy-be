@@ -34,17 +34,19 @@ import com.kafkick.storage.db.RepositoryTest;
  * <b>그것도 단언할 만큼 안정적이지 않았다.</b>
  *
  * <pre>
- * 표 120,000행(대상 100%)   673,910
- * 표 240,000행( 50%)      1,033,912   ← 같은 형상을 따로 재면 793,910 이 나오기도 한다
- * 표 360,000행( 33%)      1,033,912
- * 표 480,000행( 25%)      1,153,912
- * 표 600,000행( 20%)      1,273,912
- * 표 720,000행( 17%)        673,910   ← 기준값으로 되돌아온다
+ * 표 120,000행(대상 100%)   673,910   284ms
+ * 표 240,000행( 50%)      1,033,912   292ms   ← 따로 재면 793,910 이 나오기도 한다
+ * 표 360,000행( 33%)      1,033,912   261ms
+ * 표 480,000행( 25%)      1,153,912   258ms
+ * 표 600,000행( 20%)      1,273,912   256ms
+ * 표 720,000행( 17%)      1,393,912   265ms   ← 앞선 실행에서는 673,910 이었다
  * </pre>
  *
- * <p>옵티마이저가 비율에 따라 계획을 갈아타는 것으로 <b>보이지만</b>, 여섯 점으로 그 법칙을
- * 세울 수는 없다 — <b>단조롭지도 재현되지도 않는다.</b> 여기에 단언을 걸면 남의 PR 이
- * 이유 없이 빨개진다. <b>그래서 안 건다.</b>
+ * <p><b>이 여섯 점은 이 프로브를 돌리면 그대로 다시 나온다</b> — 위 수는 한 기기의 한
+ * 실행이고, 러너가 다르면 시간은 달라진다. 읽기 호출은 <b>같은 기기에서도 실행마다
+ * 달라진다</b>(240k 에서 793,910 / 1,033,912, 720k 에서 673,910 / 1,393,912).
+ * 옵티마이저가 비율에 따라 계획을 갈아타는 것으로 <b>보이지만</b> 그 법칙을 세울 수는
+ * 없다. <b>그래서 그 축에 단언을 안 건다.</b>
  *
  * <p><b>결정에 쓰는 축은 시간이다.</b> 표가 <b>6배</b>가 되는 동안 <b>260~290ms 로
  * 평평하다</b> — 예산 5초의 6% 안쪽이고, 지배하는 것은 대상 12만 키의 임시 테이블
@@ -135,24 +137,25 @@ class ResidualQueryCostProbe {
             System.out.println("[CY-949] 대상 " + CAP_KEYS + "키 · 표 " + rowCount()
                     + "행 · 읽기호출 " + reads + " · 소요 " + elapsed.toMillis() + "ms");
 
-            // **표를 키우고 같은 대상을 다시 잰다.** 읽기 호출이 표를 따라가는지가
-            // 예산의 분모를 정한다.
-            plant(newRun(3), PER_RULE * 2, PER_RULE * 2);
-            long biggerReadsBefore = handlerReads();
-            long biggerStartedAt = System.nanoTime();
-            adapter.residualByType(before, after);
-            Duration biggerElapsed = Duration.ofNanos(System.nanoTime() - biggerStartedAt);
-            long biggerReads = handlerReads() - biggerReadsBefore;
+            // **표를 키우며 같은 대상을 다섯 번 더 잰다.** javadoc 이 여섯 점을 근거로
+            // 쓰므로 그 여섯 점이 **이 코드로 재현돼야** 한다 — 한때 2배까지만 재 놓고
+            // 6배 결론을 적었다(리뷰가 잡았다). CI 비용은 이 다섯 점이 대부분이다.
+            for (int extra = 1; extra <= 5; extra++) {
+                plant(newRun(2 + extra), PER_RULE * 2 * extra, PER_RULE * 2);
+                long sweepReadsBefore = handlerReads();
+                long sweepStartedAt = System.nanoTime();
+                adapter.residualByType(before, after);
+                Duration sweepElapsed = Duration.ofNanos(System.nanoTime() - sweepStartedAt);
 
-            System.out.println("[CY-949] 대상 " + CAP_KEYS + "키 · 표 " + rowCount()
-                    + "행 · 읽기호출 " + biggerReads + " · 소요 "
-                    + biggerElapsed.toMillis() + "ms");
+                System.out.println("[CY-949] 대상 " + CAP_KEYS + "키 · 표 " + rowCount()
+                        + "행 · 읽기호출 " + (handlerReads() - sweepReadsBefore)
+                        + " · 소요 " + sweepElapsed.toMillis() + "ms");
+            }
 
-            // **여기에 단언을 안 건다.** 같은 형상을 두 번 재도 값이 달라진다(위 표) —
+            // **여기에 단언을 안 건다.** 같은 형상을 두 번 재도 값이 달라진다 —
             // 걸면 남의 PR 이 이유 없이 빨개진다. 결정에 쓰는 축은 시간이고 그것도
             // 러너마다 다르다. 못 박는 것은 계획의 모양이다.
-
-    }
+        }
     }
 
     /**
