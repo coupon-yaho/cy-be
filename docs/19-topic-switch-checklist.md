@@ -63,39 +63,53 @@ Full Jitter 재시도·워커 풀 — 무엇을 나르는지와 무관하다.
 
 ---
 
-## 2.5 대사 — PRD 가 요구하는 계층이라 따로 센다
+## 2.5 대사 — 가져갈 수 있는 것은 **값 타입 다섯뿐**이다
 
-사전예약 PRD 는 **정합성 대사 배치**를 명시하고(*"주기적으로 실행되는 배치가 최종적으로
-정정한다"*), **KPI 여덟 중 셋**이 그 산출물로 검증된다 — 유실 0건 · 정합률 100% ·
-취소 후 외부 잔존 0건. **그쪽에서도 대사는 안 지워진다.**
+사전예약 PRD(저장소 밖 문서: `~/Downloads/사전예약 시스템 PRD.pdf`)가 **정합성 대사
+배치**를 명시하므로 그쪽에서도 대사는 안 지워진다. 그래서 질문은 "남나 바뀌나" 가 아니라
+**어디까지 가져가나**다.
 
-그래서 이 계층은 "남나 바뀌나" 가 아니라 **어디까지 가져가나**가 질문이다.
-위 표의 `12 / 26` 을 파일로 갈랐다(하위 `replay/` 여섯은 전부 도메인이라 제외).
+⚠️ **처음 답은 틀렸다.** *"실행 이력은 그대로 간다"* 고 적었는데, **낱말만 세고 타입 참조를
+안 봤기 때문**이다. 재 보니 —
 
-| 가져간다 | 왜 |
+```
+VerificationRun            DatasetType dataset · Long seedRunId · String datasetFingerprint
+VerificationRunRepository  DatasetScale × 2 · DatasetType × 6
+```
+
+`DatasetType`(정상셋/오염셋)과 `seedRunId` 는 **이 과제의 검증 방식 자체**다. 게다가
+`dataset` 은 `uk_run_params(as_of, dataset, scope, attempt)` 로 **유일성 키에까지** 박혀 있다.
+**실행 이력이라는 개념은 가지만 이 타입은 안 간다** — 그쪽은 자기 축으로 다시 쓰고,
+이 레코드의 **모양**(언제·무엇을·몇 번째·판정·시작/종료)이 참고가 된다.
+
+| 그대로 가져간다 | 왜 |
 |---|---|
-| `VerificationRun` · `VerificationRunRepository` | 실행 이력. **KPI 셋이 "대사 결과를 조회하여 확인" 이라 이것이 증적이다** |
-| `VerdictType` · `ScopeType` · `StatsStatus` | PASS/FAIL · 전수/증분. 도메인이 안 붙는다 |
-| `ResidualCount` | 잔여 집계(CY-947). 지속·신규·해소는 집합 연산이다 |
+| `VerdictType` · `ScopeType` · `StatsStatus` | PASS/FAIL · 전수/증분 · 집계 완전성. 값만 있다 |
+| `ResidualCount` | 잔여 집계(CY-947). `int` 셋뿐이고 지속·신규·해소는 집합 연산이다 |
 | `FindingKey` | `(String, String)` 둘뿐이다 |
-| `CleanupRepository` | 이력을 걷는 포트 |
+
+**다섯이 전부다.** 전부 값 타입이고 **다른 타입을 하나도 안 문다** — 그것이 이 목록의 조건이다.
 
 | 다시 쓴다 | 왜 |
 |---|---|
 | `FindingType` · `TargetKey` · `VerificationFinding` | 규칙 어휘와 대상 키의 **모양** |
+| `VerificationFindingRepository` | 낱말은 없지만 `FindingType` 을 문다 — 그 타입이 곧 V1~V6 어휘다 |
 | `VerificationRuleRepository` · `StatsRepository` | 규칙 질의. `coupons`·`issuances` 를 직접 읽는다 |
-| `DatasetType` · `ExpectedFindingRepository` · `HourlyIssued` | 낱말은 없지만 **정상셋/오염셋·정답 매니페스트**가 이 과제의 검증 방식이다. 사전예약 대사는 운영 데이터 하나를 본다 |
-| `DatasetScale` | 축은 무관한데(PRD 도 "검사 건수" 를 요구한다) 필드 이름이 쿠폰이다(CY-945). 일반화하면 스키마가 따라 움직여 그때 갚는다 |
+| `DatasetScale` | 축은 무관한데(PRD 도 "검사 건수" 를 요구한다) 필드 이름이 쿠폰이다(CY-945) |
+| `VerificationRun` · `VerificationRunRepository` | 위 참조 때문. **처음에 여기가 아니라 위 표에 있었다** |
+| `DatasetType` · `ExpectedFindingRepository` · `HourlyIssued` · `CleanupRepository` | 낱말은 없지만 개념이 이 과제 고유다 — 정상셋/오염셋, 정답 매니페스트, 시드 스키마에 글자 단위로 맞춘 요일 표기, `asof_state`·`findings` 를 이름으로 드는 삭제 |
 
-**그 경계를 코드가 지킨다.** `VerificationDomainBoundaryTest` 가 세 가지를 본다 —
-가져가는 쪽이 쿠폰 낱말에 안 닿는가, 새 타입이 어느 쪽에도 안 적히지 않았는가,
-"다시 쓴다" 고 적은 것이 실제로 낱말을 드는가. **셋째가 내 분류를 두 번 고쳤다** —
-`FindingKey` 는 가져갈 수 있는데 못 준다고 적어 뒀고, 정규식이 `coupon_id` 를
-낱말 경계 때문에 못 잡고 있었다.
+하위 패키지 둘은 재사용 판정에서 뺐다 — `replay/`(일곱 중 여섯이 도메인. `AsOfStateRepository`
+만 낱말이 깨끗한데 그 표의 PK 가 `(run_id, coupon_id)` 다)와 `exception/`(검증 규칙의 실패 어휘).
 
-**정정·복구는 여기 없다.** PRD 대사 보고서의 네 축 중 검사 건수(CY-945)와
-잔여 불일치(CY-947)는 냈지만, 나머지 둘은 **대사가 쓰기를 하는 축**이라 쓰는 대상이
-예약 원장이다 — cy-be 에 그 도메인이 없어 만들면 **쓰는 사람이 없는 칼럼**이 된다.
+**그 경계를 코드가 지킨다.** `VerificationDomainBoundaryTest` 가 넷을 본다 — 가져가는 쪽이
+**낱말과 타입 둘 다** 안 무는가, 새 타입·하위 패키지가 분류에서 빠지지 않았는가,
+"다시 쓴다" 고 적은 것이 실제로 도메인을 드는가, 분류에 적힌 파일이 실재하는가.
+
+⚠️ **이 가드를 만들며 내 분류가 네 번 틀렸다** — `FindingKey` 를 못 준다고 적었고,
+정규식이 `coupon_id`(낱말 경계)와 `CouponStateMachine`(대소문자)을 못 잡았고,
+타입 참조를 안 봐서 위 오류가 났고, 세 번째 시험이 자기 이름으로 통과하는
+항진명제였다. **네 번 다 시험이 잡았다.**
 
 ---
 

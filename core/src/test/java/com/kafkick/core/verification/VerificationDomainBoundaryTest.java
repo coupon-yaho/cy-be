@@ -1,52 +1,64 @@
-// 사전예약이 그대로 가져갈 수 있는 절반이 쿠폰 어휘에 안 닿는지 확인합니다.
+// 다른 주제가 그대로 가져갈 수 있는 타입이 무엇인지 못 박습니다.
 package com.kafkick.core.verification;
 
+import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import static java.util.Map.entry;
-
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>검증 틀의 절반은 쿠폰과 무관하고, 그 절반이 다른 도메인이 가져갈 수 있는 것이다.</b>
+ * <b>검증 틀에서 다른 주제가 그대로 가져갈 수 있는 것은 값 타입 다섯뿐이다.</b>
  *
- * <p>사전예약 PRD 는 <b>정합성 대사 배치</b>를 명시하고(§*"주기적으로 실행되는 배치가
- * 최종적으로 정정한다"*), KPI 여덟 중 <b>셋</b>이 그 대사의 산출물로 검증된다
- * (유실 0건 · 정합률 100% · 취소 후 외부 잔존 0건). 즉 그쪽에서도 대사는 지워지지 않는다.
+ * <p>사전예약 PRD(`~/Downloads/사전예약 시스템 PRD.pdf`, 저장소 밖 문서)는 <b>정합성 대사
+ * 배치</b>를 명시하므로 그쪽에서도 대사는 안 지워진다. 그래서 <i>"무엇을 가져가나"</i> 가
+ * 질문이 되고, 이 시험이 그 답을 못 박는다.
  *
- * <p>그때 쿠폰 규칙(V1~V6)은 안 따라간다 — 예약은 자기 규칙 어휘를 갖는다. 따라가는 것은
- * <b>그 위</b>다: 실행 이력 · 주기/수동 트리거 · 중복 실행 방지 · 자동 회수 · 판정 어휘.
- * PRD 가 요구하는 것 중 <b>주기·수동 실행 / 중복 방지 / 실행 이력·보고서</b> 셋이 여기 있다.
+ * <h2>⚠️ 처음 답은 틀렸다 — 실행 이력 타입은 못 가져간다</h2>
  *
- * <h2>그 경계를 지금까지 아무것도 안 지켰다</h2>
+ * <p>처음에 {@code VerificationRun}·{@code VerificationRunRepository} 를 <i>"그대로 가져갈
+ * 수 있다"</i> 로 적었다. <b>틀렸다.</b> 낱말만 세고 <b>타입 참조를 안 봤기 때문</b>이다.
  *
- * <p>측정은 손으로 했다 — {@code VerificationRun} 에 {@code FindingType} 하나를 import
- * 하면 경계가 죽는데 <b>아무것도 안 빨개진다.</b> 한 번 오염되면 되돌리기 어렵다:
- * 그 타입이 필드에 박히면 저장 스키마와 API 응답까지 따라 움직인다.
+ * <pre>
+ * VerificationRun            DatasetType dataset · Long seedRunId · String datasetFingerprint
+ * VerificationRunRepository  DatasetScale × 2 · DatasetType × 6
+ * </pre>
  *
- * <p>형제는 {@code CoreArchitectureTest} 다 — <i>"core 가 어댑터 타입을 알면 안 된다"</i> 를
- * 소스로 훑어 세고, 예외마다 <b>왜 예외인지</b>를 주석에 적는다. 같은 형태를 쓴다.
+ * <p>{@code DatasetType}(정상셋/오염셋)과 {@code seedRunId}(시드 실행)는 <b>이 과제의 검증
+ * 방식 자체</b>다 — 사전예약 대사는 운영 데이터 하나를 본다. 게다가 {@code dataset} 은
+ * {@code uk_run_params(as_of, dataset, scope, attempt)} 로 <b>유일성 키에까지</b> 박혀 있다.
  *
- * <h2>왜 import 만 안 보고 낱말을 보나</h2>
+ * <p><b>실행 이력이라는 개념은 간다. 이 타입이 안 갈 뿐이다.</b> 그쪽은 자기 축으로 다시
+ * 쓴다 — 그때 이 레코드의 <b>모양</b>(언제·무엇을·몇 번째·판정·시작/종료)이 참고가 된다.
  *
- * <p>{@code FindingType} 은 같은 패키지라 <b>import 가 안 붙는다.</b> import 만 세면
- * {@code core.verification} 안에서는 아무것도 못 잡는다 — 그래서 <b>낱말</b>을 센다.
+ * <h2>어떻게 세나</h2>
  *
- * <p><b>주석은 걷어내고 센다.</b> {@code docs/19} 가 같은 축을 이미 세면서 그 규칙을
- * 정해 뒀다 — <i>"설명에 도메인 이름이 나오는 것과 타입·필드·SQL 이 도메인에 묶인 것은
- * 전혀 다른 문제다."</i> 재사용을 막는 것은 <b>타입과 필드</b>이지 문구가 아니다.
- * ⚠️ 처음에는 주석까지 셌는데, 그러면 이 가드가 <b>고칠 필요 없는 javadoc 을 고치게</b>
- * 만든다 — 같은 저장소의 문서와 가드가 경계의 뜻을 다르게 말하는 상태가 된다.
+ * <p>두 축을 본다. <b>낱말</b>과 <b>타입 참조</b>다.
+ *
+ * <ul>
+ *   <li><b>낱말</b> — {@code FindingType} 은 같은 패키지라 import 가 안 붙어서 import 만
+ *       세면 아무것도 못 잡는다. 대소문자를 안 가린다({@code Coupon}·{@code COUPON_PREFIX}
+ *       가 전부 그 모양이다).</li>
+ *   <li><b>타입 참조</b> — 아래 두 통에 있는 타입 이름을 그대로 금지어로 쓴다.
+ *       <b>이것이 없어서 위 오류가 났다.</b></li>
+ * </ul>
+ *
+ * <p><b>주석은 걷어내고 센다.</b> {@code docs/19} 가 같은 축을 세면서 그 규칙을 정했다 —
+ * <i>"설명에 도메인 이름이 나오는 것과 타입·필드·SQL 이 도메인에 묶인 것은 전혀 다른
+ * 문제다."</i> ⚠️ 형제 {@code CoreArchitectureTest} 는 <b>반대로</b> 주석까지 본다
+ * ({@code VerificationRunRepository} 의 javadoc 이 <i>"주석만으로도 위반이 된다"</i> 고 적어
+ * 뒀다) — 두 가드가 주석을 다르게 다루는 것은 <b>의도</b>다. 그쪽은 <i>"core 가 어댑터를
+ * 안다"</i> 를 막고, 이쪽은 <i>"가져갈 수 있나"</i> 를 가른다.
  */
 class VerificationDomainBoundaryTest {
 
@@ -56,46 +68,44 @@ class VerificationDomainBoundaryTest {
     /**
      * <b>쿠폰 도메인의 낱말.</b> 표 이름과 규칙 어휘다.
      *
-     * <p>{@code member} 는 안 넣는다 — 예약도 사용자를 가리키는 낱말이 필요하고,
-     * 그 자체로는 쿠폰 전용이 아니다. 넣으면 경계가 아니라 <b>어휘 취향</b>을 강제한다.
+     * <p>⚠️ <b>낱말 경계를 안 걸고 대소문자도 안 가린다.</b> 처음에 {@code coupons?\b} 로
+     * 적었다가 {@code coupon_id}·{@code uk_coupon_member} 를 놓쳤고({@code _} 가 낱말
+     * 문자다), 대소문자를 가려서 {@code CouponStateMachine}·{@code IssuanceStatus} 스무 개를
+     * 또 놓쳤다 — <b>구멍이 두 번 다 제일 흔한 자리에 났다.</b>
      *
-     * <p>⚠️ <b>낱말 경계를 안 건다.</b> 처음에 {@code coupons?\b} 로 적었는데
-     * {@code _} 가 낱말 문자라 <b>{@code coupon_id}·{@code uk_coupon_member} 를 못 잡았다</b> —
-     * 컬럼 이름이 전부 그 모양이라 구멍이 정확히 제일 흔한 자리에 났다.
-     * 아래 세 번째 시험이 그 구멍을 드러냈다.
+     * <p>{@code member} 는 안 넣는다 — 예약도 사용자를 가리키는 낱말이 필요하다.
+     * {@code uk_coupon_member}·{@code DUP_PER_MEMBER} 는 {@code coupon} 쪽으로 잡힌다.
      */
     private static final Pattern COUPON_VOCABULARY = Pattern.compile(
-            "FindingType|TargetKey|VerificationFinding|coupon|issuance|campaign_id");
+            "coupon|issuance|issued|campaign|stock|grade", Pattern.CASE_INSENSITIVE);
 
     /**
-     * <b>가져갈 수 있는 절반.</b> 이 목록이 곧 다른 도메인에 주는 계약이다.
+     * <b>그대로 가져갈 수 있는 것.</b> 전부 값 타입이고 필드가 원시형·문자열뿐이다 —
+     * <b>다른 타입을 하나도 안 문다</b>는 것이 이 목록의 조건이다.
      *
      * <p>여기 파일을 <b>더하는 것은 자유지만 빼는 것은 결정</b>이다 — 뺀다는 것은
-     * 그 타입이 쿠폰 전용이 됐다는 뜻이고, 사전예약 쪽 재사용 목록에서도 사라진다.
+     * 다른 주제의 재사용 목록에서도 사라진다는 뜻이다.
      */
-    private static final List<String> DOMAIN_FREE = List.of(
-            // 실행 이력 — 대사가 "언제 무엇을 판정했나" 를 남기는 자리.
-            // PRD 의 KPI 셋이 "대사 결과를 조회하여 확인한다" 이므로 이것이 증적이다.
-            "VerificationRun.java",
-            "VerificationRunRepository.java",
-            // 판정 어휘. PASS/FAIL 과 전수/증분은 도메인이 안 붙는다.
+    private static final List<String> PORTABLE = List.of(
+            // PASS/FAIL. 판정이라는 개념에 도메인이 안 붙는다.
             "VerdictType.java",
+            // 전수/증분. 대사의 범위 축이고 예약에도 그대로 있다.
             "ScopeType.java",
+            // 집계가 완전한가/부분인가/건너뛰었나.
             "StatsStatus.java",
-            // 잔여 집계 형(CY-947). PRD 대사 보고서의 "잔여 불일치 건수" 축이고
-            // 지속·신규·해소라는 집합 연산의 결과라 규칙 어휘가 안 든다.
+            // 잔여 집계(CY-947). 지속·신규·해소는 집합 연산의 결과다.
             "ResidualCount.java",
-            // 실행 이력을 걷는 포트. 무엇을 걷는지는 어댑터가 안다.
-            "CleanupRepository.java",
-            // (검출 종류, 대상 키) 쌍 — **String 둘뿐이다.** 어느 도메인이든 쓴다.
+            // (검출 종류, 대상 키) 쌍 — String 둘뿐이다.
             // ⚠️ 처음에 쿠폰 전용으로 잘못 적었다. javadoc 이 campaign_id·coupon_id 를
-            //    설명해서 그렇게 읽혔는데, **코드에는 도메인이 한 글자도 없다** —
-            //    주석을 걷어내고 세는 규칙(docs/19)이 그것을 드러냈다.
+            //    설명해서 그렇게 읽혔는데 코드에는 도메인이 한 글자도 없다.
             "FindingKey.java");
 
     /**
-     * <b>경계 아래로 분류한 것과 그 이유.</b> 지우는 것이 아니라 <b>쿠폰 전용이라고
-     * 적어 두는</b> 자리다 — 사전예약은 이 자리에 자기 것을 만든다.
+     * <b>쿠폰 낱말이나 쿠폰 타입을 직접 든다.</b> 규칙 어휘와 그 질의다.
+     *
+     * <p>둘 중 하나면 된다 — {@code VerificationFindingRepository} 는 낱말이 하나도 없고
+     * {@code FindingType} 만 무는데, <b>그 타입이 곧 V1~V6 어휘</b>라 쿠폰 쪽이 맞다.
+     * (항진명제를 뺀 세 번째 시험이 그 구분을 강제했다.)
      */
     private static final Map<String, String> COUPON_SIDE = Map.ofEntries(
             entry("FindingType.java",
@@ -110,140 +120,195 @@ class VerificationDomainBoundaryTest {
                     "규칙 질의. coupons·issuances 를 직접 읽는다"),
             entry("StatsRepository.java",
                     "회차·발급 집계"),
-            // ⚠️ **이것은 CY-945 가 만든 빚이다.** 검사 규모라는 축 자체는 도메인 무관인데
-            //    (PRD 5단계가 "검사 건수" 를 요구한다) 필드 이름을 issuanceCount ·
-            //    historyCount 로 박아서 쿠폰 전용이 됐다. 축→수의 맵이었으면 무관이었다.
-            //    지금 고치면 저장 스키마(examined_issuance_count)까지 따라 움직이므로
-            //    **여기 적어만 둔다** — 사전예약이 쓸 때 그때 일반화한다.
             entry("DatasetScale.java",
-                    "축 이름이 쿠폰이다(CY-945). 일반화하면 스키마가 따라 움직인다"));
+                    "축은 무관한데(PRD 도 검사 건수를 요구한다) 필드 이름이 "
+                            + "issuanceCount·historyCount 다(CY-945). 일반화하면 "
+                            + "examined_issuance_count 까지 따라 움직여 그때 갚는다"));
 
     /**
-     * <b>어휘는 없는데 재사용도 안 되는 것들.</b> 세 번째 시험이 이 통을 만들게 했다 —
-     * 처음에는 통이 둘이었고 <i>"쿠폰 전용이면 쿠폰 낱말을 든다"</i> 를 단언했는데,
-     * 이 둘이 그 단언을 깼다. <b>모델이 틀렸던 것이다.</b>
-     *
-     * <p>재사용 가능성은 <b>낱말이 아니라 개념</b>으로 갈린다. 이 둘은 쿠폰이라는 말을
-     * 한 번도 안 쓰지만 <b>이 과제의 검증 방식 자체</b>에 묶여 있다 — 사전예약 대사에는
-     * 정답 매니페스트도, 요일·시각 발급 통계도 없다.
-     *
-     * <p>그래서 이 통에는 <b>어휘 검사를 안 건다.</b> 걸면 없는 낱말을 억지로 넣게 되고,
-     * 그것은 검사가 아니라 <b>주석 낭비</b>다. 여기서 지키는 것은 <b>분류가 빠지지 않는
-     * 것</b> 하나이고 그것은 {@link #everyTypeIsClassified()} 가 진다.
+     * <b>낱말은 없는데 재사용도 안 되는 것들.</b> 재사용 가능성은 <b>낱말이 아니라 개념</b>
+     * 으로 갈린다 — 이 통이 그것을 담는다.
      */
     private static final Map<String, String> EXERCISE_ONLY = Map.ofEntries(
-            entry("ExpectedFindingRepository.java",
-                    "오염셋 정답 매니페스트. 사전예약 대사에는 정답이 없다 — "
-                            + "운영 데이터가 대상이라 무엇이 맞는지를 시드가 안 알려 준다"),
-            entry("HourlyIssued.java",
-                    "요일·시각 발급 통계. cy-seed 의 hourly_stats 와 짝이다"),
+            // ⚠️ 이 둘이 처음에 PORTABLE 에 있었다. 타입 참조를 안 봐서 통과했다.
+            entry("VerificationRun.java",
+                    "DatasetType·seedRunId·datasetFingerprint 를 필드로 든다. "
+                            + "dataset 은 uk_run_params 유일성 키에까지 박혀 있다"),
+            entry("VerificationRunRepository.java",
+                    "시그니처 여덟 자리가 DatasetType·DatasetScale 을 쓴다"),
             entry("DatasetType.java",
-                    "CLEAN/CORRUPT. 코드에는 도메인이 없지만 정상셋·오염셋이라는 "
-                            + "**이 과제의 검증 방식**이다 — 사전예약 대사는 운영 데이터 하나를 본다"));
+                    "CLEAN/CORRUPT. 코드엔 도메인이 없지만 정상셋·오염셋을 병렬로 두는 것이 "
+                            + "이 과제의 검증 방식이다 — 사전예약 대사는 운영 데이터 하나를 본다"),
+            entry("ExpectedFindingRepository.java",
+                    "오염셋 정답 매니페스트. corruptionCountOf 의 계약이 "
+                            + "docs/contract.json 의 corruption.matrix 에 묶여 있다"),
+            entry("HourlyIssued.java",
+                    "요일×시각 히트맵 자체는 무관하지만 DAYS 가 hourly_stats.day_of_week "
+                            + "varchar(3) 및 cy-seed 의 config.py 와 글자 단위로 맞춰져 있다"),
+            entry("CleanupRepository.java",
+                    "메서드 이름이 asof_state·findings 를 든다 — 걷는 대상이 이 과제의 표다"));
+
+    /**
+     * <b>재사용 판정에서 뺀 하위 패키지.</b> 목록에 안 적으면
+     * {@link #everyTypeIsClassified()} 가 <b>안 보는 것</b>이 조용히 생긴다.
+     */
+    private static final Map<String, String> SUBPACKAGES = Map.of(
+            "replay", "이력 되감기 구현. 일곱 중 여섯이 도메인에 묶인다 "
+                    + "(AsOfStateRepository 만 깨끗한데, 그 표의 PK 가 (run_id, coupon_id) 라 "
+                    + "낱말만 깨끗하다)",
+            "exception", "오류 코드. 낱말은 없지만 검증 규칙의 실패 어휘라 그쪽을 따라간다");
 
     @Test
-    @DisplayName("가져갈 수 있는 절반이 쿠폰 어휘에 안 닿는다")
-    void theReusableHalfStaysFreeOfCouponVocabulary() throws IOException {
+    @DisplayName("가져갈 수 있는 타입은 쿠폰 낱말도 이 과제 타입도 안 문다")
+    void portableTypesCarryNeitherVocabularyNorLocalTypes() throws IOException {
+        Pattern localTypes = localTypeReferences();
+
         List<String> violations = new ArrayList<>();
-        for (String name : DOMAIN_FREE) {
+        for (String name : PORTABLE) {
             Path file = SOURCE_ROOT.resolve(name);
             assertThat(file)
                     .as("목록에 있는데 파일이 없다. 옮겼으면 이 목록도 함께 고쳐야 한다 — "
                             + "안 고치면 이 검사가 조용히 죽는다")
                     .exists();
-            for (String line : stripComments(Files.readString(file)).split("\n")) {
+            String code = stripComments(Files.readString(file));
+            for (String line : code.split("\n")) {
                 if (COUPON_VOCABULARY.matcher(line).find()) {
-                    violations.add(name + " : " + line.strip());
+                    violations.add(name + " [낱말] " + line.strip());
+                }
+                if (localTypes.matcher(line).find()) {
+                    violations.add(name + " [타입] " + line.strip());
                 }
             }
         }
 
         assertThat(violations)
                 .as("""
-                        도메인 무관이어야 할 타입이 쿠폰 어휘에 닿았다. 셋 중 하나다 —
-                        (1) 정말 필요하면 COUPON_SIDE 로 옮기고 이유를 적어라. 그것은
-                            사전예약 재사용 목록에서 그 타입이 빠진다는 뜻이다.
-                        (2) 설명만 쿠폰으로 적은 것이면 문구를 도메인 없이 고쳐라 —
-                            다음 사람이 그 타입을 쿠폰 전용으로 읽는다.
-                        (3) 그냥 실수면 되돌려라.""")
+                        가져갈 수 있다고 적어 둔 타입이 도메인에 닿았다.
+                        [낱말] 이면 쿠폰 어휘가 코드에 들어왔다.
+                        [타입] 이면 이 과제 전용 타입을 물었다 — **처음에 이 축을 안 봐서
+                        VerificationRun 이 DatasetType 을 든 채로 통과했다.**
+                        정말 필요하면 EXERCISE_ONLY 로 내리고 이유를 적어라. 그것은 다른
+                        주제의 재사용 목록에서 그 타입이 빠진다는 뜻이다.""")
                 .isEmpty();
     }
 
     /**
-     * <b>목록이 실제 파일과 같아야 한다.</b> 새 타입이 생겼는데 어느 쪽에도 안 적히면
-     * 이 검사는 <b>그 타입을 아예 안 본다</b> — 경계가 조용히 흐려지는 유일한 길이다.
-     * {@code OrElseNullBudgetTest} 가 같은 이유로 예산을 전수로 맞춘다.
+     * <b>목록이 실제 파일과 같아야 한다.</b> 새 타입이 어느 쪽에도 안 적히면 이 검사는
+     * <b>그 타입을 아예 안 본다</b> — 경계가 조용히 흐려지는 유일한 길이다.
      */
     @Test
-    @DisplayName("모든 타입이 둘 중 한쪽에 분류돼 있다")
+    @DisplayName("모든 타입과 하위 패키지가 분류돼 있다")
     void everyTypeIsClassified() throws IOException {
-        List<String> unclassified;
+        List<String> unclassified = new ArrayList<>();
         try (var paths = Files.list(SOURCE_ROOT)) {
-            unclassified = paths
-                    // **하위 디렉터리는 안 본다.** replay/ 는 이력 되감기 구현이고
-                    // 여섯 파일이 전부 도메인에 묶여 있다(docs/19 의 방법으로 셌다) —
-                    // 이 경계가 지키려는 것은 그 위의 "실행 이력·판정" 계층이다.
-                    // 하위를 섞으면 목록이 스물여섯으로 늘고 그중 열둘이 쿠폰이라,
-                    // **가져갈 수 있는 절반**이라는 이 파일의 주제가 흐려진다.
-                    .filter(path -> !Files.isDirectory(path))
-                    .map(path -> path.getFileName().toString())
-                    .filter(name -> name.endsWith(".java"))
-                    .filter(name -> !DOMAIN_FREE.contains(name))
-                    .filter(name -> !COUPON_SIDE.containsKey(name))
-                    .filter(name -> !EXERCISE_ONLY.containsKey(name))
-                    .sorted()
-                    .toList();
+            for (Path path : paths.sorted().toList()) {
+                String name = path.getFileName().toString();
+                if (Files.isDirectory(path)) {
+                    if (!SUBPACKAGES.containsKey(name)) {
+                        unclassified.add(name + "/ (하위 패키지)");
+                    }
+                } else if (name.endsWith(".java")
+                        && !PORTABLE.contains(name)
+                        && !COUPON_SIDE.containsKey(name)
+                        && !EXERCISE_ONLY.containsKey(name)) {
+                    unclassified.add(name);
+                }
+            }
         }
 
         assertThat(unclassified)
                 .as("""
-                        새 타입이 어느 쪽에도 안 적혔다. 사전예약이 가져갈 수 있는지 없는지를
-                        지금 정해라 — 나중에 정하면 그때는 이미 쓰이고 있다.
-                        도메인 무관이면 DOMAIN_FREE, 쿠폰 낱말을 들면 COUPON_SIDE,
-                        낱말은 없는데 이 과제 고유면 EXERCISE_ONLY 에 **이유와 함께** 넣는다.""")
+                        새 타입이나 하위 패키지가 어느 쪽에도 안 적혔다. 지금 정해라 —
+                        나중에 정하면 그때는 이미 쓰이고 있다.
+                        그대로 가져갈 수 있으면 PORTABLE, 쿠폰 낱말을 들면 COUPON_SIDE,
+                        낱말은 없는데 이 과제 고유면 EXERCISE_ONLY 에 **이유와 함께**.""")
                 .isEmpty();
     }
 
     /**
      * <b>{@code COUPON_SIDE} 의 분류가 사실과 맞는지 본다.</b> 거기 넣어 두고 정작 쿠폰
-     * 어휘가 하나도 없으면 둘 중 하나다 — 가져갈 수 있는데 안 준다고 적었거나,
+     * 어휘가 없으면 <b>가져갈 수 있는데 안 준다고 적어 둔 것</b>이거나
      * {@code EXERCISE_ONLY} 로 갔어야 한다.
      *
-     * <p><b>이 시험이 두 가지를 잡았다.</b> ① 정규식이 {@code coupon_id} 를 못 잡던
-     * 구멍(낱말 경계), ② 통이 둘로는 모자란다는 것 — 어휘 없이 재사용 불가인 타입이
-     * 둘 있었다. <b>단언이 틀린 것을 잡은 것이 아니라 모델이 틀린 것을 잡았다.</b>
+     * <p><b>자기 타입 이름은 뺀다.</b> 안 빼면 {@code FindingType.java} 가 자기 선언 하나로
+     * 통과해 <b>무슨 짓을 해도 안 깨진다</b> — 항진명제다.
      */
     @Test
-    @DisplayName("쿠폰 전용이라고 적은 것은 실제로 쿠폰 어휘를 든다")
+    @DisplayName("쿠폰 전용이라고 적은 것은 실제로 쿠폰 낱말을 든다")
     void theCouponSideActuallyCarriesCouponVocabulary() throws IOException {
         List<String> mislabelled = new ArrayList<>();
-        for (String name : COUPON_SIDE.keySet()) {
-            Path file = SOURCE_ROOT.resolve(name);
+        for (Map.Entry<String, String> each : COUPON_SIDE.entrySet()) {
+            Path file = SOURCE_ROOT.resolve(each.getKey());
             if (!Files.exists(file)) {
-                mislabelled.add(name + " : 파일이 없다");
+                mislabelled.add(each.getKey() + " : 파일이 없다");
                 continue;
             }
-            boolean touches = COUPON_VOCABULARY
-                    .matcher(stripComments(Files.readString(file))).find();
-            if (!touches) {
-                mislabelled.add(name + " : 쿠폰 어휘가 없다 — "
-                        + COUPON_SIDE.get(name).toLowerCase(Locale.ROOT));
+            String own = each.getKey().replace(".java", "");
+            String code = stripComments(Files.readString(file)).replace(own, "");
+            boolean carriesVocabulary = COUPON_VOCABULARY.matcher(code).find();
+            boolean carriesCouponType = couponTypeReferences(own).matcher(code).find();
+            if (!carriesVocabulary && !carriesCouponType) {
+                mislabelled.add(each.getKey() + " : 쿠폰 낱말도 쿠폰 타입도 없다 — "
+                        + each.getValue());
             }
         }
 
         assertThat(mislabelled)
-                .as("쿠폰 전용이라고 적었는데 실제로는 도메인이 안 붙는다. "
-                        + "가져갈 수 있는 것을 못 준다고 적어 둔 셈이니 DOMAIN_FREE 로 옮겨라")
+                .as("쿠폰 전용이라고 적었는데 자기 이름 말고는 도메인이 안 붙는다. "
+                        + "가져갈 수 있으면 PORTABLE, 개념이 이 과제 고유면 EXERCISE_ONLY 다")
                 .isEmpty();
     }
+
+    /** 세 통 모두 실제 파일을 가리켜야 한다 — 지워진 항목은 영원히 죽은 채로 남는다. */
+    @Test
+    @DisplayName("분류에 적힌 파일이 전부 실재한다")
+    void everyClassifiedFileExists() {
+        List<String> missing = new ArrayList<>();
+        Set<String> all = new LinkedHashSet<>(PORTABLE);
+        all.addAll(COUPON_SIDE.keySet());
+        all.addAll(EXERCISE_ONLY.keySet());
+        for (String name : all) {
+            if (!Files.exists(SOURCE_ROOT.resolve(name))) {
+                missing.add(name);
+            }
+        }
+
+        assertThat(missing)
+                .as("분류에 있는데 파일이 없다. 옮기거나 지웠으면 목록도 함께 고쳐라")
+                .isEmpty();
+    }
+
+    /** 자기 자신을 뺀 쿠폰 타입 이름들. 자기 선언으로 통과하는 항진명제를 막는다. */
+    private static Pattern couponTypeReferences(String self) {
+        List<String> names = COUPON_SIDE.keySet().stream()
+                .map(name -> name.replace(".java", ""))
+                .filter(name -> !name.equals(self))
+                .toList();
+        return Pattern.compile("\\b(" + String.join("|", names) + ")\\b");
+    }
+
     /**
-     * 블록 주석·javadoc·줄 주석을 걷어낸다. {@code docs/19} 의 파이썬과 <b>같은 규칙</b>이다 —
-     * 두 곳이 다른 규칙으로 세면 문서의 수와 이 가드의 판정이 갈린다.
+     * <b>이 과제 전용 타입의 이름을 그대로 금지어로 쓴다.</b> 목록에서 만들므로
+     * 통을 고치면 금지어가 따라 움직인다 — 두 곳에 적으면 갈린다.
+     */
+    private static Pattern localTypeReferences() {
+        List<String> names = new ArrayList<>();
+        COUPON_SIDE.keySet().forEach(name -> names.add(name.replace(".java", "")));
+        EXERCISE_ONLY.keySet().forEach(name -> names.add(name.replace(".java", "")));
+        return Pattern.compile("\\b(" + String.join("|", names) + ")\\b");
+    }
+
+    /**
+     * 블록 주석·javadoc·줄 주석을 걷어낸다. {@code docs/19} 의 파이썬과 같은 규칙이다.
+     *
+     * <p>⚠️ 줄 주석 안의 {@code /*} 는 블록 정규식이 먼저 돌아 <b>뒤의 코드를 통째로
+     * 먹는다.</b> 지금 이 패키지에는 텍스트 블록도, 문자열 안의 주석 기호도 <b>0건</b>이라
+     * 안 나지만({@code docs/19} 의 파이썬도 같은 결함을 공유한다), SQL 텍스트 블록에
+     * MySQL 힌트 {@code /*+ ... *&#47;} 가 들어오는 날 같은 사고가 난다.
      */
     private static String stripComments(String source) {
         return source
                 .replaceAll("(?s)/\\*.*?\\*/", "")
                 .replaceAll("(?m)//.*$", "");
     }
-
 }
