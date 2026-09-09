@@ -1,12 +1,10 @@
-// 잔여 집계가 5초 예산 안에서 도는지 실제로 재는 프로브입니다.
+// 잔여 집계가 무엇을 읽고 얼마나 걸리는지 실제로 재는 프로브입니다.
 package com.kafkick.storage.db.verification;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
@@ -14,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.FindingType;
@@ -23,32 +23,48 @@ import com.kafkick.core.verification.VerificationRun;
 import com.kafkick.storage.db.RepositoryTest;
 
 /**
- * <b>CY-947 이 "안 쟀다" 고 적어 둔 자리를 닫는다.</b> 그 PR 은 상한 계산
- * (규칙당 10,000 × 규칙 6 × 실행 2 = <b>12만 키</b>)만 적고 실행계획도 시간도 안 뗐다 —
- * 그러면 예산을 넘기는 날 무엇을 해야 할지가 어디에도 없다.
+ * <b>CY-947 이 "안 쟀다" 고 적어 둔 자리를 닫는다.</b> 그 PR 은 상한 계산만 적고
+ * 실행계획도 시간도 안 뗐다 — 예산을 넘기는 날 무엇을 해야 할지가 어디에도 없다.
  *
- * <p><b>이것은 회귀 시험이 아니라 프로브다.</b> 공유 컨테이너의 성능은 CI 러너와
- * 개발 기기에서 다르므로 <b>시간에 임계를 걸지 않는다</b> — 걸면 남의 PR 이 이유 없이
- * 빨개진다. 여기서 못 박는 것은 <b>실행계획의 모양</b>이고, 시간은 로그로 남겨 사람이
- * 문서에 옮긴다.
+ * <h2>접근 방식 이름이 아니라 읽은 행 수를 본다</h2>
  *
- * <p>{@code EXPLAIN} 의 {@code rows} 는 <b>근거로 안 쓴다</b> — 추정치다. 세는 것은
- * {@code COUNT} 로 세고, 느린지는 시간으로 잰다.
+ * <p>⚠️ <b>첫 판은 {@code EXPLAIN} 의 {@code access_type} 으로 비용을 말했다.</b>
+ * {@code index} 가 나오면 <i>"전체 인덱스 스캔"</i>, {@code range} 면 <i>"두 구간"</i> 으로
+ * 읽고 그 위에 결론을 세웠는데, <b>같은 모듈이 이미 그 추론으로 반려당했다</b> —
+ * {@code BacklogPlanContractTest} 가 <i>"이름은 비용을 말하지 않는다"</i> 를 적고
+ * {@code Handler_read_*} 로 갈아탔다. <b>옆에 있는 선례를 안 보고 같은 실수를 했다.</b>
  *
- * <p><b>이 프로브가 CI 에 더하는 비용도 쟀다 — 약 11초</b>(그중 질의는 3초 미만이고
- * 나머지는 18만 행 심기다). 남의 PR 이 그만큼 느려지는 것이라 <b>값을 알고 두는 것</b>과
- * 모르고 두는 것은 다르다. 표를 더 키우면 {@code range} 갈래까지 한 번에 재지지만
- * 심는 데만 8분이 걸려 <b>일부러 안 한다</b> — 그 수는 손으로 한 번 재서 위에 적었다.
+ * <p>그래서 여기도 <b>스토리지 엔진 읽기 호출 수</b>를 센다. {@code EXPLAIN} 은
+ * <b>모양</b>(어느 인덱스인가·커버링인가·정렬이 붙는가)만 단언하고, <b>비싼가</b> 는
+ * 호출 수와 시간이 답한다. {@code EXPLAIN} 의 {@code rows} 는 추정치라 안 쓴다.
+ *
+ * <h2>못 박는 것과 로그로만 남기는 것</h2>
+ *
+ * <ul>
+ *   <li><b>단언한다</b> — 어느 인덱스를 타는가, 커버링인가, {@code filesort} 가 붙는가,
+ *       그리고 <b>읽기 호출이 표 크기를 안 따르는가</b></li>
+ *   <li><b>로그로만 남긴다</b> — 벽시계. 러너마다 달라 임계를 걸면 남의 PR 이 이유 없이
+ *       빨개진다. 그 수는 사람이 문서에 옮긴다</li>
+ * </ul>
+ *
+ * <p>{@code @Transactional(NOT_SUPPORTED)} 이다 — {@code Handler_read_*} 는 세션 상태라
+ * 같은 커넥션에서 읽어야 하고, 형제도 같은 이유로 같은 모양을 쓴다.
+ * <b>그래서 심은 행을 손으로 지운다.</b>
  */
 @RepositoryTest
 @Import({VerificationFindingJdbcAdapter.class, VerificationRunJdbcAdapter.class})
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ResidualQueryCostProbe {
 
     /**
-     * <b>상한 그대로다.</b> {@code batch.verify.max-findings-per-rule} 기본 10,000 에
-     * 규칙 여섯 — 한 실행이 6만이고 두 실행이면 12만이다.
+     * <b>상한 그대로여야 의미가 있다.</b> {@code batch.verify.max-findings-per-rule} 의
+     * 기본값이고, 그 값이 바뀌면 이 프로브가 재는 것이 더 이상 상한이 아니다 —
+     * {@link #theProbeStillMeasuresTheCap()} 가 그 표류를 잡는다.
      */
     private static final int PER_RULE = 10_000;
+
+    /** 겹침 0이면 키가 행 수와 같다 — <b>그것이 진짜 상한</b>이다. */
+    private static final int CAP_KEYS = 2 * PER_RULE * 6;
 
     private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 8, 15, 14, 0);
 
@@ -61,99 +77,158 @@ class ResidualQueryCostProbe {
     @Autowired
     private JdbcClient jdbcClient;
 
+    /**
+     * <b>표를 두 배로 키워도 읽기 호출이 안 늘어야 한다.</b> 그것이 <i>"비용은 표 크기가
+     * 아니라 대상을 따른다"</i> 의 진짜 검증이다 — 첫 판은 표 크기만 바꿔 놓고
+     * <b>대상 행 수를 따른다</b> 고 적었는데, 대상을 한 번도 안 바꿨으므로 그 문장은
+     * 실측이 아니라 해석이었다.
+     */
     @Test
-    @DisplayName("상한 12만 키에서 잔여 집계의 실행계획과 소요를 잰다")
+    @DisplayName("잔여 집계가 무엇을 읽고 얼마나 걸리는지")
     void measureAtTheCap() {
-        long before = newRun(1);
-        long after = newRun(2);
+        try {
+            long before = newRun(1);
+            long after = newRun(2);
+            // **겹치지 않게 심는다.** 절반을 겹치면 안쪽 GROUP BY 의 키가 9만으로 줄어
+            // 임시 테이블을 최악의 75% 에서만 재게 된다. 상한은 겹침 0이다.
+            plant(before, 0, PER_RULE);
+            plant(after, PER_RULE, PER_RULE);
 
-        // **절반은 겹치게 심는다.** 전부 겹치거나 전부 안 겹치면 한쪽 갈래만 타서
-        // 실제 부하와 다르다 — 지속·신규·해소가 다 나오는 모양이어야 한다.
-        plant(before, 0, PER_RULE);
-        plant(after, PER_RULE / 2, PER_RULE);
+            assertThat(rowCount())
+                    .as("적게 심고 '빠르다' 고 적으면 안 된다")
+                    .isEqualTo(CAP_KEYS);
 
-        // **남의 실행을 함께 심는다.** 두 실행만 있으면 표 전체가 곧 대상이라, 옵티마이저가
-        // 무엇을 고르든 같은 값이 나온다. 운영 표는 실행이 계속 쌓이므로 그쪽이 실제 형상이다.
-        //
-        // ⚠️ **접근 방식은 비율에 달렸다(실측).** 대상이 표의 67%(120k/180k)면
-        //    access_type=index(전체 커버링 스캔), 29%(120k/420k)면 range 다 — 둘 다
-        //    uk_run_finding 이고 둘 다 using_index=true 이며 소요도 275ms / 268ms 로 같다.
-        //    **비용은 표 크기가 아니라 대상 행 수를 따른다.**
-        //    여기서는 앞엣것 형상으로 둔다 — 뒤엣것은 심는 데만 8분이 걸려 CI 를 그만큼
-        //    늘린다. 그 수는 손으로 한 번 재서 docs/15 에 적었다.
-        long stranger = newRun(3);
-        plant(stranger, 0, PER_RULE);
+            assertPlanShape(before, after);
 
-        long total = jdbcClient.sql("SELECT COUNT(*) FROM verification_findings")
-                .query(Long.class).single();
-        assertThat(total)
-                .as("상한대로 심었는지 먼저 확인한다 — 적게 심고 '빠르다' 고 적으면 안 된다")
-                .isEqualTo(3L * PER_RULE * FindingType.values().length);
+            long readsBefore = handlerReads();
+            long startedAt = System.nanoTime();
+            Map<FindingType, ResidualCount> residual = adapter.residualByType(before, after);
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+            long reads = handlerReads() - readsBefore;
 
-        String plan = jdbcClient.sql(explainOf(before, after)).query(String.class).single();
+            assertThat(residual.get(FindingType.STOCK_MISMATCH))
+                    .as("겹침 0이므로 지속은 없고 신규·해소가 규칙당 상한만큼이다")
+                    .isEqualTo(new ResidualCount(0, PER_RULE, PER_RULE));
 
-        long startedAt = System.nanoTime();
-        Map<FindingType, ResidualCount> residual = adapter.residualByType(before, after);
-        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+            System.out.println("[CY-949] 대상 " + CAP_KEYS + "키 · 표 " + rowCount()
+                    + "행 · 읽기호출 " + reads + " · 소요 " + elapsed.toMillis() + "ms");
 
-        assertThat(residual).hasSize(FindingType.values().length);
-        assertThat(residual.get(FindingType.STOCK_MISMATCH))
-                .as("절반이 겹치게 심었으니 세 갈래가 다 나와야 한다 — 안 나오면 부하가 아니다")
-                .isEqualTo(new ResidualCount(PER_RULE / 2, PER_RULE / 2, PER_RULE / 2));
+            // **표를 키우고 같은 대상을 다시 잰다.** 읽기 호출이 표를 따라가는지가
+            // 예산의 분모를 정한다.
+            plant(newRun(3), PER_RULE * 2, PER_RULE * 2);
+            long biggerReadsBefore = handlerReads();
+            long biggerStartedAt = System.nanoTime();
+            adapter.residualByType(before, after);
+            Duration biggerElapsed = Duration.ofNanos(System.nanoTime() - biggerStartedAt);
+            long biggerReads = handlerReads() - biggerReadsBefore;
 
-        System.out.println("[CY-949] 표 전체 " + total + "행 · 대상 "
-                + (2L * PER_RULE * FindingType.values().length) + "행 · 소요 "
-                + elapsed.toMillis() + "ms");
-        System.out.println("[CY-949] EXPLAIN\n" + plan);
+            System.out.println("[CY-949] 대상 " + CAP_KEYS + "키 · 표 " + rowCount()
+                    + "행 · 읽기호출 " + biggerReads + " · 소요 "
+                    + biggerElapsed.toMillis() + "ms");
 
-        assertThat(elapsed)
-                .as("시간에 임계를 안 걸지만, 예산(5초)의 열 배를 넘으면 그것은 성능이 "
-                        + "아니라 설계 문제다. 그때는 이 프로브가 아니라 티켓이 필요하다")
-                .isLessThan(Duration.ofSeconds(50));
-    }
+            // **읽기 호출은 표를 따라 는다 — 그것은 사실이고 막을 것이 아니다.**
+            // 막을 것은 그것이 **행당 한 번을 넘는 것**이다. 커버링이 깨지거나 조인이
+            // 붙으면 추가분이 배수로 뛴다 — 그때는 표가 커질수록 예산이 무너진다.
+            long addedRows = CAP_KEYS;
+            assertThat(biggerReads - reads)
+                    .as("표에 %d행을 더했는데 읽기 호출이 그보다 훨씬 많이 늘었다. "
+                            + "커버링이 깨졌거나 대상 밖 행을 여러 번 읽는다", addedRows)
+                    .isLessThan((long) (addedRows * 1.1));
 
-    /** {@code EXPLAIN} 은 파라미터 바인딩을 안 쓰고 리터럴로 넣는다 — 계획만 본다. */
-    private static String explainOf(long before, long after) {
-        return """
-                EXPLAIN FORMAT=JSON
-                SELECT MIN(k.finding_type) AS finding_type,
-                       SUM(k.sides = 2)                        AS persisted,
-                       SUM(k.sides = 1 AND k.has_after = 1)    AS introduced,
-                       SUM(k.sides = 1 AND k.has_after = 0)    AS resolved
-                  FROM (SELECT MIN(finding_type)         AS finding_type,
-                               COUNT(*)                  AS sides,
-                               MAX(run_id = %d)          AS has_after
-                          FROM verification_findings
-                         WHERE run_id IN (%d, %d)
-                         GROUP BY CAST(finding_type AS BINARY),
-                                  CAST(target_key AS BINARY)) k
-                 GROUP BY CAST(k.finding_type AS BINARY)
-                """.formatted(after, before, after);
+        } finally {
+            jdbcClient.sql("DELETE FROM verification_findings").update();
+            jdbcClient.sql("DELETE FROM verification_runs").update();
+        }
     }
 
     /**
-     * 규칙마다 {@code count} 건을 심는다. {@code offset} 이 두 실행의 겹침을 정한다 —
-     * {@code offset = count / 2} 면 절반이 겹치고 나머지가 신규·해소로 갈린다.
+     * <b>상한이 바뀌면 이 프로브는 더 이상 상한을 안 잰다.</b> 그런데 javadoc 과
+     * {@code docs/15} 는 <i>"상한에서 쟀다"</i> 를 계속 주장한다 — 아무것도 안 빨개지는
+     * 그 상태를 여기서 끊는다.
+     */
+    @Test
+    @DisplayName("프로브가 재는 값이 아직 배포 상한과 같다")
+    void theProbeStillMeasuresTheCap() {
+        assertThat(deployedCap())
+                .as("batch/src/main/resources/application.yml.example 의 상한이 바뀌었다. "
+                        + "PER_RULE 을 맞추고 프로브를 다시 돌린 뒤, 그 수로 어댑터 javadoc 과 "
+                        + "docs/15 를 고쳐라 — 안 고치면 문서가 안 잰 수를 주장한다")
+                .isEqualTo(PER_RULE);
+    }
+
+    /** {@code EXPLAIN} 은 <b>모양만</b> 단언한다 — 비싼가는 읽기 호출과 시간이 답한다. */
+    private void assertPlanShape(long before, long after) {
+        String plan = jdbcClient.sql(
+                        "EXPLAIN FORMAT=JSON "
+                                + VerificationFindingJdbcAdapter.SELECT_RESIDUAL_BY_TYPE)
+                .param("beforeRunId", before)
+                .param("afterRunId", after)
+                .query(String.class)
+                .single();
+
+        assertThat(plan)
+                .as("이 인덱스를 안 타면 대상 밖 행을 읽는다. 계획이 바뀌면 위 javadoc 과 "
+                        + "docs/15 의 수가 조용히 거짓이 된다:\n%s", plan)
+                .contains("\"key\": \"uk_run_finding\"")
+                .contains("\"using_index\": true");
+        assertThat(plan)
+                .as("정렬이 붙으면 임시 테이블 위에 filesort 가 더 얹힌다:\n%s", plan)
+                .doesNotContain("\"using_filesort\": true");
+    }
+
+    /**
+     * 스토리지 엔진 읽기 호출 수. {@code EXPLAIN} 의 추정치가 아니라
+     * <b>실제로 일어난 호출</b>이라 여기서 쓴다 — {@code BacklogPlanContractTest} 와 같다.
+     */
+    private long handlerReads() {
+        return jdbcClient.sql("SHOW SESSION STATUS WHERE Variable_name IN"
+                        + " ('Handler_read_next','Handler_read_key','Handler_read_first',"
+                        + "  'Handler_read_rnd_next')")
+                .query((rs, i) -> rs.getLong("Value"))
+                .stream().mapToLong(Long::longValue).sum();
+    }
+
+    private long rowCount() {
+        return jdbcClient.sql("SELECT COUNT(*) FROM verification_findings")
+                .query(Long.class).single();
+    }
+
+    /** 배포 기본값을 파일에서 읽는다 — 상수를 또 적으면 세어야 할 자리가 하나 는다. */
+    private static int deployedCap() {
+        try {
+            String text = java.nio.file.Files.readString(java.nio.file.Path.of(
+                    "../batch/src/main/resources/application.yml.example"));
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("max-findings-per-rule:\\s*\\$\\{VERIFY_MAX_FINDINGS_PER_RULE:(\\d+)\\}")
+                    .matcher(text);
+            assertThat(matcher.find())
+                    .as("상한 키의 표기가 바뀌었으면 이 정규식도 함께 고쳐야 한다 — "
+                            + "안 고치면 이 검사가 조용히 죽는다")
+                    .isTrue();
+            return Integer.parseInt(matcher.group(1));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("배포 기본값 파일을 못 읽었다", e);
+        }
+    }
+
+    /**
+     * 규칙마다 {@code count} 건을 심는다. {@code offset} 이 두 실행의 겹침을 정한다.
      *
      * <p><b>배치 INSERT 로 심는다.</b> 도메인 팩토리를 12만 번 부르면 심는 데만 몇 분이
-     * 걸려 <b>재려는 것이 아니라 준비가 시험을 지배한다.</b>
+     * 걸려 <b>재려는 것이 아니라 준비가 시험을 지배한다.</b> 값은 전부 코드 상수다.
      */
     private void plant(long runId, int offset, int count) {
         for (FindingType type : FindingType.values()) {
-            List<Object[]> rows = new ArrayList<>(count);
-            for (int i = 0; i < count; i++) {
-                rows.add(new Object[] {runId, type.name(), type.name() + ":" + (offset + i)});
-            }
-            for (int from = 0; from < rows.size(); from += 1_000) {
+            for (int from = 0; from < count; from += 1_000) {
+                int to = Math.min(from + 1_000, count);
                 StringBuilder sql = new StringBuilder(
                         "INSERT INTO verification_findings "
                                 + "(run_id, finding_type, target_key, expected, actual) VALUES ");
-                int to = Math.min(from + 1_000, rows.size());
                 for (int i = from; i < to; i++) {
                     sql.append(i > from ? "," : "")
-                            .append("(").append(rows.get(i)[0]).append(",'")
-                            .append(rows.get(i)[1]).append("','")
-                            .append(rows.get(i)[2]).append("','기대','실제')");
+                            .append("(").append(runId).append(",'").append(type.name())
+                            .append("','").append(type.name()).append(':').append(offset + i)
+                            .append("','기대','실제')");
                 }
                 jdbcClient.sql(sql.toString()).update();
             }

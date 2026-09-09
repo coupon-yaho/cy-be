@@ -92,31 +92,43 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
      * 그 유니크가 사라지면 같은 실행 안의 중복이 {@code sides = 2} 를 만들어
      * <b>지속을 과대 보고</b>한다.
      *
-     * <h3>실측 — 상한 12만 키에서 <b>약 270ms</b>, 예산의 5%다 (CY-949)</h3>
+     * <h3>실측 — 상한 12만 키에서 <b>약 300ms</b>, 예산의 6%다 (CY-949)</h3>
      *
      * <p>{@code ResidualQueryCostProbe} 가 규칙당 10,000 × 규칙 6 × 실행 2 = <b>12만 키</b>를
-     * 심고 잰 값이다. 계획도 함께 떴다.
+     * <b>겹치지 않게</b> 심고 잰 값이다(겹치면 안쪽 그룹의 키가 줄어 상한이 아니다).
+     * 계획의 모양은 그 프로브가 <b>단언</b>한다 — {@code key=uk_run_finding} ·
+     * {@code using_index=true}(커버링) · {@code filesort} 없음.
+     *
+     * <p><b>표를 키우며 같은 대상을 다섯 번 쟀다.</b>
      *
      * <pre>
-     * key            uk_run_finding      used_key_parts  run_id · finding_type · target_key
-     * using_index    true                <b>커버링이다 — 표를 안 짚는다</b>
-     * 임시테이블     안팎 둘 다 true     using_filesort  false
+     * 표 120,000행   읽기호출   553,498   301ms
+     * 표 240,000행   읽기호출   913,910   299ms
+     * 표 360,000행   읽기호출 1,033,912   282ms
+     * 표 480,000행   읽기호출 1,153,912   293ms
+     * 표 600,000행   읽기호출 1,273,912   300ms
      * </pre>
      *
-     * <p><b>접근 방식은 비율을 따른다.</b> 대상이 표의 67%(120k/180k)면
-     * {@code access_type=index}(전체 커버링 스캔)를 고르고, 29%(120k/420k)면
-     * {@code range} 다 — 둘 다 이 인덱스이고 <b>소요는 275ms / 268ms 로 사실상 같다.</b>
-     * 그래서 <b>비용은 표 크기가 아니라 대상 행 수를 따른다</b>고 읽는다.
-     * (한때 여기 <i>"IN 두 값이 각각 구간으로 들어간다"</i> 고 단정했는데 <b>절반만
-     * 맞았다</b> — 구간이 되는 것은 비율이 낮을 때뿐이다.)
+     * <p><b>읽기 호출은 표를 따라 늘고, 시간은 안 따라간다.</b> 240,000행부터는 행 하나당
+     * 정확히 <b>+1</b>이다 — 대상 밖 행까지 인덱스를 훑는다는 뜻이다. 그런데 <b>표가
+     * 5배가 되는 동안 시간은 ~300ms 로 평평하다</b>: 지배하는 것은 대상 12만 키의 임시
+     * 테이블 집계이고, 커버링 인덱스를 훑는 것 자체는 싸다.
      *
-     * <p>{@code GROUP BY} 가 인덱스의 <b>접미</b>라 임시 테이블이 붙는 것은 예상대로였고,
-     * {@code filesort} 는 안 붙는다. <b>그 대가가 270ms 이고 예산은 5초</b>라 지금은
-     * 넉넉하다. {@code (finding_type, target_key)} 인덱스는 <b>안 만든다</b> —
-     * 마이그레이션이라 시드 DDL 과 함께 가야 하는데(CY-945 가 겪은 비용) 그것을 살 이유가
-     * 지금은 없다. 규칙당 상한을 크게 올리는 날 이 프로브를 다시 돌린다.
+     * <p>⚠️ <b>한때 여기 <i>"비용은 대상 행 수를 따른다"</i> 고 적었는데 절반이 틀렸다.</b>
+     * 그때는 표 크기만 두 번 바꿔 놓고 그렇게 읽었다 — 읽기 호출을 세고 나서야
+     * <b>축이 둘로 갈린다</b>는 것을 알았다. 프로브가 못 박는 것은 <b>추가분이 행당 한 번을
+     * 안 넘는다</b>는 것이다. 커버링이 깨지거나 조인이 붙으면 그 추가분이 배수로 뛰고,
+     * 그때는 표가 커질수록 예산이 무너진다.
+     *
+     * <p>{@code (finding_type, target_key)} 인덱스는 <b>안 만든다</b> — 마이그레이션이라
+     * 시드 DDL 과 함께 가야 하는데(CY-945 가 겪은 비용) 300ms 로는 살 이유가 없다.
+     *
+     * <p><b>패키지 공개인 이유는 하나다 — {@code ResidualQueryCostProbe} 가 <i>이 문장</i>의
+     * 계획을 떠야 하기 때문이다.</b> 프로브가 사본을 들면 한쪽을 고치는 날 <b>남의 질의의
+     * 계획을 보고 문서에 수를 적는다</b> — 이 티켓이 없애려던 상태가 정확히 그것이다.
+     * {@code StuckRunClaim.CLAIM} 이 같은 이유로 같은 가시성을 갖는다.
      */
-    private static final String SELECT_RESIDUAL_BY_TYPE = """
+    static final String SELECT_RESIDUAL_BY_TYPE = """
             SELECT MIN(k.finding_type) AS finding_type,
                    SUM(k.sides = 2)                        AS persisted,
                    SUM(k.sides = 1 AND k.has_after = 1)    AS introduced,
