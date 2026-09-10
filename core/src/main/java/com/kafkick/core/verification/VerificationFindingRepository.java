@@ -11,6 +11,39 @@ import java.util.Map;
 public interface VerificationFindingRepository {
 
     /**
+     * 대상 목록 한 페이지의 상한.
+     *
+     * <p><b>포트에 있는 이유</b> — 어댑터와 API 가 <b>같은 값</b>을 강제해야 한다.
+     * 두 벌로 두면 한쪽만 고쳐질 때 API 는 받아 놓고 어댑터가 던진다(그러면 부르는 쪽이
+     * 고칠 수 있는 잘못이 <b>500</b> 으로 나간다).
+     *
+     * <p><b>시간이 아니라 바이트에서 나온 값이다.</b> 실측으로 페이지 크기는 시간을
+     * 거의 안 바꾼다(12만 키 형상에서 100건 220ms · 10,000건 240ms) — 집합을 다 만들고
+     * 자르기 때문이다. 바뀌는 것은 응답 크기다:
+     *
+     * <pre>
+     *     200행   짧은 키 14KB · 긴 키 18KB     ← 기본값
+     *   1,000행   짧은 키 70KB · 긴 키 89KB
+     *  10,000행   0.7 ~ 0.9MB
+     * 120,000행   8.4 ~ 10.7MB                  ← 상한 없는 전량
+     * </pre>
+     *
+     * <p>행당 <b>70B(짧은 키) ~ 89B(긴 키)</b> 다. 긴 쪽은 {@code DUP_PER_MEMBER} 의
+     * {@code COUPON:{n}|MEMBER:{m}} 이다. 120,000 은 <b>규칙당 상한 10,000 × 6종 ×
+     * 두 실행에서 겹침이 0일 때</b>이고, 형제 {@code ResidualQueryCostProbe} 가 같은 수를
+     * {@code CAP_KEYS} 로 못 박아 뒀다.
+     *
+     * <p>⚠️ <b>한때 여기 31.5B/행(1,000행 30KB · 전량 2.7MB)이 적혀 있었다.</b> 프로브가
+     * <b>응답이 아니라 DB 행 텍스트</b>를 셌던 것이다 — 잰 값이 "안 쟀다" 보다 나빴다.
+     * 지금 값은 실제 응답 객체를 같은 매퍼로 직렬화해 센 것이다.
+     *
+     * <p>1,000 은 한 응답을 <b>100KB 아래</b>에 묶는 자리다. 더 키우면 시간은 그대로인데
+     * 응답만 커지고, 더 줄이면 <b>페이지 수가 늘어 총 시간이 는다</b> — 페이지마다
+     * 집합을 다시 만들기 때문이다.
+     */
+    int MAX_TARGET_PAGE = 1_000;
+
+    /**
      * 검출 결과를 한 묶음으로 쌓는다.
      *
      * <p>같은 행을 다시 써도 되게 만든다. {@code uk_run_finding(run_id, finding_type, target_key)}
@@ -50,6 +83,26 @@ public interface VerificationFindingRepository {
      * @return 검출이 하나라도 있는 규칙만. 없는 규칙은 키가 없다
      */
     Map<FindingType, ResidualCount> residualByType(long beforeRunId, long afterRunId);
+
+    /**
+     * 전후 비교를 <b>대상 단위</b>로 한 페이지 읽는다.
+     *
+     * <p>{@link #residualByType} 이 <i>"이 유형이 몇 건"</i> 을 답하고 이쪽이
+     * <i>"어느 대상"</i> 을 답한다. 둘 중 하나만 있으면 화면이 <b>"3건 남았다" 까지만
+     * 알고 무엇을 조치해야 하는지 모른다.</b>
+     *
+     * <p><b>집계를 이것으로 대신하지 말 것.</b> 접힌 집계는 12만 키에서 6행을 돌려주고,
+     * 이 목록은 같은 형상에서 <b>최대 12만 행</b>이다. 첫 질문("몇 건 남았나")에는 그쪽이 맞다.
+     *
+     * @param kind 이 종류만. {@code null} 이면 전부.
+     *        <b>시간을 줄이지 않는다</b> — 집합은 어차피 다 만들어진다(실측: 좁혀도
+     *        193ms). 줄어드는 것은 바이트와 페이지 수다
+     * @param cursor 이 자리 뒤부터. {@code null} 이면 처음부터
+     * @param limit 한 페이지 최대 건수
+     * @return 정렬된 한 페이지. {@code limit} 보다 적으면 마지막 페이지다
+     */
+    List<ResidualTarget> residualTargets(long beforeRunId, long afterRunId,
+            ResidualKind kind, ResidualCursor cursor, int limit);
 
     /**
      * 검출 집합의 checksum. <b>재실행 결정론 판정의 근거</b>입니다.

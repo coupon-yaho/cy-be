@@ -107,7 +107,10 @@ class VerificationDomainBoundaryTest {
             // (검출 종류, 대상 키) 쌍 — String 둘뿐이다.
             // ⚠️ 처음에 쿠폰 전용으로 잘못 적었다. javadoc 이 campaign_id·coupon_id 를
             //    설명해서 그렇게 읽혔는데 코드에는 도메인이 한 글자도 없다.
-            "FindingKey.java");
+            "FindingKey.java",
+            // 잔여를 대상 단위로 볼 때의 세 값(CY-954). 지속·신규·해소를 한 대상에
+            // 뒤집은 것이고, ResidualCount 와 같은 이유로 도메인이 안 붙는다.
+            "ResidualKind.java");
 
     /**
      * <b>쿠폰 낱말이나 쿠폰 타입을 직접 든다.</b> 규칙 어휘와 그 질의다.
@@ -129,6 +132,13 @@ class VerificationDomainBoundaryTest {
                     "규칙 질의. coupons·issuances 를 직접 읽는다"),
             entry("StatsRepository.java",
                     "회차·발급 집계"),
+            entry("ResidualTarget.java",
+                    "잔여 한 줄(CY-954). FindingType 과 TargetKey 를 둘 다 든다 — "
+                            + "형제 FindingKey 는 String 둘이라 PORTABLE 인데, 이쪽은 "
+                            + "타입 안전을 택해 enum 을 물었다. 그 대가가 이 분류다"),
+            entry("ResidualCursor.java",
+                    "페이지를 이어받는 자리(CY-954). 정렬 키가 (FindingType, 대상키) 라 "
+                            + "그 enum 을 든다. 커서라는 개념 자체는 도메인 무관이다"),
             entry("DatasetScale.java",
                     "축은 무관한데(PRD 도 검사 건수를 요구한다) 필드 이름이 "
                             + "issuanceCount·historyCount 다(CY-945). 일반화하면 "

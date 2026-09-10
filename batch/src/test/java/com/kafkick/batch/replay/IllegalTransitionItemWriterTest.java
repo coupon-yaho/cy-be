@@ -12,6 +12,9 @@ import org.junit.jupiter.api.Test;
 
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ResidualCount;
+import com.kafkick.core.verification.ResidualCursor;
+import com.kafkick.core.verification.ResidualKind;
+import com.kafkick.core.verification.ResidualTarget;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
 
@@ -53,6 +56,13 @@ class IllegalTransitionItemWriterTest {
         public Map<FindingType, ResidualCount> residualByType(long before, long after) {
             // 이 시험은 쓰기 경로만 본다. 여기서 값을 지어내면 잔여 판정을 재는 곳이
             // 어딘지 흐려진다 — 그 축은 VerificationFindingJdbcAdapterTest 가 진다.
+            throw new UnsupportedOperationException("이 시험이 쓰는 경로가 아닙니다.");
+        }
+
+        @Override
+        public List<ResidualTarget> residualTargets(long before, long after,
+                ResidualKind kind, ResidualCursor cursor, int limit) {
+            // residualByType 과 같은 이유다 — 이 시험은 쓰기 경로만 본다.
             throw new UnsupportedOperationException("이 시험이 쓰는 경로가 아닙니다.");
         }
 
