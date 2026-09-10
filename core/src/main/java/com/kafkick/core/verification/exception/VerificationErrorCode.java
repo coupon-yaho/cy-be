@@ -326,6 +326,25 @@ public enum VerificationErrorCode implements ErrorCode {
             409,
             "VERIFICATION-026",
             "아직 판정이 나지 않은 검증 실행입니다."
+    ),
+
+    /**
+     * <b>대상 목록의 페이지 요청이 잘못됐다.</b> 읽을 수 없는 커서, 상한을 넘는 페이지 크기.
+     *
+     * <p><b>{@link #RUNS_NOT_COMPARABLE} 과 가르는 이유</b> — 그쪽은 <b>어느 두 실행을
+     * 맞댔는가</b>의 문제이고 이쪽은 <b>어떻게 나눠 읽는가</b>의 문제다. 한 코드에 뭉치면
+     * 화면 문구가 같아져({@code BatchApiExceptionHandler} 가 {@code detail} 을 로그에만
+     * 남긴다) 운영자가 <b>실행 번호를 고쳐야 하는지 페이지 인자를 고쳐야 하는지</b>
+     * 알 수 없다.
+     *
+     * <p>읽을 수 없는 커서를 <b>조용히 처음부터</b>로 접지 않는 이유도 여기 있다.
+     * 부르는 쪽은 이어받은 줄 알고 앞 페이지를 다시 처리하는데, 그것이 곧 같은 대상에
+     * 조치를 두 번 넣는 길이다.
+     */
+    INVALID_PAGE_REQUEST(
+            400,
+            "VERIFICATION-027",
+            "대상 목록 페이지 요청이 올바르지 않습니다."
     );
 
     private final int status;

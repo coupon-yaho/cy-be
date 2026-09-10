@@ -36,10 +36,17 @@ def strip(src):
 | `core/observation` | 13 / 27 | `CouponRound*` 이벤트 = 도메인 |
 | `batch/config` | 6 / 27 | 만료·회차 잡 = 도메인 |
 | `batch/job` | 2 / 3 | 잡 정의 그 자체 = 도메인 |
-| `core/verification` — **정합성 대사** | 12 / 26 | 규칙은 도메인, **실행 이력은 아니다**(§2.5) |
+| `core/verification` — **정합성 대사** | **≥15** / 29 | 규칙은 도메인, **실행 이력은 아니다**(§2.5) |
 
 **읽는 법** — 위 넷이 "인프라", 아래 **다섯**이 "도메인" 이다. 인프라 쪽 결합이 **26개 파일 중 2개**다.
 (대사는 §2.5 에서 따로 가른다 — 그 계층만 **파일 단위로 가져갈 수 있는 것과 없는 것**이 섞여 있다.)
+
+> ⚠️ **대사 줄만 세는 규칙이 다르다.** 분자는 `VerificationDomainBoundaryTest` 의
+> 비-PORTABLE 두 목록(`COUPON_SIDE` + `EXERCISE_ONLY`)을 센 것이고, 그 목록은
+> **최상위 21개 파일**만 다룬다 — `exception/`·`replay/` 8개는 재사용 판정에서 빠져 있다
+> (`SUBPACKAGES`). 분모는 형제 줄과 맞추려고 그 8개까지 센 29다. 그래서 **하한**이다.
+> 한때 여기 `12 / 26` 이 적혀 있었는데 **어느 규칙으로도 재현되지 않았다** — 이 각주가
+> 그 자리를 대신한다. 다시 세려면 저 테스트의 두 목록 크기를 더하면 된다.
 
 ---
 
@@ -64,10 +71,10 @@ Full Jitter 재시도·워커 풀 — 무엇을 나르는지와 무관하다.
 
 ---
 
-## 2.5 대사 — 가져갈 수 있는 것은 **값 타입 다섯뿐**이다
+## 2.5 대사 — 가져갈 수 있는 것은 **값 타입 여섯뿐**이다
 
-사전예약 PRD(저장소 밖 문서: `~/Downloads/사전예약 시스템 PRD.pdf`)가 **정합성 대사
-배치**를 명시하므로 그쪽에서도 대사는 안 지워진다. 그래서 질문은 "남나 바뀌나" 가 아니라
+사전예약 요구사항 명세서 §6(정합성 배치, FR-C-01~11)이 **검사·보고·전후 비교**를
+명시하므로 그쪽에서도 대사는 안 지워진다. 그래서 질문은 "남나 바뀌나" 가 아니라
 **어디까지 가져가나**다.
 
 ⚠️ **처음 답은 틀렸다.** *"실행 이력은 그대로 간다"* 고 적었는데, **낱말만 세고 타입 참조를
@@ -88,8 +95,9 @@ VerificationRunRepository  DatasetScale × 2 · DatasetType × 6
 | `VerdictType` · `ScopeType` · `StatsStatus` | PASS/FAIL · 전수/증분 · 집계 완전성. 값만 있다 |
 | `ResidualCount` | 잔여 집계(CY-947). `int` 셋뿐이고 지속·신규·해소는 집합 연산이다 |
 | `FindingKey` | `(String, String)` 둘뿐이다 |
+| `ResidualKind` | 잔여를 **대상 단위**로 볼 때의 세 값(CY-954). `ResidualCount` 를 한 대상에 뒤집은 것이다 |
 
-**다섯이 전부다.** 전부 값 타입이고 **다른 타입을 하나도 안 문다** — 그것이 이 목록의 조건이다.
+**여섯이 전부다.** 전부 값 타입이고 **다른 타입을 하나도 안 문다** — 그것이 이 목록의 조건이다.
 
 | 다시 쓴다 | 왜 |
 |---|---|
@@ -98,6 +106,7 @@ VerificationRunRepository  DatasetScale × 2 · DatasetType × 6
 | `VerificationRuleRepository` · `StatsRepository` | 규칙 질의. `coupons`·`issuances` 를 직접 읽는다 |
 | `DatasetScale` | 축은 무관한데(PRD 도 "검사 건수" 를 요구한다) 필드 이름이 쿠폰이다(CY-945) |
 | `VerificationRun` · `VerificationRunRepository` | 위 참조 때문. **처음에 여기가 아니라 위 표에 있었다** |
+| `ResidualTarget` · `ResidualCursor` | 잔여 한 줄과 페이지 커서(CY-954). 개념은 도메인 무관인데 **`FindingType` 을 문다** — 형제 `FindingKey` 는 `String` 둘이라 가져가고 이쪽은 타입 안전을 택했다. 그 대가다 |
 | `DatasetType` · `ExpectedFindingRepository` · `HourlyIssued` · `CleanupRepository` | 낱말은 없지만 개념이 이 과제 고유다 — 정상셋/오염셋, 정답 매니페스트, 시드 스키마에 글자 단위로 맞춘 요일 표기, `asof_state`·`findings` 를 이름으로 드는 삭제 |
 
 하위 패키지 둘은 재사용 판정에서 뺐다 — `replay/`(일곱 중 여섯이 도메인. `AsOfStateRepository`

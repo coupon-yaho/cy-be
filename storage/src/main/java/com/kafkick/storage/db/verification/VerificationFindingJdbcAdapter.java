@@ -3,6 +3,7 @@ package com.kafkick.storage.db.verification;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.EnumMap;
 import java.util.List;
@@ -17,6 +18,9 @@ import org.springframework.stereotype.Repository;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.core.verification.FindingType;
 import com.kafkick.core.verification.ResidualCount;
+import com.kafkick.core.verification.ResidualCursor;
+import com.kafkick.core.verification.ResidualKind;
+import com.kafkick.core.verification.ResidualTarget;
 import com.kafkick.core.verification.exception.VerificationErrorCode;
 import com.kafkick.core.verification.VerificationFinding;
 import com.kafkick.core.verification.VerificationFindingRepository;
@@ -139,6 +143,82 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                               CAST(target_key AS BINARY)) k
              GROUP BY CAST(k.finding_type AS BINARY)
             """;
+    /**
+     * 전후 비교를 <b>대상 단위</b>로 한 페이지 읽는다. 집계와 <b>같은 파생 테이블</b>을
+     * 쓰되 바깥에서 접지 않는다.
+     *
+     * <p><b>패키지 가시성이 아니라 {@code static final} 로 묶어 둔 이유는 하나다</b> —
+     * 커서 자리와 {@code HAVING} 자리를 <b>한 곳에서</b> 보기 위해서다. 형제
+     * {@link #SELECT_RESIDUAL_BY_TYPE} 과 달리 <b>이 문자열을 밖에서 {@code EXPLAIN}
+     * 하는 시험은 없다</b> — {@code ResidualTargetCostProbe} 는 포트 메서드를 부르고
+     * 읽기 호출만 센다. 계획 모양(커버링·{@code filesort})을 지키는 자리는 이 질의에
+     * 아직 비어 있다.
+     *
+     * <h2>커서가 왜 안쪽에 있나 — 실측</h2>
+     *
+     * <p>{@code LIMIT} 은 이 질의의 비용을 <b>거의 안 줄인다.</b> 12만 키 형상에서
+     * 100건이 220ms, 전량(9만 행)이 270ms 였다 — {@code GROUP BY} 가 임시 테이블로
+     * 집합을 다 만든 뒤에야 자르기 때문이다.
+     *
+     * <p>그래서 커서를 <b>파생 테이블 안쪽 {@code WHERE}</b> 에 넣어 {@code GROUP BY}
+     * 대상 자체를 줄인다. 그때 비로소 뒤 페이지가 싸진다:
+     *
+     * <pre>
+     *   커서 맨 앞    1,000행   237ms
+     *   커서 중간     1,000행    52ms
+     *   커서 거의 끝      0행    19ms
+     * </pre>
+     *
+     * <p>⚠️ <b>바깥으로 옮기면 조용히 느려진다.</b> 결과는 같아서 어느 테스트도 안 깨진다 —
+     * {@code ResidualTargetCostProbe} 가 그 자리를 지킨다.
+     *
+     * <h2>{@code CAST(... AS BINARY)} 가 세 군데 다 있어야 한다</h2>
+     *
+     * <p>{@code target_key} 는 서버 기본 콜레이션({@code utf8mb4_0900_ai_ci})이라
+     * 대소문자·악센트를 <b>안 가린다.</b> {@code GROUP BY}·{@code ORDER BY}·<b>커서 비교</b>
+     * 셋 중 하나라도 빠지면 축이 갈려 <b>페이지가 겹치거나 건너뛴다.</b>
+     * CY-947 이 집계에서 같은 이유로 그렇게 했다.
+     *
+     * <p>⚠️ <b>바깥 {@code ORDER BY} 만은 시험이 못 지킨다 — 재 보고 알았다.</b>
+     * 지워도, 거기서만 {@code CAST} 를 빼도 <b>결과가 안 바뀐다</b>: 계획이
+     * {@code Aggregate using temporary table} 이라 MySQL 이 그룹 키 순으로 내주기
+     * 때문이다(6행 형상과 30,000그룹 형상 둘 다 확인). 그러나 <b>MySQL 은 그 순서를
+     * 보장하지 않는다</b> — 계획이 바뀌는 날 커서가 조용히 샌다. 여기 남겨 두는 것은
+     * 운이 아니라 계약이고, <b>그 계약을 지키는 시험은 없다</b>는 사실을 같이 적어 둔다.
+     *
+     * <p>{@code %s} 두 자리는 선택 술어다. 값이 아니라 <b>절의 유무</b>라 바인딩할 수 없다.
+     */
+    static final String SELECT_RESIDUAL_TARGETS = """
+            SELECT k.finding_type, k.target_key, k.sides, k.has_after
+              FROM (SELECT MIN(finding_type)         AS finding_type,
+                           MIN(target_key)           AS target_key,
+                           COUNT(*)                  AS sides,
+                           MAX(run_id = :afterRunId) AS has_after
+                      FROM verification_findings
+                     WHERE run_id IN (:beforeRunId, :afterRunId)
+                       %s
+                     GROUP BY CAST(finding_type AS BINARY),
+                              CAST(target_key AS BINARY)
+                    %s) k
+             ORDER BY CAST(k.finding_type AS BINARY), CAST(k.target_key AS BINARY)
+             LIMIT :limit
+            """;
+
+    /** 커서 뒤부터 — 정렬 키 튜플을 통째로 비교한다. {@code GROUP BY} 키와 같은 축이다. */
+    private static final String CURSOR_PREDICATE =
+            "AND (CAST(finding_type AS BINARY), CAST(target_key AS BINARY))"
+                    + " > (CAST(:cursorType AS BINARY), CAST(:cursorKey AS BINARY))";
+
+    /**
+     * 종류를 좁힌다. <b>{@code HAVING} 이라 집합은 어차피 다 만들어진다</b> —
+     * 실측으로 시간이 231ms → 193ms 로 거의 그대로였다. 줄어드는 것은 바이트와 페이지 수다.
+     */
+    private static final String PERSISTED_ONLY = "HAVING COUNT(*) = 2";
+    private static final String INTRODUCED_ONLY =
+            "HAVING COUNT(*) = 1 AND MAX(run_id = :afterRunId) = 1";
+    private static final String RESOLVED_ONLY =
+            "HAVING COUNT(*) = 1 AND MAX(run_id = :afterRunId) = 0";
+
 
     /**
      * <b>{@code ORDER BY} 는 이 포트의 계약이지 리포트 순서의 근거가 아니다.</b>
@@ -251,6 +331,48 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
     }
 
     /**
+     * @throws BusinessException 두 실행이 같거나 {@code limit} 이 범위 밖일 때
+     */
+    @Override
+    public List<ResidualTarget> residualTargets(long beforeRunId, long afterRunId,
+            ResidualKind kind, ResidualCursor cursor, int limit) {
+        if (beforeRunId == afterRunId) {
+            // residualByType 과 같은 코드를 쓴다. 두 자리가 다른 답을 내면 안 된다.
+            throw new BusinessException(VerificationErrorCode.RUNS_NOT_COMPARABLE,
+                    "같은 실행끼리는 맞댈 수 없습니다. runId=" + beforeRunId);
+        }
+        if (limit < 1 || limit > VerificationFindingRepository.MAX_TARGET_PAGE) {
+            // 위 가드와 같은 이유로 raw 예외를 안 던진다 — 마지막 그물이 Exception 을
+            // 500 으로 뭉개므로, 컨트롤러 가드가 어느 날 빠지면 **부르는 쪽이 고칠 수
+            // 있는 잘못**이 서버 오류로 나간다.
+            throw new BusinessException(VerificationErrorCode.INVALID_PAGE_REQUEST,
+                    "페이지 크기는 1.." + VerificationFindingRepository.MAX_TARGET_PAGE
+                            + " 입니다. 받은 값=" + limit);
+        }
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("beforeRunId", beforeRunId)
+                .addValue("afterRunId", afterRunId)
+                .addValue("limit", limit);
+        String cursorClause = "";
+        if (cursor != null) {
+            cursorClause = CURSOR_PREDICATE;
+            params.addValue("cursorType", cursor.type().name())
+                    .addValue("cursorKey", cursor.targetKey());
+        }
+        String sql = SELECT_RESIDUAL_TARGETS.formatted(cursorClause, havingOf(kind));
+
+        List<ResidualTarget> page = new ArrayList<>();
+        jdbcTemplate.query(sql, params, rs -> {
+            // toType 을 쓰는 이유는 residualByType 과 같다 — 컬럼에 CHECK 가 없다.
+            page.add(new ResidualTarget(
+                    toType(rs.getString("finding_type"), beforeRunId, afterRunId),
+                    rs.getString("target_key"),
+                    ResidualKind.of(rs.getInt("sides"), rs.getBoolean("has_after"))));
+        });
+        return page;
+    }
+
+    /**
      * <b>중간 리스트를 만들지 않는다.</b> 행을 받는 즉시 다이제스트에 넣어,
      * 검출 객체 리스트와 그 복사본이 동시에 살지 않는다.
      *
@@ -321,6 +443,18 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                     VerificationErrorCode.UNKNOWN_FINDING_TYPE,
                     where + " finding_type=" + raw);
         }
+    }
+
+    /** {@code null} 은 "전부" 다 — 절이 통째로 빠진다. */
+    private static String havingOf(ResidualKind kind) {
+        if (kind == null) {
+            return "";
+        }
+        return switch (kind) {
+            case PERSISTED -> PERSISTED_ONLY;
+            case INTRODUCED -> INTRODUCED_ONLY;
+            case RESOLVED -> RESOLVED_ONLY;
+        };
     }
 
     private static SqlParameterSource toParams(long runId, VerificationFinding finding) {
