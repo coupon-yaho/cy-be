@@ -128,6 +128,7 @@ CREATE TABLE `notification_outbox` (
     UNIQUE KEY `uk_notification_outbox_attempt` (`notification_id`, `attempt_seq`),
     KEY `ix_notification_outbox_pending` (`status`, `next_attempt_at`, `id`),
     KEY `ix_notification_outbox_expired` (`status`, `claimed_at`, `id`),
+    KEY `ix_notification_outbox_kind` (`trigger`, `status`, `next_attempt_at`, `id`),
     UNIQUE KEY `uk_notification_outbox_claim_token` (`claim_token`),
     CONSTRAINT `ck_notification_outbox_status` CHECK (
         `status` COLLATE utf8mb4_0900_as_cs IN ('PENDING', 'IN_PROGRESS', 'PUBLISHED', 'DEAD')),
@@ -143,5 +144,11 @@ CREATE TABLE `notification_outbox` (
 ```
 
 `uk_notification_outbox_attempt`가 같은 발행 명령의 중복 저장을 막는다.
+
+`ix_notification_outbox_kind` 는 선점을 **종류별 몫**으로 나누기 위한 것이다. 없으면
+`trigger` 로 좁힌 질의가 due 백로그를 통째로 훑는다. `trigger` 가 선두인 것은
+`status` 로 시작하는 기존 질의들이 **이 인덱스를 후보로 삼지 못하게** 하려는
+것이다 — 그렇게 하지 않으면 옵티마이저가 그쪽 계획까지 바꾼다(실측). 근거는
+`V2026091001__notification_outbox_kind_index.sql` 에 있다.
 
 ---

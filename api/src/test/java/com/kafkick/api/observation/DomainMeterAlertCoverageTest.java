@@ -106,6 +106,12 @@ class DomainMeterAlertCoverageTest {
         DELIBERATELY_UNALERTED.put("app.outbox.retry",
                 "되돌려 다시 집는 것은 정상 경로다(발행 실패·대상 소실·lease 만료). "
                         + "사고는 재시도 상한을 넘겨 종착할 때이고 OutboxCommandsDead 가 진다");
+        DELIBERATELY_UNALERTED.put("app.outbox.claimed",
+                "종류별로 집힌 수다. 0 에는 '집을 것이 없었다' 와 '못 집었다' 가 섞여 있어 "
+                        + "이 값만으로는 임계를 못 잡는다 — 재발송 접수 쪽과 함께 봐야 한다. "
+                        + "게다가 굶지 않는다는 성질은 선점의 몫이 구조로 보장하고 "
+                        + "NotificationOutboxQuotaTest 가 그것을 잡는다. 이 값은 사후에 "
+                        + "섞임을 확인하는 용도이고, 처리량 사고는 OutboxBacklogGrowing 이 진다");
     }
 
     @Test

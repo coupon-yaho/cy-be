@@ -1,0 +1,52 @@
+-- 발행 명령을 **종류별 몫**으로 집기 위한 인덱스입니다.
+--
+-- 이 마이그레이션 전까지 선점은 `ORDER BY next_attempt_at, id` 하나로 due 를 훑었다.
+-- 운영자가 방금 누른 재발송(`trigger='MANUAL'`)은 `next_attempt_at = now` 라 **이미
+-- 밀린 자동 건 전부보다 뒤에 섰다.** 한 회차에 64건(`claimBatchSize`)씩 뺄 때
+-- `MANUAL` 1건이 잡히기까지 실측:
+--
+--   due INITIAL     64      2 회차
+--   due INITIAL    640     11 회차
+--   due INITIAL  5,000     79 회차       ⌈(N+1)/64⌉
+--
+-- 고치려면 `trigger` 로 좁힌 선점이 필요한데, 기존
+-- `ix_notification_outbox_pending (status, next_attempt_at, id)` 로는 그 질의가
+-- **due 백로그를 통째로 훑는다** — 인덱스에 `trigger` 가 없어 걸러낼 수가 없다.
+--
+-- ## 왜 `trigger` 가 선두인가
+--
+-- 후보 둘을 같은 형상(due INITIAL 5,000 · MANUAL 1)에서 재고 스토리지 엔진 읽기 호출
+-- (`Handler_read_*`)을 셌다. `EXPLAIN` 의 `type` 이 아니라 실제 호출 수다 —
+-- 형제 `BacklogPlanContractTest` 가 *"이름은 비용을 말하지 않는다"* 로 같은 자리에서
+-- 반려당한 적이 있다.
+--
+--   질의                    없음      (status,trigger,..)   (trigger,status,..)
+--   무필터 64건 선점         64        5,002  ← 망가짐        64  ← 그대로
+--   MANUAL 32건 선점      5,003            2                  2
+--   INITIAL 64건 선점        65           64                 64
+--   백로그 COUNT          5,003        5,003              5,003  ← 그대로
+--   lease 만료 회수           1            1                  1
+--
+-- ⚠️ **1행은 이 변경이 지우는 질의다.** 무필터 선점은 종류별 선점으로 대체되므로,
+--    머지 이후 그 행은 "지금 있는 질의"가 아니다. 나머지 네 행은 두 후보가 **똑같다.**
+--    즉 **살아 있는 질의만 보면 두 후보의 측정값은 구별되지 않는다.**
+--
+-- 그럼에도 `trigger` 를 선두에 두는 이유는 측정이 아니라 **구조**다 —
+-- `status` 로 시작하는 질의는 이 인덱스의 선두 컬럼이 없어 **후보로 삼지도 못한다.**
+-- 그래서 지금 있는 질의도, 앞으로 추가될 `status` 선두 질의도 계획이 안 바뀐다.
+-- 1행은 그 안전장치가 **가정이 아님을 보여 주는 증거**다: 기회를 주자 이 옵티마이저는
+-- 실제로 더 나쁜 인덱스를 골랐다(64 → 5,002).
+--
+-- `COUNT_BACKLOG` 의 인덱스 선택이 안 바뀌는 것은 `NotificationsMigrationTest` 가
+-- 못 박고, 종류별 선점이 상대 종류의 적체에 안 붙는 것은
+-- `OutboxKindPlanContractTest` 가 읽은 행 수로 잰다. (종류별 선점이 *어느* 인덱스를
+-- 타는지는 아무 데서도 이름으로 단언하지 않는다.)
+--
+-- ⚠️ 위 표는 **한 기기의 한 실행**에서 본 값이다. 재현되는 것은 형상과 자릿수이지
+-- 그 수 자체가 아니다 — 예산 근거로 쓰지 말 것. 다시 재려면
+-- `bash docs/measurements/outbox-kind-index.sh` 를 쓴다.
+--
+-- 뒤 두 칸(`next_attempt_at`, `id`)은 범위 조건과 정렬을 위해 있다. 선점 질의가
+-- 그 순서로 정렬하고 두 컬럼만 읽는다.
+CREATE INDEX `ix_notification_outbox_kind`
+    ON `notification_outbox` (`trigger`, `status`, `next_attempt_at`, `id`);
