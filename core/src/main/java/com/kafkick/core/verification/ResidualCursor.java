@@ -82,6 +82,10 @@ public record ResidualCursor(FindingType type, String targetKey) {
      * <i>"처음부터"</i> 로 접히면 부르는 쪽은 이어받은 줄 알고 <b>앞 페이지를 다시
      * 처리한다</b> — 같은 대상에 조치를 두 번 넣는 길이다.
      *
+     * <p><b>메시지에 받은 값을 안 싣는다.</b> 이 예외의 메시지는 로그로 흘러가는데
+     * 토큰은 바깥에서 온 값이다 — CR/LF 를 넣으면 로그 줄이 위조된다(CWE-117).
+     * 무엇이 틀렸는지는 <b>종류</b>로만 말한다.
+     *
      * @throws IllegalArgumentException 토큰이 Base64URL 이 아니거나, 구분자가 없거나,
      *         검출 종류가 이 시스템의 값이 아닐 때
      */
@@ -99,12 +103,17 @@ public record ResidualCursor(FindingType type, String targetKey) {
         if (at < 0 || at == raw.length() - 1) {
             throw new IllegalArgumentException("커서에 검출 종류와 대상 키가 다 있어야 합니다.");
         }
-        String name = raw.substring(0, at);
         try {
-            return new ResidualCursor(FindingType.valueOf(name), raw.substring(at + 1));
+            return new ResidualCursor(
+                    FindingType.valueOf(raw.substring(0, at)), raw.substring(at + 1));
         } catch (IllegalArgumentException unknown) {
-            throw new IllegalArgumentException(
-                    "커서의 검출 종류를 모릅니다. 받은 값=" + name, unknown);
+            // ⚠️ **받은 값을 메시지에 안 싣는다.** 이 예외의 메시지는 부르는 쪽에서
+            // BusinessException.detail 이 되고, BatchApiExceptionHandler 가 그것을
+            // `detail={}` 로 로그에 남긴다. 토큰은 질의 문자열에서 온 **바깥 값**이라
+            // CR/LF 를 넣으면 로그 줄을 위조할 수 있다(CWE-117).
+            // 그 자리 주석이 스스로 적어 뒀다 — detail 에는 설정 키·가드 이름·실행 id
+            // 가 들어간다고. 즉 **안쪽 값만** 넣는 자리다.
+            throw new IllegalArgumentException("커서의 검출 종류를 모릅니다.", unknown);
         }
     }
 }

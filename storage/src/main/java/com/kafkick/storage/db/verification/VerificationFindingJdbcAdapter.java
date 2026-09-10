@@ -341,9 +341,13 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
             throw new BusinessException(VerificationErrorCode.RUNS_NOT_COMPARABLE,
                     "같은 실행끼리는 맞댈 수 없습니다. runId=" + beforeRunId);
         }
-        if (limit < 1 || limit > MAX_TARGET_PAGE) {
-            throw new IllegalArgumentException(
-                    "페이지 크기는 1.." + MAX_TARGET_PAGE + " 입니다. 받은 값=" + limit);
+        if (limit < 1 || limit > VerificationFindingRepository.MAX_TARGET_PAGE) {
+            // 위 가드와 같은 이유로 raw 예외를 안 던진다 — 마지막 그물이 Exception 을
+            // 500 으로 뭉개므로, 컨트롤러 가드가 어느 날 빠지면 **부르는 쪽이 고칠 수
+            // 있는 잘못**이 서버 오류로 나간다.
+            throw new BusinessException(VerificationErrorCode.INVALID_PAGE_REQUEST,
+                    "페이지 크기는 1.." + VerificationFindingRepository.MAX_TARGET_PAGE
+                            + " 입니다. 받은 값=" + limit);
         }
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("beforeRunId", beforeRunId)
@@ -366,18 +370,6 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                     ResidualKind.of(rs.getInt("sides"), rs.getBoolean("has_after"))));
         });
         return page;
-    }
-
-    /** {@code null} 은 "전부" 다 — 절이 통째로 빠진다. */
-    private static String havingOf(ResidualKind kind) {
-        if (kind == null) {
-            return "";
-        }
-        return switch (kind) {
-            case PERSISTED -> PERSISTED_ONLY;
-            case INTRODUCED -> INTRODUCED_ONLY;
-            case RESOLVED -> RESOLVED_ONLY;
-        };
     }
 
     /**
@@ -451,6 +443,18 @@ public class VerificationFindingJdbcAdapter implements VerificationFindingReposi
                     VerificationErrorCode.UNKNOWN_FINDING_TYPE,
                     where + " finding_type=" + raw);
         }
+    }
+
+    /** {@code null} 은 "전부" 다 — 절이 통째로 빠진다. */
+    private static String havingOf(ResidualKind kind) {
+        if (kind == null) {
+            return "";
+        }
+        return switch (kind) {
+            case PERSISTED -> PERSISTED_ONLY;
+            case INTRODUCED -> INTRODUCED_ONLY;
+            case RESOLVED -> RESOLVED_ONLY;
+        };
     }
 
     private static SqlParameterSource toParams(long runId, VerificationFinding finding) {

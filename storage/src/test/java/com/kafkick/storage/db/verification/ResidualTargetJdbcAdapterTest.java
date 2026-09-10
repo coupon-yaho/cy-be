@@ -227,12 +227,17 @@ class ResidualTargetJdbcAdapterTest {
     @Test
     @DisplayName("페이지 크기가 범위 밖이면 거부한다")
     void refusesAPageSizeOutsideTheCap() {
+        // **raw 예외가 아니라 BusinessException 이다.** 마지막 그물이 Exception 을 500 으로
+        // 뭉개므로, 컨트롤러 가드가 빠지는 날 부르는 쪽이 고칠 수 있는 잘못이 서버 오류로
+        // 나간다. 형제 가드(같은 실행끼리 맞대기)와 같은 규약이다.
         assertThatThrownBy(() -> findings.residualTargets(before, after, null, null, 0))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> findings.residualTargets(before, after, null, null,
                 VerificationFindingRepository.MAX_TARGET_PAGE + 1))
-                .as("상한 없이 부르면 12만 키 형상에서 2.7MB 를 한 응답에 싣는다")
-                .isInstanceOf(IllegalArgumentException.class);
+                .as("상한 없이 부르면 12만 행 · 최대 10.7MB 를 한 응답에 싣는다")
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode().getCode())
+                .isEqualTo("VERIFICATION-027");
     }
 
     private long countOf(FindingType type, ResidualKind kind) {

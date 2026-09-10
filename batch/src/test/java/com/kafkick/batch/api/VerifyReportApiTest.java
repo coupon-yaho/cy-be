@@ -901,6 +901,10 @@ class VerifyReportApiTest {
         var response = probe.get(TARGETS + "?before=" + clean + "&after=" + corrupt);
 
         assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .as("코드까지 안 보면 025 와 027 이 뒤바뀌어도 통과한다 — 운영자는 "
+                        + "실행 번호를 고쳐야 하는지 페이지 인자를 고쳐야 하는지 모른다")
+                .isEqualTo("VERIFICATION-025");
     }
 
     /** 아직 판정이 안 난 실행은 검출 수가 <b>중간값</b>이라 맞대면 안 된다. */
@@ -914,6 +918,9 @@ class VerifyReportApiTest {
         var response = probe.get(TARGETS + "?before=" + closed + "&after=" + open);
 
         assertThat(response.statusCode()).isEqualTo(409);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .as("409 는 '잠시 뒤 다시' 이고 400 은 '인자를 고쳐라' 다 — 코드가 그것을 가른다")
+                .isEqualTo("VERIFICATION-026");
     }
 
     /** 응답의 대상 키 목록. 형제 {@code keysOf} 는 JSON <b>필드 이름</b>이라 뜻이 다르다. */

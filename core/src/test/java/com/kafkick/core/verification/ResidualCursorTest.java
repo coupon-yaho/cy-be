@@ -84,6 +84,9 @@ class ResidualCursorTest {
     /**
      * 모르는 유형이면 거부한다. 조용히 접으면 그 커서가 <b>어느 자리도 안 가리키는데</b>
      * 페이지는 정상으로 보인다.
+     *
+     * <p><b>그러면서 받은 값은 안 남긴다.</b> 이 메시지는 로그로 흘러가고 토큰은
+     * 바깥에서 온 값이라, CR/LF 를 넣으면 로그 줄이 위조된다.
      */
     @Test
     @DisplayName("모르는 검출 종류는 거부한다")
@@ -92,7 +95,8 @@ class ResidualCursorTest {
 
         assertThatThrownBy(() -> ResidualCursor.decode(token))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("V7_MADE_UP");
+                .as("받은 값을 메시지에 실으면 로그 줄이 위조된다(CWE-117)")
+                .hasMessageNotContaining("V7_MADE_UP");
     }
 
     private static String base64Url(String raw) {
