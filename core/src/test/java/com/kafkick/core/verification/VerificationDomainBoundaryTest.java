@@ -79,9 +79,18 @@ class VerificationDomainBoundaryTest {
     private static final Pattern COUPON_VOCABULARY = Pattern.compile(
             "coupon|issuance|issued|campaign|stock|grade", Pattern.CASE_INSENSITIVE);
 
+    /** 홑따옴표는 안 본다 — 문자 하나에는 주석 기호가 못 들어간다. */
+    private static final Pattern STRING_LITERAL =
+            Pattern.compile("\"(?:[^\"\\\\]|\\\\.)*\"");
+
     /**
-     * <b>그대로 가져갈 수 있는 것.</b> 전부 값 타입이고 필드가 원시형·문자열뿐이다 —
-     * <b>다른 타입을 하나도 안 문다</b>는 것이 이 목록의 조건이다.
+     * <b>그대로 가져갈 수 있는 것.</b> 전부 값 타입이고 필드가 원시형·문자열뿐이다.
+     *
+     * <p><b>검사가 지키는 것은 그보다 좁다</b> — <i>"이 패키지의 비-PORTABLE 타입을 안
+     * 문다"</i> 까지다(하위 패키지 포함). {@code LocalDate} 같은 바깥 타입이나 PORTABLE
+     * 끼리의 참조는 안 막는다 — 앞엣것은 도메인이 아니고 뒤엣것은 <b>둘 다 가져가므로</b>
+     * 재사용을 안 막기 때문이다. <i>"원시형·문자열뿐"</i> 은 <b>목록에 넣는 사람의 판단</b>
+     * 이지 이 시험의 단언이 아니다.
      *
      * <p>여기 파일을 <b>더하는 것은 자유지만 빼는 것은 결정</b>이다 — 뺀다는 것은
      * 다른 주제의 재사용 목록에서도 사라진다는 뜻이다.
@@ -159,7 +168,7 @@ class VerificationDomainBoundaryTest {
             "exception", "오류 코드. 낱말은 없지만 검증 규칙의 실패 어휘라 그쪽을 따라간다");
 
     @Test
-    @DisplayName("가져갈 수 있는 타입은 쿠폰 낱말도 이 과제 타입도 안 문다")
+    @DisplayName("가져갈 수 있는 타입은 쿠폰 낱말도 이 패키지의 비-PORTABLE 타입도 안 문다")
     void portableTypesCarryNeitherVocabularyNorLocalTypes() throws IOException {
         Pattern localTypes = localTypeReferences();
 
@@ -200,14 +209,22 @@ class VerificationDomainBoundaryTest {
     @DisplayName("모든 타입과 하위 패키지가 분류돼 있다")
     void everyTypeIsClassified() throws IOException {
         List<String> unclassified = new ArrayList<>();
+        // **디렉터리는 깊이 상관없이 본다.** 한때 Files.list 로 한 겹만 봐서
+        // replay/ 아래 중첩 패키지가 생기면 아무 분류 없이 통과했다.
+        try (var paths = Files.walk(SOURCE_ROOT)) {
+            for (Path path : paths.filter(Files::isDirectory).sorted().toList()) {
+                if (path.equals(SOURCE_ROOT)) {
+                    continue;
+                }
+                if (!SUBPACKAGES.containsKey(path.getFileName().toString())) {
+                    unclassified.add(SOURCE_ROOT.relativize(path) + "/ (하위 패키지)");
+                }
+            }
+        }
         try (var paths = Files.list(SOURCE_ROOT)) {
             for (Path path : paths.sorted().toList()) {
                 String name = path.getFileName().toString();
-                if (Files.isDirectory(path)) {
-                    if (!SUBPACKAGES.containsKey(name)) {
-                        unclassified.add(name + "/ (하위 패키지)");
-                    }
-                } else if (name.endsWith(".java")
+                if (!Files.isDirectory(path) && name.endsWith(".java")
                         && !PORTABLE.contains(name)
                         && !COUPON_SIDE.containsKey(name)
                         && !EXERCISE_ONLY.containsKey(name)) {
@@ -288,13 +305,82 @@ class VerificationDomainBoundaryTest {
     }
 
     /**
+     * <b>한 파일이 두 통에 동시에 있으면 안 된다.</b> 세 통은 <b>서로 다른 재사용 결정</b>
+     * 이라, 겹치면 모순인 채로 통과한다 — {@link #everyClassifiedFileExists()} 가 집합으로
+     * 합쳐서 보기 때문에 거기서도 안 걸린다.
+     */
+    @Test
+    @DisplayName("한 파일은 정확히 한 통에만 있다")
+    void everyTypeIsClassifiedExactlyOnce() {
+        List<String> duplicated = new ArrayList<>();
+        List<List<String>> buckets = List.of(PORTABLE,
+                List.copyOf(COUPON_SIDE.keySet()), List.copyOf(EXERCISE_ONLY.keySet()));
+        Set<String> seen = new LinkedHashSet<>();
+        for (List<String> bucket : buckets) {
+            for (String name : bucket) {
+                if (!seen.add(name)) {
+                    duplicated.add(name);
+                }
+            }
+        }
+
+        assertThat(duplicated)
+                .as("두 통에 같이 적혀 있다. 가져갈 수 있거나 없거나 둘 중 하나다")
+                .isEmpty();
+    }
+
+    /**
+     * <b>{@link #stripComments} 의 전제를 시험으로 든다.</b> 그 정규식은 문자열 리터럴
+     * 안의 주석 기호를 <b>진짜 주석으로 오인</b>해 뒤의 코드를 지운다 — 그러면 경계 위반이
+     * 조용히 통과한다.
+     *
+     * <p>어휘 분석기를 넣는 대신 <b>그 전제가 아직 참인지</b>를 잰다. 지금 이 패키지에는
+     * 그런 리터럴이 하나도 없고, 생기는 날 여기가 빨개져 그때 파서로 갈아탄다.
+     * {@code docs/19} 의 파이썬도 같은 결함을 공유하므로 두 판정이 갈리지는 않는다.
+     */
+    @Test
+    @DisplayName("문자열 리터럴 안에 주석 기호가 없다 — 주석 제거의 전제다")
+    void noStringLiteralCarriesCommentMarkers() throws IOException {
+        List<String> risky = new ArrayList<>();
+        try (var paths = Files.walk(SOURCE_ROOT)) {
+            for (Path path : paths.filter(each -> each.toString().endsWith(".java")).toList()) {
+                // **원본을 본다 — 걷어낸 것을 보면 안 된다.** 여기서 잡으려는 것이 바로
+                // "걷어내기가 문자열을 망가뜨리는 것" 인데, 걷어낸 뒤를 보면 그 문자열이
+                // 이미 잘려 있어 정규식에 안 걸린다. 처음에 그렇게 써서 돌연변이가
+                // 살아남았다 — 시험이 자기가 막으려는 것을 못 보고 있었다.
+                String code = Files.readString(path);
+                for (String literal : STRING_LITERAL.matcher(code).results()
+                        .map(match -> match.group()).toList()) {
+                    if (literal.contains("//") || literal.contains("/*")) {
+                        risky.add(SOURCE_ROOT.relativize(path) + " : " + literal);
+                    }
+                }
+            }
+        }
+
+        assertThat(risky)
+                .as("문자열 안에 주석 기호가 들어왔다. stripComments 가 그것을 주석으로 "
+                        + "오인해 뒤의 코드를 통째로 지운다 — 경계 위반이 조용히 통과한다. "
+                        + "이 시험이 빨개지면 정규식이 아니라 어휘 분석으로 갈아탈 때다")
+                .isEmpty();
+    }
+
+    /**
      * <b>이 과제 전용 타입의 이름을 그대로 금지어로 쓴다.</b> 목록에서 만들므로
      * 통을 고치면 금지어가 따라 움직인다 — 두 곳에 적으면 갈린다.
      */
-    private static Pattern localTypeReferences() {
+    private static Pattern localTypeReferences() throws IOException {
         List<String> names = new ArrayList<>();
         COUPON_SIDE.keySet().forEach(name -> names.add(name.replace(".java", "")));
         EXERCISE_ONLY.keySet().forEach(name -> names.add(name.replace(".java", "")));
+        // **하위 패키지 타입도 넣는다.** 재사용 판정에서 뺀 것들이라 PORTABLE 이 그것을
+        // 물면 같은 오염이다 — 한때 최상위 이름만 봐서 이 축이 비어 있었다.
+        try (var paths = Files.walk(SOURCE_ROOT)) {
+            paths.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> !path.getParent().equals(SOURCE_ROOT))
+                    .map(path -> path.getFileName().toString().replace(".java", ""))
+                    .forEach(names::add);
+        }
         return Pattern.compile("\\b(" + String.join("|", names) + ")\\b");
     }
 
