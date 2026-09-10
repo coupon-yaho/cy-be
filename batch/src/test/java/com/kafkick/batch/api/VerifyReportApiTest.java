@@ -56,6 +56,8 @@ class VerifyReportApiTest {
     private static final String DIFF = "/api/v1/admin/verify/reports/diff";
     private static final String RESIDUAL = "/api/v1/admin/verify/reports/residual";
 
+    private static final String TARGETS = RESIDUAL + "/targets";
+
     @LocalServerPort
     private int port;
 
@@ -753,6 +755,261 @@ class VerifyReportApiTest {
                 .isEqualTo(400);
         assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
                 .isEqualTo("VERIFICATION-025");
+    }
+
+    /**
+     * <b>집계가 답하지 못하는 다음 질문.</b> <i>"3건 남았다"</i> 다음은 <i>"어느
+     * 회차인가"</i> 이고, 그 링크가 없으면 보고서에서 실제 대상으로 갈 방법이 없다.
+     */
+    @Test
+    @DisplayName("어느 대상이 남고 어느 것이 새로 생겼는지 HTTP 로 나온다")
+    void targetsNameTheActualObjectsNotJustCounts() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b")));
+
+        JsonNode data = VerifyApiProbe.data(
+                probe.get(TARGETS + "?before=" + was + "&after=" + now));
+
+        assertThat(kindOf(data, "COUPON:1"))
+                .as("두 실행에 다 있다 — 아무도 안 고치고 있다")
+                .isEqualTo("PERSISTED");
+        assertThat(kindOf(data, "COUPON:2")).isEqualTo("RESOLVED");
+        assertThat(kindOf(data, "COUPON:3")).isEqualTo("INTRODUCED");
+        assertThat(data.path("nextCursor").isNull())
+                .as("세 줄뿐이라 다음 페이지가 없다")
+                .isTrue();
+    }
+
+    /**
+     * <b>커서를 왕복시켜 본다 — 그리고 가장 험한 키로 태운다.</b>
+     *
+     * <p>{@code DUP_PER_MEMBER} 의 대상 키는 {@code COUPON:1|MEMBER:2} 이고,
+     * <b>{@code |} 는 톰캣이 요청 타깃에서 거부한다</b>(이 저장소에
+     * {@code relaxedQueryChars} 설정이 없다). 게다가 그 유형은 이름 순서가 <b>맨 앞</b>
+     * 이라 실제 운영에서 <b>첫 페이지의 커서</b>가 바로 이 모양이다.
+     *
+     * <p>커서를 {@code cursorType}·{@code cursorKey} 두 값으로 실었을 때 이 시험은
+     * <b>요청을 만들지도 못한다</b> — {@code URI.create} 가 먼저 던진다. 그래서 커서를
+     * Base64URL 한 덩어리로 바꿨고, 이 시험이 그 결정을 지킨다.
+     */
+    @Test
+    @DisplayName("`|` 가 든 대상 키에서도 커서가 HTTP 를 왕복한다")
+    void theCursorRoundTripsEvenForKeysWithReservedCharacters() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCouponMember(FindingType.DUP_PER_MEMBER, 1, 2, "a", "b"),
+                VerificationFinding.forCouponMember(FindingType.DUP_PER_MEMBER, 1, 3, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCouponMember(FindingType.DUP_PER_MEMBER, 1, 2, "a", "b"),
+                VerificationFinding.forCouponMember(FindingType.DUP_PER_MEMBER, 1, 3, "a", "b")));
+
+        JsonNode first = VerifyApiProbe.data(
+                probe.get(TARGETS + "?before=" + was + "&after=" + now + "&limit=1"));
+
+        assertThat(first.path("targets").path(0).path("targetKey").asString())
+                .as("전제 — 이 형상의 대상 키에 `|` 가 들어 있어야 시험이 뜻이 있다")
+                .contains("|");
+        String cursor = first.path("nextCursor").asString();
+        assertThat(cursor).as("정확히 limit 만큼 왔으면 커서를 줘야 한다").isNotBlank();
+        assertThat(cursor)
+                .as("질의 문자열에 그대로 실을 수 있어야 한다 — Base64URL 알파벳뿐")
+                .matches("[A-Za-z0-9_-]+");
+
+        JsonNode second = VerifyApiProbe.data(probe.get(TARGETS + "?before=" + was
+                + "&after=" + now + "&limit=1&cursor=" + cursor));
+
+        assertThat(second.path("targets").path(0).path("targetKey").asString())
+                .as("첫 페이지와 같은 줄이 또 나오면 커서가 안 먹은 것이다")
+                .isNotEqualTo(first.path("targets").path(0).path("targetKey").asString());
+    }
+
+    /**
+     * <b>커서는 페이지의 <i>마지막</i> 줄에서 나와야 한다.</b>
+     *
+     * <p>{@code limit=1} 만 태우면 첫 줄과 마지막 줄이 같아서, 커서를
+     * {@code page.get(0)} 으로 만드는 구현이 그대로 통과한다. 그러면 페이지마다
+     * <b>{@code limit-1} 줄이 다시 나오고</b>, 그것이 컨트롤러가 막겠다고 적은
+     * "같은 대상에 조치를 두 번" 이다.
+     */
+    @Test
+    @DisplayName("두 줄씩 넘겨도 앞 페이지 줄이 다시 나오지 않는다")
+    void theCursorComesFromTheLastRowNotTheFirst() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 4, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 4, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 4, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 3, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 4, "a", "b")));
+
+        JsonNode first = VerifyApiProbe.data(
+                probe.get(TARGETS + "?before=" + was + "&after=" + now + "&limit=2"));
+        JsonNode second = VerifyApiProbe.data(probe.get(TARGETS + "?before=" + was
+                + "&after=" + now + "&limit=2&cursor=" + first.path("nextCursor").asString()));
+
+        assertThat(targetKeysOf(first)).hasSize(2);
+        assertThat(targetKeysOf(second))
+                .as("커서를 첫 줄에서 만들면 여기서 앞 페이지의 둘째 줄이 또 나온다")
+                .doesNotContainAnyElementsOf(targetKeysOf(first));
+    }
+
+    /**
+     * <b>앞뒤 실행의 검출 수가 제자리에 실려야 한다.</b> 뒤바꿔도 목록은 그대로라
+     * 대상만 보는 단언으로는 안 잡힌다 — 그런데 화면은 그 두 수로 "얼마나 줄었나" 를
+     * 말한다.
+     */
+    @Test
+    @DisplayName("앞뒤 실행의 검출 수가 뒤바뀌지 않는다")
+    void theTwoSidesCarryTheirOwnCounts() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b")));
+
+        JsonNode data = VerifyApiProbe.data(
+                probe.get(TARGETS + "?before=" + was + "&after=" + now));
+
+        assertThat(data.path("before").path("findingCount").asInt()).isEqualTo(2);
+        assertThat(data.path("after").path("findingCount").asInt()).isEqualTo(1);
+    }
+
+    /**
+     * <b>대상 목록도 집계와 <i>같은</i> 가드를 지나야 한다.</b> 경로가 다르면 가드도
+     * 따로 걸리므로, {@code /residual} 쪽 시험이 이쪽을 안 지킨다.
+     */
+    @Test
+    @DisplayName("dataset 이 다르면 대상 목록도 맞대지 않는다")
+    void targetsRefuseRunsFromDifferentDatasets() throws Exception {
+        long clean = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long corrupt = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 2);
+
+        var response = probe.get(TARGETS + "?before=" + clean + "&after=" + corrupt);
+
+        assertThat(response.statusCode()).isEqualTo(400);
+    }
+
+    /** 아직 판정이 안 난 실행은 검출 수가 <b>중간값</b>이라 맞대면 안 된다. */
+    @Test
+    @DisplayName("아직 안 끝난 실행은 대상 목록도 거부한다")
+    void targetsRefuseAnOpenRun() throws Exception {
+        long closed = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long open = runs.save(VerificationRun.start(
+                AS_OF, null, ScopeType.FULL, DatasetType.CLEAN, 2, AS_OF)).id();
+
+        var response = probe.get(TARGETS + "?before=" + closed + "&after=" + open);
+
+        assertThat(response.statusCode()).isEqualTo(409);
+    }
+
+    /** 응답의 대상 키 목록. 형제 {@code keysOf} 는 JSON <b>필드 이름</b>이라 뜻이 다르다. */
+    private static java.util.List<String> targetKeysOf(JsonNode data) {
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        for (JsonNode target : data.path("targets")) {
+            keys.add(target.path("targetKey").asString());
+        }
+        return keys;
+    }
+
+    /**
+     * <b>지어낸 커서는 거부한다.</b> 조용히 처음부터 돌려주면 부르는 쪽은 이어받은 줄
+     * 알고 <b>앞 페이지를 다시 처리한다</b> — 같은 대상에 조치를 두 번 넣는 길이다.
+     */
+    @Test
+    @DisplayName("읽을 수 없는 커서는 거부한다")
+    void aMalformedCursorIsRefusedRatherThanSilentlyRestarting() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long now = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 2);
+
+        var response = probe.get(TARGETS + "?before=" + was + "&after=" + now
+                + "&cursor=not-a-real-cursor");
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .isEqualTo("VERIFICATION-027");
+    }
+
+    /**
+     * 상한 없이 부르면 12만 키 형상에서 <b>2.7MB</b> 를 한 응답에 싣는다(실측).
+     *
+     * <p><b>400 인지를 본다.</b> 컨트롤러가 어댑터보다 먼저 막으므로 어댑터의
+     * {@code IllegalArgumentException} 은 여기까지 안 온다 — 그 가드는 HTTP 아닌
+     * 호출자를 위해 남아 있다. 이 시험이 지키는 것은 <b>둘 중 하나라도 500 을 안 낸다</b>
+     * 는 것이다.
+     */
+    @Test
+    @DisplayName("페이지 상한을 넘겨 부르면 400 이다")
+    void aPageSizeOverTheCapIsRefused() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long now = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 2);
+
+        var response = probe.get(TARGETS + "?before=" + was + "&after=" + now + "&limit=100000");
+
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(VerifyApiProbe.json(response).path("error").path("code").asString())
+                .as("코드가 갈리면 운영자가 실행 번호를 고쳐야 하는지 페이지 인자를 "
+                        + "고쳐야 하는지 알 수 없다")
+                .isEqualTo("VERIFICATION-027");
+    }
+
+    /**
+     * <b>상한 <i>자체</i>는 받아야 한다.</b> 경계 위만 막고 경계는 안 태우면
+     * 상한을 1 낮춘 구현도 통과한다.
+     */
+    @Test
+    @DisplayName("상한과 정확히 같은 페이지 크기는 받는다")
+    void aPageSizeExactlyAtTheCapIsAccepted() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 1);
+        long now = closedRunWithAttempt(DatasetType.CLEAN, VerdictType.PASS, 0, 2);
+
+        var response = probe.get(TARGETS + "?before=" + was + "&after=" + now
+                + "&limit=" + VerificationFindingRepository.MAX_TARGET_PAGE);
+
+        assertThat(response.statusCode()).isEqualTo(200);
+    }
+
+    /** 좁힌 종류만 나오는지 HTTP 표면에서도 본다. */
+    @Test
+    @DisplayName("종류를 좁히면 그 종류만 나온다")
+    void targetsCanBeNarrowedToOneKind() throws Exception {
+        long was = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 2, 1);
+        findings.appendAll(was, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b"),
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 2, "a", "b")));
+        long now = closedRunWithAttempt(DatasetType.CORRUPT, VerdictType.FAIL, 1, 2);
+        findings.appendAll(now, java.util.List.of(
+                VerificationFinding.forCoupon(FindingType.STOCK_MISMATCH, 1, "a", "b")));
+
+        JsonNode data = VerifyApiProbe.data(probe.get(
+                TARGETS + "?before=" + was + "&after=" + now + "&kind=RESOLVED"));
+
+        assertThat(data.path("targets")).hasSize(1);
+        assertThat(data.path("targets").path(0).path("targetKey").asString())
+                .isEqualTo("COUPON:2");
+    }
+
+    /** 응답에서 한 대상의 종류를 찾는다. 없으면 그 사실이 드러나게 {@code null} 을 돌려준다. */
+    private static String kindOf(JsonNode data, String targetKey) {
+        for (JsonNode target : data.path("targets")) {
+            if (targetKey.equals(target.path("targetKey").asString())) {
+                return target.path("kind").asString();
+            }
+        }
+        return null;
     }
 
     @Test

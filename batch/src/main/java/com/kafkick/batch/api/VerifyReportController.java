@@ -19,6 +19,8 @@ import com.kafkick.core.verification.DatasetType;
 import com.kafkick.core.verification.ExpectedFindingRepository;
 import com.kafkick.core.verification.FindingKey;
 import com.kafkick.core.verification.FindingType;
+import com.kafkick.core.verification.ResidualCursor;
+import com.kafkick.core.verification.ResidualKind;
 import com.kafkick.core.verification.ScopeType;
 import com.kafkick.core.verification.VerificationFindingRepository;
 import com.kafkick.core.verification.VerificationRun;
@@ -256,6 +258,106 @@ public class VerifyReportController {
                 was, findings.countOf(was.id()),
                 now, findings.countOf(now.id()),
                 findings.residualByType(was.id(), now.id())));
+    }
+
+    /**
+     * <b>전후 비교를 대상 단위로 한 페이지 준다.</b> {@code /reports/residual} 이
+     * <i>"몇 건 남았나"</i> 를 답하고 여기가 <i>"어느 것인가"</i> 를 답한다.
+     *
+     * <p><b>집계를 이것으로 대신하지 말 것.</b> 접힌 집계는 12만 키 형상에서 6행이고
+     * 이 목록은 <b>최대 12만 행(8.4~10.7MB)</b>이다. 화면의 첫 질문에는 그쪽이 맞다.
+     *
+     * <h2>왜 페이지인가 — 실측</h2>
+     *
+     * <p>이 질의는 {@code GROUP BY} 가 집합을 다 만든 뒤에 자르므로 <b>{@code LIMIT} 이
+     * 시간을 거의 안 줄인다</b>(12만 키 형상에서 100건 220ms · 전량 270ms). 대신
+     * 커서를 파생 테이블 안쪽에 밀어 넣어 <b>뒤 페이지가 싸지게</b> 했다
+     * (맨 앞 237ms · 중간 52ms · 거의 끝 19ms). 한 요청의 최악이 첫 페이지이고
+     * 이 API 의 예산({@code batch.admin.timeout-seconds}) 안이다.
+     *
+     * <p>⚠️ <b>{@code kind} 는 시간을 안 줄인다.</b> {@code HAVING} 이라 집합은 어차피 다
+     * 만들어진다(231ms → 193ms). 줄어드는 것은 바이트와 페이지 수다.
+     *
+     * <p><b>후속 조치는 여기 없다.</b> 이 API 는 <b>읽기만</b> 한다 — 조치의 종류와
+     * 권한은 아직 정해지지 않았고, 정해지기 전에 자리를 만들면 그 자리가 결정을
+     * 대신하게 된다.
+     *
+     * <pre>
+     * curl -sSf -H "X-Batch-Admin-Token: $BATCH_ADMIN_TOKEN" \
+     *   "localhost:9091/api/v1/admin/verify/reports/residual/targets?before=17&amp;after=23&amp;kind=PERSISTED"
+     * </pre>
+     *
+     * @param before 앞 실행
+     * @param after 뒤 실행
+     * @param kind 좁힐 종류. 안 주면 전부
+     * @param cursor 앞 응답의 {@code nextCursor} 를 <b>그대로</b> 준다. 안 주면 처음부터
+     * @param limit 한 페이지 최대 건수. 기본 200 은 한 응답을 <b>20KB 아래</b>로 두는
+     *        자리다(행당 70~89B). 상한은 {@link VerificationFindingRepository#MAX_TARGET_PAGE}
+     */
+    @GetMapping("/reports/residual/targets")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true,
+            timeoutString = "${batch.admin.timeout-seconds:5}")
+    public ResponseEnvelope<VerifyResidualTargetsView> residualTargets(
+            @RequestParam long before,
+            @RequestParam long after,
+            @RequestParam(required = false) ResidualKind kind,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "200") int limit) {
+
+        VerificationRun was = closedRun(before);
+        VerificationRun now = closedRun(after);
+        requireComparable(was, now);
+
+        requirePageSize(limit);
+        ResidualCursor from = cursorOf(cursor);
+
+        return ResponseEnvelope.success(VerifyResidualTargetsView.of(
+                rules.currentSchema(),
+                was, findings.countOf(was.id()),
+                now, findings.countOf(now.id()),
+                kind,
+                findings.residualTargets(was.id(), now.id(), kind, from, limit),
+                limit));
+    }
+
+    /**
+     * <b>상한은 어댑터도 막지만 여기서 먼저 막는다.</b>
+     *
+     * <p>어댑터의 {@code IllegalArgumentException} 은 HTTP 표면에서 <b>500</b> 이 된다 —
+     * 부르는 쪽이 고칠 수 있는 잘못인데 서버 오류로 나가는 것이다(실제로 그랬고
+     * {@code VerifyReportApiTest} 가 잡았다). 어댑터 가드는 <b>HTTP 아닌 호출자</b>를
+     * 위해 남겨 둔다.
+     */
+    private static void requirePageSize(int limit) {
+        if (limit < 1 || limit > VerificationFindingRepository.MAX_TARGET_PAGE) {
+            throw new BusinessException(VerificationErrorCode.INVALID_PAGE_REQUEST,
+                    "페이지 크기는 1.." + VerificationFindingRepository.MAX_TARGET_PAGE + " 입니다. 상한 없이 부르면 "
+                            + "상한 없이 부르면 12만 행 · 최대 10.7MB 를 한 응답에 "
+                            + "싣습니다. 받은 값=" + limit);
+        }
+    }
+
+    /**
+     * <b>불투명 토큰 하나다.</b> 응답이 준 {@code nextCursor} 를 그대로 실어 보낸다.
+     *
+     * <p><b>두 파라미터로 두지 않는 이유</b> — {@code DUP_PER_MEMBER} 의 대상 키가
+     * {@code COUPON:1|MEMBER:2} 인데 <b>{@code |} 는 톰캣이 요청 타깃에서 거부한다</b>
+     * (기본 설정). 그 유형은 이름 순서가 맨 앞이라 <b>첫 페이지의 커서</b>에 바로 들어간다.
+     * 거부는 컨트롤러에 닿기 전이라 봉투도 코드도 없이 스프링 기본 400 이 나간다.
+     * 자세한 것은 {@link ResidualCursor#encode()} 에 적었다.
+     */
+    private static ResidualCursor cursorOf(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        try {
+            return ResidualCursor.decode(token);
+        } catch (IllegalArgumentException malformed) {
+            // 조용히 "처음부터" 로 접으면 부르는 쪽은 이어받은 줄 알고 앞 페이지를
+            // 다시 처리한다 — 같은 대상에 조치를 두 번 넣는 길이다.
+            throw new BusinessException(VerificationErrorCode.INVALID_PAGE_REQUEST,
+                    "커서를 읽을 수 없습니다. " + malformed.getMessage());
+        }
     }
 
     /**
