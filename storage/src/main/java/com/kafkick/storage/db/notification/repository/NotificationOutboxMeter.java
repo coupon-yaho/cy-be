@@ -2,6 +2,7 @@ package com.kafkick.storage.db.notification.repository;
 
 import java.time.Duration;
 import java.util.EnumMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -12,6 +13,7 @@ import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
 
 import com.kafkick.core.notification.OutboxRetryReason;
+import com.kafkick.core.notification.domain.AttemptTrigger;
 import com.kafkick.core.observation.DomainMeterNames;
 
 /**
@@ -48,6 +50,8 @@ public class NotificationOutboxMeter {
             new EnumMap<>(OutboxRetryReason.class);
     private final Map<OutboxRetryReason, Counter> deaths =
             new EnumMap<>(OutboxRetryReason.class);
+    private final Map<AttemptTrigger, Counter> claimed =
+            new EnumMap<>(AttemptTrigger.class);
 
     /**
      * <b>모든 사유의 시계열을 미리 만든다.</b> 실패가 나야 생기게 두면 대시보드가
@@ -68,6 +72,43 @@ public class NotificationOutboxMeter {
             deaths.put(reason, Counter.builder(DomainMeterNames.OUTBOX_DEAD)
                     .tag(DomainMeterNames.TAG_REASON, reason.tag())
                     .register(registry));
+        }
+        for (AttemptTrigger kind : AttemptTrigger.outboxKinds()) {
+            claimed.put(kind, Counter.builder(DomainMeterNames.OUTBOX_CLAIMED)
+                    .tag(DomainMeterNames.TAG_TRIGGER, kind.name().toLowerCase(Locale.ROOT))
+                    .register(registry));
+        }
+    }
+
+    /**
+     * 이 회차에 <b>집힌</b> 명령을 종류별로 센다.
+     *
+     * <p><b>안 집힌 종류는 안 부른다.</b> 한때 "0 으로라도 불러야 시계열이 안 끊긴다"
+     * 고 적었는데 <b>틀렸다</b> — 시계열을 존재하게 만드는 것은 위 생성자의 사전
+     * 등록이고, {@code increment(0)} 은 그 위에 0 을 더할 뿐이라 관측되는 변화가 없다.
+     *
+     * <p><b>커밋된 뒤에 불러야 한다.</b> 선점은 한 트랜잭션이고, 그 안에서 세면 뒤에
+     * 롤백돼도 지표에는 집힌 것으로 남는다. 부르는 쪽이 그 순서를 진다.
+     *
+     * @throws NullPointerException {@code counts} 가 {@code null} 일 때
+     * @throws IllegalArgumentException 세는 수가 음수이거나, outbox 행에 올 수 없는
+     *         종류가 섞였을 때. 후자를 안 막으면 <b>선점이 못 집는 종류를 셌다는
+     *         뜻</b>인데 지표에는 정상으로 보인다
+     */
+    public void claimed(Map<AttemptTrigger, Integer> counts) {
+        Objects.requireNonNull(counts, "counts");
+        for (Map.Entry<AttemptTrigger, Integer> entry : counts.entrySet()) {
+            Counter counter = claimed.get(entry.getKey());
+            if (counter == null) {
+                throw new IllegalArgumentException(
+                        "outbox 행에 올 수 없는 종류입니다. 받은 값=" + entry.getKey());
+            }
+            int count = entry.getValue();
+            if (count < 0) {
+                throw new IllegalArgumentException(
+                        "집힌 수는 음수일 수 없습니다. " + entry.getKey() + "=" + count);
+            }
+            counter.increment(count);
         }
     }
 

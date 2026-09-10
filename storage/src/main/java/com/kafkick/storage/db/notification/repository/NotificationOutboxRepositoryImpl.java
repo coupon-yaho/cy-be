@@ -5,12 +5,16 @@ import java.time.Duration;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -48,6 +52,47 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     static final String COUNT_BACKLOG =
             "SELECT COUNT(*) FROM notification_outbox WHERE status IN ('PENDING','IN_PROGRESS')";
 
+    /**
+     * 한 종류의 due 명령을 몫만큼 잠근다.
+     *
+     * <p><b>패키지 가시성인 이유는 {@link #COUNT_BACKLOG} 와 같다</b> —
+     * {@code OutboxKindPlanContractTest} 가 <b>이 문자열 그대로</b> 실행계획을 잰다.
+     *
+     * <p>{@code `trigger`} 가 <b>맨 앞 술어</b>인 것이 인덱스 선택의 전부다.
+     * {@code ix_notification_outbox_kind (`trigger`, status, next_attempt_at, id)} 를
+     * 타야 due 백로그를 안 훑는다 — 안 타면 <b>백로그 크기에 비례해</b> 읽는다
+     * (실측 5,003 vs 2).
+     */
+    static final String SELECT_DUE_BY_KIND = """
+            SELECT id, next_attempt_at FROM notification_outbox
+             WHERE `trigger`=? AND status='PENDING'
+               AND next_attempt_at <= CURRENT_TIMESTAMP(6)
+             ORDER BY next_attempt_at, id
+             LIMIT ?
+               FOR UPDATE SKIP LOCKED
+            """;
+
+    /**
+     * 같은 종류를 <b>이어서</b> 잠근다 — 상대가 몫을 못 채워 자리가 남았을 때.
+     *
+     * <p><b>커서로 이어받지 않으면 이미 잠근 것을 다시 집는다.</b>
+     * {@code SKIP LOCKED} 는 <b>남이</b> 잠근 행만 건너뛴다 — 같은 트랜잭션이 방금
+     * 잠근 행은 그대로 보이므로, 커서 없이 한 번 더 부르면 앞 회차와 똑같은 앞머리가
+     * 나온다.
+     *
+     * <p>{@code (next_attempt_at, id)} 튜플 비교인 이유는 정렬 키가 그 둘이기 때문이다.
+     * {@code id} 만으로 이으면 <b>정렬 순서와 다른 축</b>이라 중간을 건너뛰거나 겹친다.
+     */
+    static final String SELECT_DUE_BY_KIND_AFTER = """
+            SELECT id, next_attempt_at FROM notification_outbox
+             WHERE `trigger`=? AND status='PENDING'
+               AND next_attempt_at <= CURRENT_TIMESTAMP(6)
+               AND (next_attempt_at, id) > (?, ?)
+             ORDER BY next_attempt_at, id
+             LIMIT ?
+               FOR UPDATE SKIP LOCKED
+            """;
+
     private final NotificationOutboxJpaRepository repository;
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate requiresNew;
@@ -72,6 +117,9 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      */
     private final NotificationOutboxMeter meter;
 
+    /** {@link #rotated()} 가 돌리는 회차 번호. 정확성이 아니라 공평함에만 쓰인다. */
+    private final AtomicLong claimRound = new AtomicLong();
+
     /**
      * @throws NullPointerException {@code backOff} 나 {@code meter} 가 {@code null} 일 때.
      *         <b>여기서 막는 이유</b> — 안 막으면 그 사실이 <b>lease 가 처음 만료되는
@@ -91,6 +139,13 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
         this.requiresNew.setPropagationBehavior(Propagation.REQUIRES_NEW.value());
         this.backOff = Objects.requireNonNull(backOff, "backOff");
         this.meter = Objects.requireNonNull(meter, "meter");
+        // 선점이 종류를 둘로 갈라 몫을 뗀다. 셋이 되는 날 여기서 기동이 실패해야
+        // 원인이 한 줄로 드러난다 — 선점 경로에서 터지면 릴레이가 산 채로 멈춘다.
+        List<AttemptTrigger> kinds = AttemptTrigger.outboxKinds();
+        if (kinds.size() != 2) {
+            throw new IllegalStateException(
+                    "선점은 종류가 둘일 때만 이 방식으로 몫을 나눕니다. 현재=" + kinds);
+        }
     }
 
     @Override
@@ -122,7 +177,9 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
         long leaseSeconds = durationSeconds(lease, true, "outbox lease");
         try {
             requiresNew.executeWithoutResult(ignored -> recoverExpiredClaims(leaseSeconds, max));
-            return requiresNew.execute(ignored -> claimPending(max));
+            List<NotificationOutboxClaim> claims = requiresNew.execute(ignored -> claimPending(max));
+            countClaimed(claims);
+            return claims;
         } catch (PessimisticLockingFailureException contention) {
             // SKIP LOCKED 가 대부분을 막지만 회수 경로는 여전히 기다린다. 이번 회차를 접는다.
             return List.of();
@@ -130,7 +187,46 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
     }
 
     /**
-     * <b>먼저 잠그고, 잠근 것만 선점 표시한다.</b>
+     * <b>종류마다 몫을 떼어 잠근다 — 먼저 잠그고, 잠근 것만 선점 표시한다.</b>
+     *
+     * <h2>왜 한 줄로 안 집나</h2>
+     *
+     * <p>한때 여기는 {@code ORDER BY next_attempt_at, id} 하나로 due 를 훑었다. 그러면
+     * <b>운영자가 방금 누른 재발송이 큐 맨 뒤에 선다</b> — {@code MANUAL} 행은
+     * {@code next_attempt_at = now} 라 이미 밀린 자동 건 <b>전부보다</b> 늦기 때문이다.
+     * 실측 — 한 회차에 64건({@code claimBatchSize})씩 뺄 때 {@code MANUAL} 1건이
+     * 잡히기까지:
+     *
+     * <pre>
+     *   due INITIAL     64      2 회차
+     *   due INITIAL    640     11 회차
+     *   due INITIAL  5,000     79 회차
+     * </pre>
+     *
+     * <p>⌈(N+1)/64⌉ 다 — {@code MANUAL} 은 줄의 <b>N+1 번째</b>다. (한때 ⌈N/64⌉ 로
+     * 적었는데, 셋 중 5,000 에서만 값이 같아 그 한 점을 보고 단정한 것이었다.)
+     * 사람이 누르는 기능인 만큼 그 대기가 곧 화면의 침묵이다.
+     *
+     * <h2>우선순위가 아니라 몫이다</h2>
+     *
+     * <p>⚠️ <b>{@code MANUAL} 을 무조건 앞세우면 안 된다.</b> 재처리가 몰리는 날 자동
+     * 발송이 굶는다. 기능명세가 요구하는 것은 <i>"각각 실행 기회 보장"</i> 이지
+     * 우선순위가 아니다. 그래서 <b>앞선 쪽에도 상한(절반)을 건다</b> — 그 상한이 곧
+     * 뒤쪽의 몫이라, 어느 쪽이 폭주해도 반대편이 매 회차 자리를 받는다.
+     *
+     * <p>남는 자리는 되돌려준다. 한쪽이 비었을 때 처리량이 깎이면 <b>굶는 것을 고치려다
+     * 느려지는</b> 것이라, 상대가 몫을 못 채운 만큼은 앞선 쪽이 이어서 가져간다.
+     *
+     * <p>질의가 하나에서 <b>둘, 남는 자리를 채우면 셋</b>으로 는다. 한 문장이 읽는
+     * 행은 자기 몫에 비례하고 <b>상대 종류의 적체에 안 붙는다</b> —
+     * {@code OutboxKindPlanContractTest} 가 그 축을 잰다. 그것이 유지되는 것은
+     * {@code ix_notification_outbox_kind} 덕이고, 그 인덱스가 왜 {@code `trigger`} 로
+     * 시작하는지는 마이그레이션에 적었다.
+     *
+     * <p>⚠️ <b>한 회차 전체의 비용은 안 쟀다.</b> 문장별 측정을 더해서 회차 비용이라고
+     * 적지 말 것 — 실제로 나가는 LIMIT 조합은 몫과 남은 자리에 따라 매번 다르다.
+     *
+     * <h2>잠그는 방식</h2>
      *
      * <p>한 문장으로 {@code UPDATE ... LIMIT n} 을 쓰면 갱신 대상을 찾는 동안 남이 잠근 행에서
      * 멈춘다. {@code SKIP LOCKED} 는 그 행을 <b>조용히 결과에서 빼므로</b> 워커가 서로를
@@ -146,13 +242,37 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
      * 확인하므로 전제가 지켜진다 — 그 가드가 이제 이 질의의 선행조건이기도 하다.
      */
     private List<NotificationOutboxClaim> claimPending(int max) {
-        List<Long> ids = jdbcTemplate.query("""
-                SELECT id FROM notification_outbox
-                 WHERE status='PENDING' AND next_attempt_at <= CURRENT_TIMESTAMP(6)
-                 ORDER BY next_attempt_at, id
-                 LIMIT ?
-                   FOR UPDATE SKIP LOCKED
-                """, (rs, row) -> rs.getLong("id"), max);
+        AttemptTrigger head = rotated();
+        AttemptTrigger tail = other(head);
+
+        // 앞선 쪽도 절반까지만 — 이 상한이 뒤쪽의 몫이다. max=1 이면 나눌 자리가 없어
+        // 1 이 되는데, 그때는 회차마다 뒤바뀌는 rotated() 가 대신 번갈아 준다.
+        // (claimBatch 가 max >= 1 을 이미 막으므로 이 값은 max 를 넘지 않는다.)
+        int reserve = Math.max(1, max / 2);
+
+        List<DueRow> claimed = new ArrayList<>(max);
+        claimed.addAll(lockDue(head, reserve, null));
+        int headCount = claimed.size();
+        claimed.addAll(lockDue(tail, max - headCount, null));
+
+        // 상대가 몫을 못 채워 남은 자리는 앞선 쪽이 마저 쓴다. 한쪽이 비었다고
+        // 처리량을 깎지 않기 위해서다.
+        //
+        // 앞선 쪽이 자기 상한을 꽉 채웠을 때만 이어 붙인다. 못 채웠다는 것은
+        // **그 순간 집을 수 있는 것을 다 집었다**는 뜻이라 한 번 더 물어봐야 헛돈다 —
+        // SKIP LOCKED 는 잠긴 행에서 멈추지 않고 LIMIT 을 채울 때까지 훑는다(실측:
+        // 표 20행 중 앞 10건이 잠긴 상태에서 LIMIT 5 가 11~15번째 5건을 돌려준다).
+        // 그래서 미달은 고갈이거나 남은 것이 전부 남의 손에 있는 상태이고, 둘 다
+        // 이어 물어봐야 빈손이다.
+        int spare = max - claimed.size();
+        if (spare > 0 && headCount == reserve) {
+            claimed.addAll(lockDue(head, spare, claimed.get(headCount - 1)));
+        }
+
+        List<Long> ids = new ArrayList<>(claimed.size());
+        for (DueRow row : claimed) {
+            ids.add(row.id());
+        }
         if (ids.isEmpty()) {
             return List.of();
         }
@@ -181,6 +301,87 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                         rs.getTimestamp("created_at").toInstant(),
                         rs.getInt("failure_count")),
                 ids.toArray());
+    }
+
+    /** 정렬 키를 통째로 들고 다닌다 — 이어받기 커서가 그 둘이라 {@code id} 만으로는 부족하다. */
+    private record DueRow(long id, Timestamp nextAttemptAt) { }
+
+    /**
+     * 한 종류의 due 명령을 {@code limit} 건까지 잠근다.
+     *
+     * <p>{@code after} 가 있으면 그 뒤부터 이어받는다({@link #SELECT_DUE_BY_KIND_AFTER}).
+     *
+     * <p>{@code limit} 이 0 이면 <b>질의를 안 보낸다.</b> {@code LIMIT 0} 은 오류 없이
+     * 빈 결과를 주지만 왕복은 그대로 쓴다 — 100ms 주기로 도는 경로다.
+     */
+    private List<DueRow> lockDue(AttemptTrigger kind, int limit, DueRow after) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        RowMapper<DueRow> mapper =
+                (rs, row) -> new DueRow(rs.getLong("id"), rs.getTimestamp("next_attempt_at"));
+        return after == null
+                ? jdbcTemplate.query(SELECT_DUE_BY_KIND, mapper, kind.name(), limit)
+                : jdbcTemplate.query(SELECT_DUE_BY_KIND_AFTER, mapper,
+                        kind.name(), after.nextAttemptAt(), after.id(), limit);
+    }
+
+    /**
+     * 이번 회차에 <b>먼저</b> 몫을 떼어 갈 종류. 회차마다 번갈아 돈다.
+     *
+     * <p><b>{@code max=1} 때문에 있다.</b> 백프레셔가 배치를 1 로 자르면 한 자리를
+     * 나눌 수가 없어 몫이 무의미해진다 — 순서가 고정이면 그 회차들 동안 뒤쪽은
+     * <b>영영</b> 안 잡힌다. 번갈아 돌면 그 경우에도 둘 다 기회를 받는다.
+     *
+     * <p>{@code max >= 2} 에서는 이 회전이 <b>정확성에 필요하지 않다</b> — 몫이 이미
+     * 양쪽을 보장한다. 순서만 흔들 뿐이다.
+     *
+     * <p>프로세스가 여럿이면 각자 돈다. 맞춰야 할 이유가 없다: 굶지 않는다는 성질은
+     * 회전이 아니라 몫에서 나오고, 맞추려면 공유 상태가 하나 더 생긴다.
+     */
+    private AttemptTrigger rotated() {
+        List<AttemptTrigger> kinds = AttemptTrigger.outboxKinds();
+        return kinds.get((int) Math.floorMod(claimRound.getAndIncrement(), kinds.size()));
+    }
+
+    /**
+     * 나머지 한 종류.
+     *
+     * <p>종류가 둘이라는 전제 위에 서 있다. 그 전제는 <b>생성자가 기동 시점에</b>
+     * 확인하므로 여기서는 다시 안 본다 — 100ms 마다 도는 경로에서 컴파일 타임
+     * 불변식을 검사하면, 틀렸을 때 <b>릴레이가 산 채로 아무것도 안 집으면서</b>
+     * 스택트레이스만 찍는다(스케줄러가 예외를 삼키고 재스케줄한다).
+     */
+    private static AttemptTrigger other(AttemptTrigger kind) {
+        List<AttemptTrigger> kinds = AttemptTrigger.outboxKinds();
+        return kinds.get(0) == kind ? kinds.get(1) : kinds.get(0);
+    }
+
+    /**
+     * 종류별로 집힌 수를 센다.
+     *
+     * <p><b>여기가 이미 커밋 뒤다.</b> 선점은 {@code REQUIRES_NEW} 라 부르는 쪽으로
+     * 돌아온 시점에 이미 커밋돼 있다 — 그래서 {@link #afterCommit(Runnable)} 을 쓰지
+     * 않는다.
+     *
+     * <p>⚠️ <b>한때 여기서 동기화를 걸었다가 반대로 틀렸다.</b> 이 자리에서 살아 있는
+     * 동기화는 선점 트랜잭션이 아니라 <b>바깥</b> 트랜잭션의 것이다({@code REQUIRES_NEW}
+     * 가 바깥을 멈춰 뒀다 되살린다). 그러면 바깥이 롤백될 때 행은 {@code IN_PROGRESS}
+     * 로 커밋된 채 <b>숫자만 안 오른다</b> — 막겠다던 어긋남이 정확히 반대 방향으로 난다.
+     *
+     * <p><b>안 집힌 종류를 0 으로 부르지 않는다.</b> 그렇게 해도 아무 일이 안 일어나기
+     * 때문이다 — 시계열을 존재하게 만드는 것은 {@link NotificationOutboxMeter} 생성자의
+     * 사전 등록이고, {@code increment(0)} 은 그 위에 0 을 더할 뿐이다.
+     */
+    private void countClaimed(List<NotificationOutboxClaim> claims) {
+        if (claims.isEmpty()) {
+            return;
+        }
+        Map<AttemptTrigger, Integer> counts = new EnumMap<>(AttemptTrigger.class);
+        for (NotificationOutboxClaim claim : claims) {
+            counts.merge(claim.trigger(), 1, Integer::sum);
+        }
+        meter.claimed(counts);
     }
 
     /**

@@ -180,6 +180,23 @@ public final class DomainMeterNames {
     public static final String OUTBOX_BACKLOG = "app.outbox.backlog";
 
     /**
+     * 한 회차에 <b>실제로 집힌</b> 발행 명령 수. {@link #TAG_TRIGGER} 로 나뉜다.
+     *
+     * <p><b>왜 종류로 나눠 세나.</b> 선점은 종류마다 몫을 떼어 굶는 것을 막는데,
+     * <b>그 몫이 정말 쓰였는지는 합계로는 안 보인다</b> — 운영자가 재발송을 눌렀는데
+     * {@code trigger=MANUAL} 쪽이 계속 0 이면 그 경로가 안 도는 것이다.
+     *
+     * <p><b>이 값만으로 "굶었다" 를 판정하지는 못한다.</b> 0 에는 두 가지 뜻이 있다 —
+     * 집을 것이 없었거나, 못 집었거나. 가르려면 재발송 접수 쪽
+     * ({@code notification_resend_audits})과 <b>함께</b> 봐야 한다.
+     *
+     * <p>선점 트랜잭션이 <b>커밋된 뒤에</b> 센다 — 롤백되면 아무것도 안 집힌 것이다.
+     * 안 집힌 종류는 부르지 않는다. 시계열은 기동 때 미리 만들어져 있어서 0 을 더해
+     * 봐야 달라지는 것이 없다.
+     */
+    public static final String OUTBOX_CLAIMED = "app.outbox.claimed";
+
+    /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.
      *
      * <p>0 이 아니면 화면의 attempt 수치가 이미 비어 있다는 뜻이다. 다만 이 값으로 TPS·성공률을
@@ -337,6 +354,14 @@ public final class DomainMeterNames {
 
     public static final String PATH_CONSISTENCY = "consistency";
     public static final String PATH_STOCK = "stock";
+
+    /**
+     * 발행 명령을 만든 계기. {@link #OUTBOX_CLAIMED} 를 가른다.
+     *
+     * <p>값은 {@code initial · manual} 둘로 닫혀 있다 — outbox 행의 CHECK 제약이 그
+     * 둘만 허용한다. {@code AUTO} 는 Consumer 내부 재시도라 행이 아니라 이 축에 없다.
+     */
+    public static final String TAG_TRIGGER = "trigger";
 
     private DomainMeterNames() {
     }

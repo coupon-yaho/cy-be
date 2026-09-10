@@ -142,8 +142,9 @@ class NotificationsMigrationTest {
         assertThat(query("SELECT COUNT(*) FROM information_schema.statistics"
                 + " WHERE table_schema=DATABASE() AND table_name='notification_outbox'"
                 + " AND index_name IN ('ix_notification_outbox_pending',"
-                + " 'ix_notification_outbox_expired','uk_notification_outbox_claim_token')"))
-                .isEqualTo(7);
+                + " 'ix_notification_outbox_expired','uk_notification_outbox_claim_token',"
+                + " 'ix_notification_outbox_kind')"))
+                .isEqualTo(11);
         insertNotification(1, "PENDING", "NULL", "NULL");
         execute("INSERT INTO notification_outbox"
                 + " (notification_id,attempt_seq,`trigger`,status,next_attempt_at,created_at)"
@@ -154,10 +155,17 @@ class NotificationsMigrationTest {
                 + " (1,2,'INITIAL','IN_PROGRESS',0,NOW(6),"
                 + " TIMESTAMPADD(SECOND,-10,NOW(6)),'00000000-0000-4000-8000-000000000091',NOW(6))");
 
-        assertThat(queryString("EXPLAIN SELECT id FROM notification_outbox"
-                + " WHERE status='PENDING' AND next_attempt_at<=CURRENT_TIMESTAMP(6)"
-                + " ORDER BY next_attempt_at,id LIMIT 1", "key"))
+        // **기존 질의의 인덱스 선택이 안 바뀌어야 한다.** 새 인덱스를 `status` 로
+        // 시작하게 만들면 옵티마이저가 이것들까지 가져간다(실측: 읽는 행이 64 → 5,002).
+        // `trigger` 를 선두에 둔 것이 정확히 그것을 막는다 — 선두 컬럼이 없는 질의는
+        // 이 인덱스를 후보로 삼지 못한다.
+        assertThat(queryString("EXPLAIN SELECT COUNT(*) FROM notification_outbox"
+                + " WHERE status IN ('PENDING','IN_PROGRESS')", "key"))
                 .isEqualTo("ix_notification_outbox_pending");
+        // ⚠️ 종류별 선점이 **어느 인덱스를 타는지는 여기서 안 본다.** 이 픽스처는 두
+        // 행뿐이라 옵티마이저가 무엇을 골라도 똑같이 싸고, 실제로 기존 인덱스를
+        // 고른다. 이름은 비용을 말하지 않는다 — 그 축은 `OutboxKindPlanContractTest`
+        // 가 실물 크기 픽스처에서 읽은 행 수로 잰다.
         assertThat(queryString("EXPLAIN SELECT id,failure_count FROM notification_outbox"
                 + " WHERE status='IN_PROGRESS'"
                 + " AND claimed_at<TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6))"
