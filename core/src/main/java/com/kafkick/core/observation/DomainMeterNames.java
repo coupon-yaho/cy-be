@@ -122,8 +122,13 @@ public final class DomainMeterNames {
      * outbox 명령이 <b>다시 집히도록 되돌려진</b> 횟수. {@link #TAG_REASON} 으로 나뉜다.
      *
      * <p>값은 <b>실제로 나오는 것만</b> 닫아 둔다 — {@code publish_failed}(발행이 던졌다) ·
+     * {@code record_failed}(<b>발행은 됐는데</b> 기록이 실패했다) ·
      * {@code notification_missing}(발행 대상이 사라졌다) · {@code lease_expired}(잡고 있던
-     * 워커가 lease 안에 못 끝냈다). 앞의 둘은 릴레이가, 마지막은 저장소 어댑터가 센다.
+     * 워커가 lease 안에 못 끝냈다). 앞의 셋은 릴레이가, 마지막은 저장소 어댑터가 센다.
+     *
+     * <p>⚠️ <b>{@code record_failed} 만 뜻이 반대다.</b> 나머지는 "안 나갔다" 인데
+     * 그쪽은 <b>이미 나간</b> 건이다. 되돌려 다시 집는 것은 재발행이고, 소비자가
+     * 흡수한다. 한 덩어리로 뭉쳐 있던 것을 CY-956 이 갈랐다.
      *
      * <p><b>이름이 {@code app.notify.*} 가 아니라 {@code app.outbox.*} 인 이유</b> —
      * 세는 대상이 <b>알림</b>이 아니라 <b>발행 명령</b>이다. 한 알림이 여러 번 되돌려질 수
@@ -143,17 +148,26 @@ public final class DomainMeterNames {
      * <b>얼마를 기다리라고 적었는지</b>다. 그래서 {@code _sum / _count} 를 지연으로 읽으면
      * 안 된다 — 그 값은 "평균 계획 대기" 이지 처리 지연이 아니다.
      *
-     * <p><b>{@link #TAG_REASON} 을 붙이는 대가</b> — 값 3종 × 버킷이라 시계열이 3배다.
+     * <p><b>{@link #TAG_REASON} 을 붙이는 대가</b> — 값 4종 × 버킷이라 시계열이 4배다.
      * 그래도 붙이는 이유는, 뭉침이 가장 잘 나는 것이 {@code lease_expired} 인데
-     * 섞어 놓으면 <b>다른 둘이 그 봉우리를 덮어 버리기 때문</b>이다. 그것을 보려고 만든
+     * 섞어 놓으면 <b>다른 셋이 그 봉우리를 덮어 버리기 때문</b>이다. 그것을 보려고 만든
      * 지표가 그것을 못 보게 된다.
      */
     public static final String OUTBOX_RETRY_DELAY = "app.outbox.retry.delay";
 
     /**
      * 재시도 상한(10회)을 넘겨 <b>종착</b>한 outbox <b>명령</b> 수.
-     * {@link #TAG_REASON} 으로 나뉘고, 값은 {@link #OUTBOX_RETRY} 와 <b>같은 셋</b>이다 —
+     * {@link #TAG_REASON} 으로 나뉘고, 값은 {@link #OUTBOX_RETRY} 와 <b>같은 넷</b>이다 —
      * 마지막 실패의 사유가 그대로 붙는다.
+     *
+     * <p>⚠️ <b>{@code record_failed} 로 종착한 건은 "안 나간" 건이 아니다.</b>
+     * <b>마지막 시도</b>의 발행이 성공했고 기록만 실패한 것이라 그 알림은 나갔다 —
+     * 처방이 브로커가 아니라 DB 다.
+     *
+     * <p>다만 <b>이 라벨은 마지막 실패만 말한다.</b> {@code failure_count} 는 사유와
+     * 무관하게 누적되므로({@code markFailed} 가 {@code reason} 을 안 본다) 앞선 아홉 번은
+     * 다른 사유였을 수 있다. 이력은 {@link #OUTBOX_RETRY} 를 사유별로 갈라 봐야 나온다.
+     * {@code OutboxCommandsDead} 알림 본문이 그 갈래를 따로 안내한다.
      *
      * <p><b>세는 단위가 명령이지 알림이 아니다.</b> 종착한 알림을 사람이 다시 보내면
      * 새 명령이 생기므로, 이 값이 곧 "영영 안 간 알림 수" 는 아니다 — 그렇게 읽으면
@@ -195,6 +209,31 @@ public final class DomainMeterNames {
      * 봐야 달라지는 것이 없다.
      */
     public static final String OUTBOX_CLAIMED = "app.outbox.claimed";
+
+    /**
+     * 발행을 마치고 기록하려는데 <b>선점이 이미 회수돼 있던</b> 횟수. 태그 없이 하나다.
+     *
+     * <p><b>이 값이 0 이 아니면 우리가 발행한 뒤에 선점을 잃었다.</b> 대개 그 명령은
+     * 두 번 나간다 — 회수한 쪽이 다시 발행하기 때문이다.
+     *
+     * <p>⚠️ <b>예외가 하나 있다.</b> 회수 시점의 {@code failure_count} 가 이미 9 면
+     * 회수가 그 행을 {@code PENDING} 이 아니라 <b>{@code DEAD} 로</b> 보낸다
+     * ({@code DEAD_AFTER_FAILURES = 10}). 그러면 아무도 다시 안 집으므로 <b>한 번만
+     * 나갔고</b>, 실제로 나간 건이 <i>"사람 손이 필요한 건수"</i> 에 남는다. 소비자가 멱등이라 사고로는 안 번지지만
+     * (상태·계보 검사와 멱등 키가 세 겹으로 막는다) <b>두 배로 돌고 있다는 사실은 이
+     * 값으로만 보인다.</b>
+     *
+     * <p><b>읽는 법 — 이것은 lease 설정의 지표다.</b> 꾸준히 오르면 lease 가 실제 발행
+     * 시간보다 짧다는 뜻이고, 처방은 재시도가 아니라 <b>lease 를 늘리거나 파도 깊이를
+     * 줄이는 것</b>이다 — 파도 깊이는 {@code ceil(maxInFlight / workerCount)} 이고
+     * <b>{@code claimBatchSize} 가 아니다</b>(릴레이 생성자가 그 식으로 검사한다).
+     * 그 기동 검사는 <b>예산이 맞는지</b>만 보고 실제로 넘쳤는지는 못 본다 — 그 자리를
+     * 이 값이 채운다.
+     *
+     * <p>{@link #OUTBOX_RETRY} 와 <b>다른 축이다.</b> 그쪽은 되돌려 다시 집는 것이고
+     * 이쪽은 <b>되돌리지도 못한</b> 것이다 — 그 행은 이미 남의 것이다.
+     */
+    public static final String OUTBOX_FENCE_LOST = "app.outbox.fence.lost";
 
     /**
      * 발급 경로에서 <b>삼킨</b> attempt 이벤트 발행 실패 수. {@link #TAG_REASON} 으로만 나뉜다.

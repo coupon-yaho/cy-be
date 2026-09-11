@@ -53,6 +53,9 @@ public class NotificationOutboxMeter {
     private final Map<AttemptTrigger, Counter> claimed =
             new EnumMap<>(AttemptTrigger.class);
 
+    /** 펜싱을 진 횟수. 태그가 없다 — 이유가 하나뿐이다(선점이 이미 회수됐다). */
+    private final Counter fenceLost;
+
     /**
      * <b>모든 사유의 시계열을 미리 만든다.</b> 실패가 나야 생기게 두면 대시보드가
      * <b>0 과 "지표 없음" 을 구분하지 못한다</b> — {@code rate()} 가 둘 다 빈칸으로 그린다.
@@ -73,6 +76,8 @@ public class NotificationOutboxMeter {
                     .tag(DomainMeterNames.TAG_REASON, reason.tag())
                     .register(registry));
         }
+        this.fenceLost = Counter.builder(DomainMeterNames.OUTBOX_FENCE_LOST)
+                .register(registry);
         for (AttemptTrigger kind : AttemptTrigger.outboxKinds()) {
             claimed.put(kind, Counter.builder(DomainMeterNames.OUTBOX_CLAIMED)
                     .tag(DomainMeterNames.TAG_TRIGGER, kind.name().toLowerCase(Locale.ROOT))
@@ -110,6 +115,21 @@ public class NotificationOutboxMeter {
             }
             counter.increment(count);
         }
+    }
+
+    /**
+     * <b>발행을 마치고 기록하려는데 선점이 이미 회수돼 있었다.</b>
+     *
+     * <p>{@code markPublished} 가 0행을 돌려준 경우다 — 그 질의가 {@code claim_token} 을
+     * 물으므로 0행은 <b>펜스가 무너졌다</b>는 뜻이다.
+     *
+     * <p><b>여기서 세는 이유</b> — 이 클래스 javadoc 이 <i>"결과를 아는 곳이 여기뿐"</i>
+     * 이라고 적은 그 규칙 그대로다. 갱신이 먹었는지는 어댑터만 알고, 그 값이 바로
+     * {@code markPublished} 안의 {@code updated} 다. 한때 릴레이에서 세려 했는데
+     * <b>규칙이 지정한 자리에 같은 정보가 이미 있었다.</b>
+     */
+    public void fenceLost() {
+        fenceLost.increment();
     }
 
     /**
