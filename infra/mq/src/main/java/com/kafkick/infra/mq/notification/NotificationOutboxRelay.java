@@ -66,7 +66,6 @@ public class NotificationOutboxRelay implements SmartLifecycle {
     private final NotificationRepository notifications;
     private final NotificationRequestedEventPublisher publisher;
 
-
     private final Duration lease;
     private final int claimBatchSize;
     private final FullJitterBackOff backOff;
@@ -425,29 +424,53 @@ public class NotificationOutboxRelay implements SmartLifecycle {
     }
 
     /**
+     * <p><b>반환값이 없다.</b> 한때 {@code boolean} 을 돌려줬는데 <b>아무도 안 읽었다</b> —
+     * {@code dispatch} 는 넘긴 건수만 세고 발행 성공 여부를 안 본다. 갈래가 넷으로
+     * 늘면서 뒤집어도 안 깨지는 반환점이 넷이 됐다.
+     *
      * @param notification 배치 조회에서 온 알림. <b>{@code null} 이면 그 조회 결과에 없었다는
      *         뜻</b>이다 — 선점 시점에 이미 없었거나 선점과 조회 사이에 사라진 것이라
      *         {@code NOTIFICATION_MISSING} 으로 되돌린다. <b>조회 뒤에 지워진 것은 여기서
      *         못 본다</b>(그 창은 아래 발행까지 열려 있고 없앨 수 없다)
      */
-    private boolean publish(NotificationOutboxClaim claim, Notification notification) {
+    private void publish(NotificationOutboxClaim claim, Notification notification) {
         if (notification == null) {
             // 발행 대상이 사라졌다. 지연은 발행 실패와 같은 계산을 쓴다 — 한쪽만
             // 지터를 주면 나머지가 다시 뭉친다.
             returnToPending(claim, OutboxRetryReason.NOTIFICATION_MISSING);
-            return false;
+            return;
         }
 
         NotificationRequestedEvent event = new NotificationRequestedEvent(
                 notification.id(), notification.memberId(), notification.couponId(),
                 claim.attemptSeq(), claim.trigger(), claim.requestedAt());
+
+        // ① 외부로 내보낸다. 여기서 던지면 **안 나갔다**.
         try {
             publisher.publish(event);
-            outboxes.markPublished(claim.outboxId(), claim.claimToken(), clock.instant());
-            return true;
         } catch (RuntimeException failure) {
             returnToPending(claim, OutboxRetryReason.PUBLISH_FAILED);
-            return false;
+            return;
+        }
+
+        // ② 나갔다는 사실을 적는다. **여기서 실패한 것은 발행 실패가 아니다.**
+        //    한 try 로 ①②를 함께 감싸면 발행이 성공한 건까지 publish_failed 로 세어,
+        //    운영자가 이름을 보고 카프카를 뒤지는데 문제는 DB 가 된다.
+        try {
+            if (!outboxes.markPublished(claim.outboxId(), claim.claimToken(), clock.instant())) {
+                // 0행 = claim_token 이 안 맞는다 = lease 가 만료돼 남이 가져갔다.
+                //
+                // **되돌리지 않는다.** 그 행은 이미 우리 것이 아니라서 markFailed 도
+                // 같은 토큰 검사에서 0행이 된다 — 불러 봐야 아무 일도 안 일어나고
+                // 세어지지도 않는다.
+                //
+                // **세는 것은 어댑터가 한다.** 갱신이 먹었는지는 그쪽만 알고, 그 값이
+                // 바로 markPublished 안의 updated 다 — 규칙이 지정한 자리에 같은
+                // 정보가 이미 있다.
+                return;
+            }
+        } catch (RuntimeException failure) {
+            returnToPending(claim, OutboxRetryReason.RECORD_FAILED);
         }
     }
 }
