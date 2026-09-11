@@ -160,8 +160,13 @@ public final class DomainMeterNames {
      * {@link #TAG_REASON} 으로 나뉘고, 값은 {@link #OUTBOX_RETRY} 와 <b>같은 넷</b>이다 —
      * 마지막 실패의 사유가 그대로 붙는다.
      *
-     * <p>⚠️ <b>{@code record_failed} 로 종착한 건은 "안 나간" 건이 아니다.</b> 발행은
-     * 열 번 다 성공했고 기록만 실패했다 — 처방이 브로커가 아니라 DB 다.
+     * <p>⚠️ <b>{@code record_failed} 로 종착한 건은 "안 나간" 건이 아니다.</b>
+     * <b>마지막 시도</b>의 발행이 성공했고 기록만 실패한 것이라 그 알림은 나갔다 —
+     * 처방이 브로커가 아니라 DB 다.
+     *
+     * <p>다만 <b>이 라벨은 마지막 실패만 말한다.</b> {@code failure_count} 는 사유와
+     * 무관하게 누적되므로({@code markFailed} 가 {@code reason} 을 안 본다) 앞선 아홉 번은
+     * 다른 사유였을 수 있다. 이력은 {@link #OUTBOX_RETRY} 를 사유별로 갈라 봐야 나온다.
      * {@code OutboxCommandsDead} 알림 본문이 그 갈래를 따로 안내한다.
      *
      * <p><b>세는 단위가 명령이지 알림이 아니다.</b> 종착한 알림을 사람이 다시 보내면

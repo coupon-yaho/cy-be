@@ -126,7 +126,8 @@ class NotificationOutboxRelayTest {
      * {@code PUBLISH_FAILED} 가 붙었고, 지표는 <b>성공한 발행</b>을 발행 실패로 셌다 —
      * 운영자가 그 이름을 보고 카프카를 뒤지는데 문제는 DB 다. 더 나쁜 것은
      * {@code failure_count} 다: 열 번이면 그 명령이 <i>"사람 손이 필요한 건수"</i> 에
-     * 오르는데 <b>발행은 열 번 다 됐다.</b>
+     * 오르는데 <b>그 알림은 나갔다</b>(열 번이 다 이 사유라는 뜻은 아니다 —
+     * {@code failure_count} 는 사유와 무관하게 누적된다).
      */
     @Test
     void aFailedRecordIsNotAFailedPublish() {

@@ -27,9 +27,12 @@ groups:
       # publish_failed(브로커) · notification_missing(대상 소실) · lease_expired(워커가 못 끝냄)
       # · record_failed(발행은 됐는데 기록이 실패).
       #
-      # ⚠️ **record_failed 만 뜻이 반대다.** 그쪽은 발행이 **성공한** 건이라
-      # "안 나갔다" 가 아니다 — 열 번 다 나갔고 기록만 열 번 실패한 것이다.
-      # 그래서 처방도 다르다(브로커가 아니라 DB). 본문에서 그 갈래를 따로 안내한다.
+      # ⚠️ **record_failed 만 뜻이 반대다.** 그쪽은 **마지막 시도의 발행이 성공한**
+      # 건이라 "안 나갔다" 가 아니다 — 그 알림은 나갔다.
+      #
+      # 다만 "열 번 다 나갔다" 는 아니다. failure_count 는 **사유와 무관하게** 누적되므로
+      # (markFailed 가 reason 을 안 본다) 앞선 아홉 번은 publish_failed 였을 수 있다.
+      # reason 은 **마지막 실패**의 사유다. 그래서 처방이 다르다(브로커가 아니라 DB).
       - alert: OutboxCommandsDead
         expr: increase(app_outbox_dead_total[10m]) > 0
         for: 0m
@@ -46,9 +49,12 @@ groups:
             notification_missing 이면 발행 대상 알림 행이 사라진 것이라 그 원인이 먼저입니다.
             lease_expired 면 워커가 lease 안에 못 끝낸 것이니 app_notify_relay_inflight 와
             app_outbox_backlog 를 함께 봅니다 — 상한에 붙어 있으면 워커가 모자랍니다.
-            record_failed 는 반대입니다 — 발행은 열 번 다 성공했고 기록만 실패했습니다.
-            알림 자체는 나갔을 가능성이 높으니 브로커가 아니라 DB 를 봅니다(쓰기 실패·잠금·
-            커넥션). 그 건의 재발송은 같은 알림을 한 번 더 보내는 일이 됩니다.
+            record_failed 는 반대입니다 — 마지막 시도에서 발행은 성공했고 기록만 실패했습니다.
+            그 알림은 나갔으므로 브로커가 아니라 DB 를 봅니다(쓰기 실패·잠금·커넥션).
+            앞선 시도들의 사유는 이 라벨이 말하지 않습니다 — failure_count 는 사유와 무관하게
+            누적되고 reason 은 마지막 실패의 것입니다. app_outbox_retry_total 을 reason 별로
+            갈라 보면 그 이력이 나옵니다.
+            그 건의 재발송은 같은 알림을 한 번 더 보내는 일이 됩니다.
             종착한 건은 notification_outbox 의 DEAD 행이고, 재발송은 알림 재발송 API 가 합니다.
 
       # 밀리는 것. 백로그가 계속 늘면 릴레이가 유입을 못 따라간다는 뜻이다.
