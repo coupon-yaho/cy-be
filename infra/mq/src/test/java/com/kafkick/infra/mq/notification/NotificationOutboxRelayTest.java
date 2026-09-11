@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -115,6 +117,87 @@ class NotificationOutboxRelayTest {
 
         assertThat(capturedRetryDelay())
                 .isBetween(Duration.ZERO, BASE.multipliedBy(2));
+    }
+
+    /**
+     * <b>발행은 성공했는데 기록이 실패한 것은 발행 실패가 아니다.</b>
+     *
+     * <p>한때 {@code try} 하나가 발행과 기록을 함께 감쌌다. 그래서 이 경우에도
+     * {@code PUBLISH_FAILED} 가 붙었고, 지표는 <b>성공한 발행</b>을 발행 실패로 셌다 —
+     * 운영자가 그 이름을 보고 카프카를 뒤지는데 문제는 DB 다. 더 나쁜 것은
+     * {@code failure_count} 다: 열 번이면 그 명령이 <i>"사람 손이 필요한 건수"</i> 에
+     * 오르는데 <b>발행은 열 번 다 됐다.</b>
+     */
+    @Test
+    void aFailedRecordIsNotAFailedPublish() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
+        org.mockito.Mockito.doThrow(new IllegalStateException("db down"))
+                .when(outboxes).markPublished(anyLong(), anyString(), any());
+
+        relay.poll();
+
+        org.mockito.Mockito.verify(publisher).publish(any());
+        assertThat(capturedReason())
+                .as("발행은 나갔다. 그것을 publish_failed 로 세면 원인을 엉뚱한 데서 찾는다")
+                .isEqualTo(OutboxRetryReason.RECORD_FAILED);
+    }
+
+    /**
+     * <b>펜싱을 지면 되돌리지 않고 <i>센다</i>.</b>
+     *
+     * <p>{@code markPublished} 가 {@code false} 를 주는 것은 {@code claim_token} 이
+     * 안 맞는다는 뜻 — lease 가 만료돼 남이 가져갔다. 그 행은 이미 우리 것이 아니라
+     * {@code markFailed} 를 불러 봐야 <b>같은 토큰 검사에서 0행</b>이라 아무 일도
+     * 안 일어난다. 그래서 되돌리지 않는다.
+     *
+     * <p><b>세는 것은 어댑터가 한다.</b> 갱신이 먹었는지는 그쪽만 알기 때문이다 —
+     * 그 축은 {@code NotificationOutboxFenceLostTest} 가 진짜 DB 로 잰다. 여기서는
+     * 릴레이의 몫, 즉 <b>되돌리지 않는다</b> 만 본다.
+     */
+    @Test
+    void aLostFenceIsNotReturnedToPending() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
+        when(outboxes.markPublished(anyLong(), anyString(), any())).thenReturn(false);
+
+        relay.poll();
+
+        org.mockito.Mockito.verify(publisher).publish(any());
+        verify(outboxes, never()).markFailed(anyLong(), anyString(), any(), any());
+    }
+
+    /** 발행 자체가 던진 경우는 그대로 {@code PUBLISH_FAILED} 다 — 갈랐다고 뭉개지 않는다. */
+    @Test
+    void aThrowingPublishIsStillAPublishFailure() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
+        org.mockito.Mockito.doThrow(new IllegalStateException("broker unavailable"))
+                .when(publisher).publish(any());
+
+        relay.poll();
+
+        verify(outboxes, never()).markPublished(anyLong(), anyString(), any());
+        assertThat(capturedReason()).isEqualTo(OutboxRetryReason.PUBLISH_FAILED);
+    }
+
+    /** 정상 경로에서는 아무것도 안 되돌린다. */
+    @Test
+    void aWonFenceReturnsNothingToPending() {
+        when(outboxes.claimBatch(LEASE, BATCH)).thenReturn(List.of(claim(0)));
+        when(notifications.findAllByIdIn(List.of(41L))).thenReturn(List.of(notification()));
+        when(outboxes.markPublished(anyLong(), anyString(), any())).thenReturn(true);
+
+        relay.poll();
+
+        verify(outboxes, never()).markFailed(anyLong(), anyString(), any(), any());
+    }
+
+    private OutboxRetryReason capturedReason() {
+        org.mockito.ArgumentCaptor<OutboxRetryReason> reason =
+                org.mockito.ArgumentCaptor.forClass(OutboxRetryReason.class);
+        verify(outboxes).markFailed(anyLong(), anyString(), any(), reason.capture());
+        return reason.getValue();
     }
 
     /** 발행 대상이 사라진 경로도 같은 지연을 쓴다. 한쪽만 지터를 주면 나머지가 다시 뭉친다. */

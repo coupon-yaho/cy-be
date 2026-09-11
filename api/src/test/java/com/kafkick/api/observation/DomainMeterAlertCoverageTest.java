@@ -104,7 +104,7 @@ class DomainMeterAlertCoverageTest {
                 "이 값 하나로는 한가한 것과 막힌 것이 안 갈린다고 javadoc 이 적어 뒀다 — "
                         + "백로그와 함께 봐야 하고, 알림은 OutboxBacklogGrowing 이 진다");
         DELIBERATELY_UNALERTED.put("app.outbox.retry",
-                "되돌려 다시 집는 것은 정상 경로다(발행 실패·대상 소실·lease 만료). "
+                "되돌려 다시 집는 것은 정상 경로다(발행 실패·기록 실패·대상 소실·lease 만료). "
                         + "사고는 재시도 상한을 넘겨 종착할 때이고 OutboxCommandsDead 가 진다");
         DELIBERATELY_UNALERTED.put("app.outbox.claimed",
                 "종류별로 집힌 수다. 0 에는 '집을 것이 없었다' 와 '못 집었다' 가 섞여 있어 "
@@ -112,6 +112,13 @@ class DomainMeterAlertCoverageTest {
                         + "게다가 굶지 않는다는 성질은 선점의 몫이 구조로 보장하고 "
                         + "NotificationOutboxQuotaTest 가 그것을 잡는다. 이 값은 사후에 "
                         + "섞임을 확인하는 용도이고, 처리량 사고는 OutboxBacklogGrowing 이 진다");
+        DELIBERATELY_UNALERTED.put("app.outbox.fence.lost",
+                "0 이 아니면 그 명령이 두 번 나갔다는 뜻이라 울리고 싶지만 **임계를 안 쟀다** — "
+                        + "한 건도 용납 못 하는지(>0), 아니면 백프레셔가 몰릴 때 몇 건은 "
+                        + "정상인지 모른다. 소비자가 멱등이라(상태·계보·멱등 키 세 겹) "
+                        + "사고로 안 번지는 것은 실측으로 확인했다. 값이 실제로 오르기 "
+                        + "시작하면 분포를 보고 정한다 — 안 잰 임계로 만든 알림은 "
+                        + "'할 일이 없는 페이지' 가 된다");
     }
 
     @Test

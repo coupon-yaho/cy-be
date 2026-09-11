@@ -512,6 +512,11 @@ public class NotificationOutboxRepositoryImpl implements NotificationOutboxRepos
                    SET status='PUBLISHED', published_at=?, claimed_at=NULL, claim_token=NULL
                  WHERE id=? AND status='IN_PROGRESS' AND claim_token=?
                 """, Timestamp.from(publishedAt), outboxId, claimToken) == 1;
+        if (!updated) {
+            // 0행 = claim_token 이 안 맞는다 = lease 가 만료돼 남이 가져갔다.
+            // **부르는 쪽은 이미 발행했다.** 그 사실이 남는 자리가 여기뿐이다.
+            afterCommit(meter::fenceLost);
+        }
         return updated;
     }
 
