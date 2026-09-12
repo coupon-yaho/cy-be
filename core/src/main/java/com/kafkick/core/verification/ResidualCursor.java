@@ -42,6 +42,20 @@ public record ResidualCursor(FindingType type, String targetKey) {
      */
     private static final char UNIT_SEPARATOR = '\u001F';
 
+    /**
+     * 토큰 길이 상한. <b>형제에서 베낀 256 이 아니라 이 커서에서 유도한 값이다.</b>
+     *
+     * <p>싣는 것은 {@code 유형 이름 + 구분자 + 대상 키} 뿐이고 둘 다 상한이 있다 —
+     * 가장 긴 {@code FindingType} 은 {@code ILLEGAL_TRANSITION}(18자),
+     * 대상 키는 {@link TargetKey#MAX_LENGTH}(64자)다. 최악 83바이트이고 그 Base64URL
+     * 이 <b>111자</b>다(실측). 128 은 그 위로 한 자릿수 여유를 둔 자리다.
+     *
+     * <p><b>왜 상한이 필요한가</b> — 없으면 임의 길이 문자열이 그대로
+     * {@code Base64.decode} 로 간다. 형제 코덱 넷이 모두 상한을 거는 이유이고,
+     * 여기만 안 걸 이유가 없다.
+     */
+    private static final int MAX_TOKEN_LENGTH = 128;
+
     /** 방금 돌려준 마지막 줄에서 다음 커서를 만든다. */
     public static ResidualCursor after(ResidualTarget last) {
         Objects.requireNonNull(last, "last");
@@ -86,19 +100,35 @@ public record ResidualCursor(FindingType type, String targetKey) {
      * 토큰은 바깥에서 온 값이다 — CR/LF 를 넣으면 로그 줄이 위조된다(CWE-117).
      * 무엇이 틀렸는지는 <b>종류</b>로만 말한다.
      *
-     * @throws IllegalArgumentException 토큰이 Base64URL 이 아니거나, 구분자가 없거나,
+     * <p><b>형제 코덱 넷과 같은 방어를 한다</b> — 길이 상한 · 패딩 거부 ·
+     * <b>정규 인코딩만</b>. 셋째가 핵심이다: 안 하면 같은 커서가 여러 토큰으로
+     * 표현된다. CY-958 이 그 규약을 뒤늦게 맞췄다.
+     *
+     * @throws IllegalArgumentException 토큰이 비었거나, 상한을 넘거나, 패딩이 있거나,
+     *         Base64URL 이 아니거나, 정규 인코딩이 아니거나, 구분자가 없거나,
      *         검출 종류가 이 시스템의 값이 아닐 때
      */
     public static ResidualCursor decode(String token) {
         Objects.requireNonNull(token, "token");
-        String raw;
+        if (token.isBlank() || token.length() > MAX_TOKEN_LENGTH || token.indexOf('=') >= 0) {
+            // 형제 코덱 넷과 같은 순서다 — 길이·패딩을 먼저 보고 디코딩으로 간다.
+            throw new IllegalArgumentException("커서의 형식이 올바르지 않습니다.");
+        }
+        byte[] bytes;
         try {
-            raw = new String(Base64.getUrlDecoder().decode(token), StandardCharsets.UTF_8);
+            bytes = Base64.getUrlDecoder().decode(token);
         } catch (IllegalArgumentException malformed) {
             throw new IllegalArgumentException(
                     "커서가 Base64URL 이 아닙니다. 응답의 nextCursor 를 그대로 실어 보내십시오.",
                     malformed);
         }
+        if (!Base64.getUrlEncoder().withoutPadding().encodeToString(bytes).equals(token)) {
+            // **정규 인코딩만 받는다.** Base64 는 같은 바이트열을 여러 문자열로 쓸 수
+            // 있다(패딩 유무, 마지막 바이트의 남는 비트). 그대로 두면 **하나의 논리적
+            // 커서가 여러 토큰으로 표현된다** — 형제 코덱 넷이 모두 막는 자리다.
+            throw new IllegalArgumentException("커서가 정규 Base64URL 인코딩이 아닙니다.");
+        }
+        String raw = new String(bytes, StandardCharsets.UTF_8);
         int at = raw.indexOf(UNIT_SEPARATOR);
         if (at < 0 || at == raw.length() - 1) {
             throw new IllegalArgumentException("커서에 검출 종류와 대상 키가 다 있어야 합니다.");
