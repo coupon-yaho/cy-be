@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.Base64;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
@@ -58,6 +59,10 @@ class IssuanceHistoryCursorCodecTest {
                 Arguments.of("too long", "a".repeat(257)),
                 Arguments.of("invalid Base64 URL", "%%%"),
                 Arguments.of("padded Base64 URL", encoded("v1|0|0|1") + "="),
+                // **남는 비트를 바꾼 변형.** 같은 바이트열로 디코딩되지만 문자열이 다르다 —
+                // 코덱이 정규 인코딩만 받는다는 성질을 이 케이스가 유일하게 태운다.
+                // 없으면 그 검사를 통째로 지워도 :api:test 가 초록이다(실측).
+                Arguments.of("non-canonical unused bits", nonCanonical(encoded("v1|0|0|1"))),
                 Arguments.of("wrong segment count", encoded("v1|0|0")),
                 Arguments.of("unknown version", encoded("v2|0|0|1")),
                 Arguments.of("non-numeric epochSecond", encoded("v1|now|0|1")),
@@ -73,5 +78,21 @@ class IssuanceHistoryCursorCodecTest {
     private static String encoded(String payload) {
         return java.util.Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /** 같은 바이트열로 디코딩되는 다른 문자열. 마지막 글자의 남는 비트만 바꾼다. */
+    private static String nonCanonical(String canonical) {
+        String head = canonical.substring(0, canonical.length() - 1);
+        byte[] want = Base64.getUrlDecoder().decode(canonical);
+        for (char c : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+                .toCharArray()) {
+            String candidate = head + c;
+            if (!candidate.equals(canonical)
+                    && java.util.Arrays.equals(
+                            Base64.getUrlDecoder().decode(candidate), want)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("비정규 변형을 못 만들었습니다: " + canonical);
     }
 }
