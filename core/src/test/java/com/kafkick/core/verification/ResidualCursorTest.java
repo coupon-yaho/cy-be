@@ -49,6 +49,86 @@ class ResidualCursorTest {
                 .matches("[A-Za-z0-9_-]+");
     }
 
+    /**
+     * <b>정규 인코딩만 받는다 — 형제 코덱 넷과 같은 규약이다.</b>
+     *
+     * <p>Base64 는 같은 바이트열을 여러 문자열로 쓸 수 있다. 마지막 바이트의 남는
+     * 비트를 다르게 채워도 디코딩 결과가 같다 — 그대로 두면 <b>하나의 논리적 커서가
+     * 여러 토큰으로 표현된다.</b>
+     */
+    @Test
+    @DisplayName("비정규 인코딩은 거부한다 — 같은 커서가 여러 토큰이 되면 안 된다")
+    void refusesANonCanonicalEncoding() {
+        ResidualCursor cursor = new ResidualCursor(
+                FindingType.DUP_PER_MEMBER, TargetKey.couponMember(1, 2));
+        String canonical = cursor.encode();
+        String tweaked = nonCanonicalVariantOf(canonical);
+
+        assertThat(Base64.getUrlDecoder().decode(tweaked))
+                .as("전제 — 같은 바이트열로 디코딩돼야 이 시험이 뜻이 있다")
+                .isEqualTo(Base64.getUrlDecoder().decode(canonical));
+        assertThatThrownBy(() -> ResidualCursor.decode(tweaked))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("패딩이 붙으면 거부한다")
+    void refusesAPaddedToken() {
+        String padded = Base64.getUrlEncoder()   // withoutPadding 이 아니다
+                .encodeToString("DUP_PER_MEMBER\u001FCOUPON:1".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(padded).as("전제 — 패딩이 붙어야 한다").contains("=");
+        assertThatThrownBy(() -> ResidualCursor.decode(padded))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * <b>상한은 이 커서에서 유도한 값이다.</b> 가장 긴 {@code FindingType}(18자)과
+     * 대상 키 상한(64자)으로 만든 토큰이 <b>111자</b>다 — 상한이 그보다 커야 하고,
+     * 그 관계가 깨지면 <b>정상 커서가 거절된다.</b>
+     */
+    @Test
+    @DisplayName("가장 긴 정상 커서가 상한 안에 들어온다")
+    void theLongestLegitimateTokenFitsUnderTheCap() {
+        String longestType = java.util.Arrays.stream(FindingType.values())
+                .map(Enum::name)
+                .max(java.util.Comparator.comparingInt(String::length))
+                .orElseThrow();
+        String longestKey = "I".repeat(TargetKey.MAX_LENGTH);
+        String token = new ResidualCursor(FindingType.valueOf(longestType), longestKey).encode();
+
+        assertThat(ResidualCursor.decode(token))
+                .as("가장 긴 정상 커서가 거절되면 마지막 페이지를 못 넘긴다")
+                .isNotNull();
+        assertThat(token.length()).as("실측 111자").isLessThan(128);
+    }
+
+    /**
+     * <b>상한이 없으면 이 토큰이 통과한다.</b> 모양은 완전히 정상이다 — 정규
+     * Base64URL 이고, 구분자가 있고, 유형도 실재한다. <b>대상 키만 터무니없이 길다.</b>
+     *
+     * <p>그래서 나머지 가드로는 못 잡는다. {@code "A".repeat(400)} 같은 쓰레기는
+     * 구분자 검사에서 어차피 걸려서 <b>길이 검사가 있든 없든 거절된다</b> —
+     * 그것으로 시험하면 상한을 통째로 지워도 초록이다(실제로 그랬다).
+     */
+    @Test
+    @DisplayName("모양은 멀쩡한데 대상 키만 긴 토큰을 상한이 잡는다")
+    void refusesAWellFormedTokenThatIsTooLong() {
+        String token = base64Url("DUP_PER_MEMBER" + SEPARATOR + "COUPON:" + "9".repeat(300));
+
+        assertThat(token.length()).as("전제 — 상한을 넘어야 한다").isGreaterThan(128);
+        assertThatThrownBy(() -> ResidualCursor.decode(token))
+                .as("상한이 없으면 임의 길이 키가 그대로 커서가 된다")
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("빈 토큰은 거부한다")
+    void refusesABlankToken() {
+        assertThatThrownBy(() -> ResidualCursor.decode("   "))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     @DisplayName("Base64URL 이 아니면 거부한다")
     void refusesATokenThatIsNotBase64() {
@@ -97,6 +177,32 @@ class ResidualCursorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .as("받은 값을 메시지에 실으면 로그 줄이 위조된다(CWE-117)")
                 .hasMessageNotContaining("V7_MADE_UP");
+    }
+
+    /**
+     * 같은 바이트열로 디코딩되는 <b>다른</b> 문자열을 만든다.
+     *
+     * <p>Base64 마지막 글자는 남는 비트를 싣는데, 디코더가 그 비트를 버린다.
+     * 그래서 그 자리를 바꿔도 결과가 같다 — 정규 검사가 없으면 통과한다.
+     */
+    private static String nonCanonicalVariantOf(String canonical) {
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        byte[] want = Base64.getUrlDecoder().decode(canonical);
+        String head = canonical.substring(0, canonical.length() - 1);
+        for (char c : alphabet.toCharArray()) {
+            String candidate = head + c;
+            if (candidate.equals(canonical)) {
+                continue;
+            }
+            try {
+                if (java.util.Arrays.equals(Base64.getUrlDecoder().decode(candidate), want)) {
+                    return candidate;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 이 글자로는 디코딩이 안 된다. 다음 후보.
+            }
+        }
+        throw new IllegalStateException("비정규 변형을 못 만들었습니다: " + canonical);
     }
 
     private static String base64Url(String raw) {
