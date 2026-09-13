@@ -284,8 +284,15 @@ perf/results/<run-id>/
 
 ```bash
 PERF_RECORD_REQUESTS=true perf/run/run-repeat.sh --engine V2 --profile spike
-perf/run/reconcile.sh perf/results/<run-id>/rate-6667/rep-1
+perf/run/reconcile.sh perf/results/<run-id>                     # 묶음 전체
+perf/run/reconcile.sh perf/results/<run-id>/rate-6667/rep-1     # 반복 하나
 ```
+
+묶음을 주면 그 아래 `rate-*/rep-*` 를 전부 돈다. **하나가 결함이어도 나머지를
+판정하고**(첫 반복에서 멈추면 나머지를 못 본다), 종료코드는 가장 나쁜 것을 낸다 —
+심각도는 결함 > 판정 불가 > 보류 > 정상이라 **코드 크기순(0<1<3<4)과 다르다.**
+보고서는 반복마다 그 반복 디렉터리에 남는다. 합치지 않는다 — 합치면 어느 반복의
+유실인지가 사라진다.
 
 **요청을 보내기 전에** 접수 키·대상을 적는 것이 핵심이다. 성공 응답만 모으면
 **양쪽에서 동시에 빠진 건**이 통째로 안 보인다 — 성공 목록에도 없고 DB 에도 없으니
